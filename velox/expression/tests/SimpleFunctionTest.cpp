@@ -18,10 +18,12 @@
 #include <optional>
 #include <string>
 
+#include "folly/lang/Hint.h"
 #include "glog/logging.h"
 #include "gtest/gtest.h"
 #include "velox/expression/Expr.h"
 #include "velox/functions/Udf.h"
+#include "velox/functions/prestosql/registration/RegistrationFunctions.h"
 #include "velox/functions/prestosql/tests/utils/FunctionBaseTest.h"
 #include "velox/type/Type.h"
 #include "velox/vector/BaseVector.h"
@@ -104,7 +106,7 @@ struct ArrayWriterFunction {
 
 TEST_F(SimpleFunctionTest, arrayWriter) {
   registerFunction<ArrayWriterFunction, Array<int64_t>, int64_t>(
-      {"array_writer_func"}, ARRAY(BIGINT()));
+      {"array_writer_func"});
 
   const size_t rows = arrayData.size();
   auto flatVector = makeFlatVector<int64_t>(rows, [](auto row) { return row; });
@@ -141,7 +143,7 @@ struct ArrayOfStringsWriterFunction {
 
 TEST_F(SimpleFunctionTest, arrayOfStringsWriter) {
   registerFunction<ArrayOfStringsWriterFunction, Array<Varchar>, int64_t>(
-      {"array_of_strings_writer_func"}, ARRAY(VARCHAR()));
+      {"array_of_strings_writer_func"});
 
   const size_t rows = stringArrayData.size();
   auto flatVector = makeFlatVector<int64_t>(rows, [](auto row) { return row; });
@@ -247,7 +249,7 @@ struct RowWriterFunction {
 
 TEST_F(SimpleFunctionTest, rowWriter) {
   registerFunction<RowWriterFunction, Row<int64_t, double>, int64_t>(
-      {"row_writer_func"}, ROW({BIGINT(), DOUBLE()}));
+      {"row_writer_func"});
 
   const size_t rows = rowVectorCol1.size();
   auto flatVector = makeFlatVector<int64_t>(rows, [](auto row) { return row; });
@@ -349,7 +351,7 @@ TEST_F(SimpleFunctionTest, arrayRowWriter) {
   registerFunction<
       ArrayRowWriterFunction,
       Array<Row<int64_t, double>>,
-      int32_t>({"array_row_writer_func"}, ARRAY(ROW({BIGINT(), DOUBLE()})));
+      int32_t>({"array_row_writer_func"});
 
   const size_t rows = rowVectorCol1.size();
   auto flatVector = makeFlatVector<int32_t>(rows, [](auto row) { return row; });
@@ -829,10 +831,8 @@ TEST_F(SimpleFunctionTest, mapStringOut) {
   for (auto i = 0; i < 4; i++) {
     auto mapView = reader[i];
     for (const auto& [key, value] : mapView) {
-      ASSERT_EQ(std::string(key.data(), key.size()), std::to_string(i + 1));
-      ASSERT_EQ(
-          std::string(value.value().data(), value.value().size()),
-          std::to_string(i + 1));
+      ASSERT_EQ(key, std::to_string(i + 1));
+      ASSERT_EQ(value.value(), std::to_string(i + 1));
     }
   }
 }
@@ -901,12 +901,10 @@ TEST_F(SimpleFunctionTest, reuseArgVector) {
   auto exprSet =
       compileExpressions({"(c0 - 0.5::REAL) * 2.0::REAL + 0.3::REAL"}, rowType);
 
-  pool_->setMemoryUsageTracker(memory::MemoryUsageTracker::create());
-
-  auto prevAllocations = pool_->getMemoryUsageTracker()->getNumAllocs();
+  auto prevAllocations = pool_->stats().numAllocs;
 
   evaluate(*exprSet, data);
-  auto currAllocations = pool_->getMemoryUsageTracker()->getNumAllocs();
+  auto currAllocations = pool_->stats().numAllocs;
 
   // Expect a single allocation for the result. Intermediate results should
   // reuse memory.
@@ -935,10 +933,11 @@ VectorPtr testVariadicArgReuse(
   // This is a bit of a round about way of creating the SimpleFunctionAdapter,
   // especially since it requires the caller to register the function as well,
   // but it should be easier to maintain.
-  auto function = exec::SimpleFunctions()
-                      .resolveFunction(functionName, {})
-                      ->createFunction()
-                      ->createVectorFunction(execCtx->queryCtx()->config(), {});
+  auto function =
+      exec::simpleFunctions()
+          .resolveFunction(functionName, {})
+          ->createFunction()
+          ->createVectorFunction(execCtx->queryCtx()->queryConfig(), {});
 
   // Create a dummy EvalCtx.
   SelectivityVector rows(inputs[0]->size());
@@ -1063,5 +1062,76 @@ TEST_F(SimpleFunctionTest, isAsciiArgs) {
 
   input->as<SimpleVector<StringView>>()->computeAndSetIsAscii(rows);
   ASSERT_TRUE(function_t::isAsciiArgs(rows, {input}));
+}
+
+// Return false always.
+template <typename T>
+struct GenericOutputFunc {
+  VELOX_DEFINE_FUNCTION_TYPES(T);
+  // If input is Array<x> out is x.
+  bool call(out_type<Generic<T1>>&, const arg_type<Array<Generic<T1>>>&) {
+    return false;
+  }
+};
+
+TEST_F(SimpleFunctionTest, evalGenericOutput) {
+  registerFunction<GenericOutputFunc, Generic<T1>, Array<Generic<T1>>>(
+      {"test_generic_out"});
+
+  auto input = makeArrayVector<int32_t>({{1, 2}, {1, 3}});
+  auto result = evaluate("test_generic_out(c0)", makeRowVector({input}));
+  auto expected = makeNullableFlatVector<int32_t>({std::nullopt, std::nullopt});
+  assertEqualVectors(expected, result);
+}
+
+template <typename T>
+struct NotDefaultNull {
+  VELOX_DEFINE_FUNCTION_TYPES(T);
+
+  void
+  callNullable(int32_t& out, const int32_t* input1, const int32_t* input2) {
+    out = (input1 && input2) ? 1 : 2;
+  }
+
+  void callNullFree(int32_t& out, int32_t input1, int32_t input2) {
+    out = 10;
+  }
+};
+
+// Test that callNullable is called when nulls are purned.
+TEST_F(SimpleFunctionTest, testAllNotNull) {
+  auto input = makeNullableFlatVector<int32_t>({std::nullopt, 2});
+  registerFunction<NotDefaultNull, int32_t, int32_t, int32_t>({"func"});
+  // This expression triggers null pruinig on distinct fields.
+  auto result = evaluate(
+      "try(switch(func(c0, NULL::INT)==0, c0))", makeRowVector({input}));
+  auto expected = makeNullableFlatVector<int32_t>({std::nullopt, std::nullopt});
+  assertEqualVectors(expected, result);
+}
+
+// Test that SimpleFunctionRegistry does not crash in multithreaded environment.
+TEST_F(SimpleFunctionTest, simpleFunctionRegistryThreadSafe) {
+  std::vector<std::thread> threads;
+  // create threads
+  for (int i = 1; i <= 200; ++i) {
+    threads.emplace_back(std::thread([]() {
+      for (int i = 0; i < 50; i++) {
+        functions::prestosql::registerArithmeticFunctions();
+        auto x = exec::simpleFunctions().getFunctionSignatures("add");
+        folly::compiler_must_not_elide(x);
+
+        auto y = exec::simpleFunctions().resolveFunction(
+            "plus", {BIGINT(), BIGINT()});
+        folly::compiler_must_not_elide(y);
+
+        auto z = exec::simpleFunctions().getFunctionNames();
+        folly::compiler_must_not_elide(z);
+      }
+    }));
+  }
+  // wait for them to complete
+  for (auto& th : threads) {
+    th.join();
+  }
 }
 } // namespace

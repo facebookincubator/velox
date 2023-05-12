@@ -15,8 +15,8 @@
  */
 
 #include "velox/exec/TableWriter.h"
+
 #include "velox/exec/Task.h"
-#include "velox/vector/FlatVector.h"
 
 namespace facebook::velox::exec {
 
@@ -30,19 +30,20 @@ TableWriter::TableWriter(
           operatorId,
           tableWriteNode->id(),
           "TableWrite"),
-      numWrittenRows_(0),
-      finished_(false),
-      closed_(false),
       driverCtx_(driverCtx),
+      connectorPool_(driverCtx_->task->addConnectorPoolLocked(
+          planNodeId(),
+          driverCtx_->pipelineId,
+          driverCtx_->driverId,
+          operatorType(),
+          tableWriteNode->insertTableHandle()->connectorId())),
       insertTableHandle_(
-          tableWriteNode->insertTableHandle()->connectorInsertTableHandle()) {
-  // For the time being the table writer supports one file
-  // To extend it we can create a new data sink for each
-  // partition
+          tableWriteNode->insertTableHandle()->connectorInsertTableHandle()),
+      commitStrategy_(tableWriteNode->commitStrategy()) {
   const auto& connectorId = tableWriteNode->insertTableHandle()->connectorId();
   connector_ = connector::getConnector(connectorId);
-  connectorQueryCtx_ =
-      operatorCtx_->createConnectorQueryCtx(connectorId, stats_.planNodeId);
+  connectorQueryCtx_ = operatorCtx_->createConnectorQueryCtx(
+      connectorId, planNodeId(), connectorPool_);
 
   auto names = tableWriteNode->columnNames();
   auto types = tableWriteNode->columns()->children();
@@ -55,16 +56,15 @@ TableWriter::TableWriter(
   }
 
   mappedType_ = ROW(std::move(names), std::move(types));
-  const auto& config = driverCtx_->task->queryCtx()->config();
-  if (config.createEmptyFiles()) {
-    LOG(INFO) << "Enforce creating empty files\n";
-    createDataSink();
-  }
+  createDataSink();
 }
 
 void TableWriter::createDataSink() {
   dataSink_ = connector_->createDataSink(
-      mappedType_, insertTableHandle_, connectorQueryCtx_.get());
+      mappedType_,
+      insertTableHandle_,
+      connectorQueryCtx_.get(),
+      commitStrategy_);
 }
 
 void TableWriter::addInput(RowVectorPtr input) {
@@ -86,7 +86,6 @@ void TableWriter::addInput(RowVectorPtr input) {
       mappedChildren,
       input->getNullCount());
 
-  // Lazily instantiate data sink to prevent leftover empty files.
   if (!dataSink_) {
     createDataSink();
   }
@@ -95,40 +94,67 @@ void TableWriter::addInput(RowVectorPtr input) {
 }
 
 RowVectorPtr TableWriter::getOutput() {
-  // Making sure the output is read only once after the write is fully done
+  // Making sure the output is read only once after the write is fully done.
   if (!noMoreInput_ || finished_) {
     return nullptr;
   }
   finished_ = true;
 
-  auto rowsWritten = std::dynamic_pointer_cast<FlatVector<int64_t>>(
-      BaseVector::create(BIGINT(), 1, pool()));
-  rowsWritten->set(0, numWrittenRows_);
-
-  std::vector<VectorPtr> columns = {rowsWritten};
-
-  // TODO Find a way to not have this Presto-specific logic in here.
-  if (outputType_->size() > 1) {
-    auto fragments = std::dynamic_pointer_cast<FlatVector<StringView>>(
-        BaseVector::create(VARBINARY(), 1, pool()));
-    fragments->setNull(0, true);
-    columns.emplace_back(fragments);
-
-    // clang-format off
-    auto commitContextJson = folly::toJson(
-        folly::dynamic::object
-            ("lifespan", "TaskWide")
-            ("taskId", driverCtx_->task->taskId())
-            ("pageSinkCommitStrategy", "NO_COMMIT")
-            ("lastPage", false));
-    // clang-format on
-
-    auto commitContext = std::make_shared<ConstantVector<StringView>>(
-        pool(), 1, false, VARBINARY(), StringView(commitContextJson));
-    columns.emplace_back(commitContext);
+  if (outputType_->size() == 0) {
+    return nullptr;
+  }
+  if (outputType_->size() == 1) {
+    return std::make_shared<RowVector>(
+        pool(),
+        outputType_,
+        nullptr,
+        1,
+        std::vector<VectorPtr>{std::make_shared<ConstantVector<int64_t>>(
+            pool(), 1, false /*isNull*/, BIGINT(), numWrittenRows_)});
   }
 
+  std::vector<std::string> fragments = dataSink_->finish();
+
+  vector_size_t numOutputRows = fragments.size() + 1;
+
+  // Set rows column.
+  FlatVectorPtr<int64_t> writtenRowsVector =
+      BaseVector::create<FlatVector<int64_t>>(BIGINT(), numOutputRows, pool());
+  writtenRowsVector->set(0, (int64_t)numWrittenRows_);
+  for (int idx = 1; idx < numOutputRows; ++idx) {
+    writtenRowsVector->setNull(idx, true);
+  }
+
+  // Set fragments column.
+  FlatVectorPtr<StringView> fragmentsVector =
+      BaseVector::create<FlatVector<StringView>>(
+          VARBINARY(), numOutputRows, pool());
+  fragmentsVector->setNull(0, true);
+  for (int i = 1; i < numOutputRows; i++) {
+    fragmentsVector->set(i, StringView(fragments[i - 1]));
+  }
+
+  // Set commitcontext column.
+  // clang-format off
+    auto commitContextJson = folly::toJson(
+      folly::dynamic::object
+          ("lifespan", "TaskWide")
+          ("taskId", connectorQueryCtx_->taskId())
+          ("pageSinkCommitStrategy", commitStrategyToString(commitStrategy_))
+          ("lastPage", true));
+  // clang-format on
+
+  auto commitContextVector = std::make_shared<ConstantVector<StringView>>(
+      pool(),
+      numOutputRows,
+      false /*isNull*/,
+      VARBINARY(),
+      StringView(commitContextJson));
+
+  std::vector<VectorPtr> columns = {
+      writtenRowsVector, fragmentsVector, commitContextVector};
+
   return std::make_shared<RowVector>(
-      pool(), outputType_, BufferPtr(nullptr), 1, columns);
+      pool(), outputType_, nullptr, numOutputRows, columns);
 }
 } // namespace facebook::velox::exec

@@ -13,7 +13,7 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-#include "velox/functions/prestosql/aggregates/tests/AggregationTestBase.h"
+#include "velox/functions/lib/aggregates/tests/AggregationTestBase.h"
 #include "velox/vector/fuzzer/VectorFuzzer.h"
 
 using namespace facebook::velox;
@@ -29,7 +29,7 @@ std::string max(const std::string& column) {
   return fmt::format("max({})", column);
 }
 
-class MinMaxTest : public aggregate::test::AggregationTestBase {
+class MinMaxTest : public functions::aggregate::test::AggregationTestBase {
  protected:
   void SetUp() override {
     AggregationTestBase::SetUp();
@@ -107,6 +107,14 @@ TEST_F(MinMaxTest, maxBigint) {
   doTest(max, BIGINT());
 }
 
+TEST_F(MinMaxTest, maxReal) {
+  doTest(max, REAL());
+}
+
+TEST_F(MinMaxTest, maxDouble) {
+  doTest(max, DOUBLE());
+}
+
 TEST_F(MinMaxTest, maxVarchar) {
   doTest(max, VARCHAR());
 }
@@ -135,6 +143,14 @@ TEST_F(MinMaxTest, minBigint) {
   doTest(min, BIGINT());
 }
 
+TEST_F(MinMaxTest, minReal) {
+  doTest(min, REAL());
+}
+
+TEST_F(MinMaxTest, minDouble) {
+  doTest(min, DOUBLE());
+}
+
 TEST_F(MinMaxTest, minInterval) {
   doTest(min, INTERVAL_DAY_TIME());
 }
@@ -157,7 +173,7 @@ TEST_F(MinMaxTest, constVarchar) {
            makeNullConstant(TypeKind::VARCHAR, 1'000)}),
       makeRowVector({
           makeConstant("banana", 1'000),
-          makeConstant(TypeKind::VARCHAR, 1'000),
+          makeNullConstant(TypeKind::VARCHAR, 1'000),
       })};
 
   testAggregations(
@@ -221,19 +237,32 @@ TEST_F(MinMaxTest, minMaxDate) {
 TEST_F(MinMaxTest, initialValue) {
   // Ensures that no groups are default initialized (to 0) in
   // aggregate::SimpleNumericAggregate.
-  auto rowType = ROW({"c0", "c1"}, {TINYINT(), TINYINT()});
-  auto arrayVectorC0 = makeFlatVector<int8_t>({1, 1, 1, 1});
-  auto arrayVectorC1 = makeFlatVector<int8_t>({-1, -1, -1, -1});
-
-  std::vector<VectorPtr> vec = {arrayVectorC0, arrayVectorC1};
-  auto row = std::make_shared<RowVector>(
-      pool_.get(), rowType, nullptr, vec.front()->size(), vec, 0);
-
-  // Test min of {1, 1, ...} and max {-1, -1, ..}.
-  // Make sure they are not zero.
-  testAggregations({row}, {}, {"min(c0)"}, "SELECT 1");
-
-  testAggregations({row}, {}, {"max(c1)"}, "SELECT -1");
+  auto row = makeRowVector({
+      makeFlatVector<int8_t>({1, 1, 1, 1}),
+      makeFlatVector<int8_t>({-1, -1, -1, -1}),
+      makeFlatVector<double>({1, 2, 3, 4}),
+      makeFlatVector<double>({-1, -2, -3, -4}),
+  });
+  testAggregations(
+      {row},
+      {},
+      {"min(c0)", "max(c1)", "min(c2)", "max(c3)"},
+      "SELECT 1, -1, 1, -1");
 }
 
+TEST_F(MinMaxTest, maxShortDecimal) {
+  doTest(max, DECIMAL(18, 3));
+}
+
+TEST_F(MinMaxTest, minShortDecimal) {
+  doTest(min, DECIMAL(3, 1));
+}
+
+TEST_F(MinMaxTest, maxLongDecimal) {
+  doTest(max, DECIMAL(20, 3));
+}
+
+TEST_F(MinMaxTest, minLongDecimal) {
+  doTest(min, DECIMAL(38, 19));
+}
 } // namespace

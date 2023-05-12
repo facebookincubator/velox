@@ -164,7 +164,7 @@ class VectorFuncFour : public velox::exec::VectorFunction {
   signatures() {
     // map(K,V) -> array(K)
     return {velox::exec::FunctionSignatureBuilder()
-                .typeVariable("K")
+                .knownTypeVariable("K")
                 .typeVariable("V")
                 .returnType("array(K)")
                 .argumentType("map(K,V)")
@@ -372,7 +372,7 @@ TEST_F(FunctionRegistryTest, getFunctionSignatures) {
   ASSERT_EQ(
       functionSignatures["vector_func_four"].at(0)->toString(),
       exec::FunctionSignatureBuilder()
-          .typeVariable("K")
+          .knownTypeVariable("K")
           .typeVariable("V")
           .returnType("array(K)")
           .argumentType("map(K,V)")
@@ -442,7 +442,7 @@ TEST_F(FunctionRegistryTest, registerFunctionTwice) {
   registerFunction<FuncOne, Varchar, Varchar>({"func_one"});
   registerFunction<FuncOne, Varchar, Varchar>({"func_one"});
 
-  auto& simpleFunctions = exec::SimpleFunctions();
+  auto& simpleFunctions = exec::simpleFunctions();
   auto signatures = simpleFunctions.getFunctionSignatures("func_one");
   // The function should only be registered once, despite the multiple calls to
   // registerFunction.
@@ -517,6 +517,49 @@ TEST_F(FunctionRegistryTest, resolveFunctionsBasedOnPriority) {
 
   auto result5 = resolveFunction(func, {INTEGER(), INTEGER()});
   ASSERT_EQ(*result5, *REAL());
+}
+
+TEST_F(FunctionRegistryTest, resolveSpecialForms) {
+  auto andResult =
+      resolveFunctionOrCallableSpecialForm("and", {BOOLEAN(), BOOLEAN()});
+  ASSERT_EQ(*andResult, *BOOLEAN());
+
+  auto coalesceResult =
+      resolveFunctionOrCallableSpecialForm("coalesce", {VARCHAR(), VARCHAR()});
+  ASSERT_EQ(*coalesceResult, *VARCHAR());
+
+  auto ifResult = resolveFunctionOrCallableSpecialForm(
+      "if", {BOOLEAN(), INTEGER(), INTEGER()});
+  ASSERT_EQ(*ifResult, *INTEGER());
+
+  auto orResult =
+      resolveFunctionOrCallableSpecialForm("or", {BOOLEAN(), BOOLEAN()});
+  ASSERT_EQ(*orResult, *BOOLEAN());
+
+  auto switchResult = resolveFunctionOrCallableSpecialForm(
+      "switch", {BOOLEAN(), DOUBLE(), BOOLEAN(), DOUBLE(), DOUBLE()});
+  ASSERT_EQ(*switchResult, *DOUBLE());
+
+  auto tryResult = resolveFunctionOrCallableSpecialForm("try", {REAL()});
+  ASSERT_EQ(*tryResult, *REAL());
+}
+
+TEST_F(FunctionRegistryTest, resolveRowConstructor) {
+  auto result = resolveFunctionOrCallableSpecialForm(
+      "row_constructor", {INTEGER(), BOOLEAN(), DOUBLE()});
+  ASSERT_EQ(
+      *result, *ROW({"c1", "c2", "c3"}, {INTEGER(), BOOLEAN(), DOUBLE()}));
+}
+
+TEST_F(FunctionRegistryTest, resolveFunctionNotSpecialForm) {
+  auto result = resolveFunctionOrCallableSpecialForm("func_one", {VARCHAR()});
+  ASSERT_EQ(*result, *VARCHAR());
+}
+
+TEST_F(FunctionRegistryTest, resolveCast) {
+  ASSERT_THROW(
+      resolveFunctionOrCallableSpecialForm("cast", {VARCHAR()}),
+      velox::VeloxRuntimeError);
 }
 
 } // namespace facebook::velox

@@ -56,6 +56,11 @@ class SpillInput : public ByteStream {
 /// Represents a spill file that is first in write mode and then
 /// turns into a source of spilled RowVectors. Owns a file system file that
 /// contains the spilled data and is live for the duration of 'this'.
+
+/// NOTE: The class will not delete spill file upon destruction, so the user
+/// needs to remove the unused spill files at some point later. For example, a
+/// query Task deletes all the generated spill files in one operation using
+/// rmdir() call.
 class SpillFile {
  public:
   SpillFile(
@@ -76,8 +81,6 @@ class SpillFile {
         sortCompareFlags_.empty() ||
         sortCompareFlags_.size() == numSortingKeys_);
   }
-
-  ~SpillFile();
 
   int32_t numSortingKeys() const {
     return numSortingKeys_;
@@ -158,9 +161,8 @@ class SpillFileList {
   /// Constructs a set of spill files. 'type' is a RowType describing the
   /// content. 'numSortingKeys' is the number of leading columns on which the
   /// data is sorted. 'path' is a file path prefix. ' 'targetFileSize' is the
-  /// target byte size of a single file in the file set. 'pool' and
-  /// 'mappedMemory' are used for buffering and constructing the result data
-  /// read from 'this'.
+  /// target byte size of a single file in the file set. 'pool' is used for
+  /// buffering and constructing the result data read from 'this'.
   ///
   /// When writing sorted spill runs, the caller is responsible for buffering
   /// and sorting the data. write is called multiple times, followed by flush().
@@ -170,17 +172,13 @@ class SpillFileList {
       const std::vector<CompareFlags>& sortCompareFlags,
       const std::string& path,
       uint64_t targetFileSize,
-      memory::MemoryPool& pool,
-      memory::MappedMemory& mappedMemory,
-      std::unordered_map<std::string, RuntimeMetric>& stats)
+      memory::MemoryPool& pool)
       : type_(type),
         numSortingKeys_(numSortingKeys),
         sortCompareFlags_(sortCompareFlags),
         path_(path),
         targetFileSize_(targetFileSize),
-        pool_(pool),
-        mappedMemory_(mappedMemory),
-        stats_(stats) {
+        pool_(pool) {
     // NOTE: if the associated spilling operator has specified the sort
     // comparison flags, then it must match the number of sorting keys.
     VELOX_CHECK(
@@ -209,7 +207,7 @@ class SpillFileList {
 
   uint64_t spilledBytes() const;
 
-  int64_t spilledFiles() const {
+  uint64_t spilledFiles() const {
     return files_.size();
   }
 
@@ -232,8 +230,6 @@ class SpillFileList {
   const std::string path_;
   const uint64_t targetFileSize_;
   memory::MemoryPool& pool_;
-  memory::MappedMemory& mappedMemory_;
-  std::unordered_map<std::string, RuntimeMetric>& stats_;
   std::unique_ptr<VectorStreamGroup> batch_;
   SpillFiles files_;
 };
@@ -547,31 +543,26 @@ using SpillPartitionSet =
 /// by. This has one SpillFileList per partition of spill data.
 class SpillState {
  public:
-  // Constructs a SpillState. 'type' is the content RowType. 'path' is
-  // the file system path prefix. 'bits' is the hash bit field for
-  // partitioning data between files. This also gives the maximum
-  // number of partitions. 'numSortingKeys' is the number of leading columns
-  // on which the data is sorted, 0 if only hash partitioning is used.
-  // 'targetFileSize' is the target size of a single
-  // file.  'pool' and 'mappedMemory' own
-  // the memory for state and results.
+  /// Constructs a SpillState. 'type' is the content RowType. 'path' is the file
+  /// system path prefix. 'bits' is the hash bit field for partitioning data
+  /// between files. This also gives the maximum number of partitions.
+  /// 'numSortingKeys' is the number of leading columns on which the data is
+  /// sorted, 0 if only hash partitioning is used. 'targetFileSize' is the
+  /// target size of a single file.  'pool' owns the memory for state and
+  /// results.
   SpillState(
       const std::string& path,
       int32_t maxPartitions,
       int32_t numSortingKeys,
       const std::vector<CompareFlags>& sortCompareFlags,
       uint64_t targetFileSize,
-      memory::MemoryPool& pool,
-      memory::MappedMemory& mappedMemory,
-      std::unordered_map<std::string, RuntimeMetric>& stats)
+      memory::MemoryPool& pool)
       : path_(path),
         maxPartitions_(maxPartitions),
         numSortingKeys_(numSortingKeys),
         sortCompareFlags_(sortCompareFlags),
         targetFileSize_(targetFileSize),
         pool_(pool),
-        mappedMemory_(mappedMemory),
-        stats_(stats),
         files_(maxPartitions_) {}
 
   /// Indicates if a given 'partition' has been spilled or not.
@@ -643,7 +634,8 @@ class SpillState {
   /// Return the spilled partition number set.
   const SpillPartitionNumSet& spilledPartitionSet() const;
 
-  int64_t spilledFiles() const;
+  /// Returns the number of spilled files we have.
+  uint64_t spilledFiles() const;
 
   std::vector<std::string> testingSpilledFilePaths() const;
 
@@ -656,8 +648,6 @@ class SpillState {
   const uint64_t targetFileSize_;
 
   memory::MemoryPool& pool_;
-  memory::MappedMemory& mappedMemory_;
-  std::unordered_map<std::string, RuntimeMetric>& stats_;
 
   // A set of spilled partition numbers.
   SpillPartitionNumSet spilledPartitionSet_;

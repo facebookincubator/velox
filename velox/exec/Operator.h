@@ -14,6 +14,7 @@
  * limitations under the License.
  */
 #pragma once
+#include <folly/Synchronized.h>
 #include "velox/common/base/RuntimeMetrics.h"
 #include "velox/common/time/CpuWallTimer.h"
 #include "velox/core/PlanNode.h"
@@ -45,16 +46,14 @@ struct MemoryStats {
   uint64_t peakTotalMemoryReservation{0};
   uint64_t numMemoryAllocations{0};
 
-  void update(const std::shared_ptr<memory::MemoryUsageTracker>& tracker) {
-    if (!tracker) {
-      return;
-    }
-    userMemoryReservation = tracker->getCurrentUserBytes();
-    systemMemoryReservation = tracker->getCurrentSystemBytes();
-    peakUserMemoryReservation = tracker->getPeakUserBytes();
-    peakSystemMemoryReservation = tracker->getPeakSystemBytes();
-    peakTotalMemoryReservation = tracker->getPeakTotalBytes();
-    numMemoryAllocations = tracker->getNumAllocs();
+  void update(memory::MemoryPool* pool) {
+    const memory::MemoryPool::Stats stats = pool->stats();
+    userMemoryReservation = stats.currentBytes;
+    systemMemoryReservation = 0;
+    peakUserMemoryReservation = stats.peakBytes;
+    peakSystemMemoryReservation = 0;
+    peakTotalMemoryReservation = stats.peakBytes;
+    numMemoryAllocations = stats.numAllocs;
   }
 
   void add(const MemoryStats& other) {
@@ -136,6 +135,9 @@ struct OperatorStats {
   // Total spilled partitions.
   uint32_t spilledPartitions{0};
 
+  // Total current spilled files.
+  uint32_t spilledFiles{0};
+
   std::unordered_map<std::string, RuntimeMetric> runtimeStats;
 
   int numDrivers = 0;
@@ -150,6 +152,18 @@ struct OperatorStats {
         planNodeId(std::move(_planNodeId)),
         operatorType(std::move(_operatorType)) {}
 
+  void addInputVector(uint64_t bytes, uint64_t positions) {
+    inputBytes += bytes;
+    inputPositions += positions;
+    inputVectors += 1;
+  }
+
+  void addOutputVector(uint64_t bytes, uint64_t positions) {
+    outputBytes += bytes;
+    outputPositions += positions;
+    outputVectors += 1;
+  }
+
   void addRuntimeStat(const std::string& name, const RuntimeCounter& value);
   void add(const OperatorStats& other);
   void clear();
@@ -158,7 +172,7 @@ struct OperatorStats {
 class OperatorCtx {
  public:
   OperatorCtx(
-      DriverCtx* FOLLY_NONNULL driverCtx,
+      DriverCtx* driverCtx,
       const core::PlanNodeId& planNodeId,
       int32_t operatorId,
       const std::string& operatorType = "");
@@ -169,46 +183,58 @@ class OperatorCtx {
 
   const std::string& taskId() const;
 
-  Driver* FOLLY_NONNULL driver() const {
+  Driver* driver() const {
     return driverCtx_->driver;
   }
 
-  DriverCtx* FOLLY_NONNULL driverCtx() const {
+  DriverCtx* driverCtx() const {
     return driverCtx_;
   }
 
-  velox::memory::MemoryPool* FOLLY_NONNULL pool() const {
+  velox::memory::MemoryPool* pool() const {
     return pool_;
   }
 
-  memory::MappedMemory* FOLLY_NONNULL mappedMemory() const;
+  const core::PlanNodeId& planNodeId() const {
+    return planNodeId_;
+  }
 
-  core::ExecCtx* FOLLY_NONNULL execCtx() const;
+  const int32_t operatorId() const {
+    return operatorId_;
+  }
+
+  const std::string& operatorType() const {
+    return operatorType_;
+  }
+
+  core::ExecCtx* execCtx() const;
 
   /// Makes an extract of QueryCtx for use in a connector. 'planNodeId'
-  /// is the id of the calling TableScan. This and the task id identify
-  /// the scan for column access tracking.
+  /// is the id of the calling TableScan. This and the task id identify the scan
+  /// for column access tracking. 'connectorPool' is an aggregate memory pool
+  /// for connector use.
   std::shared_ptr<connector::ConnectorQueryCtx> createConnectorQueryCtx(
       const std::string& connectorId,
-      const std::string& planNodeId) const;
+      const std::string& planNodeId,
+      memory::MemoryPool* connectorPool) const;
 
   /// Generates the spiller config for a given spiller 'type' if the disk
   /// spilling is enabled, otherwise returns null.
   std::optional<Spiller::Config> makeSpillConfig(Spiller::Type type) const;
 
  private:
-  DriverCtx* const FOLLY_NONNULL driverCtx_;
+  DriverCtx* const driverCtx_;
+  const core::PlanNodeId planNodeId_;
   const int32_t operatorId_;
-  velox::memory::MemoryPool* const FOLLY_NONNULL pool_;
+  const std::string operatorType_;
+  velox::memory::MemoryPool* const pool_;
 
   // These members are created on demand.
-  mutable memory::MappedMemory* FOLLY_NULLABLE mappedMemory_{nullptr};
   mutable std::unique_ptr<core::ExecCtx> execCtx_;
-  mutable std::unique_ptr<connector::ExpressionEvaluator> expressionEvaluator_;
 };
 
 // Query operator
-class Operator {
+class Operator : public BaseRuntimeStatWriter {
  public:
   // Factory class for mapping a user-registered PlanNode into the corresponding
   // Operator.
@@ -218,10 +244,20 @@ class Operator {
 
     // Translates plan node to operator. Returns nullptr if the plan node cannot
     // be handled by this factory.
+    virtual std::unique_ptr<Operator>
+    toOperator(DriverCtx* ctx, int32_t id, const core::PlanNodePtr& node) {
+      return nullptr;
+    }
+
+    // An overloaded method that should be called when the operator needs an
+    // ExchangeClient.
     virtual std::unique_ptr<Operator> toOperator(
-        DriverCtx* FOLLY_NONNULL ctx,
+        DriverCtx* ctx,
         int32_t id,
-        const core::PlanNodePtr& node) = 0;
+        const core::PlanNodePtr& node,
+        std::shared_ptr<ExchangeClient> exchangeClient) {
+      return nullptr;
+    }
 
     // Translates plan node to join bridge. Returns nullptr if the plan node
     // cannot be handled by this factory.
@@ -251,16 +287,9 @@ class Operator {
   // identifier of the PlanNode to which 'this'
   // corresponds. 'operatorType' is a label for use in stats.
   Operator(
-      DriverCtx* FOLLY_NONNULL driverCtx,
+      DriverCtx* driverCtx,
       RowTypePtr outputType,
       int32_t operatorId,
-      std::string planNodeId,
-      std::string operatorType);
-
-  /// This is only used by test to create mock operator.
-  Operator(
-      int32_t operatorId,
-      int32_t pipelineId,
       std::string planNodeId,
       std::string operatorType);
 
@@ -296,7 +325,7 @@ class Operator {
   // future that will be realized when the reason is no longer present.
   // The caller must wait for the `future` to complete before making
   // another call.
-  virtual BlockingReason isBlocked(ContinueFuture* FOLLY_NONNULL future) = 0;
+  virtual BlockingReason isBlocked(ContinueFuture* future) = 0;
 
   // Returns true if completely finished processing and no more output will be
   // produced. Some operators may finish early before receiving all input and
@@ -349,7 +378,7 @@ class Operator {
     input_ = nullptr;
     results_.clear();
     // Release the unused memory reservation on close.
-    operatorCtx_->pool()->getMemoryUsageTracker()->release();
+    operatorCtx_->pool()->release();
   }
 
   // Returns true if 'this' never has more output rows than input rows.
@@ -361,75 +390,173 @@ class Operator {
     return false;
   }
 
-  OperatorStats& stats() {
+  /// Returns copy of operator stats. If 'clear' is true, the function also
+  /// clears the operator stats after retrieval.
+  OperatorStats stats(bool clear);
+
+  /// Add a single runtime stat to the operator stats under the write lock.
+  /// This member overrides BaseRuntimeStatWriter's member.
+  void addRuntimeStat(const std::string& name, const RuntimeCounter& value)
+      override {
+    stats_.wlock()->addRuntimeStat(name, value);
+  }
+
+  /// Returns reference to the operator stats synchronized object to gain bulck
+  /// read/write access to the stats.
+  folly::Synchronized<OperatorStats>& stats() {
     return stats_;
   }
 
-  void recordBlockingTime(uint64_t start);
+  void recordBlockingTime(uint64_t start, BlockingReason reason);
 
   virtual std::string toString() const;
 
-  velox::memory::MemoryPool* FOLLY_NONNULL pool() {
+  velox::memory::MemoryPool* pool() const {
     return operatorCtx_->pool();
   }
 
-  const core::PlanNodeId& planNodeId() const {
-    return stats_.planNodeId;
+  /// Returns true if the operator is reclaimable. Currently, we only support
+  /// to reclaim memory from a spillable operator.
+  FOLLY_ALWAYS_INLINE virtual bool canReclaim() const {
+    return canSpill();
   }
 
-  // Registers 'translator' for mapping user defined PlanNode subclass instances
-  // to user-defined Operators.
+  /// Returns how many bytes is reclaimable from this operator. The function
+  /// returns true if this operator is reclaimable, and returns the estimated
+  /// reclaimable bytes.
+  virtual bool reclaimableBytes(uint64_t& reclaimableBytes) const {
+    const bool reclaimable = canReclaim();
+    reclaimableBytes = reclaimable ? pool()->reservedBytes() : 0;
+    return reclaimable;
+  }
+
+  /// Invoked by the memory arbitrator to reclaim memory from this operator with
+  /// specified reclaim target bytes. If 'targetBytes' is zero, then it tries to
+  /// reclaim all the reclaimable memory from this operator.
+  ///
+  /// NOTE: this method doesn't return the actually freed memory bytes. The
+  /// caller need to claim the actually freed memory space by shrinking the
+  /// associated root memory pool's capacity accordingly.
+  virtual void reclaim(uint64_t targetBytes) {}
+
+  const core::PlanNodeId& planNodeId() const {
+    return operatorCtx_->planNodeId();
+  }
+
+  const int32_t operatorId() const {
+    return operatorCtx_->operatorId();
+  }
+
+  const std::string& operatorType() const {
+    return operatorCtx_->operatorType();
+  }
+
+  /// Registers 'translator' for mapping user defined PlanNode subclass
+  /// instances to user-defined Operators.
   static void registerOperator(std::unique_ptr<PlanNodeTranslator> translator);
 
-  // Calls all the registered PlanNodeTranslators on 'planNode' and
-  // returns the result of the first one that returns non-nullptr
-  // or nullptr if all return nullptr.
+  /// Calls all the registered PlanNodeTranslators on 'planNode' and returns the
+  /// result of the first one that returns non-nullptr or nullptr if all return
+  /// nullptr. exchangeClient is not-null only when
+  /// planNode->requiresExchangeClient() is true.
   static std::unique_ptr<Operator> fromPlanNode(
-      DriverCtx* FOLLY_NONNULL ctx,
+      DriverCtx* ctx,
       int32_t id,
-      const core::PlanNodePtr& planNode);
+      const core::PlanNodePtr& planNode,
+      std::shared_ptr<ExchangeClient> exchangeClient = nullptr);
 
-  // Calls all the registered PlanNodeTranslators on 'planNode' and
-  // returns the result of the first one that returns non-nullptr
-  // or nullptr if all return nullptr.
+  /// Calls all the registered PlanNodeTranslators on 'planNode' and returns the
+  /// result of the first one that returns non-nullptr or nullptr if all return
+  /// nullptr.
   static std::unique_ptr<JoinBridge> joinBridgeFromPlanNode(
       const core::PlanNodePtr& planNode);
 
-  // Calls all the registered PlanNodeTranslators on 'planNode' and
-  // returns the result of the first one that returns non-nullptr
-  // or nullptr if all return nullptr.
+  /// Calls all the registered PlanNodeTranslators on 'planNode' and returns the
+  /// result of the first one that returns non-nullptr or nullptr if all return
+  /// nullptr.
   static OperatorSupplier operatorSupplierFromPlanNode(
       const core::PlanNodePtr& planNode);
 
-  // Calls `maxDrivers` on all the registered PlanNodeTranslators and returns
-  // the first one that is not std::nullopt or std::nullopt otherwise.
+  /// Calls `maxDrivers` on all the registered PlanNodeTranslators and returns
+  /// the first one that is not std::nullopt or std::nullopt otherwise.
   static std::optional<uint32_t> maxDrivers(const core::PlanNodePtr& planNode);
+
+  /// Returns the operator context of this operator. This method is only used
+  /// for test.
+  const OperatorCtx* testingOperatorCtx() const {
+    return operatorCtx_.get();
+  }
 
  protected:
   static std::vector<std::unique_ptr<PlanNodeTranslator>>& translators();
+  friend class NonReclaimableSection;
 
-  // Creates output vector from 'input_' and 'results_' according to
-  // 'identityProjections_' and 'resultProjections_'.
+  /// The scoped object to mark a reclaimable operator is under non-reclaimable
+  /// execution section. This prevents the memory arbitrator from reclaiming
+  /// memory from the operator if it happens to be suspended for memory
+  /// arbitration processing.
+  class NonReclaimableSection {
+   public:
+    explicit NonReclaimableSection(Operator* op) : op_(op) {
+      VELOX_CHECK(!op_->nonReclaimableSection_);
+      op_->nonReclaimableSection_ = true;
+    }
+
+    ~NonReclaimableSection() {
+      VELOX_CHECK(op_->nonReclaimableSection_);
+      op_->nonReclaimableSection_ = false;
+    }
+
+   private:
+    Operator* const op_;
+  };
+
+  /// Returns true if this is a spillable operator and has configured spilling.
+  FOLLY_ALWAYS_INLINE bool canSpill() const {
+    return spillConfig_.has_value();
+  }
+
+  /// Creates output vector from 'input_' and 'results_' according to
+  /// 'identityProjections_' and 'resultProjections_'.
   RowVectorPtr fillOutput(vector_size_t size, BufferPtr mapping);
 
-  std::unique_ptr<OperatorCtx> operatorCtx_;
-  OperatorStats stats_;
+  /// Returns the number of rows for the output batch. This uses averageRowSize
+  /// to calculate how many rows fit in preferredOutputBatchBytes. It caps the
+  /// number of rows at 10K and returns at least one row. The averageRowSize
+  /// must not be negative. If the averageRowSize is 0 which is not advised,
+  /// returns maxOutputBatchRows. If the averageRowSize is not given, returns
+  /// preferredOutputBatchRows.
+  uint32_t outputBatchRows(
+      std::optional<uint64_t> averageRowSize = std::nullopt) const;
+
+  const std::unique_ptr<OperatorCtx> operatorCtx_;
   const RowTypePtr outputType_;
 
-  // Holds the last data from addInput until it is processed. Reset after the
-  // input is processed.
+  folly::Synchronized<OperatorStats> stats_;
+
+  /// Contains the disk spilling related configs if spilling is enabled (e.g.
+  /// the fs dir path to store spill files), otherwise null.
+  std::optional<Spiller::Config> spillConfig_;
+
+  /// Indicates if an operator is under a non-reclaimable execution section.
+  /// This prevents the memory arbitrator from reclaiming memory from this
+  /// operator if it happens to be suspended for memory arbitration processing.
+  /// This only applies to a reclaimable operator.
+  tsan_atomic<bool> nonReclaimableSection_{false};
+
+  /// Holds the last data from addInput until it is processed. Reset after the
+  /// input is processed.
   RowVectorPtr input_;
 
   bool noMoreInput_ = false;
   std::vector<IdentityProjection> identityProjections_;
   std::vector<VectorPtr> results_;
 
-  // Maps between index in results_ and index in output RowVector.
+  /// Maps between index in results_ and index in output RowVector.
   std::vector<IdentityProjection> resultProjections_;
 
-  // True if the input and output rows have exactly the same fields,
-  // i.e. one could copy directly from input to output if no
-  // cardinality change.
+  /// True if the input and output rows have exactly the same fields, i.e. one
+  /// could copy directly from input to output if no cardinality change.
   bool isIdentityProjection_ = false;
 
   std::unordered_map<column_index_t, std::shared_ptr<common::Filter>>
@@ -441,9 +568,7 @@ std::vector<column_index_t> toChannels(
     const RowTypePtr& rowType,
     const std::vector<core::TypedExprPtr>& exprs);
 
-column_index_t exprToChannel(
-    const core::ITypedExpr* FOLLY_NONNULL expr,
-    const TypePtr& type);
+column_index_t exprToChannel(const core::ITypedExpr* expr, const TypePtr& type);
 
 /// Given a source output type and target input type we return the indices of
 /// the target input columns in the source output type.
@@ -458,7 +583,7 @@ std::vector<column_index_t> calculateOutputChannels(
 class SourceOperator : public Operator {
  public:
   SourceOperator(
-      DriverCtx* FOLLY_NONNULL driverCtx,
+      DriverCtx* driverCtx,
       RowTypePtr outputType,
       int32_t operatorId,
       const std::string& planNodeId,
@@ -481,25 +606,6 @@ class SourceOperator : public Operator {
   void noMoreInput() override {
     VELOX_FAIL("SourceOperator does not support noMoreInput()");
   }
-};
-
-// Concrete class implementing the base runtime stats writer. Wraps around
-// operator pointer to be called at any time to updated runtime stats.
-// Used for reporting IO wall time from lazy vectors, for example.
-class OperatorRuntimeStatWriter : public BaseRuntimeStatWriter {
- public:
-  explicit OperatorRuntimeStatWriter(Operator* FOLLY_NULLABLE op)
-      : operator_{op} {}
-
-  void addRuntimeStat(const std::string& name, const RuntimeCounter& value)
-      override {
-    if (operator_) {
-      operator_->stats().addRuntimeStat(name, value);
-    }
-  }
-
- private:
-  Operator* FOLLY_NULLABLE operator_;
 };
 
 } // namespace facebook::velox::exec

@@ -59,13 +59,10 @@ class ArrayDistinctFunction : public exec::VectorFunction {
       const auto& flatArray = constantArray->valueVector();
       const auto flatIndex = constantArray->index();
 
-      SelectivityVector singleRow(flatIndex + 1, false);
-      singleRow.setValid(flatIndex, true);
-      singleRow.updateBounds();
-
-      localResult = applyFlat(singleRow, flatArray, context);
+      exec::LocalSingleRow singleRow(context, flatIndex);
+      localResult = applyFlat(*singleRow, flatArray, context);
       localResult =
-          BaseVector::wrapInConstant(rows.size(), flatIndex, localResult);
+          BaseVector::wrapInConstant(rows.end(), flatIndex, localResult);
     } else {
       localResult = applyFlat(rows, arg, context);
     }
@@ -84,8 +81,8 @@ class ArrayDistinctFunction : public exec::VectorFunction {
         toElementRows(elementsVector->size(), rows, arrayVector);
     exec::LocalDecodedVector elements(context, *elementsVector, elementsRows);
 
-    vector_size_t elementsCount = elementsRows.size();
-    vector_size_t rowCount = arrayVector->size();
+    vector_size_t elementsCount = elementsRows.end();
+    vector_size_t rowCount = rows.end();
 
     // Allocate new vectors for indices, length and offsets.
     memory::MemoryPool* pool = context.pool();

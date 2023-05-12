@@ -32,35 +32,33 @@ using ::duckdb::dtime_t;
 using ::duckdb::string_t;
 using ::duckdb::timestamp_t;
 
-namespace {
 variant decimalVariant(const Value& val) {
-  uint8_t precision;
-  uint8_t scale;
-  val.type().GetDecimalProperties(precision, scale);
-  auto decimalType = DECIMAL(precision, scale);
+  VELOX_DCHECK(val.type().id() == LogicalTypeId::DECIMAL)
   switch (val.type().InternalType()) {
     case ::duckdb::PhysicalType::INT128: {
       auto unscaledValue = val.GetValueUnsafe<::duckdb::hugeint_t>();
-      return variant::longDecimal(
-          buildInt128(unscaledValue.upper, unscaledValue.lower), decimalType);
+      return variant(HugeInt::build(unscaledValue.upper, unscaledValue.lower));
     }
     case ::duckdb::PhysicalType::INT16: {
-      return variant::shortDecimal(val.GetValueUnsafe<int16_t>(), decimalType);
+      return variant(static_cast<int64_t>(val.GetValueUnsafe<int16_t>()));
     }
     case ::duckdb::PhysicalType::INT32: {
-      return variant::shortDecimal(val.GetValueUnsafe<int32_t>(), decimalType);
+      return variant(static_cast<int64_t>(val.GetValueUnsafe<int32_t>()));
     }
     case ::duckdb::PhysicalType::INT64: {
-      return variant::shortDecimal(val.GetValueUnsafe<int64_t>(), decimalType);
+      return variant(val.GetValueUnsafe<int64_t>());
     }
     default:
       VELOX_UNSUPPORTED();
   }
 }
-} // namespace
 
 //! Type mapping for velox -> DuckDB conversions
 LogicalType fromVeloxType(const TypePtr& type) {
+  if (type->isDecimal()) {
+    auto [precision, scale] = getDecimalPrecisionScale(*type);
+    return LogicalType::DECIMAL(precision, scale);
+  }
   switch (type->kind()) {
     case TypeKind::BOOLEAN:
       return LogicalType::BOOLEAN;
@@ -71,6 +69,9 @@ LogicalType fromVeloxType(const TypePtr& type) {
     case TypeKind::INTEGER:
       return LogicalType::INTEGER;
     case TypeKind::BIGINT:
+      if (isIntervalDayTimeType(type)) {
+        return LogicalType::INTERVAL;
+      }
       return LogicalType::BIGINT;
     case TypeKind::REAL:
       return LogicalType::FLOAT;
@@ -80,6 +81,8 @@ LogicalType fromVeloxType(const TypePtr& type) {
       return LogicalType::VARCHAR;
     case TypeKind::TIMESTAMP:
       return LogicalType::TIMESTAMP;
+    case TypeKind::DATE:
+      return LogicalType::DATE;
     case TypeKind::ARRAY:
       return LogicalType::LIST(fromVeloxType(type->childAt(0)));
     case TypeKind::MAP:
@@ -104,6 +107,8 @@ LogicalType fromVeloxType(const TypePtr& type) {
 //! Type mapping for DuckDB -> velox conversions, we support more types here
 TypePtr toVeloxType(LogicalType type) {
   switch (type.id()) {
+    case LogicalTypeId::SQLNULL:
+      return UNKNOWN();
     case LogicalTypeId::BOOLEAN:
       return BOOLEAN();
     case LogicalTypeId::TINYINT:
@@ -165,7 +170,7 @@ TypePtr toVeloxType(LogicalType type) {
   }
 }
 
-variant duckValueToVariant(const Value& val, bool parseDecimalAsDouble) {
+variant duckValueToVariant(const Value& val) {
   switch (val.type().id()) {
     case LogicalTypeId::SQLNULL:
       return variant(TypeKind::UNKNOWN);
@@ -184,11 +189,7 @@ variant duckValueToVariant(const Value& val, bool parseDecimalAsDouble) {
     case LogicalTypeId::DOUBLE:
       return variant(val.GetValue<double>());
     case LogicalTypeId::DECIMAL:
-      if (parseDecimalAsDouble) {
-        return variant(val.GetValue<double>());
-      } else {
-        return decimalVariant(val);
-      }
+      return decimalVariant(val);
     case LogicalTypeId::VARCHAR:
       return variant(val.GetValue<std::string>());
     case LogicalTypeId::BLOB:
@@ -210,18 +211,7 @@ std::string makeCreateTableSql(
       sql << ", ";
     }
     sql << rowType.nameOf(i) << " ";
-    auto child = rowType.childAt(i);
-    if (child->isArray()) {
-      sql << child->asArray().elementType()->kindName() << "[]";
-    } else if (child->isMap()) {
-      sql << "MAP(" << child->asMap().keyType()->kindName() << ", "
-          << child->asMap().valueType()->kindName() << ")";
-    } else if (child->isShortDecimal() || child->isLongDecimal()) {
-      const auto& [precision, scale] = getDecimalPrecisionScale(*child);
-      sql << "DECIMAL(" << precision << ", " << scale << ")";
-    } else {
-      sql << child->kindName();
-    }
+    toTypeSql(rowType.childAt(i), sql);
   }
   sql << ")";
   return sql.str();

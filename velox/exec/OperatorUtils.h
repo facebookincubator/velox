@@ -111,8 +111,8 @@ void gatherCopy(
 /// not. It is assumed that the disk spilling file hierarchy for an operator is
 /// flat.
 std::string makeOperatorSpillPath(
-    const std::string& spillPath,
-    const std::string& taskId,
+    const std::string& spillDir,
+    int pipelineId,
     int driverId,
     int32_t operatorId);
 
@@ -121,4 +121,19 @@ void addOperatorRuntimeStats(
     const std::string& name,
     const RuntimeCounter& value,
     std::unordered_map<std::string, RuntimeMetric>& stats);
+
+/// Aggregates runtime metrics we want to see per operator rather than per
+/// event.
+void aggregateOperatorRuntimeStats(
+    std::unordered_map<std::string, RuntimeMetric>& stats);
+
+/// Allocates 'mapping' to fit at least 'size' indices and initializes them to
+/// zero if 'mapping' is either: nullptr, not unique or cannot fit 'size'.
+/// Returns 'mapping' as folly::Range<vector_size_t*>. Can be used by operator
+/// to initialize / resize reusable state across batches of processing.
+folly::Range<vector_size_t*> initializeRowNumberMapping(
+    BufferPtr& mapping,
+    vector_size_t size,
+    memory::MemoryPool* pool);
+
 } // namespace facebook::velox::exec

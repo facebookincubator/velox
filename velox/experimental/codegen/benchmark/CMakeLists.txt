@@ -24,12 +24,12 @@ target_link_libraries(
   velox_codegen_code_generator
   velox_hive_connector
   ${FOLLY_BENCHMARK}
-  ${FOLLY_WITH_DEPENDENCIES}
-  ${Boost_FILESYSTEM_LIBRARIES}
+  Folly::folly
+  Boost::filesystem
   gtest
   gtest_main
-  ${GFLAGS_LIBRARIES}
-  ${FMT}
+  gflags::gflags
+  fmt::fmt
   velox_core
   velox_exec
   velox_exec_test_lib
@@ -45,7 +45,7 @@ target_link_libraries(velox_codegen_benchmark velox_hive_connector)
 
 add_compile_definitions(velox_codegen_test BASEFOLDER="${PROJECT_SOURCE_DIR}")
 add_compile_definitions(velox_codegen_test COMPFLAGS="${CMAKE_CXX_FLAGS}")
-add_compile_definitions(velox_codegen_test MYFOLLY="${GFLAGS_LIBRARIES}")
+add_compile_definitions(velox_codegen_test MYFOLLY="gflags::gflags")
 
 # find a better way to do this
 add_compile_definitions(velox_codegen_test
@@ -88,13 +88,13 @@ target_link_libraries(
   velox_exec_test_lib
   velox_codegen_code_generator
   ${FOLLY_BENCHMARK}
-  ${FOLLY_WITH_DEPENDENCIES}
-  ${Boost_FILESYSTEM_LIBRARIES}
+  Folly::folly
+  Boost::filesystem
   gtest
   gtest_main
-  ${GFLAGS_LIBRARIES}
+  gflags::gflags
   glog::glog
-  ${FMT}
+  fmt::fmt
   velox_core
   velox_exec
   velox_codegen_utils_resource_path

@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 #pragma once
-#include "velox/common/memory/MappedMemory.h"
+#include "velox/common/memory/Memory.h"
 
 namespace facebook::velox {
 
@@ -27,9 +27,7 @@ struct ByteRange;
 // complex types as serialized rows.
 class StreamArena {
  public:
-  static constexpr int32_t kVectorStreamOwner = 1;
-
-  explicit StreamArena(memory::MappedMemory* mappedMemory);
+  explicit StreamArena(memory::MemoryPool* pool);
 
   virtual ~StreamArena() = default;
 
@@ -47,17 +45,17 @@ class StreamArena {
     return size_;
   }
 
-  memory::MappedMemory* mappedMemory() {
-    return mappedMemory_.get();
+  memory::MemoryPool* pool() const {
+    return pool_;
   }
 
  private:
-  std::shared_ptr<memory::MappedMemory> mappedMemory_;
+  memory::MemoryPool* const pool_;
   // All allocations.
-  std::vector<std::unique_ptr<memory::MappedMemory::Allocation>> allocations_;
+  std::vector<std::unique_ptr<memory::Allocation>> allocations_;
   // The allocation from which pages are given out. Moved to 'allocations_' when
   // used up.
-  memory::MappedMemory::Allocation allocation_;
+  memory::Allocation allocation_;
   int32_t currentRun_ = 0;
   int32_t currentPage_ = 0;
   memory::MachinePageCount allocationQuantum_ = 2;

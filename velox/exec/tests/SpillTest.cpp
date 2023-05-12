@@ -17,7 +17,9 @@
 #include <gtest/gtest.h>
 #include <algorithm>
 #include <memory>
+#include "velox/common/base/RuntimeMetrics.h"
 #include "velox/common/file/FileSystems.h"
+#include "velox/exec/OperatorUtils.h"
 #include "velox/exec/tests/utils/TempDirectoryPath.h"
 #include "velox/serializers/PrestoSerializer.h"
 #include "velox/vector/tests/utils/VectorTestBase.h"
@@ -29,13 +31,39 @@ using facebook::velox::exec::test::TempDirectoryPath;
 
 namespace {
 static const int64_t kGB = 1'000'000'000;
-}
+
+// Class to write runtime stats in the tests to the stats container.
+class TestRuntimeStatWriter : public BaseRuntimeStatWriter {
+ public:
+  explicit TestRuntimeStatWriter(
+      std::unordered_map<std::string, RuntimeMetric>& stats)
+      : stats_{stats} {}
+
+  void addRuntimeStat(const std::string& name, const RuntimeCounter& value)
+      override {
+    addOperatorRuntimeStats(name, value, stats_);
+  }
+
+ private:
+  std::unordered_map<std::string, RuntimeMetric>& stats_;
+};
+} // namespace
 
 class SpillTest : public testing::Test,
                   public facebook::velox::test::VectorTestBase {
+ public:
+  explicit SpillTest()
+      : statWriter_(std::make_unique<TestRuntimeStatWriter>(stats_)) {
+    setThreadLocalRunTimeStatWriter(statWriter_.get());
+  }
+
+  ~SpillTest() {
+    setThreadLocalRunTimeStatWriter(nullptr);
+  }
+
  protected:
   void SetUp() override {
-    mappedMemory_ = memory::MappedMemory::getInstance();
+    allocator_ = memory::MemoryAllocator::getInstance();
     tempDir_ = exec::test::TempDirectoryPath::create();
     if (!isRegisteredVectorSerde()) {
       facebook::velox::serializer::presto::PrestoVectorSerde::
@@ -116,18 +144,12 @@ class SpillTest : public testing::Test,
     // the batch number of the vector in the partition. When read back, both
     // partitions produce an ascending sequence of integers without gaps.
     state_ = std::make_unique<SpillState>(
-        spillPath_,
-        numPartitions,
-        1,
-        compareFlags,
-        targetFileSize,
-        *pool(),
-        *mappedMemory_,
-        stats_);
+        spillPath_, numPartitions, 1, compareFlags, targetFileSize, *pool());
     EXPECT_EQ(targetFileSize, state_->targetFileSize());
     EXPECT_EQ(numPartitions, state_->maxPartitions());
     EXPECT_EQ(0, state_->spilledPartitions());
     EXPECT_TRUE(state_->spilledPartitionSet().empty());
+    EXPECT_EQ(0, state_->spilledFiles());
 
     for (auto partition = 0; partition < state_->maxPartitions(); ++partition) {
       EXPECT_FALSE(state_->isPartitionSpilled(partition));
@@ -183,6 +205,16 @@ class SpillTest : public testing::Test,
     for (int i = 0; i < numPartitions; ++i) {
       EXPECT_TRUE(state_->spilledPartitionSet().contains(i));
     }
+    // NOTE: we write numBatches for each partition. If the target file size is
+    // 1, we will end up with 'numPartitions * numBatches' spilled files as each
+    // batch will generate one spill file. If not, the target file size is set
+    // to vary large and only finishWrite() generates a new spill file which is
+    // called every two batches.
+    auto expectedFiles = numPartitions * numBatches;
+    if (targetFileSize > 1) {
+      expectedFiles /= 2;
+    }
+    EXPECT_EQ(expectedFiles, state_->spilledFiles());
     EXPECT_LT(
         numPartitions * numBatches * sizeof(int64_t), state_->spilledBytes());
   }
@@ -195,7 +227,7 @@ class SpillTest : public testing::Test,
       int numBatches,
       int numDuplicates,
       const std::vector<CompareFlags>& compareFlags,
-      int64_t expectedNumSpilledFiles) {
+      uint64_t expectedNumSpilledFiles) {
     const int numRowsPerBatch = 20'000;
     SCOPED_TRACE(fmt::format(
         "targetFileSize: {}, numPartitions: {}, numBatches: {}, numDuplicates: {}, nullsFirst: {}, ascending: {}",
@@ -267,10 +299,9 @@ class SpillTest : public testing::Test,
     // Both spilled bytes and files stats are cleared after merge read.
     EXPECT_EQ(0, state_->spilledBytes());
     EXPECT_EQ(0, state_->spilledFiles());
-    // Verify the spilled file has been removed from file system after spill
-    // state destruction.
-    for (const auto& spilledFile : spilledFiles) {
-      EXPECT_ANY_THROW(fs->openFileForRead(spilledFile));
+    // Verify the spilled files are still there after spill state destruction.
+    for (const auto& spilledFile : spilledFileSet) {
+      EXPECT_NO_THROW(fs->exists(spilledFile));
     }
     // Verify stats.
     ASSERT_EQ(stats_["spillFileSize"].count, spilledFiles.size());
@@ -278,12 +309,13 @@ class SpillTest : public testing::Test,
 
   folly::Random::DefaultGenerator rng_;
   std::shared_ptr<TempDirectoryPath> tempDir_;
-  memory::MappedMemory* mappedMemory_;
+  memory::MemoryAllocator* allocator_;
   std::vector<std::optional<int64_t>> values_;
   std::vector<std::vector<RowVectorPtr>> batchesByPartition_;
   std::string spillPath_;
   std::unique_ptr<SpillState> state_;
   std::unordered_map<std::string, RuntimeMetric> stats_;
+  std::unique_ptr<TestRuntimeStatWriter> statWriter_;
 };
 
 TEST_F(SpillTest, spillState) {
@@ -317,15 +349,8 @@ TEST_F(SpillTest, spillTimestamp) {
       Timestamp{0, 17'123'456},
       Timestamp{1, 17'123'456},
       Timestamp{-1, 17'123'456}};
-  SpillState state(
-      spillPath,
-      1,
-      1,
-      emptyCompareFlags,
-      1024,
-      *pool(),
-      *mappedMemory_,
-      stats_);
+
+  SpillState state(spillPath, 1, 1, emptyCompareFlags, 1024, *pool());
   int partitionIndex = 0;
   state.setPartitionSpilled(partitionIndex);
   EXPECT_TRUE(state.isPartitionSpilled(partitionIndex));

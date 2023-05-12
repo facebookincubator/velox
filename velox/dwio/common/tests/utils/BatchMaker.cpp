@@ -178,34 +178,17 @@ VectorPtr BatchMaker::createVector<TypeKind::DOUBLE>(
 }
 
 template <>
-VectorPtr BatchMaker::createVector<TypeKind::SHORT_DECIMAL>(
+VectorPtr BatchMaker::createVector<TypeKind::HUGEINT>(
     const std::shared_ptr<const Type>& type,
     size_t size,
     MemoryPool& pool,
     std::mt19937& gen,
     std::function<bool(vector_size_t /*index*/)> isNullAt) {
-  return createScalar<UnscaledShortDecimal>(
-      size,
-      gen,
-      [&gen]() { return UnscaledShortDecimal(Random::rand32(gen)); },
-      pool,
-      isNullAt,
-      type);
-}
-
-template <>
-VectorPtr BatchMaker::createVector<TypeKind::LONG_DECIMAL>(
-    const std::shared_ptr<const Type>& type,
-    size_t size,
-    MemoryPool& pool,
-    std::mt19937& gen,
-    std::function<bool(vector_size_t /*index*/)> isNullAt) {
-  return createScalar<UnscaledLongDecimal>(
+  return createScalar<int128_t>(
       size,
       gen,
       [&gen]() {
-        return UnscaledLongDecimal(
-            buildInt128(Random::rand32(gen), Random::rand32(gen)));
+        return HugeInt::build(Random::rand32(gen), Random::rand32(gen));
       },
       pool,
       isNullAt,
@@ -453,7 +436,12 @@ VectorPtr createScalarMapKeys(
   }
 
   return std::make_shared<FlatVector<T>>(
-      &pool, BufferPtr(nullptr), totalKeys, values, std::vector<BufferPtr>{});
+      &pool,
+      CppToType<T>::create(),
+      BufferPtr(nullptr),
+      totalKeys,
+      values,
+      std::vector<BufferPtr>{});
 }
 
 VectorPtr createBinaryMapKeys(
@@ -665,7 +653,8 @@ void setNullRecursive(BaseVector& vector, vector_size_t i) {
     case TypeKind::MAP: {
       auto map = vector.asUnchecked<MapVector>();
       for (auto j = 0; j < map->sizeAt(i); ++j) {
-        setNullRecursive(*map->mapKeys(), map->offsetAt(i) + j);
+        //        We only set nulls recursively to Values. This is because nulls
+        //        are not expected in Parquet Map Keys.
         setNullRecursive(*map->mapValues(), map->offsetAt(i) + j);
       }
     } break;

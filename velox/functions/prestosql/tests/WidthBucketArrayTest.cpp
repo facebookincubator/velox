@@ -14,6 +14,7 @@
  * limitations under the License.
  */
 #include <optional>
+#include "velox/common/base/tests/GTestUtils.h"
 #include "velox/functions/prestosql/tests/utils/FunctionBaseTest.h"
 
 using namespace facebook::velox;
@@ -80,13 +81,11 @@ TEST_F(WidthBucketArrayTest, failure) {
                          const std::vector<std::vector<double>>& bins,
                          const std::string& expected_message) {
     auto binsVector = makeArrayVector<double>(bins);
-    assertUserInvalidArgument(
-        [&]() {
-          evaluate<SimpleVector<int64_t>>(
-              "width_bucket(c0, c1)",
-              makeRowVector(
-                  {makeConstant(operand, binsVector->size()), binsVector}));
-        },
+    VELOX_ASSERT_THROW(
+        evaluate<SimpleVector<int64_t>>(
+            "width_bucket(c0, c1)",
+            makeRowVector(
+                {makeConstant(operand, binsVector->size()), binsVector})),
         expected_message);
   };
 
@@ -127,12 +126,10 @@ TEST_F(WidthBucketArrayTest, failureForConstant) {
   auto testFailure = [&](const double operand,
                          const std::string& bins,
                          const std::string& expected_message) {
-    assertUserInvalidArgument(
-        [&]() {
-          evaluate<SimpleVector<int64_t>>(
-              fmt::format("width_bucket(c0, {})", bins),
-              makeRowVector({makeConstant(operand, 1)}));
-        },
+    VELOX_ASSERT_THROW(
+        evaluate<SimpleVector<int64_t>>(
+            fmt::format("width_bucket(c0, {})", bins),
+            makeRowVector({makeConstant(operand, 1)})),
         expected_message);
   };
 
@@ -144,4 +141,14 @@ TEST_F(WidthBucketArrayTest, failureForConstant) {
       2, "ARRAY[1.0, 0.0]", "Bin values are not sorted in ascending order");
 }
 
+TEST_F(WidthBucketArrayTest, makeWidthBucketArrayNoThrow) {
+  auto test = [&](const std::string& sql) {
+    auto typed = makeTypedExpr(sql, ROW({DOUBLE(), ARRAY(BIGINT())}));
+    ASSERT_NO_THROW(ExprSet exprSet({typed}, &execCtx_));
+  };
+
+  test("width_bucket(0.0, array_constructor(null::BIGINT))");
+  test("width_bucket(0.0, array_constructor()::BIGINT[])");
+  test("width_bucket(0.0, array_constructor(1,0))");
+}
 } // namespace

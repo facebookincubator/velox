@@ -25,65 +25,84 @@
 #include <unordered_set>
 
 #include "velox/common/base/SimdUtil.h"
-#include "velox/common/memory/MappedMemory.h"
+#include "velox/common/memory/MemoryAllocator.h"
 #include "velox/common/memory/MmapArena.h"
 
 namespace facebook::velox::memory {
 
-// Denotes a number of pages of one size class, i.e. one page consists
-// of a size class dependent number of consecutive machine pages.
+/// Denotes a number of pages of one size class, i.e. one page consists
+/// of a size class dependent number of consecutive machine pages.
 using ClassPageCount = int32_t;
 
-struct MmapAllocatorOptions {
-  //  Capacity in bytes, default 512MB
-  uint64_t capacity = 1L << 29;
-
-  // If set true, allocations larger than largest size class size will be
-  // delegated to ManagedMmapArena. Otherwise a system mmap call will be
-  // issued for each such allocation.
-  bool useMmapArena = false;
-
-  // Used to determine MmapArena capacity. The ratio represents system memory
-  // capacity to single MmapArena capacity ratio.
-  int32_t mmapArenaCapacityRatio = 10;
-};
-
-// Implementation of MappedMemory with mmap and madvise. Each size
-// class is mmapped for the whole capacity. Each size class has a
-// bitmap of allocated entries and entries that are backed by
-// memory. If a size class does not have an entry that is free and
-// backed by memory, we allocate an entry that is free and we advise
-// away pages from other size classes where the corresponding entry
-// is free. In this way, any combination of sizes that adds up to
-// the capacity can be allocated without fragmentation. If a size
-// needs to be allocated that does not correspond to size classes,
-// we advise away enough pages from other size classes to cover for
-// it and then make a new mmap of the requested size
-// (ContiguousAllocation).
-class MmapAllocator : public MappedMemory {
+/// Implementation of MemoryAllocator with mmap and madvise. Each size class is
+/// mmapped for the whole capacity. Each size class has a bitmap of allocated
+/// entries and entries that are backed by memory. If a size class does not have
+/// an entry that is free and backed by memory, we allocate an entry that is
+/// free and we advise away pages from other size classes where the
+/// corresponding entry is free. In this way, any combination of sizes that adds
+/// up to the capacity can be allocated without fragmentation. If a size needs
+/// to be allocated that does not correspond to size classes, we advise away
+/// enough pages from other size classes to cover for it and then make a new
+/// mmap of the requested size (ContiguousAllocation). Small contiguous memory
+/// allocations less than 3/4 of smallest size class are still delegated to
+/// malloc.
+class MmapAllocator : public MemoryAllocator {
  public:
-  enum class Failure { kNone, kMadvise, kMmap };
+  struct Options {
+    ///  Capacity in bytes, default 512MB
+    uint64_t capacity = 1L << 29;
 
-  explicit MmapAllocator(const MmapAllocatorOptions& options);
+    /// If set true, allocations larger than largest size class size will be
+    /// delegated to ManagedMmapArena. Otherwise a system mmap call will be
+    /// issued for each such allocation.
+    bool useMmapArena = false;
 
-  bool allocate(
+    /// Used to determine MmapArena capacity. The ratio represents system memory
+    /// capacity to single MmapArena capacity ratio.
+    int32_t mmapArenaCapacityRatio = 10;
+
+    /// If not zero, reserve 'smallAllocationReservePct'% of space from
+    /// 'capacity' for ad hoc small allocations. And those allocations are
+    /// delegated to std::malloc.
+    ///
+    /// NOTE: if 'maxMallocBytes' is 0, this value will be disregarded.
+    uint32_t smallAllocationReservePct = 0;
+
+    /// The allocation threshold less than which an allocation is delegated to
+    /// std::malloc().
+    ///
+    /// NOTE: if it is zero, then we don't delegate any allocation std::malloc,
+    /// and 'smallAllocationReservePct' will be automatically set to 0
+    /// disregarding any passed in value.
+    int32_t maxMallocBytes = 3072;
+  };
+
+  explicit MmapAllocator(const Options& options);
+
+  ~MmapAllocator();
+
+  Kind kind() const override {
+    return kind_;
+  }
+
+  bool allocateNonContiguous(
       MachinePageCount numPages,
-      int32_t owner,
       Allocation& out,
-      std::function<void(int64_t, bool)> userAllocCB = nullptr,
+      ReservationCallback reservationCB = nullptr,
       MachinePageCount minSizeClass = 0) override;
 
-  int64_t free(Allocation& allocation) override;
+  int64_t freeNonContiguous(Allocation& allocation) override;
 
   bool allocateContiguous(
       MachinePageCount numPages,
-      Allocation* FOLLY_NULLABLE collateral,
+      Allocation* collateral,
       ContiguousAllocation& allocation,
-      std::function<void(int64_t, bool)> userAllocCB = nullptr) override {
+      ReservationCallback reservationCB = nullptr) override {
+    VELOX_CHECK_GT(numPages, 0);
     bool result;
-    stats_.recordAllocate(numPages * kPageSize, 1, [&]() {
-      result =
-          allocateContiguousImpl(numPages, collateral, allocation, userAllocCB);
+    stats_.recordAllocate(numPages * AllocationTraits::kPageSize, 1, [&]() {
+      result = allocateContiguousImpl(
+          numPages, collateral, allocation, reservationCB);
     });
     return result;
   }
@@ -93,17 +112,41 @@ class MmapAllocator : public MappedMemory {
         allocation.size(), [&]() { freeContiguousImpl(allocation); });
   }
 
-  // Checks internal consistency of allocation data
-  // structures. Returns true if OK. May return false if there are
-  // concurrent alocations and frees during the consistency check. This
-  // is a false positive but not dangerous.
-  //
-  // Checks that the totals of mapped free and mapped and allocated
-  // pages match the data in the bitmaps in the size classes.
+  /// Allocates 'bytes' contiguous bytes and returns the pointer to the first
+  /// byte. If 'bytes' is less than 'maxMallocBytes_', delegates the allocation
+  /// to malloc. If the size is above that and below the largest size classes'
+  /// size, allocates one element of the next size classes' size. If 'size' is
+  /// greater than the largest size classes' size, calls allocateContiguous().
+  /// Returns nullptr if there is no space. The amount to allocate is subject to
+  /// the size limit of 'this'. This function is not virtual but calls the
+  /// virtual functions allocateNonContiguous and allocateContiguous, which can
+  /// track sizes and enforce caps etc. If 'alignment' is not kMinAlignment,
+  /// then 'bytes' must be a multiple of 'alignment'.
+  ///
+  /// NOTE: 'alignment' must be power of two and in range of [kMinAlignment,
+  /// kMaxAlignment].
+  void* allocateBytes(uint64_t bytes, uint16_t alignment) override;
+
+  void freeBytes(void* p, uint64_t bytes) noexcept override;
+
+  /// Checks internal consistency of allocation data structures. Returns true if
+  /// OK. May return false if there are concurrent allocations and frees during
+  /// the consistency check. This is a false positive but not dangerous.
+  ///
+  /// Checks that the totals of mapped free and mapped and allocated pages match
+  /// the data in the bitmaps in the size classes.
   bool checkConsistency() const override;
 
   MachinePageCount capacity() const {
     return capacity_;
+  }
+
+  int32_t maxMallocBytes() const {
+    return maxMallocBytes_;
+  }
+
+  size_t mallocReservedBytes() const {
+    return mallocReservedBytes_;
   }
 
   MachinePageCount numAllocated() const override {
@@ -114,23 +157,21 @@ class MmapAllocator : public MappedMemory {
     return numMapped_;
   }
 
-  // Causes 'failure' to occur in next call. This is a test-only
-  // function for validating otherwise unreachable error paths.
-  void injectFailure(Failure failure) {
-    injectedFailure_ = failure;
-  }
-
   MachinePageCount numExternalMapped() const {
     return numExternalMapped_;
   }
 
-  std::string toString() const override;
+  uint64_t numMallocBytes() const {
+    return numMallocBytes_;
+  }
 
   Stats stats() const override {
     auto stats = stats_;
     stats.numAdvise = numAdvisedPages_;
     return stats;
   }
+
+  std::string toString() const override;
 
  private:
   static constexpr uint64_t kAllSet = 0xffffffffffffffff;
@@ -147,14 +188,13 @@ class MmapAllocator : public MappedMemory {
       return unitSize_;
     }
 
-    // Allocates 'numPages' from 'this' and appends these to
-    // *out. '*numUnmapped' is incremented by the number of pages that
-    // are not backed by memory.
+    // Allocates 'numPages' from 'this' and appends these to *out.
+    // '*numUnmapped' is incremented by the number of pages that are not backed
+    // by memory.
     bool allocate(
         ClassPageCount numPages,
-        int32_t owner,
         MachinePageCount& numUnmapped,
-        MappedMemory::Allocation& out);
+        Allocation& out);
 
     // Frees all pages of 'allocation' that fall in this size
     // class. Erases the corresponding runs from 'allocation'.
@@ -168,27 +208,24 @@ class MmapAllocator : public MappedMemory {
     // Advises away backing for 'numPages' worth of unallocated mapped class
     // pages. This needs to make an Allocation, for which it needs the
     // containing MmapAllocator.
-    MachinePageCount adviseAway(
-        MachinePageCount numPages,
-        MmapAllocator* FOLLY_NONNULL allocator);
+    MachinePageCount adviseAway(MachinePageCount numPages);
 
     // Sets the mapped bits for the runs in 'allocation' to 'value' for the
     // addresses that fall in the range of 'this'
     void setAllMapped(const Allocation& allocation, bool value);
 
     // Sets the mapped flag for the class pages in 'run' to 'value'
-    void setMappedBits(const MappedMemory::PageRun run, bool value);
+    void setMappedBits(const Allocation::PageRun run, bool value);
 
     // True if 'ptr' is in the address range of 'this'. Checks that ptr is at a
     // size class page boundary.
-    bool isInRange(uint8_t* FOLLY_NONNULL ptr) const;
+    bool isInRange(uint8_t* ptr) const;
 
     std::string toString() const;
 
    private:
     static constexpr int32_t kNoLastLookup = -1;
-    // Number of bits in 'mappedPages_' for one bit in
-    // 'mappedFreeLookup_'.
+    // Number of bits in 'mappedPages_' for one bit in 'mappedFreeLookup_'.
     static constexpr int32_t kPagesPerLookupBit =
         xsimd::batch<int64_t>::size * 128;
     // Number of extra 0 uint64's at te end of allocation bitmaps for SIMD
@@ -198,18 +235,17 @@ class MmapAllocator : public MappedMemory {
     // Same as allocate, except that this must be called inside
     // 'mutex_'. If 'numUnmapped' is nullptr, the allocated pages must
     // all be backed by memory. Otherwise numUnmapped is updated to be
-    // the count of machine pages needeing backing memory to back the
+    // the count of machine pages needing backing memory to back the
     // allocation.
     bool allocateLocked(
         ClassPageCount numPages,
-        int32_t owner,
-        MachinePageCount* FOLLY_NULLABLE numUnmapped,
-        MappedMemory::Allocation& out);
+        MachinePageCount* numUnmapped,
+        Allocation& out);
 
     // Returns the bit offset of the first bit of a 512 bit group in
     // 'pageAllocated_'/'pageMapped_'  that contains at least one mapped free
-    // page. Returns < 0 if none exists.
-    int32_t findMappedFreeGroup();
+    // page.
+    uint32_t findMappedFreeGroup();
 
     // Returns a word of 256 bits with a set bit for each mapped free page in
     // the range. 'index' is an index of a word in
@@ -220,7 +256,7 @@ class MmapAllocator : public MappedMemory {
 
     // Adds 'numPages' mapped free pages of this size class to 'allocation'. May
     // only be called if 'mappedFreePages_' >= 'numPages'.
-    void allocateFromMappdFree(int32_t numPages, Allocation& allocation);
+    void allocateFromMappedFree(int32_t numPages, Allocation& allocation);
 
     // Marks that 'page' is free and mapped. Called when freeing the page.
     // 'page' is a page number iin this class.
@@ -243,20 +279,24 @@ class MmapAllocator : public MappedMemory {
         MachinePageCount& numUnmapped,
         Allocation& allocation);
 
-    // Serializes access to all data members and private methods.
-    std::mutex mutex_;
-
     // Number of size class pages. Number of valid bits in
     const uint64_t capacity_;
 
     // Size of one size class page in machine pages.
     const MachinePageCount unitSize_;
 
-    // Start of address range.
-    uint8_t* FOLLY_NONNULL address_;
-
     // Size in bytes of the address range.
     const size_t byteSize_;
+
+    // Number of meaningful words in 'pageAllocated_'/'pageMapped'. The arrays
+    // themselves are padded with extra zeros for SIMD access.
+    const int32_t pageBitmapSize_;
+
+    // Serializes access to all data members and private methods.
+    std::mutex mutex_;
+
+    // Start of address range.
+    uint8_t* address_;
 
     // Index of last modified word in 'pageAllocated_'. Sweeps over
     // the bitmaps when looking for free pages.
@@ -269,15 +309,9 @@ class MmapAllocator : public MappedMemory {
     int32_t lastLookupIndex_{kNoLastLookup};
 
     // has a set bit if the corresponding 8 word range in
-    // pageAllocated_/pageMapped_ has at least one mapped free
-    // bit. Contains 1 bit for each 8 words of
-    // pageAllocated_/pageMapped_.
+    // pageAllocated_/pageMapped_ has at least one mapped free bit. Contains 1
+    // bit for each 8 words of pageAllocated_/pageMapped_.
     std::vector<uint64_t> mappedFreeLookup_;
-
-    // Number of meaningful words in
-    // 'pageAllocated_'/'pageMapped'. The arrays themselves are padded
-    // with extra zeros for SIMD access.
-    const int32_t pageBitmapSize_;
 
     // Has a 1 bit if the corresponding size class page is allocated.
     std::vector<uint64_t> pageAllocated_;
@@ -298,9 +332,9 @@ class MmapAllocator : public MappedMemory {
 
   bool allocateContiguousImpl(
       MachinePageCount numPages,
-      Allocation* FOLLY_NULLABLE collateral,
+      Allocation* collateral,
       ContiguousAllocation& allocation,
-      std::function<void(int64_t, bool)> userAllocCB);
+      ReservationCallback reservationCB);
 
   void freeContiguousImpl(ContiguousAllocation& allocation);
 
@@ -323,17 +357,17 @@ class MmapAllocator : public MappedMemory {
   // advises them away. Returns the number of pages advised away.
   MachinePageCount adviseAway(MachinePageCount target);
 
+  bool useMalloc(uint64_t bytes);
+
+  const Kind kind_;
+
+  // If set true, allocations larger than the largest size class size will be
+  // delegated to ManagedMmapArena. Otherwise, a system mmap call will be
+  // issued for each such allocation.
+  const bool useMmapArena_;
+
   // Serializes moving capacity between size classes
   std::mutex sizeClassBalanceMutex_;
-
-  // Number of allocated pages. Allocation succeeds if an atomic
-  // increment of this by the desired amount is <= 'capacity_'.
-  std::atomic<MachinePageCount> numAllocated_;
-
-  // Number of machine pages backed by memory in the address ranges in
-  // 'sizeClasses_'. It includes pages that are already freed. Hence it should
-  // be larger than numAllocated_
-  std::atomic<MachinePageCount> numMapped_;
 
   // Number of pages allocated and explicitly mmap'd by the
   // application via allocateContiguous, outside of
@@ -342,7 +376,24 @@ class MmapAllocator : public MappedMemory {
   // 'numAllocated_' and 'numMapped_'. This counter is informational
   // only.
   std::atomic<MachinePageCount> numExternalMapped_{0};
-  MachinePageCount capacity_ = 0;
+
+  // Allocations smaller than 'maxMallocBytes' will be delegated to
+  // std::malloc().
+  //
+  // NOTE: if it is zero, then there is no delegation to std::malloc.
+  const int32_t maxMallocBytes_ = 0;
+
+  // Reserved capacity for small allocations made by MmapAllocator through
+  // std::malloc().
+  //
+  // TODO: we don't put limit on the ad hoc small memory allocation usage for
+  // now. Might consider to add later after analyzing memory metrics in prod if
+  // required.
+  const size_t mallocReservedBytes_ = 0;
+
+  // Capacity for allocations made by MmapAllocator excluding the ones delegated
+  // to std::malloc().
+  const MachinePageCount capacity_ = 0;
 
   std::vector<std::unique_ptr<SizeClass>> sizeClasses_;
 
@@ -350,18 +401,13 @@ class MmapAllocator : public MappedMemory {
   std::atomic<uint64_t> numAllocations_ = 0;
   std::atomic<uint64_t> numAllocatedPages_ = 0;
   std::atomic<uint64_t> numAdvisedPages_ = 0;
+  std::atomic<uint64_t> numMallocBytes_ = 0;
 
   // Allocations that are larger than largest size classes will be delegated to
   // ManagedMmapArenas, to avoid calling mmap on every allocation.
   std::mutex arenaMutex_;
   std::unique_ptr<ManagedMmapArenas> managedArenas_;
 
-  // If set true, allocations larger than largest size class size will be
-  // delegated to ManagedMmapArena. Otherwise a system mmap call will be
-  // issued for each such allocation.
-  bool useMmapArena_;
-
-  Failure injectedFailure_{Failure::kNone};
   Stats stats_;
 };
 

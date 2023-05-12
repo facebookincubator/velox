@@ -27,14 +27,14 @@ using facebook::velox::test::BatchMaker;
 class FilterProjectTest : public OperatorTestBase {
  protected:
   void assertFilter(
-      std::vector<RowVectorPtr>&& vectors,
+      const std::vector<RowVectorPtr>& vectors,
       const std::string& filter = "c1 % 10  > 0") {
     auto plan = PlanBuilder().values(vectors).filter(filter).planNode();
 
     assertQuery(plan, "SELECT * FROM tmp WHERE " + filter);
   }
 
-  void assertProject(std::vector<RowVectorPtr>&& vectors) {
+  void assertProject(const std::vector<RowVectorPtr>& vectors) {
     auto plan = PlanBuilder()
                     .values(vectors)
                     .project({"c0", "c1", "c0 + c1"})
@@ -65,7 +65,7 @@ TEST_F(FilterProjectTest, filter) {
   }
   createDuckDbTable(vectors);
 
-  assertFilter(std::move(vectors));
+  assertFilter(vectors);
 }
 
 TEST_F(FilterProjectTest, filterOverDictionary) {
@@ -94,7 +94,7 @@ TEST_F(FilterProjectTest, filterOverDictionary) {
   }
   createDuckDbTable(vectors);
 
-  assertFilter(std::move(vectors));
+  assertFilter(vectors);
 }
 
 TEST_F(FilterProjectTest, filterOverConstant) {
@@ -116,7 +116,7 @@ TEST_F(FilterProjectTest, filterOverConstant) {
   }
   createDuckDbTable(vectors);
 
-  assertFilter(std::move(vectors));
+  assertFilter(vectors);
 }
 
 TEST_F(FilterProjectTest, project) {
@@ -128,7 +128,7 @@ TEST_F(FilterProjectTest, project) {
   }
   createDuckDbTable(vectors);
 
-  assertProject(std::move(vectors));
+  assertProject(vectors);
 }
 
 TEST_F(FilterProjectTest, projectOverDictionary) {
@@ -157,7 +157,7 @@ TEST_F(FilterProjectTest, projectOverDictionary) {
   }
   createDuckDbTable(vectors);
 
-  assertProject(std::move(vectors));
+  assertProject(vectors);
 }
 
 TEST_F(FilterProjectTest, projectOverConstant) {
@@ -179,7 +179,7 @@ TEST_F(FilterProjectTest, projectOverConstant) {
   }
   createDuckDbTable(vectors);
 
-  assertProject(std::move(vectors));
+  assertProject(vectors);
 }
 
 TEST_F(FilterProjectTest, projectOverLazy) {
@@ -253,27 +253,16 @@ TEST_F(FilterProjectTest, dereference) {
 }
 
 TEST_F(FilterProjectTest, allFailedOrPassed) {
-  auto rowType = ROW({"c0", "c1"}, {INTEGER(), INTEGER()});
   std::vector<RowVectorPtr> vectors;
   for (int32_t i = 0; i < 10; ++i) {
     // We alternate between a batch where all pass and a batch where
     // no row passes. c0 is flat vector. c1 is constant vector.
-    int32_t value = i % 2 == 0 ? 0 : 1;
+    const int32_t value = i % 2 == 0 ? 0 : 1;
 
-    auto c0 = std::dynamic_pointer_cast<FlatVector<int32_t>>(
-        BaseVector::create(INTEGER(), 100, pool_.get()));
-    for (auto row = 0; row < c0->size(); ++row) {
-      c0->set(row, value);
-    }
-
-    auto c1 = BaseVector::createConstant(value, 100, pool_.get());
-
-    vectors.push_back(std::make_shared<RowVector>(
-        pool_.get(),
-        rowType,
-        BufferPtr(nullptr),
-        2,
-        std::vector<VectorPtr>{c0, c1}));
+    vectors.push_back(makeRowVector({
+        makeFlatVector<int32_t>(100, [&](auto row) { return value; }),
+        makeConstant(value, 100),
+    }));
   }
   createDuckDbTable(vectors);
 

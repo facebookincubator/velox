@@ -37,7 +37,7 @@ DEPENDENCY_DIR=${DEPENDENCY_DIR:-$(pwd)}
 MACOS_DEPS="ninja flex bison cmake ccache protobuf icu4c boost gflags glog libevent lz4 lzo snappy xz zstd openssl@1.1"
 
 function run_and_time {
-  time "$@"
+  time "$@" || (echo "Failed to run $* ." ; exit 1 )
   { echo "+ Finished running $*"; } 2> /dev/null
 }
 
@@ -57,7 +57,13 @@ function prompt {
 }
 
 function update_brew {
-  /usr/local/bin/brew update --force --quiet
+  BREW_PATH=/usr/local/bin/brew
+  if [ `arch` == "arm64" ] ;
+     then
+       BREW_PATH=/opt/homebrew/bin/brew ;
+ fi
+  $BREW_PATH update --auto-update --verbose
+  $BREW_PATH developer off
 }
 
 function install_build_prerequisites {
@@ -71,9 +77,9 @@ function install_build_prerequisites {
       tap="velox/local-${pkg}"
       brew tap-new "${tap}"
       brew extract "--version=${ver}" "${pkg}" "${tap}"
-      brew install "${tap}/${pkg}@${ver}"
+      brew install "${tap}/${pkg}@${ver}" || ( echo "Failed to install ${tap}/${pkg}@${ver}" ; exit 1 )
     else
-      brew install --formula "${pkg}" && echo "Installation of ${pkg} is successful" || brew upgrade --formula "$pkg"
+      ( brew install --formula "${pkg}" && echo "Installation of ${pkg} is successful" || brew upgrade --formula "$pkg" ) || ( echo "Failed to install ${pkg}" ; exit 1 )
     fi
   done
 
@@ -81,8 +87,14 @@ function install_build_prerequisites {
 }
 
 function install_fmt {
-  github_checkout fmtlib/fmt 8.0.0
+  github_checkout fmtlib/fmt 8.0.1
   cmake_install -DFMT_TEST=OFF
+}
+
+function install_folly {
+  github_checkout facebook/folly "v2022.11.14.00"
+  OPENSSL_ROOT_DIR=$(brew --prefix openssl@1.1) \
+    cmake_install -DBUILD_TESTS=OFF
 }
 
 function install_double_conversion {
@@ -113,6 +125,8 @@ function install_velox_deps {
 (return 2> /dev/null) && return # If script was sourced, don't run commands.
 
 (
+  echo "Installing mac dependencies"
+  update_brew
   if [[ $# -ne 0 ]]; then
     for cmd in "$@"; do
       run_and_time "${cmd}"

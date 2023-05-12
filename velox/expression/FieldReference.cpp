@@ -75,17 +75,22 @@ void FieldReference::evalSpecialForm(
     }
     // The caller relies on vectors having a meaningful size. If we
     // have a constant that is not wrapped in anything we set its size
-    // to correspond to rows.size(). This is in place for unique ones
+    // to correspond to rows.end(). This is in place for unique ones
     // and a copy otherwise.
     if (!useDecode && child->isConstantEncoding()) {
       if (isUniqueChild) {
-        child->resize(rows.size());
+        child->resize(rows.end());
       } else {
-        child = BaseVector::wrapInConstant(rows.size(), 0, child);
+        child = BaseVector::wrapInConstant(rows.end(), 0, child);
       }
     }
     result = useDecode ? std::move(decoded.wrap(child, *input, rows.end()))
                        : std::move(child);
+  }
+
+  // Check for nulls in the input struct. Propagate these nulls to 'result'.
+  if (!inputs_.empty() && decoded.mayHaveNulls()) {
+    addNulls(rows, decoded.nulls(), context, result);
   }
 }
 
@@ -98,9 +103,29 @@ void FieldReference::evalSpecialFormSimplified(
          return static_cast<Expr*>(expr)->toString();
        },
        this});
-
-  auto row = context.row();
-  result = row->childAt(index(context));
-  BaseVector::flattenVector(result, rows.end());
+  VectorPtr input;
+  const RowVector* row;
+  if (inputs_.empty()) {
+    row = context.row();
+  } else {
+    VELOX_CHECK_EQ(inputs_.size(), 1);
+    inputs_[0]->evalSimplified(rows, context, input);
+    BaseVector::flattenVector(input);
+    row = input->as<RowVector>();
+    VELOX_CHECK(row);
+  }
+  auto index = row->type()->asRow().getChildIdx(field_);
+  if (index_ == -1) {
+    index_ = index;
+  } else {
+    VELOX_CHECK_EQ(index_, index);
+  }
+  auto& child = row->childAt(index_);
+  context.ensureWritable(rows, type_, result);
+  result->copy(child.get(), rows, nullptr);
+  if (row->mayHaveNulls()) {
+    addNulls(rows, row->rawNulls(), context, result);
+  }
 }
+
 } // namespace facebook::velox::exec

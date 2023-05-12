@@ -41,9 +41,12 @@ void applyComplexType(
   vector_size_t* rawIndices = indices->asMutable<vector_size_t>();
 
   const CompareFlags flags{.nullsFirst = false, .ascending = true};
+  auto decodedIndices = decodedElements->indices();
+
   rows.applyToSelected([&](vector_size_t row) {
     const auto size = inputArray->sizeAt(row);
     const auto offset = inputArray->offsetAt(row);
+
     for (auto i = offset; i < offset + size; ++i) {
       rawIndices[i] = i;
     }
@@ -51,8 +54,19 @@ void applyComplexType(
         rawIndices + offset,
         rawIndices + offset + size,
         [&](vector_size_t& a, vector_size_t& b) {
-          return baseElementsVector->compare(baseElementsVector, a, b, flags) <
-              0;
+          bool aNull = decodedElements->isNullAt(a);
+          bool bNull = decodedElements->isNullAt(b);
+          if (aNull) {
+            return false;
+          }
+          if (bNull) {
+            return true;
+          }
+          return baseElementsVector->compare(
+                     baseElementsVector,
+                     decodedIndices[a],
+                     decodedIndices[b],
+                     flags) < 0;
         });
   });
 
@@ -87,7 +101,7 @@ void applyScalarType(
   VELOX_DCHECK(kind == inputElements->typeKind());
   const SelectivityVector inputElementRows =
       toElementRows(inputElements->size(), rows, inputArray);
-  const vector_size_t elementsCount = inputElementRows.size();
+  const vector_size_t elementsCount = inputElementRows.end();
 
   // TODO: consider to use dictionary wrapping to avoid the direct sorting on
   // the scalar values as we do for complex data type if this runs slow in
@@ -151,8 +165,6 @@ class ArraySortFunction : public exec::VectorFunction {
   /// and 'offsets' vectors that control where output arrays start and end
   /// remain the same in the output ArrayVector.
 
-  ArraySortFunction() {}
-
   // Execute function.
   void apply(
       const SelectivityVector& rows,
@@ -171,13 +183,10 @@ class ArraySortFunction : public exec::VectorFunction {
       const auto& flatArray = constantArray->valueVector();
       const auto flatIndex = constantArray->index();
 
-      SelectivityVector singleRow(flatIndex + 1, false);
-      singleRow.setValid(flatIndex, true);
-      singleRow.updateBounds();
-
-      localResult = applyFlat(singleRow, flatArray, context);
+      exec::LocalSingleRow singleRow(context, flatIndex);
+      localResult = applyFlat(*singleRow, flatArray, context);
       localResult =
-          BaseVector::wrapInConstant(rows.size(), flatIndex, localResult);
+          BaseVector::wrapInConstant(rows.end(), flatIndex, localResult);
     } else {
       localResult = applyFlat(rows, arg, context);
     }

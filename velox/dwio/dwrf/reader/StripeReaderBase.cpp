@@ -23,6 +23,7 @@ using dwio::common::LogType;
 StripeInformationWrapper StripeReaderBase::loadStripe(
     uint32_t index,
     bool& preload) {
+  DWIO_ENSURE(canLoad_);
   auto& footer = reader_->getFooter();
   DWIO_ENSURE_LT(index, footer.stripesSize(), "invalid stripe index");
   auto stripe = footer.stripes(index);
@@ -36,8 +37,7 @@ StripeInformationWrapper StripeReaderBase::loadStripe(
     // if file is preloaded, return stripe is preloaded
     preload = true;
   } else {
-    stripeInput_ = reader_->bufferedInputFactory().create(
-        reader_->getStream(), reader_->getMemoryPool(), reader_->getFileNum());
+    stripeInput_ = reader_->getBufferedInput().clone();
 
     if (preload) {
       // If metadata cache exists, adjust read position to avoid re-reading

@@ -30,6 +30,7 @@
 #include "velox/parse/ExpressionsParser.h"
 
 using namespace facebook::velox;
+using namespace facebook::velox::connector;
 using namespace facebook::velox::connector::hive;
 
 namespace facebook::velox::exec::test {
@@ -90,9 +91,12 @@ PlanBuilder& PlanBuilder::tableScan(
   }
   SubfieldFilters filters;
   filters.reserve(subfieldFilters.size());
+  core::QueryCtx queryCtx;
+  SimpleExpressionEvaluator evaluator(&queryCtx, pool_);
   for (const auto& filter : subfieldFilters) {
     auto filterExpr = parseExpr(filter, outputType, options_, pool_);
-    auto [subfield, subfieldFilter] = exec::toSubfieldFilter(filterExpr);
+    auto [subfield, subfieldFilter] =
+        exec::toSubfieldFilter(filterExpr, &evaluator);
 
     auto it = columnAliases.find(subfield.toString());
     if (it != columnAliases.end()) {
@@ -162,10 +166,11 @@ PlanBuilder& PlanBuilder::tableScan(
 
 PlanBuilder& PlanBuilder::values(
     const std::vector<RowVectorPtr>& values,
-    bool parallelizable) {
+    bool parallelizable,
+    size_t repeatTimes) {
   auto valuesCopy = values;
   planNode_ = std::make_shared<core::ValuesNode>(
-      nextPlanNodeId(), std::move(valuesCopy), parallelizable);
+      nextPlanNodeId(), std::move(valuesCopy), parallelizable, repeatTimes);
   return *this;
 }
 
@@ -265,27 +270,32 @@ PlanBuilder& PlanBuilder::filter(const std::string& filter) {
 }
 
 PlanBuilder& PlanBuilder::tableWrite(
-    const std::vector<std::string>& columnNames,
+    const std::vector<std::string>& tableColumnNames,
     const std::shared_ptr<core::InsertTableHandle>& insertHandle,
+    CommitStrategy commitStrategy,
     const std::string& rowCountColumnName) {
   return tableWrite(
-      planNode_->outputType(), columnNames, insertHandle, rowCountColumnName);
+      planNode_->outputType(),
+      tableColumnNames,
+      insertHandle,
+      commitStrategy,
+      rowCountColumnName);
 }
 
 PlanBuilder& PlanBuilder::tableWrite(
     const RowTypePtr& inputColumns,
     const std::vector<std::string>& tableColumnNames,
     const std::shared_ptr<core::InsertTableHandle>& insertHandle,
+    CommitStrategy commitStrategy,
     const std::string& rowCountColumnName) {
-  auto outputType =
-      ROW({rowCountColumnName, "fragments", "commitcontext"},
-          {BIGINT(), VARBINARY(), VARBINARY()});
+  auto outputType = ROW({rowCountColumnName}, {BIGINT()});
   planNode_ = std::make_shared<core::TableWriteNode>(
       nextPlanNodeId(),
       inputColumns,
       tableColumnNames,
       insertHandle,
       outputType,
+      commitStrategy,
       planNode_);
   return *this;
 }
@@ -482,12 +492,16 @@ const core::AggregationNode* findPartialAggregation(
   if (auto exchange = dynamic_cast<const core::LocalPartitionNode*>(planNode)) {
     aggNode = dynamic_cast<const core::AggregationNode*>(
         exchange->sources()[0].get());
+  } else if (auto merge = dynamic_cast<const core::LocalMergeNode*>(planNode)) {
+    aggNode =
+        dynamic_cast<const core::AggregationNode*>(merge->sources()[0].get());
   } else {
     aggNode = dynamic_cast<const core::AggregationNode*>(planNode);
   }
   VELOX_CHECK_NOT_NULL(
       aggNode,
-      "Current plan node must be a partial or intermediate aggregation or local exchange over the same. Got: {}",
+      "Current plan node must be one of: partial or intermediate aggregation, "
+      "local merge or exchange. Got: {}",
       planNode->toString());
   VELOX_CHECK(exec::isPartialOutput(aggNode->step()));
   return aggNode;
@@ -634,17 +648,25 @@ PlanBuilder& PlanBuilder::groupId(
     groupingSetExprs.push_back(fields(groupingSet));
   }
 
-  std::map<std::string, core::FieldAccessTypedExprPtr> outputGroupingKeyNames;
+  std::vector<core::GroupIdNode::GroupingKeyInfo> groupingKeyInfos;
+  std::set<std::string> names;
+  auto index = 0;
   for (const auto& groupingSet : groupingSetExprs) {
     for (const auto& groupingKey : groupingSet) {
-      outputGroupingKeyNames[groupingKey->name()] = groupingKey;
+      if (names.find(groupingKey->name()) == names.end()) {
+        core::GroupIdNode::GroupingKeyInfo keyInfos;
+        keyInfos.output = groupingKey->name();
+        keyInfos.input = groupingKey;
+        groupingKeyInfos.push_back(keyInfos);
+      }
+      names.insert(groupingKey->name());
     }
   }
 
   planNode_ = std::make_shared<core::GroupIdNode>(
       nextPlanNodeId(),
       groupingSetExprs,
-      std::move(outputGroupingKeyNames),
+      std::move(groupingKeyInfos),
       fields(aggregationInputs),
       std::move(groupIdName),
       planNode_);
@@ -718,25 +740,19 @@ PlanBuilder& PlanBuilder::assignUniqueId(
 }
 
 namespace {
-core::PartitionFunctionFactory createPartitionFunctionFactory(
+core::PartitionFunctionSpecPtr createPartitionFunctionSpec(
     const RowTypePtr& inputType,
     const std::vector<std::string>& keys) {
   if (keys.empty()) {
-    return
-        [](auto /*numPartitions*/) -> std::unique_ptr<core::PartitionFunction> {
-          VELOX_UNREACHABLE();
-        };
+    return std::make_shared<core::GatherPartitionFunctionSpec>();
   } else {
     std::vector<column_index_t> keyIndices;
     keyIndices.reserve(keys.size());
     for (const auto& key : keys) {
       keyIndices.push_back(inputType->getChildIdx(key));
     }
-    return [inputType, keyIndices](
-               auto numPartitions) -> std::unique_ptr<core::PartitionFunction> {
-      return std::make_unique<exec::HashPartitionFunction>(
-          numPartitions, inputType, keyIndices);
-    };
+    return std::make_shared<HashPartitionFunctionSpec>(
+        inputType, std::move(keyIndices));
   }
 }
 
@@ -779,7 +795,7 @@ core::PlanNodePtr createLocalPartitionNode(
     const std::vector<std::string>& keys,
     const std::vector<core::PlanNodePtr>& sources) {
   auto partitionFunctionFactory =
-      createPartitionFunctionFactory(sources[0]->outputType(), keys);
+      createPartitionFunctionSpec(sources[0]->outputType(), keys);
   return std::make_shared<core::LocalPartitionNode>(
       planNodeId,
       keys.empty() ? core::LocalPartitionNode::Type::kGather
@@ -805,7 +821,7 @@ PlanBuilder& PlanBuilder::partitionedOutput(
       ? planNode_->outputType()
       : extract(planNode_->outputType(), outputLayout);
   auto partitionFunctionFactory =
-      createPartitionFunctionFactory(planNode_->outputType(), keys);
+      createPartitionFunctionSpec(planNode_->outputType(), keys);
   planNode_ = std::make_shared<core::PartitionedOutputNode>(
       nextPlanNodeId(),
       exprs(keys),
@@ -845,15 +861,10 @@ namespace {
 core::PlanNodePtr createLocalPartitionRoundRobinNode(
     const core::PlanNodeId& planNodeId,
     const std::vector<core::PlanNodePtr>& sources) {
-  auto partitionFunctionFactory = [](auto numPartitions) {
-    return std::make_unique<velox::exec::RoundRobinPartitionFunction>(
-        numPartitions);
-  };
-
   return std::make_shared<core::LocalPartitionNode>(
       planNodeId,
       core::LocalPartitionNode::Type::kRepartition,
-      partitionFunctionFactory,
+      std::make_shared<RoundRobinPartitionFunctionSpec>(),
       sources);
 }
 } // namespace
@@ -877,7 +888,8 @@ PlanBuilder& PlanBuilder::hashJoin(
     const core::PlanNodePtr& build,
     const std::string& filter,
     const std::vector<std::string>& outputLayout,
-    core::JoinType joinType) {
+    core::JoinType joinType,
+    bool nullAware) {
   VELOX_CHECK_EQ(leftKeys.size(), rightKeys.size());
 
   auto leftType = planNode_->outputType();
@@ -911,6 +923,7 @@ PlanBuilder& PlanBuilder::hashJoin(
   planNode_ = std::make_shared<core::HashJoinNode>(
       nextPlanNodeId(),
       joinType,
+      nullAware,
       leftKeyFields,
       rightKeyFields,
       std::move(filterExpr),
@@ -952,13 +965,13 @@ PlanBuilder& PlanBuilder::mergeJoin(
   return *this;
 }
 
-PlanBuilder& PlanBuilder::crossJoin(
+PlanBuilder& PlanBuilder::nestedLoopJoin(
     const core::PlanNodePtr& right,
     const std::vector<std::string>& outputLayout) {
   auto resultType = concat(planNode_->outputType(), right->outputType());
   auto outputType = extract(resultType, outputLayout);
 
-  planNode_ = std::make_shared<core::CrossJoinNode>(
+  planNode_ = std::make_shared<core::NestedLoopJoinNode>(
       nextPlanNodeId(), std::move(planNode_), right, outputType);
   return *this;
 }

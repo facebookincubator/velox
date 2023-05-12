@@ -44,16 +44,74 @@ core::AggregationNode::Step toAggregationStep(
       VELOX_FAIL("Aggregate phase is not supported.");
   }
 }
+
+core::SortOrder toSortOrder(const ::substrait::SortField& sortField) {
+  switch (sortField.direction()) {
+    case ::substrait::SortField_SortDirection_SORT_DIRECTION_ASC_NULLS_FIRST:
+      return core::kAscNullsFirst;
+    case ::substrait::SortField_SortDirection_SORT_DIRECTION_ASC_NULLS_LAST:
+      return core::kAscNullsLast;
+    case ::substrait::SortField_SortDirection_SORT_DIRECTION_DESC_NULLS_FIRST:
+      return core::kDescNullsFirst;
+    case ::substrait::SortField_SortDirection_SORT_DIRECTION_DESC_NULLS_LAST:
+      return core::kDescNullsLast;
+    default:
+      VELOX_FAIL("Sort direction is not supported.");
+  }
+}
+
+/// Holds the information required to create
+/// a project node to simulate the emit
+/// behavior in Substrait.
+struct EmitInfo {
+  std::vector<core::TypedExprPtr> expressions;
+  std::vector<std::string> projectNames;
+};
+
+/// Helper function to extract the attributes required to create a ProjectNode
+/// used for interpretting Substrait Emit.
+EmitInfo getEmitInfo(
+    const ::substrait::RelCommon& relCommon,
+    const core::PlanNodePtr& node) {
+  const auto& emit = relCommon.emit();
+  int emitSize = emit.output_mapping_size();
+  EmitInfo emitInfo;
+  emitInfo.projectNames.reserve(emitSize);
+  emitInfo.expressions.reserve(emitSize);
+  const auto& outputType = node->outputType();
+  for (int i = 0; i < emitSize; i++) {
+    int32_t mapId = emit.output_mapping(i);
+    emitInfo.projectNames[i] = outputType->nameOf(mapId);
+    emitInfo.expressions[i] = std::make_shared<core::FieldAccessTypedExpr>(
+        outputType->childAt(mapId), outputType->nameOf(mapId));
+  }
+  return emitInfo;
+}
+
 } // namespace
+
+core::PlanNodePtr SubstraitVeloxPlanConverter::processEmit(
+    const ::substrait::RelCommon& relCommon,
+    const core::PlanNodePtr& noEmitNode) {
+  switch (relCommon.emit_kind_case()) {
+    case ::substrait::RelCommon::EmitKindCase::kDirect:
+      return noEmitNode;
+    case ::substrait::RelCommon::EmitKindCase::kEmit: {
+      auto emitInfo = getEmitInfo(relCommon, noEmitNode);
+      return std::make_shared<core::ProjectNode>(
+          nextPlanNodeId(),
+          std::move(emitInfo.projectNames),
+          std::move(emitInfo.expressions),
+          noEmitNode);
+    }
+    default:
+      VELOX_FAIL("unrecognized emit kind");
+  }
+}
 
 core::PlanNodePtr SubstraitVeloxPlanConverter::toVeloxPlan(
     const ::substrait::AggregateRel& aggRel) {
-  core::PlanNodePtr childNode;
-  if (aggRel.has_input()) {
-    childNode = toVeloxPlan(aggRel.input());
-  } else {
-    VELOX_FAIL("Child Rel is expected in AggregateRel.");
-  }
+  auto childNode = convertSingleInput<::substrait::AggregateRel>(aggRel);
   core::AggregationNode::Step aggStep = toAggregationStep(aggRel);
   const auto& inputType = childNode->outputType();
   std::vector<core::FieldAccessTypedExprPtr> veloxGroupingExprs;
@@ -117,8 +175,7 @@ core::PlanNodePtr SubstraitVeloxPlanConverter::toVeloxPlan(
     aggOutNames.emplace_back(substraitParser_->makeNodeName(planNodeId_, idx));
   }
 
-  // Create Aggregate node.
-  return std::make_shared<core::AggregationNode>(
+  auto aggregationNode = std::make_shared<core::AggregationNode>(
       nextPlanNodeId(),
       aggStep,
       veloxGroupingExprs,
@@ -128,16 +185,17 @@ core::PlanNodePtr SubstraitVeloxPlanConverter::toVeloxPlan(
       aggregateMasks,
       ignoreNullKeys,
       childNode);
+
+  if (aggRel.has_common()) {
+    return processEmit(aggRel.common(), std::move(aggregationNode));
+  } else {
+    return aggregationNode;
+  }
 }
 
 core::PlanNodePtr SubstraitVeloxPlanConverter::toVeloxPlan(
     const ::substrait::ProjectRel& projectRel) {
-  core::PlanNodePtr childNode;
-  if (projectRel.has_input()) {
-    childNode = toVeloxPlan(projectRel.input());
-  } else {
-    VELOX_FAIL("Child Rel is expected in ProjectRel.");
-  }
+  auto childNode = convertSingleInput<::substrait::ProjectRel>(projectRel);
 
   // Construct Velox Expressions.
   auto projectExprs = projectRel.expressions();
@@ -148,6 +206,21 @@ core::PlanNodePtr SubstraitVeloxPlanConverter::toVeloxPlan(
 
   const auto& inputType = childNode->outputType();
   int colIdx = 0;
+  // Note that Substrait projection adds the project expressions on top of the
+  // input to the projection node. Thus we need to add the input columns first
+  // and then add the projection expressions.
+
+  // First, adding the project names and expressions from the input to
+  // the project node.
+  for (uint32_t idx = 0; idx < inputType->size(); idx++) {
+    const auto& fieldName = inputType->nameOf(idx);
+    projectNames.emplace_back(fieldName);
+    expressions.emplace_back(std::make_shared<core::FieldAccessTypedExpr>(
+        inputType->childAt(idx), fieldName));
+    colIdx += 1;
+  }
+
+  // Then, adding project expression related project names and expressions.
   for (const auto& expr : projectExprs) {
     expressions.emplace_back(exprConverter_->toVeloxExpr(expr, inputType));
     projectNames.emplace_back(
@@ -155,34 +228,144 @@ core::PlanNodePtr SubstraitVeloxPlanConverter::toVeloxPlan(
     colIdx += 1;
   }
 
-  return std::make_shared<core::ProjectNode>(
+  if (projectRel.has_common()) {
+    auto relCommon = projectRel.common();
+    const auto& emit = relCommon.emit();
+    int emitSize = emit.output_mapping_size();
+    std::vector<std::string> emitProjectNames(emitSize);
+    std::vector<core::TypedExprPtr> emitExpressions(emitSize);
+    for (int i = 0; i < emitSize; i++) {
+      int32_t mapId = emit.output_mapping(i);
+      emitProjectNames[i] = projectNames[mapId];
+      emitExpressions[i] = expressions[mapId];
+    }
+    return std::make_shared<core::ProjectNode>(
+        nextPlanNodeId(),
+        std::move(emitProjectNames),
+        std::move(emitExpressions),
+        std::move(childNode));
+  } else {
+    return std::make_shared<core::ProjectNode>(
+        nextPlanNodeId(),
+        std::move(projectNames),
+        std::move(expressions),
+        std::move(childNode));
+  }
+}
+
+core::PlanNodePtr SubstraitVeloxPlanConverter::toVeloxPlan(
+    const ::substrait::SortRel& sortRel) {
+  auto childNode = convertSingleInput<::substrait::SortRel>(sortRel);
+
+  auto [sortingKeys, sortingOrders] =
+      processSortField(sortRel.sorts(), childNode->outputType());
+
+  return std::make_shared<core::OrderByNode>(
       nextPlanNodeId(),
-      std::move(projectNames),
-      std::move(expressions),
+      sortingKeys,
+      sortingOrders,
+      false /*isPartial*/,
       childNode);
+}
+
+std::pair<
+    std::vector<core::FieldAccessTypedExprPtr>,
+    std::vector<core::SortOrder>>
+SubstraitVeloxPlanConverter::processSortField(
+    const ::google::protobuf::RepeatedPtrField<::substrait::SortField>&
+        sortFields,
+    const RowTypePtr& inputType) {
+  std::vector<core::FieldAccessTypedExprPtr> sortingKeys;
+  std::vector<core::SortOrder> sortingOrders;
+  sortingKeys.reserve(sortFields.size());
+  sortingOrders.reserve(sortFields.size());
+
+  for (const auto& sort : sortFields) {
+    sortingOrders.emplace_back(toSortOrder(sort));
+
+    if (sort.has_expr()) {
+      auto expression = exprConverter_->toVeloxExpr(sort.expr(), inputType);
+      auto fieldExpr =
+          std::dynamic_pointer_cast<const core::FieldAccessTypedExpr>(
+              expression);
+      VELOX_CHECK_NOT_NULL(
+          fieldExpr, " the sorting key in Sort Operator only support field");
+      sortingKeys.emplace_back(fieldExpr);
+    }
+  }
+  return {sortingKeys, sortingOrders};
 }
 
 core::PlanNodePtr SubstraitVeloxPlanConverter::toVeloxPlan(
     const ::substrait::FilterRel& filterRel) {
-  core::PlanNodePtr childNode;
-  if (filterRel.has_input()) {
-    childNode = toVeloxPlan(filterRel.input());
+  auto childNode = convertSingleInput<::substrait::FilterRel>(filterRel);
+
+  auto filterNode = std::make_shared<core::FilterNode>(
+      nextPlanNodeId(),
+      exprConverter_->toVeloxExpr(
+          filterRel.condition(), childNode->outputType()),
+      childNode);
+
+  if (filterRel.has_common()) {
+    return processEmit(filterRel.common(), std::move(filterNode));
   } else {
-    VELOX_FAIL("Child Rel is expected in FilterRel.");
+    return filterNode;
+  }
+}
+
+core::PlanNodePtr SubstraitVeloxPlanConverter::toVeloxPlan(
+    const ::substrait::FetchRel& fetchRel) {
+  core::PlanNodePtr childNode;
+  // Check the input of fetchRel, if it's sortRel, convert them into
+  // topNNode. otherwise, to limitNode.
+  ::substrait::SortRel sortRel;
+  bool topNFlag;
+  if (fetchRel.has_input()) {
+    topNFlag = fetchRel.input().has_sort();
+    if (topNFlag) {
+      sortRel = fetchRel.input().sort();
+      childNode = toVeloxPlan(sortRel.input());
+    } else {
+      childNode = toVeloxPlan(fetchRel.input());
+    }
+  } else {
+    VELOX_FAIL("Child Rel is expected in FetchRel.");
   }
 
-  const auto& inputType = childNode->outputType();
-  const auto& sExpr = filterRel.condition();
+  if (topNFlag) {
+    auto [sortingKeys, sortingOrders] =
+        processSortField(sortRel.sorts(), childNode->outputType());
 
-  return std::make_shared<core::FilterNode>(
-      nextPlanNodeId(),
-      exprConverter_->toVeloxExpr(sExpr, inputType),
-      childNode);
+    VELOX_CHECK_EQ(fetchRel.offset(), 0);
+
+    return std::make_shared<core::TopNNode>(
+        nextPlanNodeId(),
+        sortingKeys,
+        sortingOrders,
+        (int32_t)fetchRel.count(),
+        false /*isPartial*/,
+        childNode);
+
+  } else {
+    return std::make_shared<core::LimitNode>(
+        nextPlanNodeId(),
+        (int32_t)fetchRel.offset(),
+        (int32_t)fetchRel.count(),
+        false /*isPartial*/,
+        childNode);
+  }
 }
 
 core::PlanNodePtr SubstraitVeloxPlanConverter::toVeloxPlan(
     const ::substrait::ReadRel& readRel,
     std::shared_ptr<SplitInfo>& splitInfo) {
+  // emit is not allowed in TableScanNode and ValuesNode related
+  // outputs
+  if (readRel.has_common()) {
+    VELOX_USER_CHECK(
+        !readRel.common().has_emit(),
+        "Emit not supported for ValuesNode and TableScanNode related Substrait plans.");
+  }
   // Get output names and types.
   std::vector<std::string> colNameList;
   std::vector<TypePtr> veloxTypeList;
@@ -267,11 +450,12 @@ core::PlanNodePtr SubstraitVeloxPlanConverter::toVeloxPlan(
 
   if (readRel.has_virtual_table()) {
     return toVeloxPlan(readRel, outputType);
-
   } else {
-    auto tableScanNode = std::make_shared<core::TableScanNode>(
-        nextPlanNodeId(), outputType, tableHandle, assignments);
-    return tableScanNode;
+    return std::make_shared<core::TableScanNode>(
+        nextPlanNodeId(),
+        std::move(outputType),
+        std::move(tableHandle),
+        std::move(assignments));
   }
 }
 
@@ -332,7 +516,8 @@ core::PlanNodePtr SubstraitVeloxPlanConverter::toVeloxPlan(
         std::make_shared<RowVector>(pool_, type, nullptr, batchSize, children));
   }
 
-  return std::make_shared<core::ValuesNode>(nextPlanNodeId(), vectors);
+  return std::make_shared<core::ValuesNode>(
+      nextPlanNodeId(), std::move(vectors));
 }
 
 core::PlanNodePtr SubstraitVeloxPlanConverter::toVeloxPlan(
@@ -352,6 +537,12 @@ core::PlanNodePtr SubstraitVeloxPlanConverter::toVeloxPlan(
     auto planNode = toVeloxPlan(rel.read(), splitInfo);
     splitInfoMap_[planNode->id()] = splitInfo;
     return planNode;
+  }
+  if (rel.has_fetch()) {
+    return toVeloxPlan(rel.fetch());
+  }
+  if (rel.has_sort()) {
+    return toVeloxPlan(rel.sort());
   }
   VELOX_NYI("Substrait conversion not supported for Rel.");
 }

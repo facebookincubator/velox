@@ -63,6 +63,7 @@ std::string stringifyTruncatedElementList(
 std::shared_ptr<RowVector> RowVector::createEmpty(
     std::shared_ptr<const Type> type,
     velox::memory::MemoryPool* pool) {
+  VELOX_CHECK_NOT_NULL(type, "Vector creation requires a non-null type.");
   VELOX_CHECK(type->isRow());
   return std::static_pointer_cast<RowVector>(BaseVector::create(type, 0, pool));
 }
@@ -138,6 +139,9 @@ void RowVector::copy(
     vector_size_t targetIndex,
     vector_size_t sourceIndex,
     vector_size_t count) {
+  if (count == 0) {
+    return;
+  }
   SelectivityVector rows(targetIndex + count);
   rows.setValidRange(0, targetIndex, false);
   rows.updateBounds();
@@ -161,11 +165,6 @@ void RowVector::copy(
     const BaseVector* source,
     const SelectivityVector& rows,
     const vector_size_t* toSourceRow) {
-  for (auto i = 0; i < children_.size(); ++i) {
-    BaseVector::ensureWritable(
-        rows, type()->asRow().childAt(i), pool(), children_[i]);
-  }
-
   // Copy non-null values.
   SelectivityVector nonNullRows = rows;
 
@@ -184,8 +183,14 @@ void RowVector::copy(
 
     auto rowSource = source->loadedVector()->as<RowVector>();
     for (auto i = 0; i < childrenSize_; ++i) {
-      children_[i]->copy(
-          rowSource->childAt(i)->loadedVector(), nonNullRows, toSourceRow);
+      if (rowSource->childAt(i)) {
+        BaseVector::ensureWritable(
+            rows, type()->asRow().childAt(i), pool(), children_[i]);
+        children_[i]->copy(
+            rowSource->childAt(i)->loadedVector(), nonNullRows, toSourceRow);
+      } else {
+        children_[i].reset();
+      }
     }
   } else {
     auto nulls = decodedSource.nulls();
@@ -205,8 +210,7 @@ void RowVector::copy(
     BufferPtr mappedIndices;
     vector_size_t* rawMappedIndices = nullptr;
     if (toSourceRow) {
-      mappedIndices =
-          AlignedBuffer::allocate<vector_size_t>(rows.size(), pool_);
+      mappedIndices = AlignedBuffer::allocate<vector_size_t>(rows.end(), pool_);
       rawMappedIndices = mappedIndices->asMutable<vector_size_t>();
       nonNullRows.applyToSelected(
           [&](auto row) { rawMappedIndices[row] = indices[toSourceRow[row]]; });
@@ -214,10 +218,16 @@ void RowVector::copy(
 
     auto baseSource = decodedSource.base()->as<RowVector>();
     for (auto i = 0; i < childrenSize_; ++i) {
-      children_[i]->copy(
-          baseSource->childAt(i)->loadedVector(),
-          nonNullRows,
-          rawMappedIndices ? rawMappedIndices : indices);
+      if (baseSource->childAt(i)) {
+        BaseVector::ensureWritable(
+            rows, type()->asRow().childAt(i), pool(), children_[i]);
+        children_[i]->copy(
+            baseSource->childAt(i)->loadedVector(),
+            nonNullRows,
+            rawMappedIndices ? rawMappedIndices : indices);
+      } else {
+        children_[i].reset();
+      }
     }
   }
 
@@ -323,6 +333,7 @@ std::unique_ptr<SimpleVector<uint64_t>> RowVector::hashAll() const {
 }
 
 std::string RowVector::toString(vector_size_t index) const {
+  VELOX_CHECK_LT(index, length_, "Vector index should be less than length.");
   if (isNullAt(index)) {
     return "null";
   }
@@ -383,7 +394,9 @@ void RowVector::prepareForReuse() {
 VectorPtr RowVector::slice(vector_size_t offset, vector_size_t length) const {
   std::vector<VectorPtr> children(children_.size());
   for (int i = 0; i < children_.size(); ++i) {
-    children[i] = children_[i]->slice(offset, length);
+    if (children_[i]) {
+      children[i] = children_[i]->slice(offset, length);
+    }
   }
   return std::make_shared<RowVector>(
       pool_, type_, sliceNulls(offset, length), length, std::move(children));
@@ -424,12 +437,14 @@ void ArrayVectorBase::copyRangesImpl(
         *targetValues);
   }
   auto setNotNulls = mayHaveNulls() || source->mayHaveNulls();
-  auto wantWidth = type()->isFixedWidth() ? type()->fixedElementsWidth() : 0;
   auto* mutableOffsets = offsets_->asMutable<vector_size_t>();
   auto* mutableSizes = sizes_->asMutable<vector_size_t>();
   vector_size_t childSize = targetValues->get()->size();
   if (ranges.size() == 1 && ranges.back().count == 1) {
     auto& range = ranges.back();
+    if (range.count == 0) {
+      return;
+    }
     VELOX_DCHECK(BaseVector::length_ >= range.targetIndex + range.count);
     // Fast path if we're just copying a single array.
     if (source->isNullAt(range.sourceIndex)) {
@@ -446,15 +461,6 @@ void ArrayVectorBase::copyRangesImpl(
       mutableSizes[range.targetIndex] = copySize;
 
       if (copySize > 0) {
-        // If we are populating a FixedSizeArray we validate here that
-        // the entries we are populating are the correct sizes.
-        if (wantWidth != 0) {
-          VELOX_CHECK_EQ(
-              copySize,
-              wantWidth,
-              "Invalid length element at wrappedIndex {}",
-              wrappedIndex);
-        }
         auto copyOffset = sourceArray->offsetAt(wrappedIndex);
         targetValues->get()->resize(childSize + copySize);
         targetValues->get()->copy(
@@ -469,6 +475,9 @@ void ArrayVectorBase::copyRangesImpl(
     std::vector<CopyRange> outRanges;
     vector_size_t totalCount = 0;
     for (auto& range : ranges) {
+      if (range.count == 0) {
+        continue;
+      }
       VELOX_DCHECK(BaseVector::length_ >= range.targetIndex + range.count);
       totalCount += range.count;
     }
@@ -486,17 +495,6 @@ void ArrayVectorBase::copyRangesImpl(
           vector_size_t copySize = sourceArray->sizeAt(wrappedIndex);
 
           if (copySize > 0) {
-            // If we are populating a FixedSizeArray we validate here that the
-            // entries we are populating are the correct sizes.
-            if (wantWidth != 0) {
-              VELOX_CHECK_EQ(
-                  copySize,
-                  wantWidth,
-                  "Invalid length element at index {}, wrappedIndex {}",
-                  i,
-                  wrappedIndex);
-            }
-
             auto copyOffset = sourceArray->offsetAt(wrappedIndex);
 
             // If we're copying two adjacent ranges, merge them.  This only
@@ -522,6 +520,33 @@ void ArrayVectorBase::copyRangesImpl(
     if (targetKeys) {
       targetKeys->get()->resize(childSize);
       targetKeys->get()->copyRanges(sourceKeys, outRanges);
+    }
+  }
+}
+
+void ArrayVectorBase::checkRanges() const {
+  std::unordered_map<vector_size_t, vector_size_t> seenElements;
+  seenElements.reserve(size());
+
+  for (vector_size_t i = 0; i < size(); ++i) {
+    auto size = sizeAt(i);
+    auto offset = offsetAt(i);
+
+    for (vector_size_t j = 0; j < size; ++j) {
+      auto it = seenElements.find(offset + j);
+      if (it != seenElements.end()) {
+        VELOX_FAIL(
+            "checkRanges() found overlap at idx {}: element {} has offset {} "
+            "and size {}, and element {} has offset {} and size {}.",
+            offset + j,
+            it->second,
+            offsetAt(it->second),
+            sizeAt(it->second),
+            i,
+            offset,
+            size);
+      }
+      seenElements.emplace(offset + j, i);
     }
   }
 }
@@ -655,6 +680,7 @@ std::unique_ptr<SimpleVector<uint64_t>> ArrayVector::hashAll() const {
 }
 
 std::string ArrayVector::toString(vector_size_t index) const {
+  VELOX_CHECK_LT(index, length_, "Vector index should be less than length.");
   if (isNullAt(index)) {
     return "null";
   }
@@ -670,7 +696,7 @@ std::string ArrayVector::toString(vector_size_t index) const {
 }
 
 void ArrayVector::ensureWritable(const SelectivityVector& rows) {
-  auto newSize = std::max<vector_size_t>(rows.size(), BaseVector::length_);
+  auto newSize = std::max<vector_size_t>(rows.end(), BaseVector::length_);
   if (offsets_ && !offsets_->unique()) {
     BufferPtr newOffsets =
         AlignedBuffer::allocate<vector_size_t>(newSize, BaseVector::pool_);
@@ -917,6 +943,7 @@ BufferPtr MapVector::elementIndices() const {
 }
 
 std::string MapVector::toString(vector_size_t index) const {
+  VELOX_CHECK_LT(index, length_, "Vector index should be less than length.");
   if (isNullAt(index)) {
     return "null";
   }
@@ -931,7 +958,7 @@ std::string MapVector::toString(vector_size_t index) const {
 }
 
 void MapVector::ensureWritable(const SelectivityVector& rows) {
-  auto newSize = std::max<vector_size_t>(rows.size(), BaseVector::length_);
+  auto newSize = std::max<vector_size_t>(rows.end(), BaseVector::length_);
   if (offsets_ && !offsets_->unique()) {
     BufferPtr newOffsets =
         AlignedBuffer::allocate<vector_size_t>(newSize, BaseVector::pool_);

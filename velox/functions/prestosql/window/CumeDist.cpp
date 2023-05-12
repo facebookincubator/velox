@@ -18,7 +18,7 @@
 #include "velox/expression/FunctionSignature.h"
 #include "velox/vector/FlatVector.h"
 
-namespace facebook::velox::window {
+namespace facebook::velox::window::prestosql {
 
 namespace {
 
@@ -38,6 +38,7 @@ class CumeDistFunction : public exec::WindowFunction {
       const BufferPtr& peerGroupEnds,
       const BufferPtr& /*frameStarts*/,
       const BufferPtr& /*frameEnds*/,
+      const SelectivityVector& validRows,
       vector_size_t resultOffset,
       const VectorPtr& result) override {
     int numRows = peerGroupStarts->size() / sizeof(vector_size_t);
@@ -54,6 +55,9 @@ class CumeDistFunction : public exec::WindowFunction {
       }
       rawValues[resultOffset + i] = cumeDist_;
     }
+
+    // Set NULL values for rows with empty frames.
+    setNullEmptyFramesResults(validRows, resultOffset, result);
   }
 
  private:
@@ -82,4 +86,4 @@ void registerCumeDist(const std::string& name) {
         return std::make_unique<CumeDistFunction>();
       });
 }
-} // namespace facebook::velox::window
+} // namespace facebook::velox::window::prestosql

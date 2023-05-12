@@ -20,10 +20,10 @@ set(velox_benchmark_deps
     velox_parse_utils
     velox_parse_expression
     velox_serialization
-    ${FOLLY}
+    Folly::folly
     ${FOLLY_BENCHMARK}
     ${DOUBLE_CONVERSION}
-    ${gflags_LIBRARIES}
+    gflags::gflags
     glog::glog)
 
 add_executable(velox_benchmark_basic_simple_arithmetic SimpleArithmetic.cpp)

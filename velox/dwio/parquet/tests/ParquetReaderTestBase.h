@@ -115,14 +115,7 @@ class ParquetReaderTestBase : public testing::Test {
   std::shared_ptr<velox::common::ScanSpec> makeScanSpec(
       const RowTypePtr& rowType) {
     auto scanSpec = std::make_shared<velox::common::ScanSpec>("");
-
-    for (auto i = 0; i < rowType->size(); ++i) {
-      auto child = scanSpec->getOrCreateChild(
-          velox::common::Subfield(rowType->nameOf(i)));
-      child->setProjectOut(true);
-      child->setChannel(i);
-    }
-
+    scanSpec->addAllChildFields(*rowType);
     return scanSpec;
   }
 
@@ -152,8 +145,7 @@ class ParquetReaderTestBase : public testing::Test {
         "velox/dwio/parquet/tests/reader", "../examples/" + fileName);
   }
 
-  std::unique_ptr<memory::ScopedMemoryPool> pool_{
-      memory::getDefaultScopedMemoryPool()};
+  std::shared_ptr<memory::MemoryPool> pool_{memory::addDefaultLeafMemoryPool()};
   std::unique_ptr<test::VectorMaker> vectorMaker_{
       std::make_unique<test::VectorMaker>(pool_.get())};
 };

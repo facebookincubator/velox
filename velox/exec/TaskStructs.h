@@ -34,9 +34,15 @@ class SpillOperatorGroup;
 /// Corresponds to Presto TaskState, needed for reporting query completion.
 enum TaskState { kRunning, kFinished, kCanceled, kAborted, kFailed };
 
+std::string taskStateString(TaskState state);
+
 struct BarrierState {
   int32_t numRequested;
   std::vector<std::shared_ptr<Driver>> drivers;
+  /// Promises given to non-last peer drivers that the last driver will collect
+  /// all hashtables from the peers and assembles them into one (HashBuilder
+  /// operator does that). After the last drier done its work, the promises are
+  /// fulfilled and the non-last drivers can continue.
   std::vector<ContinuePromise> promises;
 };
 
@@ -109,11 +115,18 @@ struct SplitGroupState {
   /// e.g. Limit.
   uint32_t numFinishedOutputDrivers{0};
 
+  // True if the state contains structures used for connecting ungrouped
+  // execution pipeline with grouped excution pipeline. In that case we don't
+  // want to clean up some of these structures.
+  bool mixedExecutionMode{false};
+
   /// Clears the state.
   void clear() {
-    bridges.clear();
-    spillOperatorGroups.clear();
-    barriers.clear();
+    if (!mixedExecutionMode) {
+      bridges.clear();
+      spillOperatorGroups.clear();
+      barriers.clear();
+    }
     localMergeSources.clear();
     mergeJoinSources.clear();
     localExchanges.clear();

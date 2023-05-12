@@ -226,13 +226,14 @@ class InPredicate : public exec::VectorFunction {
   static VectorPtr createBoolConstantNull(
       vector_size_t size,
       exec::EvalCtx& context) {
-    return BaseVector::createConstant(
-        variant(TypeKind::BOOLEAN), size, context.pool());
+    return std::make_shared<ConstantVector<bool>>(
+        context.pool(), size, true /*isNull*/, BOOLEAN(), false);
   }
 
   static VectorPtr
   createBoolConstant(bool value, vector_size_t size, exec::EvalCtx& context) {
-    return BaseVector::createConstant(value, size, context.pool());
+    return std::make_shared<ConstantVector<bool>>(
+        context.pool(), size, false /*isNull*/, BOOLEAN(), std::move(value));
   }
 
   template <typename T, typename F>
@@ -243,8 +244,7 @@ class InPredicate : public exec::VectorFunction {
       VectorPtr& result,
       F&& testFunction) const {
     if (alwaysNull_) {
-      auto localResult = BaseVector::createNullConstant(
-          BOOLEAN(), rows.size(), context.pool());
+      auto localResult = createBoolConstantNull(rows.end(), context);
       context.moveOrCopyResult(localResult, rows, result);
       return;
     }
@@ -253,17 +253,17 @@ class InPredicate : public exec::VectorFunction {
     // Indicates whether result can be true or null only, e.g. no false results.
     const bool passOrNull = filter_->testNull();
 
-    if (arg->isConstant(rows)) {
+    if (arg->isConstantEncoding()) {
       auto simpleArg = arg->asUnchecked<SimpleVector<T>>();
       VectorPtr localResult;
       if (simpleArg->isNullAt(rows.begin())) {
-        localResult = createBoolConstantNull(rows.size(), context);
+        localResult = createBoolConstantNull(rows.end(), context);
       } else {
         bool pass = testFunction(simpleArg->valueAt(rows.begin()));
         if (!pass && passOrNull) {
-          localResult = createBoolConstantNull(rows.size(), context);
+          localResult = createBoolConstantNull(rows.end(), context);
         } else {
-          localResult = createBoolConstant(pass, rows.size(), context);
+          localResult = createBoolConstant(pass, rows.end(), context);
         }
       }
 
@@ -276,6 +276,7 @@ class InPredicate : public exec::VectorFunction {
     auto rawValues = flatArg->rawValues();
 
     context.ensureWritable(rows, BOOLEAN(), result);
+    result->clearNulls(rows);
     auto* boolResult = result->asUnchecked<FlatVector<bool>>();
 
     auto* rawResults = boolResult->mutableRawValues<uint64_t>();

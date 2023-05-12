@@ -27,6 +27,12 @@ namespace detail {
 
 constexpr uint8_t kMaxLevel = 60;
 
+// Current version number for the serialzation format.  Everytime the
+// serialization format changes, this needs to be increased and a new
+// deserializer should be added.  An adapter to convert serialization of
+// previous version to serialization of current version should also be added.
+constexpr int16_t kVersion = 1;
+
 uint32_t computeTotalCapacity(uint32_t k, uint8_t numLevels);
 
 uint32_t levelCapacity(uint32_t k, uint8_t numLevels, uint8_t height);
@@ -480,7 +486,7 @@ std::vector<std::pair<T, uint64_t>> KllSketch<T, A, C>::getFrequencies() const {
   for (int level = 0; level < numLevels(); ++level) {
     auto oldLen = entries.size();
     for (int i = levels_[level]; i < levels_[level + 1]; ++i) {
-      entries.emplace_back(items_[i], 1 << level);
+      entries.emplace_back(items_[i], 1ll << level);
     }
     if (oldLen > 0) {
       std::inplace_merge(
@@ -727,13 +733,16 @@ KllSketch<T, A, C> KllSketch<T, A, C>::fromView(
   ans.items_.assign(view.items.begin(), view.items.end());
   ans.levels_.assign(view.levels.begin(), view.levels.end());
   ans.isLevelZeroSorted_ = std::is_sorted(
-      &ans.items_[ans.levels_[0]], &ans.items_[ans.levels_[1]], C());
+      ans.items_.data() + ans.levels_[0],
+      ans.items_.data() + ans.levels_[1],
+      C());
   return ans;
 }
 
 template <typename T, typename A, typename C>
 size_t KllSketch<T, A, C>::serializedByteSize() const {
-  size_t ans = sizeof k_ + sizeof n_ + sizeof minValue_ + sizeof maxValue_;
+  size_t ans = sizeof detail::kVersion + sizeof k_ + sizeof n_;
+  ans += sizeof minValue_ + sizeof maxValue_;
   ans += sizeof(size_t) + sizeof(T) * items_.size();
   ans += sizeof(size_t) + sizeof(uint32_t) * levels_.size();
   return ans;
@@ -742,6 +751,7 @@ size_t KllSketch<T, A, C>::serializedByteSize() const {
 template <typename T, typename A, typename C>
 void KllSketch<T, A, C>::serialize(char* out) const {
   size_t i = 0;
+  detail::write(detail::kVersion, out, i);
   detail::write(k_, out, i);
   detail::write(n_, out, i);
   detail::write(minValue_, out, i);
@@ -754,6 +764,9 @@ void KllSketch<T, A, C>::serialize(char* out) const {
 template <typename T, typename A, typename C>
 void KllSketch<T, A, C>::View::deserialize(const char* data) {
   size_t i = 0;
+  int16_t version;
+  detail::read(data, i, version);
+  VELOX_CHECK_EQ(version, detail::kVersion, "Unsupported version: {}", version);
   detail::read(data, i, k);
   detail::read(data, i, n);
   detail::read(data, i, minValue);

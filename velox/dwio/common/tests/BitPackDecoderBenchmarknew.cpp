@@ -243,136 +243,136 @@ int32_t main(int32_t argc, char* argv[]) {
 ============================================================================
 [...]/tests/BitPackDecoderBenchmarknew.cpp     relative  time/iter   iters/s
 ============================================================================
-velox_unpack_fullrows_switch_1_8                          419.13us     2.39K
-avx512_new_unpack_fullrows_switch_1_8           124.47%   336.73us     2.97K
+velox_unpack_fullrows_switch_1_8                          404.06us     2.47K
+avx512_new_unpack_fullrows_switch_1_8           121.02%   333.87us     3.00K
 ----------------------------------------------------------------------------
-velox_unpack_fullrows_switch_2_8                          441.24us     2.27K
-avx512_new_unpack_fullrows_switch_2_8           117.59%   375.24us     2.66K
+velox_unpack_fullrows_switch_2_8                          435.25us     2.30K
+avx512_new_unpack_fullrows_switch_2_8           117.34%   370.94us     2.70K
 ----------------------------------------------------------------------------
-velox_unpack_fullrows_switch_3_8                          487.36us     2.05K
-avx512_new_unpack_fullrows_switch_3_8            116.9%   416.89us     2.40K
+velox_unpack_fullrows_switch_3_8                          460.43us     2.17K
+avx512_new_unpack_fullrows_switch_3_8           112.17%   410.49us     2.44K
 ----------------------------------------------------------------------------
-velox_unpack_fullrows_switch_4_8                          510.54us     1.96K
-avx512_new_unpack_fullrows_switch_4_8           114.42%   446.22us     2.24K
+velox_unpack_fullrows_switch_4_8                          491.38us     2.04K
+avx512_new_unpack_fullrows_switch_4_8           111.37%   441.22us     2.27K
 ----------------------------------------------------------------------------
-velox_unpack_fullrows_switch_5_8                          538.42us     1.86K
-avx512_new_unpack_fullrows_switch_5_8           111.51%   482.84us     2.07K
+velox_unpack_fullrows_switch_5_8                          513.82us     1.95K
+avx512_new_unpack_fullrows_switch_5_8           108.46%   473.76us     2.11K
 ----------------------------------------------------------------------------
-velox_unpack_fullrows_switch_6_8                          585.22us     1.71K
-avx512_new_unpack_fullrows_switch_6_8           111.56%   524.56us     1.91K
+velox_unpack_fullrows_switch_6_8                          535.98us     1.87K
+avx512_new_unpack_fullrows_switch_6_8            105.7%   507.07us     1.97K
 ----------------------------------------------------------------------------
-velox_unpack_fullrows_switch_7_8                          644.45us     1.55K
-avx512_new_unpack_fullrows_switch_7_8           112.84%   571.13us     1.75K
+velox_unpack_fullrows_switch_7_8                          566.35us     1.77K
+avx512_new_unpack_fullrows_switch_7_8           104.41%   542.44us     1.84K
 ----------------------------------------------------------------------------
-velox_unpack_fullrows_switch_8_8                          635.43us     1.57K
-avx512_new_unpack_fullrows_switch_8_8           129.49%   490.71us     2.04K
-----------------------------------------------------------------------------
-----------------------------------------------------------------------------
-velox_unpack_fullrows_switch_1_16                         997.13us     1.00K
-avx512_new_unpack_fullrows_switch_1_16          143.05%   697.07us     1.43K
-----------------------------------------------------------------------------
-velox_unpack_fullrows_switch_2_16                           1.03ms    968.25
-avx512_new_unpack_fullrows_switch_2_16          141.28%   731.02us     1.37K
-----------------------------------------------------------------------------
-velox_unpack_fullrows_switch_3_16                           1.08ms    928.70
-avx512_new_unpack_fullrows_switch_3_16          134.65%   799.68us     1.25K
-----------------------------------------------------------------------------
-velox_unpack_fullrows_switch_4_16                           1.14ms    876.54
-avx512_new_unpack_fullrows_switch_4_16          134.89%   845.80us     1.18K
-----------------------------------------------------------------------------
-velox_unpack_fullrows_switch_5_16                           1.30ms    767.20
-avx512_new_unpack_fullrows_switch_5_16          143.13%   910.66us     1.10K
-----------------------------------------------------------------------------
-velox_unpack_fullrows_switch_6_16                           1.35ms    740.65
-avx512_new_unpack_fullrows_switch_6_16          141.27%   955.73us     1.05K
-----------------------------------------------------------------------------
-velox_unpack_fullrows_switch_7_16                           1.46ms    686.16
-avx512_new_unpack_fullrows_switch_7_16           138.3%     1.05ms    948.93
-----------------------------------------------------------------------------
-velox_unpack_fullrows_switch_8_16                           1.64ms    610.13
-avx512_new_unpack_fullrows_switch_8_16          122.72%     1.34ms    748.73
-----------------------------------------------------------------------------
-velox_unpack_fullrows_switch_9_16                           1.94ms    515.81
-avx512_new_unpack_fullrows_switch_9_16          156.38%     1.24ms    806.61
-----------------------------------------------------------------------------
-velox_unpack_fullrows_switch_10_16                          1.97ms    507.97
-avx512_new_unpack_fullrows_switch_10_16         145.24%     1.36ms    737.80
-----------------------------------------------------------------------------
-velox_unpack_fullrows_switch_11_16                          2.36ms    423.80
-avx512_new_unpack_fullrows_switch_11_16         162.22%     1.45ms    687.49
-----------------------------------------------------------------------------
-velox_unpack_fullrows_switch_12_16                          2.19ms    455.73
-avx512_new_unpack_fullrows_switch_12_16         149.27%     1.47ms    680.29
-----------------------------------------------------------------------------
-velox_unpack_fullrows_switch_13_16                          2.71ms    368.83
-avx512_new_unpack_fullrows_switch_13_16         168.16%     1.61ms    620.21
-----------------------------------------------------------------------------
-velox_unpack_fullrows_switch_14_16                          2.68ms    373.53
-avx512_new_unpack_fullrows_switch_14_16         156.04%     1.72ms    582.85
-----------------------------------------------------------------------------
-velox_unpack_fullrows_switch_15_16                          2.70ms    370.77
-avx512_new_unpack_fullrows_switch_15_16         147.53%     1.83ms    547.01
-----------------------------------------------------------------------------
-velox_unpack_fullrows_switch_16_16                          1.11ms    901.19
-avx512_new_unpack_fullrows_switch_16_16         100.96%     1.10ms    909.88
+velox_unpack_fullrows_switch_8_8                          588.18us     1.70K
+avx512_new_unpack_fullrows_switch_8_8           106.21%   553.76us     1.81K
 ----------------------------------------------------------------------------
 ----------------------------------------------------------------------------
-velox_unpack_fullrows_switch_1_32                           3.42ms    292.39
-avx512_new_unpack_fullrows_switch_1_32          149.23%     2.29ms    436.33
+velox_unpack_fullrows_switch_1_16                         741.30us     1.35K
+avx512_new_unpack_fullrows_switch_1_16          116.03%   638.87us     1.57K
 ----------------------------------------------------------------------------
-velox_unpack_fullrows_switch_2_32                           3.43ms    291.90
-avx512_new_unpack_fullrows_switch_2_32          148.95%     2.30ms    434.77
+velox_unpack_fullrows_switch_2_16                         754.73us     1.32K
+avx512_new_unpack_fullrows_switch_2_16          112.44%   671.22us     1.49K
 ----------------------------------------------------------------------------
-velox_unpack_fullrows_switch_3_32                           3.44ms    290.71
-avx512_new_unpack_fullrows_switch_3_32          142.38%     2.42ms    413.92
+velox_unpack_fullrows_switch_3_16                         798.92us     1.25K
+avx512_new_unpack_fullrows_switch_3_16          112.72%   708.74us     1.41K
 ----------------------------------------------------------------------------
-velox_unpack_fullrows_switch_4_32                           3.52ms    283.73
-avx512_new_unpack_fullrows_switch_4_32          140.76%     2.50ms    399.39
+velox_unpack_fullrows_switch_4_16                         826.81us     1.21K
+avx512_new_unpack_fullrows_switch_4_16          111.65%   740.56us     1.35K
 ----------------------------------------------------------------------------
-velox_unpack_fullrows_switch_5_32                           3.59ms    278.93
-avx512_new_unpack_fullrows_switch_5_32          124.85%     2.87ms    348.25
+velox_unpack_fullrows_switch_5_16                         856.92us     1.17K
+avx512_new_unpack_fullrows_switch_5_16          110.29%   776.95us     1.29K
 ----------------------------------------------------------------------------
-velox_unpack_fullrows_switch_6_32                           3.79ms    264.19
-avx512_new_unpack_fullrows_switch_6_32          131.74%     2.87ms    348.06
+velox_unpack_fullrows_switch_6_16                         886.25us     1.13K
+avx512_new_unpack_fullrows_switch_6_16          109.19%   811.63us     1.23K
 ----------------------------------------------------------------------------
-velox_unpack_fullrows_switch_7_32                           3.96ms    252.82
-avx512_new_unpack_fullrows_switch_7_32          129.24%     3.06ms    326.73
+velox_unpack_fullrows_switch_7_16                           1.06ms    947.71
+avx512_new_unpack_fullrows_switch_7_16          124.14%   849.99us     1.18K
 ----------------------------------------------------------------------------
-velox_unpack_fullrows_switch_8_32                           4.15ms    240.98
-avx512_new_unpack_fullrows_switch_8_32          144.71%     2.87ms    348.72
+velox_unpack_fullrows_switch_8_16                         985.99us     1.01K
+avx512_new_unpack_fullrows_switch_8_16          109.04%   904.25us     1.11K
 ----------------------------------------------------------------------------
-velox_unpack_fullrows_switch_9_32                           3.99ms    250.50
-avx512_new_unpack_fullrows_switch_9_32          129.85%     3.07ms    325.27
+velox_unpack_fullrows_switch_9_16                           1.36ms    736.46
+avx512_new_unpack_fullrows_switch_9_16          146.04%   929.79us     1.08K
 ----------------------------------------------------------------------------
-velox_unpack_fullrows_switch_10_32                          4.08ms    245.20
-avx512_new_unpack_fullrows_switch_10_32         128.89%     3.16ms    316.03
+velox_unpack_fullrows_switch_10_16                          1.20ms    833.48
+avx512_new_unpack_fullrows_switch_10_16         123.66%   970.26us     1.03K
 ----------------------------------------------------------------------------
-velox_unpack_fullrows_switch_11_32                          4.23ms    236.67
-avx512_new_unpack_fullrows_switch_11_32         127.25%     3.32ms    301.17
+velox_unpack_fullrows_switch_11_16                          1.60ms    624.14
+avx512_new_unpack_fullrows_switch_11_16         158.88%     1.01ms    991.60
 ----------------------------------------------------------------------------
-velox_unpack_fullrows_switch_13_32                          4.47ms    223.66
-avx512_new_unpack_fullrows_switch_13_32         121.95%     3.67ms    272.75
+velox_unpack_fullrows_switch_12_16                          1.28ms    779.54
+avx512_new_unpack_fullrows_switch_12_16         122.34%     1.05ms    953.68
 ----------------------------------------------------------------------------
-velox_unpack_fullrows_switch_15_32                          4.66ms    214.54
-avx512_new_unpack_fullrows_switch_15_32         119.02%     3.92ms    255.34
+velox_unpack_fullrows_switch_13_16                          1.87ms    535.54
+avx512_new_unpack_fullrows_switch_13_16         171.32%     1.09ms    917.46
 ----------------------------------------------------------------------------
-velox_unpack_fullrows_switch_17_32                          5.22ms    191.41
-avx512_new_unpack_fullrows_switch_17_32         129.89%     4.02ms    248.62
+velox_unpack_fullrows_switch_14_16                          1.69ms    589.99
+avx512_new_unpack_fullrows_switch_14_16         150.03%     1.13ms    885.16
 ----------------------------------------------------------------------------
-velox_unpack_fullrows_switch_19_32                          5.22ms    191.69
-avx512_new_unpack_fullrows_switch_19_32         120.75%     4.32ms    231.46
+velox_unpack_fullrows_switch_15_16                          1.48ms    674.56
+avx512_new_unpack_fullrows_switch_15_16         125.67%     1.18ms    847.73
 ----------------------------------------------------------------------------
-velox_unpack_fullrows_switch_21_32                          5.63ms    177.67
-avx512_new_unpack_fullrows_switch_21_32         123.26%     4.57ms    219.00
+velox_unpack_fullrows_switch_16_16                        959.37us     1.04K
+avx512_new_unpack_fullrows_switch_16_16         100.03%   959.11us     1.04K
 ----------------------------------------------------------------------------
-velox_unpack_fullrows_switch_24_32                          5.90ms    169.62
-avx512_new_unpack_fullrows_switch_24_32         122.39%     4.82ms    207.60
 ----------------------------------------------------------------------------
-velox_unpack_fullrows_switch_28_32                          6.35ms    157.42
-avx512_new_unpack_fullrows_switch_28_32         117.49%     5.41ms    184.95
+velox_unpack_fullrows_switch_1_32                           1.77ms    564.97
+avx512_new_unpack_fullrows_switch_1_32          132.26%     1.34ms    747.21
 ----------------------------------------------------------------------------
-velox_unpack_fullrows_switch_30_32                          6.40ms    156.19
-avx512_new_unpack_fullrows_switch_30_32         113.29%     5.65ms    176.95
+velox_unpack_fullrows_switch_2_32                           1.81ms    552.36
+avx512_new_unpack_fullrows_switch_2_32          131.41%     1.38ms    725.87
+----------------------------------------------------------------------------
+velox_unpack_fullrows_switch_3_32                           1.86ms    536.52
+avx512_new_unpack_fullrows_switch_3_32          130.76%     1.43ms    701.53
+----------------------------------------------------------------------------
+velox_unpack_fullrows_switch_4_32                           1.91ms    523.60
+avx512_new_unpack_fullrows_switch_4_32          129.92%     1.47ms    680.26
+----------------------------------------------------------------------------
+velox_unpack_fullrows_switch_5_32                           1.96ms    509.08
+avx512_new_unpack_fullrows_switch_5_32          125.82%     1.56ms    640.54
+----------------------------------------------------------------------------
+velox_unpack_fullrows_switch_6_32                           2.02ms    494.05
+avx512_new_unpack_fullrows_switch_6_32          124.66%     1.62ms    615.88
+----------------------------------------------------------------------------
+velox_unpack_fullrows_switch_7_32                           2.09ms    478.68
+avx512_new_unpack_fullrows_switch_7_32          121.69%     1.72ms    582.52
+----------------------------------------------------------------------------
+velox_unpack_fullrows_switch_8_32                           2.15ms    464.74
+avx512_new_unpack_fullrows_switch_8_32          128.88%     1.67ms    598.94
+----------------------------------------------------------------------------
+velox_unpack_fullrows_switch_9_32                           2.05ms    488.40
+avx512_new_unpack_fullrows_switch_9_32          117.06%     1.75ms    571.74
+----------------------------------------------------------------------------
+velox_unpack_fullrows_switch_10_32                          2.11ms    474.41
+avx512_new_unpack_fullrows_switch_10_32         116.39%     1.81ms    552.19
+----------------------------------------------------------------------------
+velox_unpack_fullrows_switch_11_32                          2.23ms    448.61
+avx512_new_unpack_fullrows_switch_11_32         118.79%     1.88ms    532.92
+----------------------------------------------------------------------------
+velox_unpack_fullrows_switch_13_32                          2.34ms    426.80
+avx512_new_unpack_fullrows_switch_13_32         114.72%     2.04ms    489.60
+----------------------------------------------------------------------------
+velox_unpack_fullrows_switch_15_32                          2.58ms    387.42
+avx512_new_unpack_fullrows_switch_15_32         118.68%     2.17ms    459.78
+----------------------------------------------------------------------------
+velox_unpack_fullrows_switch_17_32                          2.92ms    342.05
+avx512_new_unpack_fullrows_switch_17_32         129.62%     2.26ms    443.36
+----------------------------------------------------------------------------
+velox_unpack_fullrows_switch_19_32                          3.03ms    330.48
+avx512_new_unpack_fullrows_switch_19_32         125.36%     2.41ms    414.30
+----------------------------------------------------------------------------
+velox_unpack_fullrows_switch_21_32                          3.13ms    319.70
+avx512_new_unpack_fullrows_switch_21_32         123.02%     2.54ms    393.29
+----------------------------------------------------------------------------
+velox_unpack_fullrows_switch_24_32                          3.23ms    309.13
+avx512_new_unpack_fullrows_switch_24_32         117.26%     2.76ms    362.49
+----------------------------------------------------------------------------
+velox_unpack_fullrows_switch_28_32                          3.62ms    276.24
+avx512_new_unpack_fullrows_switch_28_32         118.76%     3.05ms    328.06
+----------------------------------------------------------------------------
+velox_unpack_fullrows_switch_30_32                          3.71ms    269.51
+avx512_new_unpack_fullrows_switch_30_32          115.5%     3.21ms    311.28
 ----------------------------------------------------------------------------
 velox_unpack_fullrows_switch_32_32                          3.41ms    292.83
 avx512_new_unpack_fullrows_switch_32_32         101.94%     3.35ms    298.53

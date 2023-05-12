@@ -93,14 +93,14 @@ class CountAggregate : public SimpleNumericAggregate<bool, int64_t, int64_t> {
       const std::vector<VectorPtr>& args,
       bool /*mayPushdown*/) override {
     if (args.empty()) {
-      addToGroup(group, rows.size());
+      addToGroup(group, rows.countSelected());
       return;
     }
 
     DecodedVector decoded(*args[0], rows);
     if (decoded.isConstantMapping()) {
       if (!decoded.isNullAt(0)) {
-        addToGroup(group, rows.size());
+        addToGroup(group, rows.countSelected());
       }
     } else if (decoded.mayHaveNulls()) {
       int64_t nonNullCount = 0;
@@ -111,7 +111,7 @@ class CountAggregate : public SimpleNumericAggregate<bool, int64_t, int64_t> {
       });
       addToGroup(group, nonNullCount);
     } else {
-      addToGroup(group, rows.size());
+      addToGroup(group, rows.countSelected());
     }
   }
 
@@ -146,7 +146,7 @@ class CountAggregate : public SimpleNumericAggregate<bool, int64_t, int64_t> {
   DecodedVector decodedIntermediate_;
 };
 
-bool registerCountAggregate(const std::string& name) {
+bool registerCount(const std::string& name) {
   std::vector<std::shared_ptr<exec::AggregateFunctionSignature>> signatures{
       exec::AggregateFunctionSignatureBuilder()
           .returnType("bigint")
@@ -177,8 +177,8 @@ bool registerCountAggregate(const std::string& name) {
 
 } // namespace
 
-void registerCountAggregate() {
-  registerCountAggregate(kCount);
+void registerCountAggregate(const std::string& prefix) {
+  registerCount(prefix + kCount);
 }
 
 } // namespace facebook::velox::aggregate::prestosql

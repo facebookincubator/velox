@@ -144,9 +144,78 @@ TEST_F(MapTest, duplicateKeys) {
       evaluate<MapVector>("map2(c0, c1)", makeRowVector({keys, values})));
 }
 
-TEST_F(MapTest, differentArraySizes) {
+TEST_F(MapTest, fewerValuesThanKeys) {
   auto size = 1'000;
 
+  // Make sure that some rows have fewer 'values' than 'keys'.
+  auto keys = makeArrayVector<int64_t>(
+      size,
+      [](vector_size_t row) { return row % 7; },
+      [](vector_size_t row) { return row % 11; });
+  auto values = makeArrayVector<int32_t>(
+      size,
+      [](vector_size_t row) { return row % 5; },
+      [](vector_size_t row) { return row % 13; });
+
+  VELOX_ASSERT_THROW(
+      evaluate<MapVector>("map(c0, c1)", makeRowVector({keys, values})),
+      "(5 vs. 0) Key and value arrays must be the same length");
+
+  ASSERT_NO_THROW(
+      evaluate<MapVector>("try(map(c0, c1))", makeRowVector({keys, values})));
+}
+
+TEST_F(MapTest, fewerValuesThanKeysInLast) {
+  // Element 0 of the map vector is valid, element 1 is missing values
+  // and should come out empty when not throwing errors. The starts of
+  // the keys and values are aligned but the lengths are not.
+  auto size = 2;
+
+  auto keys = makeArrayVector<int64_t>(
+      size,
+      [](vector_size_t row) { return 10; },
+      [](vector_size_t row) { return row % 11; });
+  auto values = makeArrayVector<int32_t>(
+      size,
+      [](vector_size_t row) { return row == 0 ? 10 : 1; },
+      [](vector_size_t row) { return row % 13; });
+
+  VELOX_ASSERT_THROW(
+      evaluate<MapVector>("map(c0, c1)", makeRowVector({keys, values})),
+      "(10 vs. 1) Key and value arrays must be the same length");
+
+  auto map =
+      evaluate<MapVector>("try(map(c0, c1))", makeRowVector({keys, values}));
+  EXPECT_EQ(10, map->sizeAt(0));
+  EXPECT_EQ(0, map->sizeAt(1));
+
+  auto condition = makeFlatVector<bool>({true, false, true, false, true});
+
+  // Makes a vector of keys and values where items 0, 2 and 4 are
+  // aligned. The keys vector as a whole is still longer than the
+  // values vector.
+  auto keys2 = evaluate(
+      "if(c0, array[3, 2, 1], array[6, 5, 4])", makeRowVector({condition}));
+  auto values2 = evaluate(
+      "if(c0, array[30, 20, 10], array[40])", makeRowVector({condition}));
+
+  auto result = evaluate<MapVector>(
+      "try("
+      "   if(c0, "
+      "       map(c1, c2), "
+      "       cast(null as map(integer, integer))))",
+      makeRowVector({condition, keys2, values2}));
+  EXPECT_EQ(0, result->offsetAt(0));
+  EXPECT_EQ(3, result->offsetAt(2));
+  EXPECT_EQ(6, result->offsetAt(4));
+  EXPECT_EQ(9, result->mapKeys()->size());
+  EXPECT_EQ(9, result->mapValues()->size());
+}
+
+TEST_F(MapTest, fewerKeysThanValues) {
+  auto size = 1'000;
+
+  // Make sure that some rows have fewer 'keys' than 'values'.
   auto keys = makeArrayVector<int64_t>(
       size,
       [](vector_size_t row) { return row % 5; },
@@ -211,12 +280,46 @@ TEST_F(MapTest, constantKeys) {
   auto expectedMap =
       makeMapVector<StringView, int32_t>(size, sizeAt, keyAt, valueAt);
 
-  auto result = evaluate<MapVector>(
+  auto result = evaluate(
       "map(array['key'], array_constructor(c0))",
       makeRowVector({
           makeFlatVector<int32_t>(size, valueAt),
       }));
   assertEqualVectors(expectedMap, result);
+
+  // Duplicate key.
+  VELOX_ASSERT_THROW(
+      evaluate<MapVector>(
+          "map(array['key', 'key'], array_constructor(c0, c0))",
+          makeRowVector({
+              makeFlatVector<int32_t>(size, valueAt),
+          })),
+      "Duplicate map keys (key) are not allowed");
+
+  result = evaluate(
+      "try(map(array['key', 'key'], array_constructor(c0, c0)))",
+      makeRowVector({
+          makeFlatVector<int32_t>(size, valueAt),
+      }));
+  auto nullMap =
+      BaseVector::createNullConstant(MAP(VARCHAR(), INTEGER()), size, pool());
+  assertEqualVectors(nullMap, result);
+
+  // Wrong number of values.
+  VELOX_ASSERT_THROW(
+      evaluate(
+          "map(array['key1', 'key2'], array_constructor(c0, c0, c0))",
+          makeRowVector({
+              makeFlatVector<int32_t>(size, valueAt),
+          })),
+      "(2 vs. 3) Key and value arrays must be the same length");
+
+  result = evaluate(
+      "try(map(array['key1', 'key2'], array_constructor(c0, c0, c0)))",
+      makeRowVector({
+          makeFlatVector<int32_t>(size, valueAt),
+      }));
+  assertEqualVectors(nullMap, result);
 }
 
 // Test map function applied to a flat array of keys and constant array of

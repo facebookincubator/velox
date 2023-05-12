@@ -97,39 +97,21 @@ vector_size_t VectorMaker::createOffsetsAndSizes(
 ArrayVectorPtr VectorMaker::allNullArrayVector(
     vector_size_t size,
     const std::shared_ptr<const Type>& elementType) {
-  BufferPtr nulls = AlignedBuffer::allocate<bool>(size, pool_);
-  auto* rawNulls = nulls->asMutable<uint64_t>();
-  BufferPtr offsets = AlignedBuffer::allocate<vector_size_t>(size, pool_);
-  auto* rawOffsets = offsets->asMutable<vector_size_t>();
-  BufferPtr sizes = AlignedBuffer::allocate<vector_size_t>(size, pool_);
-  auto* rawSizes = sizes->asMutable<vector_size_t>();
-
-  for (vector_size_t i = 0; i < size; i++) {
-    bits::setNull(rawNulls, i, true);
-    rawOffsets[i] = 0;
-    rawSizes[i] = 0;
-  }
+  BufferPtr nulls = allocateNulls(size, pool_, bits::kNull);
+  BufferPtr offsets = allocateOffsets(size, pool_);
+  BufferPtr sizes = allocateSizes(size, pool_);
 
   return std::make_shared<ArrayVector>(
-      pool_, ARRAY(elementType), nulls, size, offsets, sizes, nullptr, size);
+      pool_, ARRAY(elementType), nulls, size, offsets, sizes, nullptr);
 }
 
 MapVectorPtr VectorMaker::allNullMapVector(
     vector_size_t size,
     const std::shared_ptr<const Type>& keyType,
     const std::shared_ptr<const Type>& valueType) {
-  BufferPtr nulls = AlignedBuffer::allocate<bool>(size, pool_);
-  auto* rawNulls = nulls->asMutable<uint64_t>();
-  BufferPtr offsets = AlignedBuffer::allocate<vector_size_t>(size, pool_);
-  auto* rawOffsets = offsets->asMutable<vector_size_t>();
-  BufferPtr sizes = AlignedBuffer::allocate<vector_size_t>(size, pool_);
-  auto* rawSizes = sizes->asMutable<vector_size_t>();
-
-  for (vector_size_t i = 0; i < size; i++) {
-    bits::setNull(rawNulls, i, true);
-    rawOffsets[i] = 0;
-    rawSizes[i] = 0;
-  }
+  BufferPtr nulls = allocateNulls(size, pool_, bits::kNull);
+  BufferPtr offsets = allocateOffsets(size, pool_);
+  BufferPtr sizes = allocateSizes(size, pool_);
 
   return std::make_shared<MapVector>(
       pool_,
@@ -139,8 +121,7 @@ MapVectorPtr VectorMaker::allNullMapVector(
       offsets,
       sizes,
       nullptr,
-      nullptr,
-      size);
+      nullptr);
 }
 
 namespace {
@@ -193,56 +174,53 @@ FlatVectorPtr<T> makeDecimalFlatVectorNullable(
 } // namespace
 
 template <>
-FlatVectorPtr<UnscaledShortDecimal> VectorMaker::shortDecimalFlatVector(
+FlatVectorPtr<int64_t> VectorMaker::shortDecimalFlatVector(
     const std::vector<int64_t>& unscaledValues,
     const TypePtr& type) {
   VELOX_CHECK(type->isShortDecimal());
-  return makeDecimalFlatVector<UnscaledShortDecimal, int64_t>(
-      unscaledValues, type, pool_);
+  return makeDecimalFlatVector<int64_t, int64_t>(unscaledValues, type, pool_);
 }
 
 template <>
-FlatVectorPtr<UnscaledLongDecimal> VectorMaker::longDecimalFlatVector(
+FlatVectorPtr<int128_t> VectorMaker::longDecimalFlatVector(
     const std::vector<int64_t>& unscaledValues,
     const TypePtr& type) {
   VELOX_CHECK(type->isLongDecimal());
-  return makeDecimalFlatVector<UnscaledLongDecimal, int64_t>(
-      unscaledValues, type, pool_);
+  return makeDecimalFlatVector<int128_t, int64_t>(unscaledValues, type, pool_);
 }
 
 template <>
-FlatVectorPtr<UnscaledLongDecimal> VectorMaker::longDecimalFlatVector(
+FlatVectorPtr<int128_t> VectorMaker::longDecimalFlatVector(
     const std::vector<int128_t>& unscaledValues,
     const TypePtr& type) {
   VELOX_CHECK(type->isLongDecimal());
-  return makeDecimalFlatVector<UnscaledLongDecimal, int128_t>(
-      unscaledValues, type, pool_);
+  return makeDecimalFlatVector<int128_t, int128_t>(unscaledValues, type, pool_);
 }
 
 template <>
-FlatVectorPtr<UnscaledShortDecimal> VectorMaker::shortDecimalFlatVectorNullable(
+FlatVectorPtr<int64_t> VectorMaker::shortDecimalFlatVectorNullable(
     const std::vector<std::optional<int64_t>>& unscaledValues,
     const TypePtr& type) {
   VELOX_CHECK(type->isShortDecimal());
-  return makeDecimalFlatVectorNullable<UnscaledShortDecimal, int64_t>(
+  return makeDecimalFlatVectorNullable<int64_t, int64_t>(
       unscaledValues, type, pool_);
 }
 
 template <>
-FlatVectorPtr<UnscaledLongDecimal> VectorMaker::longDecimalFlatVectorNullable(
+FlatVectorPtr<int128_t> VectorMaker::longDecimalFlatVectorNullable(
     const std::vector<std::optional<int64_t>>& unscaledValues,
     const TypePtr& type) {
   VELOX_CHECK(type->isLongDecimal());
-  return makeDecimalFlatVectorNullable<UnscaledLongDecimal, int64_t>(
+  return makeDecimalFlatVectorNullable<int128_t, int64_t>(
       unscaledValues, type, pool_);
 }
 
 template <>
-FlatVectorPtr<UnscaledLongDecimal> VectorMaker::longDecimalFlatVectorNullable(
+FlatVectorPtr<int128_t> VectorMaker::longDecimalFlatVectorNullable(
     const std::vector<std::optional<int128_t>>& unscaledValues,
     const TypePtr& type) {
   VELOX_CHECK(type->isLongDecimal());
-  return makeDecimalFlatVectorNullable<UnscaledLongDecimal, int128_t>(
+  return makeDecimalFlatVectorNullable<int128_t, int128_t>(
       unscaledValues, type, pool_);
 }
 

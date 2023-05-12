@@ -35,7 +35,7 @@ class PlanBuilderTest : public testing::Test,
 
 TEST_F(PlanBuilderTest, duplicateSubfield) {
   VELOX_ASSERT_THROW(
-      PlanBuilder()
+      PlanBuilder(pool_.get())
           .tableScan(
               ROW({"a", "b"}, {BIGINT(), BIGINT()}),
               {"a < 5", "b = 7", "a > 0"},
@@ -95,7 +95,7 @@ TEST_F(PlanBuilderTest, windowFunctionCall) {
           .tableScan(ROW({"a", "b", "c"}, {VARCHAR(), BIGINT(), BIGINT()}))
           .window({"window1(c) over (partition by a order by b) as d"})
           .planNode(),
-      "Registry of window functions is empty.");
+      "Window function doesn't exist: window1.");
 
   registerWindowFunction();
 

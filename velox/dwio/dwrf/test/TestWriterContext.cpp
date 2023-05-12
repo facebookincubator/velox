@@ -16,6 +16,7 @@
 
 #include <gtest/gtest.h>
 
+#include "velox/dwio/common/TypeWithId.h"
 #include "velox/dwio/dwrf/writer/WriterContext.h"
 
 using namespace ::testing;
@@ -23,57 +24,62 @@ using namespace ::testing;
 namespace facebook::velox::dwrf {
 TEST(TestWriterContext, GetIntDictionaryEncoder) {
   auto config = std::make_shared<Config>();
-  WriterContext context{config, memory::getDefaultScopedMemoryPool()};
+  WriterContext context{
+      config,
+      memory::defaultMemoryManager().addRootPool("GetIntDictionaryEncoder")};
 
   EXPECT_EQ(0, context.dictEncoders_.size());
   auto& intEncoder_1_0 = context.getIntDictionaryEncoder<int32_t>(
-      {1, 0}, context.dictionaryPool_, context.generalPool_);
+      {1, 0}, *context.dictionaryPool_, *context.generalPool_);
   EXPECT_EQ(1, context.dictEncoders_.size());
   ASSERT_EQ(1, intEncoder_1_0.refCount_);
 
   auto& duplicateCallResult_1_0 = context.getIntDictionaryEncoder<int32_t>(
-      {1, 0}, context.dictionaryPool_, context.generalPool_);
+      {1, 0}, *context.dictionaryPool_, *context.generalPool_);
   EXPECT_EQ(1, context.dictEncoders_.size());
   EXPECT_EQ(&intEncoder_1_0, &duplicateCallResult_1_0);
   EXPECT_EQ(2, intEncoder_1_0.refCount_);
 
   for (size_t i = 0; i < 40; ++i) {
     context.getIntDictionaryEncoder<int32_t>(
-        {1, 0}, context.dictionaryPool_, context.generalPool_);
+        {1, 0}, *context.dictionaryPool_, *context.generalPool_);
   }
   EXPECT_EQ(42, intEncoder_1_0.refCount_);
 
   // Ignore the mismatched type request.
   context.getIntDictionaryEncoder<int64_t>(
-      {1, 0}, context.dictionaryPool_, context.generalPool_);
+      {1, 0}, *context.dictionaryPool_, *context.generalPool_);
   EXPECT_EQ(1, context.dictEncoders_.size());
 
   context.getIntDictionaryEncoder<int32_t>(
-      {2, 0}, context.dictionaryPool_, context.generalPool_);
+      {2, 0}, *context.dictionaryPool_, *context.generalPool_);
   EXPECT_EQ(2, context.dictEncoders_.size());
 }
 
 TEST(TestWriterContext, RemoveIntDictionaryEncoderForNode) {
   auto config = std::make_shared<Config>();
   config->set(Config::MAP_FLAT_DICT_SHARE, false);
-  WriterContext context{config, memory::getDefaultScopedMemoryPool()};
+  WriterContext context{
+      config,
+      memory::defaultMemoryManager().addRootPool(
+          "RemoveIntDictionaryEncoderForNode")};
 
   context.getIntDictionaryEncoder<int32_t>(
-      {1, 1}, context.dictionaryPool_, context.generalPool_);
+      {1, 1}, *context.dictionaryPool_, *context.generalPool_);
   context.getIntDictionaryEncoder<int32_t>(
-      {1, 2}, context.dictionaryPool_, context.generalPool_);
+      {1, 2}, *context.dictionaryPool_, *context.generalPool_);
   context.getIntDictionaryEncoder<int32_t>(
-      {1, 4}, context.dictionaryPool_, context.generalPool_);
+      {1, 4}, *context.dictionaryPool_, *context.generalPool_);
   context.getIntDictionaryEncoder<int32_t>(
-      {1, 5}, context.dictionaryPool_, context.generalPool_);
+      {1, 5}, *context.dictionaryPool_, *context.generalPool_);
   EXPECT_EQ(4, context.dictEncoders_.size());
 
   context.getIntDictionaryEncoder<int32_t>(
-      {2, 0}, context.dictionaryPool_, context.generalPool_);
+      {2, 0}, *context.dictionaryPool_, *context.generalPool_);
   context.getIntDictionaryEncoder<int32_t>(
-      {3, 1}, context.dictionaryPool_, context.generalPool_);
+      {3, 1}, *context.dictionaryPool_, *context.generalPool_);
   context.getIntDictionaryEncoder<int32_t>(
-      {3, 3}, context.dictionaryPool_, context.generalPool_);
+      {3, 3}, *context.dictionaryPool_, *context.generalPool_);
   EXPECT_EQ(7, context.dictEncoders_.size());
 
   context.removeAllIntDictionaryEncodersOnNode(
@@ -101,5 +107,37 @@ TEST(TestWriterContext, RemoveIntDictionaryEncoderForNode) {
   context.removeAllIntDictionaryEncodersOnNode(
       [](uint32_t nodeId) { return nodeId == 2; });
   EXPECT_EQ(0, context.dictEncoders_.size());
+}
+
+TEST(TestWriterContext, BuildPhysicalSizeAggregators) {
+  auto config = std::make_shared<Config>();
+  WriterContext context{
+      config,
+      memory::defaultMemoryManager().addRootPool(
+          "BuildPhysicalSizeAggregators")};
+  auto type = ROW({
+      {"array", ARRAY(REAL())},
+      {"map", MAP(INTEGER(), DOUBLE())},
+      {"row",
+       ROW({
+           {"a", REAL()},
+           {"b", INTEGER()},
+       })},
+      {"nested",
+       ARRAY(ROW({
+           {"a", INTEGER()},
+           {"b", MAP(REAL(), REAL())},
+       }))},
+  });
+  auto typeWithId = velox::dwio::common::TypeWithId::create(type);
+  context.buildPhysicalSizeAggregators(*typeWithId);
+  std::vector<uint32_t> mapNodes{3, 12};
+  for (size_t i = 0; i < 14; ++i) {
+    EXPECT_NO_THROW(context.getPhysicalSizeAggregator(i));
+  }
+  for (const auto nodeId : mapNodes) {
+    EXPECT_NO_THROW(dynamic_cast<MapPhysicalSizeAggregator&>(
+        context.getPhysicalSizeAggregator(nodeId)));
+  }
 }
 } // namespace facebook::velox::dwrf

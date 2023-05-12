@@ -20,6 +20,7 @@
 #include "velox/dwio/common/BitConcatenation.h"
 #include "velox/dwio/common/DirectDecoder.h"
 #include "velox/dwio/common/SelectiveColumnReader.h"
+#include "velox/dwio/parquet/reader/BooleanDecoder.h"
 #include "velox/dwio/parquet/reader/ParquetTypeWithId.h"
 #include "velox/dwio/parquet/reader/RleBpDataDecoder.h"
 #include "velox/dwio/parquet/reader/StringDecoder.h"
@@ -43,12 +44,50 @@ class PageReader {
         type_(std::move(nodeType)),
         maxRepeat_(type_->maxRepeat_),
         maxDefine_(type_->maxDefine_),
+        isTopLevel_(maxRepeat_ == 0 && maxDefine_ <= 1),
+        codec_(codec),
+        chunkSize_(chunkSize),
+        nullConcatenation_(pool_) {
+    type_->makeLevelInfo(leafInfo_);
+  }
+
+  // This PageReader constructor is for unit test only.
+  PageReader(
+      std::unique_ptr<dwio::common::SeekableInputStream> stream,
+      memory::MemoryPool& pool,
+      thrift::CompressionCodec::type codec,
+      int64_t chunkSize)
+      : pool_(pool),
+        inputStream_(std::move(stream)),
+        maxRepeat_(0),
+        maxDefine_(1),
+        isTopLevel_(maxRepeat_ == 0 && maxDefine_ <= 1),
         codec_(codec),
         chunkSize_(chunkSize),
         nullConcatenation_(pool_) {}
 
   /// Advances 'numRows' top level rows.
   void skip(int64_t numRows);
+
+  /// Decodes repdefs for 'numTopLevelRows'. Use getLengthsAndNulls()
+  /// to access the lengths and nulls for the different nesting
+  /// levels.
+  void decodeRepDefs(int32_t numTopLevelRows);
+
+  /// Returns lengths and/or nulls   from 'begin' to 'end' for the level of
+  /// 'info' using 'mode'. 'maxItems' is the maximum number of nulls and lengths
+  /// to produce. 'lengths' is only filled for mode kList. 'nulls' is filled
+  /// from bit position 'nullsStartIndex'. Returns the number of lengths/nulls
+  /// filled.
+  int32_t getLengthsAndNulls(
+      LevelMode mode,
+      const ::parquet::internal::LevelInfo& info,
+      int32_t begin,
+      int32_t end,
+      int32_t maxItems,
+      int32_t* FOLLY_NULLABLE lengths,
+      uint64_t* FOLLY_NULLABLE nulls,
+      int32_t nullsStartIndex) const;
 
   /// Applies 'visitor' to values in the ColumnChunk of 'this'. The
   /// operation to perform and The operand rows are given by
@@ -68,7 +107,7 @@ class PageReader {
   void readNullsOnly(int64_t numValues, BufferPtr& buffer);
 
   // Returns the current string dictionary as a FlatVector<StringView>.
-  const VectorPtr& dictionaryValues();
+  const VectorPtr& dictionaryValues(const TypePtr& type);
 
   // True if the current page holds dictionary indices.
   bool isDictionary() const {
@@ -81,7 +120,25 @@ class PageReader {
     dictionaryValues_.reset();
   }
 
+  /// Returns the range of repdefs for the top level rows covered by the last
+  /// decoderepDefs().
+  std::pair<int32_t, int32_t> repDefRange() const {
+    return {repDefBegin_, repDefEnd_};
+  }
+
+  // Parses the PageHeader at 'inputStream_', and move the bufferStart_ and
+  // bufferEnd_ to the corresponding positions.
+  thrift::PageHeader readPageHeader();
+
  private:
+  // Indicates that we only want the repdefs for the next page. Used when
+  // prereading repdefs with seekToPage.
+  static constexpr int64_t kRepDefOnly = -1;
+
+  // In 'numRowsInPage_', indicates that the page's def levels must be
+  // consulted to determine number of leaf values.
+  static constexpr int32_t kRowsUnknown = -1;
+
   // If the current page has nulls, returns a nulls bitmap owned by 'this'. This
   // is filled for 'numRows' bits.
   const uint64_t* FOLLY_NULLABLE readNulls(int32_t numRows, BufferPtr& buffer);
@@ -98,19 +155,41 @@ class PageReader {
   // 'pageData_' + 'encodedDataSize_'.
   void makedecoder();
 
-  // Reads and skips pages until finding a data page that contains 'row'. Reads
-  // and sets 'rowOfPage_' and 'numRowsInPage_' and initializes a decoder for
-  // the found page.
-  void readNextPage(int64_t row);
+  // Reads and skips pages until finding a data page that contains
+  // 'row'. Reads and sets 'rowOfPage_' and 'numRowsInPage_' and
+  // initializes a decoder for the found page. row kRepDefOnly means
+  // getting repdefs for the next page. If non-top level column, 'row'
+  // is interpreted in terms of leaf rows, including leaf
+  // nulls. Seeking ahead of pages covered by decodeRepDefs is not
+  // allowed for non-top level columns.
+  void seekToPage(int64_t row);
 
-  // Parses the PageHeader at 'inputStream_'. Will not read more than
-  // 'remainingBytes' since there could be less data left in the
-  // ColumnChunk than the full header size.
-  thrift::PageHeader readPageHeader(int64_t remainingSize);
+  // Preloads the repdefs for the column chunk. To avoid preloading,
+  // would need a way too clone the input stream so that one stream
+  // reads ahead for repdefs and the other tracks the data. This is
+  // supported by CacheInputStream but not the other
+  // SeekableInputStreams.
+  void preloadRepDefs();
+
+  // Sets row number info after reading a page header. If 'forRepDef',
+  // does not set non-top level row numbers by repdefs. This is on
+  // when seeking a non-top level page for the first time, i.e. for
+  // getting the repdefs.
+  void setPageRowInfo(bool forRepDef);
+
+  // Updates row position / rep defs consumed info to refer to the first of the
+  // next page.
+  void updateRowInfoAfterPageSkipped();
+
   void prepareDataPageV1(const thrift::PageHeader& pageHeader, int64_t row);
   void prepareDataPageV2(const thrift::PageHeader& pageHeader, int64_t row);
   void prepareDictionary(const thrift::PageHeader& pageHeader);
   void makeDecoder();
+
+  // For a non-top level leaf, reads the defs and sets 'leafNulls_' and
+  // 'numRowsInPage_' accordingly. This is used for non-top level leaves when
+  // 'hasChunkRepDefs_' is false.
+  void readPageDefLevels();
 
   // Returns a pointer to contiguous space for the next 'size' bytes
   // from current position. Copies data into 'copy' if the range
@@ -166,7 +245,8 @@ class PageReader {
   template <
       typename Visitor,
       typename std::enable_if<
-          !std::is_same_v<typename Visitor::DataType, folly::StringPiece>,
+          !std::is_same_v<typename Visitor::DataType, folly::StringPiece> &&
+              !std::is_same_v<typename Visitor::DataType, int8_t>,
           int>::type = 0>
   void callDecoder(
       const uint64_t* FOLLY_NULLABLE nulls,
@@ -223,6 +303,24 @@ class PageReader {
     }
   }
 
+  template <
+      typename Visitor,
+      typename std::enable_if<
+          std::is_same_v<typename Visitor::DataType, int8_t>,
+          int>::type = 0>
+  void callDecoder(
+      const uint64_t* FOLLY_NULLABLE nulls,
+      bool& nullsFromFastPath,
+      Visitor visitor) {
+    VELOX_CHECK(!isDictionary(), "BOOLEAN types are never dictionary-encoded")
+    if (nulls) {
+      nullsFromFastPath = false;
+      booleanDecoder_->readWithVisitor<true>(nulls, visitor);
+    } else {
+      booleanDecoder_->readWithVisitor<false>(nulls, visitor);
+    }
+  }
+
   // Returns the number of passed rows/values gathered by
   // 'reader'. Only numRows() is set for a filter-only case, only
   // numValues() is set for a non-filtered case.
@@ -242,6 +340,8 @@ class PageReader {
   ParquetTypeWithIdPtr type_;
   const int32_t maxRepeat_;
   const int32_t maxDefine_;
+  const bool isTopLevel_;
+
   const thrift::CompressionCodec::type codec_;
   const int64_t chunkSize_;
   const char* FOLLY_NULLABLE bufferStart_{nullptr};
@@ -249,8 +349,45 @@ class PageReader {
   BufferPtr tempNulls_;
   BufferPtr nullsInReadRange_;
   BufferPtr multiPageNulls_;
-  std::unique_ptr<RleBpDecoder> repeatDecoder_;
+  // Decoder for single bit definition levels. the arrow decoders are used for
+  // multibit levels pending fixing RleBpDecoder for the case.
   std::unique_ptr<RleBpDecoder> defineDecoder_;
+  std::unique_ptr<arrow::util::RleDecoder> repeatDecoder_;
+  std::unique_ptr<arrow::util::RleDecoder> wideDefineDecoder_;
+
+  // True for a leaf column for which repdefs are loaded for the whole column
+  // chunk. This is typically the leaftmost leaf of a list. Other leaves under
+  // the list can read repdefs as they go since the list lengths are already
+  // known.
+  bool hasChunkRepDefs_{false};
+
+  // index of current page in 'numLeavesInPage_' -1 means before first page.
+  int32_t pageIndex_{-1};
+
+  // Number of leaf values in each data page of column chunk.
+  std::vector<int32_t> numLeavesInPage_;
+
+  // First position in '*levels_' for the range of last decodeRepDefs().
+  int32_t repDefBegin_{0};
+
+  // First position in '*levels_' after the range covered in last
+  // decodeRepDefs().
+  int32_t repDefEnd_{0};
+
+  // Definition levels for the column chunk.
+  raw_vector<int16_t> definitionLevels_;
+
+  // Repetition levels for the column chunk.
+  raw_vector<int16_t> repetitionLevels_;
+
+  // Number of valid bits in 'leafNulls_'
+  int32_t leafNullsSize_{0};
+
+  // Number of leaf nulls read.
+  int32_t numLeafNullsConsumed_{0};
+
+  // Leaf nulls extracted from 'repetitionLevels_/definitionLevels_'
+  raw_vector<uint64_t> leafNulls_;
 
   // Encoding of current page.
   thrift::Encoding::type encoding_;
@@ -260,6 +397,10 @@ class PageReader {
 
   // Number of rows in current page.
   int32_t numRowsInPage_{0};
+
+  // Number of repdefs in page. Not the same as number of rows for a non-top
+  // level column.
+  int32_t numRepDefsInPage_{0};
 
   // Copy of data if data straddles buffer boundary.
   BufferPtr pageBuffer_;
@@ -320,6 +461,9 @@ class PageReader {
   // return to the caller.
   dwio::common::BitConcatenation nullConcatenation_;
 
+  // LevelInfo for reading nulls for the leaf column 'this' represents.
+  ::parquet::internal::LevelInfo leafInfo_;
+
   // Base values of dictionary when reading a string dictionary.
   VectorPtr dictionaryValues_;
 
@@ -327,6 +471,7 @@ class PageReader {
   std::unique_ptr<dwio::common::DirectDecoder<true>> directDecoder_;
   std::unique_ptr<RleBpDataDecoder> dictionaryIdDecoder_;
   std::unique_ptr<StringDecoder> stringDecoder_;
+  std::unique_ptr<BooleanDecoder> booleanDecoder_;
   // Add decoders for other encodings here.
 };
 

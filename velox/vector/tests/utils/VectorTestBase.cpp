@@ -29,6 +29,20 @@ BufferPtr makeIndicesInReverse(vector_size_t size, memory::MemoryPool* pool) {
   return indices;
 }
 
+BufferPtr makeIndices(
+    vector_size_t size,
+    std::function<vector_size_t(vector_size_t)> indexAt,
+    memory::MemoryPool* pool) {
+  BufferPtr indices = AlignedBuffer::allocate<vector_size_t>(size, pool);
+  auto rawIndices = indices->asMutable<vector_size_t>();
+
+  for (vector_size_t i = 0; i < size; i++) {
+    rawIndices[i] = indexAt(i);
+  }
+
+  return indices;
+}
+
 VectorTestBase::~VectorTestBase() {
   // Wait for all the tasks to be deleted.
   exec::Task::testingWaitForAllTasksToBeDeleted();
@@ -64,14 +78,7 @@ BufferPtr VectorTestBase::makeEvenIndices(vector_size_t size) {
 BufferPtr VectorTestBase::makeIndices(
     vector_size_t size,
     std::function<vector_size_t(vector_size_t)> indexAt) const {
-  BufferPtr indices = AlignedBuffer::allocate<vector_size_t>(size, pool());
-  auto rawIndices = indices->asMutable<vector_size_t>();
-
-  for (vector_size_t i = 0; i < size; i++) {
-    rawIndices[i] = indexAt(i);
-  }
-
-  return indices;
+  return test::makeIndices(size, indexAt, pool());
 }
 
 BufferPtr VectorTestBase::makeIndices(
@@ -98,6 +105,15 @@ BufferPtr VectorTestBase::makeNulls(
   return nulls;
 }
 
+BufferPtr VectorTestBase::makeNulls(const std::vector<bool>& values) {
+  auto nulls = allocateNulls(values.size(), pool());
+  auto rawNulls = nulls->asMutable<uint64_t>();
+  for (auto i = 0; i < values.size(); i++) {
+    bits::setNull(rawNulls, i, values[i]);
+  }
+  return nulls;
+}
+
 void assertEqualVectors(const VectorPtr& expected, const VectorPtr& actual) {
   ASSERT_EQ(expected->size(), actual->size());
   ASSERT_TRUE(expected->type()->equivalent(*actual->type()))
@@ -108,6 +124,23 @@ void assertEqualVectors(const VectorPtr& expected, const VectorPtr& actual) {
         << "at " << i << ": expected " << expected->toString(i) << ", but got "
         << actual->toString(i);
   }
+}
+
+void assertEqualVectors(
+    const VectorPtr& expected,
+    const VectorPtr& actual,
+    const SelectivityVector& rowsToCompare) {
+  ASSERT_LE(rowsToCompare.end(), actual->size())
+      << "Vectors should at least have the required amount of rows that need "
+         "to be verified.";
+  ASSERT_TRUE(expected->type()->equivalent(*actual->type()))
+      << "Expected " << expected->type()->toString() << ", but got "
+      << actual->type()->toString();
+  rowsToCompare.applyToSelected([&](vector_size_t i) {
+    ASSERT_TRUE(expected->equalValueAt(actual.get(), i, i))
+        << "at " << i << ": expected " << expected->toString(i) << ", but got "
+        << actual->toString(i);
+  });
 }
 
 void assertCopyableVector(const VectorPtr& vector) {

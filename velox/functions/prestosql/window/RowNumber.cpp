@@ -19,7 +19,7 @@
 #include "velox/expression/FunctionSignature.h"
 #include "velox/vector/FlatVector.h"
 
-namespace facebook::velox::window {
+namespace facebook::velox::window::prestosql {
 
 namespace {
 
@@ -36,6 +36,7 @@ class RowNumberFunction : public exec::WindowFunction {
       const BufferPtr& /*peerGroupEnds*/,
       const BufferPtr& /*frameStarts*/,
       const BufferPtr& /*frameEnds*/,
+      const SelectivityVector& validRows,
       vector_size_t resultOffset,
       const VectorPtr& result) override {
     int numRows = peerGroupStarts->size() / sizeof(vector_size_t);
@@ -43,6 +44,9 @@ class RowNumberFunction : public exec::WindowFunction {
     for (int i = 0; i < numRows; i++) {
       rawValues[resultOffset + i] = rowNumber_++;
     }
+
+    // Set NULL values for rows with empty frames.
+    setNullEmptyFramesResults(validRows, resultOffset, result);
   }
 
  private:
@@ -69,4 +73,4 @@ void registerRowNumber(const std::string& name) {
         return std::make_unique<RowNumberFunction>();
       });
 }
-} // namespace facebook::velox::window
+} // namespace facebook::velox::window::prestosql

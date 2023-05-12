@@ -82,7 +82,10 @@ class DwrfRowReader : public StrideIndexProvider,
   std::optional<size_t> estimatedRowSize() const override;
 
   // Returns number of rows read. Guaranteed to be less then or equal to size.
-  uint64_t next(uint64_t size, VectorPtr& result) override;
+  uint64_t next(
+      uint64_t size,
+      VectorPtr& result,
+      const dwio::common::Mutation* = nullptr) override;
 
   void updateRuntimeStats(
       dwio::common::RuntimeStatistics& stats) const override {
@@ -91,14 +94,26 @@ class DwrfRowReader : public StrideIndexProvider,
 
   void resetFilterCaches() override;
 
+  bool allPrefetchIssued() const override {
+    return true;
+  }
+
   // Returns the skipped strides for 'stripe'. Used for testing.
-  std::optional<std::vector<uint32_t>> stridesToSkip(uint32_t stripe) const {
+  std::optional<std::vector<uint64_t>> stridesToSkip(uint32_t stripe) const {
     auto it = stripeStridesToSkip_.find(stripe);
     if (it == stripeStridesToSkip_.end()) {
       return std::nullopt;
     }
     return it->second;
   }
+
+  // Creates column reader tree and may start prefetch of frequently read
+  // columns.
+  void startNextStripe();
+
+  int64_t nextRowNumber() override;
+
+  int64_t nextReadSize(uint64_t size) override;
 
  private:
   // footer
@@ -122,9 +137,10 @@ class DwrfRowReader : public StrideIndexProvider,
 
   std::unique_ptr<ColumnReader> columnReader_;
   std::unique_ptr<dwio::common::SelectiveColumnReader> selectiveColumnReader_;
-  std::vector<uint32_t> stridesToSkip_;
+  const uint64_t* stridesToSkip_;
+  int stridesToSkipSize_;
   // Record of strides to skip in each visited stripe. Used for diagnostics.
-  std::unordered_map<uint32_t, std::vector<uint32_t>> stripeStridesToSkip_;
+  std::unordered_map<uint32_t, std::vector<uint64_t>> stripeStridesToSkip_;
   // Number of skipped strides.
   int64_t skippedStrides_{0};
 
@@ -134,10 +150,6 @@ class DwrfRowReader : public StrideIndexProvider,
   bool recomputeStridesToSkip_{false};
 
   // internal methods
-
-  // Creates column reader tree and may start prefetch of frequently read
-  // columns.
-  void startNextStripe();
 
   std::optional<size_t> estimatedRowSizeHelper(
       const FooterWrapper& footer,
@@ -152,11 +164,17 @@ class DwrfRowReader : public StrideIndexProvider,
     return (lastStripe == 0);
   }
 
-  void setStrideIndex(uint64_t index) {
-    strideIndex_ = index;
-  }
+  void checkSkipStrides(uint64_t strideSize);
 
-  void checkSkipStrides(const StatsContext& context, uint64_t strideSize);
+  void readNext(
+      uint64_t rowsToRead,
+      const dwio::common::Mutation*,
+      VectorPtr& result);
+
+  void readWithRowNumber(
+      uint64_t rowsToRead,
+      const dwio::common::Mutation*,
+      VectorPtr& result);
 };
 
 class DwrfReader : public dwio::common::Reader {
@@ -166,7 +184,7 @@ class DwrfReader : public dwio::common::Reader {
    */
   DwrfReader(
       const dwio::common::ReaderOptions& options,
-      std::unique_ptr<dwio::common::InputStream> input);
+      std::unique_ptr<dwio::common::BufferedInput> input);
 
   ~DwrfReader() override = default;
 
@@ -274,12 +292,12 @@ class DwrfReader : public dwio::common::Reader {
    * @param options the options for reading the file
    */
   static std::unique_ptr<DwrfReader> create(
-      std::unique_ptr<dwio::common::InputStream> stream,
+      std::unique_ptr<dwio::common::BufferedInput> input,
       const dwio::common::ReaderOptions& options);
 
  private:
   std::shared_ptr<ReaderBase> readerBase_;
-  const dwio::common::ReaderOptions& options_;
+  const dwio::common::ReaderOptions options_;
 
   friend class E2EEncryptionTest;
 };
@@ -289,9 +307,9 @@ class DwrfReaderFactory : public dwio::common::ReaderFactory {
   DwrfReaderFactory() : ReaderFactory(dwio::common::FileFormat::DWRF) {}
 
   std::unique_ptr<dwio::common::Reader> createReader(
-      std::unique_ptr<dwio::common::InputStream> stream,
+      std::unique_ptr<dwio::common::BufferedInput> input,
       const dwio::common::ReaderOptions& options) override {
-    return DwrfReader::create(std::move(stream), options);
+    return DwrfReader::create(std::move(input), options);
   }
 };
 

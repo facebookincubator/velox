@@ -59,7 +59,7 @@ class SimpleVector : public BaseVector {
  public:
   SimpleVector(
       velox::memory::MemoryPool* pool,
-      std::shared_ptr<const Type> type,
+      TypePtr type,
       VectorEncoding::Simple encoding,
       BufferPtr nulls,
       size_t length,
@@ -82,31 +82,6 @@ class SimpleVector : public BaseVector {
         isSorted_(isSorted),
         elementSize_(sizeof(T)),
         stats_(stats) {}
-
-  // Constructs SimpleVector inferring the type from T.
-  SimpleVector(
-      velox::memory::MemoryPool* pool,
-      VectorEncoding::Simple encoding,
-      BufferPtr nulls,
-      size_t length,
-      const SimpleVectorStats<T>& stats,
-      std::optional<vector_size_t> distinctValueCount,
-      std::optional<vector_size_t> nullCount,
-      std::optional<bool> isSorted,
-      std::optional<ByteCount> representedByteCount,
-      std::optional<ByteCount> storageByteCount = std::nullopt)
-      : SimpleVector(
-            pool,
-            CppToType<T>::create(),
-            encoding,
-            std::move(nulls),
-            length,
-            stats,
-            distinctValueCount,
-            nullCount,
-            isSorted,
-            representedByteCount,
-            storageByteCount) {}
 
   virtual ~SimpleVector() override {}
 
@@ -171,20 +146,30 @@ class SimpleVector : public BaseVector {
 
   using BaseVector::toString;
 
+  std::string valueToString(T value) const {
+    if constexpr (std::is_same_v<T, bool>) {
+      return value ? "true" : "false";
+    } else if constexpr (std::is_same_v<T, std::shared_ptr<void>>) {
+      return "<opaque>";
+    } else if constexpr (
+        std::is_same_v<T, int64_t> || std::is_same_v<T, int128_t>) {
+      if (isDecimalType(*type())) {
+        return DecimalUtil::toString(value, type());
+      } else {
+        return velox::to<std::string>(value);
+      }
+    } else {
+      return velox::to<std::string>(value);
+    }
+  }
+
   std::string toString(vector_size_t index) const override {
+    VELOX_CHECK_LT(index, length_, "Vector index should be less than length.");
     std::stringstream out;
     if (isNullAt(index)) {
       out << "null";
     } else {
-      if constexpr (std::is_same_v<T, std::shared_ptr<void>>) {
-        out << "<opaque>";
-      } else if constexpr (
-          std::is_same_v<T, UnscaledShortDecimal> ||
-          std::is_same_v<T, UnscaledLongDecimal>) {
-        out << DecimalUtil::toString(valueAt(index), type());
-      } else {
-        out << velox::to<std::string>(valueAt(index));
-      }
+      out << valueToString(valueAt(index));
     }
     return out.str();
   }
@@ -339,6 +324,18 @@ class SimpleVector : public BaseVector {
       }
     }
     return left < right ? -1 : left == right ? 0 : 1;
+  }
+
+  virtual void resetDataDependentFlags(const SelectivityVector* rows) override {
+    BaseVector::resetDataDependentFlags(rows);
+    isSorted_ = std::nullopt;
+    stats_ = SimpleVectorStats<T>{};
+    if (rows) {
+      asciiSetRows_.deselect(*rows);
+    } else {
+      asciiSetRows_.clearAll();
+      isAllAscii_ = false;
+    }
   }
 
   std::optional<bool> isSorted_ = std::nullopt;

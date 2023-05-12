@@ -40,31 +40,61 @@
 
 namespace facebook::velox {
 
-// A read-only file.
+// A read-only file.  All methods in this object should be thread safe.
 class ReadFile {
  public:
+  struct Segment {
+    // offset in the file to start reading from.
+    uint64_t offset;
+
+    // Buffer to save the data to. buffer.size() bytes will be read from the
+    // file and stored in it.
+    folly::Range<char*> buffer;
+
+    // optional: label for caching purposes.
+    // It should contain a label stating the column name or whatever logical
+    // identifier of the segment of the file that is being read. The reader can
+    // use this information to decide whether or not to cache this information
+    // if this is a frequently accessed element across the table.
+    std::string_view label;
+  };
+
   virtual ~ReadFile() = default;
 
   // Reads the data at [offset, offset + length) into the provided pre-allocated
   // buffer 'buf'. The bytes are returned as a string_view pointing to 'buf'.
+  //
+  // This method should be thread safe.
   virtual std::string_view
   pread(uint64_t offset, uint64_t length, void* FOLLY_NONNULL buf) const = 0;
 
   // Same as above, but returns owned data directly.
-  virtual std::string pread(uint64_t offset, uint64_t length) const = 0;
+  //
+  // This method should be thread safe.
+  virtual std::string pread(uint64_t offset, uint64_t length) const;
 
   // Reads starting at 'offset' into the memory referenced by the
   // Ranges in 'buffers'. The buffers are filled left to right. A
   // buffer with nullptr data will cause its size worth of bytes to be skipped.
+  //
+  // This method should be thread safe.
   virtual uint64_t preadv(
       uint64_t /*offset*/,
-      const std::vector<folly::Range<char*>>& /*buffers*/) const {
-    VELOX_NYI("preadv not supported");
-  }
+      const std::vector<folly::Range<char*>>& /*buffers*/) const;
+
+  // Vectorized read API. Implementations can coalesce and parallelize.
+  // It is different to the preadv above because we can add a label to the
+  // segment and because the offsets don't need to be sorted.
+  // In the preadv above offsets of buffers are always
+  //
+  // This method should be thread safe.
+  virtual void preadv(const std::vector<Segment>& segments) const;
 
   // Like preadv but may execute asynchronously and returns the read
   // size or exception via SemiFuture. Use hasPreadvAsync() to check
   // if the implementation is in fact asynchronous.
+  //
+  // This method should be thread safe.
   virtual folly::SemiFuture<uint64_t> preadvAsync(
       uint64_t offset,
       const std::vector<folly::Range<char*>>& buffers) const {
@@ -102,6 +132,14 @@ class ReadFile {
     bytesRead_ = 0;
   }
 
+  virtual std::string getName() const = 0;
+
+  //
+  // Get the natural size for reads.
+  // @return the number of bytes that should be read at once
+  //
+  virtual uint64_t getNaturalReadSize() const = 0;
+
  protected:
   mutable std::atomic<uint64_t> bytesRead_ = 0;
 };
@@ -134,21 +172,19 @@ class WriteFile {
 // We don't provide registration functions for the in-memory files, as they
 // aren't intended for any robust use needing a filesystem.
 
-class InMemoryReadFile final : public ReadFile {
+class InMemoryReadFile : public ReadFile {
  public:
   explicit InMemoryReadFile(std::string_view file) : file_(file) {}
 
   explicit InMemoryReadFile(std::string file)
       : ownedFile_(std::move(file)), file_(ownedFile_) {}
 
-  std::string_view
-  pread(uint64_t offset, uint64_t length, void* FOLLY_NONNULL buf) const final;
-
-  std::string pread(uint64_t offset, uint64_t length) const final;
-
-  uint64_t preadv(
+  std::string_view pread(
       uint64_t offset,
-      const std::vector<folly::Range<char*>>& buffers) const final;
+      uint64_t length,
+      void* FOLLY_NONNULL buf) const override;
+
+  std::string pread(uint64_t offset, uint64_t length) const override;
 
   uint64_t size() const final {
     return file_.size();
@@ -164,6 +200,14 @@ class InMemoryReadFile final : public ReadFile {
   }
   bool shouldCoalesce() const final {
     return shouldCoalesce_;
+  }
+
+  std::string getName() const override {
+    return "<InMemoryReadFile>";
+  }
+
+  uint64_t getNaturalReadSize() const override {
+    return 1024;
   }
 
  private:
@@ -200,8 +244,6 @@ class LocalReadFile final : public ReadFile {
   std::string_view
   pread(uint64_t offset, uint64_t length, void* FOLLY_NONNULL buf) const final;
 
-  std::string pread(uint64_t offset, uint64_t length) const final;
-
   uint64_t size() const final;
 
   uint64_t preadv(
@@ -214,10 +256,22 @@ class LocalReadFile final : public ReadFile {
     return false;
   }
 
+  std::string getName() const override {
+    if (path_.empty()) {
+      return "<LocalReadFile>";
+    }
+    return path_;
+  }
+
+  uint64_t getNaturalReadSize() const override {
+    return 10 << 20;
+  }
+
  private:
   void preadInternal(uint64_t offset, uint64_t length, char* FOLLY_NONNULL pos)
       const;
 
+  std::string path_;
   int32_t fd_;
   long size_;
 };

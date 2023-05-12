@@ -14,13 +14,16 @@
  * limitations under the License.
  */
 
+#include <cstdint>
 #include <optional>
+#include <vector>
 #include "glog/logging.h"
 #include "gtest/gtest.h"
 #include "velox/common/base/VeloxException.h"
 #include "velox/expression/VectorReaders.h"
 #include "velox/functions/Udf.h"
 #include "velox/functions/prestosql/tests/utils/FunctionBaseTest.h"
+#include "velox/type/OpaqueCustomTypes.h"
 
 namespace {
 
@@ -234,6 +237,15 @@ class ArrayViewTest : public functions::test::FunctionBaseTest {
         it++;
       }
     }
+  }
+
+  void emptyTest() {
+    auto arrayVector = makeNullableArrayVector<int32_t>({{}, {2, 3}});
+    DecodedVector decoded;
+    exec::VectorReader<Array<int32_t>> reader(
+        decode(decoded, *arrayVector.get()));
+    ASSERT_TRUE(read(reader, 0).empty());
+    ASSERT_FALSE(read(reader, 1).empty());
   }
 
   void iteratorSubscriptTest() {
@@ -513,7 +525,7 @@ template <typename T>
 struct MakeOpaqueFunc {
   VELOX_DEFINE_FUNCTION_TYPES(T);
 
-  FOLLY_ALWAYS_INLINE void call(std::shared_ptr<int64_t>& out) {
+  void call(std::shared_ptr<int64_t>& out) {
     out = std::make_shared<int64_t>(1);
   }
 };
@@ -536,6 +548,70 @@ TEST_F(NullableArrayViewTest, materializeArrayWithOpaque) {
   ASSERT_FALSE(array[1].has_value());
 }
 
+struct UDT {
+  bool operator==(const UDT& b) const {
+    return x == b.x;
+  }
+  int x;
+};
+
+constexpr char kName[] = "materializeTestUDT";
+using UDTTypeRegistrar = OpaqueCustomTypeRegister<UDT, kName>;
+
+template <typename T>
+struct MakeUDTFunc {
+  VELOX_DEFINE_FUNCTION_TYPES(T);
+  int x = 0;
+
+  void call(out_type<UDTTypeRegistrar::SimpleType>& out) {
+    out = std::make_shared<UDT>(UDT{x++});
+  }
+};
+
+TEST_F(NullableArrayViewTest, materializeArrayOfCustomTypes) {
+  static_assert(
+      std::is_same_v<
+          MaterializeType<Array<UDTTypeRegistrar::SimpleType>>::nullable_t,
+          std::vector<std::optional<UDT>>>);
+  UDTTypeRegistrar::registerType();
+  registerFunction<MakeUDTFunc, UDTTypeRegistrar::SimpleType>({"make_udt"});
+
+  auto result = evaluate(
+      "array_constructor(make_udt(), null, make_udt(), make_udt())",
+      makeRowVector({makeFlatVector<int64_t>(1)}));
+
+  DecodedVector decoded;
+  exec::VectorReader<Array<UDTTypeRegistrar::SimpleType>> reader(
+      decode(decoded, *result.get()));
+
+  std::vector<std::optional<UDT>> array = reader[0].materialize();
+  std::vector<std::optional<UDT>> expected = {
+      UDT{0}, std::nullopt, UDT{1}, UDT{2}};
+  ASSERT_EQ(array, expected);
+}
+
+TEST_F(NullFreeArrayViewTest, materializeArrayOfCustomTypes) {
+  static_assert(
+      std::is_same_v<
+          MaterializeType<Array<UDTTypeRegistrar::SimpleType>>::null_free_t,
+          std::vector<UDT>>);
+  UDTTypeRegistrar::registerType();
+  registerFunction<MakeUDTFunc, UDTTypeRegistrar::SimpleType>({"make_udt"});
+
+  auto result = evaluate(
+      "array_constructor(make_udt(), make_udt(), make_udt())",
+      makeRowVector({makeFlatVector<int64_t>(1)}));
+
+  DecodedVector decoded;
+  exec::VectorReader<Array<UDTTypeRegistrar::SimpleType>> reader(
+      decode(decoded, *result.get()));
+
+  std::vector<UDT> array = reader.readNullFree(0).materialize();
+  std::vector<UDT> expected = {UDT{0}, UDT{1}, UDT{2}};
+
+  ASSERT_EQ(array, expected);
+}
+
 TEST_F(NullFreeArrayViewTest, iteratorDifference) {
   iteratorDifferenceTest();
 }
@@ -550,5 +626,13 @@ TEST_F(NullFreeArrayViewTest, iteratorSubtraction) {
 
 TEST_F(NullFreeArrayViewTest, iteratorSubscript) {
   iteratorSubscriptTest();
+}
+
+TEST_F(NullableArrayViewTest, empty) {
+  emptyTest();
+}
+
+TEST_F(NullFreeArrayViewTest, empty) {
+  emptyTest();
 }
 } // namespace

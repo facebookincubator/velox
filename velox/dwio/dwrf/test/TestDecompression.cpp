@@ -35,7 +35,7 @@ using namespace folly::io;
 
 const std::string simpleFile(getExampleFilePath("simple-file.binary"));
 
-std::unique_ptr<ScopedMemoryPool> scopedPool = getDefaultScopedMemoryPool();
+std::shared_ptr<MemoryPool> pool = addDefaultLeafMemoryPool();
 
 TEST(TestDecompression, testPrintBufferEmpty) {
   std::ostringstream str;
@@ -174,12 +174,15 @@ void checkBytes(const char* data, int32_t length, uint32_t startValue) {
   }
 }
 
+SeekableFileInputStream createSeekableFileInputStream() {
+  auto readFile = std::make_shared<LocalReadFile>(simpleFile);
+  auto file = std::make_shared<ReadFileInputStream>(std::move(readFile));
+  return SeekableFileInputStream(
+      std::move(file), 0, 200, *pool, LogType::TEST, 20);
+}
+
 TEST(TestDecompression, testFileBackup) {
-  SCOPED_TRACE("testFileBackup");
-  std::unique_ptr<InputStream> file =
-      std::make_unique<FileInputStream>(simpleFile);
-  SeekableFileInputStream stream(
-      *file, 0, 200, scopedPool->getPool(), LogType::TEST, 20);
+  auto stream = createSeekableFileInputStream();
   const void* ptr;
   int32_t len;
   ASSERT_THROW(stream.BackUp(10), exception::LoggedException);
@@ -208,11 +211,7 @@ TEST(TestDecompression, testFileBackup) {
 }
 
 TEST(TestDecompression, testFileSkip) {
-  SCOPED_TRACE("testFileSkip");
-  std::unique_ptr<InputStream> file =
-      std::make_unique<FileInputStream>(simpleFile);
-  SeekableFileInputStream stream(
-      *file, 0, 200, scopedPool->getPool(), LogType::TEST, 20);
+  auto stream = createSeekableFileInputStream();
   const void* ptr;
   int32_t len;
   ASSERT_EQ(true, stream.Next(&ptr, &len));
@@ -230,11 +229,7 @@ TEST(TestDecompression, testFileSkip) {
 }
 
 TEST(TestDecompression, testFileCombo) {
-  SCOPED_TRACE("testFileCombo");
-  std::unique_ptr<InputStream> file =
-      std::make_unique<FileInputStream>(simpleFile);
-  SeekableFileInputStream stream(
-      *file, 0, 200, scopedPool->getPool(), LogType::TEST, 20);
+  auto stream = createSeekableFileInputStream();
   const void* ptr;
   int32_t len;
   ASSERT_EQ(true, stream.Next(&ptr, &len));
@@ -252,11 +247,7 @@ TEST(TestDecompression, testFileCombo) {
 }
 
 TEST(TestDecompression, testFileSeek) {
-  SCOPED_TRACE("testFileSeek");
-  std::unique_ptr<InputStream> file =
-      std::make_unique<FileInputStream>(simpleFile);
-  SeekableFileInputStream stream(
-      *file, 0, 200, scopedPool->getPool(), LogType::TEST, 20);
+  auto stream = createSeekableFileInputStream();
   const void* ptr;
   int32_t len;
   EXPECT_EQ(0, stream.ByteCount());
@@ -292,11 +283,7 @@ std::unique_ptr<SeekableInputStream> createTestDecompressor(
     std::unique_ptr<SeekableInputStream> input,
     uint64_t bufferSize) {
   return createDecompressor(
-      kind,
-      std::move(input),
-      bufferSize,
-      scopedPool->getPool(),
-      "Test Decompression");
+      kind, std::move(input), bufferSize, *pool, "Test Decompression");
 }
 
 } // namespace
@@ -818,15 +805,14 @@ class TestSeek : public ::testing::Test {
     size_t offset1;
     size_t offset2;
     prepareTestData(codec, input1, input2, inputSize, output, offset1, offset2);
-    auto scopedPool = getDefaultScopedMemoryPool();
-    auto& pool = scopedPool->getPool();
+    auto pool = addDefaultLeafMemoryPool();
 
     std::unique_ptr<SeekableInputStream> stream = createDecompressor(
         kind,
         std::unique_ptr<SeekableInputStream>(
             new SeekableArrayInputStream(output, offset2, outputSize / 10)),
         outputSize,
-        pool,
+        *pool,
         "TestSeek Decompressor",
         nullptr);
 

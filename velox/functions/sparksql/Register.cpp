@@ -18,15 +18,17 @@
 #include "velox/functions/lib/IsNull.h"
 #include "velox/functions/lib/Re2Functions.h"
 #include "velox/functions/lib/RegistrationHelpers.h"
-#include "velox/functions/prestosql/DateTimeFunctions.h"
 #include "velox/functions/prestosql/JsonFunctions.h"
 #include "velox/functions/prestosql/Rand.h"
 #include "velox/functions/prestosql/StringFunctions.h"
 #include "velox/functions/sparksql/ArraySort.h"
+#include "velox/functions/sparksql/Bitwise.h"
 #include "velox/functions/sparksql/CompareFunctionsNullSafe.h"
+#include "velox/functions/sparksql/DateTimeFunctions.h"
 #include "velox/functions/sparksql/Hash.h"
 #include "velox/functions/sparksql/In.h"
 #include "velox/functions/sparksql/LeastGreatest.h"
+#include "velox/functions/sparksql/MightContain.h"
 #include "velox/functions/sparksql/RegexFunctions.h"
 #include "velox/functions/sparksql/RegisterArithmetic.h"
 #include "velox/functions/sparksql/RegisterCompare.h"
@@ -50,8 +52,8 @@ static void workAroundRegistrationMacro(const std::string& prefix) {
   VELOX_REGISTER_VECTOR_FUNCTION(udf_array_contains, prefix + "array_contains");
   VELOX_REGISTER_VECTOR_FUNCTION(
       udf_array_intersect, prefix + "array_intersect");
+  // This is the semantics of spark.sql.ansi.enabled = false.
   VELOX_REGISTER_VECTOR_FUNCTION(udf_element_at, prefix + "element_at");
-  VELOX_REGISTER_VECTOR_FUNCTION(udf_concat_row, prefix + "named_struct");
   VELOX_REGISTER_VECTOR_FUNCTION(
       udf_map_allow_duplicates, prefix + "map_from_arrays");
   // String functions.
@@ -80,25 +82,29 @@ void registerFunctions(const std::string& prefix) {
   registerFunction<sparksql::ChrFunction, Varchar, int64_t>({prefix + "chr"});
   registerFunction<AsciiFunction, int32_t, Varchar>({prefix + "ascii"});
 
-  registerFunction<SubstrFunction, Varchar, Varchar, int32_t>(
+  registerFunction<sparksql::SubstrFunction, Varchar, Varchar, int32_t>(
       {prefix + "substring"});
-  registerFunction<SubstrFunction, Varchar, Varchar, int32_t, int32_t>(
-      {prefix + "substring"});
+  registerFunction<
+      sparksql::SubstrFunction,
+      Varchar,
+      Varchar,
+      int32_t,
+      int32_t>({prefix + "substring"});
   exec::registerStatefulVectorFunction("instr", instrSignatures(), makeInstr);
   exec::registerStatefulVectorFunction(
       "length", lengthSignatures(), makeLength);
 
   registerFunction<Md5Function, Varchar, Varbinary>({prefix + "md5"});
+  registerFunction<Sha1HexStringFunction, Varchar, Varbinary>(
+      {prefix + "sha1"});
+  registerFunction<Sha2HexStringFunction, Varchar, Varbinary, int32_t>(
+      {prefix + "sha2"});
 
   exec::registerStatefulVectorFunction(
       prefix + "regexp_extract", re2ExtractSignatures(), makeRegexExtract);
   exec::registerStatefulVectorFunction(
       prefix + "rlike", re2SearchSignatures(), makeRLike);
   VELOX_REGISTER_VECTOR_FUNCTION(udf_regexp_split, prefix + "split");
-
-  // Subscript operators. See ExtractValue in complexTypeExtractors.scala.
-  VELOX_REGISTER_VECTOR_FUNCTION(udf_subscript, prefix + "getarrayitem");
-  VELOX_REGISTER_VECTOR_FUNCTION(udf_subscript, prefix + "getmapvalue");
 
   exec::registerStatefulVectorFunction(
       prefix + "least", leastSignatures(), makeLeast);
@@ -107,7 +113,7 @@ void registerFunctions(const std::string& prefix) {
   exec::registerStatefulVectorFunction(
       prefix + "hash", hashSignatures(), makeHash);
   exec::registerStatefulVectorFunction(
-      prefix + "murmur3hash", hashSignatures(), makeHash);
+      prefix + "xxhash64", xxhash64Signatures(), makeXxHash64);
   VELOX_REGISTER_VECTOR_FUNCTION(udf_map, prefix + "map");
 
   // Register 'in' functions.
@@ -126,6 +132,7 @@ void registerFunctions(const std::string& prefix) {
   // broken out into a separate compilation unit to improve build latency.
   registerArithmeticFunctions(prefix);
   registerCompareFunctions(prefix);
+  registerBitwiseFunctions(prefix);
 
   // String sreach function
   registerFunction<StartsWithFunction, bool, Varchar, Varchar>(
@@ -135,11 +142,38 @@ void registerFunctions(const std::string& prefix) {
   registerFunction<ContainsFunction, bool, Varchar, Varchar>(
       {prefix + "contains"});
 
+  registerFunction<TrimSpaceFunction, Varchar, Varchar>({prefix + "trim"});
+  registerFunction<TrimFunction, Varchar, Varchar, Varchar>({prefix + "trim"});
+  registerFunction<LTrimSpaceFunction, Varchar, Varchar>({prefix + "ltrim"});
+  registerFunction<LTrimFunction, Varchar, Varchar, Varchar>(
+      {prefix + "ltrim"});
+  registerFunction<RTrimSpaceFunction, Varchar, Varchar>({prefix + "rtrim"});
+  registerFunction<RTrimFunction, Varchar, Varchar, Varchar>(
+      {prefix + "rtrim"});
+
   // Register array sort functions.
   exec::registerStatefulVectorFunction(
       prefix + "array_sort", arraySortSignatures(), makeArraySort);
   exec::registerStatefulVectorFunction(
       prefix + "sort_array", sortArraySignatures(), makeSortArray);
+
+  // Register date functions.
+  registerFunction<YearFunction, int32_t, Timestamp>({prefix + "year"});
+  registerFunction<YearFunction, int32_t, Date>({prefix + "year"});
+
+  registerFunction<UnixTimestampFunction, int64_t>({prefix + "unix_timestamp"});
+
+  registerFunction<UnixTimestampParseFunction, int64_t, Varchar>(
+      {prefix + "unix_timestamp", prefix + "to_unix_timestamp"});
+  registerFunction<
+      UnixTimestampParseWithFormatFunction,
+      int64_t,
+      Varchar,
+      Varchar>({prefix + "unix_timestamp", prefix + "to_unix_timestamp"});
+
+  // Register bloom filter function
+  exec::registerVectorFunction(
+      prefix + "might_contain", mightContainSignatures(), makeMightContain());
 }
 
 } // namespace sparksql

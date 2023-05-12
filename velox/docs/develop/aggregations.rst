@@ -9,7 +9,7 @@ application of each.
 Velox supports partial and final aggregations with zero, one or multiple
 grouping keys and zero, one or multiple aggregate functions.
 
-:doc:`Aggregate Functions <../functions/aggregate>` section of the documentation
+:doc:`Aggregate Functions <../functions/presto/aggregate>` section of the documentation
 lists all available aggregate functions and :doc:`How to add an aggregate
 function? <aggregate-functions>` guide explains how to add more.
 
@@ -222,7 +222,7 @@ Normalized Key Mode
 In normalized key mode, multiple grouping key values are mapped to a single
 64-bit integer and the processing continues as in hash mode with a single
 64-bit integer grouping key. This mode is less efficient than array mode, but
-is more efficient then hash mode because hashing and comparing a single 64-bit
+is more efficient than hash mode because hashing and comparing a single 64-bit
 integer value is faster than hashing and comparing multiple values.
 
 Adaptivity

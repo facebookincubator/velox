@@ -14,6 +14,7 @@
  * limitations under the License.
  */
 #include "velox/exec/tests/utils/Cursor.h"
+#include "velox/common/file/FileSystems.h"
 #include "velox/exec/Operator.h"
 
 namespace facebook::velox::exec::test {
@@ -124,9 +125,14 @@ TaskCursor::TaskCursor(const CursorParameters& params)
   // Captured as a shared_ptr by the consumer callback of task_.
   auto queue = queue_;
   core::PlanFragment planFragment{
-      params.planNode, params.executionStrategy, params.numSplitGroups};
+      params.planNode,
+      params.executionStrategy,
+      params.numSplitGroups,
+      params.groupedExecutionLeafNodeIds};
+  const std::string taskId = fmt::format("test_cursor {}", ++serial_);
+
   task_ = std::make_shared<exec::Task>(
-      fmt::format("test_cursor {}", ++serial_),
+      taskId,
       std::move(planFragment),
       params.destination,
       std::move(queryCtx),
@@ -139,11 +145,20 @@ TaskCursor::TaskCursor(const CursorParameters& params)
         for (auto& child : vector->children()) {
           child->loadedVector();
         }
-        RowVectorPtr copy = std::dynamic_pointer_cast<RowVector>(
-            BaseVector::create(vector->type(), vector->size(), queue->pool()));
+        auto copy = BaseVector::create<RowVector>(
+            vector->type(), vector->size(), queue->pool());
         copy->copy(vector.get(), 0, 0, vector->size());
         return queue->enqueue(std::move(copy), future);
       });
+
+  if (!params.spillDirectory.empty()) {
+    std::string taskSpillDirectory = params.spillDirectory + "/" + taskId;
+    auto fileSystem =
+        velox::filesystems::getFileSystem(taskSpillDirectory, nullptr);
+    VELOX_CHECK_NOT_NULL(fileSystem, "File System is null!");
+    fileSystem->mkdir(taskSpillDirectory);
+    task_->setSpillDirectory(taskSpillDirectory);
+  }
 }
 
 void TaskCursor::start() {

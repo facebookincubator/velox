@@ -14,12 +14,20 @@
  * limitations under the License.
  */
 
+#include <fcntl.h>
+#include <sys/resource.h>
+#include <sys/time.h>
+
 #include <folly/Benchmark.h>
 #include <folly/init/Init.h>
 #include <gflags/gflags.h>
+#include <sys/stat.h>
+#include <sys/types.h>
+#include <fstream>
 
 #include "velox/common/base/SuccinctPrinter.h"
 #include "velox/common/file/FileSystems.h"
+#include "velox/common/memory/MmapAllocator.h"
 #include "velox/connectors/hive/HiveConnector.h"
 #include "velox/dwio/common/Options.h"
 #include "velox/dwio/dwrf/reader/DwrfReader.h"
@@ -60,27 +68,51 @@ void ensureTaskCompletion(exec::Task* task) {
   ASSERT_TRUE(waitForTaskCompletion(task));
 }
 
-void printResults(const std::vector<RowVectorPtr>& results) {
-  std::cout << "Results:" << std::endl;
+void printResults(const std::vector<RowVectorPtr>& results, std::ostream& out) {
+  out << "Results:" << std::endl;
   bool printType = true;
   for (const auto& vector : results) {
     // Print RowType only once.
     if (printType) {
-      std::cout << vector->type()->asRow().toString() << std::endl;
+      out << vector->type()->asRow().toString() << std::endl;
       printType = false;
     }
     for (vector_size_t i = 0; i < vector->size(); ++i) {
-      std::cout << vector->toString(i) << std::endl;
+      out << vector->toString(i) << std::endl;
     }
   }
 }
 } // namespace
 
-DEFINE_string(data_path, "", "Root path of TPC-H data");
+DEFINE_string(
+    data_path,
+    "",
+    "Root path of TPC-H data. Data layout must follow Hive-style partitioning. "
+    "Example layout for '-data_path=/data/tpch10'\n"
+    "       /data/tpch10/customer\n"
+    "       /data/tpch10/lineitem\n"
+    "       /data/tpch10/nation\n"
+    "       /data/tpch10/orders\n"
+    "       /data/tpch10/part\n"
+    "       /data/tpch10/partsupp\n"
+    "       /data/tpch10/region\n"
+    "       /data/tpch10/supplier\n"
+    "If the above are directories, they contain the data files for "
+    "each table. If they are files, they contain a file system path for each "
+    "data file, one per line. This allows running against cloud storage or "
+    "HDFS");
+
 DEFINE_int32(
     run_query_verbose,
     -1,
     "Run a given query and print execution statistics");
+DEFINE_int32(
+    io_meter_column_pct,
+    0,
+    "Percentage of lineitem columns to "
+    "include in IO meter query. The columns are sorted by name and the n% first "
+    "are scanned");
+
 DEFINE_bool(
     include_custom_stats,
     false,
@@ -90,13 +122,111 @@ DEFINE_bool(use_native_parquet_reader, true, "Use Native Parquet Reader");
 DEFINE_int32(num_drivers, 4, "Number of drivers");
 DEFINE_string(data_format, "parquet", "Data format");
 DEFINE_int32(num_splits_per_file, 10, "Number of splits per file");
+DEFINE_int32(
+    cache_gb,
+    0,
+    "GB of process memory for cache and query.. if "
+    "non-0, uses mmap to allocator and in-process data cache.");
+DEFINE_int32(num_repeats, 1, "Number of times to run each query");
+DEFINE_int32(num_io_threads, 8, "Threads for speculative IO");
+DEFINE_string(
+    test_flags_file,
+    "",
+    "Path to a file containing gflafs and "
+    "values to try. Produces results for each flag combination "
+    "sorted on performance");
+DEFINE_bool(
+    full_sorted_stats,
+    true,
+    "Add full stats to the report on  --test_flags_file");
+
+DEFINE_string(ssd_path, "", "Directory for local SSD cache");
+DEFINE_int32(ssd_cache_gb, 0, "Size of local SSD cache in GB");
+DEFINE_int32(
+    ssd_checkpoint_interval_gb,
+    8,
+    "Checkpoint every n "
+    "GB new data in cache");
+DEFINE_bool(
+    clear_ram_cache,
+    false,
+    "Clear RAM cache before each query."
+    "Flushes in process and OS file system cache (if root on Linux)");
+DEFINE_bool(
+    clear_ssd_cache,
+    false,
+    "Clears SSD cache before "
+    "each query");
+
+DEFINE_bool(
+    warmup_after_clear,
+    false,
+    "Runs one warmup of the query before "
+    "measured run. Use to run warm after clearing caches.");
 
 DEFINE_validator(data_path, &notEmpty);
 DEFINE_validator(data_format, &validateDataFormat);
 
+struct RunStats {
+  std::map<std::string, std::string> flags;
+  int64_t micros{0};
+  int64_t rawInputBytes{0};
+  int64_t userNanos{0};
+  int64_t systemNanos{0};
+  std::string output;
+
+  std::string toString(bool detail) {
+    std::stringstream out;
+    out << succinctNanos(micros * 1000) << " "
+        << succinctBytes(rawInputBytes / (micros / 1000000.0)) << "/s raw, "
+        << succinctNanos(userNanos) << " user " << succinctNanos(systemNanos)
+        << " system (" << (100 * (userNanos + systemNanos) / (micros * 1000))
+        << "%), flags: ";
+    for (auto& pair : flags) {
+      out << pair.first << "=" << pair.second << " ";
+    }
+    out << std::endl << "======" << std::endl;
+    if (detail) {
+      out << std::endl << output << std::endl;
+    }
+    return out.str();
+  }
+};
+
+struct ParameterDim {
+  std::string flag;
+  std::vector<std::string> values;
+};
+
+std::shared_ptr<TpchQueryBuilder> queryBuilder;
+
 class TpchBenchmark {
  public:
   void initialize() {
+    if (FLAGS_cache_gb) {
+      int64_t memoryBytes = FLAGS_cache_gb * (1LL << 30);
+      memory::MmapAllocator::Options options;
+      options.capacity = memoryBytes;
+      options.useMmapArena = true;
+      options.mmapArenaCapacityRatio = 1;
+      std::unique_ptr<cache::SsdCache> ssdCache;
+      if (FLAGS_ssd_cache_gb) {
+        constexpr int32_t kNumSsdShards = 16;
+        cacheExecutor_ =
+            std::make_unique<folly::IOThreadPoolExecutor>(kNumSsdShards);
+        ssdCache = std::make_unique<cache::SsdCache>(
+            FLAGS_ssd_path,
+            static_cast<uint64_t>(FLAGS_ssd_cache_gb) << 30,
+            kNumSsdShards,
+            cacheExecutor_.get(),
+            static_cast<uint64_t>(FLAGS_ssd_checkpoint_interval_gb) << 30);
+      }
+
+      auto allocator = std::make_shared<memory::MmapAllocator>(options);
+      allocator_ = std::make_shared<cache::AsyncDataCache>(
+          allocator, memoryBytes, std::move(ssdCache));
+      memory::MemoryAllocator::setDefaultInstance(allocator_.get());
+    }
     functions::prestosql::registerAllScalarFunctions();
     aggregate::prestosql::registerAllAggregateFunctions();
     parse::registerTypeResolver();
@@ -107,42 +237,226 @@ class TpchBenchmark {
       parquet::registerParquetReaderFactory(parquet::ParquetReaderType::DUCKDB);
     }
     dwrf::registerDwrfReaderFactory();
+    ioExecutor_ =
+        std::make_unique<folly::IOThreadPoolExecutor>(FLAGS_num_io_threads);
+
     auto hiveConnector =
         connector::getConnectorFactory(
             connector::hive::HiveConnectorFactory::kHiveConnectorName)
-            ->newConnector(kHiveConnectorId, nullptr);
+            ->newConnector(kHiveConnectorId, nullptr, ioExecutor_.get());
     connector::registerConnector(hiveConnector);
   }
 
   std::pair<std::unique_ptr<TaskCursor>, std::vector<RowVectorPtr>> run(
       const TpchPlan& tpchPlan) {
-    CursorParameters params;
-    params.maxDrivers = FLAGS_num_drivers;
-    params.planNode = tpchPlan.plan;
-    const int numSplitsPerFile = FLAGS_num_splits_per_file;
+    int32_t repeat = 0;
+    try {
+      for (;;) {
+        CursorParameters params;
+        params.maxDrivers = FLAGS_num_drivers;
+        params.planNode = tpchPlan.plan;
+        const int numSplitsPerFile = FLAGS_num_splits_per_file;
 
-    bool noMoreSplits = false;
-    auto addSplits = [&](exec::Task* task) {
-      if (!noMoreSplits) {
-        for (const auto& entry : tpchPlan.dataFiles) {
-          for (const auto& path : entry.second) {
-            auto const splits = HiveConnectorTestBase::makeHiveConnectorSplits(
-                path, numSplitsPerFile, tpchPlan.dataFileFormat);
-            for (const auto& split : splits) {
-              task->addSplit(entry.first, exec::Split(split));
+        bool noMoreSplits = false;
+        auto addSplits = [&](exec::Task* task) {
+          if (!noMoreSplits) {
+            for (const auto& entry : tpchPlan.dataFiles) {
+              for (const auto& path : entry.second) {
+                auto const splits =
+                    HiveConnectorTestBase::makeHiveConnectorSplits(
+                        path, numSplitsPerFile, tpchPlan.dataFileFormat);
+                for (const auto& split : splits) {
+                  task->addSplit(entry.first, exec::Split(split));
+                }
+              }
+              task->noMoreSplits(entry.first);
             }
           }
-          task->noMoreSplits(entry.first);
+          noMoreSplits = true;
+        };
+        auto result = readCursor(params, addSplits);
+        ensureTaskCompletion(result.first->task().get());
+        if (++repeat >= FLAGS_num_repeats) {
+          return result;
         }
       }
-      noMoreSplits = true;
-    };
-    return readCursor(params, addSplits);
+    } catch (const std::exception& e) {
+      LOG(ERROR) << "Query terminated with: " << e.what();
+      return {nullptr, std::vector<RowVectorPtr>()};
+    }
   }
+
+  void runMain(std::ostream& out, RunStats& runStats) {
+    if (FLAGS_run_query_verbose == -1 && FLAGS_io_meter_column_pct == 0) {
+      folly::runBenchmarks();
+    } else {
+      const auto queryPlan = FLAGS_io_meter_column_pct > 0
+          ? queryBuilder->getIoMeterPlan(FLAGS_io_meter_column_pct)
+          : queryBuilder->getQueryPlan(FLAGS_run_query_verbose);
+      auto [cursor, actualResults] = run(queryPlan);
+      if (!cursor) {
+        LOG(ERROR) << "Query terminated with error. Exiting";
+        exit(1);
+      }
+      auto task = cursor->task();
+      ensureTaskCompletion(task.get());
+      if (FLAGS_include_results) {
+        printResults(actualResults, out);
+        out << std::endl;
+      }
+      const auto stats = task->taskStats();
+      int64_t rawInputBytes = 0;
+      for (auto& pipeline : stats.pipelineStats) {
+        auto& first = pipeline.operatorStats[0];
+        if (first.operatorType == "TableScan") {
+          rawInputBytes += first.rawInputBytes;
+        }
+      }
+      runStats.rawInputBytes = rawInputBytes;
+      out << fmt::format(
+                 "Execution time: {}",
+                 succinctMillis(
+                     stats.executionEndTimeMs - stats.executionStartTimeMs))
+          << std::endl;
+      out << fmt::format(
+                 "Splits total: {}, finished: {}",
+                 stats.numTotalSplits,
+                 stats.numFinishedSplits)
+          << std::endl;
+      out << printPlanWithStats(
+                 *queryPlan.plan, stats, FLAGS_include_custom_stats)
+          << std::endl;
+    }
+  }
+
+  void readCombinations() {
+    std::ifstream file(FLAGS_test_flags_file);
+    std::string line;
+    while (std::getline(file, line)) {
+      ParameterDim dim;
+      int32_t previous = 0;
+      for (auto i = 0; i < line.size(); ++i) {
+        if (line[i] == ':') {
+          dim.flag = line.substr(0, i);
+          previous = i + 1;
+        } else if (line[i] == ',') {
+          dim.values.push_back(line.substr(previous, i - previous));
+          previous = i + 1;
+        }
+      }
+      if (previous < line.size()) {
+        dim.values.push_back(line.substr(previous, line.size() - previous));
+      }
+
+      parameters_.push_back(dim);
+    }
+  }
+
+  void runCombinations(int32_t level) {
+    if (level == parameters_.size()) {
+      if (FLAGS_clear_ram_cache) {
+#ifdef linux
+        // system("echo 3 >/proc/sys/vm/drop_caches");
+        bool success = false;
+        auto fd = open("/proc//sys/vm/drop_caches", O_WRONLY);
+        if (fd > 0) {
+          success = write(fd, "3", 1) == 1;
+          close(fd);
+        }
+        if (!success) {
+          LOG(ERROR) << "Failed to clear OS disk cache: errno=" << errno;
+        }
+#endif
+
+        auto cache = dynamic_cast<cache::AsyncDataCache*>(allocator_.get());
+        if (cache) {
+          cache->clear();
+        }
+      }
+      if (FLAGS_clear_ssd_cache) {
+        auto cache = dynamic_cast<cache::AsyncDataCache*>(allocator_.get());
+        if (cache) {
+          auto ssdCache = cache->ssdCache();
+          if (ssdCache) {
+            ssdCache->clear();
+          }
+        }
+      }
+      if (FLAGS_warmup_after_clear) {
+        std::stringstream result;
+        RunStats ignore;
+        runMain(result, ignore);
+      }
+      RunStats stats;
+      std::stringstream result;
+      uint64_t micros = 0;
+      {
+        struct rusage start;
+        getrusage(RUSAGE_SELF, &start);
+        MicrosecondTimer timer(&micros);
+        runMain(result, stats);
+        struct rusage final;
+        getrusage(RUSAGE_SELF, &final);
+        auto tvNanos = [](struct timeval tv) {
+          return tv.tv_sec * 1000000000 + tv.tv_usec * 1000;
+        };
+        stats.userNanos = tvNanos(final.ru_utime) - tvNanos(start.ru_utime);
+        stats.systemNanos = tvNanos(final.ru_stime) - tvNanos(start.ru_stime);
+      }
+      stats.micros = micros;
+      stats.output = result.str();
+      for (auto i = 0; i < parameters_.size(); ++i) {
+        std::string name;
+        gflags::GetCommandLineOption(parameters_[i].flag.c_str(), &name);
+        stats.flags[parameters_[i].flag] = name;
+      }
+      runStats_.push_back(std::move(stats));
+    } else {
+      auto& flag = parameters_[level].flag;
+      for (auto& value : parameters_[level].values) {
+        std::string result =
+            gflags::SetCommandLineOption(flag.c_str(), value.c_str());
+        if (result.empty()) {
+          LOG(ERROR) << "Failed to set " << flag << "=" << value;
+        }
+        std::cout << result << std::endl;
+        runCombinations(level + 1);
+      }
+    }
+  }
+
+  void runAllCombinations() {
+    readCombinations();
+    runCombinations(0);
+    std::sort(
+        runStats_.begin(),
+        runStats_.end(),
+        [](const RunStats& left, const RunStats& right) {
+          return left.micros < right.micros;
+        });
+    for (auto& stats : runStats_) {
+      std::cout << stats.toString(false);
+    }
+    if (FLAGS_full_sorted_stats) {
+      std::cout << "Detail for stats:" << std::endl;
+      for (auto& stats : runStats_) {
+        std::cout << stats.toString(true);
+      }
+    }
+  }
+
+  std::unique_ptr<folly::IOThreadPoolExecutor> ioExecutor_;
+  std::unique_ptr<folly::IOThreadPoolExecutor> cacheExecutor_;
+  std::shared_ptr<memory::MemoryAllocator> allocator_;
+
+  // Parameter combinations to try. Each element specifies a flag and possible
+  // values. All permutations are tried.
+  std::vector<ParameterDim> parameters_;
+
+  std::vector<RunStats> runStats_;
 };
 
 TpchBenchmark benchmark;
-std::shared_ptr<TpchQueryBuilder> queryBuilder;
 
 BENCHMARK(q1) {
   const auto planContext = queryBuilder->getQueryPlan(1);
@@ -209,6 +523,11 @@ BENCHMARK(q16) {
   benchmark.run(planContext);
 }
 
+BENCHMARK(q17) {
+  const auto planContext = queryBuilder->getQueryPlan(17);
+  benchmark.run(planContext);
+}
+
 BENCHMARK(q18) {
   const auto planContext = queryBuilder->getQueryPlan(18);
   benchmark.run(planContext);
@@ -219,41 +538,32 @@ BENCHMARK(q19) {
   benchmark.run(planContext);
 }
 
+BENCHMARK(q20) {
+  const auto planContext = queryBuilder->getQueryPlan(20);
+  benchmark.run(planContext);
+}
+
+BENCHMARK(q21) {
+  const auto planContext = queryBuilder->getQueryPlan(21);
+  benchmark.run(planContext);
+}
+
 BENCHMARK(q22) {
   const auto planContext = queryBuilder->getQueryPlan(22);
   benchmark.run(planContext);
 }
 
-int main(int argc, char** argv) {
-  folly::init(&argc, &argv, false);
+int tpchBenchmarkMain() {
   benchmark.initialize();
   queryBuilder =
       std::make_shared<TpchQueryBuilder>(toFileFormat(FLAGS_data_format));
   queryBuilder->initialize(FLAGS_data_path);
-  if (FLAGS_run_query_verbose == -1) {
-    folly::runBenchmarks();
+  if (FLAGS_test_flags_file.empty()) {
+    RunStats ignore;
+    benchmark.runMain(std::cout, ignore);
   } else {
-    const auto queryPlan = queryBuilder->getQueryPlan(FLAGS_run_query_verbose);
-    const auto [cursor, actualResults] = benchmark.run(queryPlan);
-    auto task = cursor->task();
-    ensureTaskCompletion(task.get());
-    if (FLAGS_include_results) {
-      printResults(actualResults);
-      std::cout << std::endl;
-    }
-    const auto stats = task->taskStats();
-    std::cout << fmt::format(
-                     "Execution time: {}",
-                     succinctMillis(
-                         stats.executionEndTimeMs - stats.executionStartTimeMs))
-              << std::endl;
-    std::cout << fmt::format(
-                     "Splits total: {}, finished: {}",
-                     stats.numTotalSplits,
-                     stats.numFinishedSplits)
-              << std::endl;
-    std::cout << printPlanWithStats(
-                     *queryPlan.plan, stats, FLAGS_include_custom_stats)
-              << std::endl;
+    benchmark.runAllCombinations();
   }
+  queryBuilder.reset();
+  return 0;
 }

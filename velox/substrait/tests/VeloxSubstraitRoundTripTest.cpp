@@ -16,12 +16,15 @@
 #include <folly/Random.h>
 #include <folly/init/Init.h>
 
+#include "velox/common/base/tests/GTestUtils.h"
 #include "velox/exec/tests/utils/OperatorTestBase.h"
 #include "velox/exec/tests/utils/PlanBuilder.h"
 #include "velox/vector/tests/utils/VectorMaker.h"
 
 #include "velox/substrait/SubstraitToVeloxPlan.h"
 #include "velox/substrait/VeloxToSubstraitPlan.h"
+
+#include "velox/substrait/VariantToVectorConverter.h"
 
 using namespace facebook::velox;
 using namespace facebook::velox::test;
@@ -70,6 +73,27 @@ class VeloxSubstraitRoundTripTest : public OperatorTestBase {
     assertQuery(samePlan, duckDbSql);
   }
 
+  void assertFailingPlanConversion(
+      const std::shared_ptr<const core::PlanNode>& plan,
+      const std::string& expectedErrorMessage) {
+    CursorParameters params;
+    params.planNode = plan;
+    VELOX_ASSERT_THROW(
+        readCursor(params, [](auto /*task*/) {}), expectedErrorMessage);
+
+    // Convert Velox Plan to Substrait Plan.
+    google::protobuf::Arena arena;
+    auto substraitPlan = veloxConvertor_->toSubstrait(arena, plan);
+
+    // Convert Substrait Plan to the same Velox Plan.
+    auto samePlan = substraitConverter_->toVeloxPlan(substraitPlan);
+
+    // Assert velox again.
+    params.planNode = samePlan;
+    VELOX_ASSERT_THROW(
+        readCursor(params, [](auto /*task*/) {}), expectedErrorMessage);
+  }
+
   std::shared_ptr<VeloxToSubstraitPlanConvertor> veloxConvertor_ =
       std::make_shared<VeloxToSubstraitPlanConvertor>();
   std::shared_ptr<SubstraitVeloxPlanConverter> substraitConverter_ =
@@ -82,6 +106,29 @@ TEST_F(VeloxSubstraitRoundTripTest, project) {
   auto plan =
       PlanBuilder().values(vectors).project({"c0 + c1", "c1 / c2"}).planNode();
   assertPlanConversion(plan, "SELECT c0 + c1, c1 / c2 FROM tmp");
+}
+
+TEST_F(VeloxSubstraitRoundTripTest, cast) {
+  auto vectors = makeVectors(3, 4, 2);
+  createDuckDbTable(vectors);
+  // Cast int32 to int64.
+  auto plan =
+      PlanBuilder().values(vectors).project({"cast(c0 as bigint)"}).planNode();
+  assertPlanConversion(plan, "SELECT cast(c0 as bigint) FROM tmp");
+
+  // Cast literal "abc" to int64 and allow cast failure, expecting no exception.
+  plan = PlanBuilder()
+             .values(vectors)
+             .project({"try_cast('abc' as bigint)"})
+             .planNode();
+  assertPlanConversion(plan, "SELECT try_cast('abc' as bigint) FROM tmp");
+
+  // Cast literal "abc" to int64, expecting an exception to be thrown.
+  plan = PlanBuilder()
+             .values(vectors)
+             .project({"cast('abc' as bigint)"})
+             .planNode();
+  assertFailingPlanConversion(plan, "Failed to cast from VARCHAR to BIGINT");
 }
 
 TEST_F(VeloxSubstraitRoundTripTest, filter) {
@@ -286,6 +333,86 @@ TEST_F(VeloxSubstraitRoundTripTest, ifThen) {
   assertPlanConversion(plan, "SELECT if (c0=1, c0 + 1, c1 + 2) as x FROM tmp");
 }
 
+TEST_F(VeloxSubstraitRoundTripTest, orderBySingleKey) {
+  auto vectors = makeVectors(10, 4, 2);
+  createDuckDbTable(vectors);
+  auto plan = PlanBuilder()
+                  .values(vectors)
+                  .orderBy({"c0 DESC NULLS LAST"}, false)
+                  .planNode();
+  assertPlanConversion(plan, "SELECT * FROM tmp ORDER BY c0 DESC NULLS LAST");
+}
+
+TEST_F(VeloxSubstraitRoundTripTest, orderBy) {
+  auto vectors = makeVectors(10, 4, 2);
+  createDuckDbTable(vectors);
+  auto plan = PlanBuilder()
+                  .values(vectors)
+                  .orderBy({"c0 ASC NULLS FIRST", "c1 ASC NULLS LAST"}, false)
+                  .planNode();
+  assertPlanConversion(
+      plan, "SELECT * FROM tmp ORDER BY c0 NULLS FIRST, c1 NULLS LAST");
+}
+
+TEST_F(VeloxSubstraitRoundTripTest, limit) {
+  auto vectors = makeVectors(10, 4, 2);
+  createDuckDbTable(vectors);
+  auto plan = PlanBuilder().values(vectors).limit(0, 10, false).planNode();
+  assertPlanConversion(plan, "SELECT * FROM tmp LIMIT 10");
+
+  // With offset.
+  plan = PlanBuilder().values(vectors).limit(5, 10, false).planNode();
+  assertPlanConversion(plan, "SELECT * FROM tmp OFFSET 5 LIMIT 10");
+}
+
+TEST_F(VeloxSubstraitRoundTripTest, topN) {
+  auto vectors = makeVectors(10, 4, 2);
+  createDuckDbTable(vectors);
+  auto plan = PlanBuilder()
+                  .values(vectors)
+                  .topN({"c0 NULLS FIRST"}, 10, false)
+                  .planNode();
+  assertPlanConversion(
+      plan, "SELECT * FROM tmp ORDER BY c0 NULLS FIRST LIMIT 10");
+}
+
+TEST_F(VeloxSubstraitRoundTripTest, topNFilter) {
+  auto vectors = makeVectors(10, 4, 2);
+  createDuckDbTable(vectors);
+  auto plan = PlanBuilder()
+                  .values(vectors)
+                  .filter("c0 > 15")
+                  .topN({"c0 DESC NULLS FIRST"}, 10, false)
+                  .planNode();
+  assertPlanConversion(
+      plan,
+      "SELECT * FROM tmp WHERE c0 > 15 ORDER BY c0 DESC NULLS FIRST LIMIT 10");
+}
+
+TEST_F(VeloxSubstraitRoundTripTest, topNTwoKeys) {
+  auto vectors = makeVectors(10, 4, 2);
+  createDuckDbTable(vectors);
+  auto plan = PlanBuilder()
+                  .values(vectors)
+                  .filter("c0 > 15")
+                  .topN({"c0 NULLS FIRST", "c1 DESC NULLS LAST"}, 10, false)
+                  .planNode();
+  assertPlanConversion(
+      plan,
+      "SELECT * FROM tmp WHERE c0 > 15 ORDER BY c0 NULLS FIRST, c1 DESC NULLS LAST LIMIT 10");
+}
+
+namespace {
+core::TypedExprPtr makeConstantExpr(const TypePtr& type, const variant& value) {
+  return std::make_shared<const core::ConstantTypedExpr>(type, value);
+}
+
+core::TypedExprPtr makeConstantExpr(const VectorPtr& vector) {
+  return std::make_shared<const core::ConstantTypedExpr>(
+      BaseVector::wrapInConstant(1, 0, vector));
+}
+} // namespace
+
 TEST_F(VeloxSubstraitRoundTripTest, notNullLiteral) {
   auto vectors = makeRowVector(ROW({}, {}), 1);
   auto plan = PlanBuilder(pool_.get())
@@ -294,14 +421,14 @@ TEST_F(VeloxSubstraitRoundTripTest, notNullLiteral) {
                     std::vector<std::string> projectNames = {
                         "a", "b", "c", "d", "e", "f", "g", "h"};
                     std::vector<core::TypedExprPtr> projectExpressions = {
-                        std::make_shared<core::ConstantTypedExpr>((bool)1),
-                        std::make_shared<core::ConstantTypedExpr>((int8_t)23),
-                        std::make_shared<core::ConstantTypedExpr>((int16_t)45),
-                        std::make_shared<core::ConstantTypedExpr>((int32_t)678),
-                        std::make_shared<core::ConstantTypedExpr>((int64_t)910),
-                        std::make_shared<core::ConstantTypedExpr>((float)1.23),
-                        std::make_shared<core::ConstantTypedExpr>((double)4.56),
-                        std::make_shared<core::ConstantTypedExpr>("789")};
+                        makeConstantExpr(BOOLEAN(), (bool)1),
+                        makeConstantExpr(TINYINT(), (int8_t)23),
+                        makeConstantExpr(SMALLINT(), (int16_t)45),
+                        makeConstantExpr(INTEGER(), (int32_t)678),
+                        makeConstantExpr(BIGINT(), (int64_t)910),
+                        makeConstantExpr(REAL(), (float)1.23),
+                        makeConstantExpr(DOUBLE(), (double)4.56),
+                        makeConstantExpr(VARCHAR(), "789")};
                     return std::make_shared<core::ProjectNode>(
                         id,
                         std::move(projectNames),
@@ -311,6 +438,73 @@ TEST_F(VeloxSubstraitRoundTripTest, notNullLiteral) {
                   .planNode();
   assertPlanConversion(
       plan, "SELECT true, 23, 45, 678, 910, 1.23, 4.56, '789'");
+}
+
+TEST_F(VeloxSubstraitRoundTripTest, arrayLiteral) {
+  auto vectors = makeRowVector(ROW({}), 1);
+  auto plan =
+      PlanBuilder(pool_.get())
+          .values({vectors})
+          .addNode([&](std::string id, core::PlanNodePtr input) {
+            std::vector<core::TypedExprPtr> expressions = {
+                makeConstantExpr(
+                    makeNullableArrayVector<bool>({{true, std::nullopt}})),
+                makeConstantExpr(
+                    makeNullableArrayVector<int8_t>({{0, std::nullopt}})),
+                makeConstantExpr(
+                    makeNullableArrayVector<int16_t>({{1, std::nullopt}})),
+                makeConstantExpr(
+                    makeNullableArrayVector<int32_t>({{2, std::nullopt}})),
+                makeConstantExpr(
+                    makeNullableArrayVector<int64_t>({{3, std::nullopt}})),
+                makeConstantExpr(
+                    makeNullableArrayVector<float>({{4.4, std::nullopt}})),
+                makeConstantExpr(
+                    makeNullableArrayVector<double>({{5.5, std::nullopt}})),
+                makeConstantExpr(
+                    makeArrayVector<StringView>({{StringView("6")}})),
+                makeConstantExpr(makeArrayVector<Timestamp>(
+                    {{Timestamp(123'456, 123'000)}})),
+                makeConstantExpr(makeArrayVector<Date>({{Date(8035)}})),
+                makeConstantExpr(makeArrayVector<int64_t>(
+                    {{54 * 1000}}, INTERVAL_DAY_TIME())),
+                makeConstantExpr(makeArrayVector<int64_t>({{}})),
+                // Nested array: [[1, 2, 3], [4, 5]]
+                makeConstantExpr(makeArrayVector(
+                    {0}, makeArrayVector<int64_t>({{1, 2, 3}, {4, 5}}))),
+            };
+            std::vector<std::string> names(expressions.size());
+            for (auto i = 0; i < names.size(); ++i) {
+              names[i] = fmt::format("e{}", i);
+            }
+            return std::make_shared<core::ProjectNode>(
+                id, std::move(names), std::move(expressions), input);
+          })
+          .planNode();
+  assertPlanConversion(
+      plan,
+      "SELECT array[true, null], array[0, null], array[1, null], "
+      "array[2, null], array[3, null], array[4.4, null], array[5.5, null], "
+      "array[6],"
+      "array['1970-01-02T10:17:36.000123000'::TIMESTAMP],"
+      "array['1992-01-01'::DATE],"
+      "array[INTERVAL 54 MILLISECONDS], "
+      "array[], array[array[1,2,3], array[4,5]]");
+}
+
+TEST_F(VeloxSubstraitRoundTripTest, dateType) {
+  auto a = makeFlatVector<int32_t>({0, 1});
+  auto b = makeFlatVector<double_t>({0.3, 0.4});
+  auto c = makeFlatVector<Date>({Date(8036), Date(8035)});
+
+  auto vectors = makeRowVector({"a", "b", "c"}, {a, b, c});
+  createDuckDbTable({vectors});
+
+  auto plan = PlanBuilder()
+                  .values({vectors})
+                  .filter({"c > DATE '1992-01-01'"})
+                  .planNode();
+  assertPlanConversion(plan, "SELECT * FROM tmp WHERE c > DATE '1992-01-01'");
 }
 
 int main(int argc, char** argv) {

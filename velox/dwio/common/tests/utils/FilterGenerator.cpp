@@ -41,93 +41,73 @@ vector_size_t batchRow(uint64_t position) {
 }
 
 VectorPtr getChildBySubfield(
-    RowVector* rowVector,
+    const RowVector* rowVector,
     const Subfield& subfield,
-    const RowTypePtr& type) {
+    const RowTypePtr& rootType) {
+  const Type* type = rootType ? rootType.get() : rowVector->type().get();
   auto& path = subfield.path();
-  auto container = rowVector;
-  auto parentType = type.get();
-  for (int i = 0; i < path.size(); ++i) {
-    auto nestedField =
-        dynamic_cast<const Subfield::NestedField*>(path[i].get());
-    VELOX_CHECK(nestedField, "Path does not consist of nested fields");
-
-    auto rowType = parentType == nullptr
-        ? container->type()->as<TypeKind::ROW>()
-        : *parentType;
-    auto childIdx = rowType.getChildIdx(nestedField->name());
-    auto child = container->childAt(childIdx);
-
-    if (i == path.size() - 1) {
-      return child;
+  VELOX_CHECK(!path.empty())
+  auto* rowType = &type->asRow();
+  auto* field = dynamic_cast<const Subfield::NestedField*>(path[0].get());
+  VELOX_CHECK(field);
+  auto fieldIndex = rowType->getChildIdx(field->name());
+  type = rowType->childAt(fieldIndex).get();
+  auto vector = rowVector->childAt(fieldIndex);
+  for (int i = 1; i < path.size(); ++i) {
+    switch (type->kind()) {
+      case TypeKind::ROW:
+        rowType = &type->asRow();
+        field = dynamic_cast<const Subfield::NestedField*>(path[i].get());
+        VELOX_CHECK(field);
+        fieldIndex = rowType->getChildIdx(field->name());
+        type = rowType->childAt(fieldIndex).get();
+        vector = vector->asUnchecked<RowVector>()->childAt(fieldIndex);
+        break;
+      case TypeKind::ARRAY:
+        VELOX_CHECK(
+            dynamic_cast<const Subfield::AllSubscripts*>(path[i].get()));
+        type = type->childAt(0).get();
+        vector = vector->asUnchecked<ArrayVector>()->elements();
+        break;
+      case TypeKind::MAP:
+        VELOX_CHECK(
+            dynamic_cast<const Subfield::AllSubscripts*>(path[i].get()));
+        type = type->childAt(1).get();
+        vector = vector->asUnchecked<MapVector>()->mapValues();
+        break;
+      default:
+        VELOX_FAIL();
     }
-    VELOX_CHECK(child->typeKind() == TypeKind::ROW);
-    container = child->as<RowVector>();
-    parentType = dynamic_cast<const RowType*>(rowType.childAt(childIdx).get());
-    VELOX_CHECK_NOT_NULL(
-        parentType,
-        "Expecting child to be row type",
-        subfield.toString().c_str(),
-        i);
   }
-  // Never reached.
-  VELOX_CHECK(false);
-  return nullptr;
+  return vector;
 }
 
 uint32_t AbstractColumnStats::counter_ = 0;
 
 template <>
-std::unique_ptr<Filter> ColumnStats<bool>::makeRangeFilter(
-    float startPct,
-    float selectPct) {
-  if (values_.empty()) {
-    return std::make_unique<velox::common::IsNull>();
-  }
-  bool value = valueAtPct(startPct + selectPct);
-  return std::make_unique<velox::common::BoolValue>(value, selectPct > 50);
+int64_t ColumnStats<Date>::getIntegerValue(const Date& value) {
+  return value.days();
 }
 
 template <>
-std::unique_ptr<Filter> ColumnStats<UnscaledShortDecimal>::makeRangeFilter(
-    float startPct,
-    float selectPct) {
+std::unique_ptr<Filter> ColumnStats<bool>::makeRangeFilter(
+    const FilterSpec& filterSpec) {
   if (values_.empty()) {
     return std::make_unique<velox::common::IsNull>();
   }
-  int32_t lowerIndex;
-  int32_t upperIndex;
-  UnscaledShortDecimal lower = valueAtPct(startPct, &lowerIndex);
-  UnscaledShortDecimal upper = valueAtPct(startPct + selectPct, &upperIndex);
-  if (upperIndex - lowerIndex < 1000 && ++counter_ % 10 <= 3) {
-    std::vector<int64_t> in;
-    for (auto i = lowerIndex; i <= upperIndex; ++i) {
-      in.push_back(values_[i].unscaledValue());
-    }
-    // make sure we don't accidentally generate an AlwaysFalse filter
-    if (counter_ % 2 == 1 && selectPct < 100.0) {
-      return velox::common::createNegatedBigintValues(in, true);
-    }
-    return velox::common::createBigintValues(in, true);
-  }
-  // sometimes make a negated filter instead (1/4 chance)
-  if (counter_ % 4 == 1 && selectPct < 100.0) {
-    return std::make_unique<velox::common::NegatedBigintRange>(
-        lower.unscaledValue(), upper.unscaledValue(), selectPct < 75);
-  }
-  return std::make_unique<velox::common::BigintRange>(
-      lower.unscaledValue(), upper.unscaledValue(), selectPct > 25);
+  bool value = valueAtPct(filterSpec.startPct + filterSpec.selectPct);
+  return std::make_unique<velox::common::BoolValue>(
+      value, filterSpec.selectPct > 50);
 }
 
 template <>
 std::unique_ptr<Filter> ColumnStats<float>::makeRangeFilter(
-    float startPct,
-    float selectPct) {
+    const FilterSpec& filterSpec) {
   if (values_.empty()) {
     return std::make_unique<velox::common::IsNull>();
   }
-  float lower = valueAtPct(startPct);
-  float upper = valueAtPct(startPct + selectPct);
+  float lower = valueAtPct(filterSpec.startPct);
+  float upper = valueAtPct(filterSpec.startPct + filterSpec.selectPct);
   bool lowerUnbounded = std::isnan(lower);
   bool upperUnbounded = std::isnan(upper);
   if (lowerUnbounded && upperUnbounded) {
@@ -141,22 +121,37 @@ std::unique_ptr<Filter> ColumnStats<float>::makeRangeFilter(
       upper,
       upperUnbounded,
       false,
-      selectPct > 25);
+      filterSpec.selectPct > 25);
 }
 
 template <>
 std::unique_ptr<Filter> ColumnStats<double>::makeRangeFilter(
-    float startPct,
-    float selectPct) {
+    const FilterSpec& filterSpec) {
   if (values_.empty()) {
-    return std::make_unique<velox::common::IsNull>();
+    if (filterSpec.allowNulls_) {
+      return std::make_unique<velox::common::IsNull>();
+    } else {
+      return std::make_unique<velox::common::DoubleRange>(
+          0, false, false, 0, false, false, false);
+    }
   }
-  double lower = valueAtPct(startPct);
-  double upper = valueAtPct(startPct + selectPct);
+
+  double lower = valueAtPct(filterSpec.startPct);
+  double upper = valueAtPct(filterSpec.startPct + filterSpec.selectPct);
   bool lowerUnbounded = std::isnan(lower);
   bool upperUnbounded = std::isnan(upper);
   if (lowerUnbounded && upperUnbounded) {
     return std::make_unique<velox::common::IsNotNull>();
+  }
+  if (!filterSpec.allowNulls_) {
+    return std::make_unique<velox::common::DoubleRange>(
+        lower,
+        lowerUnbounded,
+        filterSpec.selectPct == 0,
+        upper,
+        upperUnbounded,
+        false,
+        false);
   }
   return std::make_unique<velox::common::DoubleRange>(
       lower,
@@ -165,13 +160,12 @@ std::unique_ptr<Filter> ColumnStats<double>::makeRangeFilter(
       upper,
       upperUnbounded,
       false,
-      selectPct > 25);
+      filterSpec.selectPct > 25);
 }
 
 template <>
 std::unique_ptr<Filter> ColumnStats<StringView>::makeRangeFilter(
-    float startPct,
-    float selectPct) {
+    const FilterSpec& filterSpec) {
   if (values_.empty()) {
     return std::make_unique<velox::common::IsNull>();
   }
@@ -179,8 +173,9 @@ std::unique_ptr<Filter> ColumnStats<StringView>::makeRangeFilter(
   // used to determine if we can test a values filter reasonably
   int32_t lowerIndex;
   int32_t upperIndex;
-  StringView lower = valueAtPct(startPct, &lowerIndex);
-  StringView upper = valueAtPct(startPct + selectPct, &upperIndex);
+  StringView lower = valueAtPct(filterSpec.startPct, &lowerIndex);
+  StringView upper =
+      valueAtPct(filterSpec.startPct + filterSpec.selectPct, &upperIndex);
   if (upperIndex - lowerIndex < 1000 && ++counter_ % 10 <= 3) {
     std::vector<std::string> inRange;
     inRange.reserve(upperIndex - lowerIndex);
@@ -190,16 +185,16 @@ std::unique_ptr<Filter> ColumnStats<StringView>::makeRangeFilter(
         inRange.push_back(s.getString());
       }
     }
-    if (counter_ % 2 == 0 && selectPct != 100.0) {
+    if (counter_ % 2 == 0 && filterSpec.selectPct != 100.0) {
       return std::make_unique<velox::common::NegatedBytesValues>(
-          inRange, selectPct < 75);
+          inRange, filterSpec.selectPct < 75);
     }
     return std::make_unique<velox::common::BytesValues>(
-        inRange, selectPct > 25);
+        inRange, filterSpec.selectPct > 25);
   }
 
   // sometimes create a negated filter instead
-  if (counter_ % 4 == 1 && selectPct < 100.0) {
+  if (counter_ % 4 == 1 && filterSpec.selectPct < 100.0) {
     return std::make_unique<velox::common::NegatedBytesRange>(
         std::string(lower),
         false,
@@ -207,7 +202,7 @@ std::unique_ptr<Filter> ColumnStats<StringView>::makeRangeFilter(
         std::string(upper),
         false,
         false,
-        selectPct < 75);
+        filterSpec.selectPct < 75);
   }
 
   return std::make_unique<velox::common::BytesRange>(
@@ -217,7 +212,7 @@ std::unique_ptr<Filter> ColumnStats<StringView>::makeRangeFilter(
       std::string(upper),
       false,
       false,
-      selectPct > 25);
+      filterSpec.selectPct > 25);
 }
 
 template <>
@@ -227,56 +222,6 @@ std::unique_ptr<Filter> ColumnStats<StringView>::makeRowGroupSkipRangeFilter(
   static std::string max = kMaxString;
   return std::make_unique<velox::common::BytesRange>(
       max, false, false, max, false, false, false);
-}
-
-void FilterGenerator::makeFieldSpecs(
-    const std::string& pathPrefix,
-    int32_t level,
-    const std::shared_ptr<const Type>& type,
-    ScanSpec* spec) {
-  switch (type->kind()) {
-    case TypeKind::ROW: {
-      VELOX_CHECK_EQ(type->kind(), velox::TypeKind::ROW);
-      auto rowType = dynamic_cast<const RowType*>(type.get());
-      VELOX_CHECK_NOT_NULL(rowType, "Expecting a row type", type->kindName());
-      for (auto i = 0; i < type->size(); ++i) {
-        std::string path = level == 0 ? rowType->nameOf(i)
-                                      : pathPrefix + "." + rowType->nameOf(i);
-        Subfield subfield(path);
-        ScanSpec* fieldSpec = spec->getOrCreateChild(subfield);
-        fieldSpec->setProjectOut(true);
-        fieldSpec->setExtractValues(true);
-        fieldSpec->setChannel(i);
-        makeFieldSpecs(path, level + 1, type->childAt(i), spec);
-      }
-      break;
-    }
-    case TypeKind::MAP: {
-      auto keySpec = spec->getOrCreateChild(Subfield(pathPrefix + ".keys"));
-      keySpec->setProjectOut(true);
-      keySpec->setExtractValues(true);
-      makeFieldSpecs(pathPrefix + ".keys", level + 1, type->childAt(0), spec);
-      auto valueSpec =
-          spec->getOrCreateChild(Subfield(pathPrefix + ".elements"));
-      valueSpec->setProjectOut(true);
-      valueSpec->setExtractValues(true);
-      makeFieldSpecs(
-          pathPrefix + ".elements", level + 1, type->childAt(1), spec);
-      break;
-    }
-    case TypeKind::ARRAY: {
-      auto childSpec =
-          spec->getOrCreateChild(Subfield(pathPrefix + ".elements"));
-      childSpec->setProjectOut(true);
-      childSpec->setExtractValues(true);
-      makeFieldSpecs(
-          pathPrefix + ".elements", level + 1, type->childAt(0), spec);
-      break;
-    }
-
-    default:
-      break;
-  }
 }
 
 std::string FilterGenerator::specsToString(
@@ -408,30 +353,40 @@ std::vector<FilterSpec> FilterGenerator::makeRandomSpecs(
 }
 
 std::shared_ptr<ScanSpec> FilterGenerator::makeScanSpec(
-    SubfieldFilters filters) {
+    const SubfieldFilters& filters) {
   auto spec = std::make_shared<ScanSpec>("root");
-  makeFieldSpecs("", 0, rowType_, spec.get());
-
-  for (auto& pair : filters) {
-    auto fieldSpec = spec->getOrCreateChild(pair.first);
-    fieldSpec->setFilter(std::move(pair.second));
-  }
+  spec->addAllChildFields(*rowType_);
+  addToScanSpec(filters, *spec);
   return spec;
+}
+
+void FilterGenerator::addToScanSpec(
+    const SubfieldFilters& filters,
+    ScanSpec& spec) {
+  for (auto& pair : filters) {
+    spec.getOrCreateChild(pair.first)->addFilter(*pair.second);
+  }
 }
 
 SubfieldFilters FilterGenerator::makeSubfieldFilters(
     const std::vector<FilterSpec>& filterSpecs,
     const std::vector<RowVectorPtr>& batches,
+    MutationSpec* mutationSpec,
     std::vector<uint64_t>& hitRows) {
   vector_size_t totalSize = 0;
   for (auto& batch : batches) {
     totalSize += batch->size();
   }
   hitRows.reserve(totalSize);
+  int64_t index = 0;
   for (auto i = 0; i < batches.size(); ++i) {
     auto batch = batches[i];
-    for (auto j = 0; j < batch->size(); ++j) {
-      hitRows.push_back(batchPosition(i, j));
+    for (auto j = 0; j < batch->size(); ++j, ++index) {
+      if (mutationSpec && folly::Random::randDouble01(rng_) < 0.02) {
+        mutationSpec->deletedRows.push_back(index);
+      } else {
+        hitRows.push_back(batchPosition(i, j));
+      }
     }
   }
 
@@ -458,8 +413,14 @@ SubfieldFilters FilterGenerator::makeSubfieldFilters(
       case TypeKind::BIGINT:
         stats = makeStats<TypeKind::BIGINT>(vector->type(), rowType_);
         break;
+      case TypeKind::DATE:
+        stats = makeStats<TypeKind::DATE>(vector->type(), rowType_);
+        break;
       case TypeKind::VARCHAR:
         stats = makeStats<TypeKind::VARCHAR>(vector->type(), rowType_);
+        break;
+      case TypeKind::VARBINARY:
+        stats = makeStats<TypeKind::VARBINARY>(vector->type(), rowType_);
         break;
       case TypeKind::REAL:
         stats = makeStats<TypeKind::REAL>(vector->type(), rowType_);
@@ -470,11 +431,14 @@ SubfieldFilters FilterGenerator::makeSubfieldFilters(
       case TypeKind::ROW:
         stats = makeStats<TypeKind::ROW>(vector->type(), rowType_);
         break;
+      case TypeKind::ARRAY:
+        stats = makeStats<TypeKind::ARRAY>(vector->type(), rowType_);
+        break;
+      case TypeKind::MAP:
+        stats = makeStats<TypeKind::MAP>(vector->type(), rowType_);
+        break;
       // TODO:
       // Add support for TypeKind::TIMESTAMP.
-      case TypeKind::SHORT_DECIMAL:
-        stats = makeStats<TypeKind::SHORT_DECIMAL>(vector->type(), rowType_);
-        break;
       default:
         VELOX_CHECK(
             false,
@@ -486,13 +450,7 @@ SubfieldFilters FilterGenerator::makeSubfieldFilters(
     if (filterSpec.isForRowGroupSkip) {
       filter = stats->rowGroupSkipFilter(batches, subfield, hitRows);
     } else {
-      filter = stats->filter(
-          filterSpec.startPct,
-          filterSpec.selectPct,
-          filterSpec.filterKind,
-          batches,
-          subfield,
-          hitRows);
+      filter = stats->filter(batches, filterSpec, hitRows);
     }
 
     if (filter) {
@@ -501,6 +459,240 @@ SubfieldFilters FilterGenerator::makeSubfieldFilters(
   }
 
   return filters;
+}
+
+namespace {
+
+void pruneRandomSubfield(
+    Subfield& subfield,
+    const Type& type,
+    ScanSpec& spec,
+    memory::MemoryPool* pool,
+    folly::Random::DefaultGenerator& rng,
+    const RowTypePtr& rootType,
+    std::vector<RowVectorPtr>& batches) {
+  switch (type.kind()) {
+    case TypeKind::ROW: {
+      // Prune one of the child.
+      auto& rowType = type.asRow();
+      VELOX_CHECK_GT(rowType.size(), 0);
+      int pruned = -1;
+      if (rowType.size() > 1) {
+        pruned = folly::Random::rand32(rowType.size(), rng);
+      }
+      for (int i = 0; i < rowType.size(); ++i) {
+        auto& childType = rowType.childAt(i);
+        auto& childName = rowType.nameOf(i);
+        auto* childSpec = spec.childByName(childName);
+        if (i == pruned) {
+          childSpec->setConstantValue(
+              BaseVector::createNullConstant(childType, 1, pool));
+          for (auto& batch : batches) {
+            auto* data = getChildBySubfield(batch.get(), subfield, rootType)
+                             ->asUnchecked<RowVector>();
+            data->childAt(i) =
+                BaseVector::createNullConstant(childType, data->size(), pool);
+          }
+        } else {
+          subfield.path().push_back(
+              std::make_unique<Subfield::NestedField>(childName));
+          pruneRandomSubfield(
+              subfield, *childType, *childSpec, pool, rng, rootType, batches);
+          subfield.path().pop_back();
+        }
+      }
+      break;
+    }
+    case TypeKind::ARRAY: {
+      // Cap the max element length at the average length.
+      vector_size_t totalSize = 0;
+      int totalCount = 0;
+      for (auto& batch : batches) {
+        auto* data = getChildBySubfield(batch.get(), subfield, rootType)
+                         ->asUnchecked<ArrayVector>();
+        for (int i = 0; i < data->size(); ++i) {
+          if (!data->isNullAt(i)) {
+            totalSize += data->sizeAt(i);
+            ++totalCount;
+          }
+        }
+      }
+      int maxElementsCount = std::max(1, totalSize / totalCount);
+      for (auto& batch : batches) {
+        auto* data = getChildBySubfield(batch.get(), subfield, rootType)
+                         ->asUnchecked<ArrayVector>();
+        for (int i = 0; i < data->size(); ++i) {
+          if (!data->isNullAt(i)) {
+            auto newSize = std::min(maxElementsCount, data->sizeAt(i));
+            data->setOffsetAndSize(i, data->offsetAt(i), newSize);
+          }
+        }
+      }
+      spec.setMaxArrayElementsCount(maxElementsCount);
+      auto* elementsSpec = spec.childByName(ScanSpec::kArrayElementsFieldName);
+      subfield.path().push_back(std::make_unique<Subfield::AllSubscripts>());
+      pruneRandomSubfield(
+          subfield,
+          *type.childAt(0),
+          *elementsSpec,
+          pool,
+          rng,
+          rootType,
+          batches);
+      subfield.path().pop_back();
+      break;
+    }
+    case TypeKind::MAP: {
+      // Sample half of the keys.
+      auto& keyType = type.childAt(0);
+      bool isStringKey = keyType->isVarchar() || keyType->isVarbinary();
+      std::vector<std::string> stringKeys;
+      std::vector<int64_t> longKeys;
+      for (auto& batch : batches) {
+        auto* data = getChildBySubfield(batch.get(), subfield, rootType)
+                         ->asUnchecked<MapVector>();
+        auto& keys = data->mapKeys();
+        for (int i = 0; i < data->size(); ++i) {
+          if (data->isNullAt(i)) {
+            continue;
+          }
+          for (int j = 0; j < data->sizeAt(i); ++j) {
+            int jj = data->offsetAt(i) + j;
+            switch (keyType->kind()) {
+              case TypeKind::TINYINT:
+                longKeys.push_back(
+                    keys->asUnchecked<SimpleVector<int8_t>>()->valueAt(jj));
+                break;
+              case TypeKind::SMALLINT:
+                longKeys.push_back(
+                    keys->asUnchecked<SimpleVector<int16_t>>()->valueAt(jj));
+                break;
+              case TypeKind::INTEGER:
+                longKeys.push_back(
+                    keys->asUnchecked<SimpleVector<int32_t>>()->valueAt(jj));
+                break;
+              case TypeKind::BIGINT:
+                longKeys.push_back(
+                    keys->asUnchecked<SimpleVector<int64_t>>()->valueAt(jj));
+                break;
+              case TypeKind::VARCHAR:
+              case TypeKind::VARBINARY:
+                stringKeys.push_back(
+                    keys->asUnchecked<SimpleVector<StringView>>()->valueAt(jj));
+                break;
+              default:
+                VELOX_FAIL();
+            }
+          }
+        }
+      }
+      std::unique_ptr<Filter> filter;
+      if (isStringKey) {
+        std::shuffle(stringKeys.begin(), stringKeys.end(), rng);
+        stringKeys.resize((stringKeys.size() + 1) / 2);
+        filter = std::make_unique<BytesValues>(stringKeys, false);
+      } else {
+        std::shuffle(longKeys.begin(), longKeys.end(), rng);
+        longKeys.resize((longKeys.size() + 1) / 2);
+        filter = createBigintValues(longKeys, false);
+      }
+      for (auto& batch : batches) {
+        auto* data = getChildBySubfield(batch.get(), subfield, rootType)
+                         ->asUnchecked<MapVector>();
+        auto& keys = data->mapKeys();
+        auto indices = allocateIndices(keys->size(), pool);
+        auto* rawIndices = indices->asMutable<vector_size_t>();
+        vector_size_t offset = 0;
+        for (int i = 0; i < data->size(); ++i) {
+          if (data->isNullAt(i)) {
+            continue;
+          }
+          int newSize = 0;
+          for (int j = 0; j < data->sizeAt(i); ++j) {
+            int jj = data->offsetAt(i) + j;
+            bool passed;
+            switch (keyType->kind()) {
+              case TypeKind::TINYINT:
+                passed = applyFilter(
+                    *filter,
+                    keys->asUnchecked<SimpleVector<int8_t>>()->valueAt(jj));
+                break;
+              case TypeKind::SMALLINT:
+                passed = applyFilter(
+                    *filter,
+                    keys->asUnchecked<SimpleVector<int16_t>>()->valueAt(jj));
+                break;
+              case TypeKind::INTEGER:
+                passed = applyFilter(
+                    *filter,
+                    keys->asUnchecked<SimpleVector<int32_t>>()->valueAt(jj));
+                break;
+              case TypeKind::BIGINT:
+                passed = applyFilter(
+                    *filter,
+                    keys->asUnchecked<SimpleVector<int64_t>>()->valueAt(jj));
+                break;
+              case TypeKind::VARCHAR:
+              case TypeKind::VARBINARY:
+                passed = applyFilter(
+                    *filter,
+                    keys->asUnchecked<SimpleVector<StringView>>()->valueAt(jj));
+                break;
+              default:
+                VELOX_FAIL();
+            }
+            if (passed) {
+              rawIndices[offset + newSize++] = jj;
+            }
+          }
+          data->setOffsetAndSize(i, offset, newSize);
+          offset += newSize;
+        }
+        auto newKeys =
+            BaseVector::wrapInDictionary(nullptr, indices, offset, keys);
+        auto newValues = BaseVector::wrapInDictionary(
+            nullptr, indices, offset, data->mapValues());
+        BaseVector::flattenVector(newKeys);
+        BaseVector::flattenVector(newValues);
+        data->setKeysAndValues(newKeys, newValues);
+      }
+      spec.childByName(ScanSpec::kMapKeysFieldName)
+          ->setFilter(std::move(filter));
+      auto* valuesSpec = spec.childByName(ScanSpec::kMapValuesFieldName);
+      subfield.path().push_back(std::make_unique<Subfield::AllSubscripts>());
+      pruneRandomSubfield(
+          subfield,
+          *type.childAt(1),
+          *valuesSpec,
+          pool,
+          rng,
+          rootType,
+          batches);
+      subfield.path().pop_back();
+      break;
+    }
+    default:
+      // Ignore non-complex types.
+      break;
+  }
+}
+
+} // namespace
+
+std::shared_ptr<ScanSpec> FilterGenerator::makeScanSpec(
+    const std::vector<std::string>& prunable,
+    std::vector<RowVectorPtr>& batches,
+    memory::MemoryPool* pool) {
+  auto root = std::make_shared<ScanSpec>("<root>");
+  root->addAllChildFields(*rowType_);
+  auto* first = batches[0].get();
+  for (auto& path : prunable) {
+    Subfield subfield(path);
+    auto* spec = root->getOrCreateChild(subfield);
+    auto type = getChildBySubfield(first, subfield, rowType_)->type();
+    pruneRandomSubfield(subfield, *type, *spec, pool, rng_, rowType_, batches);
+  }
+  return root;
 }
 
 } // namespace facebook::velox::dwio::common

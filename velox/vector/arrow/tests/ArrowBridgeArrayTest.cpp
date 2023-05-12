@@ -33,8 +33,7 @@ void mockSchemaRelease(ArrowSchema*) {}
 void mockArrayRelease(ArrowArray*) {}
 
 void exportToArrow(const TypePtr& type, ArrowSchema& out) {
-  auto pool =
-      &facebook::velox::memory::getProcessDefaultMemoryManager().getRoot();
+  auto pool = &facebook::velox::memory::deprecatedSharedLeafPool();
   exportToArrow(BaseVector::create(type, 0, pool), out);
 }
 
@@ -187,8 +186,7 @@ class ArrowBridgeArrayExportTest : public testing::Test {
 
   // Boiler plate structures required by vectorMaker.
   std::shared_ptr<core::QueryCtx> queryCtx_{std::make_shared<core::QueryCtx>()};
-  std::unique_ptr<memory::MemoryPool> pool_{
-      memory::getDefaultScopedMemoryPool()};
+  std::shared_ptr<memory::MemoryPool> pool_{memory::addDefaultLeafMemoryPool()};
   core::ExecCtx execCtx_{pool_.get(), queryCtx_.get()};
   facebook::velox::test::VectorMaker vectorMaker_{execCtx_.pool()};
 };
@@ -306,6 +304,17 @@ TEST_F(ArrowBridgeArrayExportTest, flatDouble) {
       std::numeric_limits<double>::max(),
       std::nullopt,
       99.4,
+  });
+}
+
+TEST_F(ArrowBridgeArrayExportTest, flatDate) {
+  testFlatVector<Date>({
+      std::numeric_limits<int32_t>::min(),
+      std::nullopt,
+      std::numeric_limits<int32_t>::max(),
+      std::numeric_limits<int32_t>::max(),
+      std::nullopt,
+      std::nullopt,
   });
 }
 
@@ -650,12 +659,8 @@ TEST_F(ArrowBridgeArrayExportTest, unsupported) {
   vector = vectorMaker_.flatVectorNullable<Timestamp>({});
   EXPECT_THROW(exportToArrow(vector, arrowArray, pool_.get()), VeloxException);
 
-  // Dates.
-  vector = vectorMaker_.flatVectorNullable<Date>({});
-  EXPECT_THROW(exportToArrow(vector, arrowArray, pool_.get()), VeloxException);
-
   // Constant encoding.
-  vector = BaseVector::createConstant(variant(10), 10, pool_.get());
+  vector = BaseVector::createConstant(INTEGER(), variant(10), 10, pool_.get());
   EXPECT_THROW(exportToArrow(vector, arrowArray, pool_.get()), VeloxException);
 }
 
@@ -816,6 +821,8 @@ class ArrowBridgeArrayImportTest : public ArrowBridgeArrayExportTest {
 
     testArrowImport<int16_t>("s", {5, 4, 3, 1, 2});
     testArrowImport<int32_t>("i", {5, 4, 3, 1, 2});
+
+    testArrowImport<Date>("tdD", {5, 4, 3, 1, 2});
 
     testArrowImport<int64_t>("l", {});
     testArrowImport<int64_t>("l", {std::nullopt});
@@ -1125,8 +1132,7 @@ class ArrowBridgeArrayImportTest : public ArrowBridgeArrayExportTest {
     EXPECT_NO_THROW(importFromArrow(arrowSchema, arrowArray, pool_.get()));
   }
 
-  std::unique_ptr<memory::ScopedMemoryPool> pool_{
-      memory::getDefaultScopedMemoryPool()};
+  std::shared_ptr<memory::MemoryPool> pool_{memory::addDefaultLeafMemoryPool()};
 };
 
 class ArrowBridgeArrayImportAsViewerTest : public ArrowBridgeArrayImportTest {

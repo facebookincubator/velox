@@ -31,8 +31,24 @@ class HyperLogLogType : public VarbinaryType {
     return instance;
   }
 
-  std::string toString() const override {
+  bool equivalent(const Type& other) const override {
+    // Pointer comparison works since this type is a singleton.
+    return this == &other;
+  }
+
+  const char* name() const override {
     return "HYPERLOGLOG";
+  }
+
+  std::string toString() const override {
+    return name();
+  }
+
+  folly::dynamic serialize() const override {
+    folly::dynamic obj = folly::dynamic::object;
+    obj["name"] = "Type";
+    obj["type"] = name();
+    return obj;
   }
 };
 
@@ -56,7 +72,7 @@ using HyperLogLog = CustomType<HyperLogLogT>;
 
 class HyperLogLogTypeFactories : public CustomTypeFactories {
  public:
-  TypePtr getType(std::vector<TypePtr> /*childTypes*/) const override {
+  TypePtr getType() const override {
     return HYPERLOGLOG();
   }
 
@@ -65,4 +81,7 @@ class HyperLogLogTypeFactories : public CustomTypeFactories {
     return nullptr;
   }
 };
+
+void registerHyperLogLogType();
+
 } // namespace facebook::velox

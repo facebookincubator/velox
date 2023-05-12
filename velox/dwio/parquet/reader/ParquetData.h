@@ -18,6 +18,7 @@
 
 #include <thrift/protocol/TCompactProtocol.h> //@manual
 #include "velox/common/base/RawVector.h"
+#include "velox/dwio/common/BufferUtil.h"
 #include "velox/dwio/common/BufferedInput.h"
 #include "velox/dwio/common/ScanSpec.h"
 #include "velox/dwio/parquet/reader/PageReader.h"
@@ -59,16 +60,15 @@ class ParquetData : public dwio::common::FormatData {
   /// Other formats may use it.
   dwio::common::PositionProvider seekToRowGroup(uint32_t index) override;
 
-  /// True if 'filter' may have hits for the column of 'this' according to the
-  /// stats in 'rowGroup'.
-  bool rowGroupMatches(
-      uint32_t rowGroupId,
-      common::Filter* FOLLY_NULLABLE filter) override;
-
-  std::vector<uint32_t> filterRowGroups(
+  void filterRowGroups(
       const common::ScanSpec& scanSpec,
       uint64_t rowsPerRowGroup,
-      const dwio::common::StatsContext& writerContext) override;
+      const dwio::common::StatsContext& writerContext,
+      FilterRowGroupsResult&) override;
+
+  PageReader* FOLLY_NONNULL reader() const {
+    return reader_.get();
+  }
 
   // Reads null flags for 'numValues' next top level rows. The first 'numValues'
   // bits of 'nulls' are set and the reader is advanced by numValues'.
@@ -80,12 +80,46 @@ class ParquetData : public dwio::common::FormatData {
     return maxDefine_ > 0;
   }
 
+  /// Sets nulls to be returned by readNulls(). Nulls for non-leaf readers come
+  /// from leaf repdefs which are gathered before descending the reader tree.
+  void setNulls(BufferPtr& nulls, int32_t numValues) {
+    if (nulls || numValues) {
+      VELOX_CHECK_EQ(presetNullsConsumed_, presetNullsSize_);
+    }
+    presetNulls_ = nulls;
+    presetNullsSize_ = numValues;
+    presetNullsConsumed_ = 0;
+  }
+
+  int32_t presetNullsLeft() const {
+    return presetNullsSize_ - presetNullsConsumed_;
+  }
+
   void readNulls(
       vector_size_t numValues,
       const uint64_t* FOLLY_NULLABLE incomingNulls,
       BufferPtr& nulls,
       bool nullsOnly = false) override {
     // If the query accesses only nulls, read the nulls from the pages in range.
+    // If nulls are preread, return those minus any skipped.
+    if (presetNulls_) {
+      VELOX_CHECK_LE(numValues, presetNullsSize_ - presetNullsConsumed_);
+      if (!presetNullsConsumed_ && numValues == presetNullsSize_) {
+        nulls = std::move(presetNulls_);
+        presetNullsConsumed_ = numValues;
+      } else {
+        dwio::common::ensureCapacity<bool>(nulls, numValues, &pool_);
+        auto bits = nulls->asMutable<uint64_t>();
+        bits::copyBits(
+            presetNulls_->as<uint64_t>(),
+            presetNullsConsumed_,
+            bits,
+            0,
+            numValues);
+        presetNullsConsumed_ += numValues;
+      }
+      return;
+    }
     if (nullsOnly) {
       readNullsOnly(numValues, nulls);
       return;
@@ -103,6 +137,10 @@ class ParquetData : public dwio::common::FormatData {
     if (nullsOnly) {
       reader_->skipNullsOnly(numValues);
     }
+    if (presetNulls_) {
+      VELOX_DCHECK_LE(numValues, presetNullsSize_ - presetNullsConsumed_);
+      presetNullsConsumed_ += numValues;
+    }
     return numValues;
   }
 
@@ -118,8 +156,8 @@ class ParquetData : public dwio::common::FormatData {
     reader_->readWithVisitor(visitor);
   }
 
-  const VectorPtr& dictionaryValues() {
-    return reader_->dictionaryValues();
+  const VectorPtr& dictionaryValues(const TypePtr& type) {
+    return reader_->dictionaryValues(type);
   }
 
   void clearDictionary() {
@@ -129,6 +167,15 @@ class ParquetData : public dwio::common::FormatData {
   bool hasDictionary() const {
     return reader_->isDictionary();
   }
+
+  bool parentNullsInLeaves() const override {
+    return true;
+  }
+
+ private:
+  /// True if 'filter' may have hits for the column of 'this' according to the
+  /// stats in 'rowGroup'.
+  bool rowGroupMatches(uint32_t rowGroupId, common::Filter* filter);
 
  protected:
   memory::MemoryPool& pool_;
@@ -142,6 +189,15 @@ class ParquetData : public dwio::common::FormatData {
   const uint32_t maxRepeat_;
   int64_t rowsInRowGroup_;
   std::unique_ptr<PageReader> reader_;
+
+  // Nulls derived from leaf repdefs for non-leaf readers.
+  BufferPtr presetNulls_;
+
+  // Number of valid bits in 'presetNulls_'.
+  int32_t presetNullsSize_{0};
+
+  // Count of leading skipped positions in 'presetNulls_'
+  int32_t presetNullsConsumed_{0};
 };
 
 } // namespace facebook::velox::parquet

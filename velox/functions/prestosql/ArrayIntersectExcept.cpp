@@ -31,7 +31,7 @@ struct SetWithNull {
     hasNull = false;
   }
 
-  std::unordered_set<T> set;
+  folly::F14FastSet<T> set;
   bool hasNull{false};
   static constexpr vector_size_t kInitialSetSize{128};
 };
@@ -109,35 +109,24 @@ class ArrayIntersectExceptFunction : public exec::VectorFunction {
   ///
   /// Constant optimization:
   ///
-  /// If any of the values passed to array_intersect() or rhs for array_except()
+  /// If the rhs values passed to either array_intersect() or array_except()
   /// are constant (array literals) we create a set before instantiating the
   /// object and pass as a constructor parameter (constantSet).
 
   ArrayIntersectExceptFunction() = default;
 
-  explicit ArrayIntersectExceptFunction(
-      SetWithNull<T> constantSet,
-      bool isLeftConstant)
-      : constantSet_(std::move(constantSet)), isLeftConstant_(isLeftConstant) {}
+  explicit ArrayIntersectExceptFunction(SetWithNull<T> constantSet)
+      : constantSet_(std::move(constantSet)) {}
 
   void apply(
       const SelectivityVector& rows,
       std::vector<VectorPtr>& args,
-      const TypePtr& /* outputType */,
+      const TypePtr& outputType,
       exec::EvalCtx& context,
       VectorPtr& result) const override {
     memory::MemoryPool* pool = context.pool();
     BaseVector* left = args[0].get();
     BaseVector* right = args[1].get();
-
-    // For array_intersect, if there's a constant input, then require it is on
-    // the right side. For array_except, the constant optimization only applies
-    // if the constant is on the rhs, so this swap is not applicable.
-    if constexpr (isIntersect) {
-      if (constantSet_.has_value() && isLeftConstant_) {
-        std::swap(left, right);
-      }
-    }
 
     exec::LocalDecodedVector leftHolder(context, *left, rows);
     auto decodedLeftArray = leftHolder.get();
@@ -249,13 +238,12 @@ class ArrayIntersectExceptFunction : public exec::VectorFunction {
         newElementNulls, newIndices, indicesCursor, baseLeftArray->elements());
     auto resultArray = std::make_shared<ArrayVector>(
         pool,
-        ARRAY(CppToType<T>::create()),
-        BufferPtr(nullptr),
+        outputType,
+        nullptr,
         rowCount,
         newOffsets,
         newLengths,
-        newElements,
-        0);
+        newElements);
     context.moveOrCopyResult(resultArray, rows, result);
   }
 
@@ -263,9 +251,6 @@ class ArrayIntersectExceptFunction : public exec::VectorFunction {
   // set generated from its elements, which is calculated only once, before
   // instantiating this object.
   std::optional<SetWithNull<T>> constantSet_;
-
-  // If there's a `constantSet`, whether it refers to left or right-hand side.
-  const bool isLeftConstant_{false};
 }; // class ArrayIntersectExcept
 
 template <typename T>
@@ -409,27 +394,25 @@ SetWithNull<T> validateConstantVectorAndGenerateSet(
 template <bool isIntersect, TypeKind kind>
 std::shared_ptr<exec::VectorFunction> createTypedArraysIntersectExcept(
     const std::vector<exec::VectorFunctionArg>& inputArgs) {
-  VELOX_CHECK_EQ(inputArgs.size(), 2);
-  BaseVector* left = inputArgs[0].constantValue.get();
-  BaseVector* right = inputArgs[1].constantValue.get();
   using T = typename TypeTraits<kind>::NativeType;
-  // No constant values.
-  if ((left == nullptr) && (right == nullptr)) {
+
+  VELOX_CHECK_EQ(inputArgs.size(), 2);
+  BaseVector* rhs = inputArgs[1].constantValue.get();
+
+  // We don't optimize the case where lhs is a constant expression for
+  // array_intersect() because that would make this function non-deterministic.
+  // For example, a constant lhs would mean the constantSet is created based on
+  // lhs; the same data encoded as a regular column could result in the set
+  // being created based on rhs. Running this function with different sets could
+  // results in arrays in different orders.
+  //
+  // If rhs is a constant value:
+  if (rhs != nullptr) {
+    return std::make_shared<ArrayIntersectExceptFunction<isIntersect, T>>(
+        validateConstantVectorAndGenerateSet<T>(rhs));
+  } else {
     return std::make_shared<ArrayIntersectExceptFunction<isIntersect, T>>();
   }
-
-  // Constant optimization is not supported for constant lhs for array_except
-  const bool isLeftConstant = (left != nullptr);
-  if (isLeftConstant) {
-    if constexpr (!isIntersect) {
-      return std::make_shared<ArrayIntersectExceptFunction<isIntersect, T>>();
-    }
-  }
-  BaseVector* constantVector = isLeftConstant ? left : right;
-  SetWithNull<T> constantSet =
-      validateConstantVectorAndGenerateSet<T>(constantVector);
-  return std::make_shared<ArrayIntersectExceptFunction<isIntersect, T>>(
-      std::move(constantSet), isLeftConstant);
 }
 
 std::shared_ptr<exec::VectorFunction> createArrayIntersect(

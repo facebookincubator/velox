@@ -16,11 +16,13 @@
 
 #include "velox/common/base/tests/GTestUtils.h"
 #include "velox/exec/AggregationHook.h"
+#include "velox/exec/tests/utils/AssertQueryBuilder.h"
 #include "velox/exec/tests/utils/PlanBuilder.h"
-#include "velox/functions/prestosql/aggregates/tests/AggregationTestBase.h"
+#include "velox/functions/lib/aggregates/tests/AggregationTestBase.h"
 
 using facebook::velox::exec::test::PlanBuilder;
 using namespace facebook::velox::exec::test;
+using namespace facebook::velox::functions::aggregate::test;
 
 namespace facebook::velox::aggregate::test {
 
@@ -57,12 +59,6 @@ void verifyAggregates(
       } else if constexpr (std::is_same_v<ResultType, double>) {
         ASSERT_FLOAT_EQ(
             result.template value<TypeKind::DOUBLE>(), expectedResult);
-      } else if constexpr (std::is_same_v<ResultType, UnscaledShortDecimal>) {
-        auto output = result.template value<TypeKind::SHORT_DECIMAL>();
-        ASSERT_EQ(output.value(), expectedResult);
-      } else if constexpr (std::is_same_v<ResultType, UnscaledLongDecimal>) {
-        auto output = result.template value<TypeKind::LONG_DECIMAL>();
-        ASSERT_EQ(output.value(), expectedResult);
       } else {
         ASSERT_EQ(result, expectedResult);
       }
@@ -223,7 +219,7 @@ TEST_F(SumTest, sumFloat) {
       "SELECT sum(c0) FROM tmp");
 }
 
-TEST_F(SumTest, sumDoubleAndFloatg) {
+TEST_F(SumTest, sumDoubleAndFloat) {
   for (int iter = 0; iter < 3; ++iter) {
     SCOPED_TRACE(fmt::format("test iterations: {}", iter));
     auto rowType = ROW({"c0", "c1", "c2"}, {REAL(), DOUBLE(), INTEGER()});
@@ -248,20 +244,131 @@ TEST_F(SumTest, sumDoubleAndFloatg) {
 }
 
 TEST_F(SumTest, sumDecimal) {
+  std::vector<std::optional<int64_t>> shortDecimalRawVector;
+  std::vector<std::optional<int128_t>> longDecimalRawVector;
+  for (int i = 0; i < 1000; ++i) {
+    shortDecimalRawVector.push_back(i * 1000);
+    longDecimalRawVector.push_back(HugeInt::build(i * 10, i * 100));
+  }
+  shortDecimalRawVector.push_back(std::nullopt);
+  longDecimalRawVector.push_back(std::nullopt);
   auto input = makeRowVector(
       {makeNullableShortDecimalFlatVector(
-           {1'000, 2'000, 3'000, 4'000, 5'000, std::nullopt}, DECIMAL(10, 1)),
+           shortDecimalRawVector, DECIMAL(10, 1)),
        makeNullableLongDecimalFlatVector(
-           {buildInt128(10, 100),
-            buildInt128(10, 200),
-            buildInt128(10, 300),
-            buildInt128(10, 400),
-            buildInt128(10, 500),
-            std::nullopt},
-           DECIMAL(23, 4))});
+           longDecimalRawVector, DECIMAL(23, 4))});
   createDuckDbTable({input});
   testAggregations(
       {input}, {}, {"sum(c0)", "sum(c1)"}, "SELECT sum(c0), sum(c1) FROM tmp");
+
+  // Decimal sum aggregation with multiple groups.
+  auto inputRows = {
+      makeRowVector(
+          {makeNullableFlatVector<int32_t>({1, 1}),
+           makeShortDecimalFlatVector({37220, 53450}, DECIMAL(5, 2))}),
+      makeRowVector(
+          {makeNullableFlatVector<int32_t>({2, 2}),
+           makeShortDecimalFlatVector({10410, 9250}, DECIMAL(5, 2))}),
+      makeRowVector(
+          {makeNullableFlatVector<int32_t>({3, 3}),
+           makeShortDecimalFlatVector({-12783, 0}, DECIMAL(5, 2))}),
+      makeRowVector(
+          {makeNullableFlatVector<int32_t>({1, 2}),
+           makeShortDecimalFlatVector({23178, 41093}, DECIMAL(5, 2))}),
+      makeRowVector(
+          {makeNullableFlatVector<int32_t>({2, 3}),
+           makeShortDecimalFlatVector({-10023, 5290}, DECIMAL(5, 2))}),
+  };
+
+  auto expectedResult = {
+      makeRowVector(
+          {makeNullableFlatVector<int32_t>({1}),
+           makeLongDecimalFlatVector({113848}, DECIMAL(38, 2))}),
+      makeRowVector(
+          {makeNullableFlatVector<int32_t>({2}),
+           makeLongDecimalFlatVector({50730}, DECIMAL(38, 2))}),
+      makeRowVector(
+          {makeNullableFlatVector<int32_t>({3}),
+           makeLongDecimalFlatVector({-7493}, DECIMAL(38, 2))})};
+
+  testAggregations(inputRows, {"c0"}, {"sum(c1)"}, expectedResult);
+}
+
+TEST_F(SumTest, sumDecimalOverflow) {
+  // Short decimals do not overflow easily.
+  std::vector<int64_t> shortDecimalInput;
+  for (int i = 0; i < 10'000; ++i) {
+    shortDecimalInput.push_back(DecimalUtil::kShortDecimalMax);
+  }
+  auto input = makeRowVector(
+      {makeShortDecimalFlatVector(shortDecimalInput, DECIMAL(17, 5))});
+  createDuckDbTable({input});
+  testAggregations({input}, {}, {"sum(c0)"}, "SELECT sum(c0) FROM tmp");
+
+  auto decimalSumOverflow = [this](
+                                const std::vector<int128_t>& input,
+                                const std::vector<int128_t>& output) {
+    const TypePtr type = DECIMAL(38, 0);
+    auto in = makeRowVector({makeLongDecimalFlatVector({input}, type)});
+    auto expected = makeRowVector({makeLongDecimalFlatVector({output}, type)});
+    PlanBuilder builder(pool());
+    builder.values({in});
+    builder.singleAggregation({}, {"sum(c0)"});
+    AssertQueryBuilder queryBuilder(
+        builder.planNode(), this->duckDbQueryRunner_);
+    queryBuilder.assertResults({expected});
+  };
+
+  // Test Positive Overflow.
+  std::vector<int128_t> longDecimalInput;
+  std::vector<int128_t> longDecimalOutput;
+  // Create input with 2 UnscaledLongDecimal::max().
+  longDecimalInput.push_back(DecimalUtil::kLongDecimalMax);
+  longDecimalInput.push_back(DecimalUtil::kLongDecimalMax);
+  // The sum must overflow.
+  VELOX_ASSERT_THROW(
+      decimalSumOverflow(longDecimalInput, longDecimalOutput),
+      "Decimal overflow");
+
+  // Now add UnscaledLongDecimal::min().
+  // The sum now must not overflow.
+  longDecimalInput.push_back(DecimalUtil::kLongDecimalMin);
+  longDecimalOutput.push_back(DecimalUtil::kLongDecimalMax);
+  decimalSumOverflow(longDecimalInput, longDecimalOutput);
+
+  // Test Negative Overflow.
+  longDecimalInput.clear();
+  longDecimalOutput.clear();
+
+  // Create input with 2 UnscaledLongDecimal::min().
+  longDecimalInput.push_back(DecimalUtil::kLongDecimalMin);
+  longDecimalInput.push_back(DecimalUtil::kLongDecimalMin);
+
+  // The sum must overflow.
+  VELOX_ASSERT_THROW(
+      decimalSumOverflow(longDecimalInput, longDecimalOutput),
+      "Decimal overflow");
+
+  // Now add UnscaledLongDecimal::max().
+  // The sum now must not overflow.
+  longDecimalInput.push_back(DecimalUtil::kLongDecimalMax);
+  longDecimalOutput.push_back(DecimalUtil::kLongDecimalMin);
+  decimalSumOverflow(longDecimalInput, longDecimalOutput);
+
+  // Check value in range.
+  longDecimalInput.clear();
+  longDecimalInput.push_back(DecimalUtil::kLongDecimalMax);
+  longDecimalInput.push_back(1);
+  VELOX_ASSERT_THROW(
+      decimalSumOverflow(longDecimalInput, longDecimalOutput),
+      "Value '100000000000000000000000000000000000000' is not in the range of Decimal Type");
+
+  longDecimalInput.clear();
+  longDecimalInput.push_back(DecimalUtil::kLongDecimalMin);
+  longDecimalInput.push_back(-1);
+  VELOX_ASSERT_THROW(
+      decimalSumOverflow(longDecimalInput, longDecimalOutput),
+      "Value '-100000000000000000000000000000000000000' is not in the range of Decimal Type");
 }
 
 TEST_F(SumTest, sumWithMask) {
@@ -493,13 +600,5 @@ TEST_F(SumTest, floatAggregateOverflow) {
   testAggregateOverflow<double, double>();
 }
 
-TEST_F(SumTest, DISABLED_decimalAggregateOverflow) {
-  testAggregateOverflow<
-      UnscaledShortDecimal,
-      UnscaledLongDecimal,
-      UnscaledLongDecimal>(false, DECIMAL(10, 5));
-  testAggregateOverflow<UnscaledLongDecimal, UnscaledLongDecimal>(
-      true, DECIMAL(20, 5));
-}
 } // namespace
 } // namespace facebook::velox::aggregate::test

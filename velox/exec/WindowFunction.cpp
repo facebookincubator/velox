@@ -41,7 +41,7 @@ bool registerWindowFunction(
     const std::string& name,
     std::vector<FunctionSignaturePtr> signatures,
     WindowFunctionFactory factory) {
-  auto sanitizedName = sanitizeFunctionName(name);
+  auto sanitizedName = sanitizeName(name);
   windowFunctions()[sanitizedName] = {
       std::move(signatures), std::move(factory)};
   return true;
@@ -49,7 +49,7 @@ bool registerWindowFunction(
 
 std::optional<std::vector<FunctionSignaturePtr>> getWindowFunctionSignatures(
     const std::string& name) {
-  auto sanitizedName = sanitizeFunctionName(name);
+  auto sanitizedName = sanitizeName(name);
   if (auto func = getWindowFunctionEntry(sanitizedName)) {
     return func.value()->signatures;
   }
@@ -68,6 +68,20 @@ std::unique_ptr<WindowFunction> WindowFunction::create(
   }
 
   VELOX_USER_FAIL("Window function not registered: {}", name);
+}
+
+void WindowFunction::setNullEmptyFramesResults(
+    const SelectivityVector& validRows,
+    vector_size_t resultOffset,
+    const VectorPtr& result) {
+  if (validRows.isAllSelected()) {
+    return;
+  }
+
+  invalidRows_.resizeFill(validRows.size(), true);
+  invalidRows_.deselect(validRows);
+  invalidRows_.applyToSelected(
+      [&](auto i) { result->setNull(resultOffset + i, true); });
 }
 
 } // namespace facebook::velox::exec

@@ -26,7 +26,7 @@ struct ByteRange {
   // Start of buffer. Not owned.
   uint8_t* buffer;
 
-  // Number of bytes or bits  starting at 'buffer'.
+  // Number of bytes or bits starting at 'buffer'.
   int32_t size;
 
   // Index of next byte/bit to be read/written in 'buffer'.
@@ -112,6 +112,7 @@ class ByteStream {
   void resetInput(std::vector<ByteRange>&& ranges) {
     ranges_ = std::move(ranges);
     current_ = &ranges_[0];
+    lastRangeEnd_ = ranges_.back().size;
   }
 
   void setRange(ByteRange range) {
@@ -176,10 +177,10 @@ class ByteStream {
   virtual void next(bool throwIfPastEnd = true) {
     VELOX_CHECK(current_ >= &ranges_[0]);
     size_t position = current_ - &ranges_[0];
-    VELOX_CHECK(position < ranges_.size());
+    VELOX_CHECK_LT(position, ranges_.size());
     if (position == ranges_.size() - 1) {
       if (throwIfPastEnd) {
-        throw std::runtime_error("Reading past end of ByteStream");
+        VELOX_FAIL("Reading past end of ByteStream");
       }
       return;
     }
@@ -328,7 +329,8 @@ class ByteStream {
       if (offset == bytes) {
         return;
       }
-      extend(bits::roundUp(bytes - offset, memory::MappedMemory::kPageSize));
+      extend(
+          bits::roundUp(bytes - offset, memory::AllocationTraits::kPageSize));
     }
   }
 
@@ -350,7 +352,7 @@ class ByteStream {
   }
 
  private:
-  void extend(int32_t bytes = memory::MappedMemory::kPageSize);
+  void extend(int32_t bytes = memory::AllocationTraits::kPageSize);
 
   void updateEnd() {
     if (!ranges_.empty() && current_ == &ranges_.back() &&
@@ -385,8 +387,8 @@ inline Timestamp ByteStream::read<Timestamp>() {
 }
 
 template <>
-inline UnscaledLongDecimal ByteStream::read<UnscaledLongDecimal>() {
-  UnscaledLongDecimal value;
+inline int128_t ByteStream::read<int128_t>() {
+  int128_t value;
   readBytes(reinterpret_cast<uint8_t*>(&value), sizeof(value));
   return value;
 }
@@ -401,11 +403,11 @@ inline Date ByteStream::read<Date>() {
 class IOBufOutputStream : public OutputStream {
  public:
   explicit IOBufOutputStream(
-      memory::MappedMemory& mappedMemory,
+      memory::MemoryPool& pool,
       OutputStreamListener* listener = nullptr,
-      int32_t initialSize = memory::MappedMemory::kPageSize)
+      int32_t initialSize = memory::AllocationTraits::kPageSize)
       : OutputStream(listener),
-        arena_(std::make_shared<StreamArena>(&mappedMemory)),
+        arena_(std::make_shared<StreamArena>(&pool)),
         out_(std::make_unique<ByteStream>(arena_.get())) {
     out_->startWrite(initialSize);
   }
@@ -421,7 +423,9 @@ class IOBufOutputStream : public OutputStream {
 
   void seekp(std::streampos pos) override;
 
-  std::unique_ptr<folly::IOBuf> getIOBuf();
+  /// 'releaseFn' is executed on iobuf destruction if not null.
+  std::unique_ptr<folly::IOBuf> getIOBuf(
+      const std::function<void()>& releaseFn = nullptr);
 
  private:
   std::shared_ptr<StreamArena> arena_;

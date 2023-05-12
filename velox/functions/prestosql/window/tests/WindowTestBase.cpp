@@ -15,6 +15,9 @@
  */
 #include "velox/functions/prestosql/window/tests/WindowTestBase.h"
 
+#include <boost/random/mersenne_twister.hpp>
+#include <boost/random/uniform_int_distribution.hpp>
+
 #include "velox/common/base/tests/GTestUtils.h"
 #include "velox/exec/tests/utils/OperatorTestBase.h"
 #include "velox/exec/tests/utils/PlanBuilder.h"
@@ -35,12 +38,9 @@ QueryInfo buildWindowQuery(
     const std::vector<RowVectorPtr>& input,
     const std::string& function,
     const std::string& overClause,
-    const std::optional<std::string> frameClause) {
-  auto functionSql = frameClause
-      ? fmt::format(
-            "{} over ({} {})", function, overClause, frameClause.value())
-      : fmt::format("{} over ({})", function, overClause);
-
+    const std::string& frameClause) {
+  std::string functionSql =
+      fmt::format("{} over ({} {})", function, overClause, frameClause);
   auto op = PlanBuilder().values(input).window({functionSql}).planNode();
 
   auto rowType = asRowType(input[0]->type());
@@ -50,6 +50,7 @@ QueryInfo buildWindowQuery(
 
   return {op, functionSql, querySql};
 }
+
 }; // namespace
 
 RowVectorPtr WindowTestBase::makeSimpleVector(vector_size_t size) {
@@ -57,6 +58,8 @@ RowVectorPtr WindowTestBase::makeSimpleVector(vector_size_t size) {
       makeFlatVector<int32_t>(size, [](auto row) { return row % 5; }),
       makeFlatVector<int32_t>(
           size, [](auto row) { return row % 7; }, nullEvery(15)),
+      makeFlatVector<int64_t>(size, [](auto row) { return row % 11 + 1; }),
+      makeFlatVector<int64_t>(size, [](auto row) { return row % 13 + 1; }),
   });
 }
 
@@ -65,6 +68,8 @@ RowVectorPtr WindowTestBase::makeSinglePartitionVector(vector_size_t size) {
       makeFlatVector<int32_t>(size, [](auto /* row */) { return 1; }),
       makeFlatVector<int32_t>(
           size, [](auto row) { return row; }, nullEvery(7)),
+      makeFlatVector<int64_t>(size, [](auto row) { return row % 11 + 1; }),
+      makeFlatVector<int64_t>(size, [](auto row) { return row % 13 + 1; }),
   });
 }
 
@@ -72,35 +77,35 @@ RowVectorPtr WindowTestBase::makeSingleRowPartitionsVector(vector_size_t size) {
   return makeRowVector({
       makeFlatVector<int32_t>(size, [](auto row) { return row; }),
       makeFlatVector<int32_t>(size, [](auto row) { return row; }),
+      makeFlatVector<int64_t>(size, [](auto row) { return row % 11 + 1; }),
+      makeFlatVector<int64_t>(size, [](auto row) { return row % 13 + 1; }),
   });
 }
 
-std::vector<RowVectorPtr> WindowTestBase::makeFuzzVectors(
-    const RowTypePtr& rowType,
+VectorPtr WindowTestBase::makeRandomInputVector(
+    const TypePtr& type,
     vector_size_t size,
-    int numVectors,
     float nullRatio) {
-  std::vector<RowVectorPtr> vectors;
   VectorFuzzer::Options options;
   options.vectorSize = size;
   options.nullRatio = nullRatio;
-  options.useMicrosecondPrecisionTimestamp = true;
+  options.timestampPrecision =
+      VectorFuzzer::Options::TimestampPrecision::kMicroSeconds;
   VectorFuzzer fuzzer(options, pool_.get(), 0);
-  for (int32_t i = 0; i < numVectors; ++i) {
-    auto vector = std::dynamic_pointer_cast<RowVector>(fuzzer.fuzzRow(rowType));
-    vectors.push_back(vector);
-  }
-  return vectors;
+  return fuzzer.fuzzFlat(type);
 }
 
-void WindowTestBase::testWindowFunction(
-    const std::vector<RowVectorPtr>& input,
-    const std::string& function,
-    const std::string& overClause,
-    const std::string& frameClause) {
-  auto queryInfo = buildWindowQuery(input, function, overClause, frameClause);
-  SCOPED_TRACE(queryInfo.functionSql);
-  assertQuery(queryInfo.planNode, queryInfo.querySql);
+RowVectorPtr WindowTestBase::makeRandomInputVector(vector_size_t size) {
+  boost::random::mt19937 gen;
+  // Frame index values require integer values > 0.
+  auto genRandomFrameValue = [&](vector_size_t /*row*/) {
+    return boost::random::uniform_int_distribution<int>(1)(gen);
+  };
+  return makeRowVector(
+      {makeRandomInputVector(BIGINT(), size, 0.2),
+       makeRandomInputVector(VARCHAR(), size, 0.3),
+       makeFlatVector<int64_t>(size, genRandomFrameValue),
+       makeFlatVector<int64_t>(size, genRandomFrameValue)});
 }
 
 void WindowTestBase::testWindowFunction(
@@ -110,8 +115,11 @@ void WindowTestBase::testWindowFunction(
     const std::vector<std::string>& frameClauses) {
   createDuckDbTable(input);
   for (const auto& overClause : overClauses) {
-    for (const auto& frameClause : frameClauses) {
-      testWindowFunction(input, function, overClause, frameClause);
+    for (auto& frameClause : frameClauses) {
+      auto queryInfo =
+          buildWindowQuery(input, function, overClause, frameClause);
+      SCOPED_TRACE(queryInfo.functionSql);
+      assertQuery(queryInfo.planNode, queryInfo.querySql);
     }
   }
 }
@@ -121,7 +129,16 @@ void WindowTestBase::assertWindowFunctionError(
     const std::string& function,
     const std::string& overClause,
     const std::string& errorMessage) {
-  auto queryInfo = buildWindowQuery(input, function, overClause, std::nullopt);
+  assertWindowFunctionError(input, function, overClause, "", errorMessage);
+}
+
+void WindowTestBase::assertWindowFunctionError(
+    const std::vector<RowVectorPtr>& input,
+    const std::string& function,
+    const std::string& overClause,
+    const std::string& frameClause,
+    const std::string& errorMessage) {
+  auto queryInfo = buildWindowQuery(input, function, overClause, frameClause);
   SCOPED_TRACE(queryInfo.functionSql);
 
   VELOX_ASSERT_THROW(

@@ -25,7 +25,7 @@ template <typename T>
 SequenceVector<T>::SequenceVector(
     velox::memory::MemoryPool* pool,
     size_t length,
-    std::shared_ptr<BaseVector> sequenceValues,
+    VectorPtr sequenceValues,
     BufferPtr sequenceLengths,
     const SimpleVectorStats<T>& stats,
     std::optional<int32_t> distinctCount,
@@ -99,6 +99,7 @@ std::unique_ptr<SimpleVector<uint64_t>> SequenceVector<T>::hashAll() const {
   }
   auto hashValues = std::make_shared<FlatVector<uint64_t>>(
       BaseVector::pool_,
+      BIGINT(),
       BufferPtr(nullptr),
       sequenceCount,
       hashes,

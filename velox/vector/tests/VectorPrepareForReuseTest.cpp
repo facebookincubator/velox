@@ -14,6 +14,7 @@
  * limitations under the License.
  */
 #include <gtest/gtest.h>
+#include "velox/vector/tests/VectorTestUtils.h"
 #include "velox/vector/tests/utils/VectorTestBase.h"
 
 using namespace facebook::velox;
@@ -21,36 +22,33 @@ using namespace facebook::velox;
 class VectorPrepareForReuseTest : public testing::Test,
                                   public test::VectorTestBase {
  protected:
-  VectorPrepareForReuseTest() {
-    pool()->setMemoryUsageTracker(memory::MemoryUsageTracker::create());
-  }
+  VectorPrepareForReuseTest() = default;
 };
 
 class MemoryAllocationChecker {
  public:
   explicit MemoryAllocationChecker(memory::MemoryPool* pool)
-      : tracker_{pool->getMemoryUsageTracker().get()},
-        numAllocations_{tracker_->getNumAllocs()} {}
+      : pool_{pool}, numAllocations_{pool_->stats().numAllocs} {}
 
   bool assertOne() {
-    bool ok = numAllocations_ + 1 == tracker_->getNumAllocs();
-    numAllocations_ = tracker_->getNumAllocs();
+    bool ok = numAllocations_ + 1 == pool_->stats().numAllocs;
+    numAllocations_ = pool_->stats().numAllocs;
     return ok;
   }
 
   bool assertAtLeastOne() {
-    bool ok = numAllocations_ < tracker_->getNumAllocs();
-    numAllocations_ = tracker_->getNumAllocs();
+    bool ok = numAllocations_ < pool_->stats().numAllocs;
+    numAllocations_ = pool_->stats().numAllocs;
     return ok;
   }
 
   ~MemoryAllocationChecker() {
-    EXPECT_EQ(numAllocations_, tracker_->getNumAllocs());
+    EXPECT_EQ(numAllocations_, pool_->stats().numAllocs);
   }
 
  private:
-  memory::MemoryUsageTracker* tracker_;
-  int64_t numAllocations_;
+  memory::MemoryPool* const pool_;
+  uint64_t numAllocations_;
 };
 
 TEST_F(VectorPrepareForReuseTest, strings) {
@@ -224,4 +222,65 @@ TEST_F(VectorPrepareForReuseTest, arrays) {
 
   vector->copy(otherVector.get(), 0, 0, 1'000);
   ASSERT_EQ(originalSize, vector->retainedSize());
+}
+
+TEST_F(VectorPrepareForReuseTest, dataDependentFlags) {
+  auto size = 10;
+
+  auto prepareForReuseStatic = [](VectorPtr& vector) {
+    BaseVector::prepareForReuse(vector, vector->size());
+  };
+  auto prepareForReuseInstance = [](VectorPtr& vector) {
+    vector->prepareForReuse();
+  };
+
+  // Primitive flat vector.
+  {
+    SCOPED_TRACE("Flat");
+    auto createVector = [&]() {
+      return test::makeFlatVectorWithFlags<TypeKind::VARCHAR>(size, pool());
+    };
+
+    test::checkVectorFlagsReset(
+        createVector, prepareForReuseInstance, SelectivityVector{size});
+    test::checkVectorFlagsReset(
+        createVector, prepareForReuseStatic, SelectivityVector{size});
+  }
+
+  // Constant vector.
+  {
+    SCOPED_TRACE("Constant");
+    auto createVector = [&]() {
+      return test::makeConstantVectorWithFlags<TypeKind::VARCHAR>(size, pool());
+    };
+
+    test::checkVectorFlagsReset(
+        createVector, prepareForReuseStatic, SelectivityVector{size});
+  }
+
+  // Dictionary vector.
+  {
+    SCOPED_TRACE("Dictionary");
+    auto createVector = [&]() {
+      return test::makeDictionaryVectorWithFlags<TypeKind::VARCHAR>(
+          size, pool());
+    };
+
+    test::checkVectorFlagsReset(
+        createVector, prepareForReuseStatic, SelectivityVector{size});
+  }
+
+  // Map vector.
+  {
+    SCOPED_TRACE("Map");
+    auto createVector = [&]() {
+      return test::makeMapVectorWithFlags<TypeKind::VARCHAR, TypeKind::VARCHAR>(
+          size, pool());
+    };
+
+    test::checkVectorFlagsReset(
+        createVector, prepareForReuseInstance, SelectivityVector{size});
+    test::checkVectorFlagsReset(
+        createVector, prepareForReuseStatic, SelectivityVector{size});
+  }
 }

@@ -19,8 +19,8 @@ add_test(velox_functions_json_test velox_functions_json_test)
 target_link_libraries(
   velox_functions_json_test
   velox_functions_json
-  ${FOLLY_WITH_DEPENDENCIES}
+  Folly::folly
   gtest
   gtest_main
-  ${gflags_LIBRARIES}
+  gflags::gflags
   glog::glog)

@@ -25,6 +25,7 @@ of plan nodes can be located at the leaves of the plan tree. These are:
 * ValuesNode
 * ExchangeNode
 * MergeExchangeNode
+* ArrowStreamNode
 
 Here is a list of supported plan nodes and corresponding operators.
 
@@ -32,6 +33,7 @@ Here is a list of supported plan nodes and corresponding operators.
 Plan Node                   Operator(s)                                      Leaf Node / Source Operator
 ==========================  ==============================================   ===========================
 TableScanNode               TableScan                                        Y
+ArrowStreamNode             ArrowStream                                      Y
 FilterNode                  FilterProject
 ProjectNode                 FilterProject
 AggregationNode             HashAggregation or StreamingAggregation
@@ -77,6 +79,24 @@ with HiveConnector, table scan reads data from ORC or Parquet files.
      - Connector-specific description of the table. May include a pushed down filter.
    * - assignments
      - Connector-specific mapping from the table schema to output columns.
+
+.. _ArrowStream operator:
+
+ArrowStreamNode
+~~~~~~~~~~~~~~~
+
+The Arrow stream operation reads data from an Arrow array stream. The ArrowArrayStream structure is defined in Arrow abi, 
+and provides the required callbacks to interact with a streaming source of Arrow arrays.
+
+.. list-table::
+   :widths: 10 30
+   :align: left
+   :header-rows: 1
+
+   * - Property
+     - Description
+   * - arrowStream
+     - The constructed Arrow array stream. This is a streaming source of data chunks, each with the same schema.
 
 FilterNode
 ~~~~~~~~~~
@@ -148,6 +168,9 @@ GroupIdNode
 Duplicates the input for each of the specified grouping key sets. Used to
 implement aggregations over grouping sets.
 
+The output consists of grouping keys, followed by aggregation inputs,
+followed by the group ID column. The type of group ID column is BIGINT.
+
 .. list-table::
    :widths: 10 30
    :align: left
@@ -157,8 +180,8 @@ implement aggregations over grouping sets.
      - Description
    * - groupingSets
      - List of grouping key sets. Keys within each set must be unique, but keys can repeat across the sets.
-   * - outputGroupingKeyNames
-     - Output names for the grouping key columns.
+   * - groupingKeyInfos
+     - The names and order of the grouping key columns in the output.
    * - aggregationInputs
      - Input columns to duplicate.
    * - groupIdName
@@ -188,7 +211,9 @@ and emitting results.
    * - Property
      - Description
    * - joinType
-     - Join type: inner, left, right, full, left semi, anti. You can read about different join types in this `blog post <https://dataschool.com/how-to-teach-people-sql/sql-join-types-explained-visually/>`_.
+     - Join type: inner, left, right, full, left semi filter, left semi project, right semi filter, right semi project, anti. You can read about different join types in this `blog post <https://dataschool.com/how-to-teach-people-sql/sql-join-types-explained-visually/>`_.
+   * - nullAware
+     - Applies to anti and semi project joins only. Indicates whether the join semantic is IN (nullAware = true) or EXISTS (nullAware = false).
    * - leftKeys
      - Columns from the left hand side input that are part of the equality condition. At least one must be specified.
    * - rightKeys
@@ -371,6 +396,10 @@ The values operation returns specified data.
      - Description
    * - values
      - Set of rows to return.
+   * - parallelizable
+     - If the same input should be produced by each thread (one per driver).
+   * - repeatTimes
+     - How many times each vector should be produced as input.
 
 ExchangeNode
 ~~~~~~~~~~~~

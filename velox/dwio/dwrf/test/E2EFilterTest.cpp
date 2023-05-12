@@ -14,6 +14,7 @@
  * limitations under the License.
  */
 
+#include "velox/common/base/Portability.h"
 #include "velox/dwio/common/tests/E2EFilterTestBase.h"
 #include "velox/dwio/dwrf/reader/DwrfReader.h"
 #include "velox/dwio/dwrf/writer/FlushPolicy.h"
@@ -52,7 +53,7 @@ class E2EFilterTest : public E2EFilterTestBase {
           };
         }
 
-        testSenario(
+        testScenario(
             columns, newCustomize, wrapInStruct, filterable, numCombinations);
       }
     }
@@ -72,9 +73,9 @@ class E2EFilterTest : public E2EFilterTestBase {
                                : (++flushCounter % flushEveryNBatches_ == 0);
       });
     };
-    auto sink = std::make_unique<MemorySink>(*pool_, 200 * 1024 * 1024);
+    auto sink = std::make_unique<MemorySink>(*leafPool_, 200 * 1024 * 1024);
     sinkPtr_ = sink.get();
-    writer_ = std::make_unique<Writer>(options, std::move(sink), *pool_);
+    writer_ = std::make_unique<Writer>(options, std::move(sink), *rootPool_);
     for (auto& batch : batches) {
       writer_->write(batch);
     }
@@ -92,7 +93,7 @@ class E2EFilterTest : public E2EFilterTestBase {
 
   std::unique_ptr<dwio::common::Reader> makeReader(
       const dwio::common::ReaderOptions& opts,
-      std::unique_ptr<dwio::common::InputStream> input) override {
+      std::unique_ptr<dwio::common::BufferedInput> input) override {
     return std::make_unique<DwrfReader>(opts, std::move(input));
   }
 
@@ -134,11 +135,11 @@ class E2EFilterTest : public E2EFilterTestBase {
         }
         flatmapNodeIdsAsStruct_[child->id] = mapFlatColsStructKeys[i];
       }
-      config->set(Config::FLATTEN_MAP, true);
+      config->set(dwrf::Config::FLATTEN_MAP, true);
       config->set<const std::vector<uint32_t>>(
-          Config::MAP_FLAT_COLS, mapFlatCols);
+          dwrf::Config::MAP_FLAT_COLS, mapFlatCols);
       config->set<const std::vector<std::vector<std::string>>>(
-          Config::MAP_FLAT_COLS_STRUCT_KEYS, mapFlatColsStructKeys);
+          dwrf::Config::MAP_FLAT_COLS_STRUCT_KEYS, mapFlatColsStructKeys);
     }
     WriterOptions options;
     options.config = config;
@@ -278,6 +279,12 @@ TEST_F(E2EFilterTest, timestamp) {
 }
 
 TEST_F(E2EFilterTest, listAndMap) {
+  int numCombinations = 10;
+#if !defined(NDEBUG) || defined(TSAN_BUILD)
+  // The test is running slow under dev/debug and TSAN build; reduce the number
+  // of combinations to avoid timeout.
+  numCombinations = 2;
+#endif
   testWithTypes(
       "long_val:bigint,"
       "long_val_2:bigint,"
@@ -286,13 +293,13 @@ TEST_F(E2EFilterTest, listAndMap) {
       "map_val:map<bigint,struct<nested_map: map<int, int>>>",
       [&]() {},
       true,
-      {"long_val", "long_val_2", "int_val"},
-      10);
+      {"long_val", "long_val_2", "int_val", "array_val", "map_val"},
+      numCombinations);
 }
 
 TEST_F(E2EFilterTest, nullCompactRanges) {
   // Makes a dataset with nulls at the beginning. Tries different
-  // filter ombinations on progressively larger batches. tests for a
+  // filter combinations on progressively larger batches. tests for a
   // bug in null compaction where null bits past end of nulls buffer
   // were compacted while there actually were no nulls.
 
@@ -326,6 +333,13 @@ TEST_F(E2EFilterTest, lazyStruct) {
 }
 
 TEST_F(E2EFilterTest, filterStruct) {
+#ifdef TSAN_BUILD
+  // The test is running slow under TSAN; reduce the number of combinations to
+  // avoid timeout.
+  constexpr int kNumCombinations = 10;
+#else
+  constexpr int kNumCombinations = 40;
+#endif
   // The data has a struct member with one second level struct
   // column. Both structs have a column that gets filtered 'nestedxxx'
   // and one that does not 'dataxxx'.
@@ -340,7 +354,7 @@ TEST_F(E2EFilterTest, filterStruct) {
        "outer_struct.inner_struct",
        "outer_struct.nested1",
        "outer_struct.inner_struct.nested2"},
-      40,
+      kNumCombinations,
       true,
       false);
 }
@@ -373,6 +387,18 @@ TEST_F(E2EFilterTest, flatMap) {
 #endif
   testWithTypes(
       kColumns, customize, false, {"long_val"}, numCombinations, true);
+}
+
+TEST_F(E2EFilterTest, metadataFilter) {
+  testMetadataFilter();
+}
+
+TEST_F(E2EFilterTest, subfieldsPruning) {
+  testSubfieldsPruning();
+}
+
+TEST_F(E2EFilterTest, mutationCornerCases) {
+  testMutationCornerCases();
 }
 
 // Define main so that gflags get processed.

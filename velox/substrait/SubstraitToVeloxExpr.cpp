@@ -16,6 +16,145 @@
 
 #include "velox/substrait/SubstraitToVeloxExpr.h"
 #include "velox/substrait/TypeUtils.h"
+#include "velox/vector/FlatVector.h"
+
+using namespace facebook::velox;
+namespace {
+// Get values for the different supported types.
+template <typename T>
+T getLiteralValue(const ::substrait::Expression::Literal& /* literal */) {
+  VELOX_NYI();
+}
+
+template <>
+int8_t getLiteralValue(const ::substrait::Expression::Literal& literal) {
+  return static_cast<int8_t>(literal.i8());
+}
+
+template <>
+int16_t getLiteralValue(const ::substrait::Expression::Literal& literal) {
+  return static_cast<int16_t>(literal.i16());
+}
+
+template <>
+int32_t getLiteralValue(const ::substrait::Expression::Literal& literal) {
+  return literal.i32();
+}
+
+template <>
+int64_t getLiteralValue(const ::substrait::Expression::Literal& literal) {
+  return literal.i64();
+}
+
+template <>
+double getLiteralValue(const ::substrait::Expression::Literal& literal) {
+  return literal.fp64();
+}
+
+template <>
+float getLiteralValue(const ::substrait::Expression::Literal& literal) {
+  return literal.fp32();
+}
+
+template <>
+bool getLiteralValue(const ::substrait::Expression::Literal& literal) {
+  return literal.boolean();
+}
+
+template <>
+uint32_t getLiteralValue(const ::substrait::Expression::Literal& literal) {
+  return literal.i32();
+}
+
+template <>
+Timestamp getLiteralValue(const ::substrait::Expression::Literal& literal) {
+  return Timestamp::fromMicros(literal.timestamp());
+}
+
+template <>
+Date getLiteralValue(const ::substrait::Expression::Literal& literal) {
+  return Date(literal.date());
+}
+
+ArrayVectorPtr makeArrayVector(const VectorPtr& elements) {
+  BufferPtr offsets = allocateOffsets(1, elements->pool());
+  BufferPtr sizes = allocateOffsets(1, elements->pool());
+  sizes->asMutable<vector_size_t>()[0] = elements->size();
+
+  return std::make_shared<ArrayVector>(
+      elements->pool(),
+      ARRAY(elements->type()),
+      nullptr,
+      1,
+      offsets,
+      sizes,
+      elements);
+}
+
+ArrayVectorPtr makeEmptyArrayVector(memory::MemoryPool* pool) {
+  BufferPtr offsets = allocateOffsets(1, pool);
+  BufferPtr sizes = allocateOffsets(1, pool);
+  return std::make_shared<ArrayVector>(
+      pool, ARRAY(UNKNOWN()), nullptr, 1, offsets, sizes, nullptr);
+}
+
+template <typename T>
+void setLiteralValue(
+    const ::substrait::Expression::Literal& literal,
+    FlatVector<T>* vector,
+    vector_size_t index) {
+  if (literal.has_null()) {
+    vector->setNull(index, true);
+  } else if constexpr (std::is_same_v<T, StringView>) {
+    if (literal.has_string()) {
+      vector->set(index, StringView(literal.string()));
+    } else if (literal.has_var_char()) {
+      vector->set(index, StringView(literal.var_char().value()));
+    } else {
+      VELOX_FAIL("Unexpected string literal");
+    }
+  } else {
+    vector->set(index, getLiteralValue<T>(literal));
+  }
+}
+
+template <TypeKind kind>
+VectorPtr constructFlatVector(
+    const ::substrait::Expression::Literal& listLiteral,
+    const vector_size_t size,
+    const TypePtr& type,
+    memory::MemoryPool* pool) {
+  VELOX_CHECK(type->isPrimitiveType());
+  auto vector = BaseVector::create(type, size, pool);
+  using T = typename TypeTraits<kind>::NativeType;
+  auto flatVector = vector->as<FlatVector<T>>();
+
+  vector_size_t index = 0;
+  for (auto child : listLiteral.list().values()) {
+    setLiteralValue(child, flatVector, index++);
+  }
+  return vector;
+}
+
+/// Whether null will be returned on cast failure.
+bool isNullOnFailure(
+    ::substrait::Expression::Cast::FailureBehavior failureBehavior) {
+  switch (failureBehavior) {
+    case ::substrait::
+        Expression_Cast_FailureBehavior_FAILURE_BEHAVIOR_UNSPECIFIED:
+    case ::substrait::
+        Expression_Cast_FailureBehavior_FAILURE_BEHAVIOR_THROW_EXCEPTION:
+      return false;
+    case ::substrait::
+        Expression_Cast_FailureBehavior_FAILURE_BEHAVIOR_RETURN_NULL:
+      return true;
+    default:
+      VELOX_NYI(
+          "The given failure behavior is NOT supported: '{}'", failureBehavior);
+  }
+}
+
+} // namespace
 
 namespace facebook::velox::substrait {
 
@@ -72,30 +211,30 @@ SubstraitVeloxExprConverter::toVeloxExpr(
   switch (typeCase) {
     case ::substrait::Expression_Literal::LiteralTypeCase::kBoolean:
       return std::make_shared<core::ConstantTypedExpr>(
-          variant(substraitLit.boolean()));
+          BOOLEAN(), variant(substraitLit.boolean()));
     case ::substrait::Expression_Literal::LiteralTypeCase::kI8:
       // SubstraitLit.i8() will return int32, so we need this type conversion.
       return std::make_shared<core::ConstantTypedExpr>(
-          variant(static_cast<int8_t>(substraitLit.i8())));
+          TINYINT(), variant(static_cast<int8_t>(substraitLit.i8())));
     case ::substrait::Expression_Literal::LiteralTypeCase::kI16:
       // SubstraitLit.i16() will return int32, so we need this type conversion.
       return std::make_shared<core::ConstantTypedExpr>(
-          variant(static_cast<int16_t>(substraitLit.i16())));
+          SMALLINT(), variant(static_cast<int16_t>(substraitLit.i16())));
     case ::substrait::Expression_Literal::LiteralTypeCase::kI32:
       return std::make_shared<core::ConstantTypedExpr>(
-          variant(substraitLit.i32()));
+          INTEGER(), variant(substraitLit.i32()));
     case ::substrait::Expression_Literal::LiteralTypeCase::kFp32:
       return std::make_shared<core::ConstantTypedExpr>(
-          variant(substraitLit.fp32()));
+          REAL(), variant(substraitLit.fp32()));
     case ::substrait::Expression_Literal::LiteralTypeCase::kI64:
       return std::make_shared<core::ConstantTypedExpr>(
-          variant(substraitLit.i64()));
+          BIGINT(), variant(substraitLit.i64()));
     case ::substrait::Expression_Literal::LiteralTypeCase::kFp64:
       return std::make_shared<core::ConstantTypedExpr>(
-          variant(substraitLit.fp64()));
+          DOUBLE(), variant(substraitLit.fp64()));
     case ::substrait::Expression_Literal::LiteralTypeCase::kString:
       return std::make_shared<core::ConstantTypedExpr>(
-          variant(substraitLit.string()));
+          VARCHAR(), variant(substraitLit.string()));
     case ::substrait::Expression_Literal::LiteralTypeCase::kNull: {
       auto veloxType =
           toVeloxType(substraitParser_.parseType(substraitLit.null())->type);
@@ -104,10 +243,85 @@ SubstraitVeloxExprConverter::toVeloxExpr(
     }
     case ::substrait::Expression_Literal::LiteralTypeCase::kVarChar:
       return std::make_shared<core::ConstantTypedExpr>(
-          variant(substraitLit.var_char().value()));
+          VARCHAR(), variant(substraitLit.var_char().value()));
+    case ::substrait::Expression_Literal::LiteralTypeCase::kList: {
+      auto constantVector =
+          BaseVector::wrapInConstant(1, 0, literalsToArrayVector(substraitLit));
+      return std::make_shared<const core::ConstantTypedExpr>(constantVector);
+    }
+    case ::substrait::Expression_Literal::LiteralTypeCase::kDate:
+      return std::make_shared<core::ConstantTypedExpr>(
+          DATE(), variant(Date(substraitLit.date())));
     default:
       VELOX_NYI(
           "Substrait conversion not supported for type case '{}'", typeCase);
+  }
+}
+
+ArrayVectorPtr SubstraitVeloxExprConverter::literalsToArrayVector(
+    const ::substrait::Expression::Literal& listLiteral) {
+  auto childSize = listLiteral.list().values().size();
+  if (childSize == 0) {
+    return makeEmptyArrayVector(pool_);
+  }
+  auto typeCase = listLiteral.list().values(0).literal_type_case();
+  switch (typeCase) {
+    case ::substrait::Expression_Literal::LiteralTypeCase::kBoolean:
+      return makeArrayVector(constructFlatVector<TypeKind::BOOLEAN>(
+          listLiteral, childSize, BOOLEAN(), pool_));
+    case ::substrait::Expression_Literal::LiteralTypeCase::kI8:
+      return makeArrayVector(constructFlatVector<TypeKind::TINYINT>(
+          listLiteral, childSize, TINYINT(), pool_));
+    case ::substrait::Expression_Literal::LiteralTypeCase::kI16:
+      return makeArrayVector(constructFlatVector<TypeKind::SMALLINT>(
+          listLiteral, childSize, SMALLINT(), pool_));
+    case ::substrait::Expression_Literal::LiteralTypeCase::kI32:
+      return makeArrayVector(constructFlatVector<TypeKind::INTEGER>(
+          listLiteral, childSize, INTEGER(), pool_));
+    case ::substrait::Expression_Literal::LiteralTypeCase::kFp32:
+      return makeArrayVector(constructFlatVector<TypeKind::REAL>(
+          listLiteral, childSize, REAL(), pool_));
+    case ::substrait::Expression_Literal::LiteralTypeCase::kI64:
+      return makeArrayVector(constructFlatVector<TypeKind::BIGINT>(
+          listLiteral, childSize, BIGINT(), pool_));
+    case ::substrait::Expression_Literal::LiteralTypeCase::kFp64:
+      return makeArrayVector(constructFlatVector<TypeKind::DOUBLE>(
+          listLiteral, childSize, DOUBLE(), pool_));
+    case ::substrait::Expression_Literal::LiteralTypeCase::kString:
+    case ::substrait::Expression_Literal::LiteralTypeCase::kVarChar:
+      return makeArrayVector(constructFlatVector<TypeKind::VARCHAR>(
+          listLiteral, childSize, VARCHAR(), pool_));
+    case ::substrait::Expression_Literal::LiteralTypeCase::kNull: {
+      auto veloxType =
+          toVeloxType(substraitParser_.parseType(listLiteral.null())->type);
+      auto kind = veloxType->kind();
+      return makeArrayVector(VELOX_DYNAMIC_SCALAR_TYPE_DISPATCH(
+          constructFlatVector, kind, listLiteral, childSize, veloxType, pool_));
+    }
+    case ::substrait::Expression_Literal::LiteralTypeCase::kDate:
+      return makeArrayVector(constructFlatVector<TypeKind::DATE>(
+          listLiteral, childSize, DATE(), pool_));
+    case ::substrait::Expression_Literal::LiteralTypeCase::kTimestamp:
+      return makeArrayVector(constructFlatVector<TypeKind::TIMESTAMP>(
+          listLiteral, childSize, TIMESTAMP(), pool_));
+    case ::substrait::Expression_Literal::LiteralTypeCase::kIntervalDayToSecond:
+      return makeArrayVector(constructFlatVector<TypeKind::BIGINT>(
+          listLiteral, childSize, INTERVAL_DAY_TIME(), pool_));
+    case ::substrait::Expression_Literal::LiteralTypeCase::kList: {
+      VectorPtr elements;
+      for (auto it : listLiteral.list().values()) {
+        auto v = literalsToArrayVector(it);
+        if (!elements) {
+          elements = v;
+        } else {
+          elements->append(v.get());
+        }
+      }
+      return makeArrayVector(elements);
+    }
+    default:
+      VELOX_NYI(
+          "literalsToArrayVector not supported for type case '{}'", typeCase);
   }
 }
 
@@ -117,8 +331,7 @@ SubstraitVeloxExprConverter::toVeloxExpr(
     const RowTypePtr& inputType) {
   auto substraitType = substraitParser_.parseType(castExpr.type());
   auto type = toVeloxType(substraitType->type);
-  // TODO add flag in substrait after. now is set false.
-  bool nullOnFailure = false;
+  bool nullOnFailure = isNullOnFailure(castExpr.failure_behavior());
 
   std::vector<core::TypedExprPtr> inputs{
       toVeloxExpr(castExpr.input(), inputType)};

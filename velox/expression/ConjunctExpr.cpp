@@ -25,7 +25,7 @@ uint64_t* rowsWithError(
     const SelectivityVector& rows,
     const SelectivityVector& activeRows,
     EvalCtx& context,
-    EvalCtx::ErrorVectorPtr& previousErrors,
+    ErrorVectorPtr& previousErrors,
     LocalSelectivityVector& errorRowsHolder) {
   auto errors = context.errors();
   if (!errors) {
@@ -73,11 +73,12 @@ void finalizeErrors(
   if (!errors) {
     return;
   }
-  // null flag of error |= initial active & ~final active.
+  // Pre-existing errors outside of initial active rows are preserved. Errors in
+  // the initial active rows but not in the final active rows are cleared.
   int32_t numWords = bits::nwords(errors->size());
   auto errorNulls = errors->mutableNulls(errors->size())->asMutable<uint64_t>();
   for (int32_t i = 0; i < numWords; ++i) {
-    errorNulls[i] &= rows.asRange().bits()[i] & activeRows.asRange().bits()[i];
+    errorNulls[i] &= ~rows.asRange().bits()[i] | activeRows.asRange().bits()[i];
     if (throwOnError && errorNulls[i]) {
       int32_t errorIndex = i * 64 + __builtin_ctzll(errorNulls[i]);
       if (errorIndex < errors->size() && errorIndex < rows.end()) {
@@ -126,7 +127,7 @@ void ConjunctExpr::evalSpecialForm(
   for (int32_t i = 0; i < inputs_.size(); ++i) {
     VectorPtr inputResult;
     VectorRecycler inputResultRecycler(inputResult, context.vectorPool());
-    EvalCtx::ErrorVectorPtr errors;
+    ErrorVectorPtr errors;
     if (handleErrors) {
       context.swapErrors(errors);
     }
@@ -161,7 +162,7 @@ void ConjunctExpr::evalSpecialForm(
   if (!reorderEnabledChecked_) {
     reorderEnabled_ = context.execCtx()
                           ->queryCtx()
-                          ->config()
+                          ->queryConfig()
                           .adaptiveFilterReorderingEnabled();
     reorderEnabledChecked_ = true;
   }
@@ -266,13 +267,52 @@ void ConjunctExpr::updateResult(
   }
 }
 
-std::string ConjunctExpr::toSql() const {
+std::string ConjunctExpr::toSql(
+    std::vector<VectorPtr>* complexConstants) const {
   std::stringstream out;
-  out << "(" << inputs_[0]->toSql() << ")";
+  out << "(" << inputs_[0]->toSql(complexConstants) << ")";
   for (auto i = 1; i < inputs_.size(); ++i) {
     out << " " << name_ << " "
-        << "(" << inputs_[i]->toSql() << ")";
+        << "(" << inputs_[i]->toSql(complexConstants) << ")";
   }
   return out.str();
+}
+
+// static
+TypePtr ConjunctExpr::resolveType(const std::vector<TypePtr>& argTypes) {
+  VELOX_CHECK_GT(
+      argTypes.size(),
+      0,
+      "Conjunct expressions expect at least one argument, received: {}",
+      argTypes.size());
+
+  for (const auto& argType : argTypes) {
+    VELOX_CHECK(
+        argType->kind() == TypeKind::BOOLEAN ||
+            argType->kind() == TypeKind::UNKNOWN,
+        "Conjunct expressions expect BOOLEAN or UNKNOWN arguments, received: {}",
+        argType->toString());
+  }
+
+  return BOOLEAN();
+}
+
+TypePtr ConjunctCallToSpecialForm::resolveType(
+    const std::vector<TypePtr>& argTypes) {
+  return ConjunctExpr::resolveType(argTypes);
+}
+
+ExprPtr ConjunctCallToSpecialForm::constructSpecialForm(
+    const TypePtr& type,
+    std::vector<ExprPtr>&& compiledChildren,
+    bool /* trackCpuUsage */) {
+  bool inputsSupportFlatNoNullsFastPath =
+      Expr::allSupportFlatNoNullsFastPath(compiledChildren);
+
+  return std::make_shared<ConjunctExpr>(
+      type,
+      std::move(compiledChildren),
+      isAnd_,
+      inputsSupportFlatNoNullsFastPath);
 }
 } // namespace facebook::velox::exec

@@ -32,9 +32,6 @@ class ExprStatsTest : public functions::test::FunctionBaseTest {
   void SetUp() override {
     functions::prestosql::registerAllScalarFunctions();
     parse::registerTypeResolver();
-
-    pool_->setMemoryUsageTracker(memory::MemoryUsageTracker::create());
-
     // Enable CPU usage tracking.
     queryCtx_->setConfigOverridesUnsafe({
         {core::QueryConfig::kExprTrackCpuUsage, "true"},
@@ -174,7 +171,7 @@ class TestListener : public exec::ExprSetListener {
 
   void onError(
       const SelectivityVector& rows,
-      const ::facebook::velox::exec::EvalCtx::ErrorVector& errors) override {
+      const ::facebook::velox::ErrorVector& errors) override {
     rows.applyToSelected([&](auto row) {
       exceptionCount_++;
 
@@ -428,5 +425,26 @@ TEST_F(ExprStatsTest, errorLog) {
   ASSERT_EQ(0, listener->exceptionCount());
   ASSERT_EQ(0, exceptions.size());
 
+  ASSERT_TRUE(exec::unregisterExprSetListener(listener));
+}
+
+TEST_F(ExprStatsTest, exceptionPreparingStatsForListener) {
+  // Currently a ConstantExpr of VARBINARY type does not support generating
+  // its sql form. Therefore, it throws an exception when ExprSet tries to
+  // generate its sql while preparing data for listeners in its destructor.
+  // This test replicates this scenario and ensures that the exception is
+  // handled and the process is not terminated.
+  std::vector<Event> events;
+  std::vector<std::string> exceptions;
+  auto listener = std::make_shared<TestListener>(events, exceptions);
+  ASSERT_TRUE(exec::registerExprSetListener(listener));
+  auto varbinaryData = vectorMaker_.flatVector<StringView>(
+      {"12"_sv}, CppToType<Varbinary>::create());
+  std::vector<core::TypedExprPtr> expressions = {
+      std::make_shared<const core::ConstantTypedExpr>(
+          BaseVector::wrapInConstant(1, 0, varbinaryData))};
+  auto exprSet =
+      std::make_unique<exec::ExprSet>(std::move(expressions), &execCtx_);
+  evaluate(*exprSet, makeRowVector({varbinaryData}));
   ASSERT_TRUE(exec::unregisterExprSetListener(listener));
 }

@@ -29,7 +29,7 @@ using namespace facebook::velox::test;
 class PrestoSerializerTest : public ::testing::Test {
  protected:
   void SetUp() override {
-    pool_ = memory::getDefaultScopedMemoryPool();
+    pool_ = memory::addDefaultLeafMemoryPool();
     serde_ = std::make_unique<serializer::presto::PrestoVectorSerde>();
     vectorMaker_ = std::make_unique<test::VectorMaker>(pool_.get());
   }
@@ -60,8 +60,7 @@ class PrestoSerializerTest : public ::testing::Test {
     sanityCheckEstimateSerializedSize(
         rowVector, folly::Range(rows.data(), numRows));
 
-    auto arena =
-        std::make_unique<StreamArena>(memory::MappedMemory::getInstance());
+    auto arena = std::make_unique<StreamArena>(pool_.get());
     auto rowType = asRowType(rowVector->type());
     auto serializer =
         serde_->createSerializer(rowType, numRows, arena.get(), serdeOptions);
@@ -78,8 +77,7 @@ class PrestoSerializerTest : public ::testing::Test {
       const VectorSerde::Options* serdeOptions) {
     facebook::velox::serializer::presto::PrestoOutputStreamListener listener;
     OStreamOutputStream out(output, &listener);
-    auto arena =
-        std::make_unique<StreamArena>(memory::MappedMemory::getInstance());
+    auto arena = std::make_unique<StreamArena>(pool_.get());
     serde_->serializeConstants(rowVector, arena.get(), serdeOptions, &out);
   }
 
@@ -139,7 +137,7 @@ class PrestoSerializerTest : public ::testing::Test {
     assertEqualVectors(rowVector, deserialized);
   }
 
-  std::unique_ptr<memory::MemoryPool> pool_;
+  std::shared_ptr<memory::MemoryPool> pool_;
   std::unique_ptr<serializer::presto::PrestoVectorSerde> serde_;
   std::unique_ptr<test::VectorMaker> vectorMaker_;
 };
@@ -229,9 +227,11 @@ TEST_F(PrestoSerializerTest, timestampWithTimeZone) {
 }
 
 TEST_F(PrestoSerializerTest, intervalDayTime) {
-  auto vector = vectorMaker_->flatVector<IntervalDayTime>(100, [](auto row) {
-    return IntervalDayTime(row + folly::Random::rand32());
-  });
+  auto vector = vectorMaker_->flatVector<int64_t>(
+      100,
+      [](auto row) { return row + folly::Random::rand32(); },
+      nullptr, // nullAt
+      INTERVAL_DAY_TIME());
 
   testRoundTrip(vector);
 
@@ -245,7 +245,7 @@ TEST_F(PrestoSerializerTest, intervalDayTime) {
 TEST_F(PrestoSerializerTest, unknown) {
   const vector_size_t size = 123;
   auto constantVector =
-      BaseVector::createConstant(variant(TypeKind::UNKNOWN), 123, pool_.get());
+      BaseVector::createNullConstant(UNKNOWN(), 123, pool_.get());
   testRoundTrip(constantVector);
 
   auto flatVector = BaseVector::create(UNKNOWN(), size, pool_.get());
@@ -322,13 +322,13 @@ TEST_F(PrestoSerializerTest, timestampWithNanosecondPrecision) {
   assertEqualVectors(deserialized, expectedOutputWithLostPrecision);
 }
 
-TEST_F(PrestoSerializerTest, unscaledLongDecimal) {
+TEST_F(PrestoSerializerTest, longDecimal) {
   std::vector<int128_t> decimalValues(102);
-  decimalValues[0] = UnscaledLongDecimal::min().unscaledValue();
+  decimalValues[0] = DecimalUtil::kLongDecimalMin;
   for (int row = 1; row < 101; row++) {
     decimalValues[row] = row - 50;
   }
-  decimalValues[101] = UnscaledLongDecimal::max().unscaledValue();
+  decimalValues[101] = DecimalUtil::kLongDecimalMax;
   auto vector =
       vectorMaker_->longDecimalFlatVector(decimalValues, DECIMAL(20, 5));
 
@@ -343,11 +343,12 @@ TEST_F(PrestoSerializerTest, unscaledLongDecimal) {
 
 TEST_F(PrestoSerializerTest, rle) {
   // Test RLE vectors with non-null value.
-  testRleRoundTrip(BaseVector::createConstant(true, 12, pool_.get()));
-  testRleRoundTrip(BaseVector::createConstant(779, 12, pool_.get()));
-  testRleRoundTrip(BaseVector::createConstant(1.23, 12, pool_.get()));
   testRleRoundTrip(
-      BaseVector::createConstant("Hello, world!", 12, pool_.get()));
+      BaseVector::createConstant(BOOLEAN(), true, 12, pool_.get()));
+  testRleRoundTrip(BaseVector::createConstant(INTEGER(), 779, 12, pool_.get()));
+  testRleRoundTrip(BaseVector::createConstant(DOUBLE(), 1.23, 12, pool_.get()));
+  testRleRoundTrip(
+      BaseVector::createConstant(VARCHAR(), "Hello, world!", 12, pool_.get()));
   testRleRoundTrip(BaseVector::wrapInConstant(
       12, 0, vectorMaker_->arrayVector<int64_t>({{1, 2, 3}})));
   testRleRoundTrip(BaseVector::wrapInConstant(
@@ -367,4 +368,15 @@ TEST_F(PrestoSerializerTest, rle) {
       BaseVector::createNullConstant(ARRAY(INTEGER()), 17, pool_.get()));
   testRleRoundTrip(BaseVector::createNullConstant(
       MAP(VARCHAR(), INTEGER()), 17, pool_.get()));
+}
+
+TEST_F(PrestoSerializerTest, lazy) {
+  constexpr int kSize = 1000;
+  auto rowVector = makeTestVector(kSize);
+  auto lazyVector = std::make_shared<LazyVector>(
+      pool_.get(),
+      rowVector->type(),
+      kSize,
+      std::make_unique<SimpleVectorLoader>([&](auto) { return rowVector; }));
+  testRoundTrip(lazyVector);
 }

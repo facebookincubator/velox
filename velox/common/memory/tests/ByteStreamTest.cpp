@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 #include "velox/common/memory/ByteStream.h"
-#include "velox/common/memory/MappedMemory.h"
+#include "velox/common/memory/MemoryAllocator.h"
 #include "velox/common/memory/MmapAllocator.h"
 
 #include <gflags/gflags.h>
@@ -23,27 +23,31 @@
 using namespace facebook::velox;
 using namespace facebook::velox::memory;
 
-class ByteStreamTest : public testing::TestWithParam<bool> {
+class ByteStreamTest : public testing::Test {
  protected:
   void SetUp() override {
     constexpr uint64_t kMaxMappedMemory = 64 << 20;
-    MmapAllocatorOptions options;
+    MmapAllocator::Options options;
     options.capacity = kMaxMappedMemory;
     mmapAllocator_ = std::make_shared<MmapAllocator>(options);
-    MappedMemory::setDefaultInstance(mmapAllocator_.get());
+    MemoryAllocator::setDefaultInstance(mmapAllocator_.get());
+    memoryManager_ = std::make_unique<MemoryManager>(IMemoryManager::Options{
+        .capacity = kMaxMemory, .allocator = MemoryAllocator::getInstance()});
+    pool_ = memoryManager_->addLeafPool("ByteStreamTest");
   }
 
   void TearDown() override {
-    MappedMemory::destroyTestOnly();
-    MappedMemory::setDefaultInstance(nullptr);
+    MmapAllocator::testingDestroyInstance();
+    MemoryAllocator::setDefaultInstance(nullptr);
   }
 
   std::shared_ptr<MmapAllocator> mmapAllocator_;
+  std::unique_ptr<MemoryManager> memoryManager_;
+  std::shared_ptr<memory::MemoryPool> pool_;
 };
 
 TEST_F(ByteStreamTest, outputStream) {
-  auto out =
-      std::make_unique<IOBufOutputStream>(*mmapAllocator_, nullptr, 10000);
+  auto out = std::make_unique<IOBufOutputStream>(*pool_, nullptr, 10000);
   std::stringstream referenceSStream;
   auto reference = std::make_unique<OStreamOutputStream>(&referenceSStream);
   for (auto i = 0; i < 100; ++i) {
@@ -87,4 +91,22 @@ TEST_F(ByteStreamTest, outputStream) {
   iobuf = nullptr;
   // We expect dropping the stream and the iobuf frees the backing memory.
   EXPECT_EQ(0, mmapAllocator_->numAllocated());
+}
+
+TEST_F(ByteStreamTest, resetInput) {
+  uint8_t* const kFakeBuffer = reinterpret_cast<uint8_t*>(this);
+  std::vector<ByteRange> byteRanges;
+  size_t totalBytes{0};
+  size_t lastRangeEnd;
+  for (int32_t i = 0; i < 32; ++i) {
+    byteRanges.push_back(ByteRange{kFakeBuffer, 4096 + i, 0});
+    totalBytes += 4096 + i;
+  }
+  lastRangeEnd = byteRanges.back().size;
+  ByteStream byteStream;
+  ASSERT_EQ(byteStream.size(), 0);
+  ASSERT_EQ(byteStream.lastRangeEnd(), 0);
+  byteStream.resetInput(std::move(byteRanges));
+  ASSERT_EQ(byteStream.size(), totalBytes);
+  ASSERT_EQ(byteStream.lastRangeEnd(), lastRangeEnd);
 }

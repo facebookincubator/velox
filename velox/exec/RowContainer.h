@@ -16,12 +16,13 @@
 #pragma once
 
 #include "velox/common/memory/HashStringAllocator.h"
-#include "velox/common/memory/MappedMemory.h"
+#include "velox/common/memory/MemoryAllocator.h"
 #include "velox/exec/Aggregate.h"
 #include "velox/exec/ContainerRowSerde.h"
 #include "velox/exec/Spill.h"
 #include "velox/vector/FlatVector.h"
 #include "velox/vector/VectorTypeUtils.h"
+
 namespace facebook::velox::exec {
 
 using normalized_key_t = uint64_t;
@@ -33,6 +34,7 @@ struct RowContainerIterator {
   // Number of unvisited entries that are prefixed by an uint64_t for
   // normalized key. Set in listRows() on first call.
   int64_t normalizedKeysLeft = 0;
+  int normalizedKeySize = 0;
 
   // Ordinal position of 'currentRow' in RowContainer.
   int32_t rowNumber{0};
@@ -42,20 +44,13 @@ struct RowContainerIterator {
 
   // Returns the current row, skipping a possible normalized key below the first
   // byte of row.
-  inline char* FOLLY_NULLABLE currentRow() const {
-    return (rowBegin && normalizedKeysLeft)
-        ? rowBegin + sizeof(normalized_key_t)
-        : rowBegin;
+  inline char* currentRow() const {
+    return (rowBegin && normalizedKeysLeft) ? rowBegin + normalizedKeySize
+                                            : rowBegin;
   }
 
   void reset() {
-    allocationIndex = 0;
-    runIndex = 0;
-    rowOffset = 0;
-    normalizedKeysLeft = 0;
-    rowBegin = nullptr;
-    rowNumber = 0;
-    endOfRun = nullptr;
+    *this = {};
   }
 };
 
@@ -65,7 +60,7 @@ struct RowContainerIterator {
 class RowPartitions {
  public:
   /// Initializes this to hold up to 'numRows'.
-  RowPartitions(int32_t numRows, memory::MappedMemory& mappedMemory);
+  RowPartitions(int32_t numRows, memory::MemoryPool& pool);
 
   /// Appends 'partitions' to the end of 'this'. Throws if adding more than the
   /// capacity given at construction.
@@ -86,7 +81,7 @@ class RowPartitions {
   int32_t size_{0};
 
   // Partition numbers. 1 byte each.
-  memory::MappedMemory::Allocation allocation_;
+  memory::Allocation allocation_;
 };
 
 // Packed representation of offset, null byte offset and null mask for
@@ -131,17 +126,17 @@ class RowContainer {
   static constexpr uint64_t kUnlimited = std::numeric_limits<uint64_t>::max();
   using Eraser = std::function<void(folly::Range<char**> rows)>;
 
-  // 'keyTypes' gives the type of row and use 'mappedMemory' for bulk
+  // 'keyTypes' gives the type of row and use 'allocator' for bulk
   // allocation.
   RowContainer(
       const std::vector<TypePtr>& keyTypes,
-      memory::MappedMemory* FOLLY_NONNULL mappedMemory)
-      : RowContainer(keyTypes, std::vector<TypePtr>{}, mappedMemory) {}
+      memory::MemoryPool* FOLLY_NONNULL pool)
+      : RowContainer(keyTypes, std::vector<TypePtr>{}, pool) {}
 
   RowContainer(
       const std::vector<TypePtr>& keyTypes,
       const std::vector<TypePtr>& dependentTypes,
-      memory::MappedMemory* FOLLY_NONNULL mappedMemory)
+      memory::MemoryPool* FOLLY_NONNULL pool)
       : RowContainer(
             keyTypes,
             true, // nullableKeys
@@ -151,7 +146,7 @@ class RowContainer {
             false, // isJoinBuild
             false, // hasProbedFlag
             false, // hasNormalizedKey
-            mappedMemory,
+            pool,
             ContainerRowSerde::instance()) {}
 
   // 'keyTypes' gives the type of the key of each row. For a group by,
@@ -168,7 +163,7 @@ class RowContainer {
   // join. 'hasNormalizedKey' specifies that an extra word is left
   // below each row for a normalized key that collapses all parts
   // into one word for faster comparison. The bulk allocation is done
-  // from 'mappedMemory'.  'serde_' is used for serializing complex
+  // from 'allocator'.  'serde_' is used for serializing complex
   // type values into the container.
   RowContainer(
       const std::vector<TypePtr>& keyTypes,
@@ -179,7 +174,7 @@ class RowContainer {
       bool isJoinBuild,
       bool hasProbedFlag,
       bool hasNormalizedKey,
-      memory::MappedMemory* FOLLY_NONNULL mappedMemory,
+      memory::MemoryPool* FOLLY_NONNULL pool,
       const RowSerde& serde);
 
   // Allocates a new row and initializes possible aggregates to null.
@@ -190,6 +185,16 @@ class RowContainer {
         (rowSizeOffset_
              ? *reinterpret_cast<const uint32_t*>(row + rowSizeOffset_)
              : 0);
+  }
+
+  /// Sets all fields, aggregates, keys and dependents to null. Used
+  /// when making a row with uninitialized keys for aggregates with
+  /// no-op partial aggregation.
+  void setAllNull(char* FOLLY_NONNULL row) {
+    if (!nullOffsets_.empty()) {
+      memset(row + nullByte(nullOffsets_[0]), 0xff, initialNulls_.size());
+      bits::clearBit(row, freeFlagOffset_);
+    }
   }
 
   // The row size excluding any out-of-line stored variable length values.
@@ -306,9 +311,15 @@ class RowContainer {
 
   /// Copies the 'probed' flags for the specified rows into 'result'.
   /// The 'result' is expected to be flat vector of type boolean.
+  /// For rows with null keys, sets null in 'result' if 'setNullForNullKeysRow'
+  /// is true and false otherwise. For rows with 'false' probed flag, sets null
+  /// in 'result' if 'setNullForNonProbedRow' is true and false otherwise. This
+  /// is used for null aware and regular right semi project join types.
   void extractProbedFlags(
       const char* FOLLY_NONNULL const* FOLLY_NONNULL rows,
       int32_t numRows,
+      bool setNullForNullKeysRow,
+      bool setNullForNonProbedRow,
       const VectorPtr& result);
 
   static inline int32_t nullByte(int32_t nullOffset) {
@@ -342,28 +353,33 @@ class RowContainer {
     if (iter->allocationIndex == 0 && iter->runIndex == 0 &&
         iter->rowOffset == 0) {
       iter->normalizedKeysLeft = numRowsWithNormalizedKey_;
+      iter->normalizedKeySize = originalNormalizedKeySize_;
     }
     int32_t rowSize = fixedRowSize_ +
-        (iter->normalizedKeysLeft > 0 ? sizeof(normalized_key_t) : 0);
+        (iter->normalizedKeysLeft > 0 ? originalNormalizedKeySize_ : 0);
     for (auto i = iter->allocationIndex; i < numAllocations; ++i) {
       auto allocation = rows_.allocationAt(i);
       auto numRuns = allocation->numRuns();
       for (auto runIndex = iter->runIndex; runIndex < numRuns; ++runIndex) {
-        memory::MappedMemory::PageRun run = allocation->runAt(runIndex);
-        auto data = run.data<char>();
+        memory::Allocation::PageRun run = allocation->runAt(runIndex);
+        auto* data =
+            run.data<char>() + memory::alignmentPadding(run.data(), alignment_);
         int64_t limit;
         if (i == numAllocations - 1 && runIndex == rows_.currentRunIndex()) {
           limit = rows_.currentOffset();
         } else {
-          limit = run.numPages() * memory::MappedMemory::kPageSize;
+          limit = run.numPages() * memory::AllocationTraits::kPageSize;
         }
         auto row = iter->rowOffset;
         while (row + rowSize <= limit) {
           rows[count++] = data + row +
-              (iter->normalizedKeysLeft > 0 ? sizeof(normalized_key_t) : 0);
+              (iter->normalizedKeysLeft > 0 ? originalNormalizedKeySize_ : 0);
+          VELOX_DCHECK_EQ(
+              reinterpret_cast<uintptr_t>(rows[count - 1]) % alignment_, 0);
           row += rowSize;
+          auto newTotalBytes = totalBytes + rowSize;
           if (--iter->normalizedKeysLeft == 0) {
-            rowSize -= sizeof(normalized_key_t);
+            rowSize -= originalNormalizedKeySize_;
           }
           if (bits::isBitSet(rows[count - 1], freeFlagOffset_)) {
             --count;
@@ -381,7 +397,7 @@ class RowContainer {
               continue;
             }
           }
-          totalBytes += rowSize;
+          totalBytes = newTotalBytes;
           if (rowSizeOffset_) {
             totalBytes += variableRowSize(rows[count - 1]);
           }
@@ -519,6 +535,9 @@ class RowContainer {
         stringAllocator_.freeSpace());
   }
 
+  // Returns the average size of rows in bytes stored in this container.
+  std::optional<int64_t> estimateRowSize() const;
+
   // Returns a cap on  extra memory that may be needed when adding 'numRows'
   // and variableLengthBytes of out-of-line variable length data.
   int64_t sizeIncrement(vector_size_t numRows, int64_t variableLengthBytes)
@@ -542,14 +561,6 @@ class RowContainer {
     return 0;
   }
 
-  // Returns estimated number of rows a batch can support for
-  // the given batchSizeInBytes.
-  // FIXME(venkatra): estimate num rows for variable length fields.
-  int32_t estimatedNumRowsPerBatch(int32_t batchSizeInBytes) {
-    return (batchSizeInBytes / fixedRowSize_) +
-        ((batchSizeInBytes % fixedRowSize_) ? 1 : 0);
-  }
-
   // Extract column values for 'rows' into 'result'.
   void extractRows(
       const std::vector<char * FOLLY_NONNULL>& rows,
@@ -564,8 +575,8 @@ class RowContainer {
     }
   }
 
-  memory::MappedMemory* FOLLY_NONNULL mappedMemory() const {
-    return stringAllocator_.mappedMemory();
+  memory::MemoryPool* FOLLY_NONNULL pool() const {
+    return stringAllocator_.pool();
   }
 
   // Returns the types of all non-aggregate columns of 'this', keys first.
@@ -1054,9 +1065,12 @@ class RowContainer {
   // The count of entries that have an extra normalized_key_t before the
   // start.
   int64_t numRowsWithNormalizedKey_ = 0;
+  // This is the original normalized key size regardless of whether
+  // disableNormalizedKeys() is called or not.
+  int originalNormalizedKeySize_;
   // Extra bytes to reserve before  each added row for a normalized key. Set to
   // 0 after deciding not to use normalized keys.
-  int8_t normalizedKeySize_ = sizeof(normalized_key_t);
+  int normalizedKeySize_;
   // Copied over the null bits of each row on initialization. Keys are
   // not null, aggregates are null.
   std::vector<uint8_t> initialNulls_;
@@ -1079,7 +1093,16 @@ class RowContainer {
     static const std::vector<std::unique_ptr<Aggregate>> kEmptyAggregates;
     return kEmptyAggregates;
   }
+
+  int alignment_ = 1;
 };
+
+template <>
+inline int128_t RowContainer::valueAt<int128_t>(
+    const char* FOLLY_NONNULL group,
+    int32_t offset) {
+  return HugeInt::deserialize(group + offset);
+}
 
 template <>
 inline void RowContainer::storeWithNulls<TypeKind::ROW>(
@@ -1139,6 +1162,29 @@ inline void RowContainer::storeNoNulls<TypeKind::MAP>(
     char* FOLLY_NONNULL row,
     int32_t offset) {
   storeComplexType(decoded, index, row, offset);
+}
+
+template <>
+inline void RowContainer::storeWithNulls<TypeKind::HUGEINT>(
+    const DecodedVector& decoded,
+    vector_size_t index,
+    char* FOLLY_NONNULL row,
+    int32_t offset,
+    int32_t nullByte,
+    uint8_t nullMask) {
+  HugeInt::serialize(decoded.valueAt<int128_t>(index), row + offset);
+  if (decoded.isNullAt(index)) {
+    row[nullByte] |= nullMask;
+  }
+}
+
+template <>
+inline void RowContainer::storeNoNulls<TypeKind::HUGEINT>(
+    const DecodedVector& decoded,
+    vector_size_t index,
+    char* FOLLY_NONNULL row,
+    int32_t offset) {
+  HugeInt::serialize(decoded.valueAt<int128_t>(index), row + offset);
 }
 
 template <>

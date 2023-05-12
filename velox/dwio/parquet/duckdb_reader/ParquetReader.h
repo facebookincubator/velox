@@ -35,7 +35,18 @@ class ParquetRowReader : public dwio::common::RowReader {
       memory::MemoryPool& pool);
   ~ParquetRowReader() override = default;
 
-  uint64_t next(uint64_t size, velox::VectorPtr& result) override;
+  int64_t nextRowNumber() override {
+    VELOX_NYI();
+  }
+
+  int64_t nextReadSize(uint64_t /*size*/) override {
+    VELOX_NYI();
+  }
+
+  uint64_t next(
+      uint64_t size,
+      velox::VectorPtr& result,
+      const dwio::common::Mutation*) override;
 
   void updateRuntimeStats(
       dwio::common::RuntimeStatistics& stats) const override;
@@ -57,7 +68,7 @@ class ParquetRowReader : public dwio::common::RowReader {
 class ParquetReader : public dwio::common::Reader {
  public:
   ParquetReader(
-      std::unique_ptr<dwio::common::InputStream> stream,
+      std::shared_ptr<dwio::common::InputStream> stream,
       const dwio::common::ReaderOptions& options);
   ~ParquetReader() override = default;
 
@@ -88,9 +99,9 @@ class ParquetReaderFactory : public dwio::common::ReaderFactory {
   ParquetReaderFactory() : ReaderFactory(dwio::common::FileFormat::PARQUET) {}
 
   std::unique_ptr<dwio::common::Reader> createReader(
-      std::unique_ptr<dwio::common::InputStream> stream,
+      std::unique_ptr<dwio::common::BufferedInput> input,
       const dwio::common::ReaderOptions& options) override {
-    return std::make_unique<ParquetReader>(std::move(stream), options);
+    return std::make_unique<ParquetReader>(input->getInputStream(), options);
   }
 };
 

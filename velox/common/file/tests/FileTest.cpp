@@ -86,6 +86,27 @@ TEST(InMemoryFile, writeAndRead) {
   readData(&readFile);
 }
 
+TEST(InMemoryFile, preadv) {
+  std::string buf;
+  {
+    InMemoryWriteFile writeFile(&buf);
+    writeData(&writeFile);
+  }
+  // aaaaa bbbbb c*1MB ddddd
+  InMemoryReadFile readFile(buf);
+  std::vector<std::string> buffers = {"1234", "567", "something else", "890"};
+  std::vector<std::string> expected = {"1ab4", "567", "scccdding else", "ddd"};
+  std::vector<ReadFile::Segment> readSegments = std::vector<ReadFile::Segment>{
+      {4, folly::Range<char*>{&buffers[0][1], 2UL}, {}},
+      {0, folly::Range<char*>{&buffers[1][1], 0UL}, {}},
+      {5 + 5 + kOneMB - 3, {&buffers[2][1], 5UL}, {}},
+      {5 + 5 + kOneMB + 2, {&buffers[3][0], 3UL}, {}}};
+
+  readFile.preadv(readSegments);
+
+  EXPECT_EQ(expected, buffers);
+}
+
 TEST(LocalFile, writeAndRead) {
   auto tempFile = ::exec::test::TempFilePath::create();
   const auto& filename = tempFile->path.c_str();
@@ -173,9 +194,9 @@ TEST(LocalFile, list) {
     auto writeFile = localFs->openFileForWrite(a);
     writeFile = localFs->openFileForWrite(b);
   }
-  ASSERT_EQ(
-      localFs->list(std::string_view(tempFolder->path)),
-      std::vector<std::string>({a, b}));
+  auto files = localFs->list(std::string_view(tempFolder->path));
+  std::sort(files.begin(), files.end());
+  ASSERT_EQ(files, std::vector<std::string>({a, b}));
   localFs->remove(a);
   ASSERT_EQ(
       localFs->list(std::string_view(tempFolder->path)),
@@ -214,4 +235,64 @@ TEST(LocalFile, readFileDestructor) {
     LocalReadFile readFile(readFd);
     ASSERT_ANY_THROW(readData(&readFile, false));
   }
+}
+
+TEST(LocalFile, mkdir) {
+  filesystems::registerLocalFileSystem();
+  auto tempFolder = ::exec::test::TempDirectoryPath::create();
+
+  std::string path = tempFolder->path;
+  auto localFs = filesystems::getFileSystem(path, nullptr);
+
+  // Create 3 levels of directories and ensure they exist.
+  path += "/level1/level2/level3";
+  EXPECT_NO_THROW(localFs->mkdir(path));
+  EXPECT_TRUE(localFs->exists(path));
+
+  // Create a completely existing directory - we should not throw.
+  EXPECT_NO_THROW(localFs->mkdir(path));
+
+  // Write a file to our directory to double check it exist.
+  path += "/a.txt";
+  const std::string data("aaaaa");
+  {
+    auto writeFile = localFs->openFileForWrite(path);
+    writeFile->append(data);
+    writeFile->close();
+  }
+  EXPECT_TRUE(localFs->exists(path));
+}
+
+TEST(LocalFile, rmdir) {
+  filesystems::registerLocalFileSystem();
+  auto tempFolder = ::exec::test::TempDirectoryPath::create();
+
+  std::string path = tempFolder->path;
+  auto localFs = filesystems::getFileSystem(path, nullptr);
+
+  // Create 3 levels of directories and ensure they exist.
+  path += "/level1/level2/level3";
+  EXPECT_NO_THROW(localFs->mkdir(path));
+  EXPECT_TRUE(localFs->exists(path));
+
+  // Write a file to our directory to double check it exist.
+  path += "/a.txt";
+  const std::string data("aaaaa");
+  {
+    auto writeFile = localFs->openFileForWrite(path);
+    writeFile->append(data);
+    writeFile->close();
+  }
+  EXPECT_TRUE(localFs->exists(path));
+
+  // Now delete the whole temp folder and ensure it is gone.
+  EXPECT_NO_THROW(localFs->rmdir(tempFolder->path));
+  EXPECT_FALSE(localFs->exists(tempFolder->path));
+
+  // Delete a non-existing directory.
+  path += "/does_not_exist/subdir";
+  EXPECT_FALSE(localFs->exists(path));
+  // The function does not throw, but will return zero files and folders
+  // deleted, which is not an error.
+  EXPECT_NO_THROW(localFs->rmdir(tempFolder->path));
 }

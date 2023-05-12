@@ -17,7 +17,6 @@
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
 #include <stdexcept>
-#include "velox/dwio/common/MemoryInputStream.h"
 #include "velox/dwio/dwrf/reader/ReaderBase.h"
 #include "velox/dwio/dwrf/writer/WriterBase.h"
 #include "velox/dwio/type/fbhive/HiveTypeParser.h"
@@ -31,47 +30,53 @@ namespace facebook::velox::dwrf {
 
 class WriterTest : public Test {
  public:
-  WriterTest()
-      : scopedPool{getDefaultScopedMemoryPool()}, pool{scopedPool->getPool()} {}
+  WriterTest() : pool_(addDefaultLeafMemoryPool("WriterTest")) {}
 
   WriterBase& createWriter(
       const std::shared_ptr<Config>& config,
       std::unique_ptr<DataSink> sink = nullptr) {
     if (!sink) {
-      auto memSink = std::make_unique<MemorySink>(pool, 1024);
-      sinkPtr = memSink.get();
+      auto memSink = std::make_unique<MemorySink>(*pool_, 1024);
+      sinkPtr_ = memSink.get();
       sink = std::move(memSink);
     }
-    writer = std::make_unique<WriterBase>(std::move(sink));
-    writer->initContext(config, pool.addScopedChild("test_writer_pool"));
-    return *writer;
+    writer_ = std::make_unique<WriterBase>(std::move(sink));
+    writer_->initContext(
+        config, defaultMemoryManager().addRootPool("WriterTest"));
+    return *writer_;
+  }
+
+  std::unique_ptr<ReaderBase> createReader() {
+    std::string_view data(sinkPtr_->getData(), sinkPtr_->size());
+    auto readFile = std::make_shared<InMemoryReadFile>(data);
+    auto input = std::make_unique<BufferedInput>(std::move(readFile), *pool_);
+    return std::make_unique<ReaderBase>(*pool_, std::move(input));
   }
 
   auto& getContext() {
-    return writer->getContext();
+    return writer_->getContext();
   }
 
   auto& getFooter() {
-    return writer->getFooter();
+    return writer_->getFooter();
   }
 
   auto& addStripeInfo() {
-    return writer->addStripeInfo();
+    return writer_->addStripeInfo();
   }
 
   void writeFooter(const Type& type) {
-    writer->writeFooter(type);
+    writer_->writeFooter(type);
   }
 
   void validateStreamSize(uint64_t streamSize) {
     DwrfStreamIdentifier si{1, 0, 0, proto::Stream_Kind_DATA};
-    writer->validateStreamSize(si, streamSize);
+    writer_->validateStreamSize(si, streamSize);
   }
 
-  std::unique_ptr<ScopedMemoryPool> scopedPool;
-  MemoryPool& pool;
-  MemorySink* sinkPtr;
-  std::unique_ptr<WriterBase> writer;
+  std::shared_ptr<MemoryPool> pool_;
+  MemorySink* sinkPtr_;
+  std::unique_ptr<WriterBase> writer_;
 };
 
 TEST_F(WriterTest, WriteFooter) {
@@ -84,11 +89,11 @@ TEST_F(WriterTest, WriteFooter) {
 
   for (size_t i = 0; i < 3; ++i) {
     writerSink.setMode(WriterSink::Mode::Index);
-    writerSink.addBuffer(pool, data.data(), data.size());
+    writerSink.addBuffer(*pool_, data.data(), data.size());
     writerSink.setMode(WriterSink::Mode::Data);
-    writerSink.addBuffer(pool, data.data(), data.size());
+    writerSink.addBuffer(*pool_, data.data(), data.size());
     writerSink.setMode(WriterSink::Mode::Footer);
-    writerSink.addBuffer(pool, data.data(), data.size());
+    writerSink.addBuffer(*pool_, data.data(), data.size());
     writerSink.setMode(WriterSink::Mode::None);
     context.stripeRowCount = 123;
     context.stripeRawSize = 345;
@@ -111,9 +116,7 @@ TEST_F(WriterTest, WriteFooter) {
   writer.close();
 
   // deserialize and verify
-  auto input =
-      std::make_unique<MemoryInputStream>(sinkPtr->getData(), sinkPtr->size());
-  auto reader = std::make_unique<ReaderBase>(pool, std::move(input));
+  auto reader = createReader();
 
   auto& ps = reader->getPostScript();
   ASSERT_EQ(reader->getWriterVersion(), config->get(Config::WRITER_VERSION));
@@ -180,7 +183,7 @@ TEST_F(WriterTest, AddStripeInfo) {
   std::memset(data.data(), 'a', data.size());
   auto& writerSink = writer.getSink();
   writerSink.setMode(WriterSink::Mode::Data);
-  writerSink.addBuffer(pool, data.data(), data.size());
+  writerSink.addBuffer(*pool_, data.data(), data.size());
   writerSink.setMode(WriterSink::Mode::None);
 
   auto& ret = addStripeInfo();
@@ -199,7 +202,7 @@ TEST_F(WriterTest, NoChecksum) {
   std::memset(data.data(), 'a', data.size());
   auto& writerSink = writer.getSink();
   writerSink.setMode(WriterSink::Mode::Data);
-  writerSink.addBuffer(pool, data.data(), data.size());
+  writerSink.addBuffer(*pool_, data.data(), data.size());
   writerSink.setMode(WriterSink::Mode::None);
 
   auto& ret = addStripeInfo();
@@ -215,9 +218,7 @@ TEST_F(WriterTest, NoChecksum) {
   writer.close();
 
   // deserialize and verify
-  auto input =
-      std::make_unique<MemoryInputStream>(sinkPtr->getData(), sinkPtr->size());
-  auto reader = std::make_unique<ReaderBase>(pool, std::move(input));
+  auto reader = createReader();
   auto& footer = reader->getFooter();
   ASSERT_TRUE(footer.hasChecksumAlgorithm());
   ASSERT_EQ(footer.checksumAlgorithm(), proto::ChecksumAlgorithm::NULL_);
@@ -232,11 +233,11 @@ TEST_F(WriterTest, NoCache) {
   std::memset(data.data(), 'a', data.size());
   auto& writerSink = writer.getSink();
   writerSink.setMode(WriterSink::Mode::Index);
-  writerSink.addBuffer(pool, data.data(), 10);
+  writerSink.addBuffer(*pool_, data.data(), 10);
   writerSink.setMode(WriterSink::Mode::Data);
-  writerSink.addBuffer(pool, data.data(), 10);
+  writerSink.addBuffer(*pool_, data.data(), 10);
   writerSink.setMode(WriterSink::Mode::Footer);
-  writerSink.addBuffer(pool, data.data(), 10);
+  writerSink.addBuffer(*pool_, data.data(), 10);
   writerSink.setMode(WriterSink::Mode::None);
 
   addStripeInfo();
@@ -251,9 +252,7 @@ TEST_F(WriterTest, NoCache) {
   writer.close();
 
   // deserialize and verify
-  auto input =
-      std::make_unique<MemoryInputStream>(sinkPtr->getData(), sinkPtr->size());
-  auto reader = std::make_unique<ReaderBase>(pool, std::move(input));
+  auto reader = createReader();
   auto& footer = reader->getFooter();
   ASSERT_EQ(footer.stripeCacheOffsetsSize(), 0);
   auto& ps = reader->getPostScript();
@@ -328,14 +327,14 @@ class MockDataSink : public dwio::common::DataSink {
 
 TEST(WriterBaseTest, FlushWriterSinkUponClose) {
   auto config = std::make_shared<Config>();
-  auto pool = getDefaultScopedMemoryPool();
+  auto pool = defaultMemoryManager().addRootPool("FlushWriterSinkUponClose");
   auto sink = std::make_unique<MockDataSink>();
   MockDataSink* sinkPtr = sink.get();
   EXPECT_CALL(*sinkPtr, write(_)).Times(1);
   EXPECT_CALL(*sinkPtr, isBuffered()).WillOnce(Return(false));
   {
     auto writer = std::make_unique<WriterBase>(std::move(sink));
-    writer->initContext(config, pool->addScopedChild("test_writer_pool"));
+    writer->initContext(config, pool->addAggregateChild("test_writer_pool"));
     writer->close();
   }
 }

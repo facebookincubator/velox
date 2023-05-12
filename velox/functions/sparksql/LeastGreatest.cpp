@@ -108,16 +108,17 @@ std::shared_ptr<exec::VectorFunction> makeImpl(
     return std::make_shared<LeastGreatestFunction<   \
         Cmp<TypeTraits<TypeKind::kind>::NativeType>, \
         TypeKind::kind>>();
-    SCALAR_CASE(BOOLEAN);
-    SCALAR_CASE(TINYINT);
-    SCALAR_CASE(SMALLINT);
-    SCALAR_CASE(INTEGER);
-    SCALAR_CASE(BIGINT);
-    SCALAR_CASE(REAL);
-    SCALAR_CASE(DOUBLE);
-    SCALAR_CASE(VARCHAR);
-    SCALAR_CASE(VARBINARY);
-    SCALAR_CASE(TIMESTAMP);
+    SCALAR_CASE(BOOLEAN)
+    SCALAR_CASE(TINYINT)
+    SCALAR_CASE(SMALLINT)
+    SCALAR_CASE(INTEGER)
+    SCALAR_CASE(BIGINT)
+    SCALAR_CASE(REAL)
+    SCALAR_CASE(DOUBLE)
+    SCALAR_CASE(VARCHAR)
+    SCALAR_CASE(VARBINARY)
+    SCALAR_CASE(TIMESTAMP)
+    SCALAR_CASE(DATE)
 #undef SCALAR_CASE
     default:
       VELOX_NYI(
@@ -136,14 +137,29 @@ std::shared_ptr<exec::VectorFunction> makeLeast(
 }
 
 std::vector<std::shared_ptr<exec::FunctionSignature>> leastSignatures() {
-  // T, T... -> T
-  return {exec::FunctionSignatureBuilder()
-              .typeVariable("T")
-              .returnType("T")
-              .argumentType("T")
-              .argumentType("T")
-              .variableArity()
-              .build()};
+  std::vector<std::string> types = {
+      "boolean",
+      "tinyint",
+      "smallint",
+      "integer",
+      "bigint",
+      "real",
+      "double",
+      "varchar",
+      "varbinary",
+      "timestamp",
+      "date"};
+  std::vector<std::shared_ptr<exec::FunctionSignature>> signatures;
+
+  for (const auto& type : types) {
+    signatures.emplace_back(exec::FunctionSignatureBuilder()
+                                .returnType(type)
+                                .argumentType(type)
+                                .argumentType(type)
+                                .variableArity()
+                                .build());
+  }
+  return signatures;
 }
 
 std::shared_ptr<exec::VectorFunction> makeGreatest(

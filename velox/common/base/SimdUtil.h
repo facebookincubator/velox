@@ -354,7 +354,12 @@ xsimd::batch<T, A> iota(const A& = {});
 template <typename T, typename A = xsimd::default_arch>
 xsimd::batch<T, A> setAll(T value, const A& = {}) {
   if constexpr (std::is_same_v<T, bool>) {
+#if defined(__aarch64__)
+    return xsimd::batch<T, A>(
+        xsimd::broadcast<unsigned char, A>(value ? -1 : 0));
+#else
     return xsimd::batch<T, A>(xsimd::broadcast<int64_t, A>(value ? -1 : 0));
+#endif
   } else {
     return xsimd::broadcast<T, A>(value);
   }
@@ -404,6 +409,10 @@ template <typename T>
 inline bool isDense(const T* values, int32_t size) {
   return (values[size - 1] - values[0] == size - 1);
 }
+
+// Reinterpret batch of U into batch of T.
+template <typename T, typename U, typename A = xsimd::default_arch>
+xsimd::batch<T, A> reinterpretBatch(xsimd::batch<U, A>, const A& = {});
 
 } // namespace facebook::velox::simd
 

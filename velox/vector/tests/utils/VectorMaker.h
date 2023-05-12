@@ -73,8 +73,7 @@ class VectorMaker {
       std::function<T(vector_size_t /*row*/)> valueAt,
       std::function<bool(vector_size_t /*row*/)> isNullAt = nullptr,
       const TypePtr& type = CppToType<T>::create()) {
-    auto flatVector = std::dynamic_pointer_cast<FlatVector<T>>(
-        BaseVector::create(type, size, pool_));
+    auto flatVector = BaseVector::create<FlatVector<T>>(type, size, pool_);
     for (vector_size_t i = 0; i < size; i++) {
       if (isNullAt && isNullAt(i)) {
         flatVector->setNull(i, true);
@@ -122,8 +121,7 @@ class VectorMaker {
   FlatVectorPtr<T> flatVector(
       size_t size,
       const TypePtr& type = CppToType<T>::create()) {
-    return std::dynamic_pointer_cast<FlatVector<T>>(
-        BaseVector::create(type, size, pool_));
+    return BaseVector::create<FlatVector<T>>(type, size, pool_);
   }
 
   /// Create a FlatVector<T>
@@ -181,8 +179,7 @@ class VectorMaker {
   FlatVectorPtr<T> flatVector(
       const std::vector<TupleType>& data,
       const TypePtr& type) {
-    auto vector = std::dynamic_pointer_cast<FlatVector<T>>(
-        BaseVector::create(type, data.size(), pool_));
+    auto vector = BaseVector::create<FlatVector<T>>(type, data.size(), pool_);
     for (vector_size_t i = 0; i < data.size(); ++i) {
       vector->set(i, std::get<TupleIndex>(data[i]));
     }
@@ -191,8 +188,8 @@ class VectorMaker {
 
   template <typename T>
   FlatVectorPtr<T> allNullFlatVector(vector_size_t size) {
-    auto flatVector = std::dynamic_pointer_cast<FlatVector<T>>(
-        BaseVector::create(CppToType<T>::create(), size, pool_));
+    auto flatVector =
+        BaseVector::create<FlatVector<T>>(CppToType<T>::create(), size, pool_);
     for (vector_size_t i = 0; i < size; i++) {
       flatVector->setNull(i, true);
     }
@@ -206,7 +203,7 @@ class VectorMaker {
   /// Examples:
   ///  auto flatVector = shortDecimalFlatVector({1, 2, 3}, DECIMAL(8, 1));
   template <typename T>
-  FlatVectorPtr<UnscaledShortDecimal> shortDecimalFlatVector(
+  FlatVectorPtr<int64_t> shortDecimalFlatVector(
       const std::vector<T>& unscaledValues,
       const TypePtr& ptr);
 
@@ -217,7 +214,7 @@ class VectorMaker {
   /// Examples:
   ///  auto flatVector = longDecimalFlatVector({1, 2, 3}, DECIMAL(20, 4));
   template <typename T>
-  FlatVectorPtr<UnscaledLongDecimal> longDecimalFlatVector(
+  FlatVectorPtr<int128_t> longDecimalFlatVector(
       const std::vector<T>& unscaledValues,
       const TypePtr& ptr);
 
@@ -229,7 +226,7 @@ class VectorMaker {
   ///  auto flatVector = shortDecimalFlatVectorNullable({1, std::nullopt, 3},
   ///  DECIMAL(8, 1));
   template <typename T>
-  FlatVectorPtr<UnscaledShortDecimal> shortDecimalFlatVectorNullable(
+  FlatVectorPtr<int64_t> shortDecimalFlatVectorNullable(
       const std::vector<std::optional<T>>& data,
       const TypePtr& ptr);
 
@@ -241,7 +238,7 @@ class VectorMaker {
   ///  auto flatVector = longDecimalFlatVectorNullable({1, std::nullopt, 3},
   ///  DECIMAL(20, 4));
   template <typename T>
-  FlatVectorPtr<UnscaledLongDecimal> longDecimalFlatVectorNullable(
+  FlatVectorPtr<int128_t> longDecimalFlatVectorNullable(
       const std::vector<std::optional<T>>& data,
       const TypePtr& ptr);
 
@@ -345,13 +342,12 @@ class VectorMaker {
         size,
         offsets,
         sizes,
-        flatVector<T>(numElements, valueAt, valueIsNullAt),
-        BaseVector::countNulls(nulls, 0, size));
+        flatVector<T>(numElements, valueAt, valueIsNullAt));
   }
 
   template <typename T>
   ArrayVectorPtr arrayVectorImpl(
-      std::shared_ptr<const Type> type,
+      const TypePtr& type,
       vector_size_t size,
       std::function<vector_size_t(vector_size_t /* row */)> sizeAt,
       std::function<T(vector_size_t /* row */, vector_size_t /* idx */)>
@@ -363,8 +359,8 @@ class VectorMaker {
     auto numElements =
         createOffsetsAndSizes(size, sizeAt, isNullAt, &nulls, &offsets, &sizes);
 
-    auto flatVector = std::dynamic_pointer_cast<FlatVector<T>>(
-        BaseVector::create(CppToType<T>::create(), numElements, pool_));
+    auto flatVector =
+        BaseVector::create<FlatVector<T>>(type->childAt(0), numElements, pool_);
     vector_size_t currentIndex = 0;
     for (vector_size_t i = 0; i < size; ++i) {
       if (isNullAt && isNullAt(i)) {
@@ -402,31 +398,9 @@ class VectorMaker {
         ARRAY(CppToType<T>::create()), size, sizeAt, valueAt, isNullAt);
   }
 
-  /// Create a FixedArrayVector<T>
-  /// size and null for individual array is determined by sizeAt and isNullAt
-  /// value for elements of each array in a given row is determined by valueAt.
-  template <typename T>
-  ArrayVectorPtr fixedSizeArrayVector(
-      int len,
-      vector_size_t size,
-      std::function<T(vector_size_t /* row */, vector_size_t /* idx */)>
-          valueAt,
-      std::function<bool(vector_size_t /*row */)> isNullAt) {
-    return arrayVectorImpl(
-        FIXED_SIZE_ARRAY(len, CppToType<T>::create()),
-        size,
-        [=](vector_size_t i) -> vector_size_t {
-          // All entries are the same fixed size, _except_ null entries are size
-          // 0.
-          return isNullAt(i) ? 0 : len;
-        }, // sizeAt
-        valueAt,
-        isNullAt);
-  }
-
   template <typename T>
   ArrayVectorPtr arrayVectorImpl(
-      std::shared_ptr<const Type> type,
+      const TypePtr& type,
       const std::vector<std::vector<T>>& data) {
     vector_size_t size = data.size();
     BufferPtr offsets = AlignedBuffer::allocate<vector_size_t>(size, pool_);
@@ -442,8 +416,8 @@ class VectorMaker {
     }
 
     // Create the underlying flat vector.
-    auto flatVector = std::dynamic_pointer_cast<FlatVector<T>>(
-        BaseVector::create(CppToType<T>::create(), numElements, pool_));
+    auto flatVector =
+        BaseVector::create<FlatVector<T>>(type->childAt(0), numElements, pool_);
 
     vector_size_t currentIdx = 0;
     for (const auto& arrayValue : data) {
@@ -456,25 +430,17 @@ class VectorMaker {
     }
 
     return std::make_shared<ArrayVector>(
-        pool_, type, nullptr, size, offsets, sizes, flatVector, 0);
+        pool_, type, nullptr, size, offsets, sizes, flatVector);
   }
 
   /// Create a ArrayVector<T>
   /// array elements are created based on input std::vectors and are
   /// non-nullable.
   template <typename T>
-  ArrayVectorPtr arrayVector(const std::vector<std::vector<T>>& data) {
-    return arrayVectorImpl(ARRAY(CppToType<T>::create()), data);
-  }
-
-  /// Create a FixedSizeArrayVector<T>
-  /// array elements are created based on input std::vectors and are
-  /// non-nullable.  All vectors should be the same size.
-  template <typename T>
-  ArrayVectorPtr fixedSizeArrayVector(
-      int len,
-      const std::vector<std::vector<T>>& data) {
-    return arrayVectorImpl(FIXED_SIZE_ARRAY(len, CppToType<T>::create()), data);
+  ArrayVectorPtr arrayVector(
+      const std::vector<std::vector<T>>& data,
+      const TypePtr& elementType = CppToType<T>::create()) {
+    return arrayVectorImpl(ARRAY(elementType), data);
   }
 
   /// Create an ArrayVector<ROW> from nested std::vectors of Variants.
@@ -484,8 +450,10 @@ class VectorMaker {
 
   template <typename T>
   ArrayVectorPtr arrayVectorNullableImpl(
-      std::shared_ptr<const Type> type,
+      const TypePtr& type,
       const std::vector<std::optional<std::vector<std::optional<T>>>>& data) {
+    VELOX_CHECK(type->isArray(), "Type must be an array: {}", type->toString());
+
     vector_size_t size = data.size();
     BufferPtr offsets = AlignedBuffer::allocate<vector_size_t>(size, pool_);
     BufferPtr sizes = AlignedBuffer::allocate<vector_size_t>(size, pool_);
@@ -499,12 +467,10 @@ class VectorMaker {
     // Count number of elements.
     vector_size_t numElements = 0;
     vector_size_t indexPtr = 0;
-    vector_size_t nullCount = 0;
     for (const auto& array : data) {
       numElements += array.has_value() ? array.value().size() : 0;
       if (!array.has_value()) {
         bits::setNull(rawNulls, indexPtr, true);
-        nullCount++;
       }
       indexPtr++;
     }
@@ -512,12 +478,11 @@ class VectorMaker {
     using V = typename CppToType<T>::NativeType;
 
     // Create the underlying flat vector.
-    auto flatVector = std::dynamic_pointer_cast<FlatVector<V>>(
-        BaseVector::create(type->childAt(0), numElements, pool_));
+    auto flatVector =
+        BaseVector::create<FlatVector<V>>(type->childAt(0), numElements, pool_);
     auto elementRawNulls = flatVector->mutableRawNulls();
 
     vector_size_t currentIdx = 0;
-    vector_size_t elementNullCount = 0;
 
     for (const auto& arrayValue : data) {
       *rawSizes++ = arrayValue.has_value() ? arrayValue.value().size() : 0;
@@ -527,7 +492,6 @@ class VectorMaker {
         for (auto arrayElement : arrayValue.value()) {
           if (arrayElement == std::nullopt) {
             bits::setNull(elementRawNulls, currentIdx, true);
-            ++elementNullCount;
           } else {
             flatVector->set(currentIdx, V(*arrayElement));
           }
@@ -535,10 +499,9 @@ class VectorMaker {
         }
       }
     }
-    flatVector->setNullCount(elementNullCount);
 
     return std::make_shared<ArrayVector>(
-        pool_, type, nulls, size, offsets, sizes, flatVector, nullCount);
+        pool_, type, nulls, size, offsets, sizes, flatVector);
   }
 
   /// Create a ArrayVector<T>
@@ -551,20 +514,9 @@ class VectorMaker {
     return arrayVectorNullableImpl(type, data);
   }
 
-  /// Create a FixedSizeArrayVector<T> array elements are created
-  /// based on input std::vectors and are nullable. All vectors should be
-  /// the same size.
-  template <typename T>
-  ArrayVectorPtr fixedSizeArrayVectorNullable(
-      int len,
-      const std::vector<std::optional<std::vector<std::optional<T>>>>& data) {
-    return arrayVectorNullableImpl(
-        FIXED_SIZE_ARRAY(len, CppToType<T>::create()), data);
-  }
-
   ArrayVectorPtr allNullArrayVector(
       vector_size_t size,
-      const std::shared_ptr<const Type>& elementType);
+      const TypePtr& elementType);
 
   /// Create a Map<TKey, TValue>
   /// size and null for individual map is determined by sizeAt and isNullAt
@@ -640,14 +592,13 @@ class VectorMaker {
         offsets,
         sizes,
         flatVector(keys),
-        flatVector(values),
-        BaseVector::countNulls(nulls, 0, size));
+        flatVector(values));
   }
 
   MapVectorPtr allNullMapVector(
       vector_size_t size,
-      const std::shared_ptr<const Type>& keyType,
-      const std::shared_ptr<const Type>& valueType);
+      const TypePtr& keyType,
+      const TypePtr& valueType);
 
   /// Create a FlatVector from a variant containing a scalar value.
   template <TypeKind kind>
@@ -682,9 +633,9 @@ class VectorMaker {
   static std::shared_ptr<T> flatten(const VectorPtr& vector) {
     SelectivityVector allRows(vector->size());
     auto flatVector =
-        BaseVector::create(vector->type(), vector->size(), vector->pool());
+        BaseVector::create<T>(vector->type(), vector->size(), vector->pool());
     flatVector->copy(vector.get(), allRows, nullptr);
-    return std::dynamic_pointer_cast<T>(flatVector);
+    return flatVector;
   }
 
   /// Create an ArrayVector from a vector of offsets and a base element vector.

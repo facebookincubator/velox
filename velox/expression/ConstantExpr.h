@@ -20,16 +20,6 @@
 namespace facebook::velox::exec {
 class ConstantExpr : public SpecialForm {
  public:
-  ConstantExpr(TypePtr type, variant value)
-      : SpecialForm(
-            std::move(type),
-            std::vector<ExprPtr>(),
-            "literal",
-            !value.isNull() /* supportsFlatNoNullsFastPath */,
-            false /* trackCpuUsage */),
-        value_(std::move(value)),
-        needToSetIsAscii_{type->isVarchar()} {}
-
   explicit ConstantExpr(VectorPtr value)
       : SpecialForm(
             value->type(),
@@ -39,11 +29,8 @@ class ConstantExpr : public SpecialForm {
             false /* trackCpuUsage */),
         needToSetIsAscii_{value->type()->isVarchar()} {
     VELOX_CHECK_EQ(value->encoding(), VectorEncoding::Simple::CONSTANT);
-    sharedSubexprValues_ = std::move(value);
+    sharedConstantValue_ = std::move(value);
   }
-
-  // Do not clear sharedSubexprValues_.
-  void reset() override {}
 
   void evalSpecialForm(
       const SelectivityVector& rows,
@@ -56,15 +43,20 @@ class ConstantExpr : public SpecialForm {
       VectorPtr& result) override;
 
   const VectorPtr& value() const {
-    return sharedSubexprValues_;
+    return sharedConstantValue_;
+  }
+
+  VectorPtr& mutableValue() {
+    return sharedConstantValue_;
   }
 
   std::string toString(bool recursive = true) const override;
 
-  std::string toSql() const override;
+  std::string toSql(
+      std::vector<VectorPtr>* complexConstants = nullptr) const override;
 
  private:
-  const variant value_;
+  VectorPtr sharedConstantValue_;
   bool needToSetIsAscii_;
 };
 } // namespace facebook::velox::exec

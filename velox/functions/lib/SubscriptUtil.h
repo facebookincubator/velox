@@ -65,30 +65,30 @@ class SubscriptImpl : public exec::VectorFunction {
   }
 
   static std::vector<std::shared_ptr<exec::FunctionSignature>> signatures() {
-    return {
-        // array(T), integer -> T
-        exec::FunctionSignatureBuilder()
-            .typeVariable("T")
-            .returnType("T")
-            .argumentType("array(T)")
-            .argumentType("integer")
-            .build(),
-        // array(T), bigint -> T
-        exec::FunctionSignatureBuilder()
-            .typeVariable("T")
-            .returnType("T")
-            .argumentType("array(T)")
-            .argumentType("bigint")
-            .build(),
-        // map(K,V), K -> V
-        exec::FunctionSignatureBuilder()
-            .typeVariable("K")
-            .typeVariable("V")
-            .returnType("V")
-            .argumentType("map(K,V)")
-            .argumentType("K")
-            .build(),
-    };
+    std::vector<std::shared_ptr<exec::FunctionSignature>> signatures;
+
+    // array(T), integer|bigint -> T
+    for (const auto& indexType : {"integer", "bigint"}) {
+      signatures.push_back(exec::FunctionSignatureBuilder()
+                               .typeVariable("T")
+                               .returnType("T")
+                               .argumentType("array(T)")
+                               .argumentType(indexType)
+                               .build());
+    }
+
+    // map(K,V), K -> V
+    for (const auto& keyType :
+         {"tinyint", "smallint", "integer", "bigint", "varchar"}) {
+      signatures.push_back(exec::FunctionSignatureBuilder()
+                               .typeVariable("V")
+                               .returnType("V")
+                               .argumentType(fmt::format("map({},V)", keyType))
+                               .argumentType(keyType)
+                               .build());
+    }
+
+    return signatures;
   }
 
  private:
@@ -156,11 +156,11 @@ class SubscriptImpl : public exec::VectorFunction {
       exec::EvalCtx& context) const {
     auto* pool = context.pool();
 
-    BufferPtr indices = allocateIndices(rows.size(), pool);
+    BufferPtr indices = allocateIndices(rows.end(), pool);
     auto rawIndices = indices->asMutable<vector_size_t>();
 
     // Create nulls for lazy initialization.
-    NullsBuilder nullsBuilder(rows.size(), pool);
+    NullsBuilder nullsBuilder(rows.end(), pool);
 
     exec::LocalDecodedVector arrayHolder(context, *arrayArg, rows);
     auto decodedArray = arrayHolder.get();
@@ -206,8 +206,16 @@ class SubscriptImpl : public exec::VectorFunction {
         }
       });
     }
+
+    // Subscript into empty arrays always returns NULLs. Check added at the end
+    // to ensure user error checks for indices are not skipped.
+    if (baseArray->elements()->size() == 0) {
+      return BaseVector::createNullConstant(
+          baseArray->elements()->type(), rows.end(), context.pool());
+    }
+
     return BaseVector::wrapInDictionary(
-        nullsBuilder.build(), indices, rows.size(), baseArray->elements());
+        nullsBuilder.build(), indices, rows.end(), baseArray->elements());
   }
 
   // Normalize indices from 1 or 0-based into always 0-based (according to
@@ -282,11 +290,11 @@ class SubscriptImpl : public exec::VectorFunction {
       exec::EvalCtx& context) const {
     auto* pool = context.pool();
 
-    BufferPtr indices = allocateIndices(rows.size(), pool);
+    BufferPtr indices = allocateIndices(rows.end(), pool);
     auto rawIndices = indices->asMutable<vector_size_t>();
 
     // Create nulls for lazy initialization.
-    NullsBuilder nullsBuilder(rows.size(), pool);
+    NullsBuilder nullsBuilder(rows.end(), pool);
 
     // Get base MapVector.
     // TODO: Optimize the case when indices are identity.
@@ -351,8 +359,16 @@ class SubscriptImpl : public exec::VectorFunction {
         processRow(row, searchKey);
       });
     }
+
+    // Subscript into empty maps always returns NULLs. Check added at the end to
+    // ensure user error checks for indices are not skipped.
+    if (baseMap->mapValues()->size() == 0) {
+      return BaseVector::createNullConstant(
+          baseMap->mapValues()->type(), rows.end(), context.pool());
+    }
+
     return BaseVector::wrapInDictionary(
-        nullsBuilder.build(), indices, rows.size(), baseMap->mapValues());
+        nullsBuilder.build(), indices, rows.end(), baseMap->mapValues());
   }
 };
 

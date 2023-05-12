@@ -32,7 +32,8 @@ void HashJoinBridge::addBuilder() {
 
 bool HashJoinBridge::setHashTable(
     std::unique_ptr<BaseHashTable> table,
-    SpillPartitionSet spillPartitionSet) {
+    SpillPartitionSet spillPartitionSet,
+    bool hasNullKeys) {
   VELOX_CHECK_NOT_NULL(table, "setHashTable called with null table");
 
   auto spillPartitionIdSet = toSpillPartitionIdSet(spillPartitionSet);
@@ -61,7 +62,8 @@ bool HashJoinBridge::setHashTable(
     buildResult_ = HashBuildResult(
         std::move(table),
         std::move(restoringSpillPartitionId_),
-        std::move(spillPartitionIdSet));
+        std::move(spillPartitionIdSet),
+        hasNullKeys);
     restoringSpillPartitionId_.reset();
 
     hasSpillData = !spillPartitionSets_.empty();
@@ -162,9 +164,10 @@ std::optional<HashJoinBridge::SpillInput> HashJoinBridge::spillInputOrFuture(
   return SpillInput(std::move(spillShard));
 }
 
-bool isNullAwareAntiJoinWithFilter(
+bool isLeftNullAwareJoinWithFilter(
     const std::shared_ptr<const core::HashJoinNode>& joinNode) {
-  return isNullAwareAntiJoin(joinNode->joinType()) &&
-      (joinNode->filter() != nullptr);
+  return (joinNode->isAntiJoin() || joinNode->isLeftSemiProjectJoin() ||
+          joinNode->isLeftSemiFilterJoin()) &&
+      joinNode->isNullAware() && (joinNode->filter() != nullptr);
 }
 } // namespace facebook::velox::exec

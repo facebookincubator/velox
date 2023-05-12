@@ -43,9 +43,6 @@ namespace facebook::velox::exec {
       case TypeKind::DATE: {                                             \
         return TEMPLATE_FUNC<TypeKind::DATE>(__VA_ARGS__);               \
       }                                                                  \
-      case TypeKind::INTERVAL_DAY_TIME: {                                \
-        return TEMPLATE_FUNC<TypeKind::INTERVAL_DAY_TIME>(__VA_ARGS__);  \
-      }                                                                  \
       case TypeKind::VARCHAR:                                            \
       case TypeKind::VARBINARY: {                                        \
         return TEMPLATE_FUNC<TypeKind::VARCHAR>(__VA_ARGS__);            \
@@ -470,7 +467,7 @@ void VectorHasher::lookupIdsRangeSimd(
         if (outOfRange != bits::lowMask(xsimd::batch<T>::size)) {
           if constexpr (sizeof(T) == 8) {
             auto unsignedValues =
-                static_cast<xsimd::batch<typename std::make_unsigned<T>::type>>(
+                simd::reinterpretBatch<typename std::make_unsigned<T>::type>(
                     values);
             if (multiplier_ == 1) {
               (unsignedValues - offset).store_unaligned(result + index);
@@ -480,11 +477,11 @@ void VectorHasher::lookupIdsRangeSimd(
                   .store_unaligned(result + index);
             }
           } else {
-            // Widen 8 to 2 x 4 since result is always 64 wide.
-            auto first4 = static_cast<xsimd::batch<uint64_t>>(
+            // Widen 8 to 2 x 4 since result is always 64 bits wide.
+            auto first4 = simd::reinterpretBatch<uint64_t>(
                               simd::getHalf<int64_t, 0>(values)) -
                 offset;
-            auto next4 = static_cast<xsimd::batch<uint64_t>>(
+            auto next4 = simd::reinterpretBatch<uint64_t>(
                              simd::getHalf<int64_t, 1>(values)) -
                 offset;
             if (multiplier_ == 1) {

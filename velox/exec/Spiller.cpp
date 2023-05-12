@@ -15,17 +15,16 @@
  */
 
 #include "velox/exec/Spiller.h"
-
-#include "velox/common/base/AsyncSource.h"
-
 #include <folly/ScopeGuard.h>
+#include "velox/common/base/AsyncSource.h"
 #include "velox/common/testutil/TestValue.h"
 
 using facebook::velox::common::testutil::TestValue;
 
 namespace facebook::velox::exec {
-
-constexpr int kLogEveryN = 32;
+namespace {
+constexpr int32_t kLogEveryN = 32;
+}
 
 Spiller::Spiller(
     Type type,
@@ -38,7 +37,6 @@ Spiller::Spiller(
     uint64_t targetFileSize,
     uint64_t minSpillRunSize,
     memory::MemoryPool& pool,
-    std::unordered_map<std::string, RuntimeMetric>& stats,
     folly::Executor* executor)
     : Spiller(
           type,
@@ -52,7 +50,6 @@ Spiller::Spiller(
           targetFileSize,
           minSpillRunSize,
           pool,
-          stats,
           executor) {
   VELOX_CHECK_EQ(type_, Type::kOrderBy);
 }
@@ -65,7 +62,6 @@ Spiller::Spiller(
     uint64_t targetFileSize,
     uint64_t minSpillRunSize,
     memory::MemoryPool& pool,
-    std::unordered_map<std::string, RuntimeMetric>& stats,
     folly::Executor* FOLLY_NULLABLE executor)
     : Spiller(
           type,
@@ -79,7 +75,6 @@ Spiller::Spiller(
           targetFileSize,
           minSpillRunSize,
           pool,
-          stats,
           executor) {
   VELOX_CHECK_EQ(type_, Type::kHashJoinProbe);
 }
@@ -96,7 +91,6 @@ Spiller::Spiller(
     uint64_t targetFileSize,
     uint64_t minSpillRunSize,
     memory::MemoryPool& pool,
-    std::unordered_map<std::string, RuntimeMetric>& stats,
     folly::Executor* executor)
     : type_(type),
       container_(container),
@@ -110,11 +104,8 @@ Spiller::Spiller(
           numSortingKeys,
           sortCompareFlags,
           targetFileSize,
-          pool,
-          spillMappedMemory(),
-          stats),
+          pool),
       pool_(pool),
-      stats_(stats),
       executor_(executor) {
   TestValue::adjust(
       "facebook::velox::exec::Spiller", const_cast<HashBitRange*>(&bits_));
@@ -124,7 +115,7 @@ Spiller::Spiller(
   VELOX_CHECK((type_ != Type::kOrderBy) || (state_.maxPartitions() == 1));
   spillRuns_.reserve(state_.maxPartitions());
   for (int i = 0; i < state_.maxPartitions(); ++i) {
-    spillRuns_.emplace_back(spillMappedMemory());
+    spillRuns_.emplace_back(pool_);
   }
 }
 
@@ -144,7 +135,6 @@ void Spiller::extractSpill(folly::Range<char**> rows, RowVectorPtr& resultPtr) {
   auto& aggregates = container_->aggregates();
   auto numKeys = types.size();
   for (auto i = 0; i < aggregates.size(); ++i) {
-    aggregates[i]->finalize(rows.data(), rows.size());
     aggregates[i]->extractAccumulators(
         rows.data(), rows.size(), &result->childAt(i + numKeys));
   }
@@ -420,22 +410,27 @@ void Spiller::spill(uint64_t targetRows, uint64_t targetBytes) {
 
 void Spiller::spill(const SpillPartitionNumSet& partitions) {
   VELOX_CHECK(!spillFinalized_);
-
-  if (FOLLY_UNLIKELY(type_ == Type::kHashJoinProbe)) {
+  if (type_ == Type::kHashJoinProbe) {
     VELOX_FAIL("There is no row container for {}", typeName(type_));
   }
-  if (FOLLY_UNLIKELY(!pendingSpillPartitions_.empty())) {
+  if (!pendingSpillPartitions_.empty()) {
     VELOX_FAIL(
         "There are pending spilling operations on partitions: {}",
         folly::join(",", pendingSpillPartitions_));
   }
 
-  for (auto partition : partitions) {
-    if (FOLLY_LIKELY(!state_.isPartitionSpilled(partition))) {
+  std::vector<uint32_t> partitionsToSpill(partitions.begin(), partitions.end());
+  if (partitionsToSpill.empty()) {
+    partitionsToSpill.resize(state_.maxPartitions());
+    std::iota(partitionsToSpill.begin(), partitionsToSpill.end(), 0);
+  }
+
+  for (auto partition : partitionsToSpill) {
+    if (!state_.isPartitionSpilled(partition)) {
       state_.setPartitionSpilled(partition);
-    }
-    if (FOLLY_LIKELY(!spillRuns_[partition].rows.empty())) {
-      pendingSpillPartitions_.insert(partition);
+      if (!spillRuns_[partition].rows.empty()) {
+        pendingSpillPartitions_.insert(partition);
+      }
     }
   }
 
@@ -507,7 +502,7 @@ Spiller::SpillRows Spiller::finishSpill() {
   spillFinalized_ = true;
 
   SpillRows rowsFromNonSpillingPartitions(
-      0, memory::StlMappedMemoryAllocator<char*>(&spillMappedMemory()));
+      0, memory::StlAllocator<char*>(pool_));
   if (type_ != Spiller::Type::kHashJoinProbe) {
     fillSpillRuns(&rowsFromNonSpillingPartitions);
   }
@@ -660,17 +655,8 @@ void Spiller::fillSpillRuns(std::vector<SpillableStats>& statsList) {
 }
 
 // static
-memory::MappedMemory& Spiller::spillMappedMemory() {
-  // Return the top level instance. Since this too may be full,
-  // another possibility is to return an emergency instance that
-  // delegates to the process wide one and makes a file-backed mmap
-  // if the allocation fails.
-  return *memory::MappedMemory::getInstance();
-}
-
-// static
 memory::MemoryPool& Spiller::spillPool() {
-  static auto pool = memory::getDefaultScopedMemoryPool();
+  static auto pool = memory::addDefaultLeafMemoryPool("spilling");
   return *pool;
 }
 

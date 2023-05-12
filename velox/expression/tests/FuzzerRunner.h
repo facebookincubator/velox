@@ -139,62 +139,7 @@ class FuzzerRunner {
     appendSpecialForms(specialForms, signatures);
     facebook::velox::test::expressionFuzzer(
         filterSignatures(signatures, onlyFunctions, skipFunctions), seed);
+    // Calling gtest here so that it can be recognized as tests in CI systems.
     return RUN_ALL_TESTS();
   }
-};
-
-// static
-const std::unordered_map<
-    std::string,
-    std::vector<facebook::velox::exec::FunctionSignaturePtr>>
-    FuzzerRunner::kSpecialForms = {
-        {"and",
-         std::vector<facebook::velox::exec::FunctionSignaturePtr>{
-             // and: boolean, boolean,.. -> boolean
-             facebook::velox::exec::FunctionSignatureBuilder()
-                 .argumentType("boolean")
-                 .argumentType("boolean")
-                 .variableArity()
-                 .returnType("boolean")
-                 .build()}},
-        {"or",
-         std::vector<facebook::velox::exec::FunctionSignaturePtr>{
-             // or: boolean, boolean,.. -> boolean
-             facebook::velox::exec::FunctionSignatureBuilder()
-                 .argumentType("boolean")
-                 .argumentType("boolean")
-                 .variableArity()
-                 .returnType("boolean")
-                 .build()}},
-        {"coalesce",
-         std::vector<facebook::velox::exec::FunctionSignaturePtr>{
-             // coalesce: T, T,.. -> T
-             facebook::velox::exec::FunctionSignatureBuilder()
-                 .typeVariable("T")
-                 .argumentType("T")
-                 .argumentType("T")
-                 .variableArity()
-                 .returnType("T")
-                 .build()}},
-        {
-            "if",
-            std::vector<facebook::velox::exec::FunctionSignaturePtr>{
-                // if (condition, then): boolean, T -> T
-                facebook::velox::exec::FunctionSignatureBuilder()
-                    .typeVariable("T")
-                    .argumentType("boolean")
-                    .argumentType("T")
-                    .argumentType("T")
-                    .returnType("T")
-                    .build(),
-                // if (condition, then, else): boolean, T -> T
-                facebook::velox::exec::FunctionSignatureBuilder()
-                    .typeVariable("T")
-                    .argumentType("boolean")
-                    .argumentType("T")
-                    .argumentType("T")
-                    .argumentType("T")
-                    .returnType("T")
-                    .build()},
-        },
 };

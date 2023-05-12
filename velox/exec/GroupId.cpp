@@ -31,9 +31,9 @@ GroupId::GroupId(
 
   std::unordered_map<std::string, column_index_t>
       inputToOutputGroupingKeyMapping;
-  for (const auto& [output, input] : groupIdNode->outputGroupingKeyNames()) {
-    inputToOutputGroupingKeyMapping[input->name()] =
-        outputType_->getChildIdx(output);
+  for (const auto& groupingKeyInfo : groupIdNode->groupingKeyInfos()) {
+    inputToOutputGroupingKeyMapping[groupingKeyInfo.input->name()] =
+        outputType_->getChildIdx(groupingKeyInfo.output);
   }
 
   auto numGroupingSets = groupIdNode->groupingSets().size();
@@ -105,7 +105,8 @@ RowVectorPtr GroupId::getOutput() {
 
   // Add groupId column.
   outputColumns[outputType_->size() - 1] =
-      BaseVector::createConstant((int64_t)groupingSetIndex_, numInput, pool());
+      std::make_shared<ConstantVector<int64_t>>(
+          pool(), numInput, false, BIGINT(), groupingSetIndex_);
 
   ++groupingSetIndex_;
   if (groupingSetIndex_ == groupingKeyMappings_.size()) {

@@ -18,12 +18,14 @@
 #include "velox/common/base/Fs.h"
 #include "velox/exec/tests/utils/AssertQueryBuilder.h"
 #include "velox/exec/tests/utils/PlanBuilder.h"
+#include "velox/exec/tests/utils/TempDirectoryPath.h"
 #include "velox/expression/FunctionSignature.h"
 #include "velox/expression/SignatureBinder.h"
 #include "velox/expression/tests/ArgumentTypeFuzzer.h"
 #include "velox/expression/tests/FuzzerToolkit.h"
 #include "velox/vector/VectorSaver.h"
 #include "velox/vector/fuzzer/VectorFuzzer.h"
+#include "velox/vector/tests/utils/VectorMaker.h"
 
 DEFINE_int32(steps, 10, "Number of plans to generate and execute.");
 
@@ -37,6 +39,8 @@ DEFINE_int32(
     batch_size,
     100,
     "The number of elements on each generated vector.");
+
+DEFINE_int32(num_batches, 10, "The number of generated vectors.");
 
 DEFINE_int32(
     max_num_varargs,
@@ -71,14 +75,13 @@ using facebook::velox::test::SignatureTemplate;
 namespace facebook::velox::exec::test {
 namespace {
 
-struct ResultOrError {
-  RowVectorPtr result;
-  std::exception_ptr exceptionPtr;
-};
-
 class AggregationFuzzer {
  public:
-  AggregationFuzzer(AggregateFunctionSignatureMap signatureMap, size_t seed);
+  AggregationFuzzer(
+      AggregateFunctionSignatureMap signatureMap,
+      size_t seed,
+      const std::unordered_map<std::string, std::string>&
+          customVerificationFunctions);
 
   void go();
 
@@ -96,8 +99,14 @@ class AggregationFuzzer {
     // Number of iterations using global aggregation.
     size_t numGlobal{0};
 
+    // Number of iterations using distinct aggregation.
+    size_t numDistinct{0};
+
+    // Number of interations using window expressions.
+    size_t numWindow{0};
+
     // Number of iterations where results were verified against DuckDB,
-    size_t numDuckDbVerified{0};
+    size_t numDuckVerified{0};
 
     // Number of iterations where aggregation failed.
     size_t numFailed{0};
@@ -124,27 +133,88 @@ class AggregationFuzzer {
     seed(rng_());
   }
 
+  // Generate at least one and up to 5 scalar columns to be used as grouping,
+  // partition or sorting keys.
+  // Column names are generated using template '<prefix>N', where N is
+  // zero-based ordinal number of the column.
+  std::vector<std::string> generateKeys(
+      const std::string& prefix,
+      std::vector<std::string>& names,
+      std::vector<TypePtr>& types);
+
   CallableSignature pickSignature();
 
-  void verify(
-      const std::vector<std::string>& groupingKeys,
-      const std::vector<std::string>& aggregates,
-      const std::vector<std::string>& masks,
-      const std::vector<RowVectorPtr>& input);
+  std::vector<RowVectorPtr> generateInputData(
+      std::vector<std::string> names,
+      std::vector<TypePtr> types);
 
-  std::optional<MaterializedRowMultiset> computeDuckDbResult(
+  // Generate a RowVector of the given types of children with an additional
+  // child named "row_number" of BIGINT row numbers that differentiates every
+  // row. Row numbers start from 0. This additional input vector is needed for
+  // result verification of window aggregations.
+  std::vector<RowVectorPtr> generateInputDataWithRowNumber(
+      std::vector<std::string> names,
+      std::vector<TypePtr> types);
+
+  void verifyWindow(
+      const std::vector<std::string>& partitionKeys,
+      const std::vector<std::string>& sortingKeys,
+      const std::vector<std::string>& aggregates,
+      const std::vector<RowVectorPtr>& input,
+      bool customVerification);
+
+  std::optional<MaterializedRowMultiset> computeDuckWindow(
+      const std::vector<std::string>& partitionKeys,
+      const std::vector<std::string>& sortingKeys,
+      const std::vector<std::string>& aggregates,
+      const std::vector<RowVectorPtr>& input,
+      const core::PlanNodePtr& plan);
+
+  void verifyAggregation(
       const std::vector<std::string>& groupingKeys,
       const std::vector<std::string>& aggregates,
       const std::vector<std::string>& masks,
       const std::vector<RowVectorPtr>& input,
+      bool customVerification,
+      const std::vector<std::string>& projections);
+
+  std::optional<MaterializedRowMultiset> computeDuckAggregation(
+      const std::vector<std::string>& groupingKeys,
+      const std::vector<std::string>& aggregates,
+      const std::vector<std::string>& masks,
+      const std::vector<std::string>& projections,
+      const std::vector<RowVectorPtr>& input,
       const core::PlanNodePtr& plan);
 
-  ResultOrError execute(const core::PlanNodePtr& plan);
+  velox::test::ResultOrError execute(
+      const core::PlanNodePtr& plan,
+      bool injectSpill);
 
+  void testPlans(
+      const std::vector<core::PlanNodePtr>& plans,
+      bool verifyResults,
+      const velox::test::ResultOrError& expected) {
+    for (auto i = 0; i < plans.size(); ++i) {
+      LOG(INFO) << "Testing plan #" << i;
+      testPlan(plans[i], false /*injectSpill*/, verifyResults, expected);
+
+      LOG(INFO) << "Testing plan #" << i << " with spilling";
+      testPlan(plans[i], true /*injectSpill*/, verifyResults, expected);
+    }
+  }
+
+  void testPlan(
+      const core::PlanNodePtr& plan,
+      bool injectSpill,
+      bool verifyResults,
+      const velox::test::ResultOrError& expected);
+
+  const std::unordered_map<std::string, std::string>
+      customVerificationFunctions_;
   const bool persistAndRunOnce_;
   const std::string reproPersistPath_;
 
-  std::unordered_set<std::string> duckDbFunctionNames_;
+  std::unordered_set<std::string> duckFunctionNames_;
 
   std::vector<CallableSignature> signatures_;
   std::vector<SignatureTemplate> signatureTemplates_;
@@ -152,22 +222,26 @@ class AggregationFuzzer {
   FuzzerGenerator rng_;
   size_t currentSeed_{0};
 
-  std::unique_ptr<memory::MemoryPool> pool_{
-      memory::getDefaultScopedMemoryPool()};
+  std::shared_ptr<memory::MemoryPool> pool_{memory::addDefaultLeafMemoryPool()};
   VectorFuzzer vectorFuzzer_;
 
   Stats stats_;
 };
 } // namespace
 
-void aggregateFuzzer(AggregateFunctionSignatureMap signatureMap, size_t seed) {
-  AggregationFuzzer(std::move(signatureMap), seed).go();
+void aggregateFuzzer(
+    AggregateFunctionSignatureMap signatureMap,
+    size_t seed,
+    const std::unordered_map<std::string, std::string>&
+        customVerificationFunctions) {
+  AggregationFuzzer(std::move(signatureMap), seed, customVerificationFunctions)
+      .go();
 }
 
 namespace {
 
-std::string toPercentageString(size_t n, size_t total) {
-  return fmt::format("{:.2f}%", (double)n / total * 100);
+std::string printStat(size_t n, size_t total) {
+  return fmt::format("{} ({:.2f}%)", n, (double)n / total * 100);
 }
 
 void printStats(
@@ -177,29 +251,21 @@ void printStats(
     size_t numSupportedSignatures) {
   LOG(INFO) << fmt::format(
       "Total functions: {} ({} signatures)", numFunctions, numSignatures);
-  LOG(INFO) << fmt::format(
-      "Functions with at least one supported signature: {} ({})",
-      numSupportedFunctions,
-      toPercentageString(numSupportedFunctions, numFunctions));
+  LOG(INFO) << "Functions with at least one supported signature: "
+            << printStat(numSupportedFunctions, numFunctions);
 
   size_t numNotSupportedFunctions = numFunctions - numSupportedFunctions;
-  LOG(INFO) << fmt::format(
-      "Functions with no supported signature: {} ({})",
-      numNotSupportedFunctions,
-      toPercentageString(numNotSupportedFunctions, numFunctions));
-  LOG(INFO) << fmt::format(
-      "Supported function signatures: {} ({})",
-      numSupportedSignatures,
-      toPercentageString(numSupportedSignatures, numSignatures));
+  LOG(INFO) << "Functions with no supported signature: "
+            << printStat(numNotSupportedFunctions, numFunctions);
+  LOG(INFO) << "Supported function signatures: "
+            << printStat(numSupportedSignatures, numSignatures);
 
   size_t numNotSupportedSignatures = numSignatures - numSupportedSignatures;
-  LOG(INFO) << fmt::format(
-      "Unsupported function signatures: {} ({})",
-      numNotSupportedSignatures,
-      toPercentageString(numNotSupportedSignatures, numSignatures));
+  LOG(INFO) << "Unsupported function signatures: "
+            << printStat(numNotSupportedSignatures, numSignatures);
 }
 
-std::unordered_set<std::string> getDuckDbFunctions() {
+std::unordered_set<std::string> getDuckFunctions() {
   std::string sql =
       "SELECT distinct on(function_name) function_name "
       "FROM duckdb_functions() "
@@ -218,8 +284,11 @@ std::unordered_set<std::string> getDuckDbFunctions() {
 
 AggregationFuzzer::AggregationFuzzer(
     AggregateFunctionSignatureMap signatureMap,
-    size_t initialSeed)
-    : persistAndRunOnce_{FLAGS_persist_and_run_once},
+    size_t initialSeed,
+    const std::unordered_map<std::string, std::string>&
+        customVerificationFunctions)
+    : customVerificationFunctions_{customVerificationFunctions},
+      persistAndRunOnce_{FLAGS_persist_and_run_once},
       reproPersistPath_{FLAGS_repro_persist_path},
       vectorFuzzer_{getFuzzerOptions(), pool_.get()} {
   seed(initialSeed);
@@ -232,7 +301,7 @@ AggregationFuzzer::AggregationFuzzer(
     exit(1);
   }
 
-  duckDbFunctionNames_ = getDuckDbFunctions();
+  duckFunctionNames_ = getDuckFunctions();
 
   size_t numFunctions = 0;
   size_t numSignatures = 0;
@@ -251,18 +320,18 @@ AggregationFuzzer::AggregationFuzzer(
         continue;
       }
 
-      if (!signature->typeVariableConstraints().empty()) {
+      if (!signature->variables().empty()) {
         bool skip = false;
         std::unordered_set<std::string> typeVariables;
-        for (auto& constraint : signature->typeVariableConstraints()) {
-          if (constraint.isIntegerParameter()) {
+        for (auto& [name, variable] : signature->variables()) {
+          if (variable.isIntegerParameter()) {
             LOG(WARNING) << "Skipping generic function signature: " << name
                          << signature->toString();
             skip = true;
             break;
           }
 
-          typeVariables.insert(constraint.name());
+          typeVariables.insert(name);
         }
         if (skip) {
           continue;
@@ -274,13 +343,14 @@ AggregationFuzzer::AggregationFuzzer(
         CallableSignature callable{
             .name = name,
             .args = {},
-            .returnType =
-                SignatureBinder::tryResolveType(signature->returnType(), {})};
+            .returnType = SignatureBinder::tryResolveType(
+                signature->returnType(), {}, {}),
+            .constantArgs = {}};
         VELOX_CHECK_NOT_NULL(callable.returnType);
 
         // Process each argument and figure out its type.
         for (const auto& arg : signature->argumentTypes()) {
-          auto resolvedType = SignatureBinder::tryResolveType(arg, {});
+          auto resolvedType = SignatureBinder::tryResolveType(arg, {}, {});
           VELOX_CHECK_NOT_NULL(resolvedType);
 
           callable.args.emplace_back(resolvedType);
@@ -352,7 +422,7 @@ void persistReproInfo(
   }
 
   // Save input vector.
-  auto inputPathOpt = generateFilePath(basePath.c_str(), "vector");
+  auto inputPathOpt = common::generateTempFilePath(basePath.c_str(), "vector");
   if (!inputPathOpt.has_value()) {
     inputPath = "Failed to create file for saving input vector.";
   } else {
@@ -367,7 +437,7 @@ void persistReproInfo(
 
   // Save plan.
   std::string planPath;
-  auto planPathOpt = generateFilePath(basePath.c_str(), "plan");
+  auto planPathOpt = common::generateTempFilePath(basePath.c_str(), "plan");
   if (!planPathOpt.has_value()) {
     planPath = "Failed to create file for saving SQL.";
   } else {
@@ -403,6 +473,55 @@ CallableSignature AggregationFuzzer::pickSignature() {
   return signature;
 }
 
+std::vector<std::string> AggregationFuzzer::generateKeys(
+    const std::string& prefix,
+    std::vector<std::string>& names,
+    std::vector<TypePtr>& types) {
+  auto numKeys = boost::random::uniform_int_distribution<uint32_t>(1, 5)(rng_);
+  std::vector<std::string> keys;
+  for (auto i = 0; i < numKeys; ++i) {
+    keys.push_back(fmt::format("{}{}", prefix, i));
+
+    // Pick random scalar type.
+    types.push_back(vectorFuzzer_.randScalarNonFloatingPointType());
+    names.push_back(keys.back());
+  }
+  return keys;
+}
+
+std::vector<RowVectorPtr> AggregationFuzzer::generateInputData(
+    std::vector<std::string> names,
+    std::vector<TypePtr> types) {
+  auto inputType = ROW(std::move(names), std::move(types));
+  std::vector<RowVectorPtr> input;
+  for (auto i = 0; i < FLAGS_num_batches; ++i) {
+    input.push_back(vectorFuzzer_.fuzzInputRow(inputType));
+  }
+  return input;
+}
+
+std::vector<RowVectorPtr> AggregationFuzzer::generateInputDataWithRowNumber(
+    std::vector<std::string> names,
+    std::vector<TypePtr> types) {
+  names.push_back("row_number");
+  types.push_back(BIGINT());
+
+  std::vector<RowVectorPtr> input;
+  auto size = vectorFuzzer_.getOptions().vectorSize;
+  velox::test::VectorMaker vectorMaker{pool_.get()};
+  int64_t rowNumber = 0;
+  for (auto j = 0; j < FLAGS_num_batches; ++j) {
+    std::vector<VectorPtr> children;
+    for (auto i = 0; i < types.size() - 1; ++i) {
+      children.push_back(vectorFuzzer_.fuzz(types[i], size));
+    }
+    children.push_back(vectorMaker.flatVector<int64_t>(
+        size, [&](auto /*row*/) { return rowNumber++; }));
+    input.push_back(vectorMaker.rowVector(names, children));
+  }
+  return input;
+}
+
 void AggregationFuzzer::go() {
   VELOX_CHECK(
       FLAGS_steps > 0 || FLAGS_duration_sec > 0,
@@ -415,51 +534,81 @@ void AggregationFuzzer::go() {
     LOG(INFO) << "==============================> Started iteration "
               << iteration << " (seed: " << currentSeed_ << ")";
 
-    // Pick a random signature.
-    CallableSignature signature = pickSignature();
-    stats_.functionNames.insert(signature.name);
+    // 10% of times test distinct aggregation.
+    if (vectorFuzzer_.coinToss(0.0)) {
+      ++stats_.numDistinct;
 
-    std::vector<TypePtr> argTypes = signature.args;
-    std::vector<std::string> argNames = makeNames(argTypes.size());
-    auto call = makeFunctionCall(signature.name, argNames);
+      std::vector<TypePtr> types;
+      std::vector<std::string> names;
 
-    // 20% of times use mask.
-    std::vector<std::string> masks;
-    if (vectorFuzzer_.coinToss(0.2)) {
-      ++stats_.numMask;
+      auto groupingKeys = generateKeys("g", names, types);
+      auto input = generateInputData(names, types);
 
-      masks.push_back("m0");
-      argTypes.push_back(BOOLEAN());
-      argNames.push_back(masks.back());
-    }
-
-    // 10% of times use global aggregation (no grouping keys).
-    std::vector<std::string> groupingKeys;
-    if (vectorFuzzer_.coinToss(0.1)) {
-      ++stats_.numGlobal;
+      verifyAggregation(groupingKeys, {}, {}, input, false, {});
     } else {
-      ++stats_.numGroupBy;
+      // Pick a random signature.
+      CallableSignature signature = pickSignature();
+      stats_.functionNames.insert(signature.name);
 
-      auto numGroupingKeys =
-          boost::random::uniform_int_distribution<uint32_t>(1, 5)(rng_);
-      for (auto i = 0; i < numGroupingKeys; ++i) {
-        groupingKeys.push_back(fmt::format("g{}", i));
+      const bool customVerification =
+          customVerificationFunctions_.count(signature.name) != 0;
 
-        // Pick random scalar type.
-        argTypes.push_back(vectorFuzzer_.randType(0 /*maxDepth*/));
-        argNames.push_back(groupingKeys.back());
+      std::vector<TypePtr> argTypes = signature.args;
+      std::vector<std::string> argNames = makeNames(argTypes.size());
+      auto call = makeFunctionCall(signature.name, argNames);
+
+      // 10% of times test window operator.
+      if (vectorFuzzer_.coinToss(0.1)) {
+        ++stats_.numWindow;
+
+        auto partitionKeys = generateKeys("p", argNames, argTypes);
+        auto sortingKeys = generateKeys("s", argNames, argTypes);
+        auto input = generateInputDataWithRowNumber(argNames, argTypes);
+
+        verifyWindow(
+            partitionKeys, sortingKeys, {call}, input, customVerification);
+      } else {
+        // 20% of times use mask.
+        std::vector<std::string> masks;
+        if (vectorFuzzer_.coinToss(0.2)) {
+          ++stats_.numMask;
+
+          masks.push_back("m0");
+          argTypes.push_back(BOOLEAN());
+          argNames.push_back(masks.back());
+        }
+
+        // 10% of times use global aggregation (no grouping keys).
+        std::vector<std::string> groupingKeys;
+        if (vectorFuzzer_.coinToss(0.1)) {
+          ++stats_.numGlobal;
+        } else {
+          ++stats_.numGroupBy;
+          groupingKeys = generateKeys("g", argNames, argTypes);
+        }
+
+        std::vector<std::string> projections;
+        if (customVerification) {
+          // Add optional projection on the original result to make it order
+          // independent for comparison.
+          auto mitigation = customVerificationFunctions_.at(signature.name);
+          if (!mitigation.empty()) {
+            projections = groupingKeys;
+            projections.push_back(fmt::format(fmt::runtime(mitigation), "a0"));
+          }
+        }
+
+        auto input = generateInputData(argNames, argTypes);
+
+        verifyAggregation(
+            groupingKeys,
+            {call},
+            masks,
+            input,
+            customVerification,
+            projections);
       }
     }
-
-    // Generate random input data.
-    auto inputType = ROW(std::move(argNames), std::move(argTypes));
-    std::vector<RowVectorPtr> input;
-    for (auto i = 0; i < 10; ++i) {
-      input.push_back(vectorFuzzer_.fuzzInputRow(inputType));
-    }
-
-    verify(groupingKeys, {call}, masks, input);
-
     LOG(INFO) << "==============================> Done with iteration "
               << iteration;
 
@@ -477,14 +626,24 @@ void AggregationFuzzer::go() {
   stats_.print(iteration);
 }
 
-ResultOrError AggregationFuzzer::execute(const core::PlanNodePtr& plan) {
+velox::test::ResultOrError AggregationFuzzer::execute(
+    const core::PlanNodePtr& plan,
+    bool injectSpill) {
   LOG(INFO) << "Executing query plan: " << std::endl
             << plan->toString(true, true);
 
-  ResultOrError resultOrError;
+  velox::test::ResultOrError resultOrError;
   try {
-    resultOrError.result =
-        AssertQueryBuilder(plan).maxDrivers(2).copyResults(pool_.get());
+    std::shared_ptr<TempDirectoryPath> spillDirectory;
+    AssertQueryBuilder builder(plan);
+    if (injectSpill) {
+      spillDirectory = exec::test::TempDirectoryPath::create();
+      builder.spillDirectory(spillDirectory->path)
+          .config(core::QueryConfig::kSpillEnabled, "true")
+          .config(core::QueryConfig::kAggregationSpillEnabled, "true")
+          .config(core::QueryConfig::kTestingSpillPct, "100");
+    }
+    resultOrError.result = builder.maxDrivers(2).copyResults(pool_.get());
     LOG(INFO) << resultOrError.result->toString();
   } catch (VeloxUserError& e) {
     // NOTE: velox user exception is accepted as it is caused by the invalid
@@ -496,10 +655,11 @@ ResultOrError AggregationFuzzer::execute(const core::PlanNodePtr& plan) {
 }
 
 // Generate SELECT <keys>, <aggregates> FROM tmp GROUP BY <keys>.
-std::string makeDuckDbSql(
+std::string makeDuckAggregationSql(
     const std::vector<std::string>& groupingKeys,
     const std::vector<std::string>& aggregates,
-    const std::vector<std::string>& masks) {
+    const std::vector<std::string>& masks,
+    const std::vector<std::string>& projections) {
   std::stringstream sql;
   sql << "SELECT " << folly::join(", ", groupingKeys);
 
@@ -515,6 +675,7 @@ std::string makeDuckDbSql(
     if (masks.size() > i && !masks[i].empty()) {
       sql << " filter (where " << masks[i] << ")";
     }
+    sql << " as a" << i;
   }
 
   sql << " FROM tmp";
@@ -523,57 +684,82 @@ std::string makeDuckDbSql(
     sql << " GROUP BY " << folly::join(", ", groupingKeys);
   }
 
+  if (!projections.empty()) {
+    return fmt::format(
+        "SELECT {} FROM ({})", folly::join(", ", projections), sql.str());
+  }
+
   return sql.str();
 }
 
-std::optional<MaterializedRowMultiset> AggregationFuzzer::computeDuckDbResult(
+bool isDuckSupported(const TypePtr& type) {
+  for (auto i = 0; i < type->size(); ++i) {
+    // DuckDB doesn't support nanosecond precision for timestamps.
+    if (type->childAt(i)->isTimestamp()) {
+      return false;
+    }
+  }
+
+  return true;
+}
+
+std::optional<MaterializedRowMultiset> computeDuckResults(
+    const std ::string& sql,
+    const std::vector<RowVectorPtr>& input,
+    const RowTypePtr& resultType) {
+  try {
+    DuckDbQueryRunner queryRunner;
+    queryRunner.createTable("tmp", input);
+    return queryRunner.execute(sql, resultType);
+  } catch (std::exception& e) {
+    LOG(WARNING) << "Couldn't get results from DuckDB";
+    return std::nullopt;
+  }
+}
+
+std::optional<MaterializedRowMultiset>
+AggregationFuzzer::computeDuckAggregation(
     const std::vector<std::string>& groupingKeys,
     const std::vector<std::string>& aggregates,
     const std::vector<std::string>& masks,
+    const std::vector<std::string>& projections,
     const std::vector<RowVectorPtr>& input,
     const core::PlanNodePtr& plan) {
   // Check if DuckDB supports specified aggregate functions.
-  for (const auto& agg :
-       dynamic_cast<const core::AggregationNode*>(plan.get())->aggregates()) {
-    if (duckDbFunctionNames_.count(agg->name()) == 0) {
+  auto aggregationNode = dynamic_cast<const core::AggregationNode*>(
+      projections.empty() ? plan.get() : plan->sources()[0].get());
+  VELOX_CHECK_NOT_NULL(aggregationNode);
+  for (const auto& agg : aggregationNode->aggregates()) {
+    if (duckFunctionNames_.count(agg->name()) == 0) {
       return std::nullopt;
     }
   }
 
   const auto& outputType = plan->outputType();
 
-  // Skip queries that use Timestamp type.
-  // DuckDB doesn't support nanosecond precision for timestamps.
-  for (auto i = 0; i < input[0]->type()->size(); ++i) {
-    if (input[0]->type()->childAt(i)->isTimestamp()) {
-      return std::nullopt;
-    }
+  if (!isDuckSupported(input[0]->type()) || !isDuckSupported(outputType)) {
+    return std::nullopt;
   }
 
-  for (auto i = 0; i < outputType->size(); ++i) {
-    if (outputType->childAt(i)->isTimestamp()) {
-      return std::nullopt;
-    }
-  }
-
-  DuckDbQueryRunner queryRunner;
-  queryRunner.createTable("tmp", {input});
-  return queryRunner.execute(
-      makeDuckDbSql(groupingKeys, aggregates, masks), outputType);
+  return computeDuckResults(
+      makeDuckAggregationSql(groupingKeys, aggregates, masks, projections),
+      input,
+      outputType);
 }
 
-std::vector<core::PlanNodePtr> makeAlternativePlans(
+void makeAlternativePlans(
     const std::vector<std::string>& groupingKeys,
     const std::vector<std::string>& aggregates,
     const std::vector<std::string>& masks,
-    const std::vector<RowVectorPtr>& inputVectors) {
-  std::vector<core::PlanNodePtr> plans;
-
+    const std::vector<std::string>& projections,
+    const std::vector<RowVectorPtr>& inputVectors,
+    std::vector<core::PlanNodePtr>& plans) {
   // Partial -> final aggregation plan.
   plans.push_back(PlanBuilder()
                       .values(inputVectors)
                       .partialAggregation(groupingKeys, aggregates, masks)
                       .finalAggregation()
+                      .optionalProject(projections)
                       .planNode());
 
   // Partial -> intermediate -> final aggregation plan.
@@ -582,76 +768,206 @@ std::vector<core::PlanNodePtr> makeAlternativePlans(
                       .partialAggregation(groupingKeys, aggregates, masks)
                       .intermediateAggregation()
                       .finalAggregation()
+                      .optionalProject(projections)
                       .planNode());
 
   // Partial -> local exchange -> final aggregation plan.
+  auto numSources = std::min<size_t>(4, inputVectors.size());
+  std::vector<std::vector<RowVectorPtr>> sourceInputs(numSources);
+  for (auto i = 0; i < inputVectors.size(); ++i) {
+    sourceInputs[i % numSources].push_back(inputVectors[i]);
+  }
+
   auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
   std::vector<core::PlanNodePtr> sources;
-  for (const auto& vector : inputVectors) {
+  for (const auto& sourceInput : sourceInputs) {
     sources.push_back(PlanBuilder(planNodeIdGenerator)
-                          .values({vector})
+                          .values({sourceInput})
                           .partialAggregation(groupingKeys, aggregates, masks)
                           .planNode());
   }
   plans.push_back(PlanBuilder(planNodeIdGenerator)
                       .localPartition(groupingKeys, sources)
                       .finalAggregation()
+                      .optionalProject(projections)
                       .planNode());
-
-  return plans;
 }
 
-void AggregationFuzzer::verify(
+void makeStreamingPlans(
     const std::vector<std::string>& groupingKeys,
     const std::vector<std::string>& aggregates,
     const std::vector<std::string>& masks,
-    const std::vector<RowVectorPtr>& input) {
-  auto plan = PlanBuilder()
-                  .values(input)
-                  .singleAggregation(groupingKeys, aggregates, masks)
-                  .planNode();
+    const std::vector<std::string>& projections,
+    const std::vector<RowVectorPtr>& inputVectors,
+    std::vector<core::PlanNodePtr>& plans) {
+  // Single aggregation.
+  plans.push_back(PlanBuilder()
+                      .values(inputVectors)
+                      .orderBy(groupingKeys, false)
+                      .streamingAggregation(
+                          groupingKeys,
+                          aggregates,
+                          masks,
+                          core::AggregationNode::Step::kSingle,
+                          false)
+                      .optionalProject(projections)
+                      .planNode());
 
+  // Partial -> final aggregation plan.
+  plans.push_back(
+      PlanBuilder()
+          .values(inputVectors)
+          .orderBy(groupingKeys, false)
+          .partialStreamingAggregation(groupingKeys, aggregates, masks)
+          .finalAggregation()
+          .optionalProject(projections)
+          .planNode());
+
+  // Partial -> intermediate -> final aggregation plan.
+  plans.push_back(
+      PlanBuilder()
+          .values(inputVectors)
+          .orderBy(groupingKeys, false)
+          .partialStreamingAggregation(groupingKeys, aggregates, masks)
+          .intermediateAggregation()
+          .finalAggregation()
+          .optionalProject(projections)
+          .planNode());
+
+  // Partial -> local merge -> final aggregation plan.
+  auto numSources = std::min<size_t>(4, inputVectors.size());
+  std::vector<std::vector<RowVectorPtr>> sourceInputs(numSources);
+  for (auto i = 0; i < inputVectors.size(); ++i) {
+    sourceInputs[i % numSources].push_back(inputVectors[i]);
+  }
+
+  auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
+  std::vector<core::PlanNodePtr> sources;
+  for (const auto& sourceInput : sourceInputs) {
+    sources.push_back(
+        PlanBuilder(planNodeIdGenerator)
+            .values({sourceInput})
+            .orderBy(groupingKeys, false)
+            .partialStreamingAggregation(groupingKeys, aggregates, masks)
+            .planNode());
+  }
+  plans.push_back(PlanBuilder(planNodeIdGenerator)
+                      .localMerge(groupingKeys, sources)
+                      .finalAggregation()
+                      .optionalProject(projections)
+                      .planNode());
+}
+
+void AggregationFuzzer::testPlan(
+    const core::PlanNodePtr& plan,
+    bool injectSpill,
+    bool verifyResults,
+    const velox::test::ResultOrError& expected) {
+  auto actual = execute(plan, injectSpill);
+
+  // Compare results or exceptions (if any). Fail is anything is different.
+  if (expected.exceptionPtr || actual.exceptionPtr) {
+    // Throws in case exceptions are not compatible.
+    velox::test::compareExceptions(expected.exceptionPtr, actual.exceptionPtr);
+  } else if (verifyResults) {
+    VELOX_CHECK(
+        assertEqualResults({expected.result}, {actual.result}),
+        "Logically equivalent plans produced different results");
+  } else {
+    VELOX_CHECK_EQ(
+        expected.result->size(),
+        actual.result->size(),
+        "Logically equivalent plans produced different number of rows");
+  }
+}
+
+std::string makeDuckWindowSql(
+    const std::vector<std::string>& partitionKeys,
+    const std::vector<std::string>& sortingKeys,
+    const std::vector<std::string>& aggregates,
+    const std::vector<std::string>& inputs) {
+  std::stringstream sql;
+  sql << "SELECT " << folly::join(", ", inputs) << ", "
+      << folly::join(", ", aggregates) << " OVER (";
+
+  if (!partitionKeys.empty()) {
+    sql << "partition by " << folly::join(", ", partitionKeys);
+  }
+  if (!sortingKeys.empty()) {
+    sql << " order by " << folly::join(", ", sortingKeys);
+  }
+
+  sql << ") FROM tmp";
+
+  return sql.str();
+}
+
+std::optional<MaterializedRowMultiset> AggregationFuzzer::computeDuckWindow(
+    const std::vector<std::string>& partitionKeys,
+    const std::vector<std::string>& sortingKeys,
+    const std::vector<std::string>& aggregates,
+    const std::vector<RowVectorPtr>& input,
+    const core::PlanNodePtr& plan) {
+  // Check if DuckDB supports specified aggregate functions.
+  auto windowNode = dynamic_cast<const core::WindowNode*>(plan.get());
+  VELOX_CHECK_NOT_NULL(windowNode);
+  for (const auto& window : windowNode->windowFunctions()) {
+    if (duckFunctionNames_.count(window.functionCall->name()) == 0) {
+      return std::nullopt;
+    }
+  }
+
+  const auto& outputType = plan->outputType();
+
+  if (!isDuckSupported(input[0]->type()) || !isDuckSupported(outputType)) {
+    return std::nullopt;
+  }
+
+  return computeDuckResults(
+      makeDuckWindowSql(
+          partitionKeys,
+          sortingKeys,
+          aggregates,
+          asRowType(input[0]->type())->names()),
+      input,
+      outputType);
+}
+
+void AggregationFuzzer::verifyWindow(
+    const std::vector<std::string>& partitionKeys,
+    const std::vector<std::string>& sortingKeys,
+    const std::vector<std::string>& aggregates,
+    const std::vector<RowVectorPtr>& input,
+    bool customVerification) {
+  std::stringstream frame;
+  if (!partitionKeys.empty()) {
+    frame << "partition by " << folly::join(", ", partitionKeys);
+  }
+  if (!sortingKeys.empty()) {
+    frame << " order by " << folly::join(", ", sortingKeys);
+  }
+
+  auto plan =
+      PlanBuilder()
+          .values(input)
+          .window({fmt::format("{} over ({})", aggregates[0], frame.str())})
+          .planNode();
   if (persistAndRunOnce_) {
     persistReproInfo(input, plan, reproPersistPath_);
   }
-
   try {
-    auto resultOrError = execute(plan);
+    auto resultOrError = execute(plan, false /*injectSpill*/);
     if (resultOrError.exceptionPtr) {
       ++stats_.numFailed;
     }
 
-    std::optional<MaterializedRowMultiset> expectedResult;
-    try {
-      expectedResult =
-          computeDuckDbResult(groupingKeys, aggregates, masks, input, plan);
-      ++stats_.numDuckDbVerified;
-    } catch (std::exception& e) {
-      LOG(WARNING) << "Couldn't get results from DuckDB";
-    }
-
-    if (expectedResult && resultOrError.result) {
-      VELOX_CHECK(
-          assertEqualResults(expectedResult.value(), {resultOrError.result}),
-          "Velox and DuckDB results don't match");
-    }
-
-    auto altPlans =
-        makeAlternativePlans(groupingKeys, aggregates, masks, input);
-
-    for (const auto& altPlan : altPlans) {
-      auto altResultOrError = execute(altPlan);
-
-      // Compare results or exceptions (if any). Fail is anything is different.
-      if (resultOrError.exceptionPtr || altResultOrError.exceptionPtr) {
-        // Throws in case exceptions are not compatible.
-        velox::test::compareExceptions(
-            resultOrError.exceptionPtr, altResultOrError.exceptionPtr);
-      } else {
+    if (!customVerification && resultOrError.result) {
+      if (auto expectedResult = computeDuckWindow(
+              partitionKeys, sortingKeys, aggregates, input, plan)) {
+        ++stats_.numDuckVerified;
         VELOX_CHECK(
-            assertEqualResults(
-                {resultOrError.result}, {altResultOrError.result}),
-            "Logically equivalent plans produced different results");
+            assertEqualResults(expectedResult.value(), {resultOrError.result}),
+            "Velox and DuckDB results don't match");
       }
     }
   } catch (...) {
@@ -662,19 +978,96 @@ void AggregationFuzzer::verify(
   }
 }
 
+void AggregationFuzzer::verifyAggregation(
+    const std::vector<std::string>& groupingKeys,
+    const std::vector<std::string>& aggregates,
+    const std::vector<std::string>& masks,
+    const std::vector<RowVectorPtr>& input,
+    bool customVerification,
+    const std::vector<std::string>& projections) {
+  auto plan = PlanBuilder()
+                  .values(input)
+                  .singleAggregation(groupingKeys, aggregates, masks)
+                  .optionalProject(projections)
+                  .planNode();
+
+  if (persistAndRunOnce_) {
+    persistReproInfo(input, plan, reproPersistPath_);
+  }
+
+  try {
+    auto resultOrError = execute(plan, false /*injectSpill*/);
+    if (resultOrError.exceptionPtr) {
+      ++stats_.numFailed;
+    }
+
+    const bool verifyResults = !customVerification || !projections.empty();
+
+    std::optional<MaterializedRowMultiset> expectedResult;
+    if (verifyResults) {
+      expectedResult = computeDuckAggregation(
+          groupingKeys, aggregates, masks, projections, input, plan);
+    }
+
+    if (expectedResult && resultOrError.result) {
+      ++stats_.numDuckVerified;
+      VELOX_CHECK(
+          assertEqualResults(expectedResult.value(), {resultOrError.result}),
+          "Velox and DuckDB results don't match");
+    }
+
+    std::vector<core::PlanNodePtr> plans;
+    makeAlternativePlans(
+        groupingKeys, aggregates, masks, projections, input, plans);
+
+    // Evaluate same plans on flat inputs.
+    std::vector<RowVectorPtr> flatInput;
+    for (const auto& vector : input) {
+      auto flat = BaseVector::create<RowVector>(
+          vector->type(), vector->size(), vector->pool());
+      flat->copy(vector.get(), 0, 0, vector->size());
+      flatInput.push_back(flat);
+    }
+
+    makeAlternativePlans(
+        groupingKeys, aggregates, masks, projections, flatInput, plans);
+
+    if (!groupingKeys.empty()) {
+      // Use OrderBy + StreamingAggregation on original input.
+      makeStreamingPlans(
+          groupingKeys, aggregates, masks, projections, input, plans);
+
+      // Use OrderBy + StreamingAggregation on flattened input.
+      makeStreamingPlans(
+          groupingKeys, aggregates, masks, projections, flatInput, plans);
+    }
+
+    testPlans(plans, verifyResults, resultOrError);
+
+  } catch (...) {
+    if (!reproPersistPath_.empty()) {
+      persistReproInfo(input, plan, reproPersistPath_);
+    }
+    throw;
+  }
+}
+
 void AggregationFuzzer::Stats::print(size_t numIterations) const {
   LOG(INFO) << "Total functions tested: " << functionNames.size();
-  LOG(INFO) << "Total masked aggregations: " << numMask << " ("
-            << toPercentageString(numMask, numIterations) << ")";
-  LOG(INFO) << "Total global aggregations: " << numGlobal << " ("
-            << toPercentageString(numGlobal, numIterations) << ")";
-  LOG(INFO) << "Total group-by aggregations: " << numGroupBy << " ("
-            << toPercentageString(numGroupBy, numIterations) << ")";
+  LOG(INFO) << "Total masked aggregations: "
+            << printStat(numMask, numIterations);
+  LOG(INFO) << "Total global aggregations: "
+            << printStat(numGlobal, numIterations);
+  LOG(INFO) << "Total group-by aggregations: "
+            << printStat(numGroupBy, numIterations);
+  LOG(INFO) << "Total distinct aggregations: "
+            << printStat(numDistinct, numIterations);
+  LOG(INFO) << "Total window expressions: "
+            << printStat(numWindow, numIterations);
   LOG(INFO) << "Total aggregations verified against DuckDB: "
-            << numDuckDbVerified << " ("
-            << toPercentageString(numDuckDbVerified, numIterations) << ")";
-  LOG(INFO) << "Total failed aggregations: " << numFailed << " ("
-            << toPercentageString(numFailed, numIterations) << ")";
+            << printStat(numDuckVerified, numIterations);
+  LOG(INFO) << "Total failed aggregations: "
+            << printStat(numFailed, numIterations);
 }
 
 } // namespace

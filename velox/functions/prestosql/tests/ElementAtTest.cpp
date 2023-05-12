@@ -15,6 +15,8 @@
  */
 
 #include <optional>
+#include "velox/common/base/tests/GTestUtils.h"
+#include "velox/expression/Expr.h"
 #include "velox/functions/lib/SubscriptUtil.h"
 #include "velox/functions/prestosql/tests/utils/FunctionBaseTest.h"
 
@@ -88,7 +90,7 @@ class ElementAtTest : public FunctionBaseTest {
 template <>
 void ElementAtTest::testVariableInputMap<StringView>() {
   auto toStr = [](size_t input) {
-    return StringView(folly::sformat("str{}", input));
+    return StringView(folly::sformat("str{}", input).c_str());
   };
 
   auto indicesVector = makeFlatVector<StringView>(
@@ -200,12 +202,13 @@ TEST_F(ElementAtTest, constantInputArray) {
 // #2 - allow out of bounds access for array and map.
 // #3 - allow negative indices.
 TEST_F(ElementAtTest, allFlavors1) {
+  // Case 1: Simple arrays and maps
   auto arrayVector = makeArrayVector<int64_t>({{10, 11, 12}});
   auto mapVector = getSimpleMapVector();
 
   // #1
-  assertUserInvalidArgument(
-      [&]() { elementAtSimple("element_at(C0, 0)", {arrayVector}); },
+  VELOX_ASSERT_THROW(
+      elementAtSimple("element_at(C0, 0)", {arrayVector}),
       "SQL array indices start at 1");
 
   EXPECT_EQ(
@@ -225,6 +228,119 @@ TEST_F(ElementAtTest, allFlavors1) {
   EXPECT_EQ(elementAtSimple("element_at(C0, -2)", {arrayVector}), 11);
   EXPECT_EQ(elementAtSimple("element_at(C0, -3)", {arrayVector}), 10);
   EXPECT_EQ(elementAtSimple("element_at(C0, -4)", {arrayVector}), std::nullopt);
+
+  // Case 2: Empty values vector
+  auto emptyValues = makeFlatVector<int64_t>({});
+  auto emptyKeys = makeFlatVector<int64_t>(std::vector<int64_t>{1});
+  auto offsets = allocateOffsets(1, pool());
+  auto sizes = allocateSizes(1, pool());
+  auto emptyValuesArray = std::make_shared<ArrayVector>(
+      pool(), ARRAY(BIGINT()), nullptr, 1, offsets, sizes, emptyValues);
+  auto emptyValuesMap = std::make_shared<MapVector>(
+      pool(),
+      MAP(BIGINT(), BIGINT()),
+      nullptr,
+      1,
+      offsets,
+      sizes,
+      emptyKeys,
+      emptyValues);
+  // #1
+  VELOX_ASSERT_THROW(
+      elementAtSimple("element_at(C0, 0)", {emptyValuesArray}),
+      "SQL array indices start at 1");
+
+  // #2
+  EXPECT_EQ(
+      elementAtSimple("element_at(C0, 4)", {emptyValuesArray}), std::nullopt);
+  EXPECT_EQ(
+      elementAtSimple("element_at(C0, 1001)", {emptyValuesMap}), std::nullopt);
+
+  // #3
+  EXPECT_EQ(
+      elementAtSimple("element_at(C0, -1)", {emptyValuesArray}), std::nullopt);
+
+  // Case 3: Empty individual arrays/maps and non-empty values vector
+  auto nonEmptyValues = makeFlatVector<int64_t>(std::vector<int64_t>{2});
+  auto nonEmptyKeys = makeFlatVector<int64_t>(std::vector<int64_t>{1});
+  auto emptyContainerNonEmptyValuesArray = std::make_shared<ArrayVector>(
+      pool(), ARRAY(BIGINT()), nullptr, 1, offsets, sizes, nonEmptyValues);
+  auto emptyContainerNonEmptyValuesMap = std::make_shared<MapVector>(
+      pool(),
+      MAP(BIGINT(), BIGINT()),
+      nullptr,
+      1,
+      offsets,
+      sizes,
+      nonEmptyKeys,
+      nonEmptyValues);
+
+  // #1
+  VELOX_ASSERT_THROW(
+      elementAtSimple("element_at(C0, 0)", {emptyContainerNonEmptyValuesArray}),
+      "SQL array indices start at 1");
+
+  // #2
+  EXPECT_EQ(
+      elementAtSimple("element_at(C0, 4)", {emptyContainerNonEmptyValuesArray}),
+      std::nullopt);
+  EXPECT_EQ(
+      elementAtSimple(
+          "element_at(C0, 1001)", {emptyContainerNonEmptyValuesMap}),
+      std::nullopt);
+
+  // #3
+  EXPECT_EQ(
+      elementAtSimple("element_at(C0, -1)", {emptyContainerNonEmptyValuesMap}),
+      std::nullopt);
+
+  // Case 4: Intermittently empty individual arrays/maps and non-empty values
+  // vector
+  offsets = allocateOffsets(2, pool());
+  sizes = allocateSizes(2, pool());
+  auto rawSizes = sizes->asMutable<vector_size_t>();
+  rawSizes[0] = 0;
+  rawSizes[1] = 1;
+
+  auto partiallyEmptyArray = std::make_shared<ArrayVector>(
+      pool(), ARRAY(BIGINT()), nullptr, 2, offsets, sizes, nonEmptyValues);
+  auto partiallyEmptyMap = std::make_shared<MapVector>(
+      pool(),
+      MAP(BIGINT(), BIGINT()),
+      nullptr,
+      2,
+      offsets,
+      sizes,
+      nonEmptyKeys,
+      nonEmptyValues);
+  // Input vector has 2 elements, but we only evaluate on the first, this way
+  // the elements aren't empty though the collection we're evaluating on is.
+  SelectivityVector rows(1);
+  VectorPtr result;
+
+  // #1
+  VELOX_ASSERT_THROW(
+      evaluate<SimpleVector<int64_t>>(
+          "element_at(c0, 0)",
+          makeRowVector({partiallyEmptyArray}),
+          rows,
+          result),
+      "SQL array indices start at 1");
+
+  // #2
+  auto expected = makeNullConstant(TypeKind::BIGINT, 1);
+  evaluate<SimpleVector<int64_t>>(
+      "element_at(C0, 4)", makeRowVector({partiallyEmptyArray}), rows, result);
+  test::assertEqualVectors(expected, result);
+
+  evaluate<SimpleVector<int64_t>>(
+      "element_at(C0, 1001)", makeRowVector({partiallyEmptyMap}), rows, result);
+  test::assertEqualVectors(expected, result);
+
+  // #3
+  evaluate<SimpleVector<int64_t>>(
+      "element_at(C0, -1)", makeRowVector({partiallyEmptyArray}), rows, result);
+  test::assertEqualVectors(expected, result);
 }
 
 // Second flavor - the regular subscript ("a[1]") behavior:
@@ -232,13 +348,13 @@ TEST_F(ElementAtTest, allFlavors1) {
 // #2 - do not allow out of bounds access for arrays.
 // #3 - do not allow negative indices.
 TEST_F(ElementAtTest, allFlavors2) {
+  // Case 1: Simple arrays and maps
   auto arrayVector = makeArrayVector<int64_t>({{10, 11, 12}});
   auto mapVector = getSimpleMapVector();
 
   // #1
-  assertUserInvalidArgument(
-      [&]() { elementAtSimple("C0[0]", {arrayVector}); },
-      "SQL array indices start at 1");
+  VELOX_ASSERT_THROW(
+      elementAtSimple("C0[0]", {arrayVector}), "SQL array indices start at 1");
 
   EXPECT_EQ(elementAtSimple("try(C0[0])", {arrayVector}), std::nullopt);
 
@@ -247,11 +363,11 @@ TEST_F(ElementAtTest, allFlavors2) {
   EXPECT_EQ(elementAtSimple("C0[3]", {arrayVector}), 12);
 
   // #2
-  assertUserInvalidArgument(
-      [&]() { elementAtSimple("C0[4]", {arrayVector}); },
+  VELOX_ASSERT_THROW(
+      elementAtSimple("C0[4]", {arrayVector}),
       "Array subscript out of bounds.");
-  assertUserInvalidArgument(
-      [&]() { elementAtSimple("C0[5]", {arrayVector}); },
+  VELOX_ASSERT_THROW(
+      elementAtSimple("C0[5]", {arrayVector}),
       "Array subscript out of bounds.");
 
   EXPECT_EQ(elementAtSimple("try(C0[4])", {arrayVector}), std::nullopt);
@@ -261,15 +377,133 @@ TEST_F(ElementAtTest, allFlavors2) {
   EXPECT_EQ(elementAtSimple("C0[1001]", {mapVector}), std::nullopt);
 
   // #3
-  assertUserInvalidArgument(
-      [&]() { elementAtSimple("C0[-1]", {arrayVector}); },
-      "Array subscript is negative.");
-  assertUserInvalidArgument(
-      [&]() { elementAtSimple("C0[-4]", {arrayVector}); },
-      "Array subscript is negative.");
+  VELOX_ASSERT_THROW(
+      elementAtSimple("C0[-1]", {arrayVector}), "Array subscript is negative.");
+  VELOX_ASSERT_THROW(
+      elementAtSimple("C0[-4]", {arrayVector}), "Array subscript is negative.");
 
   EXPECT_EQ(elementAtSimple("try(C0[-1])", {arrayVector}), std::nullopt);
   EXPECT_EQ(elementAtSimple("try(C0[-4])", {arrayVector}), std::nullopt);
+
+  // Case 2: Empty values vector
+  auto emptyValues = makeFlatVector<int64_t>({});
+  auto emptyKeys = makeFlatVector<int64_t>(std::vector<int64_t>{1});
+  auto offsets = allocateOffsets(1, pool());
+  auto sizes = allocateSizes(1, pool());
+  auto emptyValuesArray = std::make_shared<ArrayVector>(
+      pool(), ARRAY(BIGINT()), nullptr, 1, offsets, sizes, emptyValues);
+  auto emptyValuesMap = std::make_shared<MapVector>(
+      pool(),
+      MAP(BIGINT(), BIGINT()),
+      nullptr,
+      1,
+      offsets,
+      sizes,
+      emptyKeys,
+      emptyValues);
+  // #1
+  VELOX_ASSERT_THROW(
+      elementAtSimple("C0[0]", {emptyValuesArray}),
+      "SQL array indices start at 1");
+
+  // #2
+  VELOX_ASSERT_THROW(
+      elementAtSimple("C0[4]", {arrayVector}),
+      "Array subscript out of bounds.");
+  EXPECT_EQ(elementAtSimple("try(C0[4])", {emptyValuesArray}), std::nullopt);
+  // Maps are ok.
+  EXPECT_EQ(elementAtSimple("C0[1001]", {emptyValuesMap}), std::nullopt);
+
+  // #3
+  VELOX_ASSERT_THROW(
+      elementAtSimple("C0[-1]", {arrayVector}), "Array subscript is negative.");
+
+  // Case 3: Empty individual arrays/maps and non-empty values vector
+  auto nonEmptyValues = makeFlatVector<int64_t>(std::vector<int64_t>{2});
+  auto nonEmptyKeys = makeFlatVector<int64_t>(std::vector<int64_t>{1});
+  auto emptyContainerNonEmptyValuesArray = std::make_shared<ArrayVector>(
+      pool(), ARRAY(BIGINT()), nullptr, 1, offsets, sizes, nonEmptyValues);
+  auto emptyContainerNonEmptyValuesMap = std::make_shared<MapVector>(
+      pool(),
+      MAP(BIGINT(), BIGINT()),
+      nullptr,
+      1,
+      offsets,
+      sizes,
+      nonEmptyKeys,
+      nonEmptyValues);
+
+  // #1
+  VELOX_ASSERT_THROW(
+      elementAtSimple("C0[0]", {emptyContainerNonEmptyValuesArray}),
+      "SQL array indices start at 1");
+
+  // #2
+  VELOX_ASSERT_THROW(
+      elementAtSimple("C0[4]", {emptyContainerNonEmptyValuesArray}),
+      "Array subscript out of bounds.");
+  EXPECT_EQ(
+      elementAtSimple("try(C0[4])", {emptyContainerNonEmptyValuesArray}),
+      std::nullopt);
+  // Maps are ok.
+  EXPECT_EQ(
+      elementAtSimple("C0[1001]", {emptyContainerNonEmptyValuesMap}),
+      std::nullopt);
+
+  // #3
+  VELOX_ASSERT_THROW(
+      elementAtSimple("C0[-1]", {emptyContainerNonEmptyValuesArray}),
+      "Array subscript is negative.");
+
+  // Case 4: Intermittently empty individual arrays/maps and non-empty values
+  // vector
+  offsets = allocateOffsets(2, pool());
+  sizes = allocateSizes(2, pool());
+  auto rawSizes = sizes->asMutable<vector_size_t>();
+  rawSizes[0] = 0;
+  rawSizes[1] = 1;
+
+  auto partiallyEmptyArray = std::make_shared<ArrayVector>(
+      pool(), ARRAY(BIGINT()), nullptr, 2, offsets, sizes, nonEmptyValues);
+  auto partiallyEmptyMap = std::make_shared<MapVector>(
+      pool(),
+      MAP(BIGINT(), BIGINT()),
+      nullptr,
+      2,
+      offsets,
+      sizes,
+      nonEmptyKeys,
+      nonEmptyValues);
+  // Input vector has 2 elements, but we only evaluate on the first, this way
+  // the elements aren't empty though the collection we're evaluating on is.
+  SelectivityVector rows(1);
+  VectorPtr result;
+
+  // #1
+  VELOX_ASSERT_THROW(
+      evaluate<SimpleVector<int64_t>>(
+          "C0[0]", makeRowVector({partiallyEmptyArray}), rows, result),
+      "SQL array indices start at 1");
+
+  // #2
+  VELOX_ASSERT_THROW(
+      evaluate<SimpleVector<int64_t>>(
+          "C0[4]", makeRowVector({partiallyEmptyArray}), rows, result),
+      "Array subscript out of bounds.");
+  auto expected = makeNullConstant(TypeKind::BIGINT, 1);
+  evaluate<SimpleVector<int64_t>>(
+      "try(C0[4])", makeRowVector({partiallyEmptyArray}), rows, result);
+  test::assertEqualVectors(expected, result);
+  // Maps are ok.
+  evaluate<SimpleVector<int64_t>>(
+      "C0[1001]", makeRowVector({partiallyEmptyMap}), rows, result);
+  test::assertEqualVectors(expected, result);
+
+  // #3
+  VELOX_ASSERT_THROW(
+      evaluate<SimpleVector<int64_t>>(
+          "C0[-1]", makeRowVector({partiallyEmptyArray}), rows, result),
+      "Array subscript is negative.");
 }
 
 // Third flavor:
@@ -291,14 +525,14 @@ TEST_F(ElementAtTest, allFlavors3) {
   EXPECT_EQ(elementAtSimple("__f2(C0, 2)", {arrayVector}), 12);
 
   // #2
-  assertUserInvalidArgument(
-      [&]() { elementAtSimple("__f2(C0, 3)", {arrayVector}); },
+  VELOX_ASSERT_THROW(
+      elementAtSimple("__f2(C0, 3)", {arrayVector}),
       "Array subscript out of bounds.");
-  assertUserInvalidArgument(
-      [&]() { elementAtSimple("__f2(C0, 4)", {arrayVector}); },
+  VELOX_ASSERT_THROW(
+      elementAtSimple("__f2(C0, 4)", {arrayVector}),
       "Array subscript out of bounds.");
-  assertUserInvalidArgument(
-      [&]() { elementAtSimple("__f2(C0, 100)", {arrayVector}); },
+  VELOX_ASSERT_THROW(
+      elementAtSimple("__f2(C0, 100)", {arrayVector}),
       "Array subscript out of bounds.");
 
   EXPECT_EQ(elementAtSimple("try(__f2(C0, 3))", {arrayVector}), std::nullopt);
@@ -406,7 +640,7 @@ TEST_F(ElementAtTest, constantInputMap) {
 
     // String map value type.
     auto valueAt2 = [](vector_size_t idx) {
-      return StringView(folly::sformat("str{}", idx % 5));
+      return StringView(folly::sformat("str{}", idx % 5).c_str());
     };
     auto expectedValueAt2 = [](vector_size_t /* row */) {
       return StringView("str3");
@@ -479,10 +713,10 @@ TEST_F(ElementAtTest, varcharVariableInput) {
 
   auto sizeAt = [](vector_size_t row) { return 7; };
   auto valueAt = [](vector_size_t row, vector_size_t idx) {
-    return StringView(folly::to<std::string>(idx + 1));
+    return StringView(folly::to<std::string>(idx + 1).c_str());
   };
   auto expectedValueAt = [](vector_size_t row) {
-    return StringView(folly::to<std::string>(row % 7 + 1));
+    return StringView(folly::to<std::string>(row % 7 + 1).c_str());
   };
   auto arrayVector = makeArrayVector<StringView>(kVectorSize, sizeAt, valueAt);
 
@@ -528,13 +762,9 @@ TEST_F(ElementAtTest, errorStatesArray) {
   auto arrayVector = makeArrayVector<int64_t>(kVectorSize, sizeAt, valueAt);
 
   // Trying to use index = 0.
-  assertUserInvalidArgument(
-      [&]() {
-        testElementAt<int64_t>(
-            "element_at(C0, C1)",
-            {arrayVector, indicesVector},
-            expectedValueAt);
-      },
+  VELOX_ASSERT_THROW(
+      testElementAt<int64_t>(
+          "element_at(C0, C1)", {arrayVector, indicesVector}, expectedValueAt),
       "SQL array indices start at 1");
 
   testElementAt<int64_t>(

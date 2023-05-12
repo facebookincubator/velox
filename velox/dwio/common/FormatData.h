@@ -89,15 +89,25 @@ class FormatData {
   /// provider is valid until next call of this.
   virtual dwio::common::PositionProvider seekToRowGroup(uint32_t index) = 0;
 
+  struct FilterRowGroupsResult {
+    std::vector<uint64_t> filterResult;
+    std::vector<std::pair<
+        velox::common::MetadataFilter::LeafNode*,
+        std::vector<uint64_t>>>
+        metadataFilterResults;
+    int totalCount = 0;
+  };
+
   /// Applies 'scanSpec' to the metadata of 'this'. Returns row group
   /// numbers that can be skipped. The interpretation of row group
   /// number is format-dependent. In ORC, these are row groups in the
   /// current stripe, in Parquet these are row group numbers in the
   /// file.
-  virtual std::vector<uint32_t> filterRowGroups(
+  virtual void filterRowGroups(
       const velox::common::ScanSpec& scanSpec,
       uint64_t rowsPerRowGroup,
-      const StatsContext& writerContext) = 0;
+      const StatsContext& writerContext,
+      FilterRowGroupsResult&) = 0;
 
   /// If the format divides data into even-sized runs for purposes of
   /// column statistics and random access, returns the number of rows
@@ -108,14 +118,15 @@ class FormatData {
     return std::nullopt;
   }
 
-  /// Test if the 'i'th RowGroup can potentially match the 'filter' using the
-  /// RowGroup's statistics on all columns. Returns true if all columns in this
-  /// RowGroup matches the filter, false otherwise. A column is said to match
-  /// the filter if its ColumnStatistics passes the filter, or the filter for
-  /// that column is NULL.
-  virtual bool rowGroupMatches(
-      uint32_t rowGroupId,
-      velox::common::Filter* FOLLY_NULLABLE filter) = 0;
+  /// True if leaf columns contain nullness information for struct
+  /// parents. This is true in Parquet and false in ORC. and Alpha. If
+  /// false, struct parent must maintain the count of skipped nulls at
+  /// the struct level so that the children will not skip positions
+  /// where the parent was null and there is no value to skip in the
+  /// child.
+  virtual bool parentNullsInLeaves() const {
+    return false;
+  }
 };
 
 /// Base class for format-specific reader initialization arguments.

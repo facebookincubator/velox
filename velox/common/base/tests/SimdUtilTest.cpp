@@ -58,17 +58,26 @@ class SimdUtilTest : public testing::Test {
     std::vector<int32_t> reference(kWords * 64);
     std::vector<int32_t> test(kWords * 64);
     randomBits(bits, onesPer1000);
+    auto run = [&](int begin, int end) {
+      auto numReference =
+          simpleIndicesOfSetBits(bits.data(), begin, end, reference.data());
+      auto numTest =
+          simd::indicesOfSetBits(bits.data(), begin, end, test.data());
+      ASSERT_EQ(numReference, numTest);
+      ASSERT_EQ(
+          memcmp(
+              reference.data(),
+              test.data(),
+              numReference * sizeof(reference[0])),
+          0);
+    };
     int32_t begin = folly::Random::rand32(rng_) % 100;
     int32_t end = kWords * 64 - folly::Random::rand32(rng_) % 100;
-
-    auto numReference =
-        simpleIndicesOfSetBits(bits.data(), begin, end, reference.data());
-    auto numTest = simd::indicesOfSetBits(bits.data(), begin, end, test.data());
-    ASSERT_EQ(numReference, numTest);
-    ASSERT_EQ(
-        memcmp(
-            reference.data(), test.data(), numReference * sizeof(reference[0])),
-        0);
+    for (int offset = 0; offset < 64; ++offset) {
+      run(begin + offset, end);
+      run(begin, end - offset);
+      run(begin + offset, end - offset);
+    }
   }
 
   void testMemsetAndMemcpy(int32_t size) {
@@ -100,6 +109,14 @@ class SimdUtilTest : public testing::Test {
 
   folly::Random::DefaultGenerator rng_;
 };
+
+TEST_F(SimdUtilTest, setAll) {
+  auto bits = simd::setAll(true);
+  auto words = reinterpret_cast<int64_t*>(&bits);
+  for (int i = 0; i < xsimd::batch<int64_t>::size; ++i) {
+    EXPECT_EQ(words[i], -1ll);
+  }
+}
 
 TEST_F(SimdUtilTest, bitIndices) {
   testIndices(1);
@@ -330,6 +347,33 @@ TEST_F(SimdUtilTest, Batch64_memory) {
   (b + 1).store_unaligned(data);
   EXPECT_EQ(data[0], 1);
   EXPECT_EQ(data[1], 2);
+}
+
+template <typename T>
+void validateReinterpretBatch() {
+  using U = typename std::make_unsigned<T>::type;
+  T data[xsimd::batch<T>::size]{};
+  static_assert(xsimd::batch<T>::size >= 2);
+  data[0] = -1;
+  data[1] = 123;
+  auto origin = xsimd::batch<T>::load_unaligned(data);
+  auto casted = simd::reinterpretBatch<U>(origin);
+  auto origin2 = simd::reinterpretBatch<T>(origin);
+  ASSERT_EQ(casted.get(0), std::numeric_limits<U>::max());
+  ASSERT_EQ(origin2.get(0), -1);
+  ASSERT_EQ(casted.get(1), 123);
+  ASSERT_EQ(origin2.get(1), 123);
+  for (int i = 2; i < origin.size; ++i) {
+    ASSERT_EQ(casted.get(i), 0);
+    ASSERT_EQ(origin.get(i), 0);
+  }
+}
+
+TEST_F(SimdUtilTest, reinterpretBatch) {
+  validateReinterpretBatch<int8_t>();
+  validateReinterpretBatch<int16_t>();
+  validateReinterpretBatch<int32_t>();
+  validateReinterpretBatch<int64_t>();
 }
 
 } // namespace

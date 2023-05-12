@@ -17,7 +17,6 @@
 #include "velox/dwio/common/BitPackDecoder.h"
 #include "velox/common/base/Nulls.h"
 #include "velox/dwio/common/BitPackDecoderUtilAVX512.h"
-// #include "velox/dwio/parquet/reader/RleBpDataDecoder.h"
 
 #include <folly/Random.h>
 #include <gtest/gtest.h>
@@ -127,8 +126,7 @@ class BitPackDecoderTest : public testing::Test {
         reinterpret_cast<const uint8_t*>(bitPackedData_[bitWidth].data());
     T* outputIter = reinterpret_cast<T*>(result.data());
     facebook::velox::dwio::common::unpack<T>(
-        inputIter, bytes(numValues, bitWidth), numValues, bitWidth,
-        outputIter);
+        inputIter, bytes(numValues, bitWidth), numValues, bitWidth, outputIter);
 
     checkDecodeResult(randomInts_.data(), allRows_, bitWidth, result.data());
   }

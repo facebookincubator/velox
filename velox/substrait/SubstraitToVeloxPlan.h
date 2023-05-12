@@ -61,6 +61,10 @@ class SubstraitVeloxPlanConverter {
       const ::substrait::ReadRel& readRel,
       std::shared_ptr<SplitInfo>& splitInfo);
 
+  /// Convert Substrait FetchRel into Velox LimitNode or TopNNode according the
+  /// different input of fetchRel.
+  core::PlanNodePtr toVeloxPlan(const ::substrait::FetchRel& fetchRel);
+
   /// Convert Substrait ReadRel into Velox Values Node.
   core::PlanNodePtr toVeloxPlan(
       const ::substrait::ReadRel& readRel,
@@ -71,6 +75,9 @@ class SubstraitVeloxPlanConverter {
 
   /// Convert Substrait RelRoot into Velox PlanNode.
   core::PlanNodePtr toVeloxPlan(const ::substrait::RelRoot& root);
+
+  /// Convert Substrait SortRel into Velox OrderByNode.
+  core::PlanNodePtr toVeloxPlan(const ::substrait::SortRel& sortRel);
 
   /// Convert Substrait Plan into Velox PlanNode.
   core::PlanNodePtr toVeloxPlan(const ::substrait::Plan& substraitPlan);
@@ -100,6 +107,15 @@ class SubstraitVeloxPlanConverter {
   /// name>:<arg_type0>_<arg_type1>_..._<arg_typeN>
   const std::string& findFunction(uint64_t id) const;
 
+  /// Integrate Substrait emit feature. Here a given 'substrait::RelCommon'
+  /// is passed and check if emit is defined for this relation. Basically a
+  /// ProjectNode is added on top of 'noEmitNode' to represent output order
+  /// specified in 'relCommon::emit'. Return 'noEmitNode' as is
+  /// if output order is 'kDriect'.
+  core::PlanNodePtr processEmit(
+      const ::substrait::RelCommon& relCommon,
+      const core::PlanNodePtr& noEmitNode);
+
  private:
   /// Returns unique ID to use for plan node. Produces sequential numbers
   /// starting from zero.
@@ -125,6 +141,16 @@ class SubstraitVeloxPlanConverter {
   std::shared_ptr<SubstraitParser> substraitParser_{
       std::make_shared<SubstraitParser>()};
 
+  /// Helper Function to convert Substrait sortField to Velox sortingKeys and
+  /// sortingOrders.
+  std::pair<
+      std::vector<core::FieldAccessTypedExprPtr>,
+      std::vector<core::SortOrder>>
+  processSortField(
+      const ::google::protobuf::RepeatedPtrField<::substrait::SortField>&
+          sortField,
+      const RowTypePtr& inputType);
+
   /// The Expression converter used to convert Substrait representations into
   /// Velox expressions.
   std::shared_ptr<SubstraitVeloxExprConverter> exprConverter_;
@@ -142,6 +168,13 @@ class SubstraitVeloxPlanConverter {
 
   /// Memory pool.
   memory::MemoryPool* pool_;
+
+  /// Helper function to convert the input of Substrait Rel to Velox Node.
+  template <typename T>
+  core::PlanNodePtr convertSingleInput(T rel) {
+    VELOX_CHECK(rel.has_input(), "Child Rel is expected here.");
+    return toVeloxPlan(rel.input());
+  }
 };
 
 } // namespace facebook::velox::substrait

@@ -70,6 +70,8 @@ class MapWriter;
 
 class GenericView;
 
+class GenericWriter;
+
 namespace detail {
 template <typename T>
 struct resolver {
@@ -113,6 +115,13 @@ struct resolver<Varbinary> {
   using out_type = StringWriter<false>;
 };
 
+template <>
+struct resolver<IntervalDayTime> {
+  using in_type = int64_t;
+  using null_free_in_type = in_type;
+  using out_type = int64_t;
+};
+
 template <typename T>
 struct resolver<std::shared_ptr<T>> {
   using in_type = std::shared_ptr<T>;
@@ -131,7 +140,7 @@ template <typename T>
 struct resolver<Generic<T>> {
   using in_type = GenericView;
   using null_free_in_type = in_type;
-  using out_type = void; // Not supported as output type yet.
+  using out_type = GenericWriter;
 };
 
 template <typename T>

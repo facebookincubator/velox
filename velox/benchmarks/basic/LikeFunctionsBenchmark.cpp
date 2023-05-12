@@ -27,9 +27,10 @@ using namespace facebook::velox;
 using namespace facebook::velox::tpch;
 using namespace facebook::velox::functions;
 using namespace facebook::velox::functions::test;
+using namespace facebook::velox::memory;
 
 DEFINE_int32(vector_size, 10000, "Vector size");
-DEFINE_int32(num_runs, 10000, "Number of runs");
+DEFINE_int32(num_runs, 100, "Number of runs");
 DEFINE_int32(num_rows, 10000, "Number of rows");
 
 namespace {
@@ -100,20 +101,20 @@ class LikeFunctionsBenchmark : public FunctionBaseTest,
       case TpchBenchmarkCase::TpchQuery2:
       case TpchBenchmarkCase::TpchQuery14:
       case TpchBenchmarkCase::TpchQuery16Part: {
-        auto tpchPart = genTpchPart(FLAGS_num_rows);
+        auto tpchPart = genTpchPart(pool_.get(), FLAGS_num_rows);
         return tpchPart->childAt(4);
       }
       case TpchBenchmarkCase::TpchQuery9:
       case TpchBenchmarkCase::TpchQuery20: {
-        auto tpchPart = genTpchPart(FLAGS_num_rows);
+        auto tpchPart = genTpchPart(pool_.get(), FLAGS_num_rows);
         return tpchPart->childAt(1);
       }
       case TpchBenchmarkCase::TpchQuery13: {
-        auto tpchOrders = genTpchOrders(FLAGS_num_rows);
+        auto tpchOrders = genTpchOrders(pool_.get(), FLAGS_num_rows);
         return tpchOrders->childAt(8);
       }
       case TpchBenchmarkCase::TpchQuery16Supplier: {
-        auto tpchSupplier = genTpchSupplier(FLAGS_num_rows);
+        auto tpchSupplier = genTpchSupplier(pool_.get(), FLAGS_num_rows);
         return tpchSupplier->childAt(6);
       }
       default:
@@ -172,60 +173,61 @@ class LikeFunctionsBenchmark : public FunctionBaseTest,
  private:
   static constexpr const char* kWildcardCharacterSet = "%_";
   static constexpr const char* kAnyWildcardCharacter = "%";
+  std::shared_ptr<MemoryPool> pool_{addDefaultLeafMemoryPool()};
   VectorPtr inputFuzzer_;
 };
 
 std::unique_ptr<LikeFunctionsBenchmark> benchmark;
 
-BENCHMARK_MULTI(wildcardExactlyN) {
-  return benchmark->run(PatternKind::kExactlyN);
+BENCHMARK(wildcardExactlyN) {
+  benchmark->run(PatternKind::kExactlyN);
 }
 
-BENCHMARK_MULTI(wildcardAtLeastN) {
-  return benchmark->run(PatternKind::kAtLeastN);
+BENCHMARK(wildcardAtLeastN) {
+  benchmark->run(PatternKind::kAtLeastN);
 }
 
-BENCHMARK_MULTI(fixedPattern) {
-  return benchmark->run(PatternKind::kFixed);
+BENCHMARK(fixedPattern) {
+  benchmark->run(PatternKind::kFixed);
 }
 
-BENCHMARK_MULTI(prefixPattern) {
-  return benchmark->run(PatternKind::kPrefix);
+BENCHMARK(prefixPattern) {
+  benchmark->run(PatternKind::kPrefix);
 }
 
-BENCHMARK_MULTI(suffixPattern) {
-  return benchmark->run(PatternKind::kSuffix);
+BENCHMARK(suffixPattern) {
+  benchmark->run(PatternKind::kSuffix);
 }
 
 BENCHMARK_DRAW_LINE();
 
-BENCHMARK_MULTI(tpchQuery2) {
-  return benchmark->run(TpchBenchmarkCase::TpchQuery2, "%BRASS");
+BENCHMARK(tpchQuery2) {
+  benchmark->run(TpchBenchmarkCase::TpchQuery2, "%BRASS");
 }
 
-BENCHMARK_MULTI(tpchQuery9) {
-  return benchmark->run(TpchBenchmarkCase::TpchQuery9, "%green%");
+BENCHMARK(tpchQuery9) {
+  benchmark->run(TpchBenchmarkCase::TpchQuery9, "%green%");
 }
 
-BENCHMARK_MULTI(tpchQuery13) {
-  return benchmark->run(TpchBenchmarkCase::TpchQuery13, "%special%requests%");
+BENCHMARK(tpchQuery13) {
+  benchmark->run(TpchBenchmarkCase::TpchQuery13, "%special%requests%");
 }
 
-BENCHMARK_MULTI(tpchQuery14) {
-  return benchmark->run(TpchBenchmarkCase::TpchQuery14, "PROMO%");
+BENCHMARK(tpchQuery14) {
+  benchmark->run(TpchBenchmarkCase::TpchQuery14, "PROMO%");
 }
 
-BENCHMARK_MULTI(tpchQuery16Part) {
-  return benchmark->run(TpchBenchmarkCase::TpchQuery16Part, "MEDIUM POLISHED%");
+BENCHMARK(tpchQuery16Part) {
+  benchmark->run(TpchBenchmarkCase::TpchQuery16Part, "MEDIUM POLISHED%");
 }
 
-BENCHMARK_MULTI(tpchQuery16Supplier) {
-  return benchmark->run(
+BENCHMARK(tpchQuery16Supplier) {
+  benchmark->run(
       TpchBenchmarkCase::TpchQuery16Supplier, "%Customer%Complaints%");
 }
 
-BENCHMARK_MULTI(tpchQuery20) {
-  return benchmark->run(TpchBenchmarkCase::TpchQuery20, "forest%");
+BENCHMARK(tpchQuery20) {
+  benchmark->run(TpchBenchmarkCase::TpchQuery20, "forest%");
 }
 
 } // namespace

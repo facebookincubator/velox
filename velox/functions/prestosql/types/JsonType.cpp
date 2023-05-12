@@ -26,6 +26,7 @@
 
 #include "velox/common/base/Exceptions.h"
 #include "velox/expression/EvalCtx.h"
+#include "velox/expression/PeeledEncoding.h"
 #include "velox/expression/StringWriter.h"
 #include "velox/expression/VectorWriters.h"
 #include "velox/functions/lib/RowsTranslationUtil.h"
@@ -54,17 +55,8 @@ void generateJsonTyped(
     if constexpr (std::is_same_v<T, bool>) {
       result.append(value ? "true" : "false");
     } else if constexpr (
-        std::is_same_v<T, Date> || std::is_same_v<T, Timestamp> ||
-        std::is_same_v<T, IntervalDayTime>) {
+        std::is_same_v<T, Date> || std::is_same_v<T, Timestamp>) {
       result.append(std::to_string(value));
-    } else if constexpr (std::is_same_v<T, UnscaledShortDecimal>) {
-      // UnscaledShortDecimal doesn't include precision and scale information
-      // to serialize into JSON.
-      VELOX_UNSUPPORTED();
-    } else if constexpr (std::is_same_v<T, UnscaledLongDecimal>) {
-      // UnscaledLongDecimal doesn't include precision and scale information
-      // to serialize into JSON.
-      VELOX_UNSUPPORTED();
     } else {
       folly::toAppend<std::string, T>(value, &result);
     }
@@ -168,9 +160,37 @@ struct AsJson {
       const SelectivityVector& rows,
       const BufferPtr& elementToTopLevelRows,
       bool isMapKey = false)
-      : decoded_(context, *input, rows) {
-    exec::EvalCtx::ErrorVectorPtr oldErrors;
+      : decoded_(context) {
+    ErrorVectorPtr oldErrors;
     context.swapErrors(oldErrors);
+    if (isJsonType(input->type())) {
+      json_ = input;
+    } else {
+      if (!exec::PeeledEncoding::isPeelable(input->encoding()) ||
+          !rows.hasSelections()) {
+        doCast(context, input, rows, isMapKey, json_);
+      } else {
+        exec::ScopedContextSaver saver;
+        exec::LocalSelectivityVector newRowsHolder(*context.execCtx());
+
+        exec::LocalDecodedVector localDecoded(context);
+        std::vector<VectorPtr> peeledVectors;
+        auto peeledEncoding = exec::PeeledEncoding::peel(
+            {input}, rows, localDecoded, true, peeledVectors);
+        VELOX_CHECK_EQ(peeledVectors.size(), 1);
+        auto newRows =
+            peeledEncoding->translateToInnerRows(rows, newRowsHolder);
+        // Save context and set the peel.
+        context.saveAndReset(saver, rows);
+        context.setPeeledEncoding(peeledEncoding);
+
+        doCast(context, peeledVectors[0], *newRows, isMapKey, json_);
+        json_ = context.getPeeledEncoding()->wrap(
+            json_->type(), context.pool(), json_, rows);
+      }
+    }
+    decoded_.get()->decode(*json_, rows);
+    jsonStrings_ = decoded_->base()->as<SimpleVector<StringView>>();
 
     if (isMapKey && decoded_->mayHaveNulls()) {
       context.applyToSelectedNoThrow(rows, [&](auto row) {
@@ -178,42 +198,6 @@ struct AsJson {
           VELOX_FAIL("Cannot cast map with null keys to JSON.");
         }
       });
-    }
-
-    if (isJsonType(input->type())) {
-      json_ = nullptr;
-      jsonStrings_ = decoded_->base()->as<SimpleVector<StringView>>();
-      combineErrors(context, rows, elementToTopLevelRows, oldErrors);
-      return;
-    }
-
-    if (decoded_->isIdentityMapping() || !rows.hasSelections()) {
-      doCast(context, rows, isMapKey);
-    } else {
-      // If decoded_ has constant or dictionary encoding, we peel off the
-      // encoding before casting the base vector and wrap the result with the
-      // encoding afterwards. To comply with TRY expression, the errors recorded
-      // during the casting need to be wrapped with the encoding as well.
-      // ScopedContextSaver automatically handles the wrapping to the error
-      // vector.
-      exec::ScopedContextSaver saver;
-      exec::LocalSelectivityVector baseRows(
-          *context.execCtx(), decoded_->base()->size());
-
-      if (decoded_->isConstantMapping()) {
-        auto index = decoded_->index(rows.begin());
-        singleRow(baseRows, index);
-        context.saveAndReset(saver, rows);
-        context.setConstantWrap(index);
-      } else {
-        translateToInnerRows(rows, *decoded_, baseRows);
-        context.saveAndReset(saver, rows);
-        auto wrapping = decoded_->dictionaryWrapping(*input, rows);
-        context.setDictionaryWrap(
-            std::move(wrapping.indices), std::move(wrapping.nulls));
-      }
-
-      doCast(context, *baseRows, isMapKey);
     }
     combineErrors(context, rows, elementToTopLevelRows, oldErrors);
   }
@@ -246,21 +230,21 @@ struct AsJson {
  private:
   void doCast(
       exec::EvalCtx& context,
+      const VectorPtr& input,
       const SelectivityVector& baseRows,
-      bool isMapKey) {
-    context.ensureWritable(baseRows, JSON(), json_);
-    auto flatJsonStrings = json_->as<FlatVector<StringView>>();
+      bool isMapKey,
+      VectorPtr& result) {
+    context.ensureWritable(baseRows, JSON(), result);
+    auto flatJsonStrings = result->as<FlatVector<StringView>>();
 
     VELOX_DYNAMIC_TYPE_DISPATCH_ALL(
         castToJson,
-        decoded_->base()->typeKind(),
-        *decoded_->base(),
+        input->typeKind(),
+        *input,
         context,
         baseRows,
         *flatJsonStrings,
         isMapKey);
-
-    jsonStrings_ = flatJsonStrings;
   }
 
   // Combine exceptions in oldErrors into context.errors_ with a transformation
@@ -272,7 +256,7 @@ struct AsJson {
       exec::EvalCtx& context,
       const SelectivityVector& rows,
       const BufferPtr& elementToTopLevelRows,
-      exec::EvalCtx::ErrorVectorPtr& oldErrors) {
+      ErrorVectorPtr& oldErrors) {
     if (context.errors()) {
       if (elementToTopLevelRows) {
         context.addElementErrorsToTopLevel(
@@ -539,13 +523,13 @@ FOLLY_ALWAYS_INLINE T castJsonToInt(const folly::dynamic& object) {
     double value = object.asDouble();
     if (value <= kIntMaxAsDouble && value >= kIntMinAsDouble) {
       return static_cast<T>(value);
-    } else {
-      throw std::invalid_argument(fmt::format(
-          "value is outside the range of {}: [{}, {}].",
-          CppToType<T>::create()->toString(),
-          kIntMinAsDouble,
-          kIntMaxAsDouble));
     }
+
+    VELOX_USER_FAIL(
+        "value is out of range [{}, {}]: {}",
+        kIntMinAsDouble,
+        kIntMaxAsDouble,
+        value);
   } else {
     return folly::to<T>(object.asInt());
   }
@@ -621,8 +605,6 @@ FOLLY_ALWAYS_INLINE void castFromJsonTyped<TypeKind::MAP>(
   auto& writerTyped = writer.castTo<Map<Any, Any>>();
 
   for (const auto& pair : object.items()) {
-    VELOX_USER_CHECK(!pair.first.isNull(), "Map keys cannot be NULL.");
-
     // If casting to map of JSON values, nulls in map values should become the
     // JSON text "null".
     if (!isJsonType(writer.type()->childAt(1)) && pair.second.isNull()) {
@@ -835,7 +817,6 @@ void JsonCastOperator::castTo(
     const BaseVector& input,
     exec::EvalCtx& context,
     const SelectivityVector& rows,
-    bool /*nullOnFailure*/,
     const TypePtr& resultType,
     VectorPtr& result) const {
   context.ensureWritable(rows, resultType, result);
@@ -852,7 +833,6 @@ void JsonCastOperator::castFrom(
     const BaseVector& input,
     exec::EvalCtx& context,
     const SelectivityVector& rows,
-    bool /*nullOnFailure*/,
     const TypePtr& resultType,
     VectorPtr& result) const {
   context.ensureWritable(rows, resultType, result);
@@ -860,6 +840,10 @@ void JsonCastOperator::castFrom(
   // in the caller.
   VELOX_DYNAMIC_TYPE_DISPATCH(
       castFromJson, result->typeKind(), input, context, rows, *result);
+}
+
+void registerJsonType() {
+  registerCustomType("json", std::make_unique<const JsonTypeFactories>());
 }
 
 } // namespace facebook::velox

@@ -44,23 +44,23 @@ class IoCounter {
     return count_;
   }
 
-  uint64_t bytes() const {
-    return bytes_;
+  uint64_t sum() const {
+    return sum_;
   }
 
-  void increment(uint64_t bytes) {
+  void increment(uint64_t amount) {
     ++count_;
-    bytes_ += bytes;
+    sum_ += amount;
   }
 
   void merge(const IoCounter& other) {
-    bytes_ += other.bytes_;
+    sum_ += other.sum_;
     count_ += other.count_;
   }
 
  private:
   std::atomic<uint64_t> count_{0};
-  std::atomic<uint64_t> bytes_{0};
+  std::atomic<uint64_t> sum_{0};
 };
 
 class IoStatistics {
@@ -70,12 +70,14 @@ class IoStatistics {
   uint64_t rawBytesWritten() const;
   uint64_t inputBatchSize() const;
   uint64_t outputBatchSize() const;
+  uint64_t totalScanTime() const;
 
   uint64_t incRawBytesRead(int64_t);
   uint64_t incRawOverreadBytes(int64_t);
   uint64_t incRawBytesWritten(int64_t);
   uint64_t incInputBatchSize(int64_t);
   uint64_t incOutputBatchSize(int64_t);
+  uint64_t incTotalScanTime(int64_t);
 
   IoCounter& prefetch() {
     return prefetch_;
@@ -118,6 +120,7 @@ class IoStatistics {
   std::atomic<uint64_t> inputBatchSize_{0};
   std::atomic<uint64_t> outputBatchSize_{0};
   std::atomic<uint64_t> rawOverreadBytes_{0};
+  std::atomic<uint64_t> totalScanTime_{0};
 
   // Planned read from storage or SSD.
   IoCounter prefetch_;

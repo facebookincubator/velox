@@ -70,7 +70,7 @@ DuckDBWrapper::~DuckDBWrapper() {}
 
 std::unique_ptr<DuckResult> DuckDBWrapper::execute(const std::string& query) {
   auto duckResult = connection_->Query(query);
-  return std::make_unique<DuckResult>(context_, move(duckResult));
+  return std::make_unique<DuckResult>(context_, std::move(duckResult));
 }
 
 void DuckDBWrapper::print(const std::string& query) {
@@ -92,7 +92,7 @@ DuckResult::DuckResult(
     types.push_back(getType(i));
     names.push_back(getName(i));
   }
-  type_ = std::make_shared<RowType>(move(names), move(types));
+  type_ = std::make_shared<RowType>(std::move(names), std::move(types));
 }
 
 DuckResult::~DuckResult() {}
@@ -142,6 +142,8 @@ inline bool isZeroCopyEligible(const ::duckdb::LogicalType& duckType) {
 
   if (duckType.id() == LogicalTypeId::HUGEINT ||
       duckType.id() == LogicalTypeId::TIMESTAMP ||
+      duckType.id() == LogicalTypeId::BOOLEAN ||
+      duckType.id() == LogicalTypeId::BLOB ||
       duckType.id() == LogicalTypeId::VARCHAR) {
     return false;
   }
@@ -318,6 +320,8 @@ VectorPtr toVeloxVector(
     }
     case LogicalTypeId::VARCHAR:
       return convert<DuckStringConversion>(duckVector, veloxType, size, pool);
+    case LogicalTypeId::BLOB:
+      return convert<DuckBlobConversion>(duckVector, veloxType, size, pool);
     case LogicalTypeId::DATE:
       return convert<DuckDateConversion>(duckVector, veloxType, size, pool);
     case LogicalTypeId::TIMESTAMP:

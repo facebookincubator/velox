@@ -16,15 +16,14 @@
 
 #include <gtest/gtest.h>
 #include "velox/dwio/common/BufferedInput.h"
-#include "velox/dwio/common/MemoryInputStream.h"
 
 using namespace facebook::velox::dwio::common;
 
 TEST(TestBufferedInput, ZeroLengthStream) {
-  MemoryInputStream stream{nullptr, 0};
-  auto scopedPool = facebook::velox::memory::getDefaultScopedMemoryPool();
-  auto& pool = scopedPool->getPool();
-  BufferedInput input{stream, pool};
+  auto readFile =
+      std::make_shared<facebook::velox::InMemoryReadFile>(std::string());
+  auto pool = facebook::velox::memory::addDefaultLeafMemoryPool();
+  BufferedInput input(readFile, *pool);
   auto ret = input.enqueue({0, 0});
   EXPECT_NE(ret, nullptr);
   const void* buf = nullptr;

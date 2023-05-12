@@ -17,9 +17,11 @@
 #include <glog/logging.h>
 #include <gtest/gtest.h>
 
+#include "velox/common/base/tests/GTestUtils.h"
 #include "velox/functions/Udf.h"
 #include "velox/functions/prestosql/tests/utils/FunctionBaseTest.h"
 #include "velox/vector/ConstantVector.h"
+#include "velox/vector/tests/TestingAlwaysThrowsFunction.h"
 
 namespace facebook::velox {
 
@@ -60,8 +62,7 @@ struct CountCallsFunction {
 };
 
 TEST_F(TryExprTest, skipExecution) {
-  registerFunction<CountCallsFunction, int64_t, int64_t>(
-      {"count_calls"}, BIGINT());
+  registerFunction<CountCallsFunction, int64_t, int64_t>({"count_calls"});
 
   std::vector<std::optional<int64_t>> expected{
       0, std::nullopt, 1, std::nullopt, 2};
@@ -130,11 +131,87 @@ TEST_F(TryExprTest, nestedTryParentErrors) {
       result);
 }
 
+TEST_F(TryExprTest, skipExecutionEvalSimplified) {
+  registerFunction<CountCallsFunction, int64_t, int64_t>({"count_calls"});
+
+  // Test that when a subset of the inputs to a function wrapped in a TRY throw
+  // exceptions, that function is only evaluated on the inputs that did not
+  // throw exceptions.
+  auto flatVector = makeFlatVector<StringView>({"1", "a", "1", "a", "1"});
+  auto result = evaluateSimplified<FlatVector<int64_t>>(
+      "try(count_calls(cast(c0 as integer)))", makeRowVector({flatVector}));
+
+  auto expected =
+      makeNullableFlatVector<int64_t>({0, std::nullopt, 1, std::nullopt, 2});
+  assertEqualVectors(expected, result);
+}
+
+TEST_F(TryExprTest, skipExecutionWholeBatchEvalSimplified) {
+  registerFunction<CountCallsFunction, int64_t, int64_t>({"count_calls"});
+
+  // Test that when all the inputs to a function wrapped in a TRY throw
+  // exceptions, that function isn't evaluated and a NULL constant is returned
+  // directly.
+  auto flatVector = makeFlatVector<StringView>({"a", "b", "c"});
+  auto result = evaluateSimplified<ConstantVector<int64_t>>(
+      "try(count_calls(cast(c0 as integer)))", makeRowVector({flatVector}));
+
+  auto expected = makeNullConstant(TypeKind::BIGINT, 3);
+  assertEqualVectors(expected, result);
+}
+
+/// Verify that subsequent inputs to a non-default-null-behavior function are
+/// not evaluated if previous inputs generated errors.
+TEST_F(TryExprTest, skipExecutionOnInputErrors) {
+  // Fail all rows.
+  auto input = makeRowVector({
+      makeFlatVector<StringView>({"a"_sv, "b"_sv, "c"_sv}),
+  });
+
+  auto [result, stats] = evaluateWithStats(
+      "try(array_constructor(cast(c0 as bigint), length(c0)))", input);
+  auto expected =
+      BaseVector::createNullConstant(ARRAY(BIGINT()), input->size(), pool());
+
+  assertEqualVectors(expected, result);
+
+  EXPECT_EQ(3, stats.at("cast").numProcessedRows);
+  EXPECT_EQ(3, stats.at("try").numProcessedRows);
+  EXPECT_EQ(0, stats.count("array_constructor"));
+  EXPECT_EQ(0, stats.count("length"));
+
+  // Fail some rows.
+  input = makeRowVector({
+      makeFlatVector<StringView>({"a"_sv, "100"_sv, "c"_sv, "1000"_sv}),
+  });
+
+  std::tie(result, stats) = evaluateWithStats(
+      "try(array_constructor(cast(c0 as bigint), length(c0)))", input);
+  expected = makeNullableArrayVector<int64_t>({
+      std::nullopt,
+      {{100, 3}},
+      std::nullopt,
+      {{1000, 4}},
+  });
+
+  assertEqualVectors(expected, result);
+
+  EXPECT_EQ(4, stats.at("cast").numProcessedRows);
+  EXPECT_EQ(4, stats.at("try").numProcessedRows);
+  EXPECT_EQ(2, stats.at("array_constructor").numProcessedRows);
+  EXPECT_EQ(2, stats.at("length").numProcessedRows);
+}
+
 namespace {
 // A function that sets result to be a ConstantVector and then throws an
-// exception.
+// exception. The constructor parameter throwOnFirstRow controls whether the
+// function throws an exception only at the first row or at every row it is
+// evaluated on.
 class CreateConstantAndThrow : public exec::VectorFunction {
  public:
+  CreateConstantAndThrow(bool throwOnFirstRow = false)
+      : throwOnFirstRow_{throwOnFirstRow} {}
+
   bool isDefaultNullBehavior() const override {
     return true;
   }
@@ -145,12 +222,18 @@ class CreateConstantAndThrow : public exec::VectorFunction {
       const TypePtr& /* outputType */,
       exec::EvalCtx& context,
       VectorPtr& result) const override {
-    result = BaseVector::createConstant((int64_t)1, rows.end(), context.pool());
+    result = BaseVector::createConstant(
+        BIGINT(), (int64_t)1, rows.end(), context.pool());
 
-    rows.applyToSelected([&](int row) {
+    if (throwOnFirstRow_) {
       context.setError(
-          row, std::make_exception_ptr(std::invalid_argument("expected")));
-    });
+          0, std::make_exception_ptr(std::invalid_argument("expected")));
+    } else {
+      rows.applyToSelected([&](int row) {
+        context.setError(
+            row, std::make_exception_ptr(std::invalid_argument("expected")));
+      });
+    }
   }
 
   static std::vector<std::shared_ptr<exec::FunctionSignature>> signatures() {
@@ -159,30 +242,55 @@ class CreateConstantAndThrow : public exec::VectorFunction {
                 .argumentType("bigint")
                 .build()};
   }
+
+ private:
+  const bool throwOnFirstRow_;
 };
 } // namespace
 
 TEST_F(TryExprTest, constant) {
   // Test a TRY around an expression that sets result to be a ConstantVector
   // and then throws an exception.
-  exec::registerVectorFunction(
-      "create_constant_and_throw",
-      CreateConstantAndThrow::signatures(),
-      std::make_unique<CreateConstantAndThrow>());
+  {
+    exec::registerVectorFunction(
+        "create_constant_and_throw",
+        CreateConstantAndThrow::signatures(),
+        std::make_unique<CreateConstantAndThrow>());
 
-  auto constant = makeConstant<int64_t>(0, 10);
+    auto constant = makeConstant<int64_t>(0, 10);
 
-  // This should return a ConstantVector of NULLs since every row throws an
-  // exception.
-  auto result = evaluate<ConstantVector<int64_t>>(
-      "try(create_constant_and_throw(c0))", makeRowVector({constant}));
+    // This should return a ConstantVector of NULLs since every row throws an
+    // exception.
+    auto result = evaluate<ConstantVector<int64_t>>(
+        "try(create_constant_and_throw(c0))", makeRowVector({constant}));
 
-  assertEqualVectors(makeNullConstant(TypeKind::BIGINT, 10), result);
+    assertEqualVectors(makeNullConstant(TypeKind::BIGINT, 10), result);
+  }
+
+  // Test a TRY over an expression that returns constant result vector but with
+  // exceptions on a subset of rows.
+  {
+    exec::registerVectorFunction(
+        "create_constant_and_throw_on_first_row",
+        CreateConstantAndThrow::signatures(),
+        std::make_unique<CreateConstantAndThrow>(true));
+
+    auto input = makeFlatVector<int64_t>({1, 2, 3, 4, 5});
+    VELOX_ASSERT_THROW(
+        evaluate<SimpleVector<int64_t>>(
+            "create_constant_and_throw_on_first_row(c0)",
+            makeRowVector({input})),
+        "expected");
+    auto result = evaluate<SimpleVector<int64_t>>(
+        "try(create_constant_and_throw_on_first_row(c0))",
+        makeRowVector({input}));
+    assertEqualVectors(
+        makeNullableFlatVector<int64_t>({std::nullopt, 1, 1, 1, 1}), result);
+  }
 }
 
 TEST_F(TryExprTest, evalSimplified) {
-  registerFunction<CountCallsFunction, int64_t, int64_t>(
-      {"count_calls"}, BIGINT());
+  registerFunction<CountCallsFunction, int64_t, int64_t>({"count_calls"});
 
   std::vector<std::optional<int64_t>> expected{0, 1, 2, 3};
   auto constant = makeConstant<int64_t>(0, 4);
@@ -193,5 +301,100 @@ TEST_F(TryExprTest, evalSimplified) {
       "try(count_calls(c0))", makeRowVector({constant}));
 
   assertEqualVectors(makeNullableFlatVector(expected), result);
+}
+
+TEST_F(TryExprTest, nonDefaultNulls) {
+  // Create dictionary on this input with nulls which will be processed
+  // by a non default null function.
+  auto dictionaryInput = BaseVector::wrapInDictionary(
+      makeNulls({false, false, true, true, false, false}),
+      makeIndices({0, 1, 2, 3, 4, 5, 6}),
+      6,
+      makeConstant("abc", 6));
+
+  auto input = makeRowVector({dictionaryInput});
+
+  // Ensure that expression fails without Try.
+  VELOX_ASSERT_THROW(
+      evaluateSimplified<SimpleVector<bool>>(
+          "distinct_from(10::INTEGER, codepoint(c0))", input),
+      "(3 vs. 1) Unexpected parameters (varchar(3)) for function codepoint. Expected: codepoint(varchar(1))");
+
+  // First try simple eval, and ensure only the null rows will be processed.
+  auto result = evaluateSimplified<SimpleVector<bool>>(
+      "try(distinct_from(10::INTEGER, codepoint(c0)))", input);
+
+  auto expected = makeNullableFlatVector<bool>(
+      {std::nullopt, std::nullopt, true, true, std::nullopt, std::nullopt});
+  assertEqualVectors(expected, result);
+
+  // Again ensure that only null rows are processed in common eval.
+  auto commonResult = evaluate<SimpleVector<bool>>(
+      "try(distinct_from(10::INTEGER, codepoint(c0)))", input);
+  assertEqualVectors(expected, commonResult);
+}
+
+TEST_F(TryExprTest, branchingSpecialForm) {
+  registerFunction<TestingAlwaysThrowsFunction, bool, bool>({"always_throws"});
+  auto data = makeRowVector(
+      {makeNullableFlatVector<bool>({true, true, std::nullopt}),
+       makeFlatVector<double>({1.1, 2.2, 3.3}),
+       makeFlatVector<double>({1.1, 2.1, 3.1}),
+       makeNullableFlatVector<bool>({false, false, std::nullopt}),
+       makeNullableFlatVector<bool>({std::nullopt, std::nullopt, std::nullopt}),
+       makeFlatVector<bool>({true, true, true}),
+       makeNullableFlatVector<bool>({std::nullopt, std::nullopt, true}),
+       makeConstant<double>(1.1, 3)});
+
+  // Test Conjunct with pre-existing errors in Coalesce and Switch. Pre-existing
+  // error should be preserved.
+  auto result = evaluate(
+      "try(coalesce(always_throws(c0), is_nan(c1) or is_nan(c2)))", data);
+  auto expected =
+      makeNullableFlatVector<bool>({std::nullopt, std::nullopt, false});
+  assertEqualVectors(expected, result);
+
+  result = evaluate(
+      "try(switch(always_throws(c0), c3, is_nan(c1) or is_finite(c2)))", data);
+  auto switchExpected =
+      makeNullableFlatVector<bool>({std::nullopt, std::nullopt, true});
+  assertEqualVectors(switchExpected, result);
+
+  // Test Coalesce and Switch over two Conjuncts on the same rows where the
+  // first Conjunct throws. The errors from the first Conjunct should be
+  // preserved.
+  result = evaluate(
+      "try(coalesce(always_throws(c0) or always_throws(c3), is_nan(c1) or is_nan(c2)))",
+      data);
+  assertEqualVectors(expected, result);
+
+  result = evaluate(
+      "try(switch(always_throws(c0) or always_throws(c3), is_nan(c2) or is_finite(c1), is_nan(c1) or is_finite(c2)))",
+      data);
+  assertEqualVectors(switchExpected, result);
+
+  // Test Coalesce and Switch in Conjunct on rows that has pre-existing errors.
+  // Coalesce and Switch should be evaluated on these rows and these rows should
+  // not throw.
+  result = evaluate("always_throws(c0) or coalesce(c4, is_finite(c1))", data);
+  expected = makeFlatVector<bool>({true, true, true});
+  assertEqualVectors(expected, result);
+
+  result = evaluate("always_throws(c0) or switch(c4, c3, is_finite(c1))", data);
+  assertEqualVectors(expected, result);
+
+  // Test Switch where the condition has errors on all rows.
+  result = evaluate(
+      "try(switch(always_throws(c5), is_finite(c1), is_finite(c2)))", data);
+  expected =
+      makeNullableFlatVector<bool>({std::nullopt, std::nullopt, std::nullopt});
+  assertEqualVectors(expected, result);
+
+  // Test Switch where then and else clauses only evaluate on the first two
+  // rows.
+  result = evaluate(
+      "try(switch(always_throws(c6), is_finite(c1), is_finite(c7)))", data);
+  expected = makeNullableFlatVector<bool>({true, true, std::nullopt});
+  assertEqualVectors(expected, result);
 }
 } // namespace facebook::velox

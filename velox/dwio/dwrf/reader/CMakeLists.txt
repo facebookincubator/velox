@@ -21,7 +21,6 @@ add_library(
   FlatMapColumnReader.cpp
   ReaderBase.cpp
   SelectiveDwrfReader.cpp
-  SelectiveByteRleColumnReader.cpp
   SelectiveFlatMapColumnReader.cpp
   SelectiveIntegerDirectColumnReader.cpp
   SelectiveIntegerDictionaryColumnReader.cpp
@@ -36,4 +35,4 @@ add_library(
 
 target_link_libraries(
   velox_dwio_dwrf_reader velox_dwio_common velox_dwio_dwrf_common velox_caching
-  velox_dwio_dwrf_utils ${FMT})
+  velox_dwio_dwrf_utils fmt::fmt)

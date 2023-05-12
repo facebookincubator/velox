@@ -20,130 +20,50 @@
 #include <string>
 #include "folly/Likely.h"
 #include "velox/common/base/Exceptions.h"
-#include "velox/type/UnscaledLongDecimal.h"
-#include "velox/type/UnscaledShortDecimal.h"
 
 namespace facebook::velox {
 
 template <typename T>
-T checkedPlus(const T& a, const T& b) {
+T checkedPlus(const T& a, const T& b, const char* typeName = "integer") {
   T result;
   bool overflow = __builtin_add_overflow(a, b, &result);
   if (UNLIKELY(overflow)) {
-    VELOX_ARITHMETIC_ERROR("integer overflow: {} + {}", a, b);
+    VELOX_ARITHMETIC_ERROR("{} overflow: {} + {}", typeName, a, b);
   }
   return result;
 }
 
-template <>
-inline UnscaledShortDecimal checkedPlus(
-    const UnscaledShortDecimal& a,
-    const UnscaledShortDecimal& b) {
-  int64_t result;
-  bool overflow =
-      __builtin_add_overflow(a.unscaledValue(), b.unscaledValue(), &result);
-  if (UNLIKELY(overflow || !UnscaledShortDecimal::valueInRange(result))) {
-    VELOX_ARITHMETIC_ERROR(
-        "Decimal overflow: {} + {}", a.unscaledValue(), b.unscaledValue());
-  }
-  return UnscaledShortDecimal(result);
-}
-
-template <>
-inline UnscaledLongDecimal checkedPlus(
-    const UnscaledLongDecimal& a,
-    const UnscaledLongDecimal& b) {
-  int128_t result;
-  bool overflow =
-      __builtin_add_overflow(a.unscaledValue(), b.unscaledValue(), &result);
-  if (UNLIKELY(overflow || !UnscaledLongDecimal::valueInRange(result))) {
-    VELOX_ARITHMETIC_ERROR(
-        "Decimal overflow: {} + {}", a.unscaledValue(), b.unscaledValue());
-  }
-  return UnscaledLongDecimal(result);
-}
-
 template <typename T>
-T checkedMinus(const T& a, const T& b) {
+T checkedMinus(const T& a, const T& b, const char* typeName = "integer") {
   T result;
   bool overflow = __builtin_sub_overflow(a, b, &result);
   if (UNLIKELY(overflow)) {
-    VELOX_ARITHMETIC_ERROR("integer overflow: {} - {}", a, b);
+    VELOX_ARITHMETIC_ERROR("{} overflow: {} - {}", typeName, a, b);
   }
   return result;
-}
-
-template <>
-inline UnscaledShortDecimal checkedMinus(
-    const UnscaledShortDecimal& a,
-    const UnscaledShortDecimal& b) {
-  int64_t result;
-  bool overflow =
-      __builtin_sub_overflow(a.unscaledValue(), b.unscaledValue(), &result);
-  if (UNLIKELY(overflow || !UnscaledShortDecimal::valueInRange(result))) {
-    VELOX_ARITHMETIC_ERROR(
-        "Decimal overflow: {} - {}", a.unscaledValue(), b.unscaledValue());
-  }
-  return UnscaledShortDecimal(result);
-}
-
-template <>
-inline UnscaledLongDecimal checkedMinus(
-    const UnscaledLongDecimal& a,
-    const UnscaledLongDecimal& b) {
-  int128_t result;
-  bool overflow =
-      __builtin_sub_overflow(a.unscaledValue(), b.unscaledValue(), &result);
-  if (UNLIKELY(overflow || !UnscaledLongDecimal::valueInRange(result))) {
-    VELOX_ARITHMETIC_ERROR(
-        "Decimal overflow: {} - {}", a.unscaledValue(), b.unscaledValue());
-  }
-
-  return UnscaledLongDecimal(result);
 }
 
 template <typename T>
-T checkedMultiply(const T& a, const T& b) {
+T checkedMultiply(const T& a, const T& b, const char* typeName = "integer") {
   T result;
   bool overflow = __builtin_mul_overflow(a, b, &result);
   if (UNLIKELY(overflow)) {
-    VELOX_ARITHMETIC_ERROR("integer overflow: {} * {}", a, b);
+    VELOX_ARITHMETIC_ERROR("{} overflow: {} * {}", typeName, a, b);
   }
   return result;
-}
-
-template <>
-inline UnscaledShortDecimal checkedMultiply(
-    const UnscaledShortDecimal& a,
-    const UnscaledShortDecimal& b) {
-  int64_t result;
-  bool overflow =
-      __builtin_mul_overflow(a.unscaledValue(), b.unscaledValue(), &result);
-  if (UNLIKELY(overflow || !UnscaledShortDecimal::valueInRange(result))) {
-    VELOX_ARITHMETIC_ERROR(
-        "Decimal overflow: {} * {}", a.unscaledValue(), b.unscaledValue());
-  }
-  return UnscaledShortDecimal(result);
-}
-
-template <>
-inline UnscaledLongDecimal checkedMultiply(
-    const UnscaledLongDecimal& a,
-    const UnscaledLongDecimal& b) {
-  int128_t result;
-  bool overflow =
-      __builtin_mul_overflow(a.unscaledValue(), b.unscaledValue(), &result);
-  if (UNLIKELY(overflow || !UnscaledLongDecimal::valueInRange(result))) {
-    VELOX_ARITHMETIC_ERROR(
-        "Decimal overflow: {} * {}", a.unscaledValue(), b.unscaledValue());
-  }
-  return UnscaledLongDecimal(result);
 }
 
 template <typename T>
 T checkedDivide(const T& a, const T& b) {
   if (b == 0) {
     VELOX_ARITHMETIC_ERROR("division by zero");
+  }
+
+  // Type T can not represent abs(std::numeric_limits<T>::min()).
+  if constexpr (std::is_integral_v<T>) {
+    if (UNLIKELY(a == std::numeric_limits<T>::min() && b == -1)) {
+      VELOX_ARITHMETIC_ERROR("integer overflow: {} / {}", a, b);
+    }
   }
   return a / b;
 }
@@ -152,6 +72,12 @@ template <typename T>
 T checkedModulus(const T& a, const T& b) {
   if (UNLIKELY(b == 0)) {
     VELOX_ARITHMETIC_ERROR("Cannot divide by 0");
+  }
+  // std::numeric_limits<int64_t>::min() % -1 could crash the program since
+  // abs(std::numeric_limits<int64_t>::min()) can not be represented in
+  // int64_t.
+  if (b == -1) {
+    return 0;
   }
   return (a % b);
 }

@@ -45,7 +45,7 @@ int main(int argc, char** argv) {
   folly::init(&argc, &argv);
 
   // Default memory allocator used throughout this example.
-  auto pool = memory::getDefaultScopedMemoryPool();
+  auto pool = memory::addDefaultLeafMemoryPool();
 
   // For this example, the input dataset will be comprised of a single BIGINT
   // column ("my_col"), containing 10 rows.
@@ -92,7 +92,8 @@ int main(int argc, char** argv) {
   connector::registerConnector(hiveConnector);
 
   // To be able to read local files, we need to register the local file
-  // filesystem. We also need to register the dwrf reader factory:
+  // filesystem. We also need to register the dwrf reader factory as well as a
+  // write protocol, in this case commit is not required:
   filesystems::registerLocalFileSystem();
   dwrf::registerDwrfReaderFactory();
 
@@ -123,7 +124,8 @@ int main(int argc, char** argv) {
                       inputRowType->children(),
                       {},
                       HiveConnectorTestBase::makeLocationHandle(
-                          tempDir->path))))
+                          tempDir->path))),
+              connector::CommitStrategy::kNoCommit)
           .planFragment();
 
   std::shared_ptr<folly::Executor> executor(

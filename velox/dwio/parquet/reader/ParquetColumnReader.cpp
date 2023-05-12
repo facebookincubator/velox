@@ -20,8 +20,10 @@
 
 #include "velox/dwio/parquet/reader/ParquetColumnReader.h"
 #include "velox/dwio/common/SelectiveColumnReaderInternal.h"
+#include "velox/dwio/parquet/reader/BooleanColumnReader.h"
 #include "velox/dwio/parquet/reader/FloatingPointColumnReader.h"
 #include "velox/dwio/parquet/reader/IntegerColumnReader.h"
+#include "velox/dwio/parquet/reader/RepeatedColumnReader.h"
 #include "velox/dwio/parquet/reader/StringColumnReader.h"
 #include "velox/dwio/parquet/reader/StructColumnReader.h"
 
@@ -43,17 +45,16 @@ std::unique_ptr<dwio::common::SelectiveColumnReader> ParquetColumnReader::build(
     case TypeKind::SMALLINT:
     case TypeKind::TINYINT:
     case TypeKind::DATE:
-    case TypeKind::SHORT_DECIMAL:
-    case TypeKind::LONG_DECIMAL:
+    case TypeKind::HUGEINT:
       return std::make_unique<IntegerColumnReader>(
           dataType, dataType, params, scanSpec);
 
     case TypeKind::REAL:
       return std::make_unique<FloatingPointColumnReader<float, float>>(
-          dataType, params, scanSpec);
+          dataType, dataType->type, params, scanSpec);
     case TypeKind::DOUBLE:
       return std::make_unique<FloatingPointColumnReader<double, double>>(
-          dataType, params, scanSpec);
+          dataType, dataType->type, params, scanSpec);
 
     case TypeKind::ROW:
       return std::make_unique<StructColumnReader>(dataType, params, scanSpec);
@@ -62,11 +63,15 @@ std::unique_ptr<dwio::common::SelectiveColumnReader> ParquetColumnReader::build(
     case TypeKind::VARCHAR:
       return std::make_unique<StringColumnReader>(dataType, params, scanSpec);
 
-    case TypeKind::BOOLEAN:
     case TypeKind::ARRAY:
-    case TypeKind::MAP:
+      return std::make_unique<ListColumnReader>(dataType, params, scanSpec);
 
-      VELOX_UNSUPPORTED("Type is not supported: ", dataType->type->kind());
+    case TypeKind::MAP:
+      return std::make_unique<MapColumnReader>(dataType, params, scanSpec);
+
+    case TypeKind::BOOLEAN:
+      return std::make_unique<BooleanColumnReader>(dataType, params, scanSpec);
+
     default:
       VELOX_FAIL(
           "buildReader unhandled type: " +

@@ -127,7 +127,7 @@ TEST_F(ArgumentTypeFuzzerTest, signatureTemplate) {
 
   {
     auto signature = exec::FunctionSignatureBuilder()
-                         .typeVariable("K")
+                         .knownTypeVariable("K")
                          .typeVariable("V")
                          .returnType("K")
                          .argumentType("array(K)")
@@ -147,13 +147,13 @@ TEST_F(ArgumentTypeFuzzerTest, signatureTemplate) {
       ASSERT_TRUE(argumentTypes[1]->isArray());
     };
 
-    verifyArgumentTypes(SHORT_DECIMAL(10, 5), ARRAY(SHORT_DECIMAL(10, 5)));
+    verifyArgumentTypes(DECIMAL(10, 5), ARRAY(DECIMAL(10, 5)));
     verifyArgumentTypes(ARRAY(DOUBLE()), ARRAY(ARRAY(DOUBLE())));
   }
 
   {
     auto signature = exec::FunctionSignatureBuilder()
-                         .typeVariable("K")
+                         .knownTypeVariable("K")
                          .typeVariable("V")
                          .returnType("bigint")
                          .argumentType("array(K)")
@@ -191,7 +191,7 @@ TEST_F(ArgumentTypeFuzzerTest, variableArity) {
 
   {
     auto signature = exec::FunctionSignatureBuilder()
-                         .typeVariable("K")
+                         .knownTypeVariable("K")
                          .returnType("bigint")
                          .argumentType("K")
                          .variableArity()
@@ -280,7 +280,7 @@ TEST_F(ArgumentTypeFuzzerTest, lambda) {
 
   // map(K, V1), function(K, V1, V2) -> map(K, V2)
   signature = exec::FunctionSignatureBuilder()
-                  .typeVariable("K")
+                  .knownTypeVariable("K")
                   .typeVariable("V1")
                   .typeVariable("V2")
                   .returnType("map(K,V2)")
@@ -305,7 +305,7 @@ TEST_F(ArgumentTypeFuzzerTest, lambda) {
 
 TEST_F(ArgumentTypeFuzzerTest, unconstrainedSignatureTemplate) {
   auto signature = exec::FunctionSignatureBuilder()
-                       .typeVariable("K")
+                       .knownTypeVariable("K")
                        .typeVariable("V")
                        .returnType("V")
                        .argumentType("map(K,V)")

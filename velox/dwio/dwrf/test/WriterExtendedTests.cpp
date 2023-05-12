@@ -19,7 +19,6 @@
 
 #include "folly/Random.h"
 #include "velox/dwio/common/DataSink.h"
-#include "velox/dwio/common/MemoryInputStream.h"
 #include "velox/dwio/dwrf/test/utils/E2EWriterTestUtil.h"
 #include "velox/dwio/dwrf/writer/Writer.h"
 #include "velox/dwio/type/fbhive/HiveTypeParser.h"
@@ -61,6 +60,17 @@ struct FlushPolicyTestCase {
   const uint32_t numStripesUpper;
   const uint32_t seed;
   const int64_t memoryBudget;
+
+  std::string debugString() const {
+    return fmt::format(
+        "inputStripeSize {}, dictSize {}, inputNumStripesLower {}, inputNumStripesUpper {}, seed {}, memoryBudget {}",
+        stripeSize,
+        dictSize,
+        numStripesLower,
+        numStripesUpper,
+        seed,
+        memoryBudget);
+  }
 };
 
 struct FlatMapFlushPolicyTestCase : public FlushPolicyTestCase {
@@ -104,37 +114,10 @@ void testWriterDefaultFlushPolicy(
       false);
 }
 
-void testWriterStaticBudgetFlushPolicy(
-    ::facebook::velox::memory::MemoryPool& pool,
-    const std::shared_ptr<const Type>& type,
-    const std::vector<VectorPtr>& batches,
-    size_t numStripesLower,
-    size_t numStripesUpper,
-    const std::shared_ptr<Config>& config,
-    int64_t memoryBudget) {
-  E2EWriterTestUtil::testWriter(
-      pool,
-      type,
-      batches,
-      numStripesLower,
-      numStripesUpper,
-      config,
-      /* flushPolicyFactory */
-      [stripeSizeThreshold = config->get(Config::STRIPE_SIZE),
-       dictionarySizeThreshold = config->get(Config::MAX_DICTIONARY_SIZE)]() {
-        return std::make_unique<StaticBudgetFlushPolicy>(
-            stripeSizeThreshold, dictionarySizeThreshold);
-      },
-      /* layoutPlannerFactory */ nullptr,
-      memoryBudget,
-      false);
-}
-
 TEST(E2EWriterTests, FlushPolicySimpleEncoding) {
   const size_t batchCount = 200;
   const size_t size = 1000;
-  auto scopedPool = facebook::velox::memory::getDefaultScopedMemoryPool();
-  auto& pool = scopedPool->getPool();
+  auto pool = facebook::velox::memory::addDefaultLeafMemoryPool();
 
   HiveTypeParser parser;
   auto type = parser.parse(
@@ -171,9 +154,9 @@ TEST(E2EWriterTests, FlushPolicySimpleEncoding) {
     config->set(Config::DISABLE_LOW_MEMORY_MODE, true);
     config->set(Config::STRIPE_SIZE, testCase.stripeSize);
     auto batches = E2EWriterTestUtil::generateBatches(
-        type, batchCount, size, testCase.seed, pool);
+        type, batchCount, size, testCase.seed, *pool);
     testWriterDefaultFlushPolicy(
-        pool,
+        *pool,
         type,
         batches,
         testCase.numStripesLower,
@@ -188,8 +171,7 @@ TEST(E2EWriterTests, FlushPolicySimpleEncoding) {
 TEST(E2EWriterTests, FlushPolicyDictionaryEncoding) {
   const size_t batchCount = 500;
   const size_t size = 1000;
-  auto scopedPool = facebook::velox::memory::getDefaultScopedMemoryPool();
-  auto& pool = scopedPool->getPool();
+  auto pool = facebook::velox::memory::addDefaultLeafMemoryPool();
 
   HiveTypeParser parser;
   auto type = parser.parse(
@@ -234,9 +216,9 @@ TEST(E2EWriterTests, FlushPolicyDictionaryEncoding) {
     config->set(Config::DISABLE_LOW_MEMORY_MODE, true);
     config->set(Config::STRIPE_SIZE, testCase.stripeSize);
     auto batches = E2EWriterTestUtil::generateBatches(
-        type, batchCount, size, testCase.seed, pool);
+        type, batchCount, size, testCase.seed, *pool);
     testWriterDefaultFlushPolicy(
-        pool,
+        *pool,
         type,
         batches,
         testCase.numStripesLower,
@@ -281,9 +263,9 @@ TEST(E2EWriterTests, FlushPolicyDictionaryEncoding) {
     config->set(Config::DISABLE_LOW_MEMORY_MODE, true);
     config->set(Config::STRIPE_SIZE, testCase.stripeSize);
     auto batches = E2EWriterTestUtil::generateBatches(
-        type, batchCount, size, testCase.seed, pool);
+        type, batchCount, size, testCase.seed, *pool);
     testWriterDefaultFlushPolicy(
-        pool,
+        *pool,
         type,
         batches,
         testCase.numStripesLower,
@@ -315,9 +297,9 @@ TEST(E2EWriterTests, FlushPolicyDictionaryEncoding) {
 
     config->set(Config::MAX_DICTIONARY_SIZE, testCase.dictSize);
     auto batches = E2EWriterTestUtil::generateBatches(
-        type, batchCount, size, testCase.seed, pool);
+        type, batchCount, size, testCase.seed, *pool);
     testWriterDefaultFlushPolicy(
-        pool,
+        *pool,
         type,
         batches,
         testCase.numStripesLower,
@@ -331,8 +313,7 @@ TEST(E2EWriterTests, FlushPolicyDictionaryEncoding) {
 TEST(E2EWriterTests, FlushPolicyNestedTypes) {
   const size_t batchCount = 10;
   const size_t size = 1000;
-  auto scopedPool = facebook::velox::memory::getDefaultScopedMemoryPool();
-  auto& pool = scopedPool->getPool();
+  auto pool = facebook::velox::memory::addDefaultLeafMemoryPool();
 
   HiveTypeParser parser;
   auto type = parser.parse(
@@ -377,248 +358,9 @@ TEST(E2EWriterTests, FlushPolicyNestedTypes) {
     config->set(Config::DISABLE_LOW_MEMORY_MODE, true);
     config->set(Config::STRIPE_SIZE, testCase.stripeSize);
     auto batches = E2EWriterTestUtil::generateBatches(
-        type, batchCount, size, testCase.seed, pool);
+        type, batchCount, size, testCase.seed, *pool);
     testWriterDefaultFlushPolicy(
-        pool,
-        type,
-        batches,
-        testCase.numStripesLower,
-        testCase.numStripesUpper,
-        config,
-        testCase.memoryBudget);
-  }
-}
-
-// T78009859
-TEST(E2EWriterTests, FlushPolicyWithStaticMemoryBudget) {
-  const size_t batchCount = 2000;
-  const size_t size = 1000;
-  auto scopedPool = facebook::velox::memory::getDefaultScopedMemoryPool();
-  auto& pool = scopedPool->getPool();
-
-  HiveTypeParser parser;
-  // Dictionary encodable types have the richest feature to test.
-  auto type = parser.parse(
-      "struct<"
-      "short_val:smallint,"
-      "int_val:int,"
-      "long_val:bigint,"
-      "string_val:string,"
-      "binary_val:binary,"
-      ">");
-
-  auto testCases = folly::make_array<FlushPolicyTestCase>(
-      FlushPolicyTestCase{
-          /*stripeSize*/ 1 * kSizeMB,
-          /*dictSize*/ std::numeric_limits<int64_t>::max(),
-          /*numStripesLower*/ 41,
-          /*numStripesUpper*/ 41,
-          /*seed*/ 630992088},
-      FlushPolicyTestCase{
-          /*stripeSize*/ 1 * kSizeMB,
-          /*dictSize*/ std::numeric_limits<int64_t>::max(),
-          /*numStripesLower*/ 41,
-          /*numStripesUpper*/ 41,
-          /*seed*/ 630992088,
-          10 * kSizeMB},
-      FlushPolicyTestCase{
-          /*stripeSize*/ 1 * kSizeMB,
-          /*dictSize*/ std::numeric_limits<int64_t>::max(),
-          /*numStripesLower*/ 41,
-          /*numStripesUpper*/ 41,
-          /*seed*/ 1630160118},
-      FlushPolicyTestCase{
-          /*stripeSize*/ 1 * kSizeMB,
-          /*dictSize*/ std::numeric_limits<int64_t>::max(),
-          /*numStripesLower*/ 41,
-          /*numStripesUpper*/ 41,
-          /*seed*/ 1630160118,
-          13 * kSizeMB},
-      FlushPolicyTestCase{
-          /*stripeSize*/ 2 * kSizeMB,
-          /*dictSize*/ std::numeric_limits<int64_t>::max(),
-          /*numStripesLower*/ 20,
-          /*numStripesUpper*/ 20,
-          /*seed*/ 1630160118},
-      FlushPolicyTestCase{
-          /*stripeSize*/ 2 * kSizeMB,
-          /*dictSize*/ std::numeric_limits<int64_t>::max(),
-          /*numStripesLower*/ 20,
-          /*numStripesUpper*/ 20,
-          /*seed*/ 1630160118,
-          13 * kSizeMB},
-      FlushPolicyTestCase{
-          /*stripeSize*/ 32 * kSizeMB,
-          /*dictSize*/ std::numeric_limits<int64_t>::max(),
-          /*numStripesLower*/ 1,
-          /*numStripesUpper*/ 1,
-          /*seed*/ 1630160118},
-      FlushPolicyTestCase{
-          /*stripeSize*/ 32 * kSizeMB,
-          /*dictSize*/ std::numeric_limits<int64_t>::max(),
-          /*numStripesLower*/ 2,
-          /*numStripesUpper*/ 3,
-          /*seed*/ 1630160118,
-          40 * kSizeMB});
-
-  for (const auto& testCase : testCases) {
-    auto config = std::make_shared<Config>();
-    config->set(Config::DICTIONARY_NUMERIC_KEY_SIZE_THRESHOLD, 0.0f);
-    config->set(Config::DICTIONARY_STRING_KEY_SIZE_THRESHOLD, 0.0f);
-    config->set(Config::ENTROPY_KEY_STRING_SIZE_THRESHOLD, 1.0f);
-    config->set(Config::DISABLE_LOW_MEMORY_MODE, true);
-    config->set(Config::STRIPE_SIZE, testCase.stripeSize);
-    auto batches = E2EWriterTestUtil::generateBatches(
-        type, batchCount, size, testCase.seed, pool);
-    testWriterStaticBudgetFlushPolicy(
-        pool,
-        type,
-        batches,
-        testCase.numStripesLower,
-        testCase.numStripesUpper,
-        config,
-        testCase.memoryBudget);
-  }
-}
-
-TEST(E2EWriterTests, FlushPolicyDictionaryEncodingWithStaticMemoryBudget) {
-  const size_t batchCount = 500;
-  const size_t size = 1000;
-  auto scopedPool = facebook::velox::memory::getDefaultScopedMemoryPool();
-  auto& pool = scopedPool->getPool();
-
-  HiveTypeParser parser;
-  // Dictionary encodable types have the richest feature to test.
-  auto type = parser.parse(
-      "struct<"
-      "short_val:smallint,"
-      "int_val:int,"
-      "long_val:bigint,"
-      "string_val:string,"
-      "binary_val:binary,"
-      ">");
-
-  auto dictionaryEncodingTestCases = folly::make_array<FlushPolicyTestCase>(
-      FlushPolicyTestCase{
-          /*stripeSize*/ 256 * kSizeKB,
-          /*dictSize*/ std::numeric_limits<int64_t>::max(),
-          /*numStripesLower*/ 42,
-          /*numStripesUpper*/ 42,
-          /*seed*/ 630992088},
-      FlushPolicyTestCase{
-          /*stripeSize*/ 256 * kSizeKB,
-          /*dictSize*/ std::numeric_limits<int64_t>::max(),
-          /*numStripesLower*/ 41,
-          /*numStripesUpper*/ 46,
-          /*seed*/ 630992088,
-          4 * kSizeMB},
-      FlushPolicyTestCase{
-          /*stripeSize*/ 1 * kSizeMB,
-          /*dictSize*/ std::numeric_limits<int64_t>::max(),
-          /*numStripesLower*/ 11,
-          /*numStripesUpper*/ 11,
-          /*seed*/ 1630160118},
-      FlushPolicyTestCase{
-          /*stripeSize*/ 1 * kSizeMB,
-          /*dictSize*/ std::numeric_limits<int64_t>::max(),
-          /*numStripesLower*/ 21,
-          /*numStripesUpper*/ 41,
-          /*seed*/ 1630160118,
-          6 * kSizeMB});
-
-  for (const auto& testCase : dictionaryEncodingTestCases) {
-    auto config = std::make_shared<Config>();
-    config->set(Config::DICTIONARY_NUMERIC_KEY_SIZE_THRESHOLD, 1.0f);
-    config->set(Config::DICTIONARY_STRING_KEY_SIZE_THRESHOLD, 1.0f);
-    config->set(Config::ENTROPY_KEY_STRING_SIZE_THRESHOLD, 0.0f);
-    config->set(Config::DISABLE_LOW_MEMORY_MODE, true);
-    config->set(Config::STRIPE_SIZE, testCase.stripeSize);
-    auto batches = E2EWriterTestUtil::generateBatches(
-        type, batchCount, size, testCase.seed, pool);
-    testWriterStaticBudgetFlushPolicy(
-        pool,
-        type,
-        batches,
-        testCase.numStripesLower,
-        testCase.numStripesUpper,
-        config,
-        testCase.memoryBudget);
-  }
-}
-
-// Test that some memory caps are not possible, or that stripe size
-TEST(E2EWriterTests, StaticMemoryBudgetTrim) {
-  const size_t batchCount = 2000;
-  const size_t size = 1000;
-  auto scopedPool = facebook::velox::memory::getDefaultScopedMemoryPool();
-  auto& pool = scopedPool->getPool();
-
-  HiveTypeParser parser;
-  // Dictionary encodable types have the richest feature to test.
-  auto type = parser.parse(
-      "struct<"
-      "short_val:smallint,"
-      "int_val:int,"
-      "long_val:bigint,"
-      "string_val:string,"
-      "binary_val:binary,"
-      ">");
-
-  auto dictionaryEncodingTestCases = folly::make_array<FlushPolicyTestCase>(
-      FlushPolicyTestCase{
-          /*stripeSize*/ 256 * kSizeKB,
-          /*dictSize*/ std::numeric_limits<int64_t>::max(),
-          /*numStripesLower*/ 166,
-          /*numStripesUpper*/ 182,
-          /*seed*/ 630992088,
-          4 * kSizeMB},
-      FlushPolicyTestCase{
-          /*stripeSize*/ 512 * kSizeKB,
-          /*dictSize*/ std::numeric_limits<int64_t>::max(),
-          /*numStripesLower*/ 86,
-          /*numStripesUpper*/ 86,
-          /*seed*/ 630992088,
-          6 * kSizeMB},
-      FlushPolicyTestCase{
-          /*stripeSize*/ 1 * kSizeMB,
-          /*dictSize*/ std::numeric_limits<int64_t>::max(),
-          /*numStripesLower*/ 44,
-          /*numStripesUpper*/ 44,
-          /*seed*/ 630992088,
-          10 * kSizeMB},
-      FlushPolicyTestCase{
-          /*stripeSize*/ 2 * kSizeMB,
-          /*dictSize*/ std::numeric_limits<int64_t>::max(),
-          /*numStripesLower*/ 20,
-          /*numStripesUpper*/ 20,
-          /*seed*/ 630992088,
-          12 * kSizeMB},
-      FlushPolicyTestCase{
-          /*stripeSize*/ 10 * kSizeMB,
-          /*dictSize*/ std::numeric_limits<int64_t>::max(),
-          /*numStripesLower*/ 5,
-          /*numStripesUpper*/ 5,
-          /*seed*/ 630992088,
-          20 * kSizeMB},
-      FlushPolicyTestCase{
-          /*stripeSize*/ 32 * kSizeMB,
-          /*dictSize*/ std::numeric_limits<int64_t>::max(),
-          /*numStripesLower*/ 2,
-          /*numStripesUpper*/ 3,
-          /*seed*/ 630992088,
-          40 * kSizeMB});
-
-  for (const auto& testCase : dictionaryEncodingTestCases) {
-    auto config = std::make_shared<Config>();
-    config->set(Config::DICTIONARY_NUMERIC_KEY_SIZE_THRESHOLD, 1.0f);
-    config->set(Config::DICTIONARY_STRING_KEY_SIZE_THRESHOLD, 1.0f);
-    config->set(Config::ENTROPY_KEY_STRING_SIZE_THRESHOLD, 0.0f);
-    // This is the one flush policy test that doesn't disable low memory mode.
-    config->set(Config::STRIPE_SIZE, testCase.stripeSize);
-    auto batches = E2EWriterTestUtil::generateBatches(
-        type, batchCount, size, testCase.seed, pool);
-    testWriterStaticBudgetFlushPolicy(
-        pool,
+        *pool,
         type,
         batches,
         testCase.numStripesLower,
@@ -631,9 +373,8 @@ TEST(E2EWriterTests, StaticMemoryBudgetTrim) {
 // Flat map has 1.5 orders of magnitude inflated stream memory usage.
 TEST(E2EWriterTests, FlushPolicyFlatMap) {
   const size_t batchCount = 10;
-  const size_t size = 1000;
-  auto scopedPool = facebook::velox::memory::getDefaultScopedMemoryPool();
-  auto& pool = scopedPool->getPool();
+  const size_t size = 500;
+  auto pool = facebook::velox::memory::addDefaultLeafMemoryPool();
 
   HiveTypeParser parser;
   // A mixture of columns where dictionary sharing is not necessarily
@@ -650,48 +391,48 @@ TEST(E2EWriterTests, FlushPolicyFlatMap) {
       FlatMapFlushPolicyTestCase{
           /*stripeSize*/ 256 * kSizeKB,
           /*dictSize*/ std::numeric_limits<int64_t>::max(),
-          /*numStripesLower*/ 10,
-          /*numStripesUpper*/ 10,
-          /*enableDictionary*/ true,
-          /*enableDictionarySharing*/ false,
-          /*seed*/ 1321904009},
-      FlatMapFlushPolicyTestCase{
-          /*stripeSize*/ 512 * kSizeKB,
-          /*dictSize*/ std::numeric_limits<int64_t>::max(),
           /*numStripesLower*/ 6,
           /*numStripesUpper*/ 6,
           /*enableDictionary*/ true,
           /*enableDictionarySharing*/ false,
           /*seed*/ 1321904009},
       FlatMapFlushPolicyTestCase{
+          /*stripeSize*/ 512 * kSizeKB,
+          /*dictSize*/ std::numeric_limits<int64_t>::max(),
+          /*numStripesLower*/ 4,
+          /*numStripesUpper*/ 4,
+          /*enableDictionary*/ true,
+          /*enableDictionarySharing*/ false,
+          /*seed*/ 1321904009},
+      FlatMapFlushPolicyTestCase{
           /*stripeSize*/ 2 * kSizeMB,
           /*dictSize*/ std::numeric_limits<int64_t>::max(),
-          /*numStripesLower*/ 3,
-          /*numStripesUpper*/ 3,
+          /*numStripesLower*/ 2,
+          /*numStripesUpper*/ 2,
           /*enableDictionary*/ true,
           /*enableDictionarySharing*/ true,
           /*seed*/ 1321904009},
       FlatMapFlushPolicyTestCase{
           /*stripeSize*/ 256 * kSizeKB,
           /*dictSize*/ std::numeric_limits<int64_t>::max(),
-          /*numStripesLower*/ 10,
-          /*numStripesUpper*/ 10,
-          /*enableDictionary*/ false,
-          /*enableDictionarySharing*/ false,
-          /*seed*/ 1321904009},
-      FlatMapFlushPolicyTestCase{
-          /*stripeSize*/ 512 * kSizeKB,
-          /*dictSize*/ std::numeric_limits<int64_t>::max(),
           /*numStripesLower*/ 6,
           /*numStripesUpper*/ 6,
           /*enableDictionary*/ false,
           /*enableDictionarySharing*/ false,
           /*seed*/ 1321904009},
       FlatMapFlushPolicyTestCase{
+          /*stripeSize*/ 512 * kSizeKB,
+          /*dictSize*/ std::numeric_limits<int64_t>::max(),
+          /*numStripesLower*/ 4,
+          /*numStripesUpper*/ 4,
+          /*enableDictionary*/ false,
+          /*enableDictionarySharing*/ false,
+          /*seed*/ 1321904009},
+      FlatMapFlushPolicyTestCase{
           /*stripeSize*/ 2 * kSizeMB,
           /*dictSize*/ std::numeric_limits<int64_t>::max(),
-          /*numStripesLower*/ 3,
-          /*numStripesUpper*/ 3,
+          /*numStripesLower*/ 2,
+          /*numStripesUpper*/ 2,
           /*enableDictionary*/ false,
           /*enableDictionarySharing*/ true,
           /*seed*/ 1321904009});
@@ -713,93 +454,10 @@ TEST(E2EWriterTests, FlushPolicyFlatMap) {
     }
     config->set(Config::MAP_FLAT_DICT_SHARE, testCase.enableDictionarySharing);
     auto batches = E2EWriterTestUtil::generateBatches(
-        type, batchCount, size, testCase.seed, pool);
+        type, batchCount, size, testCase.seed, *pool);
 
     testWriterDefaultFlushPolicy(
-        pool,
-        type,
-        batches,
-        testCase.numStripesLower,
-        testCase.numStripesUpper,
-        config,
-        testCase.memoryBudget);
-  }
-}
-
-TEST(E2EWriterTests, FlushPolicyFlatMapWithStaticMemoryBudget) {
-  const size_t batchCount = 10;
-  const size_t size = 1000;
-  auto scopedPool = facebook::velox::memory::getDefaultScopedMemoryPool();
-  auto& pool = scopedPool->getPool();
-
-  HiveTypeParser parser;
-  // A mixture of columns where dictionary sharing is not necessarily
-  // turned on.
-  auto type = parser.parse(
-      "struct<"
-      "map_val:map<int,int>,"
-      "dense_features:map<int,float>,"
-      "sparse_features:map<bigint,array<bigint>>,"
-      "id_score_list_features:map<bigint,map<bigint, float>>,"
-      ">");
-
-  auto testCases = folly::make_array<FlatMapFlushPolicyTestCase>(
-      FlatMapFlushPolicyTestCase{
-          /*stripeSize*/ 256 * kSizeKB,
-          /*dictSize*/ std::numeric_limits<int64_t>::max(),
-          /*numStripesLower*/ 10,
-          /*numStripesUpper*/ 10,
-          /*enableDictionary*/ true,
-          /*enableDictionarySharing*/ false,
-          /*seed*/ 1321904009,
-          256 * kSizeMB},
-      FlatMapFlushPolicyTestCase{
-          /*stripeSize*/ 1 * kSizeMB,
-          /*dictSize*/ std::numeric_limits<int64_t>::max(),
-          /*numStripesLower*/ 4,
-          /*numStripesUpper*/ 4,
-          /*enableDictionary*/ true,
-          /*enableDictionarySharing*/ false,
-          /*seed*/ 1321904009,
-          256 * kSizeMB},
-      FlatMapFlushPolicyTestCase{
-          /*stripeSize*/ 256 * kSizeKB,
-          /*dictSize*/ std::numeric_limits<int64_t>::max(),
-          /*numStripesLower*/ 10,
-          /*numStripesUpper*/ 10,
-          /*enableDictionary*/ true,
-          /*enableDictionarySharing*/ true,
-          /*seed*/ 1321904009,
-          256 * kSizeMB},
-      FlatMapFlushPolicyTestCase{
-          /*stripeSize*/ 1 * kSizeMB,
-          /*dictSize*/ std::numeric_limits<int64_t>::max(),
-          /*numStripesLower*/ 4,
-          /*numStripesUpper*/ 4,
-          /*enableDictionary*/ true,
-          /*enableDictionarySharing*/ true,
-          /*seed*/ 1321904009,
-          256 * kSizeMB});
-
-  for (const auto& testCase : testCases) {
-    auto config = std::make_shared<Config>();
-    config->set(Config::STRIPE_SIZE, testCase.stripeSize);
-    config->set(Config::MAX_DICTIONARY_SIZE, testCase.dictSize);
-    config->set(Config::FLATTEN_MAP, true);
-    config->set(Config::MAP_FLAT_COLS, {0, 1, 2, 3});
-    config->set(Config::DISABLE_LOW_MEMORY_MODE, true);
-    config->set(
-        Config::MAP_FLAT_DISABLE_DICT_ENCODING, !testCase.enableDictionary);
-    if (testCase.enableDictionary) {
-      // Force dictionary encoding for integer columns.
-      config->set(Config::DICTIONARY_NUMERIC_KEY_SIZE_THRESHOLD, 1.0f);
-    }
-    config->set(Config::MAP_FLAT_DICT_SHARE, testCase.enableDictionarySharing);
-    auto batches = E2EWriterTestUtil::generateBatches(
-        type, batchCount, size, testCase.seed, pool);
-
-    testWriterStaticBudgetFlushPolicy(
-        pool,
+        *pool,
         type,
         batches,
         testCase.numStripesLower,

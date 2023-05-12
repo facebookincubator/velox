@@ -31,7 +31,7 @@ void saveType(const TypePtr& type, std::ostream& out);
 TypePtr restoreType(std::istream& in);
 
 /// Serializes the vector into binary format and writes it to the provided
-/// output stream. The serialiation preserved encoding.
+/// output stream. The serialization format preserves the encoding.
 void saveVector(const BaseVector& vector, std::ostream& out);
 
 /// Serializes the vector into binary format and writes it to a new file in
@@ -61,23 +61,23 @@ VectorPtr restoreVectorFromFile(
 /// Reads a string from a file stored by saveStringToFile() method
 std::string restoreStringFromFile(const char* FOLLY_NONNULL filePath);
 
-/// Generates a file path in specified directory and creates it. Returns
-/// std::nullopt on failure.
-std::optional<std::string> generateFilePath(
-    const char* FOLLY_NONNULL basePath,
-    const char* FOLLY_NONNULL prefix);
-
-/// Generates a folder path in specified directory and creates it. Returns
-/// std::nullopt on failure.
-std::optional<std::string> generateFolderPath(
-    const char* FOLLY_NONNULL basePath,
-    const char* FOLLY_NONNULL prefix);
-
 // Write the vector to a file. Contents would include the size of the list
 // followed by all the values.
 template <typename T>
-void saveVectorTofile(
+void saveStdVectorToFile(
     const std::vector<T>& list,
     const char* FOLLY_NONNULL filePath);
+
+// Reads a std::vector from a file stored by saveStdVectorToFile() method.
+template <typename T>
+std::vector<T> restoreStdVectorFromFile(const char* FOLLY_NONNULL filePath);
+
+/// Serializes a SelectivityVector into binary format and writes it to the
+/// provided output stream.
+void saveSelectivityVector(const SelectivityVector& rows, std::ostream& out);
+
+/// Deserializes a SelectivityVector serialized by 'saveSelectivityVector' from
+/// the provided input stream.
+SelectivityVector restoreSelectivityVector(std::istream& in);
 
 } // namespace facebook::velox

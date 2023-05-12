@@ -58,7 +58,7 @@ std::unique_ptr<SelectiveColumnReader> SelectiveDwrfReader::build(
     const std::shared_ptr<const dwio::common::TypeWithId>& dataType,
     DwrfParams& params,
     common::ScanSpec& scanSpec) {
-  dwio::common::typeutils::CompatChecker::check(
+  dwio::common::typeutils::checkTypeCompatibility(
       *dataType->type, *requestedType->type);
   EncodingKey ek{dataType->id, params.flatMapContext().sequence};
   auto& stripe = params.stripeStreams();
@@ -87,16 +87,16 @@ std::unique_ptr<SelectiveColumnReader> SelectiveDwrfReader::build(
       if (requestedType->type->kind() == TypeKind::REAL) {
         return std::make_unique<
             SelectiveFloatingPointColumnReader<float, float>>(
-            requestedType, params, scanSpec);
+            requestedType, dataType->type, params, scanSpec);
       } else {
         return std::make_unique<
             SelectiveFloatingPointColumnReader<float, double>>(
-            requestedType, params, scanSpec);
+            requestedType, dataType->type, params, scanSpec);
       }
     case TypeKind::DOUBLE:
       return std::make_unique<
           SelectiveFloatingPointColumnReader<double, double>>(
-          requestedType, params, scanSpec);
+          requestedType, dataType->type, params, scanSpec);
     case TypeKind::ROW:
       return std::make_unique<SelectiveStructColumnReader>(
           requestedType, dataType, params, scanSpec);

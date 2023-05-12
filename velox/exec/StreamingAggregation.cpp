@@ -31,7 +31,7 @@ StreamingAggregation::StreamingAggregation(
           aggregationNode->step() == core::AggregationNode::Step::kPartial
               ? "PartialAggregation"
               : "Aggregation"),
-      outputBatchSize_{driverCtx->queryConfig().preferredOutputBatchSize()},
+      outputBatchSize_{outputBatchRows()},
       step_{aggregationNode->step()} {
   auto numKeys = aggregationNode->groupingKeys().size();
   decodedKeys_.resize(numKeys);
@@ -64,7 +64,7 @@ StreamingAggregation::StreamingAggregation(
       if (channels.back() == kConstantChannel) {
         auto constant = static_cast<const core::ConstantTypedExpr*>(arg.get());
         constants.push_back(BaseVector::createConstant(
-            constant->value(), 1, operatorCtx_->pool()));
+            constant->type(), constant->value(), 1, operatorCtx_->pool()));
       } else {
         constants.push_back(nullptr);
       }
@@ -99,7 +99,7 @@ StreamingAggregation::StreamingAggregation(
       false,
       false,
       false,
-      operatorCtx_->mappedMemory(),
+      pool(),
       ContainerRowSerde::instance());
 }
 
@@ -159,8 +159,7 @@ void StreamingAggregation::storeKeys(char* group, vector_size_t index) {
 }
 
 RowVectorPtr StreamingAggregation::createOutput(size_t numGroups) {
-  auto output = std::dynamic_pointer_cast<RowVector>(
-      BaseVector::create(outputType_, numGroups, pool()));
+  auto output = BaseVector::create<RowVector>(outputType_, numGroups, pool());
 
   for (auto i = 0; i < groupingKeys_.size(); ++i) {
     rows_->extractColumn(groups_.data(), numGroups, i, output->childAt(i));
@@ -169,7 +168,6 @@ RowVectorPtr StreamingAggregation::createOutput(size_t numGroups) {
   auto numKeys = groupingKeys_.size();
   for (auto i = 0; i < aggregates_.size(); ++i) {
     auto& aggregate = aggregates_[i];
-    aggregate->finalize(groups_.data(), numGroups);
     auto& result = output->childAt(numKeys + i);
     if (isPartialOutput(step_)) {
       aggregate->extractAccumulators(groups_.data(), numGroups, &result);

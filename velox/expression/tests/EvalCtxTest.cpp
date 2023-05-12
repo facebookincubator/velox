@@ -161,7 +161,7 @@ TEST_F(EvalCtxTest, addErrorsPreserveOldErrors) {
   ASSERT_EQ(BaseVector::countNulls(context.errors()->nulls(), 4), 2);
 
   // Add two out_of_range to anotherErrors.
-  EvalCtx::ErrorVectorPtr anotherErrors;
+  ErrorVectorPtr anotherErrors;
   std::out_of_range rangeError{"out of range"};
   context.addError(0, std::make_exception_ptr(rangeError), anotherErrors);
   context.addError(4, std::make_exception_ptr(rangeError), anotherErrors);
@@ -189,4 +189,35 @@ TEST_F(EvalCtxTest, addErrorsPreserveOldErrors) {
   checkErrors(4, "out of range");
   ASSERT_TRUE(context.errors()->isNullAt(1));
   ASSERT_TRUE(context.errors()->isNullAt(2));
+}
+
+TEST_F(EvalCtxTest, localSingleRow) {
+  EvalCtx context(&execCtx_);
+
+  {
+    LocalSingleRow singleRow(context, 0);
+    ASSERT_EQ(1, singleRow->size());
+    ASSERT_EQ(1, singleRow->countSelected());
+    ASSERT_TRUE(singleRow->isValid(0));
+  }
+
+  {
+    LocalSingleRow singleRow(context, 10);
+    ASSERT_EQ(11, singleRow->size());
+    ASSERT_EQ(1, singleRow->countSelected());
+    ASSERT_TRUE(singleRow->isValid(10));
+    for (auto i = 0; i < 10; ++i) {
+      ASSERT_FALSE(singleRow->isValid(i));
+    }
+  }
+
+  {
+    LocalSingleRow singleRow(context, 100);
+    ASSERT_EQ(101, singleRow->size());
+    ASSERT_EQ(1, singleRow->countSelected());
+    ASSERT_TRUE(singleRow->isValid(100));
+    for (auto i = 0; i < 100; ++i) {
+      ASSERT_FALSE(singleRow->isValid(i));
+    }
+  }
 }

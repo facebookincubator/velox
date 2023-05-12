@@ -102,9 +102,8 @@ struct ArrayJoinFunction {
   template <typename C>
   void writeValue(out_type<velox::Varchar>& result, const C& value) {
     bool nullOutput = false;
-    result +=
-        util::Converter<CppToType<velox::Varchar>::typeKind, void, false>::cast(
-            value, nullOutput);
+    result += util::Converter<TypeKind::VARCHAR, void, false>::cast(
+        value, nullOutput);
   }
 
   template <typename C>
@@ -313,6 +312,170 @@ struct ArraySumFunction {
     }
     out = sum;
     return;
+  }
+};
+
+template <typename T>
+struct ArrayAverageFunction {
+  VELOX_DEFINE_FUNCTION_TYPES(T);
+
+  FOLLY_ALWAYS_INLINE bool call(
+      double& out,
+      const arg_type<Array<double>>& array) {
+    // If the array is empty, then set result to null.
+    if (array.size() == 0) {
+      return false;
+    }
+
+    double sum = 0;
+    size_t count = 0;
+    for (const auto& item : array) {
+      if (item.has_value()) {
+        sum += *item;
+        count++;
+      }
+    }
+    if (count != 0) {
+      out = sum / count;
+    }
+    return count != 0;
+  }
+
+  FOLLY_ALWAYS_INLINE bool callNullFree(
+      double& out,
+      const null_free_arg_type<Array<double>>& array) {
+    // If the array is empty, then set result to null.
+    if (array.size() == 0) {
+      return false;
+    }
+
+    double sum = 0;
+    for (const auto& item : array) {
+      sum += item;
+    }
+    out = sum / array.size();
+    return true;
+  }
+};
+
+template <typename TExecCtx, typename T>
+struct ArrayHasDuplicatesFunction {
+  VELOX_DEFINE_FUNCTION_TYPES(TExecCtx);
+
+  FOLLY_ALWAYS_INLINE void call(
+      bool& out,
+      const arg_type<velox::Array<T>>& inputArray) {
+    folly::F14FastSet<arg_type<T>> uniqSet;
+    int16_t numNulls = 0;
+    out = false;
+    for (const auto& item : inputArray) {
+      if (item.has_value()) {
+        if (!uniqSet.insert(item.value()).second) {
+          out = true;
+          break;
+        }
+      } else {
+        numNulls++;
+        if (numNulls == 2) {
+          out = true;
+          break;
+        }
+      }
+    }
+  }
+
+  FOLLY_ALWAYS_INLINE void callNullFree(
+      bool& out,
+      const null_free_arg_type<velox::Array<T>>& inputArray) {
+    folly::F14FastSet<null_free_arg_type<T>> uniqSet;
+    out = false;
+    for (const auto& item : inputArray) {
+      if (!uniqSet.insert(item).second) {
+        out = true;
+        break;
+      }
+    }
+  }
+};
+
+// Function Signature: array<T> -> map<T, int>, where T is ("bigint", "varchar")
+// Returns a map with frequency of each element in the input array vector.
+template <typename TExecParams, typename T>
+struct ArrayFrequencyFunction {
+  VELOX_DEFINE_FUNCTION_TYPES(TExecParams);
+
+  FOLLY_ALWAYS_INLINE void call(
+      out_type<velox::Map<T, int>>& out,
+      arg_type<velox::Array<T>> inputArray) {
+    frequencyCount_.clear();
+
+    for (const auto& item : inputArray.skipNulls()) {
+      frequencyCount_[item]++;
+    }
+
+    // To make the output order of key value pairs deterministic (since F14
+    // does not provide ordering guarantees), we do another iteration in the
+    // input and look up element frequencies in the F14 map. To prevent
+    // duplicates in the output, we remove the keys we already added.
+    for (const auto& item : inputArray.skipNulls()) {
+      auto it = frequencyCount_.find(item);
+      if (it != frequencyCount_.end()) {
+        auto [keyWriter, valueWriter] = out.add_item();
+        keyWriter = item;
+        valueWriter = it->second;
+        frequencyCount_.erase(it);
+      }
+    }
+  }
+
+ private:
+  folly::F14FastMap<arg_type<T>, int> frequencyCount_;
+};
+
+template <typename TExecParams, typename T>
+struct ArrayNormalizeFunction {
+  VELOX_DEFINE_FUNCTION_TYPES(TExecParams);
+
+  FOLLY_ALWAYS_INLINE void callNullFree(
+      out_type<velox::Array<T>>& result,
+      const null_free_arg_type<velox::Array<T>>& inputArray,
+      const null_free_arg_type<T>& p) {
+    VELOX_USER_CHECK_GE(
+        p, 0, "array_normalize only supports non-negative p: {}", p);
+
+    // If the input array is empty, then the empty result should be returned,
+    // same as Presto.
+    if (inputArray.size() == 0) {
+      return;
+    }
+
+    result.reserve(inputArray.size());
+
+    // If p = 0, then it is L0 norm. Presto version returns the input array.
+    if (p == 0) {
+      result.add_items(inputArray);
+      return;
+    }
+
+    // Calculate p-norm.
+    T sum = 0;
+    for (const auto& item : inputArray) {
+      sum += pow(abs(item), p);
+    }
+
+    T pNorm = pow(sum, 1.0 / p);
+
+    // If the input array is a zero vector then pNorm = 0.
+    // Return the input array for this case, same as Presto.
+    if (pNorm == 0) {
+      result.add_items(inputArray);
+      return;
+    }
+
+    // Construct result array from the input array and pNorm.
+    for (const auto& item : inputArray) {
+      result.add_item() = item / pNorm;
+    }
   }
 };
 

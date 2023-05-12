@@ -171,6 +171,7 @@ template <
     typename std::enable_if_t<TypeTraits<kind>::isPrimitiveType, int> = 0>
 void applyTypedWithInstance(
     const SelectivityVector& rows,
+    exec::EvalCtx& context,
     DecodedVector& arrayDecoded,
     const DecodedVector& elementsDecoded,
     const DecodedVector& searchDecoded,
@@ -190,11 +191,17 @@ void applyTypedWithInstance(
   if (elementsDecoded.isIdentityMapping() && !elementsDecoded.mayHaveNulls() &&
       searchDecoded.isConstantMapping() &&
       instanceDecoded.isConstantMapping()) {
-    auto instance = instanceDecoded.valueAt<int64_t>(0);
-    VELOX_USER_CHECK_NE(
-        instance,
-        0,
-        "array_position cannot take a 0-valued instance argument.");
+    const auto instance = instanceDecoded.valueAt<int64_t>(0);
+
+    try {
+      VELOX_USER_CHECK_NE(
+          instance,
+          0,
+          "array_position cannot take a 0-valued instance argument.");
+    } catch (...) {
+      context.setErrors(rows, std::current_exception());
+      return;
+    }
 
     // Fast path for array vector of boolean.
     if constexpr (std::is_same_v<bool, T>) {
@@ -204,14 +211,14 @@ void applyTypedWithInstance(
 
       rows.applyToSelected([&](auto row) {
         auto offset = rawOffsets[indices[row]];
+        auto remaining = instance;
         getLoopBoundary(
-            rawSizes, indices, row, instance, startIndex, endIndex, step);
+            rawSizes, indices, row, remaining, startIndex, endIndex, step);
 
         int i;
         for (i = startIndex; i != endIndex; i += step) {
           if (bits::isBitSet(rawElements, offset + i) == search) {
-            --instance;
-            if (instance == 0) {
+            if (--remaining == 0) {
               flatResult.set(row, i + 1);
               break;
             }
@@ -231,14 +238,14 @@ void applyTypedWithInstance(
 
     rows.applyToSelected([&](auto row) {
       auto offset = rawOffsets[indices[row]];
+      auto remaining = instance;
       getLoopBoundary(
-          rawSizes, indices, row, instance, startIndex, endIndex, step);
+          rawSizes, indices, row, remaining, startIndex, endIndex, step);
 
       int i;
       for (i = startIndex; i != endIndex; i += step) {
         if (rawElements[offset + i] == search) {
-          --instance;
-          if (instance == 0) {
+          if (--remaining == 0) {
             flatResult.set(row, i + 1);
             break;
           }
@@ -253,7 +260,7 @@ void applyTypedWithInstance(
 
   // Regular path where no assumption is made about the encodings of
   // searchDecoded and elementsDecoded.
-  rows.applyToSelected([&](auto row) {
+  context.applyToSelectedNoThrow(rows, [&](auto row) {
     auto offset = rawOffsets[indices[row]];
     auto search = searchDecoded.valueAt<T>(row);
 
@@ -289,6 +296,7 @@ template <
     typename std::enable_if_t<!TypeTraits<kind>::isPrimitiveType, int> = 0>
 void applyTypedWithInstance(
     const SelectivityVector& rows,
+    exec::EvalCtx& context,
     DecodedVector& arrayDecoded,
     const DecodedVector& elementsDecoded,
     DecodedVector& searchDecoded,
@@ -308,7 +316,7 @@ void applyTypedWithInstance(
   int endIndex;
   int step;
 
-  rows.applyToSelected([&](auto row) {
+  context.applyToSelectedNoThrow(rows, [&](auto row) {
     auto offset = rawOffsets[indices[row]];
     auto searchIndex = searchIndices[row];
 
@@ -379,6 +387,7 @@ class ArrayPositionFunction : public exec::VectorFunction {
           applyTypedWithInstance,
           searchVector->typeKind(),
           rows,
+          context,
           *decodedArgs.at(0),
           *elementsHolder.get(),
           *decodedArgs.at(1),

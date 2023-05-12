@@ -72,10 +72,24 @@ class TpchQueryBuilder {
   /// @param queryId TPC-H query number
   TpchPlan getQueryPlan(int queryId) const;
 
+  /// Returns a plan for select max(c1), max(c2), .. from lineitem where partkey
+  /// between
+  /// ... such that 'columnPct' columns are aggregated with max(c) for numbers
+  /// and with max(length(c)) for strings. To select the columns, we sort them
+  /// by column name and take the first columnPct percent.
+  TpchPlan getIoMeterPlan(int columnPct) const;
+
   /// Get the TPC-H table names present.
   static const std::vector<std::string>& getTableNames();
 
  private:
+  // Initializes the schema information for 'tableName' from sample file at
+  // 'filePath'.
+  void readFileSchema(
+      const std::string& tableName,
+      const std::string& filePath,
+      const std::vector<std::string>& columns);
+
   TpchPlan getQ1Plan() const;
   TpchPlan getQ3Plan() const;
   TpchPlan getQ5Plan() const;
@@ -89,8 +103,11 @@ class TpchQueryBuilder {
   TpchPlan getQ14Plan() const;
   TpchPlan getQ15Plan() const;
   TpchPlan getQ16Plan() const;
+  TpchPlan getQ17Plan() const;
   TpchPlan getQ18Plan() const;
   TpchPlan getQ19Plan() const;
+  TpchPlan getQ20Plan() const;
+  TpchPlan getQ21Plan() const;
   TpchPlan getQ22Plan() const;
 
   const std::vector<std::string>& getTableFilePaths(
@@ -125,8 +142,8 @@ class TpchQueryBuilder {
   static constexpr const char* kPart = "part";
   static constexpr const char* kSupplier = "supplier";
   static constexpr const char* kPartsupp = "partsupp";
-  std::unique_ptr<memory::ScopedMemoryPool> pool_ =
-      memory::getDefaultScopedMemoryPool();
+  std::shared_ptr<memory::MemoryPool> pool_ =
+      memory::addDefaultLeafMemoryPool();
 };
 
 } // namespace facebook::velox::exec::test

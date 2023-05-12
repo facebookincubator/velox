@@ -38,10 +38,10 @@ DEFINE_int32(
     4 * 1024,
     "Size of file cache/operator working memory in MB");
 
-DEFINE_bool(
-    velox_use_malloc,
-    true,
-    "Use malloc for file cache and large operator allocations");
+DEFINE_int32(
+    velox_memory_num_shared_leaf_pools,
+    32,
+    "Number of shared leaf memory pools per process");
 
 DEFINE_bool(
     velox_time_allocations,
@@ -93,3 +93,17 @@ DEFINE_string(
     "expression evaluation. Specifies the directory to use for storing the "
     "vectors and expression SQL strings. This flag is ignored if "
     "velox_save_input_on_expression_any_failure_path is set.");
+
+// TODO: deprecate this once all the memory leak issues have been fixed in
+// existing meta internal use cases.
+DEFINE_bool(
+    velox_memory_leak_check_enabled,
+    false,
+    "If true, check fails on any memory leaks in memory pool and memory manager");
+
+// TODO: deprecate this after solves all the use cases that can cause
+// significant performance regression by memory usage tracking.
+DEFINE_bool(
+    velox_enable_memory_usage_track_in_default_memory_pool,
+    false,
+    "If true, enable memory usage tracking in the default memory pool");

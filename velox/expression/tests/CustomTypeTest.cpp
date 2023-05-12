@@ -14,28 +14,17 @@
  * limitations under the License.
  */
 
+#include "velox/common/base/VeloxException.h"
+#include "velox/common/base/tests/GTestUtils.h"
 #include "velox/expression/VectorFunction.h"
-#include "velox/functions/FunctionRegistry.h"
 #include "velox/functions/Macros.h"
 #include "velox/functions/Registerer.h"
 #include "velox/functions/prestosql/tests/utils/FunctionBaseTest.h"
+#include "velox/type/OpaqueCustomTypes.h"
 
 namespace facebook::velox::test {
 
-class CustomTypeTest : public functions::test::FunctionBaseTest {
- protected:
-  static std::unordered_set<std::string> getSignatureStrings(
-      const std::string& functionName) {
-    auto allSignatures = getFunctionSignatures();
-    const auto& signatures = allSignatures.at(functionName);
-
-    std::unordered_set<std::string> signatureStrings;
-    for (const auto& signature : signatures) {
-      signatureStrings.insert(signature->toString());
-    }
-    return signatureStrings;
-  }
-};
+class CustomTypeTest : public functions::test::FunctionBaseTest {};
 
 namespace {
 struct FancyInt {
@@ -56,13 +45,17 @@ class FancyIntType : public OpaqueType {
   }
 
   std::string toString() const override {
+    return name();
+  }
+
+  const char* name() const override {
     return "fancy_int";
   }
 };
 
 class FancyIntTypeFactories : public CustomTypeFactories {
  public:
-  TypePtr getType(std::vector<TypePtr> /* childTypes */) const override {
+  TypePtr getType() const override {
     return FancyIntType::get();
   }
 
@@ -144,6 +137,17 @@ struct FancyPlusFunction {
     result = std::make_shared<FancyInt>(a->n + b->n);
   }
 };
+
+class AlwaysFailingTypeFactories : public CustomTypeFactories {
+ public:
+  TypePtr getType() const override {
+    VELOX_UNSUPPORTED();
+  }
+
+  exec::CastOperatorPtr getCastOperator() const override {
+    VELOX_UNSUPPORTED();
+  }
+};
 } // namespace
 
 /// Register custom type based on OpaqueType. Register a vector function that
@@ -151,7 +155,11 @@ struct FancyPlusFunction {
 /// simple function that takes and returns this type. Verify function signatures
 /// and evaluate some expressions.
 TEST_F(CustomTypeTest, customType) {
-  registerType("fancy_int", std::make_unique<FancyIntTypeFactories>());
+  ASSERT_TRUE(registerCustomType(
+      "fancy_int", std::make_unique<FancyIntTypeFactories>()));
+
+  ASSERT_FALSE(registerCustomType(
+      "fancy_int", std::make_unique<AlwaysFailingTypeFactories>()));
 
   registerFunction<FancyPlusFunction, TheFancyInt, TheFancyInt, TheFancyInt>(
       {"fancy_plus"});
@@ -194,5 +202,154 @@ TEST_F(CustomTypeTest, customType) {
       makeRowVector({data}));
   auto expected = makeFlatVector<int64_t>({11, 12, 13, 14, 15});
   assertEqualVectors(expected, result);
+
+  // Cleanup.
+  ASSERT_TRUE(unregisterCustomType("fancy_int"));
+  ASSERT_FALSE(unregisterCustomType("fancy_int"));
+}
+
+TEST_F(CustomTypeTest, getCustomTypeNames) {
+  auto names = getCustomTypeNames();
+  ASSERT_EQ(
+      (std::unordered_set<std::string>{
+          "JSON",
+          "HYPERLOGLOG",
+          "TIMESTAMP WITH TIME ZONE",
+      }),
+      names);
+
+  ASSERT_TRUE(registerCustomType(
+      "fancy_int", std::make_unique<FancyIntTypeFactories>()));
+
+  names = getCustomTypeNames();
+  ASSERT_EQ(
+      (std::unordered_set<std::string>{
+          "JSON",
+          "HYPERLOGLOG",
+          "TIMESTAMP WITH TIME ZONE",
+          "FANCY_INT",
+      }),
+      names);
+
+  ASSERT_TRUE(unregisterCustomType("fancy_int"));
+}
+
+TEST_F(CustomTypeTest, nullConstant) {
+  ASSERT_TRUE(registerCustomType(
+      "fancy_int", std::make_unique<FancyIntTypeFactories>()));
+
+  auto names = getCustomTypeNames();
+  for (const auto& name : names) {
+    auto type = getCustomType(name);
+    auto null = BaseVector::createNullConstant(type, 10, pool());
+    EXPECT_TRUE(null->isConstantEncoding());
+    EXPECT_TRUE(type->equivalent(*null->type()));
+    EXPECT_EQ(type->toString(), null->type()->toString());
+    for (auto i = 0; i < 10; ++i) {
+      EXPECT_TRUE(null->isNullAt(i));
+    }
+  }
+
+  ASSERT_TRUE(unregisterCustomType("fancy_int"));
+}
+
+struct Tuple {
+  int64_t x;
+  int64_t y;
+};
+
+static constexpr char kName[] = "tuple_type";
+using TupleTypeRegistrar = OpaqueCustomTypeRegister<Tuple, kName>;
+// The type used in the simple function interface.
+using TupleType = typename TupleTypeRegistrar::SimpleType;
+
+template <typename T>
+struct FuncMake {
+  VELOX_DEFINE_FUNCTION_TYPES(T);
+
+  void call(out_type<TupleType>& result, int64_t a, int64_t b) {
+    result = std::make_shared<Tuple>(Tuple{a, b});
+  }
+};
+
+template <typename T>
+struct FuncPlus {
+  VELOX_DEFINE_FUNCTION_TYPES(T);
+  void call(
+      out_type<TupleType>& result,
+      const arg_type<TupleType>& a,
+      const arg_type<TupleType>& b) {
+    result = std::make_shared<Tuple>(Tuple{a->x + b->x, a->y + b->y});
+  }
+};
+
+template <typename T>
+struct FuncReduce {
+  VELOX_DEFINE_FUNCTION_TYPES(T);
+  void call(int64_t& result, const arg_type<TupleType>& a) {
+    result = a->x + a->y;
+  }
+};
+
+TEST_F(CustomTypeTest, testOpaqueCustomTypeAutoCreation) {
+  // register untyped version.
+  registerFunction<FuncMake, std::shared_ptr<Tuple>, int64_t, int64_t>(
+      {"make_tuple_untyped"});
+
+  ASSERT_ANY_THROW((
+      registerFunction<FuncMake, TupleType, int64_t, int64_t>({"make_tuple"})));
+
+  TupleTypeRegistrar::registerType();
+  registerFunction<FuncMake, TupleType, int64_t, int64_t>({"make_tuple"});
+  registerFunction<FuncPlus, TupleType, TupleType, TupleType>({"plus_tuple"});
+  registerFunction<FuncReduce, int64_t, TupleType>({"reduce_tuple"});
+
+  // Verify signatures.
+  {
+    auto signatures = getSignatureStrings("plus_tuple");
+    ASSERT_EQ(1, signatures.size());
+    ASSERT_EQ(1, signatures.count("(tuple_type,tuple_type) -> tuple_type"));
+  }
+
+  {
+    auto signatures = getSignatureStrings("make_tuple_untyped");
+    ASSERT_EQ(1, signatures.size());
+    ASSERT_EQ(1, signatures.count("(bigint,bigint) -> opaque"));
+  }
+
+  {
+    auto signatures = getSignatureStrings("make_tuple");
+    ASSERT_EQ(1, signatures.size());
+    ASSERT_EQ(1, signatures.count("(bigint,bigint) -> tuple_type"));
+  }
+
+  {
+    auto signatures = getSignatureStrings("reduce_tuple");
+    ASSERT_EQ(1, signatures.size());
+    ASSERT_EQ(1, signatures.count("(tuple_type) -> bigint"));
+  }
+
+  auto data = makeFlatVector<int64_t>({1, 2, 3});
+
+  // Evaluate expressions.
+  {
+    auto expected = makeFlatVector<int64_t>({4, 8, 12});
+    auto result = evaluate(
+        "reduce_tuple(plus_tuple(make_tuple(c0, c0), make_tuple(c0, c0)))",
+        makeRowVector({data}));
+    test::assertEqualVectors(expected, result);
+  }
+
+  {
+    auto expected = makeFlatVector<int64_t>({2, 4, 6});
+    auto result =
+        evaluate("reduce_tuple(make_tuple(c0, c0))", makeRowVector({data}));
+    test::assertEqualVectors(expected, result);
+  }
+
+  VELOX_ASSERT_THROW(
+      evaluate(
+          "reduce_tuple(make_tuple_untyped(c0, c0))", makeRowVector({data})),
+      "");
 }
 } // namespace facebook::velox::test

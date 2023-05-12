@@ -38,7 +38,6 @@ class JsonCastOperator : public exec::CastOperator {
       const BaseVector& input,
       exec::EvalCtx& context,
       const SelectivityVector& rows,
-      bool nullOnFailure,
       const TypePtr& resultType,
       VectorPtr& result) const override;
 
@@ -46,7 +45,6 @@ class JsonCastOperator : public exec::CastOperator {
       const BaseVector& input,
       exec::EvalCtx& context,
       const SelectivityVector& rows,
-      bool nullOnFailure,
       const TypePtr& resultType,
       VectorPtr& result) const override;
 
@@ -69,8 +67,24 @@ class JsonType : public VarcharType {
     return JsonCastOperator::get();
   }
 
-  std::string toString() const override {
+  bool equivalent(const Type& other) const override {
+    // Pointer comparison works since this type is a singleton.
+    return this == &other;
+  }
+
+  const char* name() const override {
     return "JSON";
+  }
+
+  std::string toString() const override {
+    return name();
+  }
+
+  folly::dynamic serialize() const override {
+    folly::dynamic obj = folly::dynamic::object;
+    obj["name"] = "Type";
+    obj["type"] = name();
+    return obj;
   }
 };
 
@@ -85,7 +99,7 @@ FOLLY_ALWAYS_INLINE std::shared_ptr<const JsonType> JSON() {
 
 // Type used for function registration.
 struct JsonT {
-  using type = StringView;
+  using type = Varchar;
   static constexpr const char* typeName = "json";
 };
 
@@ -95,7 +109,7 @@ class JsonTypeFactories : public CustomTypeFactories {
  public:
   JsonTypeFactories() = default;
 
-  TypePtr getType(std::vector<TypePtr> /*childTypes*/) const override {
+  TypePtr getType() const override {
     return JSON();
   }
 
@@ -103,5 +117,7 @@ class JsonTypeFactories : public CustomTypeFactories {
     return JsonCastOperator::get();
   }
 };
+
+void registerJsonType();
 
 } // namespace facebook::velox

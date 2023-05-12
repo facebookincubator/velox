@@ -16,12 +16,13 @@
 #include "velox/common/base/tests/GTestUtils.h"
 #include "velox/exec/tests/utils/AssertQueryBuilder.h"
 #include "velox/exec/tests/utils/PlanBuilder.h"
-#include "velox/functions/prestosql/aggregates/AverageDecimalAccumulator.h"
-#include "velox/functions/prestosql/aggregates/tests/AggregationTestBase.h"
+#include "velox/functions/lib/aggregates/tests/AggregationTestBase.h"
+#include "velox/functions/prestosql/aggregates/DecimalAggregate.h"
 #include "velox/parse/TypeResolver.h"
 #include "velox/vector/tests/utils/VectorTestBase.h"
 
 using namespace facebook::velox::exec::test;
+using namespace facebook::velox::functions::aggregate::test;
 
 namespace facebook::velox::aggregate::test {
 
@@ -157,6 +158,13 @@ TEST_F(AverageAggregationTest, avg) {
       {},
       {"avg(c1)", "avg(c2)", "avg(c4)", "avg(c5)"},
       "SELECT avg(c1), avg(c2), avg(c4), avg(c5) FROM tmp");
+  testAggregationsWithCompanion(
+      vectors,
+      [](auto& /*builder*/) {},
+      {},
+      {"avg(c1)", "avg(c2)", "avg(c4)", "avg(c5)"},
+      {},
+      "SELECT avg(c1), avg(c2), avg(c4), avg(c5) FROM tmp");
 
   // global aggregation; no input
   testAggregations(
@@ -164,12 +172,26 @@ TEST_F(AverageAggregationTest, avg) {
       {},
       {"avg(c0)"},
       "SELECT null");
+  testAggregationsWithCompanion(
+      vectors,
+      [&](auto& builder) { builder.filter("c0 % 2 = 5"); },
+      {},
+      {"avg(c0)"},
+      {},
+      "SELECT null");
 
   // global aggregation over filter
   testAggregations(
       [&](auto& builder) { builder.values(vectors).filter("c0 % 5 = 3"); },
       {},
       {"avg(c1)"},
+      "SELECT avg(c1) FROM tmp WHERE c0 % 5 = 3");
+  testAggregationsWithCompanion(
+      vectors,
+      [&](auto& builder) { builder.filter("c0 % 5 = 3"); },
+      {},
+      {"avg(c1)"},
+      {},
       "SELECT avg(c1) FROM tmp WHERE c0 % 5 = 3");
 
   // group by
@@ -180,6 +202,17 @@ TEST_F(AverageAggregationTest, avg) {
       },
       {"c0_mod_10"},
       {"avg(c1)", "avg(c2)", "avg(c3)", "avg(c4)", "avg(c5)"},
+      "SELECT c0 % 10, avg(c1), avg(c2), avg(c3::DOUBLE), "
+      "avg(c4), avg(c5) FROM tmp GROUP BY 1");
+  testAggregationsWithCompanion(
+      vectors,
+      [&](auto& builder) {
+        builder.project(
+            {"c0 % 10 AS c0_mod_10", "c1", "c2", "c3", "c4", "c5", "k0"});
+      },
+      {"c0_mod_10"},
+      {"avg(c1)", "avg(c2)", "avg(c3)", "avg(c4)", "avg(c5)"},
+      {},
       "SELECT c0 % 10, avg(c1), avg(c2), avg(c3::DOUBLE), "
       "avg(c4), avg(c5) FROM tmp GROUP BY 1");
 
@@ -193,6 +226,16 @@ TEST_F(AverageAggregationTest, avg) {
       {"c0_mod_10"},
       {"avg(c1)"},
       "");
+  testAggregationsWithCompanion(
+      vectors,
+      [&](auto& builder) {
+        builder.project({"c0 % 10 AS c0_mod_10", "c1", "k0"})
+            .filter("c0_mod_10 > 10");
+      },
+      {"c0_mod_10"},
+      {"avg(c1)"},
+      {},
+      "");
 
   // group by over filter
   testAggregations(
@@ -203,6 +246,16 @@ TEST_F(AverageAggregationTest, avg) {
       },
       {"c0_mod_10"},
       {"avg(c1)"},
+      "SELECT c0 % 10, avg(c1) FROM tmp WHERE c2 % 5 = 3 GROUP BY 1");
+  testAggregationsWithCompanion(
+      vectors,
+      [&](auto& builder) {
+        builder.filter("c2 % 5 = 3")
+            .project({"c0 % 10 AS c0_mod_10", "c1", "k0"});
+      },
+      {"c0_mod_10"},
+      {"avg(c1)"},
+      {},
       "SELECT c0 % 10, avg(c1) FROM tmp WHERE c2 % 5 = 3 GROUP BY 1");
 }
 
@@ -219,7 +272,7 @@ TEST_F(AverageAggregationTest, partialResults) {
 }
 
 TEST_F(AverageAggregationTest, decimalAccumulator) {
-  AverageDecimalAccumulator accumulator;
+  LongDecimalWithOverflowState accumulator;
   accumulator.sum = -1000;
   accumulator.count = 10;
   accumulator.overflow = -1;
@@ -227,7 +280,7 @@ TEST_F(AverageAggregationTest, decimalAccumulator) {
   char* buffer = new char[accumulator.serializedSize()];
   StringView serialized(buffer, accumulator.serializedSize());
   accumulator.serialize(serialized);
-  AverageDecimalAccumulator mergedAccumulator;
+  LongDecimalWithOverflowState mergedAccumulator;
   mergedAccumulator.mergeWith(serialized);
 
   ASSERT_EQ(mergedAccumulator.sum, accumulator.sum);
@@ -258,18 +311,18 @@ TEST_F(AverageAggregationTest, avgDecimal) {
   // Long decimal aggregation
   testAggregations(
       {makeRowVector({makeNullableLongDecimalFlatVector(
-          {buildInt128(10, 100),
-           buildInt128(10, 200),
-           buildInt128(10, 300),
-           buildInt128(10, 400),
-           buildInt128(10, 500),
+          {HugeInt::build(10, 100),
+           HugeInt::build(10, 200),
+           HugeInt::build(10, 300),
+           HugeInt::build(10, 400),
+           HugeInt::build(10, 500),
            std::nullopt},
           DECIMAL(23, 4))})},
       {},
       {"avg(c0)"},
       {},
       {makeRowVector({makeLongDecimalFlatVector(
-          {buildInt128(10, 300)}, DECIMAL(23, 4))})});
+          {HugeInt::build(10, 300)}, DECIMAL(23, 4))})});
   // Round-up average.
   testAggregations(
       {makeRowVector({makeNullableShortDecimalFlatVector(
@@ -282,7 +335,7 @@ TEST_F(AverageAggregationTest, avgDecimal) {
   // The total sum overflows the max int128_t limit.
   std::vector<int128_t> rawVector;
   for (int i = 0; i < 10; ++i) {
-    rawVector.push_back(UnscaledLongDecimal::max().unscaledValue());
+    rawVector.push_back(DecimalUtil::kLongDecimalMax);
   }
   testAggregations(
       {makeRowVector({makeLongDecimalFlatVector(rawVector, DECIMAL(38, 0))})},
@@ -290,13 +343,13 @@ TEST_F(AverageAggregationTest, avgDecimal) {
       {"avg(c0)"},
       {},
       {makeRowVector({makeLongDecimalFlatVector(
-          {UnscaledLongDecimal::max().unscaledValue()}, DECIMAL(38, 0))})});
+          {DecimalUtil::kLongDecimalMax}, DECIMAL(38, 0))})});
   // The total sum underflows the min int128_t limit.
   rawVector.clear();
-  auto underFlowTestResult = makeLongDecimalFlatVector(
-      {UnscaledLongDecimal::min().unscaledValue()}, DECIMAL(38, 0));
+  auto underFlowTestResult =
+      makeLongDecimalFlatVector({DecimalUtil::kLongDecimalMin}, DECIMAL(38, 0));
   for (int i = 0; i < 10; ++i) {
-    rawVector.push_back(UnscaledLongDecimal::min().unscaledValue());
+    rawVector.push_back(DecimalUtil::kLongDecimalMin);
   }
   testAggregations(
       {makeRowVector({makeLongDecimalFlatVector(rawVector, DECIMAL(38, 0))})},
@@ -309,22 +362,21 @@ TEST_F(AverageAggregationTest, avgDecimal) {
   // result with varying row count.
   // Making sure the error value is consistent.
   for (int i = 0; i < 10; ++i) {
-    rawVector.push_back(UnscaledLongDecimal::min().unscaledValue());
+    rawVector.push_back(DecimalUtil::kLongDecimalMin);
   }
   AssertQueryBuilder assertQueryBuilder(createAvgAggPlanNode(
       {makeLongDecimalFlatVector(rawVector, DECIMAL(38, 0))}, true));
   auto result = assertQueryBuilder.copyResults(pool());
 
-  auto actualResult = result->childAt(0)->asFlatVector<UnscaledLongDecimal>();
+  auto actualResult = result->childAt(0)->asFlatVector<int128_t>();
   ASSERT_NE(actualResult->valueAt(0), underFlowTestResult->valueAt(0));
   ASSERT_EQ(
       underFlowTestResult->valueAt(0) - actualResult->valueAt(0),
-      UnscaledLongDecimal(-13));
+      static_cast<int128_t>(-13));
 
   // Test constant vector.
   testAggregations(
-      {makeRowVector({makeConstant<UnscaledShortDecimal>(
-          UnscaledShortDecimal(100), 10, DECIMAL(3, 2))})},
+      {makeRowVector({makeConstant<int64_t>(100, 10, DECIMAL(3, 2))})},
       {},
       {"avg(c0)"},
       {},
@@ -341,6 +393,61 @@ TEST_F(AverageAggregationTest, avgDecimal) {
       {"avg(c0)"},
       {},
       {makeRowVector({makeShortDecimalFlatVector({3'000}, DECIMAL(10, 1))})});
+
+  // Decimal average aggregation with multiple groups.
+  auto inputRows = {
+      makeRowVector(
+          {makeNullableFlatVector<int32_t>({1, 1}),
+           makeShortDecimalFlatVector({37220, 53450}, DECIMAL(5, 2))}),
+      makeRowVector(
+          {makeNullableFlatVector<int32_t>({2, 2}),
+           makeShortDecimalFlatVector({10410, 9250}, DECIMAL(5, 2))}),
+      makeRowVector(
+          {makeNullableFlatVector<int32_t>({3, 3}),
+           makeShortDecimalFlatVector({-12783, 0}, DECIMAL(5, 2))}),
+      makeRowVector(
+          {makeNullableFlatVector<int32_t>({1, 2}),
+           makeShortDecimalFlatVector({23178, 41093}, DECIMAL(5, 2))}),
+      makeRowVector(
+          {makeNullableFlatVector<int32_t>({2, 3}),
+           makeShortDecimalFlatVector({-10023, 5290}, DECIMAL(5, 2))}),
+  };
+
+  auto expectedResult = {
+      makeRowVector(
+          {makeNullableFlatVector<int32_t>({1}),
+           makeShortDecimalFlatVector({37949}, DECIMAL(5, 2))}),
+      makeRowVector(
+          {makeNullableFlatVector<int32_t>({2}),
+           makeShortDecimalFlatVector({12683}, DECIMAL(5, 2))}),
+      makeRowVector(
+          {makeNullableFlatVector<int32_t>({3}),
+           makeShortDecimalFlatVector({-2498}, DECIMAL(5, 2))})};
+
+  testAggregations(inputRows, {"c0"}, {"avg(c1)"}, expectedResult);
 }
+
+TEST_F(AverageAggregationTest, avgDecimalWithMultipleRowVectors) {
+  auto inputRows = {
+      makeRowVector({makeShortDecimalFlatVector({100, 200}, DECIMAL(5, 2))}),
+      makeRowVector({makeShortDecimalFlatVector({300, 400}, DECIMAL(5, 2))}),
+      makeRowVector({makeShortDecimalFlatVector({500, 600}, DECIMAL(5, 2))}),
+  };
+
+  auto expectedResult = {
+      makeRowVector({makeShortDecimalFlatVector({350}, DECIMAL(5, 2))})};
+
+  testAggregations(inputRows, {}, {"avg(c0)"}, expectedResult);
+}
+
+TEST_F(AverageAggregationTest, constantVectorOverflow) {
+  auto rows = makeRowVector({makeConstant<int32_t>(1073741824, 100)});
+  auto plan = PlanBuilder()
+                  .values({rows})
+                  .singleAggregation({}, {"avg(c0)"})
+                  .planNode();
+  assertQuery(plan, "SELECT 1073741824");
+}
+
 } // namespace
 } // namespace facebook::velox::aggregate::test

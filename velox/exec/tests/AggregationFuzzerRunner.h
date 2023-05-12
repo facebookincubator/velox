@@ -22,8 +22,11 @@
 #include <unordered_set>
 #include <vector>
 
+#include "velox/common/file/FileSystems.h"
 #include "velox/exec/Aggregate.h"
 #include "velox/exec/tests/AggregationFuzzer.h"
+#include "velox/parse/TypeResolver.h"
+#include "velox/serializers/PrestoSerializer.h"
 
 /// AggregationFuzzerRunner leverages AggregationFuzzer and VectorFuzzer to
 /// automatically generate and execute aggregation tests. It works by:
@@ -65,7 +68,9 @@ class AggregationFuzzerRunner {
   static int run(
       const std::string& onlyFunctions,
       size_t seed,
-      const std::unordered_set<std::string>& skipFunctions) {
+      const std::unordered_set<std::string>& skipFunctions,
+      const std::unordered_map<std::string, std::string>&
+          customVerificationFunctions) {
     auto signatures = facebook::velox::exec::getAggregateFunctionSignatures();
     if (signatures.empty()) {
       LOG(ERROR) << "No aggregate functions registered.";
@@ -80,7 +85,14 @@ class AggregationFuzzerRunner {
       exit(1);
     }
 
-    facebook::velox::exec::test::aggregateFuzzer(filteredSignatures, seed);
+    facebook::velox::parse::registerTypeResolver();
+    facebook::velox::serializer::presto::PrestoVectorSerde::
+        registerVectorSerde();
+    facebook::velox::filesystems::registerLocalFileSystem();
+
+    facebook::velox::exec::test::aggregateFuzzer(
+        filteredSignatures, seed, customVerificationFunctions);
+    // Calling gtest here so that it can be recognized as tests in CI systems.
     return RUN_ALL_TESTS();
   }
 

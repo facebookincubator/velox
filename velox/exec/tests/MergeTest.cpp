@@ -138,8 +138,9 @@ TEST_F(MergeTest, localMerge) {
         batchSize, [&](auto row) { return row; }, nullEvery(5));
     auto c2 = makeFlatVector<double>(
         batchSize, [](auto row) { return row * 0.1; }, nullEvery(11));
-    auto c3 = makeFlatVector<StringView>(
-        batchSize, [](auto row) { return StringView(std::to_string(row)); });
+    auto c3 = makeFlatVector<StringView>(batchSize, [](auto row) {
+      return StringView::makeInline(std::to_string(row));
+    });
     vectors.push_back(makeRowVector({c0, c1, c2, c3}));
   }
   createDuckDbTable(vectors);
@@ -178,6 +179,6 @@ TEST_F(MergeTest, offByOne) {
   params.planNode = plan;
   params.queryCtx = std::make_shared<core::QueryCtx>(executor_.get());
   params.queryCtx->setConfigOverridesUnsafe(
-      {{core::QueryConfig::kPreferredOutputBatchSize, "6"}});
+      {{core::QueryConfig::kPreferredOutputBatchRows, "6"}});
   assertQueryOrdered(params, "VALUES (0), (1), (2), (3), (4), (5), (10)", {0});
 }

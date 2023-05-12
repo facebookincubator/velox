@@ -27,7 +27,10 @@ namespace facebook::velox::exec {
 
 class Expr;
 class ExprSet;
+class LocalDecodedVector;
+class LocalSelectivityVector;
 struct ScopedContextSaver;
+class PeeledEncoding;
 
 // Context for holding the base row vector, error state and various
 // flags for Expr interpreter.
@@ -69,17 +72,14 @@ class EvalCtx {
     peeledFields_[index] = vector;
   }
 
+  const std::vector<VectorPtr>& peeledFields() {
+    return peeledFields_;
+  }
+
   /// Used by peelEncodings.
   void saveAndReset(ScopedContextSaver& saver, const SelectivityVector& rows);
 
   void restore(ScopedContextSaver& saver);
-
-  // Wraps the 'peeledResult' in the wrap produced by the last peeling in
-  // EvalEncoding() and returns the vector created as a result.
-  VectorPtr applyWrapToPeeledResult(
-      const TypePtr& outputType,
-      VectorPtr peeledResult,
-      const SelectivityVector& rows);
 
   void setError(vector_size_t index, const std::exception_ptr& exceptionPtr);
 
@@ -100,13 +100,6 @@ class EvalCtx {
       }
     });
   }
-
-  // Error vector uses an opaque flat vector to store std::exception_ptr.
-  // Since opaque types are stored as shared_ptr<void>, this ends up being a
-  // double pointer in the form of std::shared_ptr<std::exception_ptr>. This is
-  // fine since we only need to actually follow the pointer in failure cases.
-  using ErrorVector = FlatVector<std::shared_ptr<void>>;
-  using ErrorVectorPtr = std::shared_ptr<ErrorVector>;
 
   // Sets the error at 'index' in '*errorPtr' if the value is
   // null. Creates and resizes '*errorPtr' as needed and initializes
@@ -132,6 +125,17 @@ class EvalCtx {
       const BufferPtr& elementToTopLevelRows,
       ErrorVectorPtr& topLevelErrors);
 
+  void deselectErrors(SelectivityVector& rows) const {
+    if (!errors_) {
+      return;
+    }
+    // A non-null in errors resets the row. AND with the errors null mask.
+    rows.deselectNonNulls(
+        errors_->rawNulls(),
+        rows.begin(),
+        std::min(errors_->size(), rows.end()));
+  }
+
   // Returns the vector of errors or nullptr if no errors. This is
   // intentionally a raw pointer to signify that the caller may not
   // retain references to this.
@@ -145,6 +149,26 @@ class EvalCtx {
 
   void swapErrors(ErrorVectorPtr& other) {
     std::swap(errors_, other);
+  }
+
+  /// Adds errors in 'this' to 'other'. Clears errors from 'this'.
+  void moveAppendErrors(ErrorVectorPtr& other) {
+    if (!errors_) {
+      return;
+    }
+
+    if (!other) {
+      std::swap(errors_, other);
+      return;
+    }
+
+    ensureErrorsVectorSize(other, errors_->size());
+    bits::forEachBit(
+        errors_->rawNulls(), 0, errors_->size(), bits::kNotNull, [&](auto row) {
+          other->set(row, errors_->valueAt(row));
+        });
+
+    errors_.reset();
   }
 
   bool throwOnError() const {
@@ -196,19 +220,10 @@ class EvalCtx {
     return exprSet_;
   }
 
-  VectorEncoding::Simple wrapEncoding() const {
-    return wrapEncoding_;
-  }
+  VectorEncoding::Simple wrapEncoding() const;
 
-  void setConstantWrap(vector_size_t wrapIndex) {
-    wrapEncoding_ = VectorEncoding::Simple::CONSTANT;
-    constantWrapIndex_ = wrapIndex;
-  }
-
-  void setDictionaryWrap(BufferPtr wrap, BufferPtr wrapNulls) {
-    wrapEncoding_ = VectorEncoding::Simple::DICTIONARY;
-    wrap_ = std::move(wrap);
-    wrapNulls_ = std::move(wrapNulls);
+  void setPeeledEncoding(std::shared_ptr<PeeledEncoding>& peel) {
+    peeledEncoding_ = std::move(peel);
   }
 
   // Copy "rows" of localResult into results if "result" is partially populated
@@ -254,6 +269,9 @@ class EvalCtx {
   /// Make sure the vector is addressable up to index `size`-1. Initialize all
   /// new elements to null.
   void ensureErrorsVectorSize(ErrorVectorPtr& vector, vector_size_t size) const;
+  PeeledEncoding* getPeeledEncoding() {
+    return peeledEncoding_.get();
+  }
 
  private:
   core::ExecCtx* const FOLLY_NONNULL execCtx_;
@@ -264,10 +282,10 @@ class EvalCtx {
   // Corresponds 1:1 to children of 'row_'. Set to an inner vector
   // after removing dictionary/sequence wrappers.
   std::vector<VectorPtr> peeledFields_;
-  BufferPtr wrap_;
-  BufferPtr wrapNulls_;
-  VectorEncoding::Simple wrapEncoding_ = VectorEncoding::Simple::FLAT;
-  vector_size_t constantWrapIndex_;
+
+  // Set if peeling was successful, that is, common encodings from inputs were
+  // peeled off.
+  std::shared_ptr<PeeledEncoding> peeledEncoding_;
 
   // True if nulls in the input vectors were pruned (removed from the current
   // selectivity vector). Only possible is all expressions have default null
@@ -297,14 +315,49 @@ struct ScopedContextSaver {
   // The context to restore. nullptr if nothing to restore.
   EvalCtx* FOLLY_NULLABLE context = nullptr;
   std::vector<VectorPtr> peeled;
-  BufferPtr wrap;
-  BufferPtr wrapNulls;
-  VectorEncoding::Simple wrapEncoding;
+  std::shared_ptr<PeeledEncoding> peeledEncoding;
   bool nullsPruned = false;
   // The selection of the context being saved.
   const SelectivityVector* FOLLY_NONNULL rows;
   const SelectivityVector* FOLLY_NULLABLE finalSelection;
-  EvalCtx::ErrorVectorPtr errors;
+  ErrorVectorPtr errors;
+};
+
+/// Produces a SelectivityVector with a single row selected using a pool of
+/// SelectivityVectors managed by the EvalCtx::execCtx().
+class LocalSingleRow {
+ public:
+  LocalSingleRow(EvalCtx& context, vector_size_t row)
+      : context_(*context.execCtx()),
+        vector_(context_.getSelectivityVector(row + 1)) {
+    vector_->clearAll();
+    vector_->setValid(row, true);
+    vector_->updateBounds();
+  }
+
+  ~LocalSingleRow() {
+    context_.releaseSelectivityVector(std::move(vector_));
+  }
+
+  SelectivityVector& operator*() {
+    return *vector_;
+  }
+
+  const SelectivityVector& operator*() const {
+    return *vector_;
+  }
+
+  SelectivityVector* operator->() {
+    return vector_.get();
+  }
+
+  const SelectivityVector* operator->() const {
+    return vector_.get();
+  }
+
+ private:
+  core::ExecCtx& context_;
+  std::unique_ptr<SelectivityVector> vector_;
 };
 
 class LocalSelectivityVector {

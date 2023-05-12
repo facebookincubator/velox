@@ -46,6 +46,7 @@ BiasVector<T>::BiasVector(
     std::optional<ByteCount> storageByteCount)
     : SimpleVector<T>(
           pool,
+          CppToType<T>::create(),
           VectorEncoding::Simple::BIASED,
           nulls,
           length,
@@ -84,6 +85,7 @@ std::unique_ptr<SimpleVector<uint64_t>> BiasVector<T>::hashAll() const {
   }
   return std::make_unique<FlatVector<uint64_t>>(
       BaseVector::pool_,
+      BIGINT(),
       BufferPtr(nullptr),
       BaseVector::length_,
       hashes,

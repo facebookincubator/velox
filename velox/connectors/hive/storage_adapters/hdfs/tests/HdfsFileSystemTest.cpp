@@ -16,12 +16,14 @@
 #include "velox/connectors/hive/storage_adapters/hdfs/HdfsFileSystem.h"
 #include <boost/format.hpp>
 #include <connectors/hive/storage_adapters/hdfs/HdfsReadFile.h>
+#include <connectors/hive/storage_adapters/hdfs/HdfsWriteFile.h>
 #include <gmock/gmock-matchers.h>
 #include <hdfs/hdfs.h>
 #include <atomic>
 #include <random>
 #include "HdfsMiniCluster.h"
 #include "gtest/gtest.h"
+#include "velox/common/base/tests/GTestUtils.h"
 #include "velox/common/file/File.h"
 #include "velox/common/file/FileSystems.h"
 #include "velox/exec/tests/utils/TempFilePath.h"
@@ -34,6 +36,7 @@ static const std::string hdfsPort = "7878";
 static const std::string localhost = "localhost";
 static const std::string fullDestinationPath =
     "hdfs://" + localhost + ":" + hdfsPort + destinationPath;
+static const std::string simpleDestinationPath = "hdfs:///" + destinationPath;
 static const std::unordered_map<std::string, std::string> configurationValues(
     {{"hive.hdfs.host", localhost}, {"hive.hdfs.port", hdfsPort}});
 
@@ -41,8 +44,7 @@ class HdfsFileSystemTest : public testing::Test {
  public:
   static void SetUpTestSuite() {
     if (miniCluster == nullptr) {
-      miniCluster = std::make_shared<
-          facebook::velox::filesystems::test::HdfsMiniCluster>();
+      miniCluster = std::make_shared<filesystems::test::HdfsMiniCluster>();
       miniCluster->start();
       auto tempFile = createFile();
       miniCluster->addFile(tempFile->path, destinationPath);
@@ -53,14 +55,14 @@ class HdfsFileSystemTest : public testing::Test {
     if (!miniCluster->isRunning()) {
       miniCluster->start();
     }
+    filesystems::registerHdfsFileSystem();
   }
 
   static void TearDownTestSuite() {
     miniCluster->stop();
   }
   static std::atomic<bool> startThreads;
-  static std::shared_ptr<facebook::velox::filesystems::test::HdfsMiniCluster>
-      miniCluster;
+  static std::shared_ptr<filesystems::test::HdfsMiniCluster> miniCluster;
 
  private:
   static std::shared_ptr<::exec::test::TempFilePath> createFile() {
@@ -73,7 +75,7 @@ class HdfsFileSystemTest : public testing::Test {
   }
 };
 
-std::shared_ptr<facebook::velox::filesystems::test::HdfsMiniCluster>
+std::shared_ptr<filesystems::test::HdfsMiniCluster>
     HdfsFileSystemTest::miniCluster = nullptr;
 std::atomic<bool> HdfsFileSystemTest::startThreads = false;
 
@@ -99,6 +101,14 @@ void readData(ReadFile* readFile) {
   ASSERT_EQ(warfFromBuf, "abbbbbcc");
 }
 
+std::unique_ptr<WriteFile> openFileForWrite(std::string_view path) {
+  auto memConfig = std::make_shared<const core::MemConfig>(configurationValues);
+  std::string hdfsFilePath =
+      "hdfs://" + localhost + ":" + hdfsPort + std::string(path);
+  auto hdfsFileSystem = filesystems::getFileSystem(hdfsFilePath, memConfig);
+  return hdfsFileSystem->openFileForWrite(path);
+}
+
 void checkReadErrorMessages(
     ReadFile* readFile,
     std::string errorMessage,
@@ -106,14 +116,14 @@ void checkReadErrorMessages(
   try {
     readFile->pread(10 + kOneMB, endpoint);
     FAIL() << "expected VeloxException";
-  } catch (facebook::velox::VeloxException const& error) {
+  } catch (VeloxException const& error) {
     EXPECT_THAT(error.message(), testing::HasSubstr(errorMessage));
   }
   try {
     auto buf = std::make_unique<char[]>(8);
     readFile->pread(10 + kOneMB, endpoint, buf.get());
     FAIL() << "expected VeloxException";
-  } catch (facebook::velox::VeloxException const& error) {
+  } catch (VeloxException const& error) {
     EXPECT_THAT(error.message(), testing::HasSubstr(errorMessage));
   }
 }
@@ -137,10 +147,10 @@ void verifyFailures(ReadFile* readFile) {
           .str();
   auto builderErrorMessage =
       (boost::format(
-           "Unable to connect to HDFS, got error: Hdfs::HdfsRpcException: HdfsFailoverException: "
+           "Unable to connect to HDFS: %s, got error: Hdfs::HdfsRpcException: HdfsFailoverException: "
            "Failed to invoke RPC call \"getFsStats\" on server \"%s\"\tCaused by: "
            "HdfsNetworkConnectException: Connect to \"%s\" failed") %
-       serverAddress % serverAddress)
+       serverAddress % serverAddress % serverAddress)
           .str();
   checkReadErrorMessages(readFile, offsetErrorMessage, kOneMB);
   HdfsFileSystemTest::miniCluster->stop();
@@ -148,9 +158,12 @@ void verifyFailures(ReadFile* readFile) {
   try {
     auto memConfig =
         std::make_shared<const core::MemConfig>(configurationValues);
-    facebook::velox::filesystems::HdfsFileSystem hdfsFileSystem(memConfig);
+    filesystems::HdfsFileSystem hdfsFileSystem(
+        memConfig,
+        filesystems::HdfsFileSystem::getServiceEndpoint(
+            simpleDestinationPath, memConfig.get()));
     FAIL() << "expected VeloxException";
-  } catch (facebook::velox::VeloxException const& error) {
+  } catch (VeloxException const& error) {
     EXPECT_THAT(error.message(), testing::HasSubstr(builderErrorMessage));
   }
 }
@@ -165,7 +178,7 @@ TEST_F(HdfsFileSystemTest, read) {
 }
 
 TEST_F(HdfsFileSystemTest, viaFileSystem) {
-  facebook::velox::filesystems::registerHdfsFileSystem();
+  filesystems::registerHdfsFileSystem();
   auto memConfig = std::make_shared<const core::MemConfig>(configurationValues);
   auto hdfsFileSystem =
       filesystems::getFileSystem(fullDestinationPath, memConfig);
@@ -173,9 +186,44 @@ TEST_F(HdfsFileSystemTest, viaFileSystem) {
   readData(readFile.get());
 }
 
+TEST_F(HdfsFileSystemTest, initializeFsWithEndpointInfoInFilePath) {
+  filesystems::registerHdfsFileSystem();
+  // Without host/port configured.
+  auto memConfig = std::make_shared<const core::MemConfig>();
+  auto hdfsFileSystem =
+      filesystems::getFileSystem(fullDestinationPath, memConfig);
+  auto readFile = hdfsFileSystem->openFileForRead(fullDestinationPath);
+  readData(readFile.get());
+
+  // Wrong endpoint info specified in hdfs file path.
+  const std::string wrongFullDestinationPath =
+      "hdfs://not_exist_host:" + hdfsPort + destinationPath;
+  VELOX_ASSERT_THROW(
+      filesystems::getFileSystem(wrongFullDestinationPath, memConfig),
+      "Unable to connect to HDFS");
+}
+
+TEST_F(HdfsFileSystemTest, fallbackToUseConfig) {
+  filesystems::registerHdfsFileSystem();
+  auto memConfig = std::make_shared<const core::MemConfig>(configurationValues);
+  auto hdfsFileSystem =
+      filesystems::getFileSystem(simpleDestinationPath, memConfig);
+  auto readFile = hdfsFileSystem->openFileForRead(simpleDestinationPath);
+  readData(readFile.get());
+}
+
+TEST_F(HdfsFileSystemTest, oneFsInstanceForOneEndpoint) {
+  filesystems::registerHdfsFileSystem();
+  auto hdfsFileSystem1 =
+      filesystems::getFileSystem(fullDestinationPath, nullptr);
+  auto hdfsFileSystem2 =
+      filesystems::getFileSystem(fullDestinationPath, nullptr);
+  ASSERT_TRUE(hdfsFileSystem1 == hdfsFileSystem2);
+}
+
 TEST_F(HdfsFileSystemTest, missingFileViaFileSystem) {
   try {
-    facebook::velox::filesystems::registerHdfsFileSystem();
+    filesystems::registerHdfsFileSystem();
     auto memConfig =
         std::make_shared<const core::MemConfig>(configurationValues);
     auto hdfsFileSystem =
@@ -183,7 +231,7 @@ TEST_F(HdfsFileSystemTest, missingFileViaFileSystem) {
     auto readFile = hdfsFileSystem->openFileForRead(
         "hdfs://localhost:7777/path/that/does/not/exist");
     FAIL() << "expected VeloxException";
-  } catch (facebook::velox::VeloxException const& error) {
+  } catch (VeloxException const& error) {
     EXPECT_THAT(
         error.message(),
         testing::HasSubstr(
@@ -193,14 +241,17 @@ TEST_F(HdfsFileSystemTest, missingFileViaFileSystem) {
 
 TEST_F(HdfsFileSystemTest, missingHost) {
   try {
-    facebook::velox::filesystems::registerHdfsFileSystem();
+    filesystems::registerHdfsFileSystem();
     std::unordered_map<std::string, std::string> missingHostConfiguration(
         {{"hive.hdfs.port", hdfsPort}});
     auto memConfig =
         std::make_shared<const core::MemConfig>(missingHostConfiguration);
-    facebook::velox::filesystems::HdfsFileSystem hdfsFileSystem(memConfig);
+    filesystems::HdfsFileSystem hdfsFileSystem(
+        memConfig,
+        filesystems::HdfsFileSystem::getServiceEndpoint(
+            simpleDestinationPath, memConfig.get()));
     FAIL() << "expected VeloxException";
-  } catch (facebook::velox::VeloxException const& error) {
+  } catch (VeloxException const& error) {
     EXPECT_THAT(
         error.message(),
         testing::HasSubstr(
@@ -210,14 +261,17 @@ TEST_F(HdfsFileSystemTest, missingHost) {
 
 TEST_F(HdfsFileSystemTest, missingPort) {
   try {
-    facebook::velox::filesystems::registerHdfsFileSystem();
+    filesystems::registerHdfsFileSystem();
     std::unordered_map<std::string, std::string> missingPortConfiguration(
         {{"hive.hdfs.host", localhost}});
     auto memConfig =
         std::make_shared<const core::MemConfig>(missingPortConfiguration);
-    facebook::velox::filesystems::HdfsFileSystem hdfsFileSystem(memConfig);
+    filesystems::HdfsFileSystem hdfsFileSystem(
+        memConfig,
+        filesystems::HdfsFileSystem::getServiceEndpoint(
+            simpleDestinationPath, memConfig.get()));
     FAIL() << "expected VeloxException";
-  } catch (facebook::velox::VeloxException const& error) {
+  } catch (VeloxException const& error) {
     EXPECT_THAT(
         error.message(),
         testing::HasSubstr(
@@ -233,7 +287,7 @@ TEST_F(HdfsFileSystemTest, missingFileViaReadFile) {
     auto hdfs = hdfsBuilderConnect(builder);
     HdfsReadFile readFile(hdfs, "/path/that/does/not/exist");
     FAIL() << "expected VeloxException";
-  } catch (facebook::velox::VeloxException const& error) {
+  } catch (VeloxException const& error) {
     EXPECT_THAT(
         error.message(),
         testing::HasSubstr(
@@ -243,44 +297,42 @@ TEST_F(HdfsFileSystemTest, missingFileViaReadFile) {
 
 TEST_F(HdfsFileSystemTest, schemeMatching) {
   try {
-    auto fs =
-        std::dynamic_pointer_cast<facebook::velox::filesystems::HdfsFileSystem>(
-            filesystems::getFileSystem("/", nullptr));
+    auto fs = std::dynamic_pointer_cast<filesystems::HdfsFileSystem>(
+        filesystems::getFileSystem("/", nullptr));
     FAIL() << "expected VeloxException";
-  } catch (facebook::velox::VeloxException const& error) {
+  } catch (VeloxException const& error) {
     EXPECT_THAT(
         error.message(),
         testing::HasSubstr(
-            "No registered file system matched with filename '/'"));
+            "No registered file system matched with file path '/'"));
   }
-  auto fs =
-      std::dynamic_pointer_cast<facebook::velox::filesystems::HdfsFileSystem>(
-          filesystems::getFileSystem(fullDestinationPath, nullptr));
+  auto fs = std::dynamic_pointer_cast<filesystems::HdfsFileSystem>(
+      filesystems::getFileSystem(fullDestinationPath, nullptr));
   ASSERT_TRUE(fs->isHdfsFile(fullDestinationPath));
 }
 
 TEST_F(HdfsFileSystemTest, writeNotSupported) {
   try {
-    facebook::velox::filesystems::registerHdfsFileSystem();
+    filesystems::registerHdfsFileSystem();
     auto memConfig =
         std::make_shared<const core::MemConfig>(configurationValues);
     auto hdfsFileSystem =
         filesystems::getFileSystem(fullDestinationPath, memConfig);
     hdfsFileSystem->openFileForWrite("/path");
-  } catch (facebook::velox::VeloxException const& error) {
+  } catch (VeloxException const& error) {
     EXPECT_EQ(error.message(), "Write to HDFS is unsupported");
   }
 }
 
 TEST_F(HdfsFileSystemTest, removeNotSupported) {
   try {
-    facebook::velox::filesystems::registerHdfsFileSystem();
+    filesystems::registerHdfsFileSystem();
     auto memConfig =
         std::make_shared<const core::MemConfig>(configurationValues);
     auto hdfsFileSystem =
         filesystems::getFileSystem(fullDestinationPath, memConfig);
     hdfsFileSystem->remove("/path");
-  } catch (facebook::velox::VeloxException const& error) {
+  } catch (VeloxException const& error) {
     EXPECT_EQ(error.message(), "Does not support removing files from hdfs");
   }
 }
@@ -318,7 +370,7 @@ TEST_F(HdfsFileSystemTest, multipleThreadsWithReadFile) {
 
 TEST_F(HdfsFileSystemTest, multipleThreadsWithFileSystem) {
   startThreads = false;
-  facebook::velox::filesystems::registerHdfsFileSystem();
+  filesystems::registerHdfsFileSystem();
   auto memConfig = std::make_shared<const core::MemConfig>(configurationValues);
   auto hdfsFileSystem =
       filesystems::getFileSystem(fullDestinationPath, memConfig);
@@ -348,6 +400,43 @@ TEST_F(HdfsFileSystemTest, multipleThreadsWithFileSystem) {
   for (auto& thread : threads) {
     thread.join();
   }
+}
+
+TEST_F(HdfsFileSystemTest, write) {
+  std::string path = "/a.txt";
+  auto writeFile = openFileForWrite(path);
+  std::string data = "abcdefghijk";
+  writeFile->append(data);
+  writeFile->flush();
+  ASSERT_EQ(writeFile->size(), 0);
+  writeFile->append(data);
+  writeFile->append(data);
+  writeFile->flush();
+  writeFile->close();
+  ASSERT_EQ(writeFile->size(), data.size() * 3);
+}
+
+TEST_F(HdfsFileSystemTest, missingFileForWrite) {
+  const std::string filePath = "hdfs://localhost:7777/path/that/does/not/exist";
+  const std::string errorMsg =
+      "Failed to open hdfs file: hdfs://localhost:7777/path/that/does/not/exist";
+  VELOX_ASSERT_THROW(openFileForWrite(filePath), errorMsg);
+}
+
+TEST_F(HdfsFileSystemTest, writeDataFailures) {
+  auto writeFile = openFileForWrite("/a.txt");
+  writeFile->close();
+  VELOX_ASSERT_THROW(
+      writeFile->append("abcde"),
+      "Cannot append to HDFS file because file handle is null, file path: /a.txt");
+}
+
+TEST_F(HdfsFileSystemTest, writeFlushFailures) {
+  auto writeFile = openFileForWrite("/a.txt");
+  writeFile->close();
+  VELOX_ASSERT_THROW(
+      writeFile->flush(),
+      "Cannot flush HDFS file because file handle is null, file path: /a.txt");
 }
 
 TEST_F(HdfsFileSystemTest, readFailures) {

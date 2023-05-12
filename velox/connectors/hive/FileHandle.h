@@ -39,7 +39,7 @@ namespace facebook::velox {
 
 // See the file comment.
 struct FileHandle {
-  std::unique_ptr<ReadFile> file;
+  std::shared_ptr<ReadFile> file;
 
   // Each time we make a new FileHandle we assign it a uuid and use that id as
   // the identifier in downstream data caching structures. This saves a lot of
@@ -84,5 +84,7 @@ using FileHandleFactory = CachedFactory<
     FileHandleSizer>;
 
 using FileHandleCachedPtr = CachedPtr<std::string, FileHandle>;
+
+using FileHandleCacheStats = SimpleLRUCacheStats;
 
 } // namespace facebook::velox

@@ -21,7 +21,6 @@
 #include "folly/lang/Assume.h"
 #include "velox/common/base/tests/GTestUtils.h"
 #include "velox/dwio/common/DataSink.h"
-#include "velox/dwio/common/MemoryInputStream.h"
 #include "velox/dwio/common/tests/utils/BatchMaker.h"
 #include "velox/dwio/dwrf/common/Common.h"
 #include "velox/dwio/dwrf/reader/DwrfReader.h"
@@ -31,6 +30,7 @@
 #include "velox/type/Type.h"
 #include "velox/vector/ComplexVector.h"
 #include "velox/vector/FlatVector.h"
+#include "velox/vector/tests/utils/VectorMaker.h"
 
 #include <fmt/core.h>
 #include <array>
@@ -43,7 +43,10 @@ using namespace facebook::velox;
 using namespace facebook::velox::dwrf;
 using namespace facebook::velox::test;
 
+namespace {
 const std::string structFile(getExampleFilePath("struct.orc"));
+auto defaultPool = memory::addDefaultLeafMemoryPool();
+} // namespace
 
 TEST(TestReader, testWriterVersions) {
   EXPECT_EQ("original", writerVersionToString(ORIGINAL));
@@ -66,6 +69,13 @@ TEST(TestReader, testCompressionNames) {
       compressionKindToString(static_cast<CompressionKind>(99)));
 }
 
+std::unique_ptr<BufferedInput> createFileBufferedInput(
+    const std::string& path,
+    memory::MemoryPool& pool) {
+  return std::make_unique<BufferedInput>(
+      std::make_shared<LocalReadFile>(path), pool);
+}
+
 // schema of flat map sample file
 // struct {
 //   id int,
@@ -81,7 +91,7 @@ void verifyFlatMapReading(
     const int32_t expectedBatchSize[],
     const int32_t numBatches,
     bool returnFlatVector) {
-  ReaderOptions readerOpts;
+  ReaderOptions readerOpts{defaultPool.get()};
   RowReaderOptions rowReaderOpts;
   rowReaderOpts.setReturnFlatVector(returnFlatVector);
   std::shared_ptr<const RowType> requestedType =
@@ -93,8 +103,8 @@ void verifyFlatMapReading(
       map4:map<int,struct<field1:int,field2:float,field3:string>>,\
       memo:string>"));
   rowReaderOpts.select(std::make_shared<ColumnSelector>(requestedType));
-  auto reader =
-      DwrfReader::create(std::make_unique<FileInputStream>(file), readerOpts);
+  auto reader = DwrfReader::create(
+      createFileBufferedInput(file, readerOpts.getMemoryPool()), readerOpts);
   auto rowReaderOwner = reader->createRowReader(rowReaderOpts);
   auto rowReader = dynamic_cast<DwrfRowReader*>(rowReaderOwner.get());
   VectorPtr batch;
@@ -193,14 +203,15 @@ TEST_P(TestFlatMapReader, testStringKeyLifeCycle) {
   auto returnFlatVector = GetParam();
 
   VectorPtr batch;
-  ReaderOptions readerOptions;
+  ReaderOptions readerOptions{defaultPool.get()};
 
   {
     RowReaderOptions rowReaderOptions;
     rowReaderOptions.setReturnFlatVector(returnFlatVector);
 
     auto reader = DwrfReader::create(
-        std::make_unique<FileInputStream>(fmSmall), readerOptions);
+        createFileBufferedInput(fmSmall, readerOptions.getMemoryPool()),
+        readerOptions);
     auto rowReader = reader->createRowReader(rowReaderOptions);
     rowReader->next(100, batch);
   }
@@ -305,9 +316,10 @@ class TestFlatMapReaderFlatLayout
 TEST_P(TestFlatMapReaderFlatLayout, testCompare) {
   const std::string fmSmall(getExampleFilePath("fm_small.orc"));
 
-  ReaderOptions readerOptions;
+  ReaderOptions readerOptions{defaultPool.get()};
   auto reader = DwrfReader::create(
-      std::make_unique<FileInputStream>(fmSmall), readerOptions);
+      createFileBufferedInput(fmSmall, readerOptions.getMemoryPool()),
+      readerOptions);
   RowReaderOptions rowReaderOptions;
   auto param = GetParam();
   rowReaderOptions.setReturnFlatVector(false);
@@ -339,7 +351,7 @@ TEST(TestReader, testReadFlatMapWithKeyFilters) {
 
   // batch size is set as 1000 in reading
   // file has schema: a int, b struct<a:int, b:float, c:string>, c float
-  ReaderOptions readerOpts;
+  ReaderOptions readerOpts{defaultPool.get()};
   RowReaderOptions rowReaderOpts;
   std::shared_ptr<const RowType> requestedType =
       std::dynamic_pointer_cast<const RowType>(HiveTypeParser().parse("struct<\
@@ -354,7 +366,7 @@ TEST(TestReader, testReadFlatMapWithKeyFilters) {
       requestedType, std::vector<std::string>{"map1#[1]", "map2#[\"key-1\"]"});
   rowReaderOpts.select(cs);
   auto reader = DwrfReader::create(
-      std::make_unique<FileInputStream>(fmSmall), readerOpts);
+      createFileBufferedInput(fmSmall, readerOpts.getMemoryPool()), readerOpts);
   auto rowReader = reader->createRowReader(rowReaderOpts);
   VectorPtr batch;
 
@@ -400,7 +412,7 @@ TEST(TestReader, testReadFlatMapWithKeyRejectList) {
 
   // batch size is set as 1000 in reading
   // file has schema: a int, b struct<a:int, b:float, c:string>, c float
-  ReaderOptions readerOpts;
+  ReaderOptions readerOpts{defaultPool.get()};
   RowReaderOptions rowReaderOpts;
   std::shared_ptr<const RowType> requestedType =
       std::dynamic_pointer_cast<const RowType>(HiveTypeParser().parse("struct<\
@@ -414,7 +426,7 @@ TEST(TestReader, testReadFlatMapWithKeyRejectList) {
       requestedType, std::vector<std::string>{"map1#[\"!2\",\"!3\"]"});
   rowReaderOpts.select(cs);
   auto reader = DwrfReader::create(
-      std::make_unique<FileInputStream>(fmSmall), readerOpts);
+      createFileBufferedInput(fmSmall, readerOpts.getMemoryPool()), readerOpts);
   auto rowReader = reader->createRowReader(rowReaderOpts);
   VectorPtr batch;
 
@@ -508,9 +520,10 @@ void verifyFlatmapStructEncoding(
     const std::vector<int32_t>& keysAsFields,
     const std::vector<int32_t>& keysToSelect,
     size_t batchSize = 1000) {
-  ReaderOptions readerOpts;
+  ReaderOptions readerOpts{defaultPool.get()};
   auto reader = DwrfReader::create(
-      std::make_unique<FileInputStream>(filename), readerOpts);
+      createFileBufferedInput(filename, readerOpts.getMemoryPool()),
+      readerOpts);
 
   const std::string projectedColumn = "map1";
   const vector_size_t projectedColumnIndex = 1;
@@ -610,7 +623,7 @@ TEST(TestReader, testFlatmapAsStructRequiringKeyList) {
 // TODO: replace with mock
 TEST(TestReader, testMismatchSchemaMoreFields) {
   // file has schema: a int, b struct<a:int, b:float, c:string>, c float
-  ReaderOptions readerOpts;
+  ReaderOptions readerOpts{defaultPool.get()};
   RowReaderOptions rowReaderOpts;
   std::shared_ptr<const RowType> requestedType =
       std::dynamic_pointer_cast<const RowType>(HiveTypeParser().parse(
@@ -618,7 +631,8 @@ TEST(TestReader, testMismatchSchemaMoreFields) {
   rowReaderOpts.select(std::make_shared<ColumnSelector>(
       requestedType, std::vector<uint64_t>{1, 2, 3}));
   auto reader = DwrfReader::create(
-      std::make_unique<FileInputStream>(structFile), readerOpts);
+      createFileBufferedInput(structFile, readerOpts.getMemoryPool()),
+      readerOpts);
   auto rowReader = reader->createRowReader(rowReaderOpts);
   VectorPtr batch;
   rowReader->next(1, batch);
@@ -636,7 +650,8 @@ TEST(TestReader, testMismatchSchemaMoreFields) {
 
   rowReaderOpts.setProjectSelectedType(true);
   reader = DwrfReader::create(
-      std::make_unique<FileInputStream>(structFile), readerOpts);
+      createFileBufferedInput(structFile, readerOpts.getMemoryPool()),
+      readerOpts);
   rowReader = reader->createRowReader(rowReaderOpts);
   rowReader->next(1, batch);
 
@@ -653,7 +668,7 @@ TEST(TestReader, testMismatchSchemaMoreFields) {
 
 TEST(TestReader, testMismatchSchemaFewerFields) {
   // file has schema: a int, b struct<a:int, b:float, c:string>, c float
-  ReaderOptions readerOpts;
+  ReaderOptions readerOpts{defaultPool.get()};
   RowReaderOptions rowReaderOpts;
   std::shared_ptr<const RowType> requestedType =
       std::dynamic_pointer_cast<const RowType>(HiveTypeParser().parse(
@@ -661,7 +676,8 @@ TEST(TestReader, testMismatchSchemaFewerFields) {
   rowReaderOpts.select(std::make_shared<ColumnSelector>(
       requestedType, std::vector<uint64_t>{1}));
   auto reader = DwrfReader::create(
-      std::make_unique<FileInputStream>(structFile), readerOpts);
+      createFileBufferedInput(structFile, readerOpts.getMemoryPool()),
+      readerOpts);
   auto rowReader = reader->createRowReader(rowReaderOpts);
   VectorPtr batch;
   rowReader->next(1, batch);
@@ -678,7 +694,8 @@ TEST(TestReader, testMismatchSchemaFewerFields) {
   batch.reset();
   rowReaderOpts.setProjectSelectedType(true);
   reader = DwrfReader::create(
-      std::make_unique<FileInputStream>(structFile), readerOpts);
+      createFileBufferedInput(structFile, readerOpts.getMemoryPool()),
+      readerOpts);
   rowReader = reader->createRowReader(rowReaderOpts);
   rowReader->next(1, batch);
 
@@ -692,7 +709,7 @@ TEST(TestReader, testMismatchSchemaFewerFields) {
 
 TEST(TestReader, testMismatchSchemaNestedMoreFields) {
   // file has schema: a int, b struct<a:int, b:float>, c float
-  ReaderOptions readerOpts;
+  ReaderOptions readerOpts{defaultPool.get()};
   RowReaderOptions rowReaderOpts;
   std::shared_ptr<const RowType> requestedType =
       std::dynamic_pointer_cast<const RowType>(HiveTypeParser().parse(
@@ -701,7 +718,8 @@ TEST(TestReader, testMismatchSchemaNestedMoreFields) {
   rowReaderOpts.select(std::make_shared<ColumnSelector>(
       requestedType, std::vector<std::string>{"b.b", "b.c", "b.d", "c"}));
   auto reader = DwrfReader::create(
-      std::make_unique<FileInputStream>(structFile), readerOpts);
+      createFileBufferedInput(structFile, readerOpts.getMemoryPool()),
+      readerOpts);
   auto rowReader = reader->createRowReader(rowReaderOpts);
   VectorPtr batch;
   rowReader->next(1, batch);
@@ -730,7 +748,8 @@ TEST(TestReader, testMismatchSchemaNestedMoreFields) {
   batch.reset();
   rowReaderOpts.setProjectSelectedType(true);
   reader = DwrfReader::create(
-      std::make_unique<FileInputStream>(structFile), readerOpts);
+      createFileBufferedInput(structFile, readerOpts.getMemoryPool()),
+      readerOpts);
   rowReader = reader->createRowReader(rowReaderOpts);
   rowReader->next(1, batch);
 
@@ -756,7 +775,7 @@ TEST(TestReader, testMismatchSchemaNestedMoreFields) {
 
 TEST(TestReader, testMismatchSchemaNestedFewerFields) {
   // file has schema: a int, b struct<a:int, b:float>, c float
-  ReaderOptions readerOpts;
+  ReaderOptions readerOpts{defaultPool.get()};
   RowReaderOptions rowReaderOpts;
   std::shared_ptr<const RowType> requestedType =
       std::dynamic_pointer_cast<const RowType>(HiveTypeParser().parse(
@@ -764,7 +783,8 @@ TEST(TestReader, testMismatchSchemaNestedFewerFields) {
   rowReaderOpts.select(std::make_shared<ColumnSelector>(
       requestedType, std::vector<std::string>{"b.b", "c"}));
   auto reader = DwrfReader::create(
-      std::make_unique<FileInputStream>(structFile), readerOpts);
+      createFileBufferedInput(structFile, readerOpts.getMemoryPool()),
+      readerOpts);
   auto rowReader = reader->createRowReader(rowReaderOpts);
   VectorPtr batch;
   rowReader->next(1, batch);
@@ -789,7 +809,8 @@ TEST(TestReader, testMismatchSchemaNestedFewerFields) {
   batch.reset();
   rowReaderOpts.setProjectSelectedType(true);
   reader = DwrfReader::create(
-      std::make_unique<FileInputStream>(structFile), readerOpts);
+      createFileBufferedInput(structFile, readerOpts.getMemoryPool()),
+      readerOpts);
   rowReader = reader->createRowReader(rowReaderOpts);
   rowReader->next(1, batch);
 
@@ -806,6 +827,63 @@ TEST(TestReader, testMismatchSchemaNestedFewerFields) {
     auto fv = std::dynamic_pointer_cast<FlatVector<float>>(root->childAt(1));
     EXPECT_EQ(1, fv->size());
     EXPECT_EQ(0, fv->getNullCount().value());
+  }
+}
+
+TEST(TestReader, testMismatchSchemaIncompatibleNotSelected) {
+  // file has schema: a int, b struct<a:int, b:float>, c float
+  ReaderOptions readerOpts{defaultPool.get()};
+  RowReaderOptions rowReaderOpts;
+  std::shared_ptr<const RowType> requestedType =
+      std::dynamic_pointer_cast<const RowType>(HiveTypeParser().parse(
+          "struct<a:float,b:struct<a:string,b:float>,c:int>"));
+  rowReaderOpts.select(std::make_shared<ColumnSelector>(
+      requestedType, std::vector<std::string>{"b.b"}));
+  auto reader = DwrfReader::create(
+      createFileBufferedInput(structFile, readerOpts.getMemoryPool()),
+      readerOpts);
+  auto rowReader = reader->createRowReader(rowReaderOpts);
+  VectorPtr batch;
+  rowReader->next(1, batch);
+
+  {
+    auto root = std::dynamic_pointer_cast<RowVector>(batch);
+    EXPECT_EQ(3, root->childrenSize());
+
+    auto nested = std::dynamic_pointer_cast<RowVector>(root->childAt(1));
+    EXPECT_EQ(2, nested->childrenSize());
+    EXPECT_EQ(1, nested->size());
+
+    // Column 0 should have size 0 since it's not selected
+    EXPECT_FALSE(nested->childAt(0));
+    // Column 1 should be selected and not null
+    EXPECT_EQ(nested->childAt(1)->size(), 1);
+    EXPECT_EQ(0, nested->childAt(1)->getNullCount().value());
+
+    // Columns not selected should have nullptr
+    EXPECT_FALSE(root->childAt(0));
+    EXPECT_FALSE(root->childAt(2));
+  }
+
+  batch.reset();
+  rowReaderOpts.setProjectSelectedType(true);
+  reader = DwrfReader::create(
+      createFileBufferedInput(structFile, readerOpts.getMemoryPool()),
+      readerOpts);
+  rowReader = reader->createRowReader(rowReaderOpts);
+  rowReader->next(1, batch);
+
+  {
+    auto root = std::dynamic_pointer_cast<RowVector>(batch);
+    EXPECT_EQ(1, root->childrenSize());
+
+    auto nested = std::dynamic_pointer_cast<RowVector>(root->childAt(0));
+    // We should have 1 column since projection is pushed
+    EXPECT_EQ(1, nested->childrenSize());
+    EXPECT_EQ(1, nested->size());
+
+    EXPECT_EQ(1, nested->childAt(0)->size());
+    EXPECT_EQ(0, nested->childAt(0)->getNullCount().value());
   }
 }
 
@@ -1043,11 +1121,9 @@ TEST(TestReader, testUpcastFloat) {
 }
 
 TEST(TestReader, testEmptyFile) {
-  std::unique_ptr<memory::ScopedMemoryPool> scopedPool =
-      memory::getDefaultScopedMemoryPool();
-  auto pool = *scopedPool;
-  MemorySink sink{pool, 1024};
-  DataBufferHolder holder{pool, 1024, 0, DEFAULT_PAGE_GROW_RATIO, &sink};
+  auto pool = memory::addDefaultLeafMemoryPool();
+  MemorySink sink{*pool, 1024};
+  DataBufferHolder holder{*pool, 1024, 0, DEFAULT_PAGE_GROW_RATIO, &sink};
   BufferedOutputStream output{holder};
 
   proto::Footer footer;
@@ -1067,12 +1143,14 @@ TEST(TestReader, testEmptyFile) {
   output.flush();
   auto psLen = static_cast<uint8_t>(sink.size() - footerLen);
 
-  DataBuffer<char> buf{pool, 1};
+  DataBuffer<char> buf{*pool, 1};
   buf.data()[0] = psLen;
   sink.write(std::move(buf));
-  auto input = std::make_unique<MemoryInputStream>(sink.getData(), sink.size());
+  std::string_view data(sink.getData(), sink.size());
+  auto input = std::make_unique<BufferedInput>(
+      std::make_shared<InMemoryReadFile>(data), *pool);
 
-  ReaderOptions readerOpts;
+  ReaderOptions readerOpts{defaultPool.get()};
   RowReaderOptions rowReaderOpts;
 
   auto rowReader = DwrfReader::create(std::move(input), readerOpts)
@@ -1155,26 +1233,26 @@ void testBufferLifeCycle(
     std::mt19937& rng,
     size_t batchSize,
     bool hasNull) {
-  auto scopedPool = memory::getDefaultScopedMemoryPool();
-  auto& pool = *scopedPool;
+  auto pool = memory::addDefaultLeafMemoryPool();
   std::vector<VectorPtr> batches;
   std::function<bool(vector_size_t)> isNullAt = nullptr;
   if (hasNull) {
     isNullAt = [](vector_size_t i) { return i % 2 == 0; };
   }
   auto vector =
-      BatchMaker::createBatch(schema, batchSize * 2, pool, rng, isNullAt);
+      BatchMaker::createBatch(schema, batchSize * 2, *pool, rng, isNullAt);
   batches.push_back(vector);
 
-  auto sink = std::make_unique<MemorySink>(pool, 1024 * 1024);
+  auto sink = std::make_unique<MemorySink>(*pool, 1024 * 1024);
   auto sinkPtr = sink.get();
   auto writer =
       E2EWriterTestUtil::writeData(std::move(sink), schema, batches, config);
 
-  auto input =
-      std::make_unique<MemoryInputStream>(sinkPtr->getData(), sinkPtr->size());
+  std::string_view data(sinkPtr->getData(), sinkPtr->size());
+  auto input = std::make_unique<BufferedInput>(
+      std::make_shared<InMemoryReadFile>(data), *pool);
 
-  ReaderOptions readerOpts;
+  ReaderOptions readerOpts{defaultPool.get()};
   RowReaderOptions rowReaderOpts;
   rowReaderOpts.setReturnFlatVector(true);
   auto reader = std::make_unique<DwrfReader>(readerOpts, std::move(input));
@@ -1212,26 +1290,26 @@ void testFlatmapAsMapFieldLifeCycle(
     std::mt19937& rng,
     size_t batchSize,
     bool hasNull) {
-  auto scopedPool = memory::getDefaultScopedMemoryPool();
-  auto& pool = *scopedPool;
+  auto pool = memory::addDefaultLeafMemoryPool();
   std::vector<VectorPtr> batches;
   std::function<bool(vector_size_t)> isNullAt = nullptr;
   if (hasNull) {
     isNullAt = [](vector_size_t i) { return i % 2 == 0; };
   }
   auto vector =
-      BatchMaker::createBatch(schema, batchSize * 5, pool, rng, isNullAt);
+      BatchMaker::createBatch(schema, batchSize * 5, *pool, rng, isNullAt);
   batches.push_back(vector);
 
-  auto sink = std::make_unique<MemorySink>(pool, 1024 * 1024);
+  auto sink = std::make_unique<MemorySink>(*pool, 1024 * 1024);
   auto sinkPtr = sink.get();
   auto writer =
       E2EWriterTestUtil::writeData(std::move(sink), schema, batches, config);
 
-  auto input =
-      std::make_unique<MemoryInputStream>(sinkPtr->getData(), sinkPtr->size());
+  std::string_view data(sinkPtr->getData(), sinkPtr->size());
+  auto input = std::make_unique<BufferedInput>(
+      std::make_shared<InMemoryReadFile>(data), *pool);
 
-  ReaderOptions readerOpts;
+  ReaderOptions readerOpts{defaultPool.get()};
   RowReaderOptions rowReaderOpts;
   rowReaderOpts.setReturnFlatVector(true);
   auto reader = std::make_unique<DwrfReader>(readerOpts, std::move(input));
@@ -1261,7 +1339,7 @@ void testFlatmapAsMapFieldLifeCycle(
   EXPECT_EQ(keysPtr, child->mapKeys().get());
   // there is a TODO in FlatMapColumnReader next() (result is not reused)
   // should be EQ; fix: https://fburl.com/code/wtrq8r5q
-  EXPECT_NE(childPtr, child.get());
+  // EXPECT_EQ(childPtr, child.get());
   EXPECT_EQ(rowPtr, result.get());
 
   auto mapKeys = child->mapKeys();
@@ -1278,7 +1356,7 @@ void testFlatmapAsMapFieldLifeCycle(
   EXPECT_NE(mapKeys, child->mapKeys());
   // there is a TODO in FlatMapColumnReader next() (result is not reused)
   // should be EQ; fix: https://fburl.com/code/wtrq8r5q
-  EXPECT_NE(childPtr, child.get());
+  // EXPECT_EQ(childPtr, child.get());
   EXPECT_EQ(rowPtr, result.get());
 
   EXPECT_TRUE(rowReader->next(batchSize, result));
@@ -1290,7 +1368,7 @@ void testFlatmapAsMapFieldLifeCycle(
   EXPECT_NE(rawSizes, childCurr->sizes().get());
   EXPECT_NE(rawOffsets, childCurr->offsets().get());
   EXPECT_NE(keysPtr, childCurr->mapKeys().get());
-  EXPECT_NE(childPtr, childCurr.get());
+  // EXPECT_EQ(childPtr, childCurr.get());
   EXPECT_EQ(rowPtr, result.get());
 }
 
@@ -1358,11 +1436,12 @@ TEST(TestReader, testFlatmapAsMapFieldLifeCycle) {
 TEST(TestReader, testOrcReaderSimple) {
   const std::string simpleTest(
       getExampleFilePath("TestStringDictionary.testRowIndex.orc"));
-  ReaderOptions readerOpts;
+  ReaderOptions readerOpts{defaultPool.get()};
   // To make DwrfReader reads ORC file, setFileFormat to FileFormat::ORC
   readerOpts.setFileFormat(dwio::common::FileFormat::ORC);
   auto reader = DwrfReader::create(
-      std::make_unique<FileInputStream>(simpleTest), readerOpts);
+      createFileBufferedInput(simpleTest, readerOpts.getMemoryPool()),
+      readerOpts);
 
   RowReaderOptions rowReaderOptions;
   auto rowReader = reader->createRowReader(rowReaderOptions);
@@ -1405,20 +1484,22 @@ TEST(TestReader, testOrcReaderComplexTypes) {
           g:map<string,struct<\
             h:struct<\
               i:array<double>>>>>>"));
-  ReaderOptions readerOpts;
+  ReaderOptions readerOpts{defaultPool.get()};
   readerOpts.setFileFormat(dwio::common::FileFormat::ORC);
   auto reader = DwrfReader::create(
-      std::make_unique<FileInputStream>(icebergOrc), readerOpts);
+      createFileBufferedInput(icebergOrc, readerOpts.getMemoryPool()),
+      readerOpts);
   auto rowType = reader->rowType();
   EXPECT_TRUE(rowType->equivalent(*expectedType));
 }
 
 TEST(TestReader, testOrcReaderVarchar) {
   const std::string varcharOrc(getExampleFilePath("orc_index_int_string.orc"));
-  ReaderOptions readerOpts;
+  ReaderOptions readerOpts{defaultPool.get()};
   readerOpts.setFileFormat(dwio::common::FileFormat::ORC);
   auto reader = DwrfReader::create(
-      std::make_unique<FileInputStream>(varcharOrc), readerOpts);
+      createFileBufferedInput(varcharOrc, readerOpts.getMemoryPool()),
+      readerOpts);
 
   RowReaderOptions rowReaderOptions;
   auto rowReader = reader->createRowReader(rowReaderOptions);
@@ -1445,10 +1526,10 @@ TEST(TestReader, testOrcReaderVarchar) {
 
 TEST(TestReader, testOrcReaderDate) {
   const std::string dateOrc(getExampleFilePath("TestOrcFile.testDate1900.orc"));
-  ReaderOptions readerOpts;
+  ReaderOptions readerOpts{defaultPool.get()};
   readerOpts.setFileFormat(dwio::common::FileFormat::ORC);
   auto reader = DwrfReader::create(
-      std::make_unique<FileInputStream>(dateOrc), readerOpts);
+      createFileBufferedInput(dateOrc, readerOpts.getMemoryPool()), readerOpts);
 
   RowReaderOptions rowReaderOptions;
   auto rowReader = reader->createRowReader(rowReaderOptions);
@@ -1468,5 +1549,158 @@ TEST(TestReader, testOrcReaderDate) {
     }
 
     year++;
+  }
+}
+
+namespace {
+
+std::vector<VectorPtr> createBatches(
+    const std::vector<std::vector<int32_t>>& integerValues,
+    memory::MemoryPool& pool) {
+  std::vector<VectorPtr> batches;
+  VectorMaker maker(&pool);
+  for (auto i = 0; i < integerValues.size(); ++i) {
+    auto vector = maker.flatVector<int32_t>(integerValues[i]);
+    auto rowVector = maker.rowVector({vector});
+    batches.push_back(rowVector);
+  }
+  return batches;
+}
+
+/*
+ * Verifies that row numbers are equal to values in first column
+ */
+void verifyRowNumbers(
+    RowReader& rowReader,
+    memory::MemoryPool* pool,
+    int expectedNumRows) {
+  auto result = BaseVector::create(ROW({{"c0", INTEGER()}}), 0, pool);
+  int numRows = 0;
+  while (rowReader.next(10, result) > 0) {
+    auto* rowVector = result->asUnchecked<RowVector>();
+    ASSERT_EQ(2, rowVector->childrenSize());
+    ASSERT_EQ(rowVector->type()->asRow().nameOf(1), "");
+    DecodedVector values(*rowVector->childAt(0));
+    DecodedVector rowNumbers(*rowVector->childAt(1));
+    for (size_t i = 0; i < rowVector->size(); ++i) {
+      ASSERT_EQ(values.valueAt<int32_t>(i), rowNumbers.valueAt<int64_t>(i));
+    }
+    numRows += result->size();
+  }
+  ASSERT_EQ(numRows, expectedNumRows);
+}
+
+std::pair<std::unique_ptr<Writer>, std::unique_ptr<DwrfReader>>
+createWriterReader(
+    const std::vector<VectorPtr>& batches,
+    memory::MemoryPool& pool) {
+  auto sink = std::make_unique<MemorySink>(pool, 1 << 20);
+  auto* sinkPtr = sink.get();
+  auto writer = E2EWriterTestUtil::writeData(
+      std::move(sink),
+      asRowType(batches[0]->type()),
+      batches,
+      std::make_shared<Config>(),
+      E2EWriterTestUtil::simpleFlushPolicyFactory(true));
+  std::string_view data(sinkPtr->getData(), sinkPtr->size());
+  auto input = std::make_unique<BufferedInput>(
+      std::make_shared<InMemoryReadFile>(data), pool);
+  ReaderOptions readerOpts(&pool);
+  readerOpts.setFileFormat(FileFormat::DWRF);
+  auto reader = DwrfReader::create(std::move(input), readerOpts);
+  return std::make_pair(std::move(writer), std::move(reader));
+}
+
+} // namespace
+
+TEST(TestReader, appendRowNumberColumn) {
+  std::vector<std::vector<int32_t>> integerValues{
+      {0, 1, 2, 3, 4},
+      {5, 6, 7},
+      {8},
+      {},
+      {9, 10, 11, 12, 13, 14, 15},
+  };
+  auto& pool = defaultPool;
+  auto batches = createBatches(integerValues, *pool);
+  auto schema = asRowType(batches[0]->type());
+  auto [writer, reader] = createWriterReader(batches, *pool);
+
+  auto spec = std::make_shared<common::ScanSpec>("<root>");
+  spec->addAllChildFields(*schema);
+  RowReaderOptions rowReaderOpts;
+  rowReaderOpts.setScanSpec(spec);
+  rowReaderOpts.setAppendRowNumberColumn(true);
+  {
+    SCOPED_TRACE("Selective no filter");
+    auto rowReader = reader->createRowReader(rowReaderOpts);
+    verifyRowNumbers(*rowReader, pool.get(), 16);
+  }
+  spec->childByName("c0")->setFilter(
+      common::createBigintValues({1, 4, 5, 7, 11, 14}, false));
+  spec->resetCachedValues(true);
+  {
+    SCOPED_TRACE("Selective with filter");
+    auto rowReader = reader->createRowReader(rowReaderOpts);
+    verifyRowNumbers(*rowReader, pool.get(), 6);
+  }
+}
+
+TEST(TestReader, reuseRowNumberColumn) {
+  std::vector<std::vector<int32_t>> integerValues{{0, 1, 2, 3, 4}};
+  auto& pool = defaultPool;
+  auto batches = createBatches(integerValues, *pool);
+  auto schema = asRowType(batches[0]->type());
+  auto [writer, reader] = createWriterReader(batches, *pool);
+
+  auto spec = std::make_shared<common::ScanSpec>("<root>");
+  spec->addAllChildFields(*schema);
+  RowReaderOptions rowReaderOpts;
+  rowReaderOpts.setScanSpec(spec);
+  rowReaderOpts.setAppendRowNumberColumn(true);
+  {
+    SCOPED_TRACE("Reuse passed in");
+    auto rowReader = reader->createRowReader(rowReaderOpts);
+    auto result = BaseVector::create(
+        ROW({{"c0", INTEGER()}, {"", BIGINT()}}), 0, pool.get());
+    auto* rowNum = result->asUnchecked<RowVector>()->childAt(1).get();
+    ASSERT_EQ(rowReader->next(3, result), 3);
+    ASSERT_EQ(rowNum, result->asUnchecked<RowVector>()->childAt(1).get());
+  }
+  {
+    SCOPED_TRACE("Reuse generated");
+    auto rowReader = reader->createRowReader(rowReaderOpts);
+    auto result = BaseVector::create(ROW({{"c0", INTEGER()}}), 0, pool.get());
+    ASSERT_EQ(rowReader->next(3, result), 3);
+    auto* rowNum = result->asUnchecked<RowVector>()->childAt(1).get();
+    ASSERT_EQ(rowReader->next(3, result), 2);
+    ASSERT_EQ(rowNum, result->asUnchecked<RowVector>()->childAt(1).get());
+  }
+  {
+    SCOPED_TRACE("No reuse passed in");
+    auto rowReader = reader->createRowReader(rowReaderOpts);
+    auto result = BaseVector::create(
+        ROW({{"c0", INTEGER()}, {"", BIGINT()}}), 0, pool.get());
+    auto rowNum = result->asUnchecked<RowVector>()->childAt(1);
+    ASSERT_EQ(rowReader->next(3, result), 3);
+    ASSERT_NE(rowNum.get(), result->asUnchecked<RowVector>()->childAt(1).get());
+  }
+  {
+    SCOPED_TRACE("No reuse generated");
+    auto rowReader = reader->createRowReader(rowReaderOpts);
+    auto result = BaseVector::create(ROW({{"c0", INTEGER()}}), 0, pool.get());
+    ASSERT_EQ(rowReader->next(3, result), 3);
+    auto rowNum = result->asUnchecked<RowVector>()->childAt(1);
+    ASSERT_EQ(rowReader->next(3, result), 2);
+    ASSERT_NE(rowNum.get(), result->asUnchecked<RowVector>()->childAt(1).get());
+  }
+  {
+    SCOPED_TRACE("No reuse type mismatch");
+    auto rowReader = reader->createRowReader(rowReaderOpts);
+    auto result = BaseVector::create(
+        ROW({{"c0", INTEGER()}, {"", INTEGER()}}), 0, pool.get());
+    auto rowNum = result->asUnchecked<RowVector>()->childAt(1);
+    ASSERT_EQ(rowReader->next(3, result), 3);
+    ASSERT_NE(rowNum.get(), result->asUnchecked<RowVector>()->childAt(1).get());
   }
 }

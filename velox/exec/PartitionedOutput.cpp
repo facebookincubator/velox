@@ -24,6 +24,7 @@ BlockingReason Destination::advance(
     const std::vector<vector_size_t>& sizes,
     const RowVectorPtr& output,
     PartitionedOutputBufferManager& bufferManager,
+    const std::function<void()>& bufferReleaseFn,
     bool* atEnd,
     ContinueFuture* future) {
   if (row_ >= rows_.size()) {
@@ -34,12 +35,12 @@ BlockingReason Destination::advance(
       PartitionedOutput::kMinDestinationSize,
       (maxBytes * targetSizePct_) / 100);
   if (bytesInCurrent_ >= adjustedMaxBytes) {
-    return flush(bufferManager, future);
+    return flush(bufferManager, bufferReleaseFn, future);
   }
   auto firstRow = row_;
   for (; row_ < rows_.size(); ++row_) {
-    // TODO Add support for serializing partial ranges if
-    //  the full range is too big
+    // TODO: add support for serializing partial ranges if the full range is too
+    // big.
     for (vector_size_t i = 0; i < rows_[row_].size; i++) {
       bytesInCurrent_ += sizes[rows_[row_].begin + i];
     }
@@ -50,7 +51,7 @@ BlockingReason Destination::advance(
         *atEnd = true;
       }
       ++row_;
-      return flush(bufferManager, future);
+      return flush(bufferManager, bufferReleaseFn, future);
     }
   }
   serialize(output, firstRow, row_);
@@ -63,7 +64,7 @@ void Destination::serialize(
     vector_size_t begin,
     vector_size_t end) {
   if (!current_) {
-    current_ = std::make_unique<VectorStreamGroup>(memory_);
+    current_ = std::make_unique<VectorStreamGroup>(pool_);
     auto rowType = std::dynamic_pointer_cast<const RowType>(output->type());
     vector_size_t numRows = 0;
     for (vector_size_t i = begin; i < end; i++) {
@@ -76,6 +77,7 @@ void Destination::serialize(
 
 BlockingReason Destination::flush(
     PartitionedOutputBufferManager& bufferManager,
+    const std::function<void()>& bufferReleaseFn,
     ContinueFuture* future) {
   if (!current_) {
     return BlockingReason::kNotBlocked;
@@ -84,7 +86,7 @@ BlockingReason Destination::flush(
   constexpr int32_t kMinMessageSize = 128;
   auto listener = bufferManager.newListener();
   IOBufOutputStream stream(
-      *current_->mappedMemory(),
+      *current_->pool(),
       listener.get(),
       std::max<int64_t>(kMinMessageSize, current_->size()));
   current_->flush(&stream);
@@ -95,8 +97,44 @@ BlockingReason Destination::flush(
   return bufferManager.enqueue(
       taskId_,
       destination_,
-      std::make_unique<SerializedPage>(stream.getIOBuf()),
+      std::make_unique<SerializedPage>(stream.getIOBuf(bufferReleaseFn)),
       future);
+}
+
+PartitionedOutput::PartitionedOutput(
+    int32_t operatorId,
+    DriverCtx* FOLLY_NONNULL ctx,
+    const std::shared_ptr<const core::PartitionedOutputNode>& planNode)
+    : Operator(
+          ctx,
+          planNode->outputType(),
+          operatorId,
+          planNode->id(),
+          "PartitionedOutput"),
+      keyChannels_(toChannels(planNode->inputType(), planNode->keys())),
+      numDestinations_(planNode->numPartitions()),
+      replicateNullsAndAny_(planNode->isReplicateNullsAndAny()),
+      partitionFunction_(
+          numDestinations_ == 1
+              ? nullptr
+              : planNode->partitionFunctionSpec().create(numDestinations_)),
+      outputChannels_(calculateOutputChannels(
+          planNode->inputType(),
+          planNode->outputType(),
+          planNode->outputType())),
+      bufferManager_(PartitionedOutputBufferManager::getInstance()),
+      // NOTE: 'bufferReleaseFn_' holds a reference on the associated task to
+      // prevent it from deleting while there are output buffers being accessed
+      // out of the partitioned output buffer manager such as in Prestissimo,
+      // the http server holds the buffers while sending the data response.
+      bufferReleaseFn_([task = operatorCtx_->task()]() {}),
+      maxBufferedBytes_(ctx->task->queryCtx()
+                            ->queryConfig()
+                            .maxPartitionedOutputBufferSize()) {
+  if (numDestinations_ == 1 || planNode->isBroadcast()) {
+    VELOX_CHECK(keyChannels_.empty());
+    VELOX_CHECK_NULL(partitionFunction_);
+  }
 }
 
 void PartitionedOutput::initializeInput(RowVectorPtr input) {
@@ -124,8 +162,7 @@ void PartitionedOutput::initializeDestinations() {
   if (destinations_.empty()) {
     auto taskId = operatorCtx_->taskId();
     for (int i = 0; i < numDestinations_; ++i) {
-      destinations_.push_back(
-          std::make_unique<Destination>(taskId, i, mappedMemory_));
+      destinations_.push_back(std::make_unique<Destination>(taskId, i, pool()));
     }
   }
 }
@@ -160,8 +197,10 @@ void PartitionedOutput::estimateRowSizes() {
 
 void PartitionedOutput::addInput(RowVectorPtr input) {
   // TODO Report outputBytes as bytes after serialization
-  stats_.outputBytes += input->retainedSize();
-  stats_.outputPositions += input->size();
+  {
+    auto lockedStats = stats_.wlock();
+    lockedStats->addOutputVector(input->estimateFlatSize(), input->size());
+  }
 
   initializeInput(std::move(input));
 
@@ -253,6 +292,7 @@ RowVectorPtr PartitionedOutput::getOutput() {
           rowSize_,
           output_,
           *bufferManager,
+          bufferReleaseFn_,
           &atEnd,
           &future_);
       if (blockingReason_ != BlockingReason::kNotBlocked) {
@@ -278,7 +318,7 @@ RowVectorPtr PartitionedOutput::getOutput() {
           destination->serializedBytes() < kMinDestinationSize) {
         continue;
       }
-      destination->flush(*bufferManager, nullptr);
+      destination->flush(*bufferManager, bufferReleaseFn_, nullptr);
     }
     return nullptr;
   }
@@ -290,7 +330,7 @@ RowVectorPtr PartitionedOutput::getOutput() {
       if (destination->isFinished()) {
         continue;
       }
-      destination->flush(*bufferManager, nullptr);
+      destination->flush(*bufferManager, bufferReleaseFn_, nullptr);
       destination->setFinished();
     }
 

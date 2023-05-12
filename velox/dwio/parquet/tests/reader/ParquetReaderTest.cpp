@@ -23,7 +23,18 @@ using namespace facebook::velox::dwio::common;
 using namespace facebook::velox::dwio::parquet;
 using namespace facebook::velox::parquet;
 
+namespace {
+auto defaultPool = memory::addDefaultLeafMemoryPool();
+}
+
 class ParquetReaderTest : public ParquetReaderTestBase {};
+
+ParquetReader createReader(const std::string& path, const ReaderOptions& opts) {
+  return ParquetReader(
+      std::make_unique<BufferedInput>(
+          std::make_shared<LocalReadFile>(path), opts.getMemoryPool()),
+      opts);
+}
 
 TEST_F(ParquetReaderTest, parseSample) {
   // sample.parquet holds two columns (a: BIGINT, b: DOUBLE) and
@@ -33,10 +44,28 @@ TEST_F(ParquetReaderTest, parseSample) {
   //   b: [1.0..20.0]
   const std::string sample(getExampleFilePath("sample.parquet"));
 
-  ReaderOptions readerOptions;
-  ParquetReader reader(
-      std::make_unique<FileInputStream>(sample), readerOptions);
+  ReaderOptions readerOptions{defaultPool.get()};
+  ParquetReader reader = createReader(sample, readerOptions);
   EXPECT_EQ(reader.numberOfRows(), 20ULL);
+
+  auto type = reader.typeWithId();
+  EXPECT_EQ(type->size(), 2ULL);
+  auto col0 = type->childAt(0);
+  EXPECT_EQ(col0->type->kind(), TypeKind::BIGINT);
+  auto col1 = type->childAt(1);
+  EXPECT_EQ(col1->type->kind(), TypeKind::DOUBLE);
+  EXPECT_EQ(type->childByName("a"), col0);
+  EXPECT_EQ(type->childByName("b"), col1);
+}
+
+TEST_F(ParquetReaderTest, parseEmpty) {
+  // empty.parquet holds two columns (a: BIGINT, b: DOUBLE) and
+  // 0 rows.
+  const std::string empty(getExampleFilePath("empty.parquet"));
+
+  ReaderOptions readerOptions{defaultPool.get()};
+  ParquetReader reader = createReader(empty, readerOptions);
+  EXPECT_EQ(reader.numberOfRows(), 0ULL);
 
   auto type = reader.typeWithId();
   EXPECT_EQ(type->size(), 2ULL);
@@ -55,9 +84,8 @@ TEST_F(ParquetReaderTest, parseDate) {
   //   date: [1969-12-27 .. 1970-01-20]
   const std::string sample(getExampleFilePath("date.parquet"));
 
-  ReaderOptions readerOptions;
-  parquet::ParquetReader reader(
-      std::make_unique<FileInputStream>(sample), readerOptions);
+  ReaderOptions readerOptions{defaultPool.get()};
+  ParquetReader reader = createReader(sample, readerOptions);
 
   EXPECT_EQ(reader.numberOfRows(), 25ULL);
 
@@ -73,9 +101,8 @@ TEST_F(ParquetReaderTest, parseRowMapArray) {
   // ARRAY(INTEGER)) c1) c)
   const std::string sample(getExampleFilePath("row_map_array.parquet"));
 
-  ReaderOptions readerOptions;
-  parquet::ParquetReader reader(
-      std::make_unique<FileInputStream>(sample), readerOptions);
+  ReaderOptions readerOptions{defaultPool.get()};
+  ParquetReader reader = createReader(sample, readerOptions);
 
   EXPECT_EQ(reader.numberOfRows(), 1ULL);
 
@@ -102,4 +129,65 @@ TEST_F(ParquetReaderTest, parseRowMapArray) {
 
   auto col0_1_1_0 = col0_1_1->childAt(0);
   EXPECT_EQ(col0_1_1_0->type->kind(), TypeKind::INTEGER);
+}
+
+TEST_F(ParquetReaderTest, projectNoColumns) {
+  // This is the case for count(*).
+  auto rowType = ROW({}, {});
+  ReaderOptions readerOpts{defaultPool.get()};
+  ParquetReader reader =
+      createReader(getExampleFilePath("sample.parquet"), readerOpts);
+  RowReaderOptions rowReaderOpts;
+  rowReaderOpts.setScanSpec(makeScanSpec(rowType));
+  auto rowReader = reader.createRowReader(rowReaderOpts);
+  auto result = BaseVector::create(rowType, 1, pool_.get());
+  constexpr int kBatchSize = 100;
+  ASSERT_TRUE(rowReader->next(kBatchSize, result));
+  EXPECT_EQ(result->size(), 10);
+  ASSERT_TRUE(rowReader->next(kBatchSize, result));
+  EXPECT_EQ(result->size(), 10);
+  ASSERT_FALSE(rowReader->next(kBatchSize, result));
+}
+
+TEST_F(ParquetReaderTest, parseIntDecimal) {
+  // decimal_dict.parquet two columns (a: DECIMAL(7,2), b: DECIMAL(14,2)) and
+  // 6 rows.
+  // The physical type of the decimal columns:
+  //   a: int32
+  //   b: int64
+  // Data is in dictionary encoding:
+  //   a: [11.11, 11.11, 22.22, 22.22, 33.33, 33.33]
+  //   b: [11.11, 11.11, 22.22, 22.22, 33.33, 33.33]
+  auto rowType = ROW({"a", "b"}, {DECIMAL(7, 2), DECIMAL(14, 2)});
+  ReaderOptions readerOpts{defaultPool.get()};
+  const std::string decimal_dict(getExampleFilePath("decimal_dict.parquet"));
+
+  ParquetReader reader = createReader(decimal_dict, readerOpts);
+  RowReaderOptions rowReaderOpts;
+  rowReaderOpts.setScanSpec(makeScanSpec(rowType));
+  auto rowReader = reader.createRowReader(rowReaderOpts);
+
+  EXPECT_EQ(reader.numberOfRows(), 6ULL);
+
+  auto type = reader.typeWithId();
+  EXPECT_EQ(type->size(), 2ULL);
+  auto col0 = type->childAt(0);
+  auto col1 = type->childAt(1);
+  EXPECT_EQ(col0->type->kind(), TypeKind::BIGINT);
+  EXPECT_EQ(col1->type->kind(), TypeKind::BIGINT);
+
+  int64_t expectValues[3] = {1111, 2222, 3333};
+  auto result = BaseVector::create(rowType, 1, pool_.get());
+  rowReader->next(6, result);
+  EXPECT_EQ(result->size(), 6ULL);
+  auto decimals = result->as<RowVector>();
+  auto a = decimals->childAt(0)->asFlatVector<int64_t>()->rawValues();
+  auto b = decimals->childAt(1)->asFlatVector<int64_t>()->rawValues();
+  for (int i = 0; i < 3; i++) {
+    int index = 2 * i;
+    EXPECT_EQ(a[index], expectValues[i]);
+    EXPECT_EQ(a[index + 1], expectValues[i]);
+    EXPECT_EQ(b[index], expectValues[i]);
+    EXPECT_EQ(b[index + 1], expectValues[i]);
+  }
 }

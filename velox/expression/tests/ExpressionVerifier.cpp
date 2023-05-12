@@ -17,21 +17,13 @@
 #include "velox/expression/tests/ExpressionVerifier.h"
 #include "velox/common/base/Fs.h"
 #include "velox/expression/Expr.h"
-#include "velox/expression/tests/FuzzerToolkit.h"
 #include "velox/vector/VectorSaver.h"
 #include "velox/vector/fuzzer/VectorFuzzer.h"
+#include "velox/vector/tests/utils/VectorMaker.h"
 
 namespace facebook::velox::test {
 
 namespace {
-
-// File names used to persist data required for reproducing a failed test case.
-static constexpr std::string_view kInputVectorFileName = "input_vector";
-static constexpr std::string_view kIndicesOfLazyColumnsFileName =
-    "indices_of_lazy_columns";
-static constexpr std::string_view kResultVectorFileName = "result_vector";
-static constexpr std::string_view kExpressionInSqlFileName = "sql";
-
 void logRowVector(const RowVectorPtr& rowVector) {
   if (rowVector == nullptr) {
     return;
@@ -76,87 +68,66 @@ void compareVectors(const VectorPtr& left, const VectorPtr& right) {
   LOG(INFO) << "All results match.";
 }
 
-// Returns a copy of 'rowVector' but with the columns having indices listed in
-// 'columnsToWrapInLazy' wrapped in lazy encoding. 'columnsToWrapInLazy' should
-// be a sorted list of column indices.
-RowVectorPtr wrapColumnsInLazy(
-    RowVectorPtr rowVector,
-    const std::vector<column_index_t>& columnsToWrapInLazy) {
-  if (columnsToWrapInLazy.empty()) {
-    return rowVector;
-  }
-  std::vector<VectorPtr> children;
-  int listIndex = 0;
-  for (column_index_t i = 0; i < rowVector->childrenSize(); i++) {
-    auto child = rowVector->childAt(i);
-    VELOX_USER_CHECK_NOT_NULL(child);
-    VELOX_USER_CHECK(!child->isLazy());
-    if (listIndex < columnsToWrapInLazy.size() &&
-        i == columnsToWrapInLazy[listIndex]) {
-      listIndex++;
-      child = VectorFuzzer::wrapInLazyVector(child);
-    }
-    children.push_back(child);
-  }
-
-  BufferPtr newNulls = nullptr;
-  if (rowVector->nulls()) {
-    newNulls = AlignedBuffer::copy(rowVector->pool(), rowVector->nulls());
-  }
-
-  auto lazyRowVector = std::make_shared<RowVector>(
-      rowVector->pool(),
-      rowVector->type(),
-      newNulls,
-      rowVector->size(),
-      std::move(children));
-  LOG(INFO) << "Modified inputs for common eval path: ";
-  logRowVector(lazyRowVector);
-  return lazyRowVector;
-}
-
 } // namespace
 
-bool ExpressionVerifier::verify(
-    const core::TypedExprPtr& plan,
+ResultOrError ExpressionVerifier::verify(
+    const std::vector<core::TypedExprPtr>& plans,
     const RowVectorPtr& rowVector,
     VectorPtr&& resultVector,
     bool canThrow,
     std::vector<column_index_t> columnsToWrapInLazy) {
-  LOG(INFO) << "Executing expression: " << plan->toString();
-
+  for (int i = 0; i < plans.size(); ++i) {
+    LOG(INFO) << "Executing expression " << i << " : " << plans[i]->toString();
+  }
   logRowVector(rowVector);
 
   // Store data and expression in case of reproduction.
   VectorPtr copiedResult;
-  std::string sql;
+  std::string sql = "";
+
+  // Complex constants that aren't all expressible in sql
+  std::vector<VectorPtr> complexConstants;
   // Deep copy to preserve the initial state of result vector.
   if (!options_.reproPersistPath.empty()) {
     if (resultVector) {
       copiedResult = BaseVector::copy(*resultVector);
     }
-    std::vector<core::TypedExprPtr> typedExprs = {plan};
-    // Disabling constant folding in order to preserver the original
-    // expression
+    // Disabling constant folding in order to preserve the original expression
     try {
-      sql = exec::ExprSet(std::move(typedExprs), execCtx_, false)
-                .expr(0)
-                ->toSql();
+      auto exprs = exec::ExprSet(plans, execCtx_, false).exprs();
+      for (int i = 0; i < exprs.size(); ++i) {
+        if (i > 0) {
+          sql += ", ";
+        }
+        sql += exprs[i]->toSql(&complexConstants);
+      }
     } catch (const std::exception& e) {
       LOG(WARNING) << "Failed to generate SQL: " << e.what();
       sql = "<failed to generate>";
     }
     if (options_.persistAndRunOnce) {
-      persistReproInfo(rowVector, columnsToWrapInLazy, copiedResult, sql);
+      persistReproInfo(
+          rowVector, columnsToWrapInLazy, copiedResult, sql, complexConstants);
     }
   }
 
   // Execute expression plan using both common and simplified evals.
-  std::vector<VectorPtr> commonEvalResult(1);
-  std::vector<VectorPtr> simplifiedEvalResult(1);
-
-  commonEvalResult[0] = resultVector;
-
+  std::vector<VectorPtr> commonEvalResult;
+  std::vector<VectorPtr> simplifiedEvalResult;
+  if (resultVector && resultVector->encoding() == VectorEncoding::Simple::ROW) {
+    auto resultRowVector = resultVector->asUnchecked<RowVector>();
+    auto children = resultRowVector->children();
+    commonEvalResult.resize(children.size());
+    simplifiedEvalResult.resize(children.size());
+    for (int i = 0; i < children.size(); ++i) {
+      commonEvalResult[i] = children[i];
+    }
+  } else {
+    // For backwards compatibility where there was a single result and plan.
+    VELOX_CHECK_EQ(plans.size(), 1);
+    commonEvalResult.push_back(resultVector);
+    simplifiedEvalResult.resize(1);
+  }
   std::exception_ptr exceptionCommonPtr;
   std::exception_ptr exceptionSimplifiedPtr;
 
@@ -167,87 +138,115 @@ bool ExpressionVerifier::verify(
   // vector will be wrapped in lazy as specified in 'columnsToWrapInLazy'.
   try {
     exec::ExprSet exprSetCommon(
-        {plan}, execCtx_, !options_.disableConstantFolding);
-    auto inputRowVector = wrapColumnsInLazy(rowVector, columnsToWrapInLazy);
+        plans, execCtx_, !options_.disableConstantFolding);
+    auto inputRowVector = rowVector;
+    if (!columnsToWrapInLazy.empty()) {
+      inputRowVector =
+          VectorFuzzer::fuzzRowChildrenToLazy(rowVector, columnsToWrapInLazy);
+      LOG(INFO) << "Modified inputs for common eval path: ";
+      logRowVector(inputRowVector);
+    }
     exec::EvalCtx evalCtxCommon(execCtx_, &exprSetCommon, inputRowVector.get());
 
-    try {
-      exprSetCommon.eval(rows, evalCtxCommon, commonEvalResult);
-    } catch (...) {
-      if (!canThrow) {
-        LOG(ERROR)
-            << "Common eval wasn't supposed to throw, but it did. Aborting.";
-        throw;
-      }
-      exceptionCommonPtr = std::current_exception();
+    exprSetCommon.eval(rows, evalCtxCommon, commonEvalResult);
+  } catch (const VeloxUserError&) {
+    if (!canThrow) {
+      LOG(ERROR)
+          << "Common eval wasn't supposed to throw, but it did. Aborting.";
+      persistReproInfoIfNeeded(
+          rowVector, columnsToWrapInLazy, copiedResult, sql, complexConstants);
+      throw;
     }
-  } catch (...) {
     exceptionCommonPtr = std::current_exception();
+  } catch (...) {
+    LOG(ERROR)
+        << "Common eval: Exceptions other than VeloxUserError are not allowed.";
+    persistReproInfoIfNeeded(
+        rowVector, columnsToWrapInLazy, copiedResult, sql, complexConstants);
+    throw;
   }
 
   VLOG(1) << "Starting simplified eval execution.";
 
   // Execute with simplified expression eval path.
   try {
-    exec::ExprSetSimplified exprSetSimplified({plan}, execCtx_);
+    exec::ExprSetSimplified exprSetSimplified(plans, execCtx_);
     exec::EvalCtx evalCtxSimplified(
         execCtx_, &exprSetSimplified, rowVector.get());
 
-    try {
-      exprSetSimplified.eval(rows, evalCtxSimplified, simplifiedEvalResult);
-    } catch (...) {
-      if (!canThrow) {
-        LOG(ERROR)
-            << "Simplified eval wasn't supposed to throw, but it did. Aborting.";
-        throw;
-      }
-      exceptionSimplifiedPtr = std::current_exception();
-    }
-  } catch (...) {
+    exprSetSimplified.eval(rows, evalCtxSimplified, simplifiedEvalResult);
+  } catch (const VeloxUserError&) {
     exceptionSimplifiedPtr = std::current_exception();
+  } catch (...) {
+    LOG(ERROR)
+        << "Simplified eval: Exceptions other than VeloxUserError are not allowed.";
+    persistReproInfoIfNeeded(
+        rowVector, columnsToWrapInLazy, copiedResult, sql, complexConstants);
+    throw;
   }
 
   try {
-    // Compare results or exceptions (if any). Fail is anything is different.
+    // Compare results or exceptions (if any). Fail if anything is different.
     if (exceptionCommonPtr || exceptionSimplifiedPtr) {
       // Throws in case exceptions are not compatible. If they are compatible,
       // return false to signal that the expression failed.
       compareExceptions(exceptionCommonPtr, exceptionSimplifiedPtr);
-      return false;
+      return {nullptr, exceptionCommonPtr};
     } else {
       // Throws in case output is different.
-      compareVectors(commonEvalResult.front(), simplifiedEvalResult.front());
+      VELOX_CHECK_EQ(commonEvalResult.size(), plans.size());
+      VELOX_CHECK_EQ(simplifiedEvalResult.size(), plans.size());
+      for (int i = 0; i < plans.size(); ++i) {
+        compareVectors(commonEvalResult[i], simplifiedEvalResult[i]);
+      }
     }
   } catch (...) {
-    if (!options_.reproPersistPath.empty() && !options_.persistAndRunOnce) {
-      persistReproInfo(rowVector, columnsToWrapInLazy, copiedResult, sql);
-    }
+    persistReproInfoIfNeeded(
+        rowVector, columnsToWrapInLazy, copiedResult, sql, complexConstants);
     throw;
   }
 
   if (!options_.reproPersistPath.empty() && options_.persistAndRunOnce) {
-    // A guard to make sure it runs only once with persistAndRunOnce flag turned
-    // on. It shouldn't reach here normally since the flag is used to persist
-    // repro info for crash failures. But if it hasn't crashed by now, we still
-    // don't want another iteration.
+    // A guard to make sure it runs only once with persistAndRunOnce flag
+    // turned on. It shouldn't reach here normally since the flag is used to
+    // persist repro info for crash failures. But if it hasn't crashed by now,
+    // we still don't want another iteration.
     LOG(WARNING)
         << "Iteration succeeded with --persist_and_run_once flag enabled "
            "(expecting crash failure)";
     exit(0);
   }
 
-  return true;
+  return {
+      VectorMaker(commonEvalResult[0]->pool()).rowVector(commonEvalResult),
+      nullptr};
+}
+
+void ExpressionVerifier::persistReproInfoIfNeeded(
+    const VectorPtr& inputVector,
+    const std::vector<column_index_t>& columnsToWrapInLazy,
+    const VectorPtr& resultVector,
+    const std::string& sql,
+    const std::vector<VectorPtr>& complexConstants) {
+  if (options_.reproPersistPath.empty()) {
+    LOG(INFO) << "Skipping persistence because repro path is empty.";
+  } else if (!options_.persistAndRunOnce) {
+    persistReproInfo(
+        inputVector, columnsToWrapInLazy, resultVector, sql, complexConstants);
+  }
 }
 
 void ExpressionVerifier::persistReproInfo(
     const VectorPtr& inputVector,
     std::vector<column_index_t> columnsToWrapInLazy,
     const VectorPtr& resultVector,
-    const std::string& sql) {
+    const std::string& sql,
+    const std::vector<VectorPtr>& complexConstants) {
   std::string inputPath;
   std::string lazyListPath;
   std::string resultPath;
   std::string sqlPath;
+  std::string complexConstantsPath;
 
   const auto basePath = options_.reproPersistPath.c_str();
   if (!common::generateFileDirectory(basePath)) {
@@ -255,7 +254,7 @@ void ExpressionVerifier::persistReproInfo(
   }
 
   // Create a new directory
-  auto dirPath = generateFolderPath(basePath, "expressionVerifier");
+  auto dirPath = common::generateTempFolderPath(basePath, "expressionVerifier");
   if (!dirPath.has_value()) {
     LOG(INFO) << "Failed to create directory for persisting repro info.";
     return;
@@ -273,7 +272,7 @@ void ExpressionVerifier::persistReproInfo(
     lazyListPath =
         fmt::format("{}/{}", dirPath->c_str(), kIndicesOfLazyColumnsFileName);
     try {
-      saveVectorTofile<column_index_t>(
+      saveStdVectorToFile<column_index_t>(
           columnsToWrapInLazy, lazyListPath.c_str());
     } catch (std::exception& e) {
       lazyListPath = e.what();
@@ -291,22 +290,39 @@ void ExpressionVerifier::persistReproInfo(
   }
 
   // Saving sql
-  sqlPath = fmt::format("{}/{}", dirPath->c_str(), kExpressionInSqlFileName);
+  sqlPath = fmt::format("{}/{}", dirPath->c_str(), kExpressionSqlFileName);
   try {
     saveStringToFile(sql, sqlPath.c_str());
   } catch (std::exception& e) {
     sqlPath = e.what();
   }
+  // Saving complex constants
+  if (!complexConstants.empty()) {
+    complexConstantsPath =
+        fmt::format("{}/{}", dirPath->c_str(), kComplexConstantsFileName);
+    try {
+      saveVectorToFile(
+          VectorMaker(complexConstants[0]->pool())
+              .rowVector(complexConstants)
+              .get(),
+          complexConstantsPath.c_str());
+    } catch (std::exception& e) {
+      complexConstantsPath = e.what();
+    }
+  }
 
   std::stringstream ss;
-  ss << "Persisted input: --input_path " << inputPath;
+  ss << "Persisted input: --fuzzer_repro_path " << dirPath.value();
+  ss << " --input_path " << inputPath;
   if (resultVector) {
     ss << " --result_path " << resultPath;
   }
   ss << " --sql_path " << sqlPath;
   if (!columnsToWrapInLazy.empty()) {
-    // TODO: add support for consuming this in ExpressionRunner
     ss << " --lazy_column_list_path " << lazyListPath;
+  }
+  if (!complexConstants.empty()) {
+    ss << " --complex_constant_path " << complexConstantsPath;
   }
   LOG(INFO) << ss.str();
 }

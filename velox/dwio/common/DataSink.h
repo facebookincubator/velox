@@ -133,14 +133,14 @@ class DataSink : public Closeable {
   }
 };
 
-class FileSink : public DataSink {
+class LocalFileSink : public DataSink {
  public:
-  explicit FileSink(
+  explicit LocalFileSink(
       const std::string& name,
       const MetricsLogPtr& metricLogger = MetricsLog::voidLog(),
       IoStatistics* stats = nullptr);
 
-  ~FileSink() override {
+  ~LocalFileSink() override {
     destroy();
   }
 

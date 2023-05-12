@@ -16,14 +16,12 @@
 #include "velox/exec/RowContainer.h"
 #include <gtest/gtest.h>
 #include <algorithm>
-#include <array>
 #include <random>
 #include "velox/common/file/FileSystems.h"
 #include "velox/dwio/common/tests/utils/BatchMaker.h"
 #include "velox/exec/ContainerRowSerde.h"
 #include "velox/exec/VectorHasher.h"
 #include "velox/exec/tests/utils/RowContainerTestBase.h"
-#include "velox/exec/tests/utils/TempDirectoryPath.h"
 #include "velox/serializers/PrestoSerializer.h"
 
 using namespace facebook::velox;
@@ -271,7 +269,7 @@ class RowContainerTest : public exec::test::RowContainerTestBase {
     std::vector<TypePtr> types{input->type()};
 
     // Store the vector in the rowContainer.
-    auto rowContainer = std::make_unique<RowContainer>(types, mappedMemory_);
+    auto rowContainer = std::make_unique<RowContainer>(types, pool_.get());
     auto size = input->size();
     SelectivityVector allRows(size);
     std::vector<char*> rows(size);
@@ -465,10 +463,12 @@ TEST_F(RowContainerTest, types) {
       ROW(
           {{"bool_val", BOOLEAN()},
            {"tiny_val", TINYINT()},
+           {"long_decimal_val", DECIMAL(20, 3)},
            {"small_val", SMALLINT()},
            {"int_val", INTEGER()},
            {"long_val", BIGINT()},
            {"float_val", REAL()},
+           {"short_decimal_val", DECIMAL(10, 2)},
            {"double_val", DOUBLE()},
            {"string_val", VARCHAR()},
            {"array_val", ARRAY(VARCHAR())},
@@ -481,6 +481,8 @@ TEST_F(RowContainerTest, types) {
 
            {"bool_val2", BOOLEAN()},
            {"tiny_val2", TINYINT()},
+           {"long_decimal_val2", DECIMAL(20, 0)},
+           {"short_decimal_val2", DECIMAL(3, 3)},
            {"small_val2", SMALLINT()},
            {"int_val2", INTEGER()},
            {"long_val2", BIGINT()},
@@ -550,8 +552,8 @@ TEST_F(RowContainerTest, types) {
   }
   checkSizes(rows, *data);
   data->checkConsistency();
-  auto copy = std::static_pointer_cast<RowVector>(
-      BaseVector::create(batch->type(), batch->size(), pool_.get()));
+  auto copy =
+      BaseVector::create<RowVector>(batch->type(), batch->size(), pool_.get());
   for (auto column = 0; column < batch->childrenSize(); ++column) {
     testExtractColumn(*data, rows, column, batch->childAt(column));
 
@@ -688,11 +690,9 @@ TEST_F(RowContainerTest, rowSize) {
   EXPECT_EQ(29, data->nextOffset());
   // 2nd bit in first byte of flags.
   EXPECT_EQ(data->probedFlagOffset(), 8 * 8 + 1);
-  std::unordered_set<char*> rowSet;
   std::vector<char*> rows;
   for (int i = 0; i < kNumRows; ++i) {
     rows.push_back(data->newRow());
-    rowSet.insert(rows.back());
   }
   EXPECT_EQ(kNumRows, data->numRows());
   for (auto i = 0; i < rows.size(); ++i) {
@@ -715,6 +715,131 @@ TEST_F(RowContainerTest, rowSize) {
   EXPECT_EQ(0, data->listRows(&iter, kNumRows, rows.data()));
 
   EXPECT_EQ(rows, rowsFromContainer);
+}
+
+TEST_F(RowContainerTest, rowSizeWithNormalizedKey) {
+  auto data = makeRowContainer({SMALLINT()}, {VARCHAR()});
+  data->newRow();
+  data->disableNormalizedKeys();
+  data->newRow();
+  auto rowSize = data->fixedRowSize() + sizeof(normalized_key_t);
+  RowContainerIterator iter;
+  char* rows[2];
+  auto numRows = data->listRows(&iter, 2, rowSize - 1, rows);
+  ASSERT_EQ(numRows, 1);
+}
+
+TEST_F(RowContainerTest, estimateRowSize) {
+  auto numRows = 1000;
+
+  // Make a RowContainer with a fixed-length key column and a variable-length
+  // dependent column.
+  auto rowContainer = makeRowContainer({BIGINT()}, {VARCHAR()});
+  EXPECT_FALSE(rowContainer->estimateRowSize().has_value());
+
+  // Store rows to the container.
+  auto key =
+      vectorMaker_.flatVector<int64_t>(numRows, [](auto row) { return row; });
+  auto dependent = vectorMaker_.flatVector<StringView>(numRows, [](auto row) {
+    return StringView::makeInline(fmt::format("str {}", row));
+  });
+  SelectivityVector allRows(numRows);
+  DecodedVector decodedKey(*key, allRows);
+  DecodedVector decodedDependent(*dependent, allRows);
+  for (size_t i = 0; i < numRows; i++) {
+    auto row = rowContainer->newRow();
+    rowContainer->store(decodedKey, i, row, 0);
+    rowContainer->store(decodedDependent, i, row, 1);
+  }
+}
+
+class AggregateWithAlignment : public Aggregate {
+ public:
+  explicit AggregateWithAlignment(TypePtr resultType, int alignment)
+      : Aggregate(std::move(resultType)), alignment_(alignment) {}
+
+  int32_t accumulatorFixedWidthSize() const override {
+    return 42;
+  }
+
+  int32_t accumulatorAlignmentSize() const override {
+    return alignment_;
+  }
+
+  void initializeNewGroups(
+      char** /*groups*/,
+      folly::Range<const vector_size_t*> /*indices*/) override {}
+
+  void addRawInput(
+      char** /*groups*/,
+      const SelectivityVector& /*rows*/,
+      const std::vector<VectorPtr>& /*args*/,
+      bool /*mayPushdown*/) override {}
+
+  void extractValues(
+      char** /*groups*/,
+      int32_t /*numGroups*/,
+      VectorPtr* /*result*/) override {}
+
+  void addIntermediateResults(
+      char** /*groups*/,
+      const SelectivityVector& /*rows*/,
+      const std::vector<VectorPtr>& /*args*/,
+      bool /*mayPushdown*/) override {}
+
+  void addSingleGroupRawInput(
+      char* /*group*/,
+      const SelectivityVector& /*rows*/,
+      const std::vector<VectorPtr>& /*args*/,
+      bool /*mayPushdown*/) override {}
+
+  void addSingleGroupIntermediateResults(
+      char* /*group*/,
+      const SelectivityVector& /*rows*/,
+      const std::vector<VectorPtr>& /*args*/,
+      bool /*mayPushdown*/) override {}
+
+  void extractAccumulators(
+      char** /*groups*/,
+      int32_t /*numGroups*/,
+      VectorPtr* /*result*/) override {}
+
+ private:
+  int alignment_;
+};
+
+TEST_F(RowContainerTest, alignment) {
+  std::vector<std::unique_ptr<Aggregate>> aggregates;
+  aggregates.emplace_back(new AggregateWithAlignment(BIGINT(), 64));
+  RowContainer data(
+      {SMALLINT()},
+      true,
+      aggregates,
+      {},
+      false,
+      false,
+      true,
+      true,
+      pool_.get(),
+      ContainerRowSerde::instance());
+  constexpr int kNumRows = 100;
+  char* rows[kNumRows];
+  for (int i = 0; i < kNumRows; ++i) {
+    rows[i] = data.newRow();
+    ASSERT_EQ(reinterpret_cast<uintptr_t>(rows[i]) % 64, 0);
+    if (i > 0 && rows[i - 1] < rows[i]) {
+      ASSERT_LE(rows[i - 1] + data.fixedRowSize(), rows[i]);
+    }
+    if (i == 50) {
+      data.disableNormalizedKeys();
+    }
+  }
+  RowContainerIterator iter;
+  char* result[kNumRows];
+  ASSERT_EQ(data.listRows(&iter, kNumRows, 1e8, result), kNumRows);
+  for (int i = 0; i < kNumRows; ++i) {
+    ASSERT_EQ(result[i], rows[i]);
+  }
 }
 
 // Verify comparison of fringe float valuesg
@@ -798,12 +923,22 @@ TEST_F(RowContainerTest, partition) {
 }
 
 TEST_F(RowContainerTest, probedFlag) {
-  auto rowContainer =
-      makeRowContainer({BIGINT()}, {BIGINT()}, true /*isJoinBuild*/);
+  static const std::vector<std::unique_ptr<Aggregate>> kEmptyAggregates;
+  auto rowContainer = std::make_unique<RowContainer>(
+      std::vector<TypePtr>{BIGINT()}, // keyTypes
+      true, // nullableKeys
+      kEmptyAggregates,
+      std::vector<TypePtr>{BIGINT()}, // dependentTypes
+      true, // hasNext
+      true, // isJoinBuild
+      true, // hasProbedFlag
+      false, // hasNormalizedKey
+      pool_.get(),
+      ContainerRowSerde::instance());
 
   auto input = makeRowVector({
-      makeFlatVector<int64_t>({1, 2, 3, 4, 5}),
-      makeFlatVector<int64_t>({10, 20, 30, 40, 50}),
+      makeNullableFlatVector<int64_t>({1, 2, 3, 4, std::nullopt, 5}),
+      makeFlatVector<int64_t>({10, 20, 30, 40, -1, 50}),
   });
 
   auto size = input->size();
@@ -816,35 +951,88 @@ TEST_F(RowContainerTest, probedFlag) {
     rowContainer->store(decodedValue, i, rows[i], 1);
   }
 
-  // No 'probed' flags set. Verify all false.
+  // No 'probed' flags set. Verify all false, except for null key row.
   auto result = BaseVector::create<FlatVector<bool>>(BOOLEAN(), 1, pool());
-  rowContainer->extractProbedFlags(rows.data(), size, result);
+  rowContainer->extractProbedFlags(
+      rows.data(),
+      size,
+      true /*setNullForNullKeysRow*/,
+      false /*setNullForNonProbedRow*/,
+      result);
 
-  ASSERT_EQ(size, result->size());
-  for (auto i = 0; i < size; ++i) {
-    ASSERT_FALSE(result->isNullAt(i));
-    ASSERT_FALSE(result->valueAt(i));
-  }
+  auto expected = makeNullableFlatVector<bool>(
+      {false, false, false, false, std::nullopt, false});
+  assertEqualVectors(expected, result);
+
+  rowContainer->extractProbedFlags(
+      rows.data(),
+      size,
+      false /*setNullForNullKeysRow*/,
+      false /*setNullForNonProbedRow*/,
+      result);
+  assertEqualVectors(makeConstant(false, size), result);
+
+  rowContainer->extractProbedFlags(
+      rows.data(),
+      size,
+      true /*setNullForNullKeysRow*/,
+      true /*setNullForNonProbedRow*/,
+      result);
+  assertEqualVectors(makeNullConstant(TypeKind::BOOLEAN, size), result);
 
   // Set 'probed' flags for every other row.
   for (auto i = 0; i < size; i += 2) {
     rowContainer->setProbedFlag(rows.data() + i, 1);
   }
 
-  rowContainer->extractProbedFlags(rows.data(), size, result);
-  ASSERT_EQ(size, result->size());
-  for (auto i = 0; i < size; ++i) {
-    ASSERT_FALSE(result->isNullAt(i));
-    ASSERT_EQ(result->valueAt(i), i % 2 == 0);
-  }
+  rowContainer->extractProbedFlags(
+      rows.data(),
+      size,
+      true /*setNullForNullKeysRow*/,
+      false /*setNullForNonProbedRow*/,
+      result);
+
+  assertEqualVectors(
+      makeNullableFlatVector<bool>(
+          {true, false, true, false, std::nullopt, false}),
+      result);
+
+  rowContainer->extractProbedFlags(
+      rows.data(),
+      size,
+      true /*setNullForNullKeysRow*/,
+      true /*setNullForNonProbedRow*/,
+      result);
+
+  assertEqualVectors(
+      makeNullableFlatVector<bool>(
+          {true, std::nullopt, true, std::nullopt, std::nullopt, std::nullopt}),
+      result);
 
   // Set 'probed' flags for all rows.
   rowContainer->setProbedFlag(rows.data(), size);
 
-  rowContainer->extractProbedFlags(rows.data(), size, result);
-  ASSERT_EQ(size, result->size());
-  for (auto i = 0; i < size; ++i) {
-    ASSERT_FALSE(result->isNullAt(i));
-    ASSERT_TRUE(result->valueAt(i));
-  }
+  rowContainer->extractProbedFlags(
+      rows.data(),
+      size,
+      true /*setNullForNullKeysRow*/,
+      false /*setNullForNonProbedRow*/,
+      result);
+
+  assertEqualVectors(
+      makeNullableFlatVector<bool>(
+          {true, true, true, true, std::nullopt, true}),
+      result);
+
+  rowContainer->extractProbedFlags(
+      rows.data(),
+      size,
+      true /*setNullForNullKeysRow*/,
+      true /*setNullForNonProbedRow*/,
+      result);
+
+  assertEqualVectors(
+      makeNullableFlatVector<bool>(
+          {true, true, true, true, std::nullopt, true}),
+      result);
 }

@@ -17,6 +17,7 @@
 #include "velox/exec/Spiller.h"
 #include <folly/executors/IOThreadPoolExecutor.h>
 #include <unordered_set>
+#include "velox/common/base/RuntimeMetrics.h"
 #include "velox/common/base/tests/GTestUtils.h"
 #include "velox/common/testutil/TestValue.h"
 #include "velox/exec/HashPartitionFunction.h"
@@ -31,6 +32,22 @@ using namespace facebook::velox::common::testutil;
 using facebook::velox::filesystems::FileSystem;
 
 namespace {
+// Class to write runtime stats in the tests to the stats container.
+class TestRuntimeStatWriter : public BaseRuntimeStatWriter {
+ public:
+  explicit TestRuntimeStatWriter(
+      std::unordered_map<std::string, RuntimeMetric>& stats)
+      : stats_{stats} {}
+
+  void addRuntimeStat(const std::string& name, const RuntimeCounter& value)
+      override {
+    addOperatorRuntimeStats(name, value, stats_);
+  }
+
+ private:
+  std::unordered_map<std::string, RuntimeMetric>& stats_;
+};
+
 struct TestParam {
   Spiller::Type type;
   // Specifies the spill executor pool size. If the size is zero, then spill
@@ -93,7 +110,14 @@ class SpillerTest : public exec::test::RowContainerTestBase {
         type_(param.type),
         executorPoolSize_(param.poolSize),
         hashBits_(0, type_ == Spiller::Type::kOrderBy ? 0 : 2),
-        numPartitions_(hashBits_.numPartitions()) {}
+        numPartitions_(hashBits_.numPartitions()),
+        statWriter_(std::make_unique<TestRuntimeStatWriter>(stats_)) {
+    setThreadLocalRunTimeStatWriter(statWriter_.get());
+  }
+
+  ~SpillerTest() {
+    setThreadLocalRunTimeStatWriter(nullptr);
+  }
 
   void SetUp() override {
     RowContainerTestBase::SetUp();
@@ -122,6 +146,10 @@ class SpillerTest : public exec::test::RowContainerTestBase {
     std::iota(std::begin(keyChannels_), std::end(keyChannels_), 0);
     spillIndicesBuffers_.resize(numPartitions_);
     numPartitionInputs_.resize(numPartitions_, 0);
+    // Check spiller memory pool properties.
+    ASSERT_EQ(Spiller::spillPool().name(), "spilling");
+    ASSERT_EQ(Spiller::spillPool().kind(), memory::MemoryPool::Kind::kLeaf);
+    ASSERT_TRUE(Spiller::spillPool().threadSafe());
   }
 
  protected:
@@ -155,7 +183,7 @@ class SpillerTest : public exec::test::RowContainerTestBase {
       return;
     }
     // Verify the spilled file exist on file system.
-    const int numSpilledFiles = spiller_->spilledFiles();
+    const auto numSpilledFiles = spiller_->spilledFiles();
     EXPECT_GT(numSpilledFiles, 0);
     const auto spilledFileSet = spiller_->state().testingSpilledFilePaths();
     EXPECT_EQ(numSpilledFiles, spilledFileSet.size());
@@ -175,6 +203,7 @@ class SpillerTest : public exec::test::RowContainerTestBase {
       EXPECT_TRUE(unspilledPartitionRows.empty());
       EXPECT_EQ(0, rowContainer_->numRows());
       EXPECT_EQ(numPartitions_, spiller_->stats().spilledPartitions);
+      EXPECT_EQ(numSpilledFiles, spiller_->stats().spilledFiles);
       for (int i = 0; i < numPartitions_; ++i) {
         expectedSpillPartitions.insert(i);
       }
@@ -183,6 +212,7 @@ class SpillerTest : public exec::test::RowContainerTestBase {
     } else {
       EXPECT_GE(numPartitions_, spiller_->stats().spilledPartitions);
       EXPECT_GE(numPartitions_, spiller_->state().spilledPartitionSet().size());
+      EXPECT_GE(numSpilledFiles, spiller_->stats().spilledFiles);
     }
     // Assert we can't call any spill function after the spiller has been
     // finalized.
@@ -193,10 +223,9 @@ class SpillerTest : public exec::test::RowContainerTestBase {
     verifySortedSpillData(outputBatchSize);
 
     spiller_.reset();
-    // Verify the spilled file has been removed from file system after spiller
-    // destruction.
-    for (auto spilledFile : spilledFileSet) {
-      EXPECT_ANY_THROW(fs_->openFileForRead(spilledFile));
+    // Verify the spilled files are still there after spiller destruction.
+    for (const auto& spilledFile : spilledFileSet) {
+      EXPECT_NO_THROW(fs_->exists(spilledFile));
     }
   }
 
@@ -365,6 +394,7 @@ class SpillerTest : public exec::test::RowContainerTestBase {
       uint64_t minSpillRunSize,
       bool makeError) {
     stats_.clear();
+
     if (type_ == Spiller::Type::kHashJoinProbe) {
       // kHashJoinProbe doesn't have associated row container.
       spiller_ = std::make_unique<Spiller>(
@@ -375,7 +405,6 @@ class SpillerTest : public exec::test::RowContainerTestBase {
           targetFileSize,
           minSpillRunSize,
           *pool_,
-          stats_,
           executor());
     } else if (type_ == Spiller::Type::kOrderBy) {
       // We spill 'data' in one partition in type of kOrderBy, otherwise in 4
@@ -391,7 +420,6 @@ class SpillerTest : public exec::test::RowContainerTestBase {
           targetFileSize,
           minSpillRunSize,
           *pool_,
-          stats_,
           executor());
     } else {
       spiller_ = std::make_unique<Spiller>(
@@ -406,7 +434,6 @@ class SpillerTest : public exec::test::RowContainerTestBase {
           targetFileSize,
           minSpillRunSize,
           *pool_,
-          stats_,
           executor());
     }
     if (type_ == Spiller::Type::kOrderBy) {
@@ -727,6 +754,73 @@ class SpillerTest : public exec::test::RowContainerTestBase {
     }
   }
 
+  void verifyNonSortedSpillData(
+      const SpillPartitionNumSet& spillPartitionNumSet,
+      const std::vector<std::vector<RowVectorPtr>>& inputsByPartition) {
+    ASSERT_TRUE(
+        type_ == Spiller::Type::kHashJoinBuild ||
+        type_ == Spiller::Type::kHashJoinProbe);
+
+    SpillPartitionSet spillPartitionSet;
+    spiller_->finishSpill(spillPartitionSet);
+    ASSERT_ANY_THROW(spiller_->spill(0, nullptr));
+    ASSERT_ANY_THROW(spiller_->spill({0}));
+    ASSERT_EQ(spillPartitionSet.size(), spillPartitionNumSet.size());
+
+    for (auto& spillPartitionEntry : spillPartitionSet) {
+      const int partition = spillPartitionEntry.first.partitionNumber();
+      ASSERT_EQ(
+          hashBits_.begin(), spillPartitionEntry.first.partitionBitOffset());
+      auto reader = spillPartitionEntry.second->createReader();
+      if (type_ == Spiller::Type::kHashJoinProbe) {
+        // For hash probe type, we append each input vector as one batch in
+        // spill file so that we can do one-to-one comparison.
+        for (int i = 0; i < inputsByPartition[partition].size(); ++i) {
+          const auto& expectedVector = inputsByPartition[partition][i];
+          if (expectedVector == nullptr) {
+            continue;
+          }
+          RowVectorPtr outputVector;
+          ASSERT_TRUE(reader->nextBatch(outputVector));
+          for (int row = 0; row < expectedVector->size(); ++row) {
+            ASSERT_EQ(
+                expectedVector->compare(
+                    outputVector.get(), row, row, CompareFlags{}),
+                0);
+          }
+        }
+      } else {
+        // For hash build type, spill partition operation might generate
+        // different number of batches in spill file, then we have to do row by
+        // row comparison.
+        RowVectorPtr outputVector;
+        int outputRow = 0;
+        for (int i = 0; i < inputsByPartition[partition].size(); ++i) {
+          const auto& expectedVector = inputsByPartition[partition][i];
+          if (expectedVector == nullptr) {
+            continue;
+          }
+          for (int row = 0; row < expectedVector->size(); ++row) {
+            if (outputVector == nullptr || outputRow >= outputVector->size()) {
+              ASSERT_TRUE(reader->nextBatch(outputVector))
+                  << "input row: " << row << " input size "
+                  << expectedVector->size() << " output row " << outputRow
+                  << " output size " << outputVector->size() << " batch " << i;
+              outputRow = 0;
+            }
+            ASSERT_EQ(
+                expectedVector->compare(
+                    outputVector.get(), row, outputRow++, CompareFlags{}),
+                0)
+                << "input row: " << row << " input size "
+                << expectedVector->size() << " output row " << outputRow - 1
+                << " output size " << outputVector->size() << " batch " << i;
+          }
+        }
+      }
+    }
+  }
+
   folly::IOThreadPoolExecutor* executor() {
     static std::mutex mutex;
     std::lock_guard<std::mutex> l(mutex);
@@ -754,6 +848,7 @@ class SpillerTest : public exec::test::RowContainerTestBase {
   const HashBitRange hashBits_;
   const int32_t numPartitions_;
   std::unordered_map<std::string, RuntimeMetric> stats_;
+  std::unique_ptr<TestRuntimeStatWriter> statWriter_;
   folly::Random::DefaultGenerator rng_;
   std::unique_ptr<folly::IOThreadPoolExecutor> executor_;
   std::shared_ptr<TempDirectoryPath> tempDirPath_;
@@ -813,7 +908,6 @@ class NoHashJoinNoOrderBy : public SpillerTest,
 TEST_P(NoHashJoin, spilFew) {
   // Test with distinct sort keys.
   testSortedSpill(10, 1);
-  return;
   testSortedSpill(10, 1, 0, false);
   testSortedSpill(10, 1, 32);
   testSortedSpill(10, 1, 32, false);
@@ -906,8 +1000,8 @@ TEST_P(NoHashJoinNoOrderBy, spillWithEmptyPartitions) {
     ASSERT_TRUE(spiller_->isAnySpilled());
     ASSERT_FALSE(spiller_->isAllSpilled());
 
-    int32_t numNonEmptyPartitions = 0;
-    for (int partition = 0; partition < numPartitions_; ++partition) {
+    uint64_t numNonEmptyPartitions = 0;
+    for (auto partition = 0; partition < numPartitions_; ++partition) {
       if (testData.rowsPerPartition[partition] != 0) {
         ASSERT_TRUE(spiller_->state().isPartitionSpilled(partition));
         ++numNonEmptyPartitions;
@@ -916,7 +1010,7 @@ TEST_P(NoHashJoinNoOrderBy, spillWithEmptyPartitions) {
             << partition;
       }
     }
-    const int numSpilledFiles = spiller_->spilledFiles();
+    const auto numSpilledFiles = spiller_->spilledFiles();
     ASSERT_EQ(numNonEmptyPartitions, numSpilledFiles);
     // Expect no non-spilling partitions.
     EXPECT_TRUE(spiller_->finishSpill().empty());
@@ -985,6 +1079,62 @@ TEST_P(NoHashJoinNoOrderBy, spillWithNonSpillingPartitions) {
     verifySortedSpillData();
     EXPECT_LT(0, spiller_->stats().spilledRows);
     EXPECT_GT(numRows, spiller_->stats().spilledRows);
+  }
+}
+
+TEST_P(NoHashJoin, spillPartition) {
+  {
+    setupSpillData(rowType_, numKeys_, 1'000, 1, nullptr, {});
+    sortSpillData();
+    setupSpiller(100'000, 0, false);
+    std::vector<Spiller::SpillableStats> statsList;
+    spiller_->fillSpillRuns(statsList);
+    spiller_->spill({0});
+    spiller_->spill({0});
+    spiller_->spill({std::min<uint32_t>(1, numPartitions_ - 1)});
+    spiller_->spill({std::min<uint32_t>(1, numPartitions_ - 1)});
+    spiller_->finishSpill();
+    verifySortedSpillData();
+    VELOX_ASSERT_THROW(spiller_->spill({0}), "");
+  }
+  {
+    setupSpillData(rowType_, numKeys_, 1'000, 1, nullptr, {});
+    sortSpillData();
+    setupSpiller(100'000, 0, false);
+    std::vector<Spiller::SpillableStats> statsList;
+    spiller_->fillSpillRuns(statsList);
+    std::vector<uint32_t> spillPartitionNums(numPartitions_);
+    std::iota(spillPartitionNums.begin(), spillPartitionNums.end(), 0);
+    spiller_->spill(SpillPartitionNumSet(
+        spillPartitionNums.begin(), spillPartitionNums.end()));
+    ASSERT_TRUE(spiller_->isAllSpilled());
+    spiller_->spill(SpillPartitionNumSet(
+        spillPartitionNums.begin(), spillPartitionNums.end()));
+    ASSERT_TRUE(spiller_->isAllSpilled());
+    spiller_->finishSpill();
+    ASSERT_TRUE(spiller_->isAllSpilled());
+    verifySortedSpillData();
+    VELOX_ASSERT_THROW(
+        spiller_->spill(SpillPartitionNumSet(
+            spillPartitionNums.begin(), spillPartitionNums.end())),
+        "");
+  }
+  {
+    setupSpillData(rowType_, numKeys_, 1'000, 1, nullptr, {});
+    sortSpillData();
+    setupSpiller(100'000, 0, false);
+    std::vector<Spiller::SpillableStats> statsList;
+    spiller_->fillSpillRuns(statsList);
+    std::vector<uint32_t> spillPartitionNums(numPartitions_);
+    std::iota(spillPartitionNums.begin(), spillPartitionNums.end(), 0);
+    spiller_->spill();
+    ASSERT_TRUE(spiller_->isAllSpilled());
+    spiller_->spill();
+    ASSERT_TRUE(spiller_->isAllSpilled());
+    spiller_->finishSpill();
+    ASSERT_TRUE(spiller_->isAllSpilled());
+    verifySortedSpillData();
+    VELOX_ASSERT_THROW(spiller_->spill({}), "");
   }
 }
 
@@ -1061,6 +1211,80 @@ TEST_P(NoHashJoinNoOrderBy, minSpillRunSize) {
   }
 }
 
+class HashJoinBuildOnly : public SpillerTest,
+                          public testing::WithParamInterface<TestParam> {
+ public:
+  HashJoinBuildOnly() : SpillerTest(GetParam()) {}
+
+  static std::vector<TestParam> getTestParams() {
+    return TestParamsBuilder{
+        .typesToExclude =
+            {Spiller::Type::kAggregate,
+             Spiller::Type::kHashJoinProbe,
+             Spiller::Type::kOrderBy}}
+        .getTestParams();
+  }
+};
+
+TEST_P(HashJoinBuildOnly, spillPartition) {
+  {
+    setupSpillData(rowType_, numKeys_, 1'000, 1, nullptr, {});
+    std::vector<std::vector<RowVectorPtr>> vectorsByPartition(numPartitions_);
+    HashPartitionFunction spillHashFunction(hashBits_, rowType_, keyChannels_);
+    splitByPartition(rowVector_, spillHashFunction, vectorsByPartition);
+    setupSpiller(100'000, 0, false);
+    std::vector<Spiller::SpillableStats> statsList;
+    spiller_->fillSpillRuns(statsList);
+    spiller_->spill({0});
+    spiller_->spill({0});
+    spiller_->spill({std::min<uint32_t>(1, numPartitions_ - 1)});
+    spiller_->spill({std::min<uint32_t>(1, numPartitions_ - 1)});
+    verifyNonSortedSpillData(
+        {0, std::min<uint32_t>(1, numPartitions_ - 1)}, vectorsByPartition);
+    VELOX_ASSERT_THROW(spiller_->spill({0}), "");
+    VELOX_ASSERT_THROW(
+        spiller_->spill({std::min<uint32_t>(1, numPartitions_ - 1)}), "");
+  }
+  {
+    setupSpillData(rowType_, numKeys_, 1'000, 1, nullptr, {});
+    std::vector<std::vector<RowVectorPtr>> vectorsByPartition(numPartitions_);
+    HashPartitionFunction spillHashFunction(hashBits_, rowType_, keyChannels_);
+    splitByPartition(rowVector_, spillHashFunction, vectorsByPartition);
+    setupSpiller(100'000, 0, false);
+    std::vector<Spiller::SpillableStats> statsList;
+    spiller_->fillSpillRuns(statsList);
+    std::vector<uint32_t> spillPartitionNums(numPartitions_);
+    std::iota(spillPartitionNums.begin(), spillPartitionNums.end(), 0);
+    SpillPartitionNumSet spillPartitionSet(
+        spillPartitionNums.begin(), spillPartitionNums.end());
+    spiller_->spill(spillPartitionSet);
+    ASSERT_TRUE(spiller_->isAllSpilled());
+    spiller_->spill(spillPartitionSet);
+    ASSERT_TRUE(spiller_->isAllSpilled());
+    verifyNonSortedSpillData(spillPartitionSet, vectorsByPartition);
+    VELOX_ASSERT_THROW(spiller_->spill(spillPartitionSet), "");
+  }
+  {
+    setupSpillData(rowType_, numKeys_, 1'000, 1, nullptr, {});
+    setupSpiller(100'000, 0, false);
+    std::vector<std::vector<RowVectorPtr>> vectorsByPartition(numPartitions_);
+    HashPartitionFunction spillHashFunction(hashBits_, rowType_, keyChannels_);
+    splitByPartition(rowVector_, spillHashFunction, vectorsByPartition);
+    std::vector<Spiller::SpillableStats> statsList;
+    spiller_->fillSpillRuns(statsList);
+    spiller_->spill();
+    ASSERT_TRUE(spiller_->isAllSpilled());
+    spiller_->spill();
+    ASSERT_TRUE(spiller_->isAllSpilled());
+    std::vector<uint32_t> spillPartitionNums(numPartitions_);
+    std::iota(spillPartitionNums.begin(), spillPartitionNums.end(), 0);
+    SpillPartitionNumSet spillPartitionSet(
+        spillPartitionNums.begin(), spillPartitionNums.end());
+    verifyNonSortedSpillData(spillPartitionSet, vectorsByPartition);
+    VELOX_ASSERT_THROW(spiller_->spill({}), "");
+  }
+}
+
 VELOX_INSTANTIATE_TEST_SUITE_P(
     SpillerTest,
     AllTypes,
@@ -1076,31 +1300,41 @@ VELOX_INSTANTIATE_TEST_SUITE_P(
     NoHashJoinNoOrderBy,
     testing::ValuesIn(NoHashJoinNoOrderBy::getTestParams()));
 
+VELOX_INSTANTIATE_TEST_SUITE_P(
+    SpillerTest,
+    HashJoinBuildOnly,
+    testing::ValuesIn(HashJoinBuildOnly::getTestParams()));
+
 TEST(SpillerTest, stats) {
   Spiller::Stats sumStats;
   EXPECT_EQ(0, sumStats.spilledRows);
   EXPECT_EQ(0, sumStats.spilledBytes);
   EXPECT_EQ(0, sumStats.spilledPartitions);
+  EXPECT_EQ(0, sumStats.spilledFiles);
 
   Spiller::Stats stats;
   stats.spilledRows = 10;
   stats.spilledBytes = 100;
   stats.spilledPartitions = 2;
+  stats.spilledFiles = 3;
 
   sumStats += stats;
   EXPECT_EQ(stats.spilledRows, sumStats.spilledRows);
   EXPECT_EQ(stats.spilledBytes, sumStats.spilledBytes);
   EXPECT_EQ(stats.spilledPartitions, sumStats.spilledPartitions);
+  EXPECT_EQ(stats.spilledFiles, sumStats.spilledFiles);
 
   sumStats += stats;
   EXPECT_EQ(2 * stats.spilledRows, sumStats.spilledRows);
   EXPECT_EQ(2 * stats.spilledBytes, sumStats.spilledBytes);
   EXPECT_EQ(2 * stats.spilledPartitions, sumStats.spilledPartitions);
+  EXPECT_EQ(2 * stats.spilledFiles, sumStats.spilledFiles);
 
   sumStats += stats;
   EXPECT_EQ(3 * stats.spilledRows, sumStats.spilledRows);
   EXPECT_EQ(3 * stats.spilledBytes, sumStats.spilledBytes);
   EXPECT_EQ(3 * stats.spilledPartitions, sumStats.spilledPartitions);
+  EXPECT_EQ(3 * stats.spilledFiles, sumStats.spilledFiles);
 }
 
 TEST(SpillerTest, spillLevel) {

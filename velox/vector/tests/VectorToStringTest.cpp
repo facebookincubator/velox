@@ -83,12 +83,12 @@ TEST_F(VectorToStringTest, row) {
   ASSERT_EQ(
       row->toString(),
       "[ROW ROW<c0:INTEGER,c1:REAL,c2:BOOLEAN>: 3 elements, no nulls]");
-  ASSERT_EQ(row->toString(2), "{3, 444.55999755859375, 1}");
+  ASSERT_EQ(row->toString(2), "{3, 444.55999755859375, true}");
   ASSERT_EQ(
       row->toString(0, 10),
-      "0: {1, 10.100000381469727, 1}\n"
-      "1: {2, 2.299999952316284, 1}\n"
-      "2: {3, 444.55999755859375, 1}");
+      "0: {1, 10.100000381469727, true}\n"
+      "1: {2, 2.299999952316284, true}\n"
+      "2: {3, 444.55999755859375, true}");
 }
 
 TEST_F(VectorToStringTest, opaque) {
@@ -107,7 +107,7 @@ TEST_F(VectorToStringTest, decimals) {
       {1000265, 35610, -314159, 7, 0}, DECIMAL(10, 3));
   ASSERT_EQ(
       shortDecimalFlatVector->toString(),
-      "[FLAT SHORT_DECIMAL(10,3): 5 elements, no nulls]");
+      "[FLAT DECIMAL(10,3): 5 elements, no nulls]");
   ASSERT_EQ(
       shortDecimalFlatVector->toString(0, 5),
       "0: 1000.265\n"
@@ -120,7 +120,7 @@ TEST_F(VectorToStringTest, decimals) {
       {1000265, 35610, -314159, 7, 0}, DECIMAL(20, 4));
   ASSERT_EQ(
       longDecimalFlatVector->toString(),
-      "[FLAT LONG_DECIMAL(20,4): 5 elements, no nulls]");
+      "[FLAT DECIMAL(20,4): 5 elements, no nulls]");
   ASSERT_EQ(
       longDecimalFlatVector->toString(0, 5),
       "0: 100.0265\n"
@@ -135,7 +135,7 @@ TEST_F(VectorToStringTest, nullableDecimals) {
       {1000265, 35610, -314159, 7, std::nullopt}, DECIMAL(10, 3));
   ASSERT_EQ(
       shortDecimalFlatVector->toString(),
-      "[FLAT SHORT_DECIMAL(10,3): 5 elements, 1 nulls]");
+      "[FLAT DECIMAL(10,3): 5 elements, 1 nulls]");
   ASSERT_EQ(
       shortDecimalFlatVector->toString(0, 5),
       "0: 1000.265\n"
@@ -148,7 +148,7 @@ TEST_F(VectorToStringTest, nullableDecimals) {
       {1000265, 35610, -314159, 7, std::nullopt}, DECIMAL(20, 4));
   ASSERT_EQ(
       longDecimalFlatVector->toString(),
-      "[FLAT LONG_DECIMAL(20,4): 5 elements, 1 nulls]");
+      "[FLAT DECIMAL(20,4): 5 elements, 1 nulls]");
   ASSERT_EQ(
       longDecimalFlatVector->toString(0, 5),
       "0: 100.0265\n"
@@ -301,5 +301,34 @@ TEST_F(VectorToStringTest, printIndices) {
   indices = makeIndices({34, 79, 11, 0, 0, 33});
   EXPECT_EQ(
       printIndices(indices), "5 unique indices out of 6: 34, 79, 11, 0, 0, 33");
+}
+
+TEST_F(VectorToStringTest, indexOverflow) {
+  // No nulls.
+  auto flat = makeFlatVector<int32_t>({1, 2, 3});
+  ASSERT_THROW(flat->toString(4), VeloxException);
+}
+
+TEST_F(VectorToStringTest, constantgPrimitiveTypes) {
+  auto flat = makeFlatVector<int64_t>(100, [](vector_size_t i) { return i; });
+
+  // Index in values vector > constant vector size.
+  auto constantVector = BaseVector::wrapInConstant(10, 20, flat);
+  EXPECT_EQ(
+      constantVector->toString(true), "[CONSTANT BIGINT: 10 elements, 20]");
+
+  // Empty vector.
+  constantVector->resize(0);
+  EXPECT_EQ(
+      constantVector->toString(true), "[CONSTANT BIGINT: 0 elements, 20]");
+
+  // Null constant.
+  auto nulls = vectorMaker_.flatVectorNullable<int64_t>({std::nullopt});
+  auto nullConstant = BaseVector::wrapInConstant(20, 0, nulls);
+  EXPECT_EQ(
+      nullConstant->toString(true), "[CONSTANT BIGINT: 20 elements, null]");
+  nullConstant->resize(0);
+  EXPECT_EQ(
+      nullConstant->toString(true), "[CONSTANT BIGINT: 0 elements, null]");
 }
 } // namespace facebook::velox::test

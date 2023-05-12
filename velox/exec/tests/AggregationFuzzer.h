@@ -18,5 +18,9 @@
 #include "velox/exec/Aggregate.h"
 
 namespace facebook::velox::exec::test {
-void aggregateFuzzer(AggregateFunctionSignatureMap signatureMap, size_t seed);
+void aggregateFuzzer(
+    AggregateFunctionSignatureMap signatureMap,
+    size_t seed,
+    const std::unordered_map<std::string, std::string>&
+        orderDependentFunctions);
 }

@@ -14,6 +14,7 @@
  * limitations under the License.
  */
 
+#include <gmock/gmock.h>
 #include <gtest/gtest.h>
 
 #include "velox/common/memory/Memory.h"
@@ -74,12 +75,11 @@ class VectorFuzzerTest : public testing::Test {
     }
   }
 
- private:
-  std::unique_ptr<memory::MemoryPool> pool_{
-      memory::getDefaultScopedMemoryPool()};
-};
+  void validateMaxSizes(VectorPtr vector, size_t maxSize);
 
-// TODO: add coverage for other VectorFuzzer methods.
+ private:
+  std::shared_ptr<memory::MemoryPool> pool_{memory::addDefaultLeafMemoryPool()};
+};
 
 TEST_F(VectorFuzzerTest, flatPrimitive) {
   VectorFuzzer::Options opts;
@@ -98,7 +98,8 @@ TEST_F(VectorFuzzerTest, flatPrimitive) {
       TIMESTAMP(),
       INTERVAL_DAY_TIME(),
       UNKNOWN(),
-  };
+      fuzzer.randShortDecimalType(),
+      fuzzer.randLongDecimalType()};
 
   for (const auto& type : types) {
     vector = fuzzer.fuzzFlat(type);
@@ -225,6 +226,18 @@ TEST_F(VectorFuzzerTest, constants) {
   ASSERT_EQ(VectorEncoding::Simple::CONSTANT, vector->encoding());
   ASSERT_FALSE(vector->mayHaveNulls());
 
+  auto shortDecimalType = fuzzer.randShortDecimalType();
+  vector = fuzzer.fuzzConstant(shortDecimalType);
+  ASSERT_TRUE(vector->type()->kindEquals(shortDecimalType));
+  ASSERT_EQ(VectorEncoding::Simple::CONSTANT, vector->encoding());
+  ASSERT_FALSE(vector->mayHaveNulls());
+
+  auto longDecimalType = fuzzer.randLongDecimalType();
+  vector = fuzzer.fuzzConstant(longDecimalType);
+  ASSERT_TRUE(vector->type()->kindEquals(longDecimalType));
+  ASSERT_EQ(VectorEncoding::Simple::CONSTANT, vector->encoding());
+  ASSERT_FALSE(vector->mayHaveNulls());
+
   // Non-null complex types.
   vector = fuzzer.fuzzConstant(MAP(BIGINT(), SMALLINT()));
   ASSERT_TRUE(vector->type()->kindEquals(MAP(BIGINT(), SMALLINT())));
@@ -269,6 +282,7 @@ TEST_F(VectorFuzzerTest, constantsNull) {
 
 TEST_F(VectorFuzzerTest, array) {
   VectorFuzzer::Options opts;
+  opts.containerVariableLength = false;
   VectorFuzzer fuzzer(opts, pool());
 
   // 1 elements per array.
@@ -324,6 +338,7 @@ TEST_F(VectorFuzzerTest, array) {
 
 TEST_F(VectorFuzzerTest, map) {
   VectorFuzzer::Options opts;
+  opts.containerVariableLength = false;
   VectorFuzzer fuzzer(opts, pool());
 
   // 1 elements per array.
@@ -391,9 +406,76 @@ TEST_F(VectorFuzzerTest, row) {
 
   // Composable API.
   vector = fuzzer.fuzzRow(
-      {fuzzer.fuzzFlat(REAL(), 100), fuzzer.fuzzFlat(BIGINT(), 100)}, 100);
+      {fuzzer.fuzzFlat(REAL(), 100), fuzzer.fuzzFlat(BIGINT(), 100)},
+      {"c0", "c1"},
+      100);
   ASSERT_TRUE(vector->type()->kindEquals(ROW({REAL(), BIGINT()})));
   ASSERT_TRUE(vector->mayHaveNulls());
+  EXPECT_THAT(
+      vector->type()->asRow().names(), ::testing::ElementsAre("c0", "c1"));
+}
+
+FlatVectorPtr<Timestamp> genTimestampVector(
+    VectorFuzzer::Options::TimestampPrecision precision,
+    size_t vectorSize,
+    memory::MemoryPool* pool) {
+  VectorFuzzer::Options opts;
+  opts.vectorSize = vectorSize;
+  opts.timestampPrecision = precision;
+
+  VectorFuzzer fuzzer(opts, pool);
+  return std::dynamic_pointer_cast<FlatVector<Timestamp>>(
+      fuzzer.fuzzFlat(TIMESTAMP()));
+};
+
+TEST_F(VectorFuzzerTest, timestamp) {
+  const size_t vectorSize = 1000;
+
+  // Second granularity.
+  auto secTsVector = genTimestampVector(
+      VectorFuzzer::Options::TimestampPrecision::kSeconds, vectorSize, pool());
+
+  for (size_t i = 0; i < vectorSize; ++i) {
+    auto ts = secTsVector->valueAt(i);
+    ASSERT_EQ(ts.getNanos(), 0);
+  }
+
+  // Millisecond granularity.
+  auto milliTsVector = genTimestampVector(
+      VectorFuzzer::Options::TimestampPrecision::kMilliSeconds,
+      vectorSize,
+      pool());
+
+  for (size_t i = 0; i < vectorSize; ++i) {
+    auto ts = milliTsVector->valueAt(i);
+    ASSERT_EQ(ts.getNanos() % 1'000'000, 0);
+  }
+
+  // Microsecond granularity.
+  auto microTsVector = genTimestampVector(
+      VectorFuzzer::Options::TimestampPrecision::kMicroSeconds,
+      vectorSize,
+      pool());
+
+  for (size_t i = 0; i < vectorSize; ++i) {
+    auto ts = microTsVector->valueAt(i);
+    ASSERT_EQ(ts.getNanos() % 1'000, 0);
+  }
+
+  // Nanosecond granularity.
+  auto nanoTsVector = genTimestampVector(
+      VectorFuzzer::Options::TimestampPrecision::kNanoSeconds,
+      vectorSize,
+      pool());
+
+  // Check that at least one timestamp has nano > 0.
+  bool nanosFound = false;
+  for (size_t i = 0; i < vectorSize; ++i) {
+    if (nanoTsVector->valueAt(i).getNanos() > 0) {
+      nanosFound = true;
+    }
+  }
+  ASSERT_TRUE(nanosFound);
 }
 
 TEST_F(VectorFuzzerTest, assorted) {
@@ -448,7 +530,9 @@ void assertEqualVectors(
     SelectivityVector* rowsToCompare,
     const VectorPtr& expected,
     const VectorPtr& actual) {
-  ASSERT_EQ(expected->size(), actual->size());
+  ASSERT_LE(rowsToCompare->end(), actual->size())
+      << "Vectors should at least have the required amount of rows that need "
+         "to be verified.";
   ASSERT_TRUE(expected->type()->equivalent(*actual->type()))
       << "Expected " << expected->type()->toString() << ", but got "
       << actual->type()->toString();
@@ -550,11 +634,18 @@ TEST_F(VectorFuzzerTest, lazyOverDictionary) {
     }
   });
 
-  // Case 2: Applying a multiple dictionary layers.
+  // Case 2: Applying multiple (3 layers) dictionary layers.
   dict = fuzzer.fuzzDictionary(vector);
+  dict = fuzzer.fuzzDictionary(dict);
   dict = fuzzer.fuzzDictionary(dict);
   lazy = VectorFuzzer::wrapInLazyVector(dict);
 
+  // Also verify that the lazy layer is applied on the innermost dictionary
+  // layer. Should look like Dict(Dict(Dict(Lazy(Base)))))
+  ASSERT_TRUE(VectorEncoding::isDictionary(lazy->encoding()));
+  ASSERT_TRUE(VectorEncoding::isDictionary(lazy->valueVector()->encoding()));
+  ASSERT_TRUE(
+      VectorEncoding::isLazy(lazy->valueVector()->valueVector()->encoding()));
   LazyVector::ensureLoadedRows(lazy, partialRows);
   ASSERT_TRUE(VectorEncoding::isDictionary(lazy->loadedVector()->encoding()));
   assertEqualVectors(&partialRows, dict, lazy);
@@ -565,6 +656,61 @@ TEST_F(VectorFuzzerTest, lazyOverDictionary) {
       ASSERT_EQ(dict->wrappedIndex(row), lazy->wrappedIndex(row));
     }
   });
+}
+
+void VectorFuzzerTest::validateMaxSizes(VectorPtr vector, size_t maxSize) {
+  if (vector->typeKind() == TypeKind::ARRAY) {
+    validateMaxSizes(vector->template as<ArrayVector>()->elements(), maxSize);
+  } else if (vector->typeKind() == TypeKind::MAP) {
+    auto mapVector = vector->as<MapVector>();
+    validateMaxSizes(mapVector->mapKeys(), maxSize);
+    validateMaxSizes(mapVector->mapValues(), maxSize);
+  } else if (vector->typeKind() == TypeKind::ROW) {
+    auto rowVector = vector->as<RowVector>();
+    for (const auto& child : rowVector->children()) {
+      validateMaxSizes(child, maxSize);
+    }
+  }
+  EXPECT_LE(vector->size(), maxSize);
+}
+
+// Ensures we don't generate inner vectors exceeding `complexElementsMaxSize`.
+TEST_F(VectorFuzzerTest, complexTooLarge) {
+  VectorFuzzer::Options opts;
+  VectorFuzzer fuzzer(opts, pool());
+  VectorPtr vector;
+
+  vector = fuzzer.fuzzFlat(ARRAY(ARRAY(ARRAY(ARRAY(ARRAY(SMALLINT()))))));
+  validateMaxSizes(vector, opts.complexElementsMaxSize);
+
+  vector = fuzzer.fuzzFlat(MAP(
+      BIGINT(), MAP(SMALLINT(), MAP(INTEGER(), MAP(SMALLINT(), DOUBLE())))));
+  validateMaxSizes(vector, opts.complexElementsMaxSize);
+
+  vector = fuzzer.fuzzFlat(
+      ROW({BIGINT(), ROW({SMALLINT(), ROW({INTEGER()})}), DOUBLE()}));
+  validateMaxSizes(vector, opts.complexElementsMaxSize);
+
+  // Mix and match.
+  vector = fuzzer.fuzzFlat(
+      ROW({ARRAY(ROW({SMALLINT(), ROW({MAP(INTEGER(), DOUBLE())})}))}));
+  validateMaxSizes(vector, opts.complexElementsMaxSize);
+
+  // Try a more restrictive max size.
+  opts.complexElementsMaxSize = 100;
+  fuzzer.setOptions(opts);
+
+  vector = fuzzer.fuzzFlat(ARRAY(ARRAY(ARRAY(ARRAY(ARRAY(SMALLINT()))))));
+  validateMaxSizes(vector, opts.complexElementsMaxSize);
+
+  // If opts.containerVariableLength is false,  then throw if requested size
+  // cant be satisfied.
+  opts.containerVariableLength = false;
+  fuzzer.setOptions(opts);
+
+  EXPECT_THROW(
+      fuzzer.fuzzFlat(ARRAY(ARRAY(ARRAY(ARRAY(ARRAY(SMALLINT())))))),
+      VeloxUserError);
 }
 
 } // namespace

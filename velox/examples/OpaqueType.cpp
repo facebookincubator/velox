@@ -189,7 +189,7 @@ int main(int argc, char** argv) {
 
   // Create memory pool and other query-related structures.
   auto queryCtx = std::make_shared<core::QueryCtx>();
-  auto pool = memory::getDefaultScopedMemoryPool();
+  auto pool = memory::addDefaultLeafMemoryPool();
   core::ExecCtx execCtx{pool.get(), queryCtx.get()};
 
   // Next, we need to generate an input batch of data (rowVector). We create a
@@ -227,11 +227,14 @@ int main(int argc, char** argv) {
 
   // Create vector #2. Just a constant to the shared_ptr we created above.
   auto vector2 = BaseVector::createConstant(
-      variant::opaque(opaqueObj), vectorSize, execCtx.pool());
+      OPAQUE<UserDefinedMap>(),
+      variant::opaque(opaqueObj),
+      vectorSize,
+      execCtx.pool());
 
   // Create vector #3. The monotinically increasing flatVector<bigint>.
-  auto vector3 = std::dynamic_pointer_cast<FlatVector<int64_t>>(
-      BaseVector::create(BIGINT(), vectorSize, execCtx.pool()));
+  auto vector3 = BaseVector::create<FlatVector<int64_t>>(
+      BIGINT(), vectorSize, execCtx.pool());
   auto rawValues = vector3->mutableRawValues();
   std::iota(rawValues, rawValues + vectorSize, 0); // 0, 1, 2, 3, ...
 

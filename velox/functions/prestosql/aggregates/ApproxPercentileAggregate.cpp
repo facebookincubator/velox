@@ -117,6 +117,16 @@ enum IntermediateTypeChildIndex {
   kLevels = 8,
 };
 
+void checkWeight(int64_t weight) {
+  constexpr int64_t kMaxWeight = (1ll << 60) - 1;
+  VELOX_USER_CHECK(
+      1 <= weight && weight <= kMaxWeight,
+      "{}: weight must be in range [1, {}], got {}",
+      kApproxPercentile,
+      kMaxWeight,
+      weight);
+}
+
 template <typename T>
 class ApproxPercentileAggregate : public exec::Aggregate {
  public:
@@ -152,14 +162,10 @@ class ApproxPercentileAggregate : public exec::Aggregate {
     }
   }
 
-  void finalize(char** groups, int32_t numGroups) override {
-    for (auto i = 0; i < numGroups; ++i) {
-      value<KllSketchAccumulator<T>>(groups[i])->finalize();
-    }
-  }
-
   void extractValues(char** groups, int32_t numGroups, VectorPtr* result)
       override {
+    finalize(groups, numGroups);
+
     VELOX_CHECK(result);
     if (percentiles_ && percentiles_->isArray) {
       folly::Range percentiles(
@@ -205,6 +211,8 @@ class ApproxPercentileAggregate : public exec::Aggregate {
 
   void extractAccumulators(char** groups, int32_t numGroups, VectorPtr* result)
       override {
+    finalize(groups, numGroups);
+
     VELOX_CHECK(result);
     auto rowResult = (*result)->as<RowVector>();
     VELOX_CHECK(rowResult);
@@ -228,26 +236,19 @@ class ApproxPercentileAggregate : public exec::Aggregate {
           BaseVector::wrapInConstant(numGroups, 0, std::move(array));
       rowResult->childAt(kPercentilesIsArray) =
           std::make_shared<ConstantVector<bool>>(
-              pool, numGroups, false, bool(percentiles_->isArray));
+              pool, numGroups, false, BOOLEAN(), bool(percentiles_->isArray));
     } else {
-      rowResult->childAt(kPercentiles) = BaseVector::wrapInConstant(
-          numGroups,
-          0,
-          std::make_shared<ArrayVector>(
-              pool,
-              ARRAY(DOUBLE()),
-              AlignedBuffer::allocate<bool>(1, pool, bits::kNull),
-              1,
-              AlignedBuffer::allocate<vector_size_t>(1, pool, 0),
-              AlignedBuffer::allocate<vector_size_t>(1, pool, 0),
-              nullptr));
+      rowResult->childAt(kPercentiles) =
+          BaseVector::createNullConstant(ARRAY(DOUBLE()), numGroups, pool);
       rowResult->childAt(kPercentilesIsArray) =
-          std::make_shared<ConstantVector<bool>>(pool, numGroups, true, false);
+          std::make_shared<ConstantVector<bool>>(
+              pool, numGroups, true, BOOLEAN(), false);
     }
     rowResult->childAt(kAccuracy) = std::make_shared<ConstantVector<double>>(
         pool,
         numGroups,
         accuracy_ == kMissingNormalizedValue,
+        DOUBLE(),
         double(accuracy_));
     auto k = rowResult->childAt(kK)->asFlatVector<int32_t>();
     auto n = rowResult->childAt(kN)->asFlatVector<int64_t>();
@@ -322,10 +323,7 @@ class ApproxPercentileAggregate : public exec::Aggregate {
         auto accumulator = initRawAccumulator(groups[row]);
         auto value = decodedValue_.valueAt<T>(row);
         auto weight = decodedWeight_.valueAt<int64_t>(row);
-        VELOX_USER_CHECK_GE(
-            weight,
-            1,
-            "The value of the weight parameter must be greater than or equal to 1.");
+        checkWeight(weight);
         accumulator->append(value, weight);
       });
     } else {
@@ -373,10 +371,7 @@ class ApproxPercentileAggregate : public exec::Aggregate {
 
         auto value = decodedValue_.valueAt<T>(row);
         auto weight = decodedWeight_.valueAt<int64_t>(row);
-        VELOX_USER_CHECK_GE(
-            weight,
-            1,
-            "The value of the weight parameter must be greater than or equal to 1.");
+        checkWeight(weight);
         accumulator->append(value, weight);
       });
     } else {
@@ -405,6 +400,12 @@ class ApproxPercentileAggregate : public exec::Aggregate {
   }
 
  private:
+  void finalize(char** groups, int32_t numGroups) {
+    for (auto i = 0; i < numGroups; ++i) {
+      value<KllSketchAccumulator<T>>(groups[i])->finalize();
+    }
+  }
+
   template <typename VectorType, typename ExtractFunc>
   void extract(
       char** groups,
@@ -517,7 +518,7 @@ class ApproxPercentileAggregate : public exec::Aggregate {
     if (!hasAccuracy_) {
       return;
     }
-    VELOX_CHECK(
+    VELOX_USER_CHECK(
         decodedAccuracy_.isConstantMapping(),
         "Accuracy argument must be constant for all input rows");
     checkSetAccuracy(decodedAccuracy_.valueAt<double>(0));
@@ -797,8 +798,8 @@ bool registerApproxPercentile(const std::string& name) {
 
 } // namespace
 
-void registerApproxPercentileAggregate() {
-  registerApproxPercentile(kApproxPercentile);
+void registerApproxPercentileAggregate(const std::string& prefix) {
+  registerApproxPercentile(prefix + kApproxPercentile);
 }
 
 } // namespace facebook::velox::aggregate::prestosql

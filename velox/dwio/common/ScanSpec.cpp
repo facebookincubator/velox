@@ -19,6 +19,29 @@
 
 namespace facebook::velox::common {
 
+ScanSpec& ScanSpec::operator=(const ScanSpec& other) {
+  if (this != &other) {
+    numReads_ = other.numReads_;
+    subscript_ = other.subscript_;
+    fieldName_ = other.fieldName_;
+    channel_ = other.channel_;
+    constantValue_ = other.constantValue_;
+    projectOut_ = other.projectOut_;
+    extractValues_ = other.extractValues_;
+    makeFlat_ = other.makeFlat_;
+    filter_ = other.filter_;
+    metadataFilters_ = other.metadataFilters_;
+    selectivity_ = other.selectivity_;
+    enableFilterReorder_ = other.enableFilterReorder_;
+    children_ = other.children_;
+    stableChildren_ = other.stableChildren_;
+    valueHook_ = other.valueHook_;
+    isArrayElementOrMapEntry_ = other.isArrayElementOrMapEntry_;
+    maxArrayElementsCount_ = other.maxArrayElementsCount_;
+  }
+  return *this;
+}
+
 ScanSpec* ScanSpec::getOrCreateChild(const Subfield& subfield) {
   auto container = this;
   auto& path = subfield.path();
@@ -62,6 +85,8 @@ void ScanSpec::reorder() {
   if (children_.empty()) {
     return;
   }
+  // Make sure 'stableChildren_' is initialized.
+  stableChildren();
   std::sort(
       children_.begin(),
       children_.end(),
@@ -99,6 +124,17 @@ void ScanSpec::reorder() {
       });
 }
 
+const std::vector<ScanSpec*>& ScanSpec::stableChildren() {
+  std::lock_guard<std::mutex> l(mutex_);
+  if (stableChildren_.empty()) {
+    stableChildren_.reserve(children_.size());
+    for (auto& child : children_) {
+      stableChildren_.push_back(child.get());
+    }
+  }
+  return stableChildren_;
+}
+
 bool ScanSpec::hasFilter() const {
   if (hasFilter_.has_value()) {
     return hasFilter_.value();
@@ -108,13 +144,44 @@ bool ScanSpec::hasFilter() const {
     return true;
   }
   for (auto& child : children_) {
-    if (child->hasFilter()) {
+    if (!child->isArrayElementOrMapEntry_ && child->hasFilter()) {
       hasFilter_ = true;
       return true;
     }
   }
   hasFilter_ = false;
   return false;
+}
+
+void ScanSpec::moveAdaptationFrom(ScanSpec& other) {
+  // moves the filters and filter order from 'other'.
+  std::vector<std::shared_ptr<ScanSpec>> newChildren;
+  for (auto& otherChild : other.children_) {
+    bool found = false;
+    for (auto& child : children_) {
+      if (child && child->fieldName_ == otherChild->fieldName_) {
+        if (!child->isConstant() && !otherChild->isConstant()) {
+          // If other child is constant, a possible filter on a
+          // constant will have been evaluated at split start time. If
+          // 'child' is constant there is no adaptation that can be
+          // received.
+          child->filter_ = std::move(otherChild->filter_);
+          child->selectivity_ = otherChild->selectivity_;
+        }
+        newChildren.push_back(std::move(child));
+        found = true;
+        break;
+      }
+    }
+    VELOX_CHECK(found);
+  }
+  children_ = std::move(newChildren);
+  stableChildren_.clear();
+  for (auto& otherChild : other.stableChildren_) {
+    auto child = childByName(otherChild->fieldName_);
+    VELOX_CHECK(child);
+    stableChildren_.push_back(child);
+  }
 }
 
 namespace {
@@ -270,6 +337,9 @@ bool testFilter(
   if (mayHaveNull && filter->testNull()) {
     return true;
   }
+  if (type->isDecimal()) {
+    return true;
+  }
   switch (type->kind()) {
     case TypeKind::BIGINT:
     case TypeKind::INTEGER:
@@ -338,6 +408,83 @@ std::shared_ptr<ScanSpec> ScanSpec::removeChild(const ScanSpec* child) {
     }
   }
   return nullptr;
+}
+
+void ScanSpec::addFilter(const Filter& filter) {
+  filter_ = filter_ ? filter_->mergeWith(&filter) : filter.clone();
+}
+
+ScanSpec* ScanSpec::addField(const std::string& name, column_index_t channel) {
+  auto child = getOrCreateChild(Subfield(name));
+  child->setProjectOut(true);
+  child->setChannel(channel);
+  return child;
+}
+
+ScanSpec* ScanSpec::addFieldRecursively(
+    const std::string& name,
+    const Type& type,
+    column_index_t channel) {
+  auto* child = addField(name, channel);
+  child->addAllChildFields(type);
+  return child;
+}
+
+ScanSpec* ScanSpec::addMapKeyField() {
+  auto* child = addField(kMapKeysFieldName, kNoChannel);
+  child->isArrayElementOrMapEntry_ = true;
+  return child;
+}
+
+ScanSpec* ScanSpec::addMapKeyFieldRecursively(const Type& type) {
+  auto* child = addFieldRecursively(kMapKeysFieldName, type, kNoChannel);
+  child->isArrayElementOrMapEntry_ = true;
+  return child;
+}
+
+ScanSpec* ScanSpec::addMapValueField() {
+  auto* child = addField(kMapValuesFieldName, kNoChannel);
+  child->isArrayElementOrMapEntry_ = true;
+  return child;
+}
+
+ScanSpec* ScanSpec::addMapValueFieldRecursively(const Type& type) {
+  auto* child = addFieldRecursively(kMapValuesFieldName, type, kNoChannel);
+  child->isArrayElementOrMapEntry_ = true;
+  return child;
+}
+
+ScanSpec* ScanSpec::addArrayElementField() {
+  auto* child = addField(kArrayElementsFieldName, kNoChannel);
+  child->isArrayElementOrMapEntry_ = true;
+  return child;
+}
+
+ScanSpec* ScanSpec::addArrayElementFieldRecursively(const Type& type) {
+  auto* child = addFieldRecursively(kArrayElementsFieldName, type, kNoChannel);
+  child->isArrayElementOrMapEntry_ = true;
+  return child;
+}
+
+void ScanSpec::addAllChildFields(const Type& type) {
+  switch (type.kind()) {
+    case TypeKind::ROW: {
+      auto& rowType = type.asRow();
+      for (auto i = 0; i < type.size(); ++i) {
+        addFieldRecursively(rowType.nameOf(i), *type.childAt(i), i);
+      }
+      break;
+    }
+    case TypeKind::MAP:
+      addMapKeyFieldRecursively(*type.childAt(0));
+      addMapValueFieldRecursively(*type.childAt(1));
+      break;
+    case TypeKind::ARRAY:
+      addArrayElementFieldRecursively(*type.childAt(0));
+      break;
+    default:
+      break;
+  }
 }
 
 } // namespace facebook::velox::common

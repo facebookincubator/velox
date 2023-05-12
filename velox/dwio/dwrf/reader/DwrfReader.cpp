@@ -17,6 +17,7 @@
 #include "velox/dwio/dwrf/reader/DwrfReader.h"
 #include "velox/dwio/common/TypeUtils.h"
 #include "velox/dwio/common/exception/Exception.h"
+#include "velox/vector/FlatVector.h"
 
 namespace facebook::velox::dwrf {
 
@@ -25,8 +26,6 @@ using dwio::common::FileFormat;
 using dwio::common::InputStream;
 using dwio::common::ReaderOptions;
 using dwio::common::RowReaderOptions;
-using dwio::common::TypeWithId;
-using dwio::common::typeutils::CompatChecker;
 
 DwrfRowReader::DwrfRowReader(
     const std::shared_ptr<ReaderBase>& reader,
@@ -73,17 +72,17 @@ DwrfRowReader::DwrfRowReader(
   std::function<std::string()> createExceptionContext = [&]() {
     std::string exceptionMessageContext = fmt::format(
         "The schema loaded in the reader does not match the schema in the file footer."
-        "Input Stream Name: {},\n"
+        "Input Name: {},\n"
         "File Footer Schema (without partition columns): {},\n"
         "Input Table Schema (with partition columns): {}\n",
-        getReader().getStream().getName(),
+        getReader().getBufferedInput().getName(),
         getReader().getSchema()->toString(),
         getType()->toString());
     return exceptionMessageContext;
   };
 
-  CompatChecker::check(
-      *getReader().getSchema(), *getType(), true, createExceptionContext);
+  dwio::common::typeutils::checkTypeCompatibility(
+      *getReader().getSchema(), *columnSelector_, createExceptionContext);
 }
 
 uint64_t DwrfRowReader::seekToRow(uint64_t rowNumber) {
@@ -189,110 +188,187 @@ uint64_t DwrfRowReader::skipRows(uint64_t numberOfRowsToSkip) {
   return previousRow - initialRow;
 }
 
-void DwrfRowReader::checkSkipStrides(
-    const StatsContext& context,
-    uint64_t strideSize) {
-  if (!selectiveColumnReader_) {
+void DwrfRowReader::checkSkipStrides(uint64_t strideSize) {
+  if (!selectiveColumnReader_ || strideSize == 0 ||
+      currentRowInStripe % strideSize != 0) {
     return;
   }
-  if (currentRowInStripe % strideSize != 0) {
-    return;
-  }
-
-  DWIO_ENSURE(
-      selectiveColumnReader_ != nullptr, "selectiveColumnReader_ is null.");
 
   if (currentRowInStripe == 0 || recomputeStridesToSkip_) {
-    stridesToSkip_ =
-        selectiveColumnReader_->filterRowGroups(strideSize, context);
-    stripeStridesToSkip_[currentStripe] = stridesToSkip_;
+    StatsContext context(
+        getReader().getWriterName(), getReader().getWriterVersion());
+    DwrfData::FilterRowGroupsResult res;
+    selectiveColumnReader_->filterRowGroups(strideSize, context, res);
+    if (auto& metadataFilter = options_.getMetadataFilter()) {
+      metadataFilter->eval(res.metadataFilterResults, res.filterResult);
+    }
+    stridesToSkip_ = res.filterResult.data();
+    stridesToSkipSize_ = res.totalCount;
+    stripeStridesToSkip_[currentStripe] = std::move(res.filterResult);
     recomputeStridesToSkip_ = false;
-  }
-
-  if (stridesToSkip_.empty()) {
-    return;
   }
 
   bool foundStridesToSkip = false;
   auto currentStride = currentRowInStripe / strideSize;
-  for (auto strideToSkip : stridesToSkip_) {
-    if (currentStride < strideToSkip) {
-      break;
-    }
-
-    if (currentStride == strideToSkip) {
-      foundStridesToSkip = true;
-      currentRowInStripe =
-          std::min(currentRowInStripe + strideSize, rowsInCurrentStripe);
-      currentStride++;
-      skippedStrides_++;
-    }
+  while (currentStride < stridesToSkipSize_ &&
+         bits::isBitSet(stridesToSkip_, currentStride)) {
+    foundStridesToSkip = true;
+    currentRowInStripe =
+        std::min(currentRowInStripe + strideSize, rowsInCurrentStripe);
+    currentStride++;
+    skippedStrides_++;
   }
   if (foundStridesToSkip && currentRowInStripe < rowsInCurrentStripe) {
     selectiveColumnReader_->seekToRowGroup(currentStride);
   }
 }
 
-uint64_t DwrfRowReader::next(uint64_t size, VectorPtr& result) {
-  DWIO_ENSURE_GT(size, 0);
-  auto& footer = getReader().getFooter();
-  StatsContext context(
-      getReader().getWriterName(), getReader().getWriterVersion());
+void DwrfRowReader::readNext(
+    uint64_t rowsToRead,
+    const dwio::common::Mutation* mutation,
+    VectorPtr& result) {
+  if (!selectiveColumnReader_) {
+    // TODO: Move row number appending logic here.  Currently this is done in
+    // the wrapper reader.
+    VELOX_CHECK(
+        mutation == nullptr,
+        "Mutation pushdown is only supported in selective reader");
+    columnReader_->next(rowsToRead, result);
+    return;
+  }
+  if (!options_.getAppendRowNumberColumn()) {
+    selectiveColumnReader_->next(rowsToRead, result, mutation);
+    return;
+  }
+  readWithRowNumber(rowsToRead, mutation, result);
+}
 
-  for (;;) {
-    if (currentStripe >= lastStripe) {
-      if (lastStripe > 0) {
-        previousRow = firstRowOfStripe[lastStripe - 1] +
-            footer.stripes(lastStripe - 1).numberOfRows();
-      } else {
-        previousRow = 0;
-      }
-      return 0;
+void DwrfRowReader::readWithRowNumber(
+    uint64_t rowsToRead,
+    const dwio::common::Mutation* mutation,
+    VectorPtr& result) {
+  auto* rowVector = result->asUnchecked<RowVector>();
+  column_index_t numChildren = 0;
+  for (auto& column : options_.getScanSpec()->children()) {
+    if (column->projectOut()) {
+      ++numChildren;
     }
+  }
+  VectorPtr rowNumVector;
+  if (rowVector->childrenSize() != numChildren) {
+    VELOX_CHECK_EQ(rowVector->childrenSize(), numChildren + 1);
+    rowNumVector = rowVector->childAt(numChildren);
+    auto& rowType = rowVector->type()->asRow();
+    auto names = rowType.names();
+    auto types = rowType.children();
+    auto children = rowVector->children();
+    VELOX_DCHECK(!names.empty() && !types.empty() && !children.empty());
+    names.pop_back();
+    types.pop_back();
+    children.pop_back();
+    result = std::make_shared<RowVector>(
+        rowVector->pool(),
+        ROW(std::move(names), std::move(types)),
+        rowVector->nulls(),
+        rowVector->size(),
+        std::move(children));
+  }
+  selectiveColumnReader_->next(rowsToRead, result, mutation);
+  FlatVector<int64_t>* flatRowNum = nullptr;
+  if (rowNumVector && BaseVector::isVectorWritable(rowNumVector)) {
+    flatRowNum = rowNumVector->asFlatVector<int64_t>();
+  }
+  if (flatRowNum) {
+    flatRowNum->clearAllNulls();
+    flatRowNum->resize(result->size());
+  } else {
+    rowNumVector = std::make_shared<FlatVector<int64_t>>(
+        result->pool(),
+        BIGINT(),
+        nullptr,
+        result->size(),
+        AlignedBuffer::allocate<int64_t>(result->size(), result->pool()),
+        std::vector<BufferPtr>());
+    flatRowNum = rowNumVector->asUnchecked<FlatVector<int64_t>>();
+  }
+  auto rowOffsets = selectiveColumnReader_->outputRows();
+  VELOX_DCHECK_EQ(rowOffsets.size(), result->size());
+  auto* rawRowNum = flatRowNum->mutableRawValues();
+  for (int i = 0; i < rowOffsets.size(); ++i) {
+    rawRowNum[i] = previousRow + rowOffsets[i];
+  }
+  rowVector = result->asUnchecked<RowVector>();
+  auto& rowType = rowVector->type()->asRow();
+  auto names = rowType.names();
+  auto types = rowType.children();
+  auto children = rowVector->children();
+  names.emplace_back();
+  types.push_back(BIGINT());
+  children.push_back(rowNumVector);
+  result = std::make_shared<RowVector>(
+      rowVector->pool(),
+      ROW(std::move(names), std::move(types)),
+      rowVector->nulls(),
+      rowVector->size(),
+      std::move(children));
+}
 
+int64_t DwrfRowReader::nextRowNumber() {
+  auto strideSize = getReader().getFooter().rowIndexStride();
+  while (currentStripe < lastStripe) {
     if (currentRowInStripe == 0) {
       startNextStripe();
     }
-
-    auto strideSize = footer.rowIndexStride();
-    if (LIKELY(strideSize > 0) && selectiveColumnReader_) {
-      checkSkipStrides(context, strideSize);
+    checkSkipStrides(strideSize);
+    if (currentRowInStripe < rowsInCurrentStripe) {
+      return firstRowOfStripe[currentStripe] + currentRowInStripe;
     }
-
-    uint64_t rowsToRead = std::min(
-        static_cast<uint64_t>(size), rowsInCurrentStripe - currentRowInStripe);
-
-    if (rowsToRead > 0) {
-      // don't allow read to cross stride
-      if (LIKELY(strideSize > 0)) {
-        rowsToRead =
-            std::min(rowsToRead, strideSize - currentRowInStripe % strideSize);
-      }
-
-      // Record strideIndex for use by the columnReader_ which may delay actual
-      // reading of the data.
-      setStrideIndex(strideSize > 0 ? currentRowInStripe / strideSize : 0);
-
-      if (selectiveColumnReader_) {
-        selectiveColumnReader_->next(rowsToRead, result);
-      } else {
-        columnReader_->next(rowsToRead, result);
-      }
-    }
-
-    // update row number
-    previousRow = firstRowOfStripe[currentStripe] + currentRowInStripe;
-    currentRowInStripe += rowsToRead;
-    if (currentRowInStripe >= rowsInCurrentStripe) {
-      currentStripe += 1;
-      currentRowInStripe = 0;
-      newStripeLoaded = false;
-    }
-
-    if (rowsToRead > 0) {
-      return rowsToRead;
-    }
+    ++currentStripe;
+    currentRowInStripe = 0;
+    newStripeLoaded = false;
   }
+  return kAtEnd;
+}
+
+int64_t DwrfRowReader::nextReadSize(uint64_t size) {
+  VELOX_DCHECK_GT(size, 0);
+  if (nextRowNumber() == kAtEnd) {
+    return kAtEnd;
+  }
+  auto rowsToRead = std::min(size, rowsInCurrentStripe - currentRowInStripe);
+  auto strideSize = getReader().getFooter().rowIndexStride();
+  if (LIKELY(strideSize > 0)) {
+    // Don't allow read to cross stride.
+    rowsToRead =
+        std::min(rowsToRead, strideSize - currentRowInStripe % strideSize);
+  }
+  VELOX_DCHECK_GT(rowsToRead, 0);
+  return rowsToRead;
+}
+
+uint64_t DwrfRowReader::next(
+    uint64_t size,
+    velox::VectorPtr& result,
+    const dwio::common::Mutation* mutation) {
+  auto nextRow = nextRowNumber();
+  if (nextRow == kAtEnd) {
+    if (lastStripe > 0) {
+      previousRow = firstRowOfStripe[lastStripe - 1] +
+          getReader().getFooter().stripes(lastStripe - 1).numberOfRows();
+    } else {
+      previousRow = 0;
+    }
+    return 0;
+  }
+  auto rowsToRead = nextReadSize(size);
+  previousRow = nextRow;
+  // Record strideIndex for use by the columnReader_ which may delay actual
+  // reading of the data.
+  auto strideSize = getReader().getFooter().rowIndexStride();
+  strideIndex_ = strideSize > 0 ? currentRowInStripe / strideSize : 0;
+  readNext(rowsToRead, mutation, result);
+  currentRowInStripe += rowsToRead;
+  return rowsToRead;
 }
 
 void DwrfRowReader::resetFilterCaches() {
@@ -328,6 +404,7 @@ void DwrfRowReader::startNextStripe() {
   auto requestedType = getColumnSelector().getSchemaWithId();
   auto dataType = getReader().getSchemaWithId();
   auto flatMapContext = FlatMapContext::nonFlatMapContext();
+  flatMapContext.keySelectionCallback = options_.getKeySelectionCallback();
 
   if (scanSpec) {
     selectiveColumnReader_ = SelectiveDwrfReader::build(
@@ -472,15 +549,13 @@ std::optional<size_t> DwrfRowReader::estimatedRowSize() const {
 
 DwrfReader::DwrfReader(
     const ReaderOptions& options,
-    std::unique_ptr<InputStream> input)
+    std::unique_ptr<dwio::common::BufferedInput> input)
     : readerBase_(std::make_unique<ReaderBase>(
           options.getMemoryPool(),
           std::move(input),
           options.getDecrypterFactory(),
-          options.getBufferedInputFactory()
-              ? options.getBufferedInputFactory()
-              : dwio::common::BufferedInputFactory::baseFactoryShared(),
-          options.getFileNum(),
+          options.getDirectorySizeGuess(),
+          options.getFilePreloadThreshold(),
           options.getFileFormat() == FileFormat::ORC ? FileFormat::ORC
                                                      : FileFormat::DWRF)),
       options_(options) {}
@@ -545,8 +620,6 @@ uint64_t maxStreamsForType(const TypeWrapper& type) {
       case TypeKind::MAP:
         return 2;
       case TypeKind::VARBINARY:
-      case TypeKind::SHORT_DECIMAL:
-      case TypeKind::LONG_DECIMAL:
       case TypeKind::TIMESTAMP:
         return 3;
       case TypeKind::TINYINT:
@@ -653,16 +726,18 @@ uint64_t DwrfReader::getMemoryUse(
    * in the input stream and in the seekable input stream.
    * If no string column is read, estimate from the number of streams.
    */
-  uint64_t memory = hasStringColumn
-      ? 2 * maxDataLength
-      : std::min(
-            uint64_t(maxDataLength),
-            nSelectedStreams * readerBase.getStream().getNaturalReadSize());
+  uint64_t memory = hasStringColumn ? 2 * maxDataLength
+                                    : std::min(
+                                          uint64_t(maxDataLength),
+                                          nSelectedStreams *
+                                              readerBase.getBufferedInput()
+                                                  .getReadFile()
+                                                  ->getNaturalReadSize());
 
   // Do we need even more memory to read the footer or the metadata?
   auto footerLength = readerBase.getPostScript().footerLength();
-  if (memory < footerLength + DIRECTORY_SIZE_GUESS) {
-    memory = footerLength + DIRECTORY_SIZE_GUESS;
+  if (memory < footerLength + readerBase.getDirectorySizeGuess()) {
+    memory = footerLength + readerBase.getDirectorySizeGuess();
   }
 
   // Account for firstRowOfStripe.
@@ -689,18 +764,30 @@ uint64_t DwrfReader::getMemoryUse(
 
 std::unique_ptr<dwio::common::RowReader> DwrfReader::createRowReader(
     const RowReaderOptions& opts) const {
-  return std::make_unique<DwrfRowReader>(readerBase_, opts);
+  auto rowReader = std::make_unique<DwrfRowReader>(readerBase_, opts);
+  // Load the first stripe on construction so that readers created in
+  // background have a reader tree and can preload the first
+  // stripe. Also the reader tree needs to exist in order to receive
+  // adaptation from a previous reader.
+  rowReader->startNextStripe();
+  return rowReader;
 }
 
 std::unique_ptr<DwrfRowReader> DwrfReader::createDwrfRowReader(
     const RowReaderOptions& opts) const {
-  return std::make_unique<DwrfRowReader>(readerBase_, opts);
+  auto rowReader = std::make_unique<DwrfRowReader>(readerBase_, opts);
+  // Load the first stripe on construction so that readers created in
+  // background have a reader tree and can preload the first
+  // stripe. Also the reader tree needs to exist in order to receive
+  // adaptation from a previous reader.
+  rowReader->startNextStripe();
+  return rowReader;
 }
 
 std::unique_ptr<DwrfReader> DwrfReader::create(
-    std::unique_ptr<InputStream> stream,
+    std::unique_ptr<dwio::common::BufferedInput> input,
     const ReaderOptions& options) {
-  return std::make_unique<DwrfReader>(options, std::move(stream));
+  return std::make_unique<DwrfReader>(options, std::move(input));
 }
 
 void registerDwrfReaderFactory() {

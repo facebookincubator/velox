@@ -21,6 +21,7 @@
 
 #include "velox/exec/tests/AggregationFuzzerRunner.h"
 #include "velox/functions/prestosql/aggregates/RegisterAggregateFunctions.h"
+#include "velox/functions/prestosql/registration/RegistrationFunctions.h"
 
 DEFINE_int64(
     seed,
@@ -37,6 +38,7 @@ DEFINE_string(
 
 int main(int argc, char** argv) {
   facebook::velox::aggregate::prestosql::registerAllAggregateFunctions();
+  facebook::velox::functions::prestosql::registerAllScalarFunctions();
 
   ::testing::InitGoogleTest(&argc, argv);
 
@@ -48,27 +50,36 @@ int main(int argc, char** argv) {
   // TODO: List of the functions that at some point crash or fail and need to
   // be fixed before we can enable.
   std::unordered_set<std::string> skipFunctions = {
-      // approx_percentile crashes:
-      // https://github.com/facebookincubator/velox/issues/3099
-      "approx_percentile",
-      // approx_most_frequent crashes:
-      // https://github.com/facebookincubator/velox/issues/3101
-      "approx_most_frequent",
-      // avg crashes under UBSAN:
-      // https://github.com/facebookincubator/velox/issues/3103
-      "avg",
-      // The results of the following functions depend on the order of input
-      // rows.
-      // TODO Enhance the fuzzer allow partial testing for these, i.e. skip
-      // multi-threaded plans using local exchange.
-      "approx_set",
-      "arbitrary",
-      "array_agg",
-      "map_agg",
-      "map_union",
-      "max_by",
-      "min_by",
+      "stddev_pop", // https://github.com/facebookincubator/velox/issues/3493
+  };
+
+  // Functions whose results verification should be skipped. These can be
+  // order-dependent functions whose results depend on the order of input rows,
+  // or functions that return complex-typed results containing floating-point
+  // fields. For some functions, the result can be transformed to a value that
+  // can be verified. If such transformation exists, it can be specified to be
+  // used for results verification. If no transformation is specified, results
+  // are not verified.
+  std::unordered_map<std::string, std::string> customVerificationFunctions = {
+      // Order-dependent functions.
+      {"approx_distinct", ""},
+      {"approx_set", ""},
+      {"arbitrary", ""},
+      {"array_agg", "array_sort({})"},
+      {"map_agg", "array_sort(map_keys({}))"},
+      {"map_union", "array_sort(map_keys({}))"},
+      {"map_union_sum", "array_sort(map_keys({}))"},
+      {"max_by", ""},
+      {"min_by", ""},
+      // TODO: Skip result verification of companion functions that return
+      // complex types that contain floating-point fields for now, until we fix
+      // test utilities in QueryAssertions to tolerate floating-point
+      // imprecision in complex types.
+      // https://github.com/facebookincubator/velox/issues/4481
+      {"avg_partial", ""},
+      {"avg_merge", ""},
   };
   size_t initialSeed = FLAGS_seed == 0 ? std::time(nullptr) : FLAGS_seed;
-  return AggregationFuzzerRunner::run(FLAGS_only, initialSeed, skipFunctions);
+  return AggregationFuzzerRunner::run(
+      FLAGS_only, initialSeed, skipFunctions, customVerificationFunctions);
 }

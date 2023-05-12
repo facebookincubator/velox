@@ -15,8 +15,8 @@
  */
 #include "velox/expression/FunctionSignature.h"
 
-namespace facebook::velox::window {
+namespace facebook::velox::window::prestosql {
 
-void registerWindowFunctions();
+void registerAllWindowFunctions(const std::string& prefix = "");
 
-} // namespace facebook::velox::window
+} // namespace facebook::velox::window::prestosql

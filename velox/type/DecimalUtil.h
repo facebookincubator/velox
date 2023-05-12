@@ -20,22 +20,73 @@
 #include "velox/common/base/CheckedArithmetic.h"
 #include "velox/common/base/Exceptions.h"
 #include "velox/type/Type.h"
-#include "velox/type/UnscaledLongDecimal.h"
-#include "velox/type/UnscaledShortDecimal.h"
 
 namespace facebook::velox {
-
-#define LOWER(x) ((uint64_t)x)
-#define UPPER(x) ((int64_t)(x >> 64))
 
 /// A static class that holds helper functions for DECIMAL type.
 class DecimalUtil {
  public:
-  static const int128_t kPowersOfTen[LongDecimalType::kMaxPrecision + 1];
+  static constexpr int128_t kPowersOfTen[LongDecimalType::kMaxPrecision + 1] = {
+      1,
+      10,
+      100,
+      1'000,
+      10'000,
+      100'000,
+      1'000'000,
+      10'000'000,
+      100'000'000,
+      1'000'000'000,
+      10'000'000'000,
+      100'000'000'000,
+      1'000'000'000'000,
+      10'000'000'000'000,
+      100'000'000'000'000,
+      1'000'000'000'000'000,
+      10'000'000'000'000'000,
+      100'000'000'000'000'000,
+      1'000'000'000'000'000'000,
+      1'000'000'000'000'000'000 * (int128_t)10,
+      1'000'000'000'000'000'000 * (int128_t)100,
+      1'000'000'000'000'000'000 * (int128_t)1'000,
+      1'000'000'000'000'000'000 * (int128_t)10'000,
+      1'000'000'000'000'000'000 * (int128_t)100'000,
+      1'000'000'000'000'000'000 * (int128_t)1'000'000,
+      1'000'000'000'000'000'000 * (int128_t)10'000'000,
+      1'000'000'000'000'000'000 * (int128_t)100'000'000,
+      1'000'000'000'000'000'000 * (int128_t)1'000'000'000,
+      1'000'000'000'000'000'000 * (int128_t)10'000'000'000,
+      1'000'000'000'000'000'000 * (int128_t)100'000'000'000,
+      1'000'000'000'000'000'000 * (int128_t)1'000'000'000'000,
+      1'000'000'000'000'000'000 * (int128_t)10'000'000'000'000,
+      1'000'000'000'000'000'000 * (int128_t)100'000'000'000'000,
+      1'000'000'000'000'000'000 * (int128_t)1'000'000'000'000'000,
+      1'000'000'000'000'000'000 * (int128_t)10'000'000'000'000'000,
+      1'000'000'000'000'000'000 * (int128_t)100'000'000'000'000'000,
+      1'000'000'000'000'000'000 * (int128_t)1'000'000'000'000'000'000,
+      1'000'000'000'000'000'000 * (int128_t)1'000'000'000'000'000'000 *
+          (int128_t)10,
+      1'000'000'000'000'000'000 * (int128_t)1'000'000'000'000'000'000 *
+          (int128_t)100};
+
+  static constexpr int128_t kLongDecimalMin =
+      -kPowersOfTen[LongDecimalType::kMaxPrecision] + 1;
+  static constexpr int128_t kLongDecimalMax =
+      kPowersOfTen[LongDecimalType::kMaxPrecision] - 1;
+  static constexpr int128_t kShortDecimalMin =
+      -kPowersOfTen[ShortDecimalType::kMaxPrecision] + 1;
+  static constexpr int128_t kShortDecimalMax =
+      kPowersOfTen[ShortDecimalType::kMaxPrecision] - 1;
+
+  FOLLY_ALWAYS_INLINE static void valueInRange(int128_t value) {
+    VELOX_CHECK(
+        (value >= kLongDecimalMin && value <= kLongDecimalMax),
+        "Value '{}' is not in the range of Decimal Type",
+        value);
+  }
 
   /// Helper function to convert a decimal value to string.
-  template <typename T>
-  static std::string toString(const T& value, const TypePtr& type);
+  static std::string toString(const int128_t value, const TypePtr& type);
 
   template <typename TInput, typename TOutput>
   inline static std::optional<TOutput> rescaleWithRoundUp(
@@ -43,9 +94,8 @@ class DecimalUtil {
       const int fromPrecision,
       const int fromScale,
       const int toPrecision,
-      const int toScale,
-      const bool nullOnFailure) {
-    int128_t rescaledValue = inputValue.unscaledValue();
+      const int toScale) {
+    int128_t rescaledValue = inputValue;
     auto scaleDifference = toScale - fromScale;
     bool isOverflow = false;
     if (scaleDifference >= 0) {
@@ -57,8 +107,8 @@ class DecimalUtil {
       scaleDifference = -scaleDifference;
       const auto scalingFactor = DecimalUtil::kPowersOfTen[scaleDifference];
       rescaledValue /= scalingFactor;
-      int128_t remainder = inputValue.unscaledValue() % scalingFactor;
-      if (inputValue.unscaledValue() >= 0 && remainder >= scalingFactor / 2) {
+      int128_t remainder = inputValue % scalingFactor;
+      if (inputValue >= 0 && remainder >= scalingFactor / 2) {
         ++rescaledValue;
       } else if (remainder <= -scalingFactor / 2) {
         --rescaledValue;
@@ -67,21 +117,34 @@ class DecimalUtil {
     // Check overflow.
     if (rescaledValue < -DecimalUtil::kPowersOfTen[toPrecision] ||
         rescaledValue > DecimalUtil::kPowersOfTen[toPrecision] || isOverflow) {
-      if (nullOnFailure) {
-        return std::nullopt;
-      }
       VELOX_USER_FAIL(
           "Cannot cast DECIMAL '{}' to DECIMAL({},{})",
-          DecimalUtil::toString<TInput>(
-              inputValue, DECIMAL(fromPrecision, fromScale)),
+          DecimalUtil::toString(inputValue, DECIMAL(fromPrecision, fromScale)),
           toPrecision,
           toScale);
     }
-    if constexpr (std::is_same_v<TOutput, UnscaledShortDecimal>) {
-      return UnscaledShortDecimal(static_cast<int64_t>(rescaledValue));
-    } else {
-      return UnscaledLongDecimal(rescaledValue);
+    return static_cast<TOutput>(rescaledValue);
+  }
+
+  template <typename TInput, typename TOutput>
+  inline static std::optional<TOutput> rescaleInt(
+      const TInput inputValue,
+      const int toPrecision,
+      const int toScale) {
+    int128_t rescaledValue = static_cast<int128_t>(inputValue);
+    bool isOverflow = __builtin_mul_overflow(
+        rescaledValue, DecimalUtil::kPowersOfTen[toScale], &rescaledValue);
+    // Check overflow.
+    if (rescaledValue < -DecimalUtil::kPowersOfTen[toPrecision] ||
+        rescaledValue > DecimalUtil::kPowersOfTen[toPrecision] || isOverflow) {
+      VELOX_USER_FAIL(
+          "Cannot cast {} '{}' to DECIMAL({},{})",
+          CppToType<TInput>::name,
+          inputValue,
+          toPrecision,
+          toScale);
     }
+    return static_cast<TOutput>(rescaledValue);
   }
 
   template <typename R, typename A, typename B>
@@ -105,7 +168,9 @@ class DecimalUtil {
       unsignedDivisor *= -1;
     }
     unsignedDividendRescaled = checkedMultiply<R>(
-        unsignedDividendRescaled, R(DecimalUtil::kPowersOfTen[aRescale]));
+        unsignedDividendRescaled,
+        R(DecimalUtil::kPowersOfTen[aRescale]),
+        "Decimal");
     R quotient = unsignedDividendRescaled / unsignedDivisor;
     R remainder = unsignedDividendRescaled % unsignedDivisor;
     if (!noRoundUp && remainder * 2 >= unsignedDivisor) {
@@ -184,7 +249,6 @@ class DecimalUtil {
     }
   }
 
- private:
   static constexpr __uint128_t kOverflowMultiplier = ((__uint128_t)1 << 127);
 }; // DecimalUtil
 } // namespace facebook::velox

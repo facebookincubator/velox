@@ -14,24 +14,26 @@
 include(GoogleTest)
 add_executable(
   velox_memory_test
+  AllocationTest.cpp
   ByteStreamTest.cpp
   CompactDoubleListTest.cpp
   HashStringAllocatorTest.cpp
-  MemoryHeaderTest.cpp
+  MemoryAllocatorTest.cpp
+  MemoryArbitratorTest.cpp
   MemoryManagerTest.cpp
   MemoryPoolTest.cpp
-  MemoryUsageTest.cpp
-  MemoryUsageTrackerTest.cpp
-  MappedMemoryTest.cpp)
+  SharedArbitratorTest.cpp)
 
 target_link_libraries(
   velox_memory_test
   velox_memory
+  velox_caching
   velox_exception
   velox_test_util
   gtest
   gtest_main
-  ${gflags_LIBRARIES}
+  gflags::gflags
+  Folly::folly
   gmock
   glog::glog)
 
@@ -45,5 +47,20 @@ target_link_libraries(
   glog::glog
   gtest
   gtest_main
-  ${gflags_LIBRARIES}
+  gflags::gflags
+  Folly::folly
+  pthread)
+
+add_executable(velox_concurrent_allocation_benchmark
+               ConcurrentAllocationBenchmark.cpp)
+
+target_link_libraries(
+  velox_concurrent_allocation_benchmark
+  velox_memory
+  glog::glog
+  gtest
+  gtest_main
+  gflags::gflags
+  Folly::folly
+  fmt::fmt
   pthread)

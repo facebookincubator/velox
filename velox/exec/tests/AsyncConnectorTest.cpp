@@ -21,6 +21,7 @@
 #include "velox/exec/tests/utils/QueryAssertions.h"
 
 using namespace facebook::velox;
+using namespace facebook::velox::connector;
 using namespace facebook::velox::test;
 
 namespace facebook::velox::exec::test {
@@ -92,8 +93,8 @@ class TestDataSource : public connector::DataSource {
     }
 
     needSplit_ = true;
-    auto data = std::dynamic_pointer_cast<FlatVector<int64_t>>(
-        BaseVector::create({BIGINT()}, size, pool_));
+    auto data =
+        BaseVector::create<FlatVector<int64_t>>({BIGINT()}, size, pool_);
     for (auto i = 0; i < size; i++) {
       data->set(i, i);
     }
@@ -146,10 +147,11 @@ class TestConnector : public connector::Connector {
   }
 
   std::shared_ptr<connector::DataSink> createDataSink(
-      RowTypePtr /* inputType */,
-      std::shared_ptr<connector::ConnectorInsertTableHandle>
-      /* connectorInsertTableHandle */,
-      connector::ConnectorQueryCtx* /* connectorQueryCtx */) override {
+      RowTypePtr /*inputType*/,
+      std::shared_ptr<
+          ConnectorInsertTableHandle> /*connectorInsertTableHandle*/,
+      ConnectorQueryCtx* /*connectorQueryCtx*/,
+      CommitStrategy /*commitStrategy*/) override final {
     VELOX_NYI();
   }
 };

@@ -120,13 +120,49 @@ class SsdPin {
 
 // Metrics for SSD cache. Maintained by SsdFile and aggregated by SsdCache.
 struct SsdCacheStats {
-  uint64_t entriesWritten{0};
-  uint64_t bytesWritten{0};
-  uint64_t entriesRead{0};
-  uint64_t bytesRead{0};
-  uint64_t entriesCached{0};
-  uint64_t bytesCached{0};
-  int32_t numPins{0};
+  SsdCacheStats() {}
+
+  SsdCacheStats(const SsdCacheStats& other) {
+    *this = other;
+  }
+
+  void operator=(const SsdCacheStats& other) {
+    entriesWritten = tsanAtomicValue(other.entriesWritten);
+    bytesWritten = tsanAtomicValue(other.bytesWritten);
+    entriesRead = tsanAtomicValue(other.entriesRead);
+    bytesRead = tsanAtomicValue(other.bytesRead);
+    entriesCached = tsanAtomicValue(other.entriesCached);
+    bytesCached = tsanAtomicValue(other.bytesCached);
+    numPins = tsanAtomicValue(other.numPins);
+
+    openFileErrors = tsanAtomicValue(other.openFileErrors);
+    openCheckpointErrors = tsanAtomicValue(other.openCheckpointErrors);
+    openLogErrors = tsanAtomicValue(other.openLogErrors);
+    deleteCheckpointErrors = tsanAtomicValue(other.deleteCheckpointErrors);
+    growFileErrors = tsanAtomicValue(other.growFileErrors);
+    writeSsdErrors = tsanAtomicValue(other.writeSsdErrors);
+    writeCheckpointErrors = tsanAtomicValue(other.writeCheckpointErrors);
+    readSsdErrors = tsanAtomicValue(other.readSsdErrors);
+    readCheckpointErrors = tsanAtomicValue(other.readCheckpointErrors);
+  }
+
+  tsan_atomic<uint64_t> entriesWritten{0};
+  tsan_atomic<uint64_t> bytesWritten{0};
+  tsan_atomic<uint64_t> entriesRead{0};
+  tsan_atomic<uint64_t> bytesRead{0};
+  tsan_atomic<uint64_t> entriesCached{0};
+  tsan_atomic<uint64_t> bytesCached{0};
+  tsan_atomic<int32_t> numPins{0};
+
+  tsan_atomic<uint32_t> openFileErrors{0};
+  tsan_atomic<uint32_t> openCheckpointErrors{0};
+  tsan_atomic<uint32_t> openLogErrors{0};
+  tsan_atomic<uint32_t> deleteCheckpointErrors{0};
+  tsan_atomic<uint32_t> growFileErrors{0};
+  tsan_atomic<uint32_t> writeSsdErrors{0};
+  tsan_atomic<uint32_t> writeCheckpointErrors{0};
+  tsan_atomic<uint32_t> readSsdErrors{0};
+  tsan_atomic<uint32_t> readCheckpointErrors{0};
 };
 
 // A shard of SsdCache. Corresponds to one file on SSD.  The data
@@ -148,6 +184,7 @@ class SsdFile {
       int32_t shardId,
       int32_t maxRegions,
       int64_t checkpointInternalBytes = 0,
+      bool disableFileCow = false,
       folly::Executor* FOLLY_NULLABLE executor = nullptr);
 
   // Adds entries of  'pins'  to this file. 'pins' must be in read mode and
@@ -177,6 +214,7 @@ class SsdFile {
   // Asserts that the region of 'offset' is pinned. This is called by
   // the pin holder. The pin count can be read without mutex.
   void checkPinned(uint64_t offset) const {
+    tsan_lock_guard<std::mutex> l(mutex_);
     VELOX_CHECK_LT(0, regionPins_[regionIndex(offset)]);
   }
 
@@ -212,6 +250,9 @@ class SsdFile {
   // rechecks that at least 'checkpointIntervalBytes_' have been
   // written since last checkpoint and silently returns if not.
   void checkpoint(bool force = false);
+
+  /// Returns true if copy on write is disabled for this file. Used in testing.
+  bool testingIsCowDisabled() const;
 
  private:
   // 4 first bytes of a checkpoint file. Allows distinguishing between format
@@ -277,7 +318,7 @@ class SsdFile {
   void logEviction(const std::vector<int32_t>& regions);
 
   // Serializes access to all private data members.
-  std::mutex mutex_;
+  mutable std::mutex mutex_;
   // Name of cache file, used as prefix for checkpoint files.
   std::string fileName_;
   static constexpr const char* FOLLY_NONNULL kLogExtension = ".log";

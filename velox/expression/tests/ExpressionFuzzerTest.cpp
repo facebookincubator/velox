@@ -36,9 +36,9 @@ DEFINE_string(
 
 DEFINE_string(
     special_forms,
-    "and,or",
+    "and,or,cast,coalesce",
     "Comma-separated list of special forms to use in generated expression. "
-    "Supported special forms: and, or, coalesce, if.");
+    "Supported special forms: and, or, coalesce, if, switch, cast.");
 
 int main(int argc, char** argv) {
   facebook::velox::functions::prestosql::registerAllScalarFunctions();
@@ -58,7 +58,10 @@ int main(int argc, char** argv) {
       // cardinality passing a VARBINARY (since HLL's implementation uses an
       // alias to VARBINARY).
       "cardinality",
-      "neq"};
+      "in",
+      "element_at",
+      "width_bucket",
+  };
   size_t initialSeed = FLAGS_seed == 0 ? std::time(nullptr) : FLAGS_seed;
   return FuzzerRunner::run(
       FLAGS_only, initialSeed, skipFunctions, FLAGS_special_forms);

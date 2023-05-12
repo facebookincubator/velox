@@ -13,7 +13,7 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-
+#include "velox/common/base/tests/GTestUtils.h"
 #include "velox/functions/prestosql/tests/utils/FunctionBaseTest.h"
 
 using namespace facebook::velox;
@@ -32,9 +32,9 @@ class SliceTest : public FunctionBaseTest {
       const ArrayVectorPtr& expectedArrayVector) {
     auto result = evaluate<ArrayVector>(expression, makeRowVector(parameters));
     assertEqualVectors(expectedArrayVector, result);
+    EXPECT_NO_THROW(expectedArrayVector->checkRanges());
   }
 };
-} // namespace
 
 TEST_F(SliceTest, prestoTestCases) {
   {
@@ -107,25 +107,21 @@ TEST_F(SliceTest, prestoTestCases) {
   {
     auto arrayVector = makeArrayVector<int64_t>({{1, 2, 3, 4}});
     auto expectedArrayVector = makeArrayVector<int64_t>({{}});
-    assertUserInvalidArgument(
-        [&]() {
-          testSlice(
-              "slice(C0, 1, -1)",
-              {arrayVector, arrayVector, expectedArrayVector},
-              expectedArrayVector);
-        },
+    VELOX_ASSERT_THROW(
+        testSlice(
+            "slice(C0, 1, -1)",
+            {arrayVector, arrayVector, expectedArrayVector},
+            expectedArrayVector),
         "The value of length argument of slice() function should not be negative");
   }
   {
     auto arrayVector = makeArrayVector<int64_t>({{1, 2, 3, 4}});
     auto expectedArrayVector = makeArrayVector<int64_t>({{}});
-    assertUserInvalidArgument(
-        [&]() {
-          testSlice(
-              "slice(C0, 0, 1)",
-              {arrayVector, arrayVector, expectedArrayVector},
-              expectedArrayVector);
-        },
+    VELOX_ASSERT_THROW(
+        testSlice(
+            "slice(C0, 0, 1)",
+            {arrayVector, arrayVector, expectedArrayVector},
+            expectedArrayVector),
         "SQL array indices start at 1");
   }
 }
@@ -170,10 +166,8 @@ TEST_F(SliceTest, constantInputArray) {
   {
     auto expectedArrayVector = makeArrayVector<int64_t>(
         {{1, 2, 3, 4, 5, 6, 7}, {1, 2, 7}, {1, 2, 3, 5, 6, 7}});
-    assertUserInvalidArgument(
-        [&]() {
-          testSlice("slice(C0, 0, 1)", {arrayVector}, expectedArrayVector);
-        },
+    VELOX_ASSERT_THROW(
+        testSlice("slice(C0, 0, 1)", {arrayVector}, expectedArrayVector),
         "SQL array indices start at 1");
   }
 }
@@ -259,13 +253,13 @@ TEST_F(SliceTest, varcharVariableInput) {
 
   auto sizeAt = [](vector_size_t /*row*/) { return 7; };
   auto valueAt = [](vector_size_t /*row*/, vector_size_t idx) {
-    return StringView(folly::to<std::string>(idx + 1));
+    return StringView::makeInline(folly::to<std::string>(idx + 1));
   };
   auto arrayVector = makeArrayVector<StringView>(kVectorSize, sizeAt, valueAt);
 
   auto expectedSizeAt = [](vector_size_t row) { return 7 - row % 7; };
   auto expectedValueAt = [](vector_size_t row, vector_size_t idx) {
-    return StringView(folly::to<std::string>(1 + row % 7 + idx));
+    return StringView::makeInline(folly::to<std::string>(1 + row % 7 + idx));
   };
   auto expectedArrayVector =
       makeArrayVector<StringView>(kVectorSize, expectedSizeAt, expectedValueAt);
@@ -312,24 +306,22 @@ TEST_F(SliceTest, errorStatesArray) {
 
   auto sizeAt = [](vector_size_t /*row*/) { return 7; };
   auto valueAt = [](vector_size_t /*row*/, vector_size_t idx) {
-    return StringView(folly::to<std::string>(idx + 1));
+    return StringView::makeInline(folly::to<std::string>(idx + 1));
   };
   auto arrayVector = makeArrayVector<StringView>(kVectorSize, sizeAt, valueAt);
 
   auto expectedSizeAt = [](vector_size_t row) { return 7 - row % 7; };
   auto expectedValueAt = [](vector_size_t row, vector_size_t idx) {
-    return StringView(folly::to<std::string>(1 + row % 7 + idx));
+    return StringView::makeInline(folly::to<std::string>(1 + row % 7 + idx));
   };
   auto expectedArrayVector =
       makeArrayVector<StringView>(kVectorSize, expectedSizeAt, expectedValueAt);
 
-  assertUserInvalidArgument(
-      [&]() {
-        testSlice(
-            "slice(C0, C1, C2)",
-            {arrayVector, startsVector, lengthsVector},
-            expectedArrayVector);
-      },
+  VELOX_ASSERT_THROW(
+      testSlice(
+          "slice(C0, C1, C2)",
+          {arrayVector, startsVector, lengthsVector},
+          expectedArrayVector),
       "SQL array indices start at 1");
 }
 
@@ -341,13 +333,13 @@ TEST_F(SliceTest, zeroSliceLength) {
 
   auto sizeAt = [](vector_size_t /*row*/) { return 7; };
   auto valueAt = [](vector_size_t /*row*/, vector_size_t idx) {
-    return StringView(folly::to<std::string>(idx + 1));
+    return StringView::makeInline(folly::to<std::string>(idx + 1));
   };
   auto arrayVector = makeArrayVector<StringView>(kVectorSize, sizeAt, valueAt);
 
   auto expectedSizeAt = [](vector_size_t /*row*/) { return 0; };
   auto expectedValueAt = [](vector_size_t /*row*/, vector_size_t /*idx*/) {
-    return StringView(folly::to<std::string>());
+    return StringView::makeInline(folly::to<std::string>());
   };
   auto expectedArrayVector =
       makeArrayVector<StringView>(kVectorSize, expectedSizeAt, expectedValueAt);
@@ -376,12 +368,33 @@ TEST_F(SliceTest, negativeSliceLength) {
   };
   auto expectedArrayVector =
       makeArrayVector<int64_t>(kVectorSize, expectedSizeAt, expectedValueAt);
-  assertUserInvalidArgument(
-      [&]() {
-        testSlice(
-            "slice(C0, C1, C2)",
-            {arrayVector, startsVector, lengthsVector},
-            expectedArrayVector);
-      },
+  VELOX_ASSERT_THROW(
+      testSlice(
+          "slice(C0, C1, C2)",
+          {arrayVector, startsVector, lengthsVector},
+          expectedArrayVector),
       "The value of length argument of slice() function should not be negative");
 }
+
+TEST_F(SliceTest, constantArrayNonConstantLength) {
+  // Tests constant arrays and non-constant starts and lengths. Ensure they
+  // don't create overlapping ranges in the output ArrayVector.
+  auto startsVector = makeFlatVector<int64_t>(
+      kVectorSize, [](vector_size_t /*row*/) { return 2; });
+  auto lengthsVector = makeFlatVector<int64_t>(
+      kVectorSize, [](vector_size_t /*row*/) { return 2; });
+  auto arrayVector = makeConstantArray<int64_t>(kVectorSize, {99, 100, 101});
+
+  auto expectedSizeAt = [](vector_size_t /*row*/) { return 2; };
+  auto expectedValueAt = [](vector_size_t /*row*/, vector_size_t idx) {
+    return idx == 0 ? 100 : 101;
+  };
+  auto expectedArrayVector =
+      makeArrayVector<int64_t>(kVectorSize, expectedSizeAt, expectedValueAt);
+  testSlice(
+      "slice(C0, C1, C2)",
+      {arrayVector, startsVector, lengthsVector},
+      expectedArrayVector);
+}
+
+} // namespace

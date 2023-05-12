@@ -13,15 +13,16 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-#include "velox/expression/FunctionSignature.h"
 #include <boost/algorithm/string.hpp>
 #include <boost/algorithm/string/trim.hpp>
+
 #include "velox/common/base/Exceptions.h"
+#include "velox/expression/FunctionSignature.h"
 #include "velox/type/Type.h"
 
 namespace facebook::velox::exec {
 
-std::string sanitizeFunctionName(const std::string& name) {
+std::string sanitizeName(const std::string& name) {
   std::string sanitizedName;
   sanitizedName.resize(name.size());
   std::transform(
@@ -65,13 +66,29 @@ std::string TypeSignature::toString() const {
   return out.str();
 }
 
-std::string FunctionSignature::toString() const {
+std::string FunctionSignature::argumentsToString() const {
+  std::vector<std::string> arguments;
+  auto size = argumentTypes_.size();
+  arguments.reserve(size);
+  for (auto i = 0; i < size; ++i) {
+    auto arg = argumentTypes_.at(i).toString();
+    if (constantArguments_.at(i)) {
+      arguments.emplace_back("constant " + arg);
+    } else {
+      arguments.emplace_back(arg);
+    }
+  }
   std::ostringstream out;
-  out << "(" << folly::join(",", argumentTypes_);
+  out << folly::join(",", arguments);
   if (variableArity_) {
     out << "...";
   }
-  out << ") -> " << returnType_.toString();
+  return out.str();
+}
+
+std::string FunctionSignature::toString() const {
+  std::ostringstream out;
+  out << "(" << argumentsToString() << ") -> " << returnType_.toString();
   return out.str();
 }
 
@@ -132,28 +149,32 @@ bool isPositiveInteger(const std::string& str) {
 }
 
 void validateBaseTypeAndCollectTypeParams(
-    const std::unordered_set<std::string>& typeParams,
+    const std::unordered_map<std::string, SignatureVariable>& variables,
     const TypeSignature& arg,
-    std::unordered_set<std::string>& collectedTypeVariables) {
-  if (!typeParams.count(arg.baseName())) {
+    std::unordered_set<std::string>& collectedTypeVariables,
+    bool isReturnType) {
+  if (!variables.count(arg.baseName())) {
     auto typeName = boost::algorithm::to_upper_copy(arg.baseName());
 
     if (typeName == "ANY") {
+      VELOX_USER_CHECK(
+          !isReturnType, "Type 'Any' cannot appear in return type");
+
       VELOX_USER_CHECK(
           arg.parameters().empty(), "Type 'Any' cannot have parameters")
       return;
     }
 
-    if (!isPositiveInteger(typeName) && !isCommonDecimalName(typeName) &&
-        !typeExists(typeName)) {
-      // Check to ensure base type is supported.
-      mapNameToTypeKind(typeName);
+    if (!isPositiveInteger(typeName) &&
+        !tryMapNameToTypeKind(typeName).has_value() &&
+        !isDecimalName(typeName)) {
+      VELOX_USER_CHECK(hasType(typeName), "Type doesn't exist: {}", typeName);
     }
 
     // Ensure all params are similarly supported.
     for (auto& param : arg.parameters()) {
       validateBaseTypeAndCollectTypeParams(
-          typeParams, param, collectedTypeVariables);
+          variables, param, collectedTypeVariables, isReturnType);
     }
 
   } else {
@@ -168,67 +189,88 @@ void validateBaseTypeAndCollectTypeParams(
 }
 
 void validate(
-    const std::vector<TypeVariableConstraint>& typeVariableConstraints,
+    const std::unordered_map<std::string, SignatureVariable>& variables,
     const TypeSignature& returnType,
-    const std::vector<TypeSignature>& argumentTypes) {
-  // Validate that the type params are unique.
-  std::unordered_set<std::string> typeNames(typeVariableConstraints.size());
-  for (const auto& variable : typeVariableConstraints) {
-    VELOX_USER_CHECK(
-        typeNames.insert(variable.name()).second,
-        "Type parameter declared twice {}",
-        variable.name());
-  }
-
-  std::unordered_set<std::string> usedTypeVariables;
+    const std::vector<TypeSignature>& argumentTypes,
+    const std::vector<bool>& constantArguments) {
+  std::unordered_set<std::string> usedVariables;
   // Validate the argument types.
   for (const auto& arg : argumentTypes) {
     // Is base type a type parameter or a built in type ?
-    validateBaseTypeAndCollectTypeParams(typeNames, arg, usedTypeVariables);
+    validateBaseTypeAndCollectTypeParams(variables, arg, usedVariables, false);
   }
 
-  // Similarly validate for return type.
+  // All type variables should apear in the inputs arguments.
+  for (auto& [name, variable] : variables) {
+    if (variable.isTypeParameter()) {
+      VELOX_USER_CHECK(
+          usedVariables.count(name),
+          "Some type variables are not used in the inputs");
+    }
+  }
+
   validateBaseTypeAndCollectTypeParams(
-      typeNames, returnType, usedTypeVariables);
+      variables, returnType, usedVariables, true);
 
   VELOX_USER_CHECK_EQ(
-      usedTypeVariables.size(),
-      typeNames.size(),
-      "Not all type parameters used");
+      usedVariables.size(),
+      variables.size(),
+      "Some integer variables are not used");
+
+  VELOX_USER_CHECK_EQ(
+      argumentTypes.size(),
+      constantArguments.size(),
+      "Argument types size is not equal to constant flags");
 }
 
 } // namespace
 
-TypeVariableConstraint::TypeVariableConstraint(
+SignatureVariable::SignatureVariable(
     std::string name,
     std::optional<std::string> constraint,
-    ParameterType type)
+    ParameterType type,
+    bool knownTypesOnly)
     : name_{std::move(name)},
       constraint_(constraint.has_value() ? std::move(constraint.value()) : ""),
-      type_{type} {
+      type_{type},
+      knownTypesOnly_(knownTypesOnly) {
+  VELOX_CHECK(
+      !knownTypesOnly_ || isTypeParameter(),
+      "Non-Type variables cannot have the knownTypesOnly constraint");
+
   VELOX_CHECK(
       isIntegerParameter() || (isTypeParameter() && constraint_.empty()),
-      "Type parameters cannot have constraints");
+      "Type variables cannot have constraints");
 }
 
 FunctionSignature::FunctionSignature(
-    std::vector<TypeVariableConstraint> typeVariableConstraints,
+    std::unordered_map<std::string, SignatureVariable> variables,
     TypeSignature returnType,
     std::vector<TypeSignature> argumentTypes,
+    std::vector<bool> constantArguments,
     bool variableArity)
-    : typeVariableConstraints_{std::move(typeVariableConstraints)},
+    : variables_{std::move(variables)},
       returnType_{std::move(returnType)},
       argumentTypes_{std::move(argumentTypes)},
+      constantArguments_{std::move(constantArguments)},
       variableArity_{variableArity} {
-  validate(typeVariableConstraints_, returnType_, argumentTypes_);
+  validate(variables_, returnType_, argumentTypes_, constantArguments_);
+}
+
+std::string AggregateFunctionSignature::toString() const {
+  std::ostringstream out;
+  out << "(" << argumentsToString() << ") -> " << intermediateType_.toString()
+      << " -> " << returnType().toString();
+  return out.str();
 }
 
 FunctionSignaturePtr FunctionSignatureBuilder::build() {
   VELOX_CHECK(returnType_.has_value());
   return std::make_shared<FunctionSignature>(
-      std::move(typeVariableConstraints_),
+      std::move(variables_),
       returnType_.value(),
       std::move(argumentTypes_),
+      std::move(constantArguments_),
       variableArity_);
 }
 
@@ -237,10 +279,11 @@ AggregateFunctionSignatureBuilder::build() {
   VELOX_CHECK(returnType_.has_value());
   VELOX_CHECK(intermediateType_.has_value());
   return std::make_shared<AggregateFunctionSignature>(
-      std::move(typeVariableConstraints_),
+      std::move(variables_),
       returnType_.value(),
       intermediateType_.value(),
       std::move(argumentTypes_),
+      std::move(constantArguments_),
       variableArity_);
 }
 } // namespace facebook::velox::exec

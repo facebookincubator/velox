@@ -28,17 +28,27 @@ namespace facebook::velox::test {
 /// Returns indices buffer with sequential values going from size - 1 to 0.
 BufferPtr makeIndicesInReverse(vector_size_t size, memory::MemoryPool* pool);
 
+BufferPtr makeIndices(
+    vector_size_t size,
+    std::function<vector_size_t(vector_size_t)> indexAt,
+    memory::MemoryPool* pool);
+
 // TODO: enable ASSERT_EQ for vectors.
 void assertEqualVectors(const VectorPtr& expected, const VectorPtr& actual);
+
+// Verify that the values in both 'expected' and 'actual' vectors is the same
+// but only for the rows marked valid in 'rowsToCompare'.
+void assertEqualVectors(
+    const VectorPtr& expected,
+    const VectorPtr& actual,
+    const SelectivityVector& rowsToCompare);
 
 /// Verify that 'vector' is copyable, by copying all rows.
 void assertCopyableVector(const VectorPtr& vector);
 
 class VectorTestBase {
  protected:
-  VectorTestBase() {
-    pool_->setMemoryUsageTracker(memory::MemoryUsageTracker::create());
-  }
+  VectorTestBase() = default;
 
   ~VectorTestBase();
 
@@ -141,8 +151,9 @@ class VectorTestBase {
   FlatVectorPtr<T> makeFlatVector(
       vector_size_t size,
       std::function<T(vector_size_t /*row*/)> valueAt,
-      std::function<bool(vector_size_t /*row*/)> isNullAt = nullptr) {
-    return vectorMaker_.flatVector<T>(size, valueAt, isNullAt);
+      std::function<bool(vector_size_t /*row*/)> isNullAt = nullptr,
+      const TypePtr& type = CppToType<T>::create()) {
+    return vectorMaker_.flatVector<T>(size, valueAt, isNullAt, type);
   }
 
   /// Decimal Vector type cannot be inferred from the cpp type alone as the cpp
@@ -183,25 +194,25 @@ class VectorTestBase {
     return vectorMaker_.allNullFlatVector<T>(size);
   }
 
-  FlatVectorPtr<UnscaledShortDecimal> makeShortDecimalFlatVector(
+  FlatVectorPtr<int64_t> makeShortDecimalFlatVector(
       const std::vector<int64_t>& unscaledValues,
       const TypePtr& type) {
     return vectorMaker_.shortDecimalFlatVector(unscaledValues, type);
   }
 
-  FlatVectorPtr<UnscaledLongDecimal> makeLongDecimalFlatVector(
+  FlatVectorPtr<int128_t> makeLongDecimalFlatVector(
       const std::vector<int128_t>& unscaledValues,
       const TypePtr& type) {
     return vectorMaker_.longDecimalFlatVector(unscaledValues, type);
   }
 
-  FlatVectorPtr<UnscaledShortDecimal> makeNullableShortDecimalFlatVector(
+  FlatVectorPtr<int64_t> makeNullableShortDecimalFlatVector(
       const std::vector<std::optional<int64_t>>& unscaledValues,
       const TypePtr& type) {
     return vectorMaker_.shortDecimalFlatVectorNullable(unscaledValues, type);
   }
 
-  FlatVectorPtr<UnscaledLongDecimal> makeNullableLongDecimalFlatVector(
+  FlatVectorPtr<int128_t> makeNullableLongDecimalFlatVector(
       const std::vector<std::optional<int128_t>>& unscaledValues,
       const TypePtr& type) {
     return vectorMaker_.longDecimalFlatVectorNullable(unscaledValues, type);
@@ -219,13 +230,23 @@ class VectorTestBase {
   //   });
   //   EXPECT_EQ(3, arrayVector->size());
   template <typename T>
-  ArrayVectorPtr makeArrayVector(const std::vector<std::vector<T>>& data) {
-    return vectorMaker_.arrayVector<T>(data);
+  ArrayVectorPtr makeArrayVector(
+      const std::vector<std::vector<T>>& data,
+      const TypePtr& elementType = CppToType<T>::create()) {
+    return vectorMaker_.arrayVector<T>(data, elementType);
+  }
+
+  ArrayVectorPtr makeAllNullArrayVector(
+      vector_size_t size,
+      const TypePtr& elementType) {
+    return vectorMaker_.allNullArrayVector(size, elementType);
   }
 
   // Create an ArrayVector<ROW> from nested std::vectors of variants.
   // Example:
-  //   auto arrayVector = makeArrayOfRowVector({
+  //   auto arrayVector = makeArrayOfRowVector(
+  //     ROW({INTEGER(), VARCHAR()}),
+  //     {
   //       {variant::row({1, "red"}), variant::row({1, "blue"})},
   //       {},
   //       {variant::row({3, "green"})},
@@ -578,27 +599,36 @@ class VectorTestBase {
     return vectorMaker_.mapVector(offsets, keyVector, valueVector, nulls);
   }
 
-  template <typename T>
-  VectorPtr
-  makeConstant(T value, vector_size_t size, const TypePtr& type = {}) {
-    variant v;
-    if constexpr (std::is_same_v<T, UnscaledShortDecimal>) {
-      v = variant::shortDecimal(value.unscaledValue(), type);
-    } else if constexpr (std::is_same_v<T, UnscaledLongDecimal>) {
-      v = variant::longDecimal(value.unscaledValue(), type);
-    } else {
-      v = value;
-    }
-    return BaseVector::createConstant(v, size, pool());
+  MapVectorPtr makeAllNullMapVector(
+      vector_size_t size,
+      const TypePtr& keyType,
+      const TypePtr& valueType) {
+    return vectorMaker_.allNullMapVector(size, keyType, valueType);
+  }
+
+  VectorPtr makeConstant(const variant& value, vector_size_t size) {
+    return BaseVector::createConstant(value.inferType(), value, size, pool());
   }
 
   template <typename T>
-  VectorPtr makeConstant(const std::optional<T>& value, vector_size_t size) {
+  VectorPtr makeConstant(
+      T value,
+      vector_size_t size,
+      const TypePtr& type = CppToType<EvalType<T>>::create()) {
+    return std::make_shared<ConstantVector<EvalType<T>>>(
+        pool(), size, false, type, std::move(value));
+  }
+
+  template <typename T>
+  VectorPtr makeConstant(
+      const std::optional<T>& value,
+      vector_size_t size,
+      const TypePtr& type = CppToType<EvalType<T>>::create()) {
     return std::make_shared<ConstantVector<EvalType<T>>>(
         pool(),
         size,
         /*isNull=*/!value.has_value(),
-        CppToType<T>::create(),
+        type,
         value ? EvalType<T>(*value) : EvalType<T>(),
         SimpleVectorStats<EvalType<T>>{},
         sizeof(EvalType<T>));
@@ -620,7 +650,8 @@ class VectorTestBase {
   }
 
   VectorPtr makeNullConstant(TypeKind typeKind, vector_size_t size) {
-    return BaseVector::createConstant(variant(typeKind), size, pool());
+    return BaseVector::createNullConstant(
+        createType(typeKind, {}), size, pool());
   }
 
   BufferPtr makeIndices(
@@ -640,6 +671,9 @@ class VectorTestBase {
   BufferPtr makeNulls(
       vector_size_t size,
       std::function<bool(vector_size_t /*row*/)> isNullAt);
+
+  /// Creates a null buffer from a vector of booleans.
+  BufferPtr makeNulls(const std::vector<bool>& values);
 
   static VectorPtr
   wrapInDictionary(BufferPtr indices, vector_size_t size, VectorPtr vector);
@@ -704,8 +738,9 @@ class VectorTestBase {
     return pool_.get();
   }
 
-  std::unique_ptr<memory::MemoryPool> pool_{
-      memory::getDefaultScopedMemoryPool()};
+  std::shared_ptr<memory::MemoryPool> rootPool_{
+      memory::defaultMemoryManager().addRootPool()};
+  std::shared_ptr<memory::MemoryPool> pool_{rootPool_->addLeafChild("leaf")};
   velox::test::VectorMaker vectorMaker_{pool_.get()};
   std::shared_ptr<folly::Executor> executor_{
       std::make_shared<folly::CPUThreadPoolExecutor>(

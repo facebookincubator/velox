@@ -31,8 +31,7 @@ void TryExpr::evalSpecialForm(
   // This also prevents this TRY expression from leaking exceptions to the
   // parent TRY expression, so the parent won't incorrectly null out rows that
   // threw exceptions which this expression already handled.
-  ScopedVarSetter<EvalCtx::ErrorVectorPtr> errorsSetter(
-      context.errorsPtr(), nullptr);
+  ScopedVarSetter<ErrorVectorPtr> errorsSetter(context.errorsPtr(), nullptr);
   inputs_[0]->eval(rows, context, result);
 
   nullOutErrors(rows, context, result);
@@ -51,8 +50,7 @@ void TryExpr::evalSpecialFormSimplified(
   // This also prevents this TRY expression from leaking exceptions to the
   // parent TRY expression, so the parent won't incorrectly null out rows that
   // threw exceptions which this expression already handled.
-  ScopedVarSetter<EvalCtx::ErrorVectorPtr> errorsSetter(
-      context.errorsPtr(), nullptr);
+  ScopedVarSetter<ErrorVectorPtr> errorsSetter(context.errorsPtr(), nullptr);
   inputs_[0]->evalSimplified(rows, context, result);
 
   nullOutErrors(rows, context, result);
@@ -107,16 +105,25 @@ void TryExpr::nullOutErrors(
         return;
       }
 
-      // If the result is constant, the input should have been constant as
-      // well, so we should have consistently gotten exceptions.
-      // If this is not the case, an easy way to handle it would be to wrap
-      // the ConstantVector in a DictionaryVector and NULL out the rows that
-      // saw errors.
-      VELOX_DCHECK(
-          rows.testSelected([&](auto row) { return !errors->isNullAt(row); }));
-      // Set the result to be a NULL constant.
-      result = BaseVector::createNullConstant(
-          result->type(), result->size(), context.pool());
+      if (errors->isConstantEncoding()) {
+        // Set the result to be a NULL constant.
+        result = BaseVector::createNullConstant(
+            result->type(), result->size(), context.pool());
+      } else {
+        auto size = result->size();
+        VELOX_DCHECK_GE(size, rows.end());
+
+        auto nulls = allocateNulls(size, context.pool());
+        auto rawNulls = nulls->asMutable<uint64_t>();
+        rows.applyToSelected([&](auto row) {
+          if (row < errors->size() && !errors->isNullAt(row)) {
+            bits::setNull(rawNulls, row, true);
+          }
+        });
+        // Wrap in dictionary indices all pointing to index 0.
+        auto indices = allocateIndices(size, context.pool());
+        result = BaseVector::wrapInDictionary(nulls, indices, size, result);
+      }
     } else {
       rows.applyToSelected([&](auto row) {
         if (row < errors->size() && !errors->isNullAt(row)) {
@@ -125,5 +132,27 @@ void TryExpr::nullOutErrors(
       });
     }
   }
+}
+
+TypePtr TryCallToSpecialForm::resolveType(
+    const std::vector<TypePtr>& argTypes) {
+  VELOX_CHECK_EQ(
+      argTypes.size(),
+      1,
+      "TRY expressions expect exactly 1 argument, received: {}",
+      argTypes.size());
+  return argTypes[0];
+}
+
+ExprPtr TryCallToSpecialForm::constructSpecialForm(
+    const TypePtr& type,
+    std::vector<ExprPtr>&& compiledChildren,
+    bool /* trackCpuUsage */) {
+  VELOX_CHECK_EQ(
+      compiledChildren.size(),
+      1,
+      "TRY expressions expect exactly 1 argument, received: {}",
+      compiledChildren.size());
+  return std::make_shared<TryExpr>(type, std::move(compiledChildren[0]));
 }
 } // namespace facebook::velox::exec

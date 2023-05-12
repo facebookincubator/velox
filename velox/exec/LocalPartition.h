@@ -74,7 +74,7 @@ class LocalExchangeQueue {
 
   /// Used by a consumer to fetch some data. Returns kNotBlocked and sets data
   /// to nullptr if all data has been fetched and all producers are done
-  /// producing data. Returns kWaitForExchange if there is no data, but some
+  /// producing data. Returns kWaitForProducer if there is no data, but some
   /// producers are not done producing data. Sets future that will be completed
   /// once there is data to fetch or if all producers report completion.
   ///
@@ -183,19 +183,11 @@ class LocalPartition : public Operator {
 
   bool isFinished() override;
 
-  void close() override {
-    Operator::close();
-    for (auto& queue : queues_) {
-      queue->close();
-    }
-  }
-
  private:
   const std::vector<std::shared_ptr<LocalExchangeQueue>> queues_;
   const size_t numPartitions_;
   std::unique_ptr<core::PartitionFunction> partitionFunction_;
 
-  uint32_t numBlockedPartitions_{0};
   std::vector<BlockingReason> blockingReasons_;
   std::vector<ContinueFuture> futures_;
 

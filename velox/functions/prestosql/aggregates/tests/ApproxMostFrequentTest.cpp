@@ -14,7 +14,10 @@
  * limitations under the License.
  */
 
-#include "velox/functions/prestosql/aggregates/tests/AggregationTestBase.h"
+#include "velox/exec/tests/utils/AssertQueryBuilder.h"
+#include "velox/functions/lib/aggregates/tests/AggregationTestBase.h"
+
+using namespace facebook::velox::functions::aggregate::test;
 
 namespace facebook::velox::aggregate::test {
 namespace {
@@ -129,6 +132,31 @@ TYPED_TEST(ApproxMostFrequentTest, emptyGroup) {
       {"c0"},
       {"approx_most_frequent(3, c1, 11)"},
       {this->makeRowVector({groupKeys, expected})});
+}
+
+using ApproxMostFrequentTestInt = ApproxMostFrequentTest<int>;
+
+TEST_F(ApproxMostFrequentTestInt, invalidBuckets) {
+  static_cast<memory::MemoryPoolImpl*>(pool())->testingSetCapacity(1 << 21);
+  auto run = [&](int64_t buckets) {
+    auto rows = makeRowVector({
+        makeConstant<int64_t>(buckets, buckets),
+        makeFlatVector<int>(buckets, folly::identity),
+        makeConstant<int64_t>(buckets, buckets),
+    });
+    auto plan = exec::test::PlanBuilder()
+                    .values({rows})
+                    .singleAggregation({}, {"approx_most_frequent(c0, c1, c2)"})
+                    .planNode();
+    return exec::test::AssertQueryBuilder(plan).copyResults(pool());
+  };
+  ASSERT_EQ(run(10)->size(), 1);
+  try {
+    run(1 << 19);
+    FAIL() << "Expected an exception";
+  } catch (const VeloxException& e) {
+    EXPECT_EQ(e.errorCode(), error_code::kMemCapExceeded);
+  }
 }
 
 } // namespace

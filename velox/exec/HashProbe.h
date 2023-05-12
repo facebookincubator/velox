@@ -19,6 +19,7 @@
 #include "velox/exec/HashPartitionFunction.h"
 #include "velox/exec/HashTable.h"
 #include "velox/exec/Operator.h"
+#include "velox/exec/ProbeOperatorState.h"
 #include "velox/exec/VectorHasher.h"
 
 namespace facebook::velox::exec {
@@ -31,36 +32,9 @@ class HashProbe : public Operator {
       DriverCtx* driverCtx,
       const std::shared_ptr<const core::HashJoinNode>& hashJoinNode);
 
-  /// Define the internal execution state for hash probe. The valid state
-  /// transition is depicted as follows:
-  ///
-  ///                           +--------------------------------+
-  ///                           ^                                |
-  ///                           |                                V
-  ///   kWaitForBuild -->  kRunning  -->  kWaitForPeers --> kFinish
-  ///         ^                                |
-  ///         |                                v
-  ///         +--------------------------------+
-  ///
-  enum class State {
-    /// Wait for hash build operators to build the next hash table to join.
-    kWaitForBuild = 0,
-    /// The running state that join the probe input with the build table.
-    kRunning = 1,
-    /// Wait for all the peer hash probe operators to finish processing inputs.
-    /// This state only applies when disk spilling is enabled. The last finished
-    /// operator will notify the build operators to build the next hash table
-    /// from the spilled data. Then all the peer probe operators will wait for
-    /// the next hash table to build.
-    kWaitForPeers = 2,
-    /// The finishing state.
-    kFinish = 3,
-  };
-  static std::string stateName(State state);
-
   bool needsInput() const override {
-    if (state_ == State::kFinish || noMoreInput_ || noMoreSpillInput_ ||
-        input_ != nullptr) {
+    if (state_ == ProbeOperatorState::kFinish || noMoreInput_ ||
+        noMoreSpillInput_ || input_ != nullptr) {
       return false;
     }
     if (table_) {
@@ -83,11 +57,18 @@ class HashProbe : public Operator {
 
   bool isFinished() override;
 
+  /// NOTE: we can't reclaim memory from a hash probe operator. The disk
+  /// spilling in hash probe is used to coordinate with the disk spilling
+  /// triggered by the hash build operator.
+  bool canReclaim() const override {
+    return false;
+  }
+
   void clearDynamicFilters() override;
 
  private:
-  void setState(State state);
-  void checkStateTransition(State state);
+  void setState(ProbeOperatorState state);
+  void checkStateTransition(ProbeOperatorState state);
 
   void setRunning();
   void checkRunning() const;
@@ -119,6 +100,9 @@ class HashProbe : public Operator {
   // Populate output columns.
   void fillOutput(vector_size_t size);
 
+  // Populate 'match' output column for the left semi join project,
+  void fillLeftSemiProjectMatchColumn(vector_size_t size);
+
   // Clears the columns of 'output_' that are projected from
   // 'input_'. This should be done when preparing to produce a next
   // batch of output to drop any lingering references to row
@@ -137,31 +121,35 @@ class HashProbe : public Operator {
   vector_size_t evalFilter(vector_size_t numRows);
 
   inline bool filterPassed(vector_size_t row) {
-    return !decodedFilterResult_.isNullAt(row) &&
+    return filterInputRows_.isValid(row) &&
+        !decodedFilterResult_.isNullAt(row) &&
         decodedFilterResult_.valueAt<bool>(row);
   }
 
   // Populate filter input columns.
   void fillFilterInput(vector_size_t size);
 
-  // Prepare filter row selectivity for null-aware anti join. 'numRows'
+  // Prepare filter row selectivity for null-aware join. 'numRows'
   // specifies the number of rows in 'filterInputRows_' to process. If
   // 'filterPropagateNulls' is true, the probe input row which has null in any
   // probe filter column can't pass the filter.
-  void prepareFilterRowsForNullAwareAntiJoin(
+  void prepareFilterRowsForNullAwareJoin(
       vector_size_t numRows,
       bool filterPropagateNulls);
 
-  vector_size_t evalFilterForNullAwareAntiJoin(
+  // Evaluate the filter for null-aware anti or left semi project join.
+  SelectivityVector evalFilterForNullAwareJoin(
       vector_size_t numRows,
       bool filterPropagateNulls);
 
-  // Apply the filter on table rows joined with selected 'rows' from probe
-  // input for null-aware anti-join processing. Only keep the rows not passing
-  // the filter in 'rows'.
-  void applyFilterOnTableRowsForNullAwareAntiJoin(
-      SelectivityVector& rows,
-      bool nullKeyRowsOnly);
+  // Combine the selected probe-side rows with all or null-join-key (depending
+  // on the iterator) build side rows and evaluate the filter.  Mark probe rows
+  // that pass the filter in 'filterPassedRows'. Used in null-aware join
+  // processing.
+  void applyFilterOnTableRowsForNullAwareJoin(
+      const SelectivityVector& rows,
+      SelectivityVector& filterPassedRows,
+      std::function<int32_t(char**, int32_t)> iterator);
 
   void ensureLoadedIfNotAtEnd(column_index_t channel);
 
@@ -181,14 +169,6 @@ class HashProbe : public Operator {
   // process probe inputs to spill the probe rows if the corresponding
   // partitions have been spilled at the build side.
   bool skipProbeOnEmptyBuild() const;
-
-  // Checks if the spilling is allowed for this hash join. As for now, we don't
-  // allow spilling for null-aware anti-join with filter set. It requires to
-  // cross join the null-key probe rows with all the build-side rows for filter
-  // evaluation which is not supported under spilling.
-  bool isSpillAllowed() const {
-    return !isNullAwareAntiJoinWithFilter(joinNode_);
-  }
 
   bool spillEnabled() const;
 
@@ -227,11 +207,32 @@ class HashProbe : public Operator {
       vector_size_t numInput,
       const folly::F14FastSet<uint32_t>& spillPartitions);
 
+  /// Decode join key inputs and populate 'nonNullInputRows_'.
+  void decodeAndDetectNonNullKeys();
+
   // Invoked when there is no more input from either upstream task or spill
   // input. If there is remaining spilled data, then the last finished probe
   // operator is responsible for notifying the hash build operators to build the
   // next hash table from the spilled data.
   void noMoreInputInternal();
+
+  // Returns the index of the 'match' column in the output for semi project
+  // joins.
+  VectorPtr& matchColumn() const {
+    VELOX_DCHECK(
+        isRightSemiProjectJoin(joinType_) || isLeftSemiProjectJoin(joinType_));
+    return output_->children().back();
+  }
+
+  // Returns true if build side has no data.
+  // NOTE: if build side has triggered spilling, then the first hash table
+  // might be empty, but we still have spilled partition data remaining to
+  // restore. Also note that the spilled partition at build side must not be
+  // empty.
+  bool emptyBuildSide() const {
+    return table_->numDistinct() == 0 && spillPartitionSet_.empty() &&
+        spillInputPartitionIds_.empty();
+  }
 
   // TODO: Define batch size as bytes based on RowContainer row sizes.
   const uint32_t outputBatchSize_;
@@ -240,13 +241,13 @@ class HashProbe : public Operator {
 
   const core::JoinType joinType_;
 
-  const std::shared_ptr<HashJoinBridge> joinBridge_;
+  const bool nullAware_;
 
-  const std::optional<Spiller::Config> spillConfig_;
+  const std::shared_ptr<HashJoinBridge> joinBridge_;
 
   const RowTypePtr probeType_;
 
-  State state_{State::kWaitForBuild};
+  ProbeOperatorState state_{ProbeOperatorState::kWaitForBuild};
 
   // Used for synchronization with the hash probe operators of the same pipeline
   // to handle the last probe processing for certain types of join and notify
@@ -290,6 +291,17 @@ class HashProbe : public Operator {
   // same pipeline.
   std::shared_ptr<BaseHashTable> table_;
 
+  // Indicates whether there was no input. Used for right semi join project.
+  bool noInput_{true};
+
+  // Indicates whether there are rows with null join keys on the build
+  // side. Used by anti and left semi project join.
+  bool buildSideHasNullKeys_{false};
+
+  // Indicates whether there are rows with null join keys on the probe
+  // side. Used by right semi project join.
+  bool probeSideHasNullKeys_{false};
+
   VectorHasher::ScratchMemory scratchMemory_;
 
   // Rows in 'filterInput_' to apply 'filter_' to.
@@ -309,7 +321,6 @@ class HashProbe : public Operator {
 
   // Maps from column index in hash table to channel in 'filterInputType_'.
   std::vector<IdentityProjection> filterTableProjections_;
-  folly::F14FastMap<column_index_t, column_index_t> filterTableProjectionMap_;
 
   // Temporary projection from probe and build for evaluating
   // 'filter_'. This can always be reused since this does not escape
@@ -343,6 +354,10 @@ class HashProbe : public Operator {
 
   // Rows of table found by join probe, later filtered by 'filter_'.
   std::vector<char*> outputTableRows_;
+
+  // Indicates probe-side rows which should produce a NULL in left semi project
+  // with filter.
+  SelectivityVector leftSemiProjectIsNull_;
 
   // Tracks probe side rows which had one or more matches on the build side, but
   // didn't pass the filter.
@@ -424,16 +439,23 @@ class HashProbe : public Operator {
     // Expects that probe side rows with multiple matches are next to each
     // other. Calls onLast just once for each probe side row.
     template <typename TOnLast>
-    void advance(vector_size_t row, bool passed, TOnLast onLast) {
+    void
+    advance(vector_size_t row, std::optional<bool> passed, TOnLast onLast) {
       if (currentRow != row) {
         if (currentRow != -1) {
           onLast(currentRow, currentRowPassed);
         }
         currentRow = row;
-        currentRowPassed = false;
+        currentRowPassed = std::nullopt;
       }
 
-      currentRowPassed |= passed;
+      if (passed.has_value()) {
+        if (currentRowPassed.has_value()) {
+          currentRowPassed = currentRowPassed.value() || passed.value();
+        } else {
+          currentRowPassed = passed;
+        }
+      }
     }
 
     // Called when all rows from the current input batch were processed. Calls
@@ -445,7 +467,7 @@ class HashProbe : public Operator {
       }
 
       currentRow = -1;
-      currentRowPassed = false;
+      currentRowPassed = std::nullopt;
     }
 
    private:
@@ -453,7 +475,7 @@ class HashProbe : public Operator {
     vector_size_t currentRow{-1};
 
     // True if currentRow has a match.
-    bool currentRowPassed{false};
+    std::optional<bool> currentRowPassed;
   };
 
   BaseHashTable::RowsIterator lastProbeIterator_;
@@ -531,8 +553,8 @@ class HashProbe : public Operator {
   SpillPartitionSet spillPartitionSet_;
 };
 
-inline std::ostream& operator<<(std::ostream& os, HashProbe::State state) {
-  os << HashProbe::stateName(state);
+inline std::ostream& operator<<(std::ostream& os, ProbeOperatorState state) {
+  os << probeOperatorStateName(state);
   return os;
 }
 

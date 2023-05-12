@@ -19,9 +19,12 @@
 
 namespace facebook::velox::core {
 
+/// A simple wrapper around BaseConfigManager. Defines constants for query
+/// config properties and accessor methods.
 class QueryConfig {
  public:
-  explicit QueryConfig(BaseConfigManager* config) : config_{config} {}
+  explicit QueryConfig(BaseConfigManager* configManager)
+      : configManager_{configManager} {}
 
   static constexpr const char* kCodegenEnabled = "driver.codegen.enabled";
 
@@ -85,19 +88,33 @@ class QueryConfig {
   static constexpr const char* kMaxExtendedPartialAggregationMemory =
       "max_extended_partial_aggregation_memory";
 
-  /// Output volume as percentage of input volume below which we will not seek
-  /// to increase reduction by using more memory. the data volume is measured as
-  /// the number of rows.
-  static constexpr const char* kPartialAggregationGoodPct =
-      "partial_aggregation_reduction_ratio_threshold";
+  static constexpr const char* kAbandonPartialAggregationMinRows =
+      "abandon_partial_aggregation_min_rows";
+
+  static constexpr const char* kAbandonPartialAggregationMinPct =
+      "abandon_partial_aggregation_min_pct";
 
   static constexpr const char* kMaxPartitionedOutputBufferSize =
       "driver.max-page-partitioning-buffer-size";
 
-  /// Preffered number of rows to be returned by operators from
-  /// Operator::getOutput.
-  static constexpr const char* kPreferredOutputBatchSize =
-      "preferred_output_batch_size";
+  /// Preferred size of batches in bytes to be returned by operators from
+  /// Operator::getOutput. It is used when an estimate of average row size is
+  /// known. Otherwise kPreferredOutputBatchRows is used.
+  static constexpr const char* kPreferredOutputBatchBytes =
+      "preferred_output_batch_bytes";
+
+  /// Preferred number of rows to be returned by operators from
+  /// Operator::getOutput. It is used when an estimate of average row size is
+  /// not known. When the estimate of average row size is known,
+  /// kPreferredOutputBatchBytes is used.
+  static constexpr const char* kPreferredOutputBatchRows =
+      "preferred_output_batch_rows";
+
+  /// Max number of rows that could be return by operators from
+  /// Operator::getOutput. It is used when an estimate of average row size is
+  /// known and kPreferredOutputBatchBytes is used to compute the number of
+  /// output rows.
+  static constexpr const char* kMaxOutputBatchRows = "max_output_batch_rows";
 
   static constexpr const char* kHashAdaptivityEnabled =
       "driver.hash_adaptivity_enabled";
@@ -109,9 +126,6 @@ class QueryConfig {
 
   /// Global enable spilling flag.
   static constexpr const char* kSpillEnabled = "spill_enabled";
-
-  /// Spill path. "/tmp" by default.
-  static constexpr const char* kSpillPath = "spiller-spill-path";
 
   /// Aggregation spilling flag, only applies if "spill_enabled" flag is set.
   static constexpr const char* kAggregationSpillEnabled =
@@ -175,18 +189,21 @@ class QueryConfig {
   }
 
   uint64_t maxExtendedPartialAggregationMemoryUsage() const {
-    static constexpr uint64_t kDefault = 1L << 24;
+    static constexpr uint64_t kDefault = 1L << 26;
     return get<uint64_t>(kMaxExtendedPartialAggregationMemory, kDefault);
+  }
+
+  int32_t abandonPartialAggregationMinRows() const {
+    return get<int32_t>(kAbandonPartialAggregationMinRows, 10000);
+  }
+
+  int32_t abandonPartialAggregationMinPct() const {
+    return get<int32_t>(kAbandonPartialAggregationMinPct, 80);
   }
 
   uint64_t aggregationSpillMemoryThreshold() const {
     static constexpr uint64_t kDefault = 0;
     return get<uint64_t>(kAggregationSpillMemoryThreshold, kDefault);
-  }
-
-  double partialAggregationGoodPct() const {
-    static constexpr double kDefault = 0.5;
-    return get<double>(kPartialAggregationGoodPct, kDefault);
   }
 
   uint64_t joinSpillMemoryThreshold() const {
@@ -213,8 +230,17 @@ class QueryConfig {
     return get<uint64_t>(kMaxLocalExchangeBufferSize, kDefault);
   }
 
-  uint32_t preferredOutputBatchSize() const {
-    return get<uint32_t>(kPreferredOutputBatchSize, 1024);
+  uint64_t preferredOutputBatchBytes() const {
+    static constexpr uint64_t kDefault = 10UL << 20;
+    return get<uint64_t>(kPreferredOutputBatchBytes, kDefault);
+  }
+
+  uint32_t preferredOutputBatchRows() const {
+    return get<uint32_t>(kPreferredOutputBatchRows, 1024);
+  }
+
+  uint32_t maxOutputBatchRows() const {
+    return get<uint32_t>(kMaxOutputBatchRows, 10'000);
   }
 
   bool hashAdaptivityEnabled() const {
@@ -274,16 +300,6 @@ class QueryConfig {
   /// Returns true if spilling is enabled.
   bool spillEnabled() const {
     return get<bool>(kSpillEnabled, false);
-  }
-
-  /// Returns the path for writing spill files. The path should be
-  /// interpretable by filesystems::getFileSystem and may refer to any writable
-  /// location. Actual file names are composed by appending '/' and a filename
-  /// composed of Task id and serial numbers. The files are automatically
-  /// deleted when no longer needed. Files may be left behind after crashes but
-  /// are identifiable based on the Task id in the name.
-  std::optional<std::string> spillPath() const {
-    return get<std::string>(kSpillPath, "/tmp");
   }
 
   /// Returns 'is aggregation spilling enabled' flag. Must also check the
@@ -360,14 +376,14 @@ class QueryConfig {
 
   template <typename T>
   T get(const std::string& key, const T& defaultValue) const {
-    return config_->get<T>(key, defaultValue);
+    return configManager_->get<T>(key, defaultValue);
   }
   template <typename T>
   std::optional<T> get(const std::string& key) const {
-    return std::optional<T>(config_->get<T>(key));
+    return std::optional<T>(configManager_->get<T>(key));
   }
 
  private:
-  BaseConfigManager* config_;
+  BaseConfigManager* FOLLY_NONNULL configManager_;
 };
 } // namespace facebook::velox::core

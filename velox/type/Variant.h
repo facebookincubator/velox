@@ -24,7 +24,6 @@
 #include "velox/common/base/Exceptions.h"
 #include "velox/common/base/VeloxException.h"
 #include "velox/type/Conversions.h"
-#include "velox/type/DecimalUtil.h"
 #include "velox/type/Type.h"
 
 namespace facebook::velox {
@@ -50,9 +49,6 @@ template <>
 struct VariantEquality<TypeKind::DATE>;
 
 template <>
-struct VariantEquality<TypeKind::INTERVAL_DAY_TIME>;
-
-template <>
 struct VariantEquality<TypeKind::ARRAY>;
 
 template <>
@@ -60,12 +56,6 @@ struct VariantEquality<TypeKind::ROW>;
 
 template <>
 struct VariantEquality<TypeKind::MAP>;
-
-template <>
-struct VariantEquality<TypeKind::SHORT_DECIMAL>;
-
-template <>
-struct VariantEquality<TypeKind::LONG_DECIMAL>;
 
 bool dispatchDynamicVariantEquality(
     const variant& a,
@@ -115,68 +105,6 @@ struct VariantTypeTraits<TypeKind::ARRAY> {
   using stored_type = std::vector<variant>;
 };
 
-/// Variants contain a TypeKind and a value.
-/// DECIMAL type variants use TypeKind to store the kind, and this struct as the
-/// value to store the optional unscaled value, precision, scale.
-template <typename T>
-struct DecimalCapsule {
-  std::optional<T> unscaledValue;
-  int precision;
-  int scale;
-
-  T value() const {
-    return unscaledValue.value();
-  }
-
-  bool hasValue() const {
-    return unscaledValue.has_value();
-  }
-
-  bool operator==(const DecimalCapsule& other) const {
-    VELOX_CHECK(hasValue() && other.hasValue());
-    return value() == other.value() && precision == other.precision &&
-        scale == other.scale;
-  }
-
-  bool operator<(const DecimalCapsule& other) const {
-    VELOX_CHECK(hasValue() && other.hasValue());
-    auto lhsIntegral =
-        (value().unscaledValue() / DecimalUtil::kPowersOfTen[scale]);
-    auto rhsIntegral =
-        (other.value().unscaledValue() /
-         DecimalUtil::kPowersOfTen[other.scale]);
-    if (lhsIntegral == rhsIntegral) {
-      return (value().unscaledValue() % DecimalUtil::kPowersOfTen[scale]) <
-          (other.value().unscaledValue() %
-           DecimalUtil::kPowersOfTen[other.scale]);
-    }
-    return lhsIntegral < rhsIntegral;
-  }
-
-  size_t hash() const {
-    auto hasher = folly::Hash{};
-    auto hash = folly::hash::hash_combine_generic(
-        hasher, hasher(precision), hasher(scale));
-    if (hasValue()) {
-      hash = folly::hash::hash_combine_generic(hasher, hasher(value()), hash);
-    }
-    return hash;
-  }
-};
-
-using ShortDecimalCapsule = DecimalCapsule<UnscaledShortDecimal>;
-using LongDecimalCapsule = DecimalCapsule<UnscaledLongDecimal>;
-
-template <>
-struct VariantTypeTraits<TypeKind::SHORT_DECIMAL> {
-  using stored_type = ShortDecimalCapsule;
-};
-
-template <>
-struct VariantTypeTraits<TypeKind::LONG_DECIMAL> {
-  using stored_type = LongDecimalCapsule;
-};
-
 struct OpaqueCapsule {
   std::shared_ptr<const OpaqueType> type;
   std::shared_ptr<void> obj;
@@ -198,16 +126,6 @@ struct VariantTypeTraits<TypeKind::OPAQUE> {
   using stored_type = OpaqueCapsule;
 };
 } // namespace detail
-
-#define VELOX_VARIANT_SCALAR_MEMBERS(KIND)                            \
-  /* implicit */ variant(                                             \
-      const typename detail::VariantTypeTraits<KIND>::native_type& v) \
-      : kind_{KIND},                                                  \
-        ptr_{new detail::VariantTypeTraits<KIND>::stored_type{v}} {}  \
-  /* implicit */ variant(                                             \
-      typename detail::VariantTypeTraits<KIND>::native_type&& v)      \
-      : kind_{KIND},                                                  \
-        ptr_{new detail::VariantTypeTraits<KIND>::stored_type{v}} {}
 
 class variant {
  private:
@@ -276,18 +194,28 @@ class variant {
     }
   };
 
+#define VELOX_VARIANT_SCALAR_MEMBERS(KIND)                     \
+  /* implicit */ variant(                                      \
+      typename detail::VariantTypeTraits<KIND>::native_type v) \
+      : kind_{KIND},                                           \
+        ptr_{new detail::VariantTypeTraits<KIND>::stored_type{v}} {}
+
   VELOX_VARIANT_SCALAR_MEMBERS(TypeKind::BOOLEAN)
   VELOX_VARIANT_SCALAR_MEMBERS(TypeKind::TINYINT)
   VELOX_VARIANT_SCALAR_MEMBERS(TypeKind::SMALLINT)
   VELOX_VARIANT_SCALAR_MEMBERS(TypeKind::INTEGER)
   VELOX_VARIANT_SCALAR_MEMBERS(TypeKind::BIGINT)
+  VELOX_VARIANT_SCALAR_MEMBERS(TypeKind::HUGEINT)
   VELOX_VARIANT_SCALAR_MEMBERS(TypeKind::REAL)
   VELOX_VARIANT_SCALAR_MEMBERS(TypeKind::DOUBLE)
-  VELOX_VARIANT_SCALAR_MEMBERS(TypeKind::VARCHAR)
+  VELOX_VARIANT_SCALAR_MEMBERS(TypeKind::VARCHAR);
+  // VARBINARY conflicts with VARCHAR, so we don't gen these methods
+  // VELOX_VARIANT_SCALAR_MEMBERS(TypeKind::VARBINARY);
   VELOX_VARIANT_SCALAR_MEMBERS(TypeKind::DATE)
-  VELOX_VARIANT_SCALAR_MEMBERS(TypeKind::INTERVAL_DAY_TIME)
   VELOX_VARIANT_SCALAR_MEMBERS(TypeKind::TIMESTAMP)
   VELOX_VARIANT_SCALAR_MEMBERS(TypeKind::UNKNOWN)
+#undef VELOX_VARIANT_SCALAR_MEMBERS
+
   // On 64-bit platforms `int64_t` is declared as `long int`, not `long long
   // int`, thus adding an extra overload to make literals like 1LL resolve
   // correctly. Note that one has to use template T because otherwise SFINAE
@@ -298,9 +226,6 @@ class variant {
           std::is_same_v<T, long long> && !std::is_same_v<long long, int64_t>,
           bool> = true>
   /* implicit */ variant(const T& v) : variant(static_cast<int64_t>(v)) {}
-
-  // VARBINARY conflicts with VARCHAR, so we don't gen these methods
-  // VELOX_VARIANT_SCALAR_MEMBERS(TypeKind::VARBINARY);
 
   static variant row(const std::vector<variant>& inputs) {
     return {
@@ -345,13 +270,6 @@ class variant {
         typename detail::VariantTypeTraits<TypeKind::DATE>::stored_type{input}};
   }
 
-  static variant intervalDayTime(const IntervalDayTime& input) {
-    return {
-        TypeKind::INTERVAL_DAY_TIME,
-        new typename detail::VariantTypeTraits<
-            TypeKind::INTERVAL_DAY_TIME>::stored_type{input}};
-  }
-
   template <class T>
   static variant opaque(const std::shared_ptr<T>& input) {
     VELOX_CHECK(input.get(), "Can't create a variant of nullptr opaque type");
@@ -365,32 +283,6 @@ class variant {
       const std::shared_ptr<const OpaqueType>& type) {
     VELOX_CHECK(input.get(), "Can't create a variant of nullptr opaque type");
     return {TypeKind::OPAQUE, new detail::OpaqueCapsule{type, input}};
-  }
-
-  static variant shortDecimal(
-      const std::optional<int64_t> input,
-      const TypePtr& type) {
-    VELOX_CHECK(type->isShortDecimal(), "Not a UnscaledShortDecimal type");
-    auto decimalType = type->asShortDecimal();
-    return {
-        TypeKind::SHORT_DECIMAL,
-        new detail::ShortDecimalCapsule{
-            std::optional<UnscaledShortDecimal>(input),
-            decimalType.precision(),
-            decimalType.scale()}};
-  }
-
-  static variant longDecimal(
-      const std::optional<int128_t> input,
-      const TypePtr& type) {
-    VELOX_CHECK(type->isLongDecimal(), "Not a UnscaledLongDecimal type");
-    auto decimalType = type->asLongDecimal();
-    return {
-        TypeKind::LONG_DECIMAL,
-        new detail::LongDecimalCapsule{
-            std::optional<UnscaledLongDecimal>(input),
-            decimalType.precision(),
-            decimalType.scale()}};
   }
 
   static variant array(const std::vector<variant>& inputs) {
@@ -409,11 +301,7 @@ class variant {
 
   variant() : kind_{TypeKind::INVALID}, ptr_{nullptr} {}
 
-  variant(TypeKind kind) : kind_{kind}, ptr_{nullptr} {
-    VELOX_CHECK(
-        !isDecimalKind(kind),
-        "Use smallDecimal() or longDecimal() for DECIMAL values.");
-  }
+  variant(TypeKind kind) : kind_{kind}, ptr_{nullptr} {}
 
   variant(const variant& other) : kind_{other.kind_}, ptr_{nullptr} {
     auto op = other.ptr_;
@@ -421,6 +309,13 @@ class variant {
       dynamicCopy(other.ptr_, other.kind_);
     }
   }
+
+  // Support construction from StringView as well as StringPiece.
+  variant(StringView view) : variant{folly::StringPiece{view}} {}
+
+  // Break ties between implicit conversions to StringView/StringPiece.
+  variant(std::string str)
+      : kind_{TypeKind::VARCHAR}, ptr_{new std::string{std::move(str)}} {}
 
   variant(const char* str)
       : kind_{TypeKind::VARCHAR}, ptr_{new std::string{str}} {}
@@ -448,18 +343,11 @@ class variant {
   }
 
   static variant null(TypeKind kind) {
-    VELOX_CHECK(
-        !isDecimalKind(kind),
-        "Use smallDecimal() or longDecimal() for DECIMAL null values.");
     return variant{kind};
   }
 
-  static variant binary(std::string&& val) {
+  static variant binary(std::string val) {
     return variant{TypeKind::VARBINARY, new std::string{std::move(val)}};
-  }
-
-  static variant binary(const std::string& val) {
-    return variant{TypeKind::VARBINARY, new std::string{val}};
   }
 
   variant& operator=(const variant& other) {
@@ -519,7 +407,12 @@ class variant {
     }
   }
 
-  std::string toJson() const;
+  std::string toJson(const TypePtr& type = nullptr) const;
+
+  /// Used by python binding, do not change signature.
+  std::string pyToJson() const {
+    return toJson();
+  }
 
   folly::dynamic serialize() const;
 
@@ -567,11 +460,6 @@ class variant {
   }
 
   bool isNull() const {
-    if (kind_ == TypeKind::SHORT_DECIMAL) {
-      return !value<TypeKind::SHORT_DECIMAL>().hasValue();
-    } else if (kind_ == TypeKind::LONG_DECIMAL) {
-      return !value<TypeKind::LONG_DECIMAL>().hasValue();
-    }
     return ptr_ == nullptr;
   }
 
@@ -650,14 +538,6 @@ class variant {
         }
         return ARRAY(elementType);
       }
-      case TypeKind::SHORT_DECIMAL: {
-        auto val = value<TypeKind::SHORT_DECIMAL>();
-        return DECIMAL(val.precision, val.scale);
-      }
-      case TypeKind::LONG_DECIMAL: {
-        auto val = value<TypeKind::LONG_DECIMAL>();
-        return DECIMAL(val.precision, val.scale);
-      }
       case TypeKind::OPAQUE: {
         return value<TypeKind::OPAQUE>().type;
       }
@@ -701,15 +581,14 @@ struct VariantConverter {
   static variant convert(const variant& value) {
     if (value.isNull()) {
       return variant{value.kind()};
-    } else {
-      bool nullOutput = false;
-      auto v = variant{
-          util::Converter<ToKind>::cast(value.value<FromKind>(), nullOutput)};
-      if (nullOutput) {
-        throw std::invalid_argument("Velox cast error");
-      }
-      return v;
     }
+    bool nullOutput = false;
+    auto converted =
+        util::Converter<ToKind>::cast(value.value<FromKind>(), nullOutput);
+    if (nullOutput) {
+      throw std::invalid_argument("Velox cast error");
+    }
+    return {converted};
   }
 
   template <TypeKind ToKind>
@@ -734,8 +613,8 @@ struct VariantConverter {
       case TypeKind::VARBINARY:
         return convert<TypeKind::VARBINARY, ToKind>(value);
       case TypeKind::DATE:
-      case TypeKind::INTERVAL_DAY_TIME:
       case TypeKind::TIMESTAMP:
+      case TypeKind::HUGEINT:
         // Default date/timestamp conversion is prone to errors and implicit
         // assumptions. Block converting timestamp to integer, double and
         // std::string types. The callers should implement their own conversion
@@ -750,7 +629,5 @@ struct VariantConverter {
     return VELOX_DYNAMIC_SCALAR_TYPE_DISPATCH(convert, toKind, value);
   }
 };
-
-#undef VELOX_VARIANT_SCALAR_MEMBERS
 
 } // namespace facebook::velox

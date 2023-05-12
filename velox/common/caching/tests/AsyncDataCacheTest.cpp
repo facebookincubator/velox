@@ -31,7 +31,7 @@
 using namespace facebook::velox;
 using namespace facebook::velox::cache;
 
-using facebook::velox::memory::MappedMemory;
+using facebook::velox::memory::MemoryAllocator;
 
 // Represents a planned load from a file. Many of these constitute a load plan.
 struct Request {
@@ -43,6 +43,26 @@ struct Request {
 };
 
 class AsyncDataCacheTest : public testing::Test {
+ public:
+  // Deterministically fills 'allocation'  based on 'sequence'
+  static void initializeContents(int64_t sequence, memory::Allocation& alloc) {
+    bool first = true;
+    for (int32_t i = 0; i < alloc.numRuns(); ++i) {
+      memory::Allocation::PageRun run = alloc.runAt(i);
+      int64_t* ptr = reinterpret_cast<int64_t*>(run.data());
+      int32_t numWords =
+          run.numPages() * memory::AllocationTraits::kPageSize / sizeof(void*);
+      for (int32_t offset = 0; offset < numWords; offset++) {
+        if (first) {
+          ptr[offset] = sequence;
+          first = false;
+        } else {
+          ptr[offset] = offset + sequence;
+        }
+      }
+    }
+  }
+
  protected:
   static constexpr int32_t kNumFiles = 100;
 
@@ -74,7 +94,7 @@ class AsyncDataCacheTest : public testing::Test {
           executor(),
           ssdBytes / 20);
     }
-    memory::MmapAllocatorOptions options;
+    memory::MmapAllocator::Options options;
     options.capacity = maxBytes;
     cache_ = std::make_shared<AsyncDataCache>(
         std::make_shared<memory::MmapAllocator>(options),
@@ -86,6 +106,8 @@ class AsyncDataCacheTest : public testing::Test {
         filenames_.push_back(StringIdLease(fileIds(), name));
       }
     }
+    ASSERT_EQ(cache_->kind(), MemoryAllocator::Kind::kMmap);
+    ASSERT_EQ(MemoryAllocator::kindString(cache_->kind()), "MMAP");
   }
 
   // Finds one entry from RAM, SSD or storage. Throws if the data
@@ -133,28 +155,6 @@ class AsyncDataCacheTest : public testing::Test {
     }
   }
 
- public:
-  // Deterministically fills 'allocation'  based on 'sequence'
-  static void initializeContents(
-      int64_t sequence,
-      MappedMemory::Allocation& alloc) {
-    bool first = true;
-    for (int32_t i = 0; i < alloc.numRuns(); ++i) {
-      MappedMemory::PageRun run = alloc.runAt(i);
-      int64_t* ptr = reinterpret_cast<int64_t*>(run.data());
-      int32_t numWords =
-          run.numPages() * MappedMemory::kPageSize / sizeof(void*);
-      for (int32_t offset = 0; offset < numWords; offset++) {
-        if (first) {
-          ptr[offset] = sequence;
-          first = false;
-        } else {
-          ptr[offset] = offset + sequence;
-        }
-      }
-    }
-  }
-
   // Checks that the contents are consistent with what is set in
   // initializeContents.
   static void checkContents(const AsyncDataCacheEntry& entry) {
@@ -165,10 +165,10 @@ class AsyncDataCacheTest : public testing::Test {
     int64_t sequence;
     int32_t bytesChecked = sizeof(int64_t);
     for (int32_t i = 0; i < alloc.numRuns(); ++i) {
-      MappedMemory::PageRun run = alloc.runAt(i);
+      memory::Allocation::PageRun run = alloc.runAt(i);
       int64_t* ptr = reinterpret_cast<int64_t*>(run.data());
       int32_t numWords =
-          run.numPages() * MappedMemory::kPageSize / sizeof(void*);
+          run.numPages() * memory::AllocationTraits::kPageSize / sizeof(void*);
       for (int32_t offset = 0; offset < numWords; offset++) {
         if (first) {
           sequence = ptr[offset];
@@ -201,7 +201,6 @@ class AsyncDataCacheTest : public testing::Test {
     };
   }
 
- protected:
   folly::IOThreadPoolExecutor* FOLLY_NONNULL executor() {
     static std::mutex mutex;
     std::lock_guard<std::mutex> l(mutex);
@@ -211,6 +210,13 @@ class AsyncDataCacheTest : public testing::Test {
       executor_ = std::make_unique<folly::IOThreadPoolExecutor>(20);
     }
     return executor_.get();
+  }
+
+  void clearAllocations(std::deque<memory::Allocation>& allocations) {
+    while (!allocations.empty()) {
+      cache_->freeNonContiguous(allocations.front());
+      allocations.pop_front();
+    }
   }
 
   std::shared_ptr<exec::test::TempDirectoryPath> tempDirectory_;
@@ -224,7 +230,7 @@ class TestingCoalescedLoad : public CoalescedLoad {
   TestingCoalescedLoad(
       std::vector<RawFileCacheKey> keys,
       std::vector<int32_t> sizes,
-      AsyncDataCache& cache)
+      const std::shared_ptr<AsyncDataCache>& cache)
       : CoalescedLoad(std::move(keys), std::move(sizes)), cache_(cache) {}
 
   void injectError(bool error) {
@@ -233,7 +239,7 @@ class TestingCoalescedLoad : public CoalescedLoad {
 
   std::vector<CachePin> loadData(bool /*isPrefetch*/) override {
     std::vector<CachePin> pins;
-    cache_.makePins(
+    cache_->makePins(
         keys_,
         [&](int32_t index) { return sizes_[index]; },
         [&](int32_t /*index*/, CachePin pin) {
@@ -248,8 +254,16 @@ class TestingCoalescedLoad : public CoalescedLoad {
     return pins;
   }
 
+  int64_t size() const override {
+    int64_t sum = 0;
+    for (auto& request : requests_) {
+      sum += request.size;
+    }
+    return sum;
+  }
+
  protected:
-  AsyncDataCache& cache_;
+  std::shared_ptr<AsyncDataCache> cache_;
   std::vector<Request> requests_;
   bool injectError_{false};
 };
@@ -260,18 +274,18 @@ class TestingCoalescedSsdLoad : public TestingCoalescedLoad {
       std::vector<RawFileCacheKey> keys,
       std::vector<int32_t> sizes,
       std::vector<SsdPin> ssdPins,
-      AsyncDataCache& cache)
+      const std::shared_ptr<AsyncDataCache>& cache)
       : TestingCoalescedLoad(std::move(keys), std::move(sizes), cache),
         ssdPins_(std::move(ssdPins)) {}
 
   std::vector<CachePin> loadData(bool /*isPrefetch*/) override {
     auto fileNum = keys_[0].fileNum;
-    auto& file = cache_.ssdCache()->file(fileNum);
+    auto& file = cache_->ssdCache()->file(fileNum);
     std::vector<CachePin> pins;
     std::vector<SsdPin> toLoad;
     // We make pins for the new load but leave out the entries that may have
     // been loaded between constructing 'this' and now.
-    cache_.makePins(
+    cache_->makePins(
         keys_,
         [&](int32_t index) { return sizes_[index]; },
         [&](int32_t index, CachePin pin) {
@@ -390,7 +404,7 @@ void AsyncDataCacheTest::loadBatch(
       sizes.push_back(request->size);
     }
     auto load = std::make_shared<TestingCoalescedLoad>(
-        std::move(keys), std::move(sizes), *cache_);
+        std::move(keys), std::move(sizes), cache_);
     load->injectError(injectError);
     executor()->add([load]() {
       try {
@@ -410,7 +424,7 @@ void AsyncDataCacheTest::loadBatch(
       ssdPins.push_back(std::move(request->ssdPin));
     }
     auto load = std::make_shared<TestingCoalescedSsdLoad>(
-        std::move(keys), std::move(sizes), std::move(ssdPins), *cache_);
+        std::move(keys), std::move(sizes), std::move(ssdPins), cache_);
     load->injectError(injectError);
     executor()->add([load]() {
       try {
@@ -537,18 +551,20 @@ TEST_F(AsyncDataCacheTest, replace) {
     executor_->join();
   }
   auto stats = cache_->refreshStats();
+  EXPECT_LT(0, stats.numHit);
+  EXPECT_LT(0, stats.hitBytes);
   EXPECT_LT(0, stats.numEvict);
   EXPECT_GE(
-      kMaxBytes / memory::MappedMemory::kPageSize,
+      kMaxBytes / memory::AllocationTraits::kPageSize,
       cache_->incrementCachedPages(0));
 }
 
 TEST_F(AsyncDataCacheTest, outOfCapacity) {
   constexpr int64_t kMaxBytes = 16 << 20;
   constexpr int32_t kSize = 16 << 10;
-  constexpr int32_t kSizeInPages = kSize / MappedMemory::kPageSize;
+  constexpr int32_t kSizeInPages = kSize / memory::AllocationTraits::kPageSize;
   std::deque<CachePin> pins;
-  std::deque<MappedMemory::Allocation> allocations;
+  std::deque<memory::Allocation> allocations;
   initializeCache(kMaxBytes);
   // We pin 2 16K entries and unpin 1. Eventually the whole capacity
   // is pinned and we fail making a ew entry.
@@ -562,18 +578,17 @@ TEST_F(AsyncDataCacheTest, outOfCapacity) {
     }
     pins.pop_front();
   }
-  MappedMemory::Allocation allocation(cache_.get());
-  EXPECT_FALSE(cache_->allocate(kSizeInPages, 0, allocation));
+  memory::Allocation allocation;
+  ASSERT_FALSE(cache_->allocateNonContiguous(kSizeInPages, allocation));
   // One 4 page entry below the max size of 4K 4 page entries in 16MB of
   // capacity.
-  EXPECT_EQ(4092, cache_->incrementCachedPages(0));
-  EXPECT_EQ(4092, cache_->incrementPrefetchPages(0));
+  ASSERT_EQ(4092, cache_->incrementCachedPages(0));
+  ASSERT_EQ(4092, cache_->incrementPrefetchPages(0));
   pins.clear();
 
   // We allocate the full capacity and expect the cache entries to go.
   for (;;) {
-    MappedMemory::Allocation(cache_.get());
-    if (!cache_->allocate(kSizeInPages, 0, allocation)) {
+    if (!cache_->allocateNonContiguous(kSizeInPages, allocation)) {
       break;
     }
     allocations.push_back(std::move(allocation));
@@ -581,6 +596,7 @@ TEST_F(AsyncDataCacheTest, outOfCapacity) {
   EXPECT_EQ(0, cache_->incrementCachedPages(0));
   EXPECT_EQ(0, cache_->incrementPrefetchPages(0));
   EXPECT_EQ(4092, cache_->numAllocated());
+  clearAllocations(allocations);
 }
 
 namespace {
@@ -594,8 +610,15 @@ void corruptFile(const std::string& path) {
 } // namespace
 
 TEST_F(AsyncDataCacheTest, ssd) {
+#ifdef TSAN_BUILD
+  // NOTE: scale down the test data set to prevent tsan tester from running out
+  // of memory.
+  constexpr uint64_t kRamBytes = 16 << 20;
+  constexpr uint64_t kSsdBytes = 256UL << 20;
+#else
   constexpr uint64_t kRamBytes = 32 << 20;
   constexpr uint64_t kSsdBytes = 512UL << 20;
+#endif
   FLAGS_velox_exception_user_stacktrace_enabled = false;
   initializeCache(kRamBytes, kSsdBytes);
   cache_->setVerifyHook(
@@ -605,11 +628,10 @@ TEST_F(AsyncDataCacheTest, ssd) {
   // new entry creation.
   FLAGS_ssd_verify_write = true;
 
-  // We read kSsdBytes worth of data on 16
-  // threads. The same data will
-  // be hit by all threads. The expectation is that most of the data
-  // ends up on SSD. All data may not get written if reading is faster than
-  // writing. Error out once every 11 load batches.
+  // We read kSsdBytes worth of data on 16 threads. The same data will be hit by
+  // all threads. The expectation is that most of the data ends up on SSD. All
+  // data may not get written if reading is faster than writing. Error out once
+  // every 11 load batches.
   //
   // Note that executor() must have more threads so that background
   // write does not wait for the workload.
@@ -620,14 +642,14 @@ TEST_F(AsyncDataCacheTest, ssd) {
   // We allow writes to proceed faster.
   FLAGS_ssd_verify_write = false;
 
-  EXPECT_LE(kRamBytes, stats.bytesWritten);
+  ASSERT_LE(kRamBytes, stats.bytesWritten);
   // We read the data back. The verify hook checks correct values. Error every
   // 13 batch loads.
   runThreads(16, [&](int32_t /*i*/) { loadLoop(0, kSsdBytes, 13); });
 
   LOG(INFO) << "Stats after second pass:" << cache_->toString();
   stats = cache_->ssdCache()->stats();
-  EXPECT_LE(kRamBytes, stats.bytesRead);
+  ASSERT_LE(kRamBytes, stats.bytesRead);
 
   // We re-read the second half and add another half capacity of new
   // entries. We expect some of the oldest entries to get evicted. Error every
@@ -639,14 +661,14 @@ TEST_F(AsyncDataCacheTest, ssd) {
   // Wait for writes to finish and make a checkpoint.
   cache_->ssdCache()->shutdown();
   auto stats2 = cache_->ssdCache()->stats();
-  EXPECT_GT(stats2.bytesWritten, stats.bytesWritten);
-  EXPECT_GT(stats2.bytesRead, stats.bytesRead);
+  ASSERT_GT(stats2.bytesWritten, stats.bytesWritten);
+  ASSERT_GT(stats2.bytesRead, stats.bytesRead);
 
   // Check that no pins are leaked.
-  EXPECT_EQ(0, stats2.numPins);
+  ASSERT_EQ(0, stats2.numPins);
   auto ramStats = cache_->refreshStats();
-  EXPECT_EQ(0, ramStats.numShared);
-  EXPECT_EQ(0, ramStats.numExclusive);
+  ASSERT_EQ(0, ramStats.numShared);
+  ASSERT_EQ(0, ramStats.numExclusive);
   cache_->ssdCache()->clear();
   // We cut the tail off one of the cache shards.
   corruptFile(fmt::format("{}/cache0.cpt", tempDirectory_->path));
@@ -660,9 +682,8 @@ TEST_F(AsyncDataCacheTest, ssd) {
             << cache_->toString();
   auto ssdStats = cache_->ssdCache()->stats();
 
-  //    The exact number of hits after recovery is not deterministic due
-  // to threading. Hitting at least 1/2 of the capacity when 3/4 are
-  // available since one of the shards was deliberately corrupted, is
-  // a safe bet.
-  EXPECT_LT(kSsdBytes / 2, stats.bytesRead);
+  // The exact number of hits after recovery is not deterministic due to
+  // threading. Hitting at least 1/2 of the capacity when 3/4 are available
+  // since one of the shards was deliberately corrupted, is a safe bet.
+  ASSERT_LT(kSsdBytes / 2, stats2.bytesRead);
 }

@@ -303,10 +303,50 @@ void parseFail(
     const std::string_view& input,
     const char* cur,
     const char* end) {
+  VELOX_DCHECK(cur <= end);
   VELOX_USER_FAIL(
       "Invalid format: \"{}\" is malformed at \"{}\"",
       input,
       std::string_view(cur, end - cur));
+}
+
+// Joda only supports parsing a few three-letter prefixes. The list is available
+// here:
+//
+//  https://github.com/JodaOrg/joda-time/blob/main/src/main/java/org/joda/time/DateTimeUtils.java#L437
+//
+// Full timezone names (e.g. "America/Los_Angeles") are not supported by Joda
+// when parsing, so we don't implement them here.
+int64_t parseTimezone(const char* cur, const char* end, Date& date) {
+  if (cur < end) {
+    // If there are at least 3 letters left.
+    if (end - cur >= 3) {
+      static std::unordered_map<std::string_view, int64_t> defaultTzNames{
+          {"UTC", 0},
+          {"GMT", 0},
+          {"EST", util::getTimeZoneID("America/New_York")},
+          {"EDT", util::getTimeZoneID("America/New_York")},
+          {"CST", util::getTimeZoneID("America/Chicago")},
+          {"CDT", util::getTimeZoneID("America/Chicago")},
+          {"MST", util::getTimeZoneID("America/Denver")},
+          {"MDT", util::getTimeZoneID("America/Denver")},
+          {"PST", util::getTimeZoneID("America/Los_Angeles")},
+          {"PDT", util::getTimeZoneID("America/Los_Angeles")},
+      };
+
+      auto it = defaultTzNames.find(std::string_view(cur, 3));
+      if (it != defaultTzNames.end()) {
+        date.timezoneId = it->second;
+        return 3;
+      }
+    }
+    // The format 'UT' is also accepted for UTC.
+    else if ((end - cur == 2) && (*cur == 'U') && (*(cur + 1) == 'T')) {
+      date.timezoneId = 0;
+      return 2;
+    }
+  }
+  throw std::runtime_error("Unable to parse timezone.");
 }
 
 int64_t parseTimezoneOffset(const char* cur, const char* end, Date& date) {
@@ -590,6 +630,12 @@ void parseFromPattern(
     } catch (...) {
       parseFail(input, cur, end);
     }
+  } else if (curPattern.specifier == DateTimeFormatSpecifier::TIMEZONE) {
+    try {
+      cur += parseTimezone(cur, end, date);
+    } catch (...) {
+      parseFail(input, cur, end);
+    }
   } else if (curPattern.specifier == DateTimeFormatSpecifier::ERA) {
     try {
       cur += parseEra(cur, end, date);
@@ -682,7 +728,13 @@ void parseFromPattern(
       } else if (type == DateTimeFormatterType::MYSQL) {
         // In MySQL format, year read in must have exactly two digits, otherwise
         // throw an error
-        parseFail(input, cur - count + 2, end);
+        if (count > 2) {
+          // Larger than expected, print suffix.
+          parseFail(input, cur - count + 2, end);
+        } else {
+          // Smaller than expected, print prefix.
+          parseFail(input, cur - count, end);
+        }
       }
     } else {
       while (cur < end && cur < startPos + maxDigitConsume &&

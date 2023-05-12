@@ -31,19 +31,18 @@ HiveConnectorTestBase::HiveConnectorTestBase() {
 
 void HiveConnectorTestBase::SetUp() {
   OperatorTestBase::SetUp();
-  executor_ = std::make_unique<folly::IOThreadPoolExecutor>(3);
   auto hiveConnector =
       connector::getConnectorFactory(
           connector::hive::HiveConnectorFactory::kHiveConnectorName)
-          ->newConnector(kHiveConnectorId, nullptr, executor_.get());
+          ->newConnector(kHiveConnectorId, nullptr, ioExecutor_.get());
   connector::registerConnector(hiveConnector);
   dwrf::registerDwrfReaderFactory();
 }
 
 void HiveConnectorTestBase::TearDown() {
-  if (executor_) {
-    executor_->join();
-  }
+  // Make sure all pending loads are finished or cancelled before unregister
+  // connector.
+  ioExecutor_.reset();
   dwrf::unregisterDwrfReaderFactory();
   connector::unregisterConnector(kHiveConnectorId);
   OperatorTestBase::TearDown();
@@ -59,18 +58,13 @@ void HiveConnectorTestBase::writeToFile(
     const std::string& filePath,
     const std::vector<RowVectorPtr>& vectors,
     std::shared_ptr<dwrf::Config> config) {
-  static const auto kWriter = "HiveConnectorTestBase.Writer";
-
   facebook::velox::dwrf::WriterOptions options;
   options.config = config;
   options.schema = vectors[0]->type();
   auto sink =
-      std::make_unique<facebook::velox::dwio::common::FileSink>(filePath);
-  facebook::velox::dwrf::Writer writer{
-      options,
-      std::move(sink),
-      pool_->addChild(kWriter, std::numeric_limits<int64_t>::max())};
-
+      std::make_unique<facebook::velox::dwio::common::LocalFileSink>(filePath);
+  auto childPool = rootPool_->addAggregateChild("HiveConnectorTestBase.Writer");
+  facebook::velox::dwrf::Writer writer{options, std::move(sink), *childPool};
   for (size_t i = 0; i < vectors.size(); ++i) {
     writer.write(vectors[i]);
   }
@@ -114,7 +108,9 @@ HiveConnectorTestBase::makeHiveConnectorSplits(
     const std::string& filePath,
     uint32_t splitCount,
     dwio::common::FileFormat format) {
-  const int fileSize = fs::file_size(filePath);
+  auto file =
+      filesystems::getFileSystem(filePath, nullptr)->openFileForRead(filePath);
+  const int64_t fileSize = file->size();
   // Take the upper bound.
   const int splitSize = std::ceil((fileSize) / splitCount);
   std::vector<std::shared_ptr<connector::hive::HiveConnectorSplit>> splits;

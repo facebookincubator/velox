@@ -13,12 +13,11 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+#include "velox/common/caching/SsdCache.h"
 #include <folly/Executor.h>
 #include <folly/portability/SysUio.h>
 #include <numeric>
 #include "velox/common/caching/FileIds.h"
-
-#include "velox/common/caching/SsdCache.h"
 #include "velox/common/time/Timer.h"
 
 namespace facebook::velox::cache {
@@ -28,7 +27,8 @@ SsdCache::SsdCache(
     uint64_t maxBytes,
     int32_t numShards,
     folly::Executor* executor,
-    int64_t checkpointIntervalBytes)
+    int64_t checkpointIntervalBytes,
+    bool disableFileCow)
     : filePrefix_(filePrefix),
       numShards_(numShards),
       groupStats_(std::make_unique<FileGroupStats>()),
@@ -43,7 +43,8 @@ SsdCache::SsdCache(
         fmt::format("{}{}", filePrefix_, i),
         i,
         fileMaxRegions,
-        checkpointIntervalBytes / numShards));
+        checkpointIntervalBytes / numShards,
+        disableFileCow));
   }
 }
 

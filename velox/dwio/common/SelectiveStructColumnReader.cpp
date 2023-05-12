@@ -20,38 +20,14 @@
 
 namespace facebook::velox::dwio::common {
 
-std::vector<uint32_t> SelectiveStructColumnReaderBase::filterRowGroups(
+void SelectiveStructColumnReaderBase::filterRowGroups(
     uint64_t rowGroupSize,
-    const dwio::common::StatsContext& context) const {
-  auto stridesToSkip =
-      SelectiveColumnReader::filterRowGroups(rowGroupSize, context);
+    const dwio::common::StatsContext& context,
+    FormatData::FilterRowGroupsResult& result) const {
+  SelectiveColumnReader::filterRowGroups(rowGroupSize, context, result);
   for (const auto& child : children_) {
-    auto childStridesToSkip = child->filterRowGroups(rowGroupSize, context);
-    if (stridesToSkip.empty()) {
-      stridesToSkip = std::move(childStridesToSkip);
-    } else {
-      std::vector<uint32_t> merged;
-      merged.reserve(childStridesToSkip.size() + stridesToSkip.size());
-      std::merge(
-          childStridesToSkip.begin(),
-          childStridesToSkip.end(),
-          stridesToSkip.begin(),
-          stridesToSkip.end(),
-          std::back_inserter(merged));
-      stridesToSkip = std::move(merged);
-    }
+    child->filterRowGroups(rowGroupSize, context, result);
   }
-  return stridesToSkip;
-}
-
-bool SelectiveStructColumnReaderBase::rowGroupMatches(
-    uint32_t rowGroupId) const {
-  for (const auto& child : children_) {
-    if (!child->rowGroupMatches(rowGroupId)) {
-      return false;
-    }
-  }
-  return true;
 }
 
 uint64_t SelectiveStructColumnReaderBase::skip(uint64_t numValues) {
@@ -79,9 +55,12 @@ uint64_t SelectiveStructColumnReaderBase::skip(uint64_t numValues) {
 void SelectiveStructColumnReaderBase::next(
     uint64_t numValues,
     VectorPtr& result,
-    const uint64_t* incomingNulls) {
-  VELOX_CHECK(!incomingNulls, "next may only be called for the root reader.");
+    const Mutation* mutation) {
   if (children_.empty()) {
+    if (mutation && mutation->deletedRows) {
+      numValues -= bits::countBits(mutation->deletedRows, 0, numValues);
+    }
+
     // no readers
     // This can be either count(*) query or a query that select only
     // constant columns (partition keys or columns missing from an old file
@@ -103,6 +82,8 @@ void SelectiveStructColumnReaderBase::next(
   if (numValues > oldSize) {
     std::iota(&rows_[oldSize], &rows_[rows_.size()], oldSize);
   }
+  mutation_ = mutation;
+  hasMutation_ = mutation && mutation->deletedRows;
   read(readOffset_, rows_, nullptr);
   getValues(outputRows(), &result);
 }
@@ -114,19 +95,32 @@ void SelectiveStructColumnReaderBase::read(
   numReads_ = scanSpec_->newRead();
   prepareRead<char>(offset, rows, incomingNulls);
   RowSet activeRows = rows;
-  auto& childSpecs = scanSpec_->children();
+  if (hasMutation_) {
+    // We handle the mutation after prepareRead so that output rows and format
+    // specific initializations (e.g. RepDef in Parquet) are done properly.
+    VELOX_DCHECK(!nullsInReadRange_, "Only top level can have mutation");
+    VELOX_DCHECK_EQ(
+        rows.back(), rows.size() - 1, "Top level should have a dense row set");
+    bits::forEachUnsetBit(
+        mutation_->deletedRows, 0, rows.back() + 1, [&](auto i) {
+          addOutputRow(i);
+        });
+    if (outputRows_.empty()) {
+      readOffset_ = offset + rows.back() + 1;
+      return;
+    }
+    activeRows = outputRows_;
+  }
   const uint64_t* structNulls =
       nullsInReadRange_ ? nullsInReadRange_->as<uint64_t>() : nullptr;
-  bool hasFilter = false;
   // a struct reader may have a null/non-null filter
   if (scanSpec_->filter()) {
     auto kind = scanSpec_->filter()->kind();
     VELOX_CHECK(
         kind == velox::common::FilterKind::kIsNull ||
         kind == velox::common::FilterKind::kIsNotNull);
-    hasFilter = true;
     filterNulls<int32_t>(
-        rows, kind == velox::common::FilterKind::kIsNull, false);
+        activeRows, kind == velox::common::FilterKind::kIsNull, false);
     if (outputRows_.empty()) {
       recordParentNullsInChildren(offset, rows);
       return;
@@ -135,6 +129,7 @@ void SelectiveStructColumnReaderBase::read(
   }
 
   assert(!children_.empty());
+  auto& childSpecs = scanSpec_->children();
   for (size_t i = 0; i < childSpecs.size(); ++i) {
     auto& childSpec = childSpecs[i];
     if (childSpec->isConstant()) {
@@ -149,7 +144,6 @@ void SelectiveStructColumnReaderBase::read(
     }
     advanceFieldReader(reader, offset);
     if (childSpec->hasFilter()) {
-      hasFilter = true;
       {
         SelectivityTimer timer(childSpec->selectivity(), activeRows.size());
 
@@ -173,7 +167,7 @@ void SelectiveStructColumnReaderBase::read(
   // here.
   recordParentNullsInChildren(offset, rows);
 
-  if (hasFilter) {
+  if (scanSpec_->hasFilter()) {
     setOutputRows(activeRows);
   }
   lazyVectorReadOffset_ = offset;
@@ -183,6 +177,9 @@ void SelectiveStructColumnReaderBase::read(
 void SelectiveStructColumnReaderBase::recordParentNullsInChildren(
     vector_size_t offset,
     RowSet rows) {
+  if (formatData_->parentNullsInLeaves()) {
+    return;
+  }
   auto& childSpecs = scanSpec_->children();
   for (auto i = 0; i < childSpecs.size(); ++i) {
     auto& childSpec = childSpecs[i];
@@ -231,20 +228,18 @@ void SelectiveStructColumnReaderBase::getValues(
   VELOX_CHECK(
       result->get()->type()->isRow(),
       "Struct reader expects a result of type ROW.");
-
-  auto resultRow = static_cast<RowVector*>(result->get());
-  if (!result->unique()) {
-    std::vector<VectorPtr> children(resultRow->children().size());
-    fillRowVectorChildren(
-        *resultRow->pool(), resultRow->type()->asRow(), children);
+  auto& rowType = result->get()->type()->asRow();
+  if (!result->unique() || result->get()->isLazy()) {
+    std::vector<VectorPtr> children(rowType.size());
+    fillRowVectorChildren(*result->get()->pool(), rowType, children);
     *result = std::make_unique<RowVector>(
-        resultRow->pool(),
-        resultRow->type(),
-        BufferPtr(nullptr),
+        result->get()->pool(),
+        result->get()->type(),
+        nullptr,
         0,
         std::move(children));
-    resultRow = static_cast<RowVector*>(result->get());
   }
+  auto* resultRow = static_cast<RowVector*>(result->get());
   resultRow->resize(rows.size());
   if (!rows.size()) {
     return;

@@ -22,10 +22,9 @@
 #include "velox/type/Type.h"
 #include "velox/vector/BaseVector.h"
 #include "velox/vector/ComplexVector.h"
+#include "velox/vector/fuzzer/GeneratorSpec.h"
 
 namespace facebook::velox {
-
-using FuzzerGenerator = std::mt19937;
 
 enum UTF8CharList {
   ASCII = 0, // Ascii character set.
@@ -47,14 +46,12 @@ enum UTF8CharList {
 /// The `fuzz(type)` method provides the highest degree of entropy. It randomly
 /// generates different types of (possibly nested) encodings given the input
 /// type, including constants, dictionaries, sliced vectors, and more. It
-/// accepts any primitive, complex, or nested types. Additionally,
-/// 'opt.allowLazyVector' can be set to true to enable a chance of generating a
-/// lazy vector:
+/// accepts any primitive, complex, or nested types:
 ///
-///   auto vector1 = fuzzer.fuzz(INTEGER(), true);
+///   auto vector1 = fuzzer.fuzz(INTEGER());
 ///   auto vector2 =
-///       fuzzer.fuzz(MAP(ARRAY(INTEGER()), ROW({REAL(), BIGINT()})), false);
-///   auto vector3 = fuzzer.fuzz(ROW({SMALLINT(), DOUBLE()}), true);
+///       fuzzer.fuzz(MAP(ARRAY(INTEGER()), ROW({REAL(), BIGINT()})));
+///   auto vector3 = fuzzer.fuzz(ROW({SMALLINT(), DOUBLE()}));
 ///
 /// #2.
 ///
@@ -119,13 +116,27 @@ class VectorFuzzer {
 
     /// If true, the length of array/map are randomly generated and
     /// `containerLength` is treated as maximum length.
-    bool containerVariableLength{false};
+    bool containerVariableLength{true};
+
+    /// Restricts the maximum inner (elements) vector size created when
+    /// generating nested vectors (arrays, maps, and rows).
+    size_t complexElementsMaxSize{10000};
 
     /// If true, generated map keys are normalized (unique and not-null).
     bool normalizeMapKeys{true};
 
-    /// If true, the random generated timestamp value will only be in
-    /// microsecond precision (default is nanosecond).
+    /// Control the precision of timestamps generated. By default generate using
+    /// nanoseconds precision.
+    enum class TimestampPrecision : int8_t {
+      kNanoSeconds = 0,
+      kMicroSeconds = 1,
+      kMilliSeconds = 2,
+      kSeconds = 3,
+    };
+    TimestampPrecision timestampPrecision{TimestampPrecision::kNanoSeconds};
+
+    /// TODO: keeping the deprecated option for backwards compatibility. Will be
+    /// removed soon. For new code the option above.
     bool useMicrosecondPrecisionTimestamp{false};
 
     /// If true, fuzz() will randomly generate lazy vectors and fuzzInputRow()
@@ -154,6 +165,10 @@ class VectorFuzzer {
   // `size` elements.
   VectorPtr fuzz(const TypePtr& type);
   VectorPtr fuzz(const TypePtr& type, vector_size_t size);
+
+  // Returns a "fuzzed" vector containing randomized data customized according
+  // to generatorSpec.
+  VectorPtr fuzz(const GeneratorSpec& generatorSpec);
 
   // Same as above, but returns a vector without nulls (regardless of the value
   // of opts.nullRatio).
@@ -205,6 +220,14 @@ class VectorFuzzer {
 
   // Returns a "fuzzed" row vector with randomized data and nulls.
   RowVectorPtr fuzzRow(const RowTypePtr& rowType);
+  RowVectorPtr fuzzRow(const RowTypePtr& rowType, vector_size_t size);
+
+  // Returns a RowVector based on the provided vectors, fuzzing its top-level
+  // null buffer.
+  RowVectorPtr fuzzRow(
+      std::vector<VectorPtr>&& children,
+      std::vector<std::string> childrenNames,
+      vector_size_t size);
 
   // Returns a RowVector based on the provided vectors, fuzzing its top-level
   // null buffer.
@@ -223,6 +246,24 @@ class VectorFuzzer {
   TypePtr randType(int maxDepth = 5);
   RowTypePtr randRowType(int maxDepth = 5);
 
+  // Generates short decimal TypePtr with random precision and scale.
+  inline TypePtr randShortDecimalType() {
+    auto [precision, scale] =
+        randPrecisionScale(ShortDecimalType::kMaxPrecision);
+    return DECIMAL(precision, scale);
+  }
+
+  // Generates long decimal TypePtr with random precision and scale.
+  inline TypePtr randLongDecimalType() {
+    auto [precision, scale] =
+        randPrecisionScale(LongDecimalType::kMaxPrecision);
+    return DECIMAL(precision, scale);
+  }
+
+  // Generate a random non-floating-point primitive type to be used as join keys
+  // or group-by key for aggregations, etc.
+  TypePtr randScalarNonFloatingPointType();
+
   void reSeed(size_t seed) {
     rng_.seed(seed);
   }
@@ -232,7 +273,8 @@ class VectorFuzzer {
     return boost::random::uniform_01<double>()(rng_) < n;
   }
 
-  // Wraps the given vector in a LazyVector.
+  // Wraps the given vector in a LazyVector. If there are multiple dictionary
+  // layers then the lazy wrap is applied over the innermost dictionary layer.
   static VectorPtr wrapInLazyVector(VectorPtr baseVector);
 
   // Randomly applies wrapInLazyVector() to the children of the given input row
@@ -241,20 +283,35 @@ class VectorFuzzer {
   // re-used between multiple evaluations.
   RowVectorPtr fuzzRowChildrenToLazy(RowVectorPtr rowVector);
 
+  // Returns a copy of 'rowVector' but with the columns having indices listed in
+  // 'columnsToWrapInLazy' wrapped in lazy encoding. Must only be used for input
+  // row vectors where all children are non-null and non-lazy.
+  // 'columnsToWrapInLazy' should be a sorted list of column indices.
+  static RowVectorPtr fuzzRowChildrenToLazy(
+      RowVectorPtr rowVector,
+      const std::vector<column_index_t>& columnsToWrapInLazy);
+
+  // Generate a random null buffer.
+  BufferPtr fuzzNulls(vector_size_t size);
+
+  // Generate a random indices buffer of 'size' with maximum possible index
+  // pointing to (baseVectorSize-1).
+  BufferPtr fuzzIndices(vector_size_t size, vector_size_t baseVectorSize);
+
  private:
   // Generates a flat vector for primitive types.
   VectorPtr fuzzFlatPrimitive(const TypePtr& type, vector_size_t size);
+
+  /// Generates random precision in range [1, maxPrecision]
+  // and scale in range [0, random precision generated].
+  /// @param maximum precision.
+  std::pair<int8_t, int8_t> randPrecisionScale(int8_t maxPrecision);
 
   // Returns a complex vector with randomized data and nulls.  The children and
   // all other descendant vectors will randomly use constant, dictionary, or
   // flat encodings if flatEncoding is set to false, otherwise they will all be
   // flat.
   VectorPtr fuzzComplex(const TypePtr& type, vector_size_t size);
-
-  RowVectorPtr fuzzRow(const RowTypePtr& rowType, vector_size_t size);
-
-  // Generate a random null buffer.
-  BufferPtr fuzzNulls(vector_size_t size);
 
   void fuzzOffsetsAndSizes(
       BufferPtr& offsets,
@@ -272,12 +329,13 @@ class VectorFuzzer {
       BufferPtr& offsets,
       BufferPtr& sizes);
 
-  variant randVariant(const TypePtr& arg);
-
   VectorFuzzer::Options opts_;
 
   memory::MemoryPool* pool_;
 
+  // Be careful not to call any functions that use rng_ inline as arguments to a
+  // function.  C++ does not guarantee the order in which arguments are
+  // evaluated, which can lead to inconsistent results across platforms.
   FuzzerGenerator rng_;
 };
 

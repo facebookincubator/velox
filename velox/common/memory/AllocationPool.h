@@ -15,10 +15,10 @@
  */
 #pragma once
 
-#include "velox/common/memory/MappedMemory.h"
+#include "velox/common/memory/Memory.h"
 
 namespace facebook::velox {
-// A set of MappedMemory::Allocations holding the fixed width payload
+// A set of Allocations holding the fixed width payload
 // rows. The Runs are filled to the end except for the last one. This
 // is used for iterating over the payload for rehashing, returning
 // results etc. This is used via HashStringAllocator for variable length
@@ -27,19 +27,17 @@ namespace facebook::velox {
 // started.
 class AllocationPool {
  public:
-  static constexpr int32_t kHashTableOwner = -3;
   static constexpr int32_t kMinPages = 16;
 
-  explicit AllocationPool(
-      memory::MappedMemory* mappedMemory,
-      int32_t owner = kHashTableOwner)
-      : mappedMemory_(mappedMemory), allocation_(mappedMemory), owner_(owner) {}
+  explicit AllocationPool(memory::MemoryPool* pool) : pool_(pool) {}
 
   ~AllocationPool() = default;
 
   void clear();
 
-  char* allocateFixed(uint64_t bytes);
+  // Allocate a buffer from this pool, optionally aligned.  The alignment can
+  // only be power of 2.
+  char* allocateFixed(uint64_t bytes, int32_t alignment = 1);
 
   // Starts a new run for variable length allocation. The actual size
   // is at least one machine page. Throws std::bad_alloc if no space.
@@ -57,13 +55,12 @@ class AllocationPool {
     return largeAllocations_.size();
   }
 
-  const memory::MappedMemory::Allocation* allocationAt(int32_t index) const {
+  const memory::Allocation* allocationAt(int32_t index) const {
     return index == allocations_.size() ? &allocation_
                                         : allocations_[index].get();
   }
 
-  const memory::MappedMemory::ContiguousAllocation* largeAllocationAt(
-      int32_t index) const {
+  const memory::ContiguousAllocation* largeAllocationAt(int32_t index) const {
     return largeAllocations_[index].get();
   }
 
@@ -83,7 +80,7 @@ class AllocationPool {
     for (auto& largeAllocation : largeAllocations_) {
       totalPages += largeAllocation->numPages();
     }
-    return totalPages * memory::MappedMemory::kPageSize;
+    return totalPages * memory::AllocationTraits::kPageSize;
   }
 
   // Returns number of bytes left at the end of the current run.
@@ -96,7 +93,7 @@ class AllocationPool {
 
   // Returns pointer to first unallocated byte in the current run.
   char* firstFreeInRun() {
-    VELOX_DCHECK(availableInRun() > 0);
+    VELOX_DCHECK_GT(availableInRun(), 0);
     return currentRun().data<char>() + currentOffset_;
   }
 
@@ -110,25 +107,23 @@ class AllocationPool {
     currentOffset_ = offset;
   }
 
-  memory::MappedMemory* mappedMemory() const {
-    return mappedMemory_;
+  memory::MemoryPool* pool() const {
+    return pool_;
   }
 
  private:
-  memory::MappedMemory::PageRun currentRun() const {
+  memory::Allocation::PageRun currentRun() const {
     return allocation_.runAt(currentRun_);
   }
 
   void newRunImpl(memory::MachinePageCount numPages);
 
-  memory::MappedMemory* mappedMemory_;
-  std::vector<std::unique_ptr<memory::MappedMemory::Allocation>> allocations_;
-  std::vector<std::unique_ptr<memory::MappedMemory::ContiguousAllocation>>
-      largeAllocations_;
-  memory::MappedMemory::Allocation allocation_;
+  memory::MemoryPool* pool_;
+  std::vector<std::unique_ptr<memory::Allocation>> allocations_;
+  std::vector<std::unique_ptr<memory::ContiguousAllocation>> largeAllocations_;
+  memory::Allocation allocation_;
   int32_t currentRun_ = 0;
   int32_t currentOffset_ = 0;
-  const int32_t owner_;
 };
 
 } // namespace facebook::velox

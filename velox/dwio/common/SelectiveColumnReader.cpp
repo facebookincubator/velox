@@ -19,7 +19,6 @@
 namespace facebook::velox::dwio::common {
 
 using dwio::common::TypeWithId;
-using dwio::common::typeutils::CompatChecker;
 
 velox::common::AlwaysTrue& alwaysTrue() {
   static velox::common::AlwaysTrue alwaysTrue;
@@ -53,14 +52,17 @@ SelectiveColumnReader::SelectiveColumnReader(
       scanSpec_(&scanSpec),
       type_{type} {}
 
-std::vector<uint32_t> SelectiveColumnReader::filterRowGroups(
+void SelectiveColumnReader::filterRowGroups(
     uint64_t rowGroupSize,
-    const dwio::common::StatsContext& context) const {
-  return formatData_->filterRowGroups(*scanSpec_, rowGroupSize, context);
+    const dwio::common::StatsContext& context,
+    FormatData::FilterRowGroupsResult& result) const {
+  formatData_->filterRowGroups(*scanSpec_, rowGroupSize, context, result);
 }
 
-bool SelectiveColumnReader::rowGroupMatches(uint32_t rowGroupId) const {
-  return formatData_->rowGroupMatches(rowGroupId, scanSpec_->filter());
+const std::vector<SelectiveColumnReader*>& SelectiveColumnReader::children()
+    const {
+  static std::vector<SelectiveColumnReader*> empty;
+  return empty;
 }
 
 void SelectiveColumnReader::seekTo(vector_size_t offset, bool readsNullsOnly) {
@@ -150,57 +152,52 @@ void SelectiveColumnReader::getIntValues(
     case TypeKind::SMALLINT: {
       switch (valueSize_) {
         case 8:
-          getFlatValues<int64_t, int16_t>(rows, result);
+          getFlatValues<int64_t, int16_t>(rows, result, requestedType);
           break;
         case 4:
-          getFlatValues<int32_t, int16_t>(rows, result);
+          getFlatValues<int32_t, int16_t>(rows, result, requestedType);
           break;
         case 2:
-          getFlatValues<int16_t, int16_t>(rows, result);
+          getFlatValues<int16_t, int16_t>(rows, result, requestedType);
           break;
         default:
-          VELOX_FAIL("Unsupported value size");
+          VELOX_FAIL("Unsupported value size: {}", valueSize_);
       }
       break;
       case TypeKind::INTEGER:
         switch (valueSize_) {
           case 8:
-            getFlatValues<int64_t, int32_t>(rows, result);
+            getFlatValues<int64_t, int32_t>(rows, result, requestedType);
             break;
           case 4:
-            getFlatValues<int32_t, int32_t>(rows, result);
+            getFlatValues<int32_t, int32_t>(rows, result, requestedType);
             break;
           case 2:
-            getFlatValues<int16_t, int32_t>(rows, result);
+            getFlatValues<int16_t, int32_t>(rows, result, requestedType);
             break;
           default:
-            VELOX_FAIL("Unsupported value size");
+            VELOX_FAIL("Unsupported value size: {}", valueSize_);
         }
         break;
       case TypeKind::DATE:
-        getFlatValues<Date, Date>(rows, result);
+        getFlatValues<Date, Date>(rows, result, requestedType);
         break;
-      case TypeKind::SHORT_DECIMAL:
-        getFlatValues<UnscaledShortDecimal, UnscaledShortDecimal>(
-            rows, result, requestedType);
-        break;
-      case TypeKind::LONG_DECIMAL:
-        getFlatValues<UnscaledLongDecimal, UnscaledLongDecimal>(
-            rows, result, requestedType);
+      case TypeKind::HUGEINT:
+        getFlatValues<int128_t, int128_t>(rows, result, requestedType);
         break;
       case TypeKind::BIGINT:
         switch (valueSize_) {
           case 8:
-            getFlatValues<int64_t, int64_t>(rows, result);
+            getFlatValues<int64_t, int64_t>(rows, result, requestedType);
             break;
           case 4:
-            getFlatValues<int32_t, int64_t>(rows, result);
+            getFlatValues<int32_t, int64_t>(rows, result, requestedType);
             break;
           case 2:
-            getFlatValues<int16_t, int64_t>(rows, result);
+            getFlatValues<int16_t, int64_t>(rows, result, requestedType);
             break;
           default:
-            VELOX_FAIL("Unsupported value size");
+            VELOX_FAIL("Unsupported value size: {}", valueSize_);
         }
         break;
       default:

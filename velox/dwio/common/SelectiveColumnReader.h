@@ -20,6 +20,7 @@
 #include "velox/common/process/ProcessBase.h"
 #include "velox/dwio/common/ColumnSelector.h"
 #include "velox/dwio/common/FormatData.h"
+#include "velox/dwio/common/Mutation.h"
 #include "velox/dwio/common/ScanSpec.h"
 #include "velox/type/Filter.h"
 
@@ -132,15 +133,16 @@ class SelectiveColumnReader {
     return *formatData_;
   }
 
+  /// Returns list of child readers, empty for leaf readers.
+  virtual const std::vector<SelectiveColumnReader*>& children() const;
+
   /**
    * Read the next group of values into a RowVector.
    * @param numValues the number of values to read
    * @param vector to read into
    */
-  virtual void next(
-      uint64_t /*numValues*/,
-      VectorPtr& /*result*/,
-      const uint64_t* FOLLY_NULLABLE /*incomingNulls*/ = nullptr) {
+  virtual void
+  next(uint64_t /*numValues*/, VectorPtr& /*result*/, const Mutation*) {
     VELOX_UNSUPPORTED("next() is only defined in SelectiveStructColumnReader");
   }
 
@@ -172,7 +174,7 @@ class SelectiveColumnReader {
   // read(). If 'this' has no filter, returns 'rows' passed to last
   // read().
   const RowSet outputRows() const {
-    if (scanSpec_->hasFilter()) {
+    if (scanSpec_->hasFilter() || hasMutation()) {
       return outputRows_;
     }
     return inputRows_;
@@ -193,6 +195,10 @@ class SelectiveColumnReader {
 
   const TypePtr& type() const {
     return type_;
+  }
+
+  const TypeWithId& nodeType() const {
+    return *nodeType_;
   }
 
   // The below functions are called from ColumnVisitor to fill the result set.
@@ -352,11 +358,10 @@ class SelectiveColumnReader {
     initTimeClocks_ = 0;
   }
 
-  virtual bool rowGroupMatches(uint32_t rowGroupId) const;
-
-  virtual std::vector<uint32_t> filterRowGroups(
+  virtual void filterRowGroups(
       uint64_t rowGroupSize,
-      const dwio::common::StatsContext& context) const;
+      const dwio::common::StatsContext& context,
+      FormatData::FilterRowGroupsResult&) const;
 
   raw_vector<int32_t>& innerNonNullRows() {
     return innerNonNullRows_;
@@ -473,7 +478,7 @@ class SelectiveColumnReader {
   void getFlatValues(
       RowSet rows,
       VectorPtr* FOLLY_NONNULL result,
-      const TypePtr& type = CppToType<TVector>::create(),
+      const TypePtr& type,
       bool isFinal = false);
 
   template <typename T, typename TVector>
@@ -500,8 +505,13 @@ class SelectiveColumnReader {
   // copy.
   char* FOLLY_NONNULL copyStringValue(folly::StringPiece value);
 
+  virtual bool hasMutation() const {
+    return false;
+  }
+
   memory::MemoryPool& memoryPool_;
 
+  // Requested Velox type
   std::shared_ptr<const dwio::common::TypeWithId> nodeType_;
 
   // Format specific state and functions.
@@ -511,6 +521,8 @@ class SelectiveColumnReader {
   // spec is assigned at construction and the contents may change at
   // run time based on adaptation. Owned by caller.
   velox::common::ScanSpec* FOLLY_NONNULL scanSpec_;
+
+  // The file data type?
   TypePtr type_;
 
   // Row number after last read row, relative to stripe start.

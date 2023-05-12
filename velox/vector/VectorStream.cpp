@@ -17,29 +17,80 @@
 #include <memory>
 
 namespace facebook::velox {
-
 namespace {
-std::unique_ptr<VectorSerde>& getVectorSerde() {
+
+std::unique_ptr<VectorSerde>& getVectorSerdeImpl() {
   static std::unique_ptr<VectorSerde> serde;
   return serde;
 }
+
+std::unordered_map<std::string, std::unique_ptr<VectorSerde>>&
+getNamedVectorSerdeImpl() {
+  static std::unordered_map<std::string, std::unique_ptr<VectorSerde>>
+      namedSerde;
+  return namedSerde;
+}
+
 } // namespace
 
-bool registerVectorSerde(std::unique_ptr<VectorSerde> serde) {
-  VELOX_CHECK(!getVectorSerde().get(), "Vector serde is already registered");
-  getVectorSerde() = std::move(serde);
-  return true;
+VectorSerde* getVectorSerde() {
+  auto serde = getVectorSerdeImpl().get();
+  VELOX_CHECK_NOT_NULL(serde, "Vector serde is not registered.");
+  return serde;
+}
+
+/// None of the calls below are thread-safe. We only expect one call of it in
+/// the entire system upon startup.
+void registerVectorSerde(std::unique_ptr<VectorSerde> serdeToRegister) {
+  auto& serde = getVectorSerdeImpl();
+  VELOX_CHECK_NULL(serde, "Vector serde is already registered.");
+  serde = std::move(serdeToRegister);
+}
+
+void deregisterVectorSerde() {
+  getVectorSerdeImpl().reset();
 }
 
 bool isRegisteredVectorSerde() {
-  return (getVectorSerde().get() != nullptr);
+  return getVectorSerdeImpl() != nullptr;
+}
+
+/// Named serde helper functions.
+void registerNamedVectorSerde(
+    std::string_view serdeName,
+    std::unique_ptr<VectorSerde> serdeToRegister) {
+  auto& namedSerdeMap = getNamedVectorSerdeImpl();
+  VELOX_CHECK(
+      namedSerdeMap.find(std::string(serdeName)) == namedSerdeMap.end(),
+      "Vector serde '{}' is already registered.",
+      serdeName);
+  namedSerdeMap[std::string(serdeName)] = std::move(serdeToRegister);
+}
+
+void deregisterNamedVectorSerde(std::string_view serdeName) {
+  auto& namedSerdeMap = getNamedVectorSerdeImpl();
+  namedSerdeMap.erase(std::string(serdeName));
+}
+
+bool isRegisteredNamedVectorSerde(std::string_view serdeName) {
+  auto& namedSerdeMap = getNamedVectorSerdeImpl();
+  return namedSerdeMap.find(std::string(serdeName)) != namedSerdeMap.end();
+}
+
+VectorSerde* getNamedVectorSerde(std::string_view serdeName) {
+  auto& namedSerdeMap = getNamedVectorSerdeImpl();
+  auto it = namedSerdeMap.find(std::string(serdeName));
+  VELOX_CHECK(
+      it != namedSerdeMap.end(),
+      "Named vector serde '{}' is not registered.",
+      serdeName);
+  return it->second.get();
 }
 
 void VectorStreamGroup::createStreamTree(
     RowTypePtr type,
     int32_t numRows,
     const VectorSerde::Options* options) {
-  VELOX_CHECK(getVectorSerde().get(), "Vector serde is not registered");
   serializer_ =
       getVectorSerde()->createSerializer(type, numRows, this, options);
 }
@@ -59,7 +110,6 @@ void VectorStreamGroup::estimateSerializedSize(
     VectorPtr vector,
     const folly::Range<const IndexRange*>& ranges,
     vector_size_t** sizes) {
-  VELOX_CHECK(getVectorSerde().get(), "Vector serde is not registered");
   getVectorSerde()->estimateSerializedSize(vector, ranges, sizes);
 }
 
@@ -70,7 +120,6 @@ void VectorStreamGroup::read(
     RowTypePtr type,
     RowVectorPtr* result,
     const VectorSerde::Options* options) {
-  VELOX_CHECK(getVectorSerde().get(), "Vector serde is not registered");
   getVectorSerde()->deserialize(source, pool, type, result, options);
 }
 

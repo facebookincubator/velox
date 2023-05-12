@@ -36,9 +36,8 @@ VectorPtr fastPosition(const RowVectorPtr& inputs) {
   VectorPtr searches = inputs->childAt(1);
 
   const auto numRows = arrays->size();
-  auto result =
-      std::static_pointer_cast<FlatVector<int64_t>>(BaseVector::create(
-          CppToType<int64_t>::create(), numRows, arrays->pool()));
+  auto result = BaseVector::create<FlatVector<int64_t>>(
+      BIGINT(), numRows, arrays->pool());
 
   auto arrayVector = arrays->as<ArrayVector>();
   auto rawOffsets = arrayVector->rawOffsets();
@@ -80,9 +79,8 @@ VectorPtr fastPositionWithInstance(const RowVectorPtr& inputs) {
   VectorPtr instances = inputs->childAt(2);
 
   const auto numRows = arrays->size();
-  auto result =
-      std::static_pointer_cast<FlatVector<int64_t>>(BaseVector::create(
-          CppToType<int64_t>::create(), numRows, arrays->pool()));
+  auto result = BaseVector::create<FlatVector<int64_t>>(
+      BIGINT(), numRows, arrays->pool());
 
   auto arrayVector = arrays->as<ArrayVector>();
   auto rawOffsets = arrayVector->rawOffsets();
@@ -146,14 +144,14 @@ class ArrayPositionBenchmark : public functions::test::FunctionBenchmarkBase {
         [](auto row) { return row % 5; },
         [](auto row) { return row % 23; });
 
-    auto searchVector =
-        BaseVector::createConstant(int32_t{7}, size, execCtx_.pool());
+    auto searchVector = BaseVector::createConstant(
+        INTEGER(), int32_t{7}, size, execCtx_.pool());
 
     if (vectorCount == 2) {
       return vectorMaker_.rowVector({arrayVector, searchVector});
     } else {
-      auto instanceVector =
-          BaseVector::createConstant(int64_t{5}, size, execCtx_.pool());
+      auto instanceVector = BaseVector::createConstant(
+          BIGINT(), int64_t{5}, size, execCtx_.pool());
       return vectorMaker_.rowVector(
           {arrayVector, searchVector, instanceVector});
     }

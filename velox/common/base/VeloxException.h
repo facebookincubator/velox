@@ -89,6 +89,9 @@ inline constexpr auto kNotImplemented = "NOT_IMPLEMENTED"_fs;
 // An error raised when memory exceeded limits.
 inline constexpr auto kMemCapExceeded = "MEM_CAP_EXCEEDED"_fs;
 
+// Error caused by memory allocation failure.
+inline constexpr auto kMemAllocError = "MEM_ALLOC_ERROR"_fs;
+
 // Error caused by failing to allocate cache buffer space for IO.
 inline constexpr auto kNoCacheSpace = "NO_CACHE_SPACE"_fs;
 
@@ -346,6 +349,10 @@ struct ExceptionContext {
 
   bool suspended{false};
 };
+
+/// If exceptionPtr represents an std::exception, convert it to VeloxUserError
+/// to add useful context for debugging.
+std::exception_ptr toVeloxException(const std::exception_ptr& exceptionPtr);
 
 /// Returns a reference to thread_local variable that holds a function that can
 /// be used to get addition context to be added to the detailed error message in

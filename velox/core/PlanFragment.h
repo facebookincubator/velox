@@ -15,10 +15,13 @@
  */
 #pragma once
 #include <memory>
+#include <unordered_set>
 #include <vector>
 #include "velox/core/PlanNode.h"
 
 namespace facebook::velox::core {
+
+class QueryConfig;
 
 /// Gives hints on how to execute the fragment of a plan.
 enum class ExecutionStrategy {
@@ -40,8 +43,21 @@ struct PlanFragment {
   ExecutionStrategy executionStrategy{ExecutionStrategy::kUngrouped};
   int numSplitGroups{0};
 
+  /// Contains leaf plan nodes that need to be executed in the grouped mode.
+  std::unordered_set<PlanNodeId> groupedExecutionLeafNodeIds;
+
+  /// Returns true if the fragment uses grouped execution strategy meaning that
+  /// at least one pipeline has a leaf node that should run grouped execution.
+  /// Note that it does not mean that all pipelines run grouped execution -
+  /// some leaf nodes might still run ungrouped execution.
   inline bool isGroupedExecution() const {
     return executionStrategy == ExecutionStrategy::kGrouped;
+  }
+
+  /// Returns true for leaf nodes that use grouped execution, false otherwise.
+  inline bool leafNodeRunsGroupedExecution(const PlanNodeId& planNodeId) const {
+    return groupedExecutionLeafNodeIds.find(planNodeId) !=
+        groupedExecutionLeafNodeIds.end();
   }
 
   PlanFragment() = default;
@@ -52,10 +68,16 @@ struct PlanFragment {
   PlanFragment(
       std::shared_ptr<const core::PlanNode> topNode,
       ExecutionStrategy strategy,
-      int numberOfSplitGroups)
+      int numberOfSplitGroups,
+      const std::unordered_set<PlanNodeId>& groupedExecLeafNodeIds)
       : planNode(std::move(topNode)),
         executionStrategy(strategy),
-        numSplitGroups(numberOfSplitGroups) {}
+        numSplitGroups(numberOfSplitGroups),
+        groupedExecutionLeafNodeIds(groupedExecLeafNodeIds) {}
+
+  /// Returns true if the spilling is enabled and there is at least one node in
+  /// the plan, whose operator can spill. Returns false otherwise.
+  bool canSpill(const QueryConfig& queryConfig) const;
 };
 
 } // namespace facebook::velox::core

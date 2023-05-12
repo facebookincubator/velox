@@ -17,10 +17,10 @@
 #include "velox/dwio/parquet/reader/PageReader.h"
 #include "velox/dwio/common/BufferUtil.h"
 #include "velox/dwio/common/ColumnVisitors.h"
+#include "velox/dwio/parquet/reader/NestedStructureDecoder.h"
 #include "velox/dwio/parquet/thrift/ThriftTransport.h"
 #include "velox/vector/FlatVector.h"
 
-#include <arrow/util/rle_encoding.h>
 #include <snappy.h>
 #include <thrift/protocol/TCompactProtocol.h> //@manual
 #include <zlib.h>
@@ -31,13 +31,20 @@ namespace facebook::velox::parquet {
 using thrift::Encoding;
 using thrift::PageHeader;
 
-void PageReader::readNextPage(int64_t row) {
+void PageReader::seekToPage(int64_t row) {
   defineDecoder_.reset();
   repeatDecoder_.reset();
   // 'rowOfPage_' is the row number of the first row of the next page.
   rowOfPage_ += numRowsInPage_;
   for (;;) {
-    PageHeader pageHeader = readPageHeader(chunkSize_ - pageStart_);
+    auto dataStart = pageStart_;
+    if (chunkSize_ <= pageStart_) {
+      // This may happen if seeking to exactly end of row group.
+      numRepDefsInPage_ = 0;
+      numRowsInPage_ = 0;
+      break;
+    }
+    PageHeader pageHeader = readPageHeader();
     pageStart_ = pageDataStart_ + pageHeader.compressed_page_size;
 
     switch (pageHeader.type) {
@@ -48,31 +55,27 @@ void PageReader::readNextPage(int64_t row) {
         prepareDataPageV2(pageHeader, row);
         break;
       case thrift::PageType::DICTIONARY_PAGE:
+        if (row == kRepDefOnly) {
+          skipBytes(
+              pageHeader.compressed_page_size,
+              inputStream_.get(),
+              bufferStart_,
+              bufferEnd_);
+          continue;
+        }
         prepareDictionary(pageHeader);
         continue;
       default:
         break; // ignore INDEX page type and any other custom extensions
     }
-    if (row < rowOfPage_ + numRowsInPage_) {
+    if (row == kRepDefOnly || row < rowOfPage_ + numRowsInPage_) {
       break;
     }
-    rowOfPage_ += numRowsInPage_;
-    dwio::common::skipBytes(
-        pageHeader.compressed_page_size,
-        inputStream_.get(),
-        bufferStart_,
-        bufferEnd_);
+    updateRowInfoAfterPageSkipped();
   }
 }
 
-PageHeader PageReader::readPageHeader(int64_t remainingSize) {
-  // Note that sizeof(PageHeader) may be longer than actually read
-  std::shared_ptr<thrift::ThriftBufferedTransport> transport;
-  std::unique_ptr<apache::thrift::protocol::TCompactProtocolT<
-      thrift::ThriftBufferedTransport>>
-      protocol;
-  char copy[sizeof(PageHeader)];
-  bool wasInBuffer = false;
+PageHeader PageReader::readPageHeader() {
   if (bufferEnd_ == bufferStart_) {
     const void* buffer;
     int32_t size;
@@ -80,37 +83,17 @@ PageHeader PageReader::readPageHeader(int64_t remainingSize) {
     bufferStart_ = reinterpret_cast<const char*>(buffer);
     bufferEnd_ = bufferStart_ + size;
   }
-  if (bufferEnd_ - bufferStart_ >= sizeof(PageHeader)) {
-    wasInBuffer = true;
-    transport = std::make_shared<thrift::ThriftBufferedTransport>(
-        bufferStart_, sizeof(PageHeader));
-    protocol = std::make_unique<apache::thrift::protocol::TCompactProtocolT<
-        thrift::ThriftBufferedTransport>>(transport);
-  } else {
-    dwio::common::readBytes(
-        std::min<int64_t>(remainingSize, sizeof(PageHeader)),
-        inputStream_.get(),
-        &copy,
-        bufferStart_,
-        bufferEnd_);
 
-    transport = std::make_shared<thrift::ThriftBufferedTransport>(
-        copy, sizeof(PageHeader));
-    protocol = std::make_unique<apache::thrift::protocol::TCompactProtocolT<
-        thrift::ThriftBufferedTransport>>(transport);
-  }
+  std::shared_ptr<thrift::ThriftTransport> transport =
+      std::make_shared<thrift::ThriftStreamingTransport>(
+          inputStream_.get(), bufferStart_, bufferEnd_);
+  apache::thrift::protocol::TCompactProtocolT<thrift::ThriftTransport> protocol(
+      transport);
   PageHeader pageHeader;
-  uint64_t readBytes = pageHeader.read(protocol.get());
+  uint64_t readBytes;
+  readBytes = pageHeader.read(&protocol);
+
   pageDataStart_ = pageStart_ + readBytes;
-  // Unread the bytes that were not consumed.
-  if (wasInBuffer) {
-    bufferStart_ += readBytes;
-  } else {
-    std::vector<uint64_t> start = {pageDataStart_};
-    dwio::common::PositionProvider position(start);
-    inputStream_->seekToPosition(position);
-    bufferStart_ = bufferEnd_ = nullptr;
-  }
   return pageHeader;
 }
 
@@ -212,12 +195,62 @@ const char* FOLLY_NONNULL PageReader::uncompressData(
   }
 }
 
+void PageReader::setPageRowInfo(bool forRepDef) {
+  if (isTopLevel_ || forRepDef || maxRepeat_ == 0) {
+    numRowsInPage_ = numRepDefsInPage_;
+  } else if (hasChunkRepDefs_) {
+    ++pageIndex_;
+    VELOX_CHECK_LT(
+        pageIndex_,
+        numLeavesInPage_.size(),
+        "Seeking past known repdefs for non top level column page {}",
+        pageIndex_);
+    numRowsInPage_ = numLeavesInPage_[pageIndex_];
+  } else {
+    numRowsInPage_ = kRowsUnknown;
+  }
+}
+
+void PageReader::readPageDefLevels() {
+  VELOX_CHECK(kRowsUnknown == numRowsInPage_ || maxDefine_ > 1);
+  definitionLevels_.resize(numRepDefsInPage_);
+  wideDefineDecoder_->GetBatch(definitionLevels_.data(), numRepDefsInPage_);
+  leafNulls_.resize(bits::nwords(numRepDefsInPage_));
+  leafNullsSize_ = getLengthsAndNulls(
+      LevelMode::kNulls,
+      leafInfo_,
+
+      0,
+      numRepDefsInPage_,
+      numRepDefsInPage_,
+      nullptr,
+      leafNulls_.data(),
+      0);
+  numRowsInPage_ = leafNullsSize_;
+  numLeafNullsConsumed_ = 0;
+}
+
+void PageReader::updateRowInfoAfterPageSkipped() {
+  rowOfPage_ += numRowsInPage_;
+  if (hasChunkRepDefs_) {
+    numLeafNullsConsumed_ = rowOfPage_;
+  }
+}
+
 void PageReader::prepareDataPageV1(const PageHeader& pageHeader, int64_t row) {
   VELOX_CHECK(
       pageHeader.type == thrift::PageType::DATA_PAGE &&
       pageHeader.__isset.data_page_header);
-  numRowsInPage_ = pageHeader.data_page_header.num_values;
-  if (numRowsInPage_ + rowOfPage_ <= row) {
+  numRepDefsInPage_ = pageHeader.data_page_header.num_values;
+  setPageRowInfo(row == kRepDefOnly);
+  if (row != kRepDefOnly && numRowsInPage_ != kRowsUnknown &&
+      numRowsInPage_ + rowOfPage_ <= row) {
+    dwio::common::skipBytes(
+        pageHeader.compressed_page_size,
+        inputStream_.get(),
+        bufferStart_,
+        bufferEnd_);
+
     return;
   }
   pageData_ = readBytes(pageHeader.compressed_page_size, pageBuffer_);
@@ -228,32 +261,52 @@ void PageReader::prepareDataPageV1(const PageHeader& pageHeader, int64_t row) {
   auto pageEnd = pageData_ + pageHeader.uncompressed_page_size;
   if (maxRepeat_ > 0) {
     uint32_t repeatLength = readField<int32_t>(pageData_);
-    pageData_ += repeatLength;
-    repeatDecoder_ = std::make_unique<RleBpDecoder>(
-        pageData_,
-        pageData_ + repeatLength,
+    repeatDecoder_ = std::make_unique<arrow::util::RleDecoder>(
+        reinterpret_cast<const uint8_t*>(pageData_),
+        repeatLength,
         arrow::bit_util::NumRequiredBits(maxRepeat_));
+
     pageData_ += repeatLength;
   }
 
   if (maxDefine_ > 0) {
     auto defineLength = readField<uint32_t>(pageData_);
-    defineDecoder_ = std::make_unique<RleBpDecoder>(
-        pageData_,
-        pageData_ + defineLength,
-        arrow::bit_util::NumRequiredBits(maxDefine_));
+    if (maxDefine_ == 1) {
+      defineDecoder_ = std::make_unique<RleBpDecoder>(
+          pageData_,
+          pageData_ + defineLength,
+          arrow::bit_util::NumRequiredBits(maxDefine_));
+    } else {
+      wideDefineDecoder_ = std::make_unique<arrow::util::RleDecoder>(
+          reinterpret_cast<const uint8_t*>(pageData_),
+          defineLength,
+          arrow::bit_util::NumRequiredBits(maxDefine_));
+    }
     pageData_ += defineLength;
   }
   encodedDataSize_ = pageEnd - pageData_;
 
   encoding_ = pageHeader.data_page_header.encoding;
-  makeDecoder();
+  if (!hasChunkRepDefs_ && (numRowsInPage_ == kRowsUnknown || maxDefine_ > 1)) {
+    readPageDefLevels();
+  }
+
+  if (row != kRepDefOnly) {
+    makeDecoder();
+  }
 }
 
 void PageReader::prepareDataPageV2(const PageHeader& pageHeader, int64_t row) {
   VELOX_CHECK(pageHeader.__isset.data_page_header_v2);
-  numRowsInPage_ = pageHeader.data_page_header_v2.num_values;
-  if (numRowsInPage_ + rowOfPage_ <= row) {
+  numRepDefsInPage_ = pageHeader.data_page_header_v2.num_values;
+  setPageRowInfo(row == kRepDefOnly);
+  if (row != kRepDefOnly && numRowsInPage_ != kRowsUnknown &&
+      numRowsInPage_ + rowOfPage_ <= row) {
+    skipBytes(
+        pageHeader.compressed_page_size,
+        inputStream_.get(),
+        bufferStart_,
+        bufferEnd_);
     return;
   }
 
@@ -267,9 +320,9 @@ void PageReader::prepareDataPageV2(const PageHeader& pageHeader, int64_t row) {
   pageData_ = readBytes(bytes, pageBuffer_);
 
   if (repeatLength) {
-    repeatDecoder_ = std::make_unique<RleBpDecoder>(
-        pageData_,
-        pageData_ + repeatLength,
+    repeatDecoder_ = std::make_unique<arrow::util::RleDecoder>(
+        reinterpret_cast<const uint8_t*>(pageData_),
+        repeatLength,
         arrow::bit_util::NumRequiredBits(maxRepeat_));
   }
 
@@ -288,9 +341,19 @@ void PageReader::prepareDataPageV2(const PageHeader& pageHeader, int64_t row) {
         pageHeader.compressed_page_size - levelsSize,
         pageHeader.uncompressed_page_size - levelsSize);
   }
+  if (row == kRepDefOnly) {
+    skipBytes(bytes, inputStream_.get(), bufferStart_, bufferEnd_);
+    return;
+  }
+
   encodedDataSize_ = pageHeader.uncompressed_page_size - levelsSize;
   encoding_ = pageHeader.data_page_header_v2.encoding;
-  makeDecoder();
+  if (numRowsInPage_ == kRowsUnknown) {
+    readPageDefLevels();
+  }
+  if (row != kRepDefOnly) {
+    makeDecoder();
+  }
 }
 
 void PageReader::prepareDictionary(const PageHeader& pageHeader) {
@@ -321,7 +384,14 @@ void PageReader::prepareDictionary(const PageHeader& pageHeader) {
           ? sizeof(float)
           : sizeof(double);
       auto numBytes = dictionary_.numValues * typeSize;
-      dictionary_.values = AlignedBuffer::allocate<char>(numBytes, &pool_);
+      if (type_->type->isShortDecimal() && parquetType == thrift::Type::INT32) {
+        auto veloxTypeLength = type_->type->cppSizeInBytes();
+        auto numVeloxBytes = dictionary_.numValues * veloxTypeLength;
+        dictionary_.values =
+            AlignedBuffer::allocate<char>(numVeloxBytes, &pool_);
+      } else {
+        dictionary_.values = AlignedBuffer::allocate<char>(numBytes, &pool_);
+      }
       if (pageData_) {
         memcpy(dictionary_.values->asMutable<char>(), pageData_, numBytes);
       } else {
@@ -331,6 +401,15 @@ void PageReader::prepareDictionary(const PageHeader& pageHeader) {
             dictionary_.values->asMutable<char>(),
             bufferStart_,
             bufferEnd_);
+      }
+      if (type_->type->isShortDecimal() && parquetType == thrift::Type::INT32) {
+        auto values = dictionary_.values->asMutable<int64_t>();
+        auto parquetValues = dictionary_.values->asMutable<int32_t>();
+        for (auto i = dictionary_.numValues - 1; i >= 0; --i) {
+          // Expand the Parquet type length values to Velox type length.
+          // We start from the end to allow in-place expansion.
+          values[i] = parquetValues[i];
+        }
       }
       break;
     }
@@ -392,10 +471,9 @@ void PageReader::prepareDictionary(const PageHeader& pageHeader) {
             values[i] = value;
           }
         }
-        auto values = dictionary_.values->asMutable<UnscaledShortDecimal>();
+        auto values = dictionary_.values->asMutable<int64_t>();
         for (auto i = 0; i < dictionary_.numValues; ++i) {
-          values[i] = UnscaledShortDecimal(
-              __builtin_bswap64(values[i].unscaledValue()));
+          values[i] = __builtin_bswap64(values[i]);
         }
         break;
       } else if (type_->type->isLongDecimal()) {
@@ -416,10 +494,9 @@ void PageReader::prepareDictionary(const PageHeader& pageHeader) {
             values[i] = value;
           }
         }
-        auto values = dictionary_.values->asMutable<UnscaledLongDecimal>();
+        auto values = dictionary_.values->asMutable<int128_t>();
         for (auto i = 0; i < dictionary_.numValues; ++i) {
-          values[i] = UnscaledLongDecimal(
-              dwio::common::builtin_bswap128(values[i].unscaledValue()));
+          values[i] = dwio::common::builtin_bswap128(values[i]);
         }
         break;
       }
@@ -459,6 +536,117 @@ int32_t parquetTypeBytes(thrift::Type::type type) {
 }
 } // namespace
 
+void PageReader::preloadRepDefs() {
+  hasChunkRepDefs_ = true;
+  while (pageStart_ < chunkSize_) {
+    seekToPage(kRepDefOnly);
+    auto begin = definitionLevels_.size();
+    auto numLevels = definitionLevels_.size() + numRepDefsInPage_;
+    definitionLevels_.resize(numLevels);
+    wideDefineDecoder_->GetBatch(
+        definitionLevels_.data() + begin, numRepDefsInPage_);
+    if (repeatDecoder_) {
+      repetitionLevels_.resize(numLevels);
+
+      repeatDecoder_->GetBatch(
+          repetitionLevels_.data() + begin, numRepDefsInPage_);
+    }
+    leafNulls_.resize(bits::nwords(leafNullsSize_ + numRepDefsInPage_));
+    auto numLeaves = getLengthsAndNulls(
+        LevelMode::kNulls,
+        leafInfo_,
+        begin,
+        begin + numRepDefsInPage_,
+        numRepDefsInPage_,
+        nullptr,
+        leafNulls_.data(),
+        leafNullsSize_);
+    leafNullsSize_ += numLeaves;
+    numLeavesInPage_.push_back(numLeaves);
+  }
+
+  // Reset the input to start of column chunk.
+  std::vector<uint64_t> rewind = {0};
+  pageStart_ = 0;
+  dwio::common::PositionProvider position(rewind);
+  inputStream_->seekToPosition(position);
+  bufferStart_ = bufferEnd_ = nullptr;
+  rowOfPage_ = 0;
+  numRowsInPage_ = 0;
+  pageData_ = nullptr;
+}
+
+void PageReader::decodeRepDefs(int32_t numTopLevelRows) {
+  if (definitionLevels_.empty()) {
+    preloadRepDefs();
+  }
+  repDefBegin_ = repDefEnd_;
+  int32_t numLevels = definitionLevels_.size();
+  int32_t topFound = 0;
+  int32_t i = repDefBegin_;
+  if (maxRepeat_ > 0) {
+    for (; i < numLevels; ++i) {
+      if (repetitionLevels_[i] == 0) {
+        ++topFound;
+        if (topFound == numTopLevelRows + 1) {
+          break;
+        }
+      }
+    }
+    repDefEnd_ = i;
+  } else {
+    repDefEnd_ = i + numTopLevelRows;
+  }
+}
+
+int32_t PageReader::getLengthsAndNulls(
+    LevelMode mode,
+    const ::parquet::internal::LevelInfo& info,
+    int32_t begin,
+    int32_t end,
+    int32_t maxItems,
+    int32_t* lengths,
+    uint64_t* nulls,
+    int32_t nullsStartIndex) const {
+  ::parquet::internal::ValidityBitmapInputOutput bits;
+  bits.values_read_upper_bound = maxItems;
+  bits.values_read = 0;
+  bits.null_count = 0;
+  bits.valid_bits = reinterpret_cast<uint8_t*>(nulls);
+  bits.valid_bits_offset = nullsStartIndex;
+
+  switch (mode) {
+    case LevelMode::kNulls:
+      DefLevelsToBitmap(
+          definitionLevels_.data() + begin, end - begin, info, &bits);
+      break;
+    case LevelMode::kList: {
+      ::parquet::internal::DefRepLevelsToList(
+          definitionLevels_.data() + begin,
+          repetitionLevels_.data() + begin,
+          end - begin,
+          info,
+          &bits,
+          lengths);
+      // Convert offsets to lengths.
+      for (auto i = 0; i < bits.values_read; ++i) {
+        lengths[i] = lengths[i + 1] - lengths[i];
+      }
+      break;
+    }
+    case LevelMode::kStructOverLists: {
+      DefRepLevelsToBitmap(
+          definitionLevels_.data() + begin,
+          repetitionLevels_.data() + begin,
+          end - begin,
+          info,
+          &bits);
+      break;
+    }
+  }
+  return bits.values_read;
+}
+
 void PageReader::makeDecoder() {
   auto parquetType = type_->parquetType_.value();
   switch (encoding_) {
@@ -469,6 +657,10 @@ void PageReader::makeDecoder() {
       break;
     case Encoding::PLAIN:
       switch (parquetType) {
+        case thrift::Type::BOOLEAN:
+          booleanDecoder_ = std::make_unique<BooleanDecoder>(
+              pageData_, pageData_ + encodedDataSize_);
+          break;
         case thrift::Type::BYTE_ARRAY:
           stringDecoder_ = std::make_unique<StringDecoder>(
               pageData_, pageData_ + encodedDataSize_);
@@ -503,7 +695,10 @@ void PageReader::skip(int64_t numRows) {
   }
   auto toSkip = numRows;
   if (firstUnvisited_ + numRows >= rowOfPage_ + numRowsInPage_) {
-    readNextPage(firstUnvisited_ + numRows);
+    seekToPage(firstUnvisited_ + numRows);
+    if (hasChunkRepDefs_) {
+      numLeafNullsConsumed_ = rowOfPage_;
+    }
     toSkip -= rowOfPage_ - firstUnvisited_;
   }
   firstUnvisited_ += numRows;
@@ -518,23 +713,29 @@ void PageReader::skip(int64_t numRows) {
     directDecoder_->skip(toSkip);
   } else if (stringDecoder_) {
     stringDecoder_->skip(toSkip);
+  } else if (booleanDecoder_) {
+    booleanDecoder_->skip(toSkip);
   } else {
     VELOX_FAIL("No decoder to skip");
   }
 }
 
 int32_t PageReader::skipNulls(int32_t numValues) {
-  if (!defineDecoder_) {
+  if (!defineDecoder_ && isTopLevel_) {
     return numValues;
   }
-  VELOX_CHECK_EQ(1, maxDefine_);
+  VELOX_CHECK(1 == maxDefine_ || !leafNulls_.empty());
   dwio::common::ensureCapacity<bool>(tempNulls_, numValues, &pool_);
   tempNulls_->setSize(0);
-  bool allOnes;
-  defineDecoder_->readBits(
-      numValues, tempNulls_->asMutable<uint64_t>(), &allOnes);
-  if (allOnes) {
-    return numValues;
+  if (isTopLevel_) {
+    bool allOnes;
+    defineDecoder_->readBits(
+        numValues, tempNulls_->asMutable<uint64_t>(), &allOnes);
+    if (allOnes) {
+      return numValues;
+    }
+  } else {
+    readNulls(numValues, tempNulls_);
   }
   auto words = tempNulls_->as<uint64_t>();
   return bits::countBits(words, 0, numValues);
@@ -547,17 +748,19 @@ void PageReader::skipNullsOnly(int64_t numRows) {
   }
   auto toSkip = numRows;
   if (firstUnvisited_ + numRows >= rowOfPage_ + numRowsInPage_) {
-    readNextPage(firstUnvisited_ + numRows);
+    seekToPage(firstUnvisited_ + numRows);
     firstUnvisited_ += numRows;
     toSkip = firstUnvisited_ - rowOfPage_;
+  } else {
+    firstUnvisited_ += numRows;
   }
-  firstUnvisited_ += numRows;
 
   // Skip nulls
   skipNulls(toSkip);
 }
 
 void PageReader::readNullsOnly(int64_t numValues, BufferPtr& buffer) {
+  VELOX_CHECK(!maxRepeat_);
   auto toRead = numValues;
   if (buffer) {
     dwio::common::ensureCapacity<bool>(buffer, numValues, &pool_);
@@ -566,7 +769,7 @@ void PageReader::readNullsOnly(int64_t numValues, BufferPtr& buffer) {
   while (toRead) {
     auto availableOnPage = rowOfPage_ + numRowsInPage_ - firstUnvisited_;
     if (!availableOnPage) {
-      readNextPage(firstUnvisited_);
+      seekToPage(firstUnvisited_);
       availableOnPage = numRowsInPage_;
     }
     auto numRead = std::min(availableOnPage, toRead);
@@ -580,15 +783,26 @@ void PageReader::readNullsOnly(int64_t numValues, BufferPtr& buffer) {
 
 const uint64_t* FOLLY_NULLABLE
 PageReader::readNulls(int32_t numValues, BufferPtr& buffer) {
-  if (!defineDecoder_) {
+  if (maxDefine_ == 0) {
     buffer = nullptr;
     return nullptr;
   }
-  VELOX_CHECK_EQ(1, maxDefine_);
   dwio::common::ensureCapacity<bool>(buffer, numValues, &pool_);
-  bool allOnes;
-  defineDecoder_->readBits(numValues, buffer->asMutable<uint64_t>(), &allOnes);
-  return allOnes ? nullptr : buffer->as<uint64_t>();
+  if (isTopLevel_) {
+    VELOX_CHECK_EQ(1, maxDefine_);
+    bool allOnes;
+    defineDecoder_->readBits(
+        numValues, buffer->asMutable<uint64_t>(), &allOnes);
+    return allOnes ? nullptr : buffer->as<uint64_t>();
+  }
+  bits::copyBits(
+      leafNulls_.data(),
+      numLeafNullsConsumed_,
+      buffer->asMutable<uint64_t>(),
+      0,
+      numValues);
+  numLeafNullsConsumed_ += numValues;
+  return buffer->as<uint64_t>();
 }
 
 void PageReader::startVisit(folly::Range<const vector_size_t*> rows) {
@@ -613,7 +827,10 @@ bool PageReader::rowsForPage(
   // page that contains the row.
   auto rowZero = visitBase_ + visitorRows_[currentVisitorRow_];
   if (rowZero >= rowOfPage_ + numRowsInPage_) {
-    readNextPage(rowZero);
+    seekToPage(rowZero);
+    if (hasChunkRepDefs_) {
+      numLeafNullsConsumed_ = rowOfPage_;
+    }
   }
   auto& scanState = reader.scanState();
   if (isDictionary()) {
@@ -696,11 +913,11 @@ bool PageReader::rowsForPage(
   return true;
 }
 
-const VectorPtr& PageReader::dictionaryValues() {
+const VectorPtr& PageReader::dictionaryValues(const TypePtr& type) {
   if (!dictionaryValues_) {
     dictionaryValues_ = std::make_shared<FlatVector<StringView>>(
         &pool_,
-        VARCHAR(),
+        type,
         nullptr,
         dictionary_.numValues,
         dictionary_.values,

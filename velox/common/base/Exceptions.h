@@ -142,6 +142,10 @@ inline const char* errorMessage(const char* s) {
   return s;
 }
 
+inline std::string errorMessage(const std::string& str) {
+  return str;
+}
+
 template <typename... Args>
 std::string errorMessage(fmt::string_view fmt, const Args&... args) {
   return fmt::vformat(fmt, fmt::make_format_args(args...));
@@ -270,7 +274,7 @@ DECLARE_CHECK_FAIL_TEMPLATES(::facebook::velox::VeloxRuntimeError);
       /* isRetriable */ false,                                   \
       ##__VA_ARGS__)
 
-#define VELOX_SCHMEA_MISMATCH_ERROR(...)                         \
+#define VELOX_SCHEMA_MISMATCH_ERROR(...)                         \
   _VELOX_THROW(                                                  \
       ::facebook::velox::VeloxUserError,                         \
       ::facebook::velox::error_source::kErrorSourceUser.c_str(), \

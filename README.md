@@ -97,7 +97,16 @@ $ CPU_TARGET="arm64" make
 
 You can also produce intel binaries on an M1, use `CPU_TARGET="sse"` for the above.
 
-### Setting up on Linux (Ubuntu 20.04 or later)
+### Setting up on aarch64 Linux (Ubuntu 20.04 or later)
+
+On an aarch64 based machine, you can build like so:
+
+```shell
+$ CPU_TARGET="aarch64" ./scripts/setup-ubuntu.sh
+$ CPU_TARGET="aarch64" make
+```
+
+### Setting up on x86_64 Linux (Ubuntu 20.04 or later)
 
 Once you have checked out Velox, you can setup and build like so:
 
@@ -125,6 +134,7 @@ Note that,
     * sse
   * On ARM
     * Neon
+    * Neon64
 
 ### Building Velox with docker-compose
 
@@ -152,7 +162,7 @@ contribute to the project.
 
 The main communication channel with the Velox OSS community is through the
 [the Velox-OSS Slack workspace](http://velox-oss.slack.com). 
-Please reach out to **velox@fb.com** to get access to Velox Slack Channel.
+Please reach out to **velox@meta.com** to get access to Velox Slack Channel.
 
 
 ## License

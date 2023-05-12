@@ -16,10 +16,10 @@
 
 #include <gtest/gtest.h>
 
+#include "velox/common/base/Fs.h"
 #include "velox/common/memory/Memory.h"
 #include "velox/core/QueryCtx.h"
 #include "velox/exec/tests/utils/AssertQueryBuilder.h"
-#include "velox/exec/tests/utils/QueryAssertions.h"
 #include "velox/expression/Expr.h"
 #include "velox/expression/tests/ExpressionRunner.h"
 #include "velox/expression/tests/ExpressionVerifier.h"
@@ -28,25 +28,11 @@
 #include "velox/parse/QueryPlanner.h"
 #include "velox/parse/TypeResolver.h"
 #include "velox/vector/VectorSaver.h"
+#include "velox/vector/fuzzer/VectorFuzzer.h"
 
 namespace facebook::velox::test {
 
 namespace {
-/// Parse comma-separated SQL expressions.
-std::vector<core::TypedExprPtr> parseSql(
-    const std::string& sql,
-    const TypePtr& inputType,
-    memory::MemoryPool* pool) {
-  auto exprs = parse::parseMultipleExpressions(sql, {});
-
-  std::vector<core::TypedExprPtr> typedExprs;
-  typedExprs.reserve(exprs.size());
-  for (const auto& expr : exprs) {
-    typedExprs.push_back(core::Expressions::inferTypes(expr, inputType, pool));
-  }
-  return typedExprs;
-}
-
 /// Creates a RowVector from a list of child vectors. Uses _col0, _col1,..
 /// auto-generated names for the RowType.
 RowVectorPtr createRowVector(
@@ -92,7 +78,7 @@ vector_size_t adjustNumRows(vector_size_t numRows, vector_size_t size) {
 void saveResults(
     const RowVectorPtr& results,
     const std::string& directoryPath) {
-  auto path = generateFilePath(directoryPath.c_str(), "vector");
+  auto path = common::generateTempFilePath(directoryPath.c_str(), "vector");
   VELOX_CHECK(
       path.has_value(),
       "Failed to create file for saving result vector in {} directory.",
@@ -104,18 +90,35 @@ void saveResults(
 }
 } // namespace
 
+std::vector<core::TypedExprPtr> ExpressionRunner::parseSql(
+    const std::string& sql,
+    const TypePtr& inputType,
+    memory::MemoryPool* pool,
+    const VectorPtr& complexConstants) {
+  auto exprs = parse::parseMultipleExpressions(sql, {});
+
+  std::vector<core::TypedExprPtr> typedExprs;
+  typedExprs.reserve(exprs.size());
+  for (const auto& expr : exprs) {
+    typedExprs.push_back(
+        core::Expressions::inferTypes(expr, inputType, pool, complexConstants));
+  }
+  return typedExprs;
+}
+
 void ExpressionRunner::run(
     const std::string& inputPath,
     const std::string& sql,
+    const std::string& complexConstantsPath,
     const std::string& resultPath,
     const std::string& mode,
     vector_size_t numRows,
-    const std::string& storeResultPath) {
+    const std::string& storeResultPath,
+    const std::string& lazyColumnListPath) {
   VELOX_CHECK(!sql.empty());
 
   std::shared_ptr<core::QueryCtx> queryCtx{std::make_shared<core::QueryCtx>()};
-  std::unique_ptr<memory::MemoryPool> pool{
-      memory::getDefaultScopedMemoryPool()};
+  std::shared_ptr<memory::MemoryPool> pool{memory::addDefaultLeafMemoryPool()};
   core::ExecCtx execCtx{pool.get(), queryCtx.get()};
 
   RowVectorPtr inputVector;
@@ -130,6 +133,12 @@ void ExpressionRunner::run(
         "Input vector is not a RowVector: {}",
         inputVector->toString());
     VELOX_CHECK_GT(inputVector->size(), 0, "Input vector must not be empty.");
+  }
+
+  std::vector<column_index_t> columnsToWrapInLazy;
+  if (!lazyColumnListPath.empty()) {
+    columnsToWrapInLazy =
+        restoreStdVectorFromFile<column_index_t>(lazyColumnListPath.c_str());
   }
 
   parse::registerTypeResolver();
@@ -156,7 +165,13 @@ void ExpressionRunner::run(
     return;
   }
 
-  auto typedExprs = parseSql(sql, inputVector->type(), pool.get());
+  VectorPtr complexConstants{nullptr};
+  if (!complexConstantsPath.empty()) {
+    complexConstants =
+        restoreVectorFromFile(complexConstantsPath.c_str(), pool.get());
+  }
+  auto typedExprs =
+      parseSql(sql, inputVector->type(), pool.get(), complexConstants);
 
   VectorPtr resultVector;
   if (!resultPath.empty()) {
@@ -168,11 +183,18 @@ void ExpressionRunner::run(
   LOG(INFO) << "Evaluating SQL expression(s): " << sql;
 
   if (mode == "verify") {
-    VELOX_CHECK_EQ(
-        1, typedExprs.size(), "'verify' mode supports only one SQL expression");
     test::ExpressionVerifier(&execCtx, {false, ""})
-        .verify(typedExprs[0], inputVector, std::move(resultVector), true);
+        .verify(
+            typedExprs,
+            inputVector,
+            std::move(resultVector),
+            true,
+            columnsToWrapInLazy);
   } else if (mode == "common") {
+    if (!columnsToWrapInLazy.empty()) {
+      inputVector =
+          VectorFuzzer::fuzzRowChildrenToLazy(inputVector, columnsToWrapInLazy);
+    }
     exec::ExprSet exprSet(typedExprs, &execCtx);
     auto results = evaluateAndPrintResults(exprSet, inputVector, rows, execCtx);
     if (!storeResultPath.empty()) {

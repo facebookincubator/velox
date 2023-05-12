@@ -49,6 +49,8 @@ template <typename T>
 class FlatVector;
 
 class VectorPool;
+class BaseVector;
+using VectorPtr = std::shared_ptr<BaseVector>;
 
 /**
  * Base class for all columnar-based vectors of any type.
@@ -136,7 +138,8 @@ class BaseVector {
   }
 
   virtual bool isNullAt(vector_size_t idx) const {
-    VELOX_DCHECK(isIndexInRange(idx));
+    VELOX_DCHECK_GE(idx, 0, "Index must not be negative");
+    VELOX_DCHECK_LT(idx, length_, "Index is too large");
     return rawNulls_ ? bits::isBitNull(rawNulls_, idx) : false;
   }
 
@@ -281,6 +284,13 @@ class BaseVector {
         });
   }
 
+  /// Compares values in range [start, start + size) and returns an index of a
+  /// duplicate value if found.
+  std::optional<vector_size_t> findDuplicateValue(
+      vector_size_t start,
+      vector_size_t size,
+      CompareFlags flags);
+
   /**
    * @return the hash of the value at the given index in this vector
    */
@@ -290,11 +300,6 @@ class BaseVector {
    * @return a new vector that contains the hashes for all entries
    */
   virtual std::unique_ptr<SimpleVector<uint64_t>> hashAll() const = 0;
-
-  // Returns true if all values in the specified rows are the same.
-  virtual bool isConstant(const SelectivityVector& rows) const {
-    return false;
-  }
 
   /// Returns true if this vector is encoded as flat (FlatVector).
   bool isFlatEncoding() const {
@@ -382,6 +387,9 @@ class BaseVector {
       const vector_size_t* toSourceRow) {
     rows.applyToSelected([&](vector_size_t row) {
       auto sourceRow = toSourceRow ? toSourceRow[row] : row;
+      if (sourceRow >= source->size()) {
+        return;
+      }
       if (source->isNullAt(sourceRow)) {
         setNull(row, true);
       } else {
@@ -391,7 +399,7 @@ class BaseVector {
   }
 
   // Utility for making a deep copy of a whole vector.
-  static std::shared_ptr<BaseVector> copy(const BaseVector& vector) {
+  static VectorPtr copy(const BaseVector& vector) {
     auto result =
         BaseVector::create(vector.type(), vector.size(), vector.pool());
     result->copy(&vector, 0, 0, vector.size());
@@ -403,6 +411,9 @@ class BaseVector {
       vector_size_t targetIndex,
       vector_size_t sourceIndex,
       vector_size_t count) {
+    if (count == 0) {
+      return;
+    }
     CopyRange range{sourceIndex, targetIndex, count};
     copyRanges(source, folly::Range(&range, 1));
   }
@@ -423,9 +434,7 @@ class BaseVector {
 
   // Construct a zero-copy slice of the vector with the indicated offset and
   // length.
-  virtual std::shared_ptr<BaseVector> slice(
-      vector_size_t offset,
-      vector_size_t length) const = 0;
+  virtual VectorPtr slice(vector_size_t offset, vector_size_t length) const = 0;
 
   // Returns a vector of the type of 'source' where 'indices' contains
   // an index into 'source' for each element of 'source'. The
@@ -433,30 +442,27 @@ class BaseVector {
   // equivalent to wrapping 'source' in a dictionary with 'indices'
   // but this may reuse structure if said structure is uniquely owned
   // or if a copy is more efficient than dictionary wrapping.
-  static std::shared_ptr<BaseVector> transpose(
-      BufferPtr indices,
-      std::shared_ptr<BaseVector>&& source);
+  static VectorPtr transpose(BufferPtr indices, VectorPtr&& source);
 
-  static std::shared_ptr<BaseVector> createConstant(
+  static VectorPtr createConstant(
+      const TypePtr& type,
       variant value,
       vector_size_t size,
       velox::memory::MemoryPool* pool);
 
-  static std::shared_ptr<BaseVector> createNullConstant(
+  static VectorPtr createNullConstant(
       const TypePtr& type,
       vector_size_t size,
       velox::memory::MemoryPool* pool);
 
-  static std::shared_ptr<BaseVector> wrapInDictionary(
+  static VectorPtr wrapInDictionary(
       BufferPtr nulls,
       BufferPtr indices,
       vector_size_t size,
-      std::shared_ptr<BaseVector> vector);
+      VectorPtr vector);
 
-  static std::shared_ptr<BaseVector> wrapInSequence(
-      BufferPtr lengths,
-      vector_size_t size,
-      std::shared_ptr<BaseVector> vector);
+  static VectorPtr
+  wrapInSequence(BufferPtr lengths, vector_size_t size, VectorPtr vector);
 
   // Creates a ConstantVector of specified length and value coming from the
   // 'index' element of the 'vector'. Peels off any encodings of the 'vector'
@@ -464,10 +470,8 @@ class BaseVector {
   // ConstantVector holding a scalar value or a ConstantVector wrapping flat or
   // lazy vector. The result cannot be a wrapping over another constant or
   // dictionary vector.
-  static std::shared_ptr<BaseVector> wrapInConstant(
-      vector_size_t length,
-      vector_size_t index,
-      std::shared_ptr<BaseVector> vector);
+  static VectorPtr
+  wrapInConstant(vector_size_t length, vector_size_t index, VectorPtr vector);
 
   // Makes 'result' writable for 'rows'. A wrapper (e.g. dictionary, constant,
   // sequence) is flattened and a multiply referenced flat vector is copied.
@@ -475,7 +479,7 @@ class BaseVector {
   // overwritten.
   //
   // After invoking this function, the 'result' is guaranteed to be a flat
-  // uniquely-referenced vector.
+  // uniquely-referenced vector with all data-dependent flags reset.
   //
   // Use SelectivityVector::empty() to make the 'result' writable and preserve
   // all current values.
@@ -483,7 +487,7 @@ class BaseVector {
       const SelectivityVector& rows,
       const TypePtr& type,
       velox::memory::MemoryPool* pool,
-      std::shared_ptr<BaseVector>& result,
+      VectorPtr& result,
       VectorPool* vectorPool = nullptr);
 
   virtual void ensureWritable(const SelectivityVector& rows);
@@ -509,22 +513,8 @@ class BaseVector {
     return false;
   }
 
-  // Flattens the input vector.
-  //
-  // TODO: This method reuses ensureWritable(), which ensures that both:
-  //  (a) the vector is flattened, and
-  //  (b) it's singly-referenced
-  //
-  // We don't necessarily need (b) if we only want to flatten vectors.
-  static void flattenVector(
-      std::shared_ptr<BaseVector>& vector,
-      size_t vectorSize) {
-    BaseVector::ensureWritable(
-        SelectivityVector::empty(vectorSize),
-        vector->type(),
-        vector->pool(),
-        vector);
-  }
+  // Flattens the input vector and all of its children.
+  static void flattenVector(VectorPtr& vector);
 
   template <typename T>
   static inline uint64_t byteSize(vector_size_t count) {
@@ -534,7 +524,7 @@ class BaseVector {
   // If 'vector' is a wrapper, returns the underlying values vector. This is
   // virtual and defined here because we must be able to access this in type
   // agnostic code without a switch on all data types.
-  virtual std::shared_ptr<BaseVector> valueVector() const {
+  virtual VectorPtr valueVector() const {
     VELOX_UNSUPPORTED("Vector is not a wrapper");
   }
 
@@ -546,8 +536,7 @@ class BaseVector {
     return this;
   }
 
-  static std::shared_ptr<BaseVector> loadedVectorShared(
-      std::shared_ptr<BaseVector>);
+  static VectorPtr loadedVectorShared(VectorPtr);
 
   virtual const BufferPtr& values() const {
     VELOX_UNSUPPORTED("Only flat vectors have a values buffer");
@@ -571,8 +560,8 @@ class BaseVector {
     return std::static_pointer_cast<T>(createInternal(type, size, pool));
   }
 
-  static std::shared_ptr<BaseVector> getOrCreateEmpty(
-      std::shared_ptr<BaseVector> vector,
+  static VectorPtr getOrCreateEmpty(
+      VectorPtr vector,
       const TypePtr& type,
       velox::memory::MemoryPool* pool) {
     return vector ? vector : create(type, 0, pool);
@@ -643,17 +632,17 @@ class BaseVector {
   /// To safely reuse a vector one needs to (1) ensure that the vector as well
   /// as all its buffers and child vectors are singly-referenced and mutable
   /// (for buffers); (2) clear append-only string buffers and child vectors
-  /// (elements of arrays, keys and values of maps, fields of structs).
+  /// (elements of arrays, keys and values of maps, fields of structs); (3)
+  /// reset all data-dependent flags.
   ///
   /// This method takes a non-const reference to a 'vector' and updates it to
   /// possibly a new flat vector of the specified size that is safe to reuse.
   /// If input 'vector' is not singly-referenced or not flat, replaces 'vector'
   /// with a new vector of the same type and specified size. If some of the
   /// buffers cannot be reused, these buffers are reset. Child vectors are
-  /// updated by calling this method recursively with size zero.
-  static void prepareForReuse(
-      std::shared_ptr<BaseVector>& vector,
-      vector_size_t size);
+  /// updated by calling this method recursively with size zero. Data-dependent
+  /// flags are reset after this call.
+  static void prepareForReuse(VectorPtr& vector, vector_size_t size);
 
   /// Resets non-reusable buffers and updates child vectors by calling
   /// BaseVector::prepareForReuse.
@@ -725,6 +714,17 @@ class BaseVector {
     return isCodegenOutput_;
   }
 
+  /// Marks the vector as containing or being a lazy vector and being wrapped.
+  /// Should only be used if 'this' is lazy or has a nested lazy vector.
+  /// Returns true if this is the first time it was wrapped, else returns false.
+  bool markAsContainingLazyAndWrapped() {
+    if (containsLazyAndIsWrapped_) {
+      return false;
+    }
+    containsLazyAndIsWrapped_ = true;
+    return true;
+  }
+
  protected:
   /// Returns a brief summary of the vector. The default implementation includes
   /// encoding, type, number of rows and number of nulls.
@@ -735,10 +735,10 @@ class BaseVector {
   virtual std::string toSummaryString() const;
 
   /*
-   * Allocates or reallocates nulls_ with the given size if nulls_ hasn't
-   * been allocated yet or has been allocated with a smaller capacity.
+   * Allocates or reallocates nulls_ with at least the given size if nulls_
+   * hasn't been allocated yet or has been allocated with a smaller capacity.
    */
-  void ensureNullsCapacity(vector_size_t size, bool setNotNull = false);
+  void ensureNullsCapacity(vector_size_t minimumSize, bool setNotNull = false);
 
   FOLLY_ALWAYS_INLINE static std::optional<int32_t>
   compareNulls(bool thisNull, bool otherNull, CompareFlags flags) {
@@ -782,6 +782,22 @@ class BaseVector {
     return sliceBuffer(*BOOLEAN(), nulls_, offset, length, pool_);
   }
 
+  // Reset data-dependent flags to the "unknown" status. This is needed whenever
+  // a vector is mutated because the modification may invalidate these flags.
+  // Currently, we call this function in BaseVector::ensureWritable() and
+  // BaseVector::prepareForReuse() that are expected to be called before any
+  // vector mutation.
+  //
+  // Per-vector flags are reset to default values. Per-row flags are reset only
+  // at the selected rows. If rows is a nullptr, per-row flags are reset at all
+  // rows.
+  virtual void resetDataDependentFlags(const SelectivityVector* /*rows*/) {
+    nullCount_ = std::nullopt;
+    distinctValueCount_ = std::nullopt;
+    representedByteCount_ = std::nullopt;
+    storageByteCount_ = std::nullopt;
+  }
+
   const TypePtr type_;
   const TypeKind typeKind_;
   const VectorEncoding::Simple encoding_;
@@ -804,7 +820,7 @@ class BaseVector {
   ByteCount inMemoryBytes_ = 0;
 
  private:
-  static std::shared_ptr<BaseVector> createInternal(
+  static VectorPtr createInternal(
       const TypePtr& type,
       vector_size_t size,
       velox::memory::MemoryPool* pool);
@@ -812,6 +828,13 @@ class BaseVector {
   bool isCodegenOutput_ = false;
 
   friend class LazyVector;
+
+  /// Is true if this vector is a lazy vector or contains one and is being
+  /// wrapped. Keeping track of this helps to enforce the invariant that an
+  /// unloaded lazy vector should not be wrapped by two separate top level
+  /// vectors. This would ensure we avoid it being loaded for two separate set
+  /// of rows.
+  bool containsLazyAndIsWrapped_{false};
 };
 
 template <>
@@ -821,8 +844,6 @@ template <>
 inline uint64_t BaseVector::byteSize<UnknownValue>(vector_size_t) {
   return 0;
 }
-
-using VectorPtr = std::shared_ptr<BaseVector>;
 
 // Returns true if vector is a Lazy vector, possibly wrapped, that hasn't
 // been loaded yet.
@@ -893,7 +914,7 @@ struct fmt::formatter<facebook::velox::VectorEncoding::Simple> {
   template <typename FormatContext>
   auto format(
       const facebook::velox::VectorEncoding::Simple& x,
-      FormatContext& ctx) {
+      FormatContext& ctx) const {
     return format_to(
         ctx.out(), "{}", facebook::velox::VectorEncoding::mapSimpleToName(x));
   }

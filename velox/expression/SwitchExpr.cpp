@@ -16,6 +16,7 @@
 #include "velox/expression/SwitchExpr.h"
 #include "velox/expression/BooleanMix.h"
 #include "velox/expression/ConstantExpr.h"
+#include "velox/expression/FieldReference.h"
 #include "velox/expression/ScopedVarSetter.h"
 
 namespace facebook::velox::exec {
@@ -38,45 +39,16 @@ SwitchExpr::SwitchExpr(
           false /* trackCpuUsage */),
       numCases_{inputs_.size() / 2},
       hasElseClause_{hasElseClause(inputs_)} {
-  VELOX_CHECK_GT(numCases_, 0);
+  std::vector<TypePtr> inputTypes;
+  inputTypes.reserve(inputs_.size());
+  std::transform(
+      inputs_.begin(),
+      inputs_.end(),
+      std::back_inserter(inputTypes),
+      [](const ExprPtr& expr) { return expr->type(); });
 
-  // Make sure all 'condition' expressions hae type BOOLEAN and all 'then' and
-  // an optional 'else' clause have the same type.
-
-  // Find first 'then' type that's not an UNKNOWN type.
-  TypePtr thenType;
-
-  for (auto i = 0; i < numCases_; i++) {
-    auto& condition = inputs_[i * 2];
-    VELOX_CHECK_EQ(condition->type()->kind(), TypeKind::BOOLEAN);
-    auto& thenClause = inputs_[i * 2 + 1];
-    if (thenClause->type()->containsUnknown()) {
-      // Allow null expressions.
-    } else if (!thenType) {
-      thenType = thenClause->type();
-    } else {
-      VELOX_CHECK(
-          thenType->equivalent(*thenClause->type()),
-          "All then clauses of a SWITCH statement must have the same type. "
-          "Expected {}, but got {}.",
-          thenType->toString(),
-          thenClause->type()->toString());
-    }
-  }
-
-  if (hasElseClause_ && thenType) {
-    auto& elseClause = inputs_.back();
-    if (elseClause->type()->containsUnknown()) {
-      // Allow null expressions.
-    } else {
-      VELOX_CHECK(
-          thenType->equivalent(*elseClause->type()),
-          "Else clause of a SWITCH statement must have the same type as 'then' clauses. "
-          "Expected {}, but got {}.",
-          thenType->toString(),
-          elseClause->type()->toString());
-    }
-  }
+  // Apply type checking.
+  resolveType(inputTypes);
 }
 
 void SwitchExpr::evalSpecialForm(
@@ -92,13 +64,33 @@ void SwitchExpr::evalSpecialForm(
 
   // SWITCH: fix finalSelection at "rows" unless already fixed
   ScopedFinalSelectionSetter scopedFinalSelectionSetter(context, &rows);
-
+  if (propagatesNulls_) {
+    // If propagates nulls, we load lazies before conditions so that we can
+    // avoid errors for null rows. Null propagation is on only if all thens and
+    // else load access the same vectors, so there is no extra loading.
+    DecodedVector decoded;
+    auto& remaining = *remainingRows.get();
+    for (const auto& field : distinctFields_) {
+      context.ensureFieldLoaded(field->index(context), remaining);
+      const auto& vector = context.getField(field->index(context));
+      if (vector->mayHaveNulls()) {
+        decoded.decode(*vector, remaining);
+        addNulls(remaining, decoded.nulls(), context, type(), result);
+        remaining.deselectNulls(
+            decoded.nulls(), remaining.begin(), remaining.end());
+      }
+    }
+  }
   for (auto i = 0; i < numCases_; i++) {
     if (!remainingRows.get()->hasSelections()) {
       break;
     }
     // evaluate the case condition
     inputs_[2 * i]->eval(*remainingRows.get(), context, condition);
+
+    if (context.errors()) {
+      context.deselectErrors(*remainingRows);
+    }
 
     const auto booleanMix = getFlatBool(
         condition.get(),
@@ -113,7 +105,8 @@ void SwitchExpr::evalSpecialForm(
     switch (booleanMix) {
       case BooleanMix::kAllTrue:
         inputs_[2 * i + 1]->eval(*remainingRows.get(), context, result);
-        return;
+        remainingRows->clearAll();
+        continue;
       case BooleanMix::kAllNull:
       case BooleanMix::kAllFalse:
         continue;
@@ -144,6 +137,18 @@ void SwitchExpr::evalSpecialForm(
       // fill in nulls for remainingRows
       remainingRows.get()->applyToSelected(
           [&](auto row) { result->setNull(row, true); });
+    }
+  }
+  // Some rows may have not been evaluated by any then or else clause because a
+  // condition threw an error on these rows. We make sure the result vector has
+  // at least the size of rows.end().
+  if (context.errors() && (!result || result->size() < rows.end())) {
+    if (result && result->isConstantEncoding() && result.unique()) {
+      result->resize(rows.end());
+    } else {
+      LocalSelectivityVector nonErrorRows(context, rows);
+      context.deselectErrors(*nonErrorRows);
+      addNulls(rows, nonErrorRows->asRange().bits(), context, result);
     }
   }
 }
@@ -185,5 +190,78 @@ bool SwitchExpr::propagatesNulls() const {
   }
 
   return true;
+}
+
+// static
+TypePtr SwitchExpr::resolveType(const std::vector<TypePtr>& argTypes) {
+  VELOX_CHECK_GT(
+      argTypes.size(),
+      1,
+      "Switch statements expect at least 2 arguments, received {}",
+      argTypes.size());
+  // Type structure is [cond1Type, then1Type, cond2Type, then2Type, ...
+  // elseType*]
+
+  // Make sure all 'condition' expressions hae type BOOLEAN and all 'then' and
+  // an optional 'else' clause have the same type.
+  int numCases = argTypes.size() / 2;
+
+  auto& expressionType = argTypes[1];
+
+  for (auto i = 0; i < numCases; i++) {
+    auto& conditionType = argTypes[i * 2];
+    auto& thenType = argTypes[i * 2 + 1];
+
+    VELOX_CHECK_EQ(
+        conditionType->kind(),
+        TypeKind::BOOLEAN,
+        "Condition of  SWITCH statement is not bool");
+
+    VELOX_CHECK(
+        thenType->equivalent(*expressionType),
+        "All then clauses of a SWITCH statement must have the same type. "
+        "Expected {}, but got {}.",
+        expressionType->toString(),
+        thenType->toString());
+  }
+
+  bool hasElse = argTypes.size() % 2 == 1;
+
+  if (hasElse) {
+    auto& elseClauseType = argTypes.back();
+
+    VELOX_CHECK(
+        elseClauseType->equivalent(*expressionType),
+        "Else clause of a SWITCH statement must have the same type as 'then' clauses. "
+        "Expected {}, but got {}.",
+        expressionType->toString(),
+        elseClauseType->toString());
+  }
+
+  return expressionType;
+}
+
+TypePtr SwitchCallToSpecialForm::resolveType(
+    const std::vector<TypePtr>& argTypes) {
+  return SwitchExpr::resolveType(argTypes);
+}
+
+ExprPtr SwitchCallToSpecialForm::constructSpecialForm(
+    const TypePtr& type,
+    std::vector<ExprPtr>&& compiledChildren,
+    bool /* trackCpuUsage */) {
+  bool inputsSupportFlatNoNullsFastPath =
+      Expr::allSupportFlatNoNullsFastPath(compiledChildren);
+  return std::make_shared<SwitchExpr>(
+      type, std::move(compiledChildren), inputsSupportFlatNoNullsFastPath);
+}
+
+TypePtr IfCallToSpecialForm::resolveType(const std::vector<TypePtr>& argTypes) {
+  VELOX_CHECK(
+      argTypes.size() == 3,
+      "An IF statement must have 3 clauses, the if clause, the then clause, and the else clause. Expected 3, but got {}.",
+      argTypes.size());
+
+  return SwitchCallToSpecialForm::resolveType(argTypes);
 }
 } // namespace facebook::velox::exec

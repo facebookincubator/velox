@@ -296,7 +296,7 @@ class IntegerColumnWriter : public BaseColumnWriter {
 
   void createIndexEntry() override {
     hasNull_ = hasNull_ || indexStatsBuilder_->hasNull().value();
-    fileStatsBuilder_->merge(*indexStatsBuilder_);
+    fileStatsBuilder_->merge(*indexStatsBuilder_, /*ignoreSize=*/true);
     // Add entry with stats for either case.
     indexBuilder_->addEntry(*indexStatsBuilder_);
     indexStatsBuilder_->reset();
@@ -484,7 +484,7 @@ uint64_t IntegerColumnWriter<T>::write(
     // it to flat vector
     if (slice->encoding() != VectorEncoding::Simple::FLAT) {
       auto newBase = BaseVector::create(
-          CppToType<T>::create(),
+          slice->type(),
           slice->size(),
           &getMemoryPool(MemoryUsageCategory::GENERAL));
       auto newVector = std::dynamic_pointer_cast<FlatVector<T>>(newBase);
@@ -890,7 +890,7 @@ class StringColumnWriter : public BaseColumnWriter {
 
   void createIndexEntry() override {
     hasNull_ = hasNull_ || indexStatsBuilder_->hasNull().value();
-    fileStatsBuilder_->merge(*indexStatsBuilder_);
+    fileStatsBuilder_->merge(*indexStatsBuilder_, /*ignoreSize=*/true);
     // Add entry with stats for either case.
     indexBuilder_->addEntry(*indexStatsBuilder_);
     indexStatsBuilder_->reset();

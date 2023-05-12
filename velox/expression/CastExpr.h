@@ -16,6 +16,7 @@
 
 #pragma once
 
+#include "velox/expression/FunctionCallToSpecialForm.h"
 #include "velox/expression/SpecialForm.h"
 
 namespace facebook::velox::exec {
@@ -35,33 +36,32 @@ class CastOperator {
   /// to the other type.
   virtual bool isSupportedToType(const TypePtr& other) const = 0;
 
-  /// Casts an input vector to the custom type.
+  /// Casts an input vector to the custom type. This function should not throw
+  /// when processing input rows, but report errors via context.setError().
   /// @param input The flat or constant input vector
   /// @param context The context
   /// @param rows Non-null rows of input
-  /// @param nullOnFailure Whether this is a cast or try_cast operation
   /// @param resultType The result type.
   /// @param result The result vector of the custom type
   virtual void castTo(
       const BaseVector& input,
       exec::EvalCtx& context,
       const SelectivityVector& rows,
-      bool nullOnFailure,
       const TypePtr& resultType,
       VectorPtr& result) const = 0;
 
-  /// Casts a vector of the custom type to another type.
+  /// Casts a vector of the custom type to another type. This function should
+  /// not throw when processing input rows, but report errors via
+  /// context.setError().
   /// @param input The flat or constant input vector
   /// @param context The context
   /// @param rows Non-null rows of input
-  /// @param nullOnFailure Whether this is a cast or try_cast operation
   /// @param resultType The result type
   /// @param result The result vector of the destination type
   virtual void castFrom(
       const BaseVector& input,
       exec::EvalCtx& context,
       const SelectivityVector& rows,
-      bool nullOnFailure,
       const TypePtr& resultType,
       VectorPtr& result) const = 0;
 };
@@ -71,24 +71,21 @@ class CastExpr : public SpecialForm {
   /// @param type The target type of the cast expression
   /// @param expr The expression to cast
   /// @param trackCpuUsage Whether to track CPU usage
-  /// @param nullOnFailure Whether to throw or return null if cast is not
-  /// possible
-  CastExpr(TypePtr type, ExprPtr&& expr, bool trackCpuUsage, bool nullOnFailure)
+  CastExpr(TypePtr type, ExprPtr&& expr, bool trackCpuUsage)
       : SpecialForm(
             type,
             std::vector<ExprPtr>({expr}),
             kCast.data(),
             false /* supportsFlatNoNullsFastPath */,
-            trackCpuUsage),
-        nullOnFailure_(nullOnFailure) {
+            trackCpuUsage) {
     auto fromType = inputs_[0]->type();
-    castFromOperator_ = getCastOperator(fromType->toString());
+    castFromOperator_ = getCustomTypeCastOperator(fromType->toString());
     if (castFromOperator_ && !castFromOperator_->isSupportedToType(type)) {
       VELOX_FAIL(
           "Cannot cast {} to {}.", fromType->toString(), type->toString());
     }
 
-    castToOperator_ = getCastOperator(type->toString());
+    castToOperator_ = getCustomTypeCastOperator(type->toString());
     if (castToOperator_ && !castToOperator_->isSupportedFromType(fromType)) {
       VELOX_FAIL(
           "Cannot cast {} to {}.", fromType->toString(), type->toString());
@@ -102,7 +99,7 @@ class CastExpr : public SpecialForm {
 
   std::string toString(bool recursive = true) const override;
 
-  std::string toSql() const override;
+  std::string toSql(std::vector<VectorPtr>*) const override;
 
  private:
   /// @tparam To The cast target type
@@ -143,7 +140,7 @@ class CastExpr : public SpecialForm {
   /// @param result The result vector
   void apply(
       const SelectivityVector& rows,
-      VectorPtr& input,
+      const VectorPtr& input,
       exec::EvalCtx& context,
       const TypePtr& fromType,
       const TypePtr& toType,
@@ -168,12 +165,13 @@ class CastExpr : public SpecialForm {
       const RowVector* input,
       exec::EvalCtx& context,
       const RowType& fromType,
-      const RowType& toType);
+      const TypePtr& toType);
 
   /// Apply the cast between decimal vectors.
   /// @param rows Non-null rows of the input vector.
   /// @param input The input decimal vector. It is guaranteed to be flat or
   /// constant.
+  template <typename ToDecimalType>
   VectorPtr applyDecimal(
       const SelectivityVector& rows,
       const BaseVector& input,
@@ -191,9 +189,6 @@ class CastExpr : public SpecialForm {
       const TypePtr& toType,
       VectorPtr& result);
 
-  // When enabled the error in casting leads to null being returned.
-  const bool nullOnFailure_;
-
   // Custom cast operator for the from-type. Nullptr if the type is native or
   // doesn't support cast-from.
   CastOperatorPtr castFromOperator_;
@@ -201,6 +196,16 @@ class CastExpr : public SpecialForm {
   // Custom cast operator for the to-type. Nullptr if the type is native or
   // doesn't support cast-to.
   CastOperatorPtr castToOperator_;
+};
+
+class CastCallToSpecialForm : public FunctionCallToSpecialForm {
+ public:
+  TypePtr resolveType(const std::vector<TypePtr>& argTypes) override;
+
+  ExprPtr constructSpecialForm(
+      const TypePtr& type,
+      std::vector<ExprPtr>&& compiledChildren,
+      bool trackCpuUsage) override;
 };
 
 } // namespace facebook::velox::exec

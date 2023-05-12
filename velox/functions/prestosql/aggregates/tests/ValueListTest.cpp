@@ -49,7 +49,6 @@ class ValueListTest : public functions::test::FunctionBaseTest {
       for (auto i = 0; i < size; i++) {
         values.appendValue(decoded, i, allocator());
       }
-      values.finalize(allocator());
 
       ASSERT_EQ(size, values.size());
       auto result = read(values, data->type(), size);
@@ -61,7 +60,6 @@ class ValueListTest : public functions::test::FunctionBaseTest {
     {
       aggregate::ValueList values;
       values.appendRange(data, 0, size, allocator());
-      values.finalize(allocator());
 
       ASSERT_EQ(size, values.size());
       auto result = read(values, data->type(), size);
@@ -74,15 +72,13 @@ class ValueListTest : public functions::test::FunctionBaseTest {
     return allocator_.get();
   }
 
+  std::shared_ptr<memory::MemoryPool> pool_{memory::addDefaultLeafMemoryPool()};
   std::unique_ptr<HashStringAllocator> allocator_{
-      std::make_unique<HashStringAllocator>(
-          memory::MappedMemory::getInstance())};
+      std::make_unique<HashStringAllocator>(pool_.get())};
 };
 
 TEST_F(ValueListTest, empty) {
   aggregate::ValueList values;
-  values.finalize(allocator());
-
   ASSERT_EQ(0, values.size());
 }
 

@@ -21,11 +21,12 @@ workflows:
       - linux-build
       - linux-build-options
       - linux-adapters
-      - macos-build
+      - macos-build:
+          matrix:
+            parameters:
+              os: [macos-intel]
       - format-check
       - header-check
-      - linux-benchmarks-basic
-      - linux-benchmarks-basic-dedicated
 
   # Daily documentation update
   nightly:
@@ -38,7 +39,19 @@ workflows:
                - main
     jobs:
       - doc-gen-job
-      - linux-fuzzer-run
+      - linux-presto-fuzzer-run
+      - linux-spark-fuzzer-run
+      - linux-spark-aggregate-fuzzer-run
+      - linux-aggregate-fuzzer-run
+      - linux-join-fuzzer-run
+      - docker-compose-ubuntu-cpp
+      - docker-compose-centos-cpp
+      - docker-compose-presto-native
+      - macos-build:
+          matrix:
+            parameters:
+              os: [ macos-m1 ]
+
 
   # Hourly build on weekdays
   weekday:
@@ -54,7 +67,10 @@ workflows:
       - linux-build-release
       - linux-build-options
       - linux-adapters
-      - macos-build
+      - macos-build:
+          matrix:
+            parameters:
+              os: [macos-intel]
 
 commands:
   update-submodules:
@@ -108,44 +124,56 @@ commands:
           path: '/tmp/test_xml_output/'
 
   build-benchmarks:
+    parameters:
+      binary_output:
+        type: string
+      benchmark_class:
+        type: string
     steps:
       - run:
-          name: "Build Benchmarks"
+          name: "Build Benchmarks - << parameters.benchmark_class >>"
           command: |
             make benchmarks-basic-build NUM_THREADS=16 MAX_HIGH_MEM_JOBS=8 MAX_LINK_JOBS=8
             ccache -s
+            mkdir -p << parameters.binary_output >>
+            cp -r --verbose _build/release/velox/benchmarks/basic/* << parameters.binary_output >>
 
-  run-benchmarks:
+  fuzzer-run:
+    parameters:
+      fuzzer_repro:
+        type: string
+      fuzzer_output:
+        type: string
+      fuzzer_name:
+        type: string
+      fuzzer_exe:
+        type: string
+      fuzzer_args:
+        type: string
     steps:
+      - pre-steps
       - run:
-          name: "Run Benchmarks"
+          name: Build
           command: |
-            # get to the directory with benchmarks
-            cd scripts/veloxbench/veloxbench
-
-            # setup .conbench file
-            touch .conbench
-            echo "url: $CONBENCH_URL" >> .conbench
-            echo "email: $CONBENCH_EMAIL" >> .conbench
-            echo "password: $CONBENCH_PASSWORD" >> .conbench
-            echo "host_name: $CONBENCH_HOST" >> .conbench
-
-            # Figure out the run name and run reason
-            if [[ $CIRCLE_BRANCH == 'main' ]]; then
-              # Currently, the names of runs to be included in Conbench history must
-              # start with 'commit:'
-              # (https://github.com/conbench/conbench/issues/350)
-              # This way we can keep track of performance over time on the main branch
-              # separately from pull request branches and manual runs.
-
-              run_name="commit: $(git rev-parse HEAD)"
-              run_reason='commit'
-            else
-              run_name="pull request $CIRCLE_PR_NUMBER: $(git rev-parse HEAD)"
-              run_reason='pull request'
-            fi
-
-            conbench cpp-micro --run-name="$run_name" --run-reason="$run_reason"
+            make debug NUM_THREADS=16 MAX_HIGH_MEM_JOBS=8 MAX_LINK_JOBS=8
+            ccache -s
+          no_output_timeout: 1h
+      - run:
+          name: "Run << parameters.fuzzer_name >> Fuzzer"
+          command: |
+            eval " << parameters.fuzzer_exe >> << parameters.fuzzer_args >> " \
+                  2>&1 | tee "<< parameters.fuzzer_output >>" || ( \
+                    tail -n 1000 "<< parameters.fuzzer_output >>" ; \
+                    echo "FAIL: << parameters.fuzzer_name >> run failed"; \
+                    exit 1; \
+                  )
+                echo -e "\n << parameters.fuzzer_name >> run finished successfully."
+          no_output_timeout: 120m
+      - store_artifacts:
+          path: << parameters.fuzzer_output >>
+      - store_artifacts:
+          path: << parameters.fuzzer_repro >>
+      - post-steps
 
 executors:
   build:
@@ -155,18 +183,27 @@ executors:
     environment:
         CC:  /opt/rh/gcc-toolset-9/root/bin/gcc
         CXX: /opt/rh/gcc-toolset-9/root/bin/g++
+        VELOX_DEPENDENCY_SOURCE: BUNDLED
   check:
     docker:
       - image : ghcr.io/facebookincubator/velox-dev:check-avx
-  doc-gen:
-    docker:
-      - image : ghcr.io/facebookincubator/velox-dev:circleci-avx
+  macos-intel:
+    macos:
+      xcode: "14.3.0"
+    resource_class: macos.x86.medium.gen2
+  macos-m1:
+    macos:
+      xcode: "14.2.0"
+    resource_class: macos.m1.large.gen1
 
 jobs:
   macos-build:
-    macos:
-      xcode: "12.5.1"
-    resource_class: large
+    parameters:
+      os:
+        type: executor
+    executor: << parameters.os >>
+    environment:
+      ICU_SOURCE: BUNDLED
     steps:
       - checkout
       - update-submodules
@@ -176,7 +213,7 @@ jobs:
           # to manually avoid the case where bad dependencies
           # are cached, and has no other meaning.
           # If you update it, be sure to update save_cache too.
-          key: velox-circleci-macos-deps-v1-{{ checksum ".circleci/config.yml" }}-{{ checksum "scripts/setup-macos.sh" }}
+          key: velox-circleci-macos-{{ arch }}-deps-v1-{{ checksum ".circleci/config.yml" }}-{{ checksum "scripts/setup-macos.sh" }}
       - run:
           name: "Install dependencies"
           command: |
@@ -187,13 +224,14 @@ jobs:
               PATH=~/deps/bin:${PATH} DEPENDENCY_DIR=~/deps-src INSTALL_PREFIX=~/deps PROMPT_ALWAYS_RESPOND=n ./scripts/setup-macos.sh
               rm -rf ~/deps/.git ~/deps/Library/Taps/  # Reduce cache size by 70%.
             fi
+          no_output_timeout: 20m
       - save_cache:
           name: "Save Dependency Cache"
           # The version number in the key can be incremented
           # to manually avoid the case where bad dependencies
           # are cached, and has no other meaning.
           # If you update it, be sure to update restore_cache too.
-          key: velox-circleci-macos-deps-v1-{{ checksum ".circleci/config.yml" }}-{{ checksum "scripts/setup-macos.sh" }}
+          key: velox-circleci-macos-{{ arch }}-deps-v1-{{ checksum ".circleci/config.yml" }}-{{ checksum "scripts/setup-macos.sh" }}
           paths:
             - ~/deps
       - run:
@@ -228,7 +266,7 @@ jobs:
       - run:
           name: "Build"
           command: |
-            make debug NUM_THREADS=16 MAX_HIGH_MEM_JOBS=8 MAX_LINK_JOBS=8 EXTRA_CMAKE_FLAGS="-DVELOX_ENABLE_ARROW=ON"
+            make debug NUM_THREADS=16 MAX_HIGH_MEM_JOBS=8 MAX_LINK_JOBS=6 EXTRA_CMAKE_FLAGS="-DVELOX_ENABLE_ARROW=ON"
             ccache -s
           no_output_timeout: 1h
       - run:
@@ -243,18 +281,103 @@ jobs:
           # Run fuzzer using the built executable - we do this instead of make
           # since currently make fuzzertest tends to rebuild the project.
           command: |
+            mkdir -p /tmp/fuzzer_repro/
+            chmod -R 777 /tmp/fuzzer_repro
             _build/debug/velox/expression/tests/velox_expression_fuzzer_test \
-                --seed 123456 \
+                --seed ${RANDOM} \
                 --enable_variadic_signatures \
+                --velox_fuzzer_enable_complex_types \
+                --lazy_vector_generation_ratio 0.2 \
+                --velox_fuzzer_enable_column_reuse \
+                --velox_fuzzer_enable_expression_reuse \
+                --retry_with_try \
                 --duration_sec 60 \
                 --logtostderr=1 \
                 --minloglevel=0 \
+                --repro_persist_path=/tmp/fuzzer_repro \
             && echo -e "\n\nFuzzer run finished successfully."
           no_output_timeout: 5m
+      - store_artifacts:
+          path: '/tmp/fuzzer_repro'
+      - run:
+          name: "Run Spark Fuzzer Tests"
+          command: |
+            mkdir -p /tmp/spark_fuzzer_repro/
+            chmod -R 777 /tmp/spark_fuzzer_repro
+            _build/debug/velox/expression/tests/spark_expression_fuzzer_test \
+                --seed ${RANDOM} \
+                --duration_sec 60 \
+                --logtostderr=1 \
+                --minloglevel=0 \
+                --repro_persist_path=/tmp/spark_fuzzer_repro \
+            && echo -e "\n\nSpark Fuzzer run finished successfully."
+          no_output_timeout: 5m
+      - store_artifacts:
+          path: '/tmp/spark_fuzzer_repro'
+      - run:
+          name: "Run Spark Aggregate Fuzzer Tests"
+          command: |
+            mkdir -p /tmp/spark_aggregate_fuzzer_repro/
+            chmod -R 777 /tmp/spark_aggregate_fuzzer_repro
+            _build/debug/velox/exec/tests/spark_aggregation_fuzzer_test \
+                --seed ${RANDOM} \
+                --duration_sec 60 \
+                --logtostderr=1 \
+                --minloglevel=0 \
+                --repro_persist_path=/tmp/spark_aggregate_fuzzer_repro \
+            && echo -e "\n\nSpark Aggregation Fuzzer run finished successfully."
+          no_output_timeout: 5m
+      - store_artifacts:
+          path: '/tmp/spark_aggregate_fuzzer_repro'
+      - run:
+          name: "Run Aggregate Fuzzer Tests"
+          # Run aggregation fuzzer using the built executable.
+          command: |
+            mkdir -p /tmp/aggregate_fuzzer_repro/
+            rm -rfv /tmp/aggregate_fuzzer_repro/*
+            chmod -R 777 /tmp/aggregate_fuzzer_repro
+            _build/debug/velox/exec/tests/velox_aggregation_fuzzer_test \
+                --seed ${RANDOM} \
+                --duration_sec 60 \
+                --logtostderr=1 \
+                --minloglevel=0 \
+                --repro_persist_path=/tmp/aggregate_fuzzer_repro \
+            && echo -e "\n\nAggregation fuzzer run finished successfully."
+          no_output_timeout: 5m
+      - store_artifacts:
+          path: '/tmp/aggregate_fuzzer_repro'
       - run:
          name: "Run Example Binaries"
          command: |
            find _build/debug/velox/examples/ -maxdepth 1 -type f -executable -exec "{}" \;
+      - run:
+          name: "Build and Test PyVelox"
+          command: |
+            conda init bash
+            source ~/.bashrc
+            conda create -y --name pyveloxenv python=3.7
+            conda activate pyveloxenv
+            LD_LIBRARY_PATH=/usr/local/lib make python-test
+      - run:
+          name: "Check function signatures"
+          command: |
+            source ~/.bashrc
+            conda activate pyveloxenv
+            pip install deepdiff
+            python ./scripts/signature.py export --spark --presto /tmp/pr_signatures.json
+            cp ./scripts/signature.py /tmp/signature.py
+            git remote add upstream https://github.com/facebookincubator/velox
+            git fetch upstream
+            merge_base=$(git merge-base  'upstream/main' `git rev-parse HEAD`) || \
+            { echo "::error::Failed to find merge_base"; exit 1; }
+            echo "Merge Base: $merge_base"
+            git checkout $merge_base
+            git submodule update --init --recursive
+            LD_LIBRARY_PATH=/usr/local/lib make python-clean
+            LD_LIBRARY_PATH=/usr/local/lib make python-build
+            cp /tmp/signature.py ./scripts/signature.py
+            python ./scripts/signature.py export --spark --presto /tmp/main_signatures.json
+            python ./scripts/signature.py diff /tmp/main_signatures.json /tmp/pr_signatures.json
       - post-steps
 
   linux-build-release:
@@ -272,60 +395,6 @@ jobs:
           command: |
             cd _build/release && ctest -j 16 -VV --output-on-failure
           no_output_timeout: 1h
-      - post-steps
-
-  linux-benchmarks-basic:
-    executor: build
-    environment:
-      CONBENCH_URL: "https://velox-conbench.voltrondata.run/"
-      CONBENCH_HOST: "CircleCI-runner"
-      LINUX_DISTRO: "centos"
-    steps:
-      - pre-steps
-      - build-benchmarks
-      - run:
-          name: "Install benchmark dependencies"
-          command: |
-            # upgrade python to 3.8 for this job
-            yum install -y python38
-            pip3.8 install -r scripts/benchmark-requirements.txt
-      - run-benchmarks
-      # TODO: Disabling conbench github notifications for now until results are more stable.
-      #- run:
-      #  name: "Analyze Benchmark Regressions and Post to Github"
-      #    command: |
-      #      export GITHUB_APP_PRIVATE_KEY=$(echo $GITHUB_APP_PRIVATE_KEY_ENCODED | base64 -d)
-      #      python3.8 scripts/benchmark-github-status.py --z-score-threshold 50
-      - post-steps
-
-  linux-benchmarks-basic-dedicated:
-    machine:
-      image: ubuntu-2004:current
-    resource_class: 2xlarge
-    environment:
-      CONBENCH_URL: "https://velox-conbench.voltrondata.run/"
-      CONBENCH_HOST: "CircleCI-runner-dedicated"
-      LINUX_DISTRO: "ubuntu"
-    steps:
-      - checkout
-      - update-submodules
-      - run:
-          name: "Setup Ubuntu"
-          command: |
-            sudo ./scripts/setup-ubuntu.sh
-      - setup-environment
-      - build-benchmarks
-      - run:
-          name: "Install benchmark dependencies"
-          command: |
-            pip3 install -r scripts/benchmark-requirements.txt
-      - run-benchmarks
-      # TODO: Disabling conbench github notifications for now until results are more stable.
-      #- run:
-      #    name: "Analyze Benchmark Regressions and Post to Github"
-      #    command: |
-      #      export GITHUB_APP_PRIVATE_KEY=$(echo $GITHUB_APP_PRIVATE_KEY_ENCODED | base64 -d)
-      #      python3 scripts/benchmark-github-status.py --z-score-threshold 50
       - post-steps
 
   # Build with different options
@@ -350,6 +419,9 @@ jobs:
 
   linux-adapters:
     executor: build
+    environment:
+      VELOX_DEPENDENCY_SOURCE: SYSTEM
+      ICU_SOURCE: BUNDLED
     steps:
       - pre-steps
       - run:
@@ -390,40 +462,76 @@ jobs:
           no_output_timeout: 1h
       - post-steps
 
-  linux-fuzzer-run:
+  linux-presto-fuzzer-run:
     executor: build
+    environment:
+      VELOX_DEPENDENCY_SOURCE: SYSTEM
     steps:
-      - pre-steps
-      - run:
-          name: Build
-          command: |
-            make debug NUM_THREADS=16 MAX_HIGH_MEM_JOBS=8 MAX_LINK_JOBS=8
-            ccache -s
-          no_output_timeout: 1h
-      - run:
-          # Run Fuzzer, save the output to /tmp/fuzzer.log, and upload the file
-          # as job artifact to make it convenient for users to inspect it -
-          # these logs can also be quite large. Always prints the last 1k lines to
-          # the job output for context.
-          name: "Run Fuzzer Tests"
-          command: |
-            echo -e "The logs will be saved to \"/tmp/fuzzer.log\" and uploaded" \
-                    "as a job artifact (check the \"Artifacts\" tab above)."
-            _build/debug/velox/expression/tests/velox_expression_fuzzer_test \
-                --seed ${RANDOM} \
-                --duration_sec 600 \
-                --logtostderr=1 \
-                --minloglevel=0 \
-              2>&1 | tee /tmp/fuzzer.log || ( \
-                tail -n 1000 /tmp/fuzzer.log;
-                echo "FAIL: Fuzzer run failed";
-                exit 1; \
-              )
-            echo -e "\n\nFuzzer run finished successfully."
-          no_output_timeout: 20m
-      - store_artifacts:
-          path: '/tmp/fuzzer.log'
-      - post-steps
+      - fuzzer-run:
+          fuzzer_output: "/tmp/fuzzer.log"
+          fuzzer_repro: "/tmp/fuzzer_repro"
+          fuzzer_name: "Expression"
+          fuzzer_exe: "_build/debug/velox/expression/tests/velox_expression_fuzzer_test"
+          fuzzer_args: " --seed ${RANDOM} --lazy_vector_generation_ratio 0.2 \
+          --duration_sec 600 --enable_variadic_signatures \
+          --velox_fuzzer_enable_complex_types \
+          --velox_fuzzer_enable_column_reuse \
+          --velox_fuzzer_enable_expression_reuse \
+          --retry_with_try \
+          --logtostderr=1 --minloglevel=0 \
+          --repro_persist_path=/tmp/fuzzer_repro"
+
+  linux-spark-fuzzer-run:
+    executor: build
+    environment:
+      VELOX_DEPENDENCY_SOURCE: SYSTEM
+    steps:
+      - fuzzer-run:
+          fuzzer_output: "/tmp/spark_fuzzer.log"
+          fuzzer_repro: "/tmp/spark_fuzzer_repro"
+          fuzzer_name: "Spark"
+          fuzzer_exe: "_build/debug/velox/expression/tests/spark_expression_fuzzer_test"
+          fuzzer_args: " --seed ${RANDOM} --duration_sec 600 --logtostderr=1 --minloglevel=0 \ 
+          --repro_persist_path=/tmp/spark_fuzzer_repro"
+
+  linux-spark-aggregate-fuzzer-run:
+    executor: build
+    environment:
+      VELOX_DEPENDENCY_SOURCE: SYSTEM
+    steps:
+      - fuzzer-run:
+          fuzzer_output: "/tmp/spark_aggregate_fuzzer.log"
+          fuzzer_repro: "/tmp/spark_aggregate_fuzzer_repro"
+          fuzzer_name: "SparkAggregate"
+          fuzzer_exe: "_build/debug/velox/exec/tests/spark_aggregation_fuzzer_test"
+          fuzzer_args: " --seed ${RANDOM} --duration_sec 600 --logtostderr=1 --minloglevel=0 \
+          --repro_persist_path=/tmp/spark_aggregate_fuzzer_repro"
+
+
+  linux-aggregate-fuzzer-run:
+    executor: build
+    environment:
+      VELOX_DEPENDENCY_SOURCE: SYSTEM
+    steps:
+      - fuzzer-run:
+          fuzzer_output: "/tmp/aggregate_fuzzer.log"
+          fuzzer_repro: "/tmp/aggregate_fuzzer_repro"
+          fuzzer_name: "Aggregate"
+          fuzzer_exe: "_build/debug/velox/exec/tests/velox_aggregation_fuzzer_test"
+          fuzzer_args: " --seed ${RANDOM} --duration_sec 3600 --logtostderr=1 --minloglevel=0 \ 
+          --repro_persist_path=/tmp/aggregate_fuzzer_repro"
+
+  linux-join-fuzzer-run:
+    executor: build
+    environment:
+      VELOX_DEPENDENCY_SOURCE: SYSTEM
+    steps:
+      - fuzzer-run:
+          fuzzer_output: "/tmp/join_fuzzer.log"
+          fuzzer_repro: "/tmp/join_fuzzer_repro"
+          fuzzer_name: "Join"
+          fuzzer_exe: "_build/debug/velox/exec/tests/velox_join_fuzzer_test"
+          fuzzer_args: " --seed ${RANDOM} --duration_sec 3600 --logtostderr=1 --minloglevel=0"
 
   format-check:
     executor: check
@@ -458,24 +566,87 @@ jobs:
             fi
 
   doc-gen-job:
-    executor: doc-gen
+    executor: build
     steps:
       - checkout
+      - update-submodules
       - add_ssh_keys:
           fingerprints:
-            - "ed:40:13:bc:d0:3d:28:26:98:cb:90:31:cc:d3:f1:6b"
+            - "7b:24:f3:1a:b1:15:97:c6:fe:06:46:27:3e:b7:6b:96"
       - run:
           name: "Build docs and update gh-pages"
           command: |
             git config --global user.email "velox@users.noreply.github.com"
             git config --global user.name "velox"
             git checkout main
-            make -C velox/docs html
+            conda init bash
+            source ~/.bashrc
+            conda create -y --name docgenenv python=3.7
+            conda activate docgenenv
+            pip install sphinx sphinx-tabs breathe sphinx_rtd_theme chardet
+            source /opt/rh/gcc-toolset-9/enable
+            ./scripts/gen-docs.sh docgenenv
             git checkout gh-pages
             cp -R velox/docs/_build/html/* docs
             git add docs
-            if [ -n "$(git status --porcelain)" ]
+            if [ -n "$(git status --porcelain --untracked-files=no)" ]
             then
               git commit -m "Update documentation"
               git push
             fi
+
+  docker-compose-ubuntu-cpp:
+    machine: # Use machine executor type to use docker-compose
+      image: ubuntu-2204:2022.10.1 # Ubuntu 22.04
+    resource_class: 2xlarge
+    steps:
+      - checkout
+      - update-submodules
+      - run:
+          name: "Build images for ubuntu-CPP declared in docker-compose.yml"
+          command: docker-compose build ubuntu-cpp
+      - run:
+          name: "Run ubuntu-cpp image"
+          command: docker-compose run -e NUM_THREADS=16 --rm ubuntu-cpp
+
+  docker-compose-centos-cpp:
+    machine: # Use machine executor type to use docker-compose
+      # Ubuntu 22.04 is the base image but we use centos 8 on
+      # the docker-compose container. There are no centos on
+      # circle-ci base images
+      image: ubuntu-2204:2022.10.1
+    resource_class: 2xlarge
+    steps:
+      - checkout
+      - update-submodules
+      - run:
+          name: "Build images for centos-cpp declared in docker-compose.yml"
+          command: docker-compose build centos-cpp
+      - run:
+          name: "Run centos-cpp image"
+          command: docker-compose run -e NUM_THREADS=16 --rm centos-cpp
+
+  docker-compose-presto-native:
+    machine: # Use machine executor type to use docker-compose
+      image: ubuntu-2204:2022.10.1
+    resource_class: 2xlarge
+    environment:
+      PRESTODB_REPOSITORY: https://github.com/prestodb/presto
+    steps:
+      - run:
+          name: "Checkout prestodb"
+          command: git clone git@github.com:prestodb/presto.git
+      - run:
+          name: "Update presto-native to latest Velox"
+          command: |
+            cd presto
+            git submodule update --init --recursive
+            cd presto-native-execution
+            git submodule update --remote --merge
+      - run:
+          name: "Build presto-native container"
+          command: |
+            git config --global user.email "velox@users.noreply.github.com"
+            git config --global user.name "velox"
+            cd presto/presto-native-execution
+            make runtime-container

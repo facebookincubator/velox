@@ -54,7 +54,7 @@ class LocalMergeSource : public MergeSource {
         }
         consumerPromises_.emplace_back("LocalMergeSourceQueue::next");
         *future = consumerPromises_.back().getSemiFuture();
-        return BlockingReason::kWaitForExchange;
+        return BlockingReason::kWaitForProducer;
       }
 
       data = data_.front();
@@ -119,10 +119,10 @@ class MergeExchangeSource : public MergeSource {
   MergeExchangeSource(
       MergeExchange* mergeExchange,
       const std::string& taskId,
-      int destination)
+      int destination,
+      memory::MemoryPool* FOLLY_NONNULL pool)
       : mergeExchange_(mergeExchange),
-        client_(std::make_unique<ExchangeClient>(destination)) {
-    client_->initialize(mergeExchange->pool());
+        client_(std::make_unique<ExchangeClient>(destination, pool)) {
     client_->addRemoteTaskId(taskId);
     client_->noMoreRemoteTasks();
   }
@@ -141,12 +141,12 @@ class MergeExchangeSource : public MergeSource {
       }
 
       if (!currentPage_) {
-        return BlockingReason::kWaitForExchange;
+        return BlockingReason::kWaitForProducer;
       }
     }
     if (!inputStream_) {
       inputStream_ = std::make_unique<ByteStream>();
-      mergeExchange_->stats().rawInputBytes += currentPage_->size();
+      mergeExchange_->stats().wlock()->rawInputBytes += currentPage_->size();
       currentPage_->prepareStreamForDeserialize(inputStream_.get());
     }
 
@@ -157,8 +157,8 @@ class MergeExchangeSource : public MergeSource {
           mergeExchange_->outputType(),
           &data);
 
-      mergeExchange_->stats().inputPositions += data->size();
-      mergeExchange_->stats().inputBytes += data->retainedSize();
+      auto lockedStats = mergeExchange_->stats().wlock();
+      lockedStats->addInputVector(data->estimateFlatSize(), data->size());
     }
 
     // Since VectorStreamGroup::read() may cause inputStream to be at end,
@@ -180,7 +180,7 @@ class MergeExchangeSource : public MergeSource {
   }
 
  private:
-  MergeExchange* mergeExchange_;
+  MergeExchange* const mergeExchange_;
   std::unique_ptr<ExchangeClient> client_;
   std::unique_ptr<ByteStream> inputStream_;
   std::unique_ptr<SerializedPage> currentPage_;
@@ -202,9 +202,10 @@ std::shared_ptr<MergeSource> MergeSource::createLocalMergeSource() {
 std::shared_ptr<MergeSource> MergeSource::createMergeExchangeSource(
     MergeExchange* mergeExchange,
     const std::string& taskId,
-    int destination) {
+    int destination,
+    memory::MemoryPool* pool) {
   return std::make_shared<MergeExchangeSource>(
-      mergeExchange, taskId, destination);
+      mergeExchange, taskId, destination, pool);
 }
 
 namespace {
@@ -233,7 +234,7 @@ BlockingReason MergeJoinSource::next(
 
     consumerPromise_ = ContinuePromise("MergeJoinSource::next");
     *future = consumerPromise_->getSemiFuture();
-    return BlockingReason::kWaitForExchange;
+    return BlockingReason::kWaitForProducer;
   });
 }
 

@@ -74,6 +74,11 @@ std::shared_ptr<Connector> getConnector(const std::string& connectorId) {
   return it->second;
 }
 
+const std::unordered_map<std::string, std::shared_ptr<Connector>>&
+getAllConnectors() {
+  return connectors();
+}
+
 folly::Synchronized<
     std::unordered_map<std::string_view, std::weak_ptr<cache::ScanTracker>>>
     Connector::trackers_;
@@ -102,6 +107,17 @@ std::shared_ptr<cache::ScanTracker> Connector::getTracker(
     }
     return tracker;
   });
+}
+
+std::string commitStrategyToString(CommitStrategy commitStrategy) {
+  switch (commitStrategy) {
+    case CommitStrategy::kNoCommit:
+      return "NO_COMMIT";
+    case CommitStrategy::kTaskCommit:
+      return "TASK_COMMIT";
+    default:
+      VELOX_UNREACHABLE();
+  }
 }
 
 } // namespace facebook::velox::connector

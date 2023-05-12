@@ -13,7 +13,7 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-
+#include "velox/common/base/tests/GTestUtils.h"
 #include "velox/functions/prestosql/tests/utils/FunctionBaseTest.h"
 
 using namespace facebook::velox;
@@ -251,4 +251,184 @@ TEST_F(ZipTest, dictionaryArrays) {
 
   assertEqualVectors(expected, result);
 }
+
+/// Test if we can zip two flat vectors of arrays with rows starting at
+/// different offsets
+TEST_F(ZipTest, flatArraysWithDifferentOffsets) {
+  auto firstElements = makeFlatVector<int32_t>({0, 1, 2, 3, 4, 5, 6, 7, 8});
+  auto firstVector = makeArrayVector({0, 3, 6}, firstElements);
+
+  // Use different offsets.
+  auto secondElements =
+      makeFlatVector<int32_t>({10, 11, 12, 13, 14, 15, 16, 17, 18});
+  const auto size = 3;
+  BufferPtr offsetsBuffer = allocateOffsets(size, pool_.get());
+  BufferPtr sizesBuffer = allocateSizes(size, pool_.get());
+  auto rawOffsets = offsetsBuffer->asMutable<vector_size_t>();
+  auto rawSizes = sizesBuffer->asMutable<vector_size_t>();
+
+  rawOffsets[0] = 6;
+  rawOffsets[1] = 3;
+  rawOffsets[2] = 0;
+
+  for (int i = 0; i < size; i++) {
+    rawSizes[i] = 3;
+  }
+
+  auto secondVector = std::make_shared<ArrayVector>(
+      pool_.get(),
+      ARRAY(INTEGER()),
+      nullptr,
+      size,
+      offsetsBuffer,
+      sizesBuffer,
+      secondElements);
+
+  auto result = evaluate<ArrayVector>(
+      "zip(c0, c1)",
+      makeRowVector({
+          firstVector,
+          secondVector,
+      }));
+
+  auto firstResult = makeFlatVector<int32_t>({0, 1, 2, 3, 4, 5, 6, 7, 8});
+  auto secondResult =
+      makeFlatVector<int32_t>({16, 17, 18, 13, 14, 15, 10, 11, 12});
+
+  auto rowVector = makeRowVector({firstResult, secondResult});
+
+  // create the expected ArrayVector
+  auto expected = makeArrayVector({0, 3, 6}, rowVector);
+
+  assertEqualVectors(expected, result);
+}
+
+/// Test if we can zip two flat vectors of arrays with overlapping ranges of
+/// elements.
+TEST_F(ZipTest, flatArraysWithOverlappingRanges) {
+  const auto size = 3;
+  BufferPtr offsetsBuffer = allocateOffsets(size, pool_.get());
+  BufferPtr sizesBuffer = allocateSizes(size, pool_.get());
+  auto rawOffsets = offsetsBuffer->asMutable<vector_size_t>();
+  auto rawSizes = sizesBuffer->asMutable<vector_size_t>();
+
+  rawOffsets[0] = 0;
+  rawOffsets[1] = 1;
+  rawOffsets[2] = 2;
+
+  for (int i = 0; i < size; i++) {
+    rawSizes[i] = 3;
+  }
+
+  auto firstElements = makeFlatVector<int32_t>({0, 1, 2, 3, 4});
+  auto firstVector = std::make_shared<ArrayVector>(
+      pool_.get(),
+      ARRAY(INTEGER()),
+      nullptr,
+      size,
+      offsetsBuffer,
+      sizesBuffer,
+      firstElements);
+
+  auto secondElements = makeFlatVector<int32_t>({10, 11, 12, 13, 14});
+  auto secondVector = std::make_shared<ArrayVector>(
+      pool_.get(),
+      ARRAY(INTEGER()),
+      nullptr,
+      size,
+      offsetsBuffer,
+      sizesBuffer,
+      secondElements);
+
+  auto result = evaluate<ArrayVector>(
+      "zip(c0, c1)",
+      makeRowVector({
+          firstVector,
+          secondVector,
+      }));
+
+  auto firstResult = makeFlatVector<int32_t>({0, 1, 2, 1, 2, 3, 2, 3, 4});
+  auto secondResult =
+      makeFlatVector<int32_t>({10, 11, 12, 11, 12, 13, 12, 13, 14});
+
+  auto rowVector = makeRowVector({firstResult, secondResult});
+
+  // create the expected ArrayVector
+  auto expected = makeArrayVector({0, 3, 6}, rowVector);
+
+  assertEqualVectors(expected, result);
+}
+
+/// Test if we can zip two flat vectors of arrays with a gap in the range of
+/// elements.
+TEST_F(ZipTest, flatArraysWithGapInElements) {
+  const auto size = 3;
+  BufferPtr offsetsBuffer = allocateOffsets(size, pool_.get());
+  BufferPtr sizesBuffer = allocateSizes(size, pool_.get());
+  auto rawOffsets = offsetsBuffer->asMutable<vector_size_t>();
+  auto rawSizes = sizesBuffer->asMutable<vector_size_t>();
+
+  rawOffsets[0] = 0;
+  rawOffsets[1] = 6;
+  rawOffsets[2] = 9;
+
+  for (int i = 0; i < size; i++) {
+    rawSizes[i] = 3;
+  }
+
+  auto firstElements =
+      makeFlatVector<int32_t>({0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11});
+  auto firstVector = std::make_shared<ArrayVector>(
+      pool_.get(),
+      ARRAY(INTEGER()),
+      nullptr,
+      size,
+      offsetsBuffer,
+      sizesBuffer,
+      firstElements);
+
+  auto secondElements =
+      makeFlatVector<int32_t>({10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21});
+  auto secondVector = std::make_shared<ArrayVector>(
+      pool_.get(),
+      ARRAY(INTEGER()),
+      nullptr,
+      size,
+      offsetsBuffer,
+      sizesBuffer,
+      secondElements);
+
+  auto result = evaluate<ArrayVector>(
+      "zip(c0, c1)",
+      makeRowVector({
+          firstVector,
+          secondVector,
+      }));
+
+  auto firstResult = makeFlatVector<int32_t>({0, 1, 2, 6, 7, 8, 9, 10, 11});
+  auto secondResult =
+      makeFlatVector<int32_t>({10, 11, 12, 16, 17, 18, 19, 20, 21});
+
+  auto rowVector = makeRowVector({firstResult, secondResult});
+
+  // create the expected ArrayVector
+  auto expected = makeArrayVector({0, 3, 6}, rowVector);
+
+  assertEqualVectors(expected, result);
+}
+
+// Single arg not supported.
+TEST_F(ZipTest, singleArgument) {
+  auto vector = makeNullableArrayVector<int64_t>(
+      {{1, 2, 3, 4}, {3, 4, 5}, {std::nullopt}});
+  VELOX_ASSERT_THROW(
+      evaluate<ArrayVector>("zip(c0)", makeRowVector({vector})),
+      "Scalar function signature is not supported: zip(ARRAY<BIGINT>). Supported signatures: "
+      "(array(E00),array(E01)) -> array(row(E00,E01)), (array(E00),array(E01),array(E02)) -> "
+      "array(row(E00,E01,E02)), (array(E00),array(E01),array(E02),array(E03)) -> array(row(E0"
+      "0,E01,E02,E03)), (array(E00),array(E01),array(E02),array(E03),array(E04)) -> array(row"
+      "(E00,E01,E02,E03,E04)), (array(E00),array(E01),array(E02),array(E03),array(E04),array("
+      "E05)) -> array(row(E00,E01,E02,E03,E04,E05))");
+}
+
 } // namespace

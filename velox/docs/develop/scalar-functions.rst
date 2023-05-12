@@ -9,7 +9,7 @@ This document describes the main concepts, features, and examples of the simple
 function API in Velox. For more real-world API usage examples, check
 **velox/example/SimpleFunctions.cpp**.
 
-A simple scalar function, e.g. a :doc:`mathematical function </functions/math>`,
+A simple scalar function, e.g. a :doc:`mathematical function </functions/presto/math>`,
 can be added by wrapping a C++ function in a templated class. For example, a
 ceil function can be implemented as:
 
@@ -358,11 +358,6 @@ we need to call registerFunction again:
   registerFunction<CeilFunction, float, float>({"ceil", "ceiling");
 
 We need to call registerFunction for each signature we want to support.
-
-For decimal arguments, we use UnscaledLongDecimal or UnscaledShortDecimal for
-registration. Simple functions always require decimal arguments to have the same
-precision and scale. We must explicitly :func:`cast` the decimal arguments if
-required before passing them to simple functions.
 
 Codegen
 ^^^^^^^
@@ -1207,7 +1202,7 @@ The map_keys function takes any map and returns an array of map keys.
 
     // map(K,V) -> array(K)
     exec::FunctionSignatureBuilder()
-      .typeVariable("K")
+      .knownTypeVariable("K")
       .typeVariable("V")
       .returnType("array(K)")
       .argumentType("map(K,V)")

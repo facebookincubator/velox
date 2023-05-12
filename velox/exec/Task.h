@@ -29,8 +29,7 @@ namespace facebook::velox::exec {
 class PartitionedOutputBufferManager;
 
 class HashJoinBridge;
-class CrossJoinBridge;
-
+class NestedLoopJoinBridge;
 class Task : public std::enable_shared_from_this<Task> {
  public:
   /// Creates a task to execute a plan fragment, but doesn't start execution
@@ -41,7 +40,7 @@ class Task : public std::enable_shared_from_this<Task> {
   /// for a particular partition from a set of upstream tasks participating in a
   /// distributed execution. Used to initialize an ExchangeClient. Ignored if
   /// plan fragment doesn't have an ExchangeNode.
-  /// @param queryCtx Query context containing MemoryPool and MappedMemory
+  /// @param queryCtx Query context containing MemoryPool and MemoryAllocator
   /// instances to use for memory allocations during execution, executor to
   /// schedule operators on, and session properties.
   /// @param consumer Optional factory function to get callbacks to pass the
@@ -66,6 +65,12 @@ class Task : public std::enable_shared_from_this<Task> {
       std::function<void(std::exception_ptr)> onError = nullptr);
 
   ~Task();
+
+  /// Specify directory to which data will be spilled if spilling is enabled and
+  /// required.
+  void setSpillDirectory(const std::string& spillDirectory) {
+    spillDirectory_ = spillDirectory;
+  }
 
   std::string toString() const;
 
@@ -94,7 +99,7 @@ class Task : public std::enable_shared_from_this<Task> {
 
   /// Returns MemoryPool used to allocate memory during execution. This instance
   /// is a child of the MemoryPool passed in the constructor.
-  memory::MemoryPool* FOLLY_NONNULL pool() const {
+  memory::MemoryPool* pool() const {
     return pool_.get();
   }
 
@@ -134,49 +139,58 @@ class Task : public std::enable_shared_from_this<Task> {
   /// This API is available for query plans that do not use
   /// PartitionedOutputNode and LocalPartitionNode plan nodes.
   ///
-  /// The caller is required to add all the necessary splits and signal
-  /// no-more-splits before calling 'next' for the first time. The operators in
-  /// the pipeline are not allowed to block for external events, but can block
-  /// waiting for data to be produced by a different pipeline of the same task.
-  RowVectorPtr next();
+  /// The caller is required to add all the necessary splits, and signal
+  /// no-more-splits before calling 'next' for the first time.
+  ///
+  /// If no `future` is provided, the operators in the pipeline are not allowed
+  /// to block for external events, but can block waiting for data to be
+  /// produced by a different pipeline of the same task.
+  ///
+  /// If `future` is provided, the operators in the pipeline can block
+  /// externally. When any operators are blocked externally, the function lets
+  /// all non-blocked operators to run until completion, returns nullptr and
+  /// updates `future`. `future` is realized when the operators are no longer
+  /// blocked. Caller thread is responsible to wait for future before calling
+  /// `next` again.
+  RowVectorPtr next(ContinueFuture* future = nullptr);
 
-  // Resumes execution of 'self' after a successful pause. All 'drivers_' must
-  // be off-thread and there must be no 'exception_'
+  /// Resumes execution of 'self' after a successful pause. All 'drivers_' must
+  /// be off-thread and there must be no 'exception_'
   static void resume(std::shared_ptr<Task> self);
 
-  // Sets the (so far) max split sequence id, so all splits with sequence id
-  // equal or below that, will be ignored in the 'addSplitWithSequence' call.
-  // Note, that 'addSplitWithSequence' does not update max split sequence id
-  // and the operation is silently ignored if Task is not running.
+  /// Sets the (so far) max split sequence id, so all splits with sequence id
+  /// equal or below that, will be ignored in the 'addSplitWithSequence' call.
+  /// Note, that 'addSplitWithSequence' does not update max split sequence id
+  /// and the operation is silently ignored if Task is not running.
   void setMaxSplitSequenceId(
       const core::PlanNodeId& planNodeId,
       long maxSequenceId);
 
-  // Adds split for a source operator corresponding to plan node with
-  // specified ID.
-  // It requires sequential id of the split and, when that id is NOT greater
-  // than the current max split sequence id, the split is discarded as a
-  // duplicate.
-  // Note, that this method does NOT update max split sequence id.
-  // Returns true if split was added, false if it was ignored.
-  // Note that, the operation is silently ignored if Task is not running.
+  /// Adds split for a source operator corresponding to plan node with
+  /// specified ID.
+  /// It requires sequential id of the split and, when that id is NOT greater
+  /// than the current max split sequence id, the split is discarded as a
+  /// duplicate.
+  /// Note, that this method does NOT update max split sequence id.
+  /// Returns true if split was added, false if it was ignored.
+  /// Note that, the operation is silently ignored if Task is not running.
   bool addSplitWithSequence(
       const core::PlanNodeId& planNodeId,
       exec::Split&& split,
       long sequenceId);
 
-  // Adds split for a source operator corresponding to plan node with
-  // specified ID. Does not require sequential id.
-  // Note that, the operation is silently ignored if Task is not running.
+  /// Adds split for a source operator corresponding to plan node with
+  /// specified ID. Does not require sequential id.
+  /// Note that, the operation is silently ignored if Task is not running.
   void addSplit(const core::PlanNodeId& planNodeId, exec::Split&& split);
 
-  // We mark that for the given group there would be no more splits coming.
+  /// We mark that for the given group there would be no more splits coming.
   void noMoreSplitsForGroup(
       const core::PlanNodeId& planNodeId,
       int32_t splitGroupId);
 
-  // Signals that there are no more splits for the source operator
-  // corresponding to plan node with specified ID.
+  /// Signals that there are no more splits for the source operator
+  /// corresponding to plan node with specified ID.
   void noMoreSplits(const core::PlanNodeId& planNodeId);
 
   /// Updates the total number of output buffers to broadcast the results of the
@@ -188,7 +202,10 @@ class Task : public std::enable_shared_from_this<Task> {
   /// of buffers. No more calls are expected after the call with noMoreBuffers
   /// == true, but occasionally the caller might resend it, so calls
   /// received after a call with noMoreBuffers == true are ignored.
-  void updateBroadcastOutputBuffers(int numBuffers, bool noMoreBuffers);
+  /// @return true if update was successful.
+  ///         false if noMoreBuffers was previously set to true.
+  ///         false if buffer was not found for a given task.
+  bool updateBroadcastOutputBuffers(int numBuffers, bool noMoreBuffers);
 
   /// Returns true if state is 'running'.
   bool isRunning() const;
@@ -202,11 +219,11 @@ class Task : public std::enable_shared_from_this<Task> {
     return state_;
   }
 
-  // Returns a future which is realized when 'this' is no longer in
-  // running state. If 'this' is not in running state at the time of
-  // call, the future is immediately realized. The future is realized
-  // with an exception after maxWaitMicros. A zero max wait means no
-  // timeout.
+  /// Returns a future which is realized when 'this' is no longer in
+  /// running state. If 'this' is not in running state at the time of
+  /// call, the future is immediately realized. The future is realized
+  /// with an exception after maxWaitMicros. A zero max wait means no
+  /// timeout.
   ContinueFuture stateChangeFuture(uint64_t maxWaitMicros);
 
   /// Returns task execution error or nullptr if no error occurred.
@@ -219,11 +236,9 @@ class Task : public std::enable_shared_from_this<Task> {
   /// occurred.
   std::string errorMessage() const;
 
-  // Returns by copy as other threads might be updating the structure.
-  TaskStats taskStats() const {
-    std::lock_guard<std::mutex> l(mutex_);
-    return taskStats_;
-  }
+  /// Returns Task Stats by copy as other threads might be updating the
+  /// structure.
+  TaskStats taskStats() const;
 
   /// Returns time (ms) since the task execution started or zero, if not
   /// started.
@@ -260,44 +275,55 @@ class Task : public std::enable_shared_from_this<Task> {
   /// library components (Driver, Operator, etc.) and should not be called by
   /// the library users.
 
-  /// Creates new instance of MemoryPool for a plan node, stores it in the task
-  /// to ensure lifetime and returns a raw pointer. Not thread safe, e.g. must
-  /// be called from the Operator's constructor via addOperatorPool().
-  memory::MemoryPool* FOLLY_NONNULL
-  getOrAddNodePool(const core::PlanNodeId& planNodeId);
-
   /// Creates new instance of MemoryPool for an operator, stores it in the task
   /// to ensure lifetime and returns a raw pointer. Not thread safe, e.g. must
   /// be called from the Operator's constructor.
-  velox::memory::MemoryPool* FOLLY_NONNULL addOperatorPool(
+  velox::memory::MemoryPool* addOperatorPool(
       const core::PlanNodeId& planNodeId,
       int pipelineId,
+      uint32_t driverId,
       const std::string& operatorType);
 
-  /// Creates new instance of MappedMemory, stores it in the task to ensure
-  /// lifetime and returns a raw pointer. Not thread safe, e.g. must be called
-  /// from the Operator's constructor.
-  memory::MappedMemory* FOLLY_NONNULL
-  addOperatorMemory(const std::shared_ptr<memory::MemoryUsageTracker>& tracker);
+  /// Creates new instance of MemoryPool with aggregate kind for the connector
+  /// use, stores it in the task to ensure lifetime and returns a raw pointer.
+  /// Not thread safe, e.g. must be called from the Operator's constructor.
+  velox::memory::MemoryPool* addConnectorPoolLocked(
+      const core::PlanNodeId& planNodeId,
+      int pipelineId,
+      uint32_t driverId,
+      const std::string& operatorType,
+      const std::string& connectorId);
 
-  // Removes driver from the set of drivers in 'self'. The task will be kept
-  // alive by 'self'. 'self' going out of scope may cause the Task to
-  // be freed. This happens if a cancelled task is decoupled from the
-  // task manager and threads are left to finish themselves.
-  static void removeDriver(
-      std::shared_ptr<Task> self,
-      Driver* FOLLY_NONNULL instance);
+  /// Creates new instance of MemoryPool for a merge source in a
+  /// MergeExchangeNode, stores it in the task to ensure lifetime and returns a
+  /// raw pointer.
+  velox::memory::MemoryPool* addMergeSourcePool(
+      const core::PlanNodeId& planNodeId,
+      uint32_t pipelineId,
+      uint32_t sourceId);
 
-  // Returns a split for the source operator corresponding to plan node with
-  // specified ID. If there are no splits and no-more-splits signal has been
-  // received, sets split to null and returns kNotBlocked. Otherwise, returns
-  // kWaitForSplit and sets a future that will complete when split becomes
-  // available or no-more-splits signal is received.
+  /// Removes driver from the set of drivers in 'self'. The task will be kept
+  /// alive by 'self'. 'self' going out of scope may cause the Task to
+  /// be freed. This happens if a cancelled task is decoupled from the
+  /// task manager and threads are left to finish themselves.
+  static void removeDriver(std::shared_ptr<Task> self, Driver* instance);
+
+  /// Returns a split for the source operator corresponding to plan
+  /// node with specified ID. If there are no splits and no-more-splits
+  /// signal has been received, sets split to null and returns
+  /// kNotBlocked. Otherwise, returns kWaitForSplit and sets a future
+  /// that will complete when split becomes available or no-more-splits
+  /// signal is received. If 'maxPreloadSplits' is given, ensures that
+  /// so many of splits at the head of the queue are preloading. If
+  /// they are not, calls preload on them to start preload.
   BlockingReason getSplitOrFuture(
       uint32_t splitGroupId,
       const core::PlanNodeId& planNodeId,
       exec::Split& split,
-      ContinueFuture& future);
+      ContinueFuture& future,
+      int32_t maxPreloadSplits = 0,
+      std::function<void(std::shared_ptr<connector::ConnectorSplit>)> preload =
+          nullptr);
 
   void splitFinished();
 
@@ -343,46 +369,53 @@ class Task : public std::enable_shared_from_this<Task> {
 
   void setError(const std::string& message);
 
-  // Synchronizes completion of an Operator across Drivers of 'this'.
-  // 'planNodeId' identifies the Operator within all
-  // Operators/pipelines of 'this'.  Each Operator instance calls this
-  // once. All but the last get a false return value and 'future' is
-  // set to a future the caller should block on. At this point the
-  // caller should go off thread as in any blocking situation.  The
-  // last to call gets a true return value and 'peers' is set to all
-  // Drivers except 'caller'. 'promises' coresponds pairwise to
-  // 'peers'. Realizing the promise will continue the peer. This
-  // effects a synchronization barrier between Drivers of a pipeline
-  // inside one worker. This is used for example for multithreaded
-  // hash join build to ensure all build threads are completed before
-  // allowing the probe pipeline to proceed. Throws a cancelled error
-  // if 'this' is in an error state.
+  /// Returns all the peer operators of the 'caller' operator from a given
+  /// 'pipelindId' in this task.
+  std::vector<Operator*> findPeerOperators(int pipelineId, Operator* caller);
+
+  /// Synchronizes completion of an Operator across Drivers of 'this'.
+  /// 'planNodeId' identifies the Operator within all Operators/pipelines of
+  /// 'this'.  Each Operator instance calls this once. All but the last get a
+  /// false return value and 'future' is set to a future the caller should block
+  /// on. At this point the caller should go off thread as in any blocking
+  /// situation.  The last to call gets a true return value and 'peers' is set
+  /// to all Drivers except 'caller'. 'promises' corresponds pairwise to
+  /// 'peers'. Realizing the promise will continue the peer. This effects a
+  /// synchronization barrier between Drivers of a pipeline inside one worker.
+  /// This is used for example for multithreaded hash join build to ensure all
+  /// build threads are completed before allowing the probe pipeline to proceed.
+  /// Throws a cancelled error if 'this' is in an error state.
+  ///
+  /// NOTE: if 'future' is null, then the caller doesn't intend to wait for the
+  /// other peers to finish. The function won't set its promise and record it in
+  /// peers. This is used in scenario that the caller only needs to know whether
+  /// it is the last one to reach the barrier.g
   bool allPeersFinished(
       const core::PlanNodeId& planNodeId,
-      Driver* FOLLY_NONNULL caller,
-      ContinueFuture* FOLLY_NONNULL future,
+      Driver* caller,
+      ContinueFuture* future,
       std::vector<ContinuePromise>& promises,
       std::vector<std::shared_ptr<Driver>>& peers);
 
-  // Adds HashJoinBridge's for all the specified plan node IDs.
+  /// Adds HashJoinBridge's for all the specified plan node IDs.
   void addHashJoinBridgesLocked(
       uint32_t splitGroupId,
       const std::vector<core::PlanNodeId>& planNodeIds);
 
-  // Adds CrossJoinBridge's for all the specified plan node IDs.
-  void addCrossJoinBridgesLocked(
+  /// Adds NestedLoopJoinBridge's for all the specified plan node IDs.
+  void addNestedLoopJoinBridgesLocked(
       uint32_t splitGroupId,
       const std::vector<core::PlanNodeId>& planNodeIds);
 
-  // Adds custom join bridges for all the specified plan nodes.
+  /// Adds custom join bridges for all the specified plan nodes.
   void addCustomJoinBridgesLocked(
       uint32_t splitGroupId,
       const std::vector<core::PlanNodePtr>& planNodes);
 
-  // Returns a HashJoinBridge for 'planNodeId'. This is used for synchronizing
-  // start of probe with completion of build for a join that has a
-  // separate probe and build. 'id' is the PlanNodeId shared between
-  // the probe and build Operators of the join.
+  /// Returns a HashJoinBridge for 'planNodeId'. This is used for synchronizing
+  /// start of probe with completion of build for a join that has a
+  /// separate probe and build. 'id' is the PlanNodeId shared between
+  /// the probe and build Operators of the join.
   std::shared_ptr<HashJoinBridge> getHashJoinBridge(
       uint32_t splitGroupId,
       const core::PlanNodeId& planNodeId);
@@ -391,12 +424,12 @@ class Task : public std::enable_shared_from_this<Task> {
       uint32_t splitGroupId,
       const core::PlanNodeId& planNodeId);
 
-  // Returns a CrossJoinBridge for 'planNodeId'.
-  std::shared_ptr<CrossJoinBridge> getCrossJoinBridge(
+  /// Returns a NestedLoopJoinBridge for 'planNodeId'.
+  std::shared_ptr<NestedLoopJoinBridge> getNestedLoopJoinBridge(
       uint32_t splitGroupId,
       const core::PlanNodeId& planNodeId);
 
-  // Returns a custom join bridge for 'planNodeId'.
+  /// Returns a custom join bridge for 'planNodeId'.
   std::shared_ptr<JoinBridge> getCustomJoinBridge(
       uint32_t splitGroupId,
       const core::PlanNodeId& planNodeId);
@@ -405,71 +438,76 @@ class Task : public std::enable_shared_from_this<Task> {
       uint32_t splitGroupId,
       const core::PlanNodeId& planNodeId);
 
-  // Transitions this to kFinished state if all Drivers are
-  // finished. Otherwise sets a flag so that the last Driver to finish
-  // will transition the state.
+  /// Transitions this to kFinished state if all Drivers are
+  /// finished. Otherwise sets a flag so that the last Driver to finish
+  /// will transition the state.
   void setAllOutputConsumed();
 
-  // Adds 'stats' to the cumulative total stats for the operator in
-  // the Task stats. Clears 'stats'.
+  /// Adds 'stats' to the cumulative total stats for the operator in the Task
+  /// stats. Called from Drivers upon their closure.
   void addOperatorStats(OperatorStats& stats);
 
-  // Returns kNone if no pause or terminate is requested. The thread count is
-  // incremented if kNone is returned. If something else is returned the
-  // calling thread should unwind and return itself to its pool.
-  StopReason enter(ThreadState& state);
+  /// Returns kNone if no pause or terminate is requested. The thread count is
+  /// incremented if kNone is returned. If something else is returned the
+  /// calling thread should unwind and return itself to its pool. If 'this' goes
+  /// from no threads running to one thread running, sets 'onThreadSince_' to
+  /// 'nowMicros'.
+  StopReason enter(ThreadState& state, uint64_t nowMicros = 0);
 
-  // Sets the state to terminated. Returns kAlreadyOnThread if the
-  // Driver is running. In this case, the Driver will free resources
-  // and the caller should not do anything. Returns kTerminate if the
-  // Driver was not on thread. When this happens, the Driver is on the
-  // caller thread wit isTerminated set and the caller is responsible
-  // for freeing resources.
+  /// Sets the state to terminated. Returns kAlreadyOnThread if the
+  /// Driver is running. In this case, the Driver will free resources
+  /// and the caller should not do anything. Returns kTerminate if the
+  /// Driver was not on thread. When this happens, the Driver is on the
+  /// caller thread wit isTerminated set and the caller is responsible
+  /// for freeing resources.
   StopReason enterForTerminateLocked(ThreadState& state);
 
-  // Marks that the Driver is not on thread. If no more Drivers in the
-  // CancelPool are on thread, this realizes
-  // threadFinishFutures_. These allow syncing with pause or
-  // termination. The Driver may go off thread because of
-  // hasBlockingFuture or pause requested or terminate requested. The
-  // return value indicates the reason. If kTerminate is returned, the
-  // isTerminated flag is set.
+  /// Marks that the Driver is not on thread. If no more Drivers in the
+  /// CancelPool are on thread, this realizes
+  /// threadFinishFutures_. These allow syncing with pause or
+  /// termination. The Driver may go off thread because of
+  /// hasBlockingFuture or pause requested or terminate requested. The
+  /// return value indicates the reason. If kTerminate is returned, the
+  /// isTerminated flag is set.
   StopReason leave(ThreadState& state);
 
-  // Enters a suspended section where the caller stays on thread but
-  // is not accounted as being on the thread.  Returns kNone if no
-  // terminate is requested. The thread count is decremented if kNone
-  // is returned. If thread count goes to zero, waiting promises are
-  // realized. If kNone is not returned the calling thread should
-  // unwind and return itself to its pool.
+  /// Enters a suspended section where the caller stays on thread but
+  /// is not accounted as being on the thread.  Returns kNone if no
+  /// terminate is requested. The thread count is decremented if kNone
+  /// is returned. If thread count goes to zero, waiting promises are
+  /// realized. If kNone is not returned the calling thread should
+  /// unwind and return itself to its pool.
   StopReason enterSuspended(ThreadState& state);
 
   StopReason leaveSuspended(ThreadState& state);
 
-  // Returns a stop reason without synchronization. If the stop reason
-  // is yield, then atomically decrements the count of threads that
-  // are to yield.
+  /// Returns a stop reason without synchronization. If the stop reason
+  /// is yield, then atomically decrements the count of threads that
+  /// are to yield.
   StopReason shouldStop();
 
-  // Requests the Task to stop activity.  The returned future is
-  // realized when all running threads have stopped running. Activity
-  // can be resumed with resume() after the future is realized.
-  ContinueFuture requestPause(bool pause) {
-    std::lock_guard<std::mutex> l(mutex_);
-    return requestPauseLocked(pause);
+  /// Returns true if Driver or async executor threads for 'this'
+  /// should silently stop and drop any results that may be
+  /// pending. This is like shouldStop() but can be called multiple
+  /// times since not affect a yield counter.
+  bool isCancelled() const {
+    return terminateRequested_;
   }
 
-  ContinueFuture requestPauseLocked(bool pause);
+  /// Requests the Task to stop activity.  The returned future is
+  /// realized when all running threads have stopped running. Activity
+  /// can be resumed with resume() after the future is realized.
+  ContinueFuture requestPause();
 
-  // Requests activity of 'this' to stop. The returned future will be
-  // realized when the last thread stops running for 'this'. This is used to
-  // mark cancellation by the user.
+  /// Requests activity of 'this' to stop. The returned future will be
+  /// realized when the last thread stops running for 'this'. This is used to
+  /// mark cancellation by the user.
   ContinueFuture requestCancel() {
     return terminate(kCanceled);
   }
 
-  // Like requestCancel but sets end state to kAborted. This is for stopping
-  // Tasks due to failures of other parts of the query.
+  /// Like requestCancel but sets end state to kAborted. This is for stopping
+  /// Tasks due to failures of other parts of the query.
   ContinueFuture requestAbort() {
     return terminate(kAborted);
   }
@@ -479,15 +517,25 @@ class Task : public std::enable_shared_from_this<Task> {
     toYield_ = numThreads_;
   }
 
-  // Once 'pauseRequested_' is set, it will not be cleared until
-  // task::resume(). It is therefore OK to read it without a mutex
-  // from a thread that this flag concerns.
+  /// Requests yield if 'this' is running and has had at least one Driver on
+  /// thread since before 'startTimeMicros'. Returns the number of threads in
+  /// 'this' at the time of requesting yield. Returns 0 if yield not requested.
+  int32_t yieldIfDue(uint64_t startTimeMicros);
+
+  /// Once 'pauseRequested_' is set, it will not be cleared until
+  /// task::resume(). It is therefore OK to read it without a mutex
+  /// from a thread that this flag concerns.
   bool pauseRequested() const {
     return pauseRequested_;
   }
 
   std::mutex& mutex() {
     return mutex_;
+  }
+
+  /// Returns the number of concurrent drivers in the pipeline of 'driver'.
+  int32_t numDrivers(Driver* driver) {
+    return driverFactories_[driver->driverCtx()->pipelineId]->numDrivers;
   }
 
   /// Returns the number of created and deleted tasks since the velox engine
@@ -500,13 +548,58 @@ class Task : public std::enable_shared_from_this<Task> {
     return numDeletedTasks_;
   }
 
+  const std::string& spillDirectory() const {
+    return spillDirectory_;
+  }
+
+  /// True if produces output via PartitionedOutputBufferManager.
+  bool hasPartitionedOutput() const {
+    return numDriversInPartitionedOutput_ > 0;
+  }
+
   /// Invoked to wait for all the tasks created by the test to be deleted.
   ///
   /// NOTE: it is assumed that there is no more task to be created after or
   /// during this wait call. This is for testing purpose for now.
   static void testingWaitForAllTasksToBeDeleted(uint64_t maxWaitUs = 3'000'000);
 
+  /// Invoked to run provided 'callback' on each alive driver of the task.
+  void testingVisitDrivers(const std::function<void(Driver*)>& callback);
+
  private:
+  // Returns time (ms) since the task execution started or zero, if not started.
+  uint64_t timeSinceStartMsLocked() const;
+
+  // Returns reference to the SplitsState structure for the specified plan node
+  // id. Throws if not found, meaning that plan node does not expect splits.
+  SplitsState& getPlanNodeSplitsStateLocked(const core::PlanNodeId& planNodeId);
+
+  // Validate that the supplied grouped execution leaf nodes make sense.
+  void validateGroupedExecutionLeafNodes();
+
+  // Returns true if all nodes expecting splits have received 'no more splits'
+  // message.
+  bool allNodesReceivedNoMoreSplitsMessageLocked() const;
+
+  // Remove the spill directory, if the Task was creating it for potential
+  // spilling.
+  void removeSpillDirectoryIfExists();
+
+  // Creates new instance of MemoryPool for a plan node, stores it in the task
+  // to ensure lifetime and returns a raw pointer.
+  memory::MemoryPool* getOrAddNodePool(const core::PlanNodeId& planNodeId);
+
+  // Creates new instance of MemoryPool for the exchange client of an
+  // ExchangeNode in a pipeline, stores it in the task to ensure lifetime and
+  // returns a raw pointer.
+  velox::memory::MemoryPool* addExchangeClientPool(
+      const core::PlanNodeId& planNodeId,
+      uint32_t pipelineId);
+
+  /// Returns task execution error message or empty string if not error
+  /// occurred. This should only be called inside mutex_ protection.
+  std::string errorMessageLocked() const;
+
   // Counts the number of created tasks which is incremented on each task
   // creation.
   static std::atomic<uint64_t> numCreatedTasks_;
@@ -549,17 +642,21 @@ class Task : public std::enable_shared_from_this<Task> {
   BlockingReason getSplitOrFutureLocked(
       SplitsStore& splitsStore,
       exec::Split& split,
-      ContinueFuture& future);
+      ContinueFuture& future,
+      int32_t maxPreloadSplits = 0,
+      std::function<void(std::shared_ptr<connector::ConnectorSplit>)> preload =
+          nullptr);
 
   /// Returns next split from the store. The caller must ensure the store is not
   /// empty.
-  exec::Split getSplitLocked(SplitsStore& splitsStore);
+  exec::Split getSplitLocked(
+      SplitsStore& splitsStore,
+      int32_t maxPreloadSplits,
+      std::function<void(std::shared_ptr<connector::ConnectorSplit>)> preload);
 
   /// Creates for the given split group and fills up the 'SplitGroupState'
   /// structure, which stores inter-operator state (local exchange, bridges).
-  void createSplitGroupStateLocked(
-      std::shared_ptr<Task>& self,
-      uint32_t splitGroupId);
+  void createSplitGroupStateLocked(uint32_t splitGroupId);
 
   /// Creates a bunch of drivers for the given split group.
   void createDriversLocked(
@@ -604,13 +701,11 @@ class Task : public std::enable_shared_from_this<Task> {
       SplitsStore& splitsStore,
       exec::Split&& split);
 
-  void finishedLocked();
+  // Invoked when all the driver threads are off thread. The function returns
+  // 'threadFinishPromises_' to fulfill.
+  std::vector<ContinuePromise> allThreadsFinishedLocked();
 
   StopReason shouldStopLocked();
-
-  /// Checks that specified plan node ID refers to a source plan node. Throws if
-  /// that's not the case.
-  void checkPlanNodeIdForSplit(const core::PlanNodeId& id) const;
 
   // Sets this to a terminal requested state and frees all resources
   // of Drivers that are not presently on thread. Unblocks all waiting
@@ -625,7 +720,12 @@ class Task : public std::enable_shared_from_this<Task> {
   // Returns a future that is realized when there are no more threads
   // executing for 'this'. 'comment' is used as a debugging label on
   // the promise/future pair.
-  ContinueFuture makeFinishFutureLocked(const char* FOLLY_NONNULL comment);
+  ContinueFuture makeFinishFuture(const char* comment) {
+    std::lock_guard<std::mutex> l(mutex_);
+    return makeFinishFutureLocked(comment);
+  }
+
+  ContinueFuture makeFinishFutureLocked(const char* comment);
 
   bool isOutputPipeline(int pipelineId) const {
     return driverFactories_[pipelineId]->outputDriver;
@@ -637,34 +737,29 @@ class Task : public std::enable_shared_from_this<Task> {
 
   int getOutputPipelineId() const;
 
-  /// Callback function added to the MemoryUsageTracker to return a descriptive
-  /// message about query memory usage to be added to the error when a
-  /// MEM_CAP_EXCEEDED error is encountered.
-  /// Example Error Message generated:
-  /// Query 20220923_033248_00003_xney3 failed:
-  ///   Exceeded memory cap of 7.00GB when requesting 4.00MB.
-  /// query.20220923_033248_00003_xney3: total: 7.00GB
-  ///     task.20220923_033248_00003_xney3.1.0.25: : 5.88GB in 30 drivers,
-  ///       min 2.00MB, max 400.00MB
-  ///         pipe.0: : 5.74GB in 60 operators, min 0B, max 393.81MB
-  ///             op.PartitionedOutput: : 0B in 15 instances, min 0B, max 0B
-  ///             op.FilterProject: : 0B in 15 instances, min 0B, max 0B
-  ///             op.Aggregation: : 5GB in 15 instances, min 384MB, max 393MB
-  ///             op.LocalExchange: : 0B in 15 instances, min 0B, max 0B
-  ///         pipe.1: : 32.75MB in 30 operators, min 4.00KB, max 14.65MB
-  ///             op.LocalPartition: : 508KB in 15 instances, min 4KB, max 63KB
-  ///             op.Exchange: : 32.25MB in 15 instances, min 107KB, max 14MB
-  ///     task.20220923_033248_00003_xney3.2.0.19: : 1.12GB in 15 drivers,
-  ///       min 61.00MB, max 91.00MB
-  ///         pipe.0: : 1.03GB in 75 operators, min 149.00KB, max 39.38MB
-  ///             op.PartitionedOutput: : 446.71MB in 15 instances,
-  ///               min 12.02MB, max 39.38MB
-  ///             op.PartialAggregation: : 300.03MB in 15 instances,
-  ///               min 1.48MB, max 25.59MB
-  ///             op.FilterProject: : 32MB in 30 instances, min 149KB, max 2MB
-  ///             op.TableScan: : 278MB in 15 instances, min 9.05MB, max 27MB.
-  /// Failed Operator: PartialAggregation.3: 11.98MB
-  std::string getErrorMsgOnMemCapExceeded(memory::MemoryUsageTracker& tracker);
+  // Create an exchange client for the specified exchange plan node at a given
+  // pipeline.
+  void createExchangeClient(
+      int32_t pipelineId,
+      const core::PlanNodeId& planNodeId);
+
+  // Get a shared reference to the exchange client with the specified exchange
+  // plan node 'planNodeId'. The function returns null if there is no client
+  // created for 'planNodeId' in 'exchangeClientByPlanNode_'.
+  std::shared_ptr<ExchangeClient> getExchangeClient(
+      const core::PlanNodeId& planNodeId) const {
+    std::lock_guard<std::mutex> l(mutex_);
+    return getExchangeClientLocked(planNodeId);
+  }
+
+  std::shared_ptr<ExchangeClient> getExchangeClientLocked(
+      const core::PlanNodeId& planNodeId) const;
+
+  // Get a shared reference to the exchange client with the specified
+  // 'pipelineId'. The function returns null if there is no client created for
+  // 'pipelineId' set in 'exchangeClients_'.
+  std::shared_ptr<ExchangeClient> getExchangeClientLocked(
+      int32_t pipelineId) const;
 
   // RAII helper class to satisfy 'stateChangePromises_' and notify listeners
   // that task is complete outside of the mutex. Inactive on creation. Must be
@@ -728,30 +823,19 @@ class Task : public std::enable_shared_from_this<Task> {
   const std::shared_ptr<core::QueryCtx> queryCtx_;
 
   // Root MemoryPool for this Task. All member variables that hold references
-  // to pool_ must be defined after pool_, childPools_, and
-  // childMappedMemories_
-  std::unique_ptr<memory::MemoryPool> pool_;
+  // to pool_ must be defined after pool_, childPools_.
+  std::shared_ptr<memory::MemoryPool> pool_;
 
   // Keep driver and operator memory pools alive for the duration of the task
   // to allow for sharing vectors across drivers without copy.
-  std::vector<std::unique_ptr<memory::MemoryPool>> childPools_;
+  std::vector<std::shared_ptr<memory::MemoryPool>> childPools_;
 
-  // The map from plan node it to the corresponding memory pool object's raw
+  // The map from plan node id to the corresponding memory pool object's raw
   // pointer.
   //
-  // NOTE: ''childPools_' holds the ownerships of node memory pools.
+  // NOTE: 'childPools_' holds the ownerships of node memory pools.
   std::unordered_map<core::PlanNodeId, memory::MemoryPool*> nodePools_;
 
-  // Keep operator MappedMemory instances alive for the duration of the task to
-  // allow for sharing data without copy.
-  std::vector<std::shared_ptr<memory::MappedMemory>> childMappedMemories_;
-
-  // A set of IDs of leaf plan nodes that require splits. Used to check plan
-  // node IDs specified in split management methods.
-  const std::unordered_set<core::PlanNodeId> splitPlanNodeIds_;
-
-  // True if produces output via PartitionedOutputBufferManager.
-  bool hasPartitionedOutput_ = false;
   // Set to true by PartitionedOutputBufferManager when all output is
   // acknowledged. If this happens before Drivers are at end, the last
   // Driver to finish will set state_ to kFinished. If Drivers have
@@ -759,19 +843,24 @@ class Task : public std::enable_shared_from_this<Task> {
   // kFinished.
   bool partitionedOutputConsumed_ = false;
 
-  /// Exchange clients. One per pipeline / source.
-  /// Null for pipelines, which don't need it.
-  std::vector<std::shared_ptr<ExchangeClient>> exchangeClients_;
-
-  /// Exchange clients keyed by the corresponding Exchange plan node ID. Used to
-  /// process remaining remote splits after the task has completed early.
-  std::unordered_map<core::PlanNodeId, std::shared_ptr<ExchangeClient>>
-      exchangeClientByPlanNode_;
-
   // Set if terminated by an error. This is the first error reported
   // by any of the instances.
   std::exception_ptr exception_ = nullptr;
   mutable std::mutex mutex_;
+
+  // Exchange clients. One per pipeline / source. Null for pipelines, which
+  // don't need it.
+  //
+  // NOTE: there can be only one exchange client for a given pipeline ID, and
+  // the exchange clients are also referenced by 'exchangeClientByPlanNode_'.
+  // Hence, exchange clients can be indexed either by pipeline ID or by plan
+  // node ID.
+  std::vector<std::shared_ptr<ExchangeClient>> exchangeClients_;
+
+  // Exchange clients keyed by the corresponding Exchange plan node ID. Used to
+  // process remaining remote splits after the task has completed early.
+  std::unordered_map<core::PlanNodeId, std::shared_ptr<ExchangeClient>>
+      exchangeClientByPlanNode_;
 
   ConsumerSupplier consumerSupplier_;
 
@@ -785,30 +874,43 @@ class Task : public std::enable_shared_from_this<Task> {
   /// This number changes over time as drivers finish their work and maybe new
   /// get created.
   uint32_t numRunningDrivers_{0};
-  /// The total number of drivers we need to run in all pipelines. In normal
-  /// execution it is the sum of number of drivers for all pipelines. In grouped
-  /// execution we multiply that by the number of split groups, but in practice
-  /// this number will be much less (roughly divided by the number of workers),
-  /// so this will be adjusted in the end of task's work.
+  /// The total number of drivers we need to run in all pipelines. It is sum of
+  /// the Ungrouped Execution drivers plus the number of Grouped Execution
+  /// drivers per split group times the number of split groups. In practice for
+  /// tasks with Grouped Execution the final number would be much less (roughly
+  /// divided by the number of workers), so this will be adjusted in the end of
+  /// task's work.
   uint32_t numTotalDrivers_{0};
   /// The number of completed drivers so far.
   /// This number increases over time as drivers finish their work.
   /// We use this number to detect when the Task is completed.
   uint32_t numFinishedDrivers_{0};
   /// Reflects number of drivers required to process single split group during
-  /// grouped execution or the whole plan fragment during normal execution.
+  /// grouped execution. Zero for a completely ungrouped execution.
   uint32_t numDriversPerSplitGroup_{0};
-  /// Number of drivers running in the pipeine hosting the Partitioned Output.
-  /// We use it to recalculate the number of producing drivers at the end during
-  /// the Grouped Execution mode.
+  /// Reflects number of drivers required to run ungrouped execution in the
+  /// fragment. Zero for a completely grouped execution.
+  uint32_t numDriversUngrouped_{0};
+  /// Number of drivers running in the pipeline hosting the Partitioned Output
+  /// (in a single split group). We use it to recalculate the number of
+  /// producing drivers at the end during the Grouped Execution mode.
   uint32_t numDriversInPartitionedOutput_{0};
+  /// True if the pipeline hosting the Partitioned Output runs in the Grouped
+  /// Execution mode. In this case we will need to update the number of output
+  /// drivers in the end. False otherwise.
+  bool groupedPartitionedOutput_{false};
   /// The number of splits groups we run concurrently.
   uint32_t concurrentSplitGroups_{1};
 
-  /// Have we initialized operators' stats already?
-  bool initializedOpStats_{false};
+  /// Have we already initialized stats of operators in the drivers for Grouped
+  /// Execution?
+  bool initializedGroupedOpStats_{false};
+  /// Have we already initialized stats of operators in the drivers for
+  /// Ungrouped Execution?
+  bool initializedUngroupedOpStats_{false};
+
   /// How many splits groups we are processing at the moment. Used to control
-  /// split group concurrency.
+  /// split group concurrency. Ungrouped Split Group is not included here.
   uint32_t numRunningSplitGroups_{0};
   /// Split groups for which we have received at least one split - meaning our
   /// task is to process these. This set only grows. Used to deduplicate split
@@ -823,7 +925,10 @@ class Task : public std::enable_shared_from_this<Task> {
 
   TaskState state_ = TaskState::kRunning;
 
-  /// Stores separate splits state for each plan node.
+  /// Stores splits state structure for each plan node.
+  /// At construction populated with all leaf plan nodes that require splits.
+  /// Afterwards accessed with getPlanNodeSplitsStateLocked() to ensure we only
+  /// manage splits of the plan nodes that expect splits.
   std::unordered_map<core::PlanNodeId, SplitsState> splitsStates_;
 
   std::vector<ContinuePromise> stateChangePromises_;
@@ -850,10 +955,17 @@ class Task : public std::enable_shared_from_this<Task> {
   std::atomic<bool> terminateRequested_{false};
   std::atomic<int32_t> toYield_ = 0;
   int32_t numThreads_ = 0;
+  // Microsecond real time when 'this' last went from no threads to
+  // one thread running. Used to decide if continuous run should be
+  // interrupted by yieldIfDue().
+  tsan_atomic<uint64_t> onThreadSince_{0};
   // Promises for the futures returned to callers of requestPause() or
   // terminate(). They are fulfilled when the last thread stops
   // running for 'this'.
   std::vector<ContinuePromise> threadFinishPromises_;
+
+  // Base spill directory for this task.
+  std::string spillDirectory_;
 };
 
 /// Listener invoked on task completion.

@@ -29,9 +29,7 @@ TopN::TopN(
           topNNode->id(),
           "TopN"),
       count_(topNNode->count()),
-      data_(std::make_unique<RowContainer>(
-          outputType_->children(),
-          operatorCtx_->mappedMemory())),
+      data_(std::make_unique<RowContainer>(outputType_->children(), pool())),
       comparator_(
           outputType_,
           topNNode->sortingKeys(),
@@ -72,7 +70,7 @@ void TopN::addInput(RowVectorPtr input) {
     } else {
       char* topRow = topRows_.top();
 
-      if (comparator_(topRow, decodedVectors_, row)) {
+      if (!comparator_(decodedVectors_, row, topRow)) {
         continue;
       }
       topRows_.pop();

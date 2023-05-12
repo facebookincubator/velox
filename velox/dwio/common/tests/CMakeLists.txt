@@ -16,37 +16,25 @@ add_subdirectory(utils)
 
 if(VELOX_ENABLE_AVX512)
   set_source_files_properties(
-    BitPackDecoderBenchmarknew.cpp BitPackDecoderTest.cpp
-    PROPERTIES COMPILE_FLAGS "${VELOX_AVX512_FLAG}")
+    BitPackDecoderBenchmarknew.cpp BitPackDecoderBenchmark.cpp
+    BitPackDecoderTest.cpp PROPERTIES COMPILE_FLAGS "${VELOX_AVX512_FLAG}")
   add_executable(velox_dwio_common_bitpack_decoder_benchmarks
                  BitPackDecoderBenchmarknew.cpp)
   target_link_libraries(velox_dwio_common_bitpack_decoder_benchmarks
                         velox_dwio_common ${FOLLY} ${FOLLY_BENCHMARK})
-
-  add_executable(velox_dwio_common_bitpack_decoder_tests BitPackDecoderTest.cpp)
-  target_link_libraries(
-    velox_dwio_common_bitpack_decoder_tests
-    velox_dwio_common
-    velox_dwio_common_test_utils
-    ${TEST_LINK_LIBS}
-    ${gflags_LIBRARIES}
-    gtest
-    gtest_main
-    gmock
-    glog::glog
-    ${FOLLY}
-    ${FOLLY_BENCHMARK})
 endif()
 
 add_executable(
   velox_dwio_common_test
   BitConcatenationTest.cpp
+  BitPackDecoderTest.cpp
   ChainedBufferTests.cpp
   DataBufferTests.cpp
   DecoderUtilTest.cpp
   LocalFileSinkTest.cpp
   LoggedExceptionTest.cpp
   RangeTests.cpp
+  ReadFileInputStreamTests.cpp
   RetryTests.cpp
   TestBufferedInput.cpp
   TestColumnSelector.cpp
@@ -57,38 +45,41 @@ target_link_libraries(
   velox_dwio_common_test_utils
   velox_temp_path
   Boost::regex
-  ${VELOX_LINK_LIBS}
-  ${FOLLY_WITH_DEPENDENCIES}
+  velox_link_libs
+  Folly::folly
   ${TEST_LINK_LIBS}
-  ${gflags_LIBRARIES}
+  gflags::gflags
   gtest
   gtest_main
   gmock
   glog::glog
-  ${FMT})
+  fmt::fmt)
 
 add_executable(velox_dwio_common_data_buffer_benchmark DataBufferBenchmark.cpp)
 
 target_link_libraries(
   velox_dwio_common_data_buffer_benchmark velox_dwio_common velox_memory
-  velox_dwio_common_exception ${FOLLY} ${FOLLY_BENCHMARK})
+  velox_dwio_common_exception Folly::folly ${FOLLY_BENCHMARK})
 
 add_executable(velox_dwio_common_int_decoder_benchmark IntDecoderBenchmark.cpp)
 target_link_libraries(
   velox_dwio_common_int_decoder_benchmark velox_dwio_common_exception
-  velox_exception velox_dwio_dwrf_common ${FOLLY} ${FOLLY_BENCHMARK})
+  velox_exception velox_dwio_dwrf_common Folly::folly ${FOLLY_BENCHMARK})
 
 add_library(velox_e2e_filter_test_base E2EFilterTestBase.cpp)
 
 target_link_libraries(
   velox_e2e_filter_test_base
-  ${VELOX_LINK_LIBS}
-  ${FOLLY_WITH_DEPENDENCIES}
-  ${FMT}
-  ${LZ4}
-  ${LZO}
-  ${ZSTD}
-  ${ZLIB_LIBRARIES}
+  velox_functions_prestosql
+  velox_parse_parser
+  velox_vector_test_lib
+  velox_link_libs
+  Folly::folly
+  fmt::fmt
+  lz4::lz4
+  lzo2::lzo2
+  zstd::zstd
+  ZLIB::ZLIB
   ${TEST_LINK_LIBS})
 
 if(VELOX_ENABLE_ARROW)
@@ -96,5 +87,5 @@ if(VELOX_ENABLE_ARROW)
                  BitPackDecoderBenchmark.cpp)
   target_link_libraries(
     velox_dwio_common_bitpack_decoder_benchmark velox_dwio_common arrow duckdb
-    ${FOLLY} ${FOLLY_BENCHMARK})
+    Folly::folly ${FOLLY_BENCHMARK})
 endif()

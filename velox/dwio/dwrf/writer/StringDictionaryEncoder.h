@@ -104,7 +104,7 @@ class StringDictionaryEncoder {
             17,
             folly::transparent<DictStringIdHash>(*this),
             folly::transparent<DictStringIdEquality>(*this),
-            memory::Allocator<detail::DictStringId>{generalPool}},
+            memory::StlAllocator<detail::DictStringId>{generalPool}},
         keyOffsets_{dictionaryDataPool},
         counts_{generalPool},
         firstSeenStrideIndex_{generalPool},
@@ -198,7 +198,7 @@ class StringDictionaryEncoder {
       detail::DictStringId,
       folly::transparent<DictStringIdHash>,
       folly::transparent<DictStringIdEquality>,
-      memory::Allocator<detail::DictStringId>>
+      memory::StlAllocator<detail::DictStringId>>
       keyIndex_;
   // key index -> starting offset of key.
   dwio::common::DataBuffer<uint32_t> keyOffsets_;
@@ -209,7 +209,7 @@ class StringDictionaryEncoder {
   // key index -> cached hash
   dwio::common::DataBuffer<uint32_t> hash_;
 
-  friend class DictStringIdHash;
+  friend struct DictStringIdHash;
 };
 
 FOLLY_ALWAYS_INLINE bool DictStringIdEquality::operator()(

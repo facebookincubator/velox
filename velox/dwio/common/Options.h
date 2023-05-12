@@ -19,17 +19,13 @@
 #include <limits>
 #include <unordered_set>
 
+#include <folly/Executor.h>
 #include "velox/common/memory/Memory.h"
-#include "velox/dwio/common/BufferedInput.h"
 #include "velox/dwio/common/ColumnSelector.h"
 #include "velox/dwio/common/ErrorTolerance.h"
 #include "velox/dwio/common/InputStream.h"
 #include "velox/dwio/common/ScanSpec.h"
 #include "velox/dwio/common/encryption/Encryption.h"
-
-namespace facebook::velox::dwio::common {
-class ColumnReaderFactory;
-} // namespace facebook::velox::dwio::common
 
 namespace facebook {
 namespace velox {
@@ -96,6 +92,7 @@ class RowReaderOptions {
   ErrorTolerance errorTolerance_;
   std::shared_ptr<ColumnSelector> selector_;
   std::shared_ptr<velox::common::ScanSpec> scanSpec_ = nullptr;
+  std::shared_ptr<velox::common::MetadataFilter> metadataFilter_;
   // Node id for map column to a list of keys to be projected as a struct.
   std::unordered_map<uint32_t, std::vector<std::string>> flatmapNodeIdAsStruct_;
   // Optional executors to enable internal reader parallelism.
@@ -104,20 +101,15 @@ class RowReaderOptions {
   // operations.
   std::shared_ptr<folly::Executor> decodingExecutor_;
   std::shared_ptr<folly::Executor> ioExecutor_;
+  bool appendRowNumberColumn_ = false;
+  // Function to populate metrics related to feature projection stats
+  // in Koski. This gets fired in FlatMapColumnReader.
+  // This is a bit of a hack as there is (by design) no good way
+  // To propogate information from column reader to Koski
+  std::function<void(uint64_t numTotalKeys, uint64_t numSelectedKeys)>
+      keySelectionCallback_;
 
  public:
-  RowReaderOptions(const RowReaderOptions& other) {
-    dataStart = other.dataStart;
-    dataLength = other.dataLength;
-    preloadStripe = other.preloadStripe;
-    projectSelectedType = other.projectSelectedType;
-    errorTolerance_ = other.errorTolerance_;
-    selector_ = other.selector_;
-    scanSpec_ = other.scanSpec_;
-    returnFlatVector_ = other.returnFlatVector_;
-    flatmapNodeIdAsStruct_ = other.flatmapNodeIdAsStruct_;
-  }
-
   RowReaderOptions() noexcept
       : dataStart(0),
         dataLength(std::numeric_limits<uint64_t>::max()),
@@ -234,12 +226,22 @@ class RowReaderOptions {
     return errorTolerance_;
   }
 
-  const std::shared_ptr<velox::common::ScanSpec> getScanSpec() const {
+  const std::shared_ptr<velox::common::ScanSpec>& getScanSpec() const {
     return scanSpec_;
   }
 
   void setScanSpec(std::shared_ptr<velox::common::ScanSpec> scanSpec) {
-    scanSpec_ = scanSpec;
+    scanSpec_ = std::move(scanSpec);
+  }
+
+  const std::shared_ptr<velox::common::MetadataFilter>& getMetadataFilter()
+      const {
+    return metadataFilter_;
+  }
+
+  void setMetadataFilter(
+      std::shared_ptr<velox::common::MetadataFilter> metadataFilter) {
+    metadataFilter_ = std::move(metadataFilter);
   }
 
   void setFlatmapNodeIdsAsStruct(
@@ -265,6 +267,31 @@ class RowReaderOptions {
 
   void setIOExecutor(std::shared_ptr<folly::Executor> executor) {
     ioExecutor_ = executor;
+  }
+
+  /*
+   * Set to true, if you want to add a new column to the results containing the
+   * row numbers.  These row numbers are relative to the beginning of file (0 as
+   * first row) and does not affected by filtering or deletion during the read
+   * (it always counts all rows in the file).
+   */
+  void setAppendRowNumberColumn(bool value) {
+    appendRowNumberColumn_ = value;
+  }
+
+  bool getAppendRowNumberColumn() const {
+    return appendRowNumberColumn_;
+  }
+
+  void setKeySelectionCallback(
+      std::function<void(uint64_t totalKeys, uint64_t selectedKeys)>
+          keySelectionCallback) {
+    keySelectionCallback_ = std::move(keySelectionCallback);
+  }
+
+  const std::function<void(uint64_t totalKeys, uint64_t selectedKeys)>
+  getKeySelectionCallback() const {
+    return keySelectionCallback_;
   }
 
   const std::shared_ptr<folly::Executor>& getDecodingExecutor() const {
@@ -323,17 +350,18 @@ class ReaderOptions {
   int32_t loadQuantum_{kDefaultLoadQuantum};
   int32_t maxCoalesceDistance_{kDefaultCoalesceDistance};
   SerDeOptions serDeOptions;
-  uint64_t fileNum;
   std::shared_ptr<encryption::DecrypterFactory> decrypterFactory_;
-  std::shared_ptr<BufferedInputFactory> bufferedInputFactory_;
+  uint64_t directorySizeGuess{kDefaultDirectorySizeGuess};
+  uint64_t filePreloadThreshold{kDefaultFilePreloadThreshold};
 
  public:
   static constexpr int32_t kDefaultLoadQuantum = 8 << 20; // 8MB
   static constexpr int32_t kDefaultCoalesceDistance = 512 << 10; // 512K
+  static constexpr uint64_t kDefaultDirectorySizeGuess = 1024 * 1024; // 1MB
+  static constexpr uint64_t kDefaultFilePreloadThreshold =
+      1024 * 1024 * 8; // 8MB
 
-  ReaderOptions(
-      velox::memory::MemoryPool* pool =
-          &facebook::velox::memory::getProcessDefaultMemoryManager().getRoot())
+  ReaderOptions(velox::memory::MemoryPool* pool)
       : tailLocation(std::numeric_limits<uint64_t>::max()),
         memoryPool(pool),
         fileFormat(FileFormat::UNKNOWN),
@@ -355,9 +383,9 @@ class ReaderOptions {
     autoPreloadLength = other.autoPreloadLength;
     prefetchMode = other.prefetchMode;
     serDeOptions = other.serDeOptions;
-    fileNum = other.fileNum;
     decrypterFactory_ = other.decrypterFactory_;
-    bufferedInputFactory_ = other.bufferedInputFactory_;
+    directorySizeGuess = other.directorySizeGuess;
+    filePreloadThreshold = other.filePreloadThreshold;
     return *this;
   }
 
@@ -379,11 +407,6 @@ class ReaderOptions {
    */
   ReaderOptions& setFileFormat(FileFormat format) {
     fileFormat = format;
-    return *this;
-  }
-
-  ReaderOptions& setFileNum(uint64_t num) {
-    fileNum = num;
     return *this;
   }
 
@@ -456,9 +479,13 @@ class ReaderOptions {
     return *this;
   }
 
-  ReaderOptions& setBufferedInputFactory(
-      std::shared_ptr<BufferedInputFactory> factory) {
-    bufferedInputFactory_ = factory;
+  ReaderOptions& setDirectorySizeGuess(uint64_t size) {
+    directorySizeGuess = size;
+    return *this;
+  }
+
+  ReaderOptions& setFilePreloadThreshold(uint64_t threshold) {
+    filePreloadThreshold = threshold;
     return *this;
   }
 
@@ -475,10 +502,6 @@ class ReaderOptions {
    */
   velox::memory::MemoryPool& getMemoryPool() const {
     return *memoryPool;
-  }
-
-  uint64_t getFileNum() const {
-    return fileNum;
   }
 
   /**
@@ -524,8 +547,12 @@ class ReaderOptions {
     return decrypterFactory_;
   }
 
-  std::shared_ptr<BufferedInputFactory> getBufferedInputFactory() const {
-    return bufferedInputFactory_;
+  uint64_t getDirectorySizeGuess() const {
+    return directorySizeGuess;
+  }
+
+  uint64_t getFilePreloadThreshold() const {
+    return filePreloadThreshold;
   }
 };
 

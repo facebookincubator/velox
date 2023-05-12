@@ -30,6 +30,19 @@ using namespace facebook::velox;
 using namespace facebook::velox::dwio::parquet;
 using namespace facebook::velox::parquet::duckdb_reader;
 
+namespace {
+auto defaultPool = memory::addDefaultLeafMemoryPool();
+
+std::unique_ptr<ParquetReader> createFileInput(
+    const std::string& path,
+    const ReaderOptions& opts) {
+  return std::make_unique<ParquetReader>(
+      std::make_shared<ReadFileInputStream>(
+          std::make_shared<LocalReadFile>(path)),
+      opts);
+}
+} // namespace
+
 class ParquetReaderTest : public ParquetReaderTestBase {
  public:
   void assertReadWithFilters(
@@ -39,10 +52,8 @@ class ParquetReaderTest : public ParquetReaderTestBase {
       const RowVectorPtr& expected) {
     const auto filePath(getExampleFilePath(fileName));
 
-    ReaderOptions readerOptions;
-    auto reader = std::make_unique<parquet::duckdb_reader::ParquetReader>(
-        std::make_unique<FileInputStream>(filePath), readerOptions);
-
+    ReaderOptions readerOptions{defaultPool.get()};
+    auto reader = createFileInput(filePath, readerOptions);
     assertReadWithReaderAndFilters(
         std::move(reader), fileName, fileSchema, std::move(filters), expected);
   }
@@ -62,13 +73,12 @@ TEST_F(ParquetReaderTest, readSampleFull) {
   //   b: [1.0..20.0]
   const std::string sample(getExampleFilePath("sample.parquet"));
 
-  ReaderOptions readerOptions;
-  ParquetReader reader(
-      std::make_unique<FileInputStream>(sample), readerOptions);
+  ReaderOptions readerOptions{defaultPool.get()};
+  auto reader = createFileInput(sample, readerOptions);
 
-  EXPECT_EQ(reader.numberOfRows(), 20ULL);
+  EXPECT_EQ(reader->numberOfRows(), 20ULL);
 
-  auto type = reader.typeWithId();
+  auto type = reader->typeWithId();
   EXPECT_EQ(type->size(), 2ULL);
   auto col0 = type->childAt(0);
   EXPECT_EQ(col0->type->kind(), TypeKind::BIGINT);
@@ -80,7 +90,7 @@ TEST_F(ParquetReaderTest, readSampleFull) {
   auto rowReaderOpts = getReaderOpts(sampleSchema());
   auto scanSpec = makeScanSpec(sampleSchema());
   rowReaderOpts.setScanSpec(scanSpec);
-  auto rowReader = reader.createRowReader(rowReaderOpts);
+  auto rowReader = reader->createRowReader(rowReaderOpts);
   auto expected = vectorMaker_->rowVector(
       {rangeVector<int64_t>(20, 1), rangeVector<double>(20, 1)});
   assertReadExpected(*rowReader, expected);
@@ -89,15 +99,14 @@ TEST_F(ParquetReaderTest, readSampleFull) {
 TEST_F(ParquetReaderTest, readSampleRange1) {
   const std::string sample(getExampleFilePath("sample.parquet"));
 
-  ReaderOptions readerOptions;
-  ParquetReader reader(
-      std::make_unique<FileInputStream>(sample), readerOptions);
+  ReaderOptions readerOptions{defaultPool.get()};
+  auto reader = createFileInput(sample, readerOptions);
 
   auto rowReaderOpts = getReaderOpts(sampleSchema());
   auto scanSpec = makeScanSpec(sampleSchema());
   rowReaderOpts.setScanSpec(scanSpec);
   rowReaderOpts.range(0, 200);
-  auto rowReader = reader.createRowReader(rowReaderOpts);
+  auto rowReader = reader->createRowReader(rowReaderOpts);
   auto expected = vectorMaker_->rowVector(
       {rangeVector<int64_t>(10, 1), rangeVector<double>(10, 1)});
   assertReadExpected(*rowReader, expected);
@@ -106,15 +115,14 @@ TEST_F(ParquetReaderTest, readSampleRange1) {
 TEST_F(ParquetReaderTest, readSampleRange2) {
   const std::string sample(getExampleFilePath("sample.parquet"));
 
-  ReaderOptions readerOptions;
-  ParquetReader reader(
-      std::make_unique<FileInputStream>(sample), readerOptions);
+  ReaderOptions readerOptions{defaultPool.get()};
+  auto reader = createFileInput(sample, readerOptions);
 
   auto rowReaderOpts = getReaderOpts(sampleSchema());
   auto scanSpec = makeScanSpec(sampleSchema());
   rowReaderOpts.setScanSpec(scanSpec);
   rowReaderOpts.range(200, 500);
-  auto rowReader = reader.createRowReader(rowReaderOpts);
+  auto rowReader = reader->createRowReader(rowReaderOpts);
   auto expected = vectorMaker_->rowVector(
       {rangeVector<int64_t>(10, 11), rangeVector<double>(10, 11)});
   assertReadExpected(*rowReader, expected);
@@ -123,15 +131,14 @@ TEST_F(ParquetReaderTest, readSampleRange2) {
 TEST_F(ParquetReaderTest, readSampleEmptyRange) {
   const std::string sample(getExampleFilePath("sample.parquet"));
 
-  ReaderOptions readerOptions;
-  ParquetReader reader(
-      std::make_unique<FileInputStream>(sample), readerOptions);
+  ReaderOptions readerOptions{defaultPool.get()};
+  auto reader = createFileInput(sample, readerOptions);
 
   auto rowReaderOpts = getReaderOpts(sampleSchema());
   auto scanSpec = makeScanSpec(sampleSchema());
   rowReaderOpts.setScanSpec(scanSpec);
   rowReaderOpts.range(300, 10);
-  auto rowReader = reader.createRowReader(rowReaderOpts);
+  auto rowReader = reader->createRowReader(rowReaderOpts);
 
   VectorPtr result;
   EXPECT_EQ(rowReader->next(1000, result), 0);
@@ -184,13 +191,12 @@ TEST_F(ParquetReaderTest, dateRead) {
   //   date: [1969-12-27 .. 1970-01-20]
   const std::string sample(getExampleFilePath("date.parquet"));
 
-  ReaderOptions readerOptions;
-  ParquetReader reader(
-      std::make_unique<FileInputStream>(sample), readerOptions);
+  ReaderOptions readerOptions{defaultPool.get()};
+  auto reader = createFileInput(sample, readerOptions);
 
-  EXPECT_EQ(reader.numberOfRows(), 25ULL);
+  EXPECT_EQ(reader->numberOfRows(), 25ULL);
 
-  auto type = reader.typeWithId();
+  auto type = reader->typeWithId();
   EXPECT_EQ(type->size(), 1ULL);
   auto col0 = type->childAt(0);
   EXPECT_EQ(col0->type->kind(), TypeKind::DATE);
@@ -198,7 +204,7 @@ TEST_F(ParquetReaderTest, dateRead) {
   auto rowReaderOpts = getReaderOpts(dateSchema());
   auto scanSpec = makeScanSpec(dateSchema());
   rowReaderOpts.setScanSpec(scanSpec);
-  auto rowReader = reader.createRowReader(rowReaderOpts);
+  auto rowReader = reader->createRowReader(rowReaderOpts);
 
   auto expected = vectorMaker_->rowVector({rangeVector<Date>(25, -5)});
   assertReadExpected(*rowReader, expected);
@@ -223,13 +229,12 @@ TEST_F(ParquetReaderTest, intRead) {
   //   bigint: [1000 .. 1009]
   const std::string sample(getExampleFilePath("int.parquet"));
 
-  ReaderOptions readerOptions;
-  ParquetReader reader(
-      std::make_unique<FileInputStream>(sample), readerOptions);
+  ReaderOptions readerOptions{defaultPool.get()};
+  auto reader = createFileInput(sample, readerOptions);
 
-  EXPECT_EQ(reader.numberOfRows(), 10ULL);
+  EXPECT_EQ(reader->numberOfRows(), 10ULL);
 
-  auto type = reader.typeWithId();
+  auto type = reader->typeWithId();
   EXPECT_EQ(type->size(), 2ULL);
   auto col0 = type->childAt(0);
   EXPECT_EQ(col0->type->kind(), TypeKind::INTEGER);
@@ -239,7 +244,7 @@ TEST_F(ParquetReaderTest, intRead) {
   auto rowReaderOpts = getReaderOpts(intSchema());
   auto scanSpec = makeScanSpec(intSchema());
   rowReaderOpts.setScanSpec(scanSpec);
-  auto rowReader = reader.createRowReader(rowReaderOpts);
+  auto rowReader = reader->createRowReader(rowReaderOpts);
 
   auto expected = vectorMaker_->rowVector(
       {rangeVector<int32_t>(10, 100), rangeVector<int64_t>(10, 1000)});

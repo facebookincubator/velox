@@ -22,6 +22,7 @@
 #include <sstream>
 #include "velox/common/base/Exceptions.h"
 #include "velox/core/SimpleFunctionMetadata.h"
+#include "velox/expression/FunctionCallToSpecialForm.h"
 #include "velox/expression/FunctionSignature.h"
 #include "velox/expression/SignatureBinder.h"
 #include "velox/expression/SimpleFunctionRegistry.h"
@@ -45,7 +46,7 @@ exec::TypeSignature typeToTypeSignature(std::shared_ptr<const Type> type) {
 }
 
 void populateSimpleFunctionSignatures(FunctionSignatureMap& map) {
-  const auto& simpleFunctions = exec::SimpleFunctions();
+  const auto& simpleFunctions = exec::simpleFunctions();
   for (const auto& functionName : simpleFunctions.getFunctionNames()) {
     map[functionName] = simpleFunctions.getFunctionSignatures(functionName);
   }
@@ -76,6 +77,12 @@ FunctionSignatureMap getFunctionSignatures() {
   return result;
 }
 
+void clearFunctionRegistry() {
+  exec::mutableSimpleFunctions().clearRegistry();
+  exec::vectorFunctionFactories().withWLock(
+      [](auto& functionMap) { functionMap.clear(); });
+}
+
 std::shared_ptr<const Type> resolveFunction(
     const std::string& functionName,
     const std::vector<TypePtr>& argTypes) {
@@ -88,14 +95,40 @@ std::shared_ptr<const Type> resolveFunction(
   return resolveVectorFunction(functionName, argTypes);
 }
 
+std::shared_ptr<const Type> resolveFunctionOrCallableSpecialForm(
+    const std::string& functionName,
+    const std::vector<TypePtr>& argTypes) {
+  if (auto returnType = resolveCallableSpecialForm(functionName, argTypes)) {
+    return returnType;
+  }
+
+  return resolveFunction(functionName, argTypes);
+}
+
+std::shared_ptr<const Type> resolveCallableSpecialForm(
+    const std::string& functionName,
+    const std::vector<TypePtr>& argTypes) {
+  // TODO Replace with struct_pack
+  if (functionName == "row_constructor") {
+    auto numInput = argTypes.size();
+    std::vector<TypePtr> types(numInput);
+    std::vector<std::string> names(numInput);
+    for (auto i = 0; i < numInput; i++) {
+      types[i] = argTypes[i];
+      names[i] = fmt::format("c{}", i + 1);
+    }
+    return ROW(std::move(names), std::move(types));
+  }
+
+  return exec::resolveTypeForSpecialForm(functionName, argTypes);
+}
+
 std::shared_ptr<const Type> resolveSimpleFunction(
     const std::string& functionName,
     const std::vector<TypePtr>& argTypes) {
-  auto resolvedFunction =
-      exec::SimpleFunctions().resolveFunction(functionName, argTypes);
-
-  if (resolvedFunction) {
-    return resolvedFunction->getMetadata().returnType();
+  if (auto resolvedFunction =
+          exec::simpleFunctions().resolveFunction(functionName, argTypes)) {
+    return resolvedFunction->type();
   }
 
   return nullptr;

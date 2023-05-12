@@ -76,43 +76,38 @@ FooterStatisticsImpl::FooterStatisticsImpl(
 
 ReaderBase::ReaderBase(
     MemoryPool& pool,
-    std::unique_ptr<InputStream> stream,
+    std::unique_ptr<dwio::common::BufferedInput> input,
     FileFormat fileFormat)
     : ReaderBase(
           pool,
-          std::move(stream),
+          std::move(input),
           nullptr,
-          nullptr,
-          kDefaultFileNum,
+          dwio::common::ReaderOptions::kDefaultDirectorySizeGuess,
+          dwio::common::ReaderOptions::kDefaultFilePreloadThreshold,
           fileFormat) {}
 
 ReaderBase::ReaderBase(
     MemoryPool& pool,
-    std::unique_ptr<InputStream> stream,
+    std::unique_ptr<dwio::common::BufferedInput> input,
     std::shared_ptr<DecrypterFactory> decryptorFactory,
-    std::shared_ptr<dwio::common::BufferedInputFactory> bufferedInputFactory,
-    uint64_t fileNum,
+    uint64_t directorySizeGuess,
+    uint64_t filePreloadThreshold,
     FileFormat fileFormat)
     : pool_{pool},
-      stream_{std::move(stream)},
       arena_(std::make_unique<google::protobuf::Arena>()),
-      fileNum_(fileNum),
       decryptorFactory_(decryptorFactory),
-      bufferedInputFactory_(
-          bufferedInputFactory
-              ? bufferedInputFactory
-              : dwio::common::BufferedInputFactory::baseFactoryShared()) {
-  input_ = bufferedInputFactory_->create(*stream_, pool, fileNum);
-
+      directorySizeGuess_(directorySizeGuess),
+      filePreloadThreshold_(filePreloadThreshold),
+      input_(std::move(input)) {
   // read last bytes into buffer to get PostScript
   // If file is small, load the entire file.
   // TODO: make a config
-  fileLength_ = stream_->getLength();
+  fileLength_ = input_->getReadFile()->size();
   DWIO_ENSURE(fileLength_ > 0, "ORC file is empty");
 
-  auto preloadFile = fileLength_ <= FILE_PRELOAD_THRESHOLD;
+  auto preloadFile = fileLength_ <= filePreloadThreshold_;
   uint64_t readSize =
-      preloadFile ? fileLength_ : std::min(fileLength_, DIRECTORY_SIZE_GUESS);
+      preloadFile ? fileLength_ : std::min(fileLength_, directorySizeGuess_);
   DWIO_ENSURE_GE(readSize, 4, "File size too small");
 
   input_->enqueue({fileLength_ - readSize, readSize});

@@ -21,9 +21,8 @@ elseif(${VELOX_BUILD_TEST_UTILS})
   add_subdirectory(tests/utils)
 endif()
 
-set_source_files_properties(
-    BitPackDecoder.cpp
-    PROPERTIES COMPILE_FLAGS "${VELOX_AVX512_FLAG}")
+set_source_files_properties(BitPackDecoder.cpp
+                            PROPERTIES COMPILE_FLAGS "${VELOX_AVX512_FLAG}")
 
 add_library(
   velox_dwio_common
@@ -42,16 +41,18 @@ add_library(
   InputStream.cpp
   IntDecoder.cpp
   IoStatistics.cpp
-  MemoryInputStream.cpp
+  MetadataFilter.cpp
   Options.cpp
   Range.cpp
   ReaderFactory.cpp
   ScanSpec.cpp
   ColumnLoader.cpp
+  SelectiveByteRleColumnReader.cpp
   SelectiveColumnReader.cpp
   SelectiveRepeatedColumnReader.cpp
   SelectiveStructColumnReader.cpp
   SeekableInputStream.cpp
+  TypeUtils.cpp
   TypeWithId.cpp)
 
 target_link_libraries(
@@ -62,7 +63,8 @@ target_link_libraries(
   velox_dwio_common_encryption
   velox_dwio_common_exception
   velox_exception
+  velox_expression
   velox_memory
   Boost::regex
-  ${FOLLY_WITH_DEPENDENCIES}
+  Folly::folly
   glog::glog)

@@ -91,16 +91,15 @@ std::vector<KeyNode<T>> getKeyNodes(
   auto& stripe = params.stripeStreams();
   auto keyPredicate = prepareKeyPredicate<T>(requestedType, stripe);
 
-  std::shared_ptr<common::ScanSpec> elementsSpec;
+  std::shared_ptr<common::ScanSpec> keysSpec;
+  std::shared_ptr<common::ScanSpec> valuesSpec;
   if (!asStruct) {
-    if (auto keys = scanSpec.childByName("keys")) {
-      scanSpec.removeChild(keys);
+    if (auto keys = scanSpec.childByName(common::ScanSpec::kMapKeysFieldName)) {
+      keysSpec = scanSpec.removeChild(keys);
     }
-    if (auto elements = scanSpec.childByName("elements")) {
-      elementsSpec = scanSpec.removeChild(elements);
-      if (!requestedValueType->type->isRow()) {
-        elementsSpec.reset();
-      }
+    if (auto values =
+            scanSpec.childByName(common::ScanSpec::kMapValuesFieldName)) {
+      valuesSpec = scanSpec.removeChild(values);
     }
   }
 
@@ -125,6 +124,7 @@ std::vector<KeyNode<T>> getKeyNodes(
         if (sequence == 0 || processed.count(sequence) > 0) {
           return;
         }
+        processed.insert(sequence);
         EncodingKey seqEk(dataValueType->id, sequence);
         const auto& keyInfo = stripe.getEncoding(seqEk).key();
         auto key = extractKey<T>(keyInfo);
@@ -133,24 +133,23 @@ std::vector<KeyNode<T>> getKeyNodes(
           return;
         }
         common::ScanSpec* childSpec;
-        if (auto it = childSpecs.find(key); it != childSpecs.end()) {
+        if (auto it = childSpecs.find(key);
+            it != childSpecs.end() && !it->second->isConstant()) {
           childSpec = it->second;
         } else if (asStruct) {
           // Column not selected in 'scanSpec', skipping it.
           return;
         } else {
+          if (keysSpec && keysSpec->filter() &&
+              !common::applyFilter(*keysSpec->filter(), key.get())) {
+            return; // Subfield pruning
+          }
           childSpec =
               scanSpec.getOrCreateChild(common::Subfield(toString(key.get())));
           childSpec->setProjectOut(true);
           childSpec->setExtractValues(true);
-          if (elementsSpec) {
-            for (auto& elementsChild : elementsSpec->children()) {
-              auto c = childSpec->getOrCreateChild(
-                  common::Subfield(elementsChild->fieldName()));
-              c->setProjectOut(true);
-              c->setExtractValues(true);
-              c->setChannel(elementsChild->channel());
-            }
+          if (valuesSpec) {
+            *childSpec = *valuesSpec;
           }
           childSpecs[key] = childSpec;
         }
@@ -159,12 +158,15 @@ std::vector<KeyNode<T>> getKeyNodes(
         VELOX_CHECK(inMap, "In map stream is required");
         auto inMapDecoder = createBooleanRleDecoder(std::move(inMap), seqEk);
         DwrfParams childParams(
-            stripe, FlatMapContext(sequence, inMapDecoder.get()));
+            stripe,
+            FlatMapContext{
+                .sequence = sequence,
+                .inMapDecoder = inMapDecoder.get(),
+                .keySelectionCallback = nullptr});
         auto reader = SelectiveDwrfReader::build(
             requestedValueType, dataValueType, childParams, *childSpec);
         keyNodes.emplace_back(
             key, sequence, std::move(reader), std::move(inMapDecoder));
-        processed.insert(sequence);
       });
 
   VLOG(1) << "[Flat-Map] Initialized a flat-map column reader for node "
@@ -246,6 +248,7 @@ class SelectiveFlatMapReader : public SelectiveStructColumnReaderBase {
       override {
     numReads_ = scanSpec_->newRead();
     prepareRead<char>(offset, rows, incomingNulls);
+    VELOX_DCHECK(!hasMutation());
     auto* mapNulls =
         nullsInReadRange_ ? nullsInReadRange_->as<uint64_t>() : nullptr;
     for (auto* reader : children_) {
@@ -335,7 +338,9 @@ class SelectiveFlatMapReader : public SelectiveStructColumnReaderBase {
       if constexpr (std::is_same_v<T, StringView>) {
         strKey = keyNodes_[k].key.get();
         if (!strKey.isInline()) {
-          strKey = {&rawStrKeyBuffer[strKeySize], strKey.size()};
+          strKey = {
+              &rawStrKeyBuffer[strKeySize],
+              static_cast<int32_t>(strKey.size())};
           strKeySize += strKey.size();
         }
       }

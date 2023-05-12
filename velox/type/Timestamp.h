@@ -15,13 +15,14 @@
  */
 #pragma once
 
-#include "velox/type/StringView.h"
-
 #include <iomanip>
 #include <sstream>
 #include <string>
 
 #include <folly/dynamic.h>
+
+#include "velox/common/base/CheckedArithmetic.h"
+#include "velox/type/StringView.h"
 
 namespace date {
 class time_zone;
@@ -31,9 +32,13 @@ namespace facebook::velox {
 
 struct Timestamp {
  public:
+  enum class Precision : int { kMilliseconds = 3, kNanoseconds = 9 };
   constexpr Timestamp() : seconds_(0), nanos_(0) {}
   constexpr Timestamp(int64_t seconds, uint64_t nanos)
       : seconds_(seconds), nanos_(nanos) {}
+
+  // Returns the current unix timestamp (ms precision).
+  static Timestamp now();
 
   int64_t getSeconds() const {
     return seconds_;
@@ -45,15 +50,21 @@ struct Timestamp {
 
   int64_t toNanos() const {
     // int64 can store around 292 years in nanos ~ till 2262-04-12
-    return seconds_ * 1'000'000'000 + nanos_;
+    // The addition cannot overflow because the product will be promoted to
+    // uint64_t first and its value is at most UINT64_MAX / 2.
+    return checkedMultiply(seconds_, (int64_t)1'000'000'000) + nanos_;
   }
 
   int64_t toMillis() const {
-    return seconds_ * 1'000 + nanos_ / 1'000'000;
+    // The addition cannot overflow because the product will be promoted to
+    // uint64_t first and its value is at most UINT64_MAX / 2.
+    return checkedMultiply(seconds_, (int64_t)1'000) + nanos_ / 1'000'000;
   }
 
   int64_t toMicros() const {
-    return seconds_ * 1'000'000 + nanos_ / 1'000;
+    // The addition cannot overflow because the product will be promoted to
+    // uint64_t first and its value is at most UINT64_MAX / 2.
+    return checkedMultiply(seconds_, (int64_t)1'000'000) + nanos_ / 1'000;
   }
 
   static Timestamp fromMillis(int64_t millis) {
@@ -136,7 +147,8 @@ struct Timestamp {
     return StringView("TODO: Implement");
   };
 
-  std::string toString() const {
+  std::string toString(
+      const Precision& precision = Precision::kNanoseconds) const {
     // mbasmanova: error: no matching function for call to 'gmtime_r'
     // mbasmanova: time_t is long not long long
     // struct tm tmValue;
@@ -153,11 +165,15 @@ struct Timestamp {
     // T - literal T
     // %T - equivalent to "%H:%M:%S" (the ISO 8601 time format)
     // so this return time in the format
-    // %Y-%m-%dT%H:%M:%S.nnnnnnnnn
+    // %Y-%m-%dT%H:%M:%S.nnnnnnnnn for nanoseconds precision, or
+    // %Y-%m-%dT%H:%M:%S.nnn for milliseconds precision
     // Note there is no Z suffix, which denotes UTC timestamp.
+    auto width = static_cast<int>(precision);
+    auto value =
+        precision == Precision::kMilliseconds ? nanos_ / 1'000'000 : nanos_;
     std::ostringstream oss;
     oss << std::put_time(bt, "%FT%T");
-    oss << '.' << std::setfill('0') << std::setw(9) << nanos_;
+    oss << '.' << std::setfill('0') << std::setw(width) << value;
 
     return oss.str();
   }
@@ -179,7 +195,7 @@ void parseTo(folly::StringPiece in, ::facebook::velox::Timestamp& out);
 
 template <typename T>
 void toAppend(const ::facebook::velox::Timestamp& value, T* result) {
-  // TODO Implement
+  result->append(value.toString());
 }
 
 } // namespace facebook::velox

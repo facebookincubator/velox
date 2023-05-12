@@ -77,7 +77,7 @@ class HashBuild final : public Operator {
 
   bool isFinished() override;
 
-  void close() override {}
+  void reclaim(uint64_t targetBytes) override;
 
  private:
   void setState(State state);
@@ -105,14 +105,6 @@ class HashBuild final : public Operator {
   // it will transition to 'kWaitForProbe' to wait for the next spill data to
   // process which will be set by the join probe side.
   void postHashBuildProcess();
-
-  // Checks if the spilling is allowed for this hash join. As for now, we don't
-  // allow spilling for null-aware anti-join with filter set. It requires to
-  // cross join the null-key probe rows with all the build-side rows for filter
-  // evaluation which is not supported under spilling.
-  bool isSpillAllowed() const {
-    return !isNullAwareAntiJoinWithFilter(joinNode_);
-  }
 
   bool spillEnabled() const {
     return spillConfig_.has_value();
@@ -239,14 +231,11 @@ class HashBuild final : public Operator {
 
   const core::JoinType joinType_;
 
-  // Holds the areas in RowContainer of 'table_'
-  memory::MappedMemory* const FOLLY_NONNULL mappedMemory_;
+  const bool nullAware_;
 
   const std::shared_ptr<HashJoinBridge> joinBridge_;
 
-  const std::optional<Spiller::Config> spillConfig_;
-
-  const std::shared_ptr<SpillOperatorGroup> spillGroup_;
+  std::shared_ptr<SpillOperatorGroup> spillGroup_;
 
   State state_{State::kRunning};
 
@@ -279,9 +268,9 @@ class HashBuild final : public Operator {
   // Set of active rows during addInput().
   SelectivityVector activeRows_;
 
-  // True if this is a build side of an anti join and has at least one entry
-  // with null join keys.
-  bool antiJoinHasNullKeys_{false};
+  // True if this is a build side of an anti or left semi project join and has
+  // at least one entry with null join keys.
+  bool joinHasNullKeys_{false};
 
   // Counts input batches and triggers spilling if folly hash of this % 100 <=
   // 'testSpillPct_';.

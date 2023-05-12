@@ -15,6 +15,7 @@
  */
 #include "velox/expression/Expr.h"
 #include "velox/expression/VectorFunction.h"
+#include "velox/functions/lib/CheckDuplicateKeys.h"
 
 namespace facebook::velox::functions {
 namespace {
@@ -39,11 +40,7 @@ class MapFunction : public exec::VectorFunction {
 
     static const char* kArrayLengthsMismatch =
         "Key and value arrays must be the same length";
-    static const char* kDuplicateKey =
-        "Duplicate map keys ({}) are not allowed";
     static const char* kNullKey = "map key cannot be null";
-
-    MapVectorPtr mapVector;
 
     // If both vectors have identity mapping, check if we can take the zero-copy
     // fast-path.
@@ -66,24 +63,108 @@ class MapFunction : public exec::VectorFunction {
         });
       }
 
-      // Check array lengths
-      context.applyToSelectedNoThrow(rows, [&](vector_size_t row) {
-        VELOX_USER_CHECK_EQ(
-            keysArray->sizeAt(row),
-            valuesArray->sizeAt(row),
-            "{}",
-            kArrayLengthsMismatch);
-      });
-
-      mapVector = std::make_shared<MapVector>(
+      auto mapVector = std::make_shared<MapVector>(
           context.pool(),
           outputType,
-          BufferPtr(nullptr),
+          nullptr,
           rows.end(),
           keysArray->offsets(),
           keysArray->sizes(),
           keysArray->elements(),
           valuesArray->elements());
+
+      if constexpr (!AllowDuplicateKeys) {
+        checkDuplicateKeys(mapVector, rows, context);
+      }
+      context.moveOrCopyResult(mapVector, rows, result);
+    } else if (decodedKeys->isConstantMapping()) {
+      // Constant keys.
+      auto keysIndex = decodedKeys->index(rows.begin());
+      auto valueIndices = decodedValues->indices();
+
+      auto keysArray = decodedKeys->base()->as<ArrayVector>();
+      auto valuesArray = decodedValues->base()->as<ArrayVector>();
+
+      // Verify there are no null keys and no duplicate keys.
+      auto numKeys = keysArray->sizeAt(keysIndex);
+      auto keysElements = keysArray->elements();
+      auto keysOffset = keysArray->offsetAt(keysIndex);
+
+      try {
+        if (keysElements->mayHaveNulls()) {
+          for (auto i = 0; i < numKeys; ++i) {
+            VELOX_USER_CHECK(!keysElements->isNullAt(keysOffset + i), kNullKey);
+          }
+        }
+
+        if constexpr (!AllowDuplicateKeys) {
+          checkDuplicateConstantKeys(numKeys, keysOffset, keysElements);
+        }
+      } catch (const std::exception&) {
+        context.setErrors(rows, std::current_exception());
+      }
+
+      // When context.throwOnError is false, some rows will be marked as
+      // 'failed'. These rows should not be processed further. 'remainingRows'
+      // will contain a subset of 'rows' that have passed all the checks (e.g.
+      // keys are not nulls and number of keys and values is the same).
+      SelectivityVector remainingRows = rows;
+
+      // Check array lengths
+      context.applyToSelectedNoThrow(remainingRows, [&](vector_size_t row) {
+        VELOX_USER_CHECK_EQ(
+            numKeys,
+            valuesArray->sizeAt(valueIndices[row]),
+            "{}",
+            kArrayLengthsMismatch);
+      });
+
+      context.deselectErrors(remainingRows);
+
+      vector_size_t totalElements = remainingRows.countSelected() * numKeys;
+
+      BufferPtr offsets = allocateOffsets(rows.end(), context.pool());
+      auto rawOffsets = offsets->asMutable<vector_size_t>();
+
+      BufferPtr sizes = allocateSizes(rows.end(), context.pool());
+      auto rawSizes = sizes->asMutable<vector_size_t>();
+
+      BufferPtr keysIndices = allocateIndices(totalElements, context.pool());
+      auto rawKeysIndices = keysIndices->asMutable<vector_size_t>();
+
+      BufferPtr valuesIndices = allocateIndices(totalElements, context.pool());
+      auto rawValuesIndices = valuesIndices->asMutable<vector_size_t>();
+
+      vector_size_t offset = 0;
+      remainingRows.applyToSelected([&](vector_size_t row) {
+        rawOffsets[row] = offset;
+        rawSizes[row] = numKeys;
+
+        auto valuesOffset = valuesArray->offsetAt(valueIndices[row]);
+        for (vector_size_t i = 0; i < numKeys; i++) {
+          rawKeysIndices[offset + i] = keysOffset + i;
+          rawValuesIndices[offset + i] = valuesOffset + i;
+        }
+
+        offset += numKeys;
+      });
+
+      auto wrappedKeys = BaseVector::wrapInDictionary(
+          nullptr, keysIndices, totalElements, keysArray->elements());
+
+      auto wrappedValues = BaseVector::wrapInDictionary(
+          nullptr, valuesIndices, totalElements, valuesArray->elements());
+
+      auto mapVector = std::make_shared<MapVector>(
+          context.pool(),
+          outputType,
+          nullptr,
+          rows.end(),
+          offsets,
+          sizes,
+          wrappedKeys,
+          wrappedValues);
+      context.moveOrCopyResult(mapVector, remainingRows, result);
     } else {
       auto keyIndices = decodedKeys->indices();
       auto valueIndices = decodedValues->indices();
@@ -91,20 +172,27 @@ class MapFunction : public exec::VectorFunction {
       auto keysArray = decodedKeys->base()->as<ArrayVector>();
       auto valuesArray = decodedValues->base()->as<ArrayVector>();
 
+      // When context.throwOnError is false, some rows will be marked as
+      // 'failed'. These rows should not be processed further. 'remainingRows'
+      // will contain a subset of 'rows' that have passed all the checks (e.g.
+      // keys are not nulls and number of keys and values is the same).
+      SelectivityVector remainingRows = rows;
+
       // Verify there are no null keys.
       auto keysElements = keysArray->elements();
       if (keysElements->mayHaveNulls()) {
-        context.applyToSelectedNoThrow(rows, [&](auto row) {
+        context.applyToSelectedNoThrow(remainingRows, [&](auto row) {
           auto offset = keysArray->offsetAt(keyIndices[row]);
           auto size = keysArray->sizeAt(keyIndices[row]);
           for (auto i = 0; i < size; ++i) {
             VELOX_USER_CHECK(!keysElements->isNullAt(offset + i), kNullKey);
           }
         });
+        context.deselectErrors(remainingRows);
       }
 
       // Check array lengths
-      context.applyToSelectedNoThrow(rows, [&](vector_size_t row) {
+      context.applyToSelectedNoThrow(remainingRows, [&](vector_size_t row) {
         VELOX_USER_CHECK_EQ(
             keysArray->sizeAt(keyIndices[row]),
             valuesArray->sizeAt(valueIndices[row]),
@@ -112,15 +200,17 @@ class MapFunction : public exec::VectorFunction {
             kArrayLengthsMismatch);
       });
 
+      context.deselectErrors(remainingRows);
+
       vector_size_t totalElements = 0;
-      rows.applyToSelected([&](auto row) {
+      remainingRows.applyToSelected([&](auto row) {
         totalElements += keysArray->sizeAt(keyIndices[row]);
       });
 
-      BufferPtr offsets = allocateOffsets(rows.size(), context.pool());
+      BufferPtr offsets = allocateOffsets(rows.end(), context.pool());
       auto rawOffsets = offsets->asMutable<vector_size_t>();
 
-      BufferPtr sizes = allocateSizes(rows.size(), context.pool());
+      BufferPtr sizes = allocateSizes(rows.end(), context.pool());
       auto rawSizes = sizes->asMutable<vector_size_t>();
 
       BufferPtr valuesIndices = allocateIndices(totalElements, context.pool());
@@ -130,7 +220,7 @@ class MapFunction : public exec::VectorFunction {
       auto rawKeysIndices = keysIndices->asMutable<vector_size_t>();
 
       vector_size_t offset = 0;
-      rows.applyToSelected([&](vector_size_t row) {
+      remainingRows.applyToSelected([&](vector_size_t row) {
         auto size = keysArray->sizeAt(keyIndices[row]);
         rawOffsets[row] = offset;
         rawSizes[row] = size;
@@ -146,55 +236,31 @@ class MapFunction : public exec::VectorFunction {
       });
 
       auto wrappedKeys = BaseVector::wrapInDictionary(
-          BufferPtr(nullptr),
-          keysIndices,
-          totalElements,
-          keysArray->elements());
+          nullptr, keysIndices, totalElements, keysArray->elements());
 
       auto wrappedValues = BaseVector::wrapInDictionary(
-          BufferPtr(nullptr),
-          valuesIndices,
-          totalElements,
-          valuesArray->elements());
+          nullptr, valuesIndices, totalElements, valuesArray->elements());
 
-      mapVector = std::make_shared<MapVector>(
+      auto mapVector = std::make_shared<MapVector>(
           context.pool(),
           outputType,
-          BufferPtr(nullptr),
+          nullptr,
           rows.end(),
           offsets,
           sizes,
           wrappedKeys,
           wrappedValues);
+      if constexpr (!AllowDuplicateKeys) {
+        checkDuplicateKeys(mapVector, remainingRows, context);
+      }
+      context.moveOrCopyResult(mapVector, remainingRows, result);
     }
-
-    if constexpr (!AllowDuplicateKeys) {
-      // Check for duplicate keys
-      MapVector::canonicalize(mapVector);
-
-      auto offsets = mapVector->rawOffsets();
-      auto sizes = mapVector->rawSizes();
-      auto mapKeys = mapVector->mapKeys();
-      context.applyToSelectedNoThrow(rows, [&](vector_size_t row) {
-        auto offset = offsets[row];
-        auto size = sizes[row];
-        for (vector_size_t i = 1; i < size; i++) {
-          if (mapKeys->equalValueAt(
-                  mapKeys.get(), offset + i, offset + i - 1)) {
-            auto duplicateKey = mapKeys->wrappedVector()->toString(
-                mapKeys->wrappedIndex(offset + i));
-            VELOX_USER_FAIL(kDuplicateKey, duplicateKey);
-          }
-        }
-      });
-    }
-    context.moveOrCopyResult(mapVector, rows, result);
   }
 
   static std::vector<std::shared_ptr<exec::FunctionSignature>> signatures() {
     // array(K), array(V) -> map(K,V)
     return {exec::FunctionSignatureBuilder()
-                .typeVariable("K")
+                .knownTypeVariable("K")
                 .typeVariable("V")
                 .returnType("map(K,V)")
                 .argumentType("array(K)")
@@ -203,21 +269,46 @@ class MapFunction : public exec::VectorFunction {
   }
 
  private:
-  // Can only take the fast path if:
-  // - the offsets in both keys and values vectors are the same.
-  // - if the number of elements is equal or larger than rows.end().
-  //
-  // (if element sizes are different keys and values the Map function will
-  // throw).
+  // Can only take the fast path if keys and values have an equal
+  // number of arrays and the offsets and sizes of these arrays match
+  // 1:1. The map must be well formed for all elements, also ones not
+  // in 'rows' in apply(). This is because canonicalize() will touch
+  // all elements in any case.
   bool canTakeFastPath(
       ArrayVector* keys,
       ArrayVector* values,
       const SelectivityVector& rows) const {
     VELOX_CHECK_GE(keys->size(), rows.end());
     VELOX_CHECK_GE(values->size(), rows.end());
-    return rows.testSelected([&](vector_size_t row) {
-      return keys->offsetAt(row) == values->offsetAt(row);
-    });
+    // the fast path takes a reference to the keys and values and the
+    // offsets and sizes from keys. This is valid only if the keys and
+    // values align for all rows for both size and offset. Anything
+    // else will break canonicalize().
+    if (keys->size() != values->size()) {
+      return false;
+    }
+    for (auto row = 0; row < keys->size(); ++row) {
+      if (keys->offsetAt(row) != values->offsetAt(row) ||
+          keys->sizeAt(row) != values->sizeAt(row)) {
+        return false;
+      }
+    }
+    return true;
+  }
+
+  void checkDuplicateConstantKeys(
+      vector_size_t numKeys,
+      vector_size_t keysOffset,
+      const VectorPtr& keysElements) const {
+    static const char* kDuplicateKey =
+        "Duplicate map keys ({}) are not allowed";
+
+    if (auto duplicateIndex = keysElements->findDuplicateValue(
+            keysOffset, numKeys, CompareFlags())) {
+      auto duplicateKey = keysElements->wrappedVector()->toString(
+          keysElements->wrappedIndex(duplicateIndex.value()));
+      VELOX_USER_FAIL(kDuplicateKey, duplicateKey);
+    }
   }
 };
 } // namespace

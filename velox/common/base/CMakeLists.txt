@@ -18,18 +18,20 @@ target_link_libraries(
   velox_flag_definitions
   velox_process
   glog::glog
-  ${FOLLY_WITH_DEPENDENCIES}
-  ${FMT}
-  ${GFLAGS_LIBRARIES})
+  Folly::folly
+  fmt::fmt
+  gflags::gflags)
 
 add_library(
   velox_common_base
   BitUtil.cpp
+  Counters.cpp
   Fs.cpp
   RandomUtil.cpp
   RawVector.cpp
   RuntimeMetrics.cpp
   SimdUtil.cpp
+  StatsReporter.cpp
   SuccinctPrinter.cpp)
 
 target_link_libraries(velox_common_base velox_exception velox_process xsimd)

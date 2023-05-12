@@ -106,12 +106,11 @@ class OperatorUtilsTest
     }
   }
 
-  std::unique_ptr<memory::MemoryPool> pool_{
-      memory::getDefaultScopedMemoryPool()};
+  std::shared_ptr<memory::MemoryPool> pool_{memory::addDefaultLeafMemoryPool()};
 };
 
 TEST_F(OperatorUtilsTest, wrapChildConstant) {
-  auto constant = BaseVector::createConstant(11, 1'000, pool_.get());
+  auto constant = makeConstant(11, 1'000);
 
   BufferPtr mapping = allocateIndices(1'234, pool_.get());
   auto rawMapping = mapping->asMutable<vector_size_t>();
@@ -176,10 +175,10 @@ TEST_F(OperatorUtilsTest, gatherCopy) {
 
   // Test with UNKNOWN type.
   int kNumRows = 100;
-  auto sourceVector = makeRowVector(
-      {makeFlatVector<int64_t>(kNumRows, [](auto row) { return row % 7; }),
-       BaseVector::createConstant(
-           variant(TypeKind::UNKNOWN), kNumRows, pool_.get())});
+  auto sourceVector = makeRowVector({
+      makeFlatVector<int64_t>(kNumRows, [](auto row) { return row % 7; }),
+      BaseVector::createNullConstant(UNKNOWN(), kNumRows, pool()),
+  });
   std::vector<const RowVector*> sourceVectors(kNumRows);
   std::vector<vector_size_t> sourceIndices(kNumRows);
   for (int i = 0; i < kNumRows; ++i) {
@@ -205,7 +204,7 @@ TEST_F(OperatorUtilsTest, gatherCopy) {
 }
 
 TEST_F(OperatorUtilsTest, makeOperatorSpillPath) {
-  EXPECT_EQ("spill/task_1_100", makeOperatorSpillPath("spill", "task", 1, 100));
+  EXPECT_EQ("spill/3_1_100", makeOperatorSpillPath("spill", 3, 1, 100));
 }
 
 TEST_F(OperatorUtilsTest, wrap) {
@@ -277,4 +276,24 @@ TEST_F(OperatorUtilsTest, addOperatorRuntimeStats) {
   ASSERT_EQ(stats[statsName].sum, 500);
   ASSERT_EQ(stats[statsName].max, 200);
   ASSERT_EQ(stats[statsName].min, 100);
+}
+
+TEST_F(OperatorUtilsTest, initializeRowNumberMapping) {
+  BufferPtr mapping;
+  auto rawMapping = initializeRowNumberMapping(mapping, 10, pool());
+  ASSERT_TRUE(mapping != nullptr);
+  ASSERT_GE(mapping->size(), 10);
+
+  rawMapping = initializeRowNumberMapping(mapping, 100, pool());
+  ASSERT_GE(mapping->size(), 100);
+
+  rawMapping = initializeRowNumberMapping(mapping, 60, pool());
+  ASSERT_GE(mapping->size(), 100);
+
+  ASSERT_EQ(mapping->refCount(), 1);
+  auto otherMapping = mapping;
+  ASSERT_EQ(mapping->refCount(), 2);
+  ASSERT_EQ(mapping.get(), otherMapping.get());
+  rawMapping = initializeRowNumberMapping(mapping, 10, pool());
+  ASSERT_NE(mapping.get(), otherMapping.get());
 }

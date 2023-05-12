@@ -35,9 +35,9 @@ target_link_libraries(
   velox_codegen_code_generator
   gtest
   gtest_main
-  ${GFLAGS_LIBRARIES}
+  gflags::gflags
   glog::glog
-  ${FMT}
+  fmt::fmt
   velox_core
   velox_parse_parser
   velox_exec_test_lib
@@ -54,9 +54,9 @@ target_link_libraries(
   velox_codegen_code_generator
   gtest
   gtest_main
-  ${GFLAGS_LIBRARIES}
+  gflags::gflags
   glog::glog
-  ${FMT}
+  fmt::fmt
   velox_core
   velox_parse_parser
   velox_exec_test_lib

@@ -12,10 +12,6 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-set_source_files_properties(
-    RleBpDecoder.cpp
-    PROPERTIES COMPILE_FLAGS "${VELOX_AVX512_FLAG}")
-
 add_library(
   velox_dwio_native_parquet_reader
   NestedStructureDecoder.cpp
@@ -36,6 +32,8 @@ target_link_libraries(
   velox_type
   velox_dwio_common
   arrow
+  fmt::fmt
   parquet
+  Snappy::snappy
   thrift
-  ${FMT})
+  zstd::zstd)

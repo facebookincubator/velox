@@ -17,7 +17,6 @@
 #include "velox/dwio/dwrf/test/utils/E2EWriterTestUtil.h"
 
 #include <gtest/gtest.h>
-#include "velox/dwio/common/MemoryInputStream.h"
 #include "velox/dwio/common/tests/utils/BatchMaker.h"
 #include "velox/dwio/dwrf/reader/DwrfReader.h"
 #include "velox/dwio/dwrf/writer/FlushPolicy.h"
@@ -36,8 +35,7 @@ namespace facebook::velox::dwrf {
     const std::vector<VectorPtr>& batches,
     const std::shared_ptr<Config>& config,
     std::function<std::unique_ptr<DWRFFlushPolicy>()> flushPolicyFactory,
-    std::function<
-        std::unique_ptr<LayoutPlanner>(StreamList, const EncodingContainer&)>
+    std::function<std::unique_ptr<LayoutPlanner>(const TypeWithId&)>
         layoutPlannerFactory,
     const int64_t writerMemoryCap) {
   // write file to memory
@@ -51,7 +49,7 @@ namespace facebook::velox::dwrf {
   auto writer = std::make_unique<Writer>(
       options,
       std::move(sink),
-      velox::memory::getProcessDefaultMemoryManager().getRoot());
+      velox::memory::defaultMemoryManager().addRootPool());
 
   for (size_t i = 0; i < batches.size(); ++i) {
     writer->write(batches[i]);
@@ -71,8 +69,7 @@ namespace facebook::velox::dwrf {
     size_t numStripesUpper,
     const std::shared_ptr<Config>& config,
     std::function<std::unique_ptr<DWRFFlushPolicy>()> flushPolicyFactory,
-    std::function<
-        std::unique_ptr<LayoutPlanner>(StreamList, const EncodingContainer&)>
+    std::function<std::unique_ptr<LayoutPlanner>(const TypeWithId&)>
         layoutPlannerFactory,
     const int64_t writerMemoryCap,
     const bool verifyContent) {
@@ -90,10 +87,11 @@ namespace facebook::velox::dwrf {
       layoutPlannerFactory,
       writerMemoryCap);
   // read it back and compare
-  auto input =
-      std::make_unique<MemoryInputStream>(sinkPtr->getData(), sinkPtr->size());
+  auto readFile = std::make_shared<InMemoryReadFile>(
+      std::string_view(sinkPtr->getData(), sinkPtr->size()));
+  auto input = std::make_unique<BufferedInput>(readFile, pool);
 
-  ReaderOptions readerOpts;
+  ReaderOptions readerOpts{&pool};
   RowReaderOptions rowReaderOpts;
   auto reader = std::make_unique<DwrfReader>(readerOpts, std::move(input));
   EXPECT_GE(numStripesUpper, reader->getNumberOfStripes());

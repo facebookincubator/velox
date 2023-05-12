@@ -74,29 +74,18 @@ void extractColumns(
   }
 }
 
-folly::Range<vector_size_t*> initializeRowNumberMapping(
-    BufferPtr& mapping,
-    vector_size_t size,
-    memory::MemoryPool* pool) {
-  if (!mapping || !mapping->unique() ||
-      mapping->size() < sizeof(vector_size_t) * size) {
-    mapping = allocateIndices(size, pool);
-  }
-  return folly::Range(mapping->asMutable<vector_size_t>(), size);
-}
-
-BlockingReason fromStateToBlockingReason(HashProbe::State state) {
+BlockingReason fromStateToBlockingReason(ProbeOperatorState state) {
   switch (state) {
-    case HashProbe::State::kRunning:
+    case ProbeOperatorState::kRunning:
       FOLLY_FALLTHROUGH;
-    case HashProbe::State::kFinish:
+    case ProbeOperatorState::kFinish:
       return BlockingReason::kNotBlocked;
-    case HashProbe::State::kWaitForBuild:
+    case ProbeOperatorState::kWaitForBuild:
       return BlockingReason::kWaitForJoinBuild;
-    case HashProbe::State::kWaitForPeers:
+    case ProbeOperatorState::kWaitForPeers:
       return BlockingReason::kWaitForJoinProbe;
     default:
-      VELOX_UNREACHABLE("Unexpected state: ", HashProbe::stateName(state));
+      VELOX_UNREACHABLE("Unexpected state: ", probeOperatorStateName(state));
   }
 }
 
@@ -122,20 +111,20 @@ HashProbe::HashProbe(
           operatorId,
           joinNode->id(),
           "HashProbe"),
-      outputBatchSize_{driverCtx->queryConfig().preferredOutputBatchSize()},
+      outputBatchSize_{outputBatchRows()},
       joinNode_(std::move(joinNode)),
       joinType_{joinNode_->joinType()},
+      nullAware_{joinNode_->isNullAware()},
       joinBridge_(operatorCtx_->task()->getHashJoinBridgeLocked(
           operatorCtx_->driverCtx()->splitGroupId,
           planNodeId())),
-      spillConfig_(
-          isSpillAllowed()
-              ? operatorCtx_->makeSpillConfig(Spiller::Type::kHashJoinProbe)
-              : std::nullopt),
       probeType_(joinNode_->sources()[0]->outputType()),
       filterResult_(1),
       outputTableRows_(outputBatchSize_) {
   VELOX_CHECK_NOT_NULL(joinBridge_);
+  spillConfig_ = joinNode_->canSpill(driverCtx->queryConfig())
+      ? operatorCtx_->makeSpillConfig(Spiller::Type::kHashJoinProbe)
+      : std::nullopt;
 
   auto numKeys = joinNode_->leftKeys().size();
   keyChannels_.reserve(numKeys);
@@ -177,7 +166,7 @@ HashProbe::HashProbe(
     isIdentityProjection_ = true;
   }
 
-  if (isNullAwareAntiJoin(joinType_)) {
+  if (nullAware_) {
     filterTableResult_.resize(1);
   }
 }
@@ -212,9 +201,6 @@ void HashProbe::initializeFilter(
       filterTableProjections_.emplace_back(channelValue, filterChannel);
       names.emplace_back(tableType->nameOf(channelValue));
       types.emplace_back(tableType->childAt(channelValue));
-      if (isNullAwareAntiJoin(joinType_)) {
-        filterTableProjectionMap_[channelValue] = filterChannel;
-      }
       ++filterChannel;
       continue;
     }
@@ -262,7 +248,6 @@ void HashProbe::maybeSetupSpillInput(
       spillConfig.maxFileSize,
       spillConfig.minSpillRunSize,
       Spiller::spillPool(),
-      stats().runtimeStats,
       spillConfig.executor);
   // Set the spill partitions to the corresponding ones at the build side. The
   // hash probe operator itself won't trigger any spilling.
@@ -282,18 +267,21 @@ void HashProbe::asyncWaitForHashTable() {
   auto hashBuildResult = joinBridge_->tableOrFuture(&future_);
   if (!hashBuildResult.has_value()) {
     VELOX_CHECK(future_.valid());
-    setState(State::kWaitForBuild);
+    setState(ProbeOperatorState::kWaitForBuild);
     return;
   }
 
-  if (hashBuildResult->antiJoinHasNullKeys) {
-    // Null-aware anti join with null keys on the build side without a filter
-    // always returns nothing.
-    VELOX_CHECK(isNullAwareAntiJoin(joinType_));
-    // 'antiJoinHasNullKeys' flag shall only be set on the first built 'table_'
-    VELOX_CHECK(spillPartitionSet_.empty());
-    noMoreInput();
-    return;
+  if (hashBuildResult->hasNullKeys) {
+    VELOX_CHECK(nullAware_);
+    if (isAntiJoin(joinType_) && !joinNode_->filter()) {
+      // Null-aware anti join with null keys on the build side without a filter
+      // always returns nothing.
+      // The flag must be set on the first (and only) built 'table_'.
+      VELOX_CHECK(spillPartitionSet_.empty());
+      noMoreInput();
+      return;
+    }
+    buildSideHasNullKeys_ = true;
   }
 
   table_ = std::move(hashBuildResult->table);
@@ -448,29 +436,29 @@ void HashProbe::prepareInputIndicesBuffers(
 
 BlockingReason HashProbe::isBlocked(ContinueFuture* future) {
   switch (state_) {
-    case State::kWaitForBuild:
+    case ProbeOperatorState::kWaitForBuild:
       VELOX_CHECK_NULL(table_);
       if (!future_.valid()) {
         setRunning();
         asyncWaitForHashTable();
       }
       break;
-    case State::kRunning:
+    case ProbeOperatorState::kRunning:
       VELOX_CHECK_NOT_NULL(table_);
       if (spillInputReader_ != nullptr) {
         addSpillInput();
       }
       break;
-    case State::kWaitForPeers:
+    case ProbeOperatorState::kWaitForPeers:
       VELOX_CHECK(hasMoreSpillData());
       if (!future_.valid()) {
         setRunning();
       }
       break;
-    case State::kFinish:
+    case ProbeOperatorState::kFinish:
       break;
     default:
-      VELOX_UNREACHABLE(stateName(state_));
+      VELOX_UNREACHABLE(probeOperatorStateName(state_));
       break;
   }
 
@@ -497,15 +485,42 @@ void HashProbe::clearDynamicFilters() {
   Operator::clearDynamicFilters();
 }
 
+void HashProbe::decodeAndDetectNonNullKeys() {
+  nonNullInputRows_.resize(input_->size());
+  nonNullInputRows_.setAll();
+
+  for (auto i = 0; i < hashers_.size(); ++i) {
+    auto key = input_->childAt(hashers_[i]->channel())->loadedVector();
+    hashers_[i]->decode(*key, nonNullInputRows_);
+  }
+
+  deselectRowsWithNulls(hashers_, nonNullInputRows_);
+  if (isRightSemiProjectJoin(joinType_) &&
+      nonNullInputRows_.countSelected() < input_->size()) {
+    probeSideHasNullKeys_ = true;
+  }
+}
+
 void HashProbe::addInput(RowVectorPtr input) {
   input_ = std::move(input);
+
+  if (input_->size() > 0) {
+    noInput_ = false;
+  }
 
   if (canReplaceWithDynamicFilter_) {
     replacedWithDynamicFilter_ = true;
     return;
   }
 
+  bool hasDecoded = false;
+
   if (needSpillInput()) {
+    if (isRightSemiProjectJoin(joinType_) && !probeSideHasNullKeys_) {
+      decodeAndDetectNonNullKeys();
+      hasDecoded = true;
+    }
+
     spillInput(input_);
     // Check if all the probe input rows have been spilled.
     if (input_ == nullptr) {
@@ -522,30 +537,21 @@ void HashProbe::addInput(RowVectorPtr input) {
     // Build side is empty. This state is valid only for anti, left and full
     // joins.
     VELOX_CHECK(
-        isAntiJoins(joinType_) || isLeftJoin(joinType_) ||
+        isAntiJoin(joinType_) || isLeftJoin(joinType_) ||
         isFullJoin(joinType_) || isLeftSemiProjectJoin(joinType_));
-    if (!isAntiJoins(joinType_) || (filter_ == nullptr)) {
-      return;
+    if (isLeftSemiProjectJoin(joinType_) ||
+        (isAntiJoin(joinType_) && filter_)) {
+      // For anti join with filter and semi project join we need to decode the
+      // join keys columns to initialize 'nonNullInputRows_'. The anti join
+      // filter evaluation and semi project join output generation will access
+      // 'nonNullInputRows_' later.
+      decodeAndDetectNonNullKeys();
     }
-    // For anti join types we need to decode the join keys columns to initialize
-    // 'nonNullInputRows_' if the filter is also present. The filter evaluation
-    // will access 'nonNullInputRows_' later.
-  }
-
-  nonNullInputRows_.resize(input_->size());
-  nonNullInputRows_.setAll();
-
-  for (auto i = 0; i < hashers_.size(); ++i) {
-    auto key = input_->childAt(hashers_[i]->channel())->loadedVector();
-    hashers_[i]->decode(*key, nonNullInputRows_);
-  }
-
-  deselectRowsWithNulls(hashers_, nonNullInputRows_);
-
-  if (table_->numDistinct() == 0) {
-    VELOX_CHECK(isAntiJoins(joinType_));
-    VELOX_CHECK_NOT_NULL(filter_);
     return;
+  }
+
+  if (!hasDecoded) {
+    decodeAndDetectNonNullKeys();
   }
 
   activeRows_ = nonNullInputRows_;
@@ -566,16 +572,13 @@ void HashProbe::addInput(RowVectorPtr input) {
     lookup_->rows.resize(activeRows_.size());
     std::iota(lookup_->rows.begin(), lookup_->rows.end(), 0);
   } else {
-    bits::forEachSetBit(
-        activeRows_.asRange().bits(),
-        0,
-        activeRows_.size(),
-        [&](vector_size_t row) { lookup_->rows.push_back(row); });
+    activeRows_.applyToSelected(
+        [&](auto row) { lookup_->rows.push_back(row); });
   }
 
   passingInputRowsInitialized_ = false;
-  if (isLeftJoin(joinType_) || isFullJoin(joinType_) ||
-      isAntiJoins(joinType_) || isLeftSemiProjectJoin(joinType_)) {
+  if (isLeftJoin(joinType_) || isFullJoin(joinType_) || isAntiJoin(joinType_) ||
+      isLeftSemiProjectJoin(joinType_)) {
     // Make sure to allocate an entry in 'hits' for every input row to allow for
     // including rows without a match in the output. Also, make sure to
     // initialize all 'hits' to nullptr as HashTable::joinProbe will only
@@ -614,8 +617,58 @@ void HashProbe::prepareOutput(vector_size_t size) {
     BaseVector::prepareForReuse(output, size);
     output_ = std::static_pointer_cast<RowVector>(output);
   } else {
-    output_ = std::static_pointer_cast<RowVector>(
-        BaseVector::create(outputType_, size, pool()));
+    output_ = BaseVector::create<RowVector>(outputType_, size, pool());
+  }
+}
+
+namespace {
+VectorPtr createConstantFalse(vector_size_t size, memory::MemoryPool* pool) {
+  return std::make_shared<ConstantVector<bool>>(
+      pool, size, false /*isNull*/, BOOLEAN(), false /*value*/);
+}
+} // namespace
+
+void HashProbe::fillLeftSemiProjectMatchColumn(vector_size_t size) {
+  if (emptyBuildSide()) {
+    // Build side is empty or all rows have null join keys.
+    if (nullAware_ && buildSideHasNullKeys_) {
+      matchColumn() = BaseVector::createNullConstant(BOOLEAN(), size, pool());
+    } else {
+      matchColumn() = createConstantFalse(size, pool());
+    }
+  } else {
+    auto flatMatch = matchColumn()->as<FlatVector<bool>>();
+    flatMatch->resize(size);
+    auto rawValues = flatMatch->mutableRawValues<uint64_t>();
+    for (auto i = 0; i < size; ++i) {
+      if (nullAware_) {
+        // Null-aware join may produce TRUE, FALSE or NULL.
+        if (filter_) {
+          if (leftSemiProjectIsNull_.isValid(i)) {
+            flatMatch->setNull(i, true);
+          } else {
+            bool hasMatch = outputTableRows_[i] != nullptr;
+            bits::setBit(rawValues, i, hasMatch);
+          }
+        } else {
+          if (!nonNullInputRows_.isValid(i)) {
+            // Probe key is null.
+            flatMatch->setNull(i, true);
+          } else {
+            // Probe key is not null.
+            bool hasMatch = outputTableRows_[i] != nullptr;
+            if (!hasMatch && buildSideHasNullKeys_) {
+              flatMatch->setNull(i, true);
+            } else {
+              bits::setBit(rawValues, i, hasMatch);
+            }
+          }
+        }
+      } else {
+        bool hasMatch = outputTableRows_[i] != nullptr;
+        bits::setBit(rawValues, i, hasMatch);
+      }
+    }
   }
 }
 
@@ -633,14 +686,7 @@ void HashProbe::fillOutput(vector_size_t size) {
   }
 
   if (isLeftSemiProjectJoin(joinType_)) {
-    // Populate 'match' column.
-    auto match = output_->childAt(outputType_->size() - 1);
-    match->resize(size);
-    auto flatMatch = match->as<FlatVector<bool>>();
-    auto rawValues = flatMatch->mutableRawValues<uint64_t>();
-    for (auto i = 0; i < size; ++i) {
-      bits::setBit(rawValues, i, outputTableRows_[i] != nullptr);
-    }
+    fillLeftSemiProjectMatchColumn(size);
   } else {
     extractColumns(
         table_.get(),
@@ -695,8 +741,18 @@ RowVectorPtr HashProbe::getBuildSideOutput() {
 
   if (isRightSemiProjectJoin(joinType_)) {
     // Populate 'match' column.
-    auto match = output_->childAt(outputType_->size() - 1);
-    table_->rows()->extractProbedFlags(outputTableRows_.data(), numOut, match);
+    if (noInput_) {
+      // Probe side is empty. All rows should return 'match = false', even ones
+      // with a null join key.
+      matchColumn() = createConstantFalse(numOut, pool());
+    } else {
+      table_->rows()->extractProbedFlags(
+          outputTableRows_.data(),
+          numOut,
+          nullAware_,
+          nullAware_ && probeSideHasNullKeys_,
+          matchColumn());
+    }
   }
 
   return output_;
@@ -738,32 +794,33 @@ bool HashProbe::needSpillInput() const {
   return !spillInputPartitionIds_.empty();
 }
 
-void HashProbe::setState(State state) {
+void HashProbe::setState(ProbeOperatorState state) {
   checkStateTransition(state);
   state_ = state;
 }
 
-void HashProbe::checkStateTransition(State state) {
+void HashProbe::checkStateTransition(ProbeOperatorState state) {
   VELOX_CHECK_NE(state_, state);
   switch (state) {
-    case State::kRunning:
+    case ProbeOperatorState::kRunning:
       if (!hasMoreSpillData()) {
-        VELOX_CHECK_EQ(state_, State::kWaitForBuild);
+        VELOX_CHECK_EQ(state_, ProbeOperatorState::kWaitForBuild);
       } else {
         VELOX_CHECK(
-            state_ == State::kWaitForBuild || state_ == State::kWaitForPeers)
+            state_ == ProbeOperatorState::kWaitForBuild ||
+            state_ == ProbeOperatorState::kWaitForPeers)
       }
       break;
-    case State::kWaitForPeers:
+    case ProbeOperatorState::kWaitForPeers:
       VELOX_CHECK(hasMoreSpillData());
       FOLLY_FALLTHROUGH;
-    case State::kWaitForBuild:
+    case ProbeOperatorState::kWaitForBuild:
       FOLLY_FALLTHROUGH;
-    case State::kFinish:
-      VELOX_CHECK_EQ(state_, State::kRunning);
+    case ProbeOperatorState::kFinish:
+      VELOX_CHECK_EQ(state_, ProbeOperatorState::kRunning);
       break;
     default:
-      VELOX_UNREACHABLE(stateName(state_));
+      VELOX_UNREACHABLE(probeOperatorStateName(state_));
       break;
   }
 }
@@ -784,7 +841,7 @@ RowVectorPtr HashProbe::getOutput() {
         prepareForSpillRestore();
         asyncWaitForHashTable();
       } else {
-        setState(State::kFinish);
+        setState(ProbeOperatorState::kFinish);
       }
       return nullptr;
     }
@@ -794,15 +851,15 @@ RowVectorPtr HashProbe::getOutput() {
   const auto inputSize = input_->size();
 
   if (replacedWithDynamicFilter_) {
-    stats_.addRuntimeStat(
-        "replacedWithDynamicFilterRows", RuntimeCounter(inputSize));
+    addRuntimeStat("replacedWithDynamicFilterRows", RuntimeCounter(inputSize));
     auto output = Operator::fillOutput(inputSize, nullptr);
     input_ = nullptr;
     return output;
   }
 
-  const bool isLeftSemiOrAntiJoinNoFilter =
-      !filter_ && (isLeftSemiFilterJoin(joinType_) || isAntiJoins(joinType_));
+  const bool isLeftSemiOrAntiJoinNoFilter = !filter_ &&
+      (isLeftSemiFilterJoin(joinType_) || isLeftSemiProjectJoin(joinType_) ||
+       isAntiJoin(joinType_));
 
   const bool emptyBuildSide = (table_->numDistinct() == 0);
 
@@ -825,29 +882,32 @@ RowVectorPtr HashProbe::getOutput() {
       std::iota(mapping.begin(), mapping.end(), 0);
       std::fill(outputTableRows_.begin(), outputTableRows_.end(), nullptr);
       numOut = inputSize;
-    } else if (isNullAwareAntiJoin(joinType_) && !filter_) {
-      // When build side is not empty, anti join without a filter returns probe
-      // rows with no nulls in the join key and no match in the build side.
-      for (auto i = 0; i < inputSize; ++i) {
-        if (nonNullInputRows_.isValid(i) &&
-            (!activeRows_.isValid(i) || !lookup_->hits[i])) {
-          mapping[numOut] = i;
-          ++numOut;
-        }
-      }
     } else if (isAntiJoin(joinType_) && !filter_) {
-      for (auto i = 0; i < inputSize; ++i) {
-        if (!nonNullInputRows_.isValid(i) ||
-            (!activeRows_.isValid(i) || !lookup_->hits[i])) {
-          mapping[numOut] = i;
-          ++numOut;
+      if (nullAware_) {
+        // When build side is not empty, anti join without a filter returns
+        // probe rows with no nulls in the join key and no match in the build
+        // side.
+        for (auto i = 0; i < inputSize; ++i) {
+          if (nonNullInputRows_.isValid(i) &&
+              (!activeRows_.isValid(i) || !lookup_->hits[i])) {
+            mapping[numOut] = i;
+            ++numOut;
+          }
+        }
+      } else {
+        for (auto i = 0; i < inputSize; ++i) {
+          if (!nonNullInputRows_.isValid(i) ||
+              (!activeRows_.isValid(i) || !lookup_->hits[i])) {
+            mapping[numOut] = i;
+            ++numOut;
+          }
         }
       }
     } else {
       numOut = table_->listJoinResults(
           results_,
           isLeftJoin(joinType_) || isFullJoin(joinType_) ||
-              isAntiJoins(joinType_) || isLeftSemiProjectJoin(joinType_),
+              isAntiJoin(joinType_) || isLeftSemiProjectJoin(joinType_),
           mapping,
           folly::Range(outputTableRows_.data(), outputTableRows_.size()));
     }
@@ -859,12 +919,8 @@ RowVectorPtr HashProbe::getOutput() {
     VELOX_CHECK_LE(numOut, outputTableRows_.size());
 
     numOut = evalFilter(numOut);
+
     if (!numOut) {
-      // The filter was false on all rows.
-      if (isLeftSemiOrAntiJoinNoFilter) {
-        input_ = nullptr;
-        return nullptr;
-      }
       continue;
     }
 
@@ -893,8 +949,7 @@ RowVectorPtr HashProbe::getOutput() {
 
 void HashProbe::fillFilterInput(vector_size_t size) {
   if (!filterInput_) {
-    filterInput_ = std::static_pointer_cast<RowVector>(
-        BaseVector::create(filterInputType_, 1, pool()));
+    filterInput_ = BaseVector::create<RowVector>(filterInputType_, 1, pool());
   }
   filterInput_->resize(size);
   for (auto projection : filterInputProjections_) {
@@ -911,13 +966,13 @@ void HashProbe::fillFilterInput(vector_size_t size) {
       filterInput_);
 }
 
-void HashProbe::prepareFilterRowsForNullAwareAntiJoin(
+void HashProbe::prepareFilterRowsForNullAwareJoin(
     vector_size_t numRows,
     bool filterPropagateNulls) {
   VELOX_CHECK_LE(numRows, kBatchSize);
   if (filterTableInput_ == nullptr) {
-    filterTableInput_ = std::static_pointer_cast<RowVector>(
-        BaseVector::create(filterInputType_, kBatchSize, pool()));
+    filterTableInput_ =
+        BaseVector::create<RowVector>(filterInputType_, kBatchSize, pool());
   }
 
   if (filterPropagateNulls) {
@@ -940,73 +995,63 @@ void HashProbe::prepareFilterRowsForNullAwareAntiJoin(
 
   // NOTE: for null-aware anti join, we will skip filtering on the probe rows
   // with null join key columns(s) as we can apply filtering after they cross
-  // join with the table rows later.g
+  // join with the table rows later.
   if (!nonNullInputRows_.isAllSelected()) {
     auto* rawMapping = outputRowMapping_->asMutable<vector_size_t>();
     for (int i = 0; i < numRows; ++i) {
-      filterInputRows_.setValid(i, nonNullInputRows_.isValid(rawMapping[i]));
+      if (filterInputRows_.isValid(i) &&
+          !nonNullInputRows_.isValid(rawMapping[i])) {
+        filterInputRows_.setValid(i, false);
+      }
     }
     filterInputRows_.updateBounds();
   }
 }
 
-void HashProbe::applyFilterOnTableRowsForNullAwareAntiJoin(
-    SelectivityVector& rows,
-    bool nullKeyRowsOnly) {
+namespace {
+
+const uint64_t* getFlatFilterResult(VectorPtr& result) {
+  if (!result->isFlatEncoding()) {
+    return nullptr;
+  }
+  auto* flat = result->asUnchecked<FlatVector<bool>>();
+  if (!flat->mayHaveNulls()) {
+    return flat->rawValues<uint64_t>();
+  }
+  if (!flat->rawValues<uint64_t>()) {
+    return flat->rawNulls();
+  }
+  if (!result.unique()) {
+    return nullptr;
+  }
+  auto* values = flat->mutableRawValues<uint64_t>();
+  bits::andBits(values, flat->rawNulls(), 0, flat->size());
+  return values;
+}
+
+} // namespace
+
+void HashProbe::applyFilterOnTableRowsForNullAwareJoin(
+    const SelectivityVector& rows,
+    SelectivityVector& filterPassedRows,
+    std::function<int32_t(char**, int32_t)> iterator) {
   if (!rows.hasSelections()) {
     return;
   }
-  auto tableRows = table_->rows();
-  if (tableRows == nullptr) {
-    return;
-  }
-  RowContainerIterator iter;
+  auto* tableRows = table_->rows();
+  VELOX_CHECK(tableRows, "Should not move rows in hash joins");
   char* data[kBatchSize];
-  while (auto numRows = tableRows->listRows(
-             &iter, kBatchSize, RowContainer::kUnlimited, data)) {
+  while (auto numRows = iterator(data, kBatchSize)) {
     filterTableInput_->resize(numRows);
     filterTableInputRows_.resizeFill(numRows, true);
-    auto* rawNonNullRows = filterTableInputRows_.asMutableRange().bits();
-
-    for (column_index_t columnIndex = 0;
-         columnIndex < tableRows->columnTypes().size();
-         ++columnIndex) {
-      // NOTE: extracts the build side columns in 'filterTableInput_' from the
-      // table. 'filterTableInput_' has type of 'filterInputType_', and we will
-      // fill the probe side columns later before applying the filter.
-      VectorPtr columnVector;
-      auto it = filterTableProjectionMap_.find(columnIndex);
-      if (it != filterTableProjectionMap_.end()) {
-        columnVector = filterTableInput_->childAt(it->second);
-        tableRows->extractColumn(data, numRows, columnIndex, columnVector);
-      }
-      if (nullKeyRowsOnly && columnIndex < tableRows->keyTypes().size()) {
-        if (columnVector == nullptr) {
-          columnVector = BaseVector::create(
-              tableRows->keyTypes()[columnIndex], numRows, pool());
-          tableRows->extractColumn(data, numRows, columnIndex, columnVector);
-        }
-        filterInputColumnDecodedVector_.decode(
-            *columnVector, filterTableInputRows_);
-        if (filterInputColumnDecodedVector_.mayHaveNulls()) {
-          // NOTE: the true value of a raw null bit indicates non-null so we AND
-          // with the raw bit.
-          bits::andBits(
-              rawNonNullRows,
-              filterInputColumnDecodedVector_.nulls(),
-              0,
-              numRows);
-        }
-      }
+    for (auto& projection : filterTableProjections_) {
+      tableRows->extractColumn(
+          data,
+          numRows,
+          projection.inputChannel,
+          filterTableInput_->childAt(projection.outputChannel));
     }
-
-    if (nullKeyRowsOnly) {
-      bits::negate(reinterpret_cast<char*>(rawNonNullRows), numRows);
-      filterTableInputRows_.updateBounds();
-    }
-
     rows.applyToSelected([&](vector_size_t row) {
-      // Fill up 'filterTableInput_' with probe side filter columns.
       for (auto& projection : filterInputProjections_) {
         filterTableInput_->childAt(projection.outputChannel) =
             BaseVector::wrapInConstant(
@@ -1015,29 +1060,49 @@ void HashProbe::applyFilterOnTableRowsForNullAwareAntiJoin(
       EvalCtx evalCtx(
           operatorCtx_->execCtx(), filter_.get(), filterTableInput_.get());
       filter_->eval(filterTableInputRows_, evalCtx, filterTableResult_);
-      decodedFilterTableResult_.decode(
-          *filterTableResult_[0], filterTableInputRows_);
-      const bool passed =
-          !filterTableInputRows_.testSelected([&](vector_size_t j) {
-            return decodedFilterTableResult_.isNullAt(j) ||
-                !decodedFilterTableResult_.valueAt<bool>(j);
-          });
-      if (passed) {
-        rows.setValid(row, false);
+      if (auto* values = getFlatFilterResult(filterTableResult_[0])) {
+        if (!bits::testSetBits(
+                values, 0, numRows, [](vector_size_t) { return false; })) {
+          filterPassedRows.setValid(row, true);
+        }
+      } else {
+        decodedFilterTableResult_.decode(
+            *filterTableResult_[0], filterTableInputRows_);
+        if (decodedFilterTableResult_.isConstantMapping()) {
+          if (!decodedFilterTableResult_.isNullAt(0) &&
+              decodedFilterTableResult_.valueAt<bool>(0)) {
+            filterPassedRows.setValid(row, true);
+          }
+        } else {
+          for (vector_size_t i = 0; i < numRows; ++i) {
+            if (!decodedFilterTableResult_.isNullAt(i) &&
+                decodedFilterTableResult_.valueAt<bool>(i)) {
+              filterPassedRows.setValid(row, true);
+              break;
+            }
+          }
+        }
       }
     });
   }
-  rows.updateBounds();
 }
 
-vector_size_t HashProbe::evalFilterForNullAwareAntiJoin(
+SelectivityVector HashProbe::evalFilterForNullAwareJoin(
     vector_size_t numRows,
-    const bool filterPropagateNulls) {
+    bool filterPropagateNulls) {
   auto* rawOutputProbeRowMapping =
       outputRowMapping_->asMutable<vector_size_t>();
 
-  SelectivityVector filterPassedRows(numRows, false);
+  // Subset of probe-side rows with a match that passed the filter.
+  SelectivityVector filterPassedRows(input_->size(), false);
+
+  // Subset of probe-side rows with non-null probe key and either no match or no
+  // match that passed the filter. We need to combine these with all build-side
+  // rows with null keys to see if a filter passes on any of these.
   SelectivityVector nullKeyProbeRows(input_->size(), false);
+
+  // Subset of probe-sie rows with null probe key. We need to combine these with
+  // all build-side rows to see if a filter passes on any of these.
   SelectivityVector crossJoinProbeRows(input_->size(), false);
 
   for (auto i = 0; i < numRows; ++i) {
@@ -1049,7 +1114,7 @@ vector_size_t HashProbe::evalFilterForNullAwareAntiJoin(
     const auto probeRow = rawOutputProbeRowMapping[i];
     if (nonNullInputRows_.isValid(probeRow)) {
       if (filterPassed(i)) {
-        filterPassedRows.setValid(i, true);
+        filterPassedRows.setValid(probeRow, true);
       } else {
         nullKeyProbeRows.setValid(probeRow, true);
       }
@@ -1058,59 +1123,55 @@ vector_size_t HashProbe::evalFilterForNullAwareAntiJoin(
     }
   }
 
-  // Skip filtering on the probe rows which have passed the filter on any one of
-  // its matched row with the build side.
+  if (buildSideHasNullKeys_) {
+    BaseHashTable::NullKeyRowsIterator iter;
+    nullKeyProbeRows.deselect(filterPassedRows);
+    applyFilterOnTableRowsForNullAwareJoin(
+        nullKeyProbeRows, filterPassedRows, [&](char** data, int32_t maxRows) {
+          return table_->listNullKeyRows(&iter, maxRows, data);
+        });
+  }
+  BaseHashTable::RowsIterator iter;
+  crossJoinProbeRows.deselect(filterPassedRows);
+  applyFilterOnTableRowsForNullAwareJoin(
+      crossJoinProbeRows, filterPassedRows, [&](char** data, int32_t maxRows) {
+        return table_->listAllRows(
+            &iter, maxRows, RowContainer::kUnlimited, data);
+      });
   filterPassedRows.updateBounds();
-  filterPassedRows.applyToSelected([&](vector_size_t row) {
-    auto probeRow = rawOutputProbeRowMapping[row];
-    nullKeyProbeRows.setValid(probeRow, false);
-    crossJoinProbeRows.setValid(probeRow, false);
-  });
 
-  // TODO: consider to combine the two filter processes into one to avoid scan
-  // the table rows twice.
-  nullKeyProbeRows.updateBounds();
-  applyFilterOnTableRowsForNullAwareAntiJoin(nullKeyProbeRows, true);
-
-  crossJoinProbeRows.updateBounds();
-  applyFilterOnTableRowsForNullAwareAntiJoin(crossJoinProbeRows, false);
-
-  vector_size_t numPassed = 0;
-  auto addMiss = [&](auto row) {
-    outputTableRows_[numPassed] = nullptr;
-    rawOutputProbeRowMapping[numPassed++] = row;
-  };
-  for (auto i = 0; i < numRows; ++i) {
-    auto probeRow = rawOutputProbeRowMapping[i];
-    bool passed;
-    if (filterPropagateNulls && nullFilterInputRows_.isValid(i)) {
-      passed = false;
-    } else if (nonNullInputRows_.isValid(probeRow)) {
-      passed = filterPassed(i) || !nullKeyProbeRows.isValid(probeRow);
-    } else {
-      passed = !crossJoinProbeRows.isValid(probeRow);
-    }
-    noMatchDetector_.advance(probeRow, passed, addMiss);
-  }
-  if (results_.atEnd()) {
-    noMatchDetector_.finish(addMiss);
-  }
-  return numPassed;
+  return filterPassedRows;
 }
 
 int32_t HashProbe::evalFilter(int32_t numRows) {
   if (!filter_) {
     return numRows;
   }
+
   const bool filterPropagateNulls = filter_->expr(0)->propagatesNulls();
   auto* rawOutputProbeRowMapping =
       outputRowMapping_->asMutable<vector_size_t>();
 
-  fillFilterInput(numRows);
   filterInputRows_.resizeFill(numRows);
 
-  if (isNullAwareAntiJoin(joinType_)) {
-    prepareFilterRowsForNullAwareAntiJoin(numRows, filterPropagateNulls);
+  // Do not evaluate filter on rows with no match to (1) avoid
+  // false-positives when filter evaluates to true for rows with NULLs on the
+  // build side; (2) avoid errors in filter evaluation that would fail the query
+  // unnecessarily.
+  // TODO Apply the same to left joins.
+  if (isAntiJoin(joinType_) || isLeftSemiProjectJoin(joinType_)) {
+    for (auto i = 0; i < numRows; ++i) {
+      if (outputTableRows_[i] == nullptr) {
+        filterInputRows_.setValid(i, false);
+      }
+    }
+    filterInputRows_.updateBounds();
+  }
+
+  fillFilterInput(numRows);
+
+  if (nullAware_) {
+    prepareFilterRowsForNullAwareJoin(numRows, filterPropagateNulls);
   }
 
   EvalCtx evalCtx(operatorCtx_->execCtx(), filter_.get(), filterInput_.get());
@@ -1152,34 +1213,74 @@ int32_t HashProbe::evalFilter(int32_t numRows) {
       leftSemiFilterJoinTracker_.finish(addLastMatch);
     }
   } else if (isLeftSemiProjectJoin(joinType_)) {
-    auto addLast = [&](auto row, bool passed) {
-      // NOTE: Set output table row to point to a fake string to indicate there
-      // is a match for this probe 'row'. 'fillOutput' populates the match
-      // column based on the nullable of this pointer.
-      static const char* kPassed = "passed";
+    // NOTE: Set output table row to point to a fake string to indicate there
+    // is a match for this probe 'row'. 'fillOutput' populates the match
+    // column based on the nullable of this pointer.
+    static const char* kPassed = "passed";
 
-      outputTableRows_[numPassed] =
-          passed ? const_cast<char*>(kPassed) : nullptr;
-      rawOutputProbeRowMapping[numPassed++] = row;
-    };
-    for (auto i = 0; i < numRows; ++i) {
-      leftSemiProjectJoinTracker_.advance(
-          rawOutputProbeRowMapping[i], filterPassed(i), addLast);
+    if (nullAware_) {
+      leftSemiProjectIsNull_.resize(numRows);
+      leftSemiProjectIsNull_.clearAll();
+
+      auto addLast = [&](auto row, std::optional<bool> passed) {
+        if (passed.has_value()) {
+          outputTableRows_[numPassed] =
+              passed.value() ? const_cast<char*>(kPassed) : nullptr;
+        } else {
+          leftSemiProjectIsNull_.setValid(numPassed, true);
+        }
+        rawOutputProbeRowMapping[numPassed++] = row;
+      };
+
+      auto passedRows =
+          evalFilterForNullAwareJoin(numRows, filterPropagateNulls);
+      for (auto i = 0; i < numRows; ++i) {
+        // filterPassed(i) -> TRUE
+        // else passed -> NULL
+        // else FALSE
+        auto probeRow = rawOutputProbeRowMapping[i];
+        std::optional<bool> passed = filterPassed(i)
+            ? std::optional(true)
+            : (passedRows.isValid(probeRow) ? std::nullopt
+                                            : std::optional(false));
+        leftSemiProjectJoinTracker_.advance(probeRow, passed, addLast);
+      }
+      leftSemiProjectIsNull_.updateBounds();
+      if (results_.atEnd()) {
+        leftSemiProjectJoinTracker_.finish(addLast);
+      }
+    } else {
+      auto addLast = [&](auto row, std::optional<bool> passed) {
+        outputTableRows_[numPassed] =
+            passed.value() ? const_cast<char*>(kPassed) : nullptr;
+        rawOutputProbeRowMapping[numPassed++] = row;
+      };
+      for (auto i = 0; i < numRows; ++i) {
+        leftSemiProjectJoinTracker_.advance(
+            rawOutputProbeRowMapping[i], filterPassed(i), addLast);
+      }
+      if (results_.atEnd()) {
+        leftSemiProjectJoinTracker_.finish(addLast);
+      }
     }
-    if (results_.atEnd()) {
-      leftSemiProjectJoinTracker_.finish(addLast);
-    }
-  } else if (isNullAwareAntiJoin(joinType_)) {
-    numPassed = evalFilterForNullAwareAntiJoin(numRows, filterPropagateNulls);
   } else if (isAntiJoin(joinType_)) {
     auto addMiss = [&](auto row) {
       outputTableRows_[numPassed] = nullptr;
       rawOutputProbeRowMapping[numPassed++] = row;
     };
-    for (auto i = 0; i < numRows; ++i) {
-      auto probeRow = rawOutputProbeRowMapping[i];
-      bool passed = nonNullInputRows_.isValid(probeRow) && filterPassed(i);
-      noMatchDetector_.advance(probeRow, passed, addMiss);
+    if (nullAware_) {
+      auto passedRows =
+          evalFilterForNullAwareJoin(numRows, filterPropagateNulls);
+      for (auto i = 0; i < numRows; ++i) {
+        auto probeRow = rawOutputProbeRowMapping[i];
+        bool passed = passedRows.isValid(probeRow);
+        noMatchDetector_.advance(probeRow, passed, addMiss);
+      }
+    } else {
+      for (auto i = 0; i < numRows; ++i) {
+        auto probeRow = rawOutputProbeRowMapping[i];
+        noMatchDetector_.advance(probeRow, filterPassed(i), addMiss);
+      }
     }
     if (results_.atEnd()) {
       noMatchDetector_.finish(addMiss);
@@ -1196,15 +1297,18 @@ int32_t HashProbe::evalFilter(int32_t numRows) {
 }
 
 void HashProbe::ensureLoadedIfNotAtEnd(column_index_t channel) {
-  if (isLeftSemiFilterJoin(joinType_) || isLeftSemiProjectJoin(joinType_) ||
-      isAntiJoins(joinType_) || results_.atEnd()) {
+  if ((!filter_ &&
+       (isLeftSemiFilterJoin(joinType_) || isLeftSemiProjectJoin(joinType_) ||
+        isAntiJoin(joinType_))) ||
+      results_.atEnd()) {
     return;
   }
 
   if (!passingInputRowsInitialized_) {
     passingInputRowsInitialized_ = true;
     passingInputRows_.resize(input_->size());
-    if (isLeftJoin(joinType_) || isFullJoin(joinType_)) {
+    if (isLeftJoin(joinType_) || isFullJoin(joinType_) ||
+        isLeftSemiProjectJoin(joinType_)) {
       passingInputRows_.setAll();
     } else {
       passingInputRows_.clearAll();
@@ -1251,52 +1355,42 @@ void HashProbe::noMoreInputInternal() {
   std::vector<std::shared_ptr<Driver>> peers;
   // The last operator to finish processing inputs is responsible for producing
   // build-side rows based on the join.
-  ContinueFuture future;
   if (!operatorCtx_->task()->allPeersFinished(
           planNodeId(),
           operatorCtx_->driver(),
-          hasSpillData ? &future_ : &future,
+          hasSpillData ? &future_ : nullptr,
           hasSpillData ? promises_ : promises,
           peers)) {
     if (hasSpillData) {
       VELOX_CHECK(future_.valid());
-      setState(State::kWaitForPeers);
+      setState(ProbeOperatorState::kWaitForPeers);
     }
+    DCHECK(promises.empty());
     return;
   }
-
+  // NOTE: if 'hasSpillData' is false, then this is the last built table to
+  // probe. Correspondingly, the hash probe operator except the last one can
+  // simply finish its processing without waiting the other peers to reach the
+  // barrier.
+  VELOX_CHECK(promises.empty());
+  VELOX_CHECK(hasSpillData || peers.empty());
   lastProber_ = true;
 }
 
 bool HashProbe::isFinished() {
-  return state_ == State::kFinish;
+  return state_ == ProbeOperatorState::kFinish;
 }
 
 bool HashProbe::isRunning() const {
-  return state_ == State::kRunning;
+  return state_ == ProbeOperatorState::kRunning;
 }
 
 void HashProbe::checkRunning() const {
-  VELOX_CHECK(isRunning(), stateName(state_));
+  VELOX_CHECK(isRunning(), probeOperatorStateName(state_));
 }
 
 void HashProbe::setRunning() {
-  setState(State::kRunning);
-}
-
-std::string HashProbe::stateName(State state) {
-  switch (state) {
-    case State::kWaitForBuild:
-      return "WAIT_FOR_BUILD";
-    case State::kRunning:
-      return "RUNNING";
-    case State::kWaitForPeers:
-      return "WAIT_FOR_PEERS";
-    case State::kFinish:
-      return "FINISH";
-    default:
-      return fmt::format("UNKNOWN: {}", static_cast<int>(state));
-  }
+  setState(ProbeOperatorState::kRunning);
 }
 
 } // namespace facebook::velox::exec

@@ -25,9 +25,6 @@
 
 namespace facebook::velox::parquet {
 
-constexpr uint64_t DIRECTORY_SIZE_GUESS = 1024 * 1024;
-constexpr uint64_t FILE_PRELOAD_THRESHOLD = 1024 * 1024 * 8;
-
 enum class ParquetMetricsType { HEADER, FILE_METADATA, FILE, BLOCK, TEST };
 
 class StructColumnReader;
@@ -36,7 +33,7 @@ class StructColumnReader;
 class ReaderBase {
  public:
   ReaderBase(
-      std::unique_ptr<dwio::common::InputStream> stream,
+      std::unique_ptr<dwio::common::BufferedInput>,
       const dwio::common::ReaderOptions& options);
 
   virtual ~ReaderBase() = default;
@@ -47,10 +44,6 @@ class ReaderBase {
 
   dwio::common::BufferedInput& bufferedInput() const {
     return *input_;
-  }
-
-  dwio::common::InputStream& stream() const {
-    return *stream_;
   }
 
   uint64_t fileLength() const {
@@ -107,10 +100,11 @@ class ReaderBase {
           children);
 
   memory::MemoryPool& pool_;
-  const dwio::common::ReaderOptions& options_;
-  const std::unique_ptr<dwio::common::InputStream> stream_;
-  std::shared_ptr<dwio::common::BufferedInputFactory> bufferedInputFactory_;
-  std::shared_ptr<velox::dwio::common::BufferedInput> input_;
+  const uint64_t directorySizeGuess_;
+  const uint64_t filePreloadThreshold_;
+  // Copy of options. Must be owned by 'this'.
+  const dwio::common::ReaderOptions options_;
+  std::unique_ptr<velox::dwio::common::BufferedInput> input_;
   uint64_t fileLength_;
   std::unique_ptr<thrift::FileMetaData> fileMetaData_;
   RowTypePtr schema_;
@@ -131,7 +125,14 @@ class ParquetRowReader : public dwio::common::RowReader {
       const dwio::common::RowReaderOptions& options);
   ~ParquetRowReader() override = default;
 
-  uint64_t next(uint64_t size, velox::VectorPtr& result) override;
+  int64_t nextRowNumber() override;
+
+  int64_t nextReadSize(uint64_t size) override;
+
+  uint64_t next(
+      uint64_t size,
+      velox::VectorPtr& result,
+      const dwio::common::Mutation* = nullptr) override;
 
   void updateRuntimeStats(
       dwio::common::RuntimeStatistics& stats) const override;
@@ -142,6 +143,11 @@ class ParquetRowReader : public dwio::common::RowReader {
 
   const dwio::common::RowReaderOptions& getOptions() {
     return options_;
+  }
+
+  bool allPrefetchIssued() const override {
+    //  Allow opening the next split while this is reading.
+    return true;
   }
 
  private:
@@ -155,14 +161,15 @@ class ParquetRowReader : public dwio::common::RowReader {
 
   memory::MemoryPool& pool_;
   const std::shared_ptr<ReaderBase> readerBase_;
-  const dwio::common::RowReaderOptions& options_;
+  const dwio::common::RowReaderOptions options_;
 
   // All row groups from file metadata.
   const std::vector<thrift::RowGroup>& rowGroups_;
 
   // Indices of row groups where stats match filters.
   std::vector<uint32_t> rowGroupIds_;
-  uint32_t currentRowGroupIdsIdx_;
+  std::vector<uint64_t> firstRowOfRowGroup_;
+  uint32_t nextRowGroupIdsIdx_;
   const thrift::RowGroup* FOLLY_NULLABLE currentRowGroupPtr_{nullptr};
   uint64_t rowsInCurrentRowGroup_;
   uint64_t currentRowInGroup_;
@@ -179,7 +186,7 @@ class ParquetRowReader : public dwio::common::RowReader {
 class ParquetReader : public dwio::common::Reader {
  public:
   ParquetReader(
-      std::unique_ptr<dwio::common::InputStream> stream,
+      std::unique_ptr<dwio::common::BufferedInput>,
       const dwio::common::ReaderOptions& options);
 
   ~ParquetReader() override = default;
@@ -214,9 +221,9 @@ class ParquetReaderFactory : public dwio::common::ReaderFactory {
   ParquetReaderFactory() : ReaderFactory(dwio::common::FileFormat::PARQUET) {}
 
   std::unique_ptr<dwio::common::Reader> createReader(
-      std::unique_ptr<dwio::common::InputStream> stream,
+      std::unique_ptr<dwio::common::BufferedInput> input,
       const dwio::common::ReaderOptions& options) override {
-    return std::make_unique<ParquetReader>(std::move(stream), options);
+    return std::make_unique<ParquetReader>(std::move(input), options);
   }
 };
 

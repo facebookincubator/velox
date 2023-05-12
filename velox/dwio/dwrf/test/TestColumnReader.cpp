@@ -132,6 +132,7 @@ class ColumnReaderTestBase {
     if (useSelectiveReader()) {
       if (!scanSpec) {
         scanSpec_ = std::make_unique<common::ScanSpec>("root");
+        scanSpec_->addAllChildFields(*dataTypeWithId->type);
         scanSpec = scanSpec_.get();
       }
       makeFieldSpecs("", 0, rowType, scanSpec);
@@ -154,7 +155,7 @@ class ColumnReaderTestBase {
     if (columnReader_) {
       columnReader_->next(numValues, result);
     } else {
-      selectiveColumnReader_->next(numValues, result);
+      selectiveColumnReader_->next(numValues, result, nullptr);
     }
   }
 
@@ -180,7 +181,7 @@ class ColumnReaderTestBase {
     if (columnReader_) {
       columnReader_->next(readSize, batch);
     } else {
-      selectiveColumnReader_->next(readSize, batch);
+      selectiveColumnReader_->next(readSize, batch, nullptr);
     }
 
     ASSERT_EQ(readSize, batch->size());
@@ -1193,7 +1194,7 @@ TEST_P(StringReaderTests, testStringDictSkipNoNulls) {
     if (columnReader_) {
       columnReader_->next(rowsRead, batch);
     } else {
-      selectiveColumnReader_->next(rowsRead, batch);
+      selectiveColumnReader_->next(rowsRead, batch, nullptr);
     }
 
     ASSERT_EQ(rowsRead, batch->size());
@@ -4265,6 +4266,7 @@ TEST_P(TestColumnReader, testPresentStreamChange) {
   auto pool = &streams_.getMemoryPool();
   VectorPtr toReset = std::make_shared<FlatVector<int32_t>>(
       pool,
+      INTEGER(),
       AlignedBuffer::allocate<bool>(1, pool),
       1,
       AlignedBuffer::allocate<int32_t>(1, pool),
@@ -4315,6 +4317,7 @@ TEST_P(TestColumnReader, testStructVectorTypeChange) {
   auto pool = &streams_.getMemoryPool();
   VectorPtr toReset = std::make_shared<FlatVector<float>>(
       pool,
+      REAL(),
       nullptr,
       1,
       AlignedBuffer::allocate<float>(1, pool),
@@ -4370,6 +4373,7 @@ TEST_P(TestColumnReader, testListVectorTypeChange) {
   auto pool = &streams_.getMemoryPool();
   VectorPtr elements = std::make_shared<FlatVector<int8_t>>(
       pool,
+      TINYINT(),
       nullptr,
       1,
       AlignedBuffer::allocate<int8_t>(1, pool),
@@ -4450,6 +4454,7 @@ TEST_P(TestColumnReader, testMapVectorTypeChange) {
   auto pool = &streams_.getMemoryPool();
   VectorPtr toReset = std::make_shared<FlatVector<int8_t>>(
       pool,
+      TINYINT(),
       nullptr,
       1,
       AlignedBuffer::allocate<int8_t>(1, pool),

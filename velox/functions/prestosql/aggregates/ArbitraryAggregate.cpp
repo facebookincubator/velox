@@ -16,10 +16,11 @@
 
 #include "velox/exec/Aggregate.h"
 #include "velox/expression/FunctionSignature.h"
+#include "velox/functions/lib/aggregates/SimpleNumericAggregate.h"
+#include "velox/functions/lib/aggregates/SingleValueAccumulator.h"
 #include "velox/functions/prestosql/aggregates/AggregateNames.h"
-#include "velox/functions/prestosql/aggregates/SimpleNumericAggregate.h"
-#include "velox/functions/prestosql/aggregates/SingleValueAccumulator.h"
-#include "velox/vector/DecodedVector.h"
+
+using namespace facebook::velox::functions::aggregate;
 
 namespace facebook::velox::aggregate::prestosql {
 
@@ -96,6 +97,9 @@ class ArbitraryAggregate : public SimpleNumericAggregate<T, T, T> {
       const SelectivityVector& rows,
       const std::vector<VectorPtr>& args,
       bool /*unused*/) override {
+    if (!exec::Aggregate::isNull(group)) {
+      return;
+    }
     DecodedVector decoded(*args[0], rows);
 
     if (decoded.isConstantMapping()) {
@@ -154,8 +158,6 @@ class NonNumericArbitrary : public exec::Aggregate {
       new (groups[i] + offset_) SingleValueAccumulator();
     }
   }
-
-  void finalize(char** /* groups */, int32_t /* numGroups */) override {}
 
   void extractValues(char** groups, int32_t numGroups, VectorPtr* result)
       override {
@@ -252,7 +254,7 @@ class NonNumericArbitrary : public exec::Aggregate {
   }
 };
 
-bool registerArbitraryAggregate(const std::string& name) {
+bool registerArbitrary(const std::string& name) {
   std::vector<std::shared_ptr<exec::AggregateFunctionSignature>> signatures{
       exec::AggregateFunctionSignatureBuilder()
           .typeVariable("T")
@@ -290,9 +292,6 @@ bool registerArbitraryAggregate(const std::string& name) {
             return std::make_unique<ArbitraryAggregate<Timestamp>>(inputType);
           case TypeKind::DATE:
             return std::make_unique<ArbitraryAggregate<Date>>(inputType);
-          case TypeKind::INTERVAL_DAY_TIME:
-            return std::make_unique<ArbitraryAggregate<IntervalDayTime>>(
-                inputType);
           case TypeKind::VARCHAR:
           case TypeKind::ARRAY:
           case TypeKind::MAP:
@@ -309,8 +308,8 @@ bool registerArbitraryAggregate(const std::string& name) {
 
 } // namespace
 
-void registerArbitraryAggregate() {
-  registerArbitraryAggregate(kArbitrary);
+void registerArbitraryAggregate(const std::string& prefix) {
+  registerArbitrary(prefix + kArbitrary);
 }
 
 } // namespace facebook::velox::aggregate::prestosql

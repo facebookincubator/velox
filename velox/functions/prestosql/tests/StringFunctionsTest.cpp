@@ -22,8 +22,6 @@
 #include "velox/functions/lib/StringEncodingUtils.h"
 #include "velox/functions/lib/string/StringImpl.h"
 #include "velox/functions/prestosql/tests/utils/FunctionBaseTest.h"
-#include "velox/parse/Expressions.h"
-#include "velox/type/Type.h"
 
 using namespace facebook::velox;
 using namespace facebook::velox::exec;
@@ -65,18 +63,6 @@ int expectedStart(int i) {
 
 int expectedLength(int i) {
   return i % 3;
-}
-
-std::string hexToDec(const std::string& str) {
-  VELOX_CHECK_EQ(str.size() % 2, 0);
-  std::string out;
-  out.resize(str.size() / 2);
-  for (int i = 0; i < out.size(); ++i) {
-    int high = facebook::velox::functions::stringImpl::fromHex(str[2 * i]);
-    int low = facebook::velox::functions::stringImpl::fromHex(str[2 * i + 1]);
-    out[i] = (high << 4) | (low & 0xf);
-  }
-  return out;
 }
 } // namespace
 
@@ -220,12 +206,12 @@ class StringFunctionsTest : public FunctionBaseTest {
     // We expect 2 allocations: one for the values buffer and another for the
     // strings buffer. I.e. FlatVector<StringView>::values and
     // FlatVector<StringView>::stringBuffers.
-    auto numAllocsBefore = pool()->getMemoryUsageTracker()->getNumAllocs();
+    auto numAllocsBefore = pool()->stats().numAllocs;
 
     auto result = evaluate<FlatVector<StringView>>(
         buildConcatQuery(), makeRowVector(inputVectors));
 
-    auto numAllocsAfter = pool()->getMemoryUsageTracker()->getNumAllocs();
+    auto numAllocsAfter = pool()->stats().numAllocs;
     ASSERT_EQ(numAllocsAfter - numAllocsBefore, 2);
 
     auto concatStd = [](const std::vector<std::string>& inputs) {
@@ -237,8 +223,7 @@ class StringFunctionsTest : public FunctionBaseTest {
     };
 
     for (int i = 0; i < inputTable.size(); ++i) {
-      EXPECT_EQ(result->valueAt(i), StringView(concatStd(inputTable[i])))
-          << "at " << i;
+      EXPECT_EQ(result->valueAt(i), concatStd(inputTable[i])) << "at " << i;
     }
   }
 
@@ -329,13 +314,6 @@ class StringFunctionsTest : public FunctionBaseTest {
       const std::string& search,
       const std::string& replace,
       bool multiReferenced);
-
-  void testXXHash64(
-      const std::vector<std::tuple<std::string, int64_t, int64_t>>& tests);
-
-  void testXXHash64(
-      const std::vector<std::pair<std::string, int64_t>>& tests,
-      bool stringVariant);
 
   static std::string generateInvalidUtf8() {
     std::string str;
@@ -520,6 +498,19 @@ TEST_F(StringFunctionsTest, substrNegativeStarts) {
   EXPECT_EQ(result->valueAt(0).getString(), "");
 }
 
+TEST_F(StringFunctionsTest, substrNumericOverflow) {
+  const auto substr = [&](std::optional<std::string> str,
+                          std::optional<int32_t> start,
+                          std::optional<int32_t> length) {
+    return evaluateOnce<std::string>("substr(c0, c1, c2)", str, start, length);
+  };
+
+  EXPECT_EQ(substr("example", 4, 2147483645), "mple");
+  EXPECT_EQ(substr("example", 2147483645, 4), "");
+  EXPECT_EQ(substr("example", -4, -2147483645), "");
+  EXPECT_EQ(substr("example", -2147483645, -4), "");
+}
+
 /**
  * The test for substr operating on single buffers with two string functions
  * using a conditional
@@ -556,7 +547,7 @@ TEST_F(StringFunctionsTest, substrWithConditionalDoubleBuffer) {
       1 /* index of the string vector */);
 
   // Destroying original string vector to examine
-  // the life time of the string buffer
+  // the lifetime of the string buffer
   EXPECT_EQ(stringVector.use_count(), 1);
   stringVector = nullptr;
 
@@ -616,7 +607,7 @@ TEST_F(StringFunctionsTest, substrWithConditionalSingleBuffer) {
       1 /* index of the string vector */);
 
   // Destroying original string vector to examine
-  // the life time of the string buffer
+  // the lifetime of the string buffer
   EXPECT_EQ(stringVector.use_count(), 1);
   stringVector = nullptr;
 
@@ -794,7 +785,7 @@ TEST_F(StringFunctionsTest, concat) {
     auto result = evaluate<SimpleVector<StringView>>(
         fmt::format("concat('{}', '{}')", c0, c1), rows);
     for (int i = 0; i < 10; ++i) {
-      EXPECT_EQ(result->valueAt(i), StringView(c0 + c1));
+      EXPECT_EQ(result->valueAt(i), c0 + c1);
     }
   }
 
@@ -1140,66 +1131,6 @@ TEST_F(StringFunctionsTest, codePoint) {
   }
 }
 
-TEST_F(StringFunctionsTest, md5) {
-  const auto md5 = [&](std::optional<std::string> arg) {
-    return evaluateOnce<std::string, std::string>(
-        "md5(c0)", {arg}, {VARBINARY()});
-  };
-
-  EXPECT_EQ(hexToDec("533f6357e0210e67d91f651bc49e1278"), md5("hashme"));
-  EXPECT_EQ(hexToDec("eb2ac5b04180d8d6011a016aeb8f75b3"), md5("Infinity"));
-  EXPECT_EQ(hexToDec("d41d8cd98f00b204e9800998ecf8427e"), md5(""));
-
-  EXPECT_EQ(std::nullopt, md5(std::nullopt));
-}
-
-TEST_F(StringFunctionsTest, sha256) {
-  const auto sha256 = [&](std::optional<std::string> arg) {
-    return evaluateOnce<std::string, std::string>(
-        "sha256(c0)", {arg}, {VARBINARY()});
-  };
-
-  EXPECT_EQ(
-      hexToDec(
-          "02208b9403a87df9f4ed6b2ee2657efaa589026b4cce9accc8e8a5bf3d693c86"),
-      sha256("hashme"));
-  EXPECT_EQ(
-      hexToDec(
-          "d0067cad9a63e0813759a2bb841051ca73570c0da2e08e840a8eb45db6a7a010"),
-      sha256("Infinity"));
-  EXPECT_EQ(
-      hexToDec(
-          "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"),
-      sha256(""));
-
-  EXPECT_EQ(std::nullopt, sha256(std::nullopt));
-}
-
-TEST_F(StringFunctionsTest, sha512) {
-  const auto sha512 = [&](std::optional<std::string> arg) {
-    return evaluateOnce<std::string, std::string>(
-        "sha512(c0)", {arg}, {VARBINARY()});
-  };
-
-  EXPECT_EQ(
-      hexToDec(
-          "1f6b05823a0453c1ec55009555087e8226d774c7c49d099784317b8460a0623ddaa083334f9218dda8075e0a0dc8319f89199f04e6b8f3980a73556866b388ae"),
-      sha512("prestodb"));
-  EXPECT_EQ(
-      hexToDec(
-          "7de872ed1c41ce3901bb7f12f20b0c0106331fe5b5ecc5fbbcf3ce6c79df4da595ebb7e221ab8b7fc5d918583eac6890ade1c26436335d3835828011204b7679"),
-      sha512("Infinity"));
-  EXPECT_EQ(
-      hexToDec(
-          "30163935c002fc4e1200906c3d30a9c4956b4af9f6dcaef1eb4b1fcb8fba69e7a7acdc491ea5b1f2864ea8c01b01580ef09defc3b11b3f183cb21d236f7f1a6b"),
-      sha512("hash"));
-  EXPECT_EQ(
-      hexToDec(
-          "cf83e1357eefb8bdf1542850d66d8007d620e4050b5715dc83f4a921d36ce9ce47d0d13c5d85f2b0ff8318d2877eec2f63b931bd47417a81a538327af927da3e"),
-      sha512(""));
-  EXPECT_EQ(std::nullopt, sha512(std::nullopt));
-}
-
 void StringFunctionsTest::testReplaceInPlace(
     const std::vector<std::pair<std::string, std::string>>& tests,
     const std::string& search,
@@ -1383,93 +1314,6 @@ TEST_F(StringFunctionsTest, controlExprEncodingPropagation) {
   test("if(1!=1, lower(C1), lower(C2))", false);
 }
 
-TEST_F(StringFunctionsTest, xxhash64) {
-  const auto xxhash64 = [&](std::optional<std::string> value) {
-    return evaluateOnce<std::string, std::string>(
-        "xxhash64(c0)", {value}, {VARBINARY()});
-  };
-
-  const auto toVarbinary = [](const int64_t input) {
-    std::string out;
-    out.resize(sizeof(input));
-    std::memcpy(out.data(), &input, sizeof(input));
-    return out;
-  };
-
-  EXPECT_EQ(std::nullopt, xxhash64(std::nullopt));
-  EXPECT_EQ(toVarbinary(-1205034819632174695L), xxhash64(""));
-  EXPECT_EQ(toVarbinary(-443202081618794350L), xxhash64("hashme"));
-}
-
-TEST_F(StringFunctionsTest, toHex) {
-  const auto toHex = [&](std::optional<std::string> value) {
-    return evaluateOnce<std::string>("to_hex(cast(c0 as varbinary))", value);
-  };
-
-  EXPECT_EQ(std::nullopt, toHex(std::nullopt));
-  EXPECT_EQ("", toHex(""));
-  EXPECT_EQ("61", toHex("a"));
-  EXPECT_EQ("616263", toHex("abc"));
-  EXPECT_EQ("68656C6C6F20776F726C64", toHex("hello world"));
-  EXPECT_EQ(
-      "48656C6C6F20576F726C642066726F6D2056656C6F7821",
-      toHex("Hello World from Velox!"));
-
-  const auto toHexFromBase64 = [&](std::optional<std::string> value) {
-    return evaluateOnce<std::string>("to_hex(from_base64(c0))", value);
-  };
-
-  EXPECT_EQ(
-      "D763DAB175DA5814349354FCF23885",
-      toHexFromBase64("12PasXXaWBQ0k1T88jiF"));
-}
-
-TEST_F(StringFunctionsTest, fromHex) {
-  const auto fromHex = [&](std::optional<std::string> value) {
-    return evaluateOnce<std::string>("from_hex(c0)", value);
-  };
-
-  EXPECT_EQ(std::nullopt, fromHex(std::nullopt));
-  EXPECT_EQ("", fromHex(""));
-  EXPECT_EQ("a", fromHex("61"));
-  EXPECT_EQ("abc", fromHex("616263"));
-  EXPECT_EQ("azo", fromHex("617a6f"));
-  EXPECT_EQ("azo", fromHex("617a6F"));
-  EXPECT_EQ("azo", fromHex("617A6F"));
-  EXPECT_EQ("hello world", fromHex("68656C6C6F20776F726C64"));
-  EXPECT_EQ(
-      "Hello World from Velox!",
-      fromHex("48656C6C6F20576F726C642066726F6D2056656C6F7821"));
-
-  EXPECT_THROW(fromHex("f/"), VeloxUserError);
-  EXPECT_THROW(fromHex("f:"), VeloxUserError);
-  EXPECT_THROW(fromHex("f@"), VeloxUserError);
-  EXPECT_THROW(fromHex("f`"), VeloxUserError);
-  EXPECT_THROW(fromHex("fg"), VeloxUserError);
-  EXPECT_THROW(fromHex("fff"), VeloxUserError);
-
-  const auto fromHexToBase64 = [&](std::optional<std::string> value) {
-    return evaluateOnce<std::string>("to_base64(from_hex(c0))", value);
-  };
-  EXPECT_EQ(
-      "12PasXXaWBQ0k1T88jiF",
-      fromHexToBase64("D763DAB175DA5814349354FCF23885"));
-}
-
-TEST_F(StringFunctionsTest, toBase64) {
-  const auto toBase64 = [&](std::optional<std::string> value) {
-    return evaluateOnce<std::string>("to_base64(cast(c0 as varbinary))", value);
-  };
-
-  EXPECT_EQ(std::nullopt, toBase64(std::nullopt));
-  EXPECT_EQ("", toBase64(""));
-  EXPECT_EQ("YQ==", toBase64("a"));
-  EXPECT_EQ("YWJj", toBase64("abc"));
-  EXPECT_EQ("aGVsbG8gd29ybGQ=", toBase64("hello world"));
-  EXPECT_EQ(
-      "SGVsbG8gV29ybGQgZnJvbSBWZWxveCE=", toBase64("Hello World from Velox!"));
-}
-
 TEST_F(StringFunctionsTest, reverse) {
   const auto reverse = [&](std::optional<std::string> value) {
     return evaluateOnce<std::string>("reverse(c0)", value);
@@ -1491,62 +1335,10 @@ TEST_F(StringFunctionsTest, reverse) {
       "\u671B\u5E0C\u2014\u7231\u2014\u5FF5\u4FE1",
       reverse("\u4FE1\u5FF5\u2014\u7231\u2014\u5E0C\u671B"));
   EXPECT_EQ(expectedInvalidStr, reverse(invalidStr));
-}
 
-TEST_F(StringFunctionsTest, fromBase64) {
-  const auto fromBase64 = [&](std::optional<std::string> value) {
-    return evaluateOnce<std::string>("from_base64(c0)", value);
-  };
-
-  EXPECT_EQ(std::nullopt, fromBase64(std::nullopt));
-  EXPECT_EQ("", fromBase64(""));
-  EXPECT_EQ("a", fromBase64("YQ=="));
-  EXPECT_EQ("abc", fromBase64("YWJj"));
-  EXPECT_EQ("hello world", fromBase64("aGVsbG8gd29ybGQ="));
-  EXPECT_EQ(
-      "Hello World from Velox!",
-      fromBase64("SGVsbG8gV29ybGQgZnJvbSBWZWxveCE="));
-
-  EXPECT_THROW(fromBase64("YQ="), VeloxUserError);
-  EXPECT_THROW(fromBase64("YQ==="), VeloxUserError);
-}
-
-TEST_F(StringFunctionsTest, urlEncode) {
-  const auto urlEncode = [&](std::optional<std::string> value) {
-    return evaluateOnce<std::string>("url_encode(c0)", value);
-  };
-
-  EXPECT_EQ(std::nullopt, urlEncode(std::nullopt));
-  EXPECT_EQ("", urlEncode(""));
-  EXPECT_EQ("http%3A%2F%2Ftest", urlEncode("http://test"));
-  EXPECT_EQ(
-      "http%3A%2F%2Ftest%3Fa%3Db%26c%3Dd", urlEncode("http://test?a=b&c=d"));
-  EXPECT_EQ(
-      "http%3A%2F%2F%E3%83%86%E3%82%B9%E3%83%88",
-      urlEncode("http://\u30c6\u30b9\u30c8"));
-  EXPECT_EQ("%7E%40%3A.-*_%2B+%E2%98%83", urlEncode("~@:.-*_+ \u2603"));
-  EXPECT_EQ("test", urlEncode("test"));
-}
-
-TEST_F(StringFunctionsTest, urlDecode) {
-  const auto urlDecode = [&](std::optional<std::string> value) {
-    return evaluateOnce<std::string>("url_decode(c0)", value);
-  };
-
-  EXPECT_EQ(std::nullopt, urlDecode(std::nullopt));
-  EXPECT_EQ("", urlDecode(""));
-  EXPECT_EQ("http://test", urlDecode("http%3A%2F%2Ftest"));
-  EXPECT_EQ(
-      "http://test?a=b&c=d", urlDecode("http%3A%2F%2Ftest%3Fa%3Db%26c%3Dd"));
-  EXPECT_EQ(
-      "http://\u30c6\u30b9\u30c8",
-      urlDecode("http%3A%2F%2F%E3%83%86%E3%82%B9%E3%83%88"));
-  EXPECT_EQ("~@:.-*_+ \u2603", urlDecode("%7E%40%3A.-*_%2B+%E2%98%83"));
-  EXPECT_EQ("test", urlDecode("test"));
-
-  EXPECT_THROW(urlDecode("http%3A%2F%2"), VeloxUserError);
-  EXPECT_THROW(urlDecode("http%3A%2F%"), VeloxUserError);
-  EXPECT_THROW(urlDecode("http%3A%2F%2H"), VeloxUserError);
+  // Test unicode out of the valid range.
+  std::string invalidIncompleteString = "\xed\xa0";
+  EXPECT_EQ(reverse(invalidIncompleteString), "\xa0\xed");
 }
 
 TEST_F(StringFunctionsTest, toUtf8) {
@@ -1587,7 +1379,7 @@ class MultiStringFunction : public exec::VectorFunction {
       const TypePtr& /* outputType */,
       exec::EvalCtx& /*context*/,
       VectorPtr& result) const override {
-    result = BaseVector::wrapInConstant(rows.size(), 0, args[0]);
+    result = BaseVector::wrapInConstant(rows.end(), 0, args[0]);
   }
 
   static std::vector<std::shared_ptr<exec::FunctionSignature>> signatures() {
@@ -2070,4 +1862,17 @@ TEST_F(StringFunctionsTest, lpad) {
   // Invalid UTF-8 chars
   EXPECT_EQ("x" + invalidString, lpad(invalidString, 8, "x"));
   EXPECT_EQ(invalidPadString + "abc", lpad("abc", 6, invalidPadString));
+}
+
+TEST_F(StringFunctionsTest, concatInSwitchExpr) {
+  auto data = makeRowVector(
+      {makeFlatVector<bool>({true, false}),
+       makeFlatVector<StringView>(
+           {"This is a long sentence"_sv, "This is some other sentence"_sv})});
+
+  auto result =
+      evaluate("if(c0, concat(c1, '-zzz'), concat('aaa-', c1))", data);
+  auto expected = makeFlatVector<StringView>(
+      {"This is a long sentence-zzz"_sv, "aaa-This is some other sentence"_sv});
+  test::assertEqualVectors(expected, result);
 }

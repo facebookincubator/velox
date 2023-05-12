@@ -64,6 +64,14 @@ AssertQueryBuilder& AssertQueryBuilder::config(
   return *this;
 }
 
+AssertQueryBuilder& AssertQueryBuilder::connectorConfig(
+    const std::string& connectorId,
+    const std::string& key,
+    const std::string& value) {
+  connectorConfigs_[connectorId][key] = value;
+  return *this;
+}
+
 AssertQueryBuilder& AssertQueryBuilder::split(Split split) {
   this->split(getOnlyLeafPlanNodeId(params_.planNode), std::move(split));
   return *this;
@@ -156,18 +164,36 @@ std::shared_ptr<Task> AssertQueryBuilder::assertResults(
   return cursor->task();
 }
 
+std::shared_ptr<Task> AssertQueryBuilder::assertEmptyResults() {
+  auto [cursor, results] = readCursor();
+  test::assertEmptyResults(results);
+  return cursor->task();
+}
+
+std::shared_ptr<Task> AssertQueryBuilder::assertTypeAndNumRows(
+    const TypePtr& expectedType,
+    vector_size_t expectedNumRows) {
+  auto [cursor, results] = readCursor();
+
+  assertEqualTypeAndNumRows(expectedType, expectedNumRows, results);
+  return cursor->task();
+}
+
 RowVectorPtr AssertQueryBuilder::copyResults(memory::MemoryPool* pool) {
   auto [cursor, results] = readCursor();
 
-  VELOX_CHECK(!results.empty());
+  if (results.empty()) {
+    return BaseVector::create<RowVector>(
+        params_.planNode->outputType(), 0, pool);
+  }
 
   auto totalCount = 0;
   for (const auto& result : results) {
     totalCount += result->size();
   }
 
-  auto copy = std::dynamic_pointer_cast<RowVector>(
-      BaseVector::create(results[0]->type(), totalCount, pool));
+  auto copy =
+      BaseVector::create<RowVector>(results[0]->type(), totalCount, pool);
   auto copyCount = 0;
   for (const auto& result : results) {
     copy->copy(result.get(), copyCount, 0, result->size());
@@ -181,13 +207,21 @@ std::pair<std::unique_ptr<TaskCursor>, std::vector<RowVectorPtr>>
 AssertQueryBuilder::readCursor() {
   VELOX_CHECK_NOT_NULL(params_.planNode);
 
-  if (!configs_.empty()) {
+  if (!configs_.empty() || !connectorConfigs_.empty()) {
     if (!params_.queryCtx) {
       // NOTE: the destructor of 'executor_' will wait for all the async task
       // activities to finish on AssertQueryBuilder dtor.
       params_.queryCtx = std::make_shared<core::QueryCtx>(executor_.get());
     }
+  }
+  if (!configs_.empty()) {
     params_.queryCtx->setConfigOverridesUnsafe(std::move(configs_));
+  }
+  if (!connectorConfigs_.empty()) {
+    for (auto& [connectorId, configs] : connectorConfigs_) {
+      params_.queryCtx->setConnectorConfigOverridesUnsafe(
+          connectorId, std::move(configs));
+    }
   }
 
   bool noMoreSplits = false;

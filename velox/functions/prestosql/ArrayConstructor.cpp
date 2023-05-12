@@ -13,6 +13,7 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+#include "velox/functions/prestosql/ArrayConstructor.h"
 #include "velox/expression/Expr.h"
 #include "velox/expression/VectorFunction.h"
 
@@ -36,9 +37,9 @@ class ArrayConstructor : public exec::VectorFunction {
     context.ensureWritable(rows, outputType, result);
     result->clearNulls(rows);
     auto arrayResult = result->as<ArrayVector>();
-    auto sizes = arrayResult->mutableSizes(rows.size());
+    auto sizes = arrayResult->mutableSizes(rows.end());
     auto rawSizes = sizes->asMutable<int32_t>();
-    auto offsets = arrayResult->mutableOffsets(rows.size());
+    auto offsets = arrayResult->mutableOffsets(rows.end());
     auto rawOffsets = offsets->asMutable<int32_t>();
 
     auto elementsResult = arrayResult->elements();
@@ -85,4 +86,9 @@ VELOX_DECLARE_VECTOR_FUNCTION(
     udf_array_constructor,
     ArrayConstructor::signatures(),
     std::make_unique<ArrayConstructor>());
+
+void registerArrayConstructor(const std::string& name) {
+  VELOX_REGISTER_VECTOR_FUNCTION(udf_array_constructor, name);
+}
+
 } // namespace facebook::velox::functions

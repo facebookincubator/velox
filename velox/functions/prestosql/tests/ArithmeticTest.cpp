@@ -13,12 +13,14 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+#include <cmath>
 #include <optional>
 
 #include <gmock/gmock.h>
 
 #include <velox/common/base/VeloxException.h>
 #include <velox/vector/SimpleVector.h>
+#include "velox/common/base/tests/GTestUtils.h"
 #include "velox/functions/prestosql/tests/utils/FunctionBaseTest.h"
 
 namespace facebook::velox {
@@ -31,6 +33,10 @@ constexpr float kNanF = std::numeric_limits<float>::quiet_NaN();
 
 MATCHER(IsNan, "is NaN") {
   return arg && std::isnan(*arg);
+}
+
+MATCHER(IsInf, "is Infinity") {
+  return arg && std::isinf(*arg);
 }
 
 class ArithmeticTest : public functions::test::FunctionBaseTest {
@@ -81,16 +87,34 @@ __attribute__((__no_sanitize__("float-divide-by-zero")))
 #endif
 #endif
 {
-  assertExpression<int32_t>("c0 / c1", {10, 11, -34}, {2, 2, 10}, {5, 5, -3});
-  assertExpression<int64_t>("c0 / c1", {10, 11, -34}, {2, 2, 10}, {5, 5, -3});
+  assertExpression<int32_t>(
+      "c0 / c1", {10, 11, -34, 0}, {2, 2, 10, -1}, {5, 5, -3, 0});
+  assertExpression<int64_t>(
+      "c0 / c1", {10, 11, -34, 0}, {2, 2, 10, -1}, {5, 5, -3, 0});
 
   assertError<int32_t>("c0 / c1", {10}, {0}, "division by zero");
   assertError<int32_t>("c0 / c1", {0}, {0}, "division by zero");
+  assertError<int32_t>(
+      "c0 / c1",
+      {std::numeric_limits<int32_t>::min()},
+      {-1},
+      "integer overflow: -2147483648 / -1");
 
   assertExpression<float>(
-      "c0 / c1", {10.5, 9.2, 0.0}, {2, 0, 0}, {5.25, kInfF, kNanF});
+      "c0 / c1",
+      {10.5, 9.2, 0.0, 0.0},
+      {2, 0, 0, -1},
+      {5.25, kInfF, kNanF, 0.0});
   assertExpression<double>(
-      "c0 / c1", {10.5, 9.2, 0.0}, {2, 0, 0}, {5.25, kInf, kNan});
+      "c0 / c1", {10.5, 9.2, 0.0, 0.0}, {2, 0, 0, -1}, {5.25, kInf, kNan, 0.0});
+}
+
+TEST_F(ArithmeticTest, multiply) {
+  assertError<int32_t>(
+      "c0 * c1",
+      {std::numeric_limits<int32_t>::min()},
+      {-1},
+      "integer overflow: -2147483648 * -1");
 }
 
 TEST_F(ArithmeticTest, mod) {
@@ -109,9 +133,10 @@ TEST_F(ArithmeticTest, mod) {
 }
 
 TEST_F(ArithmeticTest, modInt) {
-  std::vector<int64_t> numerInt = {9, 10, 0, -9, -10, -11};
-  std::vector<int64_t> denomInt = {3, -3, 11, -1, 199999, 77};
-  std::vector<int64_t> expectedInt = {0, 1, 0, 0, -10, -11};
+  std::vector<int64_t> numerInt = {
+      9, 10, 0, -9, -10, -11, std::numeric_limits<int64_t>::min()};
+  std::vector<int64_t> denomInt = {3, -3, 11, -1, 199999, 77, -1};
+  std::vector<int64_t> expectedInt = {0, 1, 0, 0, -10, -11, 0};
 
   assertExpression<int64_t, int64_t>(
       "mod(c0, c1)", numerInt, denomInt, expectedInt);
@@ -363,26 +388,24 @@ TEST_F(ArithmeticTest, widthBucket) {
   EXPECT_EQ(5, widthBucket(-1, 3.2, 0, 4));
 
   // failure
-  assertUserInvalidArgument(
-      [&]() { widthBucket(3.14, 0, 4, 0); },
-      "bucketCount must be greater than 0");
-  assertUserInvalidArgument(
-      [&]() { widthBucket(kNan, 0, 4, 10); }, "operand must not be NaN");
-  assertUserInvalidArgument(
-      [&]() { widthBucket(3.14, kNan, 0, 10); }, "first bound must be finite");
-  assertUserInvalidArgument(
-      [&]() { widthBucket(3.14, kInf, 0, 10); }, "first bound must be finite");
-  assertUserInvalidArgument(
-      [&]() { widthBucket(3.14, 0, kNan, 10); }, "second bound must be finite");
-  assertUserInvalidArgument(
-      [&]() { widthBucket(3.14, 0, kInf, 10); }, "second bound must be finite");
-  assertUserInvalidArgument(
-      [&]() { widthBucket(3.14, 0, 0, 10); }, "bounds cannot equal each other");
-  assertUserInvalidArgument(
-      [&]() { widthBucket(kInf, 0, 4, kMaxInt64); },
+  VELOX_ASSERT_THROW(
+      widthBucket(3.14, 0, 4, 0), "bucketCount must be greater than 0");
+  VELOX_ASSERT_THROW(widthBucket(kNan, 0, 4, 10), "operand must not be NaN");
+  VELOX_ASSERT_THROW(
+      widthBucket(3.14, kNan, 0, 10), "first bound must be finite");
+  VELOX_ASSERT_THROW(
+      widthBucket(3.14, kInf, 0, 10), "first bound must be finite");
+  VELOX_ASSERT_THROW(
+      widthBucket(3.14, 0, kNan, 10), "second bound must be finite");
+  VELOX_ASSERT_THROW(
+      widthBucket(3.14, 0, kInf, 10), "second bound must be finite");
+  VELOX_ASSERT_THROW(
+      widthBucket(3.14, 0, 0, 10), "bounds cannot equal each other");
+  VELOX_ASSERT_THROW(
+      widthBucket(kInf, 0, 4, kMaxInt64),
       "Bucket for value inf is out of range");
-  assertUserInvalidArgument(
-      [&]() { widthBucket(kInf, 4, 0, kMaxInt64); },
+  VELOX_ASSERT_THROW(
+      widthBucket(kInf, 4, 0, kMaxInt64),
       "Bucket for value inf is out of range");
 }
 
@@ -631,8 +654,9 @@ TEST_F(ArithmeticTest, clamp) {
 }
 
 TEST_F(ArithmeticTest, truncate) {
-  const auto truncate = [&](std::optional<double> a) {
-    return evaluateOnce<double>("truncate(c0)", a);
+  const auto truncate = [&](std::optional<double> a,
+                            std::optional<int32_t> n = 0) {
+    return evaluateOnce<double>("truncate(c0,c1)", a, n);
   };
 
   EXPECT_EQ(truncate(0), 0);
@@ -640,6 +664,39 @@ TEST_F(ArithmeticTest, truncate) {
   EXPECT_EQ(truncate(-1.5), -1);
   EXPECT_EQ(truncate(std::nullopt), std::nullopt);
   EXPECT_THAT(truncate(kNan), IsNan());
+  EXPECT_THAT(truncate(kInf), IsInf());
+
+  EXPECT_EQ(truncate(0, 0), 0);
+  EXPECT_EQ(truncate(1.5, 0), 1);
+  EXPECT_EQ(truncate(-1.5, 0), -1);
+  EXPECT_EQ(truncate(std::nullopt, 0), std::nullopt);
+  EXPECT_EQ(truncate(1.5, std::nullopt), std::nullopt);
+  EXPECT_THAT(truncate(kNan, 0), IsNan());
+  EXPECT_THAT(truncate(kNan, 1), IsNan());
+  EXPECT_THAT(truncate(kInf, 0), IsInf());
+  EXPECT_THAT(truncate(kInf, 1), IsInf());
+
+  EXPECT_DOUBLE_EQ(truncate(1.5678, 2).value(), 1.56);
+  EXPECT_DOUBLE_EQ(truncate(-1.5678, 2).value(), -1.56);
+  EXPECT_DOUBLE_EQ(truncate(1.333, -1).value(), 0);
+  EXPECT_DOUBLE_EQ(truncate(3.54555, 2).value(), 3.54);
+  EXPECT_DOUBLE_EQ(truncate(1234, 1).value(), 1234);
+  EXPECT_DOUBLE_EQ(truncate(1234, -1).value(), 1230);
+  EXPECT_DOUBLE_EQ(truncate(1234.56, 1).value(), 1234.5);
+  EXPECT_DOUBLE_EQ(truncate(1234.56, -1).value(), 1230.0);
+  EXPECT_DOUBLE_EQ(truncate(1239.999, 2).value(), 1239.99);
+  EXPECT_DOUBLE_EQ(truncate(1239.999, -2).value(), 1200.0);
+  EXPECT_DOUBLE_EQ(
+      truncate(123456789012345678901.23, 3).value(), 123456789012345678901.23);
+  EXPECT_DOUBLE_EQ(
+      truncate(-123456789012345678901.23, 3).value(),
+      -123456789012345678901.23);
+  EXPECT_DOUBLE_EQ(
+      truncate(123456789123456.999, 2).value(), 123456789123456.99);
+  EXPECT_DOUBLE_EQ(truncate(123456789012345678901.0, -21).value(), 0.0);
+  EXPECT_DOUBLE_EQ(truncate(123456789012345678901.23, -21).value(), 0.0);
+  EXPECT_DOUBLE_EQ(truncate(123456789012345678901.0, -21).value(), 0.0);
+  EXPECT_DOUBLE_EQ(truncate(123456789012345678901.23, -21).value(), 0.0);
 }
 
 } // namespace

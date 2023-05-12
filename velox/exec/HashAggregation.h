@@ -35,10 +35,7 @@ class HashAggregation : public Operator {
     return !noMoreInput_ && !partialFull_;
   }
 
-  void noMoreInput() override {
-    groupingSet_->noMoreInput();
-    Operator::noMoreInput();
-  }
+  void noMoreInput() override;
 
   BlockingReason isBlocked(ContinueFuture* /* unused */) override {
     return BlockingReason::kNotBlocked;
@@ -51,29 +48,34 @@ class HashAggregation : public Operator {
     groupingSet_.reset();
   }
 
+  void reclaim(uint64_t targetBytes) override;
+
  private:
   void prepareOutput(vector_size_t size);
 
-  /// Invoked to reset partial aggregation state if it was full and has been
-  /// flushed.
+  // Invoked to reset partial aggregation state if it was full and has been
+  // flushed.
   void resetPartialOutputIfNeed();
 
-  /// Invoked on partial output flush to try to bump up the partial aggregation
-  /// memory usage if it needs. 'aggregationPct' is the ratio between the number
-  /// of output rows and the number of input rows as a percentage. It is a
-  /// measure of the effectiveness of the partial aggregation.
+  // Invoked on partial output flush to try to bump up the partial aggregation
+  // memory usage if it needs. 'aggregationPct' is the ratio between the number
+  // of output rows and the number of input rows as a percentage. It is a
+  // measure of the effectiveness of the partial aggregation.
   void maybeIncreasePartialAggregationMemoryUsage(double aggregationPct);
 
-  /// Maximum number of rows in the output batch.
-  const uint32_t outputBatchSize_;
+  // True if we have enough rows and not enough reduction, i.e. more than
+  // 'abandonPartialAggregationMinRows_' rows and more than
+  // 'abandonPartialAggregationMinPct_' % of rows are unique.
+  bool abandonPartialAggregationEarly(int64_t numOutput) const;
+
+  // Invoked to record the spilling stats in operator stats after processing all
+  // the inputs.
+  void recordSpillStats();
 
   const bool isPartialOutput_;
   const bool isDistinct_;
   const bool isGlobal_;
-  const std::shared_ptr<memory::MemoryUsageTracker> memoryTracker_;
-  const double partialAggregationGoodPct_;
   const int64_t maxExtendedPartialAggregationMemoryUsage_;
-  const std::optional<Spiller::Config> spillConfig_;
 
   int64_t maxPartialAggregationMemoryUsage_;
   std::unique_ptr<GroupingSet> groupingSet_;
@@ -81,6 +83,17 @@ class HashAggregation : public Operator {
   bool partialFull_ = false;
   bool newDistincts_ = false;
   bool finished_ = false;
+  // True if partial aggregation has been found to be non-reducing.
+  bool abandonedPartialAggregation_{false};
+
+  // Minimum number of rows to see before deciding to give up on partial
+  // aggregation.
+  const int32_t abandonPartialAggregationMinRows_;
+
+  // Min unique rows pct for partial aggregation. If more than this many rows
+  // are unique, the partial aggregation is not worthwhile.
+  const int32_t abandonPartialAggregationMinPct_;
+
   RowContainerIterator resultIterator_;
   bool pushdownChecked_ = false;
   bool mayPushdown_ = false;

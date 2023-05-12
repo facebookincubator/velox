@@ -13,7 +13,6 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-
 #include "velox/exec/OperatorUtils.h"
 #include "velox/exec/VectorHasher.h"
 #include "velox/expression/EvalCtx.h"
@@ -116,6 +115,27 @@ void gatherCopy(
         target, targetIndex, count, sources, sourceIndices, sourceChannel);
   }
 }
+
+// We want to aggregate some operator runtime metrics per operator rather than
+// per event. This function returns true for such metrics.
+bool shouldAggregateRuntimeMetric(const std::string& name) {
+  static const folly::F14FastSet<std::string> metricNames{
+      "dataSourceWallNanos",
+      "dataSourceLazyWallNanos",
+      "queuedWallNanos",
+      "flushTimes"};
+  if (metricNames.contains(name)) {
+    return true;
+  }
+
+  // 'blocked*WallNanos'
+  if (name.size() > 16 and strncmp(name.c_str(), "blocked", 7) == 0) {
+    return true;
+  }
+
+  return false;
+}
+
 } // namespace
 
 void deselectRowsWithNulls(
@@ -336,12 +356,12 @@ void gatherCopy(
 }
 
 std::string makeOperatorSpillPath(
-    const std::string& spillPath,
-    const std::string& taskId,
+    const std::string& spillDir,
+    int pipelineId,
     int driverId,
     int32_t operatorId) {
-  VELOX_CHECK(!spillPath.empty());
-  return fmt::format("{}/{}_{}_{}", spillPath, taskId, driverId, operatorId);
+  VELOX_CHECK(!spillDir.empty());
+  return fmt::format("{}/{}_{}_{}", spillDir, pipelineId, driverId, operatorId);
 }
 
 void addOperatorRuntimeStats(
@@ -354,6 +374,26 @@ void addOperatorRuntimeStats(
     VELOX_CHECK_EQ(stats.at(name).unit, value.unit);
   }
   stats.at(name).addValue(value.value);
+}
+
+void aggregateOperatorRuntimeStats(
+    std::unordered_map<std::string, RuntimeMetric>& stats) {
+  for (auto& runtimeMetric : stats) {
+    if (shouldAggregateRuntimeMetric(runtimeMetric.first)) {
+      runtimeMetric.second.aggregate();
+    }
+  }
+}
+
+folly::Range<vector_size_t*> initializeRowNumberMapping(
+    BufferPtr& mapping,
+    vector_size_t size,
+    memory::MemoryPool* pool) {
+  if (!mapping || !mapping->unique() ||
+      mapping->size() < sizeof(vector_size_t) * size) {
+    mapping = allocateIndices(size, pool);
+  }
+  return folly::Range(mapping->asMutable<vector_size_t>(), size);
 }
 
 } // namespace facebook::velox::exec

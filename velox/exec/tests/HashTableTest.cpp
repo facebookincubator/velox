@@ -78,7 +78,7 @@ class HashTableTest : public testing::TestWithParam<bool> {
             buildType->childAt(channel), channel));
       }
       auto table = HashTable<true>::createForJoin(
-          std::move(keyHashers), dependentTypes, true, false, mappedMemory_);
+          std::move(keyHashers), dependentTypes, true, false, pool_.get());
 
       makeRows(size, 1, sequence, buildType, batches);
       copyVectorsToTable(batches, startOffset, table.get());
@@ -104,9 +104,12 @@ class HashTableTest : public testing::TestWithParam<bool> {
 
   // Inserts and deletes rows in a HashTable, similarly to a group by
   // that periodically spills a fraction of the groups.
-  void testGroupBySpill(int32_t size, TypePtr tableType, int32_t numKeys) {
-    constexpr int32_t kBatchSize = 1000;
-    constexpr int32_t kNumErasePerRound = 500;
+  void testGroupBySpill(
+      int32_t size,
+      TypePtr tableType,
+      int32_t numKeys,
+      int32_t batchSize = 1000,
+      int32_t eraseSize = 500) {
     int32_t sequence = 0;
     std::vector<RowVectorPtr> batches;
     auto table = createHashTableForAggregation(tableType, numKeys);
@@ -114,17 +117,16 @@ class HashTableTest : public testing::TestWithParam<bool> {
     std::vector<char*> allInserted;
     int32_t numErased = 0;
     // We insert 1000 and delete 500.
-    for (auto round = 0; round < size; round += kBatchSize) {
-      makeRows(kBatchSize, 1, sequence, tableType, batches);
-      sequence += kBatchSize;
-      lookup->reset(kBatchSize);
+    for (auto round = 0; round < size; round += batchSize) {
+      makeRows(batchSize, 1, sequence, tableType, batches);
+      sequence += batchSize;
+      lookup->reset(batchSize);
       insertGroups(*batches.back(), *lookup, *table);
       allInserted.insert(
           allInserted.end(), lookup->hits.begin(), lookup->hits.end());
 
-      table->erase(
-          folly::Range<char**>(&allInserted[numErased], kNumErasePerRound));
-      numErased += kNumErasePerRound;
+      table->erase(folly::Range<char**>(&allInserted[numErased], eraseSize));
+      numErased += eraseSize;
     }
     int32_t batchStart = 0;
     // We loop over the keys one more time. The first half will be all
@@ -132,14 +134,13 @@ class HashTableTest : public testing::TestWithParam<bool> {
     int32_t row = 0;
     for (auto i = 0; i < batches.size(); ++i) {
       insertGroups(*batches[0], *lookup, *table);
-      for (; row < batchStart + kBatchSize; ++row) {
-        if (row < numErased) {
-          ASSERT_NE(lookup->hits[row - batchStart], allInserted[row]);
-        } else {
+      for (; row < batchStart + batchSize; ++row) {
+        if (row >= numErased) {
           ASSERT_EQ(lookup->hits[row - batchStart], allInserted[row]);
         }
       }
     }
+    table->checkConsistency();
   }
 
   std::unique_ptr<HashTable<false>> createHashTableForAggregation(
@@ -152,7 +153,7 @@ class HashTableTest : public testing::TestWithParam<bool> {
     }
     static std::vector<std::unique_ptr<Aggregate>> empty;
     return HashTable<false>::createForAggregation(
-        std::move(keyHashers), empty, mappedMemory_);
+        std::move(keyHashers), empty, pool_.get());
   }
 
   void insertGroups(
@@ -217,9 +218,9 @@ class HashTableTest : public testing::TestWithParam<bool> {
   }
 
   void copyVectorsToTable(
-      std::vector<RowVectorPtr>& batches,
+      const std::vector<RowVectorPtr>& batches,
       int32_t tableOffset,
-      HashTable<true>* table) {
+      BaseHashTable* table) {
     int32_t batchSize = batches[0]->size();
     raw_vector<uint64_t> dummy(batchSize);
     int32_t batchOffset = 0;
@@ -249,12 +250,11 @@ class HashTableTest : public testing::TestWithParam<bool> {
       for (auto i = 0; i < batch->childrenSize(); ++i) {
         decoders[i].decode(*batch->childAt(i), rows);
         if (i < numKeys) {
-          if (table->hashMode() != BaseHashTable::HashMode::kHash) {
-            auto hasher = table->hashers()[i].get();
-            if (hasher->mayUseValueIds()) {
-              hasher->decode(*batch->childAt(i), insertedRows);
-              hasher->computeValueIds(insertedRows, dummy);
-            }
+          auto hasher = table->hashers()[i].get();
+          hasher->decode(*batch->childAt(i), insertedRows);
+          if (table->hashMode() != BaseHashTable::HashMode::kHash &&
+              hasher->mayUseValueIds()) {
+            hasher->computeValueIds(insertedRows, dummy);
           }
         }
       }
@@ -286,7 +286,7 @@ class HashTableTest : public testing::TestWithParam<bool> {
           *reinterpret_cast<char**>(newRow + nextOffset) = nullptr;
         }
         ++numInserted;
-        for (auto i = 0; i < hashers.size(); ++i) {
+        for (auto i = 0; i < batches[batchIndex]->type()->size(); ++i) {
           rowContainer->store(decoded[batchIndex][i], rowIndex, newRow, i);
         }
       }
@@ -308,8 +308,8 @@ class HashTableTest : public testing::TestWithParam<bool> {
             nullptr);
 
       case TypeKind::VARCHAR: {
-        auto strings = std::static_pointer_cast<FlatVector<StringView>>(
-            BaseVector::create(VARCHAR(), size, pool_.get()));
+        auto strings = BaseVector::create<FlatVector<StringView>>(
+            VARCHAR(), size, pool_.get());
         for (auto row = 0; row < size; ++row) {
           auto string = fmt::format("{}", keySpacing_ * (sequence + row));
           // Make strings that overflow the inline limit for 1/10 of
@@ -434,9 +434,43 @@ class HashTableTest : public testing::TestWithParam<bool> {
     topTable_->erase(folly::Range<char**>(toErase.data(), toErase.size()));
   }
 
-  std::unique_ptr<memory::MemoryPool> pool_{
-      memory::getDefaultScopedMemoryPool()};
-  memory::MappedMemory* mappedMemory_{memory::MappedMemory::getInstance()};
+  void testListNullKeyRows(
+      const VectorPtr& keys,
+      BaseHashTable::HashMode mode) {
+    folly::F14FastSet<int> nullValues;
+    for (int i = 0; i < keys->size(); ++i) {
+      if (i % 97 == 0) {
+        keys->setNull(i, true);
+        nullValues.insert(i);
+      }
+    }
+    auto batch = vectorMaker_->rowVector(
+        {keys,
+         vectorMaker_->flatVector<int64_t>(keys->size(), folly::identity)});
+    std::vector<std::unique_ptr<VectorHasher>> hashers;
+    hashers.push_back(std::make_unique<VectorHasher>(keys->type(), 0));
+    auto table = HashTable<false>::createForJoin(
+        std::move(hashers), {BIGINT()}, true, false, pool_.get());
+    copyVectorsToTable({batch}, 0, table.get());
+    table->prepareJoinTable({}, executor_.get());
+    ASSERT_EQ(table->hashMode(), mode);
+    std::vector<char*> rows(nullValues.size());
+    BaseHashTable::NullKeyRowsIterator iter;
+    auto numRows = table->listNullKeyRows(&iter, rows.size(), rows.data());
+    ASSERT_EQ(numRows, nullValues.size());
+    auto actual =
+        BaseVector::create<FlatVector<int64_t>>(BIGINT(), numRows, pool_.get());
+    table->rows()->extractColumn(rows.data(), numRows, 1, actual);
+    for (int i = 0; i < actual->size(); ++i) {
+      auto it = nullValues.find(actual->valueAt(i));
+      ASSERT_TRUE(it != nullValues.end());
+      nullValues.erase(it);
+    }
+    ASSERT_TRUE(nullValues.empty());
+    ASSERT_EQ(0, table->listNullKeyRows(&iter, rows.size(), rows.data()));
+  }
+
+  std::shared_ptr<memory::MemoryPool> pool_{memory::addDefaultLeafMemoryPool()};
   std::unique_ptr<test::VectorMaker> vectorMaker_{
       std::make_unique<test::VectorMaker>(pool_.get())};
   // Bitmap of positions in batches_ that end up in the table.
@@ -518,8 +552,75 @@ TEST_P(HashTableTest, clear) {
       std::vector<TypePtr>{BIGINT()},
       BIGINT()));
   auto table = HashTable<true>::createForAggregation(
-      std::move(keyHashers), aggregates, mappedMemory_);
+      std::move(keyHashers), aggregates, pool_.get());
   table->clear();
+}
+
+// Test a specific code path in HashTable::decodeHashMode where
+// rangesWithReserve overflows, distinctsWithReserve fits and bestWithReserve =
+// rangesWithReserve.
+TEST_P(HashTableTest, bestWithReserveOverflow) {
+  auto rowType =
+      ROW({"a", "b", "c", "d"}, {BIGINT(), BIGINT(), BIGINT(), BIGINT()});
+  const auto numKeys = 4;
+  auto table = createHashTableForAggregation(rowType, numKeys);
+  auto lookup = std::make_unique<HashLookup>(table->hashers());
+
+  // Make sure rangesWithReserve overflows.
+  //  Ranges for keys are: 200K, 200K, 200K, 100K.
+  //  With 50% reserve at both ends: 400K, 400K, 400K, 200K.
+  //  Combined ranges with reserve: 400K * 400K * 400K * 200K =
+  //  12,800,000,000,000,000,000,000.
+  // Also, make sure that distinctsWithReserve fits.
+  //  Number of distinct values (ndv) are: 20K, 20K, 20K, 10K.
+  //  With 50% reserve: 30K, 30K, 30K, 15K.
+  //  Combined ndvs with reserve: 30K * 30K * 30K * 15K =
+  //  405,000,000,000,000,000.
+  // Also, make sure bestWithReserve == rangesWithReserve and therefore
+  // overflows as well.
+  //  Range is considered 'best' if range < 20 * ndv.
+  //
+  // Finally, make sure last key has some duplicate values. The original bug
+  // this test is reproducing was when HashTable failed to set multiplier for
+  // the VectorHasher, which caused the combined value IDs to be computed using
+  // only the last VectorHasher. Hence, all values where last key was the same
+  // were assigned the same value IDs.
+  auto data = vectorMaker_->rowVector({
+      vectorMaker_->flatVector<int64_t>(
+          20'000, [](auto row) { return row * 10; }),
+      vectorMaker_->flatVector<int64_t>(
+          20'000, [](auto row) { return 1 + row * 10; }),
+      vectorMaker_->flatVector<int64_t>(
+          20'000, [](auto row) { return 2 + row * 10; }),
+      vectorMaker_->flatVector<int64_t>(
+          20'000, [](auto row) { return 3 + (row / 2) * 10; }),
+  });
+
+  lookup->reset(data->size());
+  insertGroups(*data, *lookup, *table);
+
+  // Expect 'normalized key' hash mode using distinct values, not ranges.
+  ASSERT_EQ(table->hashMode(), BaseHashTable::HashMode::kNormalizedKey);
+  ASSERT_EQ(table->numDistinct(), data->size());
+
+  for (auto i = 0; i < numKeys; ++i) {
+    ASSERT_FALSE(table->hashers()[i]->isRange());
+    ASSERT_TRUE(table->hashers()[i]->mayUseValueIds());
+  }
+
+  // Compute value IDs and verify all are unique.
+  SelectivityVector rows(data->size());
+  raw_vector<uint64_t> valueIds(data->size());
+
+  for (int32_t i = 0; i < numKeys; ++i) {
+    bool ok = table->hashers()[i]->computeValueIds(rows, valueIds);
+    ASSERT_TRUE(ok);
+  }
+
+  std::unordered_set<uint64_t> uniqueValueIds;
+  for (auto id : valueIds) {
+    ASSERT_TRUE(uniqueValueIds.insert(id).second) << id;
+  }
 }
 
 /// Test edge case that used to trigger a rounding error in
@@ -582,12 +683,99 @@ TEST_P(HashTableTest, arrayProbeNormalizedKey) {
     rows.setValidRange(5'000, 10'000, true);
     rows.updateBounds();
     insertGroups(*data, rows, *lookup, *table);
+    EXPECT_LE(table->stats().numDistinct, table->rehashSize());
   }
 
-  ASSERT_TRUE(table->hashMode() == BaseHashTable::HashMode::kNormalizedKey);
+  ASSERT_EQ(table->hashMode(), BaseHashTable::HashMode::kNormalizedKey);
+}
+
+TEST_P(HashTableTest, regularHashingTableSize) {
+  keySpacing_ = 1000;
+  auto checkTableSize = [&](BaseHashTable::HashMode mode,
+                            const RowTypePtr& type) {
+    std::vector<std::unique_ptr<VectorHasher>> keyHashers;
+    for (auto channel = 0; channel < type->size(); ++channel) {
+      keyHashers.emplace_back(
+          std::make_unique<VectorHasher>(type->childAt(channel), channel));
+    }
+    auto table = HashTable<true>::createForJoin(
+        std::move(keyHashers), {}, true, false, pool_.get());
+    std::vector<RowVectorPtr> batches;
+    makeRows(1 << 12, 1, 0, type, batches);
+    copyVectorsToTable(batches, 0, table.get());
+    table->prepareJoinTable({}, executor_.get());
+    ASSERT_EQ(table->hashMode(), mode);
+    EXPECT_GE(table->rehashSize(), table->numDistinct());
+  };
+  {
+    auto type = ROW({"key"}, {ROW({"k1"}, {BIGINT()})});
+    checkTableSize(BaseHashTable::HashMode::kHash, type);
+  }
+  {
+    auto type = ROW({"k1", "k2"}, {BIGINT(), BIGINT()});
+    checkTableSize(BaseHashTable::HashMode::kNormalizedKey, type);
+  }
+}
+
+TEST_P(HashTableTest, groupBySpill) {
+  auto type = ROW({"k1"}, {BIGINT()});
+  testGroupBySpill(5'000'000, type, 1, 1000, 1000);
+}
+
+TEST_P(HashTableTest, checkSizeValidation) {
+  auto rowType = ROW({"a"}, {BIGINT()});
+  auto table = createHashTableForAggregation(rowType, 1);
+  auto lookup = std::make_unique<HashLookup>(table->hashers());
+
+  // The initial set hash mode with table size of 256K entries.
+  table->testingSetHashMode(BaseHashTable::HashMode::kHash, 131'072);
+  ASSERT_EQ(table->capacity(), 256 << 10);
+
+  auto vector1 = vectorMaker_->rowVector({vectorMaker_->flatVector<int64_t>(
+      131'072, [&](auto row) { return row; })});
+  // The first insertion of 128KB distinct entries.
+  insertGroups(*vector1, *lookup, *table);
+  ASSERT_EQ(table->capacity(), 256 << 10);
+
+  auto vector2 = vectorMaker_->rowVector({vectorMaker_->flatVector<int64_t>(
+      131'072, [&](auto row) { return 131'072 + row; })});
+  // The second insertion of 128KB distinct entries triggers the table resizing.
+  // And we expect the table size bumps up to 512KB.
+  insertGroups(*vector2, *lookup, *table);
+  ASSERT_EQ(table->capacity(), 512 << 10);
+
+  auto vector3 = vectorMaker_->rowVector(
+      {vectorMaker_->flatVector<int64_t>(1, [&](auto row) { return row; })});
+  // The last insertion triggers the check size which see the table size matches
+  // the number of distinct entries that it stores.
+  insertGroups(*vector3, *lookup, *table);
+  ASSERT_EQ(table->capacity(), 512 << 10);
+}
+
+TEST_P(HashTableTest, listNullKeyRows) {
+  VectorPtr keys = vectorMaker_->flatVector<int64_t>(500, folly::identity);
+  testListNullKeyRows(keys, BaseHashTable::HashMode::kArray);
+  {
+    auto flat = vectorMaker_->flatVector<int64_t>(
+        10'000, [](auto i) { return i * 1000; });
+    keys = vectorMaker_->rowVector({flat, flat});
+  }
+  testListNullKeyRows(keys, BaseHashTable::HashMode::kHash);
 }
 
 VELOX_INSTANTIATE_TEST_SUITE_P(
     HashTableTests,
     HashTableTest,
     testing::Values(true, false));
+
+TEST(HashTableTest, modeString) {
+  ASSERT_EQ("HASH", BaseHashTable::modeString(BaseHashTable::HashMode::kHash));
+  ASSERT_EQ(
+      "NORMALIZED_KEY",
+      BaseHashTable::modeString(BaseHashTable::HashMode::kNormalizedKey));
+  ASSERT_EQ(
+      "ARRAY", BaseHashTable::modeString(BaseHashTable::HashMode::kArray));
+  ASSERT_EQ(
+      "Unknown HashTable mode:100",
+      BaseHashTable::modeString(static_cast<BaseHashTable::HashMode>(100)));
+}

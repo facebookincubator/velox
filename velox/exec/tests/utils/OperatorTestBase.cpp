@@ -16,6 +16,7 @@
 
 #include "velox/exec/tests/utils/OperatorTestBase.h"
 #include "velox/common/caching/AsyncDataCache.h"
+#include "velox/common/file/FileSystems.h"
 #include "velox/common/testutil/TestValue.h"
 #include "velox/dwio/common/DataSink.h"
 #include "velox/exec/Exchange.h"
@@ -36,7 +37,7 @@ namespace facebook::velox::exec::test {
 std::shared_ptr<cache::AsyncDataCache> OperatorTestBase::asyncDataCache_;
 
 OperatorTestBase::OperatorTestBase() {
-  using memory::MappedMemory;
+  using memory::MemoryAllocator;
   facebook::velox::exec::ExchangeSource::registerFactory();
   parse::registerTypeResolver();
 }
@@ -46,8 +47,8 @@ void OperatorTestBase::registerVectorSerde() {
 }
 
 OperatorTestBase::~OperatorTestBase() {
-  // Revert to default process-wide MappedMemory.
-  memory::MappedMemory::setDefaultInstance(nullptr);
+  // Revert to default process-wide MemoryAllocator.
+  memory::MemoryAllocator::setDefaultInstance(nullptr);
 }
 
 void OperatorTestBase::TearDownTestCase() {
@@ -55,16 +56,18 @@ void OperatorTestBase::TearDownTestCase() {
 }
 
 void OperatorTestBase::SetUp() {
-  // Sets the process default MappedMemory to an async cache of up
-  // to 4GB backed by a default MappedMemory
+  // Sets the process default MemoryAllocator to an async cache of up
+  // to 4GB backed by a default MemoryAllocator
   if (!asyncDataCache_) {
     asyncDataCache_ = std::make_shared<cache::AsyncDataCache>(
-        memory::MappedMemory::createDefaultInstance(), 4UL << 30);
+        memory::MemoryAllocator::createDefaultInstance(), 4UL << 30);
   }
-  memory::MappedMemory::setDefaultInstance(asyncDataCache_.get());
+  memory::MemoryAllocator::setDefaultInstance(asyncDataCache_.get());
   if (!isRegisteredVectorSerde()) {
     this->registerVectorSerde();
   }
+  driverExecutor_ = std::make_unique<folly::CPUThreadPoolExecutor>(3);
+  ioExecutor_ = std::make_unique<folly::IOThreadPoolExecutor>(3);
 }
 
 void OperatorTestBase::SetUpTestCase() {
@@ -157,6 +160,24 @@ core::TypedExprPtr OperatorTestBase::parseExpr(
     const parse::ParseOptions& options) {
   auto untyped = parse::parseExpr(text, options);
   return core::Expressions::inferTypes(untyped, rowType, pool_.get());
+}
+
+/*static*/ void OperatorTestBase::deleteTaskAndCheckSpillDirectory(
+    std::shared_ptr<Task>& task) {
+  const auto spillDirectoryStr = task->spillDirectory();
+  // Nothing to do if there is no spilling directory was set.
+  if (spillDirectoryStr.empty()) {
+    return;
+  }
+
+  // Wait for the task to go.
+  task.reset();
+  Task::testingWaitForAllTasksToBeDeleted();
+
+  // If a spilling directory was set, ensure it was removed after the task is
+  // gone.
+  auto fs = filesystems::getFileSystem(spillDirectoryStr, nullptr);
+  EXPECT_FALSE(fs->exists(spillDirectoryStr));
 }
 
 } // namespace facebook::velox::exec::test
