@@ -6,6 +6,18 @@ Mathematical Functions
 
     Returns the absolute value of ``x``.
 
+.. spark:function:: acosh(x) -> double
+
+    Returns inverse hyperbolic cosine of ``x``.
+
+.. spark:function:: asinh(x) -> double
+
+    Returns inverse hyperbolic sine of ``x``.
+
+.. spark:function:: atanh(x) -> double
+
+    Returns inverse hyperbolic tangent of ``x``.
+
 .. spark:function:: add(x, y) -> [same as x]
 
     Returns the result of adding x to y. The types of x and y must be the same.

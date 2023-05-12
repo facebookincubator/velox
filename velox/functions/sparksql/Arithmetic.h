@@ -41,6 +41,14 @@ struct AsinhFunction {
 };
 
 template <typename T>
+struct AtanhFunction {
+  template <typename TInput>
+  FOLLY_ALWAYS_INLINE void call(TInput& result, TInput a) {
+    result = std::atanh(a);
+  }
+};
+
+template <typename T>
 struct RemainderFunction {
   template <typename TInput>
   FOLLY_ALWAYS_INLINE bool
