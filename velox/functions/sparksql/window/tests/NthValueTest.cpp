@@ -16,7 +16,6 @@
 #include "velox/common/base/tests/GTestUtils.h"
 #include "velox/functions/lib/window/tests/WindowTestBase.h"
 #include "velox/functions/sparksql/window/WindowFunctionsRegistration.h"
-#include "velox/vector/fuzzer/VectorFuzzer.h"
 
 using namespace facebook::velox::exec::test;
 
@@ -28,6 +27,7 @@ class SparkNthValueTest : public WindowTestBase {
  protected:
   void SetUp() override {
     WindowTestBase::SetUp();
+    WindowTestBase::options_.parseIntegerAsBigint = false;
     velox::functions::window::sparksql::registerWindowFunctions("");
   }
 };
@@ -37,14 +37,15 @@ TEST_F(SparkNthValueTest, basic) {
 
   auto vectors = makeRowVector({
       makeFlatVector<int32_t>(size, [](auto row) { return row; }),
-      makeFlatVector<int32_t>(size, [](auto row) { return row % 50; }),
+      makeFlatVector<int32_t>(size, [](auto row) { return row % 30; }),
       makeFlatVector<int32_t>(size, [](auto row) { return row % 5 + 1; }),
   });
 
   std::string overClause = "partition by c0 order by c1";
-  std::string frameClausee = "rows between 1 preceding and current row";
+  std::string frameClausee =
+      "range between unbounded preceding and current row";
   WindowTestBase::testWindowFunction(
-      {vectors}, "nth_value(c0, c2)", {overClause}, {frameClausee});
+      {vectors}, "nth_value(c0, 1)", {overClause}, {frameClausee});
 }
 
 TEST_F(SparkNthValueTest, singlePartition) {
@@ -52,29 +53,45 @@ TEST_F(SparkNthValueTest, singlePartition) {
 
   auto vectors = makeRowVector({
       makeFlatVector<int32_t>(size, [](auto /* row */) { return 1; }),
-      makeFlatVector<int32_t>(size, [](auto row) { return row % 50; }),
+      makeFlatVector<int32_t>(size, [](auto row) { return row % 30; }),
       makeFlatVector<int32_t>(size, [](auto row) { return row % 5 + 1; }),
   });
 
   std::string overClause = "partition by c0 order by c1";
-  std::string frameClausee = "rows between 1 preceding and current row";
+  std::string frameClausee =
+      "range between unbounded preceding and current row";
   WindowTestBase::testWindowFunction(
-      {vectors}, "nth_value(c0, c2)", {overClause}, {frameClausee});
+      {vectors}, "nth_value(c0, 1)", {overClause}, {frameClausee});
+}
+
+TEST_F(SparkNthValueTest, nonLiteralOffset) {
+  vector_size_t size = 20;
+
+  auto vectors = makeRowVector({
+      makeFlatVector<int32_t>(size, [](auto /* row */) { return 1; }),
+      makeFlatVector<int32_t>(size, [](auto row) { return row % 30; }),
+      makeFlatVector<int32_t>(size, [](auto row) { return row % 5; }),
+  });
+
+  std::string overClause = "partition by c0 order by c1";
+  std::string offsetError = "Offset must be literal for spark";
+  assertWindowFunctionError(
+      {vectors}, "nth_value(c0, c2)", overClause, offsetError);
 }
 
 TEST_F(SparkNthValueTest, invalidOffsets) {
   vector_size_t size = 20;
 
-  auto vectors = makeRowVector({
-      makeFlatVector<int32_t>(size, [](auto /* row */) { return 1; }),
-      makeFlatVector<int32_t>(size, [](auto row) { return row % 50; }),
-      makeFlatVector<int32_t>(size, [](auto row) { return row % 5; }),
-  });
+  auto vectors = makeRowVector(
+      {makeFlatVector<int32_t>(size, [](auto /* row */) { return 1; }),
+       makeFlatVector<int32_t>(size, [](auto row) { return row % 50; })});
 
   std::string overClause = "partition by c0 order by c1";
   std::string offsetError = "Offset must be at least 1";
   assertWindowFunctionError(
-      {vectors}, "nth_value(c0, c2)", overClause, offsetError);
+      {vectors}, "nth_value(c0, 0)", overClause, offsetError);
+  assertWindowFunctionError(
+      {vectors}, "nth_value(c0, -1)", overClause, offsetError);
 }
 
 }; // namespace

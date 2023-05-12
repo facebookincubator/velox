@@ -22,10 +22,7 @@
 namespace facebook::velox::functions::window {
 
 namespace {
-template <TypeKind OffsetTypeKind>
 class NthValueFunction : public exec::WindowFunction {
-  using OffsetNativeType = typename TypeTraits<OffsetTypeKind>::NativeType;
-
  public:
   explicit NthValueFunction(
       const std::vector<exec::WindowFunctionArg>& args,
@@ -35,22 +32,38 @@ class NthValueFunction : public exec::WindowFunction {
     VELOX_CHECK_EQ(args.size(), 2);
     VELOX_CHECK_NULL(args[0].constantValue);
     valueIndex_ = args[0].index.value();
-    if (args[1].constantValue) {
+    if (args[1].type->isInteger()) {
+      VELOX_USER_CHECK(
+          args[1].constantValue,
+          "Offset must be literal for spark");
       if (args[1].constantValue->isNullAt(0)) {
         isConstantOffsetNull_ = true;
         return;
       }
       constantOffset_ =
-          args[1]
-              .constantValue->template as<ConstantVector<OffsetNativeType>>()
-              ->valueAt(0);
+        args[1]
+            .constantValue->template as<ConstantVector<int32_t>>()
+            ->valueAt(0);
       VELOX_USER_CHECK_GE(
           constantOffset_.value(), 1, "Offset must be at least 1");
-      return;
+    } else {
+      if (args[1].constantValue) {
+        if (args[1].constantValue->isNullAt(0)) {
+          isConstantOffsetNull_ = true;
+          return;
+        }
+        constantOffset_ =
+          args[1]
+              .constantValue->template as<ConstantVector<int64_t>>()
+              ->valueAt(0);
+        VELOX_USER_CHECK_GE(
+            constantOffset_.value(), 1, "Offset must be at least 1");
+        return;
+      }
+
+      offsetIndex_ = args[1].index.value();
+      offsets_ = BaseVector::create<FlatVector<int64_t>>(BIGINT(), 0, pool);
     }
-    offsetIndex_ = args[1].index.value();
-    offsets_ = BaseVector::create<FlatVector<OffsetNativeType>>(
-        fromKindToScalerType(OffsetTypeKind), 0, pool);
   }
 
   void resetPartition(const exec::WindowPartition* partition) override {
@@ -121,8 +134,7 @@ class NthValueFunction : public exec::WindowFunction {
       if (offsets_->isNullAt(i)) {
         rowNumbers_[i] = -1;
       } else {
-        vector_size_t offset =
-          static_cast<vector_size_t>(offsets_->valueAt(i));
+        vector_size_t offset = offsets_->valueAt(i);
         VELOX_USER_CHECK_GE(offset, 1, "Offset must be at least 1");
         setRowNumber(i, frameStarts, frameEnds, offset);
       }
@@ -162,12 +174,12 @@ class NthValueFunction : public exec::WindowFunction {
   const exec::WindowPartition* partition_;
 
   // These fields are set if the offset argument is a constant value.
-  std::optional<OffsetNativeType> constantOffset_;
+  std::optional<int64_t> constantOffset_;
   bool isConstantOffsetNull_ = false;
 
   // This vector is used to extract values of the offset argument column
   // (if not a constant offset value).
-  FlatVectorPtr<OffsetNativeType> offsets_;
+  FlatVectorPtr<int64_t> offsets_;
 
   // This offset tracks how far along the partition rows have been output.
   // This can be used to optimize reading offset column values corresponding
@@ -185,15 +197,14 @@ class NthValueFunction : public exec::WindowFunction {
 };
 } // namespace
 
-template <TypeKind OffsetTypeKind>
-void registerNthValue(const std::string& name) {
-
+void registerNthValue(
+    const std::string& name, const TypeKind& offsetTypeKind) {
   std::vector<exec::FunctionSignaturePtr> signatures{
       exec::FunctionSignatureBuilder()
           .typeVariable("T")
           .returnType("T")
           .argumentType("T")
-          .argumentType(mapTypeKindToName(OffsetTypeKind))
+          .argumentType(mapTypeKindToName(offsetTypeKind))
           .build(),
   };
 
@@ -206,16 +217,16 @@ void registerNthValue(const std::string& name) {
           velox::memory::MemoryPool* pool,
           HashStringAllocator *
           /*stringAllocator*/) -> std::unique_ptr<exec::WindowFunction> {
-        return std::make_unique<NthValueFunction<OffsetTypeKind>>(
+        return std::make_unique<NthValueFunction>(
             args, resultType, pool);
       });
 }
 
-void registerNthValueWithIntOffset(const std::string& name) {
-  registerNthValue<TypeKind::INTEGER>(name);
+void registerIntegerNthValue(const std::string& name) {
+  registerNthValue(name, TypeKind::INTEGER);
 }
 
-void registerNthValueWithBigIntOffset(const std::string& name) {
-  registerNthValue<TypeKind::BIGINT>(name);
+void registerBigintNthValue(const std::string& name) {
+  registerNthValue(name, TypeKind::BIGINT);
 }
 } // namespace facebook::velox::functions::window

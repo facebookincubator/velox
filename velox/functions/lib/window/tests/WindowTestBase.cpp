@@ -38,10 +38,12 @@ QueryInfo buildWindowQuery(
     const std::vector<RowVectorPtr>& input,
     const std::string& function,
     const std::string& overClause,
-    const std::string& frameClause) {
+    const std::string& frameClause,
+    const parse::ParseOptions& options) {
   std::string functionSql =
       fmt::format("{} over ({} {})", function, overClause, frameClause);
-  auto op = PlanBuilder().values(input).window({functionSql}).planNode();
+  auto op = PlanBuilder()
+    .setParseOptions(options).values(input).window({functionSql}).planNode();
 
   auto rowType = asRowType(input[0]->type());
   std::string columnsString = folly::join(", ", rowType->names());
@@ -117,7 +119,8 @@ void WindowTestBase::testWindowFunction(
   for (const auto& overClause : overClauses) {
     for (auto& frameClause : frameClauses) {
       auto queryInfo =
-          buildWindowQuery(input, function, overClause, frameClause);
+          buildWindowQuery(
+              input, function, overClause, frameClause, options_);
       SCOPED_TRACE(queryInfo.functionSql);
       assertQuery(queryInfo.planNode, queryInfo.querySql);
     }
@@ -138,7 +141,8 @@ void WindowTestBase::assertWindowFunctionError(
     const std::string& overClause,
     const std::string& frameClause,
     const std::string& errorMessage) {
-  auto queryInfo = buildWindowQuery(input, function, overClause, frameClause);
+  auto queryInfo = buildWindowQuery(
+      input, function, overClause, frameClause, options_);
   SCOPED_TRACE(queryInfo.functionSql);
 
   VELOX_ASSERT_THROW(

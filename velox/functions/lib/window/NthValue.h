@@ -18,7 +18,7 @@
 #include <string>
 
 namespace facebook::velox::functions::window {
-void registerNthValueWithIntOffset(const std::string& name);
+void registerBigintNthValue(const std::string& name);
 
-void registerNthValueWithBigIntOffset(const std::string& name);
+void registerIntegerNthValue(const std::string& name);
 } // namespace facebook::velox::functions::window

@@ -19,7 +19,7 @@
 namespace facebook::velox::functions::window::sparksql {
 
 void registerWindowFunctions(const std::string& prefix) {
-  functions::window::registerNthValueWithIntOffset(prefix + "nth_value");
+  functions::window::registerIntegerNthValue(prefix + "nth_value");
 }
 
 } // namespace facebook::velox::functions::window::sparksql

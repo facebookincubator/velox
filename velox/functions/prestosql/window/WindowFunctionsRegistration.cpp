@@ -36,7 +36,7 @@ void registerAllWindowFunctions(const std::string& prefix) {
   registerPercentRank(prefix + "percent_rank");
   registerCumeDist(prefix + "cume_dist");
   registerNtile(prefix + "ntile");
-  functions::window::registerNthValueWithBigIntOffset(prefix + "nth_value");
+  functions::window::registerBigintNthValue(prefix + "nth_value");
   registerFirstValue(prefix + "first_value");
   registerLastValue(prefix + "last_value");
 }
