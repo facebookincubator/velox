@@ -16,7 +16,6 @@
 
 #include "velox/dwio/common/BitPackDecoder.h"
 #include "velox/common/base/Nulls.h"
-#include "velox/dwio/common/BitPackDecoderUtilAVX512.h"
 
 #include <folly/Random.h>
 #include <gtest/gtest.h>
@@ -131,20 +130,6 @@ class BitPackDecoderTest : public testing::Test {
     checkDecodeResult(randomInts_.data(), allRows_, bitWidth, result.data());
   }
 
-  template <typename T>
-  void testUnpackAVX512(uint8_t bitWidth) {
-    auto numValues = randomInts_.size();
-    std::vector<T> result(numValues);
-
-    const uint8_t* inputIter =
-        reinterpret_cast<const uint8_t*>(bitPackedData_[bitWidth].data());
-    T* outputIter = reinterpret_cast<T*>(result.data());
-    facebook::velox::dwio::common::unpackAVX512<T>(
-        inputIter, bytes(numValues, bitWidth), numValues, bitWidth, outputIter);
-
-    checkDecodeResult(randomInts_.data(), allRows_, bitWidth, result.data());
-  }
-
   std::vector<uint64_t> randomInts_;
 
   // All indices into 'randomInts_'.
@@ -184,23 +169,5 @@ TEST_F(BitPackDecoderTest, uint16AllRows) {
 TEST_F(BitPackDecoderTest, uint32AllRows) {
   for (auto width = 1; width <= 32; ++width) {
     testUnpack<uint32_t>(width);
-  }
-}
-
-TEST_F(BitPackDecoderTest, uint8AllRowsAVX512) {
-  for (auto width = 1; width <= 8; ++width) {
-    testUnpackAVX512<uint8_t>(width);
-  }
-}
-
-TEST_F(BitPackDecoderTest, uint16AllRowsAVX512) {
-  for (auto width = 1; width <= 16; ++width) {
-    testUnpackAVX512<uint16_t>(width);
-  }
-}
-
-TEST_F(BitPackDecoderTest, uint32AllRowsAVX512) {
-  for (auto width = 1; width <= 32; ++width) {
-    testUnpackAVX512<uint32_t>(width);
   }
 }

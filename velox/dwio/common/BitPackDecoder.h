@@ -45,6 +45,7 @@ void unpack(
     const char* FOLLY_NULLABLE bufferEnd,
     T* FOLLY_NONNULL result);
 
+#ifdef VELOX_ENABLE_AVX512
 /// Unpack numValues number of input values from inputBuffer. The results
 /// will be written to result. The
 /// caller needs to make sure the inputBufferLen contains at least numValues
@@ -200,6 +201,7 @@ inline void unpackAVX512<uint32_t>(
       VELOX_UNREACHABLE("invalid bitWidth");
   }
 }
+#endif
 
 /// Unpack numValues number of input values from inputBuffer. The results
 /// will be written to result. The
@@ -444,8 +446,7 @@ inline void unpack<uint32_t>(
 
 #elif XSIMD_WITH_AVX2
 
-  unpackAVX512<uint32_t>(
-      inputBits, inputBufferLen, numValues, bitWidth, result);
+  unpackAVX2<uint32_t>(inputBits, inputBufferLen, numValues, bitWidth, result);
 
 #else
 
