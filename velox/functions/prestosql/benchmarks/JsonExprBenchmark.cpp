@@ -41,9 +41,9 @@ class JsonBenchmark : public velox::functions::test::FunctionBenchmarkBase {
         {"simd_is_json_scalar"});
   }
 
-  std::string prepareData(int fileSize) {
+  std::string prepareData(int jsonSize) {
     std::string jsonData = R"({"key": [)" + smallJson;
-    for (int i = 0; i < fileSize / 10; i++) {
+    for (int i = 0; i < jsonSize / 10; i++) {
       jsonData += "," + smallJson;
     }
     jsonData += "]}";
@@ -87,18 +87,18 @@ class JsonBenchmark : public velox::functions::test::FunctionBenchmarkBase {
   }
 };
 
-void FollyIsJsonScalar(int iter, int vectorSize, int fileSize) {
+void FollyIsJsonScalar(int iter, int vectorSize, int jsonSize) {
   folly::BenchmarkSuspender suspender;
   JsonBenchmark benchmark;
-  auto json = benchmark.prepareData(fileSize);
+  auto json = benchmark.prepareData(jsonSize);
   suspender.dismiss();
   benchmark.runWithJson(iter, vectorSize, "folly_is_json_scalar", json);
 }
 
-void SIMDIsJsonScalar(int iter, int vectorSize, int fileSize) {
+void SIMDIsJsonScalar(int iter, int vectorSize, int jsonSize) {
   folly::BenchmarkSuspender suspender;
   JsonBenchmark benchmark;
-  auto json = benchmark.prepareData(fileSize);
+  auto json = benchmark.prepareData(jsonSize);
   suspender.dismiss();
   benchmark.runWithJson(iter, vectorSize, "simd_is_json_scalar", json);
 }
