@@ -33,6 +33,14 @@ struct AcoshFunction {
 };
 
 template <typename T>
+struct AsinhFunction {
+  template <typename TInput>
+  FOLLY_ALWAYS_INLINE void call(TInput& result, TInput a) {
+    result = std::asinh(a);
+  }
+};
+
+template <typename T>
 struct RemainderFunction {
   template <typename TInput>
   FOLLY_ALWAYS_INLINE bool
