@@ -293,10 +293,14 @@ inline int64_t findNthInstanceByteIndexFromEnd(
 
 /// Replace replaced with replacement in inputString and write results in
 /// outputString. If inPlace=true inputString and outputString are assumed to
-/// tbe the same. When replaced is empty, replacement is added before and after
-/// each charecter. When inputString is empty results is empty.
+/// tbe the same. When replaced is empty and ignoreEmptyReplaced is false,
+/// replacement is added before and after each charecter. When replaced is
+/// empty and ignoreEmptyReplaced is true, the result is the inputString value.
+/// When inputString is empty results is empty.
 /// replace("", "", "x") = ""
-/// replace("aa", "", "x") = "xaxax"
+/// replace("aa", "", "x") = "xaxax" -- when ignoreEmptyReplaced is false
+/// replace("aa", "", "x") = "aa" -- when ignoreEmptyReplaced is true
+template <bool ignoreEmptyReplaced = false>
 inline static size_t replace(
     char* outputString,
     const std::string_view& inputString,
@@ -305,6 +309,15 @@ inline static size_t replace(
     bool inPlace = false) {
   if (inputString.size() == 0) {
     return 0;
+  }
+
+  if constexpr (ignoreEmptyReplaced) {
+    if (replaced.size() == 0) {
+      if (!inPlace) {
+        std::memcpy(outputString, inputString.data(), inputString.size());
+      }
+      return inputString.size();
+    }
   }
 
   size_t readPosition = 0;
