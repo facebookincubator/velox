@@ -44,18 +44,21 @@
             
   <section id="types">
 <h1>Types<a class="headerlink" href="#types" title="Permalink to this heading">¶</a></h1>
-<p>Velox supports scalar types and complex types. These types cover most of the
-Presto and Spark data types.</p>
-<section id="scalar-types">
-<h2>Scalar Types<a class="headerlink" href="#scalar-types" title="Permalink to this heading">¶</a></h2>
-<p>Scalar types in Velox are logical and SQL-compatible.
-Each scalar type is implemented using a C++ type. The table
-below shows the supported scalar types and their corresponding C++ type.</p>
+<p>Velox supports scalar types and complex types.
+Scalar types are categorized into a fixed set of physical types,
+and an extensible set of logical types.
+Physical types determine the in-memory layout of the data.
+Logical types add additional semantics to a physical type.</p>
+<section id="physical-types">
+<h2>Physical Types<a class="headerlink" href="#physical-types" title="Permalink to this heading">¶</a></h2>
+<p>Each physical type is implemented using a C++ type. The table
+below shows the supported physical types, their corresponding C++ type,
+and fixed-width bytes required per value.</p>
 <table class="docutils align-default">
 <thead>
-<tr class="row-odd"><th class="head"><p>Velox Type</p></th>
+<tr class="row-odd"><th class="head"><p>Physical Type</p></th>
 <th class="head"><p>C++ Type</p></th>
-<th class="head"><p>Bytes per Value</p></th>
+<th class="head"><p>Fixed Width (bytes)</p></th>
 </tr>
 </thead>
 <tbody>
@@ -79,33 +82,25 @@ below shows the supported scalar types and their corresponding C++ type.</p>
 <td><p>int64_t</p></td>
 <td><p>8</p></td>
 </tr>
-<tr class="row-odd"><td><p>DATE</p></td>
+<tr class="row-odd"><td><p>HUGEINT</p></td>
+<td><p>int128_t</p></td>
+<td><p>16</p></td>
+</tr>
+<tr class="row-even"><td><p>DATE</p></td>
 <td><p>struct Date</p></td>
 <td><p>8</p></td>
 </tr>
-<tr class="row-even"><td><p>REAL</p></td>
+<tr class="row-odd"><td><p>REAL</p></td>
 <td><p>float</p></td>
 <td><p>4</p></td>
 </tr>
-<tr class="row-odd"><td><p>DOUBLE</p></td>
+<tr class="row-even"><td><p>DOUBLE</p></td>
 <td><p>double</p></td>
 <td><p>8</p></td>
 </tr>
-<tr class="row-even"><td><p>SHORT_DECIMAL</p></td>
-<td><p>struct UnscaledShortDecimal</p></td>
-<td><p>8</p></td>
-</tr>
-<tr class="row-odd"><td><p>LONG_DECIMAL</p></td>
-<td><p>struct UnscaledLongDecimal</p></td>
-<td><p>16</p></td>
-</tr>
-<tr class="row-even"><td><p>TIMESTAMP</p></td>
+<tr class="row-odd"><td><p>TIMESTAMP</p></td>
 <td><p>struct Timestamp</p></td>
 <td><p>16</p></td>
-</tr>
-<tr class="row-odd"><td><p>INTERVAL DAY TO SECOND</p></td>
-<td><p>struct IntervalDayTime</p></td>
-<td><p>8</p></td>
 </tr>
 <tr class="row-even"><td><p>VARCHAR</p></td>
 <td><p>struct StringView</p></td>
@@ -115,28 +110,115 @@ below shows the supported scalar types and their corresponding C++ type.</p>
 <td><p>struct StringView</p></td>
 <td><p>16</p></td>
 </tr>
+<tr class="row-even"><td><p>OPAQUE</p></td>
+<td><p>std::shared_ptr&lt;void&gt;</p></td>
+<td><p>16</p></td>
+</tr>
+<tr class="row-odd"><td><p>UNKNOWN</p></td>
+<td><p>struct UnknownValue</p></td>
+<td><p>0</p></td>
+</tr>
 </tbody>
 </table>
-<p>All scalar types except DECIMAL have a one-to-one mapping with their C++ types.</p>
-<p>DECIMAL type is a special scalar type since it carries additional <cite>precision</cite>,
-and <cite>scale</cite> information. Similar to SQL decimal, <cite>precision</cite> is the number of
+<p>All physical types except VARCHAR and VARBINARY have a one-to-one mapping
+with their C++ types.
+The C++ type is also used as a template parameter for vector classes.
+For example, vector of 64-bit integers is represented as <cite>FlatVector&lt;int64_t&gt;</cite>
+whose type is <cite>BIGINT</cite>.</p>
+<p>OPAQUE type can be used to define custom types.
+An OPAQUE type must be specified wih an unique <cite>std::type_index</cite>.
+Values for this type must be provided as <cite>std::shared_ptr&lt;T&gt;</cite> where T is a C++ type.
+More details on when to use an OPAQUE type to define a custom type are given below.</p>
+<p>VARCHAR, VARBINARY, OPAQUE use variable number of bytes per value.
+These types store a fixed-width part in the C++ type and a variable-width part elsewhere.
+All other types use fixed-width bytes per value as shown in the above table.
+For example: VARCHAR and VARBINARY <a class="reference internal" href="vectors.html"><span class="doc">FlatVectors</span></a> store the
+fixed-width part in a StringView for each value.
+StringView is a struct that contains a 4-byte size field, a 4-byte prefix field,
+and an 8-byte field pointer that points to variable-width part.
+The variable-width part for each value is store in <cite>stringBuffers</cite>.
+OPAQUE types store variable-width parts outside of the FlatVector.</p>
+<p>UNKNOWN type is used to represent an empty or all nulls vector of unknown type.
+For example, SELECT array() returns an ARRAY(UNKNOWN()) because it is not possible
+to determine the type of the elements. This works because there are no elements.</p>
+</section>
+<section id="logical-types">
+<h2>Logical Types<a class="headerlink" href="#logical-types" title="Permalink to this heading">¶</a></h2>
+<p>Logical types are backed by a physical type and include additional semantics.
+There can be multiple logical types backed by the same physical type.
+Therefore, knowing the C++ type is not sufficient to infer a logical type.
+The table below shows the supported logical types, and
+their corresponding physical type.</p>
+<table class="docutils align-default">
+<thead>
+<tr class="row-odd"><th class="head"><p>Logical Type</p></th>
+<th class="head"><p>Physical Type</p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even"><td><p>DECIMAL</p></td>
+<td><p>BIGINT if precision &lt;= 18, HUGEINT if precision &gt;= 19</p></td>
+</tr>
+<tr class="row-odd"><td><p>INTERVAL DAY TO SECOND</p></td>
+<td><p>BIGINT</p></td>
+</tr>
+</tbody>
+</table>
+<p>We are in the process of migrating (<a class="reference external" href="https://github.com/facebookincubator/velox/pull/4744">#4744</a>) DATE type to a logical type backed
+by BIGINT.</p>
+<p>DECIMAL type carries additional <cite>precision</cite>,
+and <cite>scale</cite> information. <cite>Precision</cite> is the number of
 digits in a number. <cite>Scale</cite> is the number of digits to the right of the decimal
 point in a number. For example, the number <cite>123.45</cite> has a precision of <cite>5</cite> and a
-scale of <cite>2</cite>. Velox supports two types of decimals, SHORT_DECIMAL and LONG_DECIMAL.
-SHORT_DECIMAL has a maximum precision of 18, with a range of
-[<span class="math">-10^{18} + 1, +10^{18} - 1</span>]. LONG_DECIMAL has a maximum precision of 38,
-with a range of [<span class="math">-10^{38} + 1, +10^{38} - 1</span>].
-Their corresponding C++ types, UnscaledShortDecimal and UnscaledLongDecimal carry
-the unscaled value. For example, the unscaled value of decimal <cite>123.45</cite> is <cite>12345</cite>.
-All the three values, precision, scale, unscaled value are required to represent a
-decimal value. UnscaledLongDecimal is a wrapper around the <cite>int128_t</cite> type.
-Some systems implement a similar wrapper around two <cite>int64_t</cite> values.
-Velox chose <cite>int128_t</cite> since most compilers now support this type and
-it simplifies the implementation.</p>
+scale of <cite>2</cite>. DECIMAL types are backed by <cite>BIGINT</cite> and <cite>HUGEINT</cite> physical types,
+which store the unscaled value. For example, the unscaled value of decimal
+<cite>123.45</cite> is <cite>12345</cite>. <cite>BIGINT</cite> is used upto 18 precision, and has a range of
+[<span class="math">-10^{18} + 1, +10^{18} - 1</span>]. <cite>HUGEINT</cite> is used starting from 19 precision
+upto 38 precision, with a range of [<span class="math">-10^{38} + 1, +10^{38} - 1</span>].</p>
+<p>All the three values, precision, scale, unscaled value are required to represent a
+decimal value.</p>
+</section>
+<section id="custom-types">
+<h2>Custom Types<a class="headerlink" href="#custom-types" title="Permalink to this heading">¶</a></h2>
+<p>Most custom types can be represented as logical types and can be built by extending
+the existing physical types. For example, Presto Types described below are implemented
+by extending the physical types.
+An OPAQUE type must be used when there is no physical type available to back the logical type.</p>
 </section>
 <section id="complex-types">
 <h2>Complex Types<a class="headerlink" href="#complex-types" title="Permalink to this heading">¶</a></h2>
-<p>Velox supports the ARRAY, MAP, and ROW complex types.</p>
+<p>Velox supports the ARRAY, MAP, and ROW complex types.
+Complex types are composed of scalar types and can be nested with
+other complex types.</p>
+<p>For example: MAP&lt;INTEGER, ARRAY&lt;BIGINT&gt;&gt; is a complex type whose
+key is a scalar type INTEGER and value is a complex type ARRAY with
+element type BIGINT.</p>
+<p>Array type contains its element type.
+Map type contains the key type and value type.
+Row type contains its field types along with their names.</p>
+</section>
+<section id="presto-types">
+<h2>Presto Types<a class="headerlink" href="#presto-types" title="Permalink to this heading">¶</a></h2>
+<p>Velox supports a number of Presto-specific logical types.
+The table below shows the supported Presto types.</p>
+<table class="docutils align-default">
+<thead>
+<tr class="row-odd"><th class="head"><p>Presto Type</p></th>
+<th class="head"><p>Physical Type</p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even"><td><p>HYPERLOGLOG</p></td>
+<td><p>VARBINARY</p></td>
+</tr>
+<tr class="row-odd"><td><p>JSON</p></td>
+<td><p>VARCHAR</p></td>
+</tr>
+<tr class="row-even"><td><p>TIMESTAMP WITH TIME ZONE</p></td>
+<td><p>ROW&lt;BIGINT, SMALLINT&gt;</p></td>
+</tr>
+</tbody>
+</table>
 </section>
 </section>
 
@@ -151,8 +233,11 @@ it simplifies the implementation.</p>
     <h3><a href="../index.html">Table of Contents</a></h3>
     <ul>
 <li><a class="reference internal" href="#">Types</a><ul>
-<li><a class="reference internal" href="#scalar-types">Scalar Types</a></li>
+<li><a class="reference internal" href="#physical-types">Physical Types</a></li>
+<li><a class="reference internal" href="#logical-types">Logical Types</a></li>
+<li><a class="reference internal" href="#custom-types">Custom Types</a></li>
 <li><a class="reference internal" href="#complex-types">Complex Types</a></li>
+<li><a class="reference internal" href="#presto-types">Presto Types</a></li>
 </ul>
 </li>
 </ul>
