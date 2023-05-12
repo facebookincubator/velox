@@ -18,9 +18,10 @@
 
 #include "velox/core/Expressions.h"
 #include "velox/substrait/SubstraitParser.h"
-#include "velox/vector/ComplexVector.h"
 #include "velox/type/StringView.h"
+#include "velox/vector/ComplexVector.h"
 #include "velox/vector/FlatVector.h"
+
 namespace facebook::velox::substrait {
 
 /// This class is used to convert Substrait representations to Velox
