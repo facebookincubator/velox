@@ -52,6 +52,32 @@ class HugeInt {
       char* serializedData) {
     memcpy(serializedData, &value, sizeof(int128_t));
   }
+
+  static FOLLY_ALWAYS_INLINE int128_t stringToInt128(const std::string& str) {
+    int128_t result = 0;
+    bool negative = false;
+    size_t idx = 0;
+
+    if (str.empty()) {
+      throw std::invalid_argument(
+          "Empty string cannot be converted to int128_t.");
+    }
+
+    if (str[0] == '-') {
+      negative = true;
+      idx = 1;
+    }
+
+    for (; idx < str.size(); ++idx) {
+      if (str[idx] >= '0' && str[idx] <= '9') {
+        result = result * 10 + (str[idx] - '0');
+      } else {
+        throw std::invalid_argument("Invalid character in the string.");
+      }
+    }
+
+    return negative ? -result : result;
+  }
 };
 
 } // namespace facebook::velox

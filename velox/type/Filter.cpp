@@ -279,19 +279,14 @@ bool NegatedBigintRange::testingEquals(const Filter& other) const {
 
 folly::dynamic HugeintRange::serialize() const {
   auto obj = Filter::serializeBase("HugeintRange");
-  auto size = sizeof(int128_t);
-  char lower[size];
-  HugeInt::serialize(lower_, lower);
-  obj["lower"] = std::string(lower, size);
-  char upper[size];
-  HugeInt::serialize(upper_, upper);
-  obj["upper"] = std::string(upper, size);
+  obj["lower"] = std::to_string(lower_);
+  obj["upper"] = std::to_string(upper_);
   return obj;
 }
 
 FilterPtr HugeintRange::create(const folly::dynamic& obj) {
-  auto lower = HugeInt::deserialize(obj["lower"].asString().c_str());
-  auto upper = HugeInt::deserialize(obj["upper"].asString().c_str());
+  auto lower = HugeInt::stringToInt128(obj["lower"].asString());
+  auto upper = HugeInt::stringToInt128(obj["upper"].asString());
   auto nullAllowed = deserializeNullAllowed(obj);
   return std::make_unique<HugeintRange>(lower, upper, nullAllowed);
 }
