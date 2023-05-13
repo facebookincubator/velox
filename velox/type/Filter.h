@@ -1708,6 +1708,8 @@ class MultiRange final : public Filter {
 
   bool testBytes(const char* value, int32_t length) const final;
 
+  bool testInt64(int64_t value) const final;
+
   bool testLength(int32_t length) const final;
 
   bool testBytesRange(

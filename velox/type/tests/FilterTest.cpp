@@ -1048,6 +1048,34 @@ TEST(FilterTest, multiRange) {
   EXPECT_TRUE(filter->testBytes("abc", 3));
 }
 
+TEST(FilterTest, multiRangeTestInt64) {
+  auto filter = orFilter(between(1, 10), between(-10, -1));
+
+  EXPECT_TRUE(filter->testInt64(1));
+  EXPECT_TRUE(filter->testInt64(5));
+  EXPECT_TRUE(filter->testInt64(-10));
+  EXPECT_TRUE(filter->testInt64(-5));
+
+  EXPECT_FALSE(filter->testNull());
+  EXPECT_FALSE(filter->testInt64(0));
+  EXPECT_FALSE(filter->testInt64(50));
+  EXPECT_FALSE(filter->testInt64(-11));
+  EXPECT_FALSE(filter->testInt64(std::numeric_limits<int64_t>::max()));
+
+  filter = orFilter(greaterThanOrEqual(200), lessThanOrEqual(100));
+  ASSERT_TRUE(dynamic_cast<MultiRange*>(filter.get()));
+  EXPECT_TRUE(filter->testInt64(300));
+  EXPECT_TRUE(filter->testInt64(-101));
+  EXPECT_TRUE(filter->testInt64(10));
+  EXPECT_TRUE(filter->testInt64(std::numeric_limits<int64_t>::max()));
+  EXPECT_TRUE(filter->testInt64(std::numeric_limits<int64_t>::min()));
+
+  EXPECT_FALSE(filter->testNull());
+  EXPECT_FALSE(filter->testInt64(101));
+  EXPECT_FALSE(filter->testInt64(155));
+  EXPECT_FALSE(filter->testInt64(190));
+}
+
 TEST(FilterTest, multiRangeWithNaNs) {
   // x <> 1.2 with nanAllowed true
   auto filter =

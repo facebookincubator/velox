@@ -767,6 +767,18 @@ bool MultiRange::testBytes(const char* value, int32_t length) const {
   return false;
 }
 
+bool MultiRange::testInt64(int64_t value) const {
+  if (value == static_cast<int64_t>(NULL)) {
+    return nullAllowed_;
+  }
+  for (const auto& filter : filters_) {
+    if (filter->testInt64(value)) {
+      return true;
+    }
+  }
+  return false;
+}
+
 bool MultiRange::testLength(int32_t length) const {
   for (const auto& filter : filters_) {
     if (filter->testLength(length)) {
