@@ -285,8 +285,8 @@ folly::dynamic HugeintRange::serialize() const {
 }
 
 FilterPtr HugeintRange::create(const folly::dynamic& obj) {
-  auto lower = HugeInt::stringToInt128(obj["lower"].asString());
-  auto upper = HugeInt::stringToInt128(obj["upper"].asString());
+  auto lower = HugeInt::parse(obj["lower"].asString());
+  auto upper = HugeInt::parse(obj["upper"].asString());
   auto nullAllowed = deserializeNullAllowed(obj);
   return std::make_unique<HugeintRange>(lower, upper, nullAllowed);
 }
@@ -350,7 +350,6 @@ folly::dynamic BigintValuesUsingBitmask::serialize() const {
 
   folly::dynamic values = folly::dynamic::array;
   for (size_t i = 0; i < bitmask_.size(); ++i) {
-    auto j = bitmask_.size();
     if (bitmask_[i]) {
       values.push_back(i + min_);
     }
