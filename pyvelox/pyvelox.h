@@ -276,15 +276,15 @@ static void registerTypedVectors(
         return getItemFromSimpleVector(v, idx);
       })
       .def("__getitem__", [](std::shared_ptr<SimpleVector<NativeType>> v, py::slice slice) {
-        size_t start, stop, step, slicelength;
-        if (!slice.compute(v->size(), &start, &stop, &step, &slicelength)) {
+        size_t start, stop, step, length;
+        if (!slice.compute(v->size(), &start, &stop, &step, &length)) {
             throw py::error_already_set();
         }
         if(step!=1){
             PyErr_SetString(PyExc_NotImplementedError, "Slicing with step other than 1 is not supported");
             throw py::error_already_set();
-        }
-        return v->slice(start, stop-start);
+        } 
+        return v->slice(start, length);
     });
 
   py::class_<
@@ -369,7 +369,7 @@ static void addVectorBindings(
         if(step!=1){
             PyErr_SetString(PyExc_NotImplementedError, "Slicing with step other than 1 is not supported");
             throw py::error_already_set();
-        }
+        } 
         return u->slice(start, stop-start);
       }, py::arg("start"), py::arg("stop"), py::arg("step") = 1);
 
