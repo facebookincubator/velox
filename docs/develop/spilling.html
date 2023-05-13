@@ -253,12 +253,12 @@ parallelize the restore work. For example, to build a hash table from a
 spilled partition, we can parallelize the build work among multiple hash build
 operators by assigning each of them a shard of spill files. There are two
 configuration properties to control.</p>
-<p><a class="reference internal" href="../configs.html"><span class="doc">max-spill-file-size</span></a> sets the maximum spill file size limit. For unsorted spill,
+<p><a class="reference internal" href="../configs.html"><span class="doc">max_spill_file_size</span></a> sets the maximum spill file size limit. For unsorted spill,
 as we continuously append to the same spill file so this helps to prevent a
 spill file from growing too big. For sorted spill, each file stores only one
 sorted run of data, hence, the spill file size is the minimum of spillable data
 size and this configuration limit.</p>
-<p><a class="reference internal" href="../configs.html"><span class="doc">min-spill-run-size</span></a> sets the minimum data size used by sorted spill to select
+<p><a class="reference internal" href="../configs.html"><span class="doc">min_spill_run_size</span></a> sets the minimum data size used by sorted spill to select
 partitions for spilling. Each sorted spill file can only store one sorted run
 of data. Spiller tries to spill from the same set of partitions if possible.
 By having this configuration limit, we can avoid spilling from partitions which
@@ -272,7 +272,7 @@ practice.</p>
 <p>The spill target size determines how much data to spill each time. If too
 small, spilling interrupts operator execution frequently and generates lots of
 small files. If too large, operator execution slows down by spilling lots of
-data to disk. Configuration property <a class="reference internal" href="../configs.html"><span class="doc">spillable-reservation-growth-pct</span></a> sets the
+data to disk. Configuration property <a class="reference internal" href="../configs.html"><span class="doc">spillable_reservation_growth_pct</span></a> sets the
 spill target size as a factor of the query memory limit. We might need to tune
 this parameter a bit in practice to see its impact on performance.</p>
 </section>
@@ -444,7 +444,7 @@ level, <em>M</em> = 1*GB*, <em>N</em> = 3:</p>
 </tbody>
 </table>
 <p>For production deployments, we recommend setting a limit for the max spilling
-level using <a class="reference internal" href="../configs.html"><span class="doc">max-spill-level</span></a> configuration property.</p>
+level using <a class="reference internal" href="../configs.html"><span class="doc">max_spill_level</span></a> configuration property.</p>
 <p>The following gives a brief description of the hash build and probe workflows
 extended to support (recursive) spilling:</p>
 <section id="hashbuild">
