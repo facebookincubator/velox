@@ -274,7 +274,18 @@ static void registerTypedVectors(
       py::module_local(asModuleLocalDefinitions))
       .def("__getitem__", [](SimpleVectorPtr<NativeType> v, vector_size_t idx) {
         return getItemFromSimpleVector(v, idx);
-      });
+      })
+      .def("__getitem__", [](std::shared_ptr<SimpleVector<NativeType>> v, py::slice slice) {
+        size_t start, stop, step, slicelength;
+        if (!slice.compute(v->size(), &start, &stop, &step, &slicelength)) {
+            throw py::error_already_set();
+        }
+        if(step!=1){
+            PyErr_SetString(PyExc_NotImplementedError, "Slicing with step other than 1 is not supported");
+            throw py::error_already_set();
+        }
+        return v->slice(start, stop-start);
+    });
 
   py::class_<
       FlatVector<NativeType>,
@@ -354,7 +365,13 @@ static void addVectorBindings(
       .def("encoding", &BaseVector::encoding)
       .def("append", [](VectorPtr& u, VectorPtr& v) { appendVectors(u, v); })
       .def("resize", &BaseVector::resize)
-      .def("slice", [](VectorPtr& u, vector_size_t offset, vector_size_t length) { return u->slice(offset, length);});
+      .def("slice", [](VectorPtr& u, vector_size_t start, vector_size_t stop, vector_size_t step) { 
+        if(step!=1){
+            PyErr_SetString(PyExc_NotImplementedError, "Slicing with step other than 1 is not supported");
+            throw py::error_already_set();
+        }
+        return u->slice(start, stop-start);
+      }, py::arg("start"), py::arg("stop"), py::arg("step") = 1);
 
   constexpr TypeKind supportedTypes[] = {
       TypeKind::BOOLEAN,
