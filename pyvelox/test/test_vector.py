@@ -56,15 +56,23 @@ class TestVeloxVector(unittest.TestCase):
             pv.from_list([])
 
     def test_from_list_with_type(self):
-        a = pv.from_list([0, 1, 3], pv.BooleanType())
+        list_a = [0, 1, 3]
+        a = pv.from_list(list_a, pv.BooleanType())
         self.assertEqual(a.typeKind().name, 'BOOLEAN')
         for i in range(len(a)):
             self.assertTrue(isinstance(a[i], bool))
+            self.assertEqual(a[i], bool(list_a[i]))
         self.assertTrue(isinstance(pv.from_list([None, None, None], pv.VarcharType()), pv.BaseVector))
         empty_vector = pv.from_list([], pv.IntegerType())
         self.assertTrue(isinstance(empty_vector, pv.BaseVector))
         with self.assertRaises(IndexError):
             a = empty_vector[0]
+        with self.assertRaises(RuntimeError):
+            a = pv.from_list([0, 1, 3], pv.VarcharType()) # Conversion not possible from int to varchar
+        list_b = [0.2, 1.2, 3.23]
+        b = pv.from_list(list_b, pv.RealType())
+        for i in range(len(list_b)):
+            self.assertNotAlmostEqual(list_b[i], b[i], places=17)
 
     def test_constant_encoding(self):
         ints = pv.constant_vector(1000, 10)
