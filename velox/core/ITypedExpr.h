@@ -20,15 +20,17 @@
 
 namespace facebook::velox::core {
 
+class ITypedExpr;
+
+using TypedExprPtr = std::shared_ptr<const ITypedExpr>;
+
 /* a strongly-typed expression, such as literal, function call, etc... */
 class ITypedExpr : public ISerializable {
  public:
   explicit ITypedExpr(std::shared_ptr<const Type> type)
       : type_{std::move(type)}, inputs_{} {}
 
-  ITypedExpr(
-      std::shared_ptr<const Type> type,
-      std::vector<std::shared_ptr<const ITypedExpr>> inputs)
+  ITypedExpr(std::shared_ptr<const Type> type, std::vector<TypedExprPtr> inputs)
       : type_{std::move(type)}, inputs_{std::move(inputs)} {}
 
   const std::shared_ptr<const Type>& type() const {
@@ -37,7 +39,7 @@ class ITypedExpr : public ISerializable {
 
   virtual ~ITypedExpr() = default;
 
-  const std::vector<std::shared_ptr<const ITypedExpr>>& inputs() const {
+  const std::vector<TypedExprPtr>& inputs() const {
     return inputs_;
   }
 
@@ -47,7 +49,7 @@ class ITypedExpr : public ISerializable {
   ///
   /// Used to bind inputs to lambda functions.
   virtual std::shared_ptr<const ITypedExpr> rewriteInputNames(
-      const std::unordered_map<std::string, std::string>& mapping) const = 0;
+      const std::unordered_map<std::string, TypedExprPtr>& mapping) const = 0;
 
   virtual std::string toString() const = 0;
 
@@ -86,9 +88,9 @@ class ITypedExpr : public ISerializable {
  protected:
   folly::dynamic serializeBase(std::string_view name) const;
 
-  std::vector<std::shared_ptr<const ITypedExpr>> rewriteInputsRecursive(
-      const std::unordered_map<std::string, std::string>& mapping) const {
-    std::vector<std::shared_ptr<const ITypedExpr>> newInputs;
+  std::vector<TypedExprPtr> rewriteInputsRecursive(
+      const std::unordered_map<std::string, TypedExprPtr>& mapping) const {
+    std::vector<TypedExprPtr> newInputs;
     newInputs.reserve(inputs().size());
     for (const auto& input : inputs()) {
       newInputs.emplace_back(input->rewriteInputNames(mapping));
@@ -104,7 +106,5 @@ class ITypedExpr : public ISerializable {
   std::shared_ptr<const Type> type_;
   std::vector<std::shared_ptr<const ITypedExpr>> inputs_;
 };
-
-using TypedExprPtr = std::shared_ptr<const ITypedExpr>;
 
 } // namespace facebook::velox::core

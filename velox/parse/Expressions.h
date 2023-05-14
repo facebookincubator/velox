@@ -38,6 +38,13 @@ class Expressions {
       memory::MemoryPool* pool,
       const VectorPtr& complexConstants = nullptr);
 
+  static TypedExprPtr inferTypes(
+      const std::shared_ptr<const IExpr>& expr,
+      const TypePtr& input,
+      const std::vector<TypePtr>& lambdaInputTypes,
+      memory::MemoryPool* pool,
+      const VectorPtr& complexConstants = nullptr);
+
   static TypePtr getInputRowType(const TypedExprPtr& expr);
 
   static void setTypeResolverHook(TypeResolverHook hook) {
@@ -49,13 +56,6 @@ class Expressions {
   }
 
  private:
-  static TypedExprPtr inferTypes(
-      const std::shared_ptr<const IExpr>& expr,
-      const TypePtr& input,
-      const std::vector<TypePtr>& lambdaInputTypes,
-      memory::MemoryPool* pool,
-      const VectorPtr& complexConstants = nullptr);
-
   static TypedExprPtr resolveLambdaExpr(
       const std::shared_ptr<const core::LambdaExpr>& lambdaExpr,
       const TypePtr& inputRow,
