@@ -27,6 +27,8 @@ add_library(
   SelectiveStringDirectColumnReader.cpp
   SelectiveStringDictionaryColumnReader.cpp
   SelectiveTimestampColumnReader.cpp
+  SelectiveShortDecimalColumnReader.cpp
+  SelectiveLongDecimalColumnReader.cpp
   SelectiveStructColumnReader.cpp
   SelectiveRepeatedColumnReader.cpp
   StripeDictionaryCache.cpp

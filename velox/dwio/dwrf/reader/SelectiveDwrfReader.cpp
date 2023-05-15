@@ -22,7 +22,9 @@
 #include "velox/dwio/dwrf/reader/SelectiveFloatingPointColumnReader.h"
 #include "velox/dwio/dwrf/reader/SelectiveIntegerDictionaryColumnReader.h"
 #include "velox/dwio/dwrf/reader/SelectiveIntegerDirectColumnReader.h"
+#include "velox/dwio/dwrf/reader/SelectiveLongDecimalColumnReader.h"
 #include "velox/dwio/dwrf/reader/SelectiveRepeatedColumnReader.h"
+#include "velox/dwio/dwrf/reader/SelectiveShortDecimalColumnReader.h"
 #include "velox/dwio/dwrf/reader/SelectiveStringDictionaryColumnReader.h"
 #include "velox/dwio/dwrf/reader/SelectiveStringDirectColumnReader.h"
 #include "velox/dwio/dwrf/reader/SelectiveStructColumnReader.h"
@@ -126,6 +128,12 @@ std::unique_ptr<SelectiveColumnReader> SelectiveDwrfReader::build(
     case TypeKind::TIMESTAMP:
       return std::make_unique<SelectiveTimestampColumnReader>(
           requestedType, params, scanSpec);
+    case TypeKind::SHORT_DECIMAL:
+      return std::make_unique<SelectiveShortDecimalColumnReader>(
+          requestedType, dataType->type, params, scanSpec);
+    case TypeKind::LONG_DECIMAL:
+      return std::make_unique<SelectiveLongDecimalColumnReader>(
+          requestedType, dataType->type, params, scanSpec);
     default:
       DWIO_RAISE(
           "buildReader unhandled type: " +

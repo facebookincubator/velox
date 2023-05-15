@@ -509,6 +509,12 @@ std::optional<size_t> DwrfRowReader::estimatedRowSizeHelper(
       }
       return totalEstimate;
     }
+    case TypeKind::SHORT_DECIMAL: {
+      return valueCount * sizeof(uint64_t);
+    }
+    case TypeKind::LONG_DECIMAL: {
+      return valueCount * sizeof(uint128_t);
+    }
     default:
       return std::nullopt;
   }

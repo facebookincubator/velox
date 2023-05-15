@@ -92,7 +92,13 @@ TypeKind TypeWrapper::kind() const {
       return TypeKind::VARCHAR;
     case proto::orc::Type_Kind_DATE:
       return TypeKind::DATE;
-    case proto::orc::Type_Kind_DECIMAL:
+    case proto::orc::Type_Kind_DECIMAL: {
+      if (orcPtr()->precision() <= 18) {
+        return TypeKind::SHORT_DECIMAL;
+      } else {
+        return TypeKind::LONG_DECIMAL;
+      }
+    }
     case proto::orc::Type_Kind_CHAR:
     case proto::orc::Type_Kind_TIMESTAMP_INSTANT:
       DWIO_RAISE(

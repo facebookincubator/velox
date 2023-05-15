@@ -314,6 +314,12 @@ std::shared_ptr<const Type> ReaderBase::convertType(
       // child doesn't hold.
       return ROW(std::move(names), std::move(tl));
     }
+    case TypeKind::LONG_DECIMAL:
+      return LONG_DECIMAL(
+          type.getOrcPtr()->precision(), type.getOrcPtr()->scale());
+    case TypeKind::SHORT_DECIMAL:
+      return SHORT_DECIMAL(
+          type.getOrcPtr()->precision(), type.getOrcPtr()->scale());
     default:
       DWIO_RAISE("Unknown type kind");
   }
