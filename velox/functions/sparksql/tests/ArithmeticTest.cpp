@@ -221,6 +221,26 @@ TEST_F(ArithmeticTest, atanh) {
   EXPECT_TRUE(std::isnan(atanh(kNan).value_or(0)));
 }
 
+TEST_F(ArithmeticTest, sec) {
+  const auto sec = [&](std::optional<double> a) {
+    return evaluateOnce<double>("sec(c0)", a);
+  };
+
+  EXPECT_EQ(sec(0), 1);
+  EXPECT_EQ(sec(std::nullopt), std::nullopt);
+  EXPECT_TRUE(std::isnan(sec(kNan).value_or(0)));
+}
+
+TEST_F(ArithmeticTest, csc) {
+  const auto csc = [&](std::optional<double> a) {
+    return evaluateOnce<double>("csc(c0)", a);
+  };
+
+  EXPECT_EQ(csc(0), kInf);
+  EXPECT_EQ(csc(std::nullopt), std::nullopt);
+  EXPECT_TRUE(std::isnan(csc(kNan).value_or(0)));
+}
+
 class CeilFloorTest : public SparkFunctionBaseTest {
  protected:
   template <typename T>
