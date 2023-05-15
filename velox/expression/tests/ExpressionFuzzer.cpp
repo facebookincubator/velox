@@ -62,7 +62,7 @@ DEFINE_bool(
     "Retry failed expressions by wrapping it using a try() statement.");
 
 DEFINE_bool(
-    drilldown,
+    find_minimal_subexpression,
     false,
     "Automatically seeks minimum failed subexpression on result mismatch");
 
@@ -1260,8 +1260,13 @@ void ExpressionFuzzer::go() {
           true, // canThrow
           columnsToWrapInLazy);
     } catch (const std::exception& e) {
-      if (FLAGS_drilldown) {
-        drilldown(plan, rowVector, columnsToWrapInLazy);
+      if (FLAGS_find_minimal_subexpression) {
+        computeMinimumSubExpression(
+            {&execCtx_, {false, ""}},
+            vectorFuzzer_,
+            plan,
+            rowVector,
+            columnsToWrapInLazy);
       }
       throw;
     }
@@ -1280,89 +1285,6 @@ void ExpressionFuzzer::go() {
     ++i;
   }
   logStats();
-}
-
-void ExpressionFuzzer::errorExit(const std::string& text) {
-  VELOX_FAIL(text);
-}
-
-void ExpressionFuzzer::drilldown(
-    core::TypedExprPtr plan,
-    const RowVectorPtr& rowVector,
-    const std::vector<column_index_t>& columnsToWrapInLazy) {
-  if (tryWithResults(plan, rowVector, columnsToWrapInLazy)) {
-    errorExit("Retry should have failed");
-  }
-  bool minimalFound = false;
-  drilldownRecursive(plan, rowVector, columnsToWrapInLazy, minimalFound);
-  if (minimalFound) {
-    errorExit("Found minimal failing expression");
-  } else {
-    errorExit("Only the top level expression failed");
-  }
-}
-
-void ExpressionFuzzer::drilldownRecursive(
-    core::TypedExprPtr plan,
-    const RowVectorPtr& rowVector,
-    const std::vector<column_index_t>& columnsToWrapInLazy,
-    bool& minimalFound) {
-  bool anyFailed = false;
-  for (auto& input : plan->inputs()) {
-    if (!tryWithResults(input, rowVector, columnsToWrapInLazy)) {
-      anyFailed = true;
-      drilldownRecursive(input, rowVector, columnsToWrapInLazy, minimalFound);
-      if (minimalFound) {
-        return;
-      }
-    }
-  }
-  if (!anyFailed) {
-    minimalFound = true;
-    LOG(INFO) << "Failed with all children succeeding: " << plan->toString();
-    // Re-running the minimum failed. Put breakpoint here to debug.
-    tryWithResults(plan, rowVector, columnsToWrapInLazy);
-    if (!columnsToWrapInLazy.empty()) {
-      LOG(INFO) << "Trying without lazy:";
-      if (tryWithResults(plan, rowVector, {})) {
-        LOG(INFO) << "Minimal failure succeeded without lazy vectors";
-      }
-    }
-  }
-}
-
-bool ExpressionFuzzer::tryWithResults(
-    core::TypedExprPtr plan,
-    const RowVectorPtr& rowVector,
-    const std::vector<column_index_t>& columnsToWrapInLazy) {
-  VectorPtr result;
-  bool emptyResult = try1(plan, rowVector, columnsToWrapInLazy, result);
-  result = vectorFuzzer_.fuzzFlat(plan->type());
-  bool filledResult = try1(plan, rowVector, columnsToWrapInLazy, result);
-  if (emptyResult != filledResult) {
-    LOG(ERROR) << fmt::format(
-        "empty result = {} filledResult = {}", emptyResult, filledResult);
-  }
-  return filledResult && emptyResult;
-}
-
-bool ExpressionFuzzer::try1(
-    core::TypedExprPtr plan,
-    const RowVectorPtr& rowVector,
-    const std::vector<column_index_t>& columnsToWrapInLazy,
-    VectorPtr resultVector) {
-  ResultOrError result;
-  try {
-    result = verifier_.verify(
-        plan,
-        rowVector,
-        resultVector ? BaseVector::copy(*resultVector) : nullptr,
-        true, // canThrow
-        columnsToWrapInLazy);
-  } catch (const std::exception& e) {
-    return false;
-  }
-  return true;
 }
 
 void expressionFuzzer(FunctionSignatureMap signatureMap, size_t seed) {

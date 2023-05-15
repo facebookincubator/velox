@@ -23,6 +23,7 @@
 #include "velox/type/Type.h"
 #include "velox/vector/BaseVector.h"
 #include "velox/vector/ComplexVector.h"
+#include "velox/vector/fuzzer/VectorFuzzer.h"
 
 namespace facebook::velox::test {
 
@@ -93,4 +94,12 @@ class ExpressionVerifier {
   const ExpressionVerifierOptions options_;
 };
 
+// Finds the minimum common subexpression which fails for a plan should it
+// exist.
+void computeMinimumSubExpression(
+    ExpressionVerifier&& minimalVerifier,
+    VectorFuzzer& fuzzer,
+    core::TypedExprPtr plan,
+    const RowVectorPtr& rowVector,
+    const std::vector<column_index_t>& columnsToWrapInLazy);
 } // namespace facebook::velox::test

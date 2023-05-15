@@ -18,7 +18,6 @@
 #include "velox/common/base/Fs.h"
 #include "velox/expression/Expr.h"
 #include "velox/vector/VectorSaver.h"
-#include "velox/vector/fuzzer/VectorFuzzer.h"
 #include "velox/vector/tests/utils/VectorMaker.h"
 
 namespace facebook::velox::test {
@@ -314,6 +313,131 @@ void ExpressionVerifier::persistReproInfo(
     ss << " --complex_constant_path " << complexConstantsPath;
   }
   LOG(INFO) << ss.str();
+}
+
+namespace {
+class MinimalSubExpressionFinder {
+ public:
+  MinimalSubExpressionFinder(
+      ExpressionVerifier&& verifier,
+      VectorFuzzer& vectorFuzzer)
+      : verifier_(verifier), vectorFuzzer_(vectorFuzzer) {}
+
+  // Tries subexpressions of plan until finding the minimal failing subtree.
+  void findMinimalExpression(
+      core::TypedExprPtr plan,
+      const RowVectorPtr& rowVector,
+      const std::vector<column_index_t>& columnsToWrapInLazy) {
+    if (verifyWithResults(plan, rowVector, columnsToWrapInLazy)) {
+      errorExit("Retry should have failed");
+    }
+    bool minimalFound = false;
+    findMinimalRecursive(plan, rowVector, columnsToWrapInLazy, minimalFound);
+    if (minimalFound) {
+      errorExit("Found minimal failing expression");
+    } else {
+      errorExit("Only the top level expression failed");
+    }
+  }
+
+ private:
+  // Central point for failure exit.
+  void errorExit(const std::string& text) {
+    VELOX_FAIL(text);
+  }
+
+  // Verifies children of 'plan'. If all succeed, sets minimalFound to
+  // true and reruns 'plan' wth and without lazy vectors. Set
+  // breakpoint inside this to debug failures.
+  void findMinimalRecursive(
+      core::TypedExprPtr plan,
+      const RowVectorPtr& rowVector,
+      const std::vector<column_index_t>& columnsToWrapInLazy,
+      bool& minimalFound) {
+    bool anyFailed = false;
+    for (auto& input : plan->inputs()) {
+      if (!verifyWithResults(input, rowVector, columnsToWrapInLazy)) {
+        anyFailed = true;
+        findMinimalRecursive(
+            input, rowVector, columnsToWrapInLazy, minimalFound);
+        if (minimalFound) {
+          return;
+        }
+      }
+    }
+    if (!anyFailed) {
+      minimalFound = true;
+      LOG(INFO) << "Failed with all children succeeding: " << plan->toString();
+      // Re-running the minimum failed. Put breakpoint here to debug.
+      verifyWithResults(plan, rowVector, columnsToWrapInLazy);
+      if (!columnsToWrapInLazy.empty()) {
+        LOG(INFO) << "Trying without lazy:";
+        if (verifyWithResults(plan, rowVector, {})) {
+          LOG(INFO) << "Minimal failure succeeded without lazy vectors";
+        }
+      }
+    }
+  }
+
+  // Verifies a 'plan' against a 'rowVector' with and without pre-existing
+  // contents in result vector.
+  bool verifyWithResults(
+      core::TypedExprPtr plan,
+      const RowVectorPtr& rowVector,
+      const std::vector<column_index_t>& columnsToWrapInLazy) {
+    VectorPtr result;
+    LOG(INFO) << "Running with empty results vector :" << plan->toString();
+    bool emptyResult = verifyPlan(plan, rowVector, columnsToWrapInLazy, result);
+    LOG(INFO) << "Running with non empty vector :" << plan->toString();
+    result = vectorFuzzer_.fuzzFlat(plan->type());
+    bool filledResult =
+        verifyPlan(plan, rowVector, columnsToWrapInLazy, result);
+    if (emptyResult != filledResult) {
+      LOG(ERROR) << fmt::format(
+          "Different results for empty vs populated ! Empty result = {} filledResult = {}",
+          emptyResult,
+          filledResult);
+    }
+    return filledResult && emptyResult;
+  }
+
+  // Runs verification on a plan with a provided result vector.
+  // Returns true if the verification is successful.
+  bool verifyPlan(
+      core::TypedExprPtr plan,
+      const RowVectorPtr& rowVector,
+      const std::vector<column_index_t>& columnsToWrapInLazy,
+      VectorPtr results) {
+    ResultOrError result;
+    try {
+      result = verifier_.verify(
+          plan,
+          rowVector,
+          results ? BaseVector::copy(*results) : nullptr,
+          true, // canThrow
+          columnsToWrapInLazy);
+    } catch (const std::exception& e) {
+      return false;
+    }
+    return true;
+  }
+
+  ExpressionVerifier verifier_;
+  VectorFuzzer& vectorFuzzer_;
+};
+} // namespace
+
+void computeMinimumSubExpression(
+    ExpressionVerifier&& minimalVerifier,
+    VectorFuzzer& fuzzer,
+    core::TypedExprPtr plan,
+    const RowVectorPtr& rowVector,
+    const std::vector<column_index_t>& columnsToWrapInLazy) {
+  auto finder = MinimalSubExpressionFinder(std::move(minimalVerifier), fuzzer);
+  LOG(INFO) << "============================================";
+  LOG(INFO) << "Finding minimal subexpression.";
+  finder.findMinimalExpression(plan, rowVector, columnsToWrapInLazy);
+  LOG(INFO) << "============================================";
 }
 
 } // namespace facebook::velox::test
