@@ -285,17 +285,17 @@ TEST_F(CeilFloorTest, Limits) {
 class BinTest : public SparkFunctionBaseTest {
  protected:
   std::optional<std::string> bin(std::optional<std::int64_t> arg) {
-    return evaluateOnce<std::string, int64_t>(
-        "bin(c0)", {arg}, {BIGINT()});
+    return evaluateOnce<std::string, int64_t>("bin(c0)", {arg}, {BIGINT()});
   }
 };
 
 TEST_F(BinTest, bin) {
   EXPECT_EQ(bin(std::nullopt), std::nullopt);
   EXPECT_EQ(bin(13), "1101");
-  EXPECT_EQ(bin(-13), "1111111111111111111111111111111111111111111111111111111111110011");
+  EXPECT_EQ(
+      bin(-13),
+      "1111111111111111111111111111111111111111111111111111111111110011");
 }
-
 
 } // namespace
 } // namespace facebook::velox::functions::sparksql::test
