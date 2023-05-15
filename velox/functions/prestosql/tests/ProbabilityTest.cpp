@@ -121,6 +121,7 @@ TEST_F(ProbabilityTest, binomialCDF) {
 
   EXPECT_EQ(binomialCDF(5, 0.5, 5), 1.0);
   EXPECT_EQ(binomialCDF(5, 0.5, 0), 0.03125);
+  EXPECT_EQ(binomialCDF(3, 0.5, 1), 0.5);
   EXPECT_EQ(binomialCDF(20, 1.0, 0), 0.0);
   EXPECT_EQ(binomialCDF(20, 0.3, 6), 0.60800981220092398);
   EXPECT_EQ(binomialCDF(200, 0.3, 60), 0.5348091761606989);
@@ -137,10 +138,7 @@ TEST_F(ProbabilityTest, binomialCDF) {
   VELOX_ASSERT_THROW(
       binomialCDF(5, 2, 3), "Success probability must be real value in [0, 1]");
   VELOX_ASSERT_THROW(
-      binomialCDF(1, 0.5, 3),
-      "Number of trials must be greater than or equal to value");
-  VELOX_ASSERT_THROW(
-      binomialCDF(-1, 0.5, -5), "Number of trials must be greater than 0");
+      binomialCDF(-1, 0.5, 2), "Number of trials must be greater than 0");
   VELOX_ASSERT_THROW(
       binomialCDF(1, 0.5, -2), "Value must be a positive integer");
   VELOX_ASSERT_THROW(

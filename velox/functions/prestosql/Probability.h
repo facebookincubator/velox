@@ -78,10 +78,6 @@ struct BinomialCDFFunction {
     VELOX_USER_CHECK_GT(
         numOfTrials, 0, "Number of trials must be greater than 0");
     VELOX_USER_CHECK_GE(value, 0, "Value must be a positive integer");
-    VELOX_USER_CHECK_GE(
-        numOfTrials,
-        value,
-        "Number of trials must be greater than or equal to value");
     VELOX_USER_CHECK(
         (successProb >= 0) && (successProb <= 1),
         "Success probability must be real value in [0, 1]");
