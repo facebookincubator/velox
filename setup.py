@@ -172,6 +172,7 @@ setup(
         "typing",
         "tabulate",
         "typing-inspect",
+        "pyarrow",
     ],
     extras_require={"tests": ["pyarrow"]},
     python_requires=">=3.7",

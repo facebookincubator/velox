@@ -24,11 +24,17 @@ namespace py = pybind11;
 
 void addConversionBindings(py::module& m, bool asModuleLocalDefinitions) {
    m.def("export_to_arrow", [](VectorPtr& inputVector) {
-    auto arrowArray = std::make_shared<ArrowArray>();
+    auto arrowArray = std::make_unique<ArrowArray>();
     std::shared_ptr<facebook::velox::memory::MemoryPool> pool_{
         facebook::velox::memory::addDefaultLeafMemoryPool()};
     facebook::velox::exportToArrow(inputVector, *arrowArray, pool_.get());
-    return reinterpret_cast<uintptr_t>(arrowArray.get());
+
+    auto arrowSchema = std::make_unique<ArrowSchema>();
+    facebook::velox::exportToArrow(inputVector, *arrowSchema);
+
+    py::module arrow_module = py::module::import("pyarrow");
+    py::object array_class = arrow_module.attr("Array");  
+    return array_class.attr("_import_from_c")(reinterpret_cast<uintptr_t>(arrowArray.get()), reinterpret_cast<uintptr_t>(arrowSchema.get()));
   });
 
   m.def(

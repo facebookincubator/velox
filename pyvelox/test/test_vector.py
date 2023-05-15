@@ -277,15 +277,11 @@ class TestVeloxVector(unittest.TestCase):
             
     def test_export_to_arrow(self):
         vector = pv.from_list([1, 2, 3])
-        vector_ptr = pv.export_to_arrow(vector)
+        array = pv.export_to_arrow(vector)
 
-        self.assertTrue(isinstance(vector_ptr, int))
-
-        arrow_arr = pa.Array._import_from_c(vector_ptr, pa.int64())
-
-        self.assertEqual(arrow_arr.type, pa.int64())
-        self.assertEqual(len(arrow_arr), 3)
-        self.assertListEqual(arrow_arr.tolist(), [1, 2, 3])
+        self.assertEqual(array.type, pa.int64())
+        self.assertEqual(len(array), 3)
+        self.assertListEqual(array.tolist(), [1, 2, 3])
 
     def test_import_from_arrow(self):
         arr = pa.array([1, 2, 3], type=pa.int32())
@@ -298,10 +294,9 @@ class TestVeloxVector(unittest.TestCase):
 
     def test_roundtrip_conversion(self):
         vector = pv.from_list([1, 2, 3])
-        vector_ptr = pv.export_to_arrow(vector)
-        arrow_arr = pa.Array._import_from_c(vector_ptr, pa.int64())
+        array = pv.export_to_arrow(vector)
 
-        velox_vector = pv.import_from_arrow(arrow_arr)
+        velox_vector = pv.import_from_arrow(array)
         self.assertEqual(velox_vector.size(), 3)
         self.assertTrue(velox_vector.dtype(), pv.IntegerType())
         for i in range(0, 3):
