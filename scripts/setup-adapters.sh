@@ -36,28 +36,10 @@ function install_gcs-sdk-cpp {
   # https://github.com/googleapis/google-cloud-cpp/blob/main/doc/packaging.md#required-libraries
 
   # abseil-cpp
-  github_checkout abseil/abseil-cpp 20220623.1 --depth 1
+  github_checkout abseil/abseil-cpp 20230125.3 --depth 1
   sed -i 's/^#define ABSL_OPTION_USE_\(.*\) 2/#define ABSL_OPTION_USE_\1 0/' "absl/base/options.h"
   cmake_install -DBUILD_SHARED_LIBS=OFF \
     -DABSL_BUILD_TESTING=OFF
-
-  # protobuf
-  github_checkout protocolbuffers/protobuf v21.12 --depth 1
-  cmake_install -DBUILD_SHARED_LIBS=OFF \
-    -Dprotobuf_BUILD_TESTS=OFF \
-    -Dprotobuf_ABSL_PROVIDER=package
-
-  # grpc
-  github_checkout grpc/grpc v1.51.1 --depth 1
-  cmake_install -DBUILD_SHARED_LIBS=OFF \
-    -DgRPC_INSTALL=ON \
-    -DgRPC_BUILD_TESTS=OFF \
-    -DgRPC_ABSL_PROVIDER=package \
-    -DgRPC_CARES_PROVIDER=package \
-    -DgRPC_PROTOBUF_PROVIDER=package \
-    -DgRPC_RE2_PROVIDER=package \
-    -DgRPC_SSL_PROVIDER=package \
-    -DgRPC_ZLIB_PROVIDER=package
 
   # crc32
   github_checkout google/crc32c 1.1.2 --depth 1
@@ -71,11 +53,12 @@ function install_gcs-sdk-cpp {
   cmake_install -DBUILD_SHARED_LIBS=OFF \
     -DJSON_BuildTests=OFF
 
-  # google-cloud-gcp
-  github_checkout googleapis/google-cloud-cpp v2.5.0 --depth 1
+  # google-cloud-cpp
+  github_checkout googleapis/google-cloud-cpp v2.10.1 --depth 1
   cmake_install -DBUILD_SHARED_LIBS=OFF \
     -DCMAKE_INSTALL_MESSAGE=NEVER \
-    -DGOOGLE_CLOUD_CPP_ENABLE_EXAMPLES=OFF
+    -DGOOGLE_CLOUD_CPP_ENABLE_EXAMPLES=OFF \
+    -DGOOGLE_CLOUD_CPP_ENABLE=storage
 }
 
 function install_libhdfs3 {
@@ -104,11 +87,11 @@ if [[ "$OSTYPE" == "linux-gnu"* ]]; then
    if [[ "$LINUX_DISTRIBUTION" == "ubuntu" ]]; then
       apt install -y --no-install-recommends libxml2-dev libgsasl7-dev uuid-dev
       # Dependencies of GCS, probably a workaround until the docker image is rebuilt
-      apt install -y --no-install-recommends libc-ares-dev libcurl4-openssl-dev python3-dev
+      apt install -y --no-install-recommends libc-ares-dev libcurl4-openssl-dev
    else # Assume Fedora/CentOS
       yum -y install libxml2-devel libgsasl-devel libuuid-devel
       # Dependencies of GCS, probably a workaround until the docker image is rebuilt
-      yum -y install curl-devel c-ares-devel python3-devel
+      yum -y install curl-devel c-ares-devel
    fi
 fi
 

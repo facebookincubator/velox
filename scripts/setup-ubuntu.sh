@@ -41,7 +41,6 @@ sudo --preserve-env apt update && sudo --preserve-env apt install -y libunwind-d
   git \
   libc-ares-dev \
   libcurl4-openssl-dev \
-  python3-dev \
   libssl-dev \
   libboost-all-dev \
   libicu-dev \
