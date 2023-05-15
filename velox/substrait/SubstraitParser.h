@@ -128,6 +128,10 @@ class SubstraitParser {
       {"starts_with", "startswith"},
       {"datediff", "date_diff"},
       {"named_struct", "row_constructor"},
+      {"bit_or", "bitwise_or_agg"},
+      {"bit_or_merge", "bitwise_or_agg_merge"},
+      {"bit_and", "bitwise_and_agg"},
+      {"bit_and_merge", "bitwise_and_agg_merge"},
       {"modulus", "mod"} /*Presto functions.*/};
 
   // The map is uesd for mapping substrait type.
