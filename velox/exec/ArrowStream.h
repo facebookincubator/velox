@@ -16,8 +16,7 @@
 #include "velox/core/PlanNode.h"
 #include "velox/exec/Operator.h"
 
-#include "velox/vector/arrow/Abi.h"
-
+struct ArrowArrayStream;
 namespace facebook::velox::exec {
 
 class ArrowStream : public SourceOperator {
