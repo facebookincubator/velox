@@ -114,6 +114,16 @@ dwio::common::PositionProvider ParquetData::seekToRowGroup(uint32_t index) {
   VELOX_CHECK_LT(index, streams_.size());
   VELOX_CHECK(streams_[index], "Stream not enqueued for column");
   auto& metadata = rowGroups_[index].columns[type_->column].meta_data;
+#ifdef VELOX_ENABLE_QPL    
+  if (!hasNulls() && maxRepeat_ == 0 && metadata.codec == thrift::CompressionCodec::QPL  && metadata.type == thrift::Type::INT32) {
+    qplReader_ = std::make_unique<QplPageReader>(
+        std::move(streams_[index]),
+        pool_,
+        type_,
+        metadata.codec,
+        metadata.total_compressed_size);
+  }
+#endif  
   reader_ = std::make_unique<PageReader>(
       std::move(streams_[index]),
       pool_,

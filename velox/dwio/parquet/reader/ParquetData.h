@@ -22,6 +22,7 @@
 #include "velox/dwio/common/BufferedInput.h"
 #include "velox/dwio/common/ScanSpec.h"
 #include "velox/dwio/parquet/reader/PageReader.h"
+#include "velox/dwio/parquet/reader/QplPageReader.h"
 #include "velox/dwio/parquet/thrift/ParquetThriftTypes.h"
 #include "velox/dwio/parquet/thrift/ThriftTransport.h"
 
@@ -153,7 +154,12 @@ class ParquetData : public dwio::common::FormatData {
   /// PageReader::readWithVisitor().
   template <typename Visitor>
   void readWithVisitor(Visitor visitor) {
-    reader_->readWithVisitor(visitor);
+#ifdef VELOX_ENABLE_QPL    
+    if (std::is_same_v<typename Visitor::DataType, int32_t> && qplReader_ != nullptr) {
+      return qplReader_->readWithVisitor(visitor);
+    } else
+#endif      
+      reader_->readWithVisitor(visitor);
   }
 
   const VectorPtr& dictionaryValues(const TypePtr& type) {
@@ -189,7 +195,9 @@ class ParquetData : public dwio::common::FormatData {
   const uint32_t maxRepeat_;
   int64_t rowsInRowGroup_;
   std::unique_ptr<PageReader> reader_;
-
+#ifdef VELOX_ENABLE_QPL
+  std::unique_ptr<QplPageReader> qplReader_;
+#endif
   // Nulls derived from leaf repdefs for non-leaf readers.
   BufferPtr presetNulls_;
 

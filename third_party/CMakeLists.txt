@@ -38,6 +38,7 @@ if(VELOX_ENABLE_ARROW)
       -DCMAKE_INSTALL_PREFIX=${ARROW_PREFIX}/install
       -DCMAKE_BUILD_TYPE=${CMAKE_BUILD_TYPE}
       -DARROW_BUILD_STATIC=ON
+      -DARROW_WITH_QPL=${VELOX_ENABLE_QPL}
       -DThrift_SOURCE=${THRIFT_SOURCE})
   set(ARROW_LIBDIR ${ARROW_PREFIX}/install/${CMAKE_INSTALL_LIBDIR})
 
@@ -89,5 +90,50 @@ if(VELOX_ENABLE_ARROW)
   set_property(TARGET arrow PROPERTY INTERFACE_LINK_LIBRARIES ${RE2} thrift)
   set_target_properties(parquet PROPERTIES IMPORTED_LOCATION
                                            ${ARROW_LIBDIR}/libparquet.a)
+
+endif()
+
+
+if(VELOX_ENABLE_QPL)
+  message(STATUS "Building QPL from source")
+  set(QPL_PREFIX "${CMAKE_CURRENT_BINARY_DIR}/qpl_ep/install")
+  set(QPL_STATIC_LIB_NAME ${CMAKE_STATIC_LIBRARY_PREFIX}qpl${CMAKE_STATIC_LIBRARY_SUFFIX})
+  set(QPL_STATIC_LIB "${QPL_PREFIX}/lib/${QPL_STATIC_LIB_NAME}")
+
+  set(CMAKE_CXX_FLAGS  "${CMAKE_CXX_FLAGS} -ldl -laccel-config -L/usr/lib64")    
+
+  set(QPL_CMAKE_ARGS
+    -DCMAKE_BUILD_TYPE=Release
+    -DCMAKE_INSTALL_LIBDIR=${QPL_PREFIX}/lib
+    -DCMAKE_INSTALL_PREFIX=${QPL_PREFIX}
+    -DCMAKE_CXX_FLAGS=${CMAKE_CXX_FLAGS}
+    -DEFFICIENT_WAIT=OFF
+    -DQPL_BUILD_TESTS=0
+    -DCMAKE_C_COMPILER=/home/zhaoyaqi/program/gcc-9.4.0/_build/bin/gcc
+    -DCMAKE_CXX_COMPILER=/home/zhaoyaqi/program/gcc-9.4.0/_build/bin/g++)
+
+  set(QPL_PATCH_COMMAND
+      "sed" "-i" "20,27d"
+      "${CMAKE_CURRENT_BINARY_DIR}/qpl_ep-prefix/src/qpl_ep/tools/CMakeLists.txt")
+
+  ExternalProject_Add(qpl_ep
+                      ${EP_LOG_OPTIONS}
+                      URL https://github.com/intel/qpl/archive/refs/tags/v1.1.0.tar.gz
+                      PATCH_COMMAND ${QPL_PATCH_COMMAND}
+                      BUILD_BYPRODUCTS "${QPL_STATIC_LIB}"
+                      CMAKE_ARGS ${QPL_CMAKE_ARGS}
+                     )
+
+  file(MAKE_DIRECTORY "${QPL_PREFIX}/include")
+
+  add_library(qpl::qpl STATIC IMPORTED GLOBAL)
+  set(QPL_LIBRARIES ${QPL_STATIC_LIB})
+  set(QPL_INCLUDE_DIRS "${QPL_PREFIX}/include")
+  target_link_libraries(qpl::qpl INTERFACE /usr/lib64/libaccel-config.so)
+  set_target_properties(qpl::qpl
+                        PROPERTIES IMPORTED_LOCATION ${QPL_LIBRARIES}
+                                   INTERFACE_INCLUDE_DIRECTORIES ${QPL_INCLUDE_DIRS})
+
+  add_dependencies(qpl::qpl qpl_ep)
 
 endif()

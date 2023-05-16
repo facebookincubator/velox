@@ -81,6 +81,7 @@ option(VELOX_ENABLE_CCACHE "Use ccache if installed." ON)
 option(VELOX_BUILD_TEST_UTILS "Builds Velox test utilities" OFF)
 option(VELOX_BUILD_PYTHON_PACKAGE "Builds Velox Python bindings" OFF)
 option(VELOX_BUILD_BENCHMARKS "Builds Velox benchmarks" OFF)
+option(VELOX_ENABLE_QPL "Enable Intel QPL support" OFF)
 
 if(${VELOX_BUILD_MINIMAL})
   # Enable and disable components for velox base build
@@ -193,6 +194,10 @@ if(VELOX_ENABLE_PARQUET)
   # Native Parquet reader requires Apache Thrift and Arrow Parquet writer, which
   # are included in Arrow.
   set(VELOX_ENABLE_ARROW ON)
+endif()
+
+if(VELOX_ENABLE_QPL)
+  add_definitions(-DVELOX_ENABLE_QPL)
 endif()
 
 # Turn on Codegen only for Clang and non Mac systems.
