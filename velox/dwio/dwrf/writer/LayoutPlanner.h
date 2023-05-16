@@ -16,6 +16,7 @@
 
 #pragma once
 
+#include <folly/container/F14Map.h>
 #include "velox/common/base/GTestMacros.h"
 #include "velox/dwio/common/Common.h"
 #include "velox/dwio/dwrf/common/Common.h"
@@ -107,29 +108,46 @@ class EncodingManager : public EncodingContainer {
   std::vector<proto::StripeEncryptionGroup> encryptionGroups_;
 };
 
-class LayoutPlanner {
+class LayoutResult {
  public:
-  explicit LayoutPlanner(StreamList streamList);
-  virtual ~LayoutPlanner() = default;
+  LayoutResult(StreamList streams, size_t indexCount)
+      : streams_{std::move(streams)}, indexCount_{indexCount} {}
 
   void iterateIndexStreams(
-      std::function<void(const DwrfStreamIdentifier&, DataBufferHolder&)>
-          consumer);
+      const std::function<void(const DwrfStreamIdentifier&, DataBufferHolder&)>&
+          consumer) const;
 
   void iterateDataStreams(
-      std::function<void(const DwrfStreamIdentifier&, DataBufferHolder&)>
-          consumer);
+      const std::function<void(const DwrfStreamIdentifier&, DataBufferHolder&)>&
+          consumer) const;
 
-  virtual void plan();
-
- protected:
+ private:
   StreamList streams_;
   size_t indexCount_;
+};
 
-  class NodeSizeSorter {
-   public:
-    static void sort(StreamList::iterator begin, StreamList::iterator end);
-  };
+class LayoutPlanner {
+ public:
+  explicit LayoutPlanner(const dwio::common::TypeWithId& schema);
+  virtual ~LayoutPlanner() = default;
+
+  virtual LayoutResult plan(
+      const EncodingContainer& encoding,
+      StreamList streamList) const;
+
+ protected:
+  static void sortBySize(
+      StreamList::iterator begin,
+      StreamList::iterator end,
+      const folly::F14FastSet<uint32_t>& flatMapCols);
+
+  // This method assumes flatmap can only be top level fields, which is enforced
+  // through the way how flatmap is configured.
+  static folly::F14FastSet<uint32_t> getFlatMapColumns(
+      const EncodingContainer& encoding,
+      const folly::F14FastMap<uint32_t, uint32_t>& nodeToColumnMap);
+
+  folly::F14FastMap<uint32_t, uint32_t> nodeToColumnMap_;
 
   VELOX_FRIEND_TEST(LayoutPlannerTests, Basic);
 };

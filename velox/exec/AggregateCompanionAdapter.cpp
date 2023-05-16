@@ -122,6 +122,7 @@ void AggregateCompanionAdapter::MergeFunction::addRawInput(
     const SelectivityVector& rows,
     const std::vector<VectorPtr>& args,
     bool mayPushdown) {
+  fn_->enableValidateIntermediateInputs();
   fn_->addIntermediateResults(groups, rows, args, mayPushdown);
 }
 
@@ -130,6 +131,7 @@ void AggregateCompanionAdapter::MergeFunction::addSingleGroupRawInput(
     const SelectivityVector& rows,
     const std::vector<VectorPtr>& args,
     bool mayPushdown) {
+  fn_->enableValidateIntermediateInputs();
   fn_->addSingleGroupIntermediateResults(group, rows, args, mayPushdown);
 }
 
@@ -210,6 +212,7 @@ void AggregateCompanionAdapter::ExtractFunction::apply(
   std::vector<vector_size_t> allSelectedRange;
   rows.applyToSelected([&](auto row) { allSelectedRange.push_back(row); });
   fn_->initializeNewGroups(groups, allSelectedRange);
+  fn_->enableValidateIntermediateInputs();
   fn_->addIntermediateResults(groups, rows, args, false);
 
   auto localResult = BaseVector::create(outputType, rows.end(), context.pool());

@@ -439,7 +439,7 @@ void Expr::evalSimplifiedImpl(
   auto evalArg = [&](int32_t i) {
     auto& inputValue = inputValues_[i];
     inputs_[i]->evalSimplified(remainingRows.rows(), context, inputValue);
-    BaseVector::flattenVector(inputValue, rows.end());
+    BaseVector::flattenVector(inputValue);
     VELOX_CHECK(
         inputValue->encoding() == VectorEncoding::Simple::FLAT ||
         inputValue->encoding() == VectorEncoding::Simple::ARRAY ||
@@ -1702,4 +1702,23 @@ std::string printExprWithStats(const exec::ExprSet& exprSet) {
   }
   return out.str();
 }
+
+void SimpleExpressionEvaluator::evaluate(
+    exec::ExprSet* exprSet,
+    const SelectivityVector& rows,
+    const RowVector& input,
+    VectorPtr& result) {
+  EvalCtx context(ensureExecCtx(), exprSet, &input);
+  std::vector<VectorPtr> results = {result};
+  exprSet->eval(0, 1, true, rows, context, results);
+  result = results[0];
+}
+
+core::ExecCtx* SimpleExpressionEvaluator::ensureExecCtx() {
+  if (!execCtx_) {
+    execCtx_ = std::make_unique<core::ExecCtx>(pool_, queryCtx_);
+  }
+  return execCtx_.get();
+}
+
 } // namespace facebook::velox::exec

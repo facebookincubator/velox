@@ -29,11 +29,13 @@ target_link_libraries(
   velox_memory
   velox_caching
   velox_exception
+  velox_exec_test_lib
   velox_test_util
+  velox_vector_fuzzer
   gtest
   gtest_main
   gflags::gflags
-  ${FOLLY_WITH_DEPENDENCIES}
+  Folly::folly
   gmock
   glog::glog)
 
@@ -48,7 +50,7 @@ target_link_libraries(
   gtest
   gtest_main
   gflags::gflags
-  ${FOLLY_WITH_DEPENDENCIES}
+  Folly::folly
   pthread)
 
 add_executable(velox_concurrent_allocation_benchmark
@@ -61,6 +63,6 @@ target_link_libraries(
   gtest
   gtest_main
   gflags::gflags
-  ${FOLLY_WITH_DEPENDENCIES}
+  Folly::folly
   fmt::fmt
   pthread)

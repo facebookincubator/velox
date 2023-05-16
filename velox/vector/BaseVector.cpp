@@ -556,8 +556,7 @@ void BaseVector::ensureWritable(
     copy =
         BaseVector::create(isUnknownType ? type : resultType, targetSize, pool);
   }
-  SelectivityVector copyRows(
-      std::min<vector_size_t>(targetSize, result->size()));
+  SelectivityVector copyRows(result->size());
   copyRows.deselect(rows);
   if (copyRows.hasSelections()) {
     copy->copy(result.get(), copyRows, nullptr);
@@ -623,7 +622,7 @@ VectorPtr newNullConstant(
 }
 } // namespace
 
-std::shared_ptr<BaseVector> BaseVector::createNullConstant(
+VectorPtr BaseVector::createNullConstant(
     const TypePtr& type,
     vector_size_t size,
     velox::memory::MemoryPool* pool) {
@@ -701,9 +700,38 @@ bool isReusableEncoding(VectorEncoding::Simple encoding) {
 } // namespace
 
 // static
-void BaseVector::prepareForReuse(
-    std::shared_ptr<BaseVector>& vector,
-    vector_size_t size) {
+void BaseVector::flattenVector(VectorPtr& vector) {
+  if (!vector) {
+    return;
+  }
+  switch (vector->encoding()) {
+    case VectorEncoding::Simple::FLAT:
+      return;
+    case VectorEncoding::Simple::ROW: {
+      auto* rowVector = vector->asUnchecked<RowVector>();
+      for (auto& child : rowVector->children()) {
+        BaseVector::flattenVector(child);
+      }
+      return;
+    }
+    case VectorEncoding::Simple::ARRAY: {
+      auto* arrayVector = vector->asUnchecked<ArrayVector>();
+      BaseVector::flattenVector(arrayVector->elements());
+      return;
+    }
+    case VectorEncoding::Simple::MAP: {
+      auto* mapVector = vector->asUnchecked<MapVector>();
+      BaseVector::flattenVector(mapVector->mapKeys());
+      BaseVector::flattenVector(mapVector->mapValues());
+      return;
+    }
+    default:
+      BaseVector::ensureWritable(
+          SelectivityVector::empty(), vector->type(), vector->pool(), vector);
+  }
+}
+
+void BaseVector::prepareForReuse(VectorPtr& vector, vector_size_t size) {
   if (!vector.unique() || !isReusableEncoding(vector->encoding())) {
     vector = BaseVector::create(vector->type(), size, vector->pool());
     return;
@@ -792,6 +820,32 @@ BufferPtr BaseVector::sliceBuffer(
   bits::copyBits(
       buf->as<uint64_t>(), offset, ans->asMutable<uint64_t>(), 0, length);
   return ans;
+}
+
+std::optional<vector_size_t> BaseVector::findDuplicateValue(
+    vector_size_t start,
+    vector_size_t size,
+    CompareFlags flags) {
+  if (length_ == 0 || size == 0) {
+    return std::nullopt;
+  }
+
+  VELOX_DCHECK_GE(start, 0, "Start index must not be negative");
+  VELOX_DCHECK_LT(start, length_, "Start index is too large");
+  VELOX_DCHECK_GT(size, 0, "Size must not be negative");
+  VELOX_DCHECK_LE(start + size, length_, "Size is too large");
+
+  std::vector<vector_size_t> indices(size);
+  std::iota(indices.begin(), indices.end(), start);
+  sortIndices(indices, flags);
+
+  for (auto i = 1; i < size; ++i) {
+    if (equalValueAt(this, indices[i], indices[i - 1])) {
+      return indices[i];
+    }
+  }
+
+  return std::nullopt;
 }
 
 std::string printNulls(const BufferPtr& nulls, vector_size_t maxBitsToPrint) {

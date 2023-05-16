@@ -19,9 +19,13 @@
 #include <folly/executors/task_queue/UnboundedBlockingQueue.h>
 #include <folly/executors/thread_factory/InitThreadFactory.h>
 #include <gflags/gflags.h>
+#include "velox/common/testutil/TestValue.h"
 #include "velox/common/time/Timer.h"
 #include "velox/exec/Operator.h"
+#include "velox/exec/OperatorUtils.h"
 #include "velox/exec/Task.h"
+
+using facebook::velox::common::testutil::TestValue;
 
 namespace facebook::velox::exec {
 
@@ -41,10 +45,34 @@ const core::QueryConfig& DriverCtx::queryConfig() const {
   return task->queryCtx()->queryConfig();
 }
 
-velox::memory::MemoryPool* FOLLY_NONNULL DriverCtx::addOperatorPool(
+velox::memory::MemoryPool* DriverCtx::addOperatorPool(
     const core::PlanNodeId& planNodeId,
     const std::string& operatorType) {
   return task->addOperatorPool(planNodeId, pipelineId, driverId, operatorType);
+}
+
+std::optional<Spiller::Config> DriverCtx::makeSpillConfig(
+    int32_t operatorId) const {
+  const auto& queryConfig = task->queryCtx()->queryConfig();
+  if (!queryConfig.spillEnabled()) {
+    return std::nullopt;
+  }
+  if (task->spillDirectory().empty()) {
+    return std::nullopt;
+  }
+  return Spiller::Config(
+      makeOperatorSpillPath(
+          task->spillDirectory(), pipelineId, driverId, operatorId),
+      queryConfig.maxSpillFileSize(),
+      queryConfig.minSpillRunSize(),
+      task->queryCtx()->spillExecutor(),
+      queryConfig.spillableReservationGrowthPct(),
+      HashBitRange(
+          queryConfig.spillStartPartitionBit(),
+          queryConfig.spillStartPartitionBit() +
+              queryConfig.spillPartitionBits()),
+      queryConfig.maxSpillLevel(),
+      queryConfig.testingSpillPct());
 }
 
 std::atomic_uint64_t BlockingState::numBlockedDrivers_{0};
@@ -74,8 +102,8 @@ void BlockingState::setResume(std::shared_ptr<BlockingState> state) {
   std::move(state->future_)
       .via(&exec)
       .thenValue([state](auto&& /* unused */) {
-        auto driver = state->driver_;
-        auto task = driver->task();
+        auto& driver = state->driver_;
+        auto& task = driver->task();
 
         std::lock_guard<std::mutex> l(task->mutex());
         if (!driver->state().isTerminated) {
@@ -93,9 +121,9 @@ void BlockingState::setResume(std::shared_ptr<BlockingState> state) {
       })
       .thenError(
           folly::tag_t<std::exception>{}, [state](std::exception const& e) {
-            LOG(ERROR)
-                << "A ContinueFuture should not be realized with an error"
-                << e.what();
+            LOG(ERROR) << "A ContinueFuture for task "
+                       << state->driver_->task()->taskId()
+                       << " should not be realized with an error: " << e.what();
             state->driver_->setError(std::make_exception_ptr(e));
           });
 }
@@ -181,19 +209,20 @@ void Driver::enqueue(std::shared_ptr<Driver> driver) {
       [driver]() { Driver::run(driver); });
 }
 
-Driver::Driver(
+void Driver::init(
     std::unique_ptr<DriverCtx> ctx,
-    std::vector<std::unique_ptr<Operator>> operators)
-    : ctx_(std::move(ctx)), operators_(std::move(operators)) {
+    std::vector<std::unique_ptr<Operator>> operators) {
+  VELOX_CHECK_NULL(ctx_);
+  ctx_ = std::move(ctx);
+  VELOX_CHECK(operators_.empty());
+  operators_ = std::move(operators);
   curOpIndex_ = operators_.size() - 1;
-  // Operators need access to their Driver for adaptation.
-  ctx_->driver = this;
   trackOperatorCpuUsage_ = ctx_->queryConfig().operatorTrackCpuUsage();
 }
 
 namespace {
-/// Checks if output channel is produced using identity projection and returns
-/// input channel if so.
+// Checks if output channel is produced using identity projection and returns
+// input channel if so.
 std::optional<column_index_t> getIdentityProjection(
     const std::vector<IdentityProjection>& projections,
     column_index_t outputChannel) {
@@ -281,6 +310,7 @@ StopReason Driver::runInternal(
     std::shared_ptr<Driver>& self,
     std::shared_ptr<BlockingState>& blockingState,
     RowVectorPtr& result) {
+  TestValue::adjust("facebook::velox::exec::Driver::runInternal", self.get());
   const auto now = getCurrentTimeMicro();
   const auto queuedTime = (now - queueTimeStartMicros_) * 1'000;
   // Update the next operator's queueTime.
@@ -397,6 +427,9 @@ StopReason Driver::runInternal(
                 lockedStats->addInputVector(resultBytes, result->size());
               }
               RuntimeStatWriterScopeGuard statsWriterGuard(nextOp);
+              TestValue::adjust(
+                  "facebook::velox::exec::Driver::runInternal::addInput",
+                  nextOp);
               nextOp->addInput(result);
               // The next iteration will see if operators_[i + 1] has
               // output now that it got input.
@@ -428,6 +461,9 @@ StopReason Driver::runInternal(
                       op->stats().wlock()->finishTiming.add(timing);
                     });
                 RuntimeStatWriterScopeGuard statsWriterGuard(nextOp);
+                TestValue::adjust(
+                    "facebook::velox::exec::Driver::runInternal::noMoreInput",
+                    nextOp);
                 nextOp->noMoreInput();
                 break;
               }
@@ -592,7 +628,7 @@ bool Driver::mayPushdownAggregation(Operator* aggregation) const {
 }
 
 std::unordered_set<column_index_t> Driver::canPushdownFilters(
-    const Operator* FOLLY_NONNULL filterSource,
+    const Operator* filterSource,
     const std::vector<column_index_t>& channels) const {
   int filterSourceIndex = -1;
   for (auto i = 0; i < operators_.size(); ++i) {
@@ -640,14 +676,18 @@ std::unordered_set<column_index_t> Driver::canPushdownFilters(
   return supportedChannels;
 }
 
-Operator* FOLLY_NULLABLE
-Driver::findOperator(std::string_view planNodeId) const {
+Operator* Driver::findOperator(std::string_view planNodeId) const {
   for (auto& op : operators_) {
     if (op->planNodeId() == planNodeId) {
       return op.get();
     }
   }
   return nullptr;
+}
+
+Operator* Driver::findOperator(int32_t operatorId) const {
+  VELOX_CHECK_LT(operatorId, operators_.size());
+  return operators_[operatorId].get();
 }
 
 std::vector<Operator*> Driver::operators() const {
@@ -677,8 +717,8 @@ std::string Driver::toString() {
   out << "}";
   return out.str();
 }
-SuspendedSection::SuspendedSection(Driver* FOLLY_NONNULL driver)
-    : driver_(driver) {
+
+SuspendedSection::SuspendedSection(Driver* driver) : driver_(driver) {
   if (driver->task()->enterSuspended(driver->state()) != StopReason::kNone) {
     VELOX_FAIL("Terminate detected when entering suspended section");
   }

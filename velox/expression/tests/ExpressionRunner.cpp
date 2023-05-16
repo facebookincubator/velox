@@ -189,7 +189,7 @@ void ExpressionRunner::run(
     auto verifier = test::ExpressionVerifier(&execCtx, {false, ""});
     try {
       verifier.verify(
-          typedExprs[0],
+          typedExprs,
           inputVector,
           std::move(resultVector),
           true,
@@ -201,7 +201,7 @@ void ExpressionRunner::run(
         computeMinimumSubExpression(
             std::move(verifier),
             fuzzer,
-            typedExprs[0],
+            typedExprs,
             inputVector,
             columnsToWrapInLazy);
       }

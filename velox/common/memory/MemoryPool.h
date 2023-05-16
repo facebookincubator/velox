@@ -135,13 +135,6 @@ class MemoryPool : public std::enable_shared_from_this<MemoryPool> {
     /// memory pools from the same root memory pool independently.
     bool threadSafe{true};
 
-    /// Used by memory arbitration to reclaim memory from the associated query
-    /// object if not null. For example, a memory pool can reclaim the used
-    /// memory from a spillable operator through disk spilling. If null, we
-    /// can't reclaim memory from this memory pool. This also only applies if
-    /// the memory usage tracking is enabled.
-    std::shared_ptr<MemoryReclaimer> reclaimer{nullptr};
-
     /// TODO: deprecate this flag after all the existing memory leak use cases
     /// have been fixed.
     ///
@@ -160,6 +153,7 @@ class MemoryPool : public std::enable_shared_from_this<MemoryPool> {
       const std::string& name,
       Kind kind,
       std::shared_ptr<MemoryPool> parent,
+      std::unique_ptr<MemoryReclaimer> reclaimer,
       const Options& options);
 
   /// Removes this memory pool's tracking from its parent through dropChild().
@@ -200,7 +194,7 @@ class MemoryPool : public std::enable_shared_from_this<MemoryPool> {
 
   /// Invoked to traverse the memory pool subtree rooted at this, and calls
   /// 'visitor' on each visited child memory pool with the parent pool's
-  /// 'childrenMutex_' reader lock held. The 'visitor' must not access the
+  /// 'poolMutex_' reader lock held. The 'visitor' must not access the
   /// parent memory pool to avoid the potential recursive locking issues. Note
   /// that the traversal stops if 'visitor' returns false.
   virtual void visitChildren(
@@ -213,7 +207,7 @@ class MemoryPool : public std::enable_shared_from_this<MemoryPool> {
   virtual std::shared_ptr<MemoryPool> addLeafChild(
       const std::string& name,
       bool threadSafe = true,
-      std::shared_ptr<MemoryReclaimer> reclaimer = nullptr);
+      std::unique_ptr<MemoryReclaimer> reclaimer = nullptr);
 
   /// Invoked to create a named aggregate child memory pool.
   ///
@@ -221,7 +215,7 @@ class MemoryPool : public std::enable_shared_from_this<MemoryPool> {
   /// memory usage tracking which inherits from its parent.
   virtual std::shared_ptr<MemoryPool> addAggregateChild(
       const std::string& name,
-      std::shared_ptr<MemoryReclaimer> reclaimer = nullptr);
+      std::unique_ptr<MemoryReclaimer> reclaimer = nullptr);
 
   /// Allocates a buffer with specified 'size'.
   virtual void* allocate(int64_t size) = 0;
@@ -233,6 +227,7 @@ class MemoryPool : public std::enable_shared_from_this<MemoryPool> {
   /// Re-allocates from an existing buffer with 'newSize' and update memory
   /// usage counting accordingly. If 'newSize' is larger than the current buffer
   /// 'size', the function will allocate a new buffer and free the old buffer.
+  /// If the new allocation fails, this method will throw and not free 'p'.
   virtual void* reallocate(void* p, int64_t size, int64_t newSize) = 0;
 
   /// Frees an allocated buffer.
@@ -243,7 +238,8 @@ class MemoryPool : public std::enable_shared_from_this<MemoryPool> {
   /// <= the size of the largest size class. The new memory is returned in 'out'
   /// on success and any memory formerly referenced by 'out' is freed. The
   /// function throws if allocation fails and 'out' references no memory and any
-  /// partially allocated memory is freed.
+  /// partially allocated memory is freed. 'out' will always be freed regardless
+  /// of success or not.
   virtual void allocateNonContiguous(
       MachinePageCount numPages,
       Allocation& out,
@@ -288,11 +284,9 @@ class MemoryPool : public std::enable_shared_from_this<MemoryPool> {
 
   /// Returns the currently used memory in bytes of this memory pool.
   virtual int64_t currentBytes() const = 0;
-  virtual int64_t getCurrentBytes() const = 0;
 
   /// Returns the peak memory usage in bytes of this memory pool.
   virtual int64_t peakBytes() const = 0;
-  virtual int64_t getMaxBytes() const = 0;
 
   /// Returns the reserved but not used memory reservation in bytes of this
   /// memory pool.
@@ -336,8 +330,14 @@ class MemoryPool : public std::enable_shared_from_this<MemoryPool> {
   /// returns the memory pool's capacity after the growth.
   virtual uint64_t grow(uint64_t bytes) = 0;
 
+  /// Sets the memory reclaimer for this memory pool.
+  ///
+  /// NOTE: this shall only be called at most once if the memory pool hasn't set
+  /// reclaimer on construction.
+  virtual void setReclaimer(std::unique_ptr<MemoryReclaimer> reclaimer);
+
   /// Returns the memory reclaimer of this memory pool if not null.
-  MemoryReclaimer* reclaimer() const;
+  virtual MemoryReclaimer* reclaimer() const;
 
   /// Invoked by the memory arbitrator to enter memory arbitration processing.
   /// It is a noop if 'reclaimer_' is not set, otherwise invoke the reclaimer's
@@ -360,7 +360,8 @@ class MemoryPool : public std::enable_shared_from_this<MemoryPool> {
   /// with specified reclaim target bytes. If 'targetBytes' is zero, then it
   /// tries to reclaim all the reclaimable memory from the memory pool. It is
   /// noop if the reclaimer is not set, otherwise invoke the reclaimer's
-  /// corresponding method.
+  /// corresponding method. The function returns the actually freed capacity
+  /// from the root of this memory pool.
   virtual uint64_t reclaim(uint64_t targetBytes);
 
   /// The memory pool's execution stats.
@@ -397,6 +398,13 @@ class MemoryPool : public std::enable_shared_from_this<MemoryPool> {
     bool operator==(const Stats& rhs) const;
 
     std::string toString() const;
+
+    /// Returns true if the current bytes is zero.
+    /// Note that peak or cumulative bytes might be non-zero and we are still
+    /// empty at this moment.
+    bool empty() const {
+      return currentBytes == 0;
+    }
   };
 
   /// Returns the stats of this memory pool.
@@ -437,7 +445,7 @@ class MemoryPool : public std::enable_shared_from_this<MemoryPool> {
       const std::string& name,
       Kind kind,
       bool threadSafe,
-      std::shared_ptr<MemoryReclaimer> reclaimer) = 0;
+      std::unique_ptr<MemoryReclaimer> reclaimer) = 0;
 
   /// Invoked only on destruction to remove this memory pool from its parent's
   /// child memory pool tracking.
@@ -449,11 +457,14 @@ class MemoryPool : public std::enable_shared_from_this<MemoryPool> {
   const std::shared_ptr<MemoryPool> parent_;
   const bool trackUsage_;
   const bool threadSafe_;
-  const std::shared_ptr<MemoryReclaimer> reclaimer_;
   const bool checkUsageLeak_;
 
-  // Protects 'children_'.
-  mutable folly::SharedMutex childrenMutex_;
+  mutable folly::SharedMutex poolMutex_;
+  /// Used by memory arbitration to reclaim memory from the associated query
+  /// object if not null. For example, a memory pool can reclaim the used memory
+  /// from a spillable operator through disk spilling. If null, we can't reclaim
+  /// memory from this memory pool.
+  std::unique_ptr<MemoryReclaimer> reclaimer_;
   // NOTE: we use raw pointer instead of weak pointer here to minimize
   // visitChildren() cost as we don't have to upgrade the weak pointer and copy
   // out the upgraded shared pointers.git
@@ -473,6 +484,7 @@ class MemoryPoolImpl : public MemoryPool {
       const std::string& name,
       Kind kind,
       std::shared_ptr<MemoryPool> parent,
+      std::unique_ptr<MemoryReclaimer> reclaimer = nullptr,
       DestructionCallback destructionCb = nullptr,
       const Options& options = Options{});
 
@@ -509,17 +521,7 @@ class MemoryPoolImpl : public MemoryPool {
     return currentBytesLocked();
   }
 
-  int64_t getCurrentBytes() const override {
-    std::lock_guard<std::mutex> l(mutex_);
-    return currentBytesLocked();
-  }
-
   int64_t peakBytes() const override {
-    std::lock_guard<std::mutex> l(mutex_);
-    return peakBytes_;
-  }
-
-  int64_t getMaxBytes() const override {
     std::lock_guard<std::mutex> l(mutex_);
     return peakBytes_;
   }
@@ -572,7 +574,7 @@ class MemoryPoolImpl : public MemoryPool {
       const std::string& name,
       Kind kind,
       bool threadSafe,
-      std::shared_ptr<MemoryReclaimer> reclaimer) override;
+      std::unique_ptr<MemoryReclaimer> reclaimer) override;
 
   FOLLY_ALWAYS_INLINE int64_t capacityLocked() const {
     return parent_ != nullptr ? toImpl(parent_)->capacity_ : capacity_;
@@ -754,7 +756,7 @@ class MemoryPoolImpl : public MemoryPool {
   // , Source: RUNTIME, ErrorCode: MEM_CAP_EXCEEDED
   std::string capExceedingMessage(
       MemoryPool* requestor,
-      uint64_t incrementBytes);
+      const std::string& errorMessage);
 
   FOLLY_ALWAYS_INLINE void sanityCheckLocked() const {
     if (FOLLY_UNLIKELY(

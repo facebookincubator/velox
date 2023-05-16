@@ -47,24 +47,29 @@ HashBuild::HashBuild(
     int32_t operatorId,
     DriverCtx* driverCtx,
     std::shared_ptr<const core::HashJoinNode> joinNode)
-    : Operator(driverCtx, nullptr, operatorId, joinNode->id(), "HashBuild"),
+    : Operator(
+          driverCtx,
+          nullptr,
+          operatorId,
+          joinNode->id(),
+          "HashBuild",
+          joinNode->canSpill(driverCtx->queryConfig())
+              ? driverCtx->makeSpillConfig(operatorId)
+              : std::nullopt),
       joinNode_(std::move(joinNode)),
       joinType_{joinNode_->joinType()},
       nullAware_{joinNode_->isNullAware()},
       joinBridge_(operatorCtx_->task()->getHashJoinBridgeLocked(
           operatorCtx_->driverCtx()->splitGroupId,
-          planNodeId())),
-      spillConfig_(
-          joinNode_->canSpill(driverCtx->queryConfig())
-              ? operatorCtx_->makeSpillConfig(Spiller::Type::kHashJoinBuild)
-              : std::nullopt),
-      spillGroup_(
-          spillEnabled() ? operatorCtx_->task()->getSpillOperatorGroupLocked(
-                               operatorCtx_->driverCtx()->splitGroupId,
-                               planNodeId())
-                         : nullptr) {
+          planNodeId())) {
   VELOX_CHECK(pool()->trackUsage());
   VELOX_CHECK_NOT_NULL(joinBridge_);
+
+  spillGroup_ = spillEnabled()
+      ? operatorCtx_->task()->getSpillOperatorGroupLocked(
+            operatorCtx_->driverCtx()->splitGroupId, planNodeId())
+      : nullptr;
+
   joinBridge_->addBuilder();
 
   auto outputType = joinNode_->sources()[1]->outputType();
@@ -284,6 +289,10 @@ void HashBuild::addInput(RowVectorPtr input) {
     VELOX_CHECK(future_.valid());
     return;
   }
+
+  // Prevents the memory arbitrator to reclaim memory from this operator during
+  // the execution belowg.
+  NonReclaimableSection guard(this);
 
   activeRows_.resize(input->size());
   activeRows_.setAll();
@@ -981,4 +990,58 @@ bool HashBuild::testingTriggerSpill() {
       spillConfig()->testSpillPct;
 }
 
+void HashBuild::reclaim(uint64_t /*unused*/) {
+  VELOX_CHECK(canReclaim());
+  auto* driver = operatorCtx_->driver();
+  VELOX_CHECK(!driver->state().isOnThread() || driver->state().isSuspended);
+  VELOX_CHECK(driver->task()->pauseRequested());
+
+  TestValue::adjust("facebook::velox::exec::HashBuild::reclaim", this);
+
+  // NOTE: a hash build operator is reclaimable if it is in the middle of table
+  // build processing and is not under non-reclaimable execution section.
+  if ((state_ != State::kRunning) || nonReclaimableSection_) {
+    // TODO: add stats to record the non-reclaimable case and reduce the log
+    // frequency if it is too verbose.
+    LOG(WARNING) << "Can't reclaim from hash build operator, state_["
+                 << stateName(state_) << "], nonReclaimableSection_["
+                 << nonReclaimableSection_ << "], " << toString();
+    return;
+  }
+
+  const auto& task = driver->task();
+  VELOX_CHECK(task->pauseRequested());
+  const std::vector<Operator*> operators =
+      task->findPeerOperators(operatorCtx_->driverCtx()->pipelineId, this);
+  for (auto* op : operators) {
+    HashBuild* buildOp = dynamic_cast<HashBuild*>(op);
+    VELOX_CHECK_NOT_NULL(buildOp);
+    VELOX_CHECK(buildOp->canReclaim());
+    if ((buildOp->state_ != State::kRunning) ||
+        buildOp->nonReclaimableSection_) {
+      // TODO: add stats to record the non-reclaimable case and reduce the log
+      // frequency if it is too verbose.
+      LOG(WARNING) << "Can't reclaim from hash build operator, state_["
+                   << stateName(buildOp->state_) << "], nonReclaimableSection_["
+                   << buildOp->nonReclaimableSection_ << "], "
+                   << buildOp->toString();
+      return;
+    }
+  }
+
+  std::vector<Spiller::SpillableStats> spillableStats;
+  spillableStats.reserve(spiller_->hashBits().numPartitions());
+  // TODO: consider to parallelize this disk spilling processing.
+  for (auto* op : operators) {
+    HashBuild* buildOp = static_cast<HashBuild*>(op);
+    buildOp->spiller_->fillSpillRuns(spillableStats);
+    // TODO: support fine-grain disk spilling based on 'targetBytes' after
+    // having row container memory compaction support later.
+    buildOp->spiller_->spill();
+    VELOX_CHECK_EQ(buildOp->table_->numDistinct(), 0);
+    buildOp->table_->clear();
+    // Release the minimum reserved memory.
+    op->pool()->release();
+  }
+}
 } // namespace facebook::velox::exec

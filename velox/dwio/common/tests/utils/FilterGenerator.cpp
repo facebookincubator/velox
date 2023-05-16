@@ -85,6 +85,11 @@ VectorPtr getChildBySubfield(
 uint32_t AbstractColumnStats::counter_ = 0;
 
 template <>
+int64_t ColumnStats<Date>::getIntegerValue(const Date& value) {
+  return value.days();
+}
+
+template <>
 std::unique_ptr<Filter> ColumnStats<bool>::makeRangeFilter(
     const FilterSpec& filterSpec) {
   if (values_.empty()) {
@@ -408,6 +413,9 @@ SubfieldFilters FilterGenerator::makeSubfieldFilters(
       case TypeKind::BIGINT:
         stats = makeStats<TypeKind::BIGINT>(vector->type(), rowType_);
         break;
+      case TypeKind::DATE:
+        stats = makeStats<TypeKind::DATE>(vector->type(), rowType_);
+        break;
       case TypeKind::VARCHAR:
         stats = makeStats<TypeKind::VARCHAR>(vector->type(), rowType_);
         break;
@@ -644,8 +652,8 @@ void pruneRandomSubfield(
             BaseVector::wrapInDictionary(nullptr, indices, offset, keys);
         auto newValues = BaseVector::wrapInDictionary(
             nullptr, indices, offset, data->mapValues());
-        BaseVector::flattenVector(newKeys, newKeys->size());
-        BaseVector::flattenVector(newValues, newValues->size());
+        BaseVector::flattenVector(newKeys);
+        BaseVector::flattenVector(newValues);
         data->setKeysAndValues(newKeys, newValues);
       }
       spec.childByName(ScanSpec::kMapKeysFieldName)

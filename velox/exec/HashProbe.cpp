@@ -110,7 +110,10 @@ HashProbe::HashProbe(
           joinNode->outputType(),
           operatorId,
           joinNode->id(),
-          "HashProbe"),
+          "HashProbe",
+          joinNode->canSpill(driverCtx->queryConfig())
+              ? driverCtx->makeSpillConfig(operatorId)
+              : std::nullopt),
       outputBatchSize_{outputBatchRows()},
       joinNode_(std::move(joinNode)),
       joinType_{joinNode_->joinType()},
@@ -118,10 +121,6 @@ HashProbe::HashProbe(
       joinBridge_(operatorCtx_->task()->getHashJoinBridgeLocked(
           operatorCtx_->driverCtx()->splitGroupId,
           planNodeId())),
-      spillConfig_(
-          joinNode_->canSpill(driverCtx->queryConfig())
-              ? operatorCtx_->makeSpillConfig(Spiller::Type::kHashJoinProbe)
-              : std::nullopt),
       probeType_(joinNode_->sources()[0]->outputType()),
       filterResult_(1),
       outputTableRows_(outputBatchSize_) {
