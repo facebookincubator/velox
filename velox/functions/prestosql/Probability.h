@@ -43,7 +43,6 @@ struct BetaCDFFunction {
   }
 };
 
-
 template <typename T>
 struct NormalCDFFunction {
   VELOX_DEFINE_FUNCTION_TYPES(T);
