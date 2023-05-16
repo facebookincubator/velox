@@ -46,6 +46,9 @@
 namespace facebook::velox {
 
 using int128_t = __int128_t;
+struct int96_t {
+  int32_t val[3];
+};
 
 /// Velox type system supports a small set of SQL-compatible composeable types:
 /// BOOLEAN, TINYINT, SMALLINT, INTEGER, BIGINT, REAL, DOUBLE, VARCHAR,

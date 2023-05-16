@@ -118,6 +118,11 @@ std::shared_ptr<SubstraitParser::SubstraitType> SubstraitParser::parseType(
       nullability = substraitType.date().nullability();
       break;
     }
+    case ::substrait::Type::KindCase::kTimestamp: {
+      typeName = "TIMESTAMP";
+      nullability = substraitType.timestamp().nullability();
+      break;
+    }
     case ::substrait::Type::KindCase::kDecimal: {
       auto precision = substraitType.decimal().precision();
       auto scale = substraitType.decimal().scale();

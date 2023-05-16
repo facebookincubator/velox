@@ -97,6 +97,10 @@ class SubstraitToVeloxPlanValidator {
       const ::substrait::Expression::ScalarFunction& scalarFunction,
       const RowTypePtr& inputType);
 
+  /// Validate extract function.
+  bool validateExtractExpr(
+      const std::vector<std::shared_ptr<const core::ITypedExpr>>& params);
+
   /// Validate Substrait scarlar function.
   bool validateScalarFunction(
       const ::substrait::Expression::ScalarFunction& scalarFunction,

@@ -146,7 +146,7 @@ class SubstraitParser {
       {"fp32", "REAL"},
       {"fp64", "DOUBLE"},
       {"date", "DATE"},
-      {"ts", "TIMESTAMP_TZ"},
+      {"ts", "TIMESTAMP"},
       {"str", "VARCHAR"},
       {"vbin", "VARBINARY"},
       {"decShort", "SHORT_DECIMAL"},

@@ -523,6 +523,19 @@ int64_t fromDateString(const char* str, size_t len) {
   size_t pos = 0;
 
   if (!tryParseDateString(str, len, pos, daysSinceEpoch, true)) {
+    if (len == 19) {
+      // Timestamp format: (YYYY-MM-DD HH:MM:SS).
+      std::string input(str);
+      size_t strLen = 10;
+      std::string leadingStr = input.substr(0, strLen);
+      if (!tryParseDateString(
+              leadingStr.c_str(), strLen, pos, daysSinceEpoch, true)) {
+        VELOX_USER_FAIL(
+            "Unable to parse date value: \"{}\", expected format is (YYYY-MM-DD)",
+            std::string(leadingStr, strLen));
+      }
+      return daysSinceEpoch;
+    }
     VELOX_USER_FAIL(
         "Unable to parse date value: \"{}\", expected format is (YYYY-MM-DD)",
         std::string(str, len));

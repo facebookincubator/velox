@@ -91,6 +91,11 @@ int64_t ColumnStats<UnscaledShortDecimal>::getIntegerValue(
 }
 
 template <>
+int64_t ColumnStats<Timestamp>::getIntegerValue(const Timestamp& value) {
+  return value.toNanos();
+}
+
+template <>
 std::unique_ptr<Filter> ColumnStats<bool>::makeRangeFilter(
     const FilterSpec& filterSpec) {
   if (values_.empty()) {
@@ -429,10 +434,11 @@ SubfieldFilters FilterGenerator::makeSubfieldFilters(
       case TypeKind::MAP:
         stats = makeStats<TypeKind::MAP>(vector->type(), rowType_);
         break;
-      // TODO:
-      // Add support for TypeKind::TIMESTAMP.
       case TypeKind::SHORT_DECIMAL:
         stats = makeStats<TypeKind::SHORT_DECIMAL>(vector->type(), rowType_);
+        break;
+      case TypeKind::TIMESTAMP:
+        stats = makeStats<TypeKind::TIMESTAMP>(vector->type(), rowType_);
         break;
       default:
         VELOX_CHECK(

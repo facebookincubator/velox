@@ -19,6 +19,8 @@
 #include "velox/vector/FlatVector.h"
 #include "velox/vector/VariantToVector.h"
 
+#include "velox/type/Timestamp.h"
+
 using namespace facebook::velox;
 namespace {
 // Get values for the different supported types.
@@ -259,7 +261,6 @@ SubstraitVeloxExprConverter::toExtractExpr(
       VELOX_FAIL("Value expected in variant.");
     }
     // The first parameter specifies extracting from which field.
-    // Only year is supported currently.
     std::string from = variant.value<std::string>();
 
     // The second parameter is the function parameter.
@@ -376,23 +377,13 @@ SubstraitVeloxExprConverter::toVeloxExpr(
     case ::substrait::Expression_Literal::LiteralTypeCase::kString:
       return std::make_shared<core::ConstantTypedExpr>(
           VARCHAR(), variant(substraitLit.string()));
-    case ::substrait::Expression_Literal::LiteralTypeCase::kNull: {
-      auto veloxType =
-          toVeloxType(subParser_->parseType(substraitLit.null())->type);
-      if (veloxType->isShortDecimal()) {
-        return std::make_shared<core::ConstantTypedExpr>(
-            veloxType, variant::shortDecimal(std::nullopt, veloxType));
-      } else if (veloxType->isLongDecimal()) {
-        return std::make_shared<core::ConstantTypedExpr>(
-            veloxType, variant::longDecimal(std::nullopt, veloxType));
-      } else {
-        return std::make_shared<core::ConstantTypedExpr>(
-            veloxType, variant::null(veloxType->kind()));
-      }
-    }
     case ::substrait::Expression_Literal::LiteralTypeCase::kDate:
       return std::make_shared<core::ConstantTypedExpr>(
           DATE(), variant(Date(substraitLit.date())));
+    case ::substrait::Expression_Literal::LiteralTypeCase::kTimestamp:
+      return std::make_shared<core::ConstantTypedExpr>(
+          TIMESTAMP(),
+          variant(Timestamp::fromMicros(substraitLit.timestamp())));
     case ::substrait::Expression_Literal::LiteralTypeCase::kVarChar:
       return std::make_shared<core::ConstantTypedExpr>(
           VARCHAR(), variant(substraitLit.var_char().value()));
@@ -423,6 +414,20 @@ SubstraitVeloxExprConverter::toVeloxExpr(
         auto type = LONG_DECIMAL(precision, scale);
         return std::make_shared<core::ConstantTypedExpr>(
             type, variant::longDecimal(decimalValue, type));
+      }
+    }
+    case ::substrait::Expression_Literal::LiteralTypeCase::kNull: {
+      auto veloxType =
+          toVeloxType(subParser_->parseType(substraitLit.null())->type);
+      if (veloxType->isShortDecimal()) {
+        return std::make_shared<core::ConstantTypedExpr>(
+            veloxType, variant::shortDecimal(std::nullopt, veloxType));
+      } else if (veloxType->isLongDecimal()) {
+        return std::make_shared<core::ConstantTypedExpr>(
+            veloxType, variant::longDecimal(std::nullopt, veloxType));
+      } else {
+        return std::make_shared<core::ConstantTypedExpr>(
+            veloxType, variant::null(veloxType->kind()));
       }
     }
     default:

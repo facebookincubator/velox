@@ -413,6 +413,21 @@ void PageReader::prepareDictionary(const PageHeader& pageHeader) {
       }
       break;
     }
+    case thrift::Type::INT96: {
+      auto numBytes = dictionary_.numValues * sizeof(int96_t);
+      dictionary_.values = AlignedBuffer::allocate<char>(numBytes, &pool_);
+      if (pageData_) {
+        memcpy(dictionary_.values->asMutable<char>(), pageData_, numBytes);
+      } else {
+        dwio::common::readBytes(
+            numBytes,
+            inputStream_.get(),
+            dictionary_.values->asMutable<char>(),
+            bufferStart_,
+            bufferEnd_);
+      }
+      break;
+    }
     case thrift::Type::BYTE_ARRAY: {
       dictionary_.values =
           AlignedBuffer::allocate<StringView>(dictionary_.numValues, &pool_);
@@ -505,7 +520,6 @@ void PageReader::prepareDictionary(const PageHeader& pageHeader) {
       VELOX_UNSUPPORTED(
           "Parquet type {} not supported for dictionary", parquetType);
     }
-    case thrift::Type::INT96:
     default:
       VELOX_UNSUPPORTED(
           "Parquet type {} not supported for dictionary", parquetType);
@@ -532,6 +546,8 @@ int32_t parquetTypeBytes(thrift::Type::type type) {
     case thrift::Type::INT64:
     case thrift::Type::DOUBLE:
       return 8;
+    case thrift::Type::INT96:
+      return 12;
     default:
       VELOX_FAIL("Type does not have a byte width {}", type);
   }

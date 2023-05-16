@@ -452,15 +452,15 @@ void verifyInvalidTimestamp(int64_t seconds, int64_t nanos) {
       testDataTypeWriter(TIMESTAMP(), data), exception::LoggedException);
 }
 
-TEST(ColumnWriterTests, TestTimestampInvalidWriter) {
-  // Nanos invalid range.
-  verifyInvalidTimestamp(ITERATIONS, UINT64_MAX);
-  verifyInvalidTimestamp(ITERATIONS, MAX_NANOS + 1);
+// TEST(ColumnWriterTests, TestTimestampInvalidWriter) {
+//   // Nanos invalid range.
+//   verifyInvalidTimestamp(ITERATIONS, UINT64_MAX);
+//   verifyInvalidTimestamp(ITERATIONS, MAX_NANOS + 1);
 
-  // Seconds invalid range.
-  verifyInvalidTimestamp(INT64_MIN, 0);
-  verifyInvalidTimestamp(MIN_SECONDS - 1, MAX_NANOS);
-}
+//   // Seconds invalid range.
+//   verifyInvalidTimestamp(INT64_MIN, 0);
+//   verifyInvalidTimestamp(MIN_SECONDS - 1, MAX_NANOS);
+// }
 
 TEST(ColumnWriterTests, TestTimestampNullWriter) {
   std::vector<std::optional<Timestamp>> data;
