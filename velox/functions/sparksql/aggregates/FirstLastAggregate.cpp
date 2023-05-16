@@ -50,6 +50,10 @@ class FirstLastAggregateBase
     return sizeof(TAccumulator);
   }
 
+  int32_t accumulatorAlignmentSize() const override {
+    return 1;
+  }
+
   void initializeNewGroups(
       char** groups,
       folly::Range<const vector_size_t*> indices) override {
@@ -58,22 +62,6 @@ class FirstLastAggregateBase
     for (auto i : indices) {
       new (groups[i] + exec::Aggregate::offset_) TAccumulator();
     }
-  }
-
-  void addIntermediateResults(
-      char** groups,
-      const SelectivityVector& rows,
-      const std::vector<VectorPtr>& args,
-      bool mayPushdown) override {
-    this->addRawInput(groups, rows, args, mayPushdown);
-  }
-
-  void addSingleGroupIntermediateResults(
-      char* group,
-      const SelectivityVector& rows,
-      const std::vector<VectorPtr>& args,
-      bool mayPushdown) override {
-    this->addSingleGroupRawInput(group, rows, args, mayPushdown);
   }
 
   void extractValues(char** groups, int32_t numGroups, VectorPtr* result)
@@ -105,18 +93,37 @@ class FirstLastAggregateBase
 
   void extractAccumulators(char** groups, int32_t numGroups, VectorPtr* result)
       override {
-    extractValues(groups, numGroups, result);
+    auto rowVector = (*result)->as<RowVector>();
+    VELOX_CHECK_EQ(
+        rowVector->childrenSize(),
+        2,
+        "intermediate results must have 2 children");
+
+    auto ignoreNullVector = rowVector->childAt(1)->asFlatVector<bool>();
+    rowVector->resize(numGroups);
+    ignoreNullVector->resize(numGroups);
+
+    extractValues(groups, numGroups, &(rowVector->childAt(0)));
   }
 
   void destroy(folly::Range<char**> groups) override {
     if constexpr (!numeric) {
       for (auto group : groups) {
         auto accumulator = exec::Aggregate::value<TAccumulator>(group);
-        accumulator->value().destroy(exec::Aggregate::allocator_);
+        if (accumulator->has_value()) {
+          accumulator->value().destroy(exec::Aggregate::allocator_);
+        }
       }
     }
   }
 };
+
+template <>
+inline int32_t
+FirstLastAggregateBase<true, UnscaledLongDecimal>::accumulatorAlignmentSize()
+    const {
+  return static_cast<int32_t>(sizeof(UnscaledLongDecimal));
+}
 
 template <bool ignoreNull, typename TData, bool numeric>
 class FirstAggregate : public FirstLastAggregateBase<numeric, TData> {
@@ -131,8 +138,29 @@ class FirstAggregate : public FirstLastAggregateBase<numeric, TData> {
       bool /* mayPushdown */) override {
     DecodedVector decoded(*args[0], rows);
 
-    rows.applyToSelected(
-        [&](vector_size_t i) { updateValue(i, groups[i], decoded); });
+    rows.applyToSelected([&](vector_size_t i) {
+      updateValue(decoded.index(i), groups[i], decoded.base());
+    });
+  }
+
+  void addIntermediateResults(
+      char** groups,
+      const SelectivityVector& rows,
+      const std::vector<VectorPtr>& args,
+      bool /* mayPushdown */) override {
+    DecodedVector decoded(*args[0], rows);
+    auto rowVector = dynamic_cast<const RowVector*>(decoded.base());
+    VELOX_CHECK_NOT_NULL(rowVector);
+    VELOX_CHECK_EQ(
+        rowVector->childrenSize(),
+        2,
+        "intermediate results must have 2 children");
+
+    auto valueVector = rowVector->childAt(0);
+
+    rows.applyToSelected([&](vector_size_t i) {
+      updateValue(decoded.index(i), groups[i], valueVector.get());
+    });
   }
 
   void addSingleGroupRawInput(
@@ -142,8 +170,28 @@ class FirstAggregate : public FirstLastAggregateBase<numeric, TData> {
       bool /* mayPushdown */) override {
     DecodedVector decoded(*args[0], rows);
 
-    rows.testSelected(
-        [&](vector_size_t i) { return updateValue(i, group, decoded); });
+    rows.testSelected([&](vector_size_t i) {
+      return updateValue(decoded.index(i), group, decoded.base());
+    });
+  }
+
+  void addSingleGroupIntermediateResults(
+      char* group,
+      const SelectivityVector& rows,
+      const std::vector<VectorPtr>& args,
+      bool /* mayPushdown */) override {
+    DecodedVector decoded(*args[0], rows);
+    auto rowVector = dynamic_cast<const RowVector*>(decoded.base());
+    VELOX_CHECK_NOT_NULL(rowVector);
+    VELOX_CHECK_EQ(
+        rowVector->childrenSize(),
+        2,
+        "intermediate results must have 2 children");
+
+    auto valueVector = rowVector->childAt(0);
+    rows.testSelected([&](vector_size_t i) {
+      return updateValue(decoded.index(i), group, valueVector.get());
+    });
   }
 
  private:
@@ -152,18 +200,18 @@ class FirstAggregate : public FirstLastAggregateBase<numeric, TData> {
 
   // If we found a valid value, set to accumulator, then skip remaining rows in
   // group.
-  bool updateValue(vector_size_t i, char* group, DecodedVector& decoded) {
+  bool updateValue(vector_size_t i, char* group, const BaseVector* vector) {
     auto accumulator = exec::Aggregate::value<TAccumulator>(group);
     if (accumulator->has_value()) {
       return false;
     }
 
     if constexpr (!numeric) {
-      return updateNonNumeric(i, group, decoded);
+      return updateNonNumeric(i, group, vector);
     } else {
-      if (!decoded.isNullAt(i)) {
+      if (!vector->isNullAt(i)) {
         exec::Aggregate::clearNull(group);
-        auto value = decoded.valueAt<TData>(i);
+        auto value = vector->as<SimpleVector<TData>>()->valueAt(i);
         *accumulator = value;
         return false;
       }
@@ -177,14 +225,14 @@ class FirstAggregate : public FirstLastAggregateBase<numeric, TData> {
     }
   }
 
-  bool updateNonNumeric(vector_size_t i, char* group, DecodedVector& decoded) {
+  bool
+  updateNonNumeric(vector_size_t i, char* group, const BaseVector* vector) {
     auto accumulator = exec::Aggregate::value<TAccumulator>(group);
 
-    if (!decoded.isNullAt(i)) {
+    if (!vector->isNullAt(i)) {
       exec::Aggregate::clearNull(group);
       *accumulator = SingleValueAccumulator();
-      accumulator->value().write(
-          decoded.base(), decoded.index(i), exec::Aggregate::allocator_);
+      accumulator->value().write(vector, i, exec::Aggregate::allocator_);
       return false;
     }
 
@@ -210,8 +258,29 @@ class LastAggregate : public FirstLastAggregateBase<numeric, TData> {
       bool /* mayPushdown */) override {
     DecodedVector decoded(*args[0], rows);
 
-    rows.applyToSelected(
-        [&](vector_size_t i) { updateValue(i, groups[i], decoded); });
+    rows.applyToSelected([&](vector_size_t i) {
+      updateValue(decoded.index(i), groups[i], decoded.base());
+    });
+  }
+
+  void addIntermediateResults(
+      char** groups,
+      const SelectivityVector& rows,
+      const std::vector<VectorPtr>& args,
+      bool /* mayPushdown */) override {
+    DecodedVector decoded(*args[0], rows);
+    auto rowVector = dynamic_cast<const RowVector*>(decoded.base());
+    VELOX_CHECK_NOT_NULL(rowVector);
+    VELOX_CHECK_EQ(
+        rowVector->childrenSize(),
+        2,
+        "intermediate results must have 2 children");
+
+    auto valueVector = rowVector->childAt(0);
+
+    rows.applyToSelected([&](vector_size_t i) {
+      updateValue(decoded.index(i), groups[i], valueVector.get());
+    });
   }
 
   void addSingleGroupRawInput(
@@ -221,23 +290,43 @@ class LastAggregate : public FirstLastAggregateBase<numeric, TData> {
       bool /* mayPushdown */) override {
     DecodedVector decoded(*args[0], rows);
 
-    rows.applyToSelected(
-        [&](vector_size_t i) { updateValue(i, group, decoded); });
+    rows.applyToSelected([&](vector_size_t i) {
+      updateValue(decoded.index(i), group, decoded.base());
+    });
+  }
+
+  void addSingleGroupIntermediateResults(
+      char* group,
+      const SelectivityVector& rows,
+      const std::vector<VectorPtr>& args,
+      bool /* mayPushdown */) override {
+    DecodedVector decoded(*args[0], rows);
+    auto rowVector = dynamic_cast<const RowVector*>(decoded.base());
+    VELOX_CHECK_NOT_NULL(rowVector);
+    VELOX_CHECK_EQ(
+        rowVector->childrenSize(),
+        2,
+        "intermediate results must have 2 children");
+
+    auto valueVector = rowVector->childAt(0);
+    rows.applyToSelected([&](vector_size_t i) {
+      updateValue(decoded.index(i), group, valueVector.get());
+    });
   }
 
  private:
   using TAccumulator =
       typename FirstLastAggregateBase<numeric, TData>::TAccumulator;
 
-  void updateValue(vector_size_t i, char* group, DecodedVector& decoded) {
+  void updateValue(vector_size_t i, char* group, const BaseVector* vector) {
     if constexpr (!numeric) {
-      return updateNonNumeric(i, group, decoded);
+      return updateNonNumeric(i, group, vector);
     } else {
       auto accumulator = exec::Aggregate::value<TAccumulator>(group);
 
-      if (!decoded.isNullAt(i)) {
+      if (!vector->isNullAt(i)) {
         exec::Aggregate::clearNull(group);
-        *accumulator = decoded.valueAt<TData>(i);
+        *accumulator = vector->as<SimpleVector<TData>>()->valueAt(i);
         return;
       }
 
@@ -248,14 +337,14 @@ class LastAggregate : public FirstLastAggregateBase<numeric, TData> {
     }
   }
 
-  void updateNonNumeric(vector_size_t i, char* group, DecodedVector& decoded) {
+  void
+  updateNonNumeric(vector_size_t i, char* group, const BaseVector* vector) {
     auto accumulator = exec::Aggregate::value<TAccumulator>(group);
 
-    if (!decoded.isNullAt(i)) {
+    if (!vector->isNullAt(i)) {
       exec::Aggregate::clearNull(group);
       *accumulator = SingleValueAccumulator();
-      accumulator->value().write(
-          decoded.base(), decoded.index(i), exec::Aggregate::allocator_);
+      accumulator->value().write(vector, i, exec::Aggregate::allocator_);
       return;
     }
 
@@ -274,20 +363,31 @@ bool registerFirstLast(const std::string& name) {
       exec::AggregateFunctionSignatureBuilder()
           .typeVariable("T")
           .argumentType("T")
-          .intermediateType("T")
+          .intermediateType("row(T, boolean)")
           .returnType("T")
           .build()};
+
+  signatures.push_back(
+      exec::AggregateFunctionSignatureBuilder()
+          .integerVariable("a_precision")
+          .integerVariable("a_scale")
+          .argumentType("DECIMAL(a_precision, a_scale)")
+          .intermediateType("row(DECIMAL(a_precision, a_scale), boolean)")
+          .returnType("DECIMAL(a_precision, a_scale)")
+          .build());
 
   return exec::registerAggregateFunction(
       name,
       std::move(signatures),
       [name](
-          core::AggregationNode::Step /*step*/,
+          core::AggregationNode::Step step,
           const std::vector<TypePtr>& argTypes,
           const TypePtr& resultType) -> std::unique_ptr<exec::Aggregate> {
         VELOX_CHECK_EQ(argTypes.size(), 1, "{} takes only 1 arguments", name);
         const auto& inputType = argTypes[0];
-        TypeKind dataKind = inputType->kind();
+        TypeKind dataKind = exec::isRawInput(step)
+            ? inputType->kind()
+            : inputType->childAt(0)->kind();
         switch (dataKind) {
           case TypeKind::BOOLEAN:
             return std::make_unique<TClass<ignoreNull, bool, true>>(resultType);
@@ -314,10 +414,15 @@ bool registerFirstLast(const std::string& name) {
                 resultType);
           case TypeKind::DATE:
             return std::make_unique<TClass<ignoreNull, Date, true>>(resultType);
+          case TypeKind::SHORT_DECIMAL:
+            return std::make_unique<
+                TClass<ignoreNull, UnscaledShortDecimal, true>>(resultType);
+          case TypeKind::LONG_DECIMAL:
+            return std::make_unique<
+                TClass<ignoreNull, UnscaledLongDecimal, true>>(resultType);
           case TypeKind::VARCHAR:
           case TypeKind::ARRAY:
           case TypeKind::MAP:
-          case TypeKind::ROW:
             return std::make_unique<TClass<ignoreNull, ComplexType, false>>(
                 resultType);
           default:
@@ -326,7 +431,8 @@ bool registerFirstLast(const std::string& name) {
                 name,
                 inputType->toString());
         }
-      });
+      },
+      true);
 }
 
 void registerFirstLastAggregates(const std::string& prefix) {
