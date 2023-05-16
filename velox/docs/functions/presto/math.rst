@@ -168,6 +168,7 @@ Mathematical Functions
     For example, if ``bins`` is ``ARRAY[0, 2, 4]``, then we have four bins:
     ``(-infinity(), 0)``, ``[0, 2)``, ``[2, 4)`` and ``[4, infinity())``.
 
+
 ====================================
 Trigonometric Functions
 ====================================

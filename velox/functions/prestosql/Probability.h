@@ -43,7 +43,6 @@ struct BetaCDFFunction {
   }
 };
 
-static const double kSqrtOfTwo = sqrt(2);
 
 template <typename T>
 struct NormalCDFFunction {
@@ -51,6 +50,8 @@ struct NormalCDFFunction {
 
   // Normal cumulative distribution is computed as per the reference at
   // https://mathworld.wolfram.com/NormalDistribution.html.
+
+  const double kSqrtOfTwo = sqrt(2);
 
   FOLLY_ALWAYS_INLINE void
   call(double& result, double m, double sd, double value) {
