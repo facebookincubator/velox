@@ -106,8 +106,8 @@ of plan nodes can be located at the leaves of the plan tree. These are:</p>
 <td><p>MergeJoin</p></td>
 <td></td>
 </tr>
-<tr class="row-even"><td><p>CrossJoinNode</p></td>
-<td><p>CrossJoinProbe and CrossJoinBuild</p></td>
+<tr class="row-even"><td><p>NestedLoopJoinNode</p></td>
+<td><p>NestedLoopJoinProbe and NestedLoopJoinBuild</p></td>
 <td></td>
 </tr>
 <tr class="row-odd"><td><p>OrderByNode</p></td>
@@ -379,8 +379,8 @@ and emitting results.</p>
 </tbody>
 </table>
 </section>
-<section id="crossjoinnode">
-<h3>CrossJoinNode<a class="headerlink" href="#crossjoinnode" title="Permalink to this heading">¶</a></h3>
+<section id="nestedloopjoinnode">
+<h3>NestedLoopJoinNode<a class="headerlink" href="#nestedloopjoinnode" title="Permalink to this heading">¶</a></h3>
 <p>The cross join operation combines two separate inputs into a single output by
 combining each row of the left hand side input with each row of the right hand
 side input. If there are N rows in the left input and M rows in the right
@@ -858,7 +858,7 @@ ALL.</p>
 <li><a class="reference internal" href="#aggregationnode">AggregationNode</a></li>
 <li><a class="reference internal" href="#groupidnode">GroupIdNode</a></li>
 <li><a class="reference internal" href="#hashjoinnode-and-mergejoinnode">HashJoinNode and MergeJoinNode</a></li>
-<li><a class="reference internal" href="#crossjoinnode">CrossJoinNode</a></li>
+<li><a class="reference internal" href="#nestedloopjoinnode">NestedLoopJoinNode</a></li>
 <li><a class="reference internal" href="#orderbynode">OrderByNode</a></li>
 <li><a class="reference internal" href="#topnnode">TopNNode</a></li>
 <li><a class="reference internal" href="#limitnode">LimitNode</a></li>

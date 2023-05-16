@@ -66,7 +66,7 @@ state.</p>
 consisting of multiple operators stacked on top of each other.
 See <a class="reference internal" href="operators.html"><span class="doc">Plan Nodes and Operators</span></a> for the mapping between plan
 nodes and operators. Each plan node with multiple sources introduces a new
-pipeline or pipelines. These plan nodes include HashJoinNode, CrossJoinNode,
+pipeline or pipelines. These plan nodes include HashJoinNode, NestedLoopJoinNode,
 MergeJoinNode, LocalMergeNode, LocalPartitionNode. Join nodes have two sources
 and introduce one new pipeline that ends at the right-side source.
 LocalMergeNode and LocalPartitionNode introduce one pipeline for each source.
@@ -140,12 +140,12 @@ received.</p>
 <section id="join-bridges-and-barriers">
 <h2>Join Bridges and Barriers<a class="headerlink" href="#join-bridges-and-barriers" title="Permalink to this heading">¶</a></h2>
 <p>HashProbe operators need to wait for the corresponding HashBuild operators to
-create a hash table. For each HashJoinNode and CrossJoinNode, the Task creates
-a bridge object, either HashJoinBridge or a CrossJoinBridge. HashProbe and
+create a hash table. For each HashJoinNode and NestedLoopJoinNode, the Task creates
+a bridge object, either HashJoinBridge or a NestedLoopJoinBridge. HashProbe and
 HashBuild operators use Task::getHashJoinBridge() API to get access to a shared
 bridge. HashBuild operator adds the hash table to the bridge. HashProbe
-operator fetches the hash table from the bridge. Similarly, CrossJoinProbe and
-CrossJoinBuild operators use Task::getCrossJoinBridge() API to access a shared
+operator fetches the hash table from the bridge. Similarly, NestedLoopJoinProbe and
+NestedLoopJoinBuild operators use Task::getNestedLoopJoinBridge() API to access a shared
 bridge to pass the build-side data to the probe-side.</p>
 <p>HashBuilder operators running in parallel need to coordinate among themselves to
 wait until all are finished processing input to combine the results into a
@@ -155,7 +155,7 @@ Last operator receives true and is responsible for assembling the hash table
 and sending it over the bridge to the probe side.</p>
 <p>Task::allPeersFinished() API uses BarrierState structure to maintain state to
 know which operator is the last one.</p>
-<p>Similarly, CrossJoinBuild operators running in parallel use
+<p>Similarly, NestedLoopJoinBuild operators running in parallel use
 Task::allPeersFinished() API to choose a single operator to combine the results
 and send them over the bridge to the probe side.</p>
 <p>In addition, in case of RIGHT and FULL OUTER join, HashProbe operators use
