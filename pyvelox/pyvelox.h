@@ -107,9 +107,9 @@ inline velox::variant pyToVariant(const py::handle& obj) {
   } else if (py::isinstance<py::str>(obj)) {
     return pyToVariant<velox::TypeKind::VARCHAR>(obj);
   } else if (py::isinstance<py::list>(obj)) {
-    py::list obj_as_list = py::cast<py::list>(obj);
+    py::list objAsList = py::cast<py::list>(obj);
     std::vector<velox::variant> result;
-    for (auto& item : obj_as_list) {
+    for (auto& item : objAsList) {
       result.push_back(pyToVariant(item));
       if (result.front().kind() != result.back().kind()) {
         throw py::type_error("Array must consist of elements of only one kind");
@@ -117,19 +117,19 @@ inline velox::variant pyToVariant(const py::handle& obj) {
     }
     return velox::variant::array(std::move(result));
   } else if (py::isinstance<py::dict>(obj)) {
-    py::dict obj_as_dict = py::cast<py::dict>(obj);
+    py::dict objAsDict = py::cast<py::dict>(obj);
     std::map<velox::variant, velox::variant> map;
-    for (auto item : obj_as_dict) {
+    for (auto item : objAsDict) {
       velox::variant key = pyToVariant(item.first);
       velox::variant value = pyToVariant(item.second);
-      map.emplace(std::make_pair(std::move(key), std::move(value)));
+      map.emplace(std::make_pair(pyToVariant(item.first)), pyToVariant(item.second));
     }
     return velox::variant::map(std::move(map));
   } else if (py::isinstance<py::tuple>(obj)) {
-    py::tuple obj_as_tuple = py::cast<py::tuple>(obj);
+    py::tuple objAsTuple = py::cast<py::tuple>(obj);
     std::vector<velox::variant> elements;
-    elements.reserve(py::len(obj_as_tuple));
-    for (auto item : obj_as_tuple) {
+    elements.reserve(py::len(objAsTuple));
+    for (auto item : objAsTuple) {
       elements.emplace_back(pyToVariant(item));
     }
     return velox::variant::row(std::move(elements));
@@ -137,88 +137,7 @@ inline velox::variant pyToVariant(const py::handle& obj) {
     throw py::type_error("Invalid type of object");
   }
 }
-template <TypeKind T>
-inline VectorPtr variantToConstantVector(
-    velox::variant variant,
-    vector_size_t length,
-    facebook::velox::memory::MemoryPool* pool) {
-  using NativeType = typename TypeTraits<T>::NativeType;
 
-  TypePtr typePtr = fromKindToScalerType(T);
-  NativeType value;
-  if constexpr (std::is_same_v<NativeType, StringView>) {
-    const std::string& str = variant.value<std::string>();
-    value = StringView(str);
-  } else {
-    value = variant.value<NativeType>();
-  }
-  auto result = std::make_shared<ConstantVector<NativeType>>(
-      pool,
-      length,
-      /*isNull=*/false,
-      typePtr,
-      std::move(value));
-  return result;
-}
-
-inline VectorPtr pyToConstantVector(
-    const py::handle& obj,
-    vector_size_t length,
-    facebook::velox::memory::MemoryPool* pool) {
-  if (obj.is_none()) {
-    throw py::type_error("Cannot infer type of constant None vector");
-  }
-  velox::variant variant = pyToVariant(obj);
-  return VELOX_DYNAMIC_SCALAR_TYPE_DISPATCH(
-      variantToConstantVector,
-      variant.kind(),
-      std::move(variant),
-      length,
-      pool);
-}
-
-static VectorPtr pyToConstantVector(
-    const py::handle& obj,
-    vector_size_t length,
-    facebook::velox::memory::MemoryPool* pool,
-    TypePtr type = nullptr);
-
-template <TypeKind T>
-static VectorPtr variantsToFlatVector(
-    const std::vector<velox::variant>& variants,
-    facebook::velox::memory::MemoryPool* pool);
-
-static inline VectorPtr pyListToVector(
-    const py::list& list,
-    facebook::velox::memory::MemoryPool* pool) {
-  std::vector<velox::variant> variants;
-  variants.reserve(list.size());
-  for (auto item : list) {
-    variants.push_back(pyToVariant(item));
-  }
-
-  if (variants.empty()) {
-    throw py::value_error("Can't create a Velox vector from an empty list");
-  }
-
-  velox::TypeKind first_kind = velox::TypeKind::INVALID;
-  for (velox::variant& var : variants) {
-    if (var.hasValue()) {
-      if (first_kind == velox::TypeKind::INVALID) {
-        first_kind = var.kind();
-      } else if (var.kind() != first_kind) {
-        throw py::type_error(
-            "Velox Vector must consist of items of the same type");
-      }
-    }
-  }
-
-  if (first_kind == velox::TypeKind::INVALID) {
-    throw py::value_error(
-        "Can't create a Velox vector consisting of only None");
-  }
-  return velox::core::variantsToVector(variants, pool);
-}
 
 template <TypeKind T>
 static VectorPtr createDictionaryVector(

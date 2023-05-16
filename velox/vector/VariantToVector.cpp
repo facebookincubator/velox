@@ -305,7 +305,7 @@ static void insertVariantIntoVector(
         const std::map<variant, variant>& elements = v.map();
         VectorPtr& keys = asMap->mapKeys();
         VectorPtr& values = asMap->mapValues();
-        for (const std::pair<variant, variant>& pair : elements) {
+        for (const auto& pair : elements) {
           insertVariantIntoVector(counter.children.at(0), pair.first, keys);
           insertVariantIntoVector(counter.children.at(1), pair.second, values);
         }
