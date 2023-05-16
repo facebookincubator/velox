@@ -96,9 +96,9 @@ template <typename T>
 struct CauchyCDFFunction {
   VELOX_DEFINE_FUNCTION_TYPES(T);
 
-  FOLLY_ALWAYS_INLINE static void
+  FOLLY_ALWAYS_INLINE void
   call(double& result, double median, double scale, double value) {
-    constexpr double kInf = std::numeric_limits<double>::infinity();
+    static constexpr double kInf = std::numeric_limits<double>::infinity();
     if (median == kInf) {
       result = 0.0;
     } else if (scale == kInf) {
