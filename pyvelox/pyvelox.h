@@ -29,8 +29,8 @@
 #include <velox/type/Variant.h>
 #include <velox/vector/DictionaryVector.h>
 #include <velox/vector/FlatVector.h>
-#include <velox/vector/arrow/Bridge.h>
 #include "folly/json.h"
+#include "util.h"
 
 #include "context.h"
 

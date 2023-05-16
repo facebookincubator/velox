@@ -15,6 +15,7 @@
  */
 
 #include "conversion.h" 
+#include "util.h"
 #include <velox/vector/arrow/Abi.h>
 #include <velox/vector/arrow/Bridge.h>
 
@@ -25,9 +26,8 @@ namespace py = pybind11;
 void addConversionBindings(py::module& m, bool asModuleLocalDefinitions) {
    m.def("export_to_arrow", [](VectorPtr& inputVector) {
     auto arrowArray = std::make_unique<ArrowArray>();
-    std::shared_ptr<facebook::velox::memory::MemoryPool> pool_{
-        facebook::velox::memory::addDefaultLeafMemoryPool()};
-    facebook::velox::exportToArrow(inputVector, *arrowArray, pool_.get());
+    auto pool_ = PyVeloxContext::getInstance().pool();
+    facebook::velox::exportToArrow(inputVector, *arrowArray, pool_);
 
     auto arrowSchema = std::make_unique<ArrowSchema>();
     facebook::velox::exportToArrow(inputVector, *arrowSchema);
@@ -43,9 +43,8 @@ void addConversionBindings(py::module& m, bool asModuleLocalDefinitions) {
         auto arrowArray = std::make_unique<ArrowArray>();
         auto arrowSchema = std::make_unique<ArrowSchema>();
         inputArrowArray.attr("_export_to_c")(reinterpret_cast<uintptr_t>(arrowArray.get()), reinterpret_cast<uintptr_t>(arrowSchema.get()));
-        std::shared_ptr<facebook::velox::memory::MemoryPool> pool_{
-            facebook::velox::memory::addDefaultLeafMemoryPool()};
-        return importFromArrowAsOwner(*arrowSchema, *arrowArray, pool_.get());
+        auto pool_ = PyVeloxContext::getInstance().pool();
+        return importFromArrowAsOwner(*arrowSchema, *arrowArray, pool_);
       });
 }
 } // namespace facebook::velox::py
