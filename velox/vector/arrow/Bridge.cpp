@@ -932,7 +932,7 @@ VectorPtr createStringFlatVector(
   std::vector<BufferPtr> stringViewBuffers;
   if (shouldAcquireStringBuffer) {
     stringViewBuffers.emplace_back(
-        wrapInBufferView(values, offsets[length + 1]));
+        wrapInBufferView(values, offsets[length]));
   }
 
   return std::make_shared<FlatVector<StringView>>(
