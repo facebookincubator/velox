@@ -27,30 +27,30 @@ class TestVeloxVectorSaver(unittest.TestCase):
     def tearDown(self):
         # remove the temporary directory
         shutil.rmtree(self.test_dir)
-        
+
     def get_flat_vector(self):
         return pv.from_list([1, 2, 3])
-    
+
     def get_const_vector(self):
         return pv.constant_vector(1000, 10)
-    
+
     def get_dict_vector(self):
         base_indices = [0, 0, 1, 0, 2]
         return pv.dictionary_vector(pv.from_list([1, 2, 3]), base_indices)
-    
+
     def test_serde_vector(self):
         data = {
             "flat_vector": self.get_flat_vector(),
             "const_vector": self.get_const_vector(),
             "dict_vector": self.get_dict_vector(),
         }
-        
+
         paths = {
             "flat_vector": path.join(self.test_dir, "flat.pyvelox"),
             "const_vector": path.join(self.test_dir, "const.pyvelox"),
             "dict_vector": path.join(self.test_dir, "dict.pyvelox"),
         }
-        
+
         for vec_key, fpath_key in zip(data, paths):
             vec = data[vec_key]
             fpath = paths[fpath_key]
