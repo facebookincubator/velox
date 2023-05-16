@@ -147,43 +147,6 @@ static VectorPtr pyListToVector(
       variantsToFlatVector, first_kind, variants, pool);
 }
 
-template <typename NativeType>
-static py::object getItemFromSimpleVector(
-    SimpleVectorPtr<NativeType>& vector,
-    vector_size_t idx) {
-  checkBounds(vector, idx);
-  if (vector->isNullAt(idx)) {
-    return py::none();
-  }
-  if constexpr (std::is_same_v<NativeType, velox::StringView>) {
-    const velox::StringView value = vector->valueAt(idx);
-    py::str result = std::string_view(value);
-    return result;
-  } else {
-    py::object result = py::cast(vector->valueAt(idx));
-    return result;
-  }
-}
-
-template <typename NativeType>
-inline void setItemInFlatVector(
-    FlatVectorPtr<NativeType>& vector,
-    vector_size_t idx,
-    py::handle& obj) {
-  checkBounds(vector, idx);
-
-  velox::variant var = pyToVariant(obj);
-  if (var.kind() == velox::TypeKind::INVALID) {
-    return vector->setNull(idx, true);
-  }
-
-  if (var.kind() != vector->typeKind()) {
-    throw py::type_error("Attempted to insert value of mismatched types");
-  }
-
-  vector->set(idx, NativeType{var.value<NativeType>()});
-}
-
 static VectorPtr evaluateExpression(
     std::shared_ptr<const facebook::velox::core::IExpr>& expr,
     std::vector<std::string> names,

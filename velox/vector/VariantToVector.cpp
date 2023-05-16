@@ -311,16 +311,6 @@ static void insertVariantIntoVector(
         }
         break;
       }
-      case TypeKind::SHORT_DECIMAL: {
-        setElementInFlatVector<TypeKind::SHORT_DECIMAL>(
-            counter.rowsInserted, v, vector);
-        break;
-      }
-      case TypeKind::LONG_DECIMAL: {
-        setElementInFlatVector<TypeKind::LONG_DECIMAL>(
-            counter.rowsInserted, v, vector);
-        break;
-      }
       default: {
         VELOX_DYNAMIC_SCALAR_TYPE_DISPATCH(
             setElementInFlatVector,

@@ -120,9 +120,8 @@ inline velox::variant pyToVariant(const py::handle& obj) {
     py::dict objAsDict = py::cast<py::dict>(obj);
     std::map<velox::variant, velox::variant> map;
     for (auto item : objAsDict) {
-      velox::variant key = pyToVariant(item.first);
-      velox::variant value = pyToVariant(item.second);
-      map.emplace(std::make_pair(pyToVariant(item.first)), pyToVariant(item.second));
+      map.emplace(
+          std::make_pair(pyToVariant(item.first), pyToVariant(item.second)));
     }
     return velox::variant::map(std::move(map));
   } else if (py::isinstance<py::tuple>(obj)) {
@@ -138,6 +137,20 @@ inline velox::variant pyToVariant(const py::handle& obj) {
   }
 }
 
+static VectorPtr pyToConstantVector(
+    const py::handle& obj,
+    vector_size_t length,
+    facebook::velox::memory::MemoryPool* pool,
+    TypePtr type = nullptr);
+
+template <TypeKind T>
+static VectorPtr variantsToFlatVector(
+    const std::vector<velox::variant>& variants,
+    facebook::velox::memory::MemoryPool* pool);
+
+static inline VectorPtr pyListToVector(
+    const py::list& list,
+    facebook::velox::memory::MemoryPool* pool);
 
 template <TypeKind T>
 static VectorPtr createDictionaryVector(
