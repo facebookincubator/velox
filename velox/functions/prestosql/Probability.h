@@ -50,12 +50,11 @@ struct NormalCDFFunction {
   // Normal cumulative distribution is computed as per the reference at
   // https://mathworld.wolfram.com/NormalDistribution.html.
 
-  const double kSqrtOfTwo = sqrt(2);
-
   FOLLY_ALWAYS_INLINE void
   call(double& result, double m, double sd, double value) {
     VELOX_USER_CHECK_GT(sd, 0, "standardDeviation must be > 0");
 
+    static const double kSqrtOfTwo = sqrt(2);
     result = 0.5 * (1 + erf((value - m) / (sd * kSqrtOfTwo)));
   }
 };
