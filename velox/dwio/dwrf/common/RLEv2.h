@@ -22,10 +22,303 @@
 #include "velox/dwio/common/DataBuffer.h"
 #include "velox/dwio/common/IntDecoder.h"
 #include "velox/dwio/common/exception/Exception.h"
+#include "velox/dwio/dwrf/common/IntEncoder.h"
 
 #include <vector>
 
 namespace facebook::velox::dwrf {
+
+#define MAX_LITERAL_SIZE 512
+#define MAX_SHORT_REPEAT_LENGTH 10
+#define MIN_REPEAT 3
+#define HIST_LEN 32
+
+enum EncodingType { SHORT_REPEAT = 0, DIRECT = 1, PATCHED_BASE = 2, DELTA = 3 };
+
+struct EncodingOption {
+  EncodingType encoding;
+  int64_t fixedDelta;
+  int64_t gapVsPatchListCount;
+  int64_t zigzagLiteralsCount;
+  int64_t baseRedLiteralsCount;
+  int64_t adjDeltasCount;
+  uint32_t zzBits90p;
+  uint32_t zzBits100p;
+  uint32_t brBits95p;
+  uint32_t brBits100p;
+  uint32_t bitsDeltaMax;
+  uint32_t patchWidth;
+  uint32_t patchGapWidth;
+  uint32_t patchLength;
+  int64_t min;
+  bool isFixedDelta;
+};
+
+template <bool isSigned>
+class RleEncoderV2 : public IntEncoder<isSigned> {
+ public:
+  RleEncoderV2(
+      std::unique_ptr<BufferedOutputStream> outStream,
+      bool useVInts,
+      uint32_t numBytes)
+      : IntEncoder<isSigned>{std::move(outStream), useVInts, numBytes},
+        numLiterals(0),
+        alignedBitPacking{true},
+        fixedRunLength(0),
+        variableRunLength(0),
+        prevDelta{0} {
+    literals = new int64_t[MAX_LITERAL_SIZE];
+    gapVsPatchList = new int64_t[MAX_LITERAL_SIZE];
+    zigzagLiterals = isSigned ? new int64_t[MAX_LITERAL_SIZE] : nullptr;
+    baseRedLiterals = new int64_t[MAX_LITERAL_SIZE];
+    adjDeltas = new int64_t[MAX_LITERAL_SIZE];
+  }
+
+  ~RleEncoderV2() override {
+    delete[] literals;
+    delete[] gapVsPatchList;
+    delete[] zigzagLiterals;
+    delete[] baseRedLiterals;
+    delete[] adjDeltas;
+  }
+
+  // For 64 bit Integers, only signed type is supported. writeVuLong only
+  // supports int64_t and it needs to support uint64_t before this method
+  // can support uint64_t overload.
+  uint64_t add(
+      const int64_t* data,
+      const common::Ranges& ranges,
+      const uint64_t* nulls) override {
+    return addImpl(data, ranges, nulls);
+  }
+
+  uint64_t add(
+      const int32_t* data,
+      const common::Ranges& ranges,
+      const uint64_t* nulls) override {
+    return addImpl(data, ranges, nulls);
+  }
+
+  uint64_t add(
+      const uint32_t* data,
+      const common::Ranges& ranges,
+      const uint64_t* nulls) override {
+    return addImpl(data, ranges, nulls);
+  }
+
+  uint64_t add(
+      const int16_t* data,
+      const common::Ranges& ranges,
+      const uint64_t* nulls) override {
+    return addImpl(data, ranges, nulls);
+  }
+
+  uint64_t add(
+      const uint16_t* data,
+      const common::Ranges& ranges,
+      const uint64_t* nulls) override {
+    return addImpl(data, ranges, nulls);
+  }
+
+  void writeValue(const int64_t value) override {
+    write(value);
+  }
+
+  uint64_t flush() override {
+    if (numLiterals != 0) {
+      EncodingOption option = {};
+      if (variableRunLength != 0) {
+        determineEncoding(option);
+        writeValues(option);
+      } else if (fixedRunLength != 0) {
+        if (fixedRunLength < MIN_REPEAT) {
+          variableRunLength = fixedRunLength;
+          fixedRunLength = 0;
+          determineEncoding(option);
+          writeValues(option);
+        } else if (
+            fixedRunLength >= MIN_REPEAT &&
+            fixedRunLength <= MAX_SHORT_REPEAT_LENGTH) {
+          option.encoding = SHORT_REPEAT;
+          writeValues(option);
+        } else {
+          option.encoding = DELTA;
+          option.isFixedDelta = true;
+          writeValues(option);
+        }
+      }
+    }
+    return IntEncoder<isSigned>::flush();
+  }
+
+  // copied from RLEv1.h
+  void recordPosition(PositionRecorder& recorder, int32_t strideIndex = -1)
+      const override {
+    IntEncoder<isSigned>::recordPosition(recorder, strideIndex);
+    recorder.add(static_cast<uint64_t>(numLiterals), strideIndex);
+  }
+
+ private:
+  int64_t* literals;
+  int32_t numLiterals;
+  const bool alignedBitPacking;
+  uint32_t fixedRunLength;
+  uint32_t variableRunLength;
+  int64_t prevDelta;
+  int32_t histgram[HIST_LEN];
+
+  // The four list below should actually belong to EncodingOption since it only
+  // holds temporal values in write(int64_t val), it is move here for
+  // performance consideration.
+  int64_t* gapVsPatchList;
+  int64_t* zigzagLiterals;
+  int64_t* baseRedLiterals;
+  int64_t* adjDeltas;
+
+  uint32_t getOpCode(EncodingType encoding);
+  int64_t* prepareForDirectOrPatchedBase(EncodingOption& option);
+  void determineEncoding(EncodingOption& option);
+  void computeZigZagLiterals(EncodingOption& option);
+  void preparePatchedBlob(EncodingOption& option);
+  void writeInts(int64_t* input, uint32_t offset, size_t len, uint32_t bitSize);
+  void initializeLiterals(int64_t val);
+  void writeValues(EncodingOption& option);
+  void writeShortRepeatValues(EncodingOption& option);
+  void writeDirectValues(EncodingOption& option);
+  void writePatchedBasedValues(EncodingOption& option);
+  void writeDeltaValues(EncodingOption& option);
+  uint32_t percentileBits(
+      int64_t* data,
+      size_t offset,
+      size_t length,
+      double p,
+      bool reuseHist = false);
+
+  template <typename T>
+  void write(T val) {
+    if (numLiterals == 0) {
+      initializeLiterals(val);
+      return;
+    }
+
+    if (numLiterals == 1) {
+      prevDelta = val - literals[0];
+      literals[numLiterals++] = val;
+
+      if (val == literals[0]) {
+        fixedRunLength = 2;
+        variableRunLength = 0;
+      } else {
+        fixedRunLength = 0;
+        variableRunLength = 2;
+      }
+      return;
+    }
+
+    int64_t currentDelta = val - literals[numLiterals - 1];
+    EncodingOption option = {};
+    if (prevDelta == 0 && currentDelta == 0) {
+      // case 1: fixed delta run
+      literals[numLiterals++] = val;
+
+      if (variableRunLength > 0) {
+        // if variable run is non-zero then we are seeing repeating
+        // values at the end of variable run in which case fixed Run
+        // length is 2
+        fixedRunLength = 2;
+      }
+      fixedRunLength++;
+
+      // if fixed run met the minimum condition and if variable
+      // run is non-zero then flush the variable run and shift the
+      // tail fixed runs to start of the buffer
+      if (fixedRunLength >= MIN_REPEAT && variableRunLength > 0) {
+        numLiterals -= MIN_REPEAT;
+        variableRunLength -= (MIN_REPEAT - 1);
+
+        determineEncoding(option);
+        writeValues(option);
+
+        // shift tail fixed runs to beginning of the buffer
+        for (size_t i = 0; i < MIN_REPEAT; ++i) {
+          literals[i] = val;
+        }
+        numLiterals = MIN_REPEAT;
+      }
+
+      if (fixedRunLength == MAX_LITERAL_SIZE) {
+        option.encoding = DELTA;
+        option.isFixedDelta = true;
+        writeValues(option);
+      }
+      return;
+    }
+
+    // case 2: variable delta run
+
+    // if fixed run length is non-zero and if it satisfies the
+    // short repeat conditions then write the values as short repeats
+    // else use delta encoding
+    if (fixedRunLength >= MIN_REPEAT) {
+      if (fixedRunLength <= MAX_SHORT_REPEAT_LENGTH) {
+        option.encoding = SHORT_REPEAT;
+      } else {
+        option.encoding = DELTA;
+        option.isFixedDelta = true;
+      }
+      writeValues(option);
+    }
+
+    // if fixed run length is <MIN_REPEAT and current value is
+    // different from previous then treat it as variable run
+    if (fixedRunLength > 0 && fixedRunLength < MIN_REPEAT &&
+        val != literals[numLiterals - 1]) {
+      variableRunLength = fixedRunLength;
+      fixedRunLength = 0;
+    }
+
+    // after writing values re-initialize the variables
+    if (numLiterals == 0) {
+      initializeLiterals(val);
+    } else {
+      prevDelta = val - literals[numLiterals - 1];
+      literals[numLiterals++] = val;
+      variableRunLength++;
+
+      if (variableRunLength == MAX_LITERAL_SIZE) {
+        determineEncoding(option);
+        writeValues(option);
+      }
+    }
+  }
+
+  template <typename T>
+  uint64_t
+  addImpl(const T* data, const common::Ranges& ranges, const uint64_t* nulls);
+};
+
+template <bool isSigned>
+template <typename T>
+uint64_t RleEncoderV2<isSigned>::addImpl(
+    const T* data,
+    const common::Ranges& ranges,
+    const uint64_t* nulls) {
+  uint64_t count = 0;
+  if (nulls) {
+    for (auto& pos : ranges) {
+      if (!bits::isBitNull(nulls, pos)) {
+        write(data[pos]);
+        ++count;
+      }
+    }
+  } else {
+    for (auto& pos : ranges) {
+      write(data[pos]);
+      ++count;
+    }
+  }
+  return count;
+}
 
 template <bool isSigned>
 class RleDecoderV2 : public dwio::common::IntDecoder<isSigned> {

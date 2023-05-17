@@ -18,6 +18,7 @@
 
 #include "velox/dwio/dwrf/common/IntEncoder.h"
 #include "velox/dwio/dwrf/common/RLEv1.h"
+#include "velox/dwio/dwrf/common/RLEv2.h"
 
 namespace facebook::velox::dwrf {
 
@@ -38,6 +39,8 @@ std::unique_ptr<IntEncoder<isSigned>> createRleEncoder(
       return std::make_unique<RleEncoderV1<isSigned>>(
           std::move(output), useVInts, numBytes);
     case RleVersion_2:
+      return std::make_unique<RleEncoderV2<isSigned>>(
+          std::move(output), useVInts, numBytes);
     default:
       DWIO_ENSURE(false, "not supported");
       return {};

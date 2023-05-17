@@ -171,6 +171,14 @@ class BaseColumnWriter : public ColumnWriter {
     auto options = StatisticsBuilderOptions::fromConfig(context.getConfigs());
     indexStatsBuilder_ = StatisticsBuilder::create(*type.type, options);
     fileStatsBuilder_ = StatisticsBuilder::create(*type.type, options);
+
+    if (format_ == dwrf::DwrfFormat::kDwrf) {
+      VELOX_CHECK(rleVersion_ == velox::dwrf::RleVersion_1);
+    } else { // kOrc
+      VELOX_CHECK(
+          rleVersion_ == velox::dwrf::RleVersion_1 ||
+          rleVersion_ == velox::dwrf::RleVersion_2);
+    }
   }
 
   uint64_t writeNulls(const VectorPtr& slice, const common::Ranges& ranges) {
@@ -247,15 +255,22 @@ class BaseColumnWriter : public ColumnWriter {
   }
 
   virtual bool useDictionaryEncoding() const {
-    return (sequence_ == 0 ||
-            !context_.getConfig(Config::MAP_FLAT_DISABLE_DICT_ENCODING)) &&
-        !context_.isLowMemoryMode();
+    if (format_ == velox::dwrf::DwrfFormat::kDwrf) {
+      return (sequence_ == 0 ||
+              !context_.getConfig(Config::MAP_FLAT_DISABLE_DICT_ENCODING)) &&
+          !context_.isLowMemoryMode();
+    } else { // kOrc
+      return false;
+    }
   }
 
   WriterContext::LocalDecodedVector decode(
       const VectorPtr& slice,
       const common::Ranges& ranges);
 
+  // TODO: decouple Dwrf and Orc
+  velox::dwrf::DwrfFormat format_ = velox::dwrf::DwrfFormat::kDwrf;
+  velox::dwrf::RleVersion rleVersion_ = velox::dwrf::RleVersion_1;
   const dwio::common::TypeWithId& type_;
   std::vector<std::unique_ptr<BaseColumnWriter>> children_;
   std::unique_ptr<IndexBuilder> indexBuilder_;

@@ -287,10 +287,18 @@ class IntegerColumnWriter : public BaseColumnWriter {
   // whatnot.
   void setEncoding(proto::ColumnEncoding& encoding) const override {
     BaseColumnWriter::setEncoding(encoding);
-    if (useDictionaryEncoding_) {
-      encoding.set_kind(
-          proto::ColumnEncoding_Kind::ColumnEncoding_Kind_DICTIONARY);
-      encoding.set_dictionarysize(finalDictionarySize_);
+    if (format_ == dwrf::DwrfFormat::kDwrf) {
+      if (useDictionaryEncoding_) {
+        encoding.set_kind(
+            proto::ColumnEncoding_Kind::ColumnEncoding_Kind_DICTIONARY);
+        encoding.set_dictionarysize(finalDictionarySize_);
+      }
+    } else { // kOrc
+      auto kind =
+          (rleVersion_ == velox::dwrf::RleVersion_1
+               ? proto::ColumnEncoding_Kind::ColumnEncoding_Kind_DIRECT
+               : proto::ColumnEncoding_Kind::ColumnEncoding_Kind_DIRECT_V2);
+      encoding.set_kind(kind);
     }
   }
 
@@ -385,17 +393,25 @@ class IntegerColumnWriter : public BaseColumnWriter {
     if (!data_ && !dataDirect_) {
       if (dictEncoding) {
         data_ = createRleEncoder</* isSigned = */ false>(
-            RleVersion_1,
+            rleVersion_,
             newStream(StreamKind::StreamKind_DATA),
             getConfig(Config::USE_VINTS),
             sizeof(T));
         inDictionary_ = createBooleanRleEncoder(
             newStream(StreamKind::StreamKind_IN_DICTIONARY));
       } else {
-        dataDirect_ = createDirectEncoder</* isSigned */ true>(
-            newStream(StreamKind::StreamKind_DATA),
-            getConfig(Config::USE_VINTS),
-            sizeof(T));
+        if (format_ == dwrf::DwrfFormat::kDwrf) {
+          dataDirect_ = createDirectEncoder</* isSigned */ true>(
+              newStream(StreamKind::StreamKind_DATA),
+              getConfig(Config::USE_VINTS),
+              sizeof(T));
+        } else { // kOrc
+          dataDirect_ = createRleEncoder</* isSigned = */ true>(
+              rleVersion_,
+              newStream(StreamKind::StreamKind_DATA),
+              getConfig(Config::USE_VINTS),
+              sizeof(T));
+        }
       }
     }
     ensureValidStreamWriters(dictEncoding);
@@ -655,17 +671,21 @@ class TimestampColumnWriter : public BaseColumnWriter {
       const TypeWithId& type,
       const uint32_t sequence,
       std::function<void(IndexBuilder&)> onRecordPosition)
-      : BaseColumnWriter{context, type, sequence, onRecordPosition},
-        seconds_{createRleEncoder</* isSigned = */ true>(
-            RleVersion_1,
-            newStream(StreamKind::StreamKind_DATA),
-            context.getConfig(Config::USE_VINTS),
-            LONG_BYTE_SIZE)},
-        nanos_{createRleEncoder</* isSigned = */ false>(
-            RleVersion_1,
-            newStream(StreamKind::StreamKind_NANO_DATA),
-            context.getConfig(Config::USE_VINTS),
-            LONG_BYTE_SIZE)} {
+      : BaseColumnWriter{context, type, sequence, onRecordPosition} {
+    seconds_.reset(createRleEncoder</* isSigned = */ true>(
+                       rleVersion_,
+                       newStream(StreamKind::StreamKind_DATA),
+                       context.getConfig(Config::USE_VINTS),
+                       LONG_BYTE_SIZE)
+                       .release());
+
+    nanos_.reset(createRleEncoder</* isSigned = */ false>(
+                     rleVersion_,
+                     newStream(StreamKind::StreamKind_NANO_DATA),
+                     context.getConfig(Config::USE_VINTS),
+                     LONG_BYTE_SIZE)
+                     .release());
+
     reset();
   }
 
@@ -683,6 +703,19 @@ class TimestampColumnWriter : public BaseColumnWriter {
     BaseColumnWriter::recordPosition();
     seconds_->recordPosition(*indexBuilder_);
     nanos_->recordPosition(*indexBuilder_);
+  }
+
+  void setEncoding(proto::ColumnEncoding& encoding) const override {
+    BaseColumnWriter::setEncoding(encoding);
+    if (format_ == dwrf::DwrfFormat::kOrc) {
+      if (rleVersion_ == velox::dwrf::RleVersion_1) {
+        encoding.set_kind(
+            proto::ColumnEncoding_Kind::ColumnEncoding_Kind_DIRECT);
+      } else {
+        encoding.set_kind(
+            proto::ColumnEncoding_Kind::ColumnEncoding_Kind_DIRECT_V2);
+      }
+    }
   }
 
  private:
@@ -881,10 +914,18 @@ class StringColumnWriter : public BaseColumnWriter {
   // whatnot.
   void setEncoding(proto::ColumnEncoding& encoding) const override {
     BaseColumnWriter::setEncoding(encoding);
-    if (useDictionaryEncoding_) {
-      encoding.set_kind(
-          proto::ColumnEncoding_Kind::ColumnEncoding_Kind_DICTIONARY);
-      encoding.set_dictionarysize(finalDictionarySize_);
+    if (format_ == dwrf::DwrfFormat::kDwrf) {
+      if (useDictionaryEncoding_) {
+        encoding.set_kind(
+            proto::ColumnEncoding_Kind::ColumnEncoding_Kind_DICTIONARY);
+        encoding.set_dictionarysize(finalDictionarySize_);
+      }
+    } else { // kOrc
+      auto kind =
+          (rleVersion_ == velox::dwrf::RleVersion_1
+               ? proto::ColumnEncoding_Kind::ColumnEncoding_Kind_DIRECT
+               : proto::ColumnEncoding_Kind::ColumnEncoding_Kind_DIRECT_V2);
+      encoding.set_kind(kind);
     }
   }
 
@@ -953,10 +994,14 @@ class StringColumnWriter : public BaseColumnWriter {
 
  protected:
   bool useDictionaryEncoding() const override {
-    return (sequence_ == 0 ||
-            !context_.getConfig(
-                Config::MAP_FLAT_DISABLE_DICT_ENCODING_STRING)) &&
-        !context_.isLowMemoryMode();
+    if (format_ == dwrf::DwrfFormat::kDwrf) {
+      return (sequence_ == 0 ||
+              !context_.getConfig(
+                  Config::MAP_FLAT_DISABLE_DICT_ENCODING_STRING)) &&
+          !context_.isLowMemoryMode();
+    } else { // kOrc TODO: handle dictionary encoding for ORC
+      return false;
+    }
   }
 
  private:
@@ -984,14 +1029,14 @@ class StringColumnWriter : public BaseColumnWriter {
     if (!data_ && !dataDirect_) {
       if (dictEncoding) {
         data_ = createRleEncoder</* isSigned = */ false>(
-            RleVersion_1,
+            rleVersion_,
             newStream(StreamKind::StreamKind_DATA),
             getConfig(Config::USE_VINTS),
             sizeof(uint32_t));
         dictionaryData_ = std::make_unique<AppendOnlyBufferedStream>(
             newStream(StreamKind::StreamKind_DICTIONARY_DATA));
         dictionaryDataLength_ = createRleEncoder</* isSigned = */ false>(
-            RleVersion_1,
+            rleVersion_,
             newStream(StreamKind::StreamKind_LENGTH),
             getConfig(Config::USE_VINTS),
             sizeof(uint32_t));
@@ -1000,7 +1045,7 @@ class StringColumnWriter : public BaseColumnWriter {
         strideDictionaryData_ = std::make_unique<AppendOnlyBufferedStream>(
             newStream(StreamKind::StreamKind_STRIDE_DICTIONARY));
         strideDictionaryDataLength_ = createRleEncoder</* isSigned = */ false>(
-            RleVersion_1,
+            rleVersion_,
             newStream(StreamKind::StreamKind_STRIDE_DICTIONARY_LENGTH),
             getConfig(Config::USE_VINTS),
             sizeof(uint32_t));
@@ -1008,7 +1053,7 @@ class StringColumnWriter : public BaseColumnWriter {
         dataDirect_ = std::make_unique<AppendOnlyBufferedStream>(
             newStream(StreamKind::StreamKind_DATA));
         dataDirectLength_ = createRleEncoder</* isSigned = */ false>(
-            RleVersion_1,
+            rleVersion_,
             newStream(StreamKind::StreamKind_LENGTH),
             getConfig(Config::USE_VINTS),
             sizeof(uint32_t));
@@ -1461,7 +1506,7 @@ class BinaryColumnWriter : public BaseColumnWriter {
       : BaseColumnWriter{context, type, sequence, onRecordPosition},
         data_{newStream(StreamKind::StreamKind_DATA)},
         lengths_{createRleEncoder</* isSigned */ false>(
-            RleVersion_1,
+            rleVersion_,
             newStream(StreamKind::StreamKind_LENGTH),
             context.getConfig(Config::USE_VINTS),
             dwio::common::INT_BYTE_SIZE)} {
@@ -1482,6 +1527,19 @@ class BinaryColumnWriter : public BaseColumnWriter {
     BaseColumnWriter::recordPosition();
     data_.recordPosition(*indexBuilder_);
     lengths_->recordPosition(*indexBuilder_);
+  }
+
+  void setEncoding(proto::ColumnEncoding& encoding) const override {
+    BaseColumnWriter::setEncoding(encoding);
+    if (format_ == dwrf::DwrfFormat::kOrc) {
+      if (rleVersion_ == velox::dwrf::RleVersion_1) {
+        encoding.set_kind(
+            proto::ColumnEncoding_Kind::ColumnEncoding_Kind_DIRECT);
+      } else {
+        encoding.set_kind(
+            proto::ColumnEncoding_Kind::ColumnEncoding_Kind_DIRECT_V2);
+      }
+    }
   }
 
  private:
@@ -1704,7 +1762,7 @@ class ListColumnWriter : public BaseColumnWriter {
       std::function<void(IndexBuilder&)> onRecordPosition)
       : BaseColumnWriter{context, type, sequence, onRecordPosition},
         lengths_{createRleEncoder</* isSigned = */ false>(
-            RleVersion_1,
+            rleVersion_,
             newStream(StreamKind::StreamKind_LENGTH),
             context.getConfig(Config::USE_VINTS),
             dwio::common::INT_BYTE_SIZE)} {
@@ -1724,6 +1782,19 @@ class ListColumnWriter : public BaseColumnWriter {
   void recordPosition() override {
     BaseColumnWriter::recordPosition();
     lengths_->recordPosition(*indexBuilder_);
+  }
+
+  void setEncoding(proto::ColumnEncoding& encoding) const override {
+    BaseColumnWriter::setEncoding(encoding);
+    if (format_ == dwrf::DwrfFormat::kOrc) {
+      if (rleVersion_ == velox::dwrf::RleVersion_1) {
+        encoding.set_kind(
+            proto::ColumnEncoding_Kind::ColumnEncoding_Kind_DIRECT);
+      } else {
+        encoding.set_kind(
+            proto::ColumnEncoding_Kind::ColumnEncoding_Kind_DIRECT_V2);
+      }
+    }
   }
 
  private:
@@ -1831,7 +1902,7 @@ class MapColumnWriter : public BaseColumnWriter {
       std::function<void(IndexBuilder&)> onRecordPosition)
       : BaseColumnWriter{context, type, sequence, onRecordPosition},
         lengths_{createRleEncoder</* isSigned = */ false>(
-            RleVersion_1,
+            rleVersion_,
             newStream(StreamKind::StreamKind_LENGTH),
             context.getConfig(Config::USE_VINTS),
             dwio::common::INT_BYTE_SIZE)} {
@@ -1852,6 +1923,19 @@ class MapColumnWriter : public BaseColumnWriter {
   void recordPosition() override {
     BaseColumnWriter::recordPosition();
     lengths_->recordPosition(*indexBuilder_);
+  }
+
+  void setEncoding(proto::ColumnEncoding& encoding) const override {
+    BaseColumnWriter::setEncoding(encoding);
+    if (format_ == dwrf::DwrfFormat::kOrc) {
+      if (rleVersion_ == velox::dwrf::RleVersion_1) {
+        encoding.set_kind(
+            proto::ColumnEncoding_Kind::ColumnEncoding_Kind_DIRECT);
+      } else {
+        encoding.set_kind(
+            proto::ColumnEncoding_Kind::ColumnEncoding_Kind_DIRECT_V2);
+      }
+    }
   }
 
  private:
