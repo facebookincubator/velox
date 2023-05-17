@@ -956,7 +956,8 @@ struct ConvFunction {
     if (isNegativeInput && toBase < 0) {
       hasNegativeMark = true;
     } else if (isNegativeInput && toBase > 0) {
-      // Use the max value for 64-bit to convert unsignedValue to positive.
+      // If toBase > 0, the result is unsigned. Converts the original nagative
+      // value to unsigned one.
       unsignedValue = MAX_UNSIGNED_INT64 - unsignedValue + 1;
     }
     toBase = toBase < 0 ? -toBase : toBase;

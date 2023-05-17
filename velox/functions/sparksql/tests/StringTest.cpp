@@ -740,12 +740,13 @@ TEST_F(StringTest, conv) {
   EXPECT_EQ(conv("-15", 10, -16), "-F");
   EXPECT_EQ(conv("-15", 10, 16), "FFFFFFFFFFFFFFF1");
   EXPECT_EQ(conv("-10", 16, -10), "-16");
+  // If there is an invalid digit in the number, the longest
+  // valid prefix should be converted.
   EXPECT_EQ(conv("11abc", 10, 16), "B");
   // Test null result.
   EXPECT_EQ(conv("", 10, 16), std::nullopt);
   EXPECT_EQ(conv("", std::nullopt, 16), std::nullopt);
   EXPECT_EQ(conv("", 10, std::nullopt), std::nullopt);
 }
-
 } // namespace
 } // namespace facebook::velox::functions::sparksql::test
