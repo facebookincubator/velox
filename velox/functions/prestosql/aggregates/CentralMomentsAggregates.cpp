@@ -56,17 +56,19 @@ struct CentralMomentsAccumulator {
 
   void update(double value) {
     double oldCount = count();
+    count_ += 1;
+    double oldM1 = m1();
     double oldM2 = m2();
     double oldM3 = m3();
-    count_ += 1;
-    double delta = value - m1();
+    double delta = value - oldM1;
     double deltaN = delta / count();
     double deltaN2 = deltaN * deltaN;
     double dm2 = delta * deltaN * oldCount;
+
     m1_ += deltaN;
     m2_ += dm2;
     m3_ += dm2 * deltaN * (count() - 2) - 3 * deltaN * oldM2;
-    m4_ += dm2 * deltaN2 * (count() * count() - 3 * count() + 3) +
+    m4_ += dm2 * deltaN2 * (count() * (double)count() - 3 * count() + 3) +
         6 * deltaN2 * oldM2 - 4 * deltaN * oldM3;
   }
 
@@ -75,40 +77,41 @@ struct CentralMomentsAccumulator {
   }
 
   void merge(
-      int64_t countOther,
-      double m1Other,
-      double m2Other,
-      double m3Other,
-      double m4Other) {
-    if (countOther == 0) {
+      double otherCount,
+      double otherM1,
+      double otherM2,
+      double otherM3,
+      double otherM4) {
+    if (otherCount == 0) {
       return;
     }
 
     double oldCount = count();
+    count_ += otherCount;
+
+    double oldM1 = m1();
     double oldM2 = m2();
     double oldM3 = m3();
-    double newCount = countOther + oldCount;
-    double delta = m1Other - m1();
+    double delta = otherM1 - oldM1;
     double delta2 = delta * delta;
     double delta3 = delta * delta2;
     double delta4 = delta2 * delta2;
 
-    count_ = newCount;
-    m1_ = (oldCount * m1() + countOther * m1Other) / count();
-    m2_ += m2Other + delta2 * oldCount * countOther / count();
-    m3_ += m3Other +
-        delta3 * oldCount * countOther * (oldCount - countOther) /
+    m1_ = (oldCount * oldM1 + otherCount * otherM1) / count();
+    m2_ += otherM2 + delta2 * oldCount * otherCount / count();
+    m3_ += otherM3 +
+        delta3 * oldCount * otherCount * (oldCount - otherCount) /
             (count() * count()) +
-        3 * delta * (oldCount * m2Other - countOther * oldM2) / count();
-    m4_ += m4Other +
-        delta4 * oldCount * countOther *
-            (oldCount * oldCount - oldCount * countOther +
-             countOther * countOther) /
+        3 * delta * (oldCount * otherM2 - otherCount * oldM2) / count();
+    m4_ += otherM4 +
+        delta4 * oldCount * otherCount *
+            (oldCount * oldCount - oldCount * otherCount +
+             otherCount * otherCount) /
             (count() * count() * count()) +
         6 * delta2 *
-            (oldCount * oldCount * m2Other + countOther * countOther * oldM2) /
+            (oldCount * oldCount * otherM2 + otherCount * otherCount * oldM2) /
             (count() * count()) +
-        4 * delta * (oldCount * oldM3 - countOther * oldM3) / count();
+        4 * delta * (oldCount * otherM3 - otherCount * oldM3) / count();
   }
 
  private:
