@@ -414,8 +414,9 @@ void PageReader::prepareDictionary(const PageHeader& pageHeader) {
       break;
     }
     case thrift::Type::INT96: {
+      auto numVeloxBytes = dictionary_.numValues * sizeof(Timestamp);
+      dictionary_.values = AlignedBuffer::allocate<char>(numVeloxBytes, &pool_);
       auto numBytes = dictionary_.numValues * sizeof(int96_t);
-      dictionary_.values = AlignedBuffer::allocate<char>(numBytes, &pool_);
       if (pageData_) {
         memcpy(dictionary_.values->asMutable<char>(), pageData_, numBytes);
       } else {
@@ -425,6 +426,25 @@ void PageReader::prepareDictionary(const PageHeader& pageHeader) {
             dictionary_.values->asMutable<char>(),
             bufferStart_,
             bufferEnd_);
+      }
+      // Expand the Parquet type length values to Velox type length.
+      // We start from the end to allow in-place expansion.
+      auto values = dictionary_.values->asMutable<Timestamp>();
+      auto parquetValues = dictionary_.values->asMutable<char>();
+      constexpr int64_t JULIAN_TO_UNIX_EPOCH_DAYS = 2440588LL;
+      constexpr int64_t SECONDS_PER_DAY = 86400LL;
+      for (auto i = dictionary_.numValues - 1; i >= 0; --i) {
+        // Convert the timestamp into seconds and nanos since the Unix epoch,
+        // 00:00:00.000000 on 1 January 1970.
+        uint64_t nanos;
+        memcpy(&nanos, parquetValues + i * sizeof(int96_t), sizeof(uint64_t));
+        int32_t days;
+        memcpy(
+            &days,
+            parquetValues + i * sizeof(int96_t) + +sizeof(uint64_t),
+            sizeof(int32_t));
+        values[i] = Timestamp(
+            (days - JULIAN_TO_UNIX_EPOCH_DAYS) * SECONDS_PER_DAY, nanos);
       }
       break;
     }
