@@ -902,4 +902,90 @@ struct TranslateFunction {
   }
 };
 
+template <typename T>
+struct ConvFunction {
+  VELOX_DEFINE_FUNCTION_TYPES(T);
+
+  static constexpr bool is_default_ascii_behavior = true;
+
+  FOLLY_ALWAYS_INLINE bool call(
+      out_type<Varchar>& result,
+      const arg_type<Varchar>& input,
+      int32_t fromBase,
+      int32_t toBase) {
+    if (input.empty()) {
+      return false;
+    }
+
+    // Consistent with spark, only supports base belonging to [2, 36].
+    const int MIN_BASE = 2;
+    const int MAX_BASE = 36;
+    if (fromBase < MIN_BASE || fromBase > MAX_BASE ||
+        std::abs(toBase) < MIN_BASE || std::abs(toBase) > MAX_BASE) {
+      return false;
+    }
+
+    // Fast path for case "0", regardless of fromBase/toBase.
+    if (input.data()[0] == '0' && input.size() == 1) {
+      result.setNoCopy(StringView(input.data(), 1));
+      return true;
+    }
+
+    // No need to do the conversion.
+    if (fromBase == toBase) {
+      result.setNoCopy(StringView(input.data(), input.size()));
+      return true;
+    }
+
+    bool isNegativeInput;
+    char* inputChars = (char*)malloc(input.size() + 1);
+    std::memcpy(inputChars, input.data(), input.size());
+    inputChars[input.size()] = '\0';
+    unsigned long unsignedValue;
+    if (input.data()[0] == '-') {
+      isNegativeInput = true;
+      unsignedValue = strtoul(inputChars + 1, nullptr, fromBase);
+    } else {
+      isNegativeInput = false;
+      unsignedValue = strtoul(inputChars, nullptr, fromBase);
+    }
+    free(inputChars);
+
+    bool hasNegativeMark = false;
+    const unsigned long MAX_UNSIGNED_INT64 = 0xFFFFFFFFFFFFFFFF;
+    if (isNegativeInput && toBase < 0) {
+      hasNegativeMark = true;
+    } else if (isNegativeInput && toBase > 0) {
+      // Use the max value for 64-bit to convert unsignedValue to positive.
+      unsignedValue = MAX_UNSIGNED_INT64 - unsignedValue + 1;
+    }
+    toBase = toBase < 0 ? -toBase : toBase;
+
+    result.resize(64);
+    auto resultBuffer = result.data();
+    int i = 63;
+    while (unsignedValue > 0) {
+      int remainder = unsignedValue % toBase;
+      if (remainder < 10) {
+        resultBuffer[i] = (char)(remainder + (int)'0');
+      } else {
+        resultBuffer[i] = (char)(remainder - 10 + (int)'A');
+      }
+      i--;
+      unsignedValue = unsignedValue / toBase;
+    }
+    if (hasNegativeMark) {
+      resultBuffer[i] = '-';
+      i--;
+    }
+    auto resultSize = 64 - i - 1;
+    if (resultSize == 0) {
+      return false;
+    }
+    result.resize(resultSize);
+    result.setNoCopy(StringView(result.data() + i + 1, resultSize));
+    return true;
+  }
+};
+
 } // namespace facebook::velox::functions::sparksql

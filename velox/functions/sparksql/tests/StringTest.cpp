@@ -198,6 +198,13 @@ class StringTest : public SparkFunctionBaseTest {
       std::optional<int32_t> size) {
     return evaluateOnce<std::string>("lpad(c0, c1)", string, size);
   }
+
+  std::optional<std::string> conv(
+      std::optional<std::string> str,
+      std::optional<int32_t> fromBase,
+      std::optional<int32_t> toBase) {
+    return evaluateOnce<std::string>("conv(c0, c1, c2)", str, fromBase, toBase);
+  }
 };
 
 TEST_F(StringTest, Ascii) {
@@ -721,5 +728,24 @@ TEST_F(StringTest, translateNonconstantMatch) {
   expected = makeFlatVector<std::string>({"åbaæçè", "åæcèaç"});
   testTranslate({input, match, replace}, expected);
 }
+
+TEST_F(StringTest, conv) {
+  EXPECT_EQ(conv("4", 10, 2), "100");
+  EXPECT_EQ(conv("110", 2, 10), "6");
+  EXPECT_EQ(conv("15", 10, 16), "F");
+  EXPECT_EQ(conv("big", 36, 16), "3A48");
+  EXPECT_EQ(conv("9223372036854775807", 36, 16), "FFFFFFFFFFFFFFFF");
+  // Space is contained, but has no impact on the conversion.
+  EXPECT_EQ(conv(" 15 ", 10, 16), "F");
+  EXPECT_EQ(conv("-15", 10, -16), "-F");
+  EXPECT_EQ(conv("-15", 10, 16), "FFFFFFFFFFFFFFF1");
+  EXPECT_EQ(conv("-10", 16, -10), "-16");
+  EXPECT_EQ(conv("11abc", 10, 16), "B");
+  // Test null result.
+  EXPECT_EQ(conv("", 10, 16), std::nullopt);
+  EXPECT_EQ(conv("", std::nullopt, 16), std::nullopt);
+  EXPECT_EQ(conv("", 10, std::nullopt), std::nullopt);
+}
+
 } // namespace
 } // namespace facebook::velox::functions::sparksql::test
