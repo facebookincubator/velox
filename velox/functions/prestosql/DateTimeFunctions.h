@@ -1108,7 +1108,7 @@ struct CurrentTimeFunction {
     sessionTimeZone_ = getTimeZoneFromConfig(config);
   }
 
-  FOLLY_ALWAYS_INLINE bool call(
+  FOLLY_ALWAYS_INLINE void call(
       out_type<Varchar>& result) {
     Timestamp ts = Timestamp::now();
     ts.toTimezone(*sessionTimeZone_);
@@ -1117,8 +1117,6 @@ struct CurrentTimeFunction {
     
     result.resize(tsString.size());
     std::memcpy(result.data(), tsString.data(), tsString.size());
-
-    return true;
   }
 };
 

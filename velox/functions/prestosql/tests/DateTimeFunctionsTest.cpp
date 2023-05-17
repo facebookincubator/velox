@@ -2874,49 +2874,16 @@ TEST_F(DateTimeFunctionsTest, dateParse) {
       dateParse("116", "%y+"), "Invalid format: \"116\" is malformed at \"6\"");
 }
 
-//     std::optional<std::string> current_time() {
-//     return evaluateOnce<std::string>("get_current_time");
-//   }
-
-// // test "current_time" eval
-//   auto vector = makeNullableFlatVector<int32_t>({1, std::nullopt, 3});
-//   auto rowVector = makeRowVector({vector});
-//   SelectivityVector rows(rowVector->size());
-//   std::vector<VectorPtr> result(1);
-
-//   exec::ExprSet exprSet({expression}, execCtx_.get());
-//   exec::EvalCtx context(execCtx_.get(), &exprSet, rowVector.get());
-//   exprSet.eval(rows, context, result);
-
-//   auto expected = makeNullableFlatVector<std::string>(
-//       {"19:51:34.241 PDT"});
-//   auto resultFront = result.front();
-//   assertEqualVectors(expected, result.front());
-
-// TEST_F(DateTimeFunctionsTest, currentTimeTest) {
-//   // test the built expression
-//   auto expression =
-//       currentTimeCall();
-
-//   ASSERT_EQ("current_time", compile(expression)->toString());
-
-//   const auto current_time = [&]() {   
-//     return evaluateOnce<std::string>("current_time");
-//   };
-
-//   std::optional<std::string> currentTimeStr = current_time();
-
-//   EXPECT_EQ("19:51:34.241 UTC", currentTimeStr);
-// }
-
 TEST_F(DateTimeFunctionsTest, currentTimeTest) {
   auto tz = "America/Los_Angeles";
   setQueryTimeZone(tz);
   auto expression = currentTimeCall();
-  auto result = evaluate(expression, makeRowVector({makeNullableFlatVector<int32_t>(
-    {10, 10, std::nullopt, 15})}));
-  // auto currentTimeStr = castEvaluateResult<std::string>(result, expression->toString());
-  // EXPECT_EQ("19:51:34.241 UTC", currentTimeStr);
+  auto result = evaluate(
+      expression,
+      makeRowVector(
+          {makeNullableFlatVector<int32_t>({10, 10, std::nullopt, 15})}));
+  // auto currentTimeStr = castEvaluateResult<std::string>(result,
+  // expression->toString()); EXPECT_EQ("19:51:34.241 UTC", currentTimeStr);
 }
 
 TEST_F(DateTimeFunctionsTest, dateFunctionVarchar) {
