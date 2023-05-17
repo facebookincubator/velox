@@ -39,6 +39,19 @@ class VectorSerializer {
       const RowVectorPtr& vector,
       const folly::Range<const IndexRange*>& ranges) = 0;
 
+  // Usage
+  // append(vector, ranges);
+  // vector_size_t size = serializedSize();
+  // OutputStream* stream = allocateBuffer(size);
+  // flush();
+  //
+  // So we can allocate memory for flush OutputStream size
+  // The return value is accurate without compress,
+  // Return the maximum required size with different compress codec
+  virtual vector_size_t maxSerializedSize() {
+    VELOX_NYI("{} unsupported", __FUNCTION__);
+  };
+
   // Writes the contents to 'stream' in wire format
   virtual void flush(OutputStream* stream) = 0;
 };

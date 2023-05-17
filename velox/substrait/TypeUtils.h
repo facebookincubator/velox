@@ -95,6 +95,11 @@ struct RangeTraits<TypeKind::SHORT_DECIMAL> {
   using NativeType = UnscaledShortDecimal;
 };
 
+template <>
+struct RangeTraits<TypeKind::LONG_DECIMAL> {
+  using NativeType = UnscaledLongDecimal;
+};
+
 #endif /* RANGETRAITS_H */
 
 } // namespace facebook::velox::substrait
