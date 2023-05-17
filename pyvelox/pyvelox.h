@@ -180,6 +180,17 @@ static py::object getItemFromSimpleVector(
     SimpleVectorPtr<NativeType>& vector,
     vector_size_t idx);
 
+inline void checkRowVectorBounds(RowVectorPtr& v, vector_size_t idx) {
+  if (idx < 0 || size_t(idx) >= v->childrenSize()) {
+    throw std::out_of_range("Index out of range");
+  }
+}
+
+inline VectorPtr getVectorFromRowVectorPtr(RowVectorPtr& v, vector_size_t idx) {
+  checkRowVectorBounds(v, idx);
+  return v->childAt(idx);
+}
+
 template <typename NativeType>
 inline void setItemInFlatVector(
     FlatVectorPtr<NativeType>& vector,
@@ -500,7 +511,12 @@ static void addVectorBindings(
   /// TODO: I think I may have to implement a PyRowVector interface and not override the destructor here
   /// Need to check that, not sure what is the pure virtual method being called
    py::class_<RowVector, BaseVector, RowVectorPtr>(m, "RowVector", py::module_local(asModuleLocalDefinitions))
-    .def("__len__", &RowVector::childrenSize);
+    .def("__len__", &RowVector::childrenSize)
+    .def(
+          "__getitem__",
+          [](RowVectorPtr& v, vector_size_t idx) {
+            return getVectorFromRowVectorPtr(v, idx);
+    });
   m.def(
       "constant_vector",
       [](const py::handle& obj, vector_size_t length, TypePtr type) {

@@ -15,6 +15,7 @@
  */
 
 #include "substrait.h" // @manual
+#include "context.h"
 #include <google/protobuf/util/json_util.h>
 #include <fstream>
 #include <sstream>
@@ -47,9 +48,9 @@ static void readFromFile(
 }
 
 RowVectorPtr runSubstraitQuery(const std::string& planPath) {
-  std::shared_ptr<facebook::velox::memory::MemoryPool> pool = facebook::velox::memory::addDefaultLeafMemoryPool();
+  memory::MemoryPool* pool = PyVeloxContext::getInstance().pool();
   std::shared_ptr<facebook::velox::substrait::SubstraitVeloxPlanConverter> planConverter =
-      std::make_shared<facebook::velox::substrait::SubstraitVeloxPlanConverter>(pool.get());
+      std::make_shared<facebook::velox::substrait::SubstraitVeloxPlanConverter>(pool);
 
   ::substrait::Plan substraitPlan;
   readFromFile(planPath, substraitPlan);
@@ -76,20 +77,20 @@ RowVectorPtr runSubstraitQuery(const std::string& planPath) {
 }
 
 static inline RowVectorPtr runSubstraitQueryWithBuilder(const std::string& planPath) {
-  std::shared_ptr<facebook::velox::memory::MemoryPool> pool = facebook::velox::memory::addDefaultLeafMemoryPool();
+  memory::MemoryPool* pool = PyVeloxContext::getInstance().pool();
   std::shared_ptr<facebook::velox::substrait::SubstraitVeloxPlanConverter> planConverter =
-      std::make_shared<facebook::velox::substrait::SubstraitVeloxPlanConverter>(pool.get());
+      std::make_shared<facebook::velox::substrait::SubstraitVeloxPlanConverter>(pool);
 
   ::substrait::Plan substraitPlan;
   readFromFile(planPath, substraitPlan);
 
   auto veloxPlan = planConverter->toVeloxPlan(substraitPlan);
-  return facebook::velox::exec::test::AssertQueryBuilder(veloxPlan).copyResults(pool.get());
+  return facebook::velox::exec::test::AssertQueryBuilder(veloxPlan).copyResults(pool);
 }
 
-static inline VectorPtr runSubstraitQueryByFile(const std::string& planPath) {
-  return facebook::velox::substrait::RunQueryByFile(planPath);
-}
+// static inline VectorPtr runSubstraitQueryByFile(const std::string& planPath) {
+//   return facebook::velox::substrait::RunQueryByFile(planPath);
+// }
 
 
 void addSubstraitBindings(py::module& m, bool asModuleLocalDefinitions) {
@@ -98,12 +99,6 @@ void addSubstraitBindings(py::module& m, bool asModuleLocalDefinitions) {
       "run_substrait_query",
       &runSubstraitQuery,
       "Runs a Substrait query and return output.");
-
-  m.def(
-      "run_substrait_query_with_builder",
-      &runSubstraitQueryByFile,
-      "Runs a Substrait query and return output.");
-
 
 }
 } // namespace facebook::velox::py
