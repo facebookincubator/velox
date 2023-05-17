@@ -17,6 +17,7 @@
 #include <pybind11/stl.h>
 #include "velox/common/memory/Memory.h"
 #include "velox/core/QueryCtx.h"
+#include "velox/connectors/hive/HiveConnector.h"
 
 namespace facebook::velox::py {
 
@@ -65,6 +66,43 @@ struct PyVeloxContext {
           queryCtx_.get());
 
   static inline std::unique_ptr<PyVeloxContext> instance_;
+};
+
+struct PySubstraitContext {
+
+  PySubstraitContext() = default;
+  PySubstraitContext(const PySubstraitContext&) = delete;
+  PySubstraitContext(const PySubstraitContext&&) = delete;
+  PySubstraitContext& operator=(const PySubstraitContext&) = delete;
+  PySubstraitContext& operator=(const PySubstraitContext&&) = delete;
+
+  static inline PySubstraitContext& getInstance() {
+    if (!instance_) {
+      instance_ = std::make_unique<PySubstraitContext>();
+    }
+    return *instance_.get();
+  }
+
+  inline void initialize() {
+    facebook::velox::connector::registerConnector(connector_);
+  }
+
+  inline void finalize() {
+    facebook::velox::connector::unregisterConnector("test-hive");
+  }
+
+  static inline void cleanup() {
+    if (instance_) {
+      instance_.reset();
+    }
+  }
+
+  private:
+  std::shared_ptr<facebook::velox::connector::Connector> connector_ = connector::getConnectorFactory(
+          connector::hive::HiveConnectorFactory::kHiveConnectorName)
+          ->newConnector("test-hive", nullptr);
+
+  static inline std::unique_ptr<PySubstraitContext> instance_;
 };
 
 } // namespace facebook::velox::py

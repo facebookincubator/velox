@@ -59,7 +59,7 @@ TEST_F(Substrait2VeloxValuesNodeConversionTest, valuesNode) {
 
       });
 
-  std::cout << expectedData->toString() << std::endl;
+  std::cout << expectedData->toString(0, 10) << std::endl;
   createDuckDbTable({expectedData});
   assertQuery(veloxPlan, "SELECT * FROM tmp");
 }
