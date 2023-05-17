@@ -16,6 +16,11 @@
 
 #include "velox/dwio/common/Options.h"
 
+DEFINE_int32(
+    max_coalesce_distance_bytes,
+    512 << 10, // 512K
+    "Maximum distance in which coalesce will combine requests.");
+
 namespace facebook {
 namespace velox {
 namespace dwio {

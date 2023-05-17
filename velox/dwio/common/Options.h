@@ -27,6 +27,8 @@
 #include "velox/dwio/common/ScanSpec.h"
 #include "velox/dwio/common/encryption/Encryption.h"
 
+DECLARE_int32(max_coalesce_distance_bytes);
+
 namespace facebook {
 namespace velox {
 namespace dwio {
@@ -348,7 +350,7 @@ class ReaderOptions {
   uint64_t autoPreloadLength;
   PrefetchMode prefetchMode;
   int32_t loadQuantum_{kDefaultLoadQuantum};
-  int32_t maxCoalesceDistance_{kDefaultCoalesceDistance};
+  int32_t maxCoalesceDistance_{FLAGS_max_coalesce_distance_bytes};
   SerDeOptions serDeOptions;
   std::shared_ptr<encryption::DecrypterFactory> decrypterFactory_;
   uint64_t directorySizeGuess{kDefaultDirectorySizeGuess};
@@ -356,7 +358,6 @@ class ReaderOptions {
 
  public:
   static constexpr int32_t kDefaultLoadQuantum = 8 << 20; // 8MB
-  static constexpr int32_t kDefaultCoalesceDistance = 512 << 10; // 512K
   static constexpr uint64_t kDefaultDirectorySizeGuess = 1024 * 1024; // 1MB
   static constexpr uint64_t kDefaultFilePreloadThreshold =
       1024 * 1024 * 8; // 8MB

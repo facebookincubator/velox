@@ -40,3 +40,9 @@ TEST(OptionsTests, testAppendRowNumberColumnInCopy) {
   RowReaderOptions rowReaderOptionsSecondCopy{rowReaderOptions};
   ASSERT_EQ(true, rowReaderOptionsSecondCopy.getAppendRowNumberColumn());
 }
+
+TEST(OptionsTests, testForDefaultMaxCoalesce) {
+  ReaderOptions readerOptions(nullptr);
+  ASSERT_EQ(
+      FLAGS_max_coalesce_distance_bytes, readerOptions.maxCoalesceDistance());
+}
