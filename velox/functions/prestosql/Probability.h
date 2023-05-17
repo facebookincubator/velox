@@ -16,6 +16,8 @@
 #pragma once
 
 #include "boost/math/distributions/beta.hpp"
+#include "velox/functions/Macros.h"
+#include "velox/common/base/Exceptions.h"
 
 namespace facebook::velox::functions {
 
