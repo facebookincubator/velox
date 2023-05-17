@@ -163,6 +163,29 @@ class StringTest : public SparkFunctionBaseTest {
         pos,
         len);
   }
+
+  using constant_dictionary_input_t =
+      std::vector<std::pair<std::string, std::string>>;
+
+  void testTranslateConstantDictionary(
+      exec::ExprSet& exprSet,
+      const constant_dictionary_input_t& inputData);
+
+  using nonconstant_dictionary_input_t = std::vector<std::pair<
+      std::tuple<std::string, std::string, std::string>,
+      std::string>>;
+
+  void testTranslateNonconstantDictionary(
+      exec::ExprSet& exprSet,
+      const nonconstant_dictionary_input_t& inputData);
+
+  std::optional<std::string> translate(
+      std::optional<std::string> str,
+      std::optional<std::string> match,
+      std::optional<std::string> replace) {
+    return evaluateOnce<std::string>(
+        "translate(c0, c1, c2)", str, match, replace);
+  }
 };
 
 TEST_F(StringTest, Ascii) {
@@ -495,6 +518,92 @@ TEST_F(StringTest, left) {
   EXPECT_EQ(left("da\u6570\u636Eta", 2), "da");
   EXPECT_EQ(left("da\u6570\u636Eta", 3), "da\u6570");
   EXPECT_EQ(left("da\u6570\u636Eta", 30), "da\u6570\u636Eta");
+}
+
+void StringTest::testTranslateConstantDictionary(
+    exec::ExprSet& exprSet,
+    const constant_dictionary_input_t& inputData) {
+  auto stringVector = makeFlatVector<StringView>(inputData.size());
+  for (int i = 0; i < inputData.size(); i++) {
+    stringVector->set(i, StringView(inputData[i].first));
+  }
+  auto result = evaluate(exprSet, makeRowVector({stringVector}));
+  FlatVector<StringView>* flatResult = result->asFlatVector<StringView>();
+  for (int32_t i = 0; i < inputData.size(); ++i) {
+    ASSERT_EQ(flatResult->valueAt(i), inputData[i].second);
+  }
+}
+
+void StringTest::testTranslateNonconstantDictionary(
+    exec::ExprSet& exprSet,
+    const nonconstant_dictionary_input_t& inputData) {
+  auto stringVector = makeFlatVector<StringView>(inputData.size());
+  auto matchVector = makeFlatVector<StringView>(inputData.size());
+  auto replaceVector = makeFlatVector<StringView>(inputData.size());
+  for (int i = 0; i < inputData.size(); i++) {
+    stringVector->set(i, StringView(std::get<0>(inputData[i].first)));
+    matchVector->set(i, StringView(std::get<1>(inputData[i].first)));
+    replaceVector->set(i, StringView(std::get<2>(inputData[i].first)));
+  }
+  auto result = evaluate(
+      exprSet, makeRowVector({stringVector, matchVector, replaceVector}));
+  FlatVector<StringView>* flatResult = result->asFlatVector<StringView>();
+  for (int32_t i = 0; i < inputData.size(); ++i) {
+    ASSERT_EQ(flatResult->valueAt(i), inputData[i].second);
+  }
+}
+
+TEST_F(StringTest, translate) {
+  EXPECT_EQ(translate("ab[cd]", "[]", "##"), "ab#cd#");
+  EXPECT_EQ(translate("ab[cd]", "[]", "#"), "ab#cd");
+  EXPECT_EQ(translate("ab[cd]", "[]", "#@$"), "ab#cd@");
+  EXPECT_EQ(translate("ab[cd]", "[]", "  "), "ab cd ");
+  EXPECT_EQ(translate("ab\u2028", "\u2028", "\u2029"), "ab\u2029");
+  EXPECT_EQ(translate("abcabc", "a", "\u2029"), "\u2029bc\u2029bc");
+  EXPECT_EQ(translate("abc", "", ""), "abc");
+  EXPECT_EQ(translate("translate", "rnlt", "123"), "1a2s3ae");
+  EXPECT_EQ(translate("translate", "rnlt", ""), "asae");
+  EXPECT_EQ(translate("abcd", "aba", "123"), "12cd");
+  // Test null input.
+  EXPECT_EQ(translate("abc", std::nullopt, "\u2029"), std::nullopt);
+  EXPECT_EQ(translate("abc", "\u2028", std::nullopt), std::nullopt);
+  EXPECT_EQ(translate(std::nullopt, "\u2028", "\u2029"), std::nullopt);
+
+  // Test constant dictionary cases.
+  auto rowTypePtr = ROW({{"c0", VARCHAR()}});
+  auto exprSet = compileExpression("translate(c0, 'ab', '12')", rowTypePtr);
+  // Input column data and the expected result of translate(c0, "ab", "12").
+  // Uses ascii batch as the input.
+  constant_dictionary_input_t asciiData = {
+      {{"abcd"}, {"12cd"}},
+      {{"cdab"}, {"cd12"}},
+  };
+  testTranslateConstantDictionary(*exprSet.get(), asciiData);
+  // Uses unicode batch as the next input.
+  constant_dictionary_input_t unicodeData = {
+      {{"abåæçè"}, {"12åæçè"}},
+      {{"åæçèab"}, {"åæçè12"}},
+  };
+  testTranslateConstantDictionary(*exprSet.get(), unicodeData);
+
+  // Test nonconstant dictionary cases.
+  rowTypePtr = ROW({{"c0", VARCHAR()}, {"c1", VARCHAR()}, {"c2", VARCHAR()}});
+  exprSet = compileExpression("translate(c0, c1, c2)", rowTypePtr);
+  nonconstant_dictionary_input_t allAsciiData = {
+      {{"abcd", "ab", "#"}, {"#cd"}},
+      {{"cdab", "ca", "@$"}, {"@d$b"}},
+  };
+  testTranslateNonconstantDictionary(*exprSet.get(), allAsciiData);
+  nonconstant_dictionary_input_t partialAsciiData = {
+      {{"abcd", "ac", "åç"}, {"åbçd"}},
+      {{"cdab", "ab", "æ"}, {"cdæ"}},
+  };
+  testTranslateNonconstantDictionary(*exprSet.get(), partialAsciiData);
+  nonconstant_dictionary_input_t allUnicodeData = {
+      {{"abåæçè", "aå", "åa"}, {"åbaæçè"}},
+      {{"åæçèac", "çc", "cç"}, {"åæcèaç"}},
+  };
+  testTranslateNonconstantDictionary(*exprSet.get(), allUnicodeData);
 }
 
 } // namespace
