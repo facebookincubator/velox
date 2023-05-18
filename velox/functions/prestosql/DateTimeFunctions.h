@@ -15,16 +15,15 @@
  */
 #pragma once
 
+#include <iomanip>
 #include <string_view>
-#include "velox/functions/lib/DateTimeFormatter.h"
+#include "velox/core/QueryConfig.h"
 #include "velox/functions/lib/TimeUtils.h"
 #include "velox/functions/prestosql/DateTimeImpl.h"
 #include "velox/functions/prestosql/types/TimestampWithTimeZoneType.h"
 #include "velox/type/TimestampConversion.h"
 #include "velox/type/Type.h"
 #include "velox/type/tz/TimeZoneMap.h"
-#include <iomanip>
-#include "velox/core/QueryConfig.h"
 
 namespace facebook::velox::functions {
 
@@ -1108,13 +1107,12 @@ struct CurrentTimeFunction {
     sessionTimeZone_ = getTimeZoneFromConfig(config);
   }
 
-  FOLLY_ALWAYS_INLINE void call(
-      out_type<Varchar>& result) {
+  FOLLY_ALWAYS_INLINE void call(out_type<Varchar>& result) {
     Timestamp ts = Timestamp::now();
     ts.toTimezone(*sessionTimeZone_);
 
-    std::string tsString = ts.toStringTimeWithTimezone();
-    
+    std::string tsString = ts.toString(Timestamp::Precision::kMilliseconds, 1);
+
     result.resize(tsString.size());
     std::memcpy(result.data(), tsString.data(), tsString.size());
   }

@@ -17,12 +17,12 @@
 #include <optional>
 #include <string>
 #include "velox/common/base/tests/GTestUtils.h"
+#include "velox/core/Expressions.h"
+#include "velox/expression/Expr.h"
 #include "velox/external/date/tz.h"
 #include "velox/functions/prestosql/tests/utils/FunctionBaseTest.h"
 #include "velox/functions/prestosql/types/TimestampWithTimeZoneType.h"
 #include "velox/type/tz/TimeZoneMap.h"
-#include "velox/core/Expressions.h"
-#include "velox/expression/Expr.h"
 
 using namespace facebook::velox;
 using namespace facebook::velox::test;

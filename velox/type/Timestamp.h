@@ -148,7 +148,8 @@ struct Timestamp {
   };
 
   std::string toString(
-      const Precision& precision = Precision::kNanoseconds) const {
+      const Precision& precision = Precision::kNanoseconds,
+      int timeWithTimezoneFormatFlag = 0) const {
     // mbasmanova: error: no matching function for call to 'gmtime_r'
     // mbasmanova: time_t is long not long long
     // struct tm tmValue;
@@ -171,32 +172,14 @@ struct Timestamp {
     auto width = static_cast<int>(precision);
     auto value =
         precision == Precision::kMilliseconds ? nanos_ / 1'000'000 : nanos_;
+    auto formatStr = timeWithTimezoneFormatFlag == 1 ? "%T" : "%FT%T";
     std::ostringstream oss;
-    oss << std::put_time(bt, "%FT%T");
+    oss << std::put_time(bt, formatStr);
     oss << '.' << std::setfill('0') << std::setw(width) << value;
 
-    return oss.str();
-  }
-
-  std::string toStringTimeWithTimezone() const {
-    // mbasmanova: error: no matching function for call to 'gmtime_r'
-    // mbasmanova: time_t is long not long long
-    // struct tm tmValue;
-    // auto bt = gmtime_r(&seconds_, &tmValue);
-    auto bt = gmtime((const time_t*)&seconds_);
-    if (!bt) {
-      const auto& error_message = folly::to<std::string>(
-          "Can't convert Seconds to time: ", folly::to<std::string>(seconds_));
-      throw std::runtime_error{error_message};
+    if (timeWithTimezoneFormatFlag == 1) {
+      oss << " " << std::put_time(bt, "%Z"); // HH:MM:SS.ZZZ UTC
     }
-
-    // return ISO 8601 time format.
-    // %T - equivalent to "%H:%M:%S" (the ISO 8601 time format)
-    auto value = nanos_ / 1'000'000;
-    std::ostringstream oss;
-    oss << std::put_time(bt, "%T");
-    oss << '.' << std::setfill('0') << std::setw(3) << value;
-    oss << " " << std::put_time(bt, "%Z"); // HH:MM:SS.ZZZ UTC
 
     return oss.str();
   }
