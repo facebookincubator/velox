@@ -788,6 +788,17 @@ class ArrowBridgeArrayImportTest : public ArrowBridgeArrayExportTest {
     // reusable. So we don't check them in here.
     if constexpr (!std::is_same_v<T, std::string>) {
       EXPECT_FALSE(BaseVector::isVectorWritable(output));
+    } else {
+      size_t totalLength = 0;
+      bool isInline = true;
+      for (const auto& value : inputValues) {
+        if (value.has_value()) {
+          totalLength += value.value().length();
+          isInline = isInline && StringView(value.value()).isInline();
+        }
+      }
+      totalLength = isInline ? 0 : totalLength;
+      EXPECT_EQ(totalLength, output->buffersSize());
     }
   }
 
