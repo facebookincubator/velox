@@ -385,13 +385,13 @@ static void addVectorBindings(
       });
 
   m.def("from_list", [](const py::list& list) mutable {
-    return pyListToVector(list, PyVeloxContext::getInstance().pool());
+    return pyListToVector(list, PyVeloxContext::getSingletonInstance().pool());
   });
   m.def(
       "constant_vector",
       [](const py::handle& obj, vector_size_t length, TypePtr type) {
         return pyToConstantVector(
-            obj, length, PyVeloxContext::getInstance().pool(), type);
+            obj, length, PyVeloxContext::getSingletonInstance().pool(), type);
       },
       py::arg("value"),
       py::arg("length"),
@@ -401,7 +401,7 @@ static void addVectorBindings(
       "dictionary_vector",
       [](VectorPtr baseVector, const py::list& indices_list) {
         BufferPtr indices_buffer = AlignedBuffer::allocate<vector_size_t>(
-            indices_list.size(), PyVeloxContext::getInstance().pool());
+            indices_list.size(), PyVeloxContext::getSingletonInstance().pool());
         vector_size_t* indices_ptr = indices_buffer->asMutable<vector_size_t>();
         for (size_t i = 0; i < indices_list.size(); i++) {
           if (!py::isinstance<py::int_>(indices_list[i]))
@@ -415,7 +415,7 @@ static void addVectorBindings(
             baseVector->typeKind(),
             std::move(indices_buffer),
             std::move(baseVector),
-            PyVeloxContext::getInstance().pool());
+            PyVeloxContext::getSingletonInstance().pool());
       });
 }
 

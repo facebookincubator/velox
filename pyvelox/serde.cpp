@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
-#include "serde.h" // @manual
+#include "serde.h"
 #include "context.h"
 
 #include <velox/vector/VectorSaver.h>
@@ -24,10 +24,9 @@ namespace facebook::velox::py {
 namespace py = pybind11;
 
 namespace {
-static VectorPtr pyRestoreVectorFromFileHelper(
-    const char* FOLLY_NONNULL filePath) {
+VectorPtr pyRestoreVectorFromFileHelper(const char* FOLLY_NONNULL filePath) {
   using namespace facebook::velox;
-  memory::MemoryPool* pool = PyVeloxContext::getInstance().pool();
+  memory::MemoryPool* pool = PyVeloxContext::getSingletonInstance().pool();
   return restoreVectorFromFile(filePath, pool);
 }
 } // namespace

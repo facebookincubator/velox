@@ -203,13 +203,13 @@ static VectorPtr evaluateExpression(
     }
   }
   auto rowType = ROW(std::move(names), std::move(types));
-  memory::MemoryPool* pool = PyVeloxContext::getInstance().pool();
+  memory::MemoryPool* pool = PyVeloxContext::getSingletonInstance().pool();
   RowVectorPtr rowVector = std::make_shared<RowVector>(
       pool, rowType, BufferPtr{nullptr}, numRows, inputs);
   core::TypedExprPtr typed = core::Expressions::inferTypes(expr, rowType, pool);
-  exec::ExprSet set({typed}, PyVeloxContext::getInstance().execCtx());
+  exec::ExprSet set({typed}, PyVeloxContext::getSingletonInstance().execCtx());
   exec::EvalCtx evalCtx(
-      PyVeloxContext::getInstance().execCtx(), &set, rowVector.get());
+      PyVeloxContext::getSingletonInstance().execCtx(), &set, rowVector.get());
   SelectivityVector rows(numRows);
   std::vector<VectorPtr> result;
   set.eval(rows, evalCtx, result);

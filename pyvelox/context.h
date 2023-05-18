@@ -19,16 +19,13 @@
 #include "velox/core/QueryCtx.h"
 
 namespace facebook::velox::py {
-struct PyVeloxContext {
-  PyVeloxContext() = default;
-  PyVeloxContext(const PyVeloxContext&) = delete;
-  PyVeloxContext(const PyVeloxContext&&) = delete;
-  PyVeloxContext& operator=(const PyVeloxContext&) = delete;
-  PyVeloxContext& operator=(const PyVeloxContext&&) = delete;
 
-  static inline PyVeloxContext& getInstance() {
+/// PyVeloxContext is used only during function binding time. Its a utility
+/// that manages pool, query and exec context for Velox expressions and vectors.
+struct PyVeloxContext {
+  static inline PyVeloxContext& getSingletonInstance() {
     if (!instance_) {
-      instance_ = std::make_unique<PyVeloxContext>();
+      instance_ = std::unique_ptr<PyVeloxContext>(new PyVeloxContext());
     }
     return *instance_.get();
   }
@@ -36,9 +33,11 @@ struct PyVeloxContext {
   facebook::velox::memory::MemoryPool* pool() {
     return pool_.get();
   }
+
   facebook::velox::core::QueryCtx* queryCtx() {
     return queryCtx_.get();
   }
+
   facebook::velox::core::ExecCtx* execCtx() {
     return execCtx_.get();
   }
@@ -50,6 +49,12 @@ struct PyVeloxContext {
   }
 
  private:
+  PyVeloxContext() = default;
+  PyVeloxContext(const PyVeloxContext&) = delete;
+  PyVeloxContext(const PyVeloxContext&&) = delete;
+  PyVeloxContext& operator=(const PyVeloxContext&) = delete;
+  PyVeloxContext& operator=(const PyVeloxContext&&) = delete;
+
   std::shared_ptr<facebook::velox::memory::MemoryPool> pool_ =
       facebook::velox::memory::addDefaultLeafMemoryPool();
   std::shared_ptr<facebook::velox::core::QueryCtx> queryCtx_ =

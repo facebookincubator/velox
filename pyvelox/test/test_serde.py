@@ -12,9 +12,10 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-import shutil, tempfile
-from os import path
+import shutil
+import tempfile
 import unittest
+from os import path
 
 import pyvelox.pyvelox as pv
 
@@ -28,21 +29,21 @@ class TestVeloxVectorSaver(unittest.TestCase):
         # remove the temporary directory
         shutil.rmtree(self.test_dir)
 
-    def get_flat_vector(self):
+    def make_flat_vector(self):
         return pv.from_list([1, 2, 3])
 
-    def get_const_vector(self):
+    def make_const_vector(self):
         return pv.constant_vector(1000, 10)
 
-    def get_dict_vector(self):
+    def make_dict_vector(self):
         base_indices = [0, 0, 1, 0, 2]
         return pv.dictionary_vector(pv.from_list([1, 2, 3]), base_indices)
 
     def test_serde_vector(self):
         data = {
-            "flat_vector": self.get_flat_vector(),
-            "const_vector": self.get_const_vector(),
-            "dict_vector": self.get_dict_vector(),
+            "flat_vector": self.make_flat_vector(),
+            "const_vector": self.make_const_vector(),
+            "dict_vector": self.make_dict_vector(),
         }
 
         paths = {
@@ -57,5 +58,6 @@ class TestVeloxVectorSaver(unittest.TestCase):
             pv.save_vector(vector=vec, file_path=fpath)
             loaded_vec = pv.load_vector(file_path=fpath)
             self.assertEqual(len(vec), len(loaded_vec))
+            self.assertEqual(vec.dtype(), loaded_vec.dtype())
             for i in range(len(vec)):
                 self.assertEqual(vec[i], loaded_vec[i])
