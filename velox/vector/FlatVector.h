@@ -357,6 +357,14 @@ class FlatVector final : public SimpleVector<T> {
     return stringBuffers_;
   }
 
+  const uint64_t buffersSize() const {
+    auto size = 0;
+    for (auto& buffer : stringBuffers_) {
+      size += buffer->capacity();
+    }
+    return size;
+  }
+
   /// Used for vectors of type VARCHAR and VARBINARY to replace the old data
   /// buffers with 'buffers' which are referenced by StringView's.
   void setStringBuffers(std::vector<BufferPtr> buffers) {

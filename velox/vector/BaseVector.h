@@ -549,6 +549,10 @@ class BaseVector {
     VELOX_UNSUPPORTED("Only flat vectors have a values buffer");
   }
 
+  virtual const uint64_t buffersSize() const {
+    VELOX_UNSUPPORTED("Only flat vectors have string buffers");
+  }
+
   // If 'this' is a wrapper, returns the wrap info, interpretation depends on
   // encoding.
   virtual BufferPtr wrapInfo() const {
