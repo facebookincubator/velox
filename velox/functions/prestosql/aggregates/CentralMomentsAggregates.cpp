@@ -14,9 +14,7 @@
  * limitations under the License.
  */
 #include "velox/exec/Aggregate.h"
-#include "velox/expression/FunctionSignature.h"
 #include "velox/functions/prestosql/aggregates/AggregateNames.h"
-#include "velox/vector/DecodedVector.h"
 #include "velox/vector/FlatVector.h"
 
 namespace facebook::velox::aggregate::prestosql {
@@ -221,8 +219,10 @@ class CentralMomentsIntermediateResult {
   double* m4_;
 };
 
-// @tparam T Type of the raw input and final result. Can be integer, double or
-// float.
+// T is the input type for partial aggregation, it can be integer, double or
+// float. Not used for final aggregation. TResultAccessor is the type of the
+// static struct that will access the result in a certain way from the
+// CentralMoments Accumulator.
 template <typename T, typename TResultAccessor>
 class CentralMomentsAggregate : public exec::Aggregate {
  public:
@@ -312,7 +312,7 @@ class CentralMomentsAggregate : public exec::Aggregate {
       bool /* mayPushdown */) override {
     decodedPartial_.decode(*args[0], rows);
 
-    auto baseRowVector = static_cast<const RowVector*>(decodedPartial_.base());
+    auto baseRowVector = dynamic_cast<const RowVector*>(decodedPartial_.base());
     CentralMomentsIntermediateInput input{baseRowVector};
 
     if (decodedPartial_.isConstantMapping()) {
@@ -347,7 +347,7 @@ class CentralMomentsAggregate : public exec::Aggregate {
       const std::vector<VectorPtr>& args,
       bool /* mayPushdown */) override {
     decodedPartial_.decode(*args[0], rows);
-    auto baseRowVector = static_cast<const RowVector*>(decodedPartial_.base());
+    auto baseRowVector = dynamic_cast<const RowVector*>(decodedPartial_.base());
     CentralMomentsIntermediateInput input{baseRowVector};
 
     if (decodedPartial_.isConstantMapping()) {
@@ -379,12 +379,12 @@ class CentralMomentsAggregate : public exec::Aggregate {
 
   void extractValues(char** groups, int32_t numGroups, VectorPtr* result)
       override {
-    auto vector = (*result)->as<FlatVector<T>>();
+    auto vector = (*result)->as<FlatVector<double>>();
     VELOX_CHECK(vector);
     vector->resize(numGroups);
     uint64_t* rawNulls = getRawNulls(vector);
 
-    T* rawValues = vector->mutableRawValues();
+    double* rawValues = vector->mutableRawValues();
     for (auto i = 0; i < numGroups; ++i) {
       char* group = groups[i];
       if (isNull(group)) {
@@ -393,7 +393,7 @@ class CentralMomentsAggregate : public exec::Aggregate {
         auto* accData = accumulator(group);
         if (TResultAccessor::hasResult(*accData)) {
           clearNull(rawNulls, i);
-          rawValues[i] = (T)TResultAccessor::result(*accData);
+          rawValues[i] = TResultAccessor::result(*accData);
         } else {
           vector->setNull(i, true);
         }
@@ -453,6 +453,37 @@ class CentralMomentsAggregate : public exec::Aggregate {
   DecodedVector decodedPartial_;
 };
 
+void checkAccumulatorRowType(
+    const TypePtr& type,
+    const std::string& errorMessage) {
+  VELOX_CHECK_EQ(type->kind(), TypeKind::ROW, "{}", errorMessage);
+  VELOX_CHECK_EQ(
+      type->childAt(kCentralMomentsIndices.count)->kind(),
+      TypeKind::BIGINT,
+      "{}",
+      errorMessage);
+  VELOX_CHECK_EQ(
+      type->childAt(kCentralMomentsIndices.m1)->kind(),
+      TypeKind::DOUBLE,
+      "{}",
+      errorMessage);
+  VELOX_CHECK_EQ(
+      type->childAt(kCentralMomentsIndices.m2)->kind(),
+      TypeKind::DOUBLE,
+      "{}",
+      errorMessage);
+  VELOX_CHECK_EQ(
+      type->childAt(kCentralMomentsIndices.m3)->kind(),
+      TypeKind::DOUBLE,
+      "{}",
+      errorMessage);
+  VELOX_CHECK_EQ(
+      type->childAt(kCentralMomentsIndices.m4)->kind(),
+      TypeKind::DOUBLE,
+      "{}",
+      errorMessage);
+}
+
 template <typename TResultAccessor>
 bool registerCentralMoments(const std::string& name) {
   std::vector<std::shared_ptr<exec::AggregateFunctionSignature>> signatures;
@@ -476,30 +507,41 @@ bool registerCentralMoments(const std::string& name) {
           const TypePtr& resultType) -> std::unique_ptr<exec::Aggregate> {
         VELOX_CHECK_LE(
             argTypes.size(), 1, "{} takes at most one argument", name);
-        auto rawInputType = exec::isRawInput(step)
-            ? argTypes[0]
-            : (exec::isPartialOutput(step) ? DOUBLE() : resultType);
-        switch (rawInputType->kind()) {
-          case TypeKind::SMALLINT:
-            return std::make_unique<
-                CentralMomentsAggregate<int16_t, TResultAccessor>>(resultType);
-          case TypeKind::INTEGER:
-            return std::make_unique<
-                CentralMomentsAggregate<int32_t, TResultAccessor>>(resultType);
-          case TypeKind::BIGINT:
-            return std::make_unique<
-                CentralMomentsAggregate<int64_t, TResultAccessor>>(resultType);
-          case TypeKind::DOUBLE:
-            return std::make_unique<
-                CentralMomentsAggregate<double, TResultAccessor>>(resultType);
-          case TypeKind::REAL:
-            return std::make_unique<
-                CentralMomentsAggregate<float, TResultAccessor>>(resultType);
-          default:
-            VELOX_UNSUPPORTED(
-                "Unsupported input type: {}. "
-                "Expected SMALLINT, INTEGER, BIGINT, DOUBLE or REAL.",
-                rawInputType->toString())
+        const auto& inputType = argTypes[0];
+        if (exec::isRawInput(step)) {
+          switch (inputType->kind()) {
+            case TypeKind::SMALLINT:
+              return std::make_unique<
+                  CentralMomentsAggregate<int16_t, TResultAccessor>>(
+                  resultType);
+            case TypeKind::INTEGER:
+              return std::make_unique<
+                  CentralMomentsAggregate<int32_t, TResultAccessor>>(
+                  resultType);
+            case TypeKind::BIGINT:
+              return std::make_unique<
+                  CentralMomentsAggregate<int64_t, TResultAccessor>>(
+                  resultType);
+            case TypeKind::DOUBLE:
+              return std::make_unique<
+                  CentralMomentsAggregate<double, TResultAccessor>>(resultType);
+            case TypeKind::REAL:
+              return std::make_unique<
+                  CentralMomentsAggregate<float, TResultAccessor>>(resultType);
+            default:
+              VELOX_UNSUPPORTED(
+                  "Unsupported input type: {}. "
+                  "Expected SMALLINT, INTEGER, BIGINT, DOUBLE or REAL.",
+                  inputType->toString())
+          }
+        } else {
+          checkAccumulatorRowType(
+              inputType,
+              "Input type for final aggregation must be "
+              "(count:bigint, m1:double, m2:double, m3:double, m4:double) struct");
+          // final agg not use template T, int64_t here has no effect.
+          return std::make_unique<
+              CentralMomentsAggregate<int64_t, TResultAccessor>>(resultType);
         }
       });
 }
