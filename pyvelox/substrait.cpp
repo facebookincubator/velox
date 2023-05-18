@@ -104,7 +104,8 @@ static inline RowVectorPtr runSubstraitQuery(const std::string& planPath) {
   //PySubstraitContext::initialize();
   /// TODO: wrap this in a struct and see if we get the calling pure virtual function error
   /// Here we need a initialize function to call the register and destructor to call the unregister
-  /// then we can register the connector properly. This would require a class.
+  /// then we can register the connector properly. This would require a class. May be do this in the
+  /// constructor and destructor of the converter in Substrait API.
   
   std::shared_ptr<facebook::velox::substrait::SubstraitVeloxPlanConverter> planConverter =
       std::make_shared<facebook::velox::substrait::SubstraitVeloxPlanConverter>(pool);
