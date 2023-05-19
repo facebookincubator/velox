@@ -70,20 +70,16 @@ struct BinomialCDFFunction {
   call(double& result, int64_t numOfTrials, double successProb, int64_t value) {
     static constexpr int64_t kInf = std::numeric_limits<int64_t>::max();
 
-    if (value < 0) {
-      result = 0.0;
-      return;
-    }
-
-    if ((numOfTrials == kInf) || (value == kInf)) {
-      result = 0.0;
-      return;
-    }
-    VELOX_USER_CHECK_GT(
-        numOfTrials, 0, "numberOfTrials must be greater than 0");
     VELOX_USER_CHECK(
         (successProb >= 0) && (successProb <= 1),
         "successProbability must be in the interval [0, 1]");
+    VELOX_USER_CHECK_GT(
+        numOfTrials, 0, "numberOfTrials must be greater than 0");
+
+    if ((value < 0) || (numOfTrials == kInf) || (value == kInf)) {
+      result = 0.0;
+      return;
+    }
 
     boost::math::binomial_distribution<> dist(numOfTrials, successProb);
     result = boost::math::cdf(dist, value);

@@ -26,7 +26,6 @@ constexpr double kInf = std::numeric_limits<double>::infinity();
 constexpr double kNan = std::numeric_limits<double>::quiet_NaN();
 constexpr double kDoubleMax = std::numeric_limits<double>::max();
 constexpr double kDoubleMin = std::numeric_limits<double>::min();
-constexpr int64_t kBigIntInf = std::numeric_limits<int64_t>::max();
 constexpr int64_t kBigIntMax = std::numeric_limits<int64_t>::max();
 constexpr int64_t kBigIntMin = std::numeric_limits<int64_t>::min();
 
@@ -125,13 +124,11 @@ TEST_F(ProbabilityTest, binomialCDF) {
   EXPECT_EQ(binomialCDF(20, 1.0, 0), 0.0);
   EXPECT_EQ(binomialCDF(20, 0.3, 6), 0.60800981220092398);
   EXPECT_EQ(binomialCDF(200, 0.3, 60), 0.5348091761606989);
-  EXPECT_EQ(binomialCDF(kBigIntInf, 0.5, 5), 0.0);
-  EXPECT_EQ(binomialCDF(3, 0.5, kBigIntInf), 0.0);
-  EXPECT_EQ(binomialCDF(kBigIntInf, 0.5, kBigIntInf), 0.0);
   EXPECT_EQ(binomialCDF(kBigIntMax, 0.5, 2), 0.0);
   EXPECT_EQ(binomialCDF(kBigIntMax, 0.5, kBigIntMax), 0.0);
   EXPECT_EQ(binomialCDF(10, 0.1, kBigIntMin), 0.0);
   EXPECT_EQ(binomialCDF(10, 0.1, -2), 0.0);
+  EXPECT_EQ(binomialCDF(25, 0.5, -100), 0.0);
 
   // Invalid inputs
   VELOX_ASSERT_THROW(
@@ -141,20 +138,22 @@ TEST_F(ProbabilityTest, binomialCDF) {
       binomialCDF(5, 2, 3),
       "successProbability must be in the interval [0, 1]");
   VELOX_ASSERT_THROW(
-      binomialCDF(-1, 0.5, 2), "numberOfTrials must be greater than 0");
-  VELOX_ASSERT_THROW(
-      binomialCDF(kBigIntMin, 0.5, 1), "numberOfTrials must be greater than 0");
-  VELOX_ASSERT_THROW(
-      binomialCDF(5, kBigIntInf, 3),
-      "successProbability must be in the interval [0, 1]");
-  VELOX_ASSERT_THROW(
       binomialCDF(5, kBigIntMax, 3),
       "successProbability must be in the interval [0, 1]");
   VELOX_ASSERT_THROW(
       binomialCDF(5, kNan, 3),
       "successProbability must be in the interval [0, 1]");
   VELOX_ASSERT_THROW(
+      binomialCDF(-1, 0.5, 2), "numberOfTrials must be greater than 0");
+  VELOX_ASSERT_THROW(
+      binomialCDF(kBigIntMin, 0.5, 1), "numberOfTrials must be greater than 0");
+  VELOX_ASSERT_THROW(
       binomialCDF(kNan, 0.5, 3), "numberOfTrials must be greater than 0");
+  VELOX_ASSERT_THROW(
+      binomialCDF(-2, 2, -1),
+      "successProbability must be in the interval [0, 1]");
+  VELOX_ASSERT_THROW(
+      binomialCDF(-2, 0.5, -1), "numberOfTrials must be greater than 0");
 }
 
 } // namespace
