@@ -97,8 +97,6 @@ void UnsafeRowFast::initialize(const TypePtr& type) {
     case TypeKind::REAL:
       FOLLY_FALLTHROUGH;
     case TypeKind::DOUBLE:
-      FOLLY_FALLTHROUGH;
-    case TypeKind::DATE:
       valueBytes_ = type->cppSizeInBytes();
       fixedWidthTypeKind_ = true;
       supportsBulkCopy_ = decoded_.isIdentityMapping();

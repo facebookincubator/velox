@@ -312,8 +312,6 @@ exec::AggregateRegistrationResult registerFirstLast(const std::string& name) {
           case TypeKind::TIMESTAMP:
             return std::make_unique<TClass<ignoreNull, Timestamp, true>>(
                 resultType);
-          case TypeKind::DATE:
-            return std::make_unique<TClass<ignoreNull, Date, true>>(resultType);
           case TypeKind::VARCHAR:
           case TypeKind::ARRAY:
           case TypeKind::MAP:
