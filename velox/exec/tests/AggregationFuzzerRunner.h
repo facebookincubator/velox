@@ -106,6 +106,9 @@ class AggregationFuzzerRunner {
           // https://github.com/facebookincubator/velox/issues/4481
           {"avg_partial", ""},
           {"avg_merge", ""},
+          // Semantically inconsistent functions
+          {"skewness", ""},
+          {"kurtosis", ""},
   };
 
   static int run(const std::string& planPath) {
