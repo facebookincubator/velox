@@ -255,6 +255,19 @@ TEST_P(CentralMomentsAggregationTest, notEnoughCount) {
   testSingleColGlobalAgg(aggName, data, {expectedResult});
 }
 
+TEST_P(CentralMomentsAggregationTest, constantInput) {
+  constexpr double kNan = std::numeric_limits<double>::quiet_NaN();
+
+  vector_size_t size = 10;
+  auto data = makeRowVector(
+      {makeFlatVector<int32_t>(size, [](auto row) { return 5; })});
+  createDuckDbTable({data});
+  auto aggName = GetParam();
+  std::vector<double> nanVec = {kNan};
+  auto expectedResult = makeRowVector({makeFlatVector<double>(nanVec)});
+  testSingleColGlobalAgg(aggName, data, {expectedResult});
+}
+
 VELOX_INSTANTIATE_TEST_SUITE_P(
     CentralMomentsAggregationTest,
     CentralMomentsAggregationTest,
