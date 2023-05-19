@@ -793,8 +793,9 @@ class ArrowBridgeArrayImportTest : public ArrowBridgeArrayExportTest {
       bool isInline = true;
       for (const auto& value : inputValues) {
         if (value.has_value()) {
-          totalLength += value.value().length();
-          isInline = isInline && StringView(value.value()).isInline();
+          auto view = StringView(value.value());
+          totalLength += view.size();
+          isInline = isInline && view.isInline();
         }
       }
       totalLength = isInline ? 0 : totalLength;
