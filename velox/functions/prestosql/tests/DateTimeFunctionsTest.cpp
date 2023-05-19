@@ -17,8 +17,6 @@
 #include <optional>
 #include <string>
 #include "velox/common/base/tests/GTestUtils.h"
-#include "velox/core/Expressions.h"
-#include "velox/expression/Expr.h"
 #include "velox/external/date/tz.h"
 #include "velox/functions/prestosql/tests/utils/FunctionBaseTest.h"
 #include "velox/functions/prestosql/types/TimestampWithTimeZoneType.h"
@@ -226,20 +224,6 @@ class DateTimeFunctionsTest : public functions::test::FunctionBaseTest {
         nullptr,
         timestamps->size(),
         std::vector<VectorPtr>({timestamps, timezones}));
-  }
-
-  std::unique_ptr<core::ExecCtx> execCtx_{
-      std::make_unique<core::ExecCtx>(pool_.get(), queryCtx_.get())};
-
-  std::unique_ptr<exec::ExprSet> compile(const core::TypedExprPtr& expr) {
-    return std::make_unique<exec::ExprSet>(
-        std::vector<core::TypedExprPtr>{expr}, execCtx_.get());
-  }
-
-  core::TypedExprPtr currentTimeCall() {
-    std::vector<facebook::velox::core::TypedExprPtr> emptyVector;
-    return std::make_shared<core::CallTypedExpr>(
-        VARCHAR(), emptyVector, "current_time");
   }
 
   Date getCurrentDate(const std::optional<std::string>& timeZone) {
@@ -2878,7 +2862,6 @@ TEST_F(DateTimeFunctionsTest, currentTimeTest) {
   auto emptyRowVector = makeRowVector(ROW({}), 1);
   auto tz = "America/Los_Angeles";
   setQueryTimeZone(tz);
-  auto expression = currentTimeCall();
   auto result = evaluateOnce<std::string>("current_time", emptyRowVector);
   // EXPECT_EQ("19:51:34.241 UTC", result);
 }
