@@ -18,6 +18,7 @@
 #include <iomanip>
 #include <string_view>
 #include "velox/core/QueryConfig.h"
+#include "velox/functions/lib/DateTimeFormatter.h"
 #include "velox/functions/lib/TimeUtils.h"
 #include "velox/functions/prestosql/DateTimeImpl.h"
 #include "velox/functions/prestosql/types/TimestampWithTimeZoneType.h"

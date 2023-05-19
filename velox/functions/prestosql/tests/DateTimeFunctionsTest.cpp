@@ -2875,15 +2875,12 @@ TEST_F(DateTimeFunctionsTest, dateParse) {
 }
 
 TEST_F(DateTimeFunctionsTest, currentTimeTest) {
+  auto emptyRowVector = makeRowVector(ROW({}), 1);
   auto tz = "America/Los_Angeles";
   setQueryTimeZone(tz);
   auto expression = currentTimeCall();
-  auto result = evaluate(
-      expression,
-      makeRowVector(
-          {makeNullableFlatVector<int32_t>({10, 10, std::nullopt, 15})}));
-  // auto currentTimeStr = castEvaluateResult<std::string>(result,
-  // expression->toString()); EXPECT_EQ("19:51:34.241 UTC", currentTimeStr);
+  auto result = evaluateOnce<std::string>("current_time", emptyRowVector);
+  // EXPECT_EQ("19:51:34.241 UTC", result);
 }
 
 TEST_F(DateTimeFunctionsTest, dateFunctionVarchar) {
