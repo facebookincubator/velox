@@ -357,7 +357,7 @@ class FlatVector final : public SimpleVector<T> {
     return stringBuffers_;
   }
 
-  const uint64_t buffersSize() const override {
+  uint64_t buffersSize() const override {
     auto size = 0;
     for (auto& buffer : stringBuffers_) {
       size += buffer->capacity();
