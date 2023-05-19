@@ -798,6 +798,7 @@ class ArrowBridgeArrayImportTest : public ArrowBridgeArrayExportTest {
           isInline = isInline && view.isInline();
         }
       }
+
       totalLength = isInline ? 0 : totalLength;
       EXPECT_EQ(totalLength, output->buffersSize());
     }
