@@ -59,4 +59,68 @@ struct SIMDIsJsonScalarFunction {
   }
 };
 
+template <typename T>
+struct SIMDJsonArrayContainsFunction {
+  VELOX_DEFINE_FUNCTION_TYPES(T);
+  template <typename TInput>
+  FOLLY_ALWAYS_INLINE bool
+  call(bool& result, const arg_type<Json>& json, const TInput& value) {
+    ParserContext ctx(json.data(), json.size());
+    result = false;
+
+    try {
+      ctx.parseDocument();
+    } catch (simdjson::simdjson_error& e) {
+      return false;
+    }
+
+    if (ctx.jsonDoc.type() != simdjson::ondemand::json_type::array) {
+      return false;
+    }
+
+    try {
+      for (auto&& v : ctx.jsonDoc) {
+        if constexpr (std::is_same_v<TInput, bool>) {
+          if (v.type() == simdjson::ondemand::json_type::boolean &&
+              v.get_bool() == value) {
+            result = true;
+            break;
+          }
+        } else if constexpr (std::is_same_v<TInput, int64_t>) {
+          if (v.type() == simdjson::ondemand::json_type::number &&
+              ((v.get_number_type() ==
+                    simdjson::ondemand::number_type::signed_integer &&
+                v.get_int64() == value) ||
+               (v.get_number_type() ==
+                    simdjson::ondemand::number_type::unsigned_integer &&
+                v.get_uint64() == value))) {
+            result = true;
+            break;
+          }
+        } else if constexpr (std::is_same_v<TInput, double>) {
+          if (v.type() == simdjson::ondemand::json_type::number &&
+              v.get_number_type() ==
+                  simdjson::ondemand::number_type::floating_point_number &&
+              v.get_double() == value) {
+            result = true;
+            break;
+          }
+        } else {
+          if (v.type() == simdjson::ondemand::json_type::string) {
+            std::string_view rlt = v.get_string();
+            std::string str_value{value.getString()};
+            if (rlt.compare(str_value) == 0) {
+              result = true;
+              break;
+            }
+          }
+        }
+      }
+    } catch (simdjson::simdjson_error& e) {
+      return false;
+    }
+    return true;
+  }
+};
+
 } // namespace facebook::velox::functions
