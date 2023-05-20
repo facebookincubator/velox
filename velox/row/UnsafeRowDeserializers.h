@@ -755,7 +755,7 @@ struct UnsafeRowDeserializer {
     const TypePtr& type = dataIterator->type();
     assert(type->isPrimitiveType());
 
-    return VELOX_DYNAMIC_SCALAR_TYPE_DISPATCH(
+    return VELOX_DYNAMIC_SCALAR_TYPE_DISPATCH_ALL(
         createFlatVector, type->kind(), dataIterator, type, pool);
   }
 

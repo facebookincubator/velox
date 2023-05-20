@@ -27,6 +27,12 @@ int32_t alignBits(int32_t numBits) {
 int32_t alignBytes(int32_t numBytes) {
   return bits::roundUp(numBytes, 8);
 }
+
+void copy(char* dst, const char* src, const size_t size) {
+  if (FOLLY_LIKELY(size > 0)) {
+    memcpy(dst, src, size);
+  }
+}
 } // namespace
 
 // static
@@ -103,6 +109,11 @@ void UnsafeRowFast::initialize(const TypePtr& type) {
       fixedWidthTypeKind_ = true;
       supportsBulkCopy_ = decoded_.isIdentityMapping();
       break;
+    case TypeKind::UNKNOWN:
+      // will be 0 for UNKNOWN type;
+      valueBytes_ = type->cppSizeInBytes();
+      fixedWidthTypeKind_ = true;
+      break;
     case TypeKind::TIMESTAMP:
       valueBytes_ = sizeof(int64_t);
       fixedWidthTypeKind_ = true;
@@ -160,7 +171,7 @@ void UnsafeRowFast::serializeFixedWidth(vector_size_t index, char* buffer) {
           decoded_.valueAt<Timestamp>(index).toMicros();
       break;
     default:
-      memcpy(
+      copy(
           buffer,
           decoded_.data<char>() + decoded_.index(index) * valueBytes_,
           valueBytes_);
@@ -172,7 +183,7 @@ void UnsafeRowFast::serializeFixedWidth(
     vector_size_t size,
     char* buffer) {
   VELOX_DCHECK(supportsBulkCopy_);
-  memcpy(
+  copy(
       buffer,
       decoded_.data<char>() + decoded_.index(offset) * valueBytes_,
       valueBytes_ * size);

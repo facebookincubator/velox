@@ -24,6 +24,14 @@ fixed-width columns (booleans, integers, floating point numbers) are stored
 directly. These values must fit within 8 bytes. Long decimal columns are not
 supported.
 
+For UNKNOWN type (i.e NullType in Spark type system) serialization,
+Spark doesn't define how should the UNKNOWN type be serialized into UnsafeRow,
+during query evaluation, Spark won't serialzie anything into the
+UnsafRow byte buffer. During deserializtion, if the caller wants to access
+the value with UNKNOWN type, Spark returns a null value directly without
+doing any actual deserialization. We implemented the same behavior in Velox's
+UnsafeRow serializer/deserializer for consistency.
+
 Values of the variable-width columns (strings, arrays, maps) are split between
 fixed-width and variable-width sections. 8 bytes of the fixed-width section
 store the size and location of the value in the variable-width section.

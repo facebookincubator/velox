@@ -106,6 +106,7 @@ TEST_F(UnsafeRowFuzzTests, fast) {
       DOUBLE(),
       VARCHAR(),
       VARBINARY(),
+      UNKNOWN(),
       // Arrays.
       ARRAY(BOOLEAN()),
       ARRAY(TINYINT()),
@@ -116,10 +117,12 @@ TEST_F(UnsafeRowFuzzTests, fast) {
       ARRAY(DOUBLE()),
       ARRAY(VARCHAR()),
       ARRAY(VARBINARY()),
+      ARRAY(UNKNOWN()),
       // Nested arrays.
       ARRAY(ARRAY(INTEGER())),
       ARRAY(ARRAY(BIGINT())),
       ARRAY(ARRAY(VARCHAR())),
+      ARRAY(ARRAY(UNKNOWN())),
       // Maps.
       MAP(BIGINT(), REAL()),
       MAP(BIGINT(), BIGINT()),
@@ -127,6 +130,8 @@ TEST_F(UnsafeRowFuzzTests, fast) {
       MAP(INTEGER(), MAP(BIGINT(), DOUBLE())),
       MAP(VARCHAR(), BOOLEAN()),
       MAP(INTEGER(), MAP(BIGINT(), ARRAY(REAL()))),
+      MAP(BIGINT(), UNKNOWN()),
+      MAP(BIGINT(), MAP(BIGINT(), UNKNOWN())),
       // Timestamp and date types.
       TIMESTAMP(),
       DATE(),
@@ -139,7 +144,9 @@ TEST_F(UnsafeRowFuzzTests, fast) {
           {BOOLEAN(),
            ROW({INTEGER(), TIMESTAMP()}),
            VARCHAR(),
+           ROW({UNKNOWN()}),
            ARRAY(BIGINT())}),
+      ROW({UNKNOWN()}),
       ARRAY({ROW({BIGINT(), VARCHAR()})}),
       MAP(BIGINT(), ROW({BOOLEAN(), TINYINT(), REAL()})),
   });
