@@ -988,7 +988,8 @@ bool SubstraitToVeloxPlanValidator::validate(
       "covar_pop",
       "covar_pop_merge",
       "covar_samp",
-      "covar_samp_merge"};
+      "covar_samp_merge",
+      "approx_distinct"};
   for (const auto& funcSpec : funcSpecs) {
     auto funcName = subParser_->getSubFunctionName(funcSpec);
     if (supportedFuncs.find(funcName) == supportedFuncs.end()) {
