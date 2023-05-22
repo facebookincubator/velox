@@ -33,10 +33,12 @@
 #include <velox/vector/ComplexVector.h>
 #include <velox/vector/DictionaryVector.h>
 #include <velox/vector/FlatVector.h>
-#include <velox/vector/ComplexVector.h>
 #include "folly/json.h"
 
 #include "context.h"
+
+#include <velox/vector/tests/utils/VectorMaker.h>
+#include "velox/dwio/dwrf/writer/Writer.h"
 
 namespace facebook::velox::py {
 
@@ -508,15 +510,6 @@ static void addVectorBindings(
     return pyListToVector(list, PyVeloxContext::getSingletonInstance().pool());
   });
 
-  /// TODO: I think I may have to implement a PyRowVector interface and not override the destructor here
-  /// Need to check that, not sure what is the pure virtual method being called
-   py::class_<RowVector, BaseVector, RowVectorPtr>(m, "RowVector", py::module_local(asModuleLocalDefinitions))
-    .def("__len__", &RowVector::childrenSize)
-    .def(
-          "__getitem__",
-          [](RowVectorPtr& v, vector_size_t idx) {
-            return getVectorFromRowVectorPtr(v, idx);
-    });
   m.def(
       "constant_vector",
       [](const py::handle& obj, vector_size_t length, TypePtr type) {

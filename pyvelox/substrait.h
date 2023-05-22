@@ -27,7 +27,6 @@
 
 #include "velox/substrait/SubstraitToVeloxPlan.h"
 
-
 namespace facebook::velox::py {
 
 namespace py = pybind11;

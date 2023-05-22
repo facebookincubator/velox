@@ -15,9 +15,11 @@
  */
 
 #include <pybind11/stl.h>
-#include "velox/common/memory/Memory.h"
-#include "velox/core/QueryCtx.h"
-#include "velox/connectors/hive/HiveConnector.h"
+#include <velox/common/file/FileSystems.h>
+#include <velox/common/memory/Memory.h>
+#include <velox/connectors/hive/HiveConnector.h>
+#include <velox/core/QueryCtx.h>
+#include <velox/dwio/dwrf/reader/DwrfReader.h>
 
 namespace facebook::velox::py {
 
@@ -41,6 +43,9 @@ struct PyVeloxContext {
 
   facebook::velox::core::ExecCtx* execCtx() {
     return execCtx_.get();
+  }
+  facebook::velox::memory::MemoryPool* rootPool() {
+    return rootPool_.get();
   }
 
   static inline void cleanup() {
@@ -69,7 +74,6 @@ struct PyVeloxContext {
 };
 
 struct PySubstraitContext {
-
   PySubstraitContext() = default;
   PySubstraitContext(const PySubstraitContext&) = delete;
   PySubstraitContext(const PySubstraitContext&&) = delete;
@@ -85,10 +89,13 @@ struct PySubstraitContext {
 
   inline void initialize() {
     facebook::velox::connector::registerConnector(connector_);
+    filesystems::registerLocalFileSystem();
+    dwrf::registerDwrfReaderFactory();
   }
 
   inline void finalize() {
-    facebook::velox::connector::unregisterConnector("test-hive");
+    facebook::velox::connector::unregisterConnector(kConnectorId);
+    dwrf::unregisterDwrfReaderFactory();
   }
 
   static inline void cleanup() {
@@ -97,10 +104,13 @@ struct PySubstraitContext {
     }
   }
 
-  private:
-  std::shared_ptr<facebook::velox::connector::Connector> connector_ = connector::getConnectorFactory(
+ private:
+  const std::string kConnectorId =
+      "test-hive"; // same name used in SubstraitVeloxConverter
+  std::shared_ptr<facebook::velox::connector::Connector> connector_ =
+      connector::getConnectorFactory(
           connector::hive::HiveConnectorFactory::kHiveConnectorName)
-          ->newConnector("test-hive", nullptr);
+          ->newConnector(kConnectorId, nullptr);
 
   static inline std::unique_ptr<PySubstraitContext> instance_;
 };

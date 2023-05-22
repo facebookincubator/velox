@@ -22,61 +22,69 @@
 #include "velox/common/base/Exceptions.h"
 
 namespace facebook::velox::substrait {
-    // void readFromFile(
-    //     const std::string& msgPath,
-    //     google::protobuf::Message& msg) {
-    // // Read json file and resume the Substrait plan.
-    // std::ifstream msgJson(msgPath);
-    // VELOX_CHECK(
-    //     !msgJson.fail(), "Failed to open file: {}. {}", msgPath, strerror(errno));
-    // std::stringstream buffer;
-    // buffer << msgJson.rdbuf();
-    // std::string msgData = buffer.str();
-    // auto status = google::protobuf::util::JsonStringToMessage(msgData, &msg);
-    // VELOX_CHECK(
-    //     status.ok(),
-    //     "Failed to parse Substrait JSON: {} {}",
-    //     status.code(),
-    //     status.message());
-    // }
+// void readFromFile(
+//     const std::string& msgPath,
+//     google::protobuf::Message& msg) {
+// // Read json file and resume the Substrait plan.
+// std::ifstream msgJson(msgPath);
+// VELOX_CHECK(
+//     !msgJson.fail(), "Failed to open file: {}. {}", msgPath,
+//     strerror(errno));
+// std::stringstream buffer;
+// buffer << msgJson.rdbuf();
+// std::string msgData = buffer.str();
+// auto status = google::protobuf::util::JsonStringToMessage(msgData, &msg);
+// VELOX_CHECK(
+//     status.ok(),
+//     "Failed to parse Substrait JSON: {} {}",
+//     status.code(),
+//     status.message());
+// }
 
-    // VectorPtr RunQueryByFile(const std::string& planPath) {
-    //     std::shared_ptr<memory::MemoryPool> pool = memory::addDefaultLeafMemoryPool();
-    //     std::shared_ptr<facebook::velox::substrait::SubstraitVeloxPlanConverter> planConverter =
-    //     std::make_shared<facebook::velox::substrait::SubstraitVeloxPlanConverter>(pool.get());
+// VectorPtr RunQueryByFile(const std::string& planPath) {
+//     std::shared_ptr<memory::MemoryPool> pool =
+//     memory::addDefaultLeafMemoryPool();
+//     std::shared_ptr<facebook::velox::substrait::SubstraitVeloxPlanConverter>
+//     planConverter =
+//     std::make_shared<facebook::velox::substrait::SubstraitVeloxPlanConverter>(pool.get());
 
-    //     ::substrait::Plan substraitPlan;
-    //     readFromFile(planPath, substraitPlan);
+//     ::substrait::Plan substraitPlan;
+//     readFromFile(planPath, substraitPlan);
 
-    //     auto veloxPlan = planConverter->toVeloxPlan(substraitPlan);
-    //     auto fragment = std::make_shared<facebook::velox::core::PlanFragment>(veloxPlan);
+//     auto veloxPlan = planConverter->toVeloxPlan(substraitPlan);
+//     auto fragment =
+//     std::make_shared<facebook::velox::core::PlanFragment>(veloxPlan);
 
-    //     std::shared_ptr<folly::Executor> executor(std::make_shared<folly::CPUThreadPoolExecutor>(1));
+//     std::shared_ptr<folly::Executor>
+//     executor(std::make_shared<folly::CPUThreadPoolExecutor>(1));
 
-    //     auto substrait_task = std::make_shared<facebook::velox::exec::Task>(
-    //         "substrait_task", *fragment, 0,
-    //         std::make_shared<facebook::velox::core::QueryCtx>(executor.get()));
+//     auto substrait_task = std::make_shared<facebook::velox::exec::Task>(
+//         "substrait_task", *fragment, 0,
+//         std::make_shared<facebook::velox::core::QueryCtx>(executor.get()));
 
-    //     auto result = substrait_task->next();
+//     auto result = substrait_task->next();
 
-    //     while (auto tmp = substrait_task->next()) {
-    //     }
-    //     return result->childAt(0);
-    // }
+//     while (auto tmp = substrait_task->next()) {
+//     }
+//     return result->childAt(0);
+// }
 
-    // VectorPtr RunQueryByFileV2(const std::string& planPath) {
-    //     return 
-    // }
+// VectorPtr RunQueryByFileV2(const std::string& planPath) {
+//     return
+// }
 
-    // RowVectorPtr RunQueryByFileV1(const std::string& planPath) {
-    //     std::shared_ptr<memory::MemoryPool> pool = memory::getDefaultMemoryPool();
-    //     std::shared_ptr<facebook::velox::substrait::SubstraitVeloxPlanConverter> planConverter =
-    //     std::make_shared<facebook::velox::substrait::SubstraitVeloxPlanConverter>(pool.get());
+// RowVectorPtr RunQueryByFileV1(const std::string& planPath) {
+//     std::shared_ptr<memory::MemoryPool> pool =
+//     memory::getDefaultMemoryPool();
+//     std::shared_ptr<facebook::velox::substrait::SubstraitVeloxPlanConverter>
+//     planConverter =
+//     std::make_shared<facebook::velox::substrait::SubstraitVeloxPlanConverter>(pool.get());
 
-    //     ::substrait::Plan substraitPlan;
-    //     readFromFile(planPath, substraitPlan);
+//     ::substrait::Plan substraitPlan;
+//     readFromFile(planPath, substraitPlan);
 
-    //     auto planNode = planConverter->toVeloxPlan(substraitPlan);
-    //     return facebook::velox::exec::test::AssertQueryBuilder(planNode).copyResults(pool.get());
-    // }
-}
+//     auto planNode = planConverter->toVeloxPlan(substraitPlan);
+//     return
+//     facebook::velox::exec::test::AssertQueryBuilder(planNode).copyResults(pool.get());
+// }
+} // namespace facebook::velox::substrait

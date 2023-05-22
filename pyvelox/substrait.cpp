@@ -15,29 +15,28 @@
  */
 
 #include "substrait.h" // @manual
+#include <google/protobuf/util/json_util.h>
+#include <velox/exec/tests/utils/AssertQueryBuilder.h>
+#include <velox/exec/tests/utils/HiveConnectorTestBase.h>
+#include <velox/exec/tests/utils/TempDirectoryPath.h>
+#include <velox/functions/prestosql/aggregates/RegisterAggregateFunctions.h>
+#include <velox/functions/prestosql/registration/RegistrationFunctions.h>
+#include <velox/substrait/SubstraitExecutor.h>
+#include <fstream>
+#include <iostream>
+#include <sstream>
 #include "context.h"
 #include "signatures.h" /// TODO: remove
-#include <google/protobuf/util/json_util.h>
-#include <fstream>
-#include <sstream>
 #include "velox/common/base/Exceptions.h"
-#include <velox/substrait/SubstraitExecutor.h>
-#include <velox/exec/tests/utils/AssertQueryBuilder.h>
-#include <velox/functions/prestosql/registration/RegistrationFunctions.h>
-#include "velox/functions/prestosql/aggregates/RegisterAggregateFunctions.h"
-#include "velox/exec/tests/utils/TempDirectoryPath.h"
-#include "velox/exec/tests/utils/HiveConnectorTestBase.h"
-#include <iostream>
-
 
 namespace facebook::velox::py {
 
 namespace py = pybind11;
 
 static void readFromFile(
-      const std::string& msgPath,
-      google::protobuf::Message& msg) {
-    // Read json file and resume the Substrait plan.
+    const std::string& msgPath,
+    google::protobuf::Message& msg) {
+  // Read json file and resume the Substrait plan.
   std::ifstream msgJson(msgPath);
   VELOX_CHECK(
       !msgJson.fail(), "Failed to open file: {}. {}", msgPath, strerror(errno));
@@ -52,43 +51,7 @@ static void readFromFile(
       status.message());
 }
 
-// RowVectorPtr runSubstraitQuery(const std::string& planPath) {
-//   memory::MemoryPool* pool = PyVeloxContext::getInstance().pool();
-
-//   std::shared_ptr<facebook::velox::substrait::SubstraitVeloxPlanConverter> planConverter =
-//       std::make_shared<facebook::velox::substrait::SubstraitVeloxPlanConverter>(pool);
-
-//   ::substrait::Plan substraitPlan;
-//   readFromFile(planPath, substraitPlan);
-
-//   auto veloxPlan = planConverter->toVeloxPlan(substraitPlan);
-//   auto fragment = std::make_shared<facebook::velox::core::PlanFragment>(veloxPlan);
-//   std::shared_ptr<folly::Executor> executor(std::make_shared<folly::CPUThreadPoolExecutor>(1));
-//   auto queryCtx = std::make_shared<facebook::velox::core::QueryCtx>(executor.get());
-//   auto substrait_task = facebook::velox::exec::Task::create(
-//           "0", *fragment, 0, std::move(queryCtx));
-
-//   substrait_task->noMoreSplits("0");
-  
-//   auto result = substrait_task->next();
-
-//   while (auto tmp = substrait_task->next()) {
-//   }
-//   std::chrono::microseconds execution_timeout(100);
-//   while (!substrait_task->isFinished()) {
-//     auto& inline_executor = folly::QueuedImmediateExecutor::instance();
-//     auto task_future =
-//         substrait_task->stateChangeFuture(execution_timeout.count()).via(&inline_executor);
-//     task_future.wait();
-//   }
-//   return result;
-// }
-
 static inline void initializeSubstrait() {
-  // auto connector = connector::getConnectorFactory(
-  //         connector::hive::HiveConnectorFactory::kHiveConnectorName)
-  //         ->newConnector("test-hive", nullptr);
-  // facebook::velox::connector::registerConnector(connector);
   PySubstraitContext::getInstance().initialize();
 }
 
@@ -97,10 +60,10 @@ static inline void finalizeSubstrait() {
 }
 
 std::vector<std::shared_ptr<facebook::velox::connector::ConnectorSplit>>
-  makeSplits(
+makeSplits(
     const facebook::velox::substrait::SubstraitVeloxPlanConverter& converter,
     std::shared_ptr<const core::PlanNode> planNode,
-    std::shared_ptr<exec::test::TempDirectoryPath>& tmpDir) {
+    const std::string& dirPath) {
   const auto& splitInfos = converter.splitInfos();
   auto leafPlanNodeIds = planNode->leafPlanNodeIds();
   // Only one leaf node is expected here.
@@ -117,48 +80,56 @@ std::vector<std::shared_ptr<facebook::velox::connector::ConnectorSplit>>
   splits.reserve(paths.size());
 
   for (int i = 0; i < paths.size(); i++) {
-    auto path = fmt::format("{}{}", tmpDir->path, paths[i]);
+    auto path = fmt::format("{}{}", dirPath, paths[i]);
     auto start = starts[i];
     auto length = lengths[i];
     auto split = facebook::velox::exec::test::HiveConnectorSplitBuilder(path)
-                      .fileFormat(fileFormat)
-                      .start(start)
-                      .length(length)
-                      .build();
+                     .fileFormat(fileFormat)
+                     .start(start)
+                     .length(length)
+                     .build();
     splits.emplace_back(split);
   }
   return splits;
 }
 
-static inline RowVectorPtr runSubstraitQuery(const std::string& planPath, bool enableSplits) {
+static inline RowVectorPtr runSubstraitQuery(
+    const std::string& planPath,
+    bool enableSplits,
+    const std::string& dirPath) {
   memory::MemoryPool* pool = PyVeloxContext::getInstance().pool();
-  
-  //PySubstraitContext::initialize();
-  /// TODO: wrap this in a struct and see if we get the calling pure virtual function error
-  /// Here we need a initialize function to call the register and destructor to call the unregister
-  /// then we can register the connector properly. This would require a class. May be do this in the
-  /// constructor and destructor of the converter in Substrait API.
-  
+
+  // PySubstraitContext::initialize();
+  /// TODO: wrap this in a struct and see if we get the calling pure virtual
+  /// function error Here we need a initialize function to call the register and
+  /// destructor to call the unregister then we can register the connector
+  /// properly. This would require a class. May be do this in the constructor
+  /// and destructor of the converter in Substrait API.
+
+  // filesystems::registerLocalFileSystem();
+  // dwrf::registerDwrfReaderFactory();
+
   facebook::velox::substrait::SubstraitVeloxPlanConverter planConverter(pool);
 
   ::substrait::Plan substraitPlan;
   readFromFile(planPath, substraitPlan);
 
   auto planNode = planConverter.toVeloxPlan(substraitPlan);
-  //connector::unregisterConnector("test-hive");
-  if(enableSplits) {
-    std::shared_ptr<exec::test::TempDirectoryPath> tmpDir{
-      exec::test::TempDirectoryPath::create()};
-    return facebook::velox::exec::test::AssertQueryBuilder(planNode).splits(makeSplits(planConverter, planNode, tmpDir)).copyResults(pool);
+  // connector::unregisterConnector("test-hive");
+  if (enableSplits) {
+    return facebook::velox::exec::test::AssertQueryBuilder(planNode)
+        .splits(makeSplits(planConverter, planNode, dirPath))
+        .copyResults(pool);
   } else {
-    return facebook::velox::exec::test::AssertQueryBuilder(planNode).copyResults(pool);
+    return facebook::velox::exec::test::AssertQueryBuilder(planNode)
+        .copyResults(pool);
   }
 }
 
-// static inline VectorPtr runSubstraitQueryByFile(const std::string& planPath) {
+// static inline VectorPtr runSubstraitQueryByFile(const std::string& planPath)
+// {
 //   return facebook::velox::substrait::RunQueryByFile(planPath);
 // }
-
 
 void addSubstraitBindings(py::module& m, bool asModuleLocalDefinitions) {
   using namespace facebook::velox;
@@ -171,11 +142,13 @@ void addSubstraitBindings(py::module& m, bool asModuleLocalDefinitions) {
   m.def(
       "run_substrait_query",
       &runSubstraitQuery,
-      "Runs a Substrait query and return output.");
+      "Runs a Substrait query and return output.",
+      py::arg("plan_path"),
+      py::arg("enable_splits") = false,
+      py::arg("dir_path") = "");
   m.def(
       "finalize_substrait",
       &finalizeSubstrait,
       "Finalizes the modules required for Substrait.");
-
 }
 } // namespace facebook::velox::py

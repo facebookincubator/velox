@@ -13,7 +13,8 @@
 # limitations under the License.
 if(VELOX_BUILD_PYTHON_PACKAGE)
   message("Creating pyvelox module")
-  include_directories(SYSTEM ${CMAKE_SOURCE_DIR} ${Protobuf_INCLUDE_DIRS} ${CMAKE_SOURCE_DIR}/velox/external/xxhash)
+  include_directories(SYSTEM ${CMAKE_SOURCE_DIR} ${Protobuf_INCLUDE_DIRS}
+                      ${CMAKE_SOURCE_DIR}/velox/external/xxhash)
   add_definitions(-DCREATE_PYVELOX_MODULE -DVELOX_DISABLE_GOOGLETEST)
   # Define our Python module:
   pybind11_add_module(pyvelox MODULE pyvelox.cpp serde.cpp signatures.cpp
@@ -35,8 +36,7 @@ if(VELOX_BUILD_PYTHON_PACKAGE)
             velox_functions_prestosql
             velox_functions_spark
             ${Protobuf_LIBRARIES}
-            velox_substrait_plan_converter
-            )
+            velox_substrait_plan_converter)
 
   install(TARGETS pyvelox LIBRARY DESTINATION .)
 else()

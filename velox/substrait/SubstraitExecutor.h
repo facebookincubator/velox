@@ -26,7 +26,7 @@
 
 #include <google/protobuf/util/json_util.h>
 
-#include<iostream>
+#include <iostream>
 
 using namespace facebook::velox;
 using namespace facebook::velox::test;
@@ -36,10 +36,9 @@ using namespace facebook::velox::substrait;
 
 namespace facebook::velox::substrait {
 
-    void readFromFile(const std::string& msgPath, google::protobuf::Message& msg);
+void readFromFile(const std::string& msgPath, google::protobuf::Message& msg);
 
-    
-    VectorPtr RunQueryByFile(const std::string& planPath);
-    //RowVectorPtr RunQueryByFileV1(const std::string& planPath);
-    void RunQueryByFileV2(const std::string& planPath);
-}
+VectorPtr RunQueryByFile(const std::string& planPath);
+// RowVectorPtr RunQueryByFileV1(const std::string& planPath);
+void RunQueryByFileV2(const std::string& planPath);
+} // namespace facebook::velox::substrait
