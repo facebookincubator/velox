@@ -123,4 +123,35 @@ struct SIMDJsonArrayContainsFunction {
   }
 };
 
+template <typename T>
+struct SIMDJsonArrayLengthFunction {
+  VELOX_DEFINE_FUNCTION_TYPES(T);
+
+  FOLLY_ALWAYS_INLINE bool call(int64_t& len, const arg_type<Json>& json) {
+    ParserContext ctx(json.data(), json.size());
+    bool result = false;
+
+    try {
+      ctx.parseDocument();
+    } catch (simdjson::simdjson_error& e) {
+      return result;
+    }
+
+    if (ctx.jsonDoc.type() != simdjson::ondemand::json_type::array) {
+      return result;
+    }
+
+    len = 0;
+    try {
+      for (auto&& v : ctx.jsonDoc) {
+        len++;
+      }
+      result = true;
+    } catch (simdjson::simdjson_error& e) {
+      return result;
+    }
+    return result;
+  }
+};
+
 } // namespace facebook::velox::functions

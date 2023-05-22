@@ -43,6 +43,10 @@ class JsonBenchmark : public velox::functions::test::FunctionBenchmarkBase {
         {"folly_json_array_contains"});
     registerFunction<SIMDJsonArrayContainsFunction, bool, Json, bool>(
         {"simd_json_array_contains"});
+    registerFunction<JsonArrayLengthFunction, int64_t, Json>(
+        {"folly_json_array_length"});
+    registerFunction<SIMDJsonArrayLengthFunction, int64_t, Json>(
+        {"simd_json_array_length"});
   }
 
   std::string prepareData(int jsonSize) {
@@ -142,6 +146,24 @@ void SIMDJsonArrayContains(int iter, int vectorSize, int jsonSize) {
       iter, vectorSize, "simd_json_array_contains", json);
 }
 
+void FollyJsonArrayLength(int iter, int vectorSize, int jsonSize) {
+  folly::BenchmarkSuspender suspender;
+  JsonBenchmark benchmark;
+  auto json = benchmark.prepareData(jsonSize);
+  suspender.dismiss();
+  benchmark.runWithJson(
+      iter, vectorSize, "folly_json_array_length", json);
+}
+
+void SIMDJsonArrayLength(int iter, int vectorSize, int jsonSize) {
+  folly::BenchmarkSuspender suspender;
+  JsonBenchmark benchmark;
+  auto json = benchmark.prepareData(jsonSize);
+  suspender.dismiss();
+  benchmark.runWithJson(
+      iter, vectorSize, "simd_json_array_length", json);
+}
+
 BENCHMARK_DRAW_LINE();
 
 BENCHMARK_NAMED_PARAM(FollyIsJsonScalar, 100_iters_10bytes_size, 100, 10);
@@ -216,6 +238,51 @@ BENCHMARK_NAMED_PARAM(
     10000);
 BENCHMARK_RELATIVE_NAMED_PARAM(
     SIMDJsonArrayContains,
+    100_iters_10000bytes_size,
+    100,
+    10000);
+BENCHMARK_DRAW_LINE();
+
+BENCHMARK_DRAW_LINE();
+BENCHMARK_NAMED_PARAM(FollyJsonArrayLength, 100_iters_10bytes_size, 100, 10);
+BENCHMARK_RELATIVE_NAMED_PARAM(
+    SIMDJsonArrayLength,
+    100_iters_10bytes_size,
+    100,
+    10);
+BENCHMARK_DRAW_LINE();
+
+BENCHMARK_NAMED_PARAM(
+    FollyJsonArrayLength,
+    100_iters_100bytes_size,
+    100,
+    100);
+BENCHMARK_RELATIVE_NAMED_PARAM(
+    SIMDJsonArrayLength,
+    100_iters_100bytes_size,
+    100,
+    100);
+BENCHMARK_DRAW_LINE();
+
+BENCHMARK_NAMED_PARAM(
+    FollyJsonArrayLength,
+    100_iters_1000bytes_size,
+    100,
+    1000);
+BENCHMARK_RELATIVE_NAMED_PARAM(
+    SIMDJsonArrayLength,
+    100_iters_1000bytes_size,
+    100,
+    1000);
+BENCHMARK_DRAW_LINE();
+
+BENCHMARK_NAMED_PARAM(
+    FollyJsonArrayLength,
+    100_iters_10000bytes_size,
+    100,
+    10000);
+BENCHMARK_RELATIVE_NAMED_PARAM(
+    SIMDJsonArrayLength,
     100_iters_10000bytes_size,
     100,
     10000);

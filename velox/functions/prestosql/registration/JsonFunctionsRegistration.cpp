@@ -26,7 +26,7 @@ void registerJsonFunctions(const std::string& prefix) {
       {prefix + "is_json_scalar"});
   registerFunction<JsonExtractScalarFunction, Varchar, Json, Varchar>(
       {prefix + "json_extract_scalar"});
-  registerFunction<JsonArrayLengthFunction, int64_t, Json>(
+  registerFunction<SIMDJsonArrayLengthFunction, int64_t, Json>(
       {prefix + "json_array_length"});
   registerFunction<SIMDJsonArrayContainsFunction, bool, Json, bool>(
       {prefix + "json_array_contains"});
