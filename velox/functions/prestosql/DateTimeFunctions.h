@@ -1102,19 +1102,20 @@ template <typename T>
 struct CurrentTimeFunction {
   VELOX_DEFINE_FUNCTION_TYPES(T);
 
-  const date::time_zone* sessionTimeZone_ = nullptr;
+  const date::time_zone* sessionTimeZone = nullptr;
 
   FOLLY_ALWAYS_INLINE void initialize(const core::QueryConfig& config) {
-    sessionTimeZone_ = getTimeZoneFromConfig(config);
+    sessionTimeZone = getTimeZoneFromConfig(config);
   }
 
   FOLLY_ALWAYS_INLINE void call(out_type<Varchar>& result) {
     Timestamp ts = Timestamp::now();
-    if (sessionTimeZone_ != nullptr) {
-      ts.toTimezone(*sessionTimeZone_);
+    if (sessionTimeZone != nullptr) {
+      ts.toTimezone(*sessionTimeZone);
     }
 
-    std::string tsString = ts.toString(Timestamp::Precision::kMilliseconds, 1);
+    std::string tsString =
+        ts.toString(Timestamp::Precision::kMilliseconds, true);
 
     result.resize(tsString.size());
     std::memcpy(result.data(), tsString.data(), tsString.size());

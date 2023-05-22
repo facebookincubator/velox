@@ -240,7 +240,7 @@ class DateTimeFunctionsTest : public functions::test::FunctionBaseTest {
     if (timeZone.has_value()) {
       ts.toTimezone(util::getTimeZoneID(timeZone.value()));
     }
-    return ts.toString(Timestamp::Precision::kMilliseconds, 1);
+    return ts.toString(Timestamp::Precision::kMilliseconds, true);
   }
 };
 
@@ -2867,14 +2867,14 @@ TEST_F(DateTimeFunctionsTest, dateParse) {
 }
 
 TEST_F(DateTimeFunctionsTest, currentTimeTest) {
-  auto emptyRowVector = makeRowVector(ROW({}), 1);
   auto tz = "America/Los_Angeles";
   setQueryTimeZone(tz);
-  auto currentTimeBefore = getCurrentTime(tz);
-  auto result = evaluateOnce<std::string>("current_time", emptyRowVector);
-  auto currentTimeAfter = getCurrentTime(tz);
-  EXPECT_LE(currentTimeBefore, result);
-  EXPECT_GE(currentTimeAfter, result);
+  auto before = getCurrentTime(tz);
+  auto result =
+      evaluateOnce<std::string>("current_time", makeRowVector(ROW({}), 1));
+  auto after = getCurrentTime(tz);
+  EXPECT_LE(before, result);
+  EXPECT_GE(after, result);
 }
 
 TEST_F(DateTimeFunctionsTest, dateFunctionVarchar) {

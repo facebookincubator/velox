@@ -149,7 +149,7 @@ struct Timestamp {
 
   std::string toString(
       const Precision& precision = Precision::kNanoseconds,
-      int timeWithTimezoneFormatFlag = 0) const {
+      bool printTimezone = false) const {
     // mbasmanova: error: no matching function for call to 'gmtime_r'
     // mbasmanova: time_t is long not long long
     // struct tm tmValue;
@@ -172,12 +172,12 @@ struct Timestamp {
     auto width = static_cast<int>(precision);
     auto value =
         precision == Precision::kMilliseconds ? nanos_ / 1'000'000 : nanos_;
-    auto formatStr = timeWithTimezoneFormatFlag == 1 ? "%T" : "%FT%T";
+    auto formatStr = printTimezone ? "%T" : "%FT%T";
     std::ostringstream oss;
     oss << std::put_time(bt, formatStr);
     oss << '.' << std::setfill('0') << std::setw(width) << value;
 
-    if (timeWithTimezoneFormatFlag == 1) {
+    if (printTimezone) {
       oss << " " << std::put_time(bt, "%Z"); // HH:MM:SS.ZZZ UTC
     }
 
