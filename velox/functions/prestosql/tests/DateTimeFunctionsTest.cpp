@@ -234,6 +234,14 @@ class DateTimeFunctionsTest : public functions::test::FunctionBaseTest {
                   timeZone.value(), std::chrono::system_clock::now())
             : std::chrono::system_clock::now()));
   }
+
+  std::string getCurrentTime(const std::optional<std::string>& timeZone) {
+    auto ts = Timestamp::now();
+    if (timeZone.has_value()) {
+      ts.toTimezone(util::getTimeZoneID(timeZone.value()));
+    }
+    return ts.toString(Timestamp::Precision::kMilliseconds, 1);
+  }
 };
 
 bool operator==(
@@ -2862,8 +2870,11 @@ TEST_F(DateTimeFunctionsTest, currentTimeTest) {
   auto emptyRowVector = makeRowVector(ROW({}), 1);
   auto tz = "America/Los_Angeles";
   setQueryTimeZone(tz);
+  auto currentTimeBefore = getCurrentTime(tz);
   auto result = evaluateOnce<std::string>("current_time", emptyRowVector);
-  // EXPECT_EQ("19:51:34.241 UTC", result);
+  auto currentTimeAfter = getCurrentTime(tz);
+  EXPECT_LE(currentTimeBefore, result);
+  EXPECT_GE(currentTimeAfter, result);
 }
 
 TEST_F(DateTimeFunctionsTest, dateFunctionVarchar) {

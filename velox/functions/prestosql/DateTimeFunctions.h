@@ -1110,7 +1110,9 @@ struct CurrentTimeFunction {
 
   FOLLY_ALWAYS_INLINE void call(out_type<Varchar>& result) {
     Timestamp ts = Timestamp::now();
-    ts.toTimezone(*sessionTimeZone_);
+    if (sessionTimeZone_ != nullptr) {
+      ts.toTimezone(*sessionTimeZone_);
+    }
 
     std::string tsString = ts.toString(Timestamp::Precision::kMilliseconds, 1);
 
