@@ -28,7 +28,19 @@ namespace facebook::velox::substrait {
 class SubstraitVeloxPlanConverter {
  public:
   explicit SubstraitVeloxPlanConverter(memory::MemoryPool* pool)
-      : pool_(pool) {}
+      : pool_(pool) {
+        auto connectorId = "test-hive";
+        
+        auto hiveConnector =
+        connector::getConnectorFactory(
+          connector::hive::HiveConnectorFactory::kHiveConnectorName)
+          ->newConnector(connectorId, nullptr);
+        connector::registerConnector(hiveConnector);
+    }
+
+ ~SubstraitVeloxPlanConverter() {
+    connector::unregisterConnector("test-hive");
+ }
   struct SplitInfo {
     /// The Partition index.
     u_int32_t partitionIndex;

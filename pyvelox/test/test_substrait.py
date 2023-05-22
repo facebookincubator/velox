@@ -16,7 +16,7 @@ class TestVeloxSubstrait(unittest.TestCase):
     def test_simple(self):
         other_path = BASE_PATH + "substrait_virtualTable.json"
         print("*" * 80)
-        res = pv.run_substrait_query(other_path)
+        res = pv.run_substrait_query(other_path, False)
         print(res)
         print(dir(res))
         print(len(res))
@@ -36,10 +36,11 @@ class TestVeloxSubstrait(unittest.TestCase):
                 assert vec[i] == exp_vec[i]
                 
     def test_aggregates(self):
-        
-        plan_path = BASE_PATH + "q6_first_stage.json"
+        substrait_plan = "substrait_virtualTable.json"
+        substrait_other_plan = "q6_first_stage.json"
+        plan_path = BASE_PATH + substrait_other_plan
         print("*" * 80)
-        res = pv.run_substrait_query(plan_path)
+        res = pv.run_substrait_query(plan_path, True)
         print(res)
         print(dir(res))
         print(len(res))
