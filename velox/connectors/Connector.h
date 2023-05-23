@@ -175,6 +175,10 @@ class DataSource {
   virtual int64_t estimatedRowSize() {
     return kUnknownRowSize;
   }
+
+  // free all resource associated with datasource 
+  virtual void close() {
+  }
 };
 
 /// Collection of context data for use in a DataSource or DataSink. One instance

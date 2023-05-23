@@ -56,6 +56,8 @@ class TableScan : public SourceOperator {
     return ioWaitNanos_;
   }
 
+  void close() override;
+
  private:
   // Sets 'maxPreloadSplits' and 'splitPreloader' if prefetching
   // splits is appropriate. The preloader will be applied to the
