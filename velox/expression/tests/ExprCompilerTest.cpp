@@ -224,4 +224,12 @@ TEST_F(ExprCompilerTest, customTypeConstant) {
   ASSERT_EQ("[1, 2, 3]:JSON", compile(expression)->toString());
 }
 
+TEST_F(ExprCompilerTest, customTypeConstant222) {
+  auto expression =
+      std::make_shared<core::ConstantTypedExpr>(VARCHAR(), "[1, 2, 3]");
+
+  auto exprSet = compile(expression);
+  ASSERT_EQ("[1, 2, 3]:JSON", compile(expression)->toString());
+}
+
 } // namespace facebook::velox::exec::test
