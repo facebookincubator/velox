@@ -176,7 +176,7 @@ class DataSource {
     return kUnknownRowSize;
   }
 
-  // free all resource associated with datasource 
+  // free all resource associated with datasource
   virtual void close() {}
 };
 
