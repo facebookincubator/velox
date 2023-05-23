@@ -146,14 +146,7 @@ bool SubstraitToVeloxPlanValidator::validateScalarFunction(
       return false;
     }
   }
-  if (name == "murmur3hash") {
-    for (const auto& type : types) {
-      if (type == "ts") {
-        VLOG(1) << "Timestamp type is not supported in " << name << ".";
-        return false;
-      }
-    }
-  }
+
   std::unordered_set<std::string> functions = {
       "regexp_replace",    "split",         "split_part",
       "factorial",         "concat_ws",     "rand",
