@@ -177,8 +177,7 @@ class DataSource {
   }
 
   // free all resource associated with datasource 
-  virtual void close() {
-  }
+  virtual void close() {}
 };
 
 /// Collection of context data for use in a DataSource or DataSink. One instance
