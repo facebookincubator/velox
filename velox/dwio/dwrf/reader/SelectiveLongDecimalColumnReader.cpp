@@ -69,15 +69,11 @@ void scaleInt128(int128_t& value, uint32_t scale, uint32_t currentScale) {
       currentScale += scaleAdjust;
     }
   } else if (scale < currentScale) {
-    int128_t remainder;
     while (currentScale > scale) {
       uint32_t scaleAdjust = std::min(
           SelectiveShortDecimalColumnReader::MAX_PRECISION_64,
           currentScale - scale);
-      // TODO: YYM
-      // value =
-      // value.divide(SelectiveShortDecimalColumnReader::POWERS_OF_TEN[scaleAdjust],
-      // remainder);
+      value /= SelectiveShortDecimalColumnReader::POWERS_OF_TEN[scaleAdjust];
       currentScale -= scaleAdjust;
     }
   }
