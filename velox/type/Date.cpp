@@ -27,15 +27,16 @@ std::string Date::toString() const {
   // Find the number of seconds for the days_;
   // Casting 86400 to int64 to handle overflows gracefully.
   int64_t daySeconds = days_ * (int64_t)(86400);
-  auto tmValue = gmtime((const time_t*)&daySeconds);
-  if (!tmValue) {
-    VELOX_FAIL("Can't convert days to dates: {}", days_);
-  }
+  std::tm tmValue;
+  VELOX_USER_CHECK_NOT_NULL(
+      gmtime_r((const time_t*)&daySeconds, &tmValue),
+      "Can't convert days to dates: {}",
+      days_);
 
   // return ISO 8601 time format.
   // %F - equivalent to "%Y-%m-%d" (the ISO 8601 date format)
   std::ostringstream oss;
-  oss << std::put_time(tmValue, "%F");
+  oss << std::put_time(&tmValue, "%F");
   return oss.str();
 }
 
