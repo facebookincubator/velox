@@ -59,6 +59,25 @@ Unless specified otherwise, all functions return NULL if at least one of the arg
 
         SELECT ltrim('ps', 'spark'); -- "ark"
 
+.. spark:function:: overlay(input, replace, pos, len) -> same as input
+
+    Replace a substring of ``input`` starting at ``pos`` character with ``replace`` and
+    going for rest ``len`` characters of ``input``.
+    ``input`` has same type with ``replace``, can be varchar or varbinary, when ``input`` is varchar,
+    ``len`` is in characters, if ``input`` is varbinary, ``len`` is in bytes.
+    First part is first pos - 1 characters of ``input``, ``pos`` is 1-based. The value of 1,
+    zero or negative indicates the start of the input.
+    Second part is ``replace``.
+    Third part is rest of ``input`` from pos + len, if ``len`` is negative, it will be set to size of ``replace``,
+    if pos + len is negative, it refers to -(pos + len)th element before the end of ``input``.
+    ::
+
+        SELECT overlay('Spark SQL', '_', 6, -1); -- "Spark_SQL"
+        SELECT overlay('Spark SQL', 'CORE', 7, -1); -- "Spark CORE"
+        SELECT overlay('Spark SQL', 'ANSI ', 7, 0); -- "Spark ANSI SQL"
+        SELECT overlay('Spark SQL', 'tructured', 2, 4); -- "Structured SQL"
+        SELECT overlay('Spark SQL', '_', -6, 3); -- "_Sql"
+
 .. spark:function:: replace(string, search, replace) -> string
 
     Replaces all occurrences of `search` with `replace`. ::
