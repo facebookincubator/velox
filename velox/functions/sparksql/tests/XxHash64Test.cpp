@@ -26,6 +26,11 @@ class XxHash64Test : public SparkFunctionBaseTest {
   std::optional<int64_t> xxhash64(std::optional<T> arg) {
     return evaluateOnce<int64_t>("xxhash64(c0)", arg);
   }
+
+  template <typename T, typename Seed>
+  std::optional<int64_t> xxhash64WithSeed(Seed seed, std::optional<T> arg) {
+    return evaluateOnce<int64_t>(fmt::format("xxhash64({}, c0)", seed), arg);
+  }
 };
 
 // The expected result was obtained by running SELECT xxhash64("Spark") query
@@ -118,5 +123,27 @@ TEST_F(XxHash64Test, float) {
   EXPECT_EQ(xxhash64<float>(limits::infinity()), -5940311692336719973);
   EXPECT_EQ(xxhash64<float>(-limits::infinity()), -7580553461823983095);
 }
+
+TEST_F(XxHash64Test, hashSeed) {
+  using long_limits = std::numeric_limits<int64_t>;
+  using int_limits = std::numeric_limits<int32_t>;
+  std::vector<int64_t> seeds = {
+      long_limits::min(),
+      static_cast<int64_t>(int_limits::min()) - 1L,
+      0L,
+      static_cast<int64_t>(int_limits::max()) + 1L,
+      long_limits::max()};
+  std::vector<int64_t> expected = {
+      -6671470883434376173,
+      8765374525824963196,
+      -5379971487550586029,
+      8810073187160811495,
+      4605443450566835086};
+
+  for (auto i = 0; i < seeds.size(); ++i) {
+    EXPECT_EQ(xxhash64WithSeed<int64_t>(seeds[i], 42), expected[i]);
+  }
+}
+
 } // namespace
 } // namespace facebook::velox::functions::sparksql::test
