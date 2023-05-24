@@ -210,4 +210,21 @@ TEST_F(ArrayConstructorTest, literals) {
       VeloxUserError);
 }
 
+TEST_F(ArrayConstructorTest, singleArg) {
+  vector_size_t size = 1'000;
+
+  // mix flat and constant encodings
+  auto a = makeFlatVector<int64_t>(size, [](vector_size_t row) { return row; });
+  auto result =
+      evaluate<ArrayVector>("array_constructor(c0)", makeRowVector({a}));
+  auto resultElements = result->elements()->asFlatVector<int64_t>();
+  for (vector_size_t row = 0; row < result->size(); row++) {
+    ASSERT_FALSE(result->isNullAt(row)) << "at " << row;
+    ASSERT_EQ(1, result->sizeAt(row)) << "at " << row;
+    ASSERT_EQ(row, result->offsetAt(row)) << "at " << row;
+    ASSERT_FALSE(resultElements->isNullAt(row)) << "at " << row;
+    ASSERT_EQ(a->valueAt(row), resultElements->valueAt(row)) << "at " << row;
+  }
+}
+
 } // namespace

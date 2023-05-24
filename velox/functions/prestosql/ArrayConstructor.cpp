@@ -54,7 +54,7 @@ class ArrayConstructor : public exec::VectorFunction {
     auto offsets = arrayResult->mutableOffsets(rows.end());
     auto rawOffsets = offsets->asMutable<int32_t>();
 
-    auto elementsResult = arrayResult->elements();
+    auto& elementsResult = arrayResult->elements();
 
     // append to the end of the "elements" vector
     auto baseOffset = elementsResult->size();
@@ -64,6 +64,13 @@ class ArrayConstructor : public exec::VectorFunction {
         rawSizes[row] = 0;
         rawOffsets[row] = baseOffset;
       });
+    } else if (numArgs == 1) {
+      rows.applyToSelected([&](vector_size_t row) {
+        rawSizes[row] = 1;
+        rawOffsets[row] = row;
+      });
+
+      context.moveOrCopyResult(args[0], rows, elementsResult);
     } else {
       elementsResult->resize(baseOffset + numArgs * rows.countSelected());
 
@@ -76,6 +83,7 @@ class ArrayConstructor : public exec::VectorFunction {
         }
       });
     }
+
     if (localResult != finalResults) {
       context.moveOrCopyResult(localResult, rows, finalResults);
     }
