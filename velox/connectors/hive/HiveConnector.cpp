@@ -571,6 +571,7 @@ void HiveDataSource::addSplit(std::shared_ptr<ConnectorSplit> split) {
     runtimeStats_.skippedSplitBytes += split_->length;
     return;
   }
+  ++runtimeStats_.processedSplits;
 
   auto& fileType = reader_->rowType();
 

@@ -29,9 +29,6 @@ class TimestampColumnReader : public IntegerColumnReader {
       common::ScanSpec& scanSpec)
       : IntegerColumnReader(nodeType, nodeType, params, scanSpec) {}
 
-  static constexpr int64_t JULIAN_TO_UNIX_EPOCH_DAYS = 2440588LL;
-  static constexpr int64_t SECONDS_PER_DAY = 86400LL;
-
   void read(
       vector_size_t offset,
       RowSet rows,
