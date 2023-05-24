@@ -108,49 +108,31 @@ class MakeDecimalFunction final : public exec::VectorFunction {
     const auto& toPrecisionScale = getDecimalPrecisionScale(*toType);
     auto precision = toPrecisionScale.first;
     auto scale = toPrecisionScale.second;
-    if (precision <= 18) {
-      context.ensureWritable(
-          rows,
-          SHORT_DECIMAL(
-              static_cast<uint8_t>(precision), static_cast<uint8_t>(scale)),
-          resultRef);
-      auto result = resultRef->asUnchecked<FlatVector<UnscaledShortDecimal>>()
-                        ->mutableRawValues();
-      rows.applyToSelected([&](int row) {
-        auto unscaled = unscaledVec->valueAt<int64_t>(row);
+    context.ensureWritable(
+        rows,
+        SHORT_DECIMAL(
+            static_cast<uint8_t>(precision), static_cast<uint8_t>(scale)),
+        resultRef);
+    auto result = resultRef->asUnchecked<FlatVector<UnscaledShortDecimal>>()
+                      ->mutableRawValues();
+    rows.applyToSelected([&](int row) {
+      auto unscaled = unscaledVec->valueAt<int64_t>(row);
 
-        if (UnscaledShortDecimal::valueInRange(unscaled)) {
-          result[row] = UnscaledShortDecimal(unscaled);
-        } else {
-          if (nullOnOverflow) {
-            resultRef->setNull(row, true);
-          } else {
-            VELOX_USER_FAIL("Unscaled value overflow for precision");
-          }
+      if (unscaled <= -static_cast<long>(DecimalUtil::kPowersOfTen[18]) ||
+          unscaled >= static_cast<long>(DecimalUtil::kPowersOfTen[18])) {
+        if (precision < 19) {
+          resultRef->setNull(row, true);
         }
-      });
-
-    } else {
-      context.ensureWritable(
-          rows,
-          LONG_DECIMAL(
-              static_cast<uint8_t>(precision), static_cast<uint8_t>(scale)),
-          resultRef);
-      auto result = resultRef->asUnchecked<FlatVector<UnscaledLongDecimal>>()
-                        ->mutableRawValues();
-      rows.applyToSelected([&](int row) {
-        auto unscaled = unscaledVec->valueAt<int64_t>(row);
-        if (UnscaledLongDecimal::valueInRange(unscaled)) {
-          result[row] = UnscaledLongDecimal(unscaled);
-        } else {
-          if (nullOnOverflow) {
-            resultRef->setNull(row, true);
-          } else {
-            VELOX_USER_FAIL("Unscaled value overflow for precision");
-          }
-        }
-      });
-    }
+      } else if (
+          unscaled <= -static_cast<long>(
+                          DecimalUtil::kPowersOfTen[std::min(precision, 18)]) ||
+          unscaled >= static_cast<long>(
+                          DecimalUtil::kPowersOfTen[std::min(precision, 18)])) {
+        resultRef->setNull(row, true);
+      } else {
+        result[row] = UnscaledShortDecimal(unscaled);
+      }
+    });
   }
 };
 
