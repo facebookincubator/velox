@@ -153,8 +153,11 @@ class StringTest : public SparkFunctionBaseTest {
 TEST_F(StringTest, Ascii) {
   EXPECT_EQ(ascii(std::string("\0", 1)), 0);
   EXPECT_EQ(ascii(" "), 32);
-  EXPECT_EQ(ascii("😋"), -16);
+  EXPECT_EQ(ascii("😋"), 128523);
   EXPECT_EQ(ascii(""), 0);
+  EXPECT_EQ(ascii("¥"), 165);
+  EXPECT_EQ(ascii("®"), 174);
+  EXPECT_EQ(ascii("©"), 169);
   EXPECT_EQ(ascii(std::nullopt), std::nullopt);
 }
 

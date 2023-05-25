@@ -27,7 +27,13 @@ struct AsciiFunction {
   VELOX_DEFINE_FUNCTION_TYPES(T);
 
   FOLLY_ALWAYS_INLINE bool call(int32_t& result, const arg_type<Varchar>& s) {
-    result = s.empty() ? 0 : s.data()[0];
+    if (s.empty()) {
+      result = 0;
+      return true;
+    }
+    int charLen = utf8proc_char_length(s.data());
+    int size;
+    result = utf8proc_codepoint(s.data(), s.data() + charLen, size);
     return true;
   }
 };
