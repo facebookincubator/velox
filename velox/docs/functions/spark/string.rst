@@ -10,7 +10,9 @@ Unless specified otherwise, all functions return NULL if at least one of the arg
 
 .. spark:function:: chr(n) -> varchar
 
-    Returns the Unicode code point ``n`` as a single character string.
+    Returns a utf8 string of single ASCII character. The ASCII character has the binary
+    equivalent of ``n``. If ``n < 0``, the result is an empty string. If ``n >= 256``,
+    the result is equivalent to chr(``n % 256``).
 
 .. spark:function:: contains(left, right) -> boolean
 

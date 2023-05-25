@@ -38,6 +38,11 @@ struct AsciiFunction {
   }
 };
 
+/// chr function
+/// chr(n) -> string
+/// Returns a utf8 string of single ASCII character. The ASCII character has
+/// the binary equivalent of n. If n < 0, the result is an empty string. If n >=
+/// 256, the result is equivalent to chr(n % 256).
 template <typename T>
 struct ChrFunction {
   VELOX_DEFINE_FUNCTION_TYPES(T);
@@ -46,8 +51,15 @@ struct ChrFunction {
     if (ord < 0) {
       result.resize(0);
     } else {
-      result.resize(1);
-      *result.data() = ord;
+      ord = ord & 0xFF;
+      if (ord < 0x80) {
+        result.resize(1);
+        result.data()[0] = ord;
+      } else {
+        result.resize(2);
+        result.data()[0] = 0xC0 + (ord >> 6);
+        result.data()[1] = 0x80 + (ord & 0x3F);
+      }
     }
     return true;
   }
