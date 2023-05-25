@@ -31,7 +31,6 @@ class E2EFilterTest : public E2EFilterTestBase {
  protected:
   void SetUp() override {
     E2EFilterTestBase::SetUp();
-    writerProperties_ = ::parquet::WriterProperties::Builder().build();
   }
 
   void testWithTypes(
@@ -59,9 +58,10 @@ class E2EFilterTest : public E2EFilterTestBase {
       bool /*forRowGroupSkip*/) override {
     auto sink = std::make_unique<MemorySink>(*leafPool_, 200 * 1024 * 1024);
     sinkPtr_ = sink.get();
+    options_.memoryPool = rootPool_.get();
 
     writer_ = std::make_unique<facebook::velox::parquet::Writer>(
-        std::move(sink), *leafPool_, rowGroupSize_, writerProperties_);
+        std::move(sink), options_);
     for (auto& batch : batches) {
       writer_->write(batch);
     }
@@ -75,8 +75,7 @@ class E2EFilterTest : public E2EFilterTestBase {
   }
 
   std::unique_ptr<facebook::velox::parquet::Writer> writer_;
-  std::shared_ptr<::parquet::WriterProperties> writerProperties_;
-  int32_t rowGroupSize_{10000};
+  facebook::velox::parquet::WriterOptions options_;
 };
 
 TEST_F(E2EFilterTest, writerMagic) {
@@ -102,10 +101,9 @@ TEST_F(E2EFilterTest, boolean) {
 }
 
 TEST_F(E2EFilterTest, integerDirect) {
-  writerProperties_ = ::parquet::WriterProperties::Builder()
-                          .disable_dictionary()
-                          ->data_pagesize(4 * 1024)
-                          ->build();
+  options_.enableDictionary = false;
+  options_.dataPageSize = 4 * 1024;
+
   testWithTypes(
       "short_val:smallint,"
       "int_val:int,"
@@ -118,18 +116,16 @@ TEST_F(E2EFilterTest, integerDirect) {
 }
 TEST_F(E2EFilterTest, compression) {
   for (const auto compression :
-       {::parquet::Compression::SNAPPY,
-        ::parquet::Compression::ZSTD,
-        ::parquet::Compression::GZIP,
-        ::parquet::Compression::UNCOMPRESSED}) {
-    if (!arrow::util::Codec::IsAvailable(compression)) {
+       {dwio::common::CompressionKind_SNAPPY,
+        dwio::common::CompressionKind_ZSTD,
+        dwio::common::CompressionKind_GZIP,
+        dwio::common::CompressionKind_NONE}) {
+    if (!facebook::velox::parquet::Writer::isArrowCodecAvailable(compression)) {
       continue;
     }
 
-    writerProperties_ = ::parquet::WriterProperties::Builder()
-                            .data_pagesize(4 * 1024)
-                            ->compression(compression)
-                            ->build();
+    options_.dataPageSize = 4 * 1024;
+    options_.compression = compression;
 
     testWithTypes(
         "short_val:smallint,"
@@ -173,8 +169,7 @@ TEST_F(E2EFilterTest, compression) {
 }
 
 TEST_F(E2EFilterTest, integerDictionary) {
-  writerProperties_ =
-      ::parquet::WriterProperties::Builder().data_pagesize(4 * 1024)->build();
+  options_.dataPageSize = 4 * 1024;
 
   testWithTypes(
       "short_val:smallint,"
@@ -217,10 +212,8 @@ TEST_F(E2EFilterTest, integerDictionary) {
 }
 
 TEST_F(E2EFilterTest, floatAndDoubleDirect) {
-  writerProperties_ = ::parquet::WriterProperties::Builder()
-                          .disable_dictionary()
-                          ->data_pagesize(4 * 1024)
-                          ->build();
+  options_.enableDictionary = false;
+  options_.dataPageSize = 4 * 1024;
 
   testWithTypes(
       "float_val:float,"
@@ -291,10 +284,9 @@ TEST_F(E2EFilterTest, shortDecimalDictionary) {
 }
 
 TEST_F(E2EFilterTest, shortDecimalDirect) {
-  writerProperties_ = ::parquet::WriterProperties::Builder()
-                          .disable_dictionary()
-                          ->data_pagesize(4 * 1024)
-                          ->build();
+  options_.enableDictionary = false;
+  options_.dataPageSize = 4 * 1024;
+
   // decimal(10, 5) maps to 5 bytes FLBA in Parquet.
   // decimal(17, 5) maps to 8 bytes FLBA in Parquet.
   for (const auto& type : {
@@ -356,10 +348,9 @@ TEST_F(E2EFilterTest, longDecimalDictionary) {
 }
 
 TEST_F(E2EFilterTest, longDecimalDirect) {
-  writerProperties_ = ::parquet::WriterProperties::Builder()
-                          .disable_dictionary()
-                          ->data_pagesize(4 * 1024)
-                          ->build();
+  options_.enableDictionary = false;
+  options_.dataPageSize = 4 * 1024;
+
   // decimal(30, 10) maps to 13 bytes FLBA in Parquet.
   // decimal(37, 15) maps to 16 bytes FLBA in Parquet.
   for (const auto& type : {
@@ -398,10 +389,8 @@ TEST_F(E2EFilterTest, longDecimalDirect) {
 }
 
 TEST_F(E2EFilterTest, stringDirect) {
-  writerProperties_ = ::parquet::WriterProperties::Builder()
-                          .disable_dictionary()
-                          ->data_pagesize(4 * 1024)
-                          ->build();
+  options_.enableDictionary = false;
+  options_.dataPageSize = 4 * 1024;
 
   testWithTypes(
       "string_val:string,"
@@ -431,10 +420,8 @@ TEST_F(E2EFilterTest, stringDictionary) {
 }
 
 TEST_F(E2EFilterTest, dedictionarize) {
-  writerProperties_ = ::parquet::WriterProperties::Builder()
-                          .max_row_group_length(10000000)
-                          ->dictionary_pagesize_limit(20000)
-                          ->build();
+  options_.maxRowGroupLength = 10'000'000;
+  options_.dictionaryPageSizeLimit = 20'000;
 
   testWithTypes(
       "long_val: bigint,"
@@ -469,8 +456,8 @@ TEST_F(E2EFilterTest, filterStruct) {
 
 TEST_F(E2EFilterTest, list) {
   // Break up the leaf data in small pages to cover coalescing repdefs.
-  writerProperties_ =
-      ::parquet::WriterProperties::Builder().data_pagesize(4 * 1024)->build();
+  options_.dataPageSize = 4 * 1024;
+
   batchCount_ = 2;
   batchSize_ = 12000;
   testWithTypes(
@@ -496,8 +483,8 @@ TEST_F(E2EFilterTest, mutationCornerCases) {
 
 TEST_F(E2EFilterTest, map) {
   // Break up the leaf data in small pages to cover coalescing repdefs.
-  writerProperties_ =
-      ::parquet::WriterProperties::Builder().data_pagesize(4 * 1024)->build();
+  options_.dataPageSize = 4 * 1024;
+
   batchCount_ = 2;
   batchSize_ = 12000;
   testWithTypes(
@@ -512,10 +499,8 @@ TEST_F(E2EFilterTest, map) {
 }
 
 TEST_F(E2EFilterTest, varbinaryDirect) {
-  writerProperties_ = ::parquet::WriterProperties::Builder()
-                          .disable_dictionary()
-                          ->data_pagesize(4 * 1024)
-                          ->build();
+  options_.enableDictionary = false;
+  options_.dataPageSize = 4 * 1024;
 
   testWithTypes(
       "varbinary_val:varbinary,"
@@ -545,8 +530,8 @@ TEST_F(E2EFilterTest, varbinaryDictionary) {
 }
 
 TEST_F(E2EFilterTest, largeMetadata) {
-  writerProperties_ =
-      ::parquet::WriterProperties::Builder().max_row_group_length(1)->build();
+  options_.maxRowGroupLength = 1;
+
   rowType_ = ROW({INTEGER()});
   std::vector<RowVectorPtr> batches;
   batches.push_back(std::static_pointer_cast<RowVector>(

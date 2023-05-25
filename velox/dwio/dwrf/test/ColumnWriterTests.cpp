@@ -1488,7 +1488,7 @@ std::unique_ptr<DwrfReader> getDwrfReader(
   auto sink = std::make_unique<MemorySink>(leafPool, 2 * 1024 * 1024);
   auto sinkPtr = sink.get();
 
-  WriterOptions options;
+  dwrf::WriterOptions options;
   options.config = config;
   options.schema = type;
   options.flushPolicyFactory = [&]() {
@@ -1496,7 +1496,8 @@ std::unique_ptr<DwrfReader> getDwrfReader(
       return true; // Flushes every batch.
     });
   };
-  Writer writer{options, std::move(sink), rootPool};
+  options.memoryPool = &rootPool;
+  dwrf::Writer writer{std::move(sink), options};
   writer.write(batch);
   writer.close();
 

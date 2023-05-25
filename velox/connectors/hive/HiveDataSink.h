@@ -17,6 +17,8 @@
 
 #include "velox/connectors/Connector.h"
 #include "velox/connectors/hive/PartitionIdGenerator.h"
+#include "velox/dwio/common/Options.h"
+#include "velox/dwio/common/Writer.h"
 
 namespace facebook::velox::dwrf {
 class Writer;
@@ -87,9 +89,11 @@ class HiveInsertTableHandle : public ConnectorInsertTableHandle {
  public:
   HiveInsertTableHandle(
       std::vector<std::shared_ptr<const HiveColumnHandle>> inputColumns,
-      std::shared_ptr<const LocationHandle> locationHandle)
+      std::shared_ptr<const LocationHandle> locationHandle,
+      const dwio::common::FileFormat tableStorageFormat)
       : inputColumns_(std::move(inputColumns)),
-        locationHandle_(std::move(locationHandle)) {}
+        locationHandle_(std::move(locationHandle)),
+        tableStorageFormat_(tableStorageFormat) {}
 
   virtual ~HiveInsertTableHandle() = default;
 
@@ -100,6 +104,10 @@ class HiveInsertTableHandle : public ConnectorInsertTableHandle {
 
   const std::shared_ptr<const LocationHandle>& locationHandle() const {
     return locationHandle_;
+  }
+
+  const dwio::common::FileFormat tableStorageFormat() const {
+    return tableStorageFormat_;
   }
 
   bool isPartitioned() const;
@@ -117,6 +125,7 @@ class HiveInsertTableHandle : public ConnectorInsertTableHandle {
  private:
   const std::vector<std::shared_ptr<const HiveColumnHandle>> inputColumns_;
   const std::shared_ptr<const LocationHandle> locationHandle_;
+  const dwio::common::FileFormat tableStorageFormat_;
 };
 
 /// Parameters for Hive writers.
@@ -254,7 +263,7 @@ class HiveDataSink : public DataSink {
   // Below are structures for partitions from all inputs. writerInfo_ and
   // writers_ are both indexed by partitionId.
   std::vector<std::shared_ptr<HiveWriterInfo>> writerInfo_;
-  std::vector<std::unique_ptr<dwrf::Writer>> writers_;
+  std::vector<std::unique_ptr<dwio::common::Writer>> writers_;
 
   // Below are structures updated when processing current input. partitionIds_
   // are indexed by the row of input_. partitionRows_, rawPartitionRows_ and
