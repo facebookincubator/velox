@@ -1185,24 +1185,20 @@ struct ToISO8601Function : public TimestampWithTimezoneSupport<T> {
     // timestamp.toString() returns in format
     // "1919-11-28T00:00:00.000000000"
     // truncate nanosecond precision for ISO 8601 string
-    auto isoStr = timestamp.toString().substr(0, 23);
-    result.resize(isoStr.size());
-    result = isoStr;
+    result = timestamp.toString().substr(0, 23);
+    result.resize(23);
   }
 
   FOLLY_ALWAYS_INLINE void call(
       out_type<Varchar>& result,
       const arg_type<TimestampWithTimezone>& timestampWithTimezone) {
     auto timestamp = this->toTimestamp(timestampWithTimezone);
-    auto timezone = *timestampWithTimezone.template at<1>();
-    auto timezoneName = util::getTimeZoneName(timezone);
 
     // timestamp.toString() returns in format
     // "1919-11-28T00:00:00.000000000"
     // truncate nanosecond precision for ISO 8601 string
-    auto isoStr = timestamp.toString().substr(0, 23);
-    result.resize(isoStr.size());
-    result = isoStr;
+    result = timestamp.toString().substr(0, 23) + std::to_string(timezone);
+    result.resize(23);
   }
 };
 
