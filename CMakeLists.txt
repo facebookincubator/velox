@@ -187,7 +187,7 @@ endif()
 if(VELOX_ENABLE_GCS)
   # Set GCS_ROOT_DIR if you have a custom install location of GCS SDK CPP.
   if(GCSSDK_ROOT_DIR)
-    set(CMAKE_PREFIX_PATH ${GCSSDK_ROOT_DIR})
+    list(APPEND CMAKE_PREFIX_PATH ${GCSSDK_ROOT_DIR})
   endif()
   find_package(google_cloud_cpp_storage REQUIRED)
   add_definitions(-DVELOX_ENABLE_GCS)
