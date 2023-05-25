@@ -34,7 +34,6 @@ void registerSimpleFunctions(const std::string& prefix) {
       {prefix + "date"});
   registerFunction<TimeZoneHourFunction, int64_t, TimestampWithTimezone>(
       {prefix + "timezone_hour"});
-
   registerFunction<TimeZoneMinuteFunction, int64_t, TimestampWithTimezone>(
       {prefix + "timezone_minute"});
   registerFunction<ToISO8601Function, Varchar, Date>({prefix + "to_iso8601"});

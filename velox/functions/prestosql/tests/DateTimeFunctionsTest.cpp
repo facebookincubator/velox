@@ -21,6 +21,7 @@
 #include "velox/functions/prestosql/tests/utils/FunctionBaseTest.h"
 #include "velox/functions/prestosql/types/TimestampWithTimeZoneType.h"
 #include "velox/type/tz/TimeZoneMap.h"
+#include "velox/type/Timestamp.h"
 
 using namespace facebook::velox;
 using namespace facebook::velox::test;
@@ -3115,22 +3116,17 @@ TEST_F(DateTimeFunctionsTest, toISO8601TestVarchar) {
     return evaluateOnce<std::string, Date>("to_iso8601(c0)", dateObj);
   };
 
-  // Date() input: days since epoch
+  auto getDate = [](const std::string& dateStr) {
+    Date returnDate;
+    parseTo(dateStr, returnDate);
+    return returnDate;
+  };
 
-  // Date(0) is 1970-01-01.
-  EXPECT_EQ("1970-01-01T00:00:00.000", toISO8601(Date()));
-
-  // Date(18297) is 2020-02-05.
-  EXPECT_EQ("2020-02-05T00:00:00.000", toISO8601(Date(18297)));
-
-  // Date(-18297) is 1919-11-28.
-  EXPECT_EQ("1919-11-28T00:00:00.000", toISO8601(Date(-18297)));
-
-  // Date(980127) is 4653-07-01.
-  EXPECT_EQ("4653-07-01T00:00:00.000", toISO8601(Date(980127)));
-
-  // Date(-45734) is 1844-10-14.
-  EXPECT_EQ("1844-10-14T00:00:00.000", toISO8601(Date(-45734)));
+  EXPECT_EQ("1970-01-01T00:00:00.000", toISO8601(getDate("1970-01-01")));
+  EXPECT_EQ("2020-02-05T00:00:00.000", toISO8601(getDate("2020-02-05")));
+  EXPECT_EQ("1919-11-28T00:00:00.000", toISO8601(getDate("1919-11-28")));
+  EXPECT_EQ("4653-07-01T00:00:00.000", toISO8601(getDate("4653-07-01")));
+  EXPECT_EQ("1844-10-14T00:00:00.000", toISO8601(getDate("1844-10-14")));
 }
 
 TEST_F(DateTimeFunctionsTest, toISO8601TestTimestamp) {
@@ -3143,61 +3139,23 @@ TEST_F(DateTimeFunctionsTest, toISO8601TestTimestamp) {
     return evaluateOnce<std::string>("to_iso8601(c0)", timestamp);
   };
 
-  // Timestamp() input: seconds, nanoseconds since epoch
+  auto getTimestamp = [](const std::string& timestampStr) {
+    return util::fromTimestampString(StringView{timestampStr});
+  };
 
-  // Date(0) is 1970-01-01.
-  EXPECT_EQ("1970-01-01T00:00:00.000", toISO8601(Timestamp()));
+  EXPECT_EQ("1970-01-01T00:00:00.000", toISO8601(getTimestamp("1970-01-01 00:00:00")));
+  EXPECT_EQ("1970-01-01T03:19:58.000", toISO8601(getTimestamp("1970-01-01 03:19:58")));
+  EXPECT_EQ("1970-01-01T23:59:59.000", toISO8601(getTimestamp("1970-01-01 23:59:59")));
+  EXPECT_EQ("1970-01-01T23:59:59.999", toISO8601(getTimestamp("1970-01-01 23:59:59.999")));
 
-  // Date(0) is 1970-01-01.
-  EXPECT_EQ(
-      "1970-01-01T03:19:58.000",
-      toISO8601(Timestamp(3 * kSecondsInHour + 19 * kSecondsInMinute + 58, 0)));
+  EXPECT_EQ("2020-02-05T00:00:00.000", toISO8601(getTimestamp("2020-02-05 00:00:00")));
+  EXPECT_EQ("2020-02-05T14:27:39.000", toISO8601(getTimestamp("2020-02-05 14:27:39")));
+  EXPECT_EQ("2020-02-05T23:59:59.000", toISO8601(getTimestamp("2020-02-05 23:59:59")));
+  EXPECT_EQ("2020-02-05T23:59:59.999", toISO8601(getTimestamp("2020-02-05 23:59:59.999")));
 
-  // Date(18297) is 2020-02-05.
-  EXPECT_EQ(
-      "2020-02-05T00:00:00.000",
-      toISO8601(Timestamp(18297 * kSecondsInDay, 0)));
-
-  // Date(18297) is 2020-02-05.
-  EXPECT_EQ(
-      "2020-02-05T14:27:39.000",
-      toISO8601(Timestamp(
-          18297 * kSecondsInDay + 14 * kSecondsInHour + 27 * kSecondsInMinute +
-              39,
-          0)));
-
-  // Date(-18297) is 1919-11-28.
-  EXPECT_EQ(
-      "1919-11-28T00:00:00.000",
-      toISO8601(Timestamp(-18297 * kSecondsInDay, 0)));
-
-  // Last second of day 0
-  EXPECT_EQ(
-      "1970-01-01T23:59:59.000", toISO8601(Timestamp(kSecondsInDay - 1, 0)));
-  // Last nanosecond of day 0
-  EXPECT_EQ(
-      "1970-01-01T23:59:59.999",
-      toISO8601(Timestamp(kSecondsInDay - 1, kNanosInSecond - 1)));
-
-  // Last second of day 18297
-  EXPECT_EQ(
-      "2020-02-05T23:59:59.000",
-      toISO8601(Timestamp(18297 * kSecondsInDay + kSecondsInDay - 1, 0)));
-  // Last nanosecond of day 18297
-  EXPECT_EQ(
-      "2020-02-05T23:59:59.999",
-      toISO8601(Timestamp(
-          18297 * kSecondsInDay + kSecondsInDay - 1, kNanosInSecond - 1)));
-
-  // Last second of day -18297
-  EXPECT_EQ(
-      "1919-11-28T23:59:59.000",
-      toISO8601(Timestamp(-18297 * kSecondsInDay + kSecondsInDay - 1, 0)));
-  // Last nanosecond of day -18297
-  EXPECT_EQ(
-      "1919-11-28T23:59:59.999",
-      toISO8601(Timestamp(
-          -18297 * kSecondsInDay + kSecondsInDay - 1, kNanosInSecond - 1)));
+  EXPECT_EQ("1919-11-28T00:00:00.000", toISO8601(getTimestamp("1919-11-28 00:00:00")));
+  EXPECT_EQ("1919-11-28T23:59:59.000", toISO8601(getTimestamp("1919-11-28 23:59:59")));
+  EXPECT_EQ("1919-11-28T23:59:59.999", toISO8601(getTimestamp("1919-11-28 23:59:59.999")));
 }
 
 TEST_F(DateTimeFunctionsTest, toISO8601TestTimestampWithTimezone) {
