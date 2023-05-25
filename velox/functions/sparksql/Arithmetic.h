@@ -166,6 +166,30 @@ struct FloorFunction {
 };
 
 template <typename T>
+struct Log2FunctionNaNAsNull {
+  FOLLY_ALWAYS_INLINE bool call(double& result, double a) {
+    double yAsymptote = 0.0;
+    if (a <= yAsymptote) {
+      return false;
+    }
+    result = std::log2(a);
+    return true;
+  }
+};
+
+template <typename T>
+struct Log10FunctionNaNAsNull {
+  FOLLY_ALWAYS_INLINE bool call(double& result, double a) {
+    double yAsymptote = 0.0;
+    if (a <= yAsymptote) {
+      return false;
+    }
+    result = std::log10(a);
+    return true;
+  }
+};
+
+template <typename T>
 struct AcoshFunction {
   template <typename TInput>
   FOLLY_ALWAYS_INLINE void call(TInput& result, TInput a) {
