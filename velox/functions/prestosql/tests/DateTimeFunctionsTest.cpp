@@ -20,8 +20,8 @@
 #include "velox/external/date/tz.h"
 #include "velox/functions/prestosql/tests/utils/FunctionBaseTest.h"
 #include "velox/functions/prestosql/types/TimestampWithTimeZoneType.h"
-#include "velox/type/tz/TimeZoneMap.h"
 #include "velox/type/Timestamp.h"
+#include "velox/type/tz/TimeZoneMap.h"
 
 using namespace facebook::velox;
 using namespace facebook::velox::test;
@@ -3143,19 +3143,41 @@ TEST_F(DateTimeFunctionsTest, toISO8601TestTimestamp) {
     return util::fromTimestampString(StringView{timestampStr});
   };
 
-  EXPECT_EQ("1970-01-01T00:00:00.000", toISO8601(getTimestamp("1970-01-01 00:00:00")));
-  EXPECT_EQ("1970-01-01T03:19:58.000", toISO8601(getTimestamp("1970-01-01 03:19:58")));
-  EXPECT_EQ("1970-01-01T23:59:59.000", toISO8601(getTimestamp("1970-01-01 23:59:59")));
-  EXPECT_EQ("1970-01-01T23:59:59.999", toISO8601(getTimestamp("1970-01-01 23:59:59.999")));
+  EXPECT_EQ(
+      "1970-01-01T00:00:00.000",
+      toISO8601(getTimestamp("1970-01-01 00:00:00")));
+  EXPECT_EQ(
+      "1970-01-01T03:19:58.000",
+      toISO8601(getTimestamp("1970-01-01 03:19:58")));
+  EXPECT_EQ(
+      "1970-01-01T23:59:59.000",
+      toISO8601(getTimestamp("1970-01-01 23:59:59")));
+  EXPECT_EQ(
+      "1970-01-01T23:59:59.999",
+      toISO8601(getTimestamp("1970-01-01 23:59:59.999")));
 
-  EXPECT_EQ("2020-02-05T00:00:00.000", toISO8601(getTimestamp("2020-02-05 00:00:00")));
-  EXPECT_EQ("2020-02-05T14:27:39.000", toISO8601(getTimestamp("2020-02-05 14:27:39")));
-  EXPECT_EQ("2020-02-05T23:59:59.000", toISO8601(getTimestamp("2020-02-05 23:59:59")));
-  EXPECT_EQ("2020-02-05T23:59:59.999", toISO8601(getTimestamp("2020-02-05 23:59:59.999")));
+  EXPECT_EQ(
+      "2020-02-05T00:00:00.000",
+      toISO8601(getTimestamp("2020-02-05 00:00:00")));
+  EXPECT_EQ(
+      "2020-02-05T14:27:39.000",
+      toISO8601(getTimestamp("2020-02-05 14:27:39")));
+  EXPECT_EQ(
+      "2020-02-05T23:59:59.000",
+      toISO8601(getTimestamp("2020-02-05 23:59:59")));
+  EXPECT_EQ(
+      "2020-02-05T23:59:59.999",
+      toISO8601(getTimestamp("2020-02-05 23:59:59.999")));
 
-  EXPECT_EQ("1919-11-28T00:00:00.000", toISO8601(getTimestamp("1919-11-28 00:00:00")));
-  EXPECT_EQ("1919-11-28T23:59:59.000", toISO8601(getTimestamp("1919-11-28 23:59:59")));
-  EXPECT_EQ("1919-11-28T23:59:59.999", toISO8601(getTimestamp("1919-11-28 23:59:59.999")));
+  EXPECT_EQ(
+      "1919-11-28T00:00:00.000",
+      toISO8601(getTimestamp("1919-11-28 00:00:00")));
+  EXPECT_EQ(
+      "1919-11-28T23:59:59.000",
+      toISO8601(getTimestamp("1919-11-28 23:59:59")));
+  EXPECT_EQ(
+      "1919-11-28T23:59:59.999",
+      toISO8601(getTimestamp("1919-11-28 23:59:59.999")));
 }
 
 TEST_F(DateTimeFunctionsTest, toISO8601TestTimestampWithTimezone) {
