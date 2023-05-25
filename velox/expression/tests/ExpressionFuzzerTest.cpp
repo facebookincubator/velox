@@ -61,7 +61,7 @@ int main(int argc, char** argv) {
       "in",
       "element_at",
       "width_bucket",
-  };
+      "get_current_time"};
   size_t initialSeed = FLAGS_seed == 0 ? std::time(nullptr) : FLAGS_seed;
   return FuzzerRunner::run(
       FLAGS_only, initialSeed, skipFunctions, FLAGS_special_forms);
