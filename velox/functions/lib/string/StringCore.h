@@ -299,6 +299,7 @@ inline int64_t findNthInstanceByteIndexFromEnd(
 /// each charecter. When inputString is empty results is empty.
 /// replace("", "", "x") = ""
 /// replace("aa", "", "x") = "xaxax"
+template <bool ignoreEmptyReplaced = false>
 inline static size_t replace(
     char* outputString,
     const std::string_view& inputString,
@@ -307,6 +308,13 @@ inline static size_t replace(
     bool inPlace = false) {
   if (inputString.size() == 0) {
     return 0;
+  }
+
+  if (ignoreEmptyReplaced && replaced.size() == 0) {
+    if (!inPlace) {
+      std::memcpy(outputString, inputString.data(), inputString.size());
+    }
+    return inputString.size();
   }
 
   size_t readPosition = 0;

@@ -140,6 +140,14 @@ class StringTest : public SparkFunctionBaseTest {
     return evaluateOnce<std::string>(
         "substring(c0, c1, c2)", str, start, length);
   }
+
+  std::optional<std::string> replace(
+      std::optional<std::string> str,
+      std::optional<std::string> replaced,
+      std::optional<std::string> replacement) {
+    return evaluateOnce<std::string>(
+        "replace(c0, c1, c2)", str, replaced, replacement);
+  }
 };
 
 TEST_F(StringTest, Ascii) {
@@ -444,6 +452,20 @@ TEST_F(StringTest, substring) {
   EXPECT_EQ(substring("example", -2147483647), "example");
   EXPECT_EQ(substring("da\u6570\u636Eta", 3), "\u6570\u636Eta");
   EXPECT_EQ(substring("da\u6570\u636Eta", -3), "\u636Eta");
+}
+
+TEST_F(StringTest, replace) {
+  EXPECT_EQ(replace("aaabaac", "a", "z"), "zzzbzzc");
+  EXPECT_EQ(replace("aaabaac", "", "z"), "aaabaac");
+  EXPECT_EQ(replace("aaabaac", "a", ""), "bc");
+  EXPECT_EQ(replace("aaabaac", "x", "z"), "aaabaac");
+  EXPECT_EQ(replace("aaabaac", "ab", "z"), "aazaac");
+  EXPECT_EQ(replace("aaabaac", "aa", "z"), "zabzc");
+  EXPECT_EQ(replace("aaabaac", "aa", "xyz"), "xyzabxyzc");
+  EXPECT_EQ(replace("aaabaac", "aaabaac", "z"), "z");
+  EXPECT_EQ(
+      replace("123\u6570\u6570\u636E", "\u6570\u636E", "data"),
+      "123\u6570data");
 }
 
 } // namespace
