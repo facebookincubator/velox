@@ -467,6 +467,7 @@ jobs:
     executor: build
     environment:
       VELOX_DEPENDENCY_SOURCE: SYSTEM
+      simdjson_SOURCE: BUNDLED
     steps:
       - fuzzer-run:
           fuzzer_output: "/tmp/fuzzer.log"
@@ -486,6 +487,7 @@ jobs:
     executor: build
     environment:
       VELOX_DEPENDENCY_SOURCE: SYSTEM
+      simdjson_SOURCE: BUNDLED
     steps:
       - fuzzer-run:
           fuzzer_output: "/tmp/spark_fuzzer.log"
@@ -499,6 +501,7 @@ jobs:
     executor: build
     environment:
       VELOX_DEPENDENCY_SOURCE: SYSTEM
+      simdjson_SOURCE: BUNDLED
     steps:
       - fuzzer-run:
           fuzzer_output: "/tmp/spark_aggregate_fuzzer.log"
@@ -526,6 +529,7 @@ jobs:
     executor: build
     environment:
       VELOX_DEPENDENCY_SOURCE: SYSTEM
+      simdjson_SOURCE: BUNDLED
     steps:
       - fuzzer-run:
           fuzzer_output: "/tmp/join_fuzzer.log"

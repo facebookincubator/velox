@@ -98,19 +98,19 @@ benchmarks-basic-build:
 	$(MAKE) release EXTRA_CMAKE_FLAGS="-DVELOX_BUILD_BENCHMARKS=ON"
 
 benchmarks-basic-run:
-	scripts/benchmark-runner.py run \
+	ASAN_OPTIONS=symbolize=1 ASAN_SYMBOLIZER_PATH=$(shell which llvm-symbolizer) scripts/benchmark-runner.py run \
 			--bm_estimate_time \
 			--bm_max_secs 10 \
 			--bm_max_trials 10000 \
 			${EXTRA_BENCHMARK_FLAGS}
 
 unittest: debug			#: Build with debugging and run unit tests
-	cd $(BUILD_BASE_DIR)/debug && ctest -j ${NUM_THREADS} -VV --output-on-failure
+	cd $(BUILD_BASE_DIR)/debug && ASAN_OPTIONS=symbolize=1 ASAN_SYMBOLIZER_PATH=$(shell which llvm-symbolizer) ctest -j ${NUM_THREADS} -VV --output-on-failure
 
 # Build with debugging and run expression fuzzer test. Use a fixed seed to
 # ensure the tests are reproducible.
 fuzzertest: debug
-	$(BUILD_BASE_DIR)/debug/velox/expression/tests/velox_expression_fuzzer_test \
+	ASAN_OPTIONS=symbolize=1 ASAN_SYMBOLIZER_PATH=$(shell which llvm-symbolizer) $(BUILD_BASE_DIR)/debug/velox/expression/tests/velox_expression_fuzzer_test \
 			--seed $(FUZZER_SEED) \
 			--duration_sec $(FUZZER_DURATION_SEC) \
 			--repro_persist_path $(FUZZER_REPRO_PERSIST_PATH) \
@@ -158,4 +158,4 @@ python-build:
 	DEBUG=1 CMAKE_BUILD_PARALLEL_LEVEL=4 ${PYTHON_EXECUTABLE} setup.py develop
 
 python-test: python-build
-	DEBUG=1 ${PYTHON_EXECUTABLE} -m unittest -v
+	ASAN_OPTIONS=symbolize=1 ASAN_SYMBOLIZER_PATH=$(shell which llvm-symbolizer) DEBUG=1 ${PYTHON_EXECUTABLE} -m unittest -v

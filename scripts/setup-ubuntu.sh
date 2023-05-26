@@ -55,6 +55,7 @@ sudo --preserve-env apt update && sudo --preserve-env apt install -y libunwind-d
   libsodium-dev \
   libthrift-dev \
   liblzo2-dev \
+  llvm \
   bison \
   flex \
   libfl-dev \

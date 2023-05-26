@@ -37,6 +37,7 @@ yum -y install bzip2-devel \
   libzstd-devel \
   lz4-devel \
   lzo-devel \
+  llvm \
   ninja-build \
   pcre-devel \
   perl-core \

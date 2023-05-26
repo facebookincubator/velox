@@ -269,6 +269,18 @@ if("${MAX_LINK_JOBS}")
   set(CMAKE_JOB_POOL_LINK link_job_pool)
 endif()
 
+message("Before build check")
+if(CMAKE_BUILD_TYPE STREQUAL "Debug")
+  message("Inside build type check")
+  if(CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
+    set(CMAKE_CXX_FLAGS
+            "${CMAKE_CXX_FLAGS}  -static-libasan -fsanitize=address")
+  else()
+    message("setting sanitize...")
+    set(CMAKE_CXX_FLAGS "-O -g -fsanitize=address -mavx2 -mfma -mavx -mf16c -mlzcnt -std=c++17 -mbmi2 ")
+  endif()
+endif()
+
 if("${ENABLE_ALL_WARNINGS}")
   if(CMAKE_CXX_COMPILER_ID MATCHES "Clang")
     set(KNOWN_COMPILER_SPECIFIC_WARNINGS
