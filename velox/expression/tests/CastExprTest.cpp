@@ -421,6 +421,16 @@ TEST_F(CastExprTest, date) {
 
   setCastIntByTruncate(true);
   testCast<std::string, Date>("date", input, result);
+
+  // Wrong date format case.
+  std::vector<std::optional<std::string>> inputWrongFormat{
+      "1970-01/01", "2023/05/10", "2023-/05-/10", "20150318"};
+  std::vector<std::optional<Date>> nullResult{
+      std::nullopt, std::nullopt, std::nullopt, std::nullopt};
+  testCast<std::string, Date>(
+      "date", inputWrongFormat, nullResult, false, true);
+  testCast<std::string, Date>(
+      "date", inputWrongFormat, nullResult, true, false);
 }
 
 TEST_F(CastExprTest, invalidDate) {
@@ -550,6 +560,13 @@ TEST_F(CastExprTest, allowDecimal) {
   setCastIntAllowDecimalAndByTruncate(true);
   testCast<std::string, int32_t>(
       "int", {"-.", "0.0", "125.5", "-128.3"}, {0, 0, 125, -128}, false, true);
+}
+
+TEST_F(CastExprTest, sparkSemantic) {
+  // Allow decimal.
+  setCastIntAllowDecimalAndByTruncate(true);
+  testCast<float, bool>(
+      "bool", {0.5, -0.5, 1, 0}, {true, true, true, false}, false, true);
 }
 
 constexpr vector_size_t kVectorSize = 1'000;

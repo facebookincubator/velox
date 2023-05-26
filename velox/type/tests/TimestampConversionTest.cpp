@@ -83,7 +83,8 @@ TEST(DateTimeUtilTest, fromDateString) {
   EXPECT_EQ(-719162, fromDateString("  \t    \n 00001-1-1  \n"));
 
   // Different separators.
-  EXPECT_EQ(-719162, fromDateString("1/1/1"));
+  // Illegal date format for spark.
+  // EXPECT_EQ(-719162, fromDateString("1/1/1"));
   EXPECT_EQ(-719162, fromDateString("1 1 1"));
   EXPECT_EQ(-719162, fromDateString("1\\1\\1"));
 

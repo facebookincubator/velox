@@ -177,11 +177,16 @@ bool tryParseDateString(
   if (!characterIsDigit(buf[pos])) {
     return false;
   }
+  int yearSegStart = pos;
   // First parse the year.
   for (; pos < len && characterIsDigit(buf[pos]); pos++) {
     year = checkedPlus((buf[pos] - '0'), checkedMultiply(year, 10));
     if (year > kMaxYear) {
       break;
+    }
+    // Align with spark, year digits should not be greater than 7.
+    if (pos - yearSegStart + 1 > 7) {
+      return false;
     }
   }
   if (yearneg) {
@@ -203,7 +208,8 @@ bool tryParseDateString(
 
   // Fetch the separator.
   sep = buf[pos++];
-  if (sep != ' ' && sep != '-' && sep != '/' && sep != '\\') {
+  // For spark, "/" separtor is not supported.
+  if (sep != ' ' && sep != '-' && sep != '\\') {
     // Invalid separator.
     return false;
   }
