@@ -44,6 +44,8 @@ class NestedLoopJoinProbe : public Operator {
     return state_ == ProbeOperatorState::kFinish;
   }
 
+  void close() override;
+
  private:
   // TODO: maybe consolidate initializeFilter routine across Operators like
   // HashProbe and MergeJoin
@@ -81,7 +83,7 @@ class NestedLoopJoinProbe : public Operator {
   // Return true if buildIndex_ is points to the end of buildData_.
   bool advanceIndex(vector_size_t probeCnt);
 
-  bool buildIndexAtEnd() const {
+  bool hasProbedAllBuildData() const {
     return (buildIndex_ == buildData_.value().size());
   }
 
@@ -113,6 +115,7 @@ class NestedLoopJoinProbe : public Operator {
   // Maximum number of rows in the output batch.
   const uint32_t outputBatchSize_;
   const core::JoinType joinType_;
+
   ProbeOperatorState state_{ProbeOperatorState::kWaitForBuild};
   ContinueFuture future_{ContinueFuture::makeEmpty()};
 
@@ -128,7 +131,7 @@ class NestedLoopJoinProbe : public Operator {
   // buildIndex_ updates.
   vector_size_t prevProbeCnt_{0};
   bool lastProbe_{false};
-  // Represents whether probe side row has been matched
+  // Represents whether probe side rows have been matched.
   SelectivityVector probeMatched_;
   std::vector<IdentityProjection> filterProbeProjections_;
   BufferPtr probeOutMapping_;
@@ -142,7 +145,8 @@ class NestedLoopJoinProbe : public Operator {
   size_t buildIndex_{0};
   std::vector<IdentityProjection> buildProjections_;
   BufferPtr buildIndices_;
-  // Represents whether probe build row has been matched
+
+  // Represents whether probe build rows have been matched.
   std::vector<SelectivityVector> buildMatched_;
   std::vector<IdentityProjection> filterBuildProjections_;
   BufferPtr buildOutMapping_;
