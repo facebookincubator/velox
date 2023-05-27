@@ -27,7 +27,6 @@ static const std::string kHiveConnectorId = "test-hive";
 using ColumnHandleMap =
     std::unordered_map<std::string, std::shared_ptr<connector::ColumnHandle>>;
 
-namespace {
 connector::hive::HiveColumnHandle makeColumnHandle(
     const std::string& name,
     const TypePtr& type,
@@ -42,7 +41,6 @@ connector::hive::HiveColumnHandle makeColumnHandle(
       type,
       std::move(subfields));
 }
-} // namespace
 
 class HiveConnectorTestBase : public OperatorTestBase {
  public:
