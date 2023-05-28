@@ -5,7 +5,7 @@ extensible, and high-performance data processing components. These components
 can be reused to build compute engines focused on different analytical
 workloads, including batch, interactive, stream processing, and AI/ML.
 Velox was created by Facebook and it is currently developed in partnership with
-Intel, ByteDance, and Ahana.
+Intel, ByteDance, and Ahana.test
 
 In common usage scenarios, Velox takes a fully optimized query plan as input
 and performs the described computation. Considering Velox does not provide a
