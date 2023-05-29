@@ -24,21 +24,45 @@ using namespace facebook::velox::exec::test;
 
 class NestedLoopJoinTest : public HiveConnectorTestBase {
  protected:
-  RowTypePtr defaultLeftType_;
-  RowTypePtr defaultRightType_;
+  RowTypePtr leftType_;
+  RowTypePtr rightType_;
   std::vector<std::string> comparisons_;
   std::vector<core::JoinType> joinTypes_;
+  std::string joinConditionStr_;
+  std::string queryStr_;
 
   void SetUp() override {
     HiveConnectorTestBase::SetUp();
-    defaultLeftType_ = ROW({{"t0", BIGINT()}});
-    defaultRightType_ = ROW({{"u0", BIGINT()}});
+    leftType_ = ROW({{"t0", BIGINT()}});
+    rightType_ = ROW({{"u0", BIGINT()}});
     comparisons_ = {"=", "<", "<=", "<>"};
     joinTypes_ = {
         core::JoinType::kInner,
         core::JoinType::kLeft,
         core::JoinType::kRight,
         core::JoinType::kFull};
+    joinConditionStr_ = "t0 {} u0";
+    queryStr_ = "SELECT t0, u0 FROM t {} JOIN u ON t.t0 {} u.u0";
+  }
+
+  void setLeftType(RowTypePtr leftType) {
+    leftType_ = leftType;
+  }
+
+  void setRightType(RowTypePtr rightType) {
+    rightType_ = rightType;
+  }
+
+  void setComparisons(std::vector<std::string>&& comparisons) {
+    comparisons_ = std::move(comparisons);
+  }
+
+  void setJoinConditionStr(std::string joinConditionStr) {
+    joinConditionStr_ = std::move(joinConditionStr);
+  }
+
+  void setQueryStr(std::string queryStr) {
+    queryStr_ = std::move(queryStr);
   }
 
   template <typename T>
@@ -85,37 +109,33 @@ class NestedLoopJoinTest : public HiveConnectorTestBase {
                                   PlanBuilder(planNodeIdGenerator)
                                       .values(rightVectors, numDrivers > 1)
                                       .planNode(),
-                                  fmt::format("t0 {} u0", comparison),
+                                  fmt::format(joinConditionStr_, comparison),
                                   {"t0", "u0"},
                                   joinType)
                               .planNode();
 
         assertQuery(
-            params,
-            fmt::format(
-                "SELECT t0, u0 FROM t {} JOIN u ON t.t0 {} u.u0",
-                joinTypeName(joinType),
-                comparison));
+            params, fmt::format(queryStr_, joinTypeName(joinType), comparison));
       }
     }
   }
 };
 
 TEST_F(NestedLoopJoinTest, basic) {
-  auto leftVectors = makeBatches(20, 5, defaultLeftType_, pool_.get());
-  auto rightVectors = makeBatches(18, 5, defaultRightType_, pool_.get());
+  auto leftVectors = makeBatches(20, 5, leftType_, pool_.get());
+  auto rightVectors = makeBatches(18, 5, rightType_, pool_.get());
   runTest(leftVectors, rightVectors);
 }
 
 TEST_F(NestedLoopJoinTest, emptyLeft) {
-  auto leftVectors = makeBatches(0, 5, defaultLeftType_, pool_.get());
-  auto rightVectors = makeBatches(18, 5, defaultRightType_, pool_.get());
+  auto leftVectors = makeBatches(0, 5, leftType_, pool_.get());
+  auto rightVectors = makeBatches(18, 5, rightType_, pool_.get());
   runTest(leftVectors, rightVectors);
 }
 
 TEST_F(NestedLoopJoinTest, emptyRight) {
-  auto leftVectors = makeBatches(20, 5, defaultLeftType_, pool_.get());
-  auto rightVectors = makeBatches(0, 5, defaultRightType_, pool_.get());
+  auto leftVectors = makeBatches(20, 5, leftType_, pool_.get());
+  auto rightVectors = makeBatches(0, 5, rightType_, pool_.get());
   runTest(leftVectors, rightVectors);
 }
 
@@ -313,14 +333,14 @@ TEST_F(NestedLoopJoinTest, zeroColumnBuild) {
 }
 
 TEST_F(NestedLoopJoinTest, parallel) {
-  auto leftVectors = makeBatches(10, 5, defaultLeftType_, pool_.get());
-  auto rightVectors = makeBatches(7, 5, defaultRightType_, pool_.get());
+  auto leftVectors = makeBatches(10, 5, leftType_, pool_.get());
+  auto rightVectors = makeBatches(7, 5, rightType_, pool_.get());
   runTest(leftVectors, rightVectors, 5);
 }
 
 TEST_F(NestedLoopJoinTest, bigintArray) {
-  auto leftVectors = makeBatches(1000, 5, defaultLeftType_, pool_.get());
-  auto rightVectors = makeBatches(900, 5, defaultRightType_, pool_.get());
+  auto leftVectors = makeBatches(1000, 5, leftType_, pool_.get());
+  auto rightVectors = makeBatches(900, 5, rightType_, pool_.get());
   createDuckDbTable("t", leftVectors);
   createDuckDbTable("u", rightVectors);
 
@@ -339,7 +359,7 @@ TEST_F(NestedLoopJoinTest, bigintArray) {
 }
 
 TEST_F(NestedLoopJoinTest, allTypes) {
-  RowTypePtr leftTypes = ROW(
+  RowTypePtr leftType = ROW(
       {{"t0", BIGINT()},
        {"t1", VARCHAR()},
        {"t2", REAL()},
@@ -348,7 +368,7 @@ TEST_F(NestedLoopJoinTest, allTypes) {
        {"t5", SMALLINT()},
        {"t6", TINYINT()}});
 
-  RowTypePtr rightTypes = ROW(
+  RowTypePtr rightType = ROW(
       {{"u0", BIGINT()},
        {"u1", VARCHAR()},
        {"u2", REAL()},
@@ -357,23 +377,17 @@ TEST_F(NestedLoopJoinTest, allTypes) {
        {"u5", SMALLINT()},
        {"u6", TINYINT()}});
 
-  auto leftVectors = makeBatches(60, 5, leftTypes, pool_.get());
-  auto rightVectors = makeBatches(50, 5, rightTypes, pool_.get());
+  auto leftVectors = makeBatches(60, 5, leftType, pool_.get());
+  auto rightVectors = makeBatches(50, 5, rightType, pool_.get());
   createDuckDbTable("t", leftVectors);
   createDuckDbTable("u", rightVectors);
 
-  auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
-  auto plan =
-      PlanBuilder(planNodeIdGenerator)
-          .values(leftVectors)
-          .nestedLoopJoin(
-              PlanBuilder(planNodeIdGenerator).values(rightVectors).planNode(),
-              "t0 = u0 AND t1 = u1 AND t2 = u2 AND t3 = u3 AND t4 = u4 AND t5 = u5 AND t6 = u6",
-              {"t0", "u0"},
-              core::JoinType::kFull)
-          .planNode();
-
-  assertQuery(
-      plan,
-      "SELECT t0, u0 FROM t FULL JOIN u ON t.t0 = u0 AND t1 = u1 AND t2 = u2 AND t3 = u3 AND t4 = u4 AND t5 = u5 AND t6 = u6");
+  setLeftType(leftType);
+  setRightType(rightType);
+  setComparisons({"="});
+  setJoinConditionStr(
+      "t0 {0} u0 AND t1 {0} u1 AND t2 {0} u2 AND t3 {0} u3 AND t4 {0} u4 AND t5 {0} u5 AND t6 {0} u6");
+  setQueryStr(
+      "SELECT t0, u0 FROM t {0} JOIN u ON t.t0 {1} u0 AND t1 {1} u1 AND t2 {1} u2 AND t3 {1} u3 AND t4 {1} u4 AND t5 {1} u5 AND t6 {1} u6");
+  runTest(leftVectors, rightVectors);
 }

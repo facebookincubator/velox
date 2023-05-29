@@ -20,6 +20,8 @@
 #include "velox/exec/tests/utils/OperatorTestBase.h"
 #include "velox/vector/fuzzer/VectorFuzzer.h"
 
+#include <iostream>
+
 using namespace facebook::velox;
 using namespace facebook::velox::test;
 using namespace facebook::velox::exec;
@@ -296,4 +298,67 @@ TEST_F(OperatorUtilsTest, initializeRowNumberMapping) {
   ASSERT_EQ(mapping.get(), otherMapping.get());
   rawMapping = initializeRowNumberMapping(mapping, 10, pool());
   ASSERT_NE(mapping.get(), otherMapping.get());
+}
+
+TEST_F(OperatorUtilsTest, projectChildren) {
+  constexpr vector_size_t srcVectorSize{10};
+  const auto srcRowType = ROW({
+      {"bool_val", BOOLEAN()},
+      {"int_val", INTEGER()},
+      {"double_val", DOUBLE()},
+      {"string_val", VARCHAR()},
+  });
+  VectorFuzzer fuzzer({}, pool());
+  auto srcVector{fuzzer.fuzzFlat(srcRowType, srcVectorSize)};
+  RowVectorPtr srcRowVector{std::dynamic_pointer_cast<RowVector>(srcVector)};
+
+  {
+    std::vector<IdentityProjection> emptyProjection{};
+    auto destRowVector =
+        BaseVector::create<RowVector>(srcRowType, srcVectorSize, pool());
+    projectChildren(
+        destRowVector, srcRowVector, emptyProjection, srcVectorSize, nullptr);
+    for (vector_size_t i = 0; i < destRowVector->childrenSize(); ++i) {
+      ASSERT_EQ(destRowVector->childAt(i)->size(), 0);
+    }
+  }
+
+  {
+    std::vector<IdentityProjection> identicalProjections{};
+    for (auto i = 0; i < srcRowType->size(); ++i) {
+      identicalProjections.emplace_back(i, i);
+    }
+    auto destRowVector =
+        BaseVector::create<RowVector>(srcRowType, srcVectorSize, pool());
+    projectChildren(
+        destRowVector,
+        srcRowVector,
+        identicalProjections,
+        srcVectorSize,
+        nullptr);
+    for (const auto& projection : identicalProjections) {
+      ASSERT_EQ(
+          destRowVector->childAt(projection.outputChannel).get(),
+          srcRowVector->childAt(projection.inputChannel).get());
+    }
+  }
+
+  {
+    const auto destRowType = ROW({
+        {"double_val", DOUBLE()},
+        {"bool_val", BOOLEAN()},
+    });
+    std::vector<IdentityProjection> projections{};
+    projections.emplace_back(2, 0);
+    projections.emplace_back(0, 1);
+    auto destRowVector =
+        BaseVector::create<RowVector>(destRowType, srcVectorSize, pool());
+    projectChildren(
+        destRowVector, srcRowVector, projections, srcVectorSize, nullptr);
+    for (const auto& projection : projections) {
+      ASSERT_EQ(
+          destRowVector->childAt(projection.outputChannel).get(),
+          srcRowVector->childAt(projection.inputChannel).get());
+    }
+  }
 }

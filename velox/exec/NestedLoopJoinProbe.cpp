@@ -71,28 +71,29 @@ NestedLoopJoinProbe::NestedLoopJoinProbe(
 
 BlockingReason NestedLoopJoinProbe::isBlocked(ContinueFuture* future) {
   switch (state_) {
-    case ProbeOperatorState::kRunning:
-      FOLLY_FALLTHROUGH;
     case ProbeOperatorState::kFinish:
       return BlockingReason::kNotBlocked;
     case ProbeOperatorState::kWaitForBuild: {
-      VELOX_CHECK(buildData_.has_value() == false);
+      VELOX_CHECK(!buildVectors_.has_value());
       if (!getBuildData(future)) {
         return BlockingReason::kWaitForJoinBuild;
       }
-      VELOX_CHECK(buildData_.has_value());
+      VELOX_CHECK(buildVectors_.has_value());
 
       if (needsBuildMismatch(joinType_)) {
-        buildMatched_.resize(buildData_->size());
-        for (auto i = 0; i < buildData_->size(); ++i) {
-          buildMatched_[i].resizeFill(buildData_.value()[i]->size(), false);
+        buildMatched_.resize(buildVectors_->size());
+        for (auto i = 0; i < buildVectors_->size(); ++i) {
+          buildMatched_[i].resizeFill(buildVectors_.value()[i]->size(), false);
         }
       }
 
       setState(ProbeOperatorState::kRunning);
       return BlockingReason::kNotBlocked;
     }
-    case ProbeOperatorState::kWaitForPeers:
+    case ProbeOperatorState::kRunning:
+      if (!processingBuildMismatch()) {
+        return BlockingReason::kNotBlocked;
+      }
       if (future_.valid()) {
         *future = std::move(future_);
         return BlockingReason::kWaitForJoinProbe;
@@ -110,7 +111,7 @@ void NestedLoopJoinProbe::close() {
   if (joinCondition_ != nullptr) {
     joinCondition_->clear();
   }
-  buildData_.reset();
+  buildVectors_.reset();
   Operator::close();
 }
 
@@ -122,68 +123,67 @@ void NestedLoopJoinProbe::addInput(RowVectorPtr input) {
     child->loadedVector();
   }
   input_ = std::move(input);
-  buildIndex_ = 0;
+  VELOX_CHECK_EQ(buildIndex_, 0);
   if (needsProbeMismatch(joinType_)) {
     probeMatched_.resizeFill(input_->size(), false);
   }
 }
 
 RowVectorPtr NestedLoopJoinProbe::getOutput() {
+  if (isFinished()) {
+    return nullptr;
+  }
   while (true) {
-    switch (state_) {
-      case ProbeOperatorState::kFinish:
-        return nullptr;
-      case ProbeOperatorState::kWaitForPeers: {
-        VELOX_CHECK(lastProbe_);
-        RowVectorPtr output{nullptr};
-        while (!output && !hasProbedAllBuildData()) {
-          output = getMismatchedOutput(
-              buildData_.value()[buildIndex_],
-              buildMatched_[buildIndex_],
-              buildOutMapping_,
-              buildProjections_,
-              identityProjections_);
-          buildIndex_++;
-        }
-        if (hasProbedAllBuildData()) {
-          setState(ProbeOperatorState::kFinish);
-        }
-        return output;
-      }
-      case ProbeOperatorState::kRunning: {
-        if (input_ == nullptr) {
-          return nullptr;
-        }
-        // When input_ is not null but buildIndex_ is at the end, it means the
-        // matching of input_ and buildData_ has finished. For left/full joins,
-        // the next step is to emit output for mismatched probe side rows.
-        if (hasProbedAllBuildData()) {
-          auto output = needsProbeMismatch(joinType_)
-              ? getMismatchedOutput(
-                    input_,
-                    probeMatched_,
-                    probeOutMapping_,
-                    identityProjections_,
-                    buildProjections_)
-              : nullptr;
-          finishMatchAndProbeMismatch();
-          return output;
-        }
+    VELOX_CHECK_EQ(state_, ProbeOperatorState::kRunning);
 
-        vector_size_t probeCnt = getProbeCnt();
-        auto output = doMatching(probeCnt);
-        if (advanceIndex(probeCnt)) {
-          if (!needsProbeMismatch(joinType_)) {
-            finishMatchAndProbeMismatch();
-          }
-        }
-        if (output) {
-          return output;
-        }
-        break;
+    if (lastProbe_) {
+      VELOX_CHECK(processingBuildMismatch());
+      VELOX_CHECK_NULL(input_);
+
+      RowVectorPtr output{nullptr};
+      while (!output && !hasProbedAllBuildData()) {
+        output = getMismatchedOutput(
+            buildVectors_.value()[buildIndex_],
+            buildMatched_[buildIndex_],
+            buildOutMapping_,
+            buildProjections_,
+            identityProjections_);
+        ++buildIndex_;
       }
-      default:
-        VELOX_UNREACHABLE(probeOperatorStateName(state_));
+      if (hasProbedAllBuildData()) {
+        setState(ProbeOperatorState::kFinish);
+      }
+      return output;
+    }
+
+    if (input_ == nullptr) {
+      return nullptr;
+    }
+
+    // When input_ is not null but buildIndex_ is at the end, it means the
+    // matching of input_ and buildData_ has finished. For left/full joins,
+    // the next step is to emit output for mismatched probe side rows.
+    if (hasProbedAllBuildData()) {
+      auto output = needsProbeMismatch(joinType_) ? getMismatchedOutput(
+                                                        input_,
+                                                        probeMatched_,
+                                                        probeOutMapping_,
+                                                        identityProjections_,
+                                                        buildProjections_)
+                                                  : nullptr;
+      finishProbeInput();
+      return output;
+    }
+
+    vector_size_t probeCnt = getNumProbeRows();
+    auto output = doMatch(probeCnt);
+    if (advanceProbeRows(probeCnt)) {
+      if (!needsProbeMismatch(joinType_)) {
+        finishProbeInput();
+      }
+    }
+    if (output) {
+      return output;
     }
   }
   VELOX_UNREACHABLE();
@@ -261,8 +261,10 @@ RowVectorPtr NestedLoopJoinProbe::getMismatchedOutput(
   return output;
 }
 
-void NestedLoopJoinProbe::finishMatchAndProbeMismatch() {
+void NestedLoopJoinProbe::finishProbeInput() {
+  VELOX_CHECK_NOT_NULL(input_);
   input_.reset();
+  buildIndex_ = 0;
   if (!noMoreInput_) {
     return;
   }
@@ -288,8 +290,6 @@ void NestedLoopJoinProbe::noMoreInput() {
 void NestedLoopJoinProbe::beginBuildMismatch() {
   VELOX_CHECK(needsBuildMismatch(joinType_));
 
-  setState(ProbeOperatorState::kWaitForPeers);
-
   std::vector<ContinuePromise> promises;
   std::vector<std::shared_ptr<Driver>> peers;
   if (!operatorCtx_->task()->allPeersFinished(
@@ -304,7 +304,7 @@ void NestedLoopJoinProbe::beginBuildMismatch() {
   for (auto& peer : peers) {
     auto op = peer->findOperator(planNodeId());
     auto* probe = dynamic_cast<NestedLoopJoinProbe*>(op);
-    VELOX_CHECK(probe);
+    VELOX_CHECK_NOT_NULL(probe);
     for (auto i = 0; i < buildMatched_.size(); ++i) {
       buildMatched_[i].select(probe->buildMatched_[i]);
     }
@@ -319,7 +319,7 @@ void NestedLoopJoinProbe::beginBuildMismatch() {
 }
 
 bool NestedLoopJoinProbe::getBuildData(ContinueFuture* future) {
-  VELOX_CHECK(!buildData_.has_value());
+  VELOX_CHECK(!buildVectors_.has_value());
 
   auto buildData =
       operatorCtx_->task()
@@ -330,8 +330,8 @@ bool NestedLoopJoinProbe::getBuildData(ContinueFuture* future) {
     return false;
   }
 
-  buildData_ = std::move(buildData);
-  if (buildData_->empty()) {
+  buildVectors_ = std::move(buildData);
+  if (buildVectors_->empty()) {
     // Build side is empty. Return empty set of rows and  terminate the pipeline
     // early.
     buildSideEmpty_ = true;
@@ -339,20 +339,20 @@ bool NestedLoopJoinProbe::getBuildData(ContinueFuture* future) {
   return true;
 }
 
-vector_size_t NestedLoopJoinProbe::getProbeCnt() const {
+vector_size_t NestedLoopJoinProbe::getNumProbeRows() const {
   VELOX_CHECK_NOT_NULL(input_);
   VELOX_CHECK(!hasProbedAllBuildData());
 
   const auto inputSize = input_->size();
-  auto buildSize = buildData_.value()[buildIndex_]->size();
-  vector_size_t probeCnt;
-  if (buildSize > outputBatchSize_) {
-    probeCnt = 1;
+  auto numBuildRows = buildVectors_.value()[buildIndex_]->size();
+  vector_size_t numProbeRows;
+  if (numBuildRows > outputBatchSize_) {
+    numProbeRows = 1;
   } else {
     numProbeRows = std::min(
         (vector_size_t)outputBatchSize_ / numBuildRows, inputSize - probeRow_);
   }
-  return probeCnt;
+  return numProbeRows;
 }
 
 RowVectorPtr NestedLoopJoinProbe::getCrossProduct(
@@ -363,14 +363,15 @@ RowVectorPtr NestedLoopJoinProbe::getCrossProduct(
   VELOX_CHECK_GT(probeCnt, 0);
   VELOX_CHECK(!hasProbedAllBuildData());
 
-  const auto buildSize = buildData_.value()[buildIndex_]->size();
-  const auto batchSize = probeCnt * buildSize;
-  const bool probeCntChanged = (probeCnt != prevProbeCnt_);
-  prevProbeCnt_ = probeCnt;
-  auto output = BaseVector::create<RowVector>(outputType, batchSize, pool());
+  const auto buildSize = buildVectors_.value()[buildIndex_]->size();
+  const auto numOutputRows = probeCnt * buildSize;
+  const bool probeCntChanged = (probeCnt != numPrevProbedRows_);
+  numPrevProbedRows_ = probeCnt;
+  auto output =
+      BaseVector::create<RowVector>(outputType, numOutputRows, pool());
 
   auto rawProbeIndices =
-      initializeRowNumberMapping(probeIndices_, batchSize, pool());
+      initializeRowNumberMapping(probeIndices_, numOutputRows, pool());
   for (auto i = 0; i < probeCnt; ++i) {
     std::fill(
         rawProbeIndices.begin() + i * buildSize,
@@ -380,7 +381,7 @@ RowVectorPtr NestedLoopJoinProbe::getCrossProduct(
 
   if (probeCntChanged) {
     auto rawBuildIndices_ =
-        initializeRowNumberMapping(buildIndices_, batchSize, pool());
+        initializeRowNumberMapping(buildIndices_, numOutputRows, pool());
     for (auto i = 0; i < probeCnt; ++i) {
       std::iota(
           rawBuildIndices_.begin() + i * buildSize,
@@ -389,31 +390,32 @@ RowVectorPtr NestedLoopJoinProbe::getCrossProduct(
     }
   }
 
-  projectChildren(output, input_, probeProjections, batchSize, probeIndices_);
+  projectChildren(
+      output, input_, probeProjections, numOutputRows, probeIndices_);
   projectChildren(
       output,
-      buildData_.value()[buildIndex_],
+      buildVectors_.value()[buildIndex_],
       buildProjections,
-      batchSize,
+      numOutputRows,
       buildIndices_);
   return output;
 }
 
-bool NestedLoopJoinProbe::advanceIndex(vector_size_t probeCnt) {
+bool NestedLoopJoinProbe::advanceProbeRows(vector_size_t probeCnt) {
   probeRow_ += probeCnt;
   if (probeRow_ < input_->size()) {
     return false;
   }
   probeRow_ = 0;
-  prevProbeCnt_ = 0;
+  numPrevProbedRows_ = 0;
   do {
     ++buildIndex_;
   } while (!hasProbedAllBuildData() &&
-           !buildData_.value()[buildIndex_]->size());
+           !buildVectors_.value()[buildIndex_]->size());
   return hasProbedAllBuildData();
 }
 
-RowVectorPtr NestedLoopJoinProbe::doMatching(vector_size_t probeCnt) {
+RowVectorPtr NestedLoopJoinProbe::doMatch(vector_size_t probeCnt) {
   VELOX_CHECK_NOT_NULL(input_);
   VELOX_CHECK(!hasProbedAllBuildData());
 
@@ -440,45 +442,46 @@ RowVectorPtr NestedLoopJoinProbe::doMatching(vector_size_t probeCnt) {
   DecodedVector decodedFilterResult;
   decodedFilterResult.decode(*filterResult[0], filterInputRows_);
 
-  const vector_size_t resultSize = decodedFilterResult.size();
+  const vector_size_t maxOutputRows_ = decodedFilterResult.size();
   auto rawProbeOutMapping =
-      initializeRowNumberMapping(probeOutMapping_, resultSize, pool());
+      initializeRowNumberMapping(probeOutMapping_, maxOutputRows_, pool());
   auto rawBuildOutMapping =
-      initializeRowNumberMapping(buildOutMapping_, resultSize, pool());
+      initializeRowNumberMapping(buildOutMapping_, maxOutputRows_, pool());
   auto probeIndices = probeIndices_->asMutable<vector_size_t>();
   auto buildIndices = buildIndices_->asMutable<vector_size_t>();
-  int32_t outputSize{0};
-  for (auto i = 0; i < resultSize; ++i) {
+  int32_t numOutputRows{0};
+  for (auto i = 0; i < maxOutputRows_; ++i) {
     if (!decodedFilterResult.isNullAt(i) &&
         decodedFilterResult.valueAt<bool>(i)) {
-      rawProbeOutMapping[outputSize] = probeIndices[i];
-      rawBuildOutMapping[outputSize] = buildIndices[i];
-      outputSize++;
+      rawProbeOutMapping[numOutputRows] = probeIndices[i];
+      rawBuildOutMapping[numOutputRows] = buildIndices[i];
+      ++numOutputRows;
     }
   }
   if (needsProbeMismatch(joinType_)) {
-    for (auto i = 0; i < outputSize; ++i) {
+    for (auto i = 0; i < numOutputRows; ++i) {
       probeMatched_.setValid(rawProbeOutMapping[i], true);
     }
     probeMatched_.updateBounds();
   }
   if (needsBuildMismatch(joinType_)) {
-    for (auto i = 0; i < outputSize; ++i) {
+    for (auto i = 0; i < numOutputRows; ++i) {
       buildMatched_[buildIndex_].setValid(rawBuildOutMapping[i], true);
     }
   }
 
-  if (!outputSize) {
+  if (numOutputRows == 0) {
     return nullptr;
   }
-  auto output = BaseVector::create<RowVector>(outputType_, outputSize, pool());
+  auto output =
+      BaseVector::create<RowVector>(outputType_, numOutputRows, pool());
   projectChildren(
-      output, input_, identityProjections_, outputSize, probeOutMapping_);
+      output, input_, identityProjections_, numOutputRows, probeOutMapping_);
   projectChildren(
       output,
-      buildData_.value()[buildIndex_],
+      buildVectors_.value()[buildIndex_],
       buildProjections_,
-      outputSize,
+      numOutputRows,
       buildOutMapping_);
   return output;
 }

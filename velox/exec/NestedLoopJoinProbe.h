@@ -56,14 +56,15 @@ class NestedLoopJoinProbe : public Operator {
 
   bool getBuildData(ContinueFuture* future);
 
-  // Get probe side rows count to process on next call to getCrossProduct()
-  vector_size_t getProbeCnt() const;
+  // Calculates the number of probe rows to match with the build side vectors
+  // given the output batch size limit.
+  vector_size_t getNumProbeRows() const;
 
-  // Get cross product of next 'probeCnt' rows of input_ and all rows of
-  // buildData_.value()[buildIndex].
+  // Generates cross product of next 'probeCnt' rows of input_, and all rows of
+  // build side vector at 'buildIndex_' in 'buildData_'.
   // 'outputType' specifies the type of output.
   // Projections from input_ and buildData_ to the output are specified by
-  // 'probeProjections' and 'buildProjections', respectively. Caller is
+  // 'probeProjections' and 'buildProjections' respectively. Caller is
   // responsible for ensuring all columns in outputType is contained in either
   // projections.
   // TODO: consider consolidate the routine of producing cartesian product that
@@ -77,14 +78,14 @@ class NestedLoopJoinProbe : public Operator {
   // Evaluates joinCondition against the output of getCrossProduct(probeCnt),
   // returns the result that passed joinCondition, updates probeMatched_,
   // buildMatched_ accordingly.
-  RowVectorPtr doMatching(vector_size_t probeCnt);
+  RowVectorPtr doMatch(vector_size_t probeCnt);
 
-  // Update probeRow_ and buildIndex_ by advance probeRow_ by probeCnt.
-  // Return true if buildIndex_ is points to the end of buildData_.
-  bool advanceIndex(vector_size_t probeCnt);
+  // Updates 'probeRow_' and 'buildIndex_' by advancing 'probeRow_' by probeCnt.
+  // Returns true if 'buildIndex_' points to the end of 'buildData_'.
+  bool advanceProbeRows(vector_size_t probeCnt);
 
   bool hasProbedAllBuildData() const {
-    return (buildIndex_ == buildData_.value().size());
+    return (buildIndex_ == buildVectors_.value().size());
   }
 
   // Wraps rows of 'data' that are not selected in 'matched' and projects
@@ -98,7 +99,7 @@ class NestedLoopJoinProbe : public Operator {
       const std::vector<IdentityProjection>& projections,
       const std::vector<IdentityProjection>& nullProjections);
 
-  void finishMatchAndProbeMismatch();
+  void finishProbeInput();
 
   // When doing right/full joins, all but last probe operators that finished
   // matching and probe-side mismatch output, will block on kWaitForPeers state.
@@ -106,6 +107,11 @@ class NestedLoopJoinProbe : public Operator {
   // operators to emit output for mismatched build side rows, and notify other
   // probe operators to finish.
   void beginBuildMismatch();
+
+  bool processingBuildMismatch() const {
+    return state_ == ProbeOperatorState::kRunning && input_ == nullptr &&
+        noMoreInput_;
+  }
 
   void setState(ProbeOperatorState s) {
     state_ = s;
@@ -127,9 +133,9 @@ class NestedLoopJoinProbe : public Operator {
   // Probe side state
   // Input row to process on next call to getOutput().
   vector_size_t probeRow_{0};
-  // probeCnt used in the last call to getCrossProduct(). Gets reset upon every
-  // buildIndex_ updates.
-  vector_size_t prevProbeCnt_{0};
+  // Records the number of probed rows in last getCrossProduct() call. It is
+  // reset upon each 'buildIndex_' update.
+  vector_size_t numPrevProbedRows_{0};
   bool lastProbe_{false};
   // Represents whether probe side rows have been matched.
   SelectivityVector probeMatched_;
@@ -138,7 +144,7 @@ class NestedLoopJoinProbe : public Operator {
   BufferPtr probeIndices_;
 
   // Build side state
-  std::optional<std::vector<RowVectorPtr>> buildData_;
+  std::optional<std::vector<RowVectorPtr>> buildVectors_;
   bool buildSideEmpty_{false};
   // Index into buildData_ for the build side vector to process on next call to
   // getOutput().
