@@ -257,4 +257,3 @@ Probability Functions
     The mean and value must be real values and the standard deviation must be a real and
     positive value (all of type DOUBLE).
 
-    positive integers with numberOfTrials greater or equal to value.
