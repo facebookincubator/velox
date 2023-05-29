@@ -109,7 +109,7 @@ function install_fbthrift {
 }
 
 function install_conda {
-  MINICONDA_PATH=/opt/miniconda-for-velox-jasong
+  MINICONDA_PATH=/opt/miniconda-for-velox
   if [ -d "${MINICONDA_PATH}" ]; then
     if prompt "${MINICONDA_PATH} already exists. Delete?"; then
       rm -rf "${MINICONDA_PATH}"
