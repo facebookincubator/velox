@@ -76,8 +76,13 @@ struct BinomialCDFFunction {
     VELOX_USER_CHECK_GT(
         numOfTrials, 0, "numberOfTrials must be greater than 0");
 
-    if ((value < 0) || (numOfTrials == kInf) || (value == kInf)) {
+    if ((value < 0) || (numOfTrials == kInf)) {
       result = 0.0;
+      return;
+    }
+
+    if (value == kInf) {
+      result = 1.0;
       return;
     }
 

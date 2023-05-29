@@ -126,6 +126,7 @@ TEST_F(ProbabilityTest, binomialCDF) {
   EXPECT_EQ(binomialCDF(200, 0.3, 60), 0.5348091761606989);
   EXPECT_EQ(binomialCDF(kBigIntMax, 0.5, 2), 0.0);
   EXPECT_EQ(binomialCDF(kBigIntMax, 0.5, kBigIntMax), 0.0);
+  EXPECT_EQ(binomialCDF(10, 0.5, kBigIntMax), 1.0);
   EXPECT_EQ(binomialCDF(10, 0.1, kBigIntMin), 0.0);
   EXPECT_EQ(binomialCDF(10, 0.1, -2), 0.0);
   EXPECT_EQ(binomialCDF(25, 0.5, -100), 0.0);
