@@ -166,6 +166,10 @@ TEST_F(DateTimeFunctionsTest, makeDate) {
   VELOX_ASSERT_THROW(makeDate(2021, 13, 1), "Date out of range: 2021-13-1");
   VELOX_ASSERT_THROW(makeDate(2022, 3, 35), "Date out of range: 2022-3-35");
 
+  VELOX_ASSERT_THROW(makeDate(2023, 4, 31), "Date out of range: 2023-4-31");
+  parseTo("2023-03-31", expectedDate);
+  EXPECT_EQ(makeDate(2023, 3, 31), expectedDate);
+
   VELOX_ASSERT_THROW(makeDate(2023, 2, 29), "Date out of range: 2023-2-29");
   parseTo("2023-03-29", expectedDate);
   EXPECT_EQ(makeDate(2023, 3, 29), expectedDate);
