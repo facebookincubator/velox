@@ -1,4 +1,5 @@
 import pyvelox.pyvelox as pv
+import json
 import unittest
 import shutil, tempfile
 import os
@@ -18,10 +19,12 @@ BASE_PATH = os.path.join(os.getcwd(), "velox/substrait/tests/data/")
 class TestVeloxSubstrait(unittest.TestCase):
     def setUp(self):
         # create a temporary directory
+        pv.initialize_substrait()
         self.test_dir = tempfile.mkdtemp()
 
     def tearDown(self):
         # remove the temporary directory
+        pv.finalize_substrait()
         shutil.rmtree(self.test_dir)
         
     def test_make_row_vectors(self):
@@ -51,9 +54,7 @@ class TestVeloxSubstrait(unittest.TestCase):
     def test_simple(self):
         other_path = BASE_PATH + "substrait_virtualTable.json"
         
-        pv.initialize_substrait()
         res = pv.run_substrait_query(other_path)
-        pv.finalize_substrait()
         
         expected_vectors = [
             pv.from_list([2499109626526694126, 2342493223442167775, 4077358421272316858]),
@@ -261,10 +262,9 @@ class TestVeloxSubstrait(unittest.TestCase):
         pv.save_row_vector([row_vec], self.test_dir + "/mock_lineitem.orc")
         
         assert os.path.exists(self.test_dir + "/mock_lineitem.orc")
-        
-        pv.initialize_substrait()
+
         res = pv.run_substrait_query(plan_path, True, self.test_dir)
-        pv.finalize_substrait()
+
 
         for i in range(len(res)):
             vec = res[i]
@@ -278,8 +278,27 @@ class TestVeloxSubstrait(unittest.TestCase):
         with open(other_path, "w") as fp:
             fp.write("no json")
 
-        pv.initialize_substrait()
         with self.assertRaises(ValueError) as cm:
             pv.run_substrait_query(other_path)
-        self.assertEqual('plan should be either path to a plan in JSON format or JSON object', str(cm.exception))
-        pv.finalize_substrait()
+        self.assertEqual('plan should be path to a plan in JSON format.', str(cm.exception))
+
+    def test_plan_str_json_format(self):
+        other_path = BASE_PATH + "substrait_virtualTable.json"
+        with open(other_path, 'r') as f:
+            data = f.read()
+
+        res = pv.run_substrait_query(data)
+
+        expected_vectors = [
+            pv.from_list([2499109626526694126, 2342493223442167775, 4077358421272316858]),
+            pv.from_list([581869302, -708632711, -133711905]),
+            pv.from_list([0.90579193414549275, 0.96886777112423139, 0.63235925003444637]),
+            pv.from_list([True, False, False]),
+        ]
+
+        for i in range(len(res) - 1):
+            vec = res[i]
+            exp_vec = expected_vectors[i]
+            N = len(vec)
+            for i in range(N):
+                assert vec[i] == exp_vec[i]

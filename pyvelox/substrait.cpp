@@ -22,16 +22,13 @@
 #include <velox/exec/tests/utils/TempDirectoryPath.h>
 #include <velox/functions/prestosql/aggregates/RegisterAggregateFunctions.h>
 #include <velox/functions/prestosql/registration/RegistrationFunctions.h>
+#include <algorithm>
 #include <filesystem>
 #include <fstream>
 #include <iostream>
 #include <sstream>
-#include "context.h"
-
-// TODO: reorder
-#include <algorithm>
-#include <fstream>
 #include <string>
+#include "context.h"
 
 namespace facebook::velox::py {
 
@@ -54,11 +51,7 @@ static void readFromJSON(
       status.message());
 }
 
-bool isJsonFile(const std::string& filePath) {
-  std::ifstream file(filePath);
-  std::string content(
-      (std::istreambuf_iterator<char>(file)), std::istreambuf_iterator<char>());
-
+bool isJSON(std::string content) {
   // Remove leading whitespaces
   auto start =
       std::find_if_not(content.begin(), content.end(), [](unsigned char c) {
@@ -82,6 +75,13 @@ bool isJsonFile(const std::string& filePath) {
   return (
       (content.front() == '{' && content.back() == '}') ||
       (content.front() == '[' && content.back() == ']'));
+}
+
+bool isJsonFile(const std::string& filePath) {
+  std::ifstream file(filePath);
+  std::string content(
+      (std::istreambuf_iterator<char>(file)), std::istreambuf_iterator<char>());
+  return isJSON(content);
 }
 
 } // namespace
@@ -157,7 +157,9 @@ static inline RowVectorPtr runSubstraitQuery(
   ::substrait::Plan substraitPlan;
   // convert plan to protobuf
   // read from file
-  if (isFilePath(plan)) {
+  if (isJSON(plan)) {
+    readFromJSON(plan, substraitPlan);
+  } else if (isFilePath(plan)) {
     // check whether input file is in JSON format
     if (isJsonFile(plan)) {
       readFromFile(plan, substraitPlan);
@@ -166,8 +168,10 @@ static inline RowVectorPtr runSubstraitQuery(
       /// NOTE: To support Protobuf format, we should generate Substrait proto
       /// in Python format too. Then we should be able to add proto format too.
       throw py::value_error(
-          "plan should be either path to a plan in JSON format or JSON object");
+          "plan should be path to a plan in JSON format.");
     }
+  } else {
+    throw py::value_error("Invalid Substrait plan.");
   }
 
   auto planNode = planConverter.toVeloxPlan(substraitPlan);
