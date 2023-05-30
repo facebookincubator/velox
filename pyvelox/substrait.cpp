@@ -22,14 +22,69 @@
 #include <velox/exec/tests/utils/TempDirectoryPath.h>
 #include <velox/functions/prestosql/aggregates/RegisterAggregateFunctions.h>
 #include <velox/functions/prestosql/registration/RegistrationFunctions.h>
+#include <filesystem>
 #include <fstream>
 #include <iostream>
 #include <sstream>
 #include "context.h"
 
+// TODO: reorder
+#include <algorithm>
+#include <fstream>
+#include <string>
+
 namespace facebook::velox::py {
 
 namespace py = pybind11;
+
+namespace {
+
+bool isFilePath(const std::string& path) {
+  return std::filesystem::exists(path);
+}
+
+static void readFromJSON(
+    const std::string& msg,
+    google::protobuf::Message& protoMsg) {
+  auto status = google::protobuf::util::JsonStringToMessage(msg, &protoMsg);
+  VELOX_CHECK(
+      status.ok(),
+      "Failed to parse Substrait JSON: {} {}",
+      status.code(),
+      status.message());
+}
+
+bool isJsonFile(const std::string& filePath) {
+  std::ifstream file(filePath);
+  std::string content(
+      (std::istreambuf_iterator<char>(file)), std::istreambuf_iterator<char>());
+
+  // Remove leading whitespaces
+  auto start =
+      std::find_if_not(content.begin(), content.end(), [](unsigned char c) {
+        return std::isspace(c);
+      });
+  content.erase(content.begin(), start);
+
+  // Remove trailing whitespaces
+  auto end =
+      std::find_if_not(content.rbegin(), content.rend(), [](unsigned char c) {
+        return std::isspace(c);
+      });
+  content.erase(end.base(), content.end());
+
+  if (content.empty()) {
+    return false; // If the file is empty, it's not a JSON file
+  }
+
+  // Check if the first character is '{' or '[' and the last character is '}' or
+  // ']'
+  return (
+      (content.front() == '{' && content.back() == '}') ||
+      (content.front() == '[' && content.back() == ']'));
+}
+
+} // namespace
 
 static void readFromFile(
     const std::string& msgPath,
@@ -92,7 +147,7 @@ makeSplits(
 }
 
 static inline RowVectorPtr runSubstraitQuery(
-    const std::string& planPath,
+    const std::string& plan,
     bool enableSplits,
     const std::string& dirPath) {
   memory::MemoryPool* pool = PyVeloxContext::getSingletonInstance().pool();
@@ -100,7 +155,20 @@ static inline RowVectorPtr runSubstraitQuery(
   facebook::velox::substrait::SubstraitVeloxPlanConverter planConverter(pool);
 
   ::substrait::Plan substraitPlan;
-  readFromFile(planPath, substraitPlan);
+  // convert plan to protobuf
+  // read from file
+  if (isFilePath(plan)) {
+    // check whether input file is in JSON format
+    if (isJsonFile(plan)) {
+      readFromFile(plan, substraitPlan);
+    } else {
+      /// other formats are not yet supported.
+      /// NOTE: To support Protobuf format, we should generate Substrait proto
+      /// in Python format too. Then we should be able to add proto format too.
+      throw py::value_error(
+          "plan should be either path to a plan in JSON format or JSON object");
+    }
+  }
 
   auto planNode = planConverter.toVeloxPlan(substraitPlan);
 
@@ -131,7 +199,7 @@ void addSubstraitBindings(py::module& m, bool asModuleLocalDefinitions) {
         Parameters
         ----------
         plan : str
-        	The path of Substrait plan or Substrait plan JSON or Protobuf format.
+          The path of Substrait plan or Substrait plan JSON.
         enable_splits: bool
         	Flag to enable splits.
         file_path: str

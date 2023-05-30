@@ -272,3 +272,14 @@ class TestVeloxSubstrait(unittest.TestCase):
             N = len(vec)
             for i in range(N):
                 assert vec[i] == exp_vec[i]
+
+    def test_file_type_failure(self):
+        other_path = self.test_dir + "dummy_plan.txt"
+        with open(other_path, "w") as fp:
+            fp.write("no json")
+
+        pv.initialize_substrait()
+        with self.assertRaises(ValueError) as cm:
+            pv.run_substrait_query(other_path)
+        self.assertEqual('plan should be either path to a plan in JSON format or JSON object', str(cm.exception))
+        pv.finalize_substrait()
