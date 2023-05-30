@@ -90,11 +90,17 @@ struct Converter<TypeKind::BOOLEAN> {
   }
 
   static T cast(const UnscaledLongDecimal& d, bool& nullOutput) {
-    return folly::to<T>(d.unscaledValue());
+    if (d.unscaledValue() == 0) {
+      return false;
+    }
+    return true;
   }
 
   static T cast(const UnscaledShortDecimal& d, bool& nullOutput) {
-    return folly::to<T>(d.unscaledValue());
+    if (d.unscaledValue() == 0) {
+      return false;
+    }
+    return true;
   }
 };
 

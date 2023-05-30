@@ -78,11 +78,19 @@ void applyCastKernel(
     if constexpr (
         CppToType<From>::typeKind == TypeKind::SHORT_DECIMAL ||
         CppToType<From>::typeKind == TypeKind::LONG_DECIMAL) {
-      auto output = util::
-          Converter<CppToType<To>::typeKind, void, Truncate, AllowDecimal>::
-              cast(input->valueAt(row), nullOutput, input->type());
-      if (!nullOutput) {
-        result->set(row, output);
+      if constexpr (CppToType<To>::typeKind == TypeKind::BOOLEAN) {
+        auto output = util::Converter<CppToType<To>::typeKind>::cast(
+            input->valueAt(row), nullOutput);
+        if (!nullOutput) {
+          result->set(row, output);
+        }
+      } else {
+        auto output = util::
+            Converter<CppToType<To>::typeKind, void, Truncate, AllowDecimal>::
+                cast(input->valueAt(row), nullOutput, input->type());
+        if (!nullOutput) {
+          result->set(row, output);
+        }
       }
     } else {
       auto output = util::
