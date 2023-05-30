@@ -24,8 +24,6 @@
 
 #include "velox/substrait/SubstraitToVeloxPlan.h"
 
-#include <iostream>
-
 using namespace facebook::velox;
 using namespace facebook::velox::test;
 using namespace facebook::velox::exec;
@@ -59,7 +57,6 @@ TEST_F(Substrait2VeloxValuesNodeConversionTest, valuesNode) {
 
       });
 
-  std::cout << expectedData->toString(0, 10) << std::endl;
   createDuckDbTable({expectedData});
   assertQuery(veloxPlan, "SELECT * FROM tmp");
 }

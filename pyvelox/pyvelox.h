@@ -23,6 +23,7 @@
 #include <pybind11/stl.h>
 #include <pybind11/stl_bind.h>
 #include <velox/buffer/StringViewBufferHolder.h>
+#include <velox/dwio/dwrf/writer/Writer.h>
 #include <velox/expression/Expr.h>
 #include <velox/functions/prestosql/registration/RegistrationFunctions.h>
 #include <velox/parse/Expressions.h>
@@ -33,12 +34,13 @@
 #include <velox/vector/ComplexVector.h>
 #include <velox/vector/DictionaryVector.h>
 #include <velox/vector/FlatVector.h>
+#include <velox/vector/tests/utils/VectorMaker.h>
 #include "folly/json.h"
 
 #include "context.h"
 
-#include <velox/vector/tests/utils/VectorMaker.h>
-#include "velox/dwio/dwrf/writer/Writer.h"
+
+
 
 namespace facebook::velox::py {
 
@@ -182,13 +184,13 @@ static py::object getItemFromSimpleVector(
     SimpleVectorPtr<NativeType>& vector,
     vector_size_t idx);
 
-inline void checkRowVectorBounds(RowVectorPtr& v, vector_size_t idx) {
+inline void checkRowVectorBounds(const RowVectorPtr& v, vector_size_t idx) {
   if (idx < 0 || size_t(idx) >= v->childrenSize()) {
     throw std::out_of_range("Index out of range");
   }
 }
 
-inline VectorPtr getVectorFromRowVectorPtr(RowVectorPtr& v, vector_size_t idx) {
+inline VectorPtr getVectorFromRowVectorPtr(const RowVectorPtr& v, vector_size_t idx) {
   checkRowVectorBounds(v, idx);
   return v->childAt(idx);
 }

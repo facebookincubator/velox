@@ -68,7 +68,7 @@ class TestVeloxSubstrait(unittest.TestCase):
             N = len(vec)
             for i in range(N):
                 assert vec[i] == exp_vec[i]
-                
+
     def test_aggregates(self):
         substrait_plan = "q6_first_stage.json"
         plan_path = BASE_PATH + substrait_plan
@@ -272,4 +272,3 @@ class TestVeloxSubstrait(unittest.TestCase):
             N = len(vec)
             for i in range(N):
                 assert vec[i] == exp_vec[i]
-            

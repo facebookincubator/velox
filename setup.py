@@ -131,8 +131,7 @@ class CMakeBuild(build_ext):
             "-DVELOX_CODEGEN_SUPPORT=OFF",
         ]
         build_args = []
-        
-        # extra_cmake_flags = ' EXTRA_CMAKE_FLAGS="-DVELOX_ENABLE_SUBSTRAIT=ON -DVELOX_ENABLE_ARROW=ON"'
+
 
         # Default to Ninja
         if "CMAKE_GENERATOR" not in os.environ:
@@ -149,6 +148,7 @@ class CMakeBuild(build_ext):
 
         if not os.path.exists(self.build_temp):
             os.makedirs(self.build_temp)
+
         subprocess.check_call(
             ["cmake", str(ROOT_DIR)] + cmake_args, cwd=self.build_temp
         )
@@ -156,7 +156,6 @@ class CMakeBuild(build_ext):
         subprocess.check_call(
             ["cmake", "--build", "."] + build_args, cwd=self.build_temp
         )
-        
 
 
 setup(

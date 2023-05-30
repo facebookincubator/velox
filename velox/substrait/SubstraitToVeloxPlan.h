@@ -29,7 +29,6 @@ class SubstraitVeloxPlanConverter {
  public:
   explicit SubstraitVeloxPlanConverter(memory::MemoryPool* pool)
       : pool_(pool) {}
-
   struct SplitInfo {
     /// The Partition index.
     u_int32_t partitionIndex;

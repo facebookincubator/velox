@@ -404,11 +404,6 @@ core::PlanNodePtr SubstraitVeloxPlanConverter::toVeloxPlan(
   // Do not hard-code connector ID and allow for connectors other than Hive.
   static const std::string kHiveConnectorId = "test-hive";
 
-  // auto connector = connector::getConnectorFactory(
-  //         connector::hive::HiveConnectorFactory::kHiveConnectorName)
-  //         ->newConnector(kHiveConnectorId, nullptr);
-  // facebook::velox::connector::registerConnector(connector);
-
   // Velox requires Filter Pushdown must being enabled.
   bool filterPushdownEnabled = true;
   std::shared_ptr<connector::hive::HiveTableHandle> tableHandle;
