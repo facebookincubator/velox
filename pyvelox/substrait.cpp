@@ -97,7 +97,7 @@ static inline RowVectorPtr runSubstraitQuery(
     const std::string& planPath,
     bool enableSplits,
     const std::string& dirPath) {
-  memory::MemoryPool* pool = PyVeloxContext::getInstance().pool();
+  memory::MemoryPool* pool = PyVeloxContext::getSingletonInstance().pool();
 
   // PySubstraitContext::initialize();
   /// TODO: wrap this in a struct and see if we get the calling pure virtual

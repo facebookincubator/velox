@@ -61,6 +61,8 @@ struct PyVeloxContext {
   PyVeloxContext& operator=(const PyVeloxContext&) = delete;
   PyVeloxContext& operator=(const PyVeloxContext&&) = delete;
 
+  std::shared_ptr<facebook::velox::memory::MemoryPool> rootPool_{
+      memory::defaultMemoryManager().addRootPool()};
   std::shared_ptr<facebook::velox::memory::MemoryPool> pool_ =
       facebook::velox::memory::deprecatedAddDefaultLeafMemoryPool();
   std::shared_ptr<facebook::velox::core::QueryCtx> queryCtx_ =
