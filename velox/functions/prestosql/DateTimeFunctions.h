@@ -1113,7 +1113,8 @@ struct ParseDateTimeFunction {
 };
 
 // template <typename T>
-// struct FromISO8601TimestampFunction : public TimestampWithTimezoneSupport<T> {
+// struct FromISO8601TimestampFunction : public TimestampWithTimezoneSupport<T>
+// {
 //   VELOX_DEFINE_FUNCTION_TYPES(T);
 
 //   FOLLY_ALWAYS_INLINE void call(
