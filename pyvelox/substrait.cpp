@@ -125,8 +125,34 @@ void addSubstraitBindings(py::module& m, bool asModuleLocalDefinitions) {
   m.def(
       "run_substrait_query",
       &runSubstraitQuery,
-      "Runs a Substrait query and return output.",
-      py::arg("plan_path"),
+      R"delimiter(
+        Runs a Substrait query and return output.
+
+        Parameters
+        ----------
+        plan : str
+        	The path of Substrait plan or Substrait plan JSON or Protobuf format.
+        enable_splits: bool
+        	Flag to enable splits.
+        file_path: str
+        	The path to which the vector will be saved. Must specify if `enable_splits`
+        	is set to True.
+
+        Returns
+        -------
+        RowVector
+
+        Examples
+        --------
+
+        >>> import pyvelox.pyvelox as pv
+        >>> pv.initialize_substrait()
+        >>> res = pv.run_substrait_query('path_to_substrait_plan')
+        >>> pv.finalize_substrait()
+        >>> type(res)
+        <class 'pyvelox.pyvelox.RowVector'>
+      )delimiter",
+      py::arg("plan"),
       py::arg("enable_splits") = false,
       py::arg("dir_path") = "");
   m.def(

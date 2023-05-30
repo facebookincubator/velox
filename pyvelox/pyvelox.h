@@ -39,9 +39,6 @@
 
 #include "context.h"
 
-
-
-
 namespace facebook::velox::py {
 
 namespace py = pybind11;
@@ -190,7 +187,9 @@ inline void checkRowVectorBounds(const RowVectorPtr& v, vector_size_t idx) {
   }
 }
 
-inline VectorPtr getVectorFromRowVectorPtr(const RowVectorPtr& v, vector_size_t idx) {
+inline VectorPtr getVectorFromRowVectorPtr(
+    const RowVectorPtr& v,
+    vector_size_t idx) {
   checkRowVectorBounds(v, idx);
   return v->childAt(idx);
 }

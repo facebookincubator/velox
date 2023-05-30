@@ -132,7 +132,6 @@ class CMakeBuild(build_ext):
         ]
         build_args = []
 
-
         # Default to Ninja
         if "CMAKE_GENERATOR" not in os.environ:
             cmake_args += ["-GNinja"]
