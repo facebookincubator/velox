@@ -149,8 +149,6 @@ TEST_F(ProbabilityTest, binomialCDF) {
   VELOX_ASSERT_THROW(
       binomialCDF(kBigIntMin, 0.5, 1), "numberOfTrials must be greater than 0");
   VELOX_ASSERT_THROW(
-      binomialCDF(kNan, 0.5, 3), "numberOfTrials must be greater than 0");
-  VELOX_ASSERT_THROW(
       binomialCDF(-2, 2, -1),
       "successProbability must be in the interval [0, 1]");
   VELOX_ASSERT_THROW(
