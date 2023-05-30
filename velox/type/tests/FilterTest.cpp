@@ -1046,6 +1046,25 @@ TEST(FilterTest, multiRange) {
   filter = orFilter(lessThan(""), greaterThan(""));
   EXPECT_FALSE(filter->testBytes(nullptr, 0));
   EXPECT_TRUE(filter->testBytes("abc", 3));
+
+  filter = orFilter(between(1, 10), between(100, 120));
+
+  EXPECT_TRUE(filter->testInt64(1));
+  EXPECT_TRUE(filter->testInt64(5));
+  EXPECT_TRUE(filter->testInt64(10));
+  EXPECT_TRUE(filter->testInt64(100));
+  EXPECT_TRUE(filter->testInt64(110));
+  EXPECT_TRUE(filter->testInt64(120));
+  EXPECT_FALSE(filter->testNull());
+  EXPECT_FALSE(filter->testInt64(0));
+  EXPECT_FALSE(filter->testInt64(50));
+  EXPECT_FALSE(filter->testInt64(150));
+  EXPECT_TRUE(filter->testInt64Range(5, 15, false));
+  EXPECT_TRUE(filter->testInt64Range(5, 15, true));
+  EXPECT_TRUE(filter->testInt64Range(105, 115, false));
+  EXPECT_TRUE(filter->testInt64Range(105, 115, true));
+  EXPECT_FALSE(filter->testInt64Range(15, 45, false));
+  EXPECT_FALSE(filter->testInt64Range(15, 45, true));
 }
 
 TEST(FilterTest, multiRangeWithNaNs) {

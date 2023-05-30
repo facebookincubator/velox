@@ -1866,6 +1866,8 @@ class MultiRange final : public Filter {
   std::unique_ptr<Filter> clone(
       std::optional<bool> nullAllowed = std::nullopt) const final;
 
+  bool testInt64(int64_t value) const final;
+
   bool testDouble(double value) const final;
 
   bool testFloat(float value) const final;
@@ -1873,6 +1875,8 @@ class MultiRange final : public Filter {
   bool testBytes(const char* value, int32_t length) const final;
 
   bool testLength(int32_t length) const final;
+
+  bool testInt64Range(int64_t min, int64_t max, bool hasNull) const final;
 
   bool testBytesRange(
       std::optional<std::string_view> min,

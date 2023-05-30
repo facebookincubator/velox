@@ -1347,6 +1347,18 @@ std::unique_ptr<Filter> MultiRange::clone(
   }
 }
 
+bool MultiRange::testInt64(int64_t value) const {
+  if (std::isnan(value)) {
+    return nanAllowed_;
+  }
+  for (const auto& filter : filters_) {
+    if (filter->testInt64(value)) {
+      return true;
+    }
+  }
+  return false;
+}
+
 bool MultiRange::testDouble(double value) const {
   if (std::isnan(value)) {
     return nanAllowed_;
@@ -1383,6 +1395,18 @@ bool MultiRange::testBytes(const char* value, int32_t length) const {
 bool MultiRange::testLength(int32_t length) const {
   for (const auto& filter : filters_) {
     if (filter->testLength(length)) {
+      return true;
+    }
+  }
+  return false;
+}
+
+bool MultiRange::testInt64Range(int64_t min, int64_t max, bool hasNull) const {
+  if (hasNull && nullAllowed_) {
+    return true;
+  }
+  for (const auto& filter : filters_) {
+    if (filter->testInt64Range(min, max, hasNull)) {
       return true;
     }
   }
