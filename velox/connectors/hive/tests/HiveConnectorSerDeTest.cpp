@@ -90,10 +90,10 @@ TEST_F(HiveConnectorSerDeTest, hiveColumnHandle) {
        {"c0c1",
         ARRAY(MAP(
             VARCHAR(), ROW({{"c0c1c0", BIGINT()}, {"c0c1c1", BIGINT()}})))}});
-  auto columnHandle = exec::test::makeColumnHandle(
+  auto columnHandle = exec::test::HiveConnectorTestBase::makeColumnHandle(
       "columnHandle", columnType, {"c0.c0c1[3][\"foo\"].c0c1c0"});
 
-  testSerde(columnHandle);
+  testSerde(*columnHandle);
 }
 
 TEST_F(HiveConnectorSerDeTest, locationHandle) {

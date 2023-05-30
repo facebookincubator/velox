@@ -27,21 +27,6 @@ static const std::string kHiveConnectorId = "test-hive";
 using ColumnHandleMap =
     std::unordered_map<std::string, std::shared_ptr<connector::ColumnHandle>>;
 
-connector::hive::HiveColumnHandle makeColumnHandle(
-    const std::string& name,
-    const TypePtr& type,
-    const std::vector<std::string>& requiredSubfields) {
-  std::vector<common::Subfield> subfields;
-  for (auto& path : requiredSubfields) {
-    subfields.emplace_back(path);
-  }
-  return connector::hive::HiveColumnHandle(
-      name,
-      connector::hive::HiveColumnHandle::ColumnType::kRegular,
-      type,
-      std::move(subfields));
-}
-
 class HiveConnectorTestBase : public OperatorTestBase {
  public:
   HiveConnectorTestBase();
@@ -99,6 +84,14 @@ class HiveConnectorTestBase : public OperatorTestBase {
         std::move(subfieldFilters),
         remainingFilter);
   }
+
+  /// @param name Column name.
+  /// @param type Column type.
+  /// @param Required subfields of this column.
+  static std::shared_ptr<connector::hive::HiveColumnHandle> makeColumnHandle(
+      const std::string& name,
+      const TypePtr& type,
+      const std::vector<std::string>& requiredSubfields);
 
   /// @param targetDirectory Final directory of the target table after commit.
   /// @param writeDirectory Write directory of the target table before commit.
