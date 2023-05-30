@@ -167,8 +167,7 @@ static inline RowVectorPtr runSubstraitQuery(
       /// other formats are not yet supported.
       /// NOTE: To support Protobuf format, we should generate Substrait proto
       /// in Python format too. Then we should be able to add proto format too.
-      throw py::value_error(
-          "plan should be path to a plan in JSON format.");
+      throw py::value_error("plan should be path to a plan in JSON format.");
     }
   } else {
     throw py::value_error("Invalid Substrait plan.");
