@@ -209,13 +209,10 @@ TEST(CoalesceIfDistanceLETest, SegmentsMustBeSorted) {
       ::facebook::velox::VeloxRuntimeError);
 }
 
-TEST(CoalesceIfDistanceLETest, SegmentsCantOverlap) {
-  EXPECT_THROW(
-      willCoalesceIfDistanceLE(0, {0, 1}, {0, 1}),
-      ::facebook::velox::VeloxRuntimeError);
-  EXPECT_THROW(
-      willCoalesceIfDistanceLE(10, {0, 1}, {0, 1}),
-      ::facebook::velox::VeloxRuntimeError);
+TEST(CoalesceIfDistanceLETest, SegmentsCanBeDuplicatedButNotPartiallyOverlap) {
+  EXPECT_TRUE(willCoalesceIfDistanceLE(0, {0, 1}, {0, 1}));
+  EXPECT_TRUE(willCoalesceIfDistanceLE(10, {0, 1}, {0, 1}));
+
   EXPECT_THROW(
       willCoalesceIfDistanceLE(0, {0, 2}, {1, 1}),
       ::facebook::velox::VeloxRuntimeError);
@@ -264,6 +261,27 @@ TEST(ReadToSegmentsTest, CanReadToNonContiguousSegments) {
   EXPECT_EQ(
       testData.buffers,
       (std::vector<std::string>{"aaaa", "is", "bb", "awesome", "dddd"}));
+}
+
+TEST(ReadToSegmentsTest, CanReadToMultipleLocations) {
+  std::vector<std::string> buffers = {"1111", "22", "33", "44", "5555"};
+  auto segments = std::vector<ReadFile::Segment>{
+      {0, {buffers[0].data(), buffers[0].size()}, {}},
+      {4, {buffers[1].data(), buffers[1].size()}, {}},
+      {4, {buffers[2].data(), buffers[2].size()}, {}},
+      {4, {buffers[3].data(), buffers[3].size()}, {}},
+      {6, {buffers[4].data(), buffers[4].size()}, {}}};
+
+  auto readToSegments =
+      ReadToSegments(segments.begin(), segments.end(), getReader());
+
+  EXPECT_EQ(
+      buffers, (std::vector<std::string>{"1111", "22", "33", "44", "5555"}));
+
+  readToSegments.read();
+
+  EXPECT_EQ(
+      buffers, (std::vector<std::string>{"aaaa", "ab", "ab", "ab", "bbbb"}));
 }
 
 TEST(ReadToSegmentsTest, NoSegmentsIsNoOp) {

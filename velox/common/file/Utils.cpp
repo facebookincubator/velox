@@ -22,10 +22,37 @@ namespace facebook::velox::file::utils {
 bool CoalesceIfDistanceLE::operator()(
     const ReadFile::Segment& a,
     const ReadFile::Segment& b) const {
-  VELOX_CHECK_LE(a.offset, b.offset, "Segments to combine must be sorted.");
+  if (a.offset == b.offset && a.buffer.size() == b.buffer.size()) {
+    // Support duplicate segments
+    return true;
+  }
+
+  VELOX_CHECK_LE(
+      a.offset,
+      b.offset,
+      "Segments must be sorted: a({}, {}, &{}, \"{}\"), b({}, {}, &{}, \"{}\")",
+      a.offset,
+      a.buffer.size(),
+      static_cast<void*>(a.buffer.data()),
+      a.label,
+      b.offset,
+      b.buffer.size(),
+      static_cast<void*>(b.buffer.data()),
+      b.label);
   const uint64_t beginGap = a.offset + a.buffer.size(), endGap = b.offset;
 
-  VELOX_CHECK_LE(beginGap, endGap, "Segments to combine can't overlap.");
+  VELOX_CHECK_LE(
+      beginGap,
+      endGap,
+      "Segment overlap is not supported: a({}, {}, &{}, \"{}\"), b({}, {}, &{}, \"{}\")",
+      a.offset,
+      a.buffer.size(),
+      static_cast<void*>(a.buffer.data()),
+      a.label,
+      b.offset,
+      b.buffer.size(),
+      static_cast<void*>(b.buffer.data()),
+      b.label);
   const uint64_t gap = endGap - beginGap;
 
   return gap <= maxCoalescingDistance_;

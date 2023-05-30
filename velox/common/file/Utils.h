@@ -131,13 +131,26 @@ class ReadToSegments {
     std::unique_ptr<folly::IOBuf> result = reader_(fileOffset, readSize);
 
     folly::io::Cursor cursor(result.get());
-    for (auto segment = begin_; segment != end_; ++segment) {
+    auto segment = begin_;
+    while (segment != end_) {
       if (fileOffset < segment->offset) {
         cursor.skip(segment->offset - fileOffset);
         fileOffset = segment->offset;
       }
       cursor.pull(segment->buffer.data(), segment->buffer.size());
       fileOffset += segment->buffer.size();
+
+      // Support reading to multiple locations
+      auto prev = segment;
+      while (++segment != end_ && prev->offset == segment->offset &&
+             prev->buffer.size() == segment->buffer.size()) {
+        if (prev->buffer.data() != segment->buffer.data()) {
+          memcpy(
+              segment->buffer.data(),
+              prev->buffer.data(),
+              segment->buffer.size());
+        }
+      }
     }
   }
 
