@@ -5,7 +5,7 @@ Window functions
 Spark window functions can be used to compute SQL window functions.
 
 Value functions
-_______________
+---------------
 
 .. function:: nth_value(x, offset) -> [same as input]
 
