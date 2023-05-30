@@ -47,21 +47,25 @@ class SubscriptImpl : public exec::VectorFunction {
       exec::EvalCtx& context,
       VectorPtr& result) const override {
     VELOX_CHECK_EQ(args.size(), 2);
-    VectorPtr localResult;
 
     switch (args[0]->typeKind()) {
       case TypeKind::ARRAY:
-        localResult = applyArray(rows, args, context);
+        VELOX_DYNAMIC_TYPE_DISPATCH(
+            applyArray,
+            args[0]->type()->childAt(0)->kind(),
+            rows,
+            args,
+            context,
+            result);
         break;
 
       case TypeKind::MAP:
-        localResult = applyMap(rows, args, context);
+        applyMap(rows, args, context, result);
         break;
 
       default:
         VELOX_UNREACHABLE();
     }
-    context.moveOrCopyResult(localResult, rows, result);
   }
 
   static std::vector<std::shared_ptr<exec::FunctionSignature>> signatures() {
@@ -99,10 +103,12 @@ class SubscriptImpl : public exec::VectorFunction {
   }
 
  private:
-  VectorPtr applyArray(
+  template <TypeKind elementKind>
+  void applyArray(
       const SelectivityVector& rows,
       std::vector<VectorPtr>& args,
-      exec::EvalCtx& context) const {
+      exec::EvalCtx& context,
+      VectorPtr& result) const {
     VELOX_CHECK_EQ(args[0]->typeKind(), TypeKind::ARRAY);
 
     auto arrayArg = args[0];
@@ -110,10 +116,14 @@ class SubscriptImpl : public exec::VectorFunction {
 
     switch (indexArg->typeKind()) {
       case TypeKind::INTEGER:
-        return applyArrayTyped<int32_t>(rows, arrayArg, indexArg, context);
+        applyArrayTyped<int32_t, elementKind>(
+            rows, arrayArg, indexArg, context, result);
+        break;
 
       case TypeKind::BIGINT:
-        return applyArrayTyped<int64_t>(rows, arrayArg, indexArg, context);
+        applyArrayTyped<int64_t, elementKind>(
+            rows, arrayArg, indexArg, context, result);
+        break;
 
       default:
         VELOX_UNSUPPORTED(
@@ -122,10 +132,11 @@ class SubscriptImpl : public exec::VectorFunction {
     }
   }
 
-  VectorPtr applyMap(
+  void applyMap(
       const SelectivityVector& rows,
       std::vector<VectorPtr>& args,
-      exec::EvalCtx& context) const {
+      exec::EvalCtx& context,
+      VectorPtr& result) const {
     VELOX_CHECK_EQ(args[0]->typeKind(), TypeKind::MAP);
 
     auto mapArg = args[0];
@@ -136,19 +147,26 @@ class SubscriptImpl : public exec::VectorFunction {
 
     switch (indexArg->typeKind()) {
       case TypeKind::BIGINT:
-        return applyMapTyped<int64_t>(rows, mapArg, indexArg, context);
+        applyMapTyped<int64_t>(rows, mapArg, indexArg, context, result);
+        break;
       case TypeKind::INTEGER:
-        return applyMapTyped<int32_t>(rows, mapArg, indexArg, context);
+        applyMapTyped<int32_t>(rows, mapArg, indexArg, context, result);
+        break;
       case TypeKind::SMALLINT:
-        return applyMapTyped<int16_t>(rows, mapArg, indexArg, context);
+        applyMapTyped<int16_t>(rows, mapArg, indexArg, context, result);
+        break;
       case TypeKind::TINYINT:
-        return applyMapTyped<int8_t>(rows, mapArg, indexArg, context);
+        applyMapTyped<int8_t>(rows, mapArg, indexArg, context, result);
+        break;
       case TypeKind::REAL:
-        return applyMapTyped<float>(rows, mapArg, indexArg, context);
+        applyMapTyped<float>(rows, mapArg, indexArg, context, result);
+        break;
       case TypeKind::DOUBLE:
-        return applyMapTyped<double>(rows, mapArg, indexArg, context);
+        applyMapTyped<double>(rows, mapArg, indexArg, context, result);
+        break;
       case TypeKind::VARCHAR:
-        return applyMapTyped<StringView>(rows, mapArg, indexArg, context);
+        applyMapTyped<StringView>(rows, mapArg, indexArg, context, result);
+        break;
       default:
         VELOX_UNSUPPORTED(
             "Unsupported map key type for element_at: {}",
@@ -159,12 +177,19 @@ class SubscriptImpl : public exec::VectorFunction {
   /// Decode arguments and transform result into a dictionaryVector where the
   /// dictionary maintains a mapping from a given row to the index of the input
   /// elements vector. This allows us to ensure that element_at is zero-copy.
-  template <typename I>
-  VectorPtr applyArrayTyped(
+  template <
+      typename I,
+      TypeKind elementKind,
+      typename std::enable_if_t<
+          !TypeTraits<elementKind>::isFixedWidth ||
+              elementKind == TypeKind::BOOLEAN,
+          int> = 0>
+  void applyArrayTyped(
       const SelectivityVector& rows,
       const VectorPtr& arrayArg,
       const VectorPtr& indexArg,
-      exec::EvalCtx& context) const {
+      exec::EvalCtx& context,
+      VectorPtr& result) const {
     auto* pool = context.pool();
 
     BufferPtr indices = allocateIndices(rows.end(), pool);
@@ -218,15 +243,147 @@ class SubscriptImpl : public exec::VectorFunction {
       });
     }
 
+    VectorPtr localResult;
     // Subscript into empty arrays always returns NULLs. Check added at the end
     // to ensure user error checks for indices are not skipped.
     if (baseArray->elements()->size() == 0) {
-      return BaseVector::createNullConstant(
+      localResult = BaseVector::createNullConstant(
           baseArray->elements()->type(), rows.end(), context.pool());
+    } else {
+      localResult = BaseVector::wrapInDictionary(
+          nullsBuilder.build(), indices, rows.end(), baseArray->elements());
     }
 
-    return BaseVector::wrapInDictionary(
-        nullsBuilder.build(), indices, rows.end(), baseArray->elements());
+    context.moveOrCopyResult(localResult, rows, result);
+  }
+
+  template <
+      typename I,
+      TypeKind elementKind,
+      typename std::enable_if_t<
+          TypeTraits<elementKind>::isFixedWidth &&
+              elementKind != TypeKind::BOOLEAN,
+          int> = 0>
+  void applyArrayTyped(
+      const SelectivityVector& rows,
+      const VectorPtr& arrayArg,
+      const VectorPtr& indexArg,
+      exec::EvalCtx& context,
+      VectorPtr& result) const {
+    using T = typename TypeTraits<elementKind>::NativeType;
+
+    auto* pool = context.pool();
+
+    context.ensureWritable(rows, arrayArg->type()->childAt(0), result);
+    auto* flatResult = result->asFlatVector<T>();
+    flatResult->clearNulls(rows);
+
+    auto* values = flatResult->mutableRawValues();
+    auto* nulls = flatResult->mutableRawNulls();
+
+    exec::LocalDecodedVector arrayHolder(context, *arrayArg, rows);
+    auto* decodedArray = arrayHolder.get();
+    auto* baseArray = decodedArray->base()->as<ArrayVector>();
+    auto* arrayIndices = decodedArray->indices();
+    auto& elements = baseArray->elements();
+
+    exec::LocalSelectivityVector nestedRows(context, elements->size());
+    nestedRows->setAll();
+    exec::LocalDecodedVector elementsHolder(context, *elements, *nestedRows);
+    auto* decodedElements = elementsHolder.get();
+
+    exec::LocalDecodedVector indexHolder(context, *indexArg, rows);
+    auto* decodedIndices = indexHolder.get();
+
+    auto* rawSizes = baseArray->rawSizes();
+    auto* rawOffsets = baseArray->rawOffsets();
+
+    bool flatNoNullsElementFastPath = decodedElements->isIdentityMapping() &&
+        !decodedElements->mayHaveNulls();
+
+    // Optimize for constant encoding case.
+    if (decodedIndices->isConstantMapping()) {
+      vector_size_t adjustedIndex = -1;
+      bool allFailed = false;
+      // If index is invalid, capture the error and mark all rows as failed.
+      try {
+        adjustedIndex = adjustIndex(decodedIndices->valueAt<I>(0));
+      } catch (const std::exception& e) {
+        context.setErrors(rows, std::current_exception());
+        allFailed = true;
+      }
+
+      if (!allFailed) {
+        if (flatNoNullsElementFastPath) {
+          auto* rawElements = decodedElements->data<T>();
+          context.applyToSelectedNoThrow(rows, [&](auto row) {
+            auto elementIndex = getIndex(
+                adjustedIndex, row, rawSizes, rawOffsets, arrayIndices);
+            copyValueFlatNullFree(
+                row, elementIndex, rawElements, nulls, values);
+          });
+        } else {
+          context.applyToSelectedNoThrow(rows, [&](auto row) {
+            auto elementIndex = getIndex(
+                adjustedIndex, row, rawSizes, rawOffsets, arrayIndices);
+            copyValue(row, elementIndex, decodedElements, nulls, values);
+          });
+        }
+      }
+    } else {
+      if (flatNoNullsElementFastPath) {
+        auto* rawElements = decodedElements->data<T>();
+        context.applyToSelectedNoThrow(rows, [&](auto row) {
+          auto adjustedIndex = adjustIndex(decodedIndices->valueAt<I>(row));
+          auto elementIndex =
+              getIndex(adjustedIndex, row, rawSizes, rawOffsets, arrayIndices);
+          copyValueFlatNullFree(row, elementIndex, rawElements, nulls, values);
+        });
+      } else {
+        context.applyToSelectedNoThrow(rows, [&](auto row) {
+          auto adjustedIndex = adjustIndex(decodedIndices->valueAt<I>(row));
+          auto elementIndex =
+              getIndex(adjustedIndex, row, rawSizes, rawOffsets, arrayIndices);
+          copyValue(row, elementIndex, decodedElements, nulls, values);
+        });
+      }
+    }
+
+    // Subscript into empty arrays always returns NULLs. Check added at the end
+    // to ensure user error checks for indices are not skipped.
+    if (baseArray->elements()->size() == 0) {
+      auto localResult = BaseVector::createNullConstant(
+          baseArray->elements()->type(), rows.end(), context.pool());
+      context.moveOrCopyResult(localResult, rows, result);
+    }
+  }
+
+  template <typename T>
+  FOLLY_ALWAYS_INLINE void copyValue(
+      vector_size_t row,
+      vector_size_t elementIndex,
+      const DecodedVector* decodedElements,
+      uint64_t* nulls,
+      T* values) const {
+    if (elementIndex == -1 || decodedElements->isNullAt(elementIndex)) {
+      bits::setNull(nulls, row);
+    } else {
+      values[row] = decodedElements->valueAt<T>(elementIndex);
+    }
+  }
+
+  template <typename T>
+  FOLLY_ALWAYS_INLINE void copyValueFlatNullFree(
+      vector_size_t row,
+      vector_size_t elementIndex,
+      const T* rawElements,
+      uint64_t* nulls,
+      T* values) const {
+    if (elementIndex == -1) {
+      bits::setNull(nulls, row);
+    } else {
+      values[row] = rawElements[elementIndex];
+    }
   }
 
   // Normalize indices from 1 or 0-based into always 0-based (according to
@@ -294,11 +451,12 @@ class SubscriptImpl : public exec::VectorFunction {
   /// dictionary maintains a mapping from a given row to the index of the input
   /// map value vector. This allows us to ensure that element_at is zero-copy.
   template <typename TKey>
-  VectorPtr applyMapTyped(
+  void applyMapTyped(
       const SelectivityVector& rows,
       const VectorPtr& mapArg,
       const VectorPtr& indexArg,
-      exec::EvalCtx& context) const {
+      exec::EvalCtx& context,
+      VectorPtr& result) const {
     auto* pool = context.pool();
 
     BufferPtr indices = allocateIndices(rows.end(), pool);
@@ -371,15 +529,18 @@ class SubscriptImpl : public exec::VectorFunction {
       });
     }
 
+    VectorPtr localResult;
     // Subscript into empty maps always returns NULLs. Check added at the end to
     // ensure user error checks for indices are not skipped.
     if (baseMap->mapValues()->size() == 0) {
-      return BaseVector::createNullConstant(
+      localResult = BaseVector::createNullConstant(
           baseMap->mapValues()->type(), rows.end(), context.pool());
+    } else {
+      localResult = BaseVector::wrapInDictionary(
+          nullsBuilder.build(), indices, rows.end(), baseMap->mapValues());
     }
 
-    return BaseVector::wrapInDictionary(
-        nullsBuilder.build(), indices, rows.end(), baseMap->mapValues());
+    context.moveOrCopyResult(localResult, rows, result);
   }
 };
 
