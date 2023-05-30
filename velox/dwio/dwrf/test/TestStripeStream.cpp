@@ -140,7 +140,7 @@ TEST(StripeStream, planReads) {
           actual.cend(),
           0,
           [](uint64_t ac, const Region& r) { return ac + r.length; }),
-      1000500);
+      1000300);
 }
 
 TEST(StripeStream, filterSequences) {
