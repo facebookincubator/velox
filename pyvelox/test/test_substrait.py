@@ -18,6 +18,7 @@ import unittest
 import shutil, tempfile
 import os
 
+
 def compare_vectors(v1, v2):
     N = len(v1)
     assert N == len(v2)
@@ -26,9 +27,7 @@ def compare_vectors(v1, v2):
     for idx in range(N):
         assert v1[idx] == v2[idx]
 
-
 # Run the tests from the base path of the project
-
 BASE_PATH = os.path.join(os.getcwd(), "velox/substrait/tests/data/")
 class TestVeloxSubstrait(unittest.TestCase):
     def setUp(self):
