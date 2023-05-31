@@ -144,6 +144,6 @@ void projectChildren(
     RowVectorPtr src,
     const std::vector<IdentityProjection>& projections,
     int32_t size,
-    const BufferPtr mapping);
+    const BufferPtr& mapping);
 
 } // namespace facebook::velox::exec

@@ -401,7 +401,7 @@ void projectChildren(
     RowVectorPtr src,
     const std::vector<IdentityProjection>& projections,
     int32_t size,
-    const BufferPtr mapping) {
+    const BufferPtr& mapping) {
   for (const auto& projection : projections) {
     dest->childAt(projection.outputChannel) =
         wrapChild(size, mapping, src->childAt(projection.inputChannel));

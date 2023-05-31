@@ -22,7 +22,7 @@ void NestedLoopJoinBridge::setData(std::vector<RowVectorPtr> buildVectors) {
   std::vector<ContinuePromise> promises;
   {
     std::lock_guard<std::mutex> l(mutex_);
-    VELOX_CHECK(!buildVectors_.has_value(), "setData may be called only once");
+    VELOX_CHECK(!buildVectors_.has_value(), "setData must be called only once");
     buildVectors_ = std::move(buildVectors);
     promises = std::move(promises_);
   }

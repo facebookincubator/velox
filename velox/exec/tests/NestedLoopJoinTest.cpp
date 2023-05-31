@@ -24,8 +24,8 @@ using namespace facebook::velox::exec::test;
 
 class NestedLoopJoinTest : public HiveConnectorTestBase {
  protected:
-  RowTypePtr leftType_;
-  RowTypePtr rightType_;
+  RowTypePtr probeType_;
+  RowTypePtr buildType_;
   std::vector<std::string> comparisons_;
   std::vector<core::JoinType> joinTypes_;
   std::string joinConditionStr_;
@@ -33,8 +33,8 @@ class NestedLoopJoinTest : public HiveConnectorTestBase {
 
   void SetUp() override {
     HiveConnectorTestBase::SetUp();
-    leftType_ = ROW({{"t0", BIGINT()}});
-    rightType_ = ROW({{"u0", BIGINT()}});
+    probeType_ = ROW({{"t0", BIGINT()}});
+    buildType_ = ROW({{"u0", BIGINT()}});
     comparisons_ = {"=", "<", "<=", "<>"};
     joinTypes_ = {
         core::JoinType::kInner,
@@ -45,12 +45,12 @@ class NestedLoopJoinTest : public HiveConnectorTestBase {
     queryStr_ = "SELECT t0, u0 FROM t {} JOIN u ON t.t0 {} u.u0";
   }
 
-  void setLeftType(RowTypePtr leftType) {
-    leftType_ = leftType;
+  void setProbeType(RowTypePtr probeType) {
+    probeType_ = probeType;
   }
 
-  void setRightType(RowTypePtr rightType) {
-    rightType_ = rightType;
+  void setBuildType(RowTypePtr buildType) {
+    buildType_ = buildType;
   }
 
   void setComparisons(std::vector<std::string>&& comparisons) {
@@ -78,17 +78,17 @@ class NestedLoopJoinTest : public HiveConnectorTestBase {
   }
 
   void runTest(
-      const std::vector<RowVectorPtr>& leftVectors,
-      const std::vector<RowVectorPtr>& rightVectors,
+      const std::vector<RowVectorPtr>& probeVectors,
+      const std::vector<RowVectorPtr>& buildVectors,
       int32_t numDrivers = 1) {
     if (numDrivers == 1) {
-      createDuckDbTable("t", leftVectors);
-      createDuckDbTable("u", rightVectors);
+      createDuckDbTable("t", probeVectors);
+      createDuckDbTable("u", buildVectors);
     } else {
-      auto allLeftVectors = makeCopies(leftVectors, numDrivers);
-      auto allRightVectors = makeCopies(rightVectors, numDrivers);
-      createDuckDbTable("t", allLeftVectors);
-      createDuckDbTable("u", allRightVectors);
+      auto allProbeVectors = makeCopies(probeVectors, numDrivers);
+      auto allBuildVectors = makeCopies(buildVectors, numDrivers);
+      createDuckDbTable("t", allProbeVectors);
+      createDuckDbTable("u", allBuildVectors);
     }
 
     CursorParameters params;
@@ -104,10 +104,10 @@ class NestedLoopJoinTest : public HiveConnectorTestBase {
             comparison));
 
         params.planNode = PlanBuilder(planNodeIdGenerator)
-                              .values(leftVectors, numDrivers > 1)
+                              .values(probeVectors, numDrivers > 1)
                               .nestedLoopJoin(
                                   PlanBuilder(planNodeIdGenerator)
-                                      .values(rightVectors, numDrivers > 1)
+                                      .values(buildVectors, numDrivers > 1)
                                       .planNode(),
                                   fmt::format(joinConditionStr_, comparison),
                                   {"t0", "u0"},
@@ -122,48 +122,48 @@ class NestedLoopJoinTest : public HiveConnectorTestBase {
 };
 
 TEST_F(NestedLoopJoinTest, basic) {
-  auto leftVectors = makeBatches(20, 5, leftType_, pool_.get());
-  auto rightVectors = makeBatches(18, 5, rightType_, pool_.get());
-  runTest(leftVectors, rightVectors);
+  auto probeVectors = makeBatches(20, 5, probeType_, pool_.get());
+  auto buildVectors = makeBatches(18, 5, buildType_, pool_.get());
+  runTest(probeVectors, buildVectors);
 }
 
-TEST_F(NestedLoopJoinTest, emptyLeft) {
-  auto leftVectors = makeBatches(0, 5, leftType_, pool_.get());
-  auto rightVectors = makeBatches(18, 5, rightType_, pool_.get());
-  runTest(leftVectors, rightVectors);
+TEST_F(NestedLoopJoinTest, emptyProbe) {
+  auto probeVectors = makeBatches(0, 5, probeType_, pool_.get());
+  auto buildVectors = makeBatches(18, 5, buildType_, pool_.get());
+  runTest(probeVectors, buildVectors);
 }
 
-TEST_F(NestedLoopJoinTest, emptyRight) {
-  auto leftVectors = makeBatches(20, 5, leftType_, pool_.get());
-  auto rightVectors = makeBatches(0, 5, rightType_, pool_.get());
-  runTest(leftVectors, rightVectors);
+TEST_F(NestedLoopJoinTest, emptyBuild) {
+  auto probeVectors = makeBatches(20, 5, probeType_, pool_.get());
+  auto buildVectors = makeBatches(0, 5, buildType_, pool_.get());
+  runTest(probeVectors, buildVectors);
 }
 
 TEST_F(NestedLoopJoinTest, basicCrossJoin) {
-  auto leftVectors = {
+  auto probeVectors = {
       makeRowVector({sequence<int32_t>(10)}),
       makeRowVector({sequence<int32_t>(100, 10)}),
       makeRowVector({sequence<int32_t>(1'000, 10 + 100)}),
       makeRowVector({sequence<int32_t>(7, 10 + 100 + 1'000)}),
   };
 
-  auto rightVectors = {
+  auto buildVectors = {
       makeRowVector({sequence<int32_t>(10)}),
       makeRowVector({sequence<int32_t>(100, 10)}),
       makeRowVector({sequence<int32_t>(1'000, 10 + 100)}),
       makeRowVector({sequence<int32_t>(11, 10 + 100 + 1'000)}),
   };
 
-  createDuckDbTable("t", {leftVectors});
-  createDuckDbTable("u", {rightVectors});
+  createDuckDbTable("t", {probeVectors});
+  createDuckDbTable("u", {buildVectors});
 
   // All x 13. Join output vectors contains multiple probe rows each.
   auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
   auto op = PlanBuilder(planNodeIdGenerator)
-                .values({leftVectors})
+                .values({probeVectors})
                 .nestedLoopJoin(
                     PlanBuilder(planNodeIdGenerator)
-                        .values({rightVectors})
+                        .values({buildVectors})
                         .filter("c0 < 13")
                         .project({"c0 AS u_c0"})
                         .planNode(),
@@ -175,11 +175,11 @@ TEST_F(NestedLoopJoinTest, basicCrossJoin) {
   // 13 x all. Join output vectors contains single probe row each.
   planNodeIdGenerator->reset();
   op = PlanBuilder(planNodeIdGenerator)
-           .values({leftVectors})
+           .values({probeVectors})
            .filter("c0 < 13")
            .nestedLoopJoin(
                PlanBuilder(planNodeIdGenerator)
-                   .values({rightVectors})
+                   .values({buildVectors})
                    .project({"c0 AS u_c0"})
                    .planNode(),
                {"c0", "u_c0"})
@@ -190,7 +190,7 @@ TEST_F(NestedLoopJoinTest, basicCrossJoin) {
   // All x 13. No columns on the build side.
   planNodeIdGenerator->reset();
   op = PlanBuilder(planNodeIdGenerator)
-           .values({leftVectors})
+           .values({probeVectors})
            .nestedLoopJoin(
                PlanBuilder(planNodeIdGenerator)
                    .values({vectorMaker_.rowVector(ROW({}, {}), 13)})
@@ -203,7 +203,7 @@ TEST_F(NestedLoopJoinTest, basicCrossJoin) {
   // 13 x All. No columns on the build side.
   planNodeIdGenerator->reset();
   op = PlanBuilder(planNodeIdGenerator)
-           .values({leftVectors})
+           .values({probeVectors})
            .filter("c0 < 13")
            .nestedLoopJoin(
                PlanBuilder(planNodeIdGenerator)
@@ -219,10 +219,10 @@ TEST_F(NestedLoopJoinTest, basicCrossJoin) {
   // Empty build side.
   planNodeIdGenerator->reset();
   op = PlanBuilder(planNodeIdGenerator)
-           .values({leftVectors})
+           .values({probeVectors})
            .nestedLoopJoin(
                PlanBuilder(planNodeIdGenerator)
-                   .values({rightVectors})
+                   .values({buildVectors})
                    .filter("c0 < 0")
                    .project({"c0 AS u_c0"})
                    .planNode(),
@@ -236,10 +236,10 @@ TEST_F(NestedLoopJoinTest, basicCrossJoin) {
   CursorParameters params;
   params.maxDrivers = 4;
   params.planNode = PlanBuilder(planNodeIdGenerator)
-                        .values({leftVectors})
+                        .values({probeVectors})
                         .nestedLoopJoin(
                             PlanBuilder(planNodeIdGenerator, pool_.get())
-                                .values({rightVectors}, true)
+                                .values({buildVectors}, true)
                                 .filter("c0 in (10, 17)")
                                 .project({"c0 AS u_c0"})
                                 .planNode(),
@@ -253,14 +253,14 @@ TEST_F(NestedLoopJoinTest, basicCrossJoin) {
 }
 
 TEST_F(NestedLoopJoinTest, lazyVectors) {
-  auto leftVectors = {
+  auto probeVectors = {
       makeRowVector({lazySequence<int32_t>(10)}),
       makeRowVector({lazySequence<int32_t>(100, 10)}),
       makeRowVector({lazySequence<int32_t>(1'000, 10 + 100)}),
       makeRowVector({lazySequence<int32_t>(7, 10 + 100 + 1'000)}),
   };
 
-  auto rightVectors = {
+  auto buildVectors = {
       makeRowVector({lazySequence<int32_t>(10)}),
       makeRowVector({lazySequence<int32_t>(100, 10)}),
       makeRowVector({lazySequence<int32_t>(1'000, 10 + 100)}),
@@ -272,10 +272,10 @@ TEST_F(NestedLoopJoinTest, lazyVectors) {
 
   auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
   auto op = PlanBuilder(planNodeIdGenerator)
-                .values({leftVectors})
+                .values({probeVectors})
                 .nestedLoopJoin(
                     PlanBuilder(planNodeIdGenerator)
-                        .values({rightVectors})
+                        .values({buildVectors})
                         .project({"c0 AS u_c0"})
                         .planNode(),
                     "c0+u_c0<100",
@@ -288,26 +288,26 @@ TEST_F(NestedLoopJoinTest, lazyVectors) {
 
 // Test cross join with a build side that has rows, but no columns.
 TEST_F(NestedLoopJoinTest, zeroColumnBuild) {
-  auto leftVectors = {
+  auto probeVectors = {
       makeRowVector({sequence<int32_t>(10)}),
       makeRowVector({sequence<int32_t>(100, 10)}),
       makeRowVector({sequence<int32_t>(1'000, 10 + 100)}),
       makeRowVector({sequence<int32_t>(7, 10 + 100 + 1'000)}),
   };
 
-  auto rightVectors = {
+  auto buildVectors = {
       makeRowVector({sequence<int32_t>(1)}),
       makeRowVector({sequence<int32_t>(4, 1)})};
 
-  createDuckDbTable("t", {leftVectors});
+  createDuckDbTable("t", {probeVectors});
 
   // Build side has > 1 row.
   auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
   auto op = PlanBuilder(planNodeIdGenerator)
-                .values({leftVectors})
+                .values({probeVectors})
                 .nestedLoopJoin(
                     PlanBuilder(planNodeIdGenerator)
-                        .values({rightVectors})
+                        .values({buildVectors})
                         .project({})
                         .planNode(),
                     {"c0"})
@@ -319,10 +319,10 @@ TEST_F(NestedLoopJoinTest, zeroColumnBuild) {
   // Build side has exactly 1 row.
   planNodeIdGenerator->reset();
   op = PlanBuilder(planNodeIdGenerator)
-           .values({leftVectors})
+           .values({probeVectors})
            .nestedLoopJoin(
                PlanBuilder(planNodeIdGenerator)
-                   .values({rightVectors})
+                   .values({buildVectors})
                    .filter("c0 = 1")
                    .project({})
                    .planNode(),
@@ -333,23 +333,23 @@ TEST_F(NestedLoopJoinTest, zeroColumnBuild) {
 }
 
 TEST_F(NestedLoopJoinTest, parallel) {
-  auto leftVectors = makeBatches(10, 5, leftType_, pool_.get());
-  auto rightVectors = makeBatches(7, 5, rightType_, pool_.get());
-  runTest(leftVectors, rightVectors, 5);
+  auto probeVectors = makeBatches(10, 5, probeType_, pool_.get());
+  auto buildVectors = makeBatches(7, 5, buildType_, pool_.get());
+  runTest(probeVectors, buildVectors, 5);
 }
 
 TEST_F(NestedLoopJoinTest, bigintArray) {
-  auto leftVectors = makeBatches(1000, 5, leftType_, pool_.get());
-  auto rightVectors = makeBatches(900, 5, rightType_, pool_.get());
-  createDuckDbTable("t", leftVectors);
-  createDuckDbTable("u", rightVectors);
+  auto probeVectors = makeBatches(1000, 5, probeType_, pool_.get());
+  auto buildVectors = makeBatches(900, 5, buildType_, pool_.get());
+  createDuckDbTable("t", probeVectors);
+  createDuckDbTable("u", buildVectors);
 
   auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
   auto plan =
       PlanBuilder(planNodeIdGenerator)
-          .values(leftVectors)
+          .values(probeVectors)
           .nestedLoopJoin(
-              PlanBuilder(planNodeIdGenerator).values(rightVectors).planNode(),
+              PlanBuilder(planNodeIdGenerator).values(buildVectors).planNode(),
               "t0 = u0",
               {"t0", "u0"},
               core::JoinType::kFull)
@@ -359,7 +359,7 @@ TEST_F(NestedLoopJoinTest, bigintArray) {
 }
 
 TEST_F(NestedLoopJoinTest, allTypes) {
-  RowTypePtr leftType = ROW(
+  RowTypePtr probeType = ROW(
       {{"t0", BIGINT()},
        {"t1", VARCHAR()},
        {"t2", REAL()},
@@ -368,7 +368,7 @@ TEST_F(NestedLoopJoinTest, allTypes) {
        {"t5", SMALLINT()},
        {"t6", TINYINT()}});
 
-  RowTypePtr rightType = ROW(
+  RowTypePtr buildType = ROW(
       {{"u0", BIGINT()},
        {"u1", VARCHAR()},
        {"u2", REAL()},
@@ -377,17 +377,17 @@ TEST_F(NestedLoopJoinTest, allTypes) {
        {"u5", SMALLINT()},
        {"u6", TINYINT()}});
 
-  auto leftVectors = makeBatches(60, 5, leftType, pool_.get());
-  auto rightVectors = makeBatches(50, 5, rightType, pool_.get());
-  createDuckDbTable("t", leftVectors);
-  createDuckDbTable("u", rightVectors);
+  auto probeVectors = makeBatches(60, 5, probeType, pool_.get());
+  auto buildVectors = makeBatches(50, 5, buildType, pool_.get());
+  createDuckDbTable("t", probeVectors);
+  createDuckDbTable("u", buildVectors);
 
-  setLeftType(leftType);
-  setRightType(rightType);
+  setProbeType(probeType);
+  setBuildType(buildType);
   setComparisons({"="});
   setJoinConditionStr(
       "t0 {0} u0 AND t1 {0} u1 AND t2 {0} u2 AND t3 {0} u3 AND t4 {0} u4 AND t5 {0} u5 AND t6 {0} u6");
   setQueryStr(
       "SELECT t0, u0 FROM t {0} JOIN u ON t.t0 {1} u0 AND t1 {1} u1 AND t2 {1} u2 AND t3 {1} u3 AND t4 {1} u4 AND t5 {1} u5 AND t6 {1} u6");
-  runTest(leftVectors, rightVectors);
+  runTest(probeVectors, buildVectors);
 }

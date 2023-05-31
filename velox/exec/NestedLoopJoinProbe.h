@@ -89,13 +89,14 @@ class NestedLoopJoinProbe : public Operator {
   }
 
   // Wraps rows of 'data' that are not selected in 'matched' and projects
-  // to the children of output according to 'projections'. Creates null vector
-  // as output's children according to 'nullProjections'. 'mapping' is used as
-  // buffer for recording mismatched row numbers.
+  // to the output according to 'projections'. 'nullProjections' is used to
+  // create null column vectors in output for outer join. 'unmatchedMapping' is
+  // the reusable buffer to record the mismatched row numbers for output
+  // projections.
   RowVectorPtr getMismatchedOutput(
       RowVectorPtr data,
       const SelectivityVector& matched,
-      BufferPtr mapping,
+      BufferPtr& unmatchedMapping,
       const std::vector<IdentityProjection>& projections,
       const std::vector<IdentityProjection>& nullProjections);
 
@@ -113,8 +114,8 @@ class NestedLoopJoinProbe : public Operator {
         noMoreInput_;
   }
 
-  void setState(ProbeOperatorState s) {
-    state_ = s;
+  void setState(ProbeOperatorState state) {
+    state_ = state;
   }
 
  private:

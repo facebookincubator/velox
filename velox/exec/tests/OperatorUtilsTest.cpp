@@ -301,7 +301,7 @@ TEST_F(OperatorUtilsTest, initializeRowNumberMapping) {
 }
 
 TEST_F(OperatorUtilsTest, projectChildren) {
-  constexpr vector_size_t srcVectorSize{10};
+  const vector_size_t srcVectorSize{10};
   const auto srcRowType = ROW({
       {"bool_val", BOOLEAN()},
       {"int_val", INTEGER()},
@@ -309,11 +309,10 @@ TEST_F(OperatorUtilsTest, projectChildren) {
       {"string_val", VARCHAR()},
   });
   VectorFuzzer fuzzer({}, pool());
-  auto srcVector{fuzzer.fuzzFlat(srcRowType, srcVectorSize)};
-  RowVectorPtr srcRowVector{std::dynamic_pointer_cast<RowVector>(srcVector)};
+  auto srcRowVector{fuzzer.fuzzRow(srcRowType, srcVectorSize)};
 
   {
-    std::vector<IdentityProjection> emptyProjection{};
+    std::vector<IdentityProjection> emptyProjection;
     auto destRowVector =
         BaseVector::create<RowVector>(srcRowType, srcVectorSize, pool());
     projectChildren(
