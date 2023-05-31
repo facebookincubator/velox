@@ -1,0 +1,34 @@
+{
+  "relations": [{
+          "root": {
+              "input": {
+                  "aggregate": {
+                      "common": {
+                          "direct": {}
+                      },
+                      "input": {
+                          "read": {
+                              "common": {
+                                  "direct": {}
+                              },
+                              "baseSchema": {
+                                  "struct": {}
+                              },
+                              "localFiles": {
+                                "items": [{
+                                        "uriFile": "file:///tmp/tmp_file",
+                                        "length": "31979",
+                                        "parquet": {}
+                                    }
+                                ]
+                            }
+                          }
+                      },
+                      "groupings": [{}
+                      ]
+                  }
+              }
+          }
+      }
+  ]
+}

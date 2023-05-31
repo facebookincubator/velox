@@ -1,0 +1,137 @@
+{
+  "extensions": [{
+          "extensionFunction": {
+              "name": "is_not_null:opt_bool_i32"
+          }
+      }, {
+          "extensionFunction": {
+              "functionAnchor": 2,
+              "name": "and:opt_bool_bool"
+          }
+      }, {
+          "extensionFunction": {
+              "functionAnchor": 1,
+              "name": "lt:opt_i32_i32"
+          }
+      }
+  ],
+  "relations": [{
+          "root": {
+              "input": {
+                  "project": {
+                      "common": {
+                          "direct": {}
+                      },
+                      "input": {
+                          "read": {
+                              "common": {
+                                  "direct": {}
+                              },
+                              "baseSchema": {
+                                  "names": ["key"],
+                                  "struct": {
+                                      "types": [{
+                                              "i32": {
+                                                  "nullability": "NULLABILITY_NULLABLE"
+                                              }
+                                          }
+                                      ]
+                                  },
+                                  "partitionColumns": {
+                                      "columnType": ["NORMAL_COL"]
+                                  }
+                              },
+                              "filter": {
+                                  "scalarFunction": {
+                                      "functionReference": 2,
+                                      "outputType": {
+                                          "bool": {
+                                              "nullability": "NULLABILITY_NULLABLE"
+                                          }
+                                      },
+                                      "arguments": [{
+                                              "value": {
+                                                  "scalarFunction": {
+                                                      "outputType": {
+                                                          "bool": {
+                                                              "nullability": "NULLABILITY_REQUIRED"
+                                                          }
+                                                      },
+                                                      "arguments": [{
+                                                              "value": {
+                                                                  "selection": {
+                                                                      "directReference": {
+                                                                          "structField": {}
+                                                                      }
+                                                                  }
+                                                              }
+                                                          }
+                                                      ]
+                                                  }
+                                              }
+                                          }, {
+                                              "value": {
+                                                  "scalarFunction": {
+                                                      "functionReference": 1,
+                                                      "outputType": {
+                                                          "bool": {
+                                                              "nullability": "NULLABILITY_NULLABLE"
+                                                          }
+                                                      },
+                                                      "arguments": [{
+                                                              "value": {
+                                                                  "selection": {
+                                                                      "directReference": {
+                                                                          "structField": {}
+                                                                      }
+                                                                  }
+                                                              }
+                                                          }, {
+                                                              "value": {
+                                                                  "literal": {
+                                                                      "i32": 3
+                                                                  }
+                                                              }
+                                                          }
+                                                      ]
+                                                  }
+                                              }
+                                          }
+                                      ]
+                                  }
+                              },
+                              "localFiles": {
+                                  "items": [{
+                                          "uriFile": "file:///tmp/file.parquet",
+                                          "length": "1486",
+                                          "parquet": {}
+                                      }
+                                  ]
+                              }
+                          }
+                      },
+                      "expressions": [{
+                              "cast": {
+                                  "type": {
+                                      "string": {
+                                          "nullability": "NULLABILITY_NULLABLE"
+                                      }
+                                  },
+                                  "input": {
+                                      "selection": {
+                                          "directReference": {
+                                              "structField": {}
+                                          }
+                                      }
+                                  },
+                                  "failureBehavior": "FAILURE_BEHAVIOR_RETURN_NULL"
+                              }
+                          }
+                      ]
+                  }
+              },
+              "names": ["key#173"]
+          }
+      }
+  ]
+}

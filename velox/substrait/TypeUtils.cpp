@@ -65,11 +65,30 @@ std::string_view getNameBeforeDelimiter(
   return std::string_view(compoundName.data(), pos);
 }
 
+std::pair<int32_t, int32_t> getPrecisionAndScale(const std::string& typeName) {
+  std::size_t start = typeName.find_first_of("<");
+  std::size_t end = typeName.find_last_of(">");
+  if (start == std::string::npos || end == std::string::npos) {
+    throw std::runtime_error("Invalid decimal type.");
+  }
+
+  std::string decimalType = typeName.substr(start + 1, end - start - 1);
+  std::size_t token_pos = decimalType.find_first_of(",");
+  auto precision = stoi(decimalType.substr(0, token_pos));
+  auto scale =
+      stoi(decimalType.substr(token_pos + 1, decimalType.length() - 1));
+  return std::make_pair(precision, scale);
+}
+
 TypePtr toVeloxType(const std::string& typeName) {
   VELOX_CHECK(!typeName.empty(), "Cannot convert empty string to Velox type.");
 
   auto type = getNameBeforeDelimiter(typeName, "<");
   auto typeKind = mapNameToTypeKind(std::string(type));
+  if (isDecimalName(typeName)) {
+    auto decimal = getPrecisionAndScale(typeName);
+    return DECIMAL(decimal.first, decimal.second);
+  }
   switch (typeKind) {
     case TypeKind::BOOLEAN:
       return BOOLEAN();
@@ -119,6 +138,9 @@ TypePtr toVeloxType(const std::string& typeName) {
     }
     case TypeKind::DATE: {
       return DATE();
+    }
+    case TypeKind::TIMESTAMP: {
+      return TIMESTAMP();
     }
     case TypeKind::UNKNOWN:
       return UNKNOWN();
