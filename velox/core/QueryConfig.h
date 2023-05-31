@@ -80,6 +80,11 @@ class QueryConfig {
   // truncating the decimal part instead of rounding.
   static constexpr const char* kCastToIntByTruncate = "cast_to_int_by_truncate";
 
+  // Allow decimal in casting varchar to int. The fractional part will be
+  // ignored.
+  static constexpr const char* kCastIntAllowDecimal =
+      "driver.cast.int_allow_decimal";
+
   /// Used for backpressure to block local exchange producers when the local
   /// exchange buffer reaches or exceeds this size.
   static constexpr const char* kMaxLocalExchangeBufferSize =
@@ -118,6 +123,9 @@ class QueryConfig {
   /// known and kPreferredOutputBatchBytes is used to compute the number of
   /// output rows.
   static constexpr const char* kMaxOutputBatchRows = "max_output_batch_rows";
+
+  /// It is used when DataBuffer.reserve() method to reallocated buffer size.
+  static constexpr const char* kDataBufferGrowRatio = "data_buffer_grow_ratio";
 
   /// If false, the 'group by' code is forced to use generic hash mode
   /// hashtable.
@@ -252,6 +260,10 @@ class QueryConfig {
     return get<uint32_t>(kMaxOutputBatchRows, 10'000);
   }
 
+  uint32_t dataBufferGrowRatio() const {
+    return get<uint32_t>(kDataBufferGrowRatio, 1);
+  }
+
   bool hashAdaptivityEnabled() const {
     return get<bool>(kHashAdaptivityEnabled, true);
   }
@@ -276,6 +288,10 @@ class QueryConfig {
 
   bool isCastToIntByTruncate() const {
     return get<bool>(kCastToIntByTruncate, false);
+  }
+
+  bool isCastIntAllowDecimal() const {
+    return get<bool>(kCastIntAllowDecimal, false);
   }
 
   bool codegenEnabled() const {

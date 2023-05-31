@@ -293,6 +293,68 @@ PlanNodePtr AggregationNode::create(const folly::dynamic& obj, void* context) {
 }
 
 namespace {
+RowTypePtr getSparkExpandOutputType(
+    const std::vector<std::vector<TypedExprPtr>>& projectSets,
+    const std::vector<std::string>& names) {
+  std::vector<std::string> outputs;
+  outputs.reserve(names.size());
+  std::vector<TypePtr> types;
+  types.reserve(names.size());
+  for (int32_t i = 0; i < names.size(); ++i) {
+    outputs.push_back(names[i]);
+    auto expr = projectSets[0][i];
+    types.push_back(expr->type());
+  }
+
+  return ROW(std::move(outputs), std::move(types));
+}
+} // namespace
+
+ExpandNode::ExpandNode(
+    PlanNodeId id,
+    std::vector<std::vector<TypedExprPtr>> projectSets,
+    std::vector<std::string> names,
+    PlanNodePtr source)
+    : PlanNode(std::move(id)),
+      sources_{source},
+      outputType_(getSparkExpandOutputType(projectSets, names)),
+      projectSets_(std::move(projectSets)),
+      names_(std::move(names)) {}
+
+void ExpandNode::addDetails(std::stringstream& stream) const {
+  for (auto i = 0; i < projectSets_.size(); ++i) {
+    if (i > 0) {
+      stream << ", ";
+    }
+    stream << "[";
+    addKeys(stream, projectSets_[i]);
+    stream << "]";
+  }
+}
+
+folly::dynamic ExpandNode::serialize() const {
+  auto obj = PlanNode::serialize();
+  obj["projectSets"] = ISerializable::serialize(projectSets_);
+  obj["names"] = ISerializable::serialize(names_);
+
+  return obj;
+}
+
+// static
+PlanNodePtr ExpandNode::create(const folly::dynamic& obj, void* context) {
+  auto source = deserializeSingleSource(obj, context);
+  auto names = deserializeStrings(obj["names"]);
+  auto projectSets =
+      ISerializable::deserialize<std::vector<std::vector<ITypedExpr>>>(
+          obj["projectSets"], context);
+  return std::make_shared<ExpandNode>(
+      deserializePlanNodeId(obj),
+      std::move(projectSets),
+      std::move(names),
+      std::move(source));
+}
+
+namespace {
 RowTypePtr getGroupIdOutputType(
     const std::vector<GroupIdNode::GroupingKeyInfo>& groupingKeyInfos,
     const std::vector<FieldAccessTypedExprPtr>& aggregationInputs,
@@ -516,6 +578,14 @@ const std::vector<PlanNodePtr>& ArrowStreamNode::sources() const {
 }
 
 void ArrowStreamNode::addDetails(std::stringstream& stream) const {
+  // Nothing to add.
+}
+
+const std::vector<PlanNodePtr>& ValueStreamNode::sources() const {
+  return kEmptySources;
+}
+
+void ValueStreamNode::addDetails(std::stringstream& stream) const {
   // Nothing to add.
 }
 
