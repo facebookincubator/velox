@@ -13,18 +13,17 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+#pragma once
 
 #include "velox/common/base/Exceptions.h"
 #include "velox/exec/WindowFunction.h"
-#include "velox/expression/FunctionSignature.h"
 #include "velox/vector/FlatVector.h"
 
 namespace facebook::velox::functions::window {
 
-namespace {
-class NthValueFunction : public exec::WindowFunction {
+class NthValueBase : public exec::WindowFunction {
  public:
-  explicit NthValueFunction(
+  NthValueBase(
       const std::vector<exec::WindowFunctionArg>& args,
       const TypePtr& resultType,
       velox::memory::MemoryPool* pool)
@@ -32,37 +31,6 @@ class NthValueFunction : public exec::WindowFunction {
     VELOX_CHECK_EQ(args.size(), 2);
     VELOX_CHECK_NULL(args[0].constantValue);
     valueIndex_ = args[0].index.value();
-    if (args[1].type->isInteger()) {
-      VELOX_USER_CHECK(
-          args[1].constantValue, "Offset must be literal for spark");
-      if (args[1].constantValue->isNullAt(0)) {
-        isConstantOffsetNull_ = true;
-        return;
-      }
-      constantOffset_ =
-          args[1]
-              .constantValue->template as<ConstantVector<int32_t>>()
-              ->valueAt(0);
-      VELOX_USER_CHECK_GE(
-          constantOffset_.value(), 1, "Offset must be at least 1");
-    } else {
-      if (args[1].constantValue) {
-        if (args[1].constantValue->isNullAt(0)) {
-          isConstantOffsetNull_ = true;
-          return;
-        }
-        constantOffset_ =
-            args[1]
-                .constantValue->template as<ConstantVector<int64_t>>()
-                ->valueAt(0);
-        VELOX_USER_CHECK_GE(
-            constantOffset_.value(), 1, "Offset must be at least 1");
-        return;
-      }
-
-      offsetIndex_ = args[1].index.value();
-      offsets_ = BaseVector::create<FlatVector<int64_t>>(BIGINT(), 0, pool);
-    }
   }
 
   void resetPartition(const exec::WindowPartition* partition) override {
@@ -86,7 +54,16 @@ class NthValueFunction : public exec::WindowFunction {
     if (constantOffset_.has_value() || isConstantOffsetNull_) {
       setRowNumbersForConstantOffset(validRows, rawFrameStarts, rawFrameEnds);
     } else {
-      setRowNumbers(numRows, validRows, rawFrameStarts, rawFrameEnds);
+      setRowNumbers(
+        numRows,
+        validRows,
+        rawFrameStarts,
+        rawFrameEnds,
+        partitionOffset_,
+        partition_,
+        offsetIndex_,
+        offsets_,
+        rowNumbers_);
     }
 
     auto rowNumbersRange = folly::Range(rowNumbers_.data(), numRows);
@@ -96,7 +73,25 @@ class NthValueFunction : public exec::WindowFunction {
     partitionOffset_ += numRows;
   }
 
- private:
+ protected:
+  void initializeConstantOffset(
+      const std::optional<vector_size_t>& constantOffset) {
+    if (constantOffset.has_value()) {
+      VELOX_USER_CHECK_GE(
+          constantOffset.value(), 1, "Offset must be at least 1");
+      constantOffset_ = constantOffset;
+    } else {
+      isConstantOffsetNull_ = true;
+    }
+  }
+
+  void initializeOffsetVector(
+      column_index_t offsetIndex,
+      const VectorPtr& offsets) {
+    offsetIndex_ = offsetIndex;
+    offsets_ = offsets;
+  }
+
   // The below 2 functions build the rowNumbers for column extraction.
   // The rowNumbers map for each output row, as per nth_value function
   // semantics, the rowNumber (relative to the start of the partition) from
@@ -111,8 +106,7 @@ class NthValueFunction : public exec::WindowFunction {
       return;
     }
 
-    vector_size_t constantOffsetValue =
-        static_cast<vector_size_t>(constantOffset_.value());
+    const auto constantOffsetValue = constantOffset_.value();
     validRows.applyToSelected([&](auto i) {
       setRowNumber(i, frameStarts, frameEnds, constantOffsetValue);
     });
@@ -120,27 +114,16 @@ class NthValueFunction : public exec::WindowFunction {
     setRowNumbersForEmptyFrames(validRows);
   }
 
-  void setRowNumbers(
+  virtual void setRowNumbers(
       vector_size_t numRows,
       const SelectivityVector& validRows,
       const vector_size_t* frameStarts,
-      const vector_size_t* frameEnds) {
-    offsets_->resize(numRows);
-    partition_->extractColumn(
-        offsetIndex_, partitionOffset_, numRows, 0, offsets_);
-
-    validRows.applyToSelected([&](auto i) {
-      if (offsets_->isNullAt(i)) {
-        rowNumbers_[i] = kNullRow;
-      } else {
-        vector_size_t offset = offsets_->valueAt(i);
-        VELOX_USER_CHECK_GE(offset, 1, "Offset must be at least 1");
-        setRowNumber(i, frameStarts, frameEnds, offset);
-      }
-    });
-
-    setRowNumbersForEmptyFrames(validRows);
-  }
+      const vector_size_t* frameEnds,
+      const vector_size_t partitionOffset,
+      const exec::WindowPartition* partition,
+      const column_index_t offsetIndex,
+      const VectorPtr& offsets,
+      std::vector<vector_size_t>& rowNumbers)= 0;
 
   void setRowNumbersForEmptyFrames(const SelectivityVector& validRows) {
     if (validRows.isAllSelected()) {
@@ -164,6 +147,7 @@ class NthValueFunction : public exec::WindowFunction {
     rowNumbers_[i] = rowNumber <= frameEnd ? rowNumber : kNullRow;
   }
 
+ private:
   // These are the argument indices of the nth_value value and offset columns
   // in the input row vector. These are needed to retrieve column values
   // from the partition data.
@@ -173,12 +157,12 @@ class NthValueFunction : public exec::WindowFunction {
   const exec::WindowPartition* partition_;
 
   // These fields are set if the offset argument is a constant value.
-  std::optional<int64_t> constantOffset_;
+  std::optional<vector_size_t> constantOffset_;
   bool isConstantOffsetNull_ = false;
 
   // This vector is used to extract values of the offset argument column
   // (if not a constant offset value).
-  FlatVectorPtr<int64_t> offsets_;
+  VectorPtr offsets_;
 
   // This offset tracks how far along the partition rows have been output.
   // This can be used to optimize reading offset column values corresponding
@@ -194,36 +178,4 @@ class NthValueFunction : public exec::WindowFunction {
   // Member variable re-used for setting null for empty frames.
   SelectivityVector invalidRows_;
 };
-} // namespace
-
-void registerNthValue(const std::string& name, const TypeKind& offsetTypeKind) {
-  std::vector<exec::FunctionSignaturePtr> signatures{
-      exec::FunctionSignatureBuilder()
-          .typeVariable("T")
-          .returnType("T")
-          .argumentType("T")
-          .argumentType(mapTypeKindToName(offsetTypeKind))
-          .build(),
-  };
-
-  exec::registerWindowFunction(
-      name,
-      std::move(signatures),
-      [name](
-          const std::vector<exec::WindowFunctionArg>& args,
-          const TypePtr& resultType,
-          velox::memory::MemoryPool* pool,
-          HashStringAllocator*
-          /*stringAllocator*/) -> std::unique_ptr<exec::WindowFunction> {
-        return std::make_unique<NthValueFunction>(args, resultType, pool);
-      });
-}
-
-void registerIntegerNthValue(const std::string& name) {
-  registerNthValue(name, TypeKind::INTEGER);
-}
-
-void registerBigintNthValue(const std::string& name) {
-  registerNthValue(name, TypeKind::BIGINT);
-}
 } // namespace facebook::velox::functions::window
