@@ -44,6 +44,12 @@ class CastExprTest : public functions::test::CastBaseTest {
     });
   }
 
+  void setCastIntAllowDecimalAndByTruncate(bool value) {
+    queryCtx_->testingOverrideConfigUnsafe(
+        {{core::QueryConfig::kCastIntAllowDecimal, std::to_string(value)},
+         {core::QueryConfig::kCastToIntByTruncate, std::to_string(value)}});
+  }
+
   void setCastMatchStructByName(bool value) {
     queryCtx_->testingOverrideConfigUnsafe({
         {core::QueryConfig::kCastMatchStructByName, std::to_string(value)},
@@ -415,6 +421,16 @@ TEST_F(CastExprTest, date) {
 
   setCastIntByTruncate(true);
   testCast<std::string, Date>("date", input, result);
+
+  // Wrong date format case.
+  std::vector<std::optional<std::string>> inputWrongFormat{
+      "1970-01/01", "2023/05/10", "2023-/05-/10", "20150318"};
+  std::vector<std::optional<Date>> nullResult{
+      std::nullopt, std::nullopt, std::nullopt, std::nullopt};
+  testCast<std::string, Date>(
+      "date", inputWrongFormat, nullResult, false, true);
+  testCast<std::string, Date>(
+      "date", inputWrongFormat, nullResult, true, false);
 }
 
 TEST_F(CastExprTest, invalidDate) {
@@ -537,6 +553,20 @@ TEST_F(CastExprTest, errorHandling) {
 
   testCast<std::string, int8_t>(
       "tinyint", {"1", "2", "3", "100", "-100.5"}, {1, 2, 3, 100, -100}, true);
+}
+
+TEST_F(CastExprTest, allowDecimal) {
+  // Allow decimal.
+  setCastIntAllowDecimalAndByTruncate(true);
+  testCast<std::string, int32_t>(
+      "int", {"-.", "0.0", "125.5", "-128.3"}, {0, 0, 125, -128}, false, true);
+}
+
+TEST_F(CastExprTest, sparkSemantic) {
+  // Allow decimal.
+  setCastIntAllowDecimalAndByTruncate(true);
+  testCast<float, bool>(
+      "bool", {0.5, -0.5, 1, 0}, {true, true, true, false}, false, true);
 }
 
 constexpr vector_size_t kVectorSize = 1'000;
@@ -805,6 +835,13 @@ TEST_F(CastExprTest, toString) {
   ASSERT_EQ("cast((a) as ARRAY<VARCHAR>)", exprSet.exprs()[1]->toString());
 }
 
+TEST_F(CastExprTest, decimalToInt) {
+  // short to short, scale up.
+  auto longFlat = makeLongDecimalFlatVector({8976067200}, DECIMAL(21, 6));
+  testComplexCast(
+      "c0", longFlat, makeFlatVector<int32_t>(std::vector<int32_t>{8976}));
+}
+
 TEST_F(CastExprTest, decimalToDecimal) {
   // short to short, scale up.
   auto shortFlat =
@@ -928,6 +965,16 @@ TEST_F(CastExprTest, integerToDecimal) {
   testIntToDecimalCasts<int16_t>();
   testIntToDecimalCasts<int32_t>();
   testIntToDecimalCasts<int64_t>();
+}
+
+TEST_F(CastExprTest, varcharToDecimal) {
+  auto input = makeFlatVector<StringView>(
+      std::vector<StringView>{"9999999999.99", "9999999999.99"});
+  testComplexCast(
+      "c0",
+      input,
+      makeShortDecimalFlatVector(
+          {999'999'999'999, 999'999'999'999}, DECIMAL(12, 2)));
 }
 
 TEST_F(CastExprTest, castInTry) {
