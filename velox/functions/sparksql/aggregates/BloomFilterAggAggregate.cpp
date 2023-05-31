@@ -221,7 +221,7 @@ class BloomFilterAggAggregate : public exec::Aggregate {
 
   void computeCapacity() {
     if (capacity_ == kMissingArgument) {
-      int64_t estimatedNumItems_ = std::min(estimatedNumItems_, kMaxNumItems);
+      int64_t estimatedNumItems = std::min(estimatedNumItems_, kMaxNumItems);
       int64_t numBits = std::min(numBits_, kMaxNumBits);
       capacity_ = numBits / 16;
     }
