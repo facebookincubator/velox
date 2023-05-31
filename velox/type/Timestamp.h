@@ -34,8 +34,11 @@ struct Timestamp {
  public:
   enum class Precision : int { kMilliseconds = 3, kNanoseconds = 9 };
   constexpr Timestamp() : seconds_(0), nanos_(0) {}
-  constexpr Timestamp(int64_t seconds, uint64_t nanos)
-      : seconds_(seconds), nanos_(nanos) {}
+  Timestamp(int64_t seconds, uint64_t nanos) {
+    constexpr const uint64_t kNanosPerSecond{1000000000};
+    seconds_ = seconds + nanos / kNanosPerSecond;
+    nanos_ = nanos - (nanos / kNanosPerSecond) * kNanosPerSecond;
+  }
 
   // Returns the current unix timestamp (ms precision).
   static Timestamp now();

@@ -191,7 +191,7 @@ class Subfield {
   };
 
  public:
-  explicit Subfield(const std::string& path);
+  explicit Subfield(const std::string& path, bool dotAsRegular = false);
 
   explicit Subfield(std::vector<std::unique_ptr<PathElement>>&& path);
 

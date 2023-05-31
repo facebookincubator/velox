@@ -616,7 +616,7 @@ VectorPtr BaseVector::createConstant(
     variant value,
     vector_size_t size,
     velox::memory::MemoryPool* pool) {
-  VELOX_CHECK_EQ(type->kind(), value.kind());
+  VELOX_CHECK(compatibleKind(type->kind(), value.kind()));
   return VELOX_DYNAMIC_SCALAR_TYPE_DISPATCH_ALL(
       newConstant, value.kind(), type, value, size, pool);
 }

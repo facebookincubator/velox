@@ -177,11 +177,16 @@ bool tryParseDateString(
   if (!characterIsDigit(buf[pos])) {
     return false;
   }
+  int yearSegStart = pos;
   // First parse the year.
   for (; pos < len && characterIsDigit(buf[pos]); pos++) {
     year = checkedPlus((buf[pos] - '0'), checkedMultiply(year, 10));
     if (year > kMaxYear) {
       break;
+    }
+    // Align with spark, year digits should not be greater than 7.
+    if (pos - yearSegStart + 1 > 7) {
+      return false;
     }
   }
   if (yearneg) {
@@ -191,13 +196,20 @@ bool tryParseDateString(
     }
   }
 
-  if (pos >= len) {
+  // No month or day.
+  if (pos == len) {
+    daysSinceEpoch = daysSinceEpochFromDate(year, 1, 1);
+    return true;
+  }
+
+  if (pos > len) {
     return false;
   }
 
   // Fetch the separator.
   sep = buf[pos++];
-  if (sep != ' ' && sep != '-' && sep != '/' && sep != '\\') {
+  // For spark, "/" separtor is not supported.
+  if (sep != ' ' && sep != '-' && sep != '\\') {
     // Invalid separator.
     return false;
   }
@@ -207,7 +219,13 @@ bool tryParseDateString(
     return false;
   }
 
-  if (pos >= len) {
+  // No day.
+  if (pos == len) {
+    daysSinceEpoch = daysSinceEpochFromDate(year, month, 1);
+    return true;
+  }
+
+  if (pos > len) {
     return false;
   }
 
@@ -240,13 +258,25 @@ bool tryParseDateString(
 
   // In strict mode, check remaining string for non-space characters.
   if (strict) {
-    // Skip trailing spaces.
-    while (pos < len && characterIsSpace(buf[pos])) {
+    // Check for an optional trailing 'T' followed by optional digits.
+    if (pos < len && buf[pos] == 'T') {
       pos++;
-    }
-    // Check position. if end was not reached, non-space chars remaining.
-    if (pos < len) {
-      return false;
+      while (pos < len && characterIsDigit(buf[pos])) {
+        pos++;
+      }
+    } else {
+      // Skip trailing spaces.
+      while (pos < len && characterIsSpace(buf[pos])) {
+        pos++;
+      }
+      // Skip trailing digits after spaces.
+      while (pos < len && characterIsDigit(buf[pos])) {
+        pos++;
+      }
+      // Check position. if end was not reached, non-space chars remaining.
+      if (pos < len) {
+        return false;
+      }
     }
   } else {
     // In non-strict mode, check for any direct trailing digits.
@@ -499,6 +529,19 @@ int64_t fromDateString(const char* str, size_t len) {
   size_t pos = 0;
 
   if (!tryParseDateString(str, len, pos, daysSinceEpoch, true)) {
+    if (len == 19) {
+      // Timestamp format: (YYYY-MM-DD HH:MM:SS).
+      std::string input(str);
+      size_t strLen = 10;
+      std::string leadingStr = input.substr(0, strLen);
+      if (!tryParseDateString(
+              leadingStr.c_str(), strLen, pos, daysSinceEpoch, true)) {
+        VELOX_USER_FAIL(
+            "Unable to parse date value: \"{}\", expected format is (YYYY-MM-DD)",
+            std::string(leadingStr, strLen));
+      }
+      return daysSinceEpoch;
+    }
     VELOX_USER_FAIL(
         "Unable to parse date value: \"{}\", expected format is (YYYY-MM-DD)",
         std::string(str, len));

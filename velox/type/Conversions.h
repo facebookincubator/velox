@@ -21,12 +21,17 @@
 #include <string>
 #include <type_traits>
 #include "velox/common/base/Exceptions.h"
+#include "velox/type/DecimalUtil.h"
 #include "velox/type/TimestampConversion.h"
 #include "velox/type/Type.h"
 
 namespace facebook::velox::util {
 
-template <TypeKind KIND, typename = void, bool TRUNCATE = false>
+template <
+    TypeKind KIND,
+    typename = void,
+    bool TRUNCATE = false,
+    bool ALLOW_DECIMAL = false>
 struct Converter {
   template <typename T>
   // nullOutput API requires that the user has already set nullOutput to
@@ -37,11 +42,25 @@ struct Converter {
     VELOX_UNSUPPORTED(
         "Conversion to {} is not supported", TypeTraits<KIND>::name);
   }
+
+  template <typename T>
+  static typename TypeTraits<KIND>::NativeType
+  cast(T val, bool& nullOutput, const TypePtr& toType) {
+    VELOX_UNSUPPORTED(
+        "Conversion of {} to {} is not supported",
+        CppToType<T>::name,
+        TypeTraits<KIND>::name);
+  }
 };
 
 template <>
 struct Converter<TypeKind::BOOLEAN> {
   using T = bool;
+
+  template <typename From>
+  static T cast(const From& v, bool& nullOutput, const TypePtr& toType) {
+    VELOX_NYI();
+  }
 
   template <typename From>
   static T cast(const From& v, bool& nullOutput) {
@@ -69,7 +88,7 @@ struct Converter<TypeKind::BOOLEAN> {
   }
 };
 
-template <TypeKind KIND, bool TRUNCATE>
+template <TypeKind KIND, bool TRUNCATE, bool ALLOW_DECIMAL>
 struct Converter<
     KIND,
     std::enable_if_t<
@@ -77,8 +96,42 @@ struct Converter<
             KIND == TypeKind::SMALLINT || KIND == TypeKind::INTEGER ||
             KIND == TypeKind::BIGINT || KIND == TypeKind::HUGEINT,
         void>,
-    TRUNCATE> {
+    TRUNCATE,
+    ALLOW_DECIMAL> {
   using T = typename TypeTraits<KIND>::NativeType;
+
+  template <typename From>
+  static T cast(const From& v, bool& nullOutput, const TypePtr& toType) {
+    VELOX_NYI();
+  }
+
+  // from long decimal cast to some type
+  static T cast(const int128_t& d, bool& nullOutput, const TypePtr& fromType) {
+    const auto& decimalType = fromType->asLongDecimal();
+    auto scale0Decimal = DecimalUtil::rescaleWithRoundUp<int128_t, int128_t>(
+        d,
+        decimalType.precision(),
+        decimalType.scale(),
+        decimalType.precision(),
+        0,
+        false,
+        false);
+    return cast(scale0Decimal.value(), nullOutput);
+  }
+
+  // from short decimal cast to some type
+  static T cast(const int64_t& d, bool& nullOutput, const TypePtr& fromType) {
+    const auto& decimalType = fromType->asShortDecimal();
+    auto scale0Decimal = DecimalUtil::rescaleWithRoundUp<int64_t, int64_t>(
+        d,
+        decimalType.precision(),
+        decimalType.scale(),
+        decimalType.precision(),
+        0,
+        false,
+        false);
+    return cast(scale0Decimal.value(), nullOutput);
+  }
 
   template <typename From>
   static T cast(const From& v, bool& nullOutput) {
@@ -86,7 +139,10 @@ struct Converter<
         "Conversion to {} is not supported", TypeTraits<KIND>::name);
   }
 
-  static T convertStringToInt(const folly::StringPiece& v, bool& nullOutput) {
+  static T convertStringToInt(
+      const folly::StringPiece& v,
+      const bool allowDecimal,
+      bool& nullOutput) {
     // Handling boolean target case fist because it is in this scope
     if constexpr (std::is_same_v<T, bool>) {
       return folly::to<T>(v);
@@ -110,6 +166,10 @@ struct Converter<
       }
       if (negative) {
         for (; index < len; index++) {
+          // Allow decimal and ignore the fractional part.
+          if (v[index] == '.' && allowDecimal) {
+            break;
+          }
           if (!std::isdigit(v[index])) {
             return -1;
           }
@@ -121,6 +181,9 @@ struct Converter<
         }
       } else {
         for (; index < len; index++) {
+          if (v[index] == '.' && allowDecimal) {
+            break;
+          }
           if (!std::isdigit(v[index])) {
             return -1;
           }
@@ -140,7 +203,7 @@ struct Converter<
   static T cast(const folly::StringPiece& v, bool& nullOutput) {
     try {
       if constexpr (TRUNCATE) {
-        return convertStringToInt(v, nullOutput);
+        return convertStringToInt(v, ALLOW_DECIMAL, nullOutput);
       } else {
         return folly::to<T>(v);
       }
@@ -152,7 +215,8 @@ struct Converter<
   static T cast(const StringView& v, bool& nullOutput) {
     try {
       if constexpr (TRUNCATE) {
-        return convertStringToInt(folly::StringPiece(v), nullOutput);
+        return convertStringToInt(
+            folly::StringPiece(v), ALLOW_DECIMAL, nullOutput);
       } else {
         return folly::to<T>(folly::StringPiece(v));
       }
@@ -164,7 +228,7 @@ struct Converter<
   static T cast(const std::string& v, bool& nullOutput) {
     try {
       if constexpr (TRUNCATE) {
-        return convertStringToInt(v, nullOutput);
+        return convertStringToInt(v, ALLOW_DECIMAL, nullOutput);
       } else {
         return folly::to<T>(v);
       }
@@ -221,7 +285,9 @@ struct Converter<
       if (v > LimitType::maxLimit()) {
         return LimitType::max();
       }
-      if (v < LimitType::minLimit()) {
+      // bool type's min is 0, but spark expects true for casting negative float
+      // data.
+      if (!std::is_same_v<T, bool> && v < LimitType::minLimit()) {
         return LimitType::min();
       }
       return LimitType::cast(v);
@@ -241,7 +307,9 @@ struct Converter<
       if (v > LimitType::maxLimit()) {
         return LimitType::max();
       }
-      if (v < LimitType::minLimit()) {
+      // bool type's min is 0, but spark expects true for casting negative float
+      // data.
+      if (!std::is_same_v<T, bool> && v < LimitType::minLimit()) {
         return LimitType::min();
       }
       return LimitType::cast(v);
@@ -284,14 +352,38 @@ struct Converter<
       return folly::to<T>(v);
     }
   }
+
+  static T cast(const int128_t& v, bool& nullOutput) {
+    if constexpr (TRUNCATE) {
+      return T(v);
+    } else {
+      return static_cast<T>(v);
+    }
+  }
 };
 
-template <TypeKind KIND, bool TRUNCATE>
+template <TypeKind KIND, bool TRUNCATE, bool ALLOW_DECIMAL>
 struct Converter<
     KIND,
     std::enable_if_t<KIND == TypeKind::REAL || KIND == TypeKind::DOUBLE, void>,
-    TRUNCATE> {
+    TRUNCATE,
+    ALLOW_DECIMAL> {
   using T = typename TypeTraits<KIND>::NativeType;
+
+  template <typename From>
+  static T cast(const From& v, bool& nullOutput, const TypePtr& toType) {
+    VELOX_NYI();
+  }
+
+  static T cast(const int64_t& v, bool& nullOutput, const TypePtr& fromType) {
+    auto decimalType = fromType->asShortDecimal();
+    return DecimalUtil::toDoubleValue(v, decimalType.scale());
+  }
+
+  static T cast(const int128_t& v, bool& nullOutput, const TypePtr& fromType) {
+    auto decimalType = fromType->asLongDecimal();
+    return DecimalUtil::toDoubleValue(v, decimalType.scale());
+  }
 
   template <typename From>
   static T cast(const From& v, bool& nullOutput) {
@@ -358,10 +450,31 @@ struct Converter<
     VELOX_UNSUPPORTED(
         "Conversion of Timestamp to Real or Double is not supported");
   }
+
+  static T cast(const int128_t& d, bool& nullOutput) {
+    VELOX_UNSUPPORTED(
+        "Conversion of int128_t to Real or Double is not supported");
+  }
 };
 
-template <bool TRUNCATE>
-struct Converter<TypeKind::VARCHAR, void, TRUNCATE> {
+template <bool TRUNCATE, bool ALLOW_DECIMAL>
+struct Converter<TypeKind::VARCHAR, void, TRUNCATE, ALLOW_DECIMAL> {
+  template <typename T>
+  static std::string
+  cast(const T& v, bool& nullOutput, const TypePtr& fromType) {
+    VELOX_NYI();
+  }
+
+  static std::string
+  cast(const int64_t& v, bool& nullOutput, const TypePtr& fromType) {
+    return DecimalUtil::toString(v, fromType);
+  }
+
+  static std::string
+  cast(const int128_t& v, bool& nullOutput, const TypePtr& fromType) {
+    return DecimalUtil::toString(v, fromType);
+  }
+
   template <typename T>
   static std::string cast(const T& val, bool& nullOutput) {
     if constexpr (
@@ -391,6 +504,11 @@ struct Converter<TypeKind::TIMESTAMP> {
   using T = typename TypeTraits<TypeKind::TIMESTAMP>::NativeType;
 
   template <typename From>
+  static T cast(const From& v, bool& nullOutput, const TypePtr& toType) {
+    VELOX_NYI();
+  }
+
+  template <typename From>
   static T cast(const From& /* v */, bool& nullOutput) {
     VELOX_UNSUPPORTED("Conversion to Timestamp is not supported");
     return T();
@@ -415,9 +533,15 @@ struct Converter<TypeKind::TIMESTAMP> {
 };
 
 // Allow conversions from string to DATE type.
-template <bool TRUNCATE>
-struct Converter<TypeKind::DATE, void, TRUNCATE> {
+template <bool TRUNCATE, bool ALLOW_DECIMAL>
+struct Converter<TypeKind::DATE, void, TRUNCATE, ALLOW_DECIMAL> {
   using T = typename TypeTraits<TypeKind::DATE>::NativeType;
+
+  template <typename From>
+  static T cast(const From& v, bool& nullOutput, const TypePtr& toType) {
+    VELOX_NYI();
+  }
+
   template <typename From>
   static T cast(const From& /* v */, bool& nullOutput) {
     VELOX_UNSUPPORTED("Conversion to Date is not supported");
