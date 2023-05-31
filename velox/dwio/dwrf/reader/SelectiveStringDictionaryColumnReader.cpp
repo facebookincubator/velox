@@ -30,8 +30,10 @@ SelectiveStringDictionaryColumnReader::SelectiveStringDictionaryColumnReader(
       lastStrideIndex_(-1),
       provider_(params.stripeStreams().getStrideIndexProvider()) {
   auto& stripe = params.stripeStreams();
+  format_ = stripe.format();
+
   EncodingKey encodingKey{nodeType_->id, params.flatMapContext().sequence};
-  rleVersion = convertRleVersion(stripe.getEncoding(encodingKey).kind());
+  rleVersion_ = convertRleVersion(stripe.getEncoding(encodingKey).kind());
   scanState_.dictionary.numValues =
       stripe.getEncoding(encodingKey).dictionarysize();
 
@@ -39,7 +41,7 @@ SelectiveStringDictionaryColumnReader::SelectiveStringDictionaryColumnReader(
   bool dictVInts = stripe.getUseVInts(dataId);
   dictIndex_ = createRleDecoder</*isSigned*/ false>(
       stripe.getStream(dataId, true),
-      rleVersion,
+      rleVersion_,
       memoryPool_,
       dictVInts,
       dwio::common::INT_BYTE_SIZE);
@@ -48,7 +50,7 @@ SelectiveStringDictionaryColumnReader::SelectiveStringDictionaryColumnReader(
   bool lenVInts = stripe.getUseVInts(lenId);
   lengthDecoder_ = createRleDecoder</*isSigned*/ false>(
       stripe.getStream(lenId, false),
-      rleVersion,
+      rleVersion_,
       memoryPool_,
       lenVInts,
       dwio::common::INT_BYTE_SIZE);
@@ -75,7 +77,7 @@ SelectiveStringDictionaryColumnReader::SelectiveStringDictionaryColumnReader(
     bool strideLenVInt = stripe.getUseVInts(strideDictLenId);
     strideDictLengthDecoder_ = createRleDecoder</*isSigned*/ false>(
         stripe.getStream(strideDictLenId, true),
-        rleVersion,
+        rleVersion_,
         memoryPool_,
         strideLenVInt,
         dwio::common::INT_BYTE_SIZE);
