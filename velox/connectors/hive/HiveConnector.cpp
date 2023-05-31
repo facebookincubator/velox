@@ -22,6 +22,7 @@
 #include "velox/dwio/common/ReaderFactory.h"
 #include "velox/expression/FieldReference.h"
 #include "velox/type/Conversions.h"
+#include "velox/type/DecimalUtilOp.h"
 #include "velox/type/Type.h"
 #include "velox/type/Variant.h"
 
@@ -257,6 +258,7 @@ HiveDataSource::HiveDataSource(
     core::ExpressionEvaluator* expressionEvaluator,
     memory::MemoryAllocator* allocator,
     const std::string& scanId,
+    bool caseSensitive,
     folly::Executor* executor)
     : fileHandleFactory_(fileHandleFactory),
       readerOpts_(pool),
@@ -340,6 +342,8 @@ HiveDataSource::HiveDataSource(
     }
     readerOutputType_ = ROW(std::move(names), std::move(types));
   }
+
+  readerOpts_.setCaseSensitive(caseSensitive);
 
   rowReaderOpts_.setScanSpec(scanSpec_);
   rowReaderOpts_.setMetadataFilter(metadataFilter_);
@@ -427,7 +431,9 @@ bool testFilters(
 template <TypeKind ToKind>
 velox::variant convertFromString(const std::optional<std::string>& value) {
   if (value.has_value()) {
-    if constexpr (ToKind == TypeKind::VARCHAR) {
+    // No need for casting if ToKind is VARCHAR or VARBINARY.
+    if constexpr (
+        ToKind == TypeKind::VARCHAR || ToKind == TypeKind::VARBINARY) {
       return velox::variant(value.value());
     }
     bool nullOutput = false;
@@ -438,6 +444,36 @@ velox::variant convertFromString(const std::optional<std::string>& value) {
     return velox::variant(result);
   }
   return velox::variant(ToKind);
+}
+
+velox::variant convertDecimalFromString(
+    const std::optional<std::string>& value,
+    const TypePtr& type) {
+  VELOX_CHECK(type->isDecimal(), "Decimal type is expected.");
+  if (type->isShortDecimal()) {
+    if (!value.has_value()) {
+      return variant::null(TypeKind::BIGINT);
+    }
+    bool nullOutput = false;
+    auto result = velox::util::Converter<TypeKind::BIGINT>::cast(
+        value.value(), nullOutput);
+    VELOX_CHECK(
+        not nullOutput,
+        "Failed to cast {} to {}",
+        value.value(),
+        TypeKind::BIGINT);
+    return variant(static_cast<int64_t>(result));
+  }
+
+  if (!value.has_value()) {
+    return variant::null(TypeKind::HUGEINT);
+  }
+  bool nullOutput = false;
+  int128_t result =
+      DecimalUtilOp::convertStringToInt128(value.value(), nullOutput);
+  VELOX_CHECK(not nullOutput, "Failed to cast {} to int128", value.value());
+  return variant(HugeInt::build(
+      static_cast<uint64_t>(result >> 64), static_cast<uint64_t>(result)));
 }
 
 } // namespace
@@ -537,6 +573,7 @@ void HiveDataSource::addSplit(std::shared_ptr<ConnectorSplit> split) {
     runtimeStats_.skippedSplitBytes += split_->length;
     return;
   }
+  ++runtimeStats_.processedSplits;
 
   auto& fileType = reader_->rowType();
 
@@ -717,9 +754,15 @@ void HiveDataSource::setPartitionValue(
       it != partitionKeys_.end(),
       "ColumnHandle is missing for partition key {}",
       partitionKey);
-  auto constValue = VELOX_DYNAMIC_SCALAR_TYPE_DISPATCH(
-      convertFromString, it->second->dataType()->kind(), value);
-  setConstantValue(spec, it->second->dataType(), constValue);
+  auto toTypeKind = it->second->dataType()->kind();
+  velox::variant constantValue;
+  if (it->second->dataType()->isDecimal()) {
+    constantValue = convertDecimalFromString(value, it->second->dataType());
+  } else {
+    constantValue = VELOX_DYNAMIC_SCALAR_TYPE_DISPATCH(
+        convertFromString, toTypeKind, value);
+  }
+  setConstantValue(spec, it->second->dataType(), constantValue);
 }
 
 std::unordered_map<std::string, RuntimeCounter> HiveDataSource::runtimeStats() {

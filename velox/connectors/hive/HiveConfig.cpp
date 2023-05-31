@@ -124,4 +124,8 @@ std::optional<std::string> HiveConfig::s3IAMRole(const Config* config) {
 std::string HiveConfig::s3IAMRoleSessionName(const Config* config) {
   return config->get(kS3IamRoleSessionName, std::string("velox-session"));
 }
+
+bool HiveConfig::isCaseSensitive(const Config* config) {
+  return config->get<bool>(kCaseSensitive, true);
+}
 } // namespace facebook::velox::connector::hive

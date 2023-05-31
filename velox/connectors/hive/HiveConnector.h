@@ -16,6 +16,7 @@
 #pragma once
 
 #include "velox/connectors/hive/FileHandle.h"
+#include "velox/connectors/hive/HiveConfig.h"
 #include "velox/connectors/hive/HiveConnectorSplit.h"
 #include "velox/connectors/hive/HiveDataSink.h"
 #include "velox/dwio/common/CachedBufferedInput.h"
@@ -135,6 +136,7 @@ class HiveDataSource : public DataSource {
       core::ExpressionEvaluator* expressionEvaluator,
       memory::MemoryAllocator* allocator,
       const std::string& scanId,
+      bool caseSensitive,
       folly::Executor* executor);
 
   void addSplit(std::shared_ptr<ConnectorSplit> split) override;
@@ -277,6 +279,7 @@ class HiveConnector : public Connector {
         connectorQueryCtx->expressionEvaluator(),
         connectorQueryCtx->allocator(),
         connectorQueryCtx->scanId(),
+        HiveConfig::isCaseSensitive(connectorQueryCtx->config()),
         executor_);
   }
 

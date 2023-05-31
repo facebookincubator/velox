@@ -79,6 +79,8 @@ class HiveConfig {
   static constexpr const char* kS3IamRoleSessionName =
       "hive.s3.iam-role-session-name";
 
+  static constexpr const char* kCaseSensitive = "case_sensitive";
+
   static InsertExistingPartitionsBehavior insertExistingPartitionsBehavior(
       const Config* config);
 
@@ -103,6 +105,8 @@ class HiveConfig {
   static std::optional<std::string> s3IAMRole(const Config* config);
 
   static std::string s3IAMRoleSessionName(const Config* config);
+
+  static bool isCaseSensitive(const Config* config);
 };
 
 } // namespace facebook::velox::connector::hive
