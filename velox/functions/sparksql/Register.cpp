@@ -18,7 +18,6 @@
 #include "velox/functions/lib/IsNull.h"
 #include "velox/functions/lib/Re2Functions.h"
 #include "velox/functions/lib/RegistrationHelpers.h"
-#include "velox/functions/prestosql/ArrayConstructor.h"
 #include "velox/functions/prestosql/JsonFunctions.h"
 #include "velox/functions/prestosql/Rand.h"
 #include "velox/functions/prestosql/StringFunctions.h"
@@ -49,7 +48,7 @@ static void workAroundRegistrationMacro(const std::string& prefix) {
   //   function expression corresponds to body, arguments to signature
   VELOX_REGISTER_VECTOR_FUNCTION(udf_map_filter, prefix + "map_filter");
   // Complex types.
-  registerArrayConstructor(prefix + "array");
+  VELOX_REGISTER_VECTOR_FUNCTION(udf_array_constructor, prefix + "array");
   VELOX_REGISTER_VECTOR_FUNCTION(udf_array_contains, prefix + "array_contains");
   VELOX_REGISTER_VECTOR_FUNCTION(
       udf_array_intersect, prefix + "array_intersect");
@@ -71,7 +70,7 @@ static void workAroundRegistrationMacro(const std::string& prefix) {
 namespace sparksql {
 
 void registerFunctions(const std::string& prefix) {
-  registerFunction<RandFunction, double>({"rand"});
+  registerFunction<RandFunction, double>({prefix + "rand"});
 
   // Register size functions
   registerSize(prefix + "size");
@@ -91,9 +90,10 @@ void registerFunctions(const std::string& prefix) {
       Varchar,
       int32_t,
       int32_t>({prefix + "substring"});
-  exec::registerStatefulVectorFunction("instr", instrSignatures(), makeInstr);
   exec::registerStatefulVectorFunction(
-      "length", lengthSignatures(), makeLength);
+      prefix + "instr", instrSignatures(), makeInstr);
+  exec::registerStatefulVectorFunction(
+      prefix + "length", lengthSignatures(), makeLength);
 
   registerFunction<Md5Function, Varchar, Varbinary>({prefix + "md5"});
   registerFunction<Sha1HexStringFunction, Varchar, Varbinary>(
@@ -171,6 +171,8 @@ void registerFunctions(const std::string& prefix) {
       int64_t,
       Varchar,
       Varchar>({prefix + "unix_timestamp", prefix + "to_unix_timestamp"});
+  registerFunction<MakeDateFunction, Date, int32_t, int32_t, int32_t>(
+      {prefix + "make_date"});
 
   // Register bloom filter function
   registerFunction<BloomFilterMightContainFunction, bool, Varbinary, int64_t>(

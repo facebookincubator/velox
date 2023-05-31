@@ -34,6 +34,8 @@ dnf_install ninja-build ccache gcc-toolset-9 git wget which libevent-devel \
   openssl-devel re2-devel libzstd-devel lz4-devel double-conversion-devel \
   libdwarf-devel curl-devel libicu-devel llvm
 
+# Required for sanitizers
+dnf install gcc-toolset-9-libasan-devel
 dnf remove -y gflags
 
 # Required for Thrift

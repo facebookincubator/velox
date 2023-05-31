@@ -720,8 +720,9 @@ BoundType parseBoundType(WindowBoundary boundary) {
 
 } // namespace
 
-const IExprWindowFunction parseWindowExpr(const std::string& windowString) {
-  ParseOptions options;
+const IExprWindowFunction parseWindowExpr(
+    const std::string& windowString,
+    const ParseOptions& options) {
   auto parsedExpressions = parseExpression(windowString);
   if (parsedExpressions.size() != 1) {
     throw std::invalid_argument(folly::sformat(
@@ -755,6 +756,15 @@ const IExprWindowFunction parseWindowExpr(const std::string& windowString) {
   for (const auto& c : windowExpr.children) {
     params.emplace_back(parseExpr(*c, options));
   }
+
+  // Lead and Lag functions have extra offset and default_value arguments.
+  if (windowExpr.offset_expr) {
+    params.emplace_back(parseExpr(*windowExpr.offset_expr, options));
+  }
+  if (windowExpr.default_expr) {
+    params.emplace_back(parseExpr(*windowExpr.default_expr, options));
+  }
+
   auto func = normalizeFuncName(windowExpr.function_name);
   windowIExpr.functionCall =
       callExpr(func, std::move(params), getAlias(windowExpr));

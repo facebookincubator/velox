@@ -34,10 +34,15 @@ dnf_install ninja-build ccache gcc-toolset-9 git wget which libevent-devel \
   openssl-devel re2-devel libzstd-devel lz4-devel double-conversion-devel \
   libdwarf-devel curl-devel cmake libicu-devel llvm
 
+# Required for sanitizers
+dnf install gcc-toolset-9-libasan-devel
 dnf remove -y gflags
 
 # Required for Thrift
 dnf_install autoconf automake libtool bison flex python3
+
+# Required for google-cloud-storage
+dnf_install curl-devel c-ares-devel
 
 dnf_install conda
 

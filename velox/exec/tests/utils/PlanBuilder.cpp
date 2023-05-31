@@ -74,6 +74,7 @@ PlanBuilder& PlanBuilder::tableScan(
     const std::string& remainingFilter) {
   std::unordered_map<std::string, std::shared_ptr<connector::ColumnHandle>>
       assignments;
+  std::unordered_map<std::string, core::TypedExprPtr> typedMapping;
   for (uint32_t i = 0; i < outputType->size(); ++i) {
     const auto& name = outputType->nameOf(i);
     const auto& type = outputType->childAt(i);
@@ -82,6 +83,9 @@ PlanBuilder& PlanBuilder::tableScan(
     auto it = columnAliases.find(name);
     if (it != columnAliases.end()) {
       hiveColumnName = it->second;
+      typedMapping.emplace(
+          name,
+          std::make_shared<core::FieldAccessTypedExpr>(type, hiveColumnName));
     }
 
     assignments.insert(
@@ -116,7 +120,7 @@ PlanBuilder& PlanBuilder::tableScan(
   if (!remainingFilter.empty()) {
     remainingFilterExpr =
         parseExpr(remainingFilter, outputType, options_, pool_)
-            ->rewriteInputNames(columnAliases);
+            ->rewriteInputNames(typedMapping);
   }
 
   auto tableHandle = std::make_shared<HiveTableHandle>(
@@ -1227,8 +1231,10 @@ PlanBuilder& PlanBuilder::window(
   };
 
   WindowTypeResolver windowResolver;
+  facebook::velox::duckdb::ParseOptions options;
+  options.parseIntegerAsBigint = options_.parseIntegerAsBigint;
   for (const auto& windowString : windowFunctions) {
-    const auto& windowExpr = duckdb::parseWindowExpr(windowString);
+    const auto& windowExpr = duckdb::parseWindowExpr(windowString, options);
     // All window function SQL strings in the list are expected to have the same
     // PARTITION BY and ORDER BY clauses. Validate this assumption.
     if (first) {

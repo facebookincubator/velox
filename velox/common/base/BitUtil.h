@@ -715,7 +715,7 @@ inline bool isPowerOfTwo(uint64_t size) {
 // This is the Hash128to64 function from Google's cityhash (available
 // under the MIT License).  We use it to reduce multiple 64 bit hashes
 // into a single hash.
-#if defined(FOLLY_DISABLE_UNDEFINED_BEHAVIOR_SANITIZER)
+#if defined(FOLLY_DISABLE_UNDEFINED_BEHAVIOR_SANITIZER) && !defined(__GNUC__)
 FOLLY_DISABLE_UNDEFINED_BEHAVIOR_SANITIZER("unsigned-integer-overflow")
 #endif
 inline uint64_t hashMix(const uint64_t upper, const uint64_t lower) noexcept {
@@ -732,7 +732,7 @@ inline uint64_t hashMix(const uint64_t upper, const uint64_t lower) noexcept {
 // Order-independent way to reduce multiple 64 bit hashes into a
 // single hash. Copied from folly/hash/Hash.h because this is not
 // defined in some versions of folly.
-#if defined(FOLLY_DISABLE_UNDEFINED_BEHAVIOR_SANITIZER)
+#if defined(FOLLY_DISABLE_UNDEFINED_BEHAVIOR_SANITIZER) && !defined(__GNUC__)
 FOLLY_DISABLE_UNDEFINED_BEHAVIOR_SANITIZER("unsigned-integer-overflow")
 #endif
 inline uint64_t commutativeHashMix(
