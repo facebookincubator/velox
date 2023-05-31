@@ -58,6 +58,26 @@ TEST_F(ParquetReaderTest, parseSample) {
   EXPECT_EQ(type->childByName("b"), col1);
 }
 
+TEST_F(ParquetReaderTest, parseInCaseSensitive) {
+  // sample.parquet holds three columns (A: BIGINT, b: BIGINT) and
+  // 2 rows
+  const std::string sample(getExampleFilePath("upper.parquet"));
+
+  ReaderOptions readerOptions{defaultPool.get()};
+  readerOptions.setCaseSensitive(false);
+  ParquetReader reader = createReader(sample, readerOptions);
+  EXPECT_EQ(reader.numberOfRows(), 2ULL);
+
+  auto type = reader.typeWithId();
+  EXPECT_EQ(type->size(), 2ULL);
+  auto col0 = type->childAt(0);
+  EXPECT_EQ(col0->type->kind(), TypeKind::BIGINT);
+  auto col1 = type->childAt(1);
+  EXPECT_EQ(col1->type->kind(), TypeKind::BIGINT);
+  EXPECT_EQ(type->childByName("a"), col0);
+  EXPECT_EQ(type->childByName("b"), col1);
+}
+
 TEST_F(ParquetReaderTest, parseEmpty) {
   // empty.parquet holds two columns (a: BIGINT, b: DOUBLE) and
   // 0 rows.

@@ -57,18 +57,21 @@ class ColumnSelector {
    */
   explicit ColumnSelector(
       const std::shared_ptr<const velox::RowType>& schema,
-      const MetricsLogPtr& log = nullptr)
-      : ColumnSelector(schema, schema, log) {}
+      const MetricsLogPtr& log = nullptr,
+      const bool caseSensitive = true)
+      : ColumnSelector(schema, schema, log, caseSensitive) {}
 
   explicit ColumnSelector(
       const std::shared_ptr<const velox::RowType>& schema,
       const std::shared_ptr<const velox::RowType>& contentSchema,
-      MetricsLogPtr log = nullptr)
+      MetricsLogPtr log = nullptr,
+      const bool caseSensitive = true)
       : log_{std::move(log)}, schema_{schema}, state_{ReadState::kAll} {
     buildNodes(schema, contentSchema);
 
     // no filter, read everything
     setReadAll();
+    checkSelectColDuplicate(caseSensitive);
   }
 
   /**
@@ -77,18 +80,21 @@ class ColumnSelector {
   explicit ColumnSelector(
       const std::shared_ptr<const velox::RowType>& schema,
       const std::vector<std::string>& names,
-      const MetricsLogPtr& log = nullptr)
-      : ColumnSelector(schema, schema, names, log) {}
+      const MetricsLogPtr& log = nullptr,
+      const bool caseSensitive = true)
+      : ColumnSelector(schema, schema, names, log, caseSensitive) {}
 
   explicit ColumnSelector(
       const std::shared_ptr<const velox::RowType>& schema,
       const std::shared_ptr<const velox::RowType>& contentSchema,
       const std::vector<std::string>& names,
-      MetricsLogPtr log = nullptr)
+      MetricsLogPtr log = nullptr,
+      const bool caseSensitive = true)
       : log_{std::move(log)},
         schema_{schema},
         state_{names.empty() ? ReadState::kAll : ReadState::kPartial} {
-    acceptFilter(schema, contentSchema, names);
+    acceptFilter(schema, contentSchema, names, false);
+    checkSelectColDuplicate(caseSensitive);
   }
 
   /**
@@ -98,19 +104,23 @@ class ColumnSelector {
       const std::shared_ptr<const velox::RowType>& schema,
       const std::vector<uint64_t>& ids,
       const bool filterByNodes = false,
-      const MetricsLogPtr& log = nullptr)
-      : ColumnSelector(schema, schema, ids, filterByNodes, log) {}
+      const MetricsLogPtr& log = nullptr,
+      const bool caseSensitive = true)
+      : ColumnSelector(schema, schema, ids, filterByNodes, log, caseSensitive) {
+  }
 
   explicit ColumnSelector(
       const std::shared_ptr<const velox::RowType>& schema,
       const std::shared_ptr<const velox::RowType>& contentSchema,
       const std::vector<uint64_t>& ids,
       const bool filterByNodes = false,
-      MetricsLogPtr log = nullptr)
+      MetricsLogPtr log = nullptr,
+      const bool caseSensitive = true)
       : log_{std::move(log)},
         schema_{schema},
         state_{ids.empty() ? ReadState::kAll : ReadState::kPartial} {
     acceptFilter(schema, contentSchema, ids, filterByNodes);
+    checkSelectColDuplicate(caseSensitive);
   }
 
   // set a specific node to read state
@@ -300,6 +310,28 @@ class ColumnSelector {
 
   // get node ID list to be read
   std::vector<uint64_t> getNodeFilter() const;
+
+  void checkSelectColDuplicate(bool caseSensitive) {
+    if (caseSensitive) {
+      return;
+    }
+    std::unordered_map<std::string, int> names;
+    for (auto node : nodes_) {
+      auto name = node->getNode().name;
+      if (names.find(name) == names.end()) {
+        names[name] = 1;
+      } else {
+        names[name] = names[name] + 1;
+      }
+      for (auto filter : filter_) {
+        if (names[filter.name] > 1) {
+          VELOX_USER_FAIL(
+              "Found duplicate field(s) {} in case-insensitive mode",
+              filter.name);
+        }
+      }
+    }
+  }
 
   // accept filter
   template <typename T>

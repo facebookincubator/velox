@@ -185,6 +185,9 @@ void SelectiveColumnReader::getIntValues(
       case TypeKind::HUGEINT:
         getFlatValues<int128_t, int128_t>(rows, result, requestedType);
         break;
+      case TypeKind::TIMESTAMP:
+        getFlatValues<Timestamp, Timestamp>(rows, result, requestedType);
+        break;
       case TypeKind::BIGINT:
         switch (valueSize_) {
           case 8:

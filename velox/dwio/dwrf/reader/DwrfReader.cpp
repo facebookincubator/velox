@@ -17,6 +17,7 @@
 #include "velox/dwio/dwrf/reader/DwrfReader.h"
 #include "velox/dwio/common/TypeUtils.h"
 #include "velox/dwio/common/exception/Exception.h"
+#include "velox/type/DecimalUtilOp.h"
 #include "velox/vector/FlatVector.h"
 
 namespace facebook::velox::dwrf {
@@ -520,6 +521,9 @@ std::optional<size_t> DwrfRowReader::estimatedRowSizeHelper(
       }
       return totalEstimate;
     }
+    case TypeKind::HUGEINT: {
+      return valueCount * sizeof(uint128_t);
+    }
     default:
       return std::nullopt;
   }
@@ -797,6 +801,14 @@ void registerDwrfReaderFactory() {
 
 void unregisterDwrfReaderFactory() {
   dwio::common::unregisterReaderFactory(dwio::common::FileFormat::DWRF);
+}
+
+void registerOrcReaderFactory() {
+  dwio::common::registerReaderFactory(std::make_shared<OrcReaderFactory>());
+}
+
+void unregisterOrcReaderFactory() {
+  dwio::common::unregisterReaderFactory(dwio::common::FileFormat::ORC);
 }
 
 } // namespace facebook::velox::dwrf

@@ -31,8 +31,7 @@ SelectiveStringDictionaryColumnReader::SelectiveStringDictionaryColumnReader(
       provider_(params.stripeStreams().getStrideIndexProvider()) {
   auto& stripe = params.stripeStreams();
   EncodingKey encodingKey{nodeType_->id, params.flatMapContext().sequence};
-  RleVersion rleVersion =
-      convertRleVersion(stripe.getEncoding(encodingKey).kind());
+  rleVersion = convertRleVersion(stripe.getEncoding(encodingKey).kind());
   scanState_.dictionary.numValues =
       stripe.getEncoding(encodingKey).dictionarysize();
 

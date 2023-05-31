@@ -22,7 +22,9 @@
 #include "velox/dwio/dwrf/reader/SelectiveFloatingPointColumnReader.h"
 #include "velox/dwio/dwrf/reader/SelectiveIntegerDictionaryColumnReader.h"
 #include "velox/dwio/dwrf/reader/SelectiveIntegerDirectColumnReader.h"
+#include "velox/dwio/dwrf/reader/SelectiveLongDecimalColumnReader.h"
 #include "velox/dwio/dwrf/reader/SelectiveRepeatedColumnReader.h"
+#include "velox/dwio/dwrf/reader/SelectiveShortDecimalColumnReader.h"
 #include "velox/dwio/dwrf/reader/SelectiveStringDictionaryColumnReader.h"
 #include "velox/dwio/dwrf/reader/SelectiveStringDirectColumnReader.h"
 #include "velox/dwio/dwrf/reader/SelectiveStructColumnReader.h"
@@ -42,9 +44,11 @@ std::unique_ptr<SelectiveColumnReader> buildIntegerReader(
   auto& stripe = params.stripeStreams();
   switch (static_cast<int64_t>(stripe.getEncoding(ek).kind())) {
     case proto::ColumnEncoding_Kind_DICTIONARY:
+    case proto::ColumnEncoding_Kind_DICTIONARY_V2:
       return std::make_unique<SelectiveIntegerDictionaryColumnReader>(
           requestedType, dataType, params, scanSpec, numBytes);
     case proto::ColumnEncoding_Kind_DIRECT:
+    case proto::ColumnEncoding_Kind_DIRECT_V2:
       return std::make_unique<SelectiveIntegerDirectColumnReader>(
           requestedType, dataType, params, numBytes, scanSpec);
     default:
@@ -62,8 +66,17 @@ std::unique_ptr<SelectiveColumnReader> SelectiveDwrfReader::build(
       *dataType->type, *requestedType->type);
   EncodingKey ek{dataType->id, params.flatMapContext().sequence};
   auto& stripe = params.stripeStreams();
+  if (dataType->type->isShortDecimal()) {
+    return std::make_unique<SelectiveShortDecimalColumnReader>(
+        requestedType, dataType->type, params, scanSpec);
+  }
+  if (dataType->type->isLongDecimal()) {
+    return std::make_unique<SelectiveLongDecimalColumnReader>(
+        requestedType, dataType->type, params, scanSpec);
+  }
   switch (dataType->type->kind()) {
     case TypeKind::INTEGER:
+    case TypeKind::DATE:
       return buildIntegerReader(
           requestedType, dataType, params, INT_BYTE_SIZE, scanSpec);
     case TypeKind::BIGINT:
@@ -110,9 +123,11 @@ std::unique_ptr<SelectiveColumnReader> SelectiveDwrfReader::build(
     case TypeKind::VARCHAR:
       switch (static_cast<int64_t>(stripe.getEncoding(ek).kind())) {
         case proto::ColumnEncoding_Kind_DIRECT:
+        case proto::ColumnEncoding_Kind_DIRECT_V2:
           return std::make_unique<SelectiveStringDirectColumnReader>(
               requestedType, params, scanSpec);
         case proto::ColumnEncoding_Kind_DICTIONARY:
+        case proto::ColumnEncoding_Kind_DICTIONARY_V2:
           return std::make_unique<SelectiveStringDictionaryColumnReader>(
               requestedType, params, scanSpec);
         default:

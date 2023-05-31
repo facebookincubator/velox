@@ -42,12 +42,39 @@ class SelectiveIntegerDirectColumnReader
     auto data = encodingKey.forKind(proto::Stream_Kind_DATA);
     auto& stripe = params.stripeStreams();
     bool dataVInts = stripe.getUseVInts(data);
-    auto decoder = createDirectDecoder</*isSigned*/ true>(
-        stripe.getStream(data, true), dataVInts, numBytes);
-    auto rawDecoder = decoder.release();
-    auto directDecoder =
-        dynamic_cast<dwio::common::DirectDecoder<true>*>(rawDecoder);
-    ints.reset(directDecoder);
+
+    format = stripe.format();
+    if (format == velox::dwrf::DwrfFormat::kDwrf) {
+      auto decoder = createDirectDecoder<true>(
+          stripe.getStream(data, true), dataVInts, numBytes);
+      directDecoder =
+          dynamic_cast<dwio::common::DirectDecoder<true>*>(decoder.release());
+      VELOX_CHECK(directDecoder);
+      ints.reset(directDecoder);
+    } else if (format == velox::dwrf::DwrfFormat::kOrc) {
+      auto encoding = stripe.getEncoding(encodingKey);
+      version = convertRleVersion(encoding.kind());
+      auto decoder = createRleDecoder<true>(
+          stripe.getStream(data, true),
+          version,
+          params.pool(),
+          dataVInts,
+          numBytes);
+      if (version == velox::dwrf::RleVersion_1) {
+        rleDecoderV1 =
+            dynamic_cast<velox::dwrf::RleDecoderV1<true>*>(decoder.release());
+        VELOX_CHECK(rleDecoderV1);
+        ints.reset(rleDecoderV1);
+      } else {
+        VELOX_CHECK(version == velox::dwrf::RleVersion_2);
+        rleDecoderV2 =
+            dynamic_cast<velox::dwrf::RleDecoderV2<true>*>(decoder.release());
+        VELOX_CHECK(rleDecoderV2);
+        ints.reset(rleDecoderV2);
+      }
+    } else {
+      VELOX_FAIL("invalid stripe format");
+    }
   }
 
   bool hasBulkPath() const override {
@@ -71,7 +98,16 @@ class SelectiveIntegerDirectColumnReader
   void readWithVisitor(RowSet rows, ColumnVisitor visitor);
 
  private:
-  std::unique_ptr<dwio::common::DirectDecoder</*isSigned*/ true>> ints;
+  dwrf::DwrfFormat format;
+  RleVersion version;
+
+  union {
+    dwio::common::DirectDecoder<true>* directDecoder;
+    velox::dwrf::RleDecoderV1<true>* rleDecoderV1;
+    velox::dwrf::RleDecoderV2<true>* rleDecoderV2;
+  };
+
+  std::unique_ptr<dwio::common::IntDecoder<true>> ints;
 };
 
 template <typename ColumnVisitor>
@@ -79,10 +115,51 @@ void SelectiveIntegerDirectColumnReader::readWithVisitor(
     RowSet rows,
     ColumnVisitor visitor) {
   vector_size_t numRows = rows.back() + 1;
-  if (nullsInReadRange_) {
-    ints->readWithVisitor<true>(nullsInReadRange_->as<uint64_t>(), visitor);
+
+  VELOX_CHECK(
+      format == velox::dwrf::DwrfFormat::kDwrf ||
+      format == velox::dwrf::DwrfFormat::kOrc);
+  if (format == velox::dwrf::DwrfFormat::kDwrf) {
+    if (nullsInReadRange_) {
+      directDecoder->readWithVisitor<true>(
+          nullsInReadRange_->as<uint64_t>(), visitor);
+    } else {
+      directDecoder->readWithVisitor<false>(nullptr, visitor);
+    }
   } else {
-    ints->readWithVisitor<false>(nullptr, visitor);
+    // orc format does not use int128
+    if constexpr (!std::is_same_v<typename ColumnVisitor::DataType, int128_t>) {
+      velox::dwio::common::DirectRleColumnVisitor<
+          typename ColumnVisitor::DataType,
+          typename ColumnVisitor::FilterType,
+          typename ColumnVisitor::Extract,
+          ColumnVisitor::dense>
+          drVisitor(
+              visitor.filter(),
+              &visitor.reader(),
+              visitor.rows(),
+              visitor.numRows(),
+              visitor.extractValues());
+
+      if (nullsInReadRange_) {
+        if (version == velox::dwrf::RleVersion_1) {
+          rleDecoderV1->readWithVisitor<true>(
+              nullsInReadRange_->as<uint64_t>(), drVisitor);
+        } else {
+          rleDecoderV2->readWithVisitor<true>(
+              nullsInReadRange_->as<uint64_t>(), drVisitor);
+        }
+      } else {
+        if (version == velox::dwrf::RleVersion_1) {
+          rleDecoderV1->readWithVisitor<false>(nullptr, drVisitor);
+        } else {
+          rleDecoderV2->readWithVisitor<false>(nullptr, drVisitor);
+        }
+      }
+    } else {
+      VELOX_UNREACHABLE(
+          "SelectiveIntegerDirectColumnReader::readWithVisitor get int128_t");
+    }
   }
   readOffset_ += numRows;
 }

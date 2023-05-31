@@ -31,18 +31,23 @@ void Writer::write(const RowVectorPtr& data) {
   auto table = arrow::Table::Make(
       recordBatch->schema(), recordBatch->columns(), data->size());
   if (!arrowWriter_) {
-    stream_ = std::make_shared<DataBufferSink>(pool_);
+    stream_ = std::make_shared<DataBufferSink>(
+        pool_, queryCtx_->queryConfig().dataBufferGrowRatio());
     auto arrowProperties = ::parquet::ArrowWriterProperties::Builder().build();
-    PARQUET_THROW_NOT_OK(::parquet::arrow::FileWriter::Open(
-        *recordBatch->schema(),
-        arrow::default_memory_pool(),
-        stream_,
-        properties_,
-        arrowProperties,
-        &arrowWriter_));
+    PARQUET_ASSIGN_OR_THROW(
+        arrowWriter_,
+        ::parquet::arrow::FileWriter::Open(
+            *recordBatch->schema(),
+            arrow::default_memory_pool(),
+            stream_,
+            properties_,
+            arrowProperties));
   }
 
   PARQUET_THROW_NOT_OK(arrowWriter_->WriteTable(*table, 10000));
+  if (queryCtx_->queryConfig().dataBufferGrowRatio() > 1) {
+    finalSink_->write(std::move(stream_->dataBuffer()));
+  }
 }
 
 void Writer::flush() {

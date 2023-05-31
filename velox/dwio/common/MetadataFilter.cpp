@@ -161,6 +161,12 @@ std::unique_ptr<MetadataFilter::Node> MetadataFilter::Node::fromExpression(
   if (call->name() == "not") {
     return fromExpression(scanSpec, *call->inputs()[0], evaluator, !negated);
   }
+  if (call->name() == "endswith" || call->name() == "contains" ||
+      call->name() == "like" || call->name() == "startswith" ||
+      call->name() == "rlike" || call->name() == "isnotnull" ||
+      call->name() == "coalesce" || call->name() == "might_contain") {
+    return nullptr;
+  }
   try {
     Subfield subfield;
     auto filter =

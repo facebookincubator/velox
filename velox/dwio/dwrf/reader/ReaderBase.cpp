@@ -314,6 +314,9 @@ std::shared_ptr<const Type> ReaderBase::convertType(
       // child doesn't hold.
       return ROW(std::move(names), std::move(tl));
     }
+    case TypeKind::HUGEINT: {
+      return DECIMAL(type.getOrcPtr()->precision(), type.getOrcPtr()->scale());
+    }
     default:
       DWIO_RAISE("Unknown type kind");
   }

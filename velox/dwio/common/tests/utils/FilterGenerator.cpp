@@ -90,6 +90,11 @@ int64_t ColumnStats<Date>::getIntegerValue(const Date& value) {
 }
 
 template <>
+int64_t ColumnStats<Timestamp>::getIntegerValue(const Timestamp& value) {
+  return value.toNanos();
+}
+
+template <>
 std::unique_ptr<Filter> ColumnStats<bool>::makeRangeFilter(
     const FilterSpec& filterSpec) {
   if (values_.empty()) {
@@ -221,7 +226,7 @@ std::unique_ptr<Filter> ColumnStats<StringView>::makeRowGroupSkipRangeFilter(
     const Subfield& /*subfield*/) {
   static std::string max = kMaxString;
   return std::make_unique<velox::common::BytesRange>(
-      max, false, false, max, false, false, false);
+      max, false, false, "", false, false, false);
 }
 
 std::string FilterGenerator::specsToString(
@@ -437,8 +442,9 @@ SubfieldFilters FilterGenerator::makeSubfieldFilters(
       case TypeKind::MAP:
         stats = makeStats<TypeKind::MAP>(vector->type(), rowType_);
         break;
-      // TODO:
-      // Add support for TypeKind::TIMESTAMP.
+      case TypeKind::TIMESTAMP:
+        stats = makeStats<TypeKind::TIMESTAMP>(vector->type(), rowType_);
+        break;
       default:
         VELOX_CHECK(
             false,

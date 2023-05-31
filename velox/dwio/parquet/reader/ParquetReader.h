@@ -66,6 +66,10 @@ class ReaderBase {
     return schemaWithId_;
   }
 
+  const bool isCaseSensitive() const {
+    return options_.isCaseSensitive();
+  }
+
   /// Ensures that streams are enqueued and loading for the row group at
   /// 'currentGroup'. May start loading one or more subsequent groups.
   void scheduleRowGroups(
@@ -97,7 +101,8 @@ class ReaderBase {
 
   static std::shared_ptr<const RowType> createRowType(
       std::vector<std::shared_ptr<const ParquetTypeWithId::TypeWithId>>
-          children);
+          children,
+      bool caseSensitive = true);
 
   memory::MemoryPool& pool_;
   const uint64_t directorySizeGuess_;

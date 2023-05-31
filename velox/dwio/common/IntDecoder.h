@@ -151,6 +151,8 @@ class IntDecoder {
   uint64_t readVuLong();
   int64_t readVsLong();
   int64_t readLongLE();
+  uint128_t readVuInt128();
+  int128_t readVsInt128();
   int128_t readInt128();
   template <typename cppType>
   cppType readLittleEndianFromBigEndian();
@@ -301,8 +303,135 @@ FOLLY_ALWAYS_INLINE uint64_t IntDecoder<isSigned>::readVuLong() {
 }
 
 template <bool isSigned>
+FOLLY_ALWAYS_INLINE uint128_t IntDecoder<isSigned>::readVuInt128() {
+  if (LIKELY(bufferEnd - bufferStart >= Varint::kMaxSize128)) {
+    const char* p = bufferStart;
+    uint128_t val;
+    do {
+      int128_t b;
+      b = *p++;
+      val = (b & 0x7f);
+      if (UNLIKELY(b >= 0)) {
+        break;
+      }
+      b = *p++;
+      val |= (b & 0x7f) << 7;
+      if (UNLIKELY(b >= 0)) {
+        break;
+      }
+      b = *p++;
+      val |= (b & 0x7f) << 14;
+      if (UNLIKELY(b >= 0)) {
+        break;
+      }
+      b = *p++;
+      val |= (b & 0x7f) << 21;
+      if (UNLIKELY(b >= 0)) {
+        break;
+      }
+      b = *p++;
+      val |= (b & 0x7f) << 28;
+      if (UNLIKELY(b >= 0)) {
+        break;
+      }
+      b = *p++;
+      val |= (b & 0x7f) << 35;
+      if (UNLIKELY(b >= 0)) {
+        break;
+      }
+      b = *p++;
+      val |= (b & 0x7f) << 42;
+      if (UNLIKELY(b >= 0)) {
+        break;
+      }
+      b = *p++;
+      val |= (b & 0x7f) << 49;
+      if (UNLIKELY(b >= 0)) {
+        break;
+      }
+      b = *p++;
+      val |= (b & 0x7f) << 56;
+      if (UNLIKELY(b >= 0)) {
+        break;
+      }
+      b = *p++;
+      val |= (b & 0x01) << 63;
+      if (LIKELY(b >= 0)) {
+        break;
+      }
+      b = *p++;
+      val |= (b & 0x01) << 71;
+      if (LIKELY(b >= 0)) {
+        break;
+      }
+      b = *p++;
+      val |= (b & 0x01) << 79;
+      if (LIKELY(b >= 0)) {
+        break;
+      }
+      b = *p++;
+      val |= (b & 0x01) << 87;
+      if (LIKELY(b >= 0)) {
+        break;
+      }
+      b = *p++;
+      val |= (b & 0x01) << 95;
+      if (LIKELY(b >= 0)) {
+        break;
+      }
+      b = *p++;
+      val |= (b & 0x01) << 103;
+      if (LIKELY(b >= 0)) {
+        break;
+      }
+      b = *p++;
+      val |= (b & 0x01) << 111;
+      if (LIKELY(b >= 0)) {
+        break;
+      }
+      b = *p++;
+      val |= (b & 0x01) << 119;
+      if (LIKELY(b >= 0)) {
+        break;
+      }
+      b = *p++;
+      val |= (b & 0x01) << 127;
+      if (LIKELY(b >= 0)) {
+        break;
+      } else {
+        DWIO_RAISE(fmt::format(
+            "Invalid encoding: likely corrupt data.  bytes remaining: {} , useVInts: {}, numBytes: {}, Input Stream Name: {}, byte: {}, val: {}",
+            bufferEnd - bufferStart,
+            useVInts,
+            numBytes,
+            inputStream->getName(),
+            b,
+            val));
+      }
+    } while (false);
+    bufferStart = p;
+    return val;
+  } else {
+    int128_t result = 0;
+    int64_t offset = 0;
+    signed char ch;
+    do {
+      ch = readByte();
+      result |= (ch & BASE_128_MASK) << offset;
+      offset += 7;
+    } while (ch < 0);
+    return result;
+  }
+}
+
+template <bool isSigned>
 FOLLY_ALWAYS_INLINE int64_t IntDecoder<isSigned>::readVsLong() {
   return ZigZag::decode(readVuLong());
+}
+
+template <bool isSigned>
+FOLLY_ALWAYS_INLINE int128_t IntDecoder<isSigned>::readVsInt128() {
+  return ZigZag::decode(readVuInt128());
 }
 
 template <bool isSigned>
@@ -413,6 +542,13 @@ inline int64_t IntDecoder<isSigned>::readLong() {
 
 template <bool isSigned>
 inline int128_t IntDecoder<isSigned>::readInt128() {
+  if (useVInts) {
+    if constexpr (isSigned) {
+      return readVsInt128();
+    } else {
+      return static_cast<int128_t>(readVuInt128());
+    }
+  }
   if (!bigEndian) {
     VELOX_NYI();
   }
