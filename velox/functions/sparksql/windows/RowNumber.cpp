@@ -57,9 +57,6 @@ class RowNumberFunction : public exec::WindowFunction {
 
 // Signature of this function is : row_number() -> integer.
 void registerRowNumber(const std::string& name) {
-  LOG(INFO) << "register the spark sql row number method "
-            << "\n"
-            << std::flush;
   std::vector<exec::FunctionSignaturePtr> signatures{
       exec::FunctionSignatureBuilder().returnType("integer").build(),
   };
