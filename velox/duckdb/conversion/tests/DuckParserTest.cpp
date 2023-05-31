@@ -439,8 +439,10 @@ const std::string boundTypeString(BoundType b) {
   VELOX_UNREACHABLE();
 }
 
-const std::string parseWindow(const std::string& expr) {
-  auto windowExpr = parseWindowExpr(expr);
+const std::string parseWindow(
+    const std::string& expr,
+    const ParseOptions& options) {
+  auto windowExpr = parseWindowExpr(expr, options);
   std::string concatPartitions = "";
   int i = 0;
   for (const auto& partition : windowExpr.partitionBy) {
@@ -489,43 +491,83 @@ const std::string parseWindow(const std::string& expr) {
 } // namespace
 
 TEST(DuckParserTest, window) {
+  ParseOptions options;
   EXPECT_EQ(
       "row_number() AS c OVER (PARTITION BY \"a\" ORDER BY  \"b\" ASC NULLS LAST"
       " RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW)",
-      parseWindow("row_number() over (partition by a order by b) as c"));
+      parseWindow(
+          "row_number() over (partition by a order by b) as c", options));
   EXPECT_EQ(
       "row_number() AS a OVER (  RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW)",
-      parseWindow("row_number() over () as a"));
+      parseWindow("row_number() over () as a", options));
   EXPECT_EQ(
       "row_number() AS a OVER ( ORDER BY  \"b\" ASC NULLS LAST "
       "RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW)",
-      parseWindow("row_number() over (order by b) as a"));
+      parseWindow("row_number() over (order by b) as a", options));
   EXPECT_EQ(
       "row_number() OVER (PARTITION BY \"a\"  ROWS BETWEEN "
       "UNBOUNDED PRECEDING AND CURRENT ROW)",
       parseWindow(
-          "row_number() over (partition by a rows between unbounded preceding and current row)"));
+          "row_number() over (partition by a rows between unbounded preceding and current row)",
+          options));
   EXPECT_EQ(
       "row_number() OVER (PARTITION BY \"a\" ORDER BY  \"b\" ASC NULLS LAST "
       "ROWS BETWEEN plus(\"a\",10) PRECEDING AND 10 FOLLOWING)",
-      parseWindow("row_number() over (partition by a order by b "
-                  "rows between a + 10 preceding and 10 following)"));
+      parseWindow(
+          "row_number() over (partition by a order by b "
+          "rows between a + 10 preceding and 10 following)",
+          options));
   EXPECT_EQ(
       "row_number() OVER (PARTITION BY \"a\" ORDER BY  \"b\" DESC NULLS FIRST "
       "ROWS BETWEEN plus(\"a\",10) PRECEDING AND 10 FOLLOWING)",
       parseWindow(
           "row_number() over (partition by a order by b desc nulls first "
-          "rows between a + 10 preceding and 10 following)"));
+          "rows between a + 10 preceding and 10 following)",
+          options));
 
   EXPECT_EQ(
       "lead(\"x\",\"y\",\"z\") OVER (  "
       "RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW)",
-      parseWindow("lead(x, y, z) over ()"));
+      parseWindow("lead(x, y, z) over ()", options));
 
   EXPECT_EQ(
       "lag(\"x\",3,\"z\") OVER (  "
       "RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW)",
-      parseWindow("lag(x, 3, z) over ()"));
+      parseWindow("lag(x, 3, z) over ()", options));
+
+  EXPECT_EQ(
+      "nth_value(\"x\",3) OVER (  "
+      "RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW)",
+      parseWindow("nth_value(x, 3) over ()", options));
+}
+
+TEST(DuckParserTest, windowWithIntegerConstant) {
+  ParseOptions options;
+  options.parseIntegerAsBigint = false;
+  EXPECT_EQ(
+      "row_number() OVER (PARTITION BY \"a\" ORDER BY  \"b\" ASC NULLS LAST "
+      "ROWS BETWEEN plus(\"a\",10) PRECEDING AND 10 FOLLOWING)",
+      parseWindow(
+          "row_number() over (partition by a order by b "
+          "rows between a + 10 preceding and 10 following)",
+          options));
+  EXPECT_EQ(
+      "row_number() OVER (PARTITION BY \"a\" ORDER BY  \"b\" DESC NULLS FIRST "
+      "ROWS BETWEEN plus(\"a\",10) PRECEDING AND 10 FOLLOWING)",
+      parseWindow(
+          "row_number() over (partition by a order by b desc nulls first "
+          "rows between a + 10 preceding and 10 following)",
+          options));
+
+  EXPECT_EQ(
+      "lag(\"x\",3,\"z\") OVER (  "
+      "RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW)",
+      parseWindow("lag(x, 3, z) over ()", options));
+
+  EXPECT_EQ(
+      "nth_value(\"x\",3) OVER (  "
+      "RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW)",
+      parseWindow("nth_value(x, 3) over ()", options));
 }
 
 TEST(DuckParserTest, invalidExpression) {
