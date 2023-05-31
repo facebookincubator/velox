@@ -14,17 +14,17 @@
  * limitations under the License.
  */
 
-#include "conversion.h" 
-#include "util.h"
+#include "conversion.h"
 #include <velox/vector/arrow/Abi.h>
 #include <velox/vector/arrow/Bridge.h>
+#include "util.h"
 
 namespace facebook::velox::py {
 
 namespace py = pybind11;
 
 void addConversionBindings(py::module& m, bool asModuleLocalDefinitions) {
-   m.def("export_to_arrow", [](VectorPtr& inputVector) {
+  m.def("export_to_arrow", [](VectorPtr& inputVector) {
     auto arrowArray = std::make_unique<ArrowArray>();
     auto pool_ = PyVeloxContext::getInstance().pool();
     facebook::velox::exportToArrow(inputVector, *arrowArray, pool_);
@@ -33,18 +33,20 @@ void addConversionBindings(py::module& m, bool asModuleLocalDefinitions) {
     facebook::velox::exportToArrow(inputVector, *arrowSchema);
 
     py::module arrow_module = py::module::import("pyarrow");
-    py::object array_class = arrow_module.attr("Array");  
-    return array_class.attr("_import_from_c")(reinterpret_cast<uintptr_t>(arrowArray.get()), reinterpret_cast<uintptr_t>(arrowSchema.get()));
+    py::object array_class = arrow_module.attr("Array");
+    return array_class.attr("_import_from_c")(
+        reinterpret_cast<uintptr_t>(arrowArray.get()),
+        reinterpret_cast<uintptr_t>(arrowSchema.get()));
   });
 
-  m.def(
-      "import_from_arrow",
-      [](py::object inputArrowArray) {
-        auto arrowArray = std::make_unique<ArrowArray>();
-        auto arrowSchema = std::make_unique<ArrowSchema>();
-        inputArrowArray.attr("_export_to_c")(reinterpret_cast<uintptr_t>(arrowArray.get()), reinterpret_cast<uintptr_t>(arrowSchema.get()));
-        auto pool_ = PyVeloxContext::getInstance().pool();
-        return importFromArrowAsOwner(*arrowSchema, *arrowArray, pool_);
-      });
+  m.def("import_from_arrow", [](py::object inputArrowArray) {
+    auto arrowArray = std::make_unique<ArrowArray>();
+    auto arrowSchema = std::make_unique<ArrowSchema>();
+    inputArrowArray.attr("_export_to_c")(
+        reinterpret_cast<uintptr_t>(arrowArray.get()),
+        reinterpret_cast<uintptr_t>(arrowSchema.get()));
+    auto pool_ = PyVeloxContext::getInstance().pool();
+    return importFromArrowAsOwner(*arrowSchema, *arrowArray, pool_);
+  });
 }
 } // namespace facebook::velox::py

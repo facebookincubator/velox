@@ -63,4 +63,4 @@ struct PyVeloxContext {
 
   static inline std::unique_ptr<PyVeloxContext> instance_;
 };
-}
+} // namespace facebook::velox::py

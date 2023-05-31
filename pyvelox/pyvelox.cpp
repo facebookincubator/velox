@@ -15,11 +15,8 @@
  */
 
 #include "pyvelox.h"
-<<<<<<< HEAD
-#include "serde.h"
-=======
 #include "conversion.h"
->>>>>>> d2251b96 (feat: separate module for the conversion functions)
+#include "serde.h"
 #include "signatures.h"
 
 namespace facebook::velox::py {
@@ -297,11 +294,8 @@ PYBIND11_MODULE(pyvelox, m) {
 
   addVeloxBindings(m);
   addSignatureBindings(m);
-<<<<<<< HEAD
   addSerdeBindings(m);
-=======
   addConversionBindings(m);
->>>>>>> d2251b96 (feat: separate module for the conversion functions)
   m.attr("__version__") = "dev";
 }
 #endif

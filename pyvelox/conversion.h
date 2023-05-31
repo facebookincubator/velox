@@ -18,7 +18,6 @@
 
 #include <pybind11/pybind11.h>
 
-
 namespace facebook::velox::py {
 
 namespace py = pybind11;
