@@ -506,7 +506,8 @@ bool registerVariance(const std::string& name) {
               "(count:bigint, mean:double, m2:double) struct");
           return std::make_unique<TClass<int64_t>>(resultType);
         }
-      });
+      },
+      true);
 }
 
 } // namespace

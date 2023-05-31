@@ -30,6 +30,12 @@ class DateTimeFunctionsTest : public SparkFunctionBaseTest {
         {core::QueryConfig::kAdjustTimestampToTimezone, "true"},
     });
   }
+
+  Date parseDate(const std::string& dateStr) {
+    Date returnDate;
+    parseTo(dateStr, returnDate);
+    return returnDate;
+  }
 };
 
 TEST_F(DateTimeFunctionsTest, year) {
@@ -173,6 +179,63 @@ TEST_F(DateTimeFunctionsTest, makeDate) {
   VELOX_ASSERT_THROW(makeDate(2023, 2, 29), "Date out of range: 2023-2-29");
   parseTo("2023-03-29", expectedDate);
   EXPECT_EQ(makeDate(2023, 3, 29), expectedDate);
+}
+
+TEST_F(DateTimeFunctionsTest, dateAdd) {
+  const auto dateAddInt32 = [&](std::optional<Date> date,
+                                std::optional<int32_t> value) {
+    return evaluateOnce<Date>("date_add(c0, c1)", date, value);
+  };
+  const auto dateAddInt16 = [&](std::optional<Date> date,
+                                std::optional<int16_t> value) {
+    return evaluateOnce<Date>("date_add(c0, c1)", date, value);
+  };
+  const auto dateAddInt8 = [&](std::optional<Date> date,
+                               std::optional<int8_t> value) {
+    return evaluateOnce<Date>("date_add(c0, c1)", date, value);
+  };
+
+  // Check null behaviors
+  EXPECT_EQ(std::nullopt, dateAddInt32(std::nullopt, 1));
+  EXPECT_EQ(std::nullopt, dateAddInt16(std::nullopt, 1));
+  EXPECT_EQ(std::nullopt, dateAddInt8(std::nullopt, 1));
+
+  // Simple tests
+  EXPECT_EQ(parseDate("2019-03-01"), dateAddInt32(parseDate("2019-02-28"), 1));
+  EXPECT_EQ(parseDate("2019-03-01"), dateAddInt16(parseDate("2019-02-28"), 1));
+  EXPECT_EQ(parseDate("2019-03-01"), dateAddInt8(parseDate("2019-02-28"), 1));
+
+  // Account for the last day of a year-month
+  EXPECT_EQ(
+      parseDate("2020-02-29"), dateAddInt32(parseDate("2019-01-30"), 395));
+  EXPECT_EQ(
+      parseDate("2020-02-29"), dateAddInt16(parseDate("2019-01-30"), 395));
+
+  // Check for negative intervals
+  EXPECT_EQ(
+      parseDate("2019-02-28"), dateAddInt32(parseDate("2020-02-29"), -366));
+  EXPECT_EQ(
+      parseDate("2019-02-28"), dateAddInt16(parseDate("2020-02-29"), -366));
+}
+
+TEST_F(DateTimeFunctionsTest, dateDiff) {
+  const auto dateDiff = [&](std::optional<Date> date1,
+                            std::optional<Date> date2) {
+    return evaluateOnce<int32_t>("date_diff(c0, c1)", date1, date2);
+  };
+
+  // Check null behaviors
+  EXPECT_EQ(std::nullopt, dateDiff(Date(1), std::nullopt));
+  EXPECT_EQ(std::nullopt, dateDiff(std::nullopt, Date(0)));
+
+  // Simple tests
+  EXPECT_EQ(1, dateDiff(parseDate("2019-02-28"), parseDate("2019-03-01")));
+
+  // Account for the last day of a year-month
+  EXPECT_EQ(395, dateDiff(parseDate("2019-01-30"), parseDate("2020-02-29")));
+
+  // Check for negative intervals
+  EXPECT_EQ(-366, dateDiff(parseDate("2020-02-29"), parseDate("2019-02-28")));
 }
 
 } // namespace

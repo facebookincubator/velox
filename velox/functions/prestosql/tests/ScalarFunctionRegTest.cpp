@@ -56,6 +56,7 @@ TEST_F(ScalarFunctionRegTest, prefix) {
   scalarVectorFuncMap.erase("in");
   scalarVectorFuncMap.erase("row_constructor");
   scalarVectorFuncMap.erase("is_null");
+  scalarVectorFuncMap.erase("row_constructor_with_null");
 
   for (const auto& entry : scalarVectorFuncMap) {
     EXPECT_EQ(prefix, entry.first.substr(0, prefix.size()));

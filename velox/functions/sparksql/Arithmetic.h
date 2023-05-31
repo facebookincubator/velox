@@ -25,6 +25,20 @@
 namespace facebook::velox::functions::sparksql {
 
 template <typename T>
+struct PModFloatFunction {
+  template <typename TInput>
+  FOLLY_ALWAYS_INLINE bool
+  call(TInput& result, const TInput a, const TInput n) {
+    if (UNLIKELY(n == (TInput)0)) {
+      return false;
+    }
+    TInput r = fmod(a, n);
+    result = (r > 0) ? r : fmod(r + n, n);
+    return true;
+  }
+};
+
+template <typename T>
 struct RemainderFunction {
   template <typename TInput>
   FOLLY_ALWAYS_INLINE bool
@@ -148,6 +162,38 @@ struct FloorFunction {
       result = safeDoubleToInt64(std::floor(value));
     }
     return true;
+  }
+};
+
+template <typename T>
+struct Log2FunctionNaNAsNull {
+  FOLLY_ALWAYS_INLINE bool call(double& result, double a) {
+    double yAsymptote = 0.0;
+    if (a <= yAsymptote) {
+      return false;
+    }
+    result = std::log2(a);
+    return true;
+  }
+};
+
+template <typename T>
+struct Log10FunctionNaNAsNull {
+  FOLLY_ALWAYS_INLINE bool call(double& result, double a) {
+    double yAsymptote = 0.0;
+    if (a <= yAsymptote) {
+      return false;
+    }
+    result = std::log10(a);
+    return true;
+  }
+};
+
+template <typename T>
+struct Atan2FunctionIgnoreZeroSign {
+  template <typename TInput>
+  FOLLY_ALWAYS_INLINE void call(TInput& result, TInput y, TInput x) {
+    result = std::atan2(y + 0.0, x + 0.0);
   }
 };
 

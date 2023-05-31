@@ -40,6 +40,27 @@ void registerCompareFunctions(const std::string& prefix) {
       {prefix + "between"});
   registerFunction<BetweenFunction, bool, float, float, float>(
       {prefix + "between"});
+
+  registerFunction<BetweenFunction, bool, int64_t, int64_t, int64_t>(
+      {prefix + "between"});
+  registerFunction<BetweenFunction, bool, int128_t, int128_t, int128_t>(
+      {prefix + "between"});
+  registerFunction<GtFunction, bool, int64_t, int64_t>(
+      {prefix + "greaterthan"});
+  registerFunction<GtFunction, bool, int128_t, int128_t>(
+      {prefix + "greaterthan"});
+  registerFunction<LtFunction, bool, int64_t, int64_t>({prefix + "lessthan"});
+  registerFunction<LtFunction, bool, int128_t, int128_t>({prefix + "lessthan"});
+  registerFunction<GteFunction, bool, int64_t, int64_t>(
+      {prefix + "greaterthanorequal"});
+  registerFunction<GteFunction, bool, int128_t, int128_t>(
+      {prefix + "greaterthanorequal"});
+  registerFunction<LteFunction, bool, int64_t, int64_t>(
+      {prefix + "lessthanorequal"});
+  registerFunction<LteFunction, bool, int128_t, int128_t>(
+      {prefix + "lessthanorequal"});
+  registerFunction<EqFunction, bool, int64_t, int64_t>({prefix + "equalto"});
+  registerFunction<EqFunction, bool, int128_t, int128_t>({prefix + "equalto"});
 }
 
 } // namespace facebook::velox::functions::sparksql

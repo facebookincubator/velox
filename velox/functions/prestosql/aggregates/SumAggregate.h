@@ -151,7 +151,8 @@ class SumAggregate
   template <typename TData>
   static void updateSingleValue(TData& result, TData value) {
     if constexpr (
-        std::is_same_v<TData, double> || std::is_same_v<TData, float>) {
+        std::is_same_v<TData, double> || std::is_same_v<TData, float> ||
+        std::is_same_v<TData, int64_t>) {
       result += value;
     } else {
       result = functions::checkedPlus<TData>(result, value);
@@ -161,7 +162,9 @@ class SumAggregate
   template <typename TData>
   static void updateDuplicateValues(TData& result, TData value, int n) {
     if constexpr (
-        std::is_same_v<TData, double> || std::is_same_v<TData, float>) {
+        std::is_same_v<TData, double> || std::is_same_v<TData, float> ||
+        std::is_same_v<TData, int8_t> || std::is_same_v<TData, int16_t> ||
+        std::is_same_v<TData, int32_t> || std::is_same_v<TData, int64_t>) {
       result += n * value;
     } else {
       result = functions::checkedPlus<TData>(
@@ -276,7 +279,8 @@ bool registerSum(const std::string& name) {
                 name,
                 inputType->kindName());
         }
-      });
+      },
+      true);
 }
 
 } // namespace facebook::velox::aggregate::prestosql

@@ -32,11 +32,22 @@ struct AsciiFunction {
   VELOX_DEFINE_FUNCTION_TYPES(T);
 
   FOLLY_ALWAYS_INLINE bool call(int32_t& result, const arg_type<Varchar>& s) {
-    result = s.empty() ? 0 : s.data()[0];
+    if (s.empty()) {
+      result = 0;
+      return true;
+    }
+    int charLen = utf8proc_char_length(s.data());
+    int size;
+    result = utf8proc_codepoint(s.data(), s.data() + charLen, size);
     return true;
   }
 };
 
+/// chr function
+/// chr(n) -> string
+/// Returns a utf8 string of single ASCII character. The ASCII character has
+/// the binary equivalent of n. If n < 0, the result is an empty string. If n >=
+/// 256, the result is equivalent to chr(n % 256).
 template <typename T>
 struct ChrFunction {
   VELOX_DEFINE_FUNCTION_TYPES(T);
@@ -45,8 +56,15 @@ struct ChrFunction {
     if (ord < 0) {
       result.resize(0);
     } else {
-      result.resize(1);
-      *result.data() = ord;
+      ord = ord & 0xFF;
+      if (ord < 0x80) {
+        result.resize(1);
+        result.data()[0] = ord;
+      } else {
+        result.resize(2);
+        result.data()[0] = 0xC0 + (ord >> 6);
+        result.data()[1] = 0x80 + (ord & 0x3F);
+      }
     }
     return true;
   }
@@ -213,6 +231,76 @@ struct EndsWithFunction {
           str1.substr(str1.length() - str2.length(), str2.length()) == str2;
     }
     return true;
+  }
+};
+
+/// substring_index function
+/// substring_index(string, string, int) -> string
+/// substring_index(str, delim, count) - Returns the substring from str before
+/// count occurrences of the delimiter delim. If count is positive, everything
+/// to the left of the final delimiter (counting from the left) is returned. If
+/// count is negative, everything to the right of the final delimiter (counting
+/// from the right) is returned. The function substring_index performs a
+/// case-sensitive match when searching for delim.
+template <typename T>
+struct SubstringIndexFunction {
+  VELOX_DEFINE_FUNCTION_TYPES(T);
+
+  FOLLY_ALWAYS_INLINE void call(
+      out_type<Varchar>& result,
+      const arg_type<Varchar>& str,
+      const arg_type<Varchar>& delim,
+      const int32_t& count) {
+    if (count == 0) {
+      result.setEmpty();
+      return;
+    }
+    auto strView = std::string_view(str);
+    auto delimView = std::string_view(delim);
+
+    auto strLen = strView.length();
+    auto delimLen = delimView.length();
+    std::size_t index;
+    if (count > 0) {
+      int n = 0;
+      index = 0;
+      while (n++ < count) {
+        index = strView.find(delimView, index);
+        if (index == std::string::npos) {
+          break;
+        }
+        if (n < count) {
+          index++;
+        }
+      }
+    } else {
+      int n = 0;
+      index = strLen - 1;
+      while (n++ < -count) {
+        index = strView.rfind(delimView, index);
+        if (index == std::string::npos) {
+          break;
+        }
+        if (n < -count) {
+          index--;
+        }
+      }
+    }
+
+    // If the specified count of delimiter is not satisfied,
+    // the result is as same as the original string.
+    if (index == std::string::npos) {
+      result.setNoCopy(StringView(strView.data(), strView.size()));
+      return;
+    }
+
+    if (count > 0) {
+      result.setNoCopy(StringView(strView.data(), index));
+    } else {
+      auto resultSize = strView.length() - index - delimLen;
+      result.setNoCopy(
+          StringView(strView.data() + index + delimLen, resultSize));
+    }
   }
 };
 

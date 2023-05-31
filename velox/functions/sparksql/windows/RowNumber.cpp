@@ -19,7 +19,7 @@
 #include "velox/expression/FunctionSignature.h"
 #include "velox/vector/FlatVector.h"
 
-namespace facebook::velox::window::prestosql {
+namespace facebook::velox::functions::sparksql::windows {
 
 namespace {
 
@@ -40,7 +40,7 @@ class RowNumberFunction : public exec::WindowFunction {
       vector_size_t resultOffset,
       const VectorPtr& result) override {
     int numRows = peerGroupStarts->size() / sizeof(vector_size_t);
-    auto* rawValues = result->asFlatVector<int64_t>()->mutableRawValues();
+    auto* rawValues = result->asFlatVector<int32_t>()->mutableRawValues();
     for (int i = 0; i < numRows; i++) {
       rawValues[resultOffset + i] = rowNumber_++;
     }
@@ -55,10 +55,10 @@ class RowNumberFunction : public exec::WindowFunction {
 
 } // namespace
 
-// Signature of this function is : row_number() -> bigint.
+// Signature of this function is : row_number() -> integer.
 void registerRowNumber(const std::string& name) {
   std::vector<exec::FunctionSignaturePtr> signatures{
-      exec::FunctionSignatureBuilder().returnType("bigint").build(),
+      exec::FunctionSignatureBuilder().returnType("integer").build(),
   };
 
   exec::registerWindowFunction(
@@ -73,4 +73,4 @@ void registerRowNumber(const std::string& name) {
         return std::make_unique<RowNumberFunction>();
       });
 }
-} // namespace facebook::velox::window::prestosql
+} // namespace facebook::velox::functions::sparksql::windows

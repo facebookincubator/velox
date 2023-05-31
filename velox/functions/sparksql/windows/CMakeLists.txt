@@ -11,12 +11,12 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-add_library(velox_functions_spark_aggregates
-            BitwiseXorAggregate.cpp FirstLastAggregate.cpp BloomFilterAggAggregate.cpp Register.cpp)
+add_library(velox_functions_spark_windows
+            RowNumber.cpp Register.cpp)
 
-target_link_libraries(velox_functions_spark_aggregates fmt::fmt velox_exec
-                      velox_expression_functions velox_aggregates velox_vector)
-
-if(${VELOX_BUILD_TESTING})
-  add_subdirectory(tests)
+if(CMAKE_CXX_COMPILER_ID MATCHES "GNU")
+            add_compile_options(-Wno-stringop-overflow)
 endif()
+
+target_link_libraries(velox_functions_spark_windows velox_buffer velox_exec
+                      ${FOLLY_WITH_DEPENDENCIES})

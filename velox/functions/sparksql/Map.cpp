@@ -106,8 +106,8 @@ class MapFunction : public exec::VectorFunction {
           keyType,
           "All the key arguments in Map function must be the same!");
       VELOX_CHECK_EQ(
-          args[i * 2 + 1]->type(),
-          valueType,
+          args[i * 2 + 1]->type()->kind(),
+          valueType->kind(),
           "All the key arguments in Map function must be the same!");
     }
 

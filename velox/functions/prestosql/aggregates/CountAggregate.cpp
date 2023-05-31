@@ -171,7 +171,8 @@ bool registerCount(const std::string& name) {
         VELOX_CHECK_LE(
             argTypes.size(), 1, "{} takes at most one argument", name);
         return std::make_unique<CountAggregate>();
-      });
+      },
+      true);
   return true;
 }
 

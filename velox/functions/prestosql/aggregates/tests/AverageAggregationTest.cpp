@@ -462,5 +462,36 @@ TEST_F(AverageAggregationTest, constantVectorOverflow) {
   assertQuery(plan, "SELECT 1073741824");
 }
 
+TEST_F(AverageAggregationTest, companion) {
+  auto rows = makeRowVector(
+      {makeFlatVector<int32_t>(100, [&](auto row) { return row % 10; }),
+       makeFlatVector<int32_t>(100, [&](auto row) { return row * 2; }),
+       makeFlatVector<int32_t>(100, [&](auto row) { return row; })});
+
+  createDuckDbTable("t", {rows});
+
+  std::vector<TypePtr> resultType = {BIGINT(), ROW({DOUBLE(), BIGINT()})};
+  auto plan = PlanBuilder()
+                  .values({rows})
+                  .partialAggregation({"c0"}, {"avg(c1)", "sum(c2)"})
+                  .intermediateAggregation(
+                      {"c0"},
+                      {"avg(a0)", "sum(a1)"},
+                      {ROW({DOUBLE(), BIGINT()}), BIGINT()})
+                  .aggregation(
+                      {},
+                      {"avg_merge(a0)", "sum_merge(a1)", "count(c0)"},
+                      {},
+                      core::AggregationNode::Step::kPartial,
+                      false,
+                      {ROW({DOUBLE(), BIGINT()}), BIGINT(), BIGINT()})
+                  .finalAggregation(
+                      {},
+                      {"avg(a0)", "sum(a1)", "count(a2)"},
+                      {DOUBLE(), BIGINT(), BIGINT()})
+                  .planNode();
+  assertQuery(plan, "SELECT avg(c1), sum(c2), count(distinct c0) from t");
+}
+
 } // namespace
 } // namespace facebook::velox::aggregate::test

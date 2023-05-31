@@ -17,6 +17,8 @@ add_library(
   ArraySort.cpp
   Bitwise.cpp
   CompareFunctionsNullSafe.cpp
+  Decimal.cpp
+  DecimalArithmetic.cpp
   Hash.cpp
   In.cpp
   LeastGreatest.cpp
@@ -48,6 +50,7 @@ add_subdirectory(window)
 
 if(${VELOX_ENABLE_AGGREGATES})
   add_subdirectory(aggregates)
+  add_subdirectory(windows)
 endif()
 
 if(${VELOX_BUILD_TESTING})
