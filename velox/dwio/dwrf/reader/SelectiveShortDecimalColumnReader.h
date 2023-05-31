@@ -82,6 +82,15 @@ class SelectiveShortDecimalColumnReader
     }
   }
 
+  bool hasBulkPath() const override {
+    if (format_ == velox::dwrf::DwrfFormat::kDwrf) {
+      return true;
+    } else {
+      // TODO: zuochunwei, need support useBulkPath() for kOrc
+      return false;
+    }
+  }
+
   void seekToRowGroup(uint32_t index) override {
     auto positionsProvider = formatData_->seekToRowGroup(index);
     valueDecoder_->seekToRowGroup(positionsProvider);

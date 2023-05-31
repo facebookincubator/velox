@@ -32,6 +32,15 @@ class SelectiveStringDictionaryColumnReader
       DwrfParams& params,
       common::ScanSpec& scanSpec);
 
+  bool hasBulkPath() const override {
+    if (format_ == velox::dwrf::DwrfFormat::kDwrf) {
+      return true;
+    } else {
+      // TODO: zuochunwei, need support useBulkPath() for kOrc
+      return false;
+    }
+  }
+
   void seekToRowGroup(uint32_t index) override {
     SelectiveColumnReader::seekToRowGroup(index);
     auto positionsProvider = formatData_->as<DwrfData>().seekToRowGroup(index);
@@ -82,7 +91,8 @@ class SelectiveStringDictionaryColumnReader
       dwio::common::DictionaryValues& values);
   void ensureInitialized();
 
-  RleVersion rleVersion;
+  dwrf::DwrfFormat format_;
+  RleVersion rleVersion_;
 
   std::unique_ptr<dwio::common::IntDecoder</*isSigned*/ false>> dictIndex_;
   std::unique_ptr<ByteRleDecoder> inDictionaryReader_;
@@ -110,7 +120,7 @@ void SelectiveStringDictionaryColumnReader::readWithVisitor(
     TVisitor visitor) {
   vector_size_t numRows = rows.back() + 1;
 
-  if (rleVersion == velox::dwrf::RleVersion_1) {
+  if (rleVersion_ == velox::dwrf::RleVersion_1) {
     auto decoder =
         dynamic_cast<velox::dwrf::RleDecoderV1<false>*>(dictIndex_.get());
     if (nullsInReadRange_) {

@@ -43,30 +43,30 @@ class SelectiveIntegerDirectColumnReader
     auto& stripe = params.stripeStreams();
     bool dataVInts = stripe.getUseVInts(data);
 
-    format = stripe.format();
-    if (format == velox::dwrf::DwrfFormat::kDwrf) {
+    format_ = stripe.format();
+    if (format_ == velox::dwrf::DwrfFormat::kDwrf) {
       auto decoder = createDirectDecoder<true>(
           stripe.getStream(data, true), dataVInts, numBytes);
       directDecoder =
           dynamic_cast<dwio::common::DirectDecoder<true>*>(decoder.release());
       VELOX_CHECK(directDecoder);
       ints.reset(directDecoder);
-    } else if (format == velox::dwrf::DwrfFormat::kOrc) {
+    } else if (format_ == velox::dwrf::DwrfFormat::kOrc) {
       auto encoding = stripe.getEncoding(encodingKey);
-      version = convertRleVersion(encoding.kind());
+      rleVersion_ = convertRleVersion(encoding.kind());
       auto decoder = createRleDecoder<true>(
           stripe.getStream(data, true),
-          version,
+          rleVersion_,
           params.pool(),
           dataVInts,
           numBytes);
-      if (version == velox::dwrf::RleVersion_1) {
+      if (rleVersion_ == velox::dwrf::RleVersion_1) {
         rleDecoderV1 =
             dynamic_cast<velox::dwrf::RleDecoderV1<true>*>(decoder.release());
         VELOX_CHECK(rleDecoderV1);
         ints.reset(rleDecoderV1);
       } else {
-        VELOX_CHECK(version == velox::dwrf::RleVersion_2);
+        VELOX_CHECK(rleVersion_ == velox::dwrf::RleVersion_2);
         rleDecoderV2 =
             dynamic_cast<velox::dwrf::RleDecoderV2<true>*>(decoder.release());
         VELOX_CHECK(rleDecoderV2);
@@ -78,7 +78,12 @@ class SelectiveIntegerDirectColumnReader
   }
 
   bool hasBulkPath() const override {
-    return true;
+    if (format_ == velox::dwrf::DwrfFormat::kDwrf) {
+      return true;
+    } else {
+      // TODO: zuochunwei, need support useBulkPath() for kOrc
+      return false;
+    }
   }
 
   void seekToRowGroup(uint32_t index) override {
@@ -98,8 +103,8 @@ class SelectiveIntegerDirectColumnReader
   void readWithVisitor(RowSet rows, ColumnVisitor visitor);
 
  private:
-  dwrf::DwrfFormat format;
-  RleVersion version;
+  dwrf::DwrfFormat format_;
+  RleVersion rleVersion_;
 
   union {
     dwio::common::DirectDecoder<true>* directDecoder;
@@ -117,9 +122,9 @@ void SelectiveIntegerDirectColumnReader::readWithVisitor(
   vector_size_t numRows = rows.back() + 1;
 
   VELOX_CHECK(
-      format == velox::dwrf::DwrfFormat::kDwrf ||
-      format == velox::dwrf::DwrfFormat::kOrc);
-  if (format == velox::dwrf::DwrfFormat::kDwrf) {
+      format_ == velox::dwrf::DwrfFormat::kDwrf ||
+      format_ == velox::dwrf::DwrfFormat::kOrc);
+  if (format_ == velox::dwrf::DwrfFormat::kDwrf) {
     if (nullsInReadRange_) {
       directDecoder->readWithVisitor<true>(
           nullsInReadRange_->as<uint64_t>(), visitor);
@@ -142,7 +147,7 @@ void SelectiveIntegerDirectColumnReader::readWithVisitor(
               visitor.extractValues());
 
       if (nullsInReadRange_) {
-        if (version == velox::dwrf::RleVersion_1) {
+        if (rleVersion_ == velox::dwrf::RleVersion_1) {
           rleDecoderV1->readWithVisitor<true>(
               nullsInReadRange_->as<uint64_t>(), drVisitor);
         } else {
@@ -150,7 +155,7 @@ void SelectiveIntegerDirectColumnReader::readWithVisitor(
               nullsInReadRange_->as<uint64_t>(), drVisitor);
         }
       } else {
-        if (version == velox::dwrf::RleVersion_1) {
+        if (rleVersion_ == velox::dwrf::RleVersion_1) {
           rleDecoderV1->readWithVisitor<false>(nullptr, drVisitor);
         } else {
           rleDecoderV2->readWithVisitor<false>(nullptr, drVisitor);
