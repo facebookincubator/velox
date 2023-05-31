@@ -109,20 +109,25 @@ std::vector<std::shared_ptr<connector::hive::HiveConnectorSplit>>
 HiveConnectorTestBase::makeHiveConnectorSplits(
     const std::string& filePath,
     uint32_t splitCount,
-    dwio::common::FileFormat format) {
+    dwio::common::FileFormat format,
+    int64_t maxCoalesceBytes,
+    int32_t maxCoalesceDistance) {
   auto file =
       filesystems::getFileSystem(filePath, nullptr)->openFileForRead(filePath);
   const int64_t fileSize = file->size();
   // Take the upper bound.
   const int splitSize = std::ceil((fileSize) / splitCount);
   std::vector<std::shared_ptr<connector::hive::HiveConnectorSplit>> splits;
-
+  auto options = std::make_shared<dwio::common::ReaderOptions>(nullptr);
+  options->setMaxCoalesceBytes(maxCoalesceBytes);
+  options->setMaxCoalesceDistance(maxCoalesceDistance);
   // Add all the splits.
   for (int i = 0; i < splitCount; i++) {
     auto split = HiveConnectorSplitBuilder(filePath)
                      .fileFormat(format)
                      .start(i * splitSize)
                      .length(splitSize)
+                     .readerOptions(options)
                      .build();
     splits.push_back(std::move(split));
   }

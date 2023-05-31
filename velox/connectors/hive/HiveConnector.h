@@ -40,7 +40,13 @@ class HiveConnector : public Connector {
       const std::unordered_map<
           std::string,
           std::shared_ptr<connector::ColumnHandle>>& columnHandles,
-      ConnectorQueryCtx* connectorQueryCtx) override {
+      ConnectorQueryCtx* connectorQueryCtx,
+      const std::shared_ptr<dwio::common::ReaderOptions>& options = {})
+      override {
+    auto readerOptions = options;
+    if (!options)
+      readerOptions = std::make_shared<dwio::common::ReaderOptions>(
+          connectorQueryCtx->memoryPool());
     return std::make_unique<HiveDataSource>(
         outputType,
         tableHandle,
@@ -52,7 +58,8 @@ class HiveConnector : public Connector {
         connectorQueryCtx->scanId(),
         HiveConfig::isFileColumnNamesReadAsLowerCase(
             connectorQueryCtx->config()),
-        executor_);
+        executor_,
+        readerOptions);
   }
 
   bool supportsSplitPreload() override {

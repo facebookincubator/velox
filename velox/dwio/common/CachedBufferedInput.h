@@ -66,8 +66,7 @@ class CachedBufferedInput : public BufferedInput {
       uint64_t groupId,
       std::shared_ptr<IoStatistics> ioStats,
       folly::Executor* FOLLY_NULLABLE executor,
-      int32_t loadQuantum,
-      int32_t maxCoalesceDistance)
+      const std::shared_ptr<ReaderOptions>& readerOptions)
       : BufferedInput(std::move(readFile), pool, metricsLog),
         cache_(cache),
         fileNum_(fileNum),
@@ -76,8 +75,7 @@ class CachedBufferedInput : public BufferedInput {
         ioStats_(std::move(ioStats)),
         executor_(executor),
         fileSize_(input_->getLength()),
-        loadQuantum_(loadQuantum),
-        maxCoalesceDistance_(maxCoalesceDistance) {}
+        options_(readerOptions) {}
 
   CachedBufferedInput(
       std::shared_ptr<ReadFileInputStream> input,
@@ -88,8 +86,7 @@ class CachedBufferedInput : public BufferedInput {
       uint64_t groupId,
       std::shared_ptr<IoStatistics> ioStats,
       folly::Executor* FOLLY_NULLABLE executor,
-      int32_t loadQuantum,
-      int32_t maxCoalesceDistance)
+      const std::shared_ptr<ReaderOptions>& readerOptions)
       : BufferedInput(std::move(input), pool),
         cache_(cache),
         fileNum_(fileNum),
@@ -98,8 +95,7 @@ class CachedBufferedInput : public BufferedInput {
         ioStats_(std::move(ioStats)),
         executor_(executor),
         fileSize_(input_->getLength()),
-        loadQuantum_(loadQuantum),
-        maxCoalesceDistance_(maxCoalesceDistance) {}
+        options_(readerOptions) {}
 
   ~CachedBufferedInput() override {
     for (auto& load : allCoalescedLoads_) {
@@ -145,8 +141,7 @@ class CachedBufferedInput : public BufferedInput {
         groupId_,
         ioStats_,
         executor_,
-        loadQuantum_,
-        maxCoalesceDistance_);
+        options_);
   }
 
   cache::AsyncDataCache* FOLLY_NONNULL cache() const {
@@ -200,9 +195,8 @@ class CachedBufferedInput : public BufferedInput {
   std::vector<std::shared_ptr<cache::CoalescedLoad>> allCoalescedLoads_;
 
   const uint64_t fileSize_;
-  const int32_t loadQuantum_;
-  const int32_t maxCoalesceDistance_;
   int64_t prefetchSize_{0};
+  const std::shared_ptr<ReaderOptions> options_;
 };
 
 } // namespace facebook::velox::dwio::common

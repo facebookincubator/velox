@@ -167,6 +167,9 @@ DEFINE_bool(
 DEFINE_validator(data_path, &notEmpty);
 DEFINE_validator(data_format, &validateDataFormat);
 
+DECLARE_int32(max_coalesced_distance_bytes);
+DECLARE_int64(max_coalesced_bytes);
+
 struct RunStats {
   std::map<std::string, std::string> flags;
   int64_t micros{0};
@@ -264,7 +267,11 @@ class TpchBenchmark {
               for (const auto& path : entry.second) {
                 auto const splits =
                     HiveConnectorTestBase::makeHiveConnectorSplits(
-                        path, numSplitsPerFile, tpchPlan.dataFileFormat);
+                        path,
+                        numSplitsPerFile,
+                        tpchPlan.dataFileFormat,
+                        FLAGS_max_coalesced_bytes,
+                        FLAGS_max_coalesced_distance_bytes);
                 for (const auto& split : splits) {
                   task->addSplit(entry.first, exec::Split(split));
                 }

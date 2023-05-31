@@ -227,6 +227,7 @@ class CacheTest : public testing::Test {
       int64_t offset,
       const IoStatisticsPtr& ioStats) {
     auto data = std::make_unique<StripeData>();
+    auto options = std::make_shared<ReaderOptions>(pool_.get());
     data->input = std::make_unique<CachedBufferedInput>(
         readFile,
         *pool_,
@@ -237,9 +238,7 @@ class CacheTest : public testing::Test {
         groupId,
         ioStats,
         executor_.get(),
-        dwio::common::ReaderOptions::kDefaultLoadQuantum, // loadQuantum 8MB.
-        512 << 10 // Max coalesce distance 512K.
-    );
+        options);
     data->file = readFile.get();
     for (auto i = 0; i < numColumns; ++i) {
       int32_t streamIndex = i * (kMaxStreams / numColumns);
@@ -458,6 +457,7 @@ TEST_F(CacheTest, window) {
   uint64_t fileId;
   uint64_t groupId;
   auto file = inputByPath("test_for_window", fileId, groupId);
+  auto options = std::make_shared<ReaderOptions>(pool_.get());
   auto input = std::make_unique<CachedBufferedInput>(
       file,
       *pool_,
@@ -468,9 +468,7 @@ TEST_F(CacheTest, window) {
       groupId,
       ioStats_,
       executor_.get(),
-      dwio::common::ReaderOptions::kDefaultLoadQuantum, // loadQuantum 8MB.
-      512 << 10 // Max coalesce distance 512K.
-  );
+      options);
   auto begin = 4 * kMB;
   auto end = 17 * kMB;
   auto stream = input->read(begin, end - begin, LogType::TEST);
@@ -644,7 +642,7 @@ TEST_F(CacheTest, ssdThreads) {
 class FileWithReadAhead {
  public:
   static constexpr int32_t kFileSize = 21 << 20;
-  static constexpr int64_t kLoadQuantum = 4 << 20;
+  static constexpr int64_t kLoadQuantum = 6 << 20;
   FileWithReadAhead(
       const std::string& name,
       cache::AsyncDataCache* FOLLY_NONNULL cache,
@@ -653,6 +651,7 @@ class FileWithReadAhead {
       folly::Executor* executor) {
     fileId_ = std::make_unique<StringIdLease>(fileIds(), name);
     file_ = std::make_shared<TestReadFile>(fileId_->id(), kFileSize, stats);
+    options_ = std::make_shared<ReaderOptions>(&pool);
     bufferedInput_ = std::make_unique<CachedBufferedInput>(
         file_,
         pool,
@@ -663,8 +662,7 @@ class FileWithReadAhead {
         0,
         stats,
         executor,
-        kLoadQuantum,
-        0);
+        options_);
     auto sequential = StreamIdentifier::sequentialFile();
     stream_ = bufferedInput_->enqueue(Region{0, file_->size()}, &sequential);
     // Trigger load of next 4MB after reading the first 2MB of the previous 4MB
@@ -683,6 +681,7 @@ class FileWithReadAhead {
   std::unique_ptr<CachedBufferedInput> bufferedInput_;
   std::unique_ptr<SeekableInputStream> stream_;
   std::shared_ptr<TestReadFile> file_;
+  std::shared_ptr<ReaderOptions> options_;
 };
 
 TEST_F(CacheTest, readAhead) {

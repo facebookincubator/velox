@@ -63,8 +63,11 @@ TpchDataSource::TpchDataSource(
     const std::unordered_map<
         std::string,
         std::shared_ptr<connector::ColumnHandle>>& columnHandles,
-    velox::memory::MemoryPool* FOLLY_NONNULL pool)
-    : pool_(pool) {
+    velox::memory::MemoryPool* FOLLY_NONNULL pool,
+    const std::shared_ptr<dwio::common::ReaderOptions>& options)
+    : pool_(pool), options_(options) {
+  if (!options_)
+    options_ = std::make_shared<dwio::common::ReaderOptions>(pool);
   auto tpchTableHandle =
       std::dynamic_pointer_cast<TpchTableHandle>(tableHandle);
   VELOX_CHECK_NOT_NULL(

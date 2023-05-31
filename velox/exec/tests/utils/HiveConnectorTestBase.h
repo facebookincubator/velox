@@ -74,7 +74,11 @@ class HiveConnectorTestBase : public OperatorTestBase {
   makeHiveConnectorSplits(
       const std::string& filePath,
       uint32_t splitCount,
-      dwio::common::FileFormat format);
+      dwio::common::FileFormat format,
+      int64_t maxCoalesceBytes =
+          dwio::common::ReaderOptions::kDefaultCoalesceBytes,
+      int32_t maxCoalesceDistance =
+          dwio::common::ReaderOptions::kDefaultCoalesceDistance);
 
   static std::shared_ptr<connector::hive::HiveTableHandle> makeTableHandle(
       common::test::SubfieldFilters subfieldFilters = {},
@@ -199,7 +203,15 @@ class HiveConnectorSplitBuilder {
     return *this;
   }
 
+  HiveConnectorSplitBuilder& readerOptions(
+      std::shared_ptr<dwio::common::ReaderOptions>& options) {
+    readerOptions_ = options;
+    return *this;
+  }
+
   std::shared_ptr<connector::hive::HiveConnectorSplit> build() const {
+    auto unusedMap = std::unordered_map<std::string, std::string>();
+    auto unusedExtra = std::make_shared<std::string>();
     return std::make_shared<connector::hive::HiveConnectorSplit>(
         kHiveConnectorId,
         "file:" + filePath_,
@@ -207,7 +219,10 @@ class HiveConnectorSplitBuilder {
         start_,
         length_,
         partitionKeys_,
-        tableBucketNumber_);
+        tableBucketNumber_,
+        unusedMap,
+        unusedExtra,
+        readerOptions_);
   }
 
  private:
@@ -217,6 +232,7 @@ class HiveConnectorSplitBuilder {
   uint64_t length_{std::numeric_limits<uint64_t>::max()};
   std::unordered_map<std::string, std::optional<std::string>> partitionKeys_;
   std::optional<int32_t> tableBucketNumber_;
+  std::shared_ptr<dwio::common::ReaderOptions> readerOptions_;
 };
 
 } // namespace facebook::velox::exec::test

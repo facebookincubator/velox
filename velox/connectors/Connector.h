@@ -20,6 +20,7 @@
 #include "velox/common/caching/ScanTracker.h"
 #include "velox/common/future/VeloxPromise.h"
 #include "velox/core/ExpressionEvaluator.h"
+#include "velox/dwio/common/Options.h"
 #include "velox/vector/ComplexVector.h"
 
 #include <folly/Synchronized.h>
@@ -314,7 +315,8 @@ class Connector {
       const std::unordered_map<
           std::string,
           std::shared_ptr<connector::ColumnHandle>>& columnHandles,
-      ConnectorQueryCtx* FOLLY_NONNULL connectorQueryCtx) = 0;
+      ConnectorQueryCtx* FOLLY_NONNULL connectorQueryCtx,
+      const std::shared_ptr<dwio::common::ReaderOptions>& options = {}) = 0;
 
   // Returns true if addSplit of DataSource can use 'dataSource' from
   // ConnectorSplit in addSplit(). If so, TableScan can preload splits
