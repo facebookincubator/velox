@@ -251,7 +251,7 @@ TEST_F(HivePartitionFunctionTest, timestamp) {
            dwio::common::MAX_NANOS)});
 
   assertPartitions(values, 1, {0, 0, 0, 0});
-  assertPartitions(values, 2, {0, 0, 0, 0});
+  assertPartitions(values, 2, {0, 0, 1, 0});
   assertPartitions(values, 500, {0, 284, 123, 324});
   assertPartitions(values, 997, {0, 514, 818, 713});
 
