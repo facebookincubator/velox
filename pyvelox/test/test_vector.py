@@ -256,20 +256,20 @@ class TestVeloxVector(unittest.TestCase):
             ints2.append(strs2)
 
     def test_slice(self):
-        a = pv.from_list(list(range(0,10)))
+        a = pv.from_list(list(range(0, 10)))
 
-        b = a.slice(2,6)
+        b = a.slice(2, 6)
         self.assertEqual(len(b), 4)
         for i in range(4):
-            self.assertEqual(b[i], i+2)
+            self.assertEqual(b[i], i + 2)
 
         with self.assertRaises(NotImplementedError):
-            c = a.slice(2,6,2)
+            c = a.slice(2, 6, 2)
 
         d = a[3:6]
         self.assertEqual(len(d), 3)
         for i in range(3):
-            self.assertEqual(d[i], i+3)
+            self.assertEqual(d[i], i + 3)
 
         with self.assertRaises(NotImplementedError):
             e = a[3:8:3]
