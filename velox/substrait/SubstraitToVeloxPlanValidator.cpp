@@ -329,6 +329,8 @@ bool validateBoundType(::substrait::Expression_WindowFunction_Bound boundType) {
     case ::substrait::Expression_WindowFunction_Bound::kUnboundedFollowing:
     case ::substrait::Expression_WindowFunction_Bound::kUnboundedPreceding:
     case ::substrait::Expression_WindowFunction_Bound::kCurrentRow:
+    case ::substrait::Expression_WindowFunction_Bound::kFollowing:
+    case ::substrait::Expression_WindowFunction_Bound::kPreceding:
       break;
     default:
       std::cout << "The Bound Type is not supported. "

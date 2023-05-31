@@ -539,7 +539,6 @@ const core::WindowNode::Frame createWindowFrame(
       frame.type = core::WindowNode::WindowType::kRows;
       break;
     case ::substrait::WindowType::RANGE:
-
       frame.type = core::WindowNode::WindowType::kRange;
       break;
     default:
@@ -557,14 +556,34 @@ const core::WindowNode::Frame createWindowFrame(
       return core::WindowNode::BoundType::kUnboundedFollowing;
     } else if (boundType.has_unbounded_preceding()) {
       return core::WindowNode::BoundType::kUnboundedPreceding;
+    } else if (boundType.has_following()) {
+      return core::WindowNode::BoundType::kFollowing;
+    } else if (boundType.has_preceding()) {
+      return core::WindowNode::BoundType::kPreceding;
     } else {
       VELOX_FAIL("The BoundType is not supported.");
     }
   };
   frame.startType = boundTypeConversion(lower_bound);
-  frame.startValue = nullptr;
+  switch (frame.startType) {
+    case core::WindowNode::BoundType::kPreceding:
+      // TODO: support non-literal expression.
+      frame.startValue = std::make_shared<core::ConstantTypedExpr>(
+          BIGINT(), variant(lower_bound.preceding().offset()));
+      break;
+    default:
+      frame.startValue = nullptr;
+  }
   frame.endType = boundTypeConversion(upper_bound);
-  frame.endValue = nullptr;
+  switch (frame.endType) {
+    // TODO: support non-literal expression.
+    case core::WindowNode::BoundType::kFollowing:
+      frame.endValue = std::make_shared<core::ConstantTypedExpr>(
+          BIGINT(), variant(upper_bound.following().offset()));
+      break;
+    default:
+      frame.endValue = nullptr;
+  }
   return frame;
 }
 

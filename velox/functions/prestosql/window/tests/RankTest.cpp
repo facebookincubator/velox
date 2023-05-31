@@ -97,6 +97,11 @@ TEST_P(RankTest, randomInput) {
   testWindowFunction({makeRandomInputVector(20), makeRandomInputVector(30)});
 }
 
+// Tests function with a randomly generated input dataset.
+TEST_P(RankTest, rangeFrames) {
+  testKRangeFrames(function_);
+}
+
 // Run above tests for all combinations of rank function and over clauses.
 VELOX_INSTANTIATE_TEST_SUITE_P(
     RankTestInstantiation,

@@ -199,6 +199,13 @@ TEST_F(NthValueTest, nullOffsets) {
       {vectors}, "nth_value(c0, c2)", kOverClauses);
 }
 
+TEST_F(NthValueTest, kRangeFrames) {
+  testKRangeFrames("nth_value(c2, 1)");
+  testKRangeFrames("nth_value(c2, 3)");
+  testKRangeFrames("nth_value(c2, 5)");
+  // testKRangeFrames("nth_value(c2, c3)");
+}
+
 TEST_F(NthValueTest, invalidOffsets) {
   vector_size_t size = 20;
 

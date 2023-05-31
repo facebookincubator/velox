@@ -83,6 +83,8 @@ Window::Window(
       std::make_unique<WindowPartition>(inputColumns, inputType->children());
 
   createWindowFunctions(windowNode, inputType);
+
+  initRangeValuesMap();
 }
 
 Window::WindowFrame Window::createWindowFrame(
@@ -109,6 +111,17 @@ Window::WindowFrame Window::createWindowFrame(
           frameChannel, BaseVector::create(BIGINT(), 0, pool()), std::nullopt});
     }
   };
+
+  // If this is a k Range frame bound, then its evaluation requires that the
+  // order by key be a single column (to add or subtract the k range value
+  // from).
+  if (frame.type == core::WindowNode::WindowType::kRange &&
+      (frame.startValue || frame.endValue)) {
+    VELOX_USER_CHECK_EQ(
+        sortKeyInfo_.size(),
+        1,
+        "Window frame of type RANGE PRECEDING or FOLLOWING requires single sort item in ORDER BY.");
+  }
 
   return WindowFrame(
       {frame.type,
@@ -145,6 +158,25 @@ void Window::createWindowFunctions(
 
     windowFrames_.push_back(
         createWindowFrame(windowNodeFunction.frame, inputType));
+  }
+}
+
+void Window::initRangeValuesMap() {
+  auto isKBoundFrame = [](core::WindowNode::BoundType boundType) -> bool {
+    return boundType == core::WindowNode::BoundType::kPreceding ||
+        boundType == core::WindowNode::BoundType::kFollowing;
+  };
+
+  hasKRangeFrames_ = false;
+  for (const auto& frame : windowFrames_) {
+    if (frame.type == core::WindowNode::WindowType::kRange &&
+        (isKBoundFrame(frame.startType) || isKBoundFrame(frame.endType))) {
+      hasKRangeFrames_ = true;
+      rangeValuesMap_.rangeType = outputType_->childAt(sortKeyInfo_[0].first);
+      rangeValuesMap_.rangeValues =
+          BaseVector::create(rangeValuesMap_.rangeType, 0, pool());
+      break;
+    }
   }
 }
 
@@ -275,6 +307,35 @@ void Window::noMoreInput() {
   createPeerAndFrameBuffers();
 }
 
+void Window::computeRangeValuesMap() {
+  auto peerCompare = [&](const char* lhs, const char* rhs) -> bool {
+    return compareRowsWithKeys(lhs, rhs, sortKeyInfo_);
+  };
+  auto firstPartitionRow = partitionStartRows_[currentPartition_];
+  auto lastPartitionRow = partitionStartRows_[currentPartition_ + 1] - 1;
+  auto numRows = lastPartitionRow - firstPartitionRow + 1;
+  rangeValuesMap_.rangeValues->resize(numRows);
+  rangeValuesMap_.rowIndices.resize(numRows);
+
+  rangeValuesMap_.rowIndices[0] = 0;
+  int j = 1;
+  for (auto i = firstPartitionRow + 1; i <= lastPartitionRow; i++) {
+    // Here, we removed the below check code, in order to keep raw values.
+    // if (peerCompare(sortedRows_[i - 1], sortedRows_[i])) {
+    // The order by values are extracted from the Window partition which
+    // starts from row number 0 for the firstPartitionRow. So the index
+    // requires adjustment.
+    rangeValuesMap_.rowIndices[j++] = i - firstPartitionRow;
+    // }
+  }
+
+  // If sort key is desc then reverse the rowIndices so that the range values
+  // are guaranteed ascending for the further lookup logic.
+  auto valueIndexesRange = folly::Range(rangeValuesMap_.rowIndices.data(), j);
+  windowPartition_->extractColumn(
+      sortKeyInfo_[0].first, valueIndexesRange, 0, rangeValuesMap_.rangeValues);
+}
+
 void Window::callResetPartition(vector_size_t partitionNumber) {
   partitionOffset_ = 0;
   auto partitionSize = partitionStartRows_[partitionNumber + 1] -
@@ -284,6 +345,10 @@ void Window::callResetPartition(vector_size_t partitionNumber) {
   windowPartition_->resetPartition(partition);
   for (int i = 0; i < windowFunctions_.size(); i++) {
     windowFunctions_[i]->resetPartition(windowPartition_.get());
+  }
+
+  if (hasKRangeFrames_) {
+    computeRangeValuesMap();
   }
 }
 
@@ -299,7 +364,17 @@ void Window::updateKRowsFrameBounds(
     auto constantOffset = frameArg.constant.value();
     auto startValue = startRow +
         (isKPreceding ? -constantOffset : constantOffset) - firstPartitionRow;
-    std::iota(rawFrameBounds, rawFrameBounds + numRows, startValue);
+    auto lastPartitionRow = partitionStartRows_[currentPartition_ + 1] - 1;
+    // TODO: check first partition boundary and validate the frame.
+    for (int i = 0; i < numRows; i++) {
+      if (startValue > lastPartitionRow) {
+        rawFrameBounds[i] = lastPartitionRow + 1;
+      } else {
+        rawFrameBounds[i] = startValue;
+      }
+      startValue++;
+    }
+    // std::iota(rawFrameBounds, rawFrameBounds + numRows, startValue);
   } else {
     windowPartition_->extractColumn(
         frameArg.index, partitionOffset_, numRows, 0, frameArg.value);
@@ -315,8 +390,170 @@ void Window::updateKRowsFrameBounds(
     // moves ahead.
     int precedingFactor = isKPreceding ? -1 : 1;
     for (auto i = 0; i < numRows; i++) {
+      // TOOD: check whether the value is inside [firstPartitionRow,
+      // lastPartitionRow].
       rawFrameBounds[i] = (startRow + i) +
           vector_size_t(precedingFactor * offsets[i]) - firstPartitionRow;
+    }
+  }
+}
+
+namespace {
+
+template <typename T>
+vector_size_t findIndex(
+    const T value,
+    vector_size_t leftBound,
+    vector_size_t rightBound,
+    const FlatVectorPtr<T>& values,
+    bool findStart) {
+  vector_size_t originalRightBound = rightBound;
+  vector_size_t originalLeftBound = leftBound;
+  while (leftBound < rightBound) {
+    vector_size_t mid = round((leftBound + rightBound) / 2.0);
+    auto midValue = values->valueAt(mid);
+    if (value == midValue) {
+      return mid;
+    }
+
+    if (value < midValue) {
+      rightBound = mid - 1;
+    } else {
+      leftBound = mid + 1;
+    }
+  }
+
+  // The value is not found but leftBound == rightBound at this point.
+  // This could be a value which is the least number greater than
+  // or the largest number less than value.
+  // The semantics of this function are to always return the smallest larger
+  // value (or rightBound if end of range).
+  if (findStart) {
+    if (value <= values->valueAt(rightBound)) {
+      // return std::max(originalLeftBound, rightBound);
+      return rightBound;
+    }
+    return std::min(originalRightBound, rightBound + 1);
+  }
+  if (value < values->valueAt(rightBound)) {
+    return std::max(originalLeftBound, rightBound - 1);
+  }
+  // std::max(originalLeftBound, rightBound)?
+  return std::min(originalRightBound, rightBound);
+}
+
+} // namespace
+
+// TODO: unify into one function.
+template <typename T>
+inline vector_size_t Window::kRangeStartBoundSearch(
+    const T value,
+    vector_size_t leftBound,
+    vector_size_t rightBound,
+    const FlatVectorPtr<T>& valuesVector,
+    const vector_size_t* rawPeerStarts) {
+  auto index = findIndex<T>(value, leftBound, rightBound, valuesVector, true);
+  // Since this is a kPreceding bound it includes the row at the index.
+  return rangeValuesMap_.rowIndices[rawPeerStarts[index]];
+}
+
+// TODO: lastRightBoundRow looks useless.
+template <typename T>
+vector_size_t Window::kRangeEndBoundSearch(
+    const T value,
+    vector_size_t leftBound,
+    vector_size_t rightBound,
+    vector_size_t lastRightBoundRow,
+    const FlatVectorPtr<T>& valuesVector,
+    const vector_size_t* rawPeerEnds) {
+  auto index = findIndex<T>(value, leftBound, rightBound, valuesVector, false);
+  return rangeValuesMap_.rowIndices[rawPeerEnds[index]];
+}
+
+template <TypeKind T>
+void Window::updateKRangeFrameBounds(
+    bool isKPreceding,
+    bool isStartBound,
+    const FrameChannelArg& frameArg,
+    vector_size_t numRows,
+    vector_size_t* rawFrameBounds,
+    const vector_size_t* rawPeerStarts,
+    const vector_size_t* rawPeerEnds) {
+  using NativeType = typename TypeTraits<T>::NativeType;
+  // Extract the order by key column to calculate the range values for the frame
+  // boundaries.
+  std::shared_ptr<const Type> sortKeyType =
+      outputType_->childAt(sortKeyInfo_[0].first);
+  auto orderByValues = BaseVector::create(sortKeyType, numRows, pool());
+  windowPartition_->extractColumn(
+      sortKeyInfo_[0].first, partitionOffset_, numRows, 0, orderByValues);
+  auto* rangeValuesFlatVector = orderByValues->asFlatVector<NativeType>();
+  auto* rawRangeValues = rangeValuesFlatVector->mutableRawValues();
+
+  if (frameArg.index == kConstantChannel) {
+    auto constantOffset = frameArg.constant.value();
+    constantOffset = isKPreceding ? -constantOffset : constantOffset;
+    for (int i = 0; i < numRows; i++) {
+      rawRangeValues[i] = rangeValuesFlatVector->valueAt(i) + constantOffset;
+    }
+  } else {
+    windowPartition_->extractColumn(
+        frameArg.index, partitionOffset_, numRows, 0, frameArg.value);
+    auto offsets = frameArg.value->values()->as<int64_t>();
+    for (auto i = 0; i < numRows; i++) {
+      VELOX_USER_CHECK(
+          !frameArg.value->isNullAt(i), "k in frame bounds cannot be null");
+      VELOX_USER_CHECK_GE(
+          offsets[i], 1, "k in frame bounds must be at least 1");
+    }
+
+    auto precedingFactor = isKPreceding ? -1 : 1;
+    for (auto i = 0; i < numRows; i++) {
+      rawRangeValues[i] = rangeValuesFlatVector->valueAt(i) +
+          vector_size_t(precedingFactor * offsets[i]);
+    }
+  }
+
+  // Set the frame bounds from looking up the rangeValues index.
+  auto leftBound = 0;
+  auto rightBound = rangeValuesMap_.rowIndices.size() - 1;
+  auto lastPartitionRow = partitionStartRows_[currentPartition_ + 1] - 1;
+  auto rangeIndexValues = std::dynamic_pointer_cast<FlatVector<NativeType>>(
+      rangeValuesMap_.rangeValues);
+  if (isStartBound) {
+    for (auto i = 0; i < numRows; i++) {
+      // Handle null.
+      // Different with duckDB result. May need to separate the handling for
+      // spark & presto.
+      if (rangeValuesFlatVector->mayHaveNulls() &&
+          rangeValuesFlatVector->isNullAt(i)) {
+        rawFrameBounds[i] = i;
+        continue;
+      }
+      rawFrameBounds[i] = kRangeStartBoundSearch<NativeType>(
+          rawRangeValues[i],
+          leftBound,
+          rightBound,
+          rangeIndexValues,
+          rawPeerStarts);
+    }
+  } else {
+    for (auto i = 0; i < numRows; i++) {
+      // Handle null.
+      // Different with duckDB result. May need to separate the handling for
+      // spark & presto.
+      if (rangeValuesFlatVector->mayHaveNulls() &&
+          rangeValuesFlatVector->isNullAt(i)) {
+        rawFrameBounds[i] = i;
+        continue;
+      }
+      rawFrameBounds[i] = kRangeEndBoundSearch<NativeType>(
+          rawRangeValues[i],
+          leftBound,
+          rightBound,
+          lastPartitionRow,
+          rangeIndexValues,
+          rawPeerEnds);
     }
   }
 }
@@ -365,7 +602,52 @@ void Window::updateFrameBounds(
         updateKRowsFrameBounds(
             true, frameArg.value(), startRow, numRows, rawFrameBounds);
       } else {
-        VELOX_NYI("k preceding frame is only supported in ROWS mode");
+        // Sort key type.
+        auto sortKeyTypePtr = outputType_->childAt(sortKeyInfo_[0].first);
+        switch (sortKeyTypePtr->kind()) {
+          case TypeKind::TINYINT:
+            updateKRangeFrameBounds<TypeKind::TINYINT>(
+                true,
+                isStartBound,
+                frameArg.value(),
+                numRows,
+                rawFrameBounds,
+                rawPeerStarts,
+                rawPeerEnds);
+            break;
+          case TypeKind::SMALLINT:
+            updateKRangeFrameBounds<TypeKind::SMALLINT>(
+                true,
+                isStartBound,
+                frameArg.value(),
+                numRows,
+                rawFrameBounds,
+                rawPeerStarts,
+                rawPeerEnds);
+            break;
+          case TypeKind::INTEGER:
+            updateKRangeFrameBounds<TypeKind::INTEGER>(
+                true,
+                isStartBound,
+                frameArg.value(),
+                numRows,
+                rawFrameBounds,
+                rawPeerStarts,
+                rawPeerEnds);
+            break;
+          case TypeKind::BIGINT:
+            updateKRangeFrameBounds<TypeKind::BIGINT>(
+                true,
+                isStartBound,
+                frameArg.value(),
+                numRows,
+                rawFrameBounds,
+                rawPeerStarts,
+                rawPeerEnds);
+            break;
+          default:
+            VELOX_USER_FAIL("Not supported type for sort key!");
+        }
       }
       break;
     }
@@ -374,7 +656,52 @@ void Window::updateFrameBounds(
         updateKRowsFrameBounds(
             false, frameArg.value(), startRow, numRows, rawFrameBounds);
       } else {
-        VELOX_NYI("k following frame is only supported in ROWS mode");
+        // Sort key type.
+        auto sortKeyTypePtr = outputType_->childAt(sortKeyInfo_[0].first);
+        switch (sortKeyTypePtr->kind()) {
+          case TypeKind::TINYINT:
+            updateKRangeFrameBounds<TypeKind::TINYINT>(
+                false,
+                isStartBound,
+                frameArg.value(),
+                numRows,
+                rawFrameBounds,
+                rawPeerStarts,
+                rawPeerEnds);
+            break;
+          case TypeKind::SMALLINT:
+            updateKRangeFrameBounds<TypeKind::SMALLINT>(
+                false,
+                isStartBound,
+                frameArg.value(),
+                numRows,
+                rawFrameBounds,
+                rawPeerStarts,
+                rawPeerEnds);
+            break;
+          case TypeKind::INTEGER:
+            updateKRangeFrameBounds<TypeKind::INTEGER>(
+                false,
+                isStartBound,
+                frameArg.value(),
+                numRows,
+                rawFrameBounds,
+                rawPeerStarts,
+                rawPeerEnds);
+            break;
+          case TypeKind::BIGINT:
+            updateKRangeFrameBounds<TypeKind::BIGINT>(
+                false,
+                isStartBound,
+                frameArg.value(),
+                numRows,
+                rawFrameBounds,
+                rawPeerStarts,
+                rawPeerEnds);
+            break;
+          default:
+            VELOX_USER_FAIL("Not supported type for sort key!");
+        }
       }
       break;
     }

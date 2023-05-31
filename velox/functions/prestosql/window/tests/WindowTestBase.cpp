@@ -124,6 +124,41 @@ void WindowTestBase::testWindowFunction(
   }
 }
 
+void WindowTestBase::testKRangeFrames(const std::string& function) {
+  // The current support for k Range frames is limited to ascending sort
+  // orders without null values. Frames clauses generating empty frames
+  // are also not supported.
+
+  // For deterministic results its expected that rows have a fixed ordering
+  // in the partition so that the range frames are predictable. So the
+  // input table.
+  vector_size_t size = 100;
+
+  auto vectors = makeRowVector({
+      makeFlatVector<int32_t>(size, [](auto row) { return row % 10; }),
+      makeFlatVector<int64_t>(size, [](auto row) { return row; }),
+      makeFlatVector<int32_t>(size, [](auto row) { return row % 7 + 1; }),
+      makeFlatVector<int64_t>(size, [](auto row) { return row % 4 + 1; }),
+  });
+
+  const std::string overClause = "partition by c0 order by c1";
+  const std::vector<std::string> kRangeFrames = {
+      "range between 5 preceding and current row",
+      "range between current row and 5 following",
+      "range between 5 preceding and 5 following",
+      "range between unbounded preceding and 5 following",
+      "range between 5 preceding and unbounded following",
+
+      "range between c3 preceding and current row",
+      "range between current row and c3 following",
+      "range between c2 preceding and c3 following",
+      "range between unbounded preceding and c3 following",
+      "range between c3 preceding and unbounded following",
+  };
+
+  testWindowFunction({vectors}, function, {overClause}, kRangeFrames);
+}
+
 void WindowTestBase::assertWindowFunctionError(
     const std::vector<RowVectorPtr>& input,
     const std::string& function,
