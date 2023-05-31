@@ -16,6 +16,9 @@ set(CMAKE_MODULE_PATH ${CMAKE_MODULE_PATH}
                       "${CMAKE_CURRENT_SOURCE_DIR}/cmake_modules/")
 
 include(ExternalProject)
+if(NOT DEFINED CMAKE_INSTALL_LIBDIR)
+  set(CMAKE_INSTALL_LIBDIR "lib")
+endif()
 
 if(VELOX_ENABLE_ARROW)
   find_package(Thrift)
@@ -24,6 +27,35 @@ if(VELOX_ENABLE_ARROW)
   else()
     set(THRIFT_SOURCE "BUNDLED")
   endif()
+
+  # Use external arrow & parquet only if <package>_DIR is defined
+  if(Thrift_FOUND AND DEFINED Arrow_DIR AND DEFINED Parquet_DIR)
+    find_package(Arrow PATHS "${Arrow_DIR}" NO_DEFAULT_PATH)
+    find_package(Parquet PATHS "${Parquet_DIR}" NO_DEFAULT_PATH)
+    if(Arrow_FOUND AND Parquet_FOUND)
+      add_library(arrow INTERFACE)
+      add_library(parquet INTERFACE)
+      add_library(thrift INTERFACE)
+
+      if(TARGET Arrow::arrow_static)
+        target_link_libraries(arrow INTERFACE Arrow::arrow_static)
+      else()
+        target_link_libraries(arrow INTERFACE Arrow::arrow_shared)
+      endif()
+
+      if(TARGET Parquet::parquet_static)
+        target_link_libraries(parquet INTERFACE Parquet::parquet_static)
+      else()
+        target_link_libraries(parquet INTERFACE Parquet::parquet_shared)
+      endif()
+
+      target_link_libraries(thrift INTERFACE thrift::thrift)
+
+      message(STATUS "Using external arrow")
+      return()
+    endif()
+  endif()
+
   set(ARROW_PREFIX "${CMAKE_CURRENT_BINARY_DIR}/arrow_ep")
   set(ARROW_CMAKE_ARGS
       -DARROW_PARQUET=ON
@@ -38,7 +70,8 @@ if(VELOX_ENABLE_ARROW)
       -DCMAKE_INSTALL_PREFIX=${ARROW_PREFIX}/install
       -DCMAKE_BUILD_TYPE=${CMAKE_BUILD_TYPE}
       -DARROW_BUILD_STATIC=ON
-      -DThrift_SOURCE=${THRIFT_SOURCE})
+      -DThrift_SOURCE=BUNDLED
+      -Dre2_SOURCE=AUTO)
   set(ARROW_LIBDIR ${ARROW_PREFIX}/install/${CMAKE_INSTALL_LIBDIR})
 
   add_library(thrift STATIC IMPORTED GLOBAL)
@@ -58,11 +91,11 @@ if(VELOX_ENABLE_ARROW)
                                       ${THRIFT_INCLUDE_DIR})
   set_property(TARGET thrift PROPERTY IMPORTED_LOCATION ${THRIFT_LIB})
 
-  set(VELOX_ARROW_BUILD_VERSION 8.0.0)
+  set(VELOX_ARROW_BUILD_VERSION 11.0.0)
   set(VELOX_ARROW_BUILD_SHA256_CHECKSUM
-      ad9a05705117c989c116bae9ac70492fe015050e1b80fb0e38fde4b5d863aaa3)
+      4c720f943eeb00924081a2d06c5c6d9b743411cba0a1f82f661d37f5634badea)
   set(VELOX_ARROW_SOURCE_URL
-      "https://archive.apache.org/dist/arrow/arrow-${VELOX_ARROW_BUILD_VERSION}/apache-arrow-${VELOX_ARROW_BUILD_VERSION}.tar.gz"
+      "https://github.com/oap-project/arrow/archive/refs/tags/v${VELOX_ARROW_BUILD_VERSION}-gluten-1.0.0.tar.gz"
   )
 
   resolve_dependency_url(ARROW)
@@ -71,7 +104,6 @@ if(VELOX_ENABLE_ARROW)
     arrow_ep
     PREFIX ${ARROW_PREFIX}
     URL ${VELOX_ARROW_SOURCE_URL}
-    URL_HASH ${VELOX_ARROW_BUILD_SHA256_CHECKSUM}
     SOURCE_SUBDIR cpp
     CMAKE_ARGS ${ARROW_CMAKE_ARGS}
     BUILD_BYPRODUCTS ${ARROW_LIBDIR}/libarrow.a ${ARROW_LIBDIR}/libparquet.a
