@@ -22,6 +22,7 @@
 #include <folly/dynamic.h>
 
 #include "velox/common/base/CheckedArithmetic.h"
+#include "velox/dwio/common/IntCodecCommon.h"
 #include "velox/type/StringView.h"
 
 namespace date {
@@ -34,8 +35,20 @@ struct Timestamp {
  public:
   enum class Precision : int { kMilliseconds = 3, kNanoseconds = 9 };
   constexpr Timestamp() : seconds_(0), nanos_(0) {}
-  constexpr Timestamp(int64_t seconds, uint64_t nanos)
-      : seconds_(seconds), nanos_(nanos) {}
+  Timestamp(int64_t seconds, uint64_t nanos) {
+    VELOX_CHECK_GE(
+        seconds,
+        dwio::common::MIN_SECONDS,
+        "Expect seconds >= {} in Timestamp",
+        dwio::common::MIN_SECONDS);
+    VELOX_CHECK_LE(
+        nanos,
+        dwio::common::MAX_NANOS,
+        "Expect nanos <= {} in Timestamp",
+        dwio::common::MAX_NANOS);
+    seconds_ = seconds;
+    nanos_ = nanos;
+  }
 
   // Returns the current unix timestamp (ms precision).
   static Timestamp now();

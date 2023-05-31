@@ -244,16 +244,16 @@ TEST_F(HivePartitionFunctionTest, timestamp) {
       {std::nullopt,
        Timestamp(100'000, 900'000),
        Timestamp(
-           std::numeric_limits<int64_t>::min(),
+           dwio::common::MIN_SECONDS,
            std::numeric_limits<uint64_t>::min()),
        Timestamp(
            std::numeric_limits<int64_t>::max(),
-           std::numeric_limits<uint64_t>::max())});
+           dwio::common::MAX_NANOS)});
 
   assertPartitions(values, 1, {0, 0, 0, 0});
   assertPartitions(values, 2, {0, 0, 0, 0});
-  assertPartitions(values, 500, {0, 284, 0, 0});
-  assertPartitions(values, 997, {0, 514, 0, 0});
+  assertPartitions(values, 500, {0, 284, 123, 324});
+  assertPartitions(values, 997, {0, 514, 818, 713});
 
   assertPartitionsWithConstChannel(values, 1);
   assertPartitionsWithConstChannel(values, 2);

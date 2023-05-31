@@ -137,5 +137,25 @@ TEST(TimestampTest, now) {
   EXPECT_GE(expectedEpochMs, now.toMillis());
 }
 
+TEST(TimestampTest, invalidInput) {
+  // Nanos invalid range.
+  VELOX_ASSERT_THROW(
+      Timestamp(1, std::numeric_limits<uint64_t>::max()),
+      fmt::format("Expect nanos <= {} in Timestamp", dwio::common::MAX_NANOS));
+  VELOX_ASSERT_THROW(
+      Timestamp(1, dwio::common::MAX_NANOS + 1),
+      fmt::format("Expect nanos <= {} in Timestamp", dwio::common::MAX_NANOS));
+
+  // Seconds invalid range.
+  VELOX_ASSERT_THROW(
+      Timestamp(std::numeric_limits<int64_t>::min(), 0),
+      fmt::format(
+          "Expect seconds >= {} in Timestamp", dwio::common::MIN_SECONDS));
+  VELOX_ASSERT_THROW(
+      Timestamp(dwio::common::MIN_SECONDS - 1, dwio::common::MAX_NANOS),
+      fmt::format(
+          "Expect seconds >= {} in Timestamp", dwio::common::MIN_SECONDS));
+}
+
 } // namespace
 } // namespace facebook::velox

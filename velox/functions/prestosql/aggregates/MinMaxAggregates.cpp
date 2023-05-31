@@ -33,13 +33,14 @@ struct MinMaxTrait : public std::numeric_limits<T> {};
 
 template <>
 struct MinMaxTrait<Timestamp> {
-  static constexpr Timestamp lowest() {
+  static Timestamp lowest() {
     return Timestamp(
-        MinMaxTrait<int64_t>::lowest(), MinMaxTrait<uint64_t>::lowest());
+        dwio::common::MIN_SECONDS, std::numeric_limits<uint64_t>::lowest());
   }
 
-  static constexpr Timestamp max() {
-    return Timestamp(MinMaxTrait<int64_t>::max(), MinMaxTrait<uint64_t>::max());
+  static Timestamp max() {
+    return Timestamp(
+        std::numeric_limits<int64_t>::max(), dwio::common::MAX_NANOS);
   }
 };
 
