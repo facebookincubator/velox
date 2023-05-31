@@ -18,7 +18,7 @@
 
 #include "velox/dwio/common/BufferedInput.h"
 
-DEFINE_bool(wsVRLoad, false, "Use WS VRead API to load");
+DEFINE_bool(wsVRLoad, true, "Use WS VRead API to load");
 
 namespace facebook::velox::dwio::common {
 
