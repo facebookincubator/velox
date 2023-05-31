@@ -153,7 +153,8 @@ void OrderBy::ensureInputFits(const RowVectorPtr& input) {
   }
 
   const auto currentUsage = pool()->currentBytes();
-  if (spillMemoryThreshold_ != 0 && currentUsage > spillMemoryThreshold_) {
+  if ((spillMemoryThreshold_ != 0 && currentUsage > spillMemoryThreshold_) ||
+      pool()->highUsage()) {
     const int64_t bytesToSpill =
         currentUsage * spillConfig.spillableReservationGrowthPct / 100;
     auto rowsToSpill = std::max<int64_t>(
@@ -266,7 +267,7 @@ void OrderBy::noMoreInput() {
     returningRows_.resize(numRows_);
     RowContainerIterator iter;
     data_->listRows(&iter, numRows_, returningRows_.data());
-    std::sort(
+    std::stable_sort(
         returningRows_.begin(),
         returningRows_.end(),
         [this](const char* leftRow, const char* rightRow) {

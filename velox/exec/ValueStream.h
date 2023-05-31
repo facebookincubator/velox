@@ -16,17 +16,14 @@
 #include "velox/core/PlanNode.h"
 #include "velox/exec/Operator.h"
 
-struct ArrowArrayStream;
 namespace facebook::velox::exec {
 
-class ArrowStream : public SourceOperator {
+class ValueStream : public SourceOperator {
  public:
-  ArrowStream(
+  ValueStream(
       int32_t operatorId,
       DriverCtx* driverCtx,
-      const std::shared_ptr<const core::ArrowStreamNode>& arrowStreamNode);
-
-  virtual ~ArrowStream();
+      std::shared_ptr<const core::ValueStreamNode> ValueStreamNode);
 
   RowVectorPtr getOutput() override;
 
@@ -36,14 +33,9 @@ class ArrowStream : public SourceOperator {
 
   bool isFinished() override;
 
-  void close() override;
-
  private:
-  /// Return last error in Arrow array stream.
-  const char* getError() const;
-
   bool finished_ = false;
-  std::shared_ptr<ArrowArrayStream> arrowStream_;
+  std::shared_ptr<RowVectorStream> valueStream_;
 };
 
 } // namespace facebook::velox::exec

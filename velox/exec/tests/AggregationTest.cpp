@@ -1395,6 +1395,102 @@ TEST_F(AggregationTest, groupingSets) {
       "SELECT k1, k2, count(1), sum(a), max(b) FROM tmp GROUP BY ROLLUP (k1, k2)");
 }
 
+TEST_F(AggregationTest, groupingSetsByExpand) {
+  vector_size_t size = 1'000;
+  auto data = makeRowVector(
+      {"k1", "k2", "a", "b"},
+      {
+          makeFlatVector<int64_t>(size, [](auto row) { return row % 11; }),
+          makeFlatVector<int64_t>(size, [](auto row) { return row % 17; }),
+          makeFlatVector<int64_t>(size, [](auto row) { return row; }),
+          makeFlatVector<StringView>(
+              size,
+              [](auto row) {
+                auto str = std::string(row % 12, 'x');
+                return StringView(str);
+              }),
+      });
+
+  createDuckDbTable({data});
+  // Compute a subset of aggregates per grouping set by using masks based on
+  // group_id column.
+  auto plan =
+      PlanBuilder()
+          .values({data})
+          .expand({{"k1", "", "a", "b", "0"}, {"", "k2", "a", "b", "1"}})
+          .project(
+              {"k1",
+               "k2",
+               "group_id_0",
+               "a",
+               "b",
+               "group_id_0 = 0 as mask_a",
+               "group_id_0 = 1 as mask_b"})
+          .singleAggregation(
+              {"k1", "k2", "group_id_0"},
+              {"count(1) as count_1", "sum(a) as sum_a", "max(b) as max_b"},
+              {"", "mask_a", "mask_b"})
+          .project({"k1", "k2", "count_1", "sum_a", "max_b"})
+          .planNode();
+
+  assertQuery(
+      plan,
+      "SELECT k1, null, count(1), sum(a), null FROM tmp GROUP BY k1 "
+      "UNION ALL "
+      "SELECT null, k2, count(1), null, max(b) FROM tmp GROUP BY k2");
+
+  // Cube.
+  plan = PlanBuilder()
+             .values({data})
+             .expand({
+                 {"k1", "k2", "a", "b", "0"},
+                 {"k1", "", "a", "b", "1"},
+                 {"", "k2", "a", "b", "2"},
+                 {"", "", "a", "b", "3"},
+             })
+             .singleAggregation(
+                 {"k1", "k2", "group_id_0"},
+                 {"count(1) as count_1", "sum(a) as sum_a", "max(b) as max_b"})
+             .project({"k1", "k2", "count_1", "sum_a", "max_b"})
+             .planNode();
+
+  assertQuery(
+      plan,
+      "SELECT k1, k2, count(1), sum(a), max(b) FROM tmp GROUP BY CUBE (k1, k2)");
+
+  // Rollup.
+  plan = PlanBuilder()
+             .values({data})
+             .expand(
+                 {{"k1", "k2", "a", "b", "0"},
+                  {"k1", "", "a", "b", "1"},
+                  {"", "", "a", "b", "2"}})
+             .singleAggregation(
+                 {"k1", "k2", "group_id_0"},
+                 {"count(1) as count_1", "sum(a) as sum_a", "max(b) as max_b"})
+             .project({"k1", "k2", "count_1", "sum_a", "max_b"})
+             .planNode();
+
+  assertQuery(
+      plan,
+      "SELECT k1, k2, count(1), sum(a), max(b) FROM tmp GROUP BY ROLLUP (k1, k2)");
+  plan = PlanBuilder()
+             .values({data})
+             .expand(
+                 {{"k1", "", "a", "b", "0", "0"},
+                  {"k1", "", "a", "b", "0", "1"},
+                  {"", "k2", "a", "b", "1", "2"}})
+             .singleAggregation(
+                 {"k1", "k2", "group_id_0", "group_id_1"},
+                 {"count(1) as count_1", "sum(a) as sum_a", "max(b) as max_b"})
+             .project({"k1", "k2", "count_1", "sum_a", "max_b"})
+             .planNode();
+
+  assertQuery(
+      plan,
+      "SELECT k1, k2, count(1), sum(a), max(b) FROM tmp GROUP BY GROUPING SETS ((k1), (k1), (k2))");
+}
+
 TEST_F(AggregationTest, groupingSetsOutput) {
   vector_size_t size = 1'000;
   auto data = makeRowVector(

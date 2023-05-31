@@ -86,6 +86,9 @@ class Window : public Operator {
       const std::shared_ptr<const core::WindowNode>& windowNode,
       const RowTypePtr& inputType);
 
+  // Helper function to initialize range values map for k Range frames.
+  void initRangeValuesMap();
+
   // Helper function to create the buffers for peer and frame
   // row indices to send in window function apply invocations.
   void createPeerAndFrameBuffers();
@@ -109,6 +112,11 @@ class Window : public Operator {
   // Helper function to call WindowFunction::resetPartition() for
   // all WindowFunctions.
   void callResetPartition(vector_size_t partitionNumber);
+
+  // For k Range frames an auxiliary structure used to look up the index
+  // of frame values is required. This function computes that structure for
+  // each partition of rows.
+  void computeRangeValuesMap();
 
   // Helper method to call WindowFunction::apply to all the rows
   // of a partition between startRow and endRow. The outputs
@@ -148,6 +156,16 @@ class Window : public Operator {
       vector_size_t numRows,
       vector_size_t* rawFrameBounds);
 
+  template <TypeKind T>
+  void updateKRangeFrameBounds(
+      bool isKPreceding,
+      bool isStartBound,
+      const FrameChannelArg& frameArg,
+      vector_size_t numRows,
+      vector_size_t* rawFrameBounds,
+      const vector_size_t* rawPeerStarts,
+      const vector_size_t* rawPeerEnds);
+
   // Helper function to update frame bounds.
   void updateFrameBounds(
       const WindowFrame& windowFrame,
@@ -157,6 +175,23 @@ class Window : public Operator {
       const vector_size_t* rawPeerStarts,
       const vector_size_t* rawPeerEnds,
       vector_size_t* rawFrameBounds);
+
+  template <typename T>
+  vector_size_t kRangeStartBoundSearch(
+      const T value,
+      vector_size_t leftBound,
+      vector_size_t rightBound,
+      const FlatVectorPtr<T>& valuesVector,
+      const vector_size_t* rawPeerStarts);
+
+  template <typename T>
+  vector_size_t kRangeEndBoundSearch(
+      const T value,
+      vector_size_t leftBound,
+      vector_size_t rightBound,
+      vector_size_t lastRightBoundRow,
+      const FlatVectorPtr<T>& valuesVector,
+      const vector_size_t* rawPeerEnds);
 
   bool finished_ = false;
   const vector_size_t numInputColumns_;
@@ -242,6 +277,27 @@ class Window : public Operator {
   // output values.
   // There is one SelectivityVector per window function.
   std::vector<SelectivityVector> validFrames_;
+
+  // When computing k Range frames, the range value for the frame index needs
+  // to be mapped to the partition row for the value.
+  // This is an auxiliary structure to materialize a mapping from
+  // range value -> row index (in RowContainer) for that purpose.
+  // It uses a vector of the ordered range values and another vector of the
+  // corresponding row indices. Ideally a binary search
+  // tree or B-tree index (especially if the data is spilled to disk) should be
+  // used.
+  struct RangeValuesMap {
+    TypePtr rangeType;
+    // The range values appear in sorted order in this vector.
+    VectorPtr rangeValues;
+    // TODO (Make this a BufferPtr so that it can be allocated in the
+    // MemoryPool) ?
+    std::vector<vector_size_t> rowIndices;
+  };
+  RangeValuesMap rangeValuesMap_;
+
+  // The above mapping is built only if required for k range frames.
+  bool hasKRangeFrames_;
 
   // Number of rows output from the WindowOperator so far. The rows
   // are output in the same order of the pointers in sortedRows. This
