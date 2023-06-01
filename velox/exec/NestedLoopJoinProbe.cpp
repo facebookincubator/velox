@@ -278,14 +278,14 @@ void NestedLoopJoinProbe::beginBuildMismatch() {
 
   std::vector<ContinuePromise> promises;
   std::vector<std::shared_ptr<Driver>> peers;
-  ContinueFuture future{ContinueFuture::makeEmpty()};
   if (!operatorCtx_->task()->allPeersFinished(
-          planNodeId(), operatorCtx_->driver(), &future, promises, peers)) {
+          planNodeId(), operatorCtx_->driver(), nullptr, promises, peers)) {
     setState(ProbeOperatorState::kFinish);
     return;
   }
 
   lastProbe_ = true;
+  VELOX_CHECK(promises.empty());
   // From now on, buildIndex_ is used to indexing into buildMismatched_
   VELOX_CHECK_EQ(buildIndex_, 0);
   for (auto& peer : peers) {
@@ -299,9 +299,6 @@ void NestedLoopJoinProbe::beginBuildMismatch() {
   peers.clear();
   for (auto i = 0; i < buildMatched_.size(); ++i) {
     buildMatched_[i].updateBounds();
-  }
-  for (auto& promise : promises) {
-    promise.setValue();
   }
 }
 
