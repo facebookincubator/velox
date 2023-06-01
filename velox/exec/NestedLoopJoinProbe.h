@@ -47,8 +47,8 @@ class NestedLoopJoinProbe : public Operator {
   void close() override;
 
  private:
-  // TODO: maybe consolidate initializeFilter routine across Operators like
-  // HashProbe and MergeJoin
+  // TODO: maybe consolidate initializeFilter routine across operators like
+  // HashProbe and MergeJoin.
   void initializeFilter(
       const core::TypedExprPtr& filter,
       const RowTypePtr& leftType,
@@ -94,7 +94,7 @@ class NestedLoopJoinProbe : public Operator {
   // the reusable buffer to record the mismatched row numbers for output
   // projections.
   RowVectorPtr getMismatchedOutput(
-      RowVectorPtr data,
+      const RowVectorPtr& data,
       const SelectivityVector& matched,
       BufferPtr& unmatchedMapping,
       const std::vector<IdentityProjection>& projections,
@@ -102,11 +102,10 @@ class NestedLoopJoinProbe : public Operator {
 
   void finishProbeInput();
 
-  // When doing right/full joins, all but last probe operators that finished
-  // matching and probe-side mismatch output, will block on kWaitForPeers state.
-  // The last finishing operator will gather buildMatched from all probe
-  // operators to emit output for mismatched build side rows, and notify other
-  // probe operators to finish.
+  // When doing right/full joins, all but the last probe operators that finished
+  // matching and probe-side mismatch output, will turn into kFinish state.
+  // The last finishing operator will gather buildMatched from all the other
+  // probe operators to emit output for mismatched build side rows.
   void beginBuildMismatch();
 
   bool processingBuildMismatch() const {
@@ -114,6 +113,7 @@ class NestedLoopJoinProbe : public Operator {
         noMoreInput_;
   }
 
+  // TODO: Add state transition check.
   void setState(ProbeOperatorState state) {
     state_ = state;
   }

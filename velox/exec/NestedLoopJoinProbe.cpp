@@ -127,7 +127,6 @@ RowVectorPtr NestedLoopJoinProbe::getOutput() {
   while (output == nullptr) {
     if (lastProbe_) {
       VELOX_CHECK(processingBuildMismatch());
-      VELOX_CHECK_NULL(input_);
 
       while (output == nullptr && !hasProbedAllBuildData()) {
         output = getMismatchedOutput(
@@ -218,7 +217,7 @@ void NestedLoopJoinProbe::initializeFilter(
 }
 
 RowVectorPtr NestedLoopJoinProbe::getMismatchedOutput(
-    RowVectorPtr data,
+    const RowVectorPtr& data,
     const SelectivityVector& matched,
     BufferPtr& unmatchedMapping,
     const std::vector<IdentityProjection>& projections,
@@ -254,7 +253,7 @@ void NestedLoopJoinProbe::finishProbeInput() {
   if (!noMoreInput_) {
     return;
   }
-  if (!needsBuildMismatch(joinType_)) {
+  if (!needsBuildMismatch(joinType_) || buildSideEmpty_) {
     setState(ProbeOperatorState::kFinish);
     return;
   }
@@ -289,7 +288,7 @@ void NestedLoopJoinProbe::beginBuildMismatch() {
   // From now on, buildIndex_ is used to indexing into buildMismatched_
   VELOX_CHECK_EQ(buildIndex_, 0);
   for (auto& peer : peers) {
-    auto op = peer->findOperator(planNodeId());
+    auto* op = peer->findOperator(planNodeId());
     auto* probe = dynamic_cast<NestedLoopJoinProbe*>(op);
     VELOX_CHECK_NOT_NULL(probe);
     for (auto i = 0; i < buildMatched_.size(); ++i) {
@@ -297,8 +296,8 @@ void NestedLoopJoinProbe::beginBuildMismatch() {
     }
   }
   peers.clear();
-  for (auto i = 0; i < buildMatched_.size(); ++i) {
-    buildMatched_[i].updateBounds();
+  for (auto& matched : buildMatched_) {
+    matched.updateBounds();
   }
 }
 
@@ -316,8 +315,6 @@ bool NestedLoopJoinProbe::getBuildData(ContinueFuture* future) {
 
   buildVectors_ = std::move(buildData);
   if (buildVectors_->empty()) {
-    // Build side is empty. Returns empty set of rows and  terminates the
-    // pipeline early.
     buildSideEmpty_ = true;
   }
   return true;

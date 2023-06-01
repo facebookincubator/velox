@@ -45,15 +45,15 @@ class NestedLoopJoinTest : public HiveConnectorTestBase {
     queryStr_ = "SELECT t0, u0 FROM t {} JOIN u ON t.t0 {} u.u0";
   }
 
-  void setProbeType(RowTypePtr probeType) {
+  void setProbeType(const RowTypePtr& probeType) {
     probeType_ = probeType;
   }
 
-  void setBuildType(RowTypePtr buildType) {
+  void setBuildType(const RowTypePtr& buildType) {
     buildType_ = buildType;
   }
 
-  void setComparisons(std::vector<std::string>&& comparisons) {
+  void setComparisons(std::vector<std::string> comparisons) {
     comparisons_ = std::move(comparisons);
   }
 
@@ -95,7 +95,7 @@ class NestedLoopJoinTest : public HiveConnectorTestBase {
     params.maxDrivers = numDrivers;
     auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
 
-    for (auto joinType : joinTypes_) {
+    for (const auto joinType : joinTypes_) {
       for (const auto& comparison : comparisons_) {
         SCOPED_TRACE(fmt::format(
             "maxDrivers:{} joinType:{} comparison:{}",

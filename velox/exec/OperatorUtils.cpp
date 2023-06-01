@@ -397,8 +397,8 @@ folly::Range<vector_size_t*> initializeRowNumberMapping(
 }
 
 void projectChildren(
-    RowVectorPtr dest,
-    RowVectorPtr src,
+    const RowVectorPtr& dest,
+    const RowVectorPtr& src,
     const std::vector<IdentityProjection>& projections,
     int32_t size,
     const BufferPtr& mapping) {

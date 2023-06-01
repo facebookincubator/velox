@@ -20,8 +20,6 @@
 #include "velox/exec/tests/utils/OperatorTestBase.h"
 #include "velox/vector/fuzzer/VectorFuzzer.h"
 
-#include <iostream>
-
 using namespace facebook::velox;
 using namespace facebook::velox::test;
 using namespace facebook::velox::exec;
