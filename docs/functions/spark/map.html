@@ -60,12 +60,14 @@
 </dd></dl>
 
 <dl class="spark function">
-<dt class="sig sig-object spark" id="id0">
-<span class="sig-name descname"><span class="pre">map</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">array(K)</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">array(V))</span> <span class="pre">-&gt;</span> <span class="pre">map(K</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">V</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#id0" title="Permalink to this definition">¶</a></dt>
-<dd><p>Returns a map created using the given key/value arrays. Duplicate map key will cause exception.</p>
+<dt class="sig sig-object spark">
+<span class="sig-name descname"><span class="pre">map</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">array(K)</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">array(V))</span> <span class="pre">-&gt;</span> <span class="pre">map(K</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">V</span></span></em><span class="sig-paren">)</span></dt>
+<dd><blockquote>
+<div><p>Returns a map created using the given key/value arrays. Duplicate map key will cause exception.</p>
 <div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">SELECT</span> <span class="nb">map</span><span class="p">(</span><span class="n">ARRAY</span><span class="p">[</span><span class="mi">1</span><span class="p">,</span><span class="mi">3</span><span class="p">],</span> <span class="n">ARRAY</span><span class="p">[</span><span class="mi">2</span><span class="p">,</span><span class="mi">4</span><span class="p">]);</span> <span class="o">--</span> <span class="p">{</span><span class="mi">1</span> <span class="o">-&gt;</span> <span class="mi">2</span><span class="p">,</span> <span class="mi">3</span> <span class="o">-&gt;</span> <span class="mi">4</span><span class="p">}</span>
 </pre></div>
 </div>
+</div></blockquote>
 </dd></dl>
 
 <dl class="spark function">
@@ -88,11 +90,13 @@ If key size != value size will throw exception that key and value must have the 
 </dd></dl>
 
 <dl class="spark function">
-<dt class="sig sig-object spark" id="size">
-<span class="sig-name descname"><span class="pre">size</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">map(K</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">V)</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">bigint</span></span></span><a class="headerlink" href="#size" title="Permalink to this definition">¶</a></dt>
-<dd><p>Returns the size of the input map. Returns null for null input
+<dt class="sig sig-object spark">
+<span class="sig-name descname"><span class="pre">size</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">map(K</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">V)</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">bigint</span></span></span></dt>
+<dd><blockquote>
+<div><p>Returns the size of the input map. Returns null for null input
 if <a class="reference internal" href="../../configs.html"><span class="doc">spark.legacy_size_of_null</span></a> is set to false.
 Otherwise, returns -1 for null input.</p>
+</div></blockquote>
 </dd></dl>
 
 </section>

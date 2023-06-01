@@ -37,9 +37,13 @@
 div.body {max-width: 1300px;}
 table.coverage th {background-color: lightblue; text-align: center;}
 table.coverage td:nth-child(6) {background-color: lightblue;}
+table.coverage td:nth-child(8) {background-color: lightblue;}
 table.coverage tr:nth-child(1) td:nth-child(1) {background-color: #6BA81E;}
+table.coverage tr:nth-child(3) td:nth-child(1) {background-color: #6BA81E;}
 table.coverage tr:nth-child(5) td:nth-child(1) {background-color: #6BA81E;}
 table.coverage tr:nth-child(6) td:nth-child(3) {background-color: #6BA81E;}
+table.coverage tr:nth-child(7) td:nth-child(9) {background-color: #6BA81E;}
+table.coverage tr:nth-child(8) td:nth-child(7) {background-color: #6BA81E;}
 table.coverage tr:nth-child(9) td:nth-child(3) {background-color: #6BA81E;}
 table.coverage tr:nth-child(10) td:nth-child(1) {background-color: #6BA81E;}
 table.coverage tr:nth-child(10) td:nth-child(3) {background-color: #6BA81E;}
@@ -48,23 +52,31 @@ table.coverage tr:nth-child(11) td:nth-child(4) {background-color: #6BA81E;}
 table.coverage tr:nth-child(11) td:nth-child(5) {background-color: #6BA81E;}
 table.coverage tr:nth-child(14) td:nth-child(1) {background-color: #6BA81E;}
 table.coverage tr:nth-child(17) td:nth-child(4) {background-color: #6BA81E;}
+table.coverage tr:nth-child(20) td:nth-child(7) {background-color: #6BA81E;}
 table.coverage tr:nth-child(21) td:nth-child(1) {background-color: #6BA81E;}
 table.coverage tr:nth-child(22) td:nth-child(3) {background-color: #6BA81E;}
 table.coverage tr:nth-child(22) td:nth-child(4) {background-color: #6BA81E;}
 table.coverage tr:nth-child(24) td:nth-child(3) {background-color: #6BA81E;}
 table.coverage tr:nth-child(25) td:nth-child(1) {background-color: #6BA81E;}
+table.coverage tr:nth-child(25) td:nth-child(5) {background-color: #6BA81E;}
 table.coverage tr:nth-child(26) td:nth-child(7) {background-color: #6BA81E;}
+table.coverage tr:nth-child(27) td:nth-child(1) {background-color: #6BA81E;}
 table.coverage tr:nth-child(27) td:nth-child(5) {background-color: #6BA81E;}
 table.coverage tr:nth-child(29) td:nth-child(4) {background-color: #6BA81E;}
+table.coverage tr:nth-child(31) td:nth-child(1) {background-color: #6BA81E;}
+table.coverage tr:nth-child(31) td:nth-child(5) {background-color: #6BA81E;}
 table.coverage tr:nth-child(32) td:nth-child(2) {background-color: #6BA81E;}
 table.coverage tr:nth-child(33) td:nth-child(3) {background-color: #6BA81E;}
 table.coverage tr:nth-child(34) td:nth-child(1) {background-color: #6BA81E;}
 table.coverage tr:nth-child(34) td:nth-child(4) {background-color: #6BA81E;}
+table.coverage tr:nth-child(35) td:nth-child(3) {background-color: #6BA81E;}
 table.coverage tr:nth-child(37) td:nth-child(2) {background-color: #6BA81E;}
 table.coverage tr:nth-child(38) td:nth-child(4) {background-color: #6BA81E;}
 table.coverage tr:nth-child(39) td:nth-child(4) {background-color: #6BA81E;}
 table.coverage tr:nth-child(41) td:nth-child(3) {background-color: #6BA81E;}
+table.coverage tr:nth-child(42) td:nth-child(4) {background-color: #6BA81E;}
 table.coverage tr:nth-child(43) td:nth-child(2) {background-color: #6BA81E;}
+table.coverage tr:nth-child(43) td:nth-child(5) {background-color: #6BA81E;}
 table.coverage tr:nth-child(44) td:nth-child(3) {background-color: #6BA81E;}
 table.coverage tr:nth-child(44) td:nth-child(5) {background-color: #6BA81E;}
 table.coverage tr:nth-child(45) td:nth-child(3) {background-color: #6BA81E;}
@@ -92,6 +104,8 @@ table.coverage tr:nth-child(69) td:nth-child(4) {background-color: #6BA81E;}
 <tr class="row-odd"><th class="head" colspan="5"><p>Scalar Functions</p></th>
 <th class="head"></th>
 <th class="head"><p>Aggregate Functions</p></th>
+<th class="head"></th>
+<th class="head"><p>Window Functions</p></th>
 </tr>
 </thead>
 <tbody>
@@ -102,6 +116,8 @@ table.coverage tr:nth-child(69) td:nth-child(4) {background-color: #6BA81E;}
 <td><p>sqrt</p></td>
 <td></td>
 <td><p>any</p></td>
+<td></td>
+<td><p>cume_dist</p></td>
 </tr>
 <tr class="row-odd"><td><p>acos</p></td>
 <td><p>count_min_sketch</p></td>
@@ -110,14 +126,18 @@ table.coverage tr:nth-child(69) td:nth-child(4) {background-color: #6BA81E;}
 <td><p>stack</p></td>
 <td></td>
 <td><p>approx_count_distinct</p></td>
+<td></td>
+<td><p>dense_rank</p></td>
 </tr>
-<tr class="row-even"><td><p>acosh</p></td>
+<tr class="row-even"><td><p><a class="reference internal" href="math.html#acosh" title="acosh"><code class="xref spark spark-func docutils literal notranslate"><span class="pre">acosh()</span></code></a></p></td>
 <td><p>covar_pop</p></td>
 <td><p>input_file_block_length</p></td>
 <td><p>octet_length</p></td>
 <td><p>std</p></td>
 <td></td>
 <td><p>approx_percentile</p></td>
+<td></td>
+<td><p>first_value</p></td>
 </tr>
 <tr class="row-odd"><td><p>add_months</p></td>
 <td><p>covar_samp</p></td>
@@ -126,6 +146,8 @@ table.coverage tr:nth-child(69) td:nth-child(4) {background-color: #6BA81E;}
 <td><p>stddev</p></td>
 <td></td>
 <td><p>array_agg</p></td>
+<td></td>
+<td><p>lag</p></td>
 </tr>
 <tr class="row-even"><td><p><a class="reference internal" href="array.html#aggregate" title="aggregate"><code class="xref spark spark-func docutils literal notranslate"><span class="pre">aggregate()</span></code></a></p></td>
 <td><p>crc32</p></td>
@@ -134,6 +156,8 @@ table.coverage tr:nth-child(69) td:nth-child(4) {background-color: #6BA81E;}
 <td><p>stddev_pop</p></td>
 <td></td>
 <td><p>avg</p></td>
+<td></td>
+<td><p>last_value</p></td>
 </tr>
 <tr class="row-odd"><td><p>and</p></td>
 <td><p>cume_dist</p></td>
@@ -142,6 +166,8 @@ table.coverage tr:nth-child(69) td:nth-child(4) {background-color: #6BA81E;}
 <td><p>stddev_samp</p></td>
 <td></td>
 <td><p>bit_and</p></td>
+<td></td>
+<td><p>lead</p></td>
 </tr>
 <tr class="row-even"><td><p>any</p></td>
 <td><p>current_catalog</p></td>
@@ -150,6 +176,8 @@ table.coverage tr:nth-child(69) td:nth-child(4) {background-color: #6BA81E;}
 <td><p>str_to_map</p></td>
 <td></td>
 <td><p>bit_or</p></td>
+<td></td>
+<td><p><code class="xref spark spark-func docutils literal notranslate"><span class="pre">nth_value()</span></code></p></td>
 </tr>
 <tr class="row-odd"><td><p>approx_count_distinct</p></td>
 <td><p>current_database</p></td>
@@ -157,7 +185,9 @@ table.coverage tr:nth-child(69) td:nth-child(4) {background-color: #6BA81E;}
 <td><p>percentile</p></td>
 <td><p>string</p></td>
 <td></td>
-<td><p>bit_xor</p></td>
+<td><p><a class="reference internal" href="aggregate.html#bit_xor" title="bit_xor"><code class="xref spark spark-func docutils literal notranslate"><span class="pre">bit_xor()</span></code></a></p></td>
+<td></td>
+<td><p>ntile</p></td>
 </tr>
 <tr class="row-even"><td><p>approx_percentile</p></td>
 <td><p>current_date</p></td>
@@ -166,6 +196,8 @@ table.coverage tr:nth-child(69) td:nth-child(4) {background-color: #6BA81E;}
 <td><p>struct</p></td>
 <td></td>
 <td><p>bool_and</p></td>
+<td></td>
+<td><p>percent_rank</p></td>
 </tr>
 <tr class="row-odd"><td><p><a class="reference internal" href="array.html#array" title="array"><code class="xref spark spark-func docutils literal notranslate"><span class="pre">array()</span></code></a></p></td>
 <td><p>current_timestamp</p></td>
@@ -174,14 +206,18 @@ table.coverage tr:nth-child(69) td:nth-child(4) {background-color: #6BA81E;}
 <td><p>substr</p></td>
 <td></td>
 <td><p>bool_or</p></td>
+<td></td>
+<td><p>rank</p></td>
 </tr>
 <tr class="row-even"><td><p><a class="reference internal" href="array.html#array_contains" title="array_contains"><code class="xref spark spark-func docutils literal notranslate"><span class="pre">array_contains()</span></code></a></p></td>
 <td><p>current_timezone</p></td>
 <td><p>java_method</p></td>
 <td><p><a class="reference internal" href="math.html#pmod" title="pmod"><code class="xref spark spark-func docutils literal notranslate"><span class="pre">pmod()</span></code></a></p></td>
-<td><p><a class="reference internal" href="string.html#id3" title="substring"><code class="xref spark spark-func docutils literal notranslate"><span class="pre">substring()</span></code></a></p></td>
+<td><p><a class="reference internal" href="string.html#substring" title="substring"><code class="xref spark spark-func docutils literal notranslate"><span class="pre">substring()</span></code></a></p></td>
 <td></td>
 <td><p>collect_list</p></td>
+<td></td>
+<td><p>row_number</p></td>
 </tr>
 <tr class="row-odd"><td><p>array_distinct</p></td>
 <td><p>current_user</p></td>
@@ -190,6 +226,8 @@ table.coverage tr:nth-child(69) td:nth-child(4) {background-color: #6BA81E;}
 <td><p>substring_index</p></td>
 <td></td>
 <td><p>collect_set</p></td>
+<td></td>
+<td></td>
 </tr>
 <tr class="row-even"><td><p>array_except</p></td>
 <td><p>date</p></td>
@@ -198,6 +236,8 @@ table.coverage tr:nth-child(69) td:nth-child(4) {background-color: #6BA81E;}
 <td><p>sum</p></td>
 <td></td>
 <td><p>corr</p></td>
+<td></td>
+<td></td>
 </tr>
 <tr class="row-odd"><td><p><a class="reference internal" href="array.html#array_intersect" title="array_intersect"><code class="xref spark spark-func docutils literal notranslate"><span class="pre">array_intersect()</span></code></a></p></td>
 <td><p>date_add</p></td>
@@ -206,6 +246,8 @@ table.coverage tr:nth-child(69) td:nth-child(4) {background-color: #6BA81E;}
 <td><p>tan</p></td>
 <td></td>
 <td><p>count</p></td>
+<td></td>
+<td></td>
 </tr>
 <tr class="row-even"><td><p>array_join</p></td>
 <td><p>date_format</p></td>
@@ -214,6 +256,8 @@ table.coverage tr:nth-child(69) td:nth-child(4) {background-color: #6BA81E;}
 <td><p>tanh</p></td>
 <td></td>
 <td><p>count_if</p></td>
+<td></td>
+<td></td>
 </tr>
 <tr class="row-odd"><td><p>array_max</p></td>
 <td><p>date_from_unix_date</p></td>
@@ -222,6 +266,8 @@ table.coverage tr:nth-child(69) td:nth-child(4) {background-color: #6BA81E;}
 <td><p>timestamp</p></td>
 <td></td>
 <td><p>count_min_sketch</p></td>
+<td></td>
+<td></td>
 </tr>
 <tr class="row-even"><td><p>array_min</p></td>
 <td><p>date_part</p></td>
@@ -230,6 +276,8 @@ table.coverage tr:nth-child(69) td:nth-child(4) {background-color: #6BA81E;}
 <td><p>timestamp_micros</p></td>
 <td></td>
 <td><p>covar_pop</p></td>
+<td></td>
+<td></td>
 </tr>
 <tr class="row-odd"><td><p>array_position</p></td>
 <td><p>date_sub</p></td>
@@ -238,6 +286,8 @@ table.coverage tr:nth-child(69) td:nth-child(4) {background-color: #6BA81E;}
 <td><p>timestamp_millis</p></td>
 <td></td>
 <td><p>covar_samp</p></td>
+<td></td>
+<td></td>
 </tr>
 <tr class="row-even"><td><p>array_remove</p></td>
 <td><p>date_trunc</p></td>
@@ -246,6 +296,8 @@ table.coverage tr:nth-child(69) td:nth-child(4) {background-color: #6BA81E;}
 <td><p>timestamp_seconds</p></td>
 <td></td>
 <td><p>every</p></td>
+<td></td>
+<td></td>
 </tr>
 <tr class="row-odd"><td><p>array_repeat</p></td>
 <td><p>datediff</p></td>
@@ -253,7 +305,9 @@ table.coverage tr:nth-child(69) td:nth-child(4) {background-color: #6BA81E;}
 <td><p>radians</p></td>
 <td><p>tinyint</p></td>
 <td></td>
-<td><p>first</p></td>
+<td><p><a class="reference internal" href="aggregate.html#first" title="first"><code class="xref spark spark-func docutils literal notranslate"><span class="pre">first()</span></code></a></p></td>
+<td></td>
+<td></td>
 </tr>
 <tr class="row-even"><td><p><a class="reference internal" href="array.html#array_sort" title="array_sort"><code class="xref spark spark-func docutils literal notranslate"><span class="pre">array_sort()</span></code></a></p></td>
 <td><p>day</p></td>
@@ -262,6 +316,8 @@ table.coverage tr:nth-child(69) td:nth-child(4) {background-color: #6BA81E;}
 <td><p>to_csv</p></td>
 <td></td>
 <td><p>first_value</p></td>
+<td></td>
+<td></td>
 </tr>
 <tr class="row-odd"><td><p>array_union</p></td>
 <td><p>dayofmonth</p></td>
@@ -270,6 +326,8 @@ table.coverage tr:nth-child(69) td:nth-child(4) {background-color: #6BA81E;}
 <td><p>to_date</p></td>
 <td></td>
 <td><p>grouping</p></td>
+<td></td>
+<td></td>
 </tr>
 <tr class="row-even"><td><p>arrays_overlap</p></td>
 <td><p>dayofweek</p></td>
@@ -278,6 +336,8 @@ table.coverage tr:nth-child(69) td:nth-child(4) {background-color: #6BA81E;}
 <td><p>to_json</p></td>
 <td></td>
 <td><p>grouping_id</p></td>
+<td></td>
+<td></td>
 </tr>
 <tr class="row-odd"><td><p>arrays_zip</p></td>
 <td><p>dayofyear</p></td>
@@ -286,14 +346,18 @@ table.coverage tr:nth-child(69) td:nth-child(4) {background-color: #6BA81E;}
 <td><p>to_timestamp</p></td>
 <td></td>
 <td><p>histogram_numeric</p></td>
+<td></td>
+<td></td>
 </tr>
 <tr class="row-even"><td><p><a class="reference internal" href="string.html#ascii" title="ascii"><code class="xref spark spark-func docutils literal notranslate"><span class="pre">ascii()</span></code></a></p></td>
 <td><p>decimal</p></td>
 <td><p>levenshtein</p></td>
 <td><p>range</p></td>
-<td><p>to_unix_timestamp</p></td>
+<td><p><a class="reference internal" href="datetime.html#to_unix_timestamp" title="to_unix_timestamp"><code class="xref spark spark-func docutils literal notranslate"><span class="pre">to_unix_timestamp()</span></code></a></p></td>
 <td></td>
 <td><p>kurtosis</p></td>
+<td></td>
+<td></td>
 </tr>
 <tr class="row-odd"><td><p>asin</p></td>
 <td><p>decode</p></td>
@@ -302,14 +366,18 @@ table.coverage tr:nth-child(69) td:nth-child(4) {background-color: #6BA81E;}
 <td><p>to_utc_timestamp</p></td>
 <td></td>
 <td><p><a class="reference internal" href="aggregate.html#last" title="last"><code class="xref spark spark-func docutils literal notranslate"><span class="pre">last()</span></code></a></p></td>
+<td></td>
+<td></td>
 </tr>
-<tr class="row-even"><td><p>asinh</p></td>
+<tr class="row-even"><td><p><a class="reference internal" href="math.html#asinh" title="asinh"><code class="xref spark spark-func docutils literal notranslate"><span class="pre">asinh()</span></code></a></p></td>
 <td><p>degrees</p></td>
 <td><p>ln</p></td>
 <td><p>reflect</p></td>
 <td><p><a class="reference internal" href="array.html#transform" title="transform"><code class="xref spark spark-func docutils literal notranslate"><span class="pre">transform()</span></code></a></p></td>
 <td></td>
 <td><p>last_value</p></td>
+<td></td>
+<td></td>
 </tr>
 <tr class="row-odd"><td><p>assert_true</p></td>
 <td><p>dense_rank</p></td>
@@ -318,14 +386,18 @@ table.coverage tr:nth-child(69) td:nth-child(4) {background-color: #6BA81E;}
 <td><p>transform_keys</p></td>
 <td></td>
 <td><p>max</p></td>
+<td></td>
+<td></td>
 </tr>
 <tr class="row-even"><td><p>atan</p></td>
 <td><p>div</p></td>
 <td><p>log</p></td>
-<td><p><a class="reference internal" href="regexp.html#id0" title="regexp_extract"><code class="xref spark spark-func docutils literal notranslate"><span class="pre">regexp_extract()</span></code></a></p></td>
+<td><p><a class="reference internal" href="regexp.html#regexp_extract" title="regexp_extract"><code class="xref spark spark-func docutils literal notranslate"><span class="pre">regexp_extract()</span></code></a></p></td>
 <td><p>transform_values</p></td>
 <td></td>
 <td><p>max_by</p></td>
+<td></td>
+<td></td>
 </tr>
 <tr class="row-odd"><td><p>atan2</p></td>
 <td><p>double</p></td>
@@ -334,14 +406,18 @@ table.coverage tr:nth-child(69) td:nth-child(4) {background-color: #6BA81E;}
 <td><p>translate</p></td>
 <td></td>
 <td><p>mean</p></td>
+<td></td>
+<td></td>
 </tr>
-<tr class="row-even"><td><p>atanh</p></td>
+<tr class="row-even"><td><p><a class="reference internal" href="math.html#atanh" title="atanh"><code class="xref spark spark-func docutils literal notranslate"><span class="pre">atanh()</span></code></a></p></td>
 <td><p>e</p></td>
 <td><p>log1p</p></td>
 <td><p>regexp_like</p></td>
-<td><p>trim</p></td>
+<td><p><a class="reference internal" href="string.html#trim" title="trim"><code class="xref spark spark-func docutils literal notranslate"><span class="pre">trim()</span></code></a></p></td>
 <td></td>
 <td><p>min</p></td>
+<td></td>
+<td></td>
 </tr>
 <tr class="row-odd"><td><p>avg</p></td>
 <td><p><a class="reference internal" href="map.html#element_at" title="element_at"><code class="xref spark spark-func docutils literal notranslate"><span class="pre">element_at()</span></code></a></p></td>
@@ -350,6 +426,8 @@ table.coverage tr:nth-child(69) td:nth-child(4) {background-color: #6BA81E;}
 <td><p>trunc</p></td>
 <td></td>
 <td><p>min_by</p></td>
+<td></td>
+<td></td>
 </tr>
 <tr class="row-even"><td><p>base64</p></td>
 <td><p>elt</p></td>
@@ -358,6 +436,8 @@ table.coverage tr:nth-child(69) td:nth-child(4) {background-color: #6BA81E;}
 <td><p>try_add</p></td>
 <td></td>
 <td><p>percentile</p></td>
+<td></td>
+<td></td>
 </tr>
 <tr class="row-odd"><td><p><a class="reference internal" href="comparison.html#between" title="between"><code class="xref spark spark-func docutils literal notranslate"><span class="pre">between()</span></code></a></p></td>
 <td><p>encode</p></td>
@@ -366,14 +446,18 @@ table.coverage tr:nth-child(69) td:nth-child(4) {background-color: #6BA81E;}
 <td><p>try_divide</p></td>
 <td></td>
 <td><p>percentile_approx</p></td>
+<td></td>
+<td></td>
 </tr>
 <tr class="row-even"><td><p>bigint</p></td>
 <td><p>every</p></td>
-<td><p>ltrim</p></td>
+<td><p><a class="reference internal" href="string.html#ltrim" title="ltrim"><code class="xref spark spark-func docutils literal notranslate"><span class="pre">ltrim()</span></code></a></p></td>
 <td><p>reverse</p></td>
 <td><p>typeof</p></td>
 <td></td>
 <td><p>regr_avgx</p></td>
+<td></td>
+<td></td>
 </tr>
 <tr class="row-odd"><td><p>bin</p></td>
 <td><p>exists</p></td>
@@ -382,6 +466,8 @@ table.coverage tr:nth-child(69) td:nth-child(4) {background-color: #6BA81E;}
 <td><p>ucase</p></td>
 <td></td>
 <td><p>regr_avgy</p></td>
+<td></td>
+<td></td>
 </tr>
 <tr class="row-even"><td><p>binary</p></td>
 <td><p><a class="reference internal" href="math.html#exp" title="exp"><code class="xref spark spark-func docutils literal notranslate"><span class="pre">exp()</span></code></a></p></td>
@@ -390,6 +476,8 @@ table.coverage tr:nth-child(69) td:nth-child(4) {background-color: #6BA81E;}
 <td><p>unbase64</p></td>
 <td></td>
 <td><p>regr_count</p></td>
+<td></td>
+<td></td>
 </tr>
 <tr class="row-odd"><td><p>bit_and</p></td>
 <td><p>explode</p></td>
@@ -398,6 +486,8 @@ table.coverage tr:nth-child(69) td:nth-child(4) {background-color: #6BA81E;}
 <td><p>unhex</p></td>
 <td></td>
 <td><p>regr_r2</p></td>
+<td></td>
+<td></td>
 </tr>
 <tr class="row-even"><td><p>bit_count</p></td>
 <td><p>explode_outer</p></td>
@@ -406,6 +496,8 @@ table.coverage tr:nth-child(69) td:nth-child(4) {background-color: #6BA81E;}
 <td><p>unix_date</p></td>
 <td></td>
 <td><p>skewness</p></td>
+<td></td>
+<td></td>
 </tr>
 <tr class="row-odd"><td><p>bit_get</p></td>
 <td><p>expm1</p></td>
@@ -414,30 +506,38 @@ table.coverage tr:nth-child(69) td:nth-child(4) {background-color: #6BA81E;}
 <td><p>unix_micros</p></td>
 <td></td>
 <td><p>some</p></td>
+<td></td>
+<td></td>
 </tr>
 <tr class="row-even"><td><p>bit_length</p></td>
 <td><p>extract</p></td>
-<td><p><a class="reference internal" href="map.html#id0" title="map"><code class="xref spark spark-func docutils literal notranslate"><span class="pre">map()</span></code></a></p></td>
+<td><p><a class="reference internal" href="map.html#map" title="map"><code class="xref spark spark-func docutils literal notranslate"><span class="pre">map()</span></code></a></p></td>
 <td><p>rpad</p></td>
 <td><p>unix_millis</p></td>
 <td></td>
 <td><p>std</p></td>
+<td></td>
+<td></td>
 </tr>
 <tr class="row-odd"><td><p>bit_or</p></td>
 <td><p>factorial</p></td>
 <td><p>map_concat</p></td>
-<td><p>rtrim</p></td>
+<td><p><a class="reference internal" href="string.html#rtrim" title="rtrim"><code class="xref spark spark-func docutils literal notranslate"><span class="pre">rtrim()</span></code></a></p></td>
 <td><p>unix_seconds</p></td>
 <td></td>
 <td><p>stddev</p></td>
+<td></td>
+<td></td>
 </tr>
 <tr class="row-even"><td><p>bit_xor</p></td>
 <td><p><a class="reference internal" href="array.html#filter" title="filter"><code class="xref spark spark-func docutils literal notranslate"><span class="pre">filter()</span></code></a></p></td>
 <td><p>map_entries</p></td>
 <td><p>schema_of_csv</p></td>
-<td><p>unix_timestamp</p></td>
+<td><p><a class="reference internal" href="datetime.html#unix_timestamp" title="unix_timestamp"><code class="xref spark spark-func docutils literal notranslate"><span class="pre">unix_timestamp()</span></code></a></p></td>
 <td></td>
 <td><p>stddev_pop</p></td>
+<td></td>
+<td></td>
 </tr>
 <tr class="row-odd"><td><p>bool_and</p></td>
 <td><p>find_in_set</p></td>
@@ -446,6 +546,8 @@ table.coverage tr:nth-child(69) td:nth-child(4) {background-color: #6BA81E;}
 <td><p><a class="reference internal" href="string.html#upper" title="upper"><code class="xref spark spark-func docutils literal notranslate"><span class="pre">upper()</span></code></a></p></td>
 <td></td>
 <td><p>stddev_samp</p></td>
+<td></td>
+<td></td>
 </tr>
 <tr class="row-even"><td><p>bool_or</p></td>
 <td><p>first</p></td>
@@ -454,6 +556,8 @@ table.coverage tr:nth-child(69) td:nth-child(4) {background-color: #6BA81E;}
 <td><p>uuid</p></td>
 <td></td>
 <td><p>sum</p></td>
+<td></td>
+<td></td>
 </tr>
 <tr class="row-odd"><td><p>boolean</p></td>
 <td><p>first_value</p></td>
@@ -462,6 +566,8 @@ table.coverage tr:nth-child(69) td:nth-child(4) {background-color: #6BA81E;}
 <td><p>var_pop</p></td>
 <td></td>
 <td><p>try_avg</p></td>
+<td></td>
+<td></td>
 </tr>
 <tr class="row-even"><td><p>bround</p></td>
 <td><p>flatten</p></td>
@@ -470,6 +576,8 @@ table.coverage tr:nth-child(69) td:nth-child(4) {background-color: #6BA81E;}
 <td><p>var_samp</p></td>
 <td></td>
 <td><p>try_sum</p></td>
+<td></td>
+<td></td>
 </tr>
 <tr class="row-odd"><td><p>btrim</p></td>
 <td><p>float</p></td>
@@ -478,6 +586,8 @@ table.coverage tr:nth-child(69) td:nth-child(4) {background-color: #6BA81E;}
 <td><p>variance</p></td>
 <td></td>
 <td><p>var_pop</p></td>
+<td></td>
+<td></td>
 </tr>
 <tr class="row-even"><td><p>cardinality</p></td>
 <td><p><a class="reference internal" href="math.html#floor" title="floor"><code class="xref spark spark-func docutils literal notranslate"><span class="pre">floor()</span></code></a></p></td>
@@ -486,6 +596,8 @@ table.coverage tr:nth-child(69) td:nth-child(4) {background-color: #6BA81E;}
 <td><p>version</p></td>
 <td></td>
 <td><p>var_samp</p></td>
+<td></td>
+<td></td>
 </tr>
 <tr class="row-odd"><td><p>case</p></td>
 <td><p>forall</p></td>
@@ -494,12 +606,16 @@ table.coverage tr:nth-child(69) td:nth-child(4) {background-color: #6BA81E;}
 <td><p>weekday</p></td>
 <td></td>
 <td><p>variance</p></td>
+<td></td>
+<td></td>
 </tr>
 <tr class="row-even"><td><p>cast</p></td>
 <td><p>format_number</p></td>
 <td><p>max_by</p></td>
 <td><p><a class="reference internal" href="binary.html#sha2" title="sha2"><code class="xref spark spark-func docutils literal notranslate"><span class="pre">sha2()</span></code></a></p></td>
 <td><p>weekofyear</p></td>
+<td></td>
+<td></td>
 <td></td>
 <td></td>
 </tr>
@@ -510,12 +626,16 @@ table.coverage tr:nth-child(69) td:nth-child(4) {background-color: #6BA81E;}
 <td><p>when</p></td>
 <td></td>
 <td></td>
+<td></td>
+<td></td>
 </tr>
 <tr class="row-even"><td><p><a class="reference internal" href="math.html#ceil" title="ceil"><code class="xref spark spark-func docutils literal notranslate"><span class="pre">ceil()</span></code></a></p></td>
 <td><p>from_csv</p></td>
 <td><p>mean</p></td>
 <td><p><a class="reference internal" href="bitwise.html#shiftright" title="shiftright"><code class="xref spark spark-func docutils literal notranslate"><span class="pre">shiftright()</span></code></a></p></td>
 <td><p>width_bucket</p></td>
+<td></td>
+<td></td>
 <td></td>
 <td></td>
 </tr>
@@ -526,12 +646,16 @@ table.coverage tr:nth-child(69) td:nth-child(4) {background-color: #6BA81E;}
 <td><p>window</p></td>
 <td></td>
 <td></td>
+<td></td>
+<td></td>
 </tr>
 <tr class="row-even"><td><p>char</p></td>
 <td><p>from_unixtime</p></td>
 <td><p>min_by</p></td>
 <td><p>shuffle</p></td>
 <td><p>xpath</p></td>
+<td></td>
+<td></td>
 <td></td>
 <td></td>
 </tr>
@@ -542,12 +666,16 @@ table.coverage tr:nth-child(69) td:nth-child(4) {background-color: #6BA81E;}
 <td><p>xpath_boolean</p></td>
 <td></td>
 <td></td>
+<td></td>
+<td></td>
 </tr>
 <tr class="row-even"><td><p>character_length</p></td>
 <td><p><a class="reference internal" href="json.html#get_json_object" title="get_json_object"><code class="xref spark spark-func docutils literal notranslate"><span class="pre">get_json_object()</span></code></a></p></td>
 <td><p>mod</p></td>
 <td><p>signum</p></td>
 <td><p>xpath_double</p></td>
+<td></td>
+<td></td>
 <td></td>
 <td></td>
 </tr>
@@ -558,6 +686,8 @@ table.coverage tr:nth-child(69) td:nth-child(4) {background-color: #6BA81E;}
 <td><p>xpath_float</p></td>
 <td></td>
 <td></td>
+<td></td>
+<td></td>
 </tr>
 <tr class="row-even"><td><p>coalesce</p></td>
 <td><p><a class="reference internal" href="comparison.html#greatest" title="greatest"><code class="xref spark spark-func docutils literal notranslate"><span class="pre">greatest()</span></code></a></p></td>
@@ -566,12 +696,16 @@ table.coverage tr:nth-child(69) td:nth-child(4) {background-color: #6BA81E;}
 <td><p>xpath_int</p></td>
 <td></td>
 <td></td>
+<td></td>
+<td></td>
 </tr>
 <tr class="row-odd"><td><p>collect_list</p></td>
 <td><p>grouping</p></td>
 <td><p>months_between</p></td>
-<td><p><a class="reference internal" href="map.html#size" title="size"><code class="xref spark spark-func docutils literal notranslate"><span class="pre">size()</span></code></a></p></td>
+<td><p><a class="reference internal" href="array.html#size" title="size"><code class="xref spark spark-func docutils literal notranslate"><span class="pre">size()</span></code></a></p></td>
 <td><p>xpath_long</p></td>
+<td></td>
+<td></td>
 <td></td>
 <td></td>
 </tr>
@@ -582,12 +716,16 @@ table.coverage tr:nth-child(69) td:nth-child(4) {background-color: #6BA81E;}
 <td><p>xpath_number</p></td>
 <td></td>
 <td></td>
+<td></td>
+<td></td>
 </tr>
 <tr class="row-odd"><td><p><a class="reference internal" href="array.html#concat" title="concat"><code class="xref spark spark-func docutils literal notranslate"><span class="pre">concat()</span></code></a></p></td>
 <td><p><a class="reference internal" href="binary.html#hash" title="hash"><code class="xref spark spark-func docutils literal notranslate"><span class="pre">hash()</span></code></a></p></td>
 <td><p>nanvl</p></td>
 <td><p>slice</p></td>
 <td><p>xpath_short</p></td>
+<td></td>
+<td></td>
 <td></td>
 <td></td>
 </tr>
@@ -598,6 +736,8 @@ table.coverage tr:nth-child(69) td:nth-child(4) {background-color: #6BA81E;}
 <td><p>xpath_string</p></td>
 <td></td>
 <td></td>
+<td></td>
+<td></td>
 </tr>
 <tr class="row-odd"><td><p>conv</p></td>
 <td><p>hour</p></td>
@@ -606,12 +746,16 @@ table.coverage tr:nth-child(69) td:nth-child(4) {background-color: #6BA81E;}
 <td><p><a class="reference internal" href="binary.html#xxhash64" title="xxhash64"><code class="xref spark spark-func docutils literal notranslate"><span class="pre">xxhash64()</span></code></a></p></td>
 <td></td>
 <td></td>
+<td></td>
+<td></td>
 </tr>
 <tr class="row-even"><td><p>corr</p></td>
 <td><p>hypot</p></td>
 <td><p><a class="reference internal" href="math.html#not" title="not"><code class="xref spark spark-func docutils literal notranslate"><span class="pre">not()</span></code></a></p></td>
-<td><p><a class="reference internal" href="array.html#id0" title="sort_array"><code class="xref spark spark-func docutils literal notranslate"><span class="pre">sort_array()</span></code></a></p></td>
+<td><p><a class="reference internal" href="array.html#sort_array" title="sort_array"><code class="xref spark spark-func docutils literal notranslate"><span class="pre">sort_array()</span></code></a></p></td>
 <td><p><a class="reference internal" href="datetime.html#year" title="year"><code class="xref spark spark-func docutils literal notranslate"><span class="pre">year()</span></code></a></p></td>
+<td></td>
+<td></td>
 <td></td>
 <td></td>
 </tr>
@@ -622,11 +766,15 @@ table.coverage tr:nth-child(69) td:nth-child(4) {background-color: #6BA81E;}
 <td><p>zip_with</p></td>
 <td></td>
 <td></td>
+<td></td>
+<td></td>
 </tr>
 <tr class="row-even"><td><p>cosh</p></td>
 <td><p>ifnull</p></td>
 <td><p>nth_value</p></td>
 <td><p>space</p></td>
+<td></td>
+<td></td>
 <td></td>
 <td></td>
 <td></td>
@@ -638,11 +786,15 @@ table.coverage tr:nth-child(69) td:nth-child(4) {background-color: #6BA81E;}
 <td></td>
 <td></td>
 <td></td>
+<td></td>
+<td></td>
 </tr>
 <tr class="row-even"><td><p>count</p></td>
 <td><p>initcap</p></td>
 <td><p>nullif</p></td>
-<td><p><a class="reference internal" href="string.html#id2" title="split"><code class="xref spark spark-func docutils literal notranslate"><span class="pre">split()</span></code></a></p></td>
+<td><p><a class="reference internal" href="string.html#split" title="split"><code class="xref spark spark-func docutils literal notranslate"><span class="pre">split()</span></code></a></p></td>
+<td></td>
+<td></td>
 <td></td>
 <td></td>
 <td></td>

@@ -44,7 +44,7 @@
             
   <section id="hyperloglog-functions">
 <h1>HyperLogLog Functions<a class="headerlink" href="#hyperloglog-functions" title="Permalink to this heading">¶</a></h1>
-<p>Velox implements the Presto’s <a class="reference internal" href="aggregate.html#id1" title="approx_distinct"><code class="xref py py-func docutils literal notranslate"><span class="pre">approx_distinct()</span></code></a> function using the
+<p>Velox implements the Presto’s <a class="reference internal" href="aggregate.html#approx_distinct" title="approx_distinct"><code class="xref py py-func docutils literal notranslate"><span class="pre">approx_distinct()</span></code></a> function using the
 <a class="reference external" href="https://en.wikipedia.org/wiki/HyperLogLog">HyperLogLog</a> data structure.</p>
 <section id="data-structures">
 <h2>Data Structures<a class="headerlink" href="#data-structures" title="Permalink to this heading">¶</a></h2>
@@ -58,7 +58,7 @@ dense when it is more efficient.</p>
 <h2>Serialization<a class="headerlink" href="#serialization" title="Permalink to this heading">¶</a></h2>
 <p>Data sketches can be serialized to and deserialized from <code class="docutils literal notranslate"><span class="pre">varbinary</span></code>. This
 allows them to be stored for later use.  Combined with the ability to merge
-multiple sketches, this allows one to calculate <a class="reference internal" href="aggregate.html#id1" title="approx_distinct"><code class="xref py py-func docutils literal notranslate"><span class="pre">approx_distinct()</span></code></a> of the
+multiple sketches, this allows one to calculate <a class="reference internal" href="aggregate.html#approx_distinct" title="approx_distinct"><code class="xref py py-func docutils literal notranslate"><span class="pre">approx_distinct()</span></code></a> of the
 elements of a partition of a query, then for the entirety of a query with very
 little cost.</p>
 <p>For example, calculating the <code class="docutils literal notranslate"><span class="pre">HyperLogLog</span></code> for daily unique users will allow
@@ -73,24 +73,26 @@ dailies. This is similar to computing weekly revenue by summing daily revenue.</
 <span class="sig-name descname"><span class="pre">approx_set</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">x</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">HyperLogLog</span></span></span><a class="headerlink" href="#approx_set" title="Permalink to this definition">¶</a></dt>
 <dd><p>Returns the <code class="docutils literal notranslate"><span class="pre">HyperLogLog</span></code> sketch of the input data set of <code class="docutils literal notranslate"><span class="pre">x</span></code>.
 The value of the maximum standard error is defaulted to <code class="docutils literal notranslate"><span class="pre">0.01625</span></code>.
-This data sketch underlies <a class="reference internal" href="aggregate.html#id1" title="approx_distinct"><code class="xref py py-func docutils literal notranslate"><span class="pre">approx_distinct()</span></code></a> and can be stored and
-used later by calling <code class="docutils literal notranslate"><span class="pre">cardinality()</span></code>.</p>
-</dd></dl>
-
-<dl class="py function">
-<dt class="sig sig-object py" id="id0">
-<span class="sig-name descname"><span class="pre">approx_set</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">x</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">e</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">HyperLogLog</span></span></span><a class="headerlink" href="#id0" title="Permalink to this definition">¶</a></dt>
-<dd><p>Returns the <code class="docutils literal notranslate"><span class="pre">HyperLogLog</span></code> sketch of the input data set of <code class="docutils literal notranslate"><span class="pre">x</span></code>, with
-a maximum standard error of <code class="docutils literal notranslate"><span class="pre">e</span></code>. The current implementation of this
-function requires that <code class="docutils literal notranslate"><span class="pre">e</span></code> be in the range of <code class="docutils literal notranslate"><span class="pre">[0.0040625,</span> <span class="pre">0.26000]</span></code>.
-This data sketch underlies <a class="reference internal" href="aggregate.html#id1" title="approx_distinct"><code class="xref py py-func docutils literal notranslate"><span class="pre">approx_distinct()</span></code></a> and can be stored and
+This data sketch underlies <a class="reference internal" href="aggregate.html#approx_distinct" title="approx_distinct"><code class="xref py py-func docutils literal notranslate"><span class="pre">approx_distinct()</span></code></a> and can be stored and
 used later by calling <code class="docutils literal notranslate"><span class="pre">cardinality()</span></code>.</p>
 </dd></dl>
 
 <dl class="py function">
 <dt class="sig sig-object py">
+<span class="sig-name descname"><span class="pre">approx_set</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">x</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">e</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">HyperLogLog</span></span></span></dt>
+<dd><blockquote>
+<div><p>Returns the <code class="docutils literal notranslate"><span class="pre">HyperLogLog</span></code> sketch of the input data set of <code class="docutils literal notranslate"><span class="pre">x</span></code>, with
+a maximum standard error of <code class="docutils literal notranslate"><span class="pre">e</span></code>. The current implementation of this
+function requires that <code class="docutils literal notranslate"><span class="pre">e</span></code> be in the range of <code class="docutils literal notranslate"><span class="pre">[0.0040625,</span> <span class="pre">0.26000]</span></code>.
+This data sketch underlies <a class="reference internal" href="aggregate.html#approx_distinct" title="approx_distinct"><code class="xref py py-func docutils literal notranslate"><span class="pre">approx_distinct()</span></code></a> and can be stored and
+used later by calling <code class="docutils literal notranslate"><span class="pre">cardinality()</span></code>.</p>
+</div></blockquote>
+</dd></dl>
+
+<dl class="py function">
+<dt class="sig sig-object py">
 <span class="sig-name descname"><span class="pre">cardinality</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">hll</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">bigint</span></span></span></dt>
-<dd><p>This will perform <a class="reference internal" href="aggregate.html#id1" title="approx_distinct"><code class="xref py py-func docutils literal notranslate"><span class="pre">approx_distinct()</span></code></a> on the data summarized by the
+<dd><p>This will perform <a class="reference internal" href="aggregate.html#approx_distinct" title="approx_distinct"><code class="xref py py-func docutils literal notranslate"><span class="pre">approx_distinct()</span></code></a> on the data summarized by the
 <code class="docutils literal notranslate"><span class="pre">hll</span></code> HyperLogLog data sketch.</p>
 </dd></dl>
 
@@ -102,11 +104,13 @@ The value of the maximum standard error is defaulted to <code class="docutils li
 </dd></dl>
 
 <dl class="py function">
-<dt class="sig sig-object py" id="id1">
-<span class="sig-name descname"><span class="pre">empty_approx_set</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">e</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">HyperLogLog</span></span></span><a class="headerlink" href="#id1" title="Permalink to this definition">¶</a></dt>
-<dd><p>Returns an empty <code class="docutils literal notranslate"><span class="pre">HyperLogLog</span></code> with a maximum standard error of <code class="docutils literal notranslate"><span class="pre">e</span></code>.
+<dt class="sig sig-object py">
+<span class="sig-name descname"><span class="pre">empty_approx_set</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">e</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">HyperLogLog</span></span></span></dt>
+<dd><blockquote>
+<div><p>Returns an empty <code class="docutils literal notranslate"><span class="pre">HyperLogLog</span></code> with a maximum standard error of <code class="docutils literal notranslate"><span class="pre">e</span></code>.
 The current implementation of this function requires that <code class="docutils literal notranslate"><span class="pre">e</span></code> be in
 the range of <code class="docutils literal notranslate"><span class="pre">[0.0040625,</span> <span class="pre">0.26000]</span></code>.</p>
+</div></blockquote>
 </dd></dl>
 
 <dl class="py function">

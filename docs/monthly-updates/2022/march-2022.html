@@ -59,7 +59,7 @@
 <li><p>Add support for FULL OUTER hash join.</p></li>
 <li><p>Add Substrait-to-Velox plan conversion.</p></li>
 <li><p>Add exec::resolveAggregateFunction API to resolve aggregate function final and intermediate types based on function name and input types.</p></li>
-<li><p>Add KLL sketch implementation to be used to implement <a class="reference internal" href="../../functions/presto/aggregate.html#id9" title="approx_percentile"><code class="xref py py-func docutils literal notranslate"><span class="pre">approx_percentile()</span></code></a> Presto function with accuracy parameter. <a class="reference external" href="https://github.com/facebookincubator/velox/pull/1247">#1247</a></p></li>
+<li><p>Add KLL sketch implementation to be used to implement <a class="reference internal" href="../../functions/presto/aggregate.html#approx_percentile" title="approx_percentile"><code class="xref py py-func docutils literal notranslate"><span class="pre">approx_percentile()</span></code></a> Presto function with accuracy parameter. <a class="reference external" href="https://github.com/facebookincubator/velox/pull/1247">#1247</a></p></li>
 <li><p>Add GTest as a submodule and upgrade it to 1.11.0 (from 1.10.0).</p></li>
 <li><p>Reduce dependencies for VELOX_BUILD_MINIMAL build by removing GTest, GMock and compression libraries. <a class="reference external" href="https://github.com/facebookincubator/velox/pull/1292">#1292</a></p></li>
 <li><p>Simplify simple functions API to allow to provide void call method for functions that never return null for non-null inputs.</p></li>
@@ -80,7 +80,7 @@
 <li><p>Add <a class="reference internal" href="../../functions/presto/array.html#arrays_overlap" title="arrays_overlap"><code class="xref py py-func docutils literal notranslate"><span class="pre">arrays_overlap()</span></code></a> function.</p></li>
 <li><p>Extend <a class="reference internal" href="../../functions/presto/datetime.html#hour" title="hour"><code class="xref py py-func docutils literal notranslate"><span class="pre">hour()</span></code></a> function to support TIMESTAMP WITH TIME ZONE inputs.</p></li>
 <li><p>Fix <a class="reference internal" href="../../functions/presto/datetime.html#parse_datetime" title="parse_datetime"><code class="xref py py-func docutils literal notranslate"><span class="pre">parse_datetime()</span></code></a> and <a class="reference internal" href="../../functions/presto/datetime.html#to_unixtime" title="to_unixtime"><code class="xref py py-func docutils literal notranslate"><span class="pre">to_unixtime()</span></code></a> semantics. <a class="reference external" href="https://github.com/facebookincubator/velox/pull/1277">#1277</a></p></li>
-<li><p>Fix <a class="reference internal" href="../../functions/presto/aggregate.html#id1" title="approx_distinct"><code class="xref py py-func docutils literal notranslate"><span class="pre">approx_distinct()</span></code></a> to return 0 instead of null with all inputs are null.</p></li>
+<li><p>Fix <a class="reference internal" href="../../functions/presto/aggregate.html#approx_distinct" title="approx_distinct"><code class="xref py py-func docutils literal notranslate"><span class="pre">approx_distinct()</span></code></a> to return 0 instead of null with all inputs are null.</p></li>
 </ul>
 </section>
 <section id="performance-and-correctness-testing">

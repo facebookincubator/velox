@@ -59,13 +59,15 @@ in <code class="docutils literal notranslate"><span class="pre">string</span></c
 </dd></dl>
 
 <dl class="spark function">
-<dt class="sig sig-object spark" id="id0">
-<span class="sig-name descname"><span class="pre">regexp_extract</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">string</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">pattern</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">group</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">varchar</span></span></span><a class="headerlink" href="#id0" title="Permalink to this definition">¶</a></dt>
-<dd><p>Finds the first occurrence of the regular expression <code class="docutils literal notranslate"><span class="pre">pattern</span></code> in
+<dt class="sig sig-object spark">
+<span class="sig-name descname"><span class="pre">regexp_extract</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">string</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">pattern</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">group</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">varchar</span></span></span></dt>
+<dd><blockquote>
+<div><p>Finds the first occurrence of the regular expression <code class="docutils literal notranslate"><span class="pre">pattern</span></code> in
 <code class="docutils literal notranslate"><span class="pre">string</span></code> and returns the capturing group number <code class="docutils literal notranslate"><span class="pre">group</span></code>.</p>
 <div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">SELECT</span> <span class="n">regexp_extract</span><span class="p">(</span><span class="s1">&#39;1a 2b 14m&#39;</span><span class="p">,</span> <span class="s1">&#39;(\d+)([a-z]+)&#39;</span><span class="p">,</span> <span class="mi">2</span><span class="p">);</span> <span class="o">--</span> <span class="s1">&#39;a&#39;</span>
 </pre></div>
 </div>
+</div></blockquote>
 </dd></dl>
 
 <dl class="spark function">

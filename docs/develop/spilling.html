@@ -511,7 +511,7 @@ the hash build operators.</p></li>
 <p>Some hash probe optimizations are disabled if the spilling has been triggered
 by the hash build. For example, dynamic filtering is disabled because the
 complete set of join keys is not known.</p>
-<p>Spilling not supported for <a href="#id1"><span class="problematic" id="id2">`</span></a>null-aware anti-join type with filter because it
+<p>Spilling not supported for null-aware anti-join type with filter because it
 requires to cross join null-key probe rows with all build-side rows for filter
 evaluation to check if the null-key probe rows can be added to output or not.</p>
 </section>

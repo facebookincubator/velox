@@ -6,7 +6,7 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" /><meta name="generator" content="Docutils 0.18.1: http://docutils.sourceforge.net/" />
 
-    <title>Metrics &#8212; Velox  documentation</title>
+    <title>Window functions &#8212; Velox  documentation</title>
     <link rel="stylesheet" type="text/css" href="../../_static/pygments.css" />
     <link rel="stylesheet" type="text/css" href="../../_static/nature.css" />
     <script data-url_root="../../" id="documentation_options" src="../../_static/documentation_options.js"></script>
@@ -16,8 +16,8 @@
     <script src="../../_static/doctools.js"></script>
     <link rel="index" title="Index" href="../../genindex.html" />
     <link rel="search" title="Search" href="../../search.html" />
-    <link rel="next" title="Programming Guide" href="../../programming-guide.html" />
-    <link rel="prev" title="VectorSaver: Encoding-Preserving Serialization" href="vector-saver.html" /> 
+    <link rel="next" title="Configuration properties" href="../../configs.html" />
+    <link rel="prev" title="Aggregate Functions" href="aggregate.html" /> 
   </head><body>
     <div class="related" role="navigation" aria-label="related navigation">
       <h3>Navigation</h3>
@@ -26,15 +26,14 @@
           <a href="../../genindex.html" title="General Index"
              accesskey="I">index</a></li>
         <li class="right" >
-          <a href="../../programming-guide.html" title="Programming Guide"
+          <a href="../../configs.html" title="Configuration properties"
              accesskey="N">next</a> |</li>
         <li class="right" >
-          <a href="vector-saver.html" title="VectorSaver: Encoding-Preserving Serialization"
+          <a href="aggregate.html" title="Aggregate Functions"
              accesskey="P">previous</a> |</li>
         <li class="nav-item nav-item-0"><a href="../../index.html">Velox  documentation</a> &#187;</li>
-          <li class="nav-item nav-item-1"><a href="../../develop.html" >Developer Guide</a> &#187;</li>
-          <li class="nav-item nav-item-2"><a href="../debugging.html" accesskey="U">Debugging Tools</a> &#187;</li>
-        <li class="nav-item nav-item-this"><a href="">Metrics</a></li> 
+          <li class="nav-item nav-item-1"><a href="../../spark_functions.html" accesskey="U">Spark Functions</a> &#187;</li>
+        <li class="nav-item nav-item-this"><a href="">Window functions</a></li> 
       </ul>
     </div>  
 
@@ -43,19 +42,20 @@
         <div class="bodywrapper">
           <div class="body" role="main">
             
-  <section id="metrics">
-<h1>Metrics<a class="headerlink" href="#metrics" title="Permalink to this heading">¶</a></h1>
-<p>Velox emits several metrics during query execution which are useful to analyze the details of the underlying system and query processing. Some of these include:</p>
-<p>queryThreadIoLatency: Time spent by a query processing thread waiting for synchronously issued IO or for an in-progress read-ahead to finish.</p>
-<p>numRamRead: Number of hits from RAM cache. Does not include first use of prefetched data.</p>
-<p>numPrefetch: Number of planned read from storage or SSD.</p>
-<p>prefetchBytes: Planned read from storage or SSD in bytes.</p>
-<p>numStorageRead: Number of reads from storage, for sparsely accessed columns.</p>
-<p>storageReadBytes: Bytes read from storage, for sparsely accessed columns.</p>
-<p>numLocalRead: Number of reads from SSD cache instead of storage. Includes both random and planned reads.</p>
-<p>localReadBytes: Bytes read from SSD cache instead of storage. Includes both random and planned reads.</p>
-<p>numRamRead: Number of hits from RAM cache. Does not include first use of prefetched data.</p>
-<p>ramReadBytes: Hits from RAM cache in bytes. Does not include first use of prefetched data.</p>
+  <section id="window-functions">
+<h1>Window functions<a class="headerlink" href="#window-functions" title="Permalink to this heading">¶</a></h1>
+<p>Spark window functions can be used to compute SQL window functions.</p>
+<section id="value-functions">
+<h2>Value functions<a class="headerlink" href="#value-functions" title="Permalink to this heading">¶</a></h2>
+<dl class="py function">
+<dt class="sig sig-object py">
+<span class="sig-name descname"><span class="pre">nth_value</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">x</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">offset</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">[same</span> <span class="pre">as</span> <span class="pre">input]</span></span></span></dt>
+<dd></dd></dl>
+
+<p>Returns the value at the specified offset from the beginning of the window. Offsets start at 1.
+The offset should be a positive int literal. If the offset is greater than the number of values
+in the window, null is returned. It is an error for the offset to be zero or negative.</p>
+</section>
 </section>
 
 
@@ -66,19 +66,29 @@
       <div class="sphinxsidebar" role="navigation" aria-label="main navigation">
         <div class="sphinxsidebarwrapper">
   <div>
+    <h3><a href="../../index.html">Table of Contents</a></h3>
+    <ul>
+<li><a class="reference internal" href="#">Window functions</a><ul>
+<li><a class="reference internal" href="#value-functions">Value functions</a></li>
+</ul>
+</li>
+</ul>
+
+  </div>
+  <div>
     <h4>Previous topic</h4>
-    <p class="topless"><a href="vector-saver.html"
-                          title="previous chapter">VectorSaver: Encoding-Preserving Serialization</a></p>
+    <p class="topless"><a href="aggregate.html"
+                          title="previous chapter">Aggregate Functions</a></p>
   </div>
   <div>
     <h4>Next topic</h4>
-    <p class="topless"><a href="../../programming-guide.html"
-                          title="next chapter">Programming Guide</a></p>
+    <p class="topless"><a href="../../configs.html"
+                          title="next chapter">Configuration properties</a></p>
   </div>
   <div role="note" aria-label="source link">
     <h3>This Page</h3>
     <ul class="this-page-menu">
-      <li><a href="../../_sources/develop/debugging/metrics.rst.txt"
+      <li><a href="../../_sources/functions/spark/window.rst.txt"
             rel="nofollow">Show Source</a></li>
     </ul>
    </div>
@@ -103,15 +113,14 @@
           <a href="../../genindex.html" title="General Index"
              >index</a></li>
         <li class="right" >
-          <a href="../../programming-guide.html" title="Programming Guide"
+          <a href="../../configs.html" title="Configuration properties"
              >next</a> |</li>
         <li class="right" >
-          <a href="vector-saver.html" title="VectorSaver: Encoding-Preserving Serialization"
+          <a href="aggregate.html" title="Aggregate Functions"
              >previous</a> |</li>
         <li class="nav-item nav-item-0"><a href="../../index.html">Velox  documentation</a> &#187;</li>
-          <li class="nav-item nav-item-1"><a href="../../develop.html" >Developer Guide</a> &#187;</li>
-          <li class="nav-item nav-item-2"><a href="../debugging.html" >Debugging Tools</a> &#187;</li>
-        <li class="nav-item nav-item-this"><a href="">Metrics</a></li> 
+          <li class="nav-item nav-item-1"><a href="../../spark_functions.html" >Spark Functions</a> &#187;</li>
+        <li class="nav-item nav-item-this"><a href="">Window functions</a></li> 
       </ul>
     </div>
     <div class="footer" role="contentinfo">
