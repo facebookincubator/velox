@@ -224,7 +224,7 @@ and emitting results.
      - A list of output columns. This is a subset of columns available in the left and right inputs of the join. The columns may appear in different order than in the input.
 
 NestedLoopJoinNode
-~~~~~~~~~~~~~
+~~~~~~~~~~~~~~~~~~
 
 NestedLoopJoinNode represents an implementation that iterates through each row from
 the left side of the join and, for each row, iterates through all rows from the right
@@ -241,7 +241,7 @@ and emitting results. Nested loop join supports non-equality join.
    * - joinType
      - Join type: inner, left, right, full.
    * - joinCondition
-     - SQL expression as the join condition. Can use columns from both probe and build sides of the join.
+     - Expression used as the join condition, may reference cololumns from both inputs.
    * - outputType
      - A list of output columns. This is a subset of columns available in the left and right inputs of the join. The columns may appear in different order than in the input.
 
