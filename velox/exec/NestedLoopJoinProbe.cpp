@@ -92,15 +92,6 @@ BlockingReason NestedLoopJoinProbe::isBlocked(ContinueFuture* future) {
       setState(ProbeOperatorState::kRunning);
       return BlockingReason::kNotBlocked;
     }
-    case ProbeOperatorState::kWaitForPeers: {
-      if (future_.valid()) {
-        *future = std::move(future_);
-        return BlockingReason::kWaitForJoinProbe;
-      }
-      VELOX_CHECK(!lastProbe_);
-      setState(ProbeOperatorState::kFinish);
-      return BlockingReason::kNotBlocked;
-    }
     default:
       VELOX_UNREACHABLE(probeOperatorStateName(state_));
   }
@@ -172,7 +163,7 @@ RowVectorPtr NestedLoopJoinProbe::getOutput() {
       break;
     }
 
-    vector_size_t probeCnt = getNumProbeRows();
+    const vector_size_t probeCnt = getNumProbeRows();
     output = doMatch(probeCnt);
     if (advanceProbeRows(probeCnt)) {
       if (!needsProbeMismatch(joinType_)) {
@@ -287,10 +278,10 @@ void NestedLoopJoinProbe::beginBuildMismatch() {
 
   std::vector<ContinuePromise> promises;
   std::vector<std::shared_ptr<Driver>> peers;
+  ContinueFuture future{ContinueFuture::makeEmpty()};
   if (!operatorCtx_->task()->allPeersFinished(
-          planNodeId(), operatorCtx_->driver(), &future_, promises, peers)) {
-    VELOX_CHECK(future_.valid());
-    setState(ProbeOperatorState::kWaitForPeers);
+          planNodeId(), operatorCtx_->driver(), &future, promises, peers)) {
+    setState(ProbeOperatorState::kFinish);
     return;
   }
 
