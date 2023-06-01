@@ -581,7 +581,8 @@ void Task::start(
           self,
           partitionedOutputNode->isBroadcast(),
           partitionedOutputNode->numPartitions(),
-          totalOutputDrivers);
+          totalOutputDrivers,
+          partitionedOutputNode->partitionFunctionSpec().toString() == "ROUND ROBIN");
     }
 
     // NOTE: MergeExchangeNode doesn't use the exchange client created here to

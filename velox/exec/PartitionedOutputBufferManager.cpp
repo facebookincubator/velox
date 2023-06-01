@@ -466,6 +466,330 @@ std::string PartitionedOutputBuffer::toString() {
   return out.str();
 }
 
+ArbitraryOutputBuffer::ArbitraryOutputBuffer(
+    std::shared_ptr<Task> task,
+    bool broadcast,
+    int numDestinations,
+    uint32_t numDrivers)
+    : task_(std::move(task)),
+      broadcast_(broadcast),
+      numDrivers_(numDrivers),
+      maxSize_(
+          task_->queryCtx()->queryConfig().maxPartitionedOutputBufferSize()),
+      continueSize_((maxSize_ * kContinuePct) / 100) {
+  buffers_.reserve(numDestinations);
+  for (int i = 0; i < numDestinations; i++) {
+    buffers_.push_back(std::make_unique<DestinationBuffer>());
+  }
+}
+
+void ArbitraryOutputBuffer::updateBroadcastOutputBuffers(
+    int numBuffers,
+    bool noMoreBuffers) {
+  VELOX_CHECK(broadcast_);
+
+  std::vector<ContinuePromise> promises;
+  bool isFinished;
+  {
+    std::lock_guard<std::mutex> l(mutex_);
+
+    if (numBuffers > buffers_.size()) {
+      addBroadcastOutputBuffersLocked(numBuffers);
+    }
+
+    if (!noMoreBuffers) {
+      return;
+    }
+
+    noMoreBroadcastBuffers_ = true;
+    isFinished = isFinishedLocked();
+    updateAfterAcknowledgeLocked(dataToBroadcast_, promises);
+  }
+
+  releaseAfterAcknowledge(dataToBroadcast_, promises);
+  if (isFinished) {
+    task_->setAllOutputConsumed();
+  }
+}
+
+void ArbitraryOutputBuffer::updateNumDrivers(uint32_t newNumDrivers) {
+  bool isNoMoreDrivers{false};
+  {
+    std::lock_guard<std::mutex> l(mutex_);
+    numDrivers_ = newNumDrivers;
+    // If we finished all drivers, ensure we register that we are 'done'.
+    if (numDrivers_ == numFinished_) {
+      isNoMoreDrivers = true;
+    }
+  }
+  if (isNoMoreDrivers) {
+    noMoreDrivers();
+  }
+}
+
+void ArbitraryOutputBuffer::addBroadcastOutputBuffersLocked(int numBuffers) {
+  VELOX_CHECK(!noMoreBroadcastBuffers_)
+  buffers_.reserve(numBuffers);
+  for (auto i = buffers_.size(); i < numBuffers; i++) {
+    auto buffer = std::make_unique<DestinationBuffer>();
+    for (const auto& data : dataToBroadcast_) {
+      buffer->enqueue(data);
+    }
+    if (atEnd_) {
+      buffer->enqueue(nullptr);
+    }
+    buffers_.emplace_back(std::move(buffer));
+  }
+}
+
+BlockingReason ArbitraryOutputBuffer::enqueue(
+    int destination,
+    std::unique_ptr<SerializedPage> data,
+    ContinueFuture* future) {
+  VELOX_CHECK_NOT_NULL(data);
+  VELOX_CHECK(
+      task_->isRunning(), "Task is terminated, cannot add data to output.");
+  std::vector<DataAvailable> dataAvailableCallbacks;
+  bool blocked = false;
+  {
+    std::lock_guard<std::mutex> l(mutex_);
+    VELOX_CHECK_LT(destination, buffers_.size());
+
+    totalSize_ += data->size();
+    if (broadcast_) {
+      std::shared_ptr<SerializedPage> sharedData(data.release());
+      for (auto& buffer : buffers_) {
+        if (buffer) {
+          buffer->enqueue(sharedData);
+          dataAvailableCallbacks.emplace_back(buffer->getAndClearNotify());
+        }
+      }
+
+      if (!noMoreBroadcastBuffers_) {
+        dataToBroadcast_.emplace_back(sharedData);
+      }
+    } else {
+      if (auto buffer = buffers_[destination].get()) {
+        buffer->enqueue(std::move(data));
+        dataAvailableCallbacks.emplace_back(buffer->getAndClearNotify());
+      } else {
+        // Some downstream tasks may finish early and delete the
+        // corresponding buffers. Further data for these buffers is dropped.
+        totalSize_ -= data->size();
+      }
+    }
+
+    if (totalSize_ > maxSize_ && future) {
+      promises_.emplace_back("PartitionedOutputBuffer::enqueue");
+      *future = promises_.back().getSemiFuture();
+      blocked = true;
+    }
+  }
+
+  // Outside mutex_.
+  for (auto& callback : dataAvailableCallbacks) {
+    callback.notify();
+  }
+
+  return blocked ? BlockingReason::kWaitForConsumer
+                 : BlockingReason::kNotBlocked;
+}
+
+void ArbitraryOutputBuffer::noMoreData() {
+  checkIfDone(true); // Increment number of finished drivers.
+}
+
+void ArbitraryOutputBuffer::noMoreDrivers() {
+  checkIfDone(false); // Do not increment number of finished drivers.
+}
+
+void ArbitraryOutputBuffer::checkIfDone(bool oneDriverFinished) {
+  std::vector<DataAvailable> finished;
+  {
+    std::lock_guard<std::mutex> l(mutex_);
+    if (oneDriverFinished) {
+      ++numFinished_;
+    }
+    VELOX_CHECK_LE(
+        numFinished_,
+        numDrivers_,
+        "Each driver should call noMoreData exactly once");
+    atEnd_ = numFinished_ == numDrivers_;
+    if (atEnd_) {
+      for (auto& buffer : buffers_) {
+        if (buffer) {
+          buffer->enqueue(nullptr);
+          finished.push_back(buffer->getAndClearNotify());
+        }
+      }
+    }
+  }
+
+  // Notify outside of mutex.
+  for (auto& notification : finished) {
+    notification.notify();
+  }
+}
+
+bool ArbitraryOutputBuffer::isFinished() {
+  std::lock_guard<std::mutex> l(mutex_);
+  return isFinishedLocked();
+}
+
+bool ArbitraryOutputBuffer::isFinishedLocked() {
+  if (broadcast_ && !noMoreBroadcastBuffers_) {
+    return false;
+  }
+  for (auto& buffer : buffers_) {
+    if (buffer) {
+      return false;
+    }
+  }
+  return true;
+}
+
+void ArbitraryOutputBuffer::acknowledge(int destination, int64_t sequence) {
+  std::vector<std::shared_ptr<SerializedPage>> freed;
+  std::vector<ContinuePromise> promises;
+  {
+    std::lock_guard<std::mutex> l(mutex_);
+    VELOX_CHECK_LT(destination, buffers_.size());
+    auto* buffer = buffers_[destination].get();
+    if (!buffer) {
+      VLOG(1) << "Ack received after final ack for destination " << destination
+              << " and sequence " << sequence;
+      return;
+    }
+    freed = buffer->acknowledge(sequence, false);
+    updateAfterAcknowledgeLocked(freed, promises);
+  }
+  releaseAfterAcknowledge(freed, promises);
+}
+
+void ArbitraryOutputBuffer::updateAfterAcknowledgeLocked(
+    const std::vector<std::shared_ptr<SerializedPage>>& freed,
+    std::vector<ContinuePromise>& promises) {
+  uint64_t totalFreed = 0;
+  for (const auto& free : freed) {
+    if (free.unique()) {
+      totalFreed += free->size();
+    }
+  }
+  if (totalFreed == 0) {
+    return;
+  }
+
+  VELOX_CHECK_LE(
+      totalFreed,
+      totalSize_,
+      "Output buffer size goes negative: released {} over {}",
+      totalFreed,
+      totalSize_);
+  totalSize_ -= totalFreed;
+  if (totalSize_ < continueSize_) {
+    promises = std::move(promises_);
+  }
+}
+
+bool ArbitraryOutputBuffer::deleteResults(int destination) {
+  std::vector<std::shared_ptr<SerializedPage>> freed;
+  std::vector<ContinuePromise> promises;
+  bool isFinished;
+  DataAvailable dataAvailable;
+  {
+    std::lock_guard<std::mutex> l(mutex_);
+    VELOX_CHECK_LT(destination, buffers_.size());
+    auto* buffer = buffers_[destination].get();
+    if (!buffer) {
+      VLOG(1) << "Extra delete  received  for destination " << destination;
+      return false;
+    }
+    freed = buffer->deleteResults();
+    dataAvailable = buffer->getAndClearNotify();
+    buffers_[destination] = nullptr;
+    ++numFinalAcknowledges_;
+    isFinished = isFinishedLocked();
+    updateAfterAcknowledgeLocked(freed, promises);
+  }
+
+  // Outside of mutex.
+  dataAvailable.notify();
+
+  if (!promises.empty()) {
+    VLOG(1) << "Delete of results unblocks producers. Can happen in early end "
+            << "due to error or limit";
+  }
+  releaseAfterAcknowledge(freed, promises);
+  if (isFinished) {
+    task_->setAllOutputConsumed();
+  }
+  return isFinished;
+}
+
+void ArbitraryOutputBuffer::getData(
+    int destination,
+    uint64_t maxBytes,
+    int64_t sequence,
+    DataAvailableCallback notify) {
+  std::vector<std::unique_ptr<folly::IOBuf>> data;
+  std::vector<std::shared_ptr<SerializedPage>> freed;
+  std::vector<ContinuePromise> promises;
+  {
+    std::lock_guard<std::mutex> l(mutex_);
+
+    if (broadcast_ && destination >= buffers_.size()) {
+      addBroadcastOutputBuffersLocked(destination + 1);
+    }
+
+    // Dynamically scale up the number of buffers
+    // VELOX_CHECK_LT(destination, buffers_.size());
+    while (destination >= buffers_.size()) {
+      buffers_.push_back(std::make_unique<DestinationBuffer>());
+    }
+    auto destinationBuffer = buffers_[destination].get();
+    VELOX_CHECK(
+        destinationBuffer,
+        "getData received after its buffer is deleted. Destination: {}, sequence: {}",
+        destination,
+        sequence);
+    freed = destinationBuffer->acknowledge(sequence, true);
+    updateAfterAcknowledgeLocked(freed, promises);
+    data = destinationBuffer->getData(maxBytes, sequence, notify);
+  }
+  releaseAfterAcknowledge(freed, promises);
+  if (!data.empty()) {
+    notify(std::move(data), sequence);
+  }
+}
+
+void ArbitraryOutputBuffer::terminate() {
+  VELOX_CHECK(not task_->isRunning());
+
+  std::vector<ContinuePromise> outstandingPromises;
+  {
+    std::lock_guard<std::mutex> l(mutex_);
+    outstandingPromises.swap(promises_);
+  }
+  for (auto& promise : outstandingPromises) {
+    promise.setValue();
+  }
+}
+
+std::string ArbitraryOutputBuffer::toString() {
+  std::lock_guard<std::mutex> l(mutex_);
+  std::stringstream out;
+  out << "[PartitionedOutputBuffer totalSize_=" << totalSize_
+      << "b, num producers blocked=" << promises_.size()
+      << ", completed=" << numFinished_ << "/" << numDrivers_ << ", "
+      << (atEnd_ ? "at end, " : "") << "destinations: " << std::endl;
+  for (auto i = 0; i < buffers_.size(); ++i) {
+    auto buffer = buffers_[i].get();
+    out << i << ": " << (buffer ? buffer->toString() : "none") << std::endl;
+  }
+  out << "]" << std::endl;
+  return out.str();
+}
+
 // static
 std::weak_ptr<PartitionedOutputBufferManager>
 PartitionedOutputBufferManager::getInstance() {
@@ -473,7 +797,7 @@ PartitionedOutputBufferManager::getInstance() {
   return kInstance;
 }
 
-std::shared_ptr<PartitionedOutputBuffer>
+std::shared_ptr<OutputBuffer>
 PartitionedOutputBufferManager::getBuffer(const std::string& taskId) {
   return buffers_.withLock([&](auto& buffers) {
     auto it = buffers.find(taskId);
@@ -483,7 +807,7 @@ PartitionedOutputBufferManager::getBuffer(const std::string& taskId) {
   });
 }
 
-std::shared_ptr<PartitionedOutputBuffer>
+std::shared_ptr<OutputBuffer>
 PartitionedOutputBufferManager::getBufferIfExists(const std::string& taskId) {
   return buffers_.withLock([&](auto& buffers) {
     auto it = buffers.find(taskId);
@@ -516,7 +840,7 @@ void PartitionedOutputBufferManager::acknowledge(
     int destination,
     int64_t sequence) {
   auto buffer = buffers_.withLock(
-      [&](auto& buffers) -> std::shared_ptr<PartitionedOutputBuffer> {
+      [&](auto& buffers) -> std::shared_ptr<OutputBuffer> {
         auto it = buffers.find(taskId);
         if (it == buffers.end()) {
           VLOG(1) << "Receiving ack for non-existent task " << taskId
@@ -555,14 +879,21 @@ void PartitionedOutputBufferManager::initializeTask(
     std::shared_ptr<Task> task,
     bool broadcast,
     int numDestinations,
-    int numDrivers) {
+    int numDrivers,
+    bool isArbitrary) {
   const auto& taskId = task->taskId();
 
   buffers_.withLock([&](auto& buffers) {
     auto it = buffers.find(taskId);
     if (it == buffers.end()) {
-      buffers[taskId] = std::make_shared<PartitionedOutputBuffer>(
-          std::move(task), broadcast, numDestinations, numDrivers);
+      if (isArbitrary) {
+        buffers[taskId] = std::make_shared<ArbitraryOutputBuffer>(
+            std::move(task), broadcast, numDestinations, numDrivers);
+      }
+      else {
+        buffers[taskId] = std::make_shared<PartitionedOutputBuffer>(
+            std::move(task), broadcast, numDestinations, numDrivers);
+      }
     } else {
       VELOX_FAIL(
           "Registering an output buffer for pre-existing taskId {}", taskId);
@@ -589,7 +920,7 @@ void PartitionedOutputBufferManager::updateNumDrivers(
 
 void PartitionedOutputBufferManager::removeTask(const std::string& taskId) {
   auto buffer = buffers_.withLock(
-      [&](auto& buffers) -> std::shared_ptr<PartitionedOutputBuffer> {
+      [&](auto& buffers) -> std::shared_ptr<OutputBuffer> {
         auto it = buffers.find(taskId);
         if (it == buffers.end()) {
           // Already removed.

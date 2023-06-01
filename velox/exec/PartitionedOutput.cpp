@@ -135,6 +135,10 @@ PartitionedOutput::PartitionedOutput(
     VELOX_CHECK(keyChannels_.empty());
     VELOX_CHECK_NULL(partitionFunction_);
   }
+  // start with numDestination of 1
+  if (planNode->partitionFunctionSpec().toString() == "ROUND ROBIN") {
+    partitionFunction_ = planNode->partitionFunctionSpec().create(numDestinations_);
+  }
 }
 
 void PartitionedOutput::initializeInput(RowVectorPtr input) {
@@ -215,7 +219,9 @@ void PartitionedOutput::addInput(RowVectorPtr input) {
   }
 
   auto numInput = input_->size();
-  if (numDestinations_ == 1) {
+  // Design change:
+  // should we dynamically adjust destinations_ in PartitionedOutput or OutputBuffer?
+  if (destinations_.size() == 1) {
     destinations_[0]->addRows(IndexRange{0, numInput});
   } else {
     partitionFunction_->partition(*input_, partitions_);

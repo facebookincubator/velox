@@ -84,9 +84,145 @@ class DestinationBuffer {
   uint64_t notifyMaxBytes_;
 };
 
-class PartitionedOutputBuffer {
+class OutputBuffer {
+ public:
+  virtual ~OutputBuffer() = default;
+  virtual void updateBroadcastOutputBuffers(int numBuffers, bool noMoreBuffers) = 0;
+
+  virtual void updateNumDrivers(uint32_t newNumDrivers) = 0;
+
+  virtual BlockingReason enqueue(
+      int destination,
+      std::unique_ptr<SerializedPage> data,
+      ContinueFuture* future) = 0;
+
+  virtual void noMoreData() = 0;
+
+  virtual void noMoreDrivers() = 0;
+
+  virtual bool isFinished() = 0;
+
+  virtual bool isFinishedLocked() = 0;
+
+  virtual void acknowledge(int destination, int64_t sequence) = 0;
+
+  virtual bool deleteResults(int destination) = 0;
+
+  virtual void getData(
+      int destination,
+      uint64_t maxSize,
+      int64_t sequence,
+      DataAvailableCallback notify) = 0;
+
+  virtual void terminate() = 0;
+
+  virtual std::string toString() = 0;
+};
+
+class PartitionedOutputBuffer : public OutputBuffer {
  public:
   PartitionedOutputBuffer(
+      std::shared_ptr<Task> task,
+      bool broadcast,
+      int numDestinations,
+      uint32_t numDrivers);
+
+  /// The total number of broadcast buffers may not be known at the task start
+  /// time. This method can be called to update the total number of broadcast
+  /// destinations while the task is running.
+  void updateBroadcastOutputBuffers(int numBuffers, bool noMoreBuffers);
+
+  /// When we understand the final number of split groups (for grouped execution
+  /// only), we need to update the number of producing drivers here.
+  void updateNumDrivers(uint32_t newNumDrivers);
+
+  BlockingReason enqueue(
+      int destination,
+      std::unique_ptr<SerializedPage> data,
+      ContinueFuture* future);
+
+  void noMoreData();
+
+  void noMoreDrivers();
+
+  bool isFinished();
+
+  bool isFinishedLocked();
+
+  void acknowledge(int destination, int64_t sequence);
+
+  // Deletes all data for 'destination'. Returns true if all
+  // destinations are deleted, meaning that the buffer is fully
+  // consumed and the producer can be marked finished and the buffers
+  // freed.
+  bool deleteResults(int destination);
+
+  void getData(
+      int destination,
+      uint64_t maxSize,
+      int64_t sequence,
+      DataAvailableCallback notify);
+
+  // Continues any possibly waiting producers. Called when the
+  // producer task has an error or cancellation.
+  void terminate();
+
+  std::string toString();
+
+ private:
+  // Percentage of maxSize below which a blocked producer should
+  // be unblocked.
+  static constexpr int32_t kContinuePct = 90;
+
+  /// If this is called due to a driver processed all its data (no more data),
+  /// we increment the number of finished drivers. If it is called due to us
+  /// updating the total number of drivers, we don't.
+  void checkIfDone(bool oneDriverFinished);
+
+  // Updates buffered size and returns possibly continuable producer promises in
+  // 'promises'.
+  void updateAfterAcknowledgeLocked(
+      const std::vector<std::shared_ptr<SerializedPage>>& freed,
+      std::vector<ContinuePromise>& promises);
+
+  /// Given an updated total number of broadcast buffers, add any missing ones
+  /// and enqueue data that has been produced so far (e.g. dataToBroadcast_).
+  void addBroadcastOutputBuffersLocked(int numBuffers);
+
+  const std::shared_ptr<Task> task_;
+  const bool broadcast_;
+  /// Total number of drivers expected to produce results. This number will
+  /// decrease in the end of grouped execution, when we understand the real
+  /// number of producer drivers (depending on the number of split groups).
+  uint32_t numDrivers_{0};
+  /// If 'totalSize_' > 'maxSize_', each producer is blocked after adding data.
+  const uint64_t maxSize_;
+  /// When 'totalSize_' goes below 'continueSize_', blocked producers are
+  /// resumed.
+  const uint64_t continueSize_;
+
+  bool noMoreBroadcastBuffers_ = false;
+
+  // While noMoreBroadcastBuffers_ is false, stores the enqueued data to
+  // broadcast to destinations that have not yet been initialized. Cleared
+  // after receiving no-more-broadcast-buffers signal.
+  std::vector<std::shared_ptr<SerializedPage>> dataToBroadcast_;
+
+  std::mutex mutex_;
+  // Actual data size in 'buffers_'.
+  uint64_t totalSize_ = 0;
+  std::vector<ContinuePromise> promises_;
+  // One buffer per destination
+  std::vector<std::unique_ptr<DestinationBuffer>> buffers_;
+  uint32_t numFinished_{0};
+  // When this reaches buffers_.size(), 'this' can be freed.
+  int numFinalAcknowledges_ = 0;
+  bool atEnd_ = false;
+};
+
+class ArbitraryOutputBuffer : public OutputBuffer {
+ public:
+  ArbitraryOutputBuffer(
       std::shared_ptr<Task> task,
       bool broadcast,
       int numDestinations,
@@ -191,7 +327,8 @@ class PartitionedOutputBufferManager {
       std::shared_ptr<Task> task,
       bool broadcast,
       int numDestinations,
-      int numDrivers);
+      int numDrivers,
+      bool isArbitrary);
 
   /// Updates the number of buffers to broadcast. Return true if the buffer
   /// exists for a given taskId, else returns false.
@@ -269,15 +406,14 @@ class PartitionedOutputBufferManager {
  private:
   // Retrieves the set of buffers for a query.
   // Throws an exception if buffer doesn't exist.
-  std::shared_ptr<PartitionedOutputBuffer> getBuffer(const std::string& taskId);
+  std::shared_ptr<OutputBuffer> getBuffer(const std::string& taskId);
 
   // Retrieves the set of buffers for a query if exists.
   // Returns NULL if task not found.
-  std::shared_ptr<PartitionedOutputBuffer> getBufferIfExists(
-      const std::string& taskId);
+  std::shared_ptr<OutputBuffer> getBufferIfExists(const std::string& taskId);
 
   folly::Synchronized<
-      std::unordered_map<std::string, std::shared_ptr<PartitionedOutputBuffer>>,
+      std::unordered_map<std::string, std::shared_ptr<OutputBuffer>>,
       std::mutex>
       buffers_;
 
