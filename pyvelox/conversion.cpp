@@ -26,7 +26,7 @@ namespace py = pybind11;
 void addConversionBindings(py::module& m, bool asModuleLocalDefinitions) {
   m.def("export_to_arrow", [](VectorPtr& inputVector) {
     auto arrowArray = std::make_unique<ArrowArray>();
-    auto pool_ = PyVeloxContext::getInstance().pool();
+    auto pool_ = PyVeloxContext::getSingletonInstance().pool();
     facebook::velox::exportToArrow(inputVector, *arrowArray, pool_);
 
     auto arrowSchema = std::make_unique<ArrowSchema>();
@@ -45,7 +45,7 @@ void addConversionBindings(py::module& m, bool asModuleLocalDefinitions) {
     inputArrowArray.attr("_export_to_c")(
         reinterpret_cast<uintptr_t>(arrowArray.get()),
         reinterpret_cast<uintptr_t>(arrowSchema.get()));
-    auto pool_ = PyVeloxContext::getInstance().pool();
+    auto pool_ = PyVeloxContext::getSingletonInstance().pool();
     return importFromArrowAsOwner(*arrowSchema, *arrowArray, pool_);
   });
 }

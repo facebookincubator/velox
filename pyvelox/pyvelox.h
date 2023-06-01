@@ -30,7 +30,6 @@
 #include <velox/vector/DictionaryVector.h>
 #include <velox/vector/FlatVector.h>
 #include "folly/json.h"
-#include "util.h"
 
 #include "context.h"
 
