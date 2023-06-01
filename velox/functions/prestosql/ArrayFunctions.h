@@ -479,4 +479,39 @@ struct ArrayNormalizeFunction {
   }
 };
 
+template <typename TExecCtx, typename T>
+struct ArrayConcatFunction {
+  VELOX_DEFINE_FUNCTION_TYPES(TExecCtx);
+
+  FOLLY_ALWAYS_INLINE bool call(
+      out_type<velox::Array<T>>& result,
+      const arg_type<velox::Array<T>>& inputArray,
+      const arg_type<velox::Array<T>>& concatArray) {
+    result.reserve(inputArray.size() + concatArray.size());
+    for (auto item : inputArray) {
+      if (item.has_value()) {
+        if constexpr (std::is_same_v<T, Varchar>) {
+          result.add_item().setNoCopy(item.value());
+        } else {
+          result.add_item() = item.value();
+        }
+      } else {
+        result.add_null();
+      }
+    }
+    for (auto item : concatArray) {
+      if (item.has_value()) {
+        if constexpr (std::is_same_v<T, Varchar>) {
+          result.add_item().setNoCopy(item.value());
+        } else {
+          result.add_item() = item.value();
+        }
+      } else {
+        result.add_null();
+      }
+    }
+    return true;
+  }
+};
+
 } // namespace facebook::velox::functions

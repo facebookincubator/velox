@@ -76,6 +76,15 @@ inline void registerArrayNormalizeFunctions(const std::string& prefix) {
       T>({prefix + "array_normalize"});
 }
 
+template <typename T>
+inline void registerArrayConcatFunctions(const std::string& prefix) {
+  registerFunction<
+      ParameterBinder<ArrayConcatFunction, T>,
+      Array<T>,
+      Array<T>,
+      Array<T>>({prefix + "concat"});
+}
+
 void registerArrayFunctions(const std::string& prefix) {
   registerArrayConstructor(prefix + "array_constructor");
   VELOX_REGISTER_VECTOR_FUNCTION(udf_all_match, prefix + "all_match");
@@ -151,5 +160,16 @@ void registerArrayFunctions(const std::string& prefix) {
 
   registerArrayNormalizeFunctions<float>(prefix);
   registerArrayNormalizeFunctions<double>(prefix);
+
+  registerArrayConcatFunctions<int8_t>(prefix);
+  registerArrayConcatFunctions<int16_t>(prefix);
+  registerArrayConcatFunctions<int32_t>(prefix);
+  registerArrayConcatFunctions<int64_t>(prefix);
+  registerArrayConcatFunctions<float>(prefix);
+  registerArrayConcatFunctions<double>(prefix);
+  registerArrayConcatFunctions<bool>(prefix);
+  registerArrayConcatFunctions<Varchar>(prefix);
+  registerArrayConcatFunctions<Timestamp>(prefix);
+  registerArrayConcatFunctions<Date>(prefix);
 }
 }; // namespace facebook::velox::functions
