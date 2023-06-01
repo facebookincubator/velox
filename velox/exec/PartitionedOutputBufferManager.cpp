@@ -29,13 +29,13 @@ std::vector<std::unique_ptr<folly::IOBuf>> DestinationBuffer::getData(
     VLOG(0) << this << " Out of order get: " << sequence << " over "
             << sequence_ << " Setting second notify " << notifySequence_
             << " / " << sequence;
-    notify_ = notify;
+    notify_ = std::move(notify);
     notifySequence_ = std::min(notifySequence_, sequence);
     notifyMaxBytes_ = maxBytes;
     return {};
   }
   if (sequence - sequence_ == data_.size()) {
-    notify_ = notify;
+    notify_ = std::move(notify);
     notifySequence_ = sequence;
     notifyMaxBytes_ = maxBytes;
     return {};
@@ -43,9 +43,9 @@ std::vector<std::unique_ptr<folly::IOBuf>> DestinationBuffer::getData(
 
   std::vector<std::unique_ptr<folly::IOBuf>> result;
   uint64_t resultBytes = 0;
-  for (auto i = sequence - sequence_; i < data_.size(); i++) {
+  for (auto i = sequence - sequence_; i < data_.size(); ++i) {
     // nullptr is used as end marker
-    if (!data_[i]) {
+    if (data_[i] == nullptr) {
       VELOX_CHECK_EQ(i, data_.size() - 1, "null marker found in the middle");
       result.push_back(nullptr);
       break;
@@ -60,7 +60,7 @@ std::vector<std::unique_ptr<folly::IOBuf>> DestinationBuffer::getData(
 }
 
 DataAvailable DestinationBuffer::getAndClearNotify() {
-  if (!notify_) {
+  if (notify_ == nullptr) {
     return DataAvailable();
   }
   DataAvailable result;
@@ -76,7 +76,7 @@ DataAvailable DestinationBuffer::getAndClearNotify() {
 std::vector<std::shared_ptr<SerializedPage>> DestinationBuffer::acknowledge(
     int64_t sequence,
     bool fromGetData) {
-  int64_t numDeleted = sequence - sequence_;
+  const int64_t numDeleted = sequence - sequence_;
   if (numDeleted == 0 && fromGetData) {
     // If called from getData, it is expected that there will be
     // nothing to delete because a previous acknowledge has been
@@ -98,7 +98,7 @@ std::vector<std::shared_ptr<SerializedPage>> DestinationBuffer::acknowledge(
       numDeleted, data_.size(), "Ack received for a not yet produced item");
   std::vector<std::shared_ptr<SerializedPage>> freed;
   for (auto i = 0; i < numDeleted; ++i) {
-    if (!data_[i]) {
+    if (data_[i] == nullptr) {
       VELOX_CHECK_EQ(i, data_.size() - 1, "null marker found in the middle");
       break;
     }
@@ -113,7 +113,7 @@ std::vector<std::shared_ptr<SerializedPage>>
 DestinationBuffer::deleteResults() {
   std::vector<std::shared_ptr<SerializedPage>> freed;
   for (auto i = 0; i < data_.size(); ++i) {
-    if (!data_[i]) {
+    if (data_[i] == nullptr) {
       VELOX_CHECK_EQ(i, data_.size() - 1, "null marker found in the middle");
       break;
     }
@@ -146,17 +146,32 @@ void releaseAfterAcknowledge(
 }
 } // namespace
 
+std::string PartitionedOutputBuffer::kindString(Kind kind) {
+  switch (kind) {
+    case Kind::kPartitioned:
+      return "PARTITIONED";
+    case Kind::kBroadcast:
+      return "BROADCAST";
+    case Kind::kArbitrary:
+      return "ARBITRARY";
+    default:
+      return fmt::format("INVALID KIND {}", static_cast<int>(kind));
+  }
+}
+
 PartitionedOutputBuffer::PartitionedOutputBuffer(
     std::shared_ptr<Task> task,
-    bool broadcast,
+    PartitionedOutputBuffer::Kind kind,
     int numDestinations,
     uint32_t numDrivers)
     : task_(std::move(task)),
-      broadcast_(broadcast),
-      numDrivers_(numDrivers),
+      kind_(kind),
       maxSize_(
           task_->queryCtx()->queryConfig().maxPartitionedOutputBufferSize()),
-      continueSize_((maxSize_ * kContinuePct) / 100) {
+      continueSize_((maxSize_ * kContinuePct) / 100),
+      numDrivers_(numDrivers) {
+  VELOX_CHECK_NE(
+      kind_, Kind::kArbitrary, "{} output buffer kind is not supported", kind_);
   buffers_.reserve(numDestinations);
   for (int i = 0; i < numDestinations; i++) {
     buffers_.push_back(std::make_unique<DestinationBuffer>());
@@ -166,7 +181,7 @@ PartitionedOutputBuffer::PartitionedOutputBuffer(
 void PartitionedOutputBuffer::updateBroadcastOutputBuffers(
     int numBuffers,
     bool noMoreBuffers) {
-  VELOX_CHECK(broadcast_);
+  VELOX_CHECK(isBroadcast(), "Unexpected output buffer type {}", kind_);
 
   std::vector<ContinuePromise> promises;
   bool isFinished;
@@ -210,7 +225,7 @@ void PartitionedOutputBuffer::updateNumDrivers(uint32_t newNumDrivers) {
 void PartitionedOutputBuffer::addBroadcastOutputBuffersLocked(int numBuffers) {
   VELOX_CHECK(!noMoreBroadcastBuffers_)
   buffers_.reserve(numBuffers);
-  for (auto i = buffers_.size(); i < numBuffers; i++) {
+  for (int32_t i = buffers_.size(); i < numBuffers; ++i) {
     auto buffer = std::make_unique<DestinationBuffer>();
     for (const auto& data : dataToBroadcast_) {
       buffer->enqueue(data);
@@ -236,10 +251,11 @@ BlockingReason PartitionedOutputBuffer::enqueue(
     VELOX_CHECK_LT(destination, buffers_.size());
 
     totalSize_ += data->size();
-    if (broadcast_) {
+    if (isBroadcast()) {
+      VELOX_CHECK_EQ(destination, 0);
       std::shared_ptr<SerializedPage> sharedData(data.release());
       for (auto& buffer : buffers_) {
-        if (buffer) {
+        if (buffer != nullptr) {
           buffer->enqueue(sharedData);
           dataAvailableCallbacks.emplace_back(buffer->getAndClearNotify());
         }
@@ -249,12 +265,13 @@ BlockingReason PartitionedOutputBuffer::enqueue(
         dataToBroadcast_.emplace_back(sharedData);
       }
     } else {
-      if (auto buffer = buffers_[destination].get()) {
+      auto* buffer = buffers_[destination].get();
+      if (buffer != nullptr) {
         buffer->enqueue(std::move(data));
         dataAvailableCallbacks.emplace_back(buffer->getAndClearNotify());
       } else {
-        // Some downstream tasks may finish early and delete the
-        // corresponding buffers. Further data for these buffers is dropped.
+        // Some downstream tasks may finish early and delete the corresponding
+        // buffers. Further data for these buffers is dropped.
         totalSize_ -= data->size();
       }
     }
@@ -317,11 +334,11 @@ bool PartitionedOutputBuffer::isFinished() {
 }
 
 bool PartitionedOutputBuffer::isFinishedLocked() {
-  if (broadcast_ && !noMoreBroadcastBuffers_) {
+  if (isBroadcast() && !noMoreBroadcastBuffers_) {
     return false;
   }
   for (auto& buffer : buffers_) {
-    if (buffer) {
+    if (buffer != nullptr) {
       return false;
     }
   }
@@ -380,8 +397,8 @@ bool PartitionedOutputBuffer::deleteResults(int destination) {
     std::lock_guard<std::mutex> l(mutex_);
     VELOX_CHECK_LT(destination, buffers_.size());
     auto* buffer = buffers_[destination].get();
-    if (!buffer) {
-      VLOG(1) << "Extra delete  received  for destination " << destination;
+    if (buffer == nullptr) {
+      VLOG(1) << "Extra delete received for destination " << destination;
       return false;
     }
     freed = buffer->deleteResults();
@@ -417,13 +434,13 @@ void PartitionedOutputBuffer::getData(
   {
     std::lock_guard<std::mutex> l(mutex_);
 
-    if (broadcast_ && destination >= buffers_.size()) {
+    if (isBroadcast() && destination >= buffers_.size()) {
       addBroadcastOutputBuffersLocked(destination + 1);
     }
 
     VELOX_CHECK_LT(destination, buffers_.size());
     auto destinationBuffer = buffers_[destination].get();
-    VELOX_CHECK(
+    VELOX_CHECK_NOT_NULL(
         destinationBuffer,
         "getData received after its buffer is deleted. Destination: {}, sequence: {}",
         destination,
@@ -439,7 +456,7 @@ void PartitionedOutputBuffer::getData(
 }
 
 void PartitionedOutputBuffer::terminate() {
-  VELOX_CHECK(not task_->isRunning());
+  VELOX_CHECK(!task_->isRunning());
 
   std::vector<ContinuePromise> outstandingPromises;
   {
@@ -454,7 +471,7 @@ void PartitionedOutputBuffer::terminate() {
 std::string PartitionedOutputBuffer::toString() {
   std::lock_guard<std::mutex> l(mutex_);
   std::stringstream out;
-  out << "[PartitionedOutputBuffer totalSize_=" << totalSize_
+  out << "[PartitionedOutputBuffer[" << kind_ << "] totalSize_=" << totalSize_
       << "b, num producers blocked=" << promises_.size()
       << ", completed=" << numFinished_ << "/" << numDrivers_ << ", "
       << (atEnd_ ? "at end, " : "") << "destinations: " << std::endl;
@@ -556,13 +573,26 @@ void PartitionedOutputBufferManager::initializeTask(
     bool broadcast,
     int numDestinations,
     int numDrivers) {
+  return initializeTask(
+      task,
+      broadcast ? PartitionedOutputBuffer::Kind::kBroadcast
+                : PartitionedOutputBuffer::Kind::kPartitioned,
+      numDestinations,
+      numDrivers);
+}
+
+void PartitionedOutputBufferManager::initializeTask(
+    std::shared_ptr<Task> task,
+    PartitionedOutputBuffer::Kind kind,
+    int numDestinations,
+    int numDrivers) {
   const auto& taskId = task->taskId();
 
   buffers_.withLock([&](auto& buffers) {
     auto it = buffers.find(taskId);
     if (it == buffers.end()) {
       buffers[taskId] = std::make_shared<PartitionedOutputBuffer>(
-          std::move(task), broadcast, numDestinations, numDrivers);
+          std::move(task), kind, numDestinations, numDrivers);
     } else {
       VELOX_FAIL(
           "Registering an output buffer for pre-existing taskId {}", taskId);
@@ -599,7 +629,7 @@ void PartitionedOutputBufferManager::removeTask(const std::string& taskId) {
         buffers.erase(taskId);
         return taskBuffer;
       });
-  if (buffer) {
+  if (buffer != nullptr) {
     buffer->terminate();
   }
 }

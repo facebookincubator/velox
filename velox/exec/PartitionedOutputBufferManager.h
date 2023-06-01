@@ -86,9 +86,16 @@ class DestinationBuffer {
 
 class PartitionedOutputBuffer {
  public:
+  enum class Kind {
+    kPartitioned,
+    kBroadcast,
+    kArbitrary,
+  };
+  static std::string kindString(Kind kind);
+
   PartitionedOutputBuffer(
       std::shared_ptr<Task> task,
-      bool broadcast,
+      Kind kind,
       int numDestinations,
       uint32_t numDrivers);
 
@@ -154,17 +161,25 @@ class PartitionedOutputBuffer {
   /// and enqueue data that has been produced so far (e.g. dataToBroadcast_).
   void addBroadcastOutputBuffersLocked(int numBuffers);
 
+  FOLLY_ALWAYS_INLINE bool isBroadcast() const {
+    return kind_ == Kind::kBroadcast;
+  }
+  FOLLY_ALWAYS_INLINE bool isPartitioned() const {
+    return kind_ == Kind::kPartitioned;
+  }
+
   const std::shared_ptr<Task> task_;
-  const bool broadcast_;
-  /// Total number of drivers expected to produce results. This number will
-  /// decrease in the end of grouped execution, when we understand the real
-  /// number of producer drivers (depending on the number of split groups).
-  uint32_t numDrivers_{0};
+  const Kind kind_;
   /// If 'totalSize_' > 'maxSize_', each producer is blocked after adding data.
   const uint64_t maxSize_;
-  /// When 'totalSize_' goes below 'continueSize_', blocked producers are
-  /// resumed.
+  // When 'totalSize_' goes below 'continueSize_', blocked producers are
+  // resumed.
   const uint64_t continueSize_;
+
+  // Total number of drivers expected to produce results. This number will
+  // decrease in the end of grouped execution, when we understand the real
+  // number of producer drivers (depending on the number of split groups).
+  uint32_t numDrivers_{0};
 
   bool noMoreBroadcastBuffers_ = false;
 
@@ -177,7 +192,7 @@ class PartitionedOutputBuffer {
   // Actual data size in 'buffers_'.
   uint64_t totalSize_ = 0;
   std::vector<ContinuePromise> promises_;
-  // One buffer per destination
+  // One buffer per destination.
   std::vector<std::unique_ptr<DestinationBuffer>> buffers_;
   uint32_t numFinished_{0};
   // When this reaches buffers_.size(), 'this' can be freed.
@@ -185,11 +200,23 @@ class PartitionedOutputBuffer {
   bool atEnd_ = false;
 };
 
+FOLLY_ALWAYS_INLINE std::ostream& operator<<(
+    std::ostream& out,
+    const PartitionedOutputBuffer::Kind kind) {
+  return out << PartitionedOutputBuffer::kindString(kind);
+}
+
 class PartitionedOutputBufferManager {
  public:
   void initializeTask(
       std::shared_ptr<Task> task,
       bool broadcast,
+      int numDestinations,
+      int numDrivers);
+
+  void initializeTask(
+      std::shared_ptr<Task> task,
+      PartitionedOutputBuffer::Kind kind,
       int numDestinations,
       int numDrivers);
 
