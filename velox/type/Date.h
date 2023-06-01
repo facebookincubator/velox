@@ -39,6 +39,10 @@ struct Date {
     days_ += days;
   }
 
+  Date operator+(const int32_t days) const {
+    return Date(days_ + days);
+  }
+
   bool operator==(const Date& other) const {
     return days_ == other.days_;
   }
