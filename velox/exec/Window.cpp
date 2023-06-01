@@ -602,52 +602,47 @@ void Window::updateFrameBounds(
         updateKRowsFrameBounds(
             true, frameArg.value(), startRow, numRows, rawFrameBounds);
       } else {
+#define VELOX_DYNAMIC_LIMITED_SCALAR_TYPE_DISPATCH(                           \
+    TEMPLATE_FUNC, typeKind, ...)                                             \
+  [&]() {                                                                     \
+    switch (typeKind) {                                                       \
+      case ::facebook::velox::TypeKind::INTEGER: {                            \
+        return TEMPLATE_FUNC<::facebook::velox::TypeKind::INTEGER>(           \
+            __VA_ARGS__);                                                     \
+      }                                                                       \
+      case ::facebook::velox::TypeKind::TINYINT: {                            \
+        return TEMPLATE_FUNC<::facebook::velox::TypeKind::TINYINT>(           \
+            __VA_ARGS__);                                                     \
+      }                                                                       \
+      case ::facebook::velox::TypeKind::SMALLINT: {                           \
+        return TEMPLATE_FUNC<::facebook::velox::TypeKind::SMALLINT>(          \
+            __VA_ARGS__);                                                     \
+      }                                                                       \
+      case ::facebook::velox::TypeKind::BIGINT: {                             \
+        return TEMPLATE_FUNC<::facebook::velox::TypeKind::BIGINT>(            \
+            __VA_ARGS__);                                                     \
+      }                                                                       \
+      case ::facebook::velox::TypeKind::DATE: {                               \
+        return TEMPLATE_FUNC<::facebook::velox::TypeKind::DATE>(__VA_ARGS__); \
+      }                                                                       \
+      default:                                                                \
+        VELOX_FAIL(                                                           \
+            "Not supported type for sort key!: {}",                           \
+            mapTypeKindToName(typeKind));                                     \
+    }                                                                         \
+  }()
         // Sort key type.
         auto sortKeyTypePtr = outputType_->childAt(sortKeyInfo_[0].first);
-        switch (sortKeyTypePtr->kind()) {
-          case TypeKind::TINYINT:
-            updateKRangeFrameBounds<TypeKind::TINYINT>(
-                true,
-                isStartBound,
-                frameArg.value(),
-                numRows,
-                rawFrameBounds,
-                rawPeerStarts,
-                rawPeerEnds);
-            break;
-          case TypeKind::SMALLINT:
-            updateKRangeFrameBounds<TypeKind::SMALLINT>(
-                true,
-                isStartBound,
-                frameArg.value(),
-                numRows,
-                rawFrameBounds,
-                rawPeerStarts,
-                rawPeerEnds);
-            break;
-          case TypeKind::INTEGER:
-            updateKRangeFrameBounds<TypeKind::INTEGER>(
-                true,
-                isStartBound,
-                frameArg.value(),
-                numRows,
-                rawFrameBounds,
-                rawPeerStarts,
-                rawPeerEnds);
-            break;
-          case TypeKind::BIGINT:
-            updateKRangeFrameBounds<TypeKind::BIGINT>(
-                true,
-                isStartBound,
-                frameArg.value(),
-                numRows,
-                rawFrameBounds,
-                rawPeerStarts,
-                rawPeerEnds);
-            break;
-          default:
-            VELOX_USER_FAIL("Not supported type for sort key!");
-        }
+        VELOX_DYNAMIC_LIMITED_SCALAR_TYPE_DISPATCH(
+            updateKRangeFrameBounds,
+            sortKeyTypePtr->kind(),
+            true,
+            isStartBound,
+            frameArg.value(),
+            numRows,
+            rawFrameBounds,
+            rawPeerStarts,
+            rawPeerEnds);
       }
       break;
     }
@@ -658,50 +653,17 @@ void Window::updateFrameBounds(
       } else {
         // Sort key type.
         auto sortKeyTypePtr = outputType_->childAt(sortKeyInfo_[0].first);
-        switch (sortKeyTypePtr->kind()) {
-          case TypeKind::TINYINT:
-            updateKRangeFrameBounds<TypeKind::TINYINT>(
-                false,
-                isStartBound,
-                frameArg.value(),
-                numRows,
-                rawFrameBounds,
-                rawPeerStarts,
-                rawPeerEnds);
-            break;
-          case TypeKind::SMALLINT:
-            updateKRangeFrameBounds<TypeKind::SMALLINT>(
-                false,
-                isStartBound,
-                frameArg.value(),
-                numRows,
-                rawFrameBounds,
-                rawPeerStarts,
-                rawPeerEnds);
-            break;
-          case TypeKind::INTEGER:
-            updateKRangeFrameBounds<TypeKind::INTEGER>(
-                false,
-                isStartBound,
-                frameArg.value(),
-                numRows,
-                rawFrameBounds,
-                rawPeerStarts,
-                rawPeerEnds);
-            break;
-          case TypeKind::BIGINT:
-            updateKRangeFrameBounds<TypeKind::BIGINT>(
-                false,
-                isStartBound,
-                frameArg.value(),
-                numRows,
-                rawFrameBounds,
-                rawPeerStarts,
-                rawPeerEnds);
-            break;
-          default:
-            VELOX_USER_FAIL("Not supported type for sort key!");
-        }
+        VELOX_DYNAMIC_LIMITED_SCALAR_TYPE_DISPATCH(
+            updateKRangeFrameBounds,
+            sortKeyTypePtr->kind(),
+            false,
+            isStartBound,
+            frameArg.value(),
+            numRows,
+            rawFrameBounds,
+            rawPeerStarts,
+            rawPeerEnds);
+#undef VELOX_DYNAMIC_LIMITED_SCALAR_TYPE_DISPATCH
       }
       break;
     }
