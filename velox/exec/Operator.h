@@ -554,7 +554,11 @@ class Operator : public BaseRuntimeStatWriter {
   }
 
   /// Creates output vector from 'input_' and 'results_' according to
-  /// 'identityProjections_' and 'resultProjections_'.
+  /// 'identityProjections_' and 'resultProjections_'. If 'mapping' is set to
+  /// nullptr, the children of the output vector will be identical to their
+  /// respective sources from 'input_' or 'results_'. However, if 'mapping' is
+  /// provided, the children of the output vector will be generated as
+  /// dictionary of the sources using the specified 'mapping'.
   RowVectorPtr fillOutput(vector_size_t size, const BufferPtr& mapping);
 
   /// Returns the number of rows for the output batch. This uses averageRowSize
