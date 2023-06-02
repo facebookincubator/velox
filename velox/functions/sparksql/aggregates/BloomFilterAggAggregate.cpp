@@ -221,7 +221,8 @@ class BloomFilterAggAggregate : public exec::Aggregate {
 
   void computeCapacity() {
     if (capacity_ == kMissingArgument) {
-      int64_t estimatedNumItems = std::min(estimatedNumItems_, kMaxNumItems);
+      // For further use
+      // int64_t estimatedNumItems = std::min(estimatedNumItems_, kMaxNumItems);
       int64_t numBits = std::min(numBits_, kMaxNumBits);
       capacity_ = numBits / 16;
     }
@@ -229,7 +230,6 @@ class BloomFilterAggAggregate : public exec::Aggregate {
 
   int32_t getTotalSize(char** groups, int32_t numGroups) const {
     int32_t totalSize = 0;
-    int32_t inlineSize = 0;
     for (vector_size_t i = 0; i < numGroups; ++i) {
       auto group = groups[i];
       auto accumulator = value<BloomFilterAccumulator>(group);
@@ -301,8 +301,8 @@ bool registerBloomFilterAggAggregate(const std::string& name) {
       name,
       std::move(signatures),
       [name](
-          core::AggregationNode::Step step,
-          const std::vector<TypePtr>& argTypes,
+          core::AggregationNode::Step /* step */,
+          const std::vector<TypePtr>& /* argTypes */,
           const TypePtr& resultType) -> std::unique_ptr<exec::Aggregate> {
         return std::make_unique<BloomFilterAggAggregate>(resultType);
       });

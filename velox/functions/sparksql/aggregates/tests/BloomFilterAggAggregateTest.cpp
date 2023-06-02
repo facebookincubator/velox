@@ -49,8 +49,8 @@ TEST_F(BloomFilterAggAggregateTest, basic) {
   auto vectors = {makeRowVector({makeFlatVector<int64_t>(
       100, [](vector_size_t row) { return row % 9; })})};
   auto bloomFilter = getSerializedBloomFilter(4);
-  auto expected = {makeRowVector({makeFlatVector<StringView>(
-      1, [&](vector_size_t row) { return StringView(bloomFilter); })})};
+  auto expected = {
+      makeRowVector({makeConstant<StringView>(StringView(bloomFilter), 1)})};
 
   testAggregations(vectors, {}, {"bloom_filter_agg(c0, 5, 64)"}, expected);
 }
