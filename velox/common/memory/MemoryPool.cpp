@@ -417,6 +417,16 @@ MemoryPoolImpl::MemoryPoolImpl(
 
 MemoryPoolImpl::~MemoryPoolImpl() {
   if (checkUsageLeak_) {
+    if (!addrToReserveDetail_.empty()) {
+      std::stringbuf buf;
+      std::ostream oss(&buf);
+      for (const auto& itr : addrToReserveDetail_) {
+        const auto& pair = *(itr.second);
+        oss << "======== Reserve Stack " << pair.first << "bytes =========\n"
+            << pair.second;
+      }
+      LOG(ERROR) << buf.str();
+    }
     VELOX_CHECK(
         (usedReservationBytes_ == 0) && (reservationBytes_ == 0) &&
             (minReservationBytes_ == 0),
@@ -449,20 +459,22 @@ MemoryPool::Stats MemoryPoolImpl::statsLocked() const {
 void* MemoryPoolImpl::allocate(int64_t size) {
   CHECK_AND_INC_MEM_OP_STATS(Allocs);
   const auto alignedSize = sizeAlign(size);
-  reserve(alignedSize);
+  auto dbgDetail = reserve(alignedSize);
   void* buffer = allocator_->allocateBytes(alignedSize, alignment_);
   if (FOLLY_UNLIKELY(buffer == nullptr)) {
     release(alignedSize);
     VELOX_MEM_ALLOC_ERROR(fmt::format(
         "{} failed with {} bytes from {}", __FUNCTION__, size, toString()));
   }
+  recordAllocDbg(buffer, size);
+  recordReserveDbg(buffer, std::move(dbgDetail));
   return buffer;
 }
 
 void* MemoryPoolImpl::allocateZeroFilled(int64_t numEntries, int64_t sizeEach) {
   CHECK_AND_INC_MEM_OP_STATS(Allocs);
   const auto alignedSize = sizeAlign(sizeEach * numEntries);
-  reserve(alignedSize);
+  auto dbgDetail = reserve(alignedSize);
   void* buffer = allocator_->allocateZeroFilled(alignedSize);
   if (FOLLY_UNLIKELY(buffer == nullptr)) {
     release(alignedSize);
@@ -473,14 +485,15 @@ void* MemoryPoolImpl::allocateZeroFilled(int64_t numEntries, int64_t sizeEach) {
         sizeEach,
         toString()));
   }
+  recordAllocDbg(buffer, sizeEach * numEntries);
+  recordReserveDbg(buffer, std::move(dbgDetail));
   return buffer;
 }
 
 void* MemoryPoolImpl::reallocate(void* p, int64_t size, int64_t newSize) {
   CHECK_AND_INC_MEM_OP_STATS(Allocs);
-  const auto alignedSize = sizeAlign(size);
   const auto alignedNewSize = sizeAlign(newSize);
-  reserve(alignedNewSize);
+  auto dbgDetail = reserve(alignedNewSize);
 
   void* newP = allocator_->allocateBytes(alignedNewSize, alignment_);
   if (FOLLY_UNLIKELY(newP == nullptr)) {
@@ -494,17 +507,21 @@ void* MemoryPoolImpl::reallocate(void* p, int64_t size, int64_t newSize) {
   }
   if (p != nullptr) {
     ::memcpy(newP, p, std::min(size, newSize));
-    free(p, alignedSize);
+    free(p, size);
   }
 
+  recordAllocDbg(newP, newSize);
+  recordReserveDbg(newP, std::move(dbgDetail));
   return newP;
 }
 
 void MemoryPoolImpl::free(void* p, int64_t size) {
+//  LOG(INFO) << "=====FREE===== Pool[" << reinterpret_cast<uint64_t>(this) << "]  [" << reinterpret_cast<uint64_t>(p) << "] FREE " << size << " bytes";
   CHECK_AND_INC_MEM_OP_STATS(Frees);
   const auto alignedSize = sizeAlign(size);
+  release(alignedSize, false, p);
   allocator_->freeBytes(p, alignedSize);
-  release(alignedSize);
+  recordFreeDbg(p, size);
 }
 
 void MemoryPoolImpl::allocateNonContiguous(
@@ -631,16 +648,19 @@ bool MemoryPoolImpl::maybeReserve(uint64_t increment) {
   return true;
 }
 
-void MemoryPoolImpl::reserve(uint64_t size, bool reserveOnly) {
+std::unique_ptr<std::pair<uint64_t, std::string>> MemoryPoolImpl::reserve(
+    uint64_t size,
+    bool reserveOnly) {
+  std::unique_ptr<std::pair<uint64_t, std::string>> dbgDetail;
   if (FOLLY_LIKELY(trackUsage_)) {
     if (FOLLY_LIKELY(threadSafe_)) {
-      reserveThreadSafe(size, reserveOnly);
+      dbgDetail = reserveThreadSafe(size, reserveOnly);
     } else {
       reserveNonThreadSafe(size, reserveOnly);
     }
   }
   if (reserveOnly) {
-    return;
+    return nullptr;
   }
   if (FOLLY_UNLIKELY(!manager_->reserve(size))) {
     // NOTE: If we can make the reserve and release a single transaction we
@@ -656,13 +676,16 @@ void MemoryPoolImpl::reserve(uint64_t size, bool reserveOnly) {
             succinctBytes(size),
             capacityToString(capacity()))));
   }
+  return dbgDetail;
 }
 
-void MemoryPoolImpl::reserveThreadSafe(uint64_t size, bool reserveOnly) {
+std::unique_ptr<std::pair<uint64_t, std::string>>
+MemoryPoolImpl::reserveThreadSafe(uint64_t size, bool reserveOnly) {
   VELOX_CHECK(isLeaf());
 
   int32_t numAttempts = 0;
   int64_t increment = 0;
+  std::unique_ptr<std::pair<uint64_t, std::string>> dbgDetail;
   for (;; ++numAttempts) {
     {
       std::lock_guard<std::mutex> l(mutex_);
@@ -672,6 +695,7 @@ void MemoryPoolImpl::reserveThreadSafe(uint64_t size, bool reserveOnly) {
           minReservationBytes_ = tsanAtomicValue(reservationBytes_);
         } else {
           usedReservationBytes_ += size;
+          dbgDetail = genReserveDbgDetail(size);
           cumulativeBytes_ += size;
           maybeUpdatePeakBytesLocked(usedReservationBytes_);
         }
@@ -687,7 +711,7 @@ void MemoryPoolImpl::reserveThreadSafe(uint64_t size, bool reserveOnly) {
       // When race with concurrent memory reservation free, we might end up with
       // unused reservation but no used reservation if a retry memory
       // reservation attempt run into memory capacity exceeded error.
-      releaseThreadSafe(0, false);
+      releaseThreadSafe(0, false, nullptr);
       std::rethrow_exception(std::current_exception());
     }
   }
@@ -700,6 +724,7 @@ void MemoryPoolImpl::reserveThreadSafe(uint64_t size, bool reserveOnly) {
   if (numAttempts > 1) {
     numCollisions_ += numAttempts - 1;
   }
+  return dbgDetail;
 }
 
 bool MemoryPoolImpl::incrementReservationThreadSafe(
@@ -778,20 +803,23 @@ void MemoryPoolImpl::release() {
   release(0, true);
 }
 
-void MemoryPoolImpl::release(uint64_t size, bool releaseOnly) {
+void MemoryPoolImpl::release(uint64_t size, bool releaseOnly, void* addr) {
   if (!releaseOnly) {
     manager_->release(size);
   }
   if (FOLLY_LIKELY(trackUsage_)) {
     if (FOLLY_LIKELY(threadSafe_)) {
-      releaseThreadSafe(size, releaseOnly);
+      releaseThreadSafe(size, releaseOnly, addr);
     } else {
       releaseNonThreadSafe(size, releaseOnly);
     }
   }
 }
 
-void MemoryPoolImpl::releaseThreadSafe(uint64_t size, bool releaseOnly) {
+void MemoryPoolImpl::releaseThreadSafe(
+    uint64_t size,
+    bool releaseOnly,
+    void* addr) {
   VELOX_CHECK(isLeaf());
   VELOX_DCHECK_NOT_NULL(parent_);
 
@@ -808,6 +836,7 @@ void MemoryPoolImpl::releaseThreadSafe(uint64_t size, bool releaseOnly) {
       minReservationBytes_ = 0;
     } else {
       usedReservationBytes_ -= size;
+      recordReleaseDbg(addr, size);
       const int64_t newCap =
           std::max(minReservationBytes_, usedReservationBytes_);
       newQuantized = quantizedSize(newCap);

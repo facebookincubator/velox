@@ -644,7 +644,9 @@ class MemoryPoolImpl : public MemoryPool {
   // protection to prevent concurrent updates to the same leaf memory pool.
   // 'reserveNonThreadSafe' processes the memory reservation without mutex lock
   // at the leaf memory pool.
-  void reserve(uint64_t size, bool reserveOnly = false);
+  std::unique_ptr<std::pair<uint64_t, std::string>> reserve(
+      uint64_t size,
+      bool reserveOnly = false);
 
   FOLLY_ALWAYS_INLINE void reserveNonThreadSafe(
       uint64_t size,
@@ -678,7 +680,9 @@ class MemoryPoolImpl : public MemoryPool {
     }
   }
 
-  void reserveThreadSafe(uint64_t size, bool reserveOnly = false);
+  std::unique_ptr<std::pair<uint64_t, std::string>> reserveThreadSafe(
+      uint64_t size,
+      bool reserveOnly = false);
 
   // Increments the reservation and checks against limits at root tracker. Calls
   // root tracker's 'growCallback_' if it is set and limit exceeded. Should be
@@ -728,9 +732,9 @@ class MemoryPoolImpl : public MemoryPool {
   // reservation if 'minReservationBytes_' is set. 'releaseThreadSafe' processes
   // the memory reservation release with mutex lock protection at the leaf
   // memory pool while 'reserveThreadSafe' doesn't.
-  void release(uint64_t bytes, bool releaseOnly = false);
+  void release(uint64_t bytes, bool releaseOnly = false, void* addr = nullptr);
 
-  void releaseThreadSafe(uint64_t size, bool releaseOnly);
+  void releaseThreadSafe(uint64_t size, bool releaseOnly, void* addr);
 
   FOLLY_ALWAYS_INLINE void releaseNonThreadSafe(
       uint64_t size,
@@ -874,6 +878,120 @@ class MemoryPoolImpl : public MemoryPool {
   // The number of internal memory reservation collisions caused by concurrent
   // memory reservation requests.
   std::atomic<uint64_t> numCollisions_{0};
+
+  std::mutex dbgAllocMutex_;
+  // Map from address to {alloc size, call stack}
+  std::unordered_map<uint64_t, std::pair<uint64_t, std::string>>
+      addrToAllocDetail_;
+  std::mutex dbgReserveMutex_;
+  // Map for reserve, from address to {reserve size, call stack}
+  std::
+      unordered_map<uint64_t, std::unique_ptr<std::pair<uint64_t, std::string>>>
+          addrToReserveDetail_;
+  inline bool reserveDbgConditionMet(bool isReserve) {
+    if (isReserve) {
+      return true;
+    } else {
+      return true;
+    }
+  }
+
+  std::unique_ptr<std::pair<uint64_t, std::string>> genReserveDbgDetail(
+      uint64_t size) {
+    if (!reserveDbgConditionMet(true)) {
+      return nullptr;
+    }
+    return std::make_unique<std::pair<uint64_t, std::string>>(
+        size, process::StackTrace().toString());
+  }
+
+  inline void recordReserveDbg(
+      void* addr,
+      std::unique_ptr<std::pair<uint64_t, std::string>> detail) {
+    if (!reserveDbgConditionMet(true) || detail == nullptr) {
+      return;
+    }
+    std::lock_guard<std::mutex> l(dbgReserveMutex_);
+    addrToReserveDetail_.emplace(
+        reinterpret_cast<uint64_t>(addr), std::move(detail));
+  }
+
+  inline void recordReleaseDbg(void* addr, uint64_t size) {
+    if (!reserveDbgConditionMet(false) || addr == nullptr) {
+      return;
+    }
+    std::lock_guard<std::mutex> l(dbgReserveMutex_);
+    uint64_t addrUint64 = reinterpret_cast<uint64_t>(addr);
+    auto reserveResult = addrToReserveDetail_.find(addrUint64);
+    if (reserveResult == addrToReserveDetail_.end()) {
+      return;
+    }
+    const auto& reserveDetail = reserveResult->second;
+    if (reserveDetail->first != size) {
+      const auto releaseStackTrace = process::StackTrace().toString();
+      VELOX_FAIL(fmt::format(
+          "[MemoryPool] Trying to release {} bytes on an reservation of {} bytes.\n"
+          "======== Reserve Stack ========\n"
+          "{}\n"
+          "======== Release Stack ========\n"
+          "{}\n",
+          size,
+          reserveDetail->first,
+          reserveDetail->second,
+          releaseStackTrace));
+    }
+    addrToReserveDetail_.erase(addrUint64);
+  }
+
+  inline bool allocDbgConditionMet(bool isAlloc) {
+    return false;
+    //    if (isAlloc) {
+    //      if (name_.find("PartialAggregation") != std::string::npos) {
+    //        return true;
+    //      } else {
+    //        return false;
+    //      }
+    //    } else {
+    //      return true;
+    //    }
+  }
+
+  inline void recordAllocDbg(void* addr, uint64_t size) {
+    if (!allocDbgConditionMet(true)) {
+      return;
+    }
+    const auto stackTrace = process::StackTrace().toString();
+    std::lock_guard<std::mutex> l(dbgAllocMutex_);
+    addrToAllocDetail_.emplace(
+        reinterpret_cast<uint64_t>(addr), std::pair{size, stackTrace});
+  }
+
+  inline void recordFreeDbg(void* addr, uint64_t size) {
+    if (!allocDbgConditionMet(false) || addr == nullptr) {
+      return;
+    }
+    std::lock_guard<std::mutex> l(dbgAllocMutex_);
+    uint64_t addrUint64 = reinterpret_cast<uint64_t>(addr);
+    auto allocResult = addrToAllocDetail_.find(addrUint64);
+    if (allocResult == addrToAllocDetail_.end()) {
+      return;
+    }
+    const auto allocDetail = allocResult->second;
+    if (allocDetail.first != size) {
+      const auto freeStackTrace = process::StackTrace().toString();
+      VELOX_FAIL(fmt::format(
+          "[MemoryPool] Trying to free {} bytes on an allocation of {} bytes.\n"
+          "======== Allocation Stack ========\n"
+          "{}\n"
+          "============ Free Stack ==========\n"
+          "{}\n",
+          size,
+          allocDetail.first,
+          allocDetail.second,
+          freeStackTrace));
+    }
+    addrToAllocDetail_.erase(addrUint64);
+  }
 };
 
 /// An Allocator backed by a memory pool for STL containers.
