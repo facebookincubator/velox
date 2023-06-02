@@ -2495,3 +2495,19 @@ TEST_F(VectorTest, resizeArrayAndMapResetOffsets) {
     checkIndices(sizes);
   }
 }
+
+TEST_F(VectorTest, getRawStringBufferWithSpace) {
+  auto vector =
+      makeFlatVector<StringView>({"ee", "rr", "rryy", "12345678901234"});
+  auto originalBufferSize = vector->stringBuffers().back()->size();
+  std::string replace = "I'm replace 123456789";
+  char* raw = vector->getRawStringBufferWithSpace(replace.size());
+  memcpy(raw, replace.data(), replace.size());
+  vector->setNoCopy(1, StringView(raw, replace.size()));
+
+  auto lastBuffer = vector->stringBuffers().back();
+  ASSERT_EQ(replace.size(), lastBuffer->size() - originalBufferSize);
+  auto expected = makeFlatVector<StringView>(
+      {"ee", "I'm replace 123456789", "rryy", "12345678901234"});
+  test::assertEqualVectors(expected, vector);
+}

@@ -403,6 +403,12 @@ class FlatVector final : public SimpleVector<T> {
     return nullptr;
   }
 
+  // Allocate buffer for not inline StringView from stringBuffers or pool,
+  // return the start pointer of allocated memory
+  char* getRawStringBufferWithSpace(vector_size_t /* unused */) {
+    return nullptr;
+  }
+
   void ensureWritable(const SelectivityVector& rows) override;
 
   bool isWritable() const override {
@@ -508,6 +514,9 @@ void FlatVector<bool>::copyValuesAndNulls(
 
 template <>
 Buffer* FlatVector<StringView>::getBufferWithSpace(vector_size_t size);
+
+template <>
+char* FlatVector<StringView>::getRawStringBufferWithSpace(vector_size_t size);
 
 template <>
 void FlatVector<StringView>::prepareForReuse();

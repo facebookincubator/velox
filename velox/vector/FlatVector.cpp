@@ -220,6 +220,14 @@ Buffer* FlatVector<StringView>::getBufferWithSpace(vector_size_t size) {
 }
 
 template <>
+char* FlatVector<StringView>::getRawStringBufferWithSpace(vector_size_t size) {
+  Buffer* buffer = getBufferWithSpace(size);
+  char* bufferPtr = buffer->asMutable<char>() + buffer->size();
+  buffer->setSize(buffer->size() + size);
+  return bufferPtr;
+}
+
+template <>
 void FlatVector<StringView>::prepareForReuse() {
   BaseVector::prepareForReuse();
 
