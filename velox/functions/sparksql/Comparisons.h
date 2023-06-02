@@ -13,6 +13,10 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+#pragma once
+
+#include <memory>
+
 #include "velox/expression/VectorFunction.h"
 
 namespace facebook::velox::functions::sparksql {
@@ -59,4 +63,66 @@ struct Equal {
   }
 };
 
+template <typename T>
+struct LessOrEqual {
+  constexpr bool operator()(const T& a, const T& b) const {
+    Less<T> less;
+    Equal<T> equal;
+    return less(a, b) || equal(a, b);
+  }
+};
+
+template <typename T>
+struct GreaterOrEqual : private Less<T> {
+  constexpr bool operator()(const T& a, const T& b) const {
+    Less<T> less;
+    Equal<T> equal;
+    return less(b, a) || equal(a, b);
+  }
+};
+
+/// Supported Types:
+/// TINYINT
+/// SMALLINT
+/// INTEGER
+/// BIGINT
+/// REAL
+/// DOUBLE
+/// BOOLEAN
+/// VARCHAR
+/// TIMESTAMP
+
+/// Special cases:
+/// NaN in Spark is handled differently from standard floating point semantics.
+/// It is considered larger than any other numeric values.
+
+std::shared_ptr<exec::VectorFunction> makeEqualTo(
+    const std::string& name,
+    const std::vector<exec::VectorFunctionArg>& inputArgs);
+
+std::shared_ptr<exec::VectorFunction> makeLessThan(
+    const std::string& name,
+    const std::vector<exec::VectorFunctionArg>& inputArgs);
+
+std::shared_ptr<exec::VectorFunction> makeGreaterThan(
+    const std::string& name,
+    const std::vector<exec::VectorFunctionArg>& inputArgs);
+
+std::shared_ptr<exec::VectorFunction> makeLessThanOrEqual(
+    const std::string& name,
+    const std::vector<exec::VectorFunctionArg>& inputArgs);
+
+std::shared_ptr<exec::VectorFunction> makeGreaterThanOrEqual(
+    const std::string& name,
+    const std::vector<exec::VectorFunctionArg>& inputArgs);
+
+inline std::vector<std::shared_ptr<exec::FunctionSignature>>
+comparisonSignatures() {
+  return {exec::FunctionSignatureBuilder()
+              .typeVariable("T")
+              .returnType("boolean")
+              .argumentType("T")
+              .argumentType("T")
+              .build()};
+}
 } // namespace facebook::velox::functions::sparksql
