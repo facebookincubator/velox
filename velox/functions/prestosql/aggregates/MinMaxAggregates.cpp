@@ -40,7 +40,7 @@ struct MinMaxTrait<Timestamp> {
   }
 
   static Timestamp max() {
-    return Timestamp(std::numeric_limits<int64_t>::max(), Timestamp::MAX_NANOS);
+    return Timestamp(std::numeric_limits<int64_t>::max(), Timestamp::kMaxNanos);
   }
 };
 

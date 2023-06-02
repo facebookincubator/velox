@@ -142,11 +142,11 @@ TEST(TimestampTest, invalidInput) {
   // Nanos invalid range.
   VELOX_ASSERT_THROW(
       Timestamp(1, kMax),
-      fmt::format("({} vs. {})", kMax, Timestamp::MAX_NANOS));
+      fmt::format("({} vs. {})", kMax, Timestamp::kMaxNanos));
   VELOX_ASSERT_THROW(
-      Timestamp(1, Timestamp::MAX_NANOS + 1),
+      Timestamp(1, Timestamp::kMaxNanos + 1),
       fmt::format(
-          "({} vs. {})", Timestamp::MAX_NANOS + 1, Timestamp::MAX_NANOS));
+          "({} vs. {})", Timestamp::kMaxNanos + 1, Timestamp::kMaxNanos));
 }
 
 } // namespace

@@ -33,13 +33,13 @@ namespace facebook::velox {
 struct Timestamp {
  public:
   enum class Precision : int { kMilliseconds = 3, kNanoseconds = 9 };
-  // nanos in Timestamp should not greater than 1 second.
-  static constexpr uint64_t MAX_NANOS = 999'999'999;
+  // Nanos in Timestamp need to be less than 1 second.
+  static constexpr uint64_t kMaxNanos = 999'999'999;
 
   constexpr Timestamp() : seconds_(0), nanos_(0) {}
   Timestamp(int64_t seconds, uint64_t nanos)
       : seconds_(seconds), nanos_(nanos) {
-    VELOX_CHECK_LE(nanos, MAX_NANOS);
+    VELOX_CHECK_LE(nanos, kMaxNanos);
   }
 
   // Returns the current unix timestamp (ms precision).

@@ -246,7 +246,7 @@ TEST_F(HivePartitionFunctionTest, timestamp) {
        Timestamp(
            std::numeric_limits<int64_t>::min(),
            std::numeric_limits<uint64_t>::min()),
-       Timestamp(std::numeric_limits<int64_t>::max(), Timestamp::MAX_NANOS)});
+       Timestamp(std::numeric_limits<int64_t>::max(), Timestamp::kMaxNanos)});
 
   assertPartitions(values, 1, {0, 0, 0, 0});
   assertPartitions(values, 2, {0, 0, 0, 0});
