@@ -171,7 +171,8 @@ class DriverTest : public OperatorTestBase {
       // To be realized either after 1s wall time or when the corresponding Task
       // is no longer running.
       auto& executor = folly::QueuedImmediateExecutor::instance();
-      auto future = tasks_.back()->stateChangeFuture(1'000'000).via(&executor);
+      auto future =
+          tasks_.back()->taskCompletionFuture(1'000'000).via(&executor);
       stateFutures_.emplace(threadId, std::move(future));
 
       EXPECT_FALSE(stateFutures_.at(threadId).isReady());
@@ -446,7 +447,7 @@ TEST_F(DriverTest, error) {
   EXPECT_EQ(numRead, 0);
   EXPECT_TRUE(stateFutures_.at(0).isReady());
   // Realized immediately since task not running.
-  EXPECT_TRUE(tasks_[0]->stateChangeFuture(1'000'000).isReady());
+  EXPECT_TRUE(tasks_[0]->taskCompletionFuture(1'000'000).isReady());
   EXPECT_EQ(tasks_[0]->state(), TaskState::kFailed);
 }
 
@@ -468,7 +469,7 @@ TEST_F(DriverTest, cancel) {
   }
   EXPECT_GE(numRead, 1'000'000);
   auto& executor = folly::QueuedImmediateExecutor::instance();
-  auto future = tasks_[0]->stateChangeFuture(1'000'000).via(&executor);
+  auto future = tasks_[0]->taskCompletionFuture(1'000'000).via(&executor);
   future.wait();
   EXPECT_TRUE(stateFutures_.at(0).isReady());
 
@@ -521,7 +522,7 @@ TEST_F(DriverTest, slow) {
   // are updated some tens of instructions after this. Determinism
   // requires a barrier.
   auto& executor = folly::QueuedImmediateExecutor::instance();
-  auto future = tasks_[0]->stateChangeFuture(1'000'000).via(&executor);
+  auto future = tasks_[0]->taskCompletionFuture(1'000'000).via(&executor);
   future.wait();
   // Note that the driver count drops after the last thread stops and
   // realizes the future.
@@ -557,7 +558,7 @@ TEST_F(DriverTest, pause) {
   readResults(params, ResultOperation::kPause, 370'000'000, &numRead);
   // Each thread will fully read the 1M rows in values.
   EXPECT_EQ(numRead, 10 * hits);
-  auto stateFuture = tasks_[0]->stateChangeFuture(100'000'000);
+  auto stateFuture = tasks_[0]->taskCompletionFuture(100'000'000);
   auto& executor = folly::QueuedImmediateExecutor::instance();
   auto state = std::move(stateFuture).via(&executor);
   state.wait();
