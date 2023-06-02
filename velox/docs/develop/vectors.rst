@@ -148,6 +148,8 @@ a nulls buffer.
     bits::clearNull(rawNulls, 12);
     bits::setNull(rawNulls, 12, false);
 
+.. _developer-flat-vector-scalar-types:
+
 Flat Vectors - Scalar Types
 ---------------------------
 
@@ -263,6 +265,7 @@ entry uses 16 bytes.
     int64_t seconds_;
     uint64_t nanos_;
 
+.. _developer-constant-vector-scalar-types:
 Constant Vector - Scalar Types
 ------------------------------
 
@@ -287,6 +290,7 @@ vector from a scalar value.
         vector_size_t size,
         velox::memory::MemoryPool* pool);
 
+.. _developer-dictionary-vector-scalar-types:
 Dictionary Vector - Scalar Types
 --------------------------------
 
@@ -374,6 +378,8 @@ entry in the indices buffer contains garbage and should not be accessed.
 .. image:: images/dictionary-with-nulls.png
     :width: 500
     :align: center
+
+.. _developer_flatvector_complex_types:
 
 Flat Vectors - Complex Types
 ----------------------------

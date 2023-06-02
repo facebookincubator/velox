@@ -349,7 +349,11 @@ static void addVectorBindings(
 
   py::class_<BaseVector, VectorPtr>(
       m, "BaseVector", py::module_local(asModuleLocalDefinitions))
-      .def("__str__", [](VectorPtr& v) { return v->toString(); })
+      .def("__str__", [](VectorPtr& v) { 
+        auto schema = v->toString();
+        auto values = v->toString(0, v->size());
+        return schema + "\n" + values; 
+        })
       .def("__len__", &BaseVector::size)
       .def("size", &BaseVector::size)
       .def("dtype", &BaseVector::type)

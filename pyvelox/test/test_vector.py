@@ -129,11 +129,11 @@ class TestVeloxVector(unittest.TestCase):
     def test_to_string(self):
         self.assertEqual(
             str(pv.from_list([1, 2, 3])),
-            "[FLAT BIGINT: 3 elements, no nulls]",
+            "[FLAT BIGINT: 3 elements, no nulls]\n0: 1\n1: 2\n2: 3",
         )
         self.assertEqual(
             str(pv.from_list([1, None, 3])),
-            "[FLAT BIGINT: 3 elements, 1 nulls]",
+            "[FLAT BIGINT: 3 elements, 1 nulls]\n0: 1\n1: null\n2: 3",
         )
 
     def test_get_item(self):

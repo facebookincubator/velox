@@ -39,5 +39,6 @@ else
                 && make clean \
                 && mkdir -p bindings/python \
                 && pandoc ../../pyvelox/README.md --from markdown --to rst -s -o bindings/python/README_generated_pyvelox.rst \
-                && make html
+                && make html \
+                && make doctest
 fi
