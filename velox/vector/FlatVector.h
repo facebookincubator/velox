@@ -403,9 +403,15 @@ class FlatVector final : public SimpleVector<T> {
     return nullptr;
   }
 
-  // Allocate buffer for not inline StringView from stringBuffers or pool,
-  // return the start pointer of allocated memory
-  char* getRawStringBufferWithSpace(vector_size_t /* unused */) {
+  // Finds an existing string buffer that's singly-referenced (not shared) and
+  // have enough unused capacity to fit 'size' bytes. If found, resizes the
+  // buffer to add 'size' bytes and returns a pointer to the start of writable
+  // memory. If not found, allocates new buffer, adds it to 'stringBuffers',
+  // sets buffer size to 'size' and returns a pointer to the start of writable
+  // memory.
+  // The caller needs to make sure not to write more then 'size' bytes.
+
+  char* getRawStringBufferWithSpace(vector_size_t size) {
     return nullptr;
   }
 
