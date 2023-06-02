@@ -39,7 +39,7 @@ struct Timestamp {
   constexpr Timestamp() : seconds_(0), nanos_(0) {}
   Timestamp(int64_t seconds, uint64_t nanos)
       : seconds_(seconds), nanos_(nanos) {
-    VELOX_CHECK_LE(nanos, kMaxNanos);
+    VELOX_DCHECK_LE(nanos, kMaxNanos);
   }
 
   // Returns the current unix timestamp (ms precision).
