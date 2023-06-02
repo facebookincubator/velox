@@ -13,7 +13,7 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-#include "velox/functions/prestosql/window/tests/WindowTestBase.h"
+#include "velox/functions/lib/window/tests/WindowTestBase.h"
 
 #include <boost/random/mersenne_twister.hpp>
 #include <boost/random/uniform_int_distribution.hpp>
@@ -27,21 +27,18 @@ using namespace facebook::velox::exec::test;
 
 namespace facebook::velox::window::test {
 
-namespace {
-struct QueryInfo {
-  const core::PlanNodePtr planNode;
-  const std::string functionSql;
-  const std::string querySql;
-};
-
-QueryInfo buildWindowQuery(
+WindowTestBase::QueryInfo WindowTestBase::buildWindowQuery(
     const std::vector<RowVectorPtr>& input,
     const std::string& function,
     const std::string& overClause,
     const std::string& frameClause) {
   std::string functionSql =
       fmt::format("{} over ({} {})", function, overClause, frameClause);
-  auto op = PlanBuilder().values(input).window({functionSql}).planNode();
+  auto op = PlanBuilder()
+                .setParseOptions(options_)
+                .values(input)
+                .window({functionSql})
+                .planNode();
 
   auto rowType = asRowType(input[0]->type());
   std::string columnsString = folly::join(", ", rowType->names());
@@ -50,8 +47,6 @@ QueryInfo buildWindowQuery(
 
   return {op, functionSql, querySql};
 }
-
-}; // namespace
 
 RowVectorPtr WindowTestBase::makeSimpleVector(vector_size_t size) {
   return makeRowVector({

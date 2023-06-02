@@ -52,7 +52,8 @@ MemoryManager::MemoryManager(const Options& options)
               .alignment = alignment_,
               .capacity = kMaxMemory,
               .trackUsage =
-                  FLAGS_velox_enable_memory_usage_track_in_default_memory_pool})} {
+                  FLAGS_velox_enable_memory_usage_track_in_default_memory_pool,
+              .checkUsageLeak = options.checkUsageLeak})} {
   VELOX_CHECK_NOT_NULL(allocator_);
   VELOX_USER_CHECK_GE(capacity_, 0);
   MemoryAllocator::alignmentCheck(0, alignment_);
@@ -95,6 +96,12 @@ std::shared_ptr<MemoryPool> MemoryManager::addRootPool(
     const std::string& name,
     int64_t capacity,
     std::unique_ptr<MemoryReclaimer> reclaimer) {
+  if (arbitrator_ != nullptr) {
+    VELOX_CHECK_NOT_NULL(
+        reclaimer,
+        "Memory reclaimer must be set when configured with memory arbitrator");
+  }
+
   std::string poolName = name;
   if (poolName.empty()) {
     static std::atomic<int64_t> poolId{0};
@@ -109,6 +116,7 @@ std::shared_ptr<MemoryPool> MemoryManager::addRootPool(
     options.capacity = capacity;
   }
   options.trackUsage = true;
+  options.checkUsageLeak = checkUsageLeak_;
 
   folly::SharedMutex::WriteHolder guard{mutex_};
   if (pools_.find(poolName) != pools_.end()) {

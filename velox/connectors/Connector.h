@@ -19,7 +19,6 @@
 #include "velox/common/base/RuntimeMetrics.h"
 #include "velox/common/caching/ScanTracker.h"
 #include "velox/common/future/VeloxPromise.h"
-#include "velox/core/Context.h"
 #include "velox/core/ExpressionEvaluator.h"
 #include "velox/vector/ComplexVector.h"
 
@@ -27,6 +26,10 @@
 
 namespace facebook::velox::common {
 class Filter;
+}
+
+namespace facebook::velox {
+class Config;
 }
 
 namespace facebook::velox::connector {
@@ -38,7 +41,7 @@ class DataSource;
 struct ConnectorSplit {
   const std::string connectorId;
 
-  std::shared_ptr<AsyncSource<std::shared_ptr<DataSource>>> dataSource;
+  std::unique_ptr<AsyncSource<DataSource>> dataSource;
 
   explicit ConnectorSplit(const std::string& _connectorId)
       : connectorId(_connectorId) {}
@@ -50,32 +53,48 @@ struct ConnectorSplit {
   }
 };
 
-class ColumnHandle {
+class ColumnHandle : public ISerializable {
  public:
   virtual ~ColumnHandle() = default;
+
+  folly::dynamic serialize() const override;
+
+ protected:
+  static folly::dynamic serializeBase(std::string_view name);
 };
 
-class ConnectorTableHandle {
+using ColumnHandlePtr = std::shared_ptr<const ColumnHandle>;
+
+class ConnectorTableHandle : public ISerializable {
  public:
   explicit ConnectorTableHandle(std::string connectorId)
       : connectorId_(std::move(connectorId)) {}
 
   virtual ~ConnectorTableHandle() = default;
 
-  virtual std::string toString() const = 0;
+  virtual std::string toString() const {
+    VELOX_NYI();
+  }
 
   const std::string& connectorId() const {
     return connectorId_;
   }
 
+  virtual folly::dynamic serialize() const override;
+
+ protected:
+  folly::dynamic serializeBase(std::string_view name) const;
+
  private:
   const std::string connectorId_;
 };
 
+using ConnectorTableHandlePtr = std::shared_ptr<const ConnectorTableHandle>;
+
 /**
  * Represents a request for writing to connector
  */
-class ConnectorInsertTableHandle {
+class ConnectorInsertTableHandle : public ISerializable {
  public:
   virtual ~ConnectorInsertTableHandle() {}
 
@@ -83,6 +102,10 @@ class ConnectorInsertTableHandle {
   // this flag to determine number of drivers.
   virtual bool supportsMultiThreading() const {
     return false;
+  }
+
+  folly::dynamic serialize() const override {
+    VELOX_NYI();
   }
 };
 
@@ -100,7 +123,7 @@ class DataSink {
   virtual ~DataSink() = default;
 
   /// Add the next data (vector) to be written. This call is blocking.
-  // TODO maybe at some point we want to make it async.
+  /// TODO maybe at some point we want to make it async.
   virtual void appendData(RowVectorPtr input) = 0;
 
   /// Called once after all data has been added via possibly multiple calls to
@@ -159,7 +182,7 @@ class DataSource {
   // into 'this' Adaptation like dynamic filters stay in effect but
   // the parts dealing with open files, prefetched data etc. are moved. 'source'
   // is freed after the move.
-  virtual void setFromDataSource(std::shared_ptr<DataSource> /*source*/) {
+  virtual void setFromDataSource(std::unique_ptr<DataSource> /*source*/) {
     VELOX_UNSUPPORTED("setFromDataSource");
   }
 
@@ -275,9 +298,9 @@ class Connector {
     return false;
   }
 
-  virtual std::shared_ptr<DataSource> createDataSource(
+  virtual std::unique_ptr<DataSource> createDataSource(
       const RowTypePtr& outputType,
-      const std::shared_ptr<connector::ConnectorTableHandle>& tableHandle,
+      const std::shared_ptr<ConnectorTableHandle>& tableHandle,
       const std::unordered_map<
           std::string,
           std::shared_ptr<connector::ColumnHandle>>& columnHandles,
@@ -291,7 +314,7 @@ class Connector {
     return false;
   }
 
-  virtual std::shared_ptr<DataSink> createDataSink(
+  virtual std::unique_ptr<DataSink> createDataSink(
       RowTypePtr inputType,
       std::shared_ptr<ConnectorInsertTableHandle> connectorInsertTableHandle,
       ConnectorQueryCtx* connectorQueryCtx,

@@ -389,7 +389,11 @@ class Task : public std::enable_shared_from_this<Task> {
   /// NOTE: if 'future' is null, then the caller doesn't intend to wait for the
   /// other peers to finish. The function won't set its promise and record it in
   /// peers. This is used in scenario that the caller only needs to know whether
-  /// it is the last one to reach the barrier.g
+  /// it is the last one to reach the barrier.
+  ///
+  /// NOTE: The last peer (the one that got 'true' returned and a bunch of
+  /// promises) is responsible for promises' fulfillment even in case of an
+  /// exception!
   bool allPeersFinished(
       const core::PlanNodeId& planNodeId,
       Driver* caller,
@@ -463,13 +467,18 @@ class Task : public std::enable_shared_from_this<Task> {
   StopReason enterForTerminateLocked(ThreadState& state);
 
   /// Marks that the Driver is not on thread. If no more Drivers in the
-  /// CancelPool are on thread, this realizes
-  /// threadFinishFutures_. These allow syncing with pause or
-  /// termination. The Driver may go off thread because of
+  /// CancelPool are on thread, this realizes threadFinishFutures_. These allow
+  /// syncing with pause or termination. The Driver may go off thread because of
   /// hasBlockingFuture or pause requested or terminate requested. The
   /// return value indicates the reason. If kTerminate is returned, the
-  /// isTerminated flag is set.
-  StopReason leave(ThreadState& state);
+  /// isTerminated flag is set. 'driverCb' is called to close the driver before
+  /// it goes off thread if the task has been terminated. It ensures that the
+  /// driver close operation is always executed on driver thread. This helps to
+  /// avoid the race condition between driver close and operator abort
+  /// operations.
+  void leave(
+      ThreadState& state,
+      const std::function<void(StopReason)>& driverCb);
 
   /// Enters a suspended section where the caller stays on thread but
   /// is not accounted as being on the thread.  Returns kNone if no
@@ -631,6 +640,8 @@ class Task : public std::enable_shared_from_this<Task> {
         const std::shared_ptr<Task>& task);
 
     uint64_t reclaim(memory::MemoryPool* pool, uint64_t targetBytes) override;
+
+    void abort(memory::MemoryPool* pool) override;
 
    private:
     explicit MemoryReclaimer(const std::shared_ptr<Task>& task) : task_(task) {
@@ -989,8 +1000,8 @@ class Task : public std::enable_shared_from_this<Task> {
 
   std::weak_ptr<PartitionedOutputBufferManager> bufferManager_;
 
-  /// Boolean indicating that we have already recieved no-more-broadcast-buffers
-  /// message. Subsequent messagees will be ignored.
+  /// Boolean indicating that we have already received no-more-broadcast-buffers
+  /// message. Subsequent messages will be ignored.
   bool noMoreBroadcastBuffers_{false};
 
   // Thread counts and cancellation -related state.

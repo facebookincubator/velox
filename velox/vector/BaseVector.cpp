@@ -184,8 +184,11 @@ VectorPtr BaseVector::wrapInSequence(
 }
 
 template <TypeKind kind>
-static VectorPtr
-addConstant(vector_size_t size, vector_size_t index, VectorPtr vector) {
+static VectorPtr addConstant(
+    vector_size_t size,
+    vector_size_t index,
+    VectorPtr vector,
+    bool copyBase) {
   using T = typename KindToFlatVector<kind>::WrapperType;
 
   auto pool = vector->pool();
@@ -224,6 +227,13 @@ addConstant(vector_size_t size, vector_size_t index, VectorPtr vector) {
     }
   }
 
+  if (copyBase) {
+    VectorPtr copy = BaseVector::create(vector->type(), 1, pool);
+    copy->copy(vector.get(), 0, index, 1);
+    return std::make_shared<ConstantVector<T>>(
+        pool, size, 0, std::move(copy), SimpleVectorStats<T>{});
+  }
+
   return std::make_shared<ConstantVector<T>>(
       pool, size, index, std::move(vector), SimpleVectorStats<T>{});
 }
@@ -232,10 +242,11 @@ addConstant(vector_size_t size, vector_size_t index, VectorPtr vector) {
 VectorPtr BaseVector::wrapInConstant(
     vector_size_t length,
     vector_size_t index,
-    VectorPtr vector) {
+    VectorPtr vector,
+    bool copyBase) {
   auto kind = vector->typeKind();
   return VELOX_DYNAMIC_TYPE_DISPATCH_ALL(
-      addConstant, kind, length, index, std::move(vector));
+      addConstant, kind, length, index, std::move(vector), copyBase);
 }
 
 template <TypeKind kind>
@@ -402,10 +413,10 @@ void BaseVector::setNulls(const BufferPtr& nulls) {
 // static
 void BaseVector::resizeIndices(
     vector_size_t size,
-    vector_size_t initialValue,
     velox::memory::MemoryPool* pool,
     BufferPtr* indices,
-    const vector_size_t** raw) {
+    const vector_size_t** raw,
+    std::optional<vector_size_t> initialValue) {
   if (indices->get() && indices->get()->isMutable()) {
     auto newByteSize = byteSize<vector_size_t>(size);
     if (indices->get()->size() < newByteSize) {

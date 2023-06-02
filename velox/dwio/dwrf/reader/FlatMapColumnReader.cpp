@@ -17,6 +17,7 @@
 #include "velox/dwio/dwrf/reader/FlatMapColumnReader.h"
 #include <folly/json.h>
 #include "velox/common/base/BitUtil.h"
+#include "velox/dwio/common/FlatMapHelper.h"
 
 namespace facebook::velox::dwrf {
 
@@ -95,6 +96,16 @@ uint32_t visitUniqueStreamsOfNode(
   return streams;
 }
 
+void triggerKeySelectionNotification(
+    const FlatMapContext& context,
+    const facebook::velox::dwio::common::flatmap::FlatMapKeySelectionStats&
+        keySelectionStats) {
+  if (!context.keySelectionCallback) {
+    return;
+  }
+  context.keySelectionCallback(keySelectionStats);
+}
+
 template <typename T>
 std::vector<std::unique_ptr<KeyNode<T>>> getKeyNodesFiltered(
     const std::function<bool(const KeyValue<T>&)>& keyPredicate,
@@ -102,8 +113,11 @@ std::vector<std::unique_ptr<KeyNode<T>>> getKeyNodesFiltered(
     const std::shared_ptr<const TypeWithId>& dataType,
     StripeStreams& stripe,
     memory::MemoryPool& memoryPool,
-    KeySelectionStats& keySelectionStats) {
+    FlatMapContext& flatMapContext) {
   std::vector<std::unique_ptr<KeyNode<T>>> keyNodes;
+
+  auto keySelectionStats =
+      facebook::velox::dwio::common::flatmap::FlatMapKeySelectionStats{};
 
   const auto requestedValueType = requestedType->childAt(1);
   const auto dataValueType = dataType->childAt(1);
@@ -156,8 +170,10 @@ std::vector<std::unique_ptr<KeyNode<T>>> getKeyNodesFiltered(
             memoryPool));
       });
 
-  keySelectionStats.selectedKeyStreams = keyNodes.size();
-  keySelectionStats.totalKeyStreams = processed.size();
+  keySelectionStats.selectedKeys = keyNodes.size();
+  keySelectionStats.totalKeys = processed.size();
+
+  triggerKeySelectionNotification(flatMapContext, keySelectionStats);
 
   VLOG(1) << "[Flat-Map] Initialized a flat-map column reader for node "
           << dataType->id << ", keys=" << keyNodes.size()
@@ -188,16 +204,6 @@ std::vector<std::unique_ptr<KeyNode<T>>> rearrangeKeyNodesAsProjectedOrder(
 }
 } // namespace
 
-void triggerKeySelectionNotification(
-    FlatMapContext& context,
-    KeySelectionStats& keySelectionStats) {
-  if (!context.keySelectionCallback) {
-    return;
-  }
-  context.keySelectionCallback(
-      keySelectionStats.totalKeyStreams, keySelectionStats.selectedKeyStreams);
-}
-
 template <typename T>
 FlatMapColumnReader<T>::FlatMapColumnReader(
     const std::shared_ptr<const TypeWithId>& requestedType,
@@ -217,7 +223,7 @@ FlatMapColumnReader<T>::FlatMapColumnReader(
       dataType,
       stripe,
       memoryPool_,
-      keySelectionStats_);
+      flatMapContext_);
 
   // sort nodes by sequence id so order of keys is fixed
   std::sort(keyNodes_.begin(), keyNodes_.end(), [](auto& a, auto& b) {
@@ -225,8 +231,6 @@ FlatMapColumnReader<T>::FlatMapColumnReader(
   });
 
   initStringKeyBuffer();
-
-  triggerKeySelectionNotification(flatMapContext_, keySelectionStats_);
 }
 
 template <typename T>
@@ -537,7 +541,7 @@ std::vector<std::unique_ptr<KeyNode<T>>> getKeyNodesForStructEncoding(
     const std::shared_ptr<const TypeWithId>& dataType,
     StripeStreams& stripe,
     memory::MemoryPool& memoryPool,
-    KeySelectionStats& keySelectionStats) {
+    FlatMapContext& flatMapContext) {
   // `KeyNode` is ordered based on the projection. So if [3, 2, 1] is
   // projected, the vector of key node will be created [3, 2, 1].
   // If the key is not found in the stripe, the key node will be nullptr.
@@ -550,7 +554,7 @@ std::vector<std::unique_ptr<KeyNode<T>>> getKeyNodesForStructEncoding(
       dataType,
       stripe,
       memoryPool,
-      keySelectionStats);
+      flatMapContext);
 
   const auto& mapColumnIdAsStruct =
       stripe.getRowReaderOptions().getMapColumnIdAsStruct();
@@ -573,15 +577,13 @@ FlatMapStructEncodingColumnReader<T>::FlatMapStructEncodingColumnReader(
           dataType,
           stripe,
           memoryPool_,
-          keySelectionStats_)},
+          flatMapContext_)},
       nullColumnReader_{std::make_unique<NullColumnReader>(
           stripe,
           requestedType_->type->asMap().valueType())} {
   DWIO_ENSURE_EQ(nodeType_->id, dataType->id);
   DWIO_ENSURE(!keyNodes_.empty()); // "For struct encoding, keys to project must
                                    // be configured.";
-
-  triggerKeySelectionNotification(flatMapContext_, keySelectionStats_);
 }
 
 template <typename T>

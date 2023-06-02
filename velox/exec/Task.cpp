@@ -365,12 +365,11 @@ velox::memory::MemoryPool* Task::addExchangeClientPool(
 }
 
 bool Task::supportsSingleThreadedExecution() const {
-  std::vector<std::unique_ptr<DriverFactory>> driverFactories;
-
   if (consumerSupplier_) {
     return false;
   }
 
+  std::vector<std::unique_ptr<DriverFactory>> driverFactories;
   LocalPlanner::plan(planFragment_, nullptr, &driverFactories, 1);
 
   for (const auto& factory : driverFactories) {
@@ -473,9 +472,7 @@ RowVectorPtr Task::next(ContinueFuture* future) {
     if (runnableDrivers == 0) {
       if (blockedDrivers > 0) {
         if (!future) {
-          VELOX_CHECK_EQ(
-              0,
-              blockedDrivers,
+          VELOX_FAIL(
               "Cannot make progress as all remaining drivers are blocked and user are not expected to wait.");
         } else {
           std::vector<ContinueFuture> notReadyFutures;
@@ -492,7 +489,7 @@ RowVectorPtr Task::next(ContinueFuture* future) {
   }
 }
 
-/*static*/
+// static
 void Task::start(
     std::shared_ptr<Task> self,
     uint32_t maxDrivers,
@@ -617,7 +614,7 @@ void Task::start(
     self->createDriversLocked(self, kUngroupedGroupId, drivers);
 
     // Prevent the connecting structures from being cleaned up before all split
-    // groups are finished during the grouped exeution mode.
+    // groups are finished during the grouped execution mode.
     if (self->isGroupedExecution()) {
       self->splitGroupStates_[kUngroupedGroupId].mixedExecutionMode = true;
     }
@@ -771,7 +768,7 @@ void Task::createDriversLocked(
       continue;
     }
 
-    // In each pipleine we start drivers id from zero or, in case of grouped
+    // In each pipeline we start drivers id from zero or, in case of grouped
     // execution, from the split group id.
     const uint32_t driverIdOffset =
         factory->numDrivers * (groupedExecutionDrivers ? splitGroupId : 0);
@@ -1381,7 +1378,7 @@ bool Task::allPeersFinished(
   const auto numPeers = numDrivers(caller->driverCtx()->pipelineId);
   if (++state.numRequested == numPeers) {
     peers = std::move(state.drivers);
-    promises = std::move(state.promises);
+    promises = std::move(state.allPeersFinishedPromises);
     barriers.erase(planNodeId);
     return true;
   }
@@ -1398,9 +1395,9 @@ bool Task::allPeersFinished(
   // the peers to finish.
   if (future != nullptr) {
     state.drivers.push_back(callerShared);
-    state.promises.emplace_back(
+    state.allPeersFinishedPromises.emplace_back(
         fmt::format("Task::allPeersFinished {}", taskId_));
-    *future = state.promises.back().getSemiFuture();
+    *future = state.allPeersFinishedPromises.back().getSemiFuture();
   }
   return false;
 }
@@ -1992,26 +1989,46 @@ StopReason Task::enterForTerminateLocked(ThreadState& state) {
   return StopReason::kTerminate;
 }
 
-StopReason Task::leave(ThreadState& state) {
+void Task::leave(
+    ThreadState& state,
+    const std::function<void(StopReason)>& driverCb) {
   std::vector<ContinuePromise> threadFinishPromises;
   auto guard = folly::makeGuard([&]() {
     for (auto& promise : threadFinishPromises) {
       promise.setValue();
     }
   });
+  StopReason reason;
+  {
+    std::lock_guard<std::mutex> l(mutex_);
+    if (!state.isTerminated) {
+      reason = shouldStopLocked();
+      if (reason == StopReason::kTerminate) {
+        state.isTerminated = true;
+      }
+    } else {
+      reason = StopReason::kTerminate;
+    }
+    if ((reason != StopReason::kTerminate) || (driverCb == nullptr)) {
+      if (--numThreads_ == 0) {
+        threadFinishPromises = allThreadsFinishedLocked();
+      }
+      state.clearThread();
+      return;
+    }
+  }
+
+  VELOX_CHECK_EQ(reason, StopReason::kTerminate);
+  VELOX_CHECK_NOT_NULL(driverCb);
+  // Call 'driverCb' before goes off the driver thread. 'driverCb' will close
+  // the driver and remove it from the task.
+  driverCb(reason);
+
   std::lock_guard<std::mutex> l(mutex_);
   if (--numThreads_ == 0) {
     threadFinishPromises = allThreadsFinishedLocked();
   }
   state.clearThread();
-  if (state.isTerminated) {
-    return StopReason::kTerminate;
-  }
-  const auto reason = shouldStopLocked();
-  if (reason == StopReason::kTerminate) {
-    state.isTerminated = true;
-  }
-  return reason;
 }
 
 StopReason Task::enterSuspended(ThreadState& state) {
@@ -2264,12 +2281,21 @@ uint64_t Task::MemoryReclaimer::reclaim(
                    << " after memory reclamation: " << exception.message();
     }
   });
-  // NOTE: we can't reclaim from a cancelled task as there might be race between
-  // memory reclamation and the driver close.
+  // Don't reclaim from a cancelled task as it will terminate soon.
   if (task->isCancelled()) {
     return 0;
   }
   return memory::MemoryReclaimer::reclaim(pool, targetBytes);
+}
+
+void Task::MemoryReclaimer::abort(memory::MemoryPool* pool) {
+  auto task = ensureTask();
+  if (FOLLY_UNLIKELY(task == nullptr)) {
+    return;
+  }
+  VELOX_CHECK_EQ(task->pool()->name(), pool->name());
+  task->requestAbort().wait();
+  memory::MemoryReclaimer::abort(pool);
 }
 
 } // namespace facebook::velox::exec

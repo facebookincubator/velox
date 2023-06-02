@@ -120,8 +120,8 @@ void HashBuild::setupTable() {
   std::vector<std::unique_ptr<VectorHasher>> keyHashers;
   keyHashers.reserve(numKeys);
   for (vector_size_t i = 0; i < numKeys; ++i) {
-    keyHashers.emplace_back(std::make_unique<VectorHasher>(
-        tableType_->childAt(i), keyChannels_[i]));
+    keyHashers.emplace_back(
+        VectorHasher::create(tableType_->childAt(i), keyChannels_[i]));
   }
 
   const auto numDependents = tableType_->size() - numKeys;
@@ -706,6 +706,15 @@ bool HashBuild::finishHashBuild() {
     return false;
   }
 
+  auto promisesGuard = folly::makeGuard([&]() {
+    // Realize the promises so that the other Drivers (which were not
+    // the last to finish) can continue from the barrier and finish.
+    peers.clear();
+    for (auto& promise : promises) {
+      promise.setValue();
+    }
+  });
+
   std::vector<std::unique_ptr<BaseHashTable>> otherTables;
   otherTables.reserve(peers.size());
   SpillPartitionSet spillPartitions;
@@ -774,12 +783,6 @@ bool HashBuild::finishHashBuild() {
     }
   }
 
-  // Realize the promises so that the other Drivers (which were not
-  // the last to finish) can continue from the barrier and finish.
-  peers.clear();
-  for (auto& promise : promises) {
-    promise.setValue();
-  }
   return true;
 }
 
@@ -993,8 +996,6 @@ bool HashBuild::testingTriggerSpill() {
 void HashBuild::reclaim(uint64_t /*unused*/) {
   VELOX_CHECK(canReclaim());
   auto* driver = operatorCtx_->driver();
-  VELOX_CHECK(!driver->state().isOnThread() || driver->state().isSuspended);
-  VELOX_CHECK(driver->task()->pauseRequested());
 
   TestValue::adjust("facebook::velox::exec::HashBuild::reclaim", this);
 
@@ -1043,5 +1044,14 @@ void HashBuild::reclaim(uint64_t /*unused*/) {
     // Release the minimum reserved memory.
     op->pool()->release();
   }
+}
+
+void HashBuild::close() {
+  Operator::close();
+
+  // Free up major memory usage.
+  joinBridge_.reset();
+  spiller_.reset();
+  table_.reset();
 }
 } // namespace facebook::velox::exec

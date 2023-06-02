@@ -51,17 +51,9 @@ HashAggregation::HashAggregation(
 
   auto inputType = aggregationNode->sources()[0]->outputType();
 
-  auto numHashers = aggregationNode->groupingKeys().size();
-  std::vector<std::unique_ptr<VectorHasher>> hashers;
-  hashers.reserve(numHashers);
-  for (const auto& key : aggregationNode->groupingKeys()) {
-    auto channel = exprToChannel(key.get(), inputType);
-    VELOX_CHECK_NE(
-        channel,
-        kConstantChannel,
-        "Aggregation doesn't allow constant grouping keys");
-    hashers.push_back(VectorHasher::create(key->type(), channel));
-  }
+  auto hashers =
+      createVectorHashers(inputType, aggregationNode->groupingKeys());
+  auto numHashers = hashers.size();
 
   std::vector<column_index_t> preGroupedChannels;
   preGroupedChannels.reserve(aggregationNode->preGroupedKeys().size());
@@ -162,6 +154,7 @@ HashAggregation::HashAggregation(
 }
 
 bool HashAggregation::abandonPartialAggregationEarly(int64_t numOutput) const {
+  VELOX_CHECK(isPartialOutput_ && !isGlobal_);
   return numInputRows_ > abandonPartialAggregationMinRows_ &&
       100 * numOutput / numInputRows_ >= abandonPartialAggregationMinPct_;
 }
@@ -194,8 +187,10 @@ void HashAggregation::addInput(RowVectorPtr input) {
   // NOTE: we should not trigger partial output flush in case of global
   // aggregation as the final aggregator will handle it the same way as the
   // partial aggregator. Hence, we have to use more memory anyway.
+  const bool abandonPartialEarly = isPartialOutput_ && !isGlobal_ &&
+      abandonPartialAggregationEarly(groupingSet_->numDistinct());
   if (isPartialOutput_ && !isGlobal_ &&
-      (abandonPartialAggregationEarly(groupingSet_->numDistinct()) ||
+      (abandonPartialEarly ||
        groupingSet_->isPartialFull(maxPartialAggregationMemoryUsage_))) {
     partialFull_ = true;
   }
@@ -206,6 +201,11 @@ void HashAggregation::addInput(RowVectorPtr input) {
     if (newDistincts_) {
       // Save input to use for output in getOutput().
       input_ = input;
+    } else if (abandonPartialEarly) {
+      // If no new distinct groups (meaning we don't have anything to output)
+      // and we are abandoning the partial aggregation, then we need to ensure
+      // we 'need input'. For that we need to reset the 'partial full' flag.
+      partialFull_ = false;
     }
   }
 }
@@ -379,8 +379,6 @@ bool HashAggregation::isFinished() {
 void HashAggregation::reclaim(uint64_t targetBytes) {
   VELOX_CHECK(canReclaim());
   auto* driver = operatorCtx_->driver();
-  VELOX_CHECK(!driver->state().isOnThread() || driver->state().isSuspended);
-  VELOX_CHECK(driver->task()->pauseRequested());
 
   /// NOTE: an aggregation operator is reclaimable if it hasn't started output
   /// processing and is not under non-reclaimable execution section.
@@ -400,5 +398,12 @@ void HashAggregation::reclaim(uint64_t targetBytes) {
   VELOX_CHECK_EQ(groupingSet_->numDistinct(), 0);
   // Release the minimum reserved memory.
   pool()->release();
+}
+
+void HashAggregation::close() {
+  Operator::close();
+
+  output_ = nullptr;
+  groupingSet_.reset();
 }
 } // namespace facebook::velox::exec

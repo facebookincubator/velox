@@ -22,19 +22,12 @@
 #include "velox/common/memory/Memory.h"
 #include "velox/common/testutil/TestValue.h"
 
+DECLARE_bool(velox_suppress_memory_capacity_exceeding_error_message);
+
 using facebook::velox::common::testutil::TestValue;
 
 namespace facebook::velox::memory {
 namespace {
-#define VELOX_MEM_POOL_CAP_EXCEEDED(errorMessage)                   \
-  _VELOX_THROW(                                                     \
-      ::facebook::velox::VeloxRuntimeError,                         \
-      ::facebook::velox::error_source::kErrorSourceRuntime.c_str(), \
-      ::facebook::velox::error_code::kMemCapExceeded.c_str(),       \
-      /* isRetriable */ true,                                       \
-      "{}",                                                         \
-      (errorMessage));
-
 // Check if memory operation is allowed and increment the named stats.
 #define CHECK_AND_INC_MEM_OP_STATS(stats)                             \
   do {                                                                \
@@ -619,7 +612,8 @@ std::shared_ptr<MemoryPool> MemoryPoolImpl::genChild(
       Options{
           .alignment = alignment_,
           .trackUsage = trackUsage_,
-          .threadSafe = threadSafe});
+          .threadSafe = threadSafe,
+          .checkUsageLeak = checkUsageLeak_});
 }
 
 bool MemoryPoolImpl::maybeReserve(uint64_t increment) {
@@ -745,7 +739,6 @@ bool MemoryPoolImpl::incrementReservationThreadSafe(
     // pool which should happen rarely.
     return maybeIncrementReservation(size);
   }
-
   VELOX_MEM_POOL_CAP_EXCEEDED(capExceedingMessage(
       requestor,
       fmt::format(
@@ -761,15 +754,23 @@ bool MemoryPoolImpl::maybeIncrementReservation(uint64_t size) {
 }
 
 bool MemoryPoolImpl::maybeIncrementReservationLocked(uint64_t size) {
-  if (!isRoot() || (reservationBytes_ + size <= capacity_)) {
-    reservationBytes_ += size;
-    if (!isLeaf()) {
-      cumulativeBytes_ += size;
-      maybeUpdatePeakBytesLocked(reservationBytes_);
+  if (isRoot()) {
+    if (aborted()) {
+      // Throw exception if this root memory pool has been aborted by the memory
+      // arbitrator. This is to prevent it from triggering memory arbitration,
+      // and we expect the associated query will also abort soon.
+      VELOX_MEM_POOL_ABORTED(this);
     }
-    return true;
+    if (reservationBytes_ + size > capacity_) {
+      return false;
+    }
   }
-  return false;
+  reservationBytes_ += size;
+  if (!isLeaf()) {
+    cumulativeBytes_ += size;
+    maybeUpdatePeakBytesLocked(reservationBytes_);
+  }
+  return true;
 }
 
 void MemoryPoolImpl::release() {
@@ -839,9 +840,12 @@ std::string MemoryPoolImpl::capExceedingMessage(
   VELOX_CHECK_NULL(parent_);
 
   std::stringstream out;
+  out << "\n" << errorMessage << "\n";
+  if (FLAGS_velox_suppress_memory_capacity_exceeding_error_message) {
+    return out.str();
+  }
   {
     std::lock_guard<std::mutex> l(mutex_);
-    out << "\n" << errorMessage << "\n";
     const Stats stats = statsLocked();
     const MemoryUsage usage{
         .name = name(),
@@ -897,7 +901,7 @@ uint64_t MemoryPoolImpl::shrink(uint64_t targetBytes) {
   return freeBytes;
 }
 
-uint64_t MemoryPoolImpl::grow(uint64_t bytes) {
+uint64_t MemoryPoolImpl::grow(uint64_t bytes) noexcept {
   if (parent_ != nullptr) {
     return parent_->grow(bytes);
   }
@@ -907,6 +911,25 @@ uint64_t MemoryPoolImpl::grow(uint64_t bytes) {
   capacity_ += bytes;
   VELOX_CHECK_GE(capacity_, bytes);
   return capacity_;
+}
+
+bool MemoryPoolImpl::aborted() const {
+  if (parent_ != nullptr) {
+    return parent_->aborted();
+  }
+  return aborted_;
+}
+
+void MemoryPoolImpl::abort() {
+  if (parent_ != nullptr) {
+    parent_->abort();
+    return;
+  }
+  if (reclaimer_ == nullptr) {
+    VELOX_FAIL("Can't abort the memory pool {} without reclaimer", name_);
+  }
+  aborted_ = true;
+  reclaimer_->abort(this);
 }
 
 void MemoryPoolImpl::testingSetCapacity(int64_t bytes) {

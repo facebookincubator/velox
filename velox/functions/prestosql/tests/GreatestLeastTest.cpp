@@ -68,10 +68,21 @@ TEST_F(GreatestLeastTest, leastDouble) {
   runTest<double>("least(c0)", {{0, 1.1, -1.1}}, {0, 1.1, -1.1});
   runTest<double>("least(c0, 1.0)", {{0, 1.1, -1.1}}, {0, 1, -1.1});
   runTest<double>(
-      "least(c0, 1.0 , c1)", {{0, 1.1, -1.1}, {100, -100, 0}}, {0, -100, -1.1});
+      "least(c0, 1.0, c1)", {{0, 1.1, -1.1}, {100, -100, 0}}, {0, -100, -1.1});
+}
+
+TEST_F(GreatestLeastTest, leastReal) {
+  runTest<float>("least(c0)", {{0, 1.1, -1.1}}, {0, 1.1, -1.1});
+  runTest<float>("least(c0, 1.0::real)", {{0, 1.1, -1.1}}, {0, 1, -1.1});
+  runTest<float>(
+      "least(c0, 1.0::real, c1)",
+      {{0, 1.1, -1.1}, {100, -100, 0}},
+      {0, -100, -1.1});
 }
 
 TEST_F(GreatestLeastTest, nanInput) {
+  // Presto rejects NaN inputs of type DOUBLE, but allows NaN inputs of type
+  // REAL.
   std::vector<double> input{0, 1.1, std::nan("1")};
   VELOX_ASSERT_THROW(
       runTest<double>("least(c0)", {{0.0 / 0.0}}, {0}),
@@ -82,25 +93,72 @@ TEST_F(GreatestLeastTest, nanInput) {
       runTest<double>("greatest(c0)", {1, {0.0 / 0.0}}, {1, 0}),
       "Invalid argument to greatest(): NaN");
   runTest<double>("try(greatest(c0, 1.0))", {input}, {1.0, 1.1, std::nullopt});
+
+  auto result = evaluateOnce<bool, float, float>(
+      "is_nan(least(c0))", std::nanf("1"), 1.2);
+  ASSERT_TRUE(result.has_value());
+  ASSERT_TRUE(result.value());
+
+  result = evaluateOnce<bool, float, float>(
+      "is_nan(greatest(c0))", std::nanf("1"), 1.2);
+  ASSERT_TRUE(result.has_value());
+  ASSERT_TRUE(result.value());
 }
 
 TEST_F(GreatestLeastTest, greatestDouble) {
   runTest<double>("greatest(c0)", {{0, 1.1, -1.1}}, {0, 1.1, -1.1});
   runTest<double>("greatest(c0, 1.0)", {{0, 1.1, -1.1}}, {1, 1.1, 1});
   runTest<double>(
-      "greatest(c0, 1.0 , c1)",
+      "greatest(c0, 1.0, c1)", {{0, 1.1, -1.1}, {100, -100, 0}}, {100, 1.1, 1});
+}
+
+TEST_F(GreatestLeastTest, greatestReal) {
+  runTest<float>("greatest(c0)", {{0, 1.1, -1.1}}, {0, 1.1, -1.1});
+  runTest<float>("greatest(c0, 1.0::real)", {{0, 1.1, -1.1}}, {1, 1.1, 1});
+  runTest<float>(
+      "greatest(c0, 1.0::real, c1)",
       {{0, 1.1, -1.1}, {100, -100, 0}},
       {100, 1.1, 1});
 }
 
-TEST_F(GreatestLeastTest, leastBigInt) {
+TEST_F(GreatestLeastTest, leastInteger) {
+  // TinyInt
+  runTest<int8_t>("least(c0)", {{0, 1, -1}}, {0, 1, -1});
+  runTest<int8_t>("least(c0, c1)", {{0, 1, -1}, {100, -100, 0}}, {0, -100, -1});
+  // SmallInt
+  runTest<int16_t>("least(c0)", {{0, 1, -1}}, {0, 1, -1});
+  runTest<int16_t>(
+      "least(c0, c1)", {{0, 1, -1}, {100, -100, 0}}, {0, -100, -1});
+  // Integer
+  runTest<int32_t>("least(c0)", {{0, 1, -1}}, {0, 1, -1});
+  runTest<int32_t>(
+      "least(c0, c1)", {{0, 1, -1}, {100, -100, 0}}, {0, -100, -1});
+  // BigInt
   runTest<int64_t>("least(c0)", {{0, 1, -1}}, {0, 1, -1});
+  runTest<int64_t>("least(c0)", {{0, 1, -1}}, {0, 1, -1});
+  runTest<int64_t>(
+      "least(c0, c1)", {{0, 1, -1}, {100, -100, 0}}, {0, -100, -1});
   runTest<int64_t>("least(c0, 1)", {{0, 1, -1}}, {0, 1, -1});
   runTest<int64_t>(
       "least(c0, 1 , c1)", {{0, 1, -1}, {100, -100, 0}}, {0, -100, -1});
 }
 
-TEST_F(GreatestLeastTest, greatestBigInt) {
+TEST_F(GreatestLeastTest, greatestInteger) {
+  // TinyInt
+  runTest<int8_t>("greatest(c0)", {{0, 1, -1}}, {0, 1, -1});
+  runTest<int8_t>(
+      "greatest(c0, c1)", {{0, 1, -1}, {100, -100, 0}}, {100, 1, 0});
+  // SmallInt
+  runTest<int16_t>("greatest(c0)", {{0, 1, -1}}, {0, 1, -1});
+  runTest<int16_t>(
+      "greatest(c0, c1)", {{0, 1, -1}, {100, -100, 0}}, {100, 1, 0});
+  // Integer
+  runTest<int32_t>("greatest(c0)", {{0, 1, -1}}, {0, 1, -1});
+  runTest<int32_t>(
+      "greatest(c0, c1)", {{0, 1, -1}, {100, -100, 0}}, {100, 1, 0});
+  // BigInt
+  runTest<int64_t>("greatest(c0)", {{0, 1, -1}}, {0, 1, -1});
+  runTest<int64_t>("greatest(c0)", {{0, 1, -1}}, {0, 1, -1});
   runTest<int64_t>("greatest(c0)", {{0, 1, -1}}, {0, 1, -1});
   runTest<int64_t>("greatest(c0, 1)", {{0, 1, -1}}, {1, 1, 1});
   runTest<int64_t>(

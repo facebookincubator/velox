@@ -15,7 +15,12 @@
  */
 #pragma once
 
-#include "velox/core/Context.h"
+#include <folly/Optional.h>
+#include <string>
+
+namespace facebook::velox {
+class Config;
+}
 
 namespace facebook::velox::connector::hive {
 
@@ -26,6 +31,9 @@ class HiveConfig {
     kError,
     kOverwrite,
   };
+
+  static std::string insertExistingPartitionsBehaviorString(
+      InsertExistingPartitionsBehavior behavior);
 
   /// Behavior on insert into existing partitions.
   static constexpr const char* kInsertExistingPartitionsBehavior =

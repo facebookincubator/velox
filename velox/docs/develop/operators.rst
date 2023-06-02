@@ -40,7 +40,7 @@ AggregationNode             HashAggregation or StreamingAggregation
 GroupIdNode                 GroupId
 HashJoinNode                HashProbe and HashBuild
 MergeJoinNode               MergeJoin
-CrossJoinNode               CrossJoinProbe and CrossJoinBuild
+NestedLoopJoinNode          NestedLoopJoinProbe and NestedLoopJoinBuild
 OrderByNode                 OrderBy
 TopNNode                    TopN
 LimitNode                   Limit
@@ -162,6 +162,7 @@ each measure for each combination of the grouping keys.
      - A boolean flag indicating whether the aggregation should drop rows with nulls in any of the grouping keys. Used to avoid unnecessary processing for an aggregation followed by an inner join on the grouping keys.
 
 .. _group-id-node:
+
 GroupIdNode
 ~~~~~~~~~~~
 
@@ -223,13 +224,13 @@ and emitting results.
    * - outputType
      - A list of output columns. This is a subset of columns available in the left and right inputs of the join. The columns may appear in different order than in the input.
 
-CrossJoinNode
-~~~~~~~~~~~~~
+NestedLoopJoinNode
+~~~~~~~~~~~~~~~~~~
 
-The cross join operation combines two separate inputs into a single output by
-combining each row of the left hand side input with each row of the right hand
-side input. If there are N rows in the left input and M rows in the right
-input, the output of the cross join will contain N * M rows.
+NestedLoopJoinNode represents an implementation that iterates through each row from
+the left side of the join and, for each row, iterates through all rows from the right
+side of the join, comparing them based on the join condition to find matching rows
+and emitting results. Nested loop join supports non-equality join.
 
 .. list-table::
    :widths: 10 30
@@ -238,6 +239,10 @@ input, the output of the cross join will contain N * M rows.
 
    * - Property
      - Description
+   * - joinType
+     - Join type: inner, left, right, full.
+   * - joinCondition
+     - Expression used as the join condition, may reference columns from both inputs.
    * - outputType
      - A list of output columns. This is a subset of columns available in the left and right inputs of the join. The columns may appear in different order than in the input.
 
@@ -511,6 +516,7 @@ the nodes executing the same query stage in a distributed query execution.
      - A 24-bit integer to uniquely identify the task id across all the nodes.
 
 .. _window-node:
+
 WindowNode
 ~~~~~~~~~~
 

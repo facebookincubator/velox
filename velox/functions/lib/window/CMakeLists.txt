@@ -12,10 +12,11 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+add_library(velox_functions_window NthValue.cpp)
+
+target_link_libraries(velox_functions_window velox_buffer velox_exec
+                      Folly::folly)
+
 if(${VELOX_BUILD_TESTING})
   add_subdirectory(tests)
 endif()
-
-add_library(velox_row24 UnsafeRow24Deserializer.cpp)
-
-target_link_libraries(velox_row24 velox_memory velox_type velox_vector)

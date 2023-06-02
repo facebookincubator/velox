@@ -118,23 +118,22 @@ HashProbe::HashProbe(
       joinNode_(std::move(joinNode)),
       joinType_{joinNode_->joinType()},
       nullAware_{joinNode_->isNullAware()},
+      probeType_(joinNode_->sources()[0]->outputType()),
       joinBridge_(operatorCtx_->task()->getHashJoinBridgeLocked(
           operatorCtx_->driverCtx()->splitGroupId,
           planNodeId())),
-      probeType_(joinNode_->sources()[0]->outputType()),
       filterResult_(1),
       outputTableRows_(outputBatchSize_) {
   VELOX_CHECK_NOT_NULL(joinBridge_);
 
-  auto numKeys = joinNode_->leftKeys().size();
+  hashers_ = createVectorHashers(probeType_, joinNode_->leftKeys());
+
+  const auto numKeys = hashers_.size();
   keyChannels_.reserve(numKeys);
-  hashers_.reserve(numKeys);
-  for (auto& key : joinNode_->leftKeys()) {
-    auto channel = exprToChannel(key.get(), probeType_);
-    keyChannels_.emplace_back(channel);
-    hashers_.push_back(
-        std::make_unique<VectorHasher>(probeType_->childAt(channel), channel));
+  for (auto& hasher : hashers_) {
+    keyChannels_.push_back(hasher->channel());
   }
+
   lookup_ = std::make_unique<HashLookup>(hashers_);
   auto buildType = joinNode_->sources()[1]->outputType();
   auto tableType = makeTableType(buildType.get(), joinNode_->rightKeys());
@@ -1391,6 +1390,15 @@ void HashProbe::checkRunning() const {
 
 void HashProbe::setRunning() {
   setState(ProbeOperatorState::kRunning);
+}
+
+void HashProbe::close() {
+  Operator::close();
+
+  // Free up major memory usage.
+  joinBridge_.reset();
+  spiller_.reset();
+  table_.reset();
 }
 
 } // namespace facebook::velox::exec

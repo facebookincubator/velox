@@ -403,7 +403,7 @@ void DwrfRowReader::startNextStripe() {
   auto scanSpec = options_.getScanSpec().get();
   auto requestedType = getColumnSelector().getSchemaWithId();
   auto dataType = getReader().getSchemaWithId();
-  auto flatMapContext = FlatMapContext::nonFlatMapContext();
+  FlatMapContext flatMapContext;
   flatMapContext.keySelectionCallback = options_.getKeySelectionCallback();
 
   if (scanSpec) {
@@ -506,9 +506,10 @@ std::optional<size_t> DwrfRowReader::estimatedRowSizeHelper(
     case TypeKind::ROW: {
       // start the estimate with the offsets and hasNulls vectors sizes
       size_t totalEstimate = valueCount * (sizeof(uint8_t) + sizeof(uint64_t));
-      for (int32_t i = 0; i < t.subtypesSize() &&
-           columnSelector_->shouldReadNode(t.subtypes(i));
-           ++i) {
+      for (int32_t i = 0; i < t.subtypesSize(); ++i) {
+        if (!columnSelector_->shouldReadNode(t.subtypes(i))) {
+          continue;
+        }
         auto subtypeEstimate =
             estimatedRowSizeHelper(footer, stats, t.subtypes(i));
         if (subtypeEstimate.has_value()) {

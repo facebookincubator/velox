@@ -54,6 +54,27 @@ class ExprTest : public testing::Test, public VectorTestBase {
     return core::Expressions::inferTypes(untyped, rowType, execCtx_->pool());
   }
 
+  core::TypedExprPtr parseExpression(
+      const std::string& text,
+      const RowTypePtr& rowType,
+      const std::vector<TypePtr>& lambdaInputTypes) {
+    auto untyped = parse::parseExpr(text, options_);
+    return core::Expressions::inferTypes(
+        untyped, rowType, lambdaInputTypes, execCtx_->pool(), nullptr);
+  }
+
+  std::vector<core::TypedExprPtr> parseMultipleExpression(
+      const std::string& text,
+      const RowTypePtr& rowType) {
+    auto untyped = parse::parseMultipleExpressions(text, options_);
+    std::vector<core::TypedExprPtr> parsed;
+    for (auto& iExpr : untyped) {
+      parsed.push_back(
+          core::Expressions::inferTypes(iExpr, rowType, execCtx_->pool()));
+    }
+    return parsed;
+  }
+
   template <typename T = exec::ExprSet>
   std::unique_ptr<T> compileExpression(
       const std::string& expr,
@@ -71,6 +92,17 @@ class ExprTest : public testing::Test, public VectorTestBase {
     for (const auto& text : texts) {
       expressions.emplace_back(parseExpression(text, rowType));
     }
+    return std::make_unique<exec::ExprSet>(
+        std::move(expressions), execCtx_.get());
+  }
+
+  // Utility method to compile multiple expressions expected in a single sql
+  // text.
+  std::unique_ptr<exec::ExprSet> compileMultipleExprs(
+      const std::string& text,
+      const RowTypePtr& rowType) {
+    std::vector<core::TypedExprPtr> expressions =
+        parseMultipleExpression(text, rowType);
     return std::make_unique<exec::ExprSet>(
         std::move(expressions), execCtx_.get());
   }
@@ -197,19 +229,36 @@ class ExprTest : public testing::Test, public VectorTestBase {
     if (pos == std::string::npos) {
       return context;
     }
-
     return context.substr(0, pos);
   }
 
-  /// Extract input path from the 'context':
-  ///     "<expression>. Input data: <input path>."
-  std::string extractInputPath(const std::string& context) {
-    auto startPos = context.find(". Input data: ");
+  std::string extractFromErrorContext(
+      const std::string& context,
+      const char* key) {
+    auto startPos = context.find(key);
     VELOX_CHECK(startPos != std::string::npos);
-    startPos += strlen(". Input data: ");
+    startPos += strlen(key);
     auto endPos = context.find(".", startPos);
     VELOX_CHECK(endPos != std::string::npos);
     return context.substr(startPos, endPos - startPos);
+  }
+
+  /// Extract input path from the 'context':
+  ///     "<expression>. Input data: <input path>. ..."
+  std::string extractInputPath(const std::string& context) {
+    return extractFromErrorContext(context, ". Input data: ");
+  }
+
+  /// Extract expression sql's path from the 'context':
+  ///     "... <input path>. SQL expression: <sql path>"
+  std::string extractSqlPath(const std::string& context) {
+    return extractFromErrorContext(context, ". SQL expression: ");
+  }
+
+  /// Extract all expressions sqls' path from the 'context':
+  ///     "... <sql path>.  All SQL expressions: <all sql path>"
+  std::string extractAllExprSqlPath(const std::string& context) {
+    return extractFromErrorContext(context, ". All SQL expressions: ");
   }
 
   VectorPtr restoreVector(const std::string& path) {
@@ -220,15 +269,6 @@ class ExprTest : public testing::Test, public VectorTestBase {
     return copy;
   }
 
-  std::string extractSqlPath(const std::string& context) {
-    auto startPos = context.find(". SQL expression: ");
-    VELOX_CHECK(startPos != std::string::npos);
-    startPos += strlen(". SQL expression: ");
-    auto endPos = context.find(".", startPos);
-    VELOX_CHECK(endPos != std::string::npos);
-    return context.substr(startPos, endPos - startPos);
-  }
-
   void verifyDataAndSqlPaths(const VeloxException& e, const VectorPtr& data) {
     auto inputPath = extractInputPath(e.topLevelContext());
     auto copy = restoreVector(inputPath);
@@ -237,6 +277,10 @@ class ExprTest : public testing::Test, public VectorTestBase {
     auto sqlPath = extractSqlPath(e.topLevelContext());
     auto sql = readSqlFromFile(sqlPath);
     ASSERT_NO_THROW(compileExpression(sql, asRowType(data->type())));
+
+    auto allSqlsPath = extractAllExprSqlPath(e.topLevelContext());
+    auto allSqls = readSqlFromFile(allSqlsPath);
+    ASSERT_NO_THROW(compileMultipleExprs(allSqls, asRowType(data->type())));
   }
 
   std::string readSqlFromFile(const std::string& path) {
@@ -1932,9 +1976,11 @@ TEST_F(ExprTest, complexNullOutput) {
 TEST_F(ExprTest, rewriteInputs) {
   // rewrite one field
   {
+    auto alpha =
+        std::make_shared<core::FieldAccessTypedExpr>(INTEGER(), "alpha");
     auto expr = parseExpression(
         "(a + b) * 2.1", ROW({"a", "b"}, {INTEGER(), DOUBLE()}));
-    expr = expr->rewriteInputNames({{"a", "alpha"}});
+    expr = expr->rewriteInputNames({{"a", alpha}});
 
     auto expectedExpr = parseExpression(
         "(alpha + b) * 2.1", ROW({"alpha", "b"}, {INTEGER(), DOUBLE()}));
@@ -1943,13 +1989,42 @@ TEST_F(ExprTest, rewriteInputs) {
 
   // rewrite 2 fields
   {
+    auto alpha =
+        std::make_shared<core::FieldAccessTypedExpr>(INTEGER(), "alpha");
+    auto beta = std::make_shared<core::FieldAccessTypedExpr>(DOUBLE(), "beta");
     auto expr = parseExpression(
         "a + b * c", ROW({"a", "b", "c"}, {INTEGER(), DOUBLE(), DOUBLE()}));
-    expr = expr->rewriteInputNames({{"a", "alpha"}, {"b", "beta"}});
+    expr = expr->rewriteInputNames({{"a", alpha}, {"b", beta}});
 
     auto expectedExpr = parseExpression(
         "alpha + beta * c",
         ROW({"alpha", "beta", "c"}, {INTEGER(), DOUBLE(), DOUBLE()}));
+    ASSERT_EQ(*expectedExpr, *expr);
+  }
+
+  // rewrite with lambda
+  {
+    auto alpha =
+        std::make_shared<core::FieldAccessTypedExpr>(INTEGER(), "alpha");
+    auto expr =
+        parseExpression("i -> i * a", ROW({"a"}, {INTEGER()}), {INTEGER()});
+    expr = expr->rewriteInputNames({{"a", alpha}});
+
+    auto expectedExpr = parseExpression(
+        "i -> i * alpha", ROW({"alpha"}, {INTEGER()}), {INTEGER()});
+    ASSERT_EQ(*expectedExpr, *expr);
+  }
+
+  // no rewrite with dereference
+  {
+    auto alpha =
+        std::make_shared<core::FieldAccessTypedExpr>(INTEGER(), "alpha");
+    auto expr = parseExpression(
+        "i -> i * b.a", ROW({"b"}, {ROW({"a"}, {INTEGER()})}), {INTEGER()});
+    expr = expr->rewriteInputNames({{"a", alpha}});
+
+    auto expectedExpr = parseExpression(
+        "i -> i * b.a", ROW({"b"}, {ROW({"a"}, {INTEGER()})}), {INTEGER()});
     ASSERT_EQ(*expectedExpr, *expr);
   }
 }
@@ -2321,6 +2396,17 @@ TEST_F(ExprTest, exceptionContext) {
         trimInputPath(e.topLevelContext()));
     verifyDataAndSqlPaths(e, data);
   }
+
+  try {
+    evaluateMultiple({"c0 + (c1 % 0)", "c0 + c1"}, data);
+    FAIL() << "Expected an exception";
+  } catch (const VeloxException& e) {
+    ASSERT_EQ("mod(cast((c1) as BIGINT), 0:BIGINT)", e.context());
+    ASSERT_EQ(
+        "plus(cast((c0) as BIGINT), mod(cast((c1) as BIGINT), 0:BIGINT))",
+        trimInputPath(e.topLevelContext()));
+    verifyDataAndSqlPaths(e, data);
+  }
 }
 
 namespace {
@@ -2557,9 +2643,8 @@ TEST_F(ExprTest, toSql) {
 }
 
 namespace {
-// A naive function that wraps the input in a dictionary vector resized to
-// rows.end() - 1.  It assumes all selected values are non-null.
-class TestingShrinkingDictionary : public exec::VectorFunction {
+// A naive function that wraps the input in a dictionary vector.
+class WrapInDictionaryFunc : public exec::VectorFunction {
  public:
   bool isDefaultNullBehavior() const override {
     return true;
@@ -2577,7 +2662,35 @@ class TestingShrinkingDictionary : public exec::VectorFunction {
     rows.applyToSelected([&](int row) { rawIndices[row] = row; });
 
     result =
-        BaseVector::wrapInDictionary(nullptr, indices, rows.end() - 1, args[0]);
+        BaseVector::wrapInDictionary(nullptr, indices, rows.end(), args[0]);
+  }
+
+  static std::vector<std::shared_ptr<exec::FunctionSignature>> signatures() {
+    return {exec::FunctionSignatureBuilder()
+                .returnType("bigint")
+                .argumentType("bigint")
+                .build()};
+  }
+};
+
+class LastRowNullFunc : public exec::VectorFunction {
+ public:
+  bool isDefaultNullBehavior() const override {
+    return false;
+  }
+
+  void apply(
+      const SelectivityVector& rows,
+      std::vector<VectorPtr>& args,
+      const TypePtr& /* outputType */,
+      exec::EvalCtx& context,
+      VectorPtr& result) const override {
+    context.ensureWritable(rows, BIGINT(), result);
+    auto* flatOutput = result->asFlatVector<int64_t>();
+    auto* flatInput = args[0]->asFlatVector<int64_t>();
+    rows.applyToSelected(
+        [&](int row) { flatOutput->set(row, flatInput->valueAt(row)); });
+    flatOutput->setNull(rows.end() - 1, true);
   }
 
   static std::vector<std::shared_ptr<exec::FunctionSignature>> signatures() {
@@ -2589,40 +2702,29 @@ class TestingShrinkingDictionary : public exec::VectorFunction {
 };
 } // namespace
 
-TEST_F(ExprTest, specialFormPropagateNulls) {
+TEST_F(ExprTest, dictionaryResizedInAddNulls) {
   exec::registerVectorFunction(
-      "test_shrinking_dictionary",
-      TestingShrinkingDictionary::signatures(),
-      std::make_unique<TestingShrinkingDictionary>());
-
+      "dict_wrap",
+      WrapInDictionaryFunc::signatures(),
+      std::make_unique<WrapInDictionaryFunc>());
+  exec::registerVectorFunction(
+      "last_row_null",
+      LastRowNullFunc::signatures(),
+      std::make_unique<LastRowNullFunc>());
   // This test verifies an edge case where applyFunctionWithPeeling may produce
   // a result vector which is dictionary encoded and has fewer values than
   // are rows.
-  // This can happen when the last value in a column used in an expression is
-  // null which causes removeSureNulls to move the end of the SelectivityVector
-  // forward.  When we incorrectly use rows.end() as the size of the
-  // dictionary when rewrapping the results.
-  // Normally this is masked when this vector is used in a function call which
-  // produces a new output vector.  However, in SpecialForm expressions, we may
-  // return the output untouched, and when we try to add back in the nulls, we
-  // get an exception trying to resize the DictionaryVector.
-  // This is difficult to reproduce, so this test artificially triggers the
-  // issue by using a UDF that returns a dictionary one smaller than rows.end().
+  // The expression bellow make sure that we call a resize on a dictonary
+  // vector during addNulls after function `dict_wrap` is evaluated.
 
-  // Making the last row NULL, so we call addNulls in eval.
-  auto c0 = makeFlatVector<int64_t>(
-      5,
-      [](vector_size_t row) { return row; },
-      [](vector_size_t row) { return row == 4; });
+  // Making the last rows NULL, so we call addNulls in eval.
+  auto c0 = makeFlatVector<int64_t>({1, 2, 3, 4, 5});
 
-  auto rowVector = makeRowVector({c0});
-  auto evalResult = evaluate("test_shrinking_dictionary(\"c0\")", rowVector);
-
-  auto expectedResult = makeFlatVector<int64_t>(
-      5,
-      [](vector_size_t row) { return row; },
-      [](vector_size_t row) { return row == 4; });
-  assertEqualVectors(expectedResult, evalResult);
+  auto evalResult =
+      evaluate("dict_wrap(last_row_null(c0))", makeRowVector({c0}));
+  auto expected = c0;
+  expected->setNull(4, true);
+  assertEqualVectors(expected, evalResult);
 }
 
 TEST_F(ExprTest, tryWithConstantFailure) {
@@ -3094,6 +3196,27 @@ TEST_F(ExprTest, addNulls) {
       ASSERT_TRUE(result->equalValueAt(row.get(), i, i));
     }
     ASSERT_TRUE(result->isNullAt(kSize - 1));
+  }
+
+  // Make sure addNulls does not overwrite a shared dictionary vector indices.
+  {
+    BufferPtr sharedIndices =
+        AlignedBuffer::allocate<vector_size_t>(6, context.pool());
+    auto* mutableIndices = sharedIndices->asMutable<vector_size_t>();
+    mutableIndices[0] = 1;
+    mutableIndices[1] = 1;
+    mutableIndices[2] = 1;
+
+    // Vector of size 2 using only the first two indices of sharedIndices.
+    auto wrappedVectorSmaller = BaseVector::wrapInDictionary(
+        nullptr, sharedIndices, 2, makeFlatVector<int64_t>({1, 2, 3}));
+    exec::Expr::addNulls(
+        SelectivityVector(3),
+        rawNulls,
+        context,
+        BIGINT(),
+        wrappedVectorSmaller);
+    EXPECT_EQ(mutableIndices[2], 1);
   }
 }
 
@@ -3761,4 +3884,20 @@ TEST_F(ExprTest, dictionaryOverLoadedLazy) {
       {"(c0 < 5 and c1 < 90)", "c0 < 5"}, makeRowVector({c0, c1}));
   auto resultFromLazy = evaluate("c0 < 5", makeRowVector({c0, c1}));
   assertEqualVectors(result[1], resultFromLazy);
+}
+
+TEST_F(ExprTest, dictionaryResizeWithIndicesReset) {
+  // This test verifies a fuzzer failure that was due to resizeDictionary not
+  // initializing indices of new rows to 0.
+  auto indices = makeIndices({0, 0, 4, 4, 0});
+  auto indices2 = makeIndices({0, 1, 3});
+  auto nulls = makeNulls({false, false, false, true, false});
+  auto c0 = BaseVector::wrapInDictionary(
+      nulls, indices, 5, makeNullableFlatVector<int64_t>({1, 1, 1, 2, 2}));
+  auto wrappedC0 = BaseVector::wrapInDictionary(nullptr, indices2, 3, c0);
+
+  auto result = evaluate(
+      "coalesce(plus(c0, 1::BIGINT), 1::BIGINT)", makeRowVector({wrappedC0}));
+  auto expected = makeNullableFlatVector<int64_t>({2, 2, 1});
+  assertEqualVectors(expected, result);
 }

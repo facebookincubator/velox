@@ -14,8 +14,8 @@
  * limitations under the License.
  */
 
-#include <boost/regex.hpp>
 #include <folly/Math.h>
+#include <re2/re2.h>
 
 #include "folly/experimental/EventCount.h"
 #include "velox/common/base/tests/GTestUtils.h"
@@ -33,13 +33,11 @@
 #include "velox/exec/tests/utils/TempDirectoryPath.h"
 #include "velox/vector/fuzzer/VectorFuzzer.h"
 
-using facebook::velox::core::QueryConfig;
-using facebook::velox::exec::Aggregate;
-using facebook::velox::test::BatchMaker;
-using namespace facebook::velox::common::testutil;
-
 namespace facebook::velox::exec::test {
-namespace {
+
+using core::QueryConfig;
+using facebook::velox::test::BatchMaker;
+using namespace common::testutil;
 
 /// No-op implementation of Aggregate. Provides public access to following
 /// base class methods: setNull, clearNull and isNull.
@@ -331,11 +329,10 @@ class AggregationTest : public OperatorTestBase {
   std::unique_ptr<RowContainer> makeRowContainer(
       const std::vector<TypePtr>& keyTypes,
       const std::vector<TypePtr>& dependentTypes) {
-    static const std::vector<std::unique_ptr<Aggregate>> kEmptyAggregates;
     return std::make_unique<RowContainer>(
         keyTypes,
         false,
-        kEmptyAggregates,
+        std::vector<Accumulator>{},
         dependentTypes,
         false,
         false,
@@ -375,6 +372,75 @@ void AggregationTest::setTestKey(
     }
   }
   vector->set(row, StringView(chars));
+}
+
+TEST_F(AggregationTest, missingFunctionOrSignature) {
+  auto data = makeRowVector({
+      makeFlatVector<int64_t>({1, 2, 3}),
+      makeFlatVector<bool>({true, true, false}),
+  });
+
+  // (smallint, varchar) -> bigint
+  registerAggregateFunction(
+      "test_aggregate",
+      {AggregateFunctionSignatureBuilder()
+           .returnType("bigint")
+           .intermediateType("tinyint")
+           .argumentType("smallint")
+           .argumentType("varchar")
+           .build()},
+      [&](core::AggregationNode::Step step,
+          const std::vector<TypePtr>& argTypes,
+          const TypePtr& resultType) -> std::unique_ptr<exec::Aggregate> {
+        VELOX_UNREACHABLE();
+      });
+
+  std::vector<core::TypedExprPtr> inputs = {
+      std::make_shared<core::FieldAccessTypedExpr>(BIGINT(), "c0"),
+      std::make_shared<core::FieldAccessTypedExpr>(BOOLEAN(), "c1"),
+  };
+  auto missingFunc = std::make_shared<core::CallTypedExpr>(
+      BIGINT(), inputs, "missing-function");
+  auto wrongInputTypes =
+      std::make_shared<core::CallTypedExpr>(BIGINT(), inputs, "test_aggregate");
+  auto missingInputs = std::make_shared<core::CallTypedExpr>(
+      BIGINT(), std::vector<core::TypedExprPtr>{}, "test_aggregate");
+
+  auto makePlan = [&](const core::CallTypedExprPtr& aggExpr) {
+    return PlanBuilder()
+        .values({data})
+        .addNode([&](auto nodeId, auto source) -> core::PlanNodePtr {
+          return std::make_shared<core::AggregationNode>(
+              nodeId,
+              core::AggregationNode::Step::kSingle,
+              std::vector<core::FieldAccessTypedExprPtr>{},
+              std::vector<core::FieldAccessTypedExprPtr>{},
+              std::vector<std::string>{"agg"},
+              std::vector<core::CallTypedExprPtr>{aggExpr},
+              std::vector<core::FieldAccessTypedExprPtr>{},
+              false,
+              std::move(source));
+        })
+        .planNode();
+  };
+
+  CursorParameters params;
+  params.planNode = makePlan(missingFunc);
+  VELOX_ASSERT_THROW(
+      readCursor(params, [](Task*) {}),
+      "Aggregate function 'missing-function' not registered");
+
+  params.planNode = makePlan(wrongInputTypes);
+  VELOX_ASSERT_THROW(
+      readCursor(params, [](Task*) {}),
+      "Aggregate function signature is not supported: test_aggregate(BIGINT, BOOLEAN). "
+      "Supported signatures: (smallint,varchar) -> tinyint -> bigint.");
+
+  params.planNode = makePlan(missingInputs);
+  VELOX_ASSERT_THROW(
+      readCursor(params, [](Task*) {}),
+      "Aggregate function signature is not supported: test_aggregate(). "
+      "Supported signatures: (smallint,varchar) -> tinyint -> bigint.");
 }
 
 TEST_F(AggregationTest, global) {
@@ -679,6 +745,52 @@ TEST_F(AggregationTest, partialAggregationMemoryLimit) {
           .customStats.count("flushRowCount"));
 }
 
+TEST_F(AggregationTest, partialDistinctWithAbandon) {
+  auto vectors = {
+      // 1st batch will produce 100 distinct groups from 10 rows.
+      makeRowVector(
+          {makeFlatVector<int32_t>(100, [](auto row) { return row; })}),
+      // 2st batch will trigger abandon partial aggregation event with no new
+      // distinct values.
+      makeRowVector({makeFlatVector<int32_t>(1, [](auto row) { return row; })}),
+      // 3rd batch will not produce any new distinct values.
+      makeRowVector(
+          {makeFlatVector<int32_t>(50, [](auto row) { return row; })}),
+      // 4th batch will not produce 10 new distinct values.
+      makeRowVector(
+          {makeFlatVector<int32_t>(200, [](auto row) { return row % 110; })}),
+  };
+
+  createDuckDbTable(vectors);
+
+  // We are setting abandon partial aggregation config properties to low values,
+  // so they are triggered on the second batch.
+
+  // Distinct aggregation.
+  auto task = AssertQueryBuilder(duckDbQueryRunner_)
+                  .config(QueryConfig::kAbandonPartialAggregationMinRows, "100")
+                  .config(QueryConfig::kAbandonPartialAggregationMinPct, "50")
+                  .config("max_drivers_per_task", "1")
+                  .plan(PlanBuilder()
+                            .values(vectors)
+                            .partialAggregation({"c0"}, {})
+                            .finalAggregation()
+                            .planNode())
+                  .assertResults("SELECT distinct c0 FROM tmp");
+
+  // with aggregation, just in case.
+  task = AssertQueryBuilder(duckDbQueryRunner_)
+             .config(QueryConfig::kAbandonPartialAggregationMinRows, "100")
+             .config(QueryConfig::kAbandonPartialAggregationMinPct, "50")
+             .config("max_drivers_per_task", "1")
+             .plan(PlanBuilder()
+                       .values(vectors)
+                       .partialAggregation({"c0"}, {"sum(c0)"})
+                       .finalAggregation()
+                       .planNode())
+             .assertResults("SELECT distinct c0, sum(c0) FROM tmp group by c0");
+}
+
 TEST_F(AggregationTest, largeValueRangeArray) {
   // We have keys that map to integer range. The keys are
   // a little under max array hash table size apart. This wastes 16MB of
@@ -826,7 +938,7 @@ TEST_F(AggregationTest, partialAggregationMaybeReservationReleaseCheck) {
   // Make sure partial aggregation runs out of memory after first batch.
   CursorParameters params;
   params.queryCtx = std::make_shared<core::QueryCtx>(executor_.get());
-  params.queryCtx->setConfigOverridesUnsafe({
+  params.queryCtx->testingOverrideConfigUnsafe({
       {QueryConfig::kMaxPartialAggregationMemory,
        std::to_string(kMaxPartialMemoryUsage)},
       {QueryConfig::kMaxExtendedPartialAggregationMemory,
@@ -1715,8 +1827,8 @@ DEBUG_ONLY_TEST_F(AggregationTest, reclaimDuringReserve) {
       std::function<void(memory::MemoryPoolImpl*)>(
           ([&](memory::MemoryPoolImpl* pool) {
             ASSERT_TRUE(op != nullptr);
-            const boost::regex re(".*Aggregation");
-            if (!regex_match(pool->name(), re)) {
+            const std::string re(".*Aggregation");
+            if (!RE2::FullMatch(pool->name(), re)) {
               return;
             }
             if (!injectOnce.exchange(false)) {
@@ -1734,18 +1846,17 @@ DEBUG_ONLY_TEST_F(AggregationTest, reclaimDuringReserve) {
           })));
 
   std::thread taskThread([&]() {
-    auto task = AssertQueryBuilder(
-                    PlanBuilder()
-                        .values(batches)
-                        .singleAggregation({"c0", "c1"}, {"array_agg(c2)"})
-                        .planNode())
-                    .queryCtx(queryCtx)
-                    .spillDirectory(tempDirectory->path)
-                    .config(QueryConfig::kSpillEnabled, "true")
-                    .config(QueryConfig::kAggregationSpillEnabled, "true")
-                    .config(core::QueryConfig::kSpillPartitionBits, "2")
-                    .maxDrivers(1)
-                    .assertResults(expectedResult);
+    AssertQueryBuilder(PlanBuilder()
+                           .values(batches)
+                           .singleAggregation({"c0", "c1"}, {"array_agg(c2)"})
+                           .planNode())
+        .queryCtx(queryCtx)
+        .spillDirectory(tempDirectory->path)
+        .config(QueryConfig::kSpillEnabled, "true")
+        .config(QueryConfig::kAggregationSpillEnabled, "true")
+        .config(core::QueryConfig::kSpillPartitionBits, "2")
+        .maxDrivers(1)
+        .assertResults(expectedResult);
   });
 
   testWait.wait(testWaitKey);
@@ -1826,8 +1937,8 @@ DEBUG_ONLY_TEST_F(AggregationTest, reclaimDuringAllocation) {
         std::function<void(memory::MemoryPoolImpl*)>(
             ([&](memory::MemoryPoolImpl* pool) {
               ASSERT_TRUE(op != nullptr);
-              const boost::regex re(".*Aggregation");
-              if (!regex_match(pool->name(), re)) {
+              const std::string re(".*Aggregation");
+              if (!RE2::FullMatch(pool->name(), re)) {
                 return;
               }
               if (!injectOnce.exchange(false)) {
@@ -1850,27 +1961,27 @@ DEBUG_ONLY_TEST_F(AggregationTest, reclaimDuringAllocation) {
 
     std::thread taskThread([&]() {
       if (enableSpilling) {
-        auto task = AssertQueryBuilder(
-                        PlanBuilder()
-                            .values(batches)
-                            .singleAggregation({"c0", "c1"}, {"array_agg(c2)"})
-                            .planNode())
-                        .queryCtx(queryCtx)
-                        .spillDirectory(tempDirectory->path)
-                        .config(QueryConfig::kSpillEnabled, "true")
-                        .config(QueryConfig::kAggregationSpillEnabled, "true")
-                        .config(core::QueryConfig::kSpillPartitionBits, "2")
-                        .maxDrivers(1)
-                        .assertResults(expectedResult);
+        AssertQueryBuilder(
+            PlanBuilder()
+                .values(batches)
+                .singleAggregation({"c0", "c1"}, {"array_agg(c2)"})
+                .planNode())
+            .queryCtx(queryCtx)
+            .spillDirectory(tempDirectory->path)
+            .config(QueryConfig::kSpillEnabled, "true")
+            .config(QueryConfig::kAggregationSpillEnabled, "true")
+            .config(core::QueryConfig::kSpillPartitionBits, "2")
+            .maxDrivers(1)
+            .assertResults(expectedResult);
       } else {
-        auto task = AssertQueryBuilder(
-                        PlanBuilder()
-                            .values(batches)
-                            .singleAggregation({"c0", "c1"}, {"array_agg(c2)"})
-                            .planNode())
-                        .queryCtx(queryCtx)
-                        .maxDrivers(1)
-                        .assertResults(expectedResult);
+        AssertQueryBuilder(
+            PlanBuilder()
+                .values(batches)
+                .singleAggregation({"c0", "c1"}, {"array_agg(c2)"})
+                .planNode())
+            .queryCtx(queryCtx)
+            .maxDrivers(1)
+            .assertResults(expectedResult);
       }
     });
 
@@ -1971,27 +2082,27 @@ DEBUG_ONLY_TEST_F(AggregationTest, reclaimDuringOutputProcessing) {
 
     std::thread taskThread([&]() {
       if (enableSpilling) {
-        auto task = AssertQueryBuilder(
-                        PlanBuilder()
-                            .values(batches)
-                            .singleAggregation({"c0", "c1"}, {"array_agg(c2)"})
-                            .planNode())
-                        .queryCtx(queryCtx)
-                        .spillDirectory(tempDirectory->path)
-                        .config(QueryConfig::kSpillEnabled, "true")
-                        .config(QueryConfig::kAggregationSpillEnabled, "true")
-                        .config(core::QueryConfig::kSpillPartitionBits, "2")
-                        .maxDrivers(1)
-                        .assertResults(expectedResult);
+        AssertQueryBuilder(
+            PlanBuilder()
+                .values(batches)
+                .singleAggregation({"c0", "c1"}, {"array_agg(c2)"})
+                .planNode())
+            .queryCtx(queryCtx)
+            .spillDirectory(tempDirectory->path)
+            .config(QueryConfig::kSpillEnabled, "true")
+            .config(QueryConfig::kAggregationSpillEnabled, "true")
+            .config(core::QueryConfig::kSpillPartitionBits, "2")
+            .maxDrivers(1)
+            .assertResults(expectedResult);
       } else {
-        auto task = AssertQueryBuilder(
-                        PlanBuilder()
-                            .values(batches)
-                            .singleAggregation({"c0", "c1"}, {"array_agg(c2)"})
-                            .planNode())
-                        .queryCtx(queryCtx)
-                        .maxDrivers(1)
-                        .assertResults(expectedResult);
+        AssertQueryBuilder(
+            PlanBuilder()
+                .values(batches)
+                .singleAggregation({"c0", "c1"}, {"array_agg(c2)"})
+                .planNode())
+            .queryCtx(queryCtx)
+            .maxDrivers(1)
+            .assertResults(expectedResult);
       }
     });
 
@@ -2088,24 +2199,24 @@ DEBUG_ONLY_TEST_F(AggregationTest, reclaimWithEmptyAggregationTable) {
 
     std::thread taskThread([&]() {
       if (enableSpilling) {
-        auto task = AssertQueryBuilder(nullptr)
-                        .plan(aggregationPlan)
-                        .queryCtx(queryCtx)
-                        .spillDirectory(tempDirectory->path)
-                        .config(QueryConfig::kSpillEnabled, "true")
-                        .config(QueryConfig::kAggregationSpillEnabled, "true")
-                        .config(core::QueryConfig::kSpillPartitionBits, "2")
-                        .maxDrivers(1)
-                        .assertResults(expectedResult);
+        AssertQueryBuilder(nullptr)
+            .plan(aggregationPlan)
+            .queryCtx(queryCtx)
+            .spillDirectory(tempDirectory->path)
+            .config(QueryConfig::kSpillEnabled, "true")
+            .config(QueryConfig::kAggregationSpillEnabled, "true")
+            .config(core::QueryConfig::kSpillPartitionBits, "2")
+            .maxDrivers(1)
+            .assertResults(expectedResult);
       } else {
-        auto task = AssertQueryBuilder(
-                        PlanBuilder()
-                            .values(batches)
-                            .singleAggregation({"c0", "c1"}, {"array_agg(c2)"})
-                            .planNode())
-                        .queryCtx(queryCtx)
-                        .maxDrivers(1)
-                        .assertResults(expectedResult);
+        AssertQueryBuilder(
+            PlanBuilder()
+                .values(batches)
+                .singleAggregation({"c0", "c1"}, {"array_agg(c2)"})
+                .planNode())
+            .queryCtx(queryCtx)
+            .maxDrivers(1)
+            .assertResults(expectedResult);
       }
     });
 
@@ -2145,5 +2256,193 @@ DEBUG_ONLY_TEST_F(AggregationTest, reclaimWithEmptyAggregationTable) {
   }
 }
 
-} // namespace
+DEBUG_ONLY_TEST_F(AggregationTest, abortDuringOutputProcessing) {
+  constexpr int64_t kMaxBytes = 1LL << 30; // 1GB
+  auto rowType = ROW({"c0", "c1", "c2"}, {INTEGER(), INTEGER(), INTEGER()});
+  VectorFuzzer fuzzer({.vectorSize = 1000}, pool());
+  const int32_t numBatches = 10;
+  std::vector<RowVectorPtr> batches;
+  for (int32_t i = 0; i < numBatches; ++i) {
+    batches.push_back(fuzzer.fuzzRow(rowType));
+  }
+
+  struct {
+    bool abortFromRootMemoryPool;
+    int numDrivers;
+
+    std::string debugString() const {
+      return fmt::format(
+          "abortFromRootMemoryPool {} numDrivers {}",
+          abortFromRootMemoryPool,
+          numDrivers);
+    }
+  } testSettings[] = {{true, 1}, {false, 1}, {true, 4}, {false, 4}};
+
+  for (const auto& testData : testSettings) {
+    SCOPED_TRACE(testData.debugString());
+    auto queryCtx = std::make_shared<core::QueryCtx>(executor_.get());
+    queryCtx->testingOverrideMemoryPool(
+        memory::defaultMemoryManager().addRootPool(
+            queryCtx->queryId(), kMaxBytes, memory::MemoryReclaimer::create()));
+    auto expectedResult =
+        AssertQueryBuilder(
+            PlanBuilder()
+                .values(batches)
+                .singleAggregation({"c0", "c1"}, {"array_agg(c2)"})
+                .planNode())
+            .queryCtx(queryCtx)
+            .copyResults(pool_.get());
+
+    folly::EventCount driverWait;
+    auto driverWaitKey = driverWait.prepareWait();
+    folly::EventCount testWait;
+    auto testWaitKey = testWait.prepareWait();
+
+    std::atomic<bool> injectOnce{true};
+    Operator* op;
+    SCOPED_TESTVALUE_SET(
+        "facebook::velox::exec::Driver::runInternal::noMoreInput",
+        std::function<void(Operator*)>(([&](Operator* testOp) {
+          if (testOp->operatorType() != "Aggregation") {
+            return;
+          }
+          op = testOp;
+          if (!injectOnce.exchange(false)) {
+            return;
+          }
+          auto* driver = op->testingOperatorCtx()->driver();
+          ASSERT_EQ(
+              driver->task()->enterSuspended(driver->state()),
+              StopReason::kNone);
+          testWait.notify();
+          driverWait.wait(driverWaitKey);
+          ASSERT_EQ(
+              driver->task()->leaveSuspended(driver->state()),
+              StopReason::kAlreadyTerminated);
+          VELOX_MEM_POOL_ABORTED(op->pool());
+        })));
+
+    std::thread taskThread([&]() {
+      VELOX_ASSERT_THROW(
+          AssertQueryBuilder(
+              PlanBuilder()
+                  .values(batches)
+                  .singleAggregation({"c0", "c1"}, {"array_agg(c2)"})
+                  .planNode())
+              .queryCtx(queryCtx)
+              .maxDrivers(testData.numDrivers)
+              .assertResults(expectedResult),
+          "");
+    });
+
+    testWait.wait(testWaitKey);
+    ASSERT_TRUE(op != nullptr);
+    auto task = op->testingOperatorCtx()->task();
+    testData.abortFromRootMemoryPool ? queryCtx->pool()->abort()
+                                     : op->pool()->abort();
+    ASSERT_TRUE(op->pool()->aborted());
+    ASSERT_TRUE(queryCtx->pool()->aborted());
+    ASSERT_EQ(queryCtx->pool()->currentBytes(), 0);
+    driverWait.notify();
+    taskThread.join();
+    task.reset();
+    Task::testingWaitForAllTasksToBeDeleted();
+  }
+}
+
+DEBUG_ONLY_TEST_F(AggregationTest, abortDuringInputgProcessing) {
+  constexpr int64_t kMaxBytes = 1LL << 30; // 1GB
+  auto rowType = ROW({"c0", "c1", "c2"}, {INTEGER(), INTEGER(), INTEGER()});
+  VectorFuzzer fuzzer({.vectorSize = 1000}, pool());
+  const int32_t numBatches = 10;
+  std::vector<RowVectorPtr> batches;
+  for (int32_t i = 0; i < numBatches; ++i) {
+    batches.push_back(fuzzer.fuzzRow(rowType));
+  }
+
+  struct {
+    bool abortFromRootMemoryPool;
+    int numDrivers;
+
+    std::string debugString() const {
+      return fmt::format(
+          "abortFromRootMemoryPool {} numDrivers {}",
+          abortFromRootMemoryPool,
+          numDrivers);
+    }
+  } testSettings[] = {{true, 1}, {false, 1}, {true, 4}, {false, 4}};
+
+  for (const auto& testData : testSettings) {
+    SCOPED_TRACE(testData.debugString());
+    auto queryCtx = std::make_shared<core::QueryCtx>(executor_.get());
+    queryCtx->testingOverrideMemoryPool(
+        memory::defaultMemoryManager().addRootPool(
+            queryCtx->queryId(), kMaxBytes, memory::MemoryReclaimer::create()));
+    auto expectedResult =
+        AssertQueryBuilder(
+            PlanBuilder()
+                .values(batches)
+                .singleAggregation({"c0", "c1"}, {"array_agg(c2)"})
+                .planNode())
+            .queryCtx(queryCtx)
+            .copyResults(pool_.get());
+
+    folly::EventCount driverWait;
+    auto driverWaitKey = driverWait.prepareWait();
+    folly::EventCount testWait;
+    auto testWaitKey = testWait.prepareWait();
+
+    std::atomic<int> numInputs{0};
+    Operator* op;
+    SCOPED_TESTVALUE_SET(
+        "facebook::velox::exec::Driver::runInternal::addInput",
+        std::function<void(Operator*)>(([&](Operator* testOp) {
+          if (testOp->operatorType() != "Aggregation") {
+            return;
+          }
+          op = testOp;
+          ++numInputs;
+          if (numInputs != 2) {
+            return;
+          }
+          auto* driver = op->testingOperatorCtx()->driver();
+          ASSERT_EQ(
+              driver->task()->enterSuspended(driver->state()),
+              StopReason::kNone);
+          testWait.notify();
+          driverWait.wait(driverWaitKey);
+          ASSERT_EQ(
+              driver->task()->leaveSuspended(driver->state()),
+              StopReason::kAlreadyTerminated);
+          VELOX_MEM_POOL_ABORTED(op->pool());
+        })));
+
+    std::thread taskThread([&]() {
+      VELOX_ASSERT_THROW(
+          AssertQueryBuilder(
+              PlanBuilder()
+                  .values(batches)
+                  .singleAggregation({"c0", "c1"}, {"array_agg(c2)"})
+                  .planNode())
+              .queryCtx(queryCtx)
+              .maxDrivers(testData.numDrivers)
+              .assertResults(expectedResult),
+          "");
+    });
+
+    testWait.wait(testWaitKey);
+    ASSERT_TRUE(op != nullptr);
+    auto task = op->testingOperatorCtx()->task();
+    testData.abortFromRootMemoryPool ? queryCtx->pool()->abort()
+                                     : op->pool()->abort();
+    ASSERT_TRUE(op->pool()->aborted());
+    ASSERT_TRUE(queryCtx->pool()->aborted());
+    ASSERT_EQ(queryCtx->pool()->currentBytes(), 0);
+    driverWait.notify();
+    taskThread.join();
+    task.reset();
+    Task::testingWaitForAllTasksToBeDeleted();
+  }
+}
+
 } // namespace facebook::velox::exec::test

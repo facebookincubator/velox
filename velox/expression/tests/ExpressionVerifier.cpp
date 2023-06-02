@@ -345,7 +345,8 @@ class MinimalSubExpressionFinder {
     bool minimalFound = false;
     findMinimalRecursive(plan, rowVector, columnsToWrapInLazy, minimalFound);
     if (minimalFound) {
-      errorExit("Found minimal failing expression");
+      errorExit(fmt::format(
+          "Found minimal failing expression: {}", plan->toString()));
     } else {
       errorExit("Only the top level expression failed");
     }

@@ -863,9 +863,6 @@ NestedLoopJoinNode::NestedLoopJoinNode(
           core::isRightJoin(joinType_) || core::isFullJoin(joinType_),
       "{} unsupported, NestedLoopJoin only supports inner and outer join",
       joinTypeName(joinType_));
-  if (joinCondition_ != nullptr) {
-    VELOX_NYI("NestedLoopJoin does not support join condition.");
-  }
 
   auto leftType = sources_[0]->outputType();
   auto rightType = sources_[1]->outputType();
@@ -1051,6 +1048,42 @@ WindowNode::WindowNode(
 }
 
 namespace {
+void addSortingKeys(
+    std::stringstream& stream,
+    const std::vector<FieldAccessTypedExprPtr>& sortingKeys,
+    const std::vector<SortOrder>& sortingOrders) {
+  for (auto i = 0; i < sortingKeys.size(); ++i) {
+    if (i > 0) {
+      stream << ", ";
+    }
+    stream << sortingKeys[i]->name() << " " << sortingOrders[i].toString();
+  }
+}
+} // namespace
+
+void WindowNode::addDetails(std::stringstream& stream) const {
+  stream << "partition by [";
+  if (!partitionKeys_.empty()) {
+    addFields(stream, partitionKeys_);
+  }
+  stream << "] ";
+
+  stream << "order by [";
+  addSortingKeys(stream, sortingKeys_, sortingOrders_);
+  stream << "] ";
+
+  auto numInputCols = sources_[0]->outputType()->size();
+  auto numOutputCols = outputType_->size();
+  for (auto i = numInputCols; i < numOutputCols; i++) {
+    if (i >= numInputCols + 1) {
+      stream << ", ";
+    }
+    stream << outputType_->names()[i] << " := ";
+    addWindowFunction(stream, windowFunctions_[i - numInputCols]);
+  }
+}
+
+namespace {
 std::unordered_map<WindowNode::BoundType, std::string> boundTypeNames() {
   return {
       {WindowNode::BoundType::kCurrentRow, "CURRENT ROW"},
@@ -1214,18 +1247,167 @@ PlanNodePtr WindowNode::create(const folly::dynamic& obj, void* context) {
 }
 
 namespace {
-void addSortingKeys(
-    std::stringstream& stream,
-    const std::vector<FieldAccessTypedExprPtr>& sortingKeys,
-    const std::vector<SortOrder>& sortingOrders) {
-  for (auto i = 0; i < sortingKeys.size(); ++i) {
-    if (i > 0) {
-      stream << ", ";
-    }
-    stream << sortingKeys[i]->name() << " " << sortingOrders[i].toString();
-  }
+RowTypePtr getRowNumberOutputType(
+    const RowTypePtr& inputType,
+    const std::string& rowNumberColumnName) {
+  std::vector<std::string> names = inputType->names();
+  std::vector<TypePtr> types = inputType->children();
+
+  names.push_back(rowNumberColumnName);
+  types.push_back(BIGINT());
+
+  return ROW(std::move(names), std::move(types));
 }
 } // namespace
+
+RowNumberNode::RowNumberNode(
+    PlanNodeId id,
+    std::vector<FieldAccessTypedExprPtr> partitionKeys,
+    const std::string& rowNumberColumnName,
+    std::optional<int32_t> limit,
+    PlanNodePtr source)
+    : PlanNode(std::move(id)),
+      partitionKeys_{std::move(partitionKeys)},
+      limit_{limit},
+      sources_{std::move(source)},
+      outputType_(getRowNumberOutputType(
+          sources_[0]->outputType(),
+          rowNumberColumnName)) {}
+
+void RowNumberNode::addDetails(std::stringstream& stream) const {
+  if (!partitionKeys_.empty()) {
+    stream << "partition by (";
+    addFields(stream, partitionKeys_);
+    stream << ")";
+  }
+
+  if (limit_) {
+    if (!partitionKeys_.empty()) {
+      stream << " ";
+    }
+    stream << "limit " << limit_.value();
+  }
+}
+
+folly::dynamic RowNumberNode::serialize() const {
+  auto obj = PlanNode::serialize();
+  obj["partitionKeys"] = ISerializable::serialize(partitionKeys_);
+  obj["rowNumberColumnName"] = outputType_->names().back();
+  if (limit_) {
+    obj["limit"] = limit_.value();
+  }
+
+  return obj;
+}
+
+// static
+PlanNodePtr RowNumberNode::create(const folly::dynamic& obj, void* context) {
+  auto source = deserializeSingleSource(obj, context);
+  auto partitionKeys = deserializeFields(obj["partitionKeys"], context);
+
+  std::optional<int32_t> limit;
+  if (obj.count("limit")) {
+    limit = obj["limit"].asInt();
+  }
+
+  return std::make_shared<RowNumberNode>(
+      deserializePlanNodeId(obj),
+      partitionKeys,
+      obj["rowNumberColumnName"].asString(),
+      limit,
+      source);
+}
+
+namespace {
+RowTypePtr getTopNRowNumberOutputType(
+    const RowTypePtr& inputType,
+    const std::optional<std::string>& rowNumberColumnName) {
+  if (rowNumberColumnName) {
+    return getRowNumberOutputType(inputType, rowNumberColumnName.value());
+  }
+
+  return inputType;
+}
+} // namespace
+
+TopNRowNumberNode::TopNRowNumberNode(
+    PlanNodeId id,
+    std::vector<FieldAccessTypedExprPtr> partitionKeys,
+    std::vector<FieldAccessTypedExprPtr> sortingKeys,
+    std::vector<SortOrder> sortingOrders,
+    const std::optional<std::string>& rowNumberColumnName,
+    int32_t limit,
+    PlanNodePtr source)
+    : PlanNode(std::move(id)),
+      partitionKeys_{std::move(partitionKeys)},
+      sortingKeys_{std::move(sortingKeys)},
+      sortingOrders_{std::move(sortingOrders)},
+      limit_{limit},
+      sources_{std::move(source)},
+      outputType_{getTopNRowNumberOutputType(
+          sources_[0]->outputType(),
+          rowNumberColumnName)} {
+  VELOX_USER_CHECK_EQ(
+      sortingKeys_.size(),
+      sortingOrders_.size(),
+      "Number of sorting keys must be equal to the number of sorting orders");
+
+  VELOX_USER_CHECK_GT(
+      sortingKeys_.size(),
+      0,
+      "Number of sorting keys must be greater than zero");
+}
+
+void TopNRowNumberNode::addDetails(std::stringstream& stream) const {
+  if (!partitionKeys_.empty()) {
+    stream << "partition by (";
+    addFields(stream, partitionKeys_);
+    stream << ") ";
+  }
+
+  stream << "order by (";
+  addSortingKeys(stream, sortingKeys_, sortingOrders_);
+  stream << ") ";
+
+  stream << "limit " << limit_;
+}
+
+folly::dynamic TopNRowNumberNode::serialize() const {
+  auto obj = PlanNode::serialize();
+  obj["partitionKeys"] = ISerializable::serialize(partitionKeys_);
+  obj["sortingKeys"] = ISerializable::serialize(sortingKeys_);
+  obj["sortingOrders"] = serializeSortingOrders(sortingOrders_);
+  if (generateRowNumber()) {
+    obj["rowNumberColumnName"] = outputType_->names().back();
+  }
+  obj["limit"] = limit_;
+  return obj;
+}
+
+// static
+PlanNodePtr TopNRowNumberNode::create(
+    const folly::dynamic& obj,
+    void* context) {
+  auto source = deserializeSingleSource(obj, context);
+  auto partitionKeys = deserializeFields(obj["partitionKeys"], context);
+  auto sortingKeys = deserializeFields(obj["sortingKeys"], context);
+
+  auto sortingOrders = deserializeSortingOrders(obj["sortingOrders"]);
+
+  std::optional<std::string> rowNumberColumnName;
+  if (obj.count("rowNumberColumnName")) {
+    rowNumberColumnName = obj["rowNumberColumnName"].asString();
+  }
+
+  return std::make_shared<TopNRowNumberNode>(
+      deserializePlanNodeId(obj),
+      partitionKeys,
+      sortingKeys,
+      sortingOrders,
+      rowNumberColumnName,
+      obj["limit"].asInt(),
+      source);
+}
 
 void LocalMergeNode::addDetails(std::stringstream& stream) const {
   addSortingKeys(stream, sortingKeys_, sortingOrders_);
@@ -1366,9 +1548,7 @@ void PartitionedOutputNode::addDetails(std::stringstream& stream) const {
   } else if (numPartitions_ == 1) {
     stream << "SINGLE";
   } else {
-    stream << "HASH(";
-    addKeys(stream, keys_);
-    stream << ") " << numPartitions_;
+    stream << partitionFunctionSpec_->toString() << " " << numPartitions_;
   }
 
   if (replicateNullsAndAny_) {
@@ -1495,28 +1675,6 @@ PlanNodePtr OrderByNode::create(const folly::dynamic& obj, void* context) {
       std::move(source));
 }
 
-void WindowNode::addDetails(std::stringstream& stream) const {
-  stream << "partition by [";
-  if (!partitionKeys_.empty()) {
-    addFields(stream, partitionKeys_);
-  }
-  stream << "] ";
-
-  stream << "order by [";
-  addSortingKeys(stream, sortingKeys_, sortingOrders_);
-  stream << "] ";
-
-  auto numInputCols = sources_[0]->outputType()->size();
-  auto numOutputCols = outputType_->size();
-  for (auto i = numInputCols; i < numOutputCols; i++) {
-    if (i >= numInputCols + 1) {
-      stream << ", ";
-    }
-    stream << outputType_->names()[i] << " := ";
-    addWindowFunction(stream, windowFunctions_[i - numInputCols]);
-  }
-}
-
 void PlanNode::toString(
     std::stringstream& stream,
     bool detailed,
@@ -1594,9 +1752,11 @@ void PlanNode::registerSerDe() {
   registry.Register("OrderByNode", OrderByNode::create);
   registry.Register("PartitionedOutputNode", PartitionedOutputNode::create);
   registry.Register("ProjectNode", ProjectNode::create);
+  registry.Register("RowNumberNode", RowNumberNode::create);
   registry.Register("TableScanNode", TableScanNode::create);
   registry.Register("TableWriteNode", TableWriteNode::create);
   registry.Register("TopNNode", TopNNode::create);
+  registry.Register("TopNRowNumberNode", TopNRowNumberNode::create);
   registry.Register("UnnestNode", UnnestNode::create);
   registry.Register("ValuesNode", ValuesNode::create);
   registry.Register("WindowNode", WindowNode::create);

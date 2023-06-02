@@ -78,6 +78,19 @@ class HiveColumnHandle : public ColumnHandle {
     return columnType_ == ColumnType::kPartitionKey;
   }
 
+  std::string toString() const;
+
+  folly::dynamic serialize() const override;
+
+  static ColumnHandlePtr create(const folly::dynamic& obj);
+
+  static std::string columnTypeName(HiveColumnHandle::ColumnType columnType);
+
+  static HiveColumnHandle::ColumnType columnTypeFromName(
+      const std::string& name);
+
+  static void registerSerDe();
+
  private:
   const std::string name_;
   const ColumnType columnType_;
@@ -112,6 +125,14 @@ class HiveTableHandle : public ConnectorTableHandle {
   }
 
   std::string toString() const override;
+
+  folly::dynamic serialize() const override;
+
+  static ConnectorTableHandlePtr create(
+      const folly::dynamic& obj,
+      void* context);
+
+  static void registerSerDe();
 
  private:
   const std::string tableName_;
@@ -160,7 +181,7 @@ class HiveDataSource : public DataSource {
     return rowReader_ && rowReader_->allPrefetchIssued();
   }
 
-  void setFromDataSource(std::shared_ptr<DataSource> source) override;
+  void setFromDataSource(std::unique_ptr<DataSource> sourceUnique) override;
 
   int64_t estimatedRowSize() override;
 
@@ -261,14 +282,14 @@ class HiveConnector : public Connector {
     return true;
   }
 
-  std::shared_ptr<DataSource> createDataSource(
+  std::unique_ptr<DataSource> createDataSource(
       const RowTypePtr& outputType,
-      const std::shared_ptr<connector::ConnectorTableHandle>& tableHandle,
+      const std::shared_ptr<ConnectorTableHandle>& tableHandle,
       const std::unordered_map<
           std::string,
           std::shared_ptr<connector::ColumnHandle>>& columnHandles,
       ConnectorQueryCtx* connectorQueryCtx) override {
-    return std::make_shared<HiveDataSource>(
+    return std::make_unique<HiveDataSource>(
         outputType,
         tableHandle,
         columnHandles,
@@ -284,7 +305,7 @@ class HiveConnector : public Connector {
     return true;
   }
 
-  std::shared_ptr<DataSink> createDataSink(
+  std::unique_ptr<DataSink> createDataSink(
       RowTypePtr inputType,
       std::shared_ptr<ConnectorInsertTableHandle> connectorInsertTableHandle,
       ConnectorQueryCtx* connectorQueryCtx,
@@ -293,7 +314,7 @@ class HiveConnector : public Connector {
         connectorInsertTableHandle);
     VELOX_CHECK_NOT_NULL(
         hiveInsertHandle, "Hive connector expecting hive write handle!");
-    return std::make_shared<HiveDataSink>(
+    return std::make_unique<HiveDataSink>(
         inputType, hiveInsertHandle, connectorQueryCtx, commitStrategy);
   }
 

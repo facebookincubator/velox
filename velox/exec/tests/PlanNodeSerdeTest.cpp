@@ -91,14 +91,27 @@ TEST_F(PlanNodeSerdeTest, nestedLoopJoin) {
       });
 
   auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
-  auto plan =
-      PlanBuilder(planNodeIdGenerator)
-          .values({left})
-          .nestedLoopJoin(
-              PlanBuilder(planNodeIdGenerator).values({right}).planNode(),
-              {"t0", "u1", "t2", "t1"})
-          .planNode();
-  testSerde(plan);
+  {
+    auto plan =
+        PlanBuilder(planNodeIdGenerator)
+            .values({left})
+            .nestedLoopJoin(
+                PlanBuilder(planNodeIdGenerator).values({right}).planNode(),
+                {"t0", "u1", "t2", "t1"})
+            .planNode();
+    testSerde(plan);
+  }
+  {
+    auto plan =
+        PlanBuilder(planNodeIdGenerator)
+            .values({left})
+            .nestedLoopJoin(
+                PlanBuilder(planNodeIdGenerator).values({right}).planNode(),
+                "t0 < u0",
+                {"t0", "u1", "t2", "t1"})
+            .planNode();
+    testSerde(plan);
+  }
 }
 
 TEST_F(PlanNodeSerdeTest, enforceSingleRow) {
@@ -364,6 +377,37 @@ TEST_F(PlanNodeSerdeTest, window) {
              .window({"sum(c0) over (partition by c1 order by c2)"})
              .planNode();
 
+  testSerde(plan);
+}
+
+TEST_F(PlanNodeSerdeTest, rowNumber) {
+  auto plan = PlanBuilder().values({data_}).rowNumber({}).planNode();
+  testSerde(plan);
+
+  plan = PlanBuilder().values({data_}).rowNumber({"c2", "c0"}).planNode();
+  testSerde(plan);
+
+  plan = PlanBuilder().values({data_}).rowNumber({"c1", "c2"}, 10).planNode();
+  testSerde(plan);
+}
+
+TEST_F(PlanNodeSerdeTest, topNRowNumber) {
+  auto plan = PlanBuilder()
+                  .values({data_})
+                  .topNRowNumber({}, {"c0", "c2"}, 10, false)
+                  .planNode();
+  testSerde(plan);
+
+  plan = PlanBuilder()
+             .values({data_})
+             .topNRowNumber({}, {"c0", "c2"}, 10, true)
+             .planNode();
+  testSerde(plan);
+
+  plan = PlanBuilder()
+             .values({data_})
+             .topNRowNumber({"c0"}, {"c1", "c2"}, 10, false)
+             .planNode();
   testSerde(plan);
 }
 

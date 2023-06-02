@@ -1233,16 +1233,31 @@ void ExpressionFuzzer::retryWithTry(
     tryPlans.push_back(std::make_shared<core::CallTypedExpr>(
         plan->type(), std::vector<core::TypedExprPtr>{plan}, "try"));
   }
+
+  RowVectorPtr tryResult;
+
   // The function throws if anything goes wrong.
-  auto tryResult =
-      verifier_
-          .verify(
-              tryPlans,
-              rowVector,
-              resultVector ? BaseVector::copy(*resultVector) : nullptr,
-              false, // canThrow
-              columnsToWrapInLazy)
-          .result;
+  try {
+    tryResult =
+        verifier_
+            .verify(
+                tryPlans,
+                rowVector,
+                resultVector ? BaseVector::copy(*resultVector) : nullptr,
+                false, // canThrow
+                columnsToWrapInLazy)
+            .result;
+  } catch (const std::exception& e) {
+    if (FLAGS_find_minimal_subexpression) {
+      computeMinimumSubExpression(
+          {&execCtx_, {false, ""}},
+          vectorFuzzer_,
+          plans,
+          rowVector,
+          columnsToWrapInLazy);
+    }
+    throw;
+  }
 
   // Re-evaluate the original expression on rows that didn't produce an
   // error (i.e. returned non-NULL results when evaluated with TRY).
@@ -1254,14 +1269,26 @@ void ExpressionFuzzer::retryWithTry(
     LOG(INFO) << "Retrying original expression on " << noErrorRowVector->size()
               << " rows without errors";
 
-    verifier_.verify(
-        plans,
-        noErrorRowVector,
-        resultVector ? BaseVector::copy(*resultVector)
-                           ->slice(0, noErrorRowVector->size())
-                     : nullptr,
-        false, // canThrow
-        columnsToWrapInLazy);
+    try {
+      verifier_.verify(
+          plans,
+          noErrorRowVector,
+          resultVector ? BaseVector::copy(*resultVector)
+                             ->slice(0, noErrorRowVector->size())
+                       : nullptr,
+          false, // canThrow
+          columnsToWrapInLazy);
+    } catch (const std::exception& e) {
+      if (FLAGS_find_minimal_subexpression) {
+        computeMinimumSubExpression(
+            {&execCtx_, {false, ""}},
+            vectorFuzzer_,
+            plans,
+            rowVector,
+            columnsToWrapInLazy);
+      }
+      throw;
+    }
   }
 }
 

@@ -456,6 +456,146 @@ TEST(TestReader, testReadFlatMapWithKeyRejectList) {
   } while (true);
 }
 
+TEST(TestReader, testStatsCallbackFiredWithFiltering) {
+  const std::string fmSmall(getExampleFilePath("fm_small.orc"));
+
+  RowReaderOptions rowReaderOpts;
+  std::shared_ptr<const RowType> requestedType =
+      std::dynamic_pointer_cast<const RowType>(HiveTypeParser().parse("struct<\
+          id:int,\
+      map1:map<int, array<float>>,\
+      map2:map<string, map<smallint,bigint>>,\
+      map3:map<int,int>,\
+      map4:map<int,struct<field1:int,field2:float,field3:string>>,\
+      memo:string>"));
+
+  // Apply feature projection
+  auto cs = std::make_shared<ColumnSelector>(
+      requestedType, std::vector<std::string>{"map2#[\"key-1\"]"});
+  rowReaderOpts.select(cs);
+
+  uint64_t totalKeyStreamsAggregate = 0;
+  uint64_t selectedKeyStreamsAggregate = 0;
+
+  rowReaderOpts.setKeySelectionCallback(
+      [&totalKeyStreamsAggregate, &selectedKeyStreamsAggregate](
+          facebook::velox::dwio::common::flatmap::FlatMapKeySelectionStats
+              keySelectionStats) {
+        totalKeyStreamsAggregate += keySelectionStats.totalKeys;
+        selectedKeyStreamsAggregate += keySelectionStats.selectedKeys;
+      });
+
+  ReaderOptions readerOpts{defaultPool.get()};
+
+  auto reader = DwrfReader::create(
+      createFileBufferedInput(fmSmall, readerOpts.getMemoryPool()), readerOpts);
+  auto rowReader = reader->createRowReader(rowReaderOpts);
+  VectorPtr batch;
+
+  do {
+    bool result = rowReader->next(1000, batch);
+    LOG(INFO) << "In loop: total key streams is " << totalKeyStreamsAggregate
+              << " selected key streams is " << selectedKeyStreamsAggregate;
+    if (!result) {
+      break;
+    }
+  } while (true);
+
+  // Features were projected, so we expect selected keys > total keys
+  EXPECT_EQ(totalKeyStreamsAggregate, 16);
+  EXPECT_EQ(selectedKeyStreamsAggregate, 4);
+}
+
+TEST(TestReader, testEstimatedSize) {
+  const std::string fmSmall(getExampleFilePath("fm_small.orc"));
+
+  auto requestedType =
+      asRowType(HiveTypeParser().parse("struct<\
+          id:int,\
+      map1:map<int, array<float>>,\
+      map2:map<string, map<smallint,bigint>>,\
+      map3:map<int,int>,\
+      map4:map<int,struct<field1:int,field2:float,field3:string>>,\
+      memo:string>"));
+
+  ReaderOptions readerOpts{defaultPool.get()};
+
+  {
+    auto reader = DwrfReader::create(
+        createFileBufferedInput(fmSmall, readerOpts.getMemoryPool()),
+        readerOpts);
+    auto cs = std::make_shared<ColumnSelector>(
+        requestedType, std::vector<std::string>{"map2"});
+    RowReaderOptions rowReaderOpts;
+    rowReaderOpts.select(cs);
+
+    auto rowReader = reader->createRowReader(rowReaderOpts);
+    ASSERT_EQ(rowReader->estimatedRowSize(), 79);
+  }
+
+  {
+    auto reader = DwrfReader::create(
+        createFileBufferedInput(fmSmall, readerOpts.getMemoryPool()),
+        readerOpts);
+    auto cs = std::make_shared<ColumnSelector>(
+        requestedType, std::vector<std::string>{"id"});
+    RowReaderOptions rowReaderOpts;
+    rowReaderOpts.select(cs);
+    auto rowReader = reader->createRowReader(rowReaderOpts);
+    ASSERT_EQ(rowReader->estimatedRowSize(), 13);
+  }
+}
+
+TEST(TestReader, testStatsCallbackFiredWithoutFiltering) {
+  const std::string fmSmall(getExampleFilePath("fm_small.orc"));
+
+  RowReaderOptions rowReaderOpts;
+  std::shared_ptr<const RowType> requestedType =
+      std::dynamic_pointer_cast<const RowType>(HiveTypeParser().parse("struct<\
+          id:int,\
+      map1:map<int, array<float>>,\
+      map2:map<string, map<smallint,bigint>>,\
+      map3:map<int,int>,\
+      map4:map<int,struct<field1:int,field2:float,field3:string>>,\
+      memo:string>"));
+
+  // Don't apply feature projection here
+  auto cs = std::make_shared<ColumnSelector>(
+      requestedType, std::vector<std::string>{"map2"});
+  rowReaderOpts.select(cs);
+
+  uint64_t totalKeyStreamsAggregate = 0;
+  uint64_t selectedKeyStreamsAggregate = 0;
+
+  rowReaderOpts.setKeySelectionCallback(
+      [&totalKeyStreamsAggregate, &selectedKeyStreamsAggregate](
+          facebook::velox::dwio::common::flatmap::FlatMapKeySelectionStats
+              keySelectionStats) {
+        totalKeyStreamsAggregate += keySelectionStats.totalKeys;
+        selectedKeyStreamsAggregate += keySelectionStats.selectedKeys;
+      });
+
+  ReaderOptions readerOpts{defaultPool.get()};
+
+  auto reader = DwrfReader::create(
+      createFileBufferedInput(fmSmall, readerOpts.getMemoryPool()), readerOpts);
+  auto rowReader = reader->createRowReader(rowReaderOpts);
+  VectorPtr batch;
+
+  do {
+    bool result = rowReader->next(1000, batch);
+    LOG(INFO) << "In loop: total key streams is " << totalKeyStreamsAggregate
+              << " selected key streams is " << selectedKeyStreamsAggregate;
+    if (!result) {
+      break;
+    }
+  } while (true);
+
+  // No features were projected, so we expect selected keys == total keys
+  EXPECT_EQ(totalKeyStreamsAggregate, 16);
+  EXPECT_EQ(selectedKeyStreamsAggregate, 16);
+}
+
 namespace {
 
 std::vector<std::string> stringify(const std::vector<int32_t>& values) {
@@ -942,10 +1082,7 @@ TEST(TestReader, testUpcastBoolean) {
   ColumnSelector cs(reqType, rowType);
   EXPECT_CALL(streams, getColumnSelectorProxy()).WillRepeatedly(Return(&cs));
   std::unique_ptr<ColumnReader> reader = ColumnReader::build(
-      TypeWithId::create(reqType),
-      TypeWithId::create(rowType),
-      streams,
-      FlatMapContext::nonFlatMapContext());
+      TypeWithId::create(reqType), TypeWithId::create(rowType), streams);
 
   VectorPtr batch;
   reader->next(104, batch);
@@ -989,10 +1126,7 @@ TEST(TestReader, testUpcastIntDirect) {
   ColumnSelector cs(reqType, rowType);
   EXPECT_CALL(streams, getColumnSelectorProxy()).WillRepeatedly(Return(&cs));
   std::unique_ptr<ColumnReader> reader = ColumnReader::build(
-      TypeWithId::create(reqType),
-      TypeWithId::create(rowType),
-      streams,
-      FlatMapContext::nonFlatMapContext());
+      TypeWithId::create(reqType), TypeWithId::create(rowType), streams);
 
   VectorPtr batch;
   reader->next(100, batch);
@@ -1053,10 +1187,7 @@ TEST(TestReader, testUpcastIntDict) {
   ColumnSelector cs(reqType, rowType);
   EXPECT_CALL(streams, getColumnSelectorProxy()).WillRepeatedly(Return(&cs));
   std::unique_ptr<ColumnReader> reader = ColumnReader::build(
-      TypeWithId::create(reqType),
-      TypeWithId::create(rowType),
-      streams,
-      FlatMapContext::nonFlatMapContext());
+      TypeWithId::create(reqType), TypeWithId::create(rowType), streams);
 
   VectorPtr batch;
   reader->next(100, batch);
@@ -1105,10 +1236,7 @@ TEST(TestReader, testUpcastFloat) {
   ColumnSelector cs(reqType, rowType);
   EXPECT_CALL(streams, getColumnSelectorProxy()).WillRepeatedly(Return(&cs));
   std::unique_ptr<ColumnReader> reader = ColumnReader::build(
-      TypeWithId::create(reqType),
-      TypeWithId::create(rowType),
-      streams,
-      FlatMapContext::nonFlatMapContext());
+      TypeWithId::create(reqType), TypeWithId::create(rowType), streams);
 
   VectorPtr batch;
   reader->next(100, batch);

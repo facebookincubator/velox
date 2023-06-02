@@ -16,7 +16,6 @@
 
 #include <folly/ScopeGuard.h>
 #include <folly/executors/QueuedImmediateExecutor.h>
-#include <folly/executors/task_queue/UnboundedBlockingQueue.h>
 #include <folly/executors/thread_factory/InitThreadFactory.h>
 #include <gflags/gflags.h>
 #include "velox/common/testutil/TestValue.h"
@@ -121,10 +120,14 @@ void BlockingState::setResume(std::shared_ptr<BlockingState> state) {
       })
       .thenError(
           folly::tag_t<std::exception>{}, [state](std::exception const& e) {
-            LOG(ERROR) << "A ContinueFuture for task "
-                       << state->driver_->task()->taskId()
-                       << " should not be realized with an error: " << e.what();
-            state->driver_->setError(std::make_exception_ptr(e));
+            try {
+              VELOX_FAIL(
+                  "A ContinueFuture for task {} was realized with error: {}",
+                  state->driver_->task()->taskId(),
+                  e.what())
+            } catch (const VeloxException& eNew) {
+              state->driver_->task()->setError(std::current_exception());
+            }
           });
 }
 
@@ -151,16 +154,7 @@ class CancelGuard {
       onTerminate_(StopReason::kNone);
       onTerminateCalled = true;
     }
-    auto reason = task_->leave(*state_);
-    if (reason == StopReason::kTerminate) {
-      // Terminate requested via Task. The Driver is not on
-      // thread but 'terminated_' is set, hence no other threads will
-      // enter. onTerminateCalled will be true if both runtime error and
-      // terminate requested via Task.
-      if (!onTerminateCalled) {
-        onTerminate_(reason);
-      }
-    }
+    task_->leave(*state_, onTerminateCalled ? nullptr : onTerminate_);
   }
 
  private:
@@ -697,10 +691,6 @@ std::vector<Operator*> Driver::operators() const {
     operators.push_back(op.get());
   }
   return operators;
-}
-
-void Driver::setError(std::exception_ptr exception) {
-  task()->setError(exception);
 }
 
 std::string Driver::toString() {

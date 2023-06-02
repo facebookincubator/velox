@@ -267,10 +267,11 @@ class DriverTest : public OperatorTestBase {
     return task;
   }
 
-  std::shared_ptr<Task> testDriverSuspensionWithTaskOperationRace(
+  void testDriverSuspensionWithTaskOperationRace(
       int numDrivers,
       StopReason expectedEnterSuspensionStopReason,
       StopReason expectedLeaveSuspensionStopReason,
+      TaskState expectedTaskState,
       std::function<void(Task*)> preSuspensionTaskFunc = nullptr,
       std::function<void(Task*)> inSuspensionTaskFunc = nullptr,
       std::function<void(Task*)> leaveSuspensionTaskFunc = nullptr) {
@@ -327,7 +328,13 @@ class DriverTest : public OperatorTestBase {
       leaveSuspensionTaskFunc(task.get());
     }
     leaveSuspensionNotify.wait(leaveSuspensionNotifyKey);
-    return task;
+    if (expectedTaskState == TaskState::kFinished) {
+      ASSERT_TRUE(waitForTaskCompletion(task.get(), 1000'000'000));
+    } else if (expectedTaskState == TaskState::kCanceled) {
+      ASSERT_TRUE(waitForTaskCancelled(task.get(), 1000'000'000));
+    } else {
+      ASSERT_TRUE(waitForTaskAborted(task.get(), 1000'000'000));
+    }
   }
 
  public:
@@ -541,12 +548,11 @@ TEST_F(DriverTest, pause) {
       [](int64_t num) { return num % 10 > 0; },
       &hits);
   params.maxDrivers = 10;
-  params.queryCtx = std::make_shared<core::QueryCtx>(
-      executor_.get(),
-      // Make sure CPU usage tracking is enabled.
-      std::make_shared<core::MemConfig>(
-          std::unordered_map<std::string, std::string>{
-              {core::QueryConfig::kOperatorTrackCpuUsage, "true"}}));
+  // Make sure CPU usage tracking is enabled.
+  std::unordered_map<std::string, std::string> queryConfig{
+      {core::QueryConfig::kOperatorTrackCpuUsage, "true"}};
+  params.queryCtx =
+      std::make_shared<core::QueryCtx>(executor_.get(), std::move(queryConfig));
   int32_t numRead = 0;
   readResults(params, ResultOperation::kPause, 370'000'000, &numRead);
   // Each thread will fully read the 1M rows in values.
@@ -765,10 +771,9 @@ TEST_F(DriverTest, pauserNode) {
       kThreadsPerTask, sequence, testInstance));
 
   std::vector<CursorParameters> params(kNumTasks);
-  int32_t hits;
+  int32_t hits{0};
   for (int32_t i = 0; i < kNumTasks; ++i) {
-    params[i].queryCtx = std::make_shared<core::QueryCtx>(
-        executor.get(), std::make_shared<core::MemConfig>());
+    params[i].queryCtx = std::make_shared<core::QueryCtx>(executor.get());
     params[i].planNode = makeValuesFilterProject(
         rowType_,
         "m1 % 10 > 0",
@@ -965,10 +970,11 @@ DEBUG_ONLY_TEST_F(DriverTest, driverSuspensionRaceWithTaskPause) {
     std::shared_ptr<Task> task;
     if (testData.enterSuspensionAfterPauseStarted &&
         testData.leaveSuspensionDuringPause) {
-      task = testDriverSuspensionWithTaskOperationRace(
+      testDriverSuspensionWithTaskOperationRace(
           testData.numDrivers,
           StopReason::kNone,
           StopReason::kNone,
+          TaskState::kFinished,
           [&](Task* task) { task->requestPause(); },
           [&](Task* task) { task->requestPause().wait(); },
           [&](Task* task) {
@@ -984,10 +990,11 @@ DEBUG_ONLY_TEST_F(DriverTest, driverSuspensionRaceWithTaskPause) {
     } else if (
         testData.enterSuspensionAfterPauseStarted &&
         !testData.leaveSuspensionDuringPause) {
-      task = testDriverSuspensionWithTaskOperationRace(
+      testDriverSuspensionWithTaskOperationRace(
           testData.numDrivers,
           StopReason::kNone,
           StopReason::kNone,
+          TaskState::kFinished,
           [&](Task* task) { task->requestPause(); },
           [&](Task* task) {
             task->requestPause().wait();
@@ -996,10 +1003,11 @@ DEBUG_ONLY_TEST_F(DriverTest, driverSuspensionRaceWithTaskPause) {
     } else if (
         !testData.enterSuspensionAfterPauseStarted &&
         testData.leaveSuspensionDuringPause) {
-      task = testDriverSuspensionWithTaskOperationRace(
+      testDriverSuspensionWithTaskOperationRace(
           testData.numDrivers,
           StopReason::kNone,
           StopReason::kNone,
+          TaskState::kFinished,
           nullptr,
           [&](Task* task) { task->requestPause().wait(); },
           [&](Task* task) {
@@ -1013,17 +1021,17 @@ DEBUG_ONLY_TEST_F(DriverTest, driverSuspensionRaceWithTaskPause) {
             Task::resume(task->shared_from_this());
           });
     } else {
-      task = testDriverSuspensionWithTaskOperationRace(
+      testDriverSuspensionWithTaskOperationRace(
           testData.numDrivers,
           StopReason::kNone,
           StopReason::kNone,
+          TaskState::kFinished,
           nullptr,
           [&](Task* task) {
             task->requestPause().wait();
             Task::resume(task->shared_from_this());
           });
     }
-    waitForTaskCompletion(task.get(), 1000'000'000);
   }
 }
 
@@ -1031,14 +1039,16 @@ DEBUG_ONLY_TEST_F(DriverTest, driverSuspensionRaceWithTaskTerminate) {
   struct {
     int numDrivers;
     bool enterSuspensionAfterTaskTerminated;
+    bool abort;
     StopReason expectedEnterSuspensionStopReason;
     StopReason expectedLeaveSuspensionStopReason;
 
     std::string debugString() const {
       return fmt::format(
-          "numDrivers:{} enterSuspensionAfterTaskTerminated:{} expectedEnterSuspensionStopReason:{} expectedLeaveSuspensionStopReason:{}",
+          "numDrivers:{} enterSuspensionAfterTaskTerminated:{} abort {} expectedEnterSuspensionStopReason:{} expectedLeaveSuspensionStopReason:{}",
           numDrivers,
           enterSuspensionAfterTaskTerminated,
+          abort,
           expectedEnterSuspensionStopReason,
           expectedLeaveSuspensionStopReason);
     }
@@ -1050,9 +1060,17 @@ DEBUG_ONLY_TEST_F(DriverTest, driverSuspensionRaceWithTaskTerminate) {
       // terminated; (4) leaves the suspension from the blocked driver thread
       // and expects the same stop reason; (5) wait and expects the task to be
       // aborted.
-      {1, true, StopReason::kAlreadyTerminated, StopReason::kAlreadyTerminated},
+      {1,
+       true,
+       true,
+       StopReason::kAlreadyTerminated,
+       StopReason::kAlreadyTerminated},
       // The same as above with different number of driver threads.
-      {4, true, StopReason::kAlreadyTerminated, StopReason::kAlreadyTerminated},
+      {4,
+       true,
+       true,
+       StopReason::kAlreadyTerminated,
+       StopReason::kAlreadyTerminated},
       // This test case (1) uses TestValue to block one of the task driver
       // threads when it processes the input values; (2) enters suspension from
       // the blocked driver thread and expects to get kNone stop reason as the
@@ -1060,28 +1078,110 @@ DEBUG_ONLY_TEST_F(DriverTest, driverSuspensionRaceWithTaskTerminate) {
       // the suspension from the blocked driver thread and expects
       // kAlreadyTerminated stop reason as the task has been terminated same
       // stop reason; (5) wait and expects the task to be aborted.
-      {1, false, StopReason::kNone, StopReason::kAlreadyTerminated},
+      {1, false, true, StopReason::kNone, StopReason::kAlreadyTerminated},
       // The same as above with different number of driver threads.
-      {4, false, StopReason::kNone, StopReason::kAlreadyTerminated}};
+      {4, false, true, StopReason::kNone, StopReason::kAlreadyTerminated},
+
+      // Repeated the above test cases by terminating task by cancel.
+      {1,
+       true,
+       false,
+       StopReason::kAlreadyTerminated,
+       StopReason::kAlreadyTerminated},
+      {4,
+       true,
+       false,
+       StopReason::kAlreadyTerminated,
+       StopReason::kAlreadyTerminated},
+      {1, false, false, StopReason::kNone, StopReason::kAlreadyTerminated},
+      {4, false, false, StopReason::kNone, StopReason::kAlreadyTerminated}};
+  for (const auto& testData : testSettings) {
+    SCOPED_TRACE(testData.debugString());
+
+    if (testData.enterSuspensionAfterTaskTerminated) {
+      testDriverSuspensionWithTaskOperationRace(
+          testData.numDrivers,
+          testData.expectedEnterSuspensionStopReason,
+          testData.expectedLeaveSuspensionStopReason,
+          testData.abort ? TaskState::kAborted : TaskState::kCanceled,
+          [&](Task* task) {
+            if (testData.abort) {
+              task->requestAbort();
+            } else {
+              task->requestCancel();
+            }
+          });
+    } else {
+      testDriverSuspensionWithTaskOperationRace(
+          testData.numDrivers,
+          testData.expectedEnterSuspensionStopReason,
+          testData.expectedLeaveSuspensionStopReason,
+          testData.abort ? TaskState::kAborted : TaskState::kCanceled,
+          nullptr,
+          [&](Task* task) {
+            if (testData.abort) {
+              task->requestAbort().wait();
+            } else {
+              task->requestCancel().wait();
+            }
+          });
+    }
+  }
+}
+
+DEBUG_ONLY_TEST_F(DriverTest, driverSuspensionRaceWithTaskYield) {
+  struct {
+    int numDrivers;
+    bool enterSuspensionAfterTaskYielded;
+    bool leaveSuspensionDuringTaskYielded;
+
+    std::string debugString() const {
+      return fmt::format(
+          "numDrivers:{} enterSuspensionAfterTaskYielded:{} leaveSuspensionDuringTaskYielded:{}",
+          numDrivers,
+          enterSuspensionAfterTaskYielded,
+          leaveSuspensionDuringTaskYielded);
+    }
+  } testSettings[] = {
+      {1, true, true},
+      {4, true, true},
+      {1, false, true},
+      {4, false, true},
+      {1, true, false},
+      {4, true, false}};
   for (const auto& testData : testSettings) {
     SCOPED_TRACE(testData.debugString());
 
     std::shared_ptr<Task> task;
-    if (testData.enterSuspensionAfterTaskTerminated) {
-      task = testDriverSuspensionWithTaskOperationRace(
+    if (testData.enterSuspensionAfterTaskYielded &&
+        testData.leaveSuspensionDuringTaskYielded) {
+      testDriverSuspensionWithTaskOperationRace(
           testData.numDrivers,
-          testData.expectedEnterSuspensionStopReason,
-          testData.expectedLeaveSuspensionStopReason,
-          [&](Task* task) { task->requestCancel(); });
-    } else {
-      task = testDriverSuspensionWithTaskOperationRace(
+          StopReason::kNone,
+          StopReason::kNone,
+          TaskState::kFinished,
+          [&](Task* task) { task->requestYield(); },
+          [&](Task* task) { task->requestYield(); });
+    } else if (
+        testData.enterSuspensionAfterTaskYielded &&
+        !testData.leaveSuspensionDuringTaskYielded) {
+      testDriverSuspensionWithTaskOperationRace(
           testData.numDrivers,
-          testData.expectedEnterSuspensionStopReason,
-          testData.expectedLeaveSuspensionStopReason,
+          StopReason::kNone,
+          StopReason::kNone,
+          TaskState::kFinished,
+          [&](Task* task) { task->requestYield(); });
+    } else if (
+        !testData.enterSuspensionAfterTaskYielded &&
+        testData.leaveSuspensionDuringTaskYielded) {
+      testDriverSuspensionWithTaskOperationRace(
+          testData.numDrivers,
+          StopReason::kNone,
+          StopReason::kNone,
+          TaskState::kFinished,
           nullptr,
-          [&](Task* task) { task->requestCancel(); });
+          [&](Task* task) { task->requestYield(); });
     }
-    waitForTaskAborted(task.get(), 1000'000'000);
   }
 }
 

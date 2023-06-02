@@ -12,25 +12,8 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-add_executable(velox_row24_test UnsafeRow24DeserializerTest.cpp)
-
-add_test(velox_row24_test velox_row24_test)
+add_library(velox_functions_window_test_lib WindowTestBase.cpp)
 
 target_link_libraries(
-  velox_row24_test
-  velox_row24
-  velox_exec
-  velox_exec_test_lib
-  velox_functions_lib
-  velox_functions_prestosql
-  velox_aggregates
-  velox_presto_serializer
-  velox_type
-  velox_vector
-  velox_vector_fuzzer
-  velox_vector_test_lib
-  Folly::folly
-  gtest
-  gtest_main
-  gflags::gflags
-  glog::glog)
+  velox_functions_window_test_lib velox_exec_test_lib velox_vector_fuzzer
+  velox_vector_test_lib gflags::gflags gtest)

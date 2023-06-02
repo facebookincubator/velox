@@ -16,7 +16,6 @@
 #pragma once
 
 #include "velox/common/memory/MemoryAllocator.h"
-#include "velox/exec/Aggregate.h"
 #include "velox/exec/Operator.h"
 #include "velox/exec/RowContainer.h"
 #include "velox/exec/VectorHasher.h"
@@ -122,6 +121,12 @@ class BaseHashTable {
   virtual ~BaseHashTable() = default;
 
   virtual HashStringAllocator* FOLLY_NULLABLE stringAllocator() = 0;
+
+  void prepareForProbe(
+      HashLookup& lookup,
+      const RowVectorPtr& input,
+      SelectivityVector& rows,
+      bool ignoreNullKeys);
 
   /// Finds or creates a group for each key in 'lookup'. The keys are
   /// returned in 'lookup.hits'.
@@ -320,7 +325,7 @@ class HashTable : public BaseHashTable {
   // that matches join condition for right and full outer joins.
   HashTable(
       std::vector<std::unique_ptr<VectorHasher>>&& hashers,
-      const std::vector<std::unique_ptr<Aggregate>>& aggregates,
+      const std::vector<Accumulator>& accumulators,
       const std::vector<TypePtr>& dependentTypes,
       bool allowDuplicates,
       bool isJoinBuild,
@@ -329,11 +334,11 @@ class HashTable : public BaseHashTable {
 
   static std::unique_ptr<HashTable> createForAggregation(
       std::vector<std::unique_ptr<VectorHasher>>&& hashers,
-      const std::vector<std::unique_ptr<Aggregate>>& aggregates,
+      const std::vector<Accumulator>& accumulators,
       memory::MemoryPool* FOLLY_NULLABLE pool) {
     return std::make_unique<HashTable>(
         std::move(hashers),
-        aggregates,
+        accumulators,
         std::vector<TypePtr>{},
         false, // allowDuplicates
         false, // isJoinBuild
@@ -347,10 +352,9 @@ class HashTable : public BaseHashTable {
       bool allowDuplicates,
       bool hasProbedFlag,
       memory::MemoryPool* FOLLY_NULLABLE pool) {
-    static const std::vector<std::unique_ptr<Aggregate>> kNoAggregates;
     return std::make_unique<HashTable>(
         std::move(hashers),
-        kNoAggregates,
+        std::vector<Accumulator>{},
         dependentTypes,
         allowDuplicates,
         true, // isJoinBuild

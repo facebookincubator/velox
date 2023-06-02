@@ -112,12 +112,28 @@ class ExtremeValueFunction : public exec::VectorFunction {
       exec::EvalCtx& context,
       VectorPtr& result) const override {
     switch (outputType.get()->kind()) {
+      case TypeKind::TINYINT:
+        applyTyped<TypeTraits<TypeKind::TINYINT>::NativeType>(
+            rows, args, outputType, context, result);
+        return;
+      case TypeKind::SMALLINT:
+        applyTyped<TypeTraits<TypeKind::SMALLINT>::NativeType>(
+            rows, args, outputType, context, result);
+        return;
+      case TypeKind::INTEGER:
+        applyTyped<TypeTraits<TypeKind::INTEGER>::NativeType>(
+            rows, args, outputType, context, result);
+        return;
       case TypeKind::BIGINT:
         applyTyped<TypeTraits<TypeKind::BIGINT>::NativeType>(
             rows, args, outputType, context, result);
         return;
       case TypeKind::HUGEINT:
         applyTyped<TypeTraits<TypeKind::HUGEINT>::NativeType>(
+            rows, args, outputType, context, result);
+        return;
+      case TypeKind::REAL:
+        applyTyped<TypeTraits<TypeKind::REAL>::NativeType>(
             rows, args, outputType, context, result);
         return;
       case TypeKind::DOUBLE:
@@ -146,7 +162,15 @@ class ExtremeValueFunction : public exec::VectorFunction {
 
   static std::vector<std::shared_ptr<exec::FunctionSignature>> signatures() {
     std::vector<std::string> types = {
-        "bigint", "double", "varchar", "timestamp", "date"};
+        "tinyint",
+        "smallint",
+        "integer",
+        "bigint",
+        "double",
+        "real",
+        "varchar",
+        "timestamp",
+        "date"};
     std::vector<std::shared_ptr<exec::FunctionSignature>> signatures;
     for (const auto& type : types) {
       signatures.emplace_back(exec::FunctionSignatureBuilder()
@@ -174,7 +198,7 @@ VELOX_DECLARE_VECTOR_FUNCTION(
 
 VELOX_DECLARE_VECTOR_FUNCTION(
     udf_greatest,
-    GreatestFunction ::signatures(),
+    GreatestFunction::signatures(),
     std::make_unique<GreatestFunction>());
 
 } // namespace facebook::velox::functions

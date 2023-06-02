@@ -469,9 +469,14 @@ class BaseVector {
   // before making a new ConstantVector. The result vector is either a
   // ConstantVector holding a scalar value or a ConstantVector wrapping flat or
   // lazy vector. The result cannot be a wrapping over another constant or
-  // dictionary vector.
-  static VectorPtr
-  wrapInConstant(vector_size_t length, vector_size_t index, VectorPtr vector);
+  // dictionary vector. If copyBase is true and the result vector wraps a
+  // vector, the wrapped vector is newly constructed by copying the value from
+  // the original, guaranteeing no Vectors are shared with 'vector'.
+  static VectorPtr wrapInConstant(
+      vector_size_t length,
+      vector_size_t index,
+      VectorPtr vector,
+      bool copyBase = false);
 
   // Makes 'result' writable for 'rows'. A wrapper (e.g. dictionary, constant,
   // sequence) is flattened and a multiply referenced flat vector is copied.
@@ -579,18 +584,27 @@ class BaseVector {
   // point to element 0 of (*indices)->as<vector_size_t>().
   void resizeIndices(
       vector_size_t size,
-      vector_size_t initialValue,
       BufferPtr* indices,
-      const vector_size_t** raw) {
-    resizeIndices(size, initialValue, this->pool(), indices, raw);
+      const vector_size_t** raw,
+      std::optional<vector_size_t> initialValue = std::nullopt) {
+    resizeIndices(size, this->pool(), indices, raw, initialValue);
+  }
+
+  void
+  clearIndices(BufferPtr& indices, vector_size_t start, vector_size_t end) {
+    if (start == end) {
+      return;
+    }
+    auto* data = indices->asMutable<vector_size_t>();
+    std::fill(data + start, data + end, 0);
   }
 
   static void resizeIndices(
       vector_size_t size,
-      vector_size_t initialValue,
       velox::memory::MemoryPool* pool,
       BufferPtr* indices,
-      const vector_size_t** raw);
+      const vector_size_t** raw,
+      std::optional<vector_size_t> initialValue = std::nullopt);
 
   // Makes sure '*buffer' has space for 'size' items of T and is writable. Sets
   // 'raw' to point to the writable contents of '*buffer'.

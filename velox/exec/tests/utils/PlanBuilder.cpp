@@ -74,6 +74,7 @@ PlanBuilder& PlanBuilder::tableScan(
     const std::string& remainingFilter) {
   std::unordered_map<std::string, std::shared_ptr<connector::ColumnHandle>>
       assignments;
+  std::unordered_map<std::string, core::TypedExprPtr> typedMapping;
   for (uint32_t i = 0; i < outputType->size(); ++i) {
     const auto& name = outputType->nameOf(i);
     const auto& type = outputType->childAt(i);
@@ -82,6 +83,9 @@ PlanBuilder& PlanBuilder::tableScan(
     auto it = columnAliases.find(name);
     if (it != columnAliases.end()) {
       hiveColumnName = it->second;
+      typedMapping.emplace(
+          name,
+          std::make_shared<core::FieldAccessTypedExpr>(type, hiveColumnName));
     }
 
     assignments.insert(
@@ -116,7 +120,7 @@ PlanBuilder& PlanBuilder::tableScan(
   if (!remainingFilter.empty()) {
     remainingFilterExpr =
         parseExpr(remainingFilter, outputType, options_, pool_)
-            ->rewriteInputNames(columnAliases);
+            ->rewriteInputNames(typedMapping);
   }
 
   auto tableHandle = std::make_shared<HiveTableHandle>(
@@ -310,34 +314,6 @@ std::string throwAggregateFunctionDoesntExist(const std::string& name) {
              "Make sure to register some aggregate functions.";
   }
   VELOX_USER_FAIL(error.str());
-}
-
-std::string toString(
-    const std::string& name,
-    const std::vector<TypePtr>& types) {
-  std::ostringstream signature;
-  signature << name << "(";
-  for (auto i = 0; i < types.size(); i++) {
-    if (i > 0) {
-      signature << ", ";
-    }
-    signature << types[i]->toString();
-  }
-  signature << ")";
-  return signature.str();
-}
-
-std::string toString(
-    const std::vector<std::shared_ptr<AggregateFunctionSignature>>&
-        signatures) {
-  std::stringstream out;
-  for (auto i = 0; i < signatures.size(); ++i) {
-    if (i > 0) {
-      out << ", ";
-    }
-    out << signatures[i]->toString();
-  }
-  return out.str();
 }
 
 std::string throwAggregateFunctionSignatureNotSupported(
@@ -817,18 +793,30 @@ PlanBuilder& PlanBuilder::partitionedOutput(
     int numPartitions,
     bool replicateNullsAndAny,
     const std::vector<std::string>& outputLayout) {
+  return partitionedOutput(
+      keys,
+      numPartitions,
+      replicateNullsAndAny,
+      createPartitionFunctionSpec(planNode_->outputType(), keys),
+      outputLayout);
+}
+
+PlanBuilder& PlanBuilder::partitionedOutput(
+    const std::vector<std::string>& keys,
+    int numPartitions,
+    bool replicateNullsAndAny,
+    core::PartitionFunctionSpecPtr partitionFunctionSpec,
+    const std::vector<std::string>& outputLayout) {
   auto outputType = outputLayout.empty()
       ? planNode_->outputType()
       : extract(planNode_->outputType(), outputLayout);
-  auto partitionFunctionFactory =
-      createPartitionFunctionSpec(planNode_->outputType(), keys);
   planNode_ = std::make_shared<core::PartitionedOutputNode>(
       nextPlanNodeId(),
       exprs(keys),
       numPartitions,
       false,
       replicateNullsAndAny,
-      std::move(partitionFunctionFactory),
+      std::move(partitionFunctionSpec),
       outputType,
       planNode_);
   return *this;
@@ -968,11 +956,29 @@ PlanBuilder& PlanBuilder::mergeJoin(
 PlanBuilder& PlanBuilder::nestedLoopJoin(
     const core::PlanNodePtr& right,
     const std::vector<std::string>& outputLayout) {
+  return nestedLoopJoin(right, "", outputLayout, core::JoinType::kInner);
+}
+
+PlanBuilder& PlanBuilder::nestedLoopJoin(
+    const core::PlanNodePtr& right,
+    const std::string& joinCondition,
+    const std::vector<std::string>& outputLayout,
+    core::JoinType joinType) {
   auto resultType = concat(planNode_->outputType(), right->outputType());
   auto outputType = extract(resultType, outputLayout);
 
+  core::TypedExprPtr joinConditionExpr{};
+  if (!joinCondition.empty()) {
+    joinConditionExpr = parseExpr(joinCondition, resultType, options_, pool_);
+  }
+
   planNode_ = std::make_shared<core::NestedLoopJoinNode>(
-      nextPlanNodeId(), std::move(planNode_), right, outputType);
+      nextPlanNodeId(),
+      joinType,
+      std::move(joinConditionExpr),
+      std::move(planNode_),
+      right,
+      outputType);
   return *this;
 }
 
@@ -1019,10 +1025,6 @@ PlanBuilder& PlanBuilder::unnest(
 }
 
 namespace {
-std::string toString(const std::vector<FunctionSignaturePtr>& signatures) {
-  return fmt::format("{}", fmt::join(signatures, ","));
-}
-
 std::string throwWindowFunctionDoesntExist(const std::string& name) {
   std::stringstream error;
   error << "Window function doesn't exist: " << name << ".";
@@ -1247,8 +1249,10 @@ PlanBuilder& PlanBuilder::window(
   };
 
   WindowTypeResolver windowResolver;
+  facebook::velox::duckdb::ParseOptions options;
+  options.parseIntegerAsBigint = options_.parseIntegerAsBigint;
   for (const auto& windowString : windowFunctions) {
-    const auto& windowExpr = duckdb::parseWindowExpr(windowString);
+    const auto& windowExpr = duckdb::parseWindowExpr(windowString, options);
     // All window function SQL strings in the list are expected to have the same
     // PARTITION BY and ORDER BY clauses. Validate this assumption.
     if (first) {
@@ -1300,6 +1304,36 @@ PlanBuilder& PlanBuilder::window(
       sortingOrders,
       windowNames,
       windowNodeFunctions,
+      planNode_);
+  return *this;
+}
+
+PlanBuilder& PlanBuilder::rowNumber(
+    const std::vector<std::string>& partitionKeys,
+    std::optional<int32_t> limit) {
+  planNode_ = std::make_shared<core::RowNumberNode>(
+      nextPlanNodeId(), fields(partitionKeys), "row_number", limit, planNode_);
+  return *this;
+}
+
+PlanBuilder& PlanBuilder::topNRowNumber(
+    const std::vector<std::string>& partitionKeys,
+    const std::vector<std::string>& sortingKeys,
+    int32_t limit,
+    bool generateRowNumber) {
+  auto [sortingFields, sortingOrders] =
+      parseOrderByClauses(sortingKeys, planNode_->outputType(), pool_);
+  std::optional<std::string> rowNumberColumnName;
+  if (generateRowNumber) {
+    rowNumberColumnName = "row_number";
+  }
+  planNode_ = std::make_shared<core::TopNRowNumberNode>(
+      nextPlanNodeId(),
+      fields(partitionKeys),
+      sortingFields,
+      sortingOrders,
+      rowNumberColumnName,
+      limit,
       planNode_);
   return *this;
 }
