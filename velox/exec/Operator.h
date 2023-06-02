@@ -555,7 +555,7 @@ class Operator : public BaseRuntimeStatWriter {
 
   /// Creates output vector from 'input_' and 'results_' according to
   /// 'identityProjections_' and 'resultProjections_'.
-  RowVectorPtr fillOutput(vector_size_t size, BufferPtr mapping);
+  RowVectorPtr fillOutput(vector_size_t size, const BufferPtr& mapping);
 
   /// Returns the number of rows for the output batch. This uses averageRowSize
   /// to calculate how many rows fit in preferredOutputBatchBytes. It caps the
