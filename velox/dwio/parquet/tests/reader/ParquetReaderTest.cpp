@@ -289,3 +289,19 @@ TEST_F(ParquetReaderTest, intMultipleFilters) {
       std::move(filters),
       expected);
 }
+
+TEST_F(ParquetReaderTest, zeroOffset) {
+  // decimal_dict.parquet one columns a: DECIMAL(9,1)
+  // rowGroups_[0].columns[0].file_offset is 0.
+  auto rowType = ROW({"_c0"}, {DECIMAL(9, 1)});
+  ReaderOptions readerOpts{defaultPool.get()};
+  const std::string decimal_dict(
+      getExampleFilePath("decimal_zero_offset.parquet"));
+
+  ParquetReader reader = createReader(decimal_dict, readerOpts);
+  RowReaderOptions rowReaderOpts;
+  rowReaderOpts.setScanSpec(makeScanSpec(rowType));
+  auto rowReader = reader.createRowReader(rowReaderOpts);
+
+  EXPECT_EQ(reader.numberOfRows(), 10ULL);
+}
