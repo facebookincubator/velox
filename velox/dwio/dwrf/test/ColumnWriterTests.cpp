@@ -451,6 +451,24 @@ TEST(ColumnWriterTests, TestTimestampMixedWriter) {
   testDataTypeWriter(TIMESTAMP(), data);
 }
 
+void verifyInvalidTimestamp(int64_t seconds, int64_t nanos) {
+  std::vector<std::optional<Timestamp>> data;
+  for (int64_t i = 1; i < ITERATIONS; ++i) {
+    Timestamp ts(i, i);
+    data.emplace_back(ts);
+  }
+  Timestamp ts(seconds, nanos);
+  data.emplace_back(ts);
+  EXPECT_THROW(
+      testDataTypeWriter(TIMESTAMP(), data), exception::LoggedException);
+}
+
+TEST(ColumnWriterTests, TestTimestampInvalidWriter) {
+  // Seconds invalid range.
+  verifyInvalidTimestamp(INT64_MIN, 0);
+  verifyInvalidTimestamp(MIN_SECONDS - 1, MAX_NANOS);
+}
+
 TEST(ColumnWriterTests, TestTimestampNullWriter) {
   std::vector<std::optional<Timestamp>> data;
   for (int64_t i = 0; i < ITERATIONS; ++i) {

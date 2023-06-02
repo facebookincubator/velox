@@ -35,12 +35,12 @@ template <>
 struct MinMaxTrait<Timestamp> {
   static Timestamp lowest() {
     return Timestamp(
-        dwio::common::MIN_SECONDS, std::numeric_limits<uint64_t>::lowest());
+        std::numeric_limits<int64_t>::lowest(),
+        std::numeric_limits<uint64_t>::lowest());
   }
 
   static Timestamp max() {
-    return Timestamp(
-        std::numeric_limits<int64_t>::max(), dwio::common::MAX_NANOS);
+    return Timestamp(std::numeric_limits<int64_t>::max(), Timestamp::MAX_NANOS);
   }
 };
 

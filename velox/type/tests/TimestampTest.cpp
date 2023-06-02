@@ -138,23 +138,15 @@ TEST(TimestampTest, now) {
 }
 
 TEST(TimestampTest, invalidInput) {
+  constexpr uint64_t kMax = std::numeric_limits<uint64_t>::max();
   // Nanos invalid range.
   VELOX_ASSERT_THROW(
-      Timestamp(1, std::numeric_limits<uint64_t>::max()),
-      fmt::format("Expect nanos <= {} in Timestamp", dwio::common::MAX_NANOS));
+      Timestamp(1, kMax),
+      fmt::format("({} vs. {})", kMax, Timestamp::MAX_NANOS));
   VELOX_ASSERT_THROW(
-      Timestamp(1, dwio::common::MAX_NANOS + 1),
-      fmt::format("Expect nanos <= {} in Timestamp", dwio::common::MAX_NANOS));
-
-  // Seconds invalid range.
-  VELOX_ASSERT_THROW(
-      Timestamp(std::numeric_limits<int64_t>::min(), 0),
+      Timestamp(1, Timestamp::MAX_NANOS + 1),
       fmt::format(
-          "Expect seconds >= {} in Timestamp", dwio::common::MIN_SECONDS));
-  VELOX_ASSERT_THROW(
-      Timestamp(dwio::common::MIN_SECONDS - 1, dwio::common::MAX_NANOS),
-      fmt::format(
-          "Expect seconds >= {} in Timestamp", dwio::common::MIN_SECONDS));
+          "({} vs. {})", Timestamp::MAX_NANOS + 1, Timestamp::MAX_NANOS));
 }
 
 } // namespace
