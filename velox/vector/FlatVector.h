@@ -411,7 +411,7 @@ class FlatVector final : public SimpleVector<T> {
   // memory.
   // The caller needs to make sure not to write more then 'size' bytes.
 
-  char* getRawStringBufferWithSpace(vector_size_t size) {
+  char* getRawStringBufferWithSpace(vector_size_t /* size */) {
     return nullptr;
   }
 
