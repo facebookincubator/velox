@@ -21,13 +21,6 @@
 namespace facebook::velox::functions::sparksql {
 
 void registerCompareFunctions(const std::string& prefix) {
-  registerBinaryScalar<EqFunction, bool>({prefix + "equalto"});
-  registerBinaryScalar<NeqFunction, bool>({prefix + "notequalto"});
-  registerBinaryScalar<LtFunction, bool>({prefix + "lessthan"});
-  registerBinaryScalar<GtFunction, bool>({prefix + "greaterthan"});
-  registerBinaryScalar<LteFunction, bool>({prefix + "lessthanorequal"});
-  registerBinaryScalar<GteFunction, bool>({prefix + "greaterthanorequal"});
-
   registerFunction<BetweenFunction, bool, int8_t, int8_t, int8_t>(
       {prefix + "between"});
   registerFunction<BetweenFunction, bool, int16_t, int16_t, int16_t>(

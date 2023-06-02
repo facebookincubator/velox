@@ -25,6 +25,7 @@
 #include "velox/functions/sparksql/ArraySort.h"
 #include "velox/functions/sparksql/Bitwise.h"
 #include "velox/functions/sparksql/CompareFunctionsNullSafe.h"
+#include "velox/functions/sparksql/Comparisons.h"
 #include "velox/functions/sparksql/DateTime.h"
 #include "velox/functions/sparksql/DateTimeFunctions.h"
 #include "velox/functions/sparksql/Decimal.h"
@@ -129,7 +130,19 @@ void registerFunctions(const std::string& prefix) {
 
   // Register 'in' functions.
   registerIn(prefix);
-
+  // Register compare functions
+  exec::registerStatefulVectorFunction(
+      prefix + "equalto", comparisonSignatures(), makeEqualTo);
+  exec::registerStatefulVectorFunction(
+      prefix + "lessthan", comparisonSignatures(), makeLessThan);
+  exec::registerStatefulVectorFunction(
+      prefix + "greaterthan", comparisonSignatures(), makeGreaterThan);
+  exec::registerStatefulVectorFunction(
+      prefix + "lessthanorequal", comparisonSignatures(), makeLessThanOrEqual);
+  exec::registerStatefulVectorFunction(
+      prefix + "greaterthanorequal",
+      comparisonSignatures(),
+      makeGreaterThanOrEqual);
   // Compare nullsafe functions
   exec::registerStatefulVectorFunction(
       prefix + "equalnullsafe", equalNullSafeSignatures(), makeEqualNullSafe);
