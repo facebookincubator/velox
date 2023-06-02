@@ -7,3 +7,8 @@ Pyvelox Documentation
 
     README_generated_pyvelox
     vectors
+    
+.. automodule:: pyvelox.pyvelox
+
+    
+

@@ -261,6 +261,19 @@ inline void checkBounds(DictionaryIndices& indices, vector_size_t idx) {
   }
 }
 
+struct VectorStringifier {
+  VectorStringifier(VectorPtr& v) : v_(v) {}
+
+  inline std::string vectorToString() {
+    auto schema = v_->toString();
+    auto values = v_->toString(0, v_->size());
+    return schema + "\n" + values;
+  }
+
+ private:
+  VectorPtr v_;
+};
+
 // Currently PyVelox will only register vectors for primitive types.
 template <TypeKind T>
 static void registerTypedVectors(
@@ -349,32 +362,354 @@ static void addVectorBindings(
 
   py::class_<BaseVector, VectorPtr>(
       m, "BaseVector", py::module_local(asModuleLocalDefinitions))
-      .def("__str__", [](VectorPtr& v) { 
-        auto schema = v->toString();
-        auto values = v->toString(0, v->size());
-        return schema + "\n" + values; 
-        })
-      .def("__len__", &BaseVector::size)
-      .def("size", &BaseVector::size)
-      .def("dtype", &BaseVector::type)
-      .def("typeKind", &BaseVector::typeKind)
-      .def("mayHaveNulls", &BaseVector::mayHaveNulls)
-      .def("isLazy", &BaseVector::isLazy)
+      .def(
+          "__str__",
+          [](VectorPtr& v) {
+            auto stringer = VectorStringifier(v);
+            return stringer.vectorToString();
+          },
+          R"pbdoc(
+          Returns str object which represents the content in the vector.
+
+          Returns
+          -------
+          str
+
+          Examples
+          --------
+
+          .. doctest::
+
+              >>> import pyvelox.pyvelox as pv
+              >>> flat_vec = pv.from_list([1, 2, 3])
+              >>> print(flat_vec)
+              [FLAT BIGINT: 3 elements, no nulls]
+              0: 1
+              1: 2
+              2: 3
+              >>> const_vec = pv.constant_vector(10, 3)
+              >>> print(const_vec)
+              [CONSTANT BIGINT: 3 elements, 10]
+              0: 10
+              1: 10
+              2: 10
+              >>> dict_vec = pv.dictionary_vector(pv.from_list([1, 2, 3]), [0, 0, 1, 0, 2])
+              >>> print(dict_vec)
+              [DICTIONARY BIGINT: 5 elements, no nulls]
+              0: [0->0] 1
+              1: [1->0] 1
+              2: [2->1] 2
+              3: [3->0] 1
+              4: [4->2] 3
+      )pbdoc")
+      .def(
+          "__repr__",
+          [](VectorPtr& v) {
+            auto stringer = VectorStringifier(v);
+            return stringer.vectorToString();
+          },
+          R"pbdoc(
+          Returns str object which represents the content in the vector.
+
+          Returns
+          -------
+          str
+
+          Examples
+          --------
+
+          .. doctest::
+
+              >>> import pyvelox.pyvelox as pv
+              >>> flat_vec = pv.from_list([1, 2, 3])
+              >>> print(flat_vec)
+              [FLAT BIGINT: 3 elements, no nulls]
+              0: 1
+              1: 2
+              2: 3
+              >>> const_vec = pv.constant_vector(10, 3)
+              >>> print(const_vec)
+              [CONSTANT BIGINT: 3 elements, 10]
+              0: 10
+              1: 10
+              2: 10
+              >>> dict_vec = pv.dictionary_vector(pv.from_list([1, 2, 3]), [0, 0, 1, 0, 2])
+              >>> print(dict_vec)
+              [DICTIONARY BIGINT: 5 elements, no nulls]
+              0: [0->0] 1
+              1: [1->0] 1
+              2: [2->1] 2
+              3: [3->0] 1
+              4: [4->2] 3
+      )pbdoc")
+      .def("__len__", &BaseVector::size, R"pbdoc(
+          Returns an int representing the number of elements in the vector.
+
+          Returns
+          -------
+          int
+
+          Examples
+          --------
+
+          .. doctest::
+
+              >>> import pyvelox.pyvelox as pv
+              >>> flat_vec = pv.from_list([1, 2, 3])
+              >>> len(flat_vec)
+              3
+      )pbdoc")
+      .def("size", &BaseVector::size, R"pbdoc(
+          Returns an int representing the number of elements in the vector.
+          Similar function as `__len__`.
+
+          Returns
+          -------
+          int
+
+          Examples
+          --------
+
+          .. doctest::
+
+              >>> import pyvelox.pyvelox as pv
+              >>> flat_vec = pv.from_list([1, 2, 3])
+              >>> flat_vec.size()
+              3
+      )pbdoc")
+      .def("dtype", &BaseVector::type, R"pbdoc(
+          Returns the data type.
+
+          Returns
+          -------
+          pyvelox.pyvelox.VeloxType
+
+          Examples
+          --------
+
+          .. doctest::
+
+              >>> import pyvelox.pyvelox as pv
+              >>> flat_vec = pv.from_list([1, 2, 3])
+              >>> flat_vec_dtype = flat_vec.dtype()
+              >>> flat_vec_dtype.kind()
+              <TypeKind.BIGINT: 4>
+              >>> const_vec = pv.constant_vector(10.5, 3)
+              >>> const_vec_dtype = const_vec.dtype()
+              >>> const_vec_dtype.kind()
+              <TypeKind.DOUBLE: 6>
+              >>> dict_vec = pv.dictionary_vector(pv.from_list([1, 2, 3]), [0, 0, 1, 0, 2])
+              >>> dict_vec_dtype = dict_vec.dtype()
+              >>> dict_vec_dtype.kind()
+              <TypeKind.BIGINT: 4>
+      )pbdoc")
+      .def("typeKind", &BaseVector::typeKind, R"pbdoc(
+          Returns the data type kind.
+
+          Returns
+          -------
+          pyvelox.pyvelox.TypeKind
+
+          Examples
+          --------
+
+          .. doctest::
+
+              >>> import pyvelox.pyvelox as pv
+              >>> flat_vec = pv.from_list([1, 2, 3])
+              >>> flat_vec.typeKind()
+              <TypeKind.BIGINT: 4>
+              >>> const_vec = pv.constant_vector(10.5, 3)
+              >>> const_vec.typeKind()
+              <TypeKind.DOUBLE: 6>
+              >>> dict_vec = pv.dictionary_vector(pv.from_list([1, 2, 3]), [0, 0, 1, 0, 2])
+              >>> dict_vec.typeKind()
+              <TypeKind.BIGINT: 4>
+      )pbdoc")
+      .def("mayHaveNulls", &BaseVector::mayHaveNulls, R"pbdoc(
+          Check whether the vector contains null values. Returns True if null
+          values are present else returns False.
+
+          Returns
+          -------
+          bool
+
+          Examples
+          --------
+
+          .. doctest::
+
+              >>> import pyvelox.pyvelox as pv
+              >>> flat_vec = pv.from_list([3, 4, 3, None])
+              >>> flat_vec.mayHaveNulls()
+              True
+              >>> const_vec = pv.constant_vector(None, 3, pv.BigintType())
+              >>> const_vec.mayHaveNulls()
+              True
+              >>> dict_vec = pv.dictionary_vector(pv.from_list([None, 2, 3]), [0, 0, 1, 0, 2])
+              >>> dict_vec.mayHaveNulls()
+              True
+      )pbdoc")
+      .def("isLazy", &BaseVector::isLazy, R"pbdoc(
+          When the encoding of the vector is `VectorEncoding::Simple::LAZY`, 
+          the method returns `True`, otherwise returns `False`.
+
+          Returns
+          -------
+          bool
+
+          Examples
+          --------
+
+          .. doctest::
+
+              >>> import pyvelox.pyvelox as pv
+              >>> flat_vec = pv.from_list([3, 4, 3, None])
+              >>> flat_vec.isLazy()
+              False
+              >>> const_vec = pv.constant_vector(None, 3, pv.BigintType())
+              >>> const_vec.isLazy()
+              False
+              >>> dict_vec = pv.dictionary_vector(pv.from_list([None, 2, 3]), [0, 0, 1, 0, 2])
+              >>> dict_vec.isLazy()
+              False
+      )pbdoc")
       .def(
           "isNullAt",
           [](VectorPtr& v, vector_size_t idx) {
             checkBounds(v, idx);
             return v->isNullAt(idx);
-          })
+          },
+          R"pbdoc(
+            
+
+            Returns
+            =======
+            bool
+                Returns True, if the value at the given index is null, else False.
+
+            Examples
+            ========
+
+            .. doctest::
+
+                >>> import pyvelox.pyvelox as pv
+                >>> flat_vec = pv.from_list([3, 4, 3, None])
+                >>> flat_vec.isNullAt(0)
+                False
+                >>> flat_vec.isNullAt(3)
+                True
+                >>> const_vec = pv.constant_vector(None, 3, pv.BigintType())
+                >>> const_vec.isNullAt(1)
+                True
+                >>> dict_vec = pv.dictionary_vector(pv.from_list([None, 2, 3]), [0, 0, 1, 0, 2])
+                >>> dict_vec.isNullAt(0)
+                True
+                >>> dict_vec.isNullAt(2)
+                False
+      )pbdoc")
       .def(
           "hashValueAt",
           [](VectorPtr& v, vector_size_t idx) {
             checkBounds(v, idx);
             return v->hashValueAt(idx);
-          })
-      .def("encoding", &BaseVector::encoding)
-      .def("append", [](VectorPtr& u, VectorPtr& v) { appendVectors(u, v); })
-      .def("resize", &BaseVector::resize)
+          },
+          R"pbdoc(
+            Generates the hash value at the given index.
+
+            Returns
+            -------
+            int
+                Returns an integer
+
+            Examples
+            --------
+
+            .. doctest::
+
+                >>> import pyvelox.pyvelox as pv
+                >>> flat_vec = pv.from_list([1, 2, 3])
+                >>> flat_vec.hashValueAt(0)
+                6614235796240398542
+                >>> const_vec = pv.constant_vector(1, 3)
+                >>> const_vec.hashValueAt(0)
+                6614235796240398542
+                >>> dict_vec = pv.dictionary_vector(pv.from_list([1, 2, 3]), [0, 0, 2, 1])
+                >>> dict_vec.hashValueAt(0)
+                6614235796240398542
+      )pbdoc")
+      .def("encoding", &BaseVector::encoding, R"pbdoc(
+          Encoding of the vector.
+
+            Returns
+            -------
+            int
+                Returns an integer
+
+            Examples
+            --------
+
+            .. doctest::
+
+                >>> import pyvelox.pyvelox as pv
+                >>> flat_vec = pv.from_list([1, 2, 3])
+                >>> flat_vec.encoding()
+                <VectorEncodingSimple.FLAT: 3>
+                >>> const_vec = pv.constant_vector(1, 3)
+                >>> const_vec.encoding()
+                <VectorEncodingSimple.CONSTANT: 1>
+                >>> dict_vec = pv.dictionary_vector(pv.from_list([1, 2, 3]), [0, 0, 2, 1])
+                >>> dict_vec.encoding()
+                <VectorEncodingSimple.DICTIONARY: 2>      
+      )pbdoc")
+      .def(
+          "append",
+          [](VectorPtr& u, VectorPtr& v) { appendVectors(u, v); },
+          R"pbdoc(
+            Appends a vector to the current vector.
+
+            Returns
+            -------
+            pyvelox.pyvelox.BaseVector
+                Returns extended types from the pyvelox.pyvelox.BaseVector
+
+            Examples
+            --------
+
+            .. doctest::
+
+                >>> import pyvelox.pyvelox as pv
+                >>> flat_vec = pv.from_list([1, 2, 3])
+                >>> const_vec = pv.constant_vector(2, 4)
+                >>> dict_vec = pv.dictionary_vector(pv.from_list([10, 20, 30]), [0, 1, 2, 1])
+                >>> flat_vec.append(const_vec)
+                >>> print(flat_vec)
+                [FLAT BIGINT: 7 elements, no nulls]
+                0: 1
+                1: 2
+                2: 3
+                3: 2
+                4: 2
+                5: 2
+                6: 2
+                >>> flat_vec.append(dict_vec)
+                >>> print(flat_vec)
+                [FLAT BIGINT: 11 elements, no nulls]
+                0: 1
+                1: 2
+                2: 3
+                3: 2
+                4: 2
+                5: 2
+                6: 2
+                7: 10
+                8: 20
+                9: 30
+                10: 20
+      )pbdoc")
+      .def("resize", &BaseVector::resize, R"pbdoc(
+          
+      )pbdoc")
       .def(
           "slice",
           [](VectorPtr& u,
@@ -391,7 +726,10 @@ static void addVectorBindings(
           },
           py::arg("start"),
           py::arg("stop"),
-          py::arg("step") = 1);
+          py::arg("step") = 1,
+          R"pbdoc(
+          
+      )pbdoc");
 
   constexpr TypeKind supportedTypes[] = {
       TypeKind::BOOLEAN,

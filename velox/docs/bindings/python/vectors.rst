@@ -106,13 +106,13 @@ Constant Vector
 
 
 Dictionary Vector
-^^^^^^^^^^^^^^^
+^^^^^^^^^^^^^^^^^
 
 Doesn't support this functionality.
 
 
-Vector Length
--------------
+__len__
+-------
 
 .. doctest::
 
@@ -127,3 +127,129 @@ Vector Length
     >>> dict_vec = pv.dictionary_vector(pv.from_list([1, 2, 3]), base_indices)
     >>> len(dict_vec)
     5
+
+
+__str__
+--------
+
+.. doctest::
+
+    >>> import pyvelox.pyvelox as pv
+    >>> flat_vec = pv.from_list([1, 2, 3])
+    >>> print(flat_vec)
+    [FLAT BIGINT: 3 elements, no nulls]
+    0: 1
+    1: 2
+    2: 3
+    >>> const_vec = pv.constant_vector(10, 3)
+    >>> print(const_vec)
+    [CONSTANT BIGINT: 3 elements, 10]
+    0: 10
+    1: 10
+    2: 10
+    >>> dict_vec = pv.dictionary_vector(pv.from_list([1, 2, 3]), [0, 0, 1, 0, 2])
+    >>> print(dict_vec)
+    [DICTIONARY BIGINT: 5 elements, no nulls]
+    0: [0->0] 1
+    1: [1->0] 1
+    2: [2->1] 2
+    3: [3->0] 1
+    4: [4->2] 3
+
+__getitem__
+-----------
+
+.. doctest::
+
+    >>> import pyvelox.pyvelox as pv
+    >>> flat_vec = pv.from_list([1, 2, 3])
+    >>> flat_vec[1]
+    2
+    >>> const_vec = pv.constant_vector(10, 3)
+    >>> const_vec[2]
+    10
+    >>> dict_vec = pv.dictionary_vector(pv.from_list([1, 2, 3]), [0, 0, 1, 0, 2])
+    >>> dict_vec[3]
+    1
+
+
+__setitem__
+-----------
+
+Only supports `FlatVector`.
+
+.. doctest::
+
+    >>> import pyvelox.pyvelox as pv
+    >>> flat_vec = pv.from_list([1, 2, 3])
+    >>> flat_vec[1]
+    2
+    >>> flat_vec[1] = 10
+    >>> flat_vec[1]
+    10
+
+
+dtype
+-----
+
+.. doctest::
+
+    >>> import pyvelox.pyvelox as pv
+    >>> flat_vec = pv.from_list([1, 2, 3])
+    >>> flat_vec_dtype = flat_vec.dtype()
+    >>> flat_vec_dtype.kind()
+    <TypeKind.BIGINT: 4>
+    >>> const_vec = pv.constant_vector(10.5, 3)
+    >>> const_vec_dtype = const_vec.dtype()
+    >>> const_vec_dtype.kind()
+    <TypeKind.DOUBLE: 6>
+    >>> dict_vec = pv.dictionary_vector(pv.from_list([1, 2, 3]), [0, 0, 1, 0, 2])
+    >>> dict_vec_dtype = dict_vec.dtype()
+    >>> dict_vec_dtype.kind()
+    <TypeKind.BIGINT: 4>
+    
+
+mayHaveNulls
+------------
+
+Check whether the vector contains null values. Returns True if null
+values are present else returns False.
+
+.. doctest::
+
+    >>> import pyvelox.pyvelox as pv
+    >>> flat_vec = pv.from_list([3, 4, 3, None])
+    >>> flat_vec.mayHaveNulls()
+    True
+    >>> const_vec = pv.constant_vector(None, 3, pv.BigintType())
+    >>> const_vec.mayHaveNulls()
+    True
+    >>> dict_vec = pv.dictionary_vector(pv.from_list([None, 2, 3]), [0, 0, 1, 0, 2])
+    >>> dict_vec.mayHaveNulls()
+    True
+
+
+isLazy
+------
+
+When the encoding of the vector is `VectorEncoding::Simple::LAZY`, 
+the method returns `True`, otherwise returns `False`.
+
+.. doctest::
+
+    >>> import pyvelox.pyvelox as pv
+    >>> flat_vec = pv.from_list([3, 4, 3, None])
+    >>> flat_vec.isLazy()
+    False
+    >>> const_vec = pv.constant_vector(None, 3, pv.BigintType())
+    >>> const_vec.isLazy()
+    False
+    >>> dict_vec = pv.dictionary_vector(pv.from_list([None, 2, 3]), [0, 0, 1, 0, 2])
+    >>> dict_vec.isLazy()
+    False
+
+
+isNullAt
+--------
+
+Returns `True` if 
