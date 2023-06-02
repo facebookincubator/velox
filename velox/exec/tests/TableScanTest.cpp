@@ -366,6 +366,40 @@ TEST_F(TableScanTest, subfieldPruningRowType) {
   }
 }
 
+TEST_F(TableScanTest, subfieldPruningRemainingFilter) {
+  auto columnType = ROW({"a", "b", "c"}, {BIGINT(), BIGINT(), BIGINT()});
+  auto rowType = ROW({"e"}, {columnType});
+  auto vectors = makeVectors(10, 1'000, rowType);
+  auto filePath = TempFilePath::create();
+  writeToFile(filePath->path, vectors);
+  std::vector<common::Subfield> requiredSubfields;
+  requiredSubfields.emplace_back("e.c");
+  std::unordered_map<std::string, std::shared_ptr<connector::ColumnHandle>>
+      assignments;
+  assignments["e"] = std::make_shared<HiveColumnHandle>(
+      "e",
+      HiveColumnHandle::ColumnType::kRegular,
+      columnType,
+      std::move(requiredSubfields));
+
+  auto op = PlanBuilder()
+                .tableScan(rowType, makeTableHandle(SubfieldFilters{}, parseExpr("e.a is null", rowType)), assignments)
+                .planNode();
+  auto split = makeHiveConnectorSplit(filePath->path);
+  auto result = AssertQueryBuilder(op).split(split).copyResults(pool());
+
+  auto rows = result->as<RowVector>();
+  ASSERT_TRUE(rows);
+  ASSERT_EQ(rows->childrenSize(), 1);
+  auto e = rows->childAt(0)->as<RowVector>();
+  ASSERT_TRUE(e);
+  ASSERT_EQ(e->childrenSize(), 3);
+  auto a = e->childAt(0);
+  for (int i = 0; i < a->size(); ++i) {
+    ASSERT_TRUE(a->isNullAt(i));
+  }
+}
+
 TEST_F(TableScanTest, subfieldPruningMapType) {
   auto valueType = ROW({"a", "b"}, {BIGINT(), DOUBLE()});
   auto mapType = MAP(BIGINT(), valueType);

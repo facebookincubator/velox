@@ -314,10 +314,7 @@ HiveDataSource::HiveDataSource(
 
   const auto& remainingFilter = hiveTableHandle->remainingFilter();
   if (remainingFilter) {
-    metadataFilter_ = std::make_shared<common::MetadataFilter>(
-        *scanSpec_, *remainingFilter, expressionEvaluator_);
     remainingFilterExprSet_ = expressionEvaluator_->compile(remainingFilter);
-
     // Remaining filter may reference columns that are not used otherwise,
     // e.g. are not being projected out and are not used in range filters.
     // Make sure to add these columns to scanSpec_.
@@ -332,13 +329,12 @@ HiveDataSource::HiveDataSource(
       }
       names.emplace_back(input->field());
       types.emplace_back(input->type());
-
-      common::Subfield subfield(input->field());
-      auto fieldSpec = scanSpec_->getOrCreateChild(subfield);
-      fieldSpec->setProjectOut(true);
-      fieldSpec->setChannel(channel++);
+      // TODO: Put only selected subfields in the scan spec.
+      scanSpec_->addFieldRecursively(input->field(), *input->type(), channel++);
     }
     readerOutputType_ = ROW(std::move(names), std::move(types));
+    metadataFilter_ = std::make_shared<common::MetadataFilter>(
+        *scanSpec_, *remainingFilter, expressionEvaluator_);
   }
 
   rowReaderOpts_.setScanSpec(scanSpec_);
