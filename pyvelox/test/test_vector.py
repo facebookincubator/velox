@@ -273,7 +273,7 @@ class TestVeloxVector(unittest.TestCase):
 
         with self.assertRaises(NotImplementedError):
             e = a[3:8:3]
-            
+
     def test_export_to_arrow(self):
         test_cases = [
             ([1, 2, 3], pa.int64()),
