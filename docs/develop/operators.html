@@ -381,10 +381,10 @@ and emitting results.</p>
 </section>
 <section id="nestedloopjoinnode">
 <h3>NestedLoopJoinNode<a class="headerlink" href="#nestedloopjoinnode" title="Permalink to this heading">¶</a></h3>
-<p>The cross join operation combines two separate inputs into a single output by
-combining each row of the left hand side input with each row of the right hand
-side input. If there are N rows in the left input and M rows in the right
-input, the output of the cross join will contain N * M rows.</p>
+<p>NestedLoopJoinNode represents an implementation that iterates through each row from
+the left side of the join and, for each row, iterates through all rows from the right
+side of the join, comparing them based on the join condition to find matching rows
+and emitting results. Nested loop join supports non-equality join.</p>
 <table class="docutils align-left">
 <colgroup>
 <col style="width: 25%" />
@@ -396,6 +396,12 @@ input, the output of the cross join will contain N * M rows.</p>
 </tr>
 </thead>
 <tbody>
+<tr class="row-even"><td><p>joinType</p></td>
+<td><p>Join type: inner, left, right, full.</p></td>
+</tr>
+<tr class="row-odd"><td><p>joinCondition</p></td>
+<td><p>Expression used as the join condition, may reference columns from both inputs.</p></td>
+</tr>
 <tr class="row-even"><td><p>outputType</p></td>
 <td><p>A list of output columns. This is a subset of columns available in the left and right inputs of the join. The columns may appear in different order than in the input.</p></td>
 </tr>

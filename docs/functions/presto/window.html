@@ -173,6 +173,24 @@ within the window partition.</p>
 <p>Returns the value at the specified offset from the beginning of the window. Offsets start at 1. The offset
 can be any scalar expression. If the offset is null or greater than the number of values in the window, null is
 returned. It is an error for the offset to be zero or negative.</p>
+<dl class="py function">
+<dt class="sig sig-object py" id="lag">
+<span class="sig-name descname"><span class="pre">lag</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">x</span></span></em><span class="optional">[</span>, <em class="sig-param"><span class="n"><span class="pre">offset</span></span></em><span class="optional">[</span>, <em class="sig-param"><span class="n"><span class="pre">default_value</span></span></em><span class="optional">]</span><span class="optional">]</span><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">[same</span> <span class="pre">as</span> <span class="pre">input]</span></span></span><a class="headerlink" href="#lag" title="Permalink to this definition">¶</a></dt>
+<dd></dd></dl>
+
+<p>Returns the value at <code class="docutils literal notranslate"><span class="pre">offset</span></code> rows before the current row in the partition. If
+there is no such row, the <code class="docutils literal notranslate"><span class="pre">default_value</span></code> is returned, or if it is not
+specified <code class="docutils literal notranslate"><span class="pre">null</span></code> is returned. Offsets start at <code class="docutils literal notranslate"><span class="pre">0</span></code>, which is the current
+row. The default <code class="docutils literal notranslate"><span class="pre">offset</span></code> is <code class="docutils literal notranslate"><span class="pre">1</span></code>.</p>
+<dl class="py function">
+<dt class="sig sig-object py" id="lead">
+<span class="sig-name descname"><span class="pre">lead</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">x</span></span></em><span class="optional">[</span>, <em class="sig-param"><span class="n"><span class="pre">offset</span></span></em><span class="optional">[</span>, <em class="sig-param"><span class="n"><span class="pre">default_value</span></span></em><span class="optional">]</span><span class="optional">]</span><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">[same</span> <span class="pre">as</span> <span class="pre">input]</span></span></span><a class="headerlink" href="#lead" title="Permalink to this definition">¶</a></dt>
+<dd></dd></dl>
+
+<p>Returns the value at <code class="docutils literal notranslate"><span class="pre">offset</span></code> rows after the current row in the partition. If
+there is no such row, the <code class="docutils literal notranslate"><span class="pre">default_value</span></code> is returned, or if it is not
+specified <code class="docutils literal notranslate"><span class="pre">null</span></code> is returned. Offsets start at <code class="docutils literal notranslate"><span class="pre">0</span></code>, which is the current
+row. The default <code class="docutils literal notranslate"><span class="pre">offset</span></code> is <code class="docutils literal notranslate"><span class="pre">1</span></code>.</p>
 </section>
 <section id="aggregate-functions">
 <h3>Aggregate functions<a class="headerlink" href="#aggregate-functions" title="Permalink to this heading">¶</a></h3>
