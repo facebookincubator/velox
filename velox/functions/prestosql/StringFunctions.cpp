@@ -235,6 +235,7 @@ class ConcatFunction : public exec::VectorFunction {
     auto rawBuffer = flatResult->getRawStringBufferWithSpace(totalResultBytes);
     size_t offset = 0;
     rows.applyToSelected([&](int row) {
+      const char* start = rawBuffer + offset;
       size_t combinedSize = 0;
       for (int i = 0; i < numArgs; i++) {
         StringView value;
@@ -245,12 +246,12 @@ class ConcatFunction : public exec::VectorFunction {
         }
         auto size = value.size();
         if (size > 0) {
-          memcpy(rawBuffer, value.data(), size);
+          memcpy(rawBuffer + offset, value.data(), size);
           combinedSize += size;
-          rawBuffer += size;
+          offset += size;
         }
       }
-      flatResult->setNoCopy(row, StringView(rawBuffer, combinedSize));
+      flatResult->setNoCopy(row, StringView(start, combinedSize));
     });
   }
 
