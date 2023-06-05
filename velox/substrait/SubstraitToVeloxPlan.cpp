@@ -1837,22 +1837,6 @@ void SubstraitVeloxPlanConverter::setInFilter(
     connector::hive::SubfieldFilters& filters) {}
 
 template <>
-void SubstraitVeloxPlanConverter::setInFilter<TypeKind::DOUBLE>(
-    const std::vector<variant>& variants,
-    bool nullAllowed,
-    const std::string& inputName,
-    connector::hive::SubfieldFilters& filters) {
-  std::vector<double> values;
-  values.reserve(variants.size());
-  for (const auto& variant : variants) {
-    double value = variant.value<double>();
-    values.emplace_back(value);
-  }
-  filters[common::Subfield(inputName, true)] =
-      common::createDoubleValues(values, nullAllowed);
-}
-
-template <>
 void SubstraitVeloxPlanConverter::setInFilter<TypeKind::BIGINT>(
     const std::vector<variant>& variants,
     bool nullAllowed,
