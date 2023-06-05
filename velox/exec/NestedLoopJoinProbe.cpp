@@ -467,4 +467,24 @@ RowVectorPtr NestedLoopJoinProbe::doMatch(vector_size_t probeCnt) {
   return output;
 }
 
+void NestedLoopJoinProbe::setState(ProbeOperatorState state) {
+  checkStateTransition(state);
+  state_ = state;
+}
+
+void NestedLoopJoinProbe::checkStateTransition(ProbeOperatorState state) const {
+  VELOX_CHECK_NE(state_, state);
+  switch (state) {
+    case ProbeOperatorState::kRunning:
+      VELOX_CHECK_EQ(state_, ProbeOperatorState::kWaitForBuild);
+      break;
+    case ProbeOperatorState::kFinish:
+      VELOX_CHECK_EQ(state_, ProbeOperatorState::kRunning);
+      break;
+    default:
+      VELOX_UNREACHABLE(probeOperatorStateName(state_));
+      break;
+  }
+}
+
 } // namespace facebook::velox::exec

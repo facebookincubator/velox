@@ -113,10 +113,9 @@ class NestedLoopJoinProbe : public Operator {
         noMoreInput_;
   }
 
-  // TODO: Add state transition check.
-  void setState(ProbeOperatorState state) {
-    state_ = state;
-  }
+  void setState(ProbeOperatorState state);
+
+  void checkStateTransition(ProbeOperatorState state) const;
 
  private:
   // Maximum number of rows in the output batch.
