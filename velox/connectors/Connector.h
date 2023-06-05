@@ -316,7 +316,7 @@ class Connector {
           std::string,
           std::shared_ptr<connector::ColumnHandle>>& columnHandles,
       ConnectorQueryCtx* FOLLY_NONNULL connectorQueryCtx,
-      const std::shared_ptr<dwio::common::ReaderOptions>& options = {}) = 0;
+      const std::shared_ptr<dwio::common::ReaderOptions> options = {}) = 0;
 
   // Returns true if addSplit of DataSource can use 'dataSource' from
   // ConnectorSplit in addSplit(). If so, TableScan can preload splits

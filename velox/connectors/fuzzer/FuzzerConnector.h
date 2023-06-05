@@ -56,8 +56,7 @@ class FuzzerDataSource : public DataSource {
   FuzzerDataSource(
       const std::shared_ptr<const RowType>& outputType,
       const std::shared_ptr<connector::ConnectorTableHandle>& tableHandle,
-      velox::memory::MemoryPool* FOLLY_NONNULL pool,
-      const std::shared_ptr<dwio::common::ReaderOptions>& options = {});
+      velox::memory::MemoryPool* FOLLY_NONNULL pool);
 
   void addSplit(std::shared_ptr<ConnectorSplit> split) override;
 
@@ -98,7 +97,6 @@ class FuzzerDataSource : public DataSource {
   size_t completedBytes_{0};
 
   memory::MemoryPool* FOLLY_NONNULL pool_;
-  std::shared_ptr<dwio::common::ReaderOptions> options_;
 };
 
 class FuzzerConnector final : public Connector {
@@ -116,7 +114,7 @@ class FuzzerConnector final : public Connector {
           std::string,
           std::shared_ptr<connector::ColumnHandle>>& /*columnHandles*/,
       ConnectorQueryCtx* FOLLY_NONNULL connectorQueryCtx,
-      const std::shared_ptr<dwio::common::ReaderOptions>& options = {})
+      const std::shared_ptr<dwio::common::ReaderOptions> options = {})
       override final {
     return std::make_unique<FuzzerDataSource>(
         outputType, tableHandle, connectorQueryCtx->memoryPool());

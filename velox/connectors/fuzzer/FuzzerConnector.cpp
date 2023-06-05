@@ -22,11 +22,8 @@ namespace facebook::velox::connector::fuzzer {
 FuzzerDataSource::FuzzerDataSource(
     const std::shared_ptr<const RowType>& outputType,
     const std::shared_ptr<connector::ConnectorTableHandle>& tableHandle,
-    velox::memory::MemoryPool* FOLLY_NONNULL pool,
-    const std::shared_ptr<dwio::common::ReaderOptions>& options)
-    : outputType_(outputType), pool_(pool), options_(options) {
-  if (!options_)
-    options_ = std::make_shared<dwio::common::ReaderOptions>(pool);
+    velox::memory::MemoryPool* FOLLY_NONNULL pool)
+    : outputType_(outputType), pool_(pool) {
   auto fuzzerTableHandle =
       std::dynamic_pointer_cast<FuzzerTableHandle>(tableHandle);
   VELOX_CHECK_NOT_NULL(

@@ -32,7 +32,6 @@ struct HiveConnectorSplit : public connector::ConnectorSplit {
   std::optional<int32_t> tableBucketNumber;
   std::unordered_map<std::string, std::string> customSplitInfo;
   std::shared_ptr<std::string> extraFileInfo;
-  const std::shared_ptr<dwio::common::ReaderOptions> options;
 
   HiveConnectorSplit(
       const std::string& connectorId,
@@ -44,8 +43,7 @@ struct HiveConnectorSplit : public connector::ConnectorSplit {
           _partitionKeys = {},
       std::optional<int32_t> _tableBucketNumber = std::nullopt,
       const std::unordered_map<std::string, std::string>& _customSplitInfo = {},
-      const std::shared_ptr<std::string>& _extraFileInfo = {},
-      const std::shared_ptr<dwio::common::ReaderOptions>& readerOptions = {})
+      const std::shared_ptr<std::string>& _extraFileInfo = {})
       : ConnectorSplit(connectorId),
         filePath(_filePath),
         fileFormat(_fileFormat),
@@ -54,8 +52,7 @@ struct HiveConnectorSplit : public connector::ConnectorSplit {
         partitionKeys(_partitionKeys),
         tableBucketNumber(_tableBucketNumber),
         customSplitInfo(_customSplitInfo),
-        extraFileInfo(_extraFileInfo),
-        options(readerOptions) {}
+        extraFileInfo(_extraFileInfo) {}
 
   std::string toString() const override {
     if (tableBucketNumber.has_value()) {

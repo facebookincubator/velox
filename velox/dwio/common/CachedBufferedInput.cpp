@@ -32,7 +32,7 @@ DEFINE_int64(
 DEFINE_int32(
     max_coalesced_distance_bytes,
     512 << 10,
-    "Maximum distance in which coalesce will combine requests (TBD)");
+    "Maximum distance in bytes in which coalesce will combine requests");
     
 using ::facebook::velox::common::Region;
 

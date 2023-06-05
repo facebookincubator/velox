@@ -221,8 +221,7 @@ class HiveConnectorSplitBuilder {
         partitionKeys_,
         tableBucketNumber_,
         unusedMap,
-        unusedExtra,
-        readerOptions_);
+        unusedExtra);
   }
 
  private:

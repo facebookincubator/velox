@@ -125,7 +125,6 @@ class TpchDataSource : public DataSource {
   size_t completedBytes_{0};
 
   memory::MemoryPool* FOLLY_NONNULL pool_;
-  std::shared_ptr<dwio::common::ReaderOptions> options_;
 };
 
 class TpchConnector final : public Connector {
@@ -143,7 +142,7 @@ class TpchConnector final : public Connector {
           std::string,
           std::shared_ptr<connector::ColumnHandle>>& columnHandles,
       ConnectorQueryCtx* FOLLY_NONNULL connectorQueryCtx,
-      const std::shared_ptr<dwio::common::ReaderOptions>& options = {})
+      const std::shared_ptr<dwio::common::ReaderOptions> options = {})
       override final {
     return std::make_unique<TpchDataSource>(
         outputType,
