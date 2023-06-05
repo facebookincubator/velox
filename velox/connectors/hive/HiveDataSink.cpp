@@ -219,14 +219,14 @@ void HiveDataSink::appendWriter(
       writerParameters.writeFileName();
   writerInfo_.push_back(
       std::make_shared<HiveWriterInfo>(std::move(writerParameters)));
-  auto sink = dwio::common::DataSink::create(writePath);
 
   auto writerFactory =
       dwio::common::getWriterFactory(insertTableHandle_->tableStorageFormat());
   dwio::common::WriterOptions options;
   options.schema = inputType_;
   options.memoryPool = connectorQueryCtx_->connectorMemoryPool();
-  writers_.push_back(writerFactory->createWriter(std::move(sink), options));
+  writers_.push_back(writerFactory->createWriter(
+      dwio::common::DataSink::create(writePath), options));
 }
 
 void HiveDataSink::computePartitionRowCountsAndIndices() {

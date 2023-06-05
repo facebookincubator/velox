@@ -31,7 +31,8 @@ WriterFactoriesMap& writerFactories() {
 } // namespace
 
 bool registerWriterFactory(std::shared_ptr<WriterFactory> factory) {
-  bool ok = writerFactories().insert({factory->fileFormat(), factory}).second;
+  const bool ok =
+      writerFactories().insert({factory->fileFormat(), factory}).second;
   VELOX_CHECK(
       ok,
       "WriterFactory is already registered for format {}",
@@ -40,8 +41,7 @@ bool registerWriterFactory(std::shared_ptr<WriterFactory> factory) {
 }
 
 bool unregisterWriterFactory(FileFormat format) {
-  auto count = writerFactories().erase(format);
-  return count == 1;
+  return (writerFactories().erase(format) == 1);
 }
 
 std::shared_ptr<WriterFactory> getWriterFactory(FileFormat format) {
@@ -55,7 +55,7 @@ std::shared_ptr<WriterFactory> getWriterFactory(FileFormat format) {
 
 bool hasWriterFactory(FileFormat format) {
   auto it = writerFactories().find(format);
-  return it != writerFactories().end();
+  return (writerFactories().count(format) == 1);
 }
 
 } // namespace facebook::velox::dwio::common

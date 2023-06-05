@@ -90,7 +90,8 @@ class HiveInsertTableHandle : public ConnectorInsertTableHandle {
   HiveInsertTableHandle(
       std::vector<std::shared_ptr<const HiveColumnHandle>> inputColumns,
       std::shared_ptr<const LocationHandle> locationHandle,
-      const dwio::common::FileFormat tableStorageFormat)
+      const dwio::common::FileFormat tableStorageFormat =
+          dwio::common::FileFormat::DWRF)
       : inputColumns_(std::move(inputColumns)),
         locationHandle_(std::move(locationHandle)),
         tableStorageFormat_(tableStorageFormat) {}
