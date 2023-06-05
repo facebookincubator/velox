@@ -64,9 +64,6 @@ std::string Filter::toString() const {
     case FilterKind::kDoubleRange:
       strKind = "DoubleRange";
       break;
-    case FilterKind::kDoubleValues:
-      strKind = "DoubleValues";
-      break;
     case FilterKind::kFloatRange:
       strKind = "FloatRange";
       break;
@@ -1014,31 +1011,6 @@ std::unique_ptr<Filter> notNullOrTrue(bool nullAllowed) {
 }
 
 } // namespace
-
-std::unique_ptr<Filter> createDoubleValues(
-    const std::vector<double>& values,
-    bool nullAllowed) {
-  if (values.empty()) {
-    return nullOrFalse(nullAllowed);
-  }
-  if (values.size() == 1) {
-    return std::make_unique<DoubleRange>(
-        values.front(),
-        false,
-        false,
-        values.front(),
-        false,
-        false,
-        nullAllowed);
-  }
-  double min = values.front();
-  double max = values.front();
-  for (const auto& value : values) {
-    min = (value < min) ? value : min;
-    max = (value > max) ? value : max;
-  }
-  return std::make_unique<DoubleValues>(min, max, values, nullAllowed);
-}
 
 std::unique_ptr<Filter> createBigintValuesFilter(
     const std::vector<int64_t>& values,
