@@ -6,7 +6,6 @@ Pyvelox Documentation
     :maxdepth: 2
 
     README_generated_pyvelox
-    vectors
     
 .. automodule:: pyvelox.pyvelox
 

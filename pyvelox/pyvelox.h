@@ -445,6 +445,11 @@ static void addVectorBindings(
       .def("__len__", &BaseVector::size, R"pbdoc(
           Returns an int representing the number of elements in the vector.
 
+          Parameters
+          ----------
+          vector : Union[FlatVector, ConstantVector, DictionaryVector]
+                The vector to be saved.
+
           Returns
           -------
           int
@@ -476,6 +481,12 @@ static void addVectorBindings(
               >>> flat_vec = pv.from_list([1, 2, 3])
               >>> flat_vec.size()
               3
+              >>> const_vec = pv.constant_vector(10, 4)
+              >>> const_vec.size()
+              4
+              >>> dict_vec = pv.dictionary_vector(pv.from_list([1, 2, 3]), [0, 0, 1, 0, 2])
+              >>> dict_vec.size()
+              5
       )pbdoc")
       .def("dtype", &BaseVector::type, R"pbdoc(
           Returns the data type.
@@ -581,15 +592,20 @@ static void addVectorBindings(
             return v->isNullAt(idx);
           },
           R"pbdoc(
-            
+            Check if null values are in the given index.
+
+            Parameters
+            ----------
+            index : int
+                Index at which null value is checked.
 
             Returns
-            =======
+            -------
             bool
                 Returns True, if the value at the given index is null, else False.
 
             Examples
-            ========
+            --------
 
             .. doctest::
 
@@ -607,7 +623,9 @@ static void addVectorBindings(
                 True
                 >>> dict_vec.isNullAt(2)
                 False
-      )pbdoc")
+      )pbdoc",
+      py::arg("index")
+      )
       .def(
           "hashValueAt",
           [](VectorPtr& v, vector_size_t idx) {
@@ -616,6 +634,11 @@ static void addVectorBindings(
           },
           R"pbdoc(
             Generates the hash value at the given index.
+
+            Parameters
+            ----------
+            index : int
+                Index for which hash value is generated.
 
             Returns
             -------
@@ -637,7 +660,8 @@ static void addVectorBindings(
                 >>> dict_vec = pv.dictionary_vector(pv.from_list([1, 2, 3]), [0, 0, 2, 1])
                 >>> dict_vec.hashValueAt(0)
                 6614235796240398542
-      )pbdoc")
+      )pbdoc",
+      py::arg("index"))
       .def("encoding", &BaseVector::encoding, R"pbdoc(
           Encoding of the vector.
 
@@ -660,13 +684,18 @@ static void addVectorBindings(
                 <VectorEncodingSimple.CONSTANT: 1>
                 >>> dict_vec = pv.dictionary_vector(pv.from_list([1, 2, 3]), [0, 0, 2, 1])
                 >>> dict_vec.encoding()
-                <VectorEncodingSimple.DICTIONARY: 2>      
+                <VectorEncodingSimple.DICTIONARY: 2>
       )pbdoc")
       .def(
           "append",
           [](VectorPtr& u, VectorPtr& v) { appendVectors(u, v); },
           R"pbdoc(
             Appends a vector to the current vector.
+
+            Parameters
+            ----------
+            vector : Union[FlatVector, ConstantVector, DictionaryVector]
+                Appending vector.
 
             Returns
             -------
@@ -706,10 +735,37 @@ static void addVectorBindings(
                 8: 20
                 9: 30
                 10: 20
-      )pbdoc")
+      )pbdoc",
+      py::arg("vector"))
       .def("resize", &BaseVector::resize, R"pbdoc(
-          
-      )pbdoc")
+          Resize the vector.
+
+          Parameters
+          ----------
+          new_size: int
+              New size of the vector.
+          set_not_null: bool
+              Indicates if nulls in range [old_size, new_size]
+
+          Returns
+          -------
+          None
+
+          Examples
+          --------
+
+          .. doctest::
+
+              >>> import pyvelox.pyvelox as pv
+              >>> vec = pv.from_list([1, 2, 3])
+              >>> len(vec)
+              3
+              >>> vec.resize(4, False)
+              >>> len(vec)
+              4
+      )pbdoc",
+      py::arg("new_size"),
+      py::arg("set_not_null"))
       .def(
           "slice",
           [](VectorPtr& u,
@@ -724,12 +780,38 @@ static void addVectorBindings(
             }
             return u->slice(start, stop - start);
           },
+          R"pbdoc(
+            Slicing vector.
+
+            Parameters
+            ----------
+            start: int
+                Start index.
+            stop: bool
+                Stop index.
+            step: bool
+                Step at which index is incremented.
+
+            Returns
+            -------
+            None
+
+            Examples
+            --------
+
+            .. doctest::
+
+                >>> import pyvelox.pyvelox as pv
+                >>> vec = pv.from_list([1, 2, 3, 4, 5])
+                >>> vec[1:3]
+                [FLAT BIGINT: 2 elements, no nulls]
+                0: 2
+                1: 3
+          )pbdoc",
           py::arg("start"),
           py::arg("stop"),
-          py::arg("step") = 1,
-          R"pbdoc(
-          
-      )pbdoc");
+          py::arg("step") = 1
+          );
 
   constexpr TypeKind supportedTypes[] = {
       TypeKind::BOOLEAN,
