@@ -39,6 +39,10 @@ struct Timestamp {
   constexpr Timestamp() : seconds_(0), nanos_(0) {}
   Timestamp(int64_t seconds, uint64_t nanos)
       : seconds_(seconds), nanos_(nanos) {
+    // The range of seconds is not limited. But we need to keep in mind that
+    // too large or too small seconds is reasonable for the Timestamp type,
+    // but it may construct a timestamp value that is meaningless in practice,
+    // such as a negative timestamp.
     VELOX_DCHECK_LE(nanos, kMaxNanos);
   }
 
@@ -56,19 +60,23 @@ struct Timestamp {
   int64_t toNanos() const {
     // int64 can store around 292 years in nanos ~ till 2262-04-12
     // The addition cannot overflow because the product will be promoted to
-    // uint64_t first and its value is at most UINT64_MAX / 2.
+    // uint64_t first and its value is at most UINT64_MAX / 2. However, too
+    // large seconds_ will cause checkedMultiply overflow, we should make
+    // sure the product is less than INT64_MAX.
     return checkedMultiply(seconds_, (int64_t)1'000'000'000) + nanos_;
   }
 
   int64_t toMillis() const {
     // The addition cannot overflow because the product will be promoted to
-    // uint64_t first and its value is at most UINT64_MAX / 2.
+    // uint64_t first and its value is at most UINT64_MAX / 2. We should make
+    // sure the product is less than INT64_MAX.
     return checkedMultiply(seconds_, (int64_t)1'000) + nanos_ / 1'000'000;
   }
 
   int64_t toMicros() const {
     // The addition cannot overflow because the product will be promoted to
-    // uint64_t first and its value is at most UINT64_MAX / 2.
+    // uint64_t first and its value is at most UINT64_MAX / 2. We should make
+    // sure the product is less than INT64_MAX.
     return checkedMultiply(seconds_, (int64_t)1'000'000) + nanos_ / 1'000;
   }
 
