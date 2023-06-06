@@ -56,7 +56,7 @@ class NtileTest : public WindowTestBase {
     // Note: The DuckDB table has been previously created.
     for (auto function : kNtileInvocations) {
       WindowTestBase::testWindowFunction(
-          vectors, function, overClauses, {}, false);
+          vectors, function, overClauses, {""}, false);
     }
   }
 };
