@@ -56,8 +56,6 @@ class CumeDistFunction : public exec::WindowFunction {
       rawValues[resultOffset + i] = cumeDist_;
     }
 
-    // Set NULL values for rows with empty frames.
-    setNullEmptyFramesResults(validRows, resultOffset, result);
   }
 
  private:
