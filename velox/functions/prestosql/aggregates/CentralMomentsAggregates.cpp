@@ -150,7 +150,9 @@ template <typename T>
 SimpleVector<T>* asSimpleVector(
     const RowVector* rowVector,
     int32_t childIndex) {
-  return rowVector->childAt(childIndex)->as<SimpleVector<T>>();
+  auto result = rowVector->childAt(childIndex)->as<SimpleVector<T>>();
+  VELOX_CHECK_NOT_NULL(result);
+  return result;
 }
 
 class CentralMomentsIntermediateInput {
@@ -230,7 +232,7 @@ class CentralMomentsAggregate : public exec::Aggregate {
       : exec::Aggregate(resultType) {}
 
   int32_t accumulatorFixedWidthSize() const override {
-    return sizeof(CentralMomentsAccumulator);
+    return alignof(CentralMomentsAccumulator);
   }
 
   void initializeNewGroups(
