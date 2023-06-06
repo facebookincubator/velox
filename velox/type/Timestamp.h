@@ -149,7 +149,6 @@ struct Timestamp {
 
   std::string toString(
       const Precision& precision = Precision::kNanoseconds) const {
-    // mbasmanova: error: no matching function for call to 'gmtime_r'
     // mbasmanova: time_t is long not long long
     std::tm tmValue;
     VELOX_USER_CHECK_NOT_NULL(
