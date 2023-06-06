@@ -115,18 +115,20 @@ class DwrfData : public dwio::common::FormatData {
 // DWRF specific initialization.
 class DwrfParams : public dwio::common::FormatParams {
  public:
-  explicit DwrfParams(StripeStreams& stripeStreams, FlatMapContext context = {})
-      : FormatParams(stripeStreams.getMemoryPool()),
+  explicit DwrfParams(
+      const std::shared_ptr<StripeStreams>& stripeStreams,
+      FlatMapContext context = {})
+      : FormatParams(stripeStreams->getMemoryPool()),
         stripeStreams_(stripeStreams),
         flatMapContext_(context) {}
 
   std::unique_ptr<dwio::common::FormatData> toFormatData(
       const std::shared_ptr<const dwio::common::TypeWithId>& type,
       const common::ScanSpec& /*scanSpec*/) override {
-    return std::make_unique<DwrfData>(type, stripeStreams_, flatMapContext_);
+    return std::make_unique<DwrfData>(type, *stripeStreams_, flatMapContext_);
   }
 
-  StripeStreams& stripeStreams() {
+  const std::shared_ptr<StripeStreams>& stripeStreams() {
     return stripeStreams_;
   }
 
@@ -135,7 +137,7 @@ class DwrfParams : public dwio::common::FormatParams {
   }
 
  private:
-  StripeStreams& stripeStreams_;
+  std::shared_ptr<StripeStreams> stripeStreams_;
   FlatMapContext flatMapContext_;
 };
 

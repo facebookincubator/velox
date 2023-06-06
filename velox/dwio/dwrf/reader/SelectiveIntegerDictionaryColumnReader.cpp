@@ -34,23 +34,23 @@ SelectiveIntegerDictionaryColumnReader::SelectiveIntegerDictionaryColumnReader(
           dataType->type) {
   EncodingKey encodingKey{nodeType_->id, params.flatMapContext().sequence};
   auto& stripe = params.stripeStreams();
-  auto encoding = stripe.getEncoding(encodingKey);
+  auto encoding = stripe->getEncoding(encodingKey);
   scanState_.dictionary.numValues = encoding.dictionarysize();
   rleVersion_ = convertRleVersion(encoding.kind());
   auto data = encodingKey.forKind(proto::Stream_Kind_DATA);
-  bool dataVInts = stripe.getUseVInts(data);
+  bool dataVInts = stripe->getUseVInts(data);
   dataReader_ = createRleDecoder</* isSigned = */ false>(
-      stripe.getStream(data, true),
+      stripe->getStream(data, true),
       rleVersion_,
       memoryPool_,
       dataVInts,
       numBytes);
 
   // make a lazy dictionary initializer
-  dictInit_ = stripe.getIntDictionaryInitializerForNode(
+  dictInit_ = stripe->getIntDictionaryInitializerForNode(
       encodingKey, numBytes, numBytes);
 
-  auto inDictStream = stripe.getStream(
+  auto inDictStream = stripe->getStream(
       encodingKey.forKind(proto::Stream_Kind_IN_DICTIONARY), false);
   if (inDictStream) {
     inDictionaryReader_ =

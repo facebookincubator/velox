@@ -28,17 +28,17 @@ SelectiveStringDirectColumnReader::SelectiveStringDirectColumnReader(
   EncodingKey encodingKey{nodeType->id, params.flatMapContext().sequence};
   auto& stripe = params.stripeStreams();
   RleVersion rleVersion =
-      convertRleVersion(stripe.getEncoding(encodingKey).kind());
+      convertRleVersion(stripe->getEncoding(encodingKey).kind());
   auto lenId = encodingKey.forKind(proto::Stream_Kind_LENGTH);
-  bool lenVInts = stripe.getUseVInts(lenId);
+  bool lenVInts = stripe->getUseVInts(lenId);
   lengthDecoder_ = createRleDecoder</*isSigned*/ false>(
-      stripe.getStream(lenId, true),
+      stripe->getStream(lenId, true),
       rleVersion,
       memoryPool_,
       lenVInts,
       dwio::common::INT_BYTE_SIZE);
   blobStream_ =
-      stripe.getStream(encodingKey.forKind(proto::Stream_Kind_DATA), true);
+      stripe->getStream(encodingKey.forKind(proto::Stream_Kind_DATA), true);
 }
 
 uint64_t SelectiveStringDirectColumnReader::skip(uint64_t numValues) {

@@ -389,7 +389,7 @@ void DwrfRowReader::startNextStripe() {
   auto currentStripeInfo = loadStripe(currentStripe, preload);
   rowsInCurrentStripe = currentStripeInfo.numberOfRows();
 
-  StripeStreamsImpl stripeStreams(
+  auto stripeStreams = std::make_shared<StripeStreamsImpl>(
       *this,
       getColumnSelector(),
       options_,
@@ -412,7 +412,7 @@ void DwrfRowReader::startNextStripe() {
     selectiveColumnReader_->setIsTopLevel();
   } else {
     columnReader_ = ColumnReader::build(
-        requestedType, dataType, stripeStreams, flatMapContext);
+        requestedType, dataType, *stripeStreams, flatMapContext);
   }
   DWIO_ENSURE(
       (columnReader_ != nullptr) != (selectiveColumnReader_ != nullptr),
@@ -423,10 +423,10 @@ void DwrfRowReader::startNextStripe() {
   // if planReads is off which means stripe data loaded as whole
   if (!preload) {
     VLOG(1) << "[DWRF] Load read plan for stripe " << currentStripe;
-    stripeStreams.loadReadPlan();
+    stripeStreams->loadReadPlan();
   }
 
-  stripeDictionaryCache_ = stripeStreams.getStripeDictionaryCache();
+  stripeDictionaryCache_ = stripeStreams->getStripeDictionaryCache();
   newStripeLoaded = true;
 }
 

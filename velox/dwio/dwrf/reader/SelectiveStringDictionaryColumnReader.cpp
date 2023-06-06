@@ -28,37 +28,37 @@ SelectiveStringDictionaryColumnReader::SelectiveStringDictionaryColumnReader(
     common::ScanSpec& scanSpec)
     : SelectiveColumnReader(nodeType, params, scanSpec, nodeType->type),
       lastStrideIndex_(-1),
-      provider_(params.stripeStreams().getStrideIndexProvider()) {
+      provider_(params.stripeStreams()->getStrideIndexProvider()) {
   auto& stripe = params.stripeStreams();
   EncodingKey encodingKey{nodeType_->id, params.flatMapContext().sequence};
   RleVersion rleVersion =
-      convertRleVersion(stripe.getEncoding(encodingKey).kind());
+      convertRleVersion(stripe->getEncoding(encodingKey).kind());
   scanState_.dictionary.numValues =
-      stripe.getEncoding(encodingKey).dictionarysize();
+      stripe->getEncoding(encodingKey).dictionarysize();
 
   const auto dataId = encodingKey.forKind(proto::Stream_Kind_DATA);
-  bool dictVInts = stripe.getUseVInts(dataId);
+  bool dictVInts = stripe->getUseVInts(dataId);
   dictIndex_ = createRleDecoder</*isSigned*/ false>(
-      stripe.getStream(dataId, true),
+      stripe->getStream(dataId, true),
       rleVersion,
       memoryPool_,
       dictVInts,
       dwio::common::INT_BYTE_SIZE);
 
   const auto lenId = encodingKey.forKind(proto::Stream_Kind_LENGTH);
-  bool lenVInts = stripe.getUseVInts(lenId);
+  bool lenVInts = stripe->getUseVInts(lenId);
   lengthDecoder_ = createRleDecoder</*isSigned*/ false>(
-      stripe.getStream(lenId, false),
+      stripe->getStream(lenId, false),
       rleVersion,
       memoryPool_,
       lenVInts,
       dwio::common::INT_BYTE_SIZE);
 
-  blobStream_ = stripe.getStream(
+  blobStream_ = stripe->getStream(
       encodingKey.forKind(proto::Stream_Kind_DICTIONARY_DATA), false);
 
   // handle in dictionary stream
-  std::unique_ptr<SeekableInputStream> inDictStream = stripe.getStream(
+  std::unique_ptr<SeekableInputStream> inDictStream = stripe->getStream(
       encodingKey.forKind(proto::Stream_Kind_IN_DICTIONARY), false);
   if (inDictStream) {
     formatData_->as<DwrfData>().ensureRowGroupIndex();
@@ -67,15 +67,15 @@ SelectiveStringDictionaryColumnReader::SelectiveStringDictionaryColumnReader(
         createBooleanRleDecoder(std::move(inDictStream), encodingKey);
 
     // stride dictionary only exists if in dictionary exists
-    strideDictStream_ = stripe.getStream(
+    strideDictStream_ = stripe->getStream(
         encodingKey.forKind(proto::Stream_Kind_STRIDE_DICTIONARY), true);
     DWIO_ENSURE_NOT_NULL(strideDictStream_, "Stride dictionary is missing");
 
     const auto strideDictLenId =
         encodingKey.forKind(proto::Stream_Kind_STRIDE_DICTIONARY_LENGTH);
-    bool strideLenVInt = stripe.getUseVInts(strideDictLenId);
+    bool strideLenVInt = stripe->getUseVInts(strideDictLenId);
     strideDictLengthDecoder_ = createRleDecoder</*isSigned*/ false>(
-        stripe.getStream(strideDictLenId, true),
+        stripe->getStream(strideDictLenId, true),
         rleVersion,
         memoryPool_,
         strideLenVInt,

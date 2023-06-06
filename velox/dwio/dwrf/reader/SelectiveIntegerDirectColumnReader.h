@@ -41,9 +41,9 @@ class SelectiveIntegerDirectColumnReader
     EncodingKey encodingKey{nodeType_->id, params.flatMapContext().sequence};
     auto data = encodingKey.forKind(proto::Stream_Kind_DATA);
     auto& stripe = params.stripeStreams();
-    bool dataVInts = stripe.getUseVInts(data);
+    bool dataVInts = stripe->getUseVInts(data);
     auto decoder = createDirectDecoder</*isSigned*/ true>(
-        stripe.getStream(data, true), dataVInts, numBytes);
+        stripe->getStream(data, true), dataVInts, numBytes);
     auto rawDecoder = decoder.release();
     auto directDecoder =
         dynamic_cast<dwio::common::DirectDecoder<true>*>(rawDecoder);

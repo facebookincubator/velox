@@ -25,11 +25,11 @@ std::unique_ptr<dwio::common::IntDecoder</*isSigned*/ false>> makeLengthDecoder(
     memory::MemoryPool& pool) {
   EncodingKey encodingKey{nodeType.id, params.flatMapContext().sequence};
   auto& stripe = params.stripeStreams();
-  auto rleVersion = convertRleVersion(stripe.getEncoding(encodingKey).kind());
+  auto rleVersion = convertRleVersion(stripe->getEncoding(encodingKey).kind());
   auto lenId = encodingKey.forKind(proto::Stream_Kind_LENGTH);
-  bool lenVints = stripe.getUseVInts(lenId);
+  bool lenVints = stripe->getUseVInts(lenId);
   return createRleDecoder</*isSigned*/ false>(
-      stripe.getStream(lenId, true),
+      stripe->getStream(lenId, true),
       rleVersion,
       pool,
       lenVints,
@@ -59,7 +59,7 @@ SelectiveListColumnReader::SelectiveListColumnReader(
   EncodingKey encodingKey{nodeType_->id, params.flatMapContext().sequence};
   auto& stripe = params.stripeStreams();
   // count the number of selected sub-columns
-  const auto& cs = stripe.getColumnSelector();
+  const auto& cs = stripe->getColumnSelector();
   auto& childType = requestedType_->childAt(0);
   VELOX_CHECK(
       cs.shouldReadNode(childType->id),
@@ -103,7 +103,7 @@ SelectiveMapColumnReader::SelectiveMapColumnReader(
   scanSpec_->children()[1]->setProjectOut(true);
   scanSpec_->children()[1]->setExtractValues(true);
 
-  const auto& cs = stripe.getColumnSelector();
+  const auto& cs = stripe->getColumnSelector();
   auto& keyType = requestedType_->childAt(0);
   VELOX_CHECK(
       cs.shouldReadNode(keyType->id),

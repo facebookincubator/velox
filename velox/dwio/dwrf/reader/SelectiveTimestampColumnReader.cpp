@@ -29,15 +29,15 @@ SelectiveTimestampColumnReader::SelectiveTimestampColumnReader(
     : SelectiveColumnReader(nodeType, params, scanSpec, nodeType->type) {
   EncodingKey encodingKey{nodeType_->id, params.flatMapContext().sequence};
   auto& stripe = params.stripeStreams();
-  RleVersion vers = convertRleVersion(stripe.getEncoding(encodingKey).kind());
+  RleVersion vers = convertRleVersion(stripe->getEncoding(encodingKey).kind());
   auto data = encodingKey.forKind(proto::Stream_Kind_DATA);
-  bool vints = stripe.getUseVInts(data);
+  bool vints = stripe->getUseVInts(data);
   seconds_ = createRleDecoder</*isSigned*/ true>(
-      stripe.getStream(data, true), vers, memoryPool_, vints, LONG_BYTE_SIZE);
+      stripe->getStream(data, true), vers, memoryPool_, vints, LONG_BYTE_SIZE);
   auto nanoData = encodingKey.forKind(proto::Stream_Kind_NANO_DATA);
-  bool nanoVInts = stripe.getUseVInts(nanoData);
+  bool nanoVInts = stripe->getUseVInts(nanoData);
   nano_ = createRleDecoder</*isSigned*/ false>(
-      stripe.getStream(nanoData, true),
+      stripe->getStream(nanoData, true),
       vers,
       memoryPool_,
       nanoVInts,

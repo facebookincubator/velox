@@ -121,9 +121,9 @@ class ColumnReaderTestBase {
     auto options = RowReaderOptions();
     options.setReturnFlatVector(returnFlatVector());
 
-    EXPECT_CALL(streams_, getColumnSelectorProxy())
+    EXPECT_CALL(*streams_, getColumnSelectorProxy())
         .WillRepeatedly(testing::Return(&cs));
-    EXPECT_CALL(streams_, getRowReaderOptionsProxy())
+    EXPECT_CALL(*streams_, getRowReaderOptionsProxy())
         .WillRepeatedly(testing::Return(&options));
 
     auto dataTypeWithId =
@@ -146,7 +146,7 @@ class ColumnReaderTestBase {
       columnReader_ = nullptr;
     } else {
       columnReader_ =
-          ColumnReader::build(cs.getSchemaWithId(), dataTypeWithId, streams_);
+          ColumnReader::build(cs.getSchemaWithId(), dataTypeWithId, *streams_);
       selectiveColumnReader_ = nullptr;
     }
   }
@@ -202,7 +202,8 @@ class ColumnReaderTestBase {
   virtual bool useSelectiveReader() const = 0;
   virtual bool returnFlatVector() const = 0;
 
-  MockStripeStreams streams_;
+  std::shared_ptr<MockStripeStreams> streams_ =
+      std::make_shared<MockStripeStreams>();
   std::unique_ptr<ColumnReader> columnReader_;
   std::unique_ptr<SelectiveColumnReader> selectiveColumnReader_;
 
@@ -234,7 +235,7 @@ class StringReaderTests
 
   VectorPtr newBatch(const TypePtr& rowType) const {
     return useSelectiveReader()
-        ? BaseVector::create(rowType, 0, &streams_.getMemoryPool())
+        ? BaseVector::create(rowType, 0, &streams_->getMemoryPool())
         : nullptr;
   }
 
@@ -278,7 +279,7 @@ class TestColumnReader : public testing::TestWithParam<ReaderTestParams>,
 
   VectorPtr newBatch(const TypePtr& rowType) const {
     return useSelectiveReader()
-        ? BaseVector::create(rowType, 0, &streams_.getMemoryPool())
+        ? BaseVector::create(rowType, 0, &streams_->getMemoryPool())
         : nullptr;
   }
 
@@ -339,7 +340,7 @@ class SchemaMismatchTest : public TestWithParam<bool>,
  protected:
   VectorPtr newBatch(const TypePtr& rowType) {
     return useSelectiveReader()
-        ? BaseVector::create(rowType, 0, &streams_.getMemoryPool())
+        ? BaseVector::create(rowType, 0, &streams_->getMemoryPool())
         : nullptr;
   }
 
@@ -399,26 +400,26 @@ TEST_P(TestColumnReader, testBooleanWithNulls) {
   // set getEncoding
   proto::ColumnEncoding directEncoding;
   directEncoding.set_kind(proto::ColumnEncoding_Kind_DIRECT);
-  EXPECT_CALL(streams_, getEncodingProxy(_))
+  EXPECT_CALL(*streams_, getEncodingProxy(_))
       .WillRepeatedly(Return(&directEncoding));
 
   // set getStream
-  EXPECT_CALL(streams_, getStreamProxy(0, proto::Stream_Kind_PRESENT, false))
+  EXPECT_CALL(*streams_, getStreamProxy(0, proto::Stream_Kind_PRESENT, false))
       .WillRepeatedly(Return(nullptr));
-  EXPECT_CALL(streams_, getStreamProxy(0, proto::Stream_Kind_ROW_INDEX, false))
+  EXPECT_CALL(*streams_, getStreamProxy(0, proto::Stream_Kind_ROW_INDEX, false))
       .WillRepeatedly(Return(nullptr));
 
-  EXPECT_CALL(streams_, getStreamProxy(1, proto::Stream_Kind_ROW_INDEX, false))
+  EXPECT_CALL(*streams_, getStreamProxy(1, proto::Stream_Kind_ROW_INDEX, false))
       .WillRepeatedly(Return(nullptr));
   // alternate 4 non-null and 4 null via [0xf0 for x in range(512 / 8)]
   const unsigned char buffer1[] = {0x3d, 0xf0};
-  EXPECT_CALL(streams_, getStreamProxy(1, proto::Stream_Kind_PRESENT, false))
+  EXPECT_CALL(*streams_, getStreamProxy(1, proto::Stream_Kind_PRESENT, false))
       .WillRepeatedly(Return(
           new SeekableArrayInputStream(buffer1, VELOX_ARRAY_SIZE(buffer1))));
 
   // [0x0f for x in range(256 / 8)]
   const unsigned char buffer2[] = {0x1d, 0x0f};
-  EXPECT_CALL(streams_, getStreamProxy(1, proto::Stream_Kind_DATA, true))
+  EXPECT_CALL(*streams_, getStreamProxy(1, proto::Stream_Kind_DATA, true))
       .WillRepeatedly(Return(
           new SeekableArrayInputStream(buffer2, VELOX_ARRAY_SIZE(buffer2))));
 
@@ -448,25 +449,25 @@ TEST_P(TestColumnReader, testBooleanWithNullsFractional) {
   // set getEncoding
   proto::ColumnEncoding directEncoding;
   directEncoding.set_kind(proto::ColumnEncoding_Kind_DIRECT);
-  EXPECT_CALL(streams_, getEncodingProxy(_))
+  EXPECT_CALL(*streams_, getEncodingProxy(_))
       .WillRepeatedly(Return(&directEncoding));
 
   // set getStream
-  EXPECT_CALL(streams_, getStreamProxy(0, proto::Stream_Kind_PRESENT, false))
+  EXPECT_CALL(*streams_, getStreamProxy(0, proto::Stream_Kind_PRESENT, false))
       .WillRepeatedly(Return(nullptr));
-  EXPECT_CALL(streams_, getStreamProxy(0, proto::Stream_Kind_ROW_INDEX, false))
+  EXPECT_CALL(*streams_, getStreamProxy(0, proto::Stream_Kind_ROW_INDEX, false))
       .WillRepeatedly(Return(nullptr));
-  EXPECT_CALL(streams_, getStreamProxy(1, proto::Stream_Kind_ROW_INDEX, false))
+  EXPECT_CALL(*streams_, getStreamProxy(1, proto::Stream_Kind_ROW_INDEX, false))
       .WillRepeatedly(Return(nullptr));
   // alternate 4 non-null and 4 null via [0xf0 for x in range(512 / 8)]
   std::array<const unsigned char, 2> buffer1 = {0x3d, 0xf0};
-  EXPECT_CALL(streams_, getStreamProxy(1, proto::Stream_Kind_PRESENT, false))
+  EXPECT_CALL(*streams_, getStreamProxy(1, proto::Stream_Kind_PRESENT, false))
       .WillRepeatedly(
           Return(new SeekableArrayInputStream(buffer1.data(), buffer1.size())));
 
   // [0x0f for x in range(256 / 8)]
   std::array<const unsigned char, 2> buffer2 = {0x1d, 0x0f};
-  EXPECT_CALL(streams_, getStreamProxy(1, proto::Stream_Kind_DATA, true))
+  EXPECT_CALL(*streams_, getStreamProxy(1, proto::Stream_Kind_DATA, true))
       .WillRepeatedly(
           Return(new SeekableArrayInputStream(buffer2.data(), buffer2.size())));
 
@@ -511,24 +512,24 @@ TEST_P(TestColumnReader, testBooleanSkipsWithNulls) {
   // set getEncoding
   proto::ColumnEncoding directEncoding;
   directEncoding.set_kind(proto::ColumnEncoding_Kind_DIRECT);
-  EXPECT_CALL(streams_, getEncodingProxy(_))
+  EXPECT_CALL(*streams_, getEncodingProxy(_))
       .WillRepeatedly(Return(&directEncoding));
 
   // set getStream
-  EXPECT_CALL(streams_, getStreamProxy(0, proto::Stream_Kind_PRESENT, false))
+  EXPECT_CALL(*streams_, getStreamProxy(0, proto::Stream_Kind_PRESENT, false))
       .WillRepeatedly(Return(nullptr));
-  EXPECT_CALL(streams_, getStreamProxy(0, proto::Stream_Kind_ROW_INDEX, false))
+  EXPECT_CALL(*streams_, getStreamProxy(0, proto::Stream_Kind_ROW_INDEX, false))
       .WillRepeatedly(Return(nullptr));
-  EXPECT_CALL(streams_, getStreamProxy(1, proto::Stream_Kind_ROW_INDEX, false))
+  EXPECT_CALL(*streams_, getStreamProxy(1, proto::Stream_Kind_ROW_INDEX, false))
       .WillRepeatedly(Return(nullptr));
   // alternate 4 non-null and 4 null via [0xf0 for x in range(512 / 8)]
   const unsigned char buffer1[] = {0x3d, 0xf0};
-  EXPECT_CALL(streams_, getStreamProxy(1, proto::Stream_Kind_PRESENT, false))
+  EXPECT_CALL(*streams_, getStreamProxy(1, proto::Stream_Kind_PRESENT, false))
       .WillRepeatedly(Return(
           new SeekableArrayInputStream(buffer1, VELOX_ARRAY_SIZE(buffer1))));
   // [0x0f for x in range(128 / 8)]
   const unsigned char buffer2[] = {0x1d, 0x0f};
-  EXPECT_CALL(streams_, getStreamProxy(1, proto::Stream_Kind_DATA, true))
+  EXPECT_CALL(*streams_, getStreamProxy(1, proto::Stream_Kind_DATA, true))
       .WillRepeatedly(Return(
           new SeekableArrayInputStream(buffer2, VELOX_ARRAY_SIZE(buffer2))));
 
@@ -566,19 +567,19 @@ TEST_P(TestColumnReader, testByteWithNulls) {
   // set getEncoding
   proto::ColumnEncoding directEncoding;
   directEncoding.set_kind(proto::ColumnEncoding_Kind_DIRECT);
-  EXPECT_CALL(streams_, getEncodingProxy(_))
+  EXPECT_CALL(*streams_, getEncodingProxy(_))
       .WillRepeatedly(Return(&directEncoding));
 
   // set getStream
-  EXPECT_CALL(streams_, getStreamProxy(0, proto::Stream_Kind_PRESENT, false))
+  EXPECT_CALL(*streams_, getStreamProxy(0, proto::Stream_Kind_PRESENT, false))
       .WillRepeatedly(Return(nullptr));
-  EXPECT_CALL(streams_, getStreamProxy(0, proto::Stream_Kind_ROW_INDEX, false))
+  EXPECT_CALL(*streams_, getStreamProxy(0, proto::Stream_Kind_ROW_INDEX, false))
       .WillRepeatedly(Return(nullptr));
-  EXPECT_CALL(streams_, getStreamProxy(1, proto::Stream_Kind_ROW_INDEX, false))
+  EXPECT_CALL(*streams_, getStreamProxy(1, proto::Stream_Kind_ROW_INDEX, false))
       .WillRepeatedly(Return(nullptr));
   // alternate 4 non-null and 4 null via [0xf0 for x in range(512 / 8)]
   const unsigned char buffer1[] = {0x3d, 0xf0};
-  EXPECT_CALL(streams_, getStreamProxy(1, proto::Stream_Kind_PRESENT, false))
+  EXPECT_CALL(*streams_, getStreamProxy(1, proto::Stream_Kind_PRESENT, false))
       .WillRepeatedly(Return(
           new SeekableArrayInputStream(buffer1, VELOX_ARRAY_SIZE(buffer1))));
 
@@ -592,7 +593,7 @@ TEST_P(TestColumnReader, testByteWithNulls) {
   for (uint32_t i = 128; i < 256; ++i) {
     buffer[i + 2] = static_cast<char>(i);
   }
-  EXPECT_CALL(streams_, getStreamProxy(1, proto::Stream_Kind_DATA, true))
+  EXPECT_CALL(*streams_, getStreamProxy(1, proto::Stream_Kind_DATA, true))
       .WillRepeatedly(Return(
           new SeekableArrayInputStream(buffer, VELOX_ARRAY_SIZE(buffer))));
 
@@ -622,22 +623,22 @@ TEST_P(TestColumnReader, testBatchReusedSizeEnsured) {
   // set getEncoding
   proto::ColumnEncoding directEncoding;
   directEncoding.set_kind(proto::ColumnEncoding_Kind_DIRECT);
-  EXPECT_CALL(streams_, getEncodingProxy(_))
+  EXPECT_CALL(*streams_, getEncodingProxy(_))
       .WillRepeatedly(Return(&directEncoding));
 
   // set getStream
-  EXPECT_CALL(streams_, getStreamProxy(0, proto::Stream_Kind_PRESENT, false))
+  EXPECT_CALL(*streams_, getStreamProxy(0, proto::Stream_Kind_PRESENT, false))
       .WillRepeatedly(Return(nullptr));
-  EXPECT_CALL(streams_, getStreamProxy(0, proto::Stream_Kind_ROW_INDEX, false))
+  EXPECT_CALL(*streams_, getStreamProxy(0, proto::Stream_Kind_ROW_INDEX, false))
       .WillRepeatedly(Return(nullptr));
-  EXPECT_CALL(streams_, getStreamProxy(1, proto::Stream_Kind_ROW_INDEX, false))
+  EXPECT_CALL(*streams_, getStreamProxy(1, proto::Stream_Kind_ROW_INDEX, false))
       .WillRepeatedly(Return(nullptr));
-  EXPECT_CALL(streams_, getStreamProxy(1, proto::Stream_Kind_PRESENT, false))
+  EXPECT_CALL(*streams_, getStreamProxy(1, proto::Stream_Kind_PRESENT, false))
       .WillRepeatedly(Return(nullptr));
 
   // build up 3 rows of byte value
   const std::array<unsigned char, 2> buffer = {0x3d, 0xf0};
-  EXPECT_CALL(streams_, getStreamProxy(1, proto::Stream_Kind_DATA, true))
+  EXPECT_CALL(*streams_, getStreamProxy(1, proto::Stream_Kind_DATA, true))
       .WillRepeatedly(
           Return(new SeekableArrayInputStream(buffer.data(), buffer.size())));
 
@@ -661,19 +662,19 @@ TEST_P(TestColumnReader, testByteSkipsWithNulls) {
   // set getEncoding
   proto::ColumnEncoding directEncoding;
   directEncoding.set_kind(proto::ColumnEncoding_Kind_DIRECT);
-  EXPECT_CALL(streams_, getEncodingProxy(_))
+  EXPECT_CALL(*streams_, getEncodingProxy(_))
       .WillRepeatedly(Return(&directEncoding));
 
   // set getStream
-  EXPECT_CALL(streams_, getStreamProxy(0, proto::Stream_Kind_PRESENT, false))
+  EXPECT_CALL(*streams_, getStreamProxy(0, proto::Stream_Kind_PRESENT, false))
       .WillRepeatedly(Return(nullptr));
-  EXPECT_CALL(streams_, getStreamProxy(0, proto::Stream_Kind_ROW_INDEX, false))
+  EXPECT_CALL(*streams_, getStreamProxy(0, proto::Stream_Kind_ROW_INDEX, false))
       .WillRepeatedly(Return(nullptr));
-  EXPECT_CALL(streams_, getStreamProxy(1, proto::Stream_Kind_ROW_INDEX, false))
+  EXPECT_CALL(*streams_, getStreamProxy(1, proto::Stream_Kind_ROW_INDEX, false))
       .WillRepeatedly(Return(nullptr));
   // alternate 4 non-null and 4 null via [0xf0 for x in range(512 / 8)]
   const unsigned char buffer1[] = {0x3d, 0xf0};
-  EXPECT_CALL(streams_, getStreamProxy(1, proto::Stream_Kind_PRESENT, false))
+  EXPECT_CALL(*streams_, getStreamProxy(1, proto::Stream_Kind_PRESENT, false))
       .WillRepeatedly(Return(
           new SeekableArrayInputStream(buffer1, VELOX_ARRAY_SIZE(buffer1))));
 
@@ -687,7 +688,7 @@ TEST_P(TestColumnReader, testByteSkipsWithNulls) {
   for (uint32_t i = 128; i < 256; ++i) {
     buffer[i + 2] = static_cast<char>(i);
   }
-  EXPECT_CALL(streams_, getStreamProxy(1, proto::Stream_Kind_DATA, true))
+  EXPECT_CALL(*streams_, getStreamProxy(1, proto::Stream_Kind_DATA, true))
       .WillRepeatedly(Return(
           new SeekableArrayInputStream(buffer, VELOX_ARRAY_SIZE(buffer))));
 
@@ -725,24 +726,24 @@ TEST_P(TestColumnReader, testIntegerWithNulls) {
   // set getEncoding
   proto::ColumnEncoding directEncoding;
   directEncoding.set_kind(proto::ColumnEncoding_Kind_DIRECT);
-  EXPECT_CALL(streams_, getEncodingProxy(_))
+  EXPECT_CALL(*streams_, getEncodingProxy(_))
       .WillRepeatedly(Return(&directEncoding));
 
   // set getStream
-  EXPECT_CALL(streams_, getStreamProxy(0, proto::Stream_Kind_PRESENT, false))
+  EXPECT_CALL(*streams_, getStreamProxy(0, proto::Stream_Kind_PRESENT, false))
       .WillRepeatedly(Return(nullptr));
-  EXPECT_CALL(streams_, getStreamProxy(0, proto::Stream_Kind_ROW_INDEX, false))
+  EXPECT_CALL(*streams_, getStreamProxy(0, proto::Stream_Kind_ROW_INDEX, false))
       .WillRepeatedly(Return(nullptr));
-  EXPECT_CALL(streams_, getStreamProxy(1, proto::Stream_Kind_ROW_INDEX, false))
+  EXPECT_CALL(*streams_, getStreamProxy(1, proto::Stream_Kind_ROW_INDEX, false))
       .WillRepeatedly(Return(nullptr));
   const unsigned char buffer1[] = {0x16, 0xf0};
-  EXPECT_CALL(streams_, getStreamProxy(1, proto::Stream_Kind_PRESENT, false))
+  EXPECT_CALL(*streams_, getStreamProxy(1, proto::Stream_Kind_PRESENT, false))
       .WillRepeatedly(Return(
           new SeekableArrayInputStream(buffer1, VELOX_ARRAY_SIZE(buffer1))));
 
   char buffer2[1024];
   size_t size = writeRange(buffer2, 0, 100);
-  EXPECT_CALL(streams_, getStreamProxy(1, proto::Stream_Kind_DATA, true))
+  EXPECT_CALL(*streams_, getStreamProxy(1, proto::Stream_Kind_DATA, true))
       .WillRepeatedly(Return(new SeekableArrayInputStream(buffer2, size)));
 
   // create the row type
@@ -773,17 +774,17 @@ TEST_P(TestColumnReader, testIntDictSkipNoNullsAllInDict) {
   proto::ColumnEncoding dictEncoding;
   dictEncoding.set_kind(proto::ColumnEncoding_Kind_DICTIONARY);
   dictEncoding.set_dictionarysize(100);
-  EXPECT_CALL(streams_, getEncodingProxy(_))
+  EXPECT_CALL(*streams_, getEncodingProxy(_))
       .WillRepeatedly(Return(&directEncoding));
-  EXPECT_CALL(streams_, getEncodingProxy(1))
+  EXPECT_CALL(*streams_, getEncodingProxy(1))
       .WillRepeatedly(Return(&dictEncoding));
 
   // set getStream
-  EXPECT_CALL(streams_, getStreamProxy(_, proto::Stream_Kind_ROW_INDEX, false))
+  EXPECT_CALL(*streams_, getStreamProxy(_, proto::Stream_Kind_ROW_INDEX, false))
       .WillRepeatedly(Return(nullptr));
-  EXPECT_CALL(streams_, getStreamProxy(0, proto::Stream_Kind_ROW_INDEX, false))
+  EXPECT_CALL(*streams_, getStreamProxy(0, proto::Stream_Kind_ROW_INDEX, false))
       .WillRepeatedly(Return(nullptr));
-  EXPECT_CALL(streams_, getStreamProxy(_, proto::Stream_Kind_PRESENT, false))
+  EXPECT_CALL(*streams_, getStreamProxy(_, proto::Stream_Kind_PRESENT, false))
       .WillRepeatedly(Return(nullptr));
 
   // even row points to dictionary.
@@ -794,14 +795,14 @@ TEST_P(TestColumnReader, testIntDictSkipNoNullsAllInDict) {
     v.push_back(i);
   }
   size_t size = writeVuLongs(data + 1, v);
-  EXPECT_CALL(streams_, getStreamProxy(1, proto::Stream_Kind_DATA, true))
+  EXPECT_CALL(*streams_, getStreamProxy(1, proto::Stream_Kind_DATA, true))
       .WillRepeatedly(Return(new SeekableArrayInputStream(data, size + 1)));
 
   EXPECT_CALL(
-      streams_, getStreamProxy(1, proto::Stream_Kind_IN_DICTIONARY, false))
+      *streams_, getStreamProxy(1, proto::Stream_Kind_IN_DICTIONARY, false))
       .WillRepeatedly(Return(nullptr));
 
-  EXPECT_CALL(streams_, genMockDictDataSetter(1, 0))
+  EXPECT_CALL(*streams_, genMockDictDataSetter(1, 0))
       .WillRepeatedly(Return([&](BufferPtr& buffer, MemoryPool* pool) {
         buffer = useSelectiveReader() ? sequence<int32_t>(pool, 0, 100)
                                       : sequence<int64_t>(pool, 0, 100);
@@ -842,20 +843,20 @@ TEST_P(TestColumnReader, testIntDictSkipWithNulls) {
   proto::ColumnEncoding dictEncoding;
   dictEncoding.set_kind(proto::ColumnEncoding_Kind_DICTIONARY);
   dictEncoding.set_dictionarysize(50);
-  EXPECT_CALL(streams_, getEncodingProxy(_))
+  EXPECT_CALL(*streams_, getEncodingProxy(_))
       .WillRepeatedly(Return(&directEncoding));
-  EXPECT_CALL(streams_, getEncodingProxy(1))
+  EXPECT_CALL(*streams_, getEncodingProxy(1))
       .WillRepeatedly(Return(&dictEncoding));
 
   // set getStream
-  EXPECT_CALL(streams_, getStreamProxy(0, proto::Stream_Kind_PRESENT, false))
+  EXPECT_CALL(*streams_, getStreamProxy(0, proto::Stream_Kind_PRESENT, false))
       .WillRepeatedly(Return(nullptr));
-  EXPECT_CALL(streams_, getStreamProxy(0, proto::Stream_Kind_ROW_INDEX, false))
+  EXPECT_CALL(*streams_, getStreamProxy(0, proto::Stream_Kind_ROW_INDEX, false))
       .WillRepeatedly(Return(nullptr));
-  EXPECT_CALL(streams_, getStreamProxy(1, proto::Stream_Kind_ROW_INDEX, false))
+  EXPECT_CALL(*streams_, getStreamProxy(1, proto::Stream_Kind_ROW_INDEX, false))
       .WillRepeatedly(Return(nullptr));
   const unsigned char buffer1[] = {0x16, 0xaa};
-  EXPECT_CALL(streams_, getStreamProxy(1, proto::Stream_Kind_PRESENT, false))
+  EXPECT_CALL(*streams_, getStreamProxy(1, proto::Stream_Kind_PRESENT, false))
       .WillRepeatedly(Return(
           new SeekableArrayInputStream(buffer1, VELOX_ARRAY_SIZE(buffer1))));
 
@@ -867,16 +868,16 @@ TEST_P(TestColumnReader, testIntDictSkipWithNulls) {
     v.push_back(i % 2 == 0 ? i / 2 : i + 1000);
   }
   size_t size = writeVuLongs(buffer2 + 1, v);
-  EXPECT_CALL(streams_, getStreamProxy(1, proto::Stream_Kind_DATA, true))
+  EXPECT_CALL(*streams_, getStreamProxy(1, proto::Stream_Kind_DATA, true))
       .WillRepeatedly(Return(new SeekableArrayInputStream(buffer2, size + 1)));
 
   const unsigned char buffer3[] = {0x0a, 0xaa};
   EXPECT_CALL(
-      streams_, getStreamProxy(1, proto::Stream_Kind_IN_DICTIONARY, false))
+      *streams_, getStreamProxy(1, proto::Stream_Kind_IN_DICTIONARY, false))
       .WillRepeatedly(Return(
           new SeekableArrayInputStream(buffer3, VELOX_ARRAY_SIZE(buffer3))));
 
-  EXPECT_CALL(streams_, genMockDictDataSetter(1, 0))
+  EXPECT_CALL(*streams_, genMockDictDataSetter(1, 0))
       .WillRepeatedly(Return([&](BufferPtr& buffer, MemoryPool* pool) {
         if (useSelectiveReader()) {
           buffer = AlignedBuffer::allocate<int32_t>(1024, pool);
@@ -929,22 +930,22 @@ TEST_P(TestColumnReader, testIntDictBoundary) {
   // set getEncoding
   proto::ColumnEncoding directEncoding;
   directEncoding.set_kind(proto::ColumnEncoding_Kind_DIRECT);
-  EXPECT_CALL(streams_, getEncodingProxy(_))
+  EXPECT_CALL(*streams_, getEncodingProxy(_))
       .WillRepeatedly(Return(&directEncoding));
 
   constexpr size_t dictSize = std::numeric_limits<uint16_t>::max() + 1;
   proto::ColumnEncoding dictEncoding;
   dictEncoding.set_kind(proto::ColumnEncoding_Kind_DICTIONARY);
   dictEncoding.set_dictionarysize(dictSize);
-  EXPECT_CALL(streams_, getEncodingProxy(1))
+  EXPECT_CALL(*streams_, getEncodingProxy(1))
       .WillRepeatedly(Return(&dictEncoding));
 
   // set getStream
-  EXPECT_CALL(streams_, getStreamProxy(_, proto::Stream_Kind_ROW_INDEX, false))
+  EXPECT_CALL(*streams_, getStreamProxy(_, proto::Stream_Kind_ROW_INDEX, false))
       .WillRepeatedly(Return(nullptr));
-  EXPECT_CALL(streams_, getStreamProxy(0, proto::Stream_Kind_ROW_INDEX, false))
+  EXPECT_CALL(*streams_, getStreamProxy(0, proto::Stream_Kind_ROW_INDEX, false))
       .WillRepeatedly(Return(nullptr));
-  EXPECT_CALL(streams_, getStreamProxy(_, proto::Stream_Kind_PRESENT, false))
+  EXPECT_CALL(*streams_, getStreamProxy(_, proto::Stream_Kind_PRESENT, false))
       .WillRepeatedly(Return(nullptr));
 
   // even row points to dictionary.
@@ -959,14 +960,14 @@ TEST_P(TestColumnReader, testIntDictBoundary) {
     size = writeVuLong(data.data(), size, count);
     count += toWrite;
   }
-  EXPECT_CALL(streams_, getStreamProxy(1, proto::Stream_Kind_DATA, true))
+  EXPECT_CALL(*streams_, getStreamProxy(1, proto::Stream_Kind_DATA, true))
       .WillRepeatedly(Return(new SeekableArrayInputStream(data.data(), size)));
 
   EXPECT_CALL(
-      streams_, getStreamProxy(1, proto::Stream_Kind_IN_DICTIONARY, false))
+      *streams_, getStreamProxy(1, proto::Stream_Kind_IN_DICTIONARY, false))
       .WillRepeatedly(Return(nullptr));
 
-  EXPECT_CALL(streams_, genMockDictDataSetter(1, 0))
+  EXPECT_CALL(*streams_, genMockDictDataSetter(1, 0))
       .WillRepeatedly(Return([&](BufferPtr& buffer, MemoryPool* pool) {
         int64_t begin = std::numeric_limits<int16_t>::min();
         auto end =
@@ -997,41 +998,41 @@ TEST_P(StringReaderTests, testDictionaryWithNulls) {
   // set getEncoding
   proto::ColumnEncoding directEncoding;
   directEncoding.set_kind(proto::ColumnEncoding_Kind_DIRECT);
-  EXPECT_CALL(streams_, getEncodingProxy(0))
+  EXPECT_CALL(*streams_, getEncodingProxy(0))
       .WillRepeatedly(Return(&directEncoding));
   proto::ColumnEncoding dictionaryEncoding;
   dictionaryEncoding.set_kind(proto::ColumnEncoding_Kind_DICTIONARY);
   dictionaryEncoding.set_dictionarysize(2);
-  EXPECT_CALL(streams_, getEncodingProxy(1))
+  EXPECT_CALL(*streams_, getEncodingProxy(1))
       .WillRepeatedly(Return(&dictionaryEncoding));
 
   // set getStream
-  EXPECT_CALL(streams_, getStreamProxy(0, proto::Stream_Kind_PRESENT, false))
+  EXPECT_CALL(*streams_, getStreamProxy(0, proto::Stream_Kind_PRESENT, false))
       .WillRepeatedly(Return(nullptr));
-  EXPECT_CALL(streams_, getStreamProxy(0, proto::Stream_Kind_ROW_INDEX, false))
+  EXPECT_CALL(*streams_, getStreamProxy(0, proto::Stream_Kind_ROW_INDEX, false))
       .WillRepeatedly(Return(nullptr));
-  EXPECT_CALL(streams_, getStreamProxy(1, _, _))
+  EXPECT_CALL(*streams_, getStreamProxy(1, _, _))
       .WillRepeatedly(Return(nullptr));
   const unsigned char buffer1[] = {0x19, 0xf0};
-  EXPECT_CALL(streams_, getStreamProxy(1, proto::Stream_Kind_PRESENT, false))
+  EXPECT_CALL(*streams_, getStreamProxy(1, proto::Stream_Kind_PRESENT, false))
       .WillRepeatedly(Return(
           new SeekableArrayInputStream(buffer1, VELOX_ARRAY_SIZE(buffer1))));
   const unsigned char buffer2[] = {0x2f, 0x00, 0x00, 0x2f, 0x00, 0x01};
-  EXPECT_CALL(streams_, getStreamProxy(1, proto::Stream_Kind_DATA, true))
+  EXPECT_CALL(*streams_, getStreamProxy(1, proto::Stream_Kind_DATA, true))
       .WillRepeatedly(Return(
           new SeekableArrayInputStream(buffer2, VELOX_ARRAY_SIZE(buffer2))));
   const unsigned char buffer3[] = {0x4f, 0x52, 0x43, 0x4f, 0x77, 0x65, 0x6e};
   EXPECT_CALL(
-      streams_, getStreamProxy(1, proto::Stream_Kind_DICTIONARY_DATA, false))
+      *streams_, getStreamProxy(1, proto::Stream_Kind_DICTIONARY_DATA, false))
       .WillRepeatedly(Return(
           new SeekableArrayInputStream(buffer3, VELOX_ARRAY_SIZE(buffer3))));
   const unsigned char buffer4[] = {0x02, 0x01, 0x03};
-  EXPECT_CALL(streams_, getStreamProxy(1, proto::Stream_Kind_LENGTH, false))
+  EXPECT_CALL(*streams_, getStreamProxy(1, proto::Stream_Kind_LENGTH, false))
       .WillRepeatedly(Return(
           new SeekableArrayInputStream(buffer4, VELOX_ARRAY_SIZE(buffer4))));
 
   TestStrideIndexProvider provider(10000);
-  EXPECT_CALL(streams_, getStrideIndexProviderProxy())
+  EXPECT_CALL(*streams_, getStrideIndexProviderProxy())
       .WillRepeatedly(Return(&provider));
 
   // create the row type
@@ -1069,12 +1070,12 @@ TEST_P(StringReaderTests, testStringDictSkipNoNulls) {
   // set getEncoding
   proto::ColumnEncoding directEncoding;
   directEncoding.set_kind(proto::ColumnEncoding_Kind_DIRECT);
-  EXPECT_CALL(streams_, getEncodingProxy(_))
+  EXPECT_CALL(*streams_, getEncodingProxy(_))
       .WillRepeatedly(Return(&directEncoding));
   proto::ColumnEncoding dictionaryEncoding;
   dictionaryEncoding.set_kind(proto::ColumnEncoding_Kind_DICTIONARY);
   dictionaryEncoding.set_dictionarysize(50);
-  EXPECT_CALL(streams_, getEncodingProxy(1))
+  EXPECT_CALL(*streams_, getEncodingProxy(1))
       .WillRepeatedly(Return(&dictionaryEncoding));
 
   // set row index
@@ -1082,9 +1083,9 @@ TEST_P(StringReaderTests, testStringDictSkipNoNulls) {
   proto::RowIndex index;
 
   // set getStream
-  EXPECT_CALL(streams_, getStreamProxy(_, proto::Stream_Kind_PRESENT, false))
+  EXPECT_CALL(*streams_, getStreamProxy(_, proto::Stream_Kind_PRESENT, false))
       .WillRepeatedly(Return(nullptr));
-  EXPECT_CALL(streams_, getStreamProxy(0, proto::Stream_Kind_ROW_INDEX, false))
+  EXPECT_CALL(*streams_, getStreamProxy(0, proto::Stream_Kind_ROW_INDEX, false))
       .WillRepeatedly(Return(nullptr));
 
   char data[1024];
@@ -1128,13 +1129,13 @@ TEST_P(StringReaderTests, testStringDictSkipNoNulls) {
     }
   }
   entry->add_positions(strideDictSize);
-  EXPECT_CALL(streams_, getStreamProxy(1, proto::Stream_Kind_DATA, true))
+  EXPECT_CALL(*streams_, getStreamProxy(1, proto::Stream_Kind_DATA, true))
       .WillRepeatedly(Return(new SeekableArrayInputStream(data, len)));
   EXPECT_CALL(
-      streams_, getStreamProxy(1, proto::Stream_Kind_DICTIONARY_DATA, false))
+      *streams_, getStreamProxy(1, proto::Stream_Kind_DICTIONARY_DATA, false))
       .WillRepeatedly(Return(new SeekableArrayInputStream(dict, dictLen)));
   EXPECT_CALL(
-      streams_, getStreamProxy(1, proto::Stream_Kind_STRIDE_DICTIONARY, true))
+      *streams_, getStreamProxy(1, proto::Stream_Kind_STRIDE_DICTIONARY, true))
       .WillRepeatedly(
           Return(new SeekableArrayInputStream(strideDict, strideDictLen)));
 
@@ -1149,26 +1150,26 @@ TEST_P(StringReaderTests, testStringDictSkipNoNulls) {
     strideDictLen = writeVuLong(
         strideDictLength, strideDictLen, strideDictVals[i].length());
   }
-  EXPECT_CALL(streams_, getStreamProxy(1, proto::Stream_Kind_LENGTH, false))
+  EXPECT_CALL(*streams_, getStreamProxy(1, proto::Stream_Kind_LENGTH, false))
       .WillRepeatedly(
           Return(new SeekableArrayInputStream(dictLength, dictLen)));
   EXPECT_CALL(
-      streams_,
+      *streams_,
       getStreamProxy(1, proto::Stream_Kind_STRIDE_DICTIONARY_LENGTH, true))
       .WillRepeatedly(Return(
           new SeekableArrayInputStream(strideDictLength, strideDictLen)));
   const unsigned char inDict[] = {0x0a, 0xaa};
   EXPECT_CALL(
-      streams_, getStreamProxy(1, proto::Stream_Kind_IN_DICTIONARY, false))
+      *streams_, getStreamProxy(1, proto::Stream_Kind_IN_DICTIONARY, false))
       .WillRepeatedly(Return(
           new SeekableArrayInputStream(inDict, VELOX_ARRAY_SIZE(inDict))));
 
   auto indexData = index.SerializePartialAsString();
-  EXPECT_CALL(streams_, getStreamProxy(1, proto::Stream_Kind_ROW_INDEX, _))
+  EXPECT_CALL(*streams_, getStreamProxy(1, proto::Stream_Kind_ROW_INDEX, _))
       .WillRepeatedly(Return(
           new SeekableArrayInputStream(indexData.data(), indexData.size())));
   TestStrideIndexProvider provider(rowIndexStride);
-  EXPECT_CALL(streams_, getStrideIndexProviderProxy())
+  EXPECT_CALL(*streams_, getStrideIndexProviderProxy())
       .WillRepeatedly(Return(&provider));
 
   // create the row type
@@ -1226,12 +1227,12 @@ TEST_P(StringReaderTests, testStringDictSkipWithNulls) {
   // set getEncoding
   proto::ColumnEncoding directEncoding;
   directEncoding.set_kind(proto::ColumnEncoding_Kind_DIRECT);
-  EXPECT_CALL(streams_, getEncodingProxy(_))
+  EXPECT_CALL(*streams_, getEncodingProxy(_))
       .WillRepeatedly(Return(&directEncoding));
   proto::ColumnEncoding dictionaryEncoding;
   dictionaryEncoding.set_kind(proto::ColumnEncoding_Kind_DICTIONARY);
   dictionaryEncoding.set_dictionarysize(50);
-  EXPECT_CALL(streams_, getEncodingProxy(1))
+  EXPECT_CALL(*streams_, getEncodingProxy(1))
       .WillRepeatedly(Return(&dictionaryEncoding));
 
   // set row index
@@ -1239,12 +1240,12 @@ TEST_P(StringReaderTests, testStringDictSkipWithNulls) {
   proto::RowIndex index;
 
   // set getStream
-  EXPECT_CALL(streams_, getStreamProxy(0, proto::Stream_Kind_PRESENT, false))
+  EXPECT_CALL(*streams_, getStreamProxy(0, proto::Stream_Kind_PRESENT, false))
       .WillRepeatedly(Return(nullptr));
-  EXPECT_CALL(streams_, getStreamProxy(0, proto::Stream_Kind_ROW_INDEX, false))
+  EXPECT_CALL(*streams_, getStreamProxy(0, proto::Stream_Kind_ROW_INDEX, false))
       .WillRepeatedly(Return(nullptr));
   const unsigned char present[] = {0x16, 0xaa};
-  EXPECT_CALL(streams_, getStreamProxy(1, proto::Stream_Kind_PRESENT, false))
+  EXPECT_CALL(*streams_, getStreamProxy(1, proto::Stream_Kind_PRESENT, false))
       .WillRepeatedly(Return(
           new SeekableArrayInputStream(present, VELOX_ARRAY_SIZE(present))));
 
@@ -1294,13 +1295,13 @@ TEST_P(StringReaderTests, testStringDictSkipWithNulls) {
     }
   }
   entry->add_positions(strideDictSize);
-  EXPECT_CALL(streams_, getStreamProxy(1, proto::Stream_Kind_DATA, true))
+  EXPECT_CALL(*streams_, getStreamProxy(1, proto::Stream_Kind_DATA, true))
       .WillRepeatedly(Return(new SeekableArrayInputStream(data, len)));
   EXPECT_CALL(
-      streams_, getStreamProxy(1, proto::Stream_Kind_DICTIONARY_DATA, false))
+      *streams_, getStreamProxy(1, proto::Stream_Kind_DICTIONARY_DATA, false))
       .WillRepeatedly(Return(new SeekableArrayInputStream(dict, dictLen)));
   EXPECT_CALL(
-      streams_, getStreamProxy(1, proto::Stream_Kind_STRIDE_DICTIONARY, true))
+      *streams_, getStreamProxy(1, proto::Stream_Kind_STRIDE_DICTIONARY, true))
       .WillRepeatedly(
           Return(new SeekableArrayInputStream(strideDict, strideDictLen)));
 
@@ -1315,26 +1316,26 @@ TEST_P(StringReaderTests, testStringDictSkipWithNulls) {
     strideDictLen = writeVuLong(
         strideDictLength, strideDictLen, strideDictVals[i].length());
   }
-  EXPECT_CALL(streams_, getStreamProxy(1, proto::Stream_Kind_LENGTH, false))
+  EXPECT_CALL(*streams_, getStreamProxy(1, proto::Stream_Kind_LENGTH, false))
       .WillRepeatedly(
           Return(new SeekableArrayInputStream(dictLength, dictLen)));
   EXPECT_CALL(
-      streams_,
+      *streams_,
       getStreamProxy(1, proto::Stream_Kind_STRIDE_DICTIONARY_LENGTH, true))
       .WillRepeatedly(Return(
           new SeekableArrayInputStream(strideDictLength, strideDictLen)));
   const unsigned char inDict[] = {0x0a, 0xaa};
   EXPECT_CALL(
-      streams_, getStreamProxy(1, proto::Stream_Kind_IN_DICTIONARY, false))
+      *streams_, getStreamProxy(1, proto::Stream_Kind_IN_DICTIONARY, false))
       .WillRepeatedly(Return(
           new SeekableArrayInputStream(inDict, VELOX_ARRAY_SIZE(inDict))));
 
   auto indexData = index.SerializePartialAsString();
-  EXPECT_CALL(streams_, getStreamProxy(1, proto::Stream_Kind_ROW_INDEX, _))
+  EXPECT_CALL(*streams_, getStreamProxy(1, proto::Stream_Kind_ROW_INDEX, _))
       .WillRepeatedly(Return(
           new SeekableArrayInputStream(indexData.data(), indexData.size())));
   TestStrideIndexProvider provider(rowIndexStride);
-  EXPECT_CALL(streams_, getStrideIndexProviderProxy())
+  EXPECT_CALL(*streams_, getStrideIndexProviderProxy())
       .WillRepeatedly(Return(&provider));
 
   // create the row type
@@ -1389,31 +1390,31 @@ TEST_P(TestNonSelectiveColumnReader, testSubstructsWithNulls) {
   // set getEncoding
   proto::ColumnEncoding directEncoding;
   directEncoding.set_kind(proto::ColumnEncoding_Kind_DIRECT);
-  EXPECT_CALL(streams_, getEncodingProxy(_))
+  EXPECT_CALL(*streams_, getEncodingProxy(_))
       .WillRepeatedly(Return(&directEncoding));
 
   // set getStream
-  EXPECT_CALL(streams_, getStreamProxy(0, proto::Stream_Kind_PRESENT, false))
+  EXPECT_CALL(*streams_, getStreamProxy(0, proto::Stream_Kind_PRESENT, false))
       .WillRepeatedly(Return(nullptr));
 
   const unsigned char buffer1[] = {0x16, 0x0f};
-  EXPECT_CALL(streams_, getStreamProxy(1, proto::Stream_Kind_PRESENT, false))
+  EXPECT_CALL(*streams_, getStreamProxy(1, proto::Stream_Kind_PRESENT, false))
       .WillRepeatedly(Return(
           new SeekableArrayInputStream(buffer1, VELOX_ARRAY_SIZE(buffer1))));
 
   const unsigned char buffer2[] = {0x0a, 0x55};
-  EXPECT_CALL(streams_, getStreamProxy(2, proto::Stream_Kind_PRESENT, false))
+  EXPECT_CALL(*streams_, getStreamProxy(2, proto::Stream_Kind_PRESENT, false))
       .WillRepeatedly(Return(
           new SeekableArrayInputStream(buffer2, VELOX_ARRAY_SIZE(buffer2))));
 
   const unsigned char buffer3[] = {0x04, 0xf0};
-  EXPECT_CALL(streams_, getStreamProxy(3, proto::Stream_Kind_PRESENT, false))
+  EXPECT_CALL(*streams_, getStreamProxy(3, proto::Stream_Kind_PRESENT, false))
       .WillRepeatedly(Return(
           new SeekableArrayInputStream(buffer3, VELOX_ARRAY_SIZE(buffer3))));
 
   char buffer4[256];
   size_t size = writeRange(buffer4, 0, 26);
-  EXPECT_CALL(streams_, getStreamProxy(3, proto::Stream_Kind_DATA, true))
+  EXPECT_CALL(*streams_, getStreamProxy(3, proto::Stream_Kind_DATA, true))
       .WillRepeatedly(Return(new SeekableArrayInputStream(buffer4, size)));
 
   // create the row type
@@ -1466,42 +1467,42 @@ TEST_P(TestColumnReader, testSkipWithNulls) {
   // set getEncoding
   proto::ColumnEncoding directEncoding;
   directEncoding.set_kind(proto::ColumnEncoding_Kind_DIRECT);
-  EXPECT_CALL(streams_, getEncodingProxy(_))
+  EXPECT_CALL(*streams_, getEncodingProxy(_))
       .WillRepeatedly(Return(&directEncoding));
   proto::ColumnEncoding dictionaryEncoding;
   dictionaryEncoding.set_kind(proto::ColumnEncoding_Kind_DICTIONARY);
   dictionaryEncoding.set_dictionarysize(100);
-  EXPECT_CALL(streams_, getEncodingProxy(2))
+  EXPECT_CALL(*streams_, getEncodingProxy(2))
       .WillRepeatedly(Return(&dictionaryEncoding));
 
   // set getStream
-  EXPECT_CALL(streams_, getStreamProxy(0, proto::Stream_Kind_PRESENT, false))
+  EXPECT_CALL(*streams_, getStreamProxy(0, proto::Stream_Kind_PRESENT, false))
       .WillRepeatedly(Return(nullptr));
-  EXPECT_CALL(streams_, getStreamProxy(0, proto::Stream_Kind_ROW_INDEX, false))
+  EXPECT_CALL(*streams_, getStreamProxy(0, proto::Stream_Kind_ROW_INDEX, false))
       .WillRepeatedly(Return(nullptr));
-  EXPECT_CALL(streams_, getStreamProxy(1, proto::Stream_Kind_ROW_INDEX, false))
+  EXPECT_CALL(*streams_, getStreamProxy(1, proto::Stream_Kind_ROW_INDEX, false))
       .WillRepeatedly(Return(nullptr));
   const unsigned char buffer1[] = {
       0x03, 0x00, 0xff, 0x3f, 0x08, 0xff, 0xff, 0xfc, 0x03, 0x00};
-  EXPECT_CALL(streams_, getStreamProxy(1, proto::Stream_Kind_PRESENT, false))
+  EXPECT_CALL(*streams_, getStreamProxy(1, proto::Stream_Kind_PRESENT, false))
       .WillRepeatedly(Return(
           new SeekableArrayInputStream(buffer1, VELOX_ARRAY_SIZE(buffer1))));
-  EXPECT_CALL(streams_, getStreamProxy(2, _, _))
+  EXPECT_CALL(*streams_, getStreamProxy(2, _, _))
       .WillRepeatedly(Return(nullptr));
-  EXPECT_CALL(streams_, getStreamProxy(2, proto::Stream_Kind_PRESENT, false))
+  EXPECT_CALL(*streams_, getStreamProxy(2, proto::Stream_Kind_PRESENT, false))
       .WillRepeatedly(Return(
           new SeekableArrayInputStream(buffer1, VELOX_ARRAY_SIZE(buffer1))));
 
   TestStrideIndexProvider provider(10000);
-  EXPECT_CALL(streams_, getStrideIndexProviderProxy())
+  EXPECT_CALL(*streams_, getStrideIndexProviderProxy())
       .WillRepeatedly(Return(&provider));
 
   char buffer2[1024];
   size_t size = writeRange(buffer2, 0, 100);
-  EXPECT_CALL(streams_, getStreamProxy(1, proto::Stream_Kind_DATA, true))
+  EXPECT_CALL(*streams_, getStreamProxy(1, proto::Stream_Kind_DATA, true))
       .WillRepeatedly(Return(new SeekableArrayInputStream(buffer2, size)));
   const unsigned char buffer3[] = {0x61, 0x01, 0x00};
-  EXPECT_CALL(streams_, getStreamProxy(2, proto::Stream_Kind_DATA, true))
+  EXPECT_CALL(*streams_, getStreamProxy(2, proto::Stream_Kind_DATA, true))
       .WillRepeatedly(Return(
           new SeekableArrayInputStream(buffer3, VELOX_ARRAY_SIZE(buffer3))));
 
@@ -1514,11 +1515,11 @@ TEST_P(TestColumnReader, testSkipWithNulls) {
     }
   }
   EXPECT_CALL(
-      streams_, getStreamProxy(2, proto::Stream_Kind_DICTIONARY_DATA, false))
+      *streams_, getStreamProxy(2, proto::Stream_Kind_DICTIONARY_DATA, false))
       .WillRepeatedly(Return(
           new SeekableArrayInputStream(digits, VELOX_ARRAY_SIZE(digits))));
   const unsigned char buffer4[] = {0x61, 0x00, 0x02};
-  EXPECT_CALL(streams_, getStreamProxy(2, proto::Stream_Kind_LENGTH, false))
+  EXPECT_CALL(*streams_, getStreamProxy(2, proto::Stream_Kind_LENGTH, false))
       .WillRepeatedly(Return(
           new SeekableArrayInputStream(buffer4, VELOX_ARRAY_SIZE(buffer4))));
 
@@ -1575,19 +1576,19 @@ TEST_P(StringReaderTests, testBinaryDirect) {
   // set getEncoding
   proto::ColumnEncoding directEncoding;
   directEncoding.set_kind(proto::ColumnEncoding_Kind_DIRECT);
-  EXPECT_CALL(streams_, getEncodingProxy(_))
+  EXPECT_CALL(*streams_, getEncodingProxy(_))
       .WillRepeatedly(Return(&directEncoding));
 
   // set getStream
-  EXPECT_CALL(streams_, getStreamProxy(0, proto::Stream_Kind_PRESENT, false))
+  EXPECT_CALL(*streams_, getStreamProxy(0, proto::Stream_Kind_PRESENT, false))
       .WillRepeatedly(Return(nullptr));
-  EXPECT_CALL(streams_, getStreamProxy(0, proto::Stream_Kind_ROW_INDEX, false))
-      .WillRepeatedly(Return(nullptr));
-
-  EXPECT_CALL(streams_, getStreamProxy(1, proto::Stream_Kind_ROW_INDEX, false))
+  EXPECT_CALL(*streams_, getStreamProxy(0, proto::Stream_Kind_ROW_INDEX, false))
       .WillRepeatedly(Return(nullptr));
 
-  EXPECT_CALL(streams_, getStreamProxy(1, proto::Stream_Kind_PRESENT, false))
+  EXPECT_CALL(*streams_, getStreamProxy(1, proto::Stream_Kind_ROW_INDEX, false))
+      .WillRepeatedly(Return(nullptr));
+
+  EXPECT_CALL(*streams_, getStreamProxy(1, proto::Stream_Kind_PRESENT, false))
       .WillRepeatedly(Return(nullptr));
 
   char blob[200];
@@ -1597,12 +1598,12 @@ TEST_P(StringReaderTests, testBinaryDirect) {
       blob[2 * (10 * i + j) + 1] = static_cast<char>(j);
     }
   }
-  EXPECT_CALL(streams_, getStreamProxy(1, proto::Stream_Kind_DATA, true))
+  EXPECT_CALL(*streams_, getStreamProxy(1, proto::Stream_Kind_DATA, true))
       .WillRepeatedly(
           Return(new SeekableArrayInputStream(blob, VELOX_ARRAY_SIZE(blob))));
 
   const unsigned char buffer[] = {0x61, 0x00, 0x02};
-  EXPECT_CALL(streams_, getStreamProxy(1, proto::Stream_Kind_LENGTH, true))
+  EXPECT_CALL(*streams_, getStreamProxy(1, proto::Stream_Kind_LENGTH, true))
       .WillRepeatedly(Return(
           new SeekableArrayInputStream(buffer, VELOX_ARRAY_SIZE(buffer))));
 
@@ -1639,20 +1640,20 @@ TEST_P(StringReaderTests, testBinaryDirectWithNulls) {
   // set getEncoding
   proto::ColumnEncoding directEncoding;
   directEncoding.set_kind(proto::ColumnEncoding_Kind_DIRECT);
-  EXPECT_CALL(streams_, getEncodingProxy(_))
+  EXPECT_CALL(*streams_, getEncodingProxy(_))
       .WillRepeatedly(Return(&directEncoding));
 
   // set getStream
-  EXPECT_CALL(streams_, getStreamProxy(0, proto::Stream_Kind_PRESENT, false))
+  EXPECT_CALL(*streams_, getStreamProxy(0, proto::Stream_Kind_PRESENT, false))
       .WillRepeatedly(Return(nullptr));
-  EXPECT_CALL(streams_, getStreamProxy(0, proto::Stream_Kind_ROW_INDEX, false))
+  EXPECT_CALL(*streams_, getStreamProxy(0, proto::Stream_Kind_ROW_INDEX, false))
       .WillRepeatedly(Return(nullptr));
 
-  EXPECT_CALL(streams_, getStreamProxy(1, proto::Stream_Kind_ROW_INDEX, false))
+  EXPECT_CALL(*streams_, getStreamProxy(1, proto::Stream_Kind_ROW_INDEX, false))
       .WillRepeatedly(Return(nullptr));
 
   const unsigned char buffer1[] = {0x1d, 0xf0};
-  EXPECT_CALL(streams_, getStreamProxy(1, proto::Stream_Kind_PRESENT, false))
+  EXPECT_CALL(*streams_, getStreamProxy(1, proto::Stream_Kind_PRESENT, false))
       .WillRepeatedly(Return(
           new SeekableArrayInputStream(buffer1, VELOX_ARRAY_SIZE(buffer1))));
 
@@ -1663,12 +1664,12 @@ TEST_P(StringReaderTests, testBinaryDirectWithNulls) {
       blob[2 * (16 * i + j) + 1] = static_cast<char>('A' + j);
     }
   }
-  EXPECT_CALL(streams_, getStreamProxy(1, proto::Stream_Kind_DATA, true))
+  EXPECT_CALL(*streams_, getStreamProxy(1, proto::Stream_Kind_DATA, true))
       .WillRepeatedly(
           Return(new SeekableArrayInputStream(blob, VELOX_ARRAY_SIZE(blob))));
 
   const unsigned char buffer2[] = {0x7d, 0x00, 0x02};
-  EXPECT_CALL(streams_, getStreamProxy(1, proto::Stream_Kind_LENGTH, true))
+  EXPECT_CALL(*streams_, getStreamProxy(1, proto::Stream_Kind_LENGTH, true))
       .WillRepeatedly(Return(
           new SeekableArrayInputStream(buffer2, VELOX_ARRAY_SIZE(buffer2))));
 
@@ -1712,28 +1713,28 @@ TEST_P(TestColumnReader, testShortBlobError) {
   // set getEncoding
   proto::ColumnEncoding directEncoding;
   directEncoding.set_kind(proto::ColumnEncoding_Kind_DIRECT);
-  EXPECT_CALL(streams_, getEncodingProxy(_))
+  EXPECT_CALL(*streams_, getEncodingProxy(_))
       .WillRepeatedly(Return(&directEncoding));
 
   // set getStream
-  EXPECT_CALL(streams_, getStreamProxy(0, proto::Stream_Kind_PRESENT, false))
+  EXPECT_CALL(*streams_, getStreamProxy(0, proto::Stream_Kind_PRESENT, false))
       .WillRepeatedly(Return(nullptr));
-  EXPECT_CALL(streams_, getStreamProxy(0, proto::Stream_Kind_ROW_INDEX, false))
-      .WillRepeatedly(Return(nullptr));
-
-  EXPECT_CALL(streams_, getStreamProxy(1, proto::Stream_Kind_ROW_INDEX, false))
+  EXPECT_CALL(*streams_, getStreamProxy(0, proto::Stream_Kind_ROW_INDEX, false))
       .WillRepeatedly(Return(nullptr));
 
-  EXPECT_CALL(streams_, getStreamProxy(1, proto::Stream_Kind_PRESENT, false))
+  EXPECT_CALL(*streams_, getStreamProxy(1, proto::Stream_Kind_ROW_INDEX, false))
+      .WillRepeatedly(Return(nullptr));
+
+  EXPECT_CALL(*streams_, getStreamProxy(1, proto::Stream_Kind_PRESENT, false))
       .WillRepeatedly(Return(nullptr));
 
   char blob[100];
-  EXPECT_CALL(streams_, getStreamProxy(1, proto::Stream_Kind_DATA, true))
+  EXPECT_CALL(*streams_, getStreamProxy(1, proto::Stream_Kind_DATA, true))
       .WillRepeatedly(
           Return(new SeekableArrayInputStream(blob, VELOX_ARRAY_SIZE(blob))));
 
   const unsigned char buffer1[] = {0x61, 0x00, 0x02};
-  EXPECT_CALL(streams_, getStreamProxy(1, proto::Stream_Kind_LENGTH, true))
+  EXPECT_CALL(*streams_, getStreamProxy(1, proto::Stream_Kind_LENGTH, true))
       .WillRepeatedly(Return(
           new SeekableArrayInputStream(buffer1, VELOX_ARRAY_SIZE(buffer1))));
 
@@ -1758,19 +1759,19 @@ TEST_P(StringReaderTests, testStringDirectShortBuffer) {
   // set getEncoding
   proto::ColumnEncoding directEncoding;
   directEncoding.set_kind(proto::ColumnEncoding_Kind_DIRECT);
-  EXPECT_CALL(streams_, getEncodingProxy(_))
+  EXPECT_CALL(*streams_, getEncodingProxy(_))
       .WillRepeatedly(Return(&directEncoding));
 
   // set getStream
-  EXPECT_CALL(streams_, getStreamProxy(0, proto::Stream_Kind_PRESENT, false))
+  EXPECT_CALL(*streams_, getStreamProxy(0, proto::Stream_Kind_PRESENT, false))
       .WillRepeatedly(Return(nullptr));
-  EXPECT_CALL(streams_, getStreamProxy(0, proto::Stream_Kind_ROW_INDEX, false))
-      .WillRepeatedly(Return(nullptr));
-
-  EXPECT_CALL(streams_, getStreamProxy(1, proto::Stream_Kind_ROW_INDEX, false))
+  EXPECT_CALL(*streams_, getStreamProxy(0, proto::Stream_Kind_ROW_INDEX, false))
       .WillRepeatedly(Return(nullptr));
 
-  EXPECT_CALL(streams_, getStreamProxy(1, proto::Stream_Kind_PRESENT, false))
+  EXPECT_CALL(*streams_, getStreamProxy(1, proto::Stream_Kind_ROW_INDEX, false))
+      .WillRepeatedly(Return(nullptr));
+
+  EXPECT_CALL(*streams_, getStreamProxy(1, proto::Stream_Kind_PRESENT, false))
       .WillRepeatedly(Return(nullptr));
 
   char blob[200];
@@ -1780,12 +1781,12 @@ TEST_P(StringReaderTests, testStringDirectShortBuffer) {
       blob[2 * (10 * i + j) + 1] = static_cast<char>(j);
     }
   }
-  EXPECT_CALL(streams_, getStreamProxy(1, proto::Stream_Kind_DATA, true))
+  EXPECT_CALL(*streams_, getStreamProxy(1, proto::Stream_Kind_DATA, true))
       .WillRepeatedly(Return(
           new SeekableArrayInputStream(blob, VELOX_ARRAY_SIZE(blob), 3)));
 
   const unsigned char buffer1[] = {0x61, 0x00, 0x02};
-  EXPECT_CALL(streams_, getStreamProxy(1, proto::Stream_Kind_LENGTH, true))
+  EXPECT_CALL(*streams_, getStreamProxy(1, proto::Stream_Kind_LENGTH, true))
       .WillRepeatedly(Return(
           new SeekableArrayInputStream(buffer1, VELOX_ARRAY_SIZE(buffer1))));
 
@@ -1822,20 +1823,20 @@ TEST_P(StringReaderTests, testStringDirectShortBufferWithNulls) {
   // set getEncoding
   proto::ColumnEncoding directEncoding;
   directEncoding.set_kind(proto::ColumnEncoding_Kind_DIRECT);
-  EXPECT_CALL(streams_, getEncodingProxy(_))
+  EXPECT_CALL(*streams_, getEncodingProxy(_))
       .WillRepeatedly(Return(&directEncoding));
 
   // set getStream
-  EXPECT_CALL(streams_, getStreamProxy(0, proto::Stream_Kind_PRESENT, false))
+  EXPECT_CALL(*streams_, getStreamProxy(0, proto::Stream_Kind_PRESENT, false))
       .WillRepeatedly(Return(nullptr));
-  EXPECT_CALL(streams_, getStreamProxy(0, proto::Stream_Kind_ROW_INDEX, false))
+  EXPECT_CALL(*streams_, getStreamProxy(0, proto::Stream_Kind_ROW_INDEX, false))
       .WillRepeatedly(Return(nullptr));
 
-  EXPECT_CALL(streams_, getStreamProxy(1, proto::Stream_Kind_ROW_INDEX, false))
+  EXPECT_CALL(*streams_, getStreamProxy(1, proto::Stream_Kind_ROW_INDEX, false))
       .WillRepeatedly(Return(nullptr));
 
   const unsigned char buffer1[] = {0x3d, 0xf0};
-  EXPECT_CALL(streams_, getStreamProxy(1, proto::Stream_Kind_PRESENT, false))
+  EXPECT_CALL(*streams_, getStreamProxy(1, proto::Stream_Kind_PRESENT, false))
       .WillRepeatedly(Return(
           new SeekableArrayInputStream(buffer1, VELOX_ARRAY_SIZE(buffer1))));
 
@@ -1846,12 +1847,12 @@ TEST_P(StringReaderTests, testStringDirectShortBufferWithNulls) {
       blob[2 * (16 * i + j) + 1] = static_cast<char>('A' + j);
     }
   }
-  EXPECT_CALL(streams_, getStreamProxy(1, proto::Stream_Kind_DATA, true))
+  EXPECT_CALL(*streams_, getStreamProxy(1, proto::Stream_Kind_DATA, true))
       .WillRepeatedly(Return(
           new SeekableArrayInputStream(blob, VELOX_ARRAY_SIZE(blob), 30)));
 
   const unsigned char buffer2[] = {0x7d, 0x00, 0x02, 0x7d, 0x00, 0x02};
-  EXPECT_CALL(streams_, getStreamProxy(1, proto::Stream_Kind_LENGTH, true))
+  EXPECT_CALL(*streams_, getStreamProxy(1, proto::Stream_Kind_LENGTH, true))
       .WillRepeatedly(Return(
           new SeekableArrayInputStream(buffer2, VELOX_ARRAY_SIZE(buffer2))));
 
@@ -1901,31 +1902,31 @@ TEST_P(StringReaderTests, testStringDirectNullAcrossWindow) {
   // set getEncoding
   proto::ColumnEncoding directEncoding;
   directEncoding.set_kind(proto::ColumnEncoding_Kind_DIRECT);
-  EXPECT_CALL(streams_, getEncodingProxy(_))
+  EXPECT_CALL(*streams_, getEncodingProxy(_))
       .WillRepeatedly(Return(&directEncoding));
 
   // set getStream
-  EXPECT_CALL(streams_, getStreamProxy(0, proto::Stream_Kind_PRESENT, false))
+  EXPECT_CALL(*streams_, getStreamProxy(0, proto::Stream_Kind_PRESENT, false))
       .WillRepeatedly(Return(nullptr));
-  EXPECT_CALL(streams_, getStreamProxy(0, proto::Stream_Kind_ROW_INDEX, false))
+  EXPECT_CALL(*streams_, getStreamProxy(0, proto::Stream_Kind_ROW_INDEX, false))
       .WillRepeatedly(Return(nullptr));
 
-  EXPECT_CALL(streams_, getStreamProxy(1, proto::Stream_Kind_ROW_INDEX, false))
+  EXPECT_CALL(*streams_, getStreamProxy(1, proto::Stream_Kind_ROW_INDEX, false))
       .WillRepeatedly(Return(nullptr));
 
   const unsigned char isNull[2] = {0xff, 0x7f};
-  EXPECT_CALL(streams_, getStreamProxy(1, proto::Stream_Kind_PRESENT, false))
+  EXPECT_CALL(*streams_, getStreamProxy(1, proto::Stream_Kind_PRESENT, false))
       .WillRepeatedly(Return(
           new SeekableArrayInputStream(isNull, VELOX_ARRAY_SIZE(isNull))));
 
   const char blob[] = "abcdefg";
-  EXPECT_CALL(streams_, getStreamProxy(1, proto::Stream_Kind_DATA, true))
+  EXPECT_CALL(*streams_, getStreamProxy(1, proto::Stream_Kind_DATA, true))
       .WillRepeatedly(Return(
           new SeekableArrayInputStream(blob, VELOX_ARRAY_SIZE(blob), 4)));
 
   // [1] * 7
   const unsigned char lenData[] = {0x04, 0x00, 0x01};
-  EXPECT_CALL(streams_, getStreamProxy(1, proto::Stream_Kind_LENGTH, true))
+  EXPECT_CALL(*streams_, getStreamProxy(1, proto::Stream_Kind_LENGTH, true))
       .WillRepeatedly(Return(
           new SeekableArrayInputStream(lenData, VELOX_ARRAY_SIZE(lenData))));
 
@@ -1976,19 +1977,19 @@ TEST_P(StringReaderTests, testStringDirectSkip) {
   // set getEncoding
   proto::ColumnEncoding directEncoding;
   directEncoding.set_kind(proto::ColumnEncoding_Kind_DIRECT);
-  EXPECT_CALL(streams_, getEncodingProxy(_))
+  EXPECT_CALL(*streams_, getEncodingProxy(_))
       .WillRepeatedly(Return(&directEncoding));
 
   // set getStream
-  EXPECT_CALL(streams_, getStreamProxy(0, proto::Stream_Kind_PRESENT, false))
+  EXPECT_CALL(*streams_, getStreamProxy(0, proto::Stream_Kind_PRESENT, false))
       .WillRepeatedly(Return(nullptr));
-  EXPECT_CALL(streams_, getStreamProxy(0, proto::Stream_Kind_ROW_INDEX, false))
-      .WillRepeatedly(Return(nullptr));
-
-  EXPECT_CALL(streams_, getStreamProxy(1, proto::Stream_Kind_ROW_INDEX, false))
+  EXPECT_CALL(*streams_, getStreamProxy(0, proto::Stream_Kind_ROW_INDEX, false))
       .WillRepeatedly(Return(nullptr));
 
-  EXPECT_CALL(streams_, getStreamProxy(1, proto::Stream_Kind_PRESENT, false))
+  EXPECT_CALL(*streams_, getStreamProxy(1, proto::Stream_Kind_ROW_INDEX, false))
+      .WillRepeatedly(Return(nullptr));
+
+  EXPECT_CALL(*streams_, getStreamProxy(1, proto::Stream_Kind_PRESENT, false))
       .WillRepeatedly(Return(nullptr));
 
   // sum(0 to 1199)
@@ -2000,7 +2001,7 @@ TEST_P(StringReaderTests, testStringDirectSkip) {
       blob[posn++] = static_cast<char>(ch);
     }
   }
-  EXPECT_CALL(streams_, getStreamProxy(1, proto::Stream_Kind_DATA, true))
+  EXPECT_CALL(*streams_, getStreamProxy(1, proto::Stream_Kind_DATA, true))
       .WillRepeatedly(
           Return(new SeekableArrayInputStream(blob, BLOB_SIZE, 200)));
 
@@ -2010,7 +2011,7 @@ TEST_P(StringReaderTests, testStringDirectSkip) {
       0x02, 0x7f, 0x01, 0x86, 0x03, 0x7f, 0x01, 0x88, 0x04, 0x7f,
       0x01, 0x8a, 0x05, 0x7f, 0x01, 0x8c, 0x06, 0x7f, 0x01, 0x8e,
       0x07, 0x7f, 0x01, 0x90, 0x08, 0x1b, 0x01, 0x92, 0x09};
-  EXPECT_CALL(streams_, getStreamProxy(1, proto::Stream_Kind_LENGTH, true))
+  EXPECT_CALL(*streams_, getStreamProxy(1, proto::Stream_Kind_LENGTH, true))
       .WillRepeatedly(Return(
           new SeekableArrayInputStream(buffer1, VELOX_ARRAY_SIZE(buffer1))));
 
@@ -2044,21 +2045,21 @@ TEST_P(StringReaderTests, testStringDirectSkipWithNulls) {
   // set getEncoding
   proto::ColumnEncoding directEncoding;
   directEncoding.set_kind(proto::ColumnEncoding_Kind_DIRECT);
-  EXPECT_CALL(streams_, getEncodingProxy(_))
+  EXPECT_CALL(*streams_, getEncodingProxy(_))
       .WillRepeatedly(Return(&directEncoding));
 
   // set getStream
-  EXPECT_CALL(streams_, getStreamProxy(0, proto::Stream_Kind_PRESENT, false))
+  EXPECT_CALL(*streams_, getStreamProxy(0, proto::Stream_Kind_PRESENT, false))
       .WillRepeatedly(Return(nullptr));
-  EXPECT_CALL(streams_, getStreamProxy(0, proto::Stream_Kind_ROW_INDEX, false))
+  EXPECT_CALL(*streams_, getStreamProxy(0, proto::Stream_Kind_ROW_INDEX, false))
       .WillRepeatedly(Return(nullptr));
 
-  EXPECT_CALL(streams_, getStreamProxy(1, proto::Stream_Kind_ROW_INDEX, false))
+  EXPECT_CALL(*streams_, getStreamProxy(1, proto::Stream_Kind_ROW_INDEX, false))
       .WillRepeatedly(Return(nullptr));
 
   // alternate 4 non-null and 4 null via [0xf0 for x in range(2400 / 8)]
   const unsigned char buffer1[] = {0x7f, 0xf0, 0x7f, 0xf0, 0x25, 0xf0};
-  EXPECT_CALL(streams_, getStreamProxy(1, proto::Stream_Kind_PRESENT, false))
+  EXPECT_CALL(*streams_, getStreamProxy(1, proto::Stream_Kind_PRESENT, false))
       .WillRepeatedly(Return(
           new SeekableArrayInputStream(buffer1, VELOX_ARRAY_SIZE(buffer1))));
 
@@ -2073,7 +2074,7 @@ TEST_P(StringReaderTests, testStringDirectSkipWithNulls) {
       blob[posn++] = static_cast<char>(ch);
     }
   }
-  EXPECT_CALL(streams_, getStreamProxy(1, proto::Stream_Kind_DATA, true))
+  EXPECT_CALL(*streams_, getStreamProxy(1, proto::Stream_Kind_DATA, true))
       .WillRepeatedly(
           Return(new SeekableArrayInputStream(blob, BLOB_SIZE, 200)));
 
@@ -2083,7 +2084,7 @@ TEST_P(StringReaderTests, testStringDirectSkipWithNulls) {
       0x02, 0x7f, 0x01, 0x86, 0x03, 0x7f, 0x01, 0x88, 0x04, 0x7f,
       0x01, 0x8a, 0x05, 0x7f, 0x01, 0x8c, 0x06, 0x7f, 0x01, 0x8e,
       0x07, 0x7f, 0x01, 0x90, 0x08, 0x1b, 0x01, 0x92, 0x09};
-  EXPECT_CALL(streams_, getStreamProxy(1, proto::Stream_Kind_LENGTH, true))
+  EXPECT_CALL(*streams_, getStreamProxy(1, proto::Stream_Kind_LENGTH, true))
       .WillRepeatedly(Return(
           new SeekableArrayInputStream(buffer2, VELOX_ARRAY_SIZE(buffer2))));
 
@@ -2120,13 +2121,13 @@ TEST_P(TestColumnReader, testList) {
   // set getEncoding
   proto::ColumnEncoding directEncoding;
   directEncoding.set_kind(proto::ColumnEncoding_Kind_DIRECT);
-  EXPECT_CALL(streams_, getEncodingProxy(_))
+  EXPECT_CALL(*streams_, getEncodingProxy(_))
       .WillRepeatedly(Return(&directEncoding));
 
   // set getStream
-  EXPECT_CALL(streams_, getStreamProxy(_, proto::Stream_Kind_ROW_INDEX, false))
+  EXPECT_CALL(*streams_, getStreamProxy(_, proto::Stream_Kind_ROW_INDEX, false))
       .WillRepeatedly(Return(nullptr));
-  EXPECT_CALL(streams_, getStreamProxy(_, proto::Stream_Kind_PRESENT, false))
+  EXPECT_CALL(*streams_, getStreamProxy(_, proto::Stream_Kind_PRESENT, false))
       .WillRepeatedly(Return(nullptr));
 
   // [2 for x in range(600)]
@@ -2146,14 +2147,14 @@ TEST_P(TestColumnReader, testList) {
       0x4d,
       0x00,
       0x02};
-  EXPECT_CALL(streams_, getStreamProxy(1, proto::Stream_Kind_LENGTH, true))
+  EXPECT_CALL(*streams_, getStreamProxy(1, proto::Stream_Kind_LENGTH, true))
       .WillRepeatedly(Return(
           new SeekableArrayInputStream(buffer1, VELOX_ARRAY_SIZE(buffer1))));
 
   // range(1200)
   char buffer2[8192];
   size_t size = writeRange(buffer2, 0, 1200);
-  EXPECT_CALL(streams_, getStreamProxy(2, proto::Stream_Kind_DATA, true))
+  EXPECT_CALL(*streams_, getStreamProxy(2, proto::Stream_Kind_DATA, true))
       .WillRepeatedly(Return(new SeekableArrayInputStream(buffer2, size)));
 
   // create the row type
@@ -2186,23 +2187,23 @@ TEST_P(TestNonSelectiveColumnReader, testListPropagateNulls) {
   // set getEncoding
   proto::ColumnEncoding directEncoding;
   directEncoding.set_kind(proto::ColumnEncoding_Kind_DIRECT);
-  EXPECT_CALL(streams_, getEncodingProxy(_))
+  EXPECT_CALL(*streams_, getEncodingProxy(_))
       .WillRepeatedly(Return(&directEncoding));
 
   // set getStream
-  EXPECT_CALL(streams_, getStreamProxy(_, proto::Stream_Kind_PRESENT, false))
+  EXPECT_CALL(*streams_, getStreamProxy(_, proto::Stream_Kind_PRESENT, false))
       .WillRepeatedly(Return(nullptr));
 
   // set getStream
   const unsigned char buffer[] = {0xff, 0x00};
-  EXPECT_CALL(streams_, getStreamProxy(1, proto::Stream_Kind_PRESENT, false))
+  EXPECT_CALL(*streams_, getStreamProxy(1, proto::Stream_Kind_PRESENT, false))
       .WillRepeatedly(Return(
           new SeekableArrayInputStream(buffer, VELOX_ARRAY_SIZE(buffer))));
 
-  EXPECT_CALL(streams_, getStreamProxy(2, proto::Stream_Kind_LENGTH, true))
+  EXPECT_CALL(*streams_, getStreamProxy(2, proto::Stream_Kind_LENGTH, true))
       .WillRepeatedly(Return(new SeekableArrayInputStream(buffer, 0)));
 
-  EXPECT_CALL(streams_, getStreamProxy(3, proto::Stream_Kind_DATA, true))
+  EXPECT_CALL(*streams_, getStreamProxy(3, proto::Stream_Kind_DATA, true))
       .WillRepeatedly(Return(new SeekableArrayInputStream(buffer, 0)));
 
   // create the row type
@@ -2228,20 +2229,20 @@ TEST_P(TestNonSelectiveColumnReader, testListWithNulls) {
   // set getEncoding
   proto::ColumnEncoding directEncoding;
   directEncoding.set_kind(proto::ColumnEncoding_Kind_DIRECT);
-  EXPECT_CALL(streams_, getEncodingProxy(_))
+  EXPECT_CALL(*streams_, getEncodingProxy(_))
       .WillRepeatedly(Return(&directEncoding));
 
   // set getStream
-  EXPECT_CALL(streams_, getStreamProxy(0, proto::Stream_Kind_PRESENT, false))
+  EXPECT_CALL(*streams_, getStreamProxy(0, proto::Stream_Kind_PRESENT, false))
       .WillRepeatedly(Return(nullptr));
 
   // [0xaa for x in range(2048/8)]
   const unsigned char buffer1[] = {0x7f, 0xaa, 0x7b, 0xaa};
-  EXPECT_CALL(streams_, getStreamProxy(1, proto::Stream_Kind_PRESENT, false))
+  EXPECT_CALL(*streams_, getStreamProxy(1, proto::Stream_Kind_PRESENT, false))
       .WillRepeatedly(Return(
           new SeekableArrayInputStream(buffer1, VELOX_ARRAY_SIZE(buffer1))));
 
-  EXPECT_CALL(streams_, getStreamProxy(2, proto::Stream_Kind_PRESENT, false))
+  EXPECT_CALL(*streams_, getStreamProxy(2, proto::Stream_Kind_PRESENT, false))
       .WillRepeatedly(Return(nullptr));
 
   // [1 for x in range(260)] +
@@ -2253,14 +2254,14 @@ TEST_P(TestNonSelectiveColumnReader, testListWithNulls) {
                                    0x00, 0x04, 0x7f, 0x00, 0x04, 0x7f, 0x00,
                                    0x00, 0x7f, 0x00, 0x00, 0x7f, 0x00, 0x03,
                                    0x6e, 0x00, 0x03, 0xff, 0x13};
-  EXPECT_CALL(streams_, getStreamProxy(1, proto::Stream_Kind_LENGTH, true))
+  EXPECT_CALL(*streams_, getStreamProxy(1, proto::Stream_Kind_LENGTH, true))
       .WillRepeatedly(Return(
           new SeekableArrayInputStream(buffer2, VELOX_ARRAY_SIZE(buffer2))));
 
   // range(2048)
   char buffer3[8192];
   size_t size = writeRange(buffer3, 0, 2048);
-  EXPECT_CALL(streams_, getStreamProxy(2, proto::Stream_Kind_DATA, true))
+  EXPECT_CALL(*streams_, getStreamProxy(2, proto::Stream_Kind_DATA, true))
       .WillRepeatedly(Return(new SeekableArrayInputStream(buffer3, size)));
 
   // create the row type
@@ -2387,20 +2388,20 @@ TEST_P(TestNonSelectiveColumnReader, testListSkipWithNulls) {
   // set getEncoding
   proto::ColumnEncoding directEncoding;
   directEncoding.set_kind(proto::ColumnEncoding_Kind_DIRECT);
-  EXPECT_CALL(streams_, getEncodingProxy(_))
+  EXPECT_CALL(*streams_, getEncodingProxy(_))
       .WillRepeatedly(Return(&directEncoding));
 
   // set getStream
-  EXPECT_CALL(streams_, getStreamProxy(0, proto::Stream_Kind_PRESENT, false))
+  EXPECT_CALL(*streams_, getStreamProxy(0, proto::Stream_Kind_PRESENT, false))
       .WillRepeatedly(Return(nullptr));
 
   // [0xaa for x in range(2048/8)]
   const unsigned char buffer1[] = {0x7f, 0xaa, 0x7b, 0xaa};
-  EXPECT_CALL(streams_, getStreamProxy(1, proto::Stream_Kind_PRESENT, false))
+  EXPECT_CALL(*streams_, getStreamProxy(1, proto::Stream_Kind_PRESENT, false))
       .WillRepeatedly(Return(
           new SeekableArrayInputStream(buffer1, VELOX_ARRAY_SIZE(buffer1))));
 
-  EXPECT_CALL(streams_, getStreamProxy(2, proto::Stream_Kind_PRESENT, false))
+  EXPECT_CALL(*streams_, getStreamProxy(2, proto::Stream_Kind_PRESENT, false))
       .WillRepeatedly(Return(nullptr));
 
   // [1 for x in range(260)] +
@@ -2412,14 +2413,14 @@ TEST_P(TestNonSelectiveColumnReader, testListSkipWithNulls) {
                                    0x00, 0x04, 0x7f, 0x00, 0x04, 0x7f, 0x00,
                                    0x00, 0x7f, 0x00, 0x00, 0x7f, 0x00, 0x03,
                                    0x6e, 0x00, 0x03, 0xff, 0x13};
-  EXPECT_CALL(streams_, getStreamProxy(1, proto::Stream_Kind_LENGTH, true))
+  EXPECT_CALL(*streams_, getStreamProxy(1, proto::Stream_Kind_LENGTH, true))
       .WillRepeatedly(Return(
           new SeekableArrayInputStream(buffer2, VELOX_ARRAY_SIZE(buffer2))));
 
   // range(2048)
   char buffer3[8192];
   size_t size = writeRange(buffer3, 0, 2048);
-  EXPECT_CALL(streams_, getStreamProxy(2, proto::Stream_Kind_DATA, true))
+  EXPECT_CALL(*streams_, getStreamProxy(2, proto::Stream_Kind_DATA, true))
       .WillRepeatedly(Return(new SeekableArrayInputStream(buffer3, size)));
 
   // create the row type
@@ -2488,20 +2489,20 @@ TEST_P(TestNonSelectiveColumnReader, testListSkipWithNullsNoData) {
   // set getEncoding
   proto::ColumnEncoding directEncoding;
   directEncoding.set_kind(proto::ColumnEncoding_Kind_DIRECT);
-  EXPECT_CALL(streams_, getEncodingProxy(_))
+  EXPECT_CALL(*streams_, getEncodingProxy(_))
       .WillRepeatedly(Return(&directEncoding));
 
   // set getStream
-  EXPECT_CALL(streams_, getStreamProxy(0, proto::Stream_Kind_PRESENT, false))
+  EXPECT_CALL(*streams_, getStreamProxy(0, proto::Stream_Kind_PRESENT, false))
       .WillRepeatedly(Return(nullptr));
 
   // [0xaa for x in range(2048/8)]
   const unsigned char buffer1[] = {0x7f, 0xaa, 0x7b, 0xaa};
-  EXPECT_CALL(streams_, getStreamProxy(1, proto::Stream_Kind_PRESENT, false))
+  EXPECT_CALL(*streams_, getStreamProxy(1, proto::Stream_Kind_PRESENT, false))
       .WillRepeatedly(Return(
           new SeekableArrayInputStream(buffer1, VELOX_ARRAY_SIZE(buffer1))));
 
-  EXPECT_CALL(streams_, getStreamProxy(2, proto::Stream_Kind_PRESENT, false))
+  EXPECT_CALL(*streams_, getStreamProxy(2, proto::Stream_Kind_PRESENT, false))
       .WillRepeatedly(Return(nullptr));
 
   // [1 for x in range(260)] +
@@ -2513,11 +2514,11 @@ TEST_P(TestNonSelectiveColumnReader, testListSkipWithNullsNoData) {
                                    0x00, 0x04, 0x7f, 0x00, 0x04, 0x7f, 0x00,
                                    0x00, 0x7f, 0x00, 0x00, 0x7f, 0x00, 0x03,
                                    0x6e, 0x00, 0x03, 0xff, 0x13};
-  EXPECT_CALL(streams_, getStreamProxy(1, proto::Stream_Kind_LENGTH, true))
+  EXPECT_CALL(*streams_, getStreamProxy(1, proto::Stream_Kind_LENGTH, true))
       .WillRepeatedly(Return(
           new SeekableArrayInputStream(buffer2, VELOX_ARRAY_SIZE(buffer2))));
 
-  EXPECT_CALL(streams_, getStreamProxy(2, proto::Stream_Kind_DATA, true))
+  EXPECT_CALL(*streams_, getStreamProxy(2, proto::Stream_Kind_DATA, true))
       .WillRepeatedly(Return(nullptr));
 
   // create the row type
@@ -2566,23 +2567,23 @@ TEST_P(TestNonSelectiveColumnReader, testListWithAllNulls) {
   // set getEncoding
   proto::ColumnEncoding directEncoding;
   directEncoding.set_kind(proto::ColumnEncoding_Kind_DIRECT);
-  EXPECT_CALL(streams_, getEncodingProxy(_))
+  EXPECT_CALL(*streams_, getEncodingProxy(_))
       .WillRepeatedly(Return(&directEncoding));
 
   // set getStream
-  EXPECT_CALL(streams_, getStreamProxy(_, proto::Stream_Kind_PRESENT, false))
+  EXPECT_CALL(*streams_, getStreamProxy(_, proto::Stream_Kind_PRESENT, false))
       .WillRepeatedly(Return(nullptr));
 
   // set getStream
   const unsigned char buffer[] = {0xff, 0x00};
-  EXPECT_CALL(streams_, getStreamProxy(1, proto::Stream_Kind_PRESENT, false))
+  EXPECT_CALL(*streams_, getStreamProxy(1, proto::Stream_Kind_PRESENT, false))
       .WillRepeatedly(Return(
           new SeekableArrayInputStream(buffer, VELOX_ARRAY_SIZE(buffer))));
 
-  EXPECT_CALL(streams_, getStreamProxy(1, proto::Stream_Kind_LENGTH, true))
+  EXPECT_CALL(*streams_, getStreamProxy(1, proto::Stream_Kind_LENGTH, true))
       .WillRepeatedly(Return(new SeekableArrayInputStream(buffer, 0)));
 
-  EXPECT_CALL(streams_, getStreamProxy(2, proto::Stream_Kind_DATA, true))
+  EXPECT_CALL(*streams_, getStreamProxy(2, proto::Stream_Kind_DATA, true))
       .WillRepeatedly(Return(new SeekableArrayInputStream(buffer, 0)));
 
   // create the row type
@@ -2603,13 +2604,13 @@ TEST_P(TestColumnReader, testMap) {
   // set getEncoding
   proto::ColumnEncoding directEncoding;
   directEncoding.set_kind(proto::ColumnEncoding_Kind_DIRECT);
-  EXPECT_CALL(streams_, getEncodingProxy(_))
+  EXPECT_CALL(*streams_, getEncodingProxy(_))
       .WillRepeatedly(Return(&directEncoding));
 
   // set getStream
-  EXPECT_CALL(streams_, getStreamProxy(_, proto::Stream_Kind_ROW_INDEX, false))
+  EXPECT_CALL(*streams_, getStreamProxy(_, proto::Stream_Kind_ROW_INDEX, false))
       .WillRepeatedly(Return(nullptr));
-  EXPECT_CALL(streams_, getStreamProxy(_, proto::Stream_Kind_PRESENT, false))
+  EXPECT_CALL(*streams_, getStreamProxy(_, proto::Stream_Kind_PRESENT, false))
       .WillRepeatedly(Return(nullptr));
 
   // [2 for x in range(600)]
@@ -2629,20 +2630,20 @@ TEST_P(TestColumnReader, testMap) {
       0x4d,
       0x00,
       0x02};
-  EXPECT_CALL(streams_, getStreamProxy(1, proto::Stream_Kind_LENGTH, true))
+  EXPECT_CALL(*streams_, getStreamProxy(1, proto::Stream_Kind_LENGTH, true))
       .WillRepeatedly(Return(
           new SeekableArrayInputStream(buffer1, VELOX_ARRAY_SIZE(buffer1))));
 
   // range(1200)
   char buffer2[8192];
   size_t size = writeRange(buffer2, 0, 1200);
-  EXPECT_CALL(streams_, getStreamProxy(2, proto::Stream_Kind_DATA, true))
+  EXPECT_CALL(*streams_, getStreamProxy(2, proto::Stream_Kind_DATA, true))
       .WillRepeatedly(Return(new SeekableArrayInputStream(buffer2, size)));
 
   // range(8, 1208)
   char buffer3[8192];
   size = writeRange(buffer3, 8, 1208);
-  EXPECT_CALL(streams_, getStreamProxy(3, proto::Stream_Kind_DATA, true))
+  EXPECT_CALL(*streams_, getStreamProxy(3, proto::Stream_Kind_DATA, true))
       .WillRepeatedly(Return(new SeekableArrayInputStream(buffer3, size)));
 
   // create the row type
@@ -2677,25 +2678,25 @@ TEST_P(TestNonSelectiveColumnReader, testMapWithNulls) {
   // set getEncoding
   proto::ColumnEncoding directEncoding;
   directEncoding.set_kind(proto::ColumnEncoding_Kind_DIRECT);
-  EXPECT_CALL(streams_, getEncodingProxy(_))
+  EXPECT_CALL(*streams_, getEncodingProxy(_))
       .WillRepeatedly(Return(&directEncoding));
 
   // set getStream
-  EXPECT_CALL(streams_, getStreamProxy(0, proto::Stream_Kind_PRESENT, false))
+  EXPECT_CALL(*streams_, getStreamProxy(0, proto::Stream_Kind_PRESENT, false))
       .WillRepeatedly(Return(nullptr));
 
   // [0xaa for x in range(2048/8)]
   const unsigned char buffer1[] = {0x7f, 0xaa, 0x7b, 0xaa};
-  EXPECT_CALL(streams_, getStreamProxy(1, proto::Stream_Kind_PRESENT, false))
+  EXPECT_CALL(*streams_, getStreamProxy(1, proto::Stream_Kind_PRESENT, false))
       .WillRepeatedly(Return(
           new SeekableArrayInputStream(buffer1, VELOX_ARRAY_SIZE(buffer1))));
 
-  EXPECT_CALL(streams_, getStreamProxy(2, proto::Stream_Kind_PRESENT, false))
+  EXPECT_CALL(*streams_, getStreamProxy(2, proto::Stream_Kind_PRESENT, false))
       .WillRepeatedly(Return(nullptr));
 
   // [0x55 for x in range(2048/8)]
   const unsigned char buffer2[] = {0x7f, 0x55, 0x7b, 0x55};
-  EXPECT_CALL(streams_, getStreamProxy(3, proto::Stream_Kind_PRESENT, false))
+  EXPECT_CALL(*streams_, getStreamProxy(3, proto::Stream_Kind_PRESENT, false))
       .WillRepeatedly(Return(
           new SeekableArrayInputStream(buffer2, VELOX_ARRAY_SIZE(buffer2))));
 
@@ -2708,20 +2709,20 @@ TEST_P(TestNonSelectiveColumnReader, testMapWithNulls) {
                                    0x00, 0x04, 0x7f, 0x00, 0x04, 0x7f, 0x00,
                                    0x00, 0x7f, 0x00, 0x00, 0x7f, 0x00, 0x03,
                                    0x6e, 0x00, 0x03, 0xff, 0x13};
-  EXPECT_CALL(streams_, getStreamProxy(1, proto::Stream_Kind_LENGTH, true))
+  EXPECT_CALL(*streams_, getStreamProxy(1, proto::Stream_Kind_LENGTH, true))
       .WillRepeatedly(Return(
           new SeekableArrayInputStream(buffer3, VELOX_ARRAY_SIZE(buffer3))));
 
   // range(2048)
   char buffer4[8192];
   size_t size = writeRange(buffer4, 0, 2048);
-  EXPECT_CALL(streams_, getStreamProxy(2, proto::Stream_Kind_DATA, true))
+  EXPECT_CALL(*streams_, getStreamProxy(2, proto::Stream_Kind_DATA, true))
       .WillRepeatedly(Return(new SeekableArrayInputStream(buffer4, size)));
 
   // range(8, 1032)
   char buffer5[8192];
   size = writeRange(buffer5, 8, 1032);
-  EXPECT_CALL(streams_, getStreamProxy(3, proto::Stream_Kind_DATA, true))
+  EXPECT_CALL(*streams_, getStreamProxy(3, proto::Stream_Kind_DATA, true))
       .WillRepeatedly(Return(new SeekableArrayInputStream(buffer5, size)));
 
   // create the row type
@@ -2882,16 +2883,16 @@ TEST_P(TestNonSelectiveColumnReader, testMapSkipWithNulls) {
   // set getEncoding
   proto::ColumnEncoding directEncoding;
   directEncoding.set_kind(proto::ColumnEncoding_Kind_DIRECT);
-  EXPECT_CALL(streams_, getEncodingProxy(_))
+  EXPECT_CALL(*streams_, getEncodingProxy(_))
       .WillRepeatedly(Return(&directEncoding));
 
   // set getStream
-  EXPECT_CALL(streams_, getStreamProxy(_, proto::Stream_Kind_PRESENT, false))
+  EXPECT_CALL(*streams_, getStreamProxy(_, proto::Stream_Kind_PRESENT, false))
       .WillRepeatedly(Return(nullptr));
 
   // [0xaa for x in range(2048/8)]
   const unsigned char buffer1[] = {0x7f, 0xaa, 0x7b, 0xaa};
-  EXPECT_CALL(streams_, getStreamProxy(1, proto::Stream_Kind_PRESENT, false))
+  EXPECT_CALL(*streams_, getStreamProxy(1, proto::Stream_Kind_PRESENT, false))
       .WillRepeatedly(Return(
           new SeekableArrayInputStream(buffer1, VELOX_ARRAY_SIZE(buffer1))));
 
@@ -2904,20 +2905,20 @@ TEST_P(TestNonSelectiveColumnReader, testMapSkipWithNulls) {
                                    0x00, 0x04, 0x7f, 0x00, 0x04, 0x7f, 0x00,
                                    0x00, 0x7f, 0x00, 0x00, 0x7f, 0x00, 0x03,
                                    0x6e, 0x00, 0x03, 0xff, 0x13};
-  EXPECT_CALL(streams_, getStreamProxy(1, proto::Stream_Kind_LENGTH, true))
+  EXPECT_CALL(*streams_, getStreamProxy(1, proto::Stream_Kind_LENGTH, true))
       .WillRepeatedly(Return(
           new SeekableArrayInputStream(buffer2, VELOX_ARRAY_SIZE(buffer2))));
 
   // range(2048)
   char buffer3[8192];
   size_t size = writeRange(buffer3, 0, 2048);
-  EXPECT_CALL(streams_, getStreamProxy(2, proto::Stream_Kind_DATA, true))
+  EXPECT_CALL(*streams_, getStreamProxy(2, proto::Stream_Kind_DATA, true))
       .WillRepeatedly(Return(new SeekableArrayInputStream(buffer3, size)));
 
   // range(8, 2056)
   char buffer4[8192];
   size = writeRange(buffer4, 8, 2056);
-  EXPECT_CALL(streams_, getStreamProxy(3, proto::Stream_Kind_DATA, true))
+  EXPECT_CALL(*streams_, getStreamProxy(3, proto::Stream_Kind_DATA, true))
       .WillRepeatedly(Return(new SeekableArrayInputStream(buffer4, size)));
 
   // create the row type
@@ -3005,16 +3006,16 @@ TEST_P(TestNonSelectiveColumnReader, testMapSkipWithNullsNoData) {
   // set getEncoding
   proto::ColumnEncoding directEncoding;
   directEncoding.set_kind(proto::ColumnEncoding_Kind_DIRECT);
-  EXPECT_CALL(streams_, getEncodingProxy(_))
+  EXPECT_CALL(*streams_, getEncodingProxy(_))
       .WillRepeatedly(Return(&directEncoding));
 
   // set getStream
-  EXPECT_CALL(streams_, getStreamProxy(_, proto::Stream_Kind_PRESENT, false))
+  EXPECT_CALL(*streams_, getStreamProxy(_, proto::Stream_Kind_PRESENT, false))
       .WillRepeatedly(Return(nullptr));
 
   // [0xaa for x in range(2048/8)]
   const unsigned char buffer1[] = {0x7f, 0xaa, 0x7b, 0xaa};
-  EXPECT_CALL(streams_, getStreamProxy(1, proto::Stream_Kind_PRESENT, false))
+  EXPECT_CALL(*streams_, getStreamProxy(1, proto::Stream_Kind_PRESENT, false))
       .WillRepeatedly(Return(
           new SeekableArrayInputStream(buffer1, VELOX_ARRAY_SIZE(buffer1))));
 
@@ -3027,7 +3028,7 @@ TEST_P(TestNonSelectiveColumnReader, testMapSkipWithNullsNoData) {
                                    0x00, 0x04, 0x7f, 0x00, 0x04, 0x7f, 0x00,
                                    0x00, 0x7f, 0x00, 0x00, 0x7f, 0x00, 0x03,
                                    0x6e, 0x00, 0x03, 0xff, 0x13};
-  EXPECT_CALL(streams_, getStreamProxy(1, proto::Stream_Kind_LENGTH, true))
+  EXPECT_CALL(*streams_, getStreamProxy(1, proto::Stream_Kind_LENGTH, true))
       .WillRepeatedly(Return(
           new SeekableArrayInputStream(buffer2, VELOX_ARRAY_SIZE(buffer2))));
 
@@ -3074,19 +3075,19 @@ TEST_P(TestNonSelectiveColumnReader, testMapWithAllNulls) {
   // set getEncoding
   proto::ColumnEncoding directEncoding;
   directEncoding.set_kind(proto::ColumnEncoding_Kind_DIRECT);
-  EXPECT_CALL(streams_, getEncodingProxy(_))
+  EXPECT_CALL(*streams_, getEncodingProxy(_))
       .WillRepeatedly(Return(&directEncoding));
 
   // set getStream
-  EXPECT_CALL(streams_, getStreamProxy(_, proto::Stream_Kind_PRESENT, false))
+  EXPECT_CALL(*streams_, getStreamProxy(_, proto::Stream_Kind_PRESENT, false))
       .WillRepeatedly(Return(nullptr));
 
   const unsigned char buffer1[] = {0xff, 0x00};
-  EXPECT_CALL(streams_, getStreamProxy(1, proto::Stream_Kind_PRESENT, false))
+  EXPECT_CALL(*streams_, getStreamProxy(1, proto::Stream_Kind_PRESENT, false))
       .WillRepeatedly(Return(
           new SeekableArrayInputStream(buffer1, VELOX_ARRAY_SIZE(buffer1))));
 
-  EXPECT_CALL(streams_, getStreamProxy(1, proto::Stream_Kind_LENGTH, true))
+  EXPECT_CALL(*streams_, getStreamProxy(1, proto::Stream_Kind_LENGTH, true))
       .WillRepeatedly(Return(new SeekableArrayInputStream(buffer1, 0)));
 
   // create the row type
@@ -3110,21 +3111,21 @@ TEST_P(TestColumnReader, testFloatBatchNotAligned) {
   // set getEncoding
   proto::ColumnEncoding directEncoding;
   directEncoding.set_kind(proto::ColumnEncoding_Kind_DIRECT);
-  EXPECT_CALL(streams_, getEncodingProxy(_))
+  EXPECT_CALL(*streams_, getEncodingProxy(_))
       .WillRepeatedly(Return(&directEncoding));
 
   // set getStream
-  EXPECT_CALL(streams_, getStreamProxy(_, proto::Stream_Kind_PRESENT, false))
+  EXPECT_CALL(*streams_, getStreamProxy(_, proto::Stream_Kind_PRESENT, false))
       .WillRepeatedly(Return(nullptr));
 
-  EXPECT_CALL(streams_, getStreamProxy(_, proto::Stream_Kind_ROW_INDEX, false))
+  EXPECT_CALL(*streams_, getStreamProxy(_, proto::Stream_Kind_ROW_INDEX, false))
       .WillRepeatedly(Return(nullptr));
 
   const float testValues[] = {1.0f, 2.5f, -100.125f};
   const unsigned char byteValues[] = {
       0x00, 0x00, 0x80, 0x3f, 0x00, 0x00, 0x20, 0x40, 0x00, 0x40, 0xc8, 0xc2};
 
-  EXPECT_CALL(streams_, getStreamProxy(1, proto::Stream_Kind_DATA, true))
+  EXPECT_CALL(*streams_, getStreamProxy(1, proto::Stream_Kind_DATA, true))
       .WillRepeatedly(Return(new SeekableArrayInputStream(
           byteValues,
           VELOX_ARRAY_SIZE(byteValues),
@@ -3151,19 +3152,19 @@ TEST_P(TestColumnReader, testFloatWithNulls) {
   // set getEncoding
   proto::ColumnEncoding directEncoding;
   directEncoding.set_kind(proto::ColumnEncoding_Kind_DIRECT);
-  EXPECT_CALL(streams_, getEncodingProxy(_))
+  EXPECT_CALL(*streams_, getEncodingProxy(_))
       .WillRepeatedly(Return(&directEncoding));
 
   // set getStream
-  EXPECT_CALL(streams_, getStreamProxy(0, proto::Stream_Kind_PRESENT, false))
+  EXPECT_CALL(*streams_, getStreamProxy(0, proto::Stream_Kind_PRESENT, false))
       .WillRepeatedly(Return(nullptr));
 
-  EXPECT_CALL(streams_, getStreamProxy(_, proto::Stream_Kind_ROW_INDEX, false))
+  EXPECT_CALL(*streams_, getStreamProxy(_, proto::Stream_Kind_ROW_INDEX, false))
       .WillRepeatedly(Return(nullptr));
 
   // 13 non-nulls followed by 19 nulls
   const unsigned char buffer1[] = {0xfc, 0xff, 0xf8, 0x0, 0x0};
-  EXPECT_CALL(streams_, getStreamProxy(1, proto::Stream_Kind_PRESENT, false))
+  EXPECT_CALL(*streams_, getStreamProxy(1, proto::Stream_Kind_PRESENT, false))
       .WillRepeatedly(Return(
           new SeekableArrayInputStream(buffer1, VELOX_ARRAY_SIZE(buffer1))));
 
@@ -3187,7 +3188,7 @@ TEST_P(TestColumnReader, testFloatWithNulls) {
       0x25, 0xac, 0x0,  0x0,  0x80, 0x7f, 0x0,  0x0,  0xc0, 0x7f, 0x0,
       0x0,  0x80, 0xff, 0xff, 0xff, 0x7f, 0x7f, 0xff, 0xff, 0x7f, 0xff,
       0x1,  0x0,  0x0,  0x0,  0x1,  0x0,  0x0,  0x80};
-  EXPECT_CALL(streams_, getStreamProxy(1, proto::Stream_Kind_DATA, true))
+  EXPECT_CALL(*streams_, getStreamProxy(1, proto::Stream_Kind_DATA, true))
       .WillRepeatedly(Return(
           new SeekableArrayInputStream(buffer2, VELOX_ARRAY_SIZE(buffer2))));
 
@@ -3220,19 +3221,19 @@ TEST_P(TestColumnReader, testFloatSkipWithNulls) {
   // set getEncoding
   proto::ColumnEncoding directEncoding;
   directEncoding.set_kind(proto::ColumnEncoding_Kind_DIRECT);
-  EXPECT_CALL(streams_, getEncodingProxy(_))
+  EXPECT_CALL(*streams_, getEncodingProxy(_))
       .WillRepeatedly(Return(&directEncoding));
 
   // set getStream
-  EXPECT_CALL(streams_, getStreamProxy(0, proto::Stream_Kind_PRESENT, false))
+  EXPECT_CALL(*streams_, getStreamProxy(0, proto::Stream_Kind_PRESENT, false))
       .WillRepeatedly(Return(nullptr));
 
-  EXPECT_CALL(streams_, getStreamProxy(_, proto::Stream_Kind_ROW_INDEX, false))
+  EXPECT_CALL(*streams_, getStreamProxy(_, proto::Stream_Kind_ROW_INDEX, false))
       .WillRepeatedly(Return(nullptr));
 
   // 2 non-nulls, 2 nulls, 2 non-nulls, 2 nulls
   const unsigned char buffer1[] = {0xff, 0xcc};
-  EXPECT_CALL(streams_, getStreamProxy(1, proto::Stream_Kind_PRESENT, false))
+  EXPECT_CALL(*streams_, getStreamProxy(1, proto::Stream_Kind_PRESENT, false))
       .WillRepeatedly(Return(
           new SeekableArrayInputStream(buffer1, VELOX_ARRAY_SIZE(buffer1))));
 
@@ -3254,7 +3255,7 @@ TEST_P(TestColumnReader, testFloatSkipWithNulls) {
       0x40,
       0x1c,
       0x46};
-  EXPECT_CALL(streams_, getStreamProxy(1, proto::Stream_Kind_DATA, true))
+  EXPECT_CALL(*streams_, getStreamProxy(1, proto::Stream_Kind_DATA, true))
       .WillRepeatedly(Return(
           new SeekableArrayInputStream(buffer2, VELOX_ARRAY_SIZE(buffer2))));
 
@@ -3311,19 +3312,19 @@ TEST_P(TestColumnReader, testDoubleWithNulls) {
   // set getEncoding
   proto::ColumnEncoding directEncoding;
   directEncoding.set_kind(proto::ColumnEncoding_Kind_DIRECT);
-  EXPECT_CALL(streams_, getEncodingProxy(_))
+  EXPECT_CALL(*streams_, getEncodingProxy(_))
       .WillRepeatedly(Return(&directEncoding));
 
   // set getStream
-  EXPECT_CALL(streams_, getStreamProxy(0, proto::Stream_Kind_PRESENT, false))
+  EXPECT_CALL(*streams_, getStreamProxy(0, proto::Stream_Kind_PRESENT, false))
       .WillRepeatedly(Return(nullptr));
 
-  EXPECT_CALL(streams_, getStreamProxy(_, proto::Stream_Kind_ROW_INDEX, false))
+  EXPECT_CALL(*streams_, getStreamProxy(_, proto::Stream_Kind_ROW_INDEX, false))
       .WillRepeatedly(Return(nullptr));
 
   // 13 non-nulls followed by 19 nulls
   const unsigned char buffer1[] = {0xfc, 0xff, 0xf8, 0x0, 0x0};
-  EXPECT_CALL(streams_, getStreamProxy(1, proto::Stream_Kind_PRESENT, false))
+  EXPECT_CALL(*streams_, getStreamProxy(1, proto::Stream_Kind_PRESENT, false))
       .WillRepeatedly(Return(
           new SeekableArrayInputStream(buffer1, VELOX_ARRAY_SIZE(buffer1))));
 
@@ -3351,7 +3352,7 @@ TEST_P(TestColumnReader, testDoubleWithNulls) {
       0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xef, 0x7f, 0xff, 0xff, 0xff, 0xff,
       0xff, 0xff, 0xef, 0xff, 0x1,  0x0,  0x0,  0x0,  0x0,  0x0,  0x0,  0x0,
       0x1,  0x0,  0x0,  0x0,  0x0,  0x0,  0x0,  0x80};
-  EXPECT_CALL(streams_, getStreamProxy(1, proto::Stream_Kind_DATA, true))
+  EXPECT_CALL(*streams_, getStreamProxy(1, proto::Stream_Kind_DATA, true))
       .WillRepeatedly(Return(
           new SeekableArrayInputStream(buffer2, VELOX_ARRAY_SIZE(buffer2))));
 
@@ -3385,19 +3386,19 @@ TEST_P(TestColumnReader, testDoubleSkipWithNulls) {
   // set getEncoding
   proto::ColumnEncoding directEncoding;
   directEncoding.set_kind(proto::ColumnEncoding_Kind_DIRECT);
-  EXPECT_CALL(streams_, getEncodingProxy(_))
+  EXPECT_CALL(*streams_, getEncodingProxy(_))
       .WillRepeatedly(Return(&directEncoding));
 
   // set getStream
-  EXPECT_CALL(streams_, getStreamProxy(0, proto::Stream_Kind_PRESENT, false))
+  EXPECT_CALL(*streams_, getStreamProxy(0, proto::Stream_Kind_PRESENT, false))
       .WillRepeatedly(Return(nullptr));
 
-  EXPECT_CALL(streams_, getStreamProxy(_, proto::Stream_Kind_ROW_INDEX, false))
+  EXPECT_CALL(*streams_, getStreamProxy(_, proto::Stream_Kind_ROW_INDEX, false))
       .WillRepeatedly(Return(nullptr));
 
   // 1 non-null, 5 nulls, 2 non-nulls
   const unsigned char buffer1[] = {0xff, 0x83};
-  EXPECT_CALL(streams_, getStreamProxy(1, proto::Stream_Kind_PRESENT, false))
+  EXPECT_CALL(*streams_, getStreamProxy(1, proto::Stream_Kind_PRESENT, false))
       .WillRepeatedly(Return(
           new SeekableArrayInputStream(buffer1, VELOX_ARRAY_SIZE(buffer1))));
 
@@ -3405,7 +3406,7 @@ TEST_P(TestColumnReader, testDoubleSkipWithNulls) {
   const unsigned char buffer2[] = {
       0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0xf0, 0x3f, 0x00, 0x00, 0x00, 0x00,
       0x00, 0x00, 0x00, 0x40, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0xc0};
-  EXPECT_CALL(streams_, getStreamProxy(1, proto::Stream_Kind_DATA, true))
+  EXPECT_CALL(*streams_, getStreamProxy(1, proto::Stream_Kind_DATA, true))
       .WillRepeatedly(Return(
           new SeekableArrayInputStream(buffer2, VELOX_ARRAY_SIZE(buffer2))));
 
@@ -3461,19 +3462,19 @@ TEST_P(TestColumnReader, testTimestampSkipWithNulls) {
   // set getEncoding
   proto::ColumnEncoding directEncoding;
   directEncoding.set_kind(proto::ColumnEncoding_Kind_DIRECT);
-  EXPECT_CALL(streams_, getEncodingProxy(_))
+  EXPECT_CALL(*streams_, getEncodingProxy(_))
       .WillRepeatedly(Return(&directEncoding));
 
   // set getStream
-  EXPECT_CALL(streams_, getStreamProxy(0, proto::Stream_Kind_PRESENT, false))
+  EXPECT_CALL(*streams_, getStreamProxy(0, proto::Stream_Kind_PRESENT, false))
       .WillRepeatedly(Return(nullptr));
 
-  EXPECT_CALL(streams_, getStreamProxy(_, proto::Stream_Kind_ROW_INDEX, false))
+  EXPECT_CALL(*streams_, getStreamProxy(_, proto::Stream_Kind_ROW_INDEX, false))
       .WillRepeatedly(Return(nullptr));
 
   // 2 non-nulls, 2 nulls, 2 non-nulls, 2 nulls
   const unsigned char buffer1[] = {0xff, 0xcc};
-  EXPECT_CALL(streams_, getStreamProxy(1, proto::Stream_Kind_PRESENT, false))
+  EXPECT_CALL(*streams_, getStreamProxy(1, proto::Stream_Kind_PRESENT, false))
       .WillRepeatedly(Return(
           new SeekableArrayInputStream(buffer1, VELOX_ARRAY_SIZE(buffer1))));
 
@@ -3495,12 +3496,12 @@ TEST_P(TestColumnReader, testTimestampSkipWithNulls) {
       0xa0,
       0xd4,
       0x30};
-  EXPECT_CALL(streams_, getStreamProxy(1, proto::Stream_Kind_DATA, true))
+  EXPECT_CALL(*streams_, getStreamProxy(1, proto::Stream_Kind_DATA, true))
       .WillRepeatedly(Return(
           new SeekableArrayInputStream(buffer2, VELOX_ARRAY_SIZE(buffer2))));
 
   const unsigned char buffer3[] = {0x1, 0x8, 0x5e};
-  EXPECT_CALL(streams_, getStreamProxy(1, proto::Stream_Kind_NANO_DATA, true))
+  EXPECT_CALL(*streams_, getStreamProxy(1, proto::Stream_Kind_NANO_DATA, true))
       .WillRepeatedly(Return(
           new SeekableArrayInputStream(buffer3, VELOX_ARRAY_SIZE(buffer3))));
 
@@ -3575,14 +3576,14 @@ TEST_P(TestColumnReader, testTimestamp) {
   // set getEncoding
   proto::ColumnEncoding directEncoding;
   directEncoding.set_kind(proto::ColumnEncoding_Kind_DIRECT);
-  EXPECT_CALL(streams_, getEncodingProxy(_))
+  EXPECT_CALL(*streams_, getEncodingProxy(_))
       .WillRepeatedly(Return(&directEncoding));
 
   // set getStream
-  EXPECT_CALL(streams_, getStreamProxy(_, proto::Stream_Kind_PRESENT, false))
+  EXPECT_CALL(*streams_, getStreamProxy(_, proto::Stream_Kind_PRESENT, false))
       .WillRepeatedly(Return(nullptr));
 
-  EXPECT_CALL(streams_, getStreamProxy(_, proto::Stream_Kind_ROW_INDEX, false))
+  EXPECT_CALL(*streams_, getStreamProxy(_, proto::Stream_Kind_ROW_INDEX, false))
       .WillRepeatedly(Return(nullptr));
 
   const unsigned char buffer1[] = {
@@ -3591,14 +3592,14 @@ TEST_P(TestColumnReader, testTimestamp) {
       0xb8, 0xcd, 0xdc, 0x1a, 0x9d, 0xea, 0xc3, 0xbe, 0x1a, 0x9d, 0x9c,
       0xba, 0xa0, 0x1a, 0x9d, 0x88, 0xa6, 0x82, 0x1a, 0x9d, 0xba, 0x9c,
       0xe4, 0x19, 0x9d, 0xee, 0xe1, 0xcd, 0x18};
-  EXPECT_CALL(streams_, getStreamProxy(1, proto::Stream_Kind_DATA, true))
+  EXPECT_CALL(*streams_, getStreamProxy(1, proto::Stream_Kind_DATA, true))
       .WillRepeatedly(Return(
           new SeekableArrayInputStream(buffer1, VELOX_ARRAY_SIZE(buffer1))));
 
   const unsigned char buffer2[] = {
       0xf6, 0x00, 0xa8, 0xd1, 0xf9, 0xd6, 0x03, 0x00, 0x9e, 0x01, 0xec,
       0x76, 0xf4, 0x76, 0xfc, 0x76, 0x84, 0x77, 0x8c, 0x77, 0xfd, 0x0b};
-  EXPECT_CALL(streams_, getStreamProxy(1, proto::Stream_Kind_NANO_DATA, true))
+  EXPECT_CALL(*streams_, getStreamProxy(1, proto::Stream_Kind_NANO_DATA, true))
       .WillRepeatedly(Return(
           new SeekableArrayInputStream(buffer2, VELOX_ARRAY_SIZE(buffer2))));
 
@@ -3652,13 +3653,13 @@ TEST_P(TestColumnReader, testLargeSkip) {
   // set getEncoding
   proto::ColumnEncoding directEncoding;
   directEncoding.set_kind(proto::ColumnEncoding_Kind_DIRECT);
-  EXPECT_CALL(streams_, getEncodingProxy(_))
+  EXPECT_CALL(*streams_, getEncodingProxy(_))
       .WillRepeatedly(Return(&directEncoding));
 
   // set getStream
-  EXPECT_CALL(streams_, getStreamProxy(_, proto::Stream_Kind_ROW_INDEX, false))
+  EXPECT_CALL(*streams_, getStreamProxy(_, proto::Stream_Kind_ROW_INDEX, false))
       .WillRepeatedly(Return(nullptr));
-  EXPECT_CALL(streams_, getStreamProxy(_, proto::Stream_Kind_PRESENT, false))
+  EXPECT_CALL(*streams_, getStreamProxy(_, proto::Stream_Kind_PRESENT, false))
       .WillRepeatedly(Return(nullptr));
 
   // repeat 40 times [1, 60]
@@ -3669,13 +3670,13 @@ TEST_P(TestColumnReader, testLargeSkip) {
     length[pos + 1] = 0x01;
     length[pos + 2] = 0x01;
   }
-  EXPECT_CALL(streams_, getStreamProxy(1, proto::Stream_Kind_LENGTH, true))
+  EXPECT_CALL(*streams_, getStreamProxy(1, proto::Stream_Kind_LENGTH, true))
       .WillRepeatedly(Return(
           new SeekableArrayInputStream(length, VELOX_ARRAY_SIZE(length))));
 
   char data[1024 * 1024];
   size_t size = writeRange(data, 0, 73200);
-  EXPECT_CALL(streams_, getStreamProxy(2, proto::Stream_Kind_DATA, true))
+  EXPECT_CALL(*streams_, getStreamProxy(2, proto::Stream_Kind_DATA, true))
       .WillRepeatedly(Return(new SeekableArrayInputStream(data, size)));
 
   // create the row type
@@ -3732,13 +3733,13 @@ TEST_P(StringReaderTests, testStringDirectUseBatchAfterClose) {
   // set getEncoding
   proto::ColumnEncoding directEncoding;
   directEncoding.set_kind(proto::ColumnEncoding_Kind_DIRECT);
-  EXPECT_CALL(streams_, getEncodingProxy(_))
+  EXPECT_CALL(*streams_, getEncodingProxy(_))
       .WillRepeatedly(Return(&directEncoding));
 
   // set getStream
-  EXPECT_CALL(streams_, getStreamProxy(_, proto::Stream_Kind_ROW_INDEX, false))
+  EXPECT_CALL(*streams_, getStreamProxy(_, proto::Stream_Kind_ROW_INDEX, false))
       .WillRepeatedly(Return(nullptr));
-  EXPECT_CALL(streams_, getStreamProxy(_, proto::Stream_Kind_PRESENT, false))
+  EXPECT_CALL(*streams_, getStreamProxy(_, proto::Stream_Kind_PRESENT, false))
       .WillRepeatedly(Return(nullptr));
 
   // sum(range(1..26))
@@ -3752,13 +3753,13 @@ TEST_P(StringReaderTests, testStringDirectUseBatchAfterClose) {
       blob[posn++] = static_cast<char>('a' + len - 1);
     }
   }
-  EXPECT_CALL(streams_, getStreamProxy(1, proto::Stream_Kind_DATA, true))
+  EXPECT_CALL(*streams_, getStreamProxy(1, proto::Stream_Kind_DATA, true))
       .WillRepeatedly(
           Return(new SeekableArrayInputStream(blob.data(), BLOB_SIZE)));
 
   // range(1..131)
   auto lengths = folly::make_array<char>(0x7f, 0x01, 0x01);
-  EXPECT_CALL(streams_, getStreamProxy(1, proto::Stream_Kind_LENGTH, true))
+  EXPECT_CALL(*streams_, getStreamProxy(1, proto::Stream_Kind_LENGTH, true))
       .WillRepeatedly(
           Return(new SeekableArrayInputStream(lengths.data(), lengths.size())));
 
@@ -3773,12 +3774,12 @@ TEST_P(StringReaderTests, testStringDirectUseBatchAfterClose) {
     batches.push_back(batch);
   }
 
-  validateStringDirectBatches(batches, streams_);
+  validateStringDirectBatches(batches, *streams_);
 
   // make sure data can still be accessed after releasing column reader. This
   // will fail in asan mode if memory is recycled.
   resetReader();
-  validateStringDirectBatches(batches, streams_);
+  validateStringDirectBatches(batches, *streams_);
 }
 
 void validateStringDictBatches(
@@ -3821,17 +3822,17 @@ TEST_P(StringReaderTests, testStringDictUseBatchAfterClose) {
   dictEncoding.set_dictionarysize(DICT_SIZE);
   proto::ColumnEncoding directEncoding;
   directEncoding.set_kind(proto::ColumnEncoding_Kind_DIRECT);
-  EXPECT_CALL(streams_, getEncodingProxy(0))
+  EXPECT_CALL(*streams_, getEncodingProxy(0))
       .WillRepeatedly(Return(&directEncoding));
-  EXPECT_CALL(streams_, getEncodingProxy(1))
+  EXPECT_CALL(*streams_, getEncodingProxy(1))
       .WillRepeatedly(Return(&dictEncoding));
 
   // set getStream
-  EXPECT_CALL(streams_, getStreamProxy(0, proto::Stream_Kind_PRESENT, false))
+  EXPECT_CALL(*streams_, getStreamProxy(0, proto::Stream_Kind_PRESENT, false))
       .WillRepeatedly(Return(nullptr));
-  EXPECT_CALL(streams_, getStreamProxy(0, proto::Stream_Kind_ROW_INDEX, false))
+  EXPECT_CALL(*streams_, getStreamProxy(0, proto::Stream_Kind_ROW_INDEX, false))
       .WillRepeatedly(Return(nullptr));
-  EXPECT_CALL(streams_, getStreamProxy(1, proto::Stream_Kind_PRESENT, false))
+  EXPECT_CALL(*streams_, getStreamProxy(1, proto::Stream_Kind_PRESENT, false))
       .WillRepeatedly(Return(nullptr));
 
   // dictionary content
@@ -3845,21 +3846,21 @@ TEST_P(StringReaderTests, testStringDictUseBatchAfterClose) {
     }
   }
   EXPECT_CALL(
-      streams_, getStreamProxy(1, proto::Stream_Kind_DICTIONARY_DATA, false))
+      *streams_, getStreamProxy(1, proto::Stream_Kind_DICTIONARY_DATA, false))
       .WillRepeatedly(
           Return(new SeekableArrayInputStream(dict.data(), BLOB_SIZE)));
   EXPECT_CALL(
-      streams_, getStreamProxy(1, proto::Stream_Kind_STRIDE_DICTIONARY, true))
+      *streams_, getStreamProxy(1, proto::Stream_Kind_STRIDE_DICTIONARY, true))
       .WillRepeatedly(
           Return(new SeekableArrayInputStream(strideDict.data(), BLOB_SIZE)));
 
   // length
   auto length = folly::make_array<char>(0x17, 0x01, 0x01);
-  EXPECT_CALL(streams_, getStreamProxy(1, proto::Stream_Kind_LENGTH, false))
+  EXPECT_CALL(*streams_, getStreamProxy(1, proto::Stream_Kind_LENGTH, false))
       .WillRepeatedly(
           Return(new SeekableArrayInputStream(length.data(), length.size())));
   EXPECT_CALL(
-      streams_,
+      *streams_,
       getStreamProxy(1, proto::Stream_Kind_STRIDE_DICTIONARY_LENGTH, true))
       .WillRepeatedly(
           Return(new SeekableArrayInputStream(length.data(), length.size())));
@@ -3872,14 +3873,14 @@ TEST_P(StringReaderTests, testStringDictUseBatchAfterClose) {
     dataSize = writeVuLong(data.data(), dataSize, i);
     dataSize = writeVuLong(data.data(), dataSize, 0);
   }
-  EXPECT_CALL(streams_, getStreamProxy(1, proto::Stream_Kind_DATA, true))
+  EXPECT_CALL(*streams_, getStreamProxy(1, proto::Stream_Kind_DATA, true))
       .WillRepeatedly(
           Return(new SeekableArrayInputStream(data.data(), dataSize)));
 
   // in_dict
   auto inDict = folly::make_array<char>(0x04, 0xaa);
   EXPECT_CALL(
-      streams_, getStreamProxy(1, proto::Stream_Kind_IN_DICTIONARY, false))
+      *streams_, getStreamProxy(1, proto::Stream_Kind_IN_DICTIONARY, false))
       .WillRepeatedly(
           Return(new SeekableArrayInputStream(inDict.data(), inDict.size())));
 
@@ -3897,11 +3898,11 @@ TEST_P(StringReaderTests, testStringDictUseBatchAfterClose) {
 
   const uint64_t BATCH_SIZE = 2;
   auto indexData = index.SerializePartialAsString();
-  EXPECT_CALL(streams_, getStreamProxy(1, proto::Stream_Kind_ROW_INDEX, _))
+  EXPECT_CALL(*streams_, getStreamProxy(1, proto::Stream_Kind_ROW_INDEX, _))
       .WillRepeatedly(Return(
           new SeekableArrayInputStream(indexData.data(), indexData.size())));
   TestStrideIndexProvider provider(BATCH_SIZE);
-  EXPECT_CALL(streams_, getStrideIndexProviderProxy())
+  EXPECT_CALL(*streams_, getStrideIndexProviderProxy())
       .WillRepeatedly(Return(&provider));
 
   auto rowType = HiveTypeParser().parse("struct<myString:string>");
@@ -3917,19 +3918,19 @@ TEST_P(StringReaderTests, testStringDictUseBatchAfterClose) {
     provider.addRow(BATCH_SIZE);
     batches.push_back(batch);
   }
-  validateStringDictBatches(batches, returnFlatVector_, streams_);
+  validateStringDictBatches(batches, returnFlatVector_, *streams_);
 
   // make sure data can still be accessed after releasing column reader. This
   // will fail in asan mode if memory is recycled.
   resetReader();
-  validateStringDictBatches(batches, returnFlatVector_, streams_);
+  validateStringDictBatches(batches, returnFlatVector_, *streams_);
 }
 
 TEST_P(StringReaderTests, testStringDictStrideDictDoesntExist) {
   // set getEncoding
   proto::ColumnEncoding directEncoding;
   directEncoding.set_kind(proto::ColumnEncoding_Kind_DIRECT);
-  EXPECT_CALL(streams_, getEncodingProxy(_))
+  EXPECT_CALL(*streams_, getEncodingProxy(_))
       .WillRepeatedly(Return(&directEncoding));
 
   // set row index
@@ -3938,9 +3939,9 @@ TEST_P(StringReaderTests, testStringDictStrideDictDoesntExist) {
   const size_t totalRowCount = rowIndexStride * 10;
 
   // set getStream
-  EXPECT_CALL(streams_, getStreamProxy(_, proto::Stream_Kind_PRESENT, false))
+  EXPECT_CALL(*streams_, getStreamProxy(_, proto::Stream_Kind_PRESENT, false))
       .WillRepeatedly(Return(nullptr));
-  EXPECT_CALL(streams_, getStreamProxy(0, proto::Stream_Kind_ROW_INDEX, false))
+  EXPECT_CALL(*streams_, getStreamProxy(0, proto::Stream_Kind_ROW_INDEX, false))
       .WillRepeatedly(Return(nullptr));
 
   std::array<char, 1024> data;
@@ -3994,17 +3995,17 @@ TEST_P(StringReaderTests, testStringDictStrideDictDoesntExist) {
   proto::ColumnEncoding dictionaryEncoding;
   dictionaryEncoding.set_kind(proto::ColumnEncoding_Kind_DICTIONARY);
   dictionaryEncoding.set_dictionarysize(dictVals.size());
-  EXPECT_CALL(streams_, getEncodingProxy(1))
+  EXPECT_CALL(*streams_, getEncodingProxy(1))
       .WillRepeatedly(Return(&dictionaryEncoding));
 
-  EXPECT_CALL(streams_, getStreamProxy(1, proto::Stream_Kind_DATA, true))
+  EXPECT_CALL(*streams_, getStreamProxy(1, proto::Stream_Kind_DATA, true))
       .WillRepeatedly(Return(new SeekableArrayInputStream(data.data(), len)));
   EXPECT_CALL(
-      streams_, getStreamProxy(1, proto::Stream_Kind_DICTIONARY_DATA, false))
+      *streams_, getStreamProxy(1, proto::Stream_Kind_DICTIONARY_DATA, false))
       .WillRepeatedly(
           Return(new SeekableArrayInputStream(dict.data(), dictLen)));
   EXPECT_CALL(
-      streams_, getStreamProxy(1, proto::Stream_Kind_STRIDE_DICTIONARY, true))
+      *streams_, getStreamProxy(1, proto::Stream_Kind_STRIDE_DICTIONARY, true))
       .WillRepeatedly(Return(
           new SeekableArrayInputStream(strideDict.data(), strideDictLen)));
 
@@ -4021,11 +4022,11 @@ TEST_P(StringReaderTests, testStringDictStrideDictDoesntExist) {
     strideDictLen = writeVuLong(
         strideDictLength.data(), strideDictLen, strideDictVals[i].length());
   }
-  EXPECT_CALL(streams_, getStreamProxy(1, proto::Stream_Kind_LENGTH, false))
+  EXPECT_CALL(*streams_, getStreamProxy(1, proto::Stream_Kind_LENGTH, false))
       .WillRepeatedly(
           Return(new SeekableArrayInputStream(dictLength.data(), dictLen)));
   EXPECT_CALL(
-      streams_,
+      *streams_,
       getStreamProxy(1, proto::Stream_Kind_STRIDE_DICTIONARY_LENGTH, true))
       .WillRepeatedly(Return(new SeekableArrayInputStream(
           strideDictLength.data(), strideDictLen)));
@@ -4033,16 +4034,16 @@ TEST_P(StringReaderTests, testStringDictStrideDictDoesntExist) {
   auto inDict = folly::make_array<char>(
       0xf6, 0x55, 0xff, 0x55, 0xff, 0x55, 0xff, 0x55, 0xff, 0x55, 0xff);
   EXPECT_CALL(
-      streams_, getStreamProxy(1, proto::Stream_Kind_IN_DICTIONARY, false))
+      *streams_, getStreamProxy(1, proto::Stream_Kind_IN_DICTIONARY, false))
       .WillRepeatedly(
           Return(new SeekableArrayInputStream(inDict.data(), inDict.size())));
 
   auto indexData = index.SerializePartialAsString();
-  EXPECT_CALL(streams_, getStreamProxy(1, proto::Stream_Kind_ROW_INDEX, _))
+  EXPECT_CALL(*streams_, getStreamProxy(1, proto::Stream_Kind_ROW_INDEX, _))
       .WillRepeatedly(Return(
           new SeekableArrayInputStream(indexData.data(), indexData.size())));
   TestStrideIndexProvider provider(rowIndexStride);
-  EXPECT_CALL(streams_, getStrideIndexProviderProxy())
+  EXPECT_CALL(*streams_, getStrideIndexProviderProxy())
       .WillRepeatedly(Return(&provider));
 
   // create the row type
@@ -4089,7 +4090,7 @@ TEST_P(StringReaderTests, testStringDictZeroLengthStrideDict) {
   // set getEncoding
   proto::ColumnEncoding directEncoding;
   directEncoding.set_kind(proto::ColumnEncoding_Kind_DIRECT);
-  EXPECT_CALL(streams_, getEncodingProxy(_))
+  EXPECT_CALL(*streams_, getEncodingProxy(_))
       .WillRepeatedly(Return(&directEncoding));
 
   // set row index
@@ -4098,9 +4099,9 @@ TEST_P(StringReaderTests, testStringDictZeroLengthStrideDict) {
   const size_t totalRowCount = rowIndexStride * 10;
 
   // set getStream
-  EXPECT_CALL(streams_, getStreamProxy(_, proto::Stream_Kind_PRESENT, false))
+  EXPECT_CALL(*streams_, getStreamProxy(_, proto::Stream_Kind_PRESENT, false))
       .WillRepeatedly(Return(nullptr));
-  EXPECT_CALL(streams_, getStreamProxy(0, proto::Stream_Kind_ROW_INDEX, false))
+  EXPECT_CALL(*streams_, getStreamProxy(0, proto::Stream_Kind_ROW_INDEX, false))
       .WillRepeatedly(Return(nullptr));
 
   std::array<char, 1024> data;
@@ -4155,17 +4156,17 @@ TEST_P(StringReaderTests, testStringDictZeroLengthStrideDict) {
   proto::ColumnEncoding dictionaryEncoding;
   dictionaryEncoding.set_kind(proto::ColumnEncoding_Kind_DICTIONARY);
   dictionaryEncoding.set_dictionarysize(dictVals.size());
-  EXPECT_CALL(streams_, getEncodingProxy(1))
+  EXPECT_CALL(*streams_, getEncodingProxy(1))
       .WillRepeatedly(Return(&dictionaryEncoding));
 
-  EXPECT_CALL(streams_, getStreamProxy(1, proto::Stream_Kind_DATA, true))
+  EXPECT_CALL(*streams_, getStreamProxy(1, proto::Stream_Kind_DATA, true))
       .WillRepeatedly(Return(new SeekableArrayInputStream(data.data(), len)));
   EXPECT_CALL(
-      streams_, getStreamProxy(1, proto::Stream_Kind_DICTIONARY_DATA, false))
+      *streams_, getStreamProxy(1, proto::Stream_Kind_DICTIONARY_DATA, false))
       .WillRepeatedly(
           Return(new SeekableArrayInputStream(dict.data(), dictLen)));
   EXPECT_CALL(
-      streams_, getStreamProxy(1, proto::Stream_Kind_STRIDE_DICTIONARY, true))
+      *streams_, getStreamProxy(1, proto::Stream_Kind_STRIDE_DICTIONARY, true))
       .WillRepeatedly(Return(
           new SeekableArrayInputStream(strideDict.data(), strideDictLen)));
 
@@ -4182,11 +4183,11 @@ TEST_P(StringReaderTests, testStringDictZeroLengthStrideDict) {
     strideDictLen = writeVuLong(
         strideDictLength.data(), strideDictLen, strideDictVals[i].length());
   }
-  EXPECT_CALL(streams_, getStreamProxy(1, proto::Stream_Kind_LENGTH, false))
+  EXPECT_CALL(*streams_, getStreamProxy(1, proto::Stream_Kind_LENGTH, false))
       .WillRepeatedly(
           Return(new SeekableArrayInputStream(dictLength.data(), dictLen)));
   EXPECT_CALL(
-      streams_,
+      *streams_,
       getStreamProxy(1, proto::Stream_Kind_STRIDE_DICTIONARY_LENGTH, true))
       .WillRepeatedly(Return(new SeekableArrayInputStream(
           strideDictLength.data(), strideDictLen)));
@@ -4194,16 +4195,16 @@ TEST_P(StringReaderTests, testStringDictZeroLengthStrideDict) {
   auto inDict = folly::make_array<char>(
       0xf6, 0x55, 0xff, 0x55, 0xff, 0x55, 0xff, 0x55, 0xff, 0x55, 0xff);
   EXPECT_CALL(
-      streams_, getStreamProxy(1, proto::Stream_Kind_IN_DICTIONARY, false))
+      *streams_, getStreamProxy(1, proto::Stream_Kind_IN_DICTIONARY, false))
       .WillRepeatedly(
           Return(new SeekableArrayInputStream(inDict.data(), inDict.size())));
 
   auto indexData = index.SerializePartialAsString();
-  EXPECT_CALL(streams_, getStreamProxy(1, proto::Stream_Kind_ROW_INDEX, _))
+  EXPECT_CALL(*streams_, getStreamProxy(1, proto::Stream_Kind_ROW_INDEX, _))
       .WillRepeatedly(Return(
           new SeekableArrayInputStream(indexData.data(), indexData.size())));
   TestStrideIndexProvider provider(rowIndexStride);
-  EXPECT_CALL(streams_, getStrideIndexProviderProxy())
+  EXPECT_CALL(*streams_, getStrideIndexProviderProxy())
       .WillRepeatedly(Return(&provider));
 
   // create the row type
@@ -4241,19 +4242,19 @@ TEST_P(TestColumnReader, testPresentStreamChange) {
   // set getEncoding
   proto::ColumnEncoding directEncoding;
   directEncoding.set_kind(proto::ColumnEncoding_Kind_DIRECT);
-  EXPECT_CALL(streams_, getEncodingProxy(_))
+  EXPECT_CALL(*streams_, getEncodingProxy(_))
       .WillRepeatedly(Return(&directEncoding));
 
   // set getStream
-  EXPECT_CALL(streams_, getStreamProxy(_, proto::Stream_Kind_ROW_INDEX, false))
+  EXPECT_CALL(*streams_, getStreamProxy(_, proto::Stream_Kind_ROW_INDEX, false))
       .WillRepeatedly(Return(nullptr));
-  EXPECT_CALL(streams_, getStreamProxy(_, proto::Stream_Kind_PRESENT, false))
+  EXPECT_CALL(*streams_, getStreamProxy(_, proto::Stream_Kind_PRESENT, false))
       .WillRepeatedly(Return(nullptr));
 
   // increasing values
   std::array<char, 1024> data;
   writeRange(data.data(), 0, 256);
-  EXPECT_CALL(streams_, getStreamProxy(_, proto::Stream_Kind_DATA, true))
+  EXPECT_CALL(*streams_, getStreamProxy(_, proto::Stream_Kind_DATA, true))
       .WillRepeatedly(
           Return(new SeekableArrayInputStream(data.data(), data.size())));
 
@@ -4263,7 +4264,7 @@ TEST_P(TestColumnReader, testPresentStreamChange) {
   buildReader(rowType);
 
   // simulate vector reuse
-  auto pool = &streams_.getMemoryPool();
+  auto pool = &streams_->getMemoryPool();
   VectorPtr toReset = std::make_shared<FlatVector<int32_t>>(
       pool,
       INTEGER(),
@@ -4292,19 +4293,19 @@ TEST_P(TestColumnReader, testStructVectorTypeChange) {
   // set getEncoding
   proto::ColumnEncoding directEncoding;
   directEncoding.set_kind(proto::ColumnEncoding_Kind_DIRECT);
-  EXPECT_CALL(streams_, getEncodingProxy(_))
+  EXPECT_CALL(*streams_, getEncodingProxy(_))
       .WillRepeatedly(Return(&directEncoding));
 
   // set getStream
-  EXPECT_CALL(streams_, getStreamProxy(_, proto::Stream_Kind_ROW_INDEX, false))
+  EXPECT_CALL(*streams_, getStreamProxy(_, proto::Stream_Kind_ROW_INDEX, false))
       .WillRepeatedly(Return(nullptr));
-  EXPECT_CALL(streams_, getStreamProxy(_, proto::Stream_Kind_PRESENT, false))
+  EXPECT_CALL(*streams_, getStreamProxy(_, proto::Stream_Kind_PRESENT, false))
       .WillRepeatedly(Return(nullptr));
 
   // increasing values
   std::array<char, 1024> data;
   writeRange(data.data(), 0, 256);
-  EXPECT_CALL(streams_, getStreamProxy(_, proto::Stream_Kind_DATA, true))
+  EXPECT_CALL(*streams_, getStreamProxy(_, proto::Stream_Kind_DATA, true))
       .WillRepeatedly(
           Return(new SeekableArrayInputStream(data.data(), data.size())));
 
@@ -4314,7 +4315,7 @@ TEST_P(TestColumnReader, testStructVectorTypeChange) {
   buildReader(rowType);
 
   // simulate vector reset by creating vector of wrong type
-  auto pool = &streams_.getMemoryPool();
+  auto pool = &streams_->getMemoryPool();
   VectorPtr toReset = std::make_shared<FlatVector<float>>(
       pool,
       REAL(),
@@ -4342,25 +4343,25 @@ TEST_P(TestColumnReader, testListVectorTypeChange) {
   // set getEncoding
   proto::ColumnEncoding directEncoding;
   directEncoding.set_kind(proto::ColumnEncoding_Kind_DIRECT);
-  EXPECT_CALL(streams_, getEncodingProxy(_))
+  EXPECT_CALL(*streams_, getEncodingProxy(_))
       .WillRepeatedly(Return(&directEncoding));
 
   // set getStream
-  EXPECT_CALL(streams_, getStreamProxy(_, proto::Stream_Kind_ROW_INDEX, false))
+  EXPECT_CALL(*streams_, getStreamProxy(_, proto::Stream_Kind_ROW_INDEX, false))
       .WillRepeatedly(Return(nullptr));
-  EXPECT_CALL(streams_, getStreamProxy(_, proto::Stream_Kind_PRESENT, false))
+  EXPECT_CALL(*streams_, getStreamProxy(_, proto::Stream_Kind_PRESENT, false))
       .WillRepeatedly(Return(nullptr));
 
   // length of 2s
   auto lengths = folly::make_array<char>(0x7f, 0x00, 0x02);
-  EXPECT_CALL(streams_, getStreamProxy(1, proto::Stream_Kind_LENGTH, true))
+  EXPECT_CALL(*streams_, getStreamProxy(1, proto::Stream_Kind_LENGTH, true))
       .WillRepeatedly(
           Return(new SeekableArrayInputStream(lengths.data(), lengths.size())));
 
   // increasing values
   std::array<char, 1024> data;
   writeRange(data.data(), 0, 256);
-  EXPECT_CALL(streams_, getStreamProxy(2, proto::Stream_Kind_DATA, true))
+  EXPECT_CALL(*streams_, getStreamProxy(2, proto::Stream_Kind_DATA, true))
       .WillRepeatedly(
           Return(new SeekableArrayInputStream(data.data(), data.size())));
 
@@ -4370,7 +4371,7 @@ TEST_P(TestColumnReader, testListVectorTypeChange) {
   buildReader(rowType);
 
   // simulate batch reuse
-  auto pool = &streams_.getMemoryPool();
+  auto pool = &streams_->getMemoryPool();
   VectorPtr elements = std::make_shared<FlatVector<int8_t>>(
       pool,
       TINYINT(),
@@ -4420,28 +4421,28 @@ TEST_P(TestColumnReader, testMapVectorTypeChange) {
   // set getEncoding
   proto::ColumnEncoding directEncoding;
   directEncoding.set_kind(proto::ColumnEncoding_Kind_DIRECT);
-  EXPECT_CALL(streams_, getEncodingProxy(_))
+  EXPECT_CALL(*streams_, getEncodingProxy(_))
       .WillRepeatedly(Return(&directEncoding));
 
   // set getStream
-  EXPECT_CALL(streams_, getStreamProxy(_, proto::Stream_Kind_ROW_INDEX, false))
+  EXPECT_CALL(*streams_, getStreamProxy(_, proto::Stream_Kind_ROW_INDEX, false))
       .WillRepeatedly(Return(nullptr));
-  EXPECT_CALL(streams_, getStreamProxy(_, proto::Stream_Kind_PRESENT, false))
+  EXPECT_CALL(*streams_, getStreamProxy(_, proto::Stream_Kind_PRESENT, false))
       .WillRepeatedly(Return(nullptr));
 
   // length of 2s
   auto lengths = folly::make_array<char>(0x7f, 0x00, 0x02);
-  EXPECT_CALL(streams_, getStreamProxy(1, proto::Stream_Kind_LENGTH, true))
+  EXPECT_CALL(*streams_, getStreamProxy(1, proto::Stream_Kind_LENGTH, true))
       .WillRepeatedly(
           Return(new SeekableArrayInputStream(lengths.data(), lengths.size())));
 
   // increasing values
   std::array<char, 1024> data;
   writeRange(data.data(), 0, 256);
-  EXPECT_CALL(streams_, getStreamProxy(2, proto::Stream_Kind_DATA, true))
+  EXPECT_CALL(*streams_, getStreamProxy(2, proto::Stream_Kind_DATA, true))
       .WillRepeatedly(
           Return(new SeekableArrayInputStream(data.data(), data.size())));
-  EXPECT_CALL(streams_, getStreamProxy(3, proto::Stream_Kind_DATA, true))
+  EXPECT_CALL(*streams_, getStreamProxy(3, proto::Stream_Kind_DATA, true))
       .WillRepeatedly(
           Return(new SeekableArrayInputStream(data.data(), data.size())));
 
@@ -4451,7 +4452,7 @@ TEST_P(TestColumnReader, testMapVectorTypeChange) {
   buildReader(rowType);
 
   // simulate batch reuse
-  auto pool = &streams_.getMemoryPool();
+  auto pool = &streams_->getMemoryPool();
   VectorPtr toReset = std::make_shared<FlatVector<int8_t>>(
       pool,
       TINYINT(),
@@ -4506,22 +4507,22 @@ TEST_P(SchemaMismatchTest, testBoolean) {
   // set getEncoding
   proto::ColumnEncoding directEncoding;
   directEncoding.set_kind(proto::ColumnEncoding_Kind_DIRECT);
-  EXPECT_CALL(streams_, getEncodingProxy(_))
+  EXPECT_CALL(*streams_, getEncodingProxy(_))
       .WillRepeatedly(Return(&directEncoding));
 
   // set getStream
-  EXPECT_CALL(streams_, getStreamProxy(_, _, _))
+  EXPECT_CALL(*streams_, getStreamProxy(_, _, _))
       .WillRepeatedly(Return(nullptr));
   // interleaved nulls, encoded as ByteRLE. 0x7f - 130 bytes (0x55 - 0101 0101)
   // repeated.
   auto nulls = folly::make_array<char>(0x7f, 0x55);
-  EXPECT_CALL(streams_, getStreamProxy(1, proto::Stream_Kind_PRESENT, false))
+  EXPECT_CALL(*streams_, getStreamProxy(1, proto::Stream_Kind_PRESENT, false))
       .WillRepeatedly(
           Invoke([&](auto /* unused */, auto /* unused */, auto /* unused */) {
             return new SeekableArrayInputStream(nulls.data(), nulls.size());
           }));
   auto data = folly::make_array<char>(0x7f, 0xaa);
-  EXPECT_CALL(streams_, getStreamProxy(1, proto::Stream_Kind_DATA, true))
+  EXPECT_CALL(*streams_, getStreamProxy(1, proto::Stream_Kind_DATA, true))
       .WillRepeatedly(
           Invoke([&](auto /* unused */, auto /* unused */, auto /* unused */) {
             return new SeekableArrayInputStream(data.data(), data.size());
@@ -4538,16 +4539,16 @@ TEST_P(SchemaMismatchTest, testByte) {
   // set getEncoding
   proto::ColumnEncoding directEncoding;
   directEncoding.set_kind(proto::ColumnEncoding_Kind_DIRECT);
-  EXPECT_CALL(streams_, getEncodingProxy(_))
+  EXPECT_CALL(*streams_, getEncodingProxy(_))
       .WillRepeatedly(Return(&directEncoding));
 
   // set getStream
-  EXPECT_CALL(streams_, getStreamProxy(_, _, _))
+  EXPECT_CALL(*streams_, getStreamProxy(_, _, _))
       .WillRepeatedly(Return(nullptr));
   // interleaved nulls, encoded as ByteRLE. 0x7f - 130 bytes (0x55 - 0101 0101)
   // repeated.
   auto nulls = folly::make_array<char>(0x7f, 0x55);
-  EXPECT_CALL(streams_, getStreamProxy(1, proto::Stream_Kind_PRESENT, false))
+  EXPECT_CALL(*streams_, getStreamProxy(1, proto::Stream_Kind_PRESENT, false))
       .WillRepeatedly(
           Invoke([&](auto /* unused */, auto /* unused */, auto /* unused */) {
             return new SeekableArrayInputStream(nulls.data(), nulls.size());
@@ -4563,7 +4564,7 @@ TEST_P(SchemaMismatchTest, testByte) {
       data[pos++] = (0x01 + j * 0x10);
     }
   }
-  EXPECT_CALL(streams_, getStreamProxy(1, proto::Stream_Kind_DATA, true))
+  EXPECT_CALL(*streams_, getStreamProxy(1, proto::Stream_Kind_DATA, true))
       .WillRepeatedly(
           Invoke([&](auto /* unused */, auto /* unused */, auto /* unused */) {
             return new SeekableArrayInputStream(data.data(), data.size());
@@ -4579,16 +4580,16 @@ TEST_P(SchemaMismatchTest, testIntDirect) {
   // set getEncoding
   proto::ColumnEncoding directEncoding;
   directEncoding.set_kind(proto::ColumnEncoding_Kind_DIRECT);
-  EXPECT_CALL(streams_, getEncodingProxy(_))
+  EXPECT_CALL(*streams_, getEncodingProxy(_))
       .WillRepeatedly(Return(&directEncoding));
 
   // set getStream
-  EXPECT_CALL(streams_, getStreamProxy(_, _, _))
+  EXPECT_CALL(*streams_, getStreamProxy(_, _, _))
       .WillRepeatedly(Return(nullptr));
   // interleaved nulls, encoded as ByteRLE. 0x7f - 130 bytes (0x55 - 0101 0101)
   // repeated.
   auto nulls = folly::make_array<char>(0x7f, 0x55);
-  EXPECT_CALL(streams_, getStreamProxy(1, proto::Stream_Kind_PRESENT, false))
+  EXPECT_CALL(*streams_, getStreamProxy(1, proto::Stream_Kind_PRESENT, false))
       .WillRepeatedly(
           Invoke([&](auto /* unused */, auto /* unused */, auto /* unused */) {
             return new SeekableArrayInputStream(nulls.data(), nulls.size());
@@ -4597,7 +4598,7 @@ TEST_P(SchemaMismatchTest, testIntDirect) {
   // increasing values
   std::array<char, 1024> data;
   writeRange(data.data(), 0, 256);
-  EXPECT_CALL(streams_, getStreamProxy(1, proto::Stream_Kind_DATA, true))
+  EXPECT_CALL(*streams_, getStreamProxy(1, proto::Stream_Kind_DATA, true))
       .WillRepeatedly(
           Invoke([&](auto /* unused */, auto /* unused */, auto /* unused */) {
             return new SeekableArrayInputStream(data.data(), data.size());
@@ -4614,22 +4615,22 @@ TEST_P(SchemaMismatchTest, testIntDict) {
   proto::ColumnEncoding directEncoding;
   directEncoding.set_kind(proto::ColumnEncoding_Kind_DIRECT);
   int32_t sourceWidth = 0;
-  EXPECT_CALL(streams_, getEncodingProxy(_))
+  EXPECT_CALL(*streams_, getEncodingProxy(_))
       .WillRepeatedly(Return(&directEncoding));
   proto::ColumnEncoding dictEncoding;
   const auto dictSize = 100;
   dictEncoding.set_kind(proto::ColumnEncoding_Kind_DICTIONARY);
   dictEncoding.set_dictionarysize(dictSize);
-  EXPECT_CALL(streams_, getEncodingProxy(1))
+  EXPECT_CALL(*streams_, getEncodingProxy(1))
       .WillRepeatedly(Return(&dictEncoding));
 
   // set getStream
-  EXPECT_CALL(streams_, getStreamProxy(_, _, _))
+  EXPECT_CALL(*streams_, getStreamProxy(_, _, _))
       .WillRepeatedly(Return(nullptr));
   // interleaved nulls, encoded as ByteRLE. 0x7f - 130 bytes (0x55 - 0101 0101)
   // repeated.
   auto nulls = folly::make_array<char>(0x7f, 0x55);
-  EXPECT_CALL(streams_, getStreamProxy(1, proto::Stream_Kind_PRESENT, false))
+  EXPECT_CALL(*streams_, getStreamProxy(1, proto::Stream_Kind_PRESENT, false))
       .WillRepeatedly(
           Invoke([&](auto /* unused */, auto /* unused */, auto /* unused */) {
             return new SeekableArrayInputStream(nulls.data(), nulls.size());
@@ -4642,17 +4643,17 @@ TEST_P(SchemaMismatchTest, testIntDict) {
     v.push_back(i);
   }
   auto count = writeVuLongs(data.data() + 1, v);
-  EXPECT_CALL(streams_, getStreamProxy(1, proto::Stream_Kind_DATA, true))
+  EXPECT_CALL(*streams_, getStreamProxy(1, proto::Stream_Kind_DATA, true))
       .WillRepeatedly(
           Invoke([&](auto /* unused */, auto /* unused */, auto /* unused */) {
             return new SeekableArrayInputStream(data.data(), count + 1);
           }));
 
   EXPECT_CALL(
-      streams_, getStreamProxy(1, proto::Stream_Kind_IN_DICTIONARY, false))
+      *streams_, getStreamProxy(1, proto::Stream_Kind_IN_DICTIONARY, false))
       .WillRepeatedly(Return(nullptr));
 
-  EXPECT_CALL(streams_, genMockDictDataSetter(1, 0))
+  EXPECT_CALL(*streams_, genMockDictDataSetter(1, 0))
       .WillRepeatedly(Return([&](BufferPtr& buffer, MemoryPool* pool) {
         // Non-selective path always has int64 dictionary entries. Selective can
         // have 2 and 4 as well.
@@ -4678,16 +4679,16 @@ TEST_P(SchemaMismatchTest, testFloat) {
   // set getEncoding
   proto::ColumnEncoding directEncoding;
   directEncoding.set_kind(proto::ColumnEncoding_Kind_DIRECT);
-  EXPECT_CALL(streams_, getEncodingProxy(_))
+  EXPECT_CALL(*streams_, getEncodingProxy(_))
       .WillRepeatedly(Return(&directEncoding));
 
   // set getStream
-  EXPECT_CALL(streams_, getStreamProxy(_, _, _))
+  EXPECT_CALL(*streams_, getStreamProxy(_, _, _))
       .WillRepeatedly(Return(nullptr));
   // interleaved nulls, encoded as ByteRLE. 0x7f - 130 bytes (0x55 - 0101 0101)
   // repeated.
   auto nulls = folly::make_array<char>(0x7f, 0x55);
-  EXPECT_CALL(streams_, getStreamProxy(1, proto::Stream_Kind_PRESENT, false))
+  EXPECT_CALL(*streams_, getStreamProxy(1, proto::Stream_Kind_PRESENT, false))
       .WillRepeatedly(
           Invoke([&](auto /* unused */, auto /* unused */, auto /* unused */) {
             return new SeekableArrayInputStream(nulls.data(), nulls.size());
@@ -4697,7 +4698,7 @@ TEST_P(SchemaMismatchTest, testFloat) {
   for (auto i = 0; i < size; ++i) {
     data[i] = folly::Random::randDouble(0, 100);
   }
-  EXPECT_CALL(streams_, getStreamProxy(1, proto::Stream_Kind_DATA, true))
+  EXPECT_CALL(*streams_, getStreamProxy(1, proto::Stream_Kind_DATA, true))
       .WillRepeatedly(
           Invoke([&](auto /* unused */, auto /* unused */, auto /* unused */) {
             return new SeekableArrayInputStream(
