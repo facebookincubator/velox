@@ -25,6 +25,8 @@
 
 namespace facebook::velox::dwio::common {
 
+using int128_t = __int128_t;
+
 // Common base for writer version information used in interpreting
 // metadata. Needed to have format-independent signatures for
 // format-specific functions. Each format implementation downcasts this to the
@@ -373,6 +375,76 @@ class IntegerColumnStatistics : public virtual ColumnStatistics {
   std::optional<int64_t> min_;
   std::optional<int64_t> max_;
   std::optional<int64_t> sum_;
+};
+
+/**
+ * Statistics for Hugeint columns.
+ */
+class HugeintColumnStatistics : public virtual ColumnStatistics {
+ public:
+  HugeintColumnStatistics(
+      std::optional<uint64_t> valueCount,
+      std::optional<bool> hasNull,
+      std::optional<uint64_t> rawSize,
+      std::optional<uint64_t> size,
+      std::optional<int128_t> min,
+      std::optional<int128_t> max,
+      std::optional<int128_t> sum)
+      : ColumnStatistics(valueCount, hasNull, rawSize, size),
+        min_(min),
+        max_(max),
+        sum_(sum) {}
+
+  HugeintColumnStatistics(
+      const ColumnStatistics& colStats,
+      std::optional<int128_t> min,
+      std::optional<int128_t> max,
+      std::optional<int128_t> sum)
+      : ColumnStatistics(colStats), min_(min), max_(max), sum_(sum) {}
+
+  ~HugeintColumnStatistics() override = default;
+
+  /**
+   * Get optional smallest value in the column. Only defined if
+   * getNumberOfValues is non-zero.
+   */
+  std::optional<int128_t> getMinimum() const {
+    return min_;
+  }
+
+  /**
+   * Get optional largest value in the column. Only defined if getNumberOfValues
+   * is non-zero.
+   */
+  std::optional<int128_t> getMaximum() const {
+    return max_;
+  }
+
+  /**
+   * Get optional sum of the column. Only valid if getNumberOfValues is non-zero
+   * and sum doesn't overflow
+   */
+  std::optional<int128_t> getSum() const {
+    return sum_;
+  }
+
+  std::string toString() const override {
+    return folly::to<std::string>(
+        ColumnStatistics::toString(),
+        ", min: ",
+        (min_.has_value() ? folly::to<std::string>(min_.value()) : "unknown"),
+        ", max: ",
+        (max_.has_value() ? folly::to<std::string>(max_.value()) : "unknown"),
+        ", sum: ",
+        (sum_.has_value() ? folly::to<std::string>(sum_.value()) : "unknown"));
+  }
+
+ protected:
+  HugeintColumnStatistics() {}
+
+  std::optional<int128_t> min_;
+  std::optional<int128_t> max_;
+  std::optional<int128_t> sum_;
 };
 
 /**

@@ -220,6 +220,41 @@ bool testIntFilter(
   return true;
 }
 
+bool testHugeintFilter(
+    common::Filter* filter,
+    dwio::common::HugeintColumnStatistics* hugeintStats,
+    bool mayHaveNull) {
+  if (!hugeintStats) {
+    return true;
+  }
+
+  if (hugeintStats->getMinimum().has_value() &&
+      hugeintStats->getMaximum().has_value()) {
+    return filter->testInt128Range(
+        hugeintStats->getMinimum().value(),
+        hugeintStats->getMaximum().value(),
+        mayHaveNull);
+  }
+
+  // only min value
+  if (hugeintStats->getMinimum().has_value()) {
+    return filter->testInt128Range(
+        hugeintStats->getMinimum().value(),
+        std::numeric_limits<int128_t>::max(),
+        mayHaveNull);
+  }
+
+  // only max value
+  if (hugeintStats->getMaximum().has_value()) {
+    return filter->testInt128Range(
+        std::numeric_limits<int128_t>::min(),
+        hugeintStats->getMaximum().value(),
+        mayHaveNull);
+  }
+
+  return true;
+}
+
 bool testDoubleFilter(
     common::Filter* filter,
     dwio::common::DoubleColumnStatistics* doubleStats,
@@ -337,9 +372,7 @@ bool testFilter(
   if (mayHaveNull && filter->testNull()) {
     return true;
   }
-  if (type->isDecimal()) {
-    return true;
-  }
+
   switch (type->kind()) {
     case TypeKind::BIGINT:
     case TypeKind::INTEGER:
@@ -364,6 +397,11 @@ bool testFilter(
       auto stringStats =
           dynamic_cast<dwio::common::StringColumnStatistics*>(stats);
       return testStringFilter(filter, stringStats, mayHaveNull);
+    }
+    case TypeKind::HUGEINT: {
+      auto hugeintStats =
+          dynamic_cast<dwio::common::HugeintColumnStatistics*>(stats);
+      return testHugeintFilter(filter, hugeintStats, mayHaveNull);
     }
     default:
       break;

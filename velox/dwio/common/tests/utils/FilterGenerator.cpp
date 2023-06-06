@@ -413,6 +413,9 @@ SubfieldFilters FilterGenerator::makeSubfieldFilters(
       case TypeKind::BIGINT:
         stats = makeStats<TypeKind::BIGINT>(vector->type(), rowType_);
         break;
+      case TypeKind::HUGEINT:
+        stats = makeStats<TypeKind::HUGEINT>(vector->type(), rowType_);
+        break;
       case TypeKind::DATE:
         stats = makeStats<TypeKind::DATE>(vector->type(), rowType_);
         break;

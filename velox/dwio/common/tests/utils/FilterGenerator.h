@@ -285,6 +285,10 @@ class ColumnStats : public AbstractColumnStats {
       for (auto i = lowerIndex; i <= upperIndex; ++i) {
         in.push_back(getIntegerValue(values_[i]));
       }
+      /* Depends on IN-predicate filter changes for Long Decimals.
+      if constexpr (std::is_same_v<T, facebook::velox::int128_t>) {
+        return velox::common::createHugeintValuesFilter(in, true);
+      } */
       // make sure we don't accidentally generate an AlwaysFalse filter
       if (counter_ % 2 == 1 && filterSpec.selectPct < 100.0) {
         return velox::common::createNegatedBigintValues(in, true);

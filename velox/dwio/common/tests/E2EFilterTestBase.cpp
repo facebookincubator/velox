@@ -341,6 +341,7 @@ void E2EFilterTestBase::testRowGroupSkip(
   for (auto& field : filterable) {
     VectorPtr child = getChildBySubfield(batches[0].get(), Subfield(field));
     if (child->typeKind() == TypeKind::BIGINT ||
+        child->typeKind() == TypeKind::HUGEINT ||
         child->typeKind() == TypeKind::VARCHAR) {
       specs.emplace_back();
       specs.back().field = field;
