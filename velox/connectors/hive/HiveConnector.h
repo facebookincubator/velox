@@ -41,8 +41,7 @@ class HiveConnector : public Connector {
           std::string,
           std::shared_ptr<connector::ColumnHandle>>& columnHandles,
       ConnectorQueryCtx* connectorQueryCtx,
-      const std::shared_ptr<dwio::common::ReaderOptions> options)
-      override {
+      const std::shared_ptr<dwio::common::ReaderOptions> options) override {
     auto readerOptions = std::move(options);
     return std::make_unique<HiveDataSource>(
         outputType,
