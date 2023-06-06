@@ -342,11 +342,10 @@ class MinimalSubExpressionFinder {
     if (verifyWithResults(plan, rowVector, columnsToWrapInLazy)) {
       errorExit("Retry should have failed");
     }
-    bool minimalFound = false;
-    findMinimalRecursive(plan, rowVector, columnsToWrapInLazy, minimalFound);
+    bool minimalFound =
+        findMinimalRecursive(plan, rowVector, columnsToWrapInLazy);
     if (minimalFound) {
-      errorExit(fmt::format(
-          "Found minimal failing expression: {}", plan->toString()));
+      errorExit("Found minimal failing expression.");
     } else {
       errorExit("Only the top level expression failed");
     }
@@ -361,24 +360,22 @@ class MinimalSubExpressionFinder {
   // Verifies children of 'plan'. If all succeed, sets minimalFound to
   // true and reruns 'plan' wth and without lazy vectors. Set
   // breakpoint inside this to debug failures.
-  void findMinimalRecursive(
+  bool findMinimalRecursive(
       core::TypedExprPtr plan,
       const RowVectorPtr& rowVector,
-      const std::vector<column_index_t>& columnsToWrapInLazy,
-      bool& minimalFound) {
+      const std::vector<column_index_t>& columnsToWrapInLazy) {
     bool anyFailed = false;
     for (auto& input : plan->inputs()) {
       if (!verifyWithResults(input, rowVector, columnsToWrapInLazy)) {
         anyFailed = true;
-        findMinimalRecursive(
-            input, rowVector, columnsToWrapInLazy, minimalFound);
+        bool minimalFound =
+            findMinimalRecursive(input, rowVector, columnsToWrapInLazy);
         if (minimalFound) {
-          return;
+          return true;
         }
       }
     }
     if (!anyFailed) {
-      minimalFound = true;
       LOG(INFO) << "Failed with all children succeeding: " << plan->toString();
       // Re-running the minimum failed. Put breakpoint here to debug.
       verifyWithResults(plan, rowVector, columnsToWrapInLazy);
@@ -388,7 +385,12 @@ class MinimalSubExpressionFinder {
           LOG(INFO) << "Minimal failure succeeded without lazy vectors";
         }
       }
+      LOG(INFO) << fmt::format(
+          "Found minimal failing subexpression: {}", plan->toString());
+      return true;
     }
+
+    return false;
   }
 
   // Verifies a 'plan' against a 'rowVector' with and without pre-existing
@@ -420,18 +422,22 @@ class MinimalSubExpressionFinder {
       const RowVectorPtr& rowVector,
       const std::vector<column_index_t>& columnsToWrapInLazy,
       VectorPtr results) {
-    ResultOrError result;
+    // Turn off unnecessary logging.
+    FLAGS_minloglevel = 2;
+    bool success = true;
+
     try {
-      result = verifier_.verify(
+      verifier_.verify(
           {plan},
           rowVector,
           results ? BaseVector::copy(*results) : nullptr,
           true, // canThrow
           columnsToWrapInLazy);
     } catch (const std::exception& e) {
-      return false;
+      success = false;
     }
-    return true;
+    FLAGS_minloglevel = 0;
+    return success;
   }
 
   ExpressionVerifier verifier_;
@@ -446,6 +452,12 @@ void computeMinimumSubExpression(
     const RowVectorPtr& rowVector,
     const std::vector<column_index_t>& columnsToWrapInLazy) {
   auto finder = MinimalSubExpressionFinder(std::move(minimalVerifier), fuzzer);
+  if (plans.size() > 1) {
+    LOG(INFO)
+        << "Found more than one expression, minimal subexpression might not work"
+           " in cases where bugs are due to side effects when evaluating multiple"
+           " expressions.";
+  }
   for (auto plan : plans) {
     LOG(INFO) << "============================================";
     LOG(INFO) << "Finding minimal subexpression for plan:" << plan->toString();

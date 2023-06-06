@@ -184,8 +184,6 @@ void ExpressionRunner::run(
   LOG(INFO) << "Evaluating SQL expression(s): " << sql;
 
   if (mode == "verify") {
-    VELOX_CHECK_EQ(
-        1, typedExprs.size(), "'verify' mode supports only one SQL expression");
     auto verifier = test::ExpressionVerifier(&execCtx, {false, ""});
     try {
       verifier.verify(

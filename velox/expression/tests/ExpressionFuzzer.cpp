@@ -1284,7 +1284,7 @@ void ExpressionFuzzer::retryWithTry(
             {&execCtx_, {false, ""}},
             vectorFuzzer_,
             plans,
-            rowVector,
+            noErrorRowVector,
             columnsToWrapInLazy);
       }
       throw;
