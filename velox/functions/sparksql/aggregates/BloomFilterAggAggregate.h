@@ -18,8 +18,11 @@
 
 #include <string>
 
+#include "velox/exec/AggregateUtil.h"
+
 namespace facebook::velox::functions::aggregate::sparksql {
 
-bool registerBloomFilterAggAggregate(const std::string& name);
+exec::AggregateRegistrationResult registerBloomFilterAggAggregate(
+    const std::string& name);
 
 } // namespace facebook::velox::functions::aggregate::sparksql

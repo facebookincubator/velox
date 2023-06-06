@@ -221,7 +221,7 @@ class BloomFilterAggAggregate : public exec::Aggregate {
 
   void computeCapacity() {
     if (capacity_ == kMissingArgument) {
-      // For further use
+      // For further use, used after spark BloomFilter implementation.
       // int64_t estimatedNumItems = std::min(estimatedNumItems_, kMaxNumItems);
       int64_t numBits = std::min(numBits_, kMaxNumBits);
       capacity_ = numBits / 16;
@@ -276,7 +276,8 @@ class BloomFilterAggAggregate : public exec::Aggregate {
 
 } // namespace
 
-bool registerBloomFilterAggAggregate(const std::string& name) {
+exec::AggregateRegistrationResult registerBloomFilterAggAggregate(
+    const std::string& name) {
   std::vector<std::shared_ptr<exec::AggregateFunctionSignature>> signatures{
       exec::AggregateFunctionSignatureBuilder()
           .argumentType("bigint")
