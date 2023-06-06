@@ -231,8 +231,12 @@ class CentralMomentsAggregate : public exec::Aggregate {
   explicit CentralMomentsAggregate(TypePtr resultType)
       : exec::Aggregate(resultType) {}
 
-  int32_t accumulatorFixedWidthSize() const override {
+  int32_t accumulatorAlignmentSize() const override {
     return alignof(CentralMomentsAccumulator);
+  }
+
+  int32_t accumulatorFixedWidthSize() const override {
+    return sizeof(CentralMomentsAccumulator);
   }
 
   void initializeNewGroups(
