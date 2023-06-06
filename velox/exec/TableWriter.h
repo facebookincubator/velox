@@ -39,6 +39,7 @@ class TableWriter : public Operator {
 
   void noMoreInput() override {
     Operator::noMoreInput();
+    aggregation_->noMoreInput();
     close();
   }
 
@@ -69,11 +70,16 @@ class TableWriter : public Operator {
   const std::shared_ptr<connector::ConnectorInsertTableHandle>
       insertTableHandle_;
   const connector::CommitStrategy commitStrategy_;
+  const std::shared_ptr<Operator> aggregation_;
   std::shared_ptr<connector::Connector> connector_;
   std::shared_ptr<connector::ConnectorQueryCtx> connectorQueryCtx_;
   std::unique_ptr<connector::DataSink> dataSink_;
   std::vector<column_index_t> inputMapping_;
   std::shared_ptr<const RowType> mappedType_;
+  const int ROW_COUNT_CHANNEL = 0;
+  const int FRAGMENT_CHANNEL = 1;
+  const int CONTEXT_CHANNEL = 2;
+  const int STATS_START_CHANNEL = 3;
 
   bool finished_ = false;
   bool closed_ = false;

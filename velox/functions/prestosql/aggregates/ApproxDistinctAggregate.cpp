@@ -158,6 +158,7 @@ class ApproxDistinctAggregate : public exec::Aggregate {
       extractAccumulators(groups, numGroups, result);
     } else {
       VELOX_CHECK(result);
+      // string_view?
       auto flatResult = (*result)->asFlatVector<int64_t>();
 
       extract<true>(

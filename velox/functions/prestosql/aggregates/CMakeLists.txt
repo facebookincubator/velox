@@ -38,6 +38,7 @@ add_library(
   ValueList.cpp
   VarianceAggregates.cpp
   MaxSizeForStatsAggregate.cpp
+  SumDataSizeForStatsAggregate.cpp
   RegisterAggregateFunctions.cpp)
 
 target_link_libraries(

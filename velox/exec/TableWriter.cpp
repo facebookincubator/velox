@@ -16,6 +16,7 @@
 
 #include "velox/exec/TableWriter.h"
 
+#include "HashAggregation.h"
 #include "velox/exec/Task.h"
 
 namespace facebook::velox::exec {
@@ -39,7 +40,11 @@ TableWriter::TableWriter(
           tableWriteNode->insertTableHandle()->connectorId())),
       insertTableHandle_(
           tableWriteNode->insertTableHandle()->connectorInsertTableHandle()),
-      commitStrategy_(tableWriteNode->commitStrategy()) {
+      commitStrategy_(tableWriteNode->commitStrategy()),
+      aggregation_(std::make_unique<HashAggregation>(
+          operatorId,
+          driverCtx,
+          tableWriteNode->aggregationNode())) {
   const auto& connectorId = tableWriteNode->insertTableHandle()->connectorId();
   connector_ = connector::getConnector(connectorId);
   connectorQueryCtx_ = operatorCtx_->createConnectorQueryCtx(
@@ -91,6 +96,7 @@ void TableWriter::addInput(RowVectorPtr input) {
   }
   dataSink_->appendData(mappedInput);
   numWrittenRows_ += input->size();
+  aggregation_->addInput(input);
 }
 
 RowVectorPtr TableWriter::getOutput() {
@@ -98,7 +104,6 @@ RowVectorPtr TableWriter::getOutput() {
   if (!noMoreInput_ || finished_) {
     return nullptr;
   }
-  finished_ = true;
 
   if (outputType_->size() == 0) {
     return nullptr;
@@ -114,6 +119,44 @@ RowVectorPtr TableWriter::getOutput() {
   }
 
   std::vector<std::string> fragments = dataSink_->finish();
+
+  if (!aggregation_->isFinished()) {
+    vector_size_t numOutputRows = 1;
+    std::vector<VectorPtr> columns;
+    auto aggregationOutput = aggregation_->getOutput();
+    auto commitContextJson = folly::toJson(folly::dynamic::object(
+        "lifespan", "TaskWide")("taskId", connectorQueryCtx_->taskId())(
+        "pageSinkCommitStrategy", commitStrategyToString(commitStrategy_))(
+        "lastPage", false));
+    // clang-format on
+
+    auto commitContextVector = std::make_shared<ConstantVector<StringView>>(
+        pool(),
+        numOutputRows,
+        false /*isNull*/,
+        VARBINARY(),
+        StringView(commitContextJson));
+
+    for (int channel = 0; channel < outputType_->size(); channel++) {
+      if (channel < CONTEXT_CHANNEL) {
+        auto row_count_channel_or_fragment = BaseVector::create(
+            outputType_->childAt(channel),
+            aggregationOutput->childAt(0)->size(),
+            pool());
+        row_count_channel_or_fragment->setNull(0, true);
+        columns.push_back(row_count_channel_or_fragment);
+      } else if (channel == CONTEXT_CHANNEL) {
+        columns.push_back(commitContextVector);
+      } else {
+        columns.push_back(
+            aggregationOutput->childAt(channel - STATS_START_CHANNEL));
+      }
+    }
+    return std::make_shared<RowVector>(
+        pool(), outputType_, nullptr, numOutputRows, columns);
+  }
+
+  finished_ = true;
 
   vector_size_t numOutputRows = fragments.size() + 1;
 
@@ -153,7 +196,16 @@ RowVectorPtr TableWriter::getOutput() {
 
   std::vector<VectorPtr> columns = {
       writtenRowsVector, fragmentsVector, commitContextVector};
-
+  for (int i = 0; i < (outputType_->size() - STATS_START_CHANNEL); i++) {
+    auto null_stats = BaseVector::create(
+        outputType_->childAt(i + STATS_START_CHANNEL),
+        writtenRowsVector->size(),
+        pool());
+    for (int j = 0; j < writtenRowsVector->size(); j++) {
+      null_stats->setNull(j, true);
+    }
+    columns.push_back(null_stats);
+  }
   return std::make_shared<RowVector>(
       pool(), outputType_, nullptr, numOutputRows, columns);
 }

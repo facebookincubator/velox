@@ -300,6 +300,7 @@ PlanBuilder& PlanBuilder::tableWrite(
       insertHandle,
       outputType,
       commitStrategy,
+      nullptr,
       planNode_);
   return *this;
 }

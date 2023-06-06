@@ -362,6 +362,7 @@ RowVectorPtr HashAggregation::getOutput() {
     resetPartialOutputIfNeed();
     return nullptr;
   }
+  finished_ = true;
   numOutputRows_ += output_->size();
   return output_;
 }
