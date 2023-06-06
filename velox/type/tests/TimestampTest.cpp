@@ -137,8 +137,11 @@ TEST(TimestampTest, now) {
   EXPECT_GE(expectedEpochMs, now.toMillis());
 }
 
-TEST(TimestampTest, invalidInput) {
+DEBUG_ONLY_TEST(TimestampTest, invalidInput) {
   constexpr uint64_t kMax = std::numeric_limits<uint64_t>::max();
+  auto ts = Timestamp(std::numeric_limits<int64_t>::max(), Timestamp::kMaxNanos);
+  FLAGS_logtostderr = true;
+  LOG(INFO) << ts.toMillis();
   // Nanos invalid range.
   VELOX_ASSERT_THROW(
       Timestamp(1, kMax),

@@ -60,14 +60,14 @@ to determine the type of the elements. This works because there are no elements.
 
 TIMESTAMP type is used to represent a specific point in time.
 A TIMESTAMP is defined as the sum of seconds and nanoseconds since UNIX epoch.
-`struct Timestamp` uses a 64-bit integers to store seconds and a 64-bit unsigned integer
-to store nanoseconds. Nanoseconds in Timestamp is used to represent the high-precision
-part of Timestamp less than 1 second, so the value range of nanoseconds is [0, 10^9).
-For example, `Timestamp(0, 0)` represents `1970-01-01 00:00:00` and
-`Timestamp(10*24*60*60 + 125, 0)` represents `1970-01-11 00:02:05`.
-The seconds in Timestamp can be a negative value, which is used to represent a time point
-that is less than UNIX epoch. For example, `Timestamp(-(10*24*60*60 + 125), 0)` represents
-`1969-12-21 23:57:55`.
+`struct Timestamp` contains one 64-bit signed integer for seconds and another 64-bit
+unsigned integer for nanoseconds. Nanoseconds represent the high-precision part of
+the timestamp, which is less than 1 second. Valid range of nanoseconds is [0, 10^9).
+Timestamps before the epoch are specified using negative values for the seconds.
+Examples:
+* Timestamp(0, 0) represents 1970-01-01T00:00:00 (epoch).
+* Timestamp(10*24*60*60 + 125, 0) represents 1970-01-11T00:02:05 (10 days 125 seconds after epoch).
+* Timestamp(-10*24*60*60 - 125, 0) represents 1969-12-21T23:57:55 (10 days 125 seconds before epoch).
 
 Logical Types
 ~~~~~~~~~~~~~
@@ -135,3 +135,7 @@ JSON                      VARCHAR
 TIMESTAMP WITH TIME ZONE  ROW<BIGINT, SMALLINT>
 ========================  =====================
 
+TIMESTAMP WITH TIME ZONE represents a time point in milliseconds precision
+from UNIX epoch with timezone information. Its physical type contains one 64-bit
+signed integer for milliseconds and another 16-bit signed integer for timezone ID.
+Valid range of timezone ID is [1, 1680].
