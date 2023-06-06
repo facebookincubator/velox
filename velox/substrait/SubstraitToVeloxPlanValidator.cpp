@@ -499,6 +499,12 @@ bool SubstraitToVeloxPlanValidator::validate(
     std::cout << "Validation failed for input types in SortRel." << std::endl;
     return false;
   }
+  for (const auto& type : types) {
+    if (type->kind() == TypeKind::TIMESTAMP) {
+      std::cout << "Timestamp type is not supported in SortRel." << std::endl;
+      return false;
+    }
+  }
 
   int32_t inputPlanNodeId = 0;
   std::vector<std::string> names;
