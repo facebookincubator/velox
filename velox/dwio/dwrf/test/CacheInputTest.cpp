@@ -227,7 +227,6 @@ class CacheTest : public testing::Test {
       int64_t offset,
       const IoStatisticsPtr& ioStats) {
     auto data = std::make_unique<StripeData>();
-    auto options = std::make_shared<ReaderOptions>(pool_.get());
     data->input = std::make_unique<CachedBufferedInput>(
         readFile,
         MetricsLog::voidLog(),
@@ -237,7 +236,7 @@ class CacheTest : public testing::Test {
         groupId,
         ioStats,
         executor_.get(),
-        options);
+        ReaderOptions(pool_.get()));
     data->file = readFile.get();
     for (auto i = 0; i < numColumns; ++i) {
       int32_t streamIndex = i * (kMaxStreams / numColumns);
@@ -456,7 +455,6 @@ TEST_F(CacheTest, window) {
   uint64_t fileId;
   uint64_t groupId;
   auto file = inputByPath("test_for_window", fileId, groupId);
-  auto options = std::make_shared<ReaderOptions>(pool_.get());
   auto input = std::make_unique<CachedBufferedInput>(
       file,
       MetricsLog::voidLog(),
@@ -466,7 +464,7 @@ TEST_F(CacheTest, window) {
       groupId,
       ioStats_,
       executor_.get(),
-      options);
+      ReaderOptions(pool_.get()));
   auto begin = 4 * kMB;
   auto end = 17 * kMB;
   auto stream = input->read(begin, end - begin, LogType::TEST);
@@ -646,10 +644,10 @@ class FileWithReadAhead {
       cache::AsyncDataCache* FOLLY_NONNULL cache,
       IoStatisticsPtr stats,
       memory::MemoryPool& pool,
-      folly::Executor* executor) {
+      folly::Executor* executor)
+      : options_(&pool) {
     fileId_ = std::make_unique<StringIdLease>(fileIds(), name);
     file_ = std::make_shared<TestReadFile>(fileId_->id(), kFileSize, stats);
-    options_ = std::make_shared<ReaderOptions>(&pool);
     bufferedInput_ = std::make_unique<CachedBufferedInput>(
         file_,
         MetricsLog::voidLog(),
@@ -678,7 +676,7 @@ class FileWithReadAhead {
   std::unique_ptr<CachedBufferedInput> bufferedInput_;
   std::unique_ptr<SeekableInputStream> stream_;
   std::shared_ptr<TestReadFile> file_;
-  std::shared_ptr<ReaderOptions> options_;
+  ReaderOptions options_;
 };
 
 TEST_F(CacheTest, readAhead) {

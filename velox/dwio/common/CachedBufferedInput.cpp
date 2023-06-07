@@ -74,7 +74,7 @@ std::unique_ptr<SeekableInputStream> CachedBufferedInput::enqueue(
       tracker_,
       id,
       groupId_,
-      options_->loadQuantum());
+      options_.loadQuantum());
   requests_.back().stream = stream.get();
   return stream;
 }
@@ -92,7 +92,7 @@ bool CachedBufferedInput::shouldPreload(int32_t numPages) {
   }
   for (auto& request : requests_) {
     numPages += bits::roundUp(
-                    std::min<int32_t>(request.size, options_->loadQuantum()),
+                    std::min<int32_t>(request.size, options_.loadQuantum()),
                     memory::AllocationTraits::kPageSize) /
         memory::AllocationTraits::kPageSize;
   }
@@ -193,7 +193,7 @@ void CachedBufferedInput::load(const LogType) {
       if (prefetchAnyway || adjustedReadPct(trackingData) >= readPct) {
         request.processed = true;
         auto parts = makeRequestParts(
-            request, trackingData, options_->loadQuantum(), extraRequests);
+            request, trackingData, options_.loadQuantum(), extraRequests);
         for (auto part : parts) {
           if (cache_->exists(part->key)) {
             continue;
@@ -227,7 +227,7 @@ void CachedBufferedInput::makeLoads(
     return;
   }
   bool isSsd = !requests[0]->ssdPin.empty();
-  int32_t maxDistance = isSsd ? 20000 : options_->maxCoalesceDistance();
+  int32_t maxDistance = isSsd ? 20000 : options_.maxCoalesceDistance();
   std::sort(
       requests.begin(),
       requests.end(),
@@ -257,7 +257,7 @@ void CachedBufferedInput::makeLoads(
         return size;
       },
       [&](int32_t index) {
-        if (coalescedBytes > options_->maxCoalesceBytes()) {
+        if (coalescedBytes > options_.maxCoalesceBytes()) {
           coalescedBytes = 0;
           return kNoCoalesce;
         }
@@ -481,7 +481,7 @@ void CachedBufferedInput::readRegion(
         ioStats_,
         groupId_,
         requests,
-        options_->maxCoalesceDistance());
+        options_.maxCoalesceDistance());
   }
   allCoalescedLoads_.push_back(load);
   coalescedLoads_.withWLock([&](auto& loads) {
@@ -522,7 +522,7 @@ std::unique_ptr<SeekableInputStream> CachedBufferedInput::read(
       nullptr,
       TrackingId(),
       0,
-      options_->loadQuantum());
+      options_.loadQuantum());
 }
 
 bool CachedBufferedInput::prefetch(Region region) {

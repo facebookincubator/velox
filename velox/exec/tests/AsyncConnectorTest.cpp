@@ -143,8 +143,7 @@ class TestConnector : public connector::Connector {
           std::string,
           std::shared_ptr<connector::ColumnHandle>>& /* columnHandles */,
       connector::ConnectorQueryCtx* connectorQueryCtx,
-      const std::shared_ptr<dwio::common::ReaderOptions> options = {})
-      override {
+      const dwio::common::ReaderOptions& options) override {
     return std::make_unique<TestDataSource>(connectorQueryCtx->memoryPool());
   }
 

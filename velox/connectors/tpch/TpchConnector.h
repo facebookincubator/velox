@@ -142,8 +142,7 @@ class TpchConnector final : public Connector {
           std::string,
           std::shared_ptr<connector::ColumnHandle>>& columnHandles,
       ConnectorQueryCtx* FOLLY_NONNULL connectorQueryCtx,
-      const std::shared_ptr<dwio::common::ReaderOptions> options = {})
-      override final {
+      const dwio::common::ReaderOptions& options) override final {
     return std::make_unique<TpchDataSource>(
         outputType,
         tableHandle,

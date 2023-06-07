@@ -15,6 +15,7 @@
  */
 #include "velox/exec/TableScan.h"
 #include "velox/common/time/Timer.h"
+#include "velox/dwio/common/Options.h"
 #include "velox/exec/Task.h"
 #include "velox/expression/Expr.h"
 
@@ -107,7 +108,7 @@ RowVectorPtr TableScan::getOutput() {
             tableHandle_,
             columnHandles_,
             connectorQueryCtx_.get(),
-            {});
+            dwio::common::ReaderOptions(connectorQueryCtx_->memoryPool()));
         for (const auto& entry : pendingDynamicFilters_) {
           dataSource_->addDynamicFilter(entry.first, entry.second);
         }
@@ -234,8 +235,12 @@ void TableScan::preload(std::shared_ptr<connector::ConnectorSplit> split) {
              },
              &debugString});
 
-        auto ptr =
-            connector->createDataSource(type, table, columns, ctx.get(), {});
+        auto ptr = connector->createDataSource(
+            type,
+            table,
+            columns,
+            ctx.get(),
+            dwio::common::ReaderOptions(ctx->memoryPool()));
         if (task->isCancelled()) {
           return nullptr;
         }

@@ -41,7 +41,7 @@ class HiveConnector : public Connector {
           std::string,
           std::shared_ptr<connector::ColumnHandle>>& columnHandles,
       ConnectorQueryCtx* connectorQueryCtx,
-      const std::shared_ptr<dwio::common::ReaderOptions> options) override {
+      const dwio::common::ReaderOptions& options) override {
     return std::make_unique<HiveDataSource>(
         outputType,
         tableHandle,
@@ -54,7 +54,7 @@ class HiveConnector : public Connector {
         HiveConfig::isFileColumnNamesReadAsLowerCase(
             connectorQueryCtx->config()),
         executor_,
-        std::move(options));
+        options);
   }
 
   bool supportsSplitPreload() override {
