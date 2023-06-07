@@ -59,7 +59,7 @@ function prompt {
 function update_brew {
   BREW_PATH="$(which brew)"
   "${BREW_PATH}" update --auto-update --verbose
-  "{$BREW_PATH}" developer off
+  "${BREW_PATH}" developer off
 }
 
 function install_build_prerequisites {
