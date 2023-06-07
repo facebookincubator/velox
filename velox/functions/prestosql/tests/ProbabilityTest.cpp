@@ -170,6 +170,7 @@ TEST_F(ProbabilityTest, cauchyCDF) {
   EXPECT_EQ(0.0, cauchyCDF(kInf, 2.0, 3.0));
   EXPECT_EQ(1.0, cauchyCDF(5.0, 2.0, kDoubleMax));
   EXPECT_EQ(0.5, cauchyCDF(5.0, kDoubleMax, 3.0));
+  EXPECT_EQ(0.0, cauchyCDF(kDoubleMax, 1.0, 1.0));
   EXPECT_EQ(0.75, cauchyCDF(kDoubleMin, 1.0, 1.0));
   EXPECT_EQ(0.5, cauchyCDF(5.0, kDoubleMin, 5.0));
   EXPECT_EQ(0.25, cauchyCDF(1.0, 1.0, kDoubleMin));

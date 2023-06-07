@@ -99,7 +99,8 @@ struct CauchyCDFFunction {
   FOLLY_ALWAYS_INLINE void
   call(double& result, double median, double scale, double value) {
     static constexpr double kInf = std::numeric_limits<double>::infinity();
-    if (median == kInf) {
+    static constexpr double kDoubleMax = std::numeric_limits<double>::max();
+    if (median == kInf || median == kDoubleMax) {
       result = 0.0;
     } else if (scale == kInf) {
       result = 0.5;
