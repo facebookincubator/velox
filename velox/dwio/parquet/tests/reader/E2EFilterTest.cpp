@@ -116,6 +116,24 @@ TEST_F(E2EFilterTest, integerDirect) {
       {"short_val", "int_val", "long_val"},
       20);
 }
+
+TEST_F(E2EFilterTest, integerDeltaBinaryPack) {
+  writerProperties_ = ::parquet::WriterProperties::Builder()
+                          .disable_dictionary()
+                          ->encoding(::parquet::Encoding::DELTA_BINARY_PACKED)
+                          ->data_pagesize(4 * 1024)
+                          ->build();
+  testWithTypes(
+      "short_val:smallint,"
+      "int_val:int,"
+      "long_val:bigint,"
+      "long_null:bigint",
+      [&]() { makeAllNulls("long_null"); },
+      true,
+      {"short_val", "int_val", "long_val"},
+      20);
+}
+
 TEST_F(E2EFilterTest, compression) {
   for (const auto compression :
        {::parquet::Compression::SNAPPY,
