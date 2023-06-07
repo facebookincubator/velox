@@ -77,8 +77,8 @@ class EntropyAggregate : public exec::Aggregate {
  public:
   explicit EntropyAggregate(TypePtr resultType) : exec::Aggregate(resultType) {}
 
-  int32_t accumulatorAlignmentSize() const override{
-      return alignof(EntropyAccumulator);
+  int32_t accumulatorAlignmentSize() const override {
+    return alignof(EntropyAccumulator);
   }
 
   int32_t accumulatorFixedWidthSize() const override {
