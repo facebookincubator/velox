@@ -43,13 +43,13 @@ struct EntropyAccumulator {
     return sumCLogC_;
   }
 
-  void update(int64_t input) {
-    VELOX_CHECK_GT(input, 0, "Entropy input value must be non-negative");
-    if (input == 0) {
+  void update(int64_t count) {
+    VELOX_CHECK_GT(count, 0, "Entropy count value must be non-negative");
+    if (count == 0) {
       return;
     }
-    sumC_ += (double)input;
-    sumCLogC_ += (double)input * std::log(input);
+    sumC_ += (double)count;
+    sumCLogC_ += (double)count * std::log(count);
   }
 
   void merge(double sumCOther, double sumCLogCOther) {
@@ -392,8 +392,8 @@ exec::AggregateRegistrationResult registerEntropy(const std::string& name) {
 
 } // namespace
 
-void registerVarianceAggregates(const std::string& prefix) {
-  registerEntropy(prefix + kStdDev);
+void registerEntropyAggregates(const std::string& prefix) {
+  registerEntropy(prefix + kEntropy);
 }
 
 } // namespace facebook::velox::aggregate::prestosql
