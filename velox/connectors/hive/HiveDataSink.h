@@ -17,6 +17,7 @@
 
 #include "velox/connectors/Connector.h"
 #include "velox/connectors/hive/PartitionIdGenerator.h"
+#include "velox/dwio/dwrf/writer/Writer.h"
 
 namespace facebook::velox::dwrf {
 class Writer;
