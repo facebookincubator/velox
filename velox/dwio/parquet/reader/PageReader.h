@@ -121,6 +121,10 @@ class PageReader {
     dictionaryValues_.reset();
   }
 
+  bool isDeltaBinaryPacked() const {
+      return encoding_ == thrift::Encoding::DELTA_BINARY_PACKED;
+  }
+
   /// Returns the range of repdefs for the top level rows covered by the last
   /// decoderepDefs().
   std::pair<int32_t, int32_t> repDefRange() const {
@@ -262,6 +266,7 @@ class PageReader {
         auto dictVisitor = visitor.toDictionaryColumnVisitor();
         dictionaryIdDecoder_->readWithVisitor<true>(nulls, dictVisitor);
       } else if (encoding_ == thrift::Encoding::DELTA_BINARY_PACKED) {
+        nullsFromFastPath = false;
         deltaBpDecoder_->readWithVisitor<true>(nulls, visitor);
       } else {
         directDecoder_->readWithVisitor<true>(

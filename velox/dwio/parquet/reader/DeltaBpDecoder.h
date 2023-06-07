@@ -16,17 +16,17 @@
 
 #pragma once
 
-#include "velox/dwio/common/BitPackDecoder.h"
-
-#include <folly/Varint.h>
+#include "velox/common/base/BitUtil.h"
 
 namespace facebook::velox::parquet {
 
+// DeltaBpDecoder is adapted from Apache Arrow:
+// https://github.com/apache/arrow/blob/apache-arrow-12.0.0/cpp/src/parquet/encoding.cc#LL2357C18-L2586C3
 class DeltaBpDecoder {
  public:
   DeltaBpDecoder(const char* FOLLY_NONNULL start, const char* FOLLY_NONNULL end)
       : bufferStart_(start), bufferEnd_(end) {
-    readHeader();
+    initHeader();
   }
 
   void skip(uint64_t numValues) {
@@ -42,7 +42,7 @@ class DeltaBpDecoder {
       numValues = bits::countNonNulls(nulls, current, current + numValues);
     }
     for (int32_t i = 0; i < numValues; ++i) {
-      readInt64();
+      readLong();
     }
   }
 
@@ -68,7 +68,7 @@ class DeltaBpDecoder {
         }
 
         // We are at a non-null value on a row to visit.
-        toSkip = visitor.process(readInt64(), atEnd);
+        toSkip = visitor.process(readLong(), atEnd);
       }
       ++current;
       if (toSkip) {
@@ -82,28 +82,33 @@ class DeltaBpDecoder {
   }
 
  protected:
-  uint64_t readULEB128() {
+  bool getVlqInt(uint64_t& v) {
     uint64_t tmp = 0;
-    for (int i = 0; i < kMaxULEB128ByteLengthForInt64; i++) {
+    for (int i = 0; i < kMaxVlqByteLength; i++) {
       uint8_t byte = *(bufferStart_++);
       tmp |= static_cast<uint64_t>(byte & 0x7F) << (7 * i);
       if ((byte & 0x80) == 0) {
-        return tmp;
+        v = tmp;
+        return true;
       }
     }
-    VELOX_FAIL("Invalid ULEB128 int");
+    return false;
   }
 
-  int64_t readZigZagULEB128() {
-    uint64_t u = readULEB128();
-    return (u >> 1) ^ (~(u & 1) + 1);
+  bool getZigZagVlqInt(int64_t& v) {
+    uint64_t u;
+    if (!getVlqInt(u))
+      return false;
+    u = (u >> 1) ^ (~(u & 1) + 1);
+    v = ::arrow::util::SafeCopy<int64_t>(u);
+    return true;
   }
 
-  void readHeader() {
-    valuesPerBlock_ = readULEB128();
-    miniBlocksPerBlock_ = readULEB128();
-    totalValueCount_ = readULEB128();
-    lastValue_ = readZigZagULEB128();
+  void initHeader() {
+    if (!getVlqInt(valuesPerBlock_) || !getVlqInt(miniBlocksPerBlock_) ||
+        !getVlqInt(totalValueCount_) || !getZigZagVlqInt(lastValue_)) {
+      VELOX_FAIL("initHeader EOF");
+    }
 
     VELOX_CHECK_GT(valuesPerBlock_, 0, "cannot have zero value per block");
     VELOX_CHECK_EQ(
@@ -128,25 +133,27 @@ class DeltaBpDecoder {
     valuesRemainingCurrentMiniBlock_ = 0;
   }
 
-  void readBlock() {
-    VELOX_CHECK_GT(totalValuesRemaining_, 0, "readBlock called at EOF");
+  void initBlock() {
+    VELOX_CHECK_GT(totalValuesRemaining_, 0, "initBlock called at EOF");
 
-    minDelta_ = readZigZagULEB128();
+    if (!getZigZagVlqInt(minDelta_)) {
+      VELOX_FAIL("initBlock EOF")
+    }
 
     // read the bitwidth of each miniblock
     for (uint32_t i = 0; i < miniBlocksPerBlock_; ++i) {
       deltaBitWidths_[i] = *(bufferStart_++);
       // Note that non-conformant bitwidth entries are allowed by the Parquet
       // spec for extraneous miniblocks in the last block (GH-14923), so we
-      // check the bitwidths when actually using them (see InitMiniBlock()).
+      // check the bitwidths when actually using them (see initMiniBlock()).
     }
 
     miniBlockIdx_ = 0;
     firstBlockInitialized_ = true;
-    readMiniBlock(deltaBitWidths_[0]);
+    initMiniBlock(deltaBitWidths_[0]);
   }
 
-  void readMiniBlock(int32_t bitWidth) {
+  void initMiniBlock(int32_t bitWidth) {
     VELOX_CHECK_LE(
         bitWidth,
         kMaxDeltaBitWidth,
@@ -155,19 +162,27 @@ class DeltaBpDecoder {
     valuesRemainingCurrentMiniBlock_ = valuesPerMiniBlock_;
   }
 
-  int64_t readInt64() {
+  int64_t readLong() {
     int64_t value = 0;
     if (valuesRemainingCurrentMiniBlock_ == 0) {
       if (!firstBlockInitialized_) {
         value = lastValue_;
-        readBlock();
+        // When block is uninitialized we have two different possibilities:
+        // 1. totalValueCount_ == 1, which means that the page may have only
+        // one value (encoded in the header), and we should not initialize
+        // any block.
+        // 2. totalValueCount_ != 1, which means we should initialize the
+        // incoming block for subsequent reads.
+        if (totalValueCount_ != 1) {
+          initBlock();
+        }
         return value;
       } else {
         ++miniBlockIdx_;
         if (miniBlockIdx_ < miniBlocksPerBlock_) {
-          readMiniBlock(deltaBitWidths_[miniBlockIdx_]);
+          initMiniBlock(deltaBitWidths_[miniBlockIdx_]);
         } else {
-          readBlock();
+          initBlock();
         }
       }
     }
@@ -181,9 +196,10 @@ class DeltaBpDecoder {
         reinterpret_cast<uint64_t*>(&value),
         0,
         deltaBitWidth_);
+    // Addition between minDelta_, packed int and lastValue_ should be treated
+    // as unsigned addition. Overflow is as expected.
     value += minDelta_ + lastValue_;
     lastValue_ = value;
-
     valuesRemainingCurrentMiniBlock_--;
     totalValuesRemaining_--;
 
@@ -196,27 +212,32 @@ class DeltaBpDecoder {
   static constexpr int kMaxDeltaBitWidth =
       static_cast<int>(sizeof(int64_t) * 8);
 
-  // Maximum byte length of a ULEB128 encoded int32
-  static constexpr int kMaxULEB128ByteLengthForInt32 = 5;
-
-  // Maximum byte length of a ULEB128 encoded int64
-  static constexpr int kMaxULEB128ByteLengthForInt64 = 10;
+  // Maximum byte length of a VLQ encoded int64
+  static constexpr int kMaxVlqByteLength = 10;
 
   const char* FOLLY_NULLABLE bufferStart_;
   const char* FOLLY_NULLABLE bufferEnd_;
 
   uint64_t valuesPerBlock_;
   uint64_t miniBlocksPerBlock_;
-  uint64_t totalValueCount_;
-  uint64_t lastValue_;
   uint64_t valuesPerMiniBlock_;
+  uint64_t totalValueCount_;
+
   uint64_t totalValuesRemaining_;
-  std::vector<uint8_t> deltaBitWidths_;
-  bool firstBlockInitialized_;
+  // Remaining values in current mini block. If the current block is the last
+  // mini block, valuesRemainingCurrentMiniBlock_ may greater than
+  // totalValuesRemaining_.
   uint64_t valuesRemainingCurrentMiniBlock_;
-  uint64_t minDelta_;
+
+  // If the page doesn't contain any block, `firstBlockInitialized_` will
+  // always be false. Otherwise, it will be true when first block initialized.
+  bool firstBlockInitialized_;
+  int64_t minDelta_;
   uint64_t miniBlockIdx_;
+  std::vector<uint8_t> deltaBitWidths_;
   uint64_t deltaBitWidth_;
+
+  int64_t lastValue_;
 };
 
 } // namespace facebook::velox::parquet
