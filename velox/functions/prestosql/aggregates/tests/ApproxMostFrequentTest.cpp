@@ -139,11 +139,12 @@ using ApproxMostFrequentTestInt = ApproxMostFrequentTest<int>;
 TEST_F(ApproxMostFrequentTestInt, invalidBuckets) {
   static_cast<memory::MemoryPoolImpl*>(pool())->testingSetCapacity(1 << 21);
   auto run = [&](int64_t buckets) {
-    auto rows = makeRowVector({
-        makeConstant<int64_t>(buckets, buckets),
-        makeFlatVector<int>(buckets, folly::identity),
-        makeConstant<int64_t>(buckets, buckets),
-    });
+    // expression-list uses explicit generated elements to avoid memory leak.
+    // sse https://www.open-std.org/jtc1/sc22/wg21/docs/papers/2016/p0400r0.html
+    auto elem1 = makeConstant<int64_t>(buckets, buckets);
+    auto elem2 = makeFlatVector<int>(buckets, folly::identity);
+    auto elem3 = makeConstant<int64_t>(buckets, buckets);
+    auto rows = makeRowVector({elem1, elem2, elem3, });
     auto plan = exec::test::PlanBuilder()
                     .values({rows})
                     .singleAggregation({}, {"approx_most_frequent(c0, c1, c2)"})
