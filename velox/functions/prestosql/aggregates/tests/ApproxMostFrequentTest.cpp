@@ -144,7 +144,11 @@ TEST_F(ApproxMostFrequentTestInt, invalidBuckets) {
     auto elem1 = makeConstant<int64_t>(buckets, buckets);
     auto elem2 = makeFlatVector<int>(buckets, folly::identity);
     auto elem3 = makeConstant<int64_t>(buckets, buckets);
-    auto rows = makeRowVector({elem1, elem2, elem3, });
+    auto rows = makeRowVector({
+        elem1,
+        elem2,
+        elem3,
+    });
     auto plan = exec::test::PlanBuilder()
                     .values({rows})
                     .singleAggregation({}, {"approx_most_frequent(c0, c1, c2)"})
