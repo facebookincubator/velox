@@ -129,6 +129,40 @@ std::vector<TestParam> getTestParams() {
     }                                                           \
   } while (0);
 
+template <typename T>
+struct ExtremeValueTrait : public std::numeric_limits<T> {};
+
+template <>
+struct ExtremeValueTrait<Timestamp> {
+  static constexpr Timestamp lowest() {
+    return Timestamp(
+        ExtremeValueTrait<int64_t>::lowest(),
+        ExtremeValueTrait<uint64_t>::lowest());
+  }
+
+  static constexpr Timestamp max() {
+    return Timestamp(
+        ExtremeValueTrait<int64_t>::max(), ExtremeValueTrait<uint64_t>::max());
+  }
+};
+
+template <>
+struct ExtremeValueTrait<Date> {
+  static constexpr Date lowest() {
+    return Date(std::numeric_limits<int32_t>::lowest());
+  }
+
+  static constexpr Date max() {
+    return Date(std::numeric_limits<int32_t>::max());
+  }
+};
+
+template <typename T>
+const T kMax = ExtremeValueTrait<T>::max();
+
+template <typename T>
+const T kLowest = ExtremeValueTrait<T>::lowest();
+
 class MinMaxByAggregationTestBase : public AggregationTestBase {
  protected:
   MinMaxByAggregationTestBase() : numValues_(6) {}
@@ -384,6 +418,17 @@ class MinMaxByGlobalByAggregationTest
               makeConstant(std::optional<U>(dataAt<U>(0)), 10)}),
          "SELECT NULL"},
 
+        // Extreme value cases.
+        {makeRowVector(
+             {makeNullableFlatVector<T>({std::nullopt, dataAt<T>(4)}),
+              makeConstant(std::optional<U>(kMax<U>), 2)}),
+         "SELECT NULL"},
+
+        {makeRowVector(
+             {makeNullableFlatVector<T>({dataAt<T>(4), std::nullopt}),
+              makeConstant(std::optional<U>(kMax<U>), 2)}),
+         fmt::format("SELECT {}", asSql(dataAt<T>(4)))},
+
         // Regular cases.
         {makeRowVector(
              {makeNullableFlatVector<T>(
@@ -467,6 +512,17 @@ class MinMaxByGlobalByAggregationTest
               makeConstant(std::optional<U>(dataAt<U>(0)), 10)}),
          "SELECT NULL"},
 
+        // Extreme value cases.
+        {makeRowVector(
+             {makeNullableFlatVector<T>({std::nullopt, dataAt<T>(4)}),
+              makeConstant(std::optional<U>(kLowest<U>), 2)}),
+         "SELECT NULL"},
+
+        {makeRowVector(
+             {makeNullableFlatVector<T>({dataAt<T>(4), std::nullopt}),
+              makeConstant(std::optional<U>(kLowest<U>), 2)}),
+         fmt::format("SELECT {}", asSql(dataAt<T>(4)))},
+
         // Regular cases.
         {makeRowVector(
              {makeNullableFlatVector<T>(
@@ -515,10 +571,21 @@ class MinMaxByGlobalByAggregationTest
 };
 
 TEST_P(MinMaxByGlobalByAggregationTest, minByFinalGlobalBy) {
+  // Current timestamp implementation has bug for represent max value, wait
+  // https://github.com/facebookincubator/velox/pull/5083 merged, maybe we could
+  // not skip it.
+  if (GetParam().comparisonType == TypeKind::TIMESTAMP) {
+    GTEST_SKIP()
+        << "Not support for extreme value case when comparison type is timestamp";
+  }
   EXECUTE_TEST(minByGlobalByTest);
 }
 
 TEST_P(MinMaxByGlobalByAggregationTest, maxByFinalGlobalBy) {
+  if (GetParam().comparisonType == TypeKind::TIMESTAMP) {
+    GTEST_SKIP()
+        << "Not support for extreme value case when comparison type is timestamp";
+  }
   EXECUTE_TEST(maxByGlobalByTest);
 }
 
