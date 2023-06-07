@@ -244,7 +244,7 @@ velox_tpch_benchmark: This program benchmarks TPC-H queries. Run 'velox_tpch_ben
 
 
 
-  Flags from /home/paul/code/velox-fork/folly/folly/Benchmark.cpp:
+  Flags from ./folly/folly/Benchmark.cpp:
     -benchmark (Run benchmarks.) type: bool default: false
     -bm_estimate_time (Estimate running time) type: bool default: false
     -bm_json_verbose (File to write verbose JSON format (for BenchmarkCompare /
@@ -274,38 +274,38 @@ velox_tpch_benchmark: This program benchmarks TPC-H queries. Run 'velox_tpch_ben
 
 
 
-  Flags from /home/paul/code/velox-fork/folly/folly/detail/MemoryIdler.cpp:
+  Flags from ./folly/folly/detail/MemoryIdler.cpp:
     -folly_memory_idler_purge_arenas (if enabled, folly memory-idler purges
       jemalloc arenas on thread idle) type: bool default: true
 
 
 
-  Flags from /home/paul/code/velox-fork/folly/folly/executors/CPUThreadPoolExecutor.cpp:
+  Flags from ./folly/folly/executors/CPUThreadPoolExecutor.cpp:
     -dynamic_cputhreadpoolexecutor (CPUThreadPoolExecutor will dynamically
       create and destroy threads) type: bool default: true
 
-  Flags from /home/paul/code/velox-fork/folly/folly/executors/IOThreadPoolExecutor.cpp:
+  Flags from ./folly/folly/executors/IOThreadPoolExecutor.cpp:
     -dynamic_iothreadpoolexecutor (IOThreadPoolExecutor will dynamically create
       threads) type: bool default: true
 
-  Flags from /home/paul/code/velox-fork/folly/folly/executors/ThreadPoolExecutor.cpp:
+  Flags from ./folly/folly/executors/ThreadPoolExecutor.cpp:
     -threadtimeout_ms (Idle time before ThreadPoolExecutor threads are joined)
       type: int64 default: 60000
 
 
 
-  Flags from /home/paul/code/velox-fork/folly/folly/init/Init.cpp:
+  Flags from ./folly/folly/init/Init.cpp:
     -logging (Logging configuration) type: string default: ""
 
 
 
-  Flags from /home/paul/code/velox-fork/folly/folly/synchronization/Hazptr.cpp:
+  Flags from ./folly/folly/synchronization/Hazptr.cpp:
     -folly_hazptr_use_executor (Use an executor for hazptr asynchronous
       reclamation) type: bool default: true
 
 
 
-  Flags from /home/paul/code/velox-fork/velox/benchmarks/tpch/TpchBenchmark.cpp:
+  Flags from ./velox/benchmarks/tpch/TpchBenchmark.cpp:
     -cache_gb (GB of process memory for cache and query.. if non-0, uses mmap
       to allocator and in-process data cache.) type: int32 default: 0
     -clear_ram_cache (Clear RAM cache before each query.Flushes in process and
@@ -355,54 +355,54 @@ velox_tpch_benchmark: This program benchmarks TPC-H queries. Run 'velox_tpch_ben
 
 
 
-  Flags from /home/paul/code/velox-fork/velox/common/caching/SsdFile.cpp:
+  Flags from ./velox/common/caching/SsdFile.cpp:
     -ssd_odirect (Use O_DIRECT for SSD cache IO) type: bool default: true
     -ssd_verify_write (Read back data after writing to SSD) type: bool
       default: false
 
 
 
-  Flags from /home/paul/code/velox-fork/velox/connectors/hive/HiveConnector.cpp:
+  Flags from ./velox/connectors/hive/HiveConnector.cpp:
     -num_file_handle_cache (Max number of file handles to cache.) type: int32
       default: 20000
 
 
 
-  Flags from /home/paul/code/velox-fork/velox/dwio/common/BufferedInput.cpp:
+  Flags from ./velox/dwio/common/BufferedInput.cpp:
     -wsVRLoad (Use WS VRead API to load) type: bool default: false
 
-  Flags from /home/paul/code/velox-fork/velox/dwio/common/CachedBufferedInput.cpp:
+  Flags from ./velox/dwio/common/CachedBufferedInput.cpp:
     -cache_prefetch_min_pct (Minimum percentage of actual uses over references
       to a column for prefetching. No prefetch if > 100) type: int32
       default: 80
     -max_coalesced_bytes (Maximum size of single coalesced IO) type: int64
       default: 134217728
 
-  Flags from /home/paul/code/velox-fork/velox/dwio/common/Options.cpp:
+  Flags from ./velox/dwio/common/Options.cpp:
     -max_coalesce_distance_bytes (Maximum distance in which coalesce will
       combine requests.) type: int32 default: 524288
 
 
 
-  Flags from /home/paul/code/velox-fork/velox/dwio/parquet/reader/ParquetReader.cpp:
+  Flags from ./velox/dwio/parquet/reader/ParquetReader.cpp:
     -parquet_prefetch_rowgroups (Number of next row groups to prefetch. 1 means
       prefetch the next row group before decoding the current one) type: int32
       default: 1
 
 
 
-  Flags from /home/paul/code/velox-fork/velox/exec/TableScan.cpp:
+  Flags from ./velox/exec/TableScan.cpp:
     -split_preload_per_driver (Prefetch split metadata) type: int32 default: 2
 
 
 
-  Flags from /home/paul/code/velox-fork/velox/expression/Expr.cpp:
+  Flags from ./velox/expression/Expr.cpp:
     -force_eval_simplified (Whether to overwrite queryCtx and force the use of
       simplified expression evaluation path.) type: bool default: false
 
 
 
-  Flags from /home/paul/code/velox-fork/velox/flag_definitions/flags.cpp:
+  Flags from ./velox/flag_definitions/flags.cpp:
     -avx2 (Enables use of AVX2 when available) type: bool default: true
     -bmi2 (Enables use of BMI2 when available) type: bool default: true
     -max_block_value_set_length (Max entries per column that the block
