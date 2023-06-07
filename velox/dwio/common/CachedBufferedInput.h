@@ -58,7 +58,6 @@ class CachedBufferedInput : public BufferedInput {
  public:
   CachedBufferedInput(
       std::shared_ptr<ReadFile> readFile,
-      memory::MemoryPool& pool,
       const MetricsLogPtr& metricsLog,
       uint64_t fileNum,
       cache::AsyncDataCache* FOLLY_NONNULL cache,
@@ -67,7 +66,10 @@ class CachedBufferedInput : public BufferedInput {
       std::shared_ptr<IoStatistics> ioStats,
       folly::Executor* FOLLY_NULLABLE executor,
       const std::shared_ptr<ReaderOptions>& readerOptions)
-      : BufferedInput(std::move(readFile), pool, metricsLog),
+      : BufferedInput(
+            std::move(readFile),
+            readerOptions->getMemoryPool(),
+            metricsLog),
         cache_(cache),
         fileNum_(fileNum),
         tracker_(std::move(tracker)),
@@ -79,7 +81,6 @@ class CachedBufferedInput : public BufferedInput {
 
   CachedBufferedInput(
       std::shared_ptr<ReadFileInputStream> input,
-      memory::MemoryPool& pool,
       uint64_t fileNum,
       cache::AsyncDataCache* FOLLY_NONNULL cache,
       std::shared_ptr<cache::ScanTracker> tracker,
@@ -87,7 +88,7 @@ class CachedBufferedInput : public BufferedInput {
       std::shared_ptr<IoStatistics> ioStats,
       folly::Executor* FOLLY_NULLABLE executor,
       const std::shared_ptr<ReaderOptions>& readerOptions)
-      : BufferedInput(std::move(input), pool),
+      : BufferedInput(std::move(input), readerOptions->getMemoryPool()),
         cache_(cache),
         fileNum_(fileNum),
         tracker_(std::move(tracker)),
@@ -134,7 +135,6 @@ class CachedBufferedInput : public BufferedInput {
   virtual std::unique_ptr<BufferedInput> clone() const override {
     return std::make_unique<CachedBufferedInput>(
         input_,
-        pool_,
         fileNum_,
         cache_,
         tracker_,

@@ -230,7 +230,6 @@ class CacheTest : public testing::Test {
     auto options = std::make_shared<ReaderOptions>(pool_.get());
     data->input = std::make_unique<CachedBufferedInput>(
         readFile,
-        *pool_,
         MetricsLog::voidLog(),
         fileId,
         cache_.get(),
@@ -460,7 +459,6 @@ TEST_F(CacheTest, window) {
   auto options = std::make_shared<ReaderOptions>(pool_.get());
   auto input = std::make_unique<CachedBufferedInput>(
       file,
-      *pool_,
       MetricsLog::voidLog(),
       fileId,
       cache_.get(),
@@ -654,7 +652,6 @@ class FileWithReadAhead {
     options_ = std::make_shared<ReaderOptions>(&pool);
     bufferedInput_ = std::make_unique<CachedBufferedInput>(
         file_,
-        pool,
         MetricsLog::voidLog(),
         fileId_->id(),
         cache,

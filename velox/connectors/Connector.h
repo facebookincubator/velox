@@ -20,7 +20,6 @@
 #include "velox/common/caching/ScanTracker.h"
 #include "velox/common/future/VeloxPromise.h"
 #include "velox/core/ExpressionEvaluator.h"
-#include "velox/dwio/common/Options.h"
 #include "velox/vector/ComplexVector.h"
 
 #include <folly/Synchronized.h>
@@ -31,6 +30,10 @@ class Filter;
 
 namespace facebook::velox {
 class Config;
+}
+
+namespace facebook::velox::dwio::common {
+class ReaderOptions;
 }
 
 namespace facebook::velox::connector {
