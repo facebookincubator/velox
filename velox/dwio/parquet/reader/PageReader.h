@@ -122,7 +122,7 @@ class PageReader {
   }
 
   bool isDeltaBinaryPacked() const {
-      return encoding_ == thrift::Encoding::DELTA_BINARY_PACKED;
+    return encoding_ == thrift::Encoding::DELTA_BINARY_PACKED;
   }
 
   /// Returns the range of repdefs for the top level rows covered by the last
