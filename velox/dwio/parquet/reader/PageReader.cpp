@@ -690,7 +690,8 @@ void PageReader::makeDecoder() {
               pageData_, pageData_ + encodedDataSize_);
           break;
         default:
-          VELOX_UNSUPPORTED("DELTA_BINARY_PACKED decoder only supports INT32 and INT64");
+          VELOX_UNSUPPORTED(
+              "DELTA_BINARY_PACKED decoder only supports INT32 and INT64");
       }
       break;
     default:
