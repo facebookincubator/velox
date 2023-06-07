@@ -346,7 +346,7 @@ class MinimalSubExpressionFinder {
     if (minimalFound) {
       errorExit("Found minimal failing expression.");
     } else {
-      errorExit("Only the top level expression failed.");
+      errorExit("Only the top level expression failed!");
     }
   }
 
