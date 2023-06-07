@@ -58,6 +58,7 @@ add_executable(
   RoundRobinPartitionFunctionTest.cpp
   RowContainerTest.cpp
   RowNumberTest.cpp
+  MarkDistinctTest.cpp
   SpillTest.cpp
   SpillOperatorGroupTest.cpp
   SpillerTest.cpp
@@ -68,6 +69,7 @@ add_executable(
   TableWriteTest.cpp
   TaskListenerTest.cpp
   TopNTest.cpp
+  TopNRowNumberTest.cpp
   UnorderedStreamReaderTest.cpp
   UnnestTest.cpp
   VectorHasherTest.cpp

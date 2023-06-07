@@ -26,6 +26,7 @@
 #include "velox/exec/HashBuild.h"
 #include "velox/exec/HashProbe.h"
 #include "velox/exec/Limit.h"
+#include "velox/exec/MarkDistinct.h"
 #include "velox/exec/Merge.h"
 #include "velox/exec/MergeJoin.h"
 #include "velox/exec/NestedLoopJoinBuild.h"
@@ -37,6 +38,7 @@
 #include "velox/exec/TableScan.h"
 #include "velox/exec/TableWriter.h"
 #include "velox/exec/TopN.h"
+#include "velox/exec/TopNRowNumber.h"
 #include "velox/exec/Unnest.h"
 #include "velox/exec/Values.h"
 #include "velox/exec/Window.h"
@@ -483,6 +485,17 @@ std::shared_ptr<Driver> DriverFactory::createDriver(
             std::dynamic_pointer_cast<const core::RowNumberNode>(planNode)) {
       operators.push_back(
           std::make_unique<RowNumber>(id, ctx.get(), rowNumberNode));
+    } else if (
+        auto topNRowNumberNode =
+            std::dynamic_pointer_cast<const core::TopNRowNumberNode>(
+                planNode)) {
+      operators.push_back(
+          std::make_unique<TopNRowNumber>(id, ctx.get(), topNRowNumberNode));
+    } else if (
+        auto markDistinctNode =
+            std::dynamic_pointer_cast<const core::MarkDistinctNode>(planNode)) {
+      operators.push_back(
+          std::make_unique<MarkDistinct>(id, ctx.get(), markDistinctNode));
     } else if (
         auto localMerge =
             std::dynamic_pointer_cast<const core::LocalMergeNode>(planNode)) {

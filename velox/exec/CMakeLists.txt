@@ -37,6 +37,7 @@ add_library(
   Limit.cpp
   LocalPartition.cpp
   LocalPlanner.cpp
+  MarkDistinct.cpp
   Merge.cpp
   MergeJoin.cpp
   MergeSource.cpp
@@ -59,6 +60,7 @@ add_library(
   TableWriter.cpp
   Task.cpp
   TopN.cpp
+  TopNRowNumber.cpp
   Unnest.cpp
   Values.cpp
   VectorHasher.cpp

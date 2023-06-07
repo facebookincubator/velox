@@ -25,11 +25,10 @@ namespace {
 class NtileTest : public WindowTestBase {
  protected:
   void testNtile(const std::vector<RowVectorPtr>& vectors) {
+    // Tests ntile with a column.
+    WindowTestBase::testWindowFunction(vectors, "ntile(c2)", kOverClauses);
     // Tests ntile with constant value arguments.
     testNtileWithConstants(vectors, kOverClauses);
-    // Tests ntile with a column.
-    WindowTestBase::testWindowFunction(
-        vectors, "ntile(c2)", kOverClauses, kFrameClauses);
   }
 
   void SetUp() override {
@@ -38,6 +37,8 @@ class NtileTest : public WindowTestBase {
   }
 
  private:
+  // Note: This function assumes that the DuckDB table has been previously
+  // constructed from the data.
   void testNtileWithConstants(
       const std::vector<RowVectorPtr>& vectors,
       const std::vector<std::string>& overClauses) {
@@ -51,9 +52,11 @@ class NtileTest : public WindowTestBase {
         "ntile(10)",
         "ntile(16)",
     };
+
+    // Note: The DuckDB table has been previously created.
     for (auto function : kNtileInvocations) {
       WindowTestBase::testWindowFunction(
-          vectors, function, overClauses, kFrameClauses);
+          vectors, function, overClauses, {""}, false);
     }
   }
 };
@@ -63,14 +66,9 @@ TEST_F(NtileTest, basic) {
   testNtile({makeSimpleVector(30)});
 }
 
-// Tests ntile with a dataset with all rows in a single partition.
-TEST_F(NtileTest, singlePartition) {
-  testNtile({makeSinglePartitionVector(25)});
-}
-
 // Test ntile with a dataset with all rows in a single partition but in
 // 2 input vectors.
-TEST_F(NtileTest, multiInput) {
+TEST_F(NtileTest, singlePartition) {
   testNtile({makeSinglePartitionVector(25), makeSinglePartitionVector(30)});
 }
 

@@ -191,11 +191,9 @@ class ApproxDistinctAggregate : public exec::Aggregate {
             accumulator->serialize(buffer.data());
             serialized = StringView::makeInline(buffer);
           } else {
-            Buffer* buffer = flatResult->getBufferWithSpace(size);
-            char* ptr = buffer->asMutable<char>() + buffer->size();
-            accumulator->serialize(ptr);
-            buffer->setSize(buffer->size() + size);
-            serialized = StringView(ptr, size);
+            char* rawBuffer = flatResult->getRawStringBufferWithSpace(size);
+            accumulator->serialize(rawBuffer);
+            serialized = StringView(rawBuffer, size);
           }
           result->setNoCopy(index, serialized);
         });
@@ -401,7 +399,7 @@ std::unique_ptr<exec::Aggregate> createApproxDistinct(
       resultType, hllAsFinalResult, hllAsRawInput);
 }
 
-bool registerApproxDistinct(
+exec::AggregateRegistrationResult registerApproxDistinct(
     const std::string& name,
     bool hllAsFinalResult,
     bool hllAsRawInput) {
@@ -441,7 +439,7 @@ bool registerApproxDistinct(
     }
   }
 
-  exec::registerAggregateFunction(
+  return exec::registerAggregateFunction(
       name,
       std::move(signatures),
       [name, hllAsFinalResult, hllAsRawInput](
@@ -457,7 +455,6 @@ bool registerApproxDistinct(
             hllAsRawInput);
       },
       /*registerCompanionFunctions*/ true);
-  return true;
 }
 
 } // namespace

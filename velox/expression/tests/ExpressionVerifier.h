@@ -52,10 +52,13 @@ class ExpressionVerifier {
       : execCtx_(execCtx), options_(options) {}
 
   // Executes expressions both using common path (all evaluation
-  // optimizations) and simplified path. Additionally, a sorted list of column
+  // optimizations) and simplified path. Additionally, a list of column
   // indices can be passed via 'columnsToWrapInLazy' which specify the
   // columns/children in the input row vector that should be wrapped in a lazy
-  // layer before running it through the common evaluation path.
+  // layer before running it through the common evaluation path. The list can
+  // contain negative column indices that represent lazy vectors that should be
+  // preloaded before being fed to the evaluator. This list is sorted on the
+  // absolute value of the entries.
   // Returns:
   //  - result of evaluating the expressions if both paths succeeded and
   //  returned the exact same vectors.
@@ -67,14 +70,14 @@ class ExpressionVerifier {
       const RowVectorPtr& rowVector,
       VectorPtr&& resultVector,
       bool canThrow,
-      std::vector<column_index_t> columnsToWarpInLazy = {});
+      std::vector<int> columnsToWarpInLazy = {});
 
  private:
   // Utility method used to serialize the relevant data required to repro a
   // crash.
   void persistReproInfo(
       const VectorPtr& inputVector,
-      std::vector<column_index_t> columnsToWarpInLazy,
+      std::vector<int> columnsToWarpInLazy,
       const VectorPtr& resultVector,
       const std::string& sql,
       const std::vector<VectorPtr>& complexConstants);
@@ -84,7 +87,7 @@ class ExpressionVerifier {
   // otherwise.
   void persistReproInfoIfNeeded(
       const VectorPtr& inputVector,
-      const std::vector<column_index_t>& columnsToWarpInLazy,
+      const std::vector<int>& columnsToWarpInLazy,
       const VectorPtr& resultVector,
       const std::string& sql,
       const std::vector<VectorPtr>& complexConstants);
@@ -101,5 +104,5 @@ void computeMinimumSubExpression(
     VectorFuzzer& fuzzer,
     const std::vector<core::TypedExprPtr>& plans,
     const RowVectorPtr& rowVector,
-    const std::vector<column_index_t>& columnsToWrapInLazy);
+    const std::vector<int>& columnsToWrapInLazy);
 } // namespace facebook::velox::test

@@ -74,7 +74,7 @@ ResultOrError ExpressionVerifier::verify(
     const RowVectorPtr& rowVector,
     VectorPtr&& resultVector,
     bool canThrow,
-    std::vector<column_index_t> columnsToWrapInLazy) {
+    std::vector<int> columnsToWrapInLazy) {
   for (int i = 0; i < plans.size(); ++i) {
     LOG(INFO) << "Executing expression " << i << " : " << plans[i]->toString();
   }
@@ -223,7 +223,7 @@ ResultOrError ExpressionVerifier::verify(
 
 void ExpressionVerifier::persistReproInfoIfNeeded(
     const VectorPtr& inputVector,
-    const std::vector<column_index_t>& columnsToWrapInLazy,
+    const std::vector<int>& columnsToWrapInLazy,
     const VectorPtr& resultVector,
     const std::string& sql,
     const std::vector<VectorPtr>& complexConstants) {
@@ -237,7 +237,7 @@ void ExpressionVerifier::persistReproInfoIfNeeded(
 
 void ExpressionVerifier::persistReproInfo(
     const VectorPtr& inputVector,
-    std::vector<column_index_t> columnsToWrapInLazy,
+    std::vector<int> columnsToWrapInLazy,
     const VectorPtr& resultVector,
     const std::string& sql,
     const std::vector<VectorPtr>& complexConstants) {
@@ -271,8 +271,7 @@ void ExpressionVerifier::persistReproInfo(
     lazyListPath =
         fmt::format("{}/{}", dirPath->c_str(), kIndicesOfLazyColumnsFileName);
     try {
-      saveStdVectorToFile<column_index_t>(
-          columnsToWrapInLazy, lazyListPath.c_str());
+      saveStdVectorToFile<int>(columnsToWrapInLazy, lazyListPath.c_str());
     } catch (std::exception& e) {
       lazyListPath = e.what();
     }
@@ -338,7 +337,7 @@ class MinimalSubExpressionFinder {
   void findMinimalExpression(
       core::TypedExprPtr plan,
       const RowVectorPtr& rowVector,
-      const std::vector<column_index_t>& columnsToWrapInLazy) {
+      const std::vector<int>& columnsToWrapInLazy) {
     if (verifyWithResults(plan, rowVector, columnsToWrapInLazy)) {
       errorExit("Retry should have failed");
     }
@@ -347,7 +346,7 @@ class MinimalSubExpressionFinder {
     if (minimalFound) {
       errorExit("Found minimal failing expression.");
     } else {
-      errorExit("Only the top level expression failed");
+      errorExit("Only the top level expression failed.");
     }
   }
 
@@ -363,7 +362,7 @@ class MinimalSubExpressionFinder {
   bool findMinimalRecursive(
       core::TypedExprPtr plan,
       const RowVectorPtr& rowVector,
-      const std::vector<column_index_t>& columnsToWrapInLazy) {
+      const std::vector<int>& columnsToWrapInLazy) {
     bool anyFailed = false;
     for (auto& input : plan->inputs()) {
       if (!verifyWithResults(input, rowVector, columnsToWrapInLazy)) {
@@ -398,7 +397,7 @@ class MinimalSubExpressionFinder {
   bool verifyWithResults(
       core::TypedExprPtr plan,
       const RowVectorPtr& rowVector,
-      const std::vector<column_index_t>& columnsToWrapInLazy) {
+      const std::vector<int>& columnsToWrapInLazy) {
     VectorPtr result;
     LOG(INFO) << "Running with empty results vector :" << plan->toString();
     bool emptyResult = verifyPlan(plan, rowVector, columnsToWrapInLazy, result);
@@ -420,7 +419,7 @@ class MinimalSubExpressionFinder {
   bool verifyPlan(
       core::TypedExprPtr plan,
       const RowVectorPtr& rowVector,
-      const std::vector<column_index_t>& columnsToWrapInLazy,
+      const std::vector<int>& columnsToWrapInLazy,
       VectorPtr results) {
     // Turn off unnecessary logging.
     FLAGS_minloglevel = 2;
@@ -450,7 +449,7 @@ void computeMinimumSubExpression(
     VectorFuzzer& fuzzer,
     const std::vector<core::TypedExprPtr>& plans,
     const RowVectorPtr& rowVector,
-    const std::vector<column_index_t>& columnsToWrapInLazy) {
+    const std::vector<int>& columnsToWrapInLazy) {
   auto finder = MinimalSubExpressionFinder(std::move(minimalVerifier), fuzzer);
   if (plans.size() > 1) {
     LOG(INFO)

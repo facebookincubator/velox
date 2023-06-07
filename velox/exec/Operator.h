@@ -452,6 +452,10 @@ class Operator : public BaseRuntimeStatWriter {
   /// instances to user-defined Operators.
   static void registerOperator(std::unique_ptr<PlanNodeTranslator> translator);
 
+  /// Removes all translators registered earlier via calls to
+  /// 'registerOperator'.
+  static void unregisterAllOperators();
+
   /// Calls all the registered PlanNodeTranslators on 'planNode' and returns the
   /// result of the first one that returns non-nullptr or nullptr if all return
   /// nullptr. exchangeClient is not-null only when
@@ -554,8 +558,12 @@ class Operator : public BaseRuntimeStatWriter {
   }
 
   /// Creates output vector from 'input_' and 'results_' according to
-  /// 'identityProjections_' and 'resultProjections_'.
-  RowVectorPtr fillOutput(vector_size_t size, BufferPtr mapping);
+  /// 'identityProjections_' and 'resultProjections_'. If 'mapping' is set to
+  /// nullptr, the children of the output vector will be identical to their
+  /// respective sources from 'input_' or 'results_'. However, if 'mapping' is
+  /// provided, the children of the output vector will be generated as
+  /// dictionary of the sources using the specified 'mapping'.
+  RowVectorPtr fillOutput(vector_size_t size, const BufferPtr& mapping);
 
   /// Returns the number of rows for the output batch. This uses averageRowSize
   /// to calculate how many rows fit in preferredOutputBatchBytes. It caps the
