@@ -159,7 +159,7 @@ python-clean:
 	DEBUG=1 ${PYTHON_EXECUTABLE} setup.py clean
 
 python-build:
-	DEBUG=1 CMAKE_BUILD_PARALLEL_LEVEL=4 ${PYTHON_EXECUTABLE} -m pip install -e .$(extras)
+	DEBUG=1 CMAKE_BUILD_PARALLEL_LEVEL=4 ${PYTHON_EXECUTABLE} -m pip install -e .$(extras) --verbose
 
 python-test: 
 	$(MAKE) python-build extras="[tests]"
