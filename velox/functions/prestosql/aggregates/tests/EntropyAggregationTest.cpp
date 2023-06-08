@@ -53,11 +53,11 @@ class EntropyAggregationTest : public AggregationTestBase {
   }
 
   // The input of Velox entropy agg function is value count,
-  // but the input of DuckDB is value itself. In order to check correctness
-  // In order to compare the correctness of the result with DuckDB, we need to
-  // generate the input data of DuckDB first, and then convert the input data of
-  // DuckDB to the input data of Velox through count agg. This method will
-  // create an agg plan, and get the agg results.
+  // but the input of DuckDB is value itself. In order to check the correctness
+  // of the result with DuckDB, we need to generate the input data of DuckDB
+  // first, and then convert the input data of DuckDB to the input data of Velox
+  // through count agg. This method will create an agg plan, and get the agg
+  // results.
   RowVectorPtr getEntropyCounts(
       const RowVectorPtr& data,
       const std::vector<std::string>& groupingKeys,
