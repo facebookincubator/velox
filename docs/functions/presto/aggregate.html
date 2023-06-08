@@ -45,7 +45,7 @@
   <section id="aggregate-functions">
 <h1>Aggregate Functions<a class="headerlink" href="#aggregate-functions" title="Permalink to this heading">¶</a></h1>
 <p>Aggregate functions operate on a set of values to compute a single result.</p>
-<p>Except for <a class="reference internal" href="#count" title="count"><code class="xref py py-func docutils literal notranslate"><span class="pre">count()</span></code></a>, <a class="reference internal" href="#count_if" title="count_if"><code class="xref py py-func docutils literal notranslate"><span class="pre">count_if()</span></code></a>, <a class="reference internal" href="#max_by" title="max_by"><code class="xref py py-func docutils literal notranslate"><span class="pre">max_by()</span></code></a>, <a class="reference internal" href="#min_by" title="min_by"><code class="xref py py-func docutils literal notranslate"><span class="pre">min_by()</span></code></a> and
+<p>Except for <a class="reference internal" href="#count" title="count"><code class="xref py py-func docutils literal notranslate"><span class="pre">count()</span></code></a>, <a class="reference internal" href="#count_if" title="count_if"><code class="xref py py-func docutils literal notranslate"><span class="pre">count_if()</span></code></a>, <a class="reference internal" href="#id0" title="max_by"><code class="xref py py-func docutils literal notranslate"><span class="pre">max_by()</span></code></a>, <a class="reference internal" href="#id1" title="min_by"><code class="xref py py-func docutils literal notranslate"><span class="pre">min_by()</span></code></a> and
 <a class="reference internal" href="#approx_distinct" title="approx_distinct"><code class="xref py py-func docutils literal notranslate"><span class="pre">approx_distinct()</span></code></a>, all of these aggregate functions ignore null values
 and return null for no input rows or when all values are null. For example,
 <a class="reference internal" href="#sum" title="sum"><code class="xref py py-func docutils literal notranslate"><span class="pre">sum()</span></code></a> returns null rather than zero and <a class="reference internal" href="#avg" title="avg"><code class="xref py py-func docutils literal notranslate"><span class="pre">avg()</span></code></a> does not include null
@@ -133,9 +133,21 @@ boolean, timestamp, and date input types.</p>
 </dd></dl>
 
 <dl class="py function">
+<dt class="sig sig-object py" id="id0">
+<span class="sig-name descname"><span class="pre">max_by</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="pre">x,</span> <span class="pre">y,</span> <span class="pre">n)</span> <span class="pre">-&gt;</span> <span class="pre">array([same</span> <span class="pre">as</span> <span class="pre">x]</span></em><span class="sig-paren">)</span><a class="headerlink" href="#id0" title="Permalink to this definition">¶</a></dt>
+<dd><p>Returns n values of <code class="docutils literal notranslate"><span class="pre">x</span></code> associated with the n largest values of <code class="docutils literal notranslate"><span class="pre">y</span></code> in descending order of <code class="docutils literal notranslate"><span class="pre">y</span></code>.</p>
+</dd></dl>
+
+<dl class="py function">
 <dt class="sig sig-object py" id="min_by">
 <span class="sig-name descname"><span class="pre">min_by</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">x</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">y</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">[same</span> <span class="pre">as</span> <span class="pre">x]</span></span></span><a class="headerlink" href="#min_by" title="Permalink to this definition">¶</a></dt>
 <dd><p>Returns the value of <code class="docutils literal notranslate"><span class="pre">x</span></code> associated with the minimum value of <code class="docutils literal notranslate"><span class="pre">y</span></code> over all input values.</p>
+</dd></dl>
+
+<dl class="py function">
+<dt class="sig sig-object py" id="id1">
+<span class="sig-name descname"><span class="pre">min_by</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="pre">x,</span> <span class="pre">y,</span> <span class="pre">n)</span> <span class="pre">-&gt;</span> <span class="pre">array([same</span> <span class="pre">as</span> <span class="pre">x]</span></em><span class="sig-paren">)</span><a class="headerlink" href="#id1" title="Permalink to this definition">¶</a></dt>
+<dd><p>Returns n values of <code class="docutils literal notranslate"><span class="pre">x</span></code> associated with the n smallest values of <code class="docutils literal notranslate"><span class="pre">y</span></code> in ascending order of <code class="docutils literal notranslate"><span class="pre">y</span></code>.</p>
 </dd></dl>
 
 <dl class="py function">

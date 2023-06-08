@@ -54,6 +54,41 @@
 </dd></dl>
 
 <dl class="spark function">
+<dt class="sig sig-object spark" id="bloom_filter_agg">
+<span class="sig-name descname"><span class="pre">bloom_filter_agg</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">hash</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">estimatedNumItems</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">numBits</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">varbinary</span></span></span><a class="headerlink" href="#bloom_filter_agg" title="Permalink to this definition">¶</a></dt>
+<dd><p>Creates bloom filter from input hashes and returns it serialized into VARBINARY.
+The caller is expected to apply xxhash64 function to input data before calling bloom_filter_agg.</p>
+<dl class="simple">
+<dt>For example,</dt><dd><p>bloom_filter_agg(xxhash64(x), 100, 1024)</p>
+</dd>
+</dl>
+<p>In Spark implementation, <code class="docutils literal notranslate"><span class="pre">estimatedNumItems</span></code> and <code class="docutils literal notranslate"><span class="pre">numBits</span></code> are used to decide the number of hash functions and bloom filter capacity.
+In Velox implementation, <code class="docutils literal notranslate"><span class="pre">estimatedNumItems</span></code> is not used.</p>
+<p><code class="docutils literal notranslate"><span class="pre">hash</span></code> cannot be null.
+<code class="docutils literal notranslate"><span class="pre">numBits</span></code> specifies max capacity of the bloom filter, which allows to trade accuracy for memory.
+In Spark, the value of <code class="docutils literal notranslate"><span class="pre">numBits</span></code> is automatically capped at config value 67,108,864.
+In Velox, the value of <code class="docutils literal notranslate"><span class="pre">numBits</span></code> is automatically capped at fixed value 4,194,304.</p>
+<p><code class="docutils literal notranslate"><span class="pre">hash</span></code>, <code class="docutils literal notranslate"><span class="pre">estimatedNumItems</span></code> and <code class="docutils literal notranslate"><span class="pre">numBits</span></code> must be <code class="docutils literal notranslate"><span class="pre">BIGINT</span></code>.</p>
+</dd></dl>
+
+<dl class="spark function">
+<dt class="sig sig-object spark" id="id0">
+<span class="sig-name descname"><span class="pre">bloom_filter_agg</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">hash</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">estimatedNumItems</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">varbinary</span></span></span><a class="headerlink" href="#id0" title="Permalink to this definition">¶</a></dt>
+<dd><p>A version of <code class="docutils literal notranslate"><span class="pre">bloom_filter_agg</span></code> that uses <code class="docutils literal notranslate"><span class="pre">numBits</span></code> computed as <code class="docutils literal notranslate"><span class="pre">estimatedNumItems</span></code> * 8.</p>
+<p><code class="docutils literal notranslate"><span class="pre">hash</span></code> cannot be null.
+<code class="docutils literal notranslate"><span class="pre">estimatedNumItems</span></code> provides an estimate of the number of values of <code class="docutils literal notranslate"><span class="pre">x</span></code> under the fact of <code class="docutils literal notranslate"><span class="pre">hash</span></code> is xxhash64(x).
+Value of <code class="docutils literal notranslate"><span class="pre">estimatedNumItems</span></code> is capped at 4,000,000 like to match Spark’s implementation.
+But Spark allows for changing the defaults while Velox does not.</p>
+</dd></dl>
+
+<dl class="spark function">
+<dt class="sig sig-object spark" id="id1">
+<span class="sig-name descname"><span class="pre">bloom_filter_agg</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">hash</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">varbinary</span></span></span><a class="headerlink" href="#id1" title="Permalink to this definition">¶</a></dt>
+<dd><p>A version of <code class="docutils literal notranslate"><span class="pre">bloom_filter_agg</span></code> that use 4,194,304 as <code class="docutils literal notranslate"><span class="pre">numBits</span></code>.</p>
+<p><code class="docutils literal notranslate"><span class="pre">hash</span></code> cannot be null.</p>
+</dd></dl>
+
+<dl class="spark function">
 <dt class="sig sig-object spark" id="first">
 <span class="sig-name descname"><span class="pre">first</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">x</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">x</span></span></span><a class="headerlink" href="#first" title="Permalink to this definition">¶</a></dt>
 <dd><p>Returns the first value of <cite>x</cite>.</p>
