@@ -257,20 +257,19 @@ std::string variant::toJson(const TypePtr& type) const {
       folly::json::escapeString(str, target, getOpts());
       return target;
     }
-    case TypeKind::HUGEINT:
-      VELOX_CHECK(type && type->isLongDecimal());
-      return DecimalUtil::toString(value<TypeKind::HUGEINT>(), type);
     case TypeKind::TINYINT:
-      FOLLY_FALLTHROUGH;
     case TypeKind::SMALLINT:
-      FOLLY_FALLTHROUGH;
     case TypeKind::INTEGER:
-      FOLLY_FALLTHROUGH;
-    case TypeKind::BIGINT:
+    case TypeKind::BIGINT: {
       if (type && type->isShortDecimal()) {
         return DecimalUtil::toString(value<TypeKind::BIGINT>(), type);
       }
-      FOLLY_FALLTHROUGH;
+    }
+    case TypeKind::HUGEINT: {
+      if (type && type->isLongDecimal()) {
+        return DecimalUtil::toString(value<TypeKind::HUGEINT>(), type);
+      }
+    }
     case TypeKind::BOOLEAN: {
       auto converted = VariantConverter::convert<TypeKind::VARCHAR>(*this);
       if (converted.isNull()) {
