@@ -146,6 +146,16 @@ bool SubstraitToVeloxPlanValidator::validateScalarFunction(
       return false;
     }
   }
+  if (name == "murmur3hash") {
+    for (const auto& type : types) {
+      if (type.find("struct") != std::string::npos ||
+          type.find("map") != std::string::npos ||
+          type.find("list") != std::string::npos) {
+        VLOG(1) << type << "is not supported in murmur3hash.";
+        return false;
+      }
+    }
+  }
 
   std::unordered_set<std::string> functions = {
       "regexp_replace",    "split",         "split_part",
