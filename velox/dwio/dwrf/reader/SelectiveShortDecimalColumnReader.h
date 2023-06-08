@@ -26,6 +26,51 @@ namespace facebook::velox::dwrf {
 
 class SelectiveShortDecimalColumnReader
     : public dwio::common::SelectiveColumnReader {
+  void init(DwrfParams& params) {
+    format_ = params.stripeStreams().format();
+    if (format_ == DwrfFormat::kDwrf) {
+      initDwrf(params);
+    } else {
+      VELOX_CHECK(format_ == DwrfFormat::kOrc);
+      initOrc(params);
+    }
+  }
+
+  void initDwrf(DwrfParams& params) {
+    VELOX_FAIL("dwrf unsupport decimal");
+  }
+
+  void initOrc(DwrfParams& params) {
+    const auto& stripe = params.stripeStreams();
+    EncodingKey encodingKey{nodeType_->id, params.flatMapContext().sequence};
+
+    auto values = encodingKey.forKind(proto::orc::Stream_Kind_DATA);
+    auto scales = encodingKey.forKind(proto::orc::Stream_Kind_SECONDARY);
+
+    bool valuesVInts = stripe.getUseVInts(values);
+    bool scalesVInts = stripe.getUseVInts(scales);
+
+    auto encoding = stripe.getEncodingOrc(encodingKey);
+    auto encodingKind = encoding.kind();
+    VELOX_CHECK(
+        encodingKind == proto::orc::ColumnEncoding_Kind_DIRECT ||
+        encodingKind == proto::orc::ColumnEncoding_Kind_DIRECT_V2);
+
+    version_ = convertRleVersion(encodingKind);
+
+    valueDecoder_ = createDirectDecoder<true>(
+        stripe.getStream(values, true),
+        valuesVInts,
+        facebook::velox::dwio::common::LONG_BYTE_SIZE);
+
+    scaleDecoder_ = createRleDecoder<true>(
+        stripe.getStream(scales, true),
+        version_,
+        params.pool(),
+        scalesVInts,
+        facebook::velox::dwio::common::LONG_BYTE_SIZE);
+  }
+
  public:
   using ValueType = int64_t;
 
@@ -41,45 +86,7 @@ class SelectiveShortDecimalColumnReader
       : SelectiveColumnReader(nodeType, params, scanSpec, nodeType->type) {
     precision_ = dataType->asShortDecimal().precision();
     scale_ = dataType->asShortDecimal().scale();
-
-    const auto& stripe = params.stripeStreams();
-
-    EncodingKey encodingKey{nodeType_->id, params.flatMapContext().sequence};
-
-    auto values = encodingKey.forKind(proto::Stream_Kind_DATA);
-    auto scales = encodingKey.forKind(
-        proto::Stream_Kind_NANO_DATA); // equal to
-                                       // proto::orc::Stream_Kind_SECONDARY
-
-    bool valuesVInts = stripe.getUseVInts(values);
-    bool scalesVInts = stripe.getUseVInts(scales);
-
-    format_ = stripe.format();
-    if (format_ == velox::dwrf::DwrfFormat::kDwrf) {
-      VELOX_FAIL("dwrf unsupport decimal");
-    } else if (format_ == velox::dwrf::DwrfFormat::kOrc) {
-      auto encoding = stripe.getEncoding(encodingKey);
-      auto encodingKind = encoding.kind();
-      VELOX_CHECK(
-          encodingKind == proto::ColumnEncoding_Kind_DIRECT ||
-          encodingKind == proto::ColumnEncoding_Kind_DIRECT_V2);
-
-      version_ = convertRleVersion(encodingKind);
-
-      valueDecoder_ = createDirectDecoder<true>(
-          stripe.getStream(values, true),
-          valuesVInts,
-          facebook::velox::dwio::common::LONG_BYTE_SIZE);
-
-      scaleDecoder_ = createRleDecoder<true>(
-          stripe.getStream(scales, true),
-          version_,
-          params.pool(),
-          scalesVInts,
-          facebook::velox::dwio::common::LONG_BYTE_SIZE);
-    } else {
-      VELOX_FAIL("invalid stripe format");
-    }
+    init(params);
   }
 
   bool hasBulkPath() const override {

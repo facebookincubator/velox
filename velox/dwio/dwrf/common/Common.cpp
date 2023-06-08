@@ -36,6 +36,7 @@ std::string writerVersionToString(WriterVersion version) {
   return folly::to<std::string>("future - ", version);
 }
 
+/* unused
 std::string streamKindToString(StreamKind kind) {
   switch (static_cast<int32_t>(kind)) {
     case StreamKind_PRESENT:
@@ -63,6 +64,7 @@ std::string streamKindToString(StreamKind kind) {
   }
   return folly::to<std::string>("unknown - ", kind);
 }
+*/
 
 std::string columnEncodingKindToString(ColumnEncodingKind kind) {
   switch (static_cast<int32_t>(kind)) {
@@ -79,6 +81,11 @@ std::string columnEncodingKindToString(ColumnEncodingKind kind) {
 }
 
 DwrfStreamIdentifier EncodingKey::forKind(const proto::Stream_Kind kind) const {
+  return DwrfStreamIdentifier(node, sequence, 0, kind);
+}
+
+DwrfStreamIdentifier EncodingKey::forKind(
+    const proto::orc::Stream_Kind kind) const {
   return DwrfStreamIdentifier(node, sequence, 0, kind);
 }
 

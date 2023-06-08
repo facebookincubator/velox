@@ -20,15 +20,19 @@
 
 namespace facebook::velox::dwrf {
 
-DwrfData::DwrfData(
-    std::shared_ptr<const dwio::common::TypeWithId> nodeType,
-    StripeStreams& stripe,
-    FlatMapContext flatMapContext)
-    : memoryPool_(stripe.getMemoryPool()),
-      nodeType_(std::move(nodeType)),
-      flatMapContext_(std::move(flatMapContext)),
-      rowsPerRowGroup_{stripe.rowsPerRowGroup()} {
+void DwrfData::init(StripeStreams& stripe) {
+  auto format = stripe.format();
+  if (format == DwrfFormat::kDwrf) {
+    initDwrf(stripe);
+  } else {
+    VELOX_CHECK(format == DwrfFormat::kOrc);
+    initOrc(stripe);
+  }
+}
+
+void DwrfData::initDwrf(StripeStreams& stripe) {
   EncodingKey encodingKey{nodeType_->id, flatMapContext_.sequence};
+
   std::unique_ptr<dwio::common::SeekableInputStream> stream =
       stripe.getStream(encodingKey.forKind(proto::Stream_Kind_PRESENT), false);
   if (stream) {
@@ -42,6 +46,35 @@ DwrfData::DwrfData(
   // time pushdown.
   indexStream_ = stripe.getStream(
       encodingKey.forKind(proto::Stream_Kind_ROW_INDEX), false);
+}
+
+void DwrfData::initOrc(StripeStreams& stripe) {
+  EncodingKey encodingKey{nodeType_->id, flatMapContext_.sequence};
+
+  std::unique_ptr<dwio::common::SeekableInputStream> stream = stripe.getStream(
+      encodingKey.forKind(proto::orc::Stream_Kind_PRESENT), false);
+  if (stream) {
+    notNullDecoder_ = createBooleanRleDecoder(std::move(stream), encodingKey);
+  }
+
+  // We always initialize indexStream_ because indices are needed as
+  // soon as there is a single filter that can trigger row group skips
+  // anywhere in the reader tree. This is not known at construct time
+  // because the first filter can come from a hash join or other run
+  // time pushdown.
+  indexStream_ = stripe.getStream(
+      encodingKey.forKind(proto::orc::Stream_Kind_ROW_INDEX), false);
+}
+
+DwrfData::DwrfData(
+    std::shared_ptr<const dwio::common::TypeWithId> nodeType,
+    StripeStreams& stripe,
+    FlatMapContext flatMapContext)
+    : memoryPool_(stripe.getMemoryPool()),
+      nodeType_(std::move(nodeType)),
+      flatMapContext_(std::move(flatMapContext)),
+      rowsPerRowGroup_{stripe.rowsPerRowGroup()} {
+  init(stripe);
 }
 
 uint64_t DwrfData::skipNulls(uint64_t numValues, bool /*nullsOnly*/) {

@@ -22,15 +22,18 @@ namespace facebook::velox::dwrf {
 
 using namespace dwio::common;
 
-SelectiveStringDictionaryColumnReader::SelectiveStringDictionaryColumnReader(
-    const std::shared_ptr<const TypeWithId>& nodeType,
-    DwrfParams& params,
-    common::ScanSpec& scanSpec)
-    : SelectiveColumnReader(nodeType, params, scanSpec, nodeType->type),
-      lastStrideIndex_(-1),
-      provider_(params.stripeStreams().getStrideIndexProvider()) {
+void SelectiveStringDictionaryColumnReader::init(DwrfParams& params) {
+  format_ = params.stripeStreams().format();
+  if (format_ == DwrfFormat::kDwrf) {
+    initDwrf(params);
+  } else {
+    VELOX_CHECK(format_ == DwrfFormat::kOrc);
+    initOrc(params);
+  }
+}
+
+void SelectiveStringDictionaryColumnReader::initDwrf(DwrfParams& params) {
   auto& stripe = params.stripeStreams();
-  format_ = stripe.format();
 
   EncodingKey encodingKey{nodeType_->id, params.flatMapContext().sequence};
   rleVersion_ = convertRleVersion(stripe.getEncoding(encodingKey).kind());
@@ -83,6 +86,48 @@ SelectiveStringDictionaryColumnReader::SelectiveStringDictionaryColumnReader(
         dwio::common::INT_BYTE_SIZE);
   }
   scanState_.updateRawState();
+}
+
+void SelectiveStringDictionaryColumnReader::initOrc(DwrfParams& params) {
+  auto& stripe = params.stripeStreams();
+
+  EncodingKey encodingKey{nodeType_->id, params.flatMapContext().sequence};
+  rleVersion_ = convertRleVersion(stripe.getEncodingOrc(encodingKey).kind());
+  scanState_.dictionary.numValues =
+      stripe.getEncodingOrc(encodingKey).dictionarysize();
+
+  const auto dataId = encodingKey.forKind(proto::orc::Stream_Kind_DATA);
+  bool dictVInts = stripe.getUseVInts(dataId);
+  dictIndex_ = createRleDecoder</*isSigned*/ false>(
+      stripe.getStream(dataId, true),
+      rleVersion_,
+      memoryPool_,
+      dictVInts,
+      dwio::common::INT_BYTE_SIZE);
+
+  const auto lenId = encodingKey.forKind(proto::orc::Stream_Kind_LENGTH);
+  bool lenVInts = stripe.getUseVInts(lenId);
+  lengthDecoder_ = createRleDecoder</*isSigned*/ false>(
+      stripe.getStream(lenId, false),
+      rleVersion_,
+      memoryPool_,
+      lenVInts,
+      dwio::common::INT_BYTE_SIZE);
+
+  blobStream_ = stripe.getStream(
+      encodingKey.forKind(proto::orc::Stream_Kind_DICTIONARY_DATA), false);
+
+  scanState_.updateRawState();
+}
+
+SelectiveStringDictionaryColumnReader::SelectiveStringDictionaryColumnReader(
+    const std::shared_ptr<const TypeWithId>& nodeType,
+    DwrfParams& params,
+    common::ScanSpec& scanSpec)
+    : SelectiveColumnReader(nodeType, params, scanSpec, nodeType->type),
+      lastStrideIndex_(-1),
+      provider_(params.stripeStreams().getStrideIndexProvider()) {
+  init(params);
 }
 
 uint64_t SelectiveStringDictionaryColumnReader::skip(uint64_t numValues) {

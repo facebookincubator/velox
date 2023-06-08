@@ -23,6 +23,20 @@ namespace facebook::velox::dwrf {
 
 class SelectiveStringDirectColumnReader
     : public dwio::common::SelectiveColumnReader {
+  void init(DwrfParams& params) {
+    auto format = params.stripeStreams().format();
+    if (format == DwrfFormat::kDwrf) {
+      initDwrf(params);
+    } else {
+      VELOX_CHECK(format == DwrfFormat::kOrc);
+      initOrc(params);
+    }
+  }
+
+  void initDwrf(DwrfParams& params);
+
+  void initOrc(DwrfParams& params);
+
  public:
   using ValueType = StringView;
   SelectiveStringDirectColumnReader(

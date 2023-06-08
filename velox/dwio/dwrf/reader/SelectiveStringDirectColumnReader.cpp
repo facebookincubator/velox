@@ -20,13 +20,10 @@
 
 namespace facebook::velox::dwrf {
 
-SelectiveStringDirectColumnReader::SelectiveStringDirectColumnReader(
-    const std::shared_ptr<const dwio::common::TypeWithId>& nodeType,
-    DwrfParams& params,
-    common::ScanSpec& scanSpec)
-    : SelectiveColumnReader(nodeType, params, scanSpec, nodeType->type) {
-  EncodingKey encodingKey{nodeType->id, params.flatMapContext().sequence};
+void SelectiveStringDirectColumnReader::initDwrf(DwrfParams& params) {
+  EncodingKey encodingKey{nodeType_->id, params.flatMapContext().sequence};
   auto& stripe = params.stripeStreams();
+
   RleVersion rleVersion =
       convertRleVersion(stripe.getEncoding(encodingKey).kind());
   auto lenId = encodingKey.forKind(proto::Stream_Kind_LENGTH);
@@ -38,7 +35,33 @@ SelectiveStringDirectColumnReader::SelectiveStringDirectColumnReader(
       lenVInts,
       dwio::common::INT_BYTE_SIZE);
   blobStream_ =
-      stripe.getStream(encodingKey.forKind(proto::Stream_Kind_DATA), true);
+      stripe.getStream(encodingKey.forKind(proto::orc::Stream_Kind_DATA), true);
+}
+
+void SelectiveStringDirectColumnReader::initOrc(DwrfParams& params) {
+  EncodingKey encodingKey{nodeType_->id, params.flatMapContext().sequence};
+  auto& stripe = params.stripeStreams();
+
+  RleVersion rleVersion =
+      convertRleVersion(stripe.getEncodingOrc(encodingKey).kind());
+  auto lenId = encodingKey.forKind(proto::orc::Stream_Kind_LENGTH);
+  bool lenVInts = stripe.getUseVInts(lenId);
+  lengthDecoder_ = createRleDecoder</*isSigned*/ false>(
+      stripe.getStream(lenId, true),
+      rleVersion,
+      memoryPool_,
+      lenVInts,
+      dwio::common::INT_BYTE_SIZE);
+  blobStream_ =
+      stripe.getStream(encodingKey.forKind(proto::orc::Stream_Kind_DATA), true);
+}
+
+SelectiveStringDirectColumnReader::SelectiveStringDirectColumnReader(
+    const std::shared_ptr<const dwio::common::TypeWithId>& nodeType,
+    DwrfParams& params,
+    common::ScanSpec& scanSpec)
+    : SelectiveColumnReader(nodeType, params, scanSpec, nodeType->type) {
+  init(params);
 }
 
 uint64_t SelectiveStringDirectColumnReader::skip(uint64_t numValues) {

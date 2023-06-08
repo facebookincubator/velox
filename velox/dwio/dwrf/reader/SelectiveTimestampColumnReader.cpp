@@ -22,13 +22,10 @@ namespace facebook::velox::dwrf {
 
 using namespace dwio::common;
 
-SelectiveTimestampColumnReader::SelectiveTimestampColumnReader(
-    const std::shared_ptr<const TypeWithId>& nodeType,
-    DwrfParams& params,
-    common::ScanSpec& scanSpec)
-    : SelectiveColumnReader(nodeType, params, scanSpec, nodeType->type) {
+void SelectiveTimestampColumnReader::initDwrf(DwrfParams& params) {
   EncodingKey encodingKey{nodeType_->id, params.flatMapContext().sequence};
   auto& stripe = params.stripeStreams();
+
   version = convertRleVersion(stripe.getEncoding(encodingKey).kind());
 
   auto data = encodingKey.forKind(proto::Stream_Kind_DATA);
@@ -48,6 +45,39 @@ SelectiveTimestampColumnReader::SelectiveTimestampColumnReader(
       memoryPool_,
       nanoVInts,
       LONG_BYTE_SIZE);
+}
+
+void SelectiveTimestampColumnReader::initOrc(DwrfParams& params) {
+  EncodingKey encodingKey{nodeType_->id, params.flatMapContext().sequence};
+  auto& stripe = params.stripeStreams();
+
+  version = convertRleVersion(stripe.getEncodingOrc(encodingKey).kind());
+
+  auto data = encodingKey.forKind(proto::orc::Stream_Kind_DATA);
+  bool vints = stripe.getUseVInts(data);
+  seconds_ = createRleDecoder</*isSigned*/ true>(
+      stripe.getStream(data, true),
+      version,
+      memoryPool_,
+      vints,
+      LONG_BYTE_SIZE);
+
+  auto nanoData = encodingKey.forKind(proto::orc::Stream_Kind_SECONDARY);
+  bool nanoVInts = stripe.getUseVInts(nanoData);
+  nano_ = createRleDecoder</*isSigned*/ false>(
+      stripe.getStream(nanoData, true),
+      version,
+      memoryPool_,
+      nanoVInts,
+      LONG_BYTE_SIZE);
+}
+
+SelectiveTimestampColumnReader::SelectiveTimestampColumnReader(
+    const std::shared_ptr<const TypeWithId>& nodeType,
+    DwrfParams& params,
+    common::ScanSpec& scanSpec)
+    : SelectiveColumnReader(nodeType, params, scanSpec, nodeType->type) {
+  init(params);
 }
 
 uint64_t SelectiveTimestampColumnReader::skip(uint64_t numValues) {
