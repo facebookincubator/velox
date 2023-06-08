@@ -73,42 +73,42 @@ inline velox::variant pyToVariant(const py::handle& obj, const Type& dtype) {
   if (obj.is_none()) {
     return velox::variant();
   } else {
-    switch(dtype.kind()){
-      case TypeKind::BOOLEAN : {
-            return pyToVariant<velox::TypeKind::BOOLEAN>(obj);
+    switch (dtype.kind()) {
+      case TypeKind::BOOLEAN: {
+        return pyToVariant<velox::TypeKind::BOOLEAN>(obj);
       }
-      case TypeKind::TINYINT : {
-            return pyToVariant<velox::TypeKind::TINYINT>(obj);
+      case TypeKind::TINYINT: {
+        return pyToVariant<velox::TypeKind::TINYINT>(obj);
       }
-      case TypeKind::SMALLINT : {
-            return pyToVariant<velox::TypeKind::SMALLINT>(obj);
+      case TypeKind::SMALLINT: {
+        return pyToVariant<velox::TypeKind::SMALLINT>(obj);
       }
-      case TypeKind::INTEGER : {
-            return pyToVariant<velox::TypeKind::INTEGER>(obj);
+      case TypeKind::INTEGER: {
+        return pyToVariant<velox::TypeKind::INTEGER>(obj);
       }
-      case TypeKind::BIGINT : {
-            return pyToVariant<velox::TypeKind::BIGINT>(obj);
+      case TypeKind::BIGINT: {
+        return pyToVariant<velox::TypeKind::BIGINT>(obj);
       }
-      case TypeKind::REAL : {
-            return pyToVariant<velox::TypeKind::REAL>(obj);
+      case TypeKind::REAL: {
+        return pyToVariant<velox::TypeKind::REAL>(obj);
       }
-      case TypeKind::DOUBLE : {
-            return pyToVariant<velox::TypeKind::DOUBLE>(obj);
+      case TypeKind::DOUBLE: {
+        return pyToVariant<velox::TypeKind::DOUBLE>(obj);
       }
-      case TypeKind::VARCHAR : {
-            return pyToVariant<velox::TypeKind::VARCHAR>(obj);
+      case TypeKind::VARCHAR: {
+        return pyToVariant<velox::TypeKind::VARCHAR>(obj);
       }
-      case TypeKind::VARBINARY : {
-            return pyToVariant<velox::TypeKind::VARBINARY>(obj);
+      case TypeKind::VARBINARY: {
+        return pyToVariant<velox::TypeKind::VARBINARY>(obj);
       }
-      case TypeKind::TIMESTAMP : {
-            return pyToVariant<velox::TypeKind::TIMESTAMP>(obj);
+      case TypeKind::TIMESTAMP: {
+        return pyToVariant<velox::TypeKind::TIMESTAMP>(obj);
       }
-      case TypeKind::DATE : {
-            return pyToVariant<velox::TypeKind::DATE>(obj);
+      case TypeKind::DATE: {
+        return pyToVariant<velox::TypeKind::DATE>(obj);
       }
       default:
-            throw py::type_error("Unsupported type supplied");
+        throw py::type_error("Unsupported type supplied");
     }
   }
 }

@@ -160,7 +160,7 @@ static VectorPtr pyListToVector(
   }
 
   return VELOX_DYNAMIC_SCALAR_TYPE_DISPATCH(
-      variantsToFlatVector, dtype.kind() , variants, pool);
+      variantsToFlatVector, dtype.kind(), variants, pool);
 }
 
 template <typename NativeType>

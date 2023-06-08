@@ -58,17 +58,23 @@ class TestVeloxVector(unittest.TestCase):
     def test_from_list_with_type(self):
         list_a = [0, 1, 3]
         a = pv.from_list(list_a, pv.BooleanType())
-        self.assertEqual(a.typeKind().name, 'BOOLEAN')
+        self.assertEqual(a.typeKind().name, "BOOLEAN")
         for i in range(len(a)):
             self.assertTrue(isinstance(a[i], bool))
             self.assertEqual(a[i], bool(list_a[i]))
-        self.assertTrue(isinstance(pv.from_list([None, None, None], pv.VarcharType()), pv.BaseVector))
+        self.assertTrue(
+            isinstance(
+                pv.from_list([None, None, None], pv.VarcharType()), pv.BaseVector
+            )
+        )
         empty_vector = pv.from_list([], pv.IntegerType())
         self.assertTrue(isinstance(empty_vector, pv.BaseVector))
         with self.assertRaises(IndexError):
             a = empty_vector[0]
         with self.assertRaises(RuntimeError):
-            a = pv.from_list([0, 1, 3], pv.VarcharType()) # Conversion not possible from int to varchar
+            a = pv.from_list(
+                [0, 1, 3], pv.VarcharType()
+            )  # Conversion not possible from int to varchar
         list_b = [0.2, 1.2, 3.23]
         b = pv.from_list(list_b, pv.RealType())
         for i in range(len(list_b)):
