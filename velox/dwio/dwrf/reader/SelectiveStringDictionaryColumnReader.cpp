@@ -81,6 +81,7 @@ SelectiveStringDictionaryColumnReader::SelectiveStringDictionaryColumnReader(
         strideLenVInt,
         dwio::common::INT_BYTE_SIZE);
   }
+  scanState_.filterCache = std::make_shared<raw_vector<uint8_t>>();
   scanState_.updateRawState();
 }
 
@@ -148,11 +149,11 @@ void SelectiveStringDictionaryColumnReader::loadStrideDictionary() {
   lastStrideIndex_ = nextStride;
   dictionaryValues_ = nullptr;
 
-  scanState_.filterCache.resize(
+  scanState_.filterCache->resize(
       scanState_.dictionary.numValues + scanState_.dictionary2.numValues);
   scanState_.updateRawState();
   simd::memset(
-      scanState_.filterCache.data() + scanState_.dictionary.numValues,
+      scanState_.filterCache->data() + scanState_.dictionary.numValues,
       FilterResult::kUnknown,
       scanState_.dictionary2.numValues);
 }
@@ -287,9 +288,9 @@ void SelectiveStringDictionaryColumnReader::ensureInitialized() {
 
   loadDictionary(*blobStream_, *lengthDecoder_, scanState_.dictionary);
 
-  scanState_.filterCache.resize(scanState_.dictionary.numValues);
+  scanState_.filterCache->resize(scanState_.dictionary.numValues);
   simd::memset(
-      scanState_.filterCache.data(),
+      scanState_.filterCache->data(),
       FilterResult::kUnknown,
       scanState_.dictionary.numValues);
 

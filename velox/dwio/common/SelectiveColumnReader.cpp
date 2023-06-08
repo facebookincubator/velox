@@ -38,7 +38,7 @@ void ScanState::updateRawState() {
       dictionary2.values ? dictionary2.values->as<void*>() : nullptr;
   rawState.dictionary2.numValues = dictionary2.numValues;
   rawState.inDictionary = inDictionary ? inDictionary->as<uint64_t>() : nullptr;
-  rawState.filterCache = filterCache.data();
+  rawState.filterCache = filterCache ? filterCache->data() : nullptr;
 }
 
 SelectiveColumnReader::SelectiveColumnReader(
@@ -336,11 +336,11 @@ void SelectiveColumnReader::setNulls(BufferPtr resultNulls) {
 }
 
 void SelectiveColumnReader::resetFilterCaches() {
-  if (!scanState_.filterCache.empty()) {
+  if (scanState_.filterCache) {
     simd::memset(
-        scanState_.filterCache.data(),
+        scanState_.filterCache->data(),
         FilterResult::kUnknown,
-        scanState_.filterCache.size());
+        scanState_.filterCache->size());
   }
 }
 

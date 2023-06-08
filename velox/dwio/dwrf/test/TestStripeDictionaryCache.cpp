@@ -42,10 +42,14 @@ folly::Function<BufferPtr(memory::MemoryPool*)> genConsecutiveRangeBuffer(
   };
 }
 
-void verifyRange(BufferPtr bufferPtr, int64_t begin, int64_t end) {
-  size_t bufferSize = bufferPtr->size() / sizeof(int64_t);
+void verifyRange(
+    const StripeDictionaryCache::Entry& entry,
+    int64_t begin,
+    int64_t end) {
+  size_t bufferSize = entry.buffer->size() / sizeof(int64_t);
   ASSERT_EQ(end - begin, bufferSize);
-  auto data = bufferPtr->as<int64_t>();
+  ASSERT_EQ(entry.filterCache->size(), bufferSize);
+  auto data = entry.buffer->as<int64_t>();
   std::vector<int64_t> actualRange{};
   for (size_t i = 0; i < bufferSize; ++i) {
     actualRange.push_back(data[i]);
@@ -61,7 +65,7 @@ void verifyRange(BufferPtr bufferPtr, int64_t begin, int64_t end) {
 TEST(TestStripeDictionaryCache, RegisterDictionary) {
   {
     StripeDictionaryCache cache{defaultPool.get()};
-    cache.registerIntDictionary({9, 0}, genConsecutiveRangeBuffer(0, 100));
+    cache.registerIntDictionary({9, 0}, 100, genConsecutiveRangeBuffer(0, 100));
     EXPECT_EQ(1, cache.intDictionaryFactories_.size());
     EXPECT_EQ(1, cache.intDictionaryFactories_.count({9, 0}));
   }
@@ -72,8 +76,9 @@ TEST(TestStripeDictionaryCache, RegisterDictionary) {
   {
     StripeDictionaryCache cache{defaultPool.get()};
 
-    cache.registerIntDictionary({9, 0}, genConsecutiveRangeBuffer(0, 100));
-    cache.registerIntDictionary({9, 0}, genConsecutiveRangeBuffer(100, 200));
+    cache.registerIntDictionary({9, 0}, 100, genConsecutiveRangeBuffer(0, 100));
+    cache.registerIntDictionary(
+        {9, 0}, 100, genConsecutiveRangeBuffer(100, 200));
 
     EXPECT_EQ(1, cache.intDictionaryFactories_.size());
     EXPECT_EQ(1, cache.intDictionaryFactories_.count({9, 0}));
@@ -81,9 +86,10 @@ TEST(TestStripeDictionaryCache, RegisterDictionary) {
   {
     StripeDictionaryCache cache{defaultPool.get()};
 
-    cache.registerIntDictionary({1, 0}, genConsecutiveRangeBuffer(0, 100));
-    cache.registerIntDictionary({1, 1}, genConsecutiveRangeBuffer(0, 100));
-    cache.registerIntDictionary({9, 0}, genConsecutiveRangeBuffer(100, 200));
+    cache.registerIntDictionary({1, 0}, 100, genConsecutiveRangeBuffer(0, 100));
+    cache.registerIntDictionary({1, 1}, 100, genConsecutiveRangeBuffer(0, 100));
+    cache.registerIntDictionary(
+        {9, 0}, 100, genConsecutiveRangeBuffer(100, 200));
 
     EXPECT_EQ(3, cache.intDictionaryFactories_.size());
     EXPECT_EQ(1, cache.intDictionaryFactories_.count({1, 0}));
@@ -96,7 +102,7 @@ TEST(TestStripeDictionaryCache, GetDictionaryBuffer) {
   {
     StripeDictionaryCache cache{defaultPool.get()};
 
-    cache.registerIntDictionary({9, 0}, genConsecutiveRangeBuffer(0, 100));
+    cache.registerIntDictionary({9, 0}, 100, genConsecutiveRangeBuffer(0, 100));
     verifyRange(cache.getIntDictionary({9, 0}), 0, 100);
     EXPECT_ANY_THROW(cache.getIntDictionary({7, 0}));
   }
@@ -107,17 +113,19 @@ TEST(TestStripeDictionaryCache, GetDictionaryBuffer) {
   {
     StripeDictionaryCache cache{defaultPool.get()};
 
-    cache.registerIntDictionary({9, 0}, genConsecutiveRangeBuffer(0, 100));
-    cache.registerIntDictionary({9, 0}, genConsecutiveRangeBuffer(100, 200));
+    cache.registerIntDictionary({9, 0}, 100, genConsecutiveRangeBuffer(0, 100));
+    cache.registerIntDictionary(
+        {9, 0}, 100, genConsecutiveRangeBuffer(100, 200));
 
     verifyRange(cache.getIntDictionary({9, 0}), 0, 100);
   }
   {
     StripeDictionaryCache cache{defaultPool.get()};
 
-    cache.registerIntDictionary({1, 0}, genConsecutiveRangeBuffer(0, 100));
-    cache.registerIntDictionary({1, 1}, genConsecutiveRangeBuffer(0, 100));
-    cache.registerIntDictionary({9, 0}, genConsecutiveRangeBuffer(100, 200));
+    cache.registerIntDictionary({1, 0}, 100, genConsecutiveRangeBuffer(0, 100));
+    cache.registerIntDictionary({1, 1}, 100, genConsecutiveRangeBuffer(0, 100));
+    cache.registerIntDictionary(
+        {9, 0}, 100, genConsecutiveRangeBuffer(100, 200));
 
     verifyRange(cache.getIntDictionary({1, 0}), 0, 100);
     verifyRange(cache.getIntDictionary({1, 1}), 0, 100);

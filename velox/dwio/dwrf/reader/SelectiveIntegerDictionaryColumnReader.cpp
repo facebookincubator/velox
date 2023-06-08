@@ -108,16 +108,9 @@ void SelectiveIntegerDictionaryColumnReader::ensureInitialized() {
   }
 
   Timer timer;
-  scanState_.dictionary.values = dictInit_();
-  // Make sure there is a cache even for an empty dictionary because
-  // of asan failure when preparing a gather with all lanes masked
-  // out.
-  scanState_.filterCache.resize(
-      std::max<int32_t>(1, scanState_.dictionary.numValues));
-  simd::memset(
-      scanState_.filterCache.data(),
-      FilterResult::kUnknown,
-      scanState_.filterCache.size());
+  auto dict = dictInit_();
+  scanState_.dictionary.values = std::move(dict.buffer);
+  scanState_.filterCache = std::move(dict.filterCache);
   initialized_ = true;
   initTimeClocks_ = timer.elapsedClocks();
   scanState_.updateRawState();

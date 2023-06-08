@@ -51,7 +51,8 @@ class MockStripeStreams : public StripeStreams {
         throwIfNotFound));
   }
 
-  std::function<BufferPtr()> getIntDictionaryInitializerForNode(
+  std::function<StripeDictionaryCache::Entry()>
+  getIntDictionaryInitializerForNode(
       const EncodingKey& ek,
       uint64_t /* unused */,
       uint64_t /* unused */) override {
@@ -59,7 +60,7 @@ class MockStripeStreams : public StripeStreams {
       BufferPtr dictionaryData;
       genMockDictDataSetter(nodeId, sequenceId)(
           dictionaryData, &getMemoryPool());
-      return dictionaryData;
+      return StripeDictionaryCache::Entry{dictionaryData, nullptr};
     };
   }
 

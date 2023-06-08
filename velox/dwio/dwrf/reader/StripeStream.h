@@ -128,7 +128,8 @@ class StripeStreams {
   /// 'dictionaryWidth' is *the width at which this is stored  in the reader.
   /// The non - selective path stores this always as int64, the selective path
   /// stores this at column width.
-  virtual std::function<BufferPtr()> getIntDictionaryInitializerForNode(
+  virtual std::function<StripeDictionaryCache::Entry()>
+  getIntDictionaryInitializerForNode(
       const EncodingKey& ek,
       uint64_t elementWidth,
       uint64_t dictionaryWidth = sizeof(int64_t)) = 0;
@@ -182,7 +183,8 @@ class StripeStreamsBase : public StripeStreams {
     return DwrfFormat::kDwrf;
   }
 
-  std::function<BufferPtr()> getIntDictionaryInitializerForNode(
+  std::function<StripeDictionaryCache::Entry()>
+  getIntDictionaryInitializerForNode(
       const EncodingKey& ek,
       uint64_t elementWidth,
       uint64_t dictionaryWidth = sizeof(int64_t)) override;

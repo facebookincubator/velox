@@ -513,12 +513,17 @@ void PageReader::prepareDictionary(const PageHeader& pageHeader) {
 void PageReader::makeFilterCache(dwio::common::ScanState& state) {
   VELOX_CHECK(
       !state.dictionary2.values, "Parquet supports only one dictionary");
-  state.filterCache.resize(state.dictionary.numValues);
+  if (!state.filterCache) {
+    state.filterCache =
+        std::make_shared<raw_vector<uint8_t>>(state.dictionary.numValues);
+  } else {
+    state.filterCache->resize(state.dictionary.numValues);
+  }
   simd::memset(
-      state.filterCache.data(),
+      state.filterCache->data(),
       dwio::common::FilterResult::kUnknown,
-      state.filterCache.size());
-  state.rawState.filterCache = state.filterCache.data();
+      state.filterCache->size());
+  state.rawState.filterCache = state.filterCache->data();
 }
 
 namespace {

@@ -500,7 +500,7 @@ class IntegerDictionaryColumnReader : public ColumnReader {
   std::unique_ptr<ByteRleDecoder> inDictionaryReader;
   std::unique_ptr<dwio::common::IntDecoder</* isSigned = */ false>> dataReader;
   uint64_t dictionarySize;
-  std::function<BufferPtr()> dictInit;
+  std::function<StripeDictionaryCache::Entry()> dictInit;
   bool initialized_{false};
 };
 
@@ -599,7 +599,7 @@ void IntegerDictionaryColumnReader<ReqT>::ensureInitialized() {
     return;
   }
 
-  dictionary = dictInit();
+  dictionary = dictInit().buffer;
   initialized_ = true;
 }
 

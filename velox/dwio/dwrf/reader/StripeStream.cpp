@@ -103,7 +103,7 @@ BufferPtr readDict(
 }
 } // namespace
 
-std::function<BufferPtr()>
+std::function<StripeDictionaryCache::Entry()>
 StripeStreamsBase::getIntDictionaryInitializerForNode(
     const EncodingKey& ek,
     uint64_t elementWidth,
@@ -123,6 +123,7 @@ StripeStreamsBase::getIntDictionaryInitializerForNode(
   DWIO_ENSURE(dataStream.get());
   stripeDictionaryCache_->registerIntDictionary(
       localEk,
+      dictionarySize,
       [dictReader = createDirectDecoder</* isSigned = */ true>(
            std::move(dataStream), dictVInts, elementWidth),
        dictionaryWidth,

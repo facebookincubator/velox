@@ -111,7 +111,7 @@ struct ScanState {
   // Cached results of filter application subscripted by dictionary
   // index. The visitor needs to reset this if the dictionary changes
   // in mid scan.
-  raw_vector<uint8_t> filterCache;
+  std::shared_ptr<raw_vector<uint8_t>> filterCache;
 
   // The above as raw pointers.
   RawScanState rawState;

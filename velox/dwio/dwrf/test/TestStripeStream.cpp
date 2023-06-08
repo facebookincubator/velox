@@ -635,7 +635,7 @@ TEST(StripeStream, shareDictionary) {
       ss, getStreamProxy(2, Not(0), proto::Stream_Kind_DICTIONARY_DATA, _))
       .WillRepeatedly(Return(nullptr));
 
-  std::vector<std::function<facebook::velox::BufferPtr()>> dictInits{};
+  std::vector<std::function<StripeDictionaryCache::Entry()>> dictInits{};
   dictInits.push_back(
       ss.getIntDictionaryInitializerForNode(EncodingKey{1, 0}, 8));
   dictInits.push_back(

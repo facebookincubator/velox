@@ -19,25 +19,37 @@
 #include <folly/Function.h>
 
 #include "velox/common/base/GTestMacros.h"
+#include "velox/common/base/RawVector.h"
 #include "velox/dwio/common/IntDecoder.h"
 #include "velox/dwio/dwrf/common/Common.h"
 #include "velox/vector/BaseVector.h"
 
 namespace facebook::velox::dwrf {
+
 class StripeDictionaryCache {
+ public:
+  struct Entry {
+    BufferPtr buffer;
+    std::shared_ptr<raw_vector<uint8_t>> filterCache;
+  };
+
+ private:
   // This could be potentially made an interface to be shared for
   // string dictionaries. However, we will need a union return type
   // in that case.
   class DictionaryEntry {
    public:
     explicit DictionaryEntry(
+        int32_t dictionarySize,
         folly::Function<BufferPtr(velox::memory::MemoryPool*)>&& dictGen);
 
-    BufferPtr getDictionaryBuffer(velox::memory::MemoryPool* pool);
+    Entry get(velox::memory::MemoryPool* pool);
 
    private:
+    int32_t dictionarySize_;
     folly::Function<BufferPtr(velox::memory::MemoryPool*)> dictGen_;
     BufferPtr dictionaryBuffer_;
+    std::shared_ptr<raw_vector<uint8_t>> filterCache_;
   };
 
  public:
@@ -45,9 +57,10 @@ class StripeDictionaryCache {
 
   void registerIntDictionary(
       const EncodingKey& ek,
+      int32_t dictionarySize,
       folly::Function<BufferPtr(velox::memory::MemoryPool*)>&& dictGen);
 
-  BufferPtr getIntDictionary(const EncodingKey& ek);
+  Entry getIntDictionary(const EncodingKey& ek);
 
  private:
   // This is typically the reader's memory pool.
