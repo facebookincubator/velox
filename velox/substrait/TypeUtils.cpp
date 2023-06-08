@@ -127,8 +127,17 @@ TypePtr toVeloxType(const std::string& typeName) {
       std::vector<TypePtr> types;
       std::vector<std::string> names;
       for (int idx = 0; idx < fieldTypes.size(); idx++) {
-        names.emplace_back("col_" + std::to_string(idx));
-        types.emplace_back(toVeloxType(std::string(fieldTypes[idx])));
+        std::string fieldTypeAndName = std::string(fieldTypes[idx]);
+        size_t pos = fieldTypeAndName.find_last_of(':');
+        if (pos == std::string::npos) {
+          // Name does not exist.
+          types.emplace_back(toVeloxType(fieldTypeAndName));
+          names.emplace_back("col_" + std::to_string(idx));
+        } else {
+          types.emplace_back(toVeloxType(fieldTypeAndName.substr(0, pos)));
+          names.emplace_back(
+              fieldTypeAndName.substr(pos + 1, fieldTypeAndName.length()));
+        }
       }
       return ROW(std::move(names), std::move(types));
     }

@@ -169,6 +169,7 @@ message Type {
     repeated Type types = 1;
     uint32 type_variation_reference = 2;
     Nullability nullability = 3;
+    repeated string names = 4;
   }
 
   message List {

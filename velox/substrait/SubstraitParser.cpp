@@ -73,17 +73,23 @@ std::shared_ptr<SubstraitParser::SubstraitType> SubstraitParser::parseType(
     }
     case ::substrait::Type::KindCase::kStruct: {
       // The type name of struct is in the format of:
-      // ROW<type0,type1,ROW<type2>>...typen.
+      // ROW<type0:name0,type1:name1,ROW<type2:name2>,...typen:namen>.
       typeName = "ROW<";
-      const auto& sStruct = substraitType.struct_();
-      const auto& substraitTypes = sStruct.types();
-      for (int i = 0; i < substraitTypes.size(); i++) {
+      const auto& substraitStruct = substraitType.struct_();
+      const auto& structTypes = substraitStruct.types();
+      const auto& structNames = substraitStruct.names();
+      bool nameProvided = structTypes.size() == structNames.size();
+      for (int i = 0; i < structTypes.size(); i++) {
         if (i > 0) {
-          typeName += ",";
+          typeName += ',';
         }
-        typeName += parseType(substraitTypes[i])->type;
+        typeName += parseType(structTypes[i])->type;
+        // Struct names could be empty.
+        if (nameProvided) {
+          typeName += (':' + structNames[i]);
+        }
       }
-      typeName += ">";
+      typeName += '>';
       nullability = substraitType.struct_().nullability();
       break;
     }
@@ -173,7 +179,7 @@ std::string SubstraitParser::parseType(const std::string& substraitType) {
 
 std::vector<std::shared_ptr<SubstraitParser::SubstraitType>>
 SubstraitParser::parseNamedStruct(const ::substrait::NamedStruct& namedStruct) {
-  // Nte that "names" are not used.
+  // Note that "names" are not used.
 
   // Parse Struct.
   const auto& substraitStruct = namedStruct.struct_();
