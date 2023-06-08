@@ -24,6 +24,58 @@ namespace facebook::velox::dwrf {
 
 class SelectiveIntegerDirectColumnReader
     : public dwio::common::SelectiveIntegerColumnReader {
+  void init(DwrfParams& params, uint32_t numBytes) {
+    format_ = params.stripeStreams().format();
+    if (format_ == DwrfFormat::kDwrf) {
+      initDwrf(params, numBytes);
+    } else {
+      VELOX_CHECK(format_ == DwrfFormat::kOrc);
+      initOrc(params, numBytes);
+    }
+  }
+
+  void initDwrf(DwrfParams& params, uint32_t numBytes) {
+    auto& stripe = params.stripeStreams();
+    EncodingKey encodingKey{nodeType_->id, params.flatMapContext().sequence};
+    auto data = encodingKey.forKind(proto::Stream_Kind_DATA);
+    bool dataVInts = stripe.getUseVInts(data);
+
+    auto decoder = createDirectDecoder<true>(
+        stripe.getStream(data, true), dataVInts, numBytes);
+    directDecoder =
+        dynamic_cast<dwio::common::DirectDecoder<true>*>(decoder.release());
+    VELOX_CHECK(directDecoder);
+    ints.reset(directDecoder);
+  }
+
+  void initOrc(DwrfParams& params, uint32_t numBytes) {
+    auto& stripe = params.stripeStreams();
+    EncodingKey encodingKey{nodeType_->id, params.flatMapContext().sequence};
+    auto data = encodingKey.forKind(proto::orc::Stream_Kind_DATA);
+    bool dataVInts = stripe.getUseVInts(data);
+
+    auto encoding = stripe.getEncodingOrc(encodingKey);
+    rleVersion_ = convertRleVersion(encoding.kind());
+    auto decoder = createRleDecoder<true>(
+        stripe.getStream(data, true),
+        rleVersion_,
+        params.pool(),
+        dataVInts,
+        numBytes);
+    if (rleVersion_ == velox::dwrf::RleVersion_1) {
+      rleDecoderV1 =
+          dynamic_cast<velox::dwrf::RleDecoderV1<true>*>(decoder.release());
+      VELOX_CHECK(rleDecoderV1);
+      ints.reset(rleDecoderV1);
+    } else {
+      VELOX_CHECK(rleVersion_ == velox::dwrf::RleVersion_2);
+      rleDecoderV2 =
+          dynamic_cast<velox::dwrf::RleDecoderV2<true>*>(decoder.release());
+      VELOX_CHECK(rleDecoderV2);
+      ints.reset(rleDecoderV2);
+    }
+  }
+
  public:
   using ValueType = int64_t;
 
@@ -38,43 +90,7 @@ class SelectiveIntegerDirectColumnReader
             params,
             scanSpec,
             dataType->type) {
-    EncodingKey encodingKey{nodeType_->id, params.flatMapContext().sequence};
-    auto data = encodingKey.forKind(proto::Stream_Kind_DATA);
-    auto& stripe = params.stripeStreams();
-    bool dataVInts = stripe.getUseVInts(data);
-
-    format_ = stripe.format();
-    if (format_ == velox::dwrf::DwrfFormat::kDwrf) {
-      auto decoder = createDirectDecoder<true>(
-          stripe.getStream(data, true), dataVInts, numBytes);
-      directDecoder =
-          dynamic_cast<dwio::common::DirectDecoder<true>*>(decoder.release());
-      VELOX_CHECK(directDecoder);
-      ints.reset(directDecoder);
-    } else if (format_ == velox::dwrf::DwrfFormat::kOrc) {
-      auto encoding = stripe.getEncoding(encodingKey);
-      rleVersion_ = convertRleVersion(encoding.kind());
-      auto decoder = createRleDecoder<true>(
-          stripe.getStream(data, true),
-          rleVersion_,
-          params.pool(),
-          dataVInts,
-          numBytes);
-      if (rleVersion_ == velox::dwrf::RleVersion_1) {
-        rleDecoderV1 =
-            dynamic_cast<velox::dwrf::RleDecoderV1<true>*>(decoder.release());
-        VELOX_CHECK(rleDecoderV1);
-        ints.reset(rleDecoderV1);
-      } else {
-        VELOX_CHECK(rleVersion_ == velox::dwrf::RleVersion_2);
-        rleDecoderV2 =
-            dynamic_cast<velox::dwrf::RleDecoderV2<true>*>(decoder.release());
-        VELOX_CHECK(rleDecoderV2);
-        ints.reset(rleDecoderV2);
-      }
-    } else {
-      VELOX_FAIL("invalid stripe format");
-    }
+    init(params, numBytes);
   }
 
   bool hasBulkPath() const override {

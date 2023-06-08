@@ -95,6 +95,10 @@ class DwrfData : public dwio::common::FormatData {
         entry.positions().begin(), entry.positions().end());
   }
 
+  void init(StripeStreams& stripe);
+  void initDwrf(StripeStreams& stripe);
+  void initOrc(StripeStreams& stripe);
+
   memory::MemoryPool& memoryPool_;
   const std::shared_ptr<const dwio::common::TypeWithId> nodeType_;
   FlatMapContext flatMapContext_;
@@ -148,6 +152,19 @@ inline RleVersion convertRleVersion(proto::ColumnEncoding_Kind kind) {
       return RleVersion_1;
     case proto::ColumnEncoding_Kind_DIRECT_V2:
     case proto::ColumnEncoding_Kind_DICTIONARY_V2:
+      return RleVersion_2;
+    default:
+      DWIO_RAISE("Unknown encoding in convertRleVersion");
+  }
+}
+
+inline RleVersion convertRleVersion(proto::orc::ColumnEncoding_Kind kind) {
+  switch (static_cast<int64_t>(kind)) {
+    case proto::orc::ColumnEncoding_Kind_DIRECT:
+    case proto::orc::ColumnEncoding_Kind_DICTIONARY:
+      return RleVersion_1;
+    case proto::orc::ColumnEncoding_Kind_DIRECT_V2:
+    case proto::orc::ColumnEncoding_Kind_DICTIONARY_V2:
       return RleVersion_2;
     default:
       DWIO_RAISE("Unknown encoding in convertRleVersion");

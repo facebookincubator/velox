@@ -17,7 +17,6 @@
 #include <folly/ScopeGuard.h>
 #include <folly/container/F14Set.h>
 
-#include "velox/common/base/BitSet.h"
 #include "velox/dwio/common/exception/Exception.h"
 #include "velox/dwio/dwrf/common/DecoderUtil.h"
 #include "velox/dwio/dwrf/common/wrap/coded-stream-wrapper.h"
@@ -136,45 +135,84 @@ StripeStreamsBase::getIntDictionaryInitializerForNode(
   };
 }
 
-void StripeStreamsImpl::loadStreams() {
-  auto& footer = reader_.getStripeFooter();
+auto addStreamDwrf = [](StripeStreamsImpl* ssi,
+                        BitSet& projectedNodes,
+                        auto& stream,
+                        auto& offset) {
+  if (stream.has_offset()) {
+    offset = stream.offset();
+  }
+  if (projectedNodes.contains(stream.node())) {
+    ssi->getStreams()[stream] = {offset, stream};
+  }
+  offset += stream.length();
+};
 
+auto addStreamOrc = [](StripeStreamsImpl* ssi,
+                       BitSet& projectedNodes,
+                       auto& stream,
+                       auto& offset) {
+  if (projectedNodes.contains(stream.column())) {
+    ssi->getStreams()[stream] = {offset, stream};
+  }
+  offset += stream.length();
+};
+
+void StripeStreamsImpl::processStreams(BitSet& projectedNodes) {
   // HACK!!!
   // Column selector filters based on requested schema (ie, table schema), while
   // we need filter based on file schema. As a result we cannot call
   // shouldReadNode directly. Instead, build projected nodes set based on node
   // id from file schema. Column selector should really be fixed to handle file
   // schema properly
-  BitSet projectedNodes(0);
   auto expected = selector_.getSchemaWithId();
   auto actual = reader_.getReader().getSchemaWithId();
   findProjectedNodes(projectedNodes, *expected, *actual, [&](uint32_t node) {
     return selector_.shouldReadNode(node);
   });
 
-  auto addStream = [&](auto& stream, auto& offset) {
-    if (stream.has_offset()) {
-      offset = stream.offset();
-    }
-    if (projectedNodes.contains(stream.node())) {
-      streams_[stream] = {offset, stream};
-    }
-    offset += stream.length();
-  };
-
   uint64_t streamOffset = 0;
-  for (auto& stream : footer.streams()) {
-    addStream(stream, streamOffset);
-  }
-
-  // update column encoding for each stream
-  for (uint32_t i = 0; i < footer.encoding_size(); ++i) {
-    auto& e = footer.encoding(i);
-    auto node = e.has_node() ? e.node() : i;
-    if (projectedNodes.contains(node)) {
-      encodings_[{node, e.has_sequence() ? e.sequence() : 0}] = i;
+  if (format() == DwrfFormat::kDwrf) {
+    for (auto& stream : reader_.getStripeFooter().streams()) {
+      addStreamDwrf(this, projectedNodes, stream, streamOffset);
+    }
+  } else { // kOrc
+    for (auto& stream : reader_.getStripeFooterOrc().streams()) {
+      addStreamOrc(this, projectedNodes, stream, streamOffset);
     }
   }
+}
+
+void StripeStreamsImpl::processEncodings(BitSet& projectedNodes) {
+  if (format() == DwrfFormat::kDwrf) {
+    auto& footer = reader_.getStripeFooter();
+    // update column encoding for each stream
+    for (uint32_t i = 0; i < footer.encoding_size(); ++i) {
+      auto& e = footer.encoding(i);
+      auto node = e.has_node() ? e.node() : i;
+      if (projectedNodes.contains(node)) {
+        encodings_[{node, e.has_sequence() ? e.sequence() : 0}] = i;
+      }
+    }
+  } else { // kOrc
+    auto& footer = reader_.getStripeFooterOrc();
+    // update column encoding for each stream
+    for (uint32_t i = 0; i < footer.columns_size(); ++i) {
+      if (projectedNodes.contains(i)) {
+        encodings_[{i, 0}] = i;
+      }
+    }
+  }
+}
+
+void StripeStreamsImpl::processEncryptions(BitSet& projectedNodes) {
+  if (format() == DwrfFormat::kOrc) {
+    // orc doesn't contain encryption field
+    VELOX_CHECK(reader_.getStripeFooterOrc().encryption_size() == 0);
+    return;
+  }
+
+  auto& footer = reader_.getStripeFooter();
 
   // handle encrypted columns
   auto& handler = reader_.getDecryptionHandler();
@@ -196,10 +234,12 @@ void StripeStreamsImpl::loadStreams() {
           reader_.getReader().readProtoFromString<proto::StripeEncryptionGroup>(
               group,
               std::addressof(handler.getEncryptionProviderByIndex(index)));
-      streamOffset = 0;
+
+      uint64_t streamOffset = 0;
       for (auto& stream : groupProto->streams()) {
-        addStream(stream, streamOffset);
+        addStreamDwrf(this, projectedNodes, stream, streamOffset);
       }
+
       for (auto& encoding : groupProto->encoding()) {
         DWIO_ENSURE(encoding.has_node(), "node is required");
         auto node = encoding.node();
@@ -211,6 +251,13 @@ void StripeStreamsImpl::loadStreams() {
       }
     }
   }
+}
+
+void StripeStreamsImpl::loadStreams() {
+  BitSet projectedNodes(0);
+  processStreams(projectedNodes);
+  processEncodings(projectedNodes);
+  processEncryptions(projectedNodes);
 }
 
 std::unique_ptr<dwio::common::SeekableInputStream>

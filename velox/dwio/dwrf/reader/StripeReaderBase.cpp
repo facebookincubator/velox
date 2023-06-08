@@ -70,16 +70,29 @@ StripeInformationWrapper StripeReaderBase::loadStripe(
         LogType::STRIPE_FOOTER);
   }
 
-  // Reuse footer_'s memory to avoid expensive destruction
-  if (!footer_) {
-    footer_ = google::protobuf::Arena::CreateMessage<proto::StripeFooter>(
-        reader_->arena());
-  }
-
   auto streamDebugInfo = fmt::format("Stripe {} Footer ", index);
-  ProtoUtils::readProtoInto<proto::StripeFooter>(
-      reader_->createDecompressedStream(std::move(stream), streamDebugInfo),
-      footer_);
+
+  // Reuse footer_'s memory to avoid expensive destruction
+  if (format() == DwrfFormat::kDwrf) {
+    if (!footer_) {
+      footer_ = google::protobuf::Arena::CreateMessage<proto::StripeFooter>(
+          reader_->arena());
+    }
+
+    ProtoUtils::readProtoInto<proto::StripeFooter>(
+        reader_->createDecompressedStream(std::move(stream), streamDebugInfo),
+        footer_);
+  } else { // DwrfFormat::kOrc
+    if (!footerOrc_) {
+      footerOrc_ =
+          google::protobuf::Arena::CreateMessage<proto::orc::StripeFooter>(
+              reader_->arena());
+    }
+
+    ProtoUtils::readProtoInto<proto::orc::StripeFooter>(
+        reader_->createDecompressedStream(std::move(stream), streamDebugInfo),
+        footerOrc_);
+  }
 
   // refresh stripe encryption key if necessary
   loadEncryptionKeys(index);

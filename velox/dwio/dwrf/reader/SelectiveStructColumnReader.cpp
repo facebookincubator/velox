@@ -32,13 +32,10 @@ SelectiveStructColumnReader::SelectiveStructColumnReader(
           dataType,
           params,
           scanSpec) {
+  init(params);
+
   EncodingKey encodingKey{nodeType_->id, params.flatMapContext().sequence};
   auto& stripe = params.stripeStreams();
-  auto encoding = static_cast<int64_t>(stripe.getEncoding(encodingKey).kind());
-  DWIO_ENSURE_EQ(
-      encoding,
-      proto::ColumnEncoding_Kind_DIRECT,
-      "Unknown encoding for StructColumnReader");
 
   const auto& cs = stripe.getColumnSelector();
   // A reader tree may be constructed while the ScanSpec is being used

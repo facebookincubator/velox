@@ -26,6 +26,7 @@ class StripeReaderBase {
  public:
   explicit StripeReaderBase(const std::shared_ptr<ReaderBase>& reader)
       : reader_{reader},
+        footer_(nullptr),
         handler_{std::make_unique<encryption::DecryptionHandler>(
             reader_->getDecryptionHandler())} {}
 
@@ -43,6 +44,19 @@ class StripeReaderBase {
     DWIO_ENSURE(footer->GetArena());
   }
 
+  StripeReaderBase(
+      const std::shared_ptr<ReaderBase>& reader,
+      const proto::orc::StripeFooter* footer)
+      : reader_{reader},
+        footerOrc_{const_cast<proto::orc::StripeFooter*>(footer)},
+        handler_{std::make_unique<encryption::DecryptionHandler>(
+            reader_->getDecryptionHandler())},
+        canLoad_{false} {
+    // The footer is expected to be arena allocated and to stay
+    // live for the lifetime of 'this'.
+    DWIO_ENSURE(footer->GetArena());
+  }
+
   virtual ~StripeReaderBase() = default;
 
   StripeInformationWrapper loadStripe(uint32_t index, bool& preload);
@@ -52,8 +66,17 @@ class StripeReaderBase {
     return *footer_;
   }
 
+  const proto::orc::StripeFooter& getStripeFooterOrc() const {
+    DWIO_ENSURE_NOT_NULL(footerOrc_, "stripe not loaded");
+    return *footerOrc_;
+  }
+
   dwio::common::BufferedInput& getStripeInput() const {
     return stripeInput_ ? *stripeInput_ : reader_->getBufferedInput();
+  }
+
+  DwrfFormat format() const {
+    return reader_->format();
   }
 
   ReaderBase& getReader() const {
@@ -71,7 +94,12 @@ class StripeReaderBase {
  private:
   std::shared_ptr<ReaderBase> reader_;
   std::unique_ptr<dwio::common::BufferedInput> stripeInput_;
-  proto::StripeFooter* footer_ = nullptr;
+
+  union {
+    proto::StripeFooter* footer_ = nullptr; // format() == Dwrf
+    proto::orc::StripeFooter* footerOrc_; // format() == Orc
+  };
+
   std::unique_ptr<encryption::DecryptionHandler> handler_;
   std::optional<uint32_t> lastStripeIndex_;
   bool canLoad_{true};

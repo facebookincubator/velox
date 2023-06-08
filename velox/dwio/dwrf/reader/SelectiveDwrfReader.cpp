@@ -42,17 +42,13 @@ std::unique_ptr<SelectiveColumnReader> buildIntegerReader(
     common::ScanSpec& scanSpec) {
   EncodingKey ek{requestedType->id, params.flatMapContext().sequence};
   auto& stripe = params.stripeStreams();
-  switch (static_cast<int64_t>(stripe.getEncoding(ek).kind())) {
-    case proto::ColumnEncoding_Kind_DICTIONARY:
-    case proto::ColumnEncoding_Kind_DICTIONARY_V2:
-      return std::make_unique<SelectiveIntegerDictionaryColumnReader>(
-          requestedType, dataType, params, scanSpec, numBytes);
-    case proto::ColumnEncoding_Kind_DIRECT:
-    case proto::ColumnEncoding_Kind_DIRECT_V2:
-      return std::make_unique<SelectiveIntegerDirectColumnReader>(
-          requestedType, dataType, params, numBytes, scanSpec);
-    default:
-      DWIO_RAISE("buildReader unhandled integer encoding");
+  if (stripe.isColumnEncodingKindDictionary(ek)) {
+    return std::make_unique<SelectiveIntegerDictionaryColumnReader>(
+        requestedType, dataType, params, scanSpec, numBytes);
+  } else {
+    VELOX_CHECK(stripe.isColumnEncodingKindDirect(ek));
+    return std::make_unique<SelectiveIntegerDirectColumnReader>(
+        requestedType, dataType, params, numBytes, scanSpec);
   }
 }
 
@@ -80,14 +76,18 @@ std::unique_ptr<SelectiveColumnReader> SelectiveDwrfReader::build(
     case TypeKind::ARRAY:
       return std::make_unique<SelectiveListColumnReader>(
           requestedType, dataType, params, scanSpec);
-    case TypeKind::MAP:
-      if (stripe.getEncoding(ek).kind() ==
-          proto::ColumnEncoding_Kind_MAP_FLAT) {
-        return createSelectiveFlatMapColumnReader(
-            requestedType, dataType, params, scanSpec);
+    case TypeKind::MAP: {
+      if (stripe.format() == DwrfFormat::kDwrf) {
+        if (stripe.getEncoding(ek).kind() ==
+            proto::ColumnEncoding_Kind_MAP_FLAT) {
+          return createSelectiveFlatMapColumnReader(
+              requestedType, dataType, params, scanSpec);
+        }
       }
+
       return std::make_unique<SelectiveMapColumnReader>(
           requestedType, dataType, params, scanSpec);
+    }
     case TypeKind::REAL:
       if (requestedType->type->kind() == TypeKind::REAL) {
         return std::make_unique<
@@ -112,19 +112,16 @@ std::unique_ptr<SelectiveColumnReader> SelectiveDwrfReader::build(
       return std::make_unique<SelectiveByteRleColumnReader>(
           requestedType, dataType, params, scanSpec, false);
     case TypeKind::VARBINARY:
-    case TypeKind::VARCHAR:
-      switch (static_cast<int64_t>(stripe.getEncoding(ek).kind())) {
-        case proto::ColumnEncoding_Kind_DIRECT:
-        case proto::ColumnEncoding_Kind_DIRECT_V2:
-          return std::make_unique<SelectiveStringDirectColumnReader>(
-              requestedType, params, scanSpec);
-        case proto::ColumnEncoding_Kind_DICTIONARY:
-        case proto::ColumnEncoding_Kind_DICTIONARY_V2:
-          return std::make_unique<SelectiveStringDictionaryColumnReader>(
-              requestedType, params, scanSpec);
-        default:
-          DWIO_RAISE("buildReader string unknown encoding");
+    case TypeKind::VARCHAR: {
+      if (stripe.isColumnEncodingKindDirect(ek)) {
+        return std::make_unique<SelectiveStringDirectColumnReader>(
+            requestedType, params, scanSpec);
+      } else {
+        VELOX_CHECK(stripe.isColumnEncodingKindDictionary(ek));
+        return std::make_unique<SelectiveStringDictionaryColumnReader>(
+            requestedType, params, scanSpec);
       }
+    }
     case TypeKind::TIMESTAMP:
       return std::make_unique<SelectiveTimestampColumnReader>(
           requestedType, params, scanSpec);

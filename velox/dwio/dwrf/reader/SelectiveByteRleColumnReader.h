@@ -22,6 +22,46 @@ namespace facebook::velox::dwrf {
 
 class SelectiveByteRleColumnReader
     : public dwio::common::SelectiveByteRleColumnReader {
+  void init(DwrfParams& params, bool isBool) {
+    auto format = params.stripeStreams().format();
+    if (format == DwrfFormat::kDwrf) {
+      initDwrf(params, isBool);
+    } else {
+      VELOX_CHECK(format == DwrfFormat::kOrc);
+      initOrc(params, isBool);
+    }
+  }
+
+  void initDwrf(DwrfParams& params, bool isBool) {
+    EncodingKey encodingKey{nodeType_->id, params.flatMapContext().sequence};
+    auto& stripe = params.stripeStreams();
+    if (isBool) {
+      boolRle_ = createBooleanRleDecoder(
+          stripe.getStream(encodingKey.forKind(proto::Stream_Kind_DATA), true),
+          encodingKey);
+    } else {
+      byteRle_ = createByteRleDecoder(
+          stripe.getStream(encodingKey.forKind(proto::Stream_Kind_DATA), true),
+          encodingKey);
+    }
+  }
+
+  void initOrc(DwrfParams& params, bool isBool) {
+    EncodingKey encodingKey{nodeType_->id, params.flatMapContext().sequence};
+    auto& stripe = params.stripeStreams();
+    if (isBool) {
+      boolRle_ = createBooleanRleDecoder(
+          stripe.getStream(
+              encodingKey.forKind(proto::orc::Stream_Kind_DATA), true),
+          encodingKey);
+    } else {
+      byteRle_ = createByteRleDecoder(
+          stripe.getStream(
+              encodingKey.forKind(proto::orc::Stream_Kind_DATA), true),
+          encodingKey);
+    }
+  }
+
  public:
   using ValueType = int8_t;
 
@@ -36,17 +76,7 @@ class SelectiveByteRleColumnReader
             params,
             scanSpec,
             dataType->type) {
-    EncodingKey encodingKey{nodeType_->id, params.flatMapContext().sequence};
-    auto& stripe = params.stripeStreams();
-    if (isBool) {
-      boolRle_ = createBooleanRleDecoder(
-          stripe.getStream(encodingKey.forKind(proto::Stream_Kind_DATA), true),
-          encodingKey);
-    } else {
-      byteRle_ = createByteRleDecoder(
-          stripe.getStream(encodingKey.forKind(proto::Stream_Kind_DATA), true),
-          encodingKey);
-    }
+    init(params, isBool);
   }
 
   void seekToRowGroup(uint32_t index) override {

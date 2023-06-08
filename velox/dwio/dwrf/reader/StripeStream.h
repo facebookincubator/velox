@@ -16,6 +16,7 @@
 
 #pragma once
 
+#include "velox/common/base/BitSet.h"
 #include "velox/dwio/common/ColumnSelector.h"
 #include "velox/dwio/common/Options.h"
 #include "velox/dwio/common/SeekableInputStream.h"
@@ -48,6 +49,7 @@ class StreamInformationImpl : public StreamInformation {
   }
 
   StreamInformationImpl() : streamId_{DwrfStreamIdentifier::getInvalid()} {}
+
   StreamInformationImpl(uint64_t offset, const proto::Stream& stream)
       : streamId_(stream),
         offset_(offset),
@@ -56,10 +58,20 @@ class StreamInformationImpl : public StreamInformation {
     // PASS
   }
 
-  ~StreamInformationImpl() override = default;
+  StreamInformationImpl(uint64_t offset, const proto::orc::Stream& stream)
+      : streamId_(stream),
+        offset_(offset),
+        length_(stream.length()),
+        useVInts_(true) {
+    // PASS
+  }
 
   StreamKind getKind() const override {
     return streamId_.kind();
+  }
+
+  StreamKindOrc getKindOrc() const override {
+    return streamId_.kindOrc();
   }
 
   uint32_t getNode() const override {
@@ -113,6 +125,16 @@ class StripeStreams {
       const EncodingKey&) const = 0;
 
   /**
+   * Get the encoding for the given column for this stripe.
+   * this interface is used for format Orc
+   */
+  virtual const proto::orc::ColumnEncoding& getEncodingOrc(
+      const EncodingKey&) const {
+    static proto::orc::ColumnEncoding columnEncoding;
+    return columnEncoding;
+  }
+
+  /**
    * Get the stream for the given column/kind in this stripe.
    * @param streamId stream identifier object
    * @param throwIfNotFound fail if a stream is required and not found
@@ -163,6 +185,41 @@ class StripeStreams {
 
   // Number of rows per row group. Last row group may have fewer rows.
   virtual uint32_t rowsPerRowGroup() const = 0;
+
+  bool isColumnEncodingKindDirect(const EncodingKey& ek) const {
+    auto dwrfFormat = format();
+    if (dwrfFormat == DwrfFormat::kDwrf) {
+      auto kind = getEncoding(ek).kind();
+      if (kind == proto::ColumnEncoding_Kind_DIRECT ||
+          kind == proto::ColumnEncoding_Kind_DIRECT_V2) {
+        return true;
+      } else if (
+          kind == proto::ColumnEncoding_Kind_DICTIONARY ||
+          kind == proto::ColumnEncoding_Kind_DICTIONARY_V2) {
+        return false;
+      } else {
+        DWIO_RAISE("isColumnEncodingKindDirect dwrf kind error");
+      }
+    } else if (dwrfFormat == DwrfFormat::kOrc) {
+      auto kind = getEncodingOrc(ek).kind();
+      if (kind == proto::orc::ColumnEncoding_Kind_DIRECT ||
+          kind == proto::orc::ColumnEncoding_Kind_DIRECT_V2) {
+        return true;
+      } else if (
+          kind == proto::orc::ColumnEncoding_Kind_DICTIONARY ||
+          kind == proto::orc::ColumnEncoding_Kind_DICTIONARY_V2) {
+        return false;
+      } else {
+        DWIO_RAISE("isColumnEncodingKindDirect orc kind error");
+      }
+    } else {
+      DWIO_RAISE("isColumnEncodingKindDirect dwrfFormat error");
+    }
+  }
+
+  bool isColumnEncodingKindDictionary(const EncodingKey& ek) const {
+    return !isColumnEncodingKindDirect(ek);
+  }
 };
 
 class StripeStreamsBase : public StripeStreams {
@@ -209,6 +266,10 @@ class StripeStreamsImpl : public StripeStreamsBase {
   const uint32_t stripeIndex_;
   bool readPlanLoaded_;
 
+  void processStreams(BitSet& projectedNodes);
+  void processEncodings(BitSet& projectedNodes);
+  void processEncryptions(BitSet& projectedNodes);
+
   void loadStreams();
 
   // map of stream id -> stream information
@@ -217,7 +278,9 @@ class StripeStreamsImpl : public StripeStreamsBase {
       StreamInformationImpl,
       dwio::common::StreamIdentifierHash>
       streams_;
+
   folly::F14FastMap<EncodingKey, uint32_t, EncodingKeyHash> encodings_;
+
   folly::F14FastMap<EncodingKey, proto::ColumnEncoding, EncodingKeyHash>
       decryptedEncodings_;
 
@@ -266,6 +329,23 @@ class StripeStreamsImpl : public StripeStreamsBase {
         "encoding not found: ",
         ek.toString());
     return enc->second;
+  }
+
+  const proto::orc::ColumnEncoding& getEncodingOrc(
+      const EncodingKey& ek) const override {
+    VELOX_CHECK(format() == DwrfFormat::kOrc);
+    auto index = encodings_.find(ek);
+    if (index != encodings_.end()) {
+      return reader_.getStripeFooterOrc().columns(index->second);
+    }
+    // TODO: zuochunwei
+    // need find from decryptedEncodings_ for Orc?
+    static proto::orc::ColumnEncoding columnEncoding;
+    return columnEncoding;
+  }
+
+  auto& getStreams() {
+    return streams_;
   }
 
   // load data into buffer according to read plan
