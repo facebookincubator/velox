@@ -424,10 +424,10 @@ TEST(ColumnWriterTests, TestTimestampBoundaryValuesWriter) {
   std::vector<std::optional<Timestamp>> data;
   for (int64_t i = 0; i < ITERATIONS; ++i) {
     if (i & 1) {
-      Timestamp ts(INT64_MAX, MAX_NANOS);
+      Timestamp ts(Timestamp::kMaxSeconds, MAX_NANOS);
       data.emplace_back(ts);
     } else {
-      Timestamp ts(MIN_SECONDS, MAX_NANOS);
+      Timestamp ts(Timestamp::kMinSeconds, MAX_NANOS);
       data.emplace_back(ts);
     }
     data.emplace_back();
