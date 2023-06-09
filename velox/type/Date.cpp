@@ -25,11 +25,11 @@ void parseTo(folly::StringPiece in, Date& out) {
 
 std::string Date::toString() const {
   // Find the number of seconds for the days_;
-  // Casting 86400 to int64 to handle overflows gracefully.
-  int64_t daySeconds = days_ * (int64_t)(86400);
+  // Casting 'days_' to time_t to avoid overflow in multiplication.
+  const time_t daySeconds = static_cast<time_t>(days_) * 86400L;
   std::tm tmValue;
   VELOX_USER_CHECK_NOT_NULL(
-      gmtime_r((const time_t*)&daySeconds, &tmValue),
+      gmtime_r(&daySeconds, &tmValue),
       "Can't convert days to dates: {}",
       days_);
 
