@@ -189,6 +189,16 @@ VectorPtr constructFlatVectorForStruct(
   return vector;
 }
 
+core::FieldAccessTypedExprPtr makeFieldAccessExpr(
+    const std::string& name,
+    const TypePtr& type,
+    core::FieldAccessTypedExprPtr input) {
+  if (input) {
+    return std::make_shared<core::FieldAccessTypedExpr>(type, input, name);
+  }
+
+  return std::make_shared<core::FieldAccessTypedExpr>(type, name);
+}
 } // namespace
 
 using facebook::velox::core::variantArrayToVector;
@@ -202,44 +212,26 @@ SubstraitVeloxExprConverter::toVeloxExpr(
   switch (typeCase) {
     case ::substrait::Expression::FieldReference::ReferenceTypeCase::
         kDirectReference: {
-      const auto& dRef = substraitField.direct_reference();
-      VELOX_CHECK(dRef.has_struct_field(), "Struct field expected.");
-      int32_t colIdx = subParser_->parseReferenceSegment(dRef);
-      std::optional<int32_t> childIdx = std::nullopt;
-      if (dRef.struct_field().has_child()) {
-        childIdx =
-            subParser_->parseReferenceSegment(dRef.struct_field().child());
-      }
+      const auto& directRef = substraitField.direct_reference();
+      core::FieldAccessTypedExprPtr fieldAccess{nullptr};
+      const auto* tmp = &directRef.struct_field();
 
-      const auto& inputTypes = inputType->children();
-      const auto& inputNames = inputType->names();
-      const int64_t inputSize = inputNames.size();
+      auto inputColumnType = inputType;
+      for (;;) {
+        auto idx = tmp->field();
+        fieldAccess = makeFieldAccessExpr(
+            inputColumnType->nameOf(idx),
+            inputColumnType->childAt(idx),
+            fieldAccess);
 
-      if (colIdx >= inputSize) {
-        VELOX_FAIL("Missing the column with id '{}' .", colIdx);
-      }
-
-      if (!childIdx.has_value()) {
-        return std::make_shared<core::FieldAccessTypedExpr>(
-            inputTypes[colIdx],
-            std::make_shared<core::InputTypedExpr>(inputTypes[colIdx]),
-            inputNames[colIdx]);
-      } else {
-        // Select a subfield in a struct by name.
-        if (auto inputColumnType = asRowType(inputTypes[colIdx])) {
-          if (childIdx.value() >= inputColumnType->size()) {
-            VELOX_FAIL("Missing the subfield with id '{}' .", childIdx.value());
-          }
-          return std::make_shared<core::FieldAccessTypedExpr>(
-              inputColumnType->childAt(childIdx.value()),
-              std::make_shared<core::FieldAccessTypedExpr>(
-                  inputTypes[colIdx], inputNames[colIdx]),
-              inputColumnType->nameOf(childIdx.value()));
-        } else {
-          VELOX_FAIL("RowType expected.");
+        if (!tmp->has_child()) {
+          break;
         }
+
+        inputColumnType = asRowType(inputColumnType->childAt(idx));
+        tmp = &tmp->child().struct_field();
       }
-      break;
+      return fieldAccess;
     }
     default:
       VELOX_NYI(
