@@ -33,16 +33,24 @@ namespace facebook::velox {
 struct Timestamp {
  public:
   enum class Precision : int { kMilliseconds = 3, kNanoseconds = 9 };
+  // We need to limit the range of seconds to avoid some problems.
+  // Seconds in Timestamp need to be in range [INT64_MIN/1000, INT64_MAX/1000].
+  // Presto's Timestamp is stored in milliseconds, this range ensures that
+  // Timestamp's range in Velox will not be smaller than Presto, and can make
+  // Timestamp::toString work correctly.
+  static constexpr int64_t kMaxSeconds =
+      std::numeric_limits<int64_t>::max() / 1000;
+  static constexpr int64_t kMinSeconds =
+      std::numeric_limits<int64_t>::min() / 1000;
+
   // Nanos in Timestamp need to be less than 1 second.
   static constexpr uint64_t kMaxNanos = 999'999'999;
 
   constexpr Timestamp() : seconds_(0), nanos_(0) {}
   Timestamp(int64_t seconds, uint64_t nanos)
       : seconds_(seconds), nanos_(nanos) {
-    // The range of seconds is not limited. But we need to keep in mind that
-    // too large or too small seconds is reasonable for the Timestamp type,
-    // but it may construct a timestamp value that is meaningless in practice,
-    // such as a negative timestamp.
+    VELOX_CHECK_GE(seconds, kMinSeconds);
+    VELOX_DCHECK_LE(seconds, kMaxSeconds);
     VELOX_DCHECK_LE(nanos, kMaxNanos);
   }
 
@@ -63,7 +71,12 @@ struct Timestamp {
     // uint64_t first and its value is at most UINT64_MAX / 2. However, too
     // large seconds_ will cause checkedMultiply overflow, we should make
     // sure the product is less than INT64_MAX.
-    return checkedMultiply(seconds_, (int64_t)1'000'000'000) + nanos_;
+    try {
+      return checkedMultiply(seconds_, (int64_t)1'000'000'000) + nanos_;
+    } catch (...) {
+      VELOX_USER_FAIL(
+          "Could not convert Timestamp({}, {}) to nanoseconds, integer overflow");
+    }
   }
 
   int64_t toMillis() const {
@@ -77,7 +90,12 @@ struct Timestamp {
     // The addition cannot overflow because the product will be promoted to
     // uint64_t first and its value is at most UINT64_MAX / 2. We should make
     // sure the product is less than INT64_MAX.
-    return checkedMultiply(seconds_, (int64_t)1'000'000) + nanos_ / 1'000;
+    try {
+      return checkedMultiply(seconds_, (int64_t)1'000'000) + nanos_ / 1'000;
+    } catch (...) {
+      VELOX_USER_FAIL(
+          "Could not convert Timestamp({}, {}) to microseconds, integer overflow");
+    }
   }
 
   static Timestamp fromMillis(int64_t millis) {

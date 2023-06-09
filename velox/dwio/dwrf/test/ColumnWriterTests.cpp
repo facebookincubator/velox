@@ -465,7 +465,6 @@ void verifyInvalidTimestamp(int64_t seconds, int64_t nanos) {
 
 TEST(ColumnWriterTests, TestTimestampInvalidWriter) {
   // Seconds invalid range.
-  verifyInvalidTimestamp(INT64_MIN, 0);
   verifyInvalidTimestamp(MIN_SECONDS - 1, MAX_NANOS);
 }
 

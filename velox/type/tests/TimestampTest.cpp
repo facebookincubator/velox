@@ -71,24 +71,16 @@ TEST(TimestampTest, fromNanos) {
 }
 
 TEST(TimestampTest, arithmeticOverflow) {
-  int64_t positiveSecond = 9223372036854776;
+  int64_t positiveSecond = Timestamp::kMaxSeconds;
   uint64_t nano = 123 * 1'000'000;
 
   Timestamp ts1(positiveSecond, nano);
-  VELOX_ASSERT_THROW(
-      ts1.toMillis(), "integer overflow: 9223372036854776 * 1000");
-  VELOX_ASSERT_THROW(
-      ts1.toMicros(), "integer overflow: 9223372036854776 * 1000000");
-  VELOX_ASSERT_THROW(
-      ts1.toNanos(), "integer overflow: 9223372036854776 * 1000000000");
+  VELOX_ASSERT_THROW(ts1.toMicros(), "Could not convert Timestamp");
+  VELOX_ASSERT_THROW(ts1.toNanos(), "Could not convert Timestamp");
 
   Timestamp ts2(-positiveSecond, nano);
-  VELOX_ASSERT_THROW(
-      ts2.toMillis(), "integer overflow: -9223372036854776 * 1000");
-  VELOX_ASSERT_THROW(
-      ts2.toMicros(), "integer overflow: -9223372036854776 * 1000000");
-  VELOX_ASSERT_THROW(
-      ts2.toNanos(), "integer overflow: -9223372036854776 * 1000000000");
+  VELOX_ASSERT_THROW(ts2.toMicros(), "Could not convert Timestamp");
+  VELOX_ASSERT_THROW(ts2.toNanos(), "Could not convert Timestamp");
 }
 
 TEST(TimestampTest, toAppend) {
@@ -138,11 +130,29 @@ TEST(TimestampTest, now) {
 }
 
 DEBUG_ONLY_TEST(TimestampTest, invalidInput) {
-  constexpr uint64_t kMax = std::numeric_limits<uint64_t>::max();
+  constexpr uint64_t kUint64Max = std::numeric_limits<uint64_t>::max();
+  constexpr int64_t kInt64Min = std::numeric_limits<int64_t>::min();
+  constexpr int64_t kInt64Max = std::numeric_limits<int64_t>::max();
+  // Seconds invalid range.
+  VELOX_ASSERT_THROW(
+      Timestamp(kInt64Min, 1),
+      fmt::format("({} vs. {})", kInt64Min, Timestamp::kMinSeconds));
+  VELOX_ASSERT_THROW(
+      Timestamp(kInt64Max, 1),
+      fmt::format("({} vs. {})", kInt64Max, Timestamp::kMaxSeconds));
+  VELOX_ASSERT_THROW(
+      Timestamp(Timestamp::kMinSeconds - 1, 1),
+      fmt::format(
+          "({} vs. {})", Timestamp::kMinSeconds - 1, Timestamp::kMinSeconds));
+  VELOX_ASSERT_THROW(
+      Timestamp(Timestamp::kMaxSeconds + 1, 1),
+      fmt::format(
+          "({} vs. {})", Timestamp::kMaxSeconds + 1, Timestamp::kMaxSeconds));
+
   // Nanos invalid range.
   VELOX_ASSERT_THROW(
-      Timestamp(1, kMax),
-      fmt::format("({} vs. {})", kMax, Timestamp::kMaxNanos));
+      Timestamp(1, kUint64Max),
+      fmt::format("({} vs. {})", kUint64Max, Timestamp::kMaxNanos));
   VELOX_ASSERT_THROW(
       Timestamp(1, Timestamp::kMaxNanos + 1),
       fmt::format(

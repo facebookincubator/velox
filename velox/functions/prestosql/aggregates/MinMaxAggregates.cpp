@@ -35,12 +35,11 @@ template <>
 struct MinMaxTrait<Timestamp> {
   static Timestamp lowest() {
     return Timestamp(
-        std::numeric_limits<int64_t>::lowest(),
-        std::numeric_limits<uint64_t>::lowest());
+        Timestamp::kMinSeconds, std::numeric_limits<uint64_t>::lowest());
   }
 
   static Timestamp max() {
-    return Timestamp(std::numeric_limits<int64_t>::max(), Timestamp::kMaxNanos);
+    return Timestamp(Timestamp::kMaxSeconds, Timestamp::kMaxNanos);
   }
 };
 
