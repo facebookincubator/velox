@@ -23,6 +23,9 @@
 
 #include "velox/functions/sparksql/Register.h"
 #include "velox/substrait/SubstraitToVeloxPlan.h"
+#include "velox/substrait/VeloxToSubstraitPlan.h"
+#include "velox/vector/tests/utils/VectorTestBase.h"
+
 #include "velox/substrait/VariantToVectorConverter.h"
 #include "velox/substrait/VeloxToSubstraitPlan.h"
 
@@ -505,6 +508,37 @@ TEST_F(VeloxSubstraitRoundTripTest, dateType) {
                   .filter({"c > DATE '1992-01-01'"})
                   .planNode();
   assertPlanConversion(plan, "SELECT * FROM tmp WHERE c > DATE '1992-01-01'");
+}
+
+TEST_F(VeloxSubstraitRoundTripTest, subField) {
+  RowVectorPtr data = makeRowVector(
+      {"a", "b", "c"},
+      {
+          makeFlatVector<int64_t>({249, 235, 858}),
+          makeFlatVector<int32_t>({581, -708, -133}),
+          makeFlatVector<double>({0.905, 0.968, 0.632}),
+      });
+  createDuckDbTable({data});
+  auto plan =
+      PlanBuilder()
+          .values({data})
+          .project(
+              {"cast(row_constructor(a, b) as row(a bigint, b bigint)) as ab",
+               "a",
+               "b",
+               "c"})
+          .project(
+              {"cast(row_constructor(ab, c) as row(ab row(a bigint, b bigint), c bigint)) as abc",
+               "a",
+               "b"})
+          .project(
+              {"(cast(row_constructor(a, b) as row(a bigint, b bigint))).a",
+               "(abc).ab.a",
+               "(abc).ab.b",
+               "abc.c"})
+          .planNode();
+
+  assertPlanConversion(plan, "SELECT a, a, b, c FROM tmp");
 }
 
 int main(int argc, char** argv) {

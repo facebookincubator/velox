@@ -70,6 +70,8 @@ const std::unordered_map<std::string, TypeKind>& getTypeStringMap() {
       {"INTEGER", TypeKind::INTEGER},
       {"BIGINT", TypeKind::BIGINT},
       {"HUGEINT", TypeKind::HUGEINT},
+      {"LONG_DECIMAL", TypeKind::HUGEINT},
+      {"SHORT_DECIMAL", TypeKind::BIGINT},
       {"REAL", TypeKind::REAL},
       {"DOUBLE", TypeKind::DOUBLE},
       {"VARCHAR", TypeKind::VARCHAR},

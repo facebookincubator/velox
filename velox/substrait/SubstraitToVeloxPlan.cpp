@@ -1716,18 +1716,6 @@ void SubstraitVeloxPlanConverter::setFilterMap(
   uint32_t colIdxVal = colIdx.value();
   auto inputType = inputTypeList[colIdxVal];
   std::optional<variant> val;
-  if (inputType->isShortDecimal()) {
-    if (substraitLit) {
-      auto decimal = substraitLit.value().decimal().value();
-      auto precision = substraitLit.value().decimal().precision();
-      auto scale = substraitLit.value().decimal().scale();
-      int128_t decimalValue;
-      memcpy(&decimalValue, decimal.c_str(), 16);
-      auto type = DECIMAL(precision, scale);
-      val = variant(static_cast<int64_t>(decimalValue));
-    }
-    setColInfoMap<int64_t>(functionName, colIdxVal, val, reverse, colInfoMap);
-  }
   switch (inputType->kind()) {
     case TypeKind::INTEGER:
       if (substraitLit) {
@@ -1737,7 +1725,17 @@ void SubstraitVeloxPlanConverter::setFilterMap(
       break;
     case TypeKind::BIGINT:
       if (substraitLit) {
-        val = variant(substraitLit.value().i64());
+        if (inputType->isShortDecimal()) {
+          auto decimal = substraitLit.value().decimal().value();
+          auto precision = substraitLit.value().decimal().precision();
+          auto scale = substraitLit.value().decimal().scale();
+          int128_t decimalValue;
+          memcpy(&decimalValue, decimal.c_str(), 16);
+          auto type = DECIMAL(precision, scale);
+          val = variant(static_cast<int64_t>(decimalValue));
+        } else {
+          val = variant(substraitLit.value().i64());
+        }
       }
       setColInfoMap<int64_t>(functionName, colIdxVal, val, reverse, colInfoMap);
       break;
@@ -1944,6 +1942,7 @@ template <TypeKind KIND, typename FilterType>
 void SubstraitVeloxPlanConverter::constructSubfieldFilters(
     uint32_t colIdx,
     const std::string& inputName,
+    const TypePtr& inputType,
     const std::shared_ptr<FilterInfo>& filterInfo,
     connector::hive::SubfieldFilters& filters) {
   using NativeType = typename RangeTraits<KIND>::NativeType;
@@ -2004,14 +2003,22 @@ void SubstraitVeloxPlanConverter::constructSubfieldFilters(
   // Handle other filter ranges.
   NativeType lowerBound;
   if constexpr (KIND == facebook::velox::TypeKind::BIGINT) {
-    lowerBound = DecimalUtil::kShortDecimalMin;
+    if (inputType->isShortDecimal()) {
+      lowerBound = DecimalUtil::kShortDecimalMin;
+    } else {
+      lowerBound = getLowest<NativeType>();
+    }
   } else {
     lowerBound = getLowest<NativeType>();
   }
 
   NativeType upperBound;
   if constexpr (KIND == facebook::velox::TypeKind::BIGINT) {
-    upperBound = DecimalUtil::kShortDecimalMax;
+    if (inputType->isShortDecimal()) {
+      upperBound = DecimalUtil::kShortDecimalMax;
+    } else {
+      upperBound = getMax<NativeType>();
+    }
   } else {
     upperBound = getMax<NativeType>();
   }
@@ -2081,35 +2088,67 @@ connector::hive::SubfieldFilters SubstraitVeloxPlanConverter::mapToFilters(
     switch (inputType->kind()) {
       case TypeKind::TINYINT:
         constructSubfieldFilters<TypeKind::TINYINT, common::BigintRange>(
-            colIdx, inputNameList[colIdx], colInfoMap[colIdx], filters);
+            colIdx,
+            inputNameList[colIdx],
+            inputType,
+            colInfoMap[colIdx],
+            filters);
         break;
       case TypeKind::SMALLINT:
         constructSubfieldFilters<TypeKind::SMALLINT, common::BigintRange>(
-            colIdx, inputNameList[colIdx], colInfoMap[colIdx], filters);
+            colIdx,
+            inputNameList[colIdx],
+            inputType,
+            colInfoMap[colIdx],
+            filters);
         break;
       case TypeKind::INTEGER:
         constructSubfieldFilters<TypeKind::INTEGER, common::BigintRange>(
-            colIdx, inputNameList[colIdx], colInfoMap[colIdx], filters);
+            colIdx,
+            inputNameList[colIdx],
+            inputType,
+            colInfoMap[colIdx],
+            filters);
         break;
       case TypeKind::BIGINT:
         constructSubfieldFilters<TypeKind::BIGINT, common::BigintRange>(
-            colIdx, inputNameList[colIdx], colInfoMap[colIdx], filters);
+            colIdx,
+            inputNameList[colIdx],
+            inputType,
+            colInfoMap[colIdx],
+            filters);
         break;
       case TypeKind::DOUBLE:
         constructSubfieldFilters<TypeKind::DOUBLE, common::Filter>(
-            colIdx, inputNameList[colIdx], colInfoMap[colIdx], filters);
+            colIdx,
+            inputNameList[colIdx],
+            inputType,
+            colInfoMap[colIdx],
+            filters);
         break;
       case TypeKind::BOOLEAN:
         constructSubfieldFilters<TypeKind::BOOLEAN, common::BigintRange>(
-            colIdx, inputNameList[colIdx], colInfoMap[colIdx], filters);
+            colIdx,
+            inputNameList[colIdx],
+            inputType,
+            colInfoMap[colIdx],
+            filters);
         break;
       case TypeKind::VARCHAR:
         constructSubfieldFilters<TypeKind::VARCHAR, common::Filter>(
-            colIdx, inputNameList[colIdx], colInfoMap[colIdx], filters);
+            colIdx,
+            inputNameList[colIdx],
+            inputType,
+            colInfoMap[colIdx],
+            filters);
         break;
       case TypeKind::DATE:
         constructSubfieldFilters<TypeKind::DATE, common::BigintRange>(
-            colIdx, inputNameList[colIdx], colInfoMap[colIdx], filters);
+            colIdx,
+            inputNameList[colIdx],
+            inputType,
+            colInfoMap[colIdx],
+            filters);
         break;
       default:
         VELOX_NYI(

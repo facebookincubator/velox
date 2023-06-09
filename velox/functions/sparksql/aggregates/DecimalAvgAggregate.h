@@ -158,6 +158,7 @@ class DecimalAverageAggregate : public exec::Aggregate {
           rows,
           sumCol->as<SimpleVector<int64_t>>(),
           countCol->as<SimpleVector<int64_t>>());
+      return;
     }
     if (sumCol->type()->isLongDecimal()) {
       addIntermediateDecimalResults(
@@ -165,6 +166,7 @@ class DecimalAverageAggregate : public exec::Aggregate {
           rows,
           sumCol->as<SimpleVector<int128_t>>(),
           countCol->as<SimpleVector<int64_t>>());
+      return;
     }
     switch (sumCol->typeKind()) {
       default:
@@ -320,12 +322,13 @@ class DecimalAverageAggregate : public exec::Aggregate {
       DecimalUtil::divideWithRoundUp<int128_t, int128_t, int128_t>(
           avg, (int128_t)sum, countDecimal, false, sumRescale, 0);
     }
+    DecimalUtil::valueInRange(avg);
     auto castedAvg = DecimalUtil::rescaleWithRoundUp<int128_t, TResultType>(
-        avg, avgPrecision, avgScale, resultPrecision, resultScale);
+        avg, avgPrecision, avgScale, resultPrecision, resultScale, true);
     if (castedAvg.has_value()) {
       return castedAvg.value();
     } else {
-      VELOX_FAIL("Failed to compute final average value.");
+      VELOX_FAIL("compute final average value overflow.");
     }
   }
 
@@ -352,8 +355,10 @@ class DecimalAverageAggregate : public exec::Aggregate {
           try {
             rawValues[i] = computeFinalValue(accumulator);
           } catch (const VeloxException& err) {
-            if (err.message().find("overflow") != std::string::npos) {
-              // find overflow in computation
+            if (err.message().find("overflow") != std::string::npos ||
+                err.message().find("is not in the range of Decimal Type") !=
+                    std::string::npos) {
+              // find overflow or out of long decimal range in computation
               vector->setNull(i, true);
             } else {
               VELOX_FAIL("compute average failed");

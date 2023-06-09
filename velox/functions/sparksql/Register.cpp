@@ -192,6 +192,8 @@ void registerFunctions(const std::string& prefix) {
       prefix + "decimal_round", roundDecimalSignatures(), makeRoundDecimal);
   exec::registerStatefulVectorFunction(
       prefix + "abs", absSignatures(), makeAbs);
+  exec::registerStatefulVectorFunction(
+      prefix + "unscaled_value", unscaledValueSignatures(), makeUnscaledValue);
   // Register date functions.
   registerFunction<YearFunction, int32_t, Timestamp>({prefix + "year"});
   registerFunction<YearFunction, int32_t, Date>({prefix + "year"});
@@ -266,8 +268,6 @@ void registerFunctions(const std::string& prefix) {
   registerFunction<DateAddFunction, Date, Date, int16_t>({"date_add"});
   registerFunction<DateAddFunction, Date, Date, int8_t>({"date_add"});
   registerFunction<DateDiffFunction, int32_t, Date, Date>({"date_diff"});
-  registerFunction<UnscaledValueFunction, int64_t, int64_t>(
-      {prefix + "unscaled_value"});
 
   registerFunction<Atan2FunctionIgnoreZeroSign, double, double, double>(
       {prefix + "atan2"});

@@ -456,6 +456,7 @@ class SubstraitVeloxPlanConverter {
   void constructSubfieldFilters(
       uint32_t colIdx,
       const std::string& inputName,
+      const TypePtr& inputType,
       const std::shared_ptr<FilterInfo>& filterInfo,
       connector::hive::SubfieldFilters& filters);
 

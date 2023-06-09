@@ -29,7 +29,7 @@ struct BloomFilterMightContainFunction {
       const core::QueryConfig&,
       const arg_type<Varbinary>* serialized,
       const arg_type<int64_t>*) {
-    if (serialized != nullptr) {
+    if (serialized != nullptr && serialized->size() != 0) {
       bloomFilter_.merge(serialized->str().c_str());
     }
   }

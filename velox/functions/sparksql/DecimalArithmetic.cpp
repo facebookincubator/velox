@@ -484,7 +484,7 @@ class Multiply {
         } else {
           countLeadingZerosA = bits::countLeadingZeros(a);
         }
-        if constexpr (std::is_same_v<B, int128_t>) {
+        if constexpr (std::is_same_v<R, int128_t>) {
           countLeadingZerosB = bits::countLeadingZerosUint128(std::abs(b));
         } else {
           countLeadingZerosB = bits::countLeadingZeros(b);
@@ -499,7 +499,7 @@ class Multiply {
           int256_t blarge = b;
           int256_t reslarge = aLarge * blarge;
           reslarge = ReduceScaleBy(reslarge, deltaScale);
-          if constexpr (std::is_same_v<B, int128_t>) {
+          if constexpr (std::is_same_v<R, int128_t>) {
             auto res = convertToInt128(reslarge, overflow);
             if (!*overflow) {
               r = res;

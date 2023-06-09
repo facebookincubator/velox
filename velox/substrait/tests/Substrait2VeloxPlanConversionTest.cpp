@@ -305,14 +305,20 @@ TEST_F(Substrait2VeloxPlanConversionTest, ifthenTest) {
   // Convert to Velox PlanNode.
   auto planNode = planConverter_->toVeloxPlan(substraitPlan);
   ASSERT_EQ(
-      "-- Project[expressions: ] -> \n "
-      " -- TableScan[table: hive_table, range filters: "
-      "[(hd_demo_sk, Filter(IsNotNull, deterministic, null not allowed)), "
-      "(hd_vehicle_count, BigintRange: [1, 999999999999999999] no nulls)], "
-      "remaining filter: (and(or(equalto(ROW[\"hd_buy_potential\"],\">10000\"),"
-      "equalto(ROW[\"hd_buy_potential\"],\"unknown\")),if(greaterthan(ROW[\"hd_vehicle_count\"],0),"
-      "greaterthan(divide(cast ROW[\"hd_dep_count\"] as DOUBLE,cast ROW[\"hd_vehicle_count\"] as DOUBLE),1.2))))] "
-      "-> n0_0:BIGINT, n0_1:VARCHAR, n0_2:BIGINT, n0_3:BIGINT\n",
+      "-- Project[expressions: ] ->\n"
+      "  -- TableScan[table: hive_table, range filters: [(hd_demo_sk, Filter(IsNotNull,"
+      " deterministic, null not allowed)), (hd_vehicle_count, BigintRange: [1, 9223372036854775807] no nulls)],"
+      " remaining filter: (and(or(equalto(\"hd_buy_potential\",\">10000\"),equalto(\"hd_buy_potential\",\"unknown\")),"
+      "if(greaterthan(\"hd_vehicle_count\",0),greaterthan(divide(cast \"hd_dep_count\" as DOUBLE,"
+      "cast \"hd_vehicle_count\" as DOUBLE),1.2))))] -> n0_0:BIGINT, n0_1:VARCHAR, n0_2:BIGINT, n0_3:BIGINT\n",
+      planNode->toString(true, true));
+  ASSERT_EQ(
+      "-- Project[expressions: ] -> \n  "
+      "-- TableScan[table: hive_table, range filters: [(hd_demo_sk, Filter(IsNotNull, deterministic, null not allowed)),"
+      " (hd_vehicle_count, BigintRange: [1, 9223372036854775807] no nulls)], remaining filter: "
+      "(and(or(equalto(\"hd_buy_potential\",\">10000\"),equalto(\"hd_buy_potential\",\"unknown\")),"
+      "if(greaterthan(\"hd_vehicle_count\",0),greaterthan(divide(cast \"hd_dep_count\" as DOUBLE,"
+      "cast \"hd_vehicle_count\" as DOUBLE),1.2))))] -> n0_0:BIGINT, n0_1:VARCHAR, n0_2:BIGINT, n0_3:BIGINT\n",
       planNode->toString(true, true));
 }
 

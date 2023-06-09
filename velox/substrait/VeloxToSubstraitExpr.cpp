@@ -368,6 +368,26 @@ void convertVectorValue(
     }
   }
 }
+
+uint32_t getFieldIdForIntermediateNode(
+    const std::string& exprName,
+    const ::substrait::Expression_ReferenceSegment_StructField& structField,
+    const RowTypePtr& inputType) {
+  auto inputColumnType = inputType;
+  std::vector<int32_t> ids;
+  const auto* tmp = &structField;
+  for (;;) {
+    ids.push_back(tmp->field());
+    if (!tmp->has_child()) {
+      break;
+    }
+    tmp = &tmp->child().struct_field();
+  }
+  for (int32_t i = ids.size() - 1; i >= 0; --i) {
+    inputColumnType = asRowType(inputColumnType->childAt(ids[i]));
+  }
+  return inputColumnType->getChildIdx(exprName);
+}
 } // namespace
 
 const ::substrait::Expression& VeloxToSubstraitExprConvertor::toSubstraitExpr(
@@ -448,7 +468,40 @@ VeloxToSubstraitExprConvertor::toSubstraitExpr(
   ::substrait::Expression_ReferenceSegment_StructField* directStruct =
       substraitFieldExpr->mutable_direct_reference()->mutable_struct_field();
 
-  directStruct->set_field(inputType->getChildIdx(exprName));
+  // FieldAccessTypedExpr represents one of two things: a leaf in an expression
+  // or a dereference expression(fieldExpr->isInputColumn() == false)
+  // for a leaf in an expression, find idx from child by exprName.
+  // for a dereference expression, find idx from every child by exprName.
+  if (fieldExpr->isInputColumn()) {
+    uint32_t idx = inputType->getChildIdx(exprName);
+    directStruct->set_field(idx);
+  } else {
+    auto tmp = toSubstraitExpr(arena, fieldExpr->inputs()[0], inputType)
+                   .selection()
+                   .direct_reference();
+    if (!tmp.has_struct_field()) {
+      uint32_t idx = inputType->getChildIdx(exprName);
+      directStruct->set_field(idx);
+    } else {
+      ::substrait::Expression_ReferenceSegment_StructField* childStruct =
+          google::protobuf::Arena::CreateMessage<
+              ::substrait::Expression_ReferenceSegment_StructField>(&arena);
+      ::substrait::Expression_ReferenceSegment* refSegment =
+          google::protobuf::Arena::CreateMessage<
+              ::substrait::Expression_ReferenceSegment>(&arena);
+      directStruct->MergeFrom(tmp.struct_field());
+      childStruct->set_field(getFieldIdForIntermediateNode(
+          exprName, tmp.struct_field(), inputType));
+      refSegment->set_allocated_struct_field(childStruct);
+      ::substrait::Expression_ReferenceSegment_StructField* innerChild =
+          directStruct;
+      while (innerChild->has_child()) {
+        innerChild = innerChild->mutable_child()->mutable_struct_field();
+      }
+      innerChild->set_allocated_child(refSegment);
+    }
+  }
+
   return *substraitFieldExpr;
 }
 

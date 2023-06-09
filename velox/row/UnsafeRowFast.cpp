@@ -32,7 +32,7 @@ int32_t alignBytes(int32_t numBytes) {
 // static
 std::optional<int32_t> UnsafeRowFast::fixedRowSize(const RowTypePtr& rowType) {
   for (const auto& child : rowType->children()) {
-    if (!child->isFixedWidth()) {
+    if (!child->isFixedWidth() || child->kind() == TypeKind::HUGEINT) {
       return std::nullopt;
     }
   }
@@ -76,7 +76,11 @@ void UnsafeRowFast::initialize(const TypePtr& type) {
       auto rowBase = base->as<RowVector>();
       for (const auto& child : rowBase->children()) {
         children_.push_back(UnsafeRowFast(child));
-        childIsFixedWidth_.push_back(child->type()->isFixedWidth());
+        if (child->type()->kind() == TypeKind::HUGEINT) {
+          childIsFixedWidth_.push_back(false);
+        } else {
+          childIsFixedWidth_.push_back(child->type()->isFixedWidth());
+        }
       }
 
       rowNullBytes_ = alignBits(type->size());
@@ -97,6 +101,8 @@ void UnsafeRowFast::initialize(const TypePtr& type) {
     case TypeKind::REAL:
       FOLLY_FALLTHROUGH;
     case TypeKind::DOUBLE:
+      FOLLY_FALLTHROUGH;
+    case TypeKind::HUGEINT:
       FOLLY_FALLTHROUGH;
     case TypeKind::DATE:
       valueBytes_ = type->cppSizeInBytes();
@@ -129,6 +135,8 @@ int32_t UnsafeRowFast::variableWidthRowSize(vector_size_t index) {
       auto value = decoded_.valueAt<StringView>(index);
       return alignBytes(value.size());
     }
+    case TypeKind::HUGEINT:
+      return 16;
     case TypeKind::ARRAY:
       return arrayRowSize(index);
     case TypeKind::MAP:
@@ -188,6 +196,13 @@ int32_t UnsafeRowFast::serializeVariableWidth(
       auto value = decoded_.valueAt<StringView>(index);
       memcpy(buffer, value.data(), value.size());
       return value.size();
+    }
+    case TypeKind::HUGEINT: {
+      auto value = decoded_.valueAt<int128_t>(index);
+      int32_t size;
+      auto out = DecimalUtil::ToByteArray(value, &size);
+      memcpy(buffer, &out[0], 16);
+      return size;
     }
     case TypeKind::ARRAY:
       return serializeArray(index, buffer);
@@ -389,7 +404,11 @@ int32_t UnsafeRowFast::serializeRow(vector_size_t index, char* buffer) {
       uint64_t sizeAndOffset = variableWidthOffset << 32 | size;
       reinterpret_cast<uint64_t*>(buffer + rowNullBytes_)[i] = sizeAndOffset;
 
-      variableWidthOffset += alignBytes(size);
+      if (child.typeKind_ == TypeKind::HUGEINT) {
+        variableWidthOffset += 16;
+      } else {
+        variableWidthOffset += alignBytes(size);
+      }
     }
   }
 

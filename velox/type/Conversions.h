@@ -107,6 +107,12 @@ struct Converter<
 
   // from long decimal cast to some type
   static T cast(const int128_t& d, bool& nullOutput, const TypePtr& fromType) {
+    if (KIND == TypeKind::BOOLEAN) {
+      if (d == 0) {
+        return false;
+      }
+      return true;
+    }
     const auto& decimalType = fromType->asLongDecimal();
     auto scale0Decimal = DecimalUtil::rescaleWithRoundUp<int128_t, int128_t>(
         d,
@@ -121,6 +127,12 @@ struct Converter<
 
   // from short decimal cast to some type
   static T cast(const int64_t& d, bool& nullOutput, const TypePtr& fromType) {
+    if (KIND == TypeKind::BOOLEAN) {
+      if (d == 0) {
+        return false;
+      }
+      return true;
+    }
     const auto& decimalType = fromType->asShortDecimal();
     auto scale0Decimal = DecimalUtil::rescaleWithRoundUp<int64_t, int64_t>(
         d,

@@ -82,13 +82,8 @@ std::pair<int32_t, int32_t> getPrecisionAndScale(const std::string& typeName) {
 
 TypePtr toVeloxType(const std::string& typeName) {
   VELOX_CHECK(!typeName.empty(), "Cannot convert empty string to Velox type.");
-
   auto type = getNameBeforeDelimiter(typeName, "<");
   auto typeKind = mapNameToTypeKind(std::string(type));
-  if (isDecimalName(typeName)) {
-    auto decimal = getPrecisionAndScale(typeName);
-    return DECIMAL(decimal.first, decimal.second);
-  }
   switch (typeKind) {
     case TypeKind::BOOLEAN:
       return BOOLEAN();
@@ -99,7 +94,16 @@ TypePtr toVeloxType(const std::string& typeName) {
     case TypeKind::INTEGER:
       return INTEGER();
     case TypeKind::BIGINT:
-      return BIGINT();
+      if (type == "SHORT_DECIMAL") {
+        auto decimal = getPrecisionAndScale(typeName);
+        return DECIMAL(decimal.first, decimal.second);
+      } else {
+        return BIGINT();
+      }
+    case TypeKind::HUGEINT: {
+      auto decimal = getPrecisionAndScale(typeName);
+      return DECIMAL(decimal.first, decimal.second);
+    }
     case TypeKind::REAL:
       return REAL();
     case TypeKind::DOUBLE:

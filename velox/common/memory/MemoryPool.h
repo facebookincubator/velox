@@ -609,6 +609,14 @@ class MemoryPoolImpl : public MemoryPool {
     return allocator_;
   }
 
+  MemoryAllocator* getAllocator() {
+    return allocator_;
+  }
+
+  void setAllocator(MemoryAllocator* allocator) {
+    allocator_ = allocator;
+  }
+
  private:
   FOLLY_ALWAYS_INLINE static MemoryPoolImpl* toImpl(MemoryPool* pool) {
     return static_cast<MemoryPoolImpl*>(pool);
@@ -843,7 +851,7 @@ class MemoryPoolImpl : public MemoryPool {
   }
 
   MemoryManager* const manager_;
-  MemoryAllocator* const allocator_;
+  MemoryAllocator* allocator_;
   const DestructionCallback destructionCb_;
 
   // Serializes updates on 'grantedReservationBytes_', 'usedReservationBytes_'

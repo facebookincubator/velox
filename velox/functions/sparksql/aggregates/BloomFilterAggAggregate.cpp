@@ -120,7 +120,7 @@ class BloomFilterAggAggregate : public exec::Aggregate {
       bool /*mayPushdown*/) override {
     decodeArguments(rows, args);
     auto accumulator = value<BloomFilterAccumulator>(group);
-    VELOX_CHECK(!decodedRaw_.mayHaveNulls());
+    // VELOX_CHECK(!decodedRaw_.mayHaveNulls());
     if (decodedRaw_.isConstantMapping()) {
       // all values are same, just do for the first
       accumulator->init(capacity_);

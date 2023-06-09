@@ -431,13 +431,10 @@ bool registerDecimalSumAggregate(const std::string& name) {
               return std::make_unique<DecimalSumAggregate<int128_t, int128_t>>(
                   resultType);
             }
-            switch (sumInputType->kind()) {
-              default:
-                VELOX_FAIL(
-                    "Unknown sum type for {} aggregation {}",
-                    name,
-                    sumInputType->kindName());
-            }
+            VELOX_FAIL(
+                "Unknown sum type for {} aggregation {}",
+                name,
+                sumInputType->kindName());
           }
           default:
             VELOX_CHECK(

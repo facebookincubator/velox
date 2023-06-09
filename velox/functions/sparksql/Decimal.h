@@ -20,17 +20,6 @@
 
 namespace facebook::velox::functions::sparksql {
 
-template <typename T>
-struct UnscaledValueFunction {
-  VELOX_DEFINE_FUNCTION_TYPES(T);
-
-  FOLLY_ALWAYS_INLINE void call(
-      int64_t& result,
-      const arg_type<int64_t>& shortDecimal) {
-    result = shortDecimal;
-  }
-};
-
 std::vector<std::shared_ptr<exec::FunctionSignature>> checkOverflowSignatures();
 
 std::shared_ptr<exec::VectorFunction> makeCheckOverflow(
@@ -52,6 +41,12 @@ std::shared_ptr<exec::VectorFunction> makeRoundDecimal(
 std::vector<std::shared_ptr<exec::FunctionSignature>> absSignatures();
 
 std::shared_ptr<exec::VectorFunction> makeAbs(
+    const std::string& name,
+    const std::vector<exec::VectorFunctionArg>& inputArgs);
+
+std::vector<std::shared_ptr<exec::FunctionSignature>> unscaledValueSignatures();
+
+std::shared_ptr<exec::VectorFunction> makeUnscaledValue(
     const std::string& name,
     const std::vector<exec::VectorFunctionArg>& inputArgs);
 

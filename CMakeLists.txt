@@ -330,7 +330,6 @@ message("FINAL CMAKE_CXX_FLAGS=${CMAKE_CXX_FLAGS}")
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
 set(BOOST_INCLUDE_LIBRARIES
-    headers
     atomic
     context
     date_time
@@ -397,6 +396,10 @@ endif()
 
 set_source(simdjson)
 resolve_dependency(simdjson 3.1.5)
+if(TARGET simdjson::simdjson AND NOT TARGET simdjson)
+  add_library(simdjson INTERFACE)
+  target_link_libraries(simdjson INTERFACE simdjson::simdjson)
+endif()
 
 # Locate or build folly.
 add_compile_definitions(FOLLY_HAVE_INT128_T=1)
