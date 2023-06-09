@@ -491,7 +491,8 @@ void checkAccumulatorRowType(
 }
 
 template <typename TResultAccessor>
-exec::AggregateRegistrationResult registerCentralMoments(const std::string& name) {
+exec::AggregateRegistrationResult registerCentralMoments(
+    const std::string& name) {
   std::vector<std::shared_ptr<exec::AggregateFunctionSignature>> signatures;
   std::vector<std::string> inputTypes = {
       "smallint", "integer", "bigint", "real", "double"};
