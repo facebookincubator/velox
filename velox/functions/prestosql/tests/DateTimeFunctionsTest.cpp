@@ -193,12 +193,6 @@ class DateTimeFunctionsTest : public functions::test::FunctionBaseTest {
             timestamp.value(), timeZoneName.value().c_str())}));
   }
 
-  Date parseDate(const std::string& dateStr) {
-    Date returnDate;
-    parseTo(dateStr, returnDate);
-    return returnDate;
-  }
-
   RowVectorPtr makeTimestampWithTimeZoneVector(
       int64_t timestamp,
       const char* tz) {
@@ -227,7 +221,7 @@ class DateTimeFunctionsTest : public functions::test::FunctionBaseTest {
   }
 
   Date getCurrentDate(const std::optional<std::string>& timeZone) {
-    return parseDate(date::format(
+    return parseTo(date::format(
         "%Y-%m-%d",
         timeZone.has_value()
             ? date::make_zoned(
@@ -511,7 +505,7 @@ TEST_F(DateTimeFunctionsTest, timestampTooLarge) {
 
 TEST_F(DateTimeFunctionsTest, weekDate) {
   const auto weekDate = [&](const char* dateString) {
-    auto date = std::make_optional(parseDate(dateString));
+    auto date = std::make_optional(parseTo(dateString));
     auto week = evaluateOnce<int64_t>("week(c0)", date).value();
     auto weekOfYear = evaluateOnce<int64_t>("week_of_year(c0)", date).value();
     VELOX_CHECK_EQ(
@@ -1507,34 +1501,26 @@ TEST_F(DateTimeFunctionsTest, dateAddDate) {
   EXPECT_THROW(dateAdd("invalid_unit", 1, Date(0)), VeloxUserError);
 
   // Simple tests
+  EXPECT_EQ(parseTo("2019-03-01"), dateAdd("day", 1, parseTo("2019-02-28")));
+  EXPECT_EQ(parseTo("2020-03-28"), dateAdd("month", 13, parseTo("2019-02-28")));
   EXPECT_EQ(
-      parseDate("2019-03-01"), dateAdd("day", 1, parseDate("2019-02-28")));
-  EXPECT_EQ(
-      parseDate("2020-03-28"), dateAdd("month", 13, parseDate("2019-02-28")));
-  EXPECT_EQ(
-      parseDate("2020-02-28"), dateAdd("quarter", 4, parseDate("2019-02-28")));
-  EXPECT_EQ(
-      parseDate("2020-02-28"), dateAdd("year", 1, parseDate("2019-02-28")));
+      parseTo("2020-02-28"), dateAdd("quarter", 4, parseTo("2019-02-28")));
+  EXPECT_EQ(parseTo("2020-02-28"), dateAdd("year", 1, parseTo("2019-02-28")));
 
   // Account for the last day of a year-month
+  EXPECT_EQ(parseTo("2020-02-29"), dateAdd("day", 395, parseTo("2019-01-30")));
+  EXPECT_EQ(parseTo("2020-02-29"), dateAdd("month", 13, parseTo("2019-01-30")));
   EXPECT_EQ(
-      parseDate("2020-02-29"), dateAdd("day", 395, parseDate("2019-01-30")));
-  EXPECT_EQ(
-      parseDate("2020-02-29"), dateAdd("month", 13, parseDate("2019-01-30")));
-  EXPECT_EQ(
-      parseDate("2020-02-29"), dateAdd("quarter", 1, parseDate("2019-11-30")));
-  EXPECT_EQ(
-      parseDate("2030-02-28"), dateAdd("year", 10, parseDate("2020-02-29")));
+      parseTo("2020-02-29"), dateAdd("quarter", 1, parseTo("2019-11-30")));
+  EXPECT_EQ(parseTo("2030-02-28"), dateAdd("year", 10, parseTo("2020-02-29")));
 
   // Check for negative intervals
+  EXPECT_EQ(parseTo("2019-02-28"), dateAdd("day", -366, parseTo("2020-02-29")));
   EXPECT_EQ(
-      parseDate("2019-02-28"), dateAdd("day", -366, parseDate("2020-02-29")));
+      parseTo("2019-02-28"), dateAdd("month", -12, parseTo("2020-02-29")));
   EXPECT_EQ(
-      parseDate("2019-02-28"), dateAdd("month", -12, parseDate("2020-02-29")));
-  EXPECT_EQ(
-      parseDate("2019-02-28"), dateAdd("quarter", -4, parseDate("2020-02-29")));
-  EXPECT_EQ(
-      parseDate("2018-02-28"), dateAdd("year", -2, parseDate("2020-02-29")));
+      parseTo("2019-02-28"), dateAdd("quarter", -4, parseTo("2020-02-29")));
+  EXPECT_EQ(parseTo("2018-02-28"), dateAdd("year", -2, parseTo("2020-02-29")));
 }
 
 TEST_F(DateTimeFunctionsTest, dateAddTimestamp) {
@@ -1847,43 +1833,34 @@ TEST_F(DateTimeFunctionsTest, dateDiffDate) {
       "Unsupported datetime unit: invalid_unit");
 
   // Simple tests
+  EXPECT_EQ(1, dateDiff("day", parseTo("2019-02-28"), parseTo("2019-03-01")));
   EXPECT_EQ(
-      1, dateDiff("day", parseDate("2019-02-28"), parseDate("2019-03-01")));
+      13, dateDiff("month", parseTo("2019-02-28"), parseTo("2020-03-28")));
   EXPECT_EQ(
-      13, dateDiff("month", parseDate("2019-02-28"), parseDate("2020-03-28")));
-  EXPECT_EQ(
-      4, dateDiff("quarter", parseDate("2019-02-28"), parseDate("2020-02-28")));
-  EXPECT_EQ(
-      1, dateDiff("year", parseDate("2019-02-28"), parseDate("2020-02-28")));
+      4, dateDiff("quarter", parseTo("2019-02-28"), parseTo("2020-02-28")));
+  EXPECT_EQ(1, dateDiff("year", parseTo("2019-02-28"), parseTo("2020-02-28")));
 
   // Verify that units are not case sensitive.
-  EXPECT_EQ(
-      1, dateDiff("DAY", parseDate("2019-02-28"), parseDate("2019-03-01")));
-  EXPECT_EQ(
-      1, dateDiff("dAY", parseDate("2019-02-28"), parseDate("2019-03-01")));
-  EXPECT_EQ(
-      1, dateDiff("Day", parseDate("2019-02-28"), parseDate("2019-03-01")));
+  EXPECT_EQ(1, dateDiff("DAY", parseTo("2019-02-28"), parseTo("2019-03-01")));
+  EXPECT_EQ(1, dateDiff("dAY", parseTo("2019-02-28"), parseTo("2019-03-01")));
+  EXPECT_EQ(1, dateDiff("Day", parseTo("2019-02-28"), parseTo("2019-03-01")));
 
   // Account for the last day of a year-month
+  EXPECT_EQ(395, dateDiff("day", parseTo("2019-01-30"), parseTo("2020-02-29")));
   EXPECT_EQ(
-      395, dateDiff("day", parseDate("2019-01-30"), parseDate("2020-02-29")));
+      13, dateDiff("month", parseTo("2019-01-30"), parseTo("2020-02-29")));
   EXPECT_EQ(
-      13, dateDiff("month", parseDate("2019-01-30"), parseDate("2020-02-29")));
-  EXPECT_EQ(
-      1, dateDiff("quarter", parseDate("2019-11-30"), parseDate("2020-02-29")));
-  EXPECT_EQ(
-      10, dateDiff("year", parseDate("2020-02-29"), parseDate("2030-02-28")));
+      1, dateDiff("quarter", parseTo("2019-11-30"), parseTo("2020-02-29")));
+  EXPECT_EQ(10, dateDiff("year", parseTo("2020-02-29"), parseTo("2030-02-28")));
 
   // Check for negative intervals
   EXPECT_EQ(
-      -366, dateDiff("day", parseDate("2020-02-29"), parseDate("2019-02-28")));
+      -366, dateDiff("day", parseTo("2020-02-29"), parseTo("2019-02-28")));
   EXPECT_EQ(
-      -12, dateDiff("month", parseDate("2020-02-29"), parseDate("2019-02-28")));
+      -12, dateDiff("month", parseTo("2020-02-29"), parseTo("2019-02-28")));
   EXPECT_EQ(
-      -4,
-      dateDiff("quarter", parseDate("2020-02-29"), parseDate("2019-02-28")));
-  EXPECT_EQ(
-      -2, dateDiff("year", parseDate("2020-02-29"), parseDate("2018-02-28")));
+      -4, dateDiff("quarter", parseTo("2020-02-29"), parseTo("2019-02-28")));
+  EXPECT_EQ(-2, dateDiff("year", parseTo("2020-02-29"), parseTo("2018-02-28")));
 }
 
 TEST_F(DateTimeFunctionsTest, dateDiffTimestamp) {

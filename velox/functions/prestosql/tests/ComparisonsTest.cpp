@@ -88,18 +88,13 @@ TEST_F(ComparisonsTest, betweenVarchar) {
 }
 
 TEST_F(ComparisonsTest, betweenDate) {
-  auto parseDate = [](const std::string& dateStr) {
-    Date returnDate;
-    parseTo(dateStr, returnDate);
-    return returnDate;
-  };
   std::vector<std::tuple<Date, bool>> testData = {
-      {parseDate("2019-05-01"), false},
-      {parseDate("2019-06-01"), true},
-      {parseDate("2019-07-01"), true},
-      {parseDate("2020-05-31"), true},
-      {parseDate("2020-06-01"), true},
-      {parseDate("2020-07-01"), false}};
+      {parseTo("2019-05-01"), false},
+      {parseTo("2019-06-01"), true},
+      {parseTo("2019-07-01"), true},
+      {parseTo("2020-05-31"), true},
+      {parseTo("2020-06-01"), true},
+      {parseTo("2020-07-01"), false}};
 
   auto result = evaluate<SimpleVector<bool>>(
       "c0 between cast(\'2019-06-01\' as date) and cast(\'2020-06-01\' as date)",

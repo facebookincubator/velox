@@ -149,12 +149,9 @@ TEST_F(DateTimeFunctionsTest, makeDate) {
                             std::optional<int32_t> day) {
     return evaluateOnce<Date>("make_date(c0, c1, c2)", year, month, day);
   };
-  Date expectedDate;
-  parseTo("1920-01-25", expectedDate);
-  EXPECT_EQ(makeDate(1920, 1, 25), expectedDate);
+  EXPECT_EQ(makeDate(1920, 1, 25), parseTo("1920-01-25"));
 
-  parseTo("-0010-01-30", expectedDate);
-  EXPECT_EQ(makeDate(-10, 1, 30), expectedDate);
+  EXPECT_EQ(makeDate(-10, 1, 30), parseTo("-0010-01-30"));
 
   constexpr int32_t kMax = std::numeric_limits<int32_t>::max();
   auto errorMessage = fmt::format("Date out of range: {}-12-15", kMax);
@@ -167,12 +164,10 @@ TEST_F(DateTimeFunctionsTest, makeDate) {
   VELOX_ASSERT_THROW(makeDate(2022, 3, 35), "Date out of range: 2022-3-35");
 
   VELOX_ASSERT_THROW(makeDate(2023, 4, 31), "Date out of range: 2023-4-31");
-  parseTo("2023-03-31", expectedDate);
-  EXPECT_EQ(makeDate(2023, 3, 31), expectedDate);
+  EXPECT_EQ(makeDate(2023, 3, 31), parseTo("2023-03-31"));
 
   VELOX_ASSERT_THROW(makeDate(2023, 2, 29), "Date out of range: 2023-2-29");
-  parseTo("2023-03-29", expectedDate);
-  EXPECT_EQ(makeDate(2023, 3, 29), expectedDate);
+  EXPECT_EQ(makeDate(2023, 3, 29), parseTo("2023-03-29"));
 }
 
 TEST_F(DateTimeFunctionsTest, lastDay) {
@@ -181,30 +176,23 @@ TEST_F(DateTimeFunctionsTest, lastDay) {
   };
 
   const auto lastDay = [&](const std::string& dateStr) {
-    Date d0;
-    parseTo(dateStr, d0);
+    Date d0 = parseTo(dateStr);
     return lastDayFunc(d0);
   };
 
-  const auto parseDateStr = [&](const std::string& dateStr) {
-    Date d0;
-    parseTo(dateStr, d0);
-    return d0;
-  };
-
-  EXPECT_EQ(lastDay("2015-02-28"), parseDateStr("2015-02-28"));
-  EXPECT_EQ(lastDay("2015-03-27"), parseDateStr("2015-03-31"));
-  EXPECT_EQ(lastDay("2015-04-26"), parseDateStr("2015-04-30"));
-  EXPECT_EQ(lastDay("2015-05-25"), parseDateStr("2015-05-31"));
-  EXPECT_EQ(lastDay("2015-06-24"), parseDateStr("2015-06-30"));
-  EXPECT_EQ(lastDay("2015-07-23"), parseDateStr("2015-07-31"));
-  EXPECT_EQ(lastDay("2015-08-01"), parseDateStr("2015-08-31"));
-  EXPECT_EQ(lastDay("2015-09-02"), parseDateStr("2015-09-30"));
-  EXPECT_EQ(lastDay("2015-10-03"), parseDateStr("2015-10-31"));
-  EXPECT_EQ(lastDay("2015-11-04"), parseDateStr("2015-11-30"));
-  EXPECT_EQ(lastDay("2015-12-05"), parseDateStr("2015-12-31"));
-  EXPECT_EQ(lastDay("2016-01-06"), parseDateStr("2016-01-31"));
-  EXPECT_EQ(lastDay("2016-02-07"), parseDateStr("2016-02-29"));
+  EXPECT_EQ(lastDay("2015-02-28"), parseTo("2015-02-28"));
+  EXPECT_EQ(lastDay("2015-03-27"), parseTo("2015-03-31"));
+  EXPECT_EQ(lastDay("2015-04-26"), parseTo("2015-04-30"));
+  EXPECT_EQ(lastDay("2015-05-25"), parseTo("2015-05-31"));
+  EXPECT_EQ(lastDay("2015-06-24"), parseTo("2015-06-30"));
+  EXPECT_EQ(lastDay("2015-07-23"), parseTo("2015-07-31"));
+  EXPECT_EQ(lastDay("2015-08-01"), parseTo("2015-08-31"));
+  EXPECT_EQ(lastDay("2015-09-02"), parseTo("2015-09-30"));
+  EXPECT_EQ(lastDay("2015-10-03"), parseTo("2015-10-31"));
+  EXPECT_EQ(lastDay("2015-11-04"), parseTo("2015-11-30"));
+  EXPECT_EQ(lastDay("2015-12-05"), parseTo("2015-12-31"));
+  EXPECT_EQ(lastDay("2016-01-06"), parseTo("2016-01-31"));
+  EXPECT_EQ(lastDay("2016-02-07"), parseTo("2016-02-29"));
   EXPECT_EQ(lastDayFunc(std::nullopt), std::nullopt);
 }
 

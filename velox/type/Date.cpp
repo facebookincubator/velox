@@ -18,9 +18,11 @@
 
 namespace facebook::velox {
 
-void parseTo(folly::StringPiece in, Date& out) {
+Date parseTo(folly::StringPiece in) {
   auto daysSinceEpoch = util::fromDateString(in.data(), in.size());
-  out = Date(daysSinceEpoch);
+  VELOX_CHECK_EQ(
+      daysSinceEpoch, (int32_t)daysSinceEpoch, "Integer overflow in parseTo)");
+  return Date(daysSinceEpoch);
 }
 
 std::string Date::toString() const {

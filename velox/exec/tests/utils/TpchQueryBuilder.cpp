@@ -26,8 +26,7 @@ namespace facebook::velox::exec::test {
 
 namespace {
 int64_t toDate(std::string_view stringDate) {
-  Date date;
-  parseTo(stringDate, date);
+  Date date = parseTo(stringDate);
   return date.days();
 }
 

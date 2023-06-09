@@ -81,7 +81,7 @@ struct Date {
   int32_t days_;
 };
 
-void parseTo(folly::StringPiece in, ::facebook::velox::Date& out);
+Date parseTo(folly::StringPiece in);
 
 template <typename T>
 void toAppend(const ::facebook::velox::Date& value, T* result) {
