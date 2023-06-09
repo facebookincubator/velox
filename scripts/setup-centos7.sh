@@ -231,6 +231,8 @@ function install_velox_deps {
   run_and_time install_conda
 }
 
+$SUDO dnf makecache
+
 # dnf install dependency libraries
 dnf_install epel-release dnf-plugins-core # For ccache, ninja
 # PowerTools only works on CentOS8
@@ -252,6 +254,8 @@ dnf_install gettext-devel texinfo help2man
 # Activate gcc9; enable errors on unset variables afterwards.
 # GCC9 install via yum and devtoolset
 # dnf install gcc-toolset-9 only works on CentOS8
+
+$SUDO yum makecache
 yum_install centos-release-scl
 yum_install devtoolset-9
 source /opt/rh/devtoolset-9/enable || exit 1

@@ -32,6 +32,8 @@ function dnf_install {
   $SUDO dnf install -y -q --setopt=install_weak_deps=False "$@"
 }
 
+$SUDO dnf makecache
+
 dnf_install epel-release dnf-plugins-core # For ccache, ninja
 $SUDO dnf config-manager --set-enabled powertools
 dnf_install ninja-build ccache gcc-toolset-9 git wget which libevent-devel \
