@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 #include "velox/exec/GroupingSet.h"
-#include "velox/exec/OperatorUtils.h"
+#include "velox/exec/Aggregate.h"
 #include "velox/exec/Task.h"
 
 namespace facebook::velox::exec {
@@ -96,6 +96,26 @@ GroupingSet::~GroupingSet() {
   }
 }
 
+std::unique_ptr<GroupingSet> GroupingSet::createForMarkDistinct(
+    std::vector<std::unique_ptr<VectorHasher>>&& hashers,
+    OperatorCtx* FOLLY_NONNULL operatorCtx,
+    tsan_atomic<bool>* nonReclaimableSection) {
+  return std::make_unique<GroupingSet>(
+      std::move(hashers),
+      /*preGroupedKeys*/ std::vector<column_index_t>{},
+      /*aggregates*/ std::vector<std::unique_ptr<Aggregate>>{},
+      /*aggrMaskChannels*/ std::vector<std::optional<column_index_t>>{},
+      /*channelLists*/ std::vector<std::vector<column_index_t>>{},
+      /*constantLists*/ std::vector<std::vector<VectorPtr>>{},
+      /*intermediateTypes*/ std::vector<TypePtr>{},
+      /*ignoreNullKeys*/ false,
+      /*isPartial*/ false,
+      /*isRawInput*/ false,
+      /*spillConfig*/ nullptr,
+      nonReclaimableSection,
+      operatorCtx);
+};
+
 namespace {
 bool equalKeys(
     const std::vector<column_index_t>& keys,
@@ -161,14 +181,9 @@ void GroupingSet::addInputForActiveRows(
     const RowVectorPtr& input,
     bool mayPushdown) {
   VELOX_CHECK(!isGlobal_);
-  bool rehash = false;
   if (!table_) {
-    rehash = true;
     createHashTable();
   }
-  auto& hashers = lookup_->hashers;
-  lookup_->reset(activeRows_.end());
-  auto mode = table_->hashMode();
   ensureInputFits(input);
 
   // Prevents the memory arbitrator to reclaim memory from this grouping set
@@ -179,42 +194,7 @@ void GroupingSet::addInputForActiveRows(
   auto guard = folly::makeGuard([this]() { *nonReclaimableSection_ = false; });
   *nonReclaimableSection_ = true;
 
-  for (auto i = 0; i < hashers.size(); ++i) {
-    auto key = input->childAt(hashers[i]->channel())->loadedVector();
-    hashers[i]->decode(*key, activeRows_);
-  }
-
-  if (ignoreNullKeys_) {
-    // A null in any of the keys disables the row.
-    deselectRowsWithNulls(hashers, activeRows_);
-  }
-
-  for (int32_t i = 0; i < hashers.size(); ++i) {
-    if (mode != BaseHashTable::HashMode::kHash) {
-      if (!hashers[i]->computeValueIds(activeRows_, lookup_->hashes)) {
-        rehash = true;
-      }
-    } else {
-      hashers[i]->hash(activeRows_, i > 0, lookup_->hashes);
-    }
-  }
-
-  if (rehash) {
-    if (table_->hashMode() != BaseHashTable::HashMode::kHash) {
-      table_->decideHashMode(input->size());
-    }
-    addInputForActiveRows(input, mayPushdown);
-    return;
-  }
-
-  if (activeRows_.isAllSelected()) {
-    std::iota(lookup_->rows.begin(), lookup_->rows.end(), 0);
-  } else {
-    lookup_->rows.clear();
-    activeRows_.applyToSelected(
-        [&](auto row) { lookup_->rows.push_back(row); });
-  }
-
+  table_->prepareForProbe(*lookup_, input, activeRows_, ignoreNullKeys_);
   table_->groupProbe(*lookup_);
   masks_.addInput(input, activeRows_);
 
@@ -257,14 +237,46 @@ void GroupingSet::addRemainingInput() {
   remainingInput_.reset();
 }
 
+namespace {
+std::vector<Accumulator> toAccumulators(
+    const std::vector<std::unique_ptr<Aggregate>>& aggregates) {
+  std::vector<Accumulator> accumulators;
+  accumulators.reserve(aggregates.size());
+  for (auto& aggregate : aggregates) {
+    accumulators.push_back(aggregate.get());
+  }
+
+  return accumulators;
+}
+
+void initializeAggregates(
+    const std::vector<std::unique_ptr<Aggregate>>& aggregates,
+    RowContainer& rows) {
+  const auto numKeys = rows.keyTypes().size();
+  for (auto i = 0; i < aggregates.size(); ++i) {
+    aggregates[i]->setAllocator(&rows.stringAllocator());
+
+    const auto rowColumn = rows.columnAt(numKeys + i);
+    aggregates[i]->setOffsets(
+        rowColumn.offset(),
+        rowColumn.nullByte(),
+        rowColumn.nullMask(),
+        rows.rowSizeOffset());
+  }
+}
+} // namespace
+
 void GroupingSet::createHashTable() {
   if (ignoreNullKeys_) {
     table_ = HashTable<true>::createForAggregation(
-        std::move(hashers_), aggregates_, &pool_);
+        std::move(hashers_), toAccumulators(aggregates_), &pool_);
   } else {
     table_ = HashTable<false>::createForAggregation(
-        std::move(hashers_), aggregates_, &pool_);
+        std::move(hashers_), toAccumulators(aggregates_), &pool_);
   }
+
+  initializeAggregates(aggregates_, *table_->rows());
+
   lookup_ = std::make_unique<HashLookup>(table_->hashers());
   if (!isAdaptive_ && table_->hashMode() != BaseHashTable::HashMode::kHash) {
     table_->forceGenericHashMode();
@@ -303,7 +315,8 @@ void GroupingSet::initializeGlobalAggregation() {
         rowSizeOffset);
     offset += aggregate->accumulatorFixedWidthSize();
     ++nullOffset;
-    alignment = aggregate->combineAlignment(alignment);
+    alignment = RowContainer::combineAlignments(
+        aggregate->accumulatorAlignmentSize(), alignment);
   }
 
   lookup_->hits[0] = rows_.allocateFixed(offset, alignment);
@@ -634,10 +647,11 @@ bool GroupingSet::getOutputWithSpill(
     for (auto& hasher : table_->hashers()) {
       keyTypes.push_back(hasher->type());
     }
+
     mergeRows_ = std::make_unique<RowContainer>(
         keyTypes,
         !ignoreNullKeys_,
-        aggregates_,
+        toAccumulators(aggregates_),
         std::vector<TypePtr>(),
         false,
         false,
@@ -645,6 +659,9 @@ bool GroupingSet::getOutputWithSpill(
         false,
         &pool_,
         ContainerRowSerde::instance());
+
+    initializeAggregates(aggregates_, *mergeRows_);
+
     // Take ownership of the rows and free the hash table. The table will not be
     // needed for producing spill output.
     rowsWhileReadingSpill_ = table_->moveRows();

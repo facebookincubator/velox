@@ -221,16 +221,28 @@ class HistogramAggregate : public exec::Aggregate {
   DecodedVector decodedIntermediate_;
 };
 
-bool registerHistogram(const std::string& name) {
-  std::vector<std::shared_ptr<exec::AggregateFunctionSignature>> signatures{
-      exec::AggregateFunctionSignatureBuilder()
-          .typeVariable("T")
-          .returnType("map(T,bigint)")
-          .intermediateType("map(T,bigint)")
-          .argumentType("T")
-          .build()};
+exec::AggregateRegistrationResult registerHistogram(const std::string& name) {
+  std::vector<std::shared_ptr<exec::AggregateFunctionSignature>> signatures;
+  for (const auto inputType :
+       {"boolean",
+        "tinyint",
+        "smallint",
+        "integer",
+        "bigint",
+        "real",
+        "double",
+        "timestamp",
+        "date",
+        "interval day to second"}) {
+    signatures.push_back(
+        exec::AggregateFunctionSignatureBuilder()
+            .returnType(fmt::format("map({},bigint)", inputType))
+            .intermediateType(fmt::format("map({},bigint)", inputType))
+            .argumentType(inputType)
+            .build());
+  }
 
-  exec::registerAggregateFunction(
+  return exec::registerAggregateFunction(
       name,
       std::move(signatures),
       [name](
@@ -271,7 +283,6 @@ bool registerHistogram(const std::string& name) {
                 inputType->kindName());
         }
       });
-  return true;
 }
 
 } // namespace

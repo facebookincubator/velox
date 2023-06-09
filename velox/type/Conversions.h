@@ -218,10 +218,14 @@ struct Converter<
       if (std::isnan(v)) {
         return 0;
       }
-      if (v > LimitType::maxLimit()) {
+      if constexpr (std::is_same_v<T, int128_t>) {
+        return std::numeric_limits<int128_t>::max();
+      } else if (v > LimitType::maxLimit()) {
         return LimitType::max();
       }
-      if (v < LimitType::minLimit()) {
+      if constexpr (std::is_same_v<T, int128_t>) {
+        return std::numeric_limits<int128_t>::min();
+      } else if (v < LimitType::minLimit()) {
         return LimitType::min();
       }
       return LimitType::cast(v);
@@ -238,10 +242,14 @@ struct Converter<
       if (std::isnan(v)) {
         return 0;
       }
-      if (v > LimitType::maxLimit()) {
+      if constexpr (std::is_same_v<T, int128_t>) {
+        return std::numeric_limits<int128_t>::max();
+      } else if (v > LimitType::maxLimit()) {
         return LimitType::max();
       }
-      if (v < LimitType::minLimit()) {
+      if constexpr (std::is_same_v<T, int128_t>) {
+        return std::numeric_limits<int128_t>::min();
+      } else if (v < LimitType::minLimit()) {
         return LimitType::min();
       }
       return LimitType::cast(v);
@@ -357,6 +365,15 @@ struct Converter<
   static T cast(const Timestamp& d, bool& nullOutput) {
     VELOX_UNSUPPORTED(
         "Conversion of Timestamp to Real or Double is not supported");
+  }
+};
+
+template <bool TRUNCATE>
+struct Converter<TypeKind::VARBINARY, void, TRUNCATE> {
+  // Same semantics of TypeKind::VARCHAR converter.
+  template <typename T>
+  static std::string cast(const T& val, bool& nullOutput) {
+    return Converter<TypeKind::VARCHAR, void, TRUNCATE>::cast(val, nullOutput);
   }
 };
 

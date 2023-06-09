@@ -120,10 +120,14 @@ void BlockingState::setResume(std::shared_ptr<BlockingState> state) {
       })
       .thenError(
           folly::tag_t<std::exception>{}, [state](std::exception const& e) {
-            LOG(ERROR) << "A ContinueFuture for task "
-                       << state->driver_->task()->taskId()
-                       << " should not be realized with an error: " << e.what();
-            state->driver_->setError(std::make_exception_ptr(e));
+            try {
+              VELOX_FAIL(
+                  "A ContinueFuture for task {} was realized with error: {}",
+                  state->driver_->task()->taskId(),
+                  e.what())
+            } catch (const VeloxException& eNew) {
+              state->driver_->task()->setError(std::current_exception());
+            }
           });
 }
 
@@ -296,6 +300,20 @@ void Driver::enqueueInternal() {
   queueTimeStartMicros_ = getCurrentTimeMicro();
 }
 
+#define CALL_OPERATOR(call, operator, methodName)                       \
+  try {                                                                 \
+    call;                                                               \
+  } catch (const VeloxException& e) {                                   \
+    throw;                                                              \
+  } catch (const std::exception& e) {                                   \
+    VELOX_FAIL(                                                         \
+        "Operator::{} failed for [operator: {}, plan node ID: {}]: {}", \
+        methodName,                                                     \
+        operator->operatorType(),                                       \
+        operator->planNodeId(),                                         \
+        e.what());                                                      \
+  }
+
 StopReason Driver::runInternal(
     std::shared_ptr<Driver>& self,
     std::shared_ptr<BlockingState>& blockingState,
@@ -392,7 +410,7 @@ StopReason Driver::runInternal(
                     op->stats().wlock()->getOutputTiming.add(deltaTiming);
                   });
               RuntimeStatWriterScopeGuard statsWriterGuard(op);
-              result = op->getOutput();
+              CALL_OPERATOR(result = op->getOutput(), op, "getOutput");
               if (result) {
                 VELOX_CHECK(
                     result->size() > 0,
@@ -420,7 +438,9 @@ StopReason Driver::runInternal(
               TestValue::adjust(
                   "facebook::velox::exec::Driver::runInternal::addInput",
                   nextOp);
-              nextOp->addInput(result);
+
+              CALL_OPERATOR(nextOp->addInput(result), nextOp, "addInput");
+
               // The next iteration will see if operators_[i + 1] has
               // output now that it got input.
               i += 2;
@@ -454,7 +474,7 @@ StopReason Driver::runInternal(
                 TestValue::adjust(
                     "facebook::velox::exec::Driver::runInternal::noMoreInput",
                     nextOp);
-                nextOp->noMoreInput();
+                CALL_OPERATOR(nextOp->noMoreInput(), nextOp, "noMoreInput");
                 break;
               }
             }
@@ -469,7 +489,7 @@ StopReason Driver::runInternal(
                 createDeltaCpuWallTimer([op](const CpuWallTiming& timing) {
                   op->stats().wlock()->getOutputTiming.add(timing);
                 });
-            result = op->getOutput();
+            CALL_OPERATOR(result = op->getOutput(), op, "getOutput");
             if (result) {
               VELOX_CHECK(
                   result->size() > 0,
@@ -508,6 +528,8 @@ StopReason Driver::runInternal(
     return StopReason::kAlreadyTerminated;
   }
 }
+
+#undef CALL_OPERATOR
 
 // static
 void Driver::run(std::shared_ptr<Driver> self) {
@@ -687,10 +709,6 @@ std::vector<Operator*> Driver::operators() const {
     operators.push_back(op.get());
   }
   return operators;
-}
-
-void Driver::setError(std::exception_ptr exception) {
-  task()->setError(exception);
 }
 
 std::string Driver::toString() {

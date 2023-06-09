@@ -48,6 +48,7 @@ General Aggregate Functions
     Returns the number of input rows.
 
 .. function:: count(x) -> bigint
+    :noindex:
 
     Returns the number of non-null input values.
 
@@ -70,9 +71,17 @@ General Aggregate Functions
 
     Returns the value of ``x`` associated with the maximum value of ``y`` over all input values.
 
+.. function:: max_by(x, y, n) -> array([same as x])
+
+    Returns n values of ``x`` associated with the n largest values of ``y`` in descending order of ``y``.
+
 .. function:: min_by(x, y) -> [same as x]
 
     Returns the value of ``x`` associated with the minimum value of ``y`` over all input values.
+
+.. function:: min_by(x, y, n) -> array([same as x])
+
+    Returns n values of ``x`` associated with the n smallest values of ``y`` in ascending order of ``y``.
 
 .. function:: max(x) -> [same as input]
 
@@ -81,6 +90,29 @@ General Aggregate Functions
 .. function:: min(x) -> [same as input]
 
     Returns the minimum value of all input values.
+
+.. function:: set_agg(x) -> array<[same as input]>
+
+    Returns an array created from the distinct input ``x`` elements.
+
+    Supported types of ``x`` are: TINYINT, SMALLINT, INTEGER, BIGINT.
+
+.. function:: set_union(array(T)) -> array(T)
+
+    Returns an array of all the distinct values contained in each array of the input.
+
+    Example::
+
+        SELECT set_union(elements)
+        FROM (
+            VALUES
+                ARRAY[1, 2, 3],
+                ARRAY[2, 3, 4]
+        ) AS t(elements);
+
+    Returns ARRAY[1, 2, 3, 4]
+
+    Supported types are: TINYINT, SMALLINT, INTEGER, BIGINT.
 
 .. function:: sum(x) -> [same as input]
 
@@ -130,6 +162,7 @@ Approximate Aggregate Functions
     any specific input set.
 
 .. function:: approx_distinct(x, e) -> bigint
+   :noindex:
 
     Returns the approximate number of distinct input values.
     This function provides an approximation of ``count(DISTINCT x)``.
@@ -170,6 +203,7 @@ __ https://www.cse.ust.hk/~raywong/comp5331/References/EfficientComputationOfFre
     one and must be constant for all input rows.
 
 .. function:: approx_percentile(x, percentage, accuracy) -> [same as x]
+   :noindex:
 
     As ``approx_percentile(x, percentage)``, but with a maximum rank
     error of ``accuracy``. The value of ``accuracy`` must be between
@@ -180,17 +214,20 @@ __ https://www.cse.ust.hk/~raywong/comp5331/References/EfficientComputationOfFre
     guarantee for accuracy than T-Digest.
 
 .. function:: approx_percentile(x, percentages) -> array<[same as x]>
+   :noindex:
 
     Returns the approximate percentile for all input values of ``x`` at each of
     the specified percentages. Each element of the ``percentages`` array must be
     between zero and one, and the array must be constant for all input rows.
 
 .. function:: approx_percentile(x, percentages, accuracy) -> array<[same as x]>
+   :noindex:
 
     As ``approx_percentile(x, percentages)``, but with a maximum rank error of
     ``accuracy``.
 
 .. function:: approx_percentile(x, w, percentage) -> [same as x]
+   :noindex:
 
     Returns the approximate weighed percentile for all input values of ``x``
     using the per-item weight ``w`` at the percentage ``p``. The weight must be
@@ -199,11 +236,13 @@ __ https://www.cse.ust.hk/~raywong/comp5331/References/EfficientComputationOfFre
     zero and one and must be constant for all input rows.
 
 .. function:: approx_percentile(x, w, percentage, accuracy) -> [same as x]
+   :noindex:
 
     As ``approx_percentile(x, w, percentage)``, but with a maximum
     rank error of ``accuracy``.
 
 .. function:: approx_percentile(x, w, percentages) -> array<[same as x]>
+   :noindex:
 
     Returns the approximate weighed percentile for all input values of ``x``
     using the per-item weight ``w`` at each of the given percentages specified
@@ -213,6 +252,7 @@ __ https://www.cse.ust.hk/~raywong/comp5331/References/EfficientComputationOfFre
     must be constant for all input rows.
 
 .. function:: approx_percentile(x, w, percentages, accuracy) -> array<[same as x]>
+   :noindex:
 
     As ``approx_percentile(x, w, percentages)``, but with a maximum rank error
     of ``accuracy``.

@@ -193,9 +193,9 @@ class Task : public std::enable_shared_from_this<Task> {
   /// corresponding to plan node with specified ID.
   void noMoreSplits(const core::PlanNodeId& planNodeId);
 
-  /// Updates the total number of output buffers to broadcast the results of the
-  /// execution to. Used when plan tree ends with a PartitionedOutputNode with
-  /// broadcast flag set to true.
+  /// Updates the total number of output buffers to broadcast or arbitrarily
+  /// distribute the results of the execution to. Used when plan tree ends with
+  /// a PartitionedOutputNode with broadcast of arbitrary output type.
   /// @param numBuffers Number of output buffers. Must not decrease on
   /// subsequent calls.
   /// @param noMoreBuffers A flag indicating that numBuffers is the final number
@@ -205,6 +205,10 @@ class Task : public std::enable_shared_from_this<Task> {
   /// @return true if update was successful.
   ///         false if noMoreBuffers was previously set to true.
   ///         false if buffer was not found for a given task.
+  bool updateOutputBuffers(int numBuffers, bool noMoreBuffers);
+
+  /// TODO: deprecate this API after Prestissimo switches to use
+  /// updateOutputBuffers.
   bool updateBroadcastOutputBuffers(int numBuffers, bool noMoreBuffers);
 
   /// Returns true if state is 'running'.
@@ -219,12 +223,20 @@ class Task : public std::enable_shared_from_this<Task> {
     return state_;
   }
 
-  /// Returns a future which is realized when 'this' is no longer in
-  /// running state. If 'this' is not in running state at the time of
-  /// call, the future is immediately realized. The future is realized
-  /// with an exception after maxWaitMicros. A zero max wait means no
-  /// timeout.
+  /// Returns a future which is realized when the task's state has changed and
+  /// the Task is ready to report some progress (such as split group finished or
+  /// task is completed).
+  /// If the task is not in running state at the time of call, the future is
+  /// immediately realized. The future is realized with an exception after
+  /// maxWaitMicros. A zero max wait means no timeout.
   ContinueFuture stateChangeFuture(uint64_t maxWaitMicros);
+
+  /// Returns a future which is realized when the task is no longer in
+  /// running state.
+  /// If the task is not in running state at the time of call, the future is
+  /// immediately realized. The future is realized with an exception after
+  /// maxWaitMicros. A zero max wait means no timeout.
+  ContinueFuture taskCompletionFuture(uint64_t maxWaitMicros);
 
   /// Returns task execution error or nullptr if no error occurred.
   std::exception_ptr error() const {
@@ -389,7 +401,11 @@ class Task : public std::enable_shared_from_this<Task> {
   /// NOTE: if 'future' is null, then the caller doesn't intend to wait for the
   /// other peers to finish. The function won't set its promise and record it in
   /// peers. This is used in scenario that the caller only needs to know whether
-  /// it is the last one to reach the barrier.g
+  /// it is the last one to reach the barrier.
+  ///
+  /// NOTE: The last peer (the one that got 'true' returned and a bunch of
+  /// promises) is responsible for promises' fulfillment even in case of an
+  /// exception!
   bool allPeersFinished(
       const core::PlanNodeId& planNodeId,
       Driver* caller,
@@ -816,36 +832,6 @@ class Task : public std::enable_shared_from_this<Task> {
   std::shared_ptr<ExchangeClient> getExchangeClientLocked(
       int32_t pipelineId) const;
 
-  // RAII helper class to satisfy 'stateChangePromises_' and notify listeners
-  // that task is complete outside of the mutex. Inactive on creation. Must be
-  // activated explicitly by calling 'activate'.
-  class TaskCompletionNotifier {
-   public:
-    /// Calls notify() if it hasn't been called yet.
-    ~TaskCompletionNotifier();
-
-    /// Activates the notifier and provides a callback to invoke and promises to
-    /// satisfy on destruction or a call to 'notify'.
-    void activate(
-        std::function<void()> callback,
-        std::vector<ContinuePromise> promises);
-
-    /// Satisfies the promises passed to 'activate' and invokes the callback.
-    /// Does nothing if 'activate' hasn't been called or 'notify' has been
-    /// called already.
-    void notify();
-
-   private:
-    bool active_{false};
-    std::function<void()> callback_;
-    std::vector<ContinuePromise> promises_;
-  };
-
-  void activateTaskCompletionNotifier(TaskCompletionNotifier& notifier) {
-    notifier.activate(
-        [&]() { onTaskCompletion(); }, std::move(stateChangePromises_));
-  }
-
   // The helper class used to maintain 'numCreatedTasks_' and 'numDeletedTasks_'
   // on task construction and destruction.
   class TaskCounter {
@@ -986,6 +972,11 @@ class Task : public std::enable_shared_from_this<Task> {
   /// manage splits of the plan nodes that expect splits.
   std::unordered_map<core::PlanNodeId, SplitsState> splitsStates_;
 
+  // Promises that are fulfilled when the task is completed (terminated).
+  std::vector<ContinuePromise> taskCompletionPromises_;
+
+  // Promises that are fulfilled when the task's state has changed and ready to
+  // report some progress (such as split group finished or task is completed).
   std::vector<ContinuePromise> stateChangePromises_;
 
   TaskStats taskStats_;
@@ -996,9 +987,9 @@ class Task : public std::enable_shared_from_this<Task> {
 
   std::weak_ptr<PartitionedOutputBufferManager> bufferManager_;
 
-  /// Boolean indicating that we have already received no-more-broadcast-buffers
+  /// Boolean indicating that we have already received no-more-output-buffers
   /// message. Subsequent messages will be ignored.
-  bool noMoreBroadcastBuffers_{false};
+  bool noMoreOutputBuffers_{false};
 
   // Thread counts and cancellation -related state.
   //

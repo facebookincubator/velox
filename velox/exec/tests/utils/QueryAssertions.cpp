@@ -459,10 +459,6 @@ variant variantAt(const VectorPtr& vector, vector_size_t row) {
     return mapVariantAt(vector, row);
   }
 
-  if (typeKind == TypeKind::HUGEINT) {
-    return variantAt<TypeKind::HUGEINT>(vector, row);
-  }
-
   return VELOX_DYNAMIC_SCALAR_TYPE_DISPATCH(variantAt, typeKind, vector, row);
 }
 
@@ -1247,7 +1243,7 @@ bool waitForTaskStateChange(
   // Wait for task to transition to finished state.
   if (task->state() != state) {
     auto& executor = folly::QueuedImmediateExecutor::instance();
-    auto future = task->stateChangeFuture(maxWaitMicros).via(&executor);
+    auto future = task->taskCompletionFuture(maxWaitMicros).via(&executor);
     future.wait();
   }
 

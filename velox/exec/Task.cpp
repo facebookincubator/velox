@@ -39,6 +39,49 @@ using facebook::velox::common::testutil::TestValue;
 namespace facebook::velox::exec {
 
 namespace {
+// RAII helper class to satisfy given promises and notify listeners of an event
+// connected to the promises outside of the mutex that guards the promises.
+// Inactive on creation. Must be activated explicitly by calling 'activate'.
+class EventCompletionNotifier {
+ public:
+  /// Calls notify() if it hasn't been called yet.
+  ~EventCompletionNotifier() {
+    notify();
+  }
+
+  // Activates the notifier and provides a callback to invoke and promises to
+  // satisfy on destruction or a call to 'notify'.
+  void activate(
+      std::vector<ContinuePromise> promises,
+      std::function<void()> callback = nullptr) {
+    active_ = true;
+    callback_ = callback;
+    promises_ = std::move(promises);
+  }
+
+  // Satisfies the promises passed to 'activate' and invokes the callback.
+  // Does nothing if 'activate' hasn't been called or 'notify' has been
+  // called already.
+  void notify() {
+    if (active_) {
+      for (auto& promise : promises_) {
+        promise.setValue();
+      }
+      promises_.clear();
+
+      if (callback_) {
+        callback_();
+      }
+
+      active_ = false;
+    }
+  }
+
+ private:
+  bool active_{false};
+  std::function<void()> callback_{nullptr};
+  std::vector<ContinuePromise> promises_;
+};
 
 folly::Synchronized<std::vector<std::shared_ptr<TaskListener>>>& listeners() {
   static folly::Synchronized<std::vector<std::shared_ptr<TaskListener>>>
@@ -579,7 +622,11 @@ void Task::start(
           : factory->numDrivers;
       bufferManager->initializeTask(
           self,
-          partitionedOutputNode->isBroadcast(),
+          // TODO: change PartitionedOutputNode to pass partition output type
+          // which include arbitrary.
+          partitionedOutputNode->isBroadcast()
+              ? PartitionedOutputBuffer::Kind::kBroadcast
+              : PartitionedOutputBuffer::Kind::kPartitioned,
           partitionedOutputNode->numPartitions(),
           totalOutputDrivers);
     }
@@ -828,6 +875,7 @@ void Task::createDriversLocked(
 void Task::removeDriver(std::shared_ptr<Task> self, Driver* driver) {
   bool foundDriver = false;
   bool allFinished = true;
+  EventCompletionNotifier stateChangeNotifier;
   {
     std::lock_guard<std::mutex> taskLock(self->mutex_);
     for (auto& driverPtr : self->drivers_) {
@@ -858,6 +906,7 @@ void Task::removeDriver(std::shared_ptr<Task> self, Driver* driver) {
         if (splitGroupId != kUngroupedGroupId) {
           --self->numRunningSplitGroups_;
           self->taskStats_.completedSplitGroups.emplace(splitGroupId);
+          stateChangeNotifier.activate(std::move(self->stateChangePromises_));
           splitGroupState.clear();
           self->ensureSplitGroupsAreBeingProcessedLocked(self);
         } else {
@@ -875,6 +924,7 @@ void Task::removeDriver(std::shared_ptr<Task> self, Driver* driver) {
                 << " ms.";
     }
   }
+  stateChangeNotifier.notify();
 
   if (!foundDriver) {
     LOG(WARNING) << "Trying to remove a Driver twice from its Task";
@@ -1048,6 +1098,7 @@ void Task::noMoreSplitsForGroup(
     const core::PlanNodeId& planNodeId,
     int32_t splitGroupId) {
   std::vector<ContinuePromise> promises;
+  EventCompletionNotifier stateChangeNotifier;
   {
     std::lock_guard<std::mutex> l(mutex_);
 
@@ -1060,8 +1111,10 @@ void Task::noMoreSplitsForGroup(
     // group complete.
     if (seenSplitGroups_.count(splitGroupId) == 0) {
       taskStats_.completedSplitGroups.insert(splitGroupId);
+      stateChangeNotifier.activate(std::move(stateChangePromises_));
     }
   }
+  stateChangeNotifier.notify();
   for (auto& promise : promises) {
     promise.setValue();
   }
@@ -1257,6 +1310,10 @@ bool Task::isFinishedLocked() const {
 }
 
 bool Task::updateBroadcastOutputBuffers(int numBuffers, bool noMoreBuffers) {
+  return updateOutputBuffers(numBuffers, noMoreBuffers);
+}
+
+bool Task::updateOutputBuffers(int numBuffers, bool noMoreBuffers) {
   auto bufferManager = bufferManager_.lock();
   VELOX_CHECK_NOT_NULL(
       bufferManager,
@@ -1264,16 +1321,15 @@ bool Task::updateBroadcastOutputBuffers(int numBuffers, bool noMoreBuffers) {
       "PartitionedOutputBufferManager was already destructed");
   {
     std::lock_guard<std::mutex> l(mutex_);
-    if (noMoreBroadcastBuffers_) {
+    if (noMoreOutputBuffers_) {
       // Ignore messages received after no-more-buffers message.
       return false;
     }
     if (noMoreBuffers) {
-      noMoreBroadcastBuffers_ = true;
+      noMoreOutputBuffers_ = true;
     }
   }
-  return bufferManager->updateBroadcastOutputBuffers(
-      taskId_, numBuffers, noMoreBuffers);
+  return bufferManager->updateOutputBuffers(taskId_, numBuffers, noMoreBuffers);
 }
 
 int Task::getOutputPipelineId() const {
@@ -1378,7 +1434,7 @@ bool Task::allPeersFinished(
   const auto numPeers = numDrivers(caller->driverCtx()->pipelineId);
   if (++state.numRequested == numPeers) {
     peers = std::move(state.drivers);
-    promises = std::move(state.promises);
+    promises = std::move(state.allPeersFinishedPromises);
     barriers.erase(planNodeId);
     return true;
   }
@@ -1395,9 +1451,9 @@ bool Task::allPeersFinished(
   // the peers to finish.
   if (future != nullptr) {
     state.drivers.push_back(callerShared);
-    state.promises.emplace_back(
+    state.allPeersFinishedPromises.emplace_back(
         fmt::format("Task::allPeersFinished {}", taskId_));
-    *future = state.promises.back().getSemiFuture();
+    *future = state.allPeersFinishedPromises.back().getSemiFuture();
   }
   return false;
 }
@@ -1526,7 +1582,8 @@ static void movePromisesOut(
 
 ContinueFuture Task::terminate(TaskState terminalState) {
   std::vector<std::shared_ptr<Driver>> offThreadDrivers;
-  TaskCompletionNotifier completionNotifier;
+  EventCompletionNotifier taskCompletionNotifier;
+  EventCompletionNotifier stateChangeNotifier;
   std::vector<std::shared_ptr<ExchangeClient>> exchangeClients;
   {
     std::lock_guard<std::mutex> l(mutex_);
@@ -1551,7 +1608,9 @@ ContinueFuture Task::terminate(TaskState terminalState) {
               << taskStateString(state_) << " after running for "
               << timeSinceStartMsLocked() << " ms.";
 
-    activateTaskCompletionNotifier(completionNotifier);
+    taskCompletionNotifier.activate(
+        std::move(taskCompletionPromises_), [&]() { onTaskCompletion(); });
+    stateChangeNotifier.activate(std::move(stateChangePromises_));
 
     // Update the total number of drivers if we were cancelled.
     numTotalDrivers_ = seenSplitGroups_.size() * numDriversPerSplitGroup_ +
@@ -1575,7 +1634,8 @@ ContinueFuture Task::terminate(TaskState terminalState) {
     exchangeClients.swap(exchangeClients_);
   }
 
-  completionNotifier.notify();
+  taskCompletionNotifier.notify();
+  stateChangeNotifier.notify();
 
   // Get the stats and free the resources of Drivers that were not on
   // thread.
@@ -1779,6 +1839,22 @@ ContinueFuture Task::stateChangeFuture(uint64_t maxWaitMicros) {
   auto [promise, future] = makeVeloxContinuePromiseContract(
       fmt::format("Task::stateChangeFuture {}", taskId_));
   stateChangePromises_.emplace_back(std::move(promise));
+  if (maxWaitMicros > 0) {
+    return std::move(future).within(std::chrono::microseconds(maxWaitMicros));
+  }
+  return std::move(future);
+}
+
+ContinueFuture Task::taskCompletionFuture(uint64_t maxWaitMicros) {
+  std::lock_guard<std::mutex> l(mutex_);
+  // If 'this' is running, the future is realized on timeout or when
+  // this no longer is running.
+  if (not isRunningLocked()) {
+    return ContinueFuture();
+  }
+  auto [promise, future] = makeVeloxContinuePromiseContract(
+      fmt::format("Task::taskCompletionFuture {}", taskId_));
+  taskCompletionPromises_.emplace_back(std::move(promise));
   if (maxWaitMicros > 0) {
     return std::move(future).within(std::chrono::microseconds(maxWaitMicros));
   }
@@ -2147,31 +2223,6 @@ ContinueFuture Task::requestPause() {
   TestValue::adjust("facebook::velox::exec::Task::requestPauseLocked", this);
   pauseRequested_ = true;
   return makeFinishFutureLocked("Task::requestPause");
-}
-
-Task::TaskCompletionNotifier::~TaskCompletionNotifier() {
-  notify();
-}
-
-void Task::TaskCompletionNotifier::activate(
-    std::function<void()> callback,
-    std::vector<ContinuePromise> promises) {
-  active_ = true;
-  callback_ = callback;
-  promises_ = std::move(promises);
-}
-
-void Task::TaskCompletionNotifier::notify() {
-  if (active_) {
-    for (auto& promise : promises_) {
-      promise.setValue();
-    }
-    promises_.clear();
-
-    callback_();
-
-    active_ = false;
-  }
 }
 
 void Task::createExchangeClient(

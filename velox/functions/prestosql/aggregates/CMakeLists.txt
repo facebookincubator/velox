@@ -35,6 +35,7 @@ add_library(
   MinMaxByAggregates.cpp
   CountAggregate.cpp
   PrestoHasher.cpp
+  SetAggregates.cpp
   SumAggregate.cpp
   ValueList.cpp
   VarianceAggregates.cpp

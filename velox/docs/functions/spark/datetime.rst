@@ -7,6 +7,10 @@ Convenience Extraction Functions
 
 These functions support TIMESTAMP and DATE input types.
 
+.. spark:function:: last_day(date) -> date
+
+    Returns the last day of the month which the date belongs to.
+
 .. spark:function:: make_date(year, month, day) -> date
 
     Returns the date from year, month and day fields.
@@ -23,6 +27,7 @@ These functions support TIMESTAMP and DATE input types.
     Alias for ``unix_timestamp(string) -> integer``.
 
 .. spark:function:: to_unix_timestamp(string, format) -> integer
+   :noindex:
 
     Alias for ``unix_timestamp(string, format) -> integer``.
 
@@ -31,12 +36,14 @@ These functions support TIMESTAMP and DATE input types.
     Returns the current UNIX timestamp in seconds.
 
 .. spark:function:: unix_timestamp(string) -> integer
+   :noindex:
 
     Returns the UNIX timestamp of time specified by ``string``. Assumes the 
     format ``yyyy-MM-dd HH:mm:ss``. Returns null if ``string`` does not match
     ``format``.
 
 .. spark:function:: unix_timestamp(string, format) -> integer
+   :noindex:
 
     Returns the UNIX timestamp of time specified by ``string`` using the
     format described in the ``format`` string. The format follows Spark's

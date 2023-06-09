@@ -47,8 +47,7 @@ class RankTestBase : public WindowTestBase {
       : function_(testParam.function), overClause_(testParam.overClause) {}
 
   void testWindowFunction(const std::vector<RowVectorPtr>& vectors) {
-    WindowTestBase::testWindowFunction(
-        vectors, function_, {overClause_}, kFrameClauses);
+    WindowTestBase::testWindowFunction(vectors, function_, {overClause_});
   }
 
   void SetUp() override {
@@ -78,29 +77,24 @@ class RankTest : public RankTestBase,
 
 // Tests all functions with a dataset with uniform distribution of partitions.
 TEST_P(RankTest, basic) {
-  testWindowFunction({makeSimpleVector(50)});
-}
-
-// Tests all functions with a dataset with all rows in a single partition.
-TEST_P(RankTest, singlePartition) {
-  testWindowFunction({makeSinglePartitionVector(50)});
+  testWindowFunction({makeSimpleVector(40)});
 }
 
 // Tests all functions with a dataset with all rows in a single partition,
 // but in 2 input vectors.
-TEST_P(RankTest, multiInput) {
+TEST_P(RankTest, singlePartition) {
   testWindowFunction(
-      {makeSinglePartitionVector(50), makeSinglePartitionVector(75)});
+      {makeSinglePartitionVector(40), makeSinglePartitionVector(50)});
 }
 
 // Tests all functions with a dataset in which all partitions have a single row.
 TEST_P(RankTest, singleRowPartitions) {
-  testWindowFunction({makeSingleRowPartitionsVector(50)});
+  testWindowFunction({makeSingleRowPartitionsVector(40)});
 }
 
 // Tests all functions with a dataset with randomly generated data.
 TEST_P(RankTest, randomInput) {
-  testWindowFunction({makeRandomInputVector(20), makeRandomInputVector(30)});
+  testWindowFunction({makeRandomInputVector(30)});
 }
 
 // Run above tests for all combinations of rank function and over clauses.

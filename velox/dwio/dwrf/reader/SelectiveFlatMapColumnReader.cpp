@@ -153,12 +153,14 @@ std::vector<KeyNode<T>> getKeyNodes(
           }
           childSpecs[key] = childSpec;
         }
-        auto inMap =
-            stripe.getStream(seqEk.forKind(proto::Stream_Kind_IN_MAP), true);
+        auto labels = params.streamLabels().append(toString(key.get()));
+        auto inMap = stripe.getStream(
+            seqEk.forKind(proto::Stream_Kind_IN_MAP), labels.label(), true);
         VELOX_CHECK(inMap, "In map stream is required");
         auto inMapDecoder = createBooleanRleDecoder(std::move(inMap), seqEk);
         DwrfParams childParams(
             stripe,
+            labels,
             FlatMapContext{
                 .sequence = sequence,
                 .inMapDecoder = inMapDecoder.get(),

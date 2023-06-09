@@ -15,15 +15,10 @@
  */
 
 #include "velox/connectors/hive/HiveConnector.h"
-#include "velox/connectors/hive/HivePartitionFunction.h"
-
 #include "velox/common/base/Fs.h"
-#include "velox/dwio/common/InputStream.h"
+#include "velox/connectors/hive/HivePartitionFunction.h"
 #include "velox/dwio/common/ReaderFactory.h"
 #include "velox/expression/FieldReference.h"
-#include "velox/type/Conversions.h"
-#include "velox/type/Type.h"
-#include "velox/type/Variant.h"
 
 #include <boost/lexical_cast.hpp>
 
@@ -41,7 +36,86 @@ namespace facebook::velox::connector::hive {
 namespace {
 static const char* kPath = "$path";
 static const char* kBucket = "$bucket";
+
+std::unordered_map<HiveColumnHandle::ColumnType, std::string>
+columnTypeNames() {
+  return {
+      {HiveColumnHandle::ColumnType::kPartitionKey, "PartitionKey"},
+      {HiveColumnHandle::ColumnType::kRegular, "Regular"},
+      {HiveColumnHandle::ColumnType::kSynthesized, "Synthesized"},
+  };
+}
+
+template <typename K, typename V>
+std::unordered_map<V, K> invertMap(const std::unordered_map<K, V>& mapping) {
+  std::unordered_map<V, K> inverted;
+  for (const auto& [key, value] : mapping) {
+    inverted.emplace(value, key);
+  }
+  return inverted;
+}
 } // namespace
+
+std::string HiveColumnHandle::columnTypeName(
+    HiveColumnHandle::ColumnType type) {
+  static const auto ctNames = columnTypeNames();
+  return ctNames.at(type);
+}
+
+HiveColumnHandle::ColumnType HiveColumnHandle::columnTypeFromName(
+    const std::string& name) {
+  static const auto nameColumnTypes = invertMap(columnTypeNames());
+  return nameColumnTypes.at(name);
+}
+
+folly::dynamic HiveColumnHandle::serialize() const {
+  folly::dynamic obj = ColumnHandle::serializeBase("HiveColumnHandle");
+  obj["hiveColumnHandleName"] = name_;
+  obj["columnType"] = columnTypeName(columnType_);
+  obj["dataType"] = dataType_->serialize();
+  folly::dynamic requiredSubfields = folly::dynamic::array;
+  for (const auto& subfield : requiredSubfields_) {
+    requiredSubfields.push_back(subfield.toString());
+  }
+  obj["requiredSubfields"] = requiredSubfields;
+  return obj;
+}
+
+std::string HiveColumnHandle::toString() const {
+  std::ostringstream out;
+  out << fmt::format(
+      "HiveColumnHandle [name: {}, columnType: {}, dataType: {},",
+      name_,
+      columnTypeName(columnType_),
+      dataType_->toString());
+  out << " requiredSubfields: [";
+  for (const auto& s : requiredSubfields_) {
+    out << " " << s.toString();
+  }
+  out << " ]]";
+  return out.str();
+}
+
+ColumnHandlePtr HiveColumnHandle::create(const folly::dynamic& obj) {
+  auto name = obj["hiveColumnHandleName"].asString();
+  auto columnType = columnTypeFromName(obj["columnType"].asString());
+  auto dataType = ISerializable::deserialize<Type>(obj["dataType"]);
+
+  const auto& arr = obj["requiredSubfields"];
+  std::vector<common::Subfield> requiredSubfields;
+  requiredSubfields.reserve(arr.size());
+  for (auto& s : arr) {
+    requiredSubfields.emplace_back(s.asString());
+  }
+
+  return std::make_shared<HiveColumnHandle>(
+      name, columnType, dataType, std::move(requiredSubfields));
+}
+
+void HiveColumnHandle::registerSerDe() {
+  auto& registry = DeserializationRegistryForSharedPtr();
+  registry.Register("HiveColumnHandle", HiveColumnHandle::create);
+}
 
 HiveTableHandle::HiveTableHandle(
     std::string connectorId,
@@ -81,6 +155,56 @@ std::string HiveTableHandle::toString() const {
     out << ", remaining filter: (" << remainingFilter_->toString() << ")";
   }
   return out.str();
+}
+
+folly::dynamic HiveTableHandle::serialize() const {
+  folly::dynamic obj = ConnectorTableHandle::serializeBase("HiveTableHandle");
+  obj["tableName"] = tableName_;
+  obj["filterPushdownEnabled"] = filterPushdownEnabled_;
+
+  folly::dynamic subfieldFilters = folly::dynamic::array;
+  for (const auto& [subfield, filter] : subfieldFilters_) {
+    folly::dynamic pair = folly::dynamic::object;
+    pair["subfield"] = subfield.toString();
+    pair["filter"] = filter->serialize();
+    subfieldFilters.push_back(pair);
+  }
+
+  obj["subfieldFilters"] = subfieldFilters;
+  obj["remainingFilter"] = remainingFilter_->serialize();
+  return obj;
+}
+
+ConnectorTableHandlePtr HiveTableHandle::create(
+    const folly::dynamic& obj,
+    void* context) {
+  auto connectorId = obj["connectorId"].asString();
+  auto tableName = obj["tableName"].asString();
+  auto filterPushdownEnabled = obj["filterPushdownEnabled"].asBool();
+  auto remainingFilter = ISerializable::deserialize<core::ITypedExpr>(
+      obj["remainingFilter"], context);
+
+  SubfieldFilters subfieldFilters;
+  folly::dynamic subfieldFiltersObj = obj["subfieldFilters"];
+  for (const auto& subfieldFilter : subfieldFiltersObj) {
+    common::Subfield subfield(subfieldFilter["subfield"].asString());
+    auto filter =
+        ISerializable::deserialize<common::Filter>(subfieldFilter["filter"]);
+    subfieldFilters[common::Subfield(std::move(subfield.path()))] =
+        filter->clone();
+  }
+
+  return std::make_shared<const HiveTableHandle>(
+      connectorId,
+      tableName,
+      filterPushdownEnabled,
+      std::move(subfieldFilters),
+      remainingFilter);
+}
+
+void HiveTableHandle::registerSerDe() {
+  auto& registry = DeserializationWithContextRegistryForSharedPtr();
+  registry.Register("HiveTableHandle", create);
 }
 
 namespace {
@@ -207,13 +331,28 @@ std::shared_ptr<common::ScanSpec> HiveDataSource::makeScanSpec(
     const SubfieldFilters& filters,
     const RowTypePtr& rowType,
     const std::vector<const HiveColumnHandle*>& columnHandles,
+    const std::vector<common::Subfield>& remainingFilterInputs,
     memory::MemoryPool* pool) {
+  // This is to handle subfields that appear only in remaining filter (the root
+  // field is already included in column handles).  Presto planner does not add
+  // them to required subfields so we need to handle them by ourselves.
+  //
+  // TODO: Put only selected subfields instead of the whole root field from
+  // remaining filter in the scan spec.
+  std::unordered_set<std::string> remainingFilterInputNames;
+  for (auto& input : remainingFilterInputs) {
+    VELOX_CHECK_GT(input.path().size(), 0);
+    auto* field = dynamic_cast<const common::Subfield::NestedField*>(
+        input.path()[0].get());
+    VELOX_CHECK(field);
+    remainingFilterInputNames.insert(field->name());
+  }
   auto spec = std::make_shared<common::ScanSpec>("root");
   for (int i = 0; i < columnHandles.size(); ++i) {
     auto& name = rowType->nameOf(i);
     auto& type = rowType->childAt(i);
     auto& subfields = columnHandles[i]->requiredSubfields();
-    if (subfields.empty()) {
+    if (subfields.empty() || remainingFilterInputNames.count(name) > 0) {
       spec->addFieldRecursively(name, *type, i);
       continue;
     }
@@ -304,25 +443,32 @@ HiveDataSource::HiveDataSource(
       hiveTableHandle->isFilterPushdownEnabled(),
       "Filter pushdown must be enabled");
 
+  std::vector<common::Subfield> remainingFilterInputs;
+  const auto& remainingFilter = hiveTableHandle->remainingFilter();
+  if (remainingFilter) {
+    remainingFilterExprSet_ = expressionEvaluator_->compile(remainingFilter);
+    for (auto& input : remainingFilterExprSet_->expr(0)->distinctFields()) {
+      remainingFilterInputs.emplace_back(input->field());
+    }
+  }
+
   auto outputTypes = outputType_->children();
   readerOutputType_ = ROW(std::move(columnNames), std::move(outputTypes));
   scanSpec_ = makeScanSpec(
       hiveTableHandle->subfieldFilters(),
       readerOutputType_,
       hiveColumnHandles,
+      remainingFilterInputs,
       pool_);
 
-  const auto& remainingFilter = hiveTableHandle->remainingFilter();
   if (remainingFilter) {
     metadataFilter_ = std::make_shared<common::MetadataFilter>(
         *scanSpec_, *remainingFilter, expressionEvaluator_);
-    remainingFilterExprSet_ = expressionEvaluator_->compile(remainingFilter);
 
     // Remaining filter may reference columns that are not used otherwise,
     // e.g. are not being projected out and are not used in range filters.
     // Make sure to add these columns to scanSpec_.
-
-    auto filterInputs = remainingFilterExprSet_->expr(0)->distinctFields();
+    auto& filterInputs = remainingFilterExprSet_->expr(0)->distinctFields();
     column_index_t channel = outputType_->size();
     auto names = readerOutputType_->names();
     auto types = readerOutputType_->children();
@@ -332,11 +478,11 @@ HiveDataSource::HiveDataSource(
       }
       names.emplace_back(input->field());
       types.emplace_back(input->type());
-
-      common::Subfield subfield(input->field());
-      auto fieldSpec = scanSpec_->getOrCreateChild(subfield);
-      fieldSpec->setProjectOut(true);
-      fieldSpec->setChannel(channel++);
+      // This is to handle root fields that are not included in output types at
+      // all but used in remaining filter.
+      //
+      // TODO: Put only selected subfields in the scan spec.
+      scanSpec_->addFieldRecursively(input->field(), *input->type(), channel++);
     }
     readerOutputType_ = ROW(std::move(names), std::move(types));
   }

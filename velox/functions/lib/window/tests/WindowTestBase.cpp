@@ -27,23 +27,15 @@ using namespace facebook::velox::exec::test;
 
 namespace facebook::velox::window::test {
 
-namespace {
-struct QueryInfo {
-  const core::PlanNodePtr planNode;
-  const std::string functionSql;
-  const std::string querySql;
-};
-
-QueryInfo buildWindowQuery(
+WindowTestBase::QueryInfo WindowTestBase::buildWindowQuery(
     const std::vector<RowVectorPtr>& input,
     const std::string& function,
     const std::string& overClause,
-    const std::string& frameClause,
-    const parse::ParseOptions& options) {
+    const std::string& frameClause) {
   std::string functionSql =
       fmt::format("{} over ({} {})", function, overClause, frameClause);
   auto op = PlanBuilder()
-                .setParseOptions(options)
+                .setParseOptions(options_)
                 .values(input)
                 .window({functionSql})
                 .planNode();
@@ -55,8 +47,6 @@ QueryInfo buildWindowQuery(
 
   return {op, functionSql, querySql};
 }
-
-}; // namespace
 
 RowVectorPtr WindowTestBase::makeSimpleVector(vector_size_t size) {
   return makeRowVector({
@@ -117,12 +107,15 @@ void WindowTestBase::testWindowFunction(
     const std::vector<RowVectorPtr>& input,
     const std::string& function,
     const std::vector<std::string>& overClauses,
-    const std::vector<std::string>& frameClauses) {
-  createDuckDbTable(input);
+    const std::vector<std::string>& frameClauses,
+    bool createTable) {
+  if (createTable) {
+    createDuckDbTable(input);
+  }
   for (const auto& overClause : overClauses) {
     for (auto& frameClause : frameClauses) {
       auto queryInfo =
-          buildWindowQuery(input, function, overClause, frameClause, options_);
+          buildWindowQuery(input, function, overClause, frameClause);
       SCOPED_TRACE(queryInfo.functionSql);
       assertQuery(queryInfo.planNode, queryInfo.querySql);
     }
@@ -143,8 +136,7 @@ void WindowTestBase::assertWindowFunctionError(
     const std::string& overClause,
     const std::string& frameClause,
     const std::string& errorMessage) {
-  auto queryInfo =
-      buildWindowQuery(input, function, overClause, frameClause, options_);
+  auto queryInfo = buildWindowQuery(input, function, overClause, frameClause);
   SCOPED_TRACE(queryInfo.functionSql);
 
   VELOX_ASSERT_THROW(

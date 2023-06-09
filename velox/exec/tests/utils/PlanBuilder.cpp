@@ -309,10 +309,12 @@ namespace {
 std::string throwAggregateFunctionDoesntExist(const std::string& name) {
   std::stringstream error;
   error << "Aggregate function doesn't exist: " << name << ".";
-  if (exec::aggregateFunctions().empty()) {
-    error << " Registry of aggregate functions is empty. "
-             "Make sure to register some aggregate functions.";
-  }
+  exec::aggregateFunctions().withRLock([&](const auto& functionsMap) {
+    if (functionsMap.empty()) {
+      error << " Registry of aggregate functions is empty. "
+               "Make sure to register some aggregate functions.";
+    }
+  });
   VELOX_USER_FAIL(error.str());
 }
 
@@ -956,11 +958,29 @@ PlanBuilder& PlanBuilder::mergeJoin(
 PlanBuilder& PlanBuilder::nestedLoopJoin(
     const core::PlanNodePtr& right,
     const std::vector<std::string>& outputLayout) {
+  return nestedLoopJoin(right, "", outputLayout, core::JoinType::kInner);
+}
+
+PlanBuilder& PlanBuilder::nestedLoopJoin(
+    const core::PlanNodePtr& right,
+    const std::string& joinCondition,
+    const std::vector<std::string>& outputLayout,
+    core::JoinType joinType) {
   auto resultType = concat(planNode_->outputType(), right->outputType());
   auto outputType = extract(resultType, outputLayout);
 
+  core::TypedExprPtr joinConditionExpr{};
+  if (!joinCondition.empty()) {
+    joinConditionExpr = parseExpr(joinCondition, resultType, options_, pool_);
+  }
+
   planNode_ = std::make_shared<core::NestedLoopJoinNode>(
-      nextPlanNodeId(), std::move(planNode_), right, outputType);
+      nextPlanNodeId(),
+      joinType,
+      std::move(joinConditionExpr),
+      std::move(planNode_),
+      right,
+      outputType);
   return *this;
 }
 
@@ -1286,6 +1306,48 @@ PlanBuilder& PlanBuilder::window(
       sortingOrders,
       windowNames,
       windowNodeFunctions,
+      planNode_);
+  return *this;
+}
+
+PlanBuilder& PlanBuilder::rowNumber(
+    const std::vector<std::string>& partitionKeys,
+    std::optional<int32_t> limit) {
+  planNode_ = std::make_shared<core::RowNumberNode>(
+      nextPlanNodeId(), fields(partitionKeys), "row_number", limit, planNode_);
+  return *this;
+}
+
+PlanBuilder& PlanBuilder::topNRowNumber(
+    const std::vector<std::string>& partitionKeys,
+    const std::vector<std::string>& sortingKeys,
+    int32_t limit,
+    bool generateRowNumber) {
+  auto [sortingFields, sortingOrders] =
+      parseOrderByClauses(sortingKeys, planNode_->outputType(), pool_);
+  std::optional<std::string> rowNumberColumnName;
+  if (generateRowNumber) {
+    rowNumberColumnName = "row_number";
+  }
+  planNode_ = std::make_shared<core::TopNRowNumberNode>(
+      nextPlanNodeId(),
+      fields(partitionKeys),
+      sortingFields,
+      sortingOrders,
+      rowNumberColumnName,
+      limit,
+      planNode_);
+  return *this;
+}
+
+PlanBuilder& PlanBuilder::markDistinct(
+    std::string markerKey,
+    const std::vector<std::string>& distinctKeys) {
+  planNode_ = std::make_shared<core::MarkDistinctNode>(
+      nextPlanNodeId(),
+      std::move(markerKey),
+      fields(planNode_->outputType(), distinctKeys),
+
       planNode_);
   return *this;
 }

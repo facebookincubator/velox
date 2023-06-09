@@ -15,19 +15,15 @@
  */
 
 #include "velox/connectors/hive/HiveDataSink.h"
+#include "velox/connectors/hive/HiveConnector.h"
 
 #include "velox/common/base/Fs.h"
 #include "velox/connectors/hive/HiveConfig.h"
 #include "velox/connectors/hive/HiveConnector.h"
-#include "velox/connectors/hive/HivePartitionUtil.h"
-#include "velox/dwio/dwrf/writer/Writer.h"
 
 #include <boost/lexical_cast.hpp>
 #include <boost/uuid/uuid_generators.hpp>
 #include <boost/uuid/uuid_io.hpp>
-
-using namespace facebook::velox::dwrf;
-using WriterConfig = facebook::velox::dwrf::Config;
 
 namespace facebook::velox::connector::hive {
 
@@ -61,7 +57,35 @@ std::string makeUuid() {
   return boost::lexical_cast<std::string>(boost::uuids::random_generator()());
 }
 
+std::unordered_map<LocationHandle::TableType, std::string> tableTypeNames() {
+  return {
+      {LocationHandle::TableType::kNew, "kNew"},
+      {LocationHandle::TableType::kExisting, "kExisting"},
+  };
+}
+
+template <typename K, typename V>
+std::unordered_map<V, K> invertMap(const std::unordered_map<K, V>& mapping) {
+  std::unordered_map<V, K> inverted;
+  for (const auto& [key, value] : mapping) {
+    inverted.emplace(value, key);
+  }
+  return inverted;
+}
+
 } // namespace
+
+const std::string LocationHandle::tableTypeName(
+    LocationHandle::TableType type) {
+  static const auto tableTypes = tableTypeNames();
+  return tableTypes.at(type);
+}
+
+LocationHandle::TableType LocationHandle::tableTypeFromName(
+    const std::string& name) {
+  static const auto nameTableTypes = invertMap(tableTypeNames());
+  return nameTableTypes.at(name);
+}
 
 HiveDataSink::HiveDataSink(
     RowTypePtr inputType,
@@ -80,7 +104,10 @@ HiveDataSink::HiveDataSink(
                                             HiveConfig::maxPartitionsPerWriters(
                                                 connectorQueryCtx_->config()),
                                             connectorQueryCtx_->memoryPool())
-                                      : nullptr) {}
+                                      : nullptr) {
+  // TODO: remove this hack after Prestissimo adds to register dwrf writer.
+  facebook::velox::dwrf::registerDwrfWriterFactory();
+}
 
 void HiveDataSink::appendData(RowVectorPtr input) {
   // Write to unpartitioned table.
@@ -188,21 +215,21 @@ void HiveDataSink::ensurePartitionWriters() {
 
 void HiveDataSink::appendWriter(
     const std::optional<std::string>& partitionName) {
-  // TODO: Wire up serde properties to writer configs.
-  facebook::velox::dwrf::WriterOptions options;
-  options.config = std::make_shared<WriterConfig>();
-  options.schema = inputType_;
   // Without explicitly setting flush policy, the default memory based flush
   // policy is used.
   auto writerParameters = getWriterParameters(partitionName);
   const auto writePath = fs::path(writerParameters.writeDirectory()) /
       writerParameters.writeFileName();
-
-  auto sink = dwio::common::DataSink::create(writePath);
-  writers_.push_back(std::make_unique<Writer>(
-      options, std::move(sink), *connectorQueryCtx_->connectorMemoryPool()));
   writerInfo_.push_back(
       std::make_shared<HiveWriterInfo>(std::move(writerParameters)));
+
+  auto writerFactory =
+      dwio::common::getWriterFactory(insertTableHandle_->tableStorageFormat());
+  dwio::common::WriterOptions options;
+  options.schema = inputType_;
+  options.memoryPool = connectorQueryCtx_->connectorMemoryPool();
+  writers_.push_back(writerFactory->createWriter(
+      dwio::common::DataSink::create(writePath), options));
 }
 
 void HiveDataSink::computePartitionRowCountsAndIndices() {
@@ -311,6 +338,72 @@ bool HiveInsertTableHandle::isPartitioned() const {
 
 bool HiveInsertTableHandle::isInsertTable() const {
   return locationHandle_->tableType() == LocationHandle::TableType::kExisting;
+}
+
+folly::dynamic HiveInsertTableHandle::serialize() const {
+  folly::dynamic obj = folly::dynamic::object;
+  obj["name"] = "HiveInsertTableHandle";
+  folly::dynamic arr = folly::dynamic::array;
+  for (const auto& ic : inputColumns_) {
+    arr.push_back(ic->serialize());
+  }
+
+  obj["inputColumns"] = arr;
+  obj["locationHandle"] = locationHandle_->serialize();
+  return obj;
+}
+
+HiveInsertTableHandlePtr HiveInsertTableHandle::create(
+    const folly::dynamic& obj) {
+  auto inputColumns = ISerializable::deserialize<std::vector<HiveColumnHandle>>(
+      obj["inputColumns"]);
+  auto locationHandle =
+      ISerializable::deserialize<LocationHandle>(obj["locationHandle"]);
+  return std::make_shared<HiveInsertTableHandle>(inputColumns, locationHandle);
+}
+
+void HiveInsertTableHandle::registerSerDe() {
+  auto& registry = DeserializationRegistryForSharedPtr();
+  registry.Register("HiveInsertTableHandle", HiveInsertTableHandle::create);
+}
+
+std::string HiveInsertTableHandle::toString() const {
+  std::ostringstream out;
+  out << "HiveInsertTableHandle [inputColumns: [";
+  for (const auto& i : inputColumns_) {
+    out << " " << i->toString();
+  }
+  out << " ], locationHandle: " << locationHandle_->toString() << "]";
+  return out.str();
+}
+
+std::string LocationHandle::toString() const {
+  return fmt::format(
+      "LocationHandle [targetPath: {}, writePath: {}, tableType: {},",
+      targetPath_,
+      writePath_,
+      tableTypeName(tableType_));
+}
+
+void LocationHandle::registerSerDe() {
+  auto& registry = DeserializationRegistryForSharedPtr();
+  registry.Register("LocationHandle", LocationHandle::create);
+}
+
+folly::dynamic LocationHandle::serialize() const {
+  folly::dynamic obj = folly::dynamic::object;
+  obj["name"] = "LocationHandle";
+  obj["targetPath"] = targetPath_;
+  obj["writePath"] = writePath_;
+  obj["tableType"] = tableTypeName(tableType_);
+  return obj;
+}
+
+LocationHandlePtr LocationHandle::create(const folly::dynamic& obj) {
+  auto targetPath = obj["targetPath"].asString();
+  auto writePath = obj["writePath"].asString();
+  auto tableType = tableTypeFromName(obj["tableType"].asString());
+  return std::make_shared<LocationHandle>(targetPath, writePath, tableType);
 }
 
 } // namespace facebook::velox::connector::hive

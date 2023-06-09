@@ -17,6 +17,8 @@
 
 #include "velox/connectors/Connector.h"
 #include "velox/connectors/hive/PartitionIdGenerator.h"
+#include "velox/dwio/common/Options.h"
+#include "velox/dwio/common/Writer.h"
 
 namespace facebook::velox::dwrf {
 class Writer;
@@ -25,8 +27,11 @@ class Writer;
 namespace facebook::velox::connector::hive {
 class HiveColumnHandle;
 
+class LocationHandle;
+using LocationHandlePtr = std::shared_ptr<const LocationHandle>;
+
 /// Location related properties of the Hive table to be written.
-class LocationHandle {
+class LocationHandle : public ISerializable {
  public:
   enum class TableType {
     kNew, // Write to a new table to be created.
@@ -53,6 +58,18 @@ class LocationHandle {
     return tableType_;
   }
 
+  std::string toString() const;
+
+  static void registerSerDe();
+
+  folly::dynamic serialize() const override;
+
+  static LocationHandlePtr create(const folly::dynamic& obj);
+
+  static const std::string tableTypeName(LocationHandle::TableType type);
+
+  static LocationHandle::TableType tableTypeFromName(const std::string& name);
+
  private:
   // Target directory path.
   const std::string targetPath_;
@@ -62,6 +79,9 @@ class LocationHandle {
   const TableType tableType_;
 };
 
+class HiveInsertTableHandle;
+using HiveInsertTableHandlePtr = std::shared_ptr<HiveInsertTableHandle>;
+
 /**
  * Represents a request for Hive write.
  */
@@ -69,9 +89,12 @@ class HiveInsertTableHandle : public ConnectorInsertTableHandle {
  public:
   HiveInsertTableHandle(
       std::vector<std::shared_ptr<const HiveColumnHandle>> inputColumns,
-      std::shared_ptr<const LocationHandle> locationHandle)
+      std::shared_ptr<const LocationHandle> locationHandle,
+      const dwio::common::FileFormat tableStorageFormat =
+          dwio::common::FileFormat::DWRF)
       : inputColumns_(std::move(inputColumns)),
-        locationHandle_(std::move(locationHandle)) {}
+        locationHandle_(std::move(locationHandle)),
+        tableStorageFormat_(tableStorageFormat) {}
 
   virtual ~HiveInsertTableHandle() = default;
 
@@ -84,13 +107,26 @@ class HiveInsertTableHandle : public ConnectorInsertTableHandle {
     return locationHandle_;
   }
 
+  dwio::common::FileFormat tableStorageFormat() const {
+    return tableStorageFormat_;
+  }
+
   bool isPartitioned() const;
 
   bool isInsertTable() const;
 
+  folly::dynamic serialize() const override;
+
+  static HiveInsertTableHandlePtr create(const folly::dynamic& obj);
+
+  static void registerSerDe();
+
+  std::string toString() const;
+
  private:
   const std::vector<std::shared_ptr<const HiveColumnHandle>> inputColumns_;
   const std::shared_ptr<const LocationHandle> locationHandle_;
+  const dwio::common::FileFormat tableStorageFormat_;
 };
 
 /// Parameters for Hive writers.
@@ -228,7 +264,7 @@ class HiveDataSink : public DataSink {
   // Below are structures for partitions from all inputs. writerInfo_ and
   // writers_ are both indexed by partitionId.
   std::vector<std::shared_ptr<HiveWriterInfo>> writerInfo_;
-  std::vector<std::unique_ptr<dwrf::Writer>> writers_;
+  std::vector<std::unique_ptr<dwio::common::Writer>> writers_;
 
   // Below are structures updated when processing current input. partitionIds_
   // are indexed by the row of input_. partitionRows_, rawPartitionRows_ and
