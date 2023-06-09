@@ -182,7 +182,8 @@ class Window : public Operator {
       vector_size_t leftBound,
       vector_size_t rightBound,
       const FlatVectorPtr<T>& valuesVector,
-      const vector_size_t* rawPeerStarts);
+      const vector_size_t* rawPeerStarts,
+      vector_size_t& indexFound);
 
   template <typename T>
   vector_size_t kRangeEndBoundSearch(
@@ -191,7 +192,8 @@ class Window : public Operator {
       vector_size_t rightBound,
       vector_size_t lastRightBoundRow,
       const FlatVectorPtr<T>& valuesVector,
-      const vector_size_t* rawPeerEnds);
+      const vector_size_t* rawPeerEnds,
+      vector_size_t& indexFound);
 
   bool finished_ = false;
   const vector_size_t numInputColumns_;
