@@ -33,15 +33,19 @@ namespace facebook::velox {
 struct Timestamp {
  public:
   enum class Precision : int { kMilliseconds = 3, kNanoseconds = 9 };
+  static constexpr int64_t kMillisecondsInSecond = 1'000;
+  static constexpr int64_t kNanosecondsInMillisecond = 1'000'000;
+
   // We need to limit the range of seconds to avoid some problems.
-  // Seconds in Timestamp need to be in range [INT64_MIN/1000, INT64_MAX/1000].
-  // Presto's Timestamp is stored in milliseconds, this range ensures that
-  // Timestamp's range in Velox will not be smaller than Presto, and can make
-  // Timestamp::toString work correctly.
+  // Seconds in Timestamp need to be in range
+  // [INT64_MIN/1000 - 1, INT64_MAX/1000]. Presto's Timestamp is stored
+  // in one 64-bit signed integer for milliseconds, this range ensures
+  // that Timestamp's range in Velox will not be smaller than Presto,
+  // and can make Timestamp::toString work correctly.
   static constexpr int64_t kMaxSeconds =
-      std::numeric_limits<int64_t>::max() / 1000;
+      std::numeric_limits<int64_t>::max() / kMillisecondsInSecond;
   static constexpr int64_t kMinSeconds =
-      std::numeric_limits<int64_t>::min() / 1000;
+      std::numeric_limits<int64_t>::min() / kMillisecondsInSecond - 1;
 
   // Nanos in Timestamp need to be less than 1 second.
   static constexpr uint64_t kMaxNanos = 999'999'999;
@@ -49,9 +53,9 @@ struct Timestamp {
   constexpr Timestamp() : seconds_(0), nanos_(0) {}
   Timestamp(int64_t seconds, uint64_t nanos)
       : seconds_(seconds), nanos_(nanos) {
-    VELOX_CHECK_GE(seconds, kMinSeconds);
-    VELOX_DCHECK_LE(seconds, kMaxSeconds);
-    VELOX_DCHECK_LE(nanos, kMaxNanos);
+    VELOX_DCHECK_GE(seconds, kMinSeconds, "Timestamp seconds out of range");
+    VELOX_DCHECK_LE(seconds, kMaxSeconds, "Timestamp seconds out of range");
+    VELOX_DCHECK_LE(nanos, kMaxNanos, "Timestamp nanos out of range");
   }
 
   // Returns the current unix timestamp (ms precision).
@@ -66,13 +70,12 @@ struct Timestamp {
   }
 
   int64_t toNanos() const {
-    // int64 can store around 292 years in nanos ~ till 2262-04-12
-    // The addition cannot overflow because the product will be promoted to
-    // uint64_t first and its value is at most UINT64_MAX / 2. However, too
-    // large seconds_ will cause checkedMultiply overflow, we should make
-    // sure the product is less than INT64_MAX.
+    // int64 can store around 292 years in nanos ~ till 2262-04-12.
+    // When an integer overflow occurs in the calculation,
+    // an exception will be thrown.
     try {
-      return checkedMultiply(seconds_, (int64_t)1'000'000'000) + nanos_;
+      return checkedPlus(
+          checkedMultiply(seconds_, (int64_t)1'000'000'000), (int64_t)nanos_);
     } catch (...) {
       VELOX_USER_FAIL(
           "Could not convert Timestamp({}, {}) to nanoseconds, integer overflow");
@@ -80,18 +83,25 @@ struct Timestamp {
   }
 
   int64_t toMillis() const {
-    // The addition cannot overflow because the product will be promoted to
-    // uint64_t first and its value is at most UINT64_MAX / 2. We should make
-    // sure the product is less than INT64_MAX.
-    return checkedMultiply(seconds_, (int64_t)1'000) + nanos_ / 1'000'000;
+    // When an integer overflow occurs in the calculation,
+    // an exception will be thrown.
+    try {
+      return checkedPlus(
+          checkedMultiply(seconds_, (int64_t)1'000),
+          (int64_t)(nanos_ / 1'000'000));
+    } catch (...) {
+      VELOX_USER_FAIL(
+          "Could not convert Timestamp({}, {}) to microseconds, integer overflow");
+    }
   }
 
   int64_t toMicros() const {
-    // The addition cannot overflow because the product will be promoted to
-    // uint64_t first and its value is at most UINT64_MAX / 2. We should make
-    // sure the product is less than INT64_MAX.
+    // When an integer overflow occurs in the calculation,
+    // an exception will be thrown.
     try {
-      return checkedMultiply(seconds_, (int64_t)1'000'000) + nanos_ / 1'000;
+      return checkedPlus(
+          checkedMultiply(seconds_, (int64_t)1'000'000),
+          (int64_t)(nanos_ / 1'000));
     } catch (...) {
       VELOX_USER_FAIL(
           "Could not convert Timestamp({}, {}) to microseconds, integer overflow");
@@ -123,6 +133,32 @@ struct Timestamp {
     auto second = nanos / 1'000'000'000 - 1;
     auto nano = (nanos - second * 1'000'000'000) % 1'000'000'000;
     return Timestamp(second, nano);
+  }
+
+  static const Timestamp minMillis() {
+    // The minimum Timestamp that toMillis() method will not overflow.
+    // Used to calculate the minimum value of the Presto timestamp.
+    constexpr int64_t kMin = std::numeric_limits<int64_t>::min();
+    return Timestamp(
+        kMinSeconds,
+        (kMin % kMillisecondsInSecond + kMillisecondsInSecond) *
+            kNanosecondsInMillisecond);
+  }
+
+  static const Timestamp maxMillis() {
+    // The maximum Timestamp that toMillis() method will not overflow.
+    // Used to calculate the maximum value of the Presto timestamp.
+    constexpr int64_t kMax = std::numeric_limits<int64_t>::max();
+    return Timestamp(
+        kMaxSeconds, kMax % kMillisecondsInSecond * kNanosecondsInMillisecond);
+  }
+
+  static const Timestamp min() {
+    return Timestamp(kMinSeconds, 0);
+  }
+
+  static const Timestamp max() {
+    return Timestamp(kMaxSeconds, kMaxNanos);
   }
 
   // Assuming the timestamp represents a time at zone, converts it to the GMT
@@ -240,6 +276,21 @@ struct hash<::facebook::velox::Timestamp> {
 };
 
 std::string to_string(const ::facebook::velox::Timestamp& ts);
+
+template <>
+class numeric_limits<facebook::velox::Timestamp> {
+ public:
+  static facebook::velox::Timestamp min() {
+    return facebook::velox::Timestamp::min();
+  }
+  static facebook::velox::Timestamp max() {
+    return facebook::velox::Timestamp::max();
+  }
+
+  static facebook::velox::Timestamp lowest() {
+    return facebook::velox::Timestamp::min();
+  }
+};
 
 } // namespace std
 

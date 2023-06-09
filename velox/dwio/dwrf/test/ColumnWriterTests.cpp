@@ -438,7 +438,8 @@ TEST(ColumnWriterTests, TestTimestampBoundaryValuesWriter) {
 TEST(ColumnWriterTests, TestTimestampMixedWriter) {
   std::vector<std::optional<Timestamp>> data;
   for (int64_t i = 0; i < ITERATIONS; ++i) {
-    int64_t seconds = static_cast<int64_t>(Random::rand64());
+    int64_t seconds = static_cast<int64_t>(
+        Random::rand64(Timestamp::kMinSeconds, Timestamp::kMaxSeconds));
     if (seconds < MIN_SECONDS) {
       seconds = MIN_SECONDS;
     }
@@ -461,11 +462,6 @@ void verifyInvalidTimestamp(int64_t seconds, int64_t nanos) {
   data.emplace_back(ts);
   EXPECT_THROW(
       testDataTypeWriter(TIMESTAMP(), data), exception::LoggedException);
-}
-
-TEST(ColumnWriterTests, TestTimestampInvalidWriter) {
-  // Seconds invalid range.
-  verifyInvalidTimestamp(MIN_SECONDS - 1, MAX_NANOS);
 }
 
 TEST(ColumnWriterTests, TestTimestampNullWriter) {

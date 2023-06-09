@@ -248,8 +248,8 @@ TEST_F(HivePartitionFunctionTest, timestamp) {
 
   assertPartitions(values, 1, {0, 0, 0, 0});
   assertPartitions(values, 2, {0, 0, 0, 0});
-  assertPartitions(values, 500, {0, 284, 446, 450});
-  assertPartitions(values, 997, {0, 514, 147, 733});
+  assertPartitions(values, 500, {0, 284, 122, 450});
+  assertPartitions(values, 997, {0, 514, 404, 733});
 
   assertPartitionsWithConstChannel(values, 1);
   assertPartitionsWithConstChannel(values, 2);

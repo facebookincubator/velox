@@ -32,18 +32,6 @@ template <typename T>
 struct MinMaxTrait : public std::numeric_limits<T> {};
 
 template <>
-struct MinMaxTrait<Timestamp> {
-  static Timestamp lowest() {
-    return Timestamp(
-        Timestamp::kMinSeconds, std::numeric_limits<uint64_t>::lowest());
-  }
-
-  static Timestamp max() {
-    return Timestamp(Timestamp::kMaxSeconds, Timestamp::kMaxNanos);
-  }
-};
-
-template <>
 struct MinMaxTrait<Date> {
   static constexpr Date lowest() {
     return Date(std::numeric_limits<int32_t>::lowest());

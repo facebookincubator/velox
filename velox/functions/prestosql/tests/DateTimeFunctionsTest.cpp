@@ -481,34 +481,6 @@ TEST_F(DateTimeFunctionsTest, yearTimestampWithTimezone) {
           "year(c0)", std::nullopt, std::nullopt));
 }
 
-TEST_F(DateTimeFunctionsTest, timestampTooLarge) {
-  std::vector<std::string> functions = {
-      "year",
-      "quarter",
-      "month",
-      "week",
-      "day",
-      "dow",
-      "doy",
-      "yow",
-      "hour",
-      "minute",
-      "second",
-  };
-
-  Timestamp ts(100'000'000'000'000'000, 0);
-  for (const auto& function : functions) {
-    VELOX_ASSERT_THROW(
-        evaluateOnce<int64_t>(
-            fmt::format("{}(c0)", function), std::make_optional(ts)),
-        "Timestamp is too large: 100000000000000000 seconds since epoch");
-  }
-
-  VELOX_ASSERT_THROW(
-      evaluateOnce<int64_t>("date_trunc('hour', c0)", std::make_optional(ts)),
-      "Timestamp is too large: 100000000000000000 seconds since epoch");
-}
-
 TEST_F(DateTimeFunctionsTest, weekDate) {
   const auto weekDate = [&](const char* dateString) {
     auto date = std::make_optional(parseDate(dateString));

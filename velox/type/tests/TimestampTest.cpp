@@ -72,13 +72,16 @@ TEST(TimestampTest, fromNanos) {
 
 TEST(TimestampTest, arithmeticOverflow) {
   int64_t positiveSecond = Timestamp::kMaxSeconds;
-  uint64_t nano = 123 * 1'000'000;
+  int64_t negativeSecond = Timestamp::kMinSeconds;
+  uint64_t nano = Timestamp::kMaxNanos;
 
   Timestamp ts1(positiveSecond, nano);
+  VELOX_ASSERT_THROW(ts1.toMillis(), "Could not convert Timestamp");
   VELOX_ASSERT_THROW(ts1.toMicros(), "Could not convert Timestamp");
   VELOX_ASSERT_THROW(ts1.toNanos(), "Could not convert Timestamp");
 
-  Timestamp ts2(-positiveSecond, nano);
+  Timestamp ts2(negativeSecond, 0);
+  VELOX_ASSERT_THROW(ts2.toMillis(), "Could not convert Timestamp");
   VELOX_ASSERT_THROW(ts2.toMicros(), "Could not convert Timestamp");
   VELOX_ASSERT_THROW(ts2.toNanos(), "Could not convert Timestamp");
 }
@@ -134,30 +137,26 @@ DEBUG_ONLY_TEST(TimestampTest, invalidInput) {
   constexpr int64_t kInt64Min = std::numeric_limits<int64_t>::min();
   constexpr int64_t kInt64Max = std::numeric_limits<int64_t>::max();
   // Seconds invalid range.
-  VELOX_ASSERT_THROW(
-      Timestamp(kInt64Min, 1),
-      fmt::format("({} vs. {})", kInt64Min, Timestamp::kMinSeconds));
-  VELOX_ASSERT_THROW(
-      Timestamp(kInt64Max, 1),
-      fmt::format("({} vs. {})", kInt64Max, Timestamp::kMaxSeconds));
+  VELOX_ASSERT_THROW(Timestamp(kInt64Min, 1), "Timestamp seconds out of range");
+  VELOX_ASSERT_THROW(Timestamp(kInt64Max, 1), "Timestamp seconds out of range");
   VELOX_ASSERT_THROW(
       Timestamp(Timestamp::kMinSeconds - 1, 1),
-      fmt::format(
-          "({} vs. {})", Timestamp::kMinSeconds - 1, Timestamp::kMinSeconds));
+      "Timestamp seconds out of range");
   VELOX_ASSERT_THROW(
       Timestamp(Timestamp::kMaxSeconds + 1, 1),
-      fmt::format(
-          "({} vs. {})", Timestamp::kMaxSeconds + 1, Timestamp::kMaxSeconds));
+      "Timestamp seconds out of range");
 
   // Nanos invalid range.
+  VELOX_ASSERT_THROW(Timestamp(1, kUint64Max), "Timestamp nanos out of range");
   VELOX_ASSERT_THROW(
-      Timestamp(1, kUint64Max),
-      fmt::format("({} vs. {})", kUint64Max, Timestamp::kMaxNanos));
-  VELOX_ASSERT_THROW(
-      Timestamp(1, Timestamp::kMaxNanos + 1),
-      fmt::format(
-          "({} vs. {})", Timestamp::kMaxNanos + 1, Timestamp::kMaxNanos));
+      Timestamp(1, Timestamp::kMaxNanos + 1), "Timestamp nanos out of range");
 }
 
+TEST(TimestampTest, toString) {
+  auto kMin = Timestamp(Timestamp::kMinSeconds, 0);
+  auto kMax = Timestamp(Timestamp::kMaxSeconds, Timestamp::kMaxNanos);
+  EXPECT_EQ("-292275055-05-16T16:47:04.000000000", kMin.toString());
+  EXPECT_EQ("292278994-08-17T07:12:55.999999999", kMax.toString());
+}
 } // namespace
 } // namespace facebook::velox
