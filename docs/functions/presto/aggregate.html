@@ -163,6 +163,30 @@ boolean, timestamp, and date input types.</p>
 </dd></dl>
 
 <dl class="py function">
+<dt class="sig sig-object py" id="set_agg">
+<span class="sig-name descname"><span class="pre">set_agg</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">x</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">array&lt;[same</span> <span class="pre">as</span> <span class="pre">input]&gt;</span></span></span><a class="headerlink" href="#set_agg" title="Permalink to this definition">¶</a></dt>
+<dd><p>Returns an array created from the distinct input <code class="docutils literal notranslate"><span class="pre">x</span></code> elements.</p>
+<p>Supported types of <code class="docutils literal notranslate"><span class="pre">x</span></code> are: TINYINT, SMALLINT, INTEGER, BIGINT.</p>
+</dd></dl>
+
+<dl class="py function">
+<dt class="sig sig-object py" id="set_union">
+<span class="sig-name descname"><span class="pre">set_union</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">array(T))</span> <span class="pre">-&gt;</span> <span class="pre">array(T</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#set_union" title="Permalink to this definition">¶</a></dt>
+<dd><p>Returns an array of all the distinct values contained in each array of the input.</p>
+<p>Example:</p>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">SELECT</span> <span class="n">set_union</span><span class="p">(</span><span class="n">elements</span><span class="p">)</span>
+<span class="n">FROM</span> <span class="p">(</span>
+    <span class="n">VALUES</span>
+        <span class="n">ARRAY</span><span class="p">[</span><span class="mi">1</span><span class="p">,</span> <span class="mi">2</span><span class="p">,</span> <span class="mi">3</span><span class="p">],</span>
+        <span class="n">ARRAY</span><span class="p">[</span><span class="mi">2</span><span class="p">,</span> <span class="mi">3</span><span class="p">,</span> <span class="mi">4</span><span class="p">]</span>
+<span class="p">)</span> <span class="n">AS</span> <span class="n">t</span><span class="p">(</span><span class="n">elements</span><span class="p">);</span>
+</pre></div>
+</div>
+<p>Returns ARRAY[1, 2, 3, 4]</p>
+<p>Supported types are: TINYINT, SMALLINT, INTEGER, BIGINT.</p>
+</dd></dl>
+
+<dl class="py function">
 <dt class="sig sig-object py" id="sum">
 <span class="sig-name descname"><span class="pre">sum</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">x</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">[same</span> <span class="pre">as</span> <span class="pre">input]</span></span></span><a class="headerlink" href="#sum" title="Permalink to this definition">¶</a></dt>
 <dd><p>Returns the sum of all input values.</p>
