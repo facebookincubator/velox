@@ -34,7 +34,7 @@ class TestConnector : public connector::Connector {
           std::string,
           std::shared_ptr<connector::ColumnHandle>>& /* columnHandles */,
       connector::ConnectorQueryCtx* connectorQueryCtx,
-      const dwio::common::ReaderOptions& options) override {
+      const dwio::common::ReaderOptions& /*options*/) override {
     VELOX_NYI();
   }
 

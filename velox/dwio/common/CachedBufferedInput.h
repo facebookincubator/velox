@@ -87,7 +87,7 @@ class CachedBufferedInput : public BufferedInput {
       uint64_t groupId,
       std::shared_ptr<IoStatistics> ioStats,
       folly::Executor* FOLLY_NULLABLE executor,
-      const ReaderOptions readerOptions)
+      const ReaderOptions& readerOptions)
       : BufferedInput(std::move(input), readerOptions.getMemoryPool()),
         cache_(cache),
         fileNum_(fileNum),

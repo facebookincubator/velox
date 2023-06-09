@@ -167,8 +167,15 @@ DEFINE_bool(
 DEFINE_validator(data_path, &notEmpty);
 DEFINE_validator(data_format, &validateDataFormat);
 
-DECLARE_int32(max_coalesced_distance_bytes);
-DECLARE_int64(max_coalesced_bytes);
+DEFINE_int64(
+    max_coalesced_bytes,
+    128 << 20,
+    "Maximum size of single coalesced IO");
+
+DEFINE_int32(
+    max_coalesced_distance_bytes,
+    512 << 10,
+    "Maximum distance in bytes in which coalesce will combine requests");
 
 struct RunStats {
   std::map<std::string, std::string> flags;

@@ -24,17 +24,8 @@ DEFINE_int32(
     80,
     "Minimum percentage of actual uses over references to a column for prefetching. No prefetch if > 100");
 
-DEFINE_int64(
-    max_coalesced_bytes,
-    128 << 20,
-    "Maximum size of single coalesced IO");
-
-DEFINE_int32(
-    max_coalesced_distance_bytes,
-    512 << 10,
-    "Maximum distance in bytes in which coalesce will combine requests");
-    
-using ::facebook::velox::common::Region;
+DECLARE_int32(max_coalesced_distance_bytes);
+DECLARE_int64(max_coalesced_bytes);
 
 namespace facebook::velox::dwio::common {
 

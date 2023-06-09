@@ -174,7 +174,7 @@ class HiveConnectorTestBase : public OperatorTestBase {
 class HiveConnectorSplitBuilder {
  public:
   HiveConnectorSplitBuilder(std::string filePath)
-      : filePath_{std::move(filePath)} {}
+      : filePath_{std::move(filePath)}, readerOptions_(nullptr) {}
 
   HiveConnectorSplitBuilder& start(uint64_t start) {
     start_ = start;
@@ -204,7 +204,7 @@ class HiveConnectorSplitBuilder {
   }
 
   HiveConnectorSplitBuilder& readerOptions(
-      std::shared_ptr<dwio::common::ReaderOptions>& options) {
+      dwio::common::ReaderOptions& options) {
     readerOptions_ = options;
     return *this;
   }
@@ -231,7 +231,7 @@ class HiveConnectorSplitBuilder {
   uint64_t length_{std::numeric_limits<uint64_t>::max()};
   std::unordered_map<std::string, std::optional<std::string>> partitionKeys_;
   std::optional<int32_t> tableBucketNumber_;
-  std::shared_ptr<dwio::common::ReaderOptions> readerOptions_;
+  dwio::common::ReaderOptions readerOptions_;
 };
 
 } // namespace facebook::velox::exec::test
