@@ -17,6 +17,7 @@
 
 #include "velox/connectors/Connector.h"
 #include "velox/connectors/hive/PartitionIdGenerator.h"
+#include "velox/core/PlanNode.h"
 #include "velox/dwio/common/Options.h"
 #include "velox/dwio/common/Writer.h"
 
@@ -34,8 +35,10 @@ using LocationHandlePtr = std::shared_ptr<const LocationHandle>;
 class LocationHandle : public ISerializable {
  public:
   enum class TableType {
-    kNew, // Write to a new table to be created.
-    kExisting, // Write to an existing table.
+    /// Writes to a new table to be created.
+    kNew,
+    /// Writes to an existing table.
+    kExisting,
   };
 
   LocationHandle(
@@ -79,6 +82,88 @@ class LocationHandle : public ISerializable {
   const TableType tableType_;
 };
 
+class HiveSortingColumn : public ISerializable {
+ public:
+  HiveSortingColumn(const std::string& sortColumn, core::SortOrder sortOrder);
+
+  const std::string& sortColumn() const {
+    return sortColumn_;
+  }
+
+  core::SortOrder sortOrder() const {
+    return sortOrder_;
+  }
+
+  folly::dynamic serialize() const override {
+    VELOX_NYI("Unimplemented");
+  }
+
+  static HiveSortingColumn create(const folly::dynamic& obj) {
+    VELOX_NYI("Unimplemented");
+  }
+
+  std::string toString() const;
+
+ private:
+  const std::string sortColumn_;
+  const core::SortOrder sortOrder_;
+};
+
+class HiveBucketProperty : public ISerializable {
+ public:
+  enum class Kind { HIVE_COMPATIBLE, PRESTO_NATIVE };
+
+  HiveBucketProperty(
+      Kind kind,
+      int32_t bucketCount,
+      const std::vector<std::string>& bucketedBy,
+      const std::vector<TypePtr>& bucketedTypes,
+      const std::vector<HiveSortingColumn>& sortedBy);
+
+  Kind kind() const {
+    return kind_;
+  }
+
+  /// Returns the number of bucket count.
+  int32_t bucketCount() const {
+    return bucketCount_;
+  }
+
+  /// Returns the bucketed by column names.
+  const std::vector<std::string>& bucketedBy() const {
+    return bucketedBy_;
+  }
+
+  folly::dynamic serialize() const override {
+    VELOX_NYI("Unimplemented");
+  }
+
+  static HiveBucketProperty create(const folly::dynamic& obj) {
+    VELOX_NYI("Unimplemented");
+  }
+
+  bool operator==(const HiveBucketProperty& other) const {
+    return true;
+  }
+
+  std::string toString() const {
+    VELOX_NYI("Unimplemented");
+  };
+
+ private:
+  void validate() const;
+
+  const Kind kind_;
+  // The number of buckets.
+  const int32_t bucketCount_;
+  // The bucketed by column names.
+  const std::vector<std::string> bucketedBy_;
+  // The bucketed by data types.
+  const std::vector<TypePtr> bucketTypes_;
+  // The sort by column and order which is optional.
+  const std::vector<HiveSortingColumn> sortedBy_;
+};
+
 class HiveInsertTableHandle;
 using HiveInsertTableHandlePtr = std::shared_ptr<HiveInsertTableHandle>;
 
@@ -90,11 +175,13 @@ class HiveInsertTableHandle : public ConnectorInsertTableHandle {
   HiveInsertTableHandle(
       std::vector<std::shared_ptr<const HiveColumnHandle>> inputColumns,
       std::shared_ptr<const LocationHandle> locationHandle,
-      const dwio::common::FileFormat tableStorageFormat =
-          dwio::common::FileFormat::DWRF)
+      dwio::common::FileFormat tableStorageFormat =
+          dwio::common::FileFormat::DWRF,
+      std::optional<HiveBucketProperty> bucketProperty = std::nullopt)
       : inputColumns_(std::move(inputColumns)),
         locationHandle_(std::move(locationHandle)),
-        tableStorageFormat_(tableStorageFormat) {}
+        tableStorageFormat_(tableStorageFormat),
+        bucketProperty_(std::move(bucketProperty)) {}
 
   virtual ~HiveInsertTableHandle() = default;
 
@@ -113,6 +200,10 @@ class HiveInsertTableHandle : public ConnectorInsertTableHandle {
 
   bool isPartitioned() const;
 
+  bool isBucketed() const;
+
+  const HiveBucketProperty& bucketProperty() const;
+
   bool isInsertTable() const;
 
   folly::dynamic serialize() const override;
@@ -127,6 +218,45 @@ class HiveInsertTableHandle : public ConnectorInsertTableHandle {
   const std::vector<std::shared_ptr<const HiveColumnHandle>> inputColumns_;
   const std::shared_ptr<const LocationHandle> locationHandle_;
   const dwio::common::FileFormat tableStorageFormat_;
+  const std::optional<HiveBucketProperty> bucketProperty_;
+};
+
+struct HiveWriterId {
+  uint64_t partitionId;
+  std::optional<uint32_t> bucketId;
+
+  explicit HiveWriterId(uint64_t _partitionId)
+      : HiveWriterId(_partitionId, std::nullopt) {}
+
+  HiveWriterId(uint64_t _partitionId, std::optional<uint32_t> _bucketId)
+      : partitionId(_partitionId), bucketId(_bucketId) {}
+
+  std::string toString() const {
+    if (bucketId.has_value()) {
+      return fmt::format("{}_{}", partitionId, bucketId.value());
+    } else {
+      return fmt::format("{}_NULL", partitionId);
+    }
+  }
+
+  bool operator==(const HiveWriterId& other) const {
+    return std::tie(partitionId, bucketId) ==
+        std::tie(other.partitionId, other.bucketId);
+  }
+};
+
+struct HiveWriterIdHasher {
+  std::size_t operator()(const HiveWriterId& id) const {
+    return facebook::velox::bits::hashMix(
+        id.partitionId, id.bucketId.value_or(0));
+  }
+};
+
+struct HiveWriterIdEq {
+  constexpr bool operator()(const HiveWriterId& lhs, const HiveWriterId& rhs)
+      const {
+    return lhs == rhs;
+  }
 };
 
 /// Parameters for Hive writers.
@@ -235,44 +365,96 @@ class HiveDataSink : public DataSink {
   void close() override;
 
  private:
+#if 0
+  // Returns the writer with given hive writer id. The function returns null if
+  // no writer is found for the given 'id'.
+  FOLLY_ALWAYS_INLINE dwio::common::Writer* writer(
+      const HiveWriterId& id) const {
+    auto it = writers_.find(id);
+    if (it == writers_.end()) {
+      return nullptr;
+    }
+    return it->second.get();
+  }
+
+  // Returns the writer info with given hive writer id. The function returns
+  // null if no writer info is found for the given 'id'.
+  FOLLY_ALWAYS_INLINE HiveWriterInfo* writerInfo(const HiveWriterId& id) const {
+    auto it = writerInfo_.find(id);
+    if (it == writerInfo_.end()) {
+      return nullptr;
+    }
+    return it->second.get();
+  }
+#endif
+
   // Pass 0 as partitionId when creating the single writer for an
   // unpartitioned table.
-  void appendWriter(const std::optional<std::string>& partitionName);
+  void appendWriter(const HiveWriterId& id);
 
   // Make sure to create the one writer for unpartitioned table.
   void ensureSingleWriter();
 
-  // Make sure every partition has one writer created for it.
-  void ensurePartitionWriters();
+  // Make sure the writer created for the given hive writer id.
+  void ensurePartitionWriter(const HiveWriterId& id);
 
   // Compute the number of rows as well as the actual row indices corresponding
   // to every partition ID, based on the ID labeling of partitionIds_.
-  void computePartitionRowCountsAndIndices();
+  void computePartitionRowsAndEnsureWriters();
+
+  void maybeCalculateBucketIdVector(RowVectorPtr input);
 
   HiveWriterParameters getWriterParameters(
-      const std::optional<std::string>& partition) const;
+      const std::optional<std::string>& partition,
+      std::optional<uint32_t> bucketId) const;
 
   HiveWriterParameters::UpdateMode getUpdateMode() const;
 
   const RowTypePtr inputType_;
   const std::shared_ptr<const HiveInsertTableHandle> insertTableHandle_;
   const ConnectorQueryCtx* connectorQueryCtx_;
+  const uint32_t maxOpenWriters_;
   const CommitStrategy commitStrategy_;
   const std::vector<column_index_t> partitionChannels_;
   const std::unique_ptr<PartitionIdGenerator> partitionIdGenerator_;
+  const std::unique_ptr<core::PartitionFunction> bucketFunction_;
 
   // Below are structures for partitions from all inputs. writerInfo_ and
   // writers_ are both indexed by partitionId.
-  std::vector<std::shared_ptr<HiveWriterInfo>> writerInfo_;
-  std::vector<std::unique_ptr<dwio::common::Writer>> writers_;
+  std::unordered_map<
+      HiveWriterId,
+      std::shared_ptr<HiveWriterInfo>,
+      HiveWriterIdHasher,
+      HiveWriterIdEq>
+      writerInfo_;
+  std::unordered_map<
+      HiveWriterId,
+      std::unique_ptr<dwio::common::Writer>,
+      HiveWriterIdHasher,
+      HiveWriterIdEq>
+      writers_;
 
   // Below are structures updated when processing current input. partitionIds_
   // are indexed by the row of input_. partitionRows_, rawPartitionRows_ and
   // partitionSizes_ are indexed by partitionId.
   raw_vector<uint64_t> partitionIds_;
-  std::vector<BufferPtr> partitionRows_;
-  std::vector<vector_size_t*> rawPartitionRows_;
-  std::vector<vector_size_t> partitionSizes_;
-};
+  std::
+      unordered_map<HiveWriterId, BufferPtr, HiveWriterIdHasher, HiveWriterIdEq>
+          partitionRows_;
+  std::unordered_map<
+      HiveWriterId,
+      vector_size_t*,
+      HiveWriterIdHasher,
+      HiveWriterIdEq>
+      rawPartitionRows_;
+  std::unordered_map<
+      HiveWriterId,
+      vector_size_t,
+      HiveWriterIdHasher,
+      HiveWriterIdEq>
+      partitionSizes_;
 
+  // Reusable buffers for bucket id calculations.
+  std::vector<uint32_t> bucketIds_;
+};
 } // namespace facebook::velox::connector::hive

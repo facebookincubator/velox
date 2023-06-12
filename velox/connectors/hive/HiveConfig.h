@@ -43,7 +43,7 @@ class HiveConfig {
   static constexpr const char* kMaxPartitionsPerWriters =
       "max_partitions_per_writers";
 
-  /// Whether new data can be inserted into an unpartition table.
+      /// Whether new data can be inserted into an unpartition table.
   /// Velox currently does not support appending data to existing partitions.
   static constexpr const char* kImmutablePartitions = "immutable_partitions";
 
@@ -82,7 +82,7 @@ class HiveConfig {
   static InsertExistingPartitionsBehavior insertExistingPartitionsBehavior(
       const Config* config);
 
-  static uint32_t maxPartitionsPerWriters(const Config* config);
+  static uint32_t maxPartitionsPerWriter(const Config* config);
 
   static bool immutablePartitions(const Config* config);
 

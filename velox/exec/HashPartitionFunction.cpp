@@ -57,12 +57,14 @@ void HashPartitionFunction::init(
 void HashPartitionFunction::partition(
     const RowVector& input,
     std::vector<uint32_t>& partitions) {
-  auto size = input.size();
+  const auto size = input.size();
 
   rows_.resize(size);
   rows_.setAll();
 
   hashes_.resize(size);
+
+  partitions.resize(input.size());
   for (auto i = 0; i < hashers_.size(); ++i) {
     auto& hasher = hashers_[i];
     if (hasher->channel() != kConstantChannel) {
@@ -73,7 +75,6 @@ void HashPartitionFunction::partition(
     }
   }
 
-  partitions.resize(size);
   if (hashBitRange_.has_value()) {
     for (auto i = 0; i < size; ++i) {
       partitions[i] = hashBitRange_->partition(hashes_[i]);

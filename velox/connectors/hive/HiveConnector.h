@@ -38,10 +38,12 @@ class HiveColumnHandle : public ColumnHandle {
       const std::string& name,
       ColumnType columnType,
       TypePtr dataType,
+      TypePtr hiveType,
       std::vector<common::Subfield> requiredSubfields = {})
       : name_(name),
         columnType_(columnType),
         dataType_(std::move(dataType)),
+        hiveType_(std::move(hiveType)),
         requiredSubfields_(std::move(requiredSubfields)) {}
 
   const std::string& name() const {
@@ -54,6 +56,10 @@ class HiveColumnHandle : public ColumnHandle {
 
   const TypePtr& dataType() const {
     return dataType_;
+  }
+
+  const TypePtr& hiveType() const {
+    return hiveType_;
   }
 
   // Applies to columns of complex types: arrays, maps and structs.  When a
@@ -95,6 +101,7 @@ class HiveColumnHandle : public ColumnHandle {
   const std::string name_;
   const ColumnType columnType_;
   const TypePtr dataType_;
+  const TypePtr hiveType_;
   const std::vector<common::Subfield> requiredSubfields_;
 };
 
@@ -310,14 +317,7 @@ class HiveConnector : public Connector {
       RowTypePtr inputType,
       std::shared_ptr<ConnectorInsertTableHandle> connectorInsertTableHandle,
       ConnectorQueryCtx* connectorQueryCtx,
-      CommitStrategy commitStrategy) override final {
-    auto hiveInsertHandle = std::dynamic_pointer_cast<HiveInsertTableHandle>(
-        connectorInsertTableHandle);
-    VELOX_CHECK_NOT_NULL(
-        hiveInsertHandle, "Hive connector expecting hive write handle!");
-    return std::make_unique<HiveDataSink>(
-        inputType, hiveInsertHandle, connectorQueryCtx, commitStrategy);
-  }
+      CommitStrategy commitStrategy) override final;
 
   folly::Executor* FOLLY_NULLABLE executor() const override {
     return executor_;

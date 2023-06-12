@@ -91,7 +91,10 @@ PlanBuilder& PlanBuilder::tableScan(
     assignments.insert(
         {name,
          std::make_shared<HiveColumnHandle>(
-             hiveColumnName, HiveColumnHandle::ColumnType::kRegular, type)});
+             hiveColumnName,
+             HiveColumnHandle::ColumnType::kRegular,
+             type,
+             nullptr)});
   }
   SubfieldFilters filters;
   filters.reserve(subfieldFilters.size());
