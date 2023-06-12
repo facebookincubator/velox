@@ -32,7 +32,7 @@ class RowFunction : public exec::VectorFunction {
         context.pool(),
         outputType,
         BufferPtr(nullptr),
-        rows.end(),
+        rows.size(),
         std::move(argsCopy),
         0 /*nullCount*/);
     context.moveOrCopyResult(row, rows, result);

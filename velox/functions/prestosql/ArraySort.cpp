@@ -186,7 +186,7 @@ class ArraySortFunction : public exec::VectorFunction {
       exec::LocalSingleRow singleRow(context, flatIndex);
       localResult = applyFlat(*singleRow, flatArray, context);
       localResult =
-          BaseVector::wrapInConstant(rows.end(), flatIndex, localResult);
+          BaseVector::wrapInConstant(rows.size(), flatIndex, localResult);
     } else {
       localResult = applyFlat(rows, arg, context);
     }

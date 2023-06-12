@@ -250,7 +250,7 @@ class ZipWithFunction : public exec::VectorFunction {
     auto* sizes = base->rawSizes();
 
     if (!needsPadding && decoded->isIdentityMapping() && rows.isAllSelected() &&
-        areSameOffsets(offsets, resultOffsets, rows.end())) {
+        areSameOffsets(offsets, resultOffsets, rows.size())) {
       return base->elements();
     }
 
