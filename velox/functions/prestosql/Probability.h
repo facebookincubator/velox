@@ -100,7 +100,10 @@ struct CauchyCDFFunction {
   call(double& result, double median, double scale, double value) {
     static constexpr double kInf = std::numeric_limits<double>::infinity();
     static constexpr double kDoubleMax = std::numeric_limits<double>::max();
-    if (median == kInf || median == kDoubleMax) {
+
+    if (std::isnan(median) || std::isnan(value)) {
+      result = std::numeric_limits<double>::quiet_NaN();
+    } else if (median == kInf || median == kDoubleMax) {
       result = 0.0;
     } else if (scale == kInf) {
       result = 0.5;
