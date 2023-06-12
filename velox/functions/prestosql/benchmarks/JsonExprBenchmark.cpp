@@ -151,8 +151,7 @@ void FollyJsonArrayLength(int iter, int vectorSize, int jsonSize) {
   JsonBenchmark benchmark;
   auto json = benchmark.prepareData(jsonSize);
   suspender.dismiss();
-  benchmark.runWithJson(
-      iter, vectorSize, "folly_json_array_length", json);
+  benchmark.runWithJson(iter, vectorSize, "folly_json_array_length", json);
 }
 
 void SIMDJsonArrayLength(int iter, int vectorSize, int jsonSize) {
@@ -160,8 +159,7 @@ void SIMDJsonArrayLength(int iter, int vectorSize, int jsonSize) {
   JsonBenchmark benchmark;
   auto json = benchmark.prepareData(jsonSize);
   suspender.dismiss();
-  benchmark.runWithJson(
-      iter, vectorSize, "simd_json_array_length", json);
+  benchmark.runWithJson(iter, vectorSize, "simd_json_array_length", json);
 }
 
 BENCHMARK_DRAW_LINE();
@@ -252,11 +250,7 @@ BENCHMARK_RELATIVE_NAMED_PARAM(
     10);
 BENCHMARK_DRAW_LINE();
 
-BENCHMARK_NAMED_PARAM(
-    FollyJsonArrayLength,
-    100_iters_100bytes_size,
-    100,
-    100);
+BENCHMARK_NAMED_PARAM(FollyJsonArrayLength, 100_iters_100bytes_size, 100, 100);
 BENCHMARK_RELATIVE_NAMED_PARAM(
     SIMDJsonArrayLength,
     100_iters_100bytes_size,
