@@ -62,7 +62,7 @@ std::string HiveConfig::insertExistingPartitionsBehaviorString(
 }
 
 // static
-uint32_t HiveConfig::maxPartitionsPerWriters(const Config* config) {
+uint32_t HiveConfig::maxPartitionsPerWriter(const Config* config) {
   return config->get<uint32_t>(kMaxPartitionsPerWriters, 100);
 }
 

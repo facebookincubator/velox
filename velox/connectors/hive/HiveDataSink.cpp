@@ -20,6 +20,8 @@
 #include "velox/common/base/Fs.h"
 #include "velox/connectors/hive/HiveConfig.h"
 #include "velox/connectors/hive/HiveConnector.h"
+#include "velox/connectors/hive/HivePartitionUtil.h"
+#include "velox/exec/HashPartitionFunction.h"
 
 #include <boost/lexical_cast.hpp>
 #include <boost/uuid/uuid_generators.hpp>
@@ -73,7 +75,89 @@ std::unordered_map<V, K> invertMap(const std::unordered_map<K, V>& mapping) {
   return inverted;
 }
 
+std::unique_ptr<core::PartitionFunction> createBucketFunction(
+    HiveBucketProperty* bucketProperty,
+    const RowTypePtr inputType) {
+  if (bucketProperty == nullptr) {
+    return nullptr;
+  }
+  std::vector<column_index_t> bucketedByChannels;
+  for (const auto& column : bucketProperty->bucketedBy()) {
+    for (column_index_t i = 0; i < inputType->size(); ++i) {
+      if (inputType->childAt(i)->name() == column) {
+        bucketedByChannels.push_back(i);
+        break;
+      }
+    }
+  }
+  VELOX_CHECK_EQ(
+      bucketedByChannels.size(), bucketProperty->bucketedBy().size());
+  return std::make_unique<exec::HashPartitionFunction>(
+      bucketProperty->bucketCount(), inputType, bucketedByChannels);
+}
+
+#if 0
+std::string computeBucketedFileName(
+    const std::string& queryId,
+    int32_t bucket) {
+  // std::string paddedBucket = Strings.padStart(Integer.toString(bucket),
+  // BUCKET_NUMBER_PADDING, '0'); return format("0%s_0_%s", paddedBucket,
+  // queryId);
+}
+#endif
+
+HiveWriterId getWriterId(
+    const std::optional<uint64_t>& partitionId,
+    std::optional<uint32_t> bucketId) {
+  return HiveWriterId{partitionId.value_or(0), bucketId.value_or(0)};
+}
+
+HiveWriterId unpartitionedWriterId() {
+  static const HiveWriterId writerId{0};
+  return writerId;
+}
 } // namespace
+
+HiveSortingColumn::HiveSortingColumn(
+    const std::string& sortColumn,
+    core::SortOrder sortOrder)
+    : sortColumn_(sortColumn), sortOrder_(sortOrder) {
+  if (FOLLY_UNLIKELY(
+          sortColumn_.empty() ||
+          (sortOrder_.isAscending() && !sortOrder_.isNullsFirst()) ||
+          (!sortOrder_.isAscending() && sortOrder_.isNullsFirst()))) {
+    VELOX_USER_FAIL("Bad HiveSortingColumn: {}", toString());
+  }
+}
+
+std::string HiveSortingColumn::toString() const {
+  return fmt::format(
+      "[COLUMN{{}} ORDER[{}]]", sortColumn_, sortOrder_.toString());
+}
+
+HiveBucketProperty::HiveBucketProperty(
+    Kind kind,
+    int32_t bucketCount,
+    const std::vector<std::string>& bucketedBy,
+    const std::vector<TypePtr>& bucketTypes,
+    const std::vector<HiveSortingColumn>& sortedBy)
+    : kind_(kind),
+      bucketedBy_(bucketedBy),
+      bucketCount_(bucketCount),
+      bucketTypes_(bucketTypes),
+      sortedBy_(sortedBy) {
+  validate();
+}
+
+void HiveBucketProperty::validate() const {
+  VELOX_USER_CHECK_GT(bucketCount_, 0, "Bucket count can't be zero");
+  VELOX_USER_CHECK(!bucketedBy_.empty(), "Bucket columns can't be empty");
+  VELOX_USER_CHECK_EQ(
+      bucketedBy_.size(),
+      bucketTypes_.size(),
+      "The number of bucket column and type do not match {}",
+      toString());
+}
 
 const std::string LocationHandle::tableTypeName(
     LocationHandle::TableType type) {
@@ -95,16 +179,20 @@ HiveDataSink::HiveDataSink(
     : inputType_(std::move(inputType)),
       insertTableHandle_(std::move(insertTableHandle)),
       connectorQueryCtx_(connectorQueryCtx),
+      maxOpenWriters_(
+          HiveConfig::maxPartitionsPerWriter(connectorQueryCtx_->config())),
       commitStrategy_(commitStrategy),
       partitionChannels_(getPartitionChannels(insertTableHandle_)),
       partitionIdGenerator_(
           !partitionChannels_.empty() ? std::make_unique<PartitionIdGenerator>(
                                             inputType_,
                                             partitionChannels_,
-                                            HiveConfig::maxPartitionsPerWriters(
-                                                connectorQueryCtx_->config()),
+                                            maxOpenWriters_,
                                             connectorQueryCtx_->memoryPool())
-                                      : nullptr) {
+                                      : nullptr),
+      bucketFunction_(createBucketFunction(
+          insertTableHandle_->bucketProperty(),
+          inputType_)) {
   // TODO: remove this hack after Prestissimo adds to register dwrf writer.
   facebook::velox::dwrf::registerDwrfWriterFactory();
 }
@@ -114,15 +202,16 @@ void HiveDataSink::appendData(RowVectorPtr input) {
   if (partitionChannels_.empty()) {
     ensureSingleWriter();
 
-    writers_[0]->write(input);
-    writerInfo_[0]->numWrittenRows += input->size();
+    const auto writerId = unpartitionedWriterId();
+    writers_[writerId]->write(input);
+    writerInfo_[writerId]->numWrittenRows += input->size();
     return;
   }
 
+  maybeCalculateBucketIdVector(input);
+
   // Write to partitioned table.
   partitionIdGenerator_->run(input, partitionIds_);
-
-  ensurePartitionWriters();
 
   for (column_index_t i = 0; i < input->childrenSize(); ++i) {
     input->childAt(i)->loadedVector();
@@ -132,19 +221,20 @@ void HiveDataSink::appendData(RowVectorPtr input) {
 
   // All inputs belong to a single partition.
   if (numPartitions == 1) {
-    writers_[0]->write(input);
-    writerInfo_[0]->numWrittenRows += input->size();
+    const HiveWriterId writerId{partitionIds_[0], bucketIds_[0]};
+    writers_[writerId]->write(input);
+    writerInfo_[writerId]->numWrittenRows += input->size();
     return;
   }
 
-  computePartitionRowCountsAndIndices();
+  computePartitionRowsAndEnsureWriters();
 
-  for (auto id = 0; id < numPartitions; id++) {
-    const vector_size_t partitionSize = partitionSizes_[id];
+  for (auto entry : partitionSizes_) {
+    const vector_size_t partitionSize = entry.second;
     if (partitionSize == 0) {
       continue;
     }
-
+    const HiveWriterId& id = entry.first;
     RowVectorPtr writerInput = partitionSize == input->size()
         ? input
         : exec::wrap(partitionSize, partitionRows_[id], input);
@@ -153,12 +243,20 @@ void HiveDataSink::appendData(RowVectorPtr input) {
   }
 }
 
+void HiveDataSink::maybeCalculateBucketIdVector(RowVectorPtr input) {
+  if (bucketFunction_ == nullptr) {
+    return;
+  }
+  bucketFunction_->partition(*input, bucketIds_);
+}
+
 std::vector<std::string> HiveDataSink::finish() const {
   std::vector<std::string> partitionUpdates;
   partitionUpdates.reserve(writerInfo_.size());
 
-  for (const auto& info : writerInfo_) {
-    if (info != nullptr) {
+  for (const auto& entry : writerInfo_) {
+    if (entry.second != nullptr) {
+      auto& info = entry.second;
       // clang-format off
       auto partitionUpdateJson = folly::toJson(
        folly::dynamic::object
@@ -187,102 +285,123 @@ std::vector<std::string> HiveDataSink::finish() const {
 }
 
 void HiveDataSink::close() {
-  for (const auto& writer : writers_) {
-    writer->close();
+  for (const auto& entry : writers_) {
+    entry.second->close();
   }
 }
 
 void HiveDataSink::ensureSingleWriter() {
   if (writers_.empty()) {
-    appendWriter(std::nullopt);
+    appendWriter(unpartitionedWriterId());
   }
 }
 
-void HiveDataSink::ensurePartitionWriters() {
-  const auto numPartitions = partitionIdGenerator_->numPartitions();
-  const auto numWriters = writers_.size();
-
-  VELOX_CHECK_LE(numWriters, numPartitions);
-
-  if (numWriters < numPartitions) {
-    writers_.reserve(numPartitions);
-    writerInfo_.reserve(numPartitions);
-    for (auto id = numWriters; id < numPartitions; ++id) {
-      appendWriter(partitionIdGenerator_->partitionName(id));
-    }
+void HiveDataSink::ensurePartitionWriter(const HiveWriterId& id) {
+  if (writers_.count(id) != 0) {
+    return;
   }
+  appendWriter(id);
 }
 
-void HiveDataSink::appendWriter(
-    const std::optional<std::string>& partitionName) {
+void HiveDataSink::appendWriter(const HiveWriterId& id) {
+  // Check max open writers.
+  VELOX_USER_CHECK_LE(
+      writers_.size(),
+      maxOpenWriters_,
+      "Exceeded limit of {} open writers for partitions/buckets",
+      maxOpenWriters_);
+  VELOX_CHECK_EQ(writers_.size(), writerInfo_.size());
+
+  std::optional<std::string> partitionName;
+  if (partitionIdGenerator_ != nullptr) {
+    partitionName = partitionIdGenerator_->partitionName(id.partitionId);
+  }
   // Without explicitly setting flush policy, the default memory based flush
   // policy is used.
-  auto writerParameters = getWriterParameters(partitionName);
+  auto writerParameters = getWriterParameters(partitionName, id.bucketId);
   const auto writePath = fs::path(writerParameters.writeDirectory()) /
       writerParameters.writeFileName();
-  writerInfo_.push_back(
-      std::make_shared<HiveWriterInfo>(std::move(writerParameters)));
+  writerInfo_.emplace(
+      id, std::make_shared<HiveWriterInfo>(std::move(writerParameters)));
 
   auto writerFactory =
       dwio::common::getWriterFactory(insertTableHandle_->tableStorageFormat());
   dwio::common::WriterOptions options;
   options.schema = inputType_;
   options.memoryPool = connectorQueryCtx_->connectorMemoryPool();
-  writers_.push_back(writerFactory->createWriter(
-      dwio::common::DataSink::create(writePath), options));
+  writers_.emplace(
+      id,
+      writerFactory->createWriter(
+          dwio::common::DataSink::create(writePath), options));
 }
 
-void HiveDataSink::computePartitionRowCountsAndIndices() {
-  const auto numPartitions = partitionIdGenerator_->numPartitions();
+void HiveDataSink::computePartitionRowsAndEnsureWriters() {
+  VELOX_CHECK_EQ(bucketIds_.size(), partitionIds_.size());
+
+  for (auto entry : partitionSizes_) {
+    entry.second = 0;
+  }
+
   const auto numRows = partitionIds_.size();
-
-  partitionSizes_.resize(numPartitions);
-  std::fill(partitionSizes_.begin(), partitionSizes_.end(), 0);
-
-  partitionRows_.resize(numPartitions, nullptr);
-  rawPartitionRows_.resize(numPartitions);
-  for (auto id = 0; id < numPartitions; ++id) {
-    if ((partitionRows_[id] == nullptr) ||
+  for (auto row = 0; row < numRows; ++row) {
+    const HiveWriterId id{partitionIds_[row], bucketIds_[row]};
+    if (FOLLY_UNLIKELY(partitionRows_[id] == nullptr) ||
         (partitionRows_[id]->capacity() < numRows * sizeof(vector_size_t))) {
+      ensurePartitionWriter(id);
       partitionRows_[id] =
           allocateIndices(numRows, connectorQueryCtx_->memoryPool());
       rawPartitionRows_[id] = partitionRows_[id]->asMutable<vector_size_t>();
     }
-  }
-
-  for (auto row = 0; row < numRows; ++row) {
-    const uint64_t id = partitionIds_[row];
     rawPartitionRows_[id][partitionSizes_[id]] = row;
     ++partitionSizes_[id];
   }
 
-  for (auto id = 0; id < numPartitions; ++id) {
-    partitionRows_[id]->setSize(partitionSizes_[id] * sizeof(vector_size_t));
+  for (auto& entry : partitionRows_) {
+    entry.second->setSize(partitionSizes_[entry.first] * sizeof(vector_size_t));
   }
 }
 
 HiveWriterParameters HiveDataSink::getWriterParameters(
-    const std::optional<std::string>& partition) const {
-  auto updateMode = getUpdateMode();
+    const std::optional<std::string>& partition,
+    std::optional<uint32_t> bucketId) const {
+  const auto updateMode = getUpdateMode();
 
   std::string targetFileName;
   std::string writeFileName;
   switch (commitStrategy_) {
     case CommitStrategy::kNoCommit: {
-      targetFileName = fmt::format(
-          "{}_{}_{}",
-          connectorQueryCtx_->taskId(),
-          connectorQueryCtx_->driverId(),
-          makeUuid());
+      if (bucketId.has_value()) {
+        targetFileName = fmt::format(
+            "{}_{}_{}_{}",
+            connectorQueryCtx_->taskId(),
+            connectorQueryCtx_->driverId(),
+            bucketId.value(),
+            makeUuid());
+      } else {
+        targetFileName = fmt::format(
+            "{}_{}_{}",
+            connectorQueryCtx_->taskId(),
+            connectorQueryCtx_->driverId(),
+            makeUuid());
+      }
       writeFileName = targetFileName;
       break;
     }
     case CommitStrategy::kTaskCommit: {
-      targetFileName = fmt::format(
-          "{}_{}_{}",
-          connectorQueryCtx_->taskId(),
-          connectorQueryCtx_->driverId(),
-          0);
+      if (bucketId.has_value()) {
+        targetFileName = fmt::format(
+            "{}_{}_{}_{}",
+            connectorQueryCtx_->taskId(),
+            connectorQueryCtx_->driverId(),
+            bucketId.value(),
+            0);
+      } else {
+        targetFileName = fmt::format(
+            "{}_{}_{}",
+            connectorQueryCtx_->taskId(),
+            connectorQueryCtx_->driverId(),
+            0);
+      }
       writeFileName =
           fmt::format(".tmp.velox.{}_{}", targetFileName, makeUuid());
       break;
@@ -319,6 +438,9 @@ HiveWriterParameters::UpdateMode HiveDataSink::getUpdateMode() const {
                   insertBehavior));
       }
     } else {
+      if (insertTableHandle_->isBucketed()) {
+        VELOX_USER_FAIL("Cannot insert into bucketed unpartitioned Hive table");
+      }
       if (HiveConfig::immutablePartitions(connectorQueryCtx_->config())) {
         VELOX_USER_FAIL("Unpartitioned Hive tables are immutable.");
       }
@@ -334,6 +456,10 @@ bool HiveInsertTableHandle::isPartitioned() const {
       inputColumns_.begin(), inputColumns_.end(), [](auto column) {
         return column->isPartitionKey();
       });
+}
+
+bool HiveInsertTableHandle::isBucketed() const {
+  return bucketProperty_.has_value();
 }
 
 bool HiveInsertTableHandle::isInsertTable() const {

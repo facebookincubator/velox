@@ -73,6 +73,7 @@ folly::dynamic HiveColumnHandle::serialize() const {
   obj["hiveColumnHandleName"] = name_;
   obj["columnType"] = columnTypeName(columnType_);
   obj["dataType"] = dataType_->serialize();
+  obj["hiveType"] = hiveType_->serialize();
   folly::dynamic requiredSubfields = folly::dynamic::array;
   for (const auto& subfield : requiredSubfields_) {
     requiredSubfields.push_back(subfield.toString());
@@ -84,10 +85,11 @@ folly::dynamic HiveColumnHandle::serialize() const {
 std::string HiveColumnHandle::toString() const {
   std::ostringstream out;
   out << fmt::format(
-      "HiveColumnHandle [name: {}, columnType: {}, dataType: {},",
+      "HiveColumnHandle [name: {}, columnType: {}, dataType: {}, hiveType: {}",
       name_,
       columnTypeName(columnType_),
-      dataType_->toString());
+      dataType_->toString(),
+      hiveType_->toString());
   out << " requiredSubfields: [";
   for (const auto& s : requiredSubfields_) {
     out << " " << s.toString();
@@ -100,6 +102,7 @@ ColumnHandlePtr HiveColumnHandle::create(const folly::dynamic& obj) {
   auto name = obj["hiveColumnHandleName"].asString();
   auto columnType = columnTypeFromName(obj["columnType"].asString());
   auto dataType = ISerializable::deserialize<Type>(obj["dataType"]);
+  auto hiveType = ISerializable::deserialize<Type>(obj["hiveType"]);
 
   const auto& arr = obj["requiredSubfields"];
   std::vector<common::Subfield> requiredSubfields;
@@ -109,7 +112,7 @@ ColumnHandlePtr HiveColumnHandle::create(const folly::dynamic& obj) {
   }
 
   return std::make_shared<HiveColumnHandle>(
-      name, columnType, dataType, std::move(requiredSubfields));
+      name, columnType, dataType, hiveType, std::move(requiredSubfields));
 }
 
 void HiveColumnHandle::registerSerDe() {
@@ -912,6 +915,19 @@ int64_t HiveDataSource::estimatedRowSize() {
     return size.value();
   }
   return kUnknownRowSize;
+}
+
+std::unique_ptr<DataSink> HiveConnector::createDataSink(
+    RowTypePtr inputType,
+    std::shared_ptr<ConnectorInsertTableHandle> connectorInsertTableHandle,
+    ConnectorQueryCtx* connectorQueryCtx,
+    CommitStrategy commitStrategy) {
+  auto hiveInsertHandle = std::dynamic_pointer_cast<HiveInsertTableHandle>(
+      connectorInsertTableHandle);
+  VELOX_CHECK_NOT_NULL(
+      hiveInsertHandle, "Hive connector expecting hive write handle!");
+  return std::make_unique<HiveDataSink>(
+      inputType, hiveInsertHandle, connectorQueryCtx, commitStrategy);
 }
 
 HiveConnector::HiveConnector(

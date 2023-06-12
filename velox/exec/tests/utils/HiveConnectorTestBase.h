@@ -114,14 +114,17 @@ class HiveConnectorTestBase : public OperatorTestBase {
   /// name of tableColumnTypes[i] is tableColumnNames[i].
   /// @param partitionedBy A list of partition columns of the target table.
   /// @param locationHandle Location handle for the table write.
+  /// @param bucketProperty The bucket property of the target table if not null.
   static std::shared_ptr<connector::hive::HiveInsertTableHandle>
   makeHiveInsertTableHandle(
       const std::vector<std::string>& tableColumnNames,
       const std::vector<TypePtr>& tableColumnTypes,
       const std::vector<std::string>& partitionedBy,
       std::shared_ptr<connector::hive::LocationHandle> locationHandle,
-      const dwio::common::FileFormat tableStorageFormat =
-          dwio::common::FileFormat::DWRF);
+      dwio::common::FileFormat tableStorageFormat =
+          dwio::common::FileFormat::DWRF,
+      const std::optional<connector::hive::HiveBucketProperty>& bucketProperty =
+          std::nullopt);
 
   static std::shared_ptr<connector::hive::HiveColumnHandle> regularColumn(
       const std::string& name,

@@ -75,7 +75,7 @@ std::string makePartitionName(
     const RowVectorPtr& partitionsVector,
     vector_size_t row) {
   std::stringstream ss;
-  for (auto i = 0; i < partitionsVector->childrenSize(); i++) {
+  for (auto i = 0; i < partitionsVector->childrenSize(); ++i) {
     if (i > 0) {
       ss << '/';
     }
