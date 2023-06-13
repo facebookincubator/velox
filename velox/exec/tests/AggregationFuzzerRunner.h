@@ -93,6 +93,8 @@ class AggregationFuzzerRunner {
           {"approx_percentile_merge", ""},
           {"arbitrary", ""},
           {"array_agg", "array_sort({})"},
+          {"set_agg", "array_sort({})"},
+          {"set_union", "array_sort({})"},
           {"map_agg", "array_sort(map_keys({}))"},
           {"map_union", "array_sort(map_keys({}))"},
           {"map_union_sum", "array_sort(map_keys({}))"},
@@ -106,6 +108,9 @@ class AggregationFuzzerRunner {
           // https://github.com/facebookincubator/velox/issues/4481
           {"avg_partial", ""},
           {"avg_merge", ""},
+          // Semantically inconsistent functions
+          {"skewness", ""},
+          {"kurtosis", ""},
   };
 
   static int run(const std::string& planPath) {

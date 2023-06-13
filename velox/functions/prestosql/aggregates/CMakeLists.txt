@@ -22,6 +22,7 @@ add_library(
   AverageAggregate.cpp
   BitwiseAggregates.cpp
   BoolAggregates.cpp
+  CentralMomentsAggregates.cpp
   CountIfAggregate.cpp
   CovarianceAggregates.cpp
   ChecksumAggregate.cpp
@@ -34,6 +35,8 @@ add_library(
   MinMaxByAggregates.cpp
   CountAggregate.cpp
   PrestoHasher.cpp
+  SetAggregates.cpp
+  Strings.cpp
   SumAggregate.cpp
   ValueList.cpp
   VarianceAggregates.cpp

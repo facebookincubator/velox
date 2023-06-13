@@ -34,7 +34,7 @@ source $SCRIPTDIR/setup-helper-functions.sh
 NPROC=$(getconf _NPROCESSORS_ONLN)
 
 DEPENDENCY_DIR=${DEPENDENCY_DIR:-$(pwd)}
-MACOS_DEPS="ninja flex bison cmake ccache protobuf icu4c boost gflags glog libevent lz4 lzo snappy xz zstd openssl@1.1"
+MACOS_DEPS="ninja flex bison cmake ccache protobuf@21 icu4c boost gflags glog libevent lz4 lzo snappy xz zstd openssl@1.1"
 
 function run_and_time {
   time "$@" || (echo "Failed to run $* ." ; exit 1 )
@@ -57,11 +57,12 @@ function prompt {
 }
 
 function update_brew {
-  BREW_PATH=/usr/local/bin/brew
+  DEFAULT_BREW_PATH=/usr/local/bin/brew
   if [ `arch` == "arm64" ] ;
-     then
-       BREW_PATH=/opt/homebrew/bin/brew ;
- fi
+    then
+      DEFAULT_BREW_PATH=$(which brew) ;
+  fi
+  BREW_PATH=${BREW_PATH:-$DEFAULT_BREW_PATH}
   $BREW_PATH update --auto-update --verbose
   $BREW_PATH developer off
 }

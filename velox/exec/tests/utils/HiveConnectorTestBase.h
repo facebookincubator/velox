@@ -14,7 +14,10 @@
  * limitations under the License.
  */
 #pragma once
+
 #include "velox/connectors/hive/HiveConnector.h"
+#include "velox/connectors/hive/HiveConnectorSplit.h"
+#include "velox/dwio/dwrf/common/Config.h"
 #include "velox/exec/Operator.h"
 #include "velox/exec/tests/utils/OperatorTestBase.h"
 #include "velox/exec/tests/utils/TempFilePath.h"
@@ -119,7 +122,9 @@ class HiveConnectorTestBase : public OperatorTestBase {
       const std::vector<std::string>& tableColumnNames,
       const std::vector<TypePtr>& tableColumnTypes,
       const std::vector<std::string>& partitionedBy,
-      std::shared_ptr<connector::hive::LocationHandle> locationHandle);
+      std::shared_ptr<connector::hive::LocationHandle> locationHandle,
+      const dwio::common::FileFormat tableStorageFormat =
+          dwio::common::FileFormat::DWRF);
 
   static std::shared_ptr<connector::hive::HiveColumnHandle> regularColumn(
       const std::string& name,

@@ -1081,8 +1081,13 @@ TEST(TestReader, testUpcastBoolean) {
           HiveTypeParser().parse("struct<col0:int>"));
   ColumnSelector cs(reqType, rowType);
   EXPECT_CALL(streams, getColumnSelectorProxy()).WillRepeatedly(Return(&cs));
+  AllocationPool allocPool(defaultPool.get());
+  StreamLabels labels(allocPool);
   std::unique_ptr<ColumnReader> reader = ColumnReader::build(
-      TypeWithId::create(reqType), TypeWithId::create(rowType), streams);
+      TypeWithId::create(reqType),
+      TypeWithId::create(rowType),
+      streams,
+      labels);
 
   VectorPtr batch;
   reader->next(104, batch);
@@ -1125,8 +1130,13 @@ TEST(TestReader, testUpcastIntDirect) {
 
   ColumnSelector cs(reqType, rowType);
   EXPECT_CALL(streams, getColumnSelectorProxy()).WillRepeatedly(Return(&cs));
+  AllocationPool allocPool(defaultPool.get());
+  StreamLabels labels(allocPool);
   std::unique_ptr<ColumnReader> reader = ColumnReader::build(
-      TypeWithId::create(reqType), TypeWithId::create(rowType), streams);
+      TypeWithId::create(reqType),
+      TypeWithId::create(rowType),
+      streams,
+      labels);
 
   VectorPtr batch;
   reader->next(100, batch);
@@ -1186,8 +1196,13 @@ TEST(TestReader, testUpcastIntDict) {
           HiveTypeParser().parse("struct<col0:bigint>"));
   ColumnSelector cs(reqType, rowType);
   EXPECT_CALL(streams, getColumnSelectorProxy()).WillRepeatedly(Return(&cs));
+  AllocationPool allocPool(defaultPool.get());
+  StreamLabels labels(allocPool);
   std::unique_ptr<ColumnReader> reader = ColumnReader::build(
-      TypeWithId::create(reqType), TypeWithId::create(rowType), streams);
+      TypeWithId::create(reqType),
+      TypeWithId::create(rowType),
+      streams,
+      labels);
 
   VectorPtr batch;
   reader->next(100, batch);
@@ -1235,8 +1250,13 @@ TEST(TestReader, testUpcastFloat) {
           HiveTypeParser().parse("struct<col0:double>"));
   ColumnSelector cs(reqType, rowType);
   EXPECT_CALL(streams, getColumnSelectorProxy()).WillRepeatedly(Return(&cs));
+  AllocationPool allocPool(defaultPool.get());
+  StreamLabels labels(allocPool);
   std::unique_ptr<ColumnReader> reader = ColumnReader::build(
-      TypeWithId::create(reqType), TypeWithId::create(rowType), streams);
+      TypeWithId::create(reqType),
+      TypeWithId::create(rowType),
+      streams,
+      labels);
 
   VectorPtr batch;
   reader->next(100, batch);
@@ -1718,7 +1738,7 @@ void verifyRowNumbers(
   ASSERT_EQ(numRows, expectedNumRows);
 }
 
-std::pair<std::unique_ptr<Writer>, std::unique_ptr<DwrfReader>>
+std::pair<std::unique_ptr<dwrf::Writer>, std::unique_ptr<DwrfReader>>
 createWriterReader(
     const std::vector<VectorPtr>& batches,
     memory::MemoryPool& pool) {

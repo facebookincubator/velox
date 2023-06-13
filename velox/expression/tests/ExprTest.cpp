@@ -171,6 +171,25 @@ class ExprTest : public testing::Test, public VectorTestBase {
     return result[0];
   }
 
+  template <typename T = exec::ExprSet>
+  void evalWithEmptyRows(
+      const std::string& expr,
+      const RowVectorPtr& input,
+      VectorPtr& result,
+      const VectorPtr& expected) {
+    parse::ParseOptions options;
+    auto untyped = parse::parseExpr(expr, options);
+    auto typedExpr = core::Expressions::inferTypes(
+        untyped, asRowType(input->type()), pool());
+
+    SelectivityVector rows{input->size(), false};
+    T exprSet({typedExpr}, execCtx_.get());
+    exec::EvalCtx evalCtx(execCtx_.get(), &exprSet, input.get());
+    std::vector<VectorPtr> results{result};
+    exprSet.eval(rows, evalCtx, results);
+    assertEqualVectors(result, expected);
+  }
+
   template <typename T = ComplexType>
   std::shared_ptr<core::ConstantTypedExpr> makeConstantExpr(
       const VectorPtr& base,
@@ -3899,5 +3918,45 @@ TEST_F(ExprTest, dictionaryResizeWithIndicesReset) {
   auto result = evaluate(
       "coalesce(plus(c0, 1::BIGINT), 1::BIGINT)", makeRowVector({wrappedC0}));
   auto expected = makeNullableFlatVector<int64_t>({2, 2, 1});
+  assertEqualVectors(expected, result);
+}
+
+TEST_F(ExprTest, noSelectedRows) {
+  VectorPtr result = makeFlatVector<int64_t>({7, 8, 9});
+  auto expected = makeFlatVector<int64_t>({7, 8, 9});
+
+  // Test evalFlatNoNulls code path.
+  {
+    auto input = makeRowVector(
+        {makeFlatVector<int64_t>({1, 2, 3}),
+         makeFlatVector<int64_t>({4, 5, 6})});
+    evalWithEmptyRows("c0 + c1", input, result, expected);
+  }
+
+  // Test regular evaluation path.
+  {
+    auto input = makeRowVector(
+        {makeNullableFlatVector<int64_t>({1, std::nullopt, 3}),
+         makeNullableFlatVector<int64_t>({std::nullopt, 5, 6})});
+    evalWithEmptyRows("c0 + c1", input, result, expected);
+  }
+
+  // Test simplified evaluation path.
+  {
+    auto input = makeRowVector(
+        {makeNullableFlatVector<int64_t>({1, std::nullopt, 3}),
+         makeNullableFlatVector<int64_t>({std::nullopt, 5, 6})});
+    evalWithEmptyRows<exec::ExprSetSimplified>(
+        "c0 + c1", input, result, expected);
+  }
+}
+
+TEST_F(ExprTest, multiplyReferencedConstantField) {
+  auto data = makeRowVector(
+      {makeFlatVector<bool>({true, false, true, false}),
+       makeConstantArray<int64_t>(4, {1, 2, 3})});
+
+  auto result = evaluate("if(c0, c1, c1)", data);
+  auto expected = makeConstantArray<int64_t>(4, {1, 2, 3});
   assertEqualVectors(expected, result);
 }

@@ -40,7 +40,7 @@ SelectiveIntegerDictionaryColumnReader::SelectiveIntegerDictionaryColumnReader(
   auto data = encodingKey.forKind(proto::Stream_Kind_DATA);
   bool dataVInts = stripe.getUseVInts(data);
   dataReader_ = createRleDecoder</* isSigned = */ false>(
-      stripe.getStream(data, true),
+      stripe.getStream(data, params.streamLabels().label(), true),
       rleVersion_,
       memoryPool_,
       dataVInts,
@@ -48,10 +48,12 @@ SelectiveIntegerDictionaryColumnReader::SelectiveIntegerDictionaryColumnReader(
 
   // make a lazy dictionary initializer
   dictInit_ = stripe.getIntDictionaryInitializerForNode(
-      encodingKey, numBytes, numBytes);
+      encodingKey, numBytes, params.streamLabels(), numBytes);
 
   auto inDictStream = stripe.getStream(
-      encodingKey.forKind(proto::Stream_Kind_IN_DICTIONARY), false);
+      encodingKey.forKind(proto::Stream_Kind_IN_DICTIONARY),
+      params.streamLabels().label(),
+      false);
   if (inDictStream) {
     inDictionaryReader_ =
         createBooleanRleDecoder(std::move(inDictStream), encodingKey);
@@ -109,15 +111,16 @@ void SelectiveIntegerDictionaryColumnReader::ensureInitialized() {
 
   Timer timer;
   scanState_.dictionary.values = dictInit_();
-  // Make sure there is a cache even for an empty dictionary because
-  // of asan failure when preparing a gather with all lanes masked
-  // out.
-  scanState_.filterCache.resize(
-      std::max<int32_t>(1, scanState_.dictionary.numValues));
-  simd::memset(
-      scanState_.filterCache.data(),
-      FilterResult::kUnknown,
-      scanState_.filterCache.size());
+  if (scanSpec_->hasFilter()) {
+    // Make sure there is a cache even for an empty dictionary because of asan
+    // failure when preparing a gather with all lanes masked out.
+    scanState_.filterCache.resize(
+        std::max<int32_t>(1, scanState_.dictionary.numValues));
+    simd::memset(
+        scanState_.filterCache.data(),
+        FilterResult::kUnknown,
+        scanState_.filterCache.size());
+  }
   initialized_ = true;
   initTimeClocks_ = timer.elapsedClocks();
   scanState_.updateRawState();

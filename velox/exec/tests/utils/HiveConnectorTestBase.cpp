@@ -15,13 +15,11 @@
  */
 
 #include "velox/exec/tests/utils/HiveConnectorTestBase.h"
-#include "velox/common/base/Fs.h"
+
 #include "velox/common/file/FileSystems.h"
-#include "velox/connectors/hive/HiveConnector.h"
 #include "velox/dwio/common/tests/utils/BatchMaker.h"
 #include "velox/dwio/dwrf/reader/DwrfReader.h"
 #include "velox/dwio/dwrf/writer/Writer.h"
-#include "velox/exec/tests/utils/QueryAssertions.h"
 
 namespace facebook::velox::exec::test {
 
@@ -37,6 +35,7 @@ void HiveConnectorTestBase::SetUp() {
           ->newConnector(kHiveConnectorId, nullptr, ioExecutor_.get());
   connector::registerConnector(hiveConnector);
   dwrf::registerDwrfReaderFactory();
+  dwrf::registerDwrfWriterFactory();
 }
 
 void HiveConnectorTestBase::TearDown() {
@@ -44,6 +43,7 @@ void HiveConnectorTestBase::TearDown() {
   // connector.
   ioExecutor_.reset();
   dwrf::unregisterDwrfReaderFactory();
+  dwrf::unregisterDwrfWriterFactory();
   connector::unregisterConnector(kHiveConnectorId);
   OperatorTestBase::TearDown();
 }
@@ -58,13 +58,14 @@ void HiveConnectorTestBase::writeToFile(
     const std::string& filePath,
     const std::vector<RowVectorPtr>& vectors,
     std::shared_ptr<dwrf::Config> config) {
-  facebook::velox::dwrf::WriterOptions options;
+  velox::dwrf::WriterOptions options;
   options.config = config;
   options.schema = vectors[0]->type();
   auto sink =
       std::make_unique<facebook::velox::dwio::common::LocalFileSink>(filePath);
   auto childPool = rootPool_->addAggregateChild("HiveConnectorTestBase.Writer");
-  facebook::velox::dwrf::Writer writer{options, std::move(sink), *childPool};
+  options.memoryPool = childPool.get();
+  facebook::velox::dwrf::Writer writer{std::move(sink), options};
   for (size_t i = 0; i < vectors.size(); ++i) {
     writer.write(vectors[i]);
   }
@@ -172,7 +173,8 @@ HiveConnectorTestBase::makeHiveInsertTableHandle(
     const std::vector<std::string>& tableColumnNames,
     const std::vector<TypePtr>& tableColumnTypes,
     const std::vector<std::string>& partitionedBy,
-    std::shared_ptr<connector::hive::LocationHandle> locationHandle) {
+    std::shared_ptr<connector::hive::LocationHandle> locationHandle,
+    const dwio::common::FileFormat tableStorageFormat) {
   std::vector<std::shared_ptr<const connector::hive::HiveColumnHandle>>
       columnHandles;
   for (int i = 0; i < tableColumnNames.size(); ++i) {
@@ -195,7 +197,7 @@ HiveConnectorTestBase::makeHiveInsertTableHandle(
   }
 
   return std::make_shared<connector::hive::HiveInsertTableHandle>(
-      columnHandles, locationHandle);
+      columnHandles, locationHandle, tableStorageFormat);
 }
 
 std::shared_ptr<connector::hive::HiveColumnHandle>

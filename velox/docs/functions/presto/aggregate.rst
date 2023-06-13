@@ -71,9 +71,17 @@ General Aggregate Functions
 
     Returns the value of ``x`` associated with the maximum value of ``y`` over all input values.
 
+.. function:: max_by(x, y, n) -> array([same as x])
+
+    Returns n values of ``x`` associated with the n largest values of ``y`` in descending order of ``y``.
+
 .. function:: min_by(x, y) -> [same as x]
 
     Returns the value of ``x`` associated with the minimum value of ``y`` over all input values.
+
+.. function:: min_by(x, y, n) -> array([same as x])
+
+    Returns n values of ``x`` associated with the n smallest values of ``y`` in ascending order of ``y``.
 
 .. function:: max(x) -> [same as input]
 
@@ -82,6 +90,29 @@ General Aggregate Functions
 .. function:: min(x) -> [same as input]
 
     Returns the minimum value of all input values.
+
+.. function:: set_agg(x) -> array<[same as input]>
+
+    Returns an array created from the distinct input ``x`` elements.
+
+    Supported types of ``x`` are: TINYINT, SMALLINT, INTEGER, BIGINT, VARCHAR.
+
+.. function:: set_union(array(T)) -> array(T)
+
+    Returns an array of all the distinct values contained in each array of the input.
+
+    Example::
+
+        SELECT set_union(elements)
+        FROM (
+            VALUES
+                ARRAY[1, 2, 3],
+                ARRAY[2, 3, 4]
+        ) AS t(elements);
+
+    Returns ARRAY[1, 2, 3, 4]
+
+    Supported types are: TINYINT, SMALLINT, INTEGER, BIGINT, VARCHAR.
 
 .. function:: sum(x) -> [same as input]
 
@@ -241,6 +272,17 @@ Statistical Aggregate Functions
 
     Returns the sample covariance of input values.
 
+.. function:: kurtosis(x) -> double
+
+    Returns the excess kurtosis of all input values. Unbiased estimate using
+    the following expression:
+
+    .. math::
+
+        \mathrm{kurtosis}(x) = {n(n+1) \over (n-1)(n-2)(n-3)} { \sum[(x_i-\mu)^4] \over \sigma^4} -3{ (n-1)^2 \over (n-2)(n-3) },
+
+   where :math:`\mu` is the mean, and :math:`\sigma` is the standard deviation.
+
 .. function:: regr_intercept(y, x) -> double
 
     Returns linear regression intercept of input values. ``y`` is the dependent
@@ -250,6 +292,10 @@ Statistical Aggregate Functions
 
     Returns linear regression slope of input values. ``y`` is the dependent
     value. ``x`` is the independent value.
+
+.. function:: skewness(x) -> double
+
+    Returns the skewness of all input values.
 
 .. function:: stddev(x) -> double
 

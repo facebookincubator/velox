@@ -23,6 +23,7 @@ add_executable(
   AverageAggregationTest.cpp
   BitwiseAggregationTest.cpp
   BoolAndOrTest.cpp
+  CentralMomentsAggregationTest.cpp
   ChecksumAggregateTest.cpp
   CountAggregationTest.cpp
   CountIfAggregationTest.cpp
@@ -32,6 +33,8 @@ add_executable(
   MinMaxByAggregationTest.cpp
   MinMaxTest.cpp
   PrestoHasherTest.cpp
+  SetAggTest.cpp
+  SetUnionTest.cpp
   SumTest.cpp
   MapAggTest.cpp
   MapUnionAggregationTest.cpp

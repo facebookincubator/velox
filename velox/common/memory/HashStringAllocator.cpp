@@ -51,14 +51,6 @@ void markAsFree(HashStringAllocator::Header* FOLLY_NONNULL header) {
     *previousFreeSize(nextHeader) = header->size();
   }
 }
-
-/// Returns the header of the next block in a multi-part allocation.
-HashStringAllocator::Header* FOLLY_NULLABLE
-getNextContinued(HashStringAllocator::Header* FOLLY_NONNULL header) {
-  VELOX_DCHECK(header->isContinued());
-  return *reinterpret_cast<HashStringAllocator::Header**>(
-      header->end() - sizeof(void*));
-}
 } // namespace
 
 // static
@@ -72,7 +64,7 @@ void HashStringAllocator::prepareRead(const Header* begin, ByteStream& stream) {
       break;
     }
     ranges.back().size -= sizeof(void*);
-    header = getNextContinued(header);
+    header = header->nextContinued();
   }
   stream.resetInput(std::move(ranges));
 }
@@ -106,7 +98,7 @@ void HashStringAllocator::extendWrite(Position position, ByteStream& stream) {
       "Starting extendWrite outside of the current range");
 
   if (header->isContinued()) {
-    free(getNextContinued(header));
+    free(header->nextContinued());
     header->clearContinued();
   }
 
@@ -135,7 +127,7 @@ HashStringAllocator::Position HashStringAllocator::finishWrite(
 
   Position currentPos{currentHeader_, writePosition};
   if (currentHeader_->isContinued()) {
-    free(getNextContinued(currentHeader_));
+    free(currentHeader_->nextContinued());
     currentHeader_->clearContinued();
   }
   // Free remainder of block if there is a lot left over.
@@ -177,14 +169,17 @@ void HashStringAllocator::newSlab(int32_t size) {
   free(new (run) Header(available - sizeof(Header)));
 }
 
-void HashStringAllocator::newRange(int32_t bytes, ByteRange* range) {
+void HashStringAllocator::newRange(
+    int32_t bytes,
+    ByteRange* range,
+    bool contiguous) {
   // Allocates at least kMinContiguous or to the end of the current
   // run. At the end of the write the unused space will be made
   // free.
   VELOX_CHECK(
       currentHeader_,
       "Must have called newWrite or extendWrite before newRange");
-  auto newHeader = allocate(bytes, false);
+  auto newHeader = allocate(bytes, contiguous);
 
   auto lastWordPtr =
       reinterpret_cast<void**>(currentHeader_->end() - sizeof(void*));
@@ -196,6 +191,14 @@ void HashStringAllocator::newRange(int32_t bytes, ByteRange* range) {
       reinterpret_cast<uint8_t*>(currentHeader_->begin()),
       currentHeader_->size(),
       sizeof(void*)};
+}
+
+void HashStringAllocator::newRange(int32_t bytes, ByteRange* range) {
+  newRange(bytes, range, false);
+}
+
+void HashStringAllocator::newContiguousRange(int32_t bytes, ByteRange* range) {
+  newRange(bytes, range, true);
 }
 
 // static
@@ -298,7 +301,7 @@ void HashStringAllocator::free(Header* _header) {
   do {
     Header* continued = nullptr;
     if (header->isContinued()) {
-      continued = getNextContinued(header);
+      continued = header->nextContinued();
       header->clearContinued();
     }
     VELOX_CHECK(!header->isFree());
@@ -346,7 +349,7 @@ int64_t HashStringAllocator::offset(
       return -1;
     }
     size += length;
-    header = getNextContinued(header);
+    header = header->nextContinued();
   }
 }
 
@@ -367,7 +370,7 @@ HashStringAllocator::Position HashStringAllocator::seek(
       return {nullptr, nullptr};
     }
     size += length;
-    header = getNextContinued(header);
+    header = header->nextContinued();
   }
 }
 
@@ -381,12 +384,11 @@ int64_t HashStringAllocator::available(const Position& position) {
     assert(header);
     auto continued = header->isContinued();
     auto length = header->size() - (continued ? sizeof(void*) : 0);
-    ;
     size += length;
     if (!continued) {
       return size;
     }
-    header = getNextContinued(header);
+    header = header->nextContinued();
     startOffset = 0;
   }
 }
@@ -442,7 +444,7 @@ void HashStringAllocator::checkConsistency() const {
       } else if (header->isContinued()) {
         // If the content of the header is continued, check the
         // continue header is readable and not free.
-        auto continued = getNextContinued(header);
+        auto continued = header->nextContinued();
         VELOX_CHECK(!continued->isFree());
       }
       previousFree = header->isFree();

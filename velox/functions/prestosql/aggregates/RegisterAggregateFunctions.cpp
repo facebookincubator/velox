@@ -25,6 +25,7 @@ extern void registerArrayAggregate(const std::string& prefix);
 extern void registerAverageAggregate(const std::string& prefix);
 extern void registerBitwiseAggregates(const std::string& prefix);
 extern void registerBoolAggregates(const std::string& prefix);
+extern void registerCentralMomentsAggregates(const std::string& prefix);
 extern void registerChecksumAggregate(const std::string& prefix);
 extern void registerCountAggregate(const std::string& prefix);
 extern void registerCountIfAggregate(const std::string& prefix);
@@ -36,6 +37,8 @@ extern void registerMapUnionSumAggregate(const std::string& prefix);
 extern void registerMaxSizeForStatsAggregate(const std::string& prefix);
 extern void registerMinMaxAggregates(const std::string& prefix);
 extern void registerMinMaxByAggregates(const std::string& prefix);
+extern void registerSetAggAggregate(const std::string& prefix);
+extern void registerSetUnionAggregate(const std::string& prefix);
 extern void registerSumAggregate(const std::string& prefix);
 extern void registerVarianceAggregates(const std::string& prefix);
 
@@ -48,6 +51,7 @@ void registerAllAggregateFunctions(const std::string& prefix) {
   registerAverageAggregate(prefix);
   registerBitwiseAggregates(prefix);
   registerBoolAggregates(prefix);
+  registerCentralMomentsAggregates(prefix);
   registerChecksumAggregate(prefix);
   registerCountAggregate(prefix);
   registerCountIfAggregate(prefix);
@@ -59,6 +63,8 @@ void registerAllAggregateFunctions(const std::string& prefix) {
   registerMaxSizeForStatsAggregate(prefix);
   registerMinMaxAggregates(prefix);
   registerMinMaxByAggregates(prefix);
+  registerSetAggAggregate(prefix);
+  registerSetUnionAggregate(prefix);
   registerSumAggregate(prefix);
   registerVarianceAggregates(prefix);
 }

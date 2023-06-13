@@ -50,6 +50,7 @@ class HashStringAllocator : public StreamArena {
     static constexpr uint32_t kContinued = 1U << 30;
     static constexpr uint32_t kPreviousFree = 1U << 29;
     static constexpr uint32_t kSizeMask = (1U << 29) - 1;
+    static constexpr uint32_t kContinuedPtrSize = sizeof(void*);
 
     // Marker at end of a PageRun. Distinct from valid headers since
     // all the 3 high bits are set, which is not valid for a header.
@@ -116,10 +117,19 @@ class HashStringAllocator : public StreamArena {
       return begin() + size();
     }
 
-    // Returns Header of the next block or null if at the end of arena.
+    /// Returns the Header of the block that is physically next to this block or
+    /// null if this is the last block of the arena.
     Header* FOLLY_NULLABLE next() {
       auto next = reinterpret_cast<Header*>(end());
       return next->data_ == kArenaEnd ? nullptr : next;
+    }
+
+    /// Returns the header of the next block in a multi-part allocation. The
+    /// caller must ensure that isContinued() returns true before calling this
+    /// method.
+    HashStringAllocator::Header* nextContinued() {
+      VELOX_DCHECK(isContinued());
+      return *reinterpret_cast<Header**>(end() - kContinuedPtrSize);
     }
 
    private:
@@ -127,8 +137,8 @@ class HashStringAllocator : public StreamArena {
   };
 
   struct Position {
-    Header* FOLLY_NULLABLE header;
-    char* FOLLY_NULLABLE position;
+    Header* FOLLY_NULLABLE header{nullptr};
+    char* FOLLY_NULLABLE position{nullptr};
   };
 
   explicit HashStringAllocator(memory::MemoryPool* FOLLY_NONNULL pool)
@@ -233,10 +243,15 @@ class HashStringAllocator : public StreamArena {
   // position immediately after the last written byte.
   Position finishWrite(ByteStream& stream, int32_t numReserveBytes);
 
-  // Allocates a new range for a stream writing to 'this'. Sets the last word of
-  // the previous range to point to the new range and copies the overwritten
-  // word as the first word of the new range.
+  /// Allocates a new range for a stream writing to 'this'. Sets the last word
+  /// of the previous range to point to the new range and copies the overwritten
+  /// word as the first word of the new range.
+  ///
+  /// May allocate less than 'bytes'.
   void newRange(int32_t bytes, ByteRange* FOLLY_NONNULL range) override;
+
+  /// Allocates a new range of at least 'bytes' size.
+  void newContiguousRange(int32_t bytes, ByteRange* range);
 
   void newTinyRange(int32_t bytes, ByteRange* FOLLY_NONNULL range) override {
     newRange(bytes, range);
@@ -285,6 +300,8 @@ class HashStringAllocator : public StreamArena {
  private:
   static constexpr int32_t kUnitSize = 16 * memory::AllocationTraits::kPageSize;
   static constexpr int32_t kMinContiguous = 48;
+
+  void newRange(int32_t bytes, ByteRange* range, bool contiguous);
 
   // Adds 'bytes' worth of contiguous space to the free list. This
   // grows the footprint in MemoryAllocator but does not allocate

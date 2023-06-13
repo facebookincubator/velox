@@ -257,19 +257,20 @@ std::string variant::toJson(const TypePtr& type) const {
       folly::json::escapeString(str, target, getOpts());
       return target;
     }
+    case TypeKind::HUGEINT:
+      VELOX_CHECK(type && type->isLongDecimal());
+      return DecimalUtil::toString(value<TypeKind::HUGEINT>(), type);
     case TypeKind::TINYINT:
+      FOLLY_FALLTHROUGH;
     case TypeKind::SMALLINT:
+      FOLLY_FALLTHROUGH;
     case TypeKind::INTEGER:
-    case TypeKind::BIGINT: {
+      FOLLY_FALLTHROUGH;
+    case TypeKind::BIGINT:
       if (type && type->isShortDecimal()) {
         return DecimalUtil::toString(value<TypeKind::BIGINT>(), type);
       }
-    }
-    case TypeKind::HUGEINT: {
-      if (type && type->isLongDecimal()) {
-        return DecimalUtil::toString(value<TypeKind::HUGEINT>(), type);
-      }
-    }
+      FOLLY_FALLTHROUGH;
     case TypeKind::BOOLEAN: {
       auto converted = VariantConverter::convert<TypeKind::VARCHAR>(*this);
       if (converted.isNull()) {
@@ -623,6 +624,12 @@ template <TypeKind KIND, typename TFloat>
 bool equalsFloatingPointWithEpsilonTyped(const variant& a, const variant& b) {
   TFloat f1 = a.value<KIND>();
   TFloat f2 = b.value<KIND>();
+
+  // Check if the numbers are all NaN value, we need to treat two NaN values to
+  // be equal as well.
+  if (std::isnan(f1) && std::isnan(f2)) {
+    return true;
+  }
 
   // Check if the numbers are really close -- needed
   // when comparing numbers near zero.
