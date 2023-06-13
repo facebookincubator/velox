@@ -359,9 +359,10 @@ HiveDataSource::HiveDataSource(
     memory::MemoryAllocator* allocator,
     const std::string& scanId,
     bool fileColumnNamesReadAsLowerCase,
-    folly::Executor* executor)
+    folly::Executor* executor,
+    const dwio::common::ReaderOptions& options)
     : fileHandleFactory_(fileHandleFactory),
-      readerOpts_(pool),
+      readerOpts_(options),
       pool_(pool),
       outputType_(outputType),
       expressionEvaluator_(expressionEvaluator),
@@ -779,7 +780,6 @@ HiveDataSource::createBufferedInput(
   if (auto* asyncCache = dynamic_cast<cache::AsyncDataCache*>(allocator_)) {
     return std::make_unique<dwio::common::CachedBufferedInput>(
         fileHandle.file,
-        readerOpts.getMemoryPool(),
         dwio::common::MetricsLog::voidLog(),
         fileHandle.uuid.id(),
         asyncCache,
@@ -787,8 +787,7 @@ HiveDataSource::createBufferedInput(
         fileHandle.groupId.id(),
         ioStats_,
         executor_,
-        readerOpts.loadQuantum(),
-        readerOpts.maxCoalesceDistance());
+        readerOpts);
   }
   return std::make_unique<dwio::common::BufferedInput>(
       fileHandle.file,

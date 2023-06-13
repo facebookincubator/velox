@@ -41,7 +41,8 @@ class HiveDataSource : public DataSource {
       memory::MemoryAllocator* allocator,
       const std::string& scanId,
       bool fileColumnNamesReadAsLowerCase,
-      folly::Executor* executor);
+      folly::Executor* executor,
+      const dwio::common::ReaderOptions& options);
 
   void addSplit(std::shared_ptr<ConnectorSplit> split) override;
 
