@@ -519,7 +519,15 @@ class Multiply {
             // Since deltaScale is greater than zero, result can now be at most
             // ((2^64 - 1) * (2^63 - 1)) / 10, which is less than
             // BasicDecimal128::kMaxValue, so there cannot be any overflow.
-            r = res / R(DecimalUtil::kPowersOfTen[deltaScale]);
+            DecimalUtilOp::divideWithRoundUp<R, R, R>(
+                r,
+                res,
+                R(velox::DecimalUtil::kPowersOfTen[deltaScale]),
+                false,
+                0,
+                0,
+                overflow);
+            VELOX_DCHECK(!overflow);
           } else {
             // We are multiplying decimal(38, 38) by decimal(38, 38). The result
             // should be a

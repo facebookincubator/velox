@@ -21,7 +21,6 @@
 #include <numeric>
 
 #include "velox/common/base/BitUtil.h"
-#include "velox/common/memory/Memory.h"
 
 namespace facebook::velox::memory {
 

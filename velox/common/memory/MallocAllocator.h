@@ -16,6 +16,7 @@
 
 #pragma once
 
+#include "velox/common/memory/Memory.h"
 #include "velox/common/memory/MemoryAllocator.h"
 
 namespace facebook::velox::memory {
@@ -25,7 +26,10 @@ class MallocAllocator : public MemoryAllocator {
   MallocAllocator();
 
   ~MallocAllocator() override {
-    VELOX_CHECK((numAllocated_ == 0) && (numMapped_ == 0), "{}", toString());
+    if (numAllocated_ != 0 || numMapped_ != 0) {
+      VELOX_MEM_LOG(WARNING)
+          << "Unreleased allocation detected: " << toString();
+    }
   }
 
   Kind kind() const override {
