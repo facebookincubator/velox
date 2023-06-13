@@ -386,6 +386,18 @@ of <code class="docutils literal notranslate"><span class="pre">accuracy</span><
 </dd></dl>
 
 <dl class="py function">
+<dt class="sig sig-object py" id="kurtosis">
+<span class="sig-name descname"><span class="pre">kurtosis</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">x</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">double</span></span></span><a class="headerlink" href="#kurtosis" title="Permalink to this definition">¶</a></dt>
+<dd><blockquote>
+<div><p>Returns the excess kurtosis of all input values. Unbiased estimate using
+the following expression:</p>
+<div class="math">
+<p><span class="math">\mathrm{kurtosis}(x) = {n(n+1) \over (n-1)(n-2)(n-3)} { \sum[(x_i-\mu)^4] \over \sigma^4} -3{ (n-1)^2 \over (n-2)(n-3) },</span></p>
+</div></div></blockquote>
+<p>where <span class="math">\mu</span> is the mean, and <span class="math">\sigma</span> is the standard deviation.</p>
+</dd></dl>
+
+<dl class="py function">
 <dt class="sig sig-object py" id="regr_intercept">
 <span class="sig-name descname"><span class="pre">regr_intercept</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">y</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">x</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">double</span></span></span><a class="headerlink" href="#regr_intercept" title="Permalink to this definition">¶</a></dt>
 <dd><p>Returns linear regression intercept of input values. <code class="docutils literal notranslate"><span class="pre">y</span></code> is the dependent
@@ -397,6 +409,12 @@ value. <code class="docutils literal notranslate"><span class="pre">x</span></co
 <span class="sig-name descname"><span class="pre">regr_slope</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">y</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">x</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">double</span></span></span><a class="headerlink" href="#regr_slope" title="Permalink to this definition">¶</a></dt>
 <dd><p>Returns linear regression slope of input values. <code class="docutils literal notranslate"><span class="pre">y</span></code> is the dependent
 value. <code class="docutils literal notranslate"><span class="pre">x</span></code> is the independent value.</p>
+</dd></dl>
+
+<dl class="py function">
+<dt class="sig sig-object py" id="skewness">
+<span class="sig-name descname"><span class="pre">skewness</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">x</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">double</span></span></span><a class="headerlink" href="#skewness" title="Permalink to this definition">¶</a></dt>
+<dd><p>Returns the skewness of all input values.</p>
 </dd></dl>
 
 <dl class="py function">
