@@ -444,7 +444,8 @@ TEST_F(StringTest, substring) {
 
 TEST_F(StringTest, overlay) {
   EXPECT_EQ(overlay("Spark\u6570\u636ESQL", "_", 6, -1), "Spark_\u636ESQL");
-  EXPECT_EQ(overlay("Spark\u6570\u636ESQL", "_", 6, 0), "Spark_\u6570\u636ESQL");
+  EXPECT_EQ(
+      overlay("Spark\u6570\u636ESQL", "_", 6, 0), "Spark_\u6570\u636ESQL");
   EXPECT_EQ(overlay("Spark\u6570\u636ESQL", "_", -6, 2), "_\u636ESQL");
 
   EXPECT_EQ(overlay("Spark SQL", "_", 6, -1), "Spark_SQL");
