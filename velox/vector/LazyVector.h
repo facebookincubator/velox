@@ -45,6 +45,10 @@ class ValueHook {
 
   virtual ~ValueHook() = default;
 
+  virtual std::string toString() const {
+    return "ValueHook";
+  }
+
   virtual bool acceptsNulls() const {
     return false;
   }

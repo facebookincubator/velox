@@ -35,6 +35,10 @@ class AggregationHook : public ValueHook {
   static constexpr Kind kFloatMin = 8;
   static constexpr Kind kDoubleMax = 9;
   static constexpr Kind kDoubleMin = 10;
+  static constexpr Kind kShortDecimalMax = 11;
+  static constexpr Kind kShortDecimalMin = 12;
+  static constexpr Kind kLongDecimalMax = 13;
+  static constexpr Kind kLongDecimalMin = 14;
 
   // Make null behavior known at compile time. This is useful when
   // templating a column decoding loop with a hook.
@@ -52,6 +56,12 @@ class AggregationHook : public ValueHook {
         clearNullMask_(~nullMask_),
         groups_(groups),
         numNulls_(numNulls) {}
+
+  std::string toString() const override {
+    char buf[256];
+    sprintf(buf, "AggregationHook kind:%d", (int)kind());
+    return buf;
+  }
 
   bool acceptsNulls() const override final {
     return false;
@@ -119,6 +129,17 @@ class SumHook final : public AggregationHook {
       uint64_t* numNulls)
       : AggregationHook(offset, nullByte, nullMask, groups, numNulls) {}
 
+  std::string toString() const override {
+    char buf[256];
+    sprintf(
+        buf,
+        "SumHook kind:%d TValue:%s TAggregate:%s",
+        (int)kind(),
+        typeid(TValue).name(),
+        typeid(TAggregate).name());
+    return buf;
+  }
+
   Kind kind() const override {
     if (std::is_same_v<TAggregate, double>) {
       if (std::is_same_v<TValue, double>) {
@@ -160,6 +181,18 @@ class SimpleCallableHook final : public AggregationHook {
       : AggregationHook(offset, nullByte, nullMask, groups, numNulls),
         updateSingleValue_(updateSingleValue) {}
 
+  std::string toString() const override {
+    char buf[256];
+    sprintf(
+        buf,
+        "SimpleCallableHook kind:%d TValue:%s TAggregate:%s UpdateSingleValue:%s",
+        (int)kind(),
+        typeid(TValue).name(),
+        typeid(TAggregate).name(),
+        typeid(UpdateSingleValue).name());
+    return buf;
+  }
+
   Kind kind() const override {
     return kGeneric;
   }
@@ -187,6 +220,17 @@ class MinMaxHook final : public AggregationHook {
       uint64_t* numNulls)
       : AggregationHook(offset, nullByte, nullMask, groups, numNulls) {}
 
+  std::string toString() const override {
+    char buf[256];
+    sprintf(
+        buf,
+        "MinMaxHook kind:%d T:%s isMin:%d",
+        (int)kind(),
+        typeid(T).name(),
+        (int)isMin);
+    return buf;
+  }
+
   Kind kind() const override {
     if (isMin) {
       if (std::is_same_v<T, int64_t>) {
@@ -198,6 +242,12 @@ class MinMaxHook final : public AggregationHook {
       if (std::is_same_v<T, double>) {
         return kDoubleMin;
       }
+      if (std::is_same_v<T, UnscaledShortDecimal>) {
+        return kShortDecimalMin;
+      }
+      if (std::is_same_v<T, UnscaledLongDecimal>) {
+        return kLongDecimalMin;
+      }
     } else {
       if (std::is_same_v<T, int64_t>) {
         return kBigintMax;
@@ -207,6 +257,12 @@ class MinMaxHook final : public AggregationHook {
       }
       if (std::is_same_v<T, double>) {
         return kDoubleMax;
+      }
+      if (std::is_same_v<T, UnscaledShortDecimal>) {
+        return kShortDecimalMax;
+      }
+      if (std::is_same_v<T, UnscaledLongDecimal>) {
+        return kLongDecimalMax;
       }
     }
     return kGeneric;

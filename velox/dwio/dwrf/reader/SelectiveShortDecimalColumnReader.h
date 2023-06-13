@@ -121,7 +121,27 @@ class SelectiveShortDecimalColumnReader
  private:
   template <bool dense>
   void processValueHook(RowSet rows, ValueHook* hook) {
-    VELOX_FAIL("TODO: orc short decimal process ValueHook");
+    switch (hook->kind()) {
+      case aggregate::AggregationHook::kShortDecimalMax:
+        readHelper<dense, velox::common::AlwaysTrue>(
+            &dwio::common::alwaysTrue(),
+            rows,
+            dwio::common::ExtractToHook<
+                aggregate::MinMaxHook<UnscaledShortDecimal, false>>(hook));
+        break;
+      case aggregate::AggregationHook::kShortDecimalMin:
+        readHelper<dense, velox::common::AlwaysTrue>(
+            &dwio::common::alwaysTrue(),
+            rows,
+            dwio::common::ExtractToHook<
+                aggregate::MinMaxHook<UnscaledShortDecimal, true>>(hook));
+        break;
+      default:
+        readHelper<dense, velox::common::AlwaysTrue>(
+            &dwio::common::alwaysTrue(),
+            rows,
+            dwio::common::ExtractToGenericHook(hook));
+    }
   }
 
   template <bool dense, typename ExtractValues>

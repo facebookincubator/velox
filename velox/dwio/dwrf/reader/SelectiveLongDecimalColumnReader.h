@@ -115,7 +115,27 @@ class SelectiveLongDecimalColumnReader
  private:
   template <bool dense>
   void processValueHook(RowSet rows, ValueHook* hook) {
-    VELOX_FAIL("TODO: orc long decimal process ValueHook");
+    switch (hook->kind()) {
+      case aggregate::AggregationHook::kLongDecimalMax:
+        readHelper<dense, velox::common::AlwaysTrue>(
+            &dwio::common::alwaysTrue(),
+            rows,
+            dwio::common::ExtractToHook<
+                aggregate::MinMaxHook<UnscaledLongDecimal, false>>(hook));
+        break;
+      case aggregate::AggregationHook::kLongDecimalMin:
+        readHelper<dense, velox::common::AlwaysTrue>(
+            &dwio::common::alwaysTrue(),
+            rows,
+            dwio::common::ExtractToHook<
+                aggregate::MinMaxHook<UnscaledLongDecimal, true>>(hook));
+        break;
+      default:
+        readHelper<dense, velox::common::AlwaysTrue>(
+            &dwio::common::alwaysTrue(),
+            rows,
+            dwio::common::ExtractToGenericHook(hook));
+    }
   }
 
   template <bool dense, typename ExtractValues>
