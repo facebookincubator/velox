@@ -85,7 +85,7 @@ This configuration option is the maximum bytes coalesced into a single request t
 This configuration option is the maximum byte distance between needed data in the same file at the data source that can be coalesced. Increasing this value would theoretically reduce the number of requests and increase each request size. However, if made too large the query will return too many un-needed bytes and could decrease I/O performance. This plus __max_coalesce_bytes__ should be fine-tuned for the workload being run.
 
 ## Summary
-likeIf a use of Velox matches the use case of the TcphBenchmark then it is a good tool to test, I/O and driver performance for specific TCP-H queries. This would benefit execution of specific production workloads that are like the chosen queries. If in multi-process use case, like Spark/Gluten/Velox configuration, the recommendation is to oversubscribe I/O threads between 2X and 3X vCPUs and tune the 2 coalesce configurations exposed.
+If a use of Velox matches the use case of the TcphBenchmark then it is a good tool to test, I/O and driver performance for specific TCP-H queries. This would benefit execution of specific production workloads that are like the chosen queries. If in multi-process use case, like Spark/Gluten/Velox configuration, the recommendation is to oversubscribe I/O threads between 2X and 3X vCPUs and tune the 2 coalesce configurations exposed.
 
 ---
 ## Appendix A: Patch to Build TpchBenchmark Executable
