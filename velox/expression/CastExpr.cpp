@@ -497,6 +497,7 @@ VectorPtr CastExpr::applyDecimal(
         break;
       }
     }
+      [[fallthrough]];
     default:
       VELOX_UNSUPPORTED(
           "Cast from {} to {} is not supported",
