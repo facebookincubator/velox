@@ -16,11 +16,28 @@
 #include "velox/functions/sparksql/RegisterCompare.h"
 
 #include "velox/functions/lib/RegistrationHelpers.h"
-#include "velox/functions/prestosql/Comparisons.h"
+#include "velox/functions/sparksql/CompareFunctionsNullSafe.h"
+#include "velox/functions/sparksql/Comparisons.h"
 
 namespace facebook::velox::functions::sparksql {
 
 void registerCompareFunctions(const std::string& prefix) {
+  // Register compare functions
+  exec::registerStatefulVectorFunction(
+      prefix + "equalto", comparisonSignatures(), makeEqualTo);
+  exec::registerStatefulVectorFunction(
+      prefix + "lessthan", comparisonSignatures(), makeLessThan);
+  exec::registerStatefulVectorFunction(
+      prefix + "greaterthan", comparisonSignatures(), makeGreaterThan);
+  exec::registerStatefulVectorFunction(
+      prefix + "lessthanorequal", comparisonSignatures(), makeLessThanOrEqual);
+  exec::registerStatefulVectorFunction(
+      prefix + "greaterthanorequal",
+      comparisonSignatures(),
+      makeGreaterThanOrEqual);
+  // Compare nullsafe functions
+  exec::registerStatefulVectorFunction(
+      prefix + "equalnullsafe", equalNullSafeSignatures(), makeEqualNullSafe);
   registerFunction<BetweenFunction, bool, int8_t, int8_t, int8_t>(
       {prefix + "between"});
   registerFunction<BetweenFunction, bool, int16_t, int16_t, int16_t>(
@@ -46,41 +63,6 @@ void registerCompareFunctions(const std::string& prefix) {
       UnscaledLongDecimal,
       UnscaledLongDecimal,
       UnscaledLongDecimal>({prefix + "between"});
-  registerFunction<
-      GtFunction,
-      bool,
-      UnscaledShortDecimal,
-      UnscaledShortDecimal>({prefix + "greaterthan"});
-  registerFunction<GtFunction, bool, UnscaledLongDecimal, UnscaledLongDecimal>(
-      {prefix + "greaterthan"});
-  registerFunction<
-      LtFunction,
-      bool,
-      UnscaledShortDecimal,
-      UnscaledShortDecimal>({prefix + "lessthan"});
-  registerFunction<LtFunction, bool, UnscaledLongDecimal, UnscaledLongDecimal>(
-      {prefix + "lessthan"});
-  registerFunction<
-      GteFunction,
-      bool,
-      UnscaledShortDecimal,
-      UnscaledShortDecimal>({prefix + "greaterthanorequal"});
-  registerFunction<GteFunction, bool, UnscaledLongDecimal, UnscaledLongDecimal>(
-      {prefix + "greaterthanorequal"});
-  registerFunction<
-      LteFunction,
-      bool,
-      UnscaledShortDecimal,
-      UnscaledShortDecimal>({prefix + "lessthanorequal"});
-  registerFunction<LteFunction, bool, UnscaledLongDecimal, UnscaledLongDecimal>(
-      {prefix + "lessthanorequal"});
-  registerFunction<
-      EqFunction,
-      bool,
-      UnscaledShortDecimal,
-      UnscaledShortDecimal>({prefix + "equalto"});
-  registerFunction<EqFunction, bool, UnscaledLongDecimal, UnscaledLongDecimal>(
-      {prefix + "equalto"});
 }
 
 } // namespace facebook::velox::functions::sparksql
