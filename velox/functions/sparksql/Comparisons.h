@@ -125,4 +125,17 @@ comparisonSignatures() {
               .argumentType("T")
               .build()};
 }
+
+template <typename T>
+struct BetweenFunction {
+  template <typename TInput>
+  FOLLY_ALWAYS_INLINE void call(
+      bool& result,
+      const TInput& value,
+      const TInput& low,
+      const TInput& high) {
+    result = value >= low && value <= high;
+  }
+};
+
 } // namespace facebook::velox::functions::sparksql
