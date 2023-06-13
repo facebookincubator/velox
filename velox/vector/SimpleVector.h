@@ -192,14 +192,14 @@ class SimpleVector : public BaseVector {
       const SelectivityVector& rows,
       const vector_size_t* rowMappings = nullptr) const {
     VELOX_CHECK(rows.hasSelections())
-    if (asciiSetRows_.hasSelections()) {
+    if (asciiSetRows_->hasSelections()) {
       if (rowMappings) {
         bool isSubset = rows.template testSelected(
-            [&](auto row) { return asciiSetRows_.isValid(rowMappings[row]); });
-        return isSubset ? std::optional(isAllAscii_) : std::nullopt;
+            [&](auto row) { return asciiSetRows_->isValid(rowMappings[row]); });
+        return isSubset ? std::optional(*isAllAscii_) : std::nullopt;
       }
-      if (rows.isSubset(asciiSetRows_)) {
-        return isAllAscii_;
+      if (rows.isSubset(*asciiSetRows_)) {
+        return *isAllAscii_;
       }
     }
     return std::nullopt;
@@ -213,8 +213,8 @@ class SimpleVector : public BaseVector {
   typename std::enable_if_t<std::is_same_v<U, StringView>, std::optional<bool>>
   isAscii(vector_size_t index) const {
     VELOX_CHECK_GE(index, 0)
-    if (asciiSetRows_.size() > index && asciiSetRows_.isValid(index)) {
-      return isAllAscii_;
+    if (asciiSetRows_->size() > index && asciiSetRows_->isValid(index)) {
+      return *isAllAscii_;
     }
     return std::nullopt;
   }
@@ -224,8 +224,8 @@ class SimpleVector : public BaseVector {
   template <typename U = T>
   typename std::enable_if_t<std::is_same_v<U, StringView>, bool>
   computeAndSetIsAscii(const SelectivityVector& rows) {
-    if (rows.isSubset(asciiSetRows_)) {
-      return isAllAscii_;
+    if (rows.isSubset(*asciiSetRows_)) {
+      return *isAllAscii_;
     }
     ensureIsAsciiCapacity(rows.end());
     bool isAllAscii = true;
@@ -238,22 +238,22 @@ class SimpleVector : public BaseVector {
     });
 
     // Set isAllAscii flag, it will unset if we encounter any utf.
-    if (!asciiSetRows_.hasSelections()) {
-      isAllAscii_ = isAllAscii;
+    if (!asciiSetRows_->hasSelections()) {
+      *isAllAscii_ = isAllAscii;
     } else {
-      isAllAscii_ &= isAllAscii;
+      *isAllAscii_ &= isAllAscii;
     }
 
-    asciiSetRows_.select(rows);
-    return isAllAscii_;
+    asciiSetRows_->select(rows);
+    return *isAllAscii_;
   }
 
   /// Clears asciiness state.
   template <typename U = T>
   typename std::enable_if_t<std::is_same_v<U, StringView>, void>
   invalidateIsAscii() {
-    asciiSetRows_.clearAll();
-    isAllAscii_ = false;
+    asciiSetRows_->clearAll();
+    *isAllAscii_ = false;
   }
 
   /// Explicitly set asciness.
@@ -262,29 +262,29 @@ class SimpleVector : public BaseVector {
       bool ascii,
       const SelectivityVector& rows) {
     ensureIsAsciiCapacity(rows.end());
-    if (asciiSetRows_.hasSelections() && !asciiSetRows_.isSubset(rows)) {
-      isAllAscii_ &= ascii;
+    if (asciiSetRows_->hasSelections() && !asciiSetRows_->isSubset(rows)) {
+      *isAllAscii_ &= ascii;
     } else {
-      isAllAscii_ = ascii;
+      *isAllAscii_ = ascii;
     }
 
-    asciiSetRows_.select(rows);
+    asciiSetRows_->select(rows);
   }
 
   template <typename U = T>
   typename std::enable_if_t<std::is_same_v<U, StringView>, void> setAllIsAscii(
       bool ascii) {
     ensureIsAsciiCapacity(length_);
-    isAllAscii_ = ascii;
-    asciiSetRows_.setAll();
+    *isAllAscii_ = ascii;
+    asciiSetRows_->setAll();
   }
 
  protected:
   template <typename U = T>
   typename std::enable_if_t<std::is_same_v<U, StringView>, void>
   ensureIsAsciiCapacity(vector_size_t size) {
-    if (asciiSetRows_.size() < size) {
-      asciiSetRows_.resize(size, false);
+    if (asciiSetRows_->size() < size) {
+      asciiSetRows_->resize(size, false);
     }
   }
 
@@ -334,10 +334,10 @@ class SimpleVector : public BaseVector {
     isSorted_ = std::nullopt;
     stats_ = SimpleVectorStats<T>{};
     if (rows) {
-      asciiSetRows_.deselect(*rows);
+      asciiSetRows_->deselect(*rows);
     } else {
-      asciiSetRows_.clearAll();
-      isAllAscii_ = false;
+      asciiSetRows_->clearAll();
+      *isAllAscii_ = false;
     }
   }
 
@@ -349,11 +349,11 @@ class SimpleVector : public BaseVector {
   const uint8_t elementSize_;
 
   // True is all strings in asciiSetRows_ are ASCII.
-  bool isAllAscii_{false};
+  folly::ThreadLocal<bool> isAllAscii_{[] { return new bool(false); }};
 
   // If T is StringView, store set of rows
   // where we have computed asciiness. A set bit means the row was processed.
-  SelectivityVector asciiSetRows_;
+  folly::ThreadLocal<SelectivityVector> asciiSetRows_;
 
   SimpleVectorStats<T> stats_;
 }; // namespace velox
