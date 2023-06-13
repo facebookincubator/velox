@@ -1,6 +1,6 @@
 # Velox I/O Optimizations and the TpchBenchmark
 ## Introduction
-This document is outcome from a cycle of benchmarking to determine best I/O performance against AWS S3 Parquet data for TPCH. It is not intended to show raw data but instead describe tuning process recommendations and general suggestions for tuning.
+This document is outcome from a cycle of benchmarking to determine best I/O performance against AWS S3 Parquet data for TPCH. It is intended to describe tuning process recommendations and general suggestions for tuning the Velox query engine.
 
 Benchmarking in Velox is made easy with the optionally built TpchBenchmark (velox_tpch_benchmark) executable. To build the benchmark executable _(build/release/velox/benchamrks/tpch/velox_tpch_benchmark)_, patch the code base with a small patch ([Appendix A](#appendix-a-patch-to-build-tpchbenchmark-executable)) then use the following command line to do the build:
 ```bash
