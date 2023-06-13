@@ -139,6 +139,12 @@ bool SubstraitToVeloxPlanValidator::validateScalarFunction(
   if (name == "extract") {
     return validateExtractExpr(params);
   }
+  if (name == "regexp_extract_all" &&
+      !scalarFunction.arguments()[1].value().has_literal()) {
+    VLOG(1)
+        << "native validation failed due to: pattern is not literal for regex_extract_all.";
+    return false;
+  }
   if (name == "char_length") {
     VELOX_CHECK(types.size() == 1);
     if (types[0] == "vbin") {
