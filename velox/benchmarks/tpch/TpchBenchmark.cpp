@@ -277,8 +277,7 @@ class TpchBenchmark {
                         path,
                         numSplitsPerFile,
                         tpchPlan.dataFileFormat,
-                        FLAGS_max_coalesced_bytes,
-                        FLAGS_max_coalesced_distance_bytes);
+                        ReaderOptions(nullptr));
                 for (const auto& split : splits) {
                   task->addSplit(entry.first, exec::Split(split));
                 }
