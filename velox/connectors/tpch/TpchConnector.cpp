@@ -15,6 +15,7 @@
  */
 
 #include "velox/connectors/tpch/TpchConnector.h"
+#include "velox/dwio/common/Options.h"
 #include "velox/tpch/gen/TpchGen.h"
 
 namespace facebook::velox::connector::tpch {
@@ -63,9 +64,8 @@ TpchDataSource::TpchDataSource(
     const std::unordered_map<
         std::string,
         std::shared_ptr<connector::ColumnHandle>>& columnHandles,
-    velox::memory::MemoryPool* FOLLY_NONNULL pool,
-    const std::shared_ptr<dwio::common::ReaderOptions>& options)
-    : pool_(pool) {
+    const dwio::common::ReaderOptions& options)
+    : pool_(&options.getMemoryPool()) {
   auto tpchTableHandle =
       std::dynamic_pointer_cast<TpchTableHandle>(tableHandle);
   VELOX_CHECK_NOT_NULL(

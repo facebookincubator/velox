@@ -207,8 +207,6 @@ class HiveConnectorSplitBuilder {
   }
 
   std::shared_ptr<connector::hive::HiveConnectorSplit> build() const {
-    auto unusedMap = std::unordered_map<std::string, std::string>();
-    auto unusedExtra = std::make_shared<std::string>();
     return std::make_shared<connector::hive::HiveConnectorSplit>(
         kHiveConnectorId,
         "file:" + filePath_,
@@ -216,9 +214,7 @@ class HiveConnectorSplitBuilder {
         start_,
         length_,
         partitionKeys_,
-        tableBucketNumber_,
-        unusedMap,
-        unusedExtra);
+        tableBucketNumber_);
   }
 
  private:
