@@ -117,7 +117,10 @@ class ParquetTpchTestBase : public testing::Test {
         for (const auto& entry : tpchPlan.dataFiles) {
           for (const auto& path : entry.second) {
             auto const splits = HiveConnectorTestBase::makeHiveConnectorSplits(
-                path, kNumSplits, tpchPlan.dataFileFormat, dwio::common::ReaderOptions(nullptr));
+                path,
+                kNumSplits,
+                tpchPlan.dataFileFormat,
+                dwio::common::ReaderOptions(nullptr));
             for (const auto& split : splits) {
               task->addSplit(entry.first, Split(split));
             }
