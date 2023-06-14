@@ -442,7 +442,7 @@ TEST_F(StringTest, substring) {
   EXPECT_EQ(substring("da\u6570\u636Eta", -3), "\u636Eta");
 }
 
-TEST_F(StringTest, overlay) {
+TEST_F(StringTest, overlayVarchar) {
   EXPECT_EQ(overlay("Spark\u6570\u636ESQL", "_", 6, -1), "Spark_\u636ESQL");
   EXPECT_EQ(
       overlay("Spark\u6570\u636ESQL", "_", 6, 0), "Spark_\u6570\u636ESQL");

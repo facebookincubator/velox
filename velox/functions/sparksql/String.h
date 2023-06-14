@@ -459,34 +459,39 @@ struct OverlayFunctionBase {
   template <bool isAscii, bool isVarchar>
   FOLLY_ALWAYS_INLINE void doCall(
       exec::StringWriter<false>& result,
-      const StringView& input,
-      const StringView& replace,
-      const int32_t pos,
-      const int32_t len) {
+      StringView input,
+      StringView replace,
+      int32_t pos,
+      int32_t len) {
     // Calculate and append first part.
     auto pair = substring<isAscii, isVarchar>(input, 1, pos - 1);
-    if constexpr (isVarchar) {
-      auto byteRange = stringCore::getByteRange<isAscii>(
-          input.data(), pair.first + 1, pair.second);
-      result.append(StringView(
-          input.data() + byteRange.first, byteRange.second - byteRange.first));
-    } else {
-      result.append(StringView(input.data() + pair.first, pair.second));
-    }
+    append<isAscii, isVarchar>(result, input, pair);
 
     // Append second part.
     result.append(replace);
 
     // Calculate and append last part.
     int32_t length = 0;
-    if constexpr (isVarchar) {
-      length = len >= 0 ? len : stringImpl::length<isAscii>(replace);
+    if (len >= 0) {
+      length = len;
     } else {
-      length = len >= 0 ? len : replace.size();
+      if constexpr (isVarchar) {
+        length = stringImpl::length<isAscii>(replace);
+      } else {
+        length = replace.size();
+      }
     }
     int64_t start = (int64_t)pos + (int64_t)length;
     pair = substring<isAscii, isVarchar>(input, start, INT32_MAX);
-    if constexpr (isVarchar) {
+    append<isAscii, isVarchar>(result, input, pair);
+  }
+
+  template <bool isAscii, bool isVarchar>
+  FOLLY_ALWAYS_INLINE void append(
+      exec::StringWriter<false>& result,
+      StringView input,
+      std::pair<int32_t, int32_t> pair) {
+    if constexpr (isVarchar && !isAscii) {
       auto byteRange = stringCore::getByteRange<isAscii>(
           input.data(), pair.first + 1, pair.second);
       result.append(StringView(
@@ -568,9 +573,6 @@ template <typename T>
 struct OverlayVarbinaryFunction : public OverlayFunctionBase {
   VELOX_DEFINE_FUNCTION_TYPES(T);
 
-  // ASCII input always produces ASCII result.
-  static constexpr bool is_default_ascii_behavior = true;
-
   FOLLY_ALWAYS_INLINE void call(
       out_type<Varbinary>& result,
       const arg_type<Varbinary>& input,
@@ -578,15 +580,6 @@ struct OverlayVarbinaryFunction : public OverlayFunctionBase {
       const int32_t pos,
       const int32_t len) {
     OverlayFunctionBase::doCall<false, false>(result, input, replace, pos, len);
-  }
-
-  FOLLY_ALWAYS_INLINE void callAscii(
-      out_type<Varbinary>& result,
-      const arg_type<Varbinary>& input,
-      const arg_type<Varbinary>& replace,
-      const int32_t pos,
-      const int32_t len) {
-    OverlayFunctionBase::doCall<true, false>(result, input, replace, pos, len);
   }
 };
 

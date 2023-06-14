@@ -63,12 +63,13 @@ Unless specified otherwise, all functions return NULL if at least one of the arg
 
     Replace a substring of ``input`` starting at ``pos`` character with ``replace`` and
     going for rest ``len`` characters of ``input``.
-    ``input`` has same type with ``replace``, can be varchar or varbinary, when ``input`` is varchar,
-    ``len`` is in characters, if ``input`` is varbinary, ``len`` is in bytes.
-    First part is first pos - 1 characters of ``input``, ``pos`` is 1-based. The value of 1,
-    zero or negative indicates the start of the input.
+    Types of ``input`` and ``replace`` must be the same. Supported types are: VARCHAR and VARBINARY.
+    When ``input`` types are VARCHAR, ``len`` and ``pos`` are specified in characters, otherwise, bytes.
+    Result is constructed from three parts.
+    First part is first pos - 1 characters of ``input`` when ``pos`` if greater then zero, otherwise, empty string.
     Second part is ``replace``.
-    Third part is rest of ``input`` from pos + len, if ``len`` is negative, it will be set to size of ``replace``,
+    Third part is rest of ``input`` from indices pos + len which is 1-based,
+    if ``len`` is negative, it will be set to size of ``replace``,
     if pos + len is negative, it refers to -(pos + len)th element before the end of ``input``.
     ::
 
