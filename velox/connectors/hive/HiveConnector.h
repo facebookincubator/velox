@@ -47,7 +47,6 @@ class HiveConnector : public Connector {
         tableHandle,
         columnHandles,
         &fileHandleFactory_,
-        connectorQueryCtx->memoryPool(),
         connectorQueryCtx->expressionEvaluator(),
         connectorQueryCtx->allocator(),
         connectorQueryCtx->scanId(),

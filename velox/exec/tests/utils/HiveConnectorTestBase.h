@@ -75,10 +75,7 @@ class HiveConnectorTestBase : public OperatorTestBase {
       const std::string& filePath,
       uint32_t splitCount,
       dwio::common::FileFormat format,
-      int64_t maxCoalesceBytes =
-          dwio::common::ReaderOptions::kDefaultCoalesceBytes,
-      int32_t maxCoalesceDistance =
-          dwio::common::ReaderOptions::kDefaultCoalesceDistance);
+      const dwio::common::ReaderOptions& readerOpts);
 
   static std::shared_ptr<connector::hive::HiveTableHandle> makeTableHandle(
       common::test::SubfieldFilters subfieldFilters = {},
@@ -204,8 +201,8 @@ class HiveConnectorSplitBuilder {
   }
 
   HiveConnectorSplitBuilder& readerOptions(
-      dwio::common::ReaderOptions& options) {
-    readerOptions_ = options;
+      const dwio::common::ReaderOptions& options) {
+    readerOptions_ = dwio::common::ReaderOptions(options);
     return *this;
   }
 

@@ -199,7 +199,10 @@ class TableWriteTest : public HiveConnectorTestBase {
     for (auto& path : fs::recursive_directory_iterator(directoryPath)) {
       if (path.is_regular_file()) {
         splits.push_back(HiveConnectorTestBase::makeHiveConnectorSplits(
-            path.path().string(), 1, fileFormat)[0]);
+            path.path().string(),
+            1,
+            fileFormat,
+            dwio::common::ReaderOptions(nullptr))[0]);
       }
     }
 

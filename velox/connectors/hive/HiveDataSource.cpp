@@ -354,7 +354,6 @@ HiveDataSource::HiveDataSource(
         std::string,
         std::shared_ptr<connector::ColumnHandle>>& columnHandles,
     FileHandleFactory* fileHandleFactory,
-    velox::memory::MemoryPool* pool,
     core::ExpressionEvaluator* expressionEvaluator,
     memory::MemoryAllocator* allocator,
     const std::string& scanId,
@@ -363,7 +362,7 @@ HiveDataSource::HiveDataSource(
     const dwio::common::ReaderOptions& options)
     : fileHandleFactory_(fileHandleFactory),
       readerOpts_(options),
-      pool_(pool),
+      pool_(&options.getMemoryPool()),
       outputType_(outputType),
       expressionEvaluator_(expressionEvaluator),
       allocator_(allocator),

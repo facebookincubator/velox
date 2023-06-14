@@ -36,7 +36,6 @@ class HiveDataSource : public DataSource {
           std::string,
           std::shared_ptr<connector::ColumnHandle>>& columnHandles,
       FileHandleFactory* fileHandleFactory,
-      velox::memory::MemoryPool* pool,
       core::ExpressionEvaluator* expressionEvaluator,
       memory::MemoryAllocator* allocator,
       const std::string& scanId,
