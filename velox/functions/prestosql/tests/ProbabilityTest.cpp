@@ -155,5 +155,63 @@ TEST_F(ProbabilityTest, binomialCDF) {
       binomialCDF(-2, 0.5, -1), "numberOfTrials must be greater than 0");
 }
 
+TEST_F(ProbabilityTest, invBinomialCDF) {
+  const auto invBinomialCDF = [&](std::optional<int64_t> numberOfTrials,
+                                  std::optional<double> successProbability,
+                                  std::optional<double> p) {
+    return evaluateOnce<int64_t>(
+        "inverse_binomial_cdf(c0, c1, c2)",
+        numberOfTrials,
+        successProbability,
+        p);
+  };
+
+  EXPECT_EQ(0, invBinomialCDF(5, 0.5, 0.03125));
+  EXPECT_EQ(41, invBinomialCDF(41, 0.2, 1.0));
+  EXPECT_EQ(3, invBinomialCDF(5, 0.5, 0.8125));
+  EXPECT_EQ(1, invBinomialCDF(3, 0.5, 0.5));
+  EXPECT_EQ(6, invBinomialCDF(20, 0.3, 0.60800981220092398));
+  EXPECT_EQ(60, invBinomialCDF(200, 0.3, 0.5348091761606989));
+  EXPECT_EQ(10, invBinomialCDF(20, 0.5, 0.5));
+  EXPECT_EQ(0, invBinomialCDF(79, 0.6, 0.0));
+
+  // Invalid inputs for numberOfTrails
+  VELOX_ASSERT_THROW(
+      invBinomialCDF(0, 0.5, 0.3), "numberOfTrials must be greater than 0");
+  VELOX_ASSERT_THROW(
+      invBinomialCDF(kBigIntMin, 0.5, 0.3),
+      "numberOfTrials must be greater than 0");
+  VELOX_ASSERT_THROW(
+      invBinomialCDF(kNan, 0.5, 0.3), "numberOfTrials must be greater than 0");
+
+  // Invalid inputs for successProbability
+  VELOX_ASSERT_THROW(
+      invBinomialCDF(5, -0.5, 0.3),
+      "successProbability must be in the interval [0, 1]");
+  VELOX_ASSERT_THROW(
+      invBinomialCDF(5, kDoubleMax, 0.1),
+      "successProbability must be in the interval [0, 1]");
+  VELOX_ASSERT_THROW(
+      invBinomialCDF(5, kNan, 0.03),
+      "successProbability must be in the interval [0, 1]");
+
+  // Invalid inputs for p
+  VELOX_ASSERT_THROW(
+      invBinomialCDF(5, 0.3, -12.9), "p must be in the interval [0, 1]");
+  VELOX_ASSERT_THROW(
+      invBinomialCDF(5, 0.3, kDoubleMax), "p must be in the interval [0, 1]");
+  VELOX_ASSERT_THROW(
+      invBinomialCDF(5, 0.3, kNan), "p must be in the interval [0, 1]");
+
+  // Invalid inputs for multiple params
+  VELOX_ASSERT_THROW(
+      invBinomialCDF(-3, 0.3, 10.0), "p must be in the interval [0, 1]");
+  VELOX_ASSERT_THROW(
+      invBinomialCDF(kNan, 6, 0.2),
+      "successProbability must be in the interval [0, 1]");
+  VELOX_ASSERT_THROW(
+      invBinomialCDF(-7, 4, 22), "p must be in the interval [0, 1]");
+}
+
 } // namespace
 } // namespace facebook::velox
