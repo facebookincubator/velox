@@ -132,7 +132,7 @@ class WindowTestBase : public exec::test::OperatorTestBase {
       const std::string& overClause,
       const std::string& frameClause);
 
-  /// This function tests SQL queries for the window function and
+  /// Tests SQL queries for the window function and
   /// the specified overClauses and frameClauses with the input RowVectors.
   /// Note : 'function' should be a full window function invocation string
   /// including input parameters and open/close braces. e.g. rank(), ntile(5).
@@ -146,7 +146,7 @@ class WindowTestBase : public exec::test::OperatorTestBase {
       const std::vector<std::string>& frameClauses = {""},
       bool createTable = true);
 
-  /// This function tests the SQL query for the window function and overClause
+  /// Tests the SQL query for the window function and overClause
   /// combination with the input RowVectors. It is expected that query execution
   /// will throw an exception with the errorMessage specified.
   void assertWindowFunctionError(
@@ -155,7 +155,7 @@ class WindowTestBase : public exec::test::OperatorTestBase {
       const std::string& overClause,
       const std::string& errorMessage);
 
-  /// This function tests the SQL query for the window function, overClause,
+  /// Tests the SQL query for the window function, overClause,
   /// and frameClause combination with the input RowVectors. It is expected that
   /// query execution will throw an exception with the errorMessage specified.
   void assertWindowFunctionError(
@@ -164,6 +164,10 @@ class WindowTestBase : public exec::test::OperatorTestBase {
       const std::string& overClause,
       const std::string& frameClause,
       const std::string& errorMessage);
+
+  /// Tests different combinations of k range frame columns.
+  /// These are special as they require generating frame bound value columns.
+  void testKRangeFrames(const std::string& function);
 
   /// ParseOptions for the DuckDB Parser. nth_value in Spark expects to parse
   /// integer as bigint vs bigint in Presto. The default is to parse integer

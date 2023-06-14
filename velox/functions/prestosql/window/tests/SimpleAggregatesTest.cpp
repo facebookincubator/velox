@@ -106,6 +106,11 @@ TEST_P(SimpleAggregatesTest, randomInput) {
   testWindowFunction({makeRandomInputVector(25)});
 }
 
+// Tests function with k RANGE PRECEDING (FOLLOWING) frames.
+TEST_P(SimpleAggregatesTest, rangeFrames) {
+  testKRangeFrames(function_);
+}
+
 // Instantiate all the above tests for each combination of aggregate function
 // and over clause.
 VELOX_INSTANTIATE_TEST_SUITE_P(

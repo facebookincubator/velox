@@ -107,8 +107,65 @@ class WindowPartition {
       vector_size_t* rawPeerStarts,
       vector_size_t* rawPeerEnds) const;
 
+  /// Sets in 'rawFrameBounds' the frame boundary for the k range
+  /// preceding/following frame.
+  /// 'isStartBound' : start or end boundary of the frame.
+  /// 'isPreceding'  : preceding or following boundary.
+  /// 'frameColumn' : column which has the range boundary for that row.
+  /// 'startRow' : starting row in the partition for this buffer computation.
+  /// 'numRows' : number of rows to compute buffer for.
+  /// 'rawPeerStarts' : buffer of peer row values for each row. If the range
+  /// column is null, then its peer row value is the frame boundary.
+  void computeKRangeFrameBounds(
+      bool isStartBound,
+      bool isPreceding,
+      column_index_t frameColumn,
+      vector_size_t startRow,
+      vector_size_t numRows,
+      const vector_size_t* rawPeerStarts,
+      vector_size_t* rawFrameBounds) const;
+
  private:
   bool compareRowsWithSortKeys(const char* lhs, const char* rhs) const;
+
+  template <typename BoundTest>
+  struct RangeSearchParams {
+    // Determines if the range search should return the first row matching the
+    // frame bound or the last row matching it. firstMatch depends on start or
+    // end bound search semantics.
+    bool firstMatch;
+
+    // Number of rows incremented when searching the range value.
+    // It is +1 for searching following rows, and -1 for searching preceding
+    // rows.
+    int32_t step;
+
+    // Checks if the comparison result (between the order by value and the frame
+    // value) satisfies the frame bound. If it returns true, that means the
+    // frame bound is crossed. This is required because the order by column for
+    // the range search could be ascending or descending. The comparison result
+    // is considered as crossing the boundary based on this directionality.
+    BoundTest boundTest;
+  };
+
+  // Searches for frameColumn[startRow] in orderByColumn[startRow+-]
+  // preceding or following based on the range search params.
+  template <typename BoundTest>
+  vector_size_t searchFrameValue(
+      const RangeSearchParams<BoundTest>& params,
+      vector_size_t startRow,
+      column_index_t orderByColumn,
+      column_index_t frameColumn) const;
+
+  // Iterates over 'numRows' and searches frame value for each row.
+  template <typename BoundTest>
+  void updateKRangeFrameBounds(
+      const RangeSearchParams<BoundTest>& params,
+      column_index_t frameColumn,
+      vector_size_t startRow,
+      vector_size_t numRows,
+      const vector_size_t* rawPeerBuffer,
+      vector_size_t* rawFrameBounds) const;
 
   // The RowContainer associated with the partition.
   // It is owned by the WindowBuild that creates the partition.

@@ -122,6 +122,126 @@ void WindowTestBase::testWindowFunction(
   }
 }
 
+void WindowTestBase::testKRangeFrames(const std::string& function) {
+  vector_size_t size = 20;
+
+  auto rangeFrameTest = [&](const VectorPtr& startColumn,
+                            const VectorPtr& endColumn,
+                            const std::string& overClause,
+                            const std::string& veloxFrame,
+                            const std::string& duckFrame) {
+    auto vectors = makeRowVector({
+        makeFlatVector<int32_t>(size, [](auto row) { return row % 5; }),
+        makeFlatVector<int64_t>(size, [](auto row) { return row; }),
+        startColumn,
+        endColumn,
+    });
+    createDuckDbTable({vectors});
+
+    std::string veloxFunction =
+        fmt::format("{} over ({} {})", function, overClause, veloxFrame);
+    std::string duckFunction =
+        fmt::format("{} over ({} {})", function, overClause, duckFrame);
+    auto op = PlanBuilder()
+                  .setParseOptions(options_)
+                  .values({vectors})
+                  .window({veloxFunction})
+                  .planNode();
+
+    auto rowType = asRowType(vectors->type());
+    std::string columnsString = folly::join(", ", rowType->names());
+    std::string querySql =
+        fmt::format("SELECT {}, {} FROM tmp", columnsString, duckFunction);
+    SCOPED_TRACE(veloxFunction);
+    assertQuery(op, querySql);
+  };
+
+  // For frames with k RANGE PRECEDING/FOLLOWING, columns with the range values
+  // computed according to the frame type are added to the plan by Presto and
+  // Spark. The Velox Window operator also requires these columns to be computed
+  // and setup accordingly.
+  std::string overClause = "partition by c0 order by c1";
+  auto startColumn =
+      makeFlatVector<int64_t>(size, [](auto row) { return row - 4; });
+  auto endColumn =
+      makeFlatVector<int64_t>(size, [](auto row) { return row + 2; });
+  std::string veloxFrame = "range between c2 preceding and c3 following";
+  std::string duckFrame = "range between 4 preceding and 2 following";
+  rangeFrameTest(startColumn, endColumn, overClause, veloxFrame, duckFrame);
+
+  duckFrame = "range between 4 preceding and current row";
+  veloxFrame = "range between c2 preceding and current row";
+  rangeFrameTest(startColumn, endColumn, overClause, veloxFrame, duckFrame);
+
+  // There are no rows between 2 preceding and 4 preceding frames. So this tests
+  // empty frames.
+  endColumn = makeFlatVector<int64_t>(size, [](auto row) { return row - 2; });
+  duckFrame = "range between 4 preceding and 2 preceding";
+  veloxFrame = "range between c2 preceding and c3 preceding";
+  rangeFrameTest(startColumn, endColumn, overClause, veloxFrame, duckFrame);
+
+  // There is exactly one row in the frames between 2 and 6 preceding values.
+  startColumn = makeFlatVector<int64_t>(size, [](auto row) { return row - 6; });
+  duckFrame = "range between 6 preceding and 2 preceding";
+  rangeFrameTest(startColumn, endColumn, overClause, veloxFrame, duckFrame);
+
+  // There are no rows between 2 and 4 following frames. So this tests empty
+  // frames.
+  startColumn = makeFlatVector<int64_t>(size, [](auto row) { return row + 2; });
+  endColumn = makeFlatVector<int64_t>(size, [](auto row) { return row + 4; });
+  duckFrame = "range between 2 following and 4 following";
+  veloxFrame = "range between c2 following and c3 following";
+  rangeFrameTest(startColumn, endColumn, overClause, veloxFrame, duckFrame);
+
+  duckFrame = "range between current row and 4 following";
+  veloxFrame = "range between current row and c3 following";
+  rangeFrameTest(startColumn, endColumn, overClause, veloxFrame, duckFrame);
+
+  // There is exactly one row between 2 and 6 following frame values.
+  endColumn = makeFlatVector<int64_t>(size, [](auto row) { return row + 6; });
+  duckFrame = "range between 2 following and 6 following";
+  veloxFrame = "range between c2 following and c3 following";
+  rangeFrameTest(startColumn, endColumn, overClause, veloxFrame, duckFrame);
+
+  // The below tests are for a descending order by column. For such cases,
+  // preceding rows have greater values than the current row (and following has
+  // smaller values).
+  overClause = "partition by c0 order by c1 desc";
+  startColumn = makeFlatVector<int64_t>(size, [](auto row) { return row + 4; });
+  endColumn = makeFlatVector<int64_t>(size, [](auto row) { return row - 2; });
+  veloxFrame = "range between c2 preceding and c3 following";
+  duckFrame = "range between 4 preceding and 2 following";
+  rangeFrameTest(startColumn, endColumn, overClause, veloxFrame, duckFrame);
+
+  duckFrame = "range between 4 preceding and current row";
+  veloxFrame = "range between c2 preceding and current row";
+  rangeFrameTest(startColumn, endColumn, overClause, veloxFrame, duckFrame);
+
+  endColumn = makeFlatVector<int64_t>(size, [](auto row) { return row + 2; });
+  veloxFrame = "range between c2 preceding and c3 preceding";
+  duckFrame = "range between 4 preceding and 2 preceding";
+  rangeFrameTest(startColumn, endColumn, overClause, veloxFrame, duckFrame);
+
+  startColumn = makeFlatVector<int64_t>(size, [](auto row) { return row + 6; });
+  duckFrame = "range between 6 preceding and 2 preceding";
+  rangeFrameTest(startColumn, endColumn, overClause, veloxFrame, duckFrame);
+
+  startColumn = makeFlatVector<int64_t>(size, [](auto row) { return row - 2; });
+  endColumn = makeFlatVector<int64_t>(size, [](auto row) { return row - 4; });
+  veloxFrame = "range between c2 following and c3 following";
+  duckFrame = "range between 2 following and 4 following";
+  rangeFrameTest(startColumn, endColumn, overClause, veloxFrame, duckFrame);
+
+  veloxFrame = "range between current row and c3 following";
+  duckFrame = "range between current row and 4 following";
+  rangeFrameTest(startColumn, endColumn, overClause, veloxFrame, duckFrame);
+
+  endColumn = makeFlatVector<int64_t>(size, [](auto row) { return row - 6; });
+  veloxFrame = "range between c2 following and c3 following";
+  duckFrame = "range between 2 following and 6 following";
+  rangeFrameTest(startColumn, endColumn, overClause, veloxFrame, duckFrame);
+}
+
 void WindowTestBase::assertWindowFunctionError(
     const std::vector<RowVectorPtr>& input,
     const std::string& function,
