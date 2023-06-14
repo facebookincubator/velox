@@ -475,8 +475,8 @@ struct OverlayFunctionBase {
     if (len >= 0) {
       length = len;
     } else {
-      if constexpr (isVarchar) {
-        length = stringImpl::length<isAscii>(replace);
+      if constexpr (isVarchar && !isAscii) {
+        length = stringImpl::lengthUnicode(replace.data(), replace.size());
       } else {
         length = replace.size();
       }
@@ -492,7 +492,7 @@ struct OverlayFunctionBase {
       StringView input,
       std::pair<int32_t, int32_t> pair) {
     if constexpr (isVarchar && !isAscii) {
-      auto byteRange = stringCore::getByteRange<isAscii>(
+      auto byteRange = stringCore::getByteRange<false>(
           input.data(), pair.first + 1, pair.second);
       result.append(StringView(
           input.data() + byteRange.first, byteRange.second - byteRange.first));
@@ -512,8 +512,8 @@ struct OverlayFunctionBase {
   FOLLY_ALWAYS_INLINE std::pair<int32_t, int32_t>
   substring(const StringView& input, const int64_t pos, const int64_t length) {
     int64_t len = 0;
-    if constexpr (isVarchar) {
-      len = stringImpl::length<isAscii>(input);
+    if constexpr (isVarchar && !isAscii) {
+      len = stringImpl::lengthUnicode(input.data(), input.size());
     } else {
       len = input.size();
     }
