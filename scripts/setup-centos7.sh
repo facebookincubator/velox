@@ -176,17 +176,6 @@ function install_boost {
   $SUDO ./b2 "-j$(nproc)" -d0 install threading=multi
 }
 
-function install_libhdfs3 {
-  cd "${DEPENDENCY_DIR}"
-  github_checkout apache/hawq master
-  cd depends/libhdfs3
-  sed -i "/FIND_PACKAGE(GoogleTest REQUIRED)/d" ./CMakeLists.txt
-  sed -i "s/dumpversion/dumpfullversion/" ./CMake/Platform.cmake
-  sed -i "s/dfs.domain.socket.path\", \"\"/dfs.domain.socket.path\", \"\/var\/lib\/hadoop-hdfs\/dn_socket\"/g" src/common/SessionConfig.cpp
-  sed -i "s/pos < endOfCurBlock/pos \< endOfCurBlock \&\& pos \- cursor \<\= 128 \* 1024/g" src/client/InputStreamImpl.cpp
-  cmake_install
-}
-
 function install_protobuf {
   cd "${DEPENDENCY_DIR}"
   wget https://github.com/protocolbuffers/protobuf/releases/download/v21.4/protobuf-all-21.4.tar.gz
