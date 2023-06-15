@@ -96,19 +96,18 @@ struct InverseBetaCDFFunction {
   VELOX_DEFINE_FUNCTION_TYPES(T);
 
   FOLLY_ALWAYS_INLINE void call(double& result, double a, double b, double p) {
-    constexpr double kInf = std::numeric_limits<double>::infinity();
+    static constexpr double kInf = std::numeric_limits<double>::infinity();
 
-    VELOX_USER_CHECK_GE(p, 0, "p must be in the interval [0, 1]");
-    VELOX_USER_CHECK_LE(p, 1, "p must be in the interval [0, 1]");
-    VELOX_USER_CHECK_GT(a, 0, "a must be > 0");
-    VELOX_USER_CHECK_GT(b, 0, "b must be > 0");
-    if ((a == kInf) || (b == kInf)) {
-      result = 0.0;
-    } else {
-      boost::math::beta_distribution<> dist(a, b);
-      result = boost::math::quantile(dist, p);
-    }
+    VELOX_USER_CHECK((a > 0) && (a != kInf), "a must be a positive real value");
+    VELOX_USER_CHECK((b > 0) && (b != kInf), "b must be a positive real value");
+    VELOX_USER_CHECK(
+        (p >= 0) && (p <= 1) && (p != kInf),
+        "p must be in the interval [0, 1]");
+
+    boost::math::beta_distribution<> dist(a, b);
+    result = boost::math::quantile(dist, p);
   }
 };
+
 } // namespace
 } // namespace facebook::velox::functions

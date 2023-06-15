@@ -258,7 +258,7 @@ Probability Functions
 .. function:: inverse_beta_cdf(a, b, p) -> double
 
     Compute the inverse of the Beta cdf with given a, b parameters for the cumulative
-    probability (p): P(N < n). The a, b parameters must be positive real values.
+    probability (p): P(N < n). The a, b parameters must be positive real values (all of type DOUBLE).
     The probability p must lie on the interval [0, 1].
 
 .. function:: normal_cdf(mean, sd, value) -> double
@@ -266,3 +266,4 @@ Probability Functions
     Compute the Normal cdf with given mean and standard deviation (sd): P(N < value; mean, sd).
     The mean and value must be real values and the standard deviation must be a real and
     positive value (all of type DOUBLE).
+
