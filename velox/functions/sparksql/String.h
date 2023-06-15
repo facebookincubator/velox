@@ -464,8 +464,8 @@ struct OverlayFunctionBase {
       int32_t pos,
       int32_t len) {
     // Calculate and append first part.
-    auto pair = substring<isAscii, isVarchar>(input, 1, pos - 1);
-    append<isAscii, isVarchar>(result, input, pair);
+    auto startAndLength = substring<isAscii, isVarchar>(input, 1, pos - 1);
+    append<isAscii, isVarchar>(result, input, startAndLength);
 
     // Append second part.
     result.append(replace);
@@ -482,8 +482,8 @@ struct OverlayFunctionBase {
       }
     }
     int64_t start = (int64_t)pos + (int64_t)length;
-    pair = substring<isAscii, isVarchar>(input, start, INT32_MAX);
-    append<isAscii, isVarchar>(result, input, pair);
+    startAndLength = substring<isAscii, isVarchar>(input, start, INT32_MAX);
+    append<isAscii, isVarchar>(result, input, startAndLength);
   }
 
   template <bool isAscii, bool isVarchar>
