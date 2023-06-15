@@ -155,7 +155,7 @@ TEST_F(ProbabilityTest, binomialCDF) {
       binomialCDF(-2, 0.5, -1), "numberOfTrials must be greater than 0");
 }
 
-TEST_F(ProbabilityTest, invBinomialCDF) {
+TEST_F(ProbabilityTest, inverseBinomialCDF) {
   const auto invBinomialCDF = [&](std::optional<int64_t> numberOfTrials,
                                   std::optional<double> successProbability,
                                   std::optional<double> p) {
@@ -169,11 +169,14 @@ TEST_F(ProbabilityTest, invBinomialCDF) {
   EXPECT_EQ(0, invBinomialCDF(5, 0.5, 0.03125));
   EXPECT_EQ(41, invBinomialCDF(41, 0.2, 1.0));
   EXPECT_EQ(3, invBinomialCDF(5, 0.5, 0.8125));
-  EXPECT_EQ(1, invBinomialCDF(3, 0.5, 0.5));
-  EXPECT_EQ(6, invBinomialCDF(20, 0.3, 0.60800981220092398));
-  EXPECT_EQ(60, invBinomialCDF(200, 0.3, 0.5348091761606989));
-  EXPECT_EQ(10, invBinomialCDF(20, 0.5, 0.5));
+  EXPECT_EQ(3, invBinomialCDF(3, 0.8403, 0.5));
+  EXPECT_EQ(62, invBinomialCDF(200, 0.3, 0.6));
   EXPECT_EQ(0, invBinomialCDF(79, 0.6, 0.0));
+  EXPECT_EQ(std::nullopt, invBinomialCDF(std::nullopt, 0.6, 0.0));
+  EXPECT_EQ(std::nullopt, invBinomialCDF(11, std::nullopt, 0.22));
+  EXPECT_EQ(std::nullopt, invBinomialCDF(134, 0.6, std::nullopt));
+  EXPECT_EQ(
+      std::nullopt, invBinomialCDF(std::nullopt, std::nullopt, std::nullopt));
 
   // Invalid inputs for numberOfTrails
   VELOX_ASSERT_THROW(
