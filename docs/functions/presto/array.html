@@ -284,6 +284,12 @@ If <code class="docutils literal notranslate"><span class="pre">index</span></co
 </dd></dl>
 
 <dl class="py function">
+<dt class="sig sig-object py" id="flatten">
+<span class="sig-name descname"><span class="pre">flatten</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">array(array(T)))</span> <span class="pre">-&gt;</span> <span class="pre">array(T</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#flatten" title="Permalink to this definition">¶</a></dt>
+<dd><p>Flattens an <code class="docutils literal notranslate"><span class="pre">array(array(T))</span></code> to an <code class="docutils literal notranslate"><span class="pre">array(T)</span></code> by concatenating the contained arrays.</p>
+</dd></dl>
+
+<dl class="py function">
 <dt class="sig sig-object py" id="reduce">
 <span class="sig-name descname"><span class="pre">reduce</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">array(T)</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">initialState</span> <span class="pre">S</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">inputFunction(S</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">T</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">S)</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">outputFunction(S</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">R)</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">R</span></span></span><a class="headerlink" href="#reduce" title="Permalink to this definition">¶</a></dt>
 <dd><p>Returns a single value reduced from <code class="docutils literal notranslate"><span class="pre">array</span></code>. <code class="docutils literal notranslate"><span class="pre">inputFunction</span></code> will
