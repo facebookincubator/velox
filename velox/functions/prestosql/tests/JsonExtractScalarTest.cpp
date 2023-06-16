@@ -182,7 +182,7 @@ TEST_F(JsonExtractScalarTest, overflow) {
       jsonExtractScalar(
           R"(184467440737095516151844674407370955161518446744073709551615)",
           "$"),
-      std::nullopt);
+      "184467440737095516151844674407370955161518446744073709551615");
 }
 
 // TODO: When there is a wildcard in the json path, Presto's behavior is to
@@ -196,10 +196,10 @@ TEST_F(JsonExtractScalarTest, overflow) {
 TEST_F(JsonExtractScalarTest, wildcardSelect) {
   EXPECT_EQ(
       jsonExtractScalar(R"({"tags":{"a":["b"],"c":["d"]}})", "$.tags.c[*]"),
-      "d");
+      std::nullopt);
   EXPECT_EQ(
       jsonExtractScalar(R"({"tags":{"a":["b"],"c":["d"]}})", "$[tags][c][*]"),
-      "d");
+      std::nullopt);
   EXPECT_EQ(
       jsonExtractScalar(R"({"tags":{"a":["b"],"c":["d","e"]}})", "$.tags.c[*]"),
       std::nullopt);

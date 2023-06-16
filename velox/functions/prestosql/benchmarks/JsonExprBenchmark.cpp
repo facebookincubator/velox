@@ -47,6 +47,14 @@ class JsonBenchmark : public velox::functions::test::FunctionBenchmarkBase {
         {"folly_json_array_length"});
     registerFunction<SIMDJsonArrayLengthFunction, int64_t, Json>(
         {"simd_json_array_length"});
+    registerFunction<JsonExtractScalarFunction, Json, Json, Varchar>(
+        {"folly_json_extract_scalar"});
+    registerFunction<SIMDJsonExtractScalarFunction, Json, Json, Varchar>(
+        {"simd_json_extract_scalar"});
+    registerFunction<JsonExtractFunction, Json, Json, Varchar>(
+        {"folly_json_extract"});
+    registerFunction<SIMDJsonExtractFunction, Json, Json, Varchar>(
+        {"simd_json_extract"});
   }
 
   std::string prepareData(int jsonSize) {
@@ -65,6 +73,17 @@ class JsonBenchmark : public velox::functions::test::FunctionBenchmarkBase {
       jsonVector->set(i, velox::StringView(json));
     }
     return jsonVector;
+  }
+
+  velox::VectorPtr makeJsonPathData(
+      const std::string& jsonPath,
+      int vectorSize) {
+    auto jsonPathVector =
+        vectorMaker_.flatVector<velox::StringView>(vectorSize, VARCHAR());
+    for (auto i = 0; i < vectorSize; i++) {
+      jsonPathVector->set(i, velox::StringView(jsonPath));
+    }
+    return jsonPathVector;
   }
 
   void runWithJson(
@@ -94,6 +113,24 @@ class JsonBenchmark : public velox::functions::test::FunctionBenchmarkBase {
     auto boolVector = vectorMaker_.flatVector<bool>({true});
 
     auto rowVector = vectorMaker_.rowVector({jsonVector, boolVector});
+    auto exprSet =
+        compileExpression(fmt::format("{}(c0, c1)", fnName), rowVector->type());
+    suspender.dismiss();
+    doRun(iter, exprSet, rowVector);
+  }
+
+  void runWithJsonExtract(
+      int iter,
+      int vectorSize,
+      const std::string& fnName,
+      const std::string& json,
+      const std::string& jsonPath) {
+    folly::BenchmarkSuspender suspender;
+
+    auto jsonVector = makeJsonData(json, vectorSize);
+    auto jsonPathVector = makeJsonPathData(jsonPath, vectorSize);
+
+    auto rowVector = vectorMaker_.rowVector({jsonVector, jsonPathVector});
     auto exprSet =
         compileExpression(fmt::format("{}(c0, c1)", fnName), rowVector->type());
     suspender.dismiss();
@@ -160,6 +197,42 @@ void SIMDJsonArrayLength(int iter, int vectorSize, int jsonSize) {
   auto json = benchmark.prepareData(jsonSize);
   suspender.dismiss();
   benchmark.runWithJson(iter, vectorSize, "simd_json_array_length", json);
+}
+
+void FollyJsonExtract(int iter, int vectorSize, int jsonSize) {
+  folly::BenchmarkSuspender suspender;
+  JsonBenchmark benchmark;
+  auto json = benchmark.prepareData(jsonSize);
+  suspender.dismiss();
+  benchmark.runWithJsonExtract(
+      iter, vectorSize, "folly_json_extract", json, "$.key");
+}
+
+void SIMDJsonExtract(int iter, int vectorSize, int jsonSize) {
+  folly::BenchmarkSuspender suspender;
+  JsonBenchmark benchmark;
+  auto json = benchmark.prepareData(jsonSize);
+  suspender.dismiss();
+  benchmark.runWithJsonExtract(
+      iter, vectorSize, "simd_json_extract", json, "$.key");
+}
+
+void FollyJsonExtractScalar(int iter, int vectorSize, int jsonSize) {
+  folly::BenchmarkSuspender suspender;
+  JsonBenchmark benchmark;
+  auto json = benchmark.prepareData(jsonSize);
+  suspender.dismiss();
+  benchmark.runWithJsonExtract(
+      iter, vectorSize, "folly_json_extract_scalar", json, "$.key[0].k1");
+}
+
+void SIMDJsonExtractScalar(int iter, int vectorSize, int jsonSize) {
+  folly::BenchmarkSuspender suspender;
+  JsonBenchmark benchmark;
+  auto json = benchmark.prepareData(jsonSize);
+  suspender.dismiss();
+  benchmark.runWithJsonExtract(
+      iter, vectorSize, "simd_json_extract_scalar", json, "$.key[0].k1");
 }
 
 BENCHMARK_DRAW_LINE();
@@ -277,6 +350,84 @@ BENCHMARK_NAMED_PARAM(
     10000);
 BENCHMARK_RELATIVE_NAMED_PARAM(
     SIMDJsonArrayLength,
+    100_iters_10000bytes_size,
+    100,
+    10000);
+BENCHMARK_DRAW_LINE();
+
+BENCHMARK_DRAW_LINE();
+BENCHMARK_NAMED_PARAM(FollyJsonExtract, 100_iters_10bytes_size, 100, 10);
+BENCHMARK_RELATIVE_NAMED_PARAM(
+    SIMDJsonExtract,
+    100_iters_10bytes_size,
+    100,
+    10);
+BENCHMARK_DRAW_LINE();
+
+BENCHMARK_NAMED_PARAM(FollyJsonExtract, 100_iters_100bytes_size, 100, 100);
+BENCHMARK_RELATIVE_NAMED_PARAM(
+    SIMDJsonExtract,
+    100_iters_100bytes_size,
+    100,
+    100);
+BENCHMARK_DRAW_LINE();
+
+BENCHMARK_NAMED_PARAM(FollyJsonExtract, 100_iters_1000bytes_size, 100, 1000);
+BENCHMARK_RELATIVE_NAMED_PARAM(
+    SIMDJsonExtract,
+    100_iters_1000bytes_size,
+    100,
+    1000);
+BENCHMARK_DRAW_LINE();
+
+BENCHMARK_NAMED_PARAM(FollyJsonExtract, 100_iters_10000bytes_size, 100, 10000);
+BENCHMARK_RELATIVE_NAMED_PARAM(
+    SIMDJsonExtract,
+    100_iters_10000bytes_size,
+    100,
+    10000);
+BENCHMARK_DRAW_LINE();
+
+BENCHMARK_DRAW_LINE();
+BENCHMARK_NAMED_PARAM(FollyJsonExtractScalar, 100_iters_10bytes_size, 100, 10);
+BENCHMARK_RELATIVE_NAMED_PARAM(
+    SIMDJsonExtractScalar,
+    100_iters_10bytes_size,
+    100,
+    10);
+BENCHMARK_DRAW_LINE();
+
+BENCHMARK_NAMED_PARAM(
+    FollyJsonExtractScalar,
+    100_iters_100bytes_size,
+    100,
+    100);
+BENCHMARK_RELATIVE_NAMED_PARAM(
+    SIMDJsonExtractScalar,
+    100_iters_100bytes_size,
+    100,
+    100);
+BENCHMARK_DRAW_LINE();
+
+BENCHMARK_NAMED_PARAM(
+    FollyJsonExtractScalar,
+    100_iters_1000bytes_size,
+    100,
+    1000);
+BENCHMARK_RELATIVE_NAMED_PARAM(
+    SIMDJsonExtractScalar,
+    100_iters_1000bytes_size,
+    100,
+    1000);
+BENCHMARK_DRAW_LINE();
+
+BENCHMARK_NAMED_PARAM(
+    FollyJsonExtractScalar,
+    100_iters_10000bytes_size,
+    100,
+    10000);
+BENCHMARK_RELATIVE_NAMED_PARAM(
+    SIMDJsonExtractScalar,
     100_iters_10000bytes_size,
     100,
     10000);

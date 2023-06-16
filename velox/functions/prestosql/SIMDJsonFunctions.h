@@ -17,29 +17,30 @@
 #include "velox/functions/Macros.h"
 #include "velox/functions/UDFOutputString.h"
 #include "velox/functions/prestosql/json/JsonPathTokenizer.h"
+#include "velox/functions/prestosql/json/SimdJsonExtractor.h"
 #include "velox/functions/prestosql/types/JsonType.h"
 
 namespace facebook::velox::functions {
 
-struct ParserContext {
- public:
-  explicit ParserContext() noexcept;
-  explicit ParserContext(const char* data, size_t length) noexcept
-      : padded_json(data, length) {}
-  void parseElement() {
-    jsonEle = domParser.parse(padded_json);
+static const uint32_t kMaxCacheNum{32};
+static bool tokenize(const std::string& path, std::vector<std::string>& token) {
+  static JsonPathTokenizer kTokenizer;
+  if (path.empty()) {
+    return false;
   }
-  void parseDocument() {
-    jsonDoc = ondemandParser.iterate(padded_json);
+  if (!kTokenizer.reset(path)) {
+    return false;
   }
-  simdjson::dom::element jsonEle;
-  simdjson::ondemand::document jsonDoc;
-
- private:
-  simdjson::padded_string padded_json;
-  simdjson::dom::parser domParser;
-  simdjson::ondemand::parser ondemandParser;
-};
+  while (kTokenizer.hasNext()) {
+    if (auto curr = kTokenizer.getNext()) {
+      token.push_back(curr.value());
+    } else {
+      token.clear();
+      return false;
+    }
+  }
+  return true;
+}
 
 template <typename T>
 struct SIMDIsJsonScalarFunction {
@@ -119,6 +120,106 @@ struct SIMDJsonArrayContainsFunction {
       return false;
     }
     return true;
+  }
+};
+
+template <typename T>
+struct SIMDJsonExtractScalarFunction {
+  VELOX_DEFINE_FUNCTION_TYPES(T);
+
+  std::unordered_map<std::string, std::vector<std::string>> tokens_;
+
+  FOLLY_ALWAYS_INLINE void initialize(
+      const core::QueryConfig&,
+      const arg_type<Json>& json,
+      const arg_type<Varchar>& jsonPath) {
+    std::vector<std::string> token;
+    if (!tokenize(jsonPath, token)) {
+      VELOX_USER_FAIL("Invalid JSON path: {}", jsonPath);
+    }
+    if (tokens_.size() == kMaxCacheNum) {
+      tokens_.erase(tokens_.begin());
+    }
+    tokens_[jsonPath] = token;
+  }
+
+  FOLLY_ALWAYS_INLINE bool call(
+      out_type<Varchar>& result,
+      const arg_type<Json>& json,
+      const arg_type<Varchar>& jsonPath) {
+    std::string jsonPathStr{jsonPath};
+    std::vector<std::string> token;
+    bool retVal = false;
+
+    if (tokens_.count(jsonPathStr)) {
+      token = tokens_.at(jsonPath);
+    } else {
+      if (!tokenize(jsonPath, token)) {
+        VELOX_USER_FAIL("Invalid JSON path: {}", jsonPathStr);
+      }
+      if (tokens_.size() == kMaxCacheNum) {
+        tokens_.erase(tokens_.cbegin());
+      }
+      tokens_[jsonPath] = token;
+    }
+
+    auto extractResult = simdJsonExtractScalar(json, token);
+
+    if (extractResult.has_value()) {
+      UDFOutputString::assign(result, extractResult.value());
+      retVal = true;
+    }
+    return retVal;
+  }
+};
+
+template <typename T>
+struct SIMDJsonExtractFunction {
+  VELOX_DEFINE_FUNCTION_TYPES(T);
+
+  std::unordered_map<std::string, std::vector<std::string>> tokens_;
+
+  FOLLY_ALWAYS_INLINE void initialize(
+      const core::QueryConfig&,
+      const arg_type<Json>& json,
+      const arg_type<Varchar>& jsonPath) {
+    std::vector<std::string> token;
+    if (!tokenize(jsonPath, token)) {
+      VELOX_USER_FAIL("Invalid JSON path: {}", jsonPath);
+    }
+    if (tokens_.size() == kMaxCacheNum) {
+      tokens_.erase(tokens_.begin());
+    }
+    tokens_[jsonPath] = token;
+  }
+
+  FOLLY_ALWAYS_INLINE bool call(
+      out_type<Json>& result,
+      const arg_type<Json>& json,
+      const arg_type<Varchar>& jsonPath) {
+    std::string jsonPathStr{jsonPath};
+    std::vector<std::string> token;
+    bool retVal = false;
+
+    if (tokens_.count(jsonPathStr)) {
+      token = tokens_.at(jsonPath);
+    } else {
+      if (!tokenize(jsonPath, token)) {
+        VELOX_USER_FAIL("Invalid JSON path: {}", jsonPathStr);
+      }
+      if (tokens_.size() == kMaxCacheNum) {
+        tokens_.erase(tokens_.cbegin());
+      }
+      tokens_[jsonPath] = token;
+    }
+
+    auto extractResult = simdJsonExtract(json, token);
+
+    if (extractResult.has_value()) {
+      UDFOutputString::assign(result, extractResult.value());
+      retVal = true;
+    }
+    return retVal;
   }
 };
 

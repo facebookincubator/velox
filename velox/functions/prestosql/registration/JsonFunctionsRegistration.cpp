@@ -25,14 +25,14 @@ void registerJsonFunctions(const std::string& prefix) {
   registerFunction<SIMDIsJsonScalarFunction, bool, Json>(
       {prefix + "is_json_scalar"});
 
-  registerFunction<JsonExtractScalarFunction, Varchar, Json, Varchar>(
+  registerFunction<SIMDJsonExtractScalarFunction, Json, Json, Varchar>(
       {prefix + "json_extract_scalar"});
-  registerFunction<JsonExtractScalarFunction, Varchar, Varchar, Varchar>(
+  registerFunction<SIMDJsonExtractScalarFunction, Json, Varchar, Varchar>(
       {prefix + "json_extract_scalar"});
 
-  registerFunction<JsonExtractFunction, Json, Json, Varchar>(
+  registerFunction<SIMDJsonExtractFunction, Json, Json, Varchar>(
       {prefix + "json_extract"});
-  registerFunction<JsonExtractFunction, Json, Varchar, Varchar>(
+  registerFunction<SIMDJsonExtractFunction, Json, Varchar, Varchar>(
       {prefix + "json_extract"});
 
   registerFunction<SIMDJsonArrayLengthFunction, int64_t, Json>(
