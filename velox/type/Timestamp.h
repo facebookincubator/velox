@@ -36,8 +36,8 @@ struct Timestamp {
   static constexpr int64_t kMillisecondsInSecond = 1'000;
   static constexpr int64_t kNanosecondsInMillisecond = 1'000'000;
 
-  // Limit the range of seconds to avoid some problems. Seconds in
-  // Timestamp need to be in range [INT64_MIN/1000 - 1, INT64_MAX/1000].
+  // Limit the range of seconds to avoid some problems. Seconds should be
+  // in the range [INT64_MIN/1000 - 1, INT64_MAX/1000].
   // Presto's Timestamp is stored in one 64-bit signed integer for
   // milliseconds, this range ensures that Timestamp's range in Velox will not
   // be smaller than Presto, and can make Timestamp::toString work correctly.
@@ -78,7 +78,10 @@ struct Timestamp {
           checkedMultiply(seconds_, (int64_t)1'000'000'000), (int64_t)nanos_);
     } catch (const std::exception& e) {
       VELOX_USER_FAIL(
-          "Could not convert Timestamp({}, {}) to nanoseconds, {}", e.what());
+          "Could not convert Timestamp({}, {}) to nanoseconds, {}",
+          seconds_,
+          nanos_,
+          e.what());
     }
   }
 
@@ -91,7 +94,10 @@ struct Timestamp {
           (int64_t)(nanos_ / 1'000'000));
     } catch (const std::exception& e) {
       VELOX_USER_FAIL(
-          "Could not convert Timestamp({}, {}) to microseconds, {}", e.what());
+          "Could not convert Timestamp({}, {}) to microseconds, {}",
+          seconds_,
+          nanos_,
+          e.what());
     }
   }
 
@@ -104,7 +110,10 @@ struct Timestamp {
           (int64_t)(nanos_ / 1'000));
     } catch (const std::exception& e) {
       VELOX_USER_FAIL(
-          "Could not convert Timestamp({}, {}) to microseconds, {}", e.what());
+          "Could not convert Timestamp({}, {}) to microseconds, {}",
+          seconds_,
+          nanos_,
+          e.what());
     }
   }
 
