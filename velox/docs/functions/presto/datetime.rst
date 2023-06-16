@@ -152,7 +152,9 @@ Convenience Extraction Functions
 These functions support TIMESTAMP, DATE, and TIMESTAMP WITH TIME ZONE input types.
 
 For these functions, the input timestamp has range limitations on seconds and nanoseconds.
-This behavior is different from Presto Java that allows arbitrary large timestamps.
+Seconds should be in range [INT64_MIN/1000 - 1, INT64_MAX/1000], nanoseconds needs
+to be in range [0, 999999999]. This behavior is different from Presto Java that allows
+arbitrary large timestamps.
 
 .. function:: day(x) -> bigint
 
