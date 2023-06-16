@@ -103,7 +103,10 @@ class MallocAllocator : public MemoryAllocator {
   MallocAllocator();
 
   ~MallocAllocator() {
-    VELOX_CHECK((numAllocated_ == 0) && (numMapped_ == 0), "{}", toString());
+    if (numAllocated_ != 0 || numMapped_ != 0) {
+      VELOX_MEM_LOG(WARNING)
+          << "Unreleased allocation detected: " << toString();
+    }
   }
 
   Kind kind() const override {
