@@ -78,19 +78,19 @@
 </dd></dl>
 
 <dl class="py function">
+<dt class="sig sig-object py" id="map_concat">
+<span class="sig-name descname"><span class="pre">map_concat</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">map1(K</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">V)</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">map2(K</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">V)</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">...</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">mapN(K</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">V))</span> <span class="pre">-&gt;</span> <span class="pre">map(K</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">V</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#map_concat" title="Permalink to this definition">¶</a></dt>
+<dd><p>Returns the union of all the given maps. If a key is found in multiple given maps,
+that key’s value in the resulting map comes from the last one of those maps.</p>
+</dd></dl>
+
+<dl class="py function">
 <dt class="sig sig-object py" id="map_entries">
 <span class="sig-name descname"><span class="pre">map_entries</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">map(K</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">V))</span> <span class="pre">-&gt;</span> <span class="pre">array(row(K</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">V)</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#map_entries" title="Permalink to this definition">¶</a></dt>
 <dd><p>Returns an array of all entries in the given map.</p>
 <div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">SELECT</span> <span class="n">map_entries</span><span class="p">(</span><span class="n">MAP</span><span class="p">(</span><span class="n">ARRAY</span><span class="p">[</span><span class="mi">1</span><span class="p">,</span> <span class="mi">2</span><span class="p">],</span> <span class="n">ARRAY</span><span class="p">[</span><span class="s1">&#39;x&#39;</span><span class="p">,</span> <span class="s1">&#39;y&#39;</span><span class="p">]));</span> <span class="o">--</span> <span class="p">[</span><span class="n">ROW</span><span class="p">(</span><span class="mi">1</span><span class="p">,</span> <span class="s1">&#39;x&#39;</span><span class="p">),</span> <span class="n">ROW</span><span class="p">(</span><span class="mi">2</span><span class="p">,</span> <span class="s1">&#39;y&#39;</span><span class="p">)]</span>
 </pre></div>
 </div>
-</dd></dl>
-
-<dl class="py function">
-<dt class="sig sig-object py" id="map_concat">
-<span class="sig-name descname"><span class="pre">map_concat</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">map1(K</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">V)</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">map2(K</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">V)</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">...</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">mapN(K</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">V))</span> <span class="pre">-&gt;</span> <span class="pre">map(K</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">V</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#map_concat" title="Permalink to this definition">¶</a></dt>
-<dd><p>Returns the union of all the given maps. If a key is found in multiple given maps,
-that key’s value in the resulting map comes from the last one of those maps.</p>
 </dd></dl>
 
 <dl class="py function">
@@ -105,6 +105,15 @@ that key’s value in the resulting map comes from the last one of those maps.</
 </dd></dl>
 
 <dl class="py function">
+<dt class="sig sig-object py" id="map_from_entries">
+<span class="sig-name descname"><span class="pre">map_from_entries</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">array(row(K</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">V)))</span> <span class="pre">-&gt;</span> <span class="pre">map(K</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">V</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#map_from_entries" title="Permalink to this definition">¶</a></dt>
+<dd><p>Returns a map created from the given array of entries.</p>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">SELECT</span> <span class="n">map_from_entries</span><span class="p">(</span><span class="n">ARRAY</span><span class="p">[(</span><span class="mi">1</span><span class="p">,</span> <span class="s1">&#39;x&#39;</span><span class="p">),</span> <span class="p">(</span><span class="mi">2</span><span class="p">,</span> <span class="s1">&#39;y&#39;</span><span class="p">)]);</span> <span class="o">--</span> <span class="p">{</span><span class="mi">1</span> <span class="o">-&gt;</span> <span class="s1">&#39;x&#39;</span><span class="p">,</span> <span class="mi">2</span> <span class="o">-&gt;</span> <span class="s1">&#39;y&#39;</span><span class="p">}</span>
+</pre></div>
+</div>
+</dd></dl>
+
+<dl class="py function">
 <dt class="sig sig-object py" id="map_keys">
 <span class="sig-name descname"><span class="pre">map_keys</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">x(K</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">V))</span> <span class="pre">-&gt;</span> <span class="pre">array(K</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#map_keys" title="Permalink to this definition">¶</a></dt>
 <dd><p>Returns all the keys in the map <code class="docutils literal notranslate"><span class="pre">x</span></code>.</p>
@@ -114,16 +123,6 @@ that key’s value in the resulting map comes from the last one of those maps.</
 <dt class="sig sig-object py" id="map_values">
 <span class="sig-name descname"><span class="pre">map_values</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">x(K</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">V))</span> <span class="pre">-&gt;</span> <span class="pre">array(V</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#map_values" title="Permalink to this definition">¶</a></dt>
 <dd><p>Returns all the values in the map <code class="docutils literal notranslate"><span class="pre">x</span></code>.</p>
-</dd></dl>
-
-<dl class="py function">
-<dt class="sig sig-object py">
-<span class="sig-name descname"><span class="pre">subscript</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">map(K</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">V)</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">key</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">V</span></span></span></dt>
-<dd><blockquote>
-<div><p>Returns value for given <code class="docutils literal notranslate"><span class="pre">key</span></code>. Throws if the key is not contained in the map.
-Corresponds to SQL subscript operator [].</p>
-<p>SELECT name_to_age_map[‘Bob’] AS bob_age;</p>
-</div></blockquote>
 </dd></dl>
 
 <dl class="py function">
@@ -142,6 +141,16 @@ For keys only presented in one map, NULL will be passed as the value for the mis
                     <span class="p">(</span><span class="n">k</span><span class="p">,</span> <span class="n">v1</span><span class="p">,</span> <span class="n">v2</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">k</span> <span class="o">||</span> <span class="n">CAST</span><span class="p">(</span><span class="n">v1</span><span class="o">/</span><span class="n">v2</span> <span class="n">AS</span> <span class="n">VARCHAR</span><span class="p">));</span>
 </pre></div>
 </div>
+</dd></dl>
+
+<dl class="py function">
+<dt class="sig sig-object py">
+<span class="sig-name descname"><span class="pre">subscript</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">map(K</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">V)</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">key</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">V</span></span></span></dt>
+<dd><blockquote>
+<div><p>Returns value for given <code class="docutils literal notranslate"><span class="pre">key</span></code>. Throws if the key is not contained in the map.
+Corresponds to SQL subscript operator [].</p>
+<p>SELECT name_to_age_map[‘Bob’] AS bob_age;</p>
+</div></blockquote>
 </dd></dl>
 
 <dl class="py function">
