@@ -22,50 +22,35 @@ namespace facebook::velox::dwrf {
 
 using namespace dwio::common;
 
-void SelectiveTimestampColumnReader::initDwrf(DwrfParams& params) {
+void SelectiveTimestampColumnReader::init(DwrfParams& params) {
+  auto format = params.stripeStreams().format();
   EncodingKey encodingKey{nodeType_->id, params.flatMapContext().sequence};
   auto& stripe = params.stripeStreams();
 
-  version = convertRleVersion(stripe.getEncoding(encodingKey).kind());
+  DwrfStreamIdentifier dataId;
+  DwrfStreamIdentifier nanoDataId;
+  if (format == DwrfFormat::kDwrf) {
+    version = convertRleVersion(stripe.getEncoding(encodingKey).kind());
+    dataId = encodingKey.forKind(proto::Stream_Kind_DATA);
+    nanoDataId = encodingKey.forKind(proto::Stream_Kind_NANO_DATA);
+  } else {
+    VELOX_CHECK(format == DwrfFormat::kOrc);
+    version = convertRleVersion(stripe.getEncodingOrc(encodingKey).kind());
+    dataId = encodingKey.forKind(proto::orc::Stream_Kind_DATA);
+    nanoDataId = encodingKey.forKind(proto::orc::Stream_Kind_SECONDARY);
+  }
 
-  auto data = encodingKey.forKind(proto::Stream_Kind_DATA);
-  bool vints = stripe.getUseVInts(data);
+  bool vints = stripe.getUseVInts(dataId);
   seconds_ = createRleDecoder</*isSigned*/ true>(
-      stripe.getStream(data, true),
+      stripe.getStream(dataId, true),
       version,
       memoryPool_,
       vints,
       LONG_BYTE_SIZE);
 
-  auto nanoData = encodingKey.forKind(proto::Stream_Kind_NANO_DATA);
-  bool nanoVInts = stripe.getUseVInts(nanoData);
+  bool nanoVInts = stripe.getUseVInts(nanoDataId);
   nano_ = createRleDecoder</*isSigned*/ false>(
-      stripe.getStream(nanoData, true),
-      version,
-      memoryPool_,
-      nanoVInts,
-      LONG_BYTE_SIZE);
-}
-
-void SelectiveTimestampColumnReader::initOrc(DwrfParams& params) {
-  EncodingKey encodingKey{nodeType_->id, params.flatMapContext().sequence};
-  auto& stripe = params.stripeStreams();
-
-  version = convertRleVersion(stripe.getEncodingOrc(encodingKey).kind());
-
-  auto data = encodingKey.forKind(proto::orc::Stream_Kind_DATA);
-  bool vints = stripe.getUseVInts(data);
-  seconds_ = createRleDecoder</*isSigned*/ true>(
-      stripe.getStream(data, true),
-      version,
-      memoryPool_,
-      vints,
-      LONG_BYTE_SIZE);
-
-  auto nanoData = encodingKey.forKind(proto::orc::Stream_Kind_SECONDARY);
-  bool nanoVInts = stripe.getUseVInts(nanoData);
-  nano_ = createRleDecoder</*isSigned*/ false>(
-      stripe.getStream(nanoData, true),
+      stripe.getStream(nanoDataId, true),
       version,
       memoryPool_,
       nanoVInts,

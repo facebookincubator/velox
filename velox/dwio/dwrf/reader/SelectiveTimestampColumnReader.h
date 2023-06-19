@@ -23,20 +23,6 @@
 namespace facebook::velox::dwrf {
 class SelectiveTimestampColumnReader
     : public dwio::common::SelectiveColumnReader {
-  void init(DwrfParams& params) {
-    auto format = params.stripeStreams().format();
-    if (format == DwrfFormat::kDwrf) {
-      initDwrf(params);
-    } else {
-      VELOX_CHECK(format == DwrfFormat::kOrc);
-      initOrc(params);
-    }
-  }
-
-  void initDwrf(DwrfParams& params);
-
-  void initOrc(DwrfParams& params);
-
  public:
   // The readers produce int64_t, the vector is Timestamps.
   using ValueType = int64_t;
@@ -46,6 +32,7 @@ class SelectiveTimestampColumnReader
       DwrfParams& params,
       common::ScanSpec& scanSpec);
 
+  void init(DwrfParams& params);
   void seekToRowGroup(uint32_t index) override;
   uint64_t skip(uint64_t numValues) override;
 

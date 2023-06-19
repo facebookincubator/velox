@@ -72,8 +72,6 @@ class SelectiveStringDictionaryColumnReader
   void makeDictionaryBaseVector();
 
   void init(DwrfParams& params);
-  void initDwrf(DwrfParams& params);
-  void initOrc(DwrfParams& params);
 
   template <typename TVisitor>
   void readWithVisitor(RowSet rows, TVisitor visitor);

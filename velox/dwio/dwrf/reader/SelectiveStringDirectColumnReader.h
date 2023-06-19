@@ -23,20 +23,6 @@ namespace facebook::velox::dwrf {
 
 class SelectiveStringDirectColumnReader
     : public dwio::common::SelectiveColumnReader {
-  void init(DwrfParams& params) {
-    auto format = params.stripeStreams().format();
-    if (format == DwrfFormat::kDwrf) {
-      initDwrf(params);
-    } else {
-      VELOX_CHECK(format == DwrfFormat::kOrc);
-      initOrc(params);
-    }
-  }
-
-  void initDwrf(DwrfParams& params);
-
-  void initOrc(DwrfParams& params);
-
  public:
   using ValueType = StringView;
   SelectiveStringDirectColumnReader(
@@ -56,6 +42,7 @@ class SelectiveStringDirectColumnReader
     bufferStart_ = bufferEnd_;
   }
 
+  void init(DwrfParams& params);
   uint64_t skip(uint64_t numValues) override;
 
   void read(vector_size_t offset, RowSet rows, const uint64_t* incomingNulls)

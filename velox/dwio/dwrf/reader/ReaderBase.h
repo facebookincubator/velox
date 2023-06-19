@@ -80,12 +80,12 @@ class ReaderBase {
       memory::MemoryPool& pool,
       std::unique_ptr<dwio::common::BufferedInput> input,
       std::unique_ptr<PostScript> ps,
-      const proto::Footer* footer,
+      std::unique_ptr<FooterWrapper> footer,
       std::unique_ptr<StripeMetadataCache> cache,
       std::unique_ptr<encryption::DecryptionHandler> handler = nullptr)
       : pool_{pool},
         postScript_{std::move(ps)},
-        footer_{std::make_unique<FooterWrapper>(footer)},
+        footer_{std::move(footer)},
         cache_{std::move(cache)},
         handler_{std::move(handler)},
         input_{std::move(input)},
@@ -93,31 +93,6 @@ class ReaderBase {
             std::dynamic_pointer_cast<const RowType>(convertType(*footer_))},
         fileLength_{0},
         psLength_{0} {
-    DWIO_ENSURE(footer_->getDwrfPtr()->GetArena());
-    DWIO_ENSURE_NOT_NULL(schema_, "invalid schema");
-    if (!handler_) {
-      handler_ = encryption::DecryptionHandler::create(*footer);
-    }
-  }
-
-  ReaderBase(
-      memory::MemoryPool& pool,
-      std::unique_ptr<dwio::common::BufferedInput> input,
-      std::unique_ptr<PostScript> ps,
-      const proto::orc::Footer* footer,
-      std::unique_ptr<StripeMetadataCache> cache,
-      std::unique_ptr<encryption::DecryptionHandler> handler = nullptr)
-      : pool_{pool},
-        postScript_{std::move(ps)},
-        footer_{std::make_unique<FooterWrapper>(footer)},
-        cache_{std::move(cache)},
-        handler_{std::move(handler)},
-        input_{std::move(input)},
-        schema_{
-            std::dynamic_pointer_cast<const RowType>(convertType(*footer_))},
-        fileLength_{0},
-        psLength_{0} {
-    DWIO_ENSURE(footer_->getOrcPtr()->GetArena());
     DWIO_ENSURE_NOT_NULL(schema_, "invalid schema");
     if (!handler_) {
       handler_ = encryption::DecryptionHandler::create(*footer_);
