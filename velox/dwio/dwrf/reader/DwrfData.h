@@ -96,8 +96,6 @@ class DwrfData : public dwio::common::FormatData {
   }
 
   void init(StripeStreams& stripe);
-  void initDwrf(StripeStreams& stripe);
-  void initOrc(StripeStreams& stripe);
 
   memory::MemoryPool& memoryPool_;
   const std::shared_ptr<const dwio::common::TypeWithId> nodeType_;

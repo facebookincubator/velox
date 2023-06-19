@@ -981,98 +981,75 @@ class StringDictionaryColumnReader : public ColumnReader {
 
   void ensureInitialized();
 
-  void initOrc(StripeStreams& stripe) {
-    EncodingKey encodingKey{nodeType_->id, flatMapContext_.sequence};
-    RleVersion rleVersion =
-        convertRleVersion(stripe.getEncodingOrc(encodingKey).kind());
-    dictionaryCount = stripe.getEncodingOrc(encodingKey).dictionarysize();
-
-    const auto dataId = encodingKey.forKind(proto::orc::Stream_Kind_DATA);
-    bool dictVInts = stripe.getUseVInts(dataId);
-    dictIndex = createRleDecoder</*isSigned*/ false>(
-        stripe.getStream(dataId, true),
-        rleVersion,
-        memoryPool_,
-        dictVInts,
-        dwio::common::INT_BYTE_SIZE);
-
-    const auto lenId = encodingKey.forKind(proto::orc::Stream_Kind_LENGTH);
-    bool lenVInts = stripe.getUseVInts(lenId);
-    lengthDecoder = createRleDecoder</*isSigned*/ false>(
-        stripe.getStream(lenId, false),
-        rleVersion,
-        memoryPool_,
-        lenVInts,
-        dwio::common::INT_BYTE_SIZE);
-
-    blobStream = stripe.getStream(
-        encodingKey.forKind(proto::orc::Stream_Kind_DICTIONARY_DATA), false);
-  }
-
-  void initDwrf(StripeStreams& stripe) {
-    EncodingKey encodingKey{nodeType_->id, flatMapContext_.sequence};
-    RleVersion rleVersion =
-        convertRleVersion(stripe.getEncoding(encodingKey).kind());
-    dictionaryCount = stripe.getEncoding(encodingKey).dictionarysize();
-
-    const auto dataId = encodingKey.forKind(proto::Stream_Kind_DATA);
-    bool dictVInts = stripe.getUseVInts(dataId);
-    dictIndex = createRleDecoder</*isSigned*/ false>(
-        stripe.getStream(dataId, true),
-        rleVersion,
-        memoryPool_,
-        dictVInts,
-        dwio::common::INT_BYTE_SIZE);
-
-    const auto lenId = encodingKey.forKind(proto::Stream_Kind_LENGTH);
-    bool lenVInts = stripe.getUseVInts(lenId);
-    lengthDecoder = createRleDecoder</*isSigned*/ false>(
-        stripe.getStream(lenId, false),
-        rleVersion,
-        memoryPool_,
-        lenVInts,
-        dwio::common::INT_BYTE_SIZE);
-
-    blobStream = stripe.getStream(
-        encodingKey.forKind(proto::Stream_Kind_DICTIONARY_DATA), false);
-
-    // handle in dictionary stream
-    std::unique_ptr<dwio::common::SeekableInputStream> inDictStream =
-        stripe.getStream(
-            encodingKey.forKind(proto::Stream_Kind_IN_DICTIONARY), false);
-    if (inDictStream) {
-      inDictionaryReader =
-          createBooleanRleDecoder(std::move(inDictStream), encodingKey);
-
-      // stride dictionary only exists if in dictionary exists
-      strideDictStream = stripe.getStream(
-          encodingKey.forKind(proto::Stream_Kind_STRIDE_DICTIONARY), true);
-      DWIO_ENSURE_NOT_NULL(strideDictStream, "Stride dictionary is missing");
-
-      indexStream_ = stripe.getStream(
-          encodingKey.forKind(proto::Stream_Kind_ROW_INDEX), true);
-      DWIO_ENSURE_NOT_NULL(indexStream_, "String index is missing");
-
-      const auto strideDictLenId =
-          encodingKey.forKind(proto::Stream_Kind_STRIDE_DICTIONARY_LENGTH);
-      bool strideLenVInt = stripe.getUseVInts(strideDictLenId);
-      strideDictLengthDecoder = createRleDecoder</*isSigned*/ false>(
-          stripe.getStream(strideDictLenId, true),
-          rleVersion,
-          memoryPool_,
-          strideLenVInt,
-          dwio::common::INT_BYTE_SIZE);
-    }
-  }
-
   void init(StripeStreams& stripe) {
     auto format = stripe.format();
+    EncodingKey encodingKey{nodeType_->id, flatMapContext_.sequence};
+
+    RleVersion rleVersion;
+    DwrfStreamIdentifier dataId;
+    DwrfStreamIdentifier lenId;
+    DwrfStreamIdentifier dictionaryId;
     if (format == DwrfFormat::kDwrf) {
-      initDwrf(stripe);
+      rleVersion = convertRleVersion(stripe.getEncoding(encodingKey).kind());
+      dictionaryCount = stripe.getEncoding(encodingKey).dictionarysize();
+      dataId = encodingKey.forKind(proto::Stream_Kind_DATA);
+      lenId = encodingKey.forKind(proto::Stream_Kind_LENGTH);
+      dictionaryId = encodingKey.forKind(proto::Stream_Kind_DICTIONARY_DATA);
+
+      // handle in dictionary stream
+      std::unique_ptr<dwio::common::SeekableInputStream> inDictStream =
+          stripe.getStream(
+              encodingKey.forKind(proto::Stream_Kind_IN_DICTIONARY), false);
+      if (inDictStream) {
+        inDictionaryReader =
+            createBooleanRleDecoder(std::move(inDictStream), encodingKey);
+
+        // stride dictionary only exists if in dictionary exists
+        strideDictStream = stripe.getStream(
+            encodingKey.forKind(proto::Stream_Kind_STRIDE_DICTIONARY), true);
+        DWIO_ENSURE_NOT_NULL(strideDictStream, "Stride dictionary is missing");
+
+        indexStream_ = stripe.getStream(
+            encodingKey.forKind(proto::Stream_Kind_ROW_INDEX), true);
+        DWIO_ENSURE_NOT_NULL(indexStream_, "String index is missing");
+
+        const auto strideDictLenId =
+            encodingKey.forKind(proto::Stream_Kind_STRIDE_DICTIONARY_LENGTH);
+        bool strideLenVInt = stripe.getUseVInts(strideDictLenId);
+        strideDictLengthDecoder = createRleDecoder</*isSigned*/ false>(
+            stripe.getStream(strideDictLenId, true),
+            rleVersion,
+            memoryPool_,
+            strideLenVInt,
+            dwio::common::INT_BYTE_SIZE);
+      }
     } else {
       VELOX_CHECK(format == DwrfFormat::kOrc);
-      initOrc(stripe);
+      rleVersion = convertRleVersion(stripe.getEncodingOrc(encodingKey).kind());
+      dictionaryCount = stripe.getEncodingOrc(encodingKey).dictionarysize();
+      dataId = encodingKey.forKind(proto::orc::Stream_Kind_DATA);
+      lenId = encodingKey.forKind(proto::orc::Stream_Kind_LENGTH);
+      dictionaryId =
+          encodingKey.forKind(proto::orc::Stream_Kind_DICTIONARY_DATA);
     }
+
+    bool dictVInts = stripe.getUseVInts(dataId);
+    dictIndex = createRleDecoder</*isSigned*/ false>(
+        stripe.getStream(dataId, true),
+        rleVersion,
+        memoryPool_,
+        dictVInts,
+        dwio::common::INT_BYTE_SIZE);
+
+    bool lenVInts = stripe.getUseVInts(lenId);
+    lengthDecoder = createRleDecoder</*isSigned*/ false>(
+        stripe.getStream(lenId, false),
+        rleVersion,
+        memoryPool_,
+        lenVInts,
+        dwio::common::INT_BYTE_SIZE);
+
+    blobStream = stripe.getStream(dictionaryId, false);
   }
 
  public:

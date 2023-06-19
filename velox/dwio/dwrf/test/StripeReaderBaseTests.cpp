@@ -70,7 +70,7 @@ class StripeLoadKeysTest : public Test {
         std::make_unique<BufferedInput>(
             std::make_shared<InMemoryReadFile>(std::string()), *pool_),
         nullptr,
-        footer,
+        std::make_unique<FooterWrapper>(footer),
         nullptr,
         std::move(handler));
     stripeReader_ =

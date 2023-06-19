@@ -22,19 +22,21 @@ namespace facebook::velox::dwrf {
 
 void DwrfData::init(StripeStreams& stripe) {
   auto format = stripe.format();
+  EncodingKey encodingKey{nodeType_->id, flatMapContext_.sequence};
+
+  DwrfStreamIdentifier presentStream;
+  DwrfStreamIdentifier rowIndexStream;
   if (format == DwrfFormat::kDwrf) {
-    initDwrf(stripe);
+    presentStream = encodingKey.forKind(proto::Stream_Kind_PRESENT);
+    rowIndexStream = encodingKey.forKind(proto::Stream_Kind_ROW_INDEX);
   } else {
     VELOX_CHECK(format == DwrfFormat::kOrc);
-    initOrc(stripe);
+    presentStream = encodingKey.forKind(proto::orc::Stream_Kind_PRESENT);
+    rowIndexStream = encodingKey.forKind(proto::orc::Stream_Kind_ROW_INDEX);
   }
-}
-
-void DwrfData::initDwrf(StripeStreams& stripe) {
-  EncodingKey encodingKey{nodeType_->id, flatMapContext_.sequence};
 
   std::unique_ptr<dwio::common::SeekableInputStream> stream =
-      stripe.getStream(encodingKey.forKind(proto::Stream_Kind_PRESENT), false);
+      stripe.getStream(presentStream, false);
   if (stream) {
     notNullDecoder_ = createBooleanRleDecoder(std::move(stream), encodingKey);
   }
@@ -44,26 +46,7 @@ void DwrfData::initDwrf(StripeStreams& stripe) {
   // anywhere in the reader tree. This is not known at construct time
   // because the first filter can come from a hash join or other run
   // time pushdown.
-  indexStream_ = stripe.getStream(
-      encodingKey.forKind(proto::Stream_Kind_ROW_INDEX), false);
-}
-
-void DwrfData::initOrc(StripeStreams& stripe) {
-  EncodingKey encodingKey{nodeType_->id, flatMapContext_.sequence};
-
-  std::unique_ptr<dwio::common::SeekableInputStream> stream = stripe.getStream(
-      encodingKey.forKind(proto::orc::Stream_Kind_PRESENT), false);
-  if (stream) {
-    notNullDecoder_ = createBooleanRleDecoder(std::move(stream), encodingKey);
-  }
-
-  // We always initialize indexStream_ because indices are needed as
-  // soon as there is a single filter that can trigger row group skips
-  // anywhere in the reader tree. This is not known at construct time
-  // because the first filter can come from a hash join or other run
-  // time pushdown.
-  indexStream_ = stripe.getStream(
-      encodingKey.forKind(proto::orc::Stream_Kind_ROW_INDEX), false);
+  indexStream_ = stripe.getStream(rowIndexStream, false);
 }
 
 DwrfData::DwrfData(

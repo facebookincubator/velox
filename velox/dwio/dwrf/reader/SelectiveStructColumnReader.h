@@ -86,34 +86,24 @@ struct SelectiveStructColumnReader : SelectiveStructColumnReaderBase {
  private:
   void init(DwrfParams& params) {
     auto format = params.stripeStreams().format();
+    EncodingKey encodingKey{nodeType_->id, params.flatMapContext().sequence};
+    auto& stripe = params.stripeStreams();
     if (format == DwrfFormat::kDwrf) {
-      initDwrf(params);
+      auto encoding =
+          static_cast<int64_t>(stripe.getEncoding(encodingKey).kind());
+      DWIO_ENSURE_EQ(
+          encoding,
+          proto::ColumnEncoding_Kind_DIRECT,
+          "Unknown dwrf encoding for StructColumnReader");
     } else {
       VELOX_CHECK(format == DwrfFormat::kOrc);
-      initOrc(params);
+      auto encoding =
+          static_cast<int64_t>(stripe.getEncodingOrc(encodingKey).kind());
+      DWIO_ENSURE_EQ(
+          encoding,
+          proto::orc::ColumnEncoding_Kind_DIRECT,
+          "Unknown orc encoding for StructColumnReader");
     }
-  }
-
-  void initDwrf(DwrfParams& params) {
-    EncodingKey encodingKey{nodeType_->id, params.flatMapContext().sequence};
-    auto& stripe = params.stripeStreams();
-    auto encoding =
-        static_cast<int64_t>(stripe.getEncoding(encodingKey).kind());
-    DWIO_ENSURE_EQ(
-        encoding,
-        proto::ColumnEncoding_Kind_DIRECT,
-        "Unknown dwrf encoding for StructColumnReader");
-  }
-
-  void initOrc(DwrfParams& params) {
-    EncodingKey encodingKey{nodeType_->id, params.flatMapContext().sequence};
-    auto& stripe = params.stripeStreams();
-    auto encoding =
-        static_cast<int64_t>(stripe.getEncodingOrc(encodingKey).kind());
-    DWIO_ENSURE_EQ(
-        encoding,
-        proto::orc::ColumnEncoding_Kind_DIRECT,
-        "Unknown orc encoding for StructColumnReader");
   }
 
   void addChild(std::unique_ptr<SelectiveColumnReader> child) {

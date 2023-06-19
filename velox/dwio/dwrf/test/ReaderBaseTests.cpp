@@ -101,7 +101,7 @@ class EncryptedStatsTest : public Test {
         *readerPool_,
         std::make_unique<BufferedInput>(readFile, *readerPool_),
         std::make_unique<PostScript>(std::move(ps)),
-        footer,
+        std::make_unique<FooterWrapper>(footer),
         nullptr,
         std::move(handler));
   }

@@ -20,13 +20,25 @@
 
 namespace facebook::velox::dwrf {
 
-void SelectiveStringDirectColumnReader::initDwrf(DwrfParams& params) {
+void SelectiveStringDirectColumnReader::init(DwrfParams& params) {
+  auto format = params.stripeStreams().format();
   EncodingKey encodingKey{nodeType_->id, params.flatMapContext().sequence};
   auto& stripe = params.stripeStreams();
 
-  RleVersion rleVersion =
-      convertRleVersion(stripe.getEncoding(encodingKey).kind());
-  auto lenId = encodingKey.forKind(proto::Stream_Kind_LENGTH);
+  DwrfStreamIdentifier lenId;
+  DwrfStreamIdentifier dataId;
+  RleVersion rleVersion;
+  if (format == DwrfFormat::kDwrf) {
+    rleVersion = convertRleVersion(stripe.getEncoding(encodingKey).kind());
+    lenId = encodingKey.forKind(proto::Stream_Kind_LENGTH);
+    dataId = encodingKey.forKind(proto::Stream_Kind_DATA);
+  } else {
+    VELOX_CHECK(format == DwrfFormat::kOrc);
+    rleVersion = convertRleVersion(stripe.getEncodingOrc(encodingKey).kind());
+    lenId = encodingKey.forKind(proto::orc::Stream_Kind_LENGTH);
+    dataId = encodingKey.forKind(proto::orc::Stream_Kind_DATA);
+  }
+
   bool lenVInts = stripe.getUseVInts(lenId);
   lengthDecoder_ = createRleDecoder</*isSigned*/ false>(
       stripe.getStream(lenId, true),
@@ -34,26 +46,7 @@ void SelectiveStringDirectColumnReader::initDwrf(DwrfParams& params) {
       memoryPool_,
       lenVInts,
       dwio::common::INT_BYTE_SIZE);
-  blobStream_ =
-      stripe.getStream(encodingKey.forKind(proto::orc::Stream_Kind_DATA), true);
-}
-
-void SelectiveStringDirectColumnReader::initOrc(DwrfParams& params) {
-  EncodingKey encodingKey{nodeType_->id, params.flatMapContext().sequence};
-  auto& stripe = params.stripeStreams();
-
-  RleVersion rleVersion =
-      convertRleVersion(stripe.getEncodingOrc(encodingKey).kind());
-  auto lenId = encodingKey.forKind(proto::orc::Stream_Kind_LENGTH);
-  bool lenVInts = stripe.getUseVInts(lenId);
-  lengthDecoder_ = createRleDecoder</*isSigned*/ false>(
-      stripe.getStream(lenId, true),
-      rleVersion,
-      memoryPool_,
-      lenVInts,
-      dwio::common::INT_BYTE_SIZE);
-  blobStream_ =
-      stripe.getStream(encodingKey.forKind(proto::orc::Stream_Kind_DATA), true);
+  blobStream_ = stripe.getStream(dataId, true);
 }
 
 SelectiveStringDirectColumnReader::SelectiveStringDirectColumnReader(
