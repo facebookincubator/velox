@@ -111,7 +111,8 @@ void ensureRepDefs(
 MapColumnReader::MapColumnReader(
     std::shared_ptr<const dwio::common::TypeWithId> requestedType,
     ParquetParams& params,
-    common::ScanSpec& scanSpec)
+    common::ScanSpec& scanSpec,
+    bool caseSensitive)
     : dwio::common::SelectiveMapColumnReader(
           requestedType,
           requestedType,
@@ -119,10 +120,10 @@ MapColumnReader::MapColumnReader(
           scanSpec) {
   auto& keyChildType = requestedType->childAt(0);
   auto& elementChildType = requestedType->childAt(1);
-  keyReader_ =
-      ParquetColumnReader::build(keyChildType, params, *scanSpec.children()[0]);
+  keyReader_ = ParquetColumnReader::build(
+      keyChildType, params, *scanSpec.children()[0], caseSensitive);
   elementReader_ = ParquetColumnReader::build(
-      elementChildType, params, *scanSpec.children()[1]);
+      elementChildType, params, *scanSpec.children()[1], caseSensitive);
   reinterpret_cast<const ParquetTypeWithId*>(requestedType.get())
       ->makeLevelInfo(levelInfo_);
   children_ = {keyReader_.get(), elementReader_.get()};
@@ -219,15 +220,16 @@ void MapColumnReader::filterRowGroups(
 ListColumnReader::ListColumnReader(
     std::shared_ptr<const dwio::common::TypeWithId> requestedType,
     ParquetParams& params,
-    common::ScanSpec& scanSpec)
+    common::ScanSpec& scanSpec,
+    bool caseSensitive)
     : dwio::common::SelectiveListColumnReader(
           requestedType,
           requestedType,
           params,
           scanSpec) {
   auto& childType = requestedType->childAt(0);
-  child_ =
-      ParquetColumnReader::build(childType, params, *scanSpec.children()[0]);
+  child_ = ParquetColumnReader::build(
+      childType, params, *scanSpec.children()[0], caseSensitive);
   reinterpret_cast<const ParquetTypeWithId*>(requestedType.get())
       ->makeLevelInfo(levelInfo_);
   children_ = {child_.get()};
