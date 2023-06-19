@@ -79,6 +79,24 @@ Date getLiteralValue(const ::substrait::Expression::Literal& literal) {
   return Date(literal.date());
 }
 
+template <>
+UnscaledShortDecimal getLiteralValue(
+    const ::substrait::Expression::Literal& literal) {
+  VELOX_CHECK(literal.decimal().scale() <= 18);
+  int128_t decimalValue;
+  memcpy(&decimalValue, literal.decimal().value().c_str(), 16);
+  return UnscaledShortDecimal((int64_t)decimalValue);
+}
+
+template <>
+UnscaledLongDecimal getLiteralValue(
+    const ::substrait::Expression::Literal& literal) {
+  VELOX_CHECK(literal.decimal().scale() > 18);
+  int128_t decimalValue;
+  memcpy(&decimalValue, literal.decimal().value().c_str(), 16);
+  return UnscaledLongDecimal(decimalValue);
+}
+
 ArrayVectorPtr makeArrayVector(const VectorPtr& elements) {
   BufferPtr offsets = allocateOffsets(1, elements->pool());
   BufferPtr sizes = allocateOffsets(1, elements->pool());
@@ -501,21 +519,41 @@ RowVectorPtr SubstraitVeloxExprConverter::literalsToRowVector(
   if (childSize == 0) {
     return makeEmptyRowVector(pool_);
   }
-  auto typeCase = structLiteral.struct_().fields(0).literal_type_case();
-  switch (typeCase) {
-    case ::substrait::Expression_Literal::LiteralTypeCase::kBinary: {
-      std::vector<VectorPtr> vectors;
-      vectors.reserve(structLiteral.struct_().fields().size());
-      for (auto& child : structLiteral.struct_().fields()) {
-        vectors.emplace_back(constructFlatVectorForStruct<TypeKind::VARBINARY>(
-            child, 1, VARBINARY(), pool_));
+  std::vector<VectorPtr> vectors;
+  vectors.reserve(structLiteral.struct_().fields().size());
+  for (const auto& field : structLiteral.struct_().fields()) {
+    const auto& typeCase = field.literal_type_case();
+    switch (typeCase) {
+      case ::substrait::Expression_Literal::LiteralTypeCase::kI64: {
+        vectors.emplace_back(constructFlatVectorForStruct<TypeKind::BIGINT>(
+            field, 1, BIGINT(), pool_));
+        break;
       }
-      return makeRowVector(vectors);
+      case ::substrait::Expression_Literal::LiteralTypeCase::kBinary: {
+        vectors.emplace_back(constructFlatVectorForStruct<TypeKind::VARBINARY>(
+            field, 1, VARBINARY(), pool_));
+        break;
+      }
+      case ::substrait::Expression_Literal::LiteralTypeCase::kDecimal: {
+        auto precision = field.decimal().precision();
+        auto scale = field.decimal().scale();
+        if (precision <= 18) {
+          vectors.emplace_back(
+              constructFlatVectorForStruct<TypeKind::SHORT_DECIMAL>(
+                  field, 1, SHORT_DECIMAL(precision, scale), pool_));
+        } else {
+          vectors.emplace_back(
+              constructFlatVectorForStruct<TypeKind::LONG_DECIMAL>(
+                  field, 1, LONG_DECIMAL(precision, scale), pool_));
+        }
+        break;
+      }
+      default:
+        VELOX_NYI(
+            "literalsToRowVector not supported for type case '{}'", typeCase);
     }
-    default:
-      VELOX_NYI(
-          "literalsToRowVector not supported for type case '{}'", typeCase);
   }
+  return makeRowVector(vectors);
 }
 
 std::shared_ptr<const core::ITypedExpr>
