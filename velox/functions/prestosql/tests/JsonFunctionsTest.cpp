@@ -275,6 +275,7 @@ TEST_F(JsonFunctionsTest, isJsonScalar) {
 }
 
 TEST_F(JsonFunctionsTest, jsonArrayLength) {
+  EXPECT_EQ(jsonArrayLength(R"([)"), std::nullopt);
   EXPECT_EQ(jsonArrayLength(R"([])"), 0);
   EXPECT_EQ(jsonArrayLength(R"([1])"), 1);
   EXPECT_EQ(jsonArrayLength(R"([1, 2, 3])"), 3);
