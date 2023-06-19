@@ -19,6 +19,8 @@
 #include "velox/exec/Task.h"
 #include "velox/vector/FlatVector.h"
 
+#include <boost/sort/sort.hpp>
+
 using facebook::velox::common::testutil::TestValue;
 
 namespace facebook::velox::exec {
@@ -267,7 +269,8 @@ void OrderBy::noMoreInput() {
     returningRows_.resize(numRows_);
     RowContainerIterator iter;
     data_->listRows(&iter, numRows_, returningRows_.data());
-    std::stable_sort(
+    constexpr uint16_t kSortThreads = 8;
+    boost::sort::parallel_stable_sort(
         returningRows_.begin(),
         returningRows_.end(),
         [this](const char* leftRow, const char* rightRow) {
@@ -278,7 +281,8 @@ void OrderBy::noMoreInput() {
             }
           }
           return false;
-        });
+        },
+        kSortThreads);
 
   } else {
     // Finish spill, and we shouldn't get any rows from non-spilled partition as
