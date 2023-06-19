@@ -37,7 +37,8 @@ namespace facebook::velox::parquet {
 std::unique_ptr<dwio::common::SelectiveColumnReader> ParquetColumnReader::build(
     const std::shared_ptr<const dwio::common::TypeWithId>& dataType,
     ParquetParams& params,
-    common::ScanSpec& scanSpec) {
+    common::ScanSpec& scanSpec,
+    bool caseSensitive) {
   auto colName = scanSpec.fieldName();
 
   switch (dataType->type->kind()) {
@@ -59,17 +60,20 @@ std::unique_ptr<dwio::common::SelectiveColumnReader> ParquetColumnReader::build(
           dataType, dataType->type, params, scanSpec);
 
     case TypeKind::ROW:
-      return std::make_unique<StructColumnReader>(dataType, params, scanSpec);
+      return std::make_unique<StructColumnReader>(
+          dataType, params, scanSpec, caseSensitive);
 
     case TypeKind::VARBINARY:
     case TypeKind::VARCHAR:
       return std::make_unique<StringColumnReader>(dataType, params, scanSpec);
 
     case TypeKind::ARRAY:
-      return std::make_unique<ListColumnReader>(dataType, params, scanSpec);
+      return std::make_unique<ListColumnReader>(
+          dataType, params, scanSpec, caseSensitive);
 
     case TypeKind::MAP:
-      return std::make_unique<MapColumnReader>(dataType, params, scanSpec);
+      return std::make_unique<MapColumnReader>(
+          dataType, params, scanSpec, caseSensitive);
 
     case TypeKind::BOOLEAN:
       return std::make_unique<BooleanColumnReader>(dataType, params, scanSpec);

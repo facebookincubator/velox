@@ -22,16 +22,22 @@ namespace facebook::velox::parquet {
 StructColumnReader::StructColumnReader(
     const std::shared_ptr<const dwio::common::TypeWithId>& dataType,
     ParquetParams& params,
-    common::ScanSpec& scanSpec)
+    common::ScanSpec& scanSpec,
+    bool caseSensitive)
     : SelectiveStructColumnReader(dataType, dataType, params, scanSpec) {
   auto& childSpecs = scanSpec_->children();
   for (auto i = 0; i < childSpecs.size(); ++i) {
     if (childSpecs[i]->isConstant()) {
       continue;
     }
-    auto childDataType = nodeType_->childByName(childSpecs[i]->fieldName());
+    std::string fieldName = childSpecs[i]->fieldName();
+    if (!caseSensitive) {
+      folly::toLowerAscii(fieldName);
+    }
+    auto childDataType = nodeType_->childByName(fieldName);
 
-    addChild(ParquetColumnReader::build(childDataType, params, *childSpecs[i]));
+    addChild(ParquetColumnReader::build(
+        childDataType, params, *childSpecs[i], caseSensitive));
     childSpecs[i]->setSubscript(children_.size() - 1);
   }
   auto type = reinterpret_cast<const ParquetTypeWithId*>(nodeType_.get());

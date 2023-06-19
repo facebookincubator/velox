@@ -208,6 +208,70 @@ TEST_F(ParquetTableScanTest, timestampFilter) {
       "Unsupported expression for range filter: lt(ROW[\"t\"],cast \"2000-09-12 22:36:29\" as TIMESTAMP)");
 }
 
+// A fixed core dump issue.
+TEST_F(ParquetTableScanTest, map) {
+  auto vector = makeMapVector<StringView, StringView>({{{"name", "gluten"}}});
+
+  loadData(
+      getExampleFilePath("type1.parquet"),
+      ROW({"map"}, {MAP(VARCHAR(), VARCHAR())}),
+      makeRowVector(
+          {"map"},
+          {
+              vector,
+          }));
+
+  assertSelectWithFilter({"map"}, {}, "", "SELECT map FROM tmp");
+}
+
+// Array reader result has missing result.
+// TEST_F(ParquetTableScanTest, array) {
+//   auto vector = makeArrayVector<int32_t>({{1, 2, 3}});
+
+//   loadData(
+//       getExampleFilePath("old-repeated-int.parquet"),
+//       ROW({"repeatedInt"}, {ARRAY(INTEGER())}),
+//       makeRowVector(
+//           {"repeatedInt"},
+//           {
+//               vector,
+//           }));
+
+//   assertSelectWithFilter({"repeatedInt"}, {}, "", "SELECT repeatedInt FROM
+//   tmp");
+// }
+
+// Failed unit test on Velox map reader.
+// TEST_F(ParquetTableScanTest, nestedMapWithStruct) {
+//   auto vector = makeArrayVector<int32_t>({{1, 2, 3}});
+
+//   loadData(
+//       getExampleFilePath("nested-map-with-struct.parquet"),
+//       ROW({"_1"}, {MAP(ROW({"_1", "_2"}, {INTEGER(), VARCHAR()}),
+//       VARCHAR())}), makeRowVector(
+//           {"_1"},
+//           {
+//               vector,
+//           }));
+
+//   assertSelectWithFilter({"_1"}, {}, "", "SELECT _1");
+// }
+
+// A fixed core dump issue.
+TEST_F(ParquetTableScanTest, singleRowStruct) {
+  auto vector = makeArrayVector<int32_t>({{1, 2, 3}});
+  loadData(
+      getExampleFilePath("single-row-struct.parquet"),
+      ROW({"s"}, {ROW({"a", "b"}, {BIGINT(), BIGINT()})}),
+      makeRowVector(
+          {"s"},
+          {
+              vector,
+          }));
+
+  assertSelectWithFilter({"s"}, {}, "", "SELECT (0, 1)");
+}
+
 int main(int argc, char** argv) {
   testing::InitGoogleTest(&argc, argv);
   folly::init(&argc, &argv, false);
