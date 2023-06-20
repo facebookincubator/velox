@@ -22,6 +22,14 @@
 namespace facebook::velox::functions {
 namespace {
 
+struct ExtraParams {
+  union params {
+    struct round {
+      std::optional<int32_t> decimal{};
+    } round;
+  } params;
+};
+
 template <
     typename R /* Result Type */,
     typename A /* Argument1 */,
@@ -107,7 +115,7 @@ class DecimalUnaryFunction : public exec::VectorFunction {
   explicit DecimalUnaryFunction(
       uint8_t aPrecision,
       uint8_t aRescale,
-      int param = INT_MAX)
+      const ExtraParams& param)
       : aPrecision_(aPrecision), aRescale_(aRescale), param_(param) {}
 
   void apply(
@@ -154,7 +162,7 @@ class DecimalUnaryFunction : public exec::VectorFunction {
 
   const uint8_t aPrecision_;
   const uint8_t aRescale_;
-  const int param_;
+  const ExtraParams param_;
 };
 
 template <typename A /* Argument */>
@@ -399,18 +407,16 @@ class Round {
       const A& a,
       uint8_t aPrecision,
       uint8_t aRescale,
-      int decimalParam) {
-    if (decimalParam == INT_MAX) {
+      const ExtraParams& extraParams) {
+    auto decimalParam = extraParams.params.round.decimal;
+    if (!decimalParam.has_value()) {
       // Basic round function.
-      /// auto temp = a;
-      r = a;
       DecimalUtil::divideWithRoundUp<R, A, int128_t>(
           r, a, DecimalUtil::kPowersOfTen[aRescale], false, 0, 0);
-      // r = temp;
       return;
     }
     // RoundN function.
-    if (a == 0 || aPrecision - aRescale + decimalParam <= 0) {
+    if (a == 0 || aPrecision - aRescale + decimalParam.value() <= 0) {
       r = 0;
       return;
     }
@@ -418,8 +424,8 @@ class Round {
       r = a;
       return;
     }
-    auto reScaleFactor = DecimalUtil::kPowersOfTen[aRescale - decimalParam];
-    r = a;
+    auto reScaleFactor =
+        DecimalUtil::kPowersOfTen[aRescale - decimalParam.value()];
     DecimalUtil::divideWithRoundUp<R, A, int128_t>(
         r, a, reScaleFactor, false, 0, 0);
     r = r * reScaleFactor;
@@ -434,15 +440,13 @@ class Round {
 
   inline static std::pair<uint8_t, uint8_t> computeResultPrecisionScale(
       const uint8_t aPrecision,
-      const uint8_t aScale) {
-    return {
-        std::min(38, aPrecision - aScale + std::min((uint8_t)1, aScale)), 0};
-  }
-
-  inline static std::pair<uint8_t, uint8_t> computeResultPrecisionScale(
-      const uint8_t aPrecision,
       const uint8_t aScale,
-      const int param) {
+      const ExtraParams& extraParams) {
+    if (!extraParams.params.round.decimal.has_value()) {
+      // Return result precision and scale for basic round function.
+      return {
+          std::min(38, aPrecision - aScale + std::min((uint8_t)1, aScale)), 0};
+    }
     return {std::min(38, aPrecision + 1), aScale};
   }
 };
@@ -455,7 +459,7 @@ class Abs {
       const A& a,
       uint8_t aPrecision,
       uint8_t /*aRescale*/,
-      int /*param*/) {
+      const ExtraParams& /*param*/) {
     if constexpr (std::is_same_v<R, A>) {
       r = a < 0 ? R(-a) : a;
     }
@@ -470,15 +474,9 @@ class Abs {
 
   inline static std::pair<uint8_t, uint8_t> computeResultPrecisionScale(
       const uint8_t aPrecision,
-      const uint8_t aScale) {
-    return {aPrecision, aScale};
-  }
-
-  inline static std::pair<uint8_t, uint8_t> computeResultPrecisionScale(
-      const uint8_t aPrecision,
       const uint8_t aScale,
-      const int param) {
-    return {};
+      const ExtraParams& param) {
+    return {aPrecision, aScale};
   }
 };
 
@@ -490,7 +488,7 @@ class Negate {
       const A& a,
       uint8_t aPrecision,
       uint8_t /*aRescale*/,
-      int /*param*/) {
+      const ExtraParams& /*param*/) {
     if constexpr (std::is_same_v<R, A>) {
       r = R(-a);
     }
@@ -505,15 +503,9 @@ class Negate {
 
   inline static std::pair<uint8_t, uint8_t> computeResultPrecisionScale(
       const uint8_t aPrecision,
-      const uint8_t aScale) {
-    return {aPrecision, aScale};
-  }
-
-  inline static std::pair<uint8_t, uint8_t> computeResultPrecisionScale(
-      const uint8_t aPrecision,
       const uint8_t aScale,
-      const int additionalParm) {
-    return {};
+      const ExtraParams& /*additionalParm*/) {
+    return {aPrecision, aScale};
   }
 };
 
@@ -583,7 +575,7 @@ std::vector<std::shared_ptr<exec::FunctionSignature>> decimalRoundSignature() {
           .integerVariable("r_precision", "min(38, a_precision + 1)")
           .returnType("DECIMAL(r_precision, a_scale)")
           .argumentType("DECIMAL(a_precision, a_scale)")
-          .argumentType("INTEGER")
+          .argumentType("integer")
           .build()};
 }
 
@@ -615,33 +607,31 @@ std::shared_ptr<exec::VectorFunction> createDecimalUnary(
     const std::vector<exec::VectorFunctionArg>& inputArgs) {
   auto aType = inputArgs[0].type;
   auto [aPrecision, aScale] = getDecimalPrecisionScale(*aType);
-  std::pair<uint8_t, uint8_t> rPrecisionScale =
-      Operation::computeResultPrecisionScale(aPrecision, aScale);
-  uint8_t aRescale =
-      Operation::computeRescaleFactor(aScale, 0, rPrecisionScale.second);
-  int param = INT_MAX;
+  ExtraParams extraParams{};
   if (inputArgs.size() == 2) {
     // Round can accept additional argument like number of decimal places.
     VELOX_CHECK_EQ(inputArgs[1].type->kind(), TypeKind::INTEGER);
-    param = inputArgs[1]
-                .constantValue->asUnchecked<SimpleVector<int32_t>>()
-                ->valueAt(0);
-    rPrecisionScale =
-        Operation::computeResultPrecisionScale(aPrecision, aScale, param);
+    extraParams.params.round.decimal =
+        inputArgs[1]
+            .constantValue->asUnchecked<SimpleVector<int32_t>>()
+            ->valueAt(0);
   }
+  auto [rPrecision, rScale] =
+      Operation::computeResultPrecisionScale(aPrecision, aScale, extraParams);
+  uint8_t aRescale = Operation::computeRescaleFactor(aScale, 0, rScale);
   if (aType->isShortDecimal()) {
     return std::make_shared<
         DecimalUnaryFunction<int64_t /*result*/, int64_t, Operation>>(
-        aPrecision, aRescale, param);
+        aPrecision, aRescale, extraParams);
   } else if (aType->isLongDecimal()) {
-    if (rPrecisionScale.first <= ShortDecimalType::kMaxPrecision) {
+    if (rPrecision <= ShortDecimalType::kMaxPrecision) {
       return std::make_shared<
           DecimalUnaryFunction<int64_t /*result*/, int128_t, Operation>>(
-          aPrecision, aRescale, param);
+          aPrecision, aRescale, extraParams);
     }
     return std::make_shared<
         DecimalUnaryFunction<int128_t /*result*/, int128_t, Operation>>(
-        aPrecision, aRescale, param);
+        aPrecision, aRescale, extraParams);
   }
   VELOX_UNSUPPORTED();
 }

@@ -431,8 +431,8 @@ TEST_F(DecimalArithmeticTest, roundN) {
       {makeShortDecimalFlatVector({123, 552, -999, 0}, DECIMAL(3, 2))});
   // Round upto -1 decimal places.
   testDecimalExpr<TypeKind::BIGINT>(
-      {makeShortDecimalFlatVector({120, 550, -1000, 0}, DECIMAL(4, 1))},
-      "round(c0, CAST(0 as integer))",
+      {makeShortDecimalFlatVector({100, 600, -1000, 0}, DECIMAL(4, 1))},
+      "round(c0, CAST(-1 as integer))",
       {makeShortDecimalFlatVector({123, 552, -999, 0}, DECIMAL(3, 1))});
   // Round upto -2 decimal places. Here precision == scale - decimals.
   testDecimalExpr<TypeKind::BIGINT>(
