@@ -12,9 +12,9 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-add_library(velox_encode Base64.cpp Int128.cpp)
-target_link_libraries(velox_encode Folly::folly)
+add_executable(velox_encode_test TestInt128.cpp)
 
-if(${VELOX_BUILD_TESTING})
-  add_subdirectory(tests)
-endif()
+add_test(velox_encode_test velox_encode_test)
+
+target_link_libraries(velox_encode_test velox_encode velox_exception
+                      gflags::gflags gtest gtest_main)

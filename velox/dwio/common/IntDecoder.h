@@ -20,6 +20,7 @@
 #include <folly/Range.h>
 #include <folly/Varint.h>
 #include "velox/common/encode/Coding.h"
+#include "velox/common/encode/Int128.h"
 #include "velox/dwio/common/IntCodecCommon.h"
 #include "velox/dwio/common/SeekableInputStream.h"
 #include "velox/dwio/common/StreamUtil.h"
@@ -149,12 +150,17 @@ class IntDecoder {
   void
   bulkReadRowsFixed(RowSet rows, int32_t initialRow, T* FOLLY_NONNULL result);
 
+  template <typename T>
+  T readInt();
+
+  template <typename T>
+  T readVInt();
+
   signed char readByte();
-  int64_t readLong();
   uint64_t readVuLong();
   int64_t readVsLong();
   int64_t readLongLE();
-  int128_t readInt128();
+
   template <typename cppType>
   cppType readLittleEndianFromBigEndian();
 
@@ -169,6 +175,7 @@ class IntDecoder {
  private:
   uint64_t skipVarintsInBuffer(uint64_t items);
   void skipVarints(uint64_t items);
+  Int128 readVInt128();
 
  protected:
   // note: there is opportunity for performance gains here by avoiding
@@ -399,28 +406,6 @@ inline cppType IntDecoder<isSigned>::readLittleEndianFromBigEndian() {
   }
 }
 
-template <bool isSigned>
-inline int64_t IntDecoder<isSigned>::readLong() {
-  if (useVInts) {
-    if constexpr (isSigned) {
-      return readVsLong();
-    } else {
-      return static_cast<int64_t>(readVuLong());
-    }
-  } else if (bigEndian) {
-    return readLittleEndianFromBigEndian<int64_t>();
-  } else {
-    return readLongLE();
-  }
-}
-
-template <bool isSigned>
-inline int128_t IntDecoder<isSigned>::readInt128() {
-  if (!bigEndian) {
-    VELOX_NYI();
-  }
-  return readLittleEndianFromBigEndian<int128_t>();
-}
 template <>
 template <>
 inline void IntDecoder<false>::bulkRead(

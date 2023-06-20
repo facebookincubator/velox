@@ -14,6 +14,7 @@
  * limitations under the License.
  */
 #include "velox/dwio/dwrf/common/FileMetadata.h"
+#include "velox/common/encode/Int128.h"
 
 namespace facebook::velox::dwrf {
 namespace detail {
@@ -93,7 +94,13 @@ TypeKind TypeWrapper::kind() const {
     // Date is a logical type of INTEGER (for the number of days since EPOCH).
     case proto::orc::Type_Kind_DATE:
       return TypeKind::INTEGER;
-    case proto::orc::Type_Kind_DECIMAL:
+    case proto::orc::Type_Kind_DECIMAL: {
+      if (orcPtr()->precision() <= velox::ShortDecimalType::kMaxPrecision) {
+        return TypeKind::BIGINT;
+      } else {
+        return TypeKind::HUGEINT;
+      }
+    }
     case proto::orc::Type_Kind_CHAR:
     case proto::orc::Type_Kind_TIMESTAMP_INSTANT:
       DWIO_RAISE(
