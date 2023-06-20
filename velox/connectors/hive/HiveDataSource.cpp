@@ -20,6 +20,7 @@
 #include "velox/connectors/hive/HiveConnectorSplit.h"
 #include "velox/dwio/common/CachedBufferedInput.h"
 #include "velox/dwio/common/ReaderFactory.h"
+#include "velox/expression/ExprToSubfieldFilter.h"
 #include "velox/expression/FieldReference.h"
 
 namespace facebook::velox::connector::hive {
@@ -230,17 +231,121 @@ velox::variant convertFromString(const std::optional<std::string>& value) {
     if constexpr (ToKind == TypeKind::VARCHAR) {
       return velox::variant(value.value());
     }
-    bool nullOutput = false;
-    auto result =
-        velox::util::Converter<ToKind>::cast(value.value(), nullOutput);
-    VELOX_CHECK(
-        not nullOutput, "Failed to cast {} to {}", value.value(), ToKind)
+    auto result = velox::util::Converter<ToKind>::cast(value.value());
+
     return velox::variant(result);
   }
   return velox::variant(ToKind);
 }
 
+core::CallTypedExprPtr replaceInputs(
+    const core::CallTypedExpr* call,
+    std::vector<core::TypedExprPtr>&& inputs) {
+  return std::make_shared<core::CallTypedExpr>(
+      call->type(), std::move(inputs), call->name());
+}
+
+void checkColumnNameLowerCase(const std::shared_ptr<const Type>& type) {
+  switch (type->kind()) {
+    case TypeKind::ARRAY:
+      checkColumnNameLowerCase(type->asArray().elementType());
+      break;
+    case TypeKind::MAP: {
+      checkColumnNameLowerCase(type->asMap().keyType());
+      checkColumnNameLowerCase(type->asMap().valueType());
+
+    } break;
+    case TypeKind::ROW: {
+      for (auto& outputName : type->asRow().names()) {
+        VELOX_CHECK(
+            !std::any_of(outputName.begin(), outputName.end(), isupper));
+      }
+      for (auto& childType : type->asRow().children()) {
+        checkColumnNameLowerCase(childType);
+      }
+    } break;
+    default:
+      VLOG(1) << "No need to check type lowercase mode" << type->toString();
+  }
+}
+
+void checkColumnNameLowerCase(const SubfieldFilters& filters) {
+  for (auto& pair : filters) {
+    if (pair.first.toString() == kPath || pair.first.toString() == kBucket) {
+      continue;
+    }
+    auto& path = pair.first.path();
+
+    for (int i = 0; i < path.size(); ++i) {
+      auto nestedField =
+          dynamic_cast<const common::Subfield::NestedField*>(path[i].get());
+      if (nestedField == nullptr) {
+        continue;
+      }
+      VELOX_CHECK(!std::any_of(
+          nestedField->name().begin(), nestedField->name().end(), isupper));
+    }
+  }
+}
+
+void checkColumnNameLowerCase(const core::TypedExprPtr& typeExpr) {
+  checkColumnNameLowerCase(typeExpr->type());
+  for (auto& type : typeExpr->inputs()) {
+    checkColumnNameLowerCase(type);
+  }
+}
+
 } // namespace
+
+core::TypedExprPtr HiveDataSource::extractFiltersFromRemainingFilter(
+    const core::TypedExprPtr& expr,
+    core::ExpressionEvaluator* evaluator,
+    bool negated,
+    SubfieldFilters& filters) {
+  auto* call = dynamic_cast<const core::CallTypedExpr*>(expr.get());
+  if (!call) {
+    return expr;
+  }
+  common::Filter* oldFilter = nullptr;
+  try {
+    common::Subfield subfield;
+    if (auto filter = exec::leafCallToSubfieldFilter(
+            *call, subfield, evaluator, negated)) {
+      if (auto it = filters.find(subfield); it != filters.end()) {
+        oldFilter = it->second.get();
+        filter = filter->mergeWith(oldFilter);
+      }
+      filters.insert_or_assign(std::move(subfield), std::move(filter));
+      return nullptr;
+    }
+  } catch (const VeloxException&) {
+    LOG(WARNING) << "Unexpected failure when extracting filter for: "
+                 << expr->toString();
+    if (oldFilter) {
+      LOG(WARNING) << "Merging with " << oldFilter->toString();
+    }
+  }
+  if (call->name() == "not") {
+    auto inner = extractFiltersFromRemainingFilter(
+        call->inputs()[0], evaluator, !negated, filters);
+    return inner ? replaceInputs(call, {inner}) : nullptr;
+  }
+  if ((call->name() == "and" && !negated) ||
+      (call->name() == "or" && negated)) {
+    auto lhs = extractFiltersFromRemainingFilter(
+        call->inputs()[0], evaluator, negated, filters);
+    auto rhs = extractFiltersFromRemainingFilter(
+        call->inputs()[1], evaluator, negated, filters);
+    if (!lhs) {
+      return rhs;
+    }
+    if (!rhs) {
+      return lhs;
+    }
+    return replaceInputs(call, {lhs, rhs});
+  }
+  return expr;
+}
 
 HiveDataSource::HiveDataSource(
     const RowTypePtr& outputType,
@@ -253,6 +358,7 @@ HiveDataSource::HiveDataSource(
     core::ExpressionEvaluator* expressionEvaluator,
     memory::MemoryAllocator* allocator,
     const std::string& scanId,
+    bool fileColumnNamesReadAsLowerCase,
     folly::Executor* executor)
     : fileHandleFactory_(fileHandleFactory),
       readerOpts_(pool),
@@ -299,9 +405,19 @@ HiveDataSource::HiveDataSource(
   VELOX_CHECK(
       hiveTableHandle->isFilterPushdownEnabled(),
       "Filter pushdown must be enabled");
+  if (fileColumnNamesReadAsLowerCase) {
+    checkColumnNameLowerCase(outputType);
+    checkColumnNameLowerCase(hiveTableHandle->subfieldFilters());
+    checkColumnNameLowerCase(hiveTableHandle->remainingFilter());
+  }
 
+  SubfieldFilters filters;
+  for (auto& [k, v] : hiveTableHandle->subfieldFilters()) {
+    filters.emplace(k.clone(), v->clone());
+  }
+  auto remainingFilter = extractFiltersFromRemainingFilter(
+      hiveTableHandle->remainingFilter(), expressionEvaluator_, false, filters);
   std::vector<common::Subfield> remainingFilterInputs;
-  const auto& remainingFilter = hiveTableHandle->remainingFilter();
   if (remainingFilter) {
     remainingFilterExprSet_ = expressionEvaluator_->compile(remainingFilter);
     for (auto& input : remainingFilterExprSet_->expr(0)->distinctFields()) {
@@ -312,7 +428,7 @@ HiveDataSource::HiveDataSource(
   auto outputTypes = outputType_->children();
   readerOutputType_ = ROW(std::move(columnNames), std::move(outputTypes));
   scanSpec_ = makeScanSpec(
-      hiveTableHandle->subfieldFilters(),
+      filters,
       readerOutputType_,
       hiveColumnHandles,
       remainingFilterInputs,

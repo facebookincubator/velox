@@ -25,11 +25,16 @@ namespace facebook::velox::dwio::parquet {
 
 class ParquetReaderTestBase : public testing::Test {
  protected:
-  dwio::common::RowReaderOptions getReaderOpts(const RowTypePtr& rowType) {
+  dwio::common::RowReaderOptions getReaderOpts(
+      const RowTypePtr& rowType,
+      bool fileColumnNamesReadAsLowerCase = false) {
     dwio::common::RowReaderOptions rowReaderOpts;
     rowReaderOpts.select(
         std::make_shared<facebook::velox::dwio::common::ColumnSelector>(
-            rowType, rowType->names()));
+            rowType,
+            rowType->names(),
+            nullptr,
+            fileColumnNamesReadAsLowerCase));
 
     return rowReaderOpts;
   }
@@ -44,6 +49,10 @@ class ParquetReaderTestBase : public testing::Test {
 
   static RowTypePtr intSchema() {
     return ROW({"int", "bigint"}, {INTEGER(), BIGINT()});
+  }
+
+  static RowTypePtr upperSchemaToLowerCase() {
+    return ROW({"a", "b"}, {BIGINT(), BIGINT()});
   }
 
   template <typename T>
@@ -93,25 +102,6 @@ class ParquetReaderTestBase : public testing::Test {
     EXPECT_EQ(reader.next(1000, result), 0);
   }
 
-  void assertReadExpected(
-      dwio::common::RowReader& reader,
-      RowVectorPtr expected) {
-    uint64_t total = 0;
-    VectorPtr result;
-    while (total < expected->size()) {
-      auto part = reader.next(1000, result);
-      EXPECT_GT(part, 0);
-      if (part > 0) {
-        assertEqualVectorPart(expected, result, total);
-        total += part;
-      } else {
-        break;
-      }
-    }
-    EXPECT_EQ(total, expected->size());
-    EXPECT_EQ(reader.next(1000, result), 0);
-  }
-
   std::shared_ptr<velox::common::ScanSpec> makeScanSpec(
       const RowTypePtr& rowType) {
     auto scanSpec = std::make_shared<velox::common::ScanSpec>("");
@@ -137,7 +127,7 @@ class ParquetReaderTestBase : public testing::Test {
     auto rowReaderOpts = getReaderOpts(fileSchema);
     rowReaderOpts.setScanSpec(scanSpec);
     auto rowReader = reader->createRowReader(rowReaderOpts);
-    assertReadExpected(*rowReader, expected);
+    assertReadExpected(fileSchema, *rowReader, expected, *pool_);
   }
 
   std::string getExampleFilePath(const std::string& fileName) {

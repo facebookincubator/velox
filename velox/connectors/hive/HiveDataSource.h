@@ -40,6 +40,7 @@ class HiveDataSource : public DataSource {
       core::ExpressionEvaluator* expressionEvaluator,
       memory::MemoryAllocator* allocator,
       const std::string& scanId,
+      bool fileColumnNamesReadAsLowerCase,
       folly::Executor* executor);
 
   void addSplit(std::shared_ptr<ConnectorSplit> split) override;
@@ -77,6 +78,14 @@ class HiveDataSource : public DataSource {
       const std::vector<const HiveColumnHandle*>& columnHandles,
       const std::vector<common::Subfield>& remainingFilterInputs,
       memory::MemoryPool* pool);
+
+  // Internal API, made public to be accessible in unit tests.  Do not use in
+  // other places.
+  static core::TypedExprPtr extractFiltersFromRemainingFilter(
+      const core::TypedExprPtr& expr,
+      core::ExpressionEvaluator* evaluator,
+      bool negated,
+      SubfieldFilters& filters);
 
  protected:
   virtual uint64_t readNext(uint64_t size) {
