@@ -1,0 +1,13 @@
+[tool.poetry]
+name = "cmake_refactor"
+version = "0.1.0"
+description = "A package for refactoring CMake files"
+authors = ["Your Name <your.email@example.com>"]
+
+[tool.poetry.dependencies]
+python = "^3.9"
+antlr4-python3-runtime = "^4.9.2"
+
+[tool.poetry.dev-dependencies]
+pytest = "^6.2.4"
+pytest-diff = "^0.1.14"
