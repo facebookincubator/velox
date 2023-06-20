@@ -17,6 +17,7 @@
 #pragma once
 
 #include "velox/dwio/common/SelectiveColumnReaderInternal.h"
+#include "velox/dwio/dwrf/common/DecoderUtil.h"
 #include "velox/dwio/dwrf/reader/DwrfData.h"
 
 namespace facebook::velox::dwrf {
@@ -91,6 +92,7 @@ class SelectiveStringDictionaryColumnReader
   int64_t lastStrideIndex_;
   size_t positionOffset_;
   size_t strideDictSizeOffset_;
+  RleVersion version_;
 
   const StrideIndexProvider& provider_;
 
@@ -105,13 +107,16 @@ void SelectiveStringDictionaryColumnReader::readWithVisitor(
     RowSet rows,
     TVisitor visitor) {
   vector_size_t numRows = rows.back() + 1;
-  auto decoder = dynamic_cast<RleDecoderV1<false>*>(dictIndex_.get());
-  VELOX_CHECK(decoder, "Only RLEv1 is supported");
-  if (nullsInReadRange_) {
-    decoder->readWithVisitor<true, TVisitor>(
-        nullsInReadRange_->as<uint64_t>(), visitor);
+  const uint64_t* nulls =
+      nullsInReadRange_ ? nullsInReadRange_->as<uint64_t>() : nullptr;
+  if (version_ == velox::dwrf::RleVersion_1) {
+    auto decoder =
+        dynamic_cast<velox::dwrf::RleDecoderV1<false>*>(dictIndex_.get());
+    VELOX_DECODE_WITH_VISITOR(decoder, nulls, visitor);
   } else {
-    decoder->readWithVisitor<false, TVisitor>(nullptr, visitor);
+    auto decoder =
+        dynamic_cast<velox::dwrf::RleDecoderV2<false>*>(dictIndex_.get());
+    VELOX_DECODE_WITH_VISITOR(decoder, nulls, visitor);
   }
   readOffset_ += numRows;
 }

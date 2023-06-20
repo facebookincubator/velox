@@ -56,6 +56,83 @@ class RleDecoderV2 : public dwio::common::IntDecoder<isSigned> {
    */
   void next(int64_t* data, uint64_t numValues, const uint64_t* nulls) override;
 
+  void nextLengths(int32_t* const data, const int32_t numValues) override {
+    for (int i = 0; i < numValues; ++i) {
+      data[i] = readValue();
+    }
+  }
+
+  int64_t readValue() {
+    if (runRead == runLength) {
+      resetRun();
+      firstByte = readByte();
+    }
+
+    uint64_t nRead = 0;
+    int64_t value = 0;
+    auto type = static_cast<EncodingType>((firstByte >> 6) & 0x03);
+    if (type == SHORT_REPEAT) {
+      nRead = nextShortRepeats(&value, 0, 1, nullptr);
+    } else if (type == DIRECT) {
+      nRead = nextDirect(&value, 0, 1, nullptr);
+    } else if (type == PATCHED_BASE) {
+      nRead = nextPatched(&value, 0, 1, nullptr);
+    } else if (type == DELTA) {
+      nRead = nextDelta(&value, 0, 1, nullptr);
+    } else {
+      DWIO_RAISE("unknown encoding");
+    }
+    VELOX_CHECK(nRead == (uint64_t)1);
+    return value;
+  }
+
+  template <bool hasNulls>
+  inline void skip(int32_t numValues, int32_t current, const uint64_t* nulls) {
+    if constexpr (hasNulls) {
+      numValues = bits::countNonNulls(nulls, current, current + numValues);
+    }
+    skip(numValues);
+  }
+
+  template <bool hasNulls, typename Visitor>
+  void readWithVisitor(const uint64_t* nulls, Visitor visitor) {
+    int32_t current = visitor.start();
+    skip<hasNulls>(current, 0, nulls);
+
+    int32_t toSkip;
+    bool atEnd = false;
+    const bool allowNulls = hasNulls && visitor.allowNulls();
+
+    for (;;) {
+      if (hasNulls && allowNulls && bits::isBitNull(nulls, current)) {
+        toSkip = visitor.processNull(atEnd);
+      } else {
+        if (hasNulls && !allowNulls) {
+          toSkip = visitor.checkAndSkipNulls(nulls, current, atEnd);
+          if (!Visitor::dense) {
+            skip<false>(toSkip, current, nullptr);
+          }
+          if (atEnd) {
+            return;
+          }
+        }
+
+        // We are at a non-null value on a row to visit.
+        auto value = readValue();
+        toSkip = visitor.process(value, atEnd);
+      }
+
+      ++current;
+      if (toSkip) {
+        skip<hasNulls>(toSkip, current, nulls);
+        current += toSkip;
+      }
+      if (atEnd) {
+        return;
+      }
+    }
+  }
+
  private:
   // Used by PATCHED_BASE
   void adjustGapAndPatch() {

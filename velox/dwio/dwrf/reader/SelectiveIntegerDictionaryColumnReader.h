@@ -17,6 +17,7 @@
 #pragma once
 
 #include "velox/dwio/common/SelectiveIntegerColumnReader.h"
+#include "velox/dwio/dwrf/common/DecoderUtil.h"
 #include "velox/dwio/dwrf/reader/DwrfData.h"
 
 namespace facebook::velox::dwrf {
@@ -69,14 +70,15 @@ void SelectiveIntegerDictionaryColumnReader::readWithVisitor(
     RowSet rows,
     ColumnVisitor visitor) {
   vector_size_t numRows = rows.back() + 1;
-  VELOX_CHECK_EQ(rleVersion_, RleVersion_1);
   auto dictVisitor = visitor.toDictionaryColumnVisitor();
-  auto reader = reinterpret_cast<RleDecoderV1<false>*>(dataReader_.get());
-  if (nullsInReadRange_) {
-    reader->readWithVisitor<true>(
-        nullsInReadRange_->as<uint64_t>(), dictVisitor);
+  const uint64_t* nulls =
+      nullsInReadRange_ ? nullsInReadRange_->as<uint64_t>() : nullptr;
+  if (rleVersion_ == RleVersion_1) {
+    auto decoder = reinterpret_cast<RleDecoderV1<false>*>(dataReader_.get());
+    VELOX_DECODE_WITH_VISITOR(decoder, nulls, dictVisitor);
   } else {
-    reader->readWithVisitor<false>(nullptr, dictVisitor);
+    auto decoder = reinterpret_cast<RleDecoderV2<false>*>(dataReader_.get());
+    VELOX_DECODE_WITH_VISITOR(decoder, nulls, dictVisitor);
   }
   readOffset_ += numRows;
 }

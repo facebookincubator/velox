@@ -26,6 +26,13 @@
 
 namespace facebook::velox::dwio::common {
 
+#define VELOX_DECODE_WITH_VISITOR(decoder, nulls, visitor) \
+  if (nulls) {                                             \
+    decoder->readWithVisitor<true>(nulls, visitor);        \
+  } else {                                                 \
+    decoder->readWithVisitor<false>(nulls, visitor);       \
+  }
+
 // Generalized representation of a set of distinct values for dictionary
 // encodings.
 struct DictionaryValues {

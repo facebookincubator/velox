@@ -15,6 +15,7 @@
  */
 
 #include "velox/common/base/tests/GTestUtils.h"
+#include "velox/common/encode/Coding.h"
 #include "velox/dwio/common/Adaptor.h"
 #include "velox/dwio/common/exception/Exceptions.h"
 #include "velox/dwio/dwrf/common/wrap/dwrf-proto-wrapper.h"
@@ -725,6 +726,49 @@ TEST_P(TestColumnReader, testByteSkipsWithNulls) {
   EXPECT_TRUE(byteBatch->isNullAt(2));
   EXPECT_TRUE(byteBatch->isNullAt(3));
   EXPECT_TRUE(byteBatch->isNullAt(4));
+}
+
+TEST_P(TestColumnReader, testIntegerRLEv2) {
+  int32_t expects[] = {2030, 2000, 2020, 1000000, 2040, 2050, 2060,
+                       2070, 2080, 2090, 2100,    2110, 2120, 2130,
+                       2140, 2150, 2160, 2170,    2180, 2190};
+  // RLEv2 with PATCHED_BASE
+  const unsigned char buffer[] = {0x8e, 0x13, 0x2b, 0x21, 0x07, 0xd0, 0x1e,
+                                  0x00, 0x14, 0x70, 0x28, 0x32, 0x3c, 0x46,
+                                  0x50, 0x5a, 0x64, 0x6e, 0x78, 0x82, 0x8c,
+                                  0x96, 0xa0, 0xaa, 0xb4, 0xbe, 0xfc, 0xe8};
+  int32_t size = VELOX_ARRAY_SIZE(expects);
+  // set format
+  streams_.setFormat(DwrfFormat::kOrc);
+  // set getEncoding
+  proto::ColumnEncoding directEncoding;
+  proto::ColumnEncoding directv2Encoding;
+  directEncoding.set_kind(proto::ColumnEncoding_Kind_DIRECT);
+  directv2Encoding.set_kind(proto::ColumnEncoding_Kind_DIRECT_V2);
+  EXPECT_CALL(streams_, getEncodingProxy(0))
+      .WillRepeatedly(Return(&directEncoding)); // row type use direct only
+  EXPECT_CALL(streams_, getEncodingProxy(1))
+      .WillRepeatedly(Return(&directv2Encoding));
+  // set getStream
+  EXPECT_CALL(streams_, getStreamProxy(_, proto::Stream_Kind_PRESENT, false))
+      .WillRepeatedly(Return(nullptr));
+  EXPECT_CALL(streams_, getStreamProxy(_, proto::Stream_Kind_ROW_INDEX, false))
+      .WillRepeatedly(Return(nullptr));
+  EXPECT_CALL(streams_, getStreamProxy(1, proto::Stream_Kind_DATA, true))
+      .WillRepeatedly(Return(
+          new SeekableArrayInputStream(buffer, VELOX_ARRAY_SIZE(buffer))));
+  // create the row type
+  auto rowType = HiveTypeParser().parse("struct<myInt:int>");
+  buildReader(rowType);
+  VectorPtr batch = newBatch(rowType);
+  skipAndRead(batch, /* read */ size);
+  auto intBatch = getOnlyChild<FlatVector<int32_t>>(batch);
+  ASSERT_EQ(size, intBatch->size());
+  for (size_t i = 0; i < batch->size(); ++i) {
+    ASSERT_EQ(expects[i], intBatch->valueAt(i));
+  }
+  // reset format
+  streams_.setFormat(DwrfFormat::kDwrf);
 }
 
 TEST_P(TestColumnReader, testIntegerWithNulls) {
