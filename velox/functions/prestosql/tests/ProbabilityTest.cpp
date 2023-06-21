@@ -179,7 +179,7 @@ TEST_F(ProbabilityTest, inverseChiSquaredCDF) {
   EXPECT_EQ(std::nullopt, invChiSquaredCDF(142.345, std::nullopt));
   EXPECT_EQ(std::nullopt, invChiSquaredCDF(std::nullopt, std::nullopt));
 
-  // Invalid inputs for df
+  // Test invalid inputs for df.
   VELOX_ASSERT_THROW(invChiSquaredCDF(-3, 0.3), "df must be greater than 0");
   VELOX_ASSERT_THROW(invChiSquaredCDF(kNan, 0.99), "df must be greater than 0");
   VELOX_ASSERT_THROW(
@@ -188,7 +188,7 @@ TEST_F(ProbabilityTest, inverseChiSquaredCDF) {
   VELOX_ASSERT_THROW(
       invChiSquaredCDF(kBigIntMin, 0.15), "df must be greater than 0");
 
-  // Invalid inputs for p
+  // Test invalid inputs for p.
   VELOX_ASSERT_THROW(
       invChiSquaredCDF(3, 1.001), "p must be in the interval [0, 1]");
   VELOX_ASSERT_THROW(
@@ -202,7 +202,7 @@ TEST_F(ProbabilityTest, inverseChiSquaredCDF) {
   VELOX_ASSERT_THROW(
       invChiSquaredCDF(234, kBigIntMax), "p must be in the interval [0, 1]");
 
-  // Invalid inputs for both params
+  // Test invalid inputs for both params.
   VELOX_ASSERT_THROW(
       invChiSquaredCDF(-3, -0.001), "p must be in the interval [0, 1]");
   VELOX_ASSERT_THROW(
