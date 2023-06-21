@@ -25,9 +25,6 @@ namespace {
 constexpr double kInf = std::numeric_limits<double>::infinity();
 constexpr double kNan = std::numeric_limits<double>::quiet_NaN();
 constexpr double kDoubleMax = std::numeric_limits<double>::max();
-// TMP: For floating types, min returns the smallest positive
-// value the type can encode, not the lowest (largest neg value).
-// See numeric_limits<double>::lowest();
 constexpr double kDoubleMin = std::numeric_limits<double>::min();
 constexpr int64_t kBigIntMax = std::numeric_limits<int64_t>::max();
 constexpr int64_t kBigIntMin = std::numeric_limits<int64_t>::min();
