@@ -53,7 +53,11 @@ Mathematical Functions
 
 .. function:: from_base(string, radix) -> bigint
 
-    Returns the value of ``string`` interpreted as a base-``radix`` number. ``radix`` must be between 2 and 36.
+   Returns the value of ``string`` interpreted as a base-``radix`` number. ``radix`` must be between 2 and 36.
+
+.. function::   inverse_cauchy_cdf(median, scale, p) → double#
+   Compute the inverse of the Cauchy cdf with given parameters median and scale (gamma) for the probability p.
+   The scale parameter must be a positive double. The probability p must be a double on the interval [0, 1].
 
 .. function:: ln(x) -> double
 

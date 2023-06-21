@@ -17,6 +17,8 @@
 
 #include "boost/math/distributions/beta.hpp"
 #include "boost/math/distributions/binomial.hpp"
+#include <boost/math/distributions/cauchy.hpp>
+#include <boost/math/distributions.hpp>
 #include "velox/common/base/Exceptions.h"
 #include "velox/functions/Macros.h"
 
@@ -88,6 +90,31 @@ struct BinomialCDFFunction {
 
     boost::math::binomial_distribution<> dist(numOfTrials, successProb);
     result = boost::math::cdf(dist, value);
+  }
+};
+
+template <typename T>
+struct InverseCauchyCDFFunction {
+  VELOX_DEFINE_FUNCTION_TYPES(T);
+
+  FOLLY_ALWAYS_INLINE void
+  call(double& result, double median, double scale, double probability) {
+    static constexpr double kInf = std::numeric_limits<double>::infinity();
+    static constexpr double kDoubleMax = std::numeric_limits<double>::max();
+
+    if (std::isnan(median) || std::isnan(probability)) {
+      result = std::numeric_limits<double>::quiet_NaN();
+    } else if (median == kInf || median == kDoubleMax) {
+      result = -kInf;
+    } else if (scale == kInf) {
+      result = median;
+    } else if (probability == 1.0) {
+      result = kInf;
+    } else {
+      VELOX_USER_CHECK_GE(scale, 0, "scale must be greater than 0");
+      boost::math::cauchy_distribution<> cauchyDist(median, scale);
+      result = boost::math::quantile(cauchyDist, probability);
+    }
   }
 };
 
