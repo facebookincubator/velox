@@ -75,7 +75,7 @@ class TpchDataSource : public DataSource {
       const std::unordered_map<
           std::string,
           std::shared_ptr<connector::ColumnHandle>>& columnHandles,
-      const dwio::common::ReaderOptions& options);
+      velox::memory::MemoryPool* FOLLY_NONNULL pool);
 
   void addSplit(std::shared_ptr<ConnectorSplit> split) override;
 
@@ -140,10 +140,12 @@ class TpchConnector final : public Connector {
       const std::unordered_map<
           std::string,
           std::shared_ptr<connector::ColumnHandle>>& columnHandles,
-      ConnectorQueryCtx* FOLLY_NONNULL connectorQueryCtx,
-      const dwio::common::ReaderOptions& options) override final {
+      ConnectorQueryCtx* FOLLY_NONNULL connectorQueryCtx) override final {
     return std::make_unique<TpchDataSource>(
-        outputType, tableHandle, columnHandles, options);
+        outputType,
+        tableHandle,
+        columnHandles,
+        connectorQueryCtx->memoryPool());
   }
 
   std::unique_ptr<DataSink> createDataSink(

@@ -113,8 +113,7 @@ class FuzzerConnector final : public Connector {
       const std::unordered_map<
           std::string,
           std::shared_ptr<connector::ColumnHandle>>& /*columnHandles*/,
-      ConnectorQueryCtx* FOLLY_NONNULL connectorQueryCtx,
-      const dwio::common::ReaderOptions& /*options*/) override final {
+      ConnectorQueryCtx* FOLLY_NONNULL connectorQueryCtx) override final {
     return std::make_unique<FuzzerDataSource>(
         outputType, tableHandle, connectorQueryCtx->memoryPool());
   }

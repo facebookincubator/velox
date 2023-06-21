@@ -33,8 +33,7 @@ class TestConnector : public connector::Connector {
       const std::unordered_map<
           std::string,
           std::shared_ptr<connector::ColumnHandle>>& /* columnHandles */,
-      connector::ConnectorQueryCtx* connectorQueryCtx,
-      const dwio::common::ReaderOptions& /*options*/) override {
+      connector::ConnectorQueryCtx* connectorQueryCtx) override {
     VELOX_NYI();
   }
 

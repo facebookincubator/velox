@@ -40,8 +40,12 @@ class HiveConnector : public Connector {
       const std::unordered_map<
           std::string,
           std::shared_ptr<connector::ColumnHandle>>& columnHandles,
-      ConnectorQueryCtx* connectorQueryCtx,
-      const dwio::common::ReaderOptions& options) override {
+      ConnectorQueryCtx* connectorQueryCtx) override {
+    dwio::common::ReaderOptions options(connectorQueryCtx->memoryPool());
+    options.setMaxCoalesceBytes(
+        HiveConfig::maxCoalescedBytes(connectorQueryCtx->config()));
+    options.setMaxCoalesceDistance(
+        HiveConfig::maxCoalescedDistanceBytes(connectorQueryCtx->config()));
     return std::make_unique<HiveDataSource>(
         outputType,
         tableHandle,

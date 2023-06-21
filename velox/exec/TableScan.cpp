@@ -107,8 +107,7 @@ RowVectorPtr TableScan::getOutput() {
             outputType_,
             tableHandle_,
             columnHandles_,
-            connectorQueryCtx_.get(),
-            dwio::common::ReaderOptions(connectorQueryCtx_->memoryPool()));
+            connectorQueryCtx_.get());
         for (const auto& entry : pendingDynamicFilters_) {
           dataSource_->addDynamicFilter(entry.first, entry.second);
         }
@@ -235,12 +234,7 @@ void TableScan::preload(std::shared_ptr<connector::ConnectorSplit> split) {
              },
              &debugString});
 
-        auto ptr = connector->createDataSource(
-            type,
-            table,
-            columns,
-            ctx.get(),
-            dwio::common::ReaderOptions(ctx->memoryPool()));
+        auto ptr = connector->createDataSource(type, table, columns, ctx.get());
         if (task->isCancelled()) {
           return nullptr;
         }

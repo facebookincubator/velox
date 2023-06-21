@@ -28,6 +28,7 @@
 #include "velox/common/base/SuccinctPrinter.h"
 #include "velox/common/file/FileSystems.h"
 #include "velox/common/memory/MmapAllocator.h"
+#include "velox/connectors/hive/HiveConfig.h"
 #include "velox/connectors/hive/HiveConnector.h"
 #include "velox/dwio/common/Options.h"
 #include "velox/dwio/dwrf/reader/DwrfReader.h"
@@ -250,10 +251,21 @@ class TpchBenchmark {
     ioExecutor_ =
         std::make_unique<folly::IOThreadPoolExecutor>(FLAGS_num_io_threads);
 
+    // Add new values into the hive configuration...
+    auto configurationValues = std::unordered_map<std::string, std::string>();
+    configurationValues[connector::hive::HiveConfig::kMaxCoalescedBytes] =
+        std::to_string(FLAGS_max_coalesced_bytes);
+    configurationValues
+        [connector::hive::HiveConfig::kMaxCoalescedDistanceBytes] =
+            std::to_string(FLAGS_max_coalesced_distance_bytes);
+    auto properties =
+        std::make_shared<const core::MemConfig>(configurationValues);
+
+    // Create hive connector with config...
     auto hiveConnector =
         connector::getConnectorFactory(
             connector::hive::HiveConnectorFactory::kHiveConnectorName)
-            ->newConnector(kHiveConnectorId, nullptr, ioExecutor_.get());
+            ->newConnector(kHiveConnectorId, properties, ioExecutor_.get());
     connector::registerConnector(hiveConnector);
   }
 
