@@ -25,7 +25,7 @@ namespace {
 constexpr double kInf = std::numeric_limits<double>::infinity();
 constexpr double kNan = std::numeric_limits<double>::quiet_NaN();
 constexpr double kDoubleMax = std::numeric_limits<double>::max();
-// TMP: For floating types, min returns the smallest positive 
+// TMP: For floating types, min returns the smallest positive
 // value the type can encode, not the lowest (largest neg value).
 // See numeric_limits<double>::lowest();
 constexpr double kDoubleMin = std::numeric_limits<double>::min();
@@ -161,7 +161,7 @@ TEST_F(ProbabilityTest, binomialCDF) {
 TEST_F(ProbabilityTest, inverseChiSquaredCDF) {
   const auto invChiSquaredCDF = [&](std::optional<double> df,
                                     std::optional<double> p) {
-    return evaluateOnce<double>("inverse_chi_squared_cdf(c0, c1)",df,p);
+    return evaluateOnce<double>("inverse_chi_squared_cdf(c0, c1)", df, p);
   };
 
   EXPECT_EQ(0.0, invChiSquaredCDF(3, 0.0));
@@ -182,23 +182,37 @@ TEST_F(ProbabilityTest, inverseChiSquaredCDF) {
   // Invalid inputs for df
   VELOX_ASSERT_THROW(invChiSquaredCDF(-3, 0.3), "df must be greater than 0");
   VELOX_ASSERT_THROW(invChiSquaredCDF(kNan, 0.99), "df must be greater than 0");
-  VELOX_ASSERT_THROW(invChiSquaredCDF(kInf, 0.99), "Error in function boost::math::chi_squared_distribution<double>::chi_squared_distribution: Degrees of freedom argument is inf, but must be > 0 !");
-  VELOX_ASSERT_THROW(invChiSquaredCDF(kBigIntMin, 0.15), "df must be greater than 0");
+  VELOX_ASSERT_THROW(
+      invChiSquaredCDF(kInf, 0.99),
+      "Error in function boost::math::chi_squared_distribution<double>::chi_squared_distribution: Degrees of freedom argument is inf, but must be > 0 !");
+  VELOX_ASSERT_THROW(
+      invChiSquaredCDF(kBigIntMin, 0.15), "df must be greater than 0");
 
   // Invalid inputs for p
-  VELOX_ASSERT_THROW(invChiSquaredCDF(3, 1.001), "p must be in the interval [0, 1]");
-  VELOX_ASSERT_THROW(invChiSquaredCDF(40, kNan), "p must be in the interval [0, 1]");
-  VELOX_ASSERT_THROW(invChiSquaredCDF(40, kInf), "p must be in the interval [0, 1]");
-  VELOX_ASSERT_THROW(invChiSquaredCDF(11, kDoubleMax), "p must be in the interval [0, 1]");
-  VELOX_ASSERT_THROW(invChiSquaredCDF(500, kBigIntMin), "p must be in the interval [0, 1]");
-  VELOX_ASSERT_THROW(invChiSquaredCDF(234, kBigIntMax), "p must be in the interval [0, 1]");
+  VELOX_ASSERT_THROW(
+      invChiSquaredCDF(3, 1.001), "p must be in the interval [0, 1]");
+  VELOX_ASSERT_THROW(
+      invChiSquaredCDF(40, kNan), "p must be in the interval [0, 1]");
+  VELOX_ASSERT_THROW(
+      invChiSquaredCDF(40, kInf), "p must be in the interval [0, 1]");
+  VELOX_ASSERT_THROW(
+      invChiSquaredCDF(11, kDoubleMax), "p must be in the interval [0, 1]");
+  VELOX_ASSERT_THROW(
+      invChiSquaredCDF(500, kBigIntMin), "p must be in the interval [0, 1]");
+  VELOX_ASSERT_THROW(
+      invChiSquaredCDF(234, kBigIntMax), "p must be in the interval [0, 1]");
 
 
   // Invalid inputs for both params
-  VELOX_ASSERT_THROW(invChiSquaredCDF(-3, -0.001), "p must be in the interval [0, 1]");
-  VELOX_ASSERT_THROW(invChiSquaredCDF(kNan, kNan), "p must be in the interval [0, 1]");
-  VELOX_ASSERT_THROW(invChiSquaredCDF(kInf, kInf), "p must be in the interval [0, 1]");
-  VELOX_ASSERT_THROW(invChiSquaredCDF(kBigIntMin, kBigIntMax), "p must be in the interval [0, 1]");
+  VELOX_ASSERT_THROW(
+      invChiSquaredCDF(-3, -0.001), "p must be in the interval [0, 1]");
+  VELOX_ASSERT_THROW(
+      invChiSquaredCDF(kNan, kNan), "p must be in the interval [0, 1]");
+  VELOX_ASSERT_THROW(
+      invChiSquaredCDF(kInf, kInf), "p must be in the interval [0, 1]");
+  VELOX_ASSERT_THROW(
+      invChiSquaredCDF(kBigIntMin, kBigIntMax),
+      "p must be in the interval [0, 1]");
 }
 
 } // namespace

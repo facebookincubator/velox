@@ -96,8 +96,7 @@ template <typename T>
 struct InverseChiSquaredCDFFunction {
   VELOX_DEFINE_FUNCTION_TYPES(T);
 
-  FOLLY_ALWAYS_INLINE void
-  call(double& result, double df, double p) {
+  FOLLY_ALWAYS_INLINE void call(double& result, double df, double p) {
     VELOX_USER_CHECK((p >= 0) && (p <= 1), "p must be in the interval [0, 1]");
     VELOX_USER_CHECK_GT(df, 0, "df must be greater than 0");
 
