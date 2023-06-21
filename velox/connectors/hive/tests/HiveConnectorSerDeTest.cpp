@@ -80,7 +80,9 @@ TEST_F(HiveConnectorSerDeTest, hiveTableHandle) {
               "c5",
               orFilter(between("abc", "efg"), greaterThanOrEqual("dragon")))
           .build(),
-      parseExpr("c1 > c4 and c3 = true", rowType));
+      parseExpr("c1 > c4 and c3 = true", rowType),
+      "hive_table",
+      ROW({"c0", "c1"}, {BIGINT(), VARCHAR()}));
   testSerde(*tableHandle);
 }
 
@@ -125,6 +127,6 @@ TEST_F(HiveConnectorSerDeTest, hiveInsertTableHandle) {
       LocationHandle::TableType::kNew);
   auto hiveInsertTableHandle =
       exec::test::HiveConnectorTestBase::makeHiveInsertTableHandle(
-          tableColumnNames, tableColumnTypes, {"loca"}, locationHandle);
+          tableColumnNames, tableColumnTypes, {"loc"}, locationHandle);
   testSerde(*hiveInsertTableHandle);
 }
