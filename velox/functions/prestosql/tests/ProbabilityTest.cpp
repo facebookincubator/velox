@@ -202,7 +202,6 @@ TEST_F(ProbabilityTest, inverseChiSquaredCDF) {
   VELOX_ASSERT_THROW(
       invChiSquaredCDF(234, kBigIntMax), "p must be in the interval [0, 1]");
 
-
   // Invalid inputs for both params
   VELOX_ASSERT_THROW(
       invChiSquaredCDF(-3, -0.001), "p must be in the interval [0, 1]");
