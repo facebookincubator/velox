@@ -93,3 +93,7 @@ Binary Functions
 .. function:: xxhash64(binary) -> varbinary
 
     Computes the xxhash64 hash of ``binary``.
+
+.. function:: to_ieee754_32(real) -> varbinary
+
+    Encodes ``real`` in a 32-bit big-endian binary according to IEEE 754 single-precision floating-point format.
