@@ -178,7 +178,7 @@ TEST_F(ProbabilityTest, inverseBinomialCDF) {
   EXPECT_EQ(
       std::nullopt, invBinomialCDF(std::nullopt, std::nullopt, std::nullopt));
 
-  // Invalid inputs for numberOfTrails
+  // Test invalid inputs for numberOfTrails.
   VELOX_ASSERT_THROW(
       invBinomialCDF(0, 0.5, 0.3), "numberOfTrials must be greater than 0");
   VELOX_ASSERT_THROW(
@@ -187,7 +187,7 @@ TEST_F(ProbabilityTest, inverseBinomialCDF) {
   VELOX_ASSERT_THROW(
       invBinomialCDF(kNan, 0.5, 0.3), "numberOfTrials must be greater than 0");
 
-  // Invalid inputs for successProbability
+  // Test invalid inputs for successProbability.
   VELOX_ASSERT_THROW(
       invBinomialCDF(5, -0.5, 0.3),
       "successProbability must be in the interval [0, 1]");
@@ -198,7 +198,7 @@ TEST_F(ProbabilityTest, inverseBinomialCDF) {
       invBinomialCDF(5, kNan, 0.03),
       "successProbability must be in the interval [0, 1]");
 
-  // Invalid inputs for p
+  // Test invalid inputs for p.
   VELOX_ASSERT_THROW(
       invBinomialCDF(5, 0.3, -12.9), "p must be in the interval [0, 1]");
   VELOX_ASSERT_THROW(
@@ -206,7 +206,7 @@ TEST_F(ProbabilityTest, inverseBinomialCDF) {
   VELOX_ASSERT_THROW(
       invBinomialCDF(5, 0.3, kNan), "p must be in the interval [0, 1]");
 
-  // Invalid inputs for multiple params
+  // Test invalid inputs for multiple params.
   VELOX_ASSERT_THROW(
       invBinomialCDF(-3, 0.3, 10.0), "p must be in the interval [0, 1]");
   VELOX_ASSERT_THROW(
