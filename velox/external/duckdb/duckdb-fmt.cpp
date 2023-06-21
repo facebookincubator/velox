@@ -8,7 +8,7 @@
 
 
 // LICENSE_CHANGE_BEGIN
-// The following code up to LICENSE_CHANGE_END is subject to THIRD PARTY LICENSE #1
+// The following code up to LICENSE_CHANGE_END is subject to THIRD PARTY LICENSE #4
 // See the end of this file for a list
 
 // Formatting library for C++
@@ -21,7 +21,7 @@
 
 
 // LICENSE_CHANGE_BEGIN
-// The following code up to LICENSE_CHANGE_END is subject to THIRD PARTY LICENSE #1
+// The following code up to LICENSE_CHANGE_END is subject to THIRD PARTY LICENSE #4
 // See the end of this file for a list
 
 // Formatting library for C++ - implementation
@@ -43,10 +43,6 @@
 #include <cstdarg>
 #include <cstring>  // for std::memmove
 #include <cwchar>
-#if !defined(FMT_STATIC_THOUSANDS_SEPARATOR)
-#  include <locale>
-#endif
-
 #if FMT_EXCEPTIONS
 #  define FMT_TRY try
 #  define FMT_CATCH(x) catch (x)
@@ -188,45 +184,18 @@ FMT_FUNC void report_error(format_func func, int error_code,
 }
 }  // namespace internal
 
-#if !defined(FMT_STATIC_THOUSANDS_SEPARATOR)
-namespace internal {
-
-template <typename Locale>
-locale_ref::locale_ref(const Locale& loc) : locale_(&loc) {
-  static_assert(std::is_same<Locale, std::locale>::value, "");
-}
-
-template <typename Locale> Locale locale_ref::get() const {
-  static_assert(std::is_same<Locale, std::locale>::value, "");
-  return locale_ ? *static_cast<const std::locale*>(locale_) : std::locale();
-}
-
-template <typename Char> FMT_FUNC std::string grouping_impl(locale_ref loc) {
-  return std::use_facet<std::numpunct<Char>>(loc.get<std::locale>()).grouping();
-}
-template <typename Char> FMT_FUNC Char thousands_sep_impl(locale_ref loc) {
-  return std::use_facet<std::numpunct<Char>>(loc.get<std::locale>())
-      .thousands_sep();
-}
-template <typename Char> FMT_FUNC Char decimal_point_impl(locale_ref loc) {
-  return std::use_facet<std::numpunct<Char>>(loc.get<std::locale>())
-      .decimal_point();
-}
-}  // namespace internal
-#else
 template <typename Char>
 FMT_FUNC std::string internal::grouping_impl(locale_ref) {
   return "\03";
 }
 template <typename Char>
 FMT_FUNC Char internal::thousands_sep_impl(locale_ref) {
-  return FMT_STATIC_THOUSANDS_SEPARATOR;
+  return ',';
 }
 template <typename Char>
 FMT_FUNC Char internal::decimal_point_impl(locale_ref) {
   return '.';
 }
-#endif
 
 namespace internal {
 
@@ -1229,7 +1198,7 @@ template <> struct formatter<internal::bigint> {
   }
 };
 
-FMT_FUNC void internal::error_handler::on_error(const char* message) {
+FMT_FUNC void internal::error_handler::on_error(std::string message) {
   FMT_THROW(duckdb::Exception(message));
 }
 
@@ -1365,11 +1334,6 @@ template struct FMT_API internal::basic_data<void>;
 int (*instantiate_format_float)(double, int, internal::float_specs,
                                 internal::buffer<char>&) =
     internal::format_float;
-
-#ifndef FMT_STATIC_THOUSANDS_SEPARATOR
-template FMT_API internal::locale_ref::locale_ref(const std::locale& loc);
-template FMT_API std::locale internal::locale_ref::get<std::locale>() const;
-#endif
 
 // Explicit instantiations for char.
 

@@ -25,8 +25,10 @@ add_library(
   duckdb-8.cpp
   duckdb-fastpforlib.cpp
   duckdb-fmt.cpp
+  duckdb-fsst.cpp
   duckdb-hyperloglog.cpp
   duckdb-libpg_query.cpp
+  duckdb-mbedtls.cpp
   duckdb-miniz.cpp
   duckdb-re2.cpp
   duckdb-utf8proc.cpp)

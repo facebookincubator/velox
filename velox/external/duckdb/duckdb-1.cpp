@@ -35,155 +35,293 @@
 
 
 
+
+
+
+
+
+#include <algorithm>
+
 namespace duckdb {
 
-string SimilarCatalogEntry::GetQualifiedName() const {
-	D_ASSERT(Found());
-
-	return schema->name + "." + name;
+Catalog::Catalog(AttachedDatabase &db) : db(db) {
 }
 
-Catalog::Catalog(DatabaseInstance &db)
-    : db(db), schemas(make_unique<CatalogSet>(*this, make_unique<DefaultSchemaGenerator>(*this))),
-      dependency_manager(make_unique<DependencyManager>(*this)) {
-	catalog_version = 0;
-}
 Catalog::~Catalog() {
 }
 
-Catalog &Catalog::GetCatalog(ClientContext &context) {
-	return context.db->GetCatalog();
+DatabaseInstance &Catalog::GetDatabase() {
+	return db.GetDatabase();
 }
 
-CatalogEntry *Catalog::CreateTable(ClientContext &context, BoundCreateTableInfo *info) {
-	auto schema = GetSchema(context, info->base->schema);
-	return CreateTable(context, schema, info);
+AttachedDatabase &Catalog::GetAttached() {
+	return db;
 }
 
-CatalogEntry *Catalog::CreateTable(ClientContext &context, unique_ptr<CreateTableInfo> info) {
-	auto binder = Binder::CreateBinder(context);
-	auto bound_info = binder->BindCreateTableInfo(move(info));
-	return CreateTable(context, bound_info.get());
+const string &Catalog::GetName() {
+	return GetAttached().GetName();
 }
 
-CatalogEntry *Catalog::CreateTable(ClientContext &context, SchemaCatalogEntry *schema, BoundCreateTableInfo *info) {
-	return schema->CreateTable(context, info);
+idx_t Catalog::GetOid() {
+	return GetAttached().oid;
 }
 
-CatalogEntry *Catalog::CreateView(ClientContext &context, CreateViewInfo *info) {
-	auto schema = GetSchema(context, info->schema);
-	return CreateView(context, schema, info);
+Catalog &Catalog::GetSystemCatalog(ClientContext &context) {
+	return Catalog::GetSystemCatalog(*context.db);
 }
 
-CatalogEntry *Catalog::CreateView(ClientContext &context, SchemaCatalogEntry *schema, CreateViewInfo *info) {
-	return schema->CreateView(context, info);
-}
-
-CatalogEntry *Catalog::CreateSequence(ClientContext &context, CreateSequenceInfo *info) {
-	auto schema = GetSchema(context, info->schema);
-	return CreateSequence(context, schema, info);
-}
-
-CatalogEntry *Catalog::CreateType(ClientContext &context, CreateTypeInfo *info) {
-	auto schema = GetSchema(context, info->schema);
-	return CreateType(context, schema, info);
-}
-
-CatalogEntry *Catalog::CreateSequence(ClientContext &context, SchemaCatalogEntry *schema, CreateSequenceInfo *info) {
-	return schema->CreateSequence(context, info);
-}
-
-CatalogEntry *Catalog::CreateType(ClientContext &context, SchemaCatalogEntry *schema, CreateTypeInfo *info) {
-	return schema->CreateType(context, info);
-}
-
-CatalogEntry *Catalog::CreateTableFunction(ClientContext &context, CreateTableFunctionInfo *info) {
-	auto schema = GetSchema(context, info->schema);
-	return CreateTableFunction(context, schema, info);
-}
-
-CatalogEntry *Catalog::CreateTableFunction(ClientContext &context, SchemaCatalogEntry *schema,
-                                           CreateTableFunctionInfo *info) {
-	return schema->CreateTableFunction(context, info);
-}
-
-CatalogEntry *Catalog::CreateCopyFunction(ClientContext &context, CreateCopyFunctionInfo *info) {
-	auto schema = GetSchema(context, info->schema);
-	return CreateCopyFunction(context, schema, info);
-}
-
-CatalogEntry *Catalog::CreateCopyFunction(ClientContext &context, SchemaCatalogEntry *schema,
-                                          CreateCopyFunctionInfo *info) {
-	return schema->CreateCopyFunction(context, info);
-}
-
-CatalogEntry *Catalog::CreatePragmaFunction(ClientContext &context, CreatePragmaFunctionInfo *info) {
-	auto schema = GetSchema(context, info->schema);
-	return CreatePragmaFunction(context, schema, info);
-}
-
-CatalogEntry *Catalog::CreatePragmaFunction(ClientContext &context, SchemaCatalogEntry *schema,
-                                            CreatePragmaFunctionInfo *info) {
-	return schema->CreatePragmaFunction(context, info);
-}
-
-CatalogEntry *Catalog::CreateFunction(ClientContext &context, CreateFunctionInfo *info) {
-	auto schema = GetSchema(context, info->schema);
-	return CreateFunction(context, schema, info);
-}
-
-CatalogEntry *Catalog::CreateFunction(ClientContext &context, SchemaCatalogEntry *schema, CreateFunctionInfo *info) {
-	return schema->CreateFunction(context, info);
-}
-
-CatalogEntry *Catalog::CreateCollation(ClientContext &context, CreateCollationInfo *info) {
-	auto schema = GetSchema(context, info->schema);
-	return CreateCollation(context, schema, info);
-}
-
-CatalogEntry *Catalog::CreateCollation(ClientContext &context, SchemaCatalogEntry *schema, CreateCollationInfo *info) {
-	return schema->CreateCollation(context, info);
-}
-
-CatalogEntry *Catalog::CreateSchema(ClientContext &context, CreateSchemaInfo *info) {
-	D_ASSERT(!info->schema.empty());
-	if (info->schema == TEMP_SCHEMA) {
-		throw CatalogException("Cannot create built-in schema \"%s\"", info->schema);
+optional_ptr<Catalog> Catalog::GetCatalogEntry(ClientContext &context, const string &catalog_name) {
+	auto &db_manager = DatabaseManager::Get(context);
+	if (catalog_name == TEMP_CATALOG) {
+		return &ClientData::Get(context).temporary_objects->GetCatalog();
 	}
-
-	unordered_set<CatalogEntry *> dependencies;
-	auto entry = make_unique<SchemaCatalogEntry>(this, info->schema, info->internal);
-	auto result = entry.get();
-	if (!schemas->CreateEntry(context, info->schema, move(entry), dependencies)) {
-		if (info->on_conflict == OnCreateConflict::ERROR_ON_CONFLICT) {
-			throw CatalogException("Schema with name %s already exists!", info->schema);
-		} else {
-			D_ASSERT(info->on_conflict == OnCreateConflict::IGNORE_ON_CONFLICT);
-		}
+	if (catalog_name == SYSTEM_CATALOG) {
+		return &GetSystemCatalog(context);
+	}
+	auto entry = db_manager.GetDatabase(
+	    context, IsInvalidCatalog(catalog_name) ? DatabaseManager::GetDefaultDatabase(context) : catalog_name);
+	if (!entry) {
 		return nullptr;
 	}
-	return result;
+	return &entry->GetCatalog();
 }
 
-void Catalog::DropSchema(ClientContext &context, DropInfo *info) {
-	D_ASSERT(!info->name.empty());
-	ModifyCatalog();
-	if (!schemas->DropEntry(context, info->name, info->cascade)) {
-		if (!info->if_exists) {
-			throw CatalogException("Schema with name \"%s\" does not exist!", info->name);
-		}
+Catalog &Catalog::GetCatalog(ClientContext &context, const string &catalog_name) {
+	auto catalog = Catalog::GetCatalogEntry(context, catalog_name);
+	if (!catalog) {
+		throw BinderException("Catalog \"%s\" does not exist!", catalog_name);
 	}
+	return *catalog;
 }
 
-void Catalog::DropEntry(ClientContext &context, DropInfo *info) {
+//===--------------------------------------------------------------------===//
+// Schema
+//===--------------------------------------------------------------------===//
+optional_ptr<CatalogEntry> Catalog::CreateSchema(ClientContext &context, CreateSchemaInfo &info) {
+	return CreateSchema(GetCatalogTransaction(context), info);
+}
+
+CatalogTransaction Catalog::GetCatalogTransaction(ClientContext &context) {
+	return CatalogTransaction(*this, context);
+}
+
+//===--------------------------------------------------------------------===//
+// Table
+//===--------------------------------------------------------------------===//
+optional_ptr<CatalogEntry> Catalog::CreateTable(ClientContext &context, BoundCreateTableInfo &info) {
+	return CreateTable(GetCatalogTransaction(context), info);
+}
+
+optional_ptr<CatalogEntry> Catalog::CreateTable(ClientContext &context, unique_ptr<CreateTableInfo> info) {
+	auto binder = Binder::CreateBinder(context);
+	auto bound_info = binder->BindCreateTableInfo(std::move(info));
+	return CreateTable(context, *bound_info);
+}
+
+optional_ptr<CatalogEntry> Catalog::CreateTable(CatalogTransaction transaction, SchemaCatalogEntry &schema,
+                                                BoundCreateTableInfo &info) {
+	return schema.CreateTable(transaction, info);
+}
+
+optional_ptr<CatalogEntry> Catalog::CreateTable(CatalogTransaction transaction, BoundCreateTableInfo &info) {
+	auto &schema = GetSchema(transaction, info.base->schema);
+	return CreateTable(transaction, schema, info);
+}
+
+//===--------------------------------------------------------------------===//
+// View
+//===--------------------------------------------------------------------===//
+optional_ptr<CatalogEntry> Catalog::CreateView(CatalogTransaction transaction, CreateViewInfo &info) {
+	auto &schema = GetSchema(transaction, info.schema);
+	return CreateView(transaction, schema, info);
+}
+
+optional_ptr<CatalogEntry> Catalog::CreateView(ClientContext &context, CreateViewInfo &info) {
+	return CreateView(GetCatalogTransaction(context), info);
+}
+
+optional_ptr<CatalogEntry> Catalog::CreateView(CatalogTransaction transaction, SchemaCatalogEntry &schema,
+                                               CreateViewInfo &info) {
+	return schema.CreateView(transaction, info);
+}
+
+//===--------------------------------------------------------------------===//
+// Sequence
+//===--------------------------------------------------------------------===//
+optional_ptr<CatalogEntry> Catalog::CreateSequence(CatalogTransaction transaction, CreateSequenceInfo &info) {
+	auto &schema = GetSchema(transaction, info.schema);
+	return CreateSequence(transaction, schema, info);
+}
+
+optional_ptr<CatalogEntry> Catalog::CreateSequence(ClientContext &context, CreateSequenceInfo &info) {
+	return CreateSequence(GetCatalogTransaction(context), info);
+}
+
+optional_ptr<CatalogEntry> Catalog::CreateSequence(CatalogTransaction transaction, SchemaCatalogEntry &schema,
+                                                   CreateSequenceInfo &info) {
+	return schema.CreateSequence(transaction, info);
+}
+
+//===--------------------------------------------------------------------===//
+// Type
+//===--------------------------------------------------------------------===//
+optional_ptr<CatalogEntry> Catalog::CreateType(CatalogTransaction transaction, CreateTypeInfo &info) {
+	auto &schema = GetSchema(transaction, info.schema);
+	return CreateType(transaction, schema, info);
+}
+
+optional_ptr<CatalogEntry> Catalog::CreateType(ClientContext &context, CreateTypeInfo &info) {
+	return CreateType(GetCatalogTransaction(context), info);
+}
+
+optional_ptr<CatalogEntry> Catalog::CreateType(CatalogTransaction transaction, SchemaCatalogEntry &schema,
+                                               CreateTypeInfo &info) {
+	return schema.CreateType(transaction, info);
+}
+
+//===--------------------------------------------------------------------===//
+// Table Function
+//===--------------------------------------------------------------------===//
+optional_ptr<CatalogEntry> Catalog::CreateTableFunction(CatalogTransaction transaction, CreateTableFunctionInfo &info) {
+	auto &schema = GetSchema(transaction, info.schema);
+	return CreateTableFunction(transaction, schema, info);
+}
+
+optional_ptr<CatalogEntry> Catalog::CreateTableFunction(ClientContext &context, CreateTableFunctionInfo &info) {
+	return CreateTableFunction(GetCatalogTransaction(context), info);
+}
+
+optional_ptr<CatalogEntry> Catalog::CreateTableFunction(CatalogTransaction transaction, SchemaCatalogEntry &schema,
+                                                        CreateTableFunctionInfo &info) {
+	return schema.CreateTableFunction(transaction, info);
+}
+
+optional_ptr<CatalogEntry> Catalog::CreateTableFunction(ClientContext &context,
+                                                        optional_ptr<CreateTableFunctionInfo> info) {
+	return CreateTableFunction(context, *info);
+}
+
+//===--------------------------------------------------------------------===//
+// Copy Function
+//===--------------------------------------------------------------------===//
+optional_ptr<CatalogEntry> Catalog::CreateCopyFunction(CatalogTransaction transaction, CreateCopyFunctionInfo &info) {
+	auto &schema = GetSchema(transaction, info.schema);
+	return CreateCopyFunction(transaction, schema, info);
+}
+
+optional_ptr<CatalogEntry> Catalog::CreateCopyFunction(ClientContext &context, CreateCopyFunctionInfo &info) {
+	return CreateCopyFunction(GetCatalogTransaction(context), info);
+}
+
+optional_ptr<CatalogEntry> Catalog::CreateCopyFunction(CatalogTransaction transaction, SchemaCatalogEntry &schema,
+                                                       CreateCopyFunctionInfo &info) {
+	return schema.CreateCopyFunction(transaction, info);
+}
+
+//===--------------------------------------------------------------------===//
+// Pragma Function
+//===--------------------------------------------------------------------===//
+optional_ptr<CatalogEntry> Catalog::CreatePragmaFunction(CatalogTransaction transaction,
+                                                         CreatePragmaFunctionInfo &info) {
+	auto &schema = GetSchema(transaction, info.schema);
+	return CreatePragmaFunction(transaction, schema, info);
+}
+
+optional_ptr<CatalogEntry> Catalog::CreatePragmaFunction(ClientContext &context, CreatePragmaFunctionInfo &info) {
+	return CreatePragmaFunction(GetCatalogTransaction(context), info);
+}
+
+optional_ptr<CatalogEntry> Catalog::CreatePragmaFunction(CatalogTransaction transaction, SchemaCatalogEntry &schema,
+                                                         CreatePragmaFunctionInfo &info) {
+	return schema.CreatePragmaFunction(transaction, info);
+}
+
+//===--------------------------------------------------------------------===//
+// Function
+//===--------------------------------------------------------------------===//
+optional_ptr<CatalogEntry> Catalog::CreateFunction(CatalogTransaction transaction, CreateFunctionInfo &info) {
+	auto &schema = GetSchema(transaction, info.schema);
+	return CreateFunction(transaction, schema, info);
+}
+
+optional_ptr<CatalogEntry> Catalog::CreateFunction(ClientContext &context, CreateFunctionInfo &info) {
+	return CreateFunction(GetCatalogTransaction(context), info);
+}
+
+optional_ptr<CatalogEntry> Catalog::CreateFunction(CatalogTransaction transaction, SchemaCatalogEntry &schema,
+                                                   CreateFunctionInfo &info) {
+	return schema.CreateFunction(transaction, info);
+}
+
+optional_ptr<CatalogEntry> Catalog::AddFunction(ClientContext &context, CreateFunctionInfo &info) {
+	info.on_conflict = OnCreateConflict::ALTER_ON_CONFLICT;
+	return CreateFunction(context, info);
+}
+
+//===--------------------------------------------------------------------===//
+// Collation
+//===--------------------------------------------------------------------===//
+optional_ptr<CatalogEntry> Catalog::CreateCollation(CatalogTransaction transaction, CreateCollationInfo &info) {
+	auto &schema = GetSchema(transaction, info.schema);
+	return CreateCollation(transaction, schema, info);
+}
+
+optional_ptr<CatalogEntry> Catalog::CreateCollation(ClientContext &context, CreateCollationInfo &info) {
+	return CreateCollation(GetCatalogTransaction(context), info);
+}
+
+optional_ptr<CatalogEntry> Catalog::CreateCollation(CatalogTransaction transaction, SchemaCatalogEntry &schema,
+                                                    CreateCollationInfo &info) {
+	return schema.CreateCollation(transaction, info);
+}
+
+//===--------------------------------------------------------------------===//
+// Index
+//===--------------------------------------------------------------------===//
+optional_ptr<CatalogEntry> Catalog::CreateIndex(CatalogTransaction transaction, CreateIndexInfo &info) {
+	auto &context = transaction.GetContext();
+	return CreateIndex(context, info);
+}
+
+optional_ptr<CatalogEntry> Catalog::CreateIndex(ClientContext &context, CreateIndexInfo &info) {
+	auto &schema = GetSchema(context, info.schema);
+	auto &table = GetEntry<TableCatalogEntry>(context, schema.name, info.table->table_name);
+	return schema.CreateIndex(context, info, table);
+}
+
+//===--------------------------------------------------------------------===//
+// Lookup Structures
+//===--------------------------------------------------------------------===//
+struct CatalogLookup {
+	CatalogLookup(Catalog &catalog, string schema_p) : catalog(catalog), schema(std::move(schema_p)) {
+	}
+
+	Catalog &catalog;
+	string schema;
+};
+
+//! Return value of Catalog::LookupEntry
+struct CatalogEntryLookup {
+	optional_ptr<SchemaCatalogEntry> schema;
+	optional_ptr<CatalogEntry> entry;
+
+	DUCKDB_API bool Found() const {
+		return entry;
+	}
+};
+
+//===--------------------------------------------------------------------===//
+// Generic
+//===--------------------------------------------------------------------===//
+void Catalog::DropEntry(ClientContext &context, DropInfo &info) {
 	ModifyCatalog();
-	if (info->type == CatalogType::SCHEMA_ENTRY) {
+	if (info.type == CatalogType::SCHEMA_ENTRY) {
 		// DROP SCHEMA
 		DropSchema(context, info);
 		return;
 	}
 
-	auto lookup = LookupEntry(context, info->type, info->schema, info->name, info->if_exists);
+	auto lookup = LookupEntry(context, info.type, info.schema, info.name, info.if_not_found);
 	if (!lookup.Found()) {
 		return;
 	}
@@ -191,69 +329,189 @@ void Catalog::DropEntry(ClientContext &context, DropInfo *info) {
 	lookup.schema->DropEntry(context, info);
 }
 
-CatalogEntry *Catalog::AddFunction(ClientContext &context, CreateFunctionInfo *info) {
-	auto schema = GetSchema(context, info->schema);
-	return AddFunction(context, schema, info);
+SchemaCatalogEntry &Catalog::GetSchema(ClientContext &context, const string &name, QueryErrorContext error_context) {
+	return *Catalog::GetSchema(context, name, OnEntryNotFound::THROW_EXCEPTION, error_context);
 }
 
-CatalogEntry *Catalog::AddFunction(ClientContext &context, SchemaCatalogEntry *schema, CreateFunctionInfo *info) {
-	return schema->AddFunction(context, info);
+optional_ptr<SchemaCatalogEntry> Catalog::GetSchema(ClientContext &context, const string &schema_name,
+                                                    OnEntryNotFound if_not_found, QueryErrorContext error_context) {
+	return GetSchema(GetCatalogTransaction(context), schema_name, if_not_found, error_context);
 }
 
-SchemaCatalogEntry *Catalog::GetSchema(ClientContext &context, const string &schema_name, bool if_exists,
+SchemaCatalogEntry &Catalog::GetSchema(ClientContext &context, const string &catalog_name, const string &schema_name,
                                        QueryErrorContext error_context) {
-	D_ASSERT(!schema_name.empty());
-	if (schema_name == TEMP_SCHEMA) {
-		return ClientData::Get(context).temporary_objects.get();
-	}
-	auto entry = schemas->GetEntry(context, schema_name);
-	if (!entry && !if_exists) {
-		throw CatalogException(error_context.FormatError("Schema with name %s does not exist!", schema_name));
-	}
-	return (SchemaCatalogEntry *)entry;
+	return *Catalog::GetSchema(context, catalog_name, schema_name, OnEntryNotFound::THROW_EXCEPTION, error_context);
 }
 
-void Catalog::ScanSchemas(ClientContext &context, std::function<void(CatalogEntry *)> callback) {
-	// create all default schemas first
-	schemas->Scan(context, [&](CatalogEntry *entry) { callback(entry); });
+SchemaCatalogEntry &Catalog::GetSchema(CatalogTransaction transaction, const string &name,
+                                       QueryErrorContext error_context) {
+	return *GetSchema(transaction, name, OnEntryNotFound::THROW_EXCEPTION, error_context);
 }
 
+//===--------------------------------------------------------------------===//
+// Lookup
+//===--------------------------------------------------------------------===//
 SimilarCatalogEntry Catalog::SimilarEntryInSchemas(ClientContext &context, const string &entry_name, CatalogType type,
-                                                   const vector<SchemaCatalogEntry *> &schemas) {
-
-	vector<CatalogSet *> sets;
-	std::transform(schemas.begin(), schemas.end(), std::back_inserter(sets),
-	               [type](SchemaCatalogEntry *s) -> CatalogSet * { return &s->GetCatalogSet(type); });
-	pair<string, idx_t> most_similar {"", (idx_t)-1};
-	SchemaCatalogEntry *schema_of_most_similar = nullptr;
-	for (auto schema : schemas) {
-		auto entry = schema->GetCatalogSet(type).SimilarEntry(context, entry_name);
-		if (!entry.first.empty() && (most_similar.first.empty() || most_similar.second > entry.second)) {
-			most_similar = entry;
-			schema_of_most_similar = schema;
+                                                   const reference_set_t<SchemaCatalogEntry> &schemas) {
+	SimilarCatalogEntry result;
+	for (auto schema_ref : schemas) {
+		auto &schema = schema_ref.get();
+		auto transaction = schema.catalog.GetCatalogTransaction(context);
+		auto entry = schema.GetSimilarEntry(transaction, type, entry_name);
+		if (!entry.Found()) {
+			// no similar entry found
+			continue;
+		}
+		if (!result.Found() || result.distance > entry.distance) {
+			result = entry;
+			result.schema = &schema;
 		}
 	}
+	return result;
+}
 
-	return {most_similar.first, most_similar.second, schema_of_most_similar};
+string FindExtensionGeneric(const string &name, const ExtensionEntry entries[], idx_t size) {
+	auto lcase = StringUtil::Lower(name);
+	auto it = std::lower_bound(entries, entries + size, lcase,
+	                           [](const ExtensionEntry &element, const string &value) { return element.name < value; });
+	if (it != entries + size && it->name == lcase) {
+		return it->extension;
+	}
+	return "";
+}
+
+string FindExtensionForFunction(const string &name) {
+	idx_t size = sizeof(EXTENSION_FUNCTIONS) / sizeof(ExtensionEntry);
+	return FindExtensionGeneric(name, EXTENSION_FUNCTIONS, size);
+}
+
+string FindExtensionForSetting(const string &name) {
+	idx_t size = sizeof(EXTENSION_SETTINGS) / sizeof(ExtensionEntry);
+	return FindExtensionGeneric(name, EXTENSION_SETTINGS, size);
+}
+
+vector<CatalogSearchEntry> GetCatalogEntries(ClientContext &context, const string &catalog, const string &schema) {
+	vector<CatalogSearchEntry> entries;
+	auto &search_path = *context.client_data->catalog_search_path;
+	if (IsInvalidCatalog(catalog) && IsInvalidSchema(schema)) {
+		// no catalog or schema provided - scan the entire search path
+		entries = search_path.Get();
+	} else if (IsInvalidCatalog(catalog)) {
+		auto catalogs = search_path.GetCatalogsForSchema(schema);
+		for (auto &catalog_name : catalogs) {
+			entries.emplace_back(catalog_name, schema);
+		}
+		if (entries.empty()) {
+			entries.emplace_back(DatabaseManager::GetDefaultDatabase(context), schema);
+		}
+	} else if (IsInvalidSchema(schema)) {
+		auto schemas = search_path.GetSchemasForCatalog(catalog);
+		for (auto &schema_name : schemas) {
+			entries.emplace_back(catalog, schema_name);
+		}
+		if (entries.empty()) {
+			entries.emplace_back(catalog, DEFAULT_SCHEMA);
+		}
+	} else {
+		// specific catalog and schema provided
+		entries.emplace_back(catalog, schema);
+	}
+	return entries;
+}
+
+void FindMinimalQualification(ClientContext &context, const string &catalog_name, const string &schema_name,
+                              bool &qualify_database, bool &qualify_schema) {
+	// check if we can we qualify ONLY the schema
+	bool found = false;
+	auto entries = GetCatalogEntries(context, INVALID_CATALOG, schema_name);
+	for (auto &entry : entries) {
+		if (entry.catalog == catalog_name && entry.schema == schema_name) {
+			found = true;
+			break;
+		}
+	}
+	if (found) {
+		qualify_database = false;
+		qualify_schema = true;
+		return;
+	}
+	// check if we can qualify ONLY the catalog
+	found = false;
+	entries = GetCatalogEntries(context, catalog_name, INVALID_SCHEMA);
+	for (auto &entry : entries) {
+		if (entry.catalog == catalog_name && entry.schema == schema_name) {
+			found = true;
+			break;
+		}
+	}
+	if (found) {
+		qualify_database = true;
+		qualify_schema = false;
+		return;
+	}
+	// need to qualify both catalog and schema
+	qualify_database = true;
+	qualify_schema = true;
+}
+
+CatalogException Catalog::UnrecognizedConfigurationError(ClientContext &context, const string &name) {
+	// check if the setting exists in any extensions
+	auto extension_name = FindExtensionForSetting(name);
+	if (!extension_name.empty()) {
+		return CatalogException(
+		    "Setting with name \"%s\" is not in the catalog, but it exists in the %s extension.\n\nTo "
+		    "install and load the extension, run:\nINSTALL %s;\nLOAD %s;",
+		    name, extension_name, extension_name, extension_name);
+	}
+	// the setting is not in an extension
+	// get a list of all options
+	vector<string> potential_names = DBConfig::GetOptionNames();
+	for (auto &entry : DBConfig::GetConfig(context).extension_parameters) {
+		potential_names.push_back(entry.first);
+	}
+
+	throw CatalogException("unrecognized configuration parameter \"%s\"\n%s", name,
+	                       StringUtil::CandidatesErrorMessage(potential_names, name, "Did you mean"));
 }
 
 CatalogException Catalog::CreateMissingEntryException(ClientContext &context, const string &entry_name,
-                                                      CatalogType type, const vector<SchemaCatalogEntry *> &schemas,
+                                                      CatalogType type,
+                                                      const reference_set_t<SchemaCatalogEntry> &schemas,
                                                       QueryErrorContext error_context) {
 	auto entry = SimilarEntryInSchemas(context, entry_name, type, schemas);
 
-	vector<SchemaCatalogEntry *> unseen_schemas;
-	this->schemas->Scan([&schemas, &unseen_schemas](CatalogEntry *entry) {
-		auto schema_entry = (SchemaCatalogEntry *)entry;
-		if (std::find(schemas.begin(), schemas.end(), schema_entry) == schemas.end()) {
-			unseen_schemas.emplace_back(schema_entry);
+	reference_set_t<SchemaCatalogEntry> unseen_schemas;
+	auto &db_manager = DatabaseManager::Get(context);
+	auto databases = db_manager.GetDatabases(context);
+	for (auto database : databases) {
+		auto &catalog = database.get().GetCatalog();
+		auto current_schemas = catalog.GetAllSchemas(context);
+		for (auto &current_schema : current_schemas) {
+			unseen_schemas.insert(current_schema.get());
 		}
-	});
+	}
+	// check if the entry exists in any extension
+	if (type == CatalogType::TABLE_FUNCTION_ENTRY || type == CatalogType::SCALAR_FUNCTION_ENTRY ||
+	    type == CatalogType::AGGREGATE_FUNCTION_ENTRY) {
+		auto extension_name = FindExtensionForFunction(entry_name);
+		if (!extension_name.empty()) {
+			return CatalogException(
+			    "Function with name \"%s\" is not in the catalog, but it exists in the %s extension.\n\nTo "
+			    "install and load the extension, run:\nINSTALL %s;\nLOAD %s;",
+			    entry_name, extension_name, extension_name, extension_name);
+		}
+	}
 	auto unseen_entry = SimilarEntryInSchemas(context, entry_name, type, unseen_schemas);
-
 	string did_you_mean;
 	if (unseen_entry.Found() && unseen_entry.distance < entry.distance) {
-		did_you_mean = "\nDid you mean \"" + unseen_entry.GetQualifiedName() + "\"?";
+		// the closest matching entry requires qualification as it is not in the default search path
+		// check how to minimally qualify this entry
+		auto catalog_name = unseen_entry.schema->catalog.GetName();
+		auto schema_name = unseen_entry.schema->name;
+		bool qualify_database;
+		bool qualify_schema;
+		FindMinimalQualification(context, catalog_name, schema_name, qualify_database, qualify_schema);
+		did_you_mean = "\nDid you mean \"" + unseen_entry.GetQualifiedName(qualify_database, qualify_schema) + "\"?";
 	} else if (entry.Found()) {
 		did_you_mean = "\nDid you mean \"" + entry.name + "\"?";
 	}
@@ -262,148 +520,263 @@ CatalogException Catalog::CreateMissingEntryException(ClientContext &context, co
 	                                                  entry_name, did_you_mean));
 }
 
-CatalogEntryLookup Catalog::LookupEntry(ClientContext &context, CatalogType type, const string &schema_name,
-                                        const string &name, bool if_exists, QueryErrorContext error_context) {
-	if (!schema_name.empty()) {
-		auto schema = GetSchema(context, schema_name, if_exists, error_context);
-		if (!schema) {
-			D_ASSERT(if_exists);
-			return {nullptr, nullptr};
-		}
-
-		auto entry = schema->GetCatalogSet(type).GetEntry(context, name);
-		if (!entry && !if_exists) {
-			throw CreateMissingEntryException(context, name, type, {schema}, error_context);
-		}
-
-		return {schema, entry};
+CatalogEntryLookup Catalog::LookupEntryInternal(CatalogTransaction transaction, CatalogType type, const string &schema,
+                                                const string &name) {
+	auto schema_entry = GetSchema(transaction, schema, OnEntryNotFound::RETURN_NULL);
+	if (!schema_entry) {
+		return {nullptr, nullptr};
 	}
-
-	const auto &paths = ClientData::Get(context).catalog_search_path->Get();
-	for (const auto &path : paths) {
-		auto lookup = LookupEntry(context, type, path, name, true, error_context);
-		if (lookup.Found()) {
-			return lookup;
-		}
+	auto entry = schema_entry->GetEntry(transaction, type, name);
+	if (!entry) {
+		return {schema_entry, nullptr};
 	}
-
-	if (!if_exists) {
-		vector<SchemaCatalogEntry *> schemas;
-		for (const auto &path : paths) {
-			auto schema = GetSchema(context, path, true);
-			if (schema) {
-				schemas.emplace_back(schema);
-			}
-		}
-
-		throw CreateMissingEntryException(context, name, type, schemas, error_context);
-	}
-
-	return {nullptr, nullptr};
+	return {schema_entry, entry};
 }
 
-CatalogEntry *Catalog::GetEntry(ClientContext &context, const string &schema, const string &name) {
+CatalogEntryLookup Catalog::LookupEntry(ClientContext &context, CatalogType type, const string &schema,
+                                        const string &name, OnEntryNotFound if_not_found,
+                                        QueryErrorContext error_context) {
+	reference_set_t<SchemaCatalogEntry> schemas;
+	if (IsInvalidSchema(schema)) {
+		// try all schemas for this catalog
+		auto catalog_name = GetName();
+		if (catalog_name == DatabaseManager::GetDefaultDatabase(context)) {
+			catalog_name = INVALID_CATALOG;
+		}
+		auto entries = GetCatalogEntries(context, GetName(), INVALID_SCHEMA);
+		for (auto &entry : entries) {
+			auto &candidate_schema = entry.schema;
+			auto transaction = GetCatalogTransaction(context);
+			auto result = LookupEntryInternal(transaction, type, candidate_schema, name);
+			if (result.Found()) {
+				return result;
+			}
+			if (result.schema) {
+				schemas.insert(*result.schema);
+			}
+		}
+	} else {
+		auto transaction = GetCatalogTransaction(context);
+		auto result = LookupEntryInternal(transaction, type, schema, name);
+		if (result.Found()) {
+			return result;
+		}
+		if (result.schema) {
+			schemas.insert(*result.schema);
+		}
+	}
+	if (if_not_found == OnEntryNotFound::RETURN_NULL) {
+		return {nullptr, nullptr};
+	}
+	throw CreateMissingEntryException(context, name, type, schemas, error_context);
+}
+
+CatalogEntryLookup Catalog::LookupEntry(ClientContext &context, vector<CatalogLookup> &lookups, CatalogType type,
+                                        const string &name, OnEntryNotFound if_not_found,
+                                        QueryErrorContext error_context) {
+	reference_set_t<SchemaCatalogEntry> schemas;
+	for (auto &lookup : lookups) {
+		auto transaction = lookup.catalog.GetCatalogTransaction(context);
+		auto result = lookup.catalog.LookupEntryInternal(transaction, type, lookup.schema, name);
+		if (result.Found()) {
+			return result;
+		}
+		if (result.schema) {
+			schemas.insert(*result.schema);
+		}
+	}
+	if (if_not_found == OnEntryNotFound::RETURN_NULL) {
+		return {nullptr, nullptr};
+	}
+	throw CreateMissingEntryException(context, name, type, schemas, error_context);
+}
+
+CatalogEntry &Catalog::GetEntry(ClientContext &context, const string &schema, const string &name) {
 	vector<CatalogType> entry_types {CatalogType::TABLE_ENTRY, CatalogType::SEQUENCE_ENTRY};
 
 	for (auto entry_type : entry_types) {
-		CatalogEntry *result = GetEntry(context, entry_type, schema, name, true);
-		if (result != nullptr) {
-			return result;
+		auto result = GetEntry(context, entry_type, schema, name, OnEntryNotFound::RETURN_NULL);
+		if (result) {
+			return *result;
 		}
 	}
 
 	throw CatalogException("CatalogElement \"%s.%s\" does not exist!", schema, name);
 }
 
-CatalogEntry *Catalog::GetEntry(ClientContext &context, CatalogType type, const string &schema_name, const string &name,
-                                bool if_exists, QueryErrorContext error_context) {
-	return LookupEntry(context, type, schema_name, name, if_exists, error_context).entry;
+optional_ptr<CatalogEntry> Catalog::GetEntry(ClientContext &context, CatalogType type, const string &schema_name,
+                                             const string &name, OnEntryNotFound if_not_found,
+                                             QueryErrorContext error_context) {
+	return LookupEntry(context, type, schema_name, name, if_not_found, error_context).entry.get();
 }
 
-template <>
-TableCatalogEntry *Catalog::GetEntry(ClientContext &context, const string &schema_name, const string &name,
-                                     bool if_exists, QueryErrorContext error_context) {
-	auto entry = GetEntry(context, CatalogType::TABLE_ENTRY, schema_name, name, if_exists);
-	if (!entry) {
+CatalogEntry &Catalog::GetEntry(ClientContext &context, CatalogType type, const string &schema, const string &name,
+                                QueryErrorContext error_context) {
+	return *Catalog::GetEntry(context, type, schema, name, OnEntryNotFound::THROW_EXCEPTION, error_context);
+}
+
+optional_ptr<CatalogEntry> Catalog::GetEntry(ClientContext &context, CatalogType type, const string &catalog,
+                                             const string &schema, const string &name, OnEntryNotFound if_not_found,
+                                             QueryErrorContext error_context) {
+	auto entries = GetCatalogEntries(context, catalog, schema);
+	vector<CatalogLookup> lookups;
+	lookups.reserve(entries.size());
+	for (auto &entry : entries) {
+		if (if_not_found == OnEntryNotFound::RETURN_NULL) {
+			auto catalog_entry = Catalog::GetCatalogEntry(context, entry.catalog);
+			if (!catalog_entry) {
+				return nullptr;
+			}
+			lookups.emplace_back(*catalog_entry, entry.schema);
+		} else {
+			lookups.emplace_back(Catalog::GetCatalog(context, entry.catalog), entry.schema);
+		}
+	}
+	auto result = LookupEntry(context, lookups, type, name, if_not_found, error_context);
+	if (!result.Found()) {
+		D_ASSERT(if_not_found == OnEntryNotFound::RETURN_NULL);
 		return nullptr;
 	}
-	if (entry->type != CatalogType::TABLE_ENTRY) {
-		throw CatalogException(error_context.FormatError("%s is not a table", name));
+	return result.entry.get();
+}
+
+CatalogEntry &Catalog::GetEntry(ClientContext &context, CatalogType type, const string &catalog, const string &schema,
+                                const string &name, QueryErrorContext error_context) {
+	return *Catalog::GetEntry(context, type, catalog, schema, name, OnEntryNotFound::THROW_EXCEPTION, error_context);
+}
+
+optional_ptr<SchemaCatalogEntry> Catalog::GetSchema(ClientContext &context, const string &catalog_name,
+                                                    const string &schema_name, OnEntryNotFound if_not_found,
+                                                    QueryErrorContext error_context) {
+	auto entries = GetCatalogEntries(context, catalog_name, schema_name);
+	for (idx_t i = 0; i < entries.size(); i++) {
+		auto on_not_found = i + 1 == entries.size() ? if_not_found : OnEntryNotFound::RETURN_NULL;
+		auto &catalog = Catalog::GetCatalog(context, entries[i].catalog);
+		auto result = catalog.GetSchema(context, schema_name, on_not_found, error_context);
+		if (result) {
+			return result;
+		}
 	}
-	return (TableCatalogEntry *)entry;
+	return nullptr;
 }
 
-template <>
-SequenceCatalogEntry *Catalog::GetEntry(ClientContext &context, const string &schema_name, const string &name,
-                                        bool if_exists, QueryErrorContext error_context) {
-	return (SequenceCatalogEntry *)GetEntry(context, CatalogType::SEQUENCE_ENTRY, schema_name, name, if_exists,
-	                                        error_context);
-}
-
-template <>
-TableFunctionCatalogEntry *Catalog::GetEntry(ClientContext &context, const string &schema_name, const string &name,
-                                             bool if_exists, QueryErrorContext error_context) {
-	return (TableFunctionCatalogEntry *)GetEntry(context, CatalogType::TABLE_FUNCTION_ENTRY, schema_name, name,
-	                                             if_exists, error_context);
-}
-
-template <>
-CopyFunctionCatalogEntry *Catalog::GetEntry(ClientContext &context, const string &schema_name, const string &name,
-                                            bool if_exists, QueryErrorContext error_context) {
-	return (CopyFunctionCatalogEntry *)GetEntry(context, CatalogType::COPY_FUNCTION_ENTRY, schema_name, name, if_exists,
-	                                            error_context);
-}
-
-template <>
-PragmaFunctionCatalogEntry *Catalog::GetEntry(ClientContext &context, const string &schema_name, const string &name,
-                                              bool if_exists, QueryErrorContext error_context) {
-	return (PragmaFunctionCatalogEntry *)GetEntry(context, CatalogType::PRAGMA_FUNCTION_ENTRY, schema_name, name,
-	                                              if_exists, error_context);
-}
-
-template <>
-AggregateFunctionCatalogEntry *Catalog::GetEntry(ClientContext &context, const string &schema_name, const string &name,
-                                                 bool if_exists, QueryErrorContext error_context) {
-	auto entry = GetEntry(context, CatalogType::AGGREGATE_FUNCTION_ENTRY, schema_name, name, if_exists, error_context);
-	if (entry->type != CatalogType::AGGREGATE_FUNCTION_ENTRY) {
-		throw CatalogException(error_context.FormatError("%s is not an aggregate function", name));
+LogicalType Catalog::GetType(ClientContext &context, const string &schema, const string &name,
+                             OnEntryNotFound if_not_found) {
+	auto type_entry = GetEntry<TypeCatalogEntry>(context, schema, name, if_not_found);
+	if (!type_entry) {
+		return LogicalType::INVALID;
 	}
-	return (AggregateFunctionCatalogEntry *)entry;
-}
-
-template <>
-CollateCatalogEntry *Catalog::GetEntry(ClientContext &context, const string &schema_name, const string &name,
-                                       bool if_exists, QueryErrorContext error_context) {
-	return (CollateCatalogEntry *)GetEntry(context, CatalogType::COLLATION_ENTRY, schema_name, name, if_exists,
-	                                       error_context);
-}
-
-template <>
-TypeCatalogEntry *Catalog::GetEntry(ClientContext &context, const string &schema_name, const string &name,
-                                    bool if_exists, QueryErrorContext error_context) {
-	return (TypeCatalogEntry *)GetEntry(context, CatalogType::TYPE_ENTRY, schema_name, name, if_exists, error_context);
-}
-
-LogicalType Catalog::GetType(ClientContext &context, const string &schema, const string &name) {
-	auto user_type_catalog = GetEntry<TypeCatalogEntry>(context, schema, name);
-	auto result_type = user_type_catalog->user_type;
-	LogicalType::SetCatalog(result_type, user_type_catalog);
+	auto result_type = type_entry->user_type;
+	EnumType::SetCatalog(result_type, type_entry.get());
 	return result_type;
 }
 
-void Catalog::Alter(ClientContext &context, AlterInfo *info) {
+LogicalType Catalog::GetType(ClientContext &context, const string &catalog_name, const string &schema,
+                             const string &name) {
+	auto &type_entry = Catalog::GetEntry<TypeCatalogEntry>(context, catalog_name, schema, name);
+	auto result_type = type_entry.user_type;
+	EnumType::SetCatalog(result_type, &type_entry);
+	return result_type;
+}
+
+vector<reference<SchemaCatalogEntry>> Catalog::GetSchemas(ClientContext &context) {
+	vector<reference<SchemaCatalogEntry>> schemas;
+	ScanSchemas(context, [&](SchemaCatalogEntry &entry) { schemas.push_back(entry); });
+	return schemas;
+}
+
+bool Catalog::TypeExists(ClientContext &context, const string &catalog_name, const string &schema, const string &name) {
+	optional_ptr<CatalogEntry> entry;
+	entry = GetEntry(context, CatalogType::TYPE_ENTRY, catalog_name, schema, name, OnEntryNotFound::RETURN_NULL);
+	if (!entry) {
+		// look in the system catalog
+		entry = GetEntry(context, CatalogType::TYPE_ENTRY, SYSTEM_CATALOG, schema, name, OnEntryNotFound::RETURN_NULL);
+		if (!entry) {
+			return false;
+		}
+	}
+	return true;
+}
+
+vector<reference<SchemaCatalogEntry>> Catalog::GetSchemas(ClientContext &context, const string &catalog_name) {
+	vector<reference<Catalog>> catalogs;
+	if (IsInvalidCatalog(catalog_name)) {
+		unordered_set<string> name;
+
+		auto &search_path = *context.client_data->catalog_search_path;
+		for (auto &entry : search_path.Get()) {
+			if (name.find(entry.catalog) != name.end()) {
+				continue;
+			}
+			name.insert(entry.catalog);
+			catalogs.push_back(Catalog::GetCatalog(context, entry.catalog));
+		}
+	} else {
+		catalogs.push_back(Catalog::GetCatalog(context, catalog_name));
+	}
+	vector<reference<SchemaCatalogEntry>> result;
+	for (auto catalog : catalogs) {
+		auto schemas = catalog.get().GetSchemas(context);
+		result.insert(result.end(), schemas.begin(), schemas.end());
+	}
+	return result;
+}
+
+vector<reference<SchemaCatalogEntry>> Catalog::GetAllSchemas(ClientContext &context) {
+	vector<reference<SchemaCatalogEntry>> result;
+
+	auto &db_manager = DatabaseManager::Get(context);
+	auto databases = db_manager.GetDatabases(context);
+	for (auto database : databases) {
+		auto &catalog = database.get().GetCatalog();
+		auto new_schemas = catalog.GetSchemas(context);
+		result.insert(result.end(), new_schemas.begin(), new_schemas.end());
+	}
+	sort(result.begin(), result.end(),
+	     [&](reference<SchemaCatalogEntry> left_p, reference<SchemaCatalogEntry> right_p) {
+		     auto &left = left_p.get();
+		     auto &right = right_p.get();
+		     if (left.catalog.GetName() < right.catalog.GetName()) {
+			     return true;
+		     }
+		     if (left.catalog.GetName() == right.catalog.GetName()) {
+			     return left.name < right.name;
+		     }
+		     return false;
+	     });
+
+	return result;
+}
+
+void Catalog::Alter(ClientContext &context, AlterInfo &info) {
 	ModifyCatalog();
-	auto lookup = LookupEntry(context, info->GetCatalogType(), info->schema, info->name);
-	D_ASSERT(lookup.Found()); // It must have thrown otherwise.
+	auto lookup = LookupEntry(context, info.GetCatalogType(), info.schema, info.name, info.if_not_found);
+	if (!lookup.Found()) {
+		return;
+	}
 	return lookup.schema->Alter(context, info);
 }
 
+void Catalog::Verify() {
+}
+
+//===--------------------------------------------------------------------===//
+// Catalog Version
+//===--------------------------------------------------------------------===//
 idx_t Catalog::GetCatalogVersion() {
-	return catalog_version;
+	return GetDatabase().GetDatabaseManager().catalog_version;
 }
 
 idx_t Catalog::ModifyCatalog() {
-	return catalog_version++;
+	return GetDatabase().GetDatabaseManager().ModifyCatalog();
+}
+
+bool Catalog::IsSystemCatalog() const {
+	return db.IsSystem();
+}
+
+bool Catalog::IsTemporaryCatalog() const {
+	return db.IsTemporary();
 }
 
 } // namespace duckdb
@@ -420,23 +793,22 @@ ColumnDependencyManager::ColumnDependencyManager() {
 ColumnDependencyManager::~ColumnDependencyManager() {
 }
 
-void ColumnDependencyManager::AddGeneratedColumn(const ColumnDefinition &column,
-                                                 const case_insensitive_map_t<column_t> &name_map) {
+void ColumnDependencyManager::AddGeneratedColumn(const ColumnDefinition &column, const ColumnList &list) {
 	D_ASSERT(column.Generated());
 	vector<string> referenced_columns;
 	column.GetListOfDependencies(referenced_columns);
-	vector<column_t> indices;
+	vector<LogicalIndex> indices;
 	for (auto &col : referenced_columns) {
-		auto entry = name_map.find(col);
-		if (entry == name_map.end()) {
-			throw InvalidInputException("Referenced column \"%s\" was not found in the table", col);
+		if (!list.ColumnExists(col)) {
+			throw BinderException("Column \"%s\" referenced by generated column does not exist", col);
 		}
-		indices.push_back(entry->second);
+		auto &entry = list.GetColumn(col);
+		indices.push_back(entry.Logical());
 	}
-	return AddGeneratedColumn(column.Oid(), indices);
+	return AddGeneratedColumn(column.Logical(), indices);
 }
 
-void ColumnDependencyManager::AddGeneratedColumn(column_t index, const vector<column_t> &indices, bool root) {
+void ColumnDependencyManager::AddGeneratedColumn(LogicalIndex index, const vector<LogicalIndex> &indices, bool root) {
 	if (indices.empty()) {
 		return;
 	}
@@ -474,7 +846,7 @@ void ColumnDependencyManager::AddGeneratedColumn(column_t index, const vector<co
 	}
 }
 
-vector<column_t> ColumnDependencyManager::RemoveColumn(column_t index, column_t column_amount) {
+vector<LogicalIndex> ColumnDependencyManager::RemoveColumn(LogicalIndex index, idx_t column_amount) {
 	// Always add the initial column
 	deleted_columns.insert(index);
 
@@ -482,12 +854,12 @@ vector<column_t> ColumnDependencyManager::RemoveColumn(column_t index, column_t 
 	RemoveStandardColumn(index);
 
 	// Clean up the internal list
-	vector<column_t> new_indices = CleanupInternals(column_amount);
+	vector<LogicalIndex> new_indices = CleanupInternals(column_amount);
 	D_ASSERT(deleted_columns.empty());
 	return new_indices;
 }
 
-bool ColumnDependencyManager::IsDependencyOf(column_t gcol, column_t col) const {
+bool ColumnDependencyManager::IsDependencyOf(LogicalIndex gcol, LogicalIndex col) const {
 	auto entry = dependents_map.find(gcol);
 	if (entry == dependents_map.end()) {
 		return false;
@@ -496,7 +868,7 @@ bool ColumnDependencyManager::IsDependencyOf(column_t gcol, column_t col) const 
 	return list.count(col);
 }
 
-bool ColumnDependencyManager::HasDependencies(column_t index) const {
+bool ColumnDependencyManager::HasDependencies(LogicalIndex index) const {
 	auto entry = dependents_map.find(index);
 	if (entry == dependents_map.end()) {
 		return false;
@@ -504,13 +876,13 @@ bool ColumnDependencyManager::HasDependencies(column_t index) const {
 	return true;
 }
 
-const unordered_set<column_t> &ColumnDependencyManager::GetDependencies(column_t index) const {
+const logical_index_set_t &ColumnDependencyManager::GetDependencies(LogicalIndex index) const {
 	auto entry = dependents_map.find(index);
 	D_ASSERT(entry != dependents_map.end());
 	return entry->second;
 }
 
-bool ColumnDependencyManager::HasDependents(column_t index) const {
+bool ColumnDependencyManager::HasDependents(LogicalIndex index) const {
 	auto entry = dependencies_map.find(index);
 	if (entry == dependencies_map.end()) {
 		return false;
@@ -518,13 +890,13 @@ bool ColumnDependencyManager::HasDependents(column_t index) const {
 	return true;
 }
 
-const unordered_set<column_t> &ColumnDependencyManager::GetDependents(column_t index) const {
+const logical_index_set_t &ColumnDependencyManager::GetDependents(LogicalIndex index) const {
 	auto entry = dependencies_map.find(index);
 	D_ASSERT(entry != dependencies_map.end());
 	return entry->second;
 }
 
-void ColumnDependencyManager::RemoveStandardColumn(column_t index) {
+void ColumnDependencyManager::RemoveStandardColumn(LogicalIndex index) {
 	if (!HasDependents(index)) {
 		return;
 	}
@@ -540,7 +912,7 @@ void ColumnDependencyManager::RemoveStandardColumn(column_t index) {
 	dependencies_map.erase(index);
 }
 
-void ColumnDependencyManager::RemoveGeneratedColumn(column_t index) {
+void ColumnDependencyManager::RemoveGeneratedColumn(LogicalIndex index) {
 	deleted_columns.insert(index);
 	if (!HasDependencies(index)) {
 		return;
@@ -560,9 +932,9 @@ void ColumnDependencyManager::RemoveGeneratedColumn(column_t index) {
 	dependents_map.erase(index);
 }
 
-void ColumnDependencyManager::AdjustSingle(column_t idx, idx_t offset) {
-	D_ASSERT(idx >= offset);
-	column_t new_idx = idx - offset;
+void ColumnDependencyManager::AdjustSingle(LogicalIndex idx, idx_t offset) {
+	D_ASSERT(idx.index >= offset);
+	LogicalIndex new_idx = LogicalIndex(idx.index - offset);
 	// Adjust this index in the dependents of this column
 	bool has_dependents = HasDependents(idx);
 	bool has_dependencies = HasDependencies(idx);
@@ -587,48 +959,50 @@ void ColumnDependencyManager::AdjustSingle(column_t idx, idx_t offset) {
 	}
 	if (has_dependents) {
 		D_ASSERT(!dependencies_map.count(new_idx));
-		dependencies_map[new_idx] = move(dependencies_map[idx]);
+		dependencies_map[new_idx] = std::move(dependencies_map[idx]);
 		dependencies_map.erase(idx);
 	}
 	if (has_dependencies) {
 		D_ASSERT(!dependents_map.count(new_idx));
-		dependents_map[new_idx] = move(dependents_map[idx]);
+		dependents_map[new_idx] = std::move(dependents_map[idx]);
 		dependents_map.erase(idx);
 	}
 }
 
-vector<column_t> ColumnDependencyManager::CleanupInternals(column_t column_amount) {
-	vector<column_t> to_adjust;
+vector<LogicalIndex> ColumnDependencyManager::CleanupInternals(idx_t column_amount) {
+	vector<LogicalIndex> to_adjust;
 	D_ASSERT(!deleted_columns.empty());
 	// Get the lowest index that was deleted
-	vector<column_t> new_indices(column_amount, DConstants::INVALID_INDEX);
-	column_t threshold = *deleted_columns.begin();
+	vector<LogicalIndex> new_indices(column_amount, LogicalIndex(DConstants::INVALID_INDEX));
+	idx_t threshold = deleted_columns.begin()->index;
 
 	idx_t offset = 0;
-	for (column_t i = 0; i < column_amount; i++) {
-		new_indices[i] = i - offset;
-		if (deleted_columns.count(i)) {
+	for (idx_t i = 0; i < column_amount; i++) {
+		auto current_index = LogicalIndex(i);
+		auto new_index = LogicalIndex(i - offset);
+		new_indices[i] = new_index;
+		if (deleted_columns.count(current_index)) {
 			offset++;
 			continue;
 		}
-		if (i > threshold && (HasDependencies(i) || HasDependents(i))) {
-			to_adjust.push_back(i);
+		if (i > threshold && (HasDependencies(current_index) || HasDependents(current_index))) {
+			to_adjust.push_back(current_index);
 		}
 	}
 
 	// Adjust all indices inside the dependency managers internal mappings
 	for (auto &col : to_adjust) {
-		offset = col - new_indices[col];
+		auto offset = col.index - new_indices[col.index].index;
 		AdjustSingle(col, offset);
 	}
 	deleted_columns.clear();
 	return new_indices;
 }
 
-stack<column_t> ColumnDependencyManager::GetBindOrder(const vector<ColumnDefinition> &columns) {
-	stack<column_t> bind_order;
-	queue<column_t> to_visit;
-	unordered_set<column_t> visited;
+stack<LogicalIndex> ColumnDependencyManager::GetBindOrder(const ColumnList &columns) {
+	stack<LogicalIndex> bind_order;
+	queue<LogicalIndex> to_visit;
+	logical_index_set_t visited;
 
 	for (auto &entry : direct_dependencies) {
 		auto dependent = entry.first;
@@ -660,17 +1034,16 @@ stack<column_t> ColumnDependencyManager::GetBindOrder(const vector<ColumnDefinit
 	}
 
 	// Add generated columns that have no dependencies, but still might need to have their type resolved
-	for (idx_t i = 0; i < columns.size(); i++) {
-		auto &col = columns[i];
+	for (auto &col : columns.Logical()) {
 		// Not a generated column
 		if (!col.Generated()) {
 			continue;
 		}
 		// Already added to the bind_order stack
-		if (visited.count(i)) {
+		if (visited.count(col.Logical())) {
 			continue;
 		}
-		bind_order.push(i);
+		bind_order.push(col.Logical());
 	}
 
 	return bind_order;
@@ -682,152 +1055,36 @@ stack<column_t> ColumnDependencyManager::GetBindOrder(const vector<ColumnDefinit
 
 namespace duckdb {
 
-CopyFunctionCatalogEntry::CopyFunctionCatalogEntry(Catalog *catalog, SchemaCatalogEntry *schema,
-                                                   CreateCopyFunctionInfo *info)
-    : StandardEntry(CatalogType::COPY_FUNCTION_ENTRY, schema, catalog, info->name), function(info->function) {
+CopyFunctionCatalogEntry::CopyFunctionCatalogEntry(Catalog &catalog, SchemaCatalogEntry &schema,
+                                                   CreateCopyFunctionInfo &info)
+    : StandardEntry(CatalogType::COPY_FUNCTION_ENTRY, schema, catalog, info.name), function(info.function) {
 }
 
 } // namespace duckdb
 
 
 
+
 namespace duckdb {
 
-IndexCatalogEntry::IndexCatalogEntry(Catalog *catalog, SchemaCatalogEntry *schema, CreateIndexInfo *info)
-    : StandardEntry(CatalogType::INDEX_ENTRY, schema, catalog, info->index_name), index(nullptr), sql(info->sql) {
+DuckIndexEntry::DuckIndexEntry(Catalog &catalog, SchemaCatalogEntry &schema, CreateIndexInfo &info)
+    : IndexCatalogEntry(catalog, schema, info) {
 }
 
-IndexCatalogEntry::~IndexCatalogEntry() {
+DuckIndexEntry::~DuckIndexEntry() {
 	// remove the associated index from the info
 	if (!info || !index) {
 		return;
 	}
-	info->indexes.RemoveIndex(index);
+	info->indexes.RemoveIndex(*index);
 }
 
-string IndexCatalogEntry::ToSQL() {
-	if (sql.empty()) {
-		throw InternalException("Cannot convert INDEX to SQL because it was not created with a SQL statement");
-	}
-	if (sql[sql.size() - 1] != ';') {
-		sql += ";";
-	}
-	return sql;
+string DuckIndexEntry::GetSchemaName() const {
+	return info->schema;
 }
 
-} // namespace duckdb
-
-
-
-namespace duckdb {
-
-PragmaFunctionCatalogEntry::PragmaFunctionCatalogEntry(Catalog *catalog, SchemaCatalogEntry *schema,
-                                                       CreatePragmaFunctionInfo *info)
-    : StandardEntry(CatalogType::PRAGMA_FUNCTION_ENTRY, schema, catalog, info->name), functions(move(info->functions)) {
-}
-
-} // namespace duckdb
-
-
-
-
-
-
-namespace duckdb {
-
-MacroCatalogEntry::MacroCatalogEntry(Catalog *catalog, SchemaCatalogEntry *schema, CreateMacroInfo *info)
-    : StandardEntry(
-          (info->function->type == MacroType::SCALAR_MACRO ? CatalogType::MACRO_ENTRY : CatalogType::TABLE_MACRO_ENTRY),
-          schema, catalog, info->name),
-      function(move(info->function)) {
-	this->temporary = info->temporary;
-	this->internal = info->internal;
-}
-
-ScalarMacroCatalogEntry::ScalarMacroCatalogEntry(Catalog *catalog, SchemaCatalogEntry *schema, CreateMacroInfo *info)
-    : MacroCatalogEntry(catalog, schema, info) {
-}
-
-void ScalarMacroCatalogEntry::Serialize(Serializer &main_serializer) {
-	D_ASSERT(!internal);
-	auto &scalar_function = (ScalarMacroFunction &)*function;
-	FieldWriter writer(main_serializer);
-	writer.WriteString(schema->name);
-	writer.WriteString(name);
-	writer.WriteSerializable(*scalar_function.expression);
-	// writer.WriteSerializableList(function->parameters);
-	writer.WriteSerializableList(function->parameters);
-	writer.WriteField<uint32_t>((uint32_t)function->default_parameters.size());
-	auto &serializer = writer.GetSerializer();
-	for (auto &kv : function->default_parameters) {
-		serializer.WriteString(kv.first);
-		kv.second->Serialize(serializer);
-	}
-	writer.Finalize();
-}
-
-unique_ptr<CreateMacroInfo> ScalarMacroCatalogEntry::Deserialize(Deserializer &main_source) {
-	auto info = make_unique<CreateMacroInfo>(CatalogType::MACRO_ENTRY);
-	FieldReader reader(main_source);
-	info->schema = reader.ReadRequired<string>();
-	info->name = reader.ReadRequired<string>();
-	auto expression = reader.ReadRequiredSerializable<ParsedExpression>();
-	auto func = make_unique<ScalarMacroFunction>(move(expression));
-	info->function = move(func);
-	info->function->parameters = reader.ReadRequiredSerializableList<ParsedExpression>();
-	auto default_param_count = reader.ReadRequired<uint32_t>();
-	auto &source = reader.GetSource();
-	for (idx_t i = 0; i < default_param_count; i++) {
-		auto name = source.Read<string>();
-		info->function->default_parameters[name] = ParsedExpression::Deserialize(source);
-	}
-	// dont like this
-	// info->type=CatalogType::MACRO_ENTRY;
-	reader.Finalize();
-	return info;
-}
-
-TableMacroCatalogEntry::TableMacroCatalogEntry(Catalog *catalog, SchemaCatalogEntry *schema, CreateMacroInfo *info)
-    : MacroCatalogEntry(catalog, schema, info) {
-}
-
-void TableMacroCatalogEntry::Serialize(Serializer &main_serializer) {
-	D_ASSERT(!internal);
-	FieldWriter writer(main_serializer);
-
-	auto &table_function = (TableMacroFunction &)*function;
-	writer.WriteString(schema->name);
-	writer.WriteString(name);
-	writer.WriteSerializable(*table_function.query_node);
-	writer.WriteSerializableList(function->parameters);
-	writer.WriteField<uint32_t>((uint32_t)function->default_parameters.size());
-	auto &serializer = writer.GetSerializer();
-	for (auto &kv : function->default_parameters) {
-		serializer.WriteString(kv.first);
-		kv.second->Serialize(serializer);
-	}
-	writer.Finalize();
-}
-
-unique_ptr<CreateMacroInfo> TableMacroCatalogEntry::Deserialize(Deserializer &main_source) {
-	auto info = make_unique<CreateMacroInfo>(CatalogType::TABLE_MACRO_ENTRY);
-	FieldReader reader(main_source);
-	info->schema = reader.ReadRequired<string>();
-	info->name = reader.ReadRequired<string>();
-	auto query_node = reader.ReadRequiredSerializable<QueryNode>();
-	auto table_function = make_unique<TableMacroFunction>(move(query_node));
-	info->function = move(table_function);
-	info->function->parameters = reader.ReadRequiredSerializableList<ParsedExpression>();
-	auto default_param_count = reader.ReadRequired<uint32_t>();
-	auto &source = reader.GetSource();
-	for (idx_t i = 0; i < default_param_count; i++) {
-		auto name = source.Read<string>();
-		info->function->default_parameters[name] = ParsedExpression::Deserialize(source);
-	}
-
-	reader.Finalize();
-
-	return info;
+string DuckIndexEntry::GetTableName() const {
+	return info->table;
 }
 
 } // namespace duckdb
@@ -867,29 +1124,27 @@ unique_ptr<CreateMacroInfo> TableMacroCatalogEntry::Deserialize(Deserializer &ma
 
 
 
-
-
-
-#include <sstream>
-
 namespace duckdb {
 
-void FindForeignKeyInformation(CatalogEntry *entry, AlterForeignKeyType alter_fk_type,
+void FindForeignKeyInformation(CatalogEntry &entry, AlterForeignKeyType alter_fk_type,
                                vector<unique_ptr<AlterForeignKeyInfo>> &fk_arrays) {
-	if (entry->type != CatalogType::TABLE_ENTRY) {
+	if (entry.type != CatalogType::TABLE_ENTRY) {
 		return;
 	}
-	auto *table_entry = (TableCatalogEntry *)entry;
-	for (idx_t i = 0; i < table_entry->constraints.size(); i++) {
-		auto &cond = table_entry->constraints[i];
+	auto &table_entry = entry.Cast<TableCatalogEntry>();
+	auto &constraints = table_entry.GetConstraints();
+	for (idx_t i = 0; i < constraints.size(); i++) {
+		auto &cond = constraints[i];
 		if (cond->type != ConstraintType::FOREIGN_KEY) {
 			continue;
 		}
-		auto &fk = (ForeignKeyConstraint &)*cond;
+		auto &fk = cond->Cast<ForeignKeyConstraint>();
 		if (fk.info.type == ForeignKeyType::FK_TYPE_FOREIGN_KEY_TABLE) {
-			fk_arrays.push_back(make_unique<AlterForeignKeyInfo>(fk.info.schema, fk.info.table, entry->name,
-			                                                     fk.pk_columns, fk.fk_columns, fk.info.pk_keys,
-			                                                     fk.info.fk_keys, alter_fk_type));
+			AlterEntryData alter_data(entry.ParentCatalog().GetName(), fk.info.schema, fk.info.table,
+			                          OnEntryNotFound::THROW_EXCEPTION);
+			fk_arrays.push_back(make_uniq<AlterForeignKeyInfo>(std::move(alter_data), entry.name, fk.pk_columns,
+			                                                   fk.fk_columns, fk.info.pk_keys, fk.info.fk_keys,
+			                                                   alter_fk_type));
 		} else if (fk.info.type == ForeignKeyType::FK_TYPE_PRIMARY_KEY_TABLE &&
 		           alter_fk_type == AlterForeignKeyType::AFT_DELETE) {
 			throw CatalogException("Could not drop the table because this table is main key table of the table \"%s\"",
@@ -898,42 +1153,38 @@ void FindForeignKeyInformation(CatalogEntry *entry, AlterForeignKeyType alter_fk
 	}
 }
 
-SchemaCatalogEntry::SchemaCatalogEntry(Catalog *catalog, string name_p, bool internal)
-    : CatalogEntry(CatalogType::SCHEMA_ENTRY, catalog, move(name_p)),
-      tables(*catalog, make_unique<DefaultViewGenerator>(*catalog, this)), indexes(*catalog), table_functions(*catalog),
-      copy_functions(*catalog), pragma_functions(*catalog),
-      functions(*catalog, make_unique<DefaultFunctionGenerator>(*catalog, this)), sequences(*catalog),
-      collations(*catalog), types(*catalog, make_unique<DefaultTypeGenerator>(*catalog, this)) {
-	this->internal = internal;
+DuckSchemaEntry::DuckSchemaEntry(Catalog &catalog, string name_p, bool is_internal)
+    : SchemaCatalogEntry(catalog, std::move(name_p), is_internal),
+      tables(catalog, make_uniq<DefaultViewGenerator>(catalog, *this)), indexes(catalog), table_functions(catalog),
+      copy_functions(catalog), pragma_functions(catalog),
+      functions(catalog, make_uniq<DefaultFunctionGenerator>(catalog, *this)), sequences(catalog), collations(catalog),
+      types(catalog, make_uniq<DefaultTypeGenerator>(catalog, *this)) {
 }
 
-CatalogEntry *SchemaCatalogEntry::AddEntry(ClientContext &context, unique_ptr<StandardEntry> entry,
-                                           OnCreateConflict on_conflict, unordered_set<CatalogEntry *> dependencies) {
+optional_ptr<CatalogEntry> DuckSchemaEntry::AddEntryInternal(CatalogTransaction transaction,
+                                                             unique_ptr<StandardEntry> entry,
+                                                             OnCreateConflict on_conflict,
+                                                             DependencyList dependencies) {
 	auto entry_name = entry->name;
 	auto entry_type = entry->type;
 	auto result = entry.get();
 
 	// first find the set for this entry
 	auto &set = GetCatalogSet(entry_type);
-
-	if (name != TEMP_SCHEMA) {
-		dependencies.insert(this);
-	} else {
-		entry->temporary = true;
-	}
+	dependencies.AddDependency(*this);
 	if (on_conflict == OnCreateConflict::REPLACE_ON_CONFLICT) {
 		// CREATE OR REPLACE: first try to drop the entry
-		auto old_entry = set.GetEntry(context, entry_name);
+		auto old_entry = set.GetEntry(transaction, entry_name);
 		if (old_entry) {
 			if (old_entry->type != entry_type) {
 				throw CatalogException("Existing object %s is of type %s, trying to replace with type %s", entry_name,
 				                       CatalogTypeToString(old_entry->type), CatalogTypeToString(entry_type));
 			}
-			(void)set.DropEntry(context, entry_name, false);
+			(void)set.DropEntry(transaction, entry_name, false, entry->internal);
 		}
 	}
 	// now try to add the entry
-	if (!set.CreateEntry(context, entry_name, move(entry), dependencies)) {
+	if (!set.CreateEntry(transaction, entry_name, std::move(entry), dependencies)) {
 		// entry already exists!
 		if (on_conflict == OnCreateConflict::ERROR_ON_CONFLICT) {
 			throw CatalogException("%s with name \"%s\" already exists!", CatalogTypeToString(entry_type), entry_name);
@@ -944,217 +1195,198 @@ CatalogEntry *SchemaCatalogEntry::AddEntry(ClientContext &context, unique_ptr<St
 	return result;
 }
 
-CatalogEntry *SchemaCatalogEntry::AddEntry(ClientContext &context, unique_ptr<StandardEntry> entry,
-                                           OnCreateConflict on_conflict) {
-	unordered_set<CatalogEntry *> dependencies;
-	return AddEntry(context, move(entry), on_conflict, dependencies);
-}
+optional_ptr<CatalogEntry> DuckSchemaEntry::CreateTable(CatalogTransaction transaction, BoundCreateTableInfo &info) {
+	auto table = make_uniq<DuckTableEntry>(catalog, *this, info);
+	auto &storage = table->GetStorage();
+	storage.info->cardinality = storage.GetTotalRows();
 
-CatalogEntry *SchemaCatalogEntry::CreateSequence(ClientContext &context, CreateSequenceInfo *info) {
-	auto sequence = make_unique<SequenceCatalogEntry>(catalog, this, info);
-	return AddEntry(context, move(sequence), info->on_conflict);
-}
-
-CatalogEntry *SchemaCatalogEntry::CreateType(ClientContext &context, CreateTypeInfo *info) {
-	auto type_entry = make_unique<TypeCatalogEntry>(catalog, this, info);
-	return AddEntry(context, move(type_entry), info->on_conflict);
-}
-
-CatalogEntry *SchemaCatalogEntry::CreateTable(ClientContext &context, BoundCreateTableInfo *info) {
-	auto table = make_unique<TableCatalogEntry>(catalog, this, info);
-	table->storage->info->cardinality = table->storage->GetTotalRows();
-
-	CatalogEntry *entry = AddEntry(context, move(table), info->Base().on_conflict, info->dependencies);
+	auto entry = AddEntryInternal(transaction, std::move(table), info.Base().on_conflict, info.dependencies);
 	if (!entry) {
 		return nullptr;
 	}
 
 	// add a foreign key constraint in main key table if there is a foreign key constraint
 	vector<unique_ptr<AlterForeignKeyInfo>> fk_arrays;
-	FindForeignKeyInformation(entry, AlterForeignKeyType::AFT_ADD, fk_arrays);
+	FindForeignKeyInformation(*entry, AlterForeignKeyType::AFT_ADD, fk_arrays);
 	for (idx_t i = 0; i < fk_arrays.size(); i++) {
 		// alter primary key table
-		AlterForeignKeyInfo *fk_info = fk_arrays[i].get();
-		catalog->Alter(context, fk_info);
+		auto &fk_info = *fk_arrays[i];
+		catalog.Alter(transaction.GetContext(), fk_info);
 
 		// make a dependency between this table and referenced table
 		auto &set = GetCatalogSet(CatalogType::TABLE_ENTRY);
-		info->dependencies.insert(set.GetEntry(context, fk_info->name));
+		info.dependencies.AddDependency(*set.GetEntry(transaction, fk_info.name));
 	}
 	return entry;
 }
 
-CatalogEntry *SchemaCatalogEntry::CreateView(ClientContext &context, CreateViewInfo *info) {
-	auto view = make_unique<ViewCatalogEntry>(catalog, this, info);
-	return AddEntry(context, move(view), info->on_conflict);
-}
-
-CatalogEntry *SchemaCatalogEntry::CreateIndex(ClientContext &context, CreateIndexInfo *info, TableCatalogEntry *table) {
-	unordered_set<CatalogEntry *> dependencies;
-	dependencies.insert(table);
-	auto index = make_unique<IndexCatalogEntry>(catalog, this, info);
-	return AddEntry(context, move(index), info->on_conflict, dependencies);
-}
-
-CatalogEntry *SchemaCatalogEntry::CreateCollation(ClientContext &context, CreateCollationInfo *info) {
-	auto collation = make_unique<CollateCatalogEntry>(catalog, this, info);
-	return AddEntry(context, move(collation), info->on_conflict);
-}
-
-CatalogEntry *SchemaCatalogEntry::CreateTableFunction(ClientContext &context, CreateTableFunctionInfo *info) {
-	auto table_function = make_unique<TableFunctionCatalogEntry>(catalog, this, info);
-	return AddEntry(context, move(table_function), info->on_conflict);
-}
-
-CatalogEntry *SchemaCatalogEntry::CreateCopyFunction(ClientContext &context, CreateCopyFunctionInfo *info) {
-	auto copy_function = make_unique<CopyFunctionCatalogEntry>(catalog, this, info);
-	return AddEntry(context, move(copy_function), info->on_conflict);
-}
-
-CatalogEntry *SchemaCatalogEntry::CreatePragmaFunction(ClientContext &context, CreatePragmaFunctionInfo *info) {
-	auto pragma_function = make_unique<PragmaFunctionCatalogEntry>(catalog, this, info);
-	return AddEntry(context, move(pragma_function), info->on_conflict);
-}
-
-CatalogEntry *SchemaCatalogEntry::CreateFunction(ClientContext &context, CreateFunctionInfo *info) {
+optional_ptr<CatalogEntry> DuckSchemaEntry::CreateFunction(CatalogTransaction transaction, CreateFunctionInfo &info) {
+	if (info.on_conflict == OnCreateConflict::ALTER_ON_CONFLICT) {
+		// check if the original entry exists
+		auto &catalog_set = GetCatalogSet(info.type);
+		auto current_entry = catalog_set.GetEntry(transaction, info.name);
+		if (current_entry) {
+			// the current entry exists - alter it instead
+			auto alter_info = info.GetAlterInfo();
+			Alter(transaction.GetContext(), *alter_info);
+			return nullptr;
+		}
+	}
 	unique_ptr<StandardEntry> function;
-	switch (info->type) {
+	switch (info.type) {
 	case CatalogType::SCALAR_FUNCTION_ENTRY:
-		function = make_unique_base<StandardEntry, ScalarFunctionCatalogEntry>(catalog, this,
-		                                                                       (CreateScalarFunctionInfo *)info);
+		function = make_uniq_base<StandardEntry, ScalarFunctionCatalogEntry>(catalog, *this,
+		                                                                     info.Cast<CreateScalarFunctionInfo>());
+		break;
+	case CatalogType::TABLE_FUNCTION_ENTRY:
+		function = make_uniq_base<StandardEntry, TableFunctionCatalogEntry>(catalog, *this,
+		                                                                    info.Cast<CreateTableFunctionInfo>());
 		break;
 	case CatalogType::MACRO_ENTRY:
 		// create a macro function
-		function = make_unique_base<StandardEntry, ScalarMacroCatalogEntry>(catalog, this, (CreateMacroInfo *)info);
+		function = make_uniq_base<StandardEntry, ScalarMacroCatalogEntry>(catalog, *this, info.Cast<CreateMacroInfo>());
 		break;
 
 	case CatalogType::TABLE_MACRO_ENTRY:
-		// create a macro function
-		function = make_unique_base<StandardEntry, TableMacroCatalogEntry>(catalog, this, (CreateMacroInfo *)info);
+		// create a macro table function
+		function = make_uniq_base<StandardEntry, TableMacroCatalogEntry>(catalog, *this, info.Cast<CreateMacroInfo>());
 		break;
 	case CatalogType::AGGREGATE_FUNCTION_ENTRY:
-		D_ASSERT(info->type == CatalogType::AGGREGATE_FUNCTION_ENTRY);
+		D_ASSERT(info.type == CatalogType::AGGREGATE_FUNCTION_ENTRY);
 		// create an aggregate function
-		function = make_unique_base<StandardEntry, AggregateFunctionCatalogEntry>(catalog, this,
-		                                                                          (CreateAggregateFunctionInfo *)info);
+		function = make_uniq_base<StandardEntry, AggregateFunctionCatalogEntry>(
+		    catalog, *this, info.Cast<CreateAggregateFunctionInfo>());
 		break;
 	default:
-		throw InternalException("Unknown function type \"%s\"", CatalogTypeToString(info->type));
+		throw InternalException("Unknown function type \"%s\"", CatalogTypeToString(info.type));
 	}
-	return AddEntry(context, move(function), info->on_conflict);
+	function->internal = info.internal;
+	return AddEntry(transaction, std::move(function), info.on_conflict);
 }
 
-CatalogEntry *SchemaCatalogEntry::AddFunction(ClientContext &context, CreateFunctionInfo *info) {
-	auto entry = GetCatalogSet(info->type).GetEntry(context, info->name);
-	if (!entry) {
-		return CreateFunction(context, info);
-	}
-
-	info->on_conflict = OnCreateConflict::REPLACE_ON_CONFLICT;
-	switch (info->type) {
-	case CatalogType::SCALAR_FUNCTION_ENTRY: {
-		auto scalar_info = (CreateScalarFunctionInfo *)info;
-		auto &scalars = *(ScalarFunctionCatalogEntry *)entry;
-		for (const auto &scalar : scalars.functions) {
-			scalar_info->functions.emplace_back(scalar);
-		}
-		break;
-	}
-	case CatalogType::AGGREGATE_FUNCTION_ENTRY: {
-		auto agg_info = (CreateAggregateFunctionInfo *)info;
-		auto &aggs = *(AggregateFunctionCatalogEntry *)entry;
-		for (const auto &agg : aggs.functions) {
-			agg_info->functions.AddFunction(agg);
-		}
-		break;
-	}
-	default:
-		// Macros can only be replaced because there is only one of each name.
-		throw InternalException("Unsupported function type \"%s\" for adding", CatalogTypeToString(info->type));
-	}
-	return CreateFunction(context, info);
+optional_ptr<CatalogEntry> DuckSchemaEntry::AddEntry(CatalogTransaction transaction, unique_ptr<StandardEntry> entry,
+                                                     OnCreateConflict on_conflict) {
+	DependencyList dependencies;
+	return AddEntryInternal(transaction, std::move(entry), on_conflict, dependencies);
 }
 
-void SchemaCatalogEntry::DropEntry(ClientContext &context, DropInfo *info) {
-	auto &set = GetCatalogSet(info->type);
-
-	// first find the entry
-	auto existing_entry = set.GetEntry(context, info->name);
-	if (!existing_entry) {
-		if (!info->if_exists) {
-			throw CatalogException("%s with name \"%s\" does not exist!", CatalogTypeToString(info->type), info->name);
-		}
-		return;
-	}
-	if (existing_entry->type != info->type) {
-		throw CatalogException("Existing object %s is of type %s, trying to replace with type %s", info->name,
-		                       CatalogTypeToString(existing_entry->type), CatalogTypeToString(info->type));
-	}
-
-	// if there is a foreign key constraint, get that information
-	vector<unique_ptr<AlterForeignKeyInfo>> fk_arrays;
-	FindForeignKeyInformation(existing_entry, AlterForeignKeyType::AFT_DELETE, fk_arrays);
-
-	if (!set.DropEntry(context, info->name, info->cascade)) {
-		throw InternalException("Could not drop element because of an internal error");
-	}
-
-	// remove the foreign key constraint in main key table if main key table's name is valid
-	for (idx_t i = 0; i < fk_arrays.size(); i++) {
-		// alter primary key tablee
-		Catalog::GetCatalog(context).Alter(context, fk_arrays[i].get());
-	}
+optional_ptr<CatalogEntry> DuckSchemaEntry::CreateSequence(CatalogTransaction transaction, CreateSequenceInfo &info) {
+	auto sequence = make_uniq<SequenceCatalogEntry>(catalog, *this, info);
+	return AddEntry(transaction, std::move(sequence), info.on_conflict);
 }
 
-void SchemaCatalogEntry::Alter(ClientContext &context, AlterInfo *info) {
-	CatalogType type = info->GetCatalogType();
+optional_ptr<CatalogEntry> DuckSchemaEntry::CreateType(CatalogTransaction transaction, CreateTypeInfo &info) {
+	auto type_entry = make_uniq<TypeCatalogEntry>(catalog, *this, info);
+	return AddEntry(transaction, std::move(type_entry), info.on_conflict);
+}
+
+optional_ptr<CatalogEntry> DuckSchemaEntry::CreateView(CatalogTransaction transaction, CreateViewInfo &info) {
+	auto view = make_uniq<ViewCatalogEntry>(catalog, *this, info);
+	return AddEntry(transaction, std::move(view), info.on_conflict);
+}
+
+optional_ptr<CatalogEntry> DuckSchemaEntry::CreateIndex(ClientContext &context, CreateIndexInfo &info,
+                                                        TableCatalogEntry &table) {
+	DependencyList dependencies;
+	dependencies.AddDependency(table);
+	auto index = make_uniq<DuckIndexEntry>(catalog, *this, info);
+	return AddEntryInternal(GetCatalogTransaction(context), std::move(index), info.on_conflict, dependencies);
+}
+
+optional_ptr<CatalogEntry> DuckSchemaEntry::CreateCollation(CatalogTransaction transaction, CreateCollationInfo &info) {
+	auto collation = make_uniq<CollateCatalogEntry>(catalog, *this, info);
+	collation->internal = info.internal;
+	return AddEntry(transaction, std::move(collation), info.on_conflict);
+}
+
+optional_ptr<CatalogEntry> DuckSchemaEntry::CreateTableFunction(CatalogTransaction transaction,
+                                                                CreateTableFunctionInfo &info) {
+	auto table_function = make_uniq<TableFunctionCatalogEntry>(catalog, *this, info);
+	table_function->internal = info.internal;
+	return AddEntry(transaction, std::move(table_function), info.on_conflict);
+}
+
+optional_ptr<CatalogEntry> DuckSchemaEntry::CreateCopyFunction(CatalogTransaction transaction,
+                                                               CreateCopyFunctionInfo &info) {
+	auto copy_function = make_uniq<CopyFunctionCatalogEntry>(catalog, *this, info);
+	copy_function->internal = info.internal;
+	return AddEntry(transaction, std::move(copy_function), info.on_conflict);
+}
+
+optional_ptr<CatalogEntry> DuckSchemaEntry::CreatePragmaFunction(CatalogTransaction transaction,
+                                                                 CreatePragmaFunctionInfo &info) {
+	auto pragma_function = make_uniq<PragmaFunctionCatalogEntry>(catalog, *this, info);
+	pragma_function->internal = info.internal;
+	return AddEntry(transaction, std::move(pragma_function), info.on_conflict);
+}
+
+void DuckSchemaEntry::Alter(ClientContext &context, AlterInfo &info) {
+	CatalogType type = info.GetCatalogType();
 	auto &set = GetCatalogSet(type);
-	if (info->type == AlterType::CHANGE_OWNERSHIP) {
-		if (!set.AlterOwnership(context, (ChangeOwnershipInfo *)info)) {
+	auto transaction = GetCatalogTransaction(context);
+	if (info.type == AlterType::CHANGE_OWNERSHIP) {
+		if (!set.AlterOwnership(transaction, info.Cast<ChangeOwnershipInfo>())) {
 			throw CatalogException("Couldn't change ownership!");
 		}
 	} else {
-		string name = info->name;
-		if (!set.AlterEntry(context, name, info)) {
+		string name = info.name;
+		if (!set.AlterEntry(transaction, name, info)) {
 			throw CatalogException("Entry with name \"%s\" does not exist!", name);
 		}
 	}
 }
 
-void SchemaCatalogEntry::Scan(ClientContext &context, CatalogType type,
-                              const std::function<void(CatalogEntry *)> &callback) {
+void DuckSchemaEntry::Scan(ClientContext &context, CatalogType type,
+                           const std::function<void(CatalogEntry &)> &callback) {
 	auto &set = GetCatalogSet(type);
-	set.Scan(context, callback);
+	set.Scan(GetCatalogTransaction(context), callback);
 }
 
-void SchemaCatalogEntry::Scan(CatalogType type, const std::function<void(CatalogEntry *)> &callback) {
+void DuckSchemaEntry::Scan(CatalogType type, const std::function<void(CatalogEntry &)> &callback) {
 	auto &set = GetCatalogSet(type);
 	set.Scan(callback);
 }
 
-void SchemaCatalogEntry::Serialize(Serializer &serializer) {
-	FieldWriter writer(serializer);
-	writer.WriteString(name);
-	writer.Finalize();
+void DuckSchemaEntry::DropEntry(ClientContext &context, DropInfo &info) {
+	auto &set = GetCatalogSet(info.type);
+
+	// first find the entry
+	auto transaction = GetCatalogTransaction(context);
+	auto existing_entry = set.GetEntry(transaction, info.name);
+	if (!existing_entry) {
+		throw InternalException("Failed to drop entry \"%s\" - entry could not be found", info.name);
+	}
+	if (existing_entry->type != info.type) {
+		throw CatalogException("Existing object %s is of type %s, trying to replace with type %s", info.name,
+		                       CatalogTypeToString(existing_entry->type), CatalogTypeToString(info.type));
+	}
+
+	// if there is a foreign key constraint, get that information
+	vector<unique_ptr<AlterForeignKeyInfo>> fk_arrays;
+	FindForeignKeyInformation(*existing_entry, AlterForeignKeyType::AFT_DELETE, fk_arrays);
+
+	if (!set.DropEntry(transaction, info.name, info.cascade, info.allow_drop_internal)) {
+		throw InternalException("Could not drop element because of an internal error");
+	}
+
+	// remove the foreign key constraint in main key table if main key table's name is valid
+	for (idx_t i = 0; i < fk_arrays.size(); i++) {
+		// alter primary key table
+		catalog.Alter(context, *fk_arrays[i]);
+	}
 }
 
-unique_ptr<CreateSchemaInfo> SchemaCatalogEntry::Deserialize(Deserializer &source) {
-	auto info = make_unique<CreateSchemaInfo>();
-
-	FieldReader reader(source);
-	info->schema = reader.ReadRequired<string>();
-	reader.Finalize();
-
-	return info;
+optional_ptr<CatalogEntry> DuckSchemaEntry::GetEntry(CatalogTransaction transaction, CatalogType type,
+                                                     const string &name) {
+	return GetCatalogSet(type).GetEntry(transaction, name);
 }
 
-string SchemaCatalogEntry::ToSQL() {
-	std::stringstream ss;
-	ss << "CREATE SCHEMA " << name << ";";
-	return ss.str();
+SimilarCatalogEntry DuckSchemaEntry::GetSimilarEntry(CatalogTransaction transaction, CatalogType type,
+                                                     const string &name) {
+	return GetCatalogSet(type).SimilarEntry(transaction, name);
 }
 
-CatalogSet &SchemaCatalogEntry::GetCatalogSet(CatalogType type) {
+CatalogSet &DuckSchemaEntry::GetCatalogSet(CatalogType type) {
 	switch (type) {
 	case CatalogType::VIEW_ENTRY:
 	case CatalogType::TABLE_ENTRY:
@@ -1183,6 +1415,959 @@ CatalogSet &SchemaCatalogEntry::GetCatalogSet(CatalogType type) {
 	}
 }
 
+void DuckSchemaEntry::Verify(Catalog &catalog) {
+	InCatalogEntry::Verify(catalog);
+
+	tables.Verify(catalog);
+	indexes.Verify(catalog);
+	table_functions.Verify(catalog);
+	copy_functions.Verify(catalog);
+	pragma_functions.Verify(catalog);
+	functions.Verify(catalog);
+	sequences.Verify(catalog);
+	collations.Verify(catalog);
+	types.Verify(catalog);
+}
+
+} // namespace duckdb
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+namespace duckdb {
+
+void AddDataTableIndex(DataTable &storage, const ColumnList &columns, const vector<PhysicalIndex> &keys,
+                       IndexConstraintType constraint_type, BlockPointer *index_block = nullptr) {
+	// fetch types and create expressions for the index from the columns
+	vector<column_t> column_ids;
+	vector<unique_ptr<Expression>> unbound_expressions;
+	vector<unique_ptr<Expression>> bound_expressions;
+	idx_t key_nr = 0;
+	column_ids.reserve(keys.size());
+	for (auto &physical_key : keys) {
+		auto &column = columns.GetColumn(physical_key);
+		D_ASSERT(!column.Generated());
+		unbound_expressions.push_back(
+		    make_uniq<BoundColumnRefExpression>(column.Name(), column.Type(), ColumnBinding(0, column_ids.size())));
+
+		bound_expressions.push_back(make_uniq<BoundReferenceExpression>(column.Type(), key_nr++));
+		column_ids.push_back(column.StorageOid());
+	}
+	unique_ptr<ART> art;
+	// create an adaptive radix tree around the expressions
+	if (index_block) {
+		art = make_uniq<ART>(column_ids, TableIOManager::Get(storage), std::move(unbound_expressions), constraint_type,
+		                     storage.db, index_block->block_id, index_block->offset);
+	} else {
+		art = make_uniq<ART>(column_ids, TableIOManager::Get(storage), std::move(unbound_expressions), constraint_type,
+		                     storage.db);
+		if (!storage.IsRoot()) {
+			throw TransactionException("Transaction conflict: cannot add an index to a table that has been altered!");
+		}
+	}
+	storage.info->indexes.AddIndex(std::move(art));
+}
+
+void AddDataTableIndex(DataTable &storage, const ColumnList &columns, vector<LogicalIndex> &keys,
+                       IndexConstraintType constraint_type, BlockPointer *index_block = nullptr) {
+	vector<PhysicalIndex> new_keys;
+	new_keys.reserve(keys.size());
+	for (auto &logical_key : keys) {
+		new_keys.push_back(columns.LogicalToPhysical(logical_key));
+	}
+	AddDataTableIndex(storage, columns, new_keys, constraint_type, index_block);
+}
+
+DuckTableEntry::DuckTableEntry(Catalog &catalog, SchemaCatalogEntry &schema, BoundCreateTableInfo &info,
+                               std::shared_ptr<DataTable> inherited_storage)
+    : TableCatalogEntry(catalog, schema, info.Base()), storage(std::move(inherited_storage)),
+      bound_constraints(std::move(info.bound_constraints)),
+      column_dependency_manager(std::move(info.column_dependency_manager)) {
+	if (!storage) {
+		// create the physical storage
+		vector<ColumnDefinition> storage_columns;
+		for (auto &col_def : columns.Physical()) {
+			storage_columns.push_back(col_def.Copy());
+		}
+		storage = make_shared<DataTable>(catalog.GetAttached(), StorageManager::Get(catalog).GetTableIOManager(&info),
+		                                 schema.name, name, std::move(storage_columns), std::move(info.data));
+
+		// create the unique indexes for the UNIQUE and PRIMARY KEY and FOREIGN KEY constraints
+		idx_t indexes_idx = 0;
+		for (idx_t i = 0; i < bound_constraints.size(); i++) {
+			auto &constraint = bound_constraints[i];
+			if (constraint->type == ConstraintType::UNIQUE) {
+				// unique constraint: create a unique index
+				auto &unique = constraint->Cast<BoundUniqueConstraint>();
+				IndexConstraintType constraint_type = IndexConstraintType::UNIQUE;
+				if (unique.is_primary_key) {
+					constraint_type = IndexConstraintType::PRIMARY;
+				}
+				if (info.indexes.empty()) {
+					AddDataTableIndex(*storage, columns, unique.keys, constraint_type);
+				} else {
+					AddDataTableIndex(*storage, columns, unique.keys, constraint_type, &info.indexes[indexes_idx++]);
+				}
+			} else if (constraint->type == ConstraintType::FOREIGN_KEY) {
+				// foreign key constraint: create a foreign key index
+				auto &bfk = constraint->Cast<BoundForeignKeyConstraint>();
+				if (bfk.info.type == ForeignKeyType::FK_TYPE_FOREIGN_KEY_TABLE ||
+				    bfk.info.type == ForeignKeyType::FK_TYPE_SELF_REFERENCE_TABLE) {
+					if (info.indexes.empty()) {
+						AddDataTableIndex(*storage, columns, bfk.info.fk_keys, IndexConstraintType::FOREIGN);
+					} else {
+						AddDataTableIndex(*storage, columns, bfk.info.fk_keys, IndexConstraintType::FOREIGN,
+						                  &info.indexes[indexes_idx++]);
+					}
+				}
+			}
+		}
+	}
+}
+
+unique_ptr<BaseStatistics> DuckTableEntry::GetStatistics(ClientContext &context, column_t column_id) {
+	if (column_id == COLUMN_IDENTIFIER_ROW_ID) {
+		return nullptr;
+	}
+	auto &column = columns.GetColumn(LogicalIndex(column_id));
+	if (column.Generated()) {
+		return nullptr;
+	}
+	return storage->GetStatistics(context, column.StorageOid());
+}
+
+unique_ptr<CatalogEntry> DuckTableEntry::AlterEntry(ClientContext &context, AlterInfo &info) {
+	D_ASSERT(!internal);
+	if (info.type != AlterType::ALTER_TABLE) {
+		throw CatalogException("Can only modify table with ALTER TABLE statement");
+	}
+	auto &table_info = info.Cast<AlterTableInfo>();
+	switch (table_info.alter_table_type) {
+	case AlterTableType::RENAME_COLUMN: {
+		auto &rename_info = table_info.Cast<RenameColumnInfo>();
+		return RenameColumn(context, rename_info);
+	}
+	case AlterTableType::RENAME_TABLE: {
+		auto &rename_info = table_info.Cast<RenameTableInfo>();
+		auto copied_table = Copy(context);
+		copied_table->name = rename_info.new_table_name;
+		storage->info->table = rename_info.new_table_name;
+		return copied_table;
+	}
+	case AlterTableType::ADD_COLUMN: {
+		auto &add_info = table_info.Cast<AddColumnInfo>();
+		return AddColumn(context, add_info);
+	}
+	case AlterTableType::REMOVE_COLUMN: {
+		auto &remove_info = table_info.Cast<RemoveColumnInfo>();
+		return RemoveColumn(context, remove_info);
+	}
+	case AlterTableType::SET_DEFAULT: {
+		auto &set_default_info = table_info.Cast<SetDefaultInfo>();
+		return SetDefault(context, set_default_info);
+	}
+	case AlterTableType::ALTER_COLUMN_TYPE: {
+		auto &change_type_info = table_info.Cast<ChangeColumnTypeInfo>();
+		return ChangeColumnType(context, change_type_info);
+	}
+	case AlterTableType::FOREIGN_KEY_CONSTRAINT: {
+		auto &foreign_key_constraint_info = table_info.Cast<AlterForeignKeyInfo>();
+		if (foreign_key_constraint_info.type == AlterForeignKeyType::AFT_ADD) {
+			return AddForeignKeyConstraint(context, foreign_key_constraint_info);
+		} else {
+			return DropForeignKeyConstraint(context, foreign_key_constraint_info);
+		}
+	}
+	case AlterTableType::SET_NOT_NULL: {
+		auto &set_not_null_info = table_info.Cast<SetNotNullInfo>();
+		return SetNotNull(context, set_not_null_info);
+	}
+	case AlterTableType::DROP_NOT_NULL: {
+		auto &drop_not_null_info = table_info.Cast<DropNotNullInfo>();
+		return DropNotNull(context, drop_not_null_info);
+	}
+	default:
+		throw InternalException("Unrecognized alter table type!");
+	}
+}
+
+void DuckTableEntry::UndoAlter(ClientContext &context, AlterInfo &info) {
+	D_ASSERT(!internal);
+	D_ASSERT(info.type == AlterType::ALTER_TABLE);
+	auto &table_info = info.Cast<AlterTableInfo>();
+	switch (table_info.alter_table_type) {
+	case AlterTableType::RENAME_TABLE: {
+		storage->info->table = this->name;
+		break;
+	default:
+		break;
+	}
+	}
+}
+
+static void RenameExpression(ParsedExpression &expr, RenameColumnInfo &info) {
+	if (expr.type == ExpressionType::COLUMN_REF) {
+		auto &colref = expr.Cast<ColumnRefExpression>();
+		if (colref.column_names.back() == info.old_name) {
+			colref.column_names.back() = info.new_name;
+		}
+	}
+	ParsedExpressionIterator::EnumerateChildren(
+	    expr, [&](const ParsedExpression &child) { RenameExpression((ParsedExpression &)child, info); });
+}
+
+unique_ptr<CatalogEntry> DuckTableEntry::RenameColumn(ClientContext &context, RenameColumnInfo &info) {
+	auto rename_idx = GetColumnIndex(info.old_name);
+	if (rename_idx.index == COLUMN_IDENTIFIER_ROW_ID) {
+		throw CatalogException("Cannot rename rowid column");
+	}
+	auto create_info = make_uniq<CreateTableInfo>(schema, name);
+	create_info->temporary = temporary;
+	for (auto &col : columns.Logical()) {
+		auto copy = col.Copy();
+		if (rename_idx == col.Logical()) {
+			copy.SetName(info.new_name);
+		}
+		if (col.Generated() && column_dependency_manager.IsDependencyOf(col.Logical(), rename_idx)) {
+			RenameExpression(copy.GeneratedExpressionMutable(), info);
+		}
+		create_info->columns.AddColumn(std::move(copy));
+	}
+	for (idx_t c_idx = 0; c_idx < constraints.size(); c_idx++) {
+		auto copy = constraints[c_idx]->Copy();
+		switch (copy->type) {
+		case ConstraintType::NOT_NULL:
+			// NOT NULL constraint: no adjustments necessary
+			break;
+		case ConstraintType::CHECK: {
+			// CHECK constraint: need to rename column references that refer to the renamed column
+			auto &check = copy->Cast<CheckConstraint>();
+			RenameExpression(*check.expression, info);
+			break;
+		}
+		case ConstraintType::UNIQUE: {
+			// UNIQUE constraint: possibly need to rename columns
+			auto &unique = copy->Cast<UniqueConstraint>();
+			for (idx_t i = 0; i < unique.columns.size(); i++) {
+				if (unique.columns[i] == info.old_name) {
+					unique.columns[i] = info.new_name;
+				}
+			}
+			break;
+		}
+		case ConstraintType::FOREIGN_KEY: {
+			// FOREIGN KEY constraint: possibly need to rename columns
+			auto &fk = copy->Cast<ForeignKeyConstraint>();
+			vector<string> columns = fk.pk_columns;
+			if (fk.info.type == ForeignKeyType::FK_TYPE_FOREIGN_KEY_TABLE) {
+				columns = fk.fk_columns;
+			} else if (fk.info.type == ForeignKeyType::FK_TYPE_SELF_REFERENCE_TABLE) {
+				for (idx_t i = 0; i < fk.fk_columns.size(); i++) {
+					columns.push_back(fk.fk_columns[i]);
+				}
+			}
+			for (idx_t i = 0; i < columns.size(); i++) {
+				if (columns[i] == info.old_name) {
+					throw CatalogException(
+					    "Cannot rename column \"%s\" because this is involved in the foreign key constraint",
+					    info.old_name);
+				}
+			}
+			break;
+		}
+		default:
+			throw InternalException("Unsupported constraint for entry!");
+		}
+		create_info->constraints.push_back(std::move(copy));
+	}
+	auto binder = Binder::CreateBinder(context);
+	auto bound_create_info = binder->BindCreateTableInfo(std::move(create_info));
+	return make_uniq<DuckTableEntry>(catalog, schema, *bound_create_info, storage);
+}
+
+unique_ptr<CatalogEntry> DuckTableEntry::AddColumn(ClientContext &context, AddColumnInfo &info) {
+	auto col_name = info.new_column.GetName();
+
+	// We're checking for the opposite condition (ADD COLUMN IF _NOT_ EXISTS ...).
+	if (info.if_column_not_exists && ColumnExists(col_name)) {
+		return nullptr;
+	}
+
+	auto create_info = make_uniq<CreateTableInfo>(schema, name);
+	create_info->temporary = temporary;
+
+	for (auto &col : columns.Logical()) {
+		create_info->columns.AddColumn(col.Copy());
+	}
+	for (auto &constraint : constraints) {
+		create_info->constraints.push_back(constraint->Copy());
+	}
+	Binder::BindLogicalType(context, info.new_column.TypeMutable(), &catalog, schema.name);
+	info.new_column.SetOid(columns.LogicalColumnCount());
+	info.new_column.SetStorageOid(columns.PhysicalColumnCount());
+	auto col = info.new_column.Copy();
+
+	create_info->columns.AddColumn(std::move(col));
+
+	auto binder = Binder::CreateBinder(context);
+	auto bound_create_info = binder->BindCreateTableInfo(std::move(create_info));
+	auto new_storage =
+	    make_shared<DataTable>(context, *storage, info.new_column, bound_create_info->bound_defaults.back().get());
+	return make_uniq<DuckTableEntry>(catalog, schema, *bound_create_info, new_storage);
+}
+
+void DuckTableEntry::UpdateConstraintsOnColumnDrop(const LogicalIndex &removed_index,
+                                                   const vector<LogicalIndex> &adjusted_indices,
+                                                   const RemoveColumnInfo &info, CreateTableInfo &create_info,
+                                                   bool is_generated) {
+	// handle constraints for the new table
+	D_ASSERT(constraints.size() == bound_constraints.size());
+
+	for (idx_t constr_idx = 0; constr_idx < constraints.size(); constr_idx++) {
+		auto &constraint = constraints[constr_idx];
+		auto &bound_constraint = bound_constraints[constr_idx];
+		switch (constraint->type) {
+		case ConstraintType::NOT_NULL: {
+			auto &not_null_constraint = bound_constraint->Cast<BoundNotNullConstraint>();
+			auto not_null_index = columns.PhysicalToLogical(not_null_constraint.index);
+			if (not_null_index != removed_index) {
+				// the constraint is not about this column: we need to copy it
+				// we might need to shift the index back by one though, to account for the removed column
+				auto new_index = adjusted_indices[not_null_index.index];
+				create_info.constraints.push_back(make_uniq<NotNullConstraint>(new_index));
+			}
+			break;
+		}
+		case ConstraintType::CHECK: {
+			// Generated columns can not be part of an index
+			// CHECK constraint
+			auto &bound_check = bound_constraint->Cast<BoundCheckConstraint>();
+			// check if the removed column is part of the check constraint
+			if (is_generated) {
+				// generated columns can not be referenced by constraints, we can just add the constraint back
+				create_info.constraints.push_back(constraint->Copy());
+				break;
+			}
+			auto physical_index = columns.LogicalToPhysical(removed_index);
+			if (bound_check.bound_columns.find(physical_index) != bound_check.bound_columns.end()) {
+				if (bound_check.bound_columns.size() > 1) {
+					// CHECK constraint that concerns mult
+					throw CatalogException(
+					    "Cannot drop column \"%s\" because there is a CHECK constraint that depends on it",
+					    info.removed_column);
+				} else {
+					// CHECK constraint that ONLY concerns this column, strip the constraint
+				}
+			} else {
+				// check constraint does not concern the removed column: simply re-add it
+				create_info.constraints.push_back(constraint->Copy());
+			}
+			break;
+		}
+		case ConstraintType::UNIQUE: {
+			auto copy = constraint->Copy();
+			auto &unique = copy->Cast<UniqueConstraint>();
+			if (unique.index.index != DConstants::INVALID_INDEX) {
+				if (unique.index == removed_index) {
+					throw CatalogException(
+					    "Cannot drop column \"%s\" because there is a UNIQUE constraint that depends on it",
+					    info.removed_column);
+				}
+				unique.index = adjusted_indices[unique.index.index];
+			}
+			create_info.constraints.push_back(std::move(copy));
+			break;
+		}
+		case ConstraintType::FOREIGN_KEY: {
+			auto copy = constraint->Copy();
+			auto &fk = copy->Cast<ForeignKeyConstraint>();
+			vector<string> columns = fk.pk_columns;
+			if (fk.info.type == ForeignKeyType::FK_TYPE_FOREIGN_KEY_TABLE) {
+				columns = fk.fk_columns;
+			} else if (fk.info.type == ForeignKeyType::FK_TYPE_SELF_REFERENCE_TABLE) {
+				for (idx_t i = 0; i < fk.fk_columns.size(); i++) {
+					columns.push_back(fk.fk_columns[i]);
+				}
+			}
+			for (idx_t i = 0; i < columns.size(); i++) {
+				if (columns[i] == info.removed_column) {
+					throw CatalogException(
+					    "Cannot drop column \"%s\" because there is a FOREIGN KEY constraint that depends on it",
+					    info.removed_column);
+				}
+			}
+			create_info.constraints.push_back(std::move(copy));
+			break;
+		}
+		default:
+			throw InternalException("Unsupported constraint for entry!");
+		}
+	}
+}
+
+unique_ptr<CatalogEntry> DuckTableEntry::RemoveColumn(ClientContext &context, RemoveColumnInfo &info) {
+	auto removed_index = GetColumnIndex(info.removed_column, info.if_column_exists);
+	if (!removed_index.IsValid()) {
+		if (!info.if_column_exists) {
+			throw CatalogException("Cannot drop column: rowid column cannot be dropped");
+		}
+		return nullptr;
+	}
+
+	auto create_info = make_uniq<CreateTableInfo>(schema, name);
+	create_info->temporary = temporary;
+
+	logical_index_set_t removed_columns;
+	if (column_dependency_manager.HasDependents(removed_index)) {
+		removed_columns = column_dependency_manager.GetDependents(removed_index);
+	}
+	if (!removed_columns.empty() && !info.cascade) {
+		throw CatalogException("Cannot drop column: column is a dependency of 1 or more generated column(s)");
+	}
+	bool dropped_column_is_generated = false;
+	for (auto &col : columns.Logical()) {
+		if (col.Logical() == removed_index || removed_columns.count(col.Logical())) {
+			if (col.Generated()) {
+				dropped_column_is_generated = true;
+			}
+			continue;
+		}
+		create_info->columns.AddColumn(col.Copy());
+	}
+	if (create_info->columns.empty()) {
+		throw CatalogException("Cannot drop column: table only has one column remaining!");
+	}
+	auto adjusted_indices = column_dependency_manager.RemoveColumn(removed_index, columns.LogicalColumnCount());
+
+	UpdateConstraintsOnColumnDrop(removed_index, adjusted_indices, info, *create_info, dropped_column_is_generated);
+
+	auto binder = Binder::CreateBinder(context);
+	auto bound_create_info = binder->BindCreateTableInfo(std::move(create_info));
+	if (columns.GetColumn(LogicalIndex(removed_index)).Generated()) {
+		return make_uniq<DuckTableEntry>(catalog, schema, *bound_create_info, storage);
+	}
+	auto new_storage =
+	    make_shared<DataTable>(context, *storage, columns.LogicalToPhysical(LogicalIndex(removed_index)).index);
+	return make_uniq<DuckTableEntry>(catalog, schema, *bound_create_info, new_storage);
+}
+
+unique_ptr<CatalogEntry> DuckTableEntry::SetDefault(ClientContext &context, SetDefaultInfo &info) {
+	auto create_info = make_uniq<CreateTableInfo>(schema, name);
+	auto default_idx = GetColumnIndex(info.column_name);
+	if (default_idx.index == COLUMN_IDENTIFIER_ROW_ID) {
+		throw CatalogException("Cannot SET DEFAULT for rowid column");
+	}
+
+	// Copy all the columns, changing the value of the one that was specified by 'column_name'
+	for (auto &col : columns.Logical()) {
+		auto copy = col.Copy();
+		if (default_idx == col.Logical()) {
+			// set the default value of this column
+			if (copy.Generated()) {
+				throw BinderException("Cannot SET DEFAULT for generated column \"%s\"", col.Name());
+			}
+			copy.SetDefaultValue(info.expression ? info.expression->Copy() : nullptr);
+		}
+		create_info->columns.AddColumn(std::move(copy));
+	}
+	// Copy all the constraints
+	for (idx_t i = 0; i < constraints.size(); i++) {
+		auto constraint = constraints[i]->Copy();
+		create_info->constraints.push_back(std::move(constraint));
+	}
+
+	auto binder = Binder::CreateBinder(context);
+	auto bound_create_info = binder->BindCreateTableInfo(std::move(create_info));
+	return make_uniq<DuckTableEntry>(catalog, schema, *bound_create_info, storage);
+}
+
+unique_ptr<CatalogEntry> DuckTableEntry::SetNotNull(ClientContext &context, SetNotNullInfo &info) {
+
+	auto create_info = make_uniq<CreateTableInfo>(schema, name);
+	create_info->columns = columns.Copy();
+
+	auto not_null_idx = GetColumnIndex(info.column_name);
+	if (columns.GetColumn(LogicalIndex(not_null_idx)).Generated()) {
+		throw BinderException("Unsupported constraint for generated column!");
+	}
+	bool has_not_null = false;
+	for (idx_t i = 0; i < constraints.size(); i++) {
+		auto constraint = constraints[i]->Copy();
+		if (constraint->type == ConstraintType::NOT_NULL) {
+			auto &not_null = constraint->Cast<NotNullConstraint>();
+			if (not_null.index == not_null_idx) {
+				has_not_null = true;
+			}
+		}
+		create_info->constraints.push_back(std::move(constraint));
+	}
+	if (!has_not_null) {
+		create_info->constraints.push_back(make_uniq<NotNullConstraint>(not_null_idx));
+	}
+	auto binder = Binder::CreateBinder(context);
+	auto bound_create_info = binder->BindCreateTableInfo(std::move(create_info));
+
+	// Early return
+	if (has_not_null) {
+		return make_uniq<DuckTableEntry>(catalog, schema, *bound_create_info, storage);
+	}
+
+	// Return with new storage info. Note that we need the bound column index here.
+	auto new_storage = make_shared<DataTable>(
+	    context, *storage, make_uniq<BoundNotNullConstraint>(columns.LogicalToPhysical(LogicalIndex(not_null_idx))));
+	return make_uniq<DuckTableEntry>(catalog, schema, *bound_create_info, new_storage);
+}
+
+unique_ptr<CatalogEntry> DuckTableEntry::DropNotNull(ClientContext &context, DropNotNullInfo &info) {
+	auto create_info = make_uniq<CreateTableInfo>(schema, name);
+	create_info->columns = columns.Copy();
+
+	auto not_null_idx = GetColumnIndex(info.column_name);
+	for (idx_t i = 0; i < constraints.size(); i++) {
+		auto constraint = constraints[i]->Copy();
+		// Skip/drop not_null
+		if (constraint->type == ConstraintType::NOT_NULL) {
+			auto &not_null = constraint->Cast<NotNullConstraint>();
+			if (not_null.index == not_null_idx) {
+				continue;
+			}
+		}
+		create_info->constraints.push_back(std::move(constraint));
+	}
+
+	auto binder = Binder::CreateBinder(context);
+	auto bound_create_info = binder->BindCreateTableInfo(std::move(create_info));
+	return make_uniq<DuckTableEntry>(catalog, schema, *bound_create_info, storage);
+}
+
+unique_ptr<CatalogEntry> DuckTableEntry::ChangeColumnType(ClientContext &context, ChangeColumnTypeInfo &info) {
+	if (info.target_type.id() == LogicalTypeId::USER) {
+		info.target_type =
+		    Catalog::GetType(context, catalog.GetName(), schema.name, UserType::GetTypeName(info.target_type));
+	}
+	auto change_idx = GetColumnIndex(info.column_name);
+	auto create_info = make_uniq<CreateTableInfo>(schema, name);
+	create_info->temporary = temporary;
+
+	for (auto &col : columns.Logical()) {
+		auto copy = col.Copy();
+		if (change_idx == col.Logical()) {
+			// set the type of this column
+			if (copy.Generated()) {
+				throw NotImplementedException("Changing types of generated columns is not supported yet");
+			}
+			copy.SetType(info.target_type);
+		}
+		// TODO: check if the generated_expression breaks, only delete it if it does
+		if (copy.Generated() && column_dependency_manager.IsDependencyOf(col.Logical(), change_idx)) {
+			throw BinderException(
+			    "This column is referenced by the generated column \"%s\", so its type can not be changed",
+			    copy.Name());
+		}
+		create_info->columns.AddColumn(std::move(copy));
+	}
+
+	for (idx_t i = 0; i < constraints.size(); i++) {
+		auto constraint = constraints[i]->Copy();
+		switch (constraint->type) {
+		case ConstraintType::CHECK: {
+			auto &bound_check = bound_constraints[i]->Cast<BoundCheckConstraint>();
+			auto physical_index = columns.LogicalToPhysical(change_idx);
+			if (bound_check.bound_columns.find(physical_index) != bound_check.bound_columns.end()) {
+				throw BinderException("Cannot change the type of a column that has a CHECK constraint specified");
+			}
+			break;
+		}
+		case ConstraintType::NOT_NULL:
+			break;
+		case ConstraintType::UNIQUE: {
+			auto &bound_unique = bound_constraints[i]->Cast<BoundUniqueConstraint>();
+			if (bound_unique.key_set.find(change_idx) != bound_unique.key_set.end()) {
+				throw BinderException(
+				    "Cannot change the type of a column that has a UNIQUE or PRIMARY KEY constraint specified");
+			}
+			break;
+		}
+		case ConstraintType::FOREIGN_KEY: {
+			auto &bfk = bound_constraints[i]->Cast<BoundForeignKeyConstraint>();
+			auto key_set = bfk.pk_key_set;
+			if (bfk.info.type == ForeignKeyType::FK_TYPE_FOREIGN_KEY_TABLE) {
+				key_set = bfk.fk_key_set;
+			} else if (bfk.info.type == ForeignKeyType::FK_TYPE_SELF_REFERENCE_TABLE) {
+				for (idx_t i = 0; i < bfk.info.fk_keys.size(); i++) {
+					key_set.insert(bfk.info.fk_keys[i]);
+				}
+			}
+			if (key_set.find(columns.LogicalToPhysical(change_idx)) != key_set.end()) {
+				throw BinderException("Cannot change the type of a column that has a FOREIGN KEY constraint specified");
+			}
+			break;
+		}
+		default:
+			throw InternalException("Unsupported constraint for entry!");
+		}
+		create_info->constraints.push_back(std::move(constraint));
+	}
+
+	auto binder = Binder::CreateBinder(context);
+	// bind the specified expression
+	vector<LogicalIndex> bound_columns;
+	AlterBinder expr_binder(*binder, context, *this, bound_columns, info.target_type);
+	auto expression = info.expression->Copy();
+	auto bound_expression = expr_binder.Bind(expression);
+	auto bound_create_info = binder->BindCreateTableInfo(std::move(create_info));
+	vector<column_t> storage_oids;
+	for (idx_t i = 0; i < bound_columns.size(); i++) {
+		storage_oids.push_back(columns.LogicalToPhysical(bound_columns[i]).index);
+	}
+	if (storage_oids.empty()) {
+		storage_oids.push_back(COLUMN_IDENTIFIER_ROW_ID);
+	}
+
+	auto new_storage =
+	    make_shared<DataTable>(context, *storage, columns.LogicalToPhysical(LogicalIndex(change_idx)).index,
+	                           info.target_type, std::move(storage_oids), *bound_expression);
+	auto result = make_uniq<DuckTableEntry>(catalog, schema, *bound_create_info, new_storage);
+	return std::move(result);
+}
+
+unique_ptr<CatalogEntry> DuckTableEntry::AddForeignKeyConstraint(ClientContext &context, AlterForeignKeyInfo &info) {
+	D_ASSERT(info.type == AlterForeignKeyType::AFT_ADD);
+	auto create_info = make_uniq<CreateTableInfo>(schema, name);
+	create_info->temporary = temporary;
+
+	create_info->columns = columns.Copy();
+	for (idx_t i = 0; i < constraints.size(); i++) {
+		create_info->constraints.push_back(constraints[i]->Copy());
+	}
+	ForeignKeyInfo fk_info;
+	fk_info.type = ForeignKeyType::FK_TYPE_PRIMARY_KEY_TABLE;
+	fk_info.schema = info.schema;
+	fk_info.table = info.fk_table;
+	fk_info.pk_keys = info.pk_keys;
+	fk_info.fk_keys = info.fk_keys;
+	create_info->constraints.push_back(
+	    make_uniq<ForeignKeyConstraint>(info.pk_columns, info.fk_columns, std::move(fk_info)));
+
+	auto binder = Binder::CreateBinder(context);
+	auto bound_create_info = binder->BindCreateTableInfo(std::move(create_info));
+
+	return make_uniq<DuckTableEntry>(catalog, schema, *bound_create_info, storage);
+}
+
+unique_ptr<CatalogEntry> DuckTableEntry::DropForeignKeyConstraint(ClientContext &context, AlterForeignKeyInfo &info) {
+	D_ASSERT(info.type == AlterForeignKeyType::AFT_DELETE);
+	auto create_info = make_uniq<CreateTableInfo>(schema, name);
+	create_info->temporary = temporary;
+
+	create_info->columns = columns.Copy();
+	for (idx_t i = 0; i < constraints.size(); i++) {
+		auto constraint = constraints[i]->Copy();
+		if (constraint->type == ConstraintType::FOREIGN_KEY) {
+			ForeignKeyConstraint &fk = constraint->Cast<ForeignKeyConstraint>();
+			if (fk.info.type == ForeignKeyType::FK_TYPE_PRIMARY_KEY_TABLE && fk.info.table == info.fk_table) {
+				continue;
+			}
+		}
+		create_info->constraints.push_back(std::move(constraint));
+	}
+
+	auto binder = Binder::CreateBinder(context);
+	auto bound_create_info = binder->BindCreateTableInfo(std::move(create_info));
+
+	return make_uniq<DuckTableEntry>(catalog, schema, *bound_create_info, storage);
+}
+
+unique_ptr<CatalogEntry> DuckTableEntry::Copy(ClientContext &context) const {
+	auto create_info = make_uniq<CreateTableInfo>(schema, name);
+	create_info->columns = columns.Copy();
+
+	for (idx_t i = 0; i < constraints.size(); i++) {
+		auto constraint = constraints[i]->Copy();
+		create_info->constraints.push_back(std::move(constraint));
+	}
+
+	auto binder = Binder::CreateBinder(context);
+	auto bound_create_info = binder->BindCreateTableInfo(std::move(create_info));
+	return make_uniq<DuckTableEntry>(catalog, schema, *bound_create_info, storage);
+}
+
+void DuckTableEntry::SetAsRoot() {
+	storage->SetAsRoot();
+	storage->info->table = name;
+}
+
+void DuckTableEntry::CommitAlter(string &column_name) {
+	D_ASSERT(!column_name.empty());
+	idx_t removed_index = DConstants::INVALID_INDEX;
+	for (auto &col : columns.Logical()) {
+		if (col.Name() == column_name) {
+			// No need to alter storage, removed column is generated column
+			if (col.Generated()) {
+				return;
+			}
+			removed_index = col.Oid();
+			break;
+		}
+	}
+	D_ASSERT(removed_index != DConstants::INVALID_INDEX);
+	storage->CommitDropColumn(columns.LogicalToPhysical(LogicalIndex(removed_index)).index);
+}
+
+void DuckTableEntry::CommitDrop() {
+	storage->CommitDropTable();
+}
+
+DataTable &DuckTableEntry::GetStorage() {
+	return *storage;
+}
+
+const vector<unique_ptr<BoundConstraint>> &DuckTableEntry::GetBoundConstraints() {
+	return bound_constraints;
+}
+
+TableFunction DuckTableEntry::GetScanFunction(ClientContext &context, unique_ptr<FunctionData> &bind_data) {
+	bind_data = make_uniq<TableScanBindData>(*this);
+	return TableScanFunction::GetFunction();
+}
+
+TableStorageInfo DuckTableEntry::GetStorageInfo(ClientContext &context) {
+	TableStorageInfo result;
+	result.cardinality = storage->info->cardinality.load();
+	storage->GetStorageInfo(result);
+	storage->info->indexes.Scan([&](Index &index) {
+		IndexInfo info;
+		info.is_primary = index.IsPrimary();
+		info.is_unique = index.IsUnique() || info.is_primary;
+		info.is_foreign = index.IsForeign();
+		info.column_set = index.column_id_set;
+		result.index_info.push_back(std::move(info));
+		return false;
+	});
+	return result;
+}
+
+} // namespace duckdb
+
+
+
+
+namespace duckdb {
+
+IndexCatalogEntry::IndexCatalogEntry(Catalog &catalog, SchemaCatalogEntry &schema, CreateIndexInfo &info)
+    : StandardEntry(CatalogType::INDEX_ENTRY, schema, catalog, info.index_name), index(nullptr), sql(info.sql) {
+	this->temporary = info.temporary;
+}
+
+string IndexCatalogEntry::ToSQL() const {
+	if (sql.empty()) {
+		return sql;
+	}
+	if (sql[sql.size() - 1] != ';') {
+		return sql + ";";
+	}
+	return sql;
+}
+
+void IndexCatalogEntry::Serialize(Serializer &serializer) const {
+	// here we serialize the index metadata in the following order:
+	// schema name, table name, index name, sql, index type, index constraint type, expression list, parsed expressions,
+	// column IDs
+
+	FieldWriter writer(serializer);
+	writer.WriteString(GetSchemaName());
+	writer.WriteString(GetTableName());
+	writer.WriteString(name);
+	writer.WriteString(sql);
+	writer.WriteField(index->type);
+	writer.WriteField(index->constraint_type);
+	writer.WriteSerializableList(expressions);
+	writer.WriteSerializableList(parsed_expressions);
+	writer.WriteList<idx_t>(index->column_ids);
+	writer.Finalize();
+}
+
+unique_ptr<CreateIndexInfo> IndexCatalogEntry::Deserialize(Deserializer &source, ClientContext &context) {
+	// here we deserialize the index metadata in the following order:
+	// schema name, table schema name, table name, index name, sql, index type, index constraint type, expression list,
+	// parsed expression list, column IDs
+
+	auto create_index_info = make_uniq<CreateIndexInfo>();
+
+	FieldReader reader(source);
+
+	create_index_info->schema = reader.ReadRequired<string>();
+	create_index_info->table = make_uniq<BaseTableRef>();
+	create_index_info->table->schema_name = create_index_info->schema;
+	create_index_info->table->table_name = reader.ReadRequired<string>();
+	create_index_info->index_name = reader.ReadRequired<string>();
+	create_index_info->sql = reader.ReadRequired<string>();
+	create_index_info->index_type = IndexType(reader.ReadRequired<uint8_t>());
+	create_index_info->constraint_type = IndexConstraintType(reader.ReadRequired<uint8_t>());
+	create_index_info->expressions = reader.ReadRequiredSerializableList<ParsedExpression>();
+	create_index_info->parsed_expressions = reader.ReadRequiredSerializableList<ParsedExpression>();
+
+	create_index_info->column_ids = reader.ReadRequiredList<idx_t>();
+	reader.Finalize();
+	return create_index_info;
+}
+
+} // namespace duckdb
+
+
+
+
+
+namespace duckdb {
+
+MacroCatalogEntry::MacroCatalogEntry(Catalog &catalog, SchemaCatalogEntry &schema, CreateMacroInfo &info)
+    : FunctionEntry(
+          (info.function->type == MacroType::SCALAR_MACRO ? CatalogType::MACRO_ENTRY : CatalogType::TABLE_MACRO_ENTRY),
+          catalog, schema, info),
+      function(std::move(info.function)) {
+	this->temporary = info.temporary;
+	this->internal = info.internal;
+}
+
+ScalarMacroCatalogEntry::ScalarMacroCatalogEntry(Catalog &catalog, SchemaCatalogEntry &schema, CreateMacroInfo &info)
+    : MacroCatalogEntry(catalog, schema, info) {
+}
+
+TableMacroCatalogEntry::TableMacroCatalogEntry(Catalog &catalog, SchemaCatalogEntry &schema, CreateMacroInfo &info)
+    : MacroCatalogEntry(catalog, schema, info) {
+}
+
+unique_ptr<CreateMacroInfo> MacroCatalogEntry::GetInfoForSerialization() const {
+	auto info = make_uniq<CreateMacroInfo>(type);
+	info->catalog = catalog.GetName();
+	info->schema = schema.name;
+	info->name = name;
+	info->function = function->Copy();
+	return info;
+}
+void MacroCatalogEntry::Serialize(Serializer &serializer) const {
+	auto info = GetInfoForSerialization();
+	info->Serialize(serializer);
+}
+
+unique_ptr<CreateMacroInfo> MacroCatalogEntry::Deserialize(Deserializer &main_source, ClientContext &context) {
+	return unique_ptr_cast<CreateInfo, CreateMacroInfo>(CreateInfo::Deserialize(main_source));
+}
+
+} // namespace duckdb
+
+
+
+namespace duckdb {
+
+PragmaFunctionCatalogEntry::PragmaFunctionCatalogEntry(Catalog &catalog, SchemaCatalogEntry &schema,
+                                                       CreatePragmaFunctionInfo &info)
+    : FunctionEntry(CatalogType::PRAGMA_FUNCTION_ENTRY, catalog, schema, info), functions(std::move(info.functions)) {
+}
+
+} // namespace duckdb
+
+
+
+namespace duckdb {
+
+ScalarFunctionCatalogEntry::ScalarFunctionCatalogEntry(Catalog &catalog, SchemaCatalogEntry &schema,
+                                                       CreateScalarFunctionInfo &info)
+    : FunctionEntry(CatalogType::SCALAR_FUNCTION_ENTRY, catalog, schema, info), functions(info.functions) {
+}
+
+unique_ptr<CatalogEntry> ScalarFunctionCatalogEntry::AlterEntry(ClientContext &context, AlterInfo &info) {
+	if (info.type != AlterType::ALTER_SCALAR_FUNCTION) {
+		throw InternalException("Attempting to alter ScalarFunctionCatalogEntry with unsupported alter type");
+	}
+	auto &function_info = info.Cast<AlterScalarFunctionInfo>();
+	if (function_info.alter_scalar_function_type != AlterScalarFunctionType::ADD_FUNCTION_OVERLOADS) {
+		throw InternalException(
+		    "Attempting to alter ScalarFunctionCatalogEntry with unsupported alter scalar function type");
+	}
+	auto &add_overloads = function_info.Cast<AddScalarFunctionOverloadInfo>();
+
+	ScalarFunctionSet new_set = functions;
+	if (!new_set.MergeFunctionSet(add_overloads.new_overloads)) {
+		throw BinderException("Failed to add new function overloads to function \"%s\": function already exists", name);
+	}
+	CreateScalarFunctionInfo new_info(std::move(new_set));
+	return make_uniq<ScalarFunctionCatalogEntry>(catalog, schema, new_info);
+}
+
+} // namespace duckdb
+
+
+
+
+
+
+
+
+
+#include <sstream>
+
+namespace duckdb {
+
+SchemaCatalogEntry::SchemaCatalogEntry(Catalog &catalog, string name_p, bool internal)
+    : InCatalogEntry(CatalogType::SCHEMA_ENTRY, catalog, std::move(name_p)) {
+	this->internal = internal;
+}
+
+CatalogTransaction SchemaCatalogEntry::GetCatalogTransaction(ClientContext &context) {
+	return CatalogTransaction(catalog, context);
+}
+
+SimilarCatalogEntry SchemaCatalogEntry::GetSimilarEntry(CatalogTransaction transaction, CatalogType type,
+                                                        const string &name) {
+	SimilarCatalogEntry result;
+	Scan(transaction.GetContext(), type, [&](CatalogEntry &entry) {
+		auto ldist = StringUtil::SimilarityScore(entry.name, name);
+		if (ldist < result.distance) {
+			result.distance = ldist;
+			result.name = entry.name;
+		}
+	});
+	return result;
+}
+
+void SchemaCatalogEntry::Serialize(Serializer &serializer) const {
+	FieldWriter writer(serializer);
+	writer.WriteString(name);
+	writer.Finalize();
+}
+
+unique_ptr<CreateSchemaInfo> SchemaCatalogEntry::Deserialize(Deserializer &source) {
+	auto info = make_uniq<CreateSchemaInfo>();
+
+	FieldReader reader(source);
+	info->schema = reader.ReadRequired<string>();
+	reader.Finalize();
+
+	return info;
+}
+
+string SchemaCatalogEntry::ToSQL() const {
+	std::stringstream ss;
+	ss << "CREATE SCHEMA " << name << ";";
+	return ss.str();
+}
+
 } // namespace duckdb
 
 
@@ -1197,16 +2382,16 @@ CatalogSet &SchemaCatalogEntry::GetCatalogSet(CatalogType type) {
 
 namespace duckdb {
 
-SequenceCatalogEntry::SequenceCatalogEntry(Catalog *catalog, SchemaCatalogEntry *schema, CreateSequenceInfo *info)
-    : StandardEntry(CatalogType::SEQUENCE_ENTRY, schema, catalog, info->name), usage_count(info->usage_count),
-      counter(info->start_value), increment(info->increment), start_value(info->start_value),
-      min_value(info->min_value), max_value(info->max_value), cycle(info->cycle) {
-	this->temporary = info->temporary;
+SequenceCatalogEntry::SequenceCatalogEntry(Catalog &catalog, SchemaCatalogEntry &schema, CreateSequenceInfo &info)
+    : StandardEntry(CatalogType::SEQUENCE_ENTRY, schema, catalog, info.name), usage_count(info.usage_count),
+      counter(info.start_value), increment(info.increment), start_value(info.start_value), min_value(info.min_value),
+      max_value(info.max_value), cycle(info.cycle) {
+	this->temporary = info.temporary;
 }
 
-void SequenceCatalogEntry::Serialize(Serializer &serializer) {
+void SequenceCatalogEntry::Serialize(Serializer &serializer) const {
 	FieldWriter writer(serializer);
-	writer.WriteString(schema->name);
+	writer.WriteString(schema.name);
 	writer.WriteString(name);
 	writer.WriteField<uint64_t>(usage_count);
 	writer.WriteField<int64_t>(increment);
@@ -1218,7 +2403,7 @@ void SequenceCatalogEntry::Serialize(Serializer &serializer) {
 }
 
 unique_ptr<CreateSequenceInfo> SequenceCatalogEntry::Deserialize(Deserializer &source) {
-	auto info = make_unique<CreateSequenceInfo>();
+	auto info = make_uniq<CreateSequenceInfo>();
 
 	FieldReader reader(source);
 	info->schema = reader.ReadRequired<string>();
@@ -1234,7 +2419,7 @@ unique_ptr<CreateSequenceInfo> SequenceCatalogEntry::Deserialize(Deserializer &s
 	return info;
 }
 
-string SequenceCatalogEntry::ToSQL() {
+string SequenceCatalogEntry::ToSQL() const {
 	std::stringstream ss;
 	ss << "CREATE SEQUENCE ";
 	ss << name;
@@ -1258,616 +2443,104 @@ string SequenceCatalogEntry::ToSQL() {
 
 
 
-
-
-
-
-
-
-
-
-
-
-
-
 #include <sstream>
 
 namespace duckdb {
 
-const string &TableCatalogEntry::GetColumnName(column_t index) {
-	return columns[index].Name();
+TableCatalogEntry::TableCatalogEntry(Catalog &catalog, SchemaCatalogEntry &schema, CreateTableInfo &info)
+    : StandardEntry(CatalogType::TABLE_ENTRY, schema, catalog, info.table), columns(std::move(info.columns)),
+      constraints(std::move(info.constraints)) {
+	this->temporary = info.temporary;
 }
 
-column_t TableCatalogEntry::GetColumnIndex(string &column_name, bool if_exists) {
-	auto entry = name_map.find(column_name);
-	if (entry == name_map.end()) {
-		// entry not found: try lower-casing the name
-		entry = name_map.find(StringUtil::Lower(column_name));
-		if (entry == name_map.end()) {
-			if (if_exists) {
-				return DConstants::INVALID_INDEX;
-			}
-			throw BinderException("Table \"%s\" does not have a column with name \"%s\"", name, column_name);
-		}
-	}
-	column_name = GetColumnName(entry->second);
-	return entry->second;
+bool TableCatalogEntry::HasGeneratedColumns() const {
+	return columns.LogicalColumnCount() != columns.PhysicalColumnCount();
 }
 
-void AddDataTableIndex(DataTable *storage, vector<ColumnDefinition> &columns, vector<idx_t> &keys,
-                       IndexConstraintType constraint_type) {
-	// fetch types and create expressions for the index from the columns
-	vector<column_t> column_ids;
-	vector<unique_ptr<Expression>> unbound_expressions;
-	vector<unique_ptr<Expression>> bound_expressions;
-	idx_t key_nr = 0;
-	for (auto &key : keys) {
-		D_ASSERT(key < columns.size());
-		auto &column = columns[key];
-		if (column.Generated()) {
-			throw InvalidInputException("Creating index on generated column is not supported");
+LogicalIndex TableCatalogEntry::GetColumnIndex(string &column_name, bool if_exists) {
+	auto entry = columns.GetColumnIndex(column_name);
+	if (!entry.IsValid()) {
+		if (if_exists) {
+			return entry;
 		}
-
-		unbound_expressions.push_back(make_unique<BoundColumnRefExpression>(columns[key].Name(), columns[key].Type(),
-		                                                                    ColumnBinding(0, column_ids.size())));
-
-		bound_expressions.push_back(make_unique<BoundReferenceExpression>(columns[key].Type(), key_nr++));
-		column_ids.push_back(column.StorageOid());
+		throw BinderException("Table \"%s\" does not have a column with name \"%s\"", name, column_name);
 	}
-	// create an adaptive radix tree around the expressions
-	auto art = make_unique<ART>(column_ids, move(unbound_expressions), constraint_type);
-	storage->AddIndex(move(art), bound_expressions);
-}
-
-TableCatalogEntry::TableCatalogEntry(Catalog *catalog, SchemaCatalogEntry *schema, BoundCreateTableInfo *info,
-                                     std::shared_ptr<DataTable> inherited_storage)
-    : StandardEntry(CatalogType::TABLE_ENTRY, schema, catalog, info->Base().table), storage(move(inherited_storage)),
-      columns(move(info->Base().columns)), constraints(move(info->Base().constraints)),
-      bound_constraints(move(info->bound_constraints)),
-      column_dependency_manager(move(info->column_dependency_manager)) {
-	this->temporary = info->Base().temporary;
-	// add lower case aliases
-	this->name_map = move(info->name_map);
-#ifdef DEBUG
-	D_ASSERT(name_map.size() == columns.size());
-	for (idx_t i = 0; i < columns.size(); i++) {
-		D_ASSERT(name_map[columns[i].Name()] == i);
-	}
-#endif
-	// add the "rowid" alias, if there is no rowid column specified in the table
-	if (name_map.find("rowid") == name_map.end()) {
-		name_map["rowid"] = COLUMN_IDENTIFIER_ROW_ID;
-	}
-	if (!storage) {
-		// create the physical storage
-		vector<ColumnDefinition> storage_columns;
-		vector<ColumnDefinition> get_columns;
-		for (auto &col_def : columns) {
-			get_columns.push_back(col_def.Copy());
-			if (col_def.Generated()) {
-				continue;
-			}
-			storage_columns.push_back(col_def.Copy());
-		}
-		storage = make_shared<DataTable>(catalog->db, schema->name, name, move(storage_columns), move(info->data));
-
-		// create the unique indexes for the UNIQUE and PRIMARY KEY and FOREIGN KEY constraints
-		for (idx_t i = 0; i < bound_constraints.size(); i++) {
-			auto &constraint = bound_constraints[i];
-			if (constraint->type == ConstraintType::UNIQUE) {
-				// unique constraint: create a unique index
-				auto &unique = (BoundUniqueConstraint &)*constraint;
-				IndexConstraintType constraint_type = IndexConstraintType::UNIQUE;
-				if (unique.is_primary_key) {
-					constraint_type = IndexConstraintType::PRIMARY;
-				}
-				AddDataTableIndex(storage.get(), get_columns, unique.keys, constraint_type);
-			} else if (constraint->type == ConstraintType::FOREIGN_KEY) {
-				// foreign key constraint: create a foreign key index
-				auto &bfk = (BoundForeignKeyConstraint &)*constraint;
-				if (bfk.info.type == ForeignKeyType::FK_TYPE_FOREIGN_KEY_TABLE ||
-				    bfk.info.type == ForeignKeyType::FK_TYPE_SELF_REFERENCE_TABLE) {
-					AddDataTableIndex(storage.get(), get_columns, bfk.info.fk_keys, IndexConstraintType::FOREIGN);
-				}
-			}
-		}
-	}
+	return entry;
 }
 
 bool TableCatalogEntry::ColumnExists(const string &name) {
-	auto iterator = name_map.find(name);
-	if (iterator == name_map.end()) {
-		return false;
-	}
-	return true;
+	return columns.ColumnExists(name);
 }
 
-idx_t TableCatalogEntry::StandardColumnCount() const {
-	idx_t count = 0;
-	for (auto &col : columns) {
-		if (col.Category() == TableColumnType::STANDARD) {
-			count++;
-		}
-	}
-	return count;
-}
-
-unique_ptr<CatalogEntry> TableCatalogEntry::AlterEntry(ClientContext &context, AlterInfo *info) {
-	D_ASSERT(!internal);
-	if (info->type != AlterType::ALTER_TABLE) {
-		throw CatalogException("Can only modify table with ALTER TABLE statement");
-	}
-	auto table_info = (AlterTableInfo *)info;
-	switch (table_info->alter_table_type) {
-	case AlterTableType::RENAME_COLUMN: {
-		auto rename_info = (RenameColumnInfo *)table_info;
-		return RenameColumn(context, *rename_info);
-	}
-	case AlterTableType::RENAME_TABLE: {
-		auto rename_info = (RenameTableInfo *)table_info;
-		auto copied_table = Copy(context);
-		copied_table->name = rename_info->new_table_name;
-		return copied_table;
-	}
-	case AlterTableType::ADD_COLUMN: {
-		auto add_info = (AddColumnInfo *)table_info;
-		return AddColumn(context, *add_info);
-	}
-	case AlterTableType::REMOVE_COLUMN: {
-		auto remove_info = (RemoveColumnInfo *)table_info;
-		return RemoveColumn(context, *remove_info);
-	}
-	case AlterTableType::SET_DEFAULT: {
-		auto set_default_info = (SetDefaultInfo *)table_info;
-		return SetDefault(context, *set_default_info);
-	}
-	case AlterTableType::ALTER_COLUMN_TYPE: {
-		auto change_type_info = (ChangeColumnTypeInfo *)table_info;
-		return ChangeColumnType(context, *change_type_info);
-	}
-	case AlterTableType::FOREIGN_KEY_CONSTRAINT: {
-		auto foreign_key_constraint_info = (AlterForeignKeyInfo *)table_info;
-		return SetForeignKeyConstraint(context, *foreign_key_constraint_info);
-	}
-	default:
-		throw InternalException("Unrecognized alter table type!");
-	}
-}
-
-static void RenameExpression(ParsedExpression &expr, RenameColumnInfo &info) {
-	if (expr.type == ExpressionType::COLUMN_REF) {
-		auto &colref = (ColumnRefExpression &)expr;
-		if (colref.column_names.back() == info.old_name) {
-			colref.column_names.back() = info.new_name;
-		}
-	}
-	ParsedExpressionIterator::EnumerateChildren(
-	    expr, [&](const ParsedExpression &child) { RenameExpression((ParsedExpression &)child, info); });
-}
-
-unique_ptr<CatalogEntry> TableCatalogEntry::RenameColumn(ClientContext &context, RenameColumnInfo &info) {
-	auto rename_idx = GetColumnIndex(info.old_name);
-	auto create_info = make_unique<CreateTableInfo>(schema->name, name);
-	create_info->temporary = temporary;
-	for (idx_t i = 0; i < columns.size(); i++) {
-		auto copy = columns[i].Copy();
-
-		if (rename_idx == i) {
-			copy.SetName(info.new_name);
-		}
-		create_info->columns.push_back(move(copy));
-		auto &col = create_info->columns[i];
-		if (col.Generated() && column_dependency_manager.IsDependencyOf(i, rename_idx)) {
-			RenameExpression(col.GeneratedExpressionMutable(), info);
-		}
-	}
-	for (idx_t c_idx = 0; c_idx < constraints.size(); c_idx++) {
-		auto copy = constraints[c_idx]->Copy();
-		switch (copy->type) {
-		case ConstraintType::NOT_NULL:
-			// NOT NULL constraint: no adjustments necessary
-			break;
-		case ConstraintType::CHECK: {
-			// CHECK constraint: need to rename column references that refer to the renamed column
-			auto &check = (CheckConstraint &)*copy;
-			RenameExpression(*check.expression, info);
-			break;
-		}
-		case ConstraintType::UNIQUE: {
-			// UNIQUE constraint: possibly need to rename columns
-			auto &unique = (UniqueConstraint &)*copy;
-			for (idx_t i = 0; i < unique.columns.size(); i++) {
-				if (unique.columns[i] == info.old_name) {
-					unique.columns[i] = info.new_name;
-				}
-			}
-			break;
-		}
-		case ConstraintType::FOREIGN_KEY: {
-			// FOREIGN KEY constraint: possibly need to rename columns
-			auto &fk = (ForeignKeyConstraint &)*copy;
-			vector<string> columns = fk.pk_columns;
-			if (fk.info.type == ForeignKeyType::FK_TYPE_FOREIGN_KEY_TABLE) {
-				columns = fk.fk_columns;
-			} else if (fk.info.type == ForeignKeyType::FK_TYPE_SELF_REFERENCE_TABLE) {
-				for (idx_t i = 0; i < fk.fk_columns.size(); i++) {
-					columns.push_back(fk.fk_columns[i]);
-				}
-			}
-			for (idx_t i = 0; i < columns.size(); i++) {
-				if (columns[i] == info.old_name) {
-					throw CatalogException(
-					    "Cannot rename column \"%s\" because this is involved in the foreign key constraint",
-					    info.old_name);
-				}
-			}
-			break;
-		}
-		default:
-			throw InternalException("Unsupported constraint for entry!");
-		}
-		create_info->constraints.push_back(move(copy));
-	}
-	auto binder = Binder::CreateBinder(context);
-	auto bound_create_info = binder->BindCreateTableInfo(move(create_info));
-	return make_unique<TableCatalogEntry>(catalog, schema, (BoundCreateTableInfo *)bound_create_info.get(), storage);
-}
-
-unique_ptr<CatalogEntry> TableCatalogEntry::AddColumn(ClientContext &context, AddColumnInfo &info) {
-	auto create_info = make_unique<CreateTableInfo>(schema->name, name);
-	create_info->temporary = temporary;
-
-	for (idx_t i = 0; i < columns.size(); i++) {
-		create_info->columns.push_back(columns[i].Copy());
-	}
-	for (auto &constraint : constraints) {
-		create_info->constraints.push_back(constraint->Copy());
-	}
-	Binder::BindLogicalType(context, info.new_column.TypeMutable(), schema->name);
-	info.new_column.SetOid(columns.size());
-	info.new_column.SetStorageOid(storage->column_definitions.size());
-
-	auto col = info.new_column.Copy();
-
-	create_info->columns.push_back(move(col));
-
-	auto binder = Binder::CreateBinder(context);
-	auto bound_create_info = binder->BindCreateTableInfo(move(create_info));
-	auto new_storage =
-	    make_shared<DataTable>(context, *storage, info.new_column, bound_create_info->bound_defaults.back().get());
-	return make_unique<TableCatalogEntry>(catalog, schema, (BoundCreateTableInfo *)bound_create_info.get(),
-	                                      new_storage);
-}
-
-unique_ptr<CatalogEntry> TableCatalogEntry::RemoveColumn(ClientContext &context, RemoveColumnInfo &info) {
-	auto removed_index = GetColumnIndex(info.removed_column, info.if_exists);
-	if (removed_index == DConstants::INVALID_INDEX) {
-		return nullptr;
-	}
-
-	auto create_info = make_unique<CreateTableInfo>(schema->name, name);
-	create_info->temporary = temporary;
-
-	unordered_set<column_t> removed_columns;
-	if (column_dependency_manager.HasDependents(removed_index)) {
-		removed_columns = column_dependency_manager.GetDependents(removed_index);
-	}
-	if (!removed_columns.empty() && !info.cascade) {
-		throw CatalogException("Cannot drop column: column is a dependency of 1 or more generated column(s)");
-	}
-	for (idx_t i = 0; i < columns.size(); i++) {
-		auto &col = columns[i];
-		if (i == removed_index || removed_columns.count(i)) {
-			continue;
-		}
-		create_info->columns.push_back(col.Copy());
-	}
-	if (create_info->columns.empty()) {
-		throw CatalogException("Cannot drop column: table only has one column remaining!");
-	}
-	vector<column_t> adjusted_indices = column_dependency_manager.RemoveColumn(removed_index, columns.size());
-	// handle constraints for the new table
-	D_ASSERT(constraints.size() == bound_constraints.size());
-	for (idx_t constr_idx = 0; constr_idx < constraints.size(); constr_idx++) {
-		auto &constraint = constraints[constr_idx];
-		auto &bound_constraint = bound_constraints[constr_idx];
-		switch (constraint->type) {
-		case ConstraintType::NOT_NULL: {
-			auto &not_null_constraint = (BoundNotNullConstraint &)*bound_constraint;
-			if (not_null_constraint.index != removed_index) {
-				// the constraint is not about this column: we need to copy it
-				// we might need to shift the index back by one though, to account for the removed column
-				idx_t new_index = not_null_constraint.index;
-				new_index = adjusted_indices[new_index];
-				create_info->constraints.push_back(make_unique<NotNullConstraint>(new_index));
-			}
-			break;
-		}
-		case ConstraintType::CHECK: {
-			// CHECK constraint
-			auto &bound_check = (BoundCheckConstraint &)*bound_constraint;
-			// check if the removed column is part of the check constraint
-			if (bound_check.bound_columns.find(removed_index) != bound_check.bound_columns.end()) {
-				if (bound_check.bound_columns.size() > 1) {
-					// CHECK constraint that concerns mult
-					throw CatalogException(
-					    "Cannot drop column \"%s\" because there is a CHECK constraint that depends on it",
-					    info.removed_column);
-				} else {
-					// CHECK constraint that ONLY concerns this column, strip the constraint
-				}
-			} else {
-				// check constraint does not concern the removed column: simply re-add it
-				create_info->constraints.push_back(constraint->Copy());
-			}
-			break;
-		}
-		case ConstraintType::UNIQUE: {
-			auto copy = constraint->Copy();
-			auto &unique = (UniqueConstraint &)*copy;
-			if (unique.index != DConstants::INVALID_INDEX) {
-				if (unique.index == removed_index) {
-					throw CatalogException(
-					    "Cannot drop column \"%s\" because there is a UNIQUE constraint that depends on it",
-					    info.removed_column);
-				}
-				unique.index = adjusted_indices[unique.index];
-			}
-			create_info->constraints.push_back(move(copy));
-			break;
-		}
-		case ConstraintType::FOREIGN_KEY: {
-			auto copy = constraint->Copy();
-			auto &fk = (ForeignKeyConstraint &)*copy;
-			vector<string> columns = fk.pk_columns;
-			if (fk.info.type == ForeignKeyType::FK_TYPE_FOREIGN_KEY_TABLE) {
-				columns = fk.fk_columns;
-			} else if (fk.info.type == ForeignKeyType::FK_TYPE_SELF_REFERENCE_TABLE) {
-				for (idx_t i = 0; i < fk.fk_columns.size(); i++) {
-					columns.push_back(fk.fk_columns[i]);
-				}
-			}
-			for (idx_t i = 0; i < columns.size(); i++) {
-				if (columns[i] == info.removed_column) {
-					throw CatalogException(
-					    "Cannot drop column \"%s\" because there is a FOREIGN KEY constraint that depends on it",
-					    info.removed_column);
-				}
-			}
-			create_info->constraints.push_back(move(copy));
-			break;
-		}
-		default:
-			throw InternalException("Unsupported constraint for entry!");
-		}
-	}
-
-	auto binder = Binder::CreateBinder(context);
-	auto bound_create_info = binder->BindCreateTableInfo(move(create_info));
-	if (columns[removed_index].Generated()) {
-		return make_unique<TableCatalogEntry>(catalog, schema, (BoundCreateTableInfo *)bound_create_info.get(),
-		                                      storage);
-	}
-	auto new_storage = make_shared<DataTable>(context, *storage, removed_index);
-	return make_unique<TableCatalogEntry>(catalog, schema, (BoundCreateTableInfo *)bound_create_info.get(),
-	                                      new_storage);
-}
-
-unique_ptr<CatalogEntry> TableCatalogEntry::SetDefault(ClientContext &context, SetDefaultInfo &info) {
-	auto create_info = make_unique<CreateTableInfo>(schema->name, name);
-	auto default_idx = GetColumnIndex(info.column_name);
-
-	// Copy all the columns, changing the value of the one that was specified by 'column_name'
-	for (idx_t i = 0; i < columns.size(); i++) {
-		auto copy = columns[i].Copy();
-		if (default_idx == i) {
-			// set the default value of this column
-			D_ASSERT(!copy.Generated()); // Shouldnt reach here - DEFAULT value isn't supported for Generated Columns
-			copy.SetDefaultValue(info.expression ? info.expression->Copy() : nullptr);
-		}
-		create_info->columns.push_back(move(copy));
-	}
-	// Copy all the constraints
-	for (idx_t i = 0; i < constraints.size(); i++) {
-		auto constraint = constraints[i]->Copy();
-		create_info->constraints.push_back(move(constraint));
-	}
-
-	auto binder = Binder::CreateBinder(context);
-	auto bound_create_info = binder->BindCreateTableInfo(move(create_info));
-	return make_unique<TableCatalogEntry>(catalog, schema, (BoundCreateTableInfo *)bound_create_info.get(), storage);
-}
-
-unique_ptr<CatalogEntry> TableCatalogEntry::ChangeColumnType(ClientContext &context, ChangeColumnTypeInfo &info) {
-	if (info.target_type.id() == LogicalTypeId::USER) {
-		auto &catalog = Catalog::GetCatalog(context);
-		info.target_type = catalog.GetType(context, schema->name, UserType::GetTypeName(info.target_type));
-	}
-	auto change_idx = GetColumnIndex(info.column_name);
-	auto create_info = make_unique<CreateTableInfo>(schema->name, name);
-	create_info->temporary = temporary;
-
-	for (idx_t i = 0; i < columns.size(); i++) {
-		auto copy = columns[i].Copy();
-		if (change_idx == i) {
-			// set the type of this column
-			if (copy.Generated()) {
-				throw NotImplementedException("Changing types of generated columns is not supported yet");
-				// copy.ChangeGeneratedExpressionType(info.target_type);
-			}
-			copy.SetType(info.target_type);
-		}
-		// TODO: check if the generated_expression breaks, only delete it if it does
-		if (copy.Generated() && column_dependency_manager.IsDependencyOf(i, change_idx)) {
-			throw BinderException(
-			    "This column is referenced by the generated column \"%s\", so its type can not be changed",
-			    copy.Name());
-		}
-		create_info->columns.push_back(move(copy));
-	}
-
-	for (idx_t i = 0; i < constraints.size(); i++) {
-		auto constraint = constraints[i]->Copy();
-		switch (constraint->type) {
-		case ConstraintType::CHECK: {
-			auto &bound_check = (BoundCheckConstraint &)*bound_constraints[i];
-			if (bound_check.bound_columns.find(change_idx) != bound_check.bound_columns.end()) {
-				throw BinderException("Cannot change the type of a column that has a CHECK constraint specified");
-			}
-			break;
-		}
-		case ConstraintType::NOT_NULL:
-			break;
-		case ConstraintType::UNIQUE: {
-			auto &bound_unique = (BoundUniqueConstraint &)*bound_constraints[i];
-			if (bound_unique.key_set.find(change_idx) != bound_unique.key_set.end()) {
-				throw BinderException(
-				    "Cannot change the type of a column that has a UNIQUE or PRIMARY KEY constraint specified");
-			}
-			break;
-		}
-		case ConstraintType::FOREIGN_KEY: {
-			auto &bfk = (BoundForeignKeyConstraint &)*bound_constraints[i];
-			unordered_set<idx_t> key_set = bfk.pk_key_set;
-			if (bfk.info.type == ForeignKeyType::FK_TYPE_FOREIGN_KEY_TABLE) {
-				key_set = bfk.fk_key_set;
-			} else if (bfk.info.type == ForeignKeyType::FK_TYPE_SELF_REFERENCE_TABLE) {
-				for (idx_t i = 0; i < bfk.info.fk_keys.size(); i++) {
-					key_set.insert(bfk.info.fk_keys[i]);
-				}
-			}
-			if (key_set.find(change_idx) != key_set.end()) {
-				throw BinderException("Cannot change the type of a column that has a FOREIGN KEY constraint specified");
-			}
-			break;
-		}
-		default:
-			throw InternalException("Unsupported constraint for entry!");
-		}
-		create_info->constraints.push_back(move(constraint));
-	}
-
-	auto binder = Binder::CreateBinder(context);
-	// bind the specified expression
-	vector<column_t> bound_columns;
-	AlterBinder expr_binder(*binder, context, *this, bound_columns, info.target_type);
-	auto expression = info.expression->Copy();
-	auto bound_expression = expr_binder.Bind(expression);
-	auto bound_create_info = binder->BindCreateTableInfo(move(create_info));
-	if (bound_columns.empty()) {
-		bound_columns.push_back(COLUMN_IDENTIFIER_ROW_ID);
-	}
-
-	auto new_storage =
-	    make_shared<DataTable>(context, *storage, change_idx, info.target_type, move(bound_columns), *bound_expression);
-	auto result =
-	    make_unique<TableCatalogEntry>(catalog, schema, (BoundCreateTableInfo *)bound_create_info.get(), new_storage);
-	return move(result);
-}
-
-unique_ptr<CatalogEntry> TableCatalogEntry::SetForeignKeyConstraint(ClientContext &context, AlterForeignKeyInfo &info) {
-	auto create_info = make_unique<CreateTableInfo>(schema->name, name);
-	create_info->temporary = temporary;
-
-	for (idx_t i = 0; i < columns.size(); i++) {
-		create_info->columns.push_back(columns[i].Copy());
-	}
-	for (idx_t i = 0; i < constraints.size(); i++) {
-		auto constraint = constraints[i]->Copy();
-		if (constraint->type == ConstraintType::FOREIGN_KEY) {
-			ForeignKeyConstraint &fk = (ForeignKeyConstraint &)*constraint;
-			if (fk.info.type == ForeignKeyType::FK_TYPE_PRIMARY_KEY_TABLE && fk.info.table == info.fk_table) {
-				continue;
-			}
-		}
-		create_info->constraints.push_back(move(constraint));
-	}
-	if (info.type == AlterForeignKeyType::AFT_ADD) {
-		ForeignKeyInfo fk_info;
-		fk_info.type = ForeignKeyType::FK_TYPE_PRIMARY_KEY_TABLE;
-		fk_info.schema = info.schema;
-		fk_info.table = info.fk_table;
-		fk_info.pk_keys = info.pk_keys;
-		fk_info.fk_keys = info.fk_keys;
-		create_info->constraints.push_back(
-		    make_unique<ForeignKeyConstraint>(info.pk_columns, info.fk_columns, move(fk_info)));
-	}
-
-	auto binder = Binder::CreateBinder(context);
-	auto bound_create_info = binder->BindCreateTableInfo(move(create_info));
-
-	return make_unique<TableCatalogEntry>(catalog, schema, (BoundCreateTableInfo *)bound_create_info.get(), storage);
-}
-
-ColumnDefinition &TableCatalogEntry::GetColumn(const string &name) {
-	auto entry = name_map.find(name);
-	if (entry == name_map.end() || entry->second == COLUMN_IDENTIFIER_ROW_ID) {
-		throw CatalogException("Column with name %s does not exist!", name);
-	}
-	auto column_index = entry->second;
-	return columns[column_index];
+const ColumnDefinition &TableCatalogEntry::GetColumn(const string &name) {
+	return columns.GetColumn(name);
 }
 
 vector<LogicalType> TableCatalogEntry::GetTypes() {
 	vector<LogicalType> types;
-	for (auto &it : columns) {
-		if (it.Generated()) {
-			continue;
-		}
-		types.push_back(it.Type());
+	for (auto &col : columns.Physical()) {
+		types.push_back(col.Type());
 	}
 	return types;
 }
 
-void TableCatalogEntry::Serialize(Serializer &serializer) {
-	D_ASSERT(!internal);
+CreateTableInfo TableCatalogEntry::GetTableInfoForSerialization() const {
+	CreateTableInfo result;
+	result.catalog = catalog.GetName();
+	result.schema = schema.name;
+	result.table = name;
+	result.columns = columns.Copy();
+	result.constraints.reserve(constraints.size());
+	std::for_each(constraints.begin(), constraints.end(),
+	              [&result](const unique_ptr<Constraint> &c) { result.constraints.emplace_back(c->Copy()); });
+	return result;
+}
 
+void TableCatalogEntry::Serialize(Serializer &serializer) const {
+	D_ASSERT(!internal);
+	const auto info = GetTableInfoForSerialization();
 	FieldWriter writer(serializer);
-	writer.WriteString(schema->name);
-	writer.WriteString(name);
-	writer.WriteRegularSerializableList(columns);
-	writer.WriteSerializableList(constraints);
+	writer.WriteString(info.catalog);
+	writer.WriteString(info.schema);
+	writer.WriteString(info.table);
+	info.columns.Serialize(writer);
+	writer.WriteSerializableList(info.constraints);
 	writer.Finalize();
 }
 
-unique_ptr<CreateTableInfo> TableCatalogEntry::Deserialize(Deserializer &source) {
-	auto info = make_unique<CreateTableInfo>();
+unique_ptr<CreateTableInfo> TableCatalogEntry::Deserialize(Deserializer &source, ClientContext &context) {
+	auto info = make_uniq<CreateTableInfo>();
 
 	FieldReader reader(source);
+	info->catalog = reader.ReadRequired<string>();
 	info->schema = reader.ReadRequired<string>();
 	info->table = reader.ReadRequired<string>();
-	info->columns = reader.ReadRequiredSerializableList<ColumnDefinition, ColumnDefinition>();
+	info->columns = ColumnList::Deserialize(reader);
 	info->constraints = reader.ReadRequiredSerializableList<Constraint>();
 	reader.Finalize();
 
 	return info;
 }
 
-string TableCatalogEntry::ToSQL() {
+string TableCatalogEntry::ColumnsToSQL(const ColumnList &columns, const vector<unique_ptr<Constraint>> &constraints) {
 	std::stringstream ss;
 
-	ss << "CREATE TABLE ";
-
-	if (schema->name != DEFAULT_SCHEMA) {
-		ss << KeywordHelper::WriteOptionallyQuoted(schema->name) << ".";
-	}
-
-	ss << KeywordHelper::WriteOptionallyQuoted(name) << "(";
+	ss << "(";
 
 	// find all columns that have NOT NULL specified, but are NOT primary key columns
-	unordered_set<idx_t> not_null_columns;
-	unordered_set<idx_t> unique_columns;
-	unordered_set<idx_t> pk_columns;
+	logical_index_set_t not_null_columns;
+	logical_index_set_t unique_columns;
+	logical_index_set_t pk_columns;
 	unordered_set<string> multi_key_pks;
 	vector<string> extra_constraints;
 	for (auto &constraint : constraints) {
 		if (constraint->type == ConstraintType::NOT_NULL) {
-			auto &not_null = (NotNullConstraint &)*constraint;
+			auto &not_null = constraint->Cast<NotNullConstraint>();
 			not_null_columns.insert(not_null.index);
 		} else if (constraint->type == ConstraintType::UNIQUE) {
-			auto &pk = (UniqueConstraint &)*constraint;
+			auto &pk = constraint->Cast<UniqueConstraint>();
 			vector<string> constraint_columns = pk.columns;
-			if (pk.index != DConstants::INVALID_INDEX) {
+			if (pk.index.index != DConstants::INVALID_INDEX) {
 				// no columns specified: single column constraint
 				if (pk.is_primary_key) {
 					pk_columns.insert(pk.index);
@@ -1885,7 +2558,7 @@ string TableCatalogEntry::ToSQL() {
 				extra_constraints.push_back(constraint->ToString());
 			}
 		} else if (constraint->type == ConstraintType::FOREIGN_KEY) {
-			auto &fk = (ForeignKeyConstraint &)*constraint;
+			auto &fk = constraint->Cast<ForeignKeyConstraint>();
 			if (fk.info.type == ForeignKeyType::FK_TYPE_FOREIGN_KEY_TABLE ||
 			    fk.info.type == ForeignKeyType::FK_TYPE_SELF_REFERENCE_TABLE) {
 				extra_constraints.push_back(constraint->ToString());
@@ -1895,17 +2568,16 @@ string TableCatalogEntry::ToSQL() {
 		}
 	}
 
-	for (idx_t i = 0; i < columns.size(); i++) {
-		if (i > 0) {
+	for (auto &column : columns.Logical()) {
+		if (column.Oid() > 0) {
 			ss << ", ";
 		}
-		auto &column = columns[i];
 		ss << KeywordHelper::WriteOptionallyQuoted(column.Name()) << " ";
 		ss << column.Type().ToString();
-		bool not_null = not_null_columns.find(column.Oid()) != not_null_columns.end();
-		bool is_single_key_pk = pk_columns.find(column.Oid()) != pk_columns.end();
+		bool not_null = not_null_columns.find(column.Logical()) != not_null_columns.end();
+		bool is_single_key_pk = pk_columns.find(column.Logical()) != pk_columns.end();
 		bool is_multi_key_pk = multi_key_pks.find(column.Name()) != multi_key_pks.end();
-		bool is_unique = unique_columns.find(column.Oid()) != unique_columns.end();
+		bool is_unique = unique_columns.find(column.Logical()) != unique_columns.end();
 		if (not_null && !is_single_key_pk && !is_multi_key_pk) {
 			// NOT NULL but not a primary key column
 			ss << " NOT NULL";
@@ -1931,81 +2603,78 @@ string TableCatalogEntry::ToSQL() {
 		ss << extra_constraint;
 	}
 
-	ss << ");";
+	ss << ")";
 	return ss.str();
 }
 
-unique_ptr<CatalogEntry> TableCatalogEntry::Copy(ClientContext &context) {
-	auto create_info = make_unique<CreateTableInfo>(schema->name, name);
-	for (idx_t i = 0; i < columns.size(); i++) {
-		create_info->columns.push_back(columns[i].Copy());
+string TableCatalogEntry::ToSQL() const {
+	std::stringstream ss;
+
+	ss << "CREATE TABLE ";
+
+	if (schema.name != DEFAULT_SCHEMA) {
+		ss << KeywordHelper::WriteOptionallyQuoted(schema.name) << ".";
 	}
 
-	for (idx_t i = 0; i < constraints.size(); i++) {
-		auto constraint = constraints[i]->Copy();
-		create_info->constraints.push_back(move(constraint));
-	}
+	ss << KeywordHelper::WriteOptionallyQuoted(name);
+	ss << ColumnsToSQL(columns, constraints);
+	ss << ";";
 
-	auto binder = Binder::CreateBinder(context);
-	auto bound_create_info = binder->BindCreateTableInfo(move(create_info));
-	return make_unique<TableCatalogEntry>(catalog, schema, (BoundCreateTableInfo *)bound_create_info.get(), storage);
+	return ss.str();
 }
 
-void TableCatalogEntry::SetAsRoot() {
-	storage->SetAsRoot();
+const ColumnList &TableCatalogEntry::GetColumns() const {
+	return columns;
 }
 
-void TableCatalogEntry::CommitAlter(AlterInfo &info) {
-	D_ASSERT(info.type == AlterType::ALTER_TABLE);
-	auto &alter_table = (AlterTableInfo &)info;
-	string column_name;
-	switch (alter_table.alter_table_type) {
-	case AlterTableType::REMOVE_COLUMN: {
-		auto &remove_info = (RemoveColumnInfo &)alter_table;
-		column_name = remove_info.removed_column;
-		break;
-	}
-	case AlterTableType::ALTER_COLUMN_TYPE: {
-		auto &change_info = (ChangeColumnTypeInfo &)alter_table;
-		column_name = change_info.column_name;
-		break;
-	}
-	default:
-		break;
-	}
-	if (column_name.empty()) {
-		return;
-	}
-	idx_t removed_index = DConstants::INVALID_INDEX;
-	for (idx_t i = 0; i < columns.size(); i++) {
-		auto &col = columns[i];
-		if (col.Name() == column_name) {
-			// No need to alter storage, removed column is generated column
-			if (col.Generated()) {
-				return;
-			}
-			removed_index = i;
-			break;
-		}
-	}
-	D_ASSERT(removed_index != DConstants::INVALID_INDEX);
-	storage->CommitDropColumn(removed_index);
+ColumnList &TableCatalogEntry::GetColumnsMutable() {
+	return columns;
 }
 
-void TableCatalogEntry::CommitDrop() {
-	storage->CommitDropTable();
+const ColumnDefinition &TableCatalogEntry::GetColumn(LogicalIndex idx) {
+	return columns.GetColumn(idx);
 }
 
+const vector<unique_ptr<Constraint>> &TableCatalogEntry::GetConstraints() {
+	return constraints;
+}
+
+DataTable &TableCatalogEntry::GetStorage() {
+	throw InternalException("Calling GetStorage on a TableCatalogEntry that is not a DuckTableEntry");
+}
+
+const vector<unique_ptr<BoundConstraint>> &TableCatalogEntry::GetBoundConstraints() {
+	throw InternalException("Calling GetBoundConstraints on a TableCatalogEntry that is not a DuckTableEntry");
+}
 } // namespace duckdb
 
 
 
 namespace duckdb {
 
-TableFunctionCatalogEntry::TableFunctionCatalogEntry(Catalog *catalog, SchemaCatalogEntry *schema,
-                                                     CreateTableFunctionInfo *info)
-    : StandardEntry(CatalogType::TABLE_FUNCTION_ENTRY, schema, catalog, info->name), functions(move(info->functions)) {
-	D_ASSERT(this->functions.size() > 0);
+TableFunctionCatalogEntry::TableFunctionCatalogEntry(Catalog &catalog, SchemaCatalogEntry &schema,
+                                                     CreateTableFunctionInfo &info)
+    : FunctionEntry(CatalogType::TABLE_FUNCTION_ENTRY, catalog, schema, info), functions(std::move(info.functions)) {
+	D_ASSERT(this->functions.Size() > 0);
+}
+
+unique_ptr<CatalogEntry> TableFunctionCatalogEntry::AlterEntry(ClientContext &context, AlterInfo &info) {
+	if (info.type != AlterType::ALTER_TABLE_FUNCTION) {
+		throw InternalException("Attempting to alter TableFunctionCatalogEntry with unsupported alter type");
+	}
+	auto &function_info = info.Cast<AlterTableFunctionInfo>();
+	if (function_info.alter_table_function_type != AlterTableFunctionType::ADD_FUNCTION_OVERLOADS) {
+		throw InternalException(
+		    "Attempting to alter TableFunctionCatalogEntry with unsupported alter table function type");
+	}
+	auto &add_overloads = function_info.Cast<AddTableFunctionOverloadInfo>();
+
+	TableFunctionSet new_set = functions;
+	if (!new_set.MergeFunctionSet(add_overloads.new_overloads)) {
+		throw BinderException("Failed to add new function overloads to function \"%s\": function already exists", name);
+	}
+	CreateTableFunctionInfo new_info(std::move(new_set));
+	return make_uniq<TableFunctionCatalogEntry>(catalog, schema, new_info);
 }
 
 } // namespace duckdb
@@ -2023,23 +2692,29 @@ TableFunctionCatalogEntry::TableFunctionCatalogEntry(Catalog *catalog, SchemaCat
 
 namespace duckdb {
 
-TypeCatalogEntry::TypeCatalogEntry(Catalog *catalog, SchemaCatalogEntry *schema, CreateTypeInfo *info)
-    : StandardEntry(CatalogType::TYPE_ENTRY, schema, catalog, info->name), user_type(info->type) {
-	this->temporary = info->temporary;
-	this->internal = info->internal;
+TypeCatalogEntry::TypeCatalogEntry(Catalog &catalog, SchemaCatalogEntry &schema, CreateTypeInfo &info)
+    : StandardEntry(CatalogType::TYPE_ENTRY, schema, catalog, info.name), user_type(info.type) {
+	this->temporary = info.temporary;
+	this->internal = info.internal;
 }
 
-void TypeCatalogEntry::Serialize(Serializer &serializer) {
+void TypeCatalogEntry::Serialize(Serializer &serializer) const {
 	D_ASSERT(!internal);
 	FieldWriter writer(serializer);
-	writer.WriteString(schema->name);
+	writer.WriteString(schema.name);
 	writer.WriteString(name);
-	writer.WriteSerializable(user_type);
+	if (user_type.id() == LogicalTypeId::ENUM) {
+		// We have to serialize Enum Values
+		writer.AddField();
+		user_type.SerializeEnumType(writer.GetSerializer());
+	} else {
+		writer.WriteSerializable(user_type);
+	}
 	writer.Finalize();
 }
 
 unique_ptr<CreateTypeInfo> TypeCatalogEntry::Deserialize(Deserializer &source) {
-	auto info = make_unique<CreateTypeInfo>();
+	auto info = make_uniq<CreateTypeInfo>();
 
 	FieldReader reader(source);
 	info->schema = reader.ReadRequired<string>();
@@ -2050,11 +2725,11 @@ unique_ptr<CreateTypeInfo> TypeCatalogEntry::Deserialize(Deserializer &source) {
 	return info;
 }
 
-string TypeCatalogEntry::ToSQL() {
+string TypeCatalogEntry::ToSQL() const {
 	std::stringstream ss;
 	switch (user_type.id()) {
 	case (LogicalTypeId::ENUM): {
-		Vector values_insert_order(EnumType::GetValuesInsertOrder(user_type));
+		auto &values_insert_order = EnumType::GetValuesInsertOrder(user_type);
 		idx_t size = EnumType::GetSize(user_type);
 		ss << "CREATE TYPE ";
 		ss << KeywordHelper::WriteOptionallyQuoted(name);
@@ -2090,31 +2765,31 @@ string TypeCatalogEntry::ToSQL() {
 
 namespace duckdb {
 
-void ViewCatalogEntry::Initialize(CreateViewInfo *info) {
-	query = move(info->query);
-	this->aliases = info->aliases;
-	this->types = info->types;
-	this->temporary = info->temporary;
-	this->sql = info->sql;
-	this->internal = info->internal;
+void ViewCatalogEntry::Initialize(CreateViewInfo &info) {
+	query = std::move(info.query);
+	this->aliases = info.aliases;
+	this->types = info.types;
+	this->temporary = info.temporary;
+	this->sql = info.sql;
+	this->internal = info.internal;
 }
 
-ViewCatalogEntry::ViewCatalogEntry(Catalog *catalog, SchemaCatalogEntry *schema, CreateViewInfo *info)
-    : StandardEntry(CatalogType::VIEW_ENTRY, schema, catalog, info->view_name) {
+ViewCatalogEntry::ViewCatalogEntry(Catalog &catalog, SchemaCatalogEntry &schema, CreateViewInfo &info)
+    : StandardEntry(CatalogType::VIEW_ENTRY, schema, catalog, info.view_name) {
 	Initialize(info);
 }
 
-unique_ptr<CatalogEntry> ViewCatalogEntry::AlterEntry(ClientContext &context, AlterInfo *info) {
+unique_ptr<CatalogEntry> ViewCatalogEntry::AlterEntry(ClientContext &context, AlterInfo &info) {
 	D_ASSERT(!internal);
-	if (info->type != AlterType::ALTER_VIEW) {
+	if (info.type != AlterType::ALTER_VIEW) {
 		throw CatalogException("Can only modify view with ALTER VIEW statement");
 	}
-	auto view_info = (AlterViewInfo *)info;
-	switch (view_info->alter_view_type) {
+	auto &view_info = info.Cast<AlterViewInfo>();
+	switch (view_info.alter_view_type) {
 	case AlterViewType::RENAME_VIEW: {
-		auto rename_info = (RenameViewInfo *)view_info;
+		auto &rename_info = view_info.Cast<RenameViewInfo>();
 		auto copied_view = Copy(context);
-		copied_view->name = rename_info->new_view_name;
+		copied_view->name = rename_info.new_view_name;
 		return copied_view;
 	}
 	default:
@@ -2122,10 +2797,10 @@ unique_ptr<CatalogEntry> ViewCatalogEntry::AlterEntry(ClientContext &context, Al
 	}
 }
 
-void ViewCatalogEntry::Serialize(Serializer &serializer) {
+void ViewCatalogEntry::Serialize(Serializer &serializer) const {
 	D_ASSERT(!internal);
 	FieldWriter writer(serializer);
-	writer.WriteString(schema->name);
+	writer.WriteString(schema.name);
 	writer.WriteString(name);
 	writer.WriteString(sql);
 	writer.WriteSerializable(*query);
@@ -2134,8 +2809,8 @@ void ViewCatalogEntry::Serialize(Serializer &serializer) {
 	writer.Finalize();
 }
 
-unique_ptr<CreateViewInfo> ViewCatalogEntry::Deserialize(Deserializer &source) {
-	auto info = make_unique<CreateViewInfo>();
+unique_ptr<CreateViewInfo> ViewCatalogEntry::Deserialize(Deserializer &source, ClientContext &context) {
+	auto info = make_uniq<CreateViewInfo>();
 
 	FieldReader reader(source);
 	info->schema = reader.ReadRequired<string>();
@@ -2149,7 +2824,7 @@ unique_ptr<CreateViewInfo> ViewCatalogEntry::Deserialize(Deserializer &source) {
 	return info;
 }
 
-string ViewCatalogEntry::ToSQL() {
+string ViewCatalogEntry::ToSQL() const {
 	if (sql.empty()) {
 		//! Return empty sql with view name so pragma view_tables don't complain
 		return sql;
@@ -2157,20 +2832,20 @@ string ViewCatalogEntry::ToSQL() {
 	return sql + "\n;";
 }
 
-unique_ptr<CatalogEntry> ViewCatalogEntry::Copy(ClientContext &context) {
+unique_ptr<CatalogEntry> ViewCatalogEntry::Copy(ClientContext &context) const {
 	D_ASSERT(!internal);
-	auto create_info = make_unique<CreateViewInfo>(schema->name, name);
-	create_info->query = unique_ptr_cast<SQLStatement, SelectStatement>(query->Copy());
+	CreateViewInfo create_info(schema, name);
+	create_info.query = unique_ptr_cast<SQLStatement, SelectStatement>(query->Copy());
 	for (idx_t i = 0; i < aliases.size(); i++) {
-		create_info->aliases.push_back(aliases[i]);
+		create_info.aliases.push_back(aliases[i]);
 	}
 	for (idx_t i = 0; i < types.size(); i++) {
-		create_info->types.push_back(types[i]);
+		create_info.types.push_back(types[i]);
 	}
-	create_info->temporary = temporary;
-	create_info->sql = sql;
+	create_info.temporary = temporary;
+	create_info.sql = sql;
 
-	return make_unique<ViewCatalogEntry>(catalog, schema, create_info.get());
+	return make_uniq<ViewCatalogEntry>(catalog, schema, create_info);
 }
 
 } // namespace duckdb
@@ -2180,9 +2855,13 @@ unique_ptr<CatalogEntry> ViewCatalogEntry::Copy(ClientContext &context) {
 
 namespace duckdb {
 
-CatalogEntry::CatalogEntry(CatalogType type, Catalog *catalog_p, string name_p)
-    : oid(catalog_p->ModifyCatalog()), type(type), catalog(catalog_p), set(nullptr), name(move(name_p)), deleted(false),
-      temporary(false), internal(false), parent(nullptr) {
+CatalogEntry::CatalogEntry(CatalogType type, string name_p, idx_t oid)
+    : oid(oid), type(type), set(nullptr), name(std::move(name_p)), deleted(false), temporary(false), internal(false),
+      parent(nullptr) {
+}
+
+CatalogEntry::CatalogEntry(CatalogType type, Catalog &catalog, string name_p)
+    : CatalogEntry(type, std::move(name_p), catalog.ModifyCatalog()) {
 }
 
 CatalogEntry::~CatalogEntry() {
@@ -2192,19 +2871,43 @@ void CatalogEntry::SetAsRoot() {
 }
 
 // LCOV_EXCL_START
-unique_ptr<CatalogEntry> CatalogEntry::AlterEntry(ClientContext &context, AlterInfo *info) {
+unique_ptr<CatalogEntry> CatalogEntry::AlterEntry(ClientContext &context, AlterInfo &info) {
 	throw InternalException("Unsupported alter type for catalog entry!");
 }
 
-unique_ptr<CatalogEntry> CatalogEntry::Copy(ClientContext &context) {
+void CatalogEntry::UndoAlter(ClientContext &context, AlterInfo &info) {
+}
+
+unique_ptr<CatalogEntry> CatalogEntry::Copy(ClientContext &context) const {
 	throw InternalException("Unsupported copy type for catalog entry!");
 }
 
-string CatalogEntry::ToSQL() {
+string CatalogEntry::ToSQL() const {
 	throw InternalException("Unsupported catalog type for ToSQL()");
 }
 // LCOV_EXCL_STOP
 
+void CatalogEntry::Verify(Catalog &catalog_p) {
+}
+
+Catalog &CatalogEntry::ParentCatalog() {
+	throw InternalException("CatalogEntry::ParentCatalog called on catalog entry without catalog");
+}
+
+SchemaCatalogEntry &CatalogEntry::ParentSchema() {
+	throw InternalException("CatalogEntry::ParentSchema called on catalog entry without schema");
+}
+
+InCatalogEntry::InCatalogEntry(CatalogType type, Catalog &catalog, string name)
+    : CatalogEntry(type, catalog, std::move(name)), catalog(catalog) {
+}
+
+InCatalogEntry::~InCatalogEntry() {
+}
+
+void InCatalogEntry::Verify(Catalog &catalog_p) {
+	D_ASSERT(&catalog_p == &catalog);
+}
 } // namespace duckdb
 
 
@@ -2216,56 +2919,227 @@ string CatalogEntry::ToSQL() {
 
 namespace duckdb {
 
-CatalogSearchPath::CatalogSearchPath(ClientContext &context_p) : context(context_p) {
-	SetPaths(ParsePaths(""));
+CatalogSearchEntry::CatalogSearchEntry(string catalog_p, string schema_p)
+    : catalog(std::move(catalog_p)), schema(std::move(schema_p)) {
 }
 
-void CatalogSearchPath::Set(const string &new_value, bool is_set_schema) {
-	auto new_paths = ParsePaths(new_value);
+string CatalogSearchEntry::ToString() const {
+	if (catalog.empty()) {
+		return WriteOptionallyQuoted(schema);
+	} else {
+		return WriteOptionallyQuoted(catalog) + "." + WriteOptionallyQuoted(schema);
+	}
+}
+
+string CatalogSearchEntry::WriteOptionallyQuoted(const string &input) {
+	for (idx_t i = 0; i < input.size(); i++) {
+		if (input[i] == '.' || input[i] == ',') {
+			return "\"" + input + "\"";
+		}
+	}
+	return input;
+}
+
+string CatalogSearchEntry::ListToString(const vector<CatalogSearchEntry> &input) {
+	string result;
+	for (auto &entry : input) {
+		if (!result.empty()) {
+			result += ",";
+		}
+		result += entry.ToString();
+	}
+	return result;
+}
+
+CatalogSearchEntry CatalogSearchEntry::ParseInternal(const string &input, idx_t &idx) {
+	string catalog;
+	string schema;
+	string entry;
+	bool finished = false;
+normal:
+	for (; idx < input.size(); idx++) {
+		if (input[idx] == '"') {
+			idx++;
+			goto quoted;
+		} else if (input[idx] == '.') {
+			goto separator;
+		} else if (input[idx] == ',') {
+			finished = true;
+			goto separator;
+		}
+		entry += input[idx];
+	}
+	finished = true;
+	goto separator;
+quoted:
+	//! look for another quote
+	for (; idx < input.size(); idx++) {
+		if (input[idx] == '"') {
+			//! unquote
+			idx++;
+			goto normal;
+		}
+		entry += input[idx];
+	}
+	throw ParserException("Unterminated quote in qualified name!");
+separator:
+	if (entry.empty()) {
+		throw ParserException("Unexpected dot - empty CatalogSearchEntry");
+	}
+	if (schema.empty()) {
+		// if we parse one entry it is the schema
+		schema = std::move(entry);
+	} else if (catalog.empty()) {
+		// if we parse two entries it is [catalog.schema]
+		catalog = std::move(schema);
+		schema = std::move(entry);
+	} else {
+		throw ParserException("Too many dots - expected [schema] or [catalog.schema] for CatalogSearchEntry");
+	}
+	entry = "";
+	idx++;
+	if (finished) {
+		goto final;
+	}
+	goto normal;
+final:
+	if (schema.empty()) {
+		throw ParserException("Unexpected end of entry - empty CatalogSearchEntry");
+	}
+	return CatalogSearchEntry(std::move(catalog), std::move(schema));
+}
+
+CatalogSearchEntry CatalogSearchEntry::Parse(const string &input) {
+	idx_t pos = 0;
+	auto result = ParseInternal(input, pos);
+	if (pos < input.size()) {
+		throw ParserException("Failed to convert entry \"%s\" to CatalogSearchEntry - expected a single entry", input);
+	}
+	return result;
+}
+
+vector<CatalogSearchEntry> CatalogSearchEntry::ParseList(const string &input) {
+	idx_t pos = 0;
+	vector<CatalogSearchEntry> result;
+	while (pos < input.size()) {
+		auto entry = ParseInternal(input, pos);
+		result.push_back(entry);
+	}
+	return result;
+}
+
+CatalogSearchPath::CatalogSearchPath(ClientContext &context_p) : context(context_p) {
+	Reset();
+}
+
+void CatalogSearchPath::Reset() {
+	vector<CatalogSearchEntry> empty;
+	SetPaths(empty);
+}
+
+void CatalogSearchPath::Set(vector<CatalogSearchEntry> new_paths, bool is_set_schema) {
 	if (is_set_schema && new_paths.size() != 1) {
 		throw CatalogException("SET schema can set only 1 schema. This has %d", new_paths.size());
 	}
-	auto &catalog = Catalog::GetCatalog(context);
-	for (const auto &path : new_paths) {
-		if (!catalog.GetSchema(context, StringUtil::Lower(path), true)) {
-			throw CatalogException("SET %s: No schema named %s found.", is_set_schema ? "schema" : "search_path", path);
+	for (auto &path : new_paths) {
+		if (!Catalog::GetSchema(context, path.catalog, path.schema, OnEntryNotFound::RETURN_NULL)) {
+			if (path.catalog.empty()) {
+				// only schema supplied - check if this is a database instead
+				auto schema = Catalog::GetSchema(context, path.schema, DEFAULT_SCHEMA, OnEntryNotFound::RETURN_NULL);
+				if (schema) {
+					path.catalog = std::move(path.schema);
+					path.schema = schema->name;
+					continue;
+				}
+			}
+			throw CatalogException("SET %s: No catalog + schema named %s found.",
+			                       is_set_schema ? "schema" : "search_path", path.ToString());
 		}
 	}
-	this->set_paths = move(new_paths);
+	if (is_set_schema) {
+		if (new_paths[0].catalog == TEMP_CATALOG || new_paths[0].catalog == SYSTEM_CATALOG) {
+			throw CatalogException("SET schema cannot be set to internal schema \"%s\"", new_paths[0].catalog);
+		}
+	}
+	this->set_paths = std::move(new_paths);
 	SetPaths(set_paths);
 }
 
-const vector<string> &CatalogSearchPath::Get() {
+void CatalogSearchPath::Set(CatalogSearchEntry new_value, bool is_set_schema) {
+	vector<CatalogSearchEntry> new_paths {std::move(new_value)};
+	Set(std::move(new_paths), is_set_schema);
+}
+
+const vector<CatalogSearchEntry> &CatalogSearchPath::Get() {
 	return paths;
 }
 
-const string &CatalogSearchPath::GetOrDefault(const string &name) {
-	return name == INVALID_SCHEMA ? GetDefault() : name; // NOLINT
+string CatalogSearchPath::GetDefaultSchema(const string &catalog) {
+	for (auto &path : paths) {
+		if (path.catalog == TEMP_CATALOG) {
+			continue;
+		}
+		if (StringUtil::CIEquals(path.catalog, catalog)) {
+			return path.schema;
+		}
+	}
+	return DEFAULT_SCHEMA;
 }
 
-const string &CatalogSearchPath::GetDefault() {
+string CatalogSearchPath::GetDefaultCatalog(const string &schema) {
+	for (auto &path : paths) {
+		if (path.catalog == TEMP_CATALOG) {
+			continue;
+		}
+		if (StringUtil::CIEquals(path.schema, schema)) {
+			return path.catalog;
+		}
+	}
+	return INVALID_CATALOG;
+}
+
+vector<string> CatalogSearchPath::GetCatalogsForSchema(const string &schema) {
+	vector<string> schemas;
+	for (auto &path : paths) {
+		if (StringUtil::CIEquals(path.schema, schema)) {
+			schemas.push_back(path.catalog);
+		}
+	}
+	return schemas;
+}
+
+vector<string> CatalogSearchPath::GetSchemasForCatalog(const string &catalog) {
+	vector<string> schemas;
+	for (auto &path : paths) {
+		if (StringUtil::CIEquals(path.catalog, catalog)) {
+			schemas.push_back(path.schema);
+		}
+	}
+	return schemas;
+}
+
+const CatalogSearchEntry &CatalogSearchPath::GetDefault() {
 	const auto &paths = Get();
 	D_ASSERT(paths.size() >= 2);
-	D_ASSERT(paths[0] == TEMP_SCHEMA);
 	return paths[1];
 }
 
-void CatalogSearchPath::SetPaths(vector<string> new_paths) {
+void CatalogSearchPath::SetPaths(vector<CatalogSearchEntry> new_paths) {
 	paths.clear();
 	paths.reserve(new_paths.size() + 3);
-	paths.emplace_back(TEMP_SCHEMA);
+	paths.emplace_back(TEMP_CATALOG, DEFAULT_SCHEMA);
 	for (auto &path : new_paths) {
-		paths.push_back(move(path));
+		paths.push_back(std::move(path));
 	}
-	paths.emplace_back(DEFAULT_SCHEMA);
-	paths.emplace_back("pg_catalog");
-}
-
-vector<string> CatalogSearchPath::ParsePaths(const string &value) {
-	return StringUtil::SplitWithQuote(StringUtil::Lower(value));
+	paths.emplace_back(INVALID_CATALOG, DEFAULT_SCHEMA);
+	paths.emplace_back(SYSTEM_CATALOG, DEFAULT_SCHEMA);
+	paths.emplace_back(SYSTEM_CATALOG, "pg_catalog");
 }
 
 } // namespace duckdb
+
+
+
 
 
 
@@ -2291,44 +3165,80 @@ namespace duckdb {
 class EntryDropper {
 public:
 	//! Both constructor and destructor are privates because they should only be called by DropEntryDependencies
-	explicit EntryDropper(CatalogSet &catalog_set, idx_t entry_index)
-	    : catalog_set(catalog_set), entry_index(entry_index) {
-		old_deleted = catalog_set.entries[entry_index].get()->deleted;
+	explicit EntryDropper(EntryIndex &entry_index_p) : entry_index(entry_index_p) {
+		old_deleted = entry_index.GetEntry()->deleted;
 	}
 
 	~EntryDropper() {
-		catalog_set.entries[entry_index].get()->deleted = old_deleted;
+		entry_index.GetEntry()->deleted = old_deleted;
 	}
 
 private:
-	//! The current catalog_set
-	CatalogSet &catalog_set;
 	//! Keeps track of the state of the entry before starting the delete
 	bool old_deleted;
 	//! Index of entry to be deleted
-	idx_t entry_index;
+	EntryIndex &entry_index;
 };
 
-CatalogSet::CatalogSet(Catalog &catalog, unique_ptr<DefaultGenerator> defaults)
-    : catalog(catalog), defaults(move(defaults)) {
+CatalogSet::CatalogSet(Catalog &catalog_p, unique_ptr<DefaultGenerator> defaults)
+    : catalog((DuckCatalog &)catalog_p), defaults(std::move(defaults)) {
+	D_ASSERT(catalog_p.IsDuckCatalog());
+}
+CatalogSet::~CatalogSet() {
 }
 
-bool CatalogSet::CreateEntry(ClientContext &context, const string &name, unique_ptr<CatalogEntry> value,
-                             unordered_set<CatalogEntry *> &dependencies) {
-	auto &transaction = Transaction::GetTransaction(context);
+EntryIndex CatalogSet::PutEntry(idx_t entry_index, unique_ptr<CatalogEntry> entry) {
+	if (entries.find(entry_index) != entries.end()) {
+		throw InternalException("Entry with entry index \"%llu\" already exists", entry_index);
+	}
+	entries.insert(make_pair(entry_index, EntryValue(std::move(entry))));
+	return EntryIndex(*this, entry_index);
+}
+
+void CatalogSet::PutEntry(EntryIndex index, unique_ptr<CatalogEntry> catalog_entry) {
+	auto entry = entries.find(index.GetIndex());
+	if (entry == entries.end()) {
+		throw InternalException("Entry with entry index \"%llu\" does not exist", index.GetIndex());
+	}
+	catalog_entry->child = std::move(entry->second.entry);
+	catalog_entry->child->parent = catalog_entry.get();
+	entry->second.entry = std::move(catalog_entry);
+}
+
+bool CatalogSet::CreateEntry(CatalogTransaction transaction, const string &name, unique_ptr<CatalogEntry> value,
+                             DependencyList &dependencies) {
+	if (value->internal && !catalog.IsSystemCatalog() && name != DEFAULT_SCHEMA) {
+		throw InternalException("Attempting to create internal entry \"%s\" in non-system catalog - internal entries "
+		                        "can only be created in the system catalog",
+		                        name);
+	}
+	if (!value->internal) {
+		if (!value->temporary && catalog.IsSystemCatalog()) {
+			throw InternalException(
+			    "Attempting to create non-internal entry \"%s\" in system catalog - the system catalog "
+			    "can only contain internal entries",
+			    name);
+		}
+		if (value->temporary && !catalog.IsTemporaryCatalog()) {
+			throw InternalException("Attempting to create temporary entry \"%s\" in non-temporary catalog", name);
+		}
+		if (!value->temporary && catalog.IsTemporaryCatalog() && name != DEFAULT_SCHEMA) {
+			throw InvalidInputException("Cannot create non-temporary entry \"%s\" in temporary catalog", name);
+		}
+	}
 	// lock the catalog for writing
-	lock_guard<mutex> write_lock(catalog.write_lock);
+	lock_guard<mutex> write_lock(catalog.GetWriteLock());
 	// lock this catalog set to disallow reading
 	unique_lock<mutex> read_lock(catalog_lock);
 
 	// first check if the entry exists in the unordered set
-	idx_t entry_index;
-	auto mapping_value = GetMapping(context, name);
+	idx_t index;
+	auto mapping_value = GetMapping(transaction, name);
 	if (mapping_value == nullptr || mapping_value->deleted) {
 		// if it does not: entry has never been created
 
 		// check if there is a default entry
-		auto entry = CreateDefaultEntry(context, name, read_lock);
+		auto entry = CreateDefaultEntry(transaction, name, read_lock);
 		if (entry) {
 			return false;
 		}
@@ -2336,19 +3246,19 @@ bool CatalogSet::CreateEntry(ClientContext &context, const string &name, unique_
 		// first create a dummy deleted entry for this entry
 		// so transactions started before the commit of this transaction don't
 		// see it yet
-		entry_index = current_entry++;
-		auto dummy_node = make_unique<CatalogEntry>(CatalogType::INVALID, value->catalog, name);
+		auto dummy_node = make_uniq<InCatalogEntry>(CatalogType::INVALID, value->ParentCatalog(), name);
 		dummy_node->timestamp = 0;
 		dummy_node->deleted = true;
 		dummy_node->set = this;
 
-		entries[entry_index] = move(dummy_node);
-		PutMapping(context, name, entry_index);
+		auto entry_index = PutEntry(current_entry++, std::move(dummy_node));
+		index = entry_index.GetIndex();
+		PutMapping(transaction, name, std::move(entry_index));
 	} else {
-		entry_index = mapping_value->index;
-		auto &current = *entries[entry_index];
+		index = mapping_value->index.GetIndex();
+		auto &current = *mapping_value->index.GetEntry();
 		// if it does, we have to check version numbers
-		if (HasConflict(context, current.timestamp)) {
+		if (HasConflict(transaction, current.timestamp)) {
 			// current version has been written to by a currently active
 			// transaction
 			throw TransactionException("Catalog write-write conflict on create with \"%s\"", current.name);
@@ -2366,73 +3276,76 @@ bool CatalogSet::CreateEntry(ClientContext &context, const string &name, unique_
 	value->set = this;
 
 	// now add the dependency set of this object to the dependency manager
-	catalog.dependency_manager->AddObject(context, value.get(), dependencies);
+	catalog.GetDependencyManager().AddObject(transaction, *value, dependencies);
 
-	value->child = move(entries[entry_index]);
-	value->child->parent = value.get();
+	auto value_ptr = value.get();
+	EntryIndex entry_index(*this, index);
+	PutEntry(std::move(entry_index), std::move(value));
 	// push the old entry in the undo buffer for this transaction
-	transaction.PushCatalogEntry(value->child.get());
-	entries[entry_index] = move(value);
+	if (transaction.transaction) {
+		auto &dtransaction = transaction.transaction->Cast<DuckTransaction>();
+		dtransaction.PushCatalogEntry(*value_ptr->child);
+	}
 	return true;
 }
 
-bool CatalogSet::GetEntryInternal(ClientContext &context, idx_t entry_index, CatalogEntry *&catalog_entry) {
-	catalog_entry = entries[entry_index].get();
+bool CatalogSet::CreateEntry(ClientContext &context, const string &name, unique_ptr<CatalogEntry> value,
+                             DependencyList &dependencies) {
+	return CreateEntry(catalog.GetCatalogTransaction(context), name, std::move(value), dependencies);
+}
+
+optional_ptr<CatalogEntry> CatalogSet::GetEntryInternal(CatalogTransaction transaction, EntryIndex &entry_index) {
+	auto &catalog_entry = *entry_index.GetEntry();
 	// if it does: we have to retrieve the entry and to check version numbers
-	if (HasConflict(context, catalog_entry->timestamp)) {
+	if (HasConflict(transaction, catalog_entry.timestamp)) {
 		// current version has been written to by a currently active
 		// transaction
-		throw TransactionException("Catalog write-write conflict on alter with \"%s\"", catalog_entry->name);
+		throw TransactionException("Catalog write-write conflict on alter with \"%s\"", catalog_entry.name);
 	}
 	// there is a current version that has been committed by this transaction
-	if (catalog_entry->deleted) {
+	if (catalog_entry.deleted) {
 		// if the entry was already deleted, it now does not exist anymore
 		// so we return that we could not find it
-		return false;
+		return nullptr;
 	}
-	return true;
+	return &catalog_entry;
 }
 
-bool CatalogSet::GetEntryInternal(ClientContext &context, const string &name, idx_t &entry_index,
-                                  CatalogEntry *&catalog_entry) {
-	auto mapping_value = GetMapping(context, name);
+optional_ptr<CatalogEntry> CatalogSet::GetEntryInternal(CatalogTransaction transaction, const string &name,
+                                                        EntryIndex *entry_index) {
+	auto mapping_value = GetMapping(transaction, name);
 	if (mapping_value == nullptr || mapping_value->deleted) {
 		// the entry does not exist, check if we can create a default entry
-		return false;
+		return nullptr;
 	}
-	entry_index = mapping_value->index;
-	return GetEntryInternal(context, entry_index, catalog_entry);
+	if (entry_index) {
+		*entry_index = mapping_value->index.Copy();
+	}
+	return GetEntryInternal(transaction, mapping_value->index);
 }
 
-bool CatalogSet::AlterOwnership(ClientContext &context, ChangeOwnershipInfo *info) {
-	idx_t entry_index;
-	CatalogEntry *entry;
-	if (!GetEntryInternal(context, info->name, entry_index, entry)) {
+bool CatalogSet::AlterOwnership(CatalogTransaction transaction, ChangeOwnershipInfo &info) {
+	auto entry = GetEntryInternal(transaction, info.name, nullptr);
+	if (!entry) {
 		return false;
 	}
 
-	auto owner_entry = catalog.GetEntry(context, info->owner_schema, info->owner_name);
-	if (!owner_entry) {
-		return false;
-	}
-
-	catalog.dependency_manager->AddOwnership(context, owner_entry, entry);
-
+	auto &owner_entry = catalog.GetEntry(transaction.GetContext(), info.owner_schema, info.owner_name);
+	catalog.GetDependencyManager().AddOwnership(transaction, owner_entry, *entry);
 	return true;
 }
 
-bool CatalogSet::AlterEntry(ClientContext &context, const string &name, AlterInfo *alter_info) {
-	auto &transaction = Transaction::GetTransaction(context);
+bool CatalogSet::AlterEntry(CatalogTransaction transaction, const string &name, AlterInfo &alter_info) {
 	// lock the catalog for writing
-	lock_guard<mutex> write_lock(catalog.write_lock);
+	lock_guard<mutex> write_lock(catalog.GetWriteLock());
 
 	// first check if the entry exists in the unordered set
-	idx_t entry_index;
-	CatalogEntry *entry;
-	if (!GetEntryInternal(context, name, entry_index, entry)) {
+	EntryIndex entry_index;
+	auto entry = GetEntryInternal(transaction, name, &entry_index);
+	if (!entry) {
 		return false;
 	}
-	if (entry->internal) {
+	if (!alter_info.allow_internal && entry->internal) {
 		throw CatalogException("Cannot alter entry \"%s\" because it is an internal system entry", entry->name);
 	}
 
@@ -2443,6 +3356,10 @@ bool CatalogSet::AlterEntry(ClientContext &context, const string &name, AlterInf
 	// set the timestamp to the timestamp of the current transaction
 	// and point it to the updated table node
 	string original_name = entry->name;
+	if (!transaction.context) {
+		throw InternalException("Cannot AlterEntry without client context");
+	}
+	auto &context = *transaction.context;
 	auto value = entry->AlterEntry(context, alter_info);
 	if (!value) {
 		// alter failed, but did not result in an error
@@ -2450,125 +3367,147 @@ bool CatalogSet::AlterEntry(ClientContext &context, const string &name, AlterInf
 	}
 
 	if (value->name != original_name) {
-		auto mapping_value = GetMapping(context, value->name);
+		auto mapping_value = GetMapping(transaction, value->name);
 		if (mapping_value && !mapping_value->deleted) {
-			auto entry = GetEntryForTransaction(context, entries[mapping_value->index].get());
-			if (!entry->deleted) {
+			auto &original_entry = GetEntryForTransaction(transaction, *mapping_value->index.GetEntry());
+			if (!original_entry.deleted) {
+				entry->UndoAlter(context, alter_info);
 				string rename_err_msg =
 				    "Could not rename \"%s\" to \"%s\": another entry with this name already exists!";
 				throw CatalogException(rename_err_msg, original_name, value->name);
 			}
 		}
-		PutMapping(context, value->name, entry_index);
-		DeleteMapping(context, original_name);
 	}
-	//! Check the dependency manager to verify that there are no conflicting dependencies with this alter
-	catalog.dependency_manager->AlterObject(context, entry, value.get());
+
+	if (value->name != original_name) {
+		// Do PutMapping and DeleteMapping after dependency check
+		PutMapping(transaction, value->name, entry_index.Copy());
+		DeleteMapping(transaction, original_name);
+	}
 
 	value->timestamp = transaction.transaction_id;
-	value->child = move(entries[entry_index]);
-	value->child->parent = value.get();
 	value->set = this;
+	auto new_entry = value.get();
+	PutEntry(std::move(entry_index), std::move(value));
 
 	// serialize the AlterInfo into a temporary buffer
 	BufferedSerializer serializer;
-	alter_info->Serialize(serializer);
+	serializer.WriteString(alter_info.GetColumnName());
+	alter_info.Serialize(serializer);
 	BinaryData serialized_alter = serializer.GetData();
 
 	// push the old entry in the undo buffer for this transaction
-	transaction.PushCatalogEntry(value->child.get(), serialized_alter.data.get(), serialized_alter.size);
-	entries[entry_index] = move(value);
+	if (transaction.transaction) {
+		auto &dtransaction = transaction.transaction->Cast<DuckTransaction>();
+		dtransaction.PushCatalogEntry(*new_entry->child, serialized_alter.data.get(), serialized_alter.size);
+	}
+
+	// Check the dependency manager to verify that there are no conflicting dependencies with this alter
+	// Note that we do this AFTER the new entry has been entirely set up in the catalog set
+	// that is because in case the alter fails because of a dependency conflict, we need to be able to cleanly roll back
+	// to the old entry.
+	catalog.GetDependencyManager().AlterObject(transaction, *entry, *new_entry);
 
 	return true;
 }
 
-void CatalogSet::DropEntryDependencies(ClientContext &context, idx_t entry_index, CatalogEntry &entry, bool cascade) {
-
+void CatalogSet::DropEntryDependencies(CatalogTransaction transaction, EntryIndex &entry_index, CatalogEntry &entry,
+                                       bool cascade) {
 	// Stores the deleted value of the entry before starting the process
-	EntryDropper dropper(*this, entry_index);
+	EntryDropper dropper(entry_index);
 
 	// To correctly delete the object and its dependencies, it temporarily is set to deleted.
-	entries[entry_index].get()->deleted = true;
+	entry_index.GetEntry()->deleted = true;
 
 	// check any dependencies of this object
-	entry.catalog->dependency_manager->DropObject(context, &entry, cascade);
+	D_ASSERT(entry.ParentCatalog().IsDuckCatalog());
+	auto &duck_catalog = entry.ParentCatalog().Cast<DuckCatalog>();
+	duck_catalog.GetDependencyManager().DropObject(transaction, entry, cascade);
 
 	// dropper destructor is called here
 	// the destructor makes sure to return the value to the previous state
 	// dropper.~EntryDropper()
 }
 
-void CatalogSet::DropEntryInternal(ClientContext &context, idx_t entry_index, CatalogEntry &entry, bool cascade) {
-	auto &transaction = Transaction::GetTransaction(context);
-
-	DropEntryDependencies(context, entry_index, entry, cascade);
+void CatalogSet::DropEntryInternal(CatalogTransaction transaction, EntryIndex entry_index, CatalogEntry &entry,
+                                   bool cascade) {
+	DropEntryDependencies(transaction, entry_index, entry, cascade);
 
 	// create a new entry and replace the currently stored one
 	// set the timestamp to the timestamp of the current transaction
 	// and point it at the dummy node
-	auto value = make_unique<CatalogEntry>(CatalogType::DELETED_ENTRY, entry.catalog, entry.name);
+	auto value = make_uniq<InCatalogEntry>(CatalogType::DELETED_ENTRY, entry.ParentCatalog(), entry.name);
 	value->timestamp = transaction.transaction_id;
-	value->child = move(entries[entry_index]);
-	value->child->parent = value.get();
 	value->set = this;
 	value->deleted = true;
+	auto value_ptr = value.get();
+	PutEntry(std::move(entry_index), std::move(value));
 
 	// push the old entry in the undo buffer for this transaction
-	transaction.PushCatalogEntry(value->child.get());
-
-	entries[entry_index] = move(value);
+	if (transaction.transaction) {
+		auto &dtransaction = transaction.transaction->Cast<DuckTransaction>();
+		dtransaction.PushCatalogEntry(*value_ptr->child);
+	}
 }
 
-bool CatalogSet::DropEntry(ClientContext &context, const string &name, bool cascade) {
+bool CatalogSet::DropEntry(CatalogTransaction transaction, const string &name, bool cascade, bool allow_drop_internal) {
 	// lock the catalog for writing
-	lock_guard<mutex> write_lock(catalog.write_lock);
+	lock_guard<mutex> write_lock(catalog.GetWriteLock());
 	// we can only delete an entry that exists
-	idx_t entry_index;
-	CatalogEntry *entry;
-	if (!GetEntryInternal(context, name, entry_index, entry)) {
+	EntryIndex entry_index;
+	auto entry = GetEntryInternal(transaction, name, &entry_index);
+	if (!entry) {
 		return false;
 	}
-	if (entry->internal) {
+	if (entry->internal && !allow_drop_internal) {
 		throw CatalogException("Cannot drop entry \"%s\" because it is an internal system entry", entry->name);
 	}
 
-	DropEntryInternal(context, entry_index, *entry, cascade);
+	lock_guard<mutex> read_lock(catalog_lock);
+	DropEntryInternal(transaction, std::move(entry_index), *entry, cascade);
 	return true;
 }
 
-void CatalogSet::CleanupEntry(CatalogEntry *catalog_entry) {
+bool CatalogSet::DropEntry(ClientContext &context, const string &name, bool cascade, bool allow_drop_internal) {
+	return DropEntry(catalog.GetCatalogTransaction(context), name, cascade, allow_drop_internal);
+}
+
+DuckCatalog &CatalogSet::GetCatalog() {
+	return catalog;
+}
+
+void CatalogSet::CleanupEntry(CatalogEntry &catalog_entry) {
 	// destroy the backed up entry: it is no longer required
-	D_ASSERT(catalog_entry->parent);
-	if (catalog_entry->parent->type != CatalogType::UPDATED_ENTRY) {
+	D_ASSERT(catalog_entry.parent);
+	if (catalog_entry.parent->type != CatalogType::UPDATED_ENTRY) {
+		lock_guard<mutex> write_lock(catalog.GetWriteLock());
 		lock_guard<mutex> lock(catalog_lock);
-		if (!catalog_entry->deleted) {
+		if (!catalog_entry.deleted) {
 			// delete the entry from the dependency manager, if it is not deleted yet
-			catalog_entry->catalog->dependency_manager->EraseObject(catalog_entry);
+			D_ASSERT(catalog_entry.ParentCatalog().IsDuckCatalog());
+			catalog_entry.ParentCatalog().Cast<DuckCatalog>().GetDependencyManager().EraseObject(catalog_entry);
 		}
-		auto parent = catalog_entry->parent;
-		parent->child = move(catalog_entry->child);
+		auto parent = catalog_entry.parent;
+		parent->child = std::move(catalog_entry.child);
 		if (parent->deleted && !parent->child && !parent->parent) {
 			auto mapping_entry = mapping.find(parent->name);
 			D_ASSERT(mapping_entry != mapping.end());
-			auto index = mapping_entry->second->index;
-			auto entry = entries.find(index);
-			D_ASSERT(entry != entries.end());
-			if (entry->second.get() == parent) {
+			auto &entry = mapping_entry->second->index.GetEntry();
+			D_ASSERT(entry);
+			if (entry.get() == parent.get()) {
 				mapping.erase(mapping_entry);
-				entries.erase(entry);
 			}
 		}
 	}
 }
 
-bool CatalogSet::HasConflict(ClientContext &context, transaction_t timestamp) {
-	auto &transaction = Transaction::GetTransaction(context);
+bool CatalogSet::HasConflict(CatalogTransaction transaction, transaction_t timestamp) {
 	return (timestamp >= TRANSACTION_ID_START && timestamp != transaction.transaction_id) ||
 	       (timestamp < TRANSACTION_ID_START && timestamp > transaction.start_time);
 }
 
-MappingValue *CatalogSet::GetMapping(ClientContext &context, const string &name, bool get_latest) {
-	MappingValue *mapping_value;
+optional_ptr<MappingValue> CatalogSet::GetMapping(CatalogTransaction transaction, const string &name, bool get_latest) {
+	optional_ptr<MappingValue> mapping_value;
 	auto entry = mapping.find(name);
 	if (entry != mapping.end()) {
 		mapping_value = entry->second.get();
@@ -2580,7 +3519,7 @@ MappingValue *CatalogSet::GetMapping(ClientContext &context, const string &name,
 		return mapping_value;
 	}
 	while (mapping_value->child) {
-		if (UseTimestamp(context, mapping_value->timestamp)) {
+		if (UseTimestamp(transaction, mapping_value->timestamp)) {
 			break;
 		}
 		mapping_value = mapping_value->child.get();
@@ -2589,33 +3528,32 @@ MappingValue *CatalogSet::GetMapping(ClientContext &context, const string &name,
 	return mapping_value;
 }
 
-void CatalogSet::PutMapping(ClientContext &context, const string &name, idx_t entry_index) {
+void CatalogSet::PutMapping(CatalogTransaction transaction, const string &name, EntryIndex entry_index) {
 	auto entry = mapping.find(name);
-	auto new_value = make_unique<MappingValue>(entry_index);
-	new_value->timestamp = Transaction::GetTransaction(context).transaction_id;
+	auto new_value = make_uniq<MappingValue>(std::move(entry_index));
+	new_value->timestamp = transaction.transaction_id;
 	if (entry != mapping.end()) {
-		if (HasConflict(context, entry->second->timestamp)) {
+		if (HasConflict(transaction, entry->second->timestamp)) {
 			throw TransactionException("Catalog write-write conflict on name \"%s\"", name);
 		}
-		new_value->child = move(entry->second);
+		new_value->child = std::move(entry->second);
 		new_value->child->parent = new_value.get();
 	}
-	mapping[name] = move(new_value);
+	mapping[name] = std::move(new_value);
 }
 
-void CatalogSet::DeleteMapping(ClientContext &context, const string &name) {
+void CatalogSet::DeleteMapping(CatalogTransaction transaction, const string &name) {
 	auto entry = mapping.find(name);
 	D_ASSERT(entry != mapping.end());
-	auto delete_marker = make_unique<MappingValue>(entry->second->index);
+	auto delete_marker = make_uniq<MappingValue>(entry->second->index.Copy());
 	delete_marker->deleted = true;
-	delete_marker->timestamp = Transaction::GetTransaction(context).transaction_id;
-	delete_marker->child = move(entry->second);
+	delete_marker->timestamp = transaction.transaction_id;
+	delete_marker->child = std::move(entry->second);
 	delete_marker->child->parent = delete_marker.get();
-	mapping[name] = move(delete_marker);
+	mapping[name] = std::move(delete_marker);
 }
 
-bool CatalogSet::UseTimestamp(ClientContext &context, transaction_t timestamp) {
-	auto &transaction = Transaction::GetTransaction(context);
+bool CatalogSet::UseTimestamp(CatalogTransaction transaction, transaction_t timestamp) {
 	if (timestamp == transaction.transaction_id) {
 		// we created this version
 		return true;
@@ -2627,66 +3565,66 @@ bool CatalogSet::UseTimestamp(ClientContext &context, transaction_t timestamp) {
 	return false;
 }
 
-CatalogEntry *CatalogSet::GetEntryForTransaction(ClientContext &context, CatalogEntry *current) {
-	while (current->child) {
-		if (UseTimestamp(context, current->timestamp)) {
+CatalogEntry &CatalogSet::GetEntryForTransaction(CatalogTransaction transaction, CatalogEntry &current) {
+	reference<CatalogEntry> entry(current);
+	while (entry.get().child) {
+		if (UseTimestamp(transaction, entry.get().timestamp)) {
 			break;
 		}
-		current = current->child.get();
-		D_ASSERT(current);
+		entry = *entry.get().child;
 	}
-	return current;
+	return entry.get();
 }
 
-CatalogEntry *CatalogSet::GetCommittedEntry(CatalogEntry *current) {
-	while (current->child) {
-		if (current->timestamp < TRANSACTION_ID_START) {
+CatalogEntry &CatalogSet::GetCommittedEntry(CatalogEntry &current) {
+	reference<CatalogEntry> entry(current);
+	while (entry.get().child) {
+		if (entry.get().timestamp < TRANSACTION_ID_START) {
 			// this entry is committed: use it
 			break;
 		}
-		current = current->child.get();
-		D_ASSERT(current);
+		entry = *entry.get().child;
 	}
-	return current;
+	return entry.get();
 }
 
-pair<string, idx_t> CatalogSet::SimilarEntry(ClientContext &context, const string &name) {
+SimilarCatalogEntry CatalogSet::SimilarEntry(CatalogTransaction transaction, const string &name) {
 	unique_lock<mutex> lock(catalog_lock);
-	CreateDefaultEntries(context, lock);
+	CreateDefaultEntries(transaction, lock);
 
-	string result;
-	idx_t current_score = (idx_t)-1;
+	SimilarCatalogEntry result;
 	for (auto &kv : mapping) {
-		auto mapping_value = GetMapping(context, kv.first);
+		auto mapping_value = GetMapping(transaction, kv.first);
 		if (mapping_value && !mapping_value->deleted) {
-			auto ldist = StringUtil::LevenshteinDistance(kv.first, name);
-			if (ldist < current_score) {
-				current_score = ldist;
-				result = kv.first;
+			auto ldist = StringUtil::SimilarityScore(kv.first, name);
+			if (ldist < result.distance) {
+				result.distance = ldist;
+				result.name = kv.first;
 			}
 		}
 	}
-	return {result, current_score};
+	return result;
 }
 
-CatalogEntry *CatalogSet::CreateEntryInternal(ClientContext &context, unique_ptr<CatalogEntry> entry) {
+optional_ptr<CatalogEntry> CatalogSet::CreateEntryInternal(CatalogTransaction transaction,
+                                                           unique_ptr<CatalogEntry> entry) {
 	if (mapping.find(entry->name) != mapping.end()) {
 		return nullptr;
 	}
 	auto &name = entry->name;
-	auto entry_index = current_entry++;
 	auto catalog_entry = entry.get();
 
 	entry->set = this;
 	entry->timestamp = 0;
 
-	PutMapping(context, name, entry_index);
+	auto entry_index = PutEntry(current_entry++, std::move(entry));
+	PutMapping(transaction, name, std::move(entry_index));
 	mapping[name]->timestamp = 0;
-	entries[entry_index] = move(entry);
 	return catalog_entry;
 }
 
-CatalogEntry *CatalogSet::CreateDefaultEntry(ClientContext &context, const string &name, unique_lock<mutex> &lock) {
+optional_ptr<CatalogEntry> CatalogSet::CreateDefaultEntry(CatalogTransaction transaction, const string &name,
+                                                          unique_lock<mutex> &lock) {
 	// no entry found with this name, check for defaults
 	if (!defaults || defaults->created_all_entries) {
 		// no defaults either: return null
@@ -2694,8 +3632,12 @@ CatalogEntry *CatalogSet::CreateDefaultEntry(ClientContext &context, const strin
 	}
 	// this catalog set has a default map defined
 	// check if there is a default entry that we can create with this name
+	if (!transaction.context) {
+		// no context - cannot create default entry
+		return nullptr;
+	}
 	lock.unlock();
-	auto entry = defaults->CreateDefaultEntry(context, name);
+	auto entry = defaults->CreateDefaultEntry(*transaction.context, name);
 
 	lock.lock();
 	if (!entry) {
@@ -2703,7 +3645,7 @@ CatalogEntry *CatalogSet::CreateDefaultEntry(ClientContext &context, const strin
 		return nullptr;
 	}
 	// there is a default entry! create it
-	auto result = CreateEntryInternal(context, move(entry));
+	auto result = CreateEntryInternal(transaction, std::move(entry));
 	if (result) {
 		return result;
 	}
@@ -2711,49 +3653,56 @@ CatalogEntry *CatalogSet::CreateDefaultEntry(ClientContext &context, const strin
 	// this means somebody else created the entry first
 	// just retry?
 	lock.unlock();
-	return GetEntry(context, name);
+	return GetEntry(transaction, name);
 }
 
-CatalogEntry *CatalogSet::GetEntry(ClientContext &context, const string &name) {
+optional_ptr<CatalogEntry> CatalogSet::GetEntry(CatalogTransaction transaction, const string &name) {
 	unique_lock<mutex> lock(catalog_lock);
-	auto mapping_value = GetMapping(context, name);
+	auto mapping_value = GetMapping(transaction, name);
 	if (mapping_value != nullptr && !mapping_value->deleted) {
 		// we found an entry for this name
 		// check the version numbers
 
-		auto catalog_entry = entries[mapping_value->index].get();
-		CatalogEntry *current = GetEntryForTransaction(context, catalog_entry);
-		if (current->deleted || (current->name != name && !UseTimestamp(context, mapping_value->timestamp))) {
+		auto &catalog_entry = *mapping_value->index.GetEntry();
+		auto &current = GetEntryForTransaction(transaction, catalog_entry);
+		if (current.deleted || (current.name != name && !UseTimestamp(transaction, mapping_value->timestamp))) {
 			return nullptr;
 		}
-		return current;
+		return &current;
 	}
-	return CreateDefaultEntry(context, name, lock);
+	return CreateDefaultEntry(transaction, name, lock);
 }
 
-void CatalogSet::UpdateTimestamp(CatalogEntry *entry, transaction_t timestamp) {
-	entry->timestamp = timestamp;
-	mapping[entry->name]->timestamp = timestamp;
+optional_ptr<CatalogEntry> CatalogSet::GetEntry(ClientContext &context, const string &name) {
+	return GetEntry(catalog.GetCatalogTransaction(context), name);
 }
 
-void CatalogSet::AdjustUserDependency(CatalogEntry *entry, ColumnDefinition &column, bool remove) {
-	CatalogEntry *user_type_catalog = (CatalogEntry *)LogicalType::GetCatalog(column.Type());
-	if (user_type_catalog) {
-		if (remove) {
-			catalog.dependency_manager->dependents_map[user_type_catalog].erase(entry->parent);
-			catalog.dependency_manager->dependencies_map[entry->parent].erase(user_type_catalog);
-		} else {
-			catalog.dependency_manager->dependents_map[user_type_catalog].insert(entry);
-			catalog.dependency_manager->dependencies_map[entry].insert(user_type_catalog);
-		}
+void CatalogSet::UpdateTimestamp(CatalogEntry &entry, transaction_t timestamp) {
+	entry.timestamp = timestamp;
+	mapping[entry.name]->timestamp = timestamp;
+}
+
+void CatalogSet::AdjustUserDependency(CatalogEntry &entry, ColumnDefinition &column, bool remove) {
+	auto user_type_catalog_p = EnumType::GetCatalog(column.Type());
+	if (!user_type_catalog_p) {
+		return;
+	}
+	auto &user_type_catalog = user_type_catalog_p->Cast<CatalogEntry>();
+	auto &dependency_manager = catalog.GetDependencyManager();
+	if (remove) {
+		dependency_manager.dependents_map[user_type_catalog].erase(*entry.parent);
+		dependency_manager.dependencies_map[*entry.parent].erase(user_type_catalog);
+	} else {
+		dependency_manager.dependents_map[user_type_catalog].insert(entry);
+		dependency_manager.dependencies_map[entry].insert(user_type_catalog);
 	}
 }
 
-void CatalogSet::AdjustDependency(CatalogEntry *entry, TableCatalogEntry *table, ColumnDefinition &column,
+void CatalogSet::AdjustDependency(CatalogEntry &entry, TableCatalogEntry &table, ColumnDefinition &column,
                                   bool remove) {
 	bool found = false;
 	if (column.Type().id() == LogicalTypeId::ENUM) {
-		for (auto &old_column : table->columns) {
+		for (auto &old_column : table.GetColumns().Logical()) {
 			if (old_column.Name() == column.Name() && old_column.Type().id() != LogicalTypeId::ENUM) {
 				AdjustUserDependency(entry, column, remove);
 				found = true;
@@ -2764,7 +3713,7 @@ void CatalogSet::AdjustDependency(CatalogEntry *entry, TableCatalogEntry *table,
 		}
 	} else if (!(column.Type().GetAlias().empty())) {
 		auto alias = column.Type().GetAlias();
-		for (auto &old_column : table->columns) {
+		for (auto &old_column : table.GetColumns().Logical()) {
 			auto old_alias = old_column.Type().GetAlias();
 			if (old_column.Name() == column.Name() && old_alias != alias) {
 				AdjustUserDependency(entry, column, remove);
@@ -2777,77 +3726,79 @@ void CatalogSet::AdjustDependency(CatalogEntry *entry, TableCatalogEntry *table,
 	}
 }
 
-void CatalogSet::AdjustTableDependencies(CatalogEntry *entry) {
-	if (entry->type == CatalogType::TABLE_ENTRY && entry->parent->type == CatalogType::TABLE_ENTRY) {
+void CatalogSet::AdjustTableDependencies(CatalogEntry &entry) {
+	if (entry.type == CatalogType::TABLE_ENTRY && entry.parent->type == CatalogType::TABLE_ENTRY) {
 		// If it's a table entry we have to check for possibly removing or adding user type dependencies
-		auto old_table = (TableCatalogEntry *)entry->parent;
-		auto new_table = (TableCatalogEntry *)entry;
+		auto &old_table = entry.parent->Cast<TableCatalogEntry>();
+		auto &new_table = entry.Cast<TableCatalogEntry>();
 
-		for (auto &new_column : new_table->columns) {
+		for (idx_t i = 0; i < new_table.GetColumns().LogicalColumnCount(); i++) {
+			auto &new_column = new_table.GetColumnsMutable().GetColumnMutable(LogicalIndex(i));
 			AdjustDependency(entry, old_table, new_column, false);
 		}
-		for (auto &old_column : old_table->columns) {
+		for (idx_t i = 0; i < old_table.GetColumns().LogicalColumnCount(); i++) {
+			auto &old_column = old_table.GetColumnsMutable().GetColumnMutable(LogicalIndex(i));
 			AdjustDependency(entry, new_table, old_column, true);
 		}
 	}
 }
 
-void CatalogSet::Undo(CatalogEntry *entry) {
-	lock_guard<mutex> write_lock(catalog.write_lock);
-
+void CatalogSet::Undo(CatalogEntry &entry) {
+	lock_guard<mutex> write_lock(catalog.GetWriteLock());
 	lock_guard<mutex> lock(catalog_lock);
 
 	// entry has to be restored
 	// and entry->parent has to be removed ("rolled back")
 
 	// i.e. we have to place (entry) as (entry->parent) again
-	auto &to_be_removed_node = entry->parent;
+	auto &to_be_removed_node = *entry.parent;
 
 	AdjustTableDependencies(entry);
 
-	if (!to_be_removed_node->deleted) {
+	if (!to_be_removed_node.deleted) {
 		// delete the entry from the dependency manager as well
-		catalog.dependency_manager->EraseObject(to_be_removed_node);
+		auto &dependency_manager = catalog.GetDependencyManager();
+		dependency_manager.EraseObject(to_be_removed_node);
 	}
-	if (entry->name != to_be_removed_node->name) {
+	if (!StringUtil::CIEquals(entry.name, to_be_removed_node.name)) {
 		// rename: clean up the new name when the rename is rolled back
-		auto removed_entry = mapping.find(to_be_removed_node->name);
+		auto removed_entry = mapping.find(to_be_removed_node.name);
 		if (removed_entry->second->child) {
 			removed_entry->second->child->parent = nullptr;
-			mapping[to_be_removed_node->name] = move(removed_entry->second->child);
+			mapping[to_be_removed_node.name] = std::move(removed_entry->second->child);
 		} else {
 			mapping.erase(removed_entry);
 		}
 	}
-	if (to_be_removed_node->parent) {
+	if (to_be_removed_node.parent) {
 		// if the to be removed node has a parent, set the child pointer to the
 		// to be restored node
-		to_be_removed_node->parent->child = move(to_be_removed_node->child);
-		entry->parent = to_be_removed_node->parent;
+		to_be_removed_node.parent->child = std::move(to_be_removed_node.child);
+		entry.parent = to_be_removed_node.parent;
 	} else {
 		// otherwise we need to update the base entry tables
-		auto &name = entry->name;
-		to_be_removed_node->child->SetAsRoot();
-		entries[mapping[name]->index] = move(to_be_removed_node->child);
-		entry->parent = nullptr;
+		auto &name = entry.name;
+		to_be_removed_node.child->SetAsRoot();
+		mapping[name]->index.GetEntry() = std::move(to_be_removed_node.child);
+		entry.parent = nullptr;
 	}
 
 	// restore the name if it was deleted
-	auto restored_entry = mapping.find(entry->name);
-	if (restored_entry->second->deleted || entry->type == CatalogType::INVALID) {
+	auto restored_entry = mapping.find(entry.name);
+	if (restored_entry->second->deleted || entry.type == CatalogType::INVALID) {
 		if (restored_entry->second->child) {
 			restored_entry->second->child->parent = nullptr;
-			mapping[entry->name] = move(restored_entry->second->child);
+			mapping[entry.name] = std::move(restored_entry->second->child);
 		} else {
 			mapping.erase(restored_entry);
 		}
 	}
 	// we mark the catalog as being modified, since this action can lead to e.g. tables being dropped
-	entry->catalog->ModifyCatalog();
+	catalog.ModifyCatalog();
 }
 
-void CatalogSet::CreateDefaultEntries(ClientContext &context, unique_lock<mutex> &lock) {
-	if (!defaults || defaults->created_all_entries) {
+void CatalogSet::CreateDefaultEntries(CatalogTransaction transaction, unique_lock<mutex> &lock) {
+	if (!defaults || defaults->created_all_entries || !transaction.context) {
 		return;
 	}
 	// this catalog set has a default set defined:
@@ -2858,43 +3809,95 @@ void CatalogSet::CreateDefaultEntries(ClientContext &context, unique_lock<mutex>
 			// we unlock during the CreateEntry, since it might reference other catalog sets...
 			// specifically for views this can happen since the view will be bound
 			lock.unlock();
-			auto entry = defaults->CreateDefaultEntry(context, default_entry);
+			auto entry = defaults->CreateDefaultEntry(*transaction.context, default_entry);
 			if (!entry) {
 				throw InternalException("Failed to create default entry for %s", default_entry);
 			}
 
 			lock.lock();
-			CreateEntryInternal(context, move(entry));
+			CreateEntryInternal(transaction, std::move(entry));
 		}
 	}
 	defaults->created_all_entries = true;
 }
 
-void CatalogSet::Scan(ClientContext &context, const std::function<void(CatalogEntry *)> &callback) {
+void CatalogSet::Scan(CatalogTransaction transaction, const std::function<void(CatalogEntry &)> &callback) {
 	// lock the catalog set
 	unique_lock<mutex> lock(catalog_lock);
-	CreateDefaultEntries(context, lock);
+	CreateDefaultEntries(transaction, lock);
 
 	for (auto &kv : entries) {
-		auto entry = kv.second.get();
-		entry = GetEntryForTransaction(context, entry);
-		if (!entry->deleted) {
-			callback(entry);
+		auto &entry = *kv.second.entry.get();
+		auto &entry_for_transaction = GetEntryForTransaction(transaction, entry);
+		if (!entry_for_transaction.deleted) {
+			callback(entry_for_transaction);
 		}
 	}
 }
 
-void CatalogSet::Scan(const std::function<void(CatalogEntry *)> &callback) {
+void CatalogSet::Scan(ClientContext &context, const std::function<void(CatalogEntry &)> &callback) {
+	Scan(catalog.GetCatalogTransaction(context), callback);
+}
+
+void CatalogSet::Scan(const std::function<void(CatalogEntry &)> &callback) {
 	// lock the catalog set
 	lock_guard<mutex> lock(catalog_lock);
 	for (auto &kv : entries) {
-		auto entry = kv.second.get();
-		entry = GetCommittedEntry(entry);
-		if (!entry->deleted) {
-			callback(entry);
+		auto entry = kv.second.entry.get();
+		auto &commited_entry = GetCommittedEntry(*entry);
+		if (!commited_entry.deleted) {
+			callback(commited_entry);
 		}
 	}
 }
+
+void CatalogSet::Verify(Catalog &catalog_p) {
+	D_ASSERT(&catalog_p == &catalog);
+	vector<reference<CatalogEntry>> entries;
+	Scan([&](CatalogEntry &entry) { entries.push_back(entry); });
+	for (auto &entry : entries) {
+		entry.get().Verify(catalog_p);
+	}
+}
+
+} // namespace duckdb
+
+
+
+
+
+namespace duckdb {
+
+CatalogTransaction::CatalogTransaction(Catalog &catalog, ClientContext &context) {
+	auto &transaction = Transaction::Get(context, catalog);
+	this->db = &DatabaseInstance::GetDatabase(context);
+	if (!transaction.IsDuckTransaction()) {
+		this->transaction_id = transaction_t(-1);
+		this->start_time = transaction_t(-1);
+	} else {
+		auto &dtransaction = transaction.Cast<DuckTransaction>();
+		this->transaction_id = dtransaction.transaction_id;
+		this->start_time = dtransaction.start_time;
+	}
+	this->transaction = &transaction;
+	this->context = &context;
+}
+
+CatalogTransaction::CatalogTransaction(DatabaseInstance &db, transaction_t transaction_id_p, transaction_t start_time_p)
+    : db(&db), context(nullptr), transaction(nullptr), transaction_id(transaction_id_p), start_time(start_time_p) {
+}
+
+ClientContext &CatalogTransaction::GetContext() {
+	if (!context) {
+		throw InternalException("Attempting to get a context in a CatalogTransaction without a context");
+	}
+	return *context;
+}
+
+CatalogTransaction CatalogTransaction::GetSystemTransaction(DatabaseInstance &db) {
+	return CatalogTransaction(db, 1, 1);
+}
+
 } // namespace duckdb
 
 
@@ -2908,9 +3911,9 @@ void CatalogSet::Scan(const std::function<void(CatalogEntry *)> &callback) {
 namespace duckdb {
 
 static DefaultMacro internal_macros[] = {
+	{DEFAULT_SCHEMA, "current_role", {nullptr}, "'duckdb'"},                       // user name of current execution context
 	{DEFAULT_SCHEMA, "current_user", {nullptr}, "'duckdb'"},                       // user name of current execution context
-	{DEFAULT_SCHEMA, "current_catalog", {nullptr}, "'duckdb'"},                    // name of current database (called "catalog" in the SQL standard)
-	{DEFAULT_SCHEMA, "current_database", {nullptr}, "'duckdb'"},                   // name of current database
+	{DEFAULT_SCHEMA, "current_catalog", {nullptr}, "current_database()"},          // name of current database (called "catalog" in the SQL standard)
 	{DEFAULT_SCHEMA, "user", {nullptr}, "current_user"},                           // equivalent to current_user
 	{DEFAULT_SCHEMA, "session_user", {nullptr}, "'duckdb'"},                       // session user name
 	{"pg_catalog", "inet_client_addr", {nullptr}, "NULL"},                       // address of the remote connection
@@ -2951,10 +3954,10 @@ static DefaultMacro internal_macros[] = {
 
 	// various postgres system functions
 	{"pg_catalog", "pg_get_viewdef", {"oid", nullptr}, "(select sql from duckdb_views() v where v.view_oid=oid)"},
-	{"pg_catalog", "pg_get_constraintdef", {"constraint_oid", "pretty_bool", nullptr}, "(select constraint_text from duckdb_constraints() d_constraint where d_constraint.table_oid=constraint_oid/1000000 and d_constraint.constraint_index=constraint_oid%1000000)"},
+	{"pg_catalog", "pg_get_constraintdef", {"constraint_oid", "pretty_bool", nullptr}, "(select constraint_text from duckdb_constraints() d_constraint where d_constraint.table_oid=constraint_oid//1000000 and d_constraint.constraint_index=constraint_oid%1000000)"},
 	{"pg_catalog", "pg_get_expr", {"pg_node_tree", "relation_oid", nullptr}, "pg_node_tree"},
-	{"pg_catalog", "format_pg_type", {"type_name", nullptr}, "case when logical_type='FLOAT' then 'real' when logical_type='DOUBLE' then 'double precision' when logical_type='DECIMAL' then 'numeric' when logical_type='VARCHAR' then 'character varying' when logical_type='BLOB' then 'bytea' when logical_type='TIMESTAMP' then 'timestamp without time zone' when logical_type='TIME' then 'time without time zone' else lower(logical_type) end"},
-	{"pg_catalog", "format_type", {"type_oid", "typemod", nullptr}, "(select format_pg_type(type_name) from duckdb_types() t where t.type_oid=type_oid) || case when typemod>0 then concat('(', typemod/1000, ',', typemod%1000, ')') else '' end"},
+	{"pg_catalog", "format_pg_type", {"type_name", nullptr}, "case when logical_type='FLOAT' then 'real' when logical_type='DOUBLE' then 'double precision' when logical_type='DECIMAL' then 'numeric' when logical_type='ENUM' then lower(type_name) when logical_type='VARCHAR' then 'character varying' when logical_type='BLOB' then 'bytea' when logical_type='TIMESTAMP' then 'timestamp without time zone' when logical_type='TIME' then 'time without time zone' else lower(logical_type) end"},
+	{"pg_catalog", "format_type", {"type_oid", "typemod", nullptr}, "(select format_pg_type(type_name) from duckdb_types() t where t.type_oid=type_oid) || case when typemod>0 then concat('(', typemod//1000, ',', typemod%1000, ')') else '' end"},
 
 	{"pg_catalog", "pg_has_role", {"user", "role", "privilege", nullptr}, "true"},  //boolean  //does user have privilege for role
 	{"pg_catalog", "pg_has_role", {"role", "privilege", nullptr}, "true"},  //boolean  //does current user have privilege for role
@@ -2977,6 +3980,8 @@ static DefaultMacro internal_macros[] = {
 	{"pg_catalog", "pg_ts_template_is_visible", {"template_oid", nullptr}, "true"},
 	{"pg_catalog", "pg_type_is_visible", {"type_oid", nullptr}, "true"},
 
+	{"pg_catalog", "pg_size_pretty", {"bytes", nullptr}, "format_bytes(bytes)"},
+
 	{DEFAULT_SCHEMA, "round_even", {"x", "n", nullptr}, "CASE ((abs(x) * power(10, n+1)) % 10) WHEN 5 THEN round(x/2, n) * 2 ELSE round(x, n) END"},
 	{DEFAULT_SCHEMA, "roundbankers", {"x", "n", nullptr}, "round_even(x, n)"},
 	{DEFAULT_SCHEMA, "nullif", {"a", "b", nullptr}, "CASE WHEN a=b THEN NULL ELSE a END"},
@@ -2988,9 +3993,12 @@ static DefaultMacro internal_macros[] = {
 	{DEFAULT_SCHEMA, "array_pop_front", {"arr", nullptr}, "arr[2:]"},
 	{DEFAULT_SCHEMA, "array_push_back", {"arr", "e", nullptr}, "list_concat(arr, list_value(e))"},
 	{DEFAULT_SCHEMA, "array_push_front", {"arr", "e", nullptr}, "list_concat(list_value(e), arr)"},
+	{DEFAULT_SCHEMA, "array_to_string", {"arr", "sep", nullptr}, "list_aggr(arr, 'string_agg', sep)"},
 	{DEFAULT_SCHEMA, "generate_subscripts", {"arr", "dim", nullptr}, "unnest(generate_series(1, array_length(arr, dim)))"},
 	{DEFAULT_SCHEMA, "fdiv", {"x", "y", nullptr}, "floor(x/y)"},
 	{DEFAULT_SCHEMA, "fmod", {"x", "y", nullptr}, "(x-y*floor(x/y))"},
+	{DEFAULT_SCHEMA, "count_if", {"l", nullptr}, "sum(if(l, 1, 0))"},
+	{DEFAULT_SCHEMA, "split_part", {"string", "delimiter", "position", nullptr}, "coalesce(string_split(string, delimiter)[position],'')"},
 
 	// algebraic list aggregates
 	{DEFAULT_SCHEMA, "list_avg", {"l", nullptr}, "list_aggr(l, 'avg')"},
@@ -3011,6 +4019,7 @@ static DefaultMacro internal_macros[] = {
 	{DEFAULT_SCHEMA, "list_entropy", {"l", nullptr}, "list_aggr(l, 'entropy')"},
 	{DEFAULT_SCHEMA, "list_last", {"l", nullptr}, "list_aggr(l, 'last')"},
 	{DEFAULT_SCHEMA, "list_first", {"l", nullptr}, "list_aggr(l, 'first')"},
+	{DEFAULT_SCHEMA, "list_any_value", {"l", nullptr}, "list_aggr(l, 'any_value')"},
 	{DEFAULT_SCHEMA, "list_kurtosis", {"l", nullptr}, "list_aggr(l, 'kurtosis')"},
 	{DEFAULT_SCHEMA, "list_min", {"l", nullptr}, "list_aggr(l, 'min')"},
 	{DEFAULT_SCHEMA, "list_max", {"l", nullptr}, "list_aggr(l, 'max')"},
@@ -3027,22 +4036,25 @@ static DefaultMacro internal_macros[] = {
 	// nested list aggregates
 	{DEFAULT_SCHEMA, "list_histogram", {"l", nullptr}, "list_aggr(l, 'histogram')"},
 
+	// date functions
+	{DEFAULT_SCHEMA, "date_add", {"date", "interval", nullptr}, "date + interval"},
+
 	{nullptr, nullptr, {nullptr}, nullptr}
 	};
 
 unique_ptr<CreateMacroInfo> DefaultFunctionGenerator::CreateInternalTableMacroInfo(DefaultMacro &default_macro, unique_ptr<MacroFunction> function) {
 	for (idx_t param_idx = 0; default_macro.parameters[param_idx] != nullptr; param_idx++) {
 		function->parameters.push_back(
-		    make_unique<ColumnRefExpression>(default_macro.parameters[param_idx]));
+		    make_uniq<ColumnRefExpression>(default_macro.parameters[param_idx]));
 	}
 
-	auto bind_info = make_unique<CreateMacroInfo>();
+	auto bind_info = make_uniq<CreateMacroInfo>();
 	bind_info->schema = default_macro.schema;
 	bind_info->name = default_macro.name;
 	bind_info->temporary = true;
 	bind_info->internal = true;
 	bind_info->type = function->type == MacroType::TABLE_MACRO ? CatalogType::TABLE_MACRO_ENTRY : CatalogType::MACRO_ENTRY;
-	bind_info->function = move(function);
+	bind_info->function = std::move(function);
 	return bind_info;
 
 }
@@ -3052,8 +4064,8 @@ unique_ptr<CreateMacroInfo> DefaultFunctionGenerator::CreateInternalMacroInfo(De
 	auto expressions = Parser::ParseExpressionList(default_macro.macro);
 	D_ASSERT(expressions.size() == 1);
 
-	auto result = make_unique<ScalarMacroFunction>(move(expressions[0]));
-	return CreateInternalTableMacroInfo(default_macro, move(result));
+	auto result = make_uniq<ScalarMacroFunction>(std::move(expressions[0]));
+	return CreateInternalTableMacroInfo(default_macro, std::move(result));
 }
 
 unique_ptr<CreateMacroInfo> DefaultFunctionGenerator::CreateInternalTableMacroInfo(DefaultMacro &default_macro) {
@@ -3062,9 +4074,9 @@ unique_ptr<CreateMacroInfo> DefaultFunctionGenerator::CreateInternalTableMacroIn
 	D_ASSERT(parser.statements.size() == 1);
 	D_ASSERT(parser.statements[0]->type == StatementType::SELECT_STATEMENT);
 
-	auto &select = (SelectStatement &) *parser.statements[0];
-	auto result = make_unique<TableMacroFunction>(move(select.node));
-	return CreateInternalTableMacroInfo(default_macro, move(result));
+	auto &select = parser.statements[0]->Cast<SelectStatement>();
+	auto result = make_uniq<TableMacroFunction>(std::move(select.node));
+	return CreateInternalTableMacroInfo(default_macro, std::move(result));
 }
 
 static unique_ptr<CreateFunctionInfo> GetDefaultFunction(const string &input_schema, const string &input_name) {
@@ -3078,15 +4090,15 @@ static unique_ptr<CreateFunctionInfo> GetDefaultFunction(const string &input_sch
 	return nullptr;
 }
 
-DefaultFunctionGenerator::DefaultFunctionGenerator(Catalog &catalog, SchemaCatalogEntry *schema)
+DefaultFunctionGenerator::DefaultFunctionGenerator(Catalog &catalog, SchemaCatalogEntry &schema)
     : DefaultGenerator(catalog), schema(schema) {
 }
 
 unique_ptr<CatalogEntry> DefaultFunctionGenerator::CreateDefaultEntry(ClientContext &context,
                                                                       const string &entry_name) {
-	auto info = GetDefaultFunction(schema->name, entry_name);
+	auto info = GetDefaultFunction(schema.name, entry_name);
 	if (info) {
-		return make_unique_base<CatalogEntry, ScalarMacroCatalogEntry>(&catalog, schema, (CreateMacroInfo *)info.get());
+		return make_uniq_base<CatalogEntry, ScalarMacroCatalogEntry>(catalog, schema, info->Cast<CreateMacroInfo>());
 	}
 	return nullptr;
 }
@@ -3094,7 +4106,7 @@ unique_ptr<CatalogEntry> DefaultFunctionGenerator::CreateDefaultEntry(ClientCont
 vector<string> DefaultFunctionGenerator::GetDefaultEntries() {
 	vector<string> result;
 	for (idx_t index = 0; internal_macros[index].name != nullptr; index++) {
-		if (internal_macros[index].schema == schema->name) {
+		if (internal_macros[index].schema == schema.name) {
 			result.emplace_back(internal_macros[index].name);
 		}
 	}
@@ -3129,7 +4141,7 @@ DefaultSchemaGenerator::DefaultSchemaGenerator(Catalog &catalog) : DefaultGenera
 
 unique_ptr<CatalogEntry> DefaultSchemaGenerator::CreateDefaultEntry(ClientContext &context, const string &entry_name) {
 	if (GetDefaultSchema(entry_name)) {
-		return make_unique_base<CatalogEntry, SchemaCatalogEntry>(&catalog, StringUtil::Lower(entry_name), true);
+		return make_uniq_base<CatalogEntry, DuckSchemaEntry>(catalog, StringUtil::Lower(entry_name), true);
 	}
 	return nullptr;
 }
@@ -3173,6 +4185,8 @@ static DefaultType internal_types[] = {{"int", LogicalTypeId::INTEGER},
                                        {"blob", LogicalTypeId::BLOB},
                                        {"varbinary", LogicalTypeId::BLOB},
                                        {"binary", LogicalTypeId::BLOB},
+                                       {"bit", LogicalTypeId::BIT},
+                                       {"bitstring", LogicalTypeId::BIT},
                                        {"int8", LogicalTypeId::BIGINT},
                                        {"bigint", LogicalTypeId::BIGINT},
                                        {"int64", LogicalTypeId::BIGINT},
@@ -3220,9 +4234,10 @@ static DefaultType internal_types[] = {{"int", LogicalTypeId::INTEGER},
                                        {"uint32", LogicalTypeId::UINTEGER},
                                        {"ubigint", LogicalTypeId::UBIGINT},
                                        {"uint64", LogicalTypeId::UBIGINT},
+                                       {"union", LogicalTypeId::UNION},
                                        {"timestamptz", LogicalTypeId::TIMESTAMP_TZ},
                                        {"timetz", LogicalTypeId::TIME_TZ},
-                                       {"json", LogicalTypeId::JSON},
+                                       {"enum", LogicalTypeId::ENUM},
                                        {"null", LogicalTypeId::SQLNULL},
                                        {nullptr, LogicalTypeId::INVALID}};
 
@@ -3236,12 +4251,12 @@ LogicalTypeId DefaultTypeGenerator::GetDefaultType(const string &name) {
 	return LogicalTypeId::INVALID;
 }
 
-DefaultTypeGenerator::DefaultTypeGenerator(Catalog &catalog, SchemaCatalogEntry *schema)
+DefaultTypeGenerator::DefaultTypeGenerator(Catalog &catalog, SchemaCatalogEntry &schema)
     : DefaultGenerator(catalog), schema(schema) {
 }
 
 unique_ptr<CatalogEntry> DefaultTypeGenerator::CreateDefaultEntry(ClientContext &context, const string &entry_name) {
-	if (schema->name != DEFAULT_SCHEMA) {
+	if (schema.name != DEFAULT_SCHEMA) {
 		return nullptr;
 	}
 	auto type_id = GetDefaultType(entry_name);
@@ -3253,12 +4268,12 @@ unique_ptr<CatalogEntry> DefaultTypeGenerator::CreateDefaultEntry(ClientContext 
 	info.type = LogicalType(type_id);
 	info.internal = true;
 	info.temporary = true;
-	return make_unique_base<CatalogEntry, TypeCatalogEntry>(&catalog, schema, &info);
+	return make_uniq_base<CatalogEntry, TypeCatalogEntry>(catalog, schema, info);
 }
 
 vector<string> DefaultTypeGenerator::GetDefaultEntries() {
 	vector<string> result;
-	if (schema->name != DEFAULT_SCHEMA) {
+	if (schema.name != DEFAULT_SCHEMA) {
 		return result;
 	}
 	for (idx_t index = 0; internal_types[index].name != nullptr; index++) {
@@ -3274,8 +4289,6 @@ vector<string> DefaultTypeGenerator::GetDefaultEntries() {
 
 
 
-
-
 namespace duckdb {
 
 struct DefaultView {
@@ -3285,13 +4298,14 @@ struct DefaultView {
 };
 
 static DefaultView internal_views[] = {
-    {DEFAULT_SCHEMA, "pragma_database_list", "SELECT * FROM pragma_database_list()"},
+    {DEFAULT_SCHEMA, "pragma_database_list", "SELECT database_oid AS seq, database_name AS name, path AS file FROM duckdb_databases() WHERE NOT internal ORDER BY 1"},
     {DEFAULT_SCHEMA, "sqlite_master", "select 'table' \"type\", table_name \"name\", table_name \"tbl_name\", 0 rootpage, sql from duckdb_tables union all select 'view' \"type\", view_name \"name\", view_name \"tbl_name\", 0 rootpage, sql from duckdb_views union all select 'index' \"type\", index_name \"name\", table_name \"tbl_name\", 0 rootpage, sql from duckdb_indexes;"},
     {DEFAULT_SCHEMA, "sqlite_schema", "SELECT * FROM sqlite_master"},
     {DEFAULT_SCHEMA, "sqlite_temp_master", "SELECT * FROM sqlite_master"},
     {DEFAULT_SCHEMA, "sqlite_temp_schema", "SELECT * FROM sqlite_master"},
     {DEFAULT_SCHEMA, "duckdb_constraints", "SELECT * FROM duckdb_constraints()"},
     {DEFAULT_SCHEMA, "duckdb_columns", "SELECT * FROM duckdb_columns() WHERE NOT internal"},
+    {DEFAULT_SCHEMA, "duckdb_databases", "SELECT * FROM duckdb_databases() WHERE NOT internal"},
     {DEFAULT_SCHEMA, "duckdb_indexes", "SELECT * FROM duckdb_indexes()"},
     {DEFAULT_SCHEMA, "duckdb_schemas", "SELECT * FROM duckdb_schemas() WHERE NOT internal"},
     {DEFAULT_SCHEMA, "duckdb_tables", "SELECT * FROM duckdb_tables() WHERE NOT internal"},
@@ -3301,57 +4315,53 @@ static DefaultView internal_views[] = {
     {"pg_catalog", "pg_attribute", "SELECT table_oid attrelid, column_name attname, data_type_id atttypid, 0 attstattarget, NULL attlen, column_index attnum, 0 attndims, -1 attcacheoff, case when data_type ilike '%decimal%' then numeric_precision*1000+numeric_scale else -1 end atttypmod, false attbyval, NULL attstorage, NULL attalign, NOT is_nullable attnotnull, column_default IS NOT NULL atthasdef, false atthasmissing, '' attidentity, '' attgenerated, false attisdropped, true attislocal, 0 attinhcount, 0 attcollation, NULL attcompression, NULL attacl, NULL attoptions, NULL attfdwoptions, NULL attmissingval FROM duckdb_columns()"},
     {"pg_catalog", "pg_attrdef", "SELECT column_index oid, table_oid adrelid, column_index adnum, column_default adbin from duckdb_columns() where column_default is not null;"},
     {"pg_catalog", "pg_class", "SELECT table_oid oid, table_name relname, schema_oid relnamespace, 0 reltype, 0 reloftype, 0 relowner, 0 relam, 0 relfilenode, 0 reltablespace, 0 relpages, estimated_size::real reltuples, 0 relallvisible, 0 reltoastrelid, 0 reltoastidxid, index_count > 0 relhasindex, false relisshared, case when temporary then 't' else 'p' end relpersistence, 'r' relkind, column_count relnatts, check_constraint_count relchecks, false relhasoids, has_primary_key relhaspkey, false relhasrules, false relhastriggers, false relhassubclass, false relrowsecurity, true relispopulated, NULL relreplident, false relispartition, 0 relrewrite, 0 relfrozenxid, NULL relminmxid, NULL relacl, NULL reloptions, NULL relpartbound FROM duckdb_tables() UNION ALL SELECT view_oid oid, view_name relname, schema_oid relnamespace, 0 reltype, 0 reloftype, 0 relowner, 0 relam, 0 relfilenode, 0 reltablespace, 0 relpages, 0 reltuples, 0 relallvisible, 0 reltoastrelid, 0 reltoastidxid, false relhasindex, false relisshared, case when temporary then 't' else 'p' end relpersistence, 'v' relkind, column_count relnatts, 0 relchecks, false relhasoids, false relhaspkey, false relhasrules, false relhastriggers, false relhassubclass, false relrowsecurity, true relispopulated, NULL relreplident, false relispartition, 0 relrewrite, 0 relfrozenxid, NULL relminmxid, NULL relacl, NULL reloptions, NULL relpartbound FROM duckdb_views() UNION ALL SELECT sequence_oid oid, sequence_name relname, schema_oid relnamespace, 0 reltype, 0 reloftype, 0 relowner, 0 relam, 0 relfilenode, 0 reltablespace, 0 relpages, 0 reltuples, 0 relallvisible, 0 reltoastrelid, 0 reltoastidxid, false relhasindex, false relisshared, case when temporary then 't' else 'p' end relpersistence, 'S' relkind, 0 relnatts, 0 relchecks, false relhasoids, false relhaspkey, false relhasrules, false relhastriggers, false relhassubclass, false relrowsecurity, true relispopulated, NULL relreplident, false relispartition, 0 relrewrite, 0 relfrozenxid, NULL relminmxid, NULL relacl, NULL reloptions, NULL relpartbound FROM duckdb_sequences() UNION ALL SELECT index_oid oid, index_name relname, schema_oid relnamespace, 0 reltype, 0 reloftype, 0 relowner, 0 relam, 0 relfilenode, 0 reltablespace, 0 relpages, 0 reltuples, 0 relallvisible, 0 reltoastrelid, 0 reltoastidxid, false relhasindex, false relisshared, 't' relpersistence, 'i' relkind, NULL relnatts, 0 relchecks, false relhasoids, false relhaspkey, false relhasrules, false relhastriggers, false relhassubclass, false relrowsecurity, true relispopulated, NULL relreplident, false relispartition, 0 relrewrite, 0 relfrozenxid, NULL relminmxid, NULL relacl, NULL reloptions, NULL relpartbound FROM duckdb_indexes()"},
-    {"pg_catalog", "pg_constraint", "SELECT table_oid*1000000+constraint_index oid, constraint_text conname, schema_oid connamespace, CASE WHEN constraint_type='CHECK' then 'c' WHEN constraint_type='UNIQUE' then 'u' WHEN constraint_type='PRIMARY KEY' THEN 'p' ELSE 'x' END contype, false condeferrable, false condeferred, true convalidated, table_oid conrelid, 0 contypid, 0 conindid, 0 conparentid, 0 confrelid, NULL confupdtype, NULL confdeltype, NULL confmatchtype, true conislocal, 0 coninhcount, false connoinherit, constraint_column_indexes conkey, NULL confkey, NULL conpfeqop, NULL conppeqop, NULL conffeqop, NULL conexclop, expression conbin FROM duckdb_constraints()"},
+    {"pg_catalog", "pg_constraint", "SELECT table_oid*1000000+constraint_index oid, constraint_text conname, schema_oid connamespace, CASE constraint_type WHEN 'CHECK' then 'c' WHEN 'UNIQUE' then 'u' WHEN 'PRIMARY KEY' THEN 'p' WHEN 'FOREIGN KEY' THEN 'f' ELSE 'x' END contype, false condeferrable, false condeferred, true convalidated, table_oid conrelid, 0 contypid, 0 conindid, 0 conparentid, 0 confrelid, NULL confupdtype, NULL confdeltype, NULL confmatchtype, true conislocal, 0 coninhcount, false connoinherit, constraint_column_indexes conkey, NULL confkey, NULL conpfeqop, NULL conppeqop, NULL conffeqop, NULL conexclop, expression conbin FROM duckdb_constraints()"},
+	{"pg_catalog", "pg_database", "SELECT database_oid oid, database_name datname FROM duckdb_databases()"},
     {"pg_catalog", "pg_depend", "SELECT * FROM duckdb_dependencies()"},
 	{"pg_catalog", "pg_description", "SELECT NULL objoid, NULL classoid, NULL objsubid, NULL description WHERE 1=0"},
-    {"pg_catalog", "pg_enum", "SELECT NULL oid, NULL enumtypid, NULL enumsortorder, NULL enumlabel WHERE 1=0"},
+    {"pg_catalog", "pg_enum", "SELECT NULL oid, a.type_oid enumtypid, list_position(b.labels, a.elabel) enumsortorder, a.elabel enumlabel FROM (SELECT UNNEST(labels) elabel, type_oid FROM duckdb_types() WHERE logical_type='ENUM') a JOIN duckdb_types() b ON a.type_oid=b.type_oid;"},
     {"pg_catalog", "pg_index", "SELECT index_oid indexrelid, table_oid indrelid, 0 indnatts, 0 indnkeyatts, is_unique indisunique, is_primary indisprimary, false indisexclusion, true indimmediate, false indisclustered, true indisvalid, false indcheckxmin, true indisready, true indislive, false indisreplident, NULL::INT[] indkey, NULL::OID[] indcollation, NULL::OID[] indclass, NULL::INT[] indoption, expressions indexprs, NULL indpred FROM duckdb_indexes()"},
     {"pg_catalog", "pg_indexes", "SELECT schema_name schemaname, table_name tablename, index_name indexname, NULL \"tablespace\", sql indexdef FROM duckdb_indexes()"},
     {"pg_catalog", "pg_namespace", "SELECT oid, schema_name nspname, 0 nspowner, NULL nspacl FROM duckdb_schemas()"},
+	{"pg_catalog", "pg_proc", "SELECT f.function_oid oid, function_name proname, s.oid pronamespace, varargs provariadic, function_type = 'aggregate' proisagg, function_type = 'table' proretset, return_type prorettype, parameter_types proargtypes, parameters proargnames FROM duckdb_functions() f LEFT JOIN duckdb_schemas() s USING (database_name, schema_name)"},
     {"pg_catalog", "pg_sequence", "SELECT sequence_oid seqrelid, 0 seqtypid, start_value seqstart, increment_by seqincrement, max_value seqmax, min_value seqmin, 0 seqcache, cycle seqcycle FROM duckdb_sequences()"},
 	{"pg_catalog", "pg_sequences", "SELECT schema_name schemaname, sequence_name sequencename, 'duckdb' sequenceowner, 0 data_type, start_value, min_value, max_value, increment_by, cycle, 0 cache_size, last_value FROM duckdb_sequences()"},
+	{"pg_catalog", "pg_settings", "SELECT name, value setting, description short_desc, CASE WHEN input_type = 'VARCHAR' THEN 'string' WHEN input_type = 'BOOLEAN' THEN 'bool' WHEN input_type IN ('BIGINT', 'UBIGINT') THEN 'integer' ELSE input_type END vartype FROM duckdb_settings()"},
     {"pg_catalog", "pg_tables", "SELECT schema_name schemaname, table_name tablename, 'duckdb' tableowner, NULL \"tablespace\", index_count > 0 hasindexes, false hasrules, false hastriggers FROM duckdb_tables()"},
     {"pg_catalog", "pg_tablespace", "SELECT 0 oid, 'pg_default' spcname, 0 spcowner, NULL spcacl, NULL spcoptions"},
-    {"pg_catalog", "pg_type", "SELECT type_oid oid, format_pg_type(type_name) typname, schema_oid typnamespace, 0 typowner, type_size typlen, false typbyval, 'b' typtype, CASE WHEN type_category='NUMERIC' THEN 'N' WHEN type_category='STRING' THEN 'S' WHEN type_category='DATETIME' THEN 'D' WHEN type_category='BOOLEAN' THEN 'B' WHEN type_category='COMPOSITE' THEN 'C' WHEN type_category='USER' THEN 'U' ELSE 'X' END typcategory, false typispreferred, true typisdefined, NULL typdelim, NULL typrelid, NULL typsubscript, NULL typelem, NULL typarray, NULL typinput, NULL typoutput, NULL typreceive, NULL typsend, NULL typmodin, NULL typmodout, NULL typanalyze, 'd' typalign, 'p' typstorage, NULL typnotnull, NULL typbasetype, NULL typtypmod, NULL typndims, NULL typcollation, NULL typdefaultbin, NULL typdefault, NULL typacl FROM duckdb_types();"},
+    {"pg_catalog", "pg_type", "SELECT type_oid oid, format_pg_type(type_name) typname, schema_oid typnamespace, 0 typowner, type_size typlen, false typbyval, CASE WHEN logical_type='ENUM' THEN 'e' else 'b' end typtype, CASE WHEN type_category='NUMERIC' THEN 'N' WHEN type_category='STRING' THEN 'S' WHEN type_category='DATETIME' THEN 'D' WHEN type_category='BOOLEAN' THEN 'B' WHEN type_category='COMPOSITE' THEN 'C' WHEN type_category='USER' THEN 'U' ELSE 'X' END typcategory, false typispreferred, true typisdefined, NULL typdelim, NULL typrelid, NULL typsubscript, NULL typelem, NULL typarray, NULL typinput, NULL typoutput, NULL typreceive, NULL typsend, NULL typmodin, NULL typmodout, NULL typanalyze, 'd' typalign, 'p' typstorage, NULL typnotnull, NULL typbasetype, NULL typtypmod, NULL typndims, NULL typcollation, NULL typdefaultbin, NULL typdefault, NULL typacl FROM duckdb_types() WHERE type_size IS NOT NULL;"},
     {"pg_catalog", "pg_views", "SELECT schema_name schemaname, view_name viewname, 'duckdb' viewowner, sql definition FROM duckdb_views()"},
-    {"information_schema", "columns", "SELECT NULL table_catalog, schema_name table_schema, table_name, column_name, column_index ordinal_position, column_default, CASE WHEN is_nullable THEN 'YES' ELSE 'NO' END is_nullable, data_type, character_maximum_length, NULL character_octet_length, numeric_precision, numeric_precision_radix, numeric_scale, NULL datetime_precision, NULL interval_type, NULL interval_precision, NULL character_set_catalog, NULL character_set_schema, NULL character_set_name, NULL collation_catalog, NULL collation_schema, NULL collation_name, NULL domain_catalog, NULL domain_schema, NULL domain_name, NULL udt_catalog, NULL udt_schema, NULL udt_name, NULL scope_catalog, NULL scope_schema, NULL scope_name, NULL maximum_cardinality, NULL dtd_identifier, NULL is_self_referencing, NULL is_identity, NULL identity_generation, NULL identity_start, NULL identity_increment, NULL identity_maximum, NULL identity_minimum, NULL identity_cycle, NULL is_generated, NULL generation_expression, NULL is_updatable FROM duckdb_columns;"},
-    {"information_schema", "schemata", "SELECT NULL catalog_name, schema_name, 'duckdb' schema_owner, NULL default_character_set_catalog, NULL default_character_set_schema, NULL default_character_set_name, sql sql_path FROM duckdb_schemas()"},
-    {"information_schema", "tables", "SELECT NULL table_catalog, schema_name table_schema, table_name, CASE WHEN temporary THEN 'LOCAL TEMPORARY' ELSE 'BASE TABLE' END table_type, NULL self_referencing_column_name, NULL reference_generation, NULL user_defined_type_catalog, NULL user_defined_type_schema, NULL user_defined_type_name, 'YES' is_insertable_into, 'NO' is_typed, CASE WHEN temporary THEN 'PRESERVE' ELSE NULL END commit_action FROM duckdb_tables() UNION ALL SELECT NULL table_catalog, schema_name table_schema, view_name table_name, 'VIEW' table_type, NULL self_referencing_column_name, NULL reference_generation, NULL user_defined_type_catalog, NULL user_defined_type_schema, NULL user_defined_type_name, 'NO' is_insertable_into, 'NO' is_typed, NULL commit_action FROM duckdb_views;"},
+    {"information_schema", "columns", "SELECT database_name table_catalog, schema_name table_schema, table_name, column_name, column_index ordinal_position, column_default, CASE WHEN is_nullable THEN 'YES' ELSE 'NO' END is_nullable, data_type, character_maximum_length, NULL character_octet_length, numeric_precision, numeric_precision_radix, numeric_scale, NULL datetime_precision, NULL interval_type, NULL interval_precision, NULL character_set_catalog, NULL character_set_schema, NULL character_set_name, NULL collation_catalog, NULL collation_schema, NULL collation_name, NULL domain_catalog, NULL domain_schema, NULL domain_name, NULL udt_catalog, NULL udt_schema, NULL udt_name, NULL scope_catalog, NULL scope_schema, NULL scope_name, NULL maximum_cardinality, NULL dtd_identifier, NULL is_self_referencing, NULL is_identity, NULL identity_generation, NULL identity_start, NULL identity_increment, NULL identity_maximum, NULL identity_minimum, NULL identity_cycle, NULL is_generated, NULL generation_expression, NULL is_updatable FROM duckdb_columns;"},
+    {"information_schema", "schemata", "SELECT database_name catalog_name, schema_name, 'duckdb' schema_owner, NULL default_character_set_catalog, NULL default_character_set_schema, NULL default_character_set_name, sql sql_path FROM duckdb_schemas()"},
+    {"information_schema", "tables", "SELECT database_name table_catalog, schema_name table_schema, table_name, CASE WHEN temporary THEN 'LOCAL TEMPORARY' ELSE 'BASE TABLE' END table_type, NULL self_referencing_column_name, NULL reference_generation, NULL user_defined_type_catalog, NULL user_defined_type_schema, NULL user_defined_type_name, 'YES' is_insertable_into, 'NO' is_typed, CASE WHEN temporary THEN 'PRESERVE' ELSE NULL END commit_action FROM duckdb_tables() UNION ALL SELECT database_name table_catalog, schema_name table_schema, view_name table_name, 'VIEW' table_type, NULL self_referencing_column_name, NULL reference_generation, NULL user_defined_type_catalog, NULL user_defined_type_schema, NULL user_defined_type_name, 'NO' is_insertable_into, 'NO' is_typed, NULL commit_action FROM duckdb_views;"},
     {nullptr, nullptr, nullptr}};
 
-static unique_ptr<CreateViewInfo> GetDefaultView(const string &input_schema, const string &input_name) {
+static unique_ptr<CreateViewInfo> GetDefaultView(ClientContext &context, const string &input_schema, const string &input_name) {
 	auto schema = StringUtil::Lower(input_schema);
 	auto name = StringUtil::Lower(input_name);
 	for (idx_t index = 0; internal_views[index].name != nullptr; index++) {
 		if (internal_views[index].schema == schema && internal_views[index].name == name) {
-			auto result = make_unique<CreateViewInfo>();
+			auto result = make_uniq<CreateViewInfo>();
 			result->schema = schema;
+			result->view_name = name;
 			result->sql = internal_views[index].sql;
-
-			Parser parser;
-			parser.ParseQuery(internal_views[index].sql);
-			D_ASSERT(parser.statements.size() == 1 && parser.statements[0]->type == StatementType::SELECT_STATEMENT);
-			result->query = unique_ptr_cast<SQLStatement, SelectStatement>(move(parser.statements[0]));
 			result->temporary = true;
 			result->internal = true;
-			result->view_name = name;
-			return result;
+
+			return CreateViewInfo::FromSelect(context, std::move(result));
 		}
 	}
 	return nullptr;
 }
 
-DefaultViewGenerator::DefaultViewGenerator(Catalog &catalog, SchemaCatalogEntry *schema)
+DefaultViewGenerator::DefaultViewGenerator(Catalog &catalog, SchemaCatalogEntry &schema)
     : DefaultGenerator(catalog), schema(schema) {
 }
 
 unique_ptr<CatalogEntry> DefaultViewGenerator::CreateDefaultEntry(ClientContext &context, const string &entry_name) {
-	auto info = GetDefaultView(schema->name, entry_name);
+	auto info = GetDefaultView(context, schema.name, entry_name);
 	if (info) {
-		auto binder = Binder::CreateBinder(context);
-		binder->BindCreateViewInfo(*info);
-
-		return make_unique_base<CatalogEntry, ViewCatalogEntry>(&catalog, schema, info.get());
+		return make_uniq_base<CatalogEntry, ViewCatalogEntry>(catalog, schema, *info);
 	}
 	return nullptr;
 }
@@ -3359,11 +4369,37 @@ unique_ptr<CatalogEntry> DefaultViewGenerator::CreateDefaultEntry(ClientContext 
 vector<string> DefaultViewGenerator::GetDefaultEntries() {
 	vector<string> result;
 	for (idx_t index = 0; internal_views[index].name != nullptr; index++) {
-		if (internal_views[index].schema == schema->name) {
+		if (internal_views[index].schema == schema.name) {
 			result.emplace_back(internal_views[index].name);
 		}
 	}
 	return result;
+}
+
+} // namespace duckdb
+
+
+
+
+namespace duckdb {
+
+void DependencyList::AddDependency(CatalogEntry &entry) {
+	if (entry.internal) {
+		return;
+	}
+	set.insert(entry);
+}
+
+void DependencyList::VerifyDependencies(Catalog &catalog, const string &name) {
+	for (auto &dep_entry : set) {
+		auto &dep = dep_entry.get();
+		if (&dep.ParentCatalog() != &catalog) {
+			throw DependencyException(
+			    "Error adding dependency for object \"%s\" - dependency \"%s\" is in catalog "
+			    "\"%s\", which does not match the catalog \"%s\".\nCross catalog dependencies are not supported.",
+			    name, dep.name, dep.ParentCatalog().GetName(), catalog.GetName());
+		}
+	}
 }
 
 } // namespace duckdb
@@ -3376,52 +4412,59 @@ vector<string> DefaultViewGenerator::GetDefaultEntries() {
 
 
 
+
+
 namespace duckdb {
 
-DependencyManager::DependencyManager(Catalog &catalog) : catalog(catalog) {
+DependencyManager::DependencyManager(DuckCatalog &catalog) : catalog(catalog) {
 }
 
-void DependencyManager::AddObject(ClientContext &context, CatalogEntry *object,
-                                  unordered_set<CatalogEntry *> &dependencies) {
+void DependencyManager::AddObject(CatalogTransaction transaction, CatalogEntry &object, DependencyList &dependencies) {
 	// check for each object in the sources if they were not deleted yet
-	for (auto &dependency : dependencies) {
-		idx_t entry_index;
-		CatalogEntry *catalog_entry;
-		if (!dependency->set) {
+	for (auto &dep : dependencies.set) {
+		auto &dependency = dep.get();
+		if (&dependency.ParentCatalog() != &object.ParentCatalog()) {
+			throw DependencyException(
+			    "Error adding dependency for object \"%s\" - dependency \"%s\" is in catalog "
+			    "\"%s\", which does not match the catalog \"%s\".\nCross catalog dependencies are not supported.",
+			    object.name, dependency.name, dependency.ParentCatalog().GetName(), object.ParentCatalog().GetName());
+		}
+		if (!dependency.set) {
 			throw InternalException("Dependency has no set");
 		}
-		if (!dependency->set->GetEntryInternal(context, dependency->name, entry_index, catalog_entry)) {
+		auto catalog_entry = dependency.set->GetEntryInternal(transaction, dependency.name, nullptr);
+		if (!catalog_entry) {
 			throw InternalException("Dependency has already been deleted?");
 		}
 	}
 	// indexes do not require CASCADE to be dropped, they are simply always dropped along with the table
-	auto dependency_type = object->type == CatalogType::INDEX_ENTRY ? DependencyType::DEPENDENCY_AUTOMATIC
-	                                                                : DependencyType::DEPENDENCY_REGULAR;
+	auto dependency_type = object.type == CatalogType::INDEX_ENTRY ? DependencyType::DEPENDENCY_AUTOMATIC
+	                                                               : DependencyType::DEPENDENCY_REGULAR;
 	// add the object to the dependents_map of each object that it depends on
-	for (auto &dependency : dependencies) {
-		dependents_map[dependency].insert(Dependency(object, dependency_type));
+	for (auto &dependency : dependencies.set) {
+		auto &set = dependents_map[dependency];
+		set.insert(Dependency(object, dependency_type));
 	}
 	// create the dependents map for this object: it starts out empty
 	dependents_map[object] = dependency_set_t();
-	dependencies_map[object] = dependencies;
+	dependencies_map[object] = dependencies.set;
 }
 
-void DependencyManager::DropObject(ClientContext &context, CatalogEntry *object, bool cascade) {
+void DependencyManager::DropObject(CatalogTransaction transaction, CatalogEntry &object, bool cascade) {
 	D_ASSERT(dependents_map.find(object) != dependents_map.end());
 
 	// first check the objects that depend on this object
 	auto &dependent_objects = dependents_map[object];
 	for (auto &dep : dependent_objects) {
 		// look up the entry in the catalog set
-		auto &catalog_set = *dep.entry->set;
-		auto mapping_value = catalog_set.GetMapping(context, dep.entry->name, true /* get_latest */);
+		auto &entry = dep.entry.get();
+		auto &catalog_set = *entry.set;
+		auto mapping_value = catalog_set.GetMapping(transaction, entry.name, true /* get_latest */);
 		if (mapping_value == nullptr) {
 			continue;
 		}
-		idx_t entry_index = mapping_value->index;
-		CatalogEntry *dependency_entry;
-
-		if (!catalog_set.GetEntryInternal(context, entry_index, dependency_entry)) {
+		auto dependency_entry = catalog_set.GetEntryInternal(transaction, mapping_value->index);
+		if (!dependency_entry) {
 			// the dependent object was already deleted, no conflict
 			continue;
 		}
@@ -3429,29 +4472,29 @@ void DependencyManager::DropObject(ClientContext &context, CatalogEntry *object,
 		if (cascade || dep.dependency_type == DependencyType::DEPENDENCY_AUTOMATIC ||
 		    dep.dependency_type == DependencyType::DEPENDENCY_OWNS) {
 			// cascade: drop the dependent object
-			catalog_set.DropEntryInternal(context, entry_index, *dependency_entry, cascade);
+			catalog_set.DropEntryInternal(transaction, mapping_value->index.Copy(), *dependency_entry, cascade);
 		} else {
 			// no cascade and there are objects that depend on this object: throw error
-			throw CatalogException("Cannot drop entry \"%s\" because there are entries that "
-			                       "depend on it. Use DROP...CASCADE to drop all dependents.",
-			                       object->name);
+			throw DependencyException("Cannot drop entry \"%s\" because there are entries that "
+			                          "depend on it. Use DROP...CASCADE to drop all dependents.",
+			                          object.name);
 		}
 	}
 }
 
-void DependencyManager::AlterObject(ClientContext &context, CatalogEntry *old_obj, CatalogEntry *new_obj) {
+void DependencyManager::AlterObject(CatalogTransaction transaction, CatalogEntry &old_obj, CatalogEntry &new_obj) {
 	D_ASSERT(dependents_map.find(old_obj) != dependents_map.end());
 	D_ASSERT(dependencies_map.find(old_obj) != dependencies_map.end());
 
 	// first check the objects that depend on this object
-	vector<CatalogEntry *> owned_objects_to_add;
+	catalog_entry_vector_t owned_objects_to_add;
 	auto &dependent_objects = dependents_map[old_obj];
 	for (auto &dep : dependent_objects) {
 		// look up the entry in the catalog set
-		auto &catalog_set = *dep.entry->set;
-		idx_t entry_index;
-		CatalogEntry *dependency_entry;
-		if (!catalog_set.GetEntryInternal(context, dep.entry->name, entry_index, dependency_entry)) {
+		auto &entry = dep.entry.get();
+		auto &catalog_set = *entry.set;
+		auto dependency_entry = catalog_set.GetEntryInternal(transaction, entry.name, nullptr);
+		if (!dependency_entry) {
 			// the dependent object was already deleted, no conflict
 			continue;
 		}
@@ -3462,20 +4505,21 @@ void DependencyManager::AlterObject(ClientContext &context, CatalogEntry *old_ob
 		}
 		// conflict: attempting to alter this object but the dependent object still exists
 		// no cascade and there are objects that depend on this object: throw error
-		throw CatalogException("Cannot alter entry \"%s\" because there are entries that "
-		                       "depend on it.",
-		                       old_obj->name);
+		throw DependencyException("Cannot alter entry \"%s\" because there are entries that "
+		                          "depend on it.",
+		                          old_obj.name);
 	}
 	// add the new object to the dependents_map of each object that it depends on
 	auto &old_dependencies = dependencies_map[old_obj];
-	vector<CatalogEntry *> to_delete;
-	for (auto &dependency : old_dependencies) {
-		if (dependency->type == CatalogType::TYPE_ENTRY) {
-			auto user_type = (TypeCatalogEntry *)dependency;
-			auto table = (TableCatalogEntry *)new_obj;
+	catalog_entry_vector_t to_delete;
+	for (auto &dep : old_dependencies) {
+		auto &dependency = dep.get();
+		if (dependency.type == CatalogType::TYPE_ENTRY) {
+			auto &user_type = dependency.Cast<TypeCatalogEntry>();
+			auto &table = new_obj.Cast<TableCatalogEntry>();
 			bool deleted_dependency = true;
-			for (auto &column : table->columns) {
-				if (column.Type() == user_type->user_type) {
+			for (auto &column : table.GetColumns().Logical()) {
+				if (column.Type() == user_type.user_type) {
 					deleted_dependency = false;
 					break;
 				}
@@ -3487,19 +4531,20 @@ void DependencyManager::AlterObject(ClientContext &context, CatalogEntry *old_ob
 		}
 		dependents_map[dependency].insert(new_obj);
 	}
-	for (auto &dependency : to_delete) {
+	for (auto &dep : to_delete) {
+		auto &dependency = dep.get();
 		old_dependencies.erase(dependency);
 		dependents_map[dependency].erase(old_obj);
 	}
 
 	// We might have to add a type dependency
-	vector<CatalogEntry *> to_add;
-	if (new_obj->type == CatalogType::TABLE_ENTRY) {
-		auto table = (TableCatalogEntry *)new_obj;
-		for (auto &column : table->columns) {
-			auto user_type_catalog = LogicalType::GetCatalog(column.Type());
+	catalog_entry_vector_t to_add;
+	if (new_obj.type == CatalogType::TABLE_ENTRY) {
+		auto &table = new_obj.Cast<TableCatalogEntry>();
+		for (auto &column : table.GetColumns().Logical()) {
+			auto user_type_catalog = EnumType::GetCatalog(column.Type());
 			if (user_type_catalog) {
-				to_add.push_back(user_type_catalog);
+				to_add.push_back(*user_type_catalog);
 			}
 		}
 	}
@@ -3519,12 +4564,12 @@ void DependencyManager::AlterObject(ClientContext &context, CatalogEntry *old_ob
 	}
 }
 
-void DependencyManager::EraseObject(CatalogEntry *object) {
+void DependencyManager::EraseObject(CatalogEntry &object) {
 	// obtain the writing lock
 	EraseObjectInternal(object);
 }
 
-void DependencyManager::EraseObjectInternal(CatalogEntry *object) {
+void DependencyManager::EraseObjectInternal(CatalogEntry &object) {
 	if (dependents_map.find(object) == dependents_map.end()) {
 		// dependencies already removed
 		return;
@@ -3544,8 +4589,8 @@ void DependencyManager::EraseObjectInternal(CatalogEntry *object) {
 	dependencies_map.erase(object);
 }
 
-void DependencyManager::Scan(const std::function<void(CatalogEntry *, CatalogEntry *, DependencyType)> &callback) {
-	lock_guard<mutex> write_lock(catalog.write_lock);
+void DependencyManager::Scan(const std::function<void(CatalogEntry &, CatalogEntry &, DependencyType)> &callback) {
+	lock_guard<mutex> write_lock(catalog.GetWriteLock());
 	for (auto &entry : dependents_map) {
 		for (auto &dependent : entry.second) {
 			callback(entry.first, dependent.entry, dependent.dependency_type);
@@ -3553,27 +4598,27 @@ void DependencyManager::Scan(const std::function<void(CatalogEntry *, CatalogEnt
 	}
 }
 
-void DependencyManager::AddOwnership(ClientContext &context, CatalogEntry *owner, CatalogEntry *entry) {
+void DependencyManager::AddOwnership(CatalogTransaction transaction, CatalogEntry &owner, CatalogEntry &entry) {
 	// lock the catalog for writing
-	lock_guard<mutex> write_lock(catalog.write_lock);
+	lock_guard<mutex> write_lock(catalog.GetWriteLock());
 
 	// If the owner is already owned by something else, throw an error
 	for (auto &dep : dependents_map[owner]) {
 		if (dep.dependency_type == DependencyType::DEPENDENCY_OWNED_BY) {
-			throw CatalogException(owner->name + " already owned by " + dep.entry->name);
+			throw DependencyException(owner.name + " already owned by " + dep.entry.get().name);
 		}
 	}
 
 	// If the entry is already owned, throw an error
 	for (auto &dep : dependents_map[entry]) {
 		// if the entry is already owned, throw error
-		if (dep.entry != owner) {
-			throw CatalogException(entry->name + " already depends on " + dep.entry->name);
+		if (&dep.entry.get() != &owner) {
+			throw DependencyException(entry.name + " already depends on " + dep.entry.get().name);
 		}
 		// if the entry owns the owner, throw error
-		if (dep.entry == owner && dep.dependency_type == DependencyType::DEPENDENCY_OWNS) {
-			throw CatalogException(entry->name + " already owns " + owner->name +
-			                       ". Cannot have circular dependencies");
+		if (&dep.entry.get() == &owner && dep.dependency_type == DependencyType::DEPENDENCY_OWNS) {
+			throw DependencyException(entry.name + " already owns " + owner.name +
+			                          ". Cannot have circular dependencies");
 		}
 	}
 
@@ -3590,27 +4635,1425 @@ void DependencyManager::AddOwnership(ClientContext &context, CatalogEntry *owner
 
 
 
+
+
+
+
+
+#ifndef DISABLE_CORE_FUNCTIONS_EXTENSION
+
+#endif
+
+namespace duckdb {
+
+DuckCatalog::DuckCatalog(AttachedDatabase &db)
+    : Catalog(db), dependency_manager(make_uniq<DependencyManager>(*this)),
+      schemas(make_uniq<CatalogSet>(*this, make_uniq<DefaultSchemaGenerator>(*this))) {
+}
+
+DuckCatalog::~DuckCatalog() {
+}
+
+void DuckCatalog::Initialize(bool load_builtin) {
+	// first initialize the base system catalogs
+	// these are never written to the WAL
+	// we start these at 1 because deleted entries default to 0
+	auto data = CatalogTransaction::GetSystemTransaction(GetDatabase());
+
+	// create the default schema
+	CreateSchemaInfo info;
+	info.schema = DEFAULT_SCHEMA;
+	info.internal = true;
+	CreateSchema(data, info);
+
+	if (load_builtin) {
+		// initialize default functions
+		BuiltinFunctions builtin(data, *this);
+		builtin.Initialize();
+
+#ifndef DISABLE_CORE_FUNCTIONS_EXTENSION
+		CoreFunctions::RegisterFunctions(*this, data);
+#endif
+	}
+
+	Verify();
+}
+
+bool DuckCatalog::IsDuckCatalog() {
+	return true;
+}
+
+//===--------------------------------------------------------------------===//
+// Schema
+//===--------------------------------------------------------------------===//
+optional_ptr<CatalogEntry> DuckCatalog::CreateSchemaInternal(CatalogTransaction transaction, CreateSchemaInfo &info) {
+	DependencyList dependencies;
+	auto entry = make_uniq<DuckSchemaEntry>(*this, info.schema, info.internal);
+	auto result = entry.get();
+	if (!schemas->CreateEntry(transaction, info.schema, std::move(entry), dependencies)) {
+		return nullptr;
+	}
+	return (CatalogEntry *)result;
+}
+
+optional_ptr<CatalogEntry> DuckCatalog::CreateSchema(CatalogTransaction transaction, CreateSchemaInfo &info) {
+	D_ASSERT(!info.schema.empty());
+	auto result = CreateSchemaInternal(transaction, info);
+	if (!result) {
+		switch (info.on_conflict) {
+		case OnCreateConflict::ERROR_ON_CONFLICT:
+			throw CatalogException("Schema with name %s already exists!", info.schema);
+		case OnCreateConflict::REPLACE_ON_CONFLICT: {
+			DropInfo drop_info;
+			drop_info.type = CatalogType::SCHEMA_ENTRY;
+			drop_info.catalog = info.catalog;
+			drop_info.name = info.schema;
+			DropSchema(transaction, drop_info);
+			result = CreateSchemaInternal(transaction, info);
+			if (!result) {
+				throw InternalException("Failed to create schema entry in CREATE_OR_REPLACE");
+			}
+			break;
+		}
+		case OnCreateConflict::IGNORE_ON_CONFLICT:
+			break;
+		default:
+			throw InternalException("Unsupported OnCreateConflict for CreateSchema");
+		}
+		return nullptr;
+	}
+	return result;
+}
+
+void DuckCatalog::DropSchema(CatalogTransaction transaction, DropInfo &info) {
+	D_ASSERT(!info.name.empty());
+	ModifyCatalog();
+	if (!schemas->DropEntry(transaction, info.name, info.cascade)) {
+		if (info.if_not_found == OnEntryNotFound::THROW_EXCEPTION) {
+			throw CatalogException("Schema with name \"%s\" does not exist!", info.name);
+		}
+	}
+}
+
+void DuckCatalog::DropSchema(ClientContext &context, DropInfo &info) {
+	DropSchema(GetCatalogTransaction(context), info);
+}
+
+void DuckCatalog::ScanSchemas(ClientContext &context, std::function<void(SchemaCatalogEntry &)> callback) {
+	schemas->Scan(GetCatalogTransaction(context),
+	              [&](CatalogEntry &entry) { callback(entry.Cast<SchemaCatalogEntry>()); });
+}
+
+void DuckCatalog::ScanSchemas(std::function<void(SchemaCatalogEntry &)> callback) {
+	schemas->Scan([&](CatalogEntry &entry) { callback(entry.Cast<SchemaCatalogEntry>()); });
+}
+
+optional_ptr<SchemaCatalogEntry> DuckCatalog::GetSchema(CatalogTransaction transaction, const string &schema_name,
+                                                        OnEntryNotFound if_not_found, QueryErrorContext error_context) {
+	D_ASSERT(!schema_name.empty());
+	auto entry = schemas->GetEntry(transaction, schema_name);
+	if (!entry) {
+		if (if_not_found == OnEntryNotFound::THROW_EXCEPTION) {
+			throw CatalogException(error_context.FormatError("Schema with name %s does not exist!", schema_name));
+		}
+		return nullptr;
+	}
+	return &entry->Cast<SchemaCatalogEntry>();
+}
+
+DatabaseSize DuckCatalog::GetDatabaseSize(ClientContext &context) {
+	return db.GetStorageManager().GetDatabaseSize();
+}
+
+bool DuckCatalog::InMemory() {
+	return db.GetStorageManager().InMemory();
+}
+
+string DuckCatalog::GetDBPath() {
+	return db.GetStorageManager().GetDBPath();
+}
+
+void DuckCatalog::Verify() {
+#ifdef DEBUG
+	schemas->Verify(*this);
+#endif
+}
+
+} // namespace duckdb
+
+
+
+
+namespace duckdb {
+
+string SimilarCatalogEntry::GetQualifiedName(bool qualify_catalog, bool qualify_schema) const {
+	D_ASSERT(Found());
+	string result;
+	if (qualify_catalog) {
+		result += schema->catalog.GetName();
+	}
+	if (qualify_schema) {
+		if (!result.empty()) {
+			result += ".";
+		}
+		result += schema->name;
+	}
+	if (!result.empty()) {
+		result += ".";
+	}
+	result += name;
+	return result;
+}
+
+} // namespace duckdb
+
+
+
+
+
+
+
+
+
+
+
+#include <string.h>
+#include <stdlib.h>
+
+// We gotta leak the symbols of the init function
+duckdb_adbc::AdbcStatusCode duckdb_adbc_init(size_t count, struct duckdb_adbc::AdbcDriver *driver,
+                                             struct duckdb_adbc::AdbcError *error) {
+	if (!driver) {
+		return ADBC_STATUS_INVALID_ARGUMENT;
+	}
+
+	driver->DatabaseNew = duckdb_adbc::DatabaseNew;
+	driver->DatabaseSetOption = duckdb_adbc::DatabaseSetOption;
+	driver->DatabaseInit = duckdb_adbc::DatabaseInit;
+	driver->DatabaseRelease = duckdb_adbc::DatabaseRelease;
+	driver->ConnectionNew = duckdb_adbc::ConnectionNew;
+	driver->ConnectionSetOption = duckdb_adbc::ConnectionSetOption;
+	driver->ConnectionInit = duckdb_adbc::ConnectionInit;
+	driver->ConnectionRelease = duckdb_adbc::ConnectionRelease;
+	driver->ConnectionGetTableTypes = duckdb_adbc::ConnectionGetTableTypes;
+	driver->StatementNew = duckdb_adbc::StatementNew;
+	driver->StatementRelease = duckdb_adbc::StatementRelease;
+	//	driver->StatementBind = duckdb::adbc::StatementBind;
+	driver->StatementBindStream = duckdb_adbc::StatementBindStream;
+	driver->StatementExecuteQuery = duckdb_adbc::StatementExecuteQuery;
+	driver->StatementPrepare = duckdb_adbc::StatementPrepare;
+	driver->StatementSetOption = duckdb_adbc::StatementSetOption;
+	driver->StatementSetSqlQuery = duckdb_adbc::StatementSetSqlQuery;
+	driver->ConnectionGetObjects = duckdb_adbc::ConnectionGetObjects;
+	return ADBC_STATUS_OK;
+}
+
+namespace duckdb_adbc {
+#define CHECK_TRUE(p, e, m)                                                                                            \
+	if (!(p)) {                                                                                                        \
+		if (e) {                                                                                                       \
+			e->message = strdup(m); /* TODO Set cleanup callback */                                                    \
+		}                                                                                                              \
+		return ADBC_STATUS_INVALID_ARGUMENT;                                                                           \
+	}
+
+#define CHECK_RES(res, e, m)                                                                                           \
+	if (res != DuckDBSuccess) {                                                                                        \
+		if (e) {                                                                                                       \
+			e->message = strdup(m);                                                                                    \
+		}                                                                                                              \
+		return ADBC_STATUS_INTERNAL;                                                                                   \
+	} else {                                                                                                           \
+		return ADBC_STATUS_OK;                                                                                         \
+	}
+
+struct DuckDBAdbcDatabaseWrapper {
+	//! The DuckDB Database Configuration
+	::duckdb_config config;
+	//! The DuckDB Database
+	::duckdb_database database;
+	//! Path of Disk-Based Database or :memory: database
+	std::string path;
+};
+
+AdbcStatusCode DatabaseNew(struct AdbcDatabase *database, struct AdbcError *error) {
+	CHECK_TRUE(database, error, "Missing database object");
+
+	database->private_data = nullptr;
+	// you can't malloc a struct with a non-trivial C++ constructor
+	// and std::string has a non-trivial constructor. so we need
+	// to use new and delete rather than malloc and free.
+	auto wrapper = new DuckDBAdbcDatabaseWrapper;
+	CHECK_TRUE(wrapper, error, "Allocation error");
+
+	database->private_data = wrapper;
+	auto res = duckdb_create_config(&wrapper->config);
+	CHECK_RES(res, error, "Failed to allocate");
+}
+
+AdbcStatusCode DatabaseSetOption(struct AdbcDatabase *database, const char *key, const char *value,
+                                 struct AdbcError *error) {
+	CHECK_TRUE(database, error, "Missing database object");
+	CHECK_TRUE(key, error, "Missing key");
+
+	auto wrapper = (DuckDBAdbcDatabaseWrapper *)database->private_data;
+	if (strcmp(key, "path") == 0) {
+		wrapper->path = value;
+		return ADBC_STATUS_OK;
+	}
+	auto res = duckdb_set_config(wrapper->config, key, value);
+
+	CHECK_RES(res, error, "Failed to set configuration option");
+}
+
+AdbcStatusCode DatabaseInit(struct AdbcDatabase *database, struct AdbcError *error) {
+	char *errormsg;
+	// TODO can we set the database path via option, too? Does not look like it...
+	auto wrapper = (DuckDBAdbcDatabaseWrapper *)database->private_data;
+	auto res = duckdb_open_ext(wrapper->path.c_str(), &wrapper->database, wrapper->config, &errormsg);
+
+	// TODO this leaks memory because errormsg is malloc-ed
+	CHECK_RES(res, error, errormsg);
+}
+
+AdbcStatusCode DatabaseRelease(struct AdbcDatabase *database, struct AdbcError *error) {
+
+	if (database && database->private_data) {
+		auto wrapper = (DuckDBAdbcDatabaseWrapper *)database->private_data;
+
+		duckdb_close(&wrapper->database);
+		duckdb_destroy_config(&wrapper->config);
+		delete wrapper;
+		database->private_data = nullptr;
+	}
+	return ADBC_STATUS_OK;
+}
+
+AdbcStatusCode ConnectionNew(struct AdbcConnection *connection, struct AdbcError *error) {
+
+	CHECK_TRUE(connection, error, "Missing connection object");
+	connection->private_data = nullptr;
+	return ADBC_STATUS_OK;
+}
+
+AdbcStatusCode ConnectionSetOption(struct AdbcConnection *connection, const char *key, const char *value,
+                                   struct AdbcError *error) {
+	// there are no connection-level options that need to be set before connecting
+	return ADBC_STATUS_OK;
+}
+
+AdbcStatusCode ConnectionInit(struct AdbcConnection *connection, struct AdbcDatabase *database,
+                              struct AdbcError *error) {
+	CHECK_TRUE(database, error, "Missing database");
+	CHECK_TRUE(database->private_data, error, "Invalid database");
+	CHECK_TRUE(connection, error, "Missing connection");
+	auto database_wrapper = (DuckDBAdbcDatabaseWrapper *)database->private_data;
+
+	connection->private_data = nullptr;
+	auto res = duckdb_connect(database_wrapper->database, (duckdb_connection *)&connection->private_data);
+	CHECK_RES(res, error, "Failed to connect to Database");
+}
+
+AdbcStatusCode ConnectionRelease(struct AdbcConnection *connection, struct AdbcError *error) {
+	if (connection && connection->private_data) {
+		duckdb_disconnect((duckdb_connection *)&connection->private_data);
+		connection->private_data = nullptr;
+	}
+	return ADBC_STATUS_OK;
+}
+
+// some stream callbacks
+
+static int get_schema(struct ArrowArrayStream *stream, struct ArrowSchema *out) {
+	if (!stream || !stream->private_data || !out) {
+		return DuckDBError;
+	}
+	return duckdb_query_arrow_schema((duckdb_arrow)stream->private_data, (duckdb_arrow_schema *)&out);
+}
+
+static int get_next(struct ArrowArrayStream *stream, struct ArrowArray *out) {
+	if (!stream || !stream->private_data || !out) {
+		return DuckDBError;
+	}
+	out->release = nullptr;
+
+	return duckdb_query_arrow_array((duckdb_arrow)stream->private_data, (duckdb_arrow_array *)&out);
+}
+
+void release(struct ArrowArrayStream *stream) {
+	if (!stream || !stream->release) {
+		return;
+	}
+	stream->release = nullptr;
+	if (stream->private_data) {
+		duckdb_destroy_arrow((duckdb_arrow *)&stream->private_data);
+		stream->private_data = nullptr;
+	}
+}
+
+const char *get_last_error(struct ArrowArrayStream *stream) {
+	if (!stream) {
+		return nullptr;
+	}
+	return nullptr;
+	// return duckdb_query_arrow_error(stream);
+}
+
+// this is an evil hack, normally we would need a stream factory here, but its probably much easier if the adbc clients
+// just hand over a stream
+
+duckdb::unique_ptr<duckdb::ArrowArrayStreamWrapper>
+stream_produce(uintptr_t factory_ptr,
+               std::pair<std::unordered_map<idx_t, std::string>, std::vector<std::string>> &project_columns,
+               duckdb::TableFilterSet *filters) {
+
+	// TODO this will ignore any projections or filters but since we don't expose the scan it should be sort of fine
+	auto res = duckdb::make_uniq<duckdb::ArrowArrayStreamWrapper>();
+	res->arrow_array_stream = *(ArrowArrayStream *)factory_ptr;
+	return res;
+}
+
+void stream_schema(uintptr_t factory_ptr, duckdb::ArrowSchemaWrapper &schema) {
+	auto stream = (ArrowArrayStream *)factory_ptr;
+	get_schema(stream, &schema.arrow_schema);
+}
+
+AdbcStatusCode Ingest(duckdb_connection connection, const char *table_name, struct ArrowArrayStream *input,
+                      struct AdbcError *error) {
+
+	CHECK_TRUE(connection, error, "Invalid connection");
+	CHECK_TRUE(input, error, "Missing input arrow stream pointer");
+	CHECK_TRUE(table_name, error, "Missing database object name");
+
+	try {
+		// TODO evil cast, do we need a way to do this from the C api?
+		auto cconn = (duckdb::Connection *)connection;
+		cconn
+		    ->TableFunction("arrow_scan",
+		                    {duckdb::Value::POINTER((uintptr_t)input),
+		                     duckdb::Value::POINTER((uintptr_t)stream_produce),
+		                     duckdb::Value::POINTER((uintptr_t)get_schema)}) // TODO make this a parameter somewhere
+		    ->Create(table_name); // TODO this should probably be a temp table
+		// After creating a table, the arrow array stream is released. Hence we must set it as released to avoid
+		// double-releasing it
+		input->release = nullptr;
+	} catch (std::exception &ex) {
+		if (error) {
+			error->message = strdup(ex.what());
+		}
+		return ADBC_STATUS_INTERNAL;
+	} catch (...) {
+		return ADBC_STATUS_INTERNAL;
+	}
+	return ADBC_STATUS_OK;
+}
+
+struct DuckDBAdbcStatementWrapper {
+	::duckdb_connection connection;
+	::duckdb_arrow result;
+	::duckdb_prepared_statement statement;
+	char *ingestion_table_name;
+	ArrowArrayStream *ingestion_stream;
+};
+
+AdbcStatusCode StatementNew(struct AdbcConnection *connection, struct AdbcStatement *statement,
+                            struct AdbcError *error) {
+
+	CHECK_TRUE(connection, error, "Missing connection object");
+	CHECK_TRUE(connection->private_data, error, "Invalid connection object");
+	CHECK_TRUE(statement, error, "Missing statement object");
+
+	statement->private_data = nullptr;
+
+	auto statement_wrapper = (DuckDBAdbcStatementWrapper *)malloc(sizeof(DuckDBAdbcStatementWrapper));
+	CHECK_TRUE(statement_wrapper, error, "Allocation error");
+
+	statement->private_data = statement_wrapper;
+	statement_wrapper->connection = (duckdb_connection)connection->private_data;
+	statement_wrapper->statement = nullptr;
+	statement_wrapper->result = nullptr;
+	statement_wrapper->ingestion_stream = nullptr;
+	statement_wrapper->ingestion_table_name = nullptr;
+	return ADBC_STATUS_OK;
+}
+
+AdbcStatusCode StatementRelease(struct AdbcStatement *statement, struct AdbcError *error) {
+
+	if (statement && statement->private_data) {
+		auto wrapper = (DuckDBAdbcStatementWrapper *)statement->private_data;
+		if (wrapper->statement) {
+			duckdb_destroy_prepare(&wrapper->statement);
+			wrapper->statement = nullptr;
+		}
+		if (wrapper->result) {
+			duckdb_destroy_arrow(&wrapper->result);
+			wrapper->result = nullptr;
+		}
+		if (wrapper->ingestion_stream) {
+			wrapper->ingestion_stream->release(wrapper->ingestion_stream);
+			wrapper->ingestion_stream->release = nullptr;
+			wrapper->ingestion_stream = nullptr;
+		}
+		if (wrapper->ingestion_table_name) {
+			free(wrapper->ingestion_table_name);
+			wrapper->ingestion_table_name = nullptr;
+		}
+		free(statement->private_data);
+		statement->private_data = nullptr;
+	}
+	return ADBC_STATUS_OK;
+}
+
+AdbcStatusCode StatementExecuteQuery(struct AdbcStatement *statement, struct ArrowArrayStream *out,
+                                     int64_t *rows_affected, struct AdbcError *error) {
+	CHECK_TRUE(statement, error, "Missing statement object");
+	CHECK_TRUE(statement->private_data, error, "Invalid statement object");
+	auto wrapper = (DuckDBAdbcStatementWrapper *)statement->private_data;
+
+	// TODO: Set affected rows, careful with early return
+	if (rows_affected) {
+		*rows_affected = 0;
+	}
+
+	if (wrapper->ingestion_stream && wrapper->ingestion_table_name) {
+		auto stream = wrapper->ingestion_stream;
+		wrapper->ingestion_stream = nullptr;
+		return Ingest(wrapper->connection, wrapper->ingestion_table_name, stream, error);
+	}
+
+	auto res = duckdb_execute_prepared_arrow(wrapper->statement, &wrapper->result);
+	CHECK_TRUE(res == DuckDBSuccess, error, duckdb_query_arrow_error(wrapper->result));
+
+	if (out) {
+		out->private_data = wrapper->result;
+		out->get_schema = get_schema;
+		out->get_next = get_next;
+		out->release = release;
+		out->get_last_error = get_last_error;
+
+		// because we handed out the stream pointer its no longer our responsibility to destroy it in
+		// AdbcStatementRelease, this is now done in release()
+		wrapper->result = nullptr;
+	}
+
+	return ADBC_STATUS_OK;
+}
+
+// this is a nop for us
+AdbcStatusCode StatementPrepare(struct AdbcStatement *statement, struct AdbcError *error) {
+	CHECK_TRUE(statement, error, "Missing statement object");
+	CHECK_TRUE(statement->private_data, error, "Invalid statement object");
+	return ADBC_STATUS_OK;
+}
+
+AdbcStatusCode StatementSetSqlQuery(struct AdbcStatement *statement, const char *query, struct AdbcError *error) {
+	CHECK_TRUE(statement, error, "Missing statement object");
+	CHECK_TRUE(query, error, "Missing query");
+
+	auto wrapper = (DuckDBAdbcStatementWrapper *)statement->private_data;
+	auto res = duckdb_prepare(wrapper->connection, query, &wrapper->statement);
+
+	CHECK_RES(res, error, duckdb_prepare_error(wrapper->statement));
+}
+
+AdbcStatusCode StatementBindStream(struct AdbcStatement *statement, struct ArrowArrayStream *values,
+                                   struct AdbcError *error) {
+	CHECK_TRUE(statement, error, "Missing statement object");
+	CHECK_TRUE(values, error, "Missing stream object");
+	auto wrapper = (DuckDBAdbcStatementWrapper *)statement->private_data;
+	wrapper->ingestion_stream = values;
+	return ADBC_STATUS_OK;
+}
+
+AdbcStatusCode StatementSetOption(struct AdbcStatement *statement, const char *key, const char *value,
+                                  struct AdbcError *error) {
+	CHECK_TRUE(statement, error, "Missing statement object");
+	CHECK_TRUE(key, error, "Missing key object");
+	auto wrapper = (DuckDBAdbcStatementWrapper *)statement->private_data;
+
+	if (strcmp(key, ADBC_INGEST_OPTION_TARGET_TABLE) == 0) {
+		wrapper->ingestion_table_name = strdup(value);
+		return ADBC_STATUS_OK;
+	}
+	return ADBC_STATUS_INVALID_ARGUMENT;
+}
+
+static AdbcStatusCode QueryInternal(struct AdbcConnection *connection, struct ArrowArrayStream *out, const char *query,
+                                    struct AdbcError *error) {
+	AdbcStatusCode res;
+	AdbcStatement statement;
+
+	res = StatementNew(connection, &statement, error);
+	CHECK_TRUE(!res, error, "unable to initialize statement");
+
+	res = StatementSetSqlQuery(&statement, query, error);
+	CHECK_TRUE(!res, error, "unable to initialize statement");
+
+	res = StatementExecuteQuery(&statement, out, NULL, error);
+	CHECK_TRUE(!res, error, "unable to execute statement");
+
+	return ADBC_STATUS_OK;
+}
+
+AdbcStatusCode ConnectionGetObjects(struct AdbcConnection *connection, int depth, const char *catalog,
+                                    const char *db_schema, const char *table_name, const char **table_type,
+                                    const char *column_name, struct ArrowArrayStream *out, struct AdbcError *error) {
+	CHECK_TRUE(catalog == nullptr || strcmp(catalog, "duckdb") == 0, error, "catalog must be NULL or 'duckdb'");
+	CHECK_TRUE(table_type == nullptr, error, "table types parameter not yet supported");
+
+	auto q = duckdb::StringUtil::Format(R"(
+SELECT table_schema db_schema_name, LIST(table_schema_list) db_schema_tables FROM (
+	SELECT table_schema, { table_name : table_name, table_columns : LIST({column_name : column_name, ordinal_position : ordinal_position + 1, remarks : ''})} table_schema_list FROM information_schema.columns WHERE table_schema LIKE '%s' AND table_name LIKE '%s' AND column_name LIKE '%s' GROUP BY table_schema, table_name
+	) GROUP BY table_schema;
+)",
+	                                    db_schema ? db_schema : "%", table_name ? table_name : "%",
+	                                    column_name ? column_name : "%");
+
+	return QueryInternal(connection, out, q.c_str(), error);
+}
+
+//
+// AdbcStatusCode ConnectionGetCatalogs(struct AdbcConnection *connection, struct AdbcStatement *statement,
+//                                         struct AdbcError *error) {
+//	const char *q = "SELECT 'duckdb' catalog_name";
+//
+//	return QueryInternal(connection, statement, q, error);
+//}
+//
+// AdbcStatusCode ConnectionGetDbSchemas(struct AdbcConnection *connection, struct AdbcStatement *statement,
+//                                          struct AdbcError *error) {
+//	const char *q = "SELECT 'duckdb' catalog_name, schema_name db_schema_name FROM information_schema.schemata ORDER "
+//	                "BY schema_name";
+//	return QueryInternal(connection, statement, q, error);
+//}
+AdbcStatusCode ConnectionGetTableTypes(struct AdbcConnection *connection, struct ArrowArrayStream *out,
+                                       struct AdbcError *error) {
+	const char *q = "SELECT DISTINCT table_type FROM information_schema.tables ORDER BY table_type";
+	return QueryInternal(connection, out, q, error);
+}
+//
+// AdbcStatusCode ConnectionGetTables(struct AdbcConnection *connection, const char *catalog, const char *db_schema,
+//                                       const char *table_name, const char **table_types,
+//                                       struct AdbcStatement *statement, struct AdbcError *error) {
+//
+//	CHECK_TRUE(catalog == nullptr || strcmp(catalog, "duckdb") == 0, error, "catalog must be NULL or 'duckdb'");
+//
+//	// let's wait for https://github.com/lidavidm/arrow/issues/6
+//	CHECK_TRUE(table_types == nullptr, error, "table types parameter not yet supported");
+//	auto q = duckdb::StringUtil::Format(
+//	    "SELECT 'duckdb' catalog_name, table_schema db_schema_name, table_name, table_type FROM "
+//	    "information_schema.tables WHERE table_schema LIKE '%s' AND table_name LIKE '%s' ORDER BY table_schema, "
+//	    "table_name",
+//	    db_schema ? db_schema : "%", table_name ? table_name : "%");
+//
+//	return QueryInternal(connection, statement, q.c_str(), error);
+//}
+
+} // namespace duckdb_adbc
+// Licensed to the Apache Software Foundation (ASF) under one
+// or more contributor license agreements.  See the NOTICE file
+// distributed with this work for additional information
+// regarding copyright ownership.  The ASF licenses this file
+// to you under the Apache License, Version 2.0 (the
+// "License"); you may not use this file except in compliance
+// with the License.  You may obtain a copy of the License at
+//
+//   http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing,
+// software distributed under the License is distributed on an
+// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+// KIND, either express or implied.  See the License for the
+// specific language governing permissions and limitations
+// under the License.
+
+
+
+
+
+#include <algorithm>
+#include <cstring>
+#include <string>
+#include <unordered_map>
+#include <utility>
+
+#if defined(_WIN32)
+#include <windows.h> // Must come first
+
+#include <libloaderapi.h>
+#include <strsafe.h>
+#else
+#include <dlfcn.h>
+#endif // defined(_WIN32)
+
+namespace duckdb_adbc {
+
+// Platform-specific helpers
+
+#if defined(_WIN32)
+/// Append a description of the Windows error to the buffer.
+void GetWinError(std::string *buffer) {
+	DWORD rc = GetLastError();
+	LPVOID message;
+
+	FormatMessage(FORMAT_MESSAGE_ALLOCATE_BUFFER | FORMAT_MESSAGE_FROM_SYSTEM | FORMAT_MESSAGE_IGNORE_INSERTS,
+	              /*lpSource=*/nullptr, rc, MAKELANGID(LANG_NEUTRAL, SUBLANG_DEFAULT),
+	              reinterpret_cast<LPSTR>(&message), /*nSize=*/0, /*Arguments=*/nullptr);
+
+	(*buffer) += '(';
+	(*buffer) += std::to_string(rc);
+	(*buffer) += ") ";
+	(*buffer) += reinterpret_cast<char *>(message);
+	LocalFree(message);
+}
+
+#endif // defined(_WIN32)
+
+// Error handling
+
+void ReleaseError(struct AdbcError *error) {
+	if (error) {
+		if (error->message)
+			delete[] error->message;
+		error->message = nullptr;
+		error->release = nullptr;
+	}
+}
+
+void SetError(struct AdbcError *error, const std::string &message) {
+	if (!error)
+		return;
+	if (error->message) {
+		// Append
+		std::string buffer = error->message;
+		buffer.reserve(buffer.size() + message.size() + 1);
+		buffer += '\n';
+		buffer += message;
+		error->release(error);
+
+		error->message = new char[buffer.size() + 1];
+		buffer.copy(error->message, buffer.size());
+		error->message[buffer.size()] = '\0';
+	} else {
+		error->message = new char[message.size() + 1];
+		message.copy(error->message, message.size());
+		error->message[message.size()] = '\0';
+	}
+	error->release = ReleaseError;
+}
+
+// Driver state
+
+/// Hold the driver DLL and the driver release callback in the driver struct.
+struct ManagerDriverState {
+	// The original release callback
+	AdbcStatusCode (*driver_release)(struct AdbcDriver *driver, struct AdbcError *error);
+
+#if defined(_WIN32)
+	// The loaded DLL
+	HMODULE handle;
+#endif // defined(_WIN32)
+};
+
+/// Unload the driver DLL.
+static AdbcStatusCode ReleaseDriver(struct AdbcDriver *driver, struct AdbcError *error) {
+	AdbcStatusCode status = ADBC_STATUS_OK;
+
+	if (!driver->private_manager)
+		return status;
+	ManagerDriverState *state = reinterpret_cast<ManagerDriverState *>(driver->private_manager);
+
+	if (state->driver_release) {
+		status = state->driver_release(driver, error);
+	}
+
+#if defined(_WIN32)
+	// TODO(apache/arrow-adbc#204): causes tests to segfault
+	// if (!FreeLibrary(state->handle)) {
+	//   std::string message = "FreeLibrary() failed: ";
+	//   GetWinError(&message);
+	//   SetError(error, message);
+	// }
+#endif // defined(_WIN32)
+
+	driver->private_manager = nullptr;
+	delete state;
+	return status;
+}
+
+// Default stubs
+
+AdbcStatusCode ConnectionCommit(struct AdbcConnection *, struct AdbcError *error) {
+	return ADBC_STATUS_NOT_IMPLEMENTED;
+}
+
+AdbcStatusCode ConnectionGetInfo(struct AdbcConnection *connection, uint32_t *info_codes, size_t info_codes_length,
+                                 struct ArrowArrayStream *out, struct AdbcError *error) {
+	return ADBC_STATUS_NOT_IMPLEMENTED;
+}
+
+AdbcStatusCode ConnectionGetTableSchema(struct AdbcConnection *, const char *, const char *, const char *,
+                                        struct ArrowSchema *, struct AdbcError *error) {
+	return ADBC_STATUS_NOT_IMPLEMENTED;
+}
+
+AdbcStatusCode ConnectionReadPartition(struct AdbcConnection *connection, const uint8_t *serialized_partition,
+                                       size_t serialized_length, struct ArrowArrayStream *out,
+                                       struct AdbcError *error) {
+	return ADBC_STATUS_NOT_IMPLEMENTED;
+}
+
+AdbcStatusCode ConnectionRollback(struct AdbcConnection *, struct AdbcError *error) {
+	return ADBC_STATUS_NOT_IMPLEMENTED;
+}
+
+AdbcStatusCode StatementBind(struct AdbcStatement *, struct ArrowArray *, struct ArrowSchema *,
+                             struct AdbcError *error) {
+	return ADBC_STATUS_NOT_IMPLEMENTED;
+}
+
+AdbcStatusCode StatementExecutePartitions(struct AdbcStatement *statement, struct ArrowSchema *schema,
+                                          struct AdbcPartitions *partitions, int64_t *rows_affected,
+                                          struct AdbcError *error) {
+	return ADBC_STATUS_NOT_IMPLEMENTED;
+}
+
+AdbcStatusCode StatementGetParameterSchema(struct AdbcStatement *statement, struct ArrowSchema *schema,
+                                           struct AdbcError *error) {
+	return ADBC_STATUS_NOT_IMPLEMENTED;
+}
+AdbcStatusCode StatementSetSubstraitPlan(struct AdbcStatement *, const uint8_t *, size_t, struct AdbcError *error) {
+	return ADBC_STATUS_NOT_IMPLEMENTED;
+}
+
+/// Temporary state while the database is being configured.
+struct TempDatabase {
+	std::unordered_map<std::string, std::string> options;
+	std::string driver;
+	// Default name (see adbc.h)
+	std::string entrypoint = "AdbcDriverInit";
+	AdbcDriverInitFunc init_func = nullptr;
+};
+
+/// Temporary state while the database is being configured.
+struct TempConnection {
+	std::unordered_map<std::string, std::string> options;
+};
+
+// Direct implementations of API methods
+
+AdbcStatusCode AdbcDatabaseNew(struct AdbcDatabase *database, struct AdbcError *error) {
+	// Allocate a temporary structure to store options pre-Init
+	database->private_data = new TempDatabase();
+	database->private_driver = nullptr;
+	return ADBC_STATUS_OK;
+}
+
+AdbcStatusCode AdbcDatabaseSetOption(struct AdbcDatabase *database, const char *key, const char *value,
+                                     struct AdbcError *error) {
+	if (database->private_driver) {
+		return database->private_driver->DatabaseSetOption(database, key, value, error);
+	}
+
+	TempDatabase *args = reinterpret_cast<TempDatabase *>(database->private_data);
+	if (std::strcmp(key, "driver") == 0) {
+		args->driver = value;
+	} else if (std::strcmp(key, "entrypoint") == 0) {
+		args->entrypoint = value;
+	} else {
+		args->options[key] = value;
+	}
+	return ADBC_STATUS_OK;
+}
+
+AdbcStatusCode AdbcDriverManagerDatabaseSetInitFunc(struct AdbcDatabase *database, AdbcDriverInitFunc init_func,
+                                                    struct AdbcError *error) {
+	if (database->private_driver) {
+		return ADBC_STATUS_INVALID_STATE;
+	}
+
+	TempDatabase *args = reinterpret_cast<TempDatabase *>(database->private_data);
+	args->init_func = init_func;
+	return ADBC_STATUS_OK;
+}
+
+AdbcStatusCode AdbcDatabaseInit(struct AdbcDatabase *database, struct AdbcError *error) {
+	if (!database->private_data) {
+		SetError(error, "Must call AdbcDatabaseNew first");
+		return ADBC_STATUS_INVALID_STATE;
+	}
+	TempDatabase *args = reinterpret_cast<TempDatabase *>(database->private_data);
+	if (args->init_func) {
+		// Do nothing
+	} else if (args->driver.empty()) {
+		SetError(error, "Must provide 'driver' parameter");
+		return ADBC_STATUS_INVALID_ARGUMENT;
+	}
+
+	database->private_driver = new AdbcDriver;
+	std::memset(database->private_driver, 0, sizeof(AdbcDriver));
+	AdbcStatusCode status;
+	// So we don't confuse a driver into thinking it's initialized already
+	database->private_data = nullptr;
+	if (args->init_func) {
+		status = AdbcLoadDriverFromInitFunc(args->init_func, ADBC_VERSION_1_0_0, database->private_driver, error);
+	} else {
+		status = AdbcLoadDriver(args->driver.c_str(), args->entrypoint.c_str(), ADBC_VERSION_1_0_0,
+		                        database->private_driver, error);
+	}
+	if (status != ADBC_STATUS_OK) {
+		// Restore private_data so it will be released by AdbcDatabaseRelease
+		database->private_data = args;
+		if (database->private_driver->release) {
+			database->private_driver->release(database->private_driver, error);
+		}
+		delete database->private_driver;
+		database->private_driver = nullptr;
+		return status;
+	}
+	status = database->private_driver->DatabaseNew(database, error);
+	if (status != ADBC_STATUS_OK) {
+		if (database->private_driver->release) {
+			database->private_driver->release(database->private_driver, error);
+		}
+		delete database->private_driver;
+		database->private_driver = nullptr;
+		return status;
+	}
+	for (const auto &option : args->options) {
+		status =
+		    database->private_driver->DatabaseSetOption(database, option.first.c_str(), option.second.c_str(), error);
+		if (status != ADBC_STATUS_OK) {
+			delete args;
+			// Release the database
+			std::ignore = database->private_driver->DatabaseRelease(database, error);
+			if (database->private_driver->release) {
+				database->private_driver->release(database->private_driver, error);
+			}
+			delete database->private_driver;
+			database->private_driver = nullptr;
+			// Should be redundant, but ensure that AdbcDatabaseRelease
+			// below doesn't think that it contains a TempDatabase
+			database->private_data = nullptr;
+			return status;
+		}
+	}
+	delete args;
+	return database->private_driver->DatabaseInit(database, error);
+}
+
+AdbcStatusCode AdbcDatabaseRelease(struct AdbcDatabase *database, struct AdbcError *error) {
+	if (!database->private_driver) {
+		if (database->private_data) {
+			TempDatabase *args = reinterpret_cast<TempDatabase *>(database->private_data);
+			delete args;
+			database->private_data = nullptr;
+			return ADBC_STATUS_OK;
+		}
+		return ADBC_STATUS_INVALID_STATE;
+	}
+	auto status = database->private_driver->DatabaseRelease(database, error);
+	if (database->private_driver->release) {
+		database->private_driver->release(database->private_driver, error);
+	}
+	delete database->private_driver;
+	database->private_data = nullptr;
+	database->private_driver = nullptr;
+	return status;
+}
+
+AdbcStatusCode AdbcConnectionCommit(struct AdbcConnection *connection, struct AdbcError *error) {
+	if (!connection->private_driver) {
+		return ADBC_STATUS_INVALID_STATE;
+	}
+	return connection->private_driver->ConnectionCommit(connection, error);
+}
+
+AdbcStatusCode AdbcConnectionGetInfo(struct AdbcConnection *connection, uint32_t *info_codes, size_t info_codes_length,
+                                     struct ArrowArrayStream *out, struct AdbcError *error) {
+	if (!connection->private_driver) {
+		return ADBC_STATUS_INVALID_STATE;
+	}
+	return connection->private_driver->ConnectionGetInfo(connection, info_codes, info_codes_length, out, error);
+}
+
+AdbcStatusCode AdbcConnectionGetObjects(struct AdbcConnection *connection, int depth, const char *catalog,
+                                        const char *db_schema, const char *table_name, const char **table_types,
+                                        const char *column_name, struct ArrowArrayStream *stream,
+                                        struct AdbcError *error) {
+	if (!connection->private_driver) {
+		return ADBC_STATUS_INVALID_STATE;
+	}
+	return connection->private_driver->ConnectionGetObjects(connection, depth, catalog, db_schema, table_name,
+	                                                        table_types, column_name, stream, error);
+}
+
+AdbcStatusCode AdbcConnectionGetTableSchema(struct AdbcConnection *connection, const char *catalog,
+                                            const char *db_schema, const char *table_name, struct ArrowSchema *schema,
+                                            struct AdbcError *error) {
+	if (!connection->private_driver) {
+		return ADBC_STATUS_INVALID_STATE;
+	}
+	return connection->private_driver->ConnectionGetTableSchema(connection, catalog, db_schema, table_name, schema,
+	                                                            error);
+}
+
+AdbcStatusCode AdbcConnectionGetTableTypes(struct AdbcConnection *connection, struct ArrowArrayStream *stream,
+                                           struct AdbcError *error) {
+	if (!connection->private_driver) {
+		return ADBC_STATUS_INVALID_STATE;
+	}
+	return connection->private_driver->ConnectionGetTableTypes(connection, stream, error);
+}
+
+AdbcStatusCode AdbcConnectionInit(struct AdbcConnection *connection, struct AdbcDatabase *database,
+                                  struct AdbcError *error) {
+	if (!connection->private_data) {
+		SetError(error, "Must call AdbcConnectionNew first");
+		return ADBC_STATUS_INVALID_STATE;
+	} else if (!database->private_driver) {
+		SetError(error, "Database is not initialized");
+		return ADBC_STATUS_INVALID_ARGUMENT;
+	}
+	TempConnection *args = reinterpret_cast<TempConnection *>(connection->private_data);
+	connection->private_data = nullptr;
+	std::unordered_map<std::string, std::string> options = std::move(args->options);
+	delete args;
+
+	auto status = database->private_driver->ConnectionNew(connection, error);
+	if (status != ADBC_STATUS_OK)
+		return status;
+	connection->private_driver = database->private_driver;
+
+	for (const auto &option : options) {
+		status = database->private_driver->ConnectionSetOption(connection, option.first.c_str(), option.second.c_str(),
+		                                                       error);
+		if (status != ADBC_STATUS_OK)
+			return status;
+	}
+	return connection->private_driver->ConnectionInit(connection, database, error);
+}
+
+AdbcStatusCode AdbcConnectionNew(struct AdbcConnection *connection, struct AdbcError *error) {
+	// Allocate a temporary structure to store options pre-Init, because
+	// we don't get access to the database (and hence the driver
+	// function table) until then
+	connection->private_data = new TempConnection;
+	connection->private_driver = nullptr;
+	return ADBC_STATUS_OK;
+}
+
+AdbcStatusCode AdbcConnectionReadPartition(struct AdbcConnection *connection, const uint8_t *serialized_partition,
+                                           size_t serialized_length, struct ArrowArrayStream *out,
+                                           struct AdbcError *error) {
+	if (!connection->private_driver) {
+		return ADBC_STATUS_INVALID_STATE;
+	}
+	return connection->private_driver->ConnectionReadPartition(connection, serialized_partition, serialized_length, out,
+	                                                           error);
+}
+
+AdbcStatusCode AdbcConnectionRelease(struct AdbcConnection *connection, struct AdbcError *error) {
+	if (!connection->private_driver) {
+		if (connection->private_data) {
+			TempConnection *args = reinterpret_cast<TempConnection *>(connection->private_data);
+			delete args;
+			connection->private_data = nullptr;
+			return ADBC_STATUS_OK;
+		}
+		return ADBC_STATUS_INVALID_STATE;
+	}
+	auto status = connection->private_driver->ConnectionRelease(connection, error);
+	connection->private_driver = nullptr;
+	return status;
+}
+
+AdbcStatusCode AdbcConnectionRollback(struct AdbcConnection *connection, struct AdbcError *error) {
+	if (!connection->private_driver) {
+		return ADBC_STATUS_INVALID_STATE;
+	}
+	return connection->private_driver->ConnectionRollback(connection, error);
+}
+
+AdbcStatusCode AdbcConnectionSetOption(struct AdbcConnection *connection, const char *key, const char *value,
+                                       struct AdbcError *error) {
+	if (!connection->private_data) {
+		SetError(error, "AdbcConnectionSetOption: must AdbcConnectionNew first");
+		return ADBC_STATUS_INVALID_STATE;
+	}
+	if (!connection->private_driver) {
+		// Init not yet called, save the option
+		TempConnection *args = reinterpret_cast<TempConnection *>(connection->private_data);
+		args->options[key] = value;
+		return ADBC_STATUS_OK;
+	}
+	return connection->private_driver->ConnectionSetOption(connection, key, value, error);
+}
+
+AdbcStatusCode AdbcStatementBind(struct AdbcStatement *statement, struct ArrowArray *values, struct ArrowSchema *schema,
+                                 struct AdbcError *error) {
+	if (!statement->private_driver) {
+		return ADBC_STATUS_INVALID_STATE;
+	}
+	return statement->private_driver->StatementBind(statement, values, schema, error);
+}
+
+AdbcStatusCode AdbcStatementBindStream(struct AdbcStatement *statement, struct ArrowArrayStream *stream,
+                                       struct AdbcError *error) {
+	if (!statement->private_driver) {
+		return ADBC_STATUS_INVALID_STATE;
+	}
+	return statement->private_driver->StatementBindStream(statement, stream, error);
+}
+
+// XXX: cpplint gets confused here if declared as 'struct ArrowSchema* schema'
+AdbcStatusCode AdbcStatementExecutePartitions(struct AdbcStatement *statement, ArrowSchema *schema,
+                                              struct AdbcPartitions *partitions, int64_t *rows_affected,
+                                              struct AdbcError *error) {
+	if (!statement->private_driver) {
+		return ADBC_STATUS_INVALID_STATE;
+	}
+	return statement->private_driver->StatementExecutePartitions(statement, schema, partitions, rows_affected, error);
+}
+
+AdbcStatusCode AdbcStatementExecuteQuery(struct AdbcStatement *statement, struct ArrowArrayStream *out,
+                                         int64_t *rows_affected, struct AdbcError *error) {
+	if (!statement->private_driver) {
+		return ADBC_STATUS_INVALID_STATE;
+	}
+	return statement->private_driver->StatementExecuteQuery(statement, out, rows_affected, error);
+}
+
+AdbcStatusCode AdbcStatementGetParameterSchema(struct AdbcStatement *statement, struct ArrowSchema *schema,
+                                               struct AdbcError *error) {
+	if (!statement->private_driver) {
+		return ADBC_STATUS_INVALID_STATE;
+	}
+	return statement->private_driver->StatementGetParameterSchema(statement, schema, error);
+}
+
+AdbcStatusCode AdbcStatementNew(struct AdbcConnection *connection, struct AdbcStatement *statement,
+                                struct AdbcError *error) {
+	if (!connection->private_driver) {
+		return ADBC_STATUS_INVALID_STATE;
+	}
+	auto status = connection->private_driver->StatementNew(connection, statement, error);
+	statement->private_driver = connection->private_driver;
+	return status;
+}
+
+AdbcStatusCode AdbcStatementPrepare(struct AdbcStatement *statement, struct AdbcError *error) {
+	if (!statement->private_driver) {
+		return ADBC_STATUS_INVALID_STATE;
+	}
+	return statement->private_driver->StatementPrepare(statement, error);
+}
+
+AdbcStatusCode AdbcStatementRelease(struct AdbcStatement *statement, struct AdbcError *error) {
+	if (!statement->private_driver) {
+		return ADBC_STATUS_INVALID_STATE;
+	}
+	auto status = statement->private_driver->StatementRelease(statement, error);
+	statement->private_driver = nullptr;
+	return status;
+}
+
+AdbcStatusCode AdbcStatementSetOption(struct AdbcStatement *statement, const char *key, const char *value,
+                                      struct AdbcError *error) {
+	if (!statement->private_driver) {
+		return ADBC_STATUS_INVALID_STATE;
+	}
+	return statement->private_driver->StatementSetOption(statement, key, value, error);
+}
+
+AdbcStatusCode AdbcStatementSetSqlQuery(struct AdbcStatement *statement, const char *query, struct AdbcError *error) {
+	if (!statement->private_driver) {
+		return ADBC_STATUS_INVALID_STATE;
+	}
+	return statement->private_driver->StatementSetSqlQuery(statement, query, error);
+}
+
+AdbcStatusCode AdbcStatementSetSubstraitPlan(struct AdbcStatement *statement, const uint8_t *plan, size_t length,
+                                             struct AdbcError *error) {
+	if (!statement->private_driver) {
+		return ADBC_STATUS_INVALID_STATE;
+	}
+	return statement->private_driver->StatementSetSubstraitPlan(statement, plan, length, error);
+}
+
+const char *AdbcStatusCodeMessage(AdbcStatusCode code) {
+#define STRINGIFY(s)       #s
+#define STRINGIFY_VALUE(s) STRINGIFY(s)
+#define CASE(CONSTANT)                                                                                                 \
+	case CONSTANT:                                                                                                     \
+		return #CONSTANT " (" STRINGIFY_VALUE(CONSTANT) ")";
+
+	switch (code) {
+		CASE(ADBC_STATUS_OK);
+		CASE(ADBC_STATUS_UNKNOWN);
+		CASE(ADBC_STATUS_NOT_IMPLEMENTED);
+		CASE(ADBC_STATUS_NOT_FOUND);
+		CASE(ADBC_STATUS_ALREADY_EXISTS);
+		CASE(ADBC_STATUS_INVALID_ARGUMENT);
+		CASE(ADBC_STATUS_INVALID_STATE);
+		CASE(ADBC_STATUS_INVALID_DATA);
+		CASE(ADBC_STATUS_INTEGRITY);
+		CASE(ADBC_STATUS_INTERNAL);
+		CASE(ADBC_STATUS_IO);
+		CASE(ADBC_STATUS_CANCELLED);
+		CASE(ADBC_STATUS_TIMEOUT);
+		CASE(ADBC_STATUS_UNAUTHENTICATED);
+		CASE(ADBC_STATUS_UNAUTHORIZED);
+	default:
+		return "(invalid code)";
+	}
+#undef CASE
+#undef STRINGIFY_VALUE
+#undef STRINGIFY
+}
+
+AdbcStatusCode AdbcLoadDriver(const char *driver_name, const char *entrypoint, int version, void *raw_driver,
+                              struct AdbcError *error) {
+	AdbcDriverInitFunc init_func;
+	std::string error_message;
+
+	if (version != ADBC_VERSION_1_0_0) {
+		SetError(error, "Only ADBC 1.0.0 is supported");
+		return ADBC_STATUS_NOT_IMPLEMENTED;
+	}
+
+	auto *driver = reinterpret_cast<struct AdbcDriver *>(raw_driver);
+
+	if (!entrypoint) {
+		// Default entrypoint (see adbc.h)
+		entrypoint = "AdbcDriverInit";
+	}
+
+#if defined(_WIN32)
+
+	HMODULE handle = LoadLibraryExA(driver_name, NULL, 0);
+	if (!handle) {
+		error_message += driver_name;
+		error_message += ": LoadLibraryExA() failed: ";
+		GetWinError(&error_message);
+
+		std::string full_driver_name = driver_name;
+		full_driver_name += ".lib";
+		handle = LoadLibraryExA(full_driver_name.c_str(), NULL, 0);
+		if (!handle) {
+			error_message += '\n';
+			error_message += full_driver_name;
+			error_message += ": LoadLibraryExA() failed: ";
+			GetWinError(&error_message);
+		}
+	}
+	if (!handle) {
+		SetError(error, error_message);
+		return ADBC_STATUS_INTERNAL;
+	}
+
+	void *load_handle = reinterpret_cast<void *>(GetProcAddress(handle, entrypoint));
+	init_func = reinterpret_cast<AdbcDriverInitFunc>(load_handle);
+	if (!init_func) {
+		std::string message = "GetProcAddress(";
+		message += entrypoint;
+		message += ") failed: ";
+		GetWinError(&message);
+		if (!FreeLibrary(handle)) {
+			message += "\nFreeLibrary() failed: ";
+			GetWinError(&message);
+		}
+		SetError(error, message);
+		return ADBC_STATUS_INTERNAL;
+	}
+
+#else
+
+#if defined(__APPLE__)
+	const std::string kPlatformLibraryPrefix = "lib";
+	const std::string kPlatformLibrarySuffix = ".dylib";
+#else
+	const std::string kPlatformLibraryPrefix = "lib";
+	const std::string kPlatformLibrarySuffix = ".so";
+#endif // defined(__APPLE__)
+
+	void *handle = dlopen(driver_name, RTLD_NOW | RTLD_LOCAL);
+	if (!handle) {
+		error_message = "dlopen() failed: ";
+		error_message += dlerror();
+
+		// If applicable, append the shared library prefix/extension and
+		// try again (this way you don't have to hardcode driver names by
+		// platform in the application)
+		const std::string driver_str = driver_name;
+
+		std::string full_driver_name;
+		if (driver_str.size() < kPlatformLibraryPrefix.size() ||
+		    driver_str.compare(0, kPlatformLibraryPrefix.size(), kPlatformLibraryPrefix) != 0) {
+			full_driver_name += kPlatformLibraryPrefix;
+		}
+		full_driver_name += driver_name;
+		if (driver_str.size() < kPlatformLibrarySuffix.size() ||
+		    driver_str.compare(full_driver_name.size() - kPlatformLibrarySuffix.size(), kPlatformLibrarySuffix.size(),
+		                       kPlatformLibrarySuffix) != 0) {
+			full_driver_name += kPlatformLibrarySuffix;
+		}
+		handle = dlopen(full_driver_name.c_str(), RTLD_NOW | RTLD_LOCAL);
+		if (!handle) {
+			error_message += "\ndlopen() failed: ";
+			error_message += dlerror();
+		}
+	}
+	if (!handle) {
+		SetError(error, error_message);
+		// AdbcDatabaseInit tries to call this if set
+		driver->release = nullptr;
+		return ADBC_STATUS_INTERNAL;
+	}
+
+	void *load_handle = dlsym(handle, entrypoint);
+	if (!load_handle) {
+		std::string message = "dlsym(";
+		message += entrypoint;
+		message += ") failed: ";
+		message += dlerror();
+		SetError(error, message);
+		return ADBC_STATUS_INTERNAL;
+	}
+	init_func = reinterpret_cast<AdbcDriverInitFunc>(load_handle);
+
+#endif // defined(_WIN32)
+
+	AdbcStatusCode status = AdbcLoadDriverFromInitFunc(init_func, version, driver, error);
+	if (status == ADBC_STATUS_OK) {
+		ManagerDriverState *state = new ManagerDriverState;
+		state->driver_release = driver->release;
+#if defined(_WIN32)
+		state->handle = handle;
+#endif // defined(_WIN32)
+		driver->release = &ReleaseDriver;
+		driver->private_manager = state;
+	} else {
+#if defined(_WIN32)
+		if (!FreeLibrary(handle)) {
+			std::string message = "FreeLibrary() failed: ";
+			GetWinError(&message);
+			SetError(error, message);
+		}
+#endif // defined(_WIN32)
+	}
+	return status;
+}
+
+AdbcStatusCode AdbcLoadDriverFromInitFunc(AdbcDriverInitFunc init_func, int version, void *raw_driver,
+                                          struct AdbcError *error) {
+#define FILL_DEFAULT(DRIVER, STUB)                                                                                     \
+	if (!DRIVER->STUB) {                                                                                               \
+		DRIVER->STUB = &STUB;                                                                                          \
+	}
+#define CHECK_REQUIRED(DRIVER, STUB)                                                                                   \
+	if (!DRIVER->STUB) {                                                                                               \
+		SetError(error, "Driver does not implement required function Adbc" #STUB);                                     \
+		return ADBC_STATUS_INTERNAL;                                                                                   \
+	}
+
+	auto result = init_func(version, raw_driver, error);
+	if (result != ADBC_STATUS_OK) {
+		return result;
+	}
+
+	if (version == ADBC_VERSION_1_0_0) {
+		auto *driver = reinterpret_cast<struct AdbcDriver *>(raw_driver);
+		CHECK_REQUIRED(driver, DatabaseNew);
+		CHECK_REQUIRED(driver, DatabaseInit);
+		CHECK_REQUIRED(driver, DatabaseRelease);
+		FILL_DEFAULT(driver, DatabaseSetOption);
+
+		CHECK_REQUIRED(driver, ConnectionNew);
+		CHECK_REQUIRED(driver, ConnectionInit);
+		CHECK_REQUIRED(driver, ConnectionRelease);
+		FILL_DEFAULT(driver, ConnectionCommit);
+		FILL_DEFAULT(driver, ConnectionGetInfo);
+		FILL_DEFAULT(driver, ConnectionGetObjects);
+		FILL_DEFAULT(driver, ConnectionGetTableSchema);
+		FILL_DEFAULT(driver, ConnectionGetTableTypes);
+		FILL_DEFAULT(driver, ConnectionReadPartition);
+		FILL_DEFAULT(driver, ConnectionRollback);
+		FILL_DEFAULT(driver, ConnectionSetOption);
+
+		FILL_DEFAULT(driver, StatementExecutePartitions);
+		CHECK_REQUIRED(driver, StatementExecuteQuery);
+		CHECK_REQUIRED(driver, StatementNew);
+		CHECK_REQUIRED(driver, StatementRelease);
+		FILL_DEFAULT(driver, StatementBind);
+		FILL_DEFAULT(driver, StatementGetParameterSchema);
+		FILL_DEFAULT(driver, StatementPrepare);
+		FILL_DEFAULT(driver, StatementSetOption);
+		FILL_DEFAULT(driver, StatementSetSqlQuery);
+		FILL_DEFAULT(driver, StatementSetSubstraitPlan);
+	}
+
+	return ADBC_STATUS_OK;
+
+#undef FILL_DEFAULT
+#undef CHECK_REQUIRED
+}
+} // namespace duckdb_adbc
+
+
+
+
+
+
+#include <cstdint>
+
 #ifdef DUCKDB_DEBUG_ALLOCATION
+
 
 
 
 #include <execinfo.h>
 #endif
 
+#if defined(BUILD_JEMALLOC_EXTENSION) && !defined(WIN32)
+#include "jemalloc-extension.hpp"
+#endif
+
 namespace duckdb {
 
+AllocatedData::AllocatedData() : allocator(nullptr), pointer(nullptr), allocated_size(0) {
+}
+
 AllocatedData::AllocatedData(Allocator &allocator, data_ptr_t pointer, idx_t allocated_size)
-    : allocator(allocator), pointer(pointer), allocated_size(allocated_size) {
+    : allocator(&allocator), pointer(pointer), allocated_size(allocated_size) {
+	if (!pointer) {
+		throw InternalException("AllocatedData object constructed with nullptr");
+	}
 }
 AllocatedData::~AllocatedData() {
 	Reset();
+}
+
+AllocatedData::AllocatedData(AllocatedData &&other) noexcept
+    : allocator(other.allocator), pointer(nullptr), allocated_size(0) {
+	std::swap(pointer, other.pointer);
+	std::swap(allocated_size, other.allocated_size);
+}
+
+AllocatedData &AllocatedData::operator=(AllocatedData &&other) noexcept {
+	std::swap(allocator, other.allocator);
+	std::swap(pointer, other.pointer);
+	std::swap(allocated_size, other.allocated_size);
+	return *this;
 }
 
 void AllocatedData::Reset() {
 	if (!pointer) {
 		return;
 	}
-	allocator.FreeData(pointer, allocated_size);
+	D_ASSERT(allocator);
+	allocator->FreeData(pointer, allocated_size);
+	allocated_size = 0;
 	pointer = nullptr;
 }
 
@@ -3621,8 +6064,6 @@ struct AllocatorDebugInfo {
 #ifdef DEBUG
 	AllocatorDebugInfo();
 	~AllocatorDebugInfo();
-
-	static string GetStackTrace(int max_depth = 128);
 
 	void AllocateData(data_ptr_t pointer, idx_t size);
 	void FreeData(data_ptr_t pointer, idx_t size);
@@ -3649,22 +6090,28 @@ PrivateAllocatorData::~PrivateAllocatorData() {
 //===--------------------------------------------------------------------===//
 // Allocator
 //===--------------------------------------------------------------------===//
+#if defined(BUILD_JEMALLOC_EXTENSION) && !defined(WIN32)
+Allocator::Allocator()
+    : Allocator(JEMallocExtension::Allocate, JEMallocExtension::Free, JEMallocExtension::Reallocate, nullptr) {
+}
+#else
 Allocator::Allocator()
     : Allocator(Allocator::DefaultAllocate, Allocator::DefaultFree, Allocator::DefaultReallocate, nullptr) {
 }
+#endif
 
 Allocator::Allocator(allocate_function_ptr_t allocate_function_p, free_function_ptr_t free_function_p,
                      reallocate_function_ptr_t reallocate_function_p, unique_ptr<PrivateAllocatorData> private_data_p)
     : allocate_function(allocate_function_p), free_function(free_function_p),
-      reallocate_function(reallocate_function_p), private_data(move(private_data_p)) {
+      reallocate_function(reallocate_function_p), private_data(std::move(private_data_p)) {
 	D_ASSERT(allocate_function);
 	D_ASSERT(free_function);
 	D_ASSERT(reallocate_function);
 #ifdef DEBUG
 	if (!private_data) {
-		private_data = make_unique<PrivateAllocatorData>();
+		private_data = make_uniq<PrivateAllocatorData>();
 	}
-	private_data->debug_info = make_unique<AllocatorDebugInfo>();
+	private_data->debug_info = make_uniq<AllocatorDebugInfo>();
 #endif
 }
 
@@ -3672,11 +6119,20 @@ Allocator::~Allocator() {
 }
 
 data_ptr_t Allocator::AllocateData(idx_t size) {
+	D_ASSERT(size > 0);
+	if (size >= MAXIMUM_ALLOC_SIZE) {
+		D_ASSERT(false);
+		throw InternalException("Requested allocation size of %llu is out of range - maximum allocation size is %llu",
+		                        size, MAXIMUM_ALLOC_SIZE);
+	}
 	auto result = allocate_function(private_data.get(), size);
 #ifdef DEBUG
 	D_ASSERT(private_data);
 	private_data->debug_info->AllocateData(result, size);
 #endif
+	if (!result) {
+		throw OutOfMemoryException("Failed to allocate block of %llu bytes", size);
+	}
 	return result;
 }
 
@@ -3684,6 +6140,7 @@ void Allocator::FreeData(data_ptr_t pointer, idx_t size) {
 	if (!pointer) {
 		return;
 	}
+	D_ASSERT(size > 0);
 #ifdef DEBUG
 	D_ASSERT(private_data);
 	private_data->debug_info->FreeData(pointer, size);
@@ -3695,17 +6152,30 @@ data_ptr_t Allocator::ReallocateData(data_ptr_t pointer, idx_t old_size, idx_t s
 	if (!pointer) {
 		return nullptr;
 	}
+	if (size >= MAXIMUM_ALLOC_SIZE) {
+		D_ASSERT(false);
+		throw InternalException(
+		    "Requested re-allocation size of %llu is out of range - maximum allocation size is %llu", size,
+		    MAXIMUM_ALLOC_SIZE);
+	}
 	auto new_pointer = reallocate_function(private_data.get(), pointer, old_size, size);
 #ifdef DEBUG
 	D_ASSERT(private_data);
 	private_data->debug_info->ReallocateData(pointer, new_pointer, old_size, size);
 #endif
+	if (!new_pointer) {
+		throw OutOfMemoryException("Failed to re-allocate block of %llu bytes", size);
+	}
 	return new_pointer;
 }
 
-Allocator &Allocator::DefaultAllocator() {
-	static Allocator DEFAULT_ALLOCATOR;
+shared_ptr<Allocator> &Allocator::DefaultAllocatorReference() {
+	static shared_ptr<Allocator> DEFAULT_ALLOCATOR = make_shared<Allocator>();
 	return DEFAULT_ALLOCATOR;
+}
+
+Allocator &Allocator::DefaultAllocator() {
+	return *DefaultAllocatorReference();
 }
 
 //===--------------------------------------------------------------------===//
@@ -3720,7 +6190,7 @@ AllocatorDebugInfo::~AllocatorDebugInfo() {
 	if (allocation_count != 0) {
 		printf("Outstanding allocations found for Allocator\n");
 		for (auto &entry : pointers) {
-			printf("Allocation of size %lld at address %p\n", entry.second.first, (void *)entry.first);
+			printf("Allocation of size %llu at address %p\n", entry.second.first, (void *)entry.first);
 			printf("Stack trace:\n%s\n", entry.second.second.c_str());
 			printf("\n");
 		}
@@ -3732,28 +6202,11 @@ AllocatorDebugInfo::~AllocatorDebugInfo() {
 	D_ASSERT(allocation_count == 0);
 }
 
-string AllocatorDebugInfo::GetStackTrace(int max_depth) {
-#ifdef DUCKDB_DEBUG_ALLOCATION
-	string result;
-	auto callstack = unique_ptr<void *[]>(new void *[max_depth]);
-	int frames = backtrace(callstack.get(), max_depth);
-	char **strs = backtrace_symbols(callstack.get(), frames);
-	for (int i = 0; i < frames; i++) {
-		result += strs[i];
-		result += "\n";
-	}
-	free(strs);
-	return result;
-#else
-	throw InternalException("GetStackTrace not supported without DUCKDB_DEBUG_ALLOCATION");
-#endif
-}
-
 void AllocatorDebugInfo::AllocateData(data_ptr_t pointer, idx_t size) {
 	allocation_count += size;
 #ifdef DUCKDB_DEBUG_ALLOCATION
 	lock_guard<mutex> l(pointer_lock);
-	pointers[pointer] = make_pair(size, GetStackTrace());
+	pointers[pointer] = make_pair(size, Exception::GetStackTrace());
 #endif
 }
 
@@ -3779,6 +6232,1118 @@ void AllocatorDebugInfo::ReallocateData(data_ptr_t pointer, data_ptr_t new_point
 #endif
 
 } // namespace duckdb
+
+
+
+
+
+
+
+
+namespace duckdb {
+
+//===--------------------------------------------------------------------===//
+// Arrow append data
+//===--------------------------------------------------------------------===//
+typedef void (*initialize_t)(ArrowAppendData &result, const LogicalType &type, idx_t capacity);
+typedef void (*append_vector_t)(ArrowAppendData &append_data, Vector &input, idx_t from, idx_t to, idx_t input_size);
+typedef void (*finalize_t)(ArrowAppendData &append_data, const LogicalType &type, ArrowArray *result);
+
+struct ArrowAppendData {
+	explicit ArrowAppendData(ArrowOptions &options_p) : options(options_p) {
+	}
+	// the buffers of the arrow vector
+	ArrowBuffer validity;
+	ArrowBuffer main_buffer;
+	ArrowBuffer aux_buffer;
+
+	idx_t row_count = 0;
+	idx_t null_count = 0;
+
+	// function pointers for construction
+	initialize_t initialize = nullptr;
+	append_vector_t append_vector = nullptr;
+	finalize_t finalize = nullptr;
+
+	// child data (if any)
+	vector<unique_ptr<ArrowAppendData>> child_data;
+
+	// the arrow array C API data, only set after Finalize
+	unique_ptr<ArrowArray> array;
+	duckdb::array<const void *, 3> buffers = {{nullptr, nullptr, nullptr}};
+	vector<ArrowArray *> child_pointers;
+
+	ArrowOptions options;
+};
+
+//===--------------------------------------------------------------------===//
+// ArrowAppender
+//===--------------------------------------------------------------------===//
+static unique_ptr<ArrowAppendData> InitializeArrowChild(const LogicalType &type, idx_t capacity, ArrowOptions &options);
+static ArrowArray *FinalizeArrowChild(const LogicalType &type, ArrowAppendData &append_data);
+
+ArrowAppender::ArrowAppender(vector<LogicalType> types_p, idx_t initial_capacity, ArrowOptions options)
+    : types(std::move(types_p)) {
+	for (auto &type : types) {
+		auto entry = InitializeArrowChild(type, initial_capacity, options);
+		root_data.push_back(std::move(entry));
+	}
+}
+
+ArrowAppender::~ArrowAppender() {
+}
+
+//===--------------------------------------------------------------------===//
+// Append Helper Functions
+//===--------------------------------------------------------------------===//
+static void GetBitPosition(idx_t row_idx, idx_t &current_byte, uint8_t &current_bit) {
+	current_byte = row_idx / 8;
+	current_bit = row_idx % 8;
+}
+
+static void UnsetBit(uint8_t *data, idx_t current_byte, uint8_t current_bit) {
+	data[current_byte] &= ~((uint64_t)1 << current_bit);
+}
+
+static void NextBit(idx_t &current_byte, uint8_t &current_bit) {
+	current_bit++;
+	if (current_bit == 8) {
+		current_byte++;
+		current_bit = 0;
+	}
+}
+
+static void ResizeValidity(ArrowBuffer &buffer, idx_t row_count) {
+	auto byte_count = (row_count + 7) / 8;
+	buffer.resize(byte_count, 0xFF);
+}
+
+static void SetNull(ArrowAppendData &append_data, uint8_t *validity_data, idx_t current_byte, uint8_t current_bit) {
+	UnsetBit(validity_data, current_byte, current_bit);
+	append_data.null_count++;
+}
+
+static void AppendValidity(ArrowAppendData &append_data, UnifiedVectorFormat &format, idx_t from, idx_t to) {
+	// resize the buffer, filling the validity buffer with all valid values
+	idx_t size = to - from;
+	ResizeValidity(append_data.validity, append_data.row_count + size);
+	if (format.validity.AllValid()) {
+		// if all values are valid we don't need to do anything else
+		return;
+	}
+
+	// otherwise we iterate through the validity mask
+	auto validity_data = (uint8_t *)append_data.validity.data();
+	uint8_t current_bit;
+	idx_t current_byte;
+	GetBitPosition(append_data.row_count, current_byte, current_bit);
+	for (idx_t i = from; i < to; i++) {
+		auto source_idx = format.sel->get_index(i);
+		// append the validity mask
+		if (!format.validity.RowIsValid(source_idx)) {
+			SetNull(append_data, validity_data, current_byte, current_bit);
+		}
+		NextBit(current_byte, current_bit);
+	}
+}
+
+//===--------------------------------------------------------------------===//
+// Scalar Types
+//===--------------------------------------------------------------------===//
+struct ArrowScalarConverter {
+	template <class TGT, class SRC>
+	static TGT Operation(SRC input) {
+		return input;
+	}
+
+	static bool SkipNulls() {
+		return false;
+	}
+
+	template <class TGT>
+	static void SetNull(TGT &value) {
+	}
+};
+
+struct ArrowIntervalConverter {
+	template <class TGT, class SRC>
+	static TGT Operation(SRC input) {
+		ArrowInterval result;
+		result.months = input.months;
+		result.days = input.days;
+		result.nanoseconds = input.micros * Interval::NANOS_PER_MICRO;
+		return result;
+	}
+
+	static bool SkipNulls() {
+		return true;
+	}
+
+	template <class TGT>
+	static void SetNull(TGT &value) {
+	}
+};
+
+template <class TGT, class SRC = TGT, class OP = ArrowScalarConverter>
+struct ArrowScalarBaseData {
+	static void Append(ArrowAppendData &append_data, Vector &input, idx_t from, idx_t to, idx_t input_size) {
+		idx_t size = to - from;
+		UnifiedVectorFormat format;
+		input.ToUnifiedFormat(input_size, format);
+
+		// append the validity mask
+		AppendValidity(append_data, format, from, to);
+
+		// append the main data
+		append_data.main_buffer.resize(append_data.main_buffer.size() + sizeof(TGT) * size);
+		auto data = (SRC *)format.data;
+		auto result_data = (TGT *)append_data.main_buffer.data();
+
+		for (idx_t i = from; i < to; i++) {
+			auto source_idx = format.sel->get_index(i);
+			auto result_idx = append_data.row_count + i - from;
+
+			if (OP::SkipNulls() && !format.validity.RowIsValid(source_idx)) {
+				OP::template SetNull<TGT>(result_data[result_idx]);
+				continue;
+			}
+			result_data[result_idx] = OP::template Operation<TGT, SRC>(data[source_idx]);
+		}
+		append_data.row_count += size;
+	}
+};
+
+template <class TGT, class SRC = TGT, class OP = ArrowScalarConverter>
+struct ArrowScalarData : public ArrowScalarBaseData<TGT, SRC, OP> {
+	static void Initialize(ArrowAppendData &result, const LogicalType &type, idx_t capacity) {
+		result.main_buffer.reserve(capacity * sizeof(TGT));
+	}
+
+	static void Finalize(ArrowAppendData &append_data, const LogicalType &type, ArrowArray *result) {
+		result->n_buffers = 2;
+		result->buffers[1] = append_data.main_buffer.data();
+	}
+};
+
+//===--------------------------------------------------------------------===//
+// Enums
+//===--------------------------------------------------------------------===//
+template <class TGT>
+struct ArrowEnumData : public ArrowScalarBaseData<TGT> {
+	static idx_t GetLength(string_t input) {
+		return input.GetSize();
+	}
+	static void WriteData(data_ptr_t target, string_t input) {
+		memcpy(target, input.GetData(), input.GetSize());
+	}
+	static void EnumAppendVector(ArrowAppendData &append_data, const Vector &input, idx_t size) {
+		D_ASSERT(input.GetVectorType() == VectorType::FLAT_VECTOR);
+
+		// resize the validity mask and set up the validity buffer for iteration
+		ResizeValidity(append_data.validity, append_data.row_count + size);
+
+		// resize the offset buffer - the offset buffer holds the offsets into the child array
+		append_data.main_buffer.resize(append_data.main_buffer.size() + sizeof(uint32_t) * (size + 1));
+		auto data = (string_t *)FlatVector::GetData<string_t>(input);
+		auto offset_data = (uint32_t *)append_data.main_buffer.data();
+		if (append_data.row_count == 0) {
+			// first entry
+			offset_data[0] = 0;
+		}
+		// now append the string data to the auxiliary buffer
+		// the auxiliary buffer's length depends on the string lengths, so we resize as required
+		auto last_offset = offset_data[append_data.row_count];
+		for (idx_t i = 0; i < size; i++) {
+			auto offset_idx = append_data.row_count + i + 1;
+
+			auto string_length = GetLength(data[i]);
+
+			// append the offset data
+			auto current_offset = last_offset + string_length;
+			offset_data[offset_idx] = current_offset;
+
+			// resize the string buffer if required, and write the string data
+			append_data.aux_buffer.resize(current_offset);
+			WriteData(append_data.aux_buffer.data() + last_offset, data[i]);
+
+			last_offset = current_offset;
+		}
+		append_data.row_count += size;
+	}
+	static void Initialize(ArrowAppendData &result, const LogicalType &type, idx_t capacity) {
+		result.main_buffer.reserve(capacity * sizeof(TGT));
+		// construct the enum child data
+		auto enum_data = InitializeArrowChild(LogicalType::VARCHAR, EnumType::GetSize(type), result.options);
+		EnumAppendVector(*enum_data, EnumType::GetValuesInsertOrder(type), EnumType::GetSize(type));
+		result.child_data.push_back(std::move(enum_data));
+	}
+
+	static void Finalize(ArrowAppendData &append_data, const LogicalType &type, ArrowArray *result) {
+		result->n_buffers = 2;
+		result->buffers[1] = append_data.main_buffer.data();
+		// finalize the enum child data, and assign it to the dictionary
+		result->dictionary = FinalizeArrowChild(LogicalType::VARCHAR, *append_data.child_data[0]);
+	}
+};
+
+//===--------------------------------------------------------------------===//
+// Boolean
+//===--------------------------------------------------------------------===//
+struct ArrowBoolData {
+	static void Initialize(ArrowAppendData &result, const LogicalType &type, idx_t capacity) {
+		auto byte_count = (capacity + 7) / 8;
+		result.main_buffer.reserve(byte_count);
+	}
+
+	static void Append(ArrowAppendData &append_data, Vector &input, idx_t from, idx_t to, idx_t input_size) {
+		idx_t size = to - from;
+		UnifiedVectorFormat format;
+		input.ToUnifiedFormat(input_size, format);
+
+		// we initialize both the validity and the bit set to 1's
+		ResizeValidity(append_data.validity, append_data.row_count + size);
+		ResizeValidity(append_data.main_buffer, append_data.row_count + size);
+		auto data = (bool *)format.data;
+
+		auto result_data = (uint8_t *)append_data.main_buffer.data();
+		auto validity_data = (uint8_t *)append_data.validity.data();
+		uint8_t current_bit;
+		idx_t current_byte;
+		GetBitPosition(append_data.row_count, current_byte, current_bit);
+		for (idx_t i = from; i < to; i++) {
+			auto source_idx = format.sel->get_index(i);
+			// append the validity mask
+			if (!format.validity.RowIsValid(source_idx)) {
+				SetNull(append_data, validity_data, current_byte, current_bit);
+			} else if (!data[source_idx]) {
+				UnsetBit(result_data, current_byte, current_bit);
+			}
+			NextBit(current_byte, current_bit);
+		}
+		append_data.row_count += size;
+	}
+
+	static void Finalize(ArrowAppendData &append_data, const LogicalType &type, ArrowArray *result) {
+		result->n_buffers = 2;
+		result->buffers[1] = append_data.main_buffer.data();
+	}
+};
+
+//===--------------------------------------------------------------------===//
+// Varchar
+//===--------------------------------------------------------------------===//
+struct ArrowVarcharConverter {
+	template <class SRC>
+	static idx_t GetLength(SRC input) {
+		return input.GetSize();
+	}
+
+	template <class SRC>
+	static void WriteData(data_ptr_t target, SRC input) {
+		memcpy(target, input.GetData(), input.GetSize());
+	}
+};
+
+struct ArrowUUIDConverter {
+	template <class SRC>
+	static idx_t GetLength(SRC input) {
+		return UUID::STRING_SIZE;
+	}
+
+	template <class SRC>
+	static void WriteData(data_ptr_t target, SRC input) {
+		UUID::ToString(input, (char *)target);
+	}
+};
+
+template <class SRC = string_t, class OP = ArrowVarcharConverter, class BUFTYPE = uint64_t>
+struct ArrowVarcharData {
+	static void Initialize(ArrowAppendData &result, const LogicalType &type, idx_t capacity) {
+		result.main_buffer.reserve((capacity + 1) * sizeof(BUFTYPE));
+
+		result.aux_buffer.reserve(capacity);
+	}
+
+	static void Append(ArrowAppendData &append_data, Vector &input, idx_t from, idx_t to, idx_t input_size) {
+		idx_t size = to - from;
+		UnifiedVectorFormat format;
+		input.ToUnifiedFormat(input_size, format);
+
+		// resize the validity mask and set up the validity buffer for iteration
+		ResizeValidity(append_data.validity, append_data.row_count + size);
+		auto validity_data = (uint8_t *)append_data.validity.data();
+
+		// resize the offset buffer - the offset buffer holds the offsets into the child array
+		append_data.main_buffer.resize(append_data.main_buffer.size() + sizeof(BUFTYPE) * (size + 1));
+		auto data = (SRC *)format.data;
+		auto offset_data = (BUFTYPE *)append_data.main_buffer.data();
+		if (append_data.row_count == 0) {
+			// first entry
+			offset_data[0] = 0;
+		}
+		// now append the string data to the auxiliary buffer
+		// the auxiliary buffer's length depends on the string lengths, so we resize as required
+		auto last_offset = offset_data[append_data.row_count];
+		idx_t max_offset = append_data.row_count + to - from;
+		if (max_offset > NumericLimits<uint32_t>::Maximum() &&
+		    append_data.options.offset_size == ArrowOffsetSize::REGULAR) {
+			throw InvalidInputException("Arrow Appender: The maximum total string size for regular string buffers is "
+			                            "%u but the offset of %lu exceeds this.",
+			                            NumericLimits<uint32_t>::Maximum(), max_offset);
+		}
+		for (idx_t i = from; i < to; i++) {
+			auto source_idx = format.sel->get_index(i);
+			auto offset_idx = append_data.row_count + i + 1 - from;
+
+			if (!format.validity.RowIsValid(source_idx)) {
+				uint8_t current_bit;
+				idx_t current_byte;
+				GetBitPosition(append_data.row_count + i - from, current_byte, current_bit);
+				SetNull(append_data, validity_data, current_byte, current_bit);
+				offset_data[offset_idx] = last_offset;
+				continue;
+			}
+
+			auto string_length = OP::GetLength(data[source_idx]);
+
+			// append the offset data
+			auto current_offset = last_offset + string_length;
+			offset_data[offset_idx] = current_offset;
+
+			// resize the string buffer if required, and write the string data
+			append_data.aux_buffer.resize(current_offset);
+			OP::WriteData(append_data.aux_buffer.data() + last_offset, data[source_idx]);
+
+			last_offset = current_offset;
+		}
+		append_data.row_count += size;
+	}
+
+	static void Finalize(ArrowAppendData &append_data, const LogicalType &type, ArrowArray *result) {
+		result->n_buffers = 3;
+		result->buffers[1] = append_data.main_buffer.data();
+		result->buffers[2] = append_data.aux_buffer.data();
+	}
+};
+
+//===--------------------------------------------------------------------===//
+// Structs
+//===--------------------------------------------------------------------===//
+struct ArrowStructData {
+	static void Initialize(ArrowAppendData &result, const LogicalType &type, idx_t capacity) {
+		auto &children = StructType::GetChildTypes(type);
+		for (auto &child : children) {
+			auto child_buffer = InitializeArrowChild(child.second, capacity, result.options);
+			result.child_data.push_back(std::move(child_buffer));
+		}
+	}
+
+	static void Append(ArrowAppendData &append_data, Vector &input, idx_t from, idx_t to, idx_t input_size) {
+		UnifiedVectorFormat format;
+		input.ToUnifiedFormat(input_size, format);
+		idx_t size = to - from;
+		AppendValidity(append_data, format, from, to);
+		// append the children of the struct
+		auto &children = StructVector::GetEntries(input);
+		for (idx_t child_idx = 0; child_idx < children.size(); child_idx++) {
+			auto &child = children[child_idx];
+			auto &child_data = *append_data.child_data[child_idx];
+			child_data.append_vector(child_data, *child, from, to, size);
+		}
+		append_data.row_count += size;
+	}
+
+	static void Finalize(ArrowAppendData &append_data, const LogicalType &type, ArrowArray *result) {
+		result->n_buffers = 1;
+
+		auto &child_types = StructType::GetChildTypes(type);
+		append_data.child_pointers.resize(child_types.size());
+		result->children = append_data.child_pointers.data();
+		result->n_children = child_types.size();
+		for (idx_t i = 0; i < child_types.size(); i++) {
+			auto &child_type = child_types[i].second;
+			append_data.child_pointers[i] = FinalizeArrowChild(child_type, *append_data.child_data[i]);
+		}
+	}
+};
+
+//===--------------------------------------------------------------------===//
+// Lists
+//===--------------------------------------------------------------------===//
+void AppendListOffsets(ArrowAppendData &append_data, UnifiedVectorFormat &format, idx_t from, idx_t to,
+                       vector<sel_t> &child_sel) {
+	// resize the offset buffer - the offset buffer holds the offsets into the child array
+	idx_t size = to - from;
+	append_data.main_buffer.resize(append_data.main_buffer.size() + sizeof(uint32_t) * (size + 1));
+	auto data = (list_entry_t *)format.data;
+	auto offset_data = (uint32_t *)append_data.main_buffer.data();
+	if (append_data.row_count == 0) {
+		// first entry
+		offset_data[0] = 0;
+	}
+	// set up the offsets using the list entries
+	auto last_offset = offset_data[append_data.row_count];
+	for (idx_t i = from; i < to; i++) {
+		auto source_idx = format.sel->get_index(i);
+		auto offset_idx = append_data.row_count + i + 1 - from;
+
+		if (!format.validity.RowIsValid(source_idx)) {
+			offset_data[offset_idx] = last_offset;
+			continue;
+		}
+
+		// append the offset data
+		auto list_length = data[source_idx].length;
+		last_offset += list_length;
+		offset_data[offset_idx] = last_offset;
+
+		for (idx_t k = 0; k < list_length; k++) {
+			child_sel.push_back(data[source_idx].offset + k);
+		}
+	}
+}
+
+struct ArrowListData {
+	static void Initialize(ArrowAppendData &result, const LogicalType &type, idx_t capacity) {
+		auto &child_type = ListType::GetChildType(type);
+		result.main_buffer.reserve((capacity + 1) * sizeof(uint32_t));
+		auto child_buffer = InitializeArrowChild(child_type, capacity, result.options);
+		result.child_data.push_back(std::move(child_buffer));
+	}
+
+	static void Append(ArrowAppendData &append_data, Vector &input, idx_t from, idx_t to, idx_t input_size) {
+		UnifiedVectorFormat format;
+		input.ToUnifiedFormat(input_size, format);
+		idx_t size = to - from;
+		vector<sel_t> child_indices;
+		AppendValidity(append_data, format, from, to);
+		AppendListOffsets(append_data, format, from, to, child_indices);
+
+		// append the child vector of the list
+		SelectionVector child_sel(child_indices.data());
+		auto &child = ListVector::GetEntry(input);
+		auto child_size = child_indices.size();
+		if (size != input_size) {
+			// Let's avoid doing this
+			Vector child_copy(child.GetType());
+			child_copy.Slice(child, child_sel, child_size);
+			append_data.child_data[0]->append_vector(*append_data.child_data[0], child_copy, 0, child_size, child_size);
+		} else {
+			// We don't care about the vector, slice it
+			child.Slice(child_sel, child_size);
+			append_data.child_data[0]->append_vector(*append_data.child_data[0], child, 0, child_size, child_size);
+		}
+		append_data.row_count += size;
+	}
+
+	static void Finalize(ArrowAppendData &append_data, const LogicalType &type, ArrowArray *result) {
+		result->n_buffers = 2;
+		result->buffers[1] = append_data.main_buffer.data();
+
+		auto &child_type = ListType::GetChildType(type);
+		append_data.child_pointers.resize(1);
+		result->children = append_data.child_pointers.data();
+		result->n_children = 1;
+		append_data.child_pointers[0] = FinalizeArrowChild(child_type, *append_data.child_data[0]);
+	}
+};
+
+//===--------------------------------------------------------------------===//
+// Maps
+//===--------------------------------------------------------------------===//
+struct ArrowMapData {
+	static void Initialize(ArrowAppendData &result, const LogicalType &type, idx_t capacity) {
+		// map types are stored in a (too) clever way
+		// the main buffer holds the null values and the offsets
+		// then we have a single child, which is a struct of the map_type, and the key_type
+		result.main_buffer.reserve((capacity + 1) * sizeof(uint32_t));
+
+		auto &key_type = MapType::KeyType(type);
+		auto &value_type = MapType::ValueType(type);
+		auto internal_struct = make_uniq<ArrowAppendData>(result.options);
+		internal_struct->child_data.push_back(InitializeArrowChild(key_type, capacity, result.options));
+		internal_struct->child_data.push_back(InitializeArrowChild(value_type, capacity, result.options));
+
+		result.child_data.push_back(std::move(internal_struct));
+	}
+
+	static void Append(ArrowAppendData &append_data, Vector &input, idx_t from, idx_t to, idx_t input_size) {
+		UnifiedVectorFormat format;
+		input.ToUnifiedFormat(input_size, format);
+		idx_t size = to - from;
+		AppendValidity(append_data, format, from, to);
+		vector<sel_t> child_indices;
+		AppendListOffsets(append_data, format, from, to, child_indices);
+
+		SelectionVector child_sel(child_indices.data());
+		auto &key_vector = MapVector::GetKeys(input);
+		auto &value_vector = MapVector::GetValues(input);
+		auto list_size = child_indices.size();
+
+		auto &struct_data = *append_data.child_data[0];
+		auto &key_data = *struct_data.child_data[0];
+		auto &value_data = *struct_data.child_data[1];
+
+		if (size != input_size) {
+			// Let's avoid doing this
+			Vector key_vector_copy(key_vector.GetType());
+			key_vector_copy.Slice(key_vector, child_sel, list_size);
+			Vector value_vector_copy(value_vector.GetType());
+			value_vector_copy.Slice(value_vector, child_sel, list_size);
+			key_data.append_vector(key_data, key_vector_copy, 0, list_size, list_size);
+			value_data.append_vector(value_data, value_vector_copy, 0, list_size, list_size);
+		} else {
+			// We don't care about the vector, slice it
+			key_vector.Slice(child_sel, list_size);
+			value_vector.Slice(child_sel, list_size);
+			key_data.append_vector(key_data, key_vector, 0, list_size, list_size);
+			value_data.append_vector(value_data, value_vector, 0, list_size, list_size);
+		}
+
+		append_data.row_count += size;
+		struct_data.row_count += size;
+	}
+
+	static void Finalize(ArrowAppendData &append_data, const LogicalType &type, ArrowArray *result) {
+		// set up the main map buffer
+		result->n_buffers = 2;
+		result->buffers[1] = append_data.main_buffer.data();
+
+		// the main map buffer has a single child: a struct
+		append_data.child_pointers.resize(1);
+		result->children = append_data.child_pointers.data();
+		result->n_children = 1;
+		append_data.child_pointers[0] = FinalizeArrowChild(type, *append_data.child_data[0]);
+
+		// now that struct has two children: the key and the value type
+		auto &struct_data = *append_data.child_data[0];
+		auto &struct_result = append_data.child_pointers[0];
+		struct_data.child_pointers.resize(2);
+		struct_result->n_buffers = 1;
+		struct_result->n_children = 2;
+		struct_result->length = struct_data.child_data[0]->row_count;
+		struct_result->children = struct_data.child_pointers.data();
+
+		D_ASSERT(struct_data.child_data[0]->row_count == struct_data.child_data[1]->row_count);
+
+		auto &key_type = MapType::KeyType(type);
+		auto &value_type = MapType::ValueType(type);
+		struct_data.child_pointers[0] = FinalizeArrowChild(key_type, *struct_data.child_data[0]);
+		struct_data.child_pointers[1] = FinalizeArrowChild(value_type, *struct_data.child_data[1]);
+
+		// keys cannot have null values
+		if (struct_data.child_pointers[0]->null_count > 0) {
+			throw std::runtime_error("Arrow doesn't accept NULL keys on Maps");
+		}
+	}
+};
+
+//! Append a data chunk to the underlying arrow array
+void ArrowAppender::Append(DataChunk &input, idx_t from, idx_t to, idx_t input_size) {
+	D_ASSERT(types == input.GetTypes());
+	for (idx_t i = 0; i < input.ColumnCount(); i++) {
+		root_data[i]->append_vector(*root_data[i], input.data[i], from, to, input_size);
+	}
+	row_count += to - from;
+}
+//===--------------------------------------------------------------------===//
+// Initialize Arrow Child
+//===--------------------------------------------------------------------===//
+template <class OP>
+static void InitializeFunctionPointers(ArrowAppendData &append_data) {
+	append_data.initialize = OP::Initialize;
+	append_data.append_vector = OP::Append;
+	append_data.finalize = OP::Finalize;
+}
+
+static void InitializeFunctionPointers(ArrowAppendData &append_data, const LogicalType &type) {
+	// handle special logical types
+	switch (type.id()) {
+	case LogicalTypeId::BOOLEAN:
+		InitializeFunctionPointers<ArrowBoolData>(append_data);
+		break;
+	case LogicalTypeId::TINYINT:
+		InitializeFunctionPointers<ArrowScalarData<int8_t>>(append_data);
+		break;
+	case LogicalTypeId::SMALLINT:
+		InitializeFunctionPointers<ArrowScalarData<int16_t>>(append_data);
+		break;
+	case LogicalTypeId::DATE:
+	case LogicalTypeId::INTEGER:
+		InitializeFunctionPointers<ArrowScalarData<int32_t>>(append_data);
+		break;
+	case LogicalTypeId::TIME:
+	case LogicalTypeId::TIMESTAMP_SEC:
+	case LogicalTypeId::TIMESTAMP_MS:
+	case LogicalTypeId::TIMESTAMP:
+	case LogicalTypeId::TIMESTAMP_NS:
+	case LogicalTypeId::TIMESTAMP_TZ:
+	case LogicalTypeId::TIME_TZ:
+	case LogicalTypeId::BIGINT:
+		InitializeFunctionPointers<ArrowScalarData<int64_t>>(append_data);
+		break;
+	case LogicalTypeId::HUGEINT:
+		InitializeFunctionPointers<ArrowScalarData<hugeint_t>>(append_data);
+		break;
+	case LogicalTypeId::UTINYINT:
+		InitializeFunctionPointers<ArrowScalarData<uint8_t>>(append_data);
+		break;
+	case LogicalTypeId::USMALLINT:
+		InitializeFunctionPointers<ArrowScalarData<uint16_t>>(append_data);
+		break;
+	case LogicalTypeId::UINTEGER:
+		InitializeFunctionPointers<ArrowScalarData<uint32_t>>(append_data);
+		break;
+	case LogicalTypeId::UBIGINT:
+		InitializeFunctionPointers<ArrowScalarData<uint64_t>>(append_data);
+		break;
+	case LogicalTypeId::FLOAT:
+		InitializeFunctionPointers<ArrowScalarData<float>>(append_data);
+		break;
+	case LogicalTypeId::DOUBLE:
+		InitializeFunctionPointers<ArrowScalarData<double>>(append_data);
+		break;
+	case LogicalTypeId::DECIMAL:
+		switch (type.InternalType()) {
+		case PhysicalType::INT16:
+			InitializeFunctionPointers<ArrowScalarData<hugeint_t, int16_t>>(append_data);
+			break;
+		case PhysicalType::INT32:
+			InitializeFunctionPointers<ArrowScalarData<hugeint_t, int32_t>>(append_data);
+			break;
+		case PhysicalType::INT64:
+			InitializeFunctionPointers<ArrowScalarData<hugeint_t, int64_t>>(append_data);
+			break;
+		case PhysicalType::INT128:
+			InitializeFunctionPointers<ArrowScalarData<hugeint_t>>(append_data);
+			break;
+		default:
+			throw InternalException("Unsupported internal decimal type");
+		}
+		break;
+	case LogicalTypeId::VARCHAR:
+	case LogicalTypeId::BLOB:
+	case LogicalTypeId::BIT:
+		if (append_data.options.offset_size == ArrowOffsetSize::LARGE) {
+			InitializeFunctionPointers<ArrowVarcharData<string_t>>(append_data);
+		} else {
+			InitializeFunctionPointers<ArrowVarcharData<string_t, ArrowVarcharConverter, uint32_t>>(append_data);
+		}
+		break;
+	case LogicalTypeId::UUID:
+		if (append_data.options.offset_size == ArrowOffsetSize::LARGE) {
+			InitializeFunctionPointers<ArrowVarcharData<hugeint_t, ArrowUUIDConverter>>(append_data);
+		} else {
+			InitializeFunctionPointers<ArrowVarcharData<hugeint_t, ArrowUUIDConverter, uint32_t>>(append_data);
+		}
+		break;
+	case LogicalTypeId::ENUM:
+		switch (type.InternalType()) {
+		case PhysicalType::UINT8:
+			InitializeFunctionPointers<ArrowEnumData<uint8_t>>(append_data);
+			break;
+		case PhysicalType::UINT16:
+			InitializeFunctionPointers<ArrowEnumData<uint16_t>>(append_data);
+			break;
+		case PhysicalType::UINT32:
+			InitializeFunctionPointers<ArrowEnumData<uint32_t>>(append_data);
+			break;
+		default:
+			throw InternalException("Unsupported internal enum type");
+		}
+		break;
+	case LogicalTypeId::INTERVAL:
+		InitializeFunctionPointers<ArrowScalarData<ArrowInterval, interval_t, ArrowIntervalConverter>>(append_data);
+		break;
+	case LogicalTypeId::STRUCT:
+		InitializeFunctionPointers<ArrowStructData>(append_data);
+		break;
+	case LogicalTypeId::LIST:
+		InitializeFunctionPointers<ArrowListData>(append_data);
+		break;
+	case LogicalTypeId::MAP:
+		InitializeFunctionPointers<ArrowMapData>(append_data);
+		break;
+	default:
+		throw InternalException("Unsupported type in DuckDB -> Arrow Conversion: %s\n", type.ToString());
+	}
+}
+
+unique_ptr<ArrowAppendData> InitializeArrowChild(const LogicalType &type, idx_t capacity, ArrowOptions &options) {
+	auto result = make_uniq<ArrowAppendData>(options);
+	InitializeFunctionPointers(*result, type);
+
+	auto byte_count = (capacity + 7) / 8;
+	result->validity.reserve(byte_count);
+	result->initialize(*result, type, capacity);
+	return result;
+}
+
+static void ReleaseDuckDBArrowAppendArray(ArrowArray *array) {
+	if (!array || !array->release) {
+		return;
+	}
+	array->release = nullptr;
+	auto holder = static_cast<ArrowAppendData *>(array->private_data);
+	delete holder;
+}
+
+//===--------------------------------------------------------------------===//
+// Finalize Arrow Child
+//===--------------------------------------------------------------------===//
+ArrowArray *FinalizeArrowChild(const LogicalType &type, ArrowAppendData &append_data) {
+	auto result = make_uniq<ArrowArray>();
+
+	result->private_data = nullptr;
+	result->release = ReleaseDuckDBArrowAppendArray;
+	result->n_children = 0;
+	result->null_count = 0;
+	result->offset = 0;
+	result->dictionary = nullptr;
+	result->buffers = append_data.buffers.data();
+	result->null_count = append_data.null_count;
+	result->length = append_data.row_count;
+	result->buffers[0] = append_data.validity.data();
+
+	if (append_data.finalize) {
+		append_data.finalize(append_data, type, result.get());
+	}
+
+	append_data.array = std::move(result);
+	return append_data.array.get();
+}
+
+//! Returns the underlying arrow array
+ArrowArray ArrowAppender::Finalize() {
+	D_ASSERT(root_data.size() == types.size());
+	auto root_holder = make_uniq<ArrowAppendData>(options);
+
+	ArrowArray result;
+	root_holder->child_pointers.resize(types.size());
+	result.children = root_holder->child_pointers.data();
+	result.n_children = types.size();
+
+	// Configure root array
+	result.length = row_count;
+	result.n_children = types.size();
+	result.n_buffers = 1;
+	result.buffers = root_holder->buffers.data(); // there is no actual buffer there since we don't have NULLs
+	result.offset = 0;
+	result.null_count = 0; // needs to be 0
+	result.dictionary = nullptr;
+	root_holder->child_data = std::move(root_data);
+
+	for (idx_t i = 0; i < root_holder->child_data.size(); i++) {
+		root_holder->child_pointers[i] = FinalizeArrowChild(types[i], *root_holder->child_data[i]);
+	}
+
+	// Release ownership to caller
+	result.private_data = root_holder.release();
+	result.release = ReleaseDuckDBArrowAppendArray;
+	return result;
+}
+
+} // namespace duckdb
+
+
+
+
+
+
+
+
+
+
+
+
+#include <list>
+
+
+namespace duckdb {
+
+void ArrowConverter::ToArrowArray(DataChunk &input, ArrowArray *out_array, ArrowOptions options) {
+	ArrowAppender appender(input.GetTypes(), input.size(), options);
+	appender.Append(input, 0, input.size(), input.size());
+	*out_array = appender.Finalize();
+}
+
+//===--------------------------------------------------------------------===//
+// Arrow Schema
+//===--------------------------------------------------------------------===//
+struct DuckDBArrowSchemaHolder {
+	// unused in children
+	vector<ArrowSchema> children;
+	// unused in children
+	vector<ArrowSchema *> children_ptrs;
+	//! used for nested structures
+	std::list<vector<ArrowSchema>> nested_children;
+	std::list<vector<ArrowSchema *>> nested_children_ptr;
+	//! This holds strings created to represent decimal types
+	vector<unsafe_unique_array<char>> owned_type_names;
+};
+
+static void ReleaseDuckDBArrowSchema(ArrowSchema *schema) {
+	if (!schema || !schema->release) {
+		return;
+	}
+	schema->release = nullptr;
+	auto holder = static_cast<DuckDBArrowSchemaHolder *>(schema->private_data);
+	delete holder;
+}
+
+void InitializeChild(ArrowSchema &child, const string &name = "") {
+	//! Child is cleaned up by parent
+	child.private_data = nullptr;
+	child.release = ReleaseDuckDBArrowSchema;
+
+	//! Store the child schema
+	child.flags = ARROW_FLAG_NULLABLE;
+	child.name = name.c_str();
+	child.n_children = 0;
+	child.children = nullptr;
+	child.metadata = nullptr;
+	child.dictionary = nullptr;
+}
+void SetArrowFormat(DuckDBArrowSchemaHolder &root_holder, ArrowSchema &child, const LogicalType &type,
+                    const string &config_timezone, ArrowOptions options);
+
+void SetArrowMapFormat(DuckDBArrowSchemaHolder &root_holder, ArrowSchema &child, const LogicalType &type,
+                       const string &config_timezone, ArrowOptions options) {
+	child.format = "+m";
+	//! Map has one child which is a struct
+	child.n_children = 1;
+	root_holder.nested_children.emplace_back();
+	root_holder.nested_children.back().resize(1);
+	root_holder.nested_children_ptr.emplace_back();
+	root_holder.nested_children_ptr.back().push_back(&root_holder.nested_children.back()[0]);
+	InitializeChild(root_holder.nested_children.back()[0]);
+	child.children = &root_holder.nested_children_ptr.back()[0];
+	child.children[0]->name = "entries";
+	SetArrowFormat(root_holder, **child.children, ListType::GetChildType(type), config_timezone, options);
+}
+
+void SetArrowFormat(DuckDBArrowSchemaHolder &root_holder, ArrowSchema &child, const LogicalType &type,
+                    const string &config_timezone, ArrowOptions options) {
+	switch (type.id()) {
+	case LogicalTypeId::BOOLEAN:
+		child.format = "b";
+		break;
+	case LogicalTypeId::TINYINT:
+		child.format = "c";
+		break;
+	case LogicalTypeId::SMALLINT:
+		child.format = "s";
+		break;
+	case LogicalTypeId::INTEGER:
+		child.format = "i";
+		break;
+	case LogicalTypeId::BIGINT:
+		child.format = "l";
+		break;
+	case LogicalTypeId::UTINYINT:
+		child.format = "C";
+		break;
+	case LogicalTypeId::USMALLINT:
+		child.format = "S";
+		break;
+	case LogicalTypeId::UINTEGER:
+		child.format = "I";
+		break;
+	case LogicalTypeId::UBIGINT:
+		child.format = "L";
+		break;
+	case LogicalTypeId::FLOAT:
+		child.format = "f";
+		break;
+	case LogicalTypeId::HUGEINT:
+		child.format = "d:38,0";
+		break;
+	case LogicalTypeId::DOUBLE:
+		child.format = "g";
+		break;
+	case LogicalTypeId::UUID:
+	case LogicalTypeId::VARCHAR:
+		if (options.offset_size == ArrowOffsetSize::LARGE) {
+			child.format = "U";
+		} else {
+			child.format = "u";
+		}
+		break;
+	case LogicalTypeId::DATE:
+		child.format = "tdD";
+		break;
+	case LogicalTypeId::TIME:
+	case LogicalTypeId::TIME_TZ:
+		child.format = "ttu";
+		break;
+	case LogicalTypeId::TIMESTAMP:
+		child.format = "tsu:";
+		break;
+	case LogicalTypeId::TIMESTAMP_TZ: {
+		string format = "tsu:" + config_timezone;
+		auto format_ptr = make_unsafe_uniq_array<char>(format.size() + 1);
+		for (size_t i = 0; i < format.size(); i++) {
+			format_ptr[i] = format[i];
+		}
+		format_ptr[format.size()] = '\0';
+		root_holder.owned_type_names.push_back(std::move(format_ptr));
+		child.format = root_holder.owned_type_names.back().get();
+		break;
+	}
+	case LogicalTypeId::TIMESTAMP_SEC:
+		child.format = "tss:";
+		break;
+	case LogicalTypeId::TIMESTAMP_NS:
+		child.format = "tsn:";
+		break;
+	case LogicalTypeId::TIMESTAMP_MS:
+		child.format = "tsm:";
+		break;
+	case LogicalTypeId::INTERVAL:
+		child.format = "tin";
+		break;
+	case LogicalTypeId::DECIMAL: {
+		uint8_t width, scale;
+		type.GetDecimalProperties(width, scale);
+		string format = "d:" + to_string(width) + "," + to_string(scale);
+		auto format_ptr = make_unsafe_uniq_array<char>(format.size() + 1);
+		for (size_t i = 0; i < format.size(); i++) {
+			format_ptr[i] = format[i];
+		}
+		format_ptr[format.size()] = '\0';
+		root_holder.owned_type_names.push_back(std::move(format_ptr));
+		child.format = root_holder.owned_type_names.back().get();
+		break;
+	}
+	case LogicalTypeId::SQLNULL: {
+		child.format = "n";
+		break;
+	}
+	case LogicalTypeId::BLOB:
+	case LogicalTypeId::BIT: {
+		if (options.offset_size == ArrowOffsetSize::LARGE) {
+			child.format = "Z";
+		} else {
+			child.format = "z";
+		}
+		break;
+	}
+	case LogicalTypeId::LIST: {
+		child.format = "+l";
+		child.n_children = 1;
+		root_holder.nested_children.emplace_back();
+		root_holder.nested_children.back().resize(1);
+		root_holder.nested_children_ptr.emplace_back();
+		root_holder.nested_children_ptr.back().push_back(&root_holder.nested_children.back()[0]);
+		InitializeChild(root_holder.nested_children.back()[0]);
+		child.children = &root_holder.nested_children_ptr.back()[0];
+		child.children[0]->name = "l";
+		SetArrowFormat(root_holder, **child.children, ListType::GetChildType(type), config_timezone, options);
+		break;
+	}
+	case LogicalTypeId::STRUCT: {
+		child.format = "+s";
+		auto &child_types = StructType::GetChildTypes(type);
+		child.n_children = child_types.size();
+		root_holder.nested_children.emplace_back();
+		root_holder.nested_children.back().resize(child_types.size());
+		root_holder.nested_children_ptr.emplace_back();
+		root_holder.nested_children_ptr.back().resize(child_types.size());
+		for (idx_t type_idx = 0; type_idx < child_types.size(); type_idx++) {
+			root_holder.nested_children_ptr.back()[type_idx] = &root_holder.nested_children.back()[type_idx];
+		}
+		child.children = &root_holder.nested_children_ptr.back()[0];
+		for (size_t type_idx = 0; type_idx < child_types.size(); type_idx++) {
+
+			InitializeChild(*child.children[type_idx]);
+
+			auto &struct_col_name = child_types[type_idx].first;
+			auto name_ptr = make_unsafe_uniq_array<char>(struct_col_name.size() + 1);
+			for (size_t i = 0; i < struct_col_name.size(); i++) {
+				name_ptr[i] = struct_col_name[i];
+			}
+			name_ptr[struct_col_name.size()] = '\0';
+			root_holder.owned_type_names.push_back(std::move(name_ptr));
+
+			child.children[type_idx]->name = root_holder.owned_type_names.back().get();
+			SetArrowFormat(root_holder, *child.children[type_idx], child_types[type_idx].second, config_timezone,
+			               options);
+		}
+		break;
+	}
+	case LogicalTypeId::MAP: {
+		SetArrowMapFormat(root_holder, child, type, config_timezone, options);
+		break;
+	}
+	case LogicalTypeId::ENUM: {
+		// TODO what do we do with pointer enums here?
+		switch (EnumType::GetPhysicalType(type)) {
+		case PhysicalType::UINT8:
+			child.format = "C";
+			break;
+		case PhysicalType::UINT16:
+			child.format = "S";
+			break;
+		case PhysicalType::UINT32:
+			child.format = "I";
+			break;
+		default:
+			throw InternalException("Unsupported Enum Internal Type");
+		}
+		root_holder.nested_children.emplace_back();
+		root_holder.nested_children.back().resize(1);
+		root_holder.nested_children_ptr.emplace_back();
+		root_holder.nested_children_ptr.back().push_back(&root_holder.nested_children.back()[0]);
+		InitializeChild(root_holder.nested_children.back()[0]);
+		child.dictionary = root_holder.nested_children_ptr.back()[0];
+		child.dictionary->format = "u";
+		break;
+	}
+	default:
+		throw InternalException("Unsupported Arrow type " + type.ToString());
+	}
+}
+
+void ArrowConverter::ToArrowSchema(ArrowSchema *out_schema, const vector<LogicalType> &types,
+                                   const vector<string> &names, const string &config_timezone, ArrowOptions options) {
+	D_ASSERT(out_schema);
+	D_ASSERT(types.size() == names.size());
+	idx_t column_count = types.size();
+	// Allocate as unique_ptr first to cleanup properly on error
+	auto root_holder = make_uniq<DuckDBArrowSchemaHolder>();
+
+	// Allocate the children
+	root_holder->children.resize(column_count);
+	root_holder->children_ptrs.resize(column_count, nullptr);
+	for (size_t i = 0; i < column_count; ++i) {
+		root_holder->children_ptrs[i] = &root_holder->children[i];
+	}
+	out_schema->children = root_holder->children_ptrs.data();
+	out_schema->n_children = column_count;
+
+	// Store the schema
+	out_schema->format = "+s"; // struct apparently
+	out_schema->flags = 0;
+	out_schema->metadata = nullptr;
+	out_schema->name = "duckdb_query_result";
+	out_schema->dictionary = nullptr;
+
+	// Configure all child schemas
+	for (idx_t col_idx = 0; col_idx < column_count; col_idx++) {
+
+		auto &child = root_holder->children[col_idx];
+		InitializeChild(child, names[col_idx]);
+		SetArrowFormat(*root_holder, child, types[col_idx], config_timezone, options);
+	}
+
+	// Release ownership to caller
+	out_schema->private_data = root_holder.release();
+	out_schema->release = ReleaseDuckDBArrowSchema;
+}
+
+} // namespace duckdb
+
+
 
 
 
@@ -3858,19 +7423,20 @@ int ResultArrowArrayStreamWrapper::MyStreamGetSchema(struct ArrowArrayStream *st
 	}
 	auto my_stream = (ResultArrowArrayStreamWrapper *)stream->private_data;
 	if (!my_stream->column_types.empty()) {
-		QueryResult::ToArrowSchema(out, my_stream->column_types, my_stream->column_names, my_stream->timezone_config);
+		ArrowConverter::ToArrowSchema(out, my_stream->column_types, my_stream->column_names,
+		                              my_stream->timezone_config);
 		return 0;
 	}
 
 	auto &result = *my_stream->result;
-	if (!result.success) {
-		my_stream->last_error = "Query Failed";
+	if (result.HasError()) {
+		my_stream->last_error = result.GetErrorObject();
 		return -1;
 	}
 	if (result.type == QueryResultType::STREAM_RESULT) {
 		auto &stream_result = (StreamQueryResult &)result;
 		if (!stream_result.IsOpen()) {
-			my_stream->last_error = "Query Stream is closed";
+			my_stream->last_error = PreservedError("Query Stream is closed");
 			return -1;
 		}
 	}
@@ -3878,7 +7444,7 @@ int ResultArrowArrayStreamWrapper::MyStreamGetSchema(struct ArrowArrayStream *st
 		my_stream->column_types = result.types;
 		my_stream->column_names = result.names;
 	}
-	QueryResult::ToArrowSchema(out, my_stream->column_types, my_stream->column_names, my_stream->timezone_config);
+	ArrowConverter::ToArrowSchema(out, my_stream->column_types, my_stream->column_names, my_stream->timezone_config);
 	return 0;
 }
 
@@ -3888,8 +7454,8 @@ int ResultArrowArrayStreamWrapper::MyStreamGetNext(struct ArrowArrayStream *stre
 	}
 	auto my_stream = (ResultArrowArrayStreamWrapper *)stream->private_data;
 	auto &result = *my_stream->result;
-	if (!result.success) {
-		my_stream->last_error = "Query Failed";
+	if (result.HasError()) {
+		my_stream->last_error = result.GetErrorObject();
 		return -1;
 	}
 	if (result.type == QueryResultType::STREAM_RESULT) {
@@ -3904,30 +7470,22 @@ int ResultArrowArrayStreamWrapper::MyStreamGetNext(struct ArrowArrayStream *stre
 		my_stream->column_types = result.types;
 		my_stream->column_names = result.names;
 	}
-	unique_ptr<DataChunk> chunk_result = result.Fetch();
-	if (!chunk_result) {
+	idx_t result_count;
+	PreservedError error;
+	if (!ArrowUtil::TryFetchChunk(&result, my_stream->batch_size, out, result_count, error)) {
+		D_ASSERT(error);
+		my_stream->last_error = error;
+		return -1;
+	}
+	if (result_count == 0) {
 		// Nothing to output
 		out->release = nullptr;
-		return 0;
 	}
-	unique_ptr<DataChunk> agg_chunk_result = make_unique<DataChunk>();
-	agg_chunk_result->Initialize(Allocator::DefaultAllocator(), chunk_result->GetTypes());
-	agg_chunk_result->Append(*chunk_result, true);
-
-	while (agg_chunk_result->size() < my_stream->batch_size) {
-		auto new_chunk = result.Fetch();
-		if (!new_chunk) {
-			break;
-		} else {
-			agg_chunk_result->Append(*new_chunk, true);
-		}
-	}
-	agg_chunk_result->ToArrowArray(out);
 	return 0;
 }
 
 void ResultArrowArrayStreamWrapper::MyStreamRelease(struct ArrowArrayStream *stream) {
-	if (!stream->release) {
+	if (!stream || !stream->release) {
 		return;
 	}
 	stream->release = nullptr;
@@ -3940,10 +7498,11 @@ const char *ResultArrowArrayStreamWrapper::MyStreamGetLastError(struct ArrowArra
 	}
 	D_ASSERT(stream->private_data);
 	auto my_stream = (ResultArrowArrayStreamWrapper *)stream->private_data;
-	return my_stream->last_error.c_str();
+	return my_stream->last_error.Message().c_str();
 }
+
 ResultArrowArrayStreamWrapper::ResultArrowArrayStreamWrapper(unique_ptr<QueryResult> result_p, idx_t batch_size_p)
-    : result(move(result_p)) {
+    : result(std::move(result_p)) {
 	//! We first initialize the private data of the stream
 	stream.private_data = this;
 	//! Ceil Approx_Batch_Size/STANDARD_VECTOR_SIZE
@@ -3958,28 +7517,65 @@ ResultArrowArrayStreamWrapper::ResultArrowArrayStreamWrapper(unique_ptr<QueryRes
 	stream.get_last_error = ResultArrowArrayStreamWrapper::MyStreamGetLastError;
 }
 
-unique_ptr<DataChunk> ArrowUtil::FetchNext(QueryResult &result) {
-	auto chunk = result.Fetch();
-	if (!result.success) {
-		throw std::runtime_error(result.error);
+bool ArrowUtil::TryFetchNext(QueryResult &result, unique_ptr<DataChunk> &chunk, PreservedError &error) {
+	if (result.type == QueryResultType::STREAM_RESULT) {
+		auto &stream_result = (StreamQueryResult &)result;
+		if (!stream_result.IsOpen()) {
+			return true;
+		}
 	}
-	return chunk;
+	return result.TryFetch(chunk, error);
 }
 
-unique_ptr<DataChunk> ArrowUtil::FetchChunk(QueryResult *result, idx_t chunk_size) {
-
-	auto data_chunk = FetchNext(*result);
-	if (!data_chunk) {
-		return data_chunk;
+bool ArrowUtil::TryFetchChunk(QueryResult *result, idx_t chunk_size, ArrowArray *out, idx_t &count,
+                              PreservedError &error) {
+	count = 0;
+	ArrowAppender appender(result->types, chunk_size);
+	auto &current_chunk = result->current_chunk;
+	if (current_chunk.Valid()) {
+		// We start by scanning the non-finished current chunk
+		idx_t cur_consumption = current_chunk.RemainingSize() > chunk_size ? chunk_size : current_chunk.RemainingSize();
+		count += cur_consumption;
+		appender.Append(*current_chunk.data_chunk, current_chunk.position, current_chunk.position + cur_consumption,
+		                current_chunk.data_chunk->size());
+		current_chunk.position += cur_consumption;
 	}
-	while (data_chunk->size() < chunk_size) {
-		auto next_chunk = FetchNext(*result);
-		if (!next_chunk || next_chunk->size() == 0) {
+	while (count < chunk_size) {
+		unique_ptr<DataChunk> data_chunk;
+		if (!TryFetchNext(*result, data_chunk, error)) {
+			if (result->HasError()) {
+				error = result->GetErrorObject();
+			}
+			return false;
+		}
+		if (!data_chunk || data_chunk->size() == 0) {
 			break;
 		}
-		data_chunk->Append(*next_chunk, true);
+		if (count + data_chunk->size() > chunk_size) {
+			// We have to split the chunk between this and the next batch
+			idx_t available_space = chunk_size - count;
+			appender.Append(*data_chunk, 0, available_space, data_chunk->size());
+			count += available_space;
+			current_chunk.data_chunk = std::move(data_chunk);
+			current_chunk.position = available_space;
+		} else {
+			count += data_chunk->size();
+			appender.Append(*data_chunk, 0, data_chunk->size(), data_chunk->size());
+		}
 	}
-	return data_chunk;
+	if (count > 0) {
+		*out = appender.Finalize();
+	}
+	return true;
+}
+
+idx_t ArrowUtil::FetchChunk(QueryResult *result, idx_t chunk_size, ArrowArray *out) {
+	PreservedError error;
+	idx_t result_count;
+	if (!TryFetchChunk(result, chunk_size, out, result_count, error)) {
+		error.Throw();
+	}
+	return result_count;
 }
 
 } // namespace duckdb
@@ -3992,7 +7588,878 @@ void DuckDBAssertInternal(bool condition, const char *condition_name, const char
 	if (condition) {
 		return;
 	}
-	throw InternalException("Assertion triggered in file \"%s\" on line %d: %s", file, linenr, condition_name);
+	throw InternalException("Assertion triggered in file \"%s\" on line %d: %s%s", file, linenr, condition_name,
+	                        Exception::GetStackTrace());
+}
+
+} // namespace duckdb
+
+
+
+
+
+
+#include <numeric>
+
+namespace duckdb {
+
+Value ConvertVectorToValue(vector<Value> set) {
+	if (set.empty()) {
+		return Value::EMPTYLIST(LogicalType::BOOLEAN);
+	}
+	return Value::LIST(std::move(set));
+}
+
+vector<bool> ParseColumnList(const vector<Value> &set, vector<string> &names, const string &loption) {
+	vector<bool> result;
+
+	if (set.empty()) {
+		throw BinderException("\"%s\" expects a column list or * as parameter", loption);
+	}
+	// list of options: parse the list
+	case_insensitive_map_t<bool> option_map;
+	for (idx_t i = 0; i < set.size(); i++) {
+		option_map[set[i].ToString()] = false;
+	}
+	result.resize(names.size(), false);
+	for (idx_t i = 0; i < names.size(); i++) {
+		auto entry = option_map.find(names[i]);
+		if (entry != option_map.end()) {
+			result[i] = true;
+			entry->second = true;
+		}
+	}
+	for (auto &entry : option_map) {
+		if (!entry.second) {
+			throw BinderException("\"%s\" expected to find %s, but it was not found in the table", loption,
+			                      entry.first.c_str());
+		}
+	}
+	return result;
+}
+
+vector<bool> ParseColumnList(const Value &value, vector<string> &names, const string &loption) {
+	vector<bool> result;
+
+	// Only accept a list of arguments
+	if (value.type().id() != LogicalTypeId::LIST) {
+		// Support a single argument if it's '*'
+		if (value.type().id() == LogicalTypeId::VARCHAR && value.GetValue<string>() == "*") {
+			result.resize(names.size(), true);
+			return result;
+		}
+		throw BinderException("\"%s\" expects a column list or * as parameter", loption);
+	}
+	auto &children = ListValue::GetChildren(value);
+	// accept '*' as single argument
+	if (children.size() == 1 && children[0].type().id() == LogicalTypeId::VARCHAR &&
+	    children[0].GetValue<string>() == "*") {
+		result.resize(names.size(), true);
+		return result;
+	}
+	return ParseColumnList(children, names, loption);
+}
+
+vector<idx_t> ParseColumnsOrdered(const vector<Value> &set, vector<string> &names, const string &loption) {
+	vector<idx_t> result;
+
+	if (set.empty()) {
+		throw BinderException("\"%s\" expects a column list or * as parameter", loption);
+	}
+
+	// Maps option to bool indicating if its found and the index in the original set
+	case_insensitive_map_t<std::pair<bool, idx_t>> option_map;
+	for (idx_t i = 0; i < set.size(); i++) {
+		option_map[set[i].ToString()] = {false, i};
+	}
+	result.resize(option_map.size());
+
+	for (idx_t i = 0; i < names.size(); i++) {
+		auto entry = option_map.find(names[i]);
+		if (entry != option_map.end()) {
+			result[entry->second.second] = i;
+			entry->second.first = true;
+		}
+	}
+	for (auto &entry : option_map) {
+		if (!entry.second.first) {
+			throw BinderException("\"%s\" expected to find %s, but it was not found in the table", loption,
+			                      entry.first.c_str());
+		}
+	}
+	return result;
+}
+
+vector<idx_t> ParseColumnsOrdered(const Value &value, vector<string> &names, const string &loption) {
+	vector<idx_t> result;
+
+	// Only accept a list of arguments
+	if (value.type().id() != LogicalTypeId::LIST) {
+		// Support a single argument if it's '*'
+		if (value.type().id() == LogicalTypeId::VARCHAR && value.GetValue<string>() == "*") {
+			result.resize(names.size(), 0);
+			std::iota(std::begin(result), std::end(result), 0);
+			return result;
+		}
+		throw BinderException("\"%s\" expects a column list or * as parameter", loption);
+	}
+	auto &children = ListValue::GetChildren(value);
+	// accept '*' as single argument
+	if (children.size() == 1 && children[0].type().id() == LogicalTypeId::VARCHAR &&
+	    children[0].GetValue<string>() == "*") {
+		result.resize(names.size(), 0);
+		std::iota(std::begin(result), std::end(result), 0);
+		return result;
+	}
+	return ParseColumnsOrdered(children, names, loption);
+}
+
+} // namespace duckdb
+
+
+
+
+
+
+
+#include <sstream>
+
+namespace duckdb {
+
+const idx_t BoxRenderer::SPLIT_COLUMN = idx_t(-1);
+
+BoxRenderer::BoxRenderer(BoxRendererConfig config_p) : config(std::move(config_p)) {
+}
+
+string BoxRenderer::ToString(ClientContext &context, const vector<string> &names, const ColumnDataCollection &result) {
+	std::stringstream ss;
+	Render(context, names, result, ss);
+	return ss.str();
+}
+
+void BoxRenderer::Print(ClientContext &context, const vector<string> &names, const ColumnDataCollection &result) {
+	Printer::Print(ToString(context, names, result));
+}
+
+void BoxRenderer::RenderValue(std::ostream &ss, const string &value, idx_t column_width,
+                              ValueRenderAlignment alignment) {
+	auto render_width = Utf8Proc::RenderWidth(value);
+
+	const string *render_value = &value;
+	string small_value;
+	if (render_width > column_width) {
+		// the string is too large to fit in this column!
+		// the size of this column must have been reduced
+		// figure out how much of this value we can render
+		idx_t pos = 0;
+		idx_t current_render_width = config.DOTDOTDOT_LENGTH;
+		while (pos < value.size()) {
+			// check if this character fits...
+			auto char_size = Utf8Proc::RenderWidth(value.c_str(), value.size(), pos);
+			if (current_render_width + char_size >= column_width) {
+				// it doesn't! stop
+				break;
+			}
+			// it does! move to the next character
+			current_render_width += char_size;
+			pos = Utf8Proc::NextGraphemeCluster(value.c_str(), value.size(), pos);
+		}
+		small_value = value.substr(0, pos) + config.DOTDOTDOT;
+		render_value = &small_value;
+		render_width = current_render_width;
+	}
+	auto padding_count = (column_width - render_width) + 2;
+	idx_t lpadding;
+	idx_t rpadding;
+	switch (alignment) {
+	case ValueRenderAlignment::LEFT:
+		lpadding = 1;
+		rpadding = padding_count - 1;
+		break;
+	case ValueRenderAlignment::MIDDLE:
+		lpadding = padding_count / 2;
+		rpadding = padding_count - lpadding;
+		break;
+	case ValueRenderAlignment::RIGHT:
+		lpadding = padding_count - 1;
+		rpadding = 1;
+		break;
+	default:
+		throw InternalException("Unrecognized value renderer alignment");
+	}
+	ss << config.VERTICAL;
+	ss << string(lpadding, ' ');
+	ss << *render_value;
+	ss << string(rpadding, ' ');
+}
+
+string BoxRenderer::RenderType(const LogicalType &type) {
+	switch (type.id()) {
+	case LogicalTypeId::TINYINT:
+		return "int8";
+	case LogicalTypeId::SMALLINT:
+		return "int16";
+	case LogicalTypeId::INTEGER:
+		return "int32";
+	case LogicalTypeId::BIGINT:
+		return "int64";
+	case LogicalTypeId::HUGEINT:
+		return "int128";
+	case LogicalTypeId::UTINYINT:
+		return "uint8";
+	case LogicalTypeId::USMALLINT:
+		return "uint16";
+	case LogicalTypeId::UINTEGER:
+		return "uint32";
+	case LogicalTypeId::UBIGINT:
+		return "uint64";
+	case LogicalTypeId::LIST: {
+		auto child = RenderType(ListType::GetChildType(type));
+		return child + "[]";
+	}
+	default:
+		return StringUtil::Lower(type.ToString());
+	}
+}
+
+ValueRenderAlignment BoxRenderer::TypeAlignment(const LogicalType &type) {
+	switch (type.id()) {
+	case LogicalTypeId::TINYINT:
+	case LogicalTypeId::SMALLINT:
+	case LogicalTypeId::INTEGER:
+	case LogicalTypeId::BIGINT:
+	case LogicalTypeId::HUGEINT:
+	case LogicalTypeId::UTINYINT:
+	case LogicalTypeId::USMALLINT:
+	case LogicalTypeId::UINTEGER:
+	case LogicalTypeId::UBIGINT:
+	case LogicalTypeId::DECIMAL:
+	case LogicalTypeId::FLOAT:
+	case LogicalTypeId::DOUBLE:
+		return ValueRenderAlignment::RIGHT;
+	default:
+		return ValueRenderAlignment::LEFT;
+	}
+}
+
+list<ColumnDataCollection> BoxRenderer::FetchRenderCollections(ClientContext &context,
+                                                               const ColumnDataCollection &result, idx_t top_rows,
+                                                               idx_t bottom_rows) {
+	auto column_count = result.ColumnCount();
+	vector<LogicalType> varchar_types;
+	for (idx_t c = 0; c < column_count; c++) {
+		varchar_types.emplace_back(LogicalType::VARCHAR);
+	}
+	std::list<ColumnDataCollection> collections;
+	collections.emplace_back(context, varchar_types);
+	collections.emplace_back(context, varchar_types);
+
+	auto &top_collection = collections.front();
+	auto &bottom_collection = collections.back();
+
+	DataChunk fetch_result;
+	fetch_result.Initialize(context, result.Types());
+
+	DataChunk insert_result;
+	insert_result.Initialize(context, varchar_types);
+
+	// fetch the top rows from the ColumnDataCollection
+	idx_t chunk_idx = 0;
+	idx_t row_idx = 0;
+	while (row_idx < top_rows) {
+		fetch_result.Reset();
+		insert_result.Reset();
+		// fetch the next chunk
+		result.FetchChunk(chunk_idx, fetch_result);
+		idx_t insert_count = MinValue<idx_t>(fetch_result.size(), top_rows - row_idx);
+
+		// cast all columns to varchar
+		for (idx_t c = 0; c < column_count; c++) {
+			VectorOperations::Cast(context, fetch_result.data[c], insert_result.data[c], insert_count);
+		}
+		insert_result.SetCardinality(insert_count);
+
+		// construct the render collection
+		top_collection.Append(insert_result);
+
+		chunk_idx++;
+		row_idx += fetch_result.size();
+	}
+
+	// fetch the bottom rows from the ColumnDataCollection
+	row_idx = 0;
+	chunk_idx = result.ChunkCount() - 1;
+	while (row_idx < bottom_rows) {
+		fetch_result.Reset();
+		insert_result.Reset();
+		// fetch the next chunk
+		result.FetchChunk(chunk_idx, fetch_result);
+		idx_t insert_count = MinValue<idx_t>(fetch_result.size(), bottom_rows - row_idx);
+
+		// invert the rows
+		SelectionVector inverted_sel(insert_count);
+		for (idx_t r = 0; r < insert_count; r++) {
+			inverted_sel.set_index(r, fetch_result.size() - r - 1);
+		}
+
+		for (idx_t c = 0; c < column_count; c++) {
+			Vector slice(fetch_result.data[c], inverted_sel, insert_count);
+			VectorOperations::Cast(context, slice, insert_result.data[c], insert_count);
+		}
+		insert_result.SetCardinality(insert_count);
+		// construct the render collection
+		bottom_collection.Append(insert_result);
+
+		chunk_idx--;
+		row_idx += fetch_result.size();
+	}
+	return collections;
+}
+
+list<ColumnDataCollection> BoxRenderer::PivotCollections(ClientContext &context, list<ColumnDataCollection> input,
+                                                         vector<string> &column_names,
+                                                         vector<LogicalType> &result_types, idx_t row_count) {
+	auto &top = input.front();
+	auto &bottom = input.back();
+
+	vector<LogicalType> varchar_types;
+	vector<string> new_names;
+	new_names.emplace_back("Column");
+	new_names.emplace_back("Type");
+	varchar_types.emplace_back(LogicalType::VARCHAR);
+	varchar_types.emplace_back(LogicalType::VARCHAR);
+	for (idx_t r = 0; r < top.Count(); r++) {
+		new_names.emplace_back("Row " + to_string(r + 1));
+		varchar_types.emplace_back(LogicalType::VARCHAR);
+	}
+	for (idx_t r = 0; r < bottom.Count(); r++) {
+		auto row_index = row_count - bottom.Count() + r + 1;
+		new_names.emplace_back("Row " + to_string(row_index));
+		varchar_types.emplace_back(LogicalType::VARCHAR);
+	}
+	//
+	DataChunk row_chunk;
+	row_chunk.Initialize(Allocator::DefaultAllocator(), varchar_types);
+	std::list<ColumnDataCollection> result;
+	result.emplace_back(context, varchar_types);
+	result.emplace_back(context, varchar_types);
+	auto &res_coll = result.front();
+	ColumnDataAppendState append_state;
+	res_coll.InitializeAppend(append_state);
+	for (idx_t c = 0; c < top.ColumnCount(); c++) {
+		vector<column_t> column_ids {c};
+		auto row_index = row_chunk.size();
+		idx_t current_index = 0;
+		row_chunk.SetValue(current_index++, row_index, column_names[c]);
+		row_chunk.SetValue(current_index++, row_index, RenderType(result_types[c]));
+		for (auto &collection : input) {
+			for (auto &chunk : collection.Chunks(column_ids)) {
+				for (idx_t r = 0; r < chunk.size(); r++) {
+					row_chunk.SetValue(current_index++, row_index, chunk.GetValue(0, r));
+				}
+			}
+		}
+		row_chunk.SetCardinality(row_chunk.size() + 1);
+		if (row_chunk.size() == STANDARD_VECTOR_SIZE || c + 1 == top.ColumnCount()) {
+			res_coll.Append(append_state, row_chunk);
+			row_chunk.Reset();
+		}
+	}
+	column_names = std::move(new_names);
+	result_types = std::move(varchar_types);
+	return result;
+}
+
+string ConvertRenderValue(const string &input) {
+	return StringUtil::Replace(StringUtil::Replace(input, "\n", "\\n"), string("\0", 1), "\\0");
+}
+
+string BoxRenderer::GetRenderValue(ColumnDataRowCollection &rows, idx_t c, idx_t r) {
+	try {
+		auto row = rows.GetValue(c, r);
+		if (row.IsNull()) {
+			return config.null_value;
+		}
+		return ConvertRenderValue(StringValue::Get(row));
+	} catch (std::exception &ex) {
+		return "????INVALID VALUE - " + string(ex.what()) + "?????";
+	}
+}
+
+vector<idx_t> BoxRenderer::ComputeRenderWidths(const vector<string> &names, const vector<LogicalType> &result_types,
+                                               list<ColumnDataCollection> &collections, idx_t min_width,
+                                               idx_t max_width, vector<idx_t> &column_map, idx_t &total_length) {
+	auto column_count = result_types.size();
+
+	vector<idx_t> widths;
+	widths.reserve(column_count);
+	for (idx_t c = 0; c < column_count; c++) {
+		auto name_width = Utf8Proc::RenderWidth(ConvertRenderValue(names[c]));
+		auto type_width = Utf8Proc::RenderWidth(RenderType(result_types[c]));
+		widths.push_back(MaxValue<idx_t>(name_width, type_width));
+	}
+
+	// now iterate over the data in the render collection and find out the true max width
+	for (auto &collection : collections) {
+		for (auto &chunk : collection.Chunks()) {
+			for (idx_t c = 0; c < column_count; c++) {
+				auto string_data = FlatVector::GetData<string_t>(chunk.data[c]);
+				for (idx_t r = 0; r < chunk.size(); r++) {
+					string render_value;
+					if (FlatVector::IsNull(chunk.data[c], r)) {
+						render_value = config.null_value;
+					} else {
+						render_value = ConvertRenderValue(string_data[r].GetString());
+					}
+					auto render_width = Utf8Proc::RenderWidth(render_value);
+					widths[c] = MaxValue<idx_t>(render_width, widths[c]);
+				}
+			}
+		}
+	}
+
+	// figure out the total length
+	// we start off with a pipe (|)
+	total_length = 1;
+	for (idx_t c = 0; c < widths.size(); c++) {
+		// each column has a space at the beginning, and a space plus a pipe (|) at the end
+		// hence + 3
+		total_length += widths[c] + 3;
+	}
+	if (total_length < min_width) {
+		// if there are hidden rows we should always display that
+		// stretch up the first column until we have space to show the row count
+		widths[0] += min_width - total_length;
+		total_length = min_width;
+	}
+	// now we need to constrain the length
+	unordered_set<idx_t> pruned_columns;
+	if (total_length > max_width) {
+		// before we remove columns, check if we can just reduce the size of columns
+		for (auto &w : widths) {
+			if (w > config.max_col_width) {
+				auto max_diff = w - config.max_col_width;
+				if (total_length - max_diff <= max_width) {
+					// if we reduce the size of this column we fit within the limits!
+					// reduce the width exactly enough so that the box fits
+					w -= total_length - max_width;
+					total_length = max_width;
+					break;
+				} else {
+					// reducing the width of this column does not make the result fit
+					// reduce the column width by the maximum amount anyway
+					w = config.max_col_width;
+					total_length -= max_diff;
+				}
+			}
+		}
+
+		if (total_length > max_width) {
+			// the total length is still too large
+			// we need to remove columns!
+			// first, we add 6 characters to the total length
+			// this is what we need to add the "..." in the middle
+			total_length += 3 + config.DOTDOTDOT_LENGTH;
+			// now select columns to prune
+			// we select columns in zig-zag order starting from the middle
+			// e.g. if we have 10 columns, we remove #5, then #4, then #6, then #3, then #7, etc
+			int64_t offset = 0;
+			while (total_length > max_width) {
+				idx_t c = column_count / 2 + offset;
+				total_length -= widths[c] + 3;
+				pruned_columns.insert(c);
+				if (offset >= 0) {
+					offset = -offset - 1;
+				} else {
+					offset = -offset;
+				}
+			}
+		}
+	}
+
+	bool added_split_column = false;
+	vector<idx_t> new_widths;
+	for (idx_t c = 0; c < column_count; c++) {
+		if (pruned_columns.find(c) == pruned_columns.end()) {
+			column_map.push_back(c);
+			new_widths.push_back(widths[c]);
+		} else {
+			if (!added_split_column) {
+				// "..."
+				column_map.push_back(SPLIT_COLUMN);
+				new_widths.push_back(config.DOTDOTDOT_LENGTH);
+				added_split_column = true;
+			}
+		}
+	}
+	return new_widths;
+}
+
+void BoxRenderer::RenderHeader(const vector<string> &names, const vector<LogicalType> &result_types,
+                               const vector<idx_t> &column_map, const vector<idx_t> &widths,
+                               const vector<idx_t> &boundaries, idx_t total_length, bool has_results,
+                               std::ostream &ss) {
+	auto column_count = column_map.size();
+	// render the top line
+	ss << config.LTCORNER;
+	idx_t column_index = 0;
+	for (idx_t k = 0; k < total_length - 2; k++) {
+		if (column_index + 1 < column_count && k == boundaries[column_index]) {
+			ss << config.TMIDDLE;
+			column_index++;
+		} else {
+			ss << config.HORIZONTAL;
+		}
+	}
+	ss << config.RTCORNER;
+	ss << std::endl;
+
+	// render the header names
+	for (idx_t c = 0; c < column_count; c++) {
+		auto column_idx = column_map[c];
+		string name;
+		if (column_idx == SPLIT_COLUMN) {
+			name = config.DOTDOTDOT;
+		} else {
+			name = ConvertRenderValue(names[column_idx]);
+		}
+		RenderValue(ss, name, widths[c]);
+	}
+	ss << config.VERTICAL;
+	ss << std::endl;
+
+	// render the types
+	if (config.render_mode == RenderMode::ROWS) {
+		for (idx_t c = 0; c < column_count; c++) {
+			auto column_idx = column_map[c];
+			auto type = column_idx == SPLIT_COLUMN ? "" : RenderType(result_types[column_idx]);
+			RenderValue(ss, type, widths[c]);
+		}
+		ss << config.VERTICAL;
+		ss << std::endl;
+	}
+
+	// render the line under the header
+	ss << config.LMIDDLE;
+	column_index = 0;
+	for (idx_t k = 0; k < total_length - 2; k++) {
+		if (has_results && column_index + 1 < column_count && k == boundaries[column_index]) {
+			ss << config.MIDDLE;
+			column_index++;
+		} else {
+			ss << config.HORIZONTAL;
+		}
+	}
+	ss << config.RMIDDLE;
+	ss << std::endl;
+}
+
+void BoxRenderer::RenderValues(const list<ColumnDataCollection> &collections, const vector<idx_t> &column_map,
+                               const vector<idx_t> &widths, const vector<LogicalType> &result_types, std::ostream &ss) {
+	auto &top_collection = collections.front();
+	auto &bottom_collection = collections.back();
+	// render the top rows
+	auto top_rows = top_collection.Count();
+	auto bottom_rows = bottom_collection.Count();
+	auto column_count = column_map.size();
+
+	vector<ValueRenderAlignment> alignments;
+	if (config.render_mode == RenderMode::ROWS) {
+		for (idx_t c = 0; c < column_count; c++) {
+			auto column_idx = column_map[c];
+			if (column_idx == SPLIT_COLUMN) {
+				alignments.push_back(ValueRenderAlignment::MIDDLE);
+			} else {
+				alignments.push_back(TypeAlignment(result_types[column_idx]));
+			}
+		}
+	}
+
+	auto rows = top_collection.GetRows();
+	for (idx_t r = 0; r < top_rows; r++) {
+		for (idx_t c = 0; c < column_count; c++) {
+			auto column_idx = column_map[c];
+			string str;
+			if (column_idx == SPLIT_COLUMN) {
+				str = config.DOTDOTDOT;
+			} else {
+				str = GetRenderValue(rows, column_idx, r);
+			}
+			ValueRenderAlignment alignment;
+			if (config.render_mode == RenderMode::ROWS) {
+				alignment = alignments[c];
+			} else {
+				if (c < 2) {
+					alignment = ValueRenderAlignment::LEFT;
+				} else if (c == SPLIT_COLUMN) {
+					alignment = ValueRenderAlignment::MIDDLE;
+				} else {
+					alignment = ValueRenderAlignment::RIGHT;
+				}
+			}
+			RenderValue(ss, str, widths[c], alignment);
+		}
+		ss << config.VERTICAL;
+		ss << std::endl;
+	}
+
+	if (bottom_rows > 0) {
+		if (config.render_mode == RenderMode::COLUMNS) {
+			throw InternalException("Columns render mode does not support bottom rows");
+		}
+		// render the bottom rows
+		// first render the divider
+		auto brows = bottom_collection.GetRows();
+		for (idx_t k = 0; k < 3; k++) {
+			for (idx_t c = 0; c < column_count; c++) {
+				auto column_idx = column_map[c];
+				string str;
+				auto alignment = alignments[c];
+				if (alignment == ValueRenderAlignment::MIDDLE || column_idx == SPLIT_COLUMN) {
+					str = config.DOT;
+				} else {
+					// align the dots in the center of the column
+					auto top_value = GetRenderValue(rows, column_idx, top_rows - 1);
+					auto bottom_value = GetRenderValue(brows, column_idx, bottom_rows - 1);
+					auto top_length = MinValue<idx_t>(widths[c], Utf8Proc::RenderWidth(top_value));
+					auto bottom_length = MinValue<idx_t>(widths[c], Utf8Proc::RenderWidth(bottom_value));
+					auto dot_length = MinValue<idx_t>(top_length, bottom_length);
+					if (top_length == 0) {
+						dot_length = bottom_length;
+					} else if (bottom_length == 0) {
+						dot_length = top_length;
+					}
+					if (dot_length > 1) {
+						auto padding = dot_length - 1;
+						idx_t left_padding, right_padding;
+						switch (alignment) {
+						case ValueRenderAlignment::LEFT:
+							left_padding = padding / 2;
+							right_padding = padding - left_padding;
+							break;
+						case ValueRenderAlignment::RIGHT:
+							right_padding = padding / 2;
+							left_padding = padding - right_padding;
+							break;
+						default:
+							throw InternalException("Unrecognized value renderer alignment");
+						}
+						str = string(left_padding, ' ') + config.DOT + string(right_padding, ' ');
+					} else {
+						if (dot_length == 0) {
+							// everything is empty
+							alignment = ValueRenderAlignment::MIDDLE;
+						}
+						str = config.DOT;
+					}
+				}
+				RenderValue(ss, str, widths[c], alignment);
+			}
+			ss << config.VERTICAL;
+			ss << std::endl;
+		}
+		// note that the bottom rows are in reverse order
+		for (idx_t r = 0; r < bottom_rows; r++) {
+			for (idx_t c = 0; c < column_count; c++) {
+				auto column_idx = column_map[c];
+				string str;
+				if (column_idx == SPLIT_COLUMN) {
+					str = config.DOTDOTDOT;
+				} else {
+					str = GetRenderValue(brows, column_idx, bottom_rows - r - 1);
+				}
+				RenderValue(ss, str, widths[c], alignments[c]);
+			}
+			ss << config.VERTICAL;
+			ss << std::endl;
+		}
+	}
+}
+
+void BoxRenderer::RenderRowCount(string row_count_str, string shown_str, const string &column_count_str,
+                                 const vector<idx_t> &boundaries, bool has_hidden_rows, bool has_hidden_columns,
+                                 idx_t total_length, idx_t row_count, idx_t column_count, idx_t minimum_row_length,
+                                 std::ostream &ss) {
+	// check if we can merge the row_count_str and the shown_str
+	bool display_shown_separately = has_hidden_rows;
+	if (has_hidden_rows && total_length >= row_count_str.size() + shown_str.size() + 5) {
+		// we can!
+		row_count_str += " " + shown_str;
+		shown_str = string();
+		display_shown_separately = false;
+		minimum_row_length = row_count_str.size() + 4;
+	}
+	auto minimum_length = row_count_str.size() + column_count_str.size() + 6;
+	bool render_rows_and_columns = total_length >= minimum_length &&
+	                               ((has_hidden_columns && row_count > 0) || (row_count >= 10 && column_count > 1));
+	bool render_rows = total_length >= minimum_row_length && (row_count == 0 || row_count >= 10);
+	bool render_anything = true;
+	if (!render_rows && !render_rows_and_columns) {
+		render_anything = false;
+	}
+	// render the bottom of the result values, if there are any
+	if (row_count > 0) {
+		ss << (render_anything ? config.LMIDDLE : config.LDCORNER);
+		idx_t column_index = 0;
+		for (idx_t k = 0; k < total_length - 2; k++) {
+			if (column_index + 1 < boundaries.size() && k == boundaries[column_index]) {
+				ss << config.DMIDDLE;
+				column_index++;
+			} else {
+				ss << config.HORIZONTAL;
+			}
+		}
+		ss << (render_anything ? config.RMIDDLE : config.RDCORNER);
+		ss << std::endl;
+	}
+	if (!render_anything) {
+		return;
+	}
+
+	if (render_rows_and_columns) {
+		ss << config.VERTICAL;
+		ss << " ";
+		ss << row_count_str;
+		ss << string(total_length - row_count_str.size() - column_count_str.size() - 4, ' ');
+		ss << column_count_str;
+		ss << " ";
+		ss << config.VERTICAL;
+		ss << std::endl;
+	} else if (render_rows) {
+		RenderValue(ss, row_count_str, total_length - 4);
+		ss << config.VERTICAL;
+		ss << std::endl;
+
+		if (display_shown_separately) {
+			RenderValue(ss, shown_str, total_length - 4);
+			ss << config.VERTICAL;
+			ss << std::endl;
+		}
+	}
+	// render the bottom line
+	ss << config.LDCORNER;
+	for (idx_t k = 0; k < total_length - 2; k++) {
+		ss << config.HORIZONTAL;
+	}
+	ss << config.RDCORNER;
+	ss << std::endl;
+}
+
+void BoxRenderer::Render(ClientContext &context, const vector<string> &names, const ColumnDataCollection &result,
+                         std::ostream &ss) {
+	if (result.ColumnCount() != names.size()) {
+		throw InternalException("Error in BoxRenderer::Render - unaligned columns and names");
+	}
+	auto max_width = config.max_width;
+	if (max_width == 0) {
+		if (Printer::IsTerminal(OutputStream::STREAM_STDOUT)) {
+			max_width = Printer::TerminalWidth();
+		} else {
+			max_width = 120;
+		}
+	}
+	// we do not support max widths under 80
+	max_width = MaxValue<idx_t>(80, max_width);
+
+	// figure out how many/which rows to render
+	idx_t row_count = result.Count();
+	idx_t rows_to_render = MinValue<idx_t>(row_count, config.max_rows);
+	if (row_count <= config.max_rows + 3) {
+		// hiding rows adds 3 extra rows
+		// so hiding rows makes no sense if we are only slightly over the limit
+		// if we are 1 row over the limit hiding rows will actually increase the number of lines we display!
+		// in this case render all the rows
+		rows_to_render = row_count;
+	}
+	idx_t top_rows;
+	idx_t bottom_rows;
+	if (rows_to_render == row_count) {
+		top_rows = row_count;
+		bottom_rows = 0;
+	} else {
+		top_rows = rows_to_render / 2 + (rows_to_render % 2 != 0 ? 1 : 0);
+		bottom_rows = rows_to_render - top_rows;
+	}
+	auto row_count_str = to_string(row_count) + " rows";
+	bool has_limited_rows = config.limit > 0 && row_count == config.limit;
+	if (has_limited_rows) {
+		row_count_str = "? rows";
+	}
+	string shown_str;
+	bool has_hidden_rows = top_rows < row_count;
+	if (has_hidden_rows) {
+		shown_str = "(";
+		if (has_limited_rows) {
+			shown_str += ">" + to_string(config.limit - 1) + " rows, ";
+		}
+		shown_str += to_string(top_rows + bottom_rows) + " shown)";
+	}
+	auto minimum_row_length = MaxValue<idx_t>(row_count_str.size(), shown_str.size()) + 4;
+
+	// fetch the top and bottom render collections from the result
+	auto collections = FetchRenderCollections(context, result, top_rows, bottom_rows);
+	auto column_names = names;
+	auto result_types = result.Types();
+	if (config.render_mode == RenderMode::COLUMNS) {
+		collections = PivotCollections(context, std::move(collections), column_names, result_types, row_count);
+	}
+
+	// for each column, figure out the width
+	// start off by figuring out the name of the header by looking at the column name and column type
+	idx_t min_width = has_hidden_rows || row_count == 0 ? minimum_row_length : 0;
+	vector<idx_t> column_map;
+	idx_t total_length;
+	auto widths =
+	    ComputeRenderWidths(column_names, result_types, collections, min_width, max_width, column_map, total_length);
+
+	// render boundaries for the individual columns
+	vector<idx_t> boundaries;
+	for (idx_t c = 0; c < widths.size(); c++) {
+		idx_t render_boundary;
+		if (c == 0) {
+			render_boundary = widths[c] + 2;
+		} else {
+			render_boundary = boundaries[c - 1] + widths[c] + 3;
+		}
+		boundaries.push_back(render_boundary);
+	}
+
+	// now begin rendering
+	// first render the header
+	RenderHeader(column_names, result_types, column_map, widths, boundaries, total_length, row_count > 0, ss);
+
+	// render the values, if there are any
+	RenderValues(collections, column_map, widths, result_types, ss);
+
+	// render the row count and column count
+	auto column_count_str = to_string(result.ColumnCount()) + " column";
+	if (result.ColumnCount() > 1) {
+		column_count_str += "s";
+	}
+	bool has_hidden_columns = false;
+	for (auto entry : column_map) {
+		if (entry == SPLIT_COLUMN) {
+			has_hidden_columns = true;
+			break;
+		}
+	}
+	idx_t column_count = column_map.size();
+	if (config.render_mode == RenderMode::COLUMNS) {
+		if (has_hidden_columns) {
+			has_hidden_rows = true;
+			shown_str = " (" + to_string(column_count - 3) + " shown)";
+		} else {
+			shown_str = string();
+		}
+	} else {
+		if (has_hidden_columns) {
+			column_count--;
+			column_count_str += " (" + to_string(column_count) + " shown)";
+		}
+	}
+
+	RenderRowCount(std::move(row_count_str), std::move(shown_str), column_count_str, boundaries, has_hidden_rows,
+	               has_hidden_columns, total_length, row_count, column_count, minimum_row_length, ss);
 }
 
 } // namespace duckdb
@@ -4001,13 +8468,17 @@ void DuckDBAssertInternal(bool condition, const char *condition_name, const char
 
 namespace duckdb {
 
+hash_t Checksum(uint64_t x) {
+	return x * UINT64_C(0xbf58476d1ce4e5b9);
+}
+
 uint64_t Checksum(uint8_t *buffer, size_t size) {
 	uint64_t result = 5381;
 	uint64_t *ptr = (uint64_t *)buffer;
 	size_t i;
-	// for efficiency, we first hash uint64_t values
+	// for efficiency, we first checksum uint64_t values
 	for (i = 0; i < size / 8; i++) {
-		result ^= Hash(ptr[i]);
+		result ^= Checksum(ptr[i]);
 	}
 	if (size - i * 8 > 0) {
 		// the remaining 0-7 bytes we hash using a string hash
@@ -4025,11 +8496,11 @@ StreamWrapper::~StreamWrapper() {
 }
 
 CompressedFile::CompressedFile(CompressedFileSystem &fs, unique_ptr<FileHandle> child_handle_p, const string &path)
-    : FileHandle(fs, path), compressed_fs(fs), child_handle(move(child_handle_p)) {
+    : FileHandle(fs, path), compressed_fs(fs), child_handle(std::move(child_handle_p)) {
 }
 
 CompressedFile::~CompressedFile() {
-	Close();
+	CompressedFile::Close();
 }
 
 void CompressedFile::Initialize(bool write) {
@@ -4038,10 +8509,10 @@ void CompressedFile::Initialize(bool write) {
 	this->write = write;
 	stream_data.in_buf_size = compressed_fs.InBufferSize();
 	stream_data.out_buf_size = compressed_fs.OutBufferSize();
-	stream_data.in_buff = unique_ptr<data_t[]>(new data_t[stream_data.in_buf_size]);
+	stream_data.in_buff = make_unsafe_uniq_array<data_t>(stream_data.in_buf_size);
 	stream_data.in_buff_start = stream_data.in_buff.get();
 	stream_data.in_buff_end = stream_data.in_buff.get();
-	stream_data.out_buff = unique_ptr<data_t[]>(new data_t[stream_data.out_buf_size]);
+	stream_data.out_buff = make_unsafe_uniq_array<data_t>(stream_data.out_buf_size);
 	stream_data.out_buff_start = stream_data.out_buff.get();
 	stream_data.out_buff_end = stream_data.out_buff.get();
 
@@ -4076,6 +8547,21 @@ int64_t CompressedFile::ReadData(void *buffer, int64_t remaining) {
 		stream_data.out_buff_end = stream_data.out_buff.get();
 		D_ASSERT(stream_data.in_buff_start <= stream_data.in_buff_end);
 		D_ASSERT(stream_data.in_buff_end <= stream_data.in_buff_start + stream_data.in_buf_size);
+
+		// read more input when requested and still data in the input stream
+		if (stream_data.refresh && (stream_data.in_buff_end == stream_data.in_buff.get() + stream_data.in_buf_size)) {
+			auto bufrem = stream_data.in_buff_end - stream_data.in_buff_start;
+			// buffer not empty, move remaining bytes to the beginning
+			memmove(stream_data.in_buff.get(), stream_data.in_buff_start, bufrem);
+			stream_data.in_buff_start = stream_data.in_buff.get();
+			// refill the rest of input buffer
+			auto sz = child_handle->Read(stream_data.in_buff_start + bufrem, stream_data.in_buf_size - bufrem);
+			stream_data.in_buff_end = stream_data.in_buff_start + bufrem + sz;
+			if (sz <= 0) {
+				stream_wrapper.reset();
+				break;
+			}
+		}
 
 		// read more input if none available
 		if (stream_data.in_buff_start == stream_data.in_buff_end) {
@@ -4153,6 +8639,8 @@ bool CompressedFileSystem::CanSeek() {
 
 
 
+
+
 namespace duckdb {
 
 constexpr const idx_t DConstants::INVALID_INDEX;
@@ -4166,6 +8654,10 @@ const transaction_t MAX_TRANSACTION_ID = NumericLimits<transaction_t>::Maximum()
 const transaction_t NOT_DELETED_ID = NumericLimits<transaction_t>::Maximum() - 1; // 2^64 - 1
 const transaction_t MAXIMUM_QUERY_ID = NumericLimits<transaction_t>::Maximum();   // 2^64
 
+bool IsPowerOfTwo(uint64_t v) {
+	return (v & (v - 1)) == 0;
+}
+
 uint64_t NextPowerOfTwo(uint64_t v) {
 	v--;
 	v |= v >> 1;
@@ -4176,6 +8668,22 @@ uint64_t NextPowerOfTwo(uint64_t v) {
 	v |= v >> 32;
 	v++;
 	return v;
+}
+
+uint64_t PreviousPowerOfTwo(uint64_t v) {
+	return NextPowerOfTwo((v / 2) + 1);
+}
+
+bool IsInvalidSchema(const string &str) {
+	return str.empty();
+}
+
+bool IsInvalidCatalog(const string &str) {
+	return str.empty();
+}
+
+bool IsRowIdColumnId(column_t column_id) {
+	return column_id == COLUMN_IDENTIFIER_ROW_ID;
 }
 
 } // namespace duckdb
@@ -4521,6 +9029,5914 @@ uint64_t CycleCounter::Tick() const {
 	return Now();
 }
 } // namespace duckdb
+//-------------------------------------------------------------------------
+// This file is automatically generated by scripts/generate_enum_util.py
+// Do not edit this file manually, your changes will be overwritten
+// If you want to exclude an enum from serialization, add it to the blacklist in the script
+//
+// Note: The generated code will only work properly if the enum is a top level item in the duckdb namespace
+// If the enum is nested in a class, or in another namespace, the generated code will not compile.
+// You should move the enum to the duckdb namespace, manually write a specialization or add it to the blacklist
+//-------------------------------------------------------------------------
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+namespace duckdb {
+
+template <>
+const char *EnumUtil::ToChars<TaskExecutionMode>(TaskExecutionMode value) {
+	switch (value) {
+	case TaskExecutionMode::PROCESS_ALL:
+		return "PROCESS_ALL";
+	case TaskExecutionMode::PROCESS_PARTIAL:
+		return "PROCESS_PARTIAL";
+	default:
+		throw NotImplementedException(StringUtil::Format("Enum value: '%d' not implemented", value));
+	}
+}
+
+template <>
+TaskExecutionMode EnumUtil::FromString<TaskExecutionMode>(const char *value) {
+	if (StringUtil::Equals(value, "PROCESS_ALL")) {
+		return TaskExecutionMode::PROCESS_ALL;
+	}
+	if (StringUtil::Equals(value, "PROCESS_PARTIAL")) {
+		return TaskExecutionMode::PROCESS_PARTIAL;
+	}
+	throw NotImplementedException(StringUtil::Format("Enum value: '%s' not implemented", value));
+}
+
+template <>
+const char *EnumUtil::ToChars<TaskExecutionResult>(TaskExecutionResult value) {
+	switch (value) {
+	case TaskExecutionResult::TASK_FINISHED:
+		return "TASK_FINISHED";
+	case TaskExecutionResult::TASK_NOT_FINISHED:
+		return "TASK_NOT_FINISHED";
+	case TaskExecutionResult::TASK_ERROR:
+		return "TASK_ERROR";
+	case TaskExecutionResult::TASK_BLOCKED:
+		return "TASK_BLOCKED";
+	default:
+		throw NotImplementedException(StringUtil::Format("Enum value: '%d' not implemented", value));
+	}
+}
+
+template <>
+TaskExecutionResult EnumUtil::FromString<TaskExecutionResult>(const char *value) {
+	if (StringUtil::Equals(value, "TASK_FINISHED")) {
+		return TaskExecutionResult::TASK_FINISHED;
+	}
+	if (StringUtil::Equals(value, "TASK_NOT_FINISHED")) {
+		return TaskExecutionResult::TASK_NOT_FINISHED;
+	}
+	if (StringUtil::Equals(value, "TASK_ERROR")) {
+		return TaskExecutionResult::TASK_ERROR;
+	}
+	if (StringUtil::Equals(value, "TASK_BLOCKED")) {
+		return TaskExecutionResult::TASK_BLOCKED;
+	}
+	throw NotImplementedException(StringUtil::Format("Enum value: '%s' not implemented", value));
+}
+
+template <>
+const char *EnumUtil::ToChars<InterruptMode>(InterruptMode value) {
+	switch (value) {
+	case InterruptMode::NO_INTERRUPTS:
+		return "NO_INTERRUPTS";
+	case InterruptMode::TASK:
+		return "TASK";
+	case InterruptMode::BLOCKING:
+		return "BLOCKING";
+	default:
+		throw NotImplementedException(StringUtil::Format("Enum value: '%d' not implemented", value));
+	}
+}
+
+template <>
+InterruptMode EnumUtil::FromString<InterruptMode>(const char *value) {
+	if (StringUtil::Equals(value, "NO_INTERRUPTS")) {
+		return InterruptMode::NO_INTERRUPTS;
+	}
+	if (StringUtil::Equals(value, "TASK")) {
+		return InterruptMode::TASK;
+	}
+	if (StringUtil::Equals(value, "BLOCKING")) {
+		return InterruptMode::BLOCKING;
+	}
+	throw NotImplementedException(StringUtil::Format("Enum value: '%s' not implemented", value));
+}
+
+template <>
+const char *EnumUtil::ToChars<DistinctType>(DistinctType value) {
+	switch (value) {
+	case DistinctType::DISTINCT:
+		return "DISTINCT";
+	case DistinctType::DISTINCT_ON:
+		return "DISTINCT_ON";
+	default:
+		throw NotImplementedException(StringUtil::Format("Enum value: '%d' not implemented", value));
+	}
+}
+
+template <>
+DistinctType EnumUtil::FromString<DistinctType>(const char *value) {
+	if (StringUtil::Equals(value, "DISTINCT")) {
+		return DistinctType::DISTINCT;
+	}
+	if (StringUtil::Equals(value, "DISTINCT_ON")) {
+		return DistinctType::DISTINCT_ON;
+	}
+	throw NotImplementedException(StringUtil::Format("Enum value: '%s' not implemented", value));
+}
+
+template <>
+const char *EnumUtil::ToChars<TableFilterType>(TableFilterType value) {
+	switch (value) {
+	case TableFilterType::CONSTANT_COMPARISON:
+		return "CONSTANT_COMPARISON";
+	case TableFilterType::IS_NULL:
+		return "IS_NULL";
+	case TableFilterType::IS_NOT_NULL:
+		return "IS_NOT_NULL";
+	case TableFilterType::CONJUNCTION_OR:
+		return "CONJUNCTION_OR";
+	case TableFilterType::CONJUNCTION_AND:
+		return "CONJUNCTION_AND";
+	default:
+		throw NotImplementedException(StringUtil::Format("Enum value: '%d' not implemented", value));
+	}
+}
+
+template <>
+TableFilterType EnumUtil::FromString<TableFilterType>(const char *value) {
+	if (StringUtil::Equals(value, "CONSTANT_COMPARISON")) {
+		return TableFilterType::CONSTANT_COMPARISON;
+	}
+	if (StringUtil::Equals(value, "IS_NULL")) {
+		return TableFilterType::IS_NULL;
+	}
+	if (StringUtil::Equals(value, "IS_NOT_NULL")) {
+		return TableFilterType::IS_NOT_NULL;
+	}
+	if (StringUtil::Equals(value, "CONJUNCTION_OR")) {
+		return TableFilterType::CONJUNCTION_OR;
+	}
+	if (StringUtil::Equals(value, "CONJUNCTION_AND")) {
+		return TableFilterType::CONJUNCTION_AND;
+	}
+	throw NotImplementedException(StringUtil::Format("Enum value: '%s' not implemented", value));
+}
+
+template <>
+const char *EnumUtil::ToChars<BindingMode>(BindingMode value) {
+	switch (value) {
+	case BindingMode::STANDARD_BINDING:
+		return "STANDARD_BINDING";
+	case BindingMode::EXTRACT_NAMES:
+		return "EXTRACT_NAMES";
+	default:
+		throw NotImplementedException(StringUtil::Format("Enum value: '%d' not implemented", value));
+	}
+}
+
+template <>
+BindingMode EnumUtil::FromString<BindingMode>(const char *value) {
+	if (StringUtil::Equals(value, "STANDARD_BINDING")) {
+		return BindingMode::STANDARD_BINDING;
+	}
+	if (StringUtil::Equals(value, "EXTRACT_NAMES")) {
+		return BindingMode::EXTRACT_NAMES;
+	}
+	throw NotImplementedException(StringUtil::Format("Enum value: '%s' not implemented", value));
+}
+
+template <>
+const char *EnumUtil::ToChars<TableColumnType>(TableColumnType value) {
+	switch (value) {
+	case TableColumnType::STANDARD:
+		return "STANDARD";
+	case TableColumnType::GENERATED:
+		return "GENERATED";
+	default:
+		throw NotImplementedException(StringUtil::Format("Enum value: '%d' not implemented", value));
+	}
+}
+
+template <>
+TableColumnType EnumUtil::FromString<TableColumnType>(const char *value) {
+	if (StringUtil::Equals(value, "STANDARD")) {
+		return TableColumnType::STANDARD;
+	}
+	if (StringUtil::Equals(value, "GENERATED")) {
+		return TableColumnType::GENERATED;
+	}
+	throw NotImplementedException(StringUtil::Format("Enum value: '%s' not implemented", value));
+}
+
+template <>
+const char *EnumUtil::ToChars<AggregateType>(AggregateType value) {
+	switch (value) {
+	case AggregateType::NON_DISTINCT:
+		return "NON_DISTINCT";
+	case AggregateType::DISTINCT:
+		return "DISTINCT";
+	default:
+		throw NotImplementedException(StringUtil::Format("Enum value: '%d' not implemented", value));
+	}
+}
+
+template <>
+AggregateType EnumUtil::FromString<AggregateType>(const char *value) {
+	if (StringUtil::Equals(value, "NON_DISTINCT")) {
+		return AggregateType::NON_DISTINCT;
+	}
+	if (StringUtil::Equals(value, "DISTINCT")) {
+		return AggregateType::DISTINCT;
+	}
+	throw NotImplementedException(StringUtil::Format("Enum value: '%s' not implemented", value));
+}
+
+template <>
+const char *EnumUtil::ToChars<AggregateOrderDependent>(AggregateOrderDependent value) {
+	switch (value) {
+	case AggregateOrderDependent::ORDER_DEPENDENT:
+		return "ORDER_DEPENDENT";
+	case AggregateOrderDependent::NOT_ORDER_DEPENDENT:
+		return "NOT_ORDER_DEPENDENT";
+	default:
+		throw NotImplementedException(StringUtil::Format("Enum value: '%d' not implemented", value));
+	}
+}
+
+template <>
+AggregateOrderDependent EnumUtil::FromString<AggregateOrderDependent>(const char *value) {
+	if (StringUtil::Equals(value, "ORDER_DEPENDENT")) {
+		return AggregateOrderDependent::ORDER_DEPENDENT;
+	}
+	if (StringUtil::Equals(value, "NOT_ORDER_DEPENDENT")) {
+		return AggregateOrderDependent::NOT_ORDER_DEPENDENT;
+	}
+	throw NotImplementedException(StringUtil::Format("Enum value: '%s' not implemented", value));
+}
+
+template <>
+const char *EnumUtil::ToChars<FunctionNullHandling>(FunctionNullHandling value) {
+	switch (value) {
+	case FunctionNullHandling::DEFAULT_NULL_HANDLING:
+		return "DEFAULT_NULL_HANDLING";
+	case FunctionNullHandling::SPECIAL_HANDLING:
+		return "SPECIAL_HANDLING";
+	default:
+		throw NotImplementedException(StringUtil::Format("Enum value: '%d' not implemented", value));
+	}
+}
+
+template <>
+FunctionNullHandling EnumUtil::FromString<FunctionNullHandling>(const char *value) {
+	if (StringUtil::Equals(value, "DEFAULT_NULL_HANDLING")) {
+		return FunctionNullHandling::DEFAULT_NULL_HANDLING;
+	}
+	if (StringUtil::Equals(value, "SPECIAL_HANDLING")) {
+		return FunctionNullHandling::SPECIAL_HANDLING;
+	}
+	throw NotImplementedException(StringUtil::Format("Enum value: '%s' not implemented", value));
+}
+
+template <>
+const char *EnumUtil::ToChars<FunctionSideEffects>(FunctionSideEffects value) {
+	switch (value) {
+	case FunctionSideEffects::NO_SIDE_EFFECTS:
+		return "NO_SIDE_EFFECTS";
+	case FunctionSideEffects::HAS_SIDE_EFFECTS:
+		return "HAS_SIDE_EFFECTS";
+	default:
+		throw NotImplementedException(StringUtil::Format("Enum value: '%d' not implemented", value));
+	}
+}
+
+template <>
+FunctionSideEffects EnumUtil::FromString<FunctionSideEffects>(const char *value) {
+	if (StringUtil::Equals(value, "NO_SIDE_EFFECTS")) {
+		return FunctionSideEffects::NO_SIDE_EFFECTS;
+	}
+	if (StringUtil::Equals(value, "HAS_SIDE_EFFECTS")) {
+		return FunctionSideEffects::HAS_SIDE_EFFECTS;
+	}
+	throw NotImplementedException(StringUtil::Format("Enum value: '%s' not implemented", value));
+}
+
+template <>
+const char *EnumUtil::ToChars<MacroType>(MacroType value) {
+	switch (value) {
+	case MacroType::VOID_MACRO:
+		return "VOID_MACRO";
+	case MacroType::TABLE_MACRO:
+		return "TABLE_MACRO";
+	case MacroType::SCALAR_MACRO:
+		return "SCALAR_MACRO";
+	default:
+		throw NotImplementedException(StringUtil::Format("Enum value: '%d' not implemented", value));
+	}
+}
+
+template <>
+MacroType EnumUtil::FromString<MacroType>(const char *value) {
+	if (StringUtil::Equals(value, "VOID_MACRO")) {
+		return MacroType::VOID_MACRO;
+	}
+	if (StringUtil::Equals(value, "TABLE_MACRO")) {
+		return MacroType::TABLE_MACRO;
+	}
+	if (StringUtil::Equals(value, "SCALAR_MACRO")) {
+		return MacroType::SCALAR_MACRO;
+	}
+	throw NotImplementedException(StringUtil::Format("Enum value: '%s' not implemented", value));
+}
+
+template <>
+const char *EnumUtil::ToChars<ArrowVariableSizeType>(ArrowVariableSizeType value) {
+	switch (value) {
+	case ArrowVariableSizeType::FIXED_SIZE:
+		return "FIXED_SIZE";
+	case ArrowVariableSizeType::NORMAL:
+		return "NORMAL";
+	case ArrowVariableSizeType::SUPER_SIZE:
+		return "SUPER_SIZE";
+	default:
+		throw NotImplementedException(StringUtil::Format("Enum value: '%d' not implemented", value));
+	}
+}
+
+template <>
+ArrowVariableSizeType EnumUtil::FromString<ArrowVariableSizeType>(const char *value) {
+	if (StringUtil::Equals(value, "FIXED_SIZE")) {
+		return ArrowVariableSizeType::FIXED_SIZE;
+	}
+	if (StringUtil::Equals(value, "NORMAL")) {
+		return ArrowVariableSizeType::NORMAL;
+	}
+	if (StringUtil::Equals(value, "SUPER_SIZE")) {
+		return ArrowVariableSizeType::SUPER_SIZE;
+	}
+	throw NotImplementedException(StringUtil::Format("Enum value: '%s' not implemented", value));
+}
+
+template <>
+const char *EnumUtil::ToChars<ArrowDateTimeType>(ArrowDateTimeType value) {
+	switch (value) {
+	case ArrowDateTimeType::MILLISECONDS:
+		return "MILLISECONDS";
+	case ArrowDateTimeType::MICROSECONDS:
+		return "MICROSECONDS";
+	case ArrowDateTimeType::NANOSECONDS:
+		return "NANOSECONDS";
+	case ArrowDateTimeType::SECONDS:
+		return "SECONDS";
+	case ArrowDateTimeType::DAYS:
+		return "DAYS";
+	case ArrowDateTimeType::MONTHS:
+		return "MONTHS";
+	case ArrowDateTimeType::MONTH_DAY_NANO:
+		return "MONTH_DAY_NANO";
+	default:
+		throw NotImplementedException(StringUtil::Format("Enum value: '%d' not implemented", value));
+	}
+}
+
+template <>
+ArrowDateTimeType EnumUtil::FromString<ArrowDateTimeType>(const char *value) {
+	if (StringUtil::Equals(value, "MILLISECONDS")) {
+		return ArrowDateTimeType::MILLISECONDS;
+	}
+	if (StringUtil::Equals(value, "MICROSECONDS")) {
+		return ArrowDateTimeType::MICROSECONDS;
+	}
+	if (StringUtil::Equals(value, "NANOSECONDS")) {
+		return ArrowDateTimeType::NANOSECONDS;
+	}
+	if (StringUtil::Equals(value, "SECONDS")) {
+		return ArrowDateTimeType::SECONDS;
+	}
+	if (StringUtil::Equals(value, "DAYS")) {
+		return ArrowDateTimeType::DAYS;
+	}
+	if (StringUtil::Equals(value, "MONTHS")) {
+		return ArrowDateTimeType::MONTHS;
+	}
+	if (StringUtil::Equals(value, "MONTH_DAY_NANO")) {
+		return ArrowDateTimeType::MONTH_DAY_NANO;
+	}
+	throw NotImplementedException(StringUtil::Format("Enum value: '%s' not implemented", value));
+}
+
+template <>
+const char *EnumUtil::ToChars<StrTimeSpecifier>(StrTimeSpecifier value) {
+	switch (value) {
+	case StrTimeSpecifier::ABBREVIATED_WEEKDAY_NAME:
+		return "ABBREVIATED_WEEKDAY_NAME";
+	case StrTimeSpecifier::FULL_WEEKDAY_NAME:
+		return "FULL_WEEKDAY_NAME";
+	case StrTimeSpecifier::WEEKDAY_DECIMAL:
+		return "WEEKDAY_DECIMAL";
+	case StrTimeSpecifier::DAY_OF_MONTH_PADDED:
+		return "DAY_OF_MONTH_PADDED";
+	case StrTimeSpecifier::DAY_OF_MONTH:
+		return "DAY_OF_MONTH";
+	case StrTimeSpecifier::ABBREVIATED_MONTH_NAME:
+		return "ABBREVIATED_MONTH_NAME";
+	case StrTimeSpecifier::FULL_MONTH_NAME:
+		return "FULL_MONTH_NAME";
+	case StrTimeSpecifier::MONTH_DECIMAL_PADDED:
+		return "MONTH_DECIMAL_PADDED";
+	case StrTimeSpecifier::MONTH_DECIMAL:
+		return "MONTH_DECIMAL";
+	case StrTimeSpecifier::YEAR_WITHOUT_CENTURY_PADDED:
+		return "YEAR_WITHOUT_CENTURY_PADDED";
+	case StrTimeSpecifier::YEAR_WITHOUT_CENTURY:
+		return "YEAR_WITHOUT_CENTURY";
+	case StrTimeSpecifier::YEAR_DECIMAL:
+		return "YEAR_DECIMAL";
+	case StrTimeSpecifier::HOUR_24_PADDED:
+		return "HOUR_24_PADDED";
+	case StrTimeSpecifier::HOUR_24_DECIMAL:
+		return "HOUR_24_DECIMAL";
+	case StrTimeSpecifier::HOUR_12_PADDED:
+		return "HOUR_12_PADDED";
+	case StrTimeSpecifier::HOUR_12_DECIMAL:
+		return "HOUR_12_DECIMAL";
+	case StrTimeSpecifier::AM_PM:
+		return "AM_PM";
+	case StrTimeSpecifier::MINUTE_PADDED:
+		return "MINUTE_PADDED";
+	case StrTimeSpecifier::MINUTE_DECIMAL:
+		return "MINUTE_DECIMAL";
+	case StrTimeSpecifier::SECOND_PADDED:
+		return "SECOND_PADDED";
+	case StrTimeSpecifier::SECOND_DECIMAL:
+		return "SECOND_DECIMAL";
+	case StrTimeSpecifier::MICROSECOND_PADDED:
+		return "MICROSECOND_PADDED";
+	case StrTimeSpecifier::MILLISECOND_PADDED:
+		return "MILLISECOND_PADDED";
+	case StrTimeSpecifier::UTC_OFFSET:
+		return "UTC_OFFSET";
+	case StrTimeSpecifier::TZ_NAME:
+		return "TZ_NAME";
+	case StrTimeSpecifier::DAY_OF_YEAR_PADDED:
+		return "DAY_OF_YEAR_PADDED";
+	case StrTimeSpecifier::DAY_OF_YEAR_DECIMAL:
+		return "DAY_OF_YEAR_DECIMAL";
+	case StrTimeSpecifier::WEEK_NUMBER_PADDED_SUN_FIRST:
+		return "WEEK_NUMBER_PADDED_SUN_FIRST";
+	case StrTimeSpecifier::WEEK_NUMBER_PADDED_MON_FIRST:
+		return "WEEK_NUMBER_PADDED_MON_FIRST";
+	case StrTimeSpecifier::LOCALE_APPROPRIATE_DATE_AND_TIME:
+		return "LOCALE_APPROPRIATE_DATE_AND_TIME";
+	case StrTimeSpecifier::LOCALE_APPROPRIATE_DATE:
+		return "LOCALE_APPROPRIATE_DATE";
+	case StrTimeSpecifier::LOCALE_APPROPRIATE_TIME:
+		return "LOCALE_APPROPRIATE_TIME";
+	default:
+		throw NotImplementedException(StringUtil::Format("Enum value: '%d' not implemented", value));
+	}
+}
+
+template <>
+StrTimeSpecifier EnumUtil::FromString<StrTimeSpecifier>(const char *value) {
+	if (StringUtil::Equals(value, "ABBREVIATED_WEEKDAY_NAME")) {
+		return StrTimeSpecifier::ABBREVIATED_WEEKDAY_NAME;
+	}
+	if (StringUtil::Equals(value, "FULL_WEEKDAY_NAME")) {
+		return StrTimeSpecifier::FULL_WEEKDAY_NAME;
+	}
+	if (StringUtil::Equals(value, "WEEKDAY_DECIMAL")) {
+		return StrTimeSpecifier::WEEKDAY_DECIMAL;
+	}
+	if (StringUtil::Equals(value, "DAY_OF_MONTH_PADDED")) {
+		return StrTimeSpecifier::DAY_OF_MONTH_PADDED;
+	}
+	if (StringUtil::Equals(value, "DAY_OF_MONTH")) {
+		return StrTimeSpecifier::DAY_OF_MONTH;
+	}
+	if (StringUtil::Equals(value, "ABBREVIATED_MONTH_NAME")) {
+		return StrTimeSpecifier::ABBREVIATED_MONTH_NAME;
+	}
+	if (StringUtil::Equals(value, "FULL_MONTH_NAME")) {
+		return StrTimeSpecifier::FULL_MONTH_NAME;
+	}
+	if (StringUtil::Equals(value, "MONTH_DECIMAL_PADDED")) {
+		return StrTimeSpecifier::MONTH_DECIMAL_PADDED;
+	}
+	if (StringUtil::Equals(value, "MONTH_DECIMAL")) {
+		return StrTimeSpecifier::MONTH_DECIMAL;
+	}
+	if (StringUtil::Equals(value, "YEAR_WITHOUT_CENTURY_PADDED")) {
+		return StrTimeSpecifier::YEAR_WITHOUT_CENTURY_PADDED;
+	}
+	if (StringUtil::Equals(value, "YEAR_WITHOUT_CENTURY")) {
+		return StrTimeSpecifier::YEAR_WITHOUT_CENTURY;
+	}
+	if (StringUtil::Equals(value, "YEAR_DECIMAL")) {
+		return StrTimeSpecifier::YEAR_DECIMAL;
+	}
+	if (StringUtil::Equals(value, "HOUR_24_PADDED")) {
+		return StrTimeSpecifier::HOUR_24_PADDED;
+	}
+	if (StringUtil::Equals(value, "HOUR_24_DECIMAL")) {
+		return StrTimeSpecifier::HOUR_24_DECIMAL;
+	}
+	if (StringUtil::Equals(value, "HOUR_12_PADDED")) {
+		return StrTimeSpecifier::HOUR_12_PADDED;
+	}
+	if (StringUtil::Equals(value, "HOUR_12_DECIMAL")) {
+		return StrTimeSpecifier::HOUR_12_DECIMAL;
+	}
+	if (StringUtil::Equals(value, "AM_PM")) {
+		return StrTimeSpecifier::AM_PM;
+	}
+	if (StringUtil::Equals(value, "MINUTE_PADDED")) {
+		return StrTimeSpecifier::MINUTE_PADDED;
+	}
+	if (StringUtil::Equals(value, "MINUTE_DECIMAL")) {
+		return StrTimeSpecifier::MINUTE_DECIMAL;
+	}
+	if (StringUtil::Equals(value, "SECOND_PADDED")) {
+		return StrTimeSpecifier::SECOND_PADDED;
+	}
+	if (StringUtil::Equals(value, "SECOND_DECIMAL")) {
+		return StrTimeSpecifier::SECOND_DECIMAL;
+	}
+	if (StringUtil::Equals(value, "MICROSECOND_PADDED")) {
+		return StrTimeSpecifier::MICROSECOND_PADDED;
+	}
+	if (StringUtil::Equals(value, "MILLISECOND_PADDED")) {
+		return StrTimeSpecifier::MILLISECOND_PADDED;
+	}
+	if (StringUtil::Equals(value, "UTC_OFFSET")) {
+		return StrTimeSpecifier::UTC_OFFSET;
+	}
+	if (StringUtil::Equals(value, "TZ_NAME")) {
+		return StrTimeSpecifier::TZ_NAME;
+	}
+	if (StringUtil::Equals(value, "DAY_OF_YEAR_PADDED")) {
+		return StrTimeSpecifier::DAY_OF_YEAR_PADDED;
+	}
+	if (StringUtil::Equals(value, "DAY_OF_YEAR_DECIMAL")) {
+		return StrTimeSpecifier::DAY_OF_YEAR_DECIMAL;
+	}
+	if (StringUtil::Equals(value, "WEEK_NUMBER_PADDED_SUN_FIRST")) {
+		return StrTimeSpecifier::WEEK_NUMBER_PADDED_SUN_FIRST;
+	}
+	if (StringUtil::Equals(value, "WEEK_NUMBER_PADDED_MON_FIRST")) {
+		return StrTimeSpecifier::WEEK_NUMBER_PADDED_MON_FIRST;
+	}
+	if (StringUtil::Equals(value, "LOCALE_APPROPRIATE_DATE_AND_TIME")) {
+		return StrTimeSpecifier::LOCALE_APPROPRIATE_DATE_AND_TIME;
+	}
+	if (StringUtil::Equals(value, "LOCALE_APPROPRIATE_DATE")) {
+		return StrTimeSpecifier::LOCALE_APPROPRIATE_DATE;
+	}
+	if (StringUtil::Equals(value, "LOCALE_APPROPRIATE_TIME")) {
+		return StrTimeSpecifier::LOCALE_APPROPRIATE_TIME;
+	}
+	throw NotImplementedException(StringUtil::Format("Enum value: '%s' not implemented", value));
+}
+
+template <>
+const char *EnumUtil::ToChars<SimplifiedTokenType>(SimplifiedTokenType value) {
+	switch (value) {
+	case SimplifiedTokenType::SIMPLIFIED_TOKEN_IDENTIFIER:
+		return "SIMPLIFIED_TOKEN_IDENTIFIER";
+	case SimplifiedTokenType::SIMPLIFIED_TOKEN_NUMERIC_CONSTANT:
+		return "SIMPLIFIED_TOKEN_NUMERIC_CONSTANT";
+	case SimplifiedTokenType::SIMPLIFIED_TOKEN_STRING_CONSTANT:
+		return "SIMPLIFIED_TOKEN_STRING_CONSTANT";
+	case SimplifiedTokenType::SIMPLIFIED_TOKEN_OPERATOR:
+		return "SIMPLIFIED_TOKEN_OPERATOR";
+	case SimplifiedTokenType::SIMPLIFIED_TOKEN_KEYWORD:
+		return "SIMPLIFIED_TOKEN_KEYWORD";
+	case SimplifiedTokenType::SIMPLIFIED_TOKEN_COMMENT:
+		return "SIMPLIFIED_TOKEN_COMMENT";
+	default:
+		throw NotImplementedException(StringUtil::Format("Enum value: '%d' not implemented", value));
+	}
+}
+
+template <>
+SimplifiedTokenType EnumUtil::FromString<SimplifiedTokenType>(const char *value) {
+	if (StringUtil::Equals(value, "SIMPLIFIED_TOKEN_IDENTIFIER")) {
+		return SimplifiedTokenType::SIMPLIFIED_TOKEN_IDENTIFIER;
+	}
+	if (StringUtil::Equals(value, "SIMPLIFIED_TOKEN_NUMERIC_CONSTANT")) {
+		return SimplifiedTokenType::SIMPLIFIED_TOKEN_NUMERIC_CONSTANT;
+	}
+	if (StringUtil::Equals(value, "SIMPLIFIED_TOKEN_STRING_CONSTANT")) {
+		return SimplifiedTokenType::SIMPLIFIED_TOKEN_STRING_CONSTANT;
+	}
+	if (StringUtil::Equals(value, "SIMPLIFIED_TOKEN_OPERATOR")) {
+		return SimplifiedTokenType::SIMPLIFIED_TOKEN_OPERATOR;
+	}
+	if (StringUtil::Equals(value, "SIMPLIFIED_TOKEN_KEYWORD")) {
+		return SimplifiedTokenType::SIMPLIFIED_TOKEN_KEYWORD;
+	}
+	if (StringUtil::Equals(value, "SIMPLIFIED_TOKEN_COMMENT")) {
+		return SimplifiedTokenType::SIMPLIFIED_TOKEN_COMMENT;
+	}
+	throw NotImplementedException(StringUtil::Format("Enum value: '%s' not implemented", value));
+}
+
+template <>
+const char *EnumUtil::ToChars<KeywordCategory>(KeywordCategory value) {
+	switch (value) {
+	case KeywordCategory::KEYWORD_RESERVED:
+		return "KEYWORD_RESERVED";
+	case KeywordCategory::KEYWORD_UNRESERVED:
+		return "KEYWORD_UNRESERVED";
+	case KeywordCategory::KEYWORD_TYPE_FUNC:
+		return "KEYWORD_TYPE_FUNC";
+	case KeywordCategory::KEYWORD_COL_NAME:
+		return "KEYWORD_COL_NAME";
+	default:
+		throw NotImplementedException(StringUtil::Format("Enum value: '%d' not implemented", value));
+	}
+}
+
+template <>
+KeywordCategory EnumUtil::FromString<KeywordCategory>(const char *value) {
+	if (StringUtil::Equals(value, "KEYWORD_RESERVED")) {
+		return KeywordCategory::KEYWORD_RESERVED;
+	}
+	if (StringUtil::Equals(value, "KEYWORD_UNRESERVED")) {
+		return KeywordCategory::KEYWORD_UNRESERVED;
+	}
+	if (StringUtil::Equals(value, "KEYWORD_TYPE_FUNC")) {
+		return KeywordCategory::KEYWORD_TYPE_FUNC;
+	}
+	if (StringUtil::Equals(value, "KEYWORD_COL_NAME")) {
+		return KeywordCategory::KEYWORD_COL_NAME;
+	}
+	throw NotImplementedException(StringUtil::Format("Enum value: '%s' not implemented", value));
+}
+
+template <>
+const char *EnumUtil::ToChars<ResultModifierType>(ResultModifierType value) {
+	switch (value) {
+	case ResultModifierType::LIMIT_MODIFIER:
+		return "LIMIT_MODIFIER";
+	case ResultModifierType::ORDER_MODIFIER:
+		return "ORDER_MODIFIER";
+	case ResultModifierType::DISTINCT_MODIFIER:
+		return "DISTINCT_MODIFIER";
+	case ResultModifierType::LIMIT_PERCENT_MODIFIER:
+		return "LIMIT_PERCENT_MODIFIER";
+	default:
+		throw NotImplementedException(StringUtil::Format("Enum value: '%d' not implemented", value));
+	}
+}
+
+template <>
+ResultModifierType EnumUtil::FromString<ResultModifierType>(const char *value) {
+	if (StringUtil::Equals(value, "LIMIT_MODIFIER")) {
+		return ResultModifierType::LIMIT_MODIFIER;
+	}
+	if (StringUtil::Equals(value, "ORDER_MODIFIER")) {
+		return ResultModifierType::ORDER_MODIFIER;
+	}
+	if (StringUtil::Equals(value, "DISTINCT_MODIFIER")) {
+		return ResultModifierType::DISTINCT_MODIFIER;
+	}
+	if (StringUtil::Equals(value, "LIMIT_PERCENT_MODIFIER")) {
+		return ResultModifierType::LIMIT_PERCENT_MODIFIER;
+	}
+	throw NotImplementedException(StringUtil::Format("Enum value: '%s' not implemented", value));
+}
+
+template <>
+const char *EnumUtil::ToChars<ConstraintType>(ConstraintType value) {
+	switch (value) {
+	case ConstraintType::INVALID:
+		return "INVALID";
+	case ConstraintType::NOT_NULL:
+		return "NOT_NULL";
+	case ConstraintType::CHECK:
+		return "CHECK";
+	case ConstraintType::UNIQUE:
+		return "UNIQUE";
+	case ConstraintType::FOREIGN_KEY:
+		return "FOREIGN_KEY";
+	default:
+		throw NotImplementedException(StringUtil::Format("Enum value: '%d' not implemented", value));
+	}
+}
+
+template <>
+ConstraintType EnumUtil::FromString<ConstraintType>(const char *value) {
+	if (StringUtil::Equals(value, "INVALID")) {
+		return ConstraintType::INVALID;
+	}
+	if (StringUtil::Equals(value, "NOT_NULL")) {
+		return ConstraintType::NOT_NULL;
+	}
+	if (StringUtil::Equals(value, "CHECK")) {
+		return ConstraintType::CHECK;
+	}
+	if (StringUtil::Equals(value, "UNIQUE")) {
+		return ConstraintType::UNIQUE;
+	}
+	if (StringUtil::Equals(value, "FOREIGN_KEY")) {
+		return ConstraintType::FOREIGN_KEY;
+	}
+	throw NotImplementedException(StringUtil::Format("Enum value: '%s' not implemented", value));
+}
+
+template <>
+const char *EnumUtil::ToChars<ForeignKeyType>(ForeignKeyType value) {
+	switch (value) {
+	case ForeignKeyType::FK_TYPE_PRIMARY_KEY_TABLE:
+		return "FK_TYPE_PRIMARY_KEY_TABLE";
+	case ForeignKeyType::FK_TYPE_FOREIGN_KEY_TABLE:
+		return "FK_TYPE_FOREIGN_KEY_TABLE";
+	case ForeignKeyType::FK_TYPE_SELF_REFERENCE_TABLE:
+		return "FK_TYPE_SELF_REFERENCE_TABLE";
+	default:
+		throw NotImplementedException(StringUtil::Format("Enum value: '%d' not implemented", value));
+	}
+}
+
+template <>
+ForeignKeyType EnumUtil::FromString<ForeignKeyType>(const char *value) {
+	if (StringUtil::Equals(value, "FK_TYPE_PRIMARY_KEY_TABLE")) {
+		return ForeignKeyType::FK_TYPE_PRIMARY_KEY_TABLE;
+	}
+	if (StringUtil::Equals(value, "FK_TYPE_FOREIGN_KEY_TABLE")) {
+		return ForeignKeyType::FK_TYPE_FOREIGN_KEY_TABLE;
+	}
+	if (StringUtil::Equals(value, "FK_TYPE_SELF_REFERENCE_TABLE")) {
+		return ForeignKeyType::FK_TYPE_SELF_REFERENCE_TABLE;
+	}
+	throw NotImplementedException(StringUtil::Format("Enum value: '%s' not implemented", value));
+}
+
+template <>
+const char *EnumUtil::ToChars<ParserExtensionResultType>(ParserExtensionResultType value) {
+	switch (value) {
+	case ParserExtensionResultType::PARSE_SUCCESSFUL:
+		return "PARSE_SUCCESSFUL";
+	case ParserExtensionResultType::DISPLAY_ORIGINAL_ERROR:
+		return "DISPLAY_ORIGINAL_ERROR";
+	case ParserExtensionResultType::DISPLAY_EXTENSION_ERROR:
+		return "DISPLAY_EXTENSION_ERROR";
+	default:
+		throw NotImplementedException(StringUtil::Format("Enum value: '%d' not implemented", value));
+	}
+}
+
+template <>
+ParserExtensionResultType EnumUtil::FromString<ParserExtensionResultType>(const char *value) {
+	if (StringUtil::Equals(value, "PARSE_SUCCESSFUL")) {
+		return ParserExtensionResultType::PARSE_SUCCESSFUL;
+	}
+	if (StringUtil::Equals(value, "DISPLAY_ORIGINAL_ERROR")) {
+		return ParserExtensionResultType::DISPLAY_ORIGINAL_ERROR;
+	}
+	if (StringUtil::Equals(value, "DISPLAY_EXTENSION_ERROR")) {
+		return ParserExtensionResultType::DISPLAY_EXTENSION_ERROR;
+	}
+	throw NotImplementedException(StringUtil::Format("Enum value: '%s' not implemented", value));
+}
+
+template <>
+const char *EnumUtil::ToChars<QueryNodeType>(QueryNodeType value) {
+	switch (value) {
+	case QueryNodeType::SELECT_NODE:
+		return "SELECT_NODE";
+	case QueryNodeType::SET_OPERATION_NODE:
+		return "SET_OPERATION_NODE";
+	case QueryNodeType::BOUND_SUBQUERY_NODE:
+		return "BOUND_SUBQUERY_NODE";
+	case QueryNodeType::RECURSIVE_CTE_NODE:
+		return "RECURSIVE_CTE_NODE";
+	default:
+		throw NotImplementedException(StringUtil::Format("Enum value: '%d' not implemented", value));
+	}
+}
+
+template <>
+QueryNodeType EnumUtil::FromString<QueryNodeType>(const char *value) {
+	if (StringUtil::Equals(value, "SELECT_NODE")) {
+		return QueryNodeType::SELECT_NODE;
+	}
+	if (StringUtil::Equals(value, "SET_OPERATION_NODE")) {
+		return QueryNodeType::SET_OPERATION_NODE;
+	}
+	if (StringUtil::Equals(value, "BOUND_SUBQUERY_NODE")) {
+		return QueryNodeType::BOUND_SUBQUERY_NODE;
+	}
+	if (StringUtil::Equals(value, "RECURSIVE_CTE_NODE")) {
+		return QueryNodeType::RECURSIVE_CTE_NODE;
+	}
+	throw NotImplementedException(StringUtil::Format("Enum value: '%s' not implemented", value));
+}
+
+template <>
+const char *EnumUtil::ToChars<SequenceInfo>(SequenceInfo value) {
+	switch (value) {
+	case SequenceInfo::SEQ_START:
+		return "SEQ_START";
+	case SequenceInfo::SEQ_INC:
+		return "SEQ_INC";
+	case SequenceInfo::SEQ_MIN:
+		return "SEQ_MIN";
+	case SequenceInfo::SEQ_MAX:
+		return "SEQ_MAX";
+	case SequenceInfo::SEQ_CYCLE:
+		return "SEQ_CYCLE";
+	case SequenceInfo::SEQ_OWN:
+		return "SEQ_OWN";
+	default:
+		throw NotImplementedException(StringUtil::Format("Enum value: '%d' not implemented", value));
+	}
+}
+
+template <>
+SequenceInfo EnumUtil::FromString<SequenceInfo>(const char *value) {
+	if (StringUtil::Equals(value, "SEQ_START")) {
+		return SequenceInfo::SEQ_START;
+	}
+	if (StringUtil::Equals(value, "SEQ_INC")) {
+		return SequenceInfo::SEQ_INC;
+	}
+	if (StringUtil::Equals(value, "SEQ_MIN")) {
+		return SequenceInfo::SEQ_MIN;
+	}
+	if (StringUtil::Equals(value, "SEQ_MAX")) {
+		return SequenceInfo::SEQ_MAX;
+	}
+	if (StringUtil::Equals(value, "SEQ_CYCLE")) {
+		return SequenceInfo::SEQ_CYCLE;
+	}
+	if (StringUtil::Equals(value, "SEQ_OWN")) {
+		return SequenceInfo::SEQ_OWN;
+	}
+	throw NotImplementedException(StringUtil::Format("Enum value: '%s' not implemented", value));
+}
+
+template <>
+const char *EnumUtil::ToChars<AlterScalarFunctionType>(AlterScalarFunctionType value) {
+	switch (value) {
+	case AlterScalarFunctionType::INVALID:
+		return "INVALID";
+	case AlterScalarFunctionType::ADD_FUNCTION_OVERLOADS:
+		return "ADD_FUNCTION_OVERLOADS";
+	default:
+		throw NotImplementedException(StringUtil::Format("Enum value: '%d' not implemented", value));
+	}
+}
+
+template <>
+AlterScalarFunctionType EnumUtil::FromString<AlterScalarFunctionType>(const char *value) {
+	if (StringUtil::Equals(value, "INVALID")) {
+		return AlterScalarFunctionType::INVALID;
+	}
+	if (StringUtil::Equals(value, "ADD_FUNCTION_OVERLOADS")) {
+		return AlterScalarFunctionType::ADD_FUNCTION_OVERLOADS;
+	}
+	throw NotImplementedException(StringUtil::Format("Enum value: '%s' not implemented", value));
+}
+
+template <>
+const char *EnumUtil::ToChars<AlterTableType>(AlterTableType value) {
+	switch (value) {
+	case AlterTableType::INVALID:
+		return "INVALID";
+	case AlterTableType::RENAME_COLUMN:
+		return "RENAME_COLUMN";
+	case AlterTableType::RENAME_TABLE:
+		return "RENAME_TABLE";
+	case AlterTableType::ADD_COLUMN:
+		return "ADD_COLUMN";
+	case AlterTableType::REMOVE_COLUMN:
+		return "REMOVE_COLUMN";
+	case AlterTableType::ALTER_COLUMN_TYPE:
+		return "ALTER_COLUMN_TYPE";
+	case AlterTableType::SET_DEFAULT:
+		return "SET_DEFAULT";
+	case AlterTableType::FOREIGN_KEY_CONSTRAINT:
+		return "FOREIGN_KEY_CONSTRAINT";
+	case AlterTableType::SET_NOT_NULL:
+		return "SET_NOT_NULL";
+	case AlterTableType::DROP_NOT_NULL:
+		return "DROP_NOT_NULL";
+	default:
+		throw NotImplementedException(StringUtil::Format("Enum value: '%d' not implemented", value));
+	}
+}
+
+template <>
+AlterTableType EnumUtil::FromString<AlterTableType>(const char *value) {
+	if (StringUtil::Equals(value, "INVALID")) {
+		return AlterTableType::INVALID;
+	}
+	if (StringUtil::Equals(value, "RENAME_COLUMN")) {
+		return AlterTableType::RENAME_COLUMN;
+	}
+	if (StringUtil::Equals(value, "RENAME_TABLE")) {
+		return AlterTableType::RENAME_TABLE;
+	}
+	if (StringUtil::Equals(value, "ADD_COLUMN")) {
+		return AlterTableType::ADD_COLUMN;
+	}
+	if (StringUtil::Equals(value, "REMOVE_COLUMN")) {
+		return AlterTableType::REMOVE_COLUMN;
+	}
+	if (StringUtil::Equals(value, "ALTER_COLUMN_TYPE")) {
+		return AlterTableType::ALTER_COLUMN_TYPE;
+	}
+	if (StringUtil::Equals(value, "SET_DEFAULT")) {
+		return AlterTableType::SET_DEFAULT;
+	}
+	if (StringUtil::Equals(value, "FOREIGN_KEY_CONSTRAINT")) {
+		return AlterTableType::FOREIGN_KEY_CONSTRAINT;
+	}
+	if (StringUtil::Equals(value, "SET_NOT_NULL")) {
+		return AlterTableType::SET_NOT_NULL;
+	}
+	if (StringUtil::Equals(value, "DROP_NOT_NULL")) {
+		return AlterTableType::DROP_NOT_NULL;
+	}
+	throw NotImplementedException(StringUtil::Format("Enum value: '%s' not implemented", value));
+}
+
+template <>
+const char *EnumUtil::ToChars<AlterViewType>(AlterViewType value) {
+	switch (value) {
+	case AlterViewType::INVALID:
+		return "INVALID";
+	case AlterViewType::RENAME_VIEW:
+		return "RENAME_VIEW";
+	default:
+		throw NotImplementedException(StringUtil::Format("Enum value: '%d' not implemented", value));
+	}
+}
+
+template <>
+AlterViewType EnumUtil::FromString<AlterViewType>(const char *value) {
+	if (StringUtil::Equals(value, "INVALID")) {
+		return AlterViewType::INVALID;
+	}
+	if (StringUtil::Equals(value, "RENAME_VIEW")) {
+		return AlterViewType::RENAME_VIEW;
+	}
+	throw NotImplementedException(StringUtil::Format("Enum value: '%s' not implemented", value));
+}
+
+template <>
+const char *EnumUtil::ToChars<AlterTableFunctionType>(AlterTableFunctionType value) {
+	switch (value) {
+	case AlterTableFunctionType::INVALID:
+		return "INVALID";
+	case AlterTableFunctionType::ADD_FUNCTION_OVERLOADS:
+		return "ADD_FUNCTION_OVERLOADS";
+	default:
+		throw NotImplementedException(StringUtil::Format("Enum value: '%d' not implemented", value));
+	}
+}
+
+template <>
+AlterTableFunctionType EnumUtil::FromString<AlterTableFunctionType>(const char *value) {
+	if (StringUtil::Equals(value, "INVALID")) {
+		return AlterTableFunctionType::INVALID;
+	}
+	if (StringUtil::Equals(value, "ADD_FUNCTION_OVERLOADS")) {
+		return AlterTableFunctionType::ADD_FUNCTION_OVERLOADS;
+	}
+	throw NotImplementedException(StringUtil::Format("Enum value: '%s' not implemented", value));
+}
+
+template <>
+const char *EnumUtil::ToChars<AlterType>(AlterType value) {
+	switch (value) {
+	case AlterType::INVALID:
+		return "INVALID";
+	case AlterType::ALTER_TABLE:
+		return "ALTER_TABLE";
+	case AlterType::ALTER_VIEW:
+		return "ALTER_VIEW";
+	case AlterType::ALTER_SEQUENCE:
+		return "ALTER_SEQUENCE";
+	case AlterType::CHANGE_OWNERSHIP:
+		return "CHANGE_OWNERSHIP";
+	case AlterType::ALTER_SCALAR_FUNCTION:
+		return "ALTER_SCALAR_FUNCTION";
+	case AlterType::ALTER_TABLE_FUNCTION:
+		return "ALTER_TABLE_FUNCTION";
+	default:
+		throw NotImplementedException(StringUtil::Format("Enum value: '%d' not implemented", value));
+	}
+}
+
+template <>
+AlterType EnumUtil::FromString<AlterType>(const char *value) {
+	if (StringUtil::Equals(value, "INVALID")) {
+		return AlterType::INVALID;
+	}
+	if (StringUtil::Equals(value, "ALTER_TABLE")) {
+		return AlterType::ALTER_TABLE;
+	}
+	if (StringUtil::Equals(value, "ALTER_VIEW")) {
+		return AlterType::ALTER_VIEW;
+	}
+	if (StringUtil::Equals(value, "ALTER_SEQUENCE")) {
+		return AlterType::ALTER_SEQUENCE;
+	}
+	if (StringUtil::Equals(value, "CHANGE_OWNERSHIP")) {
+		return AlterType::CHANGE_OWNERSHIP;
+	}
+	if (StringUtil::Equals(value, "ALTER_SCALAR_FUNCTION")) {
+		return AlterType::ALTER_SCALAR_FUNCTION;
+	}
+	if (StringUtil::Equals(value, "ALTER_TABLE_FUNCTION")) {
+		return AlterType::ALTER_TABLE_FUNCTION;
+	}
+	throw NotImplementedException(StringUtil::Format("Enum value: '%s' not implemented", value));
+}
+
+template <>
+const char *EnumUtil::ToChars<PragmaType>(PragmaType value) {
+	switch (value) {
+	case PragmaType::PRAGMA_STATEMENT:
+		return "PRAGMA_STATEMENT";
+	case PragmaType::PRAGMA_CALL:
+		return "PRAGMA_CALL";
+	default:
+		throw NotImplementedException(StringUtil::Format("Enum value: '%d' not implemented", value));
+	}
+}
+
+template <>
+PragmaType EnumUtil::FromString<PragmaType>(const char *value) {
+	if (StringUtil::Equals(value, "PRAGMA_STATEMENT")) {
+		return PragmaType::PRAGMA_STATEMENT;
+	}
+	if (StringUtil::Equals(value, "PRAGMA_CALL")) {
+		return PragmaType::PRAGMA_CALL;
+	}
+	throw NotImplementedException(StringUtil::Format("Enum value: '%s' not implemented", value));
+}
+
+template <>
+const char *EnumUtil::ToChars<OnCreateConflict>(OnCreateConflict value) {
+	switch (value) {
+	case OnCreateConflict::ERROR_ON_CONFLICT:
+		return "ERROR_ON_CONFLICT";
+	case OnCreateConflict::IGNORE_ON_CONFLICT:
+		return "IGNORE_ON_CONFLICT";
+	case OnCreateConflict::REPLACE_ON_CONFLICT:
+		return "REPLACE_ON_CONFLICT";
+	case OnCreateConflict::ALTER_ON_CONFLICT:
+		return "ALTER_ON_CONFLICT";
+	default:
+		throw NotImplementedException(StringUtil::Format("Enum value: '%d' not implemented", value));
+	}
+}
+
+template <>
+OnCreateConflict EnumUtil::FromString<OnCreateConflict>(const char *value) {
+	if (StringUtil::Equals(value, "ERROR_ON_CONFLICT")) {
+		return OnCreateConflict::ERROR_ON_CONFLICT;
+	}
+	if (StringUtil::Equals(value, "IGNORE_ON_CONFLICT")) {
+		return OnCreateConflict::IGNORE_ON_CONFLICT;
+	}
+	if (StringUtil::Equals(value, "REPLACE_ON_CONFLICT")) {
+		return OnCreateConflict::REPLACE_ON_CONFLICT;
+	}
+	if (StringUtil::Equals(value, "ALTER_ON_CONFLICT")) {
+		return OnCreateConflict::ALTER_ON_CONFLICT;
+	}
+	throw NotImplementedException(StringUtil::Format("Enum value: '%s' not implemented", value));
+}
+
+template <>
+const char *EnumUtil::ToChars<TransactionType>(TransactionType value) {
+	switch (value) {
+	case TransactionType::INVALID:
+		return "INVALID";
+	case TransactionType::BEGIN_TRANSACTION:
+		return "BEGIN_TRANSACTION";
+	case TransactionType::COMMIT:
+		return "COMMIT";
+	case TransactionType::ROLLBACK:
+		return "ROLLBACK";
+	default:
+		throw NotImplementedException(StringUtil::Format("Enum value: '%d' not implemented", value));
+	}
+}
+
+template <>
+TransactionType EnumUtil::FromString<TransactionType>(const char *value) {
+	if (StringUtil::Equals(value, "INVALID")) {
+		return TransactionType::INVALID;
+	}
+	if (StringUtil::Equals(value, "BEGIN_TRANSACTION")) {
+		return TransactionType::BEGIN_TRANSACTION;
+	}
+	if (StringUtil::Equals(value, "COMMIT")) {
+		return TransactionType::COMMIT;
+	}
+	if (StringUtil::Equals(value, "ROLLBACK")) {
+		return TransactionType::ROLLBACK;
+	}
+	throw NotImplementedException(StringUtil::Format("Enum value: '%s' not implemented", value));
+}
+
+template <>
+const char *EnumUtil::ToChars<SampleMethod>(SampleMethod value) {
+	switch (value) {
+	case SampleMethod::SYSTEM_SAMPLE:
+		return "System";
+	case SampleMethod::BERNOULLI_SAMPLE:
+		return "Bernoulli";
+	case SampleMethod::RESERVOIR_SAMPLE:
+		return "Reservoir";
+	default:
+		throw NotImplementedException(StringUtil::Format("Enum value: '%d' not implemented", value));
+	}
+}
+
+template <>
+SampleMethod EnumUtil::FromString<SampleMethod>(const char *value) {
+	if (StringUtil::Equals(value, "System")) {
+		return SampleMethod::SYSTEM_SAMPLE;
+	}
+	if (StringUtil::Equals(value, "Bernoulli")) {
+		return SampleMethod::BERNOULLI_SAMPLE;
+	}
+	if (StringUtil::Equals(value, "Reservoir")) {
+		return SampleMethod::RESERVOIR_SAMPLE;
+	}
+	throw NotImplementedException(StringUtil::Format("Enum value: '%s' not implemented", value));
+}
+
+template <>
+const char *EnumUtil::ToChars<ExplainType>(ExplainType value) {
+	switch (value) {
+	case ExplainType::EXPLAIN_STANDARD:
+		return "EXPLAIN_STANDARD";
+	case ExplainType::EXPLAIN_ANALYZE:
+		return "EXPLAIN_ANALYZE";
+	default:
+		throw NotImplementedException(StringUtil::Format("Enum value: '%d' not implemented", value));
+	}
+}
+
+template <>
+ExplainType EnumUtil::FromString<ExplainType>(const char *value) {
+	if (StringUtil::Equals(value, "EXPLAIN_STANDARD")) {
+		return ExplainType::EXPLAIN_STANDARD;
+	}
+	if (StringUtil::Equals(value, "EXPLAIN_ANALYZE")) {
+		return ExplainType::EXPLAIN_ANALYZE;
+	}
+	throw NotImplementedException(StringUtil::Format("Enum value: '%s' not implemented", value));
+}
+
+template <>
+const char *EnumUtil::ToChars<OnConflictAction>(OnConflictAction value) {
+	switch (value) {
+	case OnConflictAction::THROW:
+		return "THROW";
+	case OnConflictAction::NOTHING:
+		return "NOTHING";
+	case OnConflictAction::UPDATE:
+		return "UPDATE";
+	case OnConflictAction::REPLACE:
+		return "REPLACE";
+	default:
+		throw NotImplementedException(StringUtil::Format("Enum value: '%d' not implemented", value));
+	}
+}
+
+template <>
+OnConflictAction EnumUtil::FromString<OnConflictAction>(const char *value) {
+	if (StringUtil::Equals(value, "THROW")) {
+		return OnConflictAction::THROW;
+	}
+	if (StringUtil::Equals(value, "NOTHING")) {
+		return OnConflictAction::NOTHING;
+	}
+	if (StringUtil::Equals(value, "UPDATE")) {
+		return OnConflictAction::UPDATE;
+	}
+	if (StringUtil::Equals(value, "REPLACE")) {
+		return OnConflictAction::REPLACE;
+	}
+	throw NotImplementedException(StringUtil::Format("Enum value: '%s' not implemented", value));
+}
+
+template <>
+const char *EnumUtil::ToChars<WindowBoundary>(WindowBoundary value) {
+	switch (value) {
+	case WindowBoundary::INVALID:
+		return "INVALID";
+	case WindowBoundary::UNBOUNDED_PRECEDING:
+		return "UNBOUNDED_PRECEDING";
+	case WindowBoundary::UNBOUNDED_FOLLOWING:
+		return "UNBOUNDED_FOLLOWING";
+	case WindowBoundary::CURRENT_ROW_RANGE:
+		return "CURRENT_ROW_RANGE";
+	case WindowBoundary::CURRENT_ROW_ROWS:
+		return "CURRENT_ROW_ROWS";
+	case WindowBoundary::EXPR_PRECEDING_ROWS:
+		return "EXPR_PRECEDING_ROWS";
+	case WindowBoundary::EXPR_FOLLOWING_ROWS:
+		return "EXPR_FOLLOWING_ROWS";
+	case WindowBoundary::EXPR_PRECEDING_RANGE:
+		return "EXPR_PRECEDING_RANGE";
+	case WindowBoundary::EXPR_FOLLOWING_RANGE:
+		return "EXPR_FOLLOWING_RANGE";
+	default:
+		throw NotImplementedException(StringUtil::Format("Enum value: '%d' not implemented", value));
+	}
+}
+
+template <>
+WindowBoundary EnumUtil::FromString<WindowBoundary>(const char *value) {
+	if (StringUtil::Equals(value, "INVALID")) {
+		return WindowBoundary::INVALID;
+	}
+	if (StringUtil::Equals(value, "UNBOUNDED_PRECEDING")) {
+		return WindowBoundary::UNBOUNDED_PRECEDING;
+	}
+	if (StringUtil::Equals(value, "UNBOUNDED_FOLLOWING")) {
+		return WindowBoundary::UNBOUNDED_FOLLOWING;
+	}
+	if (StringUtil::Equals(value, "CURRENT_ROW_RANGE")) {
+		return WindowBoundary::CURRENT_ROW_RANGE;
+	}
+	if (StringUtil::Equals(value, "CURRENT_ROW_ROWS")) {
+		return WindowBoundary::CURRENT_ROW_ROWS;
+	}
+	if (StringUtil::Equals(value, "EXPR_PRECEDING_ROWS")) {
+		return WindowBoundary::EXPR_PRECEDING_ROWS;
+	}
+	if (StringUtil::Equals(value, "EXPR_FOLLOWING_ROWS")) {
+		return WindowBoundary::EXPR_FOLLOWING_ROWS;
+	}
+	if (StringUtil::Equals(value, "EXPR_PRECEDING_RANGE")) {
+		return WindowBoundary::EXPR_PRECEDING_RANGE;
+	}
+	if (StringUtil::Equals(value, "EXPR_FOLLOWING_RANGE")) {
+		return WindowBoundary::EXPR_FOLLOWING_RANGE;
+	}
+	throw NotImplementedException(StringUtil::Format("Enum value: '%s' not implemented", value));
+}
+
+template <>
+const char *EnumUtil::ToChars<DataFileType>(DataFileType value) {
+	switch (value) {
+	case DataFileType::FILE_DOES_NOT_EXIST:
+		return "FILE_DOES_NOT_EXIST";
+	case DataFileType::DUCKDB_FILE:
+		return "DUCKDB_FILE";
+	case DataFileType::SQLITE_FILE:
+		return "SQLITE_FILE";
+	case DataFileType::PARQUET_FILE:
+		return "PARQUET_FILE";
+	default:
+		throw NotImplementedException(StringUtil::Format("Enum value: '%d' not implemented", value));
+	}
+}
+
+template <>
+DataFileType EnumUtil::FromString<DataFileType>(const char *value) {
+	if (StringUtil::Equals(value, "FILE_DOES_NOT_EXIST")) {
+		return DataFileType::FILE_DOES_NOT_EXIST;
+	}
+	if (StringUtil::Equals(value, "DUCKDB_FILE")) {
+		return DataFileType::DUCKDB_FILE;
+	}
+	if (StringUtil::Equals(value, "SQLITE_FILE")) {
+		return DataFileType::SQLITE_FILE;
+	}
+	if (StringUtil::Equals(value, "PARQUET_FILE")) {
+		return DataFileType::PARQUET_FILE;
+	}
+	throw NotImplementedException(StringUtil::Format("Enum value: '%s' not implemented", value));
+}
+
+template <>
+const char *EnumUtil::ToChars<StatsInfo>(StatsInfo value) {
+	switch (value) {
+	case StatsInfo::CAN_HAVE_NULL_VALUES:
+		return "CAN_HAVE_NULL_VALUES";
+	case StatsInfo::CANNOT_HAVE_NULL_VALUES:
+		return "CANNOT_HAVE_NULL_VALUES";
+	case StatsInfo::CAN_HAVE_VALID_VALUES:
+		return "CAN_HAVE_VALID_VALUES";
+	case StatsInfo::CANNOT_HAVE_VALID_VALUES:
+		return "CANNOT_HAVE_VALID_VALUES";
+	case StatsInfo::CAN_HAVE_NULL_AND_VALID_VALUES:
+		return "CAN_HAVE_NULL_AND_VALID_VALUES";
+	default:
+		throw NotImplementedException(StringUtil::Format("Enum value: '%d' not implemented", value));
+	}
+}
+
+template <>
+StatsInfo EnumUtil::FromString<StatsInfo>(const char *value) {
+	if (StringUtil::Equals(value, "CAN_HAVE_NULL_VALUES")) {
+		return StatsInfo::CAN_HAVE_NULL_VALUES;
+	}
+	if (StringUtil::Equals(value, "CANNOT_HAVE_NULL_VALUES")) {
+		return StatsInfo::CANNOT_HAVE_NULL_VALUES;
+	}
+	if (StringUtil::Equals(value, "CAN_HAVE_VALID_VALUES")) {
+		return StatsInfo::CAN_HAVE_VALID_VALUES;
+	}
+	if (StringUtil::Equals(value, "CANNOT_HAVE_VALID_VALUES")) {
+		return StatsInfo::CANNOT_HAVE_VALID_VALUES;
+	}
+	if (StringUtil::Equals(value, "CAN_HAVE_NULL_AND_VALID_VALUES")) {
+		return StatsInfo::CAN_HAVE_NULL_AND_VALID_VALUES;
+	}
+	throw NotImplementedException(StringUtil::Format("Enum value: '%s' not implemented", value));
+}
+
+template <>
+const char *EnumUtil::ToChars<StatisticsType>(StatisticsType value) {
+	switch (value) {
+	case StatisticsType::NUMERIC_STATS:
+		return "NUMERIC_STATS";
+	case StatisticsType::STRING_STATS:
+		return "STRING_STATS";
+	case StatisticsType::LIST_STATS:
+		return "LIST_STATS";
+	case StatisticsType::STRUCT_STATS:
+		return "STRUCT_STATS";
+	case StatisticsType::BASE_STATS:
+		return "BASE_STATS";
+	default:
+		throw NotImplementedException(StringUtil::Format("Enum value: '%d' not implemented", value));
+	}
+}
+
+template <>
+StatisticsType EnumUtil::FromString<StatisticsType>(const char *value) {
+	if (StringUtil::Equals(value, "NUMERIC_STATS")) {
+		return StatisticsType::NUMERIC_STATS;
+	}
+	if (StringUtil::Equals(value, "STRING_STATS")) {
+		return StatisticsType::STRING_STATS;
+	}
+	if (StringUtil::Equals(value, "LIST_STATS")) {
+		return StatisticsType::LIST_STATS;
+	}
+	if (StringUtil::Equals(value, "STRUCT_STATS")) {
+		return StatisticsType::STRUCT_STATS;
+	}
+	if (StringUtil::Equals(value, "BASE_STATS")) {
+		return StatisticsType::BASE_STATS;
+	}
+	throw NotImplementedException(StringUtil::Format("Enum value: '%s' not implemented", value));
+}
+
+template <>
+const char *EnumUtil::ToChars<ColumnSegmentType>(ColumnSegmentType value) {
+	switch (value) {
+	case ColumnSegmentType::TRANSIENT:
+		return "TRANSIENT";
+	case ColumnSegmentType::PERSISTENT:
+		return "PERSISTENT";
+	default:
+		throw NotImplementedException(StringUtil::Format("Enum value: '%d' not implemented", value));
+	}
+}
+
+template <>
+ColumnSegmentType EnumUtil::FromString<ColumnSegmentType>(const char *value) {
+	if (StringUtil::Equals(value, "TRANSIENT")) {
+		return ColumnSegmentType::TRANSIENT;
+	}
+	if (StringUtil::Equals(value, "PERSISTENT")) {
+		return ColumnSegmentType::PERSISTENT;
+	}
+	throw NotImplementedException(StringUtil::Format("Enum value: '%s' not implemented", value));
+}
+
+template <>
+const char *EnumUtil::ToChars<ChunkInfoType>(ChunkInfoType value) {
+	switch (value) {
+	case ChunkInfoType::CONSTANT_INFO:
+		return "CONSTANT_INFO";
+	case ChunkInfoType::VECTOR_INFO:
+		return "VECTOR_INFO";
+	case ChunkInfoType::EMPTY_INFO:
+		return "EMPTY_INFO";
+	default:
+		throw NotImplementedException(StringUtil::Format("Enum value: '%d' not implemented", value));
+	}
+}
+
+template <>
+ChunkInfoType EnumUtil::FromString<ChunkInfoType>(const char *value) {
+	if (StringUtil::Equals(value, "CONSTANT_INFO")) {
+		return ChunkInfoType::CONSTANT_INFO;
+	}
+	if (StringUtil::Equals(value, "VECTOR_INFO")) {
+		return ChunkInfoType::VECTOR_INFO;
+	}
+	if (StringUtil::Equals(value, "EMPTY_INFO")) {
+		return ChunkInfoType::EMPTY_INFO;
+	}
+	throw NotImplementedException(StringUtil::Format("Enum value: '%s' not implemented", value));
+}
+
+template <>
+const char *EnumUtil::ToChars<BitpackingMode>(BitpackingMode value) {
+	switch (value) {
+	case BitpackingMode::AUTO:
+		return "AUTO";
+	case BitpackingMode::CONSTANT:
+		return "CONSTANT";
+	case BitpackingMode::CONSTANT_DELTA:
+		return "CONSTANT_DELTA";
+	case BitpackingMode::DELTA_FOR:
+		return "DELTA_FOR";
+	case BitpackingMode::FOR:
+		return "FOR";
+	default:
+		throw NotImplementedException(StringUtil::Format("Enum value: '%d' not implemented", value));
+	}
+}
+
+template <>
+BitpackingMode EnumUtil::FromString<BitpackingMode>(const char *value) {
+	if (StringUtil::Equals(value, "AUTO")) {
+		return BitpackingMode::AUTO;
+	}
+	if (StringUtil::Equals(value, "CONSTANT")) {
+		return BitpackingMode::CONSTANT;
+	}
+	if (StringUtil::Equals(value, "CONSTANT_DELTA")) {
+		return BitpackingMode::CONSTANT_DELTA;
+	}
+	if (StringUtil::Equals(value, "DELTA_FOR")) {
+		return BitpackingMode::DELTA_FOR;
+	}
+	if (StringUtil::Equals(value, "FOR")) {
+		return BitpackingMode::FOR;
+	}
+	throw NotImplementedException(StringUtil::Format("Enum value: '%s' not implemented", value));
+}
+
+template <>
+const char *EnumUtil::ToChars<BlockState>(BlockState value) {
+	switch (value) {
+	case BlockState::BLOCK_UNLOADED:
+		return "BLOCK_UNLOADED";
+	case BlockState::BLOCK_LOADED:
+		return "BLOCK_LOADED";
+	default:
+		throw NotImplementedException(StringUtil::Format("Enum value: '%d' not implemented", value));
+	}
+}
+
+template <>
+BlockState EnumUtil::FromString<BlockState>(const char *value) {
+	if (StringUtil::Equals(value, "BLOCK_UNLOADED")) {
+		return BlockState::BLOCK_UNLOADED;
+	}
+	if (StringUtil::Equals(value, "BLOCK_LOADED")) {
+		return BlockState::BLOCK_LOADED;
+	}
+	throw NotImplementedException(StringUtil::Format("Enum value: '%s' not implemented", value));
+}
+
+template <>
+const char *EnumUtil::ToChars<VerificationType>(VerificationType value) {
+	switch (value) {
+	case VerificationType::ORIGINAL:
+		return "ORIGINAL";
+	case VerificationType::COPIED:
+		return "COPIED";
+	case VerificationType::DESERIALIZED:
+		return "DESERIALIZED";
+	case VerificationType::DESERIALIZED_V2:
+		return "DESERIALIZED_V2";
+	case VerificationType::PARSED:
+		return "PARSED";
+	case VerificationType::UNOPTIMIZED:
+		return "UNOPTIMIZED";
+	case VerificationType::NO_OPERATOR_CACHING:
+		return "NO_OPERATOR_CACHING";
+	case VerificationType::PREPARED:
+		return "PREPARED";
+	case VerificationType::EXTERNAL:
+		return "EXTERNAL";
+	case VerificationType::INVALID:
+		return "INVALID";
+	default:
+		throw NotImplementedException(StringUtil::Format("Enum value: '%d' not implemented", value));
+	}
+}
+
+template <>
+VerificationType EnumUtil::FromString<VerificationType>(const char *value) {
+	if (StringUtil::Equals(value, "ORIGINAL")) {
+		return VerificationType::ORIGINAL;
+	}
+	if (StringUtil::Equals(value, "COPIED")) {
+		return VerificationType::COPIED;
+	}
+	if (StringUtil::Equals(value, "DESERIALIZED")) {
+		return VerificationType::DESERIALIZED;
+	}
+	if (StringUtil::Equals(value, "DESERIALIZED_V2")) {
+		return VerificationType::DESERIALIZED_V2;
+	}
+	if (StringUtil::Equals(value, "PARSED")) {
+		return VerificationType::PARSED;
+	}
+	if (StringUtil::Equals(value, "UNOPTIMIZED")) {
+		return VerificationType::UNOPTIMIZED;
+	}
+	if (StringUtil::Equals(value, "NO_OPERATOR_CACHING")) {
+		return VerificationType::NO_OPERATOR_CACHING;
+	}
+	if (StringUtil::Equals(value, "PREPARED")) {
+		return VerificationType::PREPARED;
+	}
+	if (StringUtil::Equals(value, "EXTERNAL")) {
+		return VerificationType::EXTERNAL;
+	}
+	if (StringUtil::Equals(value, "INVALID")) {
+		return VerificationType::INVALID;
+	}
+	throw NotImplementedException(StringUtil::Format("Enum value: '%s' not implemented", value));
+}
+
+template <>
+const char *EnumUtil::ToChars<FileLockType>(FileLockType value) {
+	switch (value) {
+	case FileLockType::NO_LOCK:
+		return "NO_LOCK";
+	case FileLockType::READ_LOCK:
+		return "READ_LOCK";
+	case FileLockType::WRITE_LOCK:
+		return "WRITE_LOCK";
+	default:
+		throw NotImplementedException(StringUtil::Format("Enum value: '%d' not implemented", value));
+	}
+}
+
+template <>
+FileLockType EnumUtil::FromString<FileLockType>(const char *value) {
+	if (StringUtil::Equals(value, "NO_LOCK")) {
+		return FileLockType::NO_LOCK;
+	}
+	if (StringUtil::Equals(value, "READ_LOCK")) {
+		return FileLockType::READ_LOCK;
+	}
+	if (StringUtil::Equals(value, "WRITE_LOCK")) {
+		return FileLockType::WRITE_LOCK;
+	}
+	throw NotImplementedException(StringUtil::Format("Enum value: '%s' not implemented", value));
+}
+
+template <>
+const char *EnumUtil::ToChars<FileBufferType>(FileBufferType value) {
+	switch (value) {
+	case FileBufferType::BLOCK:
+		return "BLOCK";
+	case FileBufferType::MANAGED_BUFFER:
+		return "MANAGED_BUFFER";
+	case FileBufferType::TINY_BUFFER:
+		return "TINY_BUFFER";
+	default:
+		throw NotImplementedException(StringUtil::Format("Enum value: '%d' not implemented", value));
+	}
+}
+
+template <>
+FileBufferType EnumUtil::FromString<FileBufferType>(const char *value) {
+	if (StringUtil::Equals(value, "BLOCK")) {
+		return FileBufferType::BLOCK;
+	}
+	if (StringUtil::Equals(value, "MANAGED_BUFFER")) {
+		return FileBufferType::MANAGED_BUFFER;
+	}
+	if (StringUtil::Equals(value, "TINY_BUFFER")) {
+		return FileBufferType::TINY_BUFFER;
+	}
+	throw NotImplementedException(StringUtil::Format("Enum value: '%s' not implemented", value));
+}
+
+template <>
+const char *EnumUtil::ToChars<ExceptionFormatValueType>(ExceptionFormatValueType value) {
+	switch (value) {
+	case ExceptionFormatValueType::FORMAT_VALUE_TYPE_DOUBLE:
+		return "FORMAT_VALUE_TYPE_DOUBLE";
+	case ExceptionFormatValueType::FORMAT_VALUE_TYPE_INTEGER:
+		return "FORMAT_VALUE_TYPE_INTEGER";
+	case ExceptionFormatValueType::FORMAT_VALUE_TYPE_STRING:
+		return "FORMAT_VALUE_TYPE_STRING";
+	default:
+		throw NotImplementedException(StringUtil::Format("Enum value: '%d' not implemented", value));
+	}
+}
+
+template <>
+ExceptionFormatValueType EnumUtil::FromString<ExceptionFormatValueType>(const char *value) {
+	if (StringUtil::Equals(value, "FORMAT_VALUE_TYPE_DOUBLE")) {
+		return ExceptionFormatValueType::FORMAT_VALUE_TYPE_DOUBLE;
+	}
+	if (StringUtil::Equals(value, "FORMAT_VALUE_TYPE_INTEGER")) {
+		return ExceptionFormatValueType::FORMAT_VALUE_TYPE_INTEGER;
+	}
+	if (StringUtil::Equals(value, "FORMAT_VALUE_TYPE_STRING")) {
+		return ExceptionFormatValueType::FORMAT_VALUE_TYPE_STRING;
+	}
+	throw NotImplementedException(StringUtil::Format("Enum value: '%s' not implemented", value));
+}
+
+template <>
+const char *EnumUtil::ToChars<ExtraTypeInfoType>(ExtraTypeInfoType value) {
+	switch (value) {
+	case ExtraTypeInfoType::INVALID_TYPE_INFO:
+		return "INVALID_TYPE_INFO";
+	case ExtraTypeInfoType::GENERIC_TYPE_INFO:
+		return "GENERIC_TYPE_INFO";
+	case ExtraTypeInfoType::DECIMAL_TYPE_INFO:
+		return "DECIMAL_TYPE_INFO";
+	case ExtraTypeInfoType::STRING_TYPE_INFO:
+		return "STRING_TYPE_INFO";
+	case ExtraTypeInfoType::LIST_TYPE_INFO:
+		return "LIST_TYPE_INFO";
+	case ExtraTypeInfoType::STRUCT_TYPE_INFO:
+		return "STRUCT_TYPE_INFO";
+	case ExtraTypeInfoType::ENUM_TYPE_INFO:
+		return "ENUM_TYPE_INFO";
+	case ExtraTypeInfoType::USER_TYPE_INFO:
+		return "USER_TYPE_INFO";
+	case ExtraTypeInfoType::AGGREGATE_STATE_TYPE_INFO:
+		return "AGGREGATE_STATE_TYPE_INFO";
+	default:
+		throw NotImplementedException(StringUtil::Format("Enum value: '%d' not implemented", value));
+	}
+}
+
+template <>
+ExtraTypeInfoType EnumUtil::FromString<ExtraTypeInfoType>(const char *value) {
+	if (StringUtil::Equals(value, "INVALID_TYPE_INFO")) {
+		return ExtraTypeInfoType::INVALID_TYPE_INFO;
+	}
+	if (StringUtil::Equals(value, "GENERIC_TYPE_INFO")) {
+		return ExtraTypeInfoType::GENERIC_TYPE_INFO;
+	}
+	if (StringUtil::Equals(value, "DECIMAL_TYPE_INFO")) {
+		return ExtraTypeInfoType::DECIMAL_TYPE_INFO;
+	}
+	if (StringUtil::Equals(value, "STRING_TYPE_INFO")) {
+		return ExtraTypeInfoType::STRING_TYPE_INFO;
+	}
+	if (StringUtil::Equals(value, "LIST_TYPE_INFO")) {
+		return ExtraTypeInfoType::LIST_TYPE_INFO;
+	}
+	if (StringUtil::Equals(value, "STRUCT_TYPE_INFO")) {
+		return ExtraTypeInfoType::STRUCT_TYPE_INFO;
+	}
+	if (StringUtil::Equals(value, "ENUM_TYPE_INFO")) {
+		return ExtraTypeInfoType::ENUM_TYPE_INFO;
+	}
+	if (StringUtil::Equals(value, "USER_TYPE_INFO")) {
+		return ExtraTypeInfoType::USER_TYPE_INFO;
+	}
+	if (StringUtil::Equals(value, "AGGREGATE_STATE_TYPE_INFO")) {
+		return ExtraTypeInfoType::AGGREGATE_STATE_TYPE_INFO;
+	}
+	throw NotImplementedException(StringUtil::Format("Enum value: '%s' not implemented", value));
+}
+
+template <>
+const char *EnumUtil::ToChars<PhysicalType>(PhysicalType value) {
+	switch (value) {
+	case PhysicalType::BOOL:
+		return "BOOL";
+	case PhysicalType::UINT8:
+		return "UINT8";
+	case PhysicalType::INT8:
+		return "INT8";
+	case PhysicalType::UINT16:
+		return "UINT16";
+	case PhysicalType::INT16:
+		return "INT16";
+	case PhysicalType::UINT32:
+		return "UINT32";
+	case PhysicalType::INT32:
+		return "INT32";
+	case PhysicalType::UINT64:
+		return "UINT64";
+	case PhysicalType::INT64:
+		return "INT64";
+	case PhysicalType::FLOAT:
+		return "FLOAT";
+	case PhysicalType::DOUBLE:
+		return "DOUBLE";
+	case PhysicalType::INTERVAL:
+		return "INTERVAL";
+	case PhysicalType::LIST:
+		return "LIST";
+	case PhysicalType::STRUCT:
+		return "STRUCT";
+	case PhysicalType::VARCHAR:
+		return "VARCHAR";
+	case PhysicalType::INT128:
+		return "INT128";
+	case PhysicalType::UNKNOWN:
+		return "UNKNOWN";
+	case PhysicalType::BIT:
+		return "BIT";
+	case PhysicalType::INVALID:
+		return "INVALID";
+	default:
+		throw NotImplementedException(StringUtil::Format("Enum value: '%d' not implemented", value));
+	}
+}
+
+template <>
+PhysicalType EnumUtil::FromString<PhysicalType>(const char *value) {
+	if (StringUtil::Equals(value, "BOOL")) {
+		return PhysicalType::BOOL;
+	}
+	if (StringUtil::Equals(value, "UINT8")) {
+		return PhysicalType::UINT8;
+	}
+	if (StringUtil::Equals(value, "INT8")) {
+		return PhysicalType::INT8;
+	}
+	if (StringUtil::Equals(value, "UINT16")) {
+		return PhysicalType::UINT16;
+	}
+	if (StringUtil::Equals(value, "INT16")) {
+		return PhysicalType::INT16;
+	}
+	if (StringUtil::Equals(value, "UINT32")) {
+		return PhysicalType::UINT32;
+	}
+	if (StringUtil::Equals(value, "INT32")) {
+		return PhysicalType::INT32;
+	}
+	if (StringUtil::Equals(value, "UINT64")) {
+		return PhysicalType::UINT64;
+	}
+	if (StringUtil::Equals(value, "INT64")) {
+		return PhysicalType::INT64;
+	}
+	if (StringUtil::Equals(value, "FLOAT")) {
+		return PhysicalType::FLOAT;
+	}
+	if (StringUtil::Equals(value, "DOUBLE")) {
+		return PhysicalType::DOUBLE;
+	}
+	if (StringUtil::Equals(value, "INTERVAL")) {
+		return PhysicalType::INTERVAL;
+	}
+	if (StringUtil::Equals(value, "LIST")) {
+		return PhysicalType::LIST;
+	}
+	if (StringUtil::Equals(value, "STRUCT")) {
+		return PhysicalType::STRUCT;
+	}
+	if (StringUtil::Equals(value, "VARCHAR")) {
+		return PhysicalType::VARCHAR;
+	}
+	if (StringUtil::Equals(value, "INT128")) {
+		return PhysicalType::INT128;
+	}
+	if (StringUtil::Equals(value, "UNKNOWN")) {
+		return PhysicalType::UNKNOWN;
+	}
+	if (StringUtil::Equals(value, "BIT")) {
+		return PhysicalType::BIT;
+	}
+	if (StringUtil::Equals(value, "INVALID")) {
+		return PhysicalType::INVALID;
+	}
+	throw NotImplementedException(StringUtil::Format("Enum value: '%s' not implemented", value));
+}
+
+template <>
+const char *EnumUtil::ToChars<LogicalTypeId>(LogicalTypeId value) {
+	switch (value) {
+	case LogicalTypeId::INVALID:
+		return "INVALID";
+	case LogicalTypeId::SQLNULL:
+		return "NULL";
+	case LogicalTypeId::UNKNOWN:
+		return "UNKNOWN";
+	case LogicalTypeId::ANY:
+		return "ANY";
+	case LogicalTypeId::USER:
+		return "USER";
+	case LogicalTypeId::BOOLEAN:
+		return "BOOLEAN";
+	case LogicalTypeId::TINYINT:
+		return "TINYINT";
+	case LogicalTypeId::SMALLINT:
+		return "SMALLINT";
+	case LogicalTypeId::INTEGER:
+		return "INTEGER";
+	case LogicalTypeId::BIGINT:
+		return "BIGINT";
+	case LogicalTypeId::DATE:
+		return "DATE";
+	case LogicalTypeId::TIME:
+		return "TIME";
+	case LogicalTypeId::TIMESTAMP_SEC:
+		return "TIMESTAMP_S";
+	case LogicalTypeId::TIMESTAMP_MS:
+		return "TIMESTAMP_MS";
+	case LogicalTypeId::TIMESTAMP:
+		return "TIMESTAMP";
+	case LogicalTypeId::TIMESTAMP_NS:
+		return "TIMESTAMP_NS";
+	case LogicalTypeId::DECIMAL:
+		return "DECIMAL";
+	case LogicalTypeId::FLOAT:
+		return "FLOAT";
+	case LogicalTypeId::DOUBLE:
+		return "DOUBLE";
+	case LogicalTypeId::CHAR:
+		return "CHAR";
+	case LogicalTypeId::VARCHAR:
+		return "VARCHAR";
+	case LogicalTypeId::BLOB:
+		return "BLOB";
+	case LogicalTypeId::INTERVAL:
+		return "INTERVAL";
+	case LogicalTypeId::UTINYINT:
+		return "UTINYINT";
+	case LogicalTypeId::USMALLINT:
+		return "USMALLINT";
+	case LogicalTypeId::UINTEGER:
+		return "UINTEGER";
+	case LogicalTypeId::UBIGINT:
+		return "UBIGINT";
+	case LogicalTypeId::TIMESTAMP_TZ:
+		return "TIMESTAMP WITH TIME ZONE";
+	case LogicalTypeId::TIME_TZ:
+		return "TIME WITH TIME ZONE";
+	case LogicalTypeId::BIT:
+		return "BIT";
+	case LogicalTypeId::HUGEINT:
+		return "HUGEINT";
+	case LogicalTypeId::POINTER:
+		return "POINTER";
+	case LogicalTypeId::VALIDITY:
+		return "VALIDITY";
+	case LogicalTypeId::UUID:
+		return "UUID";
+	case LogicalTypeId::STRUCT:
+		return "STRUCT";
+	case LogicalTypeId::LIST:
+		return "LIST";
+	case LogicalTypeId::MAP:
+		return "MAP";
+	case LogicalTypeId::TABLE:
+		return "TABLE";
+	case LogicalTypeId::ENUM:
+		return "ENUM";
+	case LogicalTypeId::AGGREGATE_STATE:
+		return "AGGREGATE_STATE";
+	case LogicalTypeId::LAMBDA:
+		return "LAMBDA";
+	case LogicalTypeId::UNION:
+		return "UNION";
+	default:
+		throw NotImplementedException(StringUtil::Format("Enum value: '%d' not implemented", value));
+	}
+}
+
+template <>
+LogicalTypeId EnumUtil::FromString<LogicalTypeId>(const char *value) {
+	if (StringUtil::Equals(value, "INVALID")) {
+		return LogicalTypeId::INVALID;
+	}
+	if (StringUtil::Equals(value, "NULL")) {
+		return LogicalTypeId::SQLNULL;
+	}
+	if (StringUtil::Equals(value, "UNKNOWN")) {
+		return LogicalTypeId::UNKNOWN;
+	}
+	if (StringUtil::Equals(value, "ANY")) {
+		return LogicalTypeId::ANY;
+	}
+	if (StringUtil::Equals(value, "USER")) {
+		return LogicalTypeId::USER;
+	}
+	if (StringUtil::Equals(value, "BOOLEAN")) {
+		return LogicalTypeId::BOOLEAN;
+	}
+	if (StringUtil::Equals(value, "TINYINT")) {
+		return LogicalTypeId::TINYINT;
+	}
+	if (StringUtil::Equals(value, "SMALLINT")) {
+		return LogicalTypeId::SMALLINT;
+	}
+	if (StringUtil::Equals(value, "INTEGER")) {
+		return LogicalTypeId::INTEGER;
+	}
+	if (StringUtil::Equals(value, "BIGINT")) {
+		return LogicalTypeId::BIGINT;
+	}
+	if (StringUtil::Equals(value, "DATE")) {
+		return LogicalTypeId::DATE;
+	}
+	if (StringUtil::Equals(value, "TIME")) {
+		return LogicalTypeId::TIME;
+	}
+	if (StringUtil::Equals(value, "TIMESTAMP_S")) {
+		return LogicalTypeId::TIMESTAMP_SEC;
+	}
+	if (StringUtil::Equals(value, "TIMESTAMP_MS")) {
+		return LogicalTypeId::TIMESTAMP_MS;
+	}
+	if (StringUtil::Equals(value, "TIMESTAMP")) {
+		return LogicalTypeId::TIMESTAMP;
+	}
+	if (StringUtil::Equals(value, "TIMESTAMP_NS")) {
+		return LogicalTypeId::TIMESTAMP_NS;
+	}
+	if (StringUtil::Equals(value, "DECIMAL")) {
+		return LogicalTypeId::DECIMAL;
+	}
+	if (StringUtil::Equals(value, "FLOAT")) {
+		return LogicalTypeId::FLOAT;
+	}
+	if (StringUtil::Equals(value, "DOUBLE")) {
+		return LogicalTypeId::DOUBLE;
+	}
+	if (StringUtil::Equals(value, "CHAR")) {
+		return LogicalTypeId::CHAR;
+	}
+	if (StringUtil::Equals(value, "VARCHAR")) {
+		return LogicalTypeId::VARCHAR;
+	}
+	if (StringUtil::Equals(value, "BLOB")) {
+		return LogicalTypeId::BLOB;
+	}
+	if (StringUtil::Equals(value, "INTERVAL")) {
+		return LogicalTypeId::INTERVAL;
+	}
+	if (StringUtil::Equals(value, "UTINYINT")) {
+		return LogicalTypeId::UTINYINT;
+	}
+	if (StringUtil::Equals(value, "USMALLINT")) {
+		return LogicalTypeId::USMALLINT;
+	}
+	if (StringUtil::Equals(value, "UINTEGER")) {
+		return LogicalTypeId::UINTEGER;
+	}
+	if (StringUtil::Equals(value, "UBIGINT")) {
+		return LogicalTypeId::UBIGINT;
+	}
+	if (StringUtil::Equals(value, "TIMESTAMP WITH TIME ZONE")) {
+		return LogicalTypeId::TIMESTAMP_TZ;
+	}
+	if (StringUtil::Equals(value, "TIME WITH TIME ZONE")) {
+		return LogicalTypeId::TIME_TZ;
+	}
+	if (StringUtil::Equals(value, "BIT")) {
+		return LogicalTypeId::BIT;
+	}
+	if (StringUtil::Equals(value, "HUGEINT")) {
+		return LogicalTypeId::HUGEINT;
+	}
+	if (StringUtil::Equals(value, "POINTER")) {
+		return LogicalTypeId::POINTER;
+	}
+	if (StringUtil::Equals(value, "VALIDITY")) {
+		return LogicalTypeId::VALIDITY;
+	}
+	if (StringUtil::Equals(value, "UUID")) {
+		return LogicalTypeId::UUID;
+	}
+	if (StringUtil::Equals(value, "STRUCT")) {
+		return LogicalTypeId::STRUCT;
+	}
+	if (StringUtil::Equals(value, "LIST")) {
+		return LogicalTypeId::LIST;
+	}
+	if (StringUtil::Equals(value, "MAP")) {
+		return LogicalTypeId::MAP;
+	}
+	if (StringUtil::Equals(value, "TABLE")) {
+		return LogicalTypeId::TABLE;
+	}
+	if (StringUtil::Equals(value, "ENUM")) {
+		return LogicalTypeId::ENUM;
+	}
+	if (StringUtil::Equals(value, "AGGREGATE_STATE")) {
+		return LogicalTypeId::AGGREGATE_STATE;
+	}
+	if (StringUtil::Equals(value, "LAMBDA")) {
+		return LogicalTypeId::LAMBDA;
+	}
+	if (StringUtil::Equals(value, "UNION")) {
+		return LogicalTypeId::UNION;
+	}
+	throw NotImplementedException(StringUtil::Format("Enum value: '%s' not implemented", value));
+}
+
+template <>
+const char *EnumUtil::ToChars<OutputStream>(OutputStream value) {
+	switch (value) {
+	case OutputStream::STREAM_STDOUT:
+		return "STREAM_STDOUT";
+	case OutputStream::STREAM_STDERR:
+		return "STREAM_STDERR";
+	default:
+		throw NotImplementedException(StringUtil::Format("Enum value: '%d' not implemented", value));
+	}
+}
+
+template <>
+OutputStream EnumUtil::FromString<OutputStream>(const char *value) {
+	if (StringUtil::Equals(value, "STREAM_STDOUT")) {
+		return OutputStream::STREAM_STDOUT;
+	}
+	if (StringUtil::Equals(value, "STREAM_STDERR")) {
+		return OutputStream::STREAM_STDERR;
+	}
+	throw NotImplementedException(StringUtil::Format("Enum value: '%s' not implemented", value));
+}
+
+template <>
+const char *EnumUtil::ToChars<TimestampCastResult>(TimestampCastResult value) {
+	switch (value) {
+	case TimestampCastResult::SUCCESS:
+		return "SUCCESS";
+	case TimestampCastResult::ERROR_INCORRECT_FORMAT:
+		return "ERROR_INCORRECT_FORMAT";
+	case TimestampCastResult::ERROR_NON_UTC_TIMEZONE:
+		return "ERROR_NON_UTC_TIMEZONE";
+	default:
+		throw NotImplementedException(StringUtil::Format("Enum value: '%d' not implemented", value));
+	}
+}
+
+template <>
+TimestampCastResult EnumUtil::FromString<TimestampCastResult>(const char *value) {
+	if (StringUtil::Equals(value, "SUCCESS")) {
+		return TimestampCastResult::SUCCESS;
+	}
+	if (StringUtil::Equals(value, "ERROR_INCORRECT_FORMAT")) {
+		return TimestampCastResult::ERROR_INCORRECT_FORMAT;
+	}
+	if (StringUtil::Equals(value, "ERROR_NON_UTC_TIMEZONE")) {
+		return TimestampCastResult::ERROR_NON_UTC_TIMEZONE;
+	}
+	throw NotImplementedException(StringUtil::Format("Enum value: '%s' not implemented", value));
+}
+
+template <>
+const char *EnumUtil::ToChars<ConflictManagerMode>(ConflictManagerMode value) {
+	switch (value) {
+	case ConflictManagerMode::SCAN:
+		return "SCAN";
+	case ConflictManagerMode::THROW:
+		return "THROW";
+	default:
+		throw NotImplementedException(StringUtil::Format("Enum value: '%d' not implemented", value));
+	}
+}
+
+template <>
+ConflictManagerMode EnumUtil::FromString<ConflictManagerMode>(const char *value) {
+	if (StringUtil::Equals(value, "SCAN")) {
+		return ConflictManagerMode::SCAN;
+	}
+	if (StringUtil::Equals(value, "THROW")) {
+		return ConflictManagerMode::THROW;
+	}
+	throw NotImplementedException(StringUtil::Format("Enum value: '%s' not implemented", value));
+}
+
+template <>
+const char *EnumUtil::ToChars<LookupResultType>(LookupResultType value) {
+	switch (value) {
+	case LookupResultType::LOOKUP_MISS:
+		return "LOOKUP_MISS";
+	case LookupResultType::LOOKUP_HIT:
+		return "LOOKUP_HIT";
+	case LookupResultType::LOOKUP_NULL:
+		return "LOOKUP_NULL";
+	default:
+		throw NotImplementedException(StringUtil::Format("Enum value: '%d' not implemented", value));
+	}
+}
+
+template <>
+LookupResultType EnumUtil::FromString<LookupResultType>(const char *value) {
+	if (StringUtil::Equals(value, "LOOKUP_MISS")) {
+		return LookupResultType::LOOKUP_MISS;
+	}
+	if (StringUtil::Equals(value, "LOOKUP_HIT")) {
+		return LookupResultType::LOOKUP_HIT;
+	}
+	if (StringUtil::Equals(value, "LOOKUP_NULL")) {
+		return LookupResultType::LOOKUP_NULL;
+	}
+	throw NotImplementedException(StringUtil::Format("Enum value: '%s' not implemented", value));
+}
+
+template <>
+const char *EnumUtil::ToChars<MapInvalidReason>(MapInvalidReason value) {
+	switch (value) {
+	case MapInvalidReason::VALID:
+		return "VALID";
+	case MapInvalidReason::NULL_KEY_LIST:
+		return "NULL_KEY_LIST";
+	case MapInvalidReason::NULL_KEY:
+		return "NULL_KEY";
+	case MapInvalidReason::DUPLICATE_KEY:
+		return "DUPLICATE_KEY";
+	default:
+		throw NotImplementedException(StringUtil::Format("Enum value: '%d' not implemented", value));
+	}
+}
+
+template <>
+MapInvalidReason EnumUtil::FromString<MapInvalidReason>(const char *value) {
+	if (StringUtil::Equals(value, "VALID")) {
+		return MapInvalidReason::VALID;
+	}
+	if (StringUtil::Equals(value, "NULL_KEY_LIST")) {
+		return MapInvalidReason::NULL_KEY_LIST;
+	}
+	if (StringUtil::Equals(value, "NULL_KEY")) {
+		return MapInvalidReason::NULL_KEY;
+	}
+	if (StringUtil::Equals(value, "DUPLICATE_KEY")) {
+		return MapInvalidReason::DUPLICATE_KEY;
+	}
+	throw NotImplementedException(StringUtil::Format("Enum value: '%s' not implemented", value));
+}
+
+template <>
+const char *EnumUtil::ToChars<UnionInvalidReason>(UnionInvalidReason value) {
+	switch (value) {
+	case UnionInvalidReason::VALID:
+		return "VALID";
+	case UnionInvalidReason::TAG_OUT_OF_RANGE:
+		return "TAG_OUT_OF_RANGE";
+	case UnionInvalidReason::NO_MEMBERS:
+		return "NO_MEMBERS";
+	case UnionInvalidReason::VALIDITY_OVERLAP:
+		return "VALIDITY_OVERLAP";
+	default:
+		throw NotImplementedException(StringUtil::Format("Enum value: '%d' not implemented", value));
+	}
+}
+
+template <>
+UnionInvalidReason EnumUtil::FromString<UnionInvalidReason>(const char *value) {
+	if (StringUtil::Equals(value, "VALID")) {
+		return UnionInvalidReason::VALID;
+	}
+	if (StringUtil::Equals(value, "TAG_OUT_OF_RANGE")) {
+		return UnionInvalidReason::TAG_OUT_OF_RANGE;
+	}
+	if (StringUtil::Equals(value, "NO_MEMBERS")) {
+		return UnionInvalidReason::NO_MEMBERS;
+	}
+	if (StringUtil::Equals(value, "VALIDITY_OVERLAP")) {
+		return UnionInvalidReason::VALIDITY_OVERLAP;
+	}
+	throw NotImplementedException(StringUtil::Format("Enum value: '%s' not implemented", value));
+}
+
+template <>
+const char *EnumUtil::ToChars<VectorBufferType>(VectorBufferType value) {
+	switch (value) {
+	case VectorBufferType::STANDARD_BUFFER:
+		return "STANDARD_BUFFER";
+	case VectorBufferType::DICTIONARY_BUFFER:
+		return "DICTIONARY_BUFFER";
+	case VectorBufferType::VECTOR_CHILD_BUFFER:
+		return "VECTOR_CHILD_BUFFER";
+	case VectorBufferType::STRING_BUFFER:
+		return "STRING_BUFFER";
+	case VectorBufferType::FSST_BUFFER:
+		return "FSST_BUFFER";
+	case VectorBufferType::STRUCT_BUFFER:
+		return "STRUCT_BUFFER";
+	case VectorBufferType::LIST_BUFFER:
+		return "LIST_BUFFER";
+	case VectorBufferType::MANAGED_BUFFER:
+		return "MANAGED_BUFFER";
+	case VectorBufferType::OPAQUE_BUFFER:
+		return "OPAQUE_BUFFER";
+	default:
+		throw NotImplementedException(StringUtil::Format("Enum value: '%d' not implemented", value));
+	}
+}
+
+template <>
+VectorBufferType EnumUtil::FromString<VectorBufferType>(const char *value) {
+	if (StringUtil::Equals(value, "STANDARD_BUFFER")) {
+		return VectorBufferType::STANDARD_BUFFER;
+	}
+	if (StringUtil::Equals(value, "DICTIONARY_BUFFER")) {
+		return VectorBufferType::DICTIONARY_BUFFER;
+	}
+	if (StringUtil::Equals(value, "VECTOR_CHILD_BUFFER")) {
+		return VectorBufferType::VECTOR_CHILD_BUFFER;
+	}
+	if (StringUtil::Equals(value, "STRING_BUFFER")) {
+		return VectorBufferType::STRING_BUFFER;
+	}
+	if (StringUtil::Equals(value, "FSST_BUFFER")) {
+		return VectorBufferType::FSST_BUFFER;
+	}
+	if (StringUtil::Equals(value, "STRUCT_BUFFER")) {
+		return VectorBufferType::STRUCT_BUFFER;
+	}
+	if (StringUtil::Equals(value, "LIST_BUFFER")) {
+		return VectorBufferType::LIST_BUFFER;
+	}
+	if (StringUtil::Equals(value, "MANAGED_BUFFER")) {
+		return VectorBufferType::MANAGED_BUFFER;
+	}
+	if (StringUtil::Equals(value, "OPAQUE_BUFFER")) {
+		return VectorBufferType::OPAQUE_BUFFER;
+	}
+	throw NotImplementedException(StringUtil::Format("Enum value: '%s' not implemented", value));
+}
+
+template <>
+const char *EnumUtil::ToChars<VectorAuxiliaryDataType>(VectorAuxiliaryDataType value) {
+	switch (value) {
+	case VectorAuxiliaryDataType::ARROW_AUXILIARY:
+		return "ARROW_AUXILIARY";
+	default:
+		throw NotImplementedException(StringUtil::Format("Enum value: '%d' not implemented", value));
+	}
+}
+
+template <>
+VectorAuxiliaryDataType EnumUtil::FromString<VectorAuxiliaryDataType>(const char *value) {
+	if (StringUtil::Equals(value, "ARROW_AUXILIARY")) {
+		return VectorAuxiliaryDataType::ARROW_AUXILIARY;
+	}
+	throw NotImplementedException(StringUtil::Format("Enum value: '%s' not implemented", value));
+}
+
+template <>
+const char *EnumUtil::ToChars<PartitionedColumnDataType>(PartitionedColumnDataType value) {
+	switch (value) {
+	case PartitionedColumnDataType::INVALID:
+		return "INVALID";
+	case PartitionedColumnDataType::RADIX:
+		return "RADIX";
+	case PartitionedColumnDataType::HIVE:
+		return "HIVE";
+	default:
+		throw NotImplementedException(StringUtil::Format("Enum value: '%d' not implemented", value));
+	}
+}
+
+template <>
+PartitionedColumnDataType EnumUtil::FromString<PartitionedColumnDataType>(const char *value) {
+	if (StringUtil::Equals(value, "INVALID")) {
+		return PartitionedColumnDataType::INVALID;
+	}
+	if (StringUtil::Equals(value, "RADIX")) {
+		return PartitionedColumnDataType::RADIX;
+	}
+	if (StringUtil::Equals(value, "HIVE")) {
+		return PartitionedColumnDataType::HIVE;
+	}
+	throw NotImplementedException(StringUtil::Format("Enum value: '%s' not implemented", value));
+}
+
+template <>
+const char *EnumUtil::ToChars<ColumnDataAllocatorType>(ColumnDataAllocatorType value) {
+	switch (value) {
+	case ColumnDataAllocatorType::BUFFER_MANAGER_ALLOCATOR:
+		return "BUFFER_MANAGER_ALLOCATOR";
+	case ColumnDataAllocatorType::IN_MEMORY_ALLOCATOR:
+		return "IN_MEMORY_ALLOCATOR";
+	default:
+		throw NotImplementedException(StringUtil::Format("Enum value: '%d' not implemented", value));
+	}
+}
+
+template <>
+ColumnDataAllocatorType EnumUtil::FromString<ColumnDataAllocatorType>(const char *value) {
+	if (StringUtil::Equals(value, "BUFFER_MANAGER_ALLOCATOR")) {
+		return ColumnDataAllocatorType::BUFFER_MANAGER_ALLOCATOR;
+	}
+	if (StringUtil::Equals(value, "IN_MEMORY_ALLOCATOR")) {
+		return ColumnDataAllocatorType::IN_MEMORY_ALLOCATOR;
+	}
+	throw NotImplementedException(StringUtil::Format("Enum value: '%s' not implemented", value));
+}
+
+template <>
+const char *EnumUtil::ToChars<ColumnDataScanProperties>(ColumnDataScanProperties value) {
+	switch (value) {
+	case ColumnDataScanProperties::INVALID:
+		return "INVALID";
+	case ColumnDataScanProperties::ALLOW_ZERO_COPY:
+		return "ALLOW_ZERO_COPY";
+	case ColumnDataScanProperties::DISALLOW_ZERO_COPY:
+		return "DISALLOW_ZERO_COPY";
+	default:
+		throw NotImplementedException(StringUtil::Format("Enum value: '%d' not implemented", value));
+	}
+}
+
+template <>
+ColumnDataScanProperties EnumUtil::FromString<ColumnDataScanProperties>(const char *value) {
+	if (StringUtil::Equals(value, "INVALID")) {
+		return ColumnDataScanProperties::INVALID;
+	}
+	if (StringUtil::Equals(value, "ALLOW_ZERO_COPY")) {
+		return ColumnDataScanProperties::ALLOW_ZERO_COPY;
+	}
+	if (StringUtil::Equals(value, "DISALLOW_ZERO_COPY")) {
+		return ColumnDataScanProperties::DISALLOW_ZERO_COPY;
+	}
+	throw NotImplementedException(StringUtil::Format("Enum value: '%s' not implemented", value));
+}
+
+template <>
+const char *EnumUtil::ToChars<PartitionedTupleDataType>(PartitionedTupleDataType value) {
+	switch (value) {
+	case PartitionedTupleDataType::INVALID:
+		return "INVALID";
+	case PartitionedTupleDataType::RADIX:
+		return "RADIX";
+	default:
+		throw NotImplementedException(StringUtil::Format("Enum value: '%d' not implemented", value));
+	}
+}
+
+template <>
+PartitionedTupleDataType EnumUtil::FromString<PartitionedTupleDataType>(const char *value) {
+	if (StringUtil::Equals(value, "INVALID")) {
+		return PartitionedTupleDataType::INVALID;
+	}
+	if (StringUtil::Equals(value, "RADIX")) {
+		return PartitionedTupleDataType::RADIX;
+	}
+	throw NotImplementedException(StringUtil::Format("Enum value: '%s' not implemented", value));
+}
+
+template <>
+const char *EnumUtil::ToChars<TupleDataPinProperties>(TupleDataPinProperties value) {
+	switch (value) {
+	case TupleDataPinProperties::INVALID:
+		return "INVALID";
+	case TupleDataPinProperties::KEEP_EVERYTHING_PINNED:
+		return "KEEP_EVERYTHING_PINNED";
+	case TupleDataPinProperties::UNPIN_AFTER_DONE:
+		return "UNPIN_AFTER_DONE";
+	case TupleDataPinProperties::DESTROY_AFTER_DONE:
+		return "DESTROY_AFTER_DONE";
+	case TupleDataPinProperties::ALREADY_PINNED:
+		return "ALREADY_PINNED";
+	default:
+		throw NotImplementedException(StringUtil::Format("Enum value: '%d' not implemented", value));
+	}
+}
+
+template <>
+TupleDataPinProperties EnumUtil::FromString<TupleDataPinProperties>(const char *value) {
+	if (StringUtil::Equals(value, "INVALID")) {
+		return TupleDataPinProperties::INVALID;
+	}
+	if (StringUtil::Equals(value, "KEEP_EVERYTHING_PINNED")) {
+		return TupleDataPinProperties::KEEP_EVERYTHING_PINNED;
+	}
+	if (StringUtil::Equals(value, "UNPIN_AFTER_DONE")) {
+		return TupleDataPinProperties::UNPIN_AFTER_DONE;
+	}
+	if (StringUtil::Equals(value, "DESTROY_AFTER_DONE")) {
+		return TupleDataPinProperties::DESTROY_AFTER_DONE;
+	}
+	if (StringUtil::Equals(value, "ALREADY_PINNED")) {
+		return TupleDataPinProperties::ALREADY_PINNED;
+	}
+	throw NotImplementedException(StringUtil::Format("Enum value: '%s' not implemented", value));
+}
+
+template <>
+const char *EnumUtil::ToChars<PartitionSortStage>(PartitionSortStage value) {
+	switch (value) {
+	case PartitionSortStage::INIT:
+		return "INIT";
+	case PartitionSortStage::PREPARE:
+		return "PREPARE";
+	case PartitionSortStage::MERGE:
+		return "MERGE";
+	case PartitionSortStage::SORTED:
+		return "SORTED";
+	default:
+		throw NotImplementedException(StringUtil::Format("Enum value: '%d' not implemented", value));
+	}
+}
+
+template <>
+PartitionSortStage EnumUtil::FromString<PartitionSortStage>(const char *value) {
+	if (StringUtil::Equals(value, "INIT")) {
+		return PartitionSortStage::INIT;
+	}
+	if (StringUtil::Equals(value, "PREPARE")) {
+		return PartitionSortStage::PREPARE;
+	}
+	if (StringUtil::Equals(value, "MERGE")) {
+		return PartitionSortStage::MERGE;
+	}
+	if (StringUtil::Equals(value, "SORTED")) {
+		return PartitionSortStage::SORTED;
+	}
+	throw NotImplementedException(StringUtil::Format("Enum value: '%s' not implemented", value));
+}
+
+template <>
+const char *EnumUtil::ToChars<PhysicalOperatorType>(PhysicalOperatorType value) {
+	switch (value) {
+	case PhysicalOperatorType::INVALID:
+		return "INVALID";
+	case PhysicalOperatorType::ORDER_BY:
+		return "ORDER_BY";
+	case PhysicalOperatorType::LIMIT:
+		return "LIMIT";
+	case PhysicalOperatorType::STREAMING_LIMIT:
+		return "STREAMING_LIMIT";
+	case PhysicalOperatorType::LIMIT_PERCENT:
+		return "LIMIT_PERCENT";
+	case PhysicalOperatorType::TOP_N:
+		return "TOP_N";
+	case PhysicalOperatorType::WINDOW:
+		return "WINDOW";
+	case PhysicalOperatorType::UNNEST:
+		return "UNNEST";
+	case PhysicalOperatorType::UNGROUPED_AGGREGATE:
+		return "UNGROUPED_AGGREGATE";
+	case PhysicalOperatorType::HASH_GROUP_BY:
+		return "HASH_GROUP_BY";
+	case PhysicalOperatorType::PERFECT_HASH_GROUP_BY:
+		return "PERFECT_HASH_GROUP_BY";
+	case PhysicalOperatorType::FILTER:
+		return "FILTER";
+	case PhysicalOperatorType::PROJECTION:
+		return "PROJECTION";
+	case PhysicalOperatorType::COPY_TO_FILE:
+		return "COPY_TO_FILE";
+	case PhysicalOperatorType::RESERVOIR_SAMPLE:
+		return "RESERVOIR_SAMPLE";
+	case PhysicalOperatorType::STREAMING_SAMPLE:
+		return "STREAMING_SAMPLE";
+	case PhysicalOperatorType::STREAMING_WINDOW:
+		return "STREAMING_WINDOW";
+	case PhysicalOperatorType::PIVOT:
+		return "PIVOT";
+	case PhysicalOperatorType::TABLE_SCAN:
+		return "TABLE_SCAN";
+	case PhysicalOperatorType::DUMMY_SCAN:
+		return "DUMMY_SCAN";
+	case PhysicalOperatorType::COLUMN_DATA_SCAN:
+		return "COLUMN_DATA_SCAN";
+	case PhysicalOperatorType::CHUNK_SCAN:
+		return "CHUNK_SCAN";
+	case PhysicalOperatorType::RECURSIVE_CTE_SCAN:
+		return "RECURSIVE_CTE_SCAN";
+	case PhysicalOperatorType::DELIM_SCAN:
+		return "DELIM_SCAN";
+	case PhysicalOperatorType::EXPRESSION_SCAN:
+		return "EXPRESSION_SCAN";
+	case PhysicalOperatorType::POSITIONAL_SCAN:
+		return "POSITIONAL_SCAN";
+	case PhysicalOperatorType::BLOCKWISE_NL_JOIN:
+		return "BLOCKWISE_NL_JOIN";
+	case PhysicalOperatorType::NESTED_LOOP_JOIN:
+		return "NESTED_LOOP_JOIN";
+	case PhysicalOperatorType::HASH_JOIN:
+		return "HASH_JOIN";
+	case PhysicalOperatorType::CROSS_PRODUCT:
+		return "CROSS_PRODUCT";
+	case PhysicalOperatorType::PIECEWISE_MERGE_JOIN:
+		return "PIECEWISE_MERGE_JOIN";
+	case PhysicalOperatorType::IE_JOIN:
+		return "IE_JOIN";
+	case PhysicalOperatorType::DELIM_JOIN:
+		return "DELIM_JOIN";
+	case PhysicalOperatorType::INDEX_JOIN:
+		return "INDEX_JOIN";
+	case PhysicalOperatorType::POSITIONAL_JOIN:
+		return "POSITIONAL_JOIN";
+	case PhysicalOperatorType::ASOF_JOIN:
+		return "ASOF_JOIN";
+	case PhysicalOperatorType::UNION:
+		return "UNION";
+	case PhysicalOperatorType::RECURSIVE_CTE:
+		return "RECURSIVE_CTE";
+	case PhysicalOperatorType::INSERT:
+		return "INSERT";
+	case PhysicalOperatorType::BATCH_INSERT:
+		return "BATCH_INSERT";
+	case PhysicalOperatorType::DELETE_OPERATOR:
+		return "DELETE_OPERATOR";
+	case PhysicalOperatorType::UPDATE:
+		return "UPDATE";
+	case PhysicalOperatorType::CREATE_TABLE:
+		return "CREATE_TABLE";
+	case PhysicalOperatorType::CREATE_TABLE_AS:
+		return "CREATE_TABLE_AS";
+	case PhysicalOperatorType::BATCH_CREATE_TABLE_AS:
+		return "BATCH_CREATE_TABLE_AS";
+	case PhysicalOperatorType::CREATE_INDEX:
+		return "CREATE_INDEX";
+	case PhysicalOperatorType::ALTER:
+		return "ALTER";
+	case PhysicalOperatorType::CREATE_SEQUENCE:
+		return "CREATE_SEQUENCE";
+	case PhysicalOperatorType::CREATE_VIEW:
+		return "CREATE_VIEW";
+	case PhysicalOperatorType::CREATE_SCHEMA:
+		return "CREATE_SCHEMA";
+	case PhysicalOperatorType::CREATE_MACRO:
+		return "CREATE_MACRO";
+	case PhysicalOperatorType::DROP:
+		return "DROP";
+	case PhysicalOperatorType::PRAGMA:
+		return "PRAGMA";
+	case PhysicalOperatorType::TRANSACTION:
+		return "TRANSACTION";
+	case PhysicalOperatorType::CREATE_TYPE:
+		return "CREATE_TYPE";
+	case PhysicalOperatorType::ATTACH:
+		return "ATTACH";
+	case PhysicalOperatorType::DETACH:
+		return "DETACH";
+	case PhysicalOperatorType::EXPLAIN:
+		return "EXPLAIN";
+	case PhysicalOperatorType::EXPLAIN_ANALYZE:
+		return "EXPLAIN_ANALYZE";
+	case PhysicalOperatorType::EMPTY_RESULT:
+		return "EMPTY_RESULT";
+	case PhysicalOperatorType::EXECUTE:
+		return "EXECUTE";
+	case PhysicalOperatorType::PREPARE:
+		return "PREPARE";
+	case PhysicalOperatorType::VACUUM:
+		return "VACUUM";
+	case PhysicalOperatorType::EXPORT:
+		return "EXPORT";
+	case PhysicalOperatorType::SET:
+		return "SET";
+	case PhysicalOperatorType::LOAD:
+		return "LOAD";
+	case PhysicalOperatorType::INOUT_FUNCTION:
+		return "INOUT_FUNCTION";
+	case PhysicalOperatorType::RESULT_COLLECTOR:
+		return "RESULT_COLLECTOR";
+	case PhysicalOperatorType::RESET:
+		return "RESET";
+	case PhysicalOperatorType::EXTENSION:
+		return "EXTENSION";
+	default:
+		throw NotImplementedException(StringUtil::Format("Enum value: '%d' not implemented", value));
+	}
+}
+
+template <>
+PhysicalOperatorType EnumUtil::FromString<PhysicalOperatorType>(const char *value) {
+	if (StringUtil::Equals(value, "INVALID")) {
+		return PhysicalOperatorType::INVALID;
+	}
+	if (StringUtil::Equals(value, "ORDER_BY")) {
+		return PhysicalOperatorType::ORDER_BY;
+	}
+	if (StringUtil::Equals(value, "LIMIT")) {
+		return PhysicalOperatorType::LIMIT;
+	}
+	if (StringUtil::Equals(value, "STREAMING_LIMIT")) {
+		return PhysicalOperatorType::STREAMING_LIMIT;
+	}
+	if (StringUtil::Equals(value, "LIMIT_PERCENT")) {
+		return PhysicalOperatorType::LIMIT_PERCENT;
+	}
+	if (StringUtil::Equals(value, "TOP_N")) {
+		return PhysicalOperatorType::TOP_N;
+	}
+	if (StringUtil::Equals(value, "WINDOW")) {
+		return PhysicalOperatorType::WINDOW;
+	}
+	if (StringUtil::Equals(value, "UNNEST")) {
+		return PhysicalOperatorType::UNNEST;
+	}
+	if (StringUtil::Equals(value, "UNGROUPED_AGGREGATE")) {
+		return PhysicalOperatorType::UNGROUPED_AGGREGATE;
+	}
+	if (StringUtil::Equals(value, "HASH_GROUP_BY")) {
+		return PhysicalOperatorType::HASH_GROUP_BY;
+	}
+	if (StringUtil::Equals(value, "PERFECT_HASH_GROUP_BY")) {
+		return PhysicalOperatorType::PERFECT_HASH_GROUP_BY;
+	}
+	if (StringUtil::Equals(value, "FILTER")) {
+		return PhysicalOperatorType::FILTER;
+	}
+	if (StringUtil::Equals(value, "PROJECTION")) {
+		return PhysicalOperatorType::PROJECTION;
+	}
+	if (StringUtil::Equals(value, "COPY_TO_FILE")) {
+		return PhysicalOperatorType::COPY_TO_FILE;
+	}
+	if (StringUtil::Equals(value, "RESERVOIR_SAMPLE")) {
+		return PhysicalOperatorType::RESERVOIR_SAMPLE;
+	}
+	if (StringUtil::Equals(value, "STREAMING_SAMPLE")) {
+		return PhysicalOperatorType::STREAMING_SAMPLE;
+	}
+	if (StringUtil::Equals(value, "STREAMING_WINDOW")) {
+		return PhysicalOperatorType::STREAMING_WINDOW;
+	}
+	if (StringUtil::Equals(value, "PIVOT")) {
+		return PhysicalOperatorType::PIVOT;
+	}
+	if (StringUtil::Equals(value, "TABLE_SCAN")) {
+		return PhysicalOperatorType::TABLE_SCAN;
+	}
+	if (StringUtil::Equals(value, "DUMMY_SCAN")) {
+		return PhysicalOperatorType::DUMMY_SCAN;
+	}
+	if (StringUtil::Equals(value, "COLUMN_DATA_SCAN")) {
+		return PhysicalOperatorType::COLUMN_DATA_SCAN;
+	}
+	if (StringUtil::Equals(value, "CHUNK_SCAN")) {
+		return PhysicalOperatorType::CHUNK_SCAN;
+	}
+	if (StringUtil::Equals(value, "RECURSIVE_CTE_SCAN")) {
+		return PhysicalOperatorType::RECURSIVE_CTE_SCAN;
+	}
+	if (StringUtil::Equals(value, "DELIM_SCAN")) {
+		return PhysicalOperatorType::DELIM_SCAN;
+	}
+	if (StringUtil::Equals(value, "EXPRESSION_SCAN")) {
+		return PhysicalOperatorType::EXPRESSION_SCAN;
+	}
+	if (StringUtil::Equals(value, "POSITIONAL_SCAN")) {
+		return PhysicalOperatorType::POSITIONAL_SCAN;
+	}
+	if (StringUtil::Equals(value, "BLOCKWISE_NL_JOIN")) {
+		return PhysicalOperatorType::BLOCKWISE_NL_JOIN;
+	}
+	if (StringUtil::Equals(value, "NESTED_LOOP_JOIN")) {
+		return PhysicalOperatorType::NESTED_LOOP_JOIN;
+	}
+	if (StringUtil::Equals(value, "HASH_JOIN")) {
+		return PhysicalOperatorType::HASH_JOIN;
+	}
+	if (StringUtil::Equals(value, "CROSS_PRODUCT")) {
+		return PhysicalOperatorType::CROSS_PRODUCT;
+	}
+	if (StringUtil::Equals(value, "PIECEWISE_MERGE_JOIN")) {
+		return PhysicalOperatorType::PIECEWISE_MERGE_JOIN;
+	}
+	if (StringUtil::Equals(value, "IE_JOIN")) {
+		return PhysicalOperatorType::IE_JOIN;
+	}
+	if (StringUtil::Equals(value, "DELIM_JOIN")) {
+		return PhysicalOperatorType::DELIM_JOIN;
+	}
+	if (StringUtil::Equals(value, "INDEX_JOIN")) {
+		return PhysicalOperatorType::INDEX_JOIN;
+	}
+	if (StringUtil::Equals(value, "POSITIONAL_JOIN")) {
+		return PhysicalOperatorType::POSITIONAL_JOIN;
+	}
+	if (StringUtil::Equals(value, "ASOF_JOIN")) {
+		return PhysicalOperatorType::ASOF_JOIN;
+	}
+	if (StringUtil::Equals(value, "UNION")) {
+		return PhysicalOperatorType::UNION;
+	}
+	if (StringUtil::Equals(value, "RECURSIVE_CTE")) {
+		return PhysicalOperatorType::RECURSIVE_CTE;
+	}
+	if (StringUtil::Equals(value, "INSERT")) {
+		return PhysicalOperatorType::INSERT;
+	}
+	if (StringUtil::Equals(value, "BATCH_INSERT")) {
+		return PhysicalOperatorType::BATCH_INSERT;
+	}
+	if (StringUtil::Equals(value, "DELETE_OPERATOR")) {
+		return PhysicalOperatorType::DELETE_OPERATOR;
+	}
+	if (StringUtil::Equals(value, "UPDATE")) {
+		return PhysicalOperatorType::UPDATE;
+	}
+	if (StringUtil::Equals(value, "CREATE_TABLE")) {
+		return PhysicalOperatorType::CREATE_TABLE;
+	}
+	if (StringUtil::Equals(value, "CREATE_TABLE_AS")) {
+		return PhysicalOperatorType::CREATE_TABLE_AS;
+	}
+	if (StringUtil::Equals(value, "BATCH_CREATE_TABLE_AS")) {
+		return PhysicalOperatorType::BATCH_CREATE_TABLE_AS;
+	}
+	if (StringUtil::Equals(value, "CREATE_INDEX")) {
+		return PhysicalOperatorType::CREATE_INDEX;
+	}
+	if (StringUtil::Equals(value, "ALTER")) {
+		return PhysicalOperatorType::ALTER;
+	}
+	if (StringUtil::Equals(value, "CREATE_SEQUENCE")) {
+		return PhysicalOperatorType::CREATE_SEQUENCE;
+	}
+	if (StringUtil::Equals(value, "CREATE_VIEW")) {
+		return PhysicalOperatorType::CREATE_VIEW;
+	}
+	if (StringUtil::Equals(value, "CREATE_SCHEMA")) {
+		return PhysicalOperatorType::CREATE_SCHEMA;
+	}
+	if (StringUtil::Equals(value, "CREATE_MACRO")) {
+		return PhysicalOperatorType::CREATE_MACRO;
+	}
+	if (StringUtil::Equals(value, "DROP")) {
+		return PhysicalOperatorType::DROP;
+	}
+	if (StringUtil::Equals(value, "PRAGMA")) {
+		return PhysicalOperatorType::PRAGMA;
+	}
+	if (StringUtil::Equals(value, "TRANSACTION")) {
+		return PhysicalOperatorType::TRANSACTION;
+	}
+	if (StringUtil::Equals(value, "CREATE_TYPE")) {
+		return PhysicalOperatorType::CREATE_TYPE;
+	}
+	if (StringUtil::Equals(value, "ATTACH")) {
+		return PhysicalOperatorType::ATTACH;
+	}
+	if (StringUtil::Equals(value, "DETACH")) {
+		return PhysicalOperatorType::DETACH;
+	}
+	if (StringUtil::Equals(value, "EXPLAIN")) {
+		return PhysicalOperatorType::EXPLAIN;
+	}
+	if (StringUtil::Equals(value, "EXPLAIN_ANALYZE")) {
+		return PhysicalOperatorType::EXPLAIN_ANALYZE;
+	}
+	if (StringUtil::Equals(value, "EMPTY_RESULT")) {
+		return PhysicalOperatorType::EMPTY_RESULT;
+	}
+	if (StringUtil::Equals(value, "EXECUTE")) {
+		return PhysicalOperatorType::EXECUTE;
+	}
+	if (StringUtil::Equals(value, "PREPARE")) {
+		return PhysicalOperatorType::PREPARE;
+	}
+	if (StringUtil::Equals(value, "VACUUM")) {
+		return PhysicalOperatorType::VACUUM;
+	}
+	if (StringUtil::Equals(value, "EXPORT")) {
+		return PhysicalOperatorType::EXPORT;
+	}
+	if (StringUtil::Equals(value, "SET")) {
+		return PhysicalOperatorType::SET;
+	}
+	if (StringUtil::Equals(value, "LOAD")) {
+		return PhysicalOperatorType::LOAD;
+	}
+	if (StringUtil::Equals(value, "INOUT_FUNCTION")) {
+		return PhysicalOperatorType::INOUT_FUNCTION;
+	}
+	if (StringUtil::Equals(value, "RESULT_COLLECTOR")) {
+		return PhysicalOperatorType::RESULT_COLLECTOR;
+	}
+	if (StringUtil::Equals(value, "RESET")) {
+		return PhysicalOperatorType::RESET;
+	}
+	if (StringUtil::Equals(value, "EXTENSION")) {
+		return PhysicalOperatorType::EXTENSION;
+	}
+	throw NotImplementedException(StringUtil::Format("Enum value: '%s' not implemented", value));
+}
+
+template <>
+const char *EnumUtil::ToChars<VectorType>(VectorType value) {
+	switch (value) {
+	case VectorType::FLAT_VECTOR:
+		return "FLAT_VECTOR";
+	case VectorType::FSST_VECTOR:
+		return "FSST_VECTOR";
+	case VectorType::CONSTANT_VECTOR:
+		return "CONSTANT_VECTOR";
+	case VectorType::DICTIONARY_VECTOR:
+		return "DICTIONARY_VECTOR";
+	case VectorType::SEQUENCE_VECTOR:
+		return "SEQUENCE_VECTOR";
+	default:
+		throw NotImplementedException(StringUtil::Format("Enum value: '%d' not implemented", value));
+	}
+}
+
+template <>
+VectorType EnumUtil::FromString<VectorType>(const char *value) {
+	if (StringUtil::Equals(value, "FLAT_VECTOR")) {
+		return VectorType::FLAT_VECTOR;
+	}
+	if (StringUtil::Equals(value, "FSST_VECTOR")) {
+		return VectorType::FSST_VECTOR;
+	}
+	if (StringUtil::Equals(value, "CONSTANT_VECTOR")) {
+		return VectorType::CONSTANT_VECTOR;
+	}
+	if (StringUtil::Equals(value, "DICTIONARY_VECTOR")) {
+		return VectorType::DICTIONARY_VECTOR;
+	}
+	if (StringUtil::Equals(value, "SEQUENCE_VECTOR")) {
+		return VectorType::SEQUENCE_VECTOR;
+	}
+	throw NotImplementedException(StringUtil::Format("Enum value: '%s' not implemented", value));
+}
+
+template <>
+const char *EnumUtil::ToChars<AccessMode>(AccessMode value) {
+	switch (value) {
+	case AccessMode::UNDEFINED:
+		return "UNDEFINED";
+	case AccessMode::AUTOMATIC:
+		return "AUTOMATIC";
+	case AccessMode::READ_ONLY:
+		return "READ_ONLY";
+	case AccessMode::READ_WRITE:
+		return "READ_WRITE";
+	default:
+		throw NotImplementedException(StringUtil::Format("Enum value: '%d' not implemented", value));
+	}
+}
+
+template <>
+AccessMode EnumUtil::FromString<AccessMode>(const char *value) {
+	if (StringUtil::Equals(value, "UNDEFINED")) {
+		return AccessMode::UNDEFINED;
+	}
+	if (StringUtil::Equals(value, "AUTOMATIC")) {
+		return AccessMode::AUTOMATIC;
+	}
+	if (StringUtil::Equals(value, "READ_ONLY")) {
+		return AccessMode::READ_ONLY;
+	}
+	if (StringUtil::Equals(value, "READ_WRITE")) {
+		return AccessMode::READ_WRITE;
+	}
+	throw NotImplementedException(StringUtil::Format("Enum value: '%s' not implemented", value));
+}
+
+template <>
+const char *EnumUtil::ToChars<FileGlobOptions>(FileGlobOptions value) {
+	switch (value) {
+	case FileGlobOptions::DISALLOW_EMPTY:
+		return "DISALLOW_EMPTY";
+	case FileGlobOptions::ALLOW_EMPTY:
+		return "ALLOW_EMPTY";
+	default:
+		throw NotImplementedException(StringUtil::Format("Enum value: '%d' not implemented", value));
+	}
+}
+
+template <>
+FileGlobOptions EnumUtil::FromString<FileGlobOptions>(const char *value) {
+	if (StringUtil::Equals(value, "DISALLOW_EMPTY")) {
+		return FileGlobOptions::DISALLOW_EMPTY;
+	}
+	if (StringUtil::Equals(value, "ALLOW_EMPTY")) {
+		return FileGlobOptions::ALLOW_EMPTY;
+	}
+	throw NotImplementedException(StringUtil::Format("Enum value: '%s' not implemented", value));
+}
+
+template <>
+const char *EnumUtil::ToChars<WALType>(WALType value) {
+	switch (value) {
+	case WALType::INVALID:
+		return "INVALID";
+	case WALType::CREATE_TABLE:
+		return "CREATE_TABLE";
+	case WALType::DROP_TABLE:
+		return "DROP_TABLE";
+	case WALType::CREATE_SCHEMA:
+		return "CREATE_SCHEMA";
+	case WALType::DROP_SCHEMA:
+		return "DROP_SCHEMA";
+	case WALType::CREATE_VIEW:
+		return "CREATE_VIEW";
+	case WALType::DROP_VIEW:
+		return "DROP_VIEW";
+	case WALType::CREATE_SEQUENCE:
+		return "CREATE_SEQUENCE";
+	case WALType::DROP_SEQUENCE:
+		return "DROP_SEQUENCE";
+	case WALType::SEQUENCE_VALUE:
+		return "SEQUENCE_VALUE";
+	case WALType::CREATE_MACRO:
+		return "CREATE_MACRO";
+	case WALType::DROP_MACRO:
+		return "DROP_MACRO";
+	case WALType::CREATE_TYPE:
+		return "CREATE_TYPE";
+	case WALType::DROP_TYPE:
+		return "DROP_TYPE";
+	case WALType::ALTER_INFO:
+		return "ALTER_INFO";
+	case WALType::CREATE_TABLE_MACRO:
+		return "CREATE_TABLE_MACRO";
+	case WALType::DROP_TABLE_MACRO:
+		return "DROP_TABLE_MACRO";
+	case WALType::CREATE_INDEX:
+		return "CREATE_INDEX";
+	case WALType::DROP_INDEX:
+		return "DROP_INDEX";
+	case WALType::USE_TABLE:
+		return "USE_TABLE";
+	case WALType::INSERT_TUPLE:
+		return "INSERT_TUPLE";
+	case WALType::DELETE_TUPLE:
+		return "DELETE_TUPLE";
+	case WALType::UPDATE_TUPLE:
+		return "UPDATE_TUPLE";
+	case WALType::CHECKPOINT:
+		return "CHECKPOINT";
+	case WALType::WAL_FLUSH:
+		return "WAL_FLUSH";
+	default:
+		throw NotImplementedException(StringUtil::Format("Enum value: '%d' not implemented", value));
+	}
+}
+
+template <>
+WALType EnumUtil::FromString<WALType>(const char *value) {
+	if (StringUtil::Equals(value, "INVALID")) {
+		return WALType::INVALID;
+	}
+	if (StringUtil::Equals(value, "CREATE_TABLE")) {
+		return WALType::CREATE_TABLE;
+	}
+	if (StringUtil::Equals(value, "DROP_TABLE")) {
+		return WALType::DROP_TABLE;
+	}
+	if (StringUtil::Equals(value, "CREATE_SCHEMA")) {
+		return WALType::CREATE_SCHEMA;
+	}
+	if (StringUtil::Equals(value, "DROP_SCHEMA")) {
+		return WALType::DROP_SCHEMA;
+	}
+	if (StringUtil::Equals(value, "CREATE_VIEW")) {
+		return WALType::CREATE_VIEW;
+	}
+	if (StringUtil::Equals(value, "DROP_VIEW")) {
+		return WALType::DROP_VIEW;
+	}
+	if (StringUtil::Equals(value, "CREATE_SEQUENCE")) {
+		return WALType::CREATE_SEQUENCE;
+	}
+	if (StringUtil::Equals(value, "DROP_SEQUENCE")) {
+		return WALType::DROP_SEQUENCE;
+	}
+	if (StringUtil::Equals(value, "SEQUENCE_VALUE")) {
+		return WALType::SEQUENCE_VALUE;
+	}
+	if (StringUtil::Equals(value, "CREATE_MACRO")) {
+		return WALType::CREATE_MACRO;
+	}
+	if (StringUtil::Equals(value, "DROP_MACRO")) {
+		return WALType::DROP_MACRO;
+	}
+	if (StringUtil::Equals(value, "CREATE_TYPE")) {
+		return WALType::CREATE_TYPE;
+	}
+	if (StringUtil::Equals(value, "DROP_TYPE")) {
+		return WALType::DROP_TYPE;
+	}
+	if (StringUtil::Equals(value, "ALTER_INFO")) {
+		return WALType::ALTER_INFO;
+	}
+	if (StringUtil::Equals(value, "CREATE_TABLE_MACRO")) {
+		return WALType::CREATE_TABLE_MACRO;
+	}
+	if (StringUtil::Equals(value, "DROP_TABLE_MACRO")) {
+		return WALType::DROP_TABLE_MACRO;
+	}
+	if (StringUtil::Equals(value, "CREATE_INDEX")) {
+		return WALType::CREATE_INDEX;
+	}
+	if (StringUtil::Equals(value, "DROP_INDEX")) {
+		return WALType::DROP_INDEX;
+	}
+	if (StringUtil::Equals(value, "USE_TABLE")) {
+		return WALType::USE_TABLE;
+	}
+	if (StringUtil::Equals(value, "INSERT_TUPLE")) {
+		return WALType::INSERT_TUPLE;
+	}
+	if (StringUtil::Equals(value, "DELETE_TUPLE")) {
+		return WALType::DELETE_TUPLE;
+	}
+	if (StringUtil::Equals(value, "UPDATE_TUPLE")) {
+		return WALType::UPDATE_TUPLE;
+	}
+	if (StringUtil::Equals(value, "CHECKPOINT")) {
+		return WALType::CHECKPOINT;
+	}
+	if (StringUtil::Equals(value, "WAL_FLUSH")) {
+		return WALType::WAL_FLUSH;
+	}
+	throw NotImplementedException(StringUtil::Format("Enum value: '%s' not implemented", value));
+}
+
+template <>
+const char *EnumUtil::ToChars<JoinType>(JoinType value) {
+	switch (value) {
+	case JoinType::INVALID:
+		return "INVALID";
+	case JoinType::LEFT:
+		return "LEFT";
+	case JoinType::RIGHT:
+		return "RIGHT";
+	case JoinType::INNER:
+		return "INNER";
+	case JoinType::OUTER:
+		return "FULL";
+	case JoinType::SEMI:
+		return "SEMI";
+	case JoinType::ANTI:
+		return "ANTI";
+	case JoinType::MARK:
+		return "MARK";
+	case JoinType::SINGLE:
+		return "SINGLE";
+	default:
+		throw NotImplementedException(StringUtil::Format("Enum value: '%d' not implemented", value));
+	}
+}
+
+template <>
+JoinType EnumUtil::FromString<JoinType>(const char *value) {
+	if (StringUtil::Equals(value, "INVALID")) {
+		return JoinType::INVALID;
+	}
+	if (StringUtil::Equals(value, "LEFT")) {
+		return JoinType::LEFT;
+	}
+	if (StringUtil::Equals(value, "RIGHT")) {
+		return JoinType::RIGHT;
+	}
+	if (StringUtil::Equals(value, "INNER")) {
+		return JoinType::INNER;
+	}
+	if (StringUtil::Equals(value, "FULL")) {
+		return JoinType::OUTER;
+	}
+	if (StringUtil::Equals(value, "SEMI")) {
+		return JoinType::SEMI;
+	}
+	if (StringUtil::Equals(value, "ANTI")) {
+		return JoinType::ANTI;
+	}
+	if (StringUtil::Equals(value, "MARK")) {
+		return JoinType::MARK;
+	}
+	if (StringUtil::Equals(value, "SINGLE")) {
+		return JoinType::SINGLE;
+	}
+	throw NotImplementedException(StringUtil::Format("Enum value: '%s' not implemented", value));
+}
+
+template <>
+const char *EnumUtil::ToChars<FileCompressionType>(FileCompressionType value) {
+	switch (value) {
+	case FileCompressionType::AUTO_DETECT:
+		return "AUTO_DETECT";
+	case FileCompressionType::UNCOMPRESSED:
+		return "UNCOMPRESSED";
+	case FileCompressionType::GZIP:
+		return "GZIP";
+	case FileCompressionType::ZSTD:
+		return "ZSTD";
+	default:
+		throw NotImplementedException(StringUtil::Format("Enum value: '%d' not implemented", value));
+	}
+}
+
+template <>
+FileCompressionType EnumUtil::FromString<FileCompressionType>(const char *value) {
+	if (StringUtil::Equals(value, "AUTO_DETECT")) {
+		return FileCompressionType::AUTO_DETECT;
+	}
+	if (StringUtil::Equals(value, "UNCOMPRESSED")) {
+		return FileCompressionType::UNCOMPRESSED;
+	}
+	if (StringUtil::Equals(value, "GZIP")) {
+		return FileCompressionType::GZIP;
+	}
+	if (StringUtil::Equals(value, "ZSTD")) {
+		return FileCompressionType::ZSTD;
+	}
+	throw NotImplementedException(StringUtil::Format("Enum value: '%s' not implemented", value));
+}
+
+template <>
+const char *EnumUtil::ToChars<ProfilerPrintFormat>(ProfilerPrintFormat value) {
+	switch (value) {
+	case ProfilerPrintFormat::QUERY_TREE:
+		return "QUERY_TREE";
+	case ProfilerPrintFormat::JSON:
+		return "JSON";
+	case ProfilerPrintFormat::QUERY_TREE_OPTIMIZER:
+		return "QUERY_TREE_OPTIMIZER";
+	default:
+		throw NotImplementedException(StringUtil::Format("Enum value: '%d' not implemented", value));
+	}
+}
+
+template <>
+ProfilerPrintFormat EnumUtil::FromString<ProfilerPrintFormat>(const char *value) {
+	if (StringUtil::Equals(value, "QUERY_TREE")) {
+		return ProfilerPrintFormat::QUERY_TREE;
+	}
+	if (StringUtil::Equals(value, "JSON")) {
+		return ProfilerPrintFormat::JSON;
+	}
+	if (StringUtil::Equals(value, "QUERY_TREE_OPTIMIZER")) {
+		return ProfilerPrintFormat::QUERY_TREE_OPTIMIZER;
+	}
+	throw NotImplementedException(StringUtil::Format("Enum value: '%s' not implemented", value));
+}
+
+template <>
+const char *EnumUtil::ToChars<StatementType>(StatementType value) {
+	switch (value) {
+	case StatementType::INVALID_STATEMENT:
+		return "INVALID_STATEMENT";
+	case StatementType::SELECT_STATEMENT:
+		return "SELECT_STATEMENT";
+	case StatementType::INSERT_STATEMENT:
+		return "INSERT_STATEMENT";
+	case StatementType::UPDATE_STATEMENT:
+		return "UPDATE_STATEMENT";
+	case StatementType::CREATE_STATEMENT:
+		return "CREATE_STATEMENT";
+	case StatementType::DELETE_STATEMENT:
+		return "DELETE_STATEMENT";
+	case StatementType::PREPARE_STATEMENT:
+		return "PREPARE_STATEMENT";
+	case StatementType::EXECUTE_STATEMENT:
+		return "EXECUTE_STATEMENT";
+	case StatementType::ALTER_STATEMENT:
+		return "ALTER_STATEMENT";
+	case StatementType::TRANSACTION_STATEMENT:
+		return "TRANSACTION_STATEMENT";
+	case StatementType::COPY_STATEMENT:
+		return "COPY_STATEMENT";
+	case StatementType::ANALYZE_STATEMENT:
+		return "ANALYZE_STATEMENT";
+	case StatementType::VARIABLE_SET_STATEMENT:
+		return "VARIABLE_SET_STATEMENT";
+	case StatementType::CREATE_FUNC_STATEMENT:
+		return "CREATE_FUNC_STATEMENT";
+	case StatementType::EXPLAIN_STATEMENT:
+		return "EXPLAIN_STATEMENT";
+	case StatementType::DROP_STATEMENT:
+		return "DROP_STATEMENT";
+	case StatementType::EXPORT_STATEMENT:
+		return "EXPORT_STATEMENT";
+	case StatementType::PRAGMA_STATEMENT:
+		return "PRAGMA_STATEMENT";
+	case StatementType::SHOW_STATEMENT:
+		return "SHOW_STATEMENT";
+	case StatementType::VACUUM_STATEMENT:
+		return "VACUUM_STATEMENT";
+	case StatementType::CALL_STATEMENT:
+		return "CALL_STATEMENT";
+	case StatementType::SET_STATEMENT:
+		return "SET_STATEMENT";
+	case StatementType::LOAD_STATEMENT:
+		return "LOAD_STATEMENT";
+	case StatementType::RELATION_STATEMENT:
+		return "RELATION_STATEMENT";
+	case StatementType::EXTENSION_STATEMENT:
+		return "EXTENSION_STATEMENT";
+	case StatementType::LOGICAL_PLAN_STATEMENT:
+		return "LOGICAL_PLAN_STATEMENT";
+	case StatementType::ATTACH_STATEMENT:
+		return "ATTACH_STATEMENT";
+	case StatementType::DETACH_STATEMENT:
+		return "DETACH_STATEMENT";
+	case StatementType::MULTI_STATEMENT:
+		return "MULTI_STATEMENT";
+	default:
+		throw NotImplementedException(StringUtil::Format("Enum value: '%d' not implemented", value));
+	}
+}
+
+template <>
+StatementType EnumUtil::FromString<StatementType>(const char *value) {
+	if (StringUtil::Equals(value, "INVALID_STATEMENT")) {
+		return StatementType::INVALID_STATEMENT;
+	}
+	if (StringUtil::Equals(value, "SELECT_STATEMENT")) {
+		return StatementType::SELECT_STATEMENT;
+	}
+	if (StringUtil::Equals(value, "INSERT_STATEMENT")) {
+		return StatementType::INSERT_STATEMENT;
+	}
+	if (StringUtil::Equals(value, "UPDATE_STATEMENT")) {
+		return StatementType::UPDATE_STATEMENT;
+	}
+	if (StringUtil::Equals(value, "CREATE_STATEMENT")) {
+		return StatementType::CREATE_STATEMENT;
+	}
+	if (StringUtil::Equals(value, "DELETE_STATEMENT")) {
+		return StatementType::DELETE_STATEMENT;
+	}
+	if (StringUtil::Equals(value, "PREPARE_STATEMENT")) {
+		return StatementType::PREPARE_STATEMENT;
+	}
+	if (StringUtil::Equals(value, "EXECUTE_STATEMENT")) {
+		return StatementType::EXECUTE_STATEMENT;
+	}
+	if (StringUtil::Equals(value, "ALTER_STATEMENT")) {
+		return StatementType::ALTER_STATEMENT;
+	}
+	if (StringUtil::Equals(value, "TRANSACTION_STATEMENT")) {
+		return StatementType::TRANSACTION_STATEMENT;
+	}
+	if (StringUtil::Equals(value, "COPY_STATEMENT")) {
+		return StatementType::COPY_STATEMENT;
+	}
+	if (StringUtil::Equals(value, "ANALYZE_STATEMENT")) {
+		return StatementType::ANALYZE_STATEMENT;
+	}
+	if (StringUtil::Equals(value, "VARIABLE_SET_STATEMENT")) {
+		return StatementType::VARIABLE_SET_STATEMENT;
+	}
+	if (StringUtil::Equals(value, "CREATE_FUNC_STATEMENT")) {
+		return StatementType::CREATE_FUNC_STATEMENT;
+	}
+	if (StringUtil::Equals(value, "EXPLAIN_STATEMENT")) {
+		return StatementType::EXPLAIN_STATEMENT;
+	}
+	if (StringUtil::Equals(value, "DROP_STATEMENT")) {
+		return StatementType::DROP_STATEMENT;
+	}
+	if (StringUtil::Equals(value, "EXPORT_STATEMENT")) {
+		return StatementType::EXPORT_STATEMENT;
+	}
+	if (StringUtil::Equals(value, "PRAGMA_STATEMENT")) {
+		return StatementType::PRAGMA_STATEMENT;
+	}
+	if (StringUtil::Equals(value, "SHOW_STATEMENT")) {
+		return StatementType::SHOW_STATEMENT;
+	}
+	if (StringUtil::Equals(value, "VACUUM_STATEMENT")) {
+		return StatementType::VACUUM_STATEMENT;
+	}
+	if (StringUtil::Equals(value, "CALL_STATEMENT")) {
+		return StatementType::CALL_STATEMENT;
+	}
+	if (StringUtil::Equals(value, "SET_STATEMENT")) {
+		return StatementType::SET_STATEMENT;
+	}
+	if (StringUtil::Equals(value, "LOAD_STATEMENT")) {
+		return StatementType::LOAD_STATEMENT;
+	}
+	if (StringUtil::Equals(value, "RELATION_STATEMENT")) {
+		return StatementType::RELATION_STATEMENT;
+	}
+	if (StringUtil::Equals(value, "EXTENSION_STATEMENT")) {
+		return StatementType::EXTENSION_STATEMENT;
+	}
+	if (StringUtil::Equals(value, "LOGICAL_PLAN_STATEMENT")) {
+		return StatementType::LOGICAL_PLAN_STATEMENT;
+	}
+	if (StringUtil::Equals(value, "ATTACH_STATEMENT")) {
+		return StatementType::ATTACH_STATEMENT;
+	}
+	if (StringUtil::Equals(value, "DETACH_STATEMENT")) {
+		return StatementType::DETACH_STATEMENT;
+	}
+	if (StringUtil::Equals(value, "MULTI_STATEMENT")) {
+		return StatementType::MULTI_STATEMENT;
+	}
+	throw NotImplementedException(StringUtil::Format("Enum value: '%s' not implemented", value));
+}
+
+template <>
+const char *EnumUtil::ToChars<StatementReturnType>(StatementReturnType value) {
+	switch (value) {
+	case StatementReturnType::QUERY_RESULT:
+		return "QUERY_RESULT";
+	case StatementReturnType::CHANGED_ROWS:
+		return "CHANGED_ROWS";
+	case StatementReturnType::NOTHING:
+		return "NOTHING";
+	default:
+		throw NotImplementedException(StringUtil::Format("Enum value: '%d' not implemented", value));
+	}
+}
+
+template <>
+StatementReturnType EnumUtil::FromString<StatementReturnType>(const char *value) {
+	if (StringUtil::Equals(value, "QUERY_RESULT")) {
+		return StatementReturnType::QUERY_RESULT;
+	}
+	if (StringUtil::Equals(value, "CHANGED_ROWS")) {
+		return StatementReturnType::CHANGED_ROWS;
+	}
+	if (StringUtil::Equals(value, "NOTHING")) {
+		return StatementReturnType::NOTHING;
+	}
+	throw NotImplementedException(StringUtil::Format("Enum value: '%s' not implemented", value));
+}
+
+template <>
+const char *EnumUtil::ToChars<OrderPreservationType>(OrderPreservationType value) {
+	switch (value) {
+	case OrderPreservationType::NO_ORDER:
+		return "NO_ORDER";
+	case OrderPreservationType::INSERTION_ORDER:
+		return "INSERTION_ORDER";
+	case OrderPreservationType::FIXED_ORDER:
+		return "FIXED_ORDER";
+	default:
+		throw NotImplementedException(StringUtil::Format("Enum value: '%d' not implemented", value));
+	}
+}
+
+template <>
+OrderPreservationType EnumUtil::FromString<OrderPreservationType>(const char *value) {
+	if (StringUtil::Equals(value, "NO_ORDER")) {
+		return OrderPreservationType::NO_ORDER;
+	}
+	if (StringUtil::Equals(value, "INSERTION_ORDER")) {
+		return OrderPreservationType::INSERTION_ORDER;
+	}
+	if (StringUtil::Equals(value, "FIXED_ORDER")) {
+		return OrderPreservationType::FIXED_ORDER;
+	}
+	throw NotImplementedException(StringUtil::Format("Enum value: '%s' not implemented", value));
+}
+
+template <>
+const char *EnumUtil::ToChars<DebugInitialize>(DebugInitialize value) {
+	switch (value) {
+	case DebugInitialize::NO_INITIALIZE:
+		return "NO_INITIALIZE";
+	case DebugInitialize::DEBUG_ZERO_INITIALIZE:
+		return "DEBUG_ZERO_INITIALIZE";
+	case DebugInitialize::DEBUG_ONE_INITIALIZE:
+		return "DEBUG_ONE_INITIALIZE";
+	default:
+		throw NotImplementedException(StringUtil::Format("Enum value: '%d' not implemented", value));
+	}
+}
+
+template <>
+DebugInitialize EnumUtil::FromString<DebugInitialize>(const char *value) {
+	if (StringUtil::Equals(value, "NO_INITIALIZE")) {
+		return DebugInitialize::NO_INITIALIZE;
+	}
+	if (StringUtil::Equals(value, "DEBUG_ZERO_INITIALIZE")) {
+		return DebugInitialize::DEBUG_ZERO_INITIALIZE;
+	}
+	if (StringUtil::Equals(value, "DEBUG_ONE_INITIALIZE")) {
+		return DebugInitialize::DEBUG_ONE_INITIALIZE;
+	}
+	throw NotImplementedException(StringUtil::Format("Enum value: '%s' not implemented", value));
+}
+
+template <>
+const char *EnumUtil::ToChars<CatalogType>(CatalogType value) {
+	switch (value) {
+	case CatalogType::INVALID:
+		return "INVALID";
+	case CatalogType::TABLE_ENTRY:
+		return "TABLE_ENTRY";
+	case CatalogType::SCHEMA_ENTRY:
+		return "SCHEMA_ENTRY";
+	case CatalogType::VIEW_ENTRY:
+		return "VIEW_ENTRY";
+	case CatalogType::INDEX_ENTRY:
+		return "INDEX_ENTRY";
+	case CatalogType::PREPARED_STATEMENT:
+		return "PREPARED_STATEMENT";
+	case CatalogType::SEQUENCE_ENTRY:
+		return "SEQUENCE_ENTRY";
+	case CatalogType::COLLATION_ENTRY:
+		return "COLLATION_ENTRY";
+	case CatalogType::TYPE_ENTRY:
+		return "TYPE_ENTRY";
+	case CatalogType::DATABASE_ENTRY:
+		return "DATABASE_ENTRY";
+	case CatalogType::TABLE_FUNCTION_ENTRY:
+		return "TABLE_FUNCTION_ENTRY";
+	case CatalogType::SCALAR_FUNCTION_ENTRY:
+		return "SCALAR_FUNCTION_ENTRY";
+	case CatalogType::AGGREGATE_FUNCTION_ENTRY:
+		return "AGGREGATE_FUNCTION_ENTRY";
+	case CatalogType::PRAGMA_FUNCTION_ENTRY:
+		return "PRAGMA_FUNCTION_ENTRY";
+	case CatalogType::COPY_FUNCTION_ENTRY:
+		return "COPY_FUNCTION_ENTRY";
+	case CatalogType::MACRO_ENTRY:
+		return "MACRO_ENTRY";
+	case CatalogType::TABLE_MACRO_ENTRY:
+		return "TABLE_MACRO_ENTRY";
+	case CatalogType::UPDATED_ENTRY:
+		return "UPDATED_ENTRY";
+	case CatalogType::DELETED_ENTRY:
+		return "DELETED_ENTRY";
+	default:
+		throw NotImplementedException(StringUtil::Format("Enum value: '%d' not implemented", value));
+	}
+}
+
+template <>
+CatalogType EnumUtil::FromString<CatalogType>(const char *value) {
+	if (StringUtil::Equals(value, "INVALID")) {
+		return CatalogType::INVALID;
+	}
+	if (StringUtil::Equals(value, "TABLE_ENTRY")) {
+		return CatalogType::TABLE_ENTRY;
+	}
+	if (StringUtil::Equals(value, "SCHEMA_ENTRY")) {
+		return CatalogType::SCHEMA_ENTRY;
+	}
+	if (StringUtil::Equals(value, "VIEW_ENTRY")) {
+		return CatalogType::VIEW_ENTRY;
+	}
+	if (StringUtil::Equals(value, "INDEX_ENTRY")) {
+		return CatalogType::INDEX_ENTRY;
+	}
+	if (StringUtil::Equals(value, "PREPARED_STATEMENT")) {
+		return CatalogType::PREPARED_STATEMENT;
+	}
+	if (StringUtil::Equals(value, "SEQUENCE_ENTRY")) {
+		return CatalogType::SEQUENCE_ENTRY;
+	}
+	if (StringUtil::Equals(value, "COLLATION_ENTRY")) {
+		return CatalogType::COLLATION_ENTRY;
+	}
+	if (StringUtil::Equals(value, "TYPE_ENTRY")) {
+		return CatalogType::TYPE_ENTRY;
+	}
+	if (StringUtil::Equals(value, "DATABASE_ENTRY")) {
+		return CatalogType::DATABASE_ENTRY;
+	}
+	if (StringUtil::Equals(value, "TABLE_FUNCTION_ENTRY")) {
+		return CatalogType::TABLE_FUNCTION_ENTRY;
+	}
+	if (StringUtil::Equals(value, "SCALAR_FUNCTION_ENTRY")) {
+		return CatalogType::SCALAR_FUNCTION_ENTRY;
+	}
+	if (StringUtil::Equals(value, "AGGREGATE_FUNCTION_ENTRY")) {
+		return CatalogType::AGGREGATE_FUNCTION_ENTRY;
+	}
+	if (StringUtil::Equals(value, "PRAGMA_FUNCTION_ENTRY")) {
+		return CatalogType::PRAGMA_FUNCTION_ENTRY;
+	}
+	if (StringUtil::Equals(value, "COPY_FUNCTION_ENTRY")) {
+		return CatalogType::COPY_FUNCTION_ENTRY;
+	}
+	if (StringUtil::Equals(value, "MACRO_ENTRY")) {
+		return CatalogType::MACRO_ENTRY;
+	}
+	if (StringUtil::Equals(value, "TABLE_MACRO_ENTRY")) {
+		return CatalogType::TABLE_MACRO_ENTRY;
+	}
+	if (StringUtil::Equals(value, "UPDATED_ENTRY")) {
+		return CatalogType::UPDATED_ENTRY;
+	}
+	if (StringUtil::Equals(value, "DELETED_ENTRY")) {
+		return CatalogType::DELETED_ENTRY;
+	}
+	throw NotImplementedException(StringUtil::Format("Enum value: '%s' not implemented", value));
+}
+
+template <>
+const char *EnumUtil::ToChars<SetScope>(SetScope value) {
+	switch (value) {
+	case SetScope::AUTOMATIC:
+		return "AUTOMATIC";
+	case SetScope::LOCAL:
+		return "LOCAL";
+	case SetScope::SESSION:
+		return "SESSION";
+	case SetScope::GLOBAL:
+		return "GLOBAL";
+	default:
+		throw NotImplementedException(StringUtil::Format("Enum value: '%d' not implemented", value));
+	}
+}
+
+template <>
+SetScope EnumUtil::FromString<SetScope>(const char *value) {
+	if (StringUtil::Equals(value, "AUTOMATIC")) {
+		return SetScope::AUTOMATIC;
+	}
+	if (StringUtil::Equals(value, "LOCAL")) {
+		return SetScope::LOCAL;
+	}
+	if (StringUtil::Equals(value, "SESSION")) {
+		return SetScope::SESSION;
+	}
+	if (StringUtil::Equals(value, "GLOBAL")) {
+		return SetScope::GLOBAL;
+	}
+	throw NotImplementedException(StringUtil::Format("Enum value: '%s' not implemented", value));
+}
+
+template <>
+const char *EnumUtil::ToChars<TableScanType>(TableScanType value) {
+	switch (value) {
+	case TableScanType::TABLE_SCAN_REGULAR:
+		return "TABLE_SCAN_REGULAR";
+	case TableScanType::TABLE_SCAN_COMMITTED_ROWS:
+		return "TABLE_SCAN_COMMITTED_ROWS";
+	case TableScanType::TABLE_SCAN_COMMITTED_ROWS_DISALLOW_UPDATES:
+		return "TABLE_SCAN_COMMITTED_ROWS_DISALLOW_UPDATES";
+	case TableScanType::TABLE_SCAN_COMMITTED_ROWS_OMIT_PERMANENTLY_DELETED:
+		return "TABLE_SCAN_COMMITTED_ROWS_OMIT_PERMANENTLY_DELETED";
+	default:
+		throw NotImplementedException(StringUtil::Format("Enum value: '%d' not implemented", value));
+	}
+}
+
+template <>
+TableScanType EnumUtil::FromString<TableScanType>(const char *value) {
+	if (StringUtil::Equals(value, "TABLE_SCAN_REGULAR")) {
+		return TableScanType::TABLE_SCAN_REGULAR;
+	}
+	if (StringUtil::Equals(value, "TABLE_SCAN_COMMITTED_ROWS")) {
+		return TableScanType::TABLE_SCAN_COMMITTED_ROWS;
+	}
+	if (StringUtil::Equals(value, "TABLE_SCAN_COMMITTED_ROWS_DISALLOW_UPDATES")) {
+		return TableScanType::TABLE_SCAN_COMMITTED_ROWS_DISALLOW_UPDATES;
+	}
+	if (StringUtil::Equals(value, "TABLE_SCAN_COMMITTED_ROWS_OMIT_PERMANENTLY_DELETED")) {
+		return TableScanType::TABLE_SCAN_COMMITTED_ROWS_OMIT_PERMANENTLY_DELETED;
+	}
+	throw NotImplementedException(StringUtil::Format("Enum value: '%s' not implemented", value));
+}
+
+template <>
+const char *EnumUtil::ToChars<SetType>(SetType value) {
+	switch (value) {
+	case SetType::SET:
+		return "SET";
+	case SetType::RESET:
+		return "RESET";
+	default:
+		throw NotImplementedException(StringUtil::Format("Enum value: '%d' not implemented", value));
+	}
+}
+
+template <>
+SetType EnumUtil::FromString<SetType>(const char *value) {
+	if (StringUtil::Equals(value, "SET")) {
+		return SetType::SET;
+	}
+	if (StringUtil::Equals(value, "RESET")) {
+		return SetType::RESET;
+	}
+	throw NotImplementedException(StringUtil::Format("Enum value: '%s' not implemented", value));
+}
+
+template <>
+const char *EnumUtil::ToChars<ExpressionType>(ExpressionType value) {
+	switch (value) {
+	case ExpressionType::INVALID:
+		return "INVALID";
+	case ExpressionType::OPERATOR_CAST:
+		return "OPERATOR_CAST";
+	case ExpressionType::OPERATOR_NOT:
+		return "OPERATOR_NOT";
+	case ExpressionType::OPERATOR_IS_NULL:
+		return "OPERATOR_IS_NULL";
+	case ExpressionType::OPERATOR_IS_NOT_NULL:
+		return "OPERATOR_IS_NOT_NULL";
+	case ExpressionType::COMPARE_EQUAL:
+		return "COMPARE_EQUAL";
+	case ExpressionType::COMPARE_NOTEQUAL:
+		return "COMPARE_NOTEQUAL";
+	case ExpressionType::COMPARE_LESSTHAN:
+		return "COMPARE_LESSTHAN";
+	case ExpressionType::COMPARE_GREATERTHAN:
+		return "COMPARE_GREATERTHAN";
+	case ExpressionType::COMPARE_LESSTHANOREQUALTO:
+		return "COMPARE_LESSTHANOREQUALTO";
+	case ExpressionType::COMPARE_GREATERTHANOREQUALTO:
+		return "COMPARE_GREATERTHANOREQUALTO";
+	case ExpressionType::COMPARE_IN:
+		return "COMPARE_IN";
+	case ExpressionType::COMPARE_NOT_IN:
+		return "COMPARE_NOT_IN";
+	case ExpressionType::COMPARE_DISTINCT_FROM:
+		return "COMPARE_DISTINCT_FROM";
+	case ExpressionType::COMPARE_BETWEEN:
+		return "COMPARE_BETWEEN";
+	case ExpressionType::COMPARE_NOT_BETWEEN:
+		return "COMPARE_NOT_BETWEEN";
+	case ExpressionType::COMPARE_NOT_DISTINCT_FROM:
+		return "COMPARE_NOT_DISTINCT_FROM";
+	case ExpressionType::CONJUNCTION_AND:
+		return "CONJUNCTION_AND";
+	case ExpressionType::CONJUNCTION_OR:
+		return "CONJUNCTION_OR";
+	case ExpressionType::VALUE_CONSTANT:
+		return "VALUE_CONSTANT";
+	case ExpressionType::VALUE_PARAMETER:
+		return "VALUE_PARAMETER";
+	case ExpressionType::VALUE_TUPLE:
+		return "VALUE_TUPLE";
+	case ExpressionType::VALUE_TUPLE_ADDRESS:
+		return "VALUE_TUPLE_ADDRESS";
+	case ExpressionType::VALUE_NULL:
+		return "VALUE_NULL";
+	case ExpressionType::VALUE_VECTOR:
+		return "VALUE_VECTOR";
+	case ExpressionType::VALUE_SCALAR:
+		return "VALUE_SCALAR";
+	case ExpressionType::VALUE_DEFAULT:
+		return "VALUE_DEFAULT";
+	case ExpressionType::AGGREGATE:
+		return "AGGREGATE";
+	case ExpressionType::BOUND_AGGREGATE:
+		return "BOUND_AGGREGATE";
+	case ExpressionType::GROUPING_FUNCTION:
+		return "GROUPING_FUNCTION";
+	case ExpressionType::WINDOW_AGGREGATE:
+		return "WINDOW_AGGREGATE";
+	case ExpressionType::WINDOW_RANK:
+		return "WINDOW_RANK";
+	case ExpressionType::WINDOW_RANK_DENSE:
+		return "WINDOW_RANK_DENSE";
+	case ExpressionType::WINDOW_NTILE:
+		return "WINDOW_NTILE";
+	case ExpressionType::WINDOW_PERCENT_RANK:
+		return "WINDOW_PERCENT_RANK";
+	case ExpressionType::WINDOW_CUME_DIST:
+		return "WINDOW_CUME_DIST";
+	case ExpressionType::WINDOW_ROW_NUMBER:
+		return "WINDOW_ROW_NUMBER";
+	case ExpressionType::WINDOW_FIRST_VALUE:
+		return "WINDOW_FIRST_VALUE";
+	case ExpressionType::WINDOW_LAST_VALUE:
+		return "WINDOW_LAST_VALUE";
+	case ExpressionType::WINDOW_LEAD:
+		return "WINDOW_LEAD";
+	case ExpressionType::WINDOW_LAG:
+		return "WINDOW_LAG";
+	case ExpressionType::WINDOW_NTH_VALUE:
+		return "WINDOW_NTH_VALUE";
+	case ExpressionType::FUNCTION:
+		return "FUNCTION";
+	case ExpressionType::BOUND_FUNCTION:
+		return "BOUND_FUNCTION";
+	case ExpressionType::CASE_EXPR:
+		return "CASE_EXPR";
+	case ExpressionType::OPERATOR_NULLIF:
+		return "OPERATOR_NULLIF";
+	case ExpressionType::OPERATOR_COALESCE:
+		return "OPERATOR_COALESCE";
+	case ExpressionType::ARRAY_EXTRACT:
+		return "ARRAY_EXTRACT";
+	case ExpressionType::ARRAY_SLICE:
+		return "ARRAY_SLICE";
+	case ExpressionType::STRUCT_EXTRACT:
+		return "STRUCT_EXTRACT";
+	case ExpressionType::ARRAY_CONSTRUCTOR:
+		return "ARRAY_CONSTRUCTOR";
+	case ExpressionType::ARROW:
+		return "ARROW";
+	case ExpressionType::SUBQUERY:
+		return "SUBQUERY";
+	case ExpressionType::STAR:
+		return "STAR";
+	case ExpressionType::TABLE_STAR:
+		return "TABLE_STAR";
+	case ExpressionType::PLACEHOLDER:
+		return "PLACEHOLDER";
+	case ExpressionType::COLUMN_REF:
+		return "COLUMN_REF";
+	case ExpressionType::FUNCTION_REF:
+		return "FUNCTION_REF";
+	case ExpressionType::TABLE_REF:
+		return "TABLE_REF";
+	case ExpressionType::CAST:
+		return "CAST";
+	case ExpressionType::BOUND_REF:
+		return "BOUND_REF";
+	case ExpressionType::BOUND_COLUMN_REF:
+		return "BOUND_COLUMN_REF";
+	case ExpressionType::BOUND_UNNEST:
+		return "BOUND_UNNEST";
+	case ExpressionType::COLLATE:
+		return "COLLATE";
+	case ExpressionType::LAMBDA:
+		return "LAMBDA";
+	case ExpressionType::POSITIONAL_REFERENCE:
+		return "POSITIONAL_REFERENCE";
+	case ExpressionType::BOUND_LAMBDA_REF:
+		return "BOUND_LAMBDA_REF";
+	default:
+		throw NotImplementedException(StringUtil::Format("Enum value: '%d' not implemented", value));
+	}
+}
+
+template <>
+ExpressionType EnumUtil::FromString<ExpressionType>(const char *value) {
+	if (StringUtil::Equals(value, "INVALID")) {
+		return ExpressionType::INVALID;
+	}
+	if (StringUtil::Equals(value, "OPERATOR_CAST")) {
+		return ExpressionType::OPERATOR_CAST;
+	}
+	if (StringUtil::Equals(value, "OPERATOR_NOT")) {
+		return ExpressionType::OPERATOR_NOT;
+	}
+	if (StringUtil::Equals(value, "OPERATOR_IS_NULL")) {
+		return ExpressionType::OPERATOR_IS_NULL;
+	}
+	if (StringUtil::Equals(value, "OPERATOR_IS_NOT_NULL")) {
+		return ExpressionType::OPERATOR_IS_NOT_NULL;
+	}
+	if (StringUtil::Equals(value, "COMPARE_EQUAL")) {
+		return ExpressionType::COMPARE_EQUAL;
+	}
+	if (StringUtil::Equals(value, "COMPARE_NOTEQUAL")) {
+		return ExpressionType::COMPARE_NOTEQUAL;
+	}
+	if (StringUtil::Equals(value, "COMPARE_LESSTHAN")) {
+		return ExpressionType::COMPARE_LESSTHAN;
+	}
+	if (StringUtil::Equals(value, "COMPARE_GREATERTHAN")) {
+		return ExpressionType::COMPARE_GREATERTHAN;
+	}
+	if (StringUtil::Equals(value, "COMPARE_LESSTHANOREQUALTO")) {
+		return ExpressionType::COMPARE_LESSTHANOREQUALTO;
+	}
+	if (StringUtil::Equals(value, "COMPARE_GREATERTHANOREQUALTO")) {
+		return ExpressionType::COMPARE_GREATERTHANOREQUALTO;
+	}
+	if (StringUtil::Equals(value, "COMPARE_IN")) {
+		return ExpressionType::COMPARE_IN;
+	}
+	if (StringUtil::Equals(value, "COMPARE_NOT_IN")) {
+		return ExpressionType::COMPARE_NOT_IN;
+	}
+	if (StringUtil::Equals(value, "COMPARE_DISTINCT_FROM")) {
+		return ExpressionType::COMPARE_DISTINCT_FROM;
+	}
+	if (StringUtil::Equals(value, "COMPARE_BETWEEN")) {
+		return ExpressionType::COMPARE_BETWEEN;
+	}
+	if (StringUtil::Equals(value, "COMPARE_NOT_BETWEEN")) {
+		return ExpressionType::COMPARE_NOT_BETWEEN;
+	}
+	if (StringUtil::Equals(value, "COMPARE_NOT_DISTINCT_FROM")) {
+		return ExpressionType::COMPARE_NOT_DISTINCT_FROM;
+	}
+	if (StringUtil::Equals(value, "CONJUNCTION_AND")) {
+		return ExpressionType::CONJUNCTION_AND;
+	}
+	if (StringUtil::Equals(value, "CONJUNCTION_OR")) {
+		return ExpressionType::CONJUNCTION_OR;
+	}
+	if (StringUtil::Equals(value, "VALUE_CONSTANT")) {
+		return ExpressionType::VALUE_CONSTANT;
+	}
+	if (StringUtil::Equals(value, "VALUE_PARAMETER")) {
+		return ExpressionType::VALUE_PARAMETER;
+	}
+	if (StringUtil::Equals(value, "VALUE_TUPLE")) {
+		return ExpressionType::VALUE_TUPLE;
+	}
+	if (StringUtil::Equals(value, "VALUE_TUPLE_ADDRESS")) {
+		return ExpressionType::VALUE_TUPLE_ADDRESS;
+	}
+	if (StringUtil::Equals(value, "VALUE_NULL")) {
+		return ExpressionType::VALUE_NULL;
+	}
+	if (StringUtil::Equals(value, "VALUE_VECTOR")) {
+		return ExpressionType::VALUE_VECTOR;
+	}
+	if (StringUtil::Equals(value, "VALUE_SCALAR")) {
+		return ExpressionType::VALUE_SCALAR;
+	}
+	if (StringUtil::Equals(value, "VALUE_DEFAULT")) {
+		return ExpressionType::VALUE_DEFAULT;
+	}
+	if (StringUtil::Equals(value, "AGGREGATE")) {
+		return ExpressionType::AGGREGATE;
+	}
+	if (StringUtil::Equals(value, "BOUND_AGGREGATE")) {
+		return ExpressionType::BOUND_AGGREGATE;
+	}
+	if (StringUtil::Equals(value, "GROUPING_FUNCTION")) {
+		return ExpressionType::GROUPING_FUNCTION;
+	}
+	if (StringUtil::Equals(value, "WINDOW_AGGREGATE")) {
+		return ExpressionType::WINDOW_AGGREGATE;
+	}
+	if (StringUtil::Equals(value, "WINDOW_RANK")) {
+		return ExpressionType::WINDOW_RANK;
+	}
+	if (StringUtil::Equals(value, "WINDOW_RANK_DENSE")) {
+		return ExpressionType::WINDOW_RANK_DENSE;
+	}
+	if (StringUtil::Equals(value, "WINDOW_NTILE")) {
+		return ExpressionType::WINDOW_NTILE;
+	}
+	if (StringUtil::Equals(value, "WINDOW_PERCENT_RANK")) {
+		return ExpressionType::WINDOW_PERCENT_RANK;
+	}
+	if (StringUtil::Equals(value, "WINDOW_CUME_DIST")) {
+		return ExpressionType::WINDOW_CUME_DIST;
+	}
+	if (StringUtil::Equals(value, "WINDOW_ROW_NUMBER")) {
+		return ExpressionType::WINDOW_ROW_NUMBER;
+	}
+	if (StringUtil::Equals(value, "WINDOW_FIRST_VALUE")) {
+		return ExpressionType::WINDOW_FIRST_VALUE;
+	}
+	if (StringUtil::Equals(value, "WINDOW_LAST_VALUE")) {
+		return ExpressionType::WINDOW_LAST_VALUE;
+	}
+	if (StringUtil::Equals(value, "WINDOW_LEAD")) {
+		return ExpressionType::WINDOW_LEAD;
+	}
+	if (StringUtil::Equals(value, "WINDOW_LAG")) {
+		return ExpressionType::WINDOW_LAG;
+	}
+	if (StringUtil::Equals(value, "WINDOW_NTH_VALUE")) {
+		return ExpressionType::WINDOW_NTH_VALUE;
+	}
+	if (StringUtil::Equals(value, "FUNCTION")) {
+		return ExpressionType::FUNCTION;
+	}
+	if (StringUtil::Equals(value, "BOUND_FUNCTION")) {
+		return ExpressionType::BOUND_FUNCTION;
+	}
+	if (StringUtil::Equals(value, "CASE_EXPR")) {
+		return ExpressionType::CASE_EXPR;
+	}
+	if (StringUtil::Equals(value, "OPERATOR_NULLIF")) {
+		return ExpressionType::OPERATOR_NULLIF;
+	}
+	if (StringUtil::Equals(value, "OPERATOR_COALESCE")) {
+		return ExpressionType::OPERATOR_COALESCE;
+	}
+	if (StringUtil::Equals(value, "ARRAY_EXTRACT")) {
+		return ExpressionType::ARRAY_EXTRACT;
+	}
+	if (StringUtil::Equals(value, "ARRAY_SLICE")) {
+		return ExpressionType::ARRAY_SLICE;
+	}
+	if (StringUtil::Equals(value, "STRUCT_EXTRACT")) {
+		return ExpressionType::STRUCT_EXTRACT;
+	}
+	if (StringUtil::Equals(value, "ARRAY_CONSTRUCTOR")) {
+		return ExpressionType::ARRAY_CONSTRUCTOR;
+	}
+	if (StringUtil::Equals(value, "ARROW")) {
+		return ExpressionType::ARROW;
+	}
+	if (StringUtil::Equals(value, "SUBQUERY")) {
+		return ExpressionType::SUBQUERY;
+	}
+	if (StringUtil::Equals(value, "STAR")) {
+		return ExpressionType::STAR;
+	}
+	if (StringUtil::Equals(value, "TABLE_STAR")) {
+		return ExpressionType::TABLE_STAR;
+	}
+	if (StringUtil::Equals(value, "PLACEHOLDER")) {
+		return ExpressionType::PLACEHOLDER;
+	}
+	if (StringUtil::Equals(value, "COLUMN_REF")) {
+		return ExpressionType::COLUMN_REF;
+	}
+	if (StringUtil::Equals(value, "FUNCTION_REF")) {
+		return ExpressionType::FUNCTION_REF;
+	}
+	if (StringUtil::Equals(value, "TABLE_REF")) {
+		return ExpressionType::TABLE_REF;
+	}
+	if (StringUtil::Equals(value, "CAST")) {
+		return ExpressionType::CAST;
+	}
+	if (StringUtil::Equals(value, "BOUND_REF")) {
+		return ExpressionType::BOUND_REF;
+	}
+	if (StringUtil::Equals(value, "BOUND_COLUMN_REF")) {
+		return ExpressionType::BOUND_COLUMN_REF;
+	}
+	if (StringUtil::Equals(value, "BOUND_UNNEST")) {
+		return ExpressionType::BOUND_UNNEST;
+	}
+	if (StringUtil::Equals(value, "COLLATE")) {
+		return ExpressionType::COLLATE;
+	}
+	if (StringUtil::Equals(value, "LAMBDA")) {
+		return ExpressionType::LAMBDA;
+	}
+	if (StringUtil::Equals(value, "POSITIONAL_REFERENCE")) {
+		return ExpressionType::POSITIONAL_REFERENCE;
+	}
+	if (StringUtil::Equals(value, "BOUND_LAMBDA_REF")) {
+		return ExpressionType::BOUND_LAMBDA_REF;
+	}
+	throw NotImplementedException(StringUtil::Format("Enum value: '%s' not implemented", value));
+}
+
+template <>
+const char *EnumUtil::ToChars<ExpressionClass>(ExpressionClass value) {
+	switch (value) {
+	case ExpressionClass::INVALID:
+		return "INVALID";
+	case ExpressionClass::AGGREGATE:
+		return "AGGREGATE";
+	case ExpressionClass::CASE:
+		return "CASE";
+	case ExpressionClass::CAST:
+		return "CAST";
+	case ExpressionClass::COLUMN_REF:
+		return "COLUMN_REF";
+	case ExpressionClass::COMPARISON:
+		return "COMPARISON";
+	case ExpressionClass::CONJUNCTION:
+		return "CONJUNCTION";
+	case ExpressionClass::CONSTANT:
+		return "CONSTANT";
+	case ExpressionClass::DEFAULT:
+		return "DEFAULT";
+	case ExpressionClass::FUNCTION:
+		return "FUNCTION";
+	case ExpressionClass::OPERATOR:
+		return "OPERATOR";
+	case ExpressionClass::STAR:
+		return "STAR";
+	case ExpressionClass::SUBQUERY:
+		return "SUBQUERY";
+	case ExpressionClass::WINDOW:
+		return "WINDOW";
+	case ExpressionClass::PARAMETER:
+		return "PARAMETER";
+	case ExpressionClass::COLLATE:
+		return "COLLATE";
+	case ExpressionClass::LAMBDA:
+		return "LAMBDA";
+	case ExpressionClass::POSITIONAL_REFERENCE:
+		return "POSITIONAL_REFERENCE";
+	case ExpressionClass::BETWEEN:
+		return "BETWEEN";
+	case ExpressionClass::BOUND_AGGREGATE:
+		return "BOUND_AGGREGATE";
+	case ExpressionClass::BOUND_CASE:
+		return "BOUND_CASE";
+	case ExpressionClass::BOUND_CAST:
+		return "BOUND_CAST";
+	case ExpressionClass::BOUND_COLUMN_REF:
+		return "BOUND_COLUMN_REF";
+	case ExpressionClass::BOUND_COMPARISON:
+		return "BOUND_COMPARISON";
+	case ExpressionClass::BOUND_CONJUNCTION:
+		return "BOUND_CONJUNCTION";
+	case ExpressionClass::BOUND_CONSTANT:
+		return "BOUND_CONSTANT";
+	case ExpressionClass::BOUND_DEFAULT:
+		return "BOUND_DEFAULT";
+	case ExpressionClass::BOUND_FUNCTION:
+		return "BOUND_FUNCTION";
+	case ExpressionClass::BOUND_OPERATOR:
+		return "BOUND_OPERATOR";
+	case ExpressionClass::BOUND_PARAMETER:
+		return "BOUND_PARAMETER";
+	case ExpressionClass::BOUND_REF:
+		return "BOUND_REF";
+	case ExpressionClass::BOUND_SUBQUERY:
+		return "BOUND_SUBQUERY";
+	case ExpressionClass::BOUND_WINDOW:
+		return "BOUND_WINDOW";
+	case ExpressionClass::BOUND_BETWEEN:
+		return "BOUND_BETWEEN";
+	case ExpressionClass::BOUND_UNNEST:
+		return "BOUND_UNNEST";
+	case ExpressionClass::BOUND_LAMBDA:
+		return "BOUND_LAMBDA";
+	case ExpressionClass::BOUND_LAMBDA_REF:
+		return "BOUND_LAMBDA_REF";
+	case ExpressionClass::BOUND_EXPRESSION:
+		return "BOUND_EXPRESSION";
+	default:
+		throw NotImplementedException(StringUtil::Format("Enum value: '%d' not implemented", value));
+	}
+}
+
+template <>
+ExpressionClass EnumUtil::FromString<ExpressionClass>(const char *value) {
+	if (StringUtil::Equals(value, "INVALID")) {
+		return ExpressionClass::INVALID;
+	}
+	if (StringUtil::Equals(value, "AGGREGATE")) {
+		return ExpressionClass::AGGREGATE;
+	}
+	if (StringUtil::Equals(value, "CASE")) {
+		return ExpressionClass::CASE;
+	}
+	if (StringUtil::Equals(value, "CAST")) {
+		return ExpressionClass::CAST;
+	}
+	if (StringUtil::Equals(value, "COLUMN_REF")) {
+		return ExpressionClass::COLUMN_REF;
+	}
+	if (StringUtil::Equals(value, "COMPARISON")) {
+		return ExpressionClass::COMPARISON;
+	}
+	if (StringUtil::Equals(value, "CONJUNCTION")) {
+		return ExpressionClass::CONJUNCTION;
+	}
+	if (StringUtil::Equals(value, "CONSTANT")) {
+		return ExpressionClass::CONSTANT;
+	}
+	if (StringUtil::Equals(value, "DEFAULT")) {
+		return ExpressionClass::DEFAULT;
+	}
+	if (StringUtil::Equals(value, "FUNCTION")) {
+		return ExpressionClass::FUNCTION;
+	}
+	if (StringUtil::Equals(value, "OPERATOR")) {
+		return ExpressionClass::OPERATOR;
+	}
+	if (StringUtil::Equals(value, "STAR")) {
+		return ExpressionClass::STAR;
+	}
+	if (StringUtil::Equals(value, "SUBQUERY")) {
+		return ExpressionClass::SUBQUERY;
+	}
+	if (StringUtil::Equals(value, "WINDOW")) {
+		return ExpressionClass::WINDOW;
+	}
+	if (StringUtil::Equals(value, "PARAMETER")) {
+		return ExpressionClass::PARAMETER;
+	}
+	if (StringUtil::Equals(value, "COLLATE")) {
+		return ExpressionClass::COLLATE;
+	}
+	if (StringUtil::Equals(value, "LAMBDA")) {
+		return ExpressionClass::LAMBDA;
+	}
+	if (StringUtil::Equals(value, "POSITIONAL_REFERENCE")) {
+		return ExpressionClass::POSITIONAL_REFERENCE;
+	}
+	if (StringUtil::Equals(value, "BETWEEN")) {
+		return ExpressionClass::BETWEEN;
+	}
+	if (StringUtil::Equals(value, "BOUND_AGGREGATE")) {
+		return ExpressionClass::BOUND_AGGREGATE;
+	}
+	if (StringUtil::Equals(value, "BOUND_CASE")) {
+		return ExpressionClass::BOUND_CASE;
+	}
+	if (StringUtil::Equals(value, "BOUND_CAST")) {
+		return ExpressionClass::BOUND_CAST;
+	}
+	if (StringUtil::Equals(value, "BOUND_COLUMN_REF")) {
+		return ExpressionClass::BOUND_COLUMN_REF;
+	}
+	if (StringUtil::Equals(value, "BOUND_COMPARISON")) {
+		return ExpressionClass::BOUND_COMPARISON;
+	}
+	if (StringUtil::Equals(value, "BOUND_CONJUNCTION")) {
+		return ExpressionClass::BOUND_CONJUNCTION;
+	}
+	if (StringUtil::Equals(value, "BOUND_CONSTANT")) {
+		return ExpressionClass::BOUND_CONSTANT;
+	}
+	if (StringUtil::Equals(value, "BOUND_DEFAULT")) {
+		return ExpressionClass::BOUND_DEFAULT;
+	}
+	if (StringUtil::Equals(value, "BOUND_FUNCTION")) {
+		return ExpressionClass::BOUND_FUNCTION;
+	}
+	if (StringUtil::Equals(value, "BOUND_OPERATOR")) {
+		return ExpressionClass::BOUND_OPERATOR;
+	}
+	if (StringUtil::Equals(value, "BOUND_PARAMETER")) {
+		return ExpressionClass::BOUND_PARAMETER;
+	}
+	if (StringUtil::Equals(value, "BOUND_REF")) {
+		return ExpressionClass::BOUND_REF;
+	}
+	if (StringUtil::Equals(value, "BOUND_SUBQUERY")) {
+		return ExpressionClass::BOUND_SUBQUERY;
+	}
+	if (StringUtil::Equals(value, "BOUND_WINDOW")) {
+		return ExpressionClass::BOUND_WINDOW;
+	}
+	if (StringUtil::Equals(value, "BOUND_BETWEEN")) {
+		return ExpressionClass::BOUND_BETWEEN;
+	}
+	if (StringUtil::Equals(value, "BOUND_UNNEST")) {
+		return ExpressionClass::BOUND_UNNEST;
+	}
+	if (StringUtil::Equals(value, "BOUND_LAMBDA")) {
+		return ExpressionClass::BOUND_LAMBDA;
+	}
+	if (StringUtil::Equals(value, "BOUND_LAMBDA_REF")) {
+		return ExpressionClass::BOUND_LAMBDA_REF;
+	}
+	if (StringUtil::Equals(value, "BOUND_EXPRESSION")) {
+		return ExpressionClass::BOUND_EXPRESSION;
+	}
+	throw NotImplementedException(StringUtil::Format("Enum value: '%s' not implemented", value));
+}
+
+template <>
+const char *EnumUtil::ToChars<PendingExecutionResult>(PendingExecutionResult value) {
+	switch (value) {
+	case PendingExecutionResult::RESULT_READY:
+		return "RESULT_READY";
+	case PendingExecutionResult::RESULT_NOT_READY:
+		return "RESULT_NOT_READY";
+	case PendingExecutionResult::EXECUTION_ERROR:
+		return "EXECUTION_ERROR";
+	default:
+		throw NotImplementedException(StringUtil::Format("Enum value: '%d' not implemented", value));
+	}
+}
+
+template <>
+PendingExecutionResult EnumUtil::FromString<PendingExecutionResult>(const char *value) {
+	if (StringUtil::Equals(value, "RESULT_READY")) {
+		return PendingExecutionResult::RESULT_READY;
+	}
+	if (StringUtil::Equals(value, "RESULT_NOT_READY")) {
+		return PendingExecutionResult::RESULT_NOT_READY;
+	}
+	if (StringUtil::Equals(value, "EXECUTION_ERROR")) {
+		return PendingExecutionResult::EXECUTION_ERROR;
+	}
+	throw NotImplementedException(StringUtil::Format("Enum value: '%s' not implemented", value));
+}
+
+template <>
+const char *EnumUtil::ToChars<WindowAggregationMode>(WindowAggregationMode value) {
+	switch (value) {
+	case WindowAggregationMode::WINDOW:
+		return "WINDOW";
+	case WindowAggregationMode::COMBINE:
+		return "COMBINE";
+	case WindowAggregationMode::SEPARATE:
+		return "SEPARATE";
+	default:
+		throw NotImplementedException(StringUtil::Format("Enum value: '%d' not implemented", value));
+	}
+}
+
+template <>
+WindowAggregationMode EnumUtil::FromString<WindowAggregationMode>(const char *value) {
+	if (StringUtil::Equals(value, "WINDOW")) {
+		return WindowAggregationMode::WINDOW;
+	}
+	if (StringUtil::Equals(value, "COMBINE")) {
+		return WindowAggregationMode::COMBINE;
+	}
+	if (StringUtil::Equals(value, "SEPARATE")) {
+		return WindowAggregationMode::SEPARATE;
+	}
+	throw NotImplementedException(StringUtil::Format("Enum value: '%s' not implemented", value));
+}
+
+template <>
+const char *EnumUtil::ToChars<SubqueryType>(SubqueryType value) {
+	switch (value) {
+	case SubqueryType::INVALID:
+		return "INVALID";
+	case SubqueryType::SCALAR:
+		return "SCALAR";
+	case SubqueryType::EXISTS:
+		return "EXISTS";
+	case SubqueryType::NOT_EXISTS:
+		return "NOT_EXISTS";
+	case SubqueryType::ANY:
+		return "ANY";
+	default:
+		throw NotImplementedException(StringUtil::Format("Enum value: '%d' not implemented", value));
+	}
+}
+
+template <>
+SubqueryType EnumUtil::FromString<SubqueryType>(const char *value) {
+	if (StringUtil::Equals(value, "INVALID")) {
+		return SubqueryType::INVALID;
+	}
+	if (StringUtil::Equals(value, "SCALAR")) {
+		return SubqueryType::SCALAR;
+	}
+	if (StringUtil::Equals(value, "EXISTS")) {
+		return SubqueryType::EXISTS;
+	}
+	if (StringUtil::Equals(value, "NOT_EXISTS")) {
+		return SubqueryType::NOT_EXISTS;
+	}
+	if (StringUtil::Equals(value, "ANY")) {
+		return SubqueryType::ANY;
+	}
+	throw NotImplementedException(StringUtil::Format("Enum value: '%s' not implemented", value));
+}
+
+template <>
+const char *EnumUtil::ToChars<OrderType>(OrderType value) {
+	switch (value) {
+	case OrderType::INVALID:
+		return "INVALID";
+	case OrderType::ORDER_DEFAULT:
+		return "ORDER_DEFAULT";
+	case OrderType::ASCENDING:
+		return "ASCENDING";
+	case OrderType::DESCENDING:
+		return "DESCENDING";
+	default:
+		throw NotImplementedException(StringUtil::Format("Enum value: '%d' not implemented", value));
+	}
+}
+
+template <>
+OrderType EnumUtil::FromString<OrderType>(const char *value) {
+	if (StringUtil::Equals(value, "INVALID")) {
+		return OrderType::INVALID;
+	}
+	if (StringUtil::Equals(value, "ORDER_DEFAULT") || StringUtil::Equals(value, "DEFAULT")) {
+		return OrderType::ORDER_DEFAULT;
+	}
+	if (StringUtil::Equals(value, "ASCENDING") || StringUtil::Equals(value, "ASC")) {
+		return OrderType::ASCENDING;
+	}
+	if (StringUtil::Equals(value, "DESCENDING") || StringUtil::Equals(value, "DESC")) {
+		return OrderType::DESCENDING;
+	}
+	throw NotImplementedException(StringUtil::Format("Enum value: '%s' not implemented", value));
+}
+
+template <>
+const char *EnumUtil::ToChars<OrderByNullType>(OrderByNullType value) {
+	switch (value) {
+	case OrderByNullType::INVALID:
+		return "INVALID";
+	case OrderByNullType::ORDER_DEFAULT:
+		return "ORDER_DEFAULT";
+	case OrderByNullType::NULLS_FIRST:
+		return "NULLS_FIRST";
+	case OrderByNullType::NULLS_LAST:
+		return "NULLS_LAST";
+	default:
+		throw NotImplementedException(StringUtil::Format("Enum value: '%d' not implemented", value));
+	}
+}
+
+template <>
+OrderByNullType EnumUtil::FromString<OrderByNullType>(const char *value) {
+	if (StringUtil::Equals(value, "INVALID")) {
+		return OrderByNullType::INVALID;
+	}
+	if (StringUtil::Equals(value, "ORDER_DEFAULT") || StringUtil::Equals(value, "DEFAULT")) {
+		return OrderByNullType::ORDER_DEFAULT;
+	}
+	if (StringUtil::Equals(value, "NULLS_FIRST") || StringUtil::Equals(value, "NULLS FIRST")) {
+		return OrderByNullType::NULLS_FIRST;
+	}
+	if (StringUtil::Equals(value, "NULLS_LAST") || StringUtil::Equals(value, "NULLS LAST")) {
+		return OrderByNullType::NULLS_LAST;
+	}
+	throw NotImplementedException(StringUtil::Format("Enum value: '%s' not implemented", value));
+}
+
+template <>
+const char *EnumUtil::ToChars<DefaultOrderByNullType>(DefaultOrderByNullType value) {
+	switch (value) {
+	case DefaultOrderByNullType::INVALID:
+		return "INVALID";
+	case DefaultOrderByNullType::NULLS_FIRST:
+		return "NULLS_FIRST";
+	case DefaultOrderByNullType::NULLS_LAST:
+		return "NULLS_LAST";
+	case DefaultOrderByNullType::NULLS_FIRST_ON_ASC_LAST_ON_DESC:
+		return "NULLS_FIRST_ON_ASC_LAST_ON_DESC";
+	case DefaultOrderByNullType::NULLS_LAST_ON_ASC_FIRST_ON_DESC:
+		return "NULLS_LAST_ON_ASC_FIRST_ON_DESC";
+	default:
+		throw NotImplementedException(StringUtil::Format("Enum value: '%d' not implemented", value));
+	}
+}
+
+template <>
+DefaultOrderByNullType EnumUtil::FromString<DefaultOrderByNullType>(const char *value) {
+	if (StringUtil::Equals(value, "INVALID")) {
+		return DefaultOrderByNullType::INVALID;
+	}
+	if (StringUtil::Equals(value, "NULLS_FIRST")) {
+		return DefaultOrderByNullType::NULLS_FIRST;
+	}
+	if (StringUtil::Equals(value, "NULLS_LAST")) {
+		return DefaultOrderByNullType::NULLS_LAST;
+	}
+	if (StringUtil::Equals(value, "NULLS_FIRST_ON_ASC_LAST_ON_DESC")) {
+		return DefaultOrderByNullType::NULLS_FIRST_ON_ASC_LAST_ON_DESC;
+	}
+	if (StringUtil::Equals(value, "NULLS_LAST_ON_ASC_FIRST_ON_DESC")) {
+		return DefaultOrderByNullType::NULLS_LAST_ON_ASC_FIRST_ON_DESC;
+	}
+	throw NotImplementedException(StringUtil::Format("Enum value: '%s' not implemented", value));
+}
+
+template <>
+const char *EnumUtil::ToChars<DatePartSpecifier>(DatePartSpecifier value) {
+	switch (value) {
+	case DatePartSpecifier::YEAR:
+		return "YEAR";
+	case DatePartSpecifier::MONTH:
+		return "MONTH";
+	case DatePartSpecifier::DAY:
+		return "DAY";
+	case DatePartSpecifier::DECADE:
+		return "DECADE";
+	case DatePartSpecifier::CENTURY:
+		return "CENTURY";
+	case DatePartSpecifier::MILLENNIUM:
+		return "MILLENNIUM";
+	case DatePartSpecifier::MICROSECONDS:
+		return "MICROSECONDS";
+	case DatePartSpecifier::MILLISECONDS:
+		return "MILLISECONDS";
+	case DatePartSpecifier::SECOND:
+		return "SECOND";
+	case DatePartSpecifier::MINUTE:
+		return "MINUTE";
+	case DatePartSpecifier::HOUR:
+		return "HOUR";
+	case DatePartSpecifier::EPOCH:
+		return "EPOCH";
+	case DatePartSpecifier::DOW:
+		return "DOW";
+	case DatePartSpecifier::ISODOW:
+		return "ISODOW";
+	case DatePartSpecifier::WEEK:
+		return "WEEK";
+	case DatePartSpecifier::ISOYEAR:
+		return "ISOYEAR";
+	case DatePartSpecifier::QUARTER:
+		return "QUARTER";
+	case DatePartSpecifier::DOY:
+		return "DOY";
+	case DatePartSpecifier::YEARWEEK:
+		return "YEARWEEK";
+	case DatePartSpecifier::ERA:
+		return "ERA";
+	case DatePartSpecifier::TIMEZONE:
+		return "TIMEZONE";
+	case DatePartSpecifier::TIMEZONE_HOUR:
+		return "TIMEZONE_HOUR";
+	case DatePartSpecifier::TIMEZONE_MINUTE:
+		return "TIMEZONE_MINUTE";
+	default:
+		throw NotImplementedException(StringUtil::Format("Enum value: '%d' not implemented", value));
+	}
+}
+
+template <>
+DatePartSpecifier EnumUtil::FromString<DatePartSpecifier>(const char *value) {
+	if (StringUtil::Equals(value, "YEAR")) {
+		return DatePartSpecifier::YEAR;
+	}
+	if (StringUtil::Equals(value, "MONTH")) {
+		return DatePartSpecifier::MONTH;
+	}
+	if (StringUtil::Equals(value, "DAY")) {
+		return DatePartSpecifier::DAY;
+	}
+	if (StringUtil::Equals(value, "DECADE")) {
+		return DatePartSpecifier::DECADE;
+	}
+	if (StringUtil::Equals(value, "CENTURY")) {
+		return DatePartSpecifier::CENTURY;
+	}
+	if (StringUtil::Equals(value, "MILLENNIUM")) {
+		return DatePartSpecifier::MILLENNIUM;
+	}
+	if (StringUtil::Equals(value, "MICROSECONDS")) {
+		return DatePartSpecifier::MICROSECONDS;
+	}
+	if (StringUtil::Equals(value, "MILLISECONDS")) {
+		return DatePartSpecifier::MILLISECONDS;
+	}
+	if (StringUtil::Equals(value, "SECOND")) {
+		return DatePartSpecifier::SECOND;
+	}
+	if (StringUtil::Equals(value, "MINUTE")) {
+		return DatePartSpecifier::MINUTE;
+	}
+	if (StringUtil::Equals(value, "HOUR")) {
+		return DatePartSpecifier::HOUR;
+	}
+	if (StringUtil::Equals(value, "EPOCH")) {
+		return DatePartSpecifier::EPOCH;
+	}
+	if (StringUtil::Equals(value, "DOW")) {
+		return DatePartSpecifier::DOW;
+	}
+	if (StringUtil::Equals(value, "ISODOW")) {
+		return DatePartSpecifier::ISODOW;
+	}
+	if (StringUtil::Equals(value, "WEEK")) {
+		return DatePartSpecifier::WEEK;
+	}
+	if (StringUtil::Equals(value, "ISOYEAR")) {
+		return DatePartSpecifier::ISOYEAR;
+	}
+	if (StringUtil::Equals(value, "QUARTER")) {
+		return DatePartSpecifier::QUARTER;
+	}
+	if (StringUtil::Equals(value, "DOY")) {
+		return DatePartSpecifier::DOY;
+	}
+	if (StringUtil::Equals(value, "YEARWEEK")) {
+		return DatePartSpecifier::YEARWEEK;
+	}
+	if (StringUtil::Equals(value, "ERA")) {
+		return DatePartSpecifier::ERA;
+	}
+	if (StringUtil::Equals(value, "TIMEZONE")) {
+		return DatePartSpecifier::TIMEZONE;
+	}
+	if (StringUtil::Equals(value, "TIMEZONE_HOUR")) {
+		return DatePartSpecifier::TIMEZONE_HOUR;
+	}
+	if (StringUtil::Equals(value, "TIMEZONE_MINUTE")) {
+		return DatePartSpecifier::TIMEZONE_MINUTE;
+	}
+	throw NotImplementedException(StringUtil::Format("Enum value: '%s' not implemented", value));
+}
+
+template <>
+const char *EnumUtil::ToChars<OnEntryNotFound>(OnEntryNotFound value) {
+	switch (value) {
+	case OnEntryNotFound::THROW_EXCEPTION:
+		return "THROW_EXCEPTION";
+	case OnEntryNotFound::RETURN_NULL:
+		return "RETURN_NULL";
+	default:
+		throw NotImplementedException(StringUtil::Format("Enum value: '%d' not implemented", value));
+	}
+}
+
+template <>
+OnEntryNotFound EnumUtil::FromString<OnEntryNotFound>(const char *value) {
+	if (StringUtil::Equals(value, "THROW_EXCEPTION")) {
+		return OnEntryNotFound::THROW_EXCEPTION;
+	}
+	if (StringUtil::Equals(value, "RETURN_NULL")) {
+		return OnEntryNotFound::RETURN_NULL;
+	}
+	throw NotImplementedException(StringUtil::Format("Enum value: '%s' not implemented", value));
+}
+
+template <>
+const char *EnumUtil::ToChars<LogicalOperatorType>(LogicalOperatorType value) {
+	switch (value) {
+	case LogicalOperatorType::LOGICAL_INVALID:
+		return "LOGICAL_INVALID";
+	case LogicalOperatorType::LOGICAL_PROJECTION:
+		return "LOGICAL_PROJECTION";
+	case LogicalOperatorType::LOGICAL_FILTER:
+		return "LOGICAL_FILTER";
+	case LogicalOperatorType::LOGICAL_AGGREGATE_AND_GROUP_BY:
+		return "LOGICAL_AGGREGATE_AND_GROUP_BY";
+	case LogicalOperatorType::LOGICAL_WINDOW:
+		return "LOGICAL_WINDOW";
+	case LogicalOperatorType::LOGICAL_UNNEST:
+		return "LOGICAL_UNNEST";
+	case LogicalOperatorType::LOGICAL_LIMIT:
+		return "LOGICAL_LIMIT";
+	case LogicalOperatorType::LOGICAL_ORDER_BY:
+		return "LOGICAL_ORDER_BY";
+	case LogicalOperatorType::LOGICAL_TOP_N:
+		return "LOGICAL_TOP_N";
+	case LogicalOperatorType::LOGICAL_COPY_TO_FILE:
+		return "LOGICAL_COPY_TO_FILE";
+	case LogicalOperatorType::LOGICAL_DISTINCT:
+		return "LOGICAL_DISTINCT";
+	case LogicalOperatorType::LOGICAL_SAMPLE:
+		return "LOGICAL_SAMPLE";
+	case LogicalOperatorType::LOGICAL_LIMIT_PERCENT:
+		return "LOGICAL_LIMIT_PERCENT";
+	case LogicalOperatorType::LOGICAL_PIVOT:
+		return "LOGICAL_PIVOT";
+	case LogicalOperatorType::LOGICAL_GET:
+		return "LOGICAL_GET";
+	case LogicalOperatorType::LOGICAL_CHUNK_GET:
+		return "LOGICAL_CHUNK_GET";
+	case LogicalOperatorType::LOGICAL_DELIM_GET:
+		return "LOGICAL_DELIM_GET";
+	case LogicalOperatorType::LOGICAL_EXPRESSION_GET:
+		return "LOGICAL_EXPRESSION_GET";
+	case LogicalOperatorType::LOGICAL_DUMMY_SCAN:
+		return "LOGICAL_DUMMY_SCAN";
+	case LogicalOperatorType::LOGICAL_EMPTY_RESULT:
+		return "LOGICAL_EMPTY_RESULT";
+	case LogicalOperatorType::LOGICAL_CTE_REF:
+		return "LOGICAL_CTE_REF";
+	case LogicalOperatorType::LOGICAL_JOIN:
+		return "LOGICAL_JOIN";
+	case LogicalOperatorType::LOGICAL_DELIM_JOIN:
+		return "LOGICAL_DELIM_JOIN";
+	case LogicalOperatorType::LOGICAL_COMPARISON_JOIN:
+		return "LOGICAL_COMPARISON_JOIN";
+	case LogicalOperatorType::LOGICAL_ANY_JOIN:
+		return "LOGICAL_ANY_JOIN";
+	case LogicalOperatorType::LOGICAL_CROSS_PRODUCT:
+		return "LOGICAL_CROSS_PRODUCT";
+	case LogicalOperatorType::LOGICAL_POSITIONAL_JOIN:
+		return "LOGICAL_POSITIONAL_JOIN";
+	case LogicalOperatorType::LOGICAL_ASOF_JOIN:
+		return "LOGICAL_ASOF_JOIN";
+	case LogicalOperatorType::LOGICAL_UNION:
+		return "LOGICAL_UNION";
+	case LogicalOperatorType::LOGICAL_EXCEPT:
+		return "LOGICAL_EXCEPT";
+	case LogicalOperatorType::LOGICAL_INTERSECT:
+		return "LOGICAL_INTERSECT";
+	case LogicalOperatorType::LOGICAL_RECURSIVE_CTE:
+		return "LOGICAL_RECURSIVE_CTE";
+	case LogicalOperatorType::LOGICAL_INSERT:
+		return "LOGICAL_INSERT";
+	case LogicalOperatorType::LOGICAL_DELETE:
+		return "LOGICAL_DELETE";
+	case LogicalOperatorType::LOGICAL_UPDATE:
+		return "LOGICAL_UPDATE";
+	case LogicalOperatorType::LOGICAL_ALTER:
+		return "LOGICAL_ALTER";
+	case LogicalOperatorType::LOGICAL_CREATE_TABLE:
+		return "LOGICAL_CREATE_TABLE";
+	case LogicalOperatorType::LOGICAL_CREATE_INDEX:
+		return "LOGICAL_CREATE_INDEX";
+	case LogicalOperatorType::LOGICAL_CREATE_SEQUENCE:
+		return "LOGICAL_CREATE_SEQUENCE";
+	case LogicalOperatorType::LOGICAL_CREATE_VIEW:
+		return "LOGICAL_CREATE_VIEW";
+	case LogicalOperatorType::LOGICAL_CREATE_SCHEMA:
+		return "LOGICAL_CREATE_SCHEMA";
+	case LogicalOperatorType::LOGICAL_CREATE_MACRO:
+		return "LOGICAL_CREATE_MACRO";
+	case LogicalOperatorType::LOGICAL_DROP:
+		return "LOGICAL_DROP";
+	case LogicalOperatorType::LOGICAL_PRAGMA:
+		return "LOGICAL_PRAGMA";
+	case LogicalOperatorType::LOGICAL_TRANSACTION:
+		return "LOGICAL_TRANSACTION";
+	case LogicalOperatorType::LOGICAL_CREATE_TYPE:
+		return "LOGICAL_CREATE_TYPE";
+	case LogicalOperatorType::LOGICAL_ATTACH:
+		return "LOGICAL_ATTACH";
+	case LogicalOperatorType::LOGICAL_DETACH:
+		return "LOGICAL_DETACH";
+	case LogicalOperatorType::LOGICAL_EXPLAIN:
+		return "LOGICAL_EXPLAIN";
+	case LogicalOperatorType::LOGICAL_SHOW:
+		return "LOGICAL_SHOW";
+	case LogicalOperatorType::LOGICAL_PREPARE:
+		return "LOGICAL_PREPARE";
+	case LogicalOperatorType::LOGICAL_EXECUTE:
+		return "LOGICAL_EXECUTE";
+	case LogicalOperatorType::LOGICAL_EXPORT:
+		return "LOGICAL_EXPORT";
+	case LogicalOperatorType::LOGICAL_VACUUM:
+		return "LOGICAL_VACUUM";
+	case LogicalOperatorType::LOGICAL_SET:
+		return "LOGICAL_SET";
+	case LogicalOperatorType::LOGICAL_LOAD:
+		return "LOGICAL_LOAD";
+	case LogicalOperatorType::LOGICAL_RESET:
+		return "LOGICAL_RESET";
+	case LogicalOperatorType::LOGICAL_EXTENSION_OPERATOR:
+		return "LOGICAL_EXTENSION_OPERATOR";
+	default:
+		throw NotImplementedException(StringUtil::Format("Enum value: '%d' not implemented", value));
+	}
+}
+
+template <>
+LogicalOperatorType EnumUtil::FromString<LogicalOperatorType>(const char *value) {
+	if (StringUtil::Equals(value, "LOGICAL_INVALID")) {
+		return LogicalOperatorType::LOGICAL_INVALID;
+	}
+	if (StringUtil::Equals(value, "LOGICAL_PROJECTION")) {
+		return LogicalOperatorType::LOGICAL_PROJECTION;
+	}
+	if (StringUtil::Equals(value, "LOGICAL_FILTER")) {
+		return LogicalOperatorType::LOGICAL_FILTER;
+	}
+	if (StringUtil::Equals(value, "LOGICAL_AGGREGATE_AND_GROUP_BY")) {
+		return LogicalOperatorType::LOGICAL_AGGREGATE_AND_GROUP_BY;
+	}
+	if (StringUtil::Equals(value, "LOGICAL_WINDOW")) {
+		return LogicalOperatorType::LOGICAL_WINDOW;
+	}
+	if (StringUtil::Equals(value, "LOGICAL_UNNEST")) {
+		return LogicalOperatorType::LOGICAL_UNNEST;
+	}
+	if (StringUtil::Equals(value, "LOGICAL_LIMIT")) {
+		return LogicalOperatorType::LOGICAL_LIMIT;
+	}
+	if (StringUtil::Equals(value, "LOGICAL_ORDER_BY")) {
+		return LogicalOperatorType::LOGICAL_ORDER_BY;
+	}
+	if (StringUtil::Equals(value, "LOGICAL_TOP_N")) {
+		return LogicalOperatorType::LOGICAL_TOP_N;
+	}
+	if (StringUtil::Equals(value, "LOGICAL_COPY_TO_FILE")) {
+		return LogicalOperatorType::LOGICAL_COPY_TO_FILE;
+	}
+	if (StringUtil::Equals(value, "LOGICAL_DISTINCT")) {
+		return LogicalOperatorType::LOGICAL_DISTINCT;
+	}
+	if (StringUtil::Equals(value, "LOGICAL_SAMPLE")) {
+		return LogicalOperatorType::LOGICAL_SAMPLE;
+	}
+	if (StringUtil::Equals(value, "LOGICAL_LIMIT_PERCENT")) {
+		return LogicalOperatorType::LOGICAL_LIMIT_PERCENT;
+	}
+	if (StringUtil::Equals(value, "LOGICAL_PIVOT")) {
+		return LogicalOperatorType::LOGICAL_PIVOT;
+	}
+	if (StringUtil::Equals(value, "LOGICAL_GET")) {
+		return LogicalOperatorType::LOGICAL_GET;
+	}
+	if (StringUtil::Equals(value, "LOGICAL_CHUNK_GET")) {
+		return LogicalOperatorType::LOGICAL_CHUNK_GET;
+	}
+	if (StringUtil::Equals(value, "LOGICAL_DELIM_GET")) {
+		return LogicalOperatorType::LOGICAL_DELIM_GET;
+	}
+	if (StringUtil::Equals(value, "LOGICAL_EXPRESSION_GET")) {
+		return LogicalOperatorType::LOGICAL_EXPRESSION_GET;
+	}
+	if (StringUtil::Equals(value, "LOGICAL_DUMMY_SCAN")) {
+		return LogicalOperatorType::LOGICAL_DUMMY_SCAN;
+	}
+	if (StringUtil::Equals(value, "LOGICAL_EMPTY_RESULT")) {
+		return LogicalOperatorType::LOGICAL_EMPTY_RESULT;
+	}
+	if (StringUtil::Equals(value, "LOGICAL_CTE_REF")) {
+		return LogicalOperatorType::LOGICAL_CTE_REF;
+	}
+	if (StringUtil::Equals(value, "LOGICAL_JOIN")) {
+		return LogicalOperatorType::LOGICAL_JOIN;
+	}
+	if (StringUtil::Equals(value, "LOGICAL_DELIM_JOIN")) {
+		return LogicalOperatorType::LOGICAL_DELIM_JOIN;
+	}
+	if (StringUtil::Equals(value, "LOGICAL_COMPARISON_JOIN")) {
+		return LogicalOperatorType::LOGICAL_COMPARISON_JOIN;
+	}
+	if (StringUtil::Equals(value, "LOGICAL_ANY_JOIN")) {
+		return LogicalOperatorType::LOGICAL_ANY_JOIN;
+	}
+	if (StringUtil::Equals(value, "LOGICAL_CROSS_PRODUCT")) {
+		return LogicalOperatorType::LOGICAL_CROSS_PRODUCT;
+	}
+	if (StringUtil::Equals(value, "LOGICAL_POSITIONAL_JOIN")) {
+		return LogicalOperatorType::LOGICAL_POSITIONAL_JOIN;
+	}
+	if (StringUtil::Equals(value, "LOGICAL_ASOF_JOIN")) {
+		return LogicalOperatorType::LOGICAL_ASOF_JOIN;
+	}
+	if (StringUtil::Equals(value, "LOGICAL_UNION")) {
+		return LogicalOperatorType::LOGICAL_UNION;
+	}
+	if (StringUtil::Equals(value, "LOGICAL_EXCEPT")) {
+		return LogicalOperatorType::LOGICAL_EXCEPT;
+	}
+	if (StringUtil::Equals(value, "LOGICAL_INTERSECT")) {
+		return LogicalOperatorType::LOGICAL_INTERSECT;
+	}
+	if (StringUtil::Equals(value, "LOGICAL_RECURSIVE_CTE")) {
+		return LogicalOperatorType::LOGICAL_RECURSIVE_CTE;
+	}
+	if (StringUtil::Equals(value, "LOGICAL_INSERT")) {
+		return LogicalOperatorType::LOGICAL_INSERT;
+	}
+	if (StringUtil::Equals(value, "LOGICAL_DELETE")) {
+		return LogicalOperatorType::LOGICAL_DELETE;
+	}
+	if (StringUtil::Equals(value, "LOGICAL_UPDATE")) {
+		return LogicalOperatorType::LOGICAL_UPDATE;
+	}
+	if (StringUtil::Equals(value, "LOGICAL_ALTER")) {
+		return LogicalOperatorType::LOGICAL_ALTER;
+	}
+	if (StringUtil::Equals(value, "LOGICAL_CREATE_TABLE")) {
+		return LogicalOperatorType::LOGICAL_CREATE_TABLE;
+	}
+	if (StringUtil::Equals(value, "LOGICAL_CREATE_INDEX")) {
+		return LogicalOperatorType::LOGICAL_CREATE_INDEX;
+	}
+	if (StringUtil::Equals(value, "LOGICAL_CREATE_SEQUENCE")) {
+		return LogicalOperatorType::LOGICAL_CREATE_SEQUENCE;
+	}
+	if (StringUtil::Equals(value, "LOGICAL_CREATE_VIEW")) {
+		return LogicalOperatorType::LOGICAL_CREATE_VIEW;
+	}
+	if (StringUtil::Equals(value, "LOGICAL_CREATE_SCHEMA")) {
+		return LogicalOperatorType::LOGICAL_CREATE_SCHEMA;
+	}
+	if (StringUtil::Equals(value, "LOGICAL_CREATE_MACRO")) {
+		return LogicalOperatorType::LOGICAL_CREATE_MACRO;
+	}
+	if (StringUtil::Equals(value, "LOGICAL_DROP")) {
+		return LogicalOperatorType::LOGICAL_DROP;
+	}
+	if (StringUtil::Equals(value, "LOGICAL_PRAGMA")) {
+		return LogicalOperatorType::LOGICAL_PRAGMA;
+	}
+	if (StringUtil::Equals(value, "LOGICAL_TRANSACTION")) {
+		return LogicalOperatorType::LOGICAL_TRANSACTION;
+	}
+	if (StringUtil::Equals(value, "LOGICAL_CREATE_TYPE")) {
+		return LogicalOperatorType::LOGICAL_CREATE_TYPE;
+	}
+	if (StringUtil::Equals(value, "LOGICAL_ATTACH")) {
+		return LogicalOperatorType::LOGICAL_ATTACH;
+	}
+	if (StringUtil::Equals(value, "LOGICAL_DETACH")) {
+		return LogicalOperatorType::LOGICAL_DETACH;
+	}
+	if (StringUtil::Equals(value, "LOGICAL_EXPLAIN")) {
+		return LogicalOperatorType::LOGICAL_EXPLAIN;
+	}
+	if (StringUtil::Equals(value, "LOGICAL_SHOW")) {
+		return LogicalOperatorType::LOGICAL_SHOW;
+	}
+	if (StringUtil::Equals(value, "LOGICAL_PREPARE")) {
+		return LogicalOperatorType::LOGICAL_PREPARE;
+	}
+	if (StringUtil::Equals(value, "LOGICAL_EXECUTE")) {
+		return LogicalOperatorType::LOGICAL_EXECUTE;
+	}
+	if (StringUtil::Equals(value, "LOGICAL_EXPORT")) {
+		return LogicalOperatorType::LOGICAL_EXPORT;
+	}
+	if (StringUtil::Equals(value, "LOGICAL_VACUUM")) {
+		return LogicalOperatorType::LOGICAL_VACUUM;
+	}
+	if (StringUtil::Equals(value, "LOGICAL_SET")) {
+		return LogicalOperatorType::LOGICAL_SET;
+	}
+	if (StringUtil::Equals(value, "LOGICAL_LOAD")) {
+		return LogicalOperatorType::LOGICAL_LOAD;
+	}
+	if (StringUtil::Equals(value, "LOGICAL_RESET")) {
+		return LogicalOperatorType::LOGICAL_RESET;
+	}
+	if (StringUtil::Equals(value, "LOGICAL_EXTENSION_OPERATOR")) {
+		return LogicalOperatorType::LOGICAL_EXTENSION_OPERATOR;
+	}
+	throw NotImplementedException(StringUtil::Format("Enum value: '%s' not implemented", value));
+}
+
+template <>
+const char *EnumUtil::ToChars<OperatorResultType>(OperatorResultType value) {
+	switch (value) {
+	case OperatorResultType::NEED_MORE_INPUT:
+		return "NEED_MORE_INPUT";
+	case OperatorResultType::HAVE_MORE_OUTPUT:
+		return "HAVE_MORE_OUTPUT";
+	case OperatorResultType::FINISHED:
+		return "FINISHED";
+	case OperatorResultType::BLOCKED:
+		return "BLOCKED";
+	default:
+		throw NotImplementedException(StringUtil::Format("Enum value: '%d' not implemented", value));
+	}
+}
+
+template <>
+OperatorResultType EnumUtil::FromString<OperatorResultType>(const char *value) {
+	if (StringUtil::Equals(value, "NEED_MORE_INPUT")) {
+		return OperatorResultType::NEED_MORE_INPUT;
+	}
+	if (StringUtil::Equals(value, "HAVE_MORE_OUTPUT")) {
+		return OperatorResultType::HAVE_MORE_OUTPUT;
+	}
+	if (StringUtil::Equals(value, "FINISHED")) {
+		return OperatorResultType::FINISHED;
+	}
+	if (StringUtil::Equals(value, "BLOCKED")) {
+		return OperatorResultType::BLOCKED;
+	}
+	throw NotImplementedException(StringUtil::Format("Enum value: '%s' not implemented", value));
+}
+
+template <>
+const char *EnumUtil::ToChars<OperatorFinalizeResultType>(OperatorFinalizeResultType value) {
+	switch (value) {
+	case OperatorFinalizeResultType::HAVE_MORE_OUTPUT:
+		return "HAVE_MORE_OUTPUT";
+	case OperatorFinalizeResultType::FINISHED:
+		return "FINISHED";
+	default:
+		throw NotImplementedException(StringUtil::Format("Enum value: '%d' not implemented", value));
+	}
+}
+
+template <>
+OperatorFinalizeResultType EnumUtil::FromString<OperatorFinalizeResultType>(const char *value) {
+	if (StringUtil::Equals(value, "HAVE_MORE_OUTPUT")) {
+		return OperatorFinalizeResultType::HAVE_MORE_OUTPUT;
+	}
+	if (StringUtil::Equals(value, "FINISHED")) {
+		return OperatorFinalizeResultType::FINISHED;
+	}
+	throw NotImplementedException(StringUtil::Format("Enum value: '%s' not implemented", value));
+}
+
+template <>
+const char *EnumUtil::ToChars<SourceResultType>(SourceResultType value) {
+	switch (value) {
+	case SourceResultType::HAVE_MORE_OUTPUT:
+		return "HAVE_MORE_OUTPUT";
+	case SourceResultType::FINISHED:
+		return "FINISHED";
+	case SourceResultType::BLOCKED:
+		return "BLOCKED";
+	default:
+		throw NotImplementedException(StringUtil::Format("Enum value: '%d' not implemented", value));
+	}
+}
+
+template <>
+SourceResultType EnumUtil::FromString<SourceResultType>(const char *value) {
+	if (StringUtil::Equals(value, "HAVE_MORE_OUTPUT")) {
+		return SourceResultType::HAVE_MORE_OUTPUT;
+	}
+	if (StringUtil::Equals(value, "FINISHED")) {
+		return SourceResultType::FINISHED;
+	}
+	if (StringUtil::Equals(value, "BLOCKED")) {
+		return SourceResultType::BLOCKED;
+	}
+	throw NotImplementedException(StringUtil::Format("Enum value: '%s' not implemented", value));
+}
+
+template <>
+const char *EnumUtil::ToChars<SinkResultType>(SinkResultType value) {
+	switch (value) {
+	case SinkResultType::NEED_MORE_INPUT:
+		return "NEED_MORE_INPUT";
+	case SinkResultType::FINISHED:
+		return "FINISHED";
+	case SinkResultType::BLOCKED:
+		return "BLOCKED";
+	default:
+		throw NotImplementedException(StringUtil::Format("Enum value: '%d' not implemented", value));
+	}
+}
+
+template <>
+SinkResultType EnumUtil::FromString<SinkResultType>(const char *value) {
+	if (StringUtil::Equals(value, "NEED_MORE_INPUT")) {
+		return SinkResultType::NEED_MORE_INPUT;
+	}
+	if (StringUtil::Equals(value, "FINISHED")) {
+		return SinkResultType::FINISHED;
+	}
+	if (StringUtil::Equals(value, "BLOCKED")) {
+		return SinkResultType::BLOCKED;
+	}
+	throw NotImplementedException(StringUtil::Format("Enum value: '%s' not implemented", value));
+}
+
+template <>
+const char *EnumUtil::ToChars<SinkFinalizeType>(SinkFinalizeType value) {
+	switch (value) {
+	case SinkFinalizeType::READY:
+		return "READY";
+	case SinkFinalizeType::NO_OUTPUT_POSSIBLE:
+		return "NO_OUTPUT_POSSIBLE";
+	default:
+		throw NotImplementedException(StringUtil::Format("Enum value: '%d' not implemented", value));
+	}
+}
+
+template <>
+SinkFinalizeType EnumUtil::FromString<SinkFinalizeType>(const char *value) {
+	if (StringUtil::Equals(value, "READY")) {
+		return SinkFinalizeType::READY;
+	}
+	if (StringUtil::Equals(value, "NO_OUTPUT_POSSIBLE")) {
+		return SinkFinalizeType::NO_OUTPUT_POSSIBLE;
+	}
+	throw NotImplementedException(StringUtil::Format("Enum value: '%s' not implemented", value));
+}
+
+template <>
+const char *EnumUtil::ToChars<JoinRefType>(JoinRefType value) {
+	switch (value) {
+	case JoinRefType::REGULAR:
+		return "REGULAR";
+	case JoinRefType::NATURAL:
+		return "NATURAL";
+	case JoinRefType::CROSS:
+		return "CROSS";
+	case JoinRefType::POSITIONAL:
+		return "POSITIONAL";
+	case JoinRefType::ASOF:
+		return "ASOF";
+	default:
+		throw NotImplementedException(StringUtil::Format("Enum value: '%d' not implemented", value));
+	}
+}
+
+template <>
+JoinRefType EnumUtil::FromString<JoinRefType>(const char *value) {
+	if (StringUtil::Equals(value, "REGULAR")) {
+		return JoinRefType::REGULAR;
+	}
+	if (StringUtil::Equals(value, "NATURAL")) {
+		return JoinRefType::NATURAL;
+	}
+	if (StringUtil::Equals(value, "CROSS")) {
+		return JoinRefType::CROSS;
+	}
+	if (StringUtil::Equals(value, "POSITIONAL")) {
+		return JoinRefType::POSITIONAL;
+	}
+	if (StringUtil::Equals(value, "ASOF")) {
+		return JoinRefType::ASOF;
+	}
+	throw NotImplementedException(StringUtil::Format("Enum value: '%s' not implemented", value));
+}
+
+template <>
+const char *EnumUtil::ToChars<UndoFlags>(UndoFlags value) {
+	switch (value) {
+	case UndoFlags::EMPTY_ENTRY:
+		return "EMPTY_ENTRY";
+	case UndoFlags::CATALOG_ENTRY:
+		return "CATALOG_ENTRY";
+	case UndoFlags::INSERT_TUPLE:
+		return "INSERT_TUPLE";
+	case UndoFlags::DELETE_TUPLE:
+		return "DELETE_TUPLE";
+	case UndoFlags::UPDATE_TUPLE:
+		return "UPDATE_TUPLE";
+	default:
+		throw NotImplementedException(StringUtil::Format("Enum value: '%d' not implemented", value));
+	}
+}
+
+template <>
+UndoFlags EnumUtil::FromString<UndoFlags>(const char *value) {
+	if (StringUtil::Equals(value, "EMPTY_ENTRY")) {
+		return UndoFlags::EMPTY_ENTRY;
+	}
+	if (StringUtil::Equals(value, "CATALOG_ENTRY")) {
+		return UndoFlags::CATALOG_ENTRY;
+	}
+	if (StringUtil::Equals(value, "INSERT_TUPLE")) {
+		return UndoFlags::INSERT_TUPLE;
+	}
+	if (StringUtil::Equals(value, "DELETE_TUPLE")) {
+		return UndoFlags::DELETE_TUPLE;
+	}
+	if (StringUtil::Equals(value, "UPDATE_TUPLE")) {
+		return UndoFlags::UPDATE_TUPLE;
+	}
+	throw NotImplementedException(StringUtil::Format("Enum value: '%s' not implemented", value));
+}
+
+template <>
+const char *EnumUtil::ToChars<SetOperationType>(SetOperationType value) {
+	switch (value) {
+	case SetOperationType::NONE:
+		return "NONE";
+	case SetOperationType::UNION:
+		return "UNION";
+	case SetOperationType::EXCEPT:
+		return "EXCEPT";
+	case SetOperationType::INTERSECT:
+		return "INTERSECT";
+	case SetOperationType::UNION_BY_NAME:
+		return "UNION_BY_NAME";
+	default:
+		throw NotImplementedException(StringUtil::Format("Enum value: '%d' not implemented", value));
+	}
+}
+
+template <>
+SetOperationType EnumUtil::FromString<SetOperationType>(const char *value) {
+	if (StringUtil::Equals(value, "NONE")) {
+		return SetOperationType::NONE;
+	}
+	if (StringUtil::Equals(value, "UNION")) {
+		return SetOperationType::UNION;
+	}
+	if (StringUtil::Equals(value, "EXCEPT")) {
+		return SetOperationType::EXCEPT;
+	}
+	if (StringUtil::Equals(value, "INTERSECT")) {
+		return SetOperationType::INTERSECT;
+	}
+	if (StringUtil::Equals(value, "UNION_BY_NAME")) {
+		return SetOperationType::UNION_BY_NAME;
+	}
+	throw NotImplementedException(StringUtil::Format("Enum value: '%s' not implemented", value));
+}
+
+template <>
+const char *EnumUtil::ToChars<OptimizerType>(OptimizerType value) {
+	switch (value) {
+	case OptimizerType::INVALID:
+		return "INVALID";
+	case OptimizerType::EXPRESSION_REWRITER:
+		return "EXPRESSION_REWRITER";
+	case OptimizerType::FILTER_PULLUP:
+		return "FILTER_PULLUP";
+	case OptimizerType::FILTER_PUSHDOWN:
+		return "FILTER_PUSHDOWN";
+	case OptimizerType::REGEX_RANGE:
+		return "REGEX_RANGE";
+	case OptimizerType::IN_CLAUSE:
+		return "IN_CLAUSE";
+	case OptimizerType::JOIN_ORDER:
+		return "JOIN_ORDER";
+	case OptimizerType::DELIMINATOR:
+		return "DELIMINATOR";
+	case OptimizerType::UNNEST_REWRITER:
+		return "UNNEST_REWRITER";
+	case OptimizerType::UNUSED_COLUMNS:
+		return "UNUSED_COLUMNS";
+	case OptimizerType::STATISTICS_PROPAGATION:
+		return "STATISTICS_PROPAGATION";
+	case OptimizerType::COMMON_SUBEXPRESSIONS:
+		return "COMMON_SUBEXPRESSIONS";
+	case OptimizerType::COMMON_AGGREGATE:
+		return "COMMON_AGGREGATE";
+	case OptimizerType::COLUMN_LIFETIME:
+		return "COLUMN_LIFETIME";
+	case OptimizerType::TOP_N:
+		return "TOP_N";
+	case OptimizerType::REORDER_FILTER:
+		return "REORDER_FILTER";
+	case OptimizerType::EXTENSION:
+		return "EXTENSION";
+	default:
+		throw NotImplementedException(StringUtil::Format("Enum value: '%d' not implemented", value));
+	}
+}
+
+template <>
+OptimizerType EnumUtil::FromString<OptimizerType>(const char *value) {
+	if (StringUtil::Equals(value, "INVALID")) {
+		return OptimizerType::INVALID;
+	}
+	if (StringUtil::Equals(value, "EXPRESSION_REWRITER")) {
+		return OptimizerType::EXPRESSION_REWRITER;
+	}
+	if (StringUtil::Equals(value, "FILTER_PULLUP")) {
+		return OptimizerType::FILTER_PULLUP;
+	}
+	if (StringUtil::Equals(value, "FILTER_PUSHDOWN")) {
+		return OptimizerType::FILTER_PUSHDOWN;
+	}
+	if (StringUtil::Equals(value, "REGEX_RANGE")) {
+		return OptimizerType::REGEX_RANGE;
+	}
+	if (StringUtil::Equals(value, "IN_CLAUSE")) {
+		return OptimizerType::IN_CLAUSE;
+	}
+	if (StringUtil::Equals(value, "JOIN_ORDER")) {
+		return OptimizerType::JOIN_ORDER;
+	}
+	if (StringUtil::Equals(value, "DELIMINATOR")) {
+		return OptimizerType::DELIMINATOR;
+	}
+	if (StringUtil::Equals(value, "UNNEST_REWRITER")) {
+		return OptimizerType::UNNEST_REWRITER;
+	}
+	if (StringUtil::Equals(value, "UNUSED_COLUMNS")) {
+		return OptimizerType::UNUSED_COLUMNS;
+	}
+	if (StringUtil::Equals(value, "STATISTICS_PROPAGATION")) {
+		return OptimizerType::STATISTICS_PROPAGATION;
+	}
+	if (StringUtil::Equals(value, "COMMON_SUBEXPRESSIONS")) {
+		return OptimizerType::COMMON_SUBEXPRESSIONS;
+	}
+	if (StringUtil::Equals(value, "COMMON_AGGREGATE")) {
+		return OptimizerType::COMMON_AGGREGATE;
+	}
+	if (StringUtil::Equals(value, "COLUMN_LIFETIME")) {
+		return OptimizerType::COLUMN_LIFETIME;
+	}
+	if (StringUtil::Equals(value, "TOP_N")) {
+		return OptimizerType::TOP_N;
+	}
+	if (StringUtil::Equals(value, "REORDER_FILTER")) {
+		return OptimizerType::REORDER_FILTER;
+	}
+	if (StringUtil::Equals(value, "EXTENSION")) {
+		return OptimizerType::EXTENSION;
+	}
+	throw NotImplementedException(StringUtil::Format("Enum value: '%s' not implemented", value));
+}
+
+template <>
+const char *EnumUtil::ToChars<CompressionType>(CompressionType value) {
+	switch (value) {
+	case CompressionType::COMPRESSION_AUTO:
+		return "COMPRESSION_AUTO";
+	case CompressionType::COMPRESSION_UNCOMPRESSED:
+		return "COMPRESSION_UNCOMPRESSED";
+	case CompressionType::COMPRESSION_CONSTANT:
+		return "COMPRESSION_CONSTANT";
+	case CompressionType::COMPRESSION_RLE:
+		return "COMPRESSION_RLE";
+	case CompressionType::COMPRESSION_DICTIONARY:
+		return "COMPRESSION_DICTIONARY";
+	case CompressionType::COMPRESSION_PFOR_DELTA:
+		return "COMPRESSION_PFOR_DELTA";
+	case CompressionType::COMPRESSION_BITPACKING:
+		return "COMPRESSION_BITPACKING";
+	case CompressionType::COMPRESSION_FSST:
+		return "COMPRESSION_FSST";
+	case CompressionType::COMPRESSION_CHIMP:
+		return "COMPRESSION_CHIMP";
+	case CompressionType::COMPRESSION_PATAS:
+		return "COMPRESSION_PATAS";
+	case CompressionType::COMPRESSION_COUNT:
+		return "COMPRESSION_COUNT";
+	default:
+		throw NotImplementedException(StringUtil::Format("Enum value: '%d' not implemented", value));
+	}
+}
+
+template <>
+CompressionType EnumUtil::FromString<CompressionType>(const char *value) {
+	if (StringUtil::Equals(value, "COMPRESSION_AUTO")) {
+		return CompressionType::COMPRESSION_AUTO;
+	}
+	if (StringUtil::Equals(value, "COMPRESSION_UNCOMPRESSED")) {
+		return CompressionType::COMPRESSION_UNCOMPRESSED;
+	}
+	if (StringUtil::Equals(value, "COMPRESSION_CONSTANT")) {
+		return CompressionType::COMPRESSION_CONSTANT;
+	}
+	if (StringUtil::Equals(value, "COMPRESSION_RLE")) {
+		return CompressionType::COMPRESSION_RLE;
+	}
+	if (StringUtil::Equals(value, "COMPRESSION_DICTIONARY")) {
+		return CompressionType::COMPRESSION_DICTIONARY;
+	}
+	if (StringUtil::Equals(value, "COMPRESSION_PFOR_DELTA")) {
+		return CompressionType::COMPRESSION_PFOR_DELTA;
+	}
+	if (StringUtil::Equals(value, "COMPRESSION_BITPACKING")) {
+		return CompressionType::COMPRESSION_BITPACKING;
+	}
+	if (StringUtil::Equals(value, "COMPRESSION_FSST")) {
+		return CompressionType::COMPRESSION_FSST;
+	}
+	if (StringUtil::Equals(value, "COMPRESSION_CHIMP")) {
+		return CompressionType::COMPRESSION_CHIMP;
+	}
+	if (StringUtil::Equals(value, "COMPRESSION_PATAS")) {
+		return CompressionType::COMPRESSION_PATAS;
+	}
+	if (StringUtil::Equals(value, "COMPRESSION_COUNT")) {
+		return CompressionType::COMPRESSION_COUNT;
+	}
+	throw NotImplementedException(StringUtil::Format("Enum value: '%s' not implemented", value));
+}
+
+template <>
+const char *EnumUtil::ToChars<AggregateHandling>(AggregateHandling value) {
+	switch (value) {
+	case AggregateHandling::STANDARD_HANDLING:
+		return "STANDARD_HANDLING";
+	case AggregateHandling::NO_AGGREGATES_ALLOWED:
+		return "NO_AGGREGATES_ALLOWED";
+	case AggregateHandling::FORCE_AGGREGATES:
+		return "FORCE_AGGREGATES";
+	default:
+		throw NotImplementedException(StringUtil::Format("Enum value: '%d' not implemented", value));
+	}
+}
+
+template <>
+AggregateHandling EnumUtil::FromString<AggregateHandling>(const char *value) {
+	if (StringUtil::Equals(value, "STANDARD_HANDLING")) {
+		return AggregateHandling::STANDARD_HANDLING;
+	}
+	if (StringUtil::Equals(value, "NO_AGGREGATES_ALLOWED")) {
+		return AggregateHandling::NO_AGGREGATES_ALLOWED;
+	}
+	if (StringUtil::Equals(value, "FORCE_AGGREGATES")) {
+		return AggregateHandling::FORCE_AGGREGATES;
+	}
+	throw NotImplementedException(StringUtil::Format("Enum value: '%s' not implemented", value));
+}
+
+template <>
+const char *EnumUtil::ToChars<TableReferenceType>(TableReferenceType value) {
+	switch (value) {
+	case TableReferenceType::INVALID:
+		return "INVALID";
+	case TableReferenceType::BASE_TABLE:
+		return "BASE_TABLE";
+	case TableReferenceType::SUBQUERY:
+		return "SUBQUERY";
+	case TableReferenceType::JOIN:
+		return "JOIN";
+	case TableReferenceType::TABLE_FUNCTION:
+		return "TABLE_FUNCTION";
+	case TableReferenceType::EXPRESSION_LIST:
+		return "EXPRESSION_LIST";
+	case TableReferenceType::CTE:
+		return "CTE";
+	case TableReferenceType::EMPTY:
+		return "EMPTY";
+	case TableReferenceType::PIVOT:
+		return "PIVOT";
+	default:
+		throw NotImplementedException(StringUtil::Format("Enum value: '%d' not implemented", value));
+	}
+}
+
+template <>
+TableReferenceType EnumUtil::FromString<TableReferenceType>(const char *value) {
+	if (StringUtil::Equals(value, "INVALID")) {
+		return TableReferenceType::INVALID;
+	}
+	if (StringUtil::Equals(value, "BASE_TABLE")) {
+		return TableReferenceType::BASE_TABLE;
+	}
+	if (StringUtil::Equals(value, "SUBQUERY")) {
+		return TableReferenceType::SUBQUERY;
+	}
+	if (StringUtil::Equals(value, "JOIN")) {
+		return TableReferenceType::JOIN;
+	}
+	if (StringUtil::Equals(value, "TABLE_FUNCTION")) {
+		return TableReferenceType::TABLE_FUNCTION;
+	}
+	if (StringUtil::Equals(value, "EXPRESSION_LIST")) {
+		return TableReferenceType::EXPRESSION_LIST;
+	}
+	if (StringUtil::Equals(value, "CTE")) {
+		return TableReferenceType::CTE;
+	}
+	if (StringUtil::Equals(value, "EMPTY")) {
+		return TableReferenceType::EMPTY;
+	}
+	if (StringUtil::Equals(value, "PIVOT")) {
+		return TableReferenceType::PIVOT;
+	}
+	throw NotImplementedException(StringUtil::Format("Enum value: '%s' not implemented", value));
+}
+
+template <>
+const char *EnumUtil::ToChars<RelationType>(RelationType value) {
+	switch (value) {
+	case RelationType::INVALID_RELATION:
+		return "INVALID_RELATION";
+	case RelationType::TABLE_RELATION:
+		return "TABLE_RELATION";
+	case RelationType::PROJECTION_RELATION:
+		return "PROJECTION_RELATION";
+	case RelationType::FILTER_RELATION:
+		return "FILTER_RELATION";
+	case RelationType::EXPLAIN_RELATION:
+		return "EXPLAIN_RELATION";
+	case RelationType::CROSS_PRODUCT_RELATION:
+		return "CROSS_PRODUCT_RELATION";
+	case RelationType::JOIN_RELATION:
+		return "JOIN_RELATION";
+	case RelationType::AGGREGATE_RELATION:
+		return "AGGREGATE_RELATION";
+	case RelationType::SET_OPERATION_RELATION:
+		return "SET_OPERATION_RELATION";
+	case RelationType::DISTINCT_RELATION:
+		return "DISTINCT_RELATION";
+	case RelationType::LIMIT_RELATION:
+		return "LIMIT_RELATION";
+	case RelationType::ORDER_RELATION:
+		return "ORDER_RELATION";
+	case RelationType::CREATE_VIEW_RELATION:
+		return "CREATE_VIEW_RELATION";
+	case RelationType::CREATE_TABLE_RELATION:
+		return "CREATE_TABLE_RELATION";
+	case RelationType::INSERT_RELATION:
+		return "INSERT_RELATION";
+	case RelationType::VALUE_LIST_RELATION:
+		return "VALUE_LIST_RELATION";
+	case RelationType::DELETE_RELATION:
+		return "DELETE_RELATION";
+	case RelationType::UPDATE_RELATION:
+		return "UPDATE_RELATION";
+	case RelationType::WRITE_CSV_RELATION:
+		return "WRITE_CSV_RELATION";
+	case RelationType::WRITE_PARQUET_RELATION:
+		return "WRITE_PARQUET_RELATION";
+	case RelationType::READ_CSV_RELATION:
+		return "READ_CSV_RELATION";
+	case RelationType::SUBQUERY_RELATION:
+		return "SUBQUERY_RELATION";
+	case RelationType::TABLE_FUNCTION_RELATION:
+		return "TABLE_FUNCTION_RELATION";
+	case RelationType::VIEW_RELATION:
+		return "VIEW_RELATION";
+	case RelationType::QUERY_RELATION:
+		return "QUERY_RELATION";
+	default:
+		throw NotImplementedException(StringUtil::Format("Enum value: '%d' not implemented", value));
+	}
+}
+
+template <>
+RelationType EnumUtil::FromString<RelationType>(const char *value) {
+	if (StringUtil::Equals(value, "INVALID_RELATION")) {
+		return RelationType::INVALID_RELATION;
+	}
+	if (StringUtil::Equals(value, "TABLE_RELATION")) {
+		return RelationType::TABLE_RELATION;
+	}
+	if (StringUtil::Equals(value, "PROJECTION_RELATION")) {
+		return RelationType::PROJECTION_RELATION;
+	}
+	if (StringUtil::Equals(value, "FILTER_RELATION")) {
+		return RelationType::FILTER_RELATION;
+	}
+	if (StringUtil::Equals(value, "EXPLAIN_RELATION")) {
+		return RelationType::EXPLAIN_RELATION;
+	}
+	if (StringUtil::Equals(value, "CROSS_PRODUCT_RELATION")) {
+		return RelationType::CROSS_PRODUCT_RELATION;
+	}
+	if (StringUtil::Equals(value, "JOIN_RELATION")) {
+		return RelationType::JOIN_RELATION;
+	}
+	if (StringUtil::Equals(value, "AGGREGATE_RELATION")) {
+		return RelationType::AGGREGATE_RELATION;
+	}
+	if (StringUtil::Equals(value, "SET_OPERATION_RELATION")) {
+		return RelationType::SET_OPERATION_RELATION;
+	}
+	if (StringUtil::Equals(value, "DISTINCT_RELATION")) {
+		return RelationType::DISTINCT_RELATION;
+	}
+	if (StringUtil::Equals(value, "LIMIT_RELATION")) {
+		return RelationType::LIMIT_RELATION;
+	}
+	if (StringUtil::Equals(value, "ORDER_RELATION")) {
+		return RelationType::ORDER_RELATION;
+	}
+	if (StringUtil::Equals(value, "CREATE_VIEW_RELATION")) {
+		return RelationType::CREATE_VIEW_RELATION;
+	}
+	if (StringUtil::Equals(value, "CREATE_TABLE_RELATION")) {
+		return RelationType::CREATE_TABLE_RELATION;
+	}
+	if (StringUtil::Equals(value, "INSERT_RELATION")) {
+		return RelationType::INSERT_RELATION;
+	}
+	if (StringUtil::Equals(value, "VALUE_LIST_RELATION")) {
+		return RelationType::VALUE_LIST_RELATION;
+	}
+	if (StringUtil::Equals(value, "DELETE_RELATION")) {
+		return RelationType::DELETE_RELATION;
+	}
+	if (StringUtil::Equals(value, "UPDATE_RELATION")) {
+		return RelationType::UPDATE_RELATION;
+	}
+	if (StringUtil::Equals(value, "WRITE_CSV_RELATION")) {
+		return RelationType::WRITE_CSV_RELATION;
+	}
+	if (StringUtil::Equals(value, "WRITE_PARQUET_RELATION")) {
+		return RelationType::WRITE_PARQUET_RELATION;
+	}
+	if (StringUtil::Equals(value, "READ_CSV_RELATION")) {
+		return RelationType::READ_CSV_RELATION;
+	}
+	if (StringUtil::Equals(value, "SUBQUERY_RELATION")) {
+		return RelationType::SUBQUERY_RELATION;
+	}
+	if (StringUtil::Equals(value, "TABLE_FUNCTION_RELATION")) {
+		return RelationType::TABLE_FUNCTION_RELATION;
+	}
+	if (StringUtil::Equals(value, "VIEW_RELATION")) {
+		return RelationType::VIEW_RELATION;
+	}
+	if (StringUtil::Equals(value, "QUERY_RELATION")) {
+		return RelationType::QUERY_RELATION;
+	}
+	throw NotImplementedException(StringUtil::Format("Enum value: '%s' not implemented", value));
+}
+
+template <>
+const char *EnumUtil::ToChars<FilterPropagateResult>(FilterPropagateResult value) {
+	switch (value) {
+	case FilterPropagateResult::NO_PRUNING_POSSIBLE:
+		return "NO_PRUNING_POSSIBLE";
+	case FilterPropagateResult::FILTER_ALWAYS_TRUE:
+		return "FILTER_ALWAYS_TRUE";
+	case FilterPropagateResult::FILTER_ALWAYS_FALSE:
+		return "FILTER_ALWAYS_FALSE";
+	case FilterPropagateResult::FILTER_TRUE_OR_NULL:
+		return "FILTER_TRUE_OR_NULL";
+	case FilterPropagateResult::FILTER_FALSE_OR_NULL:
+		return "FILTER_FALSE_OR_NULL";
+	default:
+		throw NotImplementedException(StringUtil::Format("Enum value: '%d' not implemented", value));
+	}
+}
+
+template <>
+FilterPropagateResult EnumUtil::FromString<FilterPropagateResult>(const char *value) {
+	if (StringUtil::Equals(value, "NO_PRUNING_POSSIBLE")) {
+		return FilterPropagateResult::NO_PRUNING_POSSIBLE;
+	}
+	if (StringUtil::Equals(value, "FILTER_ALWAYS_TRUE")) {
+		return FilterPropagateResult::FILTER_ALWAYS_TRUE;
+	}
+	if (StringUtil::Equals(value, "FILTER_ALWAYS_FALSE")) {
+		return FilterPropagateResult::FILTER_ALWAYS_FALSE;
+	}
+	if (StringUtil::Equals(value, "FILTER_TRUE_OR_NULL")) {
+		return FilterPropagateResult::FILTER_TRUE_OR_NULL;
+	}
+	if (StringUtil::Equals(value, "FILTER_FALSE_OR_NULL")) {
+		return FilterPropagateResult::FILTER_FALSE_OR_NULL;
+	}
+	throw NotImplementedException(StringUtil::Format("Enum value: '%s' not implemented", value));
+}
+
+template <>
+const char *EnumUtil::ToChars<IndexType>(IndexType value) {
+	switch (value) {
+	case IndexType::INVALID:
+		return "INVALID";
+	case IndexType::ART:
+		return "ART";
+	default:
+		throw NotImplementedException(StringUtil::Format("Enum value: '%d' not implemented", value));
+	}
+}
+
+template <>
+IndexType EnumUtil::FromString<IndexType>(const char *value) {
+	if (StringUtil::Equals(value, "INVALID")) {
+		return IndexType::INVALID;
+	}
+	if (StringUtil::Equals(value, "ART")) {
+		return IndexType::ART;
+	}
+	throw NotImplementedException(StringUtil::Format("Enum value: '%s' not implemented", value));
+}
+
+template <>
+const char *EnumUtil::ToChars<ExplainOutputType>(ExplainOutputType value) {
+	switch (value) {
+	case ExplainOutputType::ALL:
+		return "ALL";
+	case ExplainOutputType::OPTIMIZED_ONLY:
+		return "OPTIMIZED_ONLY";
+	case ExplainOutputType::PHYSICAL_ONLY:
+		return "PHYSICAL_ONLY";
+	default:
+		throw NotImplementedException(StringUtil::Format("Enum value: '%d' not implemented", value));
+	}
+}
+
+template <>
+ExplainOutputType EnumUtil::FromString<ExplainOutputType>(const char *value) {
+	if (StringUtil::Equals(value, "ALL")) {
+		return ExplainOutputType::ALL;
+	}
+	if (StringUtil::Equals(value, "OPTIMIZED_ONLY")) {
+		return ExplainOutputType::OPTIMIZED_ONLY;
+	}
+	if (StringUtil::Equals(value, "PHYSICAL_ONLY")) {
+		return ExplainOutputType::PHYSICAL_ONLY;
+	}
+	throw NotImplementedException(StringUtil::Format("Enum value: '%s' not implemented", value));
+}
+
+template <>
+const char *EnumUtil::ToChars<NType>(NType value) {
+	switch (value) {
+	case NType::PREFIX_SEGMENT:
+		return "PREFIX_SEGMENT";
+	case NType::LEAF_SEGMENT:
+		return "LEAF_SEGMENT";
+	case NType::LEAF:
+		return "LEAF";
+	case NType::NODE_4:
+		return "NODE_4";
+	case NType::NODE_16:
+		return "NODE_16";
+	case NType::NODE_48:
+		return "NODE_48";
+	case NType::NODE_256:
+		return "NODE_256";
+	default:
+		throw NotImplementedException(StringUtil::Format("Enum value: '%d' not implemented", value));
+	}
+}
+
+template <>
+NType EnumUtil::FromString<NType>(const char *value) {
+	if (StringUtil::Equals(value, "PREFIX_SEGMENT")) {
+		return NType::PREFIX_SEGMENT;
+	}
+	if (StringUtil::Equals(value, "LEAF_SEGMENT")) {
+		return NType::LEAF_SEGMENT;
+	}
+	if (StringUtil::Equals(value, "LEAF")) {
+		return NType::LEAF;
+	}
+	if (StringUtil::Equals(value, "NODE_4")) {
+		return NType::NODE_4;
+	}
+	if (StringUtil::Equals(value, "NODE_16")) {
+		return NType::NODE_16;
+	}
+	if (StringUtil::Equals(value, "NODE_48")) {
+		return NType::NODE_48;
+	}
+	if (StringUtil::Equals(value, "NODE_256")) {
+		return NType::NODE_256;
+	}
+	throw NotImplementedException(StringUtil::Format("Enum value: '%s' not implemented", value));
+}
+
+template <>
+const char *EnumUtil::ToChars<VerifyExistenceType>(VerifyExistenceType value) {
+	switch (value) {
+	case VerifyExistenceType::APPEND:
+		return "APPEND";
+	case VerifyExistenceType::APPEND_FK:
+		return "APPEND_FK";
+	case VerifyExistenceType::DELETE_FK:
+		return "DELETE_FK";
+	default:
+		throw NotImplementedException(StringUtil::Format("Enum value: '%d' not implemented", value));
+	}
+}
+
+template <>
+VerifyExistenceType EnumUtil::FromString<VerifyExistenceType>(const char *value) {
+	if (StringUtil::Equals(value, "APPEND")) {
+		return VerifyExistenceType::APPEND;
+	}
+	if (StringUtil::Equals(value, "APPEND_FK")) {
+		return VerifyExistenceType::APPEND_FK;
+	}
+	if (StringUtil::Equals(value, "DELETE_FK")) {
+		return VerifyExistenceType::DELETE_FK;
+	}
+	throw NotImplementedException(StringUtil::Format("Enum value: '%s' not implemented", value));
+}
+
+template <>
+const char *EnumUtil::ToChars<ParserMode>(ParserMode value) {
+	switch (value) {
+	case ParserMode::PARSING:
+		return "PARSING";
+	case ParserMode::SNIFFING_DIALECT:
+		return "SNIFFING_DIALECT";
+	case ParserMode::SNIFFING_DATATYPES:
+		return "SNIFFING_DATATYPES";
+	case ParserMode::PARSING_HEADER:
+		return "PARSING_HEADER";
+	default:
+		throw NotImplementedException(StringUtil::Format("Enum value: '%d' not implemented", value));
+	}
+}
+
+template <>
+ParserMode EnumUtil::FromString<ParserMode>(const char *value) {
+	if (StringUtil::Equals(value, "PARSING")) {
+		return ParserMode::PARSING;
+	}
+	if (StringUtil::Equals(value, "SNIFFING_DIALECT")) {
+		return ParserMode::SNIFFING_DIALECT;
+	}
+	if (StringUtil::Equals(value, "SNIFFING_DATATYPES")) {
+		return ParserMode::SNIFFING_DATATYPES;
+	}
+	if (StringUtil::Equals(value, "PARSING_HEADER")) {
+		return ParserMode::PARSING_HEADER;
+	}
+	throw NotImplementedException(StringUtil::Format("Enum value: '%s' not implemented", value));
+}
+
+template <>
+const char *EnumUtil::ToChars<ErrorType>(ErrorType value) {
+	switch (value) {
+	case ErrorType::UNSIGNED_EXTENSION:
+		return "UNSIGNED_EXTENSION";
+	case ErrorType::INVALIDATED_TRANSACTION:
+		return "INVALIDATED_TRANSACTION";
+	case ErrorType::INVALIDATED_DATABASE:
+		return "INVALIDATED_DATABASE";
+	case ErrorType::ERROR_COUNT:
+		return "ERROR_COUNT";
+	case ErrorType::INVALID:
+		return "INVALID";
+	default:
+		throw NotImplementedException(StringUtil::Format("Enum value: '%d' not implemented", value));
+	}
+}
+
+template <>
+ErrorType EnumUtil::FromString<ErrorType>(const char *value) {
+	if (StringUtil::Equals(value, "UNSIGNED_EXTENSION")) {
+		return ErrorType::UNSIGNED_EXTENSION;
+	}
+	if (StringUtil::Equals(value, "INVALIDATED_TRANSACTION")) {
+		return ErrorType::INVALIDATED_TRANSACTION;
+	}
+	if (StringUtil::Equals(value, "INVALIDATED_DATABASE")) {
+		return ErrorType::INVALIDATED_DATABASE;
+	}
+	if (StringUtil::Equals(value, "ERROR_COUNT")) {
+		return ErrorType::ERROR_COUNT;
+	}
+	if (StringUtil::Equals(value, "INVALID")) {
+		return ErrorType::INVALID;
+	}
+	throw NotImplementedException(StringUtil::Format("Enum value: '%s' not implemented", value));
+}
+
+template <>
+const char *EnumUtil::ToChars<AppenderType>(AppenderType value) {
+	switch (value) {
+	case AppenderType::LOGICAL:
+		return "LOGICAL";
+	case AppenderType::PHYSICAL:
+		return "PHYSICAL";
+	default:
+		throw NotImplementedException(StringUtil::Format("Enum value: '%d' not implemented", value));
+	}
+}
+
+template <>
+AppenderType EnumUtil::FromString<AppenderType>(const char *value) {
+	if (StringUtil::Equals(value, "LOGICAL")) {
+		return AppenderType::LOGICAL;
+	}
+	if (StringUtil::Equals(value, "PHYSICAL")) {
+		return AppenderType::PHYSICAL;
+	}
+	throw NotImplementedException(StringUtil::Format("Enum value: '%s' not implemented", value));
+}
+
+template <>
+const char *EnumUtil::ToChars<CheckpointAbort>(CheckpointAbort value) {
+	switch (value) {
+	case CheckpointAbort::NO_ABORT:
+		return "NO_ABORT";
+	case CheckpointAbort::DEBUG_ABORT_BEFORE_TRUNCATE:
+		return "DEBUG_ABORT_BEFORE_TRUNCATE";
+	case CheckpointAbort::DEBUG_ABORT_BEFORE_HEADER:
+		return "DEBUG_ABORT_BEFORE_HEADER";
+	case CheckpointAbort::DEBUG_ABORT_AFTER_FREE_LIST_WRITE:
+		return "DEBUG_ABORT_AFTER_FREE_LIST_WRITE";
+	default:
+		throw NotImplementedException(StringUtil::Format("Enum value: '%d' not implemented", value));
+	}
+}
+
+template <>
+CheckpointAbort EnumUtil::FromString<CheckpointAbort>(const char *value) {
+	if (StringUtil::Equals(value, "NO_ABORT")) {
+		return CheckpointAbort::NO_ABORT;
+	}
+	if (StringUtil::Equals(value, "DEBUG_ABORT_BEFORE_TRUNCATE")) {
+		return CheckpointAbort::DEBUG_ABORT_BEFORE_TRUNCATE;
+	}
+	if (StringUtil::Equals(value, "DEBUG_ABORT_BEFORE_HEADER")) {
+		return CheckpointAbort::DEBUG_ABORT_BEFORE_HEADER;
+	}
+	if (StringUtil::Equals(value, "DEBUG_ABORT_AFTER_FREE_LIST_WRITE")) {
+		return CheckpointAbort::DEBUG_ABORT_AFTER_FREE_LIST_WRITE;
+	}
+	throw NotImplementedException(StringUtil::Format("Enum value: '%s' not implemented", value));
+}
+
+template <>
+const char *EnumUtil::ToChars<ExtensionLoadResult>(ExtensionLoadResult value) {
+	switch (value) {
+	case ExtensionLoadResult::LOADED_EXTENSION:
+		return "LOADED_EXTENSION";
+	case ExtensionLoadResult::EXTENSION_UNKNOWN:
+		return "EXTENSION_UNKNOWN";
+	case ExtensionLoadResult::NOT_LOADED:
+		return "NOT_LOADED";
+	default:
+		throw NotImplementedException(StringUtil::Format("Enum value: '%d' not implemented", value));
+	}
+}
+
+template <>
+ExtensionLoadResult EnumUtil::FromString<ExtensionLoadResult>(const char *value) {
+	if (StringUtil::Equals(value, "LOADED_EXTENSION")) {
+		return ExtensionLoadResult::LOADED_EXTENSION;
+	}
+	if (StringUtil::Equals(value, "EXTENSION_UNKNOWN")) {
+		return ExtensionLoadResult::EXTENSION_UNKNOWN;
+	}
+	if (StringUtil::Equals(value, "NOT_LOADED")) {
+		return ExtensionLoadResult::NOT_LOADED;
+	}
+	throw NotImplementedException(StringUtil::Format("Enum value: '%s' not implemented", value));
+}
+
+template <>
+const char *EnumUtil::ToChars<QueryResultType>(QueryResultType value) {
+	switch (value) {
+	case QueryResultType::MATERIALIZED_RESULT:
+		return "MATERIALIZED_RESULT";
+	case QueryResultType::STREAM_RESULT:
+		return "STREAM_RESULT";
+	case QueryResultType::PENDING_RESULT:
+		return "PENDING_RESULT";
+	default:
+		throw NotImplementedException(StringUtil::Format("Enum value: '%d' not implemented", value));
+	}
+}
+
+template <>
+QueryResultType EnumUtil::FromString<QueryResultType>(const char *value) {
+	if (StringUtil::Equals(value, "MATERIALIZED_RESULT")) {
+		return QueryResultType::MATERIALIZED_RESULT;
+	}
+	if (StringUtil::Equals(value, "STREAM_RESULT")) {
+		return QueryResultType::STREAM_RESULT;
+	}
+	if (StringUtil::Equals(value, "PENDING_RESULT")) {
+		return QueryResultType::PENDING_RESULT;
+	}
+	throw NotImplementedException(StringUtil::Format("Enum value: '%s' not implemented", value));
+}
+
+template <>
+const char *EnumUtil::ToChars<CAPIResultSetType>(CAPIResultSetType value) {
+	switch (value) {
+	case CAPIResultSetType::CAPI_RESULT_TYPE_NONE:
+		return "CAPI_RESULT_TYPE_NONE";
+	case CAPIResultSetType::CAPI_RESULT_TYPE_MATERIALIZED:
+		return "CAPI_RESULT_TYPE_MATERIALIZED";
+	case CAPIResultSetType::CAPI_RESULT_TYPE_STREAMING:
+		return "CAPI_RESULT_TYPE_STREAMING";
+	case CAPIResultSetType::CAPI_RESULT_TYPE_DEPRECATED:
+		return "CAPI_RESULT_TYPE_DEPRECATED";
+	default:
+		throw NotImplementedException(StringUtil::Format("Enum value: '%d' not implemented", value));
+	}
+}
+
+template <>
+CAPIResultSetType EnumUtil::FromString<CAPIResultSetType>(const char *value) {
+	if (StringUtil::Equals(value, "CAPI_RESULT_TYPE_NONE")) {
+		return CAPIResultSetType::CAPI_RESULT_TYPE_NONE;
+	}
+	if (StringUtil::Equals(value, "CAPI_RESULT_TYPE_MATERIALIZED")) {
+		return CAPIResultSetType::CAPI_RESULT_TYPE_MATERIALIZED;
+	}
+	if (StringUtil::Equals(value, "CAPI_RESULT_TYPE_STREAMING")) {
+		return CAPIResultSetType::CAPI_RESULT_TYPE_STREAMING;
+	}
+	if (StringUtil::Equals(value, "CAPI_RESULT_TYPE_DEPRECATED")) {
+		return CAPIResultSetType::CAPI_RESULT_TYPE_DEPRECATED;
+	}
+	throw NotImplementedException(StringUtil::Format("Enum value: '%s' not implemented", value));
+}
+
+} // namespace duckdb
 
 
 
@@ -4538,6 +14954,8 @@ string CatalogTypeToString(CatalogType type) {
 		return "Table";
 	case CatalogType::SCHEMA_ENTRY:
 		return "Schema";
+	case CatalogType::DATABASE_ENTRY:
+		return "Database";
 	case CatalogType::TABLE_FUNCTION_ENTRY:
 		return "Table Function";
 	case CatalogType::SCALAR_FUNCTION_ENTRY:
@@ -4577,6 +14995,17 @@ string CatalogTypeToString(CatalogType type) {
 namespace duckdb {
 
 // LCOV_EXCL_START
+
+vector<string> ListCompressionTypes(void) {
+	vector<string> compression_types;
+	uint8_t amount_of_compression_options = (uint8_t)CompressionType::COMPRESSION_COUNT;
+	compression_types.reserve(amount_of_compression_options);
+	for (uint8_t i = 0; i < amount_of_compression_options; i++) {
+		compression_types.push_back(CompressionTypeToString((CompressionType)i));
+	}
+	return compression_types;
+}
+
 CompressionType CompressionTypeFromString(const string &str) {
 	auto compression = StringUtil::Lower(str);
 	if (compression == "uncompressed") {
@@ -4591,6 +15020,10 @@ CompressionType CompressionTypeFromString(const string &str) {
 		return CompressionType::COMPRESSION_BITPACKING;
 	} else if (compression == "fsst") {
 		return CompressionType::COMPRESSION_FSST;
+	} else if (compression == "chimp") {
+		return CompressionType::COMPRESSION_CHIMP;
+	} else if (compression == "patas") {
+		return CompressionType::COMPRESSION_PATAS;
 	} else {
 		return CompressionType::COMPRESSION_AUTO;
 	}
@@ -4598,6 +15031,8 @@ CompressionType CompressionTypeFromString(const string &str) {
 
 string CompressionTypeToString(CompressionType type) {
 	switch (type) {
+	case CompressionType::COMPRESSION_AUTO:
+		return "Auto";
 	case CompressionType::COMPRESSION_UNCOMPRESSED:
 		return "Uncompressed";
 	case CompressionType::COMPRESSION_CONSTANT:
@@ -4612,6 +15047,10 @@ string CompressionTypeToString(CompressionType type) {
 		return "BitPacking";
 	case CompressionType::COMPRESSION_FSST:
 		return "FSST";
+	case CompressionType::COMPRESSION_CHIMP:
+		return "Chimp";
+	case CompressionType::COMPRESSION_PATAS:
+		return "Patas";
 	default:
 		throw InternalException("Unrecognized compression type!");
 	}
@@ -4622,10 +15061,92 @@ string CompressionTypeToString(CompressionType type) {
 
 
 
+namespace duckdb {
+
+bool TryGetDatePartSpecifier(const string &specifier_p, DatePartSpecifier &result) {
+	auto specifier = StringUtil::Lower(specifier_p);
+	if (specifier == "year" || specifier == "yr" || specifier == "y" || specifier == "years" || specifier == "yrs") {
+		result = DatePartSpecifier::YEAR;
+	} else if (specifier == "month" || specifier == "mon" || specifier == "months" || specifier == "mons") {
+		result = DatePartSpecifier::MONTH;
+	} else if (specifier == "day" || specifier == "days" || specifier == "d" || specifier == "dayofmonth") {
+		result = DatePartSpecifier::DAY;
+	} else if (specifier == "decade" || specifier == "dec" || specifier == "decades" || specifier == "decs") {
+		result = DatePartSpecifier::DECADE;
+	} else if (specifier == "century" || specifier == "cent" || specifier == "centuries" || specifier == "c") {
+		result = DatePartSpecifier::CENTURY;
+	} else if (specifier == "millennium" || specifier == "mil" || specifier == "millenniums" ||
+	           specifier == "millennia" || specifier == "mils" || specifier == "millenium") {
+		result = DatePartSpecifier::MILLENNIUM;
+	} else if (specifier == "microseconds" || specifier == "microsecond" || specifier == "us" || specifier == "usec" ||
+	           specifier == "usecs" || specifier == "usecond" || specifier == "useconds") {
+		result = DatePartSpecifier::MICROSECONDS;
+	} else if (specifier == "milliseconds" || specifier == "millisecond" || specifier == "ms" || specifier == "msec" ||
+	           specifier == "msecs" || specifier == "msecond" || specifier == "mseconds") {
+		result = DatePartSpecifier::MILLISECONDS;
+	} else if (specifier == "second" || specifier == "sec" || specifier == "seconds" || specifier == "secs" ||
+	           specifier == "s") {
+		result = DatePartSpecifier::SECOND;
+	} else if (specifier == "minute" || specifier == "min" || specifier == "minutes" || specifier == "mins" ||
+	           specifier == "m") {
+		result = DatePartSpecifier::MINUTE;
+	} else if (specifier == "hour" || specifier == "hr" || specifier == "hours" || specifier == "hrs" ||
+	           specifier == "h") {
+		result = DatePartSpecifier::HOUR;
+	} else if (specifier == "epoch") {
+		// seconds since 1970-01-01
+		result = DatePartSpecifier::EPOCH;
+	} else if (specifier == "dow" || specifier == "dayofweek" || specifier == "weekday") {
+		// day of the week (Sunday = 0, Saturday = 6)
+		result = DatePartSpecifier::DOW;
+	} else if (specifier == "isodow") {
+		// isodow (Monday = 1, Sunday = 7)
+		result = DatePartSpecifier::ISODOW;
+	} else if (specifier == "week" || specifier == "weeks" || specifier == "w" || specifier == "weekofyear") {
+		// ISO week number
+		result = DatePartSpecifier::WEEK;
+	} else if (specifier == "doy" || specifier == "dayofyear") {
+		// day of the year (1-365/366)
+		result = DatePartSpecifier::DOY;
+	} else if (specifier == "quarter" || specifier == "quarters") {
+		// quarter of the year (1-4)
+		result = DatePartSpecifier::QUARTER;
+	} else if (specifier == "yearweek") {
+		// Combined isoyear and isoweek YYYYWW
+		result = DatePartSpecifier::YEARWEEK;
+	} else if (specifier == "isoyear") {
+		// ISO year (first week of the year may be in previous year)
+		result = DatePartSpecifier::ISOYEAR;
+	} else if (specifier == "era") {
+		result = DatePartSpecifier::ERA;
+	} else if (specifier == "timezone") {
+		result = DatePartSpecifier::TIMEZONE;
+	} else if (specifier == "timezone_hour") {
+		result = DatePartSpecifier::TIMEZONE_HOUR;
+	} else if (specifier == "timezone_minute") {
+		result = DatePartSpecifier::TIMEZONE_MINUTE;
+	} else {
+		return false;
+	}
+	return true;
+}
+
+DatePartSpecifier GetDatePartSpecifier(const string &specifier) {
+	DatePartSpecifier result;
+	if (!TryGetDatePartSpecifier(specifier, result)) {
+		throw ConversionException("extract specifier \"%s\" not recognized", specifier);
+	}
+	return result;
+}
+
+} // namespace duckdb
+
+
+
+
 
 namespace duckdb {
 
-// LCOV_EXCL_START
 string ExpressionTypeToString(ExpressionType type) {
 	switch (type) {
 	case ExpressionType::OPERATOR_CAST:
@@ -4754,6 +15275,8 @@ string ExpressionTypeToString(ExpressionType type) {
 		return "COLLATE";
 	case ExpressionType::POSITIONAL_REFERENCE:
 		return "POSITIONAL_REFERENCE";
+	case ExpressionType::BOUND_LAMBDA_REF:
+		return "BOUND_LAMBDA_REF";
 	case ExpressionType::LAMBDA:
 		return "LAMBDA";
 	case ExpressionType::ARROW:
@@ -4763,7 +15286,86 @@ string ExpressionTypeToString(ExpressionType type) {
 	}
 	return "INVALID";
 }
-// LCOV_EXCL_STOP
+string ExpressionClassToString(ExpressionClass type) {
+	switch (type) {
+	case ExpressionClass::INVALID:
+		return "INVALID";
+	case ExpressionClass::AGGREGATE:
+		return "AGGREGATE";
+	case ExpressionClass::CASE:
+		return "CASE";
+	case ExpressionClass::CAST:
+		return "CAST";
+	case ExpressionClass::COLUMN_REF:
+		return "COLUMN_REF";
+	case ExpressionClass::COMPARISON:
+		return "COMPARISON";
+	case ExpressionClass::CONJUNCTION:
+		return "CONJUNCTION";
+	case ExpressionClass::CONSTANT:
+		return "CONSTANT";
+	case ExpressionClass::DEFAULT:
+		return "DEFAULT";
+	case ExpressionClass::FUNCTION:
+		return "FUNCTION";
+	case ExpressionClass::OPERATOR:
+		return "OPERATOR";
+	case ExpressionClass::STAR:
+		return "STAR";
+	case ExpressionClass::SUBQUERY:
+		return "SUBQUERY";
+	case ExpressionClass::WINDOW:
+		return "WINDOW";
+	case ExpressionClass::PARAMETER:
+		return "PARAMETER";
+	case ExpressionClass::COLLATE:
+		return "COLLATE";
+	case ExpressionClass::LAMBDA:
+		return "LAMBDA";
+	case ExpressionClass::POSITIONAL_REFERENCE:
+		return "POSITIONAL_REFERENCE";
+	case ExpressionClass::BETWEEN:
+		return "BETWEEN";
+	case ExpressionClass::BOUND_AGGREGATE:
+		return "BOUND_AGGREGATE";
+	case ExpressionClass::BOUND_CASE:
+		return "BOUND_CASE";
+	case ExpressionClass::BOUND_CAST:
+		return "BOUND_CAST";
+	case ExpressionClass::BOUND_COLUMN_REF:
+		return "BOUND_COLUMN_REF";
+	case ExpressionClass::BOUND_COMPARISON:
+		return "BOUND_COMPARISON";
+	case ExpressionClass::BOUND_CONJUNCTION:
+		return "BOUND_CONJUNCTION";
+	case ExpressionClass::BOUND_CONSTANT:
+		return "BOUND_CONSTANT";
+	case ExpressionClass::BOUND_DEFAULT:
+		return "BOUND_DEFAULT";
+	case ExpressionClass::BOUND_FUNCTION:
+		return "BOUND_FUNCTION";
+	case ExpressionClass::BOUND_OPERATOR:
+		return "BOUND_OPERATOR";
+	case ExpressionClass::BOUND_PARAMETER:
+		return "BOUND_PARAMETER";
+	case ExpressionClass::BOUND_REF:
+		return "BOUND_REF";
+	case ExpressionClass::BOUND_SUBQUERY:
+		return "BOUND_SUBQUERY";
+	case ExpressionClass::BOUND_WINDOW:
+		return "BOUND_WINDOW";
+	case ExpressionClass::BOUND_BETWEEN:
+		return "BOUND_BETWEEN";
+	case ExpressionClass::BOUND_UNNEST:
+		return "BOUND_UNNEST";
+	case ExpressionClass::BOUND_LAMBDA:
+		return "BOUND_LAMBDA";
+	case ExpressionClass::BOUND_EXPRESSION:
+		return "BOUND_EXPRESSION";
+	default:
+		return "ExpressionClass::!!UNIMPLEMENTED_CASE!!";
+	}
+}
 
 string ExpressionTypeToOperator(ExpressionType type) {
 	switch (type) {
@@ -4792,7 +15394,7 @@ string ExpressionTypeToOperator(ExpressionType type) {
 	}
 }
 
-ExpressionType NegateComparisionExpression(ExpressionType type) {
+ExpressionType NegateComparisonExpression(ExpressionType type) {
 	ExpressionType negated_type = ExpressionType::INVALID;
 	switch (type) {
 	case ExpressionType::COMPARE_EQUAL:
@@ -4819,7 +15421,7 @@ ExpressionType NegateComparisionExpression(ExpressionType type) {
 	return negated_type;
 }
 
-ExpressionType FlipComparisionExpression(ExpressionType type) {
+ExpressionType FlipComparisonExpression(ExpressionType type) {
 	ExpressionType flipped_type = ExpressionType::INVALID;
 	switch (type) {
 	case ExpressionType::COMPARE_NOT_DISTINCT_FROM:
@@ -4887,31 +15489,8 @@ FileCompressionType FileCompressionTypeFromString(const string &input) {
 } // namespace duckdb
 
 
-namespace duckdb {
 
-string JoinTypeToString(JoinType type) {
-	switch (type) {
-	case JoinType::LEFT:
-		return "LEFT";
-	case JoinType::RIGHT:
-		return "RIGHT";
-	case JoinType::INNER:
-		return "INNER";
-	case JoinType::OUTER:
-		return "FULL";
-	case JoinType::SEMI:
-		return "SEMI";
-	case JoinType::ANTI:
-		return "ANTI";
-	case JoinType::SINGLE:
-		return "SINGLE";
-	case JoinType::MARK:
-		return "MARK";
-	case JoinType::INVALID: // LCOV_EXCL_START
-		break;
-	}
-	return "INVALID";
-} // LCOV_EXCL_STOP
+namespace duckdb {
 
 bool IsLeftOuterJoin(JoinType type) {
 	return type == JoinType::LEFT || type == JoinType::OUTER;
@@ -4919,6 +15498,11 @@ bool IsLeftOuterJoin(JoinType type) {
 
 bool IsRightOuterJoin(JoinType type) {
 	return type == JoinType::OUTER || type == JoinType::RIGHT;
+}
+
+// **DEPRECATED**: Use EnumUtil directly instead.
+string JoinTypeToString(JoinType type) {
+	return EnumUtil::ToString(type);
 }
 
 } // namespace duckdb
@@ -4944,6 +15528,8 @@ string LogicalOperatorToString(LogicalOperatorType type) {
 		return "EXPRESSION_GET";
 	case LogicalOperatorType::LOGICAL_ANY_JOIN:
 		return "ANY_JOIN";
+	case LogicalOperatorType::LOGICAL_ASOF_JOIN:
+		return "ASOF_JOIN";
 	case LogicalOperatorType::LOGICAL_COMPARISON_JOIN:
 		return "COMPARISON_JOIN";
 	case LogicalOperatorType::LOGICAL_DELIM_JOIN:
@@ -4974,6 +15560,8 @@ string LogicalOperatorToString(LogicalOperatorType type) {
 		return "JOIN";
 	case LogicalOperatorType::LOGICAL_CROSS_PRODUCT:
 		return "CROSS_PRODUCT";
+	case LogicalOperatorType::LOGICAL_POSITIONAL_JOIN:
+		return "POSITIONAL_JOIN";
 	case LogicalOperatorType::LOGICAL_UNION:
 		return "UNION";
 	case LogicalOperatorType::LOGICAL_EXCEPT:
@@ -5020,6 +15608,10 @@ string LogicalOperatorToString(LogicalOperatorType type) {
 		return "CREATE_VIEW";
 	case LogicalOperatorType::LOGICAL_CREATE_SCHEMA:
 		return "CREATE_SCHEMA";
+	case LogicalOperatorType::LOGICAL_ATTACH:
+		return "ATTACH";
+	case LogicalOperatorType::LOGICAL_DETACH:
+		return "ATTACH";
 	case LogicalOperatorType::LOGICAL_DROP:
 		return "DROP";
 	case LogicalOperatorType::LOGICAL_PRAGMA:
@@ -5030,10 +15622,16 @@ string LogicalOperatorToString(LogicalOperatorType type) {
 		return "EXPORT";
 	case LogicalOperatorType::LOGICAL_SET:
 		return "SET";
+	case LogicalOperatorType::LOGICAL_RESET:
+		return "RESET";
 	case LogicalOperatorType::LOGICAL_LOAD:
 		return "LOAD";
 	case LogicalOperatorType::LOGICAL_INVALID:
 		break;
+	case LogicalOperatorType::LOGICAL_EXTENSION_OPERATOR:
+		return "CUSTOM_OP";
+	case LogicalOperatorType::LOGICAL_PIVOT:
+		return "PIVOT";
 	}
 	return "INVALID";
 }
@@ -5060,6 +15658,7 @@ static DefaultOptimizerType internal_optimizer_types[] = {
     {"in_clause", OptimizerType::IN_CLAUSE},
     {"join_order", OptimizerType::JOIN_ORDER},
     {"deliminator", OptimizerType::DELIMINATOR},
+    {"unnest_rewriter", OptimizerType::UNNEST_REWRITER},
     {"unused_columns", OptimizerType::UNUSED_COLUMNS},
     {"statistics_propagation", OptimizerType::STATISTICS_PROPAGATION},
     {"common_subexpressions", OptimizerType::COMMON_SUBEXPRESSIONS},
@@ -5067,6 +15666,7 @@ static DefaultOptimizerType internal_optimizer_types[] = {
     {"column_lifetime", OptimizerType::COLUMN_LIFETIME},
     {"top_n", OptimizerType::TOP_N},
     {"reorder_filter", OptimizerType::REORDER_FILTER},
+    {"extension", OptimizerType::EXTENSION},
     {nullptr, OptimizerType::INVALID}};
 
 string OptimizerTypeToString(OptimizerType type) {
@@ -5107,6 +15707,8 @@ string PhysicalOperatorToString(PhysicalOperatorType type) {
 		return "DUMMY_SCAN";
 	case PhysicalOperatorType::CHUNK_SCAN:
 		return "CHUNK_SCAN";
+	case PhysicalOperatorType::COLUMN_DATA_SCAN:
+		return "COLUMN_DATA_SCAN";
 	case PhysicalOperatorType::DELIM_SCAN:
 		return "DELIM_SCAN";
 	case PhysicalOperatorType::ORDER_BY:
@@ -5129,8 +15731,8 @@ string PhysicalOperatorToString(PhysicalOperatorType type) {
 		return "STREAMING_WINDOW";
 	case PhysicalOperatorType::UNNEST:
 		return "UNNEST";
-	case PhysicalOperatorType::SIMPLE_AGGREGATE:
-		return "SIMPLE_AGGREGATE";
+	case PhysicalOperatorType::UNGROUPED_AGGREGATE:
+		return "UNGROUPED_AGGREGATE";
 	case PhysicalOperatorType::HASH_GROUP_BY:
 		return "HASH_GROUP_BY";
 	case PhysicalOperatorType::PERFECT_HASH_GROUP_BY:
@@ -5141,6 +15743,10 @@ string PhysicalOperatorToString(PhysicalOperatorType type) {
 		return "PROJECTION";
 	case PhysicalOperatorType::COPY_TO_FILE:
 		return "COPY_TO_FILE";
+	case PhysicalOperatorType::BATCH_COPY_TO_FILE:
+		return "BATCH_COPY_TO_FILE";
+	case PhysicalOperatorType::FIXED_BATCH_COPY_TO_FILE:
+		return "FIXED_BATCH_COPY_TO_FILE";
 	case PhysicalOperatorType::DELIM_JOIN:
 		return "DELIM_JOIN";
 	case PhysicalOperatorType::BLOCKWISE_NL_JOIN:
@@ -5155,12 +15761,20 @@ string PhysicalOperatorToString(PhysicalOperatorType type) {
 		return "PIECEWISE_MERGE_JOIN";
 	case PhysicalOperatorType::IE_JOIN:
 		return "IE_JOIN";
+	case PhysicalOperatorType::ASOF_JOIN:
+		return "ASOF_JOIN";
 	case PhysicalOperatorType::CROSS_PRODUCT:
 		return "CROSS_PRODUCT";
+	case PhysicalOperatorType::POSITIONAL_JOIN:
+		return "POSITIONAL_JOIN";
+	case PhysicalOperatorType::POSITIONAL_SCAN:
+		return "POSITIONAL_SCAN";
 	case PhysicalOperatorType::UNION:
 		return "UNION";
 	case PhysicalOperatorType::INSERT:
 		return "INSERT";
+	case PhysicalOperatorType::BATCH_INSERT:
+		return "BATCH_INSERT";
 	case PhysicalOperatorType::DELETE_OPERATOR:
 		return "DELETE";
 	case PhysicalOperatorType::UPDATE:
@@ -5171,6 +15785,8 @@ string PhysicalOperatorToString(PhysicalOperatorType type) {
 		return "CREATE_TABLE";
 	case PhysicalOperatorType::CREATE_TABLE_AS:
 		return "CREATE_TABLE_AS";
+	case PhysicalOperatorType::BATCH_CREATE_TABLE_AS:
+		return "BATCH_CREATE_TABLE_AS";
 	case PhysicalOperatorType::CREATE_INDEX:
 		return "CREATE_INDEX";
 	case PhysicalOperatorType::EXPLAIN:
@@ -5209,14 +15825,24 @@ string PhysicalOperatorToString(PhysicalOperatorType type) {
 		return "EXPORT";
 	case PhysicalOperatorType::SET:
 		return "SET";
+	case PhysicalOperatorType::RESET:
+		return "RESET";
 	case PhysicalOperatorType::LOAD:
 		return "LOAD";
 	case PhysicalOperatorType::INOUT_FUNCTION:
 		return "INOUT_FUNCTION";
 	case PhysicalOperatorType::CREATE_TYPE:
 		return "CREATE_TYPE";
+	case PhysicalOperatorType::ATTACH:
+		return "ATTACH";
+	case PhysicalOperatorType::DETACH:
+		return "DETACH";
 	case PhysicalOperatorType::RESULT_COLLECTOR:
 		return "RESULT_COLLECTOR";
+	case PhysicalOperatorType::EXTENSION:
+		return "EXTENSION";
+	case PhysicalOperatorType::PIVOT:
+		return "PIVOT";
 	case PhysicalOperatorType::INVALID:
 		break;
 	}
@@ -5270,6 +15896,8 @@ string RelationTypeToString(RelationType type) {
 		return "UPDATE_RELATION";
 	case RelationType::WRITE_CSV_RELATION:
 		return "WRITE_CSV_RELATION";
+	case RelationType::WRITE_PARQUET_RELATION:
+		return "WRITE_PARQUET_RELATION";
 	case RelationType::READ_CSV_RELATION:
 		return "READ_CSV_RELATION";
 	case RelationType::SUBQUERY_RELATION:
@@ -5343,6 +15971,14 @@ string StatementTypeToString(StatementType type) {
 		return "LOAD";
 	case StatementType::EXTENSION_STATEMENT:
 		return "EXTENSION";
+	case StatementType::LOGICAL_PLAN_STATEMENT:
+		return "LOGICAL_PLAN";
+	case StatementType::ATTACH_STATEMENT:
+		return "ATTACH";
+	case StatementType::DETACH_STATEMENT:
+		return "DETACH";
+	case StatementType::MULTI_STATEMENT:
+		return "MULTI";
 	case StatementType::INVALID_STATEMENT:
 		break;
 	}
@@ -5369,18 +16005,32 @@ string StatementReturnTypeToString(StatementReturnType type) {
 
 
 
+#ifdef DUCKDB_CRASH_ON_ASSERT
+
+#include <stdio.h>
+#include <stdlib.h>
+#endif
+#ifdef DUCKDB_DEBUG_STACKTRACE
+#include <execinfo.h>
+#endif
+
 namespace duckdb {
 
-Exception::Exception(const string &msg) : std::exception(), type(ExceptionType::INVALID) {
+Exception::Exception(const string &msg) : std::exception(), type(ExceptionType::INVALID), raw_message_(msg) {
 	exception_message_ = msg;
 }
 
-Exception::Exception(ExceptionType exception_type, const string &message) : std::exception(), type(exception_type) {
+Exception::Exception(ExceptionType exception_type, const string &message)
+    : std::exception(), type(exception_type), raw_message_(message) {
 	exception_message_ = ExceptionTypeToString(exception_type) + " Error: " + message;
 }
 
 const char *Exception::what() const noexcept {
 	return exception_message_.c_str();
+}
+
+const string &Exception::RawMessage() const {
+	return raw_message_;
 }
 
 bool Exception::UncaughtException() {
@@ -5391,7 +16041,42 @@ bool Exception::UncaughtException() {
 #endif
 }
 
-string Exception::ConstructMessageRecursive(const string &msg, vector<ExceptionFormatValue> &values) {
+string Exception::GetStackTrace(int max_depth) {
+#ifdef DUCKDB_DEBUG_STACKTRACE
+	string result;
+	auto callstack = unique_ptr<void *[]>(new void *[max_depth]);
+	int frames = backtrace(callstack.get(), max_depth);
+	char **strs = backtrace_symbols(callstack.get(), frames);
+	for (int i = 0; i < frames; i++) {
+		result += strs[i];
+		result += "\n";
+	}
+	free(strs);
+	return "\n" + result;
+#else
+	// Stack trace not available. Toggle DUCKDB_DEBUG_STACKTRACE in exception.cpp to enable stack traces.
+	return "";
+#endif
+}
+
+string Exception::ConstructMessageRecursive(const string &msg, std::vector<ExceptionFormatValue> &values) {
+#ifdef DEBUG
+	// Verify that we have the required amount of values for the message
+	idx_t parameter_count = 0;
+	for (idx_t i = 0; i < msg.size(); i++) {
+		if (msg[i] != '%') {
+			continue;
+		}
+		if (i < msg.size() && msg[i + 1] == '%') {
+			i++;
+			continue;
+		}
+		parameter_count++;
+	}
+	if (parameter_count != values.size()) {
+		throw InternalException("Expected %d parameters, received %d", parameter_count, values.size());
+	}
+#endif
 	return ExceptionFormatValue::Format(msg, values);
 }
 
@@ -5465,8 +16150,81 @@ string Exception::ExceptionTypeToString(ExceptionType type) {
 		return "Out of Memory";
 	case ExceptionType::PERMISSION:
 		return "Permission";
+	case ExceptionType::PARAMETER_NOT_RESOLVED:
+		return "Parameter Not Resolved";
+	case ExceptionType::PARAMETER_NOT_ALLOWED:
+		return "Parameter Not Allowed";
+	case ExceptionType::DEPENDENCY:
+		return "Dependency";
+	case ExceptionType::HTTP:
+		return "HTTP";
 	default:
 		return "Unknown";
+	}
+}
+
+const HTTPException &Exception::AsHTTPException() const {
+	D_ASSERT(type == ExceptionType::HTTP);
+	const auto &e = static_cast<const HTTPException *>(this);
+	D_ASSERT(e->GetStatusCode() != 0);
+	D_ASSERT(e->GetHeaders().size() > 0);
+	return *e;
+}
+
+void Exception::ThrowAsTypeWithMessage(ExceptionType type, const string &message,
+                                       const std::shared_ptr<Exception> &original) {
+	switch (type) {
+	case ExceptionType::OUT_OF_RANGE:
+		throw OutOfRangeException(message);
+	case ExceptionType::CONVERSION:
+		throw ConversionException(message); // FIXME: make a separation between Conversion/Cast exception?
+	case ExceptionType::INVALID_TYPE:
+		throw InvalidTypeException(message);
+	case ExceptionType::MISMATCH_TYPE:
+		throw TypeMismatchException(message);
+	case ExceptionType::TRANSACTION:
+		throw TransactionException(message);
+	case ExceptionType::NOT_IMPLEMENTED:
+		throw NotImplementedException(message);
+	case ExceptionType::CATALOG:
+		throw CatalogException(message);
+	case ExceptionType::CONNECTION:
+		throw ConnectionException(message);
+	case ExceptionType::PARSER:
+		throw ParserException(message);
+	case ExceptionType::PERMISSION:
+		throw PermissionException(message);
+	case ExceptionType::SYNTAX:
+		throw SyntaxException(message);
+	case ExceptionType::CONSTRAINT:
+		throw ConstraintException(message);
+	case ExceptionType::BINDER:
+		throw BinderException(message);
+	case ExceptionType::IO:
+		throw IOException(message);
+	case ExceptionType::SERIALIZATION:
+		throw SerializationException(message);
+	case ExceptionType::INTERRUPT:
+		throw InterruptException();
+	case ExceptionType::INTERNAL:
+		throw InternalException(message);
+	case ExceptionType::INVALID_INPUT:
+		throw InvalidInputException(message);
+	case ExceptionType::OUT_OF_MEMORY:
+		throw OutOfMemoryException(message);
+	case ExceptionType::PARAMETER_NOT_ALLOWED:
+		throw ParameterNotAllowedException(message);
+	case ExceptionType::PARAMETER_NOT_RESOLVED:
+		throw ParameterNotResolvedException();
+	case ExceptionType::FATAL:
+		throw FatalException(message);
+	case ExceptionType::DEPENDENCY:
+		throw DependencyException(message);
+	case ExceptionType::HTTP: {
+		original->AsHTTPException().Throw();
+	}
+	default:
+		throw Exception(type, message);
 	}
 }
 
@@ -5482,6 +16240,9 @@ CastException::CastException(const PhysicalType orig_type, const PhysicalType ne
 CastException::CastException(const LogicalType &orig_type, const LogicalType &new_type)
     : Exception(ExceptionType::CONVERSION,
                 "Type " + orig_type.ToString() + " can't be cast as " + new_type.ToString()) {
+}
+
+CastException::CastException(const string &msg) : Exception(ExceptionType::CONVERSION, msg) {
 }
 
 ValueOutOfRangeException::ValueOutOfRangeException(const int64_t value, const PhysicalType orig_type,
@@ -5514,6 +16275,9 @@ ValueOutOfRangeException::ValueOutOfRangeException(const PhysicalType var_type, 
                 "The value is too long to fit into type " + TypeIdToString(var_type) + "(" + to_string(length) + ")") {
 }
 
+ValueOutOfRangeException::ValueOutOfRangeException(const string &msg) : Exception(ExceptionType::OUT_OF_RANGE, msg) {
+}
+
 ConversionException::ConversionException(const string &msg) : Exception(ExceptionType::CONVERSION, msg) {
 }
 
@@ -5525,6 +16289,9 @@ InvalidTypeException::InvalidTypeException(const LogicalType &type, const string
     : Exception(ExceptionType::INVALID_TYPE, "Invalid Type [" + type.ToString() + "]: " + msg) {
 }
 
+InvalidTypeException::InvalidTypeException(const string &msg) : Exception(ExceptionType::INVALID_TYPE, msg) {
+}
+
 TypeMismatchException::TypeMismatchException(const PhysicalType type_1, const PhysicalType type_2, const string &msg)
     : Exception(ExceptionType::MISMATCH_TYPE,
                 "Type " + TypeIdToString(type_1) + " does not match with " + TypeIdToString(type_2) + ". " + msg) {
@@ -5533,6 +16300,9 @@ TypeMismatchException::TypeMismatchException(const PhysicalType type_1, const Ph
 TypeMismatchException::TypeMismatchException(const LogicalType &type_1, const LogicalType &type_2, const string &msg)
     : Exception(ExceptionType::MISMATCH_TYPE,
                 "Type " + type_1.ToString() + " does not match with " + type_2.ToString() + ". " + msg) {
+}
+
+TypeMismatchException::TypeMismatchException(const string &msg) : Exception(ExceptionType::MISMATCH_TYPE, msg) {
 }
 
 TransactionException::TransactionException(const string &msg) : Exception(ExceptionType::TRANSACTION, msg) {
@@ -5547,6 +16317,9 @@ OutOfRangeException::OutOfRangeException(const string &msg) : Exception(Exceptio
 CatalogException::CatalogException(const string &msg) : StandardException(ExceptionType::CATALOG, msg) {
 }
 
+ConnectionException::ConnectionException(const string &msg) : StandardException(ExceptionType::CONNECTION, msg) {
+}
+
 ParserException::ParserException(const string &msg) : StandardException(ExceptionType::PARSER, msg) {
 }
 
@@ -5559,10 +16332,17 @@ SyntaxException::SyntaxException(const string &msg) : Exception(ExceptionType::S
 ConstraintException::ConstraintException(const string &msg) : Exception(ExceptionType::CONSTRAINT, msg) {
 }
 
+DependencyException::DependencyException(const string &msg) : Exception(ExceptionType::DEPENDENCY, msg) {
+}
+
 BinderException::BinderException(const string &msg) : StandardException(ExceptionType::BINDER, msg) {
 }
 
 IOException::IOException(const string &msg) : Exception(ExceptionType::IO, msg) {
+}
+
+MissingExtensionException::MissingExtensionException(const string &msg)
+    : Exception(ExceptionType::MISSING_EXTENSION, msg) {
 }
 
 SerializationException::SerializationException(const string &msg) : Exception(ExceptionType::SERIALIZATION, msg) {
@@ -5574,10 +16354,14 @@ SequenceException::SequenceException(const string &msg) : Exception(ExceptionTyp
 InterruptException::InterruptException() : Exception(ExceptionType::INTERRUPT, "Interrupted!") {
 }
 
-FatalException::FatalException(const string &msg) : Exception(ExceptionType::FATAL, msg) {
+FatalException::FatalException(ExceptionType type, const string &msg) : Exception(type, msg) {
 }
 
-InternalException::InternalException(const string &msg) : Exception(ExceptionType::INTERNAL, msg) {
+InternalException::InternalException(const string &msg) : FatalException(ExceptionType::INTERNAL, msg) {
+#ifdef DUCKDB_CRASH_ON_ASSERT
+	Printer::Print("ABORT THROWN BY INTERNAL EXCEPTION: " + msg);
+	abort();
+#endif
 }
 
 InvalidInputException::InvalidInputException(const string &msg) : Exception(ExceptionType::INVALID_INPUT, msg) {
@@ -5586,7 +16370,16 @@ InvalidInputException::InvalidInputException(const string &msg) : Exception(Exce
 OutOfMemoryException::OutOfMemoryException(const string &msg) : Exception(ExceptionType::OUT_OF_MEMORY, msg) {
 }
 
+ParameterNotAllowedException::ParameterNotAllowedException(const string &msg)
+    : StandardException(ExceptionType::PARAMETER_NOT_ALLOWED, msg) {
+}
+
+ParameterNotResolvedException::ParameterNotResolvedException()
+    : Exception(ExceptionType::PARAMETER_NOT_RESOLVED, "Parameter types could not be resolved") {
+}
+
 } // namespace duckdb
+
 
 
 
@@ -5605,7 +16398,7 @@ ExceptionFormatValue::ExceptionFormatValue(hugeint_t huge_val)
     : type(ExceptionFormatValueType::FORMAT_VALUE_TYPE_STRING), str_val(Hugeint::ToString(huge_val)) {
 }
 ExceptionFormatValue::ExceptionFormatValue(string str_val)
-    : type(ExceptionFormatValueType::FORMAT_VALUE_TYPE_STRING), str_val(move(str_val)) {
+    : type(ExceptionFormatValueType::FORMAT_VALUE_TYPE_STRING), str_val(std::move(str_val)) {
 }
 
 template <>
@@ -5627,8 +16420,21 @@ ExceptionFormatValue ExceptionFormatValue::CreateFormatValue(double value) {
 }
 template <>
 ExceptionFormatValue ExceptionFormatValue::CreateFormatValue(string value) {
-	return ExceptionFormatValue(move(value));
+	return ExceptionFormatValue(std::move(value));
 }
+
+template <>
+ExceptionFormatValue
+ExceptionFormatValue::CreateFormatValue(SQLString value) { // NOLINT: templating requires us to copy value here
+	return KeywordHelper::WriteQuoted(value.raw_string, '\'');
+}
+
+template <>
+ExceptionFormatValue
+ExceptionFormatValue::CreateFormatValue(SQLIdentifier value) { // NOLINT: templating requires us to copy value here
+	return KeywordHelper::WriteOptionallyQuoted(value.raw_string, '"');
+}
+
 template <>
 ExceptionFormatValue ExceptionFormatValue::CreateFormatValue(const char *value) {
 	return ExceptionFormatValue(string(value));
@@ -5642,7 +16448,7 @@ ExceptionFormatValue ExceptionFormatValue::CreateFormatValue(hugeint_t value) {
 	return ExceptionFormatValue(value);
 }
 
-string ExceptionFormatValue::Format(const string &msg, vector<ExceptionFormatValue> &values) {
+string ExceptionFormatValue::Format(const string &msg, std::vector<ExceptionFormatValue> &values) {
 	std::vector<duckdb_fmt::basic_format_arg<duckdb_fmt::printf_context>> format_args;
 	for (auto &val : values) {
 		switch (val.type) {
@@ -5670,7 +16476,9 @@ namespace duckdb {
 // Field Writer
 //===--------------------------------------------------------------------===//
 FieldWriter::FieldWriter(Serializer &serializer_p)
-    : serializer(serializer_p), buffer(make_unique<BufferedSerializer>()), field_count(0), finalized(false) {
+    : serializer(serializer_p), buffer(make_uniq<BufferedSerializer>()), field_count(0), finalized(false) {
+	buffer->SetVersion(serializer.GetVersion());
+	buffer->is_query_plan = serializer.is_query_plan;
 }
 
 FieldWriter::~FieldWriter() {
@@ -5710,6 +16518,7 @@ void FieldWriter::Finalize() {
 // Field Deserializer
 //===--------------------------------------------------------------------===//
 FieldDeserializer::FieldDeserializer(Deserializer &root) : root(root), remaining_data(idx_t(-1)) {
+	SetVersion(root.GetVersion());
 }
 
 void FieldDeserializer::ReadData(data_ptr_t buffer, idx_t read_size) {
@@ -5768,11 +16577,19 @@ void FieldReader::Finalize() {
 
 namespace duckdb {
 
-FileBuffer::FileBuffer(Allocator &allocator, FileBufferType type, uint64_t bufsiz)
-    : allocator(allocator), type(type), malloced_buffer(nullptr) {
-	SetMallocedSize(bufsiz);
-	malloced_buffer = allocator.AllocateData(malloced_size);
-	Construct(bufsiz);
+FileBuffer::FileBuffer(Allocator &allocator, FileBufferType type, uint64_t user_size)
+    : allocator(allocator), type(type) {
+	Init();
+	if (user_size) {
+		Resize(user_size);
+	}
+}
+
+void FileBuffer::Init() {
+	buffer = nullptr;
+	size = 0;
+	internal_buffer = nullptr;
+	internal_size = 0;
 }
 
 FileBuffer::FileBuffer(FileBuffer &source, FileBufferType type_p) : allocator(source.allocator), type(type_p) {
@@ -5781,84 +16598,84 @@ FileBuffer::FileBuffer(FileBuffer &source, FileBufferType type_p) : allocator(so
 	size = source.size;
 	internal_buffer = source.internal_buffer;
 	internal_size = source.internal_size;
-	malloced_buffer = source.malloced_buffer;
-	malloced_size = source.malloced_size;
 
-	source.buffer = nullptr;
-	source.size = 0;
-	source.internal_buffer = nullptr;
-	source.internal_size = 0;
-	source.malloced_buffer = nullptr;
-	source.malloced_size = 0;
+	source.Init();
 }
 
 FileBuffer::~FileBuffer() {
-	if (!malloced_buffer) {
+	if (!internal_buffer) {
 		return;
 	}
-	allocator.FreeData(malloced_buffer, malloced_size);
+	allocator.FreeData(internal_buffer, internal_size);
 }
 
-void FileBuffer::SetMallocedSize(uint64_t &bufsiz) {
-	// make room for the block header (if this is not the db file header)
-	if (type == FileBufferType::MANAGED_BUFFER && bufsiz != Storage::FILE_HEADER_SIZE) {
-		bufsiz += Storage::BLOCK_HEADER_SIZE;
+void FileBuffer::ReallocBuffer(size_t new_size) {
+	data_ptr_t new_buffer;
+	if (internal_buffer) {
+		new_buffer = allocator.ReallocateData(internal_buffer, internal_size, new_size);
+	} else {
+		new_buffer = allocator.AllocateData(new_size);
 	}
-	malloced_size = bufsiz;
-}
-
-void FileBuffer::Construct(uint64_t bufsiz) {
-	if (!malloced_buffer) {
+	if (!new_buffer) {
 		throw std::bad_alloc();
 	}
-	internal_buffer = malloced_buffer;
-	internal_size = malloced_size;
-	buffer = internal_buffer + Storage::BLOCK_HEADER_SIZE;
-	size = internal_size - Storage::BLOCK_HEADER_SIZE;
+	internal_buffer = new_buffer;
+	internal_size = new_size;
+	// Caller must update these.
+	buffer = nullptr;
+	size = 0;
 }
 
-void FileBuffer::Resize(uint64_t bufsiz) {
-	D_ASSERT(type == FileBufferType::MANAGED_BUFFER);
-	auto old_size = malloced_size;
-	SetMallocedSize(bufsiz);
-	malloced_buffer = allocator.ReallocateData(malloced_buffer, old_size, malloced_size);
-	Construct(bufsiz);
+FileBuffer::MemoryRequirement FileBuffer::CalculateMemory(uint64_t user_size) {
+	FileBuffer::MemoryRequirement result;
+
+	if (type == FileBufferType::TINY_BUFFER) {
+		// We never do IO on tiny buffers, so there's no need to add a header or sector-align.
+		result.header_size = 0;
+		result.alloc_size = user_size;
+	} else {
+		result.header_size = Storage::BLOCK_HEADER_SIZE;
+		result.alloc_size = AlignValue<uint32_t, Storage::SECTOR_SIZE>(result.header_size + user_size);
+	}
+	return result;
+}
+
+void FileBuffer::Resize(uint64_t new_size) {
+	auto req = CalculateMemory(new_size);
+	ReallocBuffer(req.alloc_size);
+
+	if (new_size > 0) {
+		buffer = internal_buffer + req.header_size;
+		size = internal_size - req.header_size;
+	}
 }
 
 void FileBuffer::Read(FileHandle &handle, uint64_t location) {
+	D_ASSERT(type != FileBufferType::TINY_BUFFER);
 	handle.Read(internal_buffer, internal_size, location);
 }
 
-void FileBuffer::ReadAndChecksum(FileHandle &handle, uint64_t location) {
-	// read the buffer from disk
-	Read(handle, location);
-	// compute the checksum
-	auto stored_checksum = Load<uint64_t>(internal_buffer);
-	uint64_t computed_checksum = Checksum(buffer, size);
-	// verify the checksum
-	if (stored_checksum != computed_checksum) {
-		throw IOException("Corrupt database file: computed checksum %llu does not match stored checksum %llu in block",
-		                  computed_checksum, stored_checksum);
-	}
-}
-
 void FileBuffer::Write(FileHandle &handle, uint64_t location) {
+	D_ASSERT(type != FileBufferType::TINY_BUFFER);
 	handle.Write(internal_buffer, internal_size, location);
-}
-
-void FileBuffer::ChecksumAndWrite(FileHandle &handle, uint64_t location) {
-	// compute the checksum and write it to the start of the buffer (if not temp buffer)
-	uint64_t checksum = Checksum(buffer, size);
-	Store<uint64_t>(checksum, internal_buffer);
-	// now write the buffer
-	Write(handle, location);
 }
 
 void FileBuffer::Clear() {
 	memset(internal_buffer, 0, internal_size);
 }
 
+void FileBuffer::Initialize(DebugInitialize initialize) {
+	if (initialize == DebugInitialize::NO_INITIALIZE) {
+		return;
+	}
+	uint8_t value = initialize == DebugInitialize::DEBUG_ZERO_INITIALIZE ? 0 : 0xFF;
+	memset(internal_buffer, value, internal_size);
+}
+
 } // namespace duckdb
+
+
+
 
 
 
@@ -5899,14 +16716,32 @@ FileSystem::~FileSystem() {
 }
 
 FileSystem &FileSystem::GetFileSystem(ClientContext &context) {
-	return *context.db->config.file_system;
+	auto &client_data = ClientData::Get(context);
+	return *client_data.client_file_system;
 }
 
-FileOpener *FileSystem::GetFileOpener(ClientContext &context) {
-	return ClientData::Get(context).file_opener.get();
+bool PathMatched(const string &path, const string &sub_path) {
+	if (path.rfind(sub_path, 0) == 0) {
+		return true;
+	}
+	return false;
 }
 
 #ifndef _WIN32
+
+string FileSystem::GetEnvVariable(const string &name) {
+	const char *env = getenv(name.c_str());
+	if (!env) {
+		return string();
+	}
+	return env;
+}
+
+bool FileSystem::IsPathAbsolute(const string &path) {
+	auto path_separator = FileSystem::PathSeparator();
+	return PathMatched(path, path_separator);
+}
+
 string FileSystem::PathSeparator() {
 	return "/";
 }
@@ -5927,22 +16762,66 @@ idx_t FileSystem::GetAvailableMemory() {
 }
 
 string FileSystem::GetWorkingDirectory() {
-	auto buffer = unique_ptr<char[]>(new char[PATH_MAX]);
+	auto buffer = make_unsafe_uniq_array<char>(PATH_MAX);
 	char *ret = getcwd(buffer.get(), PATH_MAX);
 	if (!ret) {
 		throw IOException("Could not get working directory!");
 	}
 	return string(buffer.get());
 }
+
+string FileSystem::NormalizeAbsolutePath(const string &path) {
+	D_ASSERT(IsPathAbsolute(path));
+	return path;
+}
+
 #else
+
+string FileSystem::GetEnvVariable(const string &env) {
+	// first convert the environment variable name to the correct encoding
+	auto env_w = WindowsUtil::UTF8ToUnicode(env.c_str());
+	// use _wgetenv to get the value
+	auto res_w = _wgetenv(env_w.c_str());
+	if (!res_w) {
+		// no environment variable of this name found
+		return string();
+	}
+	return WindowsUtil::UnicodeToUTF8(res_w);
+}
+
+bool FileSystem::IsPathAbsolute(const string &path) {
+	// 1) A single backslash or forward-slash
+	if (PathMatched(path, "\\") || PathMatched(path, "/")) {
+		return true;
+	}
+	// 2) A disk designator with a backslash (e.g., C:\ or C:/)
+	auto path_aux = path;
+	path_aux.erase(0, 1);
+	if (PathMatched(path_aux, ":\\") || PathMatched(path_aux, ":/")) {
+		return true;
+	}
+	return false;
+}
+
+string FileSystem::NormalizeAbsolutePath(const string &path) {
+	D_ASSERT(IsPathAbsolute(path));
+	auto result = StringUtil::Lower(FileSystem::ConvertSeparators(path));
+	if (PathMatched(result, "\\")) {
+		// Path starts with a single backslash or forward slash
+		// prepend drive letter
+		return GetWorkingDirectory().substr(0, 2) + result;
+	}
+	return result;
+}
 
 string FileSystem::PathSeparator() {
 	return "\\";
 }
 
 void FileSystem::SetWorkingDirectory(const string &path) {
-	if (!SetCurrentDirectory(path.c_str())) {
-		throw IOException("Could not change working directory!");
+	auto unicode_path = WindowsUtil::UTF8ToUnicode(path.c_str());
+	if (!SetCurrentDirectoryW(unicode_path.c_str())) {
+		throw IOException("Could not change working directory to \"%s\"", path);
 	}
 }
 
@@ -5962,16 +16841,16 @@ idx_t FileSystem::GetAvailableMemory() {
 }
 
 string FileSystem::GetWorkingDirectory() {
-	idx_t count = GetCurrentDirectory(0, nullptr);
+	idx_t count = GetCurrentDirectoryW(0, nullptr);
 	if (count == 0) {
 		throw IOException("Could not get working directory!");
 	}
-	auto buffer = unique_ptr<char[]>(new char[count]);
-	idx_t ret = GetCurrentDirectory(count, buffer.get());
+	auto buffer = make_unsafe_uniq_array<wchar_t>(count);
+	idx_t ret = GetCurrentDirectoryW(count, buffer.get());
 	if (count != ret + 1) {
 		throw IOException("Could not get working directory!");
 	}
-	return string(buffer.get(), ret);
+	return WindowsUtil::UnicodeToUTF8(buffer.get());
 }
 
 #endif
@@ -5989,32 +16868,63 @@ string FileSystem::ConvertSeparators(const string &path) {
 		return path;
 	}
 	// on windows-based systems we accept both
-	string result = path;
-	for (idx_t i = 0; i < result.size(); i++) {
-		if (result[i] == '/') {
-			result[i] = separator;
-		}
+	return StringUtil::Replace(path, "/", separator_str);
+}
+
+string FileSystem::ExtractName(const string &path) {
+	if (path.empty()) {
+		return string();
 	}
-	return result;
+	auto normalized_path = ConvertSeparators(path);
+	auto sep = PathSeparator();
+	auto splits = StringUtil::Split(normalized_path, sep);
+	D_ASSERT(!splits.empty());
+	return splits.back();
 }
 
 string FileSystem::ExtractBaseName(const string &path) {
-	auto normalized_path = ConvertSeparators(path);
-	auto sep = PathSeparator();
-	auto vec = StringUtil::Split(StringUtil::Split(normalized_path, sep).back(), ".");
+	if (path.empty()) {
+		return string();
+	}
+	auto vec = StringUtil::Split(ExtractName(path), ".");
+	D_ASSERT(!vec.empty());
 	return vec[0];
 }
 
-string FileSystem::GetHomeDirectory() {
-#ifdef DUCKDB_WINDOWS
-	const char *homedir = getenv("USERPROFILE");
-#else
-	const char *homedir = getenv("HOME");
-#endif
-	if (homedir) {
-		return homedir;
+string FileSystem::GetHomeDirectory(optional_ptr<FileOpener> opener) {
+	// read the home_directory setting first, if it is set
+	if (opener) {
+		Value result;
+		if (opener->TryGetCurrentSetting("home_directory", result)) {
+			if (!result.IsNull() && !result.ToString().empty()) {
+				return result.ToString();
+			}
+		}
 	}
-	return string();
+	// fallback to the default home directories for the specified system
+#ifdef DUCKDB_WINDOWS
+	return FileSystem::GetEnvVariable("USERPROFILE");
+#else
+	return FileSystem::GetEnvVariable("HOME");
+#endif
+}
+
+string FileSystem::GetHomeDirectory() {
+	return GetHomeDirectory(nullptr);
+}
+
+string FileSystem::ExpandPath(const string &path, optional_ptr<FileOpener> opener) {
+	if (path.empty()) {
+		return path;
+	}
+	if (path[0] == '~') {
+		return GetHomeDirectory(opener) + path.substr(1);
+	}
+	return path;
+}
+
+string FileSystem::ExpandPath(const string &path) {
+	return FileSystem::ExpandPath(path, nullptr);
 }
 
 // LCOV_EXCL_START
@@ -6067,7 +16977,8 @@ void FileSystem::RemoveDirectory(const string &directory) {
 	throw NotImplementedException("%s: RemoveDirectory is not implemented!", GetName());
 }
 
-bool FileSystem::ListFiles(const string &directory, const std::function<void(const string &, bool)> &callback) {
+bool FileSystem::ListFiles(const string &directory, const std::function<void(const string &, bool)> &callback,
+                           FileOpener *opener) {
 	throw NotImplementedException("%s: ListFiles is not implemented!", GetName());
 }
 
@@ -6091,12 +17002,22 @@ void FileSystem::FileSync(FileHandle &handle) {
 	throw NotImplementedException("%s: FileSync is not implemented!", GetName());
 }
 
-vector<string> FileSystem::Glob(const string &path, FileOpener *opener) {
-	throw NotImplementedException("%s: Glob is not implemented!", GetName());
+bool FileSystem::HasGlob(const string &str) {
+	for (idx_t i = 0; i < str.size(); i++) {
+		switch (str[i]) {
+		case '*':
+		case '?':
+		case '[':
+			return true;
+		default:
+			break;
+		}
+	}
+	return false;
 }
 
-vector<string> FileSystem::Glob(const string &path, ClientContext &context) {
-	return Glob(path, GetFileOpener(context));
+vector<string> FileSystem::Glob(const string &path, FileOpener *opener) {
+	throw NotImplementedException("%s: Glob is not implemented!", GetName());
 }
 
 void FileSystem::RegisterSubSystem(unique_ptr<FileSystem> sub_fs) {
@@ -6107,8 +17028,41 @@ void FileSystem::RegisterSubSystem(FileCompressionType compression_type, unique_
 	throw NotImplementedException("%s: Can't register a sub system on a non-virtual file system", GetName());
 }
 
+void FileSystem::UnregisterSubSystem(const string &name) {
+	throw NotImplementedException("%s: Can't unregister a sub system on a non-virtual file system", GetName());
+}
+
+vector<string> FileSystem::ListSubSystems() {
+	throw NotImplementedException("%s: Can't list sub systems on a non-virtual file system", GetName());
+}
+
 bool FileSystem::CanHandleFile(const string &fpath) {
 	throw NotImplementedException("%s: CanHandleFile is not implemented!", GetName());
+}
+
+vector<string> FileSystem::GlobFiles(const string &pattern, ClientContext &context, FileGlobOptions options) {
+	auto result = Glob(pattern);
+	if (result.empty()) {
+		string required_extension;
+		if (FileSystem::IsRemoteFile(pattern)) {
+			required_extension = "httpfs";
+		}
+		if (!required_extension.empty() && !context.db->ExtensionIsLoaded(required_extension)) {
+			// an extension is required to read this file but it is not loaded - try to load it
+			ExtensionHelper::LoadExternalExtension(context, required_extension);
+			// success! glob again
+			// check the extension is loaded just in case to prevent an infinite loop here
+			if (!context.db->ExtensionIsLoaded(required_extension)) {
+				throw InternalException("Extension load \"%s\" did not throw but somehow the extension was not loaded",
+				                        required_extension);
+			}
+			return GlobFiles(pattern, context, options);
+		}
+		if (options == FileGlobOptions::DISALLOW_EMPTY) {
+			throw IOException("No files found that match the pattern \"%s\"", pattern);
+		}
+	}
+	return result;
 }
 
 void FileSystem::Seek(FileHandle &handle, idx_t location) {
@@ -6136,7 +17090,7 @@ bool FileSystem::OnDiskFile(FileHandle &handle) {
 }
 // LCOV_EXCL_STOP
 
-FileHandle::FileHandle(FileSystem &file_system, string path_p) : file_system(file_system), path(move(path_p)) {
+FileHandle::FileHandle(FileSystem &file_system, string path_p) : file_system(file_system), path(std::move(path_p)) {
 }
 
 FileHandle::~FileHandle() {
@@ -6206,6 +17160,87 @@ void FileHandle::Truncate(int64_t new_size) {
 
 FileType FileHandle::GetType() {
 	return file_system.GetFileType(*this);
+}
+
+bool FileSystem::IsRemoteFile(const string &path) {
+	const string prefixes[] = {"http://", "https://", "s3://"};
+	for (auto &prefix : prefixes) {
+		if (StringUtil::StartsWith(path, prefix)) {
+			return true;
+		}
+	}
+	return false;
+}
+
+} // namespace duckdb
+
+
+
+namespace duckdb {
+
+void FilenamePattern::SetFilenamePattern(const string &pattern) {
+	const string id_format {"{i}"};
+	const string uuid_format {"{uuid}"};
+
+	_base = pattern;
+
+	_pos = _base.find(id_format);
+	if (_pos != string::npos) {
+		_base = StringUtil::Replace(_base, id_format, "");
+		_uuid = false;
+	}
+
+	_pos = _base.find(uuid_format);
+	if (_pos != string::npos) {
+		_base = StringUtil::Replace(_base, uuid_format, "");
+		_uuid = true;
+	}
+
+	_pos = std::min(_pos, (idx_t)_base.length());
+}
+
+string FilenamePattern::CreateFilename(const FileSystem &fs, const string &path, const string &extension,
+                                       idx_t offset) const {
+	string result(_base);
+	string replacement;
+
+	if (_uuid) {
+		replacement = UUID::ToString(UUID::GenerateRandomUUID());
+	} else {
+		replacement = std::to_string(offset);
+	}
+	result.insert(_pos, replacement);
+	return fs.JoinPath(path, result + "." + extension);
+}
+
+} // namespace duckdb
+
+
+
+
+
+namespace duckdb {
+string_t FSSTPrimitives::DecompressValue(void *duckdb_fsst_decoder, Vector &result, unsigned char *compressed_string,
+                                         idx_t compressed_string_len) {
+	D_ASSERT(result.GetVectorType() == VectorType::FLAT_VECTOR);
+	unsigned char decompress_buffer[StringUncompressed::STRING_BLOCK_LIMIT + 1];
+	auto decompressed_string_size =
+	    duckdb_fsst_decompress((duckdb_fsst_decoder_t *)duckdb_fsst_decoder, compressed_string_len, compressed_string,
+	                           StringUncompressed::STRING_BLOCK_LIMIT + 1, &decompress_buffer[0]);
+	D_ASSERT(decompressed_string_size <= StringUncompressed::STRING_BLOCK_LIMIT);
+
+	return StringVector::AddStringOrBlob(result, (const char *)decompress_buffer, decompressed_string_size);
+}
+
+Value FSSTPrimitives::DecompressValue(void *duckdb_fsst_decoder, unsigned char *compressed_string,
+                                      idx_t compressed_string_len) {
+	unsigned char decompress_buffer[StringUncompressed::STRING_BLOCK_LIMIT + 1];
+	auto decompressed_string_size =
+	    duckdb_fsst_decompress((duckdb_fsst_decoder_t *)duckdb_fsst_decoder, compressed_string_len, compressed_string,
+	                           StringUncompressed::STRING_BLOCK_LIMIT + 1, &decompress_buffer[0]);
+	D_ASSERT(decompressed_string_size <= StringUncompressed::STRING_BLOCK_LIMIT);
+
+	return Value(string((char *)decompress_buffer, decompressed_string_size));
 }
 
 } // namespace duckdb
@@ -6301,7 +17336,7 @@ MiniZStreamWrapper::~MiniZStreamWrapper() {
 		return;
 	}
 	try {
-		Close();
+		MiniZStreamWrapper::Close();
 	} catch (...) {
 	}
 }
@@ -6331,7 +17366,15 @@ void MiniZStreamWrapper::Initialize(CompressedFile &file, bool write) {
 		idx_t data_start = GZIP_HEADER_MINSIZE;
 		auto read_count = file.child_handle->Read(gzip_hdr, GZIP_HEADER_MINSIZE);
 		GZipFileSystem::VerifyGZIPHeader(gzip_hdr, read_count);
-
+		// Skip over the extra field if necessary
+		if (gzip_hdr[3] & GZIP_FLAG_EXTRA) {
+			uint8_t gzip_xlen[2];
+			file.child_handle->Seek(data_start);
+			file.child_handle->Read(gzip_xlen, 2);
+			idx_t xlen = (uint8_t)gzip_xlen[0] | (uint8_t)gzip_xlen[1] << 8;
+			data_start += xlen + 2;
+		}
+		// Skip over the file name if necessary
 		if (gzip_hdr[3] & GZIP_FLAG_NAME) {
 			file.child_handle->Seek(data_start);
 			data_start += GZipConsumeString(*file.child_handle);
@@ -6346,6 +17389,45 @@ void MiniZStreamWrapper::Initialize(CompressedFile &file, bool write) {
 }
 
 bool MiniZStreamWrapper::Read(StreamData &sd) {
+	// Handling for the concatenated files
+	if (sd.refresh) {
+		sd.refresh = false;
+		auto body_ptr = sd.in_buff_start + GZIP_FOOTER_SIZE;
+		uint8_t gzip_hdr[GZIP_HEADER_MINSIZE];
+		memcpy(gzip_hdr, body_ptr, GZIP_HEADER_MINSIZE);
+		GZipFileSystem::VerifyGZIPHeader(gzip_hdr, GZIP_HEADER_MINSIZE);
+		body_ptr += GZIP_HEADER_MINSIZE;
+		if (gzip_hdr[3] & GZIP_FLAG_EXTRA) {
+			idx_t xlen = (uint8_t)*body_ptr | (uint8_t) * (body_ptr + 1) << 8;
+			body_ptr += xlen + 2;
+			if (GZIP_FOOTER_SIZE + GZIP_HEADER_MINSIZE + 2 + xlen >= GZIP_HEADER_MAXSIZE) {
+				throw InternalException("Extra field resulting in GZIP header larger than defined maximum (%d)",
+				                        GZIP_HEADER_MAXSIZE);
+			}
+		}
+		if (gzip_hdr[3] & GZIP_FLAG_NAME) {
+			char c;
+			do {
+				c = *body_ptr;
+				body_ptr++;
+			} while (c != '\0' && body_ptr < sd.in_buff_end);
+			if ((idx_t)(body_ptr - sd.in_buff_start) >= GZIP_HEADER_MAXSIZE) {
+				throw InternalException("Filename resulting in GZIP header larger than defined maximum (%d)",
+				                        GZIP_HEADER_MAXSIZE);
+			}
+		}
+		sd.in_buff_start = body_ptr;
+		if (sd.in_buff_end - sd.in_buff_start < 1) {
+			Close();
+			return true;
+		}
+		duckdb_miniz::mz_inflateEnd(mz_stream_ptr);
+		auto sta = duckdb_miniz::mz_inflateInit2((duckdb_miniz::mz_streamp)mz_stream_ptr, -MZ_DEFAULT_WINDOW_BITS);
+		if (sta != duckdb_miniz::MZ_OK) {
+			throw InternalException("Failed to initialize miniz");
+		}
+	}
+
 	// actually decompress
 	mz_stream_ptr->next_in = (data_ptr_t)sd.in_buff_start;
 	D_ASSERT(sd.in_buff_end - sd.in_buff_start < NumericLimits<int32_t>::Maximum());
@@ -6361,10 +17443,23 @@ bool MiniZStreamWrapper::Read(StreamData &sd) {
 	sd.in_buff_end = sd.in_buff_start + mz_stream_ptr->avail_in;
 	sd.out_buff_end = (data_ptr_t)mz_stream_ptr->next_out;
 	D_ASSERT(sd.out_buff_end + mz_stream_ptr->avail_out == sd.out_buff.get() + sd.out_buf_size);
+
 	// if stream ended, deallocate inflator
 	if (ret == duckdb_miniz::MZ_STREAM_END) {
-		Close();
-		return true;
+		// Last read from file done and remaining bytes only for footer or less
+		if ((sd.in_buff_end < sd.in_buff.get() + sd.in_buf_size) && mz_stream_ptr->avail_in <= GZIP_FOOTER_SIZE) {
+			Close();
+			return true;
+		}
+		if (mz_stream_ptr->avail_in > GZIP_FOOTER_SIZE) {
+			// Definitely not concatenated gzip
+			if (*(sd.in_buff_start + GZIP_FOOTER_SIZE) != 0x1F) {
+				Close();
+				return true;
+			}
+		}
+		// Concatenated GZIP potentially coming up - refresh input buffer
+		sd.refresh = true;
 	}
 	return false;
 }
@@ -6450,7 +17545,7 @@ void MiniZStreamWrapper::Close() {
 class GZipFile : public CompressedFile {
 public:
 	GZipFile(unique_ptr<FileHandle> child_handle_p, const string &path, bool write)
-	    : CompressedFile(gzip_fs, move(child_handle_p), path) {
+	    : CompressedFile(gzip_fs, std::move(child_handle_p), path) {
 		Initialize(write);
 	}
 
@@ -6492,6 +17587,10 @@ string GZipFileSystem::UncompressGZIPString(const string &in) {
 	body_ptr += GZIP_HEADER_MINSIZE;
 	GZipFileSystem::VerifyGZIPHeader(gzip_hdr, GZIP_HEADER_MINSIZE);
 
+	if (gzip_hdr[3] & GZIP_FLAG_EXTRA) {
+		throw IOException("Extra field in a GZIP stream unsupported");
+	}
+
 	if (gzip_hdr[3] & GZIP_FLAG_NAME) {
 		char c;
 		do {
@@ -6531,11 +17630,11 @@ string GZipFileSystem::UncompressGZIPString(const string &in) {
 
 unique_ptr<FileHandle> GZipFileSystem::OpenCompressedFile(unique_ptr<FileHandle> handle, bool write) {
 	auto path = handle->path;
-	return make_unique<GZipFile>(move(handle), path, write);
+	return make_uniq<GZipFile>(std::move(handle), path, write);
 }
 
 unique_ptr<StreamWrapper> GZipFileSystem::CreateStream() {
-	return make_unique<MiniZStreamWrapper>();
+	return make_uniq<MiniZStreamWrapper>();
 }
 
 idx_t GZipFileSystem::InBufferSize() {
@@ -6551,104 +17650,389 @@ idx_t GZipFileSystem::OutBufferSize() {
 
 
 
-#include <limits>
+
+
+
+
+
+
 
 namespace duckdb {
 
-using std::numeric_limits;
+static unordered_map<column_t, string> GetKnownColumnValues(string &filename,
+                                                            unordered_map<string, column_t> &column_map,
+                                                            duckdb_re2::RE2 &compiled_regex, bool filename_col,
+                                                            bool hive_partition_cols) {
+	unordered_map<column_t, string> result;
 
-int8_t NumericLimits<int8_t>::Minimum() {
-	return numeric_limits<int8_t>::lowest();
-}
+	if (filename_col) {
+		auto lookup_column_id = column_map.find("filename");
+		if (lookup_column_id != column_map.end()) {
+			result[lookup_column_id->second] = filename;
+		}
+	}
 
-int8_t NumericLimits<int8_t>::Maximum() {
-	return numeric_limits<int8_t>::max();
-}
+	if (hive_partition_cols) {
+		auto partitions = HivePartitioning::Parse(filename, compiled_regex);
+		for (auto &partition : partitions) {
+			auto lookup_column_id = column_map.find(partition.first);
+			if (lookup_column_id != column_map.end()) {
+				result[lookup_column_id->second] = partition.second;
+			}
+		}
+	}
 
-int16_t NumericLimits<int16_t>::Minimum() {
-	return numeric_limits<int16_t>::lowest();
-}
-
-int16_t NumericLimits<int16_t>::Maximum() {
-	return numeric_limits<int16_t>::max();
-}
-
-int32_t NumericLimits<int32_t>::Minimum() {
-	return numeric_limits<int32_t>::lowest();
-}
-
-int32_t NumericLimits<int32_t>::Maximum() {
-	return numeric_limits<int32_t>::max();
-}
-
-int64_t NumericLimits<int64_t>::Minimum() {
-	return numeric_limits<int64_t>::lowest();
-}
-
-int64_t NumericLimits<int64_t>::Maximum() {
-	return numeric_limits<int64_t>::max();
-}
-
-float NumericLimits<float>::Minimum() {
-	return numeric_limits<float>::lowest();
-}
-
-float NumericLimits<float>::Maximum() {
-	return numeric_limits<float>::max();
-}
-
-double NumericLimits<double>::Minimum() {
-	return numeric_limits<double>::lowest();
-}
-
-double NumericLimits<double>::Maximum() {
-	return numeric_limits<double>::max();
-}
-
-uint8_t NumericLimits<uint8_t>::Minimum() {
-	return numeric_limits<uint8_t>::lowest();
-}
-
-uint8_t NumericLimits<uint8_t>::Maximum() {
-	return numeric_limits<uint8_t>::max();
-}
-
-uint16_t NumericLimits<uint16_t>::Minimum() {
-	return numeric_limits<uint16_t>::lowest();
-}
-
-uint16_t NumericLimits<uint16_t>::Maximum() {
-	return numeric_limits<uint16_t>::max();
-}
-
-uint32_t NumericLimits<uint32_t>::Minimum() {
-	return numeric_limits<uint32_t>::lowest();
-}
-
-uint32_t NumericLimits<uint32_t>::Maximum() {
-	return numeric_limits<uint32_t>::max();
-}
-
-uint64_t NumericLimits<uint64_t>::Minimum() {
-	return numeric_limits<uint64_t>::lowest();
-}
-
-uint64_t NumericLimits<uint64_t>::Maximum() {
-	return numeric_limits<uint64_t>::max();
-}
-
-hugeint_t NumericLimits<hugeint_t>::Minimum() {
-	hugeint_t result;
-	result.lower = 1;
-	result.upper = numeric_limits<int64_t>::lowest();
 	return result;
 }
 
-hugeint_t NumericLimits<hugeint_t>::Maximum() {
-	hugeint_t result;
-	result.lower = numeric_limits<uint64_t>::max();
-	result.upper = numeric_limits<int64_t>::max();
+// Takes an expression and converts a list of known column_refs to constants
+static void ConvertKnownColRefToConstants(unique_ptr<Expression> &expr,
+                                          unordered_map<column_t, string> &known_column_values, idx_t table_index) {
+	if (expr->type == ExpressionType::BOUND_COLUMN_REF) {
+		auto &bound_colref = expr->Cast<BoundColumnRefExpression>();
+
+		// This bound column ref is for another table
+		if (table_index != bound_colref.binding.table_index) {
+			return;
+		}
+
+		auto lookup = known_column_values.find(bound_colref.binding.column_index);
+		if (lookup != known_column_values.end()) {
+			expr = make_uniq<BoundConstantExpression>(Value(lookup->second).DefaultCastAs(bound_colref.return_type));
+		}
+	} else {
+		ExpressionIterator::EnumerateChildren(*expr, [&](unique_ptr<Expression> &child) {
+			ConvertKnownColRefToConstants(child, known_column_values, table_index);
+		});
+	}
+}
+
+// matches hive partitions in file name. For example:
+// 	- s3://bucket/var1=value1/bla/bla/var2=value2
+//  - http(s)://domain(:port)/lala/kasdl/var1=value1/?not-a-var=not-a-value
+//  - folder/folder/folder/../var1=value1/etc/.//var2=value2
+const string HivePartitioning::REGEX_STRING = "[\\/\\\\]([^\\/\\?\\\\]+)=([^\\/\\n\\?\\\\]+)";
+
+std::map<string, string> HivePartitioning::Parse(const string &filename, duckdb_re2::RE2 &regex) {
+	std::map<string, string> result;
+	duckdb_re2::StringPiece input(filename); // Wrap a StringPiece around it
+
+	string var;
+	string value;
+	while (RE2::FindAndConsume(&input, regex, &var, &value)) {
+		result.insert(std::pair<string, string>(var, value));
+	}
 	return result;
+}
+
+std::map<string, string> HivePartitioning::Parse(const string &filename) {
+	duckdb_re2::RE2 regex(REGEX_STRING);
+	return Parse(filename, regex);
+}
+
+// TODO: this can still be improved by removing the parts of filter expressions that are true for all remaining files.
+//		 currently, only expressions that cannot be evaluated during pushdown are removed.
+void HivePartitioning::ApplyFiltersToFileList(ClientContext &context, vector<string> &files,
+                                              vector<unique_ptr<Expression>> &filters,
+                                              unordered_map<string, column_t> &column_map, idx_t table_index,
+                                              bool hive_enabled, bool filename_enabled) {
+	vector<string> pruned_files;
+	vector<bool> have_preserved_filter(filters.size(), false);
+	vector<unique_ptr<Expression>> pruned_filters;
+	duckdb_re2::RE2 regex(REGEX_STRING);
+
+	if ((!filename_enabled && !hive_enabled) || filters.empty()) {
+		return;
+	}
+
+	for (idx_t i = 0; i < files.size(); i++) {
+		auto &file = files[i];
+		bool should_prune_file = false;
+		auto known_values = GetKnownColumnValues(file, column_map, regex, filename_enabled, hive_enabled);
+
+		FilterCombiner combiner(context);
+
+		for (idx_t j = 0; j < filters.size(); j++) {
+			auto &filter = filters[j];
+			unique_ptr<Expression> filter_copy = filter->Copy();
+			ConvertKnownColRefToConstants(filter_copy, known_values, table_index);
+			// Evaluate the filter, if it can be evaluated here, we can not prune this filter
+			Value result_value;
+
+			if (!filter_copy->IsScalar() || !filter_copy->IsFoldable() ||
+			    !ExpressionExecutor::TryEvaluateScalar(context, *filter_copy, result_value)) {
+				// can not be evaluated only with the filename/hive columns added, we can not prune this filter
+				if (!have_preserved_filter[j]) {
+					pruned_filters.emplace_back(filter->Copy());
+					have_preserved_filter[j] = true;
+				}
+			} else if (!result_value.GetValue<bool>()) {
+				// filter evaluates to false
+				should_prune_file = true;
+			}
+
+			// Use filter combiner to determine that this filter makes
+			if (!should_prune_file && combiner.AddFilter(std::move(filter_copy)) == FilterResult::UNSATISFIABLE) {
+				should_prune_file = true;
+			}
+		}
+
+		if (!should_prune_file) {
+			pruned_files.push_back(file);
+		}
+	}
+
+	D_ASSERT(filters.size() >= pruned_filters.size());
+
+	filters = std::move(pruned_filters);
+	files = std::move(pruned_files);
+}
+
+HivePartitionedColumnData::HivePartitionedColumnData(const HivePartitionedColumnData &other)
+    : PartitionedColumnData(other), hashes_v(LogicalType::HASH) {
+	// Synchronize to ensure consistency of shared partition map
+	if (other.global_state) {
+		global_state = other.global_state;
+		unique_lock<mutex> lck(global_state->lock);
+		SynchronizeLocalMap();
+	}
+	InitializeKeys();
+}
+
+void HivePartitionedColumnData::InitializeKeys() {
+	keys.resize(STANDARD_VECTOR_SIZE);
+	for (idx_t i = 0; i < STANDARD_VECTOR_SIZE; i++) {
+		keys[i].values.resize(group_by_columns.size());
+	}
+}
+
+template <class T>
+static inline Value GetHiveKeyValue(const T &val) {
+	return Value::CreateValue<T>(val);
+}
+
+template <class T>
+static inline Value GetHiveKeyValue(const T &val, const LogicalType &type) {
+	auto result = GetHiveKeyValue(val);
+	result.Reinterpret(type);
+	return result;
+}
+
+static inline Value GetHiveKeyNullValue(const LogicalType &type) {
+	Value result;
+	result.Reinterpret(type);
+	return result;
+}
+
+template <class T>
+static void TemplatedGetHivePartitionValues(Vector &input, vector<HivePartitionKey> &keys, const idx_t col_idx,
+                                            const idx_t count) {
+	UnifiedVectorFormat format;
+	input.ToUnifiedFormat(count, format);
+
+	const auto &sel = *format.sel;
+	const auto data = (T *)format.data;
+	const auto &validity = format.validity;
+
+	const auto &type = input.GetType();
+
+	const auto reinterpret = Value::CreateValue<T>(data[0]).GetTypeMutable() != type;
+	if (reinterpret) {
+		for (idx_t i = 0; i < count; i++) {
+			auto &key = keys[i];
+			const auto idx = sel.get_index(i);
+			if (validity.RowIsValid(idx)) {
+				key.values[col_idx] = GetHiveKeyValue(data[idx], type);
+			} else {
+				key.values[col_idx] = GetHiveKeyNullValue(type);
+			}
+		}
+	} else {
+		for (idx_t i = 0; i < count; i++) {
+			auto &key = keys[i];
+			const auto idx = sel.get_index(i);
+			if (validity.RowIsValid(idx)) {
+				key.values[col_idx] = GetHiveKeyValue(data[idx]);
+			} else {
+				key.values[col_idx] = GetHiveKeyNullValue(type);
+			}
+		}
+	}
+}
+
+static void GetNestedHivePartitionValues(Vector &input, vector<HivePartitionKey> &keys, const idx_t col_idx,
+                                         const idx_t count) {
+	for (idx_t i = 0; i < count; i++) {
+		auto &key = keys[i];
+		key.values[col_idx] = input.GetValue(i);
+	}
+}
+
+static void GetHivePartitionValuesTypeSwitch(Vector &input, vector<HivePartitionKey> &keys, const idx_t col_idx,
+                                             const idx_t count) {
+	const auto &type = input.GetType();
+	switch (type.InternalType()) {
+	case PhysicalType::BOOL:
+		TemplatedGetHivePartitionValues<bool>(input, keys, col_idx, count);
+		break;
+	case PhysicalType::INT8:
+		TemplatedGetHivePartitionValues<int8_t>(input, keys, col_idx, count);
+		break;
+	case PhysicalType::INT16:
+		TemplatedGetHivePartitionValues<int16_t>(input, keys, col_idx, count);
+		break;
+	case PhysicalType::INT32:
+		TemplatedGetHivePartitionValues<int32_t>(input, keys, col_idx, count);
+		break;
+	case PhysicalType::INT64:
+		TemplatedGetHivePartitionValues<int64_t>(input, keys, col_idx, count);
+		break;
+	case PhysicalType::INT128:
+		TemplatedGetHivePartitionValues<hugeint_t>(input, keys, col_idx, count);
+		break;
+	case PhysicalType::UINT8:
+		TemplatedGetHivePartitionValues<uint8_t>(input, keys, col_idx, count);
+		break;
+	case PhysicalType::UINT16:
+		TemplatedGetHivePartitionValues<uint16_t>(input, keys, col_idx, count);
+		break;
+	case PhysicalType::UINT32:
+		TemplatedGetHivePartitionValues<uint32_t>(input, keys, col_idx, count);
+		break;
+	case PhysicalType::UINT64:
+		TemplatedGetHivePartitionValues<uint64_t>(input, keys, col_idx, count);
+		break;
+	case PhysicalType::FLOAT:
+		TemplatedGetHivePartitionValues<float>(input, keys, col_idx, count);
+		break;
+	case PhysicalType::DOUBLE:
+		TemplatedGetHivePartitionValues<double>(input, keys, col_idx, count);
+		break;
+	case PhysicalType::INTERVAL:
+		TemplatedGetHivePartitionValues<interval_t>(input, keys, col_idx, count);
+		break;
+	case PhysicalType::VARCHAR:
+		TemplatedGetHivePartitionValues<string_t>(input, keys, col_idx, count);
+		break;
+	case PhysicalType::STRUCT:
+	case PhysicalType::LIST:
+		GetNestedHivePartitionValues(input, keys, col_idx, count);
+		break;
+	default:
+		throw InternalException("Unsupported type for HivePartitionedColumnData::ComputePartitionIndices");
+	}
+}
+
+void HivePartitionedColumnData::ComputePartitionIndices(PartitionedColumnDataAppendState &state, DataChunk &input) {
+	const auto count = input.size();
+
+	input.Hash(group_by_columns, hashes_v);
+	hashes_v.Flatten(count);
+
+	for (idx_t col_idx = 0; col_idx < group_by_columns.size(); col_idx++) {
+		auto &group_by_col = input.data[group_by_columns[col_idx]];
+		GetHivePartitionValuesTypeSwitch(group_by_col, keys, col_idx, count);
+	}
+
+	const auto hashes = FlatVector::GetData<hash_t>(hashes_v);
+	const auto partition_indices = FlatVector::GetData<idx_t>(state.partition_indices);
+	for (idx_t i = 0; i < count; i++) {
+		auto &key = keys[i];
+		key.hash = hashes[i];
+		auto lookup = local_partition_map.find(key);
+		if (lookup == local_partition_map.end()) {
+			idx_t new_partition_id = RegisterNewPartition(key, state);
+			partition_indices[i] = new_partition_id;
+		} else {
+			partition_indices[i] = lookup->second;
+		}
+	}
+}
+
+std::map<idx_t, const HivePartitionKey *> HivePartitionedColumnData::GetReverseMap() {
+	std::map<idx_t, const HivePartitionKey *> ret;
+	for (const auto &pair : local_partition_map) {
+		ret[pair.second] = &(pair.first);
+	}
+	return ret;
+}
+
+void HivePartitionedColumnData::GrowAllocators() {
+	unique_lock<mutex> lck_gstate(allocators->lock);
+
+	idx_t current_allocator_size = allocators->allocators.size();
+	idx_t required_allocators = local_partition_map.size();
+
+	allocators->allocators.reserve(current_allocator_size);
+	for (idx_t i = current_allocator_size; i < required_allocators; i++) {
+		CreateAllocator();
+	}
+
+	D_ASSERT(allocators->allocators.size() == local_partition_map.size());
+}
+
+void HivePartitionedColumnData::GrowAppendState(PartitionedColumnDataAppendState &state) {
+	idx_t current_append_state_size = state.partition_append_states.size();
+	idx_t required_append_state_size = local_partition_map.size();
+
+	for (idx_t i = current_append_state_size; i < required_append_state_size; i++) {
+		state.partition_append_states.emplace_back(make_uniq<ColumnDataAppendState>());
+		state.partition_buffers.emplace_back(CreatePartitionBuffer());
+	}
+}
+
+void HivePartitionedColumnData::GrowPartitions(PartitionedColumnDataAppendState &state) {
+	idx_t current_partitions = partitions.size();
+	idx_t required_partitions = local_partition_map.size();
+
+	D_ASSERT(allocators->allocators.size() == required_partitions);
+
+	for (idx_t i = current_partitions; i < required_partitions; i++) {
+		partitions.emplace_back(CreatePartitionCollection(i));
+		partitions[i]->InitializeAppend(*state.partition_append_states[i]);
+	}
+	D_ASSERT(partitions.size() == local_partition_map.size());
+}
+
+void HivePartitionedColumnData::SynchronizeLocalMap() {
+	// Synchronise global map into local, may contain changes from other threads too
+	for (auto it = global_state->partitions.begin() + local_partition_map.size(); it < global_state->partitions.end();
+	     it++) {
+		local_partition_map[(*it)->first] = (*it)->second;
+	}
+}
+
+idx_t HivePartitionedColumnData::RegisterNewPartition(HivePartitionKey key, PartitionedColumnDataAppendState &state) {
+	if (global_state) {
+		idx_t partition_id;
+
+		// Synchronize Global state with our local state with the newly discoveren partition
+		{
+			unique_lock<mutex> lck_gstate(global_state->lock);
+
+			// Insert into global map, or return partition if already present
+			auto res =
+			    global_state->partition_map.emplace(std::make_pair(std::move(key), global_state->partition_map.size()));
+			auto it = res.first;
+			partition_id = it->second;
+
+			// Add iterator to vector to allow incrementally updating local states from global state
+			global_state->partitions.emplace_back(it);
+			SynchronizeLocalMap();
+		}
+
+		// After synchronizing with the global state, we need to grow the shared allocators to support
+		// the number of partitions, which guarantees that there's always enough allocators available to each thread
+		GrowAllocators();
+
+		// Grow local partition data
+		GrowAppendState(state);
+		GrowPartitions(state);
+
+		return partition_id;
+	} else {
+		return local_partition_map.emplace(std::make_pair(std::move(key), local_partition_map.size())).first->second;
+	}
 }
 
 } // namespace duckdb
@@ -6774,10 +18158,10 @@ bool LocalFileSystem::IsPipe(const string &filename) {
 
 struct UnixFileHandle : public FileHandle {
 public:
-	UnixFileHandle(FileSystem &file_system, string path, int fd) : FileHandle(file_system, move(path)), fd(fd) {
+	UnixFileHandle(FileSystem &file_system, string path, int fd) : FileHandle(file_system, std::move(path)), fd(fd) {
 	}
 	~UnixFileHandle() override {
-		Close();
+		UnixFileHandle::Close();
 	}
 
 	int fd;
@@ -6786,6 +18170,7 @@ public:
 	void Close() override {
 		if (fd != -1) {
 			close(fd);
+			fd = -1;
 		}
 	};
 };
@@ -6815,8 +18200,9 @@ static FileType GetFileTypeInternal(int fd) { // LCOV_EXCL_START
 	}
 } // LCOV_EXCL_STOP
 
-unique_ptr<FileHandle> LocalFileSystem::OpenFile(const string &path, uint8_t flags, FileLockType lock_type,
+unique_ptr<FileHandle> LocalFileSystem::OpenFile(const string &path_p, uint8_t flags, FileLockType lock_type,
                                                  FileCompressionType compression, FileOpener *opener) {
+	auto path = FileSystem::ExpandPath(path_p, opener);
 	if (compression != FileCompressionType::UNCOMPRESSED) {
 		throw NotImplementedException("Unsupported compression type for default file system");
 	}
@@ -6890,7 +18276,7 @@ unique_ptr<FileHandle> LocalFileSystem::OpenFile(const string &path, uint8_t fla
 			}
 		}
 	}
-	return make_unique<UnixFileHandle>(*this, path, fd);
+	return make_uniq<UnixFileHandle>(*this, path, fd);
 }
 
 void LocalFileSystem::SetFilePointer(FileHandle &handle, idx_t location) {
@@ -7060,7 +18446,8 @@ void LocalFileSystem::RemoveFile(const string &filename) {
 	}
 }
 
-bool LocalFileSystem::ListFiles(const string &directory, const std::function<void(const string &, bool)> &callback) {
+bool LocalFileSystem::ListFiles(const string &directory, const std::function<void(const string &, bool)> &callback,
+                                FileOpener *opener) {
 	if (!DirectoryExists(directory)) {
 		return false;
 	}
@@ -7141,7 +18528,7 @@ public:
 	WindowsFileHandle(FileSystem &file_system, string path, HANDLE fd)
 	    : FileHandle(file_system, path), position(0), fd(fd) {
 	}
-	virtual ~WindowsFileHandle() {
+	~WindowsFileHandle() override {
 		Close();
 	}
 
@@ -7158,8 +18545,9 @@ public:
 	};
 };
 
-unique_ptr<FileHandle> LocalFileSystem::OpenFile(const string &path, uint8_t flags, FileLockType lock_type,
+unique_ptr<FileHandle> LocalFileSystem::OpenFile(const string &path_p, uint8_t flags, FileLockType lock_type,
                                                  FileCompressionType compression, FileOpener *opener) {
+	auto path = FileSystem::ExpandPath(path_p, opener);
 	if (compression != FileCompressionType::UNCOMPRESSED) {
 		throw NotImplementedException("Unsupported compression type for default file system");
 	}
@@ -7200,16 +18588,20 @@ unique_ptr<FileHandle> LocalFileSystem::OpenFile(const string &path, uint8_t fla
 		auto error = LocalFileSystem::GetLastErrorAsString();
 		throw IOException("Cannot open file \"%s\": %s", path.c_str(), error);
 	}
-	auto handle = make_unique<WindowsFileHandle>(*this, path.c_str(), hFile);
+	auto handle = make_uniq<WindowsFileHandle>(*this, path.c_str(), hFile);
 	if (flags & FileFlags::FILE_FLAGS_APPEND) {
 		auto file_size = GetFileSize(*handle);
 		SetFilePointer(*handle, file_size);
 	}
-	return move(handle);
+	return std::move(handle);
 }
 
 void LocalFileSystem::SetFilePointer(FileHandle &handle, idx_t location) {
-	((WindowsFileHandle &)handle).position = location;
+	auto &whandle = (WindowsFileHandle &)handle;
+	whandle.position = location;
+	LARGE_INTEGER wlocation;
+	wlocation.QuadPart = location;
+	SetFilePointerEx(whandle.fd, wlocation, NULL, FILE_BEGIN);
 }
 
 idx_t LocalFileSystem::GetFilePointer(FileHandle &handle) {
@@ -7227,7 +18619,8 @@ static DWORD FSInternalRead(FileHandle &handle, HANDLE hFile, void *buffer, int6
 	auto rc = ReadFile(hFile, buffer, (DWORD)nr_bytes, &bytes_read, &ov);
 	if (!rc) {
 		auto error = LocalFileSystem::GetLastErrorAsString();
-		throw IOException("Could not read file \"%s\" (error in ReadFile): %s", handle.path, error);
+		throw IOException("Could not read file \"%s\" (error in ReadFile(location: %llu, nr_bytes: %lld)): %s",
+		                  handle.path, location, nr_bytes, error);
 	}
 	return bytes_read;
 }
@@ -7382,7 +18775,8 @@ void LocalFileSystem::RemoveFile(const string &filename) {
 	}
 }
 
-bool LocalFileSystem::ListFiles(const string &directory, const std::function<void(const string &, bool)> &callback) {
+bool LocalFileSystem::ListFiles(const string &directory, const std::function<void(const string &, bool)> &callback,
+                                FileOpener *opener) {
 	string search_dir = JoinPath(directory, "*");
 
 	auto unicode_path = WindowsUtil::UTF8ToUnicode(search_dir.c_str());
@@ -7421,7 +18815,7 @@ void LocalFileSystem::MoveFile(const string &source, const string &target) {
 	auto source_unicode = WindowsUtil::UTF8ToUnicode(source.c_str());
 	auto target_unicode = WindowsUtil::UTF8ToUnicode(target.c_str());
 	if (!MoveFileW(source_unicode.c_str(), target_unicode.c_str())) {
-		throw IOException("Could not move file");
+		throw IOException("Could not move file: %s", GetLastErrorAsString());
 	}
 }
 
@@ -7465,22 +18859,49 @@ idx_t LocalFileSystem::SeekPosition(FileHandle &handle) {
 	return GetFilePointer(handle);
 }
 
-static bool HasGlob(const string &str) {
-	for (idx_t i = 0; i < str.size(); i++) {
-		switch (str[i]) {
-		case '*':
-		case '?':
-		case '[':
-			return true;
-		default:
-			break;
-		}
-	}
-	return false;
+static bool IsCrawl(const string &glob) {
+	// glob must match exactly
+	return glob == "**";
+}
+static bool HasMultipleCrawl(const vector<string> &splits) {
+	return std::count(splits.begin(), splits.end(), "**") > 1;
+}
+static bool IsSymbolicLink(const string &path) {
+#ifndef _WIN32
+	struct stat status;
+	return (lstat(path.c_str(), &status) != -1 && S_ISLNK(status.st_mode));
+#else
+	auto attributes = WindowsGetFileAttributes(path);
+	if (attributes == INVALID_FILE_ATTRIBUTES)
+		return false;
+	return attributes & FILE_ATTRIBUTE_REPARSE_POINT;
+#endif
 }
 
-static void GlobFiles(FileSystem &fs, const string &path, const string &glob, bool match_directory,
-                      vector<string> &result, bool join_path) {
+static void RecursiveGlobDirectories(FileSystem &fs, const string &path, vector<string> &result, bool match_directory,
+                                     bool join_path) {
+
+	fs.ListFiles(path, [&](const string &fname, bool is_directory) {
+		string concat;
+		if (join_path) {
+			concat = fs.JoinPath(path, fname);
+		} else {
+			concat = fname;
+		}
+		if (IsSymbolicLink(concat)) {
+			return;
+		}
+		if (is_directory == match_directory) {
+			result.push_back(concat);
+		}
+		if (is_directory) {
+			RecursiveGlobDirectories(fs, concat, result, match_directory, true);
+		}
+	});
+}
+
+static void GlobFilesInternal(FileSystem &fs, const string &path, const string &glob, bool match_directory,
+                              vector<string> &result, bool join_path) {
 	fs.ListFiles(path, [&](const string &fname, bool is_directory) {
 		if (is_directory != match_directory) {
 			return;
@@ -7493,6 +18914,26 @@ static void GlobFiles(FileSystem &fs, const string &path, const string &glob, bo
 			}
 		}
 	});
+}
+
+vector<string> LocalFileSystem::FetchFileWithoutGlob(const string &path, FileOpener *opener, bool absolute_path) {
+	vector<string> result;
+	if (FileExists(path) || IsPipe(path)) {
+		result.push_back(path);
+	} else if (!absolute_path) {
+		Value value;
+		if (opener && opener->TryGetCurrentSetting("file_search_path", value)) {
+			auto search_paths_str = value.ToString();
+			vector<std::string> search_paths = StringUtil::Split(search_paths_str, ',');
+			for (const auto &search_path : search_paths) {
+				auto joined_path = JoinPath(search_path, path);
+				if (FileExists(joined_path) || IsPipe(joined_path)) {
+					result.push_back(joined_path);
+				}
+			}
+		}
+	}
+	return result;
 }
 
 vector<string> LocalFileSystem::Glob(const string &path, FileOpener *opener) {
@@ -7528,38 +18969,41 @@ vector<string> LocalFileSystem::Glob(const string &path, FileOpener *opener) {
 		absolute_path = true;
 	} else if (splits[0] == "~") {
 		// starts with home directory
-		auto home_directory = GetHomeDirectory();
+		auto home_directory = GetHomeDirectory(opener);
 		if (!home_directory.empty()) {
 			absolute_path = true;
 			splits[0] = home_directory;
+			D_ASSERT(path[0] == '~');
+			if (!HasGlob(path)) {
+				return Glob(home_directory + path.substr(1));
+			}
 		}
 	}
 	// Check if the path has a glob at all
 	if (!HasGlob(path)) {
 		// no glob: return only the file (if it exists or is a pipe)
-		vector<string> result;
-		if (FileExists(path) || IsPipe(path)) {
-			result.push_back(path);
-		} else if (!absolute_path) {
-			Value value;
-			if (opener->TryGetCurrentSetting("file_search_path", value)) {
-				auto search_paths_str = value.ToString();
-				std::vector<std::string> search_paths = StringUtil::Split(search_paths_str, ',');
-				for (const auto &search_path : search_paths) {
-					auto joined_path = JoinPath(search_path, path);
-					if (FileExists(joined_path) || IsPipe(joined_path)) {
-						result.push_back(joined_path);
-					}
-				}
-			}
-		}
-		return result;
+		return FetchFileWithoutGlob(path, opener, absolute_path);
 	}
 	vector<string> previous_directories;
 	if (absolute_path) {
 		// for absolute paths, we don't start by scanning the current directory
 		previous_directories.push_back(splits[0]);
+	} else {
+		// If file_search_path is set, use those paths as the first glob elements
+		Value value;
+		if (opener && opener->TryGetCurrentSetting("file_search_path", value)) {
+			auto search_paths_str = value.ToString();
+			vector<std::string> search_paths = StringUtil::Split(search_paths_str, ',');
+			for (const auto &search_path : search_paths) {
+				previous_directories.push_back(search_path);
+			}
+		}
 	}
+
+	if (HasMultipleCrawl(splits)) {
+		throw IOException("Cannot use multiple \'**\' in one path");
+	}
+
 	for (idx_t i = absolute_path ? 1 : 0; i < splits.size(); i++) {
 		bool is_last_chunk = i + 1 == splits.size();
 		bool has_glob = HasGlob(splits[i]);
@@ -7571,35 +19015,454 @@ vector<string> LocalFileSystem::Glob(const string &path, FileOpener *opener) {
 			if (previous_directories.empty()) {
 				result.push_back(splits[i]);
 			} else {
-				for (auto &prev_directory : previous_directories) {
-					result.push_back(JoinPath(prev_directory, splits[i]));
+				if (is_last_chunk) {
+					for (auto &prev_directory : previous_directories) {
+						const string filename = JoinPath(prev_directory, splits[i]);
+						if (FileExists(filename) || DirectoryExists(filename)) {
+							result.push_back(filename);
+						}
+					}
+				} else {
+					for (auto &prev_directory : previous_directories) {
+						result.push_back(JoinPath(prev_directory, splits[i]));
+					}
 				}
 			}
 		} else {
-			if (previous_directories.empty()) {
-				// no previous directories: list in the current path
-				GlobFiles(*this, ".", splits[i], !is_last_chunk, result, false);
+			if (IsCrawl(splits[i])) {
+				if (!is_last_chunk) {
+					result = previous_directories;
+				}
+				if (previous_directories.empty()) {
+					RecursiveGlobDirectories(*this, ".", result, !is_last_chunk, false);
+				} else {
+					for (auto &prev_dir : previous_directories) {
+						RecursiveGlobDirectories(*this, prev_dir, result, !is_last_chunk, true);
+					}
+				}
 			} else {
-				// previous directories
-				// we iterate over each of the previous directories, and apply the glob of the current directory
-				for (auto &prev_directory : previous_directories) {
-					GlobFiles(*this, prev_directory, splits[i], !is_last_chunk, result, true);
+				if (previous_directories.empty()) {
+					// no previous directories: list in the current path
+					GlobFilesInternal(*this, ".", splits[i], !is_last_chunk, result, false);
+				} else {
+					// previous directories
+					// we iterate over each of the previous directories, and apply the glob of the current directory
+					for (auto &prev_directory : previous_directories) {
+						GlobFilesInternal(*this, prev_directory, splits[i], !is_last_chunk, result, true);
+					}
 				}
 			}
 		}
-		if (is_last_chunk || result.empty()) {
+		if (result.empty()) {
+			// no result found that matches the glob
+			// last ditch effort: search the path as a string literal
+			return FetchFileWithoutGlob(path, opener, absolute_path);
+		}
+		if (is_last_chunk) {
 			return result;
 		}
-		previous_directories = move(result);
+		previous_directories = std::move(result);
 	}
 	return vector<string>();
 }
 
 unique_ptr<FileSystem> FileSystem::CreateLocal() {
-	return make_unique<LocalFileSystem>();
+	return make_uniq<LocalFileSystem>();
 }
 
 } // namespace duckdb
+
+
+
+
+
+
+
+
+
+namespace duckdb {
+
+void MultiFileReader::AddParameters(TableFunction &table_function) {
+	table_function.named_parameters["filename"] = LogicalType::BOOLEAN;
+	table_function.named_parameters["hive_partitioning"] = LogicalType::BOOLEAN;
+	table_function.named_parameters["union_by_name"] = LogicalType::BOOLEAN;
+}
+
+vector<string> MultiFileReader::GetFileList(ClientContext &context, const Value &input, const string &name,
+                                            FileGlobOptions options) {
+	auto &config = DBConfig::GetConfig(context);
+	if (!config.options.enable_external_access) {
+		throw PermissionException("Scanning %s files is disabled through configuration", name);
+	}
+	if (input.IsNull()) {
+		throw ParserException("%s reader cannot take NULL list as parameter", name);
+	}
+	FileSystem &fs = FileSystem::GetFileSystem(context);
+	vector<string> files;
+	if (input.type().id() == LogicalTypeId::VARCHAR) {
+		auto file_name = StringValue::Get(input);
+		files = fs.GlobFiles(file_name, context, options);
+	} else if (input.type().id() == LogicalTypeId::LIST) {
+		for (auto &val : ListValue::GetChildren(input)) {
+			if (val.IsNull()) {
+				throw ParserException("%s reader cannot take NULL input as parameter", name);
+			}
+			auto glob_files = fs.GlobFiles(StringValue::Get(val), context, options);
+			files.insert(files.end(), glob_files.begin(), glob_files.end());
+		}
+	} else {
+		throw InternalException("Unsupported type for MultiFileReader::GetFileList");
+	}
+	if (files.empty() && options == FileGlobOptions::DISALLOW_EMPTY) {
+		throw IOException("%s reader needs at least one file to read", name);
+	}
+	return files;
+}
+
+bool MultiFileReader::ParseOption(const string &key, const Value &val, MultiFileReaderOptions &options) {
+	auto loption = StringUtil::Lower(key);
+	if (loption == "filename") {
+		options.filename = BooleanValue::Get(val);
+	} else if (loption == "hive_partitioning") {
+		options.hive_partitioning = BooleanValue::Get(val);
+		options.auto_detect_hive_partitioning = false;
+	} else if (loption == "union_by_name") {
+		options.union_by_name = BooleanValue::Get(val);
+	} else {
+		return false;
+	}
+	return true;
+}
+
+bool MultiFileReader::ComplexFilterPushdown(ClientContext &context, vector<string> &files,
+                                            const MultiFileReaderOptions &options, LogicalGet &get,
+                                            vector<unique_ptr<Expression>> &filters) {
+	if (files.empty()) {
+		return false;
+	}
+	if (!options.hive_partitioning && !options.filename) {
+		return false;
+	}
+
+	unordered_map<string, column_t> column_map;
+	for (idx_t i = 0; i < get.column_ids.size(); i++) {
+		column_map.insert({get.names[get.column_ids[i]], i});
+	}
+
+	auto start_files = files.size();
+	HivePartitioning::ApplyFiltersToFileList(context, files, filters, column_map, get.table_index,
+	                                         options.hive_partitioning, options.filename);
+	if (files.size() != start_files) {
+		// we have pruned files
+		return true;
+	}
+	return false;
+}
+
+MultiFileReaderBindData MultiFileReader::BindOptions(MultiFileReaderOptions &options, const vector<string> &files,
+                                                     vector<LogicalType> &return_types, vector<string> &names) {
+	MultiFileReaderBindData bind_data;
+	// Add generated constant column for filename
+	if (options.filename) {
+		if (std::find(names.begin(), names.end(), "filename") != names.end()) {
+			throw BinderException("Using filename option on file with column named filename is not supported");
+		}
+		bind_data.filename_idx = names.size();
+		return_types.emplace_back(LogicalType::VARCHAR);
+		names.emplace_back("filename");
+	}
+
+	// Add generated constant columns from hive partitioning scheme
+	if (options.hive_partitioning) {
+		D_ASSERT(!files.empty());
+		auto partitions = HivePartitioning::Parse(files[0]);
+		// verify that all files have the same hive partitioning scheme
+		for (auto &f : files) {
+			auto file_partitions = HivePartitioning::Parse(f);
+			for (auto &part_info : partitions) {
+				if (file_partitions.find(part_info.first) == file_partitions.end()) {
+					if (options.auto_detect_hive_partitioning == true) {
+						throw BinderException(
+						    "Hive partitioning was enabled automatically, but an error was encountered: Hive partition "
+						    "mismatch between file \"%s\" and \"%s\": key \"%s\" not found\n\nTo switch off hive "
+						    "partition, set: HIVE_PARTITIONING=0",
+						    files[0], f, part_info.first);
+					}
+					throw BinderException(
+					    "Hive partition mismatch between file \"%s\" and \"%s\": key \"%s\" not found", files[0], f,
+					    part_info.first);
+				}
+			}
+			if (partitions.size() != file_partitions.size()) {
+				if (options.auto_detect_hive_partitioning == true) {
+					throw BinderException("Hive partitioning was enabled automatically, but an error was encountered: "
+					                      "Hive partition mismatch between file \"%s\" and \"%s\"\n\nTo switch off "
+					                      "hive partition, set: HIVE_PARTITIONING=0",
+					                      files[0], f);
+				}
+				throw BinderException("Hive partition mismatch between file \"%s\" and \"%s\"", files[0], f);
+			}
+		}
+		for (auto &part : partitions) {
+			idx_t hive_partitioning_index = DConstants::INVALID_INDEX;
+			auto lookup = std::find(names.begin(), names.end(), part.first);
+			if (lookup != names.end()) {
+				// hive partitioning column also exists in file - override
+				auto idx = lookup - names.begin();
+				hive_partitioning_index = idx;
+				return_types[idx] = LogicalType::VARCHAR;
+			} else {
+				// hive partitioning column does not exist in file - add a new column containing the key
+				hive_partitioning_index = names.size();
+				return_types.emplace_back(LogicalType::VARCHAR);
+				names.emplace_back(part.first);
+			}
+			bind_data.hive_partitioning_indexes.emplace_back(part.first, hive_partitioning_index);
+		}
+	}
+	return bind_data;
+}
+
+void MultiFileReader::FinalizeBind(const MultiFileReaderOptions &file_options, const MultiFileReaderBindData &options,
+                                   const string &filename, const vector<string> &local_names,
+                                   const vector<LogicalType> &global_types, const vector<string> &global_names,
+                                   const vector<column_t> &global_column_ids, MultiFileReaderData &reader_data) {
+	// create a map of name -> column index
+	case_insensitive_map_t<idx_t> name_map;
+	if (file_options.union_by_name) {
+		for (idx_t col_idx = 0; col_idx < local_names.size(); col_idx++) {
+			name_map[local_names[col_idx]] = col_idx;
+		}
+	}
+	for (idx_t i = 0; i < global_column_ids.size(); i++) {
+		auto column_id = global_column_ids[i];
+		if (IsRowIdColumnId(column_id)) {
+			// row-id
+			reader_data.constant_map.emplace_back(i, Value::BIGINT(42));
+			continue;
+		}
+		if (column_id == options.filename_idx) {
+			// filename
+			reader_data.constant_map.emplace_back(i, Value(filename));
+			continue;
+		}
+		if (!options.hive_partitioning_indexes.empty()) {
+			// hive partition constants
+			auto partitions = HivePartitioning::Parse(filename);
+			D_ASSERT(partitions.size() == options.hive_partitioning_indexes.size());
+			bool found_partition = false;
+			for (auto &entry : options.hive_partitioning_indexes) {
+				if (column_id == entry.index) {
+					reader_data.constant_map.emplace_back(i, Value(partitions[entry.value]));
+					found_partition = true;
+					break;
+				}
+			}
+			if (found_partition) {
+				continue;
+			}
+		}
+		if (file_options.union_by_name) {
+			auto &global_name = global_names[column_id];
+			auto entry = name_map.find(global_name);
+			bool not_present_in_file = entry == name_map.end();
+			if (not_present_in_file) {
+				// we need to project a column with name \"global_name\" - but it does not exist in the current file
+				// push a NULL value of the specified type
+				reader_data.constant_map.emplace_back(i, Value(global_types[column_id]));
+				continue;
+			}
+		}
+	}
+}
+
+void MultiFileReader::CreateNameMapping(const string &file_name, const vector<LogicalType> &local_types,
+                                        const vector<string> &local_names, const vector<LogicalType> &global_types,
+                                        const vector<string> &global_names, const vector<column_t> &global_column_ids,
+                                        MultiFileReaderData &reader_data, const string &initial_file) {
+	D_ASSERT(global_types.size() == global_names.size());
+	D_ASSERT(local_types.size() == local_names.size());
+	// we have expected types: create a map of name -> column index
+	case_insensitive_map_t<idx_t> name_map;
+	for (idx_t col_idx = 0; col_idx < local_names.size(); col_idx++) {
+		name_map[local_names[col_idx]] = col_idx;
+	}
+	for (idx_t i = 0; i < global_column_ids.size(); i++) {
+		// check if this is a constant column
+		bool constant = false;
+		for (auto &entry : reader_data.constant_map) {
+			if (entry.column_id == i) {
+				constant = true;
+				break;
+			}
+		}
+		if (constant) {
+			// this column is constant for this file
+			continue;
+		}
+		// not constant - look up the column in the name map
+		auto global_id = global_column_ids[i];
+		if (global_id >= global_types.size()) {
+			throw InternalException(
+			    "MultiFileReader::CreatePositionalMapping - global_id is out of range in global_types for this file");
+		}
+		auto &global_name = global_names[global_id];
+		auto entry = name_map.find(global_name);
+		if (entry == name_map.end()) {
+			string candidate_names;
+			for (auto &local_name : local_names) {
+				if (!candidate_names.empty()) {
+					candidate_names += ", ";
+				}
+				candidate_names += local_name;
+			}
+			throw IOException(
+			    StringUtil::Format("Failed to read file \"%s\": schema mismatch in glob: column \"%s\" was read from "
+			                       "the original file \"%s\", but could not be found in file \"%s\".\nCandidate names: "
+			                       "%s\nIf you are trying to "
+			                       "read files with different schemas, try setting union_by_name=True",
+			                       file_name, global_name, initial_file, file_name, candidate_names));
+		}
+		// we found the column in the local file - check if the types are the same
+		auto local_id = entry->second;
+		D_ASSERT(global_id < global_types.size());
+		D_ASSERT(local_id < local_types.size());
+		auto &global_type = global_types[global_id];
+		auto &local_type = local_types[local_id];
+		if (global_type != local_type) {
+			reader_data.cast_map[local_id] = global_type;
+		}
+		// the types are the same - create the mapping
+		reader_data.column_mapping.push_back(i);
+		reader_data.column_ids.push_back(local_id);
+	}
+	reader_data.empty_columns = reader_data.column_ids.empty();
+}
+
+void MultiFileReader::CreateMapping(const string &file_name, const vector<LogicalType> &local_types,
+                                    const vector<string> &local_names, const vector<LogicalType> &global_types,
+                                    const vector<string> &global_names, const vector<column_t> &global_column_ids,
+                                    optional_ptr<TableFilterSet> filters, MultiFileReaderData &reader_data,
+                                    const string &initial_file) {
+	CreateNameMapping(file_name, local_types, local_names, global_types, global_names, global_column_ids, reader_data,
+	                  initial_file);
+	if (filters) {
+		reader_data.filter_map.resize(global_types.size());
+		for (idx_t c = 0; c < reader_data.column_mapping.size(); c++) {
+			auto map_index = reader_data.column_mapping[c];
+			reader_data.filter_map[map_index].index = c;
+			reader_data.filter_map[map_index].is_constant = false;
+		}
+		for (idx_t c = 0; c < reader_data.constant_map.size(); c++) {
+			auto constant_index = reader_data.constant_map[c].column_id;
+			reader_data.filter_map[constant_index].index = c;
+			reader_data.filter_map[constant_index].is_constant = true;
+		}
+	}
+}
+
+void MultiFileReader::FinalizeChunk(const MultiFileReaderBindData &bind_data, const MultiFileReaderData &reader_data,
+                                    DataChunk &chunk) {
+	// reference all the constants set up in MultiFileReader::FinalizeBind
+	for (auto &entry : reader_data.constant_map) {
+		chunk.data[entry.column_id].Reference(entry.value);
+	}
+	chunk.Verify();
+}
+
+TableFunctionSet MultiFileReader::CreateFunctionSet(TableFunction table_function) {
+	TableFunctionSet function_set(table_function.name);
+	function_set.AddFunction(table_function);
+	D_ASSERT(table_function.arguments.size() == 1 && table_function.arguments[0] == LogicalType::VARCHAR);
+	table_function.arguments[0] = LogicalType::LIST(LogicalType::VARCHAR);
+	function_set.AddFunction(std::move(table_function));
+	return function_set;
+}
+
+void MultiFileReaderOptions::Serialize(Serializer &serializer) const {
+	FieldWriter writer(serializer);
+	writer.WriteField<bool>(filename);
+	writer.WriteField<bool>(hive_partitioning);
+	writer.WriteField<bool>(union_by_name);
+	writer.Finalize();
+}
+
+MultiFileReaderOptions MultiFileReaderOptions::Deserialize(Deserializer &source) {
+	MultiFileReaderOptions result;
+	FieldReader reader(source);
+	result.filename = reader.ReadRequired<bool>();
+	result.hive_partitioning = reader.ReadRequired<bool>();
+	result.union_by_name = reader.ReadRequired<bool>();
+	reader.Finalize();
+	return result;
+}
+
+void MultiFileReaderBindData::Serialize(Serializer &serializer) const {
+	FieldWriter writer(serializer);
+	writer.WriteField(filename_idx);
+	writer.WriteRegularSerializableList<HivePartitioningIndex>(hive_partitioning_indexes);
+	writer.Finalize();
+}
+
+MultiFileReaderBindData MultiFileReaderBindData::Deserialize(Deserializer &source) {
+	MultiFileReaderBindData result;
+	FieldReader reader(source);
+	result.filename_idx = reader.ReadRequired<idx_t>();
+	result.hive_partitioning_indexes =
+	    reader.ReadRequiredSerializableList<HivePartitioningIndex, HivePartitioningIndex>();
+	reader.Finalize();
+	return result;
+}
+
+HivePartitioningIndex::HivePartitioningIndex(string value_p, idx_t index) : value(std::move(value_p)), index(index) {
+}
+
+void HivePartitioningIndex::Serialize(Serializer &serializer) const {
+	FieldWriter writer(serializer);
+	writer.WriteString(value);
+	writer.WriteField<idx_t>(index);
+	writer.Finalize();
+}
+
+HivePartitioningIndex HivePartitioningIndex::Deserialize(Deserializer &source) {
+	FieldReader reader(source);
+	auto value = reader.ReadRequired<string>();
+	auto index = reader.ReadRequired<idx_t>();
+	reader.Finalize();
+	return HivePartitioningIndex(std::move(value), index);
+}
+
+void MultiFileReaderOptions::AddBatchInfo(BindInfo &bind_info) const {
+	bind_info.InsertOption("filename", Value::BOOLEAN(filename));
+	bind_info.InsertOption("hive_partitioning", Value::BOOLEAN(hive_partitioning));
+	bind_info.InsertOption("union_by_name", Value::BOOLEAN(union_by_name));
+}
+
+void UnionByName::CombineUnionTypes(const vector<string> &col_names, const vector<LogicalType> &sql_types,
+                                    vector<LogicalType> &union_col_types, vector<string> &union_col_names,
+                                    case_insensitive_map_t<idx_t> &union_names_map) {
+	D_ASSERT(col_names.size() == sql_types.size());
+
+	for (idx_t col = 0; col < col_names.size(); ++col) {
+		auto union_find = union_names_map.find(col_names[col]);
+
+		if (union_find != union_names_map.end()) {
+			// given same name , union_col's type must compatible with col's type
+			auto &current_type = union_col_types[union_find->second];
+			LogicalType compatible_type;
+			compatible_type = LogicalType::MaxLogicalType(current_type, sql_types[col]);
+			union_col_types[union_find->second] = compatible_type;
+		} else {
+			union_names_map[col_names[col]] = union_col_names.size();
+			union_col_names.emplace_back(col_names[col]);
+			union_col_types.emplace_back(sql_types[col]);
+		}
+	}
+}
+
+} // namespace duckdb
+
+
 
 
 
@@ -8413,17 +20276,38 @@ struct IntegerCastOperation {
 	}
 
 	template <class T, bool NEGATIVE>
+	static bool HandleHexDigit(T &state, uint8_t digit) {
+		using result_t = typename T::Result;
+		if (state.result > (NumericLimits<result_t>::Maximum() - digit) / 16) {
+			return false;
+		}
+		state.result = state.result * 16 + digit;
+		return true;
+	}
+
+	template <class T, bool NEGATIVE>
+	static bool HandleBinaryDigit(T &state, uint8_t digit) {
+		using result_t = typename T::Result;
+		if (state.result > (NumericLimits<result_t>::Maximum() - digit) / 2) {
+			return false;
+		}
+		state.result = state.result * 2 + digit;
+		return true;
+	}
+
+	template <class T, bool NEGATIVE>
 	static bool HandleExponent(T &state, int32_t exponent) {
 		using result_t = typename T::Result;
 		double dbl_res = state.result * std::pow(10.0L, exponent);
-		if (dbl_res < NumericLimits<result_t>::Minimum() || dbl_res > NumericLimits<result_t>::Maximum()) {
+		if (dbl_res < (double)NumericLimits<result_t>::Minimum() ||
+		    dbl_res > (double)NumericLimits<result_t>::Maximum()) {
 			return false;
 		}
 		state.result = (result_t)std::nearbyint(dbl_res);
 		return true;
 	}
 
-	template <class T, bool NEGATIVE>
+	template <class T, bool NEGATIVE, bool ALLOW_EXPONENT>
 	static bool HandleDecimal(T &state, uint8_t digit) {
 		if (state.seen_decimal) {
 			return true;
@@ -8449,20 +20333,33 @@ struct IntegerCastOperation {
 		return true;
 	}
 
-	template <class T>
+	template <class T, bool NEGATIVE>
 	static bool Finalize(T &state) {
 		return true;
 	}
 };
 
-template <class T, bool NEGATIVE, bool ALLOW_EXPONENT, class OP = IntegerCastOperation>
+template <class T, bool NEGATIVE, bool ALLOW_EXPONENT, class OP = IntegerCastOperation, char decimal_separator = '.'>
 static bool IntegerCastLoop(const char *buf, idx_t len, T &result, bool strict) {
-	idx_t start_pos = NEGATIVE || *buf == '+' ? 1 : 0;
+	idx_t start_pos;
+	if (NEGATIVE) {
+		start_pos = 1;
+	} else {
+		if (*buf == '+') {
+			if (strict) {
+				// leading plus is not allowed in strict mode
+				return false;
+			}
+			start_pos = 1;
+		} else {
+			start_pos = 0;
+		}
+	}
 	idx_t pos = start_pos;
 	while (pos < len) {
 		if (!StringUtil::CharacterIsDigit(buf[pos])) {
 			// not a digit!
-			if (buf[pos] == '.') {
+			if (buf[pos] == decimal_separator) {
 				if (strict) {
 					return false;
 				}
@@ -8476,7 +20373,7 @@ static bool IntegerCastLoop(const char *buf, idx_t len, T &result, bool strict) 
 					if (!StringUtil::CharacterIsDigit(buf[pos])) {
 						break;
 					}
-					if (!OP::template HandleDecimal<T, NEGATIVE>(result, buf[pos] - '0')) {
+					if (!OP::template HandleDecimal<T, NEGATIVE, ALLOW_EXPONENT>(result, buf[pos] - '0')) {
 						return false;
 					}
 					pos++;
@@ -8512,11 +20409,13 @@ static bool IntegerCastLoop(const char *buf, idx_t len, T &result, bool strict) 
 					ExponentData exponent {0, false};
 					int negative = buf[pos] == '-';
 					if (negative) {
-						if (!IntegerCastLoop<ExponentData, true, false>(buf + pos, len - pos, exponent, strict)) {
+						if (!IntegerCastLoop<ExponentData, true, false, IntegerCastOperation, decimal_separator>(
+						        buf + pos, len - pos, exponent, strict)) {
 							return false;
 						}
 					} else {
-						if (!IntegerCastLoop<ExponentData, false, false>(buf + pos, len - pos, exponent, strict)) {
+						if (!IntegerCastLoop<ExponentData, false, false, IntegerCastOperation, decimal_separator>(
+						        buf + pos, len - pos, exponent, strict)) {
 							return false;
 						}
 					}
@@ -8530,14 +20429,81 @@ static bool IntegerCastLoop(const char *buf, idx_t len, T &result, bool strict) 
 			return false;
 		}
 	}
-	if (!OP::template Finalize<T>(result)) {
+	if (!OP::template Finalize<T, NEGATIVE>(result)) {
+		return false;
+	}
+	return pos > start_pos;
+}
+
+template <class T, bool NEGATIVE, bool ALLOW_EXPONENT, class OP = IntegerCastOperation>
+static bool IntegerHexCastLoop(const char *buf, idx_t len, T &result, bool strict) {
+	if (ALLOW_EXPONENT || NEGATIVE) {
+		return false;
+	}
+	idx_t start_pos = 1;
+	idx_t pos = start_pos;
+	char current_char;
+	while (pos < len) {
+		current_char = StringUtil::CharacterToLower(buf[pos]);
+		if (!StringUtil::CharacterIsHex(current_char)) {
+			return false;
+		}
+		uint8_t digit;
+		if (current_char >= 'a') {
+			digit = current_char - 'a' + 10;
+		} else {
+			digit = current_char - '0';
+		}
+		pos++;
+		if (!OP::template HandleHexDigit<T, NEGATIVE>(result, digit)) {
+			return false;
+		}
+	}
+	if (!OP::template Finalize<T, NEGATIVE>(result)) {
+		return false;
+	}
+	return pos > start_pos;
+}
+
+template <class T, bool NEGATIVE, bool ALLOW_EXPONENT, class OP = IntegerCastOperation>
+static bool IntegerBinaryCastLoop(const char *buf, idx_t len, T &result, bool strict) {
+	if (ALLOW_EXPONENT || NEGATIVE) {
+		return false;
+	}
+	idx_t start_pos = 1;
+	idx_t pos = start_pos;
+	uint8_t digit;
+	char current_char;
+	while (pos < len) {
+		current_char = buf[pos];
+		if (current_char == '_' && pos > start_pos) {
+			// skip underscore, if it is not the first character
+			pos++;
+			if (pos == len) {
+				// we cant end on an underscore either
+				return false;
+			}
+			continue;
+		} else if (current_char == '0') {
+			digit = 0;
+		} else if (current_char == '1') {
+			digit = 1;
+		} else {
+			return false;
+		}
+		pos++;
+		if (!OP::template HandleBinaryDigit<T, NEGATIVE>(result, digit)) {
+			return false;
+		}
+	}
+	if (!OP::template Finalize<T, NEGATIVE>(result)) {
 		return false;
 	}
 	return pos > start_pos;
 }
 
 template <class T, bool IS_SIGNED = true, bool ALLOW_EXPONENT = true, class OP = IntegerCastOperation,
-          bool ZERO_INITIALIZE = true>
+          bool ZERO_INITIALIZE = true, char decimal_separator = '.'>
 static bool TryIntegerCast(const char *buf, idx_t len, T &result, bool strict) {
 	// skip any spaces at the start
 	while (len > 0 && StringUtil::CharacterIsSpace(*buf)) {
@@ -8547,14 +20513,11 @@ static bool TryIntegerCast(const char *buf, idx_t len, T &result, bool strict) {
 	if (len == 0) {
 		return false;
 	}
-	int negative = *buf == '-';
-
 	if (ZERO_INITIALIZE) {
 		memset(&result, 0, sizeof(T));
 	}
-	if (!negative) {
-		return IntegerCastLoop<T, false, ALLOW_EXPONENT, OP>(buf, len, result, strict);
-	} else {
+	// if the number is negative, we set the negative flag and skip the negative sign
+	if (*buf == '-') {
 		if (!IS_SIGNED) {
 			// Need to check if its not -0
 			idx_t pos = 1;
@@ -8564,8 +20527,25 @@ static bool TryIntegerCast(const char *buf, idx_t len, T &result, bool strict) {
 				}
 			}
 		}
-		return IntegerCastLoop<T, true, ALLOW_EXPONENT, OP>(buf, len, result, strict);
+		return IntegerCastLoop<T, true, ALLOW_EXPONENT, OP, decimal_separator>(buf, len, result, strict);
 	}
+	if (len > 1 && *buf == '0') {
+		if (buf[1] == 'x' || buf[1] == 'X') {
+			// If it starts with 0x or 0X, we parse it as a hex value
+			buf++;
+			len--;
+			return IntegerHexCastLoop<T, false, false, OP>(buf, len, result, strict);
+		} else if (buf[1] == 'b' || buf[1] == 'B') {
+			// If it starts with 0b or 0B, we parse it as a binary value
+			buf++;
+			len--;
+			return IntegerBinaryCastLoop<T, false, false, OP>(buf, len, result, strict);
+		} else if (strict && StringUtil::CharacterIsDigit(buf[1])) {
+			// leading zeros are not allowed in strict mode
+			return false;
+		}
+	}
+	return IntegerCastLoop<T, false, ALLOW_EXPONENT, OP, decimal_separator>(buf, len, result, strict);
 }
 
 template <typename T, bool IS_SIGNED = true>
@@ -8580,7 +20560,7 @@ static inline bool TrySimpleIntegerCast(const char *buf, idx_t len, T &result, b
 
 template <>
 bool TryCast::Operation(string_t input, bool &result, bool strict) {
-	auto input_data = input.GetDataUnsafe();
+	auto input_data = input.GetData();
 	auto input_size = input.GetSize();
 
 	switch (input_size) {
@@ -8624,39 +20604,39 @@ bool TryCast::Operation(string_t input, bool &result, bool strict) {
 }
 template <>
 bool TryCast::Operation(string_t input, int8_t &result, bool strict) {
-	return TrySimpleIntegerCast<int8_t>(input.GetDataUnsafe(), input.GetSize(), result, strict);
+	return TrySimpleIntegerCast<int8_t>(input.GetData(), input.GetSize(), result, strict);
 }
 template <>
 bool TryCast::Operation(string_t input, int16_t &result, bool strict) {
-	return TrySimpleIntegerCast<int16_t>(input.GetDataUnsafe(), input.GetSize(), result, strict);
+	return TrySimpleIntegerCast<int16_t>(input.GetData(), input.GetSize(), result, strict);
 }
 template <>
 bool TryCast::Operation(string_t input, int32_t &result, bool strict) {
-	return TrySimpleIntegerCast<int32_t>(input.GetDataUnsafe(), input.GetSize(), result, strict);
+	return TrySimpleIntegerCast<int32_t>(input.GetData(), input.GetSize(), result, strict);
 }
 template <>
 bool TryCast::Operation(string_t input, int64_t &result, bool strict) {
-	return TrySimpleIntegerCast<int64_t>(input.GetDataUnsafe(), input.GetSize(), result, strict);
+	return TrySimpleIntegerCast<int64_t>(input.GetData(), input.GetSize(), result, strict);
 }
 
 template <>
 bool TryCast::Operation(string_t input, uint8_t &result, bool strict) {
-	return TrySimpleIntegerCast<uint8_t, false>(input.GetDataUnsafe(), input.GetSize(), result, strict);
+	return TrySimpleIntegerCast<uint8_t, false>(input.GetData(), input.GetSize(), result, strict);
 }
 template <>
 bool TryCast::Operation(string_t input, uint16_t &result, bool strict) {
-	return TrySimpleIntegerCast<uint16_t, false>(input.GetDataUnsafe(), input.GetSize(), result, strict);
+	return TrySimpleIntegerCast<uint16_t, false>(input.GetData(), input.GetSize(), result, strict);
 }
 template <>
 bool TryCast::Operation(string_t input, uint32_t &result, bool strict) {
-	return TrySimpleIntegerCast<uint32_t, false>(input.GetDataUnsafe(), input.GetSize(), result, strict);
+	return TrySimpleIntegerCast<uint32_t, false>(input.GetData(), input.GetSize(), result, strict);
 }
 template <>
 bool TryCast::Operation(string_t input, uint64_t &result, bool strict) {
-	return TrySimpleIntegerCast<uint64_t, false>(input.GetDataUnsafe(), input.GetSize(), result, strict);
+	return TrySimpleIntegerCast<uint64_t, false>(input.GetData(), input.GetSize(), result, strict);
 }
 
-template <class T>
+template <class T, char decimal_separator = '.'>
 static bool TryDoubleCast(const char *buf, idx_t len, T &result, bool strict) {
 	// skip any spaces at the start
 	while (len > 0 && StringUtil::CharacterIsSpace(*buf)) {
@@ -8667,11 +20647,21 @@ static bool TryDoubleCast(const char *buf, idx_t len, T &result, bool strict) {
 		return false;
 	}
 	if (*buf == '+') {
+		if (strict) {
+			// plus is not allowed in strict mode
+			return false;
+		}
 		buf++;
 		len--;
 	}
+	if (strict && len >= 2) {
+		if (buf[0] == '0' && StringUtil::CharacterIsDigit(buf[1])) {
+			// leading zeros are not allowed in strict mode
+			return false;
+		}
+	}
 	auto endptr = buf + len;
-	auto parse_result = duckdb_fast_float::from_chars(buf, buf + len, result);
+	auto parse_result = duckdb_fast_float::from_chars(buf, buf + len, result, decimal_separator);
 	if (parse_result.ec != std::errc()) {
 		return false;
 	}
@@ -8686,12 +20676,32 @@ static bool TryDoubleCast(const char *buf, idx_t len, T &result, bool strict) {
 
 template <>
 bool TryCast::Operation(string_t input, float &result, bool strict) {
-	return TryDoubleCast<float>(input.GetDataUnsafe(), input.GetSize(), result, strict);
+	return TryDoubleCast<float>(input.GetData(), input.GetSize(), result, strict);
 }
 
 template <>
 bool TryCast::Operation(string_t input, double &result, bool strict) {
-	return TryDoubleCast<double>(input.GetDataUnsafe(), input.GetSize(), result, strict);
+	return TryDoubleCast<double>(input.GetData(), input.GetSize(), result, strict);
+}
+
+template <>
+bool TryCastErrorMessageCommaSeparated::Operation(string_t input, float &result, string *error_message, bool strict) {
+	if (!TryDoubleCast<float, ','>(input.GetData(), input.GetSize(), result, strict)) {
+		HandleCastError::AssignError(StringUtil::Format("Could not cast string to float: \"%s\"", input.GetString()),
+		                             error_message);
+		return false;
+	}
+	return true;
+}
+
+template <>
+bool TryCastErrorMessageCommaSeparated::Operation(string_t input, double &result, string *error_message, bool strict) {
+	if (!TryDoubleCast<double, ','>(input.GetData(), input.GetSize(), result, strict)) {
+		HandleCastError::AssignError(StringUtil::Format("Could not cast string to double: \"%s\"", input.GetString()),
+		                             error_message);
+		return false;
+	}
+	return true;
 }
 
 //===--------------------------------------------------------------------===//
@@ -8874,7 +20884,31 @@ string_t CastFromBlob::Operation(string_t input, Vector &vector) {
 	string_t result = StringVector::EmptyString(vector, result_size);
 	Blob::ToString(input, result.GetDataWriteable());
 	result.Finalize();
+
 	return result;
+}
+
+//===--------------------------------------------------------------------===//
+// Cast From Bit
+//===--------------------------------------------------------------------===//
+template <>
+string_t CastFromBit::Operation(string_t input, Vector &vector) {
+
+	idx_t result_size = Bit::BitLength(input);
+	string_t result = StringVector::EmptyString(vector, result_size);
+	Bit::ToString(input, result.GetDataWriteable());
+	result.Finalize();
+
+	return result;
+}
+
+//===--------------------------------------------------------------------===//
+// Cast From Pointer
+//===--------------------------------------------------------------------===//
+template <>
+string_t CastFromPointer::Operation(uintptr_t input, Vector &vector) {
+	std::string s = duckdb_fmt::format("0x{:x}", input);
+	return StringVector::AddString(vector, s);
 }
 
 //===--------------------------------------------------------------------===//
@@ -8890,6 +20924,23 @@ bool TryCastToBlob::Operation(string_t input, string_t &result, Vector &result_v
 
 	result = StringVector::EmptyString(result_vector, result_size);
 	Blob::ToBlob(input, (data_ptr_t)result.GetDataWriteable());
+	result.Finalize();
+	return true;
+}
+
+//===--------------------------------------------------------------------===//
+// Cast To Bit
+//===--------------------------------------------------------------------===//
+template <>
+bool TryCastToBit::Operation(string_t input, string_t &result, Vector &result_vector, string *error_message,
+                             bool strict) {
+	idx_t result_size;
+	if (!Bit::TryGetBitStringSize(input, result_size, error_message)) {
+		return false;
+	}
+
+	result = StringVector::EmptyString(result_vector, result_size);
+	Bit::ToBit(input, result);
 	result.Finalize();
 	return true;
 }
@@ -8929,12 +20980,13 @@ bool TryCastErrorMessage::Operation(string_t input, date_t &result, string *erro
 template <>
 bool TryCast::Operation(string_t input, date_t &result, bool strict) {
 	idx_t pos;
-	return Date::TryConvertDate(input.GetDataUnsafe(), input.GetSize(), pos, result, strict);
+	bool special = false;
+	return Date::TryConvertDate(input.GetData(), input.GetSize(), pos, result, special, strict);
 }
 
 template <>
 date_t Cast::Operation(string_t input) {
-	return Date::FromCString(input.GetDataUnsafe(), input.GetSize());
+	return Date::FromCString(input.GetData(), input.GetSize());
 }
 
 //===--------------------------------------------------------------------===//
@@ -8952,12 +21004,12 @@ bool TryCastErrorMessage::Operation(string_t input, dtime_t &result, string *err
 template <>
 bool TryCast::Operation(string_t input, dtime_t &result, bool strict) {
 	idx_t pos;
-	return Time::TryConvertTime(input.GetDataUnsafe(), input.GetSize(), pos, result, strict);
+	return Time::TryConvertTime(input.GetData(), input.GetSize(), pos, result, strict);
 }
 
 template <>
 dtime_t Cast::Operation(string_t input) {
-	return Time::FromCString(input.GetDataUnsafe(), input.GetSize());
+	return Time::FromCString(input.GetData(), input.GetSize());
 }
 
 //===--------------------------------------------------------------------===//
@@ -8965,21 +21017,26 @@ dtime_t Cast::Operation(string_t input) {
 //===--------------------------------------------------------------------===//
 template <>
 bool TryCastErrorMessage::Operation(string_t input, timestamp_t &result, string *error_message, bool strict) {
-	if (!TryCast::Operation<string_t, timestamp_t>(input, result, strict)) {
-		HandleCastError::AssignError(Timestamp::ConversionError(input), error_message);
-		return false;
+	auto cast_result = Timestamp::TryConvertTimestamp(input.GetData(), input.GetSize(), result);
+	if (cast_result == TimestampCastResult::SUCCESS) {
+		return true;
 	}
-	return true;
+	if (cast_result == TimestampCastResult::ERROR_INCORRECT_FORMAT) {
+		HandleCastError::AssignError(Timestamp::ConversionError(input), error_message);
+	} else {
+		HandleCastError::AssignError(Timestamp::UnsupportedTimezoneError(input), error_message);
+	}
+	return false;
 }
 
 template <>
 bool TryCast::Operation(string_t input, timestamp_t &result, bool strict) {
-	return Timestamp::TryConvertTimestamp(input.GetDataUnsafe(), input.GetSize(), result);
+	return Timestamp::TryConvertTimestamp(input.GetData(), input.GetSize(), result) == TimestampCastResult::SUCCESS;
 }
 
 template <>
 timestamp_t Cast::Operation(string_t input) {
-	return Timestamp::FromCString(input.GetDataUnsafe(), input.GetSize());
+	return Timestamp::FromCString(input.GetData(), input.GetSize());
 }
 
 //===--------------------------------------------------------------------===//
@@ -8987,7 +21044,7 @@ timestamp_t Cast::Operation(string_t input) {
 //===--------------------------------------------------------------------===//
 template <>
 bool TryCastErrorMessage::Operation(string_t input, interval_t &result, string *error_message, bool strict) {
-	return Interval::FromCString(input.GetDataUnsafe(), input.GetSize(), result, error_message, strict);
+	return Interval::FromCString(input.GetData(), input.GetSize(), result, error_message, strict);
 }
 
 //===--------------------------------------------------------------------===//
@@ -9051,6 +21108,24 @@ struct HugeIntegerCastOperation {
 	}
 
 	template <class T, bool NEGATIVE>
+	static bool HandleHexDigit(T &result, uint8_t digit) {
+		return false;
+	}
+
+	template <class T, bool NEGATIVE>
+	static bool HandleBinaryDigit(T &result, uint8_t digit) {
+		if (result.intermediate > (NumericLimits<int64_t>::Maximum() - digit) / 2) {
+			// intermediate is full: need to flush it
+			if (!result.Flush()) {
+				return false;
+			}
+		}
+		result.intermediate = result.intermediate * 2 + digit;
+		result.digits++;
+		return true;
+	}
+
+	template <class T, bool NEGATIVE>
 	static bool HandleExponent(T &result, int32_t exponent) {
 		if (!result.Flush()) {
 			return false;
@@ -9075,7 +21150,7 @@ struct HugeIntegerCastOperation {
 		}
 	}
 
-	template <class T, bool NEGATIVE>
+	template <class T, bool NEGATIVE, bool ALLOW_EXPONENT>
 	static bool HandleDecimal(T &result, uint8_t digit) {
 		// Integer casts round
 		if (!result.decimal) {
@@ -9093,7 +21168,7 @@ struct HugeIntegerCastOperation {
 		return true;
 	}
 
-	template <class T>
+	template <class T, bool NEGATIVE>
 	static bool Finalize(T &result) {
 		return result.Flush();
 	}
@@ -9102,8 +21177,8 @@ struct HugeIntegerCastOperation {
 template <>
 bool TryCast::Operation(string_t input, hugeint_t &result, bool strict) {
 	HugeIntCastData data;
-	if (!TryIntegerCast<HugeIntCastData, true, true, HugeIntegerCastOperation>(input.GetDataUnsafe(), input.GetSize(),
-	                                                                           data, strict)) {
+	if (!TryIntegerCast<HugeIntCastData, true, true, HugeIntegerCastOperation>(input.GetData(), input.GetSize(), data,
+	                                                                           strict)) {
 		return false;
 	}
 	result = data.hugeint;
@@ -9113,13 +21188,23 @@ bool TryCast::Operation(string_t input, hugeint_t &result, bool strict) {
 //===--------------------------------------------------------------------===//
 // Decimal String Cast
 //===--------------------------------------------------------------------===//
-template <class T>
+
+template <class TYPE>
 struct DecimalCastData {
-	T result;
+	typedef TYPE type_t;
+	TYPE result;
 	uint8_t width;
 	uint8_t scale;
 	uint8_t digit_count;
 	uint8_t decimal_count;
+	//! Whether we have determined if the result should be rounded
+	bool round_set;
+	//! If the result should be rounded
+	bool should_round;
+	//! Only set when ALLOW_EXPONENT is enabled
+	enum class ExponentType : uint8_t { NONE, POSITIVE, NEGATIVE };
+	uint8_t excessive_decimals;
+	ExponentType exponent_type;
 };
 
 struct DecimalCastOperation {
@@ -9135,22 +21220,71 @@ struct DecimalCastOperation {
 		}
 		state.digit_count++;
 		if (NEGATIVE) {
+			if (state.result < (NumericLimits<typename T::type_t>::Minimum() / 10)) {
+				return false;
+			}
 			state.result = state.result * 10 - digit;
 		} else {
+			if (state.result > (NumericLimits<typename T::type_t>::Maximum() / 10)) {
+				return false;
+			}
 			state.result = state.result * 10 + digit;
 		}
 		return true;
 	}
 
 	template <class T, bool NEGATIVE>
+	static bool HandleHexDigit(T &state, uint8_t digit) {
+		return false;
+	}
+
+	template <class T, bool NEGATIVE>
+	static bool HandleBinaryDigit(T &state, uint8_t digit) {
+		return false;
+	}
+
+	template <class T, bool NEGATIVE>
+	static void RoundUpResult(T &state) {
+		if (NEGATIVE) {
+			state.result -= 1;
+		} else {
+			state.result += 1;
+		}
+	}
+
+	template <class T, bool NEGATIVE>
 	static bool HandleExponent(T &state, int32_t exponent) {
-		Finalize<T>(state);
+		auto decimal_excess = (state.decimal_count > state.scale) ? state.decimal_count - state.scale : 0;
+		if (exponent > 0) {
+			state.exponent_type = T::ExponentType::POSITIVE;
+			// Positive exponents need up to 'exponent' amount of digits
+			// Everything beyond that amount needs to be truncated
+			if (decimal_excess > exponent) {
+				// We've allowed too many decimals
+				state.excessive_decimals = decimal_excess - exponent;
+				exponent = 0;
+			} else {
+				exponent -= decimal_excess;
+			}
+			D_ASSERT(exponent >= 0);
+		} else if (exponent < 0) {
+			state.exponent_type = T::ExponentType::NEGATIVE;
+		}
+		if (!Finalize<T, NEGATIVE>(state)) {
+			return false;
+		}
 		if (exponent < 0) {
+			bool round_up = false;
 			for (idx_t i = 0; i < idx_t(-int64_t(exponent)); i++) {
+				auto mod = state.result % 10;
+				round_up = NEGATIVE ? mod <= -5 : mod >= 5;
 				state.result /= 10;
 				if (state.result == 0) {
 					break;
 				}
+			}
+			if (round_up) {
+				RoundUpResult<T, NEGATIVE>(state);
 			}
 			return true;
 		} else {
@@ -9164,12 +21298,22 @@ struct DecimalCastOperation {
 		}
 	}
 
-	template <class T, bool NEGATIVE>
+	template <class T, bool NEGATIVE, bool ALLOW_EXPONENT>
 	static bool HandleDecimal(T &state, uint8_t digit) {
-		if (state.decimal_count == state.scale) {
+		if (state.decimal_count == state.scale && !state.round_set) {
+			// Determine whether the last registered decimal should be rounded or not
+			state.round_set = true;
+			state.should_round = digit >= 5;
+		}
+		if (!ALLOW_EXPONENT && state.decimal_count == state.scale) {
 			// we exceeded the amount of supported decimals
 			// however, we don't throw an error here
 			// we just truncate the decimal
+			return true;
+		}
+		//! If we expect an exponent, we need to preserve the decimals
+		//! But we don't want to overflow, so we prevent overflowing the result with this check
+		if (state.digit_count + state.decimal_count >= DecimalWidth<decltype(state.result)>::max) {
 			return true;
 		}
 		state.decimal_count++;
@@ -9181,11 +21325,39 @@ struct DecimalCastOperation {
 		return true;
 	}
 
-	template <class T>
+	template <class T, bool NEGATIVE>
+	static bool TruncateExcessiveDecimals(T &state) {
+		D_ASSERT(state.excessive_decimals);
+		bool round_up = false;
+		for (idx_t i = 0; i < state.excessive_decimals; i++) {
+			auto mod = state.result % 10;
+			round_up = NEGATIVE ? mod <= -5 : mod >= 5;
+			state.result /= 10.0;
+		}
+		//! Only round up when exponents are involved
+		if (state.exponent_type == T::ExponentType::POSITIVE && round_up) {
+			RoundUpResult<T, NEGATIVE>(state);
+		}
+		D_ASSERT(state.decimal_count > state.scale);
+		state.decimal_count = state.scale;
+		return true;
+	}
+
+	template <class T, bool NEGATIVE>
 	static bool Finalize(T &state) {
-		// if we have not gotten exactly "scale" decimals, we need to multiply the result
-		// e.g. if we have a string "1.0" that is cast to a DECIMAL(9,3), the value needs to be 1000
-		// but we have only gotten the value "10" so far, so we multiply by 1000
+		if (state.exponent_type != T::ExponentType::POSITIVE && state.decimal_count > state.scale) {
+			//! Did not encounter an exponent, but ALLOW_EXPONENT was on
+			state.excessive_decimals = state.decimal_count - state.scale;
+		}
+		if (state.excessive_decimals && !TruncateExcessiveDecimals<T, NEGATIVE>(state)) {
+			return false;
+		}
+		if (state.exponent_type == T::ExponentType::NONE && state.round_set && state.should_round) {
+			RoundUpResult<T, NEGATIVE>(state);
+		}
+		//  if we have not gotten exactly "scale" decimals, we need to multiply the result
+		//  e.g. if we have a string "1.0" that is cast to a DECIMAL(9,3), the value needs to be 1000
+		//  but we have only gotten the value "10" so far, so we multiply by 1000
 		for (uint8_t i = state.decimal_count; i < state.scale; i++) {
 			state.result *= 10;
 		}
@@ -9193,7 +21365,7 @@ struct DecimalCastOperation {
 	}
 };
 
-template <class T>
+template <class T, char decimal_separator = '.'>
 bool TryDecimalStringCast(string_t input, T &result, string *error_message, uint8_t width, uint8_t scale) {
 	DecimalCastData<T> state;
 	state.result = 0;
@@ -9201,8 +21373,12 @@ bool TryDecimalStringCast(string_t input, T &result, string *error_message, uint
 	state.scale = scale;
 	state.digit_count = 0;
 	state.decimal_count = 0;
-	if (!TryIntegerCast<DecimalCastData<T>, true, true, DecimalCastOperation, false>(input.GetDataUnsafe(),
-	                                                                                 input.GetSize(), state, false)) {
+	state.excessive_decimals = 0;
+	state.exponent_type = DecimalCastData<T>::ExponentType::NONE;
+	state.round_set = false;
+	state.should_round = false;
+	if (!TryIntegerCast<DecimalCastData<T>, true, true, DecimalCastOperation, false, decimal_separator>(
+	        input.GetData(), input.GetSize(), state, false)) {
 		string error = StringUtil::Format("Could not convert string \"%s\" to DECIMAL(%d,%d)", input.GetString(),
 		                                  (int)width, (int)scale);
 		HandleCastError::AssignError(error, error_message);
@@ -9234,23 +21410,47 @@ bool TryCastToDecimal::Operation(string_t input, hugeint_t &result, string *erro
 }
 
 template <>
+bool TryCastToDecimalCommaSeparated::Operation(string_t input, int16_t &result, string *error_message, uint8_t width,
+                                               uint8_t scale) {
+	return TryDecimalStringCast<int16_t, ','>(input, result, error_message, width, scale);
+}
+
+template <>
+bool TryCastToDecimalCommaSeparated::Operation(string_t input, int32_t &result, string *error_message, uint8_t width,
+                                               uint8_t scale) {
+	return TryDecimalStringCast<int32_t, ','>(input, result, error_message, width, scale);
+}
+
+template <>
+bool TryCastToDecimalCommaSeparated::Operation(string_t input, int64_t &result, string *error_message, uint8_t width,
+                                               uint8_t scale) {
+	return TryDecimalStringCast<int64_t, ','>(input, result, error_message, width, scale);
+}
+
+template <>
+bool TryCastToDecimalCommaSeparated::Operation(string_t input, hugeint_t &result, string *error_message, uint8_t width,
+                                               uint8_t scale) {
+	return TryDecimalStringCast<hugeint_t, ','>(input, result, error_message, width, scale);
+}
+
+template <>
 string_t StringCastFromDecimal::Operation(int16_t input, uint8_t width, uint8_t scale, Vector &result) {
-	return DecimalToString::Format<int16_t, uint16_t>(input, scale, result);
+	return DecimalToString::Format<int16_t, uint16_t>(input, width, scale, result);
 }
 
 template <>
 string_t StringCastFromDecimal::Operation(int32_t input, uint8_t width, uint8_t scale, Vector &result) {
-	return DecimalToString::Format<int32_t, uint32_t>(input, scale, result);
+	return DecimalToString::Format<int32_t, uint32_t>(input, width, scale, result);
 }
 
 template <>
 string_t StringCastFromDecimal::Operation(int64_t input, uint8_t width, uint8_t scale, Vector &result) {
-	return DecimalToString::Format<int64_t, uint64_t>(input, scale, result);
+	return DecimalToString::Format<int64_t, uint64_t>(input, width, scale, result);
 }
 
 template <>
 string_t StringCastFromDecimal::Operation(hugeint_t input, uint8_t width, uint8_t scale, Vector &result) {
-	return HugeintToStringCast::FormatDecimal(input, scale, result);
+	return HugeintToStringCast::FormatDecimal(input, width, scale, result);
 }
 
 //===--------------------------------------------------------------------===//
@@ -10021,7 +22221,6 @@ string ConvertToString::Operation(string_t input) {
 
 
 
-
 namespace duckdb {
 
 //===--------------------------------------------------------------------===//
@@ -10243,11 +22442,12 @@ string_t StringCastTZ::Operation(timestamp_t input, Vector &vector) {
 
 
 
+
 namespace duckdb {
 class PipeFile : public FileHandle {
 public:
 	PipeFile(unique_ptr<FileHandle> child_handle_p, const string &path)
-	    : FileHandle(pipe_fs, path), child_handle(move(child_handle_p)) {
+	    : FileHandle(pipe_fs, path), child_handle(std::move(child_handle_p)) {
 	}
 
 	PipeFileSystem pipe_fs;
@@ -10291,7 +22491,74 @@ void PipeFileSystem::FileSync(FileHandle &handle) {
 
 unique_ptr<FileHandle> PipeFileSystem::OpenPipe(unique_ptr<FileHandle> handle) {
 	auto path = handle->path;
-	return make_unique<PipeFile>(move(handle), path);
+	return make_uniq<PipeFile>(std::move(handle), path);
+}
+
+} // namespace duckdb
+
+
+
+
+
+
+
+namespace duckdb {
+
+PreservedError::PreservedError() : initialized(false), exception_instance(nullptr) {
+}
+
+PreservedError::PreservedError(const Exception &exception)
+    : initialized(true), type(exception.type), raw_message(SanitizeErrorMessage(exception.RawMessage())),
+      exception_instance(exception.Copy()) {
+}
+
+PreservedError::PreservedError(const string &message)
+    : initialized(true), type(ExceptionType::INVALID), raw_message(SanitizeErrorMessage(message)),
+      exception_instance(nullptr) {
+}
+
+const string &PreservedError::Message() {
+	if (final_message.empty()) {
+		final_message = Exception::ExceptionTypeToString(type) + " Error: " + raw_message;
+	}
+	return final_message;
+}
+
+string PreservedError::SanitizeErrorMessage(string error) {
+	return StringUtil::Replace(std::move(error), string("\0", 1), "\\0");
+}
+
+void PreservedError::Throw(const string &prepended_message) const {
+	D_ASSERT(initialized);
+	if (!prepended_message.empty()) {
+		string new_message = prepended_message + raw_message;
+		Exception::ThrowAsTypeWithMessage(type, new_message, exception_instance);
+	}
+	Exception::ThrowAsTypeWithMessage(type, raw_message, exception_instance);
+}
+
+const ExceptionType &PreservedError::Type() const {
+	D_ASSERT(initialized);
+	return this->type;
+}
+
+PreservedError &PreservedError::AddToMessage(const string &prepended_message) {
+	raw_message = prepended_message + raw_message;
+	return *this;
+}
+
+PreservedError::operator bool() const {
+	return initialized;
+}
+
+bool PreservedError::operator==(const PreservedError &other) const {
+	if (initialized != other.initialized) {
+		return false;
+	}
+	if (type != other.type) {
+		return false;
+	}
+	return raw_message == other.raw_message;
 }
 
 } // namespace duckdb
@@ -10304,52 +22571,74 @@ unique_ptr<FileHandle> PipeFileSystem::OpenPipe(unique_ptr<FileHandle> handle) {
 #ifndef DUCKDB_DISABLE_PRINT
 #ifdef DUCKDB_WINDOWS
 #include <io.h>
+#else
+#include <sys/ioctl.h>
+#include <stdio.h>
+#include <unistd.h>
 #endif
 #endif
 
 namespace duckdb {
 
-// LCOV_EXCL_START
-void Printer::Print(const string &str) {
+void Printer::RawPrint(OutputStream stream, const string &str) {
 #ifndef DUCKDB_DISABLE_PRINT
 #ifdef DUCKDB_WINDOWS
-	if (IsTerminal()) {
+	if (IsTerminal(stream)) {
 		// print utf8 to terminal
 		auto unicode = WindowsUtil::UTF8ToMBCS(str.c_str());
-		fprintf(stderr, "%s\n", unicode.c_str());
+		fprintf(stream == OutputStream::STREAM_STDERR ? stderr : stdout, "%s", unicode.c_str());
 		return;
 	}
 #endif
-	fprintf(stderr, "%s\n", str.c_str());
+	fprintf(stream == OutputStream::STREAM_STDERR ? stderr : stdout, "%s", str.c_str());
 #endif
 }
 
-void Printer::PrintProgress(int percentage, const char *pbstr, int pbwidth) {
+// LCOV_EXCL_START
+void Printer::Print(OutputStream stream, const string &str) {
+	Printer::RawPrint(stream, str);
+	Printer::RawPrint(stream, "\n");
+}
+void Printer::Flush(OutputStream stream) {
 #ifndef DUCKDB_DISABLE_PRINT
-	int lpad = (int)(percentage / 100.0 * pbwidth);
-	int rpad = pbwidth - lpad;
-	printf("\r%3d%% [%.*s%*s]", percentage, lpad, pbstr, rpad, "");
-	fflush(stdout);
+	fflush(stream == OutputStream::STREAM_STDERR ? stderr : stdout);
 #endif
 }
 
-void Printer::FinishProgressBarPrint(const char *pbstr, int pbwidth) {
-#ifndef DUCKDB_DISABLE_PRINT
-	PrintProgress(100, pbstr, pbwidth);
-	printf(" \n");
-	fflush(stdout);
-#endif
+void Printer::Print(const string &str) {
+	Printer::Print(OutputStream::STREAM_STDERR, str);
 }
 
-bool Printer::IsTerminal() {
+bool Printer::IsTerminal(OutputStream stream) {
 #ifndef DUCKDB_DISABLE_PRINT
 #ifdef DUCKDB_WINDOWS
-	return GetFileType(GetStdHandle(STD_ERROR_HANDLE)) == FILE_TYPE_CHAR;
+	auto stream_handle = stream == OutputStream::STREAM_STDERR ? STD_ERROR_HANDLE : STD_OUTPUT_HANDLE;
+	return GetFileType(GetStdHandle(stream_handle)) == FILE_TYPE_CHAR;
 #else
-	throw InternalException("IsTerminal is only implemented for Windows");
+	return isatty(stream == OutputStream::STREAM_STDERR ? 2 : 1);
 #endif
+#else
+	throw InternalException("IsTerminal called while printing is disabled");
 #endif
-	return false;
+}
+
+idx_t Printer::TerminalWidth() {
+#ifndef DUCKDB_DISABLE_PRINT
+#ifdef DUCKDB_WINDOWS
+	CONSOLE_SCREEN_BUFFER_INFO csbi;
+	int columns, rows;
+
+	GetConsoleScreenBufferInfo(GetStdHandle(STD_OUTPUT_HANDLE), &csbi);
+	rows = csbi.srWindow.Right - csbi.srWindow.Left + 1;
+	return rows;
+#else
+	struct winsize w;
+	ioctl(0, TIOCGWINSZ, &w);
+	return w.ws_col;
+#endif
+#else
+	throw InternalException("TerminalWidth called while printing is disabled");
+#endif
 }
 // LCOV_EXCL_STOP
 
@@ -10360,9 +22649,23 @@ bool Printer::IsTerminal() {
 
 namespace duckdb {
 
-ProgressBar::ProgressBar(Executor &executor, idx_t show_progress_after, bool print_progress)
-    : executor(executor), show_progress_after(show_progress_after), current_percentage(-1),
-      print_progress(print_progress) {
+void ProgressBar::SystemOverrideCheck(ClientConfig &config) {
+	if (config.system_progress_bar_disable_reason != nullptr) {
+		throw InvalidInputException("Could not change the progress bar setting because: '%s'",
+		                            config.system_progress_bar_disable_reason);
+	}
+}
+
+unique_ptr<ProgressBarDisplay> ProgressBar::DefaultProgressBarDisplay() {
+	return make_uniq<TerminalProgressBarDisplay>();
+}
+
+ProgressBar::ProgressBar(Executor &executor, idx_t show_progress_after,
+                         progress_bar_display_create_func_t create_display_func)
+    : executor(executor), show_progress_after(show_progress_after), current_percentage(-1) {
+	if (create_display_func) {
+		display = create_display_func();
+	}
 }
 
 double ProgressBar::GetCurrentPercentage() {
@@ -10375,25 +22678,373 @@ void ProgressBar::Start() {
 	supported = true;
 }
 
-void ProgressBar::Update(bool final) {
+bool ProgressBar::PrintEnabled() const {
+	return display != nullptr;
+}
+
+bool ProgressBar::ShouldPrint(bool final) const {
+	if (!PrintEnabled()) {
+		// Don't print progress at all
+		return false;
+	}
+	// FIXME - do we need to check supported before running `profiler.Elapsed()` ?
+	auto sufficient_time_elapsed = profiler.Elapsed() > show_progress_after / 1000.0;
+	if (!sufficient_time_elapsed) {
+		// Don't print yet
+		return false;
+	}
+	if (final) {
+		// Print the last completed bar
+		return true;
+	}
 	if (!supported) {
+		return false;
+	}
+	return current_percentage > -1;
+}
+
+void ProgressBar::Update(bool final) {
+	if (!final && !supported) {
 		return;
 	}
 	double new_percentage;
 	supported = executor.GetPipelinesProgress(new_percentage);
-	if (!supported) {
+	if (!final && !supported) {
 		return;
 	}
-	auto sufficient_time_elapsed = profiler.Elapsed() > show_progress_after / 1000.0;
 	if (new_percentage > current_percentage) {
 		current_percentage = new_percentage;
 	}
-	if (supported && print_progress && sufficient_time_elapsed && current_percentage > -1 && print_progress) {
+	if (ShouldPrint(final)) {
+#ifndef DUCKDB_DISABLE_PRINT
 		if (final) {
-			Printer::FinishProgressBarPrint(PROGRESS_BAR_STRING.c_str(), PROGRESS_BAR_WIDTH);
+			FinishProgressBarPrint();
 		} else {
-			Printer::PrintProgress(current_percentage, PROGRESS_BAR_STRING.c_str(), PROGRESS_BAR_WIDTH);
+			PrintProgress(current_percentage);
 		}
+#endif
+	}
+}
+
+void ProgressBar::PrintProgress(int current_percentage) {
+	D_ASSERT(display);
+	display->Update(current_percentage);
+}
+
+void ProgressBar::FinishProgressBarPrint() {
+	if (finished) {
+		return;
+	}
+	D_ASSERT(display);
+	display->Finish();
+	finished = true;
+}
+
+} // namespace duckdb
+
+
+
+
+namespace duckdb {
+
+void TerminalProgressBarDisplay::PrintProgressInternal(int percentage) {
+	if (percentage > 100) {
+		percentage = 100;
+	}
+	if (percentage < 0) {
+		percentage = 0;
+	}
+	string result;
+	// we divide the number of blocks by the percentage
+	// 0%   = 0
+	// 100% = PROGRESS_BAR_WIDTH
+	// the percentage determines how many blocks we need to draw
+	double blocks_to_draw = PROGRESS_BAR_WIDTH * (percentage / 100.0);
+	// because of the power of unicode, we can also draw partial blocks
+
+	// render the percentage with some padding to ensure everything stays nicely aligned
+	result = "\r";
+	if (percentage < 100) {
+		result += " ";
+	}
+	if (percentage < 10) {
+		result += " ";
+	}
+	result += to_string(percentage) + "%";
+	result += " ";
+	result += PROGRESS_START;
+	idx_t i;
+	for (i = 0; i < idx_t(blocks_to_draw); i++) {
+		result += PROGRESS_BLOCK;
+	}
+	if (i < PROGRESS_BAR_WIDTH) {
+		// print a partial block based on the percentage of the progress bar remaining
+		idx_t index = idx_t((blocks_to_draw - idx_t(blocks_to_draw)) * PARTIAL_BLOCK_COUNT);
+		if (index >= PARTIAL_BLOCK_COUNT) {
+			index = PARTIAL_BLOCK_COUNT - 1;
+		}
+		result += PROGRESS_PARTIAL[index];
+		i++;
+	}
+	for (; i < PROGRESS_BAR_WIDTH; i++) {
+		result += PROGRESS_EMPTY;
+	}
+	result += PROGRESS_END;
+	result += " ";
+
+	Printer::RawPrint(OutputStream::STREAM_STDOUT, result);
+}
+
+void TerminalProgressBarDisplay::Update(double percentage) {
+	PrintProgressInternal(percentage);
+	Printer::Flush(OutputStream::STREAM_STDOUT);
+}
+
+void TerminalProgressBarDisplay::Finish() {
+	PrintProgressInternal(100);
+	Printer::RawPrint(OutputStream::STREAM_STDOUT, "\n");
+	Printer::Flush(OutputStream::STREAM_STDOUT);
+}
+
+} // namespace duckdb
+
+
+
+
+
+
+
+
+namespace duckdb {
+
+template <class OP, class RETURN_TYPE, typename... ARGS>
+RETURN_TYPE RadixBitsSwitch(idx_t radix_bits, ARGS &&... args) {
+	D_ASSERT(radix_bits <= sizeof(hash_t) * 8);
+	switch (radix_bits) {
+	case 1:
+		return OP::template Operation<1>(std::forward<ARGS>(args)...);
+	case 2:
+		return OP::template Operation<2>(std::forward<ARGS>(args)...);
+	case 3:
+		return OP::template Operation<3>(std::forward<ARGS>(args)...);
+	case 4:
+		return OP::template Operation<4>(std::forward<ARGS>(args)...);
+	case 5:
+		return OP::template Operation<5>(std::forward<ARGS>(args)...);
+	case 6:
+		return OP::template Operation<6>(std::forward<ARGS>(args)...);
+	case 7:
+		return OP::template Operation<7>(std::forward<ARGS>(args)...);
+	case 8:
+		return OP::template Operation<8>(std::forward<ARGS>(args)...);
+	case 9:
+		return OP::template Operation<9>(std::forward<ARGS>(args)...);
+	case 10:
+		return OP::template Operation<10>(std::forward<ARGS>(args)...);
+	default:
+		throw InternalException("TODO");
+	}
+}
+
+template <idx_t radix_bits>
+struct RadixLessThan {
+	static inline bool Operation(hash_t hash, hash_t cutoff) {
+		using CONSTANTS = RadixPartitioningConstants<radix_bits>;
+		return CONSTANTS::ApplyMask(hash) < cutoff;
+	}
+};
+
+struct SelectFunctor {
+	template <idx_t radix_bits>
+	static idx_t Operation(Vector &hashes, const SelectionVector *sel, idx_t count, idx_t cutoff,
+	                       SelectionVector *true_sel, SelectionVector *false_sel) {
+		Vector cutoff_vector(Value::HASH(cutoff));
+		return BinaryExecutor::Select<hash_t, hash_t, RadixLessThan<radix_bits>>(hashes, cutoff_vector, sel, count,
+		                                                                         true_sel, false_sel);
+	}
+};
+
+idx_t RadixPartitioning::Select(Vector &hashes, const SelectionVector *sel, idx_t count, idx_t radix_bits, idx_t cutoff,
+                                SelectionVector *true_sel, SelectionVector *false_sel) {
+	return RadixBitsSwitch<SelectFunctor, idx_t>(radix_bits, hashes, sel, count, cutoff, true_sel, false_sel);
+}
+
+struct HashsToBinsFunctor {
+	template <idx_t radix_bits>
+	static void Operation(Vector &hashes, Vector &bins, idx_t count) {
+		using CONSTANTS = RadixPartitioningConstants<radix_bits>;
+		UnaryExecutor::Execute<hash_t, hash_t>(hashes, bins, count,
+		                                       [&](hash_t hash) { return CONSTANTS::ApplyMask(hash); });
+	}
+};
+
+void RadixPartitioning::HashesToBins(Vector &hashes, idx_t radix_bits, Vector &bins, idx_t count) {
+	return RadixBitsSwitch<HashsToBinsFunctor, void>(radix_bits, hashes, bins, count);
+}
+
+//===--------------------------------------------------------------------===//
+// Row Data Partitioning
+//===--------------------------------------------------------------------===//
+template <idx_t radix_bits>
+static void InitPartitions(BufferManager &buffer_manager, vector<unique_ptr<RowDataCollection>> &partition_collections,
+                           RowDataBlock *partition_blocks[], vector<BufferHandle> &partition_handles,
+                           data_ptr_t partition_ptrs[], idx_t block_capacity, idx_t row_width) {
+	using CONSTANTS = RadixPartitioningConstants<radix_bits>;
+
+	partition_collections.reserve(CONSTANTS::NUM_PARTITIONS);
+	partition_handles.reserve(CONSTANTS::NUM_PARTITIONS);
+	for (idx_t i = 0; i < CONSTANTS::NUM_PARTITIONS; i++) {
+		partition_collections.push_back(make_uniq<RowDataCollection>(buffer_manager, block_capacity, row_width));
+		partition_blocks[i] = &partition_collections[i]->CreateBlock();
+		partition_handles.push_back(buffer_manager.Pin(partition_blocks[i]->block));
+		if (partition_ptrs) {
+			partition_ptrs[i] = partition_handles[i].Ptr();
+		}
+	}
+}
+
+struct ComputePartitionIndicesFunctor {
+	template <idx_t radix_bits>
+	static void Operation(Vector &hashes, Vector &partition_indices, idx_t count) {
+		UnaryExecutor::Execute<hash_t, hash_t>(hashes, partition_indices, count, [&](hash_t hash) {
+			using CONSTANTS = RadixPartitioningConstants<radix_bits>;
+			return CONSTANTS::ApplyMask(hash);
+		});
+	}
+};
+
+//===--------------------------------------------------------------------===//
+// Column Data Partitioning
+//===--------------------------------------------------------------------===//
+RadixPartitionedColumnData::RadixPartitionedColumnData(ClientContext &context_p, vector<LogicalType> types_p,
+                                                       idx_t radix_bits_p, idx_t hash_col_idx_p)
+    : PartitionedColumnData(PartitionedColumnDataType::RADIX, context_p, std::move(types_p)), radix_bits(radix_bits_p),
+      hash_col_idx(hash_col_idx_p) {
+	D_ASSERT(hash_col_idx < types.size());
+	const auto num_partitions = RadixPartitioning::NumberOfPartitions(radix_bits);
+	allocators->allocators.reserve(num_partitions);
+	for (idx_t i = 0; i < num_partitions; i++) {
+		CreateAllocator();
+	}
+	D_ASSERT(allocators->allocators.size() == num_partitions);
+}
+
+RadixPartitionedColumnData::RadixPartitionedColumnData(const RadixPartitionedColumnData &other)
+    : PartitionedColumnData(other), radix_bits(other.radix_bits), hash_col_idx(other.hash_col_idx) {
+	for (idx_t i = 0; i < RadixPartitioning::NumberOfPartitions(radix_bits); i++) {
+		partitions.emplace_back(CreatePartitionCollection(i));
+	}
+}
+
+RadixPartitionedColumnData::~RadixPartitionedColumnData() {
+}
+
+void RadixPartitionedColumnData::InitializeAppendStateInternal(PartitionedColumnDataAppendState &state) const {
+	const auto num_partitions = RadixPartitioning::NumberOfPartitions(radix_bits);
+	state.partition_append_states.reserve(num_partitions);
+	state.partition_buffers.reserve(num_partitions);
+	for (idx_t i = 0; i < num_partitions; i++) {
+		state.partition_append_states.emplace_back(make_uniq<ColumnDataAppendState>());
+		partitions[i]->InitializeAppend(*state.partition_append_states[i]);
+		state.partition_buffers.emplace_back(CreatePartitionBuffer());
+	}
+}
+
+void RadixPartitionedColumnData::ComputePartitionIndices(PartitionedColumnDataAppendState &state, DataChunk &input) {
+	D_ASSERT(partitions.size() == RadixPartitioning::NumberOfPartitions(radix_bits));
+	D_ASSERT(state.partition_buffers.size() == RadixPartitioning::NumberOfPartitions(radix_bits));
+	RadixBitsSwitch<ComputePartitionIndicesFunctor, void>(radix_bits, input.data[hash_col_idx], state.partition_indices,
+	                                                      input.size());
+}
+
+//===--------------------------------------------------------------------===//
+// Tuple Data Partitioning
+//===--------------------------------------------------------------------===//
+RadixPartitionedTupleData::RadixPartitionedTupleData(BufferManager &buffer_manager, const TupleDataLayout &layout_p,
+                                                     idx_t radix_bits_p, idx_t hash_col_idx_p)
+    : PartitionedTupleData(PartitionedTupleDataType::RADIX, buffer_manager, layout_p.Copy()), radix_bits(radix_bits_p),
+      hash_col_idx(hash_col_idx_p) {
+	D_ASSERT(hash_col_idx < layout.GetTypes().size());
+	const auto num_partitions = RadixPartitioning::NumberOfPartitions(radix_bits);
+	allocators->allocators.reserve(num_partitions);
+	for (idx_t i = 0; i < num_partitions; i++) {
+		CreateAllocator();
+	}
+	D_ASSERT(allocators->allocators.size() == num_partitions);
+	Initialize();
+}
+
+RadixPartitionedTupleData::RadixPartitionedTupleData(const RadixPartitionedTupleData &other)
+    : PartitionedTupleData(other), radix_bits(other.radix_bits), hash_col_idx(other.hash_col_idx) {
+	Initialize();
+}
+
+RadixPartitionedTupleData::~RadixPartitionedTupleData() {
+}
+
+void RadixPartitionedTupleData::Initialize() {
+	for (idx_t i = 0; i < RadixPartitioning::NumberOfPartitions(radix_bits); i++) {
+		partitions.emplace_back(CreatePartitionCollection(i));
+	}
+}
+
+void RadixPartitionedTupleData::InitializeAppendStateInternal(PartitionedTupleDataAppendState &state,
+                                                              TupleDataPinProperties properties) const {
+	// Init pin state per partition
+	const auto num_partitions = RadixPartitioning::NumberOfPartitions(radix_bits);
+	state.partition_pin_states.reserve(num_partitions);
+	for (idx_t i = 0; i < num_partitions; i++) {
+		state.partition_pin_states.emplace_back(make_uniq<TupleDataPinState>());
+		partitions[i]->InitializeAppend(*state.partition_pin_states[i], properties);
+	}
+
+	// Init single chunk state
+	auto column_count = layout.ColumnCount();
+	vector<column_t> column_ids;
+	column_ids.reserve(column_count);
+	for (idx_t col_idx = 0; col_idx < column_count; col_idx++) {
+		column_ids.emplace_back(col_idx);
+	}
+	partitions[0]->InitializeAppend(state.chunk_state, std::move(column_ids));
+}
+
+void RadixPartitionedTupleData::ComputePartitionIndices(PartitionedTupleDataAppendState &state, DataChunk &input) {
+	D_ASSERT(partitions.size() == RadixPartitioning::NumberOfPartitions(radix_bits));
+	RadixBitsSwitch<ComputePartitionIndicesFunctor, void>(radix_bits, input.data[hash_col_idx], state.partition_indices,
+	                                                      input.size());
+}
+
+void RadixPartitionedTupleData::ComputePartitionIndices(Vector &row_locations, idx_t count,
+                                                        Vector &partition_indices) const {
+	Vector intermediate(LogicalType::HASH);
+	partitions[0]->Gather(row_locations, *FlatVector::IncrementalSelectionVector(), count, hash_col_idx, intermediate,
+	                      *FlatVector::IncrementalSelectionVector());
+	RadixBitsSwitch<ComputePartitionIndicesFunctor, void>(radix_bits, intermediate, partition_indices, count);
+}
+
+void RadixPartitionedTupleData::RepartitionFinalizeStates(PartitionedTupleData &old_partitioned_data,
+                                                          PartitionedTupleData &new_partitioned_data,
+                                                          PartitionedTupleDataAppendState &state,
+                                                          idx_t finished_partition_idx) const {
+	D_ASSERT(old_partitioned_data.GetType() == PartitionedTupleDataType::RADIX &&
+	         new_partitioned_data.GetType() == PartitionedTupleDataType::RADIX);
+	const auto &old_radix_partitions = (RadixPartitionedTupleData &)old_partitioned_data;
+	const auto &new_radix_partitions = (RadixPartitionedTupleData &)new_partitioned_data;
+	const auto old_radix_bits = old_radix_partitions.GetRadixBits();
+	const auto new_radix_bits = new_radix_partitions.GetRadixBits();
+	D_ASSERT(new_radix_bits > old_radix_bits);
+
+	// We take the most significant digits as the partition index
+	// When repartitioning, e.g., partition 0 from "old" goes into the first N partitions in "new"
+	// When partition 0 is done, we can already finalize the append states, unpinning blocks
+	const auto multiplier = RadixPartitioning::NumberOfPartitions(new_radix_bits - old_radix_bits);
+	const auto from_idx = finished_partition_idx * multiplier;
+	const auto to_idx = from_idx + multiplier;
+	auto &partitions = new_partitioned_data.GetPartitions();
+	for (idx_t partition_index = from_idx; partition_index < to_idx; partition_index++) {
+		auto &partition = *partitions[partition_index];
+		auto &partition_pin_state = *state.partition_pin_states[partition_index];
+		partition.FinalizePinState(partition_pin_state);
 	}
 }
 
@@ -10411,7 +23062,7 @@ struct RandomState {
 	pcg32 pcg;
 };
 
-RandomEngine::RandomEngine(int64_t seed) : random_state(make_unique<RandomState>()) {
+RandomEngine::RandomEngine(int64_t seed) : random_state(make_uniq<RandomState>()) {
 	if (seed < 0) {
 		random_state->pcg.seed(pcg_extras::seed_seq_from<std::random_device>());
 	} else {
@@ -10439,7 +23090,7 @@ void RandomEngine::SetSeed(uint32_t seed) {
 }
 
 } // namespace duckdb
-#include <vector>
+
 #include <memory>
 
 
@@ -10456,7 +23107,7 @@ Regex::Regex(const std::string &pattern, RegexOptions options) {
 bool RegexSearchInternal(const char *input, Match &match, const Regex &r, RE2::Anchor anchor, size_t start,
                          size_t end) {
 	auto &regex = r.GetRegex();
-	std::vector<StringPiece> target_groups;
+	duckdb::vector<StringPiece> target_groups;
 	auto group_count = regex.NumberOfCapturingGroups() + 1;
 	target_groups.resize(group_count);
 	match.groups.clear();
@@ -10489,8 +23140,8 @@ bool RegexMatch(const std::string &input, const Regex &regex) {
 	return RegexSearchInternal(input.c_str(), nop_match, regex, RE2::ANCHOR_BOTH, 0, input.size());
 }
 
-std::vector<Match> RegexFindAll(const std::string &input, const Regex &regex) {
-	std::vector<Match> matches;
+duckdb::vector<Match> RegexFindAll(const std::string &input, const Regex &regex) {
+	duckdb::vector<Match> matches;
 	size_t position = 0;
 	Match match;
 	while (RegexSearchInternal(input.c_str(), match, regex, RE2::UNANCHORED, position, input.size())) {
@@ -10513,11 +23164,10 @@ std::vector<Match> RegexFindAll(const std::string &input, const Regex &regex) {
 
 
 
-
-
 namespace duckdb {
 
-void RowOperations::InitializeStates(RowLayout &layout, Vector &addresses, const SelectionVector &sel, idx_t count) {
+void RowOperations::InitializeStates(TupleDataLayout &layout, Vector &addresses, const SelectionVector &sel,
+                                     idx_t count) {
 	if (count == 0) {
 		return;
 	}
@@ -10525,7 +23175,7 @@ void RowOperations::InitializeStates(RowLayout &layout, Vector &addresses, const
 	auto &offsets = layout.GetOffsets();
 	auto aggr_idx = layout.ColumnCount();
 
-	for (auto &aggr : layout.GetAggregates()) {
+	for (const auto &aggr : layout.GetAggregates()) {
 		for (idx_t i = 0; i < count; ++i) {
 			auto row_idx = sel.get_index(i);
 			auto row = pointers[row_idx];
@@ -10535,39 +23185,44 @@ void RowOperations::InitializeStates(RowLayout &layout, Vector &addresses, const
 	}
 }
 
-void RowOperations::DestroyStates(RowLayout &layout, Vector &addresses, idx_t count) {
+void RowOperations::DestroyStates(RowOperationsState &state, TupleDataLayout &layout, Vector &addresses, idx_t count) {
 	if (count == 0) {
 		return;
 	}
 	//	Move to the first aggregate state
 	VectorOperations::AddInPlace(addresses, layout.GetAggrOffset(), count);
-	for (auto &aggr : layout.GetAggregates()) {
+	for (const auto &aggr : layout.GetAggregates()) {
 		if (aggr.function.destructor) {
-			aggr.function.destructor(addresses, count);
+			AggregateInputData aggr_input_data(aggr.GetFunctionData(), state.allocator);
+			aggr.function.destructor(addresses, aggr_input_data, count);
 		}
 		// Move to the next aggregate state
 		VectorOperations::AddInPlace(addresses, aggr.payload_size, count);
 	}
 }
 
-void RowOperations::UpdateStates(AggregateObject &aggr, Vector &addresses, DataChunk &payload, idx_t arg_idx,
-                                 idx_t count) {
-	AggregateInputData aggr_input_data(aggr.bind_data);
+void RowOperations::UpdateStates(RowOperationsState &state, AggregateObject &aggr, Vector &addresses,
+                                 DataChunk &payload, idx_t arg_idx, idx_t count) {
+	AggregateInputData aggr_input_data(aggr.GetFunctionData(), state.allocator);
 	aggr.function.update(aggr.child_count == 0 ? nullptr : &payload.data[arg_idx], aggr_input_data, aggr.child_count,
 	                     addresses, count);
 }
 
-void RowOperations::UpdateFilteredStates(AggregateFilterData &filter_data, AggregateObject &aggr, Vector &addresses,
-                                         DataChunk &payload, idx_t arg_idx) {
+void RowOperations::UpdateFilteredStates(RowOperationsState &state, AggregateFilterData &filter_data,
+                                         AggregateObject &aggr, Vector &addresses, DataChunk &payload, idx_t arg_idx) {
 	idx_t count = filter_data.ApplyFilter(payload);
+	if (count == 0) {
+		return;
+	}
 
 	Vector filtered_addresses(addresses, filter_data.true_sel, count);
-	filtered_addresses.Normalify(count);
+	filtered_addresses.Flatten(count);
 
-	UpdateStates(aggr, filtered_addresses, filter_data.filtered_payload, arg_idx, count);
+	UpdateStates(state, aggr, filtered_addresses, filter_data.filtered_payload, arg_idx, count);
 }
 
-void RowOperations::CombineStates(RowLayout &layout, Vector &sources, Vector &targets, idx_t count) {
+void RowOperations::CombineStates(RowOperationsState &state, TupleDataLayout &layout, Vector &sources, Vector &targets,
+                                  idx_t count) {
 	if (count == 0) {
 		return;
 	}
@@ -10577,7 +23232,7 @@ void RowOperations::CombineStates(RowLayout &layout, Vector &sources, Vector &ta
 	VectorOperations::AddInPlace(targets, layout.GetAggrOffset(), count);
 	for (auto &aggr : layout.GetAggregates()) {
 		D_ASSERT(aggr.function.combine);
-		AggregateInputData aggr_input_data(aggr.bind_data);
+		AggregateInputData aggr_input_data(aggr.GetFunctionData(), state.allocator);
 		aggr.function.combine(sources, targets, aggr_input_data, count);
 
 		// Move to the next aggregate states
@@ -10586,7 +23241,8 @@ void RowOperations::CombineStates(RowLayout &layout, Vector &sources, Vector &ta
 	}
 }
 
-void RowOperations::FinalizeStates(RowLayout &layout, Vector &addresses, DataChunk &result, idx_t aggr_idx) {
+void RowOperations::FinalizeStates(RowOperationsState &state, TupleDataLayout &layout, Vector &addresses,
+                                   DataChunk &result, idx_t aggr_idx) {
 	//	Move to the first aggregate state
 	VectorOperations::AddInPlace(addresses, layout.GetAggrOffset(), result.size());
 
@@ -10594,7 +23250,7 @@ void RowOperations::FinalizeStates(RowLayout &layout, Vector &addresses, DataChu
 	for (idx_t i = 0; i < aggregates.size(); i++) {
 		auto &target = result.data[aggr_idx + i];
 		auto &aggr = aggregates[i];
-		AggregateInputData aggr_input_data(aggr.bind_data);
+		AggregateInputData aggr_input_data(aggr.GetFunctionData(), state.allocator);
 		aggr.function.finalize(addresses, aggr_input_data, target, result.size(), 0);
 
 		// Move to the next aggregate state
@@ -10615,6 +23271,8 @@ void RowOperations::FinalizeStates(RowLayout &layout, Vector &addresses, DataChu
 
 namespace duckdb {
 
+using ValidityBytes = RowLayout::ValidityBytes;
+
 void RowOperations::SwizzleColumns(const RowLayout &layout, const data_ptr_t base_row_ptr, const idx_t count) {
 	const idx_t row_width = layout.GetRowWidth();
 	data_ptr_t heap_row_ptrs[STANDARD_VECTOR_SIZE];
@@ -10623,7 +23281,7 @@ void RowOperations::SwizzleColumns(const RowLayout &layout, const data_ptr_t bas
 		const idx_t next = MinValue<idx_t>(count - done, STANDARD_VECTOR_SIZE);
 		const data_ptr_t row_ptr = base_row_ptr + done * row_width;
 		// Load heap row pointers
-		data_ptr_t heap_ptr_ptr = row_ptr + layout.GetHeapPointerOffset();
+		data_ptr_t heap_ptr_ptr = row_ptr + layout.GetHeapOffset();
 		for (idx_t i = 0; i < next; i++) {
 			heap_row_ptrs[i] = Load<data_ptr_t>(heap_ptr_ptr);
 			heap_ptr_ptr += row_width;
@@ -10636,7 +23294,7 @@ void RowOperations::SwizzleColumns(const RowLayout &layout, const data_ptr_t bas
 			}
 			data_ptr_t col_ptr = row_ptr + layout.GetOffsets()[col_idx];
 			if (physical_type == PhysicalType::VARCHAR) {
-				data_ptr_t string_ptr = col_ptr + sizeof(uint32_t) + string_t::PREFIX_LENGTH;
+				data_ptr_t string_ptr = col_ptr + string_t::HEADER_SIZE;
 				for (idx_t i = 0; i < next; i++) {
 					if (Load<uint32_t>(col_ptr) > string_t::INLINE_LENGTH) {
 						// Overwrite the string pointer with the within-row offset (if not inlined)
@@ -10659,15 +23317,62 @@ void RowOperations::SwizzleColumns(const RowLayout &layout, const data_ptr_t bas
 }
 
 void RowOperations::SwizzleHeapPointer(const RowLayout &layout, data_ptr_t row_ptr, const data_ptr_t heap_base_ptr,
-                                       const idx_t count) {
+                                       const idx_t count, const idx_t base_offset) {
 	const idx_t row_width = layout.GetRowWidth();
-	row_ptr += layout.GetHeapPointerOffset();
+	row_ptr += layout.GetHeapOffset();
 	idx_t cumulative_offset = 0;
 	for (idx_t i = 0; i < count; i++) {
-		Store<idx_t>(cumulative_offset, row_ptr);
+		Store<idx_t>(base_offset + cumulative_offset, row_ptr);
 		cumulative_offset += Load<uint32_t>(heap_base_ptr + cumulative_offset);
 		row_ptr += row_width;
 	}
+}
+
+void RowOperations::CopyHeapAndSwizzle(const RowLayout &layout, data_ptr_t row_ptr, const data_ptr_t heap_base_ptr,
+                                       data_ptr_t heap_ptr, const idx_t count) {
+	const auto row_width = layout.GetRowWidth();
+	const auto heap_offset = layout.GetHeapOffset();
+	for (idx_t i = 0; i < count; i++) {
+		// Figure out source and size
+		const auto source_heap_ptr = Load<data_ptr_t>(row_ptr + heap_offset);
+		const auto size = Load<uint32_t>(source_heap_ptr);
+		D_ASSERT(size >= sizeof(uint32_t));
+
+		// Copy and swizzle
+		memcpy(heap_ptr, source_heap_ptr, size);
+		Store<idx_t>(heap_ptr - heap_base_ptr, row_ptr + heap_offset);
+
+		// Increment for next iteration
+		row_ptr += row_width;
+		heap_ptr += size;
+	}
+}
+
+void RowOperations::UnswizzleHeapPointer(const RowLayout &layout, const data_ptr_t base_row_ptr,
+                                         const data_ptr_t base_heap_ptr, const idx_t count) {
+	const auto row_width = layout.GetRowWidth();
+	data_ptr_t heap_ptr_ptr = base_row_ptr + layout.GetHeapOffset();
+	for (idx_t i = 0; i < count; i++) {
+		Store<data_ptr_t>(base_heap_ptr + Load<idx_t>(heap_ptr_ptr), heap_ptr_ptr);
+		heap_ptr_ptr += row_width;
+	}
+}
+
+static inline void VerifyUnswizzledString(const RowLayout &layout, const idx_t &col_idx, const data_ptr_t &row_ptr) {
+#ifdef DEBUG
+	if (layout.GetTypes()[col_idx] == LogicalTypeId::BLOB) {
+		return;
+	}
+	idx_t entry_idx;
+	idx_t idx_in_entry;
+	ValidityBytes::GetEntryIndex(col_idx, entry_idx, idx_in_entry);
+
+	ValidityBytes row_mask(row_ptr);
+	if (row_mask.RowIsValid(row_mask.GetValidityEntry(entry_idx), idx_in_entry)) {
+		auto str = Load<string_t>(row_ptr + layout.GetOffsets()[col_idx]);
+		str.Verify();
+	}
+#endif
 }
 
 void RowOperations::UnswizzlePointers(const RowLayout &layout, const data_ptr_t base_row_ptr,
@@ -10679,7 +23384,7 @@ void RowOperations::UnswizzlePointers(const RowLayout &layout, const data_ptr_t 
 		const idx_t next = MinValue<idx_t>(count - done, STANDARD_VECTOR_SIZE);
 		const data_ptr_t row_ptr = base_row_ptr + done * row_width;
 		// Restore heap row pointers
-		data_ptr_t heap_ptr_ptr = row_ptr + layout.GetHeapPointerOffset();
+		data_ptr_t heap_ptr_ptr = row_ptr + layout.GetHeapOffset();
 		for (idx_t i = 0; i < next; i++) {
 			heap_row_ptrs[i] = base_heap_ptr + Load<idx_t>(heap_ptr_ptr);
 			Store<data_ptr_t>(heap_row_ptrs[i], heap_ptr_ptr);
@@ -10693,11 +23398,12 @@ void RowOperations::UnswizzlePointers(const RowLayout &layout, const data_ptr_t 
 			}
 			data_ptr_t col_ptr = row_ptr + layout.GetOffsets()[col_idx];
 			if (physical_type == PhysicalType::VARCHAR) {
-				data_ptr_t string_ptr = col_ptr + sizeof(uint32_t) + string_t::PREFIX_LENGTH;
+				data_ptr_t string_ptr = col_ptr + string_t::HEADER_SIZE;
 				for (idx_t i = 0; i < next; i++) {
 					if (Load<uint32_t>(col_ptr) > string_t::INLINE_LENGTH) {
 						// Overwrite the string offset with the pointer (if not inlined)
 						Store<data_ptr_t>(heap_row_ptrs[i] + Load<idx_t>(string_ptr), string_ptr);
+						VerifyUnswizzledString(layout, col_idx, row_ptr + i * row_width);
 					}
 					col_ptr += row_width;
 					string_ptr += row_width;
@@ -10727,15 +23433,18 @@ void RowOperations::UnswizzlePointers(const RowLayout &layout, const data_ptr_t 
 
 
 
+
 namespace duckdb {
 
 using ValidityBytes = RowLayout::ValidityBytes;
 
 template <class T>
 static void TemplatedGatherLoop(Vector &rows, const SelectionVector &row_sel, Vector &col,
-                                const SelectionVector &col_sel, idx_t count, idx_t col_offset, idx_t col_no,
+                                const SelectionVector &col_sel, idx_t count, const RowLayout &layout, idx_t col_no,
                                 idx_t build_size) {
 	// Precompute mask indexes
+	const auto &offsets = layout.GetOffsets();
+	const auto col_offset = offsets[col_no];
 	idx_t entry_idx;
 	idx_t idx_in_entry;
 	ValidityBytes::GetEntryIndex(col_no, entry_idx, idx_in_entry);
@@ -10760,17 +23469,70 @@ static void TemplatedGatherLoop(Vector &rows, const SelectionVector &row_sel, Ve
 	}
 }
 
+static void GatherVarchar(Vector &rows, const SelectionVector &row_sel, Vector &col, const SelectionVector &col_sel,
+                          idx_t count, const RowLayout &layout, idx_t col_no, idx_t build_size,
+                          data_ptr_t base_heap_ptr) {
+	// Precompute mask indexes
+	const auto &offsets = layout.GetOffsets();
+	const auto col_offset = offsets[col_no];
+	const auto heap_offset = layout.GetHeapOffset();
+	idx_t entry_idx;
+	idx_t idx_in_entry;
+	ValidityBytes::GetEntryIndex(col_no, entry_idx, idx_in_entry);
+
+	auto ptrs = FlatVector::GetData<data_ptr_t>(rows);
+	auto data = FlatVector::GetData<string_t>(col);
+	auto &col_mask = FlatVector::Validity(col);
+
+	for (idx_t i = 0; i < count; i++) {
+		auto row_idx = row_sel.get_index(i);
+		auto row = ptrs[row_idx];
+		auto col_idx = col_sel.get_index(i);
+		auto col_ptr = row + col_offset;
+		data[col_idx] = Load<string_t>(col_ptr);
+		ValidityBytes row_mask(row);
+		if (!row_mask.RowIsValid(row_mask.GetValidityEntry(entry_idx), idx_in_entry)) {
+			if (build_size > STANDARD_VECTOR_SIZE && col_mask.AllValid()) {
+				//! We need to initialize the mask with the vector size.
+				col_mask.Initialize(build_size);
+			}
+			col_mask.SetInvalid(col_idx);
+		} else if (base_heap_ptr && Load<uint32_t>(col_ptr) > string_t::INLINE_LENGTH) {
+			//	Not inline, so unswizzle the copied pointer the pointer
+			auto heap_ptr_ptr = row + heap_offset;
+			auto heap_row_ptr = base_heap_ptr + Load<idx_t>(heap_ptr_ptr);
+			auto string_ptr = data_ptr_t(data + col_idx) + string_t::HEADER_SIZE;
+			Store<data_ptr_t>(heap_row_ptr + Load<idx_t>(string_ptr), string_ptr);
+#ifdef DEBUG
+			data[col_idx].Verify();
+#endif
+		}
+	}
+}
+
 static void GatherNestedVector(Vector &rows, const SelectionVector &row_sel, Vector &col,
-                               const SelectionVector &col_sel, idx_t count, idx_t col_offset, idx_t col_no) {
+                               const SelectionVector &col_sel, idx_t count, const RowLayout &layout, idx_t col_no,
+                               data_ptr_t base_heap_ptr) {
+	const auto &offsets = layout.GetOffsets();
+	const auto col_offset = offsets[col_no];
+	const auto heap_offset = layout.GetHeapOffset();
 	auto ptrs = FlatVector::GetData<data_ptr_t>(rows);
 
 	// Build the gather locations
-	auto data_locations = unique_ptr<data_ptr_t[]>(new data_ptr_t[count]);
-	auto mask_locations = unique_ptr<data_ptr_t[]>(new data_ptr_t[count]);
+	auto data_locations = make_unsafe_uniq_array<data_ptr_t>(count);
+	auto mask_locations = make_unsafe_uniq_array<data_ptr_t>(count);
 	for (idx_t i = 0; i < count; i++) {
 		auto row_idx = row_sel.get_index(i);
-		mask_locations[i] = ptrs[row_idx];
-		data_locations[i] = Load<data_ptr_t>(ptrs[row_idx] + col_offset);
+		auto row = ptrs[row_idx];
+		mask_locations[i] = row;
+		auto col_ptr = ptrs[row_idx] + col_offset;
+		if (base_heap_ptr) {
+			auto heap_ptr_ptr = row + heap_offset;
+			auto heap_row_ptr = base_heap_ptr + Load<idx_t>(heap_ptr_ptr);
+			data_locations[i] = heap_row_ptr + Load<idx_t>(col_ptr);
+		} else {
+			data_locations[i] = Load<data_ptr_t>(col_ptr);
+		}
 	}
 
 	// Deserialise into the selected locations
@@ -10778,56 +23540,56 @@ static void GatherNestedVector(Vector &rows, const SelectionVector &row_sel, Vec
 }
 
 void RowOperations::Gather(Vector &rows, const SelectionVector &row_sel, Vector &col, const SelectionVector &col_sel,
-                           const idx_t count, const idx_t col_offset, const idx_t col_no, const idx_t build_size) {
+                           const idx_t count, const RowLayout &layout, const idx_t col_no, const idx_t build_size,
+                           data_ptr_t heap_ptr) {
 	D_ASSERT(rows.GetVectorType() == VectorType::FLAT_VECTOR);
 	D_ASSERT(rows.GetType().id() == LogicalTypeId::POINTER); // "Cannot gather from non-pointer type!"
 
 	col.SetVectorType(VectorType::FLAT_VECTOR);
 	switch (col.GetType().InternalType()) {
 	case PhysicalType::UINT8:
-		TemplatedGatherLoop<uint8_t>(rows, row_sel, col, col_sel, count, col_offset, col_no, build_size);
+		TemplatedGatherLoop<uint8_t>(rows, row_sel, col, col_sel, count, layout, col_no, build_size);
 		break;
 	case PhysicalType::UINT16:
-		TemplatedGatherLoop<uint16_t>(rows, row_sel, col, col_sel, count, col_offset, col_no, build_size);
+		TemplatedGatherLoop<uint16_t>(rows, row_sel, col, col_sel, count, layout, col_no, build_size);
 		break;
 	case PhysicalType::UINT32:
-		TemplatedGatherLoop<uint32_t>(rows, row_sel, col, col_sel, count, col_offset, col_no, build_size);
+		TemplatedGatherLoop<uint32_t>(rows, row_sel, col, col_sel, count, layout, col_no, build_size);
 		break;
 	case PhysicalType::UINT64:
-		TemplatedGatherLoop<uint64_t>(rows, row_sel, col, col_sel, count, col_offset, col_no, build_size);
+		TemplatedGatherLoop<uint64_t>(rows, row_sel, col, col_sel, count, layout, col_no, build_size);
 		break;
 	case PhysicalType::BOOL:
 	case PhysicalType::INT8:
-		TemplatedGatherLoop<int8_t>(rows, row_sel, col, col_sel, count, col_offset, col_no, build_size);
+		TemplatedGatherLoop<int8_t>(rows, row_sel, col, col_sel, count, layout, col_no, build_size);
 		break;
 	case PhysicalType::INT16:
-		TemplatedGatherLoop<int16_t>(rows, row_sel, col, col_sel, count, col_offset, col_no, build_size);
+		TemplatedGatherLoop<int16_t>(rows, row_sel, col, col_sel, count, layout, col_no, build_size);
 		break;
 	case PhysicalType::INT32:
-		TemplatedGatherLoop<int32_t>(rows, row_sel, col, col_sel, count, col_offset, col_no, build_size);
+		TemplatedGatherLoop<int32_t>(rows, row_sel, col, col_sel, count, layout, col_no, build_size);
 		break;
 	case PhysicalType::INT64:
-		TemplatedGatherLoop<int64_t>(rows, row_sel, col, col_sel, count, col_offset, col_no, build_size);
+		TemplatedGatherLoop<int64_t>(rows, row_sel, col, col_sel, count, layout, col_no, build_size);
 		break;
 	case PhysicalType::INT128:
-		TemplatedGatherLoop<hugeint_t>(rows, row_sel, col, col_sel, count, col_offset, col_no, build_size);
+		TemplatedGatherLoop<hugeint_t>(rows, row_sel, col, col_sel, count, layout, col_no, build_size);
 		break;
 	case PhysicalType::FLOAT:
-		TemplatedGatherLoop<float>(rows, row_sel, col, col_sel, count, col_offset, col_no, build_size);
+		TemplatedGatherLoop<float>(rows, row_sel, col, col_sel, count, layout, col_no, build_size);
 		break;
 	case PhysicalType::DOUBLE:
-		TemplatedGatherLoop<double>(rows, row_sel, col, col_sel, count, col_offset, col_no, build_size);
+		TemplatedGatherLoop<double>(rows, row_sel, col, col_sel, count, layout, col_no, build_size);
 		break;
 	case PhysicalType::INTERVAL:
-		TemplatedGatherLoop<interval_t>(rows, row_sel, col, col_sel, count, col_offset, col_no, build_size);
+		TemplatedGatherLoop<interval_t>(rows, row_sel, col, col_sel, count, layout, col_no, build_size);
 		break;
 	case PhysicalType::VARCHAR:
-		TemplatedGatherLoop<string_t>(rows, row_sel, col, col_sel, count, col_offset, col_no, build_size);
+		GatherVarchar(rows, row_sel, col, col_sel, count, layout, col_no, build_size, heap_ptr);
 		break;
 	case PhysicalType::LIST:
-	case PhysicalType::MAP:
 	case PhysicalType::STRUCT:
-		GatherNestedVector(rows, row_sel, col, col_sel, count, col_offset, col_no);
+		GatherNestedVector(rows, row_sel, col, col_sel, count, layout, col_no, heap_ptr);
 		break;
 	default:
 		throw InternalException("Unimplemented type for RowOperations::Gather");
@@ -10856,7 +23618,8 @@ static void TemplatedFullScanLoop(Vector &rows, Vector &col, idx_t count, idx_t 
 	}
 }
 
-void RowOperations::FullScanColumn(const RowLayout &layout, Vector &rows, Vector &col, idx_t count, idx_t col_no) {
+void RowOperations::FullScanColumn(const TupleDataLayout &layout, Vector &rows, Vector &col, idx_t count,
+                                   idx_t col_no) {
 	const auto col_offset = layout.GetOffsets()[col_no];
 	col.SetVectorType(VectorType::FLAT_VECTOR);
 	switch (col.GetType().InternalType()) {
@@ -11106,12 +23869,12 @@ namespace duckdb {
 
 using ValidityBytes = TemplatedValidityMask<uint8_t>;
 
-static void ComputeStringEntrySizes(VectorData &vdata, idx_t entry_sizes[], const idx_t ser_count,
+static void ComputeStringEntrySizes(UnifiedVectorFormat &vdata, idx_t entry_sizes[], const idx_t ser_count,
                                     const SelectionVector &sel, const idx_t offset) {
 	auto strings = (string_t *)vdata.data;
 	for (idx_t i = 0; i < ser_count; i++) {
 		auto idx = sel.get_index(i);
-		auto str_idx = vdata.sel->get_index(idx) + offset;
+		auto str_idx = vdata.sel->get_index(idx + offset);
 		if (vdata.validity.RowIsValid(str_idx)) {
 			entry_sizes[i] += sizeof(uint32_t) + strings[str_idx].GetSize();
 		}
@@ -11135,14 +23898,14 @@ static void ComputeStructEntrySizes(Vector &v, idx_t entry_sizes[], idx_t vcount
 	}
 }
 
-static void ComputeListEntrySizes(Vector &v, VectorData &vdata, idx_t entry_sizes[], idx_t ser_count,
+static void ComputeListEntrySizes(Vector &v, UnifiedVectorFormat &vdata, idx_t entry_sizes[], idx_t ser_count,
                                   const SelectionVector &sel, idx_t offset) {
 	auto list_data = ListVector::GetData(v);
 	auto &child_vector = ListVector::GetEntry(v);
 	idx_t list_entry_sizes[STANDARD_VECTOR_SIZE];
 	for (idx_t i = 0; i < ser_count; i++) {
 		auto idx = sel.get_index(i);
-		auto source_idx = vdata.sel->get_index(idx) + offset;
+		auto source_idx = vdata.sel->get_index(idx + offset);
 		if (vdata.validity.RowIsValid(source_idx)) {
 			auto list_entry = list_data[source_idx];
 
@@ -11178,8 +23941,8 @@ static void ComputeListEntrySizes(Vector &v, VectorData &vdata, idx_t entry_size
 	}
 }
 
-void RowOperations::ComputeEntrySizes(Vector &v, VectorData &vdata, idx_t entry_sizes[], idx_t vcount, idx_t ser_count,
-                                      const SelectionVector &sel, idx_t offset) {
+void RowOperations::ComputeEntrySizes(Vector &v, UnifiedVectorFormat &vdata, idx_t entry_sizes[], idx_t vcount,
+                                      idx_t ser_count, const SelectionVector &sel, idx_t offset) {
 	const auto physical_type = v.GetType().InternalType();
 	if (TypeIsConstantSize(physical_type)) {
 		const auto type_size = GetTypeIdSize(physical_type);
@@ -11208,19 +23971,19 @@ void RowOperations::ComputeEntrySizes(Vector &v, VectorData &vdata, idx_t entry_
 
 void RowOperations::ComputeEntrySizes(Vector &v, idx_t entry_sizes[], idx_t vcount, idx_t ser_count,
                                       const SelectionVector &sel, idx_t offset) {
-	VectorData vdata;
-	v.Orrify(vcount, vdata);
+	UnifiedVectorFormat vdata;
+	v.ToUnifiedFormat(vcount, vdata);
 	ComputeEntrySizes(v, vdata, entry_sizes, vcount, ser_count, sel, offset);
 }
 
 template <class T>
-static void TemplatedHeapScatter(VectorData &vdata, const SelectionVector &sel, idx_t count, idx_t col_idx,
+static void TemplatedHeapScatter(UnifiedVectorFormat &vdata, const SelectionVector &sel, idx_t count, idx_t col_idx,
                                  data_ptr_t *key_locations, data_ptr_t *validitymask_locations, idx_t offset) {
 	auto source = (T *)vdata.data;
 	if (!validitymask_locations) {
 		for (idx_t i = 0; i < count; i++) {
 			auto idx = sel.get_index(i);
-			auto source_idx = vdata.sel->get_index(idx) + offset;
+			auto source_idx = vdata.sel->get_index(idx + offset);
 
 			auto target = (T *)key_locations[i];
 			Store<T>(source[source_idx], (data_ptr_t)target);
@@ -11233,7 +23996,7 @@ static void TemplatedHeapScatter(VectorData &vdata, const SelectionVector &sel, 
 		const auto bit = ~(1UL << idx_in_entry);
 		for (idx_t i = 0; i < count; i++) {
 			auto idx = sel.get_index(i);
-			auto source_idx = vdata.sel->get_index(idx) + offset;
+			auto source_idx = vdata.sel->get_index(idx + offset);
 
 			auto target = (T *)key_locations[i];
 			Store<T>(source[source_idx], (data_ptr_t)target);
@@ -11249,21 +24012,21 @@ static void TemplatedHeapScatter(VectorData &vdata, const SelectionVector &sel, 
 
 static void HeapScatterStringVector(Vector &v, idx_t vcount, const SelectionVector &sel, idx_t ser_count, idx_t col_idx,
                                     data_ptr_t *key_locations, data_ptr_t *validitymask_locations, idx_t offset) {
-	VectorData vdata;
-	v.Orrify(vcount, vdata);
+	UnifiedVectorFormat vdata;
+	v.ToUnifiedFormat(vcount, vdata);
 
 	auto strings = (string_t *)vdata.data;
 	if (!validitymask_locations) {
 		for (idx_t i = 0; i < ser_count; i++) {
 			auto idx = sel.get_index(i);
-			auto source_idx = vdata.sel->get_index(idx) + offset;
+			auto source_idx = vdata.sel->get_index(idx + offset);
 			if (vdata.validity.RowIsValid(source_idx)) {
 				auto &string_entry = strings[source_idx];
 				// store string size
 				Store<uint32_t>(string_entry.GetSize(), key_locations[i]);
 				key_locations[i] += sizeof(uint32_t);
 				// store the string
-				memcpy(key_locations[i], string_entry.GetDataUnsafe(), string_entry.GetSize());
+				memcpy(key_locations[i], string_entry.GetData(), string_entry.GetSize());
 				key_locations[i] += string_entry.GetSize();
 			}
 		}
@@ -11274,14 +24037,14 @@ static void HeapScatterStringVector(Vector &v, idx_t vcount, const SelectionVect
 		const auto bit = ~(1UL << idx_in_entry);
 		for (idx_t i = 0; i < ser_count; i++) {
 			auto idx = sel.get_index(i);
-			auto source_idx = vdata.sel->get_index(idx) + offset;
+			auto source_idx = vdata.sel->get_index(idx + offset);
 			if (vdata.validity.RowIsValid(source_idx)) {
 				auto &string_entry = strings[source_idx];
 				// store string size
 				Store<uint32_t>(string_entry.GetSize(), key_locations[i]);
 				key_locations[i] += sizeof(uint32_t);
 				// store the string
-				memcpy(key_locations[i], string_entry.GetDataUnsafe(), string_entry.GetSize());
+				memcpy(key_locations[i], string_entry.GetData(), string_entry.GetSize());
 				key_locations[i] += string_entry.GetSize();
 			} else {
 				// set the validitymask
@@ -11293,8 +24056,8 @@ static void HeapScatterStringVector(Vector &v, idx_t vcount, const SelectionVect
 
 static void HeapScatterStructVector(Vector &v, idx_t vcount, const SelectionVector &sel, idx_t ser_count, idx_t col_idx,
                                     data_ptr_t *key_locations, data_ptr_t *validitymask_locations, idx_t offset) {
-	VectorData vdata;
-	v.Orrify(vcount, vdata);
+	UnifiedVectorFormat vdata;
+	v.ToUnifiedFormat(vcount, vdata);
 
 	auto &children = StructVector::GetEntries(v);
 	idx_t num_children = children.size();
@@ -11332,8 +24095,8 @@ static void HeapScatterStructVector(Vector &v, idx_t vcount, const SelectionVect
 
 static void HeapScatterListVector(Vector &v, idx_t vcount, const SelectionVector &sel, idx_t ser_count, idx_t col_no,
                                   data_ptr_t *key_locations, data_ptr_t *validitymask_locations, idx_t offset) {
-	VectorData vdata;
-	v.Orrify(vcount, vdata);
+	UnifiedVectorFormat vdata;
+	v.ToUnifiedFormat(vcount, vdata);
 
 	idx_t entry_idx;
 	idx_t idx_in_entry;
@@ -11343,8 +24106,8 @@ static void HeapScatterListVector(Vector &v, idx_t vcount, const SelectionVector
 
 	auto &child_vector = ListVector::GetEntry(v);
 
-	VectorData list_vdata;
-	child_vector.Orrify(ListVector::GetListSize(v), list_vdata);
+	UnifiedVectorFormat list_vdata;
+	child_vector.ToUnifiedFormat(ListVector::GetListSize(v), list_vdata);
 	auto child_type = ListType::GetChildType(v.GetType()).InternalType();
 
 	idx_t list_entry_sizes[STANDARD_VECTOR_SIZE];
@@ -11352,7 +24115,7 @@ static void HeapScatterListVector(Vector &v, idx_t vcount, const SelectionVector
 
 	for (idx_t i = 0; i < ser_count; i++) {
 		auto idx = sel.get_index(i);
-		auto source_idx = vdata.sel->get_index(idx) + offset;
+		auto source_idx = vdata.sel->get_index(idx + offset);
 		if (!vdata.validity.RowIsValid(source_idx)) {
 			if (validitymask_locations) {
 				// set the row validitymask for this column to invalid
@@ -11389,7 +24152,7 @@ static void HeapScatterListVector(Vector &v, idx_t vcount, const SelectionVector
 
 			// serialize list validity
 			for (idx_t entry_idx = 0; entry_idx < next; entry_idx++) {
-				auto list_idx = list_vdata.sel->get_index(entry_idx) + entry_offset;
+				auto list_idx = list_vdata.sel->get_index(entry_idx + entry_offset);
 				if (!list_vdata.validity.RowIsValid(list_idx)) {
 					*(list_validitymask_location) &= ~(1UL << entry_offset_in_byte);
 				}
@@ -11434,8 +24197,8 @@ static void HeapScatterListVector(Vector &v, idx_t vcount, const SelectionVector
 void RowOperations::HeapScatter(Vector &v, idx_t vcount, const SelectionVector &sel, idx_t ser_count, idx_t col_idx,
                                 data_ptr_t *key_locations, data_ptr_t *validitymask_locations, idx_t offset) {
 	if (TypeIsConstantSize(v.GetType().InternalType())) {
-		VectorData vdata;
-		v.Orrify(vcount, vdata);
+		UnifiedVectorFormat vdata;
+		v.ToUnifiedFormat(vcount, vdata);
 		RowOperations::HeapScatterVData(vdata, v.GetType().InternalType(), sel, ser_count, col_idx, key_locations,
 		                                validitymask_locations, offset);
 	} else {
@@ -11458,9 +24221,9 @@ void RowOperations::HeapScatter(Vector &v, idx_t vcount, const SelectionVector &
 	}
 }
 
-void RowOperations::HeapScatterVData(VectorData &vdata, PhysicalType type, const SelectionVector &sel, idx_t ser_count,
-                                     idx_t col_idx, data_ptr_t *key_locations, data_ptr_t *validitymask_locations,
-                                     idx_t offset) {
+void RowOperations::HeapScatterVData(UnifiedVectorFormat &vdata, PhysicalType type, const SelectionVector &sel,
+                                     idx_t ser_count, idx_t col_idx, data_ptr_t *key_locations,
+                                     data_ptr_t *validitymask_locations, idx_t offset) {
 	switch (type) {
 	case PhysicalType::BOOL:
 	case PhysicalType::INT8:
@@ -11564,8 +24327,8 @@ idx_t SelectComparison<LessThanEquals>(Vector &left, Vector &right, const Select
 }
 
 template <class T, class OP, bool NO_MATCH_SEL>
-static void TemplatedMatchType(VectorData &col, Vector &rows, SelectionVector &sel, idx_t &count, idx_t col_offset,
-                               idx_t col_no, SelectionVector *no_match, idx_t &no_match_count) {
+static void TemplatedMatchType(UnifiedVectorFormat &col, Vector &rows, SelectionVector &sel, idx_t &count,
+                               idx_t col_offset, idx_t col_no, SelectionVector *no_match, idx_t &no_match_count) {
 	// Precompute row_mask indexes
 	idx_t entry_idx;
 	idx_t idx_in_entry;
@@ -11625,12 +24388,104 @@ static void TemplatedMatchType(VectorData &col, Vector &rows, SelectionVector &s
 	count = match_count;
 }
 
+//! Forward declaration for recursion
 template <class OP, bool NO_MATCH_SEL>
-static void TemplatedMatchNested(Vector &col, Vector &rows, SelectionVector &sel, idx_t &count, const idx_t col_offset,
-                                 const idx_t col_no, SelectionVector *no_match, idx_t &no_match_count) {
+static void TemplatedMatchOp(Vector &vec, UnifiedVectorFormat &col, const TupleDataLayout &layout, Vector &rows,
+                             SelectionVector &sel, idx_t &count, idx_t col_no, SelectionVector *no_match,
+                             idx_t &no_match_count, const idx_t original_count);
+
+template <class OP, bool NO_MATCH_SEL>
+static void TemplatedMatchStruct(Vector &vec, UnifiedVectorFormat &col, const TupleDataLayout &layout, Vector &rows,
+                                 SelectionVector &sel, idx_t &count, const idx_t col_no, SelectionVector *no_match,
+                                 idx_t &no_match_count, const idx_t original_count) {
+	// Precompute row_mask indexes
+	idx_t entry_idx;
+	idx_t idx_in_entry;
+	ValidityBytes::GetEntryIndex(col_no, entry_idx, idx_in_entry);
+
+	// Work our way through the validity of the whole struct
+	auto ptrs = FlatVector::GetData<data_ptr_t>(rows);
+	idx_t match_count = 0;
+	if (!col.validity.AllValid()) {
+		for (idx_t i = 0; i < count; i++) {
+			auto idx = sel.get_index(i);
+
+			auto row = ptrs[idx];
+			ValidityBytes row_mask(row);
+			auto isnull = !row_mask.RowIsValid(row_mask.GetValidityEntry(entry_idx), idx_in_entry);
+
+			auto col_idx = col.sel->get_index(idx);
+			if (!col.validity.RowIsValid(col_idx)) {
+				if (isnull) {
+					// match: move to next value to compare
+					sel.set_index(match_count++, idx);
+				} else {
+					if (NO_MATCH_SEL) {
+						no_match->set_index(no_match_count++, idx);
+					}
+				}
+			} else {
+				if (!isnull) {
+					sel.set_index(match_count++, idx);
+				} else {
+					if (NO_MATCH_SEL) {
+						no_match->set_index(no_match_count++, idx);
+					}
+				}
+			}
+		}
+	} else {
+		for (idx_t i = 0; i < count; i++) {
+			auto idx = sel.get_index(i);
+
+			auto row = ptrs[idx];
+			ValidityBytes row_mask(row);
+			auto isnull = !row_mask.RowIsValid(row_mask.GetValidityEntry(entry_idx), idx_in_entry);
+
+			if (!isnull) {
+				sel.set_index(match_count++, idx);
+			} else {
+				if (NO_MATCH_SEL) {
+					no_match->set_index(no_match_count++, idx);
+				}
+			}
+		}
+	}
+	count = match_count;
+
+	// Now we construct row pointers to the structs
+	Vector struct_rows(LogicalTypeId::POINTER);
+	auto struct_ptrs = FlatVector::GetData<data_ptr_t>(struct_rows);
+
+	const auto col_offset = layout.GetOffsets()[col_no];
+	for (idx_t i = 0; i < count; i++) {
+		auto idx = sel.get_index(i);
+		auto row = ptrs[idx];
+		struct_ptrs[idx] = row + col_offset;
+	}
+
+	// Get the struct layout, child columns, then recurse
+	const auto &struct_layout = layout.GetStructLayout(col_no);
+	auto &struct_entries = StructVector::GetEntries(vec);
+	D_ASSERT(struct_layout.ColumnCount() == struct_entries.size());
+	for (idx_t struct_col_no = 0; struct_col_no < struct_layout.ColumnCount(); struct_col_no++) {
+		auto &struct_vec = *struct_entries[struct_col_no];
+		UnifiedVectorFormat struct_col;
+		struct_vec.ToUnifiedFormat(original_count, struct_col);
+		TemplatedMatchOp<OP, NO_MATCH_SEL>(struct_vec, struct_col, struct_layout, struct_rows, sel, count,
+		                                   struct_col_no, no_match, no_match_count, original_count);
+	}
+}
+
+template <class OP, bool NO_MATCH_SEL>
+static void TemplatedMatchList(Vector &col, Vector &rows, SelectionVector &sel, idx_t &count,
+                               const TupleDataLayout &layout, const idx_t col_no, SelectionVector *no_match,
+                               idx_t &no_match_count) {
 	// Gather a dense Vector containing the column values being matched
 	Vector key(col.GetType());
-	RowOperations::Gather(rows, sel, key, *FlatVector::IncrementalSelectionVector(), count, col_offset, col_no);
+	const auto gather_function = TupleDataCollection::GetGatherFunction(col.GetType());
+	gather_function.function(layout, rows, col_no, sel, count, key, *FlatVector::IncrementalSelectionVector(), key,
+	                         gather_function.child_functions);
 
 	// Densify the input column
 	Vector sliced(col, sel, count);
@@ -11646,8 +24501,9 @@ static void TemplatedMatchNested(Vector &col, Vector &rows, SelectionVector &sel
 }
 
 template <class OP, bool NO_MATCH_SEL>
-static void TemplatedMatchOp(Vector &vec, VectorData &col, const RowLayout &layout, Vector &rows, SelectionVector &sel,
-                             idx_t &count, idx_t col_no, SelectionVector *no_match, idx_t &no_match_count) {
+static void TemplatedMatchOp(Vector &vec, UnifiedVectorFormat &col, const TupleDataLayout &layout, Vector &rows,
+                             SelectionVector &sel, idx_t &count, idx_t col_no, SelectionVector *no_match,
+                             idx_t &no_match_count, const idx_t original_count) {
 	if (count == 0) {
 		return;
 	}
@@ -11706,10 +24562,12 @@ static void TemplatedMatchOp(Vector &vec, VectorData &col, const RowLayout &layo
 		TemplatedMatchType<string_t, OP, NO_MATCH_SEL>(col, rows, sel, count, col_offset, col_no, no_match,
 		                                               no_match_count);
 		break;
-	case PhysicalType::LIST:
-	case PhysicalType::MAP:
 	case PhysicalType::STRUCT:
-		TemplatedMatchNested<OP, NO_MATCH_SEL>(vec, rows, sel, count, col_offset, col_no, no_match, no_match_count);
+		TemplatedMatchStruct<OP, NO_MATCH_SEL>(vec, col, layout, rows, sel, count, col_no, no_match, no_match_count,
+		                                       original_count);
+		break;
+	case PhysicalType::LIST:
+		TemplatedMatchList<OP, NO_MATCH_SEL>(vec, rows, sel, count, layout, col_no, no_match, no_match_count);
 		break;
 	default:
 		throw InternalException("Unsupported column type for RowOperations::Match");
@@ -11717,9 +24575,9 @@ static void TemplatedMatchOp(Vector &vec, VectorData &col, const RowLayout &layo
 }
 
 template <bool NO_MATCH_SEL>
-static void TemplatedMatch(DataChunk &columns, VectorData col_data[], const RowLayout &layout, Vector &rows,
-                           const Predicates &predicates, SelectionVector &sel, idx_t &count, SelectionVector *no_match,
-                           idx_t &no_match_count) {
+static void TemplatedMatch(DataChunk &columns, UnifiedVectorFormat col_data[], const TupleDataLayout &layout,
+                           Vector &rows, const Predicates &predicates, SelectionVector &sel, idx_t &count,
+                           SelectionVector *no_match, idx_t &no_match_count) {
 	for (idx_t col_no = 0; col_no < predicates.size(); ++col_no) {
 		auto &vec = columns.data[col_no];
 		auto &col = col_data[col_no];
@@ -11727,28 +24585,28 @@ static void TemplatedMatch(DataChunk &columns, VectorData col_data[], const RowL
 		case ExpressionType::COMPARE_EQUAL:
 		case ExpressionType::COMPARE_NOT_DISTINCT_FROM:
 		case ExpressionType::COMPARE_DISTINCT_FROM:
-			TemplatedMatchOp<Equals, NO_MATCH_SEL>(vec, col, layout, rows, sel, count, col_no, no_match,
-			                                       no_match_count);
+			TemplatedMatchOp<Equals, NO_MATCH_SEL>(vec, col, layout, rows, sel, count, col_no, no_match, no_match_count,
+			                                       count);
 			break;
 		case ExpressionType::COMPARE_NOTEQUAL:
 			TemplatedMatchOp<NotEquals, NO_MATCH_SEL>(vec, col, layout, rows, sel, count, col_no, no_match,
-			                                          no_match_count);
+			                                          no_match_count, count);
 			break;
 		case ExpressionType::COMPARE_GREATERTHAN:
 			TemplatedMatchOp<GreaterThan, NO_MATCH_SEL>(vec, col, layout, rows, sel, count, col_no, no_match,
-			                                            no_match_count);
+			                                            no_match_count, count);
 			break;
 		case ExpressionType::COMPARE_GREATERTHANOREQUALTO:
 			TemplatedMatchOp<GreaterThanEquals, NO_MATCH_SEL>(vec, col, layout, rows, sel, count, col_no, no_match,
-			                                                  no_match_count);
+			                                                  no_match_count, count);
 			break;
 		case ExpressionType::COMPARE_LESSTHAN:
 			TemplatedMatchOp<LessThan, NO_MATCH_SEL>(vec, col, layout, rows, sel, count, col_no, no_match,
-			                                         no_match_count);
+			                                         no_match_count, count);
 			break;
 		case ExpressionType::COMPARE_LESSTHANOREQUALTO:
 			TemplatedMatchOp<LessThanEquals, NO_MATCH_SEL>(vec, col, layout, rows, sel, count, col_no, no_match,
-			                                               no_match_count);
+			                                               no_match_count, count);
 			break;
 		default:
 			throw InternalException("Unsupported comparison type for RowOperations::Match");
@@ -11756,9 +24614,9 @@ static void TemplatedMatch(DataChunk &columns, VectorData col_data[], const RowL
 	}
 }
 
-idx_t RowOperations::Match(DataChunk &columns, VectorData col_data[], const RowLayout &layout, Vector &rows,
-                           const Predicates &predicates, SelectionVector &sel, idx_t count, SelectionVector *no_match,
-                           idx_t &no_match_count) {
+idx_t RowOperations::Match(DataChunk &columns, UnifiedVectorFormat col_data[], const TupleDataLayout &layout,
+                           Vector &rows, const Predicates &predicates, SelectionVector &sel, idx_t count,
+                           SelectionVector *no_match, idx_t &no_match_count) {
 	if (no_match) {
 		TemplatedMatch<true>(columns, col_data, layout, rows, predicates, sel, count, no_match, no_match_count);
 	} else {
@@ -11766,5380 +24624,6 @@ idx_t RowOperations::Match(DataChunk &columns, VectorData col_data[], const RowL
 	}
 
 	return count;
-}
-
-} // namespace duckdb
-
-
-
-
-
-namespace duckdb {
-
-template <class T>
-void TemplatedRadixScatter(VectorData &vdata, const SelectionVector &sel, idx_t add_count, data_ptr_t *key_locations,
-                           const bool desc, const bool has_null, const bool nulls_first, const bool is_little_endian,
-                           const idx_t offset) {
-	auto source = (T *)vdata.data;
-	if (has_null) {
-		auto &validity = vdata.validity;
-		const data_t valid = nulls_first ? 1 : 0;
-		const data_t invalid = 1 - valid;
-
-		for (idx_t i = 0; i < add_count; i++) {
-			auto idx = sel.get_index(i);
-			auto source_idx = vdata.sel->get_index(idx) + offset;
-			// write validity and according value
-			if (validity.RowIsValid(source_idx)) {
-				key_locations[i][0] = valid;
-				Radix::EncodeData<T>(key_locations[i] + 1, source[source_idx], is_little_endian);
-				// invert bits if desc
-				if (desc) {
-					for (idx_t s = 1; s < sizeof(T) + 1; s++) {
-						*(key_locations[i] + s) = ~*(key_locations[i] + s);
-					}
-				}
-			} else {
-				key_locations[i][0] = invalid;
-				memset(key_locations[i] + 1, '\0', sizeof(T));
-			}
-			key_locations[i] += sizeof(T) + 1;
-		}
-	} else {
-		for (idx_t i = 0; i < add_count; i++) {
-			auto idx = sel.get_index(i);
-			auto source_idx = vdata.sel->get_index(idx) + offset;
-			// write value
-			Radix::EncodeData<T>(key_locations[i], source[source_idx], is_little_endian);
-			// invert bits if desc
-			if (desc) {
-				for (idx_t s = 0; s < sizeof(T); s++) {
-					*(key_locations[i] + s) = ~*(key_locations[i] + s);
-				}
-			}
-			key_locations[i] += sizeof(T);
-		}
-	}
-}
-
-void RadixScatterStringVector(VectorData &vdata, const SelectionVector &sel, idx_t add_count, data_ptr_t *key_locations,
-                              const bool desc, const bool has_null, const bool nulls_first, const idx_t prefix_len,
-                              idx_t offset) {
-	auto source = (string_t *)vdata.data;
-	if (has_null) {
-		auto &validity = vdata.validity;
-		const data_t valid = nulls_first ? 1 : 0;
-		const data_t invalid = 1 - valid;
-
-		for (idx_t i = 0; i < add_count; i++) {
-			auto idx = sel.get_index(i);
-			auto source_idx = vdata.sel->get_index(idx) + offset;
-			// write validity and according value
-			if (validity.RowIsValid(source_idx)) {
-				key_locations[i][0] = valid;
-				Radix::EncodeStringDataPrefix(key_locations[i] + 1, source[source_idx], prefix_len);
-				// invert bits if desc
-				if (desc) {
-					for (idx_t s = 1; s < prefix_len + 1; s++) {
-						*(key_locations[i] + s) = ~*(key_locations[i] + s);
-					}
-				}
-			} else {
-				key_locations[i][0] = invalid;
-				memset(key_locations[i] + 1, '\0', prefix_len);
-			}
-			key_locations[i] += prefix_len + 1;
-		}
-	} else {
-		for (idx_t i = 0; i < add_count; i++) {
-			auto idx = sel.get_index(i);
-			auto source_idx = vdata.sel->get_index(idx) + offset;
-			// write value
-			Radix::EncodeStringDataPrefix(key_locations[i], source[source_idx], prefix_len);
-			// invert bits if desc
-			if (desc) {
-				for (idx_t s = 0; s < prefix_len; s++) {
-					*(key_locations[i] + s) = ~*(key_locations[i] + s);
-				}
-			}
-			key_locations[i] += prefix_len;
-		}
-	}
-}
-
-void RadixScatterListVector(Vector &v, VectorData &vdata, const SelectionVector &sel, idx_t add_count,
-                            data_ptr_t *key_locations, const bool desc, const bool has_null, const bool nulls_first,
-                            const idx_t prefix_len, const idx_t width, const idx_t offset) {
-	auto list_data = ListVector::GetData(v);
-	auto &child_vector = ListVector::GetEntry(v);
-	auto list_size = ListVector::GetListSize(v);
-
-	// serialize null values
-	if (has_null) {
-		auto &validity = vdata.validity;
-		const data_t valid = nulls_first ? 1 : 0;
-		const data_t invalid = 1 - valid;
-
-		for (idx_t i = 0; i < add_count; i++) {
-			auto idx = sel.get_index(i);
-			auto source_idx = vdata.sel->get_index(idx) + offset;
-			data_ptr_t key_location = key_locations[i] + 1;
-			// write validity and according value
-			if (validity.RowIsValid(source_idx)) {
-				key_locations[i][0] = valid;
-				key_locations[i]++;
-				auto &list_entry = list_data[source_idx];
-				if (list_entry.length > 0) {
-					// denote that the list is not empty with a 1
-					key_locations[i][0] = 1;
-					key_locations[i]++;
-					RowOperations::RadixScatter(child_vector, list_size, *FlatVector::IncrementalSelectionVector(), 1,
-					                            key_locations + i, false, true, false, prefix_len, width - 1,
-					                            list_entry.offset);
-				} else {
-					// denote that the list is empty with a 0
-					key_locations[i][0] = 0;
-					key_locations[i]++;
-					memset(key_locations[i], '\0', width - 2);
-				}
-				// invert bits if desc
-				if (desc) {
-					for (idx_t s = 0; s < width - 1; s++) {
-						*(key_location + s) = ~*(key_location + s);
-					}
-				}
-			} else {
-				key_locations[i][0] = invalid;
-				memset(key_locations[i] + 1, '\0', width - 1);
-				key_locations[i] += width;
-			}
-		}
-	} else {
-		for (idx_t i = 0; i < add_count; i++) {
-			auto idx = sel.get_index(i);
-			auto source_idx = vdata.sel->get_index(idx) + offset;
-			auto &list_entry = list_data[source_idx];
-			data_ptr_t key_location = key_locations[i];
-			if (list_entry.length > 0) {
-				// denote that the list is not empty with a 1
-				key_locations[i][0] = 1;
-				key_locations[i]++;
-				RowOperations::RadixScatter(child_vector, list_size, *FlatVector::IncrementalSelectionVector(), 1,
-				                            key_locations + i, false, true, false, prefix_len, width - 1,
-				                            list_entry.offset);
-			} else {
-				// denote that the list is empty with a 0
-				key_locations[i][0] = 0;
-				key_locations[i]++;
-				memset(key_locations[i], '\0', width - 1);
-			}
-			// invert bits if desc
-			if (desc) {
-				for (idx_t s = 0; s < width; s++) {
-					*(key_location + s) = ~*(key_location + s);
-				}
-			}
-		}
-	}
-}
-
-void RadixScatterStructVector(Vector &v, VectorData &vdata, idx_t vcount, const SelectionVector &sel, idx_t add_count,
-                              data_ptr_t *key_locations, const bool desc, const bool has_null, const bool nulls_first,
-                              const idx_t prefix_len, idx_t width, const idx_t offset) {
-	// serialize null values
-	if (has_null) {
-		auto &validity = vdata.validity;
-		const data_t valid = nulls_first ? 1 : 0;
-		const data_t invalid = 1 - valid;
-
-		for (idx_t i = 0; i < add_count; i++) {
-			auto idx = sel.get_index(i);
-			auto source_idx = vdata.sel->get_index(idx) + offset;
-			// write validity and according value
-			if (validity.RowIsValid(source_idx)) {
-				key_locations[i][0] = valid;
-			} else {
-				key_locations[i][0] = invalid;
-			}
-			key_locations[i]++;
-		}
-		width--;
-	}
-	// serialize the struct
-	auto &child_vector = *StructVector::GetEntries(v)[0];
-	RowOperations::RadixScatter(child_vector, vcount, *FlatVector::IncrementalSelectionVector(), add_count,
-	                            key_locations, false, true, false, prefix_len, width, offset);
-	// invert bits if desc
-	if (desc) {
-		for (idx_t i = 0; i < add_count; i++) {
-			for (idx_t s = 0; s < width; s++) {
-				*(key_locations[i] - width + s) = ~*(key_locations[i] - width + s);
-			}
-		}
-	}
-}
-
-void RowOperations::RadixScatter(Vector &v, idx_t vcount, const SelectionVector &sel, idx_t ser_count,
-                                 data_ptr_t *key_locations, bool desc, bool has_null, bool nulls_first,
-                                 idx_t prefix_len, idx_t width, idx_t offset) {
-	auto is_little_endian = Radix::IsLittleEndian();
-
-	VectorData vdata;
-	v.Orrify(vcount, vdata);
-	switch (v.GetType().InternalType()) {
-	case PhysicalType::BOOL:
-	case PhysicalType::INT8:
-		TemplatedRadixScatter<int8_t>(vdata, sel, ser_count, key_locations, desc, has_null, nulls_first,
-		                              is_little_endian, offset);
-		break;
-	case PhysicalType::INT16:
-		TemplatedRadixScatter<int16_t>(vdata, sel, ser_count, key_locations, desc, has_null, nulls_first,
-		                               is_little_endian, offset);
-		break;
-	case PhysicalType::INT32:
-		TemplatedRadixScatter<int32_t>(vdata, sel, ser_count, key_locations, desc, has_null, nulls_first,
-		                               is_little_endian, offset);
-		break;
-	case PhysicalType::INT64:
-		TemplatedRadixScatter<int64_t>(vdata, sel, ser_count, key_locations, desc, has_null, nulls_first,
-		                               is_little_endian, offset);
-		break;
-	case PhysicalType::UINT8:
-		TemplatedRadixScatter<uint8_t>(vdata, sel, ser_count, key_locations, desc, has_null, nulls_first,
-		                               is_little_endian, offset);
-		break;
-	case PhysicalType::UINT16:
-		TemplatedRadixScatter<uint16_t>(vdata, sel, ser_count, key_locations, desc, has_null, nulls_first,
-		                                is_little_endian, offset);
-		break;
-	case PhysicalType::UINT32:
-		TemplatedRadixScatter<uint32_t>(vdata, sel, ser_count, key_locations, desc, has_null, nulls_first,
-		                                is_little_endian, offset);
-		break;
-	case PhysicalType::UINT64:
-		TemplatedRadixScatter<uint64_t>(vdata, sel, ser_count, key_locations, desc, has_null, nulls_first,
-		                                is_little_endian, offset);
-		break;
-	case PhysicalType::INT128:
-		TemplatedRadixScatter<hugeint_t>(vdata, sel, ser_count, key_locations, desc, has_null, nulls_first,
-		                                 is_little_endian, offset);
-		break;
-	case PhysicalType::FLOAT:
-		TemplatedRadixScatter<float>(vdata, sel, ser_count, key_locations, desc, has_null, nulls_first,
-		                             is_little_endian, offset);
-		break;
-	case PhysicalType::DOUBLE:
-		TemplatedRadixScatter<double>(vdata, sel, ser_count, key_locations, desc, has_null, nulls_first,
-		                              is_little_endian, offset);
-		break;
-	case PhysicalType::INTERVAL:
-		TemplatedRadixScatter<interval_t>(vdata, sel, ser_count, key_locations, desc, has_null, nulls_first,
-		                                  is_little_endian, offset);
-		break;
-	case PhysicalType::VARCHAR:
-		RadixScatterStringVector(vdata, sel, ser_count, key_locations, desc, has_null, nulls_first, prefix_len, offset);
-		break;
-	case PhysicalType::LIST:
-		RadixScatterListVector(v, vdata, sel, ser_count, key_locations, desc, has_null, nulls_first, prefix_len, width,
-		                       offset);
-		break;
-	case PhysicalType::STRUCT:
-		RadixScatterStructVector(v, vdata, vcount, sel, ser_count, key_locations, desc, has_null, nulls_first,
-		                         prefix_len, width, offset);
-		break;
-	default:
-		throw NotImplementedException("Cannot ORDER BY column with type %s", v.GetType().ToString());
-	}
-}
-
-} // namespace duckdb
-//===--------------------------------------------------------------------===//
-// row_scatter.cpp
-// Description: This file contains the implementation of the row scattering
-//              operators
-//===--------------------------------------------------------------------===//
-
-
-
-
-
-
-
-
-
-
-namespace duckdb {
-
-using ValidityBytes = RowLayout::ValidityBytes;
-
-template <class T>
-static void TemplatedScatter(VectorData &col, Vector &rows, const SelectionVector &sel, const idx_t count,
-                             const idx_t col_offset, const idx_t col_no) {
-	auto data = (T *)col.data;
-	auto ptrs = FlatVector::GetData<data_ptr_t>(rows);
-
-	if (!col.validity.AllValid()) {
-		for (idx_t i = 0; i < count; i++) {
-			auto idx = sel.get_index(i);
-			auto col_idx = col.sel->get_index(idx);
-			auto row = ptrs[idx];
-
-			auto isnull = !col.validity.RowIsValid(col_idx);
-			T store_value = isnull ? NullValue<T>() : data[col_idx];
-			Store<T>(store_value, row + col_offset);
-			if (isnull) {
-				ValidityBytes col_mask(ptrs[idx]);
-				col_mask.SetInvalidUnsafe(col_no);
-			}
-		}
-	} else {
-		for (idx_t i = 0; i < count; i++) {
-			auto idx = sel.get_index(i);
-			auto col_idx = col.sel->get_index(idx);
-			auto row = ptrs[idx];
-
-			Store<T>(data[col_idx], row + col_offset);
-		}
-	}
-}
-
-static void ComputeStringEntrySizes(const VectorData &col, idx_t entry_sizes[], const SelectionVector &sel,
-                                    const idx_t count, const idx_t offset = 0) {
-	auto data = (const string_t *)col.data;
-	for (idx_t i = 0; i < count; i++) {
-		auto idx = sel.get_index(i);
-		auto col_idx = col.sel->get_index(idx) + offset;
-		const auto &str = data[col_idx];
-		if (col.validity.RowIsValid(col_idx) && !str.IsInlined()) {
-			entry_sizes[i] += str.GetSize();
-		}
-	}
-}
-
-static void ScatterStringVector(VectorData &col, Vector &rows, data_ptr_t str_locations[], const SelectionVector &sel,
-                                const idx_t count, const idx_t col_offset, const idx_t col_no) {
-	auto string_data = (string_t *)col.data;
-	auto ptrs = FlatVector::GetData<data_ptr_t>(rows);
-
-	for (idx_t i = 0; i < count; i++) {
-		auto idx = sel.get_index(i);
-		auto col_idx = col.sel->get_index(idx);
-		auto row = ptrs[idx];
-		if (!col.validity.RowIsValid(col_idx)) {
-			ValidityBytes col_mask(row);
-			col_mask.SetInvalidUnsafe(col_no);
-			Store<string_t>(NullValue<string_t>(), row + col_offset);
-		} else if (string_data[col_idx].IsInlined()) {
-			Store<string_t>(string_data[col_idx], row + col_offset);
-		} else {
-			const auto &str = string_data[col_idx];
-			string_t inserted((const char *)str_locations[i], str.GetSize());
-			memcpy(inserted.GetDataWriteable(), str.GetDataUnsafe(), str.GetSize());
-			str_locations[i] += str.GetSize();
-			inserted.Finalize();
-			Store<string_t>(inserted, row + col_offset);
-		}
-	}
-}
-
-static void ScatterNestedVector(Vector &vec, VectorData &col, Vector &rows, data_ptr_t data_locations[],
-                                const SelectionVector &sel, const idx_t count, const idx_t col_offset,
-                                const idx_t col_no, const idx_t vcount) {
-	// Store pointers to the data in the row
-	// Do this first because SerializeVector destroys the locations
-	auto ptrs = FlatVector::GetData<data_ptr_t>(rows);
-	data_ptr_t validitymask_locations[STANDARD_VECTOR_SIZE];
-	for (idx_t i = 0; i < count; i++) {
-		auto idx = sel.get_index(i);
-		auto row = ptrs[idx];
-		validitymask_locations[i] = row;
-
-		Store<data_ptr_t>(data_locations[i], row + col_offset);
-	}
-
-	// Serialise the data
-	RowOperations::HeapScatter(vec, vcount, sel, count, col_no, data_locations, validitymask_locations);
-}
-
-void RowOperations::Scatter(DataChunk &columns, VectorData col_data[], const RowLayout &layout, Vector &rows,
-                            RowDataCollection &string_heap, const SelectionVector &sel, idx_t count) {
-	if (count == 0) {
-		return;
-	}
-
-	// Set the validity mask for each row before inserting data
-	auto ptrs = FlatVector::GetData<data_ptr_t>(rows);
-	for (idx_t i = 0; i < count; ++i) {
-		auto row_idx = sel.get_index(i);
-		auto row = ptrs[row_idx];
-		ValidityBytes(row).SetAllValid(layout.ColumnCount());
-	}
-
-	const auto vcount = columns.size();
-	auto &offsets = layout.GetOffsets();
-	auto &types = layout.GetTypes();
-
-	// Compute the entry size of the variable size columns
-	vector<BufferHandle> handles;
-	data_ptr_t data_locations[STANDARD_VECTOR_SIZE];
-	if (!layout.AllConstant()) {
-		idx_t entry_sizes[STANDARD_VECTOR_SIZE];
-		std::fill_n(entry_sizes, count, sizeof(uint32_t));
-		for (idx_t col_no = 0; col_no < types.size(); col_no++) {
-			if (TypeIsConstantSize(types[col_no].InternalType())) {
-				continue;
-			}
-
-			auto &vec = columns.data[col_no];
-			auto &col = col_data[col_no];
-			switch (types[col_no].InternalType()) {
-			case PhysicalType::VARCHAR:
-				ComputeStringEntrySizes(col, entry_sizes, sel, count);
-				break;
-			case PhysicalType::LIST:
-			case PhysicalType::MAP:
-			case PhysicalType::STRUCT:
-				RowOperations::ComputeEntrySizes(vec, col, entry_sizes, vcount, count, sel);
-				break;
-			default:
-				throw InternalException("Unsupported type for RowOperations::Scatter");
-			}
-		}
-
-		// Build out the buffer space
-		string_heap.Build(count, data_locations, entry_sizes);
-
-		// Serialize information that is needed for swizzling if the computation goes out-of-core
-		const idx_t heap_pointer_offset = layout.GetHeapPointerOffset();
-		for (idx_t i = 0; i < count; i++) {
-			auto row_idx = sel.get_index(i);
-			auto row = ptrs[row_idx];
-			// Pointer to this row in the heap block
-			Store<data_ptr_t>(data_locations[i], row + heap_pointer_offset);
-			// Row size is stored in the heap in front of each row
-			Store<uint32_t>(entry_sizes[i], data_locations[i]);
-			data_locations[i] += sizeof(uint32_t);
-		}
-	}
-
-	for (idx_t col_no = 0; col_no < types.size(); col_no++) {
-		auto &vec = columns.data[col_no];
-		auto &col = col_data[col_no];
-		auto col_offset = offsets[col_no];
-
-		switch (types[col_no].InternalType()) {
-		case PhysicalType::BOOL:
-		case PhysicalType::INT8:
-			TemplatedScatter<int8_t>(col, rows, sel, count, col_offset, col_no);
-			break;
-		case PhysicalType::INT16:
-			TemplatedScatter<int16_t>(col, rows, sel, count, col_offset, col_no);
-			break;
-		case PhysicalType::INT32:
-			TemplatedScatter<int32_t>(col, rows, sel, count, col_offset, col_no);
-			break;
-		case PhysicalType::INT64:
-			TemplatedScatter<int64_t>(col, rows, sel, count, col_offset, col_no);
-			break;
-		case PhysicalType::UINT8:
-			TemplatedScatter<uint8_t>(col, rows, sel, count, col_offset, col_no);
-			break;
-		case PhysicalType::UINT16:
-			TemplatedScatter<uint16_t>(col, rows, sel, count, col_offset, col_no);
-			break;
-		case PhysicalType::UINT32:
-			TemplatedScatter<uint32_t>(col, rows, sel, count, col_offset, col_no);
-			break;
-		case PhysicalType::UINT64:
-			TemplatedScatter<uint64_t>(col, rows, sel, count, col_offset, col_no);
-			break;
-		case PhysicalType::INT128:
-			TemplatedScatter<hugeint_t>(col, rows, sel, count, col_offset, col_no);
-			break;
-		case PhysicalType::FLOAT:
-			TemplatedScatter<float>(col, rows, sel, count, col_offset, col_no);
-			break;
-		case PhysicalType::DOUBLE:
-			TemplatedScatter<double>(col, rows, sel, count, col_offset, col_no);
-			break;
-		case PhysicalType::INTERVAL:
-			TemplatedScatter<interval_t>(col, rows, sel, count, col_offset, col_no);
-			break;
-		case PhysicalType::VARCHAR:
-			ScatterStringVector(col, rows, data_locations, sel, count, col_offset, col_no);
-			break;
-		case PhysicalType::LIST:
-		case PhysicalType::MAP:
-		case PhysicalType::STRUCT:
-			ScatterNestedVector(vec, col, rows, data_locations, sel, count, col_offset, col_no, vcount);
-			break;
-		default:
-			throw InternalException("Unsupported type for RowOperations::Scatter");
-		}
-	}
-}
-
-} // namespace duckdb
-
-
-#include <cstring>
-
-namespace duckdb {
-
-BufferedDeserializer::BufferedDeserializer(data_ptr_t ptr, idx_t data_size) : ptr(ptr), endptr(ptr + data_size) {
-}
-
-BufferedDeserializer::BufferedDeserializer(BufferedSerializer &serializer)
-    : BufferedDeserializer(serializer.data, serializer.maximum_size) {
-}
-
-void BufferedDeserializer::ReadData(data_ptr_t buffer, idx_t read_size) {
-	if (ptr + read_size > endptr) {
-		throw SerializationException("Failed to deserialize: not enough data in buffer to fulfill read request");
-	}
-	memcpy(buffer, ptr, read_size);
-	ptr += read_size;
-}
-
-} // namespace duckdb
-
-
-
-
-#include <cstring>
-#include <algorithm>
-
-namespace duckdb {
-
-BufferedFileReader::BufferedFileReader(FileSystem &fs, const char *path, FileOpener *opener)
-    : fs(fs), data(unique_ptr<data_t[]>(new data_t[FILE_BUFFER_SIZE])), offset(0), read_data(0), total_read(0) {
-	handle =
-	    fs.OpenFile(path, FileFlags::FILE_FLAGS_READ, FileLockType::READ_LOCK, FileSystem::DEFAULT_COMPRESSION, opener);
-	file_size = fs.GetFileSize(*handle);
-}
-
-void BufferedFileReader::ReadData(data_ptr_t target_buffer, uint64_t read_size) {
-	// first copy anything we can from the buffer
-	data_ptr_t end_ptr = target_buffer + read_size;
-	while (true) {
-		idx_t to_read = MinValue<idx_t>(end_ptr - target_buffer, read_data - offset);
-		if (to_read > 0) {
-			memcpy(target_buffer, data.get() + offset, to_read);
-			offset += to_read;
-			target_buffer += to_read;
-		}
-		if (target_buffer < end_ptr) {
-			D_ASSERT(offset == read_data);
-			total_read += read_data;
-			// did not finish reading yet but exhausted buffer
-			// read data into buffer
-			offset = 0;
-			read_data = fs.Read(*handle, data.get(), FILE_BUFFER_SIZE);
-			if (read_data == 0) {
-				throw SerializationException("not enough data in file to deserialize result");
-			}
-		} else {
-			return;
-		}
-	}
-}
-
-bool BufferedFileReader::Finished() {
-	return total_read + offset == file_size;
-}
-
-} // namespace duckdb
-
-
-
-#include <cstring>
-
-namespace duckdb {
-
-// Remove this when we switch C++17: https://stackoverflow.com/a/53350948
-constexpr uint8_t BufferedFileWriter::DEFAULT_OPEN_FLAGS;
-
-BufferedFileWriter::BufferedFileWriter(FileSystem &fs, const string &path_p, uint8_t open_flags, FileOpener *opener)
-    : fs(fs), path(path_p), data(unique_ptr<data_t[]>(new data_t[FILE_BUFFER_SIZE])), offset(0), total_written(0) {
-	handle = fs.OpenFile(path, open_flags, FileLockType::WRITE_LOCK, FileSystem::DEFAULT_COMPRESSION, opener);
-}
-
-int64_t BufferedFileWriter::GetFileSize() {
-	return fs.GetFileSize(*handle);
-}
-
-idx_t BufferedFileWriter::GetTotalWritten() {
-	return total_written + offset;
-}
-
-void BufferedFileWriter::WriteData(const_data_ptr_t buffer, uint64_t write_size) {
-	// first copy anything we can from the buffer
-	const_data_ptr_t end_ptr = buffer + write_size;
-	while (buffer < end_ptr) {
-		idx_t to_write = MinValue<idx_t>((end_ptr - buffer), FILE_BUFFER_SIZE - offset);
-		D_ASSERT(to_write > 0);
-		memcpy(data.get() + offset, buffer, to_write);
-		offset += to_write;
-		buffer += to_write;
-		if (offset == FILE_BUFFER_SIZE) {
-			Flush();
-		}
-	}
-}
-
-void BufferedFileWriter::Flush() {
-	if (offset == 0) {
-		return;
-	}
-	fs.Write(*handle, data.get(), offset);
-	total_written += offset;
-	offset = 0;
-}
-
-void BufferedFileWriter::Sync() {
-	Flush();
-	handle->Sync();
-}
-
-void BufferedFileWriter::Truncate(int64_t size) {
-	// truncate the physical file on disk
-	handle->Truncate(size);
-	// reset anything written in the buffer
-	offset = 0;
-}
-
-} // namespace duckdb
-
-
-#include <cstring>
-
-namespace duckdb {
-
-BufferedSerializer::BufferedSerializer(idx_t maximum_size)
-    : BufferedSerializer(unique_ptr<data_t[]>(new data_t[maximum_size]), maximum_size) {
-}
-
-BufferedSerializer::BufferedSerializer(unique_ptr<data_t[]> data, idx_t size) : maximum_size(size), data(data.get()) {
-	blob.size = 0;
-	blob.data = move(data);
-}
-
-BufferedSerializer::BufferedSerializer(data_ptr_t data, idx_t size) : maximum_size(size), data(data) {
-	blob.size = 0;
-}
-
-void BufferedSerializer::WriteData(const_data_ptr_t buffer, idx_t write_size) {
-	if (blob.size + write_size >= maximum_size) {
-		do {
-			maximum_size *= 2;
-		} while (blob.size + write_size > maximum_size);
-		auto new_data = new data_t[maximum_size];
-		memcpy(new_data, data, blob.size);
-		data = new_data;
-		blob.data = unique_ptr<data_t[]>(new_data);
-	}
-
-	memcpy(data + blob.size, buffer, write_size);
-	blob.size += write_size;
-}
-
-} // namespace duckdb
-
-
-namespace duckdb {
-
-template <>
-string Deserializer::Read() {
-	uint32_t size = Read<uint32_t>();
-	if (size == 0) {
-		return string();
-	}
-	auto buffer = unique_ptr<data_t[]>(new data_t[size]);
-	ReadData(buffer.get(), size);
-	return string((char *)buffer.get(), size);
-}
-
-void Deserializer::ReadStringVector(vector<string> &list) {
-	uint32_t sz = Read<uint32_t>();
-	list.resize(sz);
-	for (idx_t i = 0; i < sz; i++) {
-		list[i] = Read<string>();
-	}
-}
-
-} // namespace duckdb
-
-
-
-
-
-namespace duckdb {
-
-bool Comparators::TieIsBreakable(const idx_t &col_idx, const data_ptr_t row_ptr, const RowLayout &row_layout) {
-	// Check if the blob is NULL
-	ValidityBytes row_mask(row_ptr);
-	idx_t entry_idx;
-	idx_t idx_in_entry;
-	ValidityBytes::GetEntryIndex(col_idx, entry_idx, idx_in_entry);
-	if (!row_mask.RowIsValid(row_mask.GetValidityEntry(entry_idx), idx_in_entry)) {
-		// Can't break a NULL tie
-		return false;
-	}
-	if (row_layout.GetTypes()[col_idx].InternalType() == PhysicalType::VARCHAR) {
-		const auto &tie_col_offset = row_layout.GetOffsets()[col_idx];
-		string_t tie_string = Load<string_t>(row_ptr + tie_col_offset);
-		if (tie_string.GetSize() < string_t::INLINE_LENGTH) {
-			// No need to break the tie - we already compared the full string
-			return false;
-		}
-	}
-	return true;
-}
-
-int Comparators::CompareTuple(const SBScanState &left, const SBScanState &right, const data_ptr_t &l_ptr,
-                              const data_ptr_t &r_ptr, const SortLayout &sort_layout, const bool &external_sort) {
-	// Compare the sorting columns one by one
-	int comp_res = 0;
-	data_ptr_t l_ptr_offset = l_ptr;
-	data_ptr_t r_ptr_offset = r_ptr;
-	for (idx_t col_idx = 0; col_idx < sort_layout.column_count; col_idx++) {
-		comp_res = FastMemcmp(l_ptr_offset, r_ptr_offset, sort_layout.column_sizes[col_idx]);
-		if (comp_res == 0 && !sort_layout.constant_size[col_idx]) {
-			comp_res = BreakBlobTie(col_idx, left, right, sort_layout, external_sort);
-		}
-		if (comp_res != 0) {
-			break;
-		}
-		l_ptr_offset += sort_layout.column_sizes[col_idx];
-		r_ptr_offset += sort_layout.column_sizes[col_idx];
-	}
-	return comp_res;
-}
-
-int Comparators::CompareVal(const data_ptr_t l_ptr, const data_ptr_t r_ptr, const LogicalType &type) {
-	switch (type.InternalType()) {
-	case PhysicalType::VARCHAR:
-		return TemplatedCompareVal<string_t>(l_ptr, r_ptr);
-	case PhysicalType::LIST:
-	case PhysicalType::STRUCT: {
-		auto l_nested_ptr = Load<data_ptr_t>(l_ptr);
-		auto r_nested_ptr = Load<data_ptr_t>(r_ptr);
-		return CompareValAndAdvance(l_nested_ptr, r_nested_ptr, type);
-	}
-	default:
-		throw NotImplementedException("Unimplemented CompareVal for type %s", type.ToString());
-	}
-}
-
-int Comparators::BreakBlobTie(const idx_t &tie_col, const SBScanState &left, const SBScanState &right,
-                              const SortLayout &sort_layout, const bool &external) {
-	const idx_t &col_idx = sort_layout.sorting_to_blob_col.at(tie_col);
-	data_ptr_t l_data_ptr = left.DataPtr(*left.sb->blob_sorting_data);
-	data_ptr_t r_data_ptr = right.DataPtr(*right.sb->blob_sorting_data);
-	if (!TieIsBreakable(col_idx, l_data_ptr, sort_layout.blob_layout)) {
-		// Quick check to see if ties can be broken
-		return 0;
-	}
-	// Align the pointers
-	const auto &tie_col_offset = sort_layout.blob_layout.GetOffsets()[col_idx];
-	l_data_ptr += tie_col_offset;
-	r_data_ptr += tie_col_offset;
-	// Do the comparison
-	const int order = sort_layout.order_types[tie_col] == OrderType::DESCENDING ? -1 : 1;
-	const auto &type = sort_layout.blob_layout.GetTypes()[col_idx];
-	int result;
-	if (external) {
-		// Store heap pointers
-		data_ptr_t l_heap_ptr = left.HeapPtr(*left.sb->blob_sorting_data);
-		data_ptr_t r_heap_ptr = right.HeapPtr(*right.sb->blob_sorting_data);
-		// Unswizzle offset to pointer
-		UnswizzleSingleValue(l_data_ptr, l_heap_ptr, type);
-		UnswizzleSingleValue(r_data_ptr, r_heap_ptr, type);
-		// Compare
-		result = CompareVal(l_data_ptr, r_data_ptr, type);
-		// Swizzle the pointers back to offsets
-		SwizzleSingleValue(l_data_ptr, l_heap_ptr, type);
-		SwizzleSingleValue(r_data_ptr, r_heap_ptr, type);
-	} else {
-		result = CompareVal(l_data_ptr, r_data_ptr, type);
-	}
-	return order * result;
-}
-
-template <class T>
-int Comparators::TemplatedCompareVal(const data_ptr_t &left_ptr, const data_ptr_t &right_ptr) {
-	const auto left_val = Load<T>(left_ptr);
-	const auto right_val = Load<T>(right_ptr);
-	if (Equals::Operation<T>(left_val, right_val)) {
-		return 0;
-	} else if (LessThan::Operation<T>(left_val, right_val)) {
-		return -1;
-	} else {
-		return 1;
-	}
-}
-
-int Comparators::CompareValAndAdvance(data_ptr_t &l_ptr, data_ptr_t &r_ptr, const LogicalType &type) {
-	switch (type.InternalType()) {
-	case PhysicalType::BOOL:
-	case PhysicalType::INT8:
-		return TemplatedCompareAndAdvance<int8_t>(l_ptr, r_ptr);
-	case PhysicalType::INT16:
-		return TemplatedCompareAndAdvance<int16_t>(l_ptr, r_ptr);
-	case PhysicalType::INT32:
-		return TemplatedCompareAndAdvance<int32_t>(l_ptr, r_ptr);
-	case PhysicalType::INT64:
-		return TemplatedCompareAndAdvance<int64_t>(l_ptr, r_ptr);
-	case PhysicalType::UINT8:
-		return TemplatedCompareAndAdvance<uint8_t>(l_ptr, r_ptr);
-	case PhysicalType::UINT16:
-		return TemplatedCompareAndAdvance<uint16_t>(l_ptr, r_ptr);
-	case PhysicalType::UINT32:
-		return TemplatedCompareAndAdvance<uint32_t>(l_ptr, r_ptr);
-	case PhysicalType::UINT64:
-		return TemplatedCompareAndAdvance<uint64_t>(l_ptr, r_ptr);
-	case PhysicalType::INT128:
-		return TemplatedCompareAndAdvance<hugeint_t>(l_ptr, r_ptr);
-	case PhysicalType::FLOAT:
-		return TemplatedCompareAndAdvance<float>(l_ptr, r_ptr);
-	case PhysicalType::DOUBLE:
-		return TemplatedCompareAndAdvance<double>(l_ptr, r_ptr);
-	case PhysicalType::INTERVAL:
-		return TemplatedCompareAndAdvance<interval_t>(l_ptr, r_ptr);
-	case PhysicalType::VARCHAR:
-		return CompareStringAndAdvance(l_ptr, r_ptr);
-	case PhysicalType::LIST:
-		return CompareListAndAdvance(l_ptr, r_ptr, ListType::GetChildType(type));
-	case PhysicalType::STRUCT:
-		return CompareStructAndAdvance(l_ptr, r_ptr, StructType::GetChildTypes(type));
-	default:
-		throw NotImplementedException("Unimplemented CompareValAndAdvance for type %s", type.ToString());
-	}
-}
-
-template <class T>
-int Comparators::TemplatedCompareAndAdvance(data_ptr_t &left_ptr, data_ptr_t &right_ptr) {
-	auto result = TemplatedCompareVal<T>(left_ptr, right_ptr);
-	left_ptr += sizeof(T);
-	right_ptr += sizeof(T);
-	return result;
-}
-
-int Comparators::CompareStringAndAdvance(data_ptr_t &left_ptr, data_ptr_t &right_ptr) {
-	// Construct the string_t
-	uint32_t left_string_size = Load<uint32_t>(left_ptr);
-	uint32_t right_string_size = Load<uint32_t>(right_ptr);
-	left_ptr += sizeof(uint32_t);
-	right_ptr += sizeof(uint32_t);
-	string_t left_val((const char *)left_ptr, left_string_size);
-	string_t right_val((const char *)right_ptr, right_string_size);
-	left_ptr += left_string_size;
-	right_ptr += right_string_size;
-	// Compare
-	return TemplatedCompareVal<string_t>((data_ptr_t)&left_val, (data_ptr_t)&right_val);
-}
-
-int Comparators::CompareStructAndAdvance(data_ptr_t &left_ptr, data_ptr_t &right_ptr,
-                                         const child_list_t<LogicalType> &types) {
-	idx_t count = types.size();
-	// Load validity masks
-	ValidityBytes left_validity(left_ptr);
-	ValidityBytes right_validity(right_ptr);
-	left_ptr += (count + 7) / 8;
-	right_ptr += (count + 7) / 8;
-	// Initialize variables
-	bool left_valid;
-	bool right_valid;
-	idx_t entry_idx;
-	idx_t idx_in_entry;
-	// Compare
-	int comp_res = 0;
-	for (idx_t i = 0; i < count; i++) {
-		ValidityBytes::GetEntryIndex(i, entry_idx, idx_in_entry);
-		left_valid = left_validity.RowIsValid(left_validity.GetValidityEntry(entry_idx), idx_in_entry);
-		right_valid = right_validity.RowIsValid(right_validity.GetValidityEntry(entry_idx), idx_in_entry);
-		auto &type = types[i].second;
-		if ((left_valid && right_valid) || TypeIsConstantSize(type.InternalType())) {
-			comp_res = CompareValAndAdvance(left_ptr, right_ptr, types[i].second);
-		}
-		if (!left_valid && !right_valid) {
-			comp_res = 0;
-		} else if (!left_valid) {
-			comp_res = 1;
-		} else if (!right_valid) {
-			comp_res = -1;
-		}
-		if (comp_res != 0) {
-			break;
-		}
-	}
-	return comp_res;
-}
-
-int Comparators::CompareListAndAdvance(data_ptr_t &left_ptr, data_ptr_t &right_ptr, const LogicalType &type) {
-	// Load list lengths
-	auto left_len = Load<idx_t>(left_ptr);
-	auto right_len = Load<idx_t>(right_ptr);
-	left_ptr += sizeof(idx_t);
-	right_ptr += sizeof(idx_t);
-	// Load list validity masks
-	ValidityBytes left_validity(left_ptr);
-	ValidityBytes right_validity(right_ptr);
-	left_ptr += (left_len + 7) / 8;
-	right_ptr += (right_len + 7) / 8;
-	// Compare
-	int comp_res = 0;
-	idx_t count = MinValue(left_len, right_len);
-	if (TypeIsConstantSize(type.InternalType())) {
-		// Templated code for fixed-size types
-		switch (type.InternalType()) {
-		case PhysicalType::BOOL:
-		case PhysicalType::INT8:
-			comp_res = TemplatedCompareListLoop<int8_t>(left_ptr, right_ptr, left_validity, right_validity, count);
-			break;
-		case PhysicalType::INT16:
-			comp_res = TemplatedCompareListLoop<int16_t>(left_ptr, right_ptr, left_validity, right_validity, count);
-			break;
-		case PhysicalType::INT32:
-			comp_res = TemplatedCompareListLoop<int32_t>(left_ptr, right_ptr, left_validity, right_validity, count);
-			break;
-		case PhysicalType::INT64:
-			comp_res = TemplatedCompareListLoop<int64_t>(left_ptr, right_ptr, left_validity, right_validity, count);
-			break;
-		case PhysicalType::UINT8:
-			comp_res = TemplatedCompareListLoop<uint8_t>(left_ptr, right_ptr, left_validity, right_validity, count);
-			break;
-		case PhysicalType::UINT16:
-			comp_res = TemplatedCompareListLoop<uint16_t>(left_ptr, right_ptr, left_validity, right_validity, count);
-			break;
-		case PhysicalType::UINT32:
-			comp_res = TemplatedCompareListLoop<uint32_t>(left_ptr, right_ptr, left_validity, right_validity, count);
-			break;
-		case PhysicalType::UINT64:
-			comp_res = TemplatedCompareListLoop<uint64_t>(left_ptr, right_ptr, left_validity, right_validity, count);
-			break;
-		case PhysicalType::INT128:
-			comp_res = TemplatedCompareListLoop<hugeint_t>(left_ptr, right_ptr, left_validity, right_validity, count);
-			break;
-		case PhysicalType::FLOAT:
-			comp_res = TemplatedCompareListLoop<float>(left_ptr, right_ptr, left_validity, right_validity, count);
-			break;
-		case PhysicalType::DOUBLE:
-			comp_res = TemplatedCompareListLoop<double>(left_ptr, right_ptr, left_validity, right_validity, count);
-			break;
-		case PhysicalType::INTERVAL:
-			comp_res = TemplatedCompareListLoop<interval_t>(left_ptr, right_ptr, left_validity, right_validity, count);
-			break;
-		default:
-			throw NotImplementedException("CompareListAndAdvance for fixed-size type %s", type.ToString());
-		}
-	} else {
-		// Variable-sized list entries
-		bool left_valid;
-		bool right_valid;
-		idx_t entry_idx;
-		idx_t idx_in_entry;
-		// Size (in bytes) of all variable-sizes entries is stored before the entries begin,
-		// to make deserialization easier. We need to skip over them
-		left_ptr += left_len * sizeof(idx_t);
-		right_ptr += right_len * sizeof(idx_t);
-		for (idx_t i = 0; i < count; i++) {
-			ValidityBytes::GetEntryIndex(i, entry_idx, idx_in_entry);
-			left_valid = left_validity.RowIsValid(left_validity.GetValidityEntry(entry_idx), idx_in_entry);
-			right_valid = right_validity.RowIsValid(right_validity.GetValidityEntry(entry_idx), idx_in_entry);
-			if (left_valid && right_valid) {
-				switch (type.InternalType()) {
-				case PhysicalType::LIST:
-					comp_res = CompareListAndAdvance(left_ptr, right_ptr, ListType::GetChildType(type));
-					break;
-				case PhysicalType::VARCHAR:
-					comp_res = CompareStringAndAdvance(left_ptr, right_ptr);
-					break;
-				case PhysicalType::STRUCT:
-					comp_res = CompareStructAndAdvance(left_ptr, right_ptr, StructType::GetChildTypes(type));
-					break;
-				default:
-					throw NotImplementedException("CompareListAndAdvance for variable-size type %s", type.ToString());
-				}
-			} else if (!left_valid && !right_valid) {
-				comp_res = 0;
-			} else if (left_valid) {
-				comp_res = -1;
-			} else {
-				comp_res = 1;
-			}
-			if (comp_res != 0) {
-				break;
-			}
-		}
-	}
-	// All values that we looped over were equal
-	if (comp_res == 0 && left_len != right_len) {
-		// Smaller lists first
-		if (left_len < right_len) {
-			comp_res = -1;
-		} else {
-			comp_res = 1;
-		}
-	}
-	return comp_res;
-}
-
-template <class T>
-int Comparators::TemplatedCompareListLoop(data_ptr_t &left_ptr, data_ptr_t &right_ptr,
-                                          const ValidityBytes &left_validity, const ValidityBytes &right_validity,
-                                          const idx_t &count) {
-	int comp_res = 0;
-	bool left_valid;
-	bool right_valid;
-	idx_t entry_idx;
-	idx_t idx_in_entry;
-	for (idx_t i = 0; i < count; i++) {
-		ValidityBytes::GetEntryIndex(i, entry_idx, idx_in_entry);
-		left_valid = left_validity.RowIsValid(left_validity.GetValidityEntry(entry_idx), idx_in_entry);
-		right_valid = right_validity.RowIsValid(right_validity.GetValidityEntry(entry_idx), idx_in_entry);
-		comp_res = TemplatedCompareAndAdvance<T>(left_ptr, right_ptr);
-		if (!left_valid && !right_valid) {
-			comp_res = 0;
-		} else if (!left_valid) {
-			comp_res = 1;
-		} else if (!right_valid) {
-			comp_res = -1;
-		}
-		if (comp_res != 0) {
-			break;
-		}
-	}
-	return comp_res;
-}
-
-void Comparators::UnswizzleSingleValue(data_ptr_t data_ptr, const data_ptr_t &heap_ptr, const LogicalType &type) {
-	if (type.InternalType() == PhysicalType::VARCHAR) {
-		data_ptr += sizeof(uint32_t) + string_t::PREFIX_LENGTH;
-	}
-	Store<data_ptr_t>(heap_ptr + Load<idx_t>(data_ptr), data_ptr);
-}
-
-void Comparators::SwizzleSingleValue(data_ptr_t data_ptr, const data_ptr_t &heap_ptr, const LogicalType &type) {
-	if (type.InternalType() == PhysicalType::VARCHAR) {
-		data_ptr += sizeof(uint32_t) + string_t::PREFIX_LENGTH;
-	}
-	Store<idx_t>(Load<data_ptr_t>(data_ptr) - heap_ptr, data_ptr);
-}
-
-} // namespace duckdb
-
-
-
-
-namespace duckdb {
-
-MergeSorter::MergeSorter(GlobalSortState &state, BufferManager &buffer_manager)
-    : state(state), buffer_manager(buffer_manager), sort_layout(state.sort_layout) {
-}
-
-void MergeSorter::PerformInMergeRound() {
-	while (true) {
-		{
-			lock_guard<mutex> pair_guard(state.lock);
-			if (state.pair_idx == state.num_pairs) {
-				break;
-			}
-			GetNextPartition();
-		}
-		MergePartition();
-	}
-}
-
-void MergeSorter::MergePartition() {
-	auto &left_block = *left->sb;
-	auto &right_block = *right->sb;
-#ifdef DEBUG
-	D_ASSERT(left_block.radix_sorting_data.size() == left_block.payload_data->data_blocks.size());
-	D_ASSERT(right_block.radix_sorting_data.size() == right_block.payload_data->data_blocks.size());
-	if (!state.payload_layout.AllConstant() && state.external) {
-		D_ASSERT(left_block.payload_data->data_blocks.size() == left_block.payload_data->heap_blocks.size());
-		D_ASSERT(right_block.payload_data->data_blocks.size() == right_block.payload_data->heap_blocks.size());
-	}
-	if (!sort_layout.all_constant) {
-		D_ASSERT(left_block.radix_sorting_data.size() == left_block.blob_sorting_data->data_blocks.size());
-		D_ASSERT(right_block.radix_sorting_data.size() == right_block.blob_sorting_data->data_blocks.size());
-		if (state.external) {
-			D_ASSERT(left_block.blob_sorting_data->data_blocks.size() ==
-			         left_block.blob_sorting_data->heap_blocks.size());
-			D_ASSERT(right_block.blob_sorting_data->data_blocks.size() ==
-			         right_block.blob_sorting_data->heap_blocks.size());
-		}
-	}
-#endif
-	// Set up the write block
-	// Each merge task produces a SortedBlock with exactly state.block_capacity rows or less
-	result->InitializeWrite();
-	// Initialize arrays to store merge data
-	bool left_smaller[STANDARD_VECTOR_SIZE];
-	idx_t next_entry_sizes[STANDARD_VECTOR_SIZE];
-	// Merge loop
-#ifdef DEBUG
-	auto l_count = left->Remaining();
-	auto r_count = right->Remaining();
-#endif
-	while (true) {
-		auto l_remaining = left->Remaining();
-		auto r_remaining = right->Remaining();
-		if (l_remaining + r_remaining == 0) {
-			// Done
-			break;
-		}
-		const idx_t next = MinValue(l_remaining + r_remaining, (idx_t)STANDARD_VECTOR_SIZE);
-		if (l_remaining != 0 && r_remaining != 0) {
-			// Compute the merge (not needed if one side is exhausted)
-			ComputeMerge(next, left_smaller);
-		}
-		// Actually merge the data (radix, blob, and payload)
-		MergeRadix(next, left_smaller);
-		if (!sort_layout.all_constant) {
-			MergeData(*result->blob_sorting_data, *left_block.blob_sorting_data, *right_block.blob_sorting_data, next,
-			          left_smaller, next_entry_sizes, true);
-			D_ASSERT(result->radix_sorting_data.size() == result->blob_sorting_data->data_blocks.size());
-		}
-		MergeData(*result->payload_data, *left_block.payload_data, *right_block.payload_data, next, left_smaller,
-		          next_entry_sizes, false);
-		D_ASSERT(result->radix_sorting_data.size() == result->payload_data->data_blocks.size());
-	}
-#ifdef DEBUG
-	D_ASSERT(result->Count() == l_count + r_count);
-#endif
-}
-
-void MergeSorter::GetNextPartition() {
-	// Create result block
-	state.sorted_blocks_temp[state.pair_idx].push_back(make_unique<SortedBlock>(buffer_manager, state));
-	result = state.sorted_blocks_temp[state.pair_idx].back().get();
-	// Determine which blocks must be merged
-	auto &left_block = *state.sorted_blocks[state.pair_idx * 2];
-	auto &right_block = *state.sorted_blocks[state.pair_idx * 2 + 1];
-	const idx_t l_count = left_block.Count();
-	const idx_t r_count = right_block.Count();
-	// Initialize left and right reader
-	left = make_unique<SBScanState>(buffer_manager, state);
-	right = make_unique<SBScanState>(buffer_manager, state);
-	// Compute the work that this thread must do using Merge Path
-	idx_t l_end;
-	idx_t r_end;
-	if (state.l_start + state.r_start + state.block_capacity < l_count + r_count) {
-		left->sb = state.sorted_blocks[state.pair_idx * 2].get();
-		right->sb = state.sorted_blocks[state.pair_idx * 2 + 1].get();
-		const idx_t intersection = state.l_start + state.r_start + state.block_capacity;
-		GetIntersection(intersection, l_end, r_end);
-		D_ASSERT(l_end <= l_count);
-		D_ASSERT(r_end <= r_count);
-		D_ASSERT(intersection == l_end + r_end);
-	} else {
-		l_end = l_count;
-		r_end = r_count;
-	}
-	// Create slices of the data that this thread must merge
-	left->SetIndices(0, 0);
-	right->SetIndices(0, 0);
-	left_input = left_block.CreateSlice(state.l_start, l_end, left->entry_idx);
-	right_input = right_block.CreateSlice(state.r_start, r_end, right->entry_idx);
-	left->sb = left_input.get();
-	right->sb = right_input.get();
-	state.l_start = l_end;
-	state.r_start = r_end;
-	D_ASSERT(left->Remaining() + right->Remaining() == state.block_capacity || (l_end == l_count && r_end == r_count));
-	// Update global state
-	if (state.l_start == l_count && state.r_start == r_count) {
-		// Delete references to previous pair
-		state.sorted_blocks[state.pair_idx * 2] = nullptr;
-		state.sorted_blocks[state.pair_idx * 2 + 1] = nullptr;
-		// Advance pair
-		state.pair_idx++;
-		state.l_start = 0;
-		state.r_start = 0;
-	}
-}
-
-int MergeSorter::CompareUsingGlobalIndex(SBScanState &l, SBScanState &r, const idx_t l_idx, const idx_t r_idx) {
-	D_ASSERT(l_idx < l.sb->Count());
-	D_ASSERT(r_idx < r.sb->Count());
-
-	// Easy comparison using the previous result (intersections must increase monotonically)
-	if (l_idx < state.l_start) {
-		return -1;
-	}
-	if (r_idx < state.r_start) {
-		return 1;
-	}
-
-	l.sb->GlobalToLocalIndex(l_idx, l.block_idx, l.entry_idx);
-	r.sb->GlobalToLocalIndex(r_idx, r.block_idx, r.entry_idx);
-
-	l.PinRadix(l.block_idx);
-	r.PinRadix(r.block_idx);
-	data_ptr_t l_ptr = l.radix_handle.Ptr() + l.entry_idx * sort_layout.entry_size;
-	data_ptr_t r_ptr = r.radix_handle.Ptr() + r.entry_idx * sort_layout.entry_size;
-
-	int comp_res;
-	if (sort_layout.all_constant) {
-		comp_res = FastMemcmp(l_ptr, r_ptr, sort_layout.comparison_size);
-	} else {
-		l.PinData(*l.sb->blob_sorting_data);
-		r.PinData(*r.sb->blob_sorting_data);
-		comp_res = Comparators::CompareTuple(l, r, l_ptr, r_ptr, sort_layout, state.external);
-	}
-	return comp_res;
-}
-
-void MergeSorter::GetIntersection(const idx_t diagonal, idx_t &l_idx, idx_t &r_idx) {
-	const idx_t l_count = left->sb->Count();
-	const idx_t r_count = right->sb->Count();
-	// Cover some edge cases
-	// Code coverage off because these edge cases cannot happen unless other code changes
-	// Edge cases have been tested extensively while developing Merge Path in a script
-	// LCOV_EXCL_START
-	if (diagonal >= l_count + r_count) {
-		l_idx = l_count;
-		r_idx = r_count;
-		return;
-	} else if (diagonal == 0) {
-		l_idx = 0;
-		r_idx = 0;
-		return;
-	} else if (l_count == 0) {
-		l_idx = 0;
-		r_idx = diagonal;
-		return;
-	} else if (r_count == 0) {
-		r_idx = 0;
-		l_idx = diagonal;
-		return;
-	}
-	// LCOV_EXCL_STOP
-	// Determine offsets for the binary search
-	const idx_t l_offset = MinValue(l_count, diagonal);
-	const idx_t r_offset = diagonal > l_count ? diagonal - l_count : 0;
-	D_ASSERT(l_offset + r_offset == diagonal);
-	const idx_t search_space = diagonal > MaxValue(l_count, r_count) ? l_count + r_count - diagonal
-	                                                                 : MinValue(diagonal, MinValue(l_count, r_count));
-	// Double binary search
-	idx_t li = 0;
-	idx_t ri = search_space - 1;
-	idx_t middle;
-	int comp_res;
-	while (li <= ri) {
-		middle = (li + ri) / 2;
-		l_idx = l_offset - middle;
-		r_idx = r_offset + middle;
-		if (l_idx == l_count || r_idx == 0) {
-			comp_res = CompareUsingGlobalIndex(*left, *right, l_idx - 1, r_idx);
-			if (comp_res > 0) {
-				l_idx--;
-				r_idx++;
-			} else {
-				return;
-			}
-			if (l_idx == 0 || r_idx == r_count) {
-				// This case is incredibly difficult to cover as it is dependent on parallelism randomness
-				// But it has been tested extensively during development in a script
-				// LCOV_EXCL_START
-				return;
-				// LCOV_EXCL_STOP
-			} else {
-				break;
-			}
-		}
-		comp_res = CompareUsingGlobalIndex(*left, *right, l_idx, r_idx);
-		if (comp_res > 0) {
-			li = middle + 1;
-		} else {
-			ri = middle - 1;
-		}
-	}
-	int l_r_min1 = CompareUsingGlobalIndex(*left, *right, l_idx, r_idx - 1);
-	int l_min1_r = CompareUsingGlobalIndex(*left, *right, l_idx - 1, r_idx);
-	if (l_r_min1 > 0 && l_min1_r < 0) {
-		return;
-	} else if (l_r_min1 > 0) {
-		l_idx--;
-		r_idx++;
-	} else if (l_min1_r < 0) {
-		l_idx++;
-		r_idx--;
-	}
-}
-
-void MergeSorter::ComputeMerge(const idx_t &count, bool left_smaller[]) {
-	auto &l = *left;
-	auto &r = *right;
-	auto &l_sorted_block = *l.sb;
-	auto &r_sorted_block = *r.sb;
-	// Save indices to restore afterwards
-	idx_t l_block_idx_before = l.block_idx;
-	idx_t l_entry_idx_before = l.entry_idx;
-	idx_t r_block_idx_before = r.block_idx;
-	idx_t r_entry_idx_before = r.entry_idx;
-	// Data pointers for both sides
-	data_ptr_t l_radix_ptr;
-	data_ptr_t r_radix_ptr;
-	// Compute the merge of the next 'count' tuples
-	idx_t compared = 0;
-	while (compared < count) {
-		// Move to the next block (if needed)
-		if (l.block_idx < l_sorted_block.radix_sorting_data.size() &&
-		    l.entry_idx == l_sorted_block.radix_sorting_data[l.block_idx].count) {
-			l.block_idx++;
-			l.entry_idx = 0;
-		}
-		if (r.block_idx < r_sorted_block.radix_sorting_data.size() &&
-		    r.entry_idx == r_sorted_block.radix_sorting_data[r.block_idx].count) {
-			r.block_idx++;
-			r.entry_idx = 0;
-		}
-		const bool l_done = l.block_idx == l_sorted_block.radix_sorting_data.size();
-		const bool r_done = r.block_idx == r_sorted_block.radix_sorting_data.size();
-		if (l_done || r_done) {
-			// One of the sides is exhausted, no need to compare
-			break;
-		}
-		// Pin the radix sorting data
-		if (!l_done) {
-			left->PinRadix(l.block_idx);
-			l_radix_ptr = left->RadixPtr();
-		}
-		if (!r_done) {
-			right->PinRadix(r.block_idx);
-			r_radix_ptr = right->RadixPtr();
-		}
-		const idx_t &l_count = !l_done ? l_sorted_block.radix_sorting_data[l.block_idx].count : 0;
-		const idx_t &r_count = !r_done ? r_sorted_block.radix_sorting_data[r.block_idx].count : 0;
-		// Compute the merge
-		if (sort_layout.all_constant) {
-			// All sorting columns are constant size
-			for (; compared < count && l.entry_idx < l_count && r.entry_idx < r_count; compared++) {
-				left_smaller[compared] = FastMemcmp(l_radix_ptr, r_radix_ptr, sort_layout.comparison_size) < 0;
-				const bool &l_smaller = left_smaller[compared];
-				const bool r_smaller = !l_smaller;
-				// Use comparison bool (0 or 1) to increment entries and pointers
-				l.entry_idx += l_smaller;
-				r.entry_idx += r_smaller;
-				l_radix_ptr += l_smaller * sort_layout.entry_size;
-				r_radix_ptr += r_smaller * sort_layout.entry_size;
-			}
-		} else {
-			// Pin the blob data
-			if (!l_done) {
-				left->PinData(*l_sorted_block.blob_sorting_data);
-			}
-			if (!r_done) {
-				right->PinData(*r_sorted_block.blob_sorting_data);
-			}
-			// Merge with variable size sorting columns
-			for (; compared < count && l.entry_idx < l_count && r.entry_idx < r_count; compared++) {
-				left_smaller[compared] =
-				    Comparators::CompareTuple(*left, *right, l_radix_ptr, r_radix_ptr, sort_layout, state.external) < 0;
-				const bool &l_smaller = left_smaller[compared];
-				const bool r_smaller = !l_smaller;
-				// Use comparison bool (0 or 1) to increment entries and pointers
-				l.entry_idx += l_smaller;
-				r.entry_idx += r_smaller;
-				l_radix_ptr += l_smaller * sort_layout.entry_size;
-				r_radix_ptr += r_smaller * sort_layout.entry_size;
-			}
-		}
-	}
-	// Reset block indices
-	left->SetIndices(l_block_idx_before, l_entry_idx_before);
-	right->SetIndices(r_block_idx_before, r_entry_idx_before);
-}
-
-void MergeSorter::MergeRadix(const idx_t &count, const bool left_smaller[]) {
-	auto &l = *left;
-	auto &r = *right;
-	// Save indices to restore afterwards
-	idx_t l_block_idx_before = l.block_idx;
-	idx_t l_entry_idx_before = l.entry_idx;
-	idx_t r_block_idx_before = r.block_idx;
-	idx_t r_entry_idx_before = r.entry_idx;
-
-	auto &l_blocks = l.sb->radix_sorting_data;
-	auto &r_blocks = r.sb->radix_sorting_data;
-	RowDataBlock *l_block;
-	RowDataBlock *r_block;
-
-	data_ptr_t l_ptr;
-	data_ptr_t r_ptr;
-
-	RowDataBlock *result_block = &result->radix_sorting_data.back();
-	auto result_handle = buffer_manager.Pin(result_block->block);
-	data_ptr_t result_ptr = result_handle.Ptr() + result_block->count * sort_layout.entry_size;
-
-	idx_t copied = 0;
-	while (copied < count) {
-		// Move to the next block (if needed)
-		if (l.block_idx < l_blocks.size() && l.entry_idx == l_blocks[l.block_idx].count) {
-			// Delete reference to previous block
-			l_blocks[l.block_idx].block = nullptr;
-			// Advance block
-			l.block_idx++;
-			l.entry_idx = 0;
-		}
-		if (r.block_idx < r_blocks.size() && r.entry_idx == r_blocks[r.block_idx].count) {
-			// Delete reference to previous block
-			r_blocks[r.block_idx].block = nullptr;
-			// Advance block
-			r.block_idx++;
-			r.entry_idx = 0;
-		}
-		const bool l_done = l.block_idx == l_blocks.size();
-		const bool r_done = r.block_idx == r_blocks.size();
-		// Pin the radix sortable blocks
-		if (!l_done) {
-			l_block = &l_blocks[l.block_idx];
-			left->PinRadix(l.block_idx);
-			l_ptr = l.RadixPtr();
-		}
-		if (!r_done) {
-			r_block = &r_blocks[r.block_idx];
-			r.PinRadix(r.block_idx);
-			r_ptr = r.RadixPtr();
-		}
-		const idx_t &l_count = !l_done ? l_block->count : 0;
-		const idx_t &r_count = !r_done ? r_block->count : 0;
-		// Copy using computed merge
-		if (!l_done && !r_done) {
-			// Both sides have data - merge
-			MergeRows(l_ptr, l.entry_idx, l_count, r_ptr, r.entry_idx, r_count, result_block, result_ptr,
-			          sort_layout.entry_size, left_smaller, copied, count);
-		} else if (r_done) {
-			// Right side is exhausted
-			FlushRows(l_ptr, l.entry_idx, l_count, result_block, result_ptr, sort_layout.entry_size, copied, count);
-		} else {
-			// Left side is exhausted
-			FlushRows(r_ptr, r.entry_idx, r_count, result_block, result_ptr, sort_layout.entry_size, copied, count);
-		}
-	}
-	// Reset block indices
-	left->SetIndices(l_block_idx_before, l_entry_idx_before);
-	right->SetIndices(r_block_idx_before, r_entry_idx_before);
-}
-
-void MergeSorter::MergeData(SortedData &result_data, SortedData &l_data, SortedData &r_data, const idx_t &count,
-                            const bool left_smaller[], idx_t next_entry_sizes[], bool reset_indices) {
-	auto &l = *left;
-	auto &r = *right;
-	// Save indices to restore afterwards
-	idx_t l_block_idx_before = l.block_idx;
-	idx_t l_entry_idx_before = l.entry_idx;
-	idx_t r_block_idx_before = r.block_idx;
-	idx_t r_entry_idx_before = r.entry_idx;
-
-	const auto &layout = result_data.layout;
-	const idx_t row_width = layout.GetRowWidth();
-	const idx_t heap_pointer_offset = layout.GetHeapPointerOffset();
-
-	// Left and right row data to merge
-	data_ptr_t l_ptr;
-	data_ptr_t r_ptr;
-	// Accompanying left and right heap data (if needed)
-	data_ptr_t l_heap_ptr;
-	data_ptr_t r_heap_ptr;
-
-	// Result rows to write to
-	RowDataBlock *result_data_block = &result_data.data_blocks.back();
-	auto result_data_handle = buffer_manager.Pin(result_data_block->block);
-	data_ptr_t result_data_ptr = result_data_handle.Ptr() + result_data_block->count * row_width;
-	// Result heap to write to (if needed)
-	RowDataBlock *result_heap_block;
-	BufferHandle result_heap_handle;
-	data_ptr_t result_heap_ptr;
-	if (!layout.AllConstant() && state.external) {
-		result_heap_block = &result_data.heap_blocks.back();
-		result_heap_handle = buffer_manager.Pin(result_heap_block->block);
-		result_heap_ptr = result_heap_handle.Ptr() + result_heap_block->byte_offset;
-	}
-
-	idx_t copied = 0;
-	while (copied < count) {
-		// Move to new data blocks (if needed)
-		if (l.block_idx < l_data.data_blocks.size() && l.entry_idx == l_data.data_blocks[l.block_idx].count) {
-			// Delete reference to previous block
-			l_data.data_blocks[l.block_idx].block = nullptr;
-			if (!layout.AllConstant() && state.external) {
-				l_data.heap_blocks[l.block_idx].block = nullptr;
-			}
-			// Advance block
-			l.block_idx++;
-			l.entry_idx = 0;
-		}
-		if (r.block_idx < r_data.data_blocks.size() && r.entry_idx == r_data.data_blocks[r.block_idx].count) {
-			// Delete reference to previous block
-			r_data.data_blocks[r.block_idx].block = nullptr;
-			if (!layout.AllConstant() && state.external) {
-				r_data.heap_blocks[r.block_idx].block = nullptr;
-			}
-			// Advance block
-			r.block_idx++;
-			r.entry_idx = 0;
-		}
-		const bool l_done = l.block_idx == l_data.data_blocks.size();
-		const bool r_done = r.block_idx == r_data.data_blocks.size();
-		// Pin the row data blocks
-		if (!l_done) {
-			l.PinData(l_data);
-			l_ptr = l.DataPtr(l_data);
-		}
-		if (!r_done) {
-			r.PinData(r_data);
-			r_ptr = r.DataPtr(r_data);
-		}
-		const idx_t &l_count = !l_done ? l_data.data_blocks[l.block_idx].count : 0;
-		const idx_t &r_count = !r_done ? r_data.data_blocks[r.block_idx].count : 0;
-		// Perform the merge
-		if (layout.AllConstant() || !state.external) {
-			// If all constant size, or if we are doing an in-memory sort, we do not need to touch the heap
-			if (!l_done && !r_done) {
-				// Both sides have data - merge
-				MergeRows(l_ptr, l.entry_idx, l_count, r_ptr, r.entry_idx, r_count, result_data_block, result_data_ptr,
-				          row_width, left_smaller, copied, count);
-			} else if (r_done) {
-				// Right side is exhausted
-				FlushRows(l_ptr, l.entry_idx, l_count, result_data_block, result_data_ptr, row_width, copied, count);
-			} else {
-				// Left side is exhausted
-				FlushRows(r_ptr, r.entry_idx, r_count, result_data_block, result_data_ptr, row_width, copied, count);
-			}
-		} else {
-			// External sorting with variable size data. Pin the heap blocks too
-			if (!l_done) {
-				l_heap_ptr = l.BaseHeapPtr(l_data) + Load<idx_t>(l_ptr + heap_pointer_offset);
-				D_ASSERT(l_heap_ptr - l.BaseHeapPtr(l_data) >= 0);
-				D_ASSERT((idx_t)(l_heap_ptr - l.BaseHeapPtr(l_data)) < l_data.heap_blocks[l.block_idx].byte_offset);
-			}
-			if (!r_done) {
-				r_heap_ptr = r.BaseHeapPtr(r_data) + Load<idx_t>(r_ptr + heap_pointer_offset);
-				D_ASSERT(r_heap_ptr - r.BaseHeapPtr(r_data) >= 0);
-				D_ASSERT((idx_t)(r_heap_ptr - r.BaseHeapPtr(r_data)) < r_data.heap_blocks[r.block_idx].byte_offset);
-			}
-			// Both the row and heap data need to be dealt with
-			if (!l_done && !r_done) {
-				// Both sides have data - merge
-				idx_t l_idx_copy = l.entry_idx;
-				idx_t r_idx_copy = r.entry_idx;
-				data_ptr_t result_data_ptr_copy = result_data_ptr;
-				idx_t copied_copy = copied;
-				// Merge row data
-				MergeRows(l_ptr, l_idx_copy, l_count, r_ptr, r_idx_copy, r_count, result_data_block,
-				          result_data_ptr_copy, row_width, left_smaller, copied_copy, count);
-				const idx_t merged = copied_copy - copied;
-				// Compute the entry sizes and number of heap bytes that will be copied
-				idx_t copy_bytes = 0;
-				data_ptr_t l_heap_ptr_copy = l_heap_ptr;
-				data_ptr_t r_heap_ptr_copy = r_heap_ptr;
-				for (idx_t i = 0; i < merged; i++) {
-					// Store base heap offset in the row data
-					Store<idx_t>(result_heap_block->byte_offset + copy_bytes, result_data_ptr + heap_pointer_offset);
-					result_data_ptr += row_width;
-					// Compute entry size and add to total
-					const bool &l_smaller = left_smaller[copied + i];
-					const bool r_smaller = !l_smaller;
-					auto &entry_size = next_entry_sizes[copied + i];
-					entry_size =
-					    l_smaller * Load<uint32_t>(l_heap_ptr_copy) + r_smaller * Load<uint32_t>(r_heap_ptr_copy);
-					D_ASSERT(entry_size >= sizeof(uint32_t));
-					D_ASSERT(l_heap_ptr_copy - l.BaseHeapPtr(l_data) + l_smaller * entry_size <=
-					         l_data.heap_blocks[l.block_idx].byte_offset);
-					D_ASSERT(r_heap_ptr_copy - r.BaseHeapPtr(r_data) + r_smaller * entry_size <=
-					         r_data.heap_blocks[r.block_idx].byte_offset);
-					l_heap_ptr_copy += l_smaller * entry_size;
-					r_heap_ptr_copy += r_smaller * entry_size;
-					copy_bytes += entry_size;
-				}
-				// Reallocate result heap block size (if needed)
-				if (result_heap_block->byte_offset + copy_bytes > result_heap_block->capacity) {
-					idx_t new_capacity = result_heap_block->byte_offset + copy_bytes;
-					buffer_manager.ReAllocate(result_heap_block->block, new_capacity);
-					result_heap_block->capacity = new_capacity;
-					result_heap_ptr = result_heap_handle.Ptr() + result_heap_block->byte_offset;
-				}
-				D_ASSERT(result_heap_block->byte_offset + copy_bytes <= result_heap_block->capacity);
-				// Now copy the heap data
-				for (idx_t i = 0; i < merged; i++) {
-					const bool &l_smaller = left_smaller[copied + i];
-					const bool r_smaller = !l_smaller;
-					const auto &entry_size = next_entry_sizes[copied + i];
-					memcpy(result_heap_ptr, (data_ptr_t)(l_smaller * (idx_t)l_heap_ptr + r_smaller * (idx_t)r_heap_ptr),
-					       entry_size);
-					D_ASSERT(Load<uint32_t>(result_heap_ptr) == entry_size);
-					result_heap_ptr += entry_size;
-					l_heap_ptr += l_smaller * entry_size;
-					r_heap_ptr += r_smaller * entry_size;
-					l.entry_idx += l_smaller;
-					r.entry_idx += r_smaller;
-				}
-				// Update result indices and pointers
-				result_heap_block->count += merged;
-				result_heap_block->byte_offset += copy_bytes;
-				copied += merged;
-			} else if (r_done) {
-				// Right side is exhausted - flush left
-				FlushBlobs(layout, l_count, l_ptr, l.entry_idx, l_heap_ptr, result_data_block, result_data_ptr,
-				           result_heap_block, result_heap_handle, result_heap_ptr, copied, count);
-			} else {
-				// Left side is exhausted - flush right
-				FlushBlobs(layout, r_count, r_ptr, r.entry_idx, r_heap_ptr, result_data_block, result_data_ptr,
-				           result_heap_block, result_heap_handle, result_heap_ptr, copied, count);
-			}
-			D_ASSERT(result_data_block->count == result_heap_block->count);
-		}
-	}
-	if (reset_indices) {
-		left->SetIndices(l_block_idx_before, l_entry_idx_before);
-		right->SetIndices(r_block_idx_before, r_entry_idx_before);
-	}
-}
-
-void MergeSorter::MergeRows(data_ptr_t &l_ptr, idx_t &l_entry_idx, const idx_t &l_count, data_ptr_t &r_ptr,
-                            idx_t &r_entry_idx, const idx_t &r_count, RowDataBlock *target_block,
-                            data_ptr_t &target_ptr, const idx_t &entry_size, const bool left_smaller[], idx_t &copied,
-                            const idx_t &count) {
-	const idx_t next = MinValue(count - copied, target_block->capacity - target_block->count);
-	idx_t i;
-	for (i = 0; i < next && l_entry_idx < l_count && r_entry_idx < r_count; i++) {
-		const bool &l_smaller = left_smaller[copied + i];
-		const bool r_smaller = !l_smaller;
-		// Use comparison bool (0 or 1) to copy an entry from either side
-		FastMemcpy(target_ptr, (data_ptr_t)(l_smaller * (idx_t)l_ptr + r_smaller * (idx_t)r_ptr), entry_size);
-		target_ptr += entry_size;
-		// Use the comparison bool to increment entries and pointers
-		l_entry_idx += l_smaller;
-		r_entry_idx += r_smaller;
-		l_ptr += l_smaller * entry_size;
-		r_ptr += r_smaller * entry_size;
-	}
-	// Update counts
-	target_block->count += i;
-	copied += i;
-}
-
-void MergeSorter::FlushRows(data_ptr_t &source_ptr, idx_t &source_entry_idx, const idx_t &source_count,
-                            RowDataBlock *target_block, data_ptr_t &target_ptr, const idx_t &entry_size, idx_t &copied,
-                            const idx_t &count) {
-	// Compute how many entries we can fit
-	idx_t next = MinValue(count - copied, target_block->capacity - target_block->count);
-	next = MinValue(next, source_count - source_entry_idx);
-	// Copy them all in a single memcpy
-	const idx_t copy_bytes = next * entry_size;
-	memcpy(target_ptr, source_ptr, copy_bytes);
-	target_ptr += copy_bytes;
-	source_ptr += copy_bytes;
-	// Update counts
-	source_entry_idx += next;
-	target_block->count += next;
-	copied += next;
-}
-
-void MergeSorter::FlushBlobs(const RowLayout &layout, const idx_t &source_count, data_ptr_t &source_data_ptr,
-                             idx_t &source_entry_idx, data_ptr_t &source_heap_ptr, RowDataBlock *target_data_block,
-                             data_ptr_t &target_data_ptr, RowDataBlock *target_heap_block,
-                             BufferHandle &target_heap_handle, data_ptr_t &target_heap_ptr, idx_t &copied,
-                             const idx_t &count) {
-	const idx_t row_width = layout.GetRowWidth();
-	const idx_t heap_pointer_offset = layout.GetHeapPointerOffset();
-	idx_t source_entry_idx_copy = source_entry_idx;
-	data_ptr_t target_data_ptr_copy = target_data_ptr;
-	idx_t copied_copy = copied;
-	// Flush row data
-	FlushRows(source_data_ptr, source_entry_idx_copy, source_count, target_data_block, target_data_ptr_copy, row_width,
-	          copied_copy, count);
-	const idx_t flushed = copied_copy - copied;
-	// Compute the entry sizes and number of heap bytes that will be copied
-	idx_t copy_bytes = 0;
-	data_ptr_t source_heap_ptr_copy = source_heap_ptr;
-	for (idx_t i = 0; i < flushed; i++) {
-		// Store base heap offset in the row data
-		Store<idx_t>(target_heap_block->byte_offset + copy_bytes, target_data_ptr + heap_pointer_offset);
-		target_data_ptr += row_width;
-		// Compute entry size and add to total
-		auto entry_size = Load<uint32_t>(source_heap_ptr_copy);
-		D_ASSERT(entry_size >= sizeof(uint32_t));
-		source_heap_ptr_copy += entry_size;
-		copy_bytes += entry_size;
-	}
-	// Reallocate result heap block size (if needed)
-	if (target_heap_block->byte_offset + copy_bytes > target_heap_block->capacity) {
-		idx_t new_capacity = target_heap_block->byte_offset + copy_bytes;
-		buffer_manager.ReAllocate(target_heap_block->block, new_capacity);
-		target_heap_block->capacity = new_capacity;
-		target_heap_ptr = target_heap_handle.Ptr() + target_heap_block->byte_offset;
-	}
-	D_ASSERT(target_heap_block->byte_offset + copy_bytes <= target_heap_block->capacity);
-	// Copy the heap data in one go
-	memcpy(target_heap_ptr, source_heap_ptr, copy_bytes);
-	target_heap_ptr += copy_bytes;
-	source_heap_ptr += copy_bytes;
-	source_entry_idx += flushed;
-	copied += flushed;
-	// Update result indices and pointers
-	target_heap_block->count += flushed;
-	target_heap_block->byte_offset += copy_bytes;
-	D_ASSERT(target_heap_block->byte_offset <= target_heap_block->capacity);
-}
-
-} // namespace duckdb
-
-
-
-
-namespace duckdb {
-
-//! Calls std::sort on strings that are tied by their prefix after the radix sort
-static void SortTiedBlobs(BufferManager &buffer_manager, const data_ptr_t dataptr, const idx_t &start, const idx_t &end,
-                          const idx_t &tie_col, bool *ties, const data_ptr_t blob_ptr, const SortLayout &sort_layout) {
-	const auto row_width = sort_layout.blob_layout.GetRowWidth();
-	const idx_t &col_idx = sort_layout.sorting_to_blob_col.at(tie_col);
-	// Locate the first blob row in question
-	data_ptr_t row_ptr = dataptr + start * sort_layout.entry_size;
-	data_ptr_t blob_row_ptr = blob_ptr + Load<uint32_t>(row_ptr + sort_layout.comparison_size) * row_width;
-	if (!Comparators::TieIsBreakable(col_idx, blob_row_ptr, sort_layout.blob_layout)) {
-		// Quick check to see if ties can be broken
-		return;
-	}
-	// Fill pointer array for sorting
-	auto ptr_block = unique_ptr<data_ptr_t[]>(new data_ptr_t[end - start]);
-	auto entry_ptrs = (data_ptr_t *)ptr_block.get();
-	for (idx_t i = start; i < end; i++) {
-		entry_ptrs[i - start] = row_ptr;
-		row_ptr += sort_layout.entry_size;
-	}
-	// Slow pointer-based sorting
-	const int order = sort_layout.order_types[tie_col] == OrderType::DESCENDING ? -1 : 1;
-	const auto &tie_col_offset = sort_layout.blob_layout.GetOffsets()[col_idx];
-	auto logical_type = sort_layout.blob_layout.GetTypes()[col_idx];
-	std::sort(entry_ptrs, entry_ptrs + end - start,
-	          [&blob_ptr, &order, &sort_layout, &tie_col_offset, &row_width, &logical_type](const data_ptr_t l,
-	                                                                                        const data_ptr_t r) {
-		          idx_t left_idx = Load<uint32_t>(l + sort_layout.comparison_size);
-		          idx_t right_idx = Load<uint32_t>(r + sort_layout.comparison_size);
-		          data_ptr_t left_ptr = blob_ptr + left_idx * row_width + tie_col_offset;
-		          data_ptr_t right_ptr = blob_ptr + right_idx * row_width + tie_col_offset;
-		          return order * Comparators::CompareVal(left_ptr, right_ptr, logical_type) < 0;
-	          });
-	// Re-order
-	auto temp_block =
-	    buffer_manager.Allocate(MaxValue((end - start) * sort_layout.entry_size, (idx_t)Storage::BLOCK_SIZE));
-	data_ptr_t temp_ptr = temp_block.Ptr();
-	for (idx_t i = 0; i < end - start; i++) {
-		FastMemcpy(temp_ptr, entry_ptrs[i], sort_layout.entry_size);
-		temp_ptr += sort_layout.entry_size;
-	}
-	memcpy(dataptr + start * sort_layout.entry_size, temp_block.Ptr(), (end - start) * sort_layout.entry_size);
-	// Determine if there are still ties (if this is not the last column)
-	if (tie_col < sort_layout.column_count - 1) {
-		data_ptr_t idx_ptr = dataptr + start * sort_layout.entry_size + sort_layout.comparison_size;
-		// Load current entry
-		data_ptr_t current_ptr = blob_ptr + Load<uint32_t>(idx_ptr) * row_width + tie_col_offset;
-		for (idx_t i = 0; i < end - start - 1; i++) {
-			// Load next entry and compare
-			idx_ptr += sort_layout.entry_size;
-			data_ptr_t next_ptr = blob_ptr + Load<uint32_t>(idx_ptr) * row_width + tie_col_offset;
-			ties[start + i] = Comparators::CompareVal(current_ptr, next_ptr, logical_type) == 0;
-			current_ptr = next_ptr;
-		}
-	}
-}
-
-//! Identifies sequences of rows that are tied by the prefix of a blob column, and sorts them
-static void SortTiedBlobs(BufferManager &buffer_manager, SortedBlock &sb, bool *ties, data_ptr_t dataptr,
-                          const idx_t &count, const idx_t &tie_col, const SortLayout &sort_layout) {
-	D_ASSERT(!ties[count - 1]);
-	auto &blob_block = sb.blob_sorting_data->data_blocks.back();
-	auto blob_handle = buffer_manager.Pin(blob_block.block);
-	const data_ptr_t blob_ptr = blob_handle.Ptr();
-
-	for (idx_t i = 0; i < count; i++) {
-		if (!ties[i]) {
-			continue;
-		}
-		idx_t j;
-		for (j = i; j < count; j++) {
-			if (!ties[j]) {
-				break;
-			}
-		}
-		SortTiedBlobs(buffer_manager, dataptr, i, j + 1, tie_col, ties, blob_ptr, sort_layout);
-		i = j;
-	}
-}
-
-//! Returns whether there are any 'true' values in the ties[] array
-static bool AnyTies(bool ties[], const idx_t &count) {
-	D_ASSERT(!ties[count - 1]);
-	bool any_ties = false;
-	for (idx_t i = 0; i < count - 1; i++) {
-		any_ties = any_ties || ties[i];
-	}
-	return any_ties;
-}
-
-//! Compares subsequent rows to check for ties
-static void ComputeTies(data_ptr_t dataptr, const idx_t &count, const idx_t &col_offset, const idx_t &tie_size,
-                        bool ties[], const SortLayout &sort_layout) {
-	D_ASSERT(!ties[count - 1]);
-	D_ASSERT(col_offset + tie_size <= sort_layout.comparison_size);
-	// Align dataptr
-	dataptr += col_offset;
-	for (idx_t i = 0; i < count - 1; i++) {
-		ties[i] = ties[i] && FastMemcmp(dataptr, dataptr + sort_layout.entry_size, tie_size) == 0;
-		dataptr += sort_layout.entry_size;
-	}
-}
-
-//! Textbook LSD radix sort
-void RadixSortLSD(BufferManager &buffer_manager, const data_ptr_t &dataptr, const idx_t &count, const idx_t &col_offset,
-                  const idx_t &row_width, const idx_t &sorting_size) {
-	auto temp_block = buffer_manager.Allocate(MaxValue(count * row_width, (idx_t)Storage::BLOCK_SIZE));
-	bool swap = false;
-
-	idx_t counts[SortConstants::VALUES_PER_RADIX];
-	for (idx_t r = 1; r <= sorting_size; r++) {
-		// Init counts to 0
-		memset(counts, 0, sizeof(counts));
-		// Const some values for convenience
-		const data_ptr_t source_ptr = swap ? temp_block.Ptr() : dataptr;
-		const data_ptr_t target_ptr = swap ? dataptr : temp_block.Ptr();
-		const idx_t offset = col_offset + sorting_size - r;
-		// Collect counts
-		data_ptr_t offset_ptr = source_ptr + offset;
-		for (idx_t i = 0; i < count; i++) {
-			counts[*offset_ptr]++;
-			offset_ptr += row_width;
-		}
-		// Compute offsets from counts
-		idx_t max_count = counts[0];
-		for (idx_t val = 1; val < SortConstants::VALUES_PER_RADIX; val++) {
-			max_count = MaxValue<idx_t>(max_count, counts[val]);
-			counts[val] = counts[val] + counts[val - 1];
-		}
-		if (max_count == count) {
-			continue;
-		}
-		// Re-order the data in temporary array
-		data_ptr_t row_ptr = source_ptr + (count - 1) * row_width;
-		for (idx_t i = 0; i < count; i++) {
-			idx_t &radix_offset = --counts[*(row_ptr + offset)];
-			FastMemcpy(target_ptr + radix_offset * row_width, row_ptr, row_width);
-			row_ptr -= row_width;
-		}
-		swap = !swap;
-	}
-	// Move data back to original buffer (if it was swapped)
-	if (swap) {
-		memcpy(dataptr, temp_block.Ptr(), count * row_width);
-	}
-}
-
-//! Insertion sort, used when count of values is low
-inline void InsertionSort(const data_ptr_t orig_ptr, const data_ptr_t temp_ptr, const idx_t &count,
-                          const idx_t &col_offset, const idx_t &row_width, const idx_t &total_comp_width,
-                          const idx_t &offset, bool swap) {
-	const data_ptr_t source_ptr = swap ? temp_ptr : orig_ptr;
-	const data_ptr_t target_ptr = swap ? orig_ptr : temp_ptr;
-	if (count > 1) {
-		const idx_t total_offset = col_offset + offset;
-		auto temp_val = unique_ptr<data_t[]>(new data_t[row_width]);
-		const data_ptr_t val = temp_val.get();
-		const auto comp_width = total_comp_width - offset;
-		for (idx_t i = 1; i < count; i++) {
-			FastMemcpy(val, source_ptr + i * row_width, row_width);
-			idx_t j = i;
-			while (j > 0 &&
-			       FastMemcmp(source_ptr + (j - 1) * row_width + total_offset, val + total_offset, comp_width) > 0) {
-				FastMemcpy(source_ptr + j * row_width, source_ptr + (j - 1) * row_width, row_width);
-				j--;
-			}
-			FastMemcpy(source_ptr + j * row_width, val, row_width);
-		}
-	}
-	if (swap) {
-		memcpy(target_ptr, source_ptr, count * row_width);
-	}
-}
-
-//! MSD radix sort that switches to insertion sort with low bucket sizes
-void RadixSortMSD(const data_ptr_t orig_ptr, const data_ptr_t temp_ptr, const idx_t &count, const idx_t &col_offset,
-                  const idx_t &row_width, const idx_t &comp_width, const idx_t &offset, idx_t locations[], bool swap) {
-	const data_ptr_t source_ptr = swap ? temp_ptr : orig_ptr;
-	const data_ptr_t target_ptr = swap ? orig_ptr : temp_ptr;
-	// Init counts to 0
-	memset(locations, 0, SortConstants::MSD_RADIX_LOCATIONS * sizeof(idx_t));
-	idx_t *counts = locations + 1;
-	// Collect counts
-	const idx_t total_offset = col_offset + offset;
-	data_ptr_t offset_ptr = source_ptr + total_offset;
-	for (idx_t i = 0; i < count; i++) {
-		counts[*offset_ptr]++;
-		offset_ptr += row_width;
-	}
-	// Compute locations from counts
-	idx_t max_count = 0;
-	for (idx_t radix = 0; radix < SortConstants::VALUES_PER_RADIX; radix++) {
-		max_count = MaxValue<idx_t>(max_count, counts[radix]);
-		counts[radix] += locations[radix];
-	}
-	if (max_count != count) {
-		// Re-order the data in temporary array
-		data_ptr_t row_ptr = source_ptr;
-		for (idx_t i = 0; i < count; i++) {
-			const idx_t &radix_offset = locations[*(row_ptr + total_offset)]++;
-			FastMemcpy(target_ptr + radix_offset * row_width, row_ptr, row_width);
-			row_ptr += row_width;
-		}
-		swap = !swap;
-	}
-	// Check if done
-	if (offset == comp_width - 1) {
-		if (swap) {
-			memcpy(orig_ptr, temp_ptr, count * row_width);
-		}
-		return;
-	}
-	if (max_count == count) {
-		RadixSortMSD(orig_ptr, temp_ptr, count, col_offset, row_width, comp_width, offset + 1,
-		             locations + SortConstants::MSD_RADIX_LOCATIONS, swap);
-		return;
-	}
-	// Recurse
-	idx_t radix_count = locations[0];
-	for (idx_t radix = 0; radix < SortConstants::VALUES_PER_RADIX; radix++) {
-		const idx_t loc = (locations[radix] - radix_count) * row_width;
-		if (radix_count > SortConstants::INSERTION_SORT_THRESHOLD) {
-			RadixSortMSD(orig_ptr + loc, temp_ptr + loc, radix_count, col_offset, row_width, comp_width, offset + 1,
-			             locations + SortConstants::MSD_RADIX_LOCATIONS, swap);
-		} else if (radix_count != 0) {
-			InsertionSort(orig_ptr + loc, temp_ptr + loc, radix_count, col_offset, row_width, comp_width, offset + 1,
-			              swap);
-		}
-		radix_count = locations[radix + 1] - locations[radix];
-	}
-}
-
-//! Calls different sort functions, depending on the count and sorting sizes
-void RadixSort(BufferManager &buffer_manager, const data_ptr_t &dataptr, const idx_t &count, const idx_t &col_offset,
-               const idx_t &sorting_size, const SortLayout &sort_layout) {
-	if (count <= SortConstants::INSERTION_SORT_THRESHOLD) {
-		InsertionSort(dataptr, nullptr, count, 0, sort_layout.entry_size, sort_layout.comparison_size, 0, false);
-	} else if (sorting_size <= SortConstants::MSD_RADIX_SORT_SIZE_THRESHOLD) {
-		RadixSortLSD(buffer_manager, dataptr, count, col_offset, sort_layout.entry_size, sorting_size);
-	} else {
-		auto temp_block = buffer_manager.Allocate(MaxValue(count * sort_layout.entry_size, (idx_t)Storage::BLOCK_SIZE));
-		auto preallocated_array = unique_ptr<idx_t[]>(new idx_t[sorting_size * SortConstants::MSD_RADIX_LOCATIONS]);
-		RadixSortMSD(dataptr, temp_block.Ptr(), count, col_offset, sort_layout.entry_size, sorting_size, 0,
-		             preallocated_array.get(), false);
-	}
-}
-
-//! Identifies sequences of rows that are tied, and calls radix sort on these
-static void SubSortTiedTuples(BufferManager &buffer_manager, const data_ptr_t dataptr, const idx_t &count,
-                              const idx_t &col_offset, const idx_t &sorting_size, bool ties[],
-                              const SortLayout &sort_layout) {
-	D_ASSERT(!ties[count - 1]);
-	for (idx_t i = 0; i < count; i++) {
-		if (!ties[i]) {
-			continue;
-		}
-		idx_t j;
-		for (j = i + 1; j < count; j++) {
-			if (!ties[j]) {
-				break;
-			}
-		}
-		RadixSort(buffer_manager, dataptr + i * sort_layout.entry_size, j - i + 1, col_offset, sorting_size,
-		          sort_layout);
-		i = j;
-	}
-}
-
-void LocalSortState::SortInMemory() {
-	auto &sb = *sorted_blocks.back();
-	auto &block = sb.radix_sorting_data.back();
-	const auto &count = block.count;
-	auto handle = buffer_manager->Pin(block.block);
-	const auto dataptr = handle.Ptr();
-	// Assign an index to each row
-	data_ptr_t idx_dataptr = dataptr + sort_layout->comparison_size;
-	for (uint32_t i = 0; i < count; i++) {
-		Store<uint32_t>(i, idx_dataptr);
-		idx_dataptr += sort_layout->entry_size;
-	}
-	// Radix sort and break ties until no more ties, or until all columns are sorted
-	idx_t sorting_size = 0;
-	idx_t col_offset = 0;
-	unique_ptr<bool[]> ties_ptr;
-	bool *ties = nullptr;
-	for (idx_t i = 0; i < sort_layout->column_count; i++) {
-		sorting_size += sort_layout->column_sizes[i];
-		if (sort_layout->constant_size[i] && i < sort_layout->column_count - 1) {
-			// Add columns to the sorting size until we reach a variable size column, or the last column
-			continue;
-		}
-
-		if (!ties) {
-			// This is the first sort
-			RadixSort(*buffer_manager, dataptr, count, col_offset, sorting_size, *sort_layout);
-			ties_ptr = unique_ptr<bool[]>(new bool[count]);
-			ties = ties_ptr.get();
-			std::fill_n(ties, count - 1, true);
-			ties[count - 1] = false;
-		} else {
-			// For subsequent sorts, we only have to subsort the tied tuples
-			SubSortTiedTuples(*buffer_manager, dataptr, count, col_offset, sorting_size, ties, *sort_layout);
-		}
-
-		if (sort_layout->constant_size[i] && i == sort_layout->column_count - 1) {
-			// All columns are sorted, no ties to break because last column is constant size
-			break;
-		}
-
-		ComputeTies(dataptr, count, col_offset, sorting_size, ties, *sort_layout);
-		if (!AnyTies(ties, count)) {
-			// No ties, stop sorting
-			break;
-		}
-
-		if (!sort_layout->constant_size[i]) {
-			SortTiedBlobs(*buffer_manager, sb, ties, dataptr, count, i, *sort_layout);
-			if (!AnyTies(ties, count)) {
-				// No more ties after tie-breaking, stop
-				break;
-			}
-		}
-
-		col_offset += sorting_size;
-		sorting_size = 0;
-	}
-}
-
-} // namespace duckdb
-
-
-
-
-
-
-#include <numeric>
-
-namespace duckdb {
-
-idx_t GetNestedSortingColSize(idx_t &col_size, const LogicalType &type) {
-	auto physical_type = type.InternalType();
-	if (TypeIsConstantSize(physical_type)) {
-		col_size += GetTypeIdSize(physical_type);
-		return 0;
-	} else {
-		switch (physical_type) {
-		case PhysicalType::VARCHAR: {
-			// Nested strings are between 4 and 11 chars long for alignment
-			auto size_before_str = col_size;
-			col_size += 11;
-			col_size -= (col_size - 12) % 8;
-			return col_size - size_before_str;
-		}
-		case PhysicalType::LIST:
-			// Lists get 2 bytes (null and empty list)
-			col_size += 2;
-			return GetNestedSortingColSize(col_size, ListType::GetChildType(type));
-		case PhysicalType::MAP:
-		case PhysicalType::STRUCT:
-			// Structs get 1 bytes (null)
-			col_size++;
-			return GetNestedSortingColSize(col_size, StructType::GetChildType(type, 0));
-		default:
-			throw NotImplementedException("Unable to order column with type %s", type.ToString());
-		}
-	}
-}
-
-SortLayout::SortLayout(const vector<BoundOrderByNode> &orders)
-    : column_count(orders.size()), all_constant(true), comparison_size(0), entry_size(0) {
-	vector<LogicalType> blob_layout_types;
-	for (idx_t i = 0; i < column_count; i++) {
-		const auto &order = orders[i];
-
-		order_types.push_back(order.type);
-		order_by_null_types.push_back(order.null_order);
-		auto &expr = *order.expression;
-		logical_types.push_back(expr.return_type);
-
-		auto physical_type = expr.return_type.InternalType();
-		constant_size.push_back(TypeIsConstantSize(physical_type));
-
-		if (order.stats) {
-			stats.push_back(order.stats.get());
-			has_null.push_back(stats.back()->CanHaveNull());
-		} else {
-			stats.push_back(nullptr);
-			has_null.push_back(true);
-		}
-
-		idx_t col_size = has_null.back() ? 1 : 0;
-		prefix_lengths.push_back(0);
-		if (!TypeIsConstantSize(physical_type) && physical_type != PhysicalType::VARCHAR) {
-			prefix_lengths.back() = GetNestedSortingColSize(col_size, expr.return_type);
-		} else if (physical_type == PhysicalType::VARCHAR) {
-			idx_t size_before = col_size;
-			if (stats.back()) {
-				auto &str_stats = (StringStatistics &)*stats.back();
-				col_size += str_stats.max_string_length;
-				if (col_size > 12) {
-					col_size = 12;
-				} else {
-					constant_size.back() = true;
-				}
-			} else {
-				col_size = 12;
-			}
-			prefix_lengths.back() = col_size - size_before;
-		} else {
-			col_size += GetTypeIdSize(physical_type);
-		}
-
-		comparison_size += col_size;
-		column_sizes.push_back(col_size);
-	}
-	entry_size = comparison_size + sizeof(uint32_t);
-
-	// 8-byte alignment
-	if (entry_size % 8 != 0) {
-		// First assign more bytes to strings instead of aligning
-		idx_t bytes_to_fill = 8 - (entry_size % 8);
-		for (idx_t col_idx = 0; col_idx < column_count; col_idx++) {
-			if (bytes_to_fill == 0) {
-				break;
-			}
-			if (logical_types[col_idx].InternalType() == PhysicalType::VARCHAR && stats[col_idx]) {
-				auto &str_stats = (StringStatistics &)*stats[col_idx];
-				idx_t diff = str_stats.max_string_length - prefix_lengths[col_idx];
-				if (diff > 0) {
-					// Increase all sizes accordingly
-					idx_t increase = MinValue(bytes_to_fill, diff);
-					column_sizes[col_idx] += increase;
-					prefix_lengths[col_idx] += increase;
-					constant_size[col_idx] = increase == diff;
-					comparison_size += increase;
-					entry_size += increase;
-					bytes_to_fill -= increase;
-				}
-			}
-		}
-		entry_size = AlignValue(entry_size);
-	}
-
-	for (idx_t col_idx = 0; col_idx < column_count; col_idx++) {
-		all_constant = all_constant && constant_size[col_idx];
-		if (!constant_size[col_idx]) {
-			sorting_to_blob_col[col_idx] = blob_layout_types.size();
-			blob_layout_types.push_back(logical_types[col_idx]);
-		}
-	}
-
-	blob_layout.Initialize(blob_layout_types);
-}
-
-LocalSortState::LocalSortState() : initialized(false) {
-}
-
-static idx_t EntriesPerBlock(idx_t width) {
-	return (Storage::BLOCK_SIZE + width * STANDARD_VECTOR_SIZE - 1) / width;
-}
-
-void LocalSortState::Initialize(GlobalSortState &global_sort_state, BufferManager &buffer_manager_p) {
-	sort_layout = &global_sort_state.sort_layout;
-	payload_layout = &global_sort_state.payload_layout;
-	buffer_manager = &buffer_manager_p;
-	// Radix sorting data
-	radix_sorting_data = make_unique<RowDataCollection>(*buffer_manager, EntriesPerBlock(sort_layout->entry_size),
-	                                                    sort_layout->entry_size);
-	// Blob sorting data
-	if (!sort_layout->all_constant) {
-		auto blob_row_width = sort_layout->blob_layout.GetRowWidth();
-		blob_sorting_data =
-		    make_unique<RowDataCollection>(*buffer_manager, EntriesPerBlock(blob_row_width), blob_row_width);
-		blob_sorting_heap = make_unique<RowDataCollection>(*buffer_manager, (idx_t)Storage::BLOCK_SIZE, 1, true);
-	}
-	// Payload data
-	auto payload_row_width = payload_layout->GetRowWidth();
-	payload_data =
-	    make_unique<RowDataCollection>(*buffer_manager, EntriesPerBlock(payload_row_width), payload_row_width);
-	payload_heap = make_unique<RowDataCollection>(*buffer_manager, (idx_t)Storage::BLOCK_SIZE, 1, true);
-	// Init done
-	initialized = true;
-}
-
-void LocalSortState::SinkChunk(DataChunk &sort, DataChunk &payload) {
-	D_ASSERT(sort.size() == payload.size());
-	// Build and serialize sorting data to radix sortable rows
-	auto data_pointers = FlatVector::GetData<data_ptr_t>(addresses);
-	auto handles = radix_sorting_data->Build(sort.size(), data_pointers, nullptr);
-	for (idx_t sort_col = 0; sort_col < sort.ColumnCount(); sort_col++) {
-		bool has_null = sort_layout->has_null[sort_col];
-		bool nulls_first = sort_layout->order_by_null_types[sort_col] == OrderByNullType::NULLS_FIRST;
-		bool desc = sort_layout->order_types[sort_col] == OrderType::DESCENDING;
-		RowOperations::RadixScatter(sort.data[sort_col], sort.size(), sel_ptr, sort.size(), data_pointers, desc,
-		                            has_null, nulls_first, sort_layout->prefix_lengths[sort_col],
-		                            sort_layout->column_sizes[sort_col]);
-	}
-
-	// Also fully serialize blob sorting columns (to be able to break ties
-	if (!sort_layout->all_constant) {
-		DataChunk blob_chunk;
-		blob_chunk.SetCardinality(sort.size());
-		for (idx_t sort_col = 0; sort_col < sort.ColumnCount(); sort_col++) {
-			if (!sort_layout->constant_size[sort_col]) {
-				blob_chunk.data.emplace_back(sort.data[sort_col]);
-			}
-		}
-		handles = blob_sorting_data->Build(blob_chunk.size(), data_pointers, nullptr);
-		auto blob_data = blob_chunk.Orrify();
-		RowOperations::Scatter(blob_chunk, blob_data.get(), sort_layout->blob_layout, addresses, *blob_sorting_heap,
-		                       sel_ptr, blob_chunk.size());
-	}
-
-	// Finally, serialize payload data
-	handles = payload_data->Build(payload.size(), data_pointers, nullptr);
-	auto input_data = payload.Orrify();
-	RowOperations::Scatter(payload, input_data.get(), *payload_layout, addresses, *payload_heap, sel_ptr,
-	                       payload.size());
-}
-
-idx_t LocalSortState::SizeInBytes() const {
-	idx_t size_in_bytes = radix_sorting_data->SizeInBytes() + payload_data->SizeInBytes();
-	if (!sort_layout->all_constant) {
-		size_in_bytes += blob_sorting_data->SizeInBytes() + blob_sorting_heap->SizeInBytes();
-	}
-	if (!payload_layout->AllConstant()) {
-		size_in_bytes += payload_heap->SizeInBytes();
-	}
-	return size_in_bytes;
-}
-
-void LocalSortState::Sort(GlobalSortState &global_sort_state, bool reorder_heap) {
-	D_ASSERT(radix_sorting_data->count == payload_data->count);
-	if (radix_sorting_data->count == 0) {
-		return;
-	}
-	// Move all data to a single SortedBlock
-	sorted_blocks.emplace_back(make_unique<SortedBlock>(*buffer_manager, global_sort_state));
-	auto &sb = *sorted_blocks.back();
-	// Fixed-size sorting data
-	auto sorting_block = ConcatenateBlocks(*radix_sorting_data);
-	sb.radix_sorting_data.push_back(move(sorting_block));
-	// Variable-size sorting data
-	if (!sort_layout->all_constant) {
-		auto &blob_data = *blob_sorting_data;
-		auto new_block = ConcatenateBlocks(blob_data);
-		sb.blob_sorting_data->data_blocks.push_back(move(new_block));
-	}
-	// Payload data
-	auto payload_block = ConcatenateBlocks(*payload_data);
-	sb.payload_data->data_blocks.push_back(move(payload_block));
-	// Now perform the actual sort
-	SortInMemory();
-	// Re-order before the merge sort
-	ReOrder(global_sort_state, reorder_heap);
-}
-
-RowDataBlock LocalSortState::ConcatenateBlocks(RowDataCollection &row_data) {
-	// Create block with the correct capacity
-	const idx_t &entry_size = row_data.entry_size;
-	idx_t capacity = MaxValue(((idx_t)Storage::BLOCK_SIZE + entry_size - 1) / entry_size, row_data.count);
-	RowDataBlock new_block(*buffer_manager, capacity, entry_size);
-	new_block.count = row_data.count;
-	auto new_block_handle = buffer_manager->Pin(new_block.block);
-	data_ptr_t new_block_ptr = new_block_handle.Ptr();
-	// Copy the data of the blocks into a single block
-	for (auto &block : row_data.blocks) {
-		auto block_handle = buffer_manager->Pin(block.block);
-		memcpy(new_block_ptr, block_handle.Ptr(), block.count * entry_size);
-		new_block_ptr += block.count * entry_size;
-	}
-	row_data.blocks.clear();
-	row_data.count = 0;
-	return new_block;
-}
-
-void LocalSortState::ReOrder(SortedData &sd, data_ptr_t sorting_ptr, RowDataCollection &heap, GlobalSortState &gstate,
-                             bool reorder_heap) {
-	sd.swizzled = reorder_heap;
-	auto &unordered_data_block = sd.data_blocks.back();
-	const idx_t &count = unordered_data_block.count;
-	auto unordered_data_handle = buffer_manager->Pin(unordered_data_block.block);
-	const data_ptr_t unordered_data_ptr = unordered_data_handle.Ptr();
-	// Create new block that will hold re-ordered row data
-	RowDataBlock ordered_data_block(*buffer_manager, unordered_data_block.capacity, unordered_data_block.entry_size);
-	ordered_data_block.count = count;
-	auto ordered_data_handle = buffer_manager->Pin(ordered_data_block.block);
-	data_ptr_t ordered_data_ptr = ordered_data_handle.Ptr();
-	// Re-order fixed-size row layout
-	const idx_t row_width = sd.layout.GetRowWidth();
-	const idx_t sorting_entry_size = gstate.sort_layout.entry_size;
-	for (idx_t i = 0; i < count; i++) {
-		auto index = Load<uint32_t>(sorting_ptr);
-		FastMemcpy(ordered_data_ptr, unordered_data_ptr + index * row_width, row_width);
-		ordered_data_ptr += row_width;
-		sorting_ptr += sorting_entry_size;
-	}
-	// Replace the unordered data block with the re-ordered data block
-	sd.data_blocks.clear();
-	sd.data_blocks.push_back(move(ordered_data_block));
-	// Deal with the heap (if necessary)
-	if (!sd.layout.AllConstant() && reorder_heap) {
-		// Swizzle the column pointers to offsets
-		RowOperations::SwizzleColumns(sd.layout, ordered_data_handle.Ptr(), count);
-		// Create a single heap block to store the ordered heap
-		idx_t total_byte_offset = std::accumulate(heap.blocks.begin(), heap.blocks.end(), 0,
-		                                          [](idx_t a, const RowDataBlock &b) { return a + b.byte_offset; });
-		idx_t heap_block_size = MaxValue(total_byte_offset, (idx_t)Storage::BLOCK_SIZE);
-		RowDataBlock ordered_heap_block(*buffer_manager, heap_block_size, 1);
-		ordered_heap_block.count = count;
-		ordered_heap_block.byte_offset = total_byte_offset;
-		auto ordered_heap_handle = buffer_manager->Pin(ordered_heap_block.block);
-		data_ptr_t ordered_heap_ptr = ordered_heap_handle.Ptr();
-		// Fill the heap in order
-		ordered_data_ptr = ordered_data_handle.Ptr();
-		const idx_t heap_pointer_offset = sd.layout.GetHeapPointerOffset();
-		for (idx_t i = 0; i < count; i++) {
-			auto heap_row_ptr = Load<data_ptr_t>(ordered_data_ptr + heap_pointer_offset);
-			auto heap_row_size = Load<uint32_t>(heap_row_ptr);
-			memcpy(ordered_heap_ptr, heap_row_ptr, heap_row_size);
-			ordered_heap_ptr += heap_row_size;
-			ordered_data_ptr += row_width;
-		}
-		// Swizzle the base pointer to the offset of each row in the heap
-		RowOperations::SwizzleHeapPointer(sd.layout, ordered_data_handle.Ptr(), ordered_heap_handle.Ptr(), count);
-		// Move the re-ordered heap to the SortedData, and clear the local heap
-		sd.heap_blocks.push_back(move(ordered_heap_block));
-		heap.pinned_blocks.clear();
-		heap.blocks.clear();
-		heap.count = 0;
-	}
-}
-
-void LocalSortState::ReOrder(GlobalSortState &gstate, bool reorder_heap) {
-	auto &sb = *sorted_blocks.back();
-	auto sorting_handle = buffer_manager->Pin(sb.radix_sorting_data.back().block);
-	const data_ptr_t sorting_ptr = sorting_handle.Ptr() + gstate.sort_layout.comparison_size;
-	// Re-order variable size sorting columns
-	if (!gstate.sort_layout.all_constant) {
-		ReOrder(*sb.blob_sorting_data, sorting_ptr, *blob_sorting_heap, gstate, reorder_heap);
-	}
-	// And the payload
-	ReOrder(*sb.payload_data, sorting_ptr, *payload_heap, gstate, reorder_heap);
-}
-
-GlobalSortState::GlobalSortState(BufferManager &buffer_manager, const vector<BoundOrderByNode> &orders,
-                                 RowLayout &payload_layout)
-    : buffer_manager(buffer_manager), sort_layout(SortLayout(orders)), payload_layout(payload_layout),
-      block_capacity(0), external(false) {
-}
-
-void GlobalSortState::AddLocalState(LocalSortState &local_sort_state) {
-	if (!local_sort_state.radix_sorting_data) {
-		return;
-	}
-
-	// Sort accumulated data
-	// we only re-order the heap when the data is expected to not fit in memory
-	// re-ordering the heap avoids random access when reading/merging but incurs a significant cost of shuffling data
-	// when data fits in memory, doing random access on reads is cheaper than re-shuffling
-	local_sort_state.Sort(*this, external || !local_sort_state.sorted_blocks.empty());
-
-	// Append local state sorted data to this global state
-	lock_guard<mutex> append_guard(lock);
-	for (auto &sb : local_sort_state.sorted_blocks) {
-		sorted_blocks.push_back(move(sb));
-	}
-	auto &payload_heap = local_sort_state.payload_heap;
-	for (idx_t i = 0; i < payload_heap->blocks.size(); i++) {
-		heap_blocks.push_back(move(payload_heap->blocks[i]));
-		pinned_blocks.push_back(move(payload_heap->pinned_blocks[i]));
-	}
-	if (!sort_layout.all_constant) {
-		auto &blob_heap = local_sort_state.blob_sorting_heap;
-		for (idx_t i = 0; i < blob_heap->blocks.size(); i++) {
-			heap_blocks.push_back(move(blob_heap->blocks[i]));
-			pinned_blocks.push_back(move(blob_heap->pinned_blocks[i]));
-		}
-	}
-}
-
-void GlobalSortState::PrepareMergePhase() {
-	// Determine if we need to use do an external sort
-	idx_t total_heap_size =
-	    std::accumulate(sorted_blocks.begin(), sorted_blocks.end(), (idx_t)0,
-	                    [](idx_t a, const unique_ptr<SortedBlock> &b) { return a + b->HeapSize(); });
-	if (external || (pinned_blocks.empty() && total_heap_size > 0.25 * buffer_manager.GetMaxMemory())) {
-		external = true;
-	}
-	// Use the data that we have to determine which partition size to use during the merge
-	if (external && total_heap_size > 0) {
-		// If we have variable size data we need to be conservative, as there might be skew
-		idx_t max_block_size = 0;
-		for (auto &sb : sorted_blocks) {
-			idx_t size_in_bytes = sb->SizeInBytes();
-			if (size_in_bytes > max_block_size) {
-				max_block_size = size_in_bytes;
-				block_capacity = sb->Count();
-			}
-		}
-	} else {
-		for (auto &sb : sorted_blocks) {
-			block_capacity = MaxValue(block_capacity, sb->Count());
-		}
-	}
-	// Unswizzle and pin heap blocks if we can fit everything in memory
-	if (!external) {
-		for (auto &sb : sorted_blocks) {
-			sb->blob_sorting_data->Unswizzle();
-			sb->payload_data->Unswizzle();
-		}
-	}
-}
-
-void GlobalSortState::InitializeMergeRound() {
-	D_ASSERT(sorted_blocks_temp.empty());
-	// If we reverse this list, the blocks that were merged last will be merged first in the next round
-	// These are still in memory, therefore this reduces the amount of read/write to disk!
-	std::reverse(sorted_blocks.begin(), sorted_blocks.end());
-	// Uneven number of blocks - keep one on the side
-	if (sorted_blocks.size() % 2 == 1) {
-		odd_one_out = move(sorted_blocks.back());
-		sorted_blocks.pop_back();
-	}
-	// Init merge path path indices
-	pair_idx = 0;
-	num_pairs = sorted_blocks.size() / 2;
-	l_start = 0;
-	r_start = 0;
-	// Allocate room for merge results
-	for (idx_t p_idx = 0; p_idx < num_pairs; p_idx++) {
-		sorted_blocks_temp.emplace_back();
-	}
-}
-
-void GlobalSortState::CompleteMergeRound(bool keep_radix_data) {
-	sorted_blocks.clear();
-	for (auto &sorted_block_vector : sorted_blocks_temp) {
-		sorted_blocks.push_back(make_unique<SortedBlock>(buffer_manager, *this));
-		sorted_blocks.back()->AppendSortedBlocks(sorted_block_vector);
-	}
-	sorted_blocks_temp.clear();
-	if (odd_one_out) {
-		sorted_blocks.push_back(move(odd_one_out));
-		odd_one_out = nullptr;
-	}
-	// Only one block left: Done!
-	if (sorted_blocks.size() == 1 && !keep_radix_data) {
-		sorted_blocks[0]->radix_sorting_data.clear();
-		sorted_blocks[0]->blob_sorting_data = nullptr;
-	}
-}
-void GlobalSortState::Print() {
-	PayloadScanner scanner(*this, false);
-	DataChunk chunk;
-	chunk.Initialize(Allocator::DefaultAllocator(), scanner.GetPayloadTypes());
-	for (;;) {
-		scanner.Scan(chunk);
-		const auto count = chunk.size();
-		if (!count) {
-			break;
-		}
-		chunk.Print();
-	}
-}
-
-} // namespace duckdb
-
-
-
-
-
-
-#include <numeric>
-
-namespace duckdb {
-
-SortedData::SortedData(SortedDataType type, const RowLayout &layout, BufferManager &buffer_manager,
-                       GlobalSortState &state)
-    : type(type), layout(layout), swizzled(false), buffer_manager(buffer_manager), state(state) {
-}
-
-idx_t SortedData::Count() {
-	idx_t count = std::accumulate(data_blocks.begin(), data_blocks.end(), (idx_t)0,
-	                              [](idx_t a, const RowDataBlock &b) { return a + b.count; });
-	if (!layout.AllConstant() && state.external) {
-		D_ASSERT(count == std::accumulate(heap_blocks.begin(), heap_blocks.end(), (idx_t)0,
-		                                  [](idx_t a, const RowDataBlock &b) { return a + b.count; }));
-	}
-	return count;
-}
-
-void SortedData::CreateBlock() {
-	auto capacity =
-	    MaxValue(((idx_t)Storage::BLOCK_SIZE + layout.GetRowWidth() - 1) / layout.GetRowWidth(), state.block_capacity);
-	data_blocks.emplace_back(buffer_manager, capacity, layout.GetRowWidth());
-	if (!layout.AllConstant() && state.external) {
-		heap_blocks.emplace_back(buffer_manager, (idx_t)Storage::BLOCK_SIZE, 1);
-		D_ASSERT(data_blocks.size() == heap_blocks.size());
-	}
-}
-
-unique_ptr<SortedData> SortedData::CreateSlice(idx_t start_block_index, idx_t end_block_index, idx_t end_entry_index) {
-	// Add the corresponding blocks to the result
-	auto result = make_unique<SortedData>(type, layout, buffer_manager, state);
-	for (idx_t i = start_block_index; i <= end_block_index; i++) {
-		result->data_blocks.push_back(data_blocks[i]);
-		if (!layout.AllConstant() && state.external) {
-			result->heap_blocks.push_back(heap_blocks[i]);
-		}
-	}
-	// All of the blocks that come before block with idx = start_block_idx can be reset (other references exist)
-	for (idx_t i = 0; i < start_block_index; i++) {
-		data_blocks[i].block = nullptr;
-		if (!layout.AllConstant() && state.external) {
-			heap_blocks[i].block = nullptr;
-		}
-	}
-	// Use start and end entry indices to set the boundaries
-	D_ASSERT(end_entry_index <= result->data_blocks.back().count);
-	result->data_blocks.back().count = end_entry_index;
-	if (!layout.AllConstant() && state.external) {
-		result->heap_blocks.back().count = end_entry_index;
-	}
-	return result;
-}
-
-void SortedData::Unswizzle() {
-	if (layout.AllConstant() || !swizzled) {
-		return;
-	}
-	for (idx_t i = 0; i < data_blocks.size(); i++) {
-		auto &data_block = data_blocks[i];
-		auto &heap_block = heap_blocks[i];
-		auto data_handle_p = buffer_manager.Pin(data_block.block);
-		auto heap_handle_p = buffer_manager.Pin(heap_block.block);
-		RowOperations::UnswizzlePointers(layout, data_handle_p.Ptr(), heap_handle_p.Ptr(), data_block.count);
-		state.heap_blocks.push_back(move(heap_block));
-		state.pinned_blocks.push_back(move(heap_handle_p));
-	}
-	heap_blocks.clear();
-}
-
-SortedBlock::SortedBlock(BufferManager &buffer_manager, GlobalSortState &state)
-    : buffer_manager(buffer_manager), state(state), sort_layout(state.sort_layout),
-      payload_layout(state.payload_layout) {
-	blob_sorting_data = make_unique<SortedData>(SortedDataType::BLOB, sort_layout.blob_layout, buffer_manager, state);
-	payload_data = make_unique<SortedData>(SortedDataType::PAYLOAD, payload_layout, buffer_manager, state);
-}
-
-idx_t SortedBlock::Count() const {
-	idx_t count = std::accumulate(radix_sorting_data.begin(), radix_sorting_data.end(), 0,
-	                              [](idx_t a, const RowDataBlock &b) { return a + b.count; });
-	if (!sort_layout.all_constant) {
-		D_ASSERT(count == blob_sorting_data->Count());
-	}
-	D_ASSERT(count == payload_data->Count());
-	return count;
-}
-
-void SortedBlock::InitializeWrite() {
-	CreateBlock();
-	if (!sort_layout.all_constant) {
-		blob_sorting_data->CreateBlock();
-	}
-	payload_data->CreateBlock();
-}
-
-void SortedBlock::CreateBlock() {
-	auto capacity = MaxValue(((idx_t)Storage::BLOCK_SIZE + sort_layout.entry_size - 1) / sort_layout.entry_size,
-	                         state.block_capacity);
-	radix_sorting_data.emplace_back(buffer_manager, capacity, sort_layout.entry_size);
-}
-
-void SortedBlock::AppendSortedBlocks(vector<unique_ptr<SortedBlock>> &sorted_blocks) {
-	D_ASSERT(Count() == 0);
-	for (auto &sb : sorted_blocks) {
-		for (auto &radix_block : sb->radix_sorting_data) {
-			radix_sorting_data.push_back(move(radix_block));
-		}
-		if (!sort_layout.all_constant) {
-			for (auto &blob_block : sb->blob_sorting_data->data_blocks) {
-				blob_sorting_data->data_blocks.push_back(move(blob_block));
-			}
-			for (auto &heap_block : sb->blob_sorting_data->heap_blocks) {
-				blob_sorting_data->heap_blocks.push_back(move(heap_block));
-			}
-		}
-		for (auto &payload_data_block : sb->payload_data->data_blocks) {
-			payload_data->data_blocks.push_back(move(payload_data_block));
-		}
-		if (!payload_data->layout.AllConstant()) {
-			for (auto &payload_heap_block : sb->payload_data->heap_blocks) {
-				payload_data->heap_blocks.push_back(move(payload_heap_block));
-			}
-		}
-	}
-}
-
-void SortedBlock::GlobalToLocalIndex(const idx_t &global_idx, idx_t &local_block_index, idx_t &local_entry_index) {
-	if (global_idx == Count()) {
-		local_block_index = radix_sorting_data.size() - 1;
-		local_entry_index = radix_sorting_data.back().count;
-		return;
-	}
-	D_ASSERT(global_idx < Count());
-	local_entry_index = global_idx;
-	for (local_block_index = 0; local_block_index < radix_sorting_data.size(); local_block_index++) {
-		const idx_t &block_count = radix_sorting_data[local_block_index].count;
-		if (local_entry_index >= block_count) {
-			local_entry_index -= block_count;
-		} else {
-			break;
-		}
-	}
-	D_ASSERT(local_entry_index < radix_sorting_data[local_block_index].count);
-}
-
-unique_ptr<SortedBlock> SortedBlock::CreateSlice(const idx_t start, const idx_t end, idx_t &entry_idx) {
-	// Identify blocks/entry indices of this slice
-	idx_t start_block_index;
-	idx_t start_entry_index;
-	GlobalToLocalIndex(start, start_block_index, start_entry_index);
-	idx_t end_block_index;
-	idx_t end_entry_index;
-	GlobalToLocalIndex(end, end_block_index, end_entry_index);
-	// Add the corresponding blocks to the result
-	auto result = make_unique<SortedBlock>(buffer_manager, state);
-	for (idx_t i = start_block_index; i <= end_block_index; i++) {
-		result->radix_sorting_data.push_back(radix_sorting_data[i]);
-	}
-	// Reset all blocks that come before block with idx = start_block_idx (slice holds new reference)
-	for (idx_t i = 0; i < start_block_index; i++) {
-		radix_sorting_data[i].block = nullptr;
-	}
-	// Use start and end entry indices to set the boundaries
-	entry_idx = start_entry_index;
-	D_ASSERT(end_entry_index <= result->radix_sorting_data.back().count);
-	result->radix_sorting_data.back().count = end_entry_index;
-	// Same for the var size sorting data
-	if (!sort_layout.all_constant) {
-		result->blob_sorting_data = blob_sorting_data->CreateSlice(start_block_index, end_block_index, end_entry_index);
-	}
-	// And the payload data
-	result->payload_data = payload_data->CreateSlice(start_block_index, end_block_index, end_entry_index);
-	return result;
-}
-
-idx_t SortedBlock::HeapSize() const {
-	idx_t result = 0;
-	if (!sort_layout.all_constant) {
-		for (auto &block : blob_sorting_data->heap_blocks) {
-			result += block.capacity;
-		}
-	}
-	if (!payload_layout.AllConstant()) {
-		for (auto &block : payload_data->heap_blocks) {
-			result += block.capacity;
-		}
-	}
-	return result;
-}
-
-idx_t SortedBlock::SizeInBytes() const {
-	idx_t bytes = 0;
-	for (idx_t i = 0; i < radix_sorting_data.size(); i++) {
-		bytes += radix_sorting_data[i].capacity * sort_layout.entry_size;
-		if (!sort_layout.all_constant) {
-			bytes += blob_sorting_data->data_blocks[i].capacity * sort_layout.blob_layout.GetRowWidth();
-			bytes += blob_sorting_data->heap_blocks[i].capacity;
-		}
-		bytes += payload_data->data_blocks[i].capacity * payload_layout.GetRowWidth();
-		if (!payload_layout.AllConstant()) {
-			bytes += payload_data->heap_blocks[i].capacity;
-		}
-	}
-	return bytes;
-}
-
-SBScanState::SBScanState(BufferManager &buffer_manager, GlobalSortState &state)
-    : buffer_manager(buffer_manager), sort_layout(state.sort_layout), state(state), block_idx(0), entry_idx(0) {
-}
-
-void SBScanState::PinRadix(idx_t block_idx_to) {
-	auto &radix_sorting_data = sb->radix_sorting_data;
-	D_ASSERT(block_idx_to < radix_sorting_data.size());
-	auto &block = radix_sorting_data[block_idx_to];
-	if (!radix_handle.IsValid() || radix_handle.GetBlockId() != block.block->BlockId()) {
-		radix_handle = buffer_manager.Pin(block.block);
-	}
-}
-
-void SBScanState::PinData(SortedData &sd) {
-	D_ASSERT(block_idx < sd.data_blocks.size());
-	auto &data_handle = sd.type == SortedDataType::BLOB ? blob_sorting_data_handle : payload_data_handle;
-	auto &heap_handle = sd.type == SortedDataType::BLOB ? blob_sorting_heap_handle : payload_heap_handle;
-
-	auto &data_block = sd.data_blocks[block_idx];
-	if (!data_handle.IsValid() || data_handle.GetBlockId() != data_block.block->BlockId()) {
-		data_handle = buffer_manager.Pin(data_block.block);
-	}
-	if (sd.layout.AllConstant() || !state.external) {
-		return;
-	}
-	auto &heap_block = sd.heap_blocks[block_idx];
-	if (!heap_handle.IsValid() || heap_handle.GetBlockId() != heap_block.block->BlockId()) {
-		heap_handle = buffer_manager.Pin(heap_block.block);
-	}
-}
-
-data_ptr_t SBScanState::RadixPtr() const {
-	return radix_handle.Ptr() + entry_idx * sort_layout.entry_size;
-}
-
-data_ptr_t SBScanState::DataPtr(SortedData &sd) const {
-	auto &data_handle = sd.type == SortedDataType::BLOB ? blob_sorting_data_handle : payload_data_handle;
-	D_ASSERT(sd.data_blocks[block_idx].block->Readers() != 0 &&
-	         data_handle.GetBlockId() == sd.data_blocks[block_idx].block->BlockId());
-	return data_handle.Ptr() + entry_idx * sd.layout.GetRowWidth();
-}
-
-data_ptr_t SBScanState::HeapPtr(SortedData &sd) const {
-	return BaseHeapPtr(sd) + Load<idx_t>(DataPtr(sd) + sd.layout.GetHeapPointerOffset());
-}
-
-data_ptr_t SBScanState::BaseHeapPtr(SortedData &sd) const {
-	auto &heap_handle = sd.type == SortedDataType::BLOB ? blob_sorting_heap_handle : payload_heap_handle;
-	D_ASSERT(!sd.layout.AllConstant() && state.external);
-	D_ASSERT(sd.heap_blocks[block_idx].block->Readers() != 0 &&
-	         heap_handle.GetBlockId() == sd.heap_blocks[block_idx].block->BlockId());
-	return heap_handle.Ptr();
-}
-
-idx_t SBScanState::Remaining() const {
-	const auto &blocks = sb->radix_sorting_data;
-	idx_t remaining = 0;
-	if (block_idx < blocks.size()) {
-		remaining += blocks[block_idx].count - entry_idx;
-		for (idx_t i = block_idx + 1; i < blocks.size(); i++) {
-			remaining += blocks[i].count;
-		}
-	}
-	return remaining;
-}
-
-void SBScanState::SetIndices(idx_t block_idx_to, idx_t entry_idx_to) {
-	block_idx = block_idx_to;
-	entry_idx = entry_idx_to;
-}
-
-PayloadScanner::PayloadScanner(SortedData &sorted_data, GlobalSortState &global_sort_state, bool flush_p)
-    : sorted_data(sorted_data), read_state(global_sort_state.buffer_manager, global_sort_state),
-      total_count(sorted_data.Count()), global_sort_state(global_sort_state), total_scanned(0), flush(flush_p) {
-}
-
-PayloadScanner::PayloadScanner(GlobalSortState &global_sort_state, bool flush_p)
-    : PayloadScanner(*global_sort_state.sorted_blocks[0]->payload_data, global_sort_state, flush_p) {
-}
-
-PayloadScanner::PayloadScanner(GlobalSortState &global_sort_state, idx_t block_idx)
-    : sorted_data(*global_sort_state.sorted_blocks[0]->payload_data),
-      read_state(global_sort_state.buffer_manager, global_sort_state),
-      total_count(sorted_data.data_blocks[block_idx].count), global_sort_state(global_sort_state), total_scanned(0),
-      flush(false) {
-	read_state.SetIndices(block_idx, 0);
-}
-
-void PayloadScanner::Scan(DataChunk &chunk) {
-	auto count = MinValue((idx_t)STANDARD_VECTOR_SIZE, total_count - total_scanned);
-	if (count == 0) {
-		chunk.SetCardinality(count);
-		return;
-	}
-	// Eagerly delete references to blocks that we've passed
-	if (flush) {
-		for (idx_t i = 0; i < read_state.block_idx; i++) {
-			sorted_data.data_blocks[i].block = nullptr;
-		}
-	}
-	const idx_t &row_width = sorted_data.layout.GetRowWidth();
-	// Set up a batch of pointers to scan data from
-	idx_t scanned = 0;
-	auto data_pointers = FlatVector::GetData<data_ptr_t>(addresses);
-	while (scanned < count) {
-		read_state.PinData(sorted_data);
-		auto &data_block = sorted_data.data_blocks[read_state.block_idx];
-		idx_t next = MinValue(data_block.count - read_state.entry_idx, count - scanned);
-		const data_ptr_t data_ptr = read_state.payload_data_handle.Ptr() + read_state.entry_idx * row_width;
-		// Set up the next pointers
-		data_ptr_t row_ptr = data_ptr;
-		for (idx_t i = 0; i < next; i++) {
-			data_pointers[scanned + i] = row_ptr;
-			row_ptr += row_width;
-		}
-		// Unswizzle the offsets back to pointers (if needed)
-		if (!sorted_data.layout.AllConstant() && global_sort_state.external) {
-			RowOperations::UnswizzlePointers(sorted_data.layout, data_ptr, read_state.payload_heap_handle.Ptr(), next);
-		}
-		// Update state indices
-		read_state.entry_idx += next;
-		if (read_state.entry_idx == data_block.count) {
-			read_state.block_idx++;
-			read_state.entry_idx = 0;
-		}
-		scanned += next;
-	}
-	D_ASSERT(scanned == count);
-	// Deserialize the payload data
-	for (idx_t col_idx = 0; col_idx < sorted_data.layout.ColumnCount(); col_idx++) {
-		const auto col_offset = sorted_data.layout.GetOffsets()[col_idx];
-		RowOperations::Gather(addresses, *FlatVector::IncrementalSelectionVector(), chunk.data[col_idx],
-		                      *FlatVector::IncrementalSelectionVector(), count, col_offset, col_idx);
-	}
-	chunk.SetCardinality(count);
-	chunk.Verify();
-	total_scanned += scanned;
-}
-
-} // namespace duckdb
-
-
-
-
-
-
-#include <algorithm>
-#include <cctype>
-#include <iomanip>
-#include <memory>
-#include <sstream>
-#include <stdarg.h>
-#include <string.h>
-
-namespace duckdb {
-
-bool StringUtil::Contains(const string &haystack, const string &needle) {
-	return (haystack.find(needle) != string::npos);
-}
-
-void StringUtil::LTrim(string &str) {
-	auto it = str.begin();
-	while (CharacterIsSpace(*it)) {
-		it++;
-	}
-	str.erase(str.begin(), it);
-}
-
-// Remove trailing ' ', '\f', '\n', '\r', '\t', '\v'
-void StringUtil::RTrim(string &str) {
-	str.erase(find_if(str.rbegin(), str.rend(), [](int ch) { return ch > 0 && !CharacterIsSpace(ch); }).base(),
-	          str.end());
-}
-
-void StringUtil::Trim(string &str) {
-	StringUtil::LTrim(str);
-	StringUtil::RTrim(str);
-}
-
-bool StringUtil::StartsWith(string str, string prefix) {
-	if (prefix.size() > str.size()) {
-		return false;
-	}
-	return equal(prefix.begin(), prefix.end(), str.begin());
-}
-
-bool StringUtil::EndsWith(const string &str, const string &suffix) {
-	if (suffix.size() > str.size()) {
-		return false;
-	}
-	return equal(suffix.rbegin(), suffix.rend(), str.rbegin());
-}
-
-string StringUtil::Repeat(const string &str, idx_t n) {
-	std::ostringstream os;
-	for (idx_t i = 0; i < n; i++) {
-		os << str;
-	}
-	return (os.str());
-}
-
-vector<string> StringUtil::Split(const string &str, char delimiter) {
-	std::stringstream ss(str);
-	vector<string> lines;
-	string temp;
-	while (getline(ss, temp, delimiter)) {
-		lines.push_back(temp);
-	}
-	return (lines);
-}
-
-namespace string_util_internal {
-
-inline void SkipSpaces(const string &str, idx_t &index) {
-	while (index < str.size() && std::isspace(str[index])) {
-		index++;
-	}
-}
-
-inline void ConsumeLetter(const string &str, idx_t &index, char expected) {
-	if (index >= str.size() || str[index] != expected) {
-		throw ParserException("Invalid quoted list: %s", str);
-	}
-
-	index++;
-}
-
-template <typename F>
-inline void TakeWhile(const string &str, idx_t &index, const F &cond, string &taker) {
-	while (index < str.size() && cond(str[index])) {
-		taker.push_back(str[index]);
-		index++;
-	}
-}
-
-inline string TakePossiblyQuotedItem(const string &str, idx_t &index, char delimiter, char quote) {
-	string entry;
-
-	if (str[index] == quote) {
-		index++;
-		TakeWhile(
-		    str, index, [quote](char c) { return c != quote; }, entry);
-		ConsumeLetter(str, index, quote);
-	} else {
-		TakeWhile(
-		    str, index, [delimiter, quote](char c) { return c != delimiter && c != quote && !std::isspace(c); }, entry);
-	}
-
-	return entry;
-}
-
-} // namespace string_util_internal
-
-vector<string> StringUtil::SplitWithQuote(const string &str, char delimiter, char quote) {
-	vector<string> entries;
-	idx_t i = 0;
-
-	string_util_internal::SkipSpaces(str, i);
-	while (i < str.size()) {
-		if (!entries.empty()) {
-			string_util_internal::ConsumeLetter(str, i, delimiter);
-		}
-
-		entries.emplace_back(string_util_internal::TakePossiblyQuotedItem(str, i, delimiter, quote));
-		string_util_internal::SkipSpaces(str, i);
-	}
-
-	return entries;
-}
-
-string StringUtil::Join(const vector<string> &input, const string &separator) {
-	return StringUtil::Join(input, input.size(), separator, [](const string &s) { return s; });
-}
-
-string StringUtil::BytesToHumanReadableString(idx_t bytes) {
-	string db_size;
-	auto kilobytes = bytes / 1000;
-	auto megabytes = kilobytes / 1000;
-	kilobytes -= megabytes * 1000;
-	auto gigabytes = megabytes / 1000;
-	megabytes -= gigabytes * 1000;
-	auto terabytes = gigabytes / 1000;
-	gigabytes -= terabytes * 1000;
-	if (terabytes > 0) {
-		return to_string(terabytes) + "." + to_string(gigabytes / 100) + "TB";
-	} else if (gigabytes > 0) {
-		return to_string(gigabytes) + "." + to_string(megabytes / 100) + "GB";
-	} else if (megabytes > 0) {
-		return to_string(megabytes) + "." + to_string(kilobytes / 100) + "MB";
-	} else if (kilobytes > 0) {
-		return to_string(kilobytes) + "KB";
-	} else {
-		return to_string(bytes) + " bytes";
-	}
-}
-
-string StringUtil::Upper(const string &str) {
-	string copy(str);
-	transform(copy.begin(), copy.end(), copy.begin(), [](unsigned char c) { return std::toupper(c); });
-	return (copy);
-}
-
-string StringUtil::Lower(const string &str) {
-	string copy(str);
-	transform(copy.begin(), copy.end(), copy.begin(), [](unsigned char c) { return std::tolower(c); });
-	return (copy);
-}
-
-vector<string> StringUtil::Split(const string &input, const string &split) {
-	vector<string> splits;
-
-	idx_t last = 0;
-	idx_t input_len = input.size();
-	idx_t split_len = split.size();
-	while (last <= input_len) {
-		idx_t next = input.find(split, last);
-		if (next == string::npos) {
-			next = input_len;
-		}
-
-		// Push the substring [last, next) on to splits
-		string substr = input.substr(last, next - last);
-		if (substr.empty() == false) {
-			splits.push_back(substr);
-		}
-		last = next + split_len;
-	}
-	return splits;
-}
-
-string StringUtil::Replace(string source, const string &from, const string &to) {
-	idx_t start_pos = 0;
-	while ((start_pos = source.find(from, start_pos)) != string::npos) {
-		source.replace(start_pos, from.length(), to);
-		start_pos += to.length(); // In case 'to' contains 'from', like
-		                          // replacing 'x' with 'yx'
-	}
-	return source;
-}
-
-vector<string> StringUtil::TopNStrings(vector<pair<string, idx_t>> scores, idx_t n, idx_t threshold) {
-	if (scores.empty()) {
-		return vector<string>();
-	}
-	sort(scores.begin(), scores.end(),
-	     [](const pair<string, idx_t> &a, const pair<string, idx_t> &b) -> bool { return a.second < b.second; });
-	vector<string> result;
-	result.push_back(scores[0].first);
-	for (idx_t i = 1; i < MinValue<idx_t>(scores.size(), n); i++) {
-		if (scores[i].second > threshold) {
-			break;
-		}
-		result.push_back(scores[i].first);
-	}
-	return result;
-}
-
-struct LevenshteinArray {
-	LevenshteinArray(idx_t len1, idx_t len2) : len1(len1) {
-		dist = unique_ptr<idx_t[]>(new idx_t[len1 * len2]);
-	}
-
-	idx_t &Score(idx_t i, idx_t j) {
-		return dist[GetIndex(i, j)];
-	}
-
-private:
-	idx_t len1;
-	unique_ptr<idx_t[]> dist;
-
-	idx_t GetIndex(idx_t i, idx_t j) {
-		return j * len1 + i;
-	}
-};
-
-// adapted from https://en.wikibooks.org/wiki/Algorithm_Implementation/Strings/Levenshtein_distance#C++
-idx_t StringUtil::LevenshteinDistance(const string &s1_p, const string &s2_p) {
-	auto s1 = StringUtil::Lower(s1_p);
-	auto s2 = StringUtil::Lower(s2_p);
-	idx_t len1 = s1.size();
-	idx_t len2 = s2.size();
-	if (len1 == 0) {
-		return len2;
-	}
-	if (len2 == 0) {
-		return len1;
-	}
-	LevenshteinArray array(len1 + 1, len2 + 1);
-	array.Score(0, 0) = 0;
-	for (idx_t i = 0; i <= len1; i++) {
-		array.Score(i, 0) = i;
-	}
-	for (idx_t j = 0; j <= len2; j++) {
-		array.Score(0, j) = j;
-	}
-	for (idx_t i = 1; i <= len1; i++) {
-		for (idx_t j = 1; j <= len2; j++) {
-			// d[i][j] = std::min({ d[i - 1][j] + 1,
-			//                      d[i][j - 1] + 1,
-			//                      d[i - 1][j - 1] + (s1[i - 1] == s2[j - 1] ? 0 : 1) });
-			int equal = s1[i - 1] == s2[j - 1] ? 0 : 1;
-			idx_t adjacent_score1 = array.Score(i - 1, j) + 1;
-			idx_t adjacent_score2 = array.Score(i, j - 1) + 1;
-			idx_t adjacent_score3 = array.Score(i - 1, j - 1) + equal;
-
-			idx_t t = MinValue<idx_t>(adjacent_score1, adjacent_score2);
-			array.Score(i, j) = MinValue<idx_t>(t, adjacent_score3);
-		}
-	}
-	return array.Score(len1, len2);
-}
-
-vector<string> StringUtil::TopNLevenshtein(const vector<string> &strings, const string &target, idx_t n,
-                                           idx_t threshold) {
-	vector<pair<string, idx_t>> scores;
-	scores.reserve(strings.size());
-	for (auto &str : strings) {
-		scores.emplace_back(str, LevenshteinDistance(str, target));
-	}
-	return TopNStrings(scores, n, threshold);
-}
-
-string StringUtil::CandidatesMessage(const vector<string> &candidates, const string &candidate) {
-	string result_str;
-	if (!candidates.empty()) {
-		result_str = "\n" + candidate + ": ";
-		for (idx_t i = 0; i < candidates.size(); i++) {
-			if (i > 0) {
-				result_str += ", ";
-			}
-			result_str += "\"" + candidates[i] + "\"";
-		}
-	}
-	return result_str;
-}
-
-string StringUtil::CandidatesErrorMessage(const vector<string> &strings, const string &target,
-                                          const string &message_prefix, idx_t n) {
-	auto closest_strings = StringUtil::TopNLevenshtein(strings, target, n);
-	return StringUtil::CandidatesMessage(closest_strings, message_prefix);
-}
-
-} // namespace duckdb
-
-
-
-
-
-
-
-
-
-
-
-
-#include <sstream>
-
-namespace duckdb {
-
-RenderTree::RenderTree(idx_t width_p, idx_t height_p) : width(width_p), height(height_p) {
-	nodes = unique_ptr<unique_ptr<RenderTreeNode>[]>(new unique_ptr<RenderTreeNode>[(width + 1) * (height + 1)]);
-}
-
-RenderTreeNode *RenderTree::GetNode(idx_t x, idx_t y) {
-	if (x >= width || y >= height) {
-		return nullptr;
-	}
-	return nodes[GetPosition(x, y)].get();
-}
-
-bool RenderTree::HasNode(idx_t x, idx_t y) {
-	if (x >= width || y >= height) {
-		return false;
-	}
-	return nodes[GetPosition(x, y)].get() != nullptr;
-}
-
-idx_t RenderTree::GetPosition(idx_t x, idx_t y) {
-	return y * width + x;
-}
-
-void RenderTree::SetNode(idx_t x, idx_t y, unique_ptr<RenderTreeNode> node) {
-	nodes[GetPosition(x, y)] = move(node);
-}
-
-void TreeRenderer::RenderTopLayer(RenderTree &root, std::ostream &ss, idx_t y) {
-	for (idx_t x = 0; x < root.width; x++) {
-		if (x * config.NODE_RENDER_WIDTH >= config.MAXIMUM_RENDER_WIDTH) {
-			break;
-		}
-		if (root.HasNode(x, y)) {
-			ss << config.LTCORNER;
-			ss << StringUtil::Repeat(config.HORIZONTAL, config.NODE_RENDER_WIDTH / 2 - 1);
-			if (y == 0) {
-				// top level node: no node above this one
-				ss << config.HORIZONTAL;
-			} else {
-				// render connection to node above this one
-				ss << config.DMIDDLE;
-			}
-			ss << StringUtil::Repeat(config.HORIZONTAL, config.NODE_RENDER_WIDTH / 2 - 1);
-			ss << config.RTCORNER;
-		} else {
-			ss << StringUtil::Repeat(" ", config.NODE_RENDER_WIDTH);
-		}
-	}
-	ss << std::endl;
-}
-
-void TreeRenderer::RenderBottomLayer(RenderTree &root, std::ostream &ss, idx_t y) {
-	for (idx_t x = 0; x <= root.width; x++) {
-		if (x * config.NODE_RENDER_WIDTH >= config.MAXIMUM_RENDER_WIDTH) {
-			break;
-		}
-		if (root.HasNode(x, y)) {
-			ss << config.LDCORNER;
-			ss << StringUtil::Repeat(config.HORIZONTAL, config.NODE_RENDER_WIDTH / 2 - 1);
-			if (root.HasNode(x, y + 1)) {
-				// node below this one: connect to that one
-				ss << config.TMIDDLE;
-			} else {
-				// no node below this one: end the box
-				ss << config.HORIZONTAL;
-			}
-			ss << StringUtil::Repeat(config.HORIZONTAL, config.NODE_RENDER_WIDTH / 2 - 1);
-			ss << config.RDCORNER;
-		} else if (root.HasNode(x, y + 1)) {
-			ss << StringUtil::Repeat(" ", config.NODE_RENDER_WIDTH / 2);
-			ss << config.VERTICAL;
-			ss << StringUtil::Repeat(" ", config.NODE_RENDER_WIDTH / 2);
-		} else {
-			ss << StringUtil::Repeat(" ", config.NODE_RENDER_WIDTH);
-		}
-	}
-	ss << std::endl;
-}
-
-string AdjustTextForRendering(string source, idx_t max_render_width) {
-	idx_t cpos = 0;
-	idx_t render_width = 0;
-	vector<pair<idx_t, idx_t>> render_widths;
-	while (cpos < source.size()) {
-		idx_t char_render_width = Utf8Proc::RenderWidth(source.c_str(), source.size(), cpos);
-		cpos = Utf8Proc::NextGraphemeCluster(source.c_str(), source.size(), cpos);
-		render_width += char_render_width;
-		render_widths.emplace_back(cpos, render_width);
-		if (render_width > max_render_width) {
-			break;
-		}
-	}
-	if (render_width > max_render_width) {
-		// need to find a position to truncate
-		for (idx_t pos = render_widths.size(); pos > 0; pos--) {
-			if (render_widths[pos - 1].second < max_render_width - 4) {
-				return source.substr(0, render_widths[pos - 1].first) + "..." +
-				       string(max_render_width - render_widths[pos - 1].second - 3, ' ');
-			}
-		}
-		source = "...";
-	}
-	// need to pad with spaces
-	idx_t total_spaces = max_render_width - render_width;
-	idx_t half_spaces = total_spaces / 2;
-	idx_t extra_left_space = total_spaces % 2 == 0 ? 0 : 1;
-	return string(half_spaces + extra_left_space, ' ') + source + string(half_spaces, ' ');
-}
-
-static bool NodeHasMultipleChildren(RenderTree &root, idx_t x, idx_t y) {
-	for (; x < root.width && !root.HasNode(x + 1, y); x++) {
-		if (root.HasNode(x + 1, y + 1)) {
-			return true;
-		}
-	}
-	return false;
-}
-
-void TreeRenderer::RenderBoxContent(RenderTree &root, std::ostream &ss, idx_t y) {
-	// we first need to figure out how high our boxes are going to be
-	vector<vector<string>> extra_info;
-	idx_t extra_height = 0;
-	extra_info.resize(root.width);
-	for (idx_t x = 0; x < root.width; x++) {
-		auto node = root.GetNode(x, y);
-		if (node) {
-			SplitUpExtraInfo(node->extra_text, extra_info[x]);
-			if (extra_info[x].size() > extra_height) {
-				extra_height = extra_info[x].size();
-			}
-		}
-	}
-	extra_height = MinValue<idx_t>(extra_height, config.MAX_EXTRA_LINES);
-	idx_t halfway_point = (extra_height + 1) / 2;
-	// now we render the actual node
-	for (idx_t render_y = 0; render_y <= extra_height; render_y++) {
-		for (idx_t x = 0; x < root.width; x++) {
-			if (x * config.NODE_RENDER_WIDTH >= config.MAXIMUM_RENDER_WIDTH) {
-				break;
-			}
-			auto node = root.GetNode(x, y);
-			if (!node) {
-				if (render_y == halfway_point) {
-					bool has_child_to_the_right = NodeHasMultipleChildren(root, x, y);
-					if (root.HasNode(x, y + 1)) {
-						// node right below this one
-						ss << StringUtil::Repeat(config.HORIZONTAL, config.NODE_RENDER_WIDTH / 2);
-						ss << config.RTCORNER;
-						if (has_child_to_the_right) {
-							// but we have another child to the right! keep rendering the line
-							ss << StringUtil::Repeat(config.HORIZONTAL, config.NODE_RENDER_WIDTH / 2);
-						} else {
-							// only a child below this one: fill the rest with spaces
-							ss << StringUtil::Repeat(" ", config.NODE_RENDER_WIDTH / 2);
-						}
-					} else if (has_child_to_the_right) {
-						// child to the right, but no child right below this one: render a full line
-						ss << StringUtil::Repeat(config.HORIZONTAL, config.NODE_RENDER_WIDTH);
-					} else {
-						// empty spot: render spaces
-						ss << StringUtil::Repeat(" ", config.NODE_RENDER_WIDTH);
-					}
-				} else if (render_y >= halfway_point) {
-					if (root.HasNode(x, y + 1)) {
-						// we have a node below this empty spot: render a vertical line
-						ss << StringUtil::Repeat(" ", config.NODE_RENDER_WIDTH / 2);
-						ss << config.VERTICAL;
-						ss << StringUtil::Repeat(" ", config.NODE_RENDER_WIDTH / 2);
-					} else {
-						// empty spot: render spaces
-						ss << StringUtil::Repeat(" ", config.NODE_RENDER_WIDTH);
-					}
-				} else {
-					// empty spot: render spaces
-					ss << StringUtil::Repeat(" ", config.NODE_RENDER_WIDTH);
-				}
-			} else {
-				ss << config.VERTICAL;
-				// figure out what to render
-				string render_text;
-				if (render_y == 0) {
-					render_text = node->name;
-				} else {
-					if (render_y <= extra_info[x].size()) {
-						render_text = extra_info[x][render_y - 1];
-					}
-				}
-				render_text = AdjustTextForRendering(render_text, config.NODE_RENDER_WIDTH - 2);
-				ss << render_text;
-
-				if (render_y == halfway_point && NodeHasMultipleChildren(root, x, y)) {
-					ss << config.LMIDDLE;
-				} else {
-					ss << config.VERTICAL;
-				}
-			}
-		}
-		ss << std::endl;
-	}
-}
-
-string TreeRenderer::ToString(const LogicalOperator &op) {
-	std::stringstream ss;
-	Render(op, ss);
-	return ss.str();
-}
-
-string TreeRenderer::ToString(const PhysicalOperator &op) {
-	std::stringstream ss;
-	Render(op, ss);
-	return ss.str();
-}
-
-string TreeRenderer::ToString(const QueryProfiler::TreeNode &op) {
-	std::stringstream ss;
-	Render(op, ss);
-	return ss.str();
-}
-
-string TreeRenderer::ToString(const Pipeline &op) {
-	std::stringstream ss;
-	Render(op, ss);
-	return ss.str();
-}
-
-void TreeRenderer::Render(const LogicalOperator &op, std::ostream &ss) {
-	auto tree = CreateTree(op);
-	ToStream(*tree, ss);
-}
-
-void TreeRenderer::Render(const PhysicalOperator &op, std::ostream &ss) {
-	auto tree = CreateTree(op);
-	ToStream(*tree, ss);
-}
-
-void TreeRenderer::Render(const QueryProfiler::TreeNode &op, std::ostream &ss) {
-	auto tree = CreateTree(op);
-	ToStream(*tree, ss);
-}
-
-void TreeRenderer::Render(const Pipeline &op, std::ostream &ss) {
-	auto tree = CreateTree(op);
-	ToStream(*tree, ss);
-}
-
-void TreeRenderer::ToStream(RenderTree &root, std::ostream &ss) {
-	while (root.width * config.NODE_RENDER_WIDTH > config.MAXIMUM_RENDER_WIDTH) {
-		if (config.NODE_RENDER_WIDTH - 2 < config.MINIMUM_RENDER_WIDTH) {
-			break;
-		}
-		config.NODE_RENDER_WIDTH -= 2;
-	}
-
-	for (idx_t y = 0; y < root.height; y++) {
-		// start by rendering the top layer
-		RenderTopLayer(root, ss, y);
-		// now we render the content of the boxes
-		RenderBoxContent(root, ss, y);
-		// render the bottom layer of each of the boxes
-		RenderBottomLayer(root, ss, y);
-	}
-}
-
-bool TreeRenderer::CanSplitOnThisChar(char l) {
-	return (l < '0' || (l > '9' && l < 'A') || (l > 'Z' && l < 'a')) && l != '_';
-}
-
-bool TreeRenderer::IsPadding(char l) {
-	return l == ' ' || l == '\t' || l == '\n' || l == '\r';
-}
-
-string TreeRenderer::RemovePadding(string l) {
-	idx_t start = 0, end = l.size();
-	while (start < l.size() && IsPadding(l[start])) {
-		start++;
-	}
-	while (end > 0 && IsPadding(l[end - 1])) {
-		end--;
-	}
-	return l.substr(start, end - start);
-}
-
-void TreeRenderer::SplitStringBuffer(const string &source, vector<string> &result) {
-	D_ASSERT(Utf8Proc::IsValid(source.c_str(), source.size()));
-	idx_t max_line_render_size = config.NODE_RENDER_WIDTH - 2;
-	// utf8 in prompt, get render width
-	idx_t cpos = 0;
-	idx_t start_pos = 0;
-	idx_t render_width = 0;
-	idx_t last_possible_split = 0;
-	while (cpos < source.size()) {
-		// check if we can split on this character
-		if (CanSplitOnThisChar(source[cpos])) {
-			last_possible_split = cpos;
-		}
-		size_t char_render_width = Utf8Proc::RenderWidth(source.c_str(), source.size(), cpos);
-		idx_t next_cpos = Utf8Proc::NextGraphemeCluster(source.c_str(), source.size(), cpos);
-		if (render_width + char_render_width > max_line_render_size) {
-			if (last_possible_split <= start_pos + 8) {
-				last_possible_split = cpos;
-			}
-			result.push_back(source.substr(start_pos, last_possible_split - start_pos));
-			start_pos = last_possible_split;
-			cpos = last_possible_split;
-			render_width = 0;
-		}
-		cpos = next_cpos;
-		render_width += char_render_width;
-	}
-	if (source.size() > start_pos) {
-		result.push_back(source.substr(start_pos, source.size() - start_pos));
-	}
-}
-
-void TreeRenderer::SplitUpExtraInfo(const string &extra_info, vector<string> &result) {
-	if (extra_info.empty()) {
-		return;
-	}
-	if (!Utf8Proc::IsValid(extra_info.c_str(), extra_info.size())) {
-		return;
-	}
-	auto splits = StringUtil::Split(extra_info, "\n");
-	if (!splits.empty() && splits[0] != "[INFOSEPARATOR]") {
-		result.push_back(ExtraInfoSeparator());
-	}
-	for (auto &split : splits) {
-		if (split == "[INFOSEPARATOR]") {
-			result.push_back(ExtraInfoSeparator());
-			continue;
-		}
-		string str = RemovePadding(split);
-		if (str.empty()) {
-			continue;
-		}
-		SplitStringBuffer(str, result);
-	}
-}
-
-string TreeRenderer::ExtraInfoSeparator() {
-	return StringUtil::Repeat(string(config.HORIZONTAL) + " ", (config.NODE_RENDER_WIDTH - 7) / 2);
-}
-
-unique_ptr<RenderTreeNode> TreeRenderer::CreateRenderNode(string name, string extra_info) {
-	auto result = make_unique<RenderTreeNode>();
-	result->name = move(name);
-	result->extra_text = move(extra_info);
-	return result;
-}
-
-class TreeChildrenIterator {
-public:
-	template <class T>
-	static bool HasChildren(const T &op) {
-		return !op.children.empty();
-	}
-	template <class T>
-	static void Iterate(const T &op, const std::function<void(const T &child)> &callback) {
-		for (auto &child : op.children) {
-			callback(*child);
-		}
-	}
-};
-
-template <>
-bool TreeChildrenIterator::HasChildren(const PhysicalOperator &op) {
-	if (op.type == PhysicalOperatorType::DELIM_JOIN) {
-		return true;
-	}
-	return !op.children.empty();
-}
-template <>
-void TreeChildrenIterator::Iterate(const PhysicalOperator &op,
-                                   const std::function<void(const PhysicalOperator &child)> &callback) {
-	for (auto &child : op.children) {
-		callback(*child);
-	}
-	if (op.type == PhysicalOperatorType::DELIM_JOIN) {
-		auto &delim = (PhysicalDelimJoin &)op;
-		callback(*delim.join);
-	}
-}
-
-struct PipelineRenderNode {
-	explicit PipelineRenderNode(PhysicalOperator &op) : op(op) {
-	}
-
-	PhysicalOperator &op;
-	unique_ptr<PipelineRenderNode> child;
-};
-
-template <>
-bool TreeChildrenIterator::HasChildren(const PipelineRenderNode &op) {
-	return op.child.get();
-}
-
-template <>
-void TreeChildrenIterator::Iterate(const PipelineRenderNode &op,
-                                   const std::function<void(const PipelineRenderNode &child)> &callback) {
-	if (op.child) {
-		callback(*op.child);
-	}
-}
-
-template <class T>
-static void GetTreeWidthHeight(const T &op, idx_t &width, idx_t &height) {
-	if (!TreeChildrenIterator::HasChildren(op)) {
-		width = 1;
-		height = 1;
-		return;
-	}
-	width = 0;
-	height = 0;
-
-	TreeChildrenIterator::Iterate<T>(op, [&](const T &child) {
-		idx_t child_width, child_height;
-		GetTreeWidthHeight<T>(child, child_width, child_height);
-		width += child_width;
-		height = MaxValue<idx_t>(height, child_height);
-	});
-	height++;
-}
-
-template <class T>
-idx_t TreeRenderer::CreateRenderTreeRecursive(RenderTree &result, const T &op, idx_t x, idx_t y) {
-	auto node = TreeRenderer::CreateNode(op);
-	result.SetNode(x, y, move(node));
-
-	if (!TreeChildrenIterator::HasChildren(op)) {
-		return 1;
-	}
-	idx_t width = 0;
-	// render the children of this node
-	TreeChildrenIterator::Iterate<T>(
-	    op, [&](const T &child) { width += CreateRenderTreeRecursive<T>(result, child, x + width, y + 1); });
-	return width;
-}
-
-template <class T>
-unique_ptr<RenderTree> TreeRenderer::CreateRenderTree(const T &op) {
-	idx_t width, height;
-	GetTreeWidthHeight<T>(op, width, height);
-
-	auto result = make_unique<RenderTree>(width, height);
-
-	// now fill in the tree
-	CreateRenderTreeRecursive<T>(*result, op, 0, 0);
-	return result;
-}
-
-unique_ptr<RenderTreeNode> TreeRenderer::CreateNode(const LogicalOperator &op) {
-	return CreateRenderNode(op.GetName(), op.ParamsToString());
-}
-
-unique_ptr<RenderTreeNode> TreeRenderer::CreateNode(const PhysicalOperator &op) {
-	return CreateRenderNode(op.GetName(), op.ParamsToString());
-}
-
-unique_ptr<RenderTreeNode> TreeRenderer::CreateNode(const PipelineRenderNode &op) {
-	return CreateNode(op.op);
-}
-
-string TreeRenderer::ExtractExpressionsRecursive(ExpressionInfo &state) {
-	string result = "\n[INFOSEPARATOR]";
-	result += "\n" + state.function_name;
-	result += "\n" + StringUtil::Format("%.9f", double(state.function_time));
-	if (state.children.empty()) {
-		return result;
-	}
-	// render the children of this node
-	for (auto &child : state.children) {
-		result += ExtractExpressionsRecursive(*child);
-	}
-	return result;
-}
-
-unique_ptr<RenderTreeNode> TreeRenderer::CreateNode(const QueryProfiler::TreeNode &op) {
-	auto result = TreeRenderer::CreateRenderNode(op.name, op.extra_info);
-	result->extra_text += "\n[INFOSEPARATOR]";
-	result->extra_text += "\n" + to_string(op.info.elements);
-	string timing = StringUtil::Format("%.2f", op.info.time);
-	result->extra_text += "\n(" + timing + "s)";
-	if (config.detailed) {
-		for (auto &info : op.info.executors_info) {
-			if (!info) {
-				continue;
-			}
-			for (auto &executor_info : info->roots) {
-				string sample_count = to_string(executor_info->sample_count);
-				result->extra_text += "\n[INFOSEPARATOR]";
-				result->extra_text += "\nsample_count: " + sample_count;
-				string sample_tuples_count = to_string(executor_info->sample_tuples_count);
-				result->extra_text += "\n[INFOSEPARATOR]";
-				result->extra_text += "\nsample_tuples_count: " + sample_tuples_count;
-				string total_count = to_string(executor_info->total_count);
-				result->extra_text += "\n[INFOSEPARATOR]";
-				result->extra_text += "\ntotal_count: " + total_count;
-				for (auto &state : executor_info->root->children) {
-					result->extra_text += ExtractExpressionsRecursive(*state);
-				}
-			}
-		}
-	}
-	return result;
-}
-
-unique_ptr<RenderTree> TreeRenderer::CreateTree(const LogicalOperator &op) {
-	return CreateRenderTree<LogicalOperator>(op);
-}
-
-unique_ptr<RenderTree> TreeRenderer::CreateTree(const PhysicalOperator &op) {
-	return CreateRenderTree<PhysicalOperator>(op);
-}
-
-unique_ptr<RenderTree> TreeRenderer::CreateTree(const QueryProfiler::TreeNode &op) {
-	return CreateRenderTree<QueryProfiler::TreeNode>(op);
-}
-
-unique_ptr<RenderTree> TreeRenderer::CreateTree(const Pipeline &op) {
-	auto operators = op.GetOperators();
-	D_ASSERT(!operators.empty());
-	unique_ptr<PipelineRenderNode> node;
-	for (auto &op : operators) {
-		auto new_node = make_unique<PipelineRenderNode>(*op);
-		new_node->child = move(node);
-		node = move(new_node);
-	}
-	return CreateRenderTree<PipelineRenderNode>(*node);
-}
-
-} // namespace duckdb
-
-
-
-namespace duckdb {
-
-BatchedChunkCollection::BatchedChunkCollection(Allocator &allocator) : allocator(allocator) {
-}
-
-void BatchedChunkCollection::Append(DataChunk &input, idx_t batch_index) {
-	D_ASSERT(batch_index != DConstants::INVALID_INDEX);
-	auto entry = data.find(batch_index);
-	ChunkCollection *collection;
-	if (entry == data.end()) {
-		auto new_collection = make_unique<ChunkCollection>(allocator);
-		collection = new_collection.get();
-		data.insert(make_pair(batch_index, move(new_collection)));
-	} else {
-		collection = entry->second.get();
-	}
-	collection->Append(input);
-}
-
-void BatchedChunkCollection::Merge(BatchedChunkCollection &other) {
-	for (auto &entry : other.data) {
-		if (data.find(entry.first) != data.end()) {
-			throw InternalException(
-			    "BatchChunkCollection::Merge error - batch index %d is present in both collections. This occurs when "
-			    "batch indexes are not uniquely distributed over threads",
-			    entry.first);
-		}
-		data[entry.first] = move(entry.second);
-	}
-	other.data.clear();
-}
-
-void BatchedChunkCollection::InitializeScan(BatchedChunkScanState &state) {
-	state.iterator = data.begin();
-	state.chunk_index = 0;
-}
-
-void BatchedChunkCollection::Scan(BatchedChunkScanState &state, DataChunk &output) {
-	while (state.iterator != data.end()) {
-		// check if there is a chunk remaining in this collection
-		auto collection = state.iterator->second.get();
-		if (state.chunk_index < collection->ChunkCount()) {
-			// there is! increment the chunk count
-			output.Reference(collection->GetChunk(state.chunk_index));
-			state.chunk_index++;
-			return;
-		}
-		// there isn't! move to the next collection
-		state.iterator++;
-		state.chunk_index = 0;
-	}
-}
-
-string BatchedChunkCollection::ToString() const {
-	string result;
-	result += "Batched Chunk Collection\n";
-	for (auto &entry : data) {
-		result += "Batch Index - " + to_string(entry.first) + "\n";
-		result += entry.second->ToString() + "\n\n";
-	}
-	return result;
-}
-
-void BatchedChunkCollection::Print() const {
-	Printer::Print(ToString());
-}
-
-} // namespace duckdb
-
-
-
-
-
-
-
-namespace duckdb {
-
-constexpr const char *Blob::HEX_TABLE;
-const int Blob::HEX_MAP[256] = {
-    -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
-    -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, 0,  1,  2,  3,  4,  5,  6,  7,  8,  9,
-    -1, -1, -1, -1, -1, -1, -1, 10, 11, 12, 13, 14, 15, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
-    -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, 10, 11, 12, 13, 14, 15, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
-    -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
-    -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
-    -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
-    -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
-    -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1};
-
-idx_t Blob::GetStringSize(string_t blob) {
-	auto data = (const_data_ptr_t)blob.GetDataUnsafe();
-	auto len = blob.GetSize();
-	idx_t str_len = 0;
-	for (idx_t i = 0; i < len; i++) {
-		if (data[i] >= 32 && data[i] <= 127 && data[i] != '\\') {
-			// ascii characters are rendered as-is
-			str_len++;
-		} else {
-			// non-ascii characters are rendered as hexadecimal (e.g. \x00)
-			str_len += 4;
-		}
-	}
-	return str_len;
-}
-
-void Blob::ToString(string_t blob, char *output) {
-	auto data = (const_data_ptr_t)blob.GetDataUnsafe();
-	auto len = blob.GetSize();
-	idx_t str_idx = 0;
-	for (idx_t i = 0; i < len; i++) {
-		if (data[i] >= 32 && data[i] <= 127 && data[i] != '\\') {
-			// ascii characters are rendered as-is
-			output[str_idx++] = data[i];
-		} else {
-			auto byte_a = data[i] >> 4;
-			auto byte_b = data[i] & 0x0F;
-			D_ASSERT(byte_a >= 0 && byte_a < 16);
-			D_ASSERT(byte_b >= 0 && byte_b < 16);
-			// non-ascii characters are rendered as hexadecimal (e.g. \x00)
-			output[str_idx++] = '\\';
-			output[str_idx++] = 'x';
-			output[str_idx++] = Blob::HEX_TABLE[byte_a];
-			output[str_idx++] = Blob::HEX_TABLE[byte_b];
-		}
-	}
-	D_ASSERT(str_idx == GetStringSize(blob));
-}
-
-string Blob::ToString(string_t blob) {
-	auto str_len = GetStringSize(blob);
-	auto buffer = std::unique_ptr<char[]>(new char[str_len]);
-	Blob::ToString(blob, buffer.get());
-	return string(buffer.get(), str_len);
-}
-
-bool Blob::TryGetBlobSize(string_t str, idx_t &str_len, string *error_message) {
-	auto data = (const_data_ptr_t)str.GetDataUnsafe();
-	auto len = str.GetSize();
-	str_len = 0;
-	for (idx_t i = 0; i < len; i++) {
-		if (data[i] == '\\') {
-			if (i + 3 >= len) {
-				string error = "Invalid hex escape code encountered in string -> blob conversion: "
-				               "unterminated escape code at end of blob";
-				HandleCastError::AssignError(error, error_message);
-				return false;
-			}
-			if (data[i + 1] != 'x' || Blob::HEX_MAP[data[i + 2]] < 0 || Blob::HEX_MAP[data[i + 3]] < 0) {
-				string error =
-				    StringUtil::Format("Invalid hex escape code encountered in string -> blob conversion: %s",
-				                       string((char *)data + i, 4));
-				HandleCastError::AssignError(error, error_message);
-				return false;
-			}
-			str_len++;
-			i += 3;
-		} else if (data[i] >= 32 && data[i] <= 127) {
-			str_len++;
-		} else {
-			string error = "Invalid byte encountered in STRING -> BLOB conversion. All non-ascii characters "
-			               "must be escaped with hex codes (e.g. \\xAA)";
-			HandleCastError::AssignError(error, error_message);
-			return false;
-		}
-	}
-	return true;
-}
-
-idx_t Blob::GetBlobSize(string_t str) {
-	string error_message;
-	idx_t str_len;
-	if (!Blob::TryGetBlobSize(str, str_len, &error_message)) {
-		throw ConversionException(error_message);
-	}
-	return str_len;
-}
-
-void Blob::ToBlob(string_t str, data_ptr_t output) {
-	auto data = (const_data_ptr_t)str.GetDataUnsafe();
-	auto len = str.GetSize();
-	idx_t blob_idx = 0;
-	for (idx_t i = 0; i < len; i++) {
-		if (data[i] == '\\') {
-			int byte_a = Blob::HEX_MAP[data[i + 2]];
-			int byte_b = Blob::HEX_MAP[data[i + 3]];
-			D_ASSERT(i + 3 < len);
-			D_ASSERT(byte_a >= 0 && byte_b >= 0);
-			D_ASSERT(data[i + 1] == 'x');
-			output[blob_idx++] = (byte_a << 4) + byte_b;
-			i += 3;
-		} else if (data[i] >= 32 && data[i] <= 127) {
-			output[blob_idx++] = data_t(data[i]);
-		} else {
-			throw ConversionException("Invalid byte encountered in STRING -> BLOB conversion. All non-ascii characters "
-			                          "must be escaped with hex codes (e.g. \\xAA)");
-		}
-	}
-	D_ASSERT(blob_idx == GetBlobSize(str));
-}
-
-string Blob::ToBlob(string_t str) {
-	auto blob_len = GetBlobSize(str);
-	auto buffer = std::unique_ptr<char[]>(new char[blob_len]);
-	Blob::ToBlob(str, (data_ptr_t)buffer.get());
-	return string(buffer.get(), blob_len);
-}
-
-// base64 functions are adapted from https://gist.github.com/tomykaira/f0fd86b6c73063283afe550bc5d77594
-idx_t Blob::ToBase64Size(string_t blob) {
-	// every 4 characters in base64 encode 3 bytes, plus (potential) padding at the end
-	auto input_size = blob.GetSize();
-	return ((input_size + 2) / 3) * 4;
-}
-
-void Blob::ToBase64(string_t blob, char *output) {
-	auto input_data = (const_data_ptr_t)blob.GetDataUnsafe();
-	auto input_size = blob.GetSize();
-	idx_t out_idx = 0;
-	idx_t i;
-	// convert the bulk of the string to base64
-	// this happens in steps of 3 bytes -> 4 output bytes
-	for (i = 0; i + 2 < input_size; i += 3) {
-		output[out_idx++] = Blob::BASE64_MAP[(input_data[i] >> 2) & 0x3F];
-		output[out_idx++] = Blob::BASE64_MAP[((input_data[i] & 0x3) << 4) | ((input_data[i + 1] & 0xF0) >> 4)];
-		output[out_idx++] = Blob::BASE64_MAP[((input_data[i + 1] & 0xF) << 2) | ((input_data[i + 2] & 0xC0) >> 6)];
-		output[out_idx++] = Blob::BASE64_MAP[input_data[i + 2] & 0x3F];
-	}
-
-	if (i < input_size) {
-		// there are one or two bytes left over: we have to insert padding
-		// first write the first 6 bits of the first byte
-		output[out_idx++] = Blob::BASE64_MAP[(input_data[i] >> 2) & 0x3F];
-		// now check the character count
-		if (i == input_size - 1) {
-			// single byte left over: convert the remainder of that byte and insert padding
-			output[out_idx++] = Blob::BASE64_MAP[((input_data[i] & 0x3) << 4)];
-			output[out_idx++] = Blob::BASE64_PADDING;
-		} else {
-			// two bytes left over: convert the second byte as well
-			output[out_idx++] = Blob::BASE64_MAP[((input_data[i] & 0x3) << 4) | ((input_data[i + 1] & 0xF0) >> 4)];
-			output[out_idx++] = Blob::BASE64_MAP[((input_data[i + 1] & 0xF) << 2)];
-		}
-		output[out_idx++] = Blob::BASE64_PADDING;
-	}
-}
-
-static constexpr int BASE64_DECODING_TABLE[256] = {
-    -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
-    -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, 62, -1, -1, -1, 63, 52, 53, 54, 55, 56, 57, 58, 59, 60, 61,
-    -1, -1, -1, -1, -1, -1, -1, 0,  1,  2,  3,  4,  5,  6,  7,  8,  9,  10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21,
-    22, 23, 24, 25, -1, -1, -1, -1, -1, -1, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40, 41, 42, 43, 44,
-    45, 46, 47, 48, 49, 50, 51, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
-    -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
-    -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
-    -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
-    -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1};
-
-idx_t Blob::FromBase64Size(string_t str) {
-	auto input_data = str.GetDataUnsafe();
-	auto input_size = str.GetSize();
-	if (input_size % 4 != 0) {
-		// valid base64 needs to always be cleanly divisible by 4
-		throw ConversionException("Could not decode string \"%s\" as base64: length must be a multiple of 4",
-		                          str.GetString());
-	}
-	if (input_size < 4) {
-		// empty string
-		return 0;
-	}
-	auto base_size = input_size / 4 * 3;
-	// check for padding to figure out the length
-	if (input_data[input_size - 2] == Blob::BASE64_PADDING) {
-		// two bytes of padding
-		return base_size - 2;
-	}
-	if (input_data[input_size - 1] == Blob::BASE64_PADDING) {
-		// one byte of padding
-		return base_size - 1;
-	}
-	// no padding
-	return base_size;
-}
-
-template <bool ALLOW_PADDING>
-uint32_t DecodeBase64Bytes(const string_t &str, const_data_ptr_t input_data, idx_t base_idx) {
-	int decoded_bytes[4];
-	for (idx_t decode_idx = 0; decode_idx < 4; decode_idx++) {
-		if (ALLOW_PADDING && decode_idx >= 2 && input_data[base_idx + decode_idx] == Blob::BASE64_PADDING) {
-			// the last two bytes of a base64 string can have padding: in this case we set the byte to 0
-			decoded_bytes[decode_idx] = 0;
-		} else {
-			decoded_bytes[decode_idx] = BASE64_DECODING_TABLE[input_data[base_idx + decode_idx]];
-		}
-		if (decoded_bytes[decode_idx] < 0) {
-			throw ConversionException(
-			    "Could not decode string \"%s\" as base64: invalid byte value '%d' at position %d", str.GetString(),
-			    input_data[base_idx + decode_idx], base_idx + decode_idx);
-		}
-	}
-	return (decoded_bytes[0] << 3 * 6) + (decoded_bytes[1] << 2 * 6) + (decoded_bytes[2] << 1 * 6) +
-	       (decoded_bytes[3] << 0 * 6);
-}
-
-void Blob::FromBase64(string_t str, data_ptr_t output, idx_t output_size) {
-	D_ASSERT(output_size == FromBase64Size(str));
-	auto input_data = (const_data_ptr_t)str.GetDataUnsafe();
-	auto input_size = str.GetSize();
-	if (input_size == 0) {
-		return;
-	}
-	idx_t out_idx = 0;
-	idx_t i = 0;
-	for (i = 0; i + 4 < input_size; i += 4) {
-		auto combined = DecodeBase64Bytes<false>(str, input_data, i);
-		output[out_idx++] = (combined >> 2 * 8) & 0xFF;
-		output[out_idx++] = (combined >> 1 * 8) & 0xFF;
-		output[out_idx++] = (combined >> 0 * 8) & 0xFF;
-	}
-	// decode the final four bytes: padding is allowed here
-	auto combined = DecodeBase64Bytes<true>(str, input_data, i);
-	output[out_idx++] = (combined >> 2 * 8) & 0xFF;
-	if (out_idx < output_size) {
-		output[out_idx++] = (combined >> 1 * 8) & 0xFF;
-	}
-	if (out_idx < output_size) {
-		output[out_idx++] = (combined >> 0 * 8) & 0xFF;
-	}
-}
-
-} // namespace duckdb
-
-
-
-namespace duckdb {
-
-const int64_t NumericHelper::POWERS_OF_TEN[] {1,
-                                              10,
-                                              100,
-                                              1000,
-                                              10000,
-                                              100000,
-                                              1000000,
-                                              10000000,
-                                              100000000,
-                                              1000000000,
-                                              10000000000,
-                                              100000000000,
-                                              1000000000000,
-                                              10000000000000,
-                                              100000000000000,
-                                              1000000000000000,
-                                              10000000000000000,
-                                              100000000000000000,
-                                              1000000000000000000};
-
-const double NumericHelper::DOUBLE_POWERS_OF_TEN[] {1e0,  1e1,  1e2,  1e3,  1e4,  1e5,  1e6,  1e7,  1e8,  1e9,
-                                                    1e10, 1e11, 1e12, 1e13, 1e14, 1e15, 1e16, 1e17, 1e18, 1e19,
-                                                    1e20, 1e21, 1e22, 1e23, 1e24, 1e25, 1e26, 1e27, 1e28, 1e29,
-                                                    1e30, 1e31, 1e32, 1e33, 1e34, 1e35, 1e36, 1e37, 1e38, 1e39};
-
-template <>
-int NumericHelper::UnsignedLength(uint8_t value) {
-	int length = 1;
-	length += value >= 10;
-	length += value >= 100;
-	return length;
-}
-
-template <>
-int NumericHelper::UnsignedLength(uint16_t value) {
-	int length = 1;
-	length += value >= 10;
-	length += value >= 100;
-	length += value >= 1000;
-	length += value >= 10000;
-	return length;
-}
-
-template <>
-int NumericHelper::UnsignedLength(uint32_t value) {
-	if (value >= 10000) {
-		int length = 5;
-		length += value >= 100000;
-		length += value >= 1000000;
-		length += value >= 10000000;
-		length += value >= 100000000;
-		length += value >= 1000000000;
-		return length;
-	} else {
-		int length = 1;
-		length += value >= 10;
-		length += value >= 100;
-		length += value >= 1000;
-		return length;
-	}
-}
-
-template <>
-int NumericHelper::UnsignedLength(uint64_t value) {
-	if (value >= 10000000000ULL) {
-		if (value >= 1000000000000000ULL) {
-			int length = 16;
-			length += value >= 10000000000000000ULL;
-			length += value >= 100000000000000000ULL;
-			length += value >= 1000000000000000000ULL;
-			length += value >= 10000000000000000000ULL;
-			return length;
-		} else {
-			int length = 11;
-			length += value >= 100000000000ULL;
-			length += value >= 1000000000000ULL;
-			length += value >= 10000000000000ULL;
-			length += value >= 100000000000000ULL;
-			return length;
-		}
-	} else {
-		if (value >= 100000ULL) {
-			int length = 6;
-			length += value >= 1000000ULL;
-			length += value >= 10000000ULL;
-			length += value >= 100000000ULL;
-			length += value >= 1000000000ULL;
-			return length;
-		} else {
-			int length = 1;
-			length += value >= 10ULL;
-			length += value >= 100ULL;
-			length += value >= 1000ULL;
-			length += value >= 10000ULL;
-			return length;
-		}
-	}
-}
-
-template <>
-std::string NumericHelper::ToString(hugeint_t value) {
-	return Hugeint::ToString(value);
-}
-
-} // namespace duckdb
-
-
-
-
-
-
-
-
-
-
-#include <algorithm>
-#include <cstring>
-
-namespace duckdb {
-
-ChunkCollection::ChunkCollection(Allocator &allocator) : allocator(allocator), count(0) {
-}
-
-ChunkCollection::ChunkCollection(ClientContext &context) : ChunkCollection(Allocator::Get(context)) {
-}
-
-void ChunkCollection::Verify() {
-#ifdef DEBUG
-	for (auto &chunk : chunks) {
-		chunk->Verify();
-	}
-#endif
-}
-
-void ChunkCollection::Append(ChunkCollection &other) {
-	for (auto &chunk : other.chunks) {
-		Append(*chunk);
-	}
-}
-
-void ChunkCollection::Merge(ChunkCollection &other) {
-	if (other.count == 0) {
-		return;
-	}
-	if (count == 0) {
-		chunks = move(other.chunks);
-		types = move(other.types);
-		count = other.count;
-		return;
-	}
-	unique_ptr<DataChunk> old_back;
-	if (!chunks.empty() && chunks.back()->size() != STANDARD_VECTOR_SIZE) {
-		old_back = move(chunks.back());
-		chunks.pop_back();
-		count -= old_back->size();
-	}
-	for (auto &chunk : other.chunks) {
-		chunks.push_back(move(chunk));
-	}
-	count += other.count;
-	if (old_back) {
-		Append(*old_back);
-	}
-	Verify();
-}
-
-void ChunkCollection::Append(DataChunk &new_chunk) {
-	if (new_chunk.size() == 0) {
-		return;
-	}
-	new_chunk.Verify();
-
-	// we have to ensure that every chunk in the ChunkCollection is completely
-	// filled, otherwise our O(1) lookup in GetValue and SetValue does not work
-	// first fill the latest chunk, if it exists
-	count += new_chunk.size();
-
-	idx_t remaining_data = new_chunk.size();
-	idx_t offset = 0;
-	if (chunks.empty()) {
-		// first chunk
-		types = new_chunk.GetTypes();
-	} else {
-		// the types of the new chunk should match the types of the previous one
-		D_ASSERT(types.size() == new_chunk.ColumnCount());
-		auto new_types = new_chunk.GetTypes();
-		for (idx_t i = 0; i < types.size(); i++) {
-			if (new_types[i] != types[i]) {
-				throw TypeMismatchException(new_types[i], types[i], "Type mismatch when combining rows");
-			}
-			if (types[i].InternalType() == PhysicalType::LIST) {
-				// need to check all the chunks because they can have only-null list entries
-				for (auto &chunk : chunks) {
-					auto &chunk_vec = chunk->data[i];
-					auto &new_vec = new_chunk.data[i];
-					auto &chunk_type = chunk_vec.GetType();
-					auto &new_type = new_vec.GetType();
-					if (chunk_type != new_type) {
-						throw TypeMismatchException(chunk_type, new_type, "Type mismatch when combining lists");
-					}
-				}
-			}
-			// TODO check structs, too
-		}
-
-		// first append data to the current chunk
-		DataChunk &last_chunk = *chunks.back();
-		idx_t added_data = MinValue<idx_t>(remaining_data, STANDARD_VECTOR_SIZE - last_chunk.size());
-		if (added_data > 0) {
-			// copy <added_data> elements to the last chunk
-			new_chunk.Normalify();
-			// have to be careful here: setting the cardinality without calling normalify can cause incorrect partial
-			// decompression
-			idx_t old_count = new_chunk.size();
-			new_chunk.SetCardinality(added_data);
-
-			last_chunk.Append(new_chunk);
-			remaining_data -= added_data;
-			// reset the chunk to the old data
-			new_chunk.SetCardinality(old_count);
-			offset = added_data;
-		}
-	}
-
-	if (remaining_data > 0) {
-		// create a new chunk and fill it with the remainder
-		auto chunk = make_unique<DataChunk>();
-		chunk->Initialize(allocator, types);
-		new_chunk.Copy(*chunk, offset);
-		chunks.push_back(move(chunk));
-	}
-}
-
-void ChunkCollection::Append(unique_ptr<DataChunk> new_chunk) {
-	if (types.empty()) {
-		types = new_chunk->GetTypes();
-	}
-	D_ASSERT(types == new_chunk->GetTypes());
-	count += new_chunk->size();
-	chunks.push_back(move(new_chunk));
-}
-
-void ChunkCollection::Fuse(ChunkCollection &other) {
-	if (count == 0) {
-		chunks.reserve(other.ChunkCount());
-		for (idx_t chunk_idx = 0; chunk_idx < other.ChunkCount(); ++chunk_idx) {
-			auto lhs = make_unique<DataChunk>();
-			auto &rhs = other.GetChunk(chunk_idx);
-			lhs->data.reserve(rhs.data.size());
-			for (auto &v : rhs.data) {
-				lhs->data.emplace_back(Vector(v));
-			}
-			lhs->SetCardinality(rhs.size());
-			chunks.push_back(move(lhs));
-		}
-		count = other.Count();
-	} else {
-		D_ASSERT(this->ChunkCount() == other.ChunkCount());
-		for (idx_t chunk_idx = 0; chunk_idx < ChunkCount(); ++chunk_idx) {
-			auto &lhs = this->GetChunk(chunk_idx);
-			auto &rhs = other.GetChunk(chunk_idx);
-			D_ASSERT(lhs.size() == rhs.size());
-			for (auto &v : rhs.data) {
-				lhs.data.emplace_back(Vector(v));
-			}
-		}
-	}
-	types.insert(types.end(), other.types.begin(), other.types.end());
-}
-
-// returns an int similar to a C comparator:
-// -1 if left < right
-// 0 if left == right
-// 1 if left > right
-
-template <class TYPE>
-static int8_t TemplatedCompareValue(Vector &left_vec, Vector &right_vec, idx_t left_idx, idx_t right_idx) {
-	D_ASSERT(left_vec.GetType() == right_vec.GetType());
-	auto left_val = FlatVector::GetData<TYPE>(left_vec)[left_idx];
-	auto right_val = FlatVector::GetData<TYPE>(right_vec)[right_idx];
-	if (Equals::Operation<TYPE>(left_val, right_val)) {
-		return 0;
-	}
-	if (LessThan::Operation<TYPE>(left_val, right_val)) {
-		return -1;
-	}
-	return 1;
-}
-
-// return type here is int32 because strcmp() on some platforms returns rather large values
-static int32_t CompareValue(Vector &left_vec, Vector &right_vec, idx_t vector_idx_left, idx_t vector_idx_right,
-                            OrderByNullType null_order) {
-	auto left_null = FlatVector::IsNull(left_vec, vector_idx_left);
-	auto right_null = FlatVector::IsNull(right_vec, vector_idx_right);
-
-	if (left_null && right_null) {
-		return 0;
-	} else if (right_null) {
-		return null_order == OrderByNullType::NULLS_FIRST ? 1 : -1;
-	} else if (left_null) {
-		return null_order == OrderByNullType::NULLS_FIRST ? -1 : 1;
-	}
-
-	switch (left_vec.GetType().InternalType()) {
-	case PhysicalType::BOOL:
-	case PhysicalType::INT8:
-		return TemplatedCompareValue<int8_t>(left_vec, right_vec, vector_idx_left, vector_idx_right);
-	case PhysicalType::INT16:
-		return TemplatedCompareValue<int16_t>(left_vec, right_vec, vector_idx_left, vector_idx_right);
-	case PhysicalType::INT32:
-		return TemplatedCompareValue<int32_t>(left_vec, right_vec, vector_idx_left, vector_idx_right);
-	case PhysicalType::INT64:
-		return TemplatedCompareValue<int64_t>(left_vec, right_vec, vector_idx_left, vector_idx_right);
-	case PhysicalType::UINT8:
-		return TemplatedCompareValue<uint8_t>(left_vec, right_vec, vector_idx_left, vector_idx_right);
-	case PhysicalType::UINT16:
-		return TemplatedCompareValue<uint16_t>(left_vec, right_vec, vector_idx_left, vector_idx_right);
-	case PhysicalType::UINT32:
-		return TemplatedCompareValue<uint32_t>(left_vec, right_vec, vector_idx_left, vector_idx_right);
-	case PhysicalType::UINT64:
-		return TemplatedCompareValue<uint64_t>(left_vec, right_vec, vector_idx_left, vector_idx_right);
-	case PhysicalType::INT128:
-		return TemplatedCompareValue<hugeint_t>(left_vec, right_vec, vector_idx_left, vector_idx_right);
-	case PhysicalType::FLOAT:
-		return TemplatedCompareValue<float>(left_vec, right_vec, vector_idx_left, vector_idx_right);
-	case PhysicalType::DOUBLE:
-		return TemplatedCompareValue<double>(left_vec, right_vec, vector_idx_left, vector_idx_right);
-	case PhysicalType::VARCHAR:
-		return TemplatedCompareValue<string_t>(left_vec, right_vec, vector_idx_left, vector_idx_right);
-	case PhysicalType::INTERVAL:
-		return TemplatedCompareValue<interval_t>(left_vec, right_vec, vector_idx_left, vector_idx_right);
-	default:
-		throw NotImplementedException("Type for comparison");
-	}
-}
-
-static int CompareTuple(ChunkCollection *sort_by, vector<OrderType> &desc, vector<OrderByNullType> &null_order,
-                        idx_t left, idx_t right) {
-	D_ASSERT(sort_by);
-
-	idx_t chunk_idx_left = left / STANDARD_VECTOR_SIZE;
-	idx_t chunk_idx_right = right / STANDARD_VECTOR_SIZE;
-	idx_t vector_idx_left = left % STANDARD_VECTOR_SIZE;
-	idx_t vector_idx_right = right % STANDARD_VECTOR_SIZE;
-
-	auto &left_chunk = sort_by->GetChunk(chunk_idx_left);
-	auto &right_chunk = sort_by->GetChunk(chunk_idx_right);
-
-	for (idx_t col_idx = 0; col_idx < desc.size(); col_idx++) {
-		auto order_type = desc[col_idx];
-
-		auto &left_vec = left_chunk.data[col_idx];
-		auto &right_vec = right_chunk.data[col_idx];
-
-		D_ASSERT(left_vec.GetVectorType() == VectorType::FLAT_VECTOR);
-		D_ASSERT(right_vec.GetVectorType() == VectorType::FLAT_VECTOR);
-		D_ASSERT(left_vec.GetType() == right_vec.GetType());
-
-		auto comp_res = CompareValue(left_vec, right_vec, vector_idx_left, vector_idx_right, null_order[col_idx]);
-
-		if (comp_res == 0) {
-			continue;
-		}
-		return comp_res < 0 ? (order_type == OrderType::ASCENDING ? -1 : 1)
-		                    : (order_type == OrderType::ASCENDING ? 1 : -1);
-	}
-	return 0;
-}
-
-static int64_t QuicksortInitial(ChunkCollection *sort_by, vector<OrderType> &desc, vector<OrderByNullType> &null_order,
-                                idx_t *result) {
-	// select pivot
-	int64_t pivot = 0;
-	int64_t low = 0, high = sort_by->Count() - 1;
-	// now insert elements
-	for (idx_t i = 1; i < sort_by->Count(); i++) {
-		if (CompareTuple(sort_by, desc, null_order, i, pivot) <= 0) {
-			result[low++] = i;
-		} else {
-			result[high--] = i;
-		}
-	}
-	D_ASSERT(low == high);
-	result[low] = pivot;
-	return low;
-}
-
-struct QuicksortInfo {
-	QuicksortInfo(int64_t left_p, int64_t right_p) : left(left_p), right(right_p) {
-	}
-
-	int64_t left;
-	int64_t right;
-};
-
-struct QuicksortStack {
-	std::queue<QuicksortInfo> info_queue;
-
-	QuicksortInfo Pop() {
-		auto element = info_queue.front();
-		info_queue.pop();
-		return element;
-	}
-
-	bool IsEmpty() {
-		return info_queue.empty();
-	}
-
-	void Enqueue(int64_t left, int64_t right) {
-		if (left >= right) {
-			return;
-		}
-		info_queue.emplace(left, right);
-	}
-};
-
-static void QuicksortInPlace(ChunkCollection *sort_by, vector<OrderType> &desc, vector<OrderByNullType> &null_order,
-                             idx_t *result, QuicksortInfo info, QuicksortStack &stack) {
-	auto left = info.left;
-	auto right = info.right;
-
-	D_ASSERT(left < right);
-
-	int64_t middle = left + (right - left) / 2;
-	int64_t pivot = result[middle];
-	// move the mid point value to the front.
-	int64_t i = left + 1;
-	int64_t j = right;
-
-	std::swap(result[middle], result[left]);
-	bool all_equal = true;
-	while (i <= j) {
-		if (result) {
-			while (i <= j) {
-				int cmp = CompareTuple(sort_by, desc, null_order, result[i], pivot);
-				if (cmp < 0) {
-					all_equal = false;
-				} else if (cmp > 0) {
-					all_equal = false;
-					break;
-				}
-				i++;
-			}
-		}
-
-		while (i <= j && CompareTuple(sort_by, desc, null_order, result[j], pivot) > 0) {
-			j--;
-		}
-
-		if (i < j) {
-			std::swap(result[i], result[j]);
-		}
-	}
-	std::swap(result[i - 1], result[left]);
-	int64_t part = i - 1;
-
-	if (all_equal) {
-		return;
-	}
-
-	stack.Enqueue(left, part - 1);
-	stack.Enqueue(part + 1, right);
-}
-
-void ChunkCollection::Sort(vector<OrderType> &desc, vector<OrderByNullType> &null_order, idx_t result[]) {
-	if (count == 0) {
-		return;
-	}
-	D_ASSERT(result);
-
-	// start off with an initial quicksort
-	int64_t part = QuicksortInitial(this, desc, null_order, result);
-
-	// now continuously perform
-	QuicksortStack stack;
-	stack.Enqueue(0, part);
-	stack.Enqueue(part + 1, count - 1);
-	while (!stack.IsEmpty()) {
-		auto element = stack.Pop();
-		QuicksortInPlace(this, desc, null_order, result, element, stack);
-	}
-}
-
-// FIXME make this more efficient by not using the Value API
-// just use memcpy in the vectors
-// assert that there is no selection list
-void ChunkCollection::Reorder(idx_t order_org[]) {
-	auto order = unique_ptr<idx_t[]>(new idx_t[count]);
-	memcpy(order.get(), order_org, sizeof(idx_t) * count);
-
-	// adapted from https://stackoverflow.com/a/7366196/2652376
-
-	auto val_buf = vector<Value>();
-	val_buf.resize(ColumnCount());
-
-	idx_t j, k;
-	for (idx_t i = 0; i < count; i++) {
-		for (idx_t col_idx = 0; col_idx < ColumnCount(); col_idx++) {
-			val_buf[col_idx] = GetValue(col_idx, i);
-		}
-		j = i;
-		while (true) {
-			k = order[j];
-			order[j] = j;
-			if (k == i) {
-				break;
-			}
-			for (idx_t col_idx = 0; col_idx < ColumnCount(); col_idx++) {
-				SetValue(col_idx, j, GetValue(col_idx, k));
-			}
-			j = k;
-		}
-		for (idx_t col_idx = 0; col_idx < ColumnCount(); col_idx++) {
-			SetValue(col_idx, j, val_buf[col_idx]);
-		}
-	}
-}
-
-Value ChunkCollection::GetValue(idx_t column, idx_t index) {
-	return chunks[LocateChunk(index)]->GetValue(column, index % STANDARD_VECTOR_SIZE);
-}
-
-void ChunkCollection::SetValue(idx_t column, idx_t index, const Value &value) {
-	chunks[LocateChunk(index)]->SetValue(column, index % STANDARD_VECTOR_SIZE, value);
-}
-
-void ChunkCollection::CopyCell(idx_t column, idx_t index, Vector &target, idx_t target_offset) {
-	auto &chunk = GetChunkForRow(index);
-	auto &source = chunk.data[column];
-	const auto source_offset = index % STANDARD_VECTOR_SIZE;
-	VectorOperations::Copy(source, target, source_offset + 1, source_offset, target_offset);
-}
-
-string ChunkCollection::ToString() const {
-	return chunks.empty() ? "ChunkCollection [ 0 ]"
-	                      : "ChunkCollection [ " + std::to_string(count) + " ]: \n" + chunks[0]->ToString();
-}
-
-void ChunkCollection::Print() const {
-	Printer::Print(ToString());
-}
-
-bool ChunkCollection::Equals(ChunkCollection &other) {
-	if (count != other.count) {
-		return false;
-	}
-	if (ColumnCount() != other.ColumnCount()) {
-		return false;
-	}
-	// first try to compare the results as-is
-	bool compare_equals = true;
-	for (idx_t row_idx = 0; row_idx < count; row_idx++) {
-		for (idx_t col_idx = 0; col_idx < ColumnCount(); col_idx++) {
-			auto lvalue = GetValue(col_idx, row_idx);
-			auto rvalue = other.GetValue(col_idx, row_idx);
-			if (!Value::ValuesAreEqual(lvalue, rvalue)) {
-				compare_equals = false;
-				break;
-			}
-		}
-		if (!compare_equals) {
-			break;
-		}
-	}
-	if (compare_equals) {
-		return true;
-	}
-	for (auto &type : types) {
-		// sort not supported
-		if (type.InternalType() == PhysicalType::LIST || type.InternalType() == PhysicalType::STRUCT) {
-			return false;
-		}
-	}
-	// if the results are not equal,
-	// sort both chunk collections to ensure the comparison is not order insensitive
-	vector<OrderType> desc(ColumnCount(), OrderType::DESCENDING);
-	vector<OrderByNullType> null_order(ColumnCount(), OrderByNullType::NULLS_FIRST);
-	auto this_order = unique_ptr<idx_t[]>(new idx_t[count]);
-	auto other_order = unique_ptr<idx_t[]>(new idx_t[count]);
-	Sort(desc, null_order, this_order.get());
-	other.Sort(desc, null_order, other_order.get());
-
-	for (idx_t row_idx = 0; row_idx < count; row_idx++) {
-		auto lrow = this_order[row_idx];
-		auto rrow = other_order[row_idx];
-		for (idx_t col_idx = 0; col_idx < ColumnCount(); col_idx++) {
-			auto lvalue = GetValue(col_idx, lrow);
-			auto rvalue = other.GetValue(col_idx, rrow);
-			if (!Value::ValuesAreEqual(lvalue, rvalue)) {
-				return false;
-			}
-		}
-	}
-	return true;
-}
-
-} // namespace duckdb
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-namespace duckdb {
-
-DataChunk::DataChunk() : count(0), capacity(STANDARD_VECTOR_SIZE) {
-}
-
-DataChunk::~DataChunk() {
-}
-
-void DataChunk::InitializeEmpty(const vector<LogicalType> &types) {
-	capacity = STANDARD_VECTOR_SIZE;
-	D_ASSERT(data.empty());   // can only be initialized once
-	D_ASSERT(!types.empty()); // empty chunk not allowed
-	for (idx_t i = 0; i < types.size(); i++) {
-		data.emplace_back(Vector(types[i], nullptr));
-	}
-}
-
-void DataChunk::Initialize(Allocator &allocator, const vector<LogicalType> &types) {
-	D_ASSERT(data.empty());   // can only be initialized once
-	D_ASSERT(!types.empty()); // empty chunk not allowed
-	capacity = STANDARD_VECTOR_SIZE;
-	for (idx_t i = 0; i < types.size(); i++) {
-		VectorCache cache(allocator, types[i]);
-		data.emplace_back(cache);
-		vector_caches.push_back(move(cache));
-	}
-}
-
-void DataChunk::Initialize(ClientContext &context, const vector<LogicalType> &types) {
-	Initialize(Allocator::Get(context), types);
-}
-
-void DataChunk::Reset() {
-	if (data.empty()) {
-		return;
-	}
-	if (vector_caches.size() != data.size()) {
-		throw InternalException("VectorCache and column count mismatch in DataChunk::Reset");
-	}
-	for (idx_t i = 0; i < ColumnCount(); i++) {
-		data[i].ResetFromCache(vector_caches[i]);
-	}
-	capacity = STANDARD_VECTOR_SIZE;
-	SetCardinality(0);
-}
-
-void DataChunk::Destroy() {
-	data.clear();
-	vector_caches.clear();
-	capacity = 0;
-	SetCardinality(0);
-}
-
-Value DataChunk::GetValue(idx_t col_idx, idx_t index) const {
-	D_ASSERT(index < size());
-	return data[col_idx].GetValue(index);
-}
-
-void DataChunk::SetValue(idx_t col_idx, idx_t index, const Value &val) {
-	data[col_idx].SetValue(index, val);
-}
-
-void DataChunk::Reference(DataChunk &chunk) {
-	D_ASSERT(chunk.ColumnCount() <= ColumnCount());
-	SetCardinality(chunk);
-	SetCapacity(chunk);
-	for (idx_t i = 0; i < chunk.ColumnCount(); i++) {
-		data[i].Reference(chunk.data[i]);
-	}
-}
-
-void DataChunk::Move(DataChunk &chunk) {
-	SetCardinality(chunk);
-	SetCapacity(chunk);
-	data = move(chunk.data);
-	vector_caches = move(chunk.vector_caches);
-
-	chunk.Destroy();
-}
-
-void DataChunk::Copy(DataChunk &other, idx_t offset) const {
-	D_ASSERT(ColumnCount() == other.ColumnCount());
-	D_ASSERT(other.size() == 0);
-
-	for (idx_t i = 0; i < ColumnCount(); i++) {
-		D_ASSERT(other.data[i].GetVectorType() == VectorType::FLAT_VECTOR);
-		VectorOperations::Copy(data[i], other.data[i], size(), offset, 0);
-	}
-	other.SetCardinality(size() - offset);
-}
-
-void DataChunk::Copy(DataChunk &other, const SelectionVector &sel, const idx_t source_count, const idx_t offset) const {
-	D_ASSERT(ColumnCount() == other.ColumnCount());
-	D_ASSERT(other.size() == 0);
-	D_ASSERT((offset + source_count) <= size());
-
-	for (idx_t i = 0; i < ColumnCount(); i++) {
-		D_ASSERT(other.data[i].GetVectorType() == VectorType::FLAT_VECTOR);
-		VectorOperations::Copy(data[i], other.data[i], sel, source_count, offset, 0);
-	}
-	other.SetCardinality(source_count - offset);
-}
-
-void DataChunk::Split(DataChunk &other, idx_t split_idx) {
-	D_ASSERT(other.size() == 0);
-	D_ASSERT(other.data.empty());
-	D_ASSERT(split_idx < data.size());
-	const idx_t num_cols = data.size();
-	for (idx_t col_idx = split_idx; col_idx < num_cols; col_idx++) {
-		other.data.push_back(move(data[col_idx]));
-		other.vector_caches.push_back(move(vector_caches[col_idx]));
-	}
-	for (idx_t col_idx = split_idx; col_idx < num_cols; col_idx++) {
-		data.pop_back();
-		vector_caches.pop_back();
-	}
-	other.SetCardinality(*this);
-	other.SetCapacity(*this);
-}
-
-void DataChunk::Fuse(DataChunk &other) {
-	D_ASSERT(other.size() == size());
-	const idx_t num_cols = other.data.size();
-	for (idx_t col_idx = 0; col_idx < num_cols; ++col_idx) {
-		data.emplace_back(move(other.data[col_idx]));
-		vector_caches.emplace_back(move(other.vector_caches[col_idx]));
-	}
-	other.Destroy();
-}
-
-void DataChunk::Append(const DataChunk &other, bool resize, SelectionVector *sel, idx_t sel_count) {
-	idx_t new_size = sel ? size() + sel_count : size() + other.size();
-	if (other.size() == 0) {
-		return;
-	}
-	if (ColumnCount() != other.ColumnCount()) {
-		throw InternalException("Column counts of appending chunk doesn't match!");
-	}
-	if (new_size > capacity) {
-		if (resize) {
-			for (idx_t i = 0; i < ColumnCount(); i++) {
-				data[i].Resize(size(), new_size);
-			}
-			capacity = new_size;
-		} else {
-			throw InternalException("Can't append chunk to other chunk without resizing");
-		}
-	}
-	for (idx_t i = 0; i < ColumnCount(); i++) {
-		D_ASSERT(data[i].GetVectorType() == VectorType::FLAT_VECTOR);
-		if (sel) {
-			VectorOperations::Copy(other.data[i], data[i], *sel, sel_count, 0, size());
-		} else {
-			VectorOperations::Copy(other.data[i], data[i], other.size(), 0, size());
-		}
-	}
-	SetCardinality(new_size);
-}
-
-void DataChunk::Normalify() {
-	for (idx_t i = 0; i < ColumnCount(); i++) {
-		data[i].Normalify(size());
-	}
-}
-
-vector<LogicalType> DataChunk::GetTypes() {
-	vector<LogicalType> types;
-	for (idx_t i = 0; i < ColumnCount(); i++) {
-		types.push_back(data[i].GetType());
-	}
-	return types;
-}
-
-string DataChunk::ToString() const {
-	string retval = "Chunk - [" + to_string(ColumnCount()) + " Columns]\n";
-	for (idx_t i = 0; i < ColumnCount(); i++) {
-		retval += "- " + data[i].ToString(size()) + "\n";
-	}
-	return retval;
-}
-
-void DataChunk::Serialize(Serializer &serializer) {
-	// write the count
-	serializer.Write<sel_t>(size());
-	serializer.Write<idx_t>(ColumnCount());
-	for (idx_t col_idx = 0; col_idx < ColumnCount(); col_idx++) {
-		// write the types
-		data[col_idx].GetType().Serialize(serializer);
-	}
-	// write the data
-	for (idx_t col_idx = 0; col_idx < ColumnCount(); col_idx++) {
-		data[col_idx].Serialize(size(), serializer);
-	}
-}
-
-void DataChunk::Deserialize(Deserializer &source) {
-	auto rows = source.Read<sel_t>();
-	idx_t column_count = source.Read<idx_t>();
-
-	vector<LogicalType> types;
-	for (idx_t i = 0; i < column_count; i++) {
-		types.push_back(LogicalType::Deserialize(source));
-	}
-	Initialize(Allocator::DefaultAllocator(), types);
-	// now load the column data
-	SetCardinality(rows);
-	for (idx_t i = 0; i < column_count; i++) {
-		data[i].Deserialize(rows, source);
-	}
-	Verify();
-}
-
-void DataChunk::Slice(const SelectionVector &sel_vector, idx_t count_p) {
-	this->count = count_p;
-	SelCache merge_cache;
-	for (idx_t c = 0; c < ColumnCount(); c++) {
-		data[c].Slice(sel_vector, count_p, merge_cache);
-	}
-}
-
-void DataChunk::Slice(DataChunk &other, const SelectionVector &sel, idx_t count_p, idx_t col_offset) {
-	D_ASSERT(other.ColumnCount() <= col_offset + ColumnCount());
-	this->count = count_p;
-	SelCache merge_cache;
-	for (idx_t c = 0; c < other.ColumnCount(); c++) {
-		if (other.data[c].GetVectorType() == VectorType::DICTIONARY_VECTOR) {
-			// already a dictionary! merge the dictionaries
-			data[col_offset + c].Reference(other.data[c]);
-			data[col_offset + c].Slice(sel, count_p, merge_cache);
-		} else {
-			data[col_offset + c].Slice(other.data[c], sel, count_p);
-		}
-	}
-}
-
-unique_ptr<VectorData[]> DataChunk::Orrify() {
-	auto orrified_data = unique_ptr<VectorData[]>(new VectorData[ColumnCount()]);
-	for (idx_t col_idx = 0; col_idx < ColumnCount(); col_idx++) {
-		data[col_idx].Orrify(size(), orrified_data[col_idx]);
-	}
-	return orrified_data;
-}
-
-void DataChunk::Hash(Vector &result) {
-	D_ASSERT(result.GetType().id() == LogicalType::HASH);
-	VectorOperations::Hash(data[0], result, size());
-	for (idx_t i = 1; i < ColumnCount(); i++) {
-		VectorOperations::CombineHash(result, data[i], size());
-	}
-}
-
-void DataChunk::Verify() {
-#ifdef DEBUG
-	D_ASSERT(size() <= capacity);
-	// verify that all vectors in this chunk have the chunk selection vector
-	for (idx_t i = 0; i < ColumnCount(); i++) {
-		data[i].Verify(size());
-	}
-#endif
-}
-
-void DataChunk::Print() {
-	Printer::Print(ToString());
-}
-
-struct DuckDBArrowArrayChildHolder {
-	ArrowArray array;
-	//! need max three pointers for strings
-	duckdb::array<const void *, 3> buffers = {{nullptr, nullptr, nullptr}};
-	unique_ptr<Vector> vector;
-	unique_ptr<data_t[]> offsets;
-	unique_ptr<data_t[]> data;
-	//! Children of nested structures
-	::duckdb::vector<DuckDBArrowArrayChildHolder> children;
-	::duckdb::vector<ArrowArray *> children_ptrs;
-};
-
-struct DuckDBArrowArrayHolder {
-	vector<DuckDBArrowArrayChildHolder> children = {};
-	vector<ArrowArray *> children_ptrs = {};
-	array<const void *, 1> buffers = {{nullptr}};
-	vector<shared_ptr<ArrowArrayWrapper>> arrow_original_array;
-};
-
-static void ReleaseDuckDBArrowArray(ArrowArray *array) {
-	if (!array || !array->release) {
-		return;
-	}
-	array->release = nullptr;
-	auto holder = static_cast<DuckDBArrowArrayHolder *>(array->private_data);
-	delete holder;
-}
-
-void InitializeChild(DuckDBArrowArrayChildHolder &child_holder, idx_t size) {
-	auto &child = child_holder.array;
-	child.private_data = nullptr;
-	child.release = ReleaseDuckDBArrowArray;
-	child.n_children = 0;
-	child.null_count = 0;
-	child.offset = 0;
-	child.dictionary = nullptr;
-	child.buffers = child_holder.buffers.data();
-
-	child.length = size;
-}
-
-void SetChildValidityMask(Vector &vector, ArrowArray &child) {
-	D_ASSERT(vector.GetVectorType() == VectorType::FLAT_VECTOR);
-	auto &mask = FlatVector::Validity(vector);
-	if (!mask.AllValid()) {
-		//! any bits are set: might have nulls
-		child.null_count = -1;
-	} else {
-		//! no bits are set; we know there are no nulls
-		child.null_count = 0;
-	}
-	child.buffers[0] = (void *)mask.GetData();
-}
-
-void SetArrowChild(DuckDBArrowArrayChildHolder &child_holder, const LogicalType &type, Vector &data, idx_t size);
-
-void SetList(DuckDBArrowArrayChildHolder &child_holder, const LogicalType &type, Vector &data, idx_t size) {
-	auto &child = child_holder.array;
-	child_holder.vector = make_unique<Vector>(data);
-
-	//! Lists have two buffers
-	child.n_buffers = 2;
-	//! Second Buffer is the list offsets
-	child_holder.offsets = unique_ptr<data_t[]>(new data_t[sizeof(uint32_t) * (size + 1)]);
-	child.buffers[1] = child_holder.offsets.get();
-	auto offset_ptr = (uint32_t *)child.buffers[1];
-	auto list_data = FlatVector::GetData<list_entry_t>(data);
-	auto list_mask = FlatVector::Validity(data);
-	idx_t offset = 0;
-	offset_ptr[0] = 0;
-	for (idx_t i = 0; i < size; i++) {
-		auto &le = list_data[i];
-
-		if (list_mask.RowIsValid(i)) {
-			offset += le.length;
-		}
-
-		offset_ptr[i + 1] = offset;
-	}
-	auto list_size = ListVector::GetListSize(data);
-	child_holder.children.resize(1);
-	InitializeChild(child_holder.children[0], list_size);
-	child.n_children = 1;
-	child_holder.children_ptrs.push_back(&child_holder.children[0].array);
-	child.children = &child_holder.children_ptrs[0];
-	auto &child_vector = ListVector::GetEntry(data);
-	auto &child_type = ListType::GetChildType(type);
-	SetArrowChild(child_holder.children[0], child_type, child_vector, list_size);
-	SetChildValidityMask(child_vector, child_holder.children[0].array);
-}
-
-void SetStruct(DuckDBArrowArrayChildHolder &child_holder, const LogicalType &type, Vector &data, idx_t size) {
-	auto &child = child_holder.array;
-	child_holder.vector = make_unique<Vector>(data);
-
-	//! Structs only have validity buffers
-	child.n_buffers = 1;
-	auto &children = StructVector::GetEntries(*child_holder.vector);
-	child.n_children = children.size();
-	child_holder.children.resize(child.n_children);
-	for (auto &struct_child : child_holder.children) {
-		InitializeChild(struct_child, size);
-		child_holder.children_ptrs.push_back(&struct_child.array);
-	}
-	child.children = &child_holder.children_ptrs[0];
-	for (idx_t child_idx = 0; child_idx < child_holder.children.size(); child_idx++) {
-		SetArrowChild(child_holder.children[child_idx], StructType::GetChildType(type, child_idx), *children[child_idx],
-		              size);
-		SetChildValidityMask(*children[child_idx], child_holder.children[child_idx].array);
-	}
-}
-
-void SetStructMap(DuckDBArrowArrayChildHolder &child_holder, const LogicalType &type, Vector &data, idx_t size) {
-	auto &child = child_holder.array;
-	child_holder.vector = make_unique<Vector>(data);
-
-	//! Structs only have validity buffers
-	child.n_buffers = 1;
-	auto &children = StructVector::GetEntries(*child_holder.vector);
-	child.n_children = children.size();
-	child_holder.children.resize(child.n_children);
-	auto list_size = ListVector::GetListSize(*children[0]);
-	child.length = list_size;
-	for (auto &struct_child : child_holder.children) {
-		InitializeChild(struct_child, list_size);
-		child_holder.children_ptrs.push_back(&struct_child.array);
-	}
-	child.children = &child_holder.children_ptrs[0];
-	auto &child_types = StructType::GetChildTypes(type);
-	for (idx_t child_idx = 0; child_idx < child_holder.children.size(); child_idx++) {
-		auto &list_vector_child = ListVector::GetEntry(*children[child_idx]);
-		if (child_idx == 0) {
-			VectorData list_data;
-			children[child_idx]->Orrify(size, list_data);
-			auto list_child_validity = FlatVector::Validity(list_vector_child);
-			if (!list_child_validity.AllValid()) {
-				//! Get the offsets to check from the selection vector
-				auto list_offsets = FlatVector::GetData<list_entry_t>(*children[child_idx]);
-				for (idx_t list_idx = 0; list_idx < size; list_idx++) {
-					auto offset = list_offsets[list_data.sel->get_index(list_idx)];
-					if (!list_child_validity.CheckAllValid(offset.length + offset.offset, offset.offset)) {
-						throw std::runtime_error("Arrow doesnt accept NULL keys on Maps");
-					}
-				}
-			}
-		} else {
-			SetChildValidityMask(list_vector_child, child_holder.children[child_idx].array);
-		}
-		SetArrowChild(child_holder.children[child_idx], ListType::GetChildType(child_types[child_idx].second),
-		              list_vector_child, list_size);
-	}
-}
-
-struct ArrowUUIDConversion {
-	using internal_type_t = hugeint_t;
-
-	static unique_ptr<Vector> InitializeVector(Vector &data, idx_t size) {
-		return make_unique<Vector>(LogicalType::VARCHAR, size);
-	}
-
-	static idx_t GetStringLength(hugeint_t value) {
-		return UUID::STRING_SIZE;
-	}
-
-	static string_t ConvertValue(Vector &tgt_vec, string_t *tgt_ptr, internal_type_t *src_ptr, idx_t row) {
-		auto str_value = UUID::ToString(src_ptr[row]);
-		// Have to store this string
-		tgt_ptr[row] = StringVector::AddStringOrBlob(tgt_vec, str_value);
-		return tgt_ptr[row];
-	}
-};
-
-struct ArrowVarcharConversion {
-	using internal_type_t = string_t;
-
-	static unique_ptr<Vector> InitializeVector(Vector &data, idx_t size) {
-		return make_unique<Vector>(data);
-	}
-	static idx_t GetStringLength(string_t value) {
-		return value.GetSize();
-	}
-
-	static string_t ConvertValue(Vector &tgt_vec, string_t *tgt_ptr, internal_type_t *src_ptr, idx_t row) {
-		return src_ptr[row];
-	}
-};
-
-template <class CONVERT, class VECTOR_TYPE>
-void SetVarchar(DuckDBArrowArrayChildHolder &child_holder, const LogicalType &type, Vector &data, idx_t size) {
-	auto &child = child_holder.array;
-	child_holder.vector = CONVERT::InitializeVector(data, size);
-	auto target_data_ptr = FlatVector::GetData<string_t>(data);
-	child.n_buffers = 3;
-	child_holder.offsets = unique_ptr<data_t[]>(new data_t[sizeof(uint32_t) * (size + 1)]);
-	child.buffers[1] = child_holder.offsets.get();
-	D_ASSERT(child.buffers[1]);
-	//! step 1: figure out total string length:
-	idx_t total_string_length = 0;
-	auto source_ptr = FlatVector::GetData<VECTOR_TYPE>(data);
-	auto &mask = FlatVector::Validity(data);
-	for (idx_t row_idx = 0; row_idx < size; row_idx++) {
-		if (!mask.RowIsValid(row_idx)) {
-			continue;
-		}
-		total_string_length += CONVERT::GetStringLength(source_ptr[row_idx]);
-	}
-	//! step 2: allocate this much
-	child_holder.data = unique_ptr<data_t[]>(new data_t[total_string_length]);
-	child.buffers[2] = child_holder.data.get();
-	D_ASSERT(child.buffers[2]);
-	//! step 3: assign buffers
-	idx_t current_heap_offset = 0;
-	auto target_ptr = (uint32_t *)child.buffers[1];
-
-	for (idx_t row_idx = 0; row_idx < size; row_idx++) {
-		target_ptr[row_idx] = current_heap_offset;
-		if (!mask.RowIsValid(row_idx)) {
-			continue;
-		}
-		string_t str = CONVERT::ConvertValue(*child_holder.vector, target_data_ptr, source_ptr, row_idx);
-		memcpy((void *)((uint8_t *)child.buffers[2] + current_heap_offset), str.GetDataUnsafe(), str.GetSize());
-		current_heap_offset += str.GetSize();
-	}
-	target_ptr[size] = current_heap_offset; //! need to terminate last string!
-}
-
-void SetArrowChild(DuckDBArrowArrayChildHolder &child_holder, const LogicalType &type, Vector &data, idx_t size) {
-	auto &child = child_holder.array;
-	switch (type.id()) {
-	case LogicalTypeId::BOOLEAN: {
-		//! Gotta bitpack these booleans
-		child_holder.vector = make_unique<Vector>(data);
-		child.n_buffers = 2;
-		idx_t num_bytes = (size + 8 - 1) / 8;
-		child_holder.data = unique_ptr<data_t[]>(new data_t[sizeof(uint8_t) * num_bytes]);
-		child.buffers[1] = child_holder.data.get();
-		auto source_ptr = FlatVector::GetData<uint8_t>(*child_holder.vector);
-		auto target_ptr = (uint8_t *)child.buffers[1];
-		idx_t target_pos = 0;
-		idx_t cur_bit = 0;
-		for (idx_t row_idx = 0; row_idx < size; row_idx++) {
-			if (cur_bit == 8) {
-				target_pos++;
-				cur_bit = 0;
-			}
-			if (source_ptr[row_idx] == 0) {
-				//! We set the bit to 0
-				target_ptr[target_pos] &= ~(1 << cur_bit);
-			} else {
-				//! We set the bit to 1
-				target_ptr[target_pos] |= 1 << cur_bit;
-			}
-			cur_bit++;
-		}
-		break;
-	}
-	case LogicalTypeId::TINYINT:
-	case LogicalTypeId::SMALLINT:
-	case LogicalTypeId::INTEGER:
-	case LogicalTypeId::BIGINT:
-	case LogicalTypeId::UTINYINT:
-	case LogicalTypeId::USMALLINT:
-	case LogicalTypeId::UINTEGER:
-	case LogicalTypeId::UBIGINT:
-	case LogicalTypeId::FLOAT:
-	case LogicalTypeId::DOUBLE:
-	case LogicalTypeId::HUGEINT:
-	case LogicalTypeId::DATE:
-	case LogicalTypeId::TIMESTAMP:
-	case LogicalTypeId::TIMESTAMP_MS:
-	case LogicalTypeId::TIMESTAMP_NS:
-	case LogicalTypeId::TIMESTAMP_SEC:
-	case LogicalTypeId::TIME:
-	case LogicalTypeId::TIMESTAMP_TZ:
-	case LogicalTypeId::TIME_TZ:
-		child_holder.vector = make_unique<Vector>(data);
-		child.n_buffers = 2;
-		child.buffers[1] = (void *)FlatVector::GetData(*child_holder.vector);
-		break;
-	case LogicalTypeId::SQLNULL:
-		child.n_buffers = 1;
-		break;
-	case LogicalTypeId::DECIMAL: {
-		child.n_buffers = 2;
-		child_holder.vector = make_unique<Vector>(data);
-
-		//! We have to convert to INT128
-		switch (type.InternalType()) {
-
-		case PhysicalType::INT16: {
-			child_holder.data = unique_ptr<data_t[]>(new data_t[sizeof(hugeint_t) * (size)]);
-			child.buffers[1] = child_holder.data.get();
-			auto source_ptr = FlatVector::GetData<int16_t>(*child_holder.vector);
-			auto target_ptr = (hugeint_t *)child.buffers[1];
-			for (idx_t row_idx = 0; row_idx < size; row_idx++) {
-				target_ptr[row_idx] = source_ptr[row_idx];
-			}
-			break;
-		}
-		case PhysicalType::INT32: {
-			child_holder.data = unique_ptr<data_t[]>(new data_t[sizeof(hugeint_t) * (size)]);
-			child.buffers[1] = child_holder.data.get();
-			auto source_ptr = FlatVector::GetData<int32_t>(*child_holder.vector);
-			auto target_ptr = (hugeint_t *)child.buffers[1];
-			for (idx_t row_idx = 0; row_idx < size; row_idx++) {
-				target_ptr[row_idx] = source_ptr[row_idx];
-			}
-			break;
-		}
-		case PhysicalType::INT64: {
-			child_holder.data = unique_ptr<data_t[]>(new data_t[sizeof(hugeint_t) * (size)]);
-			child.buffers[1] = child_holder.data.get();
-			auto source_ptr = FlatVector::GetData<int64_t>(*child_holder.vector);
-			auto target_ptr = (hugeint_t *)child.buffers[1];
-			for (idx_t row_idx = 0; row_idx < size; row_idx++) {
-				target_ptr[row_idx] = source_ptr[row_idx];
-			}
-			break;
-		}
-		case PhysicalType::INT128: {
-			child.buffers[1] = (void *)FlatVector::GetData(*child_holder.vector);
-			break;
-		}
-		default:
-			throw std::runtime_error("Unsupported physical type for Decimal" + TypeIdToString(type.InternalType()));
-		}
-		break;
-	}
-	case LogicalTypeId::BLOB:
-	case LogicalTypeId::JSON:
-	case LogicalTypeId::VARCHAR: {
-		SetVarchar<ArrowVarcharConversion, string_t>(child_holder, type, data, size);
-		break;
-	}
-	case LogicalTypeId::UUID: {
-		SetVarchar<ArrowUUIDConversion, hugeint_t>(child_holder, type, data, size);
-		break;
-	}
-	case LogicalTypeId::LIST: {
-		SetList(child_holder, type, data, size);
-		break;
-	}
-	case LogicalTypeId::STRUCT: {
-		SetStruct(child_holder, type, data, size);
-		break;
-	}
-	case LogicalTypeId::MAP: {
-		child_holder.vector = make_unique<Vector>(data);
-
-		auto &map_mask = FlatVector::Validity(*child_holder.vector);
-		child.n_buffers = 2;
-		//! Maps have one child
-		child.n_children = 1;
-		child_holder.children.resize(1);
-		InitializeChild(child_holder.children[0], size);
-		child_holder.children_ptrs.push_back(&child_holder.children[0].array);
-		//! Second Buffer is the offsets
-		child_holder.offsets = unique_ptr<data_t[]>(new data_t[sizeof(uint32_t) * (size + 1)]);
-		child.buffers[1] = child_holder.offsets.get();
-		auto &struct_children = StructVector::GetEntries(data);
-		auto offset_ptr = (uint32_t *)child.buffers[1];
-		auto list_data = FlatVector::GetData<list_entry_t>(*struct_children[0]);
-		idx_t offset = 0;
-		offset_ptr[0] = 0;
-		for (idx_t i = 0; i < size; i++) {
-			auto &le = list_data[i];
-			if (map_mask.RowIsValid(i)) {
-				offset += le.length;
-			}
-			offset_ptr[i + 1] = offset;
-		}
-		child.children = &child_holder.children_ptrs[0];
-		//! We need to set up a struct
-		auto struct_type = LogicalType::STRUCT(StructType::GetChildTypes(type));
-
-		SetStructMap(child_holder.children[0], struct_type, *child_holder.vector, size);
-		break;
-	}
-	case LogicalTypeId::INTERVAL: {
-		//! convert interval from month/days/ucs to milliseconds
-		child_holder.vector = make_unique<Vector>(data);
-		child.n_buffers = 2;
-		child_holder.data = unique_ptr<data_t[]>(new data_t[sizeof(int64_t) * (size)]);
-		child.buffers[1] = child_holder.data.get();
-		auto source_ptr = FlatVector::GetData<interval_t>(*child_holder.vector);
-		auto target_ptr = (int64_t *)child.buffers[1];
-		for (idx_t row_idx = 0; row_idx < size; row_idx++) {
-			target_ptr[row_idx] = Interval::GetMilli(source_ptr[row_idx]);
-		}
-		break;
-	}
-	case LogicalTypeId::ENUM: {
-		// We need to initialize our dictionary
-		child_holder.children.resize(1);
-		idx_t dict_size = EnumType::GetSize(type);
-		InitializeChild(child_holder.children[0], dict_size);
-		Vector dictionary(EnumType::GetValuesInsertOrder(type));
-		SetArrowChild(child_holder.children[0], dictionary.GetType(), dictionary, dict_size);
-		child_holder.children_ptrs.push_back(&child_holder.children[0].array);
-
-		// now we set the data
-		child.dictionary = child_holder.children_ptrs[0];
-		child_holder.vector = make_unique<Vector>(data);
-		child.n_buffers = 2;
-		child.buffers[1] = (void *)FlatVector::GetData(*child_holder.vector);
-
-		break;
-	}
-	default:
-		throw std::runtime_error("Unsupported type " + type.ToString());
-	}
-}
-
-void DataChunk::ToArrowArray(ArrowArray *out_array) {
-	Normalify();
-	D_ASSERT(out_array);
-
-	// Allocate as unique_ptr first to cleanup properly on error
-	auto root_holder = make_unique<DuckDBArrowArrayHolder>();
-
-	// Allocate the children
-	root_holder->children.resize(ColumnCount());
-	root_holder->children_ptrs.resize(ColumnCount(), nullptr);
-	for (size_t i = 0; i < ColumnCount(); ++i) {
-		root_holder->children_ptrs[i] = &root_holder->children[i].array;
-	}
-	out_array->children = root_holder->children_ptrs.data();
-	out_array->n_children = ColumnCount();
-
-	// Configure root array
-	out_array->length = size();
-	out_array->n_children = ColumnCount();
-	out_array->n_buffers = 1;
-	out_array->buffers = root_holder->buffers.data(); // there is no actual buffer there since we don't have NULLs
-	out_array->offset = 0;
-	out_array->null_count = 0; // needs to be 0
-	out_array->dictionary = nullptr;
-
-	//! Configure child arrays
-	for (idx_t col_idx = 0; col_idx < ColumnCount(); col_idx++) {
-		auto &child_holder = root_holder->children[col_idx];
-		InitializeChild(child_holder, size());
-		auto &vector = child_holder.vector;
-		auto &child = child_holder.array;
-		auto vec_buffer = data[col_idx].GetBuffer();
-		if (vec_buffer->GetAuxiliaryData() &&
-		    vec_buffer->GetAuxiliaryDataType() == VectorAuxiliaryDataType::ARROW_AUXILIARY) {
-			auto arrow_aux_data = (ArrowAuxiliaryData *)vec_buffer->GetAuxiliaryData();
-			root_holder->arrow_original_array.push_back(arrow_aux_data->arrow_array);
-		}
-		//! We could, in theory, output other types of vectors here, currently only FLAT Vectors
-		SetArrowChild(child_holder, GetTypes()[col_idx], data[col_idx], size());
-		SetChildValidityMask(*vector, child);
-		out_array->children[col_idx] = &child;
-	}
-
-	// Release ownership to caller
-	out_array->private_data = root_holder.release();
-	out_array->release = ReleaseDuckDBArrowArray;
 }
 
 } // namespace duckdb

@@ -8,7 +8,7 @@
 
 
 // LICENSE_CHANGE_BEGIN
-// The following code up to LICENSE_CHANGE_END is subject to THIRD PARTY LICENSE #6
+// The following code up to LICENSE_CHANGE_END is subject to THIRD PARTY LICENSE #2
 // See the end of this file for a list
 
 // Copyright 2008 The RE2 Authors.  All Rights Reserved.
@@ -40,7 +40,7 @@
 
 
 // LICENSE_CHANGE_BEGIN
-// The following code up to LICENSE_CHANGE_END is subject to THIRD PARTY LICENSE #6
+// The following code up to LICENSE_CHANGE_END is subject to THIRD PARTY LICENSE #2
 // See the end of this file for a list
 
 // Copyright 2018 The RE2 Authors.  All Rights Reserved.
@@ -105,7 +105,7 @@ class PODArray {
 
 
 // LICENSE_CHANGE_BEGIN
-// The following code up to LICENSE_CHANGE_END is subject to THIRD PARTY LICENSE #6
+// The following code up to LICENSE_CHANGE_END is subject to THIRD PARTY LICENSE #2
 // See the end of this file for a list
 
 // Copyright 2007 The RE2 Authors.  All Rights Reserved.
@@ -132,7 +132,7 @@ class PODArray {
 
 
 // LICENSE_CHANGE_BEGIN
-// The following code up to LICENSE_CHANGE_END is subject to THIRD PARTY LICENSE #6
+// The following code up to LICENSE_CHANGE_END is subject to THIRD PARTY LICENSE #2
 // See the end of this file for a list
 
 // Copyright 2006 The RE2 Authors.  All Rights Reserved.
@@ -534,7 +534,7 @@ template<typename Value> bool SparseArray<Value>::less(const IndexValue& a,
 
 
 // LICENSE_CHANGE_BEGIN
-// The following code up to LICENSE_CHANGE_END is subject to THIRD PARTY LICENSE #6
+// The following code up to LICENSE_CHANGE_END is subject to THIRD PARTY LICENSE #2
 // See the end of this file for a list
 
 // Copyright 2006 The RE2 Authors.  All Rights Reserved.
@@ -1576,7 +1576,7 @@ bool Prog::SearchBitState(const StringPiece& text,
 
 
 // LICENSE_CHANGE_BEGIN
-// The following code up to LICENSE_CHANGE_END is subject to THIRD PARTY LICENSE #6
+// The following code up to LICENSE_CHANGE_END is subject to THIRD PARTY LICENSE #2
 // See the end of this file for a list
 
 // Copyright 2007 The RE2 Authors.  All Rights Reserved.
@@ -1603,7 +1603,7 @@ bool Prog::SearchBitState(const StringPiece& text,
 
 
 // LICENSE_CHANGE_BEGIN
-// The following code up to LICENSE_CHANGE_END is subject to THIRD PARTY LICENSE #6
+// The following code up to LICENSE_CHANGE_END is subject to THIRD PARTY LICENSE #2
 // See the end of this file for a list
 
 // Copyright 2006 The RE2 Authors.  All Rights Reserved.
@@ -3119,7 +3119,7 @@ Prog* Prog::CompileSet(Regexp* re, RE2::Anchor anchor, int64_t max_mem) {
 
 
 // LICENSE_CHANGE_BEGIN
-// The following code up to LICENSE_CHANGE_END is subject to THIRD PARTY LICENSE #6
+// The following code up to LICENSE_CHANGE_END is subject to THIRD PARTY LICENSE #2
 // See the end of this file for a list
 
 // Copyright 2008 The RE2 Authors.  All Rights Reserved.
@@ -3164,7 +3164,7 @@ Prog* Prog::CompileSet(Regexp* re, RE2::Anchor anchor, int64_t max_mem) {
 
 
 // LICENSE_CHANGE_BEGIN
-// The following code up to LICENSE_CHANGE_END is subject to THIRD PARTY LICENSE #6
+// The following code up to LICENSE_CHANGE_END is subject to THIRD PARTY LICENSE #2
 // See the end of this file for a list
 
 // Copyright 2016 The RE2 Authors.  All Rights Reserved.
@@ -3215,7 +3215,7 @@ class HashMix {
 
 
 // LICENSE_CHANGE_BEGIN
-// The following code up to LICENSE_CHANGE_END is subject to THIRD PARTY LICENSE #6
+// The following code up to LICENSE_CHANGE_END is subject to THIRD PARTY LICENSE #2
 // See the end of this file for a list
 
 // Copyright 2007 The RE2 Authors.  All Rights Reserved.
@@ -3359,7 +3359,7 @@ class WriterMutexLock {
 
 
 // LICENSE_CHANGE_BEGIN
-// The following code up to LICENSE_CHANGE_END is subject to THIRD PARTY LICENSE #6
+// The following code up to LICENSE_CHANGE_END is subject to THIRD PARTY LICENSE #2
 // See the end of this file for a list
 
 // Copyright 2016 The RE2 Authors.  All Rights Reserved.
@@ -5435,7 +5435,7 @@ bool Prog::PossibleMatchRange(std::string* min, std::string* max, int maxlen) {
 
 
 // LICENSE_CHANGE_BEGIN
-// The following code up to LICENSE_CHANGE_END is subject to THIRD PARTY LICENSE #6
+// The following code up to LICENSE_CHANGE_END is subject to THIRD PARTY LICENSE #2
 // See the end of this file for a list
 
 // Copyright 2009 The RE2 Authors.  All Rights Reserved.
@@ -5445,7 +5445,7 @@ bool Prog::PossibleMatchRange(std::string* min, std::string* max, int maxlen) {
 
 
 // LICENSE_CHANGE_BEGIN
-// The following code up to LICENSE_CHANGE_END is subject to THIRD PARTY LICENSE #6
+// The following code up to LICENSE_CHANGE_END is subject to THIRD PARTY LICENSE #2
 // See the end of this file for a list
 
 // Copyright 2009 The RE2 Authors.  All Rights Reserved.
@@ -5571,7 +5571,7 @@ class FilteredRE2 {
 
 
 // LICENSE_CHANGE_BEGIN
-// The following code up to LICENSE_CHANGE_END is subject to THIRD PARTY LICENSE #6
+// The following code up to LICENSE_CHANGE_END is subject to THIRD PARTY LICENSE #2
 // See the end of this file for a list
 
 // Copyright 2009 The RE2 Authors.  All Rights Reserved.
@@ -5689,7 +5689,7 @@ class Prefilter {
 
 
 // LICENSE_CHANGE_BEGIN
-// The following code up to LICENSE_CHANGE_END is subject to THIRD PARTY LICENSE #6
+// The following code up to LICENSE_CHANGE_END is subject to THIRD PARTY LICENSE #2
 // See the end of this file for a list
 
 // Copyright 2009 The RE2 Authors.  All Rights Reserved.
@@ -5949,7 +5949,7 @@ void FilteredRE2::PrintPrefilter(int regexpid) {
 
 
 // LICENSE_CHANGE_BEGIN
-// The following code up to LICENSE_CHANGE_END is subject to THIRD PARTY LICENSE #6
+// The following code up to LICENSE_CHANGE_END is subject to THIRD PARTY LICENSE #2
 // See the end of this file for a list
 
 // Copyright 2008 The RE2 Authors.  All Rights Reserved.
@@ -6145,7 +6145,7 @@ static bool CanBeEmptyString(Regexp* re) {
 
 
 // LICENSE_CHANGE_BEGIN
-// The following code up to LICENSE_CHANGE_END is subject to THIRD PARTY LICENSE #6
+// The following code up to LICENSE_CHANGE_END is subject to THIRD PARTY LICENSE #2
 // See the end of this file for a list
 
 // Copyright 2006-2007 The RE2 Authors.  All Rights Reserved.
@@ -6868,7 +6868,7 @@ void Prog::Fanout(SparseArray<int>* fanout) {
 
 
 // LICENSE_CHANGE_BEGIN
-// The following code up to LICENSE_CHANGE_END is subject to THIRD PARTY LICENSE #6
+// The following code up to LICENSE_CHANGE_END is subject to THIRD PARTY LICENSE #2
 // See the end of this file for a list
 
 // Copyright 2008 The RE2 Authors.  All Rights Reserved.
@@ -7452,7 +7452,7 @@ fail:
 
 
 // LICENSE_CHANGE_BEGIN
-// The following code up to LICENSE_CHANGE_END is subject to THIRD PARTY LICENSE #6
+// The following code up to LICENSE_CHANGE_END is subject to THIRD PARTY LICENSE #2
 // See the end of this file for a list
 
 // Copyright 2006 The RE2 Authors.  All Rights Reserved.
@@ -7492,7 +7492,7 @@ fail:
 
 
 // LICENSE_CHANGE_BEGIN
-// The following code up to LICENSE_CHANGE_END is subject to THIRD PARTY LICENSE #6
+// The following code up to LICENSE_CHANGE_END is subject to THIRD PARTY LICENSE #2
 // See the end of this file for a list
 
 // Copyright 2008 The RE2 Authors.  All Rights Reserved.
@@ -7580,7 +7580,7 @@ extern Rune ApplyFold(const CaseFold *f, Rune r);
 
 
 // LICENSE_CHANGE_BEGIN
-// The following code up to LICENSE_CHANGE_END is subject to THIRD PARTY LICENSE #6
+// The following code up to LICENSE_CHANGE_END is subject to THIRD PARTY LICENSE #2
 // See the end of this file for a list
 
 // Copyright 2008 The RE2 Authors.  All Rights Reserved.
@@ -10088,7 +10088,7 @@ Regexp* Regexp::Parse(const StringPiece& s, ParseFlags global_flags,
 
 
 // LICENSE_CHANGE_BEGIN
-// The following code up to LICENSE_CHANGE_END is subject to THIRD PARTY LICENSE #6
+// The following code up to LICENSE_CHANGE_END is subject to THIRD PARTY LICENSE #2
 // See the end of this file for a list
 
 // GENERATED BY make_perl_groups.pl; DO NOT EDIT.
@@ -10216,7 +10216,7 @@ const int num_posix_groups = 28;
 
 
 // LICENSE_CHANGE_BEGIN
-// The following code up to LICENSE_CHANGE_END is subject to THIRD PARTY LICENSE #6
+// The following code up to LICENSE_CHANGE_END is subject to THIRD PARTY LICENSE #2
 // See the end of this file for a list
 
 // Copyright 2009 The RE2 Authors.  All Rights Reserved.
@@ -10917,7 +10917,7 @@ Prefilter* Prefilter::FromRE2(const RE2* re2) {
 
 
 // LICENSE_CHANGE_BEGIN
-// The following code up to LICENSE_CHANGE_END is subject to THIRD PARTY LICENSE #6
+// The following code up to LICENSE_CHANGE_END is subject to THIRD PARTY LICENSE #2
 // See the end of this file for a list
 
 // Copyright 2009 The RE2 Authors.  All Rights Reserved.
@@ -11328,7 +11328,7 @@ std::string PrefilterTree::DebugNodeString(Prefilter* node) const {
 
 
 // LICENSE_CHANGE_BEGIN
-// The following code up to LICENSE_CHANGE_END is subject to THIRD PARTY LICENSE #6
+// The following code up to LICENSE_CHANGE_END is subject to THIRD PARTY LICENSE #2
 // See the end of this file for a list
 
 // Copyright 2007 The RE2 Authors.  All Rights Reserved.
@@ -11352,7 +11352,7 @@ std::string PrefilterTree::DebugNodeString(Prefilter* node) const {
 
 
 // LICENSE_CHANGE_BEGIN
-// The following code up to LICENSE_CHANGE_END is subject to THIRD PARTY LICENSE #6
+// The following code up to LICENSE_CHANGE_END is subject to THIRD PARTY LICENSE #2
 // See the end of this file for a list
 
 // Copyright 2016 The RE2 Authors.  All Rights Reserved.
@@ -11972,6 +11972,13 @@ void Prog::ComputeByteMap() {
   builder.Build(bytemap_, &bytemap_range_);
 }
 
+int TotalInstructions(int inst_count_[]) {
+  int total = 0;
+  for (int i = 0; i < kNumInst; i++)
+    total += inst_count_[i];
+  return total;
+}
+
 // Prog::Flatten() implements a graph rewriting algorithm.
 //
 // The overall process is similar to epsilon removal, but retains some epsilon
@@ -12064,10 +12071,7 @@ void Prog::Flatten() {
     inst_count_[ip->opcode()]++;
   }
 
-  int total = 0;
-  for (int i = 0; i < kNumInst; i++)
-    total += inst_count_[i];
-  DCHECK_EQ(total, static_cast<int>(flat.size()));
+  DCHECK_EQ(TotalInstructions(inst_count_), static_cast<int>(flat.size()));
 
   // Remap start_unanchored and start.
   if (start_unanchored() == 0) {
@@ -12378,7 +12382,7 @@ void Prog::ComputeHints(std::vector<Inst>* flat, int begin, int end) {
 
 
 // LICENSE_CHANGE_BEGIN
-// The following code up to LICENSE_CHANGE_END is subject to THIRD PARTY LICENSE #6
+// The following code up to LICENSE_CHANGE_END is subject to THIRD PARTY LICENSE #2
 // See the end of this file for a list
 
 // Copyright 2003-2009 The RE2 Authors.  All Rights Reserved.
@@ -12949,6 +12953,15 @@ static int ascii_strcasecmp(const char* a, const char* b, size_t len) {
   return 0;
 }
 
+RE2::Anchor RE2::Anchored() const {
+  if (prog_->anchor_start()) {
+    if (prog_->anchor_end()) {
+      return Anchor::ANCHOR_BOTH;
+    }
+    return Anchor::ANCHOR_START;
+  }
+  return Anchor::UNANCHORED;
+}
 
 /***** Actual matching and rewriting code *****/
 
@@ -13622,7 +13635,7 @@ DEFINE_INTEGER_PARSER(ulonglong)
 
 
 // LICENSE_CHANGE_BEGIN
-// The following code up to LICENSE_CHANGE_END is subject to THIRD PARTY LICENSE #6
+// The following code up to LICENSE_CHANGE_END is subject to THIRD PARTY LICENSE #2
 // See the end of this file for a list
 
 // Copyright 2006 The RE2 Authors.  All Rights Reserved.
@@ -14602,7 +14615,7 @@ CharClass* CharClassBuilder::GetCharClass() {
 
 
 // LICENSE_CHANGE_BEGIN
-// The following code up to LICENSE_CHANGE_END is subject to THIRD PARTY LICENSE #6
+// The following code up to LICENSE_CHANGE_END is subject to THIRD PARTY LICENSE #2
 // See the end of this file for a list
 
 // Copyright 2010 The RE2 Authors.  All Rights Reserved.
@@ -14612,7 +14625,7 @@ CharClass* CharClassBuilder::GetCharClass() {
 
 
 // LICENSE_CHANGE_BEGIN
-// The following code up to LICENSE_CHANGE_END is subject to THIRD PARTY LICENSE #6
+// The following code up to LICENSE_CHANGE_END is subject to THIRD PARTY LICENSE #2
 // See the end of this file for a list
 
 // Copyright 2010 The RE2 Authors.  All Rights Reserved.
@@ -14853,7 +14866,7 @@ bool RE2::Set::Match(const StringPiece& text, std::vector<int>* v,
 
 
 // LICENSE_CHANGE_BEGIN
-// The following code up to LICENSE_CHANGE_END is subject to THIRD PARTY LICENSE #6
+// The following code up to LICENSE_CHANGE_END is subject to THIRD PARTY LICENSE #2
 // See the end of this file for a list
 
 // Copyright 2006 The RE2 Authors.  All Rights Reserved.
@@ -15518,7 +15531,7 @@ Regexp* SimplifyWalker::SimplifyCharClass(Regexp* re) {
 
 
 // LICENSE_CHANGE_BEGIN
-// The following code up to LICENSE_CHANGE_END is subject to THIRD PARTY LICENSE #6
+// The following code up to LICENSE_CHANGE_END is subject to THIRD PARTY LICENSE #2
 // See the end of this file for a list
 
 // Copyright 2004 The RE2 Authors.  All Rights Reserved.
@@ -15592,7 +15605,7 @@ std::ostream& operator<<(std::ostream& o, const StringPiece& p) {
 
 
 // LICENSE_CHANGE_BEGIN
-// The following code up to LICENSE_CHANGE_END is subject to THIRD PARTY LICENSE #6
+// The following code up to LICENSE_CHANGE_END is subject to THIRD PARTY LICENSE #2
 // See the end of this file for a list
 
 // Copyright 2006 The RE2 Authors.  All Rights Reserved.
@@ -15950,7 +15963,7 @@ static void AppendCCRange(std::string* t, Rune lo, Rune hi) {
 
 
 // LICENSE_CHANGE_BEGIN
-// The following code up to LICENSE_CHANGE_END is subject to THIRD PARTY LICENSE #6
+// The following code up to LICENSE_CHANGE_END is subject to THIRD PARTY LICENSE #2
 // See the end of this file for a list
 
 
@@ -16526,7 +16539,7 @@ const int num_unicode_tolower = 194;
 
 
 // LICENSE_CHANGE_BEGIN
-// The following code up to LICENSE_CHANGE_END is subject to THIRD PARTY LICENSE #6
+// The following code up to LICENSE_CHANGE_END is subject to THIRD PARTY LICENSE #2
 // See the end of this file for a list
 
 
@@ -22594,7 +22607,7 @@ const int num_unicode_groups = 184;
 
 
 // LICENSE_CHANGE_BEGIN
-// The following code up to LICENSE_CHANGE_END is subject to THIRD PARTY LICENSE #6
+// The following code up to LICENSE_CHANGE_END is subject to THIRD PARTY LICENSE #2
 // See the end of this file for a list
 
 /*
@@ -22863,7 +22876,7 @@ utfrune(const char *s, Rune c)
 
 
 // LICENSE_CHANGE_BEGIN
-// The following code up to LICENSE_CHANGE_END is subject to THIRD PARTY LICENSE #6
+// The following code up to LICENSE_CHANGE_END is subject to THIRD PARTY LICENSE #2
 // See the end of this file for a list
 
 // Copyright 1999-2005 The RE2 Authors.  All Rights Reserved.
