@@ -39,7 +39,8 @@ class HiveConfig {
   static constexpr const char* kInsertExistingPartitionsBehavior =
       "insert_existing_partitions_behavior";
 
-  /// Maximum number of partitions per a single table writer instance.
+  /// Maximum number of (bucketed) partitions per a single table writer
+  /// instance.
   static constexpr const char* kMaxPartitionsPerWriters =
       "max_partitions_per_writers";
 
@@ -79,6 +80,10 @@ class HiveConfig {
   static constexpr const char* kS3IamRoleSessionName =
       "hive.s3.iam-role-session-name";
 
+  // Read the source file column name as lower case.
+  static constexpr const char* kFileColumnNamesReadAsLowerCase =
+      "file_column_names_read_as_lower_case";
+
   static InsertExistingPartitionsBehavior insertExistingPartitionsBehavior(
       const Config* config);
 
@@ -103,6 +108,8 @@ class HiveConfig {
   static std::optional<std::string> s3IAMRole(const Config* config);
 
   static std::string s3IAMRoleSessionName(const Config* config);
+
+  static bool isFileColumnNamesReadAsLowerCase(const Config* config);
 };
 
 } // namespace facebook::velox::connector::hive

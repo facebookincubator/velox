@@ -24,21 +24,34 @@ void registerJsonFunctions(const std::string& prefix) {
 
   registerFunction<SIMDIsJsonScalarFunction, bool, Json>(
       {prefix + "is_json_scalar"});
+
   registerFunction<JsonExtractScalarFunction, Varchar, Json, Varchar>(
       {prefix + "json_extract_scalar"});
-  registerFunction<JsonArrayLengthFunction, int64_t, Json>(
+  registerFunction<JsonExtractScalarFunction, Varchar, Varchar, Varchar>(
+      {prefix + "json_extract_scalar"});
+
+  registerFunction<JsonExtractFunction, Json, Json, Varchar>(
+      {prefix + "json_extract"});
+  registerFunction<JsonExtractFunction, Json, Varchar, Varchar>(
+      {prefix + "json_extract"});
+
+  registerFunction<SIMDJsonArrayLengthFunction, int64_t, Json>(
       {prefix + "json_array_length"});
-  registerFunction<JsonArrayContainsFunction, bool, Json, bool>(
+
+  registerFunction<SIMDJsonArrayContainsFunction, bool, Json, bool>(
       {prefix + "json_array_contains"});
-  registerFunction<JsonArrayContainsFunction, bool, Json, int64_t>(
+  registerFunction<SIMDJsonArrayContainsFunction, bool, Json, int64_t>(
       {prefix + "json_array_contains"});
-  registerFunction<JsonArrayContainsFunction, bool, Json, double>(
+  registerFunction<SIMDJsonArrayContainsFunction, bool, Json, double>(
       {prefix + "json_array_contains"});
-  registerFunction<JsonArrayContainsFunction, bool, Json, Varchar>(
+  registerFunction<SIMDJsonArrayContainsFunction, bool, Json, Varchar>(
       {prefix + "json_array_contains"});
+
   registerFunction<JsonSizeFunction, int64_t, Json, Varchar>(
       {prefix + "json_size"});
+
   VELOX_REGISTER_VECTOR_FUNCTION(udf_json_format, prefix + "json_format");
+
   VELOX_REGISTER_VECTOR_FUNCTION(udf_json_parse, prefix + "json_parse");
 }
 

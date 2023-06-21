@@ -76,6 +76,12 @@ inline void registerArrayNormalizeFunctions(const std::string& prefix) {
       T>({prefix + "array_normalize"});
 }
 
+template <typename T>
+inline void registerArrayTrimFunctions(const std::string& prefix) {
+  registerFunction<ArrayTrimFunction, Array<T>, Array<T>, int64_t>(
+      {prefix + "trim_array"});
+}
+
 void registerArrayFunctions(const std::string& prefix) {
   registerArrayConstructor(prefix + "array_constructor");
   VELOX_REGISTER_VECTOR_FUNCTION(udf_all_match, prefix + "all_match");
@@ -108,6 +114,7 @@ void registerArrayFunctions(const std::string& prefix) {
   registerArrayMinMaxFunctions<int16_t>(prefix);
   registerArrayMinMaxFunctions<int32_t>(prefix);
   registerArrayMinMaxFunctions<int64_t>(prefix);
+  registerArrayMinMaxFunctions<int128_t>(prefix);
   registerArrayMinMaxFunctions<float>(prefix);
   registerArrayMinMaxFunctions<double>(prefix);
   registerArrayMinMaxFunctions<bool>(prefix);
@@ -119,6 +126,7 @@ void registerArrayFunctions(const std::string& prefix) {
   registerArrayJoinFunctions<int16_t>(prefix);
   registerArrayJoinFunctions<int32_t>(prefix);
   registerArrayJoinFunctions<int64_t>(prefix);
+  registerArrayJoinFunctions<int128_t>(prefix);
   registerArrayJoinFunctions<float>(prefix);
   registerArrayJoinFunctions<double>(prefix);
   registerArrayJoinFunctions<bool>(prefix);
@@ -129,10 +137,43 @@ void registerArrayFunctions(const std::string& prefix) {
   registerFunction<ArrayAverageFunction, double, Array<double>>(
       {prefix + "array_average"});
 
+  registerFunction<
+      ArrayConcatFunction,
+      Array<Generic<T1>>,
+      Variadic<Array<Generic<T1>>>>({prefix + "concat"});
+
+  registerFunction<
+      ArrayFlattenFunction,
+      Array<Generic<T1>>,
+      Array<Array<Generic<T1>>>>({prefix + "flatten"});
+
+  registerArrayTrimFunctions<int8_t>(prefix);
+  registerArrayTrimFunctions<int16_t>(prefix);
+  registerArrayTrimFunctions<int32_t>(prefix);
+  registerArrayTrimFunctions<int64_t>(prefix);
+  registerArrayTrimFunctions<int128_t>(prefix);
+  registerArrayTrimFunctions<float>(prefix);
+  registerArrayTrimFunctions<double>(prefix);
+  registerArrayTrimFunctions<bool>(prefix);
+  registerArrayTrimFunctions<Timestamp>(prefix);
+  registerArrayTrimFunctions<Date>(prefix);
+  registerArrayTrimFunctions<Varbinary>(prefix);
+  registerFunction<
+      ArrayTrimFunctionString,
+      Array<Varchar>,
+      Array<Varchar>,
+      int64_t>({prefix + "trim_array"});
+  registerFunction<
+      ArrayTrimFunction,
+      Array<Generic<T1>>,
+      Array<Generic<T1>>,
+      int64_t>({prefix + "trim_array"});
+
   registerArrayCombinationsFunctions<int8_t>(prefix);
   registerArrayCombinationsFunctions<int16_t>(prefix);
   registerArrayCombinationsFunctions<int32_t>(prefix);
   registerArrayCombinationsFunctions<int64_t>(prefix);
+  registerArrayCombinationsFunctions<int128_t>(prefix);
   registerArrayCombinationsFunctions<float>(prefix);
   registerArrayCombinationsFunctions<double>(prefix);
   registerArrayCombinationsFunctions<bool>(prefix);
@@ -144,9 +185,11 @@ void registerArrayFunctions(const std::string& prefix) {
   registerArrayHasDuplicatesFunctions<int16_t>(prefix);
   registerArrayHasDuplicatesFunctions<int32_t>(prefix);
   registerArrayHasDuplicatesFunctions<int64_t>(prefix);
+  registerArrayHasDuplicatesFunctions<int128_t>(prefix);
   registerArrayHasDuplicatesFunctions<Varchar>(prefix);
 
   registerArrayFrequencyFunctions<int64_t>(prefix);
+  registerArrayFrequencyFunctions<int128_t>(prefix);
   registerArrayFrequencyFunctions<Varchar>(prefix);
 
   registerArrayNormalizeFunctions<float>(prefix);

@@ -21,12 +21,14 @@ add_executable(
   ArrayAnyMatchTest.cpp
   ArrayAverageTest.cpp
   ArrayCombinationsTest.cpp
+  ArrayConcatTest.cpp
   ArrayConstructorTest.cpp
   ArrayContainsTest.cpp
   ArrayDistinctTest.cpp
   ArrayDuplicatesTest.cpp
   ArrayExceptTest.cpp
   ArrayFilterTest.cpp
+  ArrayFlattenTest.cpp
   ArrayJoinTest.cpp
   ArrayHasDuplicatesTest.cpp
   ArrayIntersectTest.cpp
@@ -39,6 +41,7 @@ add_executable(
   ArrayShuffleTest.cpp
   ArraysOverlapTest.cpp
   ArraySumTest.cpp
+  ArrayTrimTest.cpp
   BinaryFunctionsTest.cpp
   BitwiseTest.cpp
   CardinalityTest.cpp
@@ -56,6 +59,7 @@ add_executable(
   JsonFunctionsTest.cpp
   MapEntriesTest.cpp
   MapFilterTest.cpp
+  MapFromEntriesTest.cpp
   MapKeysAndValuesTest.cpp
   MapTest.cpp
   MapZipWithTest.cpp

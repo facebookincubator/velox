@@ -31,6 +31,7 @@
 #include "velox/common/memory/MemoryArbitrator.h"
 
 DECLARE_bool(velox_memory_leak_check_enabled);
+DECLARE_bool(velox_memory_pool_debug_enabled);
 
 namespace facebook::velox::memory {
 #define VELOX_MEM_POOL_CAP_EXCEEDED(errorMessage)                   \
@@ -120,8 +121,8 @@ class MemoryPool : public std::enable_shared_from_this<MemoryPool> {
   struct Options {
     /// Specifies the memory allocation alignment through this memory pool.
     uint16_t alignment{MemoryAllocator::kMaxAlignment};
-    /// Specifies the memory capacity of this memory pool.
-    int64_t capacity{kMaxMemory};
+    /// Specifies the max memory capacity of this memory pool.
+    int64_t maxCapacity{kMaxMemory};
 
     /// If true, tracks the memory usage from the leaf memory pool and aggregate
     /// up to the root memory pool for capacity enforcement. Otherwise there is
@@ -135,7 +136,7 @@ class MemoryPool : public std::enable_shared_from_this<MemoryPool> {
     /// enable it on a subset of memory pools.
     bool trackUsage{true};
 
-    /// If true, track the leaf memory pool usage in a thread-safe mode
+    /// If true, tracks the leaf memory pool usage in a thread-safe mode
     /// otherwise not. This only applies for leaf memory pool with memory usage
     /// tracking enabled. We use non-thread safe tracking mode for single
     /// threaded use case.
@@ -147,11 +148,15 @@ class MemoryPool : public std::enable_shared_from_this<MemoryPool> {
     /// TODO: deprecate this flag after all the existing memory leak use cases
     /// have been fixed.
     ///
-    /// If true, check the memory usage leak on destruction.
+    /// If true, checks the memory usage leak on destruction.
     ///
     /// NOTE: user can turn on/off the memory leak check of each individual
     /// memory pools from the same root memory pool independently.
     bool checkUsageLeak{FLAGS_velox_memory_leak_check_enabled};
+
+    /// If true, tracks the allocation and free call stacks to detect the source
+    /// of memory leak for testing purpose.
+    bool debugEnabled{FLAGS_velox_memory_pool_debug_enabled};
   };
 
   /// Constructs a named memory pool with specified 'name', 'parent' and 'kind'.
@@ -294,7 +299,17 @@ class MemoryPool : public std::enable_shared_from_this<MemoryPool> {
   /// Resource governing methods used to track and limit the memory usage
   /// through this memory pool object.
 
-  /// Returns the capacity from the root memory pool.
+  /// Returns the max capacity of the root memory pool which is a hard limit of
+  /// the memory pool's capacity.
+  virtual int64_t maxCapacity() const {
+    return parent_ != nullptr ? parent_->maxCapacity() : maxCapacity_;
+  }
+
+  /// Returns the current capacity of the root memory pool. The memory
+  /// arbitrator allocates an initial memory capacity for a newly created memory
+  /// pool, and continuously adjusts its capacity during the query execution and
+  /// ensures it is within 'maxCapacity()' limit. Without memory arbitrator,
+  /// 'capacity()' is fixed and set to 'maxCapacity()' on creation.
   virtual int64_t capacity() const = 0;
 
   /// Returns the currently used memory in bytes of this memory pool.
@@ -481,9 +496,11 @@ class MemoryPool : public std::enable_shared_from_this<MemoryPool> {
   const Kind kind_;
   const uint16_t alignment_;
   const std::shared_ptr<MemoryPool> parent_;
+  const int64_t maxCapacity_;
   const bool trackUsage_;
   const bool threadSafe_;
   const bool checkUsageLeak_;
+  const bool debugEnabled_;
 
   /// Indicates if the memory pool has been aborted by the memory arbitrator or
   /// not.
@@ -594,6 +611,16 @@ class MemoryPoolImpl : public MemoryPool {
 
   MemoryAllocator* testingAllocator() const {
     return allocator_;
+  }
+
+  /// Structure to store allocation details in debug mode.
+  struct AllocationRecord {
+    uint64_t size;
+    std::string callStack;
+  };
+
+  std::unordered_map<uint64_t, AllocationRecord>& testingDebugAllocRecords() {
+    return debugAllocRecords_;
   }
 
  private:
@@ -812,6 +839,11 @@ class MemoryPoolImpl : public MemoryPool {
         << MemoryAllocator::kindString(allocator_->kind())
         << (trackUsage_ ? " track-usage" : " no-usage-track")
         << (threadSafe_ ? " thread-safe" : " non-thread-safe") << "]<";
+    if (maxCapacity_ != kMaxMemory) {
+      out << "max capacity " << succinctBytes(maxCapacity_) << " ";
+    } else {
+      out << "unlimited max capacity ";
+    }
     if (capacityLocked() != kMaxMemory) {
       out << "capacity " << succinctBytes(capacityLocked()) << " ";
     } else {
@@ -828,6 +860,46 @@ class MemoryPoolImpl : public MemoryPool {
     out << ">";
     return out.str();
   }
+
+  // Recording on every allocation is very expensive and normally will result
+  // in CPU saturation. Modify this method while debugging to limit the number
+  // of times that the allocations are recorded. 'isAlloc' will be true at
+  // allocation sites, false at free sites. A good example of this filter would
+  // be based on the 'name_' of the MemoryPool.
+  //  TODO(jtan6): Add support for dynamic condition change.
+  bool needRecordDbg(bool isAlloc);
+
+  // Invoked to record the call stack of a buffer allocation if debug mode of
+  // this memory pool is enabled.
+  void recordAllocDbg(const void* addr, uint64_t size);
+
+  // Invoked to record the call stack of a non-contiguous allocation if debug
+  // mode of this memory pool is enabled.
+  void recordAllocDbg(const Allocation& allocation);
+
+  // Invoked to record the call stack of a contiguous allocation if debug mode
+  // of this memory pool is enabled.
+  void recordAllocDbg(const ContiguousAllocation& allocation);
+
+  // Invoked to free the call stack of a buffer allocation if debug mode of this
+  // memory pool is enabled.
+  void recordFreeDbg(const void* addr, uint64_t size);
+
+  // Invoked to free the call stack of a non-contiguous allocation if debug mode
+  // of this memory pool is enabled.
+  void recordFreeDbg(const Allocation& allocation);
+
+  // Invoked to free the call stack of a contiguous allocation if debug mode
+  // of this memory pool is enabled.
+  void recordFreeDbg(const ContiguousAllocation& allocation);
+
+  // Invoked by memory pool destructor to detect the sources of leaked memory
+  // allocations from the call sites which are still recorded in
+  // 'debugAllocRecords_'. If there is no memory leaks, 'debugAllocRecords_'
+  // should be empty as all the memory allocations should have been freed on
+  // memory pool destruction. We only check this if debug mode of this memory
+  // pool is enabled.
+  void leakCheckDbg();
 
   MemoryManager* const manager_;
   MemoryAllocator* const allocator_;
@@ -874,6 +946,11 @@ class MemoryPoolImpl : public MemoryPool {
   // The number of internal memory reservation collisions caused by concurrent
   // memory reservation requests.
   std::atomic<uint64_t> numCollisions_{0};
+
+  // Mutex for 'debugAllocRecords_'.
+  std::mutex debugAllocMutex_;
+  // Map from address to 'AllocationRecord'.
+  std::unordered_map<uint64_t, AllocationRecord> debugAllocRecords_;
 };
 
 /// An Allocator backed by a memory pool for STL containers.

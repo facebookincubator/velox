@@ -39,6 +39,7 @@ MemoryManager::MemoryManager(const Options& options)
               options.arbitratorConfig.retryArbitrationFailure})),
       alignment_(std::max(MemoryAllocator::kMinAlignment, options.alignment)),
       checkUsageLeak_(options.checkUsageLeak),
+      debugEnabled_(options.debugEnabled),
       poolDestructionCb_([&](MemoryPool* pool) { dropPool(pool); }),
       defaultRoot_{std::make_shared<MemoryPoolImpl>(
           this,
@@ -51,13 +52,15 @@ MemoryManager::MemoryManager(const Options& options)
           // used for system usage in production such as disk spilling.
           MemoryPool::Options{
               .alignment = alignment_,
-              .capacity = kMaxMemory,
+              .maxCapacity = kMaxMemory,
               .trackUsage =
                   FLAGS_velox_enable_memory_usage_track_in_default_memory_pool,
-              .checkUsageLeak = options.checkUsageLeak})} {
+              .checkUsageLeak = options.checkUsageLeak,
+              .debugEnabled = options.debugEnabled})} {
   VELOX_CHECK_NOT_NULL(allocator_);
   VELOX_USER_CHECK_GE(capacity_, 0);
   MemoryAllocator::alignmentCheck(0, alignment_);
+  defaultRoot_->grow(defaultRoot_->maxCapacity());
   const size_t numSharedPools =
       std::max(1, FLAGS_velox_memory_num_shared_leaf_pools);
   sharedLeafPools_.reserve(numSharedPools);
@@ -111,13 +114,10 @@ std::shared_ptr<MemoryPool> MemoryManager::addRootPool(
 
   MemoryPool::Options options;
   options.alignment = alignment_;
-  if (arbitrator_ != nullptr) {
-    options.capacity = 0;
-  } else {
-    options.capacity = capacity;
-  }
+  options.maxCapacity = capacity;
   options.trackUsage = true;
   options.checkUsageLeak = checkUsageLeak_;
+  options.debugEnabled = debugEnabled_;
 
   folly::SharedMutex::WriteHolder guard{mutex_};
   if (pools_.find(poolName) != pools_.end()) {
@@ -132,9 +132,13 @@ std::shared_ptr<MemoryPool> MemoryManager::addRootPool(
       poolDestructionCb_,
       options);
   pools_.emplace(poolName, pool);
+  VELOX_CHECK_EQ(pool->capacity(), 0);
   if (arbitrator_ != nullptr) {
-    VELOX_CHECK_EQ(pool->capacity(), 0);
     arbitrator_->reserveMemory(pool.get(), capacity);
+  } else {
+    // NOTE: if there is no memory arbitrator, then we set the memory pool's
+    // capacity to its configured max.
+    pool->grow(pool->maxCapacity());
   }
   return pool;
 }

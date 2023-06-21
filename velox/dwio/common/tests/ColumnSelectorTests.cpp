@@ -15,6 +15,7 @@
  */
 
 #include <gtest/gtest.h>
+#include "velox/common/base/VeloxException.h"
 #include "velox/dwio/common/ColumnSelector.h"
 #include "velox/dwio/type/fbhive/HiveTypeParser.h"
 #include "velox/type/Type.h"
@@ -23,7 +24,7 @@ using namespace facebook::velox::dwio::common;
 using facebook::velox::RowType;
 using facebook::velox::dwio::type::fbhive::HiveTypeParser;
 
-TEST(TestColumnSelector, testBasicFilterTree) {
+TEST(ColumnSelectorTests, testBasicFilterTree) {
   const auto schema =
       "struct<"
       "id:bigint"
@@ -194,7 +195,7 @@ TEST(TestColumnSelector, testBasicFilterTree) {
   }
 }
 
-TEST(TestColumnSelector, testGetColumnFilter) {
+TEST(ColumnSelectorTests, testGetColumnFilter) {
   const auto schema =
       "struct<"
       "id:bigint"
@@ -229,7 +230,7 @@ TEST(TestColumnSelector, testGetColumnFilter) {
   EXPECT_EQ(emptyFilter.getProjection().size(), 5);
 }
 
-TEST(TestColumnSelector, testSearchInColumnFilter) {
+TEST(ColumnSelectorTests, testSearchInColumnFilter) {
   const auto schema =
       "struct<"
       "id:bigint"
@@ -256,7 +257,7 @@ TEST(TestColumnSelector, testSearchInColumnFilter) {
   EXPECT_TRUE(FilterNode(4).in(filter) == filter.cend());
 }
 
-TEST(TestColumnSelector, testSchemaMismatchHandling) {
+TEST(ColumnSelectorTests, testSchemaMismatchHandling) {
   const auto strSchema =
       "struct<"
       "id:bigint"
@@ -320,7 +321,7 @@ TEST(TestColumnSelector, testSchemaMismatchHandling) {
   }
 }
 
-TEST(TestColumnSelector, testMapKeyFilterSyntax) {
+TEST(ColumnSelectorTests, testMapKeyFilterSyntax) {
   const auto schema =
       "struct<"
       "id:bigint"
@@ -366,7 +367,7 @@ TEST(TestColumnSelector, testMapKeyFilterSyntax) {
   EXPECT_TRUE(tags2->valid());
 }
 
-TEST(TestColumnSelector, testPartitionKeysMark) {
+TEST(ColumnSelectorTests, testPartitionKeysMark) {
   const auto schema = std::dynamic_pointer_cast<const RowType>(
       HiveTypeParser().parse("struct<"
                              "id:bigint"
@@ -482,7 +483,7 @@ TEST(TestColumnSelector, testPartitionKeysMark) {
   }
 }
 
-TEST(TestColumnSelector, testProjectionUnchangedWhenReadSetChanged) {
+TEST(ColumnSelectorTests, testProjectionUnchangedWhenReadSetChanged) {
   const auto schema = std::dynamic_pointer_cast<const RowType>(
       HiveTypeParser().parse("struct<"
                              "id:bigint"
@@ -531,7 +532,7 @@ TEST(TestColumnSelector, testProjectionUnchangedWhenReadSetChanged) {
   }
 }
 
-TEST(TestColumnSelector, testProjectOrder) {
+TEST(ColumnSelectorTests, testProjectOrder) {
   const auto schema = std::dynamic_pointer_cast<const RowType>(
       HiveTypeParser().parse("struct<"
                              "id:bigint"
@@ -614,7 +615,7 @@ TEST(TestColumnSelector, testProjectOrder) {
   }
 }
 
-TEST(TestColumnSelector, testNonexistingColFilters) {
+TEST(ColumnSelectorTests, testNonexistingColFilters) {
   const auto schema = std::dynamic_pointer_cast<const RowType>(
       HiveTypeParser().parse("struct<"
                              "id:bigint"
@@ -629,4 +630,20 @@ TEST(TestColumnSelector, testNonexistingColFilters) {
           schema,
           std::vector<std::string>{"id", "values", "notexists#[10,20,30,40]"}),
       std::runtime_error);
+}
+
+TEST(TestColumnSelector, fileColumnNamesReadAsLowerCaseDuplicateColFilters) {
+  const auto schema = std::dynamic_pointer_cast<const RowType>(
+      HiveTypeParser().parse("struct<"
+                             "id:bigint"
+                             "id:bigint"
+                             "values:array<float>"
+                             "tags:map<int, string>"
+                             "notes:struct<f1:int, f2:double, f3:string>"
+                             "memo:string"
+                             "extra:string>"));
+
+  EXPECT_THROW(
+      ColumnSelector cs(schema, std::vector<std::string>{"id"}, nullptr, true),
+      facebook::velox::VeloxException);
 }
