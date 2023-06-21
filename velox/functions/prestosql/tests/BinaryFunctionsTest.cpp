@@ -642,4 +642,45 @@ TEST_F(BinaryFunctionsTest, toIEEE754Bits64) {
       toIEEE754Bits64(std::numeric_limits<double>::lowest()));
 }
 
+TEST_F(BinaryFunctionsTest, toIEEE754Bits32) {
+  const auto toIEEE754Bits32 = [&](std::optional<float> value) {
+    return evaluateOnce<std::string, float>(
+        "to_ieee754_32(cast(c0 as real))", value);
+  };
+
+  EXPECT_EQ("00000000000000000000000000000000", toIEEE754Bits32(0.0));
+  EXPECT_EQ("00111111100000000000000000000000", toIEEE754Bits32(1.0));
+  EXPECT_EQ("01000000010010010000111111011010", toIEEE754Bits32(3.1415926));
+  EXPECT_EQ(
+      "01111111100000000000000000000000",
+      toIEEE754Bits32(1.7976931348623157E308));
+  EXPECT_EQ(
+      "11111111100000000000000000000000",
+      toIEEE754Bits32(-1.7976931348623157E308));
+  EXPECT_EQ("00000000000000000000000000000000", toIEEE754Bits32(4.9E-324));
+  EXPECT_EQ("10000000000000000000000000000000", toIEEE754Bits32(-4.9E-324));
+  EXPECT_EQ(toIEEE754Bits32(100.0), toIEEE754Bits32(100));
+
+  EXPECT_EQ(std::nullopt, toIEEE754Bits32(std::nullopt));
+
+  EXPECT_EQ(
+      "01111111101000000000000000000000",
+      toIEEE754Bits32(std::numeric_limits<float>::signaling_NaN()));
+  EXPECT_EQ(
+      "01111111110000000000000000000000",
+      toIEEE754Bits32(std::numeric_limits<float>::quiet_NaN()));
+  EXPECT_EQ(
+      "01111111100000000000000000000000",
+      toIEEE754Bits32(std::numeric_limits<float>::infinity()));
+  EXPECT_EQ(
+      "00000000100000000000000000000000",
+      toIEEE754Bits32(std::numeric_limits<float>::min()));
+  EXPECT_EQ(
+      "01111111011111111111111111111111",
+      toIEEE754Bits32(std::numeric_limits<float>::max()));
+  EXPECT_EQ(
+      "11111111011111111111111111111111",
+      toIEEE754Bits32(std::numeric_limits<float>::lowest()));
+}
+
 } // namespace
