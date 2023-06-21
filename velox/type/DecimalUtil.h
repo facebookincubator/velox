@@ -118,7 +118,9 @@ class DecimalUtil {
     if (rescaledValue < -DecimalUtil::kPowersOfTen[toPrecision] ||
         rescaledValue > DecimalUtil::kPowersOfTen[toPrecision] || isOverflow) {
       VELOX_USER_FAIL(
-          "Cannot cast DECIMAL '{}' to DECIMAL({},{})",
+          "Cannot cast DECIMAL({},{}) '{}' to DECIMAL({},{})",
+          fromPrecision,
+          fromScale,
           DecimalUtil::toString(inputValue, DECIMAL(fromPrecision, fromScale)),
           toPrecision,
           toScale);

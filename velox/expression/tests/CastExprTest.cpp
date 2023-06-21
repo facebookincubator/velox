@@ -880,7 +880,7 @@ TEST_F(CastExprTest, decimalToDecimal) {
   // Throws exception if CAST fails.
   VELOX_ASSERT_THROW(
       testComplexCast("c0", longFlat, expectedShort),
-      "Cannot cast DECIMAL '-1000.000' to DECIMAL(6,4)");
+      "Cannot cast DECIMAL(20,3) '-1000.000' to DECIMAL(6,4)");
 
   // nullOnFailure is true.
   testComplexCast("c0", longFlat, expectedShort, true);
@@ -913,14 +913,14 @@ TEST_F(CastExprTest, decimalToDecimal) {
           makeNullableLongDecimalFlatVector(
               {DecimalUtil::kLongDecimalMax}, DECIMAL(38, 0)),
           makeNullableLongDecimalFlatVector({0}, DECIMAL(38, 1))),
-      "Cannot cast DECIMAL '99999999999999999999999999999999999999' to DECIMAL(38,1)");
+      "Cannot cast DECIMAL(38,0) '99999999999999999999999999999999999999' to DECIMAL(38,1)");
   VELOX_ASSERT_THROW(
       testComplexCast(
           "c0",
           makeNullableLongDecimalFlatVector(
               {DecimalUtil::kLongDecimalMin}, DECIMAL(38, 0)),
           makeNullableLongDecimalFlatVector({0}, DECIMAL(38, 1))),
-      "Cannot cast DECIMAL '-99999999999999999999999999999999999999' to DECIMAL(38,1)");
+      "Cannot cast DECIMAL(38,0) '-99999999999999999999999999999999999999' to DECIMAL(38,1)");
 }
 
 TEST_F(CastExprTest, integerToDecimal) {
