@@ -230,7 +230,10 @@ class TableWriteTest : public HiveConnectorTestBase {
     std::vector<std::shared_ptr<connector::ConnectorSplit>> splits;
     for (const auto& filePath : filePaths) {
       splits.push_back(HiveConnectorTestBase::makeHiveConnectorSplits(
-          filePath.string(), 1, fileFormat)[0]);
+          filePath.string(),
+          1,
+          fileFormat,
+          dwio::common::ReaderOptions(nullptr))[0]);
     }
     return splits;
   }
