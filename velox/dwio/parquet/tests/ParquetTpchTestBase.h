@@ -19,8 +19,10 @@
 
 #include "velox/common/base/Fs.h"
 #include "velox/common/file/FileSystems.h"
+#include "velox/duckdb/conversion/DuckConversion.h"
+#include "velox/duckdb/conversion/DuckWrapper.h"
 #include "velox/dwio/parquet/RegisterParquetReader.h"
-#include "velox/dwio/parquet/duckdb_reader/ParquetReader.h"
+#include "velox/dwio/parquet/RegisterParquetWriter.h"
 #include "velox/exec/tests/utils/HiveConnectorTestBase.h"
 #include "velox/exec/tests/utils/PlanBuilder.h"
 #include "velox/exec/tests/utils/TempDirectoryPath.h"
@@ -41,11 +43,10 @@ namespace {
 
 class ParquetTpchTestBase : public testing::Test {
  public:
-  ParquetTpchTestBase(ParquetReaderType parquetReaderType)
-      : parquetReaderType_(parquetReaderType) {}
+  ParquetTpchTestBase() {}
 
-  // Setup a DuckDB instance for the entire suite and load TPC-H data with scale
-  // factor 0.01.
+  // Set up a DuckDB instance for the entire suite and load TPC-H data with
+  // scale factor 0.01.
   void SetUp() {
     if (duckDb_ == nullptr) {
       duckDb_ = std::make_shared<DuckDbQueryRunner>();
@@ -57,10 +58,8 @@ class ParquetTpchTestBase : public testing::Test {
 
     parse::registerTypeResolver();
     filesystems::registerLocalFileSystem();
-    if (parquetReaderType_ == ParquetReaderType::DUCKDB) {
-      FLAGS_split_preload_per_driver = 0;
-    }
-    registerParquetReaderFactory(parquetReaderType_);
+    registerParquetReaderFactory();
+    registerParquetWriterFactory();
 
     auto hiveConnector =
         connector::getConnectorFactory(
@@ -86,22 +85,86 @@ class ParquetTpchTestBase : public testing::Test {
   }
 
  private:
+  RowTypePtr getType(const DuckDBQueryResult& result) {
+    std::vector<std::string> names = {};
+    std::vector<TypePtr> types = {};
+    for (auto i = 0; i < result->ColumnCount(); i++) {
+      names.push_back(result->names[i]);
+      types.push_back(duckdb::toVeloxType(result->types[i]));
+    }
+    return std::make_shared<RowType>(std::move(names), std::move(types));
+  }
+
+  std::vector<RowVectorPtr> getVector(
+      const DuckDBQueryResult& result,
+      const RowTypePtr& resultType) {
+    std::vector<RowVectorPtr> rowVectors{};
+
+    while (true) {
+      auto currentChunk = result->Fetch();
+      if (!currentChunk) {
+        break;
+      }
+      currentChunk->Normalify();
+      std::vector<VectorPtr> outputColumns;
+      for (auto i = 0; i < result->ColumnCount(); i++) {
+        auto vector = duckdb::toVeloxVector(
+            currentChunk->size(),
+            currentChunk->data[i],
+            resultType->childAt(i),
+            pool_.get());
+        outputColumns.push_back(vector);
+      }
+
+      auto rowVector = std::make_shared<RowVector>(
+          pool_.get(),
+          resultType,
+          BufferPtr(nullptr),
+          currentChunk->size(),
+          outputColumns);
+
+      rowVectors.push_back(rowVector);
+    }
+
+    return rowVectors;
+  }
+
   /// Write TPC-H tables as a Parquet file to temp directory in hive-style
-  /// partition
+  /// partition.
   void saveTpchTablesAsParquet() {
     constexpr int kRowGroupSize = 10'000;
     const auto tableNames = tpchBuilder_.getTableNames();
     for (const auto& tableName : tableNames) {
       auto tableDirectory =
           fmt::format("{}/{}", tempDirectory_->path, tableName);
-      fs::create_directory(tableDirectory);
-      auto filePath = fmt::format("{}/file.parquet", tableDirectory);
-      auto query = fmt::format(
-          fmt::runtime(kDuckDbParquetWriteSQL_.at(tableName)),
-          tableName,
-          filePath,
-          kRowGroupSize);
-      duckDb_->execute(query);
+      auto query =
+          fmt::format(fmt::runtime(kDuckDbTpchSQL_.at(tableName)), tableName);
+
+      auto res = duckDb_->execute(query);
+
+      auto schema = getType(res);
+
+      auto input = getVector(res, schema);
+      auto plan = PlanBuilder()
+                      .values(input)
+                      .tableWrite(
+                          schema,
+                          schema->names(),
+                          std::make_shared<core::InsertTableHandle>(
+                              kHiveConnectorId,
+                              HiveConnectorTestBase::makeHiveInsertTableHandle(
+                                  schema->names(),
+                                  schema->children(),
+                                  {},
+                                  HiveConnectorTestBase::makeLocationHandle(
+                                      tableDirectory),
+                                  dwio::common::FileFormat::PARQUET)))
+                      .planNode();
+
+      // Write the data and assert that all records from the TPC-H table have
+      // been written.
+      exec::test::assertQuery(
+          plan, fmt::format("select count(*) from {}", tableName), *duckDb_);
     }
   }
 
@@ -134,53 +197,43 @@ class ParquetTpchTestBase : public testing::Test {
         params, addSplits, duckQuery, *duckDb_, sortingKeys);
   }
 
-  const ParquetReaderType parquetReaderType_;
+  std::shared_ptr<memory::MemoryPool> rootPool_{
+      memory::defaultMemoryManager().addRootPool("root")};
+  std::shared_ptr<memory::MemoryPool> pool_{rootPool_->addLeafChild("leaf")};
   std::shared_ptr<DuckDbQueryRunner> duckDb_ = nullptr;
   std::shared_ptr<TempDirectoryPath> tempDirectory_ = nullptr;
   TpchQueryBuilder tpchBuilder_ =
       TpchQueryBuilder(dwio::common::FileFormat::PARQUET);
-  const std::unordered_map<std::string, std::string> kDuckDbParquetWriteSQL_ = {
+  const std::unordered_map<std::string, std::string> kDuckDbTpchSQL_ = {
       std::make_pair(
           "lineitem",
-          R"(COPY (SELECT l_orderkey, l_partkey, l_suppkey, l_linenumber,
+          R"(SELECT l_orderkey, l_partkey, l_suppkey, l_linenumber,
          l_quantity::DOUBLE as quantity, l_extendedprice::DOUBLE as extendedprice, l_discount::DOUBLE as discount,
          l_tax::DOUBLE as tax, l_returnflag, l_linestatus, l_shipdate AS shipdate, l_commitdate, l_receiptdate,
-         l_shipinstruct, l_shipmode, l_comment FROM {})
-         TO '{}'(FORMAT 'parquet', CODEC 'ZSTD', ROW_GROUP_SIZE {}))"),
+         l_shipinstruct, l_shipmode, l_comment FROM {})"),
       std::make_pair(
           "orders",
-          R"(COPY (SELECT o_orderkey, o_custkey, o_orderstatus,
+          R"(SELECT o_orderkey, o_custkey, o_orderstatus,
          o_totalprice::DOUBLE as o_totalprice,
-         o_orderdate, o_orderpriority, o_clerk, o_shippriority, o_comment FROM {})
-         TO '{}' (FORMAT 'parquet', CODEC 'ZSTD', ROW_GROUP_SIZE {}))"),
+         o_orderdate, o_orderpriority, o_clerk, o_shippriority, o_comment FROM {})"),
       std::make_pair(
           "customer",
-          R"(COPY (SELECT c_custkey, c_name, c_address, c_nationkey, c_phone,
-         c_acctbal::DOUBLE as c_acctbal, c_mktsegment, c_comment FROM {})
-         TO '{}' (FORMAT 'parquet', CODEC 'ZSTD', ROW_GROUP_SIZE {}))"),
-      std::make_pair(
-          "nation",
-          R"(COPY (SELECT * FROM {})
-          TO '{}' (FORMAT 'parquet', CODEC 'ZSTD', ROW_GROUP_SIZE {}))"),
-      std::make_pair(
-          "region",
-          R"(COPY (SELECT * FROM {})
-         TO '{}' (FORMAT 'parquet', CODEC 'ZSTD', ROW_GROUP_SIZE {}))"),
+          R"(SELECT c_custkey, c_name, c_address, c_nationkey, c_phone,
+         c_acctbal::DOUBLE as c_acctbal, c_mktsegment, c_comment FROM {})"),
+      std::make_pair("nation", R"(SELECT * FROM {})"),
+      std::make_pair("region", R"(SELECT * FROM {})"),
       std::make_pair(
           "part",
-          R"(COPY (SELECT p_partkey, p_name, p_mfgr, p_brand, p_type, p_size,
-         p_container, p_retailprice::DOUBLE, p_comment FROM {})
-         TO '{}' (FORMAT 'parquet', CODEC 'ZSTD', ROW_GROUP_SIZE {}))"),
+          R"(SELECT p_partkey, p_name, p_mfgr, p_brand, p_type, p_size,
+         p_container, p_retailprice::DOUBLE, p_comment FROM {})"),
       std::make_pair(
           "supplier",
-          R"(COPY (SELECT s_suppkey, s_name, s_address, s_nationkey, s_phone,
-         s_acctbal::DOUBLE, s_comment FROM {})
-         TO '{}' (FORMAT 'parquet', CODEC 'ZSTD', ROW_GROUP_SIZE {}))"),
+          R"(SELECT s_suppkey, s_name, s_address, s_nationkey, s_phone,
+         s_acctbal::DOUBLE, s_comment FROM {})"),
       std::make_pair(
           "partsupp",
-          R"(COPY (SELECT ps_partkey, ps_suppkey, ps_availqty,
-         ps_supplycost::DOUBLE as supplycost, ps_comment FROM {})
-         TO '{}' (FORMAT 'parquet', CODEC 'ZSTD', ROW_GROUP_SIZE {}))")};
+          R"(SELECT ps_partkey, ps_suppkey, ps_availqty,
+         ps_supplycost::DOUBLE as supplycost, ps_comment FROM {})")};
 };
 
 } // namespace
