@@ -25,6 +25,9 @@ namespace {
 constexpr double kInf = std::numeric_limits<double>::infinity();
 constexpr double kNan = std::numeric_limits<double>::quiet_NaN();
 constexpr double kDoubleMax = std::numeric_limits<double>::max();
+// TMP: For floating types, min returns the smallest positive 
+// value the type can encode, not the lowest (largest neg value).
+// See numeric_limits<double>::lowest();
 constexpr double kDoubleMin = std::numeric_limits<double>::min();
 constexpr int64_t kBigIntMax = std::numeric_limits<int64_t>::max();
 constexpr int64_t kBigIntMin = std::numeric_limits<int64_t>::min();
@@ -155,65 +158,47 @@ TEST_F(ProbabilityTest, binomialCDF) {
       binomialCDF(-2, 0.5, -1), "numberOfTrials must be greater than 0");
 }
 
-TEST_F(ProbabilityTest, inverseBinomialCDF) {
-  const auto invBinomialCDF = [&](std::optional<int64_t> numberOfTrials,
-                                  std::optional<double> successProbability,
-                                  std::optional<double> p) {
-    return evaluateOnce<int64_t>(
-        "inverse_binomial_cdf(c0, c1, c2)",
-        numberOfTrials,
-        successProbability,
-        p);
+TEST_F(ProbabilityTest, inverseChiSquaredCDF) {
+  const auto invChiSquaredCDF = [&](std::optional<double> df,
+                                    std::optional<double> p) {
+    return evaluateOnce<double>("inverse_chi_squared_cdf(c0, c1)",df,p);
   };
 
-  EXPECT_EQ(0, invBinomialCDF(5, 0.5, 0.03125));
-  EXPECT_EQ(41, invBinomialCDF(41, 0.2, 1.0));
-  EXPECT_EQ(3, invBinomialCDF(5, 0.5, 0.8125));
-  EXPECT_EQ(3, invBinomialCDF(3, 0.8403, 0.5));
-  EXPECT_EQ(62, invBinomialCDF(200, 0.3, 0.6));
-  EXPECT_EQ(0, invBinomialCDF(79, 0.6, 0.0));
-  EXPECT_EQ(std::nullopt, invBinomialCDF(std::nullopt, 0.6, 0.0));
-  EXPECT_EQ(std::nullopt, invBinomialCDF(11, std::nullopt, 0.22));
-  EXPECT_EQ(std::nullopt, invBinomialCDF(134, 0.6, std::nullopt));
-  EXPECT_EQ(
-      std::nullopt, invBinomialCDF(std::nullopt, std::nullopt, std::nullopt));
+  EXPECT_EQ(0.0, invChiSquaredCDF(3, 0.0));
+  EXPECT_EQ(1.4236522430352796, invChiSquaredCDF(3, 0.3));
+  EXPECT_EQ(11.344866730144370, invChiSquaredCDF(3, 0.99));
+  EXPECT_EQ(12.287969413016436, invChiSquaredCDF(7.2, 0.90));
+  EXPECT_EQ(37.714228443623732, invChiSquaredCDF(25.05, 0.95));
+  EXPECT_EQ(22.178420945304087, invChiSquaredCDF(15.057, 0.895));
 
-  // Invalid inputs for numberOfTrails
-  VELOX_ASSERT_THROW(
-      invBinomialCDF(0, 0.5, 0.3), "numberOfTrials must be greater than 0");
-  VELOX_ASSERT_THROW(
-      invBinomialCDF(kBigIntMin, 0.5, 0.3),
-      "numberOfTrials must be greater than 0");
-  VELOX_ASSERT_THROW(
-      invBinomialCDF(kNan, 0.5, 0.3), "numberOfTrials must be greater than 0");
+  EXPECT_EQ(2.8093008564672404e-123, invChiSquaredCDF(5, kDoubleMin));
+  EXPECT_EQ(1.7976931348623157e+308, invChiSquaredCDF(kDoubleMax, 0.95));
+  EXPECT_EQ(4.4501477170144018e-308, invChiSquaredCDF(kDoubleMin, 0.752));
 
-  // Invalid inputs for successProbability
-  VELOX_ASSERT_THROW(
-      invBinomialCDF(5, -0.5, 0.3),
-      "successProbability must be in the interval [0, 1]");
-  VELOX_ASSERT_THROW(
-      invBinomialCDF(5, kDoubleMax, 0.1),
-      "successProbability must be in the interval [0, 1]");
-  VELOX_ASSERT_THROW(
-      invBinomialCDF(5, kNan, 0.03),
-      "successProbability must be in the interval [0, 1]");
+  EXPECT_EQ(std::nullopt, invChiSquaredCDF(std::nullopt, 0.94));
+  EXPECT_EQ(std::nullopt, invChiSquaredCDF(142.345, std::nullopt));
+  EXPECT_EQ(std::nullopt, invChiSquaredCDF(std::nullopt, std::nullopt));
+
+  // Invalid inputs for df
+  VELOX_ASSERT_THROW(invChiSquaredCDF(-3, 0.3), "df must be greater than 0");
+  VELOX_ASSERT_THROW(invChiSquaredCDF(kNan, 0.99), "df must be greater than 0");
+  VELOX_ASSERT_THROW(invChiSquaredCDF(kInf, 0.99), "Error in function boost::math::chi_squared_distribution<double>::chi_squared_distribution: Degrees of freedom argument is inf, but must be > 0 !");
+  VELOX_ASSERT_THROW(invChiSquaredCDF(kBigIntMin, 0.15), "df must be greater than 0");
 
   // Invalid inputs for p
-  VELOX_ASSERT_THROW(
-      invBinomialCDF(5, 0.3, -12.9), "p must be in the interval [0, 1]");
-  VELOX_ASSERT_THROW(
-      invBinomialCDF(5, 0.3, kDoubleMax), "p must be in the interval [0, 1]");
-  VELOX_ASSERT_THROW(
-      invBinomialCDF(5, 0.3, kNan), "p must be in the interval [0, 1]");
+  VELOX_ASSERT_THROW(invChiSquaredCDF(3, 1.001), "p must be in the interval [0, 1]");
+  VELOX_ASSERT_THROW(invChiSquaredCDF(40, kNan), "p must be in the interval [0, 1]");
+  VELOX_ASSERT_THROW(invChiSquaredCDF(40, kInf), "p must be in the interval [0, 1]");
+  VELOX_ASSERT_THROW(invChiSquaredCDF(11, kDoubleMax), "p must be in the interval [0, 1]");
+  VELOX_ASSERT_THROW(invChiSquaredCDF(500, kBigIntMin), "p must be in the interval [0, 1]");
+  VELOX_ASSERT_THROW(invChiSquaredCDF(234, kBigIntMax), "p must be in the interval [0, 1]");
 
-  // Invalid inputs for multiple params
-  VELOX_ASSERT_THROW(
-      invBinomialCDF(-3, 0.3, 10.0), "p must be in the interval [0, 1]");
-  VELOX_ASSERT_THROW(
-      invBinomialCDF(kNan, 6, 0.2),
-      "successProbability must be in the interval [0, 1]");
-  VELOX_ASSERT_THROW(
-      invBinomialCDF(-7, 4, 22), "p must be in the interval [0, 1]");
+
+  // Invalid inputs for both params
+  VELOX_ASSERT_THROW(invChiSquaredCDF(-3, -0.001), "p must be in the interval [0, 1]");
+  VELOX_ASSERT_THROW(invChiSquaredCDF(kNan, kNan), "p must be in the interval [0, 1]");
+  VELOX_ASSERT_THROW(invChiSquaredCDF(kInf, kInf), "p must be in the interval [0, 1]");
+  VELOX_ASSERT_THROW(invChiSquaredCDF(kBigIntMin, kBigIntMax), "p must be in the interval [0, 1]");
 }
 
 } // namespace

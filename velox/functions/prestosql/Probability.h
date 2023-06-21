@@ -17,6 +17,7 @@
 
 #include "boost/math/distributions/beta.hpp"
 #include "boost/math/distributions/binomial.hpp"
+#include "boost/math/distributions/chi_squared.hpp"
 #include "velox/common/base/Exceptions.h"
 #include "velox/functions/Macros.h"
 
@@ -92,19 +93,15 @@ struct BinomialCDFFunction {
 };
 
 template <typename T>
-struct InverseBinomialCDFFunction {
+struct InverseChiSquaredCDFFunction {
   VELOX_DEFINE_FUNCTION_TYPES(T);
 
   FOLLY_ALWAYS_INLINE void
-  call(int64_t& result, int64_t numOfTrials, double successProb, double p) {
+  call(double& result, double df, double p) {
     VELOX_USER_CHECK((p >= 0) && (p <= 1), "p must be in the interval [0, 1]");
-    VELOX_USER_CHECK(
-        (successProb >= 0) && (successProb <= 1),
-        "successProbability must be in the interval [0, 1]");
-    VELOX_USER_CHECK_GT(
-        numOfTrials, 0, "numberOfTrials must be greater than 0");
+    VELOX_USER_CHECK_GT(df, 0, "df must be greater than 0");
 
-    boost::math::binomial_distribution<> dist(numOfTrials, successProb);
+    boost::math::chi_squared_distribution<> dist(df);
     result = boost::math::quantile(dist, p);
   }
 };
