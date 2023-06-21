@@ -24,6 +24,8 @@ DEFINE_int32(
     80,
     "Minimum percentage of actual uses over references to a column for prefetching. No prefetch if > 100");
 
+using ::facebook::velox::common::Region;
+
 namespace facebook::velox::dwio::common {
 
 using cache::CachePin;
