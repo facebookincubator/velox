@@ -178,7 +178,7 @@ TEST_F(ProbabilityTest, inverseBinomialCDF) {
   EXPECT_EQ(
       std::nullopt, invBinomialCDF(std::nullopt, std::nullopt, std::nullopt));
 
-  // Test invalid inputs for numberOfTrails.
+  // Test invalid inputs for numberOfTrials.
   VELOX_ASSERT_THROW(
       invBinomialCDF(0, 0.5, 0.3), "numberOfTrials must be greater than 0");
   VELOX_ASSERT_THROW(
