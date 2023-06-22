@@ -46,7 +46,8 @@ def test_find_file():
 
 def test_parse_dir():
     file = "CMakeLists.txt"
-    files = io.find_files(file, '/home/jwj/code/velox/velox')
+    repo = os.path.abspath(os.path.join(current_dir, '../../../../velox'))
+    files = io.find_files(file, repo)
     targets = {}
 
     for f in files:

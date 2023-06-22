@@ -62,6 +62,7 @@ class TargetInputListener(CMakeListener):
         base_path = os.path.dirname(ctx.start.getInputStream().fileName)
         files = [f.replace('${CMAKE_CURRENT_LIST_DIR}/', base_path)
                  for f in files]
+        # TODO filter out cmake vars
         files = [os.path.join(base_path, f)
                  for f in files if not os.path.dirname(f)]
 
