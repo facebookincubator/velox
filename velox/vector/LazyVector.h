@@ -58,7 +58,7 @@ class ValueHook {
   virtual void addValue(vector_size_t row, const void* value) = 0;
 
   // Fallback implementation of bulk path for addValues. Actual
-  // hooks are expected o override tis.
+  // hooks are expected to override tis.
   virtual void addValues(
       const vector_size_t* rows,
       const void* values,
