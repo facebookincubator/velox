@@ -31,7 +31,7 @@ def walk_stream(stream: ant.CommonTokenStream, listener: CMakeListener):
 def find_files(file_name: str, root_dir):
     file_paths = []
     for root, dirs, files in os.walk(root_dir):
-        dirs[:] = [d for d in dirs if d not in ['tests', 'test', 'benchmarks', 'type_calculation', 'experimental']]
+        dirs[:] = [d for d in dirs if d not in ['type_calculation', 'experimental']]
         for file in files:
             if file == file_name:
                 file_paths.append(os.path.join(root, file))

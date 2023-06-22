@@ -73,7 +73,7 @@ Source: Path'.' 'c' ('c' | 'pp' | '++' | 'xx')?;
 Name: Identifier;
 // this should probably be a fragment that is used to construct more specific tokens like command/target/header/source...
 fragment
-Identifier:  '${'?[a-z_.+0-9-]([-/a-z0-9_]|'${' | '}' | '.')*;
+Identifier:  '${'?[a-z_.+0-9-]([-/a-z0-9_]|'${' | '+' | '}' | '.')*;
 
 
 Unquoted_argument:  (~[ \t\r\n()#"\\] | Escape_sequence)+;
