@@ -32,10 +32,6 @@ namespace facebook::velox {
 class Config;
 }
 
-namespace facebook::velox::dwio::common {
-class ReaderOptions;
-}
-
 namespace facebook::velox::connector {
 
 class DataSource;

@@ -15,7 +15,6 @@
  */
 
 #include "velox/connectors/tpch/TpchConnector.h"
-#include "velox/dwio/common/Options.h"
 #include "velox/tpch/gen/TpchGen.h"
 
 namespace facebook::velox::connector::tpch {

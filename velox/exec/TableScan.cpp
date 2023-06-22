@@ -15,7 +15,6 @@
  */
 #include "velox/exec/TableScan.h"
 #include "velox/common/time/Timer.h"
-#include "velox/dwio/common/Options.h"
 #include "velox/exec/Task.h"
 #include "velox/expression/Expr.h"
 
