@@ -6,7 +6,6 @@ Benchmarking in Velox is made easy with the optionally built TpchBenchmark (velo
 ```bash
 $ make release EXTRA_CMAKE_FLAGS="-DVELOX_BUILD_BENCHMARKS=ON"
 ```
-Make sure that the patched code is not accidently checked-in via any Pull Requests submitted to this github repository.
 
 ---
 ## Use Cases for Velox
