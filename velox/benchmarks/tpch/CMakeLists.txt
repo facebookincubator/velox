@@ -27,6 +27,7 @@ target_link_libraries(
   velox_hive_connector
   velox_exception
   velox_memory
+  velox_s3fs
   velox_process
   velox_serialization
   velox_encode
@@ -35,7 +36,9 @@ target_link_libraries(
   velox_vector_test_lib
   Folly::folly
   ${FOLLY_BENCHMARK}
-  fmt::fmt)
+  fmt::fmt
+  ${AWSSDK_LIBRARIES}
+  curl)
 
 add_executable(velox_tpch_benchmark TpchBenchmarkMain.cpp)
 
