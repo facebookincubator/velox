@@ -286,9 +286,7 @@ class TpchBenchmark {
               for (const auto& path : entry.second) {
                 auto const splits =
                     HiveConnectorTestBase::makeHiveConnectorSplits(
-                        path,
-                        numSplitsPerFile,
-                        tpchPlan.dataFileFormat);
+                        path, numSplitsPerFile, tpchPlan.dataFileFormat);
                 for (const auto& split : splits) {
                   task->addSplit(entry.first, exec::Split(split));
                 }
