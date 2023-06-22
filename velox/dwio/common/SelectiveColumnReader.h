@@ -613,16 +613,13 @@ class SelectiveColumnReader {
 template <>
 inline void SelectiveColumnReader::addValue(const folly::StringPiece value) {
   const uint64_t size = value.size();
-  if (size <= StringView::kInlineSize) {
-    reinterpret_cast<StringView*>(rawValues_)[numValues_++] =
-        StringView(value.data(), size);
-    return;
-  }
-  if (rawStringBuffer_ && rawStringUsed_ + size <= rawStringSize_) {
-    memcpy(rawStringBuffer_ + rawStringUsed_, value.data(), size);
-    reinterpret_cast<StringView*>(rawValues_)[numValues_++] =
-        StringView(rawStringBuffer_ + rawStringUsed_, size);
-    rawStringUsed_ += size;
+  if (LIKELY(rawStringBuffer_ && rawStringUsed_ + size <= rawStringSize_)) {
+    auto copySize = size <= StringView::kInlineSize ? 0 : size;
+    memcpy(rawStringBuffer_ + rawStringUsed_, value.data(), copySize);
+    new (reinterpret_cast<StringView*>(rawValues_) + (numValues_++) )
+        StringView(copySize == 0 ? value.data() : rawStringBuffer_ + rawStringUsed_, size);
+
+    rawStringUsed_ += copySize;
     return;
   }
   addStringValue(value);
