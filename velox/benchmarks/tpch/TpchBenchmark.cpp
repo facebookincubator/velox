@@ -288,8 +288,7 @@ class TpchBenchmark {
                     HiveConnectorTestBase::makeHiveConnectorSplits(
                         path,
                         numSplitsPerFile,
-                        tpchPlan.dataFileFormat,
-                        ReaderOptions(nullptr));
+                        tpchPlan.dataFileFormat);
                 for (const auto& split : splits) {
                   task->addSplit(entry.first, exec::Split(split));
                 }
