@@ -25,6 +25,16 @@ resolve_dependency_url(FOLLY)
 
 message(STATUS "Building Folly from source")
 
+# Required so cmake can use the correct version of the OpenSSL dependency for
+# MacOS
+if(APPLE)
+  execute_process(
+    COMMAND brew --prefix openssl@1.1
+    OUTPUT_VARIABLE OPENSSL_ROOT_DIR
+    OUTPUT_STRIP_TRAILING_WHITESPACE)
+  set(ENV{OPENSSL_ROOT_DIR} ${OPENSSL_ROOT_DIR})
+endif()
+
 if(gflags_SOURCE STREQUAL "BUNDLED")
   set(glog_patch && git apply ${CMAKE_CURRENT_LIST_DIR}/folly-gflags-glog.patch)
 endif()
