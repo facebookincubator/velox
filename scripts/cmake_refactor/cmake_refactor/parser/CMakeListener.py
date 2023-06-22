@@ -17,12 +17,66 @@ class CMakeListener(ParseTreeListener):
         pass
 
 
-    # Enter a parse tree produced by CMakeParser#target_command.
-    def enterTarget_command(self, ctx:CMakeParser.Target_commandContext):
+    # Enter a parse tree produced by CMakeParser#add_library.
+    def enterAdd_library(self, ctx:CMakeParser.Add_libraryContext):
         pass
 
-    # Exit a parse tree produced by CMakeParser#target_command.
-    def exitTarget_command(self, ctx:CMakeParser.Target_commandContext):
+    # Exit a parse tree produced by CMakeParser#add_library.
+    def exitAdd_library(self, ctx:CMakeParser.Add_libraryContext):
+        pass
+
+
+    # Enter a parse tree produced by CMakeParser#add_alias.
+    def enterAdd_alias(self, ctx:CMakeParser.Add_aliasContext):
+        pass
+
+    # Exit a parse tree produced by CMakeParser#add_alias.
+    def exitAdd_alias(self, ctx:CMakeParser.Add_aliasContext):
+        pass
+
+
+    # Enter a parse tree produced by CMakeParser#add_interface.
+    def enterAdd_interface(self, ctx:CMakeParser.Add_interfaceContext):
+        pass
+
+    # Exit a parse tree produced by CMakeParser#add_interface.
+    def exitAdd_interface(self, ctx:CMakeParser.Add_interfaceContext):
+        pass
+
+
+    # Enter a parse tree produced by CMakeParser#link_libraries.
+    def enterLink_libraries(self, ctx:CMakeParser.Link_librariesContext):
+        pass
+
+    # Exit a parse tree produced by CMakeParser#link_libraries.
+    def exitLink_libraries(self, ctx:CMakeParser.Link_librariesContext):
+        pass
+
+
+    # Enter a parse tree produced by CMakeParser#link_targets.
+    def enterLink_targets(self, ctx:CMakeParser.Link_targetsContext):
+        pass
+
+    # Exit a parse tree produced by CMakeParser#link_targets.
+    def exitLink_targets(self, ctx:CMakeParser.Link_targetsContext):
+        pass
+
+
+    # Enter a parse tree produced by CMakeParser#additonal_targets.
+    def enterAdditonal_targets(self, ctx:CMakeParser.Additonal_targetsContext):
+        pass
+
+    # Exit a parse tree produced by CMakeParser#additonal_targets.
+    def exitAdditonal_targets(self, ctx:CMakeParser.Additonal_targetsContext):
+        pass
+
+
+    # Enter a parse tree produced by CMakeParser#source_file.
+    def enterSource_file(self, ctx:CMakeParser.Source_fileContext):
+        pass
+
+    # Exit a parse tree produced by CMakeParser#source_file.
+    def exitSource_file(self, ctx:CMakeParser.Source_fileContext):
         pass
 
 

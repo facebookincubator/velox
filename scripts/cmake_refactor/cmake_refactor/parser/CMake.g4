@@ -17,26 +17,38 @@ language=Python3;
 caseInsensitive = true;
 }
 
-file_:  (target_command | command )* EOF;
+file_:  (add_library | add_alias | add_interface | link_libraries | command )* EOF;
 
-target_command: Target_command '(' target (keyword)? (single_argument)* ')';
+add_library: Add_library '(' target ('STATIC' | 'SHARED' | 'MODULE' | 'OBJECT')? source_file+ Exclude? ')';
 
-command:  Identifier '(' (single_argument|compound_argument)* ')';
+add_alias: Add_library '(' target alias target ')';
 
-single_argument:  Identifier | Unquoted_argument | Bracket_argument | Quoted_argument;
+// There are use cases for interface libraries with source though velox does not use them
+add_interface: Add_library '(' target interface ')';
+
+link_libraries: 'target_link_libraries' '(' target keyword? link_targets additonal_targets? ')';
+
+link_targets: target+;
+additonal_targets: keyword link_targets;
+
+source_file: Header | Source;
+
+command: Name '(' (single_argument|compound_argument)* ')';
+
+single_argument:  Name | Unquoted_argument | Bracket_argument | Quoted_argument;
 
 compound_argument:  '(' (single_argument|compound_argument)* ')';
 
-Target_command: 'add_library';
+target:  Name | Identifier_namespace; 
 
-target:  Identifier | Identifier_namespace; 
+
 
 Identifier_namespace: Identifier '::' Identifier;
  
 // Target:  Identifier;
 
 // with each keyword as a parser rule we can do .public() instead of having to resort to string cmp
-keyword:  public | private | interface | alias;
+keyword:  public | private | interface;
 
 public: 'PUBLIC';
 
@@ -46,7 +58,18 @@ interface: 'INTERFACE';
 
 alias: 'ALIAS';
 
+Exclude: 'EXCLUDE_FROM_ALL';
+
+Add_library: 'add_library';
+
+Header: Identifier'.' 'h' ('pp')?;
+
+// We should unify endings across the repo probably?
+Source: Identifier'.' 'c' ('c' | 'pp' | '++' | 'xx')?;
+
+Name: Identifier;
 // this should probably be a fragment that is used to construct more specific tokens like command/target/header/source...
+fragment
 Identifier:  [a-z_][a-z0-9_]*;
 
 Unquoted_argument:  (~[ \t\r\n()#"\\] | Escape_sequence)+;

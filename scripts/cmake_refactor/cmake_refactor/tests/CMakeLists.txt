@@ -13,6 +13,8 @@
 # limitations under the License.
 
 add_library(velox_exception Exceptions.cpp VeloxException.cpp Exceptions.h)
+add_library(velox::exception ALIAS velox_exception)
+
 target_link_libraries(
   velox_exception
   velox_flag_definitions
@@ -24,7 +26,6 @@ target_link_libraries(
 
 add_library(
   velox_common_base
-  PUBLIC
   BitUtil.cpp
   Counters.cpp
   Fs.cpp
@@ -35,7 +36,10 @@ add_library(
   StatsReporter.cpp
   SuccinctPrinter.cpp)
 
-target_link_libraries(velox_common_base velox_exception velox_process xsimd)
+target_link_libraries(velox_common_base PUBLIC velox_exception PRIVATE velox_process xsimd)
+
+# todo interface targets must inherit the sources of linked targets?
+add_library(velox_interface INTERFACE)
 
 if(${VELOX_BUILD_TESTING})
   add_subdirectory(tests)
