@@ -141,6 +141,24 @@ OPAQUE types store variable-width parts outside of the FlatVector.</p>
 <p>UNKNOWN type is used to represent an empty or all nulls vector of unknown type.
 For example, SELECT array() returns an ARRAY(UNKNOWN()) because it is not possible
 to determine the type of the elements. This works because there are no elements.</p>
+<p>TIMESTAMP type is used to represent a specific point in time.
+A TIMESTAMP is defined as the sum of seconds and nanoseconds since UNIX epoch.
+<cite>struct Timestamp</cite> contains one 64-bit signed integer for seconds and another 64-bit
+unsigned integer for nanoseconds. Nanoseconds represent the high-precision part of
+the timestamp, which is less than 1 second. Valid range of nanoseconds is [0, 10^9).
+Timestamps before the epoch are specified using negative values for the seconds.
+Examples:
+* Timestamp(0, 0) represents 1970-01-0 T00:00:00 (epoch).
+* Timestamp(10*24*60*60 + 125, 0) represents 1970-01-11 00:02:05 (10 days 125 seconds after epoch).
+* Timestamp(19524*24*60*60 + 500, 38726411) represents 2023-06-16 08:08:20.038726411</p>
+<blockquote>
+<div><p>(19524 days 500 seconds 38726411 nanoseconds after epoch).</p>
+</div></blockquote>
+<ul class="simple">
+<li><p>Timestamp(-10*24*60*60 - 125, 0) represents 1969-12-21 23:57:55 (10 days 125 seconds before epoch).</p></li>
+<li><p>Timestamp(-5000*24*60*60 - 1000, 123456) represents 1956-04-24 07:43:20.000123456
+(5000 days 1000 seconds before epoch plus 123456 nanoseconds).</p></li>
+</ul>
 </section>
 <section id="logical-types">
 <h2>Logical Types<a class="headerlink" href="#logical-types" title="Permalink to this heading">¶</a></h2>
@@ -222,6 +240,10 @@ The table below shows the supported Presto types.</p>
 </tr>
 </tbody>
 </table>
+<p>TIMESTAMP WITH TIME ZONE represents a time point in milliseconds precision
+from UNIX epoch with timezone information. Its physical type contains one 64-bit
+signed integer for milliseconds and another 16-bit signed integer for timezone ID.
+Valid range of timezone ID is [1, 1680], its definition can be found in <code class="docutils literal notranslate"><span class="pre">TimeZoneDatabase.cpp</span></code>.</p>
 </section>
 </section>
 

@@ -320,10 +320,10 @@ pattern format. The symbols currently supported are <code class="docutils litera
 <section id="convenience-extraction-functions">
 <h2>Convenience Extraction Functions<a class="headerlink" href="#convenience-extraction-functions" title="Permalink to this heading">¶</a></h2>
 <p>These functions support TIMESTAMP, DATE, and TIMESTAMP WITH TIME ZONE input types.</p>
-<p>These functions are implemented using
-<a class="reference external" href="https://en.cppreference.com/w/c/chrono/gmtime">std::gmtime</a> which raises an
-error when input timestamp is too large (for example, &gt; 100’000’000’000’000’000).
-This behavior is different from Presto Java that allows arbitrary large timestamps.</p>
+<p>For these functions, the input timestamp has range limitations on seconds and nanoseconds.
+Seconds should be in the range [INT64_MIN/1000 - 1, INT64_MAX/1000], nanoseconds should
+be in the range [0, 999999999]. This behavior is different from Presto Java that allows
+arbitrary large timestamps.</p>
 <dl class="py function">
 <dt class="sig sig-object py" id="day">
 <span class="sig-name descname"><span class="pre">day</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">x</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">bigint</span></span></span><a class="headerlink" href="#day" title="Permalink to this definition">¶</a></dt>
