@@ -20,6 +20,7 @@
 
 #include "folly/io/Cursor.h"
 #include "velox/common/file/File.h"
+#include "velox/common/file/Region.h"
 
 namespace facebook::velox::file::utils {
 
@@ -110,6 +111,10 @@ class CoalesceIfDistanceLE {
 
   bool operator()(const ReadFile::Segment& a, const ReadFile::Segment& b) const;
 
+  bool operator()(
+      const velox::common::Region& a,
+      const velox::common::Region& b) const;
+
  private:
   uint64_t maxCoalescingDistance_;
 };
@@ -144,6 +149,51 @@ class ReadToSegments {
  private:
   SegmentIter begin_;
   SegmentIter end_;
+  Reader reader_;
+};
+
+template <typename RegionIter, typename OutputIter, typename Reader>
+class ReadToIOBufs {
+ public:
+  ReadToIOBufs(
+      RegionIter begin,
+      RegionIter end,
+      OutputIter output,
+      Reader reader)
+      : begin_{begin}, end_{end}, output_{output}, reader_{std::move(reader)} {}
+
+  void operator()() {
+    if (begin_ == end_) {
+      return;
+    }
+
+    auto fileOffset = begin_->offset;
+    const auto last = std::prev(end_);
+    const auto readSize = last->offset + last->length - fileOffset;
+    std::unique_ptr<folly::IOBuf> result = reader_(fileOffset, readSize);
+
+    folly::io::Cursor cursor(result.get());
+    for (auto region = begin_; region != end_; ++region) {
+      if (fileOffset < region->offset) {
+        cursor.skip(region->offset - fileOffset);
+        fileOffset = region->offset;
+      }
+      // This clone won't copy the underlying buffer. It will just create an
+      // IOBuf pointing to the right section of the existing shared buffer
+      // of the original IOBuf. It can create a chained IOBuf if the original
+      // IOBuf is chained, and the length of the current read spreads to the
+      // next IOBuf in the chain.
+      folly::IOBuf buf;
+      cursor.clone(buf, region->length);
+      *output_++ = std::move(buf);
+      fileOffset += region->length;
+    }
+  }
+
+ private:
+  RegionIter begin_;
+  RegionIter end_;
+  OutputIter output_;
   Reader reader_;
 };
 
