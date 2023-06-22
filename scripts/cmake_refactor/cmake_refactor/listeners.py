@@ -1,7 +1,8 @@
-import antlr4 as ant
-import os
+from antlr4.error.ErrorListener import ErrorListener
+from antlr4.error.Errors import CancellationException
 from .parser.CMakeListener import CMakeListener
 from .parser.CMakeParser import CMakeParser
+import os
 
 
 class TargetNode:
@@ -19,7 +20,12 @@ class TargetNode:
         self.alias_for: TargetNode = alias_for
 
 
-class SourceFileListener(CMakeListener):
+class SyntaxErrorListener(ErrorListener):
+    def syntaxError(self, recognizer, offendingSymbol, line, column, msg, e):
+        raise CancellationException(f"line {line}:{column} {msg}")
+
+
+class TargetInputListener(CMakeListener):
     def __init__(self, target_dict: dict[str, TargetNode]) -> None:
         super().__init__()
         self.targets = target_dict
@@ -28,6 +34,24 @@ class SourceFileListener(CMakeListener):
 
         # TODO add check that sources actually exist
         return files
+
+    def add_linked_targets(self, node: TargetNode,
+                           keyword: CMakeParser.KeywordContext,
+                           targets: CMakeParser.TargetContext):
+        targets = [t.getText() for t in targets]
+        nodes: list[TargetNode] = []
+
+        for target in targets:
+            target_node: TargetNode = self.targets.get(target)
+            if target_node is None:
+                target_node = TargetNode(target)
+                self.targets[target] = target_node
+            nodes.append(target_node)
+
+        if keyword is None or keyword.public() or keyword.interface():
+            node.public_targets.extend(nodes)
+        else:
+            node.private_targets.extend(nodes)
 
     def exitAdd_library(self, ctx: CMakeParser.Add_libraryContext):
         target = ctx.target().getText()
@@ -53,30 +77,6 @@ class SourceFileListener(CMakeListener):
             node.sources.extend(sources)
             node.headers.extend(headers)
 
-
-class TargetLinkListener(CMakeListener):
-    def __init__(self, target_dict: dict[str, TargetNode]) -> None:
-        super().__init__()
-        self.targets = target_dict
-
-    def add_linked_targets(self, node: TargetNode,
-                           keyword: CMakeParser.KeywordContext,
-                           targets: CMakeParser.TargetContext):
-        targets = [t.getText() for t in targets]
-        nodes: list[TargetNode] = []
-
-        for target in targets:
-            target_node: TargetNode = self.targets.get(target)
-            if target_node is None:
-                target_node = TargetNode(target)
-                self.targets[target] = target_node
-            nodes.append(target_node)
-
-        if keyword is None or keyword.public() or keyword.interface():
-            node.public_targets.extend(nodes)
-        else:
-            node.private_targets.extend(nodes)
-
     def exitLink_libraries(self, ctx: CMakeParser.Link_librariesContext):
         target: str = ctx.target().getText()
         node: TargetNode = self.targets.get(target)
@@ -92,12 +92,6 @@ class TargetLinkListener(CMakeListener):
             self.add_linked_targets(
                 node,  more_targets.keyword(), more_targets.link_targets().target())
 
-
-class AliasListener(CMakeListener):
-    def __init__(self, target_dict: dict[str, TargetNode]) -> None:
-        super().__init__()
-        self.targets = target_dict
-
     def exitAdd_alias(self, ctx):
         alias = ctx.target(0).getText()
         target = ctx.target(1).getText()
@@ -107,11 +101,6 @@ class AliasListener(CMakeListener):
             self.targets[target] = original
 
         self.targets[alias] = TargetNode(name=alias, alias_for=original)
-
-class InterfaceListener(CMakeListener):
-    def __init__(self, target_dict: dict[str, TargetNode]) -> None:
-        super().__init__()
-        self.targets = target_dict
 
     def exitAdd_interface(self, ctx):
         target = ctx.target().getText()

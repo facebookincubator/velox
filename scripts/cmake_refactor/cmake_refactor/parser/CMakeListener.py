@@ -53,6 +53,15 @@ class CMakeListener(ParseTreeListener):
         pass
 
 
+    # Enter a parse tree produced by CMakeParser#include_directories.
+    def enterInclude_directories(self, ctx:CMakeParser.Include_directoriesContext):
+        pass
+
+    # Exit a parse tree produced by CMakeParser#include_directories.
+    def exitInclude_directories(self, ctx:CMakeParser.Include_directoriesContext):
+        pass
+
+
     # Enter a parse tree produced by CMakeParser#link_targets.
     def enterLink_targets(self, ctx:CMakeParser.Link_targetsContext):
         pass

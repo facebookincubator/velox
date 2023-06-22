@@ -43,11 +43,14 @@ def test_find_file():
     files = io.find_files(file, current_dir)
     assert len(files) == 1
 
-def test_find_file():
+
+def test_parse_dir():
     file = "CMakeLists.txt"
     files = io.find_files(file, '/home/jwj/code/velox/velox')
-    
-    assert True
+    targets = {}
 
-    
-
+    for f in files:
+        print("Parsing: ", f)
+        io.parse_targets(f, targets)
+    print(len(targets))
+    assert False

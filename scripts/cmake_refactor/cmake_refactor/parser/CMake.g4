@@ -17,7 +17,7 @@ language=Python3;
 caseInsensitive = true;
 }
 
-file_:  (add_library | add_alias | add_interface | link_libraries | command )* EOF;
+file_:  (add_library | add_alias | add_interface | link_libraries | include_directories | command )* EOF;
 
 add_library: Add_library '(' target ('STATIC' | 'SHARED' | 'MODULE' | 'OBJECT')? source_file+ Exclude? ')';
 
@@ -28,20 +28,23 @@ add_interface: Add_library '(' target interface ')';
 
 link_libraries: 'target_link_libraries' '(' target keyword? link_targets additonal_targets? ')';
 
+include_directories: 'target_include_directories' '(' target keyword? single_argument+ ')';
+
 link_targets: target+;
+
 additonal_targets: keyword link_targets;
 
-source_file: Header | Source;
+source_file: Header | Source | Variable;
 
 command: Name '(' (single_argument|compound_argument)* ')';
 
-single_argument:  Name | Unquoted_argument | Bracket_argument | Quoted_argument;
+single_argument:  Name | Variable | Path | source_file | Identifier_namespace | keyword | Unquoted_argument | Bracket_argument | Quoted_argument;
 
 compound_argument:  '(' (single_argument|compound_argument)* ')';
 
-target:  Name | Identifier_namespace; 
+target:  Name | Identifier_namespace | Variable; 
 
-
+Variable: '${'  Name '}';
 
 Identifier_namespace: Identifier '::' Identifier;
  
@@ -62,20 +65,22 @@ Exclude: 'EXCLUDE_FROM_ALL';
 
 Add_library: 'add_library';
 
-Header: Identifier'.' 'h' ('pp')?;
+Header: Path'.' 'h' ('pp')?;
 
 // We should unify endings across the repo probably?
-Source: Identifier'.' 'c' ('c' | 'pp' | '++' | 'xx')?;
+Source: Path'.' 'c' ('c' | 'pp' | '++' | 'xx')?;
 
 Name: Identifier;
 // this should probably be a fragment that is used to construct more specific tokens like command/target/header/source...
 fragment
-Identifier:  [a-z_][a-z0-9_]*;
+Identifier:  '${'?[a-z_.+0-9-]([-/a-z0-9_]|'${' | '}' | '.')*;
+
 
 Unquoted_argument:  (~[ \t\r\n()#"\\] | Escape_sequence)+;
 
 Escape_sequence:  Escape_identity | Escape_encoded | Escape_semicolon;
 
+Path: Variable? [.a-z0-9/_-]+;
 fragment
 Escape_identity:  '\\' ~[a-z0-9;];
 

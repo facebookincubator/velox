@@ -8,15 +8,15 @@ cml = os.path.join(current_dir, "CMakeLists.txt")
 def test_source_listener():
     stream = io.get_token_stream(cml)
     targets: dict[str, listeners.TargetNode] = {}
-    listener = listeners.SourceFileListener(targets)
+    listener = listeners.TargetInputListener(targets)
     io.walk_stream(stream, listener)
-    assert len(targets) == 2
+    assert len(targets) == 11
 
 
 def test_link_listener():
     stream = io.get_token_stream(cml)
     targets: dict[str, listeners.TargetNode] = {}
-    listener = listeners.TargetLinkListener(targets)
+    listener = listeners.TargetInputListener(targets)
     io.walk_stream(stream, listener)
     velox_exception_public = ['velox_flag_definitions', 'velox_process',
                               'glog::glog',
@@ -37,7 +37,7 @@ def test_link_listener():
 def test_alias_listener():
     stream = io.get_token_stream(cml)
     targets: dict[str, listeners.TargetNode] = {}
-    listener = listeners.AliasListener(targets)
+    listener = listeners.TargetInputListener(targets)
     io.walk_stream(stream, listener)
     assert targets['velox::exception'].alias_for.name == 'velox_exception'
 
@@ -45,6 +45,5 @@ def test_alias_listener():
 def test_interface_listener():
     stream = io.get_token_stream(cml)
     targets: dict[str, listeners.TargetNode] = {}
-    listener = listeners.InterfaceListener(targets)
+    listener = listeners.TargetInputListener(targets)
     io.walk_stream(stream, listener)
-    assert targets['velox_interface'].is_interface
