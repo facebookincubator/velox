@@ -29,6 +29,8 @@ DEFINE_int64(
     128 << 20,
     "Maximum size of single coalesced IO");
 
+using ::facebook::velox::common::Region;
+
 namespace facebook::velox::dwio::common {
 
 using cache::CachePin;
@@ -90,7 +92,7 @@ bool CachedBufferedInput::shouldPreload(int32_t numPages) {
         memory::AllocationTraits::kPageSize;
   }
   auto cachePages = cache_->incrementCachedPages(0);
-  auto maxPages = cache_->maxBytes() / memory::AllocationTraits::kPageSize;
+  auto maxPages = memory::AllocationTraits::numPages(cache_->capacity());
   auto allocatedPages = cache_->numAllocated();
   if (numPages < maxPages - allocatedPages) {
     // There is free space for the read-ahead.
