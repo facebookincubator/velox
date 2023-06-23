@@ -178,16 +178,16 @@ TEST_F(ProbabilityTest, invBetaCDF) {
   // EXPECT_EQ(0.0, invBetaCDF(kDoubleMin, kDoubleMin, 0.3));
 
   VELOX_ASSERT_THROW(
-      invBetaCDF(kInf, 3, 0.2), "a must be a positive real value");
+      invBetaCDF(kInf, 3, 0.2), "a must be > 0");
   VELOX_ASSERT_THROW(
-      invBetaCDF(kNan, 3, 0.5), "a must be a positive real value");
-  VELOX_ASSERT_THROW(invBetaCDF(0, 3, 0.5), "a must be a positive real value");
+      invBetaCDF(kNan, 3, 0.5), "a must be > 0");
+  VELOX_ASSERT_THROW(invBetaCDF(0, 3, 0.5), "a must be > 0");
 
   VELOX_ASSERT_THROW(
-      invBetaCDF(3, kInf, 0.2), "b must be a positive real value");
+      invBetaCDF(3, kInf, 0.2), "b must be > 0");
   VELOX_ASSERT_THROW(
-      invBetaCDF(3, kNan, 0.5), "b must be a positive real value");
-  VELOX_ASSERT_THROW(invBetaCDF(3, 0, 0.5), "b must be a positive real value");
+      invBetaCDF(3, kNan, 0.5), "b must be > 0");
+  VELOX_ASSERT_THROW(invBetaCDF(3, 0, 0.5), "b must be > 0");
 
   VELOX_ASSERT_THROW(
       invBetaCDF(3, 3.6, kInf), "p must be in the interval [0, 1]");
