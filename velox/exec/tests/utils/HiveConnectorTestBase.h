@@ -79,13 +79,15 @@ class HiveConnectorTestBase : public OperatorTestBase {
   static std::shared_ptr<connector::hive::HiveTableHandle> makeTableHandle(
       common::test::SubfieldFilters subfieldFilters = {},
       const core::TypedExprPtr& remainingFilter = nullptr,
-      const std::string& tableName = "hive_table") {
+      const std::string& tableName = "hive_table",
+      const RowTypePtr& dataColumns = nullptr) {
     return std::make_shared<connector::hive::HiveTableHandle>(
         kHiveConnectorId,
         tableName,
         true,
         std::move(subfieldFilters),
-        remainingFilter);
+        remainingFilter,
+        dataColumns);
   }
 
   /// @param name Column name.
@@ -94,6 +96,16 @@ class HiveConnectorTestBase : public OperatorTestBase {
   static std::shared_ptr<connector::hive::HiveColumnHandle> makeColumnHandle(
       const std::string& name,
       const TypePtr& type,
+      const std::vector<std::string>& requiredSubfields);
+
+  /// @param name Column name.
+  /// @param type Column type.
+  /// @param type Hive type.
+  /// @param Required subfields of this column.
+  static std::shared_ptr<connector::hive::HiveColumnHandle> makeColumnHandle(
+      const std::string& name,
+      const TypePtr& dataType,
+      const TypePtr& hiveType,
       const std::vector<std::string>& requiredSubfields);
 
   /// @param targetDirectory Final directory of the target table after commit.
@@ -116,7 +128,19 @@ class HiveConnectorTestBase : public OperatorTestBase {
   /// @param tableColumnTypes Column types of the target table. Corresponding
   /// name of tableColumnTypes[i] is tableColumnNames[i].
   /// @param partitionedBy A list of partition columns of the target table.
+  /// @param bucketProperty if not nulll, specifies the property for a bucket
+  /// table.
   /// @param locationHandle Location handle for the table write.
+  static std::shared_ptr<connector::hive::HiveInsertTableHandle>
+  makeHiveInsertTableHandle(
+      const std::vector<std::string>& tableColumnNames,
+      const std::vector<TypePtr>& tableColumnTypes,
+      const std::vector<std::string>& partitionedBy,
+      std::shared_ptr<connector::hive::HiveBucketProperty> bucketProperty,
+      std::shared_ptr<connector::hive::LocationHandle> locationHandle,
+      const dwio::common::FileFormat tableStorageFormat =
+          dwio::common::FileFormat::DWRF);
+
   static std::shared_ptr<connector::hive::HiveInsertTableHandle>
   makeHiveInsertTableHandle(
       const std::vector<std::string>& tableColumnNames,

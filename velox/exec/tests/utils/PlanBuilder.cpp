@@ -89,7 +89,10 @@ PlanBuilder& PlanBuilder::tableScan(
     assignments.insert(
         {name,
          std::make_shared<HiveColumnHandle>(
-             hiveColumnName, HiveColumnHandle::ColumnType::kRegular, type)});
+             hiveColumnName,
+             HiveColumnHandle::ColumnType::kRegular,
+             type,
+             type)});
   }
   SubfieldFilters filters;
   filters.reserve(subfieldFilters.size());
@@ -126,7 +129,8 @@ PlanBuilder& PlanBuilder::tableScan(
       tableName,
       true,
       std::move(filters),
-      remainingFilterExpr);
+      remainingFilterExpr,
+      nullptr);
   return tableScan(outputType, tableHandle, assignments);
 }
 
@@ -291,6 +295,23 @@ PlanBuilder& PlanBuilder::tableWrite(
     CommitStrategy commitStrategy,
     const std::string& rowCountColumnName) {
   auto outputType = ROW({rowCountColumnName}, {BIGINT()});
+  planNode_ = std::make_shared<core::TableWriteNode>(
+      nextPlanNodeId(),
+      inputColumns,
+      tableColumnNames,
+      insertHandle,
+      outputType,
+      commitStrategy,
+      planNode_);
+  return *this;
+}
+
+PlanBuilder& PlanBuilder::tableWrite(
+    const RowTypePtr& inputColumns,
+    const std::vector<std::string>& tableColumnNames,
+    const std::shared_ptr<core::InsertTableHandle>& insertHandle,
+    CommitStrategy commitStrategy,
+    RowTypePtr outputType) {
   planNode_ = std::make_shared<core::TableWriteNode>(
       nextPlanNodeId(),
       inputColumns,

@@ -282,9 +282,24 @@ class Expr {
     isMultiplyReferenced_ = true;
   }
 
+  template <typename T>
+  const T* as() const {
+    return dynamic_cast<const T*>(this);
+  }
+
+  template <typename T>
+  T* as() {
+    return dynamic_cast<T*>(this);
+  }
+
+  template <typename T>
+  bool is() const {
+    return as<T>() != nullptr;
+  }
+
   // True if 'this' Expr tree is null for a null in any of the columns
   // this depends on.
-  virtual bool propagatesNulls() const {
+  bool propagatesNulls() const {
     return propagatesNulls_;
   }
 
@@ -748,7 +763,8 @@ class ExprSetListener {
   /// @param errors Error vector produced inside the try expression.
   virtual void onError(
       const SelectivityVector& rows,
-      const ErrorVector& errors) = 0;
+      const ErrorVector& errors,
+      const std::string& queryId) = 0;
 };
 
 /// Return the ExprSetListeners having been registered.

@@ -499,10 +499,10 @@ TEST_F(MultiFragmentTest, broadcast) {
     auto task = makeTask(finalAggTaskIds.back(), finalAggPlan, i);
     tasks.emplace_back(task);
     Task::start(task, 1);
-    leafTask->updateBroadcastOutputBuffers(i + 1, false);
+    leafTask->updateOutputBuffers(i + 1, false);
     addRemoteSplits(task, {leafTaskId});
   }
-  leafTask->updateBroadcastOutputBuffers(finalAggTaskIds.size(), true);
+  leafTask->updateOutputBuffers(finalAggTaskIds.size(), true);
 
   // Collect results from multiple tasks.
   auto op = PlanBuilder().exchange(finalAggPlan->outputType()).planNode();
@@ -513,9 +513,9 @@ TEST_F(MultiFragmentTest, broadcast) {
     ASSERT_TRUE(waitForTaskCompletion(task.get())) << task->taskId();
   }
 
-  // Make sure duplicate 'updateBroadcastOutputBuffers' message after task
+  // Make sure duplicate 'updateOutputBuffers' message after task
   // completion doesn't cause an error.
-  leafTask->updateBroadcastOutputBuffers(finalAggTaskIds.size(), true);
+  leafTask->updateOutputBuffers(finalAggTaskIds.size(), true);
 }
 
 TEST_F(MultiFragmentTest, replicateNullsAndAny) {
@@ -796,11 +796,11 @@ TEST_F(MultiFragmentTest, earlyCompletionBroadcast) {
     tasks.push_back(task);
     Task::start(task, 4);
 
-    leafTask->updateBroadcastOutputBuffers(i + 1, false);
+    leafTask->updateOutputBuffers(i + 1, false);
 
     addRemoteSplits(task, {leafTaskId});
   }
-  leafTask->updateBroadcastOutputBuffers(joinTaskIds.size(), true);
+  leafTask->updateOutputBuffers(joinTaskIds.size(), true);
 
   // Create output task.
   auto outputPlan = PlanBuilder().exchange(joinOutputType).planNode();
@@ -1170,7 +1170,9 @@ DEBUG_ONLY_TEST_F(
   addHiveSplits(leafTask, filePaths_);
 
   const std::string kRootTaskId("root-task");
+  std::atomic_bool readyToTerminate{false};
   folly::EventCount blockTerminate;
+  std::atomic_bool noMoreSplits{false};
   folly::EventCount blockNoMoreSplits;
   SCOPED_TESTVALUE_SET(
       "facebook::velox::exec::Task::setError",
@@ -1191,10 +1193,9 @@ DEBUG_ONLY_TEST_F(
           return;
         }
         // Unblock no more split call in the middle of task terminate execution.
-        blockNoMoreSplits.notify();
-        auto waitKey = blockTerminate.prepareWait();
-        // Block to wait for the no more split call to finish.
-        blockTerminate.wait(waitKey);
+        noMoreSplits.store(true);
+        blockNoMoreSplits.notifyAll();
+        blockTerminate.await([&]() { return readyToTerminate.load(); });
       })));
   auto rootPlan = PlanBuilder()
                       .exchange(leafPlan->outputType())
@@ -1215,12 +1216,11 @@ DEBUG_ONLY_TEST_F(
         exec::Split(std::make_shared<RemoteConnectorSplit>(leafTaskId), -1);
     rootTask->addSplit("0", std::move(split));
   }
-  auto waitKey = blockNoMoreSplits.prepareWait();
-  // Block to wait for task terminate execution.
-  blockNoMoreSplits.wait(waitKey);
+  blockNoMoreSplits.await([&]() { return noMoreSplits.load(); });
   rootTask->noMoreSplits("0");
   // Unblock task terminate execution after no more split call finishes.
-  blockTerminate.notify();
+  readyToTerminate.store(true);
+  blockTerminate.notifyAll();
   ASSERT_TRUE(waitForTaskFailure(rootTask.get(), 1'000'000'000));
 }
 
@@ -1315,8 +1315,8 @@ DEBUG_ONLY_TEST_F(MultiFragmentTest, mergeWithEarlyTermination) {
   addHiveSplits(partialSortTask, filePaths);
 
   std::atomic<bool> blockMergeOnce{true};
+  std::atomic<bool> mergeIsBlockedReady{false};
   folly::EventCount mergeIsBlockedWait;
-  auto mergeIsBlockedWaitKet = mergeIsBlockedWait.prepareWait();
   SCOPED_TESTVALUE_SET(
       "facebook::velox::exec::Merge::isBlocked",
       std::function<void(const Operator*)>([&](const Operator* op) {
@@ -1326,7 +1326,7 @@ DEBUG_ONLY_TEST_F(MultiFragmentTest, mergeWithEarlyTermination) {
         if (!blockMergeOnce.exchange(false)) {
           return;
         }
-        mergeIsBlockedWait.wait(mergeIsBlockedWaitKet);
+        mergeIsBlockedWait.await([&]() { return mergeIsBlockedReady.load(); });
         // Trigger early termination.
         op->testingOperatorCtx()->task()->requestAbort();
       }));
@@ -1340,7 +1340,8 @@ DEBUG_ONLY_TEST_F(MultiFragmentTest, mergeWithEarlyTermination) {
   Task::start(finalSortTask, 1);
   addRemoteSplits(finalSortTask, partialSortTaskIds);
 
-  mergeIsBlockedWait.notify();
+  mergeIsBlockedReady.store(true);
+  mergeIsBlockedWait.notifyAll();
 
   ASSERT_TRUE(waitForTaskCompletion(partialSortTask.get(), 1'000'000'000));
   ASSERT_TRUE(waitForTaskAborted(finalSortTask.get(), 1'000'000'000));

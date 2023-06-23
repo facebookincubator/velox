@@ -415,6 +415,7 @@ core::PlanNodePtr SubstraitVeloxPlanConverter::toVeloxPlan(
         "hive_table",
         filterPushdownEnabled,
         connector::hive::SubfieldFilters{},
+        nullptr,
         nullptr);
   } else {
     connector::hive::SubfieldFilters filters =
@@ -424,6 +425,7 @@ core::PlanNodePtr SubstraitVeloxPlanConverter::toVeloxPlan(
         "hive_table",
         filterPushdownEnabled,
         std::move(filters),
+        nullptr,
         nullptr);
   }
 
@@ -437,6 +439,7 @@ core::PlanNodePtr SubstraitVeloxPlanConverter::toVeloxPlan(
     assignments[outName] = std::make_shared<connector::hive::HiveColumnHandle>(
         colNameList[idx],
         connector::hive::HiveColumnHandle::ColumnType::kRegular,
+        veloxTypeList[idx],
         veloxTypeList[idx]);
     outNames.emplace_back(outName);
   }
