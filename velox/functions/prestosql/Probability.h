@@ -17,6 +17,7 @@
 
 #include "boost/math/distributions/beta.hpp"
 #include "boost/math/distributions/binomial.hpp"
+#include "boost/math/distributions/fisher_f.hpp"
 #include "velox/common/base/Exceptions.h"
 #include "velox/functions/Macros.h"
 
@@ -92,20 +93,17 @@ struct BinomialCDFFunction {
 };
 
 template <typename T>
-struct InverseBinomialCDFFunction {
+struct FCDFFunction {
   VELOX_DEFINE_FUNCTION_TYPES(T);
 
   FOLLY_ALWAYS_INLINE void
-  call(int64_t& result, int64_t numOfTrials, double successProb, double p) {
-    VELOX_USER_CHECK((p >= 0) && (p <= 1), "p must be in the interval [0, 1]");
-    VELOX_USER_CHECK(
-        (successProb >= 0) && (successProb <= 1),
-        "successProbability must be in the interval [0, 1]");
-    VELOX_USER_CHECK_GT(
-        numOfTrials, 0, "numberOfTrials must be greater than 0");
+  call(double& result, double df1, double df2, double value) {
+    VELOX_USER_CHECK_GE(value, 0, "value must non-negative");
+    VELOX_USER_CHECK_GT(df1, 0, "numerator df must be greater than 0");
+    VELOX_USER_CHECK_GT(df2, 0, "denominator df must be greater than 0");
 
-    boost::math::binomial_distribution<> dist(numOfTrials, successProb);
-    result = boost::math::quantile(dist, p);
+    boost::math::fisher_f_distribution<> dist(df1, df2);
+    result = boost::math::cdf(dist, value);
   }
 };
 

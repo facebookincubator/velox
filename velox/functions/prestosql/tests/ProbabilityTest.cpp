@@ -155,65 +155,50 @@ TEST_F(ProbabilityTest, binomialCDF) {
       binomialCDF(-2, 0.5, -1), "numberOfTrials must be greater than 0");
 }
 
-TEST_F(ProbabilityTest, inverseBinomialCDF) {
-  const auto invBinomialCDF = [&](std::optional<int64_t> numberOfTrials,
-                                  std::optional<double> successProbability,
-                                  std::optional<double> p) {
-    return evaluateOnce<int64_t>(
-        "inverse_binomial_cdf(c0, c1, c2)",
-        numberOfTrials,
-        successProbability,
-        p);
+TEST_F(ProbabilityTest, fCDF) {
+  const auto fCDF = [&](std::optional<double> df1,
+                        std::optional<double> df2,
+                        std::optional<double> value) {
+    return evaluateOnce<double>(
+        "f_cdf(c0, c1, c2)", df1, df2, value);
   };
 
-  EXPECT_EQ(0, invBinomialCDF(5, 0.5, 0.03125));
-  EXPECT_EQ(41, invBinomialCDF(41, 0.2, 1.0));
-  EXPECT_EQ(3, invBinomialCDF(5, 0.5, 0.8125));
-  EXPECT_EQ(3, invBinomialCDF(3, 0.8403, 0.5));
-  EXPECT_EQ(62, invBinomialCDF(200, 0.3, 0.6));
-  EXPECT_EQ(0, invBinomialCDF(79, 0.6, 0.0));
-  EXPECT_EQ(std::nullopt, invBinomialCDF(std::nullopt, 0.6, 0.0));
-  EXPECT_EQ(std::nullopt, invBinomialCDF(11, std::nullopt, 0.22));
-  EXPECT_EQ(std::nullopt, invBinomialCDF(134, 0.6, std::nullopt));
-  EXPECT_EQ(
-      std::nullopt, invBinomialCDF(std::nullopt, std::nullopt, std::nullopt));
+  EXPECT_EQ(fCDF(2.0, 5.0, 0.0), 0.0);
+  EXPECT_EQ(fCDF(2.0, 5.0, 0.7988), 0.50001145221750731);
+  EXPECT_EQ(fCDF(2.0, 5.0, 3.7797), 0.89999935988961155);
+  EXPECT_EQ(fCDF(5.02, 10.0, 0.72), 0.37628199518500832);
+  EXPECT_EQ(fCDF(10.0283, 0.02, 9.62), 0.062022498946033976);
+  EXPECT_EQ(fCDF(320.02, 123.0232, 5.55), 1);
 
-  // Test invalid inputs for numberOfTrials.
-  VELOX_ASSERT_THROW(
-      invBinomialCDF(0, 0.5, 0.3), "numberOfTrials must be greater than 0");
-  VELOX_ASSERT_THROW(
-      invBinomialCDF(kBigIntMin, 0.5, 0.3),
-      "numberOfTrials must be greater than 0");
-  VELOX_ASSERT_THROW(
-      invBinomialCDF(kNan, 0.5, 0.3), "numberOfTrials must be greater than 0");
+  EXPECT_EQ(fCDF(kDoubleMax, 5.0, 3.7797), 1);
+  EXPECT_EQ(fCDF(1, kDoubleMax, 97.1), 1);
+  EXPECT_EQ(fCDF(82.6, 901.10, kDoubleMax), 1);
+  EXPECT_EQ(fCDF(12.12, 4.2015, kDoubleMin), 0);
+  EXPECT_EQ(fCDF(0.4422, kDoubleMin, 0.697), 7.9148959162596482e-306);
+  EXPECT_EQ(fCDF(kDoubleMin, 50.620, 4), 1);
+  EXPECT_EQ(fCDF(kBigIntMax, 5.0, 3.7797), 0.93256230095450132);
+  EXPECT_EQ(fCDF(76.901, kBigIntMax, 77.97), 1);
+  EXPECT_EQ(fCDF(2.0, 5.0, kBigIntMax), 1);
 
-  // Test invalid inputs for successProbability.
-  VELOX_ASSERT_THROW(
-      invBinomialCDF(5, -0.5, 0.3),
-      "successProbability must be in the interval [0, 1]");
-  VELOX_ASSERT_THROW(
-      invBinomialCDF(5, kDoubleMax, 0.1),
-      "successProbability must be in the interval [0, 1]");
-  VELOX_ASSERT_THROW(
-      invBinomialCDF(5, kNan, 0.03),
-      "successProbability must be in the interval [0, 1]");
+  EXPECT_EQ(fCDF(2.0, 5.0, std::nullopt), std::nullopt);
+  EXPECT_EQ(fCDF(2.0, std::nullopt, 3.7797), std::nullopt);
+  EXPECT_EQ(fCDF(std::nullopt, 5.0, 3.7797), std::nullopt);
 
-  // Test invalid inputs for p.
-  VELOX_ASSERT_THROW(
-      invBinomialCDF(5, 0.3, -12.9), "p must be in the interval [0, 1]");
-  VELOX_ASSERT_THROW(
-      invBinomialCDF(5, 0.3, kDoubleMax), "p must be in the interval [0, 1]");
-  VELOX_ASSERT_THROW(
-      invBinomialCDF(5, 0.3, kNan), "p must be in the interval [0, 1]");
+  // Test invalid inputs for df1.
+  VELOX_ASSERT_THROW(fCDF(0, 3, 0.5), "numerator df must be greater than 0");
+  VELOX_ASSERT_THROW(fCDF(kBigIntMin, 5.0, 3.7797), "numerator df must be greater than 0");
 
-  // Test invalid inputs for multiple params.
-  VELOX_ASSERT_THROW(
-      invBinomialCDF(-3, 0.3, 10.0), "p must be in the interval [0, 1]");
-  VELOX_ASSERT_THROW(
-      invBinomialCDF(kNan, 6, 0.2),
-      "successProbability must be in the interval [0, 1]");
-  VELOX_ASSERT_THROW(
-      invBinomialCDF(-7, 4, 22), "p must be in the interval [0, 1]");
+  // Test invalid inputs for df2.
+  VELOX_ASSERT_THROW(fCDF(3, 0, 0.5), "denominator df must be greater than 0");
+  VELOX_ASSERT_THROW(fCDF(2.0, kBigIntMin, 3.7797), "denominator df must be greater than 0");
+
+  // Test invalid inputs for value.
+  VELOX_ASSERT_THROW(fCDF(3, 5, -0.1), "value must non-negative");
+  VELOX_ASSERT_THROW(fCDF(2.0, 5.0, kBigIntMin), "value must non-negative");
+
+  // Test a combination of invalid inputs.
+  VELOX_ASSERT_THROW(fCDF(-1.2, 0, -0.1), "value must non-negative");
+  VELOX_ASSERT_THROW(fCDF(1, -kInf, -0.1), "value must non-negative");
 }
 
 } // namespace

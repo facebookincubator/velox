@@ -240,7 +240,7 @@ Floating Point Functions
 
 
 ====================================
-Probability Functions: cdf
+Probability Functions
 ====================================
 
 .. function:: beta_cdf(a, b, value) -> double
@@ -255,20 +255,14 @@ Probability Functions: cdf
     The successProbability must be real value in [0, 1], numberOfTrials and value must be
     positive integers with numberOfTrials greater or equal to value
 
+.. function:: f_cdf(df1, df2, value) -> double
+
+    Compute the F cdf with given df1 (numerator degrees of freedom) and df2 (denominator degrees of freedom) parameters:  P(N < value; df1, df2).
+    The numerator and denominator df parameters must be positive real numbers. The value must be a non-negative real number.
+
 .. function:: normal_cdf(mean, sd, value) -> double
 
     Compute the Normal cdf with given mean and standard deviation (sd): P(N < value; mean, sd).
     The mean and value must be real values and the standard deviation must be a real and
     positive value (all of type DOUBLE).
-
-====================================
-Probability Functions: inverse_cdf
-====================================
-
-.. function:: inverse_binomial_cdf(numberOfTrials, successProbability, p) -> integer
-
-    Compute the inverse of the Binomial cdf with given numberOfTrials and successProbability (of a single trial) the
-    cumulative probability (p):  P(N <= n).
-    The successProbability and p must be real values in [0, 1] and the numberOfTrials must be
-    a positive integer.
 
