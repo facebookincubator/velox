@@ -614,7 +614,7 @@ template <>
 inline void SelectiveColumnReader::addValue(const folly::StringPiece value) {
   const uint64_t size = value.size();
   if (LIKELY(rawStringBuffer_ && rawStringUsed_ + size <= rawStringSize_)) {
-    auto copySize = size <= StringView::kInlineSize ? 0 : size;
+    auto copySize = size <= StringView::kInlineSize ? 0 : size - 5;
     memcpy(rawStringBuffer_ + rawStringUsed_, value.data(), copySize);
     new (reinterpret_cast<StringView*>(rawValues_) + (numValues_++) )
         StringView(copySize == 0 ? value.data() : rawStringBuffer_ + rawStringUsed_, size);
