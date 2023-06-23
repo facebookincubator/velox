@@ -96,11 +96,14 @@ struct BitGetFunction {
   template <typename TInput>
   FOLLY_ALWAYS_INLINE void call(int8_t& result, TInput num, int32_t pos) {
     constexpr int kMaxBits = sizeof(TInput) * CHAR_BIT;
-    VELOX_USER_CHECK_GE(pos, 0, "Invalid bit position due to less than zero")
+    VELOX_USER_CHECK_GE(
+        pos,
+        0,
+        "The value of 'pos' argument must be greater than or equal to zero.")
     VELOX_USER_CHECK_LT(
         pos,
         kMaxBits,
-        "Invalid bit position due to exceeds the bit upper limit")
+        "The value of 'pos' argument must not exceed the number of bits in 'x' - 1.")
     result = (num >> pos) & 1;
   }
 };

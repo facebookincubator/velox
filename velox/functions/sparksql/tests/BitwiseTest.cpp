@@ -16,6 +16,7 @@
 #include <gmock/gmock.h>
 #include <optional>
 
+#include "velox/common/base/tests/GTestUtils.h"
 #include "velox/functions/sparksql/tests/SparkFunctionBaseTest.h"
 
 namespace facebook::velox::functions::sparksql::test {
@@ -168,29 +169,45 @@ TEST_F(BitwiseTest, bitGet) {
   EXPECT_EQ(bitGet<int8_t>(kMin8, 7), 1);
   EXPECT_EQ(bitGet<int8_t>(kMax8, 0), 1);
   EXPECT_EQ(bitGet<int8_t>(kMax8, 7), 0);
-  EXPECT_THROW(bitGet<int8_t>(kMax8, -1), VeloxUserError);
-  EXPECT_THROW(bitGet<int8_t>(kMax8, 8), VeloxUserError);
+  VELOX_ASSERT_THROW(
+      bitGet<int8_t>(kMax8, -1),
+      "The value of 'pos' argument must be greater than or equal to zero.");
+  VELOX_ASSERT_THROW(
+      bitGet<int8_t>(kMax8, 8),
+      "The value of 'pos' argument must not exceed the number of bits in 'x' - 1.");
 
   EXPECT_EQ(bitGet<int16_t>(kMin16, 0), 0);
   EXPECT_EQ(bitGet<int16_t>(kMin16, 15), 1);
   EXPECT_EQ(bitGet<int16_t>(kMax16, 0), 1);
   EXPECT_EQ(bitGet<int16_t>(kMax16, 15), 0);
-  EXPECT_THROW(bitGet<int16_t>(kMax16, -1), VeloxUserError);
-  EXPECT_THROW(bitGet<int16_t>(kMax16, 16), VeloxUserError);
+  VELOX_ASSERT_THROW(
+      bitGet<int16_t>(kMax16, -1),
+      "The value of 'pos' argument must be greater than or equal to zero.");
+  VELOX_ASSERT_THROW(
+      bitGet<int16_t>(kMax16, 16),
+      "The value of 'pos' argument must not exceed the number of bits in 'x' - 1.");
 
   EXPECT_EQ(bitGet<int32_t>(kMin32, 0), 0);
   EXPECT_EQ(bitGet<int32_t>(kMin32, 31), 1);
   EXPECT_EQ(bitGet<int32_t>(kMax32, 0), 1);
   EXPECT_EQ(bitGet<int32_t>(kMax32, 31), 0);
-  EXPECT_THROW(bitGet<int32_t>(kMax32, -1), VeloxUserError);
-  EXPECT_THROW(bitGet<int32_t>(kMax32, 32), VeloxUserError);
+  VELOX_ASSERT_THROW(
+      bitGet<int32_t>(kMax32, -1),
+      "The value of 'pos' argument must be greater than or equal to zero.");
+  VELOX_ASSERT_THROW(
+      bitGet<int32_t>(kMax32, 32),
+      "The value of 'pos' argument must not exceed the number of bits in 'x' - 1.");
 
   EXPECT_EQ(bitGet<int64_t>(kMin64, 0), 0);
   EXPECT_EQ(bitGet<int64_t>(kMin64, 63), 1);
   EXPECT_EQ(bitGet<int64_t>(kMax64, 0), 1);
   EXPECT_EQ(bitGet<int64_t>(kMax64, 63), 0);
-  EXPECT_THROW(bitGet<int64_t>(kMax64, -1), VeloxUserError);
-  EXPECT_THROW(bitGet<int64_t>(kMax64, 64), VeloxUserError);
+  VELOX_ASSERT_THROW(
+      bitGet<int64_t>(kMax64, -1),
+      "The value of 'pos' argument must be greater than or equal to zero.");
+  VELOX_ASSERT_THROW(
+      bitGet<int64_t>(kMax64, 64),
+      "The value of 'pos' argument must not exceed the number of bits in 'x' - 1.");
 }
 
 TEST_F(BitwiseTest, shiftLeft) {
