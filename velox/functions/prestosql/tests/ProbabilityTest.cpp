@@ -159,8 +159,7 @@ TEST_F(ProbabilityTest, fCDF) {
   const auto fCDF = [&](std::optional<double> df1,
                         std::optional<double> df2,
                         std::optional<double> value) {
-    return evaluateOnce<double>(
-        "f_cdf(c0, c1, c2)", df1, df2, value);
+    return evaluateOnce<double>("f_cdf(c0, c1, c2)", df1, df2, value);
   };
 
   EXPECT_EQ(fCDF(2.0, 5.0, 0.0), 0.0);
@@ -186,11 +185,13 @@ TEST_F(ProbabilityTest, fCDF) {
 
   // Test invalid inputs for df1.
   VELOX_ASSERT_THROW(fCDF(0, 3, 0.5), "numerator df must be greater than 0");
-  VELOX_ASSERT_THROW(fCDF(kBigIntMin, 5.0, 3.7797), "numerator df must be greater than 0");
+  VELOX_ASSERT_THROW(
+      fCDF(kBigIntMin, 5.0, 3.7797), "numerator df must be greater than 0");
 
   // Test invalid inputs for df2.
   VELOX_ASSERT_THROW(fCDF(3, 0, 0.5), "denominator df must be greater than 0");
-  VELOX_ASSERT_THROW(fCDF(2.0, kBigIntMin, 3.7797), "denominator df must be greater than 0");
+  VELOX_ASSERT_THROW(
+      fCDF(2.0, kBigIntMin, 3.7797), "denominator df must be greater than 0");
 
   // Test invalid inputs for value.
   VELOX_ASSERT_THROW(fCDF(3, 5, -0.1), "value must non-negative");
