@@ -127,7 +127,6 @@ function install_velox_deps {
 
 (
   echo "Installing mac dependencies"
-  update_brew
   if [[ $# -ne 0 ]]; then
     for cmd in "$@"; do
       run_and_time "${cmd}"

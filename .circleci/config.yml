@@ -27,6 +27,11 @@ workflows:
               os: [macos-intel]
       - format-check
       - header-check
+      - linux-presto-fuzzer-run
+      - linux-spark-fuzzer-run
+      - linux-spark-aggregate-fuzzer-run
+      - linux-aggregate-fuzzer-run
+      - linux-join-fuzzer-run
 
   # Daily documentation update
   nightly:
@@ -155,7 +160,7 @@ commands:
       - run:
           name: Build
           command: |
-            make debug NUM_THREADS=16 MAX_HIGH_MEM_JOBS=8 MAX_LINK_JOBS=8
+            make debug NUM_THREADS=16 MAX_HIGH_MEM_JOBS=8 MAX_LINK_JOBS=6
             ccache -s
           no_output_timeout: 1h
       - run:
