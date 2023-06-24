@@ -15,6 +15,7 @@
  */
 
 #include "velox/common/file/File.h"
+#include "velox/common/base/Fs.h"
 
 #include <fmt/format.h>
 #include <glog/logging.h>
@@ -53,20 +54,16 @@ uint64_t ReadFile::preadv(
   return numRead;
 }
 
-void ReadFile::preadv(const std::vector<ReadFile::Segment>& segments) const {
-  for (const auto& segment : segments) {
-    pread(segment.offset, segment.buffer.size(), segment.buffer.data());
-  }
-}
-
 void ReadFile::preadv(
-    const std::vector<common::Region>& regions,
-    folly::IOBuf* output) const {
-  for (const auto& region : regions) {
-    *output = folly::IOBuf(folly::IOBuf::CREATE, region.length);
-    pread(region.offset, region.length, output->writableData());
-    output->append(region.length);
-    ++output;
+    folly::Range<const common::Region*> regions,
+    folly::Range<folly::IOBuf*> iobufs) const {
+  VELOX_CHECK_EQ(regions.size(), iobufs.size());
+  for (size_t i = 0; i < regions.size(); ++i) {
+    const auto& region = regions[i];
+    auto& output = iobufs[i];
+    output = folly::IOBuf(folly::IOBuf::CREATE, region.length);
+    pread(region.offset, region.length, output.writableData());
+    output.append(region.length);
   }
 }
 
@@ -173,14 +170,28 @@ uint64_t LocalReadFile::memoryUsage() const {
   return sizeof(FILE);
 }
 
-LocalWriteFile::LocalWriteFile(std::string_view path) {
+LocalWriteFile::LocalWriteFile(
+    std::string_view path,
+    bool shouldCreateParentDirectories,
+    bool shouldThrowOnFileAlreadyExists) {
+  auto dir = fs::path(path).parent_path();
+  if (shouldCreateParentDirectories && !fs::exists(dir)) {
+    VELOX_CHECK(
+        common::generateFileDirectory(dir.c_str()),
+        "Failed to generate file directory");
+  }
+
   std::unique_ptr<char[]> buf(new char[path.size() + 1]);
   buf[path.size()] = 0;
   memcpy(buf.get(), path.data(), path.size());
   {
-    FILE* exists = fopen(buf.get(), "rb");
-    VELOX_CHECK(
-        !exists, "Failure in LocalWriteFile: path '{}' already exists.", path);
+    if (shouldThrowOnFileAlreadyExists) {
+      FILE* exists = fopen(buf.get(), "rb");
+      VELOX_CHECK(
+          !exists,
+          "Failure in LocalWriteFile: path '{}' already exists.",
+          path);
+    }
   }
   auto file = fopen(buf.get(), "ab");
   VELOX_CHECK(

@@ -255,6 +255,11 @@ Probability Functions
     The successProbability must be real value in [0, 1], numberOfTrials and value must be
     positive integers with numberOfTrials greater or equal to value
 
+.. function:: f_cdf(df1, df2, value) -> double
+
+    Compute the F cdf with given df1 (numerator degrees of freedom) and df2 (denominator degrees of freedom) parameters:  P(N < value; df1, df2).
+    The numerator and denominator df parameters must be positive real numbers. The value must be a non-negative real number.
+
 .. function:: normal_cdf(mean, sd, value) -> double
 
     Compute the Normal cdf with given mean and standard deviation (sd): P(N < value; mean, sd).

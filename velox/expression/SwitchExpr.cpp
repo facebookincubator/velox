@@ -70,7 +70,7 @@ void SwitchExpr::evalSpecialForm(
     // else load access the same vectors, so there is no extra loading.
     DecodedVector decoded;
     auto& remaining = *remainingRows.get();
-    for (const auto& field : distinctFields_) {
+    for (auto* field : distinctFields_) {
       context.ensureFieldLoaded(field->index(context), remaining);
       const auto& vector = context.getField(field->index(context));
       if (vector->mayHaveNulls()) {
@@ -105,7 +105,6 @@ void SwitchExpr::evalSpecialForm(
         true,
         &values,
         nullptr);
-    context.releaseVector(condition);
     switch (booleanMix) {
       case BooleanMix::kAllTrue:
         inputs_[2 * i + 1]->eval(*remainingRows.get(), context, result);
@@ -115,12 +114,13 @@ void SwitchExpr::evalSpecialForm(
       case BooleanMix::kAllFalse:
         continue;
       default: {
+        thenRows.get(remainingRows->end(), false);
         bits::andBits(
-            thenRows.get(rows.end(), false)->asMutableRange().bits(),
+            thenRows.get()->asMutableRange().bits(),
             remainingRows.get()->asRange().bits(),
             values,
             0,
-            rows.end());
+            remainingRows->end());
         thenRows.get()->updateBounds();
 
         if (thenRows.get()->hasSelections()) {
@@ -129,6 +129,7 @@ void SwitchExpr::evalSpecialForm(
         }
       }
     }
+    context.releaseVector(condition);
   }
 
   // Evaluate the "else" clause.

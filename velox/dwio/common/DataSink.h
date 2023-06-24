@@ -145,6 +145,8 @@ class WriteFileDataSink final : public DataSink {
       : DataSink(std::move(name), std::move(metricLogger), stats),
         writeFile_{std::move(writeFile)} {}
 
+  static void registerLocalFileFactory();
+
   ~WriteFileDataSink() override {
     destroy();
   }
@@ -154,14 +156,6 @@ class WriteFileDataSink final : public DataSink {
   }
 
   static void registerFactory();
-
-  uint64_t size() const override {
-    DWIO_ENSURE_EQ(
-        size_,
-        writeFile_->size(),
-        "Size mismatch between WriteFile and DataSink.");
-    return size_;
-  }
 
   using DataSink::write;
 
@@ -235,13 +229,9 @@ class MemorySink : public DataSink {
   DataBuffer<char> data_;
 };
 
-} // namespace facebook::velox::dwio::common
+void registerDataSinks();
 
-#define VELOX_STATIC_REGISTER_DATA_SINK(function)                           \
-  namespace {                                                               \
-  static bool FB_ANONYMOUS_VARIABLE(g_DataSinkFunction) =                   \
-      facebook::velox::dwio::common::DataSink::registerFactory((function)); \
-  }
+} // namespace facebook::velox::dwio::common
 
 #define VELOX_REGISTER_DATA_SINK_METHOD_DEFINITION(class, function)       \
   void class ::registerFactory() {                                        \

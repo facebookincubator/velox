@@ -440,25 +440,6 @@ class TableWriteTest : public HiveConnectorTestBase {
     }
   }
 
-#if 0
-  // Verifies if the given partitioned table directory (names) are encoded
-  // properly based on the used partitioned keys.
-  void verifyPartitionFileDirectory(
-      const std::filesystem::path& filePath,
-      const std::string& targetDir) {
-    auto parentPath = filePath.parent_path();
-    for (int i = partitionedBy_.size() - 1; i >= 0; --i) {
-      const auto& partitionColumn = partitionedBy_[i];
-      ASSERT_TRUE(RE2::FullMatch(
-          parentPath.filename().string(),
-          fmt::format("{}=.+", partitionColumn)))
-          << parentPath.filename().string() << " " << partitionColumn << " "
-          << i << " " << parentPath.string();
-      parentPath = parentPath.parent_path();
-    }
-  }
-#endif
-
   // Verifies if a partitioned file path (directory and file name) is encoded
   // properly.
   void verifyPartitionedFilePath(
@@ -476,12 +457,12 @@ class TableWriteTest : public HiveConnectorTestBase {
     verifyPartitionedDirPath(filePath, targetDir);
     if (commitStrategy_ == CommitStrategy::kNoCommit) {
       ASSERT_TRUE(RE2::FullMatch(
-          filePath.filename().string(), "0[0-9]+_0_test_cursor.+"))
+          filePath.filename().string(), "0[0-9]+_0_TaskCursorQuery_[0-9]+"))
           << filePath.filename().string();
     } else {
       ASSERT_TRUE(RE2::FullMatch(
           filePath.filename().string(),
-          ".tmp.velox.0[0-9]+_0_test_cursor.+_.+"))
+          ".tmp.velox.0[0-9]+_0_TaskCursorQuery_[0-9]+_.+"))
           << filePath.filename().string();
     }
   }
@@ -784,6 +765,30 @@ class BucketedTableOnlyWriteTest
   }
 };
 
+class PartitionedWithoutBucketTableWriterTest
+    : public TableWriteTest,
+      public testing::WithParamInterface<uint32_t> {
+ public:
+  PartitionedWithoutBucketTableWriterTest() : TableWriteTest(GetParam()) {}
+
+  static std::vector<uint32_t> getTestParams() {
+    std::vector<uint32_t> testParams;
+    testParams.push_back(TestParam{
+        TestMode::kPartitioned,
+        CommitStrategy::kNoCommit,
+        HiveBucketProperty::Kind::kHiveCompatible,
+        false}
+                             .value);
+    testParams.push_back(TestParam{
+        TestMode::kPartitioned,
+        CommitStrategy::kTaskCommit,
+        HiveBucketProperty::Kind::kHiveCompatible,
+        false}
+                             .value);
+    return testParams;
+  }
+};
+
 class AllTableWriterTest : public TableWriteTest,
                            public testing::WithParamInterface<uint32_t> {
  public:
@@ -1077,6 +1082,109 @@ TEST_P(AllTableWriterTest, commitStrategies) {
   }
 }
 
+TEST_P(PartitionedTableWriterTest, specialPartitionName) {
+  const int32_t numPartitions = 50;
+  const int32_t numBatches = 2;
+
+  const auto rowType =
+      ROW({"c0", "p0", "p1", "c1", "c3", "c5"},
+          {INTEGER(), INTEGER(), VARCHAR(), BIGINT(), REAL(), VARCHAR()});
+  const std::vector<std::string> partitionKeys = {"p0", "p1"};
+  const std::vector<TypePtr> partitionTypes = {INTEGER(), VARCHAR()};
+
+  const std::vector charsToEscape = {
+      '"',
+      '#',
+      '%',
+      '\'',
+      '*',
+      '/',
+      ':',
+      '=',
+      '?',
+      '\\',
+      '\x7F',
+      '{',
+      '[',
+      ']',
+      '^'};
+  ASSERT_GE(numPartitions, charsToEscape.size());
+  std::vector<RowVectorPtr> vectors = makeBatches(numBatches, [&](auto) {
+    return makeRowVector(
+        rowType->names(),
+        {
+            makeFlatVector<int32_t>(
+                numPartitions, [&](auto row) { return row + 100; }),
+            makeFlatVector<int32_t>(
+                numPartitions, [&](auto row) { return row; }),
+            makeFlatVector<StringView>(
+                numPartitions,
+                [&](auto row) {
+                  // special character
+                  return StringView::makeInline(
+                      fmt::format("str_{}{}", row, charsToEscape.at(row % 15)));
+                }),
+            makeFlatVector<int64_t>(
+                numPartitions, [&](auto row) { return row + 1000; }),
+            makeFlatVector<float>(
+                numPartitions, [&](auto row) { return row + 33.23; }),
+            makeFlatVector<StringView>(
+                numPartitions,
+                [&](auto row) {
+                  return StringView::makeInline(
+                      fmt::format("bucket_{}", row * 3));
+                }),
+        });
+  });
+  createDuckDbTable(vectors);
+
+  auto inputFilePaths = makeFilePaths(numBatches);
+  for (int i = 0; i < numBatches; i++) {
+    writeToFile(inputFilePaths[i]->path, vectors[i]);
+  }
+
+  auto outputDirectory = TempDirectoryPath::create();
+  auto plan = createInsertPlan(
+      PlanBuilder().tableScan(rowType),
+      rowType,
+      outputDirectory->path,
+      partitionKeys,
+      bucketProperty_,
+      connector::hive::LocationHandle::TableType::kNew,
+      commitStrategy_);
+
+  auto task = assertQuery(plan, inputFilePaths, "SELECT count(*) FROM tmp");
+
+  std::set<std::string> actualPartitionDirectories =
+      getLeafSubdirectories(outputDirectory->path);
+
+  std::set<std::string> expectedPartitionDirectories;
+  const std::vector<std::string> expectedCharsAfterEscape = {
+      "%22",
+      "%23",
+      "%25",
+      "%27",
+      "%2A",
+      "%2F",
+      "%3A",
+      "%3D",
+      "%3F",
+      "%5C",
+      "%7F",
+      "%7B",
+      "%5B",
+      "%5D",
+      "%5E"};
+  for (auto i = 0; i < numPartitions; ++i) {
+    // url encoded
+    auto partitionName = fmt::format(
+        "p0={}/p1=str_{}{}", i, i, expectedCharsAfterEscape.at(i % 15));
+    expectedPartitionDirectories.emplace(
+        fs::path(outputDirectory->path) / partitionName);
+  }
+  EXPECT_EQ(actualPartitionDirectories, expectedPartitionDirectories);
+}
+
 TEST_P(PartitionedTableWriterTest, multiplePartitions) {
   int32_t numPartitions = 50;
   int32_t numBatches = 2;
@@ -1231,6 +1339,40 @@ TEST_P(PartitionedTableWriterTest, singlePartition) {
   } else {
     ASSERT_GE(countRecursiveFiles(*partitionDirectories.begin()), 1);
   }
+}
+
+TEST_P(PartitionedWithoutBucketTableWriterTest, fromSinglePartitionToMultiple) {
+  const int32_t numBatches = 1;
+  auto rowType = ROW({"c0", "c1"}, {BIGINT(), BIGINT()});
+  std::vector<std::string> partitionKeys = {"c0"};
+
+  // Partition vector is constant vector.
+  std::vector<RowVectorPtr> vectors;
+  // The initial vector has the same partition key value;
+  vectors.push_back(makeRowVector(
+      rowType->names(),
+      {makeFlatVector<int64_t>(1'000, [&](auto /*unused*/) { return 1; }),
+       makeFlatVector<int64_t>(1'000, [&](auto row) { return row + 1; })}));
+  // The second vector has different partition key value.
+  vectors.push_back(makeRowVector(
+      rowType->names(),
+      {makeFlatVector<int64_t>(1'000, [&](auto row) { return row * 234 % 30; }),
+       makeFlatVector<int64_t>(1'000, [&](auto row) { return row + 1; })}));
+  createDuckDbTable(vectors);
+
+  auto outputDirectory = TempDirectoryPath::create();
+  auto plan = createInsertPlan(
+      PlanBuilder().values(vectors),
+      rowType,
+      outputDirectory->path,
+      partitionKeys);
+
+  assertQuery(plan, "SELECT count(*) FROM tmp");
+
+  assertQuery(
+      PlanBuilder().tableScan(rowType).planNode(),
+      makeHiveConnectorSplits(outputDirectory),
+      "SELECT * FROM tmp");
 }
 
 TEST_P(PartitionedTableWriterTest, maxPartitions) {
@@ -1618,3 +1760,9 @@ VELOX_INSTANTIATE_TEST_SUITE_P(
     TableWriterTest,
     AllTableWriterTest,
     testing::ValuesIn(AllTableWriterTest::getTestParams()));
+
+VELOX_INSTANTIATE_TEST_SUITE_P(
+    TableWriterTest,
+    PartitionedWithoutBucketTableWriterTest,
+    testing::ValuesIn(
+        PartitionedWithoutBucketTableWriterTest::getTestParams()));

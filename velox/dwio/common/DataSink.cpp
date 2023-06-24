@@ -40,6 +40,25 @@ void WriteFileDataSink::doClose() {
   }
 }
 
+std::unique_ptr<DataSink> localWriteFileSink(
+    const std::string& filename,
+    MetricsLogPtr metricsLog,
+    IoStatistics* stats = nullptr) {
+  if (strncmp(filename.c_str(), "file:", 5) == 0) {
+    auto pathSuffix = filename.substr(5);
+    return std::make_unique<WriteFileDataSink>(
+        std::make_unique<LocalWriteFile>(pathSuffix, true, false),
+        pathSuffix,
+        metricsLog,
+        stats);
+  }
+  return nullptr;
+}
+
+void WriteFileDataSink::registerLocalFileFactory() {
+  DataSink::registerFactory(localWriteFileSink);
+}
+
 LocalFileSink::LocalFileSink(
     const std::string& name,
     const MetricsLogPtr& metricLogger,
@@ -114,6 +133,8 @@ std::unique_ptr<DataSink> DataSink::create(
       return result;
     }
   }
+  // TODO: remove this fallback once file data sink all switch to use velox
+  // filesystem for io operation.
   return std::make_unique<LocalFileSink>(path, metricsLog, stats);
 }
 
@@ -129,5 +150,9 @@ static std::unique_ptr<DataSink> localFileSink(
 }
 
 VELOX_REGISTER_DATA_SINK_METHOD_DEFINITION(LocalFileSink, localFileSink);
+
+void registerDataSinks() {
+  dwio::common::LocalFileSink::registerFactory();
+}
 
 } // namespace facebook::velox::dwio::common

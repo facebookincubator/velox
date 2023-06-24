@@ -229,7 +229,7 @@ exec::AggregateRegistrationResult registerMaxSizeForStats(
 
 } // namespace
 
-void registerMaxSizeForStatsAggregate(const std::string& prefix) {
+void registerMaxDataSizeForStatsAggregate(const std::string& prefix) {
   registerMaxSizeForStats(prefix + kMaxSizeForStats);
 }
 

@@ -188,7 +188,24 @@ bool Expr::allSupportFlatNoNullsFastPath(
   return true;
 }
 
+void Expr::clearMetaData() {
+  metaDataComputed_ = false;
+  for (auto child : inputs_) {
+    child->clearMetaData();
+  }
+  propagatesNulls_ = false;
+  distinctFields_.clear();
+  multiplyReferencedFields_.clear();
+  hasConditionals_ = false;
+  deterministic_ = true;
+  sameAsParentDistinctFields_ = false;
+}
+
 void Expr::computeMetadata() {
+  if (metaDataComputed_) {
+    return;
+  }
+
   // Compute metadata for all the inputs.
   for (auto& input : inputs_) {
     input->computeMetadata();
@@ -214,10 +231,14 @@ void Expr::computeMetadata() {
         distinctFields_, multiplyReferencedFields_, input->distinctFields_);
   }
 
+  if (is<FieldReference>() && inputs_.empty()) {
+    distinctFields_.resize(1);
+    distinctFields_[0] = this->as<FieldReference>();
+  }
+
   // (3) Compute propagatesNulls_.
   // propagatesNulls_ is true iff a null in any of the columns this
   // depends on makes the Expr null.
-
   if (isSpecialForm() && !is<ConstantExpr>() && !is<FieldReference>() &&
       !is<CastExpr>()) {
     as<SpecialForm>()->computePropagatesNulls();
@@ -256,14 +277,15 @@ void Expr::computeMetadata() {
   }
 
   for (auto& input : inputs_) {
-    if (!input->isMultiplyReferenced_ &&
-        isSameFields(distinctFields_, input->distinctFields_)) {
-      input->distinctFields_.clear();
+    if (isSameFields(distinctFields_, input->distinctFields_)) {
+      input->sameAsParentDistinctFields_ = true;
     }
   }
 
   // (5) Compute hasConditionals_.
   hasConditionals_ = hasConditionals(this);
+
+  metaDataComputed_ = true;
 }
 
 namespace {
@@ -306,7 +328,7 @@ void mergeOrThrowArgumentErrors(
 }
 
 // Returns true if vector is a LazyVector that hasn't been loaded yet or
-// is not dictionary, sequence or constant encoded.
+// is not dictionary or constant encoded.
 bool isFlat(const BaseVector& vector) {
   auto encoding = vector.encoding();
   if (encoding == VectorEncoding::Simple::LAZY) {
@@ -317,7 +339,6 @@ bool isFlat(const BaseVector& vector) {
     encoding = vector.loadedVector()->encoding();
   }
   return !(
-      encoding == VectorEncoding::Simple::SEQUENCE ||
       encoding == VectorEncoding::Simple::DICTIONARY ||
       encoding == VectorEncoding::Simple::CONSTANT);
 }
@@ -783,7 +804,7 @@ void Expr::eval(
   if (!hasConditionals_ || distinctFields_.size() == 1 ||
       shouldEvaluateSharedSubexp()) {
     // Load lazy vectors if any.
-    for (const auto& field : distinctFields_) {
+    for (auto* field : distinctFields_) {
       context.ensureFieldLoaded(field->index(context), rows);
     }
   } else if (!propagatesNulls_) {
@@ -810,7 +831,7 @@ void Expr::evaluateSharedSubexpr(
     TEval eval) {
   // Captures the inputs referenced by distinctFields_.
   std::vector<const BaseVector*> expressionInputFields;
-  for (const auto& field : distinctFields_) {
+  for (auto* field : distinctFields_) {
     expressionInputFields.push_back(
         context.getField(field->index(context)).get());
   }
@@ -904,7 +925,7 @@ Expr::PeelEncodingsResult Expr::peelEncodings(
   auto numFields = context.row()->childrenSize();
   std::vector<VectorPtr> vectorsToPeel;
   vectorsToPeel.reserve(distinctFields_.size());
-  for (const auto& field : distinctFields_) {
+  for (auto* field : distinctFields_) {
     auto fieldIndex = field->index(context);
     assert(fieldIndex >= 0 && fieldIndex < numFields);
     auto fieldVector = context.getField(fieldIndex);
@@ -957,9 +978,9 @@ void Expr::evalEncodings(
     const SelectivityVector& rows,
     EvalCtx& context,
     VectorPtr& result) {
-  if (deterministic_ && !distinctFields_.empty()) {
+  if (deterministic_ && !skipFieldDependentOptimizations()) {
     bool hasFlat = false;
-    for (const auto& field : distinctFields_) {
+    for (auto* field : distinctFields_) {
       if (isFlat(*context.getField(field->index(context)))) {
         hasFlat = true;
         break;
@@ -1096,9 +1117,9 @@ void Expr::evalWithNulls(
     return;
   }
 
-  if (propagatesNulls_) {
+  if (propagatesNulls_ && !skipFieldDependentOptimizations()) {
     bool mayHaveNulls = false;
-    for (const auto& field : distinctFields_) {
+    for (auto* field : distinctFields_) {
       const auto& vector = context.getField(field->index(context));
       if (isLazyNotLoaded(*vector)) {
         continue;
@@ -1110,7 +1131,7 @@ void Expr::evalWithNulls(
       }
     }
 
-    if (mayHaveNulls && !distinctFields_.empty()) {
+    if (mayHaveNulls) {
       LocalSelectivityVector nonNullHolder(context);
       if (removeSureNulls(rows, context, nonNullHolder)) {
         ScopedVarSetter noMoreNulls(context.mutableNullsPruned(), true);
@@ -1290,7 +1311,6 @@ inline bool isPeelable(VectorEncoding::Simple encoding) {
   switch (encoding) {
     case VectorEncoding::Simple::CONSTANT:
     case VectorEncoding::Simple::DICTIONARY:
-    case VectorEncoding::Simple::SEQUENCE:
       return true;
     default:
       return false;

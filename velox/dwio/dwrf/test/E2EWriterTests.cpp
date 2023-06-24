@@ -26,7 +26,7 @@
 #include "velox/dwio/dwrf/test/OrcTest.h"
 #include "velox/dwio/dwrf/test/utils/E2EWriterTestUtil.h"
 #include "velox/dwio/dwrf/writer/Writer.h"
-#include "velox/dwio/type/fbhive/HiveTypeParser.h"
+#include "velox/type/fbhive/HiveTypeParser.h"
 #include "velox/vector/FlatVector.h"
 #include "velox/vector/fuzzer/VectorFuzzer.h"
 #include "velox/vector/tests/utils/VectorMaker.h"
@@ -38,7 +38,7 @@ using namespace facebook::velox::dwio::common::encryption::test;
 using namespace facebook::velox::test;
 using namespace facebook::velox::dwrf;
 using namespace facebook::velox::dwrf::encryption;
-using namespace facebook::velox::dwio::type::fbhive;
+using namespace facebook::velox::type::fbhive;
 using namespace facebook::velox;
 using facebook::velox::memory::MemoryPool;
 using folly::Random;
@@ -270,7 +270,10 @@ TEST_F(E2EWriterTests, DISABLED_TestFileCreation) {
         BatchMaker::createBatch(type, size, *leafPool_, nullptr, i));
   }
 
-  auto sink = std::make_unique<LocalFileSink>("/tmp/e2e_generated_file.orc");
+  auto path = "/tmp/e2e_generated_file.orc";
+  auto localWriteFile = std::make_unique<LocalWriteFile>(path, true, false);
+  auto sink =
+      std::make_unique<WriteFileDataSink>(std::move(localWriteFile), path);
   E2EWriterTestUtil::writeData(
       std::move(sink),
       type,

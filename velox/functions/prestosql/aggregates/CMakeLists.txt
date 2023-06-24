@@ -14,6 +14,7 @@
 
 add_library(
   velox_aggregates
+  AddressableNonNullValueList.cpp
   ApproxDistinctAggregate.cpp
   ApproxMostFrequentAggregate.cpp
   ApproxPercentileAggregate.cpp
@@ -41,6 +42,7 @@ add_library(
   ValueList.cpp
   VarianceAggregates.cpp
   MaxSizeForStatsAggregate.cpp
+  SumDataSizeForStatsAggregate.cpp
   RegisterAggregateFunctions.cpp)
 
 target_link_libraries(

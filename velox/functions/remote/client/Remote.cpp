@@ -14,33 +14,43 @@
  * limitations under the License.
  */
 
-#include <folly/json.h>
+#include "velox/functions/remote/client/Remote.h"
 
+#include <folly/io/async/EventBase.h>
 #include "velox/expression/Expr.h"
 #include "velox/expression/VectorFunction.h"
 #include "velox/functions/remote/client/ThriftClient.h"
+#include "velox/functions/remote/if/GetSerde.h"
 #include "velox/functions/remote/if/gen-cpp2/RemoteFunctionServiceAsyncClient.h"
+#include "velox/type/fbhive/HiveTypeSerializer.h"
 #include "velox/vector/VectorStream.h"
 
 namespace facebook::velox::functions {
 namespace {
 
+std::string serializeType(const TypePtr& type) {
+  // Use hive type serializer.
+  return type::fbhive::HiveTypeSerializer::serialize(type);
+}
+
 class RemoteFunction : public exec::VectorFunction {
  public:
   RemoteFunction(
       const std::string& functionName,
-      folly::SocketAddress location,
-      const std::vector<exec::VectorFunctionArg>& inputArgs)
+      const std::vector<exec::VectorFunctionArg>& inputArgs,
+      const RemoteVectorFunctionMetadata& metadata)
       : functionName_(functionName),
-        location_(location),
-        thriftClient_(getThriftClient(location_)) {
+        location_(metadata.location),
+        thriftClient_(getThriftClient(location_, &eventBase_)),
+        serdeFormat_(metadata.serdeFormat),
+        serde_(getSerde(serdeFormat_)) {
     std::vector<TypePtr> types;
     types.reserve(inputArgs.size());
     serializedInputTypes_.reserve(inputArgs.size());
 
     for (const auto& arg : inputArgs) {
       types.emplace_back(arg.type);
-      serializedInputTypes_.emplace_back(folly::toJson(arg.type->serialize()));
+      serializedInputTypes_.emplace_back(serializeType(arg.type));
     }
     remoteInputType_ = ROW(std::move(types));
   }
@@ -90,28 +100,33 @@ class RemoteFunction : public exec::VectorFunction {
 
     auto functionHandle = request.remoteFunctionHandle_ref();
     functionHandle->name_ref() = functionName_;
-    functionHandle->returnType_ref() = folly::toJson(outputType->serialize());
+    functionHandle->returnType_ref() = serializeType(outputType);
     functionHandle->argumentTypes_ref() = serializedInputTypes_;
 
     auto requestInputs = request.inputs_ref();
     requestInputs->rowCount_ref() = remoteRowVector->size();
-    requestInputs->pageFormat_ref() = remote::PageFormat::PRESTO_PAGE;
+    requestInputs->pageFormat_ref() = serdeFormat_;
 
     // TODO: serialize only active rows.
-    requestInputs->payload_ref() =
-        rowVectorToIOBuf(remoteRowVector, rows.end(), *context.pool());
+    requestInputs->payload_ref() = rowVectorToIOBuf(
+        remoteRowVector, rows.end(), *context.pool(), serde_.get());
 
     thriftClient_->sync_invokeFunction(remoteResponse, request);
     auto outputRowVector = IOBufToRowVector(
         remoteResponse.get_result().get_payload(),
         ROW({outputType}),
-        *context.pool());
+        *context.pool(),
+        serde_.get());
     result = outputRowVector->childAt(0);
   }
 
   const std::string functionName_;
   folly::SocketAddress location_;
+
+  folly::EventBase eventBase_;
   std::unique_ptr<RemoteFunctionClient> thriftClient_;
+  remote::PageFormat serdeFormat_;
+  std::unique_ptr<VectorSerde> serde_;
 
   // Structures we construct once to cache:
   RowTypePtr remoteInputType_;
@@ -121,8 +136,8 @@ class RemoteFunction : public exec::VectorFunction {
 std::shared_ptr<exec::VectorFunction> createRemoteFunction(
     const std::string& name,
     const std::vector<exec::VectorFunctionArg>& inputArgs,
-    folly::SocketAddress location) {
-  return std::make_unique<RemoteFunction>(name, location, inputArgs);
+    const RemoteVectorFunctionMetadata& metadata) {
+  return std::make_unique<RemoteFunction>(name, inputArgs, metadata);
 }
 
 } // namespace
@@ -130,8 +145,7 @@ std::shared_ptr<exec::VectorFunction> createRemoteFunction(
 void registerRemoteFunction(
     const std::string& name,
     std::vector<exec::FunctionSignaturePtr> signatures,
-    folly::SocketAddress location,
-    exec::VectorFunctionMetadata metadata,
+    const RemoteVectorFunctionMetadata& metadata,
     bool overwrite) {
   exec::registerStatefulVectorFunction(
       name,
@@ -140,7 +154,7 @@ void registerRemoteFunction(
           createRemoteFunction,
           std::placeholders::_1,
           std::placeholders::_2,
-          location),
+          metadata),
       metadata,
       overwrite);
 }
