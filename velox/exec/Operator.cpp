@@ -450,14 +450,22 @@ uint64_t Operator::MemoryReclaimer::reclaim(
   if (FOLLY_UNLIKELY(driver == nullptr)) {
     return 0;
   }
-  if (!op_->canReclaim()) {
-    return 0;
-  }
   VELOX_CHECK_EQ(pool->name(), op_->pool()->name());
   VELOX_CHECK(!driver->state().isOnThread() || driver->state().isSuspended);
   VELOX_CHECK(driver->task()->pauseRequested());
 
-  op_->reclaim(targetBytes);
+  if (!op_->canReclaim() && driver->task()->isRunning()) {
+    return 0;
+  }
+  // NOTE: if the task has been terminated, then we are safe to reclaim back all
+  // its memory resource by close this operator without spilling.
+  if (!driver->task()->isRunning()) {
+    op_->close();
+  } else {
+    VELOX_CHECK(op_->canReclaim());
+    op_->reclaim(targetBytes);
+  }
+
   return pool->shrink(targetBytes);
 }
 

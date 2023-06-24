@@ -647,6 +647,10 @@ class Task : public std::enable_shared_from_this<Task> {
     static std::unique_ptr<memory::MemoryReclaimer> create(
         const std::shared_ptr<Task>& task);
 
+    bool reclaimableBytes(
+        const memory::MemoryPool& pool,
+        uint64_t& reclaimableBytes) const override;
+
     uint64_t reclaim(memory::MemoryPool* pool, uint64_t targetBytes) override;
 
     void abort(memory::MemoryPool* pool) override;

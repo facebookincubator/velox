@@ -2311,6 +2311,23 @@ std::unique_ptr<memory::MemoryReclaimer> Task::MemoryReclaimer::create(
       new Task::MemoryReclaimer(task));
 }
 
+bool Task::MemoryReclaimer::reclaimableBytes(
+    const memory::MemoryPool& pool,
+    uint64_t& reclaimableBytes) const {
+  reclaimableBytes = 0;
+  auto task = ensureTask();
+  if (FOLLY_UNLIKELY(task == nullptr)) {
+    return false;
+  }
+  // NOTE: if a task has been terminated, then we can reclaim all its memory.
+  
+  if (!task->isRunning()) {
+    reclaimableBytes = pool.currentBytes();
+    return true;
+  }
+  return memory::MemoryReclaimer::reclaimableBytes(pool, reclaimableBytes);
+}
+
 uint64_t Task::MemoryReclaimer::reclaim(
     memory::MemoryPool* pool,
     uint64_t targetBytes) {
