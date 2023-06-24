@@ -59,6 +59,25 @@ Corresponds to Spark’s operator <code class="docutils literal notranslate"><sp
 </dd></dl>
 
 <dl class="spark function">
+<dt class="sig sig-object spark" id="bit_count">
+<span class="sig-name descname"><span class="pre">bit_count</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">x</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">integer</span></span></span><a class="headerlink" href="#bit_count" title="Permalink to this definition">¶</a></dt>
+<dd><p>Returns the number of bits that are set in the argument <code class="docutils literal notranslate"><span class="pre">x</span></code> as an unsigned 64-bit integer,
+or NULL if the argument is NULL.
+Supported types are: BOOLEAN, TINYINT, SMALLINT, INTEGER and BIGINT.</p>
+</dd></dl>
+
+<dl class="spark function">
+<dt class="sig sig-object spark" id="bit_get">
+<span class="sig-name descname"><span class="pre">bit_get</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">x</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">pos</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">tinyint</span></span></span><a class="headerlink" href="#bit_get" title="Permalink to this definition">¶</a></dt>
+<dd><p>Returns the value of the bit (0 or 1) at the specified position.
+Supported types of <code class="docutils literal notranslate"><span class="pre">x</span></code> are: TINYINT, SMALLINT, INTEGER and BIGINT.
+Supported types of <code class="docutils literal notranslate"><span class="pre">pos</span></code> are: INTEGER.
+The positions are numbered from right to left, starting at zero.
+The value of ‘pos’ argument must be between 0 and number of bits in ‘x’ - 1.
+Invalid ‘pos’ values result in an error.</p>
+</dd></dl>
+
+<dl class="spark function">
 <dt class="sig sig-object spark" id="shiftleft">
 <span class="sig-name descname"><span class="pre">shiftleft</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">x</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">n</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">[same</span> <span class="pre">as</span> <span class="pre">x]</span></span></span><a class="headerlink" href="#shiftleft" title="Permalink to this definition">¶</a></dt>
 <dd><p>Returns x bitwise left shifted by n bits. Supported types for ‘x’ are INTEGER and BIGINT.</p>
