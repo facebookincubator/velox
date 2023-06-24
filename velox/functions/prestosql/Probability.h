@@ -91,5 +91,28 @@ struct BinomialCDFFunction {
   }
 };
 
+template <typename T>
+struct InverseBinomialCDFFunction {
+  VELOX_DEFINE_FUNCTION_TYPES(T);
+
+  FOLLY_ALWAYS_INLINE void
+  call(int64_t& result, int64_t numOfTrials, double successProb, double p) {
+    static constexpr double kInf = std::numeric_limits<double>::infinity();
+
+    VELOX_USER_CHECK(
+        (p >= 0) && (p <= 1) && (p != kInf),
+        "p must be in the interval [0, 1]");
+    VELOX_USER_CHECK(
+        (successProb >= 0) && (successProb <= 1) && (successProb != kInf),
+        "successProbability must be in the interval [0, 1]");
+    VELOX_USER_CHECK(
+        (numOfTrials > 0) && (numOfTrials != kInf),
+        "numberOfTrials must be greater than 0");
+
+    boost::math::binomial_distribution<> dist(numOfTrials, successProb);
+    result = boost::math::quantile(dist, p);
+  }
+};
+
 } // namespace
 } // namespace facebook::velox::functions
