@@ -80,6 +80,11 @@ class TestVeloxVector(unittest.TestCase):
         for i in range(len(list_b)):
             self.assertNotAlmostEqual(list_b[i], b[i], places=17)
 
+        # dtype as a keyword argument
+        integerVector = pv.from_list([1, 3, 11], dtype=pv.IntegerType())
+        self.assertTrue(isinstance(integerVector, pv.BaseVector))
+        self.assertEqual(integerVector.typeKind().name, "INTEGER")
+
     def test_constant_encoding(self):
         ints = pv.constant_vector(1000, 10)
         strings = pv.constant_vector("hello", 100)
