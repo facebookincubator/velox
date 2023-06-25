@@ -133,20 +133,6 @@ template <typename T>
 struct ExtremeValueTrait : public std::numeric_limits<T> {};
 
 template <>
-struct ExtremeValueTrait<Timestamp> {
-  static constexpr Timestamp lowest() {
-    return Timestamp(
-        ExtremeValueTrait<int64_t>::lowest(),
-        ExtremeValueTrait<uint64_t>::lowest());
-  }
-
-  static constexpr Timestamp max() {
-    return Timestamp(
-        ExtremeValueTrait<int64_t>::max(), ExtremeValueTrait<uint64_t>::max());
-  }
-};
-
-template <>
 struct ExtremeValueTrait<Date> {
   static constexpr Date lowest() {
     return Date(std::numeric_limits<int32_t>::lowest());
@@ -571,21 +557,10 @@ class MinMaxByGlobalByAggregationTest
 };
 
 TEST_P(MinMaxByGlobalByAggregationTest, minByFinalGlobalBy) {
-  // Current timestamp implementation has bug for represent max value, wait
-  // https://github.com/facebookincubator/velox/pull/5083 merged, maybe we could
-  // not skip it.
-  if (GetParam().comparisonType == TypeKind::TIMESTAMP) {
-    GTEST_SKIP()
-        << "Not support for extreme value case when comparison type is timestamp";
-  }
   EXECUTE_TEST(minByGlobalByTest);
 }
 
 TEST_P(MinMaxByGlobalByAggregationTest, maxByFinalGlobalBy) {
-  if (GetParam().comparisonType == TypeKind::TIMESTAMP) {
-    GTEST_SKIP()
-        << "Not support for extreme value case when comparison type is timestamp";
-  }
   EXECUTE_TEST(maxByGlobalByTest);
 }
 
