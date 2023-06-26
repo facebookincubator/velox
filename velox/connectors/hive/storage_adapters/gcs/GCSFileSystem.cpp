@@ -42,11 +42,29 @@ namespace gc = ::google::cloud;
 // upload this buffer with zero copies if possible.
 auto constexpr kUploadBufferSize = 256 * 1024;
 
+inline void checkGCSStatus(
+    const gc::Status outcome,
+    const std::string_view& errorMsgPrefix,
+    const std::string& bucket,
+    const std::string& key) {
+  if (!outcome.ok()) {
+    auto error = outcome.error_info();
+    VELOX_FAIL(
+        "{} due to: Path:'{}', SDK Error Type:{}, GCS Status Code:{},  Message:'{}'",
+        errorMsgPrefix,
+        gcsURI(bucket, key),
+        error.domain(),
+        getErrorStringFromGCSError(outcome.code()),
+        outcome.message());
+  }
+}
+
 class GCSReadFile final : public ReadFile {
  public:
-  GCSReadFile(const std::string& path, gcs::Client* client) : client_(client) {
+  GCSReadFile(const std::string& path, std::shared_ptr<gcs::Client> client)
+      : client_(std::move(client)) {
     // assumption it's a proper path
-    bucketAndKeyFromGCSPath(path, bucket_, key_);
+    setBucketAndKeyFromGCSPath(path, bucket_, key_);
   }
 
   // Gets the length of the file.
@@ -58,11 +76,13 @@ class GCSReadFile final : public ReadFile {
     }
     // get metadata and initialize length
     auto metadata = client_->GetObjectMetadata(bucket_, key_);
-    VELOX_CHECK_GCS_OUTCOME(
-        metadata.status(),
-        "Failed to get metadata for GCS object",
-        bucket_,
-        key_);
+    if (!metadata.ok()) {
+      checkGCSStatus(
+          metadata.status(),
+          "Failed to get metadata for GCS object",
+          bucket_,
+          key_);
+    }
     length_ = (*metadata).size();
     VELOX_CHECK_GE(length_, 0);
   }
@@ -91,7 +111,6 @@ class GCSReadFile final : public ReadFile {
     for (const auto range : buffers) {
       length += range.size();
     }
-    // TODO: allocate from a memory pool
     std::string result(length, 0);
     preadInternal(offset, length, static_cast<char*>(result.data()));
     size_t resultOffset = 0;
@@ -132,16 +151,20 @@ class GCSReadFile final : public ReadFile {
   void preadInternal(uint64_t offset, uint64_t length, char* position) const {
     gcs::ObjectReadStream stream = client_->ReadObject(
         bucket_, key_, gcs::ReadRange(offset, offset + length));
-    VELOX_CHECK_GCS_OUTCOME(
-        stream.status(), "Failed to get GCS object", bucket_, key_);
+    if (!stream) {
+      checkGCSStatus(
+          stream.status(), "Failed to get GCS object", bucket_, key_);
+    }
 
     stream.read(position, length);
-    VELOX_CHECK_GCS_OUTCOME(
-        stream.status(), "Failed to get read object", bucket_, key_);
+    if (!stream) {
+      checkGCSStatus(
+          stream.status(), "Failed to get read object", bucket_, key_);
+    }
     bytesRead_ += length;
   }
 
-  gcs::Client* client_;
+  std::shared_ptr<gcs::Client> client_;
   std::string bucket_;
   std::string key_;
   std::atomic<int64_t> length_ = -1;
@@ -159,9 +182,10 @@ class GCSConfig {
  public:
   GCSConfig(const Config* config) : config_(config) {
     std::string cred = config_->get("hive.gcs.credentials", std::string(""));
-    // Cred expected in json format, change it to something else?
     if (!cred.empty()) {
       credentials_ = gc::MakeServiceAccountCredentials(cred);
+    } else {
+      LOG(WARNING) << "Config hive.gcs.credentials is empty";
     }
   }
 
@@ -182,7 +206,7 @@ class GCSFileSystem::Impl {
  public:
   Impl(const Config* config) : gcsConfig_(config) {}
 
-  ~Impl() {}
+  ~Impl() = default;
 
   // Use the input Config parameters and initialize the GCSClient.
   void initializeClient() {
@@ -206,8 +230,8 @@ class GCSFileSystem::Impl {
     client_ = std::make_shared<gcs::Client>(options);
   }
 
-  gcs::Client* gcsClient() const {
-    return client_.get();
+  std::shared_ptr<gcs::Client> getClient() const {
+    return client_;
   }
 
  private:
@@ -228,7 +252,7 @@ std::unique_ptr<ReadFile> GCSFileSystem::openFileForRead(
     std::string_view path,
     const FileOptions& /*unused*/) {
   const std::string gcspath = gcsPath(path);
-  auto gcsfile = std::make_unique<GCSReadFile>(gcspath, impl_->gcsClient());
+  auto gcsfile = std::make_unique<GCSReadFile>(gcspath, impl_->getClient());
   gcsfile->initialize();
   return gcsfile;
 }
@@ -240,59 +264,63 @@ std::unique_ptr<WriteFile> GCSFileSystem::openFileForWrite(
 }
 
 void GCSFileSystem::remove(std::string_view path) {
-  if (!isGCSFile(path))
+  if (!isGCSFile(path)) {
     VELOX_FAIL("File {} is not a valid gcs file", path);
-  const std::string file = gcsPath(path);
+  }
 
   // assumption it's a proper path
   std::string bucket;
   std::string object;
-  bucketAndKeyFromGCSPath(file, bucket, object);
+  const std::string file = gcsPath(path);
+  setBucketAndKeyFromGCSPath(file, bucket, object);
 
   if (!object.empty()) {
-    auto stat = impl_->gcsClient()->GetObjectMetadata(bucket, object);
-    VELOX_CHECK_GCS_OUTCOME(
-        stat.status(), "Failed to get metadata for GCS object", bucket, object);
+    auto stat = impl_->getClient()->GetObjectMetadata(bucket, object);
+    if (!stat.ok()) {
+      checkGCSStatus(
+          stat.status(),
+          "Failed to get metadata for GCS object",
+          bucket,
+          object);
+    }
   }
-  auto ret = impl_->gcsClient()->DeleteObject(bucket, object);
-  VELOX_CHECK_GCS_OUTCOME(
-      ret, "Failed to get metadata for GCS object", bucket, object);
+  auto ret = impl_->getClient()->DeleteObject(bucket, object);
+  if (!ret.ok()) {
+    checkGCSStatus(
+        ret, "Failed to get metadata for GCS object", bucket, object);
+  }
 }
 
 bool GCSFileSystem::exists(std::string_view path) {
   std::vector<std::string> result;
   if (!isGCSFile(path))
     VELOX_FAIL("File {} is not a valid gcs file", path);
-  const std::string file = gcsPath(path);
 
   // assumption it's a proper path
+  const std::string file = gcsPath(path);
   std::string bucket;
   std::string object;
-  bucketAndKeyFromGCSPath(file, bucket, object);
+  setBucketAndKeyFromGCSPath(file, bucket, object);
   using ::google::cloud::StatusOr;
   StatusOr<gcs::BucketMetadata> metadata =
-      impl_->gcsClient()->GetBucketMetadata(bucket);
+      impl_->getClient()->GetBucketMetadata(bucket);
 
-  if (!metadata) {
-    return false;
-  } else {
-    return true;
-  }
+  return metadata.ok();
 }
 
 std::vector<std::string> GCSFileSystem::list(std::string_view path) {
   std::vector<std::string> result;
   if (!isGCSFile(path))
     VELOX_FAIL("File {} is not a valid gcs file", path);
-  const std::string file = gcsPath(path);
 
   // assumption it's a proper path
+  const std::string file = gcsPath(path);
   std::string bucket;
   std::string object;
-  bucketAndKeyFromGCSPath(file, bucket, object);
-  for (auto&& metadata : impl_->gcsClient()->ListObjects(bucket)) {
-    if (!metadata) {
-      VELOX_CHECK_GCS_OUTCOME(
+  setBucketAndKeyFromGCSPath(file, bucket, object);
+  for (auto&& metadata : impl_->getClient()->ListObjects(bucket)) {
+    if (!metadata.ok()) {
+      checkGCSStatus(
           metadata.status(),
           "Failed to get metadata for GCS object",
           bucket,

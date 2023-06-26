@@ -27,10 +27,10 @@ TEST(GCSUtilTest, isGCSFile) {
   EXPECT_TRUE(isGCSFile("gs://bucket/file.txt"));
 }
 
-TEST(GCSUtilTest, bucketAndKeyFromGCSPath) {
+TEST(GCSUtilTest, setBucketAndKeyFromGCSPath) {
   std::string bucket, key;
   auto path = "bucket/file.txt";
-  bucketAndKeyFromGCSPath(path, bucket, key);
+  setBucketAndKeyFromGCSPath(path, bucket, key);
   EXPECT_EQ(bucket, "bucket");
   EXPECT_EQ(key, "file.txt");
 }

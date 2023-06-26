@@ -28,28 +28,42 @@ class GCSFileSystem : public FileSystem {
  public:
   explicit GCSFileSystem(std::shared_ptr<const Config> config);
 
+  // Initialize the google::cloud::storage::Client from the input Config
+  // parameters.
   void initializeClient();
 
+  // Initialize a ReadFile using
+  // google::cloud::storage::Client::GetObjectMetadata
   std::unique_ptr<ReadFile> openFileForRead(
       std::string_view path,
       const FileOptions& options = {}) override;
 
+  // Not yet implemented
   std::unique_ptr<WriteFile> openFileForWrite(
       std::string_view path,
       const FileOptions& options = {}) override;
 
+  // Returns the name of the adapter (GCS)
   std::string name() const override;
 
+  // Unsupported
   void remove(std::string_view path) override;
 
+  // Check that the path exists by using
+  // google::cloud::storage::Client::GetObjectMetadata
   bool exists(std::string_view path) override;
 
+  // List the objects associated to a path using
+  // google::cloud::storage::Client::ListObjects
   std::vector<std::string> list(std::string_view path) override;
 
+  // Unsupported
   void rename(std::string_view, std::string_view, bool) override;
 
+  // Unsupported
   void mkdir(std::string_view path) override;
 
+  // Unsupported
   void rmdir(std::string_view path) override;
 
  protected:
