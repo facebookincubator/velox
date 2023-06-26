@@ -183,6 +183,10 @@ std::string variant::toJson(const TypePtr& type) const {
     return "null";
   }
 
+  VELOX_CHECK(type);
+
+  VELOX_CHECK_EQ(this->kind(), type->kind(), "Wrong type in variant::toJson");
+
   switch (kind_) {
     case TypeKind::MAP: {
       auto& map = value<TypeKind::MAP>();
@@ -194,9 +198,9 @@ std::string variant::toJson(const TypePtr& type) const {
           b += ",";
         }
         b += "{\"key\":";
-        b += pair.first.toJson();
+        b += pair.first.toJson(type->childAt(0));
         b += ",\"value\":";
-        b += pair.second.toJson();
+        b += pair.second.toJson(type->childAt(1));
         b += "}";
         first = false;
       }
@@ -208,11 +212,16 @@ std::string variant::toJson(const TypePtr& type) const {
       std::string b{};
       b += "[";
       bool first = true;
+      uint32_t idx = 0;
+      VELOX_CHECK_EQ(
+          row.size(),
+          type->size(),
+          "Wrong number of fields in a struct in variant::toJson");
       for (auto& v : row) {
         if (!first) {
           b += ",";
         }
-        b += v.toJson();
+        b += v.toJson(type->childAt(idx++));
         first = false;
       }
       b += "]";
@@ -223,11 +232,12 @@ std::string variant::toJson(const TypePtr& type) const {
       std::string b{};
       b += "[";
       bool first = true;
+      auto arrayElementType = type->childAt(0);
       for (auto& v : array) {
         if (!first) {
           b += ",";
         }
-        b += v.toJson();
+        b += v.toJson(arrayElementType);
         first = false;
       }
       b += "]";
@@ -244,9 +254,11 @@ std::string variant::toJson(const TypePtr& type) const {
       folly::json::escapeString(str, target, getOpts());
       return target;
     }
-    case TypeKind::HUGEINT:
-      VELOX_CHECK(type && type->isLongDecimal());
-      return DecimalUtil::toString(value<TypeKind::HUGEINT>(), type);
+    case TypeKind::HUGEINT: {
+      VELOX_CHECK(type->isLongDecimal()) {
+        return DecimalUtil::toString(value<TypeKind::HUGEINT>(), type);
+      }
+    }
     case TypeKind::TINYINT:
       [[fallthrough]];
     case TypeKind::SMALLINT:
@@ -257,7 +269,7 @@ std::string variant::toJson(const TypePtr& type) const {
       }
       [[fallthrough]];
     case TypeKind::BIGINT:
-      if (type && type->isShortDecimal()) {
+      if (type->isShortDecimal()) {
         return DecimalUtil::toString(value<TypeKind::BIGINT>(), type);
       }
       [[fallthrough]];

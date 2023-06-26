@@ -421,11 +421,14 @@ class variant {
     }
   }
 
-  std::string toJson(const TypePtr& type = nullptr) const;
+  std::string toJson(const TypePtr& type) const;
 
   /// Used by python binding, do not change signature.
   std::string pyToJson() const {
-    return toJson();
+    // Current Python use cases do not require logical types.
+    // Hence, we infer the Type from the variant instead of changing the API.
+    const auto type = inferType();
+    return toJson(type);
   }
 
   folly::dynamic serialize() const;
@@ -564,7 +567,8 @@ class variant {
   }
 
   friend std::ostream& operator<<(std::ostream& stream, const variant& k) {
-    stream << k.toJson();
+    const auto type = k.inferType();
+    stream << k.toJson(type);
     return stream;
   }
 
