@@ -90,18 +90,19 @@ class DataBufferSink : public arrow::io::OutputStream {
 class Writer {
  public:
   // Constructts a writer with output to 'sink'. A new row group is
-  // started every 'rowsInRowGroup' top level rows. 'pool' is used for
+  // started every 'maxRowGroupBytes' top level rows. 'pool' is used for
   // temporary memory. 'properties' specifies Parquet-specific
   // options.
   Writer(
       std::unique_ptr<dwio::common::DataSink> sink,
       memory::MemoryPool& pool,
-      int32_t rowsInRowGroup,
+      int64_t maxRowGroupBytes,
       std::shared_ptr<::parquet::WriterProperties> properties =
           ::parquet::WriterProperties::Builder().build(),
       std::shared_ptr<velox::core::QueryCtx> queryCtx =
           std::make_shared<velox::core::QueryCtx>(nullptr))
-      : rowsInRowGroup_(rowsInRowGroup),
+      : maxRowGroupBytes_(maxRowGroupBytes),
+        maxRowGroupRows_(properties->max_row_group_length()),
         pool_(pool),
         finalSink_(std::move(sink)),
         properties_(std::move(properties)),
@@ -121,10 +122,19 @@ class Writer {
   void close();
 
  private:
-  const int32_t rowsInRowGroup_;
+  const int64_t maxRowGroupBytes_;
+  const int64_t maxRowGroupRows_;
+
+  int64_t stagingRows_ = 0;
+  int64_t stagingBytes_ = 0;
 
   // Pool for 'stream_'.
   memory::MemoryPool& pool_;
+
+  std::shared_ptr<arrow::Schema> schema_;
+
+  // columns, Arrays
+  std::vector<std::vector<std::shared_ptr<arrow::Array>>> stagingChunks_;
 
   // Final destination of output.
   std::unique_ptr<dwio::common::DataSink> finalSink_;
