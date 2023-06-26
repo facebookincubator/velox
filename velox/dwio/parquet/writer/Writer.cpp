@@ -32,7 +32,9 @@ void Writer::write(const RowVectorPtr& data) {
       recordBatch->schema(), recordBatch->columns(), data->size());
   if (!arrowWriter_) {
     stream_ = std::make_shared<DataBufferSink>(
-        pool_, queryCtx_->queryConfig().dataBufferGrowRatio());
+        finalSink_.get(),
+        pool_,
+        queryCtx_->queryConfig().dataBufferGrowRatio());
     auto arrowProperties = ::parquet::ArrowWriterProperties::Builder().build();
     PARQUET_ASSIGN_OR_THROW(
         arrowWriter_,
@@ -45,17 +47,14 @@ void Writer::write(const RowVectorPtr& data) {
   }
 
   PARQUET_THROW_NOT_OK(arrowWriter_->WriteTable(*table, 10000));
+
   if (queryCtx_->queryConfig().dataBufferGrowRatio() > 1) {
-    finalSink_->write(std::move(stream_->dataBuffer()));
+    flush(); // No performance drop on 1TB dataset.
   }
 }
 
 void Writer::flush() {
-  if (arrowWriter_) {
-    PARQUET_THROW_NOT_OK(arrowWriter_->Close());
-    arrowWriter_.reset();
-    finalSink_->write(std::move(stream_->dataBuffer()));
-  }
+  PARQUET_THROW_NOT_OK(stream_->Flush());
 }
 
 void Writer::newRowGroup(int32_t numRows) {
@@ -63,8 +62,11 @@ void Writer::newRowGroup(int32_t numRows) {
 }
 
 void Writer::close() {
-  flush();
-  finalSink_->close();
+  if (arrowWriter_) {
+    PARQUET_THROW_NOT_OK(arrowWriter_->Close());
+    arrowWriter_.reset();
+  }
+  PARQUET_THROW_NOT_OK(stream_->Close());
 }
 
 } // namespace facebook::velox::parquet
