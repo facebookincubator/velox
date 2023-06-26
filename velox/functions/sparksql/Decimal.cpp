@@ -279,16 +279,9 @@ class UnscaledValueFunction final : public exec::VectorFunction {
       exec::EvalCtx& context,
       VectorPtr& resultRef) const final {
     VELOX_CHECK_EQ(args.size(), 1);
-    auto inputType = args[0]->type();
-    VELOX_CHECK(inputType->isShortDecimal(), "ShortDecimal type is required.");
-
-    exec::DecodedArgs decodedArgs(rows, args, context);
-    auto decimalVector = decodedArgs.at(0);
-    context.ensureWritable(rows, BIGINT(), resultRef);
-    auto result =
-        resultRef->asUnchecked<FlatVector<int64_t>>()->mutableRawValues();
-    rows.applyToSelected(
-        [&](int row) { result[row] = decimalVector->valueAt<int64_t>(row); });
+    VELOX_CHECK(
+        args[0]->type()->isShortDecimal(), "ShortDecimal type is required.");
+    resultRef = std::move(args[0]);
   }
 };
 
