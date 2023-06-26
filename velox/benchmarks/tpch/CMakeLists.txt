@@ -37,7 +37,6 @@ target_link_libraries(
   Folly::folly
   ${FOLLY_BENCHMARK}
   fmt::fmt
-  ${AWSSDK_LIBRARIES}
   curl)
 
 add_executable(velox_tpch_benchmark TpchBenchmarkMain.cpp)
