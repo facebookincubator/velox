@@ -31,8 +31,11 @@ namespace facebook::velox::parquet {
 // Utility for capturing Arrow output into a DataBuffer.
 class DataBufferSink : public arrow::io::OutputStream {
  public:
-  explicit DataBufferSink(memory::MemoryPool& pool, uint32_t growRatio = 1)
-      : buffer_(pool), growRatio_(growRatio) {}
+  explicit DataBufferSink(
+      dwio::common::DataSink* sink,
+      memory::MemoryPool& pool,
+      uint32_t growRatio = 1)
+      : sink_(sink), buffer_(pool), growRatio_(growRatio) {}
 
   arrow::Status Write(const std::shared_ptr<arrow::Buffer>& data) override {
     buffer_.append(
@@ -53,19 +56,23 @@ class DataBufferSink : public arrow::io::OutputStream {
   }
 
   arrow::Status Flush() override {
+    bytesFlushed_ += buffer_.size();
+    sink_->write(std::move(buffer_));
     return arrow::Status::OK();
   }
 
   arrow::Result<int64_t> Tell() const override {
-    return buffer_.size();
+    return bytesFlushed_ + buffer_.size();
   }
 
   arrow::Status Close() override {
+    ARROW_RETURN_NOT_OK(Flush());
+    sink_->close();
     return arrow::Status::OK();
   }
 
   bool closed() const override {
-    return false;
+    return sink_->isClosed();
   }
 
   dwio::common::DataBuffer<char>& dataBuffer() {
@@ -73,8 +80,10 @@ class DataBufferSink : public arrow::io::OutputStream {
   }
 
  private:
+  dwio::common::DataSink* sink_;
   dwio::common::DataBuffer<char> buffer_;
   uint32_t growRatio_ = 1;
+  int64_t bytesFlushed_ = 0;
 };
 
 // Writes Velox vectors into  a DataSink using Arrow Parquet writer.
