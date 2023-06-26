@@ -687,6 +687,18 @@ bool variant::equalsWithEpsilon(const variant& other) const {
   if (other.isNull()) {
     return this->isNull();
   }
+  if (kind_ == TypeKind::ROW) {
+    // Any floating point column in ROW will be compared using epsilon
+    // comparator
+    auto a = value<TypeKind::ROW>();
+    auto b = other.value<TypeKind::ROW>();
+    for (size_t i = 0; i != a.size(); ++i) {
+      if (!a[i].equalsWithEpsilon(b[i])) {
+        return false;
+      }
+    }
+    return true;
+  }
   if ((kind_ == TypeKind::REAL) or (kind_ == TypeKind::DOUBLE)) {
     return equalsFloatingPointWithEpsilon(*this, other);
   }

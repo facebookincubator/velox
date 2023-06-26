@@ -36,6 +36,7 @@ const char* const kCountIf = "count_if";
 const char* const kCovarPop = "covar_pop";
 const char* const kCovarSamp = "covar_samp";
 const char* const kEvery = "every";
+const char* const kGeoMean = "geometric_mean";
 const char* const kHistogram = "histogram";
 const char* const kKurtosis = "kurtosis";
 const char* const kMapAgg = "map_agg";

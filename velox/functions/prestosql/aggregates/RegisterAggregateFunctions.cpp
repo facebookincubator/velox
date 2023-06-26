@@ -30,6 +30,7 @@ extern void registerChecksumAggregate(const std::string& prefix);
 extern void registerCountAggregate(const std::string& prefix);
 extern void registerCountIfAggregate(const std::string& prefix);
 extern void registerCovarianceAggregates(const std::string& prefix);
+extern void registerGeometricMeanAggregate(const std::string& prefix);
 extern void registerHistogramAggregate(const std::string& prefix);
 extern void registerMapAggAggregate(const std::string& prefix);
 extern void registerMapUnionAggregate(const std::string& prefix);
@@ -56,6 +57,7 @@ void registerAllAggregateFunctions(const std::string& prefix) {
   registerCountAggregate(prefix);
   registerCountIfAggregate(prefix);
   registerCovarianceAggregates(prefix);
+  registerGeometricMeanAggregate(prefix);
   registerHistogramAggregate(prefix);
   registerMapAggAggregate(prefix);
   registerMapUnionAggregate(prefix);

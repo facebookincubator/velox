@@ -956,7 +956,10 @@ void assertEqualTypeAndNumRows(
 std::tuple<uint32_t, std::vector<velox::column_index_t>>
 findFloatingPointColumns(const MaterializedRow& row) {
   auto isFloatingPointColumn = [&](size_t i) {
-    return row[i].kind() == TypeKind::REAL || row[i].kind() == TypeKind::DOUBLE;
+    // ROW may contain floating point members. Treat them as one to use epsilon
+    // comparator.
+    return row[i].kind() == TypeKind::REAL ||
+        row[i].kind() == TypeKind::DOUBLE || row[i].kind() == TypeKind::ROW;
   };
 
   uint32_t numFloatingPointColumns = 0;

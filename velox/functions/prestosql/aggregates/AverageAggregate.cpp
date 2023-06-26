@@ -32,6 +32,11 @@ struct SumCount {
   int64_t count{0};
 };
 
+enum class AggregateType {
+  kAvg,
+  kGeoMean,
+};
+
 // Partial aggregation produces a pair of sum and count.
 // Count is BIGINT() while sum  and the final aggregates type depends on
 // the input types:
@@ -40,7 +45,11 @@ struct SumCount {
 //     REAL            |     DOUBLE          |    REAL
 //     ALL INTs        |     DOUBLE          |    DOUBLE
 //
-template <typename TInput, typename TAccumulator, typename TResult>
+template <
+    typename TInput,
+    typename TAccumulator,
+    typename TResult,
+    AggregateType aggregateType>
 class AverageAggregate : public exec::Aggregate {
  public:
   explicit AverageAggregate(TypePtr resultType) : exec::Aggregate(resultType) {}
@@ -132,9 +141,12 @@ class AverageAggregate : public exec::Aggregate {
 
     if (decodedRaw_.isConstantMapping()) {
       if (!decodedRaw_.isNullAt(0)) {
-        const TInput value = decodedRaw_.valueAt<TInput>(0);
+        TAccumulator value = TAccumulator(decodedRaw_.valueAt<TInput>(0));
         const auto numRows = rows.countSelected();
-        updateNonNullValue(group, numRows, TAccumulator(value) * numRows);
+        if constexpr (aggregateType == AggregateType::kGeoMean) {
+          value = log10(value);
+        }
+        updateNonNullValue(group, numRows, value * numRows);
       }
     } else if (decodedRaw_.mayHaveNulls()) {
       rows.applyToSelected([&](vector_size_t i) {
@@ -146,12 +158,23 @@ class AverageAggregate : public exec::Aggregate {
     } else if (!exec::Aggregate::numNulls_ && decodedRaw_.isIdentityMapping()) {
       const TInput* data = decodedRaw_.data<TInput>();
       TAccumulator totalSum(0);
-      rows.applyToSelected([&](vector_size_t i) { totalSum += data[i]; });
+      rows.applyToSelected([&](vector_size_t i) {
+        if constexpr (aggregateType == AggregateType::kAvg) {
+          totalSum += data[i];
+        } else if constexpr (aggregateType == AggregateType::kGeoMean) {
+          totalSum += log10(data[i]);
+        }
+      });
       updateNonNullValue<false>(group, rows.countSelected(), totalSum);
     } else {
       TAccumulator totalSum(0);
-      rows.applyToSelected(
-          [&](vector_size_t i) { totalSum += decodedRaw_.valueAt<TInput>(i); });
+      rows.applyToSelected([&](vector_size_t i) {
+        if constexpr (aggregateType == AggregateType::kAvg) {
+          totalSum += decodedRaw_.valueAt<TInput>(i);
+        } else if constexpr (aggregateType == AggregateType::kGeoMean) {
+          totalSum += log10(decodedRaw_.valueAt<TInput>(i));
+        }
+      });
       updateNonNullValue(group, rows.countSelected(), totalSum);
     }
   }
@@ -197,7 +220,11 @@ class AverageAggregate : public exec::Aggregate {
     if constexpr (tableHasNulls) {
       exec::Aggregate::clearNull(group);
     }
-    accumulator(group)->sum += value;
+    if constexpr (aggregateType == AggregateType::kAvg) {
+      accumulator(group)->sum += value;
+    } else if constexpr (aggregateType == AggregateType::kGeoMean) {
+      accumulator(group)->sum += log10(value);
+    }
     accumulator(group)->count += 1;
   }
 
@@ -339,7 +366,12 @@ class AverageAggregate : public exec::Aggregate {
       } else {
         clearNull(rawNulls, i);
         auto* sumCount = accumulator(group);
-        rawValues[i] = TResult(sumCount->sum) / sumCount->count;
+        if constexpr (aggregateType == AggregateType::kAvg) {
+          rawValues[i] = TResult(sumCount->sum) / sumCount->count;
+        } else if constexpr (aggregateType == AggregateType::kGeoMean) {
+          rawValues[i] =
+              TResult(pow(10.0, TResult(sumCount->sum) / sumCount->count));
+        }
       }
     }
   }
@@ -381,6 +413,7 @@ class DecimalAverageAggregate : public DecimalAggregate<TUnscaledType> {
   }
 };
 
+template <AggregateType aggregateType>
 exec::AggregateRegistrationResult registerAverage(const std::string& name) {
   std::vector<std::shared_ptr<exec::AggregateFunctionSignature>> signatures;
 
@@ -398,13 +431,16 @@ exec::AggregateRegistrationResult registerAverage(const std::string& name) {
                            .argumentType("real")
                            .build());
 
-  signatures.push_back(exec::AggregateFunctionSignatureBuilder()
-                           .integerVariable("a_precision")
-                           .integerVariable("a_scale")
-                           .argumentType("DECIMAL(a_precision, a_scale)")
-                           .intermediateType("varbinary")
-                           .returnType("DECIMAL(a_precision, a_scale)")
-                           .build());
+  // Only AVG function supports DECIMAL types, not GEOMETRIC_MEAN.
+  if (aggregateType == AggregateType::kAvg) {
+    signatures.push_back(exec::AggregateFunctionSignatureBuilder()
+                             .integerVariable("a_precision")
+                             .integerVariable("a_scale")
+                             .argumentType("DECIMAL(a_precision, a_scale)")
+                             .intermediateType("varbinary")
+                             .returnType("DECIMAL(a_precision, a_scale)")
+                             .build());
+  }
 
   return exec::registerAggregateFunction(
       name,
@@ -420,17 +456,20 @@ exec::AggregateRegistrationResult registerAverage(const std::string& name) {
           switch (inputType->kind()) {
             case TypeKind::SMALLINT:
               return std::make_unique<
-                  AverageAggregate<int16_t, double, double>>(resultType);
+                  AverageAggregate<int16_t, double, double, aggregateType>>(
+                  resultType);
             case TypeKind::INTEGER:
               return std::make_unique<
-                  AverageAggregate<int32_t, double, double>>(resultType);
+                  AverageAggregate<int32_t, double, double, aggregateType>>(
+                  resultType);
             case TypeKind::BIGINT: {
               if (inputType->isShortDecimal()) {
                 return std::make_unique<DecimalAverageAggregate<int64_t>>(
                     resultType);
               }
               return std::make_unique<
-                  AverageAggregate<int64_t, double, double>>(resultType);
+                  AverageAggregate<int64_t, double, double, aggregateType>>(
+                  resultType);
             }
             case TypeKind::HUGEINT: {
               if (inputType->isLongDecimal()) {
@@ -440,10 +479,12 @@ exec::AggregateRegistrationResult registerAverage(const std::string& name) {
               VELOX_NYI();
             }
             case TypeKind::REAL:
-              return std::make_unique<AverageAggregate<float, double, float>>(
+              return std::make_unique<
+                  AverageAggregate<float, double, float, aggregateType>>(
                   resultType);
             case TypeKind::DOUBLE:
-              return std::make_unique<AverageAggregate<double, double, double>>(
+              return std::make_unique<
+                  AverageAggregate<double, double, double, aggregateType>>(
                   resultType);
             default:
               VELOX_FAIL(
@@ -457,12 +498,14 @@ exec::AggregateRegistrationResult registerAverage(const std::string& name) {
               "Input type for final aggregation must be (sum:double/long decimal, count:bigint) struct");
           switch (resultType->kind()) {
             case TypeKind::REAL:
-              return std::make_unique<AverageAggregate<int64_t, double, float>>(
+              return std::make_unique<
+                  AverageAggregate<int64_t, double, float, aggregateType>>(
                   resultType);
             case TypeKind::DOUBLE:
             case TypeKind::ROW:
               return std::make_unique<
-                  AverageAggregate<int64_t, double, double>>(resultType);
+                  AverageAggregate<int64_t, double, double, aggregateType>>(
+                  resultType);
             case TypeKind::BIGINT:
               return std::make_unique<DecimalAverageAggregate<int64_t>>(
                   resultType);
@@ -491,11 +534,14 @@ exec::AggregateRegistrationResult registerAverage(const std::string& name) {
       },
       /*registerCompanionFunctions*/ true);
 }
-
 } // namespace
 
 void registerAverageAggregate(const std::string& prefix) {
-  registerAverage(prefix + kAvg);
+  registerAverage<AggregateType::kAvg>(prefix + kAvg);
+}
+
+void registerGeometricMeanAggregate(const std::string& prefix) {
+  registerAverage<AggregateType::kGeoMean>(prefix + kGeoMean);
 }
 
 } // namespace facebook::velox::aggregate::prestosql
