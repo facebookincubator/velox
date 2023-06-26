@@ -427,11 +427,10 @@ bool HashBuild::reserveMemory(const RowVectorPtr& input) {
     return false;
   }
 
-  auto tracker = pool()->getMemoryUsageTracker();
-  VELOX_CHECK_NOT_NULL(tracker);
-  const auto currentUsage = tracker->currentBytes();
+
+  const auto currentUsage = pool()->getCurrentBytes();
   if ((spillMemoryThreshold_ != 0 && currentUsage > spillMemoryThreshold_) ||
-      tracker->highUsage()) {
+      pool()->highUsage()) {
     const int64_t bytesToSpill =
         currentUsage * spillConfig()->spillableReservationGrowthPct / 100;
     numSpillRows_ = std::max<int64_t>(

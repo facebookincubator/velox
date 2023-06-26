@@ -20,6 +20,25 @@
 
 namespace facebook::velox::functions::sparksql {
 namespace {
+class UnscaledValueFunction final : public exec::VectorFunction {
+  void apply(
+      const SelectivityVector& rows,
+      std::vector<VectorPtr>& args, // Not using const ref so we can reuse args
+      const TypePtr& outputType,
+      exec::EvalCtx& context,
+      VectorPtr& resultRef) const final {
+    auto inputType = args[0]->type();
+    VELOX_CHECK(inputType->isShortDecimal(), "ShortDecimal type is required.");
+
+    exec::DecodedArgs decodedArgs(rows, args, context);
+    auto decimalVector = decodedArgs.at(0);
+    context.ensureWritable(rows, BIGINT(), resultRef);
+    auto result =
+        resultRef->asUnchecked<FlatVector<int64_t>>()->mutableRawValues();
+    rows.applyToSelected(
+        [&](int row) { result[row] = decimalVector->valueAt<int64_t>(row); });
+  }
+};
 
 class CheckOverflowFunction final : public exec::VectorFunction {
   void apply(
@@ -326,6 +345,16 @@ std::vector<std::shared_ptr<exec::FunctionSignature>> absSignatures() {
               .build()};
 }
 
+std::vector<std::shared_ptr<exec::FunctionSignature>>
+unscaledValueSignatures() {
+  return {exec::FunctionSignatureBuilder()
+              .integerVariable("a_precision")
+              .integerVariable("a_scale")
+              .returnType("bigint")
+              .argumentType("DECIMAL(a_precision, a_scale)")
+              .build()};
+}
+
 std::shared_ptr<exec::VectorFunction> makeCheckOverflow(
     const std::string& name,
     const std::vector<exec::VectorFunctionArg>& inputArgs) {
@@ -375,4 +404,12 @@ std::shared_ptr<exec::VectorFunction> makeAbs(
   }
 }
 
+std::shared_ptr<exec::VectorFunction> makeUnscaledValue(
+    const std::string& name,
+    const std::vector<exec::VectorFunctionArg>& inputArgs) {
+  VELOX_CHECK_EQ(inputArgs.size(), 1);
+  static const auto kUnscaledValueFunction =
+      std::make_shared<UnscaledValueFunction>();
+  return kUnscaledValueFunction;
+}
 } // namespace facebook::velox::functions::sparksql

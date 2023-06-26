@@ -21,18 +21,19 @@ find_package_handle_standard_args(lz4 DEFAULT_MSG LZ4_LIBRARY LZ4_INCLUDE_DIR)
 
 mark_as_advanced(LZ4_LIBRARY LZ4_INCLUDE_DIR)
 
-get_filename_component(liblz4_ext ${LZ4_LIBRARY} EXT)
-if(liblz4_ext STREQUAL ".a")
-  set(liblz4_type STATIC)
-else()
-  set(liblz4_type SHARED)
-endif()
-
 if(NOT TARGET lz4::lz4)
-  add_library(lz4::lz4 ${liblz4_type} IMPORTED)
-  set_target_properties(lz4::lz4 PROPERTIES INTERFACE_INCLUDE_DIRECTORIES
-                                            "${LZ4_INCLUDE_DIR}")
-  set_target_properties(
-    lz4::lz4 PROPERTIES IMPORTED_LINK_INTERFACE_LANGUAGES "C"
-                        IMPORTED_LOCATION "${LZ4_LIBRARIES}")
+  add_library(lz4::lz4 UNKNOWN IMPORTED)
+  set_target_properties(lz4::lz4 PROPERTIES
+    INTERFACE_INCLUDE_DIRECTORIES "${LZ4_INCLUDE_DIR}"
+    IMPORTED_LINK_INTERFACE_LANGUAGES "C"
+    IMPORTED_LOCATION_RELEASE "${LZ4_LIBRARY_RELEASE}")
+  set_property(TARGET lz4::lz4 APPEND PROPERTY
+      IMPORTED_CONFIGURATIONS RELEASE)
+
+  if(LZ4_LIBRARY_DEBUG)
+      set_property(TARGET lz4::lz4 APPEND PROPERTY
+          IMPORTED_CONFIGURATIONS DEBUG)
+      set_property(TARGET lz4::lz4 PROPERTY
+          IMPORTED_LOCATION_DEBUG "${LZ4_LIBRARY_DEBUG}")
+  endif()
 endif()

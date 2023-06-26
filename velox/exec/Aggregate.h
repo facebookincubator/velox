@@ -382,9 +382,6 @@ struct AggregateFunctionEntry {
   AggregateFunctionFactory factory;
 };
 
-std::optional<const AggregateFunctionEntry*> getAggregateFunctionEntry(
-    const std::string& name);
-
 using AggregateFunctionMap =
     std::unordered_map<std::string, AggregateFunctionEntry>;
 

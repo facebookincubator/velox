@@ -22,13 +22,15 @@
 
 namespace facebook::velox::functions::aggregate::sparksql {
 
+using namespace facebook::velox::functions::sparksql::aggregates;
+
 extern void registerFirstLastAggregates(const std::string& prefix);
 
 void registerAggregateFunctions(const std::string& prefix) {
   registerFirstLastAggregates(prefix);
-  aggregates::registerBitwiseXorAggregate(prefix + "bit_xor");
-  aggregates::registerBloomFilterAggAggregate(prefix + "bloom_filter_agg");
-  aggregates::registerDecimalAvgAggregate(prefix + "decimal_avg");
-  aggregates::registerDecimalSumAggregate(prefix + "decimal_sum");
+  registerBitwiseXorAggregate(prefix + "bit_xor");
+  registerBloomFilterAggAggregate(prefix + "bloom_filter_agg");
+  registerDecimalAvgAggregate(prefix + "decimal_avg");
+  registerDecimalSumAggregate(prefix + "decimal_sum");
 }
 } // namespace facebook::velox::functions::aggregate::sparksql
