@@ -250,7 +250,6 @@ void registerFunctions(const std::string& prefix) {
   registerFunction<DateAddFunction, Date, Date, int16_t>({"date_add"});
   registerFunction<DateAddFunction, Date, Date, int8_t>({"date_add"});
   registerFunction<DateDiffFunction, int32_t, Date, Date>({"date_diff"});
-
   registerFunction<Atan2FunctionIgnoreZeroSign, double, double, double>(
       {prefix + "atan2"});
   registerFunction<Log2FunctionNaNAsNull, double, double>({prefix + "log2"});
