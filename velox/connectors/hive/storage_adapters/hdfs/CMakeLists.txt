@@ -14,7 +14,8 @@
 
 # for generated headers
 
-add_library(velox_hdfs HdfsFileSystem.cpp HdfsReadFile.cpp HdfsWriteFile.cpp HdfsFileSink.cpp)
+add_library(velox_hdfs HdfsFileSystem.cpp HdfsReadFile.cpp HdfsWriteFile.cpp
+                       HdfsFileSink.cpp)
 target_link_libraries(velox_hdfs Folly::folly ${LIBHDFS3} xsimd gtest)
 
 if(${VELOX_BUILD_TESTING})

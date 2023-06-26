@@ -15,10 +15,12 @@
  */
 #include "velox/connectors/hive/storage_adapters/hdfs/HdfsFileSystem.h"
 #include <boost/format.hpp>
+#include <connectors/hive/storage_adapters/hdfs/HdfsFileSink.h>
 #include <connectors/hive/storage_adapters/hdfs/HdfsReadFile.h>
 #include <connectors/hive/storage_adapters/hdfs/HdfsWriteFile.h>
 #include <gmock/gmock-matchers.h>
 #include <hdfs/hdfs.h>
+#include <velox/dwio/common/DataBuffer.h>
 #include <atomic>
 #include <random>
 #include "HdfsMiniCluster.h"
@@ -28,8 +30,6 @@
 #include "velox/common/file/FileSystems.h"
 #include "velox/core/QueryConfig.h"
 #include "velox/exec/tests/utils/TempFilePath.h"
-#include <connectors/hive/storage_adapters/hdfs/HdfsFileSink.h>
-#include <velox/dwio/common/DataBuffer.h>
 using namespace facebook::velox;
 
 constexpr int kOneMB = 1 << 20;
@@ -452,7 +452,8 @@ TEST_F(HdfsFileSystemTest, readFailures) {
 
 TEST_F(HdfsFileSystemTest, hdfsFileSinkTest) {
   filesystems::registerHdfsFileSystem();
-  auto sink = std::make_shared<facebook::velox::HdfsFileSink>(fullDestinationPath);
+  auto sink =
+      std::make_shared<facebook::velox::HdfsFileSink>(fullDestinationPath);
 
   auto pool = facebook::velox::memory::addDefaultLeafMemoryPool();
   facebook::velox::dwio::common::DataBuffer<char> buffer{*pool};
