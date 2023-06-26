@@ -28,7 +28,8 @@
 #include "velox/common/file/FileSystems.h"
 #include "velox/core/QueryConfig.h"
 #include "velox/exec/tests/utils/TempFilePath.h"
-
+#include <connectors/hive/storage_adapters/hdfs/HdfsFileSink.h>
+#include <velox/dwio/common/DataBuffer.h>
 using namespace facebook::velox;
 
 constexpr int kOneMB = 1 << 20;
@@ -447,4 +448,20 @@ TEST_F(HdfsFileSystemTest, readFailures) {
   auto hdfs = hdfsBuilderConnect(builder);
   HdfsReadFile readFile(hdfs, destinationPath);
   verifyFailures(&readFile);
+}
+
+TEST_F(HdfsFileSystemTest, hdfsFileSinkTest) {
+  filesystems::registerHdfsFileSystem();
+  auto sink = std::make_shared<facebook::velox::HdfsFileSink>(fullDestinationPath);
+
+  auto pool = facebook::velox::memory::addDefaultLeafMemoryPool();
+  facebook::velox::dwio::common::DataBuffer<char> buffer{*pool};
+  buffer.reserve(16);
+  for (auto i = 0; i != 15; ++i) {
+    buffer.append('a' + i);
+  }
+
+  sink->write(std::move(buffer));
+
+  sink->close();
 }
