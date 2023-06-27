@@ -87,7 +87,7 @@ void serializeOne<TypeKind::ROW>(
   out.append<uint64_t>(nulls);
   for (auto i = 0; i < children.size(); ++i) {
     if (!bits ::isBitSet(nulls.data(), i)) {
-      serializeSwitch(*children[i], wrappedIndex, out);
+      serializeSwitch(*children[i]->loadedVector(), wrappedIndex, out);
     }
   }
 }

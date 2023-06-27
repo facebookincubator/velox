@@ -39,6 +39,48 @@ class SimpleVectorLoader : public VectorLoader {
   std::function<VectorPtr(RowSet)> loader_;
 };
 
+// LazyVector loader for testing. Minimal implementation that documents the API
+// contract.
+class TestingLoader : public VectorLoader {
+ public:
+  explicit TestingLoader(VectorPtr data) : data_(data), rowCounter_(0) {}
+
+  void loadInternal(RowSet rows, ValueHook* hook, VectorPtr* result) override {
+    if (hook) {
+      VELOX_DYNAMIC_SCALAR_TYPE_DISPATCH(
+          applyHook, data_->typeKind(), rows, hook);
+      return;
+    }
+    *result = data_;
+    rowCounter_ += rows.size();
+  }
+
+  int32_t rowCount() const {
+    return rowCounter_;
+  }
+
+ private:
+  template <TypeKind Kind>
+  void applyHook(RowSet rows, ValueHook* hook) {
+    using T = typename TypeTraits<Kind>::NativeType;
+    auto values = data_->as<SimpleVector<T>>();
+    bool acceptsNulls = hook->acceptsNulls();
+    for (auto i = 0; i < rows.size(); ++i) {
+      auto row = rows[i];
+      if (values->isNullAt(row)) {
+        if (acceptsNulls) {
+          hook->addNull(i);
+        }
+      } else {
+        T value = values->valueAt(row);
+        hook->addValue(i, &value);
+      }
+    }
+  }
+  VectorPtr data_;
+  int32_t rowCounter_;
+};
+
 class VectorMaker {
  public:
   explicit VectorMaker(memory::MemoryPool* pool) : pool_(pool) {}
