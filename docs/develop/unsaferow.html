@@ -85,6 +85,11 @@ by arrays of keys and array of values serialized as UnsafeRow.</p>
 map size. These are duplicated in the serialized data.</p>
 <p>Structs are stored as ‘null bits’ for struct fields, followed by
 fixed-width field values and variable-width field values.</p>
+<p>Values of Velox type UNKNOWN (only null values) are treated as fixed-width
+types. UNKNOWN values in the top-level columns and as struct fields use 1 bit
+in the nulls section and 8 bytes in the fixed-width section. UNKNOWN value
+serialized as an array element or map value uses 1 bit for null flag and zero
+bytes for the value.</p>
 <section id="examples">
 <h2>Examples<a class="headerlink" href="#examples" title="Permalink to this heading">¶</a></h2>
 <p>A row with two columns, INTEGER and BIGINT, has fixed serialized size of 24
