@@ -37,9 +37,8 @@
 #include "velox/vector/tests/TestingAlwaysThrowsFunction.h"
 #include "velox/vector/tests/utils/VectorTestBase.h"
 
-using namespace facebook::velox;
-using namespace facebook::velox::test;
-
+namespace facebook::velox::test {
+namespace {
 class ExprTest : public testing::Test, public VectorTestBase {
  protected:
   void SetUp() override {
@@ -3487,6 +3486,24 @@ TEST_F(ExprTest, conjunctUnderTry) {
   auto expected =
       BaseVector::createNullConstant(ARRAY(BOOLEAN()), input->size(), pool());
   assertEqualVectors(expected, result);
+
+  // Test conjunct in switch in coalesce where there are errors came from
+  // coalesce at rows 50--99 while conjunct is evlauated on rows 31--49.
+  // Conjunct should not clear the errors from coalesce.
+  input = makeRowVector({
+      makeFlatVector<int64_t>(
+          100, [](auto row) { return row; }, [](auto row) { return row < 50; }),
+      makeFlatVector<bool>(100, [](auto row) { return row > 30; }),
+      makeFlatVector<bool>(100, [](auto row) { return row > 20; }),
+      makeConstant<int64_t>(0, 100),
+  });
+
+  result = evaluate("try(coalesce(c0 / c3 > 0, switch(c1, c1 or c2)))", input);
+  expected = makeFlatVector<bool>(
+      100,
+      [](auto /*row*/) { return true; },
+      [](auto row) { return row >= 50 || row <= 30; });
+  assertEqualVectors(expected, result);
 }
 
 TEST_F(ExprTest, flatNoNullsFastPathWithCse) {
@@ -4012,3 +4029,15 @@ TEST_F(ExprTest, dereference) {
   auto expected = makeNullConstant(TypeKind::BIGINT, 6);
   assertEqualVectors(expected, result);
 }
+
+TEST_F(ExprTest, inputFreeFieldReferenceMetaData) {
+  auto exprSet = compileExpression("c0", {ROW({"c0"}, {INTEGER()})});
+  auto expr = exprSet->expr(0);
+  EXPECT_EQ(expr->distinctFields().size(), 1);
+  EXPECT_EQ((void*)expr->distinctFields()[0], expr.get());
+
+  EXPECT_TRUE(expr->propagatesNulls());
+  EXPECT_TRUE(expr->isDeterministic());
+}
+} // namespace
+} // namespace facebook::velox::test

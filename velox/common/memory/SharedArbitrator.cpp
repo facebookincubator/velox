@@ -35,6 +35,16 @@ uint64_t capacityAfterGrowth(const MemoryPool& pool, uint64_t targetBytes) {
   return pool.capacity() + targetBytes;
 }
 } // namespace
+
+std::string SharedArbitrator::Candidate::toString() const {
+  return fmt::format(
+      "CANDIDATE[{} RECLAIMABLE[{}] RECLAIMABLE_BYTES[{}] FREE_BYTES[{}]]",
+      pool->root()->name(),
+      reclaimable,
+      succinctBytes(reclaimableBytes),
+      succinctBytes(freeBytes));
+}
+
 void SharedArbitrator::sortCandidatesByFreeCapacity(
     std::vector<Candidate>& candidates) const {
   std::sort(
@@ -207,6 +217,7 @@ bool SharedArbitrator::ensureCapacity(
   // NOTE: return the reclaimed bytes back to the arbitrator and let the memory
   // arbitration process to grow the requestor's memory capacity accordingly.
   incrementFreeCapacity(reclaimedBytes);
+  // Check if the requestor has been aborted in reclaim operation above.
   if (requestor->aborted()) {
     ++numFailures_;
     VELOX_MEM_POOL_ABORTED(requestor);
