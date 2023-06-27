@@ -60,7 +60,6 @@ add_library(
   TopN.cpp
   Unnest.cpp
   Values.cpp
-  ValueStream.cpp
   VectorHasher.cpp
   Window.cpp
   WindowFunction.cpp
