@@ -65,6 +65,10 @@ class SubstraitToVeloxPlanValidator {
   /// Used to validate whether the computing of this Plan is supported.
   bool validate(const ::substrait::Plan& plan);
 
+  std::vector<std::string> getValidateLog() {
+    return validateLog_;
+  }
+
  private:
   /// A memory pool used for function validation.
   memory::MemoryPool* pool_;
@@ -83,6 +87,8 @@ class SubstraitToVeloxPlanValidator {
   /// An expression converter used to convert Substrait representations into
   /// Velox expressions.
   std::shared_ptr<SubstraitVeloxExprConverter> exprConverter_;
+
+  std::vector<std::string> validateLog_;
 
   /// Used to get types from advanced extension and validate them.
   bool validateInputTypes(
@@ -126,6 +132,11 @@ class SubstraitToVeloxPlanValidator {
 
   /// Create DecimalType based on the type information in string.
   TypePtr getDecimalType(const std::string& decimalType);
+
+  /// Add necessary log for fallback
+  void logValidateMsg(const std::string& log) {
+    this->validateLog_.emplace_back(log);
+  }
 };
 
 } // namespace facebook::velox::substrait
