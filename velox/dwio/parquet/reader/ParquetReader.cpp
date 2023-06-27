@@ -572,10 +572,6 @@ void ParquetRowReader::filterRowGroups() {
         ? rowGroups_[i].file_offset
         : rowGroups_[i].columns[0].file_offset;
     VELOX_CHECK_GE(fileOffset, 0);
-    if (fileOffset == 0) {
-      rowGroupIds_.push_back(i);
-      continue;
-    }
     auto rowGroupInRange =
         (fileOffset >= options_.getOffset() &&
          fileOffset < options_.getLimit());
