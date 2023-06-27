@@ -238,6 +238,10 @@ Floating Point Functions
 
     Returns the constant representing not-a-number.
 
+.. function:: weibull_cdf(a, b, value) -> double
+
+    Compute the Weibull cdf with given parameters a, b: P(N <= value). The ``a``
+    and ``b`` parameters must be positive doubles and ``value`` must also be a double.
 
 ====================================
 Probability Functions

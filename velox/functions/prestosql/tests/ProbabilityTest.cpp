@@ -155,5 +155,20 @@ TEST_F(ProbabilityTest, binomialCDF) {
       binomialCDF(-2, 0.5, -1), "numberOfTrials must be greater than 0");
 }
 
+TEST_F(ProbabilityTest, weibullCDF) {
+  const auto weibullCDF = [&](std::optional<double> a,
+                              std::optional<double> b,
+                              std::optional<double> value) {
+    return evaluateOnce<double>("weibull_cdf(c0, c1, c2)", a, b, value);
+  };
+
+  EXPECT_EQ(weibullCDF(1.0, 1.0, 0.0), 0.0);
+  EXPECT_EQ(weibullCDF(1.0, 1.0, 40.0), 1.0);
+  EXPECT_EQ(weibullCDF(1.0, 0.6, 3.0), 0.99326205300091452);
+  EXPECT_EQ(weibullCDF(1.0, 0.9, 2.0), 0.89163197677810413);
+  VELOX_ASSERT_THROW(weibullCDF(0, 3, 0.5), "a must be greater than 0");
+  VELOX_ASSERT_THROW(weibullCDF(3, 0, 0.5), "b must be greater than 0");
+}
+
 } // namespace
 } // namespace facebook::velox
