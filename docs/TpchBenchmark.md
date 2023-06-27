@@ -2,9 +2,9 @@
 ## Introduction
 This document is the outcome from a cycle of benchmarking to determine the best I/O performance against AWS S3 Parquet data for TPCH. It is intended to describe the tuning process recommendations and general suggestions for tuning the Velox query engine.
 
-Benchmarking in Velox is made easy with the optionally built TpchBenchmark (velox_tpch_benchmark) executable. To build the benchmark executable _(\_build/release/velox/benchamrks/tpch/velox_tpch_benchmark)_, use the following command line to do the build:
+Benchmarking in Velox is made easy with the optionally built TpchBenchmark (velox_tpch_benchmark) executable. To build the benchmark executable _(\_build/release/velox/benchamrks/tpch/velox_tpch_benchmark)_, use the following command line to do the build with S3 support:
 ```bash
-$ make release EXTRA_CMAKE_FLAGS="-DVELOX_BUILD_BENCHMARKS=ON"
+$ make release EXTRA_CMAKE_FLAGS="-DVELOX_BUILD_BENCHMARKS=ON -DVELOX_ENABLE_S3=ON"
 ```
 
 ---
