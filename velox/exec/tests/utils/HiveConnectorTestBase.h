@@ -15,6 +15,7 @@
  */
 #pragma once
 
+#include <regex>
 #include "velox/connectors/hive/HiveConnector.h"
 #include "velox/connectors/hive/HiveConnectorSplit.h"
 #include "velox/dwio/dwrf/common/Config.h"
@@ -212,7 +213,7 @@ class HiveConnectorSplitBuilder {
   std::shared_ptr<connector::hive::HiveConnectorSplit> build() const {
     return std::make_shared<connector::hive::HiveConnectorSplit>(
         kHiveConnectorId,
-        "file:" + filePath_,
+        fixUpPath(filePath_),
         fileFormat_,
         start_,
         length_,
@@ -221,6 +222,11 @@ class HiveConnectorSplitBuilder {
   }
 
  private:
+  static std::string fixUpPath(const std::string& path) {
+    auto rex = std::regex("^[a-z]+[a-z0-9]*:.*$", std::regex::egrep);
+    return std::regex_match(path, rex) ? path : "file:" + path;
+  }
+
   const std::string filePath_;
   dwio::common::FileFormat fileFormat_{dwio::common::FileFormat::DWRF};
   uint64_t start_{0};

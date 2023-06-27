@@ -27,7 +27,6 @@ target_link_libraries(
   velox_hive_connector
   velox_exception
   velox_memory
-  velox_s3fs
   velox_process
   velox_serialization
   velox_encode
@@ -36,8 +35,12 @@ target_link_libraries(
   velox_vector_test_lib
   Folly::folly
   ${FOLLY_BENCHMARK}
-  fmt::fmt
-  curl)
+  fmt::fmt)
+
+if(VELOX_ENABLE_S3)
+  set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -DUSE_S3FS")
+  target_link_libraries(velox_tpch_benchmark_lib velox_s3fs curl)
+endif()
 
 add_executable(velox_tpch_benchmark TpchBenchmarkMain.cpp)
 
