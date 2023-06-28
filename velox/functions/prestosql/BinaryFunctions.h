@@ -421,4 +421,87 @@ struct ToIEEE754Bits64 {
   }
 };
 
+inline constexpr uint32_t kFNV32OffsetBasis = 0x811c9dc5;
+inline constexpr uint64_t kFNV64OffsetBasis = 0xcbf29ce484222325lu;
+
+/// fnv1_32(varbinary) -> bigint
+template <typename T>
+struct Fnv132Function {
+  VELOX_DEFINE_FUNCTION_TYPES(T);
+
+  FOLLY_ALWAYS_INLINE void call(
+      out_type<int64_t>& result,
+      const arg_type<Varbinary>& data) {
+    int32_t tmp = kFNV32OffsetBasis;
+    const unsigned char* input =
+        reinterpret_cast<const unsigned char*>(data.data());
+    for (auto i = 0; i < data.size(); ++i) {
+      // equals to tmp = tmp * (2^24 + 2^8 + 0x93), this maybe a litter faster
+      tmp += (tmp << 1) + (tmp << 4) + (tmp << 7) + (tmp << 8) + (tmp << 24);
+      tmp ^= *input++;
+    }
+    result = tmp;
+  }
+};
+
+/// fnv1a_32(varbinary) -> bigint
+template <typename T>
+struct Fnv1a32Function {
+  VELOX_DEFINE_FUNCTION_TYPES(T);
+
+  FOLLY_ALWAYS_INLINE void call(
+      out_type<int64_t>& result,
+      const arg_type<Varbinary>& data) {
+    int32_t tmp = kFNV32OffsetBasis;
+    const unsigned char* input =
+        reinterpret_cast<const unsigned char*>(data.data());
+    for (auto i = 0; i < data.size(); ++i) {
+      tmp ^= *input++;
+      // tmp = tmp * (2^24 + 2^8 + 0x93);
+      tmp += (tmp << 1) + (tmp << 4) + (tmp << 7) + (tmp << 8) + (tmp << 24);
+    }
+    result = tmp;
+  }
+};
+
+/// fnv1_64(varbinary) -> bigint
+template <typename T>
+struct Fnv164Function {
+  VELOX_DEFINE_FUNCTION_TYPES(T);
+
+  FOLLY_ALWAYS_INLINE void call(
+      out_type<int64_t>& result,
+      const arg_type<Varbinary>& data) {
+    result = kFNV64OffsetBasis;
+    const unsigned char* input =
+        reinterpret_cast<const unsigned char*>(data.data());
+    for (auto i = 0; i < data.size(); ++i) {
+      // result = result * (2^40 + 2^8 + 0xb3)
+      result += (result << 1) + (result << 4) + (result << 5) + (result << 7) +
+          (result << 8) + (result << 40);
+      result ^= *input++;
+    }
+  }
+};
+
+/// fnv1a_64(varbinary) -> bigint
+template <typename T>
+struct Fnv1a64Function {
+  VELOX_DEFINE_FUNCTION_TYPES(T);
+
+  FOLLY_ALWAYS_INLINE void call(
+      out_type<int64_t>& result,
+      const arg_type<Varbinary>& data) {
+    result = kFNV64OffsetBasis;
+    const unsigned char* input =
+        reinterpret_cast<const unsigned char*>(data.data());
+    for (auto i = 0; i < data.size(); ++i) {
+      result ^= *input++;
+      // result = result * (2^40 + 2^8 + 0xb3)
+      result += (result << 1) + (result << 4) + (result << 5) + (result << 7) +
+          (result << 8) + (result << 40);
+    }
+  }
+};
+
 } // namespace facebook::velox::functions

@@ -62,6 +62,11 @@ void registerSimpleFunctions(const std::string& prefix) {
       {prefix + "to_big_endian_64"});
   registerFunction<ToIEEE754Bits64, Varbinary, double>(
       {prefix + "to_ieee754_64"});
+
+  registerFunction<Fnv132Function, int64_t, Varbinary>({prefix + "fnv1_32"});
+  registerFunction<Fnv1a32Function, int64_t, Varbinary>({prefix + "fnv1a_32"});
+  registerFunction<Fnv164Function, int64_t, Varbinary>({prefix + "fnv1_64"});
+  registerFunction<Fnv1a64Function, int64_t, Varbinary>({prefix + "fnv1a_64"});
 }
 } // namespace
 

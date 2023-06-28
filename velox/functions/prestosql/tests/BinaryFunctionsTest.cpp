@@ -642,4 +642,65 @@ TEST_F(BinaryFunctionsTest, toIEEE754Bits64) {
       toIEEE754Bits64(std::numeric_limits<double>::lowest()));
 }
 
+// ground truth results of the following fnv hash function tests are based on
+// presto-main/src/test/java/com/facebook/presto/operator/scalar/TestVarbinaryFunctions.java
+TEST_F(BinaryFunctionsTest, fnv1_32) {
+  const auto fnv1_32 = [&](std::optional<std::string> value) {
+    return evaluateOnce<int64_t, std::string>(
+        "fnv1_32(from_hex(cast(c0 as varchar)))", {value});
+  };
+  EXPECT_EQ(std::nullopt, fnv1_32(std::nullopt));
+  EXPECT_EQ(0x811c9dc5L + std::numeric_limits<int>::min() * 2L, fnv1_32(""));
+  EXPECT_EQ(0x050c5d06L, fnv1_32("19"));
+  EXPECT_EQ(0x050c5deaL, fnv1_32("F5"));
+  EXPECT_EQ(0x087689bbL, fnv1_32("0919"));
+  EXPECT_EQ(0x67a7fdecL, fnv1_32("F50919"));
+  EXPECT_EQ(
+      0x9f2263f3L + std::numeric_limits<int>::min() * 2L,
+      fnv1_32("232706FC6BF50919"));
+}
+
+TEST_F(BinaryFunctionsTest, fnv1a_32) {
+  const auto fnv1a_32 = [&](std::optional<std::string> value) {
+    return evaluateOnce<int64_t, std::string>(
+        "fnv1a_32(from_hex(cast(c0 as varchar)))", {value});
+  };
+  EXPECT_EQ(std::nullopt, fnv1a_32(std::nullopt));
+  EXPECT_EQ(0x811c9dc5L + std::numeric_limits<int>::min() * 2L, fnv1a_32(""));
+  EXPECT_EQ(0x1c0c8154L, fnv1a_32("19"));
+  EXPECT_EQ(0x700b7290L, fnv1a_32("F5"));
+  EXPECT_EQ(0x34881807L, fnv1a_32("0919"));
+  EXPECT_EQ(
+      0xeb80c366L + std::numeric_limits<int>::min() * 2L, fnv1a_32("F50919"));
+  EXPECT_EQ(0x0951d55fL, fnv1a_32("232706FC6BF50919"));
+}
+
+TEST_F(BinaryFunctionsTest, fnv1_64) {
+  const auto fnv1_64 = [&](std::optional<std::string> value) {
+    return evaluateOnce<int64_t, std::string>(
+        "fnv1_64(from_hex(cast(c0 as varchar)))", {value});
+  };
+  EXPECT_EQ(std::nullopt, fnv1_64(std::nullopt));
+  EXPECT_EQ(0xcbf29ce484222325L, fnv1_64(""));
+  EXPECT_EQ(0xaf63bd4c8601b7c6L, fnv1_64("19"));
+  EXPECT_EQ(0xaf63bd4c8601b72aL, fnv1_64("F5"));
+  EXPECT_EQ(0x08327f07b4eb60bbL, fnv1_64("0919"));
+  EXPECT_EQ(0xd6e5ed186a0487ccL, fnv1_64("F50919"));
+  EXPECT_EQ(0x4a65ff96675a9f33L, fnv1_64("232706FC6BF50919"));
+}
+
+TEST_F(BinaryFunctionsTest, fnv1a_64) {
+  const auto fnv1a_64 = [&](std::optional<std::string> value) {
+    return evaluateOnce<int64_t, std::string>(
+        "fnv1a_64(from_hex(cast(c0 as varchar)))", {value});
+  };
+  EXPECT_EQ(std::nullopt, fnv1a_64(std::nullopt));
+  EXPECT_EQ(0xcbf29ce484222325L, fnv1a_64(""));
+  EXPECT_EQ(0xaf63d44c8601def4L, fnv1a_64("19"));
+  EXPECT_EQ(0xaf64684c8602da70L, fnv1a_64("F5"));
+  EXPECT_EQ(0x084a6b07b4ffd087L, fnv1a_64("0919"));
+  EXPECT_EQ(0xa2a0b81bb3201de6L, fnv1a_64("F50919"));
+  EXPECT_EQ(0x68addc0b0febac5fL, fnv1a_64("232706FC6BF50919"));
+}
+
 } // namespace
