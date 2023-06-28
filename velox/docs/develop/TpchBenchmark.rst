@@ -8,7 +8,9 @@ This document is the outcome from a cycle of benchmarking to determine the best 
 
 Benchmarking in Velox is made easy with the optionally built TpchBenchmark (velox_tpch_benchmark) executable. To build the benchmark executable (*_build/release/velox/benchamrks/tpch/velox_tpch_benchmark*), use the following command line to do the build with S3 support:
 
-``$ make release EXTRA_CMAKE_FLAGS="-DVELOX_BUILD_BENCHMARKS=ON -DVELOX_ENABLE_S3=ON"``
+.. code:: shell
+
+   $ make release EXTRA_CMAKE_FLAGS="-DVELOX_BUILD_BENCHMARKS=ON -DVELOX_ENABLE_S3=ON"
 
 ----
 
@@ -20,12 +22,12 @@ Velox is a library so there are multiple ways to use it. This document will desc
 In-Process Multi-Threaded Executor Use Case
 -------------------------------------------
 
-This use case is used by `Presto https://github.com/prestodb/presto` and, as it turns out, is the use case used by the *Velox TpchBenchmark Tool* below. This use case uses a single multi-threaded process to perform execution of queries in parallel. Each query is broken up into threads called **drivers** via a planning algorithm.  Each **driver** may also have a thread pool to perform I/O in a parallel manner. In the benchmarking tool both **driver** thread count, and I/O thread count are exposed as command line configuration options. In this use case, care must be taken to not create too many threads since maximum number of threads is a product of **driver** threads and I/O threads. In this use case, the application owns creating **drivers** and I/O Thread pools for Velox. In the case of the benchmark tool, the tool is responsible for both **driver** threads and I/O threads.
+This use case is used by `Presto <https://github.com/prestodb/presto>` and, as it turns out, is the use case used by the *Velox TpchBenchmark Tool* below. This use case uses a single multi-threaded process to perform execution of queries in parallel. Each query is broken up into threads called **drivers** via a planning algorithm.  Each **driver** may also have a thread pool to perform I/O in a parallel manner. In the benchmarking tool both **driver** thread count, and I/O thread count are exposed as command line configuration options. In this use case, care must be taken to not create too many threads since maximum number of threads is a product of **driver** threads and I/O threads. In this use case, the application owns creating **drivers** and I/O Thread pools for Velox. In the case of the benchmark tool, the tool is responsible for both **driver** threads and I/O threads.
 
 Multiple Process Executor Use Case
 ----------------------------------
 
-This use case is used by Spark + `Gluten https://github.com/oap-project/gluten` and it differs from the Presto use case where parallelism is concerned. Spark uses multiple processes where each process is a Gluten+Velox query processor. Spark scales by using many Linux processes for query processing. In this case this means that the **drivers** are outside of Velox and Gluten and is defined by the Spark configuration and number of workers. Gluten takes on the role of creating and exposing the I/O thread pool count to Spark as configuration and then injecting the I/O thread pool into Velox for parallel I/O.
+This use case is used by Spark + `Gluten <https://github.com/oap-project/gluten>` and it differs from the Presto use case where parallelism is concerned. Spark uses multiple processes where each process is a Gluten+Velox query processor. Spark scales by using many Linux processes for query processing. In this case this means that the **drivers** are outside of Velox and Gluten and is defined by the Spark configuration and number of workers. Gluten takes on the role of creating and exposing the I/O thread pool count to Spark as configuration and then injecting the I/O thread pool into Velox for parallel I/O.
 
 ----
 
@@ -126,4 +128,6 @@ Appendix A: TpchBenchmark Tool Help Output
 
 From the repository root, use the following command line to see all the available flags in the TpchBenchmark tool.
 
-``$ ./_build/release/velox/benchmarks/tpch/velox_tpch_benchmark --help``
+.. code:: shell
+
+   $ ./_build/release/velox/benchmarks/tpch/velox_tpch_benchmark --help
