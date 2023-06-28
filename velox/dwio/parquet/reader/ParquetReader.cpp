@@ -110,7 +110,7 @@ class ReaderBase {
   const uint64_t filePreloadThreshold_;
   // Copy of options. Must be owned by 'this'.
   const dwio::common::ReaderOptions options_;
-  std::unique_ptr<velox::dwio::common::BufferedInput> input_;
+  std::shared_ptr<velox::dwio::common::BufferedInput> input_;
   uint64_t fileLength_;
   std::unique_ptr<thrift::FileMetaData> fileMetaData_;
   RowTypePtr schema_;
@@ -118,8 +118,10 @@ class ReaderBase {
 
   const bool binaryAsString = false;
 
+  bool preloadFile_ = false;
+
   // Map from row group index to pre-created loading BufferedInput.
-  std::unordered_map<uint32_t, std::unique_ptr<dwio::common::BufferedInput>>
+  std::unordered_map<uint32_t, std::shared_ptr<dwio::common::BufferedInput>>
       inputs_;
 };
 
@@ -140,11 +142,18 @@ ReaderBase::ReaderBase(
 }
 
 void ReaderBase::loadFileMetaData() {
-  bool preloadFile_ = fileLength_ <= filePreloadThreshold_;
+  preloadFile_ = fileLength_ <= filePreloadThreshold_ ||
+      fileLength_ <= directorySizeGuess_;
   uint64_t readSize =
       preloadFile_ ? fileLength_ : std::min(fileLength_, directorySizeGuess_);
-  auto stream = input_->read(
-      fileLength_ - readSize, readSize, dwio::common::LogType::FOOTER);
+
+  std::unique_ptr<dwio::common::SeekableInputStream> stream = nullptr;
+  if (preloadFile_) {
+    stream = input_->readFile(fileLength_, dwio::common::LogType::FOOTER);
+  } else {
+    stream = input_->read(
+        fileLength_ - readSize, readSize, dwio::common::LogType::FOOTER);
+  }
 
   std::vector<char> copy(readSize);
   const char* bufferStart = nullptr;
@@ -568,19 +577,30 @@ void ReaderBase::scheduleRowGroups(
       currentGroup + 1 < rowGroupIds.size() ? rowGroupIds[currentGroup + 1] : 0;
   auto input = inputs_[thisGroup].get();
   if (!input) {
-    auto newInput = input_->clone();
-    reader.enqueueRowGroup(thisGroup, *newInput);
-    newInput->load(dwio::common::LogType::STRIPE);
-    inputs_[thisGroup] = std::move(newInput);
+    if (preloadFile_) {
+      // Read data from buffer directly.
+      reader.enqueueRowGroup(thisGroup, *input_);
+      inputs_[thisGroup] = input_;
+    } else {
+      auto newInput = input_->clone();
+      reader.enqueueRowGroup(thisGroup, *newInput);
+      newInput->load(dwio::common::LogType::STRIPE);
+      inputs_[thisGroup] = std::move(newInput);
+    }
   }
   for (auto counter = 0; counter < FLAGS_parquet_prefetch_rowgroups;
        ++counter) {
     if (nextGroup) {
-      if (inputs_.count(nextGroup) != 0) {
-        auto newInput = input_->clone();
-        reader.enqueueRowGroup(nextGroup, *newInput);
-        newInput->load(dwio::common::LogType::STRIPE);
-        inputs_[nextGroup] = std::move(newInput);
+      if (inputs_.count(nextGroup) == 0) {
+        if (preloadFile_) {
+          reader.enqueueRowGroup(nextGroup, *input_);
+          inputs_[nextGroup] = input_;
+        } else {
+          auto newInput = input_->clone();
+          reader.enqueueRowGroup(nextGroup, *newInput);
+          newInput->load(dwio::common::LogType::STRIPE);
+          inputs_[nextGroup] = std::move(newInput);
+        }
       }
     } else {
       break;

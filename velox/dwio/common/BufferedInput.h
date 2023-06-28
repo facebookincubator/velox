@@ -122,6 +122,14 @@ class BufferedInput {
     return std::make_unique<BufferedInput>(input_, pool_);
   }
 
+  std::unique_ptr<SeekableInputStream> readFile(
+      uint64_t length,
+      LogType logType) {
+    enqueue({0, length});
+    load(logType);
+    return readBuffer(0, length);
+  }
+
   const std::shared_ptr<ReadFile>& getReadFile() const {
     return input_->getReadFile();
   }
