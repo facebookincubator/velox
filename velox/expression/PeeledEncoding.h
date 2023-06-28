@@ -148,6 +148,10 @@ class PeeledEncoding {
       VectorPtr peeledResult,
       const SelectivityVector& rows) const;
 
+  void zeroOutNullRows(
+      const SelectivityVector& allRows,
+      const SelectivityVector& nonNullRows);
+
   /// Takes a set of outer rows (rows defined over the peel) and a functor that
   /// is executed for each outer row which does not map to a null row.
   /// The outer and its corresponding inner row is passed to the functor.

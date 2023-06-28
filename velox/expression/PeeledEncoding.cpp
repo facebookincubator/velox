@@ -278,4 +278,19 @@ VectorPtr PeeledEncoding::wrap(
   }
   return wrappedResult;
 }
+
+void PeeledEncoding::zeroOutNullRows(
+    const SelectivityVector& allRows,
+    const SelectivityVector& nonNullRows) {
+  if (wrapEncoding_ != VectorEncoding::Simple::DICTIONARY) {
+    return;
+  }
+
+  auto* rawIndices = wrap_->asMutable<vector_size_t>();
+  allRows.applyToSelected([&](auto row) {
+    if (!nonNullRows.isValid(row)) {
+      rawIndices[row] = 0;
+    }
+  });
+}
 } // namespace facebook::velox::exec

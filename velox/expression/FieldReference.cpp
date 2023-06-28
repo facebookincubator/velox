@@ -33,6 +33,7 @@ void FieldReference::evalSpecialForm(
   std::shared_ptr<PeeledEncoding> peeledEncoding;
   VectorRecycler inputRecycler(input, context.vectorPool());
   bool useDecode = false;
+  LocalSelectivityVector nonNullRows{context, rows};
   if (inputs_.empty()) {
     row = context.row();
   } else {
@@ -59,11 +60,27 @@ void FieldReference::evalSpecialForm(
       VELOX_CHECK_NOT_NULL(peeledEncoding);
       VELOX_CHECK(peeledVectors[0]->encoding() == VectorEncoding::Simple::ROW);
       row = peeledVectors[0]->as<const RowVector>();
+
+      auto* rawNulls = decoded.nulls();
+      if (rawNulls) {
+        nonNullRows->deselectNulls(rawNulls, rows.begin(), rows.end());
+        if (nonNullRows->hasSelections()) {
+          peeledEncoding->zeroOutNullRows(rows, *nonNullRows);
+        }
+      }
     } else {
       VELOX_CHECK(input->encoding() == VectorEncoding::Simple::ROW);
       row = input->as<const RowVector>();
     }
   }
+
+  if (!nonNullRows->hasSelections()) {
+    auto localResult =
+        BaseVector::createNullConstant(type(), rows.end(), context.pool());
+    context.moveOrCopyResult(localResult, rows, result);
+    return;
+  }
+
   if (index_ == -1) {
     auto rowType = dynamic_cast<const RowType*>(row->type().get());
     VELOX_CHECK(rowType);
@@ -73,15 +90,6 @@ void FieldReference::evalSpecialForm(
       inputs_.empty() ? context.getField(index_) : row->childAt(index_);
   if (child->encoding() == VectorEncoding::Simple::LAZY) {
     child = BaseVector::loadedVectorShared(child);
-  }
-  // Children of a RowVector may be shorter than the RowVector itself. Resize
-  // the child so that we can wrap it with the encoding of the RowVector later.
-  // Resizing through ensureWritable in case child is not singly referenced.
-  if (child->size() < row->size()) {
-    SelectivityVector extraRows{row->size(), false};
-    extraRows.setValidRange(child->size(), row->size(), true);
-    extraRows.updateBounds();
-    BaseVector::ensureWritable(extraRows, child->type(), context.pool(), child);
   }
   if (result.get()) {
     if (useDecode) {
