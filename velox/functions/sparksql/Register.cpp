@@ -26,6 +26,7 @@
 #include "velox/functions/sparksql/ArraySort.h"
 #include "velox/functions/sparksql/Bitwise.h"
 #include "velox/functions/sparksql/DateTimeFunctions.h"
+#include "velox/functions/sparksql/DecimalVectorFunctions.h"
 #include "velox/functions/sparksql/Hash.h"
 #include "velox/functions/sparksql/In.h"
 #include "velox/functions/sparksql/LeastGreatest.h"
@@ -98,6 +99,13 @@ inline void registerArrayMinMaxFunctions(const std::string& prefix) {
   registerArrayMinMaxFunctions<Varchar>(prefix);
   registerArrayMinMaxFunctions<Timestamp>(prefix);
   registerArrayMinMaxFunctions<Date>(prefix);
+}
+
+void registerExpressionGeneralFunctions(const std::string& prefix) {
+  exec::registerStatefulVectorFunction(
+      prefix + "make_decimal_by_unscaled_value",
+      makeDecimalByUnscaledValueSignatures(),
+      makeMakeDecimalByUnscaledValue);
 }
 } // namespace
 
@@ -276,6 +284,7 @@ void registerFunctions(const std::string& prefix) {
       prefix + "unscaled_value",
       unscaledValueSignatures(),
       makeUnscaledValue());
+  registerExpressionGeneralFunctions(prefix);
 }
 
 } // namespace sparksql
