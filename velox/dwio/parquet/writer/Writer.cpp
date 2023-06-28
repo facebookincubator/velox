@@ -28,7 +28,8 @@ void Writer::flush() {
           finalSink_.get(),
           pool_,
           queryCtx_->queryConfig().dataBufferGrowRatio());
-      auto arrowProperties = ::parquet::ArrowWriterProperties::Builder().build();
+      auto arrowProperties =
+          ::parquet::ArrowWriterProperties::Builder().build();
       PARQUET_ASSIGN_OR_THROW(
           arrowWriter_,
           ::parquet::arrow::FileWriter::Open(
@@ -43,7 +44,9 @@ void Writer::flush() {
     std::vector<std::shared_ptr<arrow::ChunkedArray>> chunks;
     for (int colIdx = 0; colIdx < fields.size(); colIdx++) {
       auto dataType = fields.at(colIdx)->type();
-      auto chunk = arrow::ChunkedArray::Make(std::move(stagingChunks_.at(colIdx)), dataType).ValueOrDie();
+      auto chunk = arrow::ChunkedArray::Make(
+                       std::move(stagingChunks_.at(colIdx)), dataType)
+                       .ValueOrDie();
       chunks.push_back(chunk);
     }
     auto table = arrow::Table::Make(schema_, std::move(chunks), stagingRows_);
@@ -60,8 +63,8 @@ void Writer::flush() {
 }
 
 /**
- * This method would cache input `ColumnarBatch` to make the size of row group big.
- * It would flush when:
+ * This method would cache input `ColumnarBatch` to make the size of row group
+ * big. It would flush when:
  * - the cached numRows bigger than `maxRowGroupRows_`
  * - the cached bytes bigger than `maxRowGroupBytes_`
  *
@@ -83,7 +86,8 @@ void Writer::write(const RowVectorPtr& data) {
 
   auto bytes = data->estimateFlatSize();
   auto numRows = data->size();
-  if (stagingBytes_ + bytes > maxRowGroupBytes_ || stagingRows_ + numRows > maxRowGroupRows_) {
+  if (stagingBytes_ + bytes > maxRowGroupBytes_ ||
+      stagingRows_ + numRows > maxRowGroupRows_) {
     flush();
   }
 
