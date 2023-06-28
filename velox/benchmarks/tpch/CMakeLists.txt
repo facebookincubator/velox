@@ -38,7 +38,7 @@ target_link_libraries(
   fmt::fmt)
 
 if(VELOX_ENABLE_S3)
-  set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -DUSE_S3FS")
+  add_definitions(-DVELOX_USE_S3FS)
   target_link_libraries(velox_tpch_benchmark_lib velox_s3fs curl)
 endif()
 

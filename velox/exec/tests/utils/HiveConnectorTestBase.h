@@ -213,7 +213,7 @@ class HiveConnectorSplitBuilder {
   std::shared_ptr<connector::hive::HiveConnectorSplit> build() const {
     return std::make_shared<connector::hive::HiveConnectorSplit>(
         kHiveConnectorId,
-        fixUpPath(filePath_),
+        fixUpPath(filePath_), // Some filePath_ may not have a schema.
         fileFormat_,
         start_,
         length_,
@@ -222,6 +222,7 @@ class HiveConnectorSplitBuilder {
   }
 
  private:
+  // If passed path is not prefixed with a schema, assume "file:"...
   static std::string fixUpPath(const std::string& path) {
     auto rex = std::regex("^[a-z]+[a-z0-9]*:.*$", std::regex::egrep);
     return std::regex_match(path, rex) ? path : "file:" + path;

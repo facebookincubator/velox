@@ -29,7 +29,7 @@
 #include "velox/common/file/FileSystems.h"
 #include "velox/common/memory/MmapAllocator.h"
 #include "velox/connectors/hive/HiveConnector.h"
-#ifdef USE_S3FS
+#ifdef VELOX_USE_S3FS
 #include "velox/connectors/hive/storage_adapters/s3fs/S3FileSystem.h"
 #endif
 #include "velox/dwio/common/Options.h"
@@ -234,7 +234,7 @@ class TpchBenchmark {
     aggregate::prestosql::registerAllAggregateFunctions();
     parse::registerTypeResolver();
     filesystems::registerLocalFileSystem();
-#ifdef USE_S3FS
+#ifdef VELOX_USE_S3FS
     filesystems::registerS3FileSystem();
 #endif
     if (FLAGS_use_native_parquet_reader) {
