@@ -6,7 +6,7 @@ Introduction
 ============
 This document is the outcome from a cycle of benchmarking to determine the best I/O performance against AWS S3 Parquet data for TPCH. It is intended to describe the tuning process recommendations and general suggestions for tuning the Velox query engine.
 
-Benchmarking in Velox is made easy with the optionally built TpchBenchmark (velox_tpch_benchmark) executable. To build the benchmark executable *(``_build/release/velox/benchamrks/tpch/velox_tpch_benchmark``)*, use the following command line to do the build with S3 support:
+Benchmarking in Velox is made easy with the optionally built TpchBenchmark (velox_tpch_benchmark) executable. To build the benchmark executable (*_build/release/velox/benchamrks/tpch/velox_tpch_benchmark*), use the following command line to do the build with S3 support:
 
 ``$ make release EXTRA_CMAKE_FLAGS="-DVELOX_BUILD_BENCHMARKS=ON -DVELOX_ENABLE_S3=ON"``
 
@@ -20,12 +20,12 @@ Velox is a library so there are multiple ways to use it. This document will desc
 In-Process Multi-Threaded Executor Use Case
 -------------------------------------------
 
-This use case is used by `Presto https://github.com/prestodb/presto`_ and, as it turns out, is the use case used by the *Velox TpchBenchmark Tool* below. This use case uses a single multi-threaded process to perform execution of queries in parallel. Each query is broken up into threads called **drivers** via a planning algorithm.  Each **driver** may also have a thread pool to perform I/O in a parallel manner. In the benchmarking tool both **driver** thread count, and I/O thread count are exposed as command line configuration options. In this use case, care must be taken to not create too many threads since maximum number of threads is a product of **driver** threads and I/O threads. In this use case, the application owns creating **drivers** and I/O Thread pools for Velox. In the case of the benchmark tool, the tool is responsible for both **driver** threads and I/O threads.
+This use case is used by `Presto https://github.com/prestodb/presto` and, as it turns out, is the use case used by the *Velox TpchBenchmark Tool* below. This use case uses a single multi-threaded process to perform execution of queries in parallel. Each query is broken up into threads called **drivers** via a planning algorithm.  Each **driver** may also have a thread pool to perform I/O in a parallel manner. In the benchmarking tool both **driver** thread count, and I/O thread count are exposed as command line configuration options. In this use case, care must be taken to not create too many threads since maximum number of threads is a product of **driver** threads and I/O threads. In this use case, the application owns creating **drivers** and I/O Thread pools for Velox. In the case of the benchmark tool, the tool is responsible for both **driver** threads and I/O threads.
 
 Multiple Process Executor Use Case
 ----------------------------------
 
-This use case is used by Spark + `Gluten https://github.com/oap-project/gluten`_ and it differs from the Presto use case where parallelism is concerned. Spark uses multiple processes where each process is a Gluten+Velox query processor. Spark scales by using many Linux processes for query processing. In this case this means that the **drivers** are outside of Velox and Gluten and is defined by the Spark configuration and number of workers. Gluten takes on the role of creating and exposing the I/O thread pool count to Spark as configuration and then injecting the I/O thread pool into Velox for parallel I/O.
+This use case is used by Spark + `Gluten https://github.com/oap-project/gluten` and it differs from the Presto use case where parallelism is concerned. Spark uses multiple processes where each process is a Gluten+Velox query processor. Spark scales by using many Linux processes for query processing. In this case this means that the **drivers** are outside of Velox and Gluten and is defined by the Spark configuration and number of workers. Gluten takes on the role of creating and exposing the I/O thread pool count to Spark as configuration and then injecting the I/O thread pool into Velox for parallel I/O.
 
 ----
 
@@ -40,42 +40,42 @@ TpchBenchmark Tool Optimizations in Velox
 -----------------------------------------
 
 The tool exposes the following options (Note: use a single dash not a double dash):
+
 * *num_drivers* - As described above this represent the number of drivers or executors used to process the TPC-H queries.
+
 * *num_io_threads* - This represents the number of I/O threads used per **driver** for I/O.
+
 * *cache_gb* - How much memory is used for caching data locally in this process. Memory caching cannot be shared in the multiple process executor use case but works well in the single process, multi-threaded use case.
+
 * *num_splits_per_file* - This is a row group optimization for the stored dataset for benchmarking.
 
 **NOTE:** *There is a limitation on the implementation of the AWS SDK that will cause failures (curl error 28) if the **driver** threads times I/O threads grow much beyond 350 threads. This only really effects the multi-threaded **drivers** use case like the benchmark tool. It is only known to be an issue when running against AWS S3. However, the error is coming from the libcurl library so it is possible other Cloud storage APIs could also be affected.*
 
 Velox exposes other options used for tuning that are of interest:
+
 * *max_coalesce_bytes* - Size of coalesced data, has small improvements as size grows.
+
 * *max_coalesce_distance_bytes* - Maximum gap bytes between data that can coalesced. Larger may mean more fetched data but at greater bytes/sec.
 
 Top Optimization Recommendations (A Starting Point for Tuning)
 --------------------------------------------------------------
 
-<table border="1">
-    <tr><th>Option Name</th><th>Single Process<br />( including tool)</th><th>Multi-Process</th></tr>
-    <tr><td>num_drivers</td><td>max(20, vCPUs<super>*</super> X 3 / 4)</td><td>NA</td></tr>
-    <tr><td>num_io_threads</td><td>max(16, vCPUs<super>*</super> X 3 / 8)</td><td>vCPUs<super>*</super></td></tr>
-    <tr><td>cache_gb</td><td>50% System RAM</td><td>NA (default = 0)</td></tr>
-    <tr><td>num_splits_per_file</td><td>Row Group Size of Data</td><td>Row Group Size of Data</td></tr>
-    <tr><td>max_coalesce_bytes</td><td>Minimum of 90MB</td><td>Minimum of 90MB</td></tr>
-    <tr>
-        <td>max_coalesce_distance_bytes</td>
-        <td>Workload dependent<super>**</super></td>
-        <td>Workload dependent<super>**</super></td>
-    </tr>
-    <tr><td>parquet_prefetch_rowgroups</td><td>Best is 1</td><td>Best is 1</td></tr>
-    <tr><td>split_preload_per_driver</td><td>Best is 2</td><td>Best is 2</td></tr>
-    <tr><td>cache_prefetch_min_pct</td><td>Best is 80</td><td>Best is 80</td></tr>
-    <tr>
-        <td colspan="3" style="font-size: 8pt">
-&nbsp;&nbsp;*&nbsp;<b>vCPUs</b> = (cores * hyper-threads)<br />
-**&nbsp;Wide tables and few columns retrieved per row can lead to many I/O requests, suggest increasing this value based on testing and the need to reduce small I/O requests.
-        </td>
-    </tr>
-</table>
+.. csv-table:: 
+:header: "Option Name", "Single Process", "Multi-Process"
+:widths: auto
+
+"num_drivers","max(20, vCPUs<super>*</super> X 3 / 4)","NA"
+"num_io_threads", "max(16, vCPUs<super>*</super> X 3 / 8)", "vCPUs*"
+"cache_gb", "50% System RAM", "NA (default = 0)"
+"num_splits_per_file", "Row Group Size of Data", "Row Group Size of Data"
+"max_coalesce_bytes", "Minimum of 90MB", "Minimum of 90MB"
+"max_coalesce_distance_bytes", "Workload dependent**", "Workload dependent**"
+"parquet_prefetch_rowgroups", "Best is 1", "Best is 1"
+"split_preload_per_driver", "Best is 2", "Best is 2"
+"cache_prefetch_min_pct", "Best is 80", "Best is 80"
+
+*  vCPUs = (cores * hyper-threads)
+** Wide tables and few columns retrieved per row can lead to many I/O requests, suggest increasing this value based on testing and the need to reduce small I/O requests.
 
 Optimizations for the TpchBenchmark (Single Process Use Case)
 =============================================================
