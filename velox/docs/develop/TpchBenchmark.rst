@@ -71,8 +71,8 @@ these experiments.
 TpchBenchmark Tool Optimizations in Velox
 -----------------------------------------
 
-The tool exposes the following options (Note: use a single dash not a double
-dash):
+The tool exposes the following options (Note: When passing options for the tool
+use a single dash not a double dash; i.e. -option and not --option):
 
 * *num_drivers* - As described above this represent the number of drivers or
   executors used to process the TPC-H queries.
