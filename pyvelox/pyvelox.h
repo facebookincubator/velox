@@ -71,7 +71,7 @@ inline velox::variant pyToVariant(const py::handle& obj) {
 
 inline velox::variant pyToVariant(const py::handle& obj, const Type& dtype) {
   if (obj.is_none()) {
-    return velox::variant();
+    return velox::variant(dtype.kind());
   }
   switch (dtype.kind()) {
     case TypeKind::BOOLEAN: {
