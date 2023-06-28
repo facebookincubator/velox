@@ -117,6 +117,7 @@ class SubstraitParser {
       {"is_not_null", "isnotnull"}, /*Spark functions.*/
       {"is_null", "isnull"},
       {"equal", "equalto"},
+      {"equal_null_safe", "equalnullsafe"},
       {"lt", "lessthan"},
       {"lte", "lessthanorequal"},
       {"gt", "greaterthan"},
