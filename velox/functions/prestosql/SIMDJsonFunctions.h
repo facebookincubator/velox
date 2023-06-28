@@ -13,7 +13,7 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-#include <simdjson/singleheader/simdjson.h> // @manual=fbsource//third-party/simdjson:simdjson
+#include "simdjson/singleheader/simdjson.h"
 #include "velox/functions/Macros.h"
 #include "velox/functions/UDFOutputString.h"
 #include "velox/functions/prestosql/json/JsonPathTokenizer.h"
