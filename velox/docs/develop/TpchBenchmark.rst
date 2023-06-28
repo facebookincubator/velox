@@ -57,25 +57,26 @@ Velox exposes other options used for tuning that are of interest:
 
 * *max_coalesce_distance_bytes* - Maximum gap bytes between data that can coalesced. Larger may mean more fetched data but at greater bytes/sec.
 
-Top Optimization Recommendations (A Starting Point for Tuning)
---------------------------------------------------------------
+Top Optimization Recommendations
+--------------------------------
 
-.. csv-table:: 
-:header: "Option Name", "Single Process", "Multi-Process"
-:widths: auto
+.. csv-table:: Starting Point for Tuning
+   :header: "Option Name", "Single Process", "Multi-Process"
+   :widths: auto
 
-"num_drivers","max(20, vCPUs<super>*</super> X 3 / 4)","NA"
-"num_io_threads", "max(16, vCPUs<super>*</super> X 3 / 8)", "vCPUs*"
-"cache_gb", "50% System RAM", "NA (default = 0)"
-"num_splits_per_file", "Row Group Size of Data", "Row Group Size of Data"
-"max_coalesce_bytes", "Minimum of 90MB", "Minimum of 90MB"
-"max_coalesce_distance_bytes", "Workload dependent**", "Workload dependent**"
-"parquet_prefetch_rowgroups", "Best is 1", "Best is 1"
-"split_preload_per_driver", "Best is 2", "Best is 2"
-"cache_prefetch_min_pct", "Best is 80", "Best is 80"
+   "num_drivers","max(20, vCPUs<super>*</super> X 3 / 4)","NA"
+   "num_io_threads", "max(16, vCPUs<super>*</super> X 3 / 8)", "vCPUs*"
+   "cache_gb", "50% System RAM", "NA (default = 0)"
+   "num_splits_per_file", "Row Group Size of Data", "Row Group Size of Data"
+   "max_coalesce_bytes", "Minimum of 90MB", "Minimum of 90MB"
+   "max_coalesce_distance_bytes", "Workload dependent**", "Workload dependent**"
+   "parquet_prefetch_rowgroups", "Best is 1", "Best is 1"
+   "split_preload_per_driver", "Best is 2", "Best is 2"
+   "cache_prefetch_min_pct", "Best is 80", "Best is 80"
 
-*  vCPUs = (cores * hyper-threads)
-** Wide tables and few columns retrieved per row can lead to many I/O requests, suggest increasing this value based on testing and the need to reduce small I/O requests.
+\*  vCPUs = (cores * hyper-threads)
+
+\*\* Wide tables and few columns retrieved per row can lead to many I/O requests, suggest increasing this value based on testing and the need to reduce small I/O requests.
 
 Optimizations for the TpchBenchmark (Single Process Use Case)
 =============================================================
