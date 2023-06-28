@@ -175,11 +175,13 @@ TEST_F(ProbabilityTest, weibullCDF) {
   EXPECT_EQ(weibullCDF(1.0, kDoubleMax, 3.0), 1.668805393880401e-308);
   EXPECT_EQ(weibullCDF(kInf, 1.0, 3.0), 0.0);
   EXPECT_EQ(weibullCDF(1.0, kInf, 20.0), 0.0);
+  EXPECT_EQ(weibullCDF(kInf, kInf, kInf), IsNan());
+  EXPECT_EQ(weibullCDF(kDoubleMin, kDoubleMin, kInf), IsNan());
+  EXPECT_EQ(weibullCDF(kDoubleMax, kDoubleMax, kInf), IsNan());
   VELOX_ASSERT_THROW(weibullCDF(0, 3, 0.5), "a must be greater than 0");
   VELOX_ASSERT_THROW(weibullCDF(3, 0, 0.5), "b must be greater than 0");
   VELOX_ASSERT_THROW(weibullCDF(kNan, 3.0, 0.5), "a must be greater than 0");
   VELOX_ASSERT_THROW(weibullCDF(3.0, kNan, 0.5), "b must be greater than 0");
-  EXPECT_EQ(weibullCDF(kDoubleMax, kDoubleMax, kInf), IsNan());
 }
 
 } // namespace
