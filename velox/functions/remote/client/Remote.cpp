@@ -136,6 +136,7 @@ class RemoteFunction : public exec::VectorFunction {
 std::shared_ptr<exec::VectorFunction> createRemoteFunction(
     const std::string& name,
     const std::vector<exec::VectorFunctionArg>& inputArgs,
+    const core::QueryConfig& /*config*/,
     const RemoteVectorFunctionMetadata& metadata) {
   return std::make_unique<RemoteFunction>(name, inputArgs, metadata);
 }

@@ -178,6 +178,7 @@ std::shared_ptr<const Type> resolveVectorFunction(
 /// constant input; non-constant inputs should be represented as nullptr;
 /// constant inputs must be instances of ConstantVector.
 std::shared_ptr<VectorFunction> getVectorFunction(
+    const core::QueryConfig& config,
     const std::string& name,
     const std::vector<TypePtr>& inputTypes,
     const std::vector<VectorPtr>& constantInputs);
@@ -219,7 +220,8 @@ struct VectorFunctionArg {
 
 using VectorFunctionFactory = std::function<std::shared_ptr<VectorFunction>(
     const std::string& name,
-    const std::vector<VectorFunctionArg>& inputArgs)>;
+    const std::vector<VectorFunctionArg>& inputArgs,
+    const core::QueryConfig& config)>;
 
 struct VectorFunctionEntry {
   std::vector<FunctionSignaturePtr> signatures;
@@ -243,7 +245,8 @@ VectorFunctionMap& vectorFunctionFactories();
 template <typename T>
 VectorFunctionFactory makeVectorFunctionFactory() {
   return [](const std::string& name,
-            const std::vector<VectorFunctionArg>& inputArgs) {
+            const std::vector<VectorFunctionArg>& inputArgs,
+            const core::QueryConfig& /*config*/) {
     return std::make_shared<T>(name, inputArgs);
   };
 }

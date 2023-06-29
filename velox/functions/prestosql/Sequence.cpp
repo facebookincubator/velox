@@ -275,7 +275,8 @@ std::vector<std::shared_ptr<exec::FunctionSignature>> signatures() {
 
 std::shared_ptr<exec::VectorFunction> create(
     const std::string& /* name */,
-    const std::vector<exec::VectorFunctionArg>& inputArgs) {
+    const std::vector<exec::VectorFunctionArg>& inputArgs,
+    const core::QueryConfig& /*config*/) {
   switch (inputArgs[0].type->kind()) {
     case TypeKind::BIGINT:
       return std::make_shared<SequenceFunction<int64_t, int64_t>>();
