@@ -173,46 +173,18 @@ class GCSReadFile final : public ReadFile {
 } // namespace
 
 namespace filesystems {
-
-class GCSConfig {
- private:
-  const Config* FOLLY_NONNULL config_;
-  std::shared_ptr<gc::Credentials> credentials_;
-
- public:
-  GCSConfig(const Config* config) : config_(config) {
-    std::string cred = config_->get("hive.gcs.credentials", std::string(""));
-    if (!cred.empty()) {
-      credentials_ = gc::MakeServiceAccountCredentials(cred);
-    } else {
-      LOG(WARNING) << "Config hive.gcs.credentials is empty";
-    }
-  }
-
-  std::string endpointOverride() const {
-    return config_->get("hive.gcs.endpoint", std::string(""));
-  }
-
-  std::string scheme() const {
-    return config_->get("hive.gcs.scheme", std::string("https"));
-  }
-
-  std::shared_ptr<gc::Credentials> credentials() const {
-    return credentials_;
-  }
-};
+using namespace connector::hive;
 
 class GCSFileSystem::Impl {
  public:
-  Impl(const Config* config) : gcsConfig_(config) {}
+  Impl(const Config* config) : config_(config) {}
 
   ~Impl() = default;
 
   // Use the input Config parameters and initialize the GCSClient.
   void initializeClient() {
     auto options = gc::Options{};
-    std::string scheme = gcsConfig_.scheme();
-    // if (scheme.empty()) scheme = "https";
+    std::string scheme = HiveConfig::gcsScheme(config_);
     if (scheme == "https") {
       options.set<gc::UnifiedCredentialsOption>(
           gc::MakeGoogleDefaultCredentials());
@@ -220,13 +192,20 @@ class GCSFileSystem::Impl {
       options.set<gc::UnifiedCredentialsOption>(gc::MakeInsecureCredentials());
     }
     options.set<gcs::UploadBufferSizeOption>(kUploadBufferSize);
-    if (!gcsConfig_.endpointOverride().empty()) {
-      options.set<gcs::RestEndpointOption>(
-          scheme + "://" + gcsConfig_.endpointOverride());
+
+    std::string endpointOverride = HiveConfig::gcsEndpoint(config_);
+    if (!endpointOverride.empty()) {
+      options.set<gcs::RestEndpointOption>(scheme + "://" + endpointOverride);
     }
-    if (gcsConfig_.credentials()) {
-      options.set<gc::UnifiedCredentialsOption>(gcsConfig_.credentials());
+
+    std::string cred = HiveConfig::gcsCredentials(config_);
+    if (!cred.empty()) {
+      auto credentials = gc::MakeServiceAccountCredentials(cred);
+      options.set<gc::UnifiedCredentialsOption>(credentials);
+    } else {
+      LOG(WARNING) << "Config::gcsCredentials is empty";
     }
+
     client_ = std::make_shared<gcs::Client>(options);
   }
 
@@ -235,7 +214,7 @@ class GCSFileSystem::Impl {
   }
 
  private:
-  const GCSConfig gcsConfig_;
+  const Config* FOLLY_NONNULL config_;
   std::shared_ptr<gcs::Client> client_;
 };
 
@@ -268,7 +247,7 @@ void GCSFileSystem::remove(std::string_view path) {
     VELOX_FAIL("File {} is not a valid gcs file", path);
   }
 
-  // assumption it's a proper path
+  // We assume 'path' is well-formed here.
   std::string bucket;
   std::string object;
   const std::string file = gcsPath(path);
@@ -296,7 +275,7 @@ bool GCSFileSystem::exists(std::string_view path) {
   if (!isGCSFile(path))
     VELOX_FAIL("File {} is not a valid gcs file", path);
 
-  // assumption it's a proper path
+  // We assume 'path' is well-formed here.
   const std::string file = gcsPath(path);
   std::string bucket;
   std::string object;
@@ -313,7 +292,7 @@ std::vector<std::string> GCSFileSystem::list(std::string_view path) {
   if (!isGCSFile(path))
     VELOX_FAIL("File {} is not a valid gcs file", path);
 
-  // assumption it's a proper path
+  // We assume 'path' is well-formed here.
   const std::string file = gcsPath(path);
   std::string bucket;
   std::string object;
