@@ -288,7 +288,7 @@ std::shared_ptr<const ParquetTypeWithId> ReaderBase::getParquetColumnInfo(
           schemaElement.name,
           std::nullopt,
           maxRepeat,
-          maxDefine);
+          maxDefine - 1);
     }
     return leafTypePtr;
   }
@@ -386,6 +386,9 @@ TypePtr ReaderBase::convertType(
       }
 
       case thrift::ConvertedType::UTF8:
+      // Thrift ENUM values are converted to Parquet binaries containing UTF-8
+      // strings.
+      case thrift::ConvertedType::ENUM:
         switch (schemaElement.type) {
           case thrift::Type::BYTE_ARRAY:
           case thrift::Type::FIXED_LEN_BYTE_ARRAY:
@@ -397,7 +400,6 @@ TypePtr ReaderBase::convertType(
       case thrift::ConvertedType::MAP:
       case thrift::ConvertedType::MAP_KEY_VALUE:
       case thrift::ConvertedType::LIST:
-      case thrift::ConvertedType::ENUM:
       case thrift::ConvertedType::TIME_MILLIS:
       case thrift::ConvertedType::TIME_MICROS:
       case thrift::ConvertedType::JSON:

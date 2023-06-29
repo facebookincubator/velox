@@ -225,20 +225,42 @@ TEST_F(ParquetTableScanTest, map) {
 }
 
 // Array reader result has missing result.
-// TEST_F(ParquetTableScanTest, array) {
-//   auto vector = makeArrayVector<int32_t>({{1, 2, 3}});
+TEST_F(ParquetTableScanTest, array) {
+  auto vector = makeArrayVector<int32_t>({{1, 2, 3}});
+
+  loadData(
+      getExampleFilePath("old-repeated-int.parquet"),
+      ROW({"repeatedInt"}, {ARRAY(INTEGER())}),
+      makeRowVector(
+          {"repeatedInt"},
+          {
+              vector,
+          }));
+
+  assertSelectWithFilter(
+      {"repeatedInt"}, {}, "", "SELECT repeatedInt FROM tmp");
+}
+
+// Failed unit test on Velox array reader.
+// Optional array with required elements.
+// TEST_F(ParquetTableScanTest, optionalArray) {
+//   auto vector = makeArrayVector<StringView>({
+//       {"a", "b"},
+//       {"c", "d"},
+//       {"e", "f"},
+//   });
 
 //   loadData(
-//       getExampleFilePath("old-repeated-int.parquet"),
-//       ROW({"repeatedInt"}, {ARRAY(INTEGER())}),
+//       getExampleFilePath("part-r-0.parquet"),
+//       ROW({"_1"}, {ARRAY(VARCHAR())}),
 //       makeRowVector(
-//           {"repeatedInt"},
+//           {"_1"},
 //           {
 //               vector,
 //           }));
 
-//   assertSelectWithFilter({"repeatedInt"}, {}, "", "SELECT repeatedInt FROM
-//   tmp");
+//   assertSelectWithFilter(
+//       {"_1"}, {}, "", "SELECT _1 FROM tmp");
 // }
 
 // Failed unit test on Velox map reader.
