@@ -55,10 +55,10 @@ std::shared_ptr<const Type> resolveVectorFunction(
 }
 
 std::shared_ptr<VectorFunction> getVectorFunction(
-    const core::QueryConfig& config,
     const std::string& name,
     const std::vector<TypePtr>& inputTypes,
-    const std::vector<VectorPtr>& constantInputs) {
+    const std::vector<VectorPtr>& constantInputs,
+    const core::QueryConfig& config) {
   auto sanitizedName = sanitizeName(name);
 
   if (!constantInputs.empty()) {

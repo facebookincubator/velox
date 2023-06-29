@@ -154,8 +154,8 @@ class AlwaysFailingVectorFunction final : public VectorFunction {
 class SimpleFunctionAdapterFactory {
  public:
   virtual std::unique_ptr<VectorFunction> createVectorFunction(
-      const core::QueryConfig& config,
-      const std::vector<VectorPtr>& constantInputs) const = 0;
+      const std::vector<VectorPtr>& constantInputs,
+      const core::QueryConfig& config) const = 0;
   virtual ~SimpleFunctionAdapterFactory() = default;
 };
 
@@ -178,10 +178,10 @@ std::shared_ptr<const Type> resolveVectorFunction(
 /// constant input; non-constant inputs should be represented as nullptr;
 /// constant inputs must be instances of ConstantVector.
 std::shared_ptr<VectorFunction> getVectorFunction(
-    const core::QueryConfig& config,
     const std::string& name,
     const std::vector<TypePtr>& inputTypes,
-    const std::vector<VectorPtr>& constantInputs);
+    const std::vector<VectorPtr>& constantInputs,
+    const core::QueryConfig& config);
 
 struct VectorFunctionMetadata {
   /// Boolean indicating whether this function supports flattening, i.e.

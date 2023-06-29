@@ -128,7 +128,7 @@ TEST_F(MapEntriesTest, outputSizeIsBoundBySelectedRows) {
   // this function to be addressable for all of its elements.
   core::QueryConfig config({});
   auto function = exec::getVectorFunction(
-      config, "map_entries", {MAP(BIGINT(), BIGINT())}, {});
+      "map_entries", {MAP(BIGINT(), BIGINT())}, {}, config);
 
   auto map = makeMapVector<int64_t, int64_t>(
       100,

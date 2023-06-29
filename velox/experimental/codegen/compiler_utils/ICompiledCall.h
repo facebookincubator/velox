@@ -63,7 +63,7 @@ class ICompiledCall : public core::CallTypedExpr {
     };
     core::QueryConfig config({});
     VELOX_CHECK_NOT_NULL(
-        exec::getVectorFunction(config, name_.value(), {}, {}));
+        exec::getVectorFunction(name_.value(), {}, {},config));
     return name_.value();
   }
 

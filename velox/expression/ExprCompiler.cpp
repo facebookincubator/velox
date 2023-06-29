@@ -420,10 +420,10 @@ ExprPtr compileExpression(
       result = specialForm;
     } else if (
         auto func = getVectorFunction(
-            config,
             call->name(),
             inputTypes,
-            getConstantInputs(compiledInputs))) {
+            getConstantInputs(compiledInputs),
+            config)) {
       result = std::make_shared<Expr>(
           resultType,
           std::move(compiledInputs),
@@ -442,7 +442,7 @@ ExprPtr compileExpression(
           resultType,
           folly::join(", ", inputTypes));
       auto func = simpleFunctionEntry->createFunction()->createVectorFunction(
-          config, getConstantInputs(compiledInputs));
+          getConstantInputs(compiledInputs), config);
       result = std::make_shared<Expr>(
           resultType,
           std::move(compiledInputs),

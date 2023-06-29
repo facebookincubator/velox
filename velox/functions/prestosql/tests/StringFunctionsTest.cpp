@@ -1167,7 +1167,7 @@ void StringFunctionsTest::testReplaceInPlace(
                                   VectorPtr& resultPtr) {
     core::QueryConfig config({});
     auto replaceFunction =
-        exec::getVectorFunction(config, "replace", {VARCHAR(), VARCHAR()}, {});
+        exec::getVectorFunction("replace", {VARCHAR(), VARCHAR()}, {}, config);
     SelectivityVector rows(tests.size());
     ExprSet exprSet({}, &execCtx_);
     RowVectorPtr inputRows = makeRowVector({});

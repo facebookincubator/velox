@@ -184,7 +184,7 @@ bool isDeterministic(
       for (const auto& signature : *vectorFunctionSignatures) {
         if (exec::SignatureBinder(*signature, argTypes).tryBind()) {
           if (auto vectorFunction =
-                  exec::getVectorFunction(config, functionName, argTypes, {})) {
+                  exec::getVectorFunction(functionName, argTypes, {}, config)) {
             return vectorFunction->isDeterministic();
           }
         }
