@@ -49,6 +49,10 @@ class FirstLastAggregateBase
   int32_t accumulatorFixedWidthSize() const override {
     return sizeof(TAccumulator);
   }
+  
+  int32_t accumulatorAlignmentSize() const override {
+    return 1;
+  }
 
   void initializeNewGroups(
       char** groups,
@@ -117,6 +121,12 @@ class FirstLastAggregateBase
     }
   }
 };
+
+template <>
+inline int32_t
+FirstLastAggregateBase<true, int128_t>::accumulatorAlignmentSize() const {
+  return static_cast<int32_t>(sizeof(int128_t));
+}
 
 template <bool ignoreNull, typename TData, bool numeric>
 class FirstAggregate : public FirstLastAggregateBase<numeric, TData> {
@@ -278,6 +288,14 @@ exec::AggregateRegistrationResult registerFirstLast(const std::string& name) {
           .returnType("T")
           .build()};
 
+  signatures.push_back(exec::AggregateFunctionSignatureBuilder()
+                           .integerVariable("a_precision")
+                           .integerVariable("a_scale")
+                           .argumentType("DECIMAL(a_precision, a_scale)")
+                           .intermediateType("DECIMAL(a_precision, a_scale)")
+                           .returnType("DECIMAL(a_precision, a_scale)")
+                           .build());
+
   return exec::registerAggregateFunction(
       name,
       std::move(signatures),
@@ -314,6 +332,9 @@ exec::AggregateRegistrationResult registerFirstLast(const std::string& name) {
                 resultType);
           case TypeKind::DATE:
             return std::make_unique<TClass<ignoreNull, Date, true>>(resultType);
+          case TypeKind::HUGEINT:
+            return std::make_unique<TClass<ignoreNull, int128_t, true>>(
+                resultType);
           case TypeKind::VARCHAR:
           case TypeKind::ARRAY:
           case TypeKind::MAP:
