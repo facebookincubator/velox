@@ -21,6 +21,7 @@
 #include "velox/functions/prestosql/JsonFunctions.h"
 #include "velox/functions/prestosql/Rand.h"
 #include "velox/functions/prestosql/StringFunctions.h"
+#include "velox/functions/prestosql/DateTimeImpl.h"
 #include "velox/functions/sparksql/ArraySort.h"
 #include "velox/functions/sparksql/Bitwise.h"
 #include "velox/functions/sparksql/CompareFunctionsNullSafe.h"
@@ -189,6 +190,10 @@ void registerFunctions(const std::string& prefix) {
       {prefix + "make_date"});
 
   registerFunction<LastDayFunction, Date, Date>({prefix + "last_day"});
+
+  registerFunction<DateSubFunction, Date, Date, int32_t>({"date_sub"});
+  registerFunction<DateSubFunction, Date, Date, int16_t>({"date_sub"});
+  registerFunction<DateSubFunction, Date, Date, int8_t>({"date_sub"});
 
   // Register bloom filter function
   registerFunction<BloomFilterMightContainFunction, bool, Varbinary, int64_t>(
