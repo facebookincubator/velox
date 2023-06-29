@@ -119,7 +119,6 @@ DEFINE_bool(
     false,
     "Include custom statistics along with execution statistics");
 DEFINE_bool(include_results, false, "Include results in the output");
-DEFINE_bool(use_native_parquet_reader, true, "Use Native Parquet Reader");
 DEFINE_int32(num_drivers, 4, "Number of drivers");
 DEFINE_string(data_format, "parquet", "Data format");
 DEFINE_int32(num_splits_per_file, 10, "Number of splits per file");
@@ -242,11 +241,7 @@ class TpchBenchmark {
     aggregate::prestosql::registerAllAggregateFunctions();
     parse::registerTypeResolver();
     filesystems::registerLocalFileSystem();
-    if (FLAGS_use_native_parquet_reader) {
-      parquet::registerParquetReaderFactory(parquet::ParquetReaderType::NATIVE);
-    } else {
-      parquet::registerParquetReaderFactory(parquet::ParquetReaderType::DUCKDB);
-    }
+    parquet::registerParquetReaderFactory();
     dwrf::registerDwrfReaderFactory();
     ioExecutor_ =
         std::make_unique<folly::IOThreadPoolExecutor>(FLAGS_num_io_threads);

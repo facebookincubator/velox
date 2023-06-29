@@ -23,7 +23,6 @@
 #endif
 
 #include "velox/external/duckdb/duckdb-fastpforlib.hpp"
-#include "velox/external/duckdb/parquet-amalgamation.hpp"
 #include "velox/vector/TypeAliases.h"
 
 #include <arrow/util/rle_encoding.h> // @manual
@@ -133,16 +132,6 @@ void arrowBitUnpack(uint8_t bitWidth, T* result) {
   bitReader.GetBatch<T>(bitWidth, result, kNumValues);
 }
 
-template <typename T>
-void duckdbBitUnpack(uint8_t bitWidth, T* result) {
-  duckdb::ByteBuffer duckInputBuffer(
-      reinterpret_cast<char*>(bitPackedData[bitWidth].data()),
-      BYTES(kNumValues, bitWidth));
-  uint8_t bitpack_pos = 0;
-  duckdb::ParquetDecodeUtils::BitUnpack<T>(
-      duckInputBuffer, bitpack_pos, result, kNumValues, bitWidth);
-}
-
 #define BENCHMARK_UNPACK_FULLROWS_CASE_8(width)                  \
   BENCHMARK(velox_unpack_fullrows_##width##_8) {                 \
     veloxBitUnpack<uint8_t>(width, result8.data());              \
@@ -158,9 +147,6 @@ void duckdbBitUnpack(uint8_t bitWidth, T* result) {
   }                                                              \
   BENCHMARK_RELATIVE(arrow_unpack_fullrows_##width##_8) {        \
     arrowBitUnpack<uint8_t>(width, result8.data());              \
-  }                                                              \
-  BENCHMARK_RELATIVE(duckdb_unpack_fullrows_##width##_8) {       \
-    duckdbBitUnpack<uint8_t>(width, result8.data());             \
   }                                                              \
   BENCHMARK_DRAW_LINE();
 
@@ -179,9 +165,6 @@ void duckdbBitUnpack(uint8_t bitWidth, T* result) {
   }                                                               \
   BENCHMARK_RELATIVE(arrow_unpack_fullrows_##width##_16) {        \
     arrowBitUnpack<uint16_t>(width, result16.data());             \
-  }                                                               \
-  BENCHMARK_RELATIVE(duckdb_unpack_fullrows_##width##_16) {       \
-    duckdbBitUnpack<uint16_t>(width, result16.data());            \
   }                                                               \
   BENCHMARK_DRAW_LINE();
 
@@ -203,9 +186,6 @@ void duckdbBitUnpack(uint8_t bitWidth, T* result) {
   }                                                               \
   BENCHMARK_RELATIVE(arrow_unpack_fullrows_##width##_32) {        \
     arrowBitUnpack<uint32_t>(width, result32.data());             \
-  }                                                               \
-  BENCHMARK_RELATIVE(duckdb_unpack_fullrows_##width##_32) {       \
-    duckdbBitUnpack<uint32_t>(width, result32.data());            \
   }                                                               \
   BENCHMARK_DRAW_LINE();
 
