@@ -288,7 +288,6 @@ TEST_F(ArithmeticTest, sinh) {
   };
 
   EXPECT_EQ(sinh(0), 0);
-
   EXPECT_EQ(sinh(kInf), kInf);
   EXPECT_EQ(sinh(-kInf), -kInf);
   EXPECT_EQ(sinh(std::nullopt), std::nullopt);
