@@ -47,17 +47,6 @@ void applyCastKernel(
     vector_size_t row,
     const SimpleVector<typename TypeTraits<FromKind>::NativeType>* input,
     FlatVector<typename TypeTraits<ToKind>::NativeType>* result) {
-  if (input->type()->isDecimal()) {
-    // Special handling for decimal types.
-    auto [precision, scale] = getDecimalPrecisionScale(*input->type());
-    if constexpr (ToKind == TypeKind::DOUBLE) {
-      auto output =
-          util::Converter<CppToType<double>::typeKind, void, Truncate>::cast(
-              input->valueAt(row));
-      result->set(row, output / (double)DecimalUtil::kPowersOfTen[scale]);
-    }
-    return;
-  }
   auto output =
       util::Converter<ToKind, void, Truncate>::cast(input->valueAt(row));
 
@@ -89,7 +78,7 @@ void applyDecimalCastKernel(
     exec::EvalCtx& context,
     const TypePtr& fromType,
     const TypePtr& toType,
-    VectorPtr castResult) {
+    VectorPtr& castResult) {
   auto sourceVector = input.as<SimpleVector<TInput>>();
   auto castResultRawBuffer =
       castResult->asUnchecked<FlatVector<TOutput>>()->mutableRawValues();
@@ -116,7 +105,7 @@ void applyIntToDecimalCastKernel(
     const BaseVector& input,
     exec::EvalCtx& context,
     const TypePtr& toType,
-    VectorPtr castResult) {
+    VectorPtr& castResult) {
   auto sourceVector = input.as<SimpleVector<TInput>>();
   auto castResultRawBuffer =
       castResult->asUnchecked<FlatVector<TOutput>>()->mutableRawValues();
@@ -132,6 +121,29 @@ void applyIntToDecimalCastKernel(
       castResult->setNull(row, true);
     }
   });
+}
+
+template <typename TInput>
+VectorPtr applyDecimalToDoubleCast(
+    const SelectivityVector& rows,
+    const BaseVector& input,
+    exec::EvalCtx& context,
+    const TypePtr& fromType) {
+  VectorPtr result;
+  context.ensureWritable(rows, DOUBLE(), result);
+  (*result).clearNulls(rows);
+  auto sourceVector = input.as<SimpleVector<TInput>>();
+  auto resultBuffer =
+      result->asUnchecked<FlatVector<double>>()->mutableRawValues();
+  auto toPrecisionScale = getDecimalPrecisionScale(*fromType);
+  context.applyToSelectedNoThrow(rows, [&](int row) {
+    auto output =
+        util::Converter<CppToType<double>::typeKind, void, false>::cast(
+            input.as<SimpleVector<TInput>>()->valueAt(row));
+    resultBuffer[row] =
+        output / (double)DecimalUtil::kPowersOfTen[toPrecisionScale.second];
+  });
+  return result;
 }
 
 template <TypeKind ToKind, TypeKind FromKind>
@@ -463,6 +475,7 @@ VectorPtr CastExpr::applyDecimal(
   VectorPtr castResult;
   context.ensureWritable(rows, toType, castResult);
   (*castResult).clearNulls(rows);
+
   // toType is a decimal
   switch (fromType->kind()) {
     case TypeKind::TINYINT:
@@ -526,6 +539,14 @@ void CastExpr::applyPeeled(
     result = applyDecimal<int64_t>(rows, input, context, fromType, toType);
   } else if (toType->isLongDecimal()) {
     result = applyDecimal<int128_t>(rows, input, context, fromType, toType);
+  } else if (fromType->isDecimal() && toType->isDouble()) {
+    if (fromType->isShortDecimal()) {
+      result =
+          applyDecimalToDoubleCast<int64_t>(rows, input, context, fromType);
+    } else if (fromType->isLongDecimal()) {
+      result =
+          applyDecimalToDoubleCast<int128_t>(rows, input, context, fromType);
+    }
   } else {
     switch (toType->kind()) {
       case TypeKind::MAP:
