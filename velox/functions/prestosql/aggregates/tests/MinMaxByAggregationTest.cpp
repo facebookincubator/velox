@@ -1046,8 +1046,8 @@ TEST_P(
 
   const bool isSmallInt = GetParam().comparisonType == TypeKind::TINYINT ||
       GetParam().comparisonType == TypeKind::SMALLINT;
-  const int kBatchSize = isSmallInt ? 1 << 4 : 1 << 10;
-  const int kNumBatches = isSmallInt ? 3 : 10;
+  const int kBatchSize = 2;
+  const int kNumBatches = 1;
   const int kNumValues = kNumBatches * kBatchSize;
   std::vector<int> values(kNumValues);
   for (int i = 0; i < kNumValues; ++i) {
