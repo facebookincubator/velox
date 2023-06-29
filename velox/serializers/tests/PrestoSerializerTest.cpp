@@ -49,7 +49,8 @@ class PrestoSerializerTest : public ::testing::Test {
   void serialize(
       const RowVectorPtr& rowVector,
       std::ostream* output,
-      const VectorSerde::Options* serdeOptions) {
+      const VectorSerde::Options* serdeOptions,
+      bool testSerializedSize = true) {
     auto numRows = rowVector->size();
 
     std::vector<IndexRange> rows(numRows);
@@ -66,9 +67,45 @@ class PrestoSerializerTest : public ::testing::Test {
         serde_->createSerializer(rowType, numRows, arena.get(), serdeOptions);
 
     serializer->append(rowVector, folly::Range(rows.data(), numRows));
+    vector_size_t size = serializer->maxSerializedSize();
     facebook::velox::serializer::presto::PrestoOutputStreamListener listener;
     OStreamOutputStream out(output, &listener);
     serializer->flush(&out);
+    if (testSerializedSize) {
+      ASSERT_EQ(size, out.tellp());
+    }
+  }
+
+  void serialize(
+      const std::vector<RowVectorPtr>& rowVector,
+      std::ostream* output,
+      const VectorSerde::Options* serdeOptions,
+      bool testSerializedSize = true) {
+    auto numRows = rowVector[0]->size();
+
+    std::vector<IndexRange> rows(numRows);
+    for (int i = 0; i < numRows; i++) {
+      rows[i] = IndexRange{i, 1};
+    }
+
+    sanityCheckEstimateSerializedSize(
+        rowVector[0], folly::Range(rows.data(), numRows));
+
+    auto arena = std::make_unique<StreamArena>(pool_.get());
+    auto rowType = asRowType(rowVector[0]->type());
+    auto serializer =
+        serde_->createSerializer(rowType, numRows, arena.get(), serdeOptions);
+
+    for (auto& vector : rowVector) {
+      serializer->append(vector, folly::Range(rows.data(), numRows));
+    }
+    vector_size_t size = serializer->maxSerializedSize();
+    facebook::velox::serializer::presto::PrestoOutputStreamListener listener;
+    OStreamOutputStream out(output, &listener);
+    serializer->flush(&out);
+    if (testSerializedSize) {
+      ASSERT_EQ(size, out.tellp());
+    }
   }
 
   void serializeRle(
@@ -126,6 +163,24 @@ class PrestoSerializerTest : public ::testing::Test {
     assertEqualVectors(deserialized, rowVector);
   }
 
+  void testRoundTripMulti(
+      std::vector<VectorPtr> vectors,
+      const VectorSerde::Options* serdeOptions = nullptr) {
+    std::vector<RowVectorPtr> rowVectors;
+    for (auto& vector : vectors) {
+      // std::cout << "vector to ser" << vector->toString(0, 10) << std::endl;
+      auto rowVector = vectorMaker_->rowVector({vector});
+      rowVectors.emplace_back(rowVector);
+    }
+    std::ostringstream out;
+    serialize(rowVectors, &out, serdeOptions);
+
+    auto rowType = asRowType(rowVectors[0]->type());
+    auto deserialized = deserialize(rowType, out.str(), serdeOptions);
+    // std::cout << "dese" << deserialized->toString(0, 10) << std::endl;
+    // assertEqualVectors(deserialized, rowVector);
+  }
+
   void testRleRoundTrip(const VectorPtr& constantVector) {
     auto rowVector = vectorMaker_->rowVector({constantVector});
     std::ostringstream out;
@@ -146,6 +201,12 @@ TEST_F(PrestoSerializerTest, basic) {
   vector_size_t numRows = 1'000;
   auto rowVector = makeTestVector(numRows);
   testRoundTrip(rowVector);
+}
+
+TEST_F(PrestoSerializerTest, appendMulti) {
+  vector_size_t numRows = 2;
+  auto rowVector = makeTestVector(numRows);
+  testRoundTripMulti({rowVector, rowVector});
 }
 
 /// Test serialization of a dictionary vector that adds nulls to the base
@@ -264,11 +325,11 @@ TEST_F(PrestoSerializerTest, multiPage) {
 
   // page 2
   auto b = makeTestVector(538);
-  serialize(b, &out, nullptr);
+  serialize(b, &out, nullptr, false);
 
   // page 3
   auto c = makeTestVector(2'048);
-  serialize(c, &out, nullptr);
+  serialize(c, &out, nullptr, false);
 
   auto bytes = out.str();
 

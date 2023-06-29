@@ -827,6 +827,84 @@ class VectorStream {
     return children_[index].get();
   }
 
+  // similiar as flush
+  vector_size_t maxSerializedSize() {
+    vector_size_t size = 0;
+    size += header_.size;
+    switch (type_->kind()) {
+      case TypeKind::ROW:
+        if (isTimestampWithTimeZoneType(type_)) {
+          size += sizeof(int32_t);
+          size += nullsSize();
+          size += values_.size();
+          return size;
+        }
+        size += sizeof(int32_t);
+
+        for (auto& child : children_) {
+          size += child->maxSerializedSize();
+        }
+        size += sizeof(int32_t);
+        if (nullCount_ + nonNullCount_ == 0) {
+          size += sizeof(int32_t);
+          // If nothing was added, there is still one offset in the wire format.
+        }
+        size += lengths_.size();
+        size += nullsSize();
+        return size;
+
+      case TypeKind::ARRAY:
+        size += children_[0]->maxSerializedSize();
+        size += sizeof(int32_t);
+        if (nullCount_ + nonNullCount_ == 0) {
+          // If nothing was added, there is still one offset in the wire format.
+          size += sizeof(int32_t);
+        }
+        size += lengths_.size();
+        size += nullsSize();
+        return size;
+
+      case TypeKind::MAP: {
+        size += children_[0]->maxSerializedSize();
+        size += children_[1]->maxSerializedSize();
+        // hash table size. -1 means not included in serialization.
+        size += sizeof(int32_t);
+        size += sizeof(int32_t);
+        if (nullCount_ + nonNullCount_ == 0) {
+          size += sizeof(int32_t);
+          // If nothing was added, there is still one offset in the wire format.
+        }
+        size += lengths_.size();
+        size += nullsSize();
+        return size;
+      }
+
+      case TypeKind::VARCHAR:
+      case TypeKind::VARBINARY:
+        size += sizeof(int32_t);
+        size += lengths_.size();
+        size += nullsSize();
+        size += sizeof(int32_t);
+        size += values_.size();
+        return size;
+
+      default:
+        size += sizeof(int32_t);
+        size += nullsSize();
+        size += values_.size();
+    }
+    return size;
+  }
+
+  size_t nullsSize() {
+    size_t size = 0;
+    size += 1;
+    if (nullCount_) {
+      size += nulls_.flushSize();
+    }
+    return size;
+  }
+
   // Writes out the accumulated contents. Does not change the state.
   void flush(OutputStream* out) {
     out->write(reinterpret_cast<char*>(header_.buffer), header_.size);
@@ -1604,6 +1682,15 @@ class PrestoVectorSerializer : public VectorSerializer {
     }
   }
 
+  vector_size_t maxSerializedSize() override {
+    vector_size_t size = 0;
+    for (auto& stream : streams_) {
+      size += stream->maxSerializedSize();
+    }
+    size += 25; /* flush header layout size */
+    return size;
+  }
+
   void flush(OutputStream* out) override {
     flushInternal(numRows_, false /*rle*/, out);
   }
@@ -1662,9 +1749,12 @@ class PrestoVectorSerializer : public VectorSerializer {
       writeInt32(out, numRows);
     }
 
+    // std::cout << "before stream " << out->tellp() << std::endl;
+
     for (auto& stream : streams_) {
       stream->flush(out);
     }
+    // std::cout << "after stream " << out->tellp() << std::endl;
 
     // Pause CRC computation
     if (listener) {
