@@ -135,13 +135,13 @@ VectorPtr applyDecimalToDoubleCast(
   auto sourceVector = input.as<SimpleVector<TInput>>();
   auto resultBuffer =
       result->asUnchecked<FlatVector<double>>()->mutableRawValues();
-  auto toPrecisionScale = getDecimalPrecisionScale(*fromType);
+  auto [precision, scale] = getDecimalPrecisionScale(*fromType);
+  const auto simpleInput = input.as<SimpleVector<TInput>>();
+  const auto kDenominator = (double)DecimalUtil::kPowersOfTen[scale];
   context.applyToSelectedNoThrow(rows, [&](int row) {
-    auto output =
-        util::Converter<CppToType<double>::typeKind, void, false>::cast(
-            input.as<SimpleVector<TInput>>()->valueAt(row));
-    resultBuffer[row] =
-        output / (double)DecimalUtil::kPowersOfTen[toPrecisionScale.second];
+    auto output = util::Converter<TypeKind::DOUBLE, void, false>::cast(
+        simpleInput->valueAt(row));
+    resultBuffer[row] = output / kDenominator;
   });
   return result;
 }
