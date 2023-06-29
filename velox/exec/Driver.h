@@ -331,7 +331,7 @@ class Driver : public std::enable_shared_from_this<Driver> {
   template <typename F>
   std::unique_ptr<DeltaCpuWallTimer<F>> createDeltaCpuWallTimer(F&& func) {
     return trackOperatorCpuUsage_
-        ? std::make_unique<DeltaCpuWallTimer<F>>(std::move(func))
+        ? std::make_unique<DeltaCpuWallTimer<F>>(std::forward<F>(func))
         : nullptr;
   }
 

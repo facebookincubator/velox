@@ -1041,7 +1041,7 @@ std::vector<StringView> toStringViews(const std::vector<std::string>& values) {
   std::vector<StringView> views;
   views.reserve(values.size());
   for (const auto& value : values) {
-    views.emplace_back(StringView(value));
+    views.emplace_back(value);
   }
   return views;
 }
