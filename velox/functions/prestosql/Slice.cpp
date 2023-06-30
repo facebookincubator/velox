@@ -77,9 +77,7 @@ class SliceFunction : public exec::VectorFunction {
       BaseVector::flattenVector(args[0], args[0]->size());
     }
 
-    VectorPtr localResult =
-        applyArray<int64_t>(rows, args, context, outputType);
-    context.moveOrCopyResult(localResult, rows, result);
+    result = std::move(applyArray<int64_t>(rows, args, context, outputType));
   }
 
  private:
@@ -92,11 +90,6 @@ class SliceFunction : public exec::VectorFunction {
       exec::EvalCtx& context,
       const TypePtr& outputType) const {
     auto pool = context.pool();
-    BufferPtr offsets = allocateOffsets(rows.end(), pool);
-    auto rawOffsets = offsets->asMutable<vector_size_t>();
-    BufferPtr sizes = allocateSizes(rows.end(), pool);
-    auto rawSizes = sizes->asMutable<vector_size_t>();
-
     exec::DecodedArgs decodedArgs(rows, args, context);
     auto decodedArray = decodedArgs.at(0);
     auto baseArray = decodedArray->base()->as<ArrayVector>();
@@ -104,9 +97,13 @@ class SliceFunction : public exec::VectorFunction {
     auto baseRawSizes = baseArray->rawSizes();
     auto baseRawOffsets = baseArray->rawOffsets();
 
+    BufferPtr offsets = allocateOffsets(baseArray->size(), pool);
+    auto rawOffsets = offsets->asMutable<vector_size_t>();
+    BufferPtr sizes = allocateSizes(baseArray->size(), pool);
+    auto rawSizes = sizes->asMutable<vector_size_t>();
+
     auto decodedStart = decodedArgs.at(1);
     auto decodedLength = decodedArgs.at(2);
-
     const auto fillResultVectorFunc = [&](vector_size_t row,
                                           vector_size_t adjustedStart) {
       auto arraySize = baseRawSizes[arrayIndices[row]];
@@ -147,8 +144,8 @@ class SliceFunction : public exec::VectorFunction {
     return std::make_shared<ArrayVector>(
         pool,
         outputType,
-        nullptr,
-        rows.end(),
+        baseArray->nulls(),
+        baseArray->size(),
         offsets,
         sizes,
         baseArray->elements());
