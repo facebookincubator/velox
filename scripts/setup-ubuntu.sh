@@ -29,10 +29,7 @@ DEPENDENCY_DIR=${DEPENDENCY_DIR:-$(pwd)}
 export CMAKE_BUILD_TYPE=Release
 
 # Install all velox and folly dependencies. 
-# The is an issue on 22.04 where a version conflict prevents glog install,
-# installing libunwind first fixes this.
-sudo --preserve-env apt update && \
-  sudo --preserve-env apt install -y \
+sudo --preserve-env apt update && sudo apt install -y \
   g++ \
   cmake \
   ccache \
@@ -90,7 +87,7 @@ function install_fmt {
 
 function install_folly {
   github_checkout facebook/folly "${FB_OS_VERSION}"
-  cmake_install -DBUILD_TESTS=OFF
+  cmake_install -DBUILD_TESTS=OFF -DFOLLY_HAVE_INT128_T=ON
 }
 
 function install_fizz {

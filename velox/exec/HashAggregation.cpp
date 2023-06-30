@@ -39,6 +39,9 @@ HashAggregation::HashAggregation(
       isPartialOutput_(isPartialOutput(aggregationNode->step())),
       isDistinct_(aggregationNode->aggregates().empty()),
       isGlobal_(aggregationNode->groupingKeys().empty()),
+      isIntermediate_(
+          aggregationNode->step() ==
+          core::AggregationNode::Step::kIntermediate),
       maxExtendedPartialAggregationMemoryUsage_(
           driverCtx->queryConfig().maxExtendedPartialAggregationMemoryUsage()),
       maxPartialAggregationMemoryUsage_(
@@ -179,6 +182,7 @@ void HashAggregation::addInput(RowVectorPtr input) {
   }
   groupingSet_->addInput(input, mayPushdown_);
   numInputRows_ += input->size();
+  numInputVectors_ += 1;
   {
     const auto hashTableStats = groupingSet_->hashTableStats();
     auto lockedStats = stats_.wlock();
@@ -195,14 +199,19 @@ void HashAggregation::addInput(RowVectorPtr input) {
   // NOTE: we should not trigger partial output flush in case of global
   // aggregation as the final aggregator will handle it the same way as the
   // partial aggregator. Hence, we have to use more memory anyway.
-  const bool abandonPartialEarly = isPartialOutput_ && !isGlobal_ &&
-      abandonPartialAggregationEarly(groupingSet_->numDistinct());
-  if (isPartialOutput_ && !isGlobal_ &&
-      (abandonPartialEarly ||
-       groupingSet_->isPartialFull(maxPartialAggregationMemoryUsage_))) {
-    partialFull_ = true;
+  if (isPartialOutput_ && !isGlobal_ && !isIntermediate_) {
+    if (groupingSet_->isPartialFull(maxPartialAggregationMemoryUsage_)) {
+      partialFull_ = true;
+    }
+    uint64_t kDefaultFlushMemory = 1L << 24;
+    if (groupingSet_->allocatedBytes() > kDefaultFlushMemory &&
+        abandonPartialAggregationEarly(groupingSet_->numDistinct())) {
+      partialFull_ = true;
+    }
   }
 
+  const bool abandonPartialEarly = isPartialOutput_ && !isGlobal_ &&
+      abandonPartialAggregationEarly(groupingSet_->numDistinct());
   if (isDistinct_) {
     newDistincts_ = !groupingSet_->hashLookup().newGroups.empty();
 
@@ -260,6 +269,7 @@ void HashAggregation::resetPartialOutputIfNeed() {
   }
   numOutputRows_ = 0;
   numInputRows_ = 0;
+  numInputVectors_ = 0;
 }
 
 void HashAggregation::maybeIncreasePartialAggregationMemoryUsage(

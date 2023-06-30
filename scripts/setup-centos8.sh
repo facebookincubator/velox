@@ -83,7 +83,7 @@ FB_OS_VERSION=v2022.11.14.00
 function install_folly {
   cd "${DEPENDENCY_DIR}"
   github_checkout facebook/folly "${FB_OS_VERSION}"
-  cmake_install -DBUILD_TESTS=OFF
+  cmake_install -DBUILD_TESTS=OFF -DFOLLY_HAVE_INT128_T=ON
 }
 
 function install_libhdfs3 {

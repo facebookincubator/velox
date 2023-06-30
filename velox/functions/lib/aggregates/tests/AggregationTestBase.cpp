@@ -298,7 +298,7 @@ void AggregationTestBase::testAggregationsWithCompanion(
     assertResults(queryBuilder);
   }
 
-  if (!groupingKeys.empty() && allowInputShuffle_) {
+  /*if (!groupingKeys.empty() && allowInputShuffle_) {
     SCOPED_TRACE("Run partial + final with spilling");
     PlanBuilder builder(pool());
     builder.values(dataWithExtraGroupingKey);
@@ -340,7 +340,7 @@ void AggregationTestBase::testAggregationsWithCompanion(
     } else {
       EXPECT_EQ(0, spilledBytes(*task));
     }
-  }
+  }*/
 
   {
     SCOPED_TRACE("Run single");

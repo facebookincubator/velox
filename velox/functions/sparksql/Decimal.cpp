@@ -20,25 +20,6 @@
 
 namespace facebook::velox::functions::sparksql {
 namespace {
-class UnscaledValueFunction final : public exec::VectorFunction {
-  void apply(
-      const SelectivityVector& rows,
-      std::vector<VectorPtr>& args, // Not using const ref so we can reuse args
-      const TypePtr& outputType,
-      exec::EvalCtx& context,
-      VectorPtr& resultRef) const final {
-    auto inputType = args[0]->type();
-    VELOX_CHECK(inputType->isShortDecimal(), "ShortDecimal type is required.");
-
-    exec::DecodedArgs decodedArgs(rows, args, context);
-    auto decimalVector = decodedArgs.at(0);
-    context.ensureWritable(rows, BIGINT(), resultRef);
-    auto result =
-        resultRef->asUnchecked<FlatVector<int64_t>>()->mutableRawValues();
-    rows.applyToSelected(
-        [&](int row) { result[row] = decimalVector->valueAt<int64_t>(row); });
-  }
-};
 
 class CheckOverflowFunction final : public exec::VectorFunction {
   void apply(
