@@ -37,9 +37,8 @@
 #include "velox/vector/tests/TestingAlwaysThrowsFunction.h"
 #include "velox/vector/tests/utils/VectorTestBase.h"
 
-using namespace facebook::velox;
-using namespace facebook::velox::test;
-
+namespace facebook::velox::test {
+namespace {
 class ExprTest : public testing::Test, public VectorTestBase {
  protected:
   void SetUp() override {
@@ -1749,7 +1748,7 @@ TEST_F(ExprTest, ifWithConstant) {
 namespace {
 // Testing functions for generating intermediate results in different
 // encodings. The test case passes vectors to these and these
-// functions make constant/dictionary/sequence vectors from their arguments
+// functions make constant/dictionary vectors from their arguments
 
 // Returns the first value of the argument vector wrapped as a constant.
 class TestingConstantFunction : public exec::VectorFunction {
@@ -1809,37 +1808,6 @@ class TestingDictionaryFunction : public exec::VectorFunction {
   }
 };
 
-// Takes a vector  of values and a vector of integer run lengths.
-// Wraps the values in a SequenceVector with the run lengths.
-
-class TestingSequenceFunction : public exec::VectorFunction {
- public:
-  bool isDefaultNullBehavior() const override {
-    return false;
-  }
-
-  void apply(
-      const SelectivityVector& rows,
-      std::vector<VectorPtr>& args,
-      const TypePtr& /* outputType */,
-      exec::EvalCtx& context,
-      VectorPtr& result) const override {
-    VELOX_CHECK(rows.isAllSelected());
-    auto lengths = args[1]->as<FlatVector<int32_t>>()->values();
-    result = BaseVector::wrapInSequence(lengths, rows.size(), args[0]);
-  }
-
-  static std::vector<std::shared_ptr<exec::FunctionSignature>> signatures() {
-    // T, integer -> T
-    return {exec::FunctionSignatureBuilder()
-                .typeVariable("T")
-                .returnType("T")
-                .argumentType("T")
-                .argumentType("integer")
-                .build()};
-  }
-};
-
 // Single-argument deterministic functions always receive their argument
 // vector as flat or constant.
 class TestingSingleArgDeterministicFunction : public exec::VectorFunction {
@@ -1878,11 +1846,6 @@ VELOX_DECLARE_VECTOR_FUNCTION(
     std::make_unique<TestingDictionaryFunction>());
 
 VELOX_DECLARE_VECTOR_FUNCTION(
-    udf_testing_sequence,
-    TestingSequenceFunction::signatures(),
-    std::make_unique<TestingSequenceFunction>());
-
-VELOX_DECLARE_VECTOR_FUNCTION(
     udf_testing_single_arg_deterministic,
     TestingSingleArgDeterministicFunction::signatures(),
     std::make_unique<TestingSingleArgDeterministicFunction>());
@@ -1892,7 +1855,6 @@ TEST_F(ExprTest, peelArgs) {
   constexpr int32_t kDistinct = 10;
   VELOX_REGISTER_VECTOR_FUNCTION(udf_testing_constant, "testing_constant");
   VELOX_REGISTER_VECTOR_FUNCTION(udf_testing_dictionary, "testing_dictionary");
-  VELOX_REGISTER_VECTOR_FUNCTION(udf_testing_sequence, "testing_sequence");
   VELOX_REGISTER_VECTOR_FUNCTION(
       udf_testing_single_arg_deterministic, "testing_single_arg_deterministic");
 
@@ -1927,16 +1889,6 @@ TEST_F(ExprTest, peelArgs) {
   expected32 = makeFlatVector<int32_t>(kSize, [&](int32_t row) {
     return 1 + distinctSource[indicesSource[row]];
   });
-  assertEqualVectors(expected32, result);
-
-  auto lengths = makeFlatVector<int32_t>(lengthSource);
-  result = evaluate(
-      "testing_constant(c0) + testing_sequence(c1, c2)",
-      makeRowVector({allOnes, distincts, lengths}));
-  expected32 = makeFlatVector<int32_t>(kSize, [&](int32_t row) {
-    return 1 + distinctSource[row / (kSize / kDistinct)];
-  });
-
   assertEqualVectors(expected32, result);
 
   // dictionary and single-argument deterministic
@@ -3487,6 +3439,24 @@ TEST_F(ExprTest, conjunctUnderTry) {
   auto expected =
       BaseVector::createNullConstant(ARRAY(BOOLEAN()), input->size(), pool());
   assertEqualVectors(expected, result);
+
+  // Test conjunct in switch in coalesce where there are errors came from
+  // coalesce at rows 50--99 while conjunct is evlauated on rows 31--49.
+  // Conjunct should not clear the errors from coalesce.
+  input = makeRowVector({
+      makeFlatVector<int64_t>(
+          100, [](auto row) { return row; }, [](auto row) { return row < 50; }),
+      makeFlatVector<bool>(100, [](auto row) { return row > 30; }),
+      makeFlatVector<bool>(100, [](auto row) { return row > 20; }),
+      makeConstant<int64_t>(0, 100),
+  });
+
+  result = evaluate("try(coalesce(c0 / c3 > 0, switch(c1, c1 or c2)))", input);
+  expected = makeFlatVector<bool>(
+      100,
+      [](auto /*row*/) { return true; },
+      [](auto row) { return row >= 50 || row <= 30; });
+  assertEqualVectors(expected, result);
 }
 
 TEST_F(ExprTest, flatNoNullsFastPathWithCse) {
@@ -4012,3 +3982,15 @@ TEST_F(ExprTest, dereference) {
   auto expected = makeNullConstant(TypeKind::BIGINT, 6);
   assertEqualVectors(expected, result);
 }
+
+TEST_F(ExprTest, inputFreeFieldReferenceMetaData) {
+  auto exprSet = compileExpression("c0", {ROW({"c0"}, {INTEGER()})});
+  auto expr = exprSet->expr(0);
+  EXPECT_EQ(expr->distinctFields().size(), 1);
+  EXPECT_EQ((void*)expr->distinctFields()[0], expr.get());
+
+  EXPECT_TRUE(expr->propagatesNulls());
+  EXPECT_TRUE(expr->isDeterministic());
+}
+} // namespace
+} // namespace facebook::velox::test

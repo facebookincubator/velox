@@ -232,7 +232,10 @@ class Expr {
     evalSpecialForm(rows, context, result);
   }
 
-  virtual void computeMetadata();
+  // Compute the following properties: deterministic_, propagatesNulls_,
+  // distinctFields_, multiplyReferencedFields_, hasConditionals_ and
+  // sameAsParentDistinctFields_.
+  void computeMetadata();
 
   virtual void reset() {
     sharedSubexprResults_.clear();
@@ -367,6 +370,23 @@ class Expr {
       const SelectivityVector& rows,
       EvalCtx& context,
       VectorPtr& result) const;
+
+  void clearMetaData();
+
+  // No need to peel encoding or remove sure nulls for default null propagating
+  // expressions when the expression has single parent(the expression that
+  // reference it) and have the same distinct fields as its parent.
+  // The reason is because such optimizations would be redundant in that case,
+  // since they would have been performed identically on the parent.
+  bool skipFieldDependentOptimizations() const {
+    if (!isMultiplyReferenced_ && sameAsParentDistinctFields_) {
+      return true;
+    }
+    if (distinctFields_.empty()) {
+      return true;
+    }
+    return false;
+  }
 
  private:
   struct PeelEncodingsResult {
@@ -586,6 +606,14 @@ class Expr {
 
   /// Runtime statistics. CPU time, wall time and number of processed rows.
   ExprStats stats_;
+
+  // If true computeMetaData returns, otherwise meta data is computed and the
+  // flag is set to true.
+  bool metaDataComputed_ = false;
+
+  // True if distinctFields_ are identical to at least one of the parent
+  // expression's distinct fields.
+  bool sameAsParentDistinctFields_ = false;
 };
 
 /// Generate a selectivity vector of a single row.

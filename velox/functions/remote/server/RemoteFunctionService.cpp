@@ -16,6 +16,8 @@
 
 #include "velox/functions/remote/server/RemoteFunctionService.h"
 #include "velox/expression/Expr.h"
+#include "velox/functions/remote/if/GetSerde.h"
+#include "velox/type/fbhive/HiveTypeParser.h"
 #include "velox/vector/VectorStream.h"
 
 namespace facebook::velox::functions {
@@ -27,6 +29,11 @@ std::string getFunctionName(
   return fmt::format("{}.{}", prefix, functionName);
 }
 
+TypePtr deserializeType(const std::string& input) {
+  // Use hive type parser/serializer.
+  return type::fbhive::HiveTypeParser().parse(input);
+}
+
 RowTypePtr deserializeArgTypes(const std::vector<std::string>& argTypes) {
   const size_t argCount = argTypes.size();
 
@@ -36,7 +43,7 @@ RowTypePtr deserializeArgTypes(const std::vector<std::string>& argTypes) {
   typeNames.reserve(argCount);
 
   for (size_t i = 0; i < argCount; ++i) {
-    argumentTypes.emplace_back(Type::create(folly::parseJson(argTypes[i])));
+    argumentTypes.emplace_back(deserializeType(argTypes[i]));
     typeNames.emplace_back(fmt::format("c{}", i));
   }
   return ROW(std::move(typeNames), std::move(argumentTypes));
@@ -70,11 +77,13 @@ void RemoteFunctionServiceHandler::invokeFunction(
 
   // Deserialize types and data.
   auto inputType = deserializeArgTypes(functionHandle.get_argumentTypes());
-  auto outputType =
-      Type::create(folly::parseJson(functionHandle.get_returnType()));
+  auto outputType = deserializeType(functionHandle.get_returnType());
 
-  auto inputVector =
-      IOBufToRowVector(request->get_inputs().get_payload(), inputType, *pool_);
+  auto serdeFormat = request->get_inputs().get_pageFormat();
+  auto serde = getSerde(serdeFormat);
+
+  auto inputVector = IOBufToRowVector(
+      request->get_inputs().get_payload(), inputType, *pool_, serde.get());
 
   // Execute the expression.
   const vector_size_t numRows = inputVector->size();
@@ -100,8 +109,9 @@ void RemoteFunctionServiceHandler::invokeFunction(
 
   auto result = response.result_ref();
   result->rowCount_ref() = outputRowVector->size();
-  result->pageFormat_ref() = remote::PageFormat::PRESTO_PAGE;
-  result->payload_ref() = rowVectorToIOBuf(outputRowVector, rows.end(), *pool_);
+  result->pageFormat_ref() = serdeFormat;
+  result->payload_ref() =
+      rowVectorToIOBuf(outputRowVector, rows.end(), *pool_, serde.get());
 }
 
 } // namespace facebook::velox::functions

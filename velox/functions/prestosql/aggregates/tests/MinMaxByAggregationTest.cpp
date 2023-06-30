@@ -129,6 +129,26 @@ std::vector<TestParam> getTestParams() {
     }                                                           \
   } while (0);
 
+template <typename T>
+struct ExtremeValueTrait : public std::numeric_limits<T> {};
+
+template <>
+struct ExtremeValueTrait<Date> {
+  static constexpr Date lowest() {
+    return Date(std::numeric_limits<int32_t>::lowest());
+  }
+
+  static constexpr Date max() {
+    return Date(std::numeric_limits<int32_t>::max());
+  }
+};
+
+template <typename T>
+const T kMax = ExtremeValueTrait<T>::max();
+
+template <typename T>
+const T kLowest = ExtremeValueTrait<T>::lowest();
+
 class MinMaxByAggregationTestBase : public AggregationTestBase {
  protected:
   MinMaxByAggregationTestBase() : numValues_(6) {}
@@ -384,6 +404,17 @@ class MinMaxByGlobalByAggregationTest
               makeConstant(std::optional<U>(dataAt<U>(0)), 10)}),
          "SELECT NULL"},
 
+        // Extreme value cases.
+        {makeRowVector(
+             {makeNullableFlatVector<T>({std::nullopt, dataAt<T>(4)}),
+              makeConstant(std::optional<U>(kMax<U>), 2)}),
+         "SELECT NULL"},
+
+        {makeRowVector(
+             {makeNullableFlatVector<T>({dataAt<T>(4), std::nullopt}),
+              makeConstant(std::optional<U>(kMax<U>), 2)}),
+         fmt::format("SELECT {}", asSql(dataAt<T>(4)))},
+
         // Regular cases.
         {makeRowVector(
              {makeNullableFlatVector<T>(
@@ -466,6 +497,17 @@ class MinMaxByGlobalByAggregationTest
              {makeNullConstant(GetParam().valueType, 10),
               makeConstant(std::optional<U>(dataAt<U>(0)), 10)}),
          "SELECT NULL"},
+
+        // Extreme value cases.
+        {makeRowVector(
+             {makeNullableFlatVector<T>({std::nullopt, dataAt<T>(4)}),
+              makeConstant(std::optional<U>(kLowest<U>), 2)}),
+         "SELECT NULL"},
+
+        {makeRowVector(
+             {makeNullableFlatVector<T>({dataAt<T>(4), std::nullopt}),
+              makeConstant(std::optional<U>(kLowest<U>), 2)}),
+         fmt::format("SELECT {}", asSql(dataAt<T>(4)))},
 
         // Regular cases.
         {makeRowVector(
@@ -1440,6 +1482,98 @@ TEST_F(MinMaxByNTest, variableN) {
   VELOX_ASSERT_THROW(
       AssertQueryBuilder(plan).copyResults(pool()),
       "third argument of max_by/min_by must be a constant for all rows in a group");
+}
+
+TEST_F(MinMaxByNTest, globalRow) {
+  auto data = makeRowVector({
+      makeFlatVector<int16_t>({1, 2, 3, 4, 5, 6}),
+      makeRowVector({
+          makeFlatVector<int16_t>({1, 2, 3, 4, 5, 6}),
+          makeFlatVector<int32_t>({10, 20, 30, 40, 50, 60}),
+      }),
+  });
+
+  auto expected = makeRowVector({
+      makeArrayVector(
+          {0},
+          makeRowVector({
+              makeFlatVector<int16_t>({1, 2, 3}),
+              makeFlatVector<int32_t>({10, 20, 30}),
+          })),
+      makeArrayVector(
+          {0},
+          makeRowVector({
+              makeFlatVector<int16_t>({6, 5, 4, 3}),
+              makeFlatVector<int32_t>({60, 50, 40, 30}),
+          })),
+  });
+
+  testAggregations(
+      {data}, {}, {"min_by(c1, c0, 3)", "max_by(c1, c0, 4)"}, {expected});
+}
+
+TEST_F(MinMaxByNTest, globalRowWithNulls) {
+  auto data = makeRowVector({
+      makeFlatVector<int16_t>({1, 2, 3, 4, 5, 6}),
+      makeRowVector(
+          {
+              makeFlatVector<int16_t>({-1, 2, -1, 4, -1, 6}),
+              makeFlatVector<int32_t>({0, 20, 0, 40, 0, 60}),
+          },
+          nullEvery(2)),
+  });
+
+  auto expected = makeRowVector({
+      makeArrayVector(
+          {0},
+          makeRowVector(
+              {
+                  makeFlatVector<int16_t>({-1, 2, -1}),
+                  makeFlatVector<int32_t>({0, 20, 0}),
+              },
+              nullEvery(2))),
+      makeArrayVector(
+          {0},
+          makeRowVector(
+              {
+                  makeFlatVector<int16_t>({6, -1, 4, -1}),
+                  makeFlatVector<int32_t>({60, 0, 40, 0}),
+              },
+              nullEvery(2, 1))),
+  });
+
+  testAggregations(
+      {data}, {}, {"min_by(c1, c0, 3)", "max_by(c1, c0, 4)"}, {expected});
+}
+
+TEST_F(MinMaxByNTest, groupByRow) {
+  auto data = makeRowVector({
+      makeFlatVector<int16_t>({1, 1, 2, 2, 1, 2}),
+      makeFlatVector<int16_t>({1, 2, 3, 4, 5, 6}),
+      makeRowVector({
+          makeFlatVector<int16_t>({1, 2, 3, 4, 5, 6}),
+          makeFlatVector<int32_t>({10, 20, 30, 40, 50, 60}),
+      }),
+  });
+
+  auto expected = makeRowVector({
+      makeFlatVector<int16_t>({1, 2}),
+      makeArrayVector(
+          {0, 2},
+          makeRowVector({
+              makeFlatVector<int16_t>({1, 2, 3, 4}),
+              makeFlatVector<int32_t>({10, 20, 30, 40}),
+          })),
+      makeArrayVector(
+          {0, 2},
+          makeRowVector({
+              makeFlatVector<int16_t>({5, 2, 6, 4}),
+              makeFlatVector<int32_t>({50, 20, 60, 40}),
+          })),
+  });
+
+  testAggregations(
+      {data}, {"c0"}, {"min_by(c2, c1, 2)", "max_by(c2, c1, 2)"}, {expected});
 }
 
 } // namespace
