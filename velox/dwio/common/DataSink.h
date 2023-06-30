@@ -145,6 +145,8 @@ class WriteFileDataSink final : public DataSink {
       : DataSink(std::move(name), std::move(metricLogger), stats),
         writeFile_{std::move(writeFile)} {}
 
+  static void registerLocalFileFactory();
+
   ~WriteFileDataSink() override {
     destroy();
   }
@@ -154,14 +156,6 @@ class WriteFileDataSink final : public DataSink {
   }
 
   static void registerFactory();
-
-  uint64_t size() const override {
-    DWIO_ENSURE_EQ(
-        size_,
-        writeFile_->size(),
-        "Size mismatch between WriteFile and DataSink.");
-    return size_;
-  }
 
   using DataSink::write;
 
