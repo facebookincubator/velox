@@ -69,6 +69,15 @@ class SortOrder {
     return nullsFirst_;
   }
 
+  bool operator==(const SortOrder& other) const {
+    return std::tie(ascending_, nullsFirst_) ==
+        std::tie(other.ascending_, other.nullsFirst_);
+  }
+
+  bool operator!=(const SortOrder& other) const {
+    return !(*this == other);
+  }
+
   std::string toString() const {
     return fmt::format(
         "{} NULLS {}",
@@ -84,6 +93,13 @@ class SortOrder {
   bool ascending_;
   bool nullsFirst_;
 };
+
+FOLLY_ALWAYS_INLINE std::ostream& operator<<(
+    std::ostream& os,
+    const SortOrder& order) {
+  os << order.toString();
+  return os;
+}
 
 extern const SortOrder kAscNullsFirst;
 extern const SortOrder kAscNullsLast;
@@ -180,7 +196,7 @@ class PlanNode : public ISerializable {
   }
 
  private:
-  /// The details of the plan node in textual format.
+  // The details of the plan node in textual format.
   virtual void addDetails(std::stringstream& stream) const = 0;
 
   // Format when detailed and recursive are enabled is:
@@ -546,6 +562,54 @@ class AggregationNode : public PlanNode {
 
   static Step stepFromName(const std::string& name);
 
+  /// Aggregate function call.
+  struct Aggregate {
+    /// Function name and input column names.
+    CallTypedExprPtr call;
+
+    /// Optional name of input column to use as a mask. Column type must be
+    /// BOOLEAN.
+    FieldAccessTypedExprPtr mask;
+
+    /// Optional list of input columns to sort by before applying aggregate
+    /// function.
+    std::vector<FieldAccessTypedExprPtr> sortingKeys;
+
+    /// A list of sorting orders that goes together with 'sortingKeys'.
+    std::vector<SortOrder> sortingOrders;
+
+    folly::dynamic serialize() const;
+
+    static Aggregate deserialize(const folly::dynamic& obj, void* context);
+  };
+
+  AggregationNode(
+      const PlanNodeId& id,
+      Step step,
+      const std::vector<FieldAccessTypedExprPtr>& groupingKeys,
+      const std::vector<FieldAccessTypedExprPtr>& preGroupedKeys,
+      const std::vector<std::string>& aggregateNames,
+      const std::vector<Aggregate>& aggregates,
+      bool ignoreNullKeys,
+      PlanNodePtr source);
+
+// TODO Remove after Prestissimo is updated.
+#ifdef VELOX_ENABLE_BACKWARD_COMPATIBILITY
+  static std::vector<Aggregate> toAggregates(
+      const std::vector<CallTypedExprPtr>& calls,
+      const std::vector<FieldAccessTypedExprPtr>& aggregateMasks) {
+    std::vector<Aggregate> aggregates;
+    aggregates.reserve(calls.size());
+    for (auto i = 0; i < calls.size(); ++i) {
+      if (i < aggregateMasks.size()) {
+        aggregates.push_back({calls[i], aggregateMasks[i], {}, {}});
+      } else {
+        aggregates.push_back({calls[i], nullptr, {}, {}});
+      }
+    }
+    return aggregates;
+  }
+
   /**
    * @param preGroupedKeys A subset of the 'groupingKeys' on which the input is
    * clustered, i.e. identical sets of values for these keys always appear next
@@ -564,7 +628,17 @@ class AggregationNode : public PlanNode {
       const std::vector<CallTypedExprPtr>& aggregates,
       const std::vector<FieldAccessTypedExprPtr>& aggregateMasks,
       bool ignoreNullKeys,
-      PlanNodePtr source);
+      PlanNodePtr source)
+      : AggregationNode(
+            id,
+            step,
+            groupingKeys,
+            preGroupedKeys,
+            aggregateNames,
+            toAggregates(aggregates, aggregateMasks),
+            ignoreNullKeys,
+            source) {}
+#endif
 
   const std::vector<PlanNodePtr>& sources() const override {
     return sources_;
@@ -590,12 +664,8 @@ class AggregationNode : public PlanNode {
     return aggregateNames_;
   }
 
-  const std::vector<CallTypedExprPtr>& aggregates() const {
+  const std::vector<Aggregate>& aggregates() const {
     return aggregates_;
-  }
-
-  const std::vector<FieldAccessTypedExprPtr>& aggregateMasks() const {
-    return aggregateMasks_;
   }
 
   bool ignoreNullKeys() const {
@@ -634,10 +704,7 @@ class AggregationNode : public PlanNode {
   const std::vector<FieldAccessTypedExprPtr> groupingKeys_;
   const std::vector<FieldAccessTypedExprPtr> preGroupedKeys_;
   const std::vector<std::string> aggregateNames_;
-  const std::vector<CallTypedExprPtr> aggregates_;
-  // Keeps mask/'no mask' for every aggregation. Mask, if given, is a reference
-  // to a boolean projection column, used to mask out rows for the aggregation.
-  const std::vector<FieldAccessTypedExprPtr> aggregateMasks_;
+  const std::vector<Aggregate> aggregates_;
   const bool ignoreNullKeys_;
   const std::vector<PlanNodePtr> sources_;
   const RowTypePtr outputType_;
@@ -1481,11 +1548,6 @@ class NestedLoopJoinNode : public PlanNode {
   const RowTypePtr outputType_;
 };
 
-// TODO Remove after updating Prestissimo.
-#ifdef VELOX_ENABLE_BACKWARD_COMPATIBILITY
-using CrossJoinNode = NestedLoopJoinNode;
-#endif
-
 // Represents the 'SortBy' node in the plan.
 class OrderByNode : public PlanNode {
  public:
@@ -1935,6 +1997,183 @@ class WindowNode : public PlanNode {
   const std::vector<SortOrder> sortingOrders_;
 
   const std::vector<Function> windowFunctions_;
+
+  const std::vector<PlanNodePtr> sources_;
+
+  const RowTypePtr outputType_;
+};
+
+/// Optimized version of a WindowNode for a single row_number function with an
+/// optional limit and no sorting.
+/// The output of this node contains all input columns followed by a
+/// 'rowNumberColumnName' BIGINT column.
+class RowNumberNode : public PlanNode {
+ public:
+  /// @param partitionKeys Partitioning keys. May be empty.
+  /// @param rowNumberColumnName Name of the column containing row numbers.
+  /// @param limit Optional per-partition limit. If specified, the number of
+  /// rows produced by this node will not exceed this value for any given
+  /// partition. Extra rows will be dropped.
+  RowNumberNode(
+      PlanNodeId id,
+      std::vector<FieldAccessTypedExprPtr> partitionKeys,
+      const std::string& rowNumberColumnName,
+      std::optional<int32_t> limit,
+      PlanNodePtr source);
+
+  const std::vector<PlanNodePtr>& sources() const override {
+    return sources_;
+  }
+
+  const RowTypePtr& outputType() const override {
+    return outputType_;
+  }
+
+  const std::vector<FieldAccessTypedExprPtr>& partitionKeys() const {
+    return partitionKeys_;
+  }
+
+  std::optional<int32_t> limit() const {
+    return limit_;
+  }
+
+  std::string_view name() const override {
+    return "RowNumber";
+  }
+
+  folly::dynamic serialize() const override;
+
+  static PlanNodePtr create(const folly::dynamic& obj, void* context);
+
+ private:
+  void addDetails(std::stringstream& stream) const override;
+
+  const std::vector<FieldAccessTypedExprPtr> partitionKeys_;
+
+  const std::optional<int32_t> limit_;
+
+  const std::vector<PlanNodePtr> sources_;
+
+  const RowTypePtr outputType_;
+};
+
+/// The MarkDistinct operator marks unique rows based on distinctKeys.
+/// The result is put in a new markerName column alongside the original input.
+/// @param markerName Name of the output mask channel.
+/// @param distinctKeys Names of grouping keys.
+/// column.
+class MarkDistinctNode : public PlanNode {
+ public:
+  MarkDistinctNode(
+      PlanNodeId id,
+      std::string markerName,
+      std::vector<FieldAccessTypedExprPtr> distinctKeys,
+      PlanNodePtr source);
+
+  const std::vector<PlanNodePtr>& sources() const override {
+    return sources_;
+  }
+
+  /// The outputType is the concatenation of the input columns and mask column.
+  const RowTypePtr& outputType() const override {
+    return outputType_;
+  }
+
+  std::string_view name() const override {
+    return "MarkDistinct";
+  }
+
+  const std::string& markerName() const {
+    return markerName_;
+  }
+
+  const std::vector<FieldAccessTypedExprPtr>& distinctKeys() const {
+    return distinctKeys_;
+  }
+
+  folly::dynamic serialize() const override;
+
+  static PlanNodePtr create(const folly::dynamic& obj, void* context);
+
+ private:
+  void addDetails(std::stringstream& stream) const override;
+
+  const std::string markerName_;
+
+  const std::vector<FieldAccessTypedExprPtr> distinctKeys_;
+
+  const std::vector<PlanNodePtr> sources_;
+
+  const RowTypePtr outputType_;
+};
+
+/// Optimized version of a WindowNode for a single row_number function with a
+/// limit over sorted partitions.
+/// The output of this node contains all input columns followed by an optional
+/// 'rowNumberColumnName' BIGINT column.
+class TopNRowNumberNode : public PlanNode {
+ public:
+  /// @param partitionKeys Partitioning keys. May be empty.
+  /// @param rowNumberColumnName Optional name of the column containing row
+  /// numbers. If not specified, the output doesn't include 'row number' column.
+  /// This is used when computing partial results.
+  /// @param limit Per-partition limit. The number of
+  /// rows produced by this node will not exceed this value for any given
+  /// partition. Extra rows will be dropped.
+  TopNRowNumberNode(
+      PlanNodeId id,
+      std::vector<FieldAccessTypedExprPtr> partitionKeys,
+      std::vector<FieldAccessTypedExprPtr> sortingKeys,
+      std::vector<SortOrder> sortingOrders,
+      const std::optional<std::string>& rowNumberColumnName,
+      int32_t limit,
+      PlanNodePtr source);
+
+  const std::vector<PlanNodePtr>& sources() const override {
+    return sources_;
+  }
+
+  const RowTypePtr& outputType() const override {
+    return outputType_;
+  }
+
+  const std::vector<FieldAccessTypedExprPtr>& partitionKeys() const {
+    return partitionKeys_;
+  }
+
+  const std::vector<FieldAccessTypedExprPtr>& sortingKeys() const {
+    return sortingKeys_;
+  }
+
+  const std::vector<SortOrder>& sortingOrders() const {
+    return sortingOrders_;
+  }
+
+  int32_t limit() const {
+    return limit_;
+  }
+
+  bool generateRowNumber() const {
+    return outputType_->size() > sources_[0]->outputType()->size();
+  }
+
+  std::string_view name() const override {
+    return "TopNRowNumber";
+  }
+
+  folly::dynamic serialize() const override;
+
+  static PlanNodePtr create(const folly::dynamic& obj, void* context);
+
+ private:
+  void addDetails(std::stringstream& stream) const override;
+
+  const std::vector<FieldAccessTypedExprPtr> partitionKeys_;
+
+  const std::vector<FieldAccessTypedExprPtr> sortingKeys_;
+  const std::vector<SortOrder> sortingOrders_;
+
+  const int32_t limit_;
 
   const std::vector<PlanNodePtr> sources_;
 

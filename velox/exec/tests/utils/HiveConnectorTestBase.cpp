@@ -15,13 +15,12 @@
  */
 
 #include "velox/exec/tests/utils/HiveConnectorTestBase.h"
-#include "velox/common/base/Fs.h"
+
 #include "velox/common/file/FileSystems.h"
-#include "velox/connectors/hive/HiveConnector.h"
+#include "velox/connectors/hive/HiveDataSink.h"
 #include "velox/dwio/common/tests/utils/BatchMaker.h"
 #include "velox/dwio/dwrf/reader/DwrfReader.h"
 #include "velox/dwio/dwrf/writer/Writer.h"
-#include "velox/exec/tests/utils/QueryAssertions.h"
 
 namespace facebook::velox::exec::test {
 
@@ -37,6 +36,7 @@ void HiveConnectorTestBase::SetUp() {
           ->newConnector(kHiveConnectorId, nullptr, ioExecutor_.get());
   connector::registerConnector(hiveConnector);
   dwrf::registerDwrfReaderFactory();
+  dwrf::registerDwrfWriterFactory();
 }
 
 void HiveConnectorTestBase::TearDown() {
@@ -44,6 +44,7 @@ void HiveConnectorTestBase::TearDown() {
   // connector.
   ioExecutor_.reset();
   dwrf::unregisterDwrfReaderFactory();
+  dwrf::unregisterDwrfWriterFactory();
   connector::unregisterConnector(kHiveConnectorId);
   OperatorTestBase::TearDown();
 }
@@ -58,13 +59,15 @@ void HiveConnectorTestBase::writeToFile(
     const std::string& filePath,
     const std::vector<RowVectorPtr>& vectors,
     std::shared_ptr<dwrf::Config> config) {
-  facebook::velox::dwrf::WriterOptions options;
+  velox::dwrf::WriterOptions options;
   options.config = config;
   options.schema = vectors[0]->type();
-  auto sink =
-      std::make_unique<facebook::velox::dwio::common::LocalFileSink>(filePath);
+  auto localWriteFile = std::make_unique<LocalWriteFile>(filePath, true, false);
+  auto sink = std::make_unique<dwio::common::WriteFileDataSink>(
+      std::move(localWriteFile), filePath);
   auto childPool = rootPool_->addAggregateChild("HiveConnectorTestBase.Writer");
-  facebook::velox::dwrf::Writer writer{options, std::move(sink), *childPool};
+  options.memoryPool = childPool.get();
+  facebook::velox::dwrf::Writer writer{std::move(sink), options};
   for (size_t i = 0; i < vectors.size(); ++i) {
     writer.write(vectors[i]);
   }
@@ -108,11 +111,12 @@ HiveConnectorTestBase::makeHiveConnectorSplits(
     const std::string& filePath,
     uint32_t splitCount,
     dwio::common::FileFormat format) {
-  const int fileSize = fs::file_size(filePath);
+  auto file =
+      filesystems::getFileSystem(filePath, nullptr)->openFileForRead(filePath);
+  const int64_t fileSize = file->size();
   // Take the upper bound.
   const int splitSize = std::ceil((fileSize) / splitCount);
   std::vector<std::shared_ptr<connector::hive::HiveConnectorSplit>> splits;
-
   // Add all the splits.
   for (int i = 0; i < splitCount; i++) {
     auto split = HiveConnectorSplitBuilder(filePath)
@@ -123,6 +127,34 @@ HiveConnectorTestBase::makeHiveConnectorSplits(
     splits.push_back(std::move(split));
   }
   return splits;
+}
+
+std::shared_ptr<connector::hive::HiveColumnHandle>
+HiveConnectorTestBase::makeColumnHandle(
+    const std::string& name,
+    const TypePtr& type,
+    const std::vector<std::string>& requiredSubfields) {
+  return makeColumnHandle(name, type, type, requiredSubfields);
+}
+
+std::shared_ptr<connector::hive::HiveColumnHandle>
+HiveConnectorTestBase::makeColumnHandle(
+    const std::string& name,
+    const TypePtr& dataType,
+    const TypePtr& hiveType,
+    const std::vector<std::string>& requiredSubfields) {
+  std::vector<common::Subfield> subfields;
+  subfields.reserve(requiredSubfields.size());
+  for (auto& path : requiredSubfields) {
+    subfields.emplace_back(path);
+  }
+
+  return std::make_shared<connector::hive::HiveColumnHandle>(
+      name,
+      connector::hive::HiveColumnHandle::ColumnType::kRegular,
+      dataType,
+      hiveType,
+      std::move(subfields));
 }
 
 std::vector<std::shared_ptr<connector::ConnectorSplit>>
@@ -152,30 +184,76 @@ HiveConnectorTestBase::makeHiveInsertTableHandle(
     const std::vector<std::string>& tableColumnNames,
     const std::vector<TypePtr>& tableColumnTypes,
     const std::vector<std::string>& partitionedBy,
-    std::shared_ptr<connector::hive::LocationHandle> locationHandle) {
+    std::shared_ptr<connector::hive::LocationHandle> locationHandle,
+    const dwio::common::FileFormat tableStorageFormat) {
+  return makeHiveInsertTableHandle(
+      tableColumnNames,
+      tableColumnTypes,
+      partitionedBy,
+      nullptr,
+      std::move(locationHandle),
+      tableStorageFormat);
+}
+
+// static
+std::shared_ptr<connector::hive::HiveInsertTableHandle>
+HiveConnectorTestBase::makeHiveInsertTableHandle(
+    const std::vector<std::string>& tableColumnNames,
+    const std::vector<TypePtr>& tableColumnTypes,
+    const std::vector<std::string>& partitionedBy,
+    std::shared_ptr<connector::hive::HiveBucketProperty> bucketProperty,
+    std::shared_ptr<connector::hive::LocationHandle> locationHandle,
+    const dwio::common::FileFormat tableStorageFormat) {
   std::vector<std::shared_ptr<const connector::hive::HiveColumnHandle>>
       columnHandles;
+  std::vector<std::string> bucketedBy;
+  std::vector<TypePtr> bucketedTypes;
+  std::vector<std::shared_ptr<const connector::hive::HiveSortingColumn>>
+      sortedBy;
+  if (bucketProperty != nullptr) {
+    bucketedBy = bucketProperty->bucketedBy();
+    bucketedTypes = bucketProperty->bucketedTypes();
+    sortedBy = bucketProperty->sortedBy();
+  }
+  int32_t numPartitionColumns{0};
+  int32_t numSortingColumns{0};
+  int32_t numBucketColumns{0};
   for (int i = 0; i < tableColumnNames.size(); ++i) {
+    for (int j = 0; j < bucketedBy.size(); ++j) {
+      if (bucketedBy[j] == tableColumnNames[i]) {
+        ++numBucketColumns;
+      }
+    }
+    for (int j = 0; j < sortedBy.size(); ++j) {
+      if (sortedBy[j]->sortColumn() == tableColumnNames[i]) {
+        ++numSortingColumns;
+      }
+    }
     if (std::find(
             partitionedBy.cbegin(),
             partitionedBy.cend(),
             tableColumnNames.at(i)) != partitionedBy.cend()) {
+      ++numPartitionColumns;
       columnHandles.push_back(
           std::make_shared<connector::hive::HiveColumnHandle>(
               tableColumnNames.at(i),
               connector::hive::HiveColumnHandle::ColumnType::kPartitionKey,
+              tableColumnTypes.at(i),
               tableColumnTypes.at(i)));
     } else {
       columnHandles.push_back(
           std::make_shared<connector::hive::HiveColumnHandle>(
               tableColumnNames.at(i),
               connector::hive::HiveColumnHandle::ColumnType::kRegular,
+              tableColumnTypes.at(i),
               tableColumnTypes.at(i)));
     }
   }
-
+  VELOX_CHECK_EQ(numPartitionColumns, partitionedBy.size());
+  VELOX_CHECK_EQ(numBucketColumns, bucketedBy.size());
+  VELOX_CHECK_EQ(numSortingColumns, sortedBy.size());
   return std::make_shared<connector::hive::HiveInsertTableHandle>(
-      columnHandles, locationHandle);
+      columnHandles, locationHandle, tableStorageFormat, bucketProperty);
 }
 
 std::shared_ptr<connector::hive::HiveColumnHandle>
@@ -183,7 +261,10 @@ HiveConnectorTestBase::regularColumn(
     const std::string& name,
     const TypePtr& type) {
   return std::make_shared<connector::hive::HiveColumnHandle>(
-      name, connector::hive::HiveColumnHandle::ColumnType::kRegular, type);
+      name,
+      connector::hive::HiveColumnHandle::ColumnType::kRegular,
+      type,
+      type);
 }
 
 std::shared_ptr<connector::hive::HiveColumnHandle>
@@ -191,7 +272,10 @@ HiveConnectorTestBase::synthesizedColumn(
     const std::string& name,
     const TypePtr& type) {
   return std::make_shared<connector::hive::HiveColumnHandle>(
-      name, connector::hive::HiveColumnHandle::ColumnType::kSynthesized, type);
+      name,
+      connector::hive::HiveColumnHandle::ColumnType::kSynthesized,
+      type,
+      type);
 }
 
 std::shared_ptr<connector::hive::HiveColumnHandle>
@@ -199,7 +283,10 @@ HiveConnectorTestBase::partitionKey(
     const std::string& name,
     const TypePtr& type) {
   return std::make_shared<connector::hive::HiveColumnHandle>(
-      name, connector::hive::HiveColumnHandle::ColumnType::kPartitionKey, type);
+      name,
+      connector::hive::HiveColumnHandle::ColumnType::kPartitionKey,
+      type,
+      type);
 }
 
 } // namespace facebook::velox::exec::test

@@ -79,11 +79,8 @@ class DecodedVectorTest : public testing::Test, public VectorTestBase {
         }
         const bool isNull = (expected[index] == std::nullopt);
         std::string value;
-        if constexpr (
-            std::is_same_v<T, UnscaledLongDecimal> ||
-            std::is_same_v<T, UnscaledShortDecimal>) {
-          value = std::to_string(actualValue.unscaledValue());
-
+        if constexpr (std::is_same_v<T, int128_t>) {
+          value = std::to_string(actualValue);
         } else {
           value = folly::to<std::string>(actualValue);
         }
@@ -133,14 +130,7 @@ class DecodedVectorTest : public testing::Test, public VectorTestBase {
 
   template <typename T>
   void testConstant(const T& value) {
-    variant var;
-    if constexpr (std::is_same_v<T, UnscaledShortDecimal>) {
-      var = variant::shortDecimal(value.unscaledValue(), SHORT_DECIMAL(10, 3));
-    } else if constexpr (std::is_same_v<T, UnscaledLongDecimal>) {
-      var = variant::longDecimal(value.unscaledValue(), LONG_DECIMAL(20, 3));
-    } else {
-      var = variant(value);
-    }
+    variant var = variant(value);
 
     auto constantVector =
         BaseVector::createConstant(var.inferType(), var, 100, pool_.get());
@@ -470,8 +460,8 @@ TEST_F(DecodedVectorTest, flat) {
   testFlat<int32_t>();
   testFlat<int64_t>();
   testFlat<bool>();
-  testFlat<UnscaledShortDecimal>(10010, SHORT_DECIMAL(10, 4));
-  testFlat<UnscaledLongDecimal>(10010, LONG_DECIMAL(25, 19));
+  testFlat<int64_t>(10010, DECIMAL(10, 4));
+  testFlat<int128_t>(10010, DECIMAL(25, 19));
   // TODO: ValueGenerator doesn't support floats.
   // testFlat<float>();
   testFlat<double>();
@@ -514,8 +504,6 @@ TEST_F(DecodedVectorTest, constant) {
   NonPOD::alive = 0;
   testConstantOpaque(std::make_shared<NonPOD>());
   EXPECT_EQ(NonPOD::alive, 0);
-  testConstant<UnscaledShortDecimal>(UnscaledShortDecimal(100));
-  testConstant<UnscaledLongDecimal>(UnscaledLongDecimal::min());
 }
 
 TEST_F(DecodedVectorTest, constantNull) {
@@ -530,8 +518,8 @@ TEST_F(DecodedVectorTest, constantNull) {
   testConstantNull(VARBINARY());
   testConstantNull(TIMESTAMP());
   testConstantNull(DATE());
-  testConstantNull(SHORT_DECIMAL(10, 3));
-  testConstantNull(LONG_DECIMAL(30, 3));
+  testConstantNull(DECIMAL(10, 3));
+  testConstantNull(DECIMAL(30, 3));
   testConstantNull(INTERVAL_DAY_TIME());
   testConstantNull(ARRAY(INTEGER()));
   testConstantNull(MAP(INTEGER(), INTEGER()));
@@ -567,16 +555,12 @@ TEST_F(DecodedVectorTest, dictionary) {
   testDictionary<int64_t>(1000, [](vector_size_t i) { return i % 5; });
   testDictionary<float>(1000, [](vector_size_t i) { return i * 0.1; });
   testDictionary<double>(1000, [](vector_size_t i) { return i * 0.1; });
-  testDictionary<UnscaledShortDecimal>(
+  testDictionary<int64_t>(
+      1000, [](vector_size_t i) { return (i % 5); }, DECIMAL(10, 3));
+  testDictionary<int128_t>(
       1000,
-      [](vector_size_t i) { return UnscaledShortDecimal(i % 5); },
-      SHORT_DECIMAL(10, 3));
-  testDictionary<UnscaledLongDecimal>(
-      1000,
-      [](vector_size_t i) {
-        return UnscaledLongDecimal(buildInt128(i, i) % 5);
-      },
-      LONG_DECIMAL(25, 20));
+      [](vector_size_t i) { return HugeInt::build(i, i) % 5; },
+      DECIMAL(25, 20));
   testDictionary<std::shared_ptr<void>>(
       1000, [](vector_size_t i) { return std::make_shared<int>(i % 5); });
 }
@@ -1375,6 +1359,41 @@ TEST_F(DecodedVectorTest, dictionaryWrapping) {
       assertEqualVectors(dict, wrapped);
     }
   }
+}
+
+TEST_F(DecodedVectorTest, previousIndicesInReUsedDecodedVector) {
+  // Verify that when DecodedVector is re-used with different set of valid rows,
+  // then the unselected indices would still have valid values.
+
+  // Create a Dict(Dict(flat)) where merged indices point to a large index.
+  // 2-layers are created to ensure copiedIndices_ is used.
+  auto indices = makeIndices(3, [](auto /* row */) { return 2; });
+  auto innerindices = makeIndices(3, [](auto /* row */) { return 998; });
+  auto flat = makeFlatVector<int64_t>(1000, [](auto row) { return row; });
+  auto dict = BaseVector::wrapInDictionary(nullptr, innerindices, 3, flat);
+  dict = BaseVector::wrapInDictionary(nullptr, indices, 3, dict);
+
+  // Create another Dict(Dict(flat)) where merged indices point to a small
+  // index.
+  auto indices2 = makeIndices(3, [](auto /* row */) { return 0; });
+  auto innerindices2 = makeIndices(3, [](auto /* row */) { return 0; });
+  auto flat2 = makeNullableFlatVector<int64_t>({1, std::nullopt});
+  auto dict2 = BaseVector::wrapInDictionary(nullptr, innerindices2, 3, flat2);
+  dict2 = BaseVector::wrapInDictionary(nullptr, indices2, 3, dict2);
+
+  // Used the first time with all selected rows.
+  DecodedVector d(*dict);
+
+  // 0, 1 row is not selected and DecodedVector is now re-used with this
+  // selectivity.
+  SelectivityVector rows(3, false);
+  rows.setValid(2, true);
+  rows.updateBounds();
+  d.decode(*dict2, rows);
+  auto wrapping = d.dictionaryWrapping(*d.base(), d.base()->size());
+  auto rawIndices = wrapping.indices->as<vector_size_t>();
+  // Ensure the previous index on the unselected row is reset.
+  EXPECT_EQ(rawIndices[0], 0);
 }
 
 } // namespace facebook::velox::test

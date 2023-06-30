@@ -23,6 +23,7 @@
 #include "velox/dwio/dwrf/common/Compression.h"
 #include "velox/dwio/dwrf/common/wrap/dwrf-proto-wrapper.h"
 #include "velox/dwio/dwrf/reader/EncodingContext.h"
+#include "velox/dwio/dwrf/reader/StreamLabels.h"
 #include "velox/dwio/dwrf/reader/StripeStream.h"
 #include "velox/vector/BaseVector.h"
 
@@ -39,7 +40,7 @@ class ColumnReader {
       : notNullDecoder_{},
         nodeType_{type},
         memoryPool_{memoryPool},
-        flatMapContext_{FlatMapContext::nonFlatMapContext()} {}
+        flatMapContext_{} {}
 
   // Reads nulls, if any. Sets '*nulls' to nullptr if void
   // the reader has no nulls and there are no incoming
@@ -67,7 +68,8 @@ class ColumnReader {
   ColumnReader(
       std::shared_ptr<const dwio::common::TypeWithId> nodeId,
       StripeStreams& stripe,
-      FlatMapContext flatMapContext = FlatMapContext::nonFlatMapContext());
+      const StreamLabels& streamLabels,
+      FlatMapContext flatMapContext = {});
 
   virtual ~ColumnReader() = default;
 
@@ -111,7 +113,8 @@ class ColumnReader {
       const std::shared_ptr<const dwio::common::TypeWithId>& requestedType,
       const std::shared_ptr<const dwio::common::TypeWithId>& dataType,
       StripeStreams& stripe,
-      FlatMapContext flatMapContext = FlatMapContext::nonFlatMapContext());
+      const StreamLabels& streamLabels,
+      FlatMapContext flatMapContext = {});
 };
 
 class ColumnReaderFactory {
@@ -121,9 +124,14 @@ class ColumnReaderFactory {
       const std::shared_ptr<const dwio::common::TypeWithId>& requestedType,
       const std::shared_ptr<const dwio::common::TypeWithId>& dataType,
       StripeStreams& stripe,
-      FlatMapContext flatMapContext = FlatMapContext::nonFlatMapContext()) {
+      const StreamLabels& streamLabels,
+      FlatMapContext flatMapContext = {}) {
     return ColumnReader::build(
-        requestedType, dataType, stripe, std::move(flatMapContext));
+        requestedType,
+        dataType,
+        stripe,
+        streamLabels,
+        std::move(flatMapContext));
   }
 
   static ColumnReaderFactory* baseFactory();

@@ -14,6 +14,7 @@
 
 add_executable(
   velox_aggregates_test
+  AddressableNonNullValueListTest.cpp
   AggregationFunctionRegTest.cpp
   ApproxDistinctTest.cpp
   ApproxMostFrequentTest.cpp
@@ -23,6 +24,7 @@ add_executable(
   AverageAggregationTest.cpp
   BitwiseAggregationTest.cpp
   BoolAndOrTest.cpp
+  CentralMomentsAggregationTest.cpp
   ChecksumAggregateTest.cpp
   CountAggregationTest.cpp
   CountIfAggregationTest.cpp
@@ -32,13 +34,16 @@ add_executable(
   MinMaxByAggregationTest.cpp
   MinMaxTest.cpp
   PrestoHasherTest.cpp
+  SetAggTest.cpp
+  SetUnionTest.cpp
   SumTest.cpp
   MapAggTest.cpp
   MapUnionAggregationTest.cpp
   MapUnionSumTest.cpp
   ValueListTest.cpp
   VarianceAggregationTest.cpp
-  MaxSizeForStatsTest.cpp)
+  MaxSizeForStatsTest.cpp
+  SumDataSizeForStatsTest.cpp)
 
 add_test(
   NAME velox_aggregates_test

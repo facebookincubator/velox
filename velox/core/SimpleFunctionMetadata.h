@@ -27,9 +27,6 @@
 #include "velox/type/Type.h"
 #include "velox/type/Variant.h"
 
-inline constexpr char kPrecisionVariable[] = "a_precision";
-inline constexpr char kScaleVariable[] = "a_scale";
-
 namespace facebook::velox::core {
 
 // Most UDFs are deterministic, hence this default value.
@@ -185,7 +182,7 @@ std::string strToLowerCopy(const std::string& str);
 } // namespace detail
 
 // A set of structs used to perform analysis on a static type to
-// collect information needed for signatrue construction.
+// collect information needed for signature construction.
 template <typename T>
 struct TypeAnalysis {
   void run(TypeAnalysisResults& results) {
@@ -194,14 +191,8 @@ struct TypeAnalysis {
         SimpleTypeTrait<T>::isPrimitiveType ||
         SimpleTypeTrait<T>::typeKind == TypeKind::OPAQUE);
     results.stats.concreteCount++;
-    if (isDecimalKind(SimpleTypeTrait<T>::typeKind)) {
-      results.out << detail::strToLowerCopy(
-                         std::string(SimpleTypeTrait<T>::name))
-                  << "(" << kPrecisionVariable << "," << kScaleVariable << ")";
-    } else {
-      results.out << detail::strToLowerCopy(
-          std::string(SimpleTypeTrait<T>::name));
-    }
+    results.out << detail::strToLowerCopy(
+        std::string(SimpleTypeTrait<T>::name));
   }
 };
 
@@ -443,15 +434,8 @@ class SimpleFunctionMetadata : public ISimpleFunctionMetadata {
 
     builder.returnType(analysis.outputType);
 
-    bool isDecimalArg = false;
     for (const auto& arg : analysis.argsTypes) {
       builder.argumentType(arg);
-      isDecimalArg |= isDecimalTypeSignature(arg);
-    }
-
-    if (isDecimalArg) {
-      builder.integerVariable(kPrecisionVariable);
-      builder.integerVariable(kScaleVariable);
     }
 
     for (const auto& variable : analysis.variables) {

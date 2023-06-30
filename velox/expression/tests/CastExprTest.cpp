@@ -39,19 +39,19 @@ class CastExprTest : public functions::test::CastBaseTest {
   }
 
   void setCastIntByTruncate(bool value) {
-    queryCtx_->setConfigOverridesUnsafe({
-        {core::QueryConfig::kCastIntByTruncate, std::to_string(value)},
+    queryCtx_->testingOverrideConfigUnsafe({
+        {core::QueryConfig::kCastToIntByTruncate, std::to_string(value)},
     });
   }
 
   void setCastMatchStructByName(bool value) {
-    queryCtx_->setConfigOverridesUnsafe({
+    queryCtx_->testingOverrideConfigUnsafe({
         {core::QueryConfig::kCastMatchStructByName, std::to_string(value)},
     });
   }
 
   void setTimezone(const std::string& value) {
-    queryCtx_->setConfigOverridesUnsafe({
+    queryCtx_->testingOverrideConfigUnsafe({
         {core::QueryConfig::kSessionTimezone, value},
         {core::QueryConfig::kAdjustTimestampToTimezone, "true"},
     });
@@ -805,6 +805,35 @@ TEST_F(CastExprTest, toString) {
   ASSERT_EQ("cast((a) as ARRAY<VARCHAR>)", exprSet.exprs()[1]->toString());
 }
 
+TEST_F(CastExprTest, decimalToDouble) {
+  // short to short, scale up.
+  auto shortFlat = makeNullableShortDecimalFlatVector(
+      {-999999999999999999, -3, 0, 55, 999999999999999999, std::nullopt},
+      DECIMAL(18, 18));
+  testComplexCast(
+      "c0",
+      shortFlat,
+      makeNullableFlatVector<double>(
+          {-0.999999999999999999,
+           -0.000000000000000003,
+           0,
+           0.000000000000000055,
+           0.999999999999999999,
+           std::nullopt}));
+  auto longFlat = makeNullableLongDecimalFlatVector(
+      {DecimalUtil::kLongDecimalMin,
+       0,
+       DecimalUtil::kLongDecimalMax,
+       HugeInt::build(0xffff, 0xffffffffffffffff),
+       std::nullopt},
+      DECIMAL(38, 5));
+  testComplexCast(
+      "c0",
+      longFlat,
+      makeNullableFlatVector<double>(
+          {-1e33, 0, 1e33, 1.2089258196146293E19, std::nullopt}));
+}
+
 TEST_F(CastExprTest, decimalToDecimal) {
   // short to short, scale up.
   auto shortFlat =
@@ -889,11 +918,11 @@ TEST_F(CastExprTest, decimalToDecimal) {
   testComplexCast(
       "c0",
       makeNullableLongDecimalFlatVector(
-          {buildInt128(-2, 200),
-           buildInt128(-1, 300),
-           buildInt128(0, 400),
-           buildInt128(1, 1),
-           buildInt128(10, 100),
+          {HugeInt::build(-2, 200),
+           HugeInt::build(-1, 300),
+           HugeInt::build(0, 400),
+           HugeInt::build(1, 1),
+           HugeInt::build(10, 100),
            std::nullopt},
           DECIMAL(23, 8)),
       makeNullableShortDecimalFlatVector(
@@ -911,14 +940,14 @@ TEST_F(CastExprTest, decimalToDecimal) {
       testComplexCast(
           "c0",
           makeNullableLongDecimalFlatVector(
-              {UnscaledLongDecimal::max().unscaledValue()}, DECIMAL(38, 0)),
+              {DecimalUtil::kLongDecimalMax}, DECIMAL(38, 0)),
           makeNullableLongDecimalFlatVector({0}, DECIMAL(38, 1))),
       "Cannot cast DECIMAL '99999999999999999999999999999999999999' to DECIMAL(38,1)");
   VELOX_ASSERT_THROW(
       testComplexCast(
           "c0",
           makeNullableLongDecimalFlatVector(
-              {UnscaledLongDecimal::min().unscaledValue()}, DECIMAL(38, 0)),
+              {DecimalUtil::kLongDecimalMin}, DECIMAL(38, 0)),
           makeNullableLongDecimalFlatVector({0}, DECIMAL(38, 1))),
       "Cannot cast DECIMAL '-99999999999999999999999999999999999999' to DECIMAL(38,1)");
 }
@@ -933,8 +962,8 @@ TEST_F(CastExprTest, integerToDecimal) {
 TEST_F(CastExprTest, castInTry) {
   // Test try(cast(array(varchar) as array(bigint))) whose input vector is
   // wrapped in dictinary encoding. The row of ["2a"] should trigger an error
-  // during casting and the try expression should turn this error into a null at
-  // this row.
+  // during casting and the try expression should turn this error into a null
+  // at this row.
   auto input = makeRowVector({makeNullableArrayVector<StringView>(
       {{{"1"_sv}}, {{"2a"_sv}}, std::nullopt, std::nullopt})});
   auto expected = makeNullableArrayVector<int64_t>(
@@ -1056,8 +1085,8 @@ TEST_F(CastExprTest, castAsCall) {
 }
 
 namespace {
-/// Wraps input in a constant encoding that repeats the first element and then
-/// in dictionary that reverses the order of rows.
+/// Wraps input in a constant encoding that repeats the first element and
+/// then in dictionary that reverses the order of rows.
 class TestingDictionaryOverConstFunction : public exec::VectorFunction {
  public:
   TestingDictionaryOverConstFunction() {}

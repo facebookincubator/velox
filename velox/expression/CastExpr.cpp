@@ -27,6 +27,7 @@
 #include "velox/expression/StringWriter.h"
 #include "velox/external/date/tz.h"
 #include "velox/functions/lib/RowsTranslationUtil.h"
+#include "velox/type/Type.h"
 #include "velox/vector/ComplexVector.h"
 #include "velox/vector/FunctionVector.h"
 #include "velox/vector/SelectivityVector.h"
@@ -36,39 +37,26 @@ namespace facebook::velox::exec {
 namespace {
 
 /// The per-row level Kernel
-/// @tparam To The cast target type
-/// @tparam From The expression type
+/// @tparam ToKind The cast target type
+/// @tparam FromKind The expression type
 /// @param row The index of the current row
-/// @param input The input vector (of type From)
-/// @param result The output vector (of type To)
-/// @return False if the result is null
-template <typename To, typename From, bool Truncate>
+/// @param input The input vector (of type FromKind)
+/// @param result The output vector (of type ToKind)
+template <TypeKind ToKind, TypeKind FromKind, bool Truncate>
 void applyCastKernel(
     vector_size_t row,
-    const SimpleVector<From>* input,
-    FlatVector<To>* result,
-    bool& nullOutput) {
-  // Special handling for string target type
-  if constexpr (CppToType<To>::typeKind == TypeKind::VARCHAR) {
-    auto output =
-        util::Converter<CppToType<To>::typeKind, void, Truncate>::cast(
-            input->valueAt(row), nullOutput);
-    if (!nullOutput) {
-      // Write the result output to the output vector
-      auto writer = exec::StringWriter<>(result, row);
-      writer.resize(output.size());
-      if (output.size()) {
-        std::memcpy(writer.data(), output.data(), output.size());
-      }
-      writer.finalize();
-    }
+    const SimpleVector<typename TypeTraits<FromKind>::NativeType>* input,
+    FlatVector<typename TypeTraits<ToKind>::NativeType>* result) {
+  auto output =
+      util::Converter<ToKind, void, Truncate>::cast(input->valueAt(row));
+
+  if constexpr (ToKind == TypeKind::VARCHAR || ToKind == TypeKind::VARBINARY) {
+    // Write the result output to the output vector
+    auto writer = exec::StringWriter<>(result, row);
+    writer.copy_from(output);
+    writer.finalize();
   } else {
-    auto output =
-        util::Converter<CppToType<To>::typeKind, void, Truncate>::cast(
-            input->valueAt(row), nullOutput);
-    if (!nullOutput) {
-      result->set(row, output);
-    }
+    result->set(row, output);
   }
 }
 
@@ -90,7 +78,7 @@ void applyDecimalCastKernel(
     exec::EvalCtx& context,
     const TypePtr& fromType,
     const TypePtr& toType,
-    VectorPtr castResult) {
+    VectorPtr& castResult) {
   auto sourceVector = input.as<SimpleVector<TInput>>();
   auto castResultRawBuffer =
       castResult->asUnchecked<FlatVector<TOutput>>()->mutableRawValues();
@@ -117,7 +105,7 @@ void applyIntToDecimalCastKernel(
     const BaseVector& input,
     exec::EvalCtx& context,
     const TypePtr& toType,
-    VectorPtr castResult) {
+    VectorPtr& castResult) {
   auto sourceVector = input.as<SimpleVector<TInput>>();
   auto castResultRawBuffer =
       castResult->asUnchecked<FlatVector<TOutput>>()->mutableRawValues();
@@ -134,26 +122,48 @@ void applyIntToDecimalCastKernel(
     }
   });
 }
-} // namespace
 
-template <typename To, typename From>
-void CastExpr::applyCastWithTry(
+template <typename TInput>
+VectorPtr applyDecimalToDoubleCast(
+    const SelectivityVector& rows,
+    const BaseVector& input,
+    exec::EvalCtx& context,
+    const TypePtr& fromType) {
+  VectorPtr result;
+  context.ensureWritable(rows, DOUBLE(), result);
+  (*result).clearNulls(rows);
+  auto resultBuffer =
+      result->asUnchecked<FlatVector<double>>()->mutableRawValues();
+  const auto precisionScale = getDecimalPrecisionScale(*fromType);
+  const auto simpleInput = input.as<SimpleVector<TInput>>();
+  context.applyToSelectedNoThrow(rows, [&](int row) {
+    auto output = util::Converter<TypeKind::DOUBLE, void, false>::cast(
+        simpleInput->valueAt(row));
+    resultBuffer[row] =
+        output / DecimalUtil::kPowersOfTen[precisionScale.second];
+  });
+  return result;
+}
+
+template <TypeKind ToKind, TypeKind FromKind>
+void applyCastPrimitives(
     const SelectivityVector& rows,
     exec::EvalCtx& context,
     const BaseVector& input,
-    FlatVector<To>* resultFlatVector) {
-  const auto& queryConfig = context.execCtx()->queryCtx()->queryConfig();
-  auto isCastIntByTruncate = queryConfig.isCastIntByTruncate();
-
+    VectorPtr& result) {
+  using To = typename TypeTraits<ToKind>::NativeType;
+  using From = typename TypeTraits<FromKind>::NativeType;
+  auto* resultFlatVector = result->as<FlatVector<To>>();
   auto* inputSimpleVector = input.as<SimpleVector<From>>();
 
-  if (!isCastIntByTruncate) {
+  const auto& queryConfig = context.execCtx()->queryCtx()->queryConfig();
+
+  if (!queryConfig.isCastToIntByTruncate()) {
     context.applyToSelectedNoThrow(rows, [&](int row) {
-      bool nullOutput = false;
       try {
         // Passing a false truncate flag
-        applyCastKernel<To, From, false>(
-            row, inputSimpleVector, resultFlatVector, nullOutput);
+        applyCastKernel<ToKind, FromKind, false>(
+            row, inputSimpleVector, resultFlatVector);
       } catch (const VeloxRuntimeError& re) {
         VELOX_FAIL(
             makeErrorMessage(input, row, resultFlatVector->type()) + " " +
@@ -166,19 +176,14 @@ void CastExpr::applyCastWithTry(
         VELOX_USER_FAIL(
             makeErrorMessage(input, row, resultFlatVector->type()) + " " +
             e.what());
-      }
-
-      if (nullOutput) {
-        VELOX_USER_FAIL(makeErrorMessage(input, row, resultFlatVector->type()));
       }
     });
   } else {
     context.applyToSelectedNoThrow(rows, [&](int row) {
-      bool nullOutput = false;
       try {
         // Passing a true truncate flag
-        applyCastKernel<To, From, true>(
-            row, inputSimpleVector, resultFlatVector, nullOutput);
+        applyCastKernel<ToKind, FromKind, true>(
+            row, inputSimpleVector, resultFlatVector);
       } catch (const VeloxRuntimeError& re) {
         VELOX_FAIL(
             makeErrorMessage(input, row, resultFlatVector->type()) + " " +
@@ -191,17 +196,13 @@ void CastExpr::applyCastWithTry(
         VELOX_USER_FAIL(
             makeErrorMessage(input, row, resultFlatVector->type()) + " " +
             e.what());
-      }
-
-      if (nullOutput) {
-        VELOX_USER_FAIL(makeErrorMessage(input, row, resultFlatVector->type()));
       }
     });
   }
 
   // If we're converting to a TIMESTAMP, check if we need to adjust the current
   // GMT timezone to the user provided session timezone.
-  if constexpr (CppToType<To>::typeKind == TypeKind::TIMESTAMP) {
+  if constexpr (ToKind == TypeKind::TIMESTAMP) {
     // If user explicitly asked us to adjust the timezone.
     if (queryConfig.adjustTimestampToTimezone()) {
       auto sessionTzName = queryConfig.sessionTimezone();
@@ -218,66 +219,27 @@ void CastExpr::applyCastWithTry(
   }
 }
 
-template <TypeKind Kind>
-void CastExpr::applyCast(
+template <TypeKind ToKind>
+void applyCastPrimitivesDispatch(
     const TypePtr& fromType,
     const TypePtr& toType,
     const SelectivityVector& rows,
     exec::EvalCtx& context,
     const BaseVector& input,
     VectorPtr& result) {
-  using To = typename TypeTraits<Kind>::NativeType;
   context.ensureWritable(rows, toType, result);
-  auto* resultFlatVector = result->as<FlatVector<To>>();
 
-  // Unwrapping fromType pointer. VERY IMPORTANT: dynamic type pointer and
-  // static type templates in each cast must match exactly
-  // @TODO Add support for needed complex types in T74045702
-  switch (fromType->kind()) {
-    case TypeKind::TINYINT: {
-      return applyCastWithTry<To, int8_t>(
-          rows, context, input, resultFlatVector);
-    }
-    case TypeKind::SMALLINT: {
-      return applyCastWithTry<To, int16_t>(
-          rows, context, input, resultFlatVector);
-    }
-    case TypeKind::INTEGER: {
-      return applyCastWithTry<To, int32_t>(
-          rows, context, input, resultFlatVector);
-    }
-    case TypeKind::BIGINT: {
-      return applyCastWithTry<To, int64_t>(
-          rows, context, input, resultFlatVector);
-    }
-    case TypeKind::BOOLEAN: {
-      return applyCastWithTry<To, bool>(rows, context, input, resultFlatVector);
-    }
-    case TypeKind::REAL: {
-      return applyCastWithTry<To, float>(
-          rows, context, input, resultFlatVector);
-    }
-    case TypeKind::DOUBLE: {
-      return applyCastWithTry<To, double>(
-          rows, context, input, resultFlatVector);
-    }
-    case TypeKind::VARCHAR:
-    case TypeKind::VARBINARY: {
-      return applyCastWithTry<To, StringView>(
-          rows, context, input, resultFlatVector);
-    }
-    case TypeKind::DATE: {
-      return applyCastWithTry<To, Date>(rows, context, input, resultFlatVector);
-    }
-    case TypeKind::TIMESTAMP: {
-      return applyCastWithTry<To, Timestamp>(
-          rows, context, input, resultFlatVector);
-    }
-    default: {
-      VELOX_UNSUPPORTED("Invalid from type in casting: {}", fromType);
-    }
-  }
+  // This already excludes complex types, hugeint and unknown from type kinds.
+  VELOX_DYNAMIC_SCALAR_TEMPLATE_TYPE_DISPATCH(
+      applyCastPrimitives,
+      ToKind,
+      fromType->kind() /*dispatched*/,
+      rows,
+      context,
+      input,
+      result);
 }
+} // namespace
 
 VectorPtr CastExpr::applyMap(
     const SelectivityVector& rows,
@@ -502,7 +464,7 @@ VectorPtr CastExpr::applyRow(
       std::move(newChildren));
 }
 
-template <typename DecimalType>
+template <typename toDecimalType>
 VectorPtr CastExpr::applyDecimal(
     const SelectivityVector& rows,
     const BaseVector& input,
@@ -512,31 +474,38 @@ VectorPtr CastExpr::applyDecimal(
   VectorPtr castResult;
   context.ensureWritable(rows, toType, castResult);
   (*castResult).clearNulls(rows);
+
+  // toType is a decimal
   switch (fromType->kind()) {
-    case TypeKind::SHORT_DECIMAL:
-      applyDecimalCastKernel<UnscaledShortDecimal, DecimalType>(
-          rows, input, context, fromType, toType, castResult);
-      break;
-    case TypeKind::LONG_DECIMAL:
-      applyDecimalCastKernel<UnscaledLongDecimal, DecimalType>(
-          rows, input, context, fromType, toType, castResult);
-      break;
     case TypeKind::TINYINT:
-      applyIntToDecimalCastKernel<int8_t, DecimalType>(
+      applyIntToDecimalCastKernel<int8_t, toDecimalType>(
           rows, input, context, toType, castResult);
       break;
     case TypeKind::SMALLINT:
-      applyIntToDecimalCastKernel<int16_t, DecimalType>(
+      applyIntToDecimalCastKernel<int16_t, toDecimalType>(
           rows, input, context, toType, castResult);
       break;
     case TypeKind::INTEGER:
-      applyIntToDecimalCastKernel<int32_t, DecimalType>(
+      applyIntToDecimalCastKernel<int32_t, toDecimalType>(
           rows, input, context, toType, castResult);
       break;
-    case TypeKind::BIGINT:
-      applyIntToDecimalCastKernel<int64_t, DecimalType>(
+    case TypeKind::BIGINT: {
+      if (fromType->isShortDecimal()) {
+        applyDecimalCastKernel<int64_t, toDecimalType>(
+            rows, input, context, fromType, toType, castResult);
+        break;
+      }
+      applyIntToDecimalCastKernel<int64_t, toDecimalType>(
           rows, input, context, toType, castResult);
       break;
+    }
+    case TypeKind::HUGEINT: {
+      if (fromType->isLongDecimal()) {
+        applyDecimalCastKernel<int128_t, toDecimalType>(
+            rows, input, context, fromType, toType, castResult);
+        break;
+      }
+    }
     default:
       VELOX_UNSUPPORTED(
           "Cast from {} to {} is not supported",
@@ -565,6 +534,18 @@ void CastExpr::applyPeeled(
     } else {
       castFromOperator_->castFrom(input, context, rows, toType, result);
     }
+  } else if (toType->isShortDecimal()) {
+    result = applyDecimal<int64_t>(rows, input, context, fromType, toType);
+  } else if (toType->isLongDecimal()) {
+    result = applyDecimal<int128_t>(rows, input, context, fromType, toType);
+  } else if (fromType->isDecimal() && toType->isDouble()) {
+    if (fromType->isShortDecimal()) {
+      result =
+          applyDecimalToDoubleCast<int64_t>(rows, input, context, fromType);
+    } else if (fromType->isLongDecimal()) {
+      result =
+          applyDecimalToDoubleCast<int128_t>(rows, input, context, fromType);
+    }
   } else {
     switch (toType->kind()) {
       case TypeKind::MAP:
@@ -591,18 +572,10 @@ void CastExpr::applyPeeled(
             fromType->asRow(),
             toType);
         break;
-      case TypeKind::SHORT_DECIMAL:
-        result = applyDecimal<UnscaledShortDecimal>(
-            rows, input, context, fromType, toType);
-        break;
-      case TypeKind::LONG_DECIMAL:
-        result = applyDecimal<UnscaledLongDecimal>(
-            rows, input, context, fromType, toType);
-        break;
       default: {
         // Handle primitive type conversions.
         VELOX_DYNAMIC_SCALAR_TYPE_DISPATCH(
-            applyCast,
+            applyCastPrimitivesDispatch,
             toType->kind(),
             fromType,
             toType,

@@ -17,6 +17,7 @@
 #include <optional>
 #include <string>
 #include "velox/common/base/tests/GTestUtils.h"
+#include "velox/external/date/tz.h"
 #include "velox/functions/prestosql/tests/utils/FunctionBaseTest.h"
 #include "velox/functions/prestosql/types/TimestampWithTimeZoneType.h"
 #include "velox/type/tz/TimeZoneMap.h"
@@ -70,14 +71,14 @@ class DateTimeFunctionsTest : public functions::test::FunctionBaseTest {
   }
 
   void setQueryTimeZone(const std::string& timeZone) {
-    queryCtx_->setConfigOverridesUnsafe({
+    queryCtx_->testingOverrideConfigUnsafe({
         {core::QueryConfig::kSessionTimezone, timeZone},
         {core::QueryConfig::kAdjustTimestampToTimezone, "true"},
     });
   }
 
   void disableAdjustTimestampToTimezone() {
-    queryCtx_->setConfigOverridesUnsafe({
+    queryCtx_->testingOverrideConfigUnsafe({
         {core::QueryConfig::kAdjustTimestampToTimezone, "false"},
     });
   }
@@ -223,6 +224,15 @@ class DateTimeFunctionsTest : public functions::test::FunctionBaseTest {
         nullptr,
         timestamps->size(),
         std::vector<VectorPtr>({timestamps, timezones}));
+  }
+
+  Date getCurrentDate(const std::optional<std::string>& timeZone) {
+    return parseDate(date::format(
+        "%Y-%m-%d",
+        timeZone.has_value()
+            ? date::make_zoned(
+                  timeZone.value(), std::chrono::system_clock::now())
+            : std::chrono::system_clock::now()));
   }
 };
 
@@ -424,7 +434,7 @@ TEST_F(DateTimeFunctionsTest, year) {
 
   EXPECT_EQ(std::nullopt, year(std::nullopt));
   EXPECT_EQ(1969, year(Timestamp(0, 0)));
-  EXPECT_EQ(1969, year(Timestamp(-1, 12300000000)));
+  EXPECT_EQ(1969, year(Timestamp(-1, Timestamp::kMaxNanos)));
   EXPECT_EQ(2096, year(Timestamp(4000000000, 0)));
   EXPECT_EQ(2096, year(Timestamp(4000000000, 123000000)));
   EXPECT_EQ(2001, year(Timestamp(998474645, 321000000)));
@@ -469,34 +479,6 @@ TEST_F(DateTimeFunctionsTest, yearTimestampWithTimezone) {
       std::nullopt,
       evaluateWithTimestampWithTimezone<int64_t>(
           "year(c0)", std::nullopt, std::nullopt));
-}
-
-TEST_F(DateTimeFunctionsTest, timestampTooLarge) {
-  std::vector<std::string> functions = {
-      "year",
-      "quarter",
-      "month",
-      "week",
-      "day",
-      "dow",
-      "doy",
-      "yow",
-      "hour",
-      "minute",
-      "second",
-  };
-
-  Timestamp ts(100'000'000'000'000'000, 0);
-  for (const auto& function : functions) {
-    VELOX_ASSERT_THROW(
-        evaluateOnce<int64_t>(
-            fmt::format("{}(c0)", function), std::make_optional(ts)),
-        "Timestamp is too large: 100000000000000000 seconds since epoch");
-  }
-
-  VELOX_ASSERT_THROW(
-      evaluateOnce<int64_t>("date_trunc('hour', c0)", std::make_optional(ts)),
-      "Timestamp is too large: 100000000000000000 seconds since epoch");
 }
 
 TEST_F(DateTimeFunctionsTest, weekDate) {
@@ -585,7 +567,7 @@ TEST_F(DateTimeFunctionsTest, quarter) {
 
   EXPECT_EQ(std::nullopt, quarter(std::nullopt));
   EXPECT_EQ(4, quarter(Timestamp(0, 0)));
-  EXPECT_EQ(4, quarter(Timestamp(-1, 12300000000)));
+  EXPECT_EQ(4, quarter(Timestamp(-1, Timestamp::kMaxNanos)));
   EXPECT_EQ(4, quarter(Timestamp(4000000000, 0)));
   EXPECT_EQ(4, quarter(Timestamp(4000000000, 123000000)));
   EXPECT_EQ(2, quarter(Timestamp(990000000, 321000000)));
@@ -651,7 +633,7 @@ TEST_F(DateTimeFunctionsTest, month) {
 
   EXPECT_EQ(std::nullopt, month(std::nullopt));
   EXPECT_EQ(12, month(Timestamp(0, 0)));
-  EXPECT_EQ(12, month(Timestamp(-1, 12300000000)));
+  EXPECT_EQ(12, month(Timestamp(-1, Timestamp::kMaxNanos)));
   EXPECT_EQ(10, month(Timestamp(4000000000, 0)));
   EXPECT_EQ(10, month(Timestamp(4000000000, 123000000)));
   EXPECT_EQ(8, month(Timestamp(998474645, 321000000)));
@@ -714,7 +696,7 @@ TEST_F(DateTimeFunctionsTest, hour) {
 
   EXPECT_EQ(std::nullopt, hour(std::nullopt));
   EXPECT_EQ(13, hour(Timestamp(0, 0)));
-  EXPECT_EQ(12, hour(Timestamp(-1, 12300000000)));
+  EXPECT_EQ(12, hour(Timestamp(-1, Timestamp::kMaxNanos)));
   // Disabled for now because the TZ for Pacific/Apia in 2096 varies between
   // systems.
   // EXPECT_EQ(21, hour(Timestamp(4000000000, 0)));
@@ -1181,7 +1163,7 @@ TEST_F(DateTimeFunctionsTest, second) {
   EXPECT_EQ(0, second(Timestamp(0, 0)));
   EXPECT_EQ(40, second(Timestamp(4000000000, 0)));
   EXPECT_EQ(59, second(Timestamp(-1, 123000000)));
-  EXPECT_EQ(59, second(Timestamp(-1, 12300000000)));
+  EXPECT_EQ(59, second(Timestamp(-1, Timestamp::kMaxNanos)));
 }
 
 TEST_F(DateTimeFunctionsTest, secondDate) {
@@ -1236,7 +1218,7 @@ TEST_F(DateTimeFunctionsTest, millisecond) {
   EXPECT_EQ(0, millisecond(Timestamp(0, 0)));
   EXPECT_EQ(0, millisecond(Timestamp(4000000000, 0)));
   EXPECT_EQ(123, millisecond(Timestamp(-1, 123000000)));
-  EXPECT_EQ(12300, millisecond(Timestamp(-1, 12300000000)));
+  EXPECT_EQ(999, millisecond(Timestamp(-1, Timestamp::kMaxNanos)));
 }
 
 TEST_F(DateTimeFunctionsTest, millisecondDate) {
@@ -1823,11 +1805,18 @@ TEST_F(DateTimeFunctionsTest, dateDiffDate) {
   EXPECT_EQ(std::nullopt, dateDiff("month", std::nullopt, Date(0)));
 
   // Check invalid units
-  EXPECT_THROW(dateDiff("millisecond", Date(1), Date(0)), VeloxUserError);
-  EXPECT_THROW(dateDiff("second", Date(1), Date(0)), VeloxUserError);
-  EXPECT_THROW(dateDiff("minute", Date(1), Date(0)), VeloxUserError);
-  EXPECT_THROW(dateDiff("hour", Date(1), Date(0)), VeloxUserError);
-  EXPECT_THROW(dateDiff("invalid_unit", Date(1), Date(0)), VeloxUserError);
+  VELOX_ASSERT_THROW(
+      dateDiff("millisecond", Date(1), Date(0)),
+      "millisecond is not a valid DATE field");
+  VELOX_ASSERT_THROW(
+      dateDiff("second", Date(1), Date(0)), "second is not a valid DATE field");
+  VELOX_ASSERT_THROW(
+      dateDiff("minute", Date(1), Date(0)), "minute is not a valid DATE field");
+  VELOX_ASSERT_THROW(
+      dateDiff("hour", Date(1), Date(0)), "hour is not a valid DATE field");
+  VELOX_ASSERT_THROW(
+      dateDiff("invalid_unit", Date(1), Date(0)),
+      "Unsupported datetime unit: invalid_unit");
 
   // Simple tests
   EXPECT_EQ(
@@ -1838,6 +1827,14 @@ TEST_F(DateTimeFunctionsTest, dateDiffDate) {
       4, dateDiff("quarter", parseDate("2019-02-28"), parseDate("2020-02-28")));
   EXPECT_EQ(
       1, dateDiff("year", parseDate("2019-02-28"), parseDate("2020-02-28")));
+
+  // Verify that units are not case sensitive.
+  EXPECT_EQ(
+      1, dateDiff("DAY", parseDate("2019-02-28"), parseDate("2019-03-01")));
+  EXPECT_EQ(
+      1, dateDiff("dAY", parseDate("2019-02-28"), parseDate("2019-03-01")));
+  EXPECT_EQ(
+      1, dateDiff("Day", parseDate("2019-02-28"), parseDate("2019-03-01")));
 
   // Account for the last day of a year-month
   EXPECT_EQ(
@@ -1859,6 +1856,19 @@ TEST_F(DateTimeFunctionsTest, dateDiffDate) {
       dateDiff("quarter", parseDate("2020-02-29"), parseDate("2019-02-28")));
   EXPECT_EQ(
       -2, dateDiff("year", parseDate("2020-02-29"), parseDate("2018-02-28")));
+
+  // Check Large date
+  EXPECT_EQ(
+      737790,
+      dateDiff("day", parseDate("2020-02-29"), parseDate("4040-02-29")));
+  EXPECT_EQ(
+      24240,
+      dateDiff("month", parseDate("2020-02-29"), parseDate("4040-02-29")));
+  EXPECT_EQ(
+      8080,
+      dateDiff("quarter", parseDate("2020-02-29"), parseDate("4040-02-29")));
+  EXPECT_EQ(
+      2020, dateDiff("year", parseDate("2020-02-29"), parseDate("4040-02-29")));
 }
 
 TEST_F(DateTimeFunctionsTest, dateDiffTimestamp) {
@@ -2110,6 +2120,62 @@ TEST_F(DateTimeFunctionsTest, dateDiffTimestamp) {
           "year",
           fromTimestampString("2020-02-29 10:00:00.500"),
           fromTimestampString("2018-02-28 10:00:00.500")));
+}
+
+TEST_F(DateTimeFunctionsTest, dateDiffTimestampWithTimezone) {
+  const auto dateDiff = [&](const std::string& unit,
+                            std::optional<int64_t> timestamp1,
+                            const std::optional<std::string>& timeZoneName1,
+                            std::optional<int64_t> timestamp2,
+                            const std::optional<std::string>& timeZoneName2) {
+    auto ts1 = (timestamp1.has_value() && timeZoneName1.has_value())
+        ? makeTimestampWithTimeZoneVector(
+              timestamp1.value(), timeZoneName1.value().c_str())
+        : BaseVector::createNullConstant(TIMESTAMP_WITH_TIME_ZONE(), 1, pool());
+    auto ts2 = (timestamp2.has_value() && timeZoneName2.has_value())
+        ? makeTimestampWithTimeZoneVector(
+              timestamp2.value(), timeZoneName2.value().c_str())
+        : BaseVector::createNullConstant(TIMESTAMP_WITH_TIME_ZONE(), 1, pool());
+
+    return evaluateOnce<int64_t>(
+        fmt::format("date_diff('{}', c0, c1)", unit),
+        makeRowVector({ts1, ts2}));
+  };
+
+  // timestamp1: 1970-01-01 00:00:00.000 +00:00 (0)
+  // timestamp2: 2020-08-25 16:30:10.123 -08:00 (1'598'373'010'123)
+  EXPECT_EQ(
+      1598347810123,
+      dateDiff(
+          "millisecond",
+          0,
+          "+00:00",
+          1'598'373'010'123,
+          "America/Los_Angeles"));
+  EXPECT_EQ(
+      1598347810,
+      dateDiff(
+          "second", 0, "+00:00", 1'598'373'010'123, "America/Los_Angeles"));
+  EXPECT_EQ(
+      26639130,
+      dateDiff(
+          "minute", 0, "+00:00", 1'598'373'010'123, "America/Los_Angeles"));
+  EXPECT_EQ(
+      443985,
+      dateDiff("hour", 0, "+00:00", 1'598'373'010'123, "America/Los_Angeles"));
+  EXPECT_EQ(
+      18499,
+      dateDiff("day", 0, "+00:00", 1'598'373'010'123, "America/Los_Angeles"));
+  EXPECT_EQ(
+      607,
+      dateDiff("month", 0, "+00:00", 1'598'373'010'123, "America/Los_Angeles"));
+  EXPECT_EQ(
+      202,
+      dateDiff(
+          "quarter", 0, "+00:00", 1'598'373'010'123, "America/Los_Angeles"));
+  EXPECT_EQ(
+      50,
+      dateDiff("year", 0, "+00:00", 1'598'373'010'123, "America/Los_Angeles"));
 }
 
 TEST_F(DateTimeFunctionsTest, parseDatetime) {
@@ -3006,4 +3072,132 @@ TEST_F(DateTimeFunctionsTest, dateFunctionTimestampWithTimezone) {
       Date(-18298),
       dateFunction(
           (-18297 * kSecondsInDay + 6 * 3'600) * 1'000, "America/Los_Angeles"));
+}
+
+TEST_F(DateTimeFunctionsTest, currentDateWithTimezone) {
+  // Since the execution of the code is slightly delayed, it is difficult for us
+  // to get the correct value of current_date. If you compare directly based on
+  // the current time, you may get wrong result at the last second of the day,
+  // and current_date may be the next day of the comparison value. In order to
+  // avoid this situation, we compute a new comparison value after the execution
+  // of current_date, so that the result of current_date is either consistent
+  // with the first comparison value or the second comparison value, and the
+  // difference between the two comparison values is at most one day.
+  auto emptyRowVector = makeRowVector(ROW({}), 1);
+  auto tz = "America/Los_Angeles";
+  setQueryTimeZone(tz);
+  auto dateBefore = getCurrentDate(tz);
+  auto result = evaluateOnce<Date>("current_date()", emptyRowVector);
+  auto dateAfter = getCurrentDate(tz);
+
+  EXPECT_TRUE(result.has_value());
+  EXPECT_LE(dateBefore, result);
+  EXPECT_LE(result, dateAfter);
+  EXPECT_LE(dateAfter.days() - dateBefore.days(), 1);
+}
+
+TEST_F(DateTimeFunctionsTest, currentDateWithoutTimezone) {
+  auto emptyRowVector = makeRowVector(ROW({}), 1);
+
+  // Do not set the timezone, so the timezone obtained from QueryConfig
+  // will be nullptr.
+  auto dateBefore = getCurrentDate(std::nullopt);
+  auto result = evaluateOnce<Date>("current_date()", emptyRowVector);
+  auto dateAfter = getCurrentDate(std::nullopt);
+
+  EXPECT_TRUE(result.has_value());
+  EXPECT_LE(dateBefore, result);
+  EXPECT_LE(result, dateAfter);
+  EXPECT_LE(dateAfter.days() - dateBefore.days(), 1);
+}
+
+TEST_F(DateTimeFunctionsTest, timeZoneHour) {
+  const auto timezone_hour = [&](const char* time, const char* timezone) {
+    Timestamp ts = util::fromTimestampString(time);
+    auto timestamp = ts.toMillis();
+    auto hour = evaluateWithTimestampWithTimezone<int64_t>(
+                    "timezone_hour(c0)", timestamp, timezone)
+                    .value();
+    return hour;
+  };
+
+  // Asia/Kolkata - should return 5 throughout the year
+  EXPECT_EQ(5, timezone_hour("2023-01-01 03:20:00", "Asia/Kolkata"));
+  EXPECT_EQ(5, timezone_hour("2023-06-01 03:20:00", "Asia/Kolkata"));
+  // America/Los_Angeles - Day light savings is from March 12 to Nov 5
+  EXPECT_EQ(-8, timezone_hour("2023-03-11 12:00:00", "America/Los_Angeles"));
+  EXPECT_EQ(-8, timezone_hour("2023-03-12 02:30:00", "America/Los_Angeles"));
+  EXPECT_EQ(-7, timezone_hour("2023-03-13 12:00:00", "America/Los_Angeles"));
+  EXPECT_EQ(-7, timezone_hour("2023-11-05 01:30:00", "America/Los_Angeles"));
+  EXPECT_EQ(-8, timezone_hour("2023-12-05 01:30:00", "America/Los_Angeles"));
+  // Different time with same date
+  EXPECT_EQ(-4, timezone_hour("2023-01-01 03:20:00", "Canada/Atlantic"));
+  EXPECT_EQ(-4, timezone_hour("2023-01-01 10:00:00", "Canada/Atlantic"));
+  // Invalid inputs
+  VELOX_ASSERT_THROW(
+      timezone_hour("invalid_date", "Canada/Atlantic"),
+      "Unable to parse timestamp value: \"invalid_date\", expected format is (YYYY-MM-DD HH:MM:SS[.MS])");
+  VELOX_ASSERT_THROW(
+      timezone_hour("123456", "Canada/Atlantic"),
+      "Unable to parse timestamp value: \"123456\", expected format is (YYYY-MM-DD HH:MM:SS[.MS])");
+}
+
+TEST_F(DateTimeFunctionsTest, timeZoneMinute) {
+  const auto timezone_minute = [&](const char* time, const char* timezone) {
+    Timestamp ts = util::fromTimestampString(time);
+    auto timestamp = ts.toMillis();
+    auto minute = evaluateWithTimestampWithTimezone<int64_t>(
+                      "timezone_minute(c0)", timestamp, timezone)
+                      .value();
+    return minute;
+  };
+
+  EXPECT_EQ(30, timezone_minute("1970-01-01 03:20:00", "Asia/Kolkata"));
+  EXPECT_EQ(0, timezone_minute("1970-01-01 03:20:00", "America/Los_Angeles"));
+  EXPECT_EQ(0, timezone_minute("1970-05-01 04:20:00", "America/Los_Angeles"));
+  EXPECT_EQ(0, timezone_minute("1970-01-01 03:20:00", "Canada/Atlantic"));
+  EXPECT_EQ(30, timezone_minute("1970-01-01 03:20:00", "Asia/Katmandu"));
+  EXPECT_EQ(45, timezone_minute("1970-01-01 03:20:00", "Pacific/Chatham"));
+  VELOX_ASSERT_THROW(
+      timezone_minute("abc", "Pacific/Chatham"),
+      "Unable to parse timestamp value: \"abc\", expected format is (YYYY-MM-DD HH:MM:SS[.MS])");
+  VELOX_ASSERT_THROW(
+      timezone_minute("2023-", "Pacific/Chatham"),
+      "Unable to parse timestamp value: \"2023-\", expected format is (YYYY-MM-DD HH:MM:SS[.MS])");
+}
+
+TEST_F(DateTimeFunctionsTest, timestampWithTimezoneComparisons) {
+  auto runAndCompare = [&](std::string expr,
+                           std::shared_ptr<RowVector>& inputs,
+                           VectorPtr expectedResult) {
+    auto actual = evaluate<SimpleVector<bool>>(expr, inputs);
+    test::assertEqualVectors(expectedResult, actual);
+  };
+
+  RowVectorPtr timestampWithTimezoneLhs = makeTimestampWithTimeZoneVector(
+      makeFlatVector<int64_t>({0, 0, 0}),
+      makeFlatVector<int16_t>({900, 900, 800}));
+  RowVectorPtr timestampWithTimezoneRhs = makeTimestampWithTimeZoneVector(
+      makeFlatVector<int64_t>({0, 1000, 0}),
+      makeFlatVector<int16_t>({900, 900, 900}));
+  auto inputs =
+      makeRowVector({timestampWithTimezoneLhs, timestampWithTimezoneRhs});
+
+  auto expectedEq = makeNullableFlatVector<bool>({true, false, false});
+  runAndCompare("c0 = c1", inputs, expectedEq);
+
+  auto expectedNeq = makeNullableFlatVector<bool>({false, true, true});
+  runAndCompare("c0 != c1", inputs, expectedNeq);
+
+  auto expectedLt = makeNullableFlatVector<bool>({false, true, false});
+  runAndCompare("c0 < c1", inputs, expectedLt);
+
+  auto expectedGt = makeNullableFlatVector<bool>({false, false, true});
+  runAndCompare("c0 > c1", inputs, expectedGt);
+
+  auto expectedLte = makeNullableFlatVector<bool>({true, true, false});
+  runAndCompare("c0 <= c1", inputs, expectedLte);
+
+  auto expectedGte = makeNullableFlatVector<bool>({true, false, true});
+  runAndCompare("c0 >= c1", inputs, expectedGte);
 }

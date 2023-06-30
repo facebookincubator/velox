@@ -28,7 +28,7 @@ add_library(
   ArraySort.cpp
   ArraySum.cpp
   Comparisons.cpp
-  DecimalArithmetic.cpp
+  DecimalVectorFunctions.cpp
   ElementAt.cpp
   FilterFunctions.cpp
   FromUnixTime.cpp
@@ -38,6 +38,7 @@ add_library(
   JsonFunctions.cpp
   Map.cpp
   MapEntries.cpp
+  MapFromEntries.cpp
   MapKeysAndValues.cpp
   MapZipWith.cpp
   Not.cpp
@@ -71,7 +72,7 @@ target_link_libraries(
   velox_type_tz
   velox_presto_types
   velox_functions_util
-  ${FOLLY})
+  Folly::folly)
 
 set_property(TARGET velox_functions_prestosql_impl PROPERTY JOB_POOL_COMPILE
                                                             high_memory_pool)

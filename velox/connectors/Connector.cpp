@@ -116,8 +116,40 @@ std::string commitStrategyToString(CommitStrategy commitStrategy) {
     case CommitStrategy::kTaskCommit:
       return "TASK_COMMIT";
     default:
-      VELOX_UNREACHABLE();
+      VELOX_UNREACHABLE(
+          "UNKOWN COMMIT STRATEGY: {}", static_cast<int>(commitStrategy));
   }
 }
 
+CommitStrategy stringToCommitStrategy(const std::string& strategy) {
+  if (strategy == "NO_COMMIT") {
+    return CommitStrategy::kNoCommit;
+  } else if (strategy == "TASK_COMMIT") {
+    return CommitStrategy::kTaskCommit;
+  } else {
+    VELOX_UNREACHABLE("UNKOWN COMMIT STRATEGY: {}", strategy);
+  }
+}
+
+folly::dynamic ColumnHandle::serializeBase(std::string_view name) {
+  folly::dynamic obj = folly::dynamic::object;
+  obj["name"] = name;
+  return obj;
+}
+
+folly::dynamic ColumnHandle::serialize() const {
+  return serializeBase("ColumnHandle");
+}
+
+folly::dynamic ConnectorTableHandle::serializeBase(
+    std::string_view name) const {
+  folly::dynamic obj = folly::dynamic::object;
+  obj["name"] = name;
+  obj["connectorId"] = connectorId_;
+  return obj;
+}
+
+folly::dynamic ConnectorTableHandle::serialize() const {
+  return serializeBase("ConnectorTableHandle");
+}
 } // namespace facebook::velox::connector

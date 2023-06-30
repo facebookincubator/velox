@@ -296,8 +296,7 @@ std::shared_ptr<Expr> compileLambda(
 }
 
 ExprPtr tryFoldIfConstant(const ExprPtr& expr, Scope* scope) {
-  if (expr->isConstant() && !expr->inputs().empty() &&
-      scope->exprSet->execCtx()) {
+  if (expr->isConstant() && scope->exprSet->execCtx()) {
     try {
       auto rowType = ROW({}, {});
       auto execCtx = scope->exprSet->execCtx();
@@ -358,6 +357,7 @@ ExprPtr compileExpression(
       alreadyCompiled->setMultiplyReferenced();
       // A property of this expression changed, namely isMultiplyReferenced_,
       // that affects metadata, so we re-compute it.
+      alreadyCompiled->clearMetaData();
       alreadyCompiled->computeMetadata();
     }
     return alreadyCompiled;
@@ -370,7 +370,7 @@ ExprPtr compileExpression(
   auto compiledInputs = compileInputs(
       expr, scope, config, pool, flatteningCandidates, enableConstantFolding);
   auto inputTypes = getTypes(compiledInputs);
-
+  bool isConstantExpr = false;
   if (dynamic_cast<const core::ConcatTypedExpr*>(expr.get())) {
     result = getRowConstructorExpr(
         resultType, std::move(compiledInputs), trackCpuUsage);
@@ -401,7 +401,7 @@ ExprPtr compileExpression(
           trackCpuUsage);
     } else if (
         auto simpleFunctionEntry =
-            SimpleFunctions().resolveFunction(call->name(), inputTypes)) {
+            simpleFunctions().resolveFunction(call->name(), inputTypes)) {
       VELOX_USER_CHECK(
           resultType->equivalent(*simpleFunctionEntry->type().get()),
           "Found incompatible return types for '{}' ({} vs. {}) "
@@ -422,7 +422,7 @@ ExprPtr compileExpression(
       const auto& functionName = call->name();
       auto vectorFunctionSignatures = getVectorFunctionSignatures(functionName);
       auto simpleFunctionSignatures =
-          SimpleFunctions().getFunctionSignatures(functionName);
+          simpleFunctions().getFunctionSignatures(functionName);
       std::vector<std::string> signatures;
 
       if (vectorFunctionSignatures.has_value()) {
@@ -436,12 +436,12 @@ ExprPtr compileExpression(
       }
 
       if (signatures.empty()) {
-        VELOX_FAIL(
+        VELOX_USER_FAIL(
             "Scalar function name not registered: {}, called with arguments: ({}).",
             call->name(),
             folly::join(", ", inputTypes));
       } else {
-        VELOX_FAIL(
+        VELOX_USER_FAIL(
             "Scalar function {} not registered with arguments: ({}). "
             "Found function registered with the following signatures:\n{}",
             call->name(),
@@ -466,6 +466,7 @@ ExprPtr compileExpression(
       auto constant =
           dynamic_cast<const core::ConstantTypedExpr*>(expr.get())) {
     result = std::make_shared<ConstantExpr>(constant->toConstantVector(pool));
+    isConstantExpr = true;
   } else if (
       auto lambda = dynamic_cast<const core::LambdaTypedExpr*>(expr.get())) {
     result = compileLambda(
@@ -481,8 +482,10 @@ ExprPtr compileExpression(
 
   result->computeMetadata();
 
-  auto folded =
-      enableConstantFolding ? tryFoldIfConstant(result, scope) : result;
+  // If the expression is constant folding it is redundant.
+  auto folded = enableConstantFolding && !isConstantExpr
+      ? tryFoldIfConstant(result, scope)
+      : result;
   scope->visited[expr.get()] = folded;
   return folded;
 }

@@ -172,6 +172,11 @@ class VectorHasher {
   // computeValueIds(). The decoded vector can be accessed via decodedVector()
   // getter.
   void decode(const BaseVector& vector, const SelectivityVector& rows) {
+    VELOX_CHECK(
+        type_->kindEquals(vector.type()),
+        "Type mismatch: {} vs. {}",
+        type_->toString(),
+        vector.type()->toString());
     decoded_.decode(vector, rows);
   }
 
@@ -696,6 +701,11 @@ template <>
 bool VectorHasher::makeValueIdsDecoded<bool, false>(
     const SelectivityVector& rows,
     uint64_t* result);
+
+/// Creates VectorHasher instances for specified columns.
+std::vector<std::unique_ptr<VectorHasher>> createVectorHashers(
+    const RowTypePtr& rowType,
+    const std::vector<core::FieldAccessTypedExprPtr>& keys);
 
 } // namespace facebook::velox::exec
 

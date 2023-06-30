@@ -50,7 +50,8 @@ add_library(
   SelectiveStructColumnReader.cpp
   SeekableInputStream.cpp
   TypeUtils.cpp
-  TypeWithId.cpp)
+  TypeWithId.cpp
+  WriterFactory.cpp)
 
 target_link_libraries(
   velox_dwio_common
@@ -63,5 +64,5 @@ target_link_libraries(
   velox_expression
   velox_memory
   Boost::regex
-  ${FOLLY_WITH_DEPENDENCIES}
+  Folly::folly
   glog::glog)

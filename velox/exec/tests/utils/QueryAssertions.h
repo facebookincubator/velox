@@ -90,7 +90,8 @@ class DuckDbQueryRunner {
 
 std::pair<std::unique_ptr<TaskCursor>, std::vector<RowVectorPtr>> readCursor(
     const CursorParameters& params,
-    std::function<void(exec::Task*)> addSplits);
+    std::function<void(exec::Task*)> addSplits,
+    uint64_t maxWaitMicros = 1'000'000);
 
 /// The Task can return results before the Driver is finished executing.
 /// Wait upto maxWaitMicros for the Task to finish as 'expectedState' before
@@ -111,6 +112,9 @@ bool waitForTaskFailure(exec::Task* task, uint64_t maxWaitMicros = 1'000'000);
 
 /// Similar to waitForTaskFinish but wait for the task to abort.
 bool waitForTaskAborted(exec::Task* task, uint64_t maxWaitMicros = 1'000'000);
+
+/// Similar to waitForTaskFinish but wait for the task to cancel.
+bool waitForTaskCancelled(exec::Task* task, uint64_t maxWaitMicros = 1'000'000);
 
 /// Wait up to maxWaitMicros for 'task' state changes to 'state'. The function
 /// returns true if 'task' has changed to the expected 'state', otherwise false.

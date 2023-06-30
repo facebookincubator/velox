@@ -21,6 +21,7 @@
 #include "velox/functions/prestosql/types/TimestampWithTimeZoneType.h"
 #include "velox/vector/BaseVector.h"
 #include "velox/vector/ComplexVector.h"
+#include "velox/vector/fuzzer/VectorFuzzer.h"
 #include "velox/vector/tests/utils/VectorTestBase.h"
 
 using namespace facebook::velox;
@@ -34,38 +35,36 @@ class PrestoSerializerTest : public ::testing::Test {
     vectorMaker_ = std::make_unique<test::VectorMaker>(pool_.get());
   }
 
-  void sanityCheckEstimateSerializedSize(
-      RowVectorPtr rowVector,
-      const folly::Range<const IndexRange*>& ranges) {
-    auto numRows = rowVector->size();
-    std::vector<vector_size_t> rowSizes(numRows, 0);
-    std::vector<vector_size_t*> rawRowSizes(numRows);
-    for (auto i = 0; i < numRows; i++) {
-      rawRowSizes[i] = &rowSizes[i];
-    }
-    serde_->estimateSerializedSize(rowVector, ranges, rawRowSizes.data());
-  }
-
-  void serialize(
-      const RowVectorPtr& rowVector,
-      std::ostream* output,
-      const VectorSerde::Options* serdeOptions) {
-    auto numRows = rowVector->size();
+  void sanityCheckEstimateSerializedSize(const RowVectorPtr& rowVector) {
+    const auto numRows = rowVector->size();
 
     std::vector<IndexRange> rows(numRows);
     for (int i = 0; i < numRows; i++) {
       rows[i] = IndexRange{i, 1};
     }
 
-    sanityCheckEstimateSerializedSize(
-        rowVector, folly::Range(rows.data(), numRows));
+    std::vector<vector_size_t> rowSizes(numRows, 0);
+    std::vector<vector_size_t*> rawRowSizes(numRows);
+    for (auto i = 0; i < numRows; i++) {
+      rawRowSizes[i] = &rowSizes[i];
+    }
+    serde_->estimateSerializedSize(
+        rowVector, folly::Range(rows.data(), numRows), rawRowSizes.data());
+  }
+
+  void serialize(
+      const RowVectorPtr& rowVector,
+      std::ostream* output,
+      const VectorSerde::Options* serdeOptions) {
+    sanityCheckEstimateSerializedSize(rowVector);
 
     auto arena = std::make_unique<StreamArena>(pool_.get());
     auto rowType = asRowType(rowVector->type());
+    auto numRows = rowVector->size();
     auto serializer =
         serde_->createSerializer(rowType, numRows, arena.get(), serdeOptions);
 
-    serializer->append(rowVector, folly::Range(rows.data(), numRows));
+    serializer->append(rowVector);
     facebook::velox::serializer::presto::PrestoOutputStreamListener listener;
     OStreamOutputStream out(output, &listener);
     serializer->flush(&out);
@@ -92,7 +91,7 @@ class PrestoSerializerTest : public ::testing::Test {
   }
 
   RowVectorPtr deserialize(
-      std::shared_ptr<const RowType> rowType,
+      const RowTypePtr& rowType,
       const std::string& input,
       const VectorSerde::Options* serdeOptions) {
     auto byteStream = toByteStream(input);
@@ -322,13 +321,13 @@ TEST_F(PrestoSerializerTest, timestampWithNanosecondPrecision) {
   assertEqualVectors(deserialized, expectedOutputWithLostPrecision);
 }
 
-TEST_F(PrestoSerializerTest, unscaledLongDecimal) {
+TEST_F(PrestoSerializerTest, longDecimal) {
   std::vector<int128_t> decimalValues(102);
-  decimalValues[0] = UnscaledLongDecimal::min().unscaledValue();
+  decimalValues[0] = DecimalUtil::kLongDecimalMin;
   for (int row = 1; row < 101; row++) {
     decimalValues[row] = row - 50;
   }
-  decimalValues[101] = UnscaledLongDecimal::max().unscaledValue();
+  decimalValues[101] = DecimalUtil::kLongDecimalMax;
   auto vector =
       vectorMaker_->longDecimalFlatVector(decimalValues, DECIMAL(20, 5));
 
@@ -379,4 +378,25 @@ TEST_F(PrestoSerializerTest, lazy) {
       kSize,
       std::make_unique<SimpleVectorLoader>([&](auto) { return rowVector; }));
   testRoundTrip(lazyVector);
+}
+
+TEST_F(PrestoSerializerTest, ioBufRoundTrip) {
+  serializer::presto::PrestoVectorSerde::registerVectorSerde();
+
+  VectorFuzzer::Options opts;
+  opts.timestampPrecision =
+      VectorFuzzer::Options::TimestampPrecision::kMilliSeconds;
+  opts.nullRatio = 0.1;
+  VectorFuzzer fuzzer(opts, pool_.get());
+
+  const size_t numRounds = 20;
+
+  for (size_t i = 0; i < numRounds; ++i) {
+    auto rowType = fuzzer.randRowType();
+    auto inputRowVector = fuzzer.fuzzInputRow(rowType);
+    auto outputRowVector = IOBufToRowVector(
+        rowVectorToIOBuf(inputRowVector, *pool_), rowType, *pool_);
+
+    assertEqualVectors(inputRowVector, outputRowVector);
+  }
 }

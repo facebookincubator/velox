@@ -17,13 +17,51 @@
 
 #include "velox/common/memory/HashStringAllocator.h"
 #include "velox/common/memory/MemoryAllocator.h"
-#include "velox/exec/Aggregate.h"
+#include "velox/core/PlanNode.h"
 #include "velox/exec/ContainerRowSerde.h"
 #include "velox/exec/Spill.h"
 #include "velox/vector/FlatVector.h"
 #include "velox/vector/VectorTypeUtils.h"
 
 namespace facebook::velox::exec {
+
+class Aggregate;
+
+class Accumulator {
+ public:
+  Accumulator(
+      bool isFixedSize,
+      int32_t fixedSize,
+      bool usesExternalMemory,
+      int32_t alignment,
+      std::function<void(folly::Range<char**> groups)> destroyFunction);
+
+  Accumulator(Aggregate* aggregate);
+
+  bool isFixedSize() const;
+
+  int32_t fixedWidthSize() const;
+
+  bool usesExternalMemory() const;
+
+  int32_t alignment() const;
+
+  void destroy(folly::Range<char**> groups);
+
+  /// Used only for spilling. Do not introduce other usages.
+  Aggregate* aggregateForSpill() const {
+    VELOX_CHECK_NOT_NULL(aggregate_);
+    return aggregate_;
+  }
+
+ private:
+  const bool isFixedSize_;
+  const int32_t fixedSize_;
+  const bool usesExternalMemory_;
+  const int32_t alignment_;
+  std::function<void(folly::Range<char**> groups)> destroyFunction_;
+  Aggregate* aggregate_{nullptr};
+};
 
 using normalized_key_t = uint64_t;
 
@@ -93,6 +131,7 @@ class RowColumn {
 
   RowColumn(int32_t offset, int32_t nullOffset)
       : packedOffsets_(PackOffsets(offset, nullOffset)) {}
+
   int32_t offset() const {
     return packedOffsets_ >> 32;
   }
@@ -140,7 +179,7 @@ class RowContainer {
       : RowContainer(
             keyTypes,
             true, // nullableKeys
-            emptyAggregates(),
+            std::vector<Accumulator>{},
             dependentTypes,
             false, // hasNext
             false, // isJoinBuild
@@ -148,6 +187,8 @@ class RowContainer {
             false, // hasNormalizedKey
             pool,
             ContainerRowSerde::instance()) {}
+
+  static int32_t combineAlignments(int32_t a, int32_t b);
 
   // 'keyTypes' gives the type of the key of each row. For a group by,
   // order by or right outer join build side these may be
@@ -168,7 +209,7 @@ class RowContainer {
   RowContainer(
       const std::vector<TypePtr>& keyTypes,
       bool nullableKeys,
-      const std::vector<std::unique_ptr<Aggregate>>& aggregates,
+      const std::vector<Accumulator>& accumulators,
       const std::vector<TypePtr>& dependentTypes,
       bool hasNext,
       bool isJoinBuild,
@@ -185,6 +226,16 @@ class RowContainer {
         (rowSizeOffset_
              ? *reinterpret_cast<const uint32_t*>(row + rowSizeOffset_)
              : 0);
+  }
+
+  /// Sets all fields, aggregates, keys and dependents to null. Used
+  /// when making a row with uninitialized keys for aggregates with
+  /// no-op partial aggregation.
+  void setAllNull(char* FOLLY_NONNULL row) {
+    if (!nullOffsets_.empty()) {
+      memset(row + nullByte(nullOffsets_[0]), 0xff, initialNulls_.size());
+      bits::clearBit(row, freeFlagOffset_);
+    }
   }
 
   // The row size excluding any out-of-line stored variable length values.
@@ -470,6 +521,16 @@ class RowContainer {
       int32_t columnIndex,
       CompareFlags flags = CompareFlags());
 
+  // Compares the value between 'left' at 'leftIndex' and 'right' and
+  // 'rightIndex'. Returns 0 for equal, < 0 for left < right, > 0 otherwise.
+  // Both columns should have the same type.
+  int32_t compare(
+      const char* FOLLY_NONNULL left,
+      const char* FOLLY_NONNULL right,
+      int leftColumnIndex,
+      int rightColumnIndex,
+      CompareFlags flags = CompareFlags());
+
   // Allows get/set of the normalized key. If normalized keys are
   // used, they are stored in the word immediately below the hash
   // table row.
@@ -551,20 +612,6 @@ class RowContainer {
     return 0;
   }
 
-  // Extract column values for 'rows' into 'result'.
-  void extractRows(
-      const std::vector<char * FOLLY_NONNULL>& rows,
-      const RowVectorPtr& result) {
-    VELOX_CHECK_EQ(rows.size(), result->size());
-    if (rows.empty()) {
-      return;
-    }
-    for (int i = 0; i < result->childrenSize(); ++i) {
-      RowContainer::extractColumn(
-          rows.data(), rows.size(), columnAt(i), result->childAt(i));
-    }
-  }
-
   memory::MemoryPool* FOLLY_NONNULL pool() const {
     return stringAllocator_.pool();
   }
@@ -578,12 +625,8 @@ class RowContainer {
     return keyTypes_;
   }
 
-  const auto& aggregates() const {
-    return aggregates_;
-  }
-
-  auto numFreeRows() const {
-    return numFreeRows_;
+  const std::vector<Accumulator>& accumulators() const {
+    return accumulators_;
   }
 
   const HashStringAllocator& stringAllocator() const {
@@ -901,34 +944,49 @@ class RowContainer {
       const char* FOLLY_NONNULL left,
       const char* FOLLY_NONNULL right,
       const Type* FOLLY_NONNULL type,
-      RowColumn column,
+      RowColumn leftColumn,
+      RowColumn rightColumn,
       CompareFlags flags) {
     using T = typename KindToFlatVector<Kind>::HashRowType;
-    auto nullByte = column.nullByte();
-    auto nullMask = column.nullMask();
-    bool leftIsNull = isNullAt(left, nullByte, nullMask);
-    bool rightIsNull = isNullAt(right, nullByte, nullMask);
+    bool leftIsNull =
+        isNullAt(left, leftColumn.nullByte(), leftColumn.nullMask());
+    bool rightIsNull =
+        isNullAt(right, rightColumn.nullByte(), rightColumn.nullMask());
     if (leftIsNull) {
       return rightIsNull ? 0 : flags.nullsFirst ? -1 : 1;
     }
     if (rightIsNull) {
       return flags.nullsFirst ? 1 : -1;
     }
-    auto offset = column.offset();
+
+    auto leftOffset = leftColumn.offset();
+    auto rightOffset = rightColumn.offset();
     if (Kind == TypeKind::ROW || Kind == TypeKind::ARRAY ||
         Kind == TypeKind::MAP) {
-      return compareComplexType(left, right, type, offset, flags);
+      return compareComplexType(
+          left, right, type, leftOffset, rightOffset, flags);
     }
     if (Kind == TypeKind::VARCHAR || Kind == TypeKind::VARBINARY) {
-      auto leftValue = valueAt<StringView>(left, offset);
-      auto rightValue = valueAt<StringView>(right, offset);
+      auto leftValue = valueAt<StringView>(left, leftOffset);
+      auto rightValue = valueAt<StringView>(right, rightOffset);
       auto result = compareStringAsc(leftValue, rightValue);
       return flags.ascending ? result : result * -1;
     }
-    auto leftValue = valueAt<T>(left, offset);
-    auto rightValue = valueAt<T>(right, offset);
+
+    auto leftValue = valueAt<T>(left, leftOffset);
+    auto rightValue = valueAt<T>(right, rightOffset);
     auto result = comparePrimitiveAsc(leftValue, rightValue);
     return flags.ascending ? result : result * -1;
+  }
+
+  template <TypeKind Kind>
+  inline int compare(
+      const char* FOLLY_NONNULL left,
+      const char* FOLLY_NONNULL right,
+      const Type* FOLLY_NONNULL type,
+      RowColumn column,
+      CompareFlags flags) {
+    return compare<Kind>(left, right, type, column, column, flags);
   }
 
   template <typename T>
@@ -1013,6 +1071,14 @@ class RowContainer {
       int32_t offset,
       CompareFlags flags);
 
+  int32_t compareComplexType(
+      const char* FOLLY_NONNULL left,
+      const char* FOLLY_NONNULL right,
+      const Type* FOLLY_NONNULL type,
+      int32_t leftOffset,
+      int32_t rightOffset,
+      CompareFlags flags = CompareFlags());
+
   // Free any variable-width fields associated with the 'rows'.
   void freeVariableWidthFields(folly::Range<char**> rows);
 
@@ -1022,10 +1088,8 @@ class RowContainer {
   const std::vector<TypePtr> keyTypes_;
   const bool nullableKeys_;
 
-  // Aggregates in payload. TODO: Separate out aggregate metadata
-  // needed to manage memory of accumulators and the executable
-  // aggregates. Store the metadata here.
-  const std::vector<std::unique_ptr<Aggregate>>& aggregates_;
+  std::vector<Accumulator> accumulators_;
+
   bool usesExternalMemory_ = false;
   // Types of non-aggregate columns. Keys first. Corresponds pairwise
   // to 'typeKinds_' and 'rowColumns_'.
@@ -1076,22 +1140,15 @@ class RowContainer {
   std::unique_ptr<RowPartitions> partitions_;
 
   const RowSerde& serde_;
-  // RowContainer requires a valid reference to a vector of aggregates. We use
-  // a static constant to ensure the aggregates_ is valid throughout the
-  // lifetime of the RowContainer.
-  static const std::vector<std::unique_ptr<Aggregate>>& emptyAggregates() {
-    static const std::vector<std::unique_ptr<Aggregate>> kEmptyAggregates;
-    return kEmptyAggregates;
-  }
 
   int alignment_ = 1;
 };
 
 template <>
-inline UnscaledLongDecimal RowContainer::valueAt<UnscaledLongDecimal>(
+inline int128_t RowContainer::valueAt<int128_t>(
     const char* FOLLY_NONNULL group,
     int32_t offset) {
-  return UnscaledLongDecimal::deserialize(group + offset);
+  return HugeInt::deserialize(group + offset);
 }
 
 template <>
@@ -1155,28 +1212,26 @@ inline void RowContainer::storeNoNulls<TypeKind::MAP>(
 }
 
 template <>
-inline void RowContainer::storeWithNulls<TypeKind::LONG_DECIMAL>(
+inline void RowContainer::storeWithNulls<TypeKind::HUGEINT>(
     const DecodedVector& decoded,
     vector_size_t index,
     char* FOLLY_NONNULL row,
     int32_t offset,
     int32_t nullByte,
     uint8_t nullMask) {
-  UnscaledLongDecimal::serialize(
-      decoded.valueAt<UnscaledLongDecimal>(index), row + offset);
+  HugeInt::serialize(decoded.valueAt<int128_t>(index), row + offset);
   if (decoded.isNullAt(index)) {
     row[nullByte] |= nullMask;
   }
 }
 
 template <>
-inline void RowContainer::storeNoNulls<TypeKind::LONG_DECIMAL>(
+inline void RowContainer::storeNoNulls<TypeKind::HUGEINT>(
     const DecodedVector& decoded,
     vector_size_t index,
     char* FOLLY_NONNULL row,
     int32_t offset) {
-  UnscaledLongDecimal::serialize(
-      decoded.valueAt<UnscaledLongDecimal>(index), row + offset);
+  HugeInt::serialize(decoded.valueAt<int128_t>(index), row + offset);
 }
 
 template <>
@@ -1270,5 +1325,50 @@ inline int RowContainer::compare(
   return VELOX_DYNAMIC_TYPE_DISPATCH(
       compare, type->kind(), left, right, type, columnAt(columnIndex), flags);
 }
+
+inline int RowContainer::compare(
+    const char* FOLLY_NONNULL left,
+    const char* FOLLY_NONNULL right,
+    int leftColumnIndex,
+    int rightColumnIndex,
+    CompareFlags flags) {
+  auto leftType = types_[leftColumnIndex].get();
+  auto rightType = types_[rightColumnIndex].get();
+  VELOX_CHECK(leftType->equivalent(*rightType));
+  return VELOX_DYNAMIC_TYPE_DISPATCH(
+      compare,
+      leftType->kind(),
+      left,
+      right,
+      leftType,
+      columnAt(leftColumnIndex),
+      columnAt(rightColumnIndex),
+      flags);
+}
+
+/// A comparator of rows stored in the RowContainer compatible with
+/// std::priority_queue. Uses specified columns and sorting orders for
+/// comparison.
+class RowComparator {
+ public:
+  RowComparator(
+      const RowTypePtr& rowType,
+      const std::vector<core::FieldAccessTypedExprPtr>& sortingKeys,
+      const std::vector<core::SortOrder>& sortingOrders,
+      RowContainer* rowContainer);
+
+  /// Returns true if lhs < rhs, false otherwise.
+  bool operator()(const char* lhs, const char* rhs);
+
+  /// Returns true if decodeVectors[index] < rhs, false otherwise.
+  bool operator()(
+      const std::vector<DecodedVector>& decodedVectors,
+      vector_size_t index,
+      const char* rhs);
+
+ private:
+  std::vector<std::pair<column_index_t, core::SortOrder>> keyInfo_;
+  RowContainer* rowContainer_;
+};
 
 } // namespace facebook::velox::exec

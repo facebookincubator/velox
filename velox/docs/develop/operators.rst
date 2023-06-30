@@ -38,9 +38,10 @@ FilterNode                  FilterProject
 ProjectNode                 FilterProject
 AggregationNode             HashAggregation or StreamingAggregation
 GroupIdNode                 GroupId
+MarkDistinctNode            MarkDistinct
 HashJoinNode                HashProbe and HashBuild
 MergeJoinNode               MergeJoin
-CrossJoinNode               CrossJoinProbe and CrossJoinBuild
+NestedLoopJoinNode          NestedLoopJoinProbe and NestedLoopJoinBuild
 OrderByNode                 OrderBy
 TopNNode                    TopN
 LimitNode                   Limit
@@ -55,6 +56,8 @@ LocalPartitionNode          LocalPartition and LocalExchange
 EnforceSingleRowNode        EnforceSingleRow
 AssignUniqueIdNode          AssignUniqueId
 WindowNode                  Window
+RowNumberNode               RowNumber
+TopNRowNumberNode           TopNRowNumber
 ==========================  ==============================================   ===========================
 
 Plan Nodes
@@ -162,6 +165,7 @@ each measure for each combination of the grouping keys.
      - A boolean flag indicating whether the aggregation should drop rows with nulls in any of the grouping keys. Used to avoid unnecessary processing for an aggregation followed by an inner join on the grouping keys.
 
 .. _group-id-node:
+
 GroupIdNode
 ~~~~~~~~~~~
 
@@ -223,13 +227,13 @@ and emitting results.
    * - outputType
      - A list of output columns. This is a subset of columns available in the left and right inputs of the join. The columns may appear in different order than in the input.
 
-CrossJoinNode
-~~~~~~~~~~~~~
+NestedLoopJoinNode
+~~~~~~~~~~~~~~~~~~
 
-The cross join operation combines two separate inputs into a single output by
-combining each row of the left hand side input with each row of the right hand
-side input. If there are N rows in the left input and M rows in the right
-input, the output of the cross join will contain N * M rows.
+NestedLoopJoinNode represents an implementation that iterates through each row from
+the left side of the join and, for each row, iterates through all rows from the right
+side of the join, comparing them based on the join condition to find matching rows
+and emitting results. Nested loop join supports non-equality join.
 
 .. list-table::
    :widths: 10 30
@@ -238,6 +242,10 @@ input, the output of the cross join will contain N * M rows.
 
    * - Property
      - Description
+   * - joinType
+     - Join type: inner, left, right, full.
+   * - joinCondition
+     - Expression used as the join condition, may reference columns from both inputs.
    * - outputType
      - A list of output columns. This is a subset of columns available in the left and right inputs of the join. The columns may appear in different order than in the input.
 
@@ -511,6 +519,7 @@ the nodes executing the same query stage in a distributed query execution.
      - A 24-bit integer to uniquely identify the task id across all the nodes.
 
 .. _window-node:
+
 WindowNode
 ~~~~~~~~~~
 
@@ -541,6 +550,92 @@ If no sorting columns are specified then the order of the results is unspecified
     - Output column names for each window function invocation in windowFunctions list below.
   * - windowFunctions
     - Window function calls with the frame clause. e.g row_number(), first_value(name) between range 10 preceding and current row. The default frame is between range unbounded preceding and current row.
+
+RowNumberNode
+~~~~~~~~~~~~~
+
+An optimized version of a WindowNode with a single row_number function, an
+optional limit, and no sorting.
+
+Partitions the input using specified partitioning keys and assigns row numbers
+within each partition starting from 1. The operator runs in streaming mode. For
+each batch of input it computes and returns the results before accepting the
+next batch of input.
+
+This operator accumulates state: a hash table mapping partition keys to total
+number of rows seen in this partition so far. This operator doesn't support
+spilling yet.
+
+This operator is equivalent to a WindowNode followed by
+FilterNode(row_number <= limit), but it uses less memory and CPU and makes
+results available before seeing all input.
+
+.. list-table::
+  :widths: 10 30
+  :align: left
+  :header-rows: 1
+
+  * - Property
+    - Description
+  * - partitionKeys
+    - Partition by columns.
+  * - rowNumberColumnName
+    - Output column name for the row numbers.
+  * - limit
+    - Optional per-partition limit. If specified, the number of rows produced by this node will not exceed this value for any given partition. Extra rows will be dropped.
+
+TopNRowNumberNode
+~~~~~~~~~~~~~~~~~
+
+An optimized version of a WindowNode with a single row_number function and a
+limit over sorted partitions.
+
+Partitions the input using specified partitioning keys and maintains up to
+a 'limit' number of top rows for each partition. After receiving all input,
+assigns row numbers within each partition starting from 1.
+
+This operator accumulates state: a hash table mapping partition keys to a list
+of top 'limit' rows within that partition. This operator doesn't support
+spilling yet.
+
+This operator is logically equivalent to a WindowNode followed by
+FilterNode(row_number <= limit), but it uses less memory and CPU.
+
+.. list-table::
+  :widths: 10 30
+  :align: left
+  :header-rows: 1
+
+  * - Property
+    - Description
+  * - partitionKeys
+    - Partition by columns for the window functions.
+  * - sortingKeys
+    - Order by columns for the window functions.
+  * - sortingOrders
+    - Sorting order for each sorting key above. The supported sort orders are asc nulls first, asc nulls last, desc nulls first and desc nulls last.
+  * - rowNumberColumnName
+    - Output column name for the row numbers.
+  * - limit
+    - Per-partition limit. If specified, the number of rows produced by this node will not exceed this value for any given partition. Extra rows will be dropped.
+
+MarkDistinctNode
+~~~~~~~~~~~~~~~~
+
+The MarkDistinct operator is used to produce aggregate mask columns for aggregations over distinct values, e.g. agg(DISTINCT a).
+Mask is a boolean column set to true for a subset of input rows that collectively represent a set of unique values of 'distinctKeys'.
+
+.. list-table::
+  :widths: 10 30
+  :align: left
+  :header-rows: 1
+
+  * - Property
+    - Description
+  * - markerName
+    - Name of the output mask column.
+  * - distinctKeys
+    - Names of grouping keys.
 
 Examples
 --------

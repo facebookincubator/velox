@@ -31,6 +31,7 @@
 #include <vector>
 
 #include "velox/common/file/File.h"
+#include "velox/common/file/Region.h"
 #include "velox/dwio/common/IoStatistics.h"
 #include "velox/dwio/common/MetricsLog.h"
 
@@ -38,17 +39,6 @@ namespace facebook::velox::dwio::common {
 
 constexpr uint64_t DEFAULT_AUTO_PRELOAD_SIZE =
     (static_cast<const uint64_t>((1ul << 20) * 72));
-
-// define a disk region to read
-struct Region {
-  uint64_t offset;
-  uint64_t length;
-
-  Region(uint64_t offset = 0, uint64_t length = 0)
-      : offset{offset}, length{length} {}
-
-  bool operator<(const Region& other) const;
-};
 
 /**
  * An abstract interface for providing readers a stream of bytes.
@@ -128,12 +118,13 @@ class InputStream {
   /**
    * Take advantage of vectorized read API provided by some file system.
    * Allow file system to do optimzied reading plan to disk to minimize
-   * total bytes transferred through network
+   * total bytes transferred through network. Stores the result in an IOBuf
+   * range named at `iobufs`, which must have the same size as `regions`.
    */
   virtual void vread(
-      const std::vector<void*>& buffers,
-      const std::vector<Region>& regions,
-      const LogType purpose);
+      folly::Range<const velox::common::Region*> regions,
+      folly::Range<folly::IOBuf*> iobufs,
+      const LogType purpose) = 0;
 
   // case insensitive find
   static uint32_t ifind(const std::string& src, const std::string& target);
@@ -159,11 +150,11 @@ class ReadFileInputStream final : public InputStream {
 
   virtual ~ReadFileInputStream() {}
 
-  uint64_t getLength() const final {
+  uint64_t getLength() const final override {
     return readFile_->size();
   }
 
-  uint64_t getNaturalReadSize() const final {
+  uint64_t getNaturalReadSize() const final override {
     return readFile_->getNaturalReadSize();
   }
 
@@ -180,6 +171,11 @@ class ReadFileInputStream final : public InputStream {
       LogType logType) override;
 
   bool hasReadAsync() const override;
+
+  void vread(
+      folly::Range<const velox::common::Region*> regions,
+      folly::Range<folly::IOBuf*> iobufs,
+      const LogType purpose) override;
 
   const std::shared_ptr<velox::ReadFile>& getReadFile() const {
     return readFile_;

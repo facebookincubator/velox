@@ -44,19 +44,18 @@ class ParquetReaderBenchmark {
       : disableDictionary_(disableDictionary) {
     pool_ = memory::addDefaultLeafMemoryPool();
     dataSetBuilder_ = std::make_unique<DataSetBuilder>(*pool_.get(), 0);
+    auto path = fileFolder_->path + "/" + fileName_;
+    auto localWriteFile = std::make_unique<LocalWriteFile>(path, true, false);
     auto sink =
-        std::make_unique<LocalFileSink>(fileFolder_->path + "/" + fileName_);
-    std::shared_ptr<::parquet::WriterProperties> writerProperties;
+        std::make_unique<WriteFileDataSink>(std::move(localWriteFile), path);
+    facebook::velox::parquet::WriterOptions options;
     if (disableDictionary_) {
       // The parquet file is in plain encoding format.
-      writerProperties =
-          ::parquet::WriterProperties::Builder().disable_dictionary()->build();
-    } else {
-      // The parquet file is in dictionary encoding format.
-      writerProperties = ::parquet::WriterProperties::Builder().build();
+      options.enableDictionary = false;
     }
+    options.memoryPool = pool_.get();
     writer_ = std::make_unique<facebook::velox::parquet::Writer>(
-        std::move(sink), *pool_, 10000, writerProperties);
+        std::move(sink), options);
   }
 
   ~ParquetReaderBenchmark() {
@@ -110,8 +109,8 @@ class ParquetReaderBenchmark {
       std::vector<uint64_t>& hitRows) {
     std::unique_ptr<FilterGenerator> filterGenerator =
         std::make_unique<FilterGenerator>(rowType, 0);
-    auto filters =
-        filterGenerator->makeSubfieldFilters(filterSpecs, batches, hitRows);
+    auto filters = filterGenerator->makeSubfieldFilters(
+        filterSpecs, batches, nullptr, hitRows);
     auto scanSpec = filterGenerator->makeScanSpec(std::move(filters));
     return scanSpec;
   }

@@ -21,6 +21,13 @@
 #include "velox/dwio/parquet/reader/StructColumnReader.h"
 #include "velox/dwio/parquet/thrift/ThriftTransport.h"
 
+DEFINE_int32(
+    parquet_prefetch_rowgroups,
+    1,
+    "Number of next row groups to "
+    "prefetch. 1 means prefetch the next row group before decoding "
+    "the current one");
+
 namespace facebook::velox::parquet {
 
 ReaderBase::ReaderBase(
@@ -113,7 +120,8 @@ void ReaderBase::initializeSchema() {
   uint32_t maxSchemaElementIdx = fileMetaData_->schema.size() - 1;
   schemaWithId_ = getParquetColumnInfo(
       maxSchemaElementIdx, maxRepeat, maxDefine, schemaIdx, columnIdx);
-  schema_ = createRowType(schemaWithId_->getChildren());
+  schema_ = createRowType(
+      schemaWithId_->getChildren(), isFileColumnNamesReadAsLowerCase());
 }
 
 std::shared_ptr<const ParquetTypeWithId> ReaderBase::getParquetColumnInfo(
@@ -140,6 +148,10 @@ std::shared_ptr<const ParquetTypeWithId> ReaderBase::getParquetColumnInfo(
     }
   }
 
+  auto name = schemaElement.name;
+  if (isFileColumnNamesReadAsLowerCase()) {
+    folly::toLowerAscii(name);
+  }
   if (!schemaElement.__isset.type) { // inner node
     VELOX_CHECK(
         schemaElement.__isset.num_children && schemaElement.num_children > 0,
@@ -166,7 +178,7 @@ std::shared_ptr<const ParquetTypeWithId> ReaderBase::getParquetColumnInfo(
               curSchemaIdx, // TODO: there are holes in the ids
               maxSchemaElementIdx,
               ParquetTypeWithId::kNonLeaf, // columnIdx,
-              schemaElement.name,
+              std::move(name),
               std::nullopt,
               maxRepeat + 1,
               maxDefine);
@@ -185,7 +197,7 @@ std::shared_ptr<const ParquetTypeWithId> ReaderBase::getParquetColumnInfo(
               curSchemaIdx, // TODO: there are holes in the ids
               maxSchemaElementIdx,
               ParquetTypeWithId::kNonLeaf, // columnIdx,
-              schemaElement.name,
+              std::move(name),
               std::nullopt,
               maxRepeat,
               maxDefine);
@@ -209,7 +221,7 @@ std::shared_ptr<const ParquetTypeWithId> ReaderBase::getParquetColumnInfo(
               curSchemaIdx,
               maxSchemaElementIdx,
               ParquetTypeWithId::kNonLeaf, // columnIdx,
-              schemaElement.name,
+              std::move(name),
               std::nullopt,
               maxRepeat,
               maxDefine);
@@ -223,7 +235,7 @@ std::shared_ptr<const ParquetTypeWithId> ReaderBase::getParquetColumnInfo(
               curSchemaIdx, // TODO: there are holes in the ids
               maxSchemaElementIdx,
               ParquetTypeWithId::kNonLeaf, // columnIdx,
-              schemaElement.name,
+              std::move(name),
               std::nullopt,
               maxRepeat,
               maxDefine);
@@ -232,12 +244,12 @@ std::shared_ptr<const ParquetTypeWithId> ReaderBase::getParquetColumnInfo(
         // Row type
         auto childrenCopy = children;
         return std::make_shared<const ParquetTypeWithId>(
-            createRowType(children),
+            createRowType(children, isFileColumnNamesReadAsLowerCase()),
             std::move(childrenCopy),
             curSchemaIdx,
             maxSchemaElementIdx,
             ParquetTypeWithId::kNonLeaf, // columnIdx,
-            schemaElement.name,
+            std::move(name),
             std::nullopt,
             maxRepeat,
             maxDefine);
@@ -258,7 +270,7 @@ std::shared_ptr<const ParquetTypeWithId> ReaderBase::getParquetColumnInfo(
             curSchemaIdx,
             maxSchemaElementIdx,
             columnIdx++,
-            schemaElement.name,
+            name,
             schemaElement.type,
             maxRepeat,
             maxDefine,
@@ -278,7 +290,7 @@ std::shared_ptr<const ParquetTypeWithId> ReaderBase::getParquetColumnInfo(
           curSchemaIdx,
           maxSchemaElementIdx,
           columnIdx++,
-          schemaElement.name,
+          std::move(name),
           std::nullopt,
           maxRepeat,
           maxDefine);
@@ -430,13 +442,17 @@ TypePtr ReaderBase::convertType(
 }
 
 std::shared_ptr<const RowType> ReaderBase::createRowType(
-    std::vector<std::shared_ptr<const ParquetTypeWithId::TypeWithId>>
-        children) {
+    std::vector<std::shared_ptr<const ParquetTypeWithId::TypeWithId>> children,
+    bool fileColumnNamesReadAsLowerCase) {
   std::vector<std::string> childNames;
   std::vector<TypePtr> childTypes;
   for (auto& child : children) {
-    childNames.push_back(
-        std::static_pointer_cast<const ParquetTypeWithId>(child)->name_);
+    auto childName =
+        std::static_pointer_cast<const ParquetTypeWithId>(child)->name_;
+    if (fileColumnNamesReadAsLowerCase) {
+      folly::toLowerAscii(childName);
+    }
+    childNames.push_back(std::move(childName));
     childTypes.push_back(child->type);
   }
   return TypeFactory<TypeKind::ROW>::create(
@@ -457,11 +473,20 @@ void ReaderBase::scheduleRowGroups(
     newInput->load(dwio::common::LogType::STRIPE);
     inputs_[thisGroup] = std::move(newInput);
   }
-  if (nextGroup) {
-    auto newInput = input_->clone();
-    reader.enqueueRowGroup(nextGroup, *newInput);
-    newInput->load(dwio::common::LogType::STRIPE);
-    inputs_[nextGroup] = std::move(newInput);
+  for (auto counter = 0; counter < FLAGS_parquet_prefetch_rowgroups;
+       ++counter) {
+    if (nextGroup) {
+      if (inputs_.count(nextGroup) != 0) {
+        auto newInput = input_->clone();
+        reader.enqueueRowGroup(nextGroup, *newInput);
+        newInput->load(dwio::common::LogType::STRIPE);
+        inputs_[nextGroup] = std::move(newInput);
+      }
+    } else {
+      break;
+    }
+    nextGroup =
+        nextGroup + 1 < rowGroupIds.size() ? rowGroupIds[nextGroup + 1] : 0;
   }
   if (currentGroup > 1) {
     inputs_.erase(rowGroupIds[currentGroup - 1]);
@@ -490,10 +515,10 @@ ParquetRowReader::ParquetRowReader(
       readerBase_(readerBase),
       options_(options),
       rowGroups_(readerBase_->fileMetaData().row_groups),
-      currentRowGroupIdsIdx_(0),
-      currentRowGroupPtr_(&rowGroups_[currentRowGroupIdsIdx_]),
-      rowsInCurrentRowGroup_(currentRowGroupPtr_->num_rows),
-      currentRowInGroup_(rowsInCurrentRowGroup_) {
+      nextRowGroupIdsIdx_(0),
+      currentRowGroupPtr_(nullptr),
+      rowsInCurrentRowGroup_(0),
+      currentRowInGroup_(0) {
   // Validate the requested type is compatible with what's in the file
   std::function<std::string()> createExceptionContext = [&]() {
     std::string exceptionMessageContext = fmt::format(
@@ -531,8 +556,8 @@ struct ParquetStatsContext : dwio::common::StatsContext {};
 } // namespace
 
 void ParquetRowReader::filterRowGroups() {
-  const auto& rowGroups = readerBase_->fileMetaData().row_groups;
-  rowGroupIds_.reserve(rowGroups.size());
+  rowGroupIds_.reserve(rowGroups_.size());
+  firstRowOfRowGroup_.reserve(rowGroups_.size());
 
   ParquetData::FilterRowGroupsResult res;
   columnReader_->filterRowGroups(0, ParquetStatsContext(), res);
@@ -540,7 +565,8 @@ void ParquetRowReader::filterRowGroups() {
     metadataFilter->eval(res.metadataFilterResults, res.filterResult);
   }
 
-  for (auto i = 0; i < rowGroups.size(); i++) {
+  uint64_t rowNumber = 0;
+  for (auto i = 0; i < rowGroups_.size(); i++) {
     VELOX_CHECK_GT(rowGroups_[i].columns.size(), 0);
     auto fileOffset = rowGroups_[i].__isset.file_offset
         ? rowGroups_[i].file_offset
@@ -555,46 +581,58 @@ void ParquetRowReader::filterRowGroups() {
         ++skippedRowGroups_;
       } else {
         rowGroupIds_.push_back(i);
+        firstRowOfRowGroup_.push_back(rowNumber);
       }
     }
+    rowNumber += rowGroups_[i].num_rows;
   }
 }
 
-uint64_t ParquetRowReader::next(uint64_t size, velox::VectorPtr& result) {
+int64_t ParquetRowReader::nextRowNumber() {
+  if (currentRowInGroup_ >= rowsInCurrentRowGroup_ &&
+      !advanceToNextRowGroup()) {
+    return kAtEnd;
+  }
+  return firstRowOfRowGroup_[nextRowGroupIdsIdx_ - 1] + currentRowInGroup_;
+}
+
+int64_t ParquetRowReader::nextReadSize(uint64_t size) {
   VELOX_CHECK_GT(size, 0);
-
-  if (currentRowInGroup_ >= rowsInCurrentRowGroup_) {
-    // attempt to advance to next row group
-    if (!advanceToNextRowGroup()) {
-      return 0;
-    }
+  if (nextRowNumber() == kAtEnd) {
+    return kAtEnd;
   }
+  return std::min(size, rowsInCurrentRowGroup_ - currentRowInGroup_);
+}
 
-  uint64_t rowsToRead = std::min(
-      static_cast<uint64_t>(size), rowsInCurrentRowGroup_ - currentRowInGroup_);
-
-  if (rowsToRead > 0) {
-    columnReader_->next(rowsToRead, result, nullptr);
-    currentRowInGroup_ += rowsToRead;
+uint64_t ParquetRowReader::next(
+    uint64_t size,
+    velox::VectorPtr& result,
+    const dwio::common::Mutation* mutation) {
+  VELOX_DCHECK(!options_.getAppendRowNumberColumn());
+  auto rowsToRead = nextReadSize(size);
+  if (rowsToRead == kAtEnd) {
+    return 0;
   }
-
+  VELOX_DCHECK_GT(rowsToRead, 0);
+  columnReader_->next(rowsToRead, result, mutation);
+  currentRowInGroup_ += rowsToRead;
   return rowsToRead;
 }
 
 bool ParquetRowReader::advanceToNextRowGroup() {
-  if (currentRowGroupIdsIdx_ == rowGroupIds_.size()) {
+  if (nextRowGroupIdsIdx_ == rowGroupIds_.size()) {
     return false;
   }
 
-  auto nextRowGroupIndex = rowGroupIds_[currentRowGroupIdsIdx_];
+  auto nextRowGroupIndex = rowGroupIds_[nextRowGroupIdsIdx_];
   readerBase_->scheduleRowGroups(
       rowGroupIds_,
-      currentRowGroupIdsIdx_,
-      dynamic_cast<StructColumnReader&>(*columnReader_));
-  currentRowGroupPtr_ = &rowGroups_[rowGroupIds_[currentRowGroupIdsIdx_]];
+      nextRowGroupIdsIdx_,
+      static_cast<StructColumnReader&>(*columnReader_));
+  currentRowGroupPtr_ = &rowGroups_[rowGroupIds_[nextRowGroupIdsIdx_]];
   rowsInCurrentRowGroup_ = currentRowGroupPtr_->num_rows;
   currentRowInGroup_ = 0;
-  currentRowGroupIdsIdx_++;
+  nextRowGroupIdsIdx_++;
   columnReader_->seekToRowGroup(nextRowGroupIndex);
   return true;
 }
@@ -610,10 +648,10 @@ void ParquetRowReader::resetFilterCaches() {
 
 std::optional<size_t> ParquetRowReader::estimatedRowSize() const {
   auto index =
-      currentRowGroupIdsIdx_ < 1 ? 0 : rowGroupIds_[currentRowGroupIdsIdx_ - 1];
+      nextRowGroupIdsIdx_ < 1 ? 0 : rowGroupIds_[nextRowGroupIdsIdx_ - 1];
   return readerBase_->rowGroupUncompressedSize(
              index, *readerBase_->schemaWithId()) /
-      rowsInCurrentRowGroup_;
+      rowGroups_[index].num_rows;
 }
 
 ParquetReader::ParquetReader(

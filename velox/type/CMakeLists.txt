@@ -14,7 +14,9 @@
 if(${VELOX_BUILD_TESTING})
   add_subdirectory(tests)
 endif()
+
 add_subdirectory(tz)
+add_subdirectory(fbhive)
 
 add_library(
   velox_type
@@ -22,7 +24,7 @@ add_library(
   DecimalUtil.cpp
   DoubleUtil.cpp
   Filter.cpp
-  UnscaledLongDecimal.cpp
+  HugeInt.cpp
   StringView.h
   Subfield.cpp
   Timestamp.cpp
@@ -39,5 +41,6 @@ target_link_libraries(
   velox_exception
   velox_serialization
   velox_external_date
-  ${Boost_REGEX_LIBRARIES}
-  ${FOLLY_WITH_DEPENDENCIES})
+  Boost::headers
+  Folly::folly
+  re2::re2)

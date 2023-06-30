@@ -36,7 +36,7 @@ DEFINE_string(
 
 DEFINE_string(
     special_forms,
-    "and,or,cast,coalesce",
+    "and,or,cast,coalesce,if,switch",
     "Comma-separated list of special forms to use in generated expression. "
     "Supported special forms: and, or, coalesce, if, switch, cast.");
 
@@ -61,6 +61,10 @@ int main(int argc, char** argv) {
       "in",
       "element_at",
       "width_bucket",
+      // Skip concat as it triggers a test failure due to an incorrect
+      // expression generation from fuzzer:
+      // https://github.com/facebookincubator/velox/issues/5398
+      "concat",
   };
   size_t initialSeed = FLAGS_seed == 0 ? std::time(nullptr) : FLAGS_seed;
   return FuzzerRunner::run(

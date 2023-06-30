@@ -16,6 +16,7 @@
 
 #include "velox/common/base/tests/GTestUtils.h"
 #include "velox/functions/prestosql/tests/utils/FunctionBaseTest.h"
+#include "velox/type/TimestampConversion.h"
 
 using namespace facebook::velox;
 using namespace facebook::velox::test;
@@ -43,12 +44,29 @@ class SequenceTest : public FunctionBaseTest {
 };
 } // namespace
 
+Date parseDate(const std::string& dateStr) {
+  Date returnDate;
+  parseTo(dateStr, returnDate);
+  return returnDate;
+}
+
 TEST_F(SequenceTest, sequence) {
   const auto startVector = makeFlatVector<int64_t>({1, 2, 10});
   const auto stopVector = makeFlatVector<int64_t>({2, 5, 9});
   VectorPtr expected =
       makeArrayVector<int64_t>({{1, 2}, {2, 3, 4, 5}, {10, 9}});
   testExpression("sequence(C0, C1)", {startVector, stopVector}, expected);
+}
+
+TEST_F(SequenceTest, integerOverflow) {
+  // stop - start = 9223372036854775807 - (-2147483648) would overflow
+  const auto startVector = makeFlatVector<int64_t>({int64_t(-2147483648), 1});
+  const auto stopVector =
+      makeFlatVector<int64_t>({int64_t(9223372036854775807), 2});
+  testExpressionWithError(
+      "sequence(C0, C1)",
+      {startVector, stopVector},
+      "result of sequence function must not have more than 10000 entries");
 }
 
 TEST_F(SequenceTest, negative) {
@@ -150,4 +168,293 @@ TEST_F(SequenceTest, dateArgumentsExceedMaxEntries) {
        std::nullopt,
        {{Date(1992)}}});
   testExpression("try(sequence(C0, C1))", {startVector, stopVector}, expected);
+}
+
+TEST_F(SequenceTest, dateIntervalDayStep) {
+  int64_t day = 86400000; // 24 * 60 * 60 * 1000
+  const auto startVector = makeFlatVector<Date>({Date(1991), Date(1992)});
+  const auto stopVector = makeFlatVector<Date>({Date(1996), Date(2000)});
+
+  const auto stepVector =
+      makeFlatVector<int64_t>({day, 2 * day}, INTERVAL_DAY_TIME());
+  const auto expected = makeArrayVector<Date>(
+      {{Date(1991), Date(1992), Date(1993), Date(1994), Date(1995), Date(1996)},
+       {Date(1992), Date(1994), Date(1996), Date(1998), Date(2000)}});
+  testExpression(
+      "sequence(C0, C1, C2)", {startVector, stopVector, stepVector}, expected);
+}
+
+TEST_F(SequenceTest, dateInvalidIntervalDayStep) {
+  int64_t day = 86400000; // 24 * 60 * 60 * 1000
+  const auto startVector =
+      makeFlatVector<Date>({Date(1991), Date(1992), Date(1992)});
+  const auto stopVector =
+      makeFlatVector<Date>({Date(1996), Date(2000), Date(2000)});
+  auto stepVector =
+      makeFlatVector<int64_t>({-1 * day, 0, 1}, INTERVAL_DAY_TIME());
+  testExpressionWithError(
+      "sequence(C0, C1, C2)",
+      {startVector, stopVector, stepVector},
+      "sequence stop value should be greater than or equal to start value if "
+      "step is greater than zero otherwise stop should be less than or equal to "
+      "start");
+
+  stepVector = makeFlatVector<int64_t>({0, 1, -1 * day}, INTERVAL_DAY_TIME());
+  testExpressionWithError(
+      "sequence(C0, C1, C2)",
+      {startVector, stopVector, stepVector},
+      "(0 vs. 0) step must not be zero");
+
+  stepVector = makeFlatVector<int64_t>({1, -1 * day, 0}, INTERVAL_DAY_TIME());
+  testExpressionWithError(
+      "sequence(C0, C1, C2)",
+      {startVector, stopVector, stepVector},
+      "sequence step must be a day interval if start and end values are dates");
+
+  stepVector = makeFlatVector<int64_t>({1, -1 * day, 0}, INTERVAL_DAY_TIME());
+  auto expected =
+      makeNullableArrayVector<Date>({std::nullopt, std::nullopt, std::nullopt});
+  testExpression(
+      "try(sequence(C0, C1, C2))",
+      {startVector, stopVector, stepVector},
+      expected);
+}
+
+TEST_F(SequenceTest, dateYearMonthStep) {
+  const auto startVector = makeFlatVector<Date>(
+      {parseDate("1975-01-31"),
+       parseDate("1975-03-15"),
+       parseDate("2023-12-31")});
+  const auto stopVector = makeFlatVector<Date>(
+      {parseDate("1975-06-20"),
+       parseDate("1974-12-15"),
+       parseDate("2024-05-31")});
+
+  const auto stepVector =
+      makeFlatVector<int32_t>({1, -1, 2}, INTERVAL_YEAR_MONTH());
+  const auto expected =
+      makeArrayVector<Date>({// last day of Feb
+                             // result won't include 1975-06-20
+                             {parseDate("1975-01-31"),
+                              parseDate("1975-02-28"),
+                              parseDate("1975-03-31"),
+                              parseDate("1975-04-30"),
+                              parseDate("1975-05-31")},
+                             // negative step
+                             {parseDate("1975-03-15"),
+                              parseDate("1975-02-15"),
+                              parseDate("1975-01-15"),
+                              parseDate("1974-12-15")},
+                             // leap year
+                             {parseDate("2023-12-31"),
+                              parseDate("2024-02-29"),
+                              parseDate("2024-04-30")}});
+  testExpression(
+      "sequence(C0, C1, C2)", {startVector, stopVector, stepVector}, expected);
+}
+
+TEST_F(SequenceTest, dateInvalidYearMonthStep) {
+  const auto startVector =
+      makeFlatVector<Date>({parseDate("1975-01-31"), parseDate("1975-03-15")});
+  const auto stopVector =
+      makeFlatVector<Date>({parseDate("1975-06-01"), parseDate("1974-12-15")});
+
+  auto stepVector = makeFlatVector<int32_t>({0, 0}, INTERVAL_DAY_TIME());
+  testExpressionWithError(
+      "sequence(C0, C1, C2)",
+      {startVector, stopVector, stepVector},
+      "(0 vs. 0) step must not be zero");
+
+  stepVector = makeFlatVector<int32_t>({1, 1}, INTERVAL_YEAR_MONTH());
+  testExpressionWithError(
+      "sequence(C0, C1, C2)",
+      {startVector, stopVector, stepVector},
+      "sequence stop value should be greater than or equal to start value if "
+      "step is greater than zero otherwise stop should be less than or equal to "
+      "start");
+
+  auto expected = makeNullableArrayVector<Date>(
+      {{{parseDate("1975-01-31"),
+         parseDate("1975-02-28"),
+         parseDate("1975-03-31"),
+         parseDate("1975-04-30"),
+         parseDate("1975-05-31")}},
+       std::nullopt});
+  testExpression(
+      "try(sequence(C0, C1, C2))",
+      {startVector, stopVector, stepVector},
+      expected);
+}
+
+TEST_F(SequenceTest, dateIntervalExceedMaxEntries) {
+  const auto startVector =
+      makeFlatVector<Date>({parseDate("1975-01-31"), parseDate("1975-03-15")});
+  const auto stopVector =
+      makeFlatVector<Date>({parseDate("3975-06-01"), parseDate("3974-12-15")});
+
+  auto stepVector = makeFlatVector<int32_t>({1, 1}, INTERVAL_YEAR_MONTH());
+  testExpressionWithError(
+      "sequence(C0, C1, C2)",
+      {startVector, stopVector, stepVector},
+      "result of sequence function must not have more than 10000 entries");
+}
+
+TEST_F(SequenceTest, timestamp) {
+  const auto startVector =
+      makeFlatVector<Timestamp>({Timestamp(1991, 0), Timestamp(1992, 0)});
+  const auto stopVector =
+      makeFlatVector<Timestamp>({Timestamp(1996, 0), Timestamp(1992, 0)});
+  const auto stepVector =
+      makeFlatVector<int64_t>({1000, 1000}, INTERVAL_DAY_TIME());
+  const auto expected = makeArrayVector<Timestamp>(
+      {{Timestamp(1991, 0),
+        Timestamp(1992, 0),
+        Timestamp(1993, 0),
+        Timestamp(1994, 0),
+        Timestamp(1995, 0),
+        Timestamp(1996, 0)},
+       {Timestamp(1992, 0)}});
+  testExpression(
+      "sequence(C0, C1, C2)", {startVector, stopVector, stepVector}, expected);
+}
+
+TEST_F(SequenceTest, timestampExceedMaxEntries) {
+  const auto startVector =
+      makeFlatVector<Timestamp>({Timestamp(1991, 0), Timestamp(1992, 0)});
+  const auto stopVector =
+      makeFlatVector<Timestamp>({Timestamp(1996, 0), Timestamp(19920, 0)});
+  const auto stepVector =
+      makeFlatVector<int64_t>({1000, 1}, INTERVAL_DAY_TIME());
+  testExpressionWithError(
+      "sequence(C0, C1, C2)",
+      {startVector, stopVector, stepVector},
+      "result of sequence function must not have more than 10000 entries");
+
+  const auto expected = makeNullableArrayVector<Timestamp>(
+      {{{Timestamp(1991, 0),
+         Timestamp(1992, 0),
+         Timestamp(1993, 0),
+         Timestamp(1994, 0),
+         Timestamp(1995, 0),
+         Timestamp(1996, 0)}},
+       std::nullopt});
+  testExpression(
+      "try(sequence(C0, C1, C2))",
+      {startVector, stopVector, stepVector},
+      expected);
+}
+
+TEST_F(SequenceTest, timestampInvalidIntervalStep) {
+  const auto startVector =
+      makeFlatVector<Timestamp>({Timestamp(1991, 0), Timestamp(1992, 0)});
+  const auto stopVector =
+      makeFlatVector<Timestamp>({Timestamp(1996, 0), Timestamp(1992, 0)});
+  const auto stepVector =
+      makeFlatVector<int64_t>({0, 1000}, INTERVAL_DAY_TIME());
+  testExpressionWithError(
+      "sequence(C0, C1, C2)",
+      {startVector, stopVector, stepVector},
+      "(0 vs. 0) step must not be zero");
+  const auto expected = makeNullableArrayVector<Timestamp>(
+      {std::nullopt, {{Timestamp(1992, 0)}}});
+  testExpression(
+      "try(sequence(C0, C1, C2))",
+      {startVector, stopVector, stepVector},
+      expected);
+}
+
+TEST_F(SequenceTest, timestampYearMonthStep) {
+  const auto startVector = makeFlatVector<Timestamp>(
+      {facebook::velox::util::fromTimestampString("1975-01-31 10:00:00.500"),
+       facebook::velox::util::fromTimestampString("1975-03-15 10:10:10.200"),
+       facebook::velox::util::fromTimestampString("2023-12-31 23:00:00.500")});
+  const auto stopVector = makeFlatVector<Timestamp>(
+      {facebook::velox::util::fromTimestampString("1975-06-01 01:00:00.500"),
+       facebook::velox::util::fromTimestampString("1974-12-15 10:20:00.500"),
+       facebook::velox::util::fromTimestampString("2024-05-31 10:00:00.500")});
+
+  const auto stepVector =
+      makeFlatVector<int32_t>({1, -1, 2}, INTERVAL_YEAR_MONTH());
+  const auto expected = makeArrayVector<Timestamp>(
+      {// last day of Feb
+       {facebook::velox::util::fromTimestampString("1975-01-31 10:00:00.500"),
+        facebook::velox::util::fromTimestampString("1975-02-28 10:00:00.500"),
+        facebook::velox::util::fromTimestampString("1975-03-31 10:00:00.500"),
+        facebook::velox::util::fromTimestampString("1975-04-30 10:00:00.500"),
+        facebook::velox::util::fromTimestampString("1975-05-31 10:00:00.500")},
+       // date is the same but timestamp is different so couldn't include
+       // 1974-12-15 10:10:10.200
+       // negative step
+       {facebook::velox::util::fromTimestampString("1975-03-15 10:10:10.200"),
+        facebook::velox::util::fromTimestampString("1975-02-15 10:10:10.200"),
+        facebook::velox::util::fromTimestampString("1975-01-15 10:10:10.200")},
+       // leap year
+       // result won't include 2024-05-31 10:00:00.500
+       {facebook::velox::util::fromTimestampString("2023-12-31 23:00:00.500"),
+        facebook::velox::util::fromTimestampString("2024-02-29 23:00:00.500"),
+        facebook::velox::util::fromTimestampString(
+            "2024-04-30 23:00:00.500")}});
+  testExpression(
+      "sequence(C0, C1, C2)", {startVector, stopVector, stepVector}, expected);
+}
+
+TEST_F(SequenceTest, timestampInvalidYearMonthStep) {
+  const auto startVector = makeFlatVector<Timestamp>(
+      {facebook::velox::util::fromTimestampString("1975-01-31 10:00:00.500"),
+       facebook::velox::util::fromTimestampString("1975-03-15 10:10:10.200"),
+       facebook::velox::util::fromTimestampString("2023-12-31 23:00:00.500")});
+  const auto stopVector = makeFlatVector<Timestamp>(
+      {facebook::velox::util::fromTimestampString("1975-06-01 01:00:00.500"),
+       facebook::velox::util::fromTimestampString("1974-12-15 10:20:00.500"),
+       facebook::velox::util::fromTimestampString("2024-05-31 10:00:00.500")});
+
+  auto stepVector = makeFlatVector<int32_t>({0, 0, 0}, INTERVAL_DAY_TIME());
+  testExpressionWithError(
+      "sequence(C0, C1, C2)",
+      {startVector, stopVector, stepVector},
+      "(0 vs. 0) step must not be zero");
+
+  stepVector = makeFlatVector<int32_t>({1, 1, 2}, INTERVAL_YEAR_MONTH());
+  testExpressionWithError(
+      "sequence(C0, C1, C2)",
+      {startVector, stopVector, stepVector},
+      "sequence stop value should be greater than or equal to start value if "
+      "step is greater than zero otherwise stop should be less than or equal to "
+      "start");
+
+  auto expected = makeNullableArrayVector<Timestamp>(
+      {// last day of Feb
+       {{facebook::velox::util::fromTimestampString("1975-01-31 10:00:00.500"),
+         facebook::velox::util::fromTimestampString("1975-02-28 10:00:00.500"),
+         facebook::velox::util::fromTimestampString("1975-03-31 10:00:00.500"),
+         facebook::velox::util::fromTimestampString("1975-04-30 10:00:00.500"),
+         facebook::velox::util::fromTimestampString(
+             "1975-05-31 10:00:00.500")}},
+       std::nullopt,
+       // leap year
+       // result won't include 2024-05-31 10:00:00.500
+       {{facebook::velox::util::fromTimestampString("2023-12-31 23:00:00.500"),
+         facebook::velox::util::fromTimestampString("2024-02-29 23:00:00.500"),
+         facebook::velox::util::fromTimestampString(
+             "2024-04-30 23:00:00.500")}}});
+  testExpression(
+      "try(sequence(C0, C1, C2))",
+      {startVector, stopVector, stepVector},
+      expected);
+}
+
+TEST_F(SequenceTest, timestampIntervalExceedMaxEntries) {
+  const auto startVector = makeFlatVector<Timestamp>(
+      {facebook::velox::util::fromTimestampString("1975-01-31 10:00:00.500"),
+       facebook::velox::util::fromTimestampString("1975-03-15 10:10:10.200"),
+       facebook::velox::util::fromTimestampString("2023-12-31 23:00:00.500")});
+  const auto stopVector = makeFlatVector<Timestamp>(
+      {facebook::velox::util::fromTimestampString("3975-06-01 01:00:00.500"),
+       facebook::velox::util::fromTimestampString("3974-12-15 10:20:00.500"),
+       facebook::velox::util::fromTimestampString("4024-05-31 10:00:00.500")});
+  auto stepVector = makeFlatVector<int32_t>({1, 1, 1}, INTERVAL_YEAR_MONTH());
+  testExpressionWithError(
+      "sequence(C0, C1, C2)",
+      {startVector, stopVector, stepVector},
+      "result of sequence function must not have more than 10000 entries");
 }

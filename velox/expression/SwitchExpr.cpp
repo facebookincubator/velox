@@ -70,7 +70,7 @@ void SwitchExpr::evalSpecialForm(
     // else load access the same vectors, so there is no extra loading.
     DecodedVector decoded;
     auto& remaining = *remainingRows.get();
-    for (const auto& field : distinctFields_) {
+    for (auto* field : distinctFields_) {
       context.ensureFieldLoaded(field->index(context), remaining);
       const auto& vector = context.getField(field->index(context));
       if (vector->mayHaveNulls()) {
@@ -90,6 +90,10 @@ void SwitchExpr::evalSpecialForm(
 
     if (context.errors()) {
       context.deselectErrors(*remainingRows);
+      if (!remainingRows->hasSelections()) {
+        context.releaseVector(condition);
+        break;
+      }
     }
 
     const auto booleanMix = getFlatBool(
@@ -101,7 +105,6 @@ void SwitchExpr::evalSpecialForm(
         true,
         &values,
         nullptr);
-    context.releaseVector(condition);
     switch (booleanMix) {
       case BooleanMix::kAllTrue:
         inputs_[2 * i + 1]->eval(*remainingRows.get(), context, result);
@@ -111,12 +114,13 @@ void SwitchExpr::evalSpecialForm(
       case BooleanMix::kAllFalse:
         continue;
       default: {
+        thenRows.get(remainingRows->end(), false);
         bits::andBits(
-            thenRows.get(rows.end(), false)->asMutableRange().bits(),
+            thenRows.get()->asMutableRange().bits(),
             remainingRows.get()->asRange().bits(),
             values,
             0,
-            rows.end());
+            remainingRows->end());
         thenRows.get()->updateBounds();
 
         if (thenRows.get()->hasSelections()) {
@@ -125,6 +129,7 @@ void SwitchExpr::evalSpecialForm(
         }
       }
     }
+    context.releaseVector(condition);
   }
 
   // Evaluate the "else" clause.
@@ -153,7 +158,9 @@ void SwitchExpr::evalSpecialForm(
   }
 }
 
-bool SwitchExpr::propagatesNulls() const {
+// This is safe to call only after all metadata is computed for input
+// expressions.
+void SwitchExpr::computePropagatesNulls() {
   // The "switch" expression propagates nulls when all of the following
   // conditions are met:
   // - All "then" clauses and optional "else" clause propagate nulls.
@@ -162,7 +169,8 @@ bool SwitchExpr::propagatesNulls() const {
 
   for (auto i = 0; i < numCases_; i += 2) {
     if (!inputs_[i + 1]->propagatesNulls()) {
-      return false;
+      propagatesNulls_ = false;
+      return;
     }
   }
 
@@ -171,25 +179,29 @@ bool SwitchExpr::propagatesNulls() const {
     const auto& condition = inputs_[i * 2];
     const auto& thenClause = inputs_[i * 2 + 1];
     if (!Expr::isSameFields(firstThenFields, thenClause->distinctFields())) {
-      return false;
+      propagatesNulls_ = false;
+      return;
     }
 
     if (!Expr::isSubsetOfFields(condition->distinctFields(), firstThenFields)) {
-      return false;
+      propagatesNulls_ = false;
+      return;
     }
   }
 
   if (hasElseClause_) {
     const auto& elseClause = inputs_.back();
     if (!elseClause->propagatesNulls()) {
-      return false;
+      propagatesNulls_ = false;
+      return;
     }
     if (!Expr::isSameFields(firstThenFields, elseClause->distinctFields())) {
-      return false;
+      propagatesNulls_ = false;
+      return;
     }
   }
 
-  return true;
+  propagatesNulls_ = true;
 }
 
 // static

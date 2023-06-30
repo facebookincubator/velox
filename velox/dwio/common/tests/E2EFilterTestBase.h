@@ -25,9 +25,9 @@
 #include "velox/dwio/common/tests/utils/BatchMaker.h"
 #include "velox/dwio/common/tests/utils/DataSetBuilder.h"
 #include "velox/dwio/common/tests/utils/FilterGenerator.h"
-#include "velox/dwio/type/fbhive/HiveTypeParser.h"
 #include "velox/type/Filter.h"
 #include "velox/type/Subfield.h"
+#include "velox/type/fbhive/HiveTypeParser.h"
 #include "velox/vector/FlatVector.h"
 
 #include <gtest/gtest.h>
@@ -189,6 +189,7 @@ class E2EFilterTestBase : public testing::Test {
 
   void readWithFilter(
       std::shared_ptr<common::ScanSpec> spec,
+      const MutationSpec&,
       const std::vector<RowVectorPtr>& batches,
       const std::vector<uint64_t>& hitRows,
       uint64_t& time,
@@ -256,6 +257,7 @@ class E2EFilterTestBase : public testing::Test {
  private:
   void testReadWithFilterLazy(
       const std::shared_ptr<common::ScanSpec>& spec,
+      const MutationSpec&,
       const std::vector<RowVectorPtr>& batches,
       const std::vector<uint64_t>& hitRows);
 
@@ -276,6 +278,7 @@ class E2EFilterTestBase : public testing::Test {
       const std::vector<RowVectorPtr>& batches,
       common::Subfield filterField,
       std::unique_ptr<common::Filter> filter,
+      core::ExpressionEvaluator*,
       const std::string& remainingFilter,
       std::function<bool(int64_t a, int64_t c)> validationFilter);
 
@@ -283,6 +286,8 @@ class E2EFilterTestBase : public testing::Test {
   void testMetadataFilter();
 
   void testSubfieldsPruning();
+
+  void testMutationCornerCases();
 
   // Allows testing reading with different batch sizes.
   void resetReadBatchSizes() {

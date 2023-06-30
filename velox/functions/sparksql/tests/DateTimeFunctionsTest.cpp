@@ -15,6 +15,7 @@
  */
 
 #include <stdint.h>
+#include "velox/common/base/tests/GTestUtils.h"
 #include "velox/functions/sparksql/tests/SparkFunctionBaseTest.h"
 #include "velox/type/tz/TimeZoneMap.h"
 
@@ -24,7 +25,7 @@ namespace {
 class DateTimeFunctionsTest : public SparkFunctionBaseTest {
  protected:
   void setQueryTimeZone(const std::string& timeZone) {
-    queryCtx_->setConfigOverridesUnsafe({
+    queryCtx_->testingOverrideConfigUnsafe({
         {core::QueryConfig::kSessionTimezone, timeZone},
         {core::QueryConfig::kAdjustTimestampToTimezone, "true"},
     });
@@ -47,7 +48,7 @@ TEST_F(DateTimeFunctionsTest, year) {
 
   EXPECT_EQ(std::nullopt, year(std::nullopt));
   EXPECT_EQ(1969, year(Timestamp(0, 0)));
-  EXPECT_EQ(1969, year(Timestamp(-1, 12300000000)));
+  EXPECT_EQ(1969, year(Timestamp(-1, Timestamp::kMaxNanos)));
   EXPECT_EQ(2096, year(Timestamp(4000000000, 0)));
   EXPECT_EQ(2096, year(Timestamp(4000000000, 123000000)));
   EXPECT_EQ(2001, year(Timestamp(998474645, 321000000)));
@@ -140,6 +141,71 @@ TEST_F(DateTimeFunctionsTest, toUnixTimestamp) {
 
   // to_unix_timestamp does not provide an overoaded without any parameters.
   EXPECT_THROW(evaluateOnce<int64_t>("to_unix_timestamp()"), VeloxUserError);
+}
+
+TEST_F(DateTimeFunctionsTest, makeDate) {
+  const auto makeDate = [&](std::optional<int32_t> year,
+                            std::optional<int32_t> month,
+                            std::optional<int32_t> day) {
+    return evaluateOnce<Date>("make_date(c0, c1, c2)", year, month, day);
+  };
+  Date expectedDate;
+  parseTo("1920-01-25", expectedDate);
+  EXPECT_EQ(makeDate(1920, 1, 25), expectedDate);
+
+  parseTo("-0010-01-30", expectedDate);
+  EXPECT_EQ(makeDate(-10, 1, 30), expectedDate);
+
+  constexpr int32_t kMax = std::numeric_limits<int32_t>::max();
+  auto errorMessage = fmt::format("Date out of range: {}-12-15", kMax);
+  VELOX_ASSERT_THROW(makeDate(kMax, 12, 15), errorMessage);
+
+  constexpr const int32_t kJodaMaxYear{292278994};
+  VELOX_ASSERT_THROW(makeDate(kJodaMaxYear - 10, 12, 15), "Integer overflow");
+
+  VELOX_ASSERT_THROW(makeDate(2021, 13, 1), "Date out of range: 2021-13-1");
+  VELOX_ASSERT_THROW(makeDate(2022, 3, 35), "Date out of range: 2022-3-35");
+
+  VELOX_ASSERT_THROW(makeDate(2023, 4, 31), "Date out of range: 2023-4-31");
+  parseTo("2023-03-31", expectedDate);
+  EXPECT_EQ(makeDate(2023, 3, 31), expectedDate);
+
+  VELOX_ASSERT_THROW(makeDate(2023, 2, 29), "Date out of range: 2023-2-29");
+  parseTo("2023-03-29", expectedDate);
+  EXPECT_EQ(makeDate(2023, 3, 29), expectedDate);
+}
+
+TEST_F(DateTimeFunctionsTest, lastDay) {
+  const auto lastDayFunc = [&](const std::optional<Date> date) {
+    return evaluateOnce<Date>("last_day(c0)", date);
+  };
+
+  const auto lastDay = [&](const std::string& dateStr) {
+    Date d0;
+    parseTo(dateStr, d0);
+    return lastDayFunc(d0);
+  };
+
+  const auto parseDateStr = [&](const std::string& dateStr) {
+    Date d0;
+    parseTo(dateStr, d0);
+    return d0;
+  };
+
+  EXPECT_EQ(lastDay("2015-02-28"), parseDateStr("2015-02-28"));
+  EXPECT_EQ(lastDay("2015-03-27"), parseDateStr("2015-03-31"));
+  EXPECT_EQ(lastDay("2015-04-26"), parseDateStr("2015-04-30"));
+  EXPECT_EQ(lastDay("2015-05-25"), parseDateStr("2015-05-31"));
+  EXPECT_EQ(lastDay("2015-06-24"), parseDateStr("2015-06-30"));
+  EXPECT_EQ(lastDay("2015-07-23"), parseDateStr("2015-07-31"));
+  EXPECT_EQ(lastDay("2015-08-01"), parseDateStr("2015-08-31"));
+  EXPECT_EQ(lastDay("2015-09-02"), parseDateStr("2015-09-30"));
+  EXPECT_EQ(lastDay("2015-10-03"), parseDateStr("2015-10-31"));
+  EXPECT_EQ(lastDay("2015-11-04"), parseDateStr("2015-11-30"));
+  EXPECT_EQ(lastDay("2015-12-05"), parseDateStr("2015-12-31"));
+  EXPECT_EQ(lastDay("2016-01-06"), parseDateStr("2016-01-31"));
+  EXPECT_EQ(lastDay("2016-02-07"), parseDateStr("2016-02-29"));
+  EXPECT_EQ(lastDayFunc(std::nullopt), std::nullopt);
 }
 
 } // namespace

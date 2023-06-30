@@ -182,13 +182,8 @@ void SelectiveColumnReader::getIntValues(
       case TypeKind::DATE:
         getFlatValues<Date, Date>(rows, result, requestedType);
         break;
-      case TypeKind::SHORT_DECIMAL:
-        getFlatValues<UnscaledShortDecimal, UnscaledShortDecimal>(
-            rows, result, requestedType);
-        break;
-      case TypeKind::LONG_DECIMAL:
-        getFlatValues<UnscaledLongDecimal, UnscaledLongDecimal>(
-            rows, result, requestedType);
+      case TypeKind::HUGEINT:
+        getFlatValues<int128_t, int128_t>(rows, result, requestedType);
         break;
       case TypeKind::BIGINT:
         switch (valueSize_) {
@@ -341,6 +336,11 @@ void SelectiveColumnReader::setNulls(BufferPtr resultNulls) {
 }
 
 void SelectiveColumnReader::resetFilterCaches() {
+  if (scanState_.filterCache.empty() && scanSpec_->hasFilter()) {
+    scanState_.filterCache.resize(std::max<int32_t>(
+        1, scanState_.dictionary.numValues + scanState_.dictionary2.numValues));
+    scanState_.updateRawState();
+  }
   if (!scanState_.filterCache.empty()) {
     simd::memset(
         scanState_.filterCache.data(),

@@ -14,8 +14,10 @@
  * limitations under the License.
  */
 
+#include "velox/common/base/tests/GTestUtils.h"
 #include "velox/common/caching/FileIds.h"
 #include "velox/common/caching/SsdCache.h"
+#include "velox/common/file/FileSystems.h"
 #include "velox/common/memory/MmapAllocator.h"
 #include "velox/exec/tests/utils/TempDirectoryPath.h"
 
@@ -66,13 +68,19 @@ class AsyncDataCacheTest : public testing::Test {
  protected:
   static constexpr int32_t kNumFiles = 100;
 
+  void SetUp() override {
+    filesystems::registerLocalFileSystem();
+  }
+
   void TearDown() override {
     if (executor_) {
       executor_->join();
     }
-    auto ssdCache = cache_->ssdCache();
-    if (ssdCache) {
-      ssdCache->deleteFiles();
+    if (cache_) {
+      auto ssdCache = cache_->ssdCache();
+      if (ssdCache) {
+        ssdCache->deleteFiles();
+      }
     }
   }
 
@@ -252,6 +260,14 @@ class TestingCoalescedLoad : public CoalescedLoad {
     }
     VELOX_CHECK(!injectError_, "Testing error");
     return pins;
+  }
+
+  int64_t size() const override {
+    int64_t sum = 0;
+    for (auto& request : requests_) {
+      sum += request.size;
+    }
+    return sum;
   }
 
  protected:
@@ -552,9 +568,10 @@ TEST_F(AsyncDataCacheTest, replace) {
 }
 
 TEST_F(AsyncDataCacheTest, outOfCapacity) {
-  constexpr int64_t kMaxBytes = 16 << 20;
-  constexpr int32_t kSize = 16 << 10;
-  constexpr int32_t kSizeInPages = kSize / memory::AllocationTraits::kPageSize;
+  const int64_t kMaxBytes = 64
+      << 20; // 64MB as MmapAllocator's min size is 64MB
+  const int32_t kSize = 16 << 10;
+  const int32_t kSizeInPages = memory::AllocationTraits::numPages(kSize);
   std::deque<CachePin> pins;
   std::deque<memory::Allocation> allocations;
   initializeCache(kMaxBytes);
@@ -574,8 +591,8 @@ TEST_F(AsyncDataCacheTest, outOfCapacity) {
   ASSERT_FALSE(cache_->allocateNonContiguous(kSizeInPages, allocation));
   // One 4 page entry below the max size of 4K 4 page entries in 16MB of
   // capacity.
-  ASSERT_EQ(4092, cache_->incrementCachedPages(0));
-  ASSERT_EQ(4092, cache_->incrementPrefetchPages(0));
+  ASSERT_EQ(16384, cache_->incrementCachedPages(0));
+  ASSERT_EQ(16384, cache_->incrementPrefetchPages(0));
   pins.clear();
 
   // We allocate the full capacity and expect the cache entries to go.
@@ -587,7 +604,7 @@ TEST_F(AsyncDataCacheTest, outOfCapacity) {
   }
   EXPECT_EQ(0, cache_->incrementCachedPages(0));
   EXPECT_EQ(0, cache_->incrementPrefetchPages(0));
-  EXPECT_EQ(4092, cache_->numAllocated());
+  EXPECT_EQ(16384, cache_->numAllocated());
   clearAllocations(allocations);
 }
 
@@ -678,4 +695,14 @@ TEST_F(AsyncDataCacheTest, ssd) {
   // threading. Hitting at least 1/2 of the capacity when 3/4 are available
   // since one of the shards was deliberately corrupted, is a safe bet.
   ASSERT_LT(kSsdBytes / 2, stats2.bytesRead);
+}
+
+TEST_F(AsyncDataCacheTest, invalidSsdPath) {
+  auto testPath = "hdfs:/test/prefix_";
+  uint64_t ssdBytes = 256UL << 20;
+  VELOX_ASSERT_THROW(
+      SsdCache(testPath, ssdBytes, 4, executor(), ssdBytes / 20),
+      fmt::format(
+          "Ssd path '{}' does not start with '/' that points to local file system.",
+          testPath));
 }

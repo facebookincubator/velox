@@ -75,7 +75,8 @@ class E2EFilterTest : public E2EFilterTestBase {
     };
     auto sink = std::make_unique<MemorySink>(*leafPool_, 200 * 1024 * 1024);
     sinkPtr_ = sink.get();
-    writer_ = std::make_unique<Writer>(options, std::move(sink), *rootPool_);
+    options.memoryPool = rootPool_.get();
+    writer_ = std::make_unique<dwrf::Writer>(std::move(sink), options);
     for (auto& batch : batches) {
       writer_->write(batch);
     }
@@ -100,7 +101,7 @@ class E2EFilterTest : public E2EFilterTestBase {
   std::unordered_set<std::string> flatMapColumns_;
 
  private:
-  WriterOptions createWriterOptions(const TypePtr& type) {
+  dwrf::WriterOptions createWriterOptions(const TypePtr& type) {
     auto config = std::make_shared<dwrf::Config>();
     config->set(dwrf::Config::COMPRESSION, CompressionKind_NONE);
     config->set(dwrf::Config::USE_VINTS, useVInts_);
@@ -141,13 +142,13 @@ class E2EFilterTest : public E2EFilterTestBase {
       config->set<const std::vector<std::vector<std::string>>>(
           dwrf::Config::MAP_FLAT_COLS_STRUCT_KEYS, mapFlatColsStructKeys);
     }
-    WriterOptions options;
+    dwrf::WriterOptions options;
     options.config = config;
     options.schema = writerSchema;
     return options;
   }
 
-  std::unique_ptr<Writer> writer_;
+  std::unique_ptr<dwrf::Writer> writer_;
   std::unordered_map<uint32_t, std::vector<std::string>>
       flatmapNodeIdsAsStruct_;
 };
@@ -280,9 +281,9 @@ TEST_F(E2EFilterTest, timestamp) {
 
 TEST_F(E2EFilterTest, listAndMap) {
   int numCombinations = 10;
-#ifdef TSAN_BUILD
-  // The test is running slow under TSAN; reduce the number of combinations to
-  // avoid timeout.
+#if !defined(NDEBUG) || defined(TSAN_BUILD)
+  // The test is running slow under dev/debug and TSAN build; reduce the number
+  // of combinations to avoid timeout.
   numCombinations = 2;
 #endif
   testWithTypes(
@@ -299,7 +300,7 @@ TEST_F(E2EFilterTest, listAndMap) {
 
 TEST_F(E2EFilterTest, nullCompactRanges) {
   // Makes a dataset with nulls at the beginning. Tries different
-  // filter ombinations on progressively larger batches. tests for a
+  // filter combinations on progressively larger batches. tests for a
   // bug in null compaction where null bits past end of nulls buffer
   // were compacted while there actually were no nulls.
 
@@ -386,7 +387,12 @@ TEST_F(E2EFilterTest, flatMap) {
 #endif
 #endif
   testWithTypes(
-      kColumns, customize, false, {"long_val"}, numCombinations, true);
+      kColumns,
+      customize,
+      false,
+      {"long_val", "long_vals"},
+      numCombinations,
+      true);
 }
 
 TEST_F(E2EFilterTest, metadataFilter) {
@@ -395,6 +401,10 @@ TEST_F(E2EFilterTest, metadataFilter) {
 
 TEST_F(E2EFilterTest, subfieldsPruning) {
   testSubfieldsPruning();
+}
+
+TEST_F(E2EFilterTest, mutationCornerCases) {
+  testMutationCornerCases();
 }
 
 // Define main so that gflags get processed.

@@ -85,9 +85,8 @@ VectorPtr getChildBySubfield(
 uint32_t AbstractColumnStats::counter_ = 0;
 
 template <>
-int64_t ColumnStats<UnscaledShortDecimal>::getIntegerValue(
-    const UnscaledShortDecimal& value) {
-  return value.unscaledValue();
+int64_t ColumnStats<Date>::getIntegerValue(const Date& value) {
+  return value.days();
 }
 
 template <>
@@ -372,16 +371,22 @@ void FilterGenerator::addToScanSpec(
 SubfieldFilters FilterGenerator::makeSubfieldFilters(
     const std::vector<FilterSpec>& filterSpecs,
     const std::vector<RowVectorPtr>& batches,
+    MutationSpec* mutationSpec,
     std::vector<uint64_t>& hitRows) {
   vector_size_t totalSize = 0;
   for (auto& batch : batches) {
     totalSize += batch->size();
   }
   hitRows.reserve(totalSize);
+  int64_t index = 0;
   for (auto i = 0; i < batches.size(); ++i) {
     auto batch = batches[i];
-    for (auto j = 0; j < batch->size(); ++j) {
-      hitRows.push_back(batchPosition(i, j));
+    for (auto j = 0; j < batch->size(); ++j, ++index) {
+      if (mutationSpec && folly::Random::randDouble01(rng_) < 0.02) {
+        mutationSpec->deletedRows.push_back(index);
+      } else {
+        hitRows.push_back(batchPosition(i, j));
+      }
     }
   }
 
@@ -408,6 +413,9 @@ SubfieldFilters FilterGenerator::makeSubfieldFilters(
       case TypeKind::BIGINT:
         stats = makeStats<TypeKind::BIGINT>(vector->type(), rowType_);
         break;
+      case TypeKind::DATE:
+        stats = makeStats<TypeKind::DATE>(vector->type(), rowType_);
+        break;
       case TypeKind::VARCHAR:
         stats = makeStats<TypeKind::VARCHAR>(vector->type(), rowType_);
         break;
@@ -431,9 +439,6 @@ SubfieldFilters FilterGenerator::makeSubfieldFilters(
         break;
       // TODO:
       // Add support for TypeKind::TIMESTAMP.
-      case TypeKind::SHORT_DECIMAL:
-        stats = makeStats<TypeKind::SHORT_DECIMAL>(vector->type(), rowType_);
-        break;
       default:
         VELOX_CHECK(
             false,
@@ -647,8 +652,8 @@ void pruneRandomSubfield(
             BaseVector::wrapInDictionary(nullptr, indices, offset, keys);
         auto newValues = BaseVector::wrapInDictionary(
             nullptr, indices, offset, data->mapValues());
-        BaseVector::flattenVector(newKeys, newKeys->size());
-        BaseVector::flattenVector(newValues, newValues->size());
+        BaseVector::flattenVector(newKeys);
+        BaseVector::flattenVector(newValues);
         data->setKeysAndValues(newKeys, newValues);
       }
       spec.childByName(ScanSpec::kMapKeysFieldName)

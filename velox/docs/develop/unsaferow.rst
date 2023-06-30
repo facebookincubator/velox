@@ -64,6 +64,12 @@ map size. These are duplicated in the serialized data.
 Structs are stored as 'null bits' for struct fields, followed by
 fixed-width field values and variable-width field values.
 
+Values of Velox type UNKNOWN (only null values) are treated as fixed-width
+types. UNKNOWN values in the top-level columns and as struct fields use 1 bit
+in the nulls section and 8 bytes in the fixed-width section. UNKNOWN value
+serialized as an array element or map value uses 1 bit for null flag and zero
+bytes for the value.
+
 Examples
 --------
 
@@ -110,3 +116,16 @@ A row with a singe struct of BIGINT and DOUBLE has fixed serialized size of 40 b
 * 8 bytes for null flags of the struct fields.
 * 8 bytes for the value of the first struct field.
 * 8 bytes for the value of the second struct field.
+
+Batches of Rows
+---------------
+
+It is common for engines to require the serialization of a batch of rows. In
+these cases, a batch of serialized UnsafeRows can be created by successively
+serializing the row size then the UnsafeRow buffer, in the following manner:
+
+row size | UnsafeRow | row size | UnsafeRow | ...
+
+Be careful that the `row size` integer needs to be of **4 bytes**, and encoded using
+**big endian** format. Note that this is different from the other integers serialized as
+part of the UnsafeRow payload, which are all expected to be little endian.

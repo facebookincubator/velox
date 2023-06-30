@@ -74,7 +74,7 @@ FlatVector<bool>& ensureWritableBool(
 FlatVector<StringView>& ensureWritableStringView(
     const SelectivityVector& rows,
     EvalCtx& context,
-    std::shared_ptr<BaseVector>& result) {
+    VectorPtr& result) {
   context.ensureWritable(rows, VARCHAR(), result);
   auto* flat = result->as<FlatVector<StringView>>();
   flat->mutableValues(rows.end());
@@ -160,9 +160,8 @@ std::string likePatternToRe2(
         case ']':
         case '{':
         case '}':
-          regex.append("\\");
-        // Append the meta character after the escape. Note: The fallthrough is
-        // intentional.
+          regex.append("\\"); // Append the meta character after the escape.
+          [[fallthrough]];
         default:
           regex.append(1, c);
           escaped = false;

@@ -195,6 +195,9 @@ class MemoryAllocator : public std::enable_shared_from_this<MemoryAllocator> {
 
   using ReservationCallback = std::function<void(int64_t, bool)>;
 
+  /// Returns the capacity of the allocator in bytes.
+  virtual size_t capacity() const = 0;
+
   /// Allocates one or more runs that add up to at least 'numPages', with the
   /// smallest run being at least 'minSizeClass' pages. 'minSizeClass' must be
   /// <= the size of the largest size class. The new memory is returned in 'out'
@@ -209,8 +212,11 @@ class MemoryAllocator : public std::enable_shared_from_this<MemoryAllocator> {
   /// returns true if the allocation succeeded. If it returns false, 'out'
   /// references no memory and any partially allocated memory is freed.
   ///
-  /// NOTE: user needs to explicitly release allocation 'out' by calling
-  /// 'freeNonContiguous' on the same memory allocator object.
+  /// NOTE:
+  ///  - 'out' is guaranteed to be freed if it's not empty.
+  ///  - Allocation is not guaranteed even if collateral 'out' is larger than
+  ///    'numPages', because this method is not atomic.
+  ///  - Throws if allocation exceeds capacity.
   virtual bool allocateNonContiguous(
       MachinePageCount numPages,
       Allocation& out,
@@ -233,8 +239,9 @@ class MemoryAllocator : public std::enable_shared_from_this<MemoryAllocator> {
   /// does. It may throw and the end state will be consistent, with no new
   /// allocation and 'allocation' and 'collateral' cleared.
   ///
-  /// NOTE: user needs to explicitly release allocation 'out' by calling
-  /// 'freeContiguous' on the same memory allocator object.
+  /// NOTE:
+  /// - 'collateral' and passed in 'allocation' are guaranteed to be freed.
+  /// - Throws if allocation exceeds capacity
   virtual bool allocateContiguous(
       MachinePageCount numPages,
       Allocation* collateral,
@@ -253,7 +260,8 @@ class MemoryAllocator : public std::enable_shared_from_this<MemoryAllocator> {
       uint64_t bytes,
       uint16_t alignment = kMinAlignment) = 0;
 
-  /// Allocates a zero-filled contiguous bytes.
+  /// Allocates a zero-filled contiguous bytes. Returns nullptr if there is no
+  /// space
   virtual void* allocateZeroFilled(uint64_t bytes);
 
   /// Frees contiguous memory allocated by allocateBytes, allocateZeroFilled,
@@ -284,7 +292,13 @@ class MemoryAllocator : public std::enable_shared_from_this<MemoryAllocator> {
   virtual std::string toString() const = 0;
 
   /// Invoked to check if 'alignmentBytes' is valid and 'allocateBytes' is
-  /// multiple of 'alignmentBytes'.
+  /// multiple of 'alignmentBytes'. Returns true if check succeeds, false
+  /// otherwise
+  static bool isAlignmentValid(uint64_t allocateBytes, uint16_t alignmentBytes);
+
+  /// Invoked to check if 'alignmentBytes' is valid and 'allocateBytes' is
+  /// multiple of 'alignmentBytes'. Semantically the same as isAlignmentValid().
+  /// Throws if check fails.
   static void alignmentCheck(uint64_t allocateBytes, uint16_t alignmentBytes);
 
   /// Causes 'failure' to occur in memory allocation calls. This is a test-only
@@ -360,13 +374,26 @@ class MemoryAllocator : public std::enable_shared_from_this<MemoryAllocator> {
     return true;
   }
 
+  // If 'data' is sufficiently large, enables/disables adaptive  huge pages for
+  // the address raneg.
+  void useHugePages(const ContiguousAllocation& data, bool enable);
+
   // The machine page counts corresponding to different sizes in order
   // of increasing size.
   const std::vector<MachinePageCount>
       sizeClassSizes_{1, 2, 4, 8, 16, 32, 64, 128, 256};
 
+  // Tracks the number of allocated pages. Allocated pages are the memory pages
+  // that are currently being used.
   std::atomic<MachinePageCount> numAllocated_{0};
-  // Tracks the number of mapped pages.
+
+  // Tracks the number of mapped pages. Mapped pages are the memory pages that
+  // meet following requirements:
+  // 1. They are obtained from the operating system from mmap calls directly,
+  // without going through std::malloc.
+  // 2. They are currently being allocated (used) or they were allocated (used)
+  // and freed in the past but haven't been returned to the operating system by
+  // 'this' (via madvise calls).
   std::atomic<MachinePageCount> numMapped_{0};
 
   // Indicates if the failure injection is persistent or transient.

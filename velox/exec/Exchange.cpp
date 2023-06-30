@@ -193,7 +193,19 @@ void ExchangeClient::addRemoteTaskId(const std::string& taskId) {
       // and the task updates have no guarantees of arriving in order.
       return;
     }
-    auto source = ExchangeSource::create(taskId, destination_, queue_, pool_);
+
+    std::shared_ptr<ExchangeSource> source;
+    try {
+      source = ExchangeSource::create(taskId, destination_, queue_, pool_);
+    } catch (const VeloxException& e) {
+      throw;
+    } catch (const std::exception& e) {
+      // Task ID can be very long. Truncate to 256 characters.
+      VELOX_FAIL(
+          "Failed to create ExchangeSource: {}. Task ID: {}.",
+          e.what(),
+          taskId.substr(0, 126));
+    }
 
     if (closed_) {
       toClose = std::move(source);
@@ -238,6 +250,7 @@ void ExchangeClient::close() {
 
 folly::F14FastMap<std::string, RuntimeMetric> ExchangeClient::stats() const {
   folly::F14FastMap<std::string, RuntimeMetric> stats;
+  std::lock_guard<std::mutex> l(queue_->mutex());
   for (const auto& source : sources_) {
     for (const auto& [name, value] : source->stats()) {
       stats[name].addValue(value);

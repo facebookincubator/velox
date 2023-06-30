@@ -15,8 +15,11 @@
  */
 #pragma once
 
+#include <folly/Synchronized.h>
+
 #include "velox/common/memory/HashStringAllocator.h"
 #include "velox/core/PlanNode.h"
+#include "velox/exec/AggregateUtil.h"
 #include "velox/expression/FunctionSignature.h"
 #include "velox/vector/BaseVector.h"
 
@@ -54,12 +57,6 @@ class Aggregate {
     return 1;
   }
 
-  /// Return an alignment that satisfies both the accumulator alignment
-  /// requirement of this function and the alignment passed in.
-  int32_t combineAlignment(int32_t alignment) const {
-    return combineAlignmentInternal(alignment);
-  }
-
   // Return true if accumulator is allocated from external memory, e.g. memory
   // not managed by Velox.
   virtual bool accumulatorUsesExternalMemory() const {
@@ -76,6 +73,11 @@ class Aggregate {
   // result set and spilling batch sizes with skewed data.
   virtual bool isFixedSize() const {
     return true;
+  }
+
+  /// Returns true if toIntermediate() is supported.
+  virtual bool supportsToIntermediate() const {
+    return false;
   }
 
   void setAllocator(HashStringAllocator* allocator) {
@@ -201,6 +203,18 @@ class Aggregate {
   virtual void
   extractAccumulators(char** groups, int32_t numGroups, VectorPtr* result) = 0;
 
+  /// Produces an accumulator initialized from a single value for each
+  /// row in 'rows'. The raw arguments of the aggregate are in 'args',
+  /// which have the same meaning as in addRawInput. The result is
+  /// placed in 'result'. 'result is allocated if nullptr, otherwise
+  /// it is expected to be a writable flat vector of the right type.
+  virtual void toIntermediate(
+      const SelectivityVector& rows,
+      std::vector<VectorPtr>& args,
+      VectorPtr& result) const {
+    VELOX_NYI("toIntermediate not supported");
+  }
+
   // Frees any out of line storage for the accumulator in
   // 'groups'. No-op for fixed length accumulators.
   virtual void destroy(folly::Range<char**> /*groups*/) {}
@@ -210,6 +224,10 @@ class Aggregate {
   // aggregation.
   void clear() {
     clearInternal();
+  }
+
+  void enableValidateIntermediateInputs() {
+    validateIntermediateInputs_ = true;
   }
 
   static std::unique_ptr<Aggregate> create(
@@ -225,11 +243,6 @@ class Aggregate {
       const std::vector<TypePtr>& argTypes);
 
  protected:
-  // The following internal function should not be overriden by any user-defined
-  // aggregation function. They shall only be overridden by
-  // AggregateCompanionAdapter.
-  virtual int32_t combineAlignmentInternal(int32_t otherAlignment) const;
-
   virtual void setAllocatorInternal(HashStringAllocator* allocator);
 
   virtual void setOffsetsInternal(
@@ -332,6 +345,8 @@ class Aggregate {
   // different indices vector as the one we get from the DecodedVector is simply
   // sequential.
   std::vector<vector_size_t> pushdownCustomIndices_;
+
+  bool validateIntermediateInputs_ = false;
 };
 
 using AggregateFunctionFactory = std::function<std::unique_ptr<Aggregate>(
@@ -341,37 +356,57 @@ using AggregateFunctionFactory = std::function<std::unique_ptr<Aggregate>(
 
 /// Register an aggregate function with the specified name and signatures. If
 /// registerCompanionFunctions is true, also register companion aggregate and
-/// scalar functions with it.
-bool registerAggregateFunction(
+/// scalar functions with it. When functions with `name` already exist, if
+/// overwrite is true, existing registration will be replaced. Otherwise, return
+/// false without overwriting the registry.
+AggregateRegistrationResult registerAggregateFunction(
     const std::string& name,
     std::vector<std::shared_ptr<AggregateFunctionSignature>> signatures,
     AggregateFunctionFactory factory,
-    bool registerCompanionFunctions = false);
+    bool registerCompanionFunctions = false,
+    bool overwrite = false);
 
 /// Returns signatures of the aggregate function with the specified name.
 /// Returns empty std::optional if function with that name is not found.
 std::optional<std::vector<std::shared_ptr<AggregateFunctionSignature>>>
 getAggregateFunctionSignatures(const std::string& name);
 
-using AggregateFunctionSignatureMap = std::unordered_map<
-    std::string,
-    std::vector<std::shared_ptr<AggregateFunctionSignature>>>;
+using AggregateFunctionSignatureMap =
+    std::unordered_map<std::string, std::vector<AggregateFunctionSignaturePtr>>;
 
 /// Returns a mapping of all Aggregate functions in registry.
 /// The mapping is function name -> list of function signatures.
 AggregateFunctionSignatureMap getAggregateFunctionSignatures();
 
 struct AggregateFunctionEntry {
-  std::vector<std::shared_ptr<AggregateFunctionSignature>> signatures;
+  std::vector<AggregateFunctionSignaturePtr> signatures;
   AggregateFunctionFactory factory;
 };
 
-using AggregateFunctionMap =
-    std::unordered_map<std::string, AggregateFunctionEntry>;
+using AggregateFunctionMap = folly::Synchronized<
+    std::unordered_map<std::string, AggregateFunctionEntry>>;
 
 AggregateFunctionMap& aggregateFunctions();
 
 const AggregateFunctionEntry* FOLLY_NULLABLE
 getAggregateFunctionEntry(const std::string& name);
 
+struct CompanionSignatureEntry {
+  std::string functionName;
+  std::vector<FunctionSignaturePtr> signatures;
+};
+
+struct CompanionFunctionSignatureMap {
+  std::vector<CompanionSignatureEntry> partial;
+  std::vector<CompanionSignatureEntry> merge;
+  std::vector<CompanionSignatureEntry> extract;
+  std::vector<CompanionSignatureEntry> mergeExtract;
+};
+
+// Returns a map of potential companion function signatures the specified
+// aggregation function would have. Notice that the registration of the
+// specified aggregation function needs to register companion functions together
+// for them to be used in queries.
+std::optional<CompanionFunctionSignatureMap> getCompanionFunctionSignatures(
+    const std::string& name);
 } // namespace facebook::velox::exec

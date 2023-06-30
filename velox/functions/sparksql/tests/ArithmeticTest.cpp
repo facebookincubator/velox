@@ -183,6 +183,64 @@ TEST_F(ArithmeticTest, Divide) {
   EXPECT_TRUE(std::isnan(divide(kInf, -kInf).value_or(0)));
 }
 
+TEST_F(ArithmeticTest, acosh) {
+  const auto acosh = [&](std::optional<double> a) {
+    return evaluateOnce<double>("acosh(c0)", a);
+  };
+
+  EXPECT_EQ(acosh(1), 0);
+  EXPECT_TRUE(std::isnan(acosh(0).value_or(0)));
+  EXPECT_EQ(acosh(kInf), kInf);
+  EXPECT_EQ(acosh(std::nullopt), std::nullopt);
+  EXPECT_TRUE(std::isnan(acosh(kNan).value_or(0)));
+}
+
+TEST_F(ArithmeticTest, asinh) {
+  const auto asinh = [&](std::optional<double> a) {
+    return evaluateOnce<double>("asinh(c0)", a);
+  };
+
+  EXPECT_EQ(asinh(0), 0);
+  EXPECT_EQ(asinh(kInf), kInf);
+  EXPECT_EQ(asinh(-kInf), -kInf);
+  EXPECT_EQ(asinh(std::nullopt), std::nullopt);
+  EXPECT_TRUE(std::isnan(asinh(kNan).value_or(0)));
+}
+
+TEST_F(ArithmeticTest, atanh) {
+  const auto atanh = [&](std::optional<double> a) {
+    return evaluateOnce<double>("atanh(c0)", a);
+  };
+
+  EXPECT_EQ(atanh(0), 0);
+  EXPECT_EQ(atanh(1), kInf);
+  EXPECT_EQ(atanh(-1), -kInf);
+  EXPECT_TRUE(std::isnan(atanh(1.1).value_or(0)));
+  EXPECT_TRUE(std::isnan(atanh(-1.1).value_or(0)));
+  EXPECT_EQ(atanh(std::nullopt), std::nullopt);
+  EXPECT_TRUE(std::isnan(atanh(kNan).value_or(0)));
+}
+
+TEST_F(ArithmeticTest, sec) {
+  const auto sec = [&](std::optional<double> a) {
+    return evaluateOnce<double>("sec(c0)", a);
+  };
+
+  EXPECT_EQ(sec(0), 1);
+  EXPECT_EQ(sec(std::nullopt), std::nullopt);
+  EXPECT_TRUE(std::isnan(sec(kNan).value_or(0)));
+}
+
+TEST_F(ArithmeticTest, csc) {
+  const auto csc = [&](std::optional<double> a) {
+    return evaluateOnce<double>("csc(c0)", a);
+  };
+
+  EXPECT_EQ(csc(0), kInf);
+  EXPECT_EQ(csc(std::nullopt), std::nullopt);
+  EXPECT_TRUE(std::isnan(csc(kNan).value_or(0)));
+}
+
 class CeilFloorTest : public SparkFunctionBaseTest {
  protected:
   template <typename T>
@@ -222,6 +280,25 @@ TEST_F(CeilFloorTest, Limits) {
   EXPECT_EQ(
       std::numeric_limits<int64_t>::min(),
       floor<double>(-std::numeric_limits<double>::infinity()));
+}
+
+class BinTest : public SparkFunctionBaseTest {
+ protected:
+  std::optional<std::string> bin(std::optional<std::int64_t> arg) {
+    return evaluateOnce<std::string, int64_t>("bin(c0)", {arg}, {BIGINT()});
+  }
+};
+
+TEST_F(BinTest, bin) {
+  EXPECT_EQ(bin(std::nullopt), std::nullopt);
+  EXPECT_EQ(bin(13), "1101");
+  EXPECT_EQ(
+      bin(-13),
+      "1111111111111111111111111111111111111111111111111111111111110011");
+  EXPECT_EQ(
+      bin(std::numeric_limits<int64_t>::max()),
+      "111111111111111111111111111111111111111111111111111111111111111");
+  EXPECT_EQ(bin(0), "0");
 }
 
 } // namespace

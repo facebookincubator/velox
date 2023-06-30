@@ -550,11 +550,66 @@ class ApproxPercentileAggregate : public exec::Aggregate {
       std::conditional_t<kSingleGroup, char*, char**> group,
       const SelectivityVector& rows,
       const std::vector<VectorPtr>& args) {
+    if (validateIntermediateInputs_) {
+      addIntermediateImpl<kSingleGroup, true>(group, rows, args);
+    } else {
+      addIntermediateImpl<kSingleGroup, false>(group, rows, args);
+    }
+  }
+
+  struct Percentiles {
+    std::vector<double> values;
+    bool isArray;
+  };
+
+  static constexpr double kMissingNormalizedValue = -1;
+  const bool hasWeight_;
+  const bool hasAccuracy_;
+  std::optional<Percentiles> percentiles_;
+  double accuracy_{kMissingNormalizedValue};
+  DecodedVector decodedValue_;
+  DecodedVector decodedWeight_;
+  DecodedVector decodedAccuracy_;
+  DecodedVector decodedDigest_;
+
+ private:
+  template <bool kSingleGroup, bool checkIntermediateInputs>
+  void addIntermediateImpl(
+      std::conditional_t<kSingleGroup, char*, char**> group,
+      const SelectivityVector& rows,
+      const std::vector<VectorPtr>& args) {
     VELOX_CHECK_EQ(args.size(), 1);
     DecodedVector decoded(*args[0], rows);
     auto rowVec = decoded.base()->as<RowVector>();
-    VELOX_CHECK(rowVec);
-    DecodedVector percentiles(*rowVec->childAt(kPercentiles), rows);
+    if constexpr (checkIntermediateInputs) {
+      VELOX_USER_CHECK(rowVec);
+      for (int i = kPercentiles; i <= kMaxValue; ++i) {
+        VELOX_USER_CHECK(
+            rowVec->childAt(i)->isFlatEncoding() ||
+            rowVec->childAt(i)->isConstantEncoding());
+      }
+      for (int i = kItems; i <= kLevels; ++i) {
+        VELOX_USER_CHECK(
+            rowVec->childAt(i)->encoding() == VectorEncoding::Simple::ARRAY);
+      }
+    } else {
+      VELOX_CHECK(rowVec);
+    }
+
+    const SelectivityVector* baseRows = &rows;
+    SelectivityVector innerRows{rowVec->size(), false};
+    if (!decoded.isIdentityMapping()) {
+      if (decoded.isConstantMapping()) {
+        innerRows.setValid(decoded.index(0), true);
+        innerRows.updateBounds();
+      } else {
+        velox::translateToInnerRows(
+            rows, decoded.indices(), decoded.nulls(), innerRows);
+      }
+      baseRows = &innerRows;
+    }
+
+    DecodedVector percentiles(*rowVec->childAt(kPercentiles), *baseRows);
     auto percentileIsArray =
         rowVec->childAt(kPercentilesIsArray)->asUnchecked<SimpleVector<bool>>();
     auto accuracy =
@@ -567,10 +622,17 @@ class ApproxPercentileAggregate : public exec::Aggregate {
     auto levels = rowVec->childAt(kLevels)->asUnchecked<ArrayVector>();
 
     auto itemsElements = items->elements()->asFlatVector<T>();
-    VELOX_CHECK(itemsElements);
+    auto levelElements = levels->elements()->asFlatVector<int32_t>();
+    if constexpr (checkIntermediateInputs) {
+      VELOX_USER_CHECK(itemsElements);
+      VELOX_USER_CHECK(levelElements);
+    } else {
+      VELOX_CHECK(itemsElements);
+      VELOX_CHECK(levelElements);
+    }
     auto rawItems = itemsElements->rawValues();
-    auto rawLevels =
-        levels->elements()->asFlatVector<int32_t>()->rawValues<uint32_t>();
+    auto rawLevels = levelElements->rawValues<uint32_t>();
+
     KllSketchAccumulator<T>* accumulator = nullptr;
     std::vector<typename KllSketch<T>::View> views;
     if constexpr (kSingleGroup) {
@@ -587,8 +649,13 @@ class ApproxPercentileAggregate : public exec::Aggregate {
       if (!accumulator) {
         int j = percentiles.index(i);
         auto percentilesBase = percentiles.base()->asUnchecked<ArrayVector>();
-        auto rawPercentiles =
-            percentilesBase->elements()->asFlatVector<double>()->rawValues();
+        auto percentileBaseElements =
+            percentilesBase->elements()->asFlatVector<double>();
+        if constexpr (checkIntermediateInputs) {
+          VELOX_USER_CHECK(percentileBaseElements);
+          VELOX_USER_CHECK(!percentilesBase->isNullAt(j));
+        }
+        auto rawPercentiles = percentileBaseElements->rawValues();
         checkSetPercentile(
             percentileIsArray->valueAt(i),
             rawPercentiles + percentilesBase->offsetAt(j),
@@ -603,6 +670,13 @@ class ApproxPercentileAggregate : public exec::Aggregate {
         }
       } else {
         accumulator = initRawAccumulator(group[row]);
+      }
+
+      if constexpr (checkIntermediateInputs) {
+        VELOX_USER_CHECK(
+            !(k->isNullAt(i) || n->isNullAt(i) || minValue->isNullAt(i) ||
+              maxValue->isNullAt(i) || items->isNullAt(i) ||
+              levels->isNullAt(i)));
       }
       typename KllSketch<T>::View v{
           .k = static_cast<uint32_t>(k->valueAt(i)),
@@ -630,21 +704,6 @@ class ApproxPercentileAggregate : public exec::Aggregate {
       }
     }
   }
-
-  struct Percentiles {
-    std::vector<double> values;
-    bool isArray;
-  };
-
-  static constexpr double kMissingNormalizedValue = -1;
-  const bool hasWeight_;
-  const bool hasAccuracy_;
-  std::optional<Percentiles> percentiles_;
-  double accuracy_{kMissingNormalizedValue};
-  DecodedVector decodedValue_;
-  DecodedVector decodedWeight_;
-  DecodedVector decodedAccuracy_;
-  DecodedVector decodedDigest_;
 };
 
 bool validPercentileType(const Type& type) {
@@ -696,7 +755,8 @@ void addSignatures(
                            .build());
 }
 
-bool registerApproxPercentile(const std::string& name) {
+exec::AggregateRegistrationResult registerApproxPercentile(
+    const std::string& name) {
   std::vector<std::shared_ptr<exec::AggregateFunctionSignature>> signatures;
   for (const auto& inputType :
        {"tinyint", "smallint", "integer", "bigint", "real", "double"}) {
@@ -707,7 +767,7 @@ bool registerApproxPercentile(const std::string& name) {
         fmt::format("array({})", inputType),
         signatures);
   }
-  exec::registerAggregateFunction(
+  return exec::registerAggregateFunction(
       name,
       std::move(signatures),
       [name](
@@ -792,8 +852,8 @@ bool registerApproxPercentile(const std::string& name) {
                 name,
                 type->toString());
         }
-      });
-  return true;
+      },
+      /*registerCompanionFunctions*/ true);
 }
 
 } // namespace

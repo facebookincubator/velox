@@ -42,6 +42,10 @@ ifdef AWSSDK_ROOT_DIR
 CMAKE_FLAGS += -DAWSSDK_ROOT_DIR=$(AWSSDK_ROOT_DIR)
 endif
 
+ifdef GCSSDK_ROOT_DIR
+CMAKE_FLAGS += -DGCSSDK_ROOT_DIR=$(GCSSDK_ROOT_DIR)
+endif
+
 # Use Ninja if available. If Ninja is used, pass through parallelism control flags.
 USE_NINJA ?= 1
 ifeq ($(USE_NINJA), 1)
@@ -155,7 +159,8 @@ python-clean:
 	DEBUG=1 ${PYTHON_EXECUTABLE} setup.py clean
 
 python-build:
-	DEBUG=1 CMAKE_BUILD_PARALLEL_LEVEL=4 ${PYTHON_EXECUTABLE} setup.py develop
+	DEBUG=1 CMAKE_BUILD_PARALLEL_LEVEL=4 ${PYTHON_EXECUTABLE} -m pip install -e .$(extras) --verbose
 
-python-test: python-build
+python-test: 
+	$(MAKE) python-build extras="[tests]"
 	DEBUG=1 ${PYTHON_EXECUTABLE} -m unittest -v
