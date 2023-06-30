@@ -964,44 +964,36 @@ TEST_P(AllTableWriterTest, renameAndReorderColumns) {
 
 // Runs a pipeline with read + write.
 TEST_P(AllTableWriterTest, directReadWrite) {
-  for (const auto fileFormat :
-       {dwio::common::FileFormat::DWRF, dwio::common::FileFormat::PARQUET}) {
-    SCOPED_TRACE(fileFormat);
-    if (!dwio::common::hasWriterFactory(fileFormat)) {
-      continue;
-    }
-    auto filePaths = makeFilePaths(10);
-    auto vectors = makeVectors(filePaths.size(), 1000);
-    for (int i = 0; i < filePaths.size(); i++) {
-      writeToFile(filePaths[i]->path, vectors[i]);
-    }
-
-    createDuckDbTable(vectors);
-
-    auto outputDirectory = TempDirectoryPath::create();
-    auto plan = createInsertPlan(
-        PlanBuilder().tableScan(rowType_),
-        rowType_,
-        outputDirectory->path,
-        partitionedBy_,
-        bucketProperty_,
-        connector::hive::LocationHandle::TableType::kNew,
-        commitStrategy_,
-        fileFormat);
-
-    assertQuery(plan, filePaths, "SELECT count(*) FROM tmp");
-
-    // To test the correctness of the generated output,
-    // We create a new plan that only read that file and then
-    // compare that against a duckDB query that runs the whole query.
-
-    assertQuery(
-        PlanBuilder().tableScan(rowType_).planNode(),
-        makeHiveConnectorSplits(outputDirectory, fileFormat),
-        "SELECT * FROM tmp");
-
-    verifyTableWriterOutput(outputDirectory->path);
+  auto filePaths = makeFilePaths(10);
+  auto vectors = makeVectors(filePaths.size(), 1000);
+  for (int i = 0; i < filePaths.size(); i++) {
+    writeToFile(filePaths[i]->path, vectors[i]);
   }
+
+  createDuckDbTable(vectors);
+
+  auto outputDirectory = TempDirectoryPath::create();
+  auto plan = createInsertPlan(
+      PlanBuilder().tableScan(rowType_),
+      rowType_,
+      outputDirectory->path,
+      partitionedBy_,
+      bucketProperty_,
+      connector::hive::LocationHandle::TableType::kNew,
+      commitStrategy_);
+
+  assertQuery(plan, filePaths, "SELECT count(*) FROM tmp");
+
+  // To test the correctness of the generated output,
+  // We create a new plan that only read that file and then
+  // compare that against a duckDB query that runs the whole query.
+
+  assertQuery(
+      PlanBuilder().tableScan(rowType_).planNode(),
+      makeHiveConnectorSplits(outputDirectory),
+      "SELECT * FROM tmp");
+
+  verifyTableWriterOutput(outputDirectory->path);
 }
 
 // Tests writing constant vectors.
@@ -1526,39 +1518,47 @@ TEST_P(UnpartitionedTableWriterTest, appendToAnExistingUnpartitionedTable) {
   //
   // The test inserts data vector by vector and checks the intermediate results
   // as well as the final result.
-
-  auto kRowsPerVector = 100;
-  auto input = makeVectors(10, kRowsPerVector);
-
-  createDuckDbTable(input);
-
-  for (auto tableType : tableTypes_) {
-    auto outputDirectory = TempDirectoryPath::create();
-    auto numRows = 0;
-
-    for (auto rowVector : input) {
-      numRows += kRowsPerVector;
-      auto plan = createInsertPlan(
-          PlanBuilder().values({rowVector}),
-          rowType_,
-          outputDirectory->path,
-          {},
-          nullptr,
-          tableType);
-      assertQuery(plan, fmt::format("SELECT {}", kRowsPerVector));
-      assertQuery(
-          PlanBuilder()
-              .tableScan(rowType_)
-              .singleAggregation({}, {"count(*)"})
-              .planNode(),
-          makeHiveConnectorSplits(outputDirectory),
-          fmt::format("SELECT {}", numRows));
+  for (const auto fileFormat :
+       {dwio::common::FileFormat::DWRF, dwio::common::FileFormat::PARQUET}) {
+    SCOPED_TRACE(fileFormat);
+    if (!dwio::common::hasWriterFactory(fileFormat)) {
+      continue;
     }
+    auto kRowsPerVector = 100;
+    auto input = makeVectors(10, kRowsPerVector);
 
-    assertQuery(
-        PlanBuilder().tableScan(rowType_).planNode(),
-        makeHiveConnectorSplits(outputDirectory),
-        "SELECT * FROM tmp");
+    createDuckDbTable(input);
+
+    for (auto tableType : tableTypes_) {
+      auto outputDirectory = TempDirectoryPath::create();
+      auto numRows = 0;
+
+      for (auto rowVector : input) {
+        numRows += kRowsPerVector;
+        auto plan = createInsertPlan(
+            PlanBuilder().values({rowVector}),
+            rowType_,
+            outputDirectory->path,
+            {},
+            nullptr,
+            tableType,
+            commitStrategy_,
+            fileFormat);
+        assertQuery(plan, fmt::format("SELECT {}", kRowsPerVector));
+        assertQuery(
+            PlanBuilder()
+                .tableScan(rowType_)
+                .singleAggregation({}, {"count(*)"})
+                .planNode(),
+            makeHiveConnectorSplits(outputDirectory, fileFormat),
+            fmt::format("SELECT {}", numRows));
+      }
+
+      assertQuery(
+          PlanBuilder().tableScan(rowType_).planNode(),
+          makeHiveConnectorSplits(outputDirectory, fileFormat),
+          "SELECT * FROM tmp");
+    }
   }
 }
 
@@ -1742,7 +1742,6 @@ TEST_P(AllTableWriterTest, tableWriteOutputCheck) {
       << "\nwrite files: " << folly::join(",", writeFiles)
       << "\ndisk files: " << folly::join(",", diskFiles);
 }
-
 // TODO: add partitioned table write update mode tests and more failure tests.
 
 VELOX_INSTANTIATE_TEST_SUITE_P(

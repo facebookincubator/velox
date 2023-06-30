@@ -21,6 +21,8 @@
 #include "velox/dwio/common/tests/utils/BatchMaker.h"
 #include "velox/dwio/dwrf/reader/DwrfReader.h"
 #include "velox/dwio/dwrf/writer/Writer.h"
+#include "velox/dwio/parquet/RegisterParquetReader.h"
+#include "velox/dwio/parquet/RegisterParquetWriter.h"
 
 namespace facebook::velox::exec::test {
 
@@ -37,6 +39,8 @@ void HiveConnectorTestBase::SetUp() {
   connector::registerConnector(hiveConnector);
   dwrf::registerDwrfReaderFactory();
   dwrf::registerDwrfWriterFactory();
+  parquet::registerParquetReaderFactory();
+  parquet::registerParquetWriterFactory();
 }
 
 void HiveConnectorTestBase::TearDown() {
@@ -45,6 +49,8 @@ void HiveConnectorTestBase::TearDown() {
   ioExecutor_.reset();
   dwrf::unregisterDwrfReaderFactory();
   dwrf::unregisterDwrfWriterFactory();
+  parquet::unregisterParquetReaderFactory();
+  parquet::unregisterParquetWriterFactory();
   connector::unregisterConnector(kHiveConnectorId);
   OperatorTestBase::TearDown();
 }
