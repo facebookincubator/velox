@@ -27,8 +27,8 @@ class XxHash64Test : public SparkFunctionBaseTest {
     return evaluateOnce<int64_t>("xxhash64(c0)", arg);
   }
 
-  template <typename T, typename Seed>
-  std::optional<int64_t> xxhash64WithSeed(Seed seed, std::optional<T> arg) {
+  template <typename T>
+  std::optional<int64_t> xxhash64WithSeed(int64_t seed, std::optional<T> arg) {
     return evaluateOnce<int64_t>(fmt::format("xxhash64({}, c0)", seed), arg);
   }
 };
