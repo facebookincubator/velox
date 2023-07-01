@@ -15,6 +15,7 @@
  */
 
 #include "velox/common/memory/HashStringAllocator.h"
+#include "velox/common/base/SimdUtil.h"
 
 namespace facebook::velox {
 
@@ -139,23 +140,25 @@ HashStringAllocator::Position HashStringAllocator::finishWrite(
 }
 
 void HashStringAllocator::newSlab(int32_t size) {
+  constexpr int32_t kSimdPadding = simd::kPadding - sizeof(Header);
   char* run = nullptr;
   uint64_t available = 0;
   int32_t needed = std::max<int32_t>(
       bits::roundUp(
-          size + 2 * sizeof(Header), memory::AllocationTraits::kPageSize),
+          size + 2 * sizeof(Header) + kSimdPadding,
+          memory::AllocationTraits::kPageSize),
       kUnitSize);
   auto pagesNeeded = memory::AllocationTraits::numPages(needed);
   if (pagesNeeded > pool()->largestSizeClass()) {
     LOG(WARNING) << "Unusually large allocation request received of bytes: "
                  << size;
     run = pool_.allocateFixed(needed);
-    available =
-        memory::AllocationTraits::pageBytes(pagesNeeded) - sizeof(Header);
+    available = memory::AllocationTraits::pageBytes(pagesNeeded) -
+        sizeof(Header) - kSimdPadding;
   } else {
     pool_.newRun(needed);
     run = pool_.firstFreeInRun();
-    available = pool_.availableInRun() - sizeof(Header);
+    available = pool_.availableInRun() - sizeof(Header) - kSimdPadding;
   }
   VELOX_CHECK_NOT_NULL(run);
   VELOX_CHECK_GT(available, 0);

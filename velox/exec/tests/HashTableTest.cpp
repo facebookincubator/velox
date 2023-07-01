@@ -96,11 +96,16 @@ class HashTableTest : public testing::TestWithParam<bool> {
     EXPECT_EQ(topTable_->hashMode(), mode);
     LOG(INFO) << "Made table " << describeTable();
     testProbe();
+    if (tryF14_) {
+      testF14Probe();
+    }
     testEraseEveryN(3);
     testProbe();
     testEraseEveryN(4);
     testProbe();
-    testGroupBySpill(size, buildType, numKeys);
+    if (enableSpill_) {
+      testGroupBySpill(size, buildType, numKeys);
+    }
   }
 
   // Inserts and deletes rows in a HashTable, similarly to a group by
@@ -411,9 +416,105 @@ class HashTableTest : public testing::TestWithParam<bool> {
         }
       }
     }
-    LOG(INFO)
+    std::cout
         << fmt::format(
                "Hashed: {} Probed: {} Hit: {} Hash time/row {} probe time/row {}",
+               numHashed,
+               numProbed,
+               numHit,
+               hashTime.timeToDropValue() / numHashed,
+               probeTime.timeToDropValue() / numProbed)
+        << std::endl;
+  }
+
+  // Same as testProbe for normalized keys, uses F14Set instead.
+  void testF14Probe() {
+    f14Table_ = std::make_unique<F14TestTable>(
+        1024,
+        F14TestHasher(),
+        F14TestComparer(),
+        memory::StlAllocator<uint64_t*>(*pool_));
+    constexpr int32_t kInsertBatch = 1000;
+    char* insertRows[kInsertBatch];
+    VELOX_CHECK_EQ(
+        topTable_->hashMode(), BaseHashTable::HashMode::kNormalizedKey);
+
+    auto& otherTables = topTable_->testingOtherTables();
+    for (auto i = 0; i <= otherTables.size(); ++i) {
+      auto subtable = i == 0 ? topTable_.get() : otherTables[i - 1].get();
+      RowContainerIterator iter;
+      while (auto numRows = subtable->rows()->listRows(
+                 &iter, kInsertBatch, RowContainer::kUnlimited, insertRows)) {
+        for (auto row = 0; row < numRows; ++row) {
+          f14Table_->insert(reinterpret_cast<uint64_t*>(insertRows[row]));
+        }
+      }
+    }
+
+    auto lookup = std::make_unique<HashLookup>(topTable_->hashers());
+
+    auto batchSize = batches_[0]->size();
+    SelectivityVector rows(batchSize);
+    SelectivityInfo hashTime;
+    SelectivityInfo probeTime;
+    int32_t numHashed = 0;
+    int32_t numProbed = 0;
+    int32_t numHit = 0;
+    auto& hashers = topTable_->hashers();
+    VectorHasher::ScratchMemory scratchMemory;
+    for (auto batchIndex = 0; batchIndex < batches_.size(); ++batchIndex) {
+      auto batch = batches_[batchIndex];
+      lookup->reset(batch->size());
+      rows.setAll();
+      numHashed += batch->size();
+      {
+        SelectivityTimer timer(hashTime, 0);
+        for (auto i = 0; i < hashers.size(); ++i) {
+          auto key = batch->childAt(i);
+          hashers[i]->lookupValueIds(*key, rows, scratchMemory, lookup->hashes);
+        }
+      }
+
+      lookup->rows.clear();
+      if (rows.isAllSelected()) {
+        lookup->rows.resize(rows.size());
+        std::iota(lookup->rows.begin(), lookup->rows.end(), 0);
+      } else {
+        constexpr int32_t kPadding = simd::kPadding / sizeof(int32_t);
+        lookup->rows.resize(bits::roundUp(rows.size() + kPadding, kPadding));
+        auto numRows = simd::indicesOfSetBits(
+            rows.asRange().bits(), 0, batch->size(), lookup->rows.data());
+        lookup->rows.resize(numRows);
+      }
+      auto startOffset = batchIndex * batchSize;
+      if (lookup->rows.empty()) {
+        // the keys disqualify all entries. The table is not consulted.
+        for (auto i = startOffset; i < startOffset + batch->size(); ++i) {
+          ASSERT_EQ(nullptr, rowOfKey_[i]);
+        }
+      } else {
+        {
+          numProbed += lookup->rows.size();
+          SelectivityTimer timer(probeTime, 0);
+          for (auto row = 0; row < lookup->rows.size(); ++row) {
+            auto index = lookup->rows[row];
+            uint64_t key = lookup->hashes[index];
+            uint64_t* keyPtr = &key + 1;
+            auto it = f14Table_->find(keyPtr);
+            lookup->hits[index] =
+                it == f14Table_->end() ? nullptr : reinterpret_cast<char*>(*it);
+          }
+        }
+        for (auto i = 0; i < lookup->rows.size(); ++i) {
+          auto key = lookup->rows[i];
+          numHit += lookup->hits[key] != nullptr;
+          ASSERT_EQ(rowOfKey_[startOffset + key], lookup->hits[key]);
+        }
+      }
+    }
+    std::cout
+        << fmt::format(
+               "F14set: Hashed: {} Probed: {} Hit: {} Hash time/row {} probe time/row {}",
                numHashed,
                numProbed,
                numHit,
@@ -491,6 +592,32 @@ class HashTableTest : public testing::TestWithParam<bool> {
   // Vectorhashers make ranges or ids of distinct values.
   int64_t keySpacing_ = 1;
   std::unique_ptr<folly::CPUThreadPoolExecutor> executor_;
+  // Enables comparing with F14Set. Only applies to normalized key cases.
+  bool tryF14_{false};
+
+  // hasher and comparer for F14 comparison test.
+  struct F14TestHasher {
+    // Same as mixNormalizedKey() in HashTable.cpp.
+    size_t operator()(uint64_t* value) const {
+      return folly::hasher<uint64_t>()(value[-1]);
+    }
+  };
+
+  struct F14TestComparer {
+    bool operator()(uint64_t* left, uint64_t* right) const {
+      return left[-1] == right[-1];
+    }
+  };
+
+  using F14TestTable = folly::F14FastSet<
+      uint64_t*,
+      F14TestHasher,
+      F14TestComparer,
+      memory::StlAllocator<uint64_t*>>;
+  std::unique_ptr<F14TestTable> f14Table_;
+
+  // Enables testGroupBySpill().
+  bool enableSpill_{true};
 };
 
 TEST_P(HashTableTest, int2DenseArray) {
@@ -763,6 +890,29 @@ TEST_P(HashTableTest, listNullKeyRows) {
     keys = vectorMaker_->rowVector({flat, flat});
   }
   testListNullKeyRows(keys, BaseHashTable::HashMode::kHash);
+}
+
+TEST_P(HashTableTest, f14Small) {
+  tryF14_ = true;
+  enableSpill_ = false;
+  keySpacing_ = 100;
+  auto type = ROW({"k1"}, {BIGINT()});
+  testCycle(BaseHashTable::HashMode::kNormalizedKey, 99999, 100, type, 1);
+}
+
+TEST_P(HashTableTest, f14Large) {
+  tryF14_ = true;
+  enableSpill_ = false;
+  auto type = ROW({"k1"}, {BIGINT()});
+  testCycle(BaseHashTable::HashMode::kNormalizedKey, 10000000, 10, type, 1);
+}
+
+TEST_P(HashTableTest, f14LargeMiss) {
+  tryF14_ = true;
+  enableSpill_ = false;
+  auto type = ROW({"k1"}, {BIGINT()});
+  insertPct_ = 5;
+  testCycle(BaseHashTable::HashMode::kNormalizedKey, 20000000, 10, type, 1);
 }
 
 VELOX_INSTANTIATE_TEST_SUITE_P(
