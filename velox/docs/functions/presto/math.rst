@@ -261,3 +261,8 @@ Probability Functions
     The mean and value must be real values and the standard deviation must be a real and
     positive value (all of type DOUBLE).
 
+.. function:: inverse_weibull_cdf(a, b, p) -> double
+
+    Compute the inverse of the Weibull cdf with given parameters ``a``, ``b`` for the probability ``p``.
+    The ``a``, ``b`` parameters must be positive double values. The probability ``p`` must be a double
+    on the interval [0, 1].
