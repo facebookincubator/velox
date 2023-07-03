@@ -15,7 +15,6 @@
  */
 #pragma once
 
-#include <boost/math/distributions/weibull.hpp>
 #include "boost/math/distributions/beta.hpp"
 #include "boost/math/distributions/binomial.hpp"
 #include "velox/common/base/Exceptions.h"
