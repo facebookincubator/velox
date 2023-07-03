@@ -193,7 +193,7 @@ bool SubstraitToVeloxPlanValidator::validateScalarFunction(
       "unix_timestamp",    "repeat",        "translate",
       "add_months",        "date_format",   "trunc",
       "sequence",          "posexplode",    "arrays_overlap",
-      "array_min",         "array_max"};
+      "array_min",         "array_max",     "approx_percentile"};
   if (functions.find(name) != functions.end()) {
     logValidateMsg(
         "native validation failed due to: Function is not supported: " + name);
