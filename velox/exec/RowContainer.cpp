@@ -648,9 +648,9 @@ void RowContainer::skip(RowContainerIterator& iter, int32_t numRows) {
     VELOX_DCHECK_EQ(0, iter.allocationIndex);
     iter.normalizedKeysLeft = numRowsWithNormalizedKey_;
     iter.normalizedKeySize = originalNormalizedKeySize_;
-    auto run = rows_.allocationAt(0)->runAt(0);
-    iter.rowBegin = run.data<char>();
-    iter.endOfRun = iter.rowBegin + run.numBytes();
+    auto range = rows_.rangeAt(0);
+    iter.rowBegin = range.data();
+    iter.endOfRun = iter.rowBegin + range.size();
   }
   if (iter.rowNumber + numRows >= numRows_) {
     iter.rowNumber = numRows_;
@@ -673,22 +673,13 @@ void RowContainer::skip(RowContainerIterator& iter, int32_t numRows) {
     }
     int32_t rowsInRun = (iter.endOfRun - iter.rowBegin) / rowSize;
     toSkip -= rowsInRun;
-    auto numRuns = rows_.allocationAt(iter.allocationIndex)->numRuns();
-    if (iter.runIndex >= numRuns - 1) {
-      ++iter.allocationIndex;
-      iter.runIndex = 0;
-    } else {
-      ++iter.runIndex;
-    }
-    auto run = rows_.allocationAt(iter.allocationIndex)->runAt(iter.runIndex);
-    if (iter.allocationIndex == rows_.numSmallAllocations() - 1 &&
-        iter.runIndex ==
-            rows_.allocationAt(iter.allocationIndex)->numRuns() - 1) {
-      iter.endOfRun = run.data<char>() + rows_.currentOffset();
-    } else {
-      iter.endOfRun = run.data<char>() + run.numBytes();
-    }
-    iter.rowBegin = run.data<char>();
+    auto numRuns = 1;
+    ++iter.allocationIndex;
+    auto range = rows_.rangeAt(iter.allocationIndex);
+    iter.endOfRun = range.data() +
+        (iter.allocationIndex == rows_.numRanges() - 1 ? rows_.currentOffset()
+                                                       : range.size());
+    iter.rowBegin = range.data();
   }
   if (iter.normalizedKeysLeft) {
     iter.normalizedKeysLeft -= numRows;

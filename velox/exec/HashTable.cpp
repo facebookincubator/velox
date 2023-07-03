@@ -26,6 +26,8 @@
 
 using facebook::velox::common::testutil::TestValue;
 
+DEFINE_bool(no_unroll, false, "No interleave of probe cache misses");
+
 namespace facebook::velox::exec {
 namespace {
 constexpr int32_t kMinTableSizeForParallelJoinBuild = 1000;
@@ -94,42 +96,37 @@ class ProbeState {
   static constexpr uint8_t kEmptyTag = 0x00;
   static constexpr int32_t kFullMask = 0xffff;
 
-  static inline int32_t tagsByteOffset(uint64_t hash, uint64_t sizeMask) {
-    return (hash & sizeMask) & ~(sizeof(BaseHashTable::TagVector) - 1);
-  }
-
   int32_t row() const {
     return row_;
   }
 
   // Use one instruction to load 16 tags
   // Use another instruction to make 16 copies of the tag being searched for
-  inline void
-  preProbe(uint8_t* tags, uint64_t sizeMask, uint64_t hash, int32_t row) {
+  template <typename Table>
+  inline void preProbe(const Table& table, uint64_t hash, int32_t row) {
     row_ = row;
-    tagIndex_ = tagsByteOffset(hash, sizeMask);
-    tagsInTable_ = BaseHashTable::loadTags(tags, tagIndex_);
+    tagIndex_ = table.tagVectorOffset(hash);
+    tagsInTable_ = BaseHashTable::loadTags(table.tags_, tagIndex_);
     auto tag = BaseHashTable::hashTag(hash);
     wantedTags_ = BaseHashTable::TagVector::broadcast(tag);
     group_ = nullptr;
     indexInTags_ = kNotSet;
+    table.incrementTagLoad();
   }
 
   // Use one instruction to compare the tag being searched for to 16 tags
   // If there is a match, load corresponding data from the table
-  template <Operation op = Operation::kProbe>
-  inline void firstProbe(char** table, int32_t firstKey) {
+  template <Operation op = Operation::kProbe, typename Table>
+  inline void firstProbe(const Table& table, int32_t firstKey) {
     hits_ = simd::toBitMask(tagsInTable_ == wantedTags_);
     if (hits_) {
       loadNextHit<op>(table, firstKey);
     }
   }
 
-  template <Operation op, typename Compare, typename Insert>
+  template <Operation op, typename Compare, typename Insert, typename Table>
   inline char* FOLLY_NULLABLE fullProbe(
-      uint8_t* tags,
-      char** table,
-      uint64_t sizeMask,
+      Table& table,
       int32_t firstKey,
       Compare compare,
       Insert insert,
@@ -138,21 +135,22 @@ class ProbeState {
       int32_t partitionEnd = -1) {
     if (group_ && compare(group_, row_)) {
       if (op == Operation::kErase) {
-        eraseHit(tags, numTombstones);
+        eraseHit(table, numTombstones);
       }
+      table.incrementHit();
       return group_;
     }
 
     auto alreadyChecked = group_;
     if (extraCheck) {
-      tagsInTable_ = BaseHashTable::loadTags(tags, tagIndex_);
+      tagsInTable_ = table.loadTags(tagIndex_);
       hits_ = simd::toBitMask(tagsInTable_ == wantedTags_);
     }
 
     int32_t insertTagIndex = -1;
+    const auto kEmptyGroup = BaseHashTable::TagVector::broadcast(0);
     const auto kTombstoneGroup =
         BaseHashTable::TagVector::broadcast(kTombstoneTag);
-    const auto kEmptyGroup = BaseHashTable::TagVector::broadcast(kEmptyTag);
     for (;;) {
       if constexpr (op == Operation::kInsert) {
         if (partitionEnd >= 0 && tagIndex_ >= partitionEnd) {
@@ -166,8 +164,9 @@ class ProbeState {
         if (!(extraCheck && group_ == alreadyChecked) &&
             compare(group_, row_)) {
           if (op == Operation::kErase) {
-            eraseHit(tags, numTombstones);
+            eraseHit(table, numTombstones);
           }
+          table.incrementHit();
           return group_;
         }
       }
@@ -199,37 +198,37 @@ class ProbeState {
           indexInTags_ = bits::getAndClearLastSetBit(tombstones);
         }
       }
-      tagIndex_ = (tagIndex_ + sizeof(BaseHashTable::TagVector)) & sizeMask;
-      tagsInTable_ = BaseHashTable::loadTags(tags, tagIndex_);
-      hits_ = simd::toBitMask(tagsInTable_ == wantedTags_) & kFullMask;
+      tagIndex_ = table.nextTagVectorOffset(tagIndex_);
+      tagsInTable_ = table.loadTags(tagIndex_);
+      hits_ = simd::toBitMask(tagsInTable_ == wantedTags_);
     }
   }
 
-  FOLLY_ALWAYS_INLINE char* FOLLY_NULLABLE joinNormalizedKeyFullProbe(
-      uint8_t* tags,
-      char** table,
-      uint64_t sizeMask,
-      const uint64_t* keys) {
+  template <typename Table>
+  FOLLY_ALWAYS_INLINE char* FOLLY_NULLABLE
+  joinNormalizedKeyFullProbe(const Table& table, const uint64_t* keys) {
     if (group_ && RowContainer::normalizedKey(group_) == keys[row_]) {
+      table.incrementHit();
       return group_;
     }
     const auto kEmptyGroup = BaseHashTable::TagVector::broadcast(kEmptyTag);
     for (;;) {
       if (!hits_) {
-        uint16_t empty =
-            simd::toBitMask(tagsInTable_ == kEmptyGroup) & kFullMask;
+        uint16_t empty = simd::toBitMask(tagsInTable_ == kEmptyGroup);
         if (empty) {
           return nullptr;
         }
       } else {
-        loadNextHit<Operation::kProbe>(table, 0);
+        loadNextHit<Operation::kProbe>(
+            table, -static_cast<int32_t>(sizeof(normalized_key_t)));
         if (RowContainer::normalizedKey(group_) == keys[row_]) {
+          table.incrementHit();
           return group_;
         }
         continue;
       }
-      tagIndex_ = (tagIndex_ + sizeof(BaseHashTable::TagVector)) & sizeMask;
-      tagsInTable_ = BaseHashTable::loadTags(tags, tagIndex_);
+      tagIndex_ = table.nextTagVectorOffset(tagIndex_);
+      tagsInTable_ = BaseHashTable::loadTags(table.tags_, tagIndex_);
       hits_ = simd::toBitMask(tagsInTable_ == wantedTags_) & kFullMask;
     }
   }
@@ -237,24 +236,31 @@ class ProbeState {
  private:
   static constexpr uint8_t kNotSet = 0xff;
 
-  template <Operation op>
-  inline void loadNextHit(char** table, int32_t firstKey) {
+  template <Operation op, typename Table>
+  inline void loadNextHit(Table& table, int32_t firstKey) {
     int32_t hit = bits::getAndClearLastSetBit(hits_);
 
     if (op == Operation::kErase) {
       indexInTags_ = hit;
     }
-    group_ = BaseHashTable::loadRow(table, tagIndex_ + hit);
+    group_ = table.row(tagIndex_, hit);
     __builtin_prefetch(group_ + firstKey);
+    table.incrementRowLoad();
   }
 
-  void eraseHit(uint8_t* tags, int64_t& numTombstones) {
+  template <typename Table>
+  void eraseHit(Table& table, int64_t& numTombstones) {
     const auto kEmptyGroup = BaseHashTable::TagVector::broadcast(kEmptyTag);
     const bool hasEmptyGroup =
         simd::toBitMask(tagsInTable_ == kEmptyGroup) != 0;
 
+    if (!hasEmptyGroup) {
+      table.hasTombstones_ = true;
+    }
     BaseHashTable::storeTag(
-        tags, tagIndex_ + indexInTags_, hasEmptyGroup ? 0 : kTombstoneTag);
+        table.tags_,
+        tagIndex_ + indexInTags_,
+        hasEmptyGroup ? 0 : kTombstoneTag);
     numTombstones += !hasEmptyGroup;
   }
 
@@ -293,6 +299,23 @@ void HashTable<ignoreNullKeys>::storeRowPointer(
     char* row) {
   if (hashMode_ != HashMode::kArray) {
     tags_[index] = hashTag(hash);
+    if (kInterleaveRows) {
+      // The pointer is in slot (index - start_of_group) after the
+      // tags. We first get the base address of the tag/pointer
+      // group. We add the size of the tags. Then we add pointer size
+      // * index of the tag in the tags vector. This is the address of
+      // a 6 byte pointer to the row.
+      int groupOffset = index & ~(kTagRowGroupSize - 1);
+      uint64_t* pointer = reinterpret_cast<uint64_t*>(
+          tags_ + sizeof(TagVector) + groupOffset +
+          (kBytesInPointer * (index - groupOffset)));
+
+      // We store 48 bits, preserving the high 16 bits of the word, which belong
+      // to the next pointer.
+      auto previous = *pointer & ~kPointerMask;
+      *pointer = reinterpret_cast<uint64_t>(row) | previous;
+      return;
+    }
   }
   table_[index] = row;
 }
@@ -351,19 +374,17 @@ bool HashTable<ignoreNullKeys>::compareKeys(
 }
 
 template <bool ignoreNullKeys>
-template <bool isJoin>
+template <bool isJoin, bool isNormalizedKey>
 FOLLY_ALWAYS_INLINE void HashTable<ignoreNullKeys>::fullProbe(
     HashLookup& lookup,
     ProbeState& state,
     bool extraCheck) {
   constexpr ProbeState::Operation op =
       isJoin ? ProbeState::Operation::kProbe : ProbeState::Operation::kInsert;
-  if (hashMode_ == HashMode::kNormalizedKey) {
+  if constexpr (isNormalizedKey) {
     // NOLINT
     lookup.hits[state.row()] = state.fullProbe<op>(
-        tags_,
-        table_,
-        sizeMask_,
+        *this,
         -static_cast<int32_t>(sizeof(normalized_key_t)),
         [&](char* group, int32_t row) INLINE_LAMBDA {
           return RowContainer::normalizedKey(group) ==
@@ -378,9 +399,7 @@ FOLLY_ALWAYS_INLINE void HashTable<ignoreNullKeys>::fullProbe(
   }
   // NOLINT
   lookup.hits[state.row()] = state.fullProbe<op>(
-      tags_,
-      table_,
-      sizeMask_,
+      *this,
       0,
       [&](char* group, int32_t row) { return compareKeys(group, lookup, row); },
       [&](int32_t index, int32_t row) {
@@ -423,6 +442,10 @@ void populateNormalizedKeys(HashLookup& lookup, int8_t sizeBits) {
 
 template <bool ignoreNullKeys>
 void HashTable<ignoreNullKeys>::groupProbe(HashLookup& lookup) {
+  if (kTrackLoads) {
+    numProbe_ += lookup.rows.size();
+  }
+
   if (hashMode_ == HashMode::kArray) {
     arrayGroupProbe(lookup);
     return;
@@ -432,7 +455,67 @@ void HashTable<ignoreNullKeys>::groupProbe(HashLookup& lookup) {
   checkSize(lookup.rows.size());
   if (hashMode_ == HashMode::kNormalizedKey) {
     populateNormalizedKeys(lookup, sizeBits_);
+    groupNormalizedKeyProbe(lookup);
+    return;
   }
+  ProbeState state1;
+  ProbeState state2;
+  ProbeState state3;
+  ProbeState state4;
+  ProbeState state5;
+  ProbeState state6;
+  ProbeState state7;
+  ProbeState state8;
+  int32_t probeIndex = 0;
+  int32_t numProbes = lookup.rows.size();
+  auto rows = lookup.rows.data();
+  bool noUnroll = FLAGS_no_unroll;
+  for (; !noUnroll && probeIndex + 8 <= numProbes; probeIndex += 8) {
+    int32_t row = rows[probeIndex];
+    state1.preProbe(*this, lookup.hashes[row], row);
+    row = rows[probeIndex + 1];
+    state2.preProbe(*this, lookup.hashes[row], row);
+    row = rows[probeIndex + 2];
+    state3.preProbe(*this, lookup.hashes[row], row);
+    row = rows[probeIndex + 3];
+    state4.preProbe(*this, lookup.hashes[row], row);
+    row = rows[probeIndex + 4];
+    state5.preProbe(*this, lookup.hashes[row], row);
+    row = rows[probeIndex + 5];
+    state6.preProbe(*this, lookup.hashes[row], row);
+    row = rows[probeIndex + 6];
+    state7.preProbe(*this, lookup.hashes[row], row);
+    row = rows[probeIndex + 7];
+    state8.preProbe(*this, lookup.hashes[row], row);
+
+    state1.firstProbe<ProbeState::Operation::kInsert>(*this, 0);
+    state2.firstProbe<ProbeState::Operation::kInsert>(*this, 0);
+    state3.firstProbe<ProbeState::Operation::kInsert>(*this, 0);
+    state4.firstProbe<ProbeState::Operation::kInsert>(*this, 0);
+    state5.firstProbe<ProbeState::Operation::kInsert>(*this, 0);
+    state6.firstProbe<ProbeState::Operation::kInsert>(*this, 0);
+    state7.firstProbe<ProbeState::Operation::kInsert>(*this, 0);
+    state8.firstProbe<ProbeState::Operation::kInsert>(*this, 0);
+
+    fullProbe<false>(lookup, state1, false);
+    fullProbe<false>(lookup, state2, true);
+    fullProbe<false>(lookup, state3, true);
+    fullProbe<false>(lookup, state4, true);
+    fullProbe<false>(lookup, state5, true);
+    fullProbe<false>(lookup, state6, true);
+    fullProbe<false>(lookup, state7, true);
+    fullProbe<false>(lookup, state8, true);
+  }
+  for (; probeIndex < numProbes; ++probeIndex) {
+    int32_t row = rows[probeIndex];
+    state1.preProbe(*this, lookup.hashes[row], row);
+    state1.firstProbe(*this, 0);
+    fullProbe<false>(lookup, state1, false);
+  }
+}
+
+template <bool ignoreNullKeys>
+void HashTable<ignoreNullKeys>::groupNormalizedKeyProbe(HashLookup& lookup) {
   ProbeState state1;
   ProbeState state2;
   ProbeState state3;
@@ -440,29 +523,32 @@ void HashTable<ignoreNullKeys>::groupProbe(HashLookup& lookup) {
   int32_t probeIndex = 0;
   int32_t numProbes = lookup.rows.size();
   auto rows = lookup.rows.data();
-  for (; probeIndex + 4 <= numProbes; probeIndex += 4) {
+  constexpr int32_t kKeyOffset =
+      -static_cast<int32_t>(sizeof(normalized_key_t));
+  bool noUnroll = FLAGS_no_unroll;
+  for (; !noUnroll && probeIndex + 4 <= numProbes; probeIndex += 4) {
     int32_t row = rows[probeIndex];
-    state1.preProbe(tags_, sizeMask_, lookup.hashes[row], row);
+    state1.preProbe(*this, lookup.hashes[row], row);
     row = rows[probeIndex + 1];
-    state2.preProbe(tags_, sizeMask_, lookup.hashes[row], row);
+    state2.preProbe(*this, lookup.hashes[row], row);
     row = rows[probeIndex + 2];
-    state3.preProbe(tags_, sizeMask_, lookup.hashes[row], row);
+    state3.preProbe(*this, lookup.hashes[row], row);
     row = rows[probeIndex + 3];
-    state4.preProbe(tags_, sizeMask_, lookup.hashes[row], row);
-    state1.firstProbe<ProbeState::Operation::kInsert>(table_, 0);
-    state2.firstProbe<ProbeState::Operation::kInsert>(table_, 0);
-    state3.firstProbe<ProbeState::Operation::kInsert>(table_, 0);
-    state4.firstProbe<ProbeState::Operation::kInsert>(table_, 0);
-    fullProbe<false>(lookup, state1, false);
-    fullProbe<false>(lookup, state2, true);
-    fullProbe<false>(lookup, state3, true);
-    fullProbe<false>(lookup, state4, true);
+    state4.preProbe(*this, lookup.hashes[row], row);
+    state1.firstProbe<ProbeState::Operation::kInsert>(*this, kKeyOffset);
+    state2.firstProbe<ProbeState::Operation::kInsert>(*this, kKeyOffset);
+    state3.firstProbe<ProbeState::Operation::kInsert>(*this, kKeyOffset);
+    state4.firstProbe<ProbeState::Operation::kInsert>(*this, kKeyOffset);
+    fullProbe<false, true>(lookup, state1, false);
+    fullProbe<false, true>(lookup, state2, true);
+    fullProbe<false, true>(lookup, state3, true);
+    fullProbe<false, true>(lookup, state4, true);
   }
   for (; probeIndex < numProbes; ++probeIndex) {
     int32_t row = rows[probeIndex];
-    state1.preProbe(tags_, sizeMask_, lookup.hashes[row], row);
-    state1.firstProbe(table_, 0);
-    fullProbe<false>(lookup, state1, false);
+    state1.preProbe(*this, lookup.hashes[row], row);
+    state1.firstProbe(*this, kKeyOffset);
+    fullProbe<false, true>(lookup, state1, false);
   }
 }
 
@@ -519,12 +605,11 @@ void HashTable<ignoreNullKeys>::arrayGroupProbe(HashLookup& lookup) {
 
 template <bool ignoreNullKeys>
 void HashTable<ignoreNullKeys>::joinProbe(HashLookup& lookup) {
+  if (kTrackLoads) {
+    numProbe_ += lookup.rows.size();
+  }
   if (hashMode_ == HashMode::kArray) {
-    for (auto row : lookup.rows) {
-      auto index = lookup.hashes[row];
-      DCHECK_LT(index, capacity_);
-      lookup.hits[row] = table_[index]; // NOLINT
-    }
+    arrayJoinProbe(lookup);
     return;
   }
   if (hashMode_ == HashMode::kNormalizedKey) {
@@ -539,19 +624,20 @@ void HashTable<ignoreNullKeys>::joinProbe(HashLookup& lookup) {
   ProbeState state2;
   ProbeState state3;
   ProbeState state4;
-  for (; probeIndex + 4 <= numProbes; probeIndex += 4) {
+  bool noUnroll = FLAGS_no_unroll;
+  for (; !noUnroll && probeIndex + 4 <= numProbes; probeIndex += 4) {
     int32_t row = rows[probeIndex];
-    state1.preProbe(tags_, sizeMask_, lookup.hashes[row], row);
+    state1.preProbe(*this, lookup.hashes[row], row);
     row = rows[probeIndex + 1];
-    state2.preProbe(tags_, sizeMask_, lookup.hashes[row], row);
+    state2.preProbe(*this, lookup.hashes[row], row);
     row = rows[probeIndex + 2];
-    state3.preProbe(tags_, sizeMask_, lookup.hashes[row], row);
+    state3.preProbe(*this, lookup.hashes[row], row);
     row = rows[probeIndex + 3];
-    state4.preProbe(tags_, sizeMask_, lookup.hashes[row], row);
-    state1.firstProbe(table_, 0);
-    state2.firstProbe(table_, 0);
-    state3.firstProbe(table_, 0);
-    state4.firstProbe(table_, 0);
+    state4.preProbe(*this, lookup.hashes[row], row);
+    state1.firstProbe(*this, 0);
+    state2.firstProbe(*this, 0);
+    state3.firstProbe(*this, 0);
+    state4.firstProbe(*this, 0);
     fullProbe<true>(lookup, state1, false);
     fullProbe<true>(lookup, state2, false);
     fullProbe<true>(lookup, state3, false);
@@ -559,9 +645,51 @@ void HashTable<ignoreNullKeys>::joinProbe(HashLookup& lookup) {
   }
   for (; probeIndex < numProbes; ++probeIndex) {
     int32_t row = rows[probeIndex];
-    state1.preProbe(tags_, sizeMask_, lookup.hashes[row], row);
-    state1.firstProbe(table_, 0);
+    state1.preProbe(*this, lookup.hashes[row], row);
+    state1.firstProbe(*this, 0);
     fullProbe<true>(lookup, state1, false);
+  }
+}
+
+template <bool ignoreNullKeys>
+void HashTable<ignoreNullKeys>::arrayJoinProbe(HashLookup& lookup) {
+  // Rows are nearly always consecutive.
+  auto& rows = lookup.rows;
+  auto hashes = lookup.hashes.data();
+  auto hits = lookup.hits.data();
+  auto numRows = rows.size();
+  int32_t i = 0;
+  constexpr int32_t kBatchSize = xsimd::batch<int64_t>::size;
+  constexpr int32_t kStep = kBatchSize * 2;
+  // We loop 2 vectors at a time for fewer switches. The rows are in practice
+  // always contiguous.
+  for (; i + kStep <= numRows; i += kStep) {
+    auto firstRow = rows[i];
+    if (rows[i + kStep - 1] - firstRow == kStep - 1) {
+      // kStep consecutive.
+      simd::gather(
+          reinterpret_cast<const int64_t*>(table_),
+          reinterpret_cast<const int64_t*>(hashes + firstRow))
+          .store_unaligned(reinterpret_cast<int64_t*>(hits) + firstRow);
+      simd::gather(
+          reinterpret_cast<const int64_t*>(table_),
+          reinterpret_cast<const int64_t*>(hashes + firstRow + kBatchSize))
+          .store_unaligned(
+              reinterpret_cast<int64_t*>(hits) + firstRow + kBatchSize);
+    } else {
+      for (auto j = i; j < i + kStep; ++j) {
+        auto row = rows[j];
+        auto index = hashes[row];
+        DCHECK(index < capacity_);
+        hits[row] = table_[index]; // NOLINT
+      }
+    }
+  }
+  for (; i < numRows; ++i) {
+    auto row = rows[i];
+    auto index = hashes[row];
+    DCHECK(index < capacity_);
+    hits[row] = table_[index]; // NOLINT
   }
 }
 
@@ -577,34 +705,32 @@ void HashTable<ignoreNullKeys>::joinNormalizedKeyProbe(HashLookup& lookup) {
   const uint64_t* keys = lookup.normalizedKeys.data();
   const uint64_t* hashes = lookup.hashes.data();
   char** hits = lookup.hits.data();
-  for (; probeIndex + 4 <= numProbes; probeIndex += 4) {
+  constexpr int32_t kKeyOffset =
+      -static_cast<int32_t>(sizeof(normalized_key_t));
+  bool noUnroll = FLAGS_no_unroll;
+  for (; !noUnroll && probeIndex + 4 <= numProbes; probeIndex += 4) {
     int32_t row = rows[probeIndex];
-    state1.preProbe(tags_, sizeMask_, hashes[row], row);
+    state1.preProbe(*this, hashes[row], row);
     row = rows[probeIndex + 1];
-    state2.preProbe(tags_, sizeMask_, hashes[row], row);
+    state2.preProbe(*this, hashes[row], row);
     row = rows[probeIndex + 2];
-    state3.preProbe(tags_, sizeMask_, hashes[row], row);
+    state3.preProbe(*this, hashes[row], row);
     row = rows[probeIndex + 3];
-    state4.preProbe(tags_, sizeMask_, hashes[row], row);
-    state1.firstProbe(table_, 0);
-    state2.firstProbe(table_, 0);
-    state3.firstProbe(table_, 0);
-    state4.firstProbe(table_, 0);
-    hits[state1.row()] =
-        state1.joinNormalizedKeyFullProbe(tags_, table_, sizeMask_, keys);
-    hits[state2.row()] =
-        state2.joinNormalizedKeyFullProbe(tags_, table_, sizeMask_, keys);
-    hits[state3.row()] =
-        state3.joinNormalizedKeyFullProbe(tags_, table_, sizeMask_, keys);
-    hits[state4.row()] =
-        state4.joinNormalizedKeyFullProbe(tags_, table_, sizeMask_, keys);
+    state4.preProbe(*this, hashes[row], row);
+    state1.firstProbe(*this, kKeyOffset);
+    state2.firstProbe(*this, kKeyOffset);
+    state3.firstProbe(*this, kKeyOffset);
+    state4.firstProbe(*this, kKeyOffset);
+    hits[state1.row()] = state1.joinNormalizedKeyFullProbe(*this, keys);
+    hits[state2.row()] = state2.joinNormalizedKeyFullProbe(*this, keys);
+    hits[state3.row()] = state3.joinNormalizedKeyFullProbe(*this, keys);
+    hits[state4.row()] = state4.joinNormalizedKeyFullProbe(*this, keys);
   }
   for (; probeIndex < numProbes; ++probeIndex) {
     int32_t row = rows[probeIndex];
-    state1.preProbe(tags_, sizeMask_, lookup.hashes[row], row);
-    state1.firstProbe(table_, 0);
-    hits[row] =
-        state1.joinNormalizedKeyFullProbe(tags_, table_, sizeMask_, keys);
+    state1.preProbe(*this, lookup.hashes[row], row);
+    state1.firstProbe(*this, 0);
+    hits[row] = state1.joinNormalizedKeyFullProbe(*this, keys);
   }
 }
 
@@ -614,30 +740,52 @@ void HashTable<ignoreNullKeys>::allocateTables(uint64_t size) {
   VELOX_CHECK_GT(size, 0);
   capacity_ = size;
   numTombstones_ = 0;
-  sizeMask_ = capacity_ - 1;
-  sizeBits_ = __builtin_popcountll(sizeMask_);
+  if (kInterleaveRows) {
+    sizeMask_ = (capacity_ * sizeof(void*)) - 1;
+    sizeBits_ = __builtin_popcountll(sizeMask_);
+    tagOffsetMask_ = sizeMask_ & ~(kTagRowGroupSize - 1);
+  } else {
+    sizeMask_ = capacity_ - 1;
+    sizeBits_ = __builtin_popcountll(sizeMask_);
+    VELOX_CHECK_LE(
+        sizeBits_, 31, "Exceeding signed int range for hash table indices");
+    tagOffsetMask_ = sizeMask_ & ~(sizeof(TagVector) - 1);
+  }
   constexpr auto kPageSize = memory::AllocationTraits::kPageSize;
-  // The total size is 9 bytes per slot, 8 in the pointers table and 1 in the
-  // tags table.
-  auto numPages = bits::roundUp(size * 9, kPageSize) / kPageSize;
-  rows_->pool()->allocateContiguous(numPages, tableAllocation_);
-  table_ = tableAllocation_.data<char*>();
-  tags_ = reinterpret_cast<uint8_t*>(table_ + size);
-  memset(tags_, 0, capacity_);
-  // Not strictly necessary to clear 'table_' but more debuggable.
-  memset(table_, 0, capacity_ * sizeof(char*));
+  if (kInterleaveRows) {
+    // The total size is 8 bytes per slot, in groups of 16 slots
+    // with 16 bytes of tags and 16 * 6 bytes of pointers and a
+    // padding of 16 bytes to round up the cache line.
+    auto numPages = bits::roundUp(size * sizeof(char*), kPageSize) / kPageSize;
+    rows_->pool()->allocateContiguous(numPages, tableAllocation_);
+    tags_ = tableAllocation_.data<uint8_t>();
+    table_ = nullptr;
+    memset(tags_, 0, capacity_ * sizeof(char*));
+  } else {
+    // The total size is 9 bytes per slot, 8 in the pointers table and 1 in the
+    // tags table.
+    auto numPages = bits::roundUp(capacity_ * 9, kPageSize) / kPageSize;
+    rows_->pool()->allocateContiguous(numPages, tableAllocation_);
+
+    table_ = tableAllocation_.data<char*>();
+    tags_ = reinterpret_cast<uint8_t*>(table_ + size);
+    memset(tags_, 0, capacity_);
+    // Not strictly necessary to clear 'table_' but more debuggable.
+    memset(table_, 0, capacity_ * sizeof(char*));
+  }
 }
 
 template <bool ignoreNullKeys>
 void HashTable<ignoreNullKeys>::clear() {
   rows_->clear();
   if (hashMode_ != HashMode::kArray && tags_) {
-    memset(tags_, 0, capacity_);
+    memset(tags_, 0, kInterleaveRows ? capacity_ * sizeof(char*) : capacity_);
   }
   if (table_) {
     memset(table_, 0, sizeof(char*) * capacity_);
   }
   numDistinct_ = 0;
+  numTombstones_ = 0;
 }
 
 template <bool ignoreNullKeys>
@@ -653,7 +801,7 @@ void HashTable<ignoreNullKeys>::checkSize(int32_t numNew) {
       hashMode_);
 
   const int64_t newNumDistincts = numNew + numDistinct_;
-  if (table_ == nullptr || capacity_ == 0) {
+  if (tags_ == nullptr || capacity_ == 0) {
     // Initial guess of cardinality is double the first input batch or at
     // least 2K entries.
     // stats_.numDistinct is non-0 when switching from HashMode::kArray to
@@ -780,13 +928,23 @@ void HashTable<ignoreNullKeys>::parallelJoinBuild() {
       buildPartitionBounds_.begin(),
       buildPartitionBounds_.begin() + buildPartitionBounds_.capacity(),
       std::numeric_limits<int32_t>::max());
+  // The partitioning is in terms of ranges of tag vector index. The stride is
+  // different depending on kInterleaveRows.
+  int64_t tagIndexEnd = sizeMask_ + 1;
   for (auto i = 0; i < numPartitions; ++i) {
-    // The bounds are rounded up to cache line size.
-    buildPartitionBounds_[i] = bits::roundUp(
-        (capacity_ / numPartitions) * i,
-        folly::hardware_destructive_interference_size);
+    if (kInterleaveRows) {
+      // The bounds are the closes tag/row pointer group bound, always cache
+      // line aligned.
+      buildPartitionBounds_[i] = bits::roundUp(
+          ((sizeMask_ + 1) / numPartitions) * i, kTagRowGroupSize);
+    } else {
+      // The bounds are rounded up to cache line size.
+      buildPartitionBounds_[i] = bits::roundUp(
+          (capacity_ / numPartitions) * i,
+          folly::hardware_destructive_interference_size);
+    }
   }
-  buildPartitionBounds_.back() = capacity_;
+  buildPartitionBounds_.back() = sizeMask_ + 1;
   std::vector<std::shared_ptr<AsyncSource<bool>>> partitionSteps;
   std::vector<std::shared_ptr<AsyncSource<bool>>> buildSteps;
   auto sync = folly::makeGuard([&]() {
@@ -839,7 +997,7 @@ void HashTable<ignoreNullKeys>::parallelJoinBuild() {
         hashes.data(),
         overflows.size(),
         0,
-        capacity_,
+        sizeMask_ + 1,
         nullptr);
     auto table = i == 0 ? this : otherTables_[i - 1].get();
     VELOX_CHECK_EQ(table->rows()->numRows(), table->numParallelBuildRows_);
@@ -881,7 +1039,7 @@ void HashTable<ignoreNullKeys>::partitionRows(
         buildPartitionBounds_.capacity() % xsimd::batch<int32_t>::size,
         "partition bounds must be padded to SIMD width");
     for (auto i = 0; i < numRows; ++i) {
-      auto index = ProbeState::tagsByteOffset(hashes[i], sizeMask_);
+      auto index = tagVectorOffset(hashes[i]);
       partitions[i] = findPartition(
           index, buildPartitionBounds_.data(), buildPartitionBounds_.size());
     }
@@ -945,22 +1103,63 @@ void HashTable<ignoreNullKeys>::insertForGroupBy(
       table_[index] = groups[i];
     }
   } else {
-    for (int32_t i = 0; i < numGroups; ++i) {
-      auto hash = hashes[i];
-      auto tagIndex = ProbeState::tagsByteOffset(hash, sizeMask_);
-      auto tagsInTable = BaseHashTable::loadTags(tags_, tagIndex);
-      for (;;) {
-        MaskType free =
-            ~simd::toBitMask(
-                BaseHashTable::TagVector::batch_bool_type(tagsInTable)) &
-            ProbeState::kFullMask;
+    constexpr int32_t kBatchSize = TagVector::size;
+    for (int32_t base = 0; base < numGroups; base += kBatchSize) {
+      char** pointers[kBatchSize];
+      auto batchEnd = std::min(base + kBatchSize, numGroups);
+      for (auto j = base; j < batchEnd; ++j) {
+        auto hash = hashes[j];
+        auto tagIndex = tagVectorOffset(hash);
+        auto tagsInTable = BaseHashTable::loadTags(tags_, tagIndex);
+        MaskType free = ~simd::toBitMask(
+            BaseHashTable::TagVector::batch_bool_type(tagsInTable));
         if (free) {
-          auto freeOffset = bits::getAndClearLastSetBit(free);
-          storeRowPointer(tagIndex + freeOffset, hash, groups[i]);
-          break;
+          int freeOffset = __builtin_ctz(free);
+          tags_[tagIndex + freeOffset] = BaseHashTable::hashTag(hash);
+          char** pointer;
+          if (kInterleaveRows) {
+            pointer = reinterpret_cast<char**>(
+                tags_ + tagIndex + sizeof(TagVector) +
+                kBytesInPointer * freeOffset);
+          } else {
+            pointer = table_ + tagIndex + freeOffset;
+          }
+          __builtin_prefetch(pointer);
+          pointers[j - base] = pointer;
+        } else {
+          pointers[j - base] = nullptr;
         }
-        tagIndex = (tagIndex + sizeof(TagVector)) & sizeMask_;
-        tagsInTable = loadTags(tags_, tagIndex);
+      }
+      for (auto j = base; j < batchEnd; ++j) {
+        auto pointer = pointers[j - base];
+        if (pointer) {
+          if (kInterleaveRows) {
+            auto previous =
+                reinterpret_cast<uint64_t>(*pointer) & ~kPointerMask;
+            *pointer = reinterpret_cast<char*>(
+                previous | reinterpret_cast<uint64_t>(groups[j]));
+          } else {
+            *pointer = groups[j];
+          }
+          continue;
+        }
+        // The place in the table was not determined on the first loop. Loop
+        // until finding a free tag.
+        auto hash = hashes[j] +
+            (kInterleaveRows ? kTagRowGroupSize : sizeof(TagVector));
+        auto tagIndex = tagVectorOffset(hash);
+        auto tagsInTable = BaseHashTable::loadTags(tags_, tagIndex);
+        for (;;) {
+          MaskType free = ~simd::toBitMask(
+              BaseHashTable::TagVector::batch_bool_type(tagsInTable));
+          if (free) {
+            auto freeOffset = bits::getAndClearLastSetBit(free);
+            storeRowPointer(tagIndex + freeOffset, hash, groups[j]);
+            break;
+          }
+          tagIndex = nextTagVectorOffset(tagIndex);
+          tagsInTable = loadTags(tagIndex);
+        }
       }
     }
   }
@@ -1011,9 +1210,7 @@ FOLLY_ALWAYS_INLINE void HashTable<ignoreNullKeys>::buildFullProbe(
   };
   if (hashMode_ == HashMode::kNormalizedKey) {
     state.fullProbe<ProbeState::Operation::kInsert>(
-        tags_,
-        table_,
-        sizeMask_,
+        *this,
         -static_cast<int32_t>(sizeof(normalized_key_t)),
         [&](char* group, int32_t /*row*/) {
           if (RowContainer::normalizedKey(group) ==
@@ -1031,9 +1228,7 @@ FOLLY_ALWAYS_INLINE void HashTable<ignoreNullKeys>::buildFullProbe(
         partitionEnd);
   } else {
     state.fullProbe<ProbeState::Operation::kInsert>(
-        tags_,
-        table_,
-        sizeMask_,
+        *this,
         0,
         [&](char* group, int32_t /*row*/) {
           if (compareKeys(group, inserted)) {
@@ -1072,8 +1267,9 @@ void HashTable<ignoreNullKeys>::insertForJoin(
 
   ProbeState state1;
   for (auto i = 0; i < numGroups; ++i) {
-    state1.preProbe(tags_, sizeMask_, hashes[i], i);
-    state1.firstProbe(table_, 0);
+    state1.preProbe(*this, hashes[i], i);
+    state1.firstProbe(*this, 0);
+
     buildFullProbe(
         state1,
         hashes[i],
@@ -1326,8 +1522,8 @@ void HashTable<ignoreNullKeys>::decideHashMode(
     return;
   }
   if (hashers_.size() == 1 && distinctsWithReserve > 10000) {
-    // A single part group by that does not go by range or become an array does
-    // not make sense as a normalized key unless it is very small.
+    // A single part group by that does not go by range or become an array
+    // does not make sense as a normalized key unless it is very small.
     setHashMode(HashMode::kHash, numNew);
     return;
   }
@@ -1373,6 +1569,30 @@ std::string HashTable<ignoreNullKeys>::toString() {
   }
   for (auto& hasher : hashers_) {
     out << hasher->toString();
+  }
+  if (kTrackLoads) {
+    out << std::endl;
+    out << fmt::format(
+        "{} probes {} tag loads {} row loads {} hits",
+        numProbe_,
+        numTagLoad_,
+        numRowLoad_,
+        numHit_);
+  }
+  if (hashMode_ != HashMode::kArray) {
+    // Count of groups indexed by number of non-empty slots.
+    int32_t numGroups[sizeof(TagVector) + 1] = {};
+    int32_t tagIndex = 0;
+    for (auto i = 0; i < capacity_; i += sizeof(TagVector)) {
+      auto tags = loadTags(tagIndex);
+      auto filled = simd::toBitMask(tags != TagVector::broadcast(0));
+      ++numGroups[__builtin_popcount(filled)];
+      tagIndex = nextTagVectorOffset(tagIndex);
+    }
+    out << std::endl;
+    for (auto i = 0; i < sizeof(numGroups) / sizeof(numGroups[0]); ++i) {
+      out << numGroups[i] << " groups with " << i << " entries" << std::endl;
+    }
   }
   return out.str();
 }
@@ -1689,13 +1909,11 @@ void HashTable<ignoreNullKeys>::eraseWithHashes(
 
     ProbeState state;
     for (auto i = 0; i < numRows; ++i) {
-      state.preProbe(tags_, sizeMask_, hashes[i], i);
+      state.preProbe(*this, hashes[i], i);
 
-      state.firstProbe<ProbeState::Operation::kErase>(table_, 0);
+      state.firstProbe<ProbeState::Operation::kErase>(*this, 0);
       state.fullProbe<ProbeState::Operation::kErase>(
-          tags_,
-          table_,
-          sizeMask_,
+          *this,
           0,
           [&](const char* group, int32_t row) { return rows[row] == group; },
           [&](int32_t /*index*/, int32_t /*row*/) { return nullptr; },
@@ -1715,14 +1933,18 @@ void HashTable<ignoreNullKeys>::checkConsistency() const {
   }
   uint64_t numEmpty = 0;
   uint64_t numTombstone = 0;
-  for (auto i = 0; i < capacity_; ++i) {
-    if (tags_[i] == ProbeState::kTombstoneTag) {
-      ++numTombstone;
-      continue;
-    }
-    if (tags_[i] == ProbeState::kEmptyTag) {
-      ++numEmpty;
-      continue;
+  constexpr int32_t kSpacing =
+      kInterleaveRows ? kTagRowGroupSize : sizeof(TagVector);
+  for (auto start = 0; start < sizeMask_; start += kSpacing) {
+    for (auto i = start; i < start + sizeof(TagVector); ++i) {
+      if (tags_[i] == ProbeState::kTombstoneTag) {
+        ++numTombstone;
+        continue;
+      }
+      if (tags_[i] == ProbeState::kEmptyTag) {
+        ++numEmpty;
+        continue;
+      }
     }
   }
   VELOX_CHECK_EQ(
@@ -1730,8 +1952,8 @@ void HashTable<ignoreNullKeys>::checkConsistency() const {
       capacity_,
       "capacity: {}, numEmpty: {}, numTombstone: {}, numDistinct: {}",
       capacity_,
-      numTombstone,
       numEmpty,
+      numTombstone,
       numDistinct_);
 }
 

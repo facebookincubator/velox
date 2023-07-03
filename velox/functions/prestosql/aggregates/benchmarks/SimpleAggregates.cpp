@@ -13,23 +13,29 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+
 #include <fmt/format.h>
 #include <folly/Benchmark.h>
 #include <folly/init/Init.h>
 #include <string>
 
+#include "velox/common/memory/MmapAllocator.h"
+#include "velox/exec/PlanNodeStats.h"
+#include "velox/exec/tests/utils/AssertQueryBuilder.h"
 #include "velox/exec/tests/utils/Cursor.h"
 #include "velox/exec/tests/utils/HiveConnectorTestBase.h"
 #include "velox/exec/tests/utils/PlanBuilder.h"
 #include "velox/vector/fuzzer/VectorFuzzer.h"
 
+DEFINE_int64(cache_gb, 10, "GB of MmapAllocator, 0 to use malloc");
 DEFINE_int64(fuzzer_seed, 99887766, "Seed for random input dataset generator");
+DEFINE_int32(threads, 1, "threads for agg from files");
 
 using namespace facebook::velox;
 using namespace facebook::velox::connector::hive;
 using namespace facebook::velox::exec::test;
 
-static constexpr int32_t kNumVectors = 1'000;
+static constexpr int32_t kNumVectors = 500;
 static constexpr int32_t kRowsPerVector = 10'000;
 
 namespace {
@@ -39,11 +45,12 @@ class SimpleAggregatesBenchmark : public HiveConnectorTestBase {
   explicit SimpleAggregatesBenchmark() {
     OperatorTestBase::SetUpTestCase();
     HiveConnectorTestBase::SetUp();
+    return;
 
     inputType_ = ROW({
         {"k_array", INTEGER()},
         {"k_norm", INTEGER()},
-        {"k_hash", INTEGER()},
+        {"k_hash", BIGINT()},
         {"i32", INTEGER()},
         {"i64", BIGINT()},
         {"f32", REAL()},
@@ -83,13 +90,14 @@ class SimpleAggregatesBenchmark : public HiveConnectorTestBase {
 
       // Generate key with many unique values from a large range (500K total
       // values).
-      children.emplace_back(fuzzer.fuzzFlat(INTEGER()));
+      children.emplace_back(fuzzer.fuzzFlat(BIGINT()));
 
       // Generate random values without nulls.
       children.emplace_back(fuzzer.fuzzFlat(INTEGER()));
       // fuzzer.fuzzFlat(BIGINT()) generates very large number causing sum() to
       // overflow.
-      children.emplace_back(copyIntToBigint(children.back()));
+      // children.emplace_back(copyIntToBigint(children.back()));
+      children.emplace_back(fuzzer.fuzzFlat(BIGINT()));
       children.emplace_back(fuzzer.fuzzFlat(REAL()));
       children.emplace_back(fuzzer.fuzzFlat(DOUBLE()));
 
@@ -99,7 +107,8 @@ class SimpleAggregatesBenchmark : public HiveConnectorTestBase {
       fuzzer.setOptions(opts);
 
       children.emplace_back(fuzzer.fuzzFlat(INTEGER()));
-      children.emplace_back(copyIntToBigint(children.back()));
+      // children.emplace_back(copyIntToBigint(children.back()));
+      children.emplace_back(fuzzer.fuzzFlat(BIGINT()));
       children.emplace_back(fuzzer.fuzzFlat(REAL()));
       children.emplace_back(fuzzer.fuzzFlat(DOUBLE()));
 
@@ -140,8 +149,7 @@ class SimpleAggregatesBenchmark : public HiveConnectorTestBase {
 
     auto plan = PlanBuilder()
                     .tableScan(inputType_)
-                    .partialAggregation({key}, {aggregate})
-                    .finalAggregation()
+                    .singleAggregation({key}, {aggregate})
                     .planFragment();
 
     vector_size_t numResultRows = 0;
@@ -164,7 +172,87 @@ class SimpleAggregatesBenchmark : public HiveConnectorTestBase {
         "t",
         std::move(plan),
         0,
-        std::make_shared<core::QueryCtx>(executor_.get()));
+        std::make_shared<core::QueryCtx>(
+            executor_.get()) /*,
+[&](auto vector, auto* /*future* /) {
+return exec::BlockingReason::kNotBlocked;
+}*/);
+  }
+
+  void run() {
+    folly::BenchmarkSuspender suspender;
+
+    auto rowType =
+        ROW({"separable_id", "longterm_id", "signal_value"},
+            {BIGINT(), BIGINT(), DOUBLE()});
+
+    auto plan = PlanBuilder()
+                    .tableScan(rowType)
+                    .singleAggregation(
+                        {"separable_id", "longterm_id"}, {"sum(signal_value)"})
+                    .singleAggregation({}, {"count(1) as c", "sum(a0)"})
+                    .planNode();
+    suspender.dismiss();
+
+    for (auto counter = 0; counter < 1; ++counter) {
+      vector_size_t numResultRows = 0;
+
+      std::vector<exec::Split> splits = {
+          exec::Split(makeHiveConnectorSplit("/tmp/tf1")),
+          exec::Split(makeHiveConnectorSplit("/tmp/tf2")),
+          exec::Split(makeHiveConnectorSplit("/tmp/tf3")),
+          exec::Split(makeHiveConnectorSplit("/tmp/tf4")),
+          exec::Split(makeHiveConnectorSplit("/tmp/tf5")),
+          exec::Split(makeHiveConnectorSplit("/tmp/tf6")),
+          exec::Split(makeHiveConnectorSplit("/tmp/tf7")),
+          exec::Split(makeHiveConnectorSplit("/tmp/tf8"))};
+      LOG(ERROR) << "Starting";
+
+      auto task =
+          AssertQueryBuilder(plan)
+              .maxDrivers(FLAGS_threads)
+              .splits(splits)
+              .assertTypeAndNumRows(ROW({BIGINT(), DOUBLE()}), FLAGS_threads);
+      LOG(ERROR) << exec::printPlanWithStats(*plan, task->taskStats(), true);
+    }
+  }
+
+  void run2() {
+    folly::BenchmarkSuspender suspender;
+
+    auto plan = PlanBuilder()
+                    .tableScan(inputType_)
+                    .singleAggregation({"k_hash", "i64"}, {"sum(f64)"})
+                    .planFragment();
+
+    vector_size_t numResultRows = 0;
+    auto task = makeTask(plan);
+
+    task->addSplit("0", exec::Split(makeHiveConnectorSplit(filePath_->path)));
+    // task->addSplit("0",
+    // exec::Split(makeHiveConnectorSplit(filePath_->path)));
+    // task->addSplit("0",
+    // exec::Split(makeHiveConnectorSplit(filePath_->path)));
+    task->addSplit("0", exec::Split(makeHiveConnectorSplit("/tmp/tf1")));
+    task->addSplit("0", exec::Split(makeHiveConnectorSplit("/tmp/tf2")));
+    task->addSplit("0", exec::Split(makeHiveConnectorSplit("/tmp/tf3")));
+    task->addSplit("0", exec::Split(makeHiveConnectorSplit("/tmp/tf4")));
+    task->addSplit("0", exec::Split(makeHiveConnectorSplit("/tmp/tf5")));
+    task->addSplit("0", exec::Split(makeHiveConnectorSplit("/tmp/tf6")));
+    task->addSplit("0", exec::Split(makeHiveConnectorSplit("/tmp/tf7")));
+    task->addSplit("0", exec::Split(makeHiveConnectorSplit("/tmp/tf8")));
+    task->noMoreSplits("0");
+
+    suspender.dismiss();
+
+    while (auto result = task->next()) {
+      numResultRows += result->size();
+    }
+
+    LOG(ERROR) << exec::printPlanWithStats(
+        *plan.planNode, task->taskStats(), true);
+
+    folly::doNotOptimizeAway(numResultRows);
   }
 
  private:
@@ -223,55 +311,67 @@ void doRun(uint32_t, const std::string& key, const std::string& aggregate) {
   BENCHMARK_DRAW_LINE();                           \
   BENCHMARK_DRAW_LINE();
 
-// Count(1) aggregate.
-BENCHMARK_NAMED_PARAM(doRun, count_k_array, "k_array", "count(1)");
-BENCHMARK_NAMED_PARAM(doRun, count_k_norm, "k_norm", "count(1)");
-BENCHMARK_NAMED_PARAM(doRun, count_k_hash, "k_hash", "count(1)");
-BENCHMARK_DRAW_LINE();
+// // Count(1) aggregate.
+// BENCHMARK_NAMED_PARAM(doRun, count_k_array, "k_array", "count(1)");
+// BENCHMARK_NAMED_PARAM(doRun, count_k_norm, "k_norm", "count(1)");
+// BENCHMARK_NAMED_PARAM(doRun, count_k_hash, "k_hash", "count(1)");
+// BENCHMARK_DRAW_LINE();
 
-// Count aggregate.
-AGG_BENCHMARKS(count, k_array)
-AGG_BENCHMARKS(count, k_norm)
-AGG_BENCHMARKS(count, k_hash)
-BENCHMARK_DRAW_LINE();
+// // Count aggregate.
+// AGG_BENCHMARKS(count, k_array)
+// AGG_BENCHMARKS(count, k_norm)
+// AGG_BENCHMARKS(count, k_hash)
+// BENCHMARK_DRAW_LINE();
 
 // Sum aggregate.
-AGG_BENCHMARKS(sum, k_array)
-AGG_BENCHMARKS(sum, k_norm)
+// AGG_BENCHMARKS(sum, k_array)
+// AGG_BENCHMARKS(sum, k_norm)
 AGG_BENCHMARKS(sum, k_hash)
 BENCHMARK_DRAW_LINE();
 
-// Avg aggregate.
-AGG_BENCHMARKS(avg, k_array)
-AGG_BENCHMARKS(avg, k_norm)
-AGG_BENCHMARKS(avg, k_hash)
-BENCHMARK_DRAW_LINE();
+// // Avg aggregate.
+// AGG_BENCHMARKS(avg, k_array)
+// AGG_BENCHMARKS(avg, k_norm)
+// AGG_BENCHMARKS(avg, k_hash)
+// BENCHMARK_DRAW_LINE();
 
-// Min aggregate.
-AGG_BENCHMARKS(min, k_array)
-AGG_BENCHMARKS(min, k_norm)
-AGG_BENCHMARKS(min, k_hash)
-BENCHMARK_DRAW_LINE();
+// // Min aggregate.
+// AGG_BENCHMARKS(min, k_array)
+// AGG_BENCHMARKS(min, k_norm)
+// AGG_BENCHMARKS(min, k_hash)
+// BENCHMARK_DRAW_LINE();
 
-// Max aggregate.
-AGG_BENCHMARKS(max, k_array)
-AGG_BENCHMARKS(max, k_norm)
-AGG_BENCHMARKS(max, k_hash)
-BENCHMARK_DRAW_LINE();
+// // Max aggregate.
+// AGG_BENCHMARKS(max, k_array)
+// AGG_BENCHMARKS(max, k_norm)
+// AGG_BENCHMARKS(max, k_hash)
+// BENCHMARK_DRAW_LINE();
 
-// Stddev aggregate.
-AGG_BENCHMARKS(stddev, k_array)
-AGG_BENCHMARKS(stddev, k_norm)
-AGG_BENCHMARKS(stddev, k_hash)
-BENCHMARK_DRAW_LINE();
+// // Stddev aggregate.
+// AGG_BENCHMARKS(stddev, k_array)
+// AGG_BENCHMARKS(stddev, k_norm)
+// AGG_BENCHMARKS(stddev, k_hash)
+// BENCHMARK_DRAW_LINE();
 
 } // namespace
 
 int main(int argc, char** argv) {
   folly::init(&argc, &argv);
 
+  std::shared_ptr<memory::MemoryAllocator> allocator;
+  if (FLAGS_cache_gb) {
+    int64_t memoryBytes = FLAGS_cache_gb * (1LL << 30);
+    memory::MmapAllocator::Options options;
+    options.capacity = memoryBytes;
+
+    auto mmap = std::make_shared<memory::MmapAllocator>(options);
+    allocator = std::make_shared<cache::AsyncDataCache>(mmap, memoryBytes);
+    memory::MemoryAllocator::setDefaultInstance(allocator.get());
+  }
+
   benchmark = std::make_unique<SimpleAggregatesBenchmark>();
-  folly::runBenchmarks();
+  // folly::runBenchmarks();
+  benchmark->run();
   benchmark.reset();
   return 0;
 }

@@ -410,41 +410,41 @@ TEST_P(MemoryAllocatorTest, allocationPool) {
   AllocationPool pool(pool_.get());
 
   pool.allocateFixed(10);
-  EXPECT_EQ(pool.numTotalAllocations(), 1);
+  EXPECT_EQ(pool.numRanges(), 1);
   EXPECT_EQ(pool.currentRunIndex(), 0);
   EXPECT_EQ(pool.currentOffset(), 10);
 
   pool.allocateFixed(kNumLargeAllocPages * AllocationTraits::kPageSize);
-  EXPECT_EQ(pool.numTotalAllocations(), 2);
+  EXPECT_EQ(pool.numRanges(), 2);
   EXPECT_EQ(pool.currentRunIndex(), 0);
   EXPECT_EQ(pool.currentOffset(), 10);
 
   pool.allocateFixed(20);
-  EXPECT_EQ(pool.numTotalAllocations(), 2);
+  EXPECT_EQ(pool.numRanges(), 2);
   EXPECT_EQ(pool.currentRunIndex(), 0);
   EXPECT_EQ(pool.currentOffset(), 30);
 
   // Leaving 10 bytes room
   pool.allocateFixed(128 * 4096 - 10);
-  EXPECT_EQ(pool.numTotalAllocations(), 3);
+  EXPECT_EQ(pool.numRanges(), 3);
   EXPECT_EQ(pool.currentRunIndex(), 0);
   EXPECT_EQ(pool.currentOffset(), 524278);
 
   pool.allocateFixed(5);
-  EXPECT_EQ(pool.numTotalAllocations(), 3);
+  EXPECT_EQ(pool.numRanges(), 3);
   EXPECT_EQ(pool.currentRunIndex(), 0);
   EXPECT_EQ(pool.currentOffset(), (524278 + 5));
 
   pool.allocateFixed(100);
-  EXPECT_EQ(pool.numTotalAllocations(), 4);
+  EXPECT_EQ(pool.numRanges(), 4);
   EXPECT_EQ(pool.currentRunIndex(), 0);
   EXPECT_EQ(pool.currentOffset(), 100);
 
   {
-    auto old = pool.numLargeAllocations();
+    auto old = pool.numRanges();
     auto bytes = AllocationTraits::kPageSize * instance_->largestSizeClass();
     pool.allocateFixed(bytes);
-    ASSERT_EQ(pool.numLargeAllocations(), old);
+    ASSERT_EQ(pool.numRanges(), old + 1);
     auto buf = pool.allocateFixed(bytes, 64);
     ASSERT_EQ(pool.numLargeAllocations(), old + 1);
     ASSERT_EQ(reinterpret_cast<uintptr_t>(buf) % 64, 0);
@@ -458,10 +458,10 @@ TEST_P(MemoryAllocatorTest, allocationPool) {
   {
     // Leaving 10 bytes room
     pool.allocateFixed(128 * 4096 - 10);
-    auto old = pool.numSmallAllocations();
+    auto old = pool.numRanges();
     auto buf = pool.allocateFixed(1, 64);
     ASSERT_EQ(reinterpret_cast<uintptr_t>(buf) % 64, 0);
-    ASSERT_EQ(pool.numSmallAllocations(), old + 1);
+    ASSERT_EQ(pool.numRanges(), old + 1);
   }
 
   pool.clear();

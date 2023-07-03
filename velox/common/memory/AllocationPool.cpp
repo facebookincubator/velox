@@ -19,20 +19,22 @@
 #include "velox/common/base/Exceptions.h"
 #include "velox/common/memory/MemoryAllocator.h"
 
+DEFINE_int32(min_apool_mb, 0, "Min MB for alloc pool");
+
 namespace facebook::velox {
 
 void AllocationPool::clear() {
-  // Trigger Allocation's destructor to free allocated memory
-  auto copy = std::move(allocation_);
   allocations_.clear();
-  auto copyLarge = std::move(largeAllocations_);
   largeAllocations_.clear();
+  startOfRun_ = nullptr;
+  bytesInRun_ = 0;
+  currentOffset_ = 0;
 }
 
 char* AllocationPool::allocateFixed(uint64_t bytes, int32_t alignment) {
   VELOX_CHECK_GT(bytes, 0, "Cannot allocate zero bytes");
   if (availableInRun() >= bytes && alignment == 1) {
-    auto* result = currentRun().data<char>() + currentOffset_;
+    auto* result = startOfRun_ + currentOffset_;
     currentOffset_ += bytes;
     return result;
   }
@@ -63,28 +65,33 @@ char* AllocationPool::allocateFixed(uint64_t bytes, int32_t alignment) {
       newRunImpl(numPages);
     }
   }
-  auto run = currentRun();
   currentOffset_ += memory::alignmentPadding(firstFreeInRun(), alignment);
-  uint64_t size = run.numBytes();
-  VELOX_CHECK_LE(bytes + currentOffset_, size);
-  auto* result = run.data<char>() + currentOffset_;
+  VELOX_CHECK_LE(bytes + currentOffset_, bytesInRun_);
+  auto* result = startOfRun_ + currentOffset_;
   VELOX_CHECK_EQ(reinterpret_cast<uintptr_t>(result) % alignment, 0);
   currentOffset_ += bytes;
   return result;
 }
 
 void AllocationPool::newRunImpl(memory::MachinePageCount numPages) {
-  ++currentRun_;
-  if (currentRun_ >= allocation_.numRuns()) {
-    if (allocation_.numRuns() > 0) {
-      allocations_.push_back(
-          std::make_unique<memory::Allocation>(std::move(allocation_)));
-    }
-    pool_->allocateNonContiguous(
-        std::max<int32_t>(kMinPages, numPages), allocation_, numPages);
-    currentRun_ = 0;
+  if (FLAGS_min_apool_mb > 0) {
+    auto largeAlloc = std::make_unique<memory::ContiguousAllocation>();
+    pool_->allocateContiguous(FLAGS_min_apool_mb * 256, *largeAlloc);
+    startOfRun_ = largeAlloc->data<char>();
+    bytesInRun_ = largeAlloc->size();
+    largeAllocations_.emplace_back(std::move(largeAlloc));
+    currentOffset_ = 0;
+    return;
   }
+  memory::Allocation allocation;
+  auto roundedPages = std::max<int32_t>(kMinPages, numPages);
+  pool_->allocateNonContiguous(roundedPages, allocation, roundedPages);
+  VELOX_CHECK_EQ(allocation.numRuns(), 1);
+  startOfRun_ = allocation.runAt(0).data<char>();
+  bytesInRun_ = allocation.runAt(0).numBytes();
   currentOffset_ = 0;
+  allocations_.push_back(
+      std::make_unique<memory::Allocation>(std::move(allocation)));
 }
 
 void AllocationPool::newRun(int32_t preferredSize) {

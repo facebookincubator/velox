@@ -43,29 +43,21 @@ class AllocationPool {
   // is at least one machine page. Throws std::bad_alloc if no space.
   void newRun(int32_t preferredSize);
 
-  int32_t numTotalAllocations() const {
-    return numSmallAllocations() + numLargeAllocations();
+  int32_t numRanges() const {
+    return allocations_.size() + largeAllocations_.size();
   }
 
-  int32_t numSmallAllocations() const {
-    return 1 + allocations_.size();
-  }
-
-  int32_t numLargeAllocations() const {
-    return largeAllocations_.size();
-  }
-
-  const memory::Allocation* allocationAt(int32_t index) const {
-    return index == allocations_.size() ? &allocation_
-                                        : allocations_[index].get();
-  }
-
-  const memory::ContiguousAllocation* largeAllocationAt(int32_t index) const {
-    return largeAllocations_[index].get();
-  }
-
-  int32_t currentRunIndex() const {
-    return currentRun_;
+  folly::Range<char*> rangeAt(int32_t index) const {
+    if (index < allocations_.size()) {
+      auto run = allocations_[index]->runAt(0);
+      return folly::Range<char*>(run.data<char>(), run.numBytes());
+    }
+    auto largeIndex = index - allocations_.size();
+    if (largeIndex < largeAllocations_.size()) {
+      memory::ContiguousAllocation& data = *largeAllocations_[largeIndex];
+      return folly::Range<char*>(data.data<char>(), data.size());
+    }
+    VELOX_FAIL("Out of range index for rangeAt(): {}", index);
   }
 
   int64_t currentOffset() const {
@@ -73,7 +65,7 @@ class AllocationPool {
   }
 
   int64_t allocatedBytes() const {
-    int32_t totalPages = allocation_.numPages();
+    int32_t totalPages = 0;
     for (auto& allocation : allocations_) {
       totalPages += allocation->numPages();
     }
@@ -85,24 +77,20 @@ class AllocationPool {
 
   // Returns number of bytes left at the end of the current run.
   int32_t availableInRun() const {
-    if (!allocation_.numRuns()) {
-      return 0;
-    }
-    return currentRun().numBytes() - currentOffset_;
+    return bytesInRun_ - currentOffset_;
   }
 
   // Returns pointer to first unallocated byte in the current run.
   char* firstFreeInRun() {
     VELOX_DCHECK_GT(availableInRun(), 0);
-    return currentRun().data<char>() + currentOffset_;
+    return startOfRun_ + currentOffset_;
   }
 
   // Sets the first free position in the current run.
   void setFirstFreeInRun(const char* firstFree) {
-    auto run = currentRun();
-    auto offset = firstFree - run.data<char>();
+    auto offset = firstFree - startOfRun_;
     VELOX_CHECK(
-        offset >= 0 && offset <= run.numBytes(),
+        offset >= 0 && offset <= bytesInRun_,
         "Trying to set end of allocation outside of last allocated run");
     currentOffset_ = offset;
   }
@@ -112,17 +100,13 @@ class AllocationPool {
   }
 
  private:
-  memory::Allocation::PageRun currentRun() const {
-    return allocation_.runAt(currentRun_);
-  }
-
   void newRunImpl(memory::MachinePageCount numPages);
 
   memory::MemoryPool* pool_;
   std::vector<std::unique_ptr<memory::Allocation>> allocations_;
   std::vector<std::unique_ptr<memory::ContiguousAllocation>> largeAllocations_;
-  memory::Allocation allocation_;
-  int32_t currentRun_ = 0;
+  char* startOfRun_{nullptr};
+  int32_t bytesInRun_{0};
   int32_t currentOffset_ = 0;
 };
 
