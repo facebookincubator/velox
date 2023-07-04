@@ -485,7 +485,6 @@ TEST_F(StringTest, overlayVarbinary) {
   EXPECT_EQ(overlayVarbinary("Spark SQL", "##", -10, 4), "##rk SQL");
 }
 
-
 TEST_F(StringTest, left) {
   EXPECT_EQ(left("example", -2), "");
   EXPECT_EQ(left("example", 0), "");
