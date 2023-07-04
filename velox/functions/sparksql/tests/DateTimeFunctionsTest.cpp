@@ -30,6 +30,12 @@ class DateTimeFunctionsTest : public SparkFunctionBaseTest {
         {core::QueryConfig::kAdjustTimestampToTimezone, "true"},
     });
   }
+
+  Date parseDate(const std::string& dateStr) {
+    Date returnDate;
+    parseTo(dateStr, returnDate);
+    return returnDate;
+  }
 };
 
 TEST_F(DateTimeFunctionsTest, year) {
