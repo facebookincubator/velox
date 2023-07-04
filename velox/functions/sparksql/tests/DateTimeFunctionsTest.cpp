@@ -208,5 +208,41 @@ TEST_F(DateTimeFunctionsTest, lastDay) {
   EXPECT_EQ(lastDayFunc(std::nullopt), std::nullopt);
 }
 
+TEST_F(DateTimeFunctionsTest, dateSub) {
+  const auto dateSubInt32 = [&](std::optional<Date> date,
+                                std::optional<int32_t> value) {
+    return evaluateOnce<Date>("date_sub(c0, c1)", date, value);
+  };
+  const auto dateSubInt16 = [&](std::optional<Date> date,
+                                std::optional<int16_t> value) {
+    return evaluateOnce<Date>("date_sub(c0, c1)", date, value);
+  };
+  const auto dateSubInt8 = [&](std::optional<Date> date,
+                               std::optional<int8_t> value) {
+    return evaluateOnce<Date>("date_sub(c0, c1)", date, value);
+  };
+
+  // Check null behaviors
+  EXPECT_EQ(std::nullopt, dateSubInt32(std::nullopt, 1));
+  EXPECT_EQ(std::nullopt, dateSubInt16(std::nullopt, 1));
+  EXPECT_EQ(std::nullopt, dateSubInt8(std::nullopt, 1));
+
+  // Simple tests
+  EXPECT_EQ(parseDate("2019-02-28"), dateSubInt32(parseDate("2019-03-01"), 1));
+  EXPECT_EQ(parseDate("2019-02-28"), dateSubInt16(parseDate("2019-03-01"), 1));
+  EXPECT_EQ(parseDate("2019-02-28"), dateSubInt8(parseDate("2019-03-01"), 1));
+
+  // Account for the last day of a year-month
+  EXPECT_EQ(
+      parseDate("2019-01-30"), dateSubInt32(parseDate("2020-02-29"), 395));
+  EXPECT_EQ(
+      parseDate("2019-01-30"), dateSubInt16(parseDate("2020-02-29"), 395));
+
+  // Check for negative intervals
+  EXPECT_EQ(
+      parseDate("2020-02-29"), dateSubInt32(parseDate("2019-02-28"), -366));
+  EXPECT_EQ(
+      parseDate("2020-02-29"), dateSubInt16(parseDate("2019-02-28"), -366));
+}
 } // namespace
 } // namespace facebook::velox::functions::sparksql::test
