@@ -46,7 +46,7 @@ struct PadFunctionBase {
       out_type<Varchar>& result,
       const arg_type<Varchar>& string,
       const arg_type<int64_t>& size) {
-    stringImpl::pad<lpad, false /*isAscii*/>(result, string, size, " ");
+    stringImpl::pad<lpad, false /*isAscii*/>(result, string, size, {" "});
   }
 
   FOLLY_ALWAYS_INLINE void callAscii(
@@ -61,7 +61,7 @@ struct PadFunctionBase {
       out_type<Varchar>& result,
       const arg_type<Varchar>& string,
       const arg_type<int64_t>& size) {
-    stringImpl::pad<lpad, true /*isAscii*/>(result, string, size, " ");
+    stringImpl::pad<lpad, true /*isAscii*/>(result, string, size, {" "});
   }
 };
 

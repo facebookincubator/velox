@@ -58,8 +58,7 @@ Unless specified otherwise, all functions return NULL if at least one of the arg
 
         SELECT lpad('hi', 5, '??'); -- ???hi
         SELECT lpad('hi', 1, '??'); -- h
-        SELECT hex(lpad(unhex('aabb'), 5)); -- 000000AABB
-        SELECT hex(lpad(unhex('aabb'), 5, unhex('1122'))); -- 112211AABB
+        SELECT lpad('hi', 4); --   hi
 
 .. spark:function:: ltrim(string) -> varchar
 
@@ -111,8 +110,7 @@ Unless specified otherwise, all functions return NULL if at least one of the arg
 
         SELECT lpad('hi', 5, '??'); -- ???hi
         SELECT lpad('hi', 1, '??'); -- h
-        SELECT hex(lpad(unhex('aabb'), 5)); -- 000000AABB
-        SELECT hex(lpad(unhex('aabb'), 5, unhex('1122'))); -- 112211AABB
+        SELECT lpad('hi', 4); -- hi  
 
 .. spark:function:: rtrim(string) -> varchar
 
