@@ -211,7 +211,9 @@ copy as compared to concatenating two columns at a time.</p>
 compiler to convert concat(a, concat(b, concat(c, d))) expression to
 concat(a, b, c, d).</p>
 <p>Other functions that can leverage this optimization include concat(array,..) and
-map_concat(map,..).</p>
+map_concat(map,..). However, only signatures that have the same input type for
+all inputs are currently supported. For eg, concat(array&lt;T&gt;, concat(array&lt;T&gt;, array&lt;T&gt;))
+will be flattened but concat(T, concat(array&lt;T&gt;, array&lt;T&gt;)) will not.</p>
 <p>A function declaring support for flattening must have a signature with variadic
 arguments of the same type and return type must be the same as input type.</p>
 <blockquote>
