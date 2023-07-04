@@ -96,11 +96,11 @@ struct InverseWeibullCDFFunction {
   VELOX_DEFINE_FUNCTION_TYPES(T);
 
   FOLLY_ALWAYS_INLINE void call(double& result, double a, double b, double p) {
-    constexpr double kInf = std::numeric_limits<double>::infinity();
+    static constexpr double kInf = std::numeric_limits<double>::infinity();
 
+    VELOX_USER_CHECK((p >= 0) && (p <= 1), "p must be in the interval [0, 1]");
     VELOX_USER_CHECK_GT(a, 0, "a must be greater than 0");
     VELOX_USER_CHECK_GT(b, 0, "b must be greater than 0");
-    VELOX_USER_CHECK((p >= 0) && (p <= 1), "p must be in the interval [0, 1]");
 
     if ((a == kInf) || (b == kInf)) {
       result = 0.0;
