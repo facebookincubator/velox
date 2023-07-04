@@ -166,9 +166,13 @@ TEST_F(ProbabilityTest, weibullCDF) {
   EXPECT_EQ(weibullCDF(1.0, 1.0, 40.0), 1.0);
   EXPECT_EQ(weibullCDF(1.0, 0.6, 3.0), 0.99326205300091452);
   EXPECT_EQ(weibullCDF(1.0, 0.9, 2.0), 0.89163197677810413);
+
   EXPECT_EQ(weibullCDF(std::nullopt, 1.0, 0.3), std::nullopt);
+
   EXPECT_EQ(weibullCDF(1.0, std::nullopt, 0.2), std::nullopt);
+
   EXPECT_EQ(weibullCDF(1.0, 0.4, std::nullopt), std::nullopt);
+
   EXPECT_EQ(weibullCDF(kDoubleMin, 1.0, 2.0), 0.63212055882855767);
   EXPECT_EQ(weibullCDF(kDoubleMax, 1.0, 3.0), 1.0);
   EXPECT_EQ(weibullCDF(1.0, kDoubleMin, 2.0), 1.0);

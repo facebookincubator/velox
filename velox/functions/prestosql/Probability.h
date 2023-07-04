@@ -98,7 +98,7 @@ struct WeibullCDFFunction {
 
   FOLLY_ALWAYS_INLINE void
   call(double& result, double a, double b, double value) {
-    constexpr double kInf = std::numeric_limits<double>::infinity();
+    static constexpr double kInf = std::numeric_limits<double>::infinity();
 
     VELOX_USER_CHECK_GT(a, 0, "a must be greater than 0");
     VELOX_USER_CHECK_GT(b, 0, "b must be greater than 0");
