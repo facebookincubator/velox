@@ -13,12 +13,12 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+
 #include "velox/expression/EvalCtx.h"
 #include "velox/expression/Expr.h"
 #include "velox/expression/VectorFunction.h"
 #include "velox/functions/lib/CheckDuplicateKeys.h"
 #include "velox/functions/lib/RowsTranslationUtil.h"
-
 namespace facebook::velox::functions {
 namespace {
 // See documentation at https://prestodb.io/docs/current/functions/map.html
@@ -84,6 +84,9 @@ class MapFromEntriesFunction : public exec::VectorFunction {
     auto valueRowVector = decodedValueVector->base()->as<RowVector>();
     auto keyValueVector = valueRowVector->childAt(0);
 
+    BufferPtr changedSizes = nullptr;
+    vector_size_t* mutableSizes = nullptr;
+
     // Validate all map entries and map keys are not null.
     if (decodedValueVector->mayHaveNulls() || keyValueVector->mayHaveNulls()) {
       context.applyToSelectedNoThrow(rows, [&](vector_size_t row) {
@@ -91,7 +94,23 @@ class MapFromEntriesFunction : public exec::VectorFunction {
         const auto offset = inputArray->offsetAt(row);
         for (auto i = 0; i < size; ++i) {
           const bool isMapEntryNull = decodedValueVector->isNullAt(offset + i);
-          VELOX_USER_CHECK(!isMapEntryNull, "map entry cannot be null");
+          if (isMapEntryNull) {
+            if (!mutableSizes) {
+              changedSizes = allocateSizes(rows.end(), context.pool());
+              mutableSizes = changedSizes->asMutable<vector_size_t>();
+              rows.applyToSelected([&](vector_size_t row) {
+                mutableSizes[row] = inputArray->rawSizes()[row];
+              });
+            }
+
+            // Set the sizes to 0 so that the final map vector generated is
+            // valid in case we are inside a try. The map vector needs to be
+            // valid because its consumed by checkDuplicateKeys before try sets
+            // invalid rows to null.
+            mutableSizes[row] = 0;
+            VELOX_USER_FAIL("map entry cannot be null");
+          }
+
           const bool isMapKeyNull =
               keyValueVector->isNullAt(decodedValueVector->index(offset + i));
           VELOX_USER_CHECK(!isMapKeyNull, "map key cannot be null");
@@ -123,7 +142,7 @@ class MapFromEntriesFunction : public exec::VectorFunction {
         inputArray->nulls(),
         rows.end(),
         inputArray->offsets(),
-        inputArray->sizes(),
+        changedSizes ? changedSizes : inputArray->sizes(),
         wrappedKeys,
         wrappedValues);
 

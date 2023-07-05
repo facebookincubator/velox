@@ -41,6 +41,10 @@ class MallocAllocator : public MemoryAllocator {
     return kind_;
   }
 
+  size_t capacity() const override {
+    return capacity_;
+  }
+
   bool allocateNonContiguous(
       MachinePageCount numPages,
       Allocation& out,
@@ -72,6 +76,10 @@ class MallocAllocator : public MemoryAllocator {
   void* allocateZeroFilled(uint64_t bytes) override;
 
   void freeBytes(void* p, uint64_t bytes) noexcept override;
+
+  size_t totalUsedBytes() const override {
+    return allocatedBytes_;
+  }
 
   MachinePageCount numAllocated() const override {
     return numAllocated_;

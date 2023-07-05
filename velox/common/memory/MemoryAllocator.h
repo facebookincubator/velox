@@ -195,6 +195,9 @@ class MemoryAllocator : public std::enable_shared_from_this<MemoryAllocator> {
 
   using ReservationCallback = std::function<void(int64_t, bool)>;
 
+  /// Returns the capacity of the allocator in bytes.
+  virtual size_t capacity() const = 0;
+
   /// Allocates one or more runs that add up to at least 'numPages', with the
   /// smallest run being at least 'minSizeClass' pages. 'minSizeClass' must be
   /// <= the size of the largest size class. The new memory is returned in 'out'
@@ -277,6 +280,9 @@ class MemoryAllocator : public std::enable_shared_from_this<MemoryAllocator> {
   virtual const std::vector<MachinePageCount>& sizeClasses() const {
     return sizeClassSizes_;
   }
+
+  /// Returns the total number of used bytes by this allocator
+  virtual size_t totalUsedBytes() const = 0;
 
   virtual MachinePageCount numAllocated() const = 0;
 
@@ -370,6 +376,10 @@ class MemoryAllocator : public std::enable_shared_from_this<MemoryAllocator> {
     }
     return true;
   }
+
+  // If 'data' is sufficiently large, enables/disables adaptive  huge pages for
+  // the address raneg.
+  void useHugePages(const ContiguousAllocation& data, bool enable);
 
   // The machine page counts corresponding to different sizes in order
   // of increasing size.

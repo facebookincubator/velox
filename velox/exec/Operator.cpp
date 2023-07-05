@@ -55,6 +55,7 @@ OperatorCtx::createConnectorQueryCtx(
       std::make_unique<SimpleExpressionEvaluator>(
           execCtx()->queryCtx(), execCtx()->pool()),
       driverCtx_->task->queryCtx()->allocator(),
+      driverCtx_->task->queryCtx()->queryId(),
       taskId(),
       planNodeId,
       driverCtx_->driverId);
@@ -454,7 +455,9 @@ uint64_t Operator::MemoryReclaimer::reclaim(
     return 0;
   }
   VELOX_CHECK_EQ(pool->name(), op_->pool()->name());
-  VELOX_CHECK(!driver->state().isOnThread() || driver->state().isSuspended);
+  VELOX_CHECK(
+      !driver->state().isOnThread() || driver->state().isSuspended ||
+      driver->state().isTerminated);
   VELOX_CHECK(driver->task()->pauseRequested());
 
   op_->reclaim(targetBytes);
@@ -467,7 +470,9 @@ void Operator::MemoryReclaimer::abort(memory::MemoryPool* pool) {
     return;
   }
   VELOX_CHECK_EQ(pool->name(), op_->pool()->name());
-  VELOX_CHECK(!driver->state().isOnThread() || driver->state().isSuspended);
+  VELOX_CHECK(
+      !driver->state().isOnThread() || driver->state().isSuspended ||
+      driver->state().isTerminated);
   VELOX_CHECK(driver->task()->isCancelled());
 
   // Calls operator close to free up major memory usage.

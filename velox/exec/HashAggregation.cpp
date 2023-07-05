@@ -67,8 +67,6 @@ HashAggregation::HashAggregation(
   std::vector<AggregateInfo> aggregateInfos;
   aggregateInfos.reserve(numAggregates);
 
-  std::vector<std::unique_ptr<Aggregate>> aggregates;
-  aggregates.reserve(numAggregates);
   for (auto i = 0; i < numAggregates; i++) {
     const auto& aggregate = aggregationNode->aggregates()[i];
 
@@ -120,18 +118,12 @@ HashAggregation::HashAggregation(
       info.sortingKeys.push_back(exprToChannel(key.get(), inputType));
     }
 
-    if (numSortingKeys > 0) {
-      VELOX_USER_CHECK_NULL(
-          aggregate.mask,
-          "Aggregations over sorted inputs with masks are not supported yet");
-    }
-
     aggregateInfos.emplace_back(std::move(info));
   }
 
-  // Check that aggregate result type match the output type
-  for (auto i = 0; i < aggregates.size(); i++) {
-    const auto& aggResultType = aggregates[i]->resultType();
+  // Check that aggregate result type match the output type.
+  for (auto i = 0; i < aggregateInfos.size(); i++) {
+    const auto& aggResultType = aggregateInfos[i].function->resultType();
     const auto& expectedType = outputType_->childAt(numHashers + i);
     VELOX_CHECK(
         aggResultType->kindEquals(expectedType),

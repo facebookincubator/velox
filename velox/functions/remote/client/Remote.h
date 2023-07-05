@@ -18,11 +18,23 @@
 
 #include <folly/SocketAddress.h>
 #include "velox/expression/VectorFunction.h"
+#include "velox/functions/remote/if/gen-cpp2/RemoteFunction_types.h"
 
 namespace facebook::velox::functions {
 
-/// Registers a new remote function that will serialize input data and
-/// communicate with a server at `location`.
+struct RemoteVectorFunctionMetadata : public exec::VectorFunctionMetadata {
+  /// Network address of the servr to communicate with. Note that this can hold
+  /// a network location (ip/port pair) or a unix domain socket path (see
+  /// SocketAddress::makeFromPath()).
+  folly::SocketAddress location;
+
+  /// The serialization format to be used
+  remote::PageFormat serdeFormat{remote::PageFormat::PRESTO_PAGE};
+};
+
+/// Registers a new remote function. It will use the meatadata defined in
+/// `RemoteVectorFunctionMetadata` to control the serialization format and
+/// remote server address.
 //
 /// Remote functions are registered as regular statufull functions (using the
 /// same internal catalog), and hence conflict if there already exists a
@@ -31,8 +43,7 @@ namespace facebook::velox::functions {
 void registerRemoteFunction(
     const std::string& name,
     std::vector<exec::FunctionSignaturePtr> signatures,
-    folly::SocketAddress location,
-    exec::VectorFunctionMetadata metadata = {},
+    const RemoteVectorFunctionMetadata& metadata = {},
     bool overwrite = true);
 
 } // namespace facebook::velox::functions
