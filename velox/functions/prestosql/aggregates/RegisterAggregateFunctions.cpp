@@ -61,14 +61,18 @@ void registerAllAggregateFunctions(const std::string& prefix) {
   registerMapAggAggregate(prefix);
   registerMapUnionAggregate(prefix);
   registerMapUnionSumAggregate(prefix);
-  registerMaxDataSizeForStatsAggregate(prefix);
-  registerSumDataSizeForStatsAggregate(prefix);
   registerMinMaxAggregates(prefix);
   registerMinMaxByAggregates(prefix);
   registerSetAggAggregate(prefix);
   registerSetUnionAggregate(prefix);
   registerSumAggregate(prefix);
   registerVarianceAggregates(prefix);
+
+  // Register internal aggregate functions. Presto doesn't expose
+  // these functions to users.
+  static const std::string kInternalPrefix = prefix + "$internal$";
+  registerMaxDataSizeForStatsAggregate(kInternalPrefix);
+  registerSumDataSizeForStatsAggregate(kInternalPrefix);
 }
 
 } // namespace facebook::velox::aggregate::prestosql
