@@ -228,6 +228,18 @@ struct HypotFunction {
 };
 
 template <typename T>
+struct Log2Function {
+  FOLLY_ALWAYS_INLINE bool call(double& result, double a) {
+    double yAsymptote = 0.0;
+    if (a <= yAsymptote) {
+      return false;
+    }
+    result = std::log2(a);
+    return true;
+  }
+};
+
+template <typename T>
 struct Log1pFunction {
   FOLLY_ALWAYS_INLINE bool call(double& result, double a) {
     if (a <= -1) {
@@ -237,4 +249,18 @@ struct Log1pFunction {
     return true;
   }
 };
+
+template <typename T>
+struct Log10Function {
+  FOLLY_ALWAYS_INLINE bool call(double& result, double a) {
+    double yAsymptote = 0.0;
+    if (a <= yAsymptote) {
+      return false;
+    }
+    result = std::log10(a);
+    return true;
+  }
+};
+
+>>>>>>> add log2/log10 function
 } // namespace facebook::velox::functions::sparksql

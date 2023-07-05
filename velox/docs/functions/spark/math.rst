@@ -71,6 +71,15 @@ Mathematical Functions
 
     Returns the natural logarithm of the “given value ``x`` plus one”.
     Return NULL if x is less than or equal to -1.
+
+.. spark:function:: log2(x) -> double
+
+    Returns the logarithm of ``x`` with base 2.
+
+.. spark:function:: log10(x) -> double
+
+    Returns the logarithm of ``x`` with base 10.
+
 .. spark:function:: multiply(x, y) -> [same as x]
 
     Returns the result of multiplying x by y. The types of x and y must be the same.

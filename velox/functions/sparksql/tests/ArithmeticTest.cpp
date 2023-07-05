@@ -350,5 +350,25 @@ TEST_F(ArithmeticTest, hypot) {
   EXPECT_DOUBLE_EQ(5.70087712549569, hypot(3.5, -4.5).value());
 }
 
+class LogNTest : public SparkFunctionBaseTest {
+ protected:
+  std::optional<double> log2(std::optional<double> arg) {
+    return evaluateOnce<double>("log2(c0)", arg);
+  }
+
+  std::optional<double> log10(std::optional<double> arg) {
+    return evaluateOnce<double>("log10(c0)", arg);
+  }
+};
+
+TEST_F(LogNTest, logN) {
+  EXPECT_EQ(log2(8), 3.0);
+  EXPECT_EQ(log2(std::nullopt), std::nullopt);
+  EXPECT_EQ(log2(-1.0), std::nullopt);
+  EXPECT_EQ(log10(100), 2.0);
+  EXPECT_EQ(log10(std::nullopt), std::nullopt);
+  EXPECT_EQ(log10(-1.0), std::nullopt);
+}
+
 } // namespace
 } // namespace facebook::velox::functions::sparksql::test
