@@ -119,26 +119,19 @@ TEST_F(XxHash64Test, float) {
   EXPECT_EQ(xxhash64<float>(-limits::infinity()), -7580553461823983095);
 }
 
-TEST_F(XxHash64Test, int64) {
+TEST_F(XxHash64Test, timestamp) {
   EXPECT_EQ(
       xxhash64<Timestamp>(Timestamp::fromMicros(0xcafecafedeadbeef)),
-      -6259772178006417012);
+      2869813644);
   EXPECT_EQ(
-      xxhash64<Timestamp>(Timestamp::fromMillis(0xdeadbeefcafecafe)),
-      -1700188678616701932);
-  EXPECT_EQ(
-      xxhash64<Timestamp>(Timestamp::fromMicros(INT64_MAX)),
-      -3246596055638297850);
-  EXPECT_EQ(
-      xxhash64<Timestamp>(Timestamp::fromMillis(INT64_MIN)),
-      -8619748838626508300);
-  EXPECT_EQ(
-      xxhash64<Timestamp>(Timestamp::fromMicros(1)), -7001672635703045582);
-  EXPECT_EQ(
-      xxhash64<Timestamp>(Timestamp::fromMillis(0)), -5252525462095825812);
-  EXPECT_EQ(
-      xxhash64<Timestamp>(Timestamp::fromMicros(-1)), 3858142552250413010);
-  EXPECT_EQ(xxhash64<Timestamp>(Timestamp::fromMillis(std::nullopt)), 42);
+      xxhash64<Timestamp>(Timestamp::fromMicros(0xdeadbeefcafecafe)),
+      2682856468);
+  EXPECT_EQ(xxhash64<Timestamp>(Timestamp::fromMicros(INT64_MAX)), 2927538950);
+  EXPECT_EQ(xxhash64<Timestamp>(Timestamp::fromNanos(INT64_MIN)), 2932133398);
+  EXPECT_EQ(xxhash64<Timestamp>(Timestamp::fromMicros(1)), 2472071730);
+  EXPECT_EQ(xxhash64<Timestamp>(Timestamp::fromMillis(0)), 3658839148);
+  EXPECT_EQ(xxhash64<Timestamp>(Timestamp::fromMicros(-1)), 3216273362);
+  EXPECT_EQ(xxhash64<Timestamp>(std::nullopt), 42);
 }
 
 } // namespace
