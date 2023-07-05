@@ -30,15 +30,9 @@ template <typename ReturnType, typename HashClass, typename SeedType>
 void applyWithType(
     const SelectivityVector& rows,
     std::vector<VectorPtr>& args, // Not using const ref so we can reuse args
+    SeedType seed,
     exec::EvalCtx& context,
     VectorPtr& resultRef) {
-  SeedType seed = 42;
-  auto hashIdx = 0;
-  if (args[0]->isConstantEncoding()) {
-    seed = args[0]->as<ConstantVector<SeedType>>()->valueAt(0);
-    hashIdx = 1;
-  }
-
   HashClass hash;
 
   auto& result = *resultRef->as<FlatVector<ReturnType>>();
@@ -47,7 +41,7 @@ void applyWithType(
   exec::LocalSelectivityVector selectedMinusNulls(context);
 
   exec::DecodedArgs decodedArgs(rows, args, context);
-  for (auto i = hashIdx; i < args.size(); i++) {
+  for (auto i = 0; i < args.size(); i++) {
     auto decoded = decodedArgs.at(i);
     const SelectivityVector* selected = &rows;
     if (args[i]->mayHaveNulls()) {
@@ -169,6 +163,10 @@ class Murmur3Hash final {
 };
 
 class Murmur3HashFunction final : public exec::VectorFunction {
+ public:
+  Murmur3HashFunction() : seed_(42) {}
+  explicit Murmur3HashFunction(int32_t seed) : seed_(seed) {}
+
   bool isDefaultNullBehavior() const final {
     return false;
   }
@@ -180,9 +178,11 @@ class Murmur3HashFunction final : public exec::VectorFunction {
       exec::EvalCtx& context,
       VectorPtr& resultRef) const final {
     context.ensureWritable(rows, INTEGER(), resultRef);
-    applyWithType<int32_t, Murmur3Hash, int32_t>(
-        rows, args, context, resultRef);
+    applyWithType<int32_t, Murmur3Hash>(rows, args, seed_, context, resultRef);
   }
+
+ private:
+  int32_t seed_;
 };
 
 class XxHash64 final {
@@ -320,6 +320,10 @@ class XxHash64 final {
 };
 
 class XxHash64Function final : public exec::VectorFunction {
+ public:
+  XxHash64Function() : seed_(42) {}
+  explicit XxHash64Function(int64_t seed) : seed_(seed) {}
+
   bool isDefaultNullBehavior() const final {
     return false;
   }
@@ -331,25 +335,21 @@ class XxHash64Function final : public exec::VectorFunction {
       exec::EvalCtx& context,
       VectorPtr& resultRef) const final {
     context.ensureWritable(rows, BIGINT(), resultRef);
-    applyWithType<int64_t, XxHash64, int64_t>(rows, args, context, resultRef);
+    applyWithType<int64_t, XxHash64>(rows, args, seed_, context, resultRef);
   }
+
+ private:
+  int64_t seed_;
 };
 
 } // namespace
 
 std::vector<std::shared_ptr<exec::FunctionSignature>> hashSignatures() {
-  return {
-      exec::FunctionSignatureBuilder()
-          .returnType("integer")
-          .argumentType("any")
-          .variableArity()
-          .build(),
-      exec::FunctionSignatureBuilder()
-          .returnType("integer")
-          .constantArgumentType("integer")
-          .argumentType("any")
-          .variableArity()
-          .build()};
+  return {exec::FunctionSignatureBuilder()
+              .returnType("integer")
+              .argumentType("any")
+              .variableArity()
+              .build()};
 }
 
 std::shared_ptr<exec::VectorFunction> makeHash(
@@ -360,19 +360,40 @@ std::shared_ptr<exec::VectorFunction> makeHash(
   return kHashFunction;
 }
 
+std::shared_ptr<exec::VectorFunction> makeHashWithSeed(
+    const std::string& name,
+    const std::vector<exec::VectorFunctionArg>& inputArgs) {
+  BaseVector* constantSeed = inputArgs[0].constantValue.get();
+  auto seed = constantSeed->as<ConstantVector<int32_t>>()->valueAt(0);
+  static const auto kHashFunction = std::make_shared<Murmur3HashFunction>(seed);
+  return kHashFunction;
+}
+
+std::vector<std::shared_ptr<exec::FunctionSignature>> hashWithSeedSignatures() {
+  return {exec::FunctionSignatureBuilder()
+              .returnType("integer")
+              .constantArgumentType("integer")
+              .argumentType("any")
+              .variableArity()
+              .build()};
+}
+
 std::vector<std::shared_ptr<exec::FunctionSignature>> xxhash64Signatures() {
-  return {
-      exec::FunctionSignatureBuilder()
-          .returnType("integer")
-          .argumentType("any")
-          .variableArity()
-          .build(),
-      exec::FunctionSignatureBuilder()
-          .returnType("integer")
-          .constantArgumentType("bigint")
-          .argumentType("any")
-          .variableArity()
-          .build()};
+  return {exec::FunctionSignatureBuilder()
+              .returnType("integer")
+              .argumentType("any")
+              .variableArity()
+              .build()};
+}
+
+std::vector<std::shared_ptr<exec::FunctionSignature>>
+xxhash64WithSeedSignatures() {
+  return {exec::FunctionSignatureBuilder()
+              .returnType("integer")
+              .constantArgumentType("bigint")
+              .argumentType("any")
+              .variableArity()
+              .build()};
 }
 
 std::shared_ptr<exec::VectorFunction> makeXxHash64(
@@ -380,6 +401,16 @@ std::shared_ptr<exec::VectorFunction> makeXxHash64(
     const std::vector<exec::VectorFunctionArg>& inputArgs,
     const core::QueryConfig& /*config*/) {
   static const auto kXxHash64Function = std::make_shared<XxHash64Function>();
+  return kXxHash64Function;
+}
+
+std::shared_ptr<exec::VectorFunction> makeXxHash64WithSeed(
+    const std::string& name,
+    const std::vector<exec::VectorFunctionArg>& inputArgs) {
+  BaseVector* constantSeed = inputArgs[0].constantValue.get();
+  auto seed = constantSeed->as<ConstantVector<int64_t>>()->valueAt(0);
+  static const auto kXxHash64Function =
+      std::make_shared<XxHash64Function>(seed);
   return kXxHash64Function;
 }
 
