@@ -6,6 +6,10 @@ Binary Functions
 
     Computes the hash of x.
 
+.. spark:function:: hash_with_seed(seed, x) -> integer
+
+    Computes the hash of x with seed.
+
 .. spark:function:: md5(x) -> varbinary
 
     Computes the md5 of x.
@@ -34,3 +38,7 @@ Binary Functions
 .. spark:function:: xxhash64(x) -> integer
 
     Computes the xxhash64 of x.
+
+.. spark:function:: xxhash64_with_seed(seed, x) -> integer
+
+    Computes the xxhash64 of x with seed.
