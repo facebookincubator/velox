@@ -118,5 +118,28 @@ TEST_F(XxHash64Test, float) {
   EXPECT_EQ(xxhash64<float>(limits::infinity()), -5940311692336719973);
   EXPECT_EQ(xxhash64<float>(-limits::infinity()), -7580553461823983095);
 }
+
+TEST_F(XxHash64Test, int64) {
+  EXPECT_EQ(
+      xxhash64<Timestamp>(Timestamp::fromMicros(0xcafecafedeadbeef)),
+      -6259772178006417012);
+  EXPECT_EQ(
+      xxhash64<Timestamp>(Timestamp::fromMillis(0xdeadbeefcafecafe)),
+      -1700188678616701932);
+  EXPECT_EQ(
+      xxhash64<Timestamp>(Timestamp::fromMicros(INT64_MAX)),
+      -3246596055638297850);
+  EXPECT_EQ(
+      xxhash64<Timestamp>(Timestamp::fromMillis(INT64_MIN)),
+      -8619748838626508300);
+  EXPECT_EQ(
+      xxhash64<Timestamp>(Timestamp::fromMicros(1)), -7001672635703045582);
+  EXPECT_EQ(
+      xxhash64<Timestamp>(Timestamp::fromMillis(0)), -5252525462095825812);
+  EXPECT_EQ(
+      xxhash64<Timestamp>(Timestamp::fromMicros(-1)), 3858142552250413010);
+  EXPECT_EQ(xxhash64<Timestamp>(Timestamp::fromMillis(std::nullopt)), 42);
+}
+
 } // namespace
 } // namespace facebook::velox::functions::sparksql::test
