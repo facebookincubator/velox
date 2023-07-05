@@ -77,6 +77,12 @@ inline void registerArrayNormalizeFunctions(const std::string& prefix) {
 }
 
 template <typename T>
+inline void registerArrayRemoveFunctions(const std::string& prefix) {
+  registerFunction<ArrayRemoveFunction, Array<T>, Array<T>, T>(
+      {prefix + "array_remove"});
+}
+
+template <typename T>
 inline void registerArrayTrimFunctions(const std::string& prefix) {
   registerFunction<ArrayTrimFunction, Array<T>, Array<T>, int64_t>(
       {prefix + "trim_array"});
@@ -198,6 +204,27 @@ void registerArrayFunctions(const std::string& prefix) {
   registerArrayHasDuplicatesFunctions<int128_t>(prefix);
   registerArrayHasDuplicatesFunctions<Varchar>(prefix);
 
+  registerArrayRemoveFunctions<int8_t>(prefix);
+  registerArrayRemoveFunctions<int16_t>(prefix);
+  registerArrayRemoveFunctions<int32_t>(prefix);
+  registerArrayRemoveFunctions<int64_t>(prefix);
+  registerArrayRemoveFunctions<int128_t>(prefix);
+  registerArrayRemoveFunctions<float>(prefix);
+  registerArrayRemoveFunctions<double>(prefix);
+  registerArrayRemoveFunctions<bool>(prefix);
+  registerArrayRemoveFunctions<Timestamp>(prefix);
+  registerArrayRemoveFunctions<Date>(prefix);
+  registerArrayRemoveFunctions<Varbinary>(prefix);
+  registerFunction<
+      ArrayRemoveFunctionString,
+      Array<Varchar>,
+      Array<Varchar>,
+      Varchar>({prefix + "array_remove"});
+  registerFunction<
+      ArrayRemoveFunction,
+      Array<Generic<T1>>,
+      Array<Generic<T1>>,
+      Generic<T1>>({prefix + "array_remove"});
   registerArrayFrequencyFunctions<int64_t>(prefix);
   registerArrayFrequencyFunctions<int128_t>(prefix);
   registerArrayFrequencyFunctions<Varchar>(prefix);
