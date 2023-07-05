@@ -434,7 +434,7 @@ TEST_F(DateTimeFunctionsTest, year) {
 
   EXPECT_EQ(std::nullopt, year(std::nullopt));
   EXPECT_EQ(1969, year(Timestamp(0, 0)));
-  EXPECT_EQ(1969, year(Timestamp(-1, 12300000000)));
+  EXPECT_EQ(1969, year(Timestamp(-1, Timestamp::kMaxNanos)));
   EXPECT_EQ(2096, year(Timestamp(4000000000, 0)));
   EXPECT_EQ(2096, year(Timestamp(4000000000, 123000000)));
   EXPECT_EQ(2001, year(Timestamp(998474645, 321000000)));
@@ -479,34 +479,6 @@ TEST_F(DateTimeFunctionsTest, yearTimestampWithTimezone) {
       std::nullopt,
       evaluateWithTimestampWithTimezone<int64_t>(
           "year(c0)", std::nullopt, std::nullopt));
-}
-
-TEST_F(DateTimeFunctionsTest, timestampTooLarge) {
-  std::vector<std::string> functions = {
-      "year",
-      "quarter",
-      "month",
-      "week",
-      "day",
-      "dow",
-      "doy",
-      "yow",
-      "hour",
-      "minute",
-      "second",
-  };
-
-  Timestamp ts(100'000'000'000'000'000, 0);
-  for (const auto& function : functions) {
-    VELOX_ASSERT_THROW(
-        evaluateOnce<int64_t>(
-            fmt::format("{}(c0)", function), std::make_optional(ts)),
-        "Timestamp is too large: 100000000000000000 seconds since epoch");
-  }
-
-  VELOX_ASSERT_THROW(
-      evaluateOnce<int64_t>("date_trunc('hour', c0)", std::make_optional(ts)),
-      "Timestamp is too large: 100000000000000000 seconds since epoch");
 }
 
 TEST_F(DateTimeFunctionsTest, weekDate) {
@@ -595,7 +567,7 @@ TEST_F(DateTimeFunctionsTest, quarter) {
 
   EXPECT_EQ(std::nullopt, quarter(std::nullopt));
   EXPECT_EQ(4, quarter(Timestamp(0, 0)));
-  EXPECT_EQ(4, quarter(Timestamp(-1, 12300000000)));
+  EXPECT_EQ(4, quarter(Timestamp(-1, Timestamp::kMaxNanos)));
   EXPECT_EQ(4, quarter(Timestamp(4000000000, 0)));
   EXPECT_EQ(4, quarter(Timestamp(4000000000, 123000000)));
   EXPECT_EQ(2, quarter(Timestamp(990000000, 321000000)));
@@ -661,7 +633,7 @@ TEST_F(DateTimeFunctionsTest, month) {
 
   EXPECT_EQ(std::nullopt, month(std::nullopt));
   EXPECT_EQ(12, month(Timestamp(0, 0)));
-  EXPECT_EQ(12, month(Timestamp(-1, 12300000000)));
+  EXPECT_EQ(12, month(Timestamp(-1, Timestamp::kMaxNanos)));
   EXPECT_EQ(10, month(Timestamp(4000000000, 0)));
   EXPECT_EQ(10, month(Timestamp(4000000000, 123000000)));
   EXPECT_EQ(8, month(Timestamp(998474645, 321000000)));
@@ -724,7 +696,7 @@ TEST_F(DateTimeFunctionsTest, hour) {
 
   EXPECT_EQ(std::nullopt, hour(std::nullopt));
   EXPECT_EQ(13, hour(Timestamp(0, 0)));
-  EXPECT_EQ(12, hour(Timestamp(-1, 12300000000)));
+  EXPECT_EQ(12, hour(Timestamp(-1, Timestamp::kMaxNanos)));
   // Disabled for now because the TZ for Pacific/Apia in 2096 varies between
   // systems.
   // EXPECT_EQ(21, hour(Timestamp(4000000000, 0)));
@@ -861,6 +833,30 @@ TEST_F(DateTimeFunctionsTest, plusMinusDateIntervalDayTime) {
 
   EXPECT_THROW(plus(baseDate, partDay), VeloxUserError);
   EXPECT_THROW(minus(baseDate, partDay), VeloxUserError);
+}
+
+TEST_F(DateTimeFunctionsTest, minusTimestampIntervalDayTime) {
+  const auto minus = [&](std::optional<int64_t> t1, std::optional<int64_t> t2) {
+    const auto timestamp1 = (t1.has_value()) ? Timestamp(t1.value(), 0)
+                                             : std::optional<Timestamp>();
+    const auto timestamp2 = (t2.has_value()) ? Timestamp(t2.value(), 0)
+                                             : std::optional<Timestamp>();
+    return evaluateOnce<int64_t>(
+        "c0 - c1",
+        makeRowVector({
+            makeNullableFlatVector<Timestamp>({timestamp1}),
+            makeNullableFlatVector<Timestamp>({timestamp2}),
+        }));
+  };
+
+  EXPECT_EQ(std::nullopt, minus(std::nullopt, std::nullopt));
+  EXPECT_EQ(std::nullopt, minus(1, std::nullopt));
+  EXPECT_EQ(std::nullopt, minus(std::nullopt, 1));
+  EXPECT_EQ(1000, minus(1, 0));
+  EXPECT_EQ(-1000, minus(1, 2));
+  VELOX_ASSERT_THROW(
+      minus(Timestamp::kMinSeconds, Timestamp::kMaxSeconds),
+      "integer overflow");
 }
 
 TEST_F(DateTimeFunctionsTest, dayOfMonthTimestampWithTimezone) {
@@ -1191,7 +1187,7 @@ TEST_F(DateTimeFunctionsTest, second) {
   EXPECT_EQ(0, second(Timestamp(0, 0)));
   EXPECT_EQ(40, second(Timestamp(4000000000, 0)));
   EXPECT_EQ(59, second(Timestamp(-1, 123000000)));
-  EXPECT_EQ(59, second(Timestamp(-1, 12300000000)));
+  EXPECT_EQ(59, second(Timestamp(-1, Timestamp::kMaxNanos)));
 }
 
 TEST_F(DateTimeFunctionsTest, secondDate) {
@@ -1246,7 +1242,7 @@ TEST_F(DateTimeFunctionsTest, millisecond) {
   EXPECT_EQ(0, millisecond(Timestamp(0, 0)));
   EXPECT_EQ(0, millisecond(Timestamp(4000000000, 0)));
   EXPECT_EQ(123, millisecond(Timestamp(-1, 123000000)));
-  EXPECT_EQ(12300, millisecond(Timestamp(-1, 12300000000)));
+  EXPECT_EQ(999, millisecond(Timestamp(-1, Timestamp::kMaxNanos)));
 }
 
 TEST_F(DateTimeFunctionsTest, millisecondDate) {
@@ -1884,6 +1880,19 @@ TEST_F(DateTimeFunctionsTest, dateDiffDate) {
       dateDiff("quarter", parseDate("2020-02-29"), parseDate("2019-02-28")));
   EXPECT_EQ(
       -2, dateDiff("year", parseDate("2020-02-29"), parseDate("2018-02-28")));
+
+  // Check Large date
+  EXPECT_EQ(
+      737790,
+      dateDiff("day", parseDate("2020-02-29"), parseDate("4040-02-29")));
+  EXPECT_EQ(
+      24240,
+      dateDiff("month", parseDate("2020-02-29"), parseDate("4040-02-29")));
+  EXPECT_EQ(
+      8080,
+      dateDiff("quarter", parseDate("2020-02-29"), parseDate("4040-02-29")));
+  EXPECT_EQ(
+      2020, dateDiff("year", parseDate("2020-02-29"), parseDate("4040-02-29")));
 }
 
 TEST_F(DateTimeFunctionsTest, dateDiffTimestamp) {
@@ -3179,4 +3188,40 @@ TEST_F(DateTimeFunctionsTest, timeZoneMinute) {
   VELOX_ASSERT_THROW(
       timezone_minute("2023-", "Pacific/Chatham"),
       "Unable to parse timestamp value: \"2023-\", expected format is (YYYY-MM-DD HH:MM:SS[.MS])");
+}
+
+TEST_F(DateTimeFunctionsTest, timestampWithTimezoneComparisons) {
+  auto runAndCompare = [&](std::string expr,
+                           std::shared_ptr<RowVector>& inputs,
+                           VectorPtr expectedResult) {
+    auto actual = evaluate<SimpleVector<bool>>(expr, inputs);
+    test::assertEqualVectors(expectedResult, actual);
+  };
+
+  RowVectorPtr timestampWithTimezoneLhs = makeTimestampWithTimeZoneVector(
+      makeFlatVector<int64_t>({0, 0, 0}),
+      makeFlatVector<int16_t>({900, 900, 800}));
+  RowVectorPtr timestampWithTimezoneRhs = makeTimestampWithTimeZoneVector(
+      makeFlatVector<int64_t>({0, 1000, 0}),
+      makeFlatVector<int16_t>({900, 900, 900}));
+  auto inputs =
+      makeRowVector({timestampWithTimezoneLhs, timestampWithTimezoneRhs});
+
+  auto expectedEq = makeNullableFlatVector<bool>({true, false, false});
+  runAndCompare("c0 = c1", inputs, expectedEq);
+
+  auto expectedNeq = makeNullableFlatVector<bool>({false, true, true});
+  runAndCompare("c0 != c1", inputs, expectedNeq);
+
+  auto expectedLt = makeNullableFlatVector<bool>({false, true, false});
+  runAndCompare("c0 < c1", inputs, expectedLt);
+
+  auto expectedGt = makeNullableFlatVector<bool>({false, false, true});
+  runAndCompare("c0 > c1", inputs, expectedGt);
+
+  auto expectedLte = makeNullableFlatVector<bool>({true, true, false});
+  runAndCompare("c0 <= c1", inputs, expectedLte);
+
+  auto expectedGte = makeNullableFlatVector<bool>({true, false, true});
+  runAndCompare("c0 >= c1", inputs, expectedGte);
 }

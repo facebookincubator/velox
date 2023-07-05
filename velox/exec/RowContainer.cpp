@@ -467,15 +467,25 @@ int32_t RowContainer::compareComplexType(
     const char* left,
     const char* right,
     const Type* type,
-    int32_t offset,
+    int32_t leftOffset,
+    int32_t rightOffset,
     CompareFlags flags) {
   VELOX_DCHECK(!flags.stopAtNull, "not supported compare flag");
 
   ByteStream leftStream;
   ByteStream rightStream;
-  prepareRead(left, offset, leftStream);
-  prepareRead(right, offset, rightStream);
+  prepareRead(left, leftOffset, leftStream);
+  prepareRead(right, rightOffset, rightStream);
   return serde_.compare(leftStream, rightStream, type, flags);
+}
+
+int32_t RowContainer::compareComplexType(
+    const char* left,
+    const char* right,
+    const Type* type,
+    int32_t offset,
+    CompareFlags flags) {
+  return compareComplexType(left, right, type, offset, offset, flags);
 }
 
 template <TypeKind Kind>
@@ -624,7 +634,7 @@ int64_t RowContainer::sizeIncrement(
       AllocationPool::kMinPages * memory::AllocationTraits::kPageSize;
   int32_t needRows = std::max<int64_t>(0, numRows - numFreeRows_);
   int64_t needBytes =
-      std::min<int64_t>(0, variableLengthBytes - stringAllocator_.freeSpace());
+      std::max<int64_t>(0, variableLengthBytes - stringAllocator_.freeSpace());
   return bits::roundUp(needRows * fixedRowSize_, kAllocUnit) +
       bits::roundUp(needBytes, kAllocUnit);
 }

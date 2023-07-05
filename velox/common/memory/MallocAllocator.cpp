@@ -28,8 +28,10 @@ bool MallocAllocator::allocateNonContiguous(
     Allocation& out,
     ReservationCallback reservationCB,
     MachinePageCount minSizeClass) {
-  VELOX_CHECK_GT(numPages, 0);
   const uint64_t freedBytes = freeNonContiguous(out);
+  if (numPages == 0) {
+    return true;
+  }
   const SizeMix mix = allocationSize(numPages, minSizeClass);
   const auto totalBytes = AllocationTraits::pageBytes(mix.totalPages);
   if (!incrementUsage(totalBytes)) {
@@ -119,6 +121,7 @@ bool MallocAllocator::allocateContiguousImpl(
   }
   auto numContiguousCollateralPages = allocation.numPages();
   if (numContiguousCollateralPages > 0) {
+    useHugePages(allocation, false);
     if (::munmap(allocation.data(), allocation.size()) < 0) {
       VELOX_MEM_LOG(ERROR) << "munmap got " << folly::errnoStr(errno) << "for "
                            << allocation.data() << ", " << allocation.size();
@@ -128,6 +131,10 @@ bool MallocAllocator::allocateContiguousImpl(
     decrementUsage(AllocationTraits::pageBytes(numContiguousCollateralPages));
     allocation.clear();
   }
+  if (numPages == 0) {
+    return true;
+  }
+
   const auto totalBytes = AllocationTraits::pageBytes(numPages);
   if (!incrementUsage(totalBytes)) {
     return false;
@@ -166,6 +173,7 @@ bool MallocAllocator::allocateContiguousImpl(
       0);
   // TODO: add handling of MAP_FAILED.
   allocation.set(data, AllocationTraits::pageBytes(numPages));
+  useHugePages(allocation, true);
   return true;
 }
 
@@ -203,7 +211,7 @@ void MallocAllocator::freeContiguousImpl(ContiguousAllocation& allocation) {
   if (allocation.empty()) {
     return;
   }
-
+  useHugePages(allocation, false);
   const auto bytes = allocation.size();
   const auto numPages = allocation.numPages();
   if (::munmap(allocation.data(), bytes) < 0) {

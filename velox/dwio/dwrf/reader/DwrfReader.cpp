@@ -17,6 +17,7 @@
 #include "velox/dwio/dwrf/reader/DwrfReader.h"
 #include "velox/dwio/common/TypeUtils.h"
 #include "velox/dwio/common/exception/Exception.h"
+#include "velox/dwio/dwrf/reader/ColumnReader.h"
 #include "velox/dwio/dwrf/reader/StreamLabels.h"
 #include "velox/vector/FlatVector.h"
 
@@ -566,7 +567,8 @@ DwrfReader::DwrfReader(
           options.getDirectorySizeGuess(),
           options.getFilePreloadThreshold(),
           options.getFileFormat() == FileFormat::ORC ? FileFormat::ORC
-                                                     : FileFormat::DWRF)),
+                                                     : FileFormat::DWRF,
+          options.isFileColumnNamesReadAsLowerCase())),
       options_(options) {}
 
 std::unique_ptr<StripeInformation> DwrfReader::getStripe(
@@ -773,13 +775,7 @@ uint64_t DwrfReader::getMemoryUse(
 
 std::unique_ptr<dwio::common::RowReader> DwrfReader::createRowReader(
     const RowReaderOptions& opts) const {
-  auto rowReader = std::make_unique<DwrfRowReader>(readerBase_, opts);
-  // Load the first stripe on construction so that readers created in
-  // background have a reader tree and can preload the first
-  // stripe. Also the reader tree needs to exist in order to receive
-  // adaptation from a previous reader.
-  rowReader->startNextStripe();
-  return rowReader;
+  return createDwrfRowReader(opts);
 }
 
 std::unique_ptr<DwrfRowReader> DwrfReader::createDwrfRowReader(

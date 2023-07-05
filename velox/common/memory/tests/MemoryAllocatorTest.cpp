@@ -62,7 +62,7 @@ class MemoryAllocatorTest : public testing::TestWithParam<bool> {
       allocator_ = std::make_shared<MmapAllocator>(options);
       auto mmapAllocator = std::dynamic_pointer_cast<MmapAllocator>(allocator_);
       ASSERT_EQ(
-          mmapAllocator->capacity(),
+          AllocationTraits::numPages(mmapAllocator->capacity()),
           bits::roundUp(
               kCapacityBytes * (100 - options.smallAllocationReservePct) / 100 /
                   AllocationTraits::kPageSize,
@@ -369,7 +369,7 @@ TEST_P(MemoryAllocatorTest, mmapAllocatorInit) {
         bits::roundUp(
             AllocationTraits::numPages(options.capacity - smallAllocationBytes),
             64 * mmapAllocator->sizeClasses().back()),
-        mmapAllocator->capacity());
+        AllocationTraits::numPages(mmapAllocator->capacity()));
     EXPECT_EQ(options.maxMallocBytes, mmapAllocator->maxMallocBytes());
     EXPECT_EQ(smallAllocationBytes, mmapAllocator->mallocReservedBytes());
   }
@@ -383,7 +383,7 @@ TEST_P(MemoryAllocatorTest, mmapAllocatorInit) {
         bits::roundUp(
             AllocationTraits::numPages(kCapacityBytes),
             64 * mmapAllocator->sizeClasses().back()),
-        mmapAllocator->capacity());
+        AllocationTraits::numPages(mmapAllocator->capacity()));
     EXPECT_EQ(options.maxMallocBytes, mmapAllocator->maxMallocBytes());
     EXPECT_EQ(0, mmapAllocator->mallocReservedBytes());
   }
@@ -399,7 +399,7 @@ TEST_P(MemoryAllocatorTest, mmapAllocatorInit) {
         bits::roundUp(
             AllocationTraits::numPages(options.capacity),
             64 * mmapAllocator->sizeClasses().back()),
-        mmapAllocator->capacity());
+        AllocationTraits::numPages(mmapAllocator->capacity()));
     EXPECT_EQ(options.maxMallocBytes, mmapAllocator->maxMallocBytes());
     EXPECT_EQ(smallAllocationBytes, mmapAllocator->mallocReservedBytes());
   }
@@ -513,9 +513,8 @@ TEST_P(MemoryAllocatorTest, allocationClass2) {
   ASSERT_EQ(allocation->pool(), nullptr);
   ASSERT_EQ(allocation->numPages(), 0);
   ASSERT_EQ(allocation->numRuns(), 0);
-  ASSERT_THROW(
-      instance_->allocateNonContiguous(0, *allocation, nullptr, kMinClassSize),
-      VeloxRuntimeError);
+  ASSERT_TRUE(
+      instance_->allocateNonContiguous(0, *allocation, nullptr, kMinClassSize));
   ASSERT_TRUE(instance_->allocateNonContiguous(
       kNumPages, *allocation, nullptr, kMinClassSize));
   ASSERT_TRUE(!allocation->empty());
@@ -980,6 +979,7 @@ TEST_P(MemoryAllocatorTest, allocateBytes) {
   // in 'data' cast to char.
   std::vector<folly::Range<char*>> data(kNumAllocs);
   uint64_t expectedNumMallocBytes = 0;
+  uint64_t expectedTotalBytes = 0;
   for (auto counter = 0; counter < data.size() * 4; ++counter) {
     int32_t index = folly::Random::rand32(rng) % kNumAllocs;
     int32_t bytes = sizes[folly::Random::rand32() % sizes.size()];
@@ -992,6 +992,7 @@ TEST_P(MemoryAllocatorTest, allocateBytes) {
       }
       int32_t freeSize = data[index].size();
       instance_->freeBytes(data[index].data(), freeSize);
+      expectedTotalBytes -= freeSize;
       if (useMmap_ && freeSize == sizes[0]) {
         expectedNumMallocBytes -= freeSize;
         ASSERT_EQ(
@@ -1001,11 +1002,22 @@ TEST_P(MemoryAllocatorTest, allocateBytes) {
     }
     data[index] = folly::Range<char*>(
         reinterpret_cast<char*>(instance_->allocateBytes(bytes)), bytes);
+    expectedTotalBytes += bytes;
     if (useMmap_ && bytes == sizes[0]) {
       expectedNumMallocBytes += bytes;
       ASSERT_EQ(
           expectedNumMallocBytes,
           ((MmapAllocator*)instance_)->numMallocBytes());
+    }
+    if (useMmap_) {
+      ASSERT_EQ(
+          expectedNumMallocBytes +
+              AllocationTraits::pageBytes(
+                  ((MmapAllocator*)instance_)->numAllocated()),
+          instance_->totalUsedBytes());
+      ASSERT_LE(expectedTotalBytes, instance_->totalUsedBytes());
+    } else {
+      ASSERT_EQ(expectedTotalBytes, instance_->totalUsedBytes());
     }
     for (auto& byte : data[index]) {
       byte = expected;
@@ -1195,9 +1207,7 @@ TEST_P(MemoryAllocatorTest, contiguousAllocation) {
   ASSERT_TRUE(allocation->empty());
   ASSERT_EQ(allocation->pool(), nullptr);
   ASSERT_EQ(allocation->numPages(), 0);
-  ASSERT_THROW(
-      instance_->allocateContiguous(0, nullptr, *allocation),
-      VeloxRuntimeError);
+  ASSERT_TRUE(instance_->allocateContiguous(0, nullptr, *allocation));
   ASSERT_TRUE(instance_->allocateContiguous(kNumPages, nullptr, *allocation));
   ASSERT_TRUE(!allocation->empty());
   ASSERT_EQ(allocation->pool(), nullptr);

@@ -17,6 +17,7 @@
 #include <optional>
 #include "velox/exec/Aggregate.h"
 #include "velox/exec/OperatorUtils.h"
+#include "velox/exec/SortedAggregations.h"
 #include "velox/exec/Task.h"
 
 namespace facebook::velox::exec {
@@ -63,21 +64,18 @@ HashAggregation::HashAggregation(
   }
 
   auto numAggregates = aggregationNode->aggregates().size();
-  std::vector<std::unique_ptr<Aggregate>> aggregates;
-  aggregates.reserve(numAggregates);
-  std::vector<std::optional<column_index_t>> aggrMaskChannels;
-  aggrMaskChannels.reserve(numAggregates);
-  auto numMasks = aggregationNode->aggregateMasks().size();
-  std::vector<std::vector<column_index_t>> args;
-  std::vector<std::vector<VectorPtr>> constantLists;
-  std::vector<TypePtr> intermediateTypes;
+  std::vector<AggregateInfo> aggregateInfos;
+  aggregateInfos.reserve(numAggregates);
+
   for (auto i = 0; i < numAggregates; i++) {
     const auto& aggregate = aggregationNode->aggregates()[i];
 
-    std::vector<column_index_t> channels;
-    std::vector<VectorPtr> constants;
+    AggregateInfo info;
+
+    auto& channels = info.inputs;
+    auto& constants = info.constantInputs;
     std::vector<TypePtr> argTypes;
-    for (auto& arg : aggregate->inputs()) {
+    for (const auto& arg : aggregate.call->inputs()) {
       argTypes.push_back(arg->type());
       channels.push_back(exprToChannel(arg.get(), inputType));
       if (channels.back() == kConstantChannel) {
@@ -88,40 +86,44 @@ HashAggregation::HashAggregation(
       }
     }
     if (isRawInput(aggregationNode->step())) {
-      intermediateTypes.push_back(
-          Aggregate::intermediateType(aggregate->name(), argTypes));
+      info.intermediateType =
+          Aggregate::intermediateType(aggregate.call->name(), argTypes);
     } else {
-      VELOX_DCHECK(!argTypes.empty());
-      intermediateTypes.push_back(argTypes[0]);
       VELOX_CHECK_EQ(
           argTypes.size(),
           1,
           "Intermediate aggregates must have a single argument");
+      info.intermediateType = argTypes[0];
     }
     // Setup aggregation mask: convert the Variable Reference name to the
     // channel (projection) index, if there is a mask.
-    if (i < numMasks) {
-      const auto& aggrMask = aggregationNode->aggregateMasks()[i];
-      if (aggrMask == nullptr) {
-        aggrMaskChannels.emplace_back(std::nullopt);
-      } else {
-        aggrMaskChannels.emplace_back(
-            inputType->asRow().getChildIdx(aggrMask->name()));
+    if (const auto& mask = aggregate.mask) {
+      if (mask != nullptr) {
+        info.mask = inputType->asRow().getChildIdx(mask->name());
       }
-    } else {
-      aggrMaskChannels.emplace_back(std::nullopt);
     }
 
     const auto& resultType = outputType_->childAt(numHashers + i);
-    aggregates.push_back(Aggregate::create(
-        aggregate->name(), aggregationNode->step(), argTypes, resultType));
-    args.push_back(channels);
-    constantLists.push_back(constants);
+    info.function = Aggregate::create(
+        aggregate.call->name(), aggregationNode->step(), argTypes, resultType);
+    info.output = numHashers + i;
+
+    // Sorting keys and orders.
+    const auto numSortingKeys = aggregate.sortingKeys.size();
+    VELOX_CHECK_EQ(numSortingKeys, aggregate.sortingOrders.size());
+    info.sortingOrders = aggregate.sortingOrders;
+
+    info.sortingKeys.reserve(numSortingKeys);
+    for (const auto& key : aggregate.sortingKeys) {
+      info.sortingKeys.push_back(exprToChannel(key.get(), inputType));
+    }
+
+    aggregateInfos.emplace_back(std::move(info));
   }
 
-  // Check that aggregate result type match the output type
-  for (auto i = 0; i < aggregates.size(); i++) {
-    const auto& aggResultType = aggregates[i]->resultType();
+  // Check that aggregate result type match the output type.
+  for (auto i = 0; i < aggregateInfos.size(); i++) {
+    const auto& aggResultType = aggregateInfos[i].function->resultType();
     const auto& expectedType = outputType_->childAt(numHashers + i);
     VELOX_CHECK(
         aggResultType->kindEquals(expectedType),
@@ -138,13 +140,10 @@ HashAggregation::HashAggregation(
   }
 
   groupingSet_ = std::make_unique<GroupingSet>(
+      inputType,
       std::move(hashers),
       std::move(preGroupedChannels),
-      std::move(aggregates),
-      std::move(aggrMaskChannels),
-      std::move(args),
-      std::move(constantLists),
-      std::move(intermediateTypes),
+      std::move(aggregateInfos),
       aggregationNode->ignoreNullKeys(),
       isPartialOutput_,
       isRawInput(aggregationNode->step()),
@@ -171,18 +170,8 @@ void HashAggregation::addInput(RowVectorPtr input) {
   }
   groupingSet_->addInput(input, mayPushdown_);
   numInputRows_ += input->size();
-  {
-    const auto hashTableStats = groupingSet_->hashTableStats();
-    auto lockedStats = stats_.wlock();
-    lockedStats->runtimeStats["hashtable.capacity"] =
-        RuntimeMetric(hashTableStats.capacity);
-    lockedStats->runtimeStats["hashtable.numRehashes"] =
-        RuntimeMetric(hashTableStats.numRehashes);
-    lockedStats->runtimeStats["hashtable.numDistinct"] =
-        RuntimeMetric(hashTableStats.numDistinct);
-    lockedStats->runtimeStats["hashtable.numTombstones"] =
-        RuntimeMetric(hashTableStats.numTombstones);
-  }
+
+  updateRuntimeStats();
 
   // NOTE: we should not trigger partial output flush in case of global
   // aggregation as the final aggregator will handle it the same way as the
@@ -208,6 +197,35 @@ void HashAggregation::addInput(RowVectorPtr input) {
       partialFull_ = false;
     }
   }
+}
+
+void HashAggregation::updateRuntimeStats() {
+  // Report range sizes and number of distinct values for the group-by keys.
+  const auto& hashers = groupingSet_->hashLookup().hashers;
+  uint64_t asRange;
+  uint64_t asDistinct;
+  const auto hashTableStats = groupingSet_->hashTableStats();
+
+  auto lockedStats = stats_.wlock();
+  auto& runtimeStats = lockedStats->runtimeStats;
+
+  for (auto i = 0; i < hashers.size(); i++) {
+    hashers[i]->cardinality(0, asRange, asDistinct);
+    if (asRange != VectorHasher::kRangeTooLarge) {
+      runtimeStats[fmt::format("rangeKey{}", i)] = RuntimeMetric(asRange);
+    }
+    if (asDistinct != VectorHasher::kRangeTooLarge) {
+      runtimeStats[fmt::format("distinctKey{}", i)] = RuntimeMetric(asDistinct);
+    }
+  }
+
+  runtimeStats["hashtable.capacity"] = RuntimeMetric(hashTableStats.capacity);
+  runtimeStats["hashtable.numRehashes"] =
+      RuntimeMetric(hashTableStats.numRehashes);
+  runtimeStats["hashtable.numDistinct"] =
+      RuntimeMetric(hashTableStats.numDistinct);
+  runtimeStats["hashtable.numTombstones"] =
+      RuntimeMetric(hashTableStats.numTombstones);
 }
 
 void HashAggregation::recordSpillStats() {

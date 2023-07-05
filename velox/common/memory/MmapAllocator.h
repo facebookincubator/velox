@@ -85,6 +85,10 @@ class MmapAllocator : public MemoryAllocator {
     return kind_;
   }
 
+  size_t capacity() const override {
+    return AllocationTraits::pageBytes(capacity_);
+  }
+
   bool allocateNonContiguous(
       MachinePageCount numPages,
       Allocation& out,
@@ -98,7 +102,6 @@ class MmapAllocator : public MemoryAllocator {
       Allocation* collateral,
       ContiguousAllocation& allocation,
       ReservationCallback reservationCB = nullptr) override {
-    VELOX_CHECK_GT(numPages, 0);
     bool result;
     stats_.recordAllocate(numPages * AllocationTraits::kPageSize, 1, [&]() {
       result = allocateContiguousImpl(
@@ -137,16 +140,16 @@ class MmapAllocator : public MemoryAllocator {
   /// the data in the bitmaps in the size classes.
   bool checkConsistency() const override;
 
-  MachinePageCount capacity() const {
-    return capacity_;
-  }
-
   int32_t maxMallocBytes() const {
     return maxMallocBytes_;
   }
 
   size_t mallocReservedBytes() const {
     return mallocReservedBytes_;
+  }
+
+  size_t totalUsedBytes() const override {
+    return numMallocBytes_ + AllocationTraits::pageBytes(numAllocated_);
   }
 
   MachinePageCount numAllocated() const override {

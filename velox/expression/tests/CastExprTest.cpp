@@ -805,6 +805,35 @@ TEST_F(CastExprTest, toString) {
   ASSERT_EQ("cast((a) as ARRAY<VARCHAR>)", exprSet.exprs()[1]->toString());
 }
 
+TEST_F(CastExprTest, decimalToDouble) {
+  // short to short, scale up.
+  auto shortFlat = makeNullableShortDecimalFlatVector(
+      {-999999999999999999, -3, 0, 55, 999999999999999999, std::nullopt},
+      DECIMAL(18, 18));
+  testComplexCast(
+      "c0",
+      shortFlat,
+      makeNullableFlatVector<double>(
+          {-0.999999999999999999,
+           -0.000000000000000003,
+           0,
+           0.000000000000000055,
+           0.999999999999999999,
+           std::nullopt}));
+  auto longFlat = makeNullableLongDecimalFlatVector(
+      {DecimalUtil::kLongDecimalMin,
+       0,
+       DecimalUtil::kLongDecimalMax,
+       HugeInt::build(0xffff, 0xffffffffffffffff),
+       std::nullopt},
+      DECIMAL(38, 5));
+  testComplexCast(
+      "c0",
+      longFlat,
+      makeNullableFlatVector<double>(
+          {-1e33, 0, 1e33, 1.2089258196146293E19, std::nullopt}));
+}
+
 TEST_F(CastExprTest, decimalToDecimal) {
   // short to short, scale up.
   auto shortFlat =
@@ -933,8 +962,8 @@ TEST_F(CastExprTest, integerToDecimal) {
 TEST_F(CastExprTest, castInTry) {
   // Test try(cast(array(varchar) as array(bigint))) whose input vector is
   // wrapped in dictinary encoding. The row of ["2a"] should trigger an error
-  // during casting and the try expression should turn this error into a null at
-  // this row.
+  // during casting and the try expression should turn this error into a null
+  // at this row.
   auto input = makeRowVector({makeNullableArrayVector<StringView>(
       {{{"1"_sv}}, {{"2a"_sv}}, std::nullopt, std::nullopt})});
   auto expected = makeNullableArrayVector<int64_t>(
@@ -1056,8 +1085,8 @@ TEST_F(CastExprTest, castAsCall) {
 }
 
 namespace {
-/// Wraps input in a constant encoding that repeats the first element and then
-/// in dictionary that reverses the order of rows.
+/// Wraps input in a constant encoding that repeats the first element and
+/// then in dictionary that reverses the order of rows.
 class TestingDictionaryOverConstFunction : public exec::VectorFunction {
  public:
   TestingDictionaryOverConstFunction() {}

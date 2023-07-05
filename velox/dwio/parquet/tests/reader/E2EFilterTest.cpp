@@ -65,6 +65,7 @@ class E2EFilterTest : public E2EFilterTestBase {
         std::move(sink), options_);
     for (auto& batch : batches) {
       writer_->write(batch);
+      writer_->flush();
     }
     writer_->close();
   }
@@ -139,7 +140,7 @@ TEST_F(E2EFilterTest, compression) {
         dwio::common::CompressionKind_ZSTD,
         dwio::common::CompressionKind_GZIP,
         dwio::common::CompressionKind_NONE}) {
-    if (!facebook::velox::parquet::Writer::isArrowCodecAvailable(compression)) {
+    if (!facebook::velox::parquet::Writer::isCodecAvailable(compression)) {
       continue;
     }
 

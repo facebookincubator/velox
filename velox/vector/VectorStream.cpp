@@ -97,8 +97,7 @@ void VectorStreamGroup::createStreamTree(
     RowTypePtr type,
     int32_t numRows,
     const VectorSerde::Options* options) {
-  serializer_ =
-      getVectorSerde()->createSerializer(type, numRows, this, options);
+  serializer_ = serde_->createSerializer(type, numRows, this, options);
 }
 
 void VectorStreamGroup::append(
@@ -131,6 +130,54 @@ void VectorStreamGroup::read(
     RowVectorPtr* result,
     const VectorSerde::Options* options) {
   getVectorSerde()->deserialize(source, pool, type, result, options);
+}
+
+folly::IOBuf rowVectorToIOBuf(
+    const RowVectorPtr& rowVector,
+    memory::MemoryPool& pool,
+    VectorSerde* serde) {
+  return rowVectorToIOBuf(rowVector, rowVector->size(), pool, serde);
+}
+
+folly::IOBuf rowVectorToIOBuf(
+    const RowVectorPtr& rowVector,
+    vector_size_t rangeEnd,
+    memory::MemoryPool& pool,
+    VectorSerde* serde) {
+  auto streamGroup = std::make_unique<VectorStreamGroup>(&pool, serde);
+  streamGroup->createStreamTree(asRowType(rowVector->type()), rangeEnd);
+
+  IndexRange range{0, rangeEnd};
+  streamGroup->append(rowVector, folly::Range<IndexRange*>(&range, 1));
+
+  IOBufOutputStream stream(pool);
+  streamGroup->flush(&stream);
+  return std::move(*stream.getIOBuf());
+}
+
+RowVectorPtr IOBufToRowVector(
+    const folly::IOBuf& ioBuf,
+    const RowTypePtr& outputType,
+    memory::MemoryPool& pool,
+    VectorSerde* serde) {
+  std::vector<ByteRange> ranges;
+  ranges.reserve(4);
+
+  for (const auto& range : ioBuf) {
+    ranges.emplace_back(ByteRange{
+        const_cast<uint8_t*>(range.data()), (int32_t)range.size(), 0});
+  }
+
+  ByteStream byteStream;
+  byteStream.resetInput(std::move(ranges));
+  RowVectorPtr outputVector;
+
+  // If not supplied, use the default one.
+  if (serde == nullptr) {
+    serde = getVectorSerde();
+  }
+  serde->deserialize(&byteStream, &pool, outputType, &outputVector, nullptr);
+  return outputVector;
 }
 
 } // namespace facebook::velox

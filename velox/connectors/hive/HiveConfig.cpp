@@ -124,4 +124,20 @@ std::optional<std::string> HiveConfig::s3IAMRole(const Config* config) {
 std::string HiveConfig::s3IAMRoleSessionName(const Config* config) {
   return config->get(kS3IamRoleSessionName, std::string("velox-session"));
 }
+
+// static.
+bool HiveConfig::isFileColumnNamesReadAsLowerCase(const Config* config) {
+  return config->get<bool>(kFileColumnNamesReadAsLowerCase, false);
+}
+
+// static.
+int64_t HiveConfig::maxCoalescedBytes(const Config* config) {
+  return config->get<int64_t>(kMaxCoalescedBytes, 128 << 20);
+}
+
+// static.
+int32_t HiveConfig::maxCoalescedDistanceBytes(const Config* config) {
+  return config->get<int32_t>(kMaxCoalescedDistanceBytes, 512 << 10);
+}
+
 } // namespace facebook::velox::connector::hive

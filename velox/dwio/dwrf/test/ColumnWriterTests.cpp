@@ -424,10 +424,10 @@ TEST(ColumnWriterTests, TestTimestampBoundaryValuesWriter) {
   std::vector<std::optional<Timestamp>> data;
   for (int64_t i = 0; i < ITERATIONS; ++i) {
     if (i & 1) {
-      Timestamp ts(INT64_MAX, MAX_NANOS);
+      Timestamp ts(Timestamp::kMaxSeconds, MAX_NANOS);
       data.emplace_back(ts);
     } else {
-      Timestamp ts(MIN_SECONDS, MAX_NANOS);
+      Timestamp ts(Timestamp::kMinSeconds, MAX_NANOS);
       data.emplace_back(ts);
     }
     data.emplace_back();
@@ -438,11 +438,8 @@ TEST(ColumnWriterTests, TestTimestampBoundaryValuesWriter) {
 TEST(ColumnWriterTests, TestTimestampMixedWriter) {
   std::vector<std::optional<Timestamp>> data;
   for (int64_t i = 0; i < ITERATIONS; ++i) {
-    int64_t seconds = static_cast<int64_t>(Random::rand64());
-    if (seconds < MIN_SECONDS) {
-      seconds = MIN_SECONDS;
-    }
-    int64_t nanos = Random::rand32(0, MAX_NANOS + 1);
+    int64_t seconds = Random::rand64(Timestamp::kMaxSeconds);
+    int64_t nanos = Random::rand32(MAX_NANOS + 1);
     Timestamp ts(seconds, nanos);
     data.emplace_back(ts);
     // Add null value
@@ -461,16 +458,6 @@ void verifyInvalidTimestamp(int64_t seconds, int64_t nanos) {
   data.emplace_back(ts);
   EXPECT_THROW(
       testDataTypeWriter(TIMESTAMP(), data), exception::LoggedException);
-}
-
-TEST(ColumnWriterTests, TestTimestampInvalidWriter) {
-  // Nanos invalid range.
-  verifyInvalidTimestamp(ITERATIONS, UINT64_MAX);
-  verifyInvalidTimestamp(ITERATIONS, MAX_NANOS + 1);
-
-  // Seconds invalid range.
-  verifyInvalidTimestamp(INT64_MIN, 0);
-  verifyInvalidTimestamp(MIN_SECONDS - 1, MAX_NANOS);
 }
 
 TEST(ColumnWriterTests, TestTimestampNullWriter) {
@@ -1471,6 +1458,51 @@ TEST(ColumnWriterTests, TestMapWriterBigBatch) {
       *pool,
       batch,
       /* useFlatMap */ true);
+}
+
+TEST(ColumnWriterTests, TestMapWriterUnalignedKeyValueCount) {
+  auto pool = addDefaultLeafMemoryPool();
+  VectorMaker maker(pool.get());
+  auto keys = maker.flatVector<int64_t>(11, folly::identity);
+  auto values = maker.flatVector<int64_t>(12, folly::identity);
+  auto offsets = allocateIndices(3, pool.get());
+  auto sizes = allocateIndices(3, pool.get());
+
+  for (int i = 0; i < 3; ++i) {
+    offsets->asMutable<vector_size_t>()[i] = 3 * i;
+    sizes->asMutable<vector_size_t>()[i] = 3;
+  }
+  auto batch = std::make_shared<MapVector>(
+      pool.get(),
+      MAP(BIGINT(), BIGINT()),
+      nullptr,
+      3,
+      offsets,
+      sizes,
+      keys,
+      values);
+  testMapWriter<int64_t, int64_t>(*pool, batch, false);
+  testMapWriter<int64_t, int64_t>(*pool, batch, true);
+
+  for (int i = 0; i < 3; ++i) {
+    offsets->asMutable<vector_size_t>()[i] = 4 * i;
+    sizes->asMutable<vector_size_t>()[i] = 4;
+  }
+  batch = std::make_shared<MapVector>(
+      pool.get(),
+      MAP(BIGINT(), BIGINT()),
+      nullptr,
+      3,
+      offsets,
+      sizes,
+      keys,
+      values);
+  ASSERT_THROW(
+      (testMapWriter<int64_t, int64_t>(*pool, batch, false)),
+      exception::LoggedException);
+  ASSERT_THROW(
+      (testMapWriter<int64_t, int64_t>(*pool, batch, true)),
+      exception::LoggedException);
 }
 
 TEST(ColumnWriterTests, TestStructKeysConfigSerializationDeserialization) {

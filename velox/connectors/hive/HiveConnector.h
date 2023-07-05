@@ -16,6 +16,7 @@
 #pragma once
 
 #include "velox/common/caching/SsdFile.h" // Needed by presto_cpp
+#include "velox/connectors/hive/HiveConfig.h"
 #include "velox/connectors/hive/HiveDataSink.h"
 #include "velox/connectors/hive/HiveDataSource.h"
 #include "velox/dwio/common/DataSink.h"
@@ -40,16 +41,23 @@ class HiveConnector : public Connector {
           std::string,
           std::shared_ptr<connector::ColumnHandle>>& columnHandles,
       ConnectorQueryCtx* connectorQueryCtx) override {
+    dwio::common::ReaderOptions options(connectorQueryCtx->memoryPool());
+    options.setMaxCoalesceBytes(
+        HiveConfig::maxCoalescedBytes(connectorQueryCtx->config()));
+    options.setMaxCoalesceDistance(
+        HiveConfig::maxCoalescedDistanceBytes(connectorQueryCtx->config()));
     return std::make_unique<HiveDataSource>(
         outputType,
         tableHandle,
         columnHandles,
         &fileHandleFactory_,
-        connectorQueryCtx->memoryPool(),
         connectorQueryCtx->expressionEvaluator(),
         connectorQueryCtx->allocator(),
         connectorQueryCtx->scanId(),
-        executor_);
+        HiveConfig::isFileColumnNamesReadAsLowerCase(
+            connectorQueryCtx->config()),
+        executor_,
+        options);
   }
 
   bool supportsSplitPreload() override {
@@ -95,12 +103,12 @@ class HiveConnectorFactory : public ConnectorFactory {
       "hive-hadoop2";
 
   HiveConnectorFactory() : ConnectorFactory(kHiveConnectorName) {
-    dwio::common::LocalFileSink::registerFactory();
+    dwio::common::WriteFileDataSink::registerLocalFileFactory();
   }
 
   HiveConnectorFactory(const char* FOLLY_NONNULL connectorName)
       : ConnectorFactory(connectorName) {
-    dwio::common::LocalFileSink::registerFactory();
+    dwio::common::WriteFileDataSink::registerLocalFileFactory();
   }
 
   std::shared_ptr<Connector> newConnector(

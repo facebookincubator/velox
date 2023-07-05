@@ -25,6 +25,7 @@
 #include "velox/common/testutil/TestValue.h"
 
 DECLARE_bool(velox_memory_leak_check_enabled);
+DECLARE_bool(velox_memory_pool_debug_enabled);
 DECLARE_int32(velox_memory_num_shared_leaf_pools);
 
 using namespace ::testing;
@@ -190,6 +191,10 @@ TEST_P(MemoryPoolTest, Ctor) {
     ASSERT_EQ(grandChild->root(), root.get());
     ASSERT_EQ(grandChild->capacity(), capacity);
   }
+  // Check we can't create a memory pool with zero max capacity.
+  VELOX_ASSERT_THROW(
+      manager.addRootPool("rootWithZeroMaxCapacity", 0),
+      "Memory pool rootWithZeroMaxCapacity max capacity can't be zero");
 }
 
 TEST_P(MemoryPoolTest, AddChild) {
@@ -374,6 +379,7 @@ TEST_P(MemoryPoolTest, AllocTest) {
 
 TEST_P(MemoryPoolTest, DISABLED_memoryLeakCheck) {
   gflags::FlagSaver flagSaver;
+  testing::FLAGS_gtest_death_test_style = "fast";
   auto manager = getMemoryManager(8 * GB);
   auto root = manager->addRootPool();
 
@@ -383,6 +389,27 @@ TEST_P(MemoryPoolTest, DISABLED_memoryLeakCheck) {
   FLAGS_velox_memory_leak_check_enabled = true;
   ASSERT_DEATH(child.reset(), "");
   child->free(oneChunk, kChunkSize);
+}
+
+TEST_P(MemoryPoolTest, DISABLED_growBeyondMaxCapacity) {
+  gflags::FlagSaver flagSaver;
+  testing::FLAGS_gtest_death_test_style = "fast";
+  auto manager = getMemoryManager(8 * GB);
+  {
+    auto poolWithoutLimit = manager->addRootPool("poolWithoutLimit");
+    ASSERT_EQ(poolWithoutLimit->capacity(), kMaxMemory);
+    ASSERT_DEATH(
+        poolWithoutLimit->grow(1), "Can't grow with unlimited capacity");
+  }
+  {
+    const int64_t capacity = 4 * GB;
+    auto poolWithLimit = manager->addRootPool("poolWithLimit", capacity);
+    ASSERT_EQ(poolWithLimit->capacity(), capacity);
+    ASSERT_EQ(poolWithLimit->shrink(poolWithLimit->currentBytes()), capacity);
+    ASSERT_EQ(poolWithLimit->grow(capacity / 2), capacity / 2);
+    ASSERT_DEATH(
+        poolWithLimit->grow(capacity), "Can't grow beyond the max capacity");
+  }
 }
 
 TEST_P(MemoryPoolTest, ReallocTestSameSize) {
@@ -523,7 +550,7 @@ TEST_P(MemoryPoolTest, MemoryCapExceptions) {
         ASSERT_EQ(error_code::kMemCapExceeded.c_str(), ex.errorCode());
         ASSERT_TRUE(ex.isRetriable());
         ASSERT_EQ(
-            "\nExceeded memory pool cap of 127.00MB when requesting 128.00MB, memory manager cap is 127.00MB\nMemoryCapExceptions usage 0B peak 0B\n\nFailed memory pool: static_quota: 0B\n",
+            "\nExceeded memory pool cap of 127.00MB with max 127.00MB when requesting 128.00MB, memory manager cap is 127.00MB\nMemoryCapExceptions usage 0B peak 0B\n\nFailed memory pool: static_quota: 0B\n",
             ex.message());
       }
     }
@@ -1898,6 +1925,7 @@ TEST_P(MemoryPoolTest, concurrentUpdateToDifferentPools) {
 }
 
 TEST_P(MemoryPoolTest, concurrentUpdatesToTheSamePool) {
+  FLAGS_velox_memory_pool_debug_enabled = true;
   if (!isLeafThreadSafe_) {
     return;
   }
@@ -1947,6 +1975,7 @@ TEST_P(MemoryPoolTest, concurrentUpdatesToTheSamePool) {
 }
 
 TEST_P(MemoryPoolTest, concurrentUpdateToSharedPools) {
+  // under some conditions bug.
   constexpr int64_t kMaxMemory = 10 * GB;
   MemoryManager manager{{.capacity = kMaxMemory}};
   const int32_t kNumThreads = FLAGS_velox_memory_num_shared_leaf_pools;
@@ -2080,9 +2109,67 @@ TEST(MemoryPoolTest, visitChildren) {
   });
 }
 
+TEST(MemoryPoolTest, debugMode) {
+  FLAGS_velox_memory_pool_debug_enabled = true;
+  constexpr int64_t kMaxMemory = 10 * GB;
+  constexpr int64_t kNumIterations = 100;
+  const std::vector<int64_t> kAllocSizes = {128, 8 * KB, 2 * MB};
+  const auto checkAllocs =
+      [](const std::unordered_map<uint64_t, MemoryPoolImpl::AllocationRecord>&
+             records,
+         uint64_t size) {
+        for (const auto& pair : records) {
+          EXPECT_EQ(pair.second.size, size);
+          EXPECT_FALSE(pair.second.callStack.empty());
+        }
+      };
+
+  MemoryManager manager{{.capacity = kMaxMemory, .debugEnabled = true}};
+  auto pool = manager.addRootPool("root")->addLeafChild("child");
+  const auto& allocRecords = std::dynamic_pointer_cast<MemoryPoolImpl>(pool)
+                                 ->testingDebugAllocRecords();
+  std::vector<void*> smallAllocs;
+  for (int32_t i = 0; i < kNumIterations; i++) {
+    smallAllocs.push_back(pool->allocate(kAllocSizes[0]));
+  }
+  EXPECT_EQ(allocRecords.size(), kNumIterations);
+  checkAllocs(allocRecords, kAllocSizes[0]);
+  for (int32_t i = 0; i < kNumIterations; i++) {
+    pool->free(smallAllocs[i], kAllocSizes[0]);
+  }
+  EXPECT_EQ(allocRecords.size(), 0);
+
+  std::vector<Allocation> mediumAllocs;
+  for (int32_t i = 0; i < kNumIterations; i++) {
+    Allocation out;
+    pool->allocateNonContiguous(
+        AllocationTraits::numPages(kAllocSizes[1]), out);
+    mediumAllocs.push_back(std::move(out));
+  }
+  EXPECT_EQ(allocRecords.size(), kNumIterations);
+  checkAllocs(allocRecords, kAllocSizes[1]);
+  for (int32_t i = 0; i < kNumIterations; i++) {
+    pool->freeNonContiguous(mediumAllocs[i]);
+  }
+  EXPECT_EQ(allocRecords.size(), 0);
+
+  std::vector<ContiguousAllocation> largeAllocs;
+  for (int32_t i = 0; i < kNumIterations; i++) {
+    ContiguousAllocation out;
+    pool->allocateContiguous(AllocationTraits::numPages(kAllocSizes[2]), out);
+    largeAllocs.push_back(std::move(out));
+  }
+  EXPECT_EQ(allocRecords.size(), kNumIterations);
+  checkAllocs(allocRecords, kAllocSizes[2]);
+  for (int32_t i = 0; i < kNumIterations; i++) {
+    pool->freeContiguous(largeAllocs[i]);
+  }
+  EXPECT_EQ(allocRecords.size(), 0);
+}
+
 TEST_P(MemoryPoolTest, shrinkAndGrowAPIs) {
   MemoryManager manager;
-  std::vector<uint64_t> capacities = {kMaxMemory, 0, 128 * MB};
+  std::vector<uint64_t> capacities = {kMaxMemory, 128 * MB};
   const int allocationSize = 8 * MB;
   for (const auto& capacity : capacities) {
     SCOPED_TRACE(fmt::format("capacity {}", succinctBytes(capacity)));
@@ -2839,7 +2926,7 @@ class MockMemoryReclaimer : public MemoryReclaimer {
 
 TEST_P(MemoryPoolTest, abortAPI) {
   MemoryManager manager;
-  std::vector<uint64_t> capacities = {kMaxMemory, 0, 128 * MB};
+  std::vector<uint64_t> capacities = {kMaxMemory, 128 * MB};
   for (const auto& capacity : capacities) {
     SCOPED_TRACE(fmt::format("capacity {}", succinctBytes(capacity)));
     {

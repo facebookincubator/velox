@@ -31,6 +31,7 @@
 #include "velox/common/memory/MemoryArbitrator.h"
 
 DECLARE_bool(velox_memory_leak_check_enabled);
+DECLARE_bool(velox_memory_pool_debug_enabled);
 
 namespace facebook::velox::memory {
 #define VELOX_MEM_POOL_CAP_EXCEEDED(errorMessage)                   \
@@ -135,7 +136,7 @@ class MemoryPool : public std::enable_shared_from_this<MemoryPool> {
     /// enable it on a subset of memory pools.
     bool trackUsage{true};
 
-    /// If true, track the leaf memory pool usage in a thread-safe mode
+    /// If true, tracks the leaf memory pool usage in a thread-safe mode
     /// otherwise not. This only applies for leaf memory pool with memory usage
     /// tracking enabled. We use non-thread safe tracking mode for single
     /// threaded use case.
@@ -147,11 +148,15 @@ class MemoryPool : public std::enable_shared_from_this<MemoryPool> {
     /// TODO: deprecate this flag after all the existing memory leak use cases
     /// have been fixed.
     ///
-    /// If true, check the memory usage leak on destruction.
+    /// If true, checks the memory usage leak on destruction.
     ///
     /// NOTE: user can turn on/off the memory leak check of each individual
     /// memory pools from the same root memory pool independently.
     bool checkUsageLeak{FLAGS_velox_memory_leak_check_enabled};
+
+    /// If true, tracks the allocation and free call stacks to detect the source
+    /// of memory leak for testing purpose.
+    bool debugEnabled{FLAGS_velox_memory_pool_debug_enabled};
   };
 
   /// Constructs a named memory pool with specified 'name', 'parent' and 'kind'.
@@ -162,7 +167,6 @@ class MemoryPool : public std::enable_shared_from_this<MemoryPool> {
       const std::string& name,
       Kind kind,
       std::shared_ptr<MemoryPool> parent,
-      std::unique_ptr<MemoryReclaimer> reclaimer,
       const Options& options);
 
   /// Removes this memory pool's tracking from its parent through dropChild().
@@ -359,27 +363,27 @@ class MemoryPool : public std::enable_shared_from_this<MemoryPool> {
   ///
   /// NOTE: this shall only be called at most once if the memory pool hasn't set
   /// reclaimer on construction.
-  virtual void setReclaimer(std::unique_ptr<MemoryReclaimer> reclaimer);
+  virtual void setReclaimer(std::unique_ptr<MemoryReclaimer> reclaimer) = 0;
 
   /// Returns the memory reclaimer of this memory pool if not null.
-  virtual MemoryReclaimer* reclaimer() const;
+  virtual MemoryReclaimer* reclaimer() const = 0;
 
   /// Invoked by the memory arbitrator to enter memory arbitration processing.
   /// It is a noop if 'reclaimer_' is not set, otherwise invoke the reclaimer's
   /// corresponding method.
-  virtual void enterArbitration();
+  virtual void enterArbitration() = 0;
 
   /// Invoked by the memory arbitrator to leave memory arbitration processing.
   /// It is a noop if 'reclaimer_' is not set, otherwise invoke the reclaimer's
   /// corresponding method.
-  virtual void leaveArbitration() noexcept;
+  virtual void leaveArbitration() noexcept = 0;
 
   /// Returns how many bytes is reclaimable from this memory pool. The function
   /// returns true if this memory pool is reclaimable, and returns the estimated
   /// reclaimable bytes in 'reclaimableBytes'. If 'reclaimer_' is not set, the
   /// function returns false, otherwise invoke the reclaimer's corresponding
   /// method.
-  virtual bool reclaimableBytes(uint64_t& reclaimableBytes) const;
+  virtual bool reclaimableBytes(uint64_t& reclaimableBytes) const = 0;
 
   /// Invoked by the memory arbitrator to reclaim memory from this memory pool
   /// with specified reclaim target bytes. If 'targetBytes' is zero, then it
@@ -387,7 +391,7 @@ class MemoryPool : public std::enable_shared_from_this<MemoryPool> {
   /// noop if the reclaimer is not set, otherwise invoke the reclaimer's
   /// corresponding method. The function returns the actually freed capacity
   /// from the root of this memory pool.
-  virtual uint64_t reclaim(uint64_t targetBytes);
+  virtual uint64_t reclaim(uint64_t targetBytes) = 0;
 
   /// Invoked by the memory arbitrator to abort a root memory pool. The function
   /// forwards the request to the corresponding query object to abort its
@@ -495,6 +499,7 @@ class MemoryPool : public std::enable_shared_from_this<MemoryPool> {
   const bool trackUsage_;
   const bool threadSafe_;
   const bool checkUsageLeak_;
+  const bool debugEnabled_;
 
   /// Indicates if the memory pool has been aborted by the memory arbitrator or
   /// not.
@@ -504,11 +509,6 @@ class MemoryPool : public std::enable_shared_from_this<MemoryPool> {
   std::atomic<bool> aborted_{false};
 
   mutable folly::SharedMutex poolMutex_;
-  /// Used by memory arbitration to reclaim memory from the associated query
-  /// object if not null. For example, a memory pool can reclaim the used memory
-  /// from a spillable operator through disk spilling. If null, we can't reclaim
-  /// memory from this memory pool.
-  std::unique_ptr<MemoryReclaimer> reclaimer_;
   // NOTE: we use raw pointer instead of weak pointer here to minimize
   // visitChildren() cost as we don't have to upgrade the weak pointer and copy
   // out the upgraded shared pointers.git
@@ -586,6 +586,18 @@ class MemoryPoolImpl : public MemoryPool {
 
   uint64_t freeBytes() const override;
 
+  void setReclaimer(std::unique_ptr<MemoryReclaimer> reclaimer) override;
+
+  MemoryReclaimer* reclaimer() const override;
+
+  void enterArbitration() override;
+
+  void leaveArbitration() noexcept override;
+
+  bool reclaimableBytes(uint64_t& reclaimableBytes) const override;
+
+  uint64_t reclaim(uint64_t targetBytes) override;
+
   uint64_t shrink(uint64_t targetBytes = 0) override;
 
   uint64_t grow(uint64_t bytes) noexcept override;
@@ -605,6 +617,16 @@ class MemoryPoolImpl : public MemoryPool {
 
   MemoryAllocator* testingAllocator() const {
     return allocator_;
+  }
+
+  /// Structure to store allocation details in debug mode.
+  struct AllocationRecord {
+    uint64_t size;
+    std::string callStack;
+  };
+
+  std::unordered_map<uint64_t, AllocationRecord>& testingDebugAllocRecords() {
+    return debugAllocRecords_;
   }
 
  private:
@@ -845,6 +867,46 @@ class MemoryPoolImpl : public MemoryPool {
     return out.str();
   }
 
+  // Recording on every allocation is very expensive and normally will result
+  // in CPU saturation. Modify this method while debugging to limit the number
+  // of times that the allocations are recorded. 'isAlloc' will be true at
+  // allocation sites, false at free sites. A good example of this filter would
+  // be based on the 'name_' of the MemoryPool.
+  //  TODO(jtan6): Add support for dynamic condition change.
+  bool needRecordDbg(bool isAlloc);
+
+  // Invoked to record the call stack of a buffer allocation if debug mode of
+  // this memory pool is enabled.
+  void recordAllocDbg(const void* addr, uint64_t size);
+
+  // Invoked to record the call stack of a non-contiguous allocation if debug
+  // mode of this memory pool is enabled.
+  void recordAllocDbg(const Allocation& allocation);
+
+  // Invoked to record the call stack of a contiguous allocation if debug mode
+  // of this memory pool is enabled.
+  void recordAllocDbg(const ContiguousAllocation& allocation);
+
+  // Invoked to free the call stack of a buffer allocation if debug mode of this
+  // memory pool is enabled.
+  void recordFreeDbg(const void* addr, uint64_t size);
+
+  // Invoked to free the call stack of a non-contiguous allocation if debug mode
+  // of this memory pool is enabled.
+  void recordFreeDbg(const Allocation& allocation);
+
+  // Invoked to free the call stack of a contiguous allocation if debug mode
+  // of this memory pool is enabled.
+  void recordFreeDbg(const ContiguousAllocation& allocation);
+
+  // Invoked by memory pool destructor to detect the sources of leaked memory
+  // allocations from the call sites which are still recorded in
+  // 'debugAllocRecords_'. If there is no memory leaks, 'debugAllocRecords_'
+  // should be empty as all the memory allocations should have been freed on
+  // memory pool destruction. We only check this if debug mode of this memory
+  // pool is enabled.
+  void leakCheckDbg();
+
   MemoryManager* const manager_;
   MemoryAllocator* const allocator_;
   const DestructionCallback destructionCb_;
@@ -855,6 +917,12 @@ class MemoryPoolImpl : public MemoryPool {
   // work based on atomic 'reservationBytes_' without mutex as children updating
   // the same parent do not have to be serialized.
   mutable std::mutex mutex_;
+
+  // Used by memory arbitration to reclaim memory from the associated query
+  // object if not null. For example, a memory pool can reclaim the used memory
+  // from a spillable operator through disk spilling. If null, we can't reclaim
+  // memory from this memory pool.
+  std::unique_ptr<MemoryReclaimer> reclaimer_;
 
   // The memory cap in bytes to enforce.
   int64_t capacity_;
@@ -890,6 +958,11 @@ class MemoryPoolImpl : public MemoryPool {
   // The number of internal memory reservation collisions caused by concurrent
   // memory reservation requests.
   std::atomic<uint64_t> numCollisions_{0};
+
+  // Mutex for 'debugAllocRecords_'.
+  std::mutex debugAllocMutex_;
+  // Map from address to 'AllocationRecord'.
+  std::unordered_map<uint64_t, AllocationRecord> debugAllocRecords_;
 };
 
 /// An Allocator backed by a memory pool for STL containers.

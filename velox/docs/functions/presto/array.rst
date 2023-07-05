@@ -155,6 +155,10 @@ Array Functions
         SELECT combinations(ARRAY[1,2,3,4,5],3); --[[1,2,3], [1,2,4], [1,3,4], [2,3,4]]
         SELECT combinations(ARRAY[1,2,2],2); --[[1,2],[1,2],[2,2]]
 
+.. function:: concat(array1, array2, ..., arrayN) -> array
+
+    Concatenates the arrays ``array1``, ``array2``, ..., ``arrayN``. This function provides the same functionality as the SQL-standard concatenation operator (``||``).
+
 .. function:: contains(x, element) -> boolean
 
     Returns true if the array ``x`` contains the ``element``.
@@ -172,6 +176,10 @@ Array Functions
         SELECT filter(ARRAY [], x -> true); -- []
         SELECT filter(ARRAY [5, -6, NULL, 7], x -> x > 0); -- [5, 7]
         SELECT filter(ARRAY [5, NULL, 7, NULL], x -> x IS NOT NULL); -- [5, 7]
+
+.. function:: flatten(array(array(T))) -> array(T)
+
+    Flattens an ``array(array(T))`` to an ``array(T)`` by concatenating the contained arrays.
 
 .. function:: reduce(array(T), initialState S, inputFunction(S,T,S), outputFunction(S,R)) -> R
 
@@ -240,6 +248,14 @@ Array Functions
         SELECT transform(ARRAY [5, NULL, 6], x -> COALESCE(x, 0) + 1); -- [6, 1, 7]
         SELECT transform(ARRAY ['x', 'abc', 'z'], x -> x || '0'); -- ['x0', 'abc0', 'z0']
         SELECT transform(ARRAY [ARRAY [1, NULL, 2], ARRAY[3, NULL]], a -> filter(a, x -> x IS NOT NULL)); -- [[1, 2], [3]]
+
+.. function:: trim_array(x, n) -> array
+
+    Remove n elements from the end of ``array``::
+
+        SELECT trim_array(ARRAY[1, 2, 3, 4], 1); -- [1, 2, 3]
+        SELECT trim_array(ARRAY[1, 2, 3, 4], 2); -- [1, 2]
+        SELECT trim_array(ARRAY[1, 2, 3, 4], 4); -- []
 
 .. function:: zip(array(T), array(U),..) -> array(row(T,U, ...))
 

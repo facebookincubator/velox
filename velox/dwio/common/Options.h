@@ -50,6 +50,13 @@ enum class FileFormat {
 FileFormat toFileFormat(std::string s);
 std::string toString(FileFormat fmt);
 
+FOLLY_ALWAYS_INLINE std::ostream& operator<<(
+    std::ostream& output,
+    const FileFormat& fmt) {
+  output << toString(fmt);
+  return output;
+}
+
 /**
  * Formatting options for serialization.
  */
@@ -354,25 +361,29 @@ class ReaderOptions {
   PrefetchMode prefetchMode;
   int32_t loadQuantum_{kDefaultLoadQuantum};
   int32_t maxCoalesceDistance_{kDefaultCoalesceDistance};
+  int64_t maxCoalesceBytes_{kDefaultCoalesceBytes};
   SerDeOptions serDeOptions;
   std::shared_ptr<encryption::DecrypterFactory> decrypterFactory_;
   uint64_t directorySizeGuess{kDefaultDirectorySizeGuess};
   uint64_t filePreloadThreshold{kDefaultFilePreloadThreshold};
+  bool fileColumnNamesReadAsLowerCase = false;
 
  public:
   static constexpr int32_t kDefaultLoadQuantum = 8 << 20; // 8MB
   static constexpr int32_t kDefaultCoalesceDistance = 512 << 10; // 512K
+  static constexpr int32_t kDefaultCoalesceBytes = 128 << 20; // 128M
   static constexpr uint64_t kDefaultDirectorySizeGuess = 1024 * 1024; // 1MB
   static constexpr uint64_t kDefaultFilePreloadThreshold =
       1024 * 1024 * 8; // 8MB
 
-  ReaderOptions(velox::memory::MemoryPool* pool)
+  explicit ReaderOptions(velox::memory::MemoryPool* pool)
       : tailLocation(std::numeric_limits<uint64_t>::max()),
         memoryPool(pool),
         fileFormat(FileFormat::UNKNOWN),
         fileSchema(nullptr),
         autoPreloadLength(DEFAULT_AUTO_PRELOAD_SIZE),
-        prefetchMode(PrefetchMode::PREFETCH) {
+        prefetchMode(PrefetchMode::PREFETCH),
+        fileColumnNamesReadAsLowerCase(false) {
     // PASS
   }
 
@@ -391,6 +402,9 @@ class ReaderOptions {
     decrypterFactory_ = other.decrypterFactory_;
     directorySizeGuess = other.directorySizeGuess;
     filePreloadThreshold = other.filePreloadThreshold;
+    fileColumnNamesReadAsLowerCase = other.fileColumnNamesReadAsLowerCase;
+    maxCoalesceDistance_ = other.maxCoalesceDistance_;
+    maxCoalesceBytes_ = other.maxCoalesceBytes_;
     return *this;
   }
 
@@ -469,6 +483,13 @@ class ReaderOptions {
     maxCoalesceDistance_ = distance;
     return *this;
   }
+  /**
+   * Modify the maximum load coalesce bytes.
+   */
+  ReaderOptions& setMaxCoalesceBytes(int64_t bytes) {
+    maxCoalesceBytes_ = bytes;
+    return *this;
+  }
 
   /**
    * Modify the serialization-deserialization options.
@@ -491,6 +512,12 @@ class ReaderOptions {
 
   ReaderOptions& setFilePreloadThreshold(uint64_t threshold) {
     filePreloadThreshold = threshold;
+    return *this;
+  }
+
+  ReaderOptions& setFileColumnNamesReadAsLowerCase(
+      bool fileColumnNamesReadAsLowerCaseMode) {
+    fileColumnNamesReadAsLowerCase = fileColumnNamesReadAsLowerCaseMode;
     return *this;
   }
 
@@ -539,6 +566,10 @@ class ReaderOptions {
     return maxCoalesceDistance_;
   }
 
+  int64_t maxCoalesceBytes() const {
+    return maxCoalesceBytes_;
+  }
+
   SerDeOptions& getSerDeOptions() {
     return serDeOptions;
   }
@@ -558,6 +589,10 @@ class ReaderOptions {
 
   uint64_t getFilePreloadThreshold() const {
     return filePreloadThreshold;
+  }
+
+  bool isFileColumnNamesReadAsLowerCase() const {
+    return fileColumnNamesReadAsLowerCase;
   }
 };
 

@@ -18,19 +18,14 @@
 
 namespace facebook::velox::tests::utils {
 
-Result getSegments(
-    std::vector<std::string> buffers,
-    const std::unordered_set<size_t>& skip) {
-  Result result;
-  result.buffers = std::move(buffers);
-  uint64_t lastOffset = 0;
-  size_t i = 0;
-  for (auto& buffer : result.buffers) {
-    if (skip.count(i++) == 0) {
-      result.segments.emplace_back(ReadFile::Segment{
-          lastOffset, folly::Range<char*>(&buffer[0], buffer.size()), {}});
-    }
-    lastOffset += buffer.size();
+std::vector<std::string> iobufsToStrings(
+    const std::vector<folly::IOBuf>& iobufs) {
+  std::vector<std::string> result;
+  result.reserve(iobufs.size());
+  for (auto& iobuf : iobufs) {
+    auto coalesced = iobuf.cloneCoalescedAsValueWithHeadroomTailroom(0, 0);
+    result.emplace_back(
+        reinterpret_cast<const char*>(coalesced.data()), coalesced.length());
   }
   return result;
 }

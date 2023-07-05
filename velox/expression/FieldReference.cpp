@@ -16,6 +16,8 @@
 
 #include "velox/expression/FieldReference.h"
 
+#include "velox/expression/PeeledEncoding.h"
+
 namespace facebook::velox::exec {
 
 void FieldReference::evalSpecialForm(
@@ -28,8 +30,11 @@ void FieldReference::evalSpecialForm(
   const RowVector* row;
   DecodedVector decoded;
   VectorPtr input;
+  std::shared_ptr<PeeledEncoding> peeledEncoding;
   VectorRecycler inputRecycler(input, context.vectorPool());
   bool useDecode = false;
+  LocalSelectivityVector nonNullRowsHolder(*context.execCtx());
+  const SelectivityVector* nonNullRows = &rows;
   if (inputs_.empty()) {
     row = context.row();
   } else {
@@ -47,10 +52,29 @@ void FieldReference::evalSpecialForm(
     }
 
     decoded.decode(*input, rows);
+    if (decoded.mayHaveNulls()) {
+      nonNullRowsHolder.get(rows);
+      nonNullRowsHolder->deselectNulls(
+          decoded.nulls(), rows.begin(), rows.end());
+      nonNullRows = nonNullRowsHolder.get();
+      if (!nonNullRows->hasSelections()) {
+        addNulls(rows, decoded.nulls(), context, result);
+        return;
+      }
+    }
     useDecode = !decoded.isIdentityMapping();
-    const BaseVector* base = decoded.base();
-    VELOX_CHECK(base->encoding() == VectorEncoding::Simple::ROW);
-    row = base->as<const RowVector>();
+    if (useDecode) {
+      std::vector<VectorPtr> peeledVectors;
+      LocalDecodedVector localDecoded{context};
+      peeledEncoding = PeeledEncoding::peel(
+          {input}, *nonNullRows, localDecoded, true, peeledVectors);
+      VELOX_CHECK_NOT_NULL(peeledEncoding);
+      VELOX_CHECK(peeledVectors[0]->encoding() == VectorEncoding::Simple::ROW);
+      row = peeledVectors[0]->as<const RowVector>();
+    } else {
+      VELOX_CHECK(input->encoding() == VectorEncoding::Simple::ROW);
+      row = input->as<const RowVector>();
+    }
   }
   if (index_ == -1) {
     auto rowType = dynamic_cast<const RowType*>(row->type().get());
@@ -59,20 +83,23 @@ void FieldReference::evalSpecialForm(
   }
   VectorPtr child =
       inputs_.empty() ? context.getField(index_) : row->childAt(index_);
+  if (child->encoding() == VectorEncoding::Simple::LAZY) {
+    child = BaseVector::loadedVectorShared(child);
+  }
   if (result.get()) {
-    auto indices = useDecode ? decoded.indices() : nullptr;
-    result->copy(child.get(), rows, indices);
-  } else {
-    if (child->encoding() == VectorEncoding::Simple::LAZY) {
-      child = BaseVector::loadedVectorShared(child);
+    if (useDecode) {
+      child = peeledEncoding->wrap(type_, context.pool(), child, *nonNullRows);
     }
+    result->copy(child.get(), *nonNullRows, nullptr);
+  } else {
     // The caller relies on vectors having a meaningful size. If we
     // have a constant that is not wrapped in anything we set its size
     // to correspond to rows.end().
     if (!useDecode && child->isConstantEncoding()) {
-      child = BaseVector::wrapInConstant(rows.end(), 0, child);
+      child = BaseVector::wrapInConstant(nonNullRows->end(), 0, child);
     }
-    result = useDecode ? std::move(decoded.wrap(child, *input, rows.end()))
+    result = useDecode ? std::move(peeledEncoding->wrap(
+                             type_, context.pool(), child, *nonNullRows))
                        : std::move(child);
   }
 

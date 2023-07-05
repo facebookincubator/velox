@@ -18,6 +18,7 @@
 
 #include <chrono>
 
+#include "velox/common/file/File.h"
 #include "velox/dwio/common/Closeable.h"
 #include "velox/dwio/common/DataBuffer.h"
 #include "velox/dwio/common/IoStatistics.h"
@@ -133,6 +134,39 @@ class DataSink : public Closeable {
   }
 };
 
+// Wrapper class that delegates calls to the underlying WriteFile
+class WriteFileDataSink final : public DataSink {
+ public:
+  explicit WriteFileDataSink(
+      std::unique_ptr<WriteFile> writeFile,
+      std::string name,
+      MetricsLogPtr metricLogger = MetricsLog::voidLog(),
+      IoStatistics* stats = nullptr)
+      : DataSink(std::move(name), std::move(metricLogger), stats),
+        writeFile_{std::move(writeFile)} {}
+
+  static void registerLocalFileFactory();
+
+  ~WriteFileDataSink() override {
+    destroy();
+  }
+
+  bool isBuffered() const override {
+    return false;
+  }
+
+  static void registerFactory();
+
+  using DataSink::write;
+
+  void write(std::vector<DataBuffer<char>>& buffers) override;
+
+  void doClose() override;
+
+ private:
+  std::shared_ptr<WriteFile> writeFile_;
+};
+
 class LocalFileSink : public DataSink {
  public:
   explicit LocalFileSink(
@@ -195,13 +229,9 @@ class MemorySink : public DataSink {
   DataBuffer<char> data_;
 };
 
-} // namespace facebook::velox::dwio::common
+void registerDataSinks();
 
-#define VELOX_STATIC_REGISTER_DATA_SINK(function)                           \
-  namespace {                                                               \
-  static bool FB_ANONYMOUS_VARIABLE(g_DataSinkFunction) =                   \
-      facebook::velox::dwio::common::DataSink::registerFactory((function)); \
-  }
+} // namespace facebook::velox::dwio::common
 
 #define VELOX_REGISTER_DATA_SINK_METHOD_DEFINITION(class, function)       \
   void class ::registerFactory() {                                        \

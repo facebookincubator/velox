@@ -37,28 +37,13 @@
 #include <folly/futures/Future.h>
 
 #include "velox/common/base/Exceptions.h"
+#include "velox/common/file/Region.h"
 
 namespace facebook::velox {
 
 // A read-only file.  All methods in this object should be thread safe.
 class ReadFile {
  public:
-  struct Segment {
-    // offset in the file to start reading from.
-    uint64_t offset;
-
-    // Buffer to save the data to. buffer.size() bytes will be read from the
-    // file and stored in it.
-    folly::Range<char*> buffer;
-
-    // optional: label for caching purposes.
-    // It should contain a label stating the column name or whatever logical
-    // identifier of the segment of the file that is being read. The reader can
-    // use this information to decide whether or not to cache this information
-    // if this is a frequently accessed element across the table.
-    std::string_view label;
-  };
-
   virtual ~ReadFile() = default;
 
   // Reads the data at [offset, offset + length) into the provided pre-allocated
@@ -83,12 +68,17 @@ class ReadFile {
       const std::vector<folly::Range<char*>>& /*buffers*/) const;
 
   // Vectorized read API. Implementations can coalesce and parallelize.
-  // It is different to the preadv above because we can add a label to the
-  // segment and because the offsets don't need to be sorted.
-  // In the preadv above offsets of buffers are always
+  // The offsets don't need to be sorted.
+  // `iobufs` is a range of IOBufs to store the read data. They
+  // will be stored in the same order as the input `regions` vector. So the
+  // array must be pre-allocated by the caller, with the same size as `regions`,
+  // but don't need to be initialized, since each iobuf will be copy-constructed
+  // by the preadv.
   //
   // This method should be thread safe.
-  virtual void preadv(const std::vector<Segment>& segments) const;
+  virtual void preadv(
+      folly::Range<const common::Region*> regions,
+      folly::Range<folly::IOBuf*> iobufs) const;
 
   // Like preadv but may execute asynchronously and returns the read
   // size or exception via SemiFuture. Use hasPreadvAsync() to check
@@ -278,8 +268,12 @@ class LocalReadFile final : public ReadFile {
 
 class LocalWriteFile final : public WriteFile {
  public:
-  // An error is thrown is a file already exists at |path|.
-  explicit LocalWriteFile(std::string_view path);
+  // An error is thrown is a file already exists at |path|,
+  // unless flag shouldThrowOnFileAlreadyExists is false
+  explicit LocalWriteFile(
+      std::string_view path,
+      bool shouldCreateParentDirectories = false,
+      bool shouldThrowOnFileAlreadyExists = true);
   ~LocalWriteFile();
 
   void append(std::string_view data) final;

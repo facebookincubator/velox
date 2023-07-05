@@ -814,6 +814,8 @@ namespace {
 class ThrowNode : public core::PlanNode {
  public:
   enum class OperatorMethod {
+    kIsBlocked,
+    kNeedsInput,
     kAddInput,
     kNoMoreInput,
     kGetOutput,
@@ -859,6 +861,14 @@ class ThrowOperator : public Operator {
         throwingMethod_{node->throwingMethod()} {}
 
   bool needsInput() const override {
+    if (throwingMethod_ == ThrowNode::OperatorMethod::kNeedsInput) {
+      // Trigger a std::bad_function_call exception.
+      std::function<bool(vector_size_t)> nullFunction = nullptr;
+
+      if (nullFunction(123)) {
+        return false;
+      }
+    }
     return !noMoreInput_ && !input_;
   }
 
@@ -901,6 +911,14 @@ class ThrowOperator : public Operator {
   }
 
   BlockingReason isBlocked(ContinueFuture* /*future*/) override {
+    if (throwingMethod_ == ThrowNode::OperatorMethod::kIsBlocked) {
+      // Trigger a std::bad_function_call exception.
+      std::function<bool()> nullFunction = nullptr;
+
+      if (nullFunction()) {
+        return BlockingReason::kWaitForMemory;
+      }
+    }
     return BlockingReason::kNotBlocked;
   }
 
@@ -958,11 +976,14 @@ TEST_F(DriverTest, driverCreationThrow) {
                         id, ThrowNode::OperatorMethod::kAddInput, input);
                   })
                   .planNode();
-
+  CursorParameters params;
+  params.planNode = plan;
+  params.maxDrivers = 5;
+  auto cursor = std::make_unique<TaskCursor>(params);
+  auto task = cursor->task();
   // Ensure execution threw correct error.
-  VELOX_ASSERT_THROW(
-      AssertQueryBuilder(plan).maxDrivers(2).copyResults(pool()),
-      "Too many drivers");
+  VELOX_ASSERT_THROW(cursor->moveNext(), "Too many drivers");
+  EXPECT_EQ(TaskState::kFailed, task->state());
 }
 
 TEST_F(DriverTest, nonVeloxOperatorException) {
@@ -979,6 +1000,16 @@ TEST_F(DriverTest, nonVeloxOperatorException) {
         })
         .planNode();
   };
+
+  VELOX_ASSERT_THROW(
+      AssertQueryBuilder(makePlan(ThrowNode::OperatorMethod::kIsBlocked))
+          .copyResults(pool()),
+      "Operator::isBlocked failed for [operator: Throw, plan node ID: 1]");
+
+  VELOX_ASSERT_THROW(
+      AssertQueryBuilder(makePlan(ThrowNode::OperatorMethod::kNeedsInput))
+          .copyResults(pool()),
+      "Operator::needsInput failed for [operator: Throw, plan node ID: 1]");
 
   VELOX_ASSERT_THROW(
       AssertQueryBuilder(makePlan(ThrowNode::OperatorMethod::kAddInput))
