@@ -154,7 +154,7 @@ class FirstAggregate : public FirstLastAggregateBase<numeric, TData> {
     this->decodedValue_.decode(*args[0], rows);
 
     rows.applyToSelected([&](vector_size_t i) {
-      updateValue(this->decodedValue_.index(i), groups[i], this->decodedValue_);
+      updateValue(i, groups[i], this->decodedValue_);
     });
   }
 
@@ -179,8 +179,7 @@ class FirstAggregate : public FirstLastAggregateBase<numeric, TData> {
     this->decodedValue_.decode(*args[0], rows);
 
     rows.testSelected([&](vector_size_t i) {
-      return updateValue(
-          this->decodedValue_.index(i), group, this->decodedValue_);
+      return updateValue(i, group, this->decodedValue_);
     });
   }
 
@@ -268,7 +267,7 @@ class LastAggregate : public FirstLastAggregateBase<numeric, TData> {
     this->decodedValue_.decode(*args[0], rows);
 
     rows.applyToSelected([&](vector_size_t i) {
-      updateValue(this->decodedValue_.index(i), groups[i], this->decodedValue_);
+      updateValue(i, groups[i], this->decodedValue_);
     });
   }
 
@@ -292,9 +291,8 @@ class LastAggregate : public FirstLastAggregateBase<numeric, TData> {
       bool /* mayPushdown */) override {
     this->decodedValue_.decode(*args[0], rows);
 
-    rows.applyToSelected([&](vector_size_t i) {
-      updateValue(this->decodedValue_.index(i), group, this->decodedValue_);
-    });
+    rows.applyToSelected(
+        [&](vector_size_t i) { updateValue(i, group, this->decodedValue_); });
   }
 
   void addSingleGroupIntermediateResults(
