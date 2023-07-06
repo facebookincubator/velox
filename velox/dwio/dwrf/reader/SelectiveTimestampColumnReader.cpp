@@ -68,8 +68,6 @@ void SelectiveTimestampColumnReader::readHelper(RowSet rows) {
   vector_size_t numRows = rows.back() + 1;
   ExtractToReader extractValues(this);
   common::AlwaysTrue filter;
-  const uint64_t* nulls =
-      nullsInReadRange_ ? nullsInReadRange_->as<uint64_t>() : nullptr;
   DirectRleColumnVisitor<
       int64_t,
       common::AlwaysTrue,
@@ -78,11 +76,9 @@ void SelectiveTimestampColumnReader::readHelper(RowSet rows) {
       visitor(filter, this, rows, extractValues);
 
   if (version_ == velox::dwrf::RleVersion_1) {
-    auto secondsV1 = dynamic_cast<RleDecoderV1<true>*>(seconds_.get());
-    VELOX_DECODE_WITH_VISITOR(secondsV1, nulls, visitor);
+    decodeWithVisitor<velox::dwrf::RleDecoderV1<true>>(seconds_.get(), visitor);
   } else {
-    auto secondsV2 = dynamic_cast<RleDecoderV2<true>*>(seconds_.get());
-    VELOX_DECODE_WITH_VISITOR(secondsV2, nulls, visitor);
+    decodeWithVisitor<velox::dwrf::RleDecoderV2<true>>(seconds_.get(), visitor);
   }
 
   // Save the seconds into their own buffer before reading nanos into
@@ -98,11 +94,9 @@ void SelectiveTimestampColumnReader::readHelper(RowSet rows) {
   // We read the nanos into 'values_' starting at index 0.
   numValues_ = 0;
   if (version_ == velox::dwrf::RleVersion_1) {
-    auto nanosV1 = dynamic_cast<RleDecoderV1<false>*>(nano_.get());
-    VELOX_DECODE_WITH_VISITOR(nanosV1, nulls, visitor);
+    decodeWithVisitor<velox::dwrf::RleDecoderV1<false>>(nano_.get(), visitor);
   } else {
-    auto nanosV2 = dynamic_cast<RleDecoderV2<false>*>(nano_.get());
-    VELOX_DECODE_WITH_VISITOR(nanosV2, nulls, visitor);
+    decodeWithVisitor<velox::dwrf::RleDecoderV2<false>>(nano_.get(), visitor);
   }
   readOffset_ += numRows;
 }

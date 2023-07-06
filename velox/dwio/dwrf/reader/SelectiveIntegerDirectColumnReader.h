@@ -93,12 +93,8 @@ void SelectiveIntegerDirectColumnReader::readWithVisitor(
     RowSet rows,
     ColumnVisitor visitor) {
   vector_size_t numRows = rows.back() + 1;
-  const uint64_t* nulls =
-      nullsInReadRange_ ? nullsInReadRange_->as<uint64_t>() : nullptr;
-
   if (format == velox::dwrf::DwrfFormat::kDwrf) {
-    auto decoder = dynamic_cast<dwio::common::DirectDecoder<true>*>(ints.get());
-    VELOX_DECODE_WITH_VISITOR(decoder, nulls, visitor);
+    decodeWithVisitor<dwio::common::DirectDecoder<true>>(ints.get(), visitor);
   } else {
     // orc format does not use int128
     if constexpr (!std::is_same_v<typename ColumnVisitor::DataType, int128_t>) {
@@ -113,14 +109,12 @@ void SelectiveIntegerDirectColumnReader::readWithVisitor(
               rows,
               visitor.extractValues());
       if (version == velox::dwrf::RleVersion_1) {
-        auto decoder =
-            dynamic_cast<velox::dwrf::RleDecoderV1<true>*>(ints.get());
-        VELOX_DECODE_WITH_VISITOR(decoder, nulls, drVisitor);
+        decodeWithVisitor<velox::dwrf::RleDecoderV1<true>>(
+            ints.get(), drVisitor);
       } else {
         VELOX_CHECK(version == velox::dwrf::RleVersion_2);
-        auto decoder =
-            dynamic_cast<velox::dwrf::RleDecoderV2<true>*>(ints.get());
-        VELOX_DECODE_WITH_VISITOR(decoder, nulls, drVisitor);
+        decodeWithVisitor<velox::dwrf::RleDecoderV2<true>>(
+            ints.get(), drVisitor);
       }
     } else {
       VELOX_UNREACHABLE(

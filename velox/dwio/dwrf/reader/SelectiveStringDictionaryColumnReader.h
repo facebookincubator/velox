@@ -107,16 +107,12 @@ void SelectiveStringDictionaryColumnReader::readWithVisitor(
     RowSet rows,
     TVisitor visitor) {
   vector_size_t numRows = rows.back() + 1;
-  const uint64_t* nulls =
-      nullsInReadRange_ ? nullsInReadRange_->as<uint64_t>() : nullptr;
   if (version_ == velox::dwrf::RleVersion_1) {
-    auto decoder =
-        dynamic_cast<velox::dwrf::RleDecoderV1<false>*>(dictIndex_.get());
-    VELOX_DECODE_WITH_VISITOR(decoder, nulls, visitor);
+    decodeWithVisitor<velox::dwrf::RleDecoderV1<false>>(
+        dictIndex_.get(), visitor);
   } else {
-    auto decoder =
-        dynamic_cast<velox::dwrf::RleDecoderV2<false>*>(dictIndex_.get());
-    VELOX_DECODE_WITH_VISITOR(decoder, nulls, visitor);
+    decodeWithVisitor<velox::dwrf::RleDecoderV2<false>>(
+        dictIndex_.get(), visitor);
   }
   readOffset_ += numRows;
 }

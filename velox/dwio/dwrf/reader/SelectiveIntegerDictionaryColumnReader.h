@@ -71,14 +71,12 @@ void SelectiveIntegerDictionaryColumnReader::readWithVisitor(
     ColumnVisitor visitor) {
   vector_size_t numRows = rows.back() + 1;
   auto dictVisitor = visitor.toDictionaryColumnVisitor();
-  const uint64_t* nulls =
-      nullsInReadRange_ ? nullsInReadRange_->as<uint64_t>() : nullptr;
   if (rleVersion_ == RleVersion_1) {
-    auto decoder = reinterpret_cast<RleDecoderV1<false>*>(dataReader_.get());
-    VELOX_DECODE_WITH_VISITOR(decoder, nulls, dictVisitor);
+    decodeWithVisitor<velox::dwrf::RleDecoderV1<false>>(
+        dataReader_.get(), dictVisitor);
   } else {
-    auto decoder = reinterpret_cast<RleDecoderV2<false>*>(dataReader_.get());
-    VELOX_DECODE_WITH_VISITOR(decoder, nulls, dictVisitor);
+    decodeWithVisitor<velox::dwrf::RleDecoderV2<false>>(
+        dataReader_.get(), dictVisitor);
   }
   readOffset_ += numRows;
 }

@@ -62,30 +62,6 @@ class RleDecoderV2 : public dwio::common::IntDecoder<isSigned> {
     }
   }
 
-  int64_t readValue() {
-    if (runRead == runLength) {
-      resetRun();
-      firstByte = readByte();
-    }
-
-    uint64_t nRead = 0;
-    int64_t value = 0;
-    auto type = static_cast<EncodingType>((firstByte >> 6) & 0x03);
-    if (type == SHORT_REPEAT) {
-      nRead = nextShortRepeats(&value, 0, 1, nullptr);
-    } else if (type == DIRECT) {
-      nRead = nextDirect(&value, 0, 1, nullptr);
-    } else if (type == PATCHED_BASE) {
-      nRead = nextPatched(&value, 0, 1, nullptr);
-    } else if (type == DELTA) {
-      nRead = nextDelta(&value, 0, 1, nullptr);
-    } else {
-      DWIO_RAISE("unknown encoding");
-    }
-    VELOX_CHECK(nRead == (uint64_t)1);
-    return value;
-  }
-
   template <bool hasNulls>
   inline void skip(int32_t numValues, int32_t current, const uint64_t* nulls) {
     if constexpr (hasNulls) {
@@ -160,6 +136,8 @@ class RleDecoderV2 : public dwio::common::IntDecoder<isSigned> {
   void resetRun() {
     resetReadLongs();
     bitSize = 0;
+    firstByte = readByte();
+    type = static_cast<EncodingType>((firstByte >> 6) & 0x03);
   }
 
   unsigned char readByte() {
@@ -242,6 +220,8 @@ class RleDecoderV2 : public dwio::common::IntDecoder<isSigned> {
       uint64_t numValues,
       const uint64_t* nulls);
 
+  int64_t readValue();
+
   unsigned char firstByte;
   uint64_t runLength;
   uint64_t runRead;
@@ -260,6 +240,7 @@ class RleDecoderV2 : public dwio::common::IntDecoder<isSigned> {
   int64_t curPatch; // Used by PATCHED_BASE
   int64_t patchMask; // Used by PATCHED_BASE
   int64_t actualGap; // Used by PATCHED_BASE
+  EncodingType type;
   dwio::common::DataBuffer<int64_t> unpacked; // Used by PATCHED_BASE
   dwio::common::DataBuffer<int64_t> unpackedPatch; // Used by PATCHED_BASE
 };
