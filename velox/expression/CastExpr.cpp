@@ -582,6 +582,10 @@ void CastExpr::applyPeeled(
     } else {
       castFromOperator_->castFrom(input, context, rows, toType, result);
     }
+  } else if (toType->isShortDecimal()) {
+    result = applyDecimal<int64_t>(rows, input, context, fromType, toType);
+  } else if (toType->isLongDecimal()) {
+    result = applyDecimal<int128_t>(rows, input, context, fromType, toType);
   } else if (fromType->isDecimal()) {
     auto converter = getDecimalConverter(fromType->isShortDecimal(), toType);
     result = converter(rows, input, context, fromType);
