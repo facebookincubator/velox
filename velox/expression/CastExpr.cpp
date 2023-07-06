@@ -124,6 +124,37 @@ void applyIntToDecimalCastKernel(
 }
 
 template <typename TInput>
+VectorPtr applyDecimalToIntCast(
+    const SelectivityVector& rows,
+    const BaseVector& input,
+    exec::EvalCtx& context,
+    const TypePtr& toType) {
+  VectorPtr result;
+  context.ensureWritable(rows, INTEGER(), result);
+  (*result).clearNulls(rows);
+  auto resultBuffer =
+      result->asUnchecked<FlatVector<int32_t>>()->mutableRawValues();
+  const auto precisionScale = getDecimalPrecisionScale(*toType);
+  const auto simpleInput = input.as<SimpleVector<TInput>>();
+  context.applyToSelectedNoThrow(rows, [&](int row) {
+    try {
+      int128_t integralPart = simpleInput->valueAt(row) /
+          DecimalUtil::kPowersOfTen[precisionScale.second];
+      resultBuffer[row] =
+          util::Converter<TypeKind::INTEGER, void, false>::cast(integralPart);
+    } catch (const VeloxRuntimeError& re) {
+      VELOX_FAIL(makeErrorMessage(input, row, INTEGER()) + " " + re.message());
+    } catch (const VeloxUserError& ue) {
+      VELOX_USER_FAIL(
+          makeErrorMessage(input, row, INTEGER()) + " " + ue.message());
+    } catch (const std::exception& e) {
+      VELOX_USER_FAIL(makeErrorMessage(input, row, INTEGER()) + " " + e.what());
+    }
+  });
+  return result;
+}
+
+template <typename TInput>
 VectorPtr applyDecimalToDoubleCast(
     const SelectivityVector& rows,
     const BaseVector& input,
@@ -515,6 +546,23 @@ VectorPtr CastExpr::applyDecimal(
   return castResult;
 }
 
+folly::Function<VectorPtr(
+    const SelectivityVector&,
+    const BaseVector&,
+    exec::EvalCtx&,
+    const TypePtr&)>
+getDecimalConverter(const bool isShortDecimal, const TypePtr& toType) {
+  if (toType->isDouble()) {
+    return isShortDecimal ? applyDecimalToDoubleCast<int64_t>
+                          : applyDecimalToDoubleCast<int128_t>;
+  } else if (toType->isInteger()) {
+    return isShortDecimal ? applyDecimalToIntCast<int64_t>
+                          : applyDecimalToIntCast<int128_t>;
+  }
+
+  return nullptr;
+}
+
 void CastExpr::applyPeeled(
     const SelectivityVector& rows,
     const BaseVector& input,
@@ -534,18 +582,9 @@ void CastExpr::applyPeeled(
     } else {
       castFromOperator_->castFrom(input, context, rows, toType, result);
     }
-  } else if (toType->isShortDecimal()) {
-    result = applyDecimal<int64_t>(rows, input, context, fromType, toType);
-  } else if (toType->isLongDecimal()) {
-    result = applyDecimal<int128_t>(rows, input, context, fromType, toType);
-  } else if (fromType->isDecimal() && toType->isDouble()) {
-    if (fromType->isShortDecimal()) {
-      result =
-          applyDecimalToDoubleCast<int64_t>(rows, input, context, fromType);
-    } else if (fromType->isLongDecimal()) {
-      result =
-          applyDecimalToDoubleCast<int128_t>(rows, input, context, fromType);
-    }
+  } else if (fromType->isDecimal()) {
+    auto converter = getDecimalConverter(fromType->isShortDecimal(), toType);
+    result = converter(rows, input, context, fromType);
   } else {
     switch (toType->kind()) {
       case TypeKind::MAP:
