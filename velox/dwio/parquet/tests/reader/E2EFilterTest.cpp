@@ -118,11 +118,9 @@ TEST_F(E2EFilterTest, integerDirect) {
 }
 
 TEST_F(E2EFilterTest, integerDeltaBinaryPack) {
-  writerProperties_ = ::parquet::WriterProperties::Builder()
-                          .disable_dictionary()
-                          ->encoding(::parquet::Encoding::DELTA_BINARY_PACKED)
-                          ->data_pagesize(4 * 1024)
-                          ->build();
+  options_.enableDictionary = false;
+  options_.encoding = ::parquet::Encoding::DELTA_BINARY_PACKED;
+
   testWithTypes(
       "short_val:smallint,"
       "int_val:int,"

@@ -24,6 +24,8 @@
 #include "velox/dwio/common/WriterFactory.h"
 #include "velox/vector/ComplexVector.h"
 
+#include <parquet/arrow/writer.h>
+
 namespace facebook::velox::parquet {
 
 class ArrowDataBufferSink;
@@ -39,6 +41,7 @@ struct WriterOptions {
   double bufferGrowRatio = 1;
   dwio::common::CompressionKind compression =
       dwio::common::CompressionKind_NONE;
+  ::parquet::Encoding::type encoding = ::parquet::Encoding::PLAIN;
   velox::memory::MemoryPool* memoryPool;
 };
 

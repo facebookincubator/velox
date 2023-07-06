@@ -109,6 +109,7 @@ std::shared_ptr<::parquet::WriterProperties> getArrowParquetWriterOptions(
   }
   properties =
       properties->compression(getArrowParquetCompression(options.compression));
+  properties = properties->encoding(options.encoding);
   properties = properties->data_pagesize(options.dataPageSize);
   return properties->build();
 }
