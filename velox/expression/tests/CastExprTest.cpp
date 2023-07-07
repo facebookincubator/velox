@@ -217,43 +217,38 @@ class CastExprTest : public functions::test::CastBaseTest {
              72,
              std::nullopt}));
 
-    int64_t tooSmall = (int64_t)(std::numeric_limits<int32_t>::min()) - 1;
-    VELOX_ASSERT_THROW(
-        testComplexCast(
-            "c0",
-            makeShortDecimalFlatVector({tooSmall}, DECIMAL(9, 0)),
-            makeFlatVector<int32_t>(0)),
-        fmt::format(
-            "Failed to cast from DECIMAL(9,0) to INTEGER: {}",
-            std::to_string(tooSmall)));
+    if constexpr (!std::is_same<int64_t, T>::value) {
+      const auto tooSmall = (int64_t)std::numeric_limits<int32_t>::min() - 1;
+      const auto tooBig = std::numeric_limits<int64_t>::max() + 1;
 
-    VELOX_ASSERT_THROW(
-        testComplexCast(
-            "c0",
-            makeShortDecimalFlatVector({tooSmall}, DECIMAL(18, 0)),
-            makeFlatVector<int32_t>(0)),
-        fmt::format(
-            "Failed to cast from DECIMAL(18,0) to INTEGER: {}",
-            std::to_string(tooSmall)));
+      VELOX_ASSERT_THROW(
+          testComplexCast(
+              "c0",
+              makeShortDecimalFlatVector({tooSmall}, DECIMAL(9, 0)),
+              makeFlatVector<T>(0)),
+          "Failed to cast from DECIMAL(9,0)");
 
-    int64_t tooBig = (int64_t)(std::numeric_limits<int32_t>::max()) + 1;
-    VELOX_ASSERT_THROW(
-        testComplexCast(
-            "c0",
-            makeShortDecimalFlatVector({tooBig}, DECIMAL(9, 0)),
-            makeFlatVector<int32_t>(0)),
-        fmt::format(
-            "Failed to cast from DECIMAL(9,0) to INTEGER: {}",
-            std::to_string(tooBig)));
+      VELOX_ASSERT_THROW(
+          testComplexCast(
+              "c0",
+              makeLongDecimalFlatVector({tooSmall}, DECIMAL(19, 0)),
+              makeFlatVector<T>(0)),
+          "Failed to cast from DECIMAL(19,0)");
 
-    VELOX_ASSERT_THROW(
-        testComplexCast(
-            "c0",
-            makeShortDecimalFlatVector({tooBig}, DECIMAL(18, 0)),
-            makeFlatVector<int32_t>(0)),
-        fmt::format(
-            "Failed to cast from DECIMAL(18,0) to INTEGER: {}",
-            std::to_string(tooBig)));
+      VELOX_ASSERT_THROW(
+          testComplexCast(
+              "c0",
+              makeShortDecimalFlatVector({tooBig}, DECIMAL(9, 0)),
+              makeFlatVector<T>(0)),
+          "Failed to cast from DECIMAL(9,0)");
+
+      VELOX_ASSERT_THROW(
+          testComplexCast(
+              "c0",
+              makeLongDecimalFlatVector({tooBig}, DECIMAL(19, 0)),
+              makeFlatVector<T>(0)),
+          "Failed to cast from DECIMAL(19,0)");
+    }
   }
 
   template <typename T>
@@ -891,8 +886,10 @@ TEST_F(CastExprTest, toString) {
 }
 
 TEST_F(CastExprTest, decimalToInt) {
-  // TODO: Add other integral types
+  testDecimalToIntCasts<int64_t>();
   testDecimalToIntCasts<int32_t>();
+  testDecimalToIntCasts<int16_t>();
+  testDecimalToIntCasts<int8_t>();
 }
 
 TEST_F(CastExprTest, decimalToDouble) {
