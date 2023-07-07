@@ -16,6 +16,7 @@
 #pragma once
 
 #include "boost/math/distributions/beta.hpp"
+#include "boost/math/distributions/poisson.hpp"
 #include "boost/math/distributions/binomial.hpp"
 #include "velox/common/base/Exceptions.h"
 #include "velox/functions/Macros.h"
@@ -88,6 +89,23 @@ struct BinomialCDFFunction {
 
     boost::math::binomial_distribution<> dist(numOfTrials, successProb);
     result = boost::math::cdf(dist, value);
+  }
+};
+
+template <typename T>
+struct InversePoissonCDFFunction {
+  VELOX_DEFINE_FUNCTION_TYPES(T);
+
+  FOLLY_ALWAYS_INLINE void
+  call(int64_t& result, double lambda, double p) {
+    static constexpr int64_t kInf = std::numeric_limits<int64_t>::max();
+
+    VELOX_USER_CHECK(
+        (p >= 0) && (p < 1), "p must be in the interval [0, 1)");
+    VELOX_USER_CHECK_GT(lambda, 0, "lambda must be greater than 0");
+
+    boost::math::poisson_distribution<> dist(lambda);
+    result = boost::math::quantile(dist, p);
   }
 };
 

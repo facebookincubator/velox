@@ -107,6 +107,8 @@ void registerSimpleFunctions(const std::string& prefix) {
       {prefix + "normal_cdf"});
   registerFunction<BinomialCDFFunction, double, int64_t, double, int64_t>(
       {prefix + "binomial_cdf"});
+  registerFunction<InversePoissonCDFFunction, int64_t, double, double>(
+      {prefix + "inverse_poisson_cdf"});
 }
 
 } // namespace

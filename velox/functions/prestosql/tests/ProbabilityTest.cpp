@@ -155,5 +155,32 @@ TEST_F(ProbabilityTest, binomialCDF) {
       binomialCDF(-2, 0.5, -1), "numberOfTrials must be greater than 0");
 }
 
+TEST_F(ProbabilityTest, inversePoissonCDF) {
+  const auto inversePoissonCDF = [&](std::optional<double> lambda,
+                                     std::optional<double> p) {
+    return evaluateOnce<int64_t>(
+        "inverse_poisson_cdf(c0, c1)", lambda, p);
+  };
+
+  EXPECT_EQ(inversePoissonCDF(3.0, 0.0), 0);
+  EXPECT_EQ(inversePoissonCDF(3.0, 0.3), 1);
+  EXPECT_EQ(inversePoissonCDF(3.0, 0.95), 6);
+  EXPECT_EQ(inversePoissonCDF(3.0, 0.99999999), 17);
+  EXPECT_EQ(inversePoissonCDF(3.0, kDoubleMin), 0);
+  EXPECT_EQ(inversePoissonCDF(std::nullopt, 0.99999999), std::nullopt);
+  EXPECT_EQ(inversePoissonCDF(3.0, std::nullopt), std::nullopt);
+  EXPECT_EQ(inversePoissonCDF(std::nullopt, std::nullopt), std::nullopt);
+
+  // Test invalid inputs.
+  VELOX_ASSERT_THROW(
+      inversePoissonCDF(kInf, 0.99999999), "Mean argument is inf, but must be > 0");
+  VELOX_ASSERT_THROW(
+      inversePoissonCDF(3.0, kNan), "p must be in the interval [0, 1)");
+  VELOX_ASSERT_THROW(
+      inversePoissonCDF(kNan, 0.99), "lambda must be greater than 0");
+  VELOX_ASSERT_THROW(
+      inversePoissonCDF(kNan, kNan), "p must be in the interval [0, 1)");
+}
+
 } // namespace
 } // namespace facebook::velox

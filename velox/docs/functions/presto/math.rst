@@ -261,3 +261,9 @@ Probability Functions
     The mean and value must be real values and the standard deviation must be a real and
     positive value (all of type DOUBLE).
 
+.. function:: inverse_poisson_cdf(lambda, p) -> integer
+
+    Compute the inverse of the Poisson cdf with given lambda (mean) parameter for the cumulative
+    probability (p). It returns the value of n so that: P(N <= n; lambda) = p.
+    The lambda parameter must be a positive real number (of type DOUBLE).
+    The probability p must lie on the interval [0, 1).
