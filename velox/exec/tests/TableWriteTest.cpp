@@ -192,21 +192,18 @@ class TableWriteTest : public HiveConnectorTestBase {
 
   std::vector<std::shared_ptr<connector::ConnectorSplit>>
   makeHiveConnectorSplits(
-      const std::shared_ptr<TempDirectoryPath>& directoryPath,
-      const FileFormat fileFormat) {
-    return makeHiveConnectorSplits(directoryPath->path, fileFormat);
+      const std::shared_ptr<TempDirectoryPath>& directoryPath) {
+    return makeHiveConnectorSplits(directoryPath->path);
   }
 
   std::vector<std::shared_ptr<connector::ConnectorSplit>>
-  makeHiveConnectorSplits(
-      const std::string& directoryPath,
-      const FileFormat fileFormat) {
+  makeHiveConnectorSplits(const std::string& directoryPath) {
     std::vector<std::shared_ptr<connector::ConnectorSplit>> splits;
 
     for (auto& path : fs::recursive_directory_iterator(directoryPath)) {
       if (path.is_regular_file()) {
         splits.push_back(HiveConnectorTestBase::makeHiveConnectorSplits(
-            path.path().string(), 1, fileFormat)[0]);
+            path.path().string(), 1, fileFormat_)[0]);
       }
     }
 
@@ -227,13 +224,11 @@ class TableWriteTest : public HiveConnectorTestBase {
   // Builds and returns the hive splits from the list of files with one split
   // per each file.
   std::vector<std::shared_ptr<connector::ConnectorSplit>>
-  makeHiveConnectorSplits(
-      const std::vector<std::filesystem::path>& filePaths,
-      const FileFormat fileFormat) {
+  makeHiveConnectorSplits(const std::vector<std::filesystem::path>& filePaths) {
     std::vector<std::shared_ptr<connector::ConnectorSplit>> splits;
     for (const auto& filePath : filePaths) {
       splits.push_back(HiveConnectorTestBase::makeHiveConnectorSplits(
-          filePath.string(), 1, fileFormat)[0]);
+          filePath.string(), 1, fileFormat_)[0]);
     }
     return splits;
   }
@@ -316,8 +311,7 @@ class TableWriteTest : public HiveConnectorTestBase {
       const connector::hive::LocationHandle::TableType& outputTableType,
       const std::string& outputDirectoryPath,
       const std::vector<std::string>& partitionedBy,
-      const std::shared_ptr<HiveBucketProperty> bucketProperty,
-      const FileFormat fileFormat) {
+      const std::shared_ptr<HiveBucketProperty> bucketProperty) {
     return std::make_shared<core::InsertTableHandle>(
         kHiveConnectorId,
         makeHiveInsertTableHandle(
@@ -327,7 +321,7 @@ class TableWriteTest : public HiveConnectorTestBase {
             bucketProperty,
             makeLocationHandle(
                 outputDirectoryPath, std::nullopt, outputTableType),
-            fileFormat));
+            fileFormat_));
   }
 
   // Returns a table insert plan node.
@@ -335,7 +329,6 @@ class TableWriteTest : public HiveConnectorTestBase {
       PlanBuilder& inputPlan,
       const RowTypePtr& outputRowType,
       const std::string& outputDirectoryPath,
-      const FileFormat fileFormat,
       const std::vector<std::string>& partitionedBy = {},
       std::shared_ptr<HiveBucketProperty> bucketProperty = {},
       const connector::hive::LocationHandle::TableType& outputTableType =
@@ -349,8 +342,7 @@ class TableWriteTest : public HiveConnectorTestBase {
                 outputTableType,
                 outputDirectoryPath,
                 partitionedBy,
-                bucketProperty,
-                fileFormat),
+                bucketProperty),
             nullptr,
             outputCommitStrategy,
             "rows")
@@ -521,7 +513,7 @@ class TableWriteTest : public HiveConnectorTestBase {
       const std::filesystem::path& dirPath) {
     assertQuery(
         PlanBuilder().tableScan(rowType_).planNode(),
-        {makeHiveConnectorSplits(filePaths, fileFormat_)},
+        {makeHiveConnectorSplits(filePaths)},
         fmt::format(
             "SELECT * FROM tmp WHERE {}",
             partitionNameToPredicate(getPartitionDirNames(dirPath))));
@@ -562,7 +554,7 @@ class TableWriteTest : public HiveConnectorTestBase {
                     .planNode();
     const auto resultVector =
         AssertQueryBuilder(plan)
-            .splits(scanNodeId, makeHiveConnectorSplits(filePaths, fileFormat_))
+            .splits(scanNodeId, makeHiveConnectorSplits(filePaths))
             .copyResults(pool_.get());
 
     // Parse the bucket id encoded in bucketed file name.
@@ -976,7 +968,7 @@ TEST_P(AllTableWriterTest, scanFilterProjectWrite) {
       PlanBuilder()
           .tableScan(ROW(std::move(tableColumnNames), std::move(types)))
           .planNode(),
-      makeHiveConnectorSplits(outputDirectory, fileFormat_),
+      makeHiveConnectorSplits(outputDirectory),
       "SELECT c0, c1, c3, c5, c2 + c3, substr(c5, 1, 1) FROM tmp WHERE c2 <> 0");
 
   verifyTableWriterOutput(outputDirectory->path, false);
@@ -1034,7 +1026,7 @@ TEST_P(AllTableWriterTest, renameAndReorderColumns) {
 
   assertQuery(
       PlanBuilder().tableScan(tableSchema_).planNode(),
-      makeHiveConnectorSplits(outputDirectory, fileFormat_),
+      makeHiveConnectorSplits(outputDirectory),
       "SELECT c5, c4, c1, c0, c3 FROM tmp");
 
   verifyTableWriterOutput(outputDirectory->path, false);
@@ -1055,7 +1047,6 @@ TEST_P(AllTableWriterTest, directReadWrite) {
       PlanBuilder().tableScan(rowType_),
       rowType_,
       outputDirectory->path,
-      fileFormat_,
       partitionedBy_,
       bucketProperty_,
       connector::hive::LocationHandle::TableType::kNew,
@@ -1069,7 +1060,7 @@ TEST_P(AllTableWriterTest, directReadWrite) {
 
   assertQuery(
       PlanBuilder().tableScan(rowType_).planNode(),
-      makeHiveConnectorSplits(outputDirectory, fileFormat_),
+      makeHiveConnectorSplits(outputDirectory),
       "SELECT * FROM tmp");
 
   verifyTableWriterOutput(outputDirectory->path);
@@ -1089,7 +1080,6 @@ TEST_P(AllTableWriterTest, constantVectors) {
       PlanBuilder().values({vector}),
       rowType_,
       outputDirectory->path,
-      fileFormat_,
       partitionedBy_,
       bucketProperty_,
       connector::hive::LocationHandle::TableType::kNew,
@@ -1099,7 +1089,7 @@ TEST_P(AllTableWriterTest, constantVectors) {
 
   assertQuery(
       PlanBuilder().tableScan(rowType_).planNode(),
-      makeHiveConnectorSplits(outputDirectory, fileFormat_),
+      makeHiveConnectorSplits(outputDirectory),
       "SELECT * FROM tmp");
 
   verifyTableWriterOutput(outputDirectory->path);
@@ -1120,7 +1110,6 @@ TEST_P(AllTableWriterTest, commitStrategies) {
         PlanBuilder().values(vectors),
         rowType_,
         outputDirectory->path,
-        fileFormat_,
         partitionedBy_,
         bucketProperty_,
         connector::hive::LocationHandle::TableType::kNew,
@@ -1130,7 +1119,7 @@ TEST_P(AllTableWriterTest, commitStrategies) {
 
     assertQuery(
         PlanBuilder().tableScan(rowType_).planNode(),
-        makeHiveConnectorSplits(outputDirectory, fileFormat_),
+        makeHiveConnectorSplits(outputDirectory),
         "SELECT * FROM tmp");
     verifyTableWriterOutput(outputDirectory->path);
   }
@@ -1143,7 +1132,6 @@ TEST_P(AllTableWriterTest, commitStrategies) {
         PlanBuilder().values(vectors),
         rowType_,
         outputDirectory->path,
-        fileFormat_,
         partitionedBy_,
         bucketProperty_,
         connector::hive::LocationHandle::TableType::kNew,
@@ -1153,7 +1141,7 @@ TEST_P(AllTableWriterTest, commitStrategies) {
 
     assertQuery(
         PlanBuilder().tableScan(rowType_).planNode(),
-        makeHiveConnectorSplits(outputDirectory, fileFormat_),
+        makeHiveConnectorSplits(outputDirectory),
         "SELECT * FROM tmp");
     verifyTableWriterOutput(outputDirectory->path);
   }
@@ -1225,7 +1213,6 @@ TEST_P(PartitionedTableWriterTest, specialPartitionName) {
       PlanBuilder().tableScan(rowType),
       rowType,
       outputDirectory->path,
-      fileFormat_,
       partitionKeys,
       bucketProperty_,
       connector::hive::LocationHandle::TableType::kNew,
@@ -1310,7 +1297,6 @@ TEST_P(PartitionedTableWriterTest, multiplePartitions) {
       PlanBuilder().tableScan(rowType),
       rowType,
       outputDirectory->path,
-      fileFormat_,
       partitionKeys,
       bucketProperty_,
       connector::hive::LocationHandle::TableType::kNew,
@@ -1338,7 +1324,7 @@ TEST_P(PartitionedTableWriterTest, multiplePartitions) {
   while (iterPartitionDirectory != actualPartitionDirectories.end()) {
     assertQuery(
         PlanBuilder().tableScan(rowType).planNode(),
-        makeHiveConnectorSplits(*iterPartitionDirectory, fileFormat_),
+        makeHiveConnectorSplits(*iterPartitionDirectory),
         fmt::format(
             "SELECT * FROM tmp WHERE {}",
             partitionNameToPredicate(*iterPartitionName, partitionTypes)));
@@ -1389,7 +1375,6 @@ TEST_P(PartitionedTableWriterTest, singlePartition) {
       PlanBuilder().tableScan(rowType),
       rowType,
       outputDirectory->path,
-      fileFormat_,
       partitionKeys,
       bucketProperty_,
       connector::hive::LocationHandle::TableType::kNew,
@@ -1409,7 +1394,7 @@ TEST_P(PartitionedTableWriterTest, singlePartition) {
   // Verify all data is written to the single partition directory.
   assertQuery(
       PlanBuilder().tableScan(rowType).planNode(),
-      makeHiveConnectorSplits(outputDirectory, fileFormat_),
+      makeHiveConnectorSplits(outputDirectory),
       "SELECT * FROM tmp");
 
   // In case of unbucketed partitioned table, one single file is written to
@@ -1445,14 +1430,13 @@ TEST_P(PartitionedWithoutBucketTableWriterTest, fromSinglePartitionToMultiple) {
       PlanBuilder().values(vectors),
       rowType,
       outputDirectory->path,
-      fileFormat_,
       partitionKeys);
 
   assertQuery(plan, "SELECT count(*) FROM tmp");
 
   assertQuery(
       PlanBuilder().tableScan(rowType).planNode(),
-      makeHiveConnectorSplits(outputDirectory, fileFormat_),
+      makeHiveConnectorSplits(outputDirectory),
       "SELECT * FROM tmp");
 }
 
@@ -1498,7 +1482,6 @@ TEST_P(PartitionedTableWriterTest, maxPartitions) {
       PlanBuilder().values({vector}),
       rowType,
       outputDirectory->path,
-      fileFormat_,
       partitionKeys,
       bucketProperty_,
       connector::hive::LocationHandle::TableType::kNew,
@@ -1532,8 +1515,7 @@ TEST_P(AllTableWriterTest, writeNoFile) {
   auto plan = createInsertPlan(
       PlanBuilder().tableScan(rowType_).filter("false"),
       rowType_,
-      outputDirectory->path,
-      fileFormat_);
+      outputDirectory->path);
 
   auto execute = [&](const std::shared_ptr<const core::PlanNode>& plan,
                      std::shared_ptr<core::QueryCtx> queryCtx) {
@@ -1558,7 +1540,6 @@ TEST_P(UnpartitionedTableWriterTest, createAndInsertIntoUnpartitionedTable) {
         PlanBuilder().values(input),
         rowType_,
         outputDirectory->path,
-        fileFormat_,
         {},
         nullptr,
         connector::hive::LocationHandle::TableType::kNew);
@@ -1589,7 +1570,6 @@ TEST_P(
       PlanBuilder().values(input),
       rowType_,
       outputDirectory->path,
-      fileFormat_,
       {},
       nullptr,
       connector::hive::LocationHandle::TableType::kExisting);
@@ -1623,7 +1603,6 @@ TEST_P(UnpartitionedTableWriterTest, appendToAnExistingUnpartitionedTable) {
           PlanBuilder().values({rowVector}),
           rowType_,
           outputDirectory->path,
-          fileFormat_,
           {},
           nullptr,
           tableType,
@@ -1634,13 +1613,13 @@ TEST_P(UnpartitionedTableWriterTest, appendToAnExistingUnpartitionedTable) {
               .tableScan(rowType_)
               .singleAggregation({}, {"count(*)"})
               .planNode(),
-          makeHiveConnectorSplits(outputDirectory, fileFormat_),
+          makeHiveConnectorSplits(outputDirectory),
           fmt::format("SELECT {}", numRows));
     }
 
     assertQuery(
         PlanBuilder().tableScan(rowType_).planNode(),
-        makeHiveConnectorSplits(outputDirectory, fileFormat_),
+        makeHiveConnectorSplits(outputDirectory),
         "SELECT * FROM tmp");
   }
 }
@@ -1677,7 +1656,6 @@ TEST_P(BucketedTableOnlyWriteTest, bucketCountLimit) {
         PlanBuilder().values({input}),
         rowType_,
         outputDirectory->path,
-        fileFormat_,
         partitionedBy_,
         bucketProperty_,
         connector::hive::LocationHandle::TableType::kNew,
@@ -1697,7 +1675,7 @@ TEST_P(BucketedTableOnlyWriteTest, bucketCountLimit) {
 
       assertQuery(
           PlanBuilder().tableScan(rowType_).planNode(),
-          makeHiveConnectorSplits(outputDirectory, fileFormat_),
+          makeHiveConnectorSplits(outputDirectory),
           "SELECT * FROM tmp");
       verifyTableWriterOutput(outputDirectory->path);
     }
@@ -1722,7 +1700,6 @@ TEST_P(BucketedTableOnlyWriteTest, mismatchedBucketTypes) {
       PlanBuilder().values({input}),
       rowType_,
       outputDirectory->path,
-      fileFormat_,
       partitionedBy_,
       bucketProperty_,
       connector::hive::LocationHandle::TableType::kNew,
