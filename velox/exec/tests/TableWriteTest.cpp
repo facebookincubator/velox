@@ -34,6 +34,7 @@ using namespace facebook::velox::exec;
 using namespace facebook::velox::exec::test;
 using namespace facebook::velox::connector;
 using namespace facebook::velox::connector::hive;
+using namespace facebook::velox::dwio::common;
 
 enum class TestMode {
   kUnpartitioned,
@@ -61,40 +62,47 @@ FOLLY_ALWAYS_INLINE std::ostream& operator<<(std::ostream& os, TestMode mode) {
 // parameters properly. So we encode the different test parameters into one
 // integer value.
 struct TestParam {
-  uint32_t value;
+  uint64_t value;
 
-  explicit TestParam(uint32_t _value) : value(_value) {}
+  explicit TestParam(uint64_t _value) : value(_value) {}
 
   TestParam(
+      FileFormat fileFormat,
       TestMode testMode,
       CommitStrategy commitStrategy,
       HiveBucketProperty::Kind bucketKind,
       bool bucketSort) {
-    value = static_cast<uint32_t>(testMode) << 24 |
-        static_cast<uint32_t>(commitStrategy) << 16 |
-        static_cast<uint32_t>(bucketKind) << 8 | !!bucketSort;
+    value = static_cast<uint64_t>(fileFormat) << 48 |
+        static_cast<uint64_t>(testMode) << 40 |
+        static_cast<uint64_t>(commitStrategy) << 32 |
+        static_cast<uint64_t>(bucketKind) << 24 | !!bucketSort;
+  }
+
+  FileFormat fileFormat() const {
+    return static_cast<FileFormat>(value >> 48);
   }
 
   TestMode testMode() const {
-    return static_cast<TestMode>(value >> 24);
+    return static_cast<TestMode>((value & ((1L << 48) - 1)) >> 40);
   }
 
   CommitStrategy commitStrategy() const {
-    return static_cast<CommitStrategy>((value & ((1 << 24) - 1)) >> 16);
+    return static_cast<CommitStrategy>((value & ((1L << 40) - 1)) >> 32);
   }
 
   HiveBucketProperty::Kind bucketKind() const {
     return static_cast<HiveBucketProperty::Kind>(
-        (value & ((1 << 16) - 1)) >> 8);
+        (value & ((1L << 32) - 1)) >> 24);
   }
 
   bool bucketSort() const {
-    return (value & ((1 << 8) - 1)) != 0;
+    return (value & ((1L << 24) - 1)) != 0;
   }
 
   std::string toString() const {
     return fmt::format(
-        "TestMode[{}] commitStrategy[{}] bucketKind[{}] bucketSort[{}]",
+        "FileFormat[{}] TestMode[{}] commitStrategy[{}] bucketKind[{}] bucketSort[{}]",
+        fileFormat(),
         testMode(),
         commitStrategy(),
         bucketKind(),
@@ -104,8 +112,9 @@ struct TestParam {
 
 class TableWriteTest : public HiveConnectorTestBase {
  protected:
-  explicit TableWriteTest(uint32_t testValue)
+  explicit TableWriteTest(uint64_t testValue)
       : testParam_(static_cast<TestParam>(testValue)),
+        fileFormat_(testParam_.fileFormat()),
         testMode_(testParam_.testMode()),
         commitStrategy_(testParam_.commitStrategy()) {
     LOG(INFO) << testParam_.toString();
@@ -184,16 +193,14 @@ class TableWriteTest : public HiveConnectorTestBase {
   std::vector<std::shared_ptr<connector::ConnectorSplit>>
   makeHiveConnectorSplits(
       const std::shared_ptr<TempDirectoryPath>& directoryPath,
-      const dwio::common::FileFormat fileFormat =
-          dwio::common::FileFormat::DWRF) {
+      const FileFormat fileFormat) {
     return makeHiveConnectorSplits(directoryPath->path, fileFormat);
   }
 
   std::vector<std::shared_ptr<connector::ConnectorSplit>>
   makeHiveConnectorSplits(
       const std::string& directoryPath,
-      const dwio::common::FileFormat fileFormat =
-          dwio::common::FileFormat::DWRF) {
+      const FileFormat fileFormat) {
     std::vector<std::shared_ptr<connector::ConnectorSplit>> splits;
 
     for (auto& path : fs::recursive_directory_iterator(directoryPath)) {
@@ -222,8 +229,7 @@ class TableWriteTest : public HiveConnectorTestBase {
   std::vector<std::shared_ptr<connector::ConnectorSplit>>
   makeHiveConnectorSplits(
       const std::vector<std::filesystem::path>& filePaths,
-      const dwio::common::FileFormat fileFormat =
-          dwio::common::FileFormat::DWRF) {
+      const FileFormat fileFormat) {
     std::vector<std::shared_ptr<connector::ConnectorSplit>> splits;
     for (const auto& filePath : filePaths) {
       splits.push_back(HiveConnectorTestBase::makeHiveConnectorSplits(
@@ -311,7 +317,7 @@ class TableWriteTest : public HiveConnectorTestBase {
       const std::string& outputDirectoryPath,
       const std::vector<std::string>& partitionedBy,
       const std::shared_ptr<HiveBucketProperty> bucketProperty,
-      const dwio::common::FileFormat fileFormat) {
+      const FileFormat fileFormat) {
     return std::make_shared<core::InsertTableHandle>(
         kHiveConnectorId,
         makeHiveInsertTableHandle(
@@ -329,13 +335,12 @@ class TableWriteTest : public HiveConnectorTestBase {
       PlanBuilder& inputPlan,
       const RowTypePtr& outputRowType,
       const std::string& outputDirectoryPath,
+      const FileFormat fileFormat,
       const std::vector<std::string>& partitionedBy = {},
       std::shared_ptr<HiveBucketProperty> bucketProperty = {},
       const connector::hive::LocationHandle::TableType& outputTableType =
           connector::hive::LocationHandle::TableType::kNew,
-      const CommitStrategy& outputCommitStrategy = CommitStrategy::kNoCommit,
-      const dwio::common::FileFormat fileFormat =
-          dwio::common::FileFormat::DWRF) {
+      const CommitStrategy& outputCommitStrategy = CommitStrategy::kNoCommit) {
     return inputPlan
         .tableWrite(
             outputRowType->names(),
@@ -516,7 +521,7 @@ class TableWriteTest : public HiveConnectorTestBase {
       const std::filesystem::path& dirPath) {
     assertQuery(
         PlanBuilder().tableScan(rowType_).planNode(),
-        {makeHiveConnectorSplits(filePaths)},
+        {makeHiveConnectorSplits(filePaths, fileFormat_)},
         fmt::format(
             "SELECT * FROM tmp WHERE {}",
             partitionNameToPredicate(getPartitionDirNames(dirPath))));
@@ -557,7 +562,7 @@ class TableWriteTest : public HiveConnectorTestBase {
                     .planNode();
     const auto resultVector =
         AssertQueryBuilder(plan)
-            .splits(scanNodeId, makeHiveConnectorSplits(filePaths))
+            .splits(scanNodeId, makeHiveConnectorSplits(filePaths, fileFormat_))
             .copyResults(pool_.get());
 
     // Parse the bucket id encoded in bucketed file name.
@@ -639,6 +644,7 @@ class TableWriteTest : public HiveConnectorTestBase {
   }
 
   const TestParam testParam_;
+  const FileFormat fileFormat_;
   const TestMode testMode_;
   // Returns all available table types to test insert without any
   // partitions (used in "immutablePartitions" set of tests).
@@ -660,103 +666,147 @@ class TableWriteTest : public HiveConnectorTestBase {
 
 class PartitionedTableWriterTest
     : public TableWriteTest,
-      public testing::WithParamInterface<uint32_t> {
+      public testing::WithParamInterface<uint64_t> {
  public:
   PartitionedTableWriterTest() : TableWriteTest(GetParam()) {}
 
-  static std::vector<uint32_t> getTestParams() {
-    std::vector<uint32_t> testParams;
+  static std::vector<uint64_t> getTestParams() {
+    std::vector<uint64_t> testParams;
     testParams.push_back(TestParam{
+        FileFormat::DWRF,
         TestMode::kPartitioned,
         CommitStrategy::kNoCommit,
         HiveBucketProperty::Kind::kHiveCompatible,
         false}
                              .value);
     testParams.push_back(TestParam{
+        FileFormat::DWRF,
         TestMode::kPartitioned,
         CommitStrategy::kTaskCommit,
         HiveBucketProperty::Kind::kHiveCompatible,
         false}
                              .value);
     testParams.push_back(TestParam{
+        FileFormat::DWRF,
         TestMode::kBucketed,
         CommitStrategy::kNoCommit,
         HiveBucketProperty::Kind::kHiveCompatible,
         false}
                              .value);
     testParams.push_back(TestParam{
+        FileFormat::DWRF,
         TestMode::kBucketed,
         CommitStrategy::kTaskCommit,
         HiveBucketProperty::Kind::kHiveCompatible,
         false}
                              .value);
     testParams.push_back(TestParam{
+        FileFormat::DWRF,
         TestMode::kBucketed,
         CommitStrategy::kNoCommit,
         HiveBucketProperty::Kind::kPrestoNative,
         false}
                              .value);
     testParams.push_back(TestParam{
+        FileFormat::DWRF,
         TestMode::kBucketed,
         CommitStrategy::kTaskCommit,
         HiveBucketProperty::Kind::kPrestoNative,
         false}
                              .value);
+    if (hasWriterFactory(FileFormat::PARQUET)) {
+      testParams.push_back(TestParam{
+          FileFormat::PARQUET,
+          TestMode::kPartitioned,
+          CommitStrategy::kNoCommit,
+          HiveBucketProperty::Kind::kHiveCompatible,
+          false}
+                               .value);
+      testParams.push_back(TestParam{
+          FileFormat::PARQUET,
+          TestMode::kPartitioned,
+          CommitStrategy::kTaskCommit,
+          HiveBucketProperty::Kind::kHiveCompatible,
+          false}
+                               .value);
+    }
     return testParams;
   }
 };
 
 class UnpartitionedTableWriterTest
     : public TableWriteTest,
-      public testing::WithParamInterface<uint32_t> {
+      public testing::WithParamInterface<uint64_t> {
  public:
   UnpartitionedTableWriterTest() : TableWriteTest(GetParam()) {}
 
-  static std::vector<uint32_t> getTestParams() {
-    std::vector<uint32_t> testParams;
+  static std::vector<uint64_t> getTestParams() {
+    std::vector<uint64_t> testParams;
     testParams.push_back(TestParam{
+        FileFormat::DWRF,
         TestMode::kUnpartitioned,
         CommitStrategy::kNoCommit,
         HiveBucketProperty::Kind::kHiveCompatible,
         false}
                              .value);
     testParams.push_back(TestParam{
+        FileFormat::DWRF,
         TestMode::kUnpartitioned,
         CommitStrategy::kTaskCommit,
         HiveBucketProperty::Kind::kHiveCompatible,
         false}
                              .value);
+    if (hasWriterFactory(FileFormat::PARQUET)) {
+      testParams.push_back(TestParam{
+          FileFormat::PARQUET,
+          TestMode::kUnpartitioned,
+          CommitStrategy::kNoCommit,
+          HiveBucketProperty::Kind::kHiveCompatible,
+          false}
+                               .value);
+      testParams.push_back(TestParam{
+          FileFormat::PARQUET,
+          TestMode::kUnpartitioned,
+          CommitStrategy::kTaskCommit,
+          HiveBucketProperty::Kind::kHiveCompatible,
+          false}
+                               .value);
+    }
     return testParams;
   }
 };
 
 class BucketedTableOnlyWriteTest
     : public TableWriteTest,
-      public testing::WithParamInterface<uint32_t> {
+      public testing::WithParamInterface<uint64_t> {
  public:
   BucketedTableOnlyWriteTest() : TableWriteTest(GetParam()) {}
 
-  static std::vector<uint32_t> getTestParams() {
-    std::vector<uint32_t> testParams;
+  static std::vector<uint64_t> getTestParams() {
+    std::vector<uint64_t> testParams;
     testParams.push_back(TestParam{
+        FileFormat::DWRF,
         TestMode::kBucketed,
         CommitStrategy::kNoCommit,
         HiveBucketProperty::Kind::kHiveCompatible,
         false}
                              .value);
     testParams.push_back(TestParam{
+        FileFormat::DWRF,
         TestMode::kBucketed,
         CommitStrategy::kTaskCommit,
         HiveBucketProperty::Kind::kHiveCompatible,
         false}
                              .value);
     testParams.push_back(TestParam{
+        FileFormat::DWRF,
         TestMode::kBucketed,
         CommitStrategy::kNoCommit,
         HiveBucketProperty::Kind::kPrestoNative,
         false}
                              .value);
     testParams.push_back(TestParam{
+        FileFormat::DWRF,
         TestMode::kBucketed,
         CommitStrategy::kTaskCommit,
         HiveBucketProperty::Kind::kPrestoNative,
@@ -768,19 +818,21 @@ class BucketedTableOnlyWriteTest
 
 class PartitionedWithoutBucketTableWriterTest
     : public TableWriteTest,
-      public testing::WithParamInterface<uint32_t> {
+      public testing::WithParamInterface<uint64_t> {
  public:
   PartitionedWithoutBucketTableWriterTest() : TableWriteTest(GetParam()) {}
 
-  static std::vector<uint32_t> getTestParams() {
-    std::vector<uint32_t> testParams;
+  static std::vector<uint64_t> getTestParams() {
+    std::vector<uint64_t> testParams;
     testParams.push_back(TestParam{
+        FileFormat::DWRF,
         TestMode::kPartitioned,
         CommitStrategy::kNoCommit,
         HiveBucketProperty::Kind::kHiveCompatible,
         false}
                              .value);
     testParams.push_back(TestParam{
+        FileFormat::DWRF,
         TestMode::kPartitioned,
         CommitStrategy::kTaskCommit,
         HiveBucketProperty::Kind::kHiveCompatible,
@@ -791,61 +843,85 @@ class PartitionedWithoutBucketTableWriterTest
 };
 
 class AllTableWriterTest : public TableWriteTest,
-                           public testing::WithParamInterface<uint32_t> {
+                           public testing::WithParamInterface<uint64_t> {
  public:
   AllTableWriterTest() : TableWriteTest(GetParam()) {}
 
-  static std::vector<uint32_t> getTestParams() {
-    std::vector<uint32_t> testParams;
+  static std::vector<uint64_t> getTestParams() {
+    std::vector<uint64_t> testParams;
     testParams.push_back(TestParam{
+        FileFormat::DWRF,
         TestMode::kUnpartitioned,
         CommitStrategy::kNoCommit,
         HiveBucketProperty::Kind::kHiveCompatible,
         false}
                              .value);
     testParams.push_back(TestParam{
+        FileFormat::DWRF,
         TestMode::kUnpartitioned,
         CommitStrategy::kTaskCommit,
         HiveBucketProperty::Kind::kHiveCompatible,
         false}
                              .value);
     testParams.push_back(TestParam{
+        FileFormat::DWRF,
         TestMode::kPartitioned,
         CommitStrategy::kNoCommit,
         HiveBucketProperty::Kind::kHiveCompatible,
         false}
                              .value);
     testParams.push_back(TestParam{
+        FileFormat::DWRF,
         TestMode::kPartitioned,
         CommitStrategy::kTaskCommit,
         HiveBucketProperty::Kind::kHiveCompatible,
         false}
                              .value);
     testParams.push_back(TestParam{
+        FileFormat::DWRF,
         TestMode::kBucketed,
         CommitStrategy::kNoCommit,
         HiveBucketProperty::Kind::kHiveCompatible,
         false}
                              .value);
     testParams.push_back(TestParam{
+        FileFormat::DWRF,
         TestMode::kBucketed,
         CommitStrategy::kTaskCommit,
         HiveBucketProperty::Kind::kHiveCompatible,
         false}
                              .value);
     testParams.push_back(TestParam{
+        FileFormat::DWRF,
         TestMode::kBucketed,
         CommitStrategy::kNoCommit,
         HiveBucketProperty::Kind::kPrestoNative,
         false}
                              .value);
     testParams.push_back(TestParam{
+        FileFormat::DWRF,
         TestMode::kBucketed,
         CommitStrategy::kTaskCommit,
         HiveBucketProperty::Kind::kPrestoNative,
         false}
                              .value);
     // TODO: add to test bucket sort after it is supported.
+    if (hasWriterFactory(FileFormat::PARQUET)) {
+      testParams.push_back(TestParam{
+          FileFormat::PARQUET,
+          TestMode::kUnpartitioned,
+          CommitStrategy::kNoCommit,
+          HiveBucketProperty::Kind::kHiveCompatible,
+          false}
+                               .value);
+      testParams.push_back(TestParam{
+          FileFormat::PARQUET,
+          TestMode::kUnpartitioned,
+          CommitStrategy::kTaskCommit,
+          HiveBucketProperty::Kind::kHiveCompatible,
+          false}
+                               .value);
+    }
     return testParams;
   }
 };
@@ -882,7 +958,8 @@ TEST_P(AllTableWriterTest, scanFilterProjectWrite) {
                               types,
                               partitionedBy_,
                               bucketProperty_,
-                              makeLocationHandle(outputDirectory->path))),
+                              makeLocationHandle(outputDirectory->path),
+                              fileFormat_)),
                       nullptr,
                       commitStrategy_,
                       "rows")
@@ -899,7 +976,7 @@ TEST_P(AllTableWriterTest, scanFilterProjectWrite) {
       PlanBuilder()
           .tableScan(ROW(std::move(tableColumnNames), std::move(types)))
           .planNode(),
-      makeHiveConnectorSplits(outputDirectory),
+      makeHiveConnectorSplits(outputDirectory, fileFormat_),
       "SELECT c0, c1, c3, c5, c2 + c3, substr(c5, 1, 1) FROM tmp WHERE c2 <> 0");
 
   verifyTableWriterOutput(outputDirectory->path, false);
@@ -945,7 +1022,8 @@ TEST_P(AllTableWriterTest, renameAndReorderColumns) {
                               inputRowType->children(),
                               partitionedBy_,
                               bucketProperty_,
-                              makeLocationHandle(outputDirectory->path))),
+                              makeLocationHandle(outputDirectory->path),
+                              fileFormat_)),
                       nullptr,
                       commitStrategy_,
                       "rows")
@@ -956,7 +1034,7 @@ TEST_P(AllTableWriterTest, renameAndReorderColumns) {
 
   assertQuery(
       PlanBuilder().tableScan(tableSchema_).planNode(),
-      makeHiveConnectorSplits(outputDirectory),
+      makeHiveConnectorSplits(outputDirectory, fileFormat_),
       "SELECT c5, c4, c1, c0, c3 FROM tmp");
 
   verifyTableWriterOutput(outputDirectory->path, false);
@@ -977,6 +1055,7 @@ TEST_P(AllTableWriterTest, directReadWrite) {
       PlanBuilder().tableScan(rowType_),
       rowType_,
       outputDirectory->path,
+      fileFormat_,
       partitionedBy_,
       bucketProperty_,
       connector::hive::LocationHandle::TableType::kNew,
@@ -990,7 +1069,7 @@ TEST_P(AllTableWriterTest, directReadWrite) {
 
   assertQuery(
       PlanBuilder().tableScan(rowType_).planNode(),
-      makeHiveConnectorSplits(outputDirectory),
+      makeHiveConnectorSplits(outputDirectory, fileFormat_),
       "SELECT * FROM tmp");
 
   verifyTableWriterOutput(outputDirectory->path);
@@ -1010,6 +1089,7 @@ TEST_P(AllTableWriterTest, constantVectors) {
       PlanBuilder().values({vector}),
       rowType_,
       outputDirectory->path,
+      fileFormat_,
       partitionedBy_,
       bucketProperty_,
       connector::hive::LocationHandle::TableType::kNew,
@@ -1019,7 +1099,7 @@ TEST_P(AllTableWriterTest, constantVectors) {
 
   assertQuery(
       PlanBuilder().tableScan(rowType_).planNode(),
-      makeHiveConnectorSplits(outputDirectory),
+      makeHiveConnectorSplits(outputDirectory, fileFormat_),
       "SELECT * FROM tmp");
 
   verifyTableWriterOutput(outputDirectory->path);
@@ -1040,6 +1120,7 @@ TEST_P(AllTableWriterTest, commitStrategies) {
         PlanBuilder().values(vectors),
         rowType_,
         outputDirectory->path,
+        fileFormat_,
         partitionedBy_,
         bucketProperty_,
         connector::hive::LocationHandle::TableType::kNew,
@@ -1049,7 +1130,7 @@ TEST_P(AllTableWriterTest, commitStrategies) {
 
     assertQuery(
         PlanBuilder().tableScan(rowType_).planNode(),
-        makeHiveConnectorSplits(outputDirectory),
+        makeHiveConnectorSplits(outputDirectory, fileFormat_),
         "SELECT * FROM tmp");
     verifyTableWriterOutput(outputDirectory->path);
   }
@@ -1062,6 +1143,7 @@ TEST_P(AllTableWriterTest, commitStrategies) {
         PlanBuilder().values(vectors),
         rowType_,
         outputDirectory->path,
+        fileFormat_,
         partitionedBy_,
         bucketProperty_,
         connector::hive::LocationHandle::TableType::kNew,
@@ -1071,7 +1153,7 @@ TEST_P(AllTableWriterTest, commitStrategies) {
 
     assertQuery(
         PlanBuilder().tableScan(rowType_).planNode(),
-        makeHiveConnectorSplits(outputDirectory),
+        makeHiveConnectorSplits(outputDirectory, fileFormat_),
         "SELECT * FROM tmp");
     verifyTableWriterOutput(outputDirectory->path);
   }
@@ -1143,6 +1225,7 @@ TEST_P(PartitionedTableWriterTest, specialPartitionName) {
       PlanBuilder().tableScan(rowType),
       rowType,
       outputDirectory->path,
+      fileFormat_,
       partitionKeys,
       bucketProperty_,
       connector::hive::LocationHandle::TableType::kNew,
@@ -1227,6 +1310,7 @@ TEST_P(PartitionedTableWriterTest, multiplePartitions) {
       PlanBuilder().tableScan(rowType),
       rowType,
       outputDirectory->path,
+      fileFormat_,
       partitionKeys,
       bucketProperty_,
       connector::hive::LocationHandle::TableType::kNew,
@@ -1254,7 +1338,7 @@ TEST_P(PartitionedTableWriterTest, multiplePartitions) {
   while (iterPartitionDirectory != actualPartitionDirectories.end()) {
     assertQuery(
         PlanBuilder().tableScan(rowType).planNode(),
-        makeHiveConnectorSplits(*iterPartitionDirectory),
+        makeHiveConnectorSplits(*iterPartitionDirectory, fileFormat_),
         fmt::format(
             "SELECT * FROM tmp WHERE {}",
             partitionNameToPredicate(*iterPartitionName, partitionTypes)));
@@ -1305,6 +1389,7 @@ TEST_P(PartitionedTableWriterTest, singlePartition) {
       PlanBuilder().tableScan(rowType),
       rowType,
       outputDirectory->path,
+      fileFormat_,
       partitionKeys,
       bucketProperty_,
       connector::hive::LocationHandle::TableType::kNew,
@@ -1324,7 +1409,7 @@ TEST_P(PartitionedTableWriterTest, singlePartition) {
   // Verify all data is written to the single partition directory.
   assertQuery(
       PlanBuilder().tableScan(rowType).planNode(),
-      makeHiveConnectorSplits(outputDirectory),
+      makeHiveConnectorSplits(outputDirectory, fileFormat_),
       "SELECT * FROM tmp");
 
   // In case of unbucketed partitioned table, one single file is written to
@@ -1360,13 +1445,14 @@ TEST_P(PartitionedWithoutBucketTableWriterTest, fromSinglePartitionToMultiple) {
       PlanBuilder().values(vectors),
       rowType,
       outputDirectory->path,
+      fileFormat_,
       partitionKeys);
 
   assertQuery(plan, "SELECT count(*) FROM tmp");
 
   assertQuery(
       PlanBuilder().tableScan(rowType).planNode(),
-      makeHiveConnectorSplits(outputDirectory),
+      makeHiveConnectorSplits(outputDirectory, fileFormat_),
       "SELECT * FROM tmp");
 }
 
@@ -1412,6 +1498,7 @@ TEST_P(PartitionedTableWriterTest, maxPartitions) {
       PlanBuilder().values({vector}),
       rowType,
       outputDirectory->path,
+      fileFormat_,
       partitionKeys,
       bucketProperty_,
       connector::hive::LocationHandle::TableType::kNew,
@@ -1445,7 +1532,8 @@ TEST_P(AllTableWriterTest, writeNoFile) {
   auto plan = createInsertPlan(
       PlanBuilder().tableScan(rowType_).filter("false"),
       rowType_,
-      outputDirectory->path);
+      outputDirectory->path,
+      fileFormat_);
 
   auto execute = [&](const std::shared_ptr<const core::PlanNode>& plan,
                      std::shared_ptr<core::QueryCtx> queryCtx) {
@@ -1470,6 +1558,7 @@ TEST_P(UnpartitionedTableWriterTest, createAndInsertIntoUnpartitionedTable) {
         PlanBuilder().values(input),
         rowType_,
         outputDirectory->path,
+        fileFormat_,
         {},
         nullptr,
         connector::hive::LocationHandle::TableType::kNew);
@@ -1500,6 +1589,7 @@ TEST_P(
       PlanBuilder().values(input),
       rowType_,
       outputDirectory->path,
+      fileFormat_,
       {},
       nullptr,
       connector::hive::LocationHandle::TableType::kExisting);
@@ -1518,47 +1608,40 @@ TEST_P(UnpartitionedTableWriterTest, appendToAnExistingUnpartitionedTable) {
   //
   // The test inserts data vector by vector and checks the intermediate results
   // as well as the final result.
-  for (const auto fileFormat :
-       {dwio::common::FileFormat::DWRF, dwio::common::FileFormat::PARQUET}) {
-    SCOPED_TRACE(fileFormat);
-    if (!dwio::common::hasWriterFactory(fileFormat)) {
-      continue;
-    }
-    auto kRowsPerVector = 100;
-    auto input = makeVectors(10, kRowsPerVector);
+  auto kRowsPerVector = 100;
+  auto input = makeVectors(10, kRowsPerVector);
 
-    createDuckDbTable(input);
+  createDuckDbTable(input);
 
-    for (auto tableType : tableTypes_) {
-      auto outputDirectory = TempDirectoryPath::create();
-      auto numRows = 0;
+  for (auto tableType : tableTypes_) {
+    auto outputDirectory = TempDirectoryPath::create();
+    auto numRows = 0;
 
-      for (auto rowVector : input) {
-        numRows += kRowsPerVector;
-        auto plan = createInsertPlan(
-            PlanBuilder().values({rowVector}),
-            rowType_,
-            outputDirectory->path,
-            {},
-            nullptr,
-            tableType,
-            commitStrategy_,
-            fileFormat);
-        assertQuery(plan, fmt::format("SELECT {}", kRowsPerVector));
-        assertQuery(
-            PlanBuilder()
-                .tableScan(rowType_)
-                .singleAggregation({}, {"count(*)"})
-                .planNode(),
-            makeHiveConnectorSplits(outputDirectory, fileFormat),
-            fmt::format("SELECT {}", numRows));
-      }
-
+    for (auto rowVector : input) {
+      numRows += kRowsPerVector;
+      auto plan = createInsertPlan(
+          PlanBuilder().values({rowVector}),
+          rowType_,
+          outputDirectory->path,
+          fileFormat_,
+          {},
+          nullptr,
+          tableType,
+          commitStrategy_);
+      assertQuery(plan, fmt::format("SELECT {}", kRowsPerVector));
       assertQuery(
-          PlanBuilder().tableScan(rowType_).planNode(),
-          makeHiveConnectorSplits(outputDirectory, fileFormat),
-          "SELECT * FROM tmp");
+          PlanBuilder()
+              .tableScan(rowType_)
+              .singleAggregation({}, {"count(*)"})
+              .planNode(),
+          makeHiveConnectorSplits(outputDirectory, fileFormat_),
+          fmt::format("SELECT {}", numRows));
     }
+
+    assertQuery(
+        PlanBuilder().tableScan(rowType_).planNode(),
+        makeHiveConnectorSplits(outputDirectory, fileFormat_),
+        "SELECT * FROM tmp");
   }
 }
 
@@ -1594,6 +1677,7 @@ TEST_P(BucketedTableOnlyWriteTest, bucketCountLimit) {
         PlanBuilder().values({input}),
         rowType_,
         outputDirectory->path,
+        fileFormat_,
         partitionedBy_,
         bucketProperty_,
         connector::hive::LocationHandle::TableType::kNew,
@@ -1613,7 +1697,7 @@ TEST_P(BucketedTableOnlyWriteTest, bucketCountLimit) {
 
       assertQuery(
           PlanBuilder().tableScan(rowType_).planNode(),
-          makeHiveConnectorSplits(outputDirectory),
+          makeHiveConnectorSplits(outputDirectory, fileFormat_),
           "SELECT * FROM tmp");
       verifyTableWriterOutput(outputDirectory->path);
     }
@@ -1638,6 +1722,7 @@ TEST_P(BucketedTableOnlyWriteTest, mismatchedBucketTypes) {
       PlanBuilder().values({input}),
       rowType_,
       outputDirectory->path,
+      fileFormat_,
       partitionedBy_,
       bucketProperty_,
       connector::hive::LocationHandle::TableType::kNew,
@@ -1671,7 +1756,8 @@ TEST_P(AllTableWriterTest, tableWriteOutputCheck) {
                               rowType_->children(),
                               partitionedBy_,
                               bucketProperty_,
-                              makeLocationHandle(outputDirectory->path))),
+                              makeLocationHandle(outputDirectory->path),
+                              fileFormat_)),
                       nullptr,
                       commitStrategy_,
                       writerOutputType)
