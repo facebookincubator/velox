@@ -1588,6 +1588,7 @@ TEST_P(UnpartitionedTableWriterTest, appendToAnExistingUnpartitionedTable) {
   //
   // The test inserts data vector by vector and checks the intermediate results
   // as well as the final result.
+
   auto kRowsPerVector = 100;
   auto input = makeVectors(10, kRowsPerVector);
 
@@ -1605,8 +1606,7 @@ TEST_P(UnpartitionedTableWriterTest, appendToAnExistingUnpartitionedTable) {
           outputDirectory->path,
           {},
           nullptr,
-          tableType,
-          commitStrategy_);
+          tableType);
       assertQuery(plan, fmt::format("SELECT {}", kRowsPerVector));
       assertQuery(
           PlanBuilder()
@@ -1805,6 +1805,7 @@ TEST_P(AllTableWriterTest, tableWriteOutputCheck) {
       << "\nwrite files: " << folly::join(",", writeFiles)
       << "\ndisk files: " << folly::join(",", diskFiles);
 }
+
 // TODO: add partitioned table write update mode tests and more failure tests.
 
 VELOX_INSTANTIATE_TEST_SUITE_P(
