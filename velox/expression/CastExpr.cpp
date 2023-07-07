@@ -153,30 +153,32 @@ VectorPtr applyDecimalToIntegralCast(
     int128_t integralPart = simpleInput->valueAt(row) / scaleFactor;
     if (integralPart > std::numeric_limits<To>::max() ||
         integralPart < std::numeric_limits<To>::min())
-      VELOX_FAIL(makeErrorMessage(input, row, toType));
+      VELOX_USER_FAIL(makeErrorMessage(input, row, toType) + " Out of bounds.");
 
-    resultBuffer[row] =
-        util::Converter<ToKind, void, false>::cast(integralPart);
+    resultBuffer[row] = (To)integralPart;
   });
   return result;
 }
 
-template <typename TInput>
+template <typename FromNativeType, TypeKind ToKind>
 VectorPtr applyDecimalToDoubleCast(
     const SelectivityVector& rows,
     const BaseVector& input,
     exec::EvalCtx& context,
-    const TypePtr& fromType) {
+    const TypePtr& fromType,
+    const TypePtr& toType) {
+  using To = typename TypeTraits<ToKind>::NativeType;
+
   VectorPtr result;
-  context.ensureWritable(rows, DOUBLE(), result);
+  context.ensureWritable(rows, toType, result);
   (*result).clearNulls(rows);
   auto resultBuffer =
-      result->asUnchecked<FlatVector<double>>()->mutableRawValues();
+      result->asUnchecked<FlatVector<To>>()->mutableRawValues();
   const auto precisionScale = getDecimalPrecisionScale(*fromType);
-  const auto simpleInput = input.as<SimpleVector<TInput>>();
+  const auto simpleInput = input.as<SimpleVector<FromNativeType>>();
   const auto scaleFactor = DecimalUtil::kPowersOfTen[precisionScale.second];
   context.applyToSelectedNoThrow(rows, [&](int row) {
-    auto output = util::Converter<TypeKind::DOUBLE, void, false>::cast(
+    auto output = util::Converter<ToKind, void, false>::cast(
         simpleInput->valueAt(row));
     resultBuffer[row] = output / scaleFactor;
   });
@@ -203,9 +205,12 @@ VectorPtr applyDecimalToPrimitiveCast(
     case TypeKind::BIGINT:
       return applyDecimalToIntegralCast<FromNativeType, TypeKind::BIGINT>(
           rows, input, context, fromType, toType);
+    case TypeKind::REAL:
+      return applyDecimalToDoubleCast<FromNativeType, TypeKind::REAL>(
+          rows, input, context, fromType, toType);
     case TypeKind::DOUBLE:
-      return applyDecimalToDoubleCast<FromNativeType>(
-          rows, input, context, fromType);
+      return applyDecimalToDoubleCast<FromNativeType, TypeKind::DOUBLE>(
+          rows, input, context, fromType, toType);
     default:
       VELOX_UNSUPPORTED(
           "Cast from {} to {} is not supported",

@@ -287,14 +287,6 @@ struct Converter<
       return folly::to<T>(v);
     }
   }
-
-  static T cast(const int128_t v) {
-    if constexpr (TRUNCATE) {
-      return T(v);
-    } else {
-      return folly::to<T>(v);
-    }
-  }
 };
 
 template <TypeKind KIND, bool TRUNCATE>
