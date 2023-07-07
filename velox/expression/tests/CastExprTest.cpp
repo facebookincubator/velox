@@ -219,7 +219,7 @@ class CastExprTest : public functions::test::CastBaseTest {
 
     if constexpr (!std::is_same<int64_t, T>::value) {
       const auto tooSmall = (int64_t)std::numeric_limits<int32_t>::min() - 1;
-      const auto tooBig = std::numeric_limits<int64_t>::max() + 1;
+      const auto tooBig = (int64_t)std::numeric_limits<int32_t>::max() + 1;
 
       VELOX_ASSERT_THROW(
           testComplexCast(
