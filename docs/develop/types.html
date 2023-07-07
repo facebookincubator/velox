@@ -86,35 +86,31 @@ and fixed-width bytes required per value.</p>
 <td><p>int128_t</p></td>
 <td><p>16</p></td>
 </tr>
-<tr class="row-even"><td><p>DATE</p></td>
-<td><p>struct Date</p></td>
-<td><p>8</p></td>
-</tr>
-<tr class="row-odd"><td><p>REAL</p></td>
+<tr class="row-even"><td><p>REAL</p></td>
 <td><p>float</p></td>
 <td><p>4</p></td>
 </tr>
-<tr class="row-even"><td><p>DOUBLE</p></td>
+<tr class="row-odd"><td><p>DOUBLE</p></td>
 <td><p>double</p></td>
 <td><p>8</p></td>
 </tr>
-<tr class="row-odd"><td><p>TIMESTAMP</p></td>
+<tr class="row-even"><td><p>TIMESTAMP</p></td>
 <td><p>struct Timestamp</p></td>
 <td><p>16</p></td>
 </tr>
-<tr class="row-even"><td><p>VARCHAR</p></td>
+<tr class="row-odd"><td><p>VARCHAR</p></td>
 <td><p>struct StringView</p></td>
 <td><p>16</p></td>
 </tr>
-<tr class="row-odd"><td><p>VARBINARY</p></td>
+<tr class="row-even"><td><p>VARBINARY</p></td>
 <td><p>struct StringView</p></td>
 <td><p>16</p></td>
 </tr>
-<tr class="row-even"><td><p>OPAQUE</p></td>
+<tr class="row-odd"><td><p>OPAQUE</p></td>
 <td><p>std::shared_ptr&lt;void&gt;</p></td>
 <td><p>16</p></td>
 </tr>
-<tr class="row-odd"><td><p>UNKNOWN</p></td>
+<tr class="row-even"><td><p>UNKNOWN</p></td>
 <td><p>struct UnknownValue</p></td>
 <td><p>0</p></td>
 </tr>
@@ -174,19 +170,20 @@ their corresponding physical type.</p>
 </tr>
 </thead>
 <tbody>
-<tr class="row-even"><td><p>DECIMAL</p></td>
+<tr class="row-even"><td><p>DATE</p></td>
+<td><p>INTEGER</p></td>
+</tr>
+<tr class="row-odd"><td><p>DECIMAL</p></td>
 <td><p>BIGINT if precision &lt;= 18, HUGEINT if precision &gt;= 19</p></td>
 </tr>
-<tr class="row-odd"><td><p>INTERVAL DAY TO SECOND</p></td>
+<tr class="row-even"><td><p>INTERVAL DAY TO SECOND</p></td>
 <td><p>BIGINT</p></td>
 </tr>
-<tr class="row-even"><td><p>INTERVAL YEAR TO MONTH</p></td>
+<tr class="row-odd"><td><p>INTERVAL YEAR TO MONTH</p></td>
 <td><p>INTEGER</p></td>
 </tr>
 </tbody>
 </table>
-<p>We are in the process of migrating (<a class="reference external" href="https://github.com/facebookincubator/velox/pull/4744">#4744</a>) DATE type to a logical type backed
-by BIGINT.</p>
 <p>DECIMAL type carries additional <cite>precision</cite>,
 and <cite>scale</cite> information. <cite>Precision</cite> is the number of
 digits in a number. <cite>Scale</cite> is the number of digits to the right of the decimal

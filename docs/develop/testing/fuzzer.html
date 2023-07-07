@@ -136,6 +136,8 @@ correctness by ensuring that results of logically equivalent plans match.</p>
 <ul class="simple">
 <li><p><code class="docutils literal notranslate"><span class="pre">--retry_with_try</span></code>: Retry failed expressions by wrapping it using a try() statement. Default is false.</p></li>
 <li><p><code class="docutils literal notranslate"><span class="pre">--enable_variadic_signatures</span></code>: Enable testing of function signatures with variadic arguments. Default is false.</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">--special_forms</span></code>: Enable testing of specified special forms, including <cite>and</cite>, <cite>or</cite>, <cite>cast</cite>, <cite>coalesce</cite>, <cite>if</cite>, and <cite>switch</cite>. Every fuzzer test specifies the enabled special forms of its own. velox_expression_fuzzer_test has all the aforementioned special forms enabled by default.</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">--enable_dereference</span></code>: Enable testing of the field-reference from structs and row_constructor functions. Default is false.</p></li>
 <li><p><code class="docutils literal notranslate"><span class="pre">--velox_fuzzer_enable_complex_types</span></code>: Enable testing of function signatures with complex argument or return types. Default is false.</p></li>
 <li><p><code class="docutils literal notranslate"><span class="pre">--lazy_vector_generation_ratio</span></code>: Specifies the probability with which columns in the input row vector will be selected to be wrapped in lazy encoding (expressed as double from 0 to 1). Default is 0.0.</p></li>
 <li><p><code class="docutils literal notranslate"><span class="pre">--velox_fuzzer_enable_column_reuse</span></code>: Enable generation of expressions where one input column can be used by multiple subexpressions. Default is false.</p></li>
@@ -160,6 +162,9 @@ correctness by ensuring that results of logically equivalent plans match.</p>
 <span class="pre">--velox_fuzzer_enable_expression_reuse</span>
 <span class="pre">--velox_fuzzer_enable_column_reuse</span>
 <span class="pre">--retry_with_try</span>
+<span class="pre">--enable_dereference</span>
+<span class="pre">--special_forms=&quot;and,or,cast,coalesce,if,switch&quot;</span>
+<span class="pre">--max_expression_trees_per_step=2</span>
 <span class="pre">--repro_persist_path=&lt;a_valid_local_path&gt;</span>
 <span class="pre">--logtostderr=1</span></code></p>
 </section>
