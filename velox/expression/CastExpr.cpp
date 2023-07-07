@@ -161,7 +161,7 @@ VectorPtr applyDecimalToIntegralCast(
 }
 
 template <typename FromNativeType, TypeKind ToKind>
-VectorPtr applyDecimalToDoubleCast(
+VectorPtr applyDecimalToFloatCast(
     const SelectivityVector& rows,
     const BaseVector& input,
     exec::EvalCtx& context,
@@ -172,14 +172,13 @@ VectorPtr applyDecimalToDoubleCast(
   VectorPtr result;
   context.ensureWritable(rows, toType, result);
   (*result).clearNulls(rows);
-  auto resultBuffer =
-      result->asUnchecked<FlatVector<To>>()->mutableRawValues();
+  auto resultBuffer = result->asUnchecked<FlatVector<To>>()->mutableRawValues();
   const auto precisionScale = getDecimalPrecisionScale(*fromType);
   const auto simpleInput = input.as<SimpleVector<FromNativeType>>();
   const auto scaleFactor = DecimalUtil::kPowersOfTen[precisionScale.second];
   context.applyToSelectedNoThrow(rows, [&](int row) {
-    auto output = util::Converter<ToKind, void, false>::cast(
-        simpleInput->valueAt(row));
+    auto output =
+        util::Converter<ToKind, void, false>::cast(simpleInput->valueAt(row));
     resultBuffer[row] = output / scaleFactor;
   });
   return result;
@@ -206,10 +205,10 @@ VectorPtr applyDecimalToPrimitiveCast(
       return applyDecimalToIntegralCast<FromNativeType, TypeKind::BIGINT>(
           rows, input, context, fromType, toType);
     case TypeKind::REAL:
-      return applyDecimalToDoubleCast<FromNativeType, TypeKind::REAL>(
+      return applyDecimalToFloatCast<FromNativeType, TypeKind::REAL>(
           rows, input, context, fromType, toType);
     case TypeKind::DOUBLE:
-      return applyDecimalToDoubleCast<FromNativeType, TypeKind::DOUBLE>(
+      return applyDecimalToFloatCast<FromNativeType, TypeKind::DOUBLE>(
           rows, input, context, fromType, toType);
     default:
       VELOX_UNSUPPORTED(
