@@ -80,13 +80,13 @@ class HiveConfig {
   static constexpr const char* kS3IamRoleSessionName =
       "hive.s3.iam-role-session-name";
 
-  /// The GCS storage endpoint server.
+  // The GCS storage endpoint server.
   static constexpr const char* kGCSEndpoint = "hive.gcs.endpoint";
 
-  /// The GCS storage scheme, https for default credentials.
+  // The GCS storage scheme, https for default credentials.
   static constexpr const char* kGCSScheme = "hive.gcs.scheme";
 
-  /// The GCS service account configuration as json string
+  // The GCS service account configuration as json string
   static constexpr const char* kGCSCredentials = "hive.gcs.credentials";
 
   // Read the source file column name as lower case.
