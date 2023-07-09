@@ -21,6 +21,8 @@
 #include "velox/dwio/common/tests/utils/BatchMaker.h"
 #include "velox/dwio/dwrf/reader/DwrfReader.h"
 #include "velox/dwio/dwrf/writer/Writer.h"
+#include "velox/dwio/parquet/RegisterParquetReader.h"
+#include "velox/dwio/parquet/RegisterParquetWriter.h"
 
 namespace facebook::velox::exec::test {
 
@@ -37,12 +39,16 @@ void HiveConnectorTestBase::SetUp() {
   connector::registerConnector(hiveConnector);
   dwrf::registerDwrfReaderFactory();
   dwrf::registerDwrfWriterFactory();
+  parquet::registerParquetReaderFactory();
+  parquet::registerParquetWriterFactory();
 }
 
 void HiveConnectorTestBase::TearDown() {
   // Make sure all pending loads are finished or cancelled before unregister
   // connector.
   ioExecutor_.reset();
+  parquet::unregisterParquetReaderFactory();
+  parquet::unregisterParquetWriterFactory();
   dwrf::unregisterDwrfReaderFactory();
   dwrf::unregisterDwrfWriterFactory();
   connector::unregisterConnector(kHiveConnectorId);

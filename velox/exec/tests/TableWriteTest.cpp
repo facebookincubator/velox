@@ -20,14 +20,11 @@
 #include "velox/connectors/hive/HiveConnector.h"
 #include "velox/connectors/hive/HivePartitionFunction.h"
 #include "velox/dwio/common/WriterFactory.h"
-#include "velox/dwio/parquet/RegisterParquetReader.h"
-#include "velox/dwio/parquet/RegisterParquetWriter.h"
 #include "velox/exec/TableWriter.h"
 #include "velox/exec/tests/utils/AssertQueryBuilder.h"
 #include "velox/exec/tests/utils/HiveConnectorTestBase.h"
 #include "velox/exec/tests/utils/PlanBuilder.h"
 #include "velox/exec/tests/utils/TempDirectoryPath.h"
-#include "velox/vector/fuzzer/VectorFuzzer.h"
 
 #include <re2/re2.h>
 
@@ -145,17 +142,6 @@ class TableWriteTest : public HiveConnectorTestBase {
       bucketProperty_ = std::make_shared<HiveBucketProperty>(
           testParam_.bucketKind(), 4, bucketedBy, bucketedTypes, sortedBy);
     }
-  }
-
-  void SetUp() override {
-    HiveConnectorTestBase::SetUp();
-    parquet::registerParquetReaderFactory();
-    parquet::registerParquetWriterFactory();
-  }
-
-  void TearDown() {
-    parquet::unregisterParquetReaderFactory();
-    parquet::unregisterParquetWriterFactory();
   }
 
   void setCommitStrategy(CommitStrategy commitStrategy) {
