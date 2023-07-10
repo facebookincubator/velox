@@ -31,8 +31,7 @@ namespace facebook::velox {
 namespace {
 namespace gcs = ::google::cloud::storage;
 namespace gc = ::google::cloud;
-// Reference: https://issues.apache.org/jira/browse/ARROW-14346
-// https://github.com/apache/arrow/blob/master/cpp/src/arrow/filesystem/gcsfs.cc#L49
+// Reference: https://github.com/apache/arrow/issues/29916
 // Change the default upload buffer size. In general, sending larger buffers is
 // more efficient with GCS, as each buffer requires a roundtrip to the service.
 // With formatted output (when using `operator<<`), keeping a larger buffer in
@@ -128,9 +127,10 @@ class GCSReadFile final : public ReadFile {
   }
 
   uint64_t memoryUsage() const override {
-    // TODO: Check if any buffers are being used by the GCS library
-    return sizeof(gcs::Client) + kUploadBufferSize + 2 * sizeof(std::string) +
-        sizeof(int64_t);
+    return sizeof(GCSReadFile) // this class
+        + sizeof(gcs::Client) // pointee
+        + kUploadBufferSize // buffer size
+        ;
   }
 
   bool shouldCoalesce() const final {
@@ -174,6 +174,8 @@ class GCSReadFile final : public ReadFile {
 
 namespace filesystems {
 using namespace connector::hive;
+
+auto constexpr kGCSInvalidPath = "File {} is not a valid gcs file";
 
 class GCSFileSystem::Impl {
  public:
@@ -244,7 +246,7 @@ std::unique_ptr<WriteFile> GCSFileSystem::openFileForWrite(
 
 void GCSFileSystem::remove(std::string_view path) {
   if (!isGCSFile(path)) {
-    VELOX_FAIL("File {} is not a valid gcs file", path);
+    VELOX_FAIL(kGCSInvalidPath, path);
   }
 
   // We assume 'path' is well-formed here.
@@ -273,7 +275,7 @@ void GCSFileSystem::remove(std::string_view path) {
 bool GCSFileSystem::exists(std::string_view path) {
   std::vector<std::string> result;
   if (!isGCSFile(path))
-    VELOX_FAIL("File {} is not a valid gcs file", path);
+    VELOX_FAIL(kGCSInvalidPath, path);
 
   // We assume 'path' is well-formed here.
   const std::string file = gcsPath(path);
@@ -290,7 +292,7 @@ bool GCSFileSystem::exists(std::string_view path) {
 std::vector<std::string> GCSFileSystem::list(std::string_view path) {
   std::vector<std::string> result;
   if (!isGCSFile(path))
-    VELOX_FAIL("File {} is not a valid gcs file", path);
+    VELOX_FAIL(kGCSInvalidPath, path);
 
   // We assume 'path' is well-formed here.
   const std::string file = gcsPath(path);
