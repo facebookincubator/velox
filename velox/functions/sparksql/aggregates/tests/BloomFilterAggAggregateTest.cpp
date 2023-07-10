@@ -86,4 +86,19 @@ TEST_F(BloomFilterAggAggregateTest, nullBloomFilter) {
           vectors, {}, {"bloom_filter_agg(c0, 5, 64)"}, expectedFake),
       "First argument of bloom_filter_agg cannot be null");
 }
+
+TEST_F(BloomFilterAggAggregateTest, config) {
+  auto vector = {makeRowVector({makeFlatVector<int64_t>(
+      100, [](vector_size_t row) { return row % 9; })})};
+  auto bloomFilter = getSerializedBloomFilter(100);
+  auto expected = {
+      makeRowVector({makeConstant<StringView>(StringView(bloomFilter), 1)})};
+
+  testAggregations(
+      vector,
+      {},
+      {"bloom_filter_agg(c0)"},
+      expected,
+      {{core::QueryConfig::kSparkRuntimeBloomFilterMaxNumBits, "1600"}});
+}
 } // namespace facebook::velox::functions::aggregate::sparksql::test

@@ -192,6 +192,18 @@ class QueryConfig {
   static constexpr const char* kSparkLegacySizeOfNull =
       "spark.legacy_size_of_null";
 
+  // The default number of expected items for the runtime bloomfilter.
+  static constexpr const char* kSparkRuntimeBloomFilterExpectedNumItems =
+      "spark.runtime.bloom_filter.expected_num_items";
+
+  // The default number of bits to use for the runtime bloom filter.
+  static constexpr const char* kSparkRuntimeBloomFilterNumBits =
+      "spark.runtime.bloom_filter.num_bits";
+
+  // The max number of bits to use for the runtime bloom filter.
+  static constexpr const char* kSparkRuntimeBloomFilterMaxNumBits =
+      "spark.runtime.bloom_filter.max_num_bits";
+
   /// The number of local parallel table writer operators per task.
   static constexpr const char* kTaskWriterCount = "task_writer_count";
 
@@ -392,6 +404,23 @@ class QueryConfig {
   bool sparkLegacySizeOfNull() const {
     constexpr bool kDefault{true};
     return get<bool>(kSparkLegacySizeOfNull, kDefault);
+  }
+
+  int64_t sparkRuntimeBloomFilterExpectedNumItems() const {
+    constexpr int64_t kDefault = 1'000'000L;
+    return get<int64_t>(kSparkRuntimeBloomFilterExpectedNumItems, kDefault);
+  }
+
+  int64_t sparkRuntimeBloomFilterNumBits() const {
+    constexpr int64_t kDefault = 8'388'608L;
+    return get<int64_t>(kSparkRuntimeBloomFilterNumBits, kDefault);
+  }
+
+  // Spark kMaxNumBits is 67'108'864, but velox has memory limit sizeClassSizes
+  // 256, so decrease it to not over memory limit.
+  int64_t sparkRuntimeBloomFilterMaxNumBits() const {
+    constexpr int64_t kDefault = 4'096 * 1024;
+    return get<int64_t>(kSparkRuntimeBloomFilterMaxNumBits, kDefault);
   }
 
   bool exprTrackCpuUsage() const {
