@@ -174,7 +174,7 @@ class CastExprTest : public functions::test::CastBaseTest {
   template <typename T>
   void testDecimalToFloatCasts(TypePtr type) {
     // short to short, scale up.
-    auto shortFlat = makeNullableShortDecimalFlatVector(
+    auto shortFlat = makeNullableFlatVector<int64_t>(
         {DecimalUtil::kShortDecimalMin,
          -999999999999999999,
          -3,
@@ -197,7 +197,7 @@ class CastExprTest : public functions::test::CastBaseTest {
              1,
              std::nullopt}));
 
-    auto longFlat = makeNullableLongDecimalFlatVector(
+    auto longFlat = makeNullableFlatVector<int128_t>(
         {DecimalUtil::kLongDecimalMin,
          0,
          DecimalUtil::kLongDecimalMax,
@@ -213,7 +213,7 @@ class CastExprTest : public functions::test::CastBaseTest {
 
   template <typename T>
   void testDecimalToIntegralCasts(TypePtr type) {
-    auto shortFlat = makeNullableShortDecimalFlatVector(
+    auto shortFlat = makeNullableFlatVector<int64_t>(
         {-300, -230, -200, -100, 0, 5'500, 5755, 6'900, 7'200, std::nullopt},
         DECIMAL(6, 2));
     testComplexCast(
@@ -230,7 +230,7 @@ class CastExprTest : public functions::test::CastBaseTest {
              69,
              72,
              std::nullopt}));
-    auto longFlat = makeNullableLongDecimalFlatVector(
+    auto longFlat = makeNullableFlatVector<int128_t>(
         {-30'000'000'000,
          -25'500'000'000,
          -20'000'000'000,
@@ -264,7 +264,7 @@ class CastExprTest : public functions::test::CastBaseTest {
       VELOX_ASSERT_THROW(
           testComplexCast(
               "c0",
-              makeShortDecimalFlatVector({tooSmall}, DECIMAL(9, 0)),
+              makeFlatVector<int64_t>({0, tooSmall}, DECIMAL(9, 0)),
               makeFlatVector<T>(0)),
           fmt::format(
               "Failed to cast from DECIMAL(9,0) to {}: -2147483649. Out of bounds.",
@@ -273,7 +273,7 @@ class CastExprTest : public functions::test::CastBaseTest {
       VELOX_ASSERT_THROW(
           testComplexCast(
               "c0",
-              makeLongDecimalFlatVector({tooSmall}, DECIMAL(19, 0)),
+              makeFlatVector<int128_t>({0, tooSmall}, DECIMAL(19, 0)),
               makeFlatVector<T>(0)),
           fmt::format(
               "Failed to cast from DECIMAL(19,0) to {}: -2147483649. Out of bounds.",
@@ -282,7 +282,7 @@ class CastExprTest : public functions::test::CastBaseTest {
       VELOX_ASSERT_THROW(
           testComplexCast(
               "c0",
-              makeShortDecimalFlatVector({tooBig}, DECIMAL(9, 0)),
+              makeFlatVector<int64_t>({0, tooBig}, DECIMAL(9, 0)),
               makeFlatVector<T>(0)),
           fmt::format(
               "Failed to cast from DECIMAL(9,0) to {}: 2147483648. Out of bounds.",
@@ -291,7 +291,7 @@ class CastExprTest : public functions::test::CastBaseTest {
       VELOX_ASSERT_THROW(
           testComplexCast(
               "c0",
-              makeLongDecimalFlatVector({tooBig}, DECIMAL(19, 0)),
+              makeFlatVector<int128_t>({0, tooBig}, DECIMAL(19, 0)),
               makeFlatVector<T>(0)),
           fmt::format(
               "Failed to cast from DECIMAL(19,0) to {}: 2147483648. Out of bounds.",
@@ -1014,7 +1014,7 @@ TEST_F(CastExprTest, decimalToDecimal) {
   // NULLs and overflow.
   longFlat = makeNullableLongDecimalFlatVector(
       {-20'000, -1'000'000, 10'000, std::nullopt}, DECIMAL(20, 3));
-  auto expectedShort = makeNullableShortDecimalFlatVector(
+  auto expectedShort = makeNullableFlatVector<int64_t>(
       {-200'000, std::nullopt, 100'000, std::nullopt}, DECIMAL(6, 4));
 
   // Throws exception if CAST fails.
