@@ -15,6 +15,7 @@
  */
 
 #include "connectors/hive/storage_adapters/s3fs/S3FileSystem.h"
+#include "connectors/hive/storage_adapters/s3fs/RegisterS3FileSystem.h"
 #include "connectors/hive/storage_adapters/s3fs/S3Util.h"
 #include "connectors/hive/storage_adapters/s3fs/tests/MinioServer.h"
 #include "velox/common/file/File.h"
