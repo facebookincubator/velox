@@ -1467,8 +1467,6 @@ std::unique_ptr<exec::Aggregate> create(
       return std::make_unique<Aggregate<W, double>>(resultType);
     case TypeKind::VARCHAR:
       return std::make_unique<Aggregate<W, StringView>>(resultType);
-    case TypeKind::DATE:
-      return std::make_unique<Aggregate<W, Date>>(resultType);
     case TypeKind::TIMESTAMP:
       return std::make_unique<Aggregate<W, Timestamp>>(resultType);
     default:
@@ -1501,8 +1499,6 @@ std::unique_ptr<exec::Aggregate> create(
     case TypeKind::VARCHAR:
       return create<Aggregate, StringView>(
           resultType, compareType, errorMessage);
-    case TypeKind::DATE:
-      return create<Aggregate, Date>(resultType, compareType, errorMessage);
     case TypeKind::TIMESTAMP:
       return create<Aggregate, Timestamp>(
           resultType, compareType, errorMessage);
@@ -1580,7 +1576,9 @@ exec::AggregateRegistrationResult registerMinMaxBy(const std::string& name) {
       [name](
           core::AggregationNode::Step step,
           const std::vector<TypePtr>& argTypes,
-          const TypePtr& resultType) -> std::unique_ptr<exec::Aggregate> {
+          const TypePtr& resultType,
+          const core::QueryConfig& /*config*/)
+          -> std::unique_ptr<exec::Aggregate> {
         const auto isRawInput = exec::isRawInput(step);
         const std::string errorMessage = fmt::format(
             "Unknown input types for {} ({}) aggregation: {}",

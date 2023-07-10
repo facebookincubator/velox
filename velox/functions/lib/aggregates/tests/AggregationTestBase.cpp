@@ -791,11 +791,13 @@ VectorPtr AggregationTestBase::testStreaming(
   auto [intermediateType, finalType] =
       getResultTypes(functionName, rawInputTypes);
   auto createFunction = [&, &finalType = finalType] {
+    core::QueryConfig config({});
     auto func = exec::Aggregate::create(
         functionName,
         core::AggregationNode::Step::kSingle,
         rawInputTypes,
-        finalType);
+        finalType,
+        config);
     func->setAllocator(&allocator);
     func->setOffsets(kOffset, 0, 1, kRowSizeOffset);
     return func;
@@ -815,6 +817,11 @@ VectorPtr AggregationTestBase::testStreaming(
   }
   auto intermediate = BaseVector::create(intermediateType, 1, pool());
   func->extractAccumulators(groups.data(), 1, &intermediate);
+  // Destroy accumulators to avoid memory leak.
+  if (func->accumulatorUsesExternalMemory()) {
+    func->destroy(folly::Range(groups.data(), 1));
+  }
+
   // Create a new function picking up the intermediate result.
   auto func2 = createFunction();
   func2->initializeNewGroups(groups.data(), indices);
@@ -835,6 +842,11 @@ VectorPtr AggregationTestBase::testStreaming(
   }
   auto result = BaseVector::create(finalType, 1, pool());
   func2->extractValues(groups.data(), 1, &result);
+  // Destroy accumulators to avoid memory leak.
+  if (func2->accumulatorUsesExternalMemory()) {
+    func2->destroy(folly::Range(groups.data(), 1));
+  }
+
   return result;
 }
 

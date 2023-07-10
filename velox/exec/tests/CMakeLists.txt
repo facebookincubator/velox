@@ -107,6 +107,8 @@ target_link_libraries(
   velox_dwio_common
   velox_dwio_common_exception
   velox_dwio_common_test_utils
+  velox_dwio_parquet_reader
+  velox_dwio_parquet_writer
   velox_exec
   velox_exec_test_lib
   velox_functions_json
@@ -228,3 +230,14 @@ add_executable(velox_aggregation_runner_test AggregationRunnerTest.cpp)
 
 target_link_libraries(velox_aggregation_runner_test velox_aggregation_fuzzer
                       velox_aggregates velox_vector_test_lib gtest gtest_main)
+
+add_library(velox_simple_aggregate SimpleAverageAggregate.cpp)
+
+target_link_libraries(velox_simple_aggregate velox_exec velox_expression
+                      velox_expression_functions)
+
+add_executable(velox_simple_aggregate_test SimpleAggregateAdapterTest.cpp)
+
+target_link_libraries(
+  velox_simple_aggregate_test velox_simple_aggregate velox_exec
+  velox_functions_aggregates_test_lib gtest gtest_main)
