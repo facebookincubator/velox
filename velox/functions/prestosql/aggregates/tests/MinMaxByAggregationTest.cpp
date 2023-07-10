@@ -551,7 +551,7 @@ TEST_P(MinMaxByGlobalByAggregationTest, randomMinByGlobalBy) {
   // DuckDB).
   if (GetParam().comparisonType == TypeKind::TIMESTAMP ||
       GetParam().valueType == TypeKind::TIMESTAMP) {
-    GTEST_SKIP() << "Fuzzer test for timestamps is not supported yet.";
+    return;
   }
 
   testGlobalAggregation(
@@ -564,7 +564,7 @@ TEST_P(MinMaxByGlobalByAggregationTest, randomMinByGlobalBy) {
 TEST_P(MinMaxByGlobalByAggregationTest, randomMaxByGlobalBy) {
   if (GetParam().comparisonType == TypeKind::TIMESTAMP ||
       GetParam().valueType == TypeKind::TIMESTAMP) {
-    GTEST_SKIP() << "Fuzzer test for timestamps is not supported yet.";
+    return;
   }
 
   testGlobalAggregation(
@@ -579,7 +579,7 @@ TEST_P(
     randomMaxByGlobalByWithDistinctCompareValue) {
   if (GetParam().comparisonType == TypeKind::TIMESTAMP ||
       GetParam().valueType == TypeKind::TIMESTAMP) {
-    GTEST_SKIP() << "Fuzzer test for timestamps is not supported yet.";
+    return;
   }
 
   // Enable disk spilling test with distinct comparison values.
@@ -979,7 +979,7 @@ TEST_P(MinMaxByGroupByAggregationTest, maxByFinalGroupBy) {
 TEST_P(MinMaxByGroupByAggregationTest, randomMinByGroupBy) {
   if (GetParam().comparisonType == TypeKind::TIMESTAMP ||
       GetParam().valueType == TypeKind::TIMESTAMP) {
-    GTEST_SKIP() << "Fuzzer test for timestamps is not supported yet.";
+    return;
   }
 
   testGroupByAggregation(
@@ -993,7 +993,7 @@ TEST_P(MinMaxByGroupByAggregationTest, randomMinByGroupBy) {
 TEST_P(MinMaxByGroupByAggregationTest, randomMaxByGroupBy) {
   if (GetParam().comparisonType == TypeKind::TIMESTAMP ||
       GetParam().valueType == TypeKind::TIMESTAMP) {
-    GTEST_SKIP() << "Fuzzer test for timestamps is not supported yet.";
+    return;
   }
 
   testGroupByAggregation(
@@ -1009,7 +1009,7 @@ TEST_P(
     randomMinMaxByGroupByWithDistinctCompareValue) {
   if (GetParam().comparisonType == TypeKind::TIMESTAMP ||
       GetParam().valueType == TypeKind::TIMESTAMP) {
-    GTEST_SKIP() << "Fuzzer test for timestamps is not supported yet.";
+    return;
   }
 
   // Enable disk spilling test with distinct comparison values.
