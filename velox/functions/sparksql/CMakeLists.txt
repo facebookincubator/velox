@@ -17,6 +17,7 @@ add_library(
   ArraySort.cpp
   Bitwise.cpp
   CompareFunctionsNullSafe.cpp
+  Comparisons.cpp
   Hash.cpp
   In.cpp
   LeastGreatest.cpp
