@@ -15,8 +15,6 @@
  */
 #pragma once
 
-#include <memory>
-
 #include "velox/expression/VectorFunction.h"
 
 namespace facebook::velox::functions::sparksql {
@@ -91,6 +89,7 @@ struct GreaterOrEqual : private Less<T> {
 /// BOOLEAN
 /// VARCHAR
 /// TIMESTAMP
+/// VARBINARY
 
 /// Special cases:
 /// NaN in Spark is handled differently from standard floating point semantics.

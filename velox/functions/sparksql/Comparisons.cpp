@@ -27,10 +27,6 @@ template <typename Cmp, TypeKind kind>
 class ComparisonFunction final : public exec::VectorFunction {
   using T = typename TypeTraits<kind>::NativeType;
 
-  bool isDefaultNullBehavior() const override {
-    return true;
-  }
-
   bool supportsFlatNoNullsFastPath() const override {
     return true;
   }
@@ -43,7 +39,6 @@ class ComparisonFunction final : public exec::VectorFunction {
       VectorPtr& result) const override {
     context.ensureWritable(rows, BOOLEAN(), result);
     auto* flatResult = result->asFlatVector<bool>();
-    flatResult->mutableRawValues<uint64_t>();
     const Cmp cmp;
     if (args[0]->isFlatEncoding() && args[1]->isFlatEncoding()) {
       // Fast path for (flat, flat).
@@ -55,7 +50,7 @@ class ComparisonFunction final : public exec::VectorFunction {
           [&](vector_size_t i) { flatResult->set(i, cmp(rawA[i], rawB[i])); });
     } else if (args[0]->isConstantEncoding() && args[1]->isFlatEncoding()) {
       // Fast path for (const, flat).
-      auto constant = args[0]->asUnchecked<SimpleVector<T>>()->valueAt(0);
+      auto constant = args[0]->asUnchecked<ConstantVector<T>>()->valueAt(0);
       auto flatValues = args[1]->asUnchecked<FlatVector<T>>();
       auto rawValues = flatValues->mutableRawValues();
       rows.applyToSelected([&](vector_size_t i) {
@@ -64,7 +59,7 @@ class ComparisonFunction final : public exec::VectorFunction {
     } else if (args[0]->isFlatEncoding() && args[1]->isConstantEncoding()) {
       // Fast path for (flat, const).
       auto flatValues = args[0]->asUnchecked<FlatVector<T>>();
-      auto constant = args[1]->asUnchecked<SimpleVector<T>>()->valueAt(0);
+      auto constant = args[1]->asUnchecked<ConstantVector<T>>()->valueAt(0);
       auto rawValues = flatValues->mutableRawValues();
       rows.applyToSelected([&](vector_size_t i) {
         flatResult->set(i, cmp(rawValues[i], constant));

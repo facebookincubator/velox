@@ -46,13 +46,11 @@ void registerCompareFunctions(const std::string& prefix) {
       {prefix + "between"});
   registerFunction<BetweenFunction, bool, int64_t, int64_t, int64_t>(
       {prefix + "between"});
-  registerFunction<BetweenFunction, bool, double, double, double>(
+  registerFunction<BetweenFunction, bool, int128_t, int128_t, int128_t>(
       {prefix + "between"});
   registerFunction<BetweenFunction, bool, float, float, float>(
       {prefix + "between"});
-  registerFunction<BetweenFunction, bool, int64_t, int64_t, int64_t>(
-      {prefix + "between"});
-  registerFunction<BetweenFunction, bool, int128_t, int128_t, int128_t>(
+  registerFunction<BetweenFunction, bool, double, double, double>(
       {prefix + "between"});
 }
 

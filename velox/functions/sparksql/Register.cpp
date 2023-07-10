@@ -158,10 +158,6 @@ void registerFunctions(const std::string& prefix) {
   // Register 'in' functions.
   registerIn(prefix);
 
-  // Compare nullsafe functions
-  exec::registerStatefulVectorFunction(
-      prefix + "equalnullsafe", equalNullSafeSignatures(), makeEqualNullSafe);
-
   // These vector functions are only accessible via the
   // VELOX_REGISTER_VECTOR_FUNCTION macro, which must be invoked in the same
   // namespace as the function definition.

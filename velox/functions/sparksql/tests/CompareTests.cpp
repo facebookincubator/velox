@@ -100,15 +100,15 @@ TEST_F(CompareTest, testdecimal) {
     facebook::velox::test::assertEqualVectors(actual, expectedResult);
   };
   std::vector<VectorPtr> inputs = {
-      makeNullableShortDecimalFlatVector(
+      makeNullableFlatVector<int64_t>(
           {1, std::nullopt, 3, -2, std::nullopt, 4}, DECIMAL(10, 5)),
-      makeNullableShortDecimalFlatVector(
+      makeNullableFlatVector<int64_t>(
           {0, 2, 3, -3, std::nullopt, 5}, DECIMAL(10, 5))};
   auto expected = makeNullableFlatVector<bool>(
       {true, std::nullopt, false, true, std::nullopt, false});
   runAndCompare(fmt::format("{}(c0, c1)", "greaterthan"), inputs, expected);
   std::vector<VectorPtr> longDecimalsInputs = {
-      makeNullableLongDecimalFlatVector(
+      makeNullableFlatVector<int128_t>(
           {DecimalUtil::kLongDecimalMax,
            std::nullopt,
            3,
@@ -116,7 +116,7 @@ TEST_F(CompareTest, testdecimal) {
            std::nullopt,
            4},
           DECIMAL(38, 5)),
-      makeNullableLongDecimalFlatVector(
+      makeNullableFlatVector<int128_t>(
           {DecimalUtil::kLongDecimalMax - 1,
            2,
            3,
@@ -133,8 +133,8 @@ TEST_F(CompareTest, testdecimal) {
 
   // Test with different data types.
   std::vector<VectorPtr> invalidInputs = {
-      makeNullableShortDecimalFlatVector({1}, DECIMAL(10, 5)),
-      makeNullableShortDecimalFlatVector({1}, DECIMAL(10, 4))};
+      makeNullableFlatVector<int64_t>({1}, DECIMAL(10, 5)),
+      makeNullableFlatVector<int64_t>({1}, DECIMAL(10, 4))};
   auto invalidResult = makeNullableFlatVector<bool>({true});
   VELOX_ASSERT_THROW(
       runAndCompare(

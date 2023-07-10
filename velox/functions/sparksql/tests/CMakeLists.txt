@@ -17,7 +17,6 @@ add_executable(
   ArithmeticTest.cpp
   ArraySortTest.cpp
   BitwiseTest.cpp
-  CompareNullSafeTests.cpp
   CompareTests.cpp
   DateTimeFunctionsTest.cpp
   ElementAtTest.cpp
