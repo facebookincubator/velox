@@ -170,7 +170,7 @@ TEST_F(ParquetReaderTest, parseDate) {
   auto type = reader.typeWithId();
   EXPECT_EQ(type->size(), 1ULL);
   auto col0 = type->childAt(0);
-  EXPECT_EQ(col0->type->kind(), TypeKind::DATE);
+  EXPECT_EQ(col0->type, DATE());
   EXPECT_EQ(type->childByName("date"), col0);
 }
 
@@ -288,4 +288,38 @@ TEST_F(ParquetReaderTest, intMultipleFilters) {
       intSchema(),
       std::move(filters),
       expected);
+}
+
+// This test is to verify filterRowGroups() doesn't throw the fileOffset Velox
+// check failure
+TEST_F(ParquetReaderTest, filterRowGroups) {
+  // decimal_no_ColumnMetadata.parquet has one columns a: DECIMAL(9,1). It
+  // doesn't have ColumnMetaData, and rowGroups_[0].columns[0].file_offset is 0.
+  auto rowType = ROW({"_c0"}, {DECIMAL(9, 1)});
+  ReaderOptions readerOpts{defaultPool.get()};
+  const std::string decimal_dict(
+      getExampleFilePath("decimal_no_ColumnMetadata.parquet"));
+
+  ParquetReader reader = createReader(decimal_dict, readerOpts);
+  RowReaderOptions rowReaderOpts;
+  rowReaderOpts.setScanSpec(makeScanSpec(rowType));
+  auto rowReader = reader.createRowReader(rowReaderOpts);
+
+  EXPECT_EQ(reader.numberOfRows(), 10ULL);
+}
+
+TEST_F(ParquetReaderTest, parseLongTagged) {
+  // This is a case for long with annonation read
+  const std::string sample(getExampleFilePath("tagged_long.parquet"));
+
+  ReaderOptions readerOptions{defaultPool.get()};
+  ParquetReader reader = createReader(sample, readerOptions);
+
+  EXPECT_EQ(reader.numberOfRows(), 4ULL);
+
+  auto type = reader.typeWithId();
+  EXPECT_EQ(type->size(), 1ULL);
+  auto col0 = type->childAt(0);
+  EXPECT_EQ(col0->type->kind(), TypeKind::BIGINT);
+  EXPECT_EQ(type->childByName("_c0"), col0);
 }

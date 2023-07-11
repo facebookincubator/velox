@@ -377,7 +377,9 @@ exec::AggregateRegistrationResult registerHistogram(const std::string& name) {
       [name](
           core::AggregationNode::Step step,
           const std::vector<TypePtr>& argTypes,
-          const TypePtr& resultType) -> std::unique_ptr<exec::Aggregate> {
+          const TypePtr& resultType,
+          const core::QueryConfig& /*config*/)
+          -> std::unique_ptr<exec::Aggregate> {
         VELOX_CHECK_EQ(
             argTypes.size(),
             1,
@@ -403,8 +405,6 @@ exec::AggregateRegistrationResult registerHistogram(const std::string& name) {
             return std::make_unique<HistogramAggregate<double>>(resultType);
           case TypeKind::TIMESTAMP:
             return std::make_unique<HistogramAggregate<Timestamp>>(resultType);
-          case TypeKind::DATE:
-            return std::make_unique<HistogramAggregate<Date>>(resultType);
           case TypeKind::VARCHAR:
             return std::make_unique<HistogramAggregate<StringView>>(resultType);
           default:
