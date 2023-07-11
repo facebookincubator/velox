@@ -100,6 +100,10 @@ RowVectorPtr TableWriter::getOutput() {
   }
   finished_ = true;
 
+  // Close the data sink to flush all the buffered data and metadata to storage
+  // and close the files.
+  auto freeGuard = folly::makeGuard([&]() { close(); });
+
   if (outputType_->size() == 0) {
     return nullptr;
   }
