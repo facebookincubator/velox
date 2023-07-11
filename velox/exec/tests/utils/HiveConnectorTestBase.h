@@ -15,7 +15,6 @@
  */
 #pragma once
 
-#include <regex>
 #include "velox/connectors/hive/HiveConnector.h"
 #include "velox/connectors/hive/HiveConnectorSplit.h"
 #include "velox/dwio/dwrf/common/Config.h"
