@@ -183,6 +183,19 @@ TEST_F(ArithmeticTest, Divide) {
   EXPECT_TRUE(std::isnan(divide(kInf, -kInf).value_or(0)));
 }
 
+TEST_F(ArithmeticTest, acos) {
+  const auto acos = [&](std::optional<double> a) {
+    return evaluateOnce<double>("acos(c0)", a);
+  };
+
+  EXPECT_EQ(acos(1), 0);
+  EXPECT_TRUE(std::isnan(acos(2).value_or(0)));
+  EXPECT_TRUE(std::isnan(acos(kInf).value_or(0)));
+  EXPECT_TRUE(std::isnan(acos(-kInf).value_or(0)));
+  EXPECT_EQ(acos(std::nullopt), std::nullopt);
+  EXPECT_TRUE(std::isnan(acos(kNan).value_or(0)));
+}
+
 TEST_F(ArithmeticTest, acosh) {
   const auto acosh = [&](std::optional<double> a) {
     return evaluateOnce<double>("acosh(c0)", a);

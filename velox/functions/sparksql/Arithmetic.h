@@ -153,6 +153,14 @@ struct FloorFunction {
 };
 
 template <typename T>
+struct AcosFunction {
+  template <typename TInput>
+  FOLLY_ALWAYS_INLINE void call(TInput& result, TInput a) {
+    result = std::acos(a);
+  }
+};
+
+template <typename T>
 struct AcoshFunction {
   template <typename TInput>
   FOLLY_ALWAYS_INLINE void call(TInput& result, TInput a) {
