@@ -103,6 +103,8 @@ void registerSimpleFunctions(const std::string& prefix) {
       {prefix + "truncate"});
   registerFunction<BetaCDFFunction, double, double, double, double>(
       {prefix + "beta_cdf"});
+  registerFunction<InverseBetaCDFFunction, double, double, double, double>(
+      {prefix + "inverse_beta_cdf"});
   registerFunction<NormalCDFFunction, double, double, double, double>(
       {prefix + "normal_cdf"});
   registerFunction<BinomialCDFFunction, double, int64_t, double, int64_t>(

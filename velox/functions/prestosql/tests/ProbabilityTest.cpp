@@ -71,6 +71,30 @@ TEST_F(ProbabilityTest, betaCDF) {
       betaCDF(3, 3, kNan), "value must be in the interval [0, 1]");
 }
 
+TEST_F(ProbabilityTest, inverseBetaCDF) {
+  const auto inverseBetaCDF = [&](std::optional<double> a,
+                                  std::optional<double> b,
+                                  std::optional<double> p) {
+    return evaluateOnce<double>("inverse_beta_cdf(c0, c1, c2)", a, b, p);
+  };
+
+  constexpr double kInf = std::numeric_limits<double>::infinity();
+
+  EXPECT_EQ(0.0, inverseBetaCDF(3, 3.6, 0.0));
+  EXPECT_EQ(1.0, inverseBetaCDF(3, 3.6, 1.0));
+  EXPECT_EQ(0.34696754854406159, inverseBetaCDF(3, 3.6, 0.3));
+  EXPECT_EQ(0.76002724631002683, inverseBetaCDF(3, 3.6, 0.95));
+
+  EXPECT_EQ(0.0, inverseBetaCDF(3, kInf, 0.3));
+  EXPECT_EQ(0.0, inverseBetaCDF(kInf, 3.6, 0.3));
+  VELOX_ASSERT_THROW(inverseBetaCDF(0, 3, 0.5), "a must be > 0");
+  VELOX_ASSERT_THROW(inverseBetaCDF(3, 0, 0.5), "b must be > 0");
+  VELOX_ASSERT_THROW(
+      inverseBetaCDF(3, 3.6, -0.005), "p must be in the interval [0, 1]");
+  VELOX_ASSERT_THROW(
+      inverseBetaCDF(3, 3.6, 1.0005), "p must be in the interval [0, 1]");
+}
+
 TEST_F(ProbabilityTest, normalCDF) {
   const auto normal_cdf = [&](std::optional<double> mean,
                               std::optional<double> sd,
