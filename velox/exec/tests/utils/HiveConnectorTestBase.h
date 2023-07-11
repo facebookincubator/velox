@@ -222,12 +222,6 @@ class HiveConnectorSplitBuilder {
   }
 
  private:
-  // If passed path is not prefixed with a schema, assume "file:"...
-  static std::string fixUpPath(const std::string& path) {
-    auto rex = std::regex("^[a-z]+[a-z0-9]*:.*$", std::regex::egrep);
-    return std::regex_match(path, rex) ? path : "file:" + path;
-  }
-
   const std::string filePath_;
   dwio::common::FileFormat fileFormat_{dwio::common::FileFormat::DWRF};
   uint64_t start_{0};
