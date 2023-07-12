@@ -240,7 +240,7 @@ Floating Point Functions
 
 
 ====================================
-Probability Functions
+Probability Functions: cdf
 ====================================
 
 .. function:: beta_cdf(a, b, value) -> double
@@ -265,3 +265,14 @@ Probability Functions
 
     Compute the Weibull cdf with given parameters a, b: P(N <= value). The ``a``
     and ``b`` parameters must be positive doubles and ``value`` must also be a double.
+
+====================================
+Probability Functions: inverse_cdf
+====================================
+
+.. function:: inverse_beta_cdf(a, b, p) -> double
+
+    Compute the inverse of the Beta cdf with given a, b parameters for the cumulative
+    probability (p): P(N < n). The a, b parameters must be positive real values (all of type DOUBLE).
+    The probability p must lie on the interval [0, 1].
+

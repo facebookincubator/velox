@@ -475,76 +475,6 @@ class TableScanNode : public PlanNode {
           assignments_;
 };
 
-class TableWriteNode : public PlanNode {
- public:
-  TableWriteNode(
-      const PlanNodeId& id,
-      const RowTypePtr& columns,
-      const std::vector<std::string>& columnNames,
-      const std::shared_ptr<InsertTableHandle>& insertTableHandle,
-      RowTypePtr outputType,
-      connector::CommitStrategy commitStrategy,
-      const PlanNodePtr& source)
-      : PlanNode(id),
-        sources_{source},
-        columns_{columns},
-        columnNames_{columnNames},
-        insertTableHandle_(insertTableHandle),
-        outputType_(std::move(outputType)),
-        commitStrategy_(commitStrategy) {
-    VELOX_CHECK_EQ(columns->size(), columnNames.size());
-    for (const auto& column : columns->names()) {
-      VELOX_CHECK(source->outputType()->containsChild(column));
-    }
-  }
-
-  const std::vector<PlanNodePtr>& sources() const override {
-    return sources_;
-  }
-
-  const RowTypePtr& outputType() const override {
-    return outputType_;
-  }
-
-  // The subset of columns in the output of the source node, potentially in
-  // different order, to write to the table.
-  const RowTypePtr& columns() const {
-    return columns_;
-  }
-
-  // Column names to use when writing the table. This vector is aligned with
-  // 'columns' vector.
-  const std::vector<std::string>& columnNames() const {
-    return columnNames_;
-  }
-
-  const std::shared_ptr<InsertTableHandle>& insertTableHandle() const {
-    return insertTableHandle_;
-  }
-
-  connector::CommitStrategy commitStrategy() const {
-    return commitStrategy_;
-  }
-
-  std::string_view name() const override {
-    return "TableWrite";
-  }
-
-  folly::dynamic serialize() const override;
-
-  static PlanNodePtr create(const folly::dynamic& obj, void* context);
-
- private:
-  void addDetails(std::stringstream& stream) const override;
-
-  const std::vector<PlanNodePtr> sources_;
-  const RowTypePtr columns_;
-  const std::vector<std::string> columnNames_;
-  const std::shared_ptr<InsertTableHandle> insertTableHandle_;
-  const RowTypePtr outputType_;
-  const connector::CommitStrategy commitStrategy_;
-};
-
 class AggregationNode : public PlanNode {
  public:
   enum class Step {
@@ -592,53 +522,6 @@ class AggregationNode : public PlanNode {
       const std::vector<Aggregate>& aggregates,
       bool ignoreNullKeys,
       PlanNodePtr source);
-
-// TODO Remove after Prestissimo is updated.
-#ifdef VELOX_ENABLE_BACKWARD_COMPATIBILITY
-  static std::vector<Aggregate> toAggregates(
-      const std::vector<CallTypedExprPtr>& calls,
-      const std::vector<FieldAccessTypedExprPtr>& aggregateMasks) {
-    std::vector<Aggregate> aggregates;
-    aggregates.reserve(calls.size());
-    for (auto i = 0; i < calls.size(); ++i) {
-      if (i < aggregateMasks.size()) {
-        aggregates.push_back({calls[i], aggregateMasks[i], {}, {}});
-      } else {
-        aggregates.push_back({calls[i], nullptr, {}, {}});
-      }
-    }
-    return aggregates;
-  }
-
-  /**
-   * @param preGroupedKeys A subset of the 'groupingKeys' on which the input is
-   * clustered, i.e. identical sets of values for these keys always appear next
-   * to each other. Can be empty. If contains all the 'groupingKeys', the
-   * aggregation will run in streaming mode.
-   * @param ignoreNullKeys True if rows with at least one null key should be
-   * ignored. Used when group by is a source of a join build side and grouping
-   * keys are join keys.
-   */
-  AggregationNode(
-      const PlanNodeId& id,
-      Step step,
-      const std::vector<FieldAccessTypedExprPtr>& groupingKeys,
-      const std::vector<FieldAccessTypedExprPtr>& preGroupedKeys,
-      const std::vector<std::string>& aggregateNames,
-      const std::vector<CallTypedExprPtr>& aggregates,
-      const std::vector<FieldAccessTypedExprPtr>& aggregateMasks,
-      bool ignoreNullKeys,
-      PlanNodePtr source)
-      : AggregationNode(
-            id,
-            step,
-            groupingKeys,
-            preGroupedKeys,
-            aggregateNames,
-            toAggregates(aggregates, aggregateMasks),
-            ignoreNullKeys,
-            source) {}
-#endif
 
   const std::vector<PlanNodePtr>& sources() const override {
     return sources_;
@@ -731,6 +614,148 @@ inline std::string mapAggregationStepToName(const AggregationNode::Step& step) {
   ss << step;
   return ss.str();
 }
+
+class TableWriteNode : public PlanNode {
+ public:
+  TableWriteNode(
+      const PlanNodeId& id,
+      const RowTypePtr& columns,
+      const std::vector<std::string>& columnNames,
+      const std::shared_ptr<InsertTableHandle>& insertTableHandle,
+      RowTypePtr outputType,
+      connector::CommitStrategy commitStrategy,
+      std::shared_ptr<AggregationNode> aggregationNode,
+      const PlanNodePtr& source)
+      : PlanNode(id),
+        sources_{source},
+        columns_{columns},
+        columnNames_{columnNames},
+        insertTableHandle_(insertTableHandle),
+        outputType_(std::move(outputType)),
+        commitStrategy_(commitStrategy),
+        aggregationNode_(std::move(aggregationNode)) {
+    VELOX_CHECK_EQ(columns->size(), columnNames.size());
+    for (const auto& column : columns->names()) {
+      VELOX_CHECK(source->outputType()->containsChild(column));
+    }
+  }
+
+#ifdef VELOX_ENABLE_BACKWARD_COMPATIBILITY
+  TableWriteNode(
+      const PlanNodeId& id,
+      const RowTypePtr& columns,
+      const std::vector<std::string>& columnNames,
+      const std::shared_ptr<InsertTableHandle>& insertTableHandle,
+      RowTypePtr outputType,
+      connector::CommitStrategy commitStrategy,
+      const PlanNodePtr& source)
+      : PlanNode(id),
+        sources_{source},
+        columns_{columns},
+        columnNames_{columnNames},
+        insertTableHandle_(insertTableHandle),
+        outputType_(std::move(outputType)),
+        commitStrategy_(commitStrategy) {
+    TableWriteNode(
+        id,
+        columns,
+        columnNames,
+        insertTableHandle,
+        outputType,
+        commitStrategy,
+        nullptr,
+        source);
+  }
+#endif
+
+  const std::vector<PlanNodePtr>& sources() const override {
+    return sources_;
+  }
+
+  const RowTypePtr& outputType() const override {
+    return outputType_;
+  }
+
+  // The subset of columns in the output of the source node, potentially in
+  // different order, to write to the table.
+  const RowTypePtr& columns() const {
+    return columns_;
+  }
+
+  // Column names to use when writing the table. This vector is aligned with
+  // 'columns' vector.
+  const std::vector<std::string>& columnNames() const {
+    return columnNames_;
+  }
+
+  const std::shared_ptr<InsertTableHandle>& insertTableHandle() const {
+    return insertTableHandle_;
+  }
+
+  connector::CommitStrategy commitStrategy() const {
+    return commitStrategy_;
+  }
+
+  // Optional aggregation node for column statistics collection
+  std::shared_ptr<AggregationNode> aggregationNode() const {
+    return aggregationNode_;
+  }
+
+  std::string_view name() const override {
+    return "TableWrite";
+  }
+
+  folly::dynamic serialize() const override;
+
+  static PlanNodePtr create(const folly::dynamic& obj, void* context);
+
+ private:
+  void addDetails(std::stringstream& stream) const override;
+
+  const std::vector<PlanNodePtr> sources_;
+  const RowTypePtr columns_;
+  const std::vector<std::string> columnNames_;
+  const std::shared_ptr<InsertTableHandle> insertTableHandle_;
+  const RowTypePtr outputType_;
+  const connector::CommitStrategy commitStrategy_;
+  const std::shared_ptr<AggregationNode> aggregationNode_;
+};
+
+class TableWriteMergeNode : public PlanNode {
+ public:
+  /// 'outputType' specifies the type to store the metadata of table write
+  /// output which contains the following columns: 'numWrittenRows', 'fragment'
+  /// and 'tableCommitContext'.
+  TableWriteMergeNode(
+      const PlanNodeId& id,
+      RowTypePtr outputType,
+      PlanNodePtr source)
+      : PlanNode(id),
+        sources_{std::move(source)},
+        outputType_(std::move(outputType)) {}
+
+  const std::vector<PlanNodePtr>& sources() const override {
+    return sources_;
+  }
+
+  const RowTypePtr& outputType() const override {
+    return outputType_;
+  }
+
+  std::string_view name() const override {
+    return "TableWriteMerge";
+  }
+
+  folly::dynamic serialize() const override;
+
+  static PlanNodePtr create(const folly::dynamic& obj, void* context);
+
+ private:
+  void addDetails(std::stringstream& stream) const override;
+
+  const std::vector<PlanNodePtr> sources_;
+  const RowTypePtr outputType_;
+};
 
 /// Plan node used to implement aggregations over grouping sets. Duplicates the
 /// aggregation input for each set of grouping keys. The output contains one
@@ -1078,7 +1103,7 @@ class PartitionedOutputNode : public PlanNode {
         replicateNullsAndAny_(replicateNullsAndAny),
         partitionFunctionSpec_(std::move(partitionFunctionSpec)),
         outputType_(std::move(outputType)) {
-    VELOX_CHECK(numPartitions > 0, "numPartitions must be greater than zero");
+    VELOX_CHECK_GT(numPartitions, 0);
     if (numPartitions == 1) {
       VELOX_CHECK(
           keys_.empty(),
@@ -1920,6 +1945,12 @@ class WindowNode : public PlanNode {
 
   static BoundType boundTypeFromName(const std::string& name);
 
+  /// Window frames can be ROW or RANGE type.
+  /// Frame bounds can be CURRENT ROW, UNBOUNDED PRECEDING(FOLLOWING)
+  /// and k PRECEDING(FOLLOWING). K could be a constant or column.
+  ///
+  /// k PRECEDING(FOLLOWING) is only supported for ROW frames now.
+  /// k has to be of integer or bigint type.
   struct Frame {
     WindowType type;
     BoundType startType;
