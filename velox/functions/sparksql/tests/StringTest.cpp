@@ -164,21 +164,6 @@ class StringTest : public SparkFunctionBaseTest {
         len);
   }
 
-  using constant_dictionary_input_t =
-      std::vector<std::pair<std::string, std::string>>;
-
-  void testTranslateConstantDictionary(
-      exec::ExprSet& exprSet,
-      const constant_dictionary_input_t& inputData);
-
-  using nonconstant_dictionary_input_t = std::vector<std::pair<
-      std::tuple<std::string, std::string, std::string>,
-      std::string>>;
-
-  void testTranslateNonconstantDictionary(
-      exec::ExprSet& exprSet,
-      const nonconstant_dictionary_input_t& inputData);
-
   std::optional<std::string> translate(
       std::optional<std::string> str,
       std::optional<std::string> match,
@@ -520,39 +505,6 @@ TEST_F(StringTest, left) {
   EXPECT_EQ(left("da\u6570\u636Eta", 30), "da\u6570\u636Eta");
 }
 
-void StringTest::testTranslateConstantDictionary(
-    exec::ExprSet& exprSet,
-    const constant_dictionary_input_t& inputData) {
-  auto stringVector = makeFlatVector<StringView>(inputData.size());
-  for (int i = 0; i < inputData.size(); i++) {
-    stringVector->set(i, StringView(inputData[i].first));
-  }
-  auto result = evaluate(exprSet, makeRowVector({stringVector}));
-  FlatVector<StringView>* flatResult = result->asFlatVector<StringView>();
-  for (int32_t i = 0; i < inputData.size(); ++i) {
-    ASSERT_EQ(flatResult->valueAt(i), inputData[i].second);
-  }
-}
-
-void StringTest::testTranslateNonconstantDictionary(
-    exec::ExprSet& exprSet,
-    const nonconstant_dictionary_input_t& inputData) {
-  auto stringVector = makeFlatVector<StringView>(inputData.size());
-  auto matchVector = makeFlatVector<StringView>(inputData.size());
-  auto replaceVector = makeFlatVector<StringView>(inputData.size());
-  for (int i = 0; i < inputData.size(); i++) {
-    stringVector->set(i, StringView(std::get<0>(inputData[i].first)));
-    matchVector->set(i, StringView(std::get<1>(inputData[i].first)));
-    replaceVector->set(i, StringView(std::get<2>(inputData[i].first)));
-  }
-  auto result = evaluate(
-      exprSet, makeRowVector({stringVector, matchVector, replaceVector}));
-  FlatVector<StringView>* flatResult = result->asFlatVector<StringView>();
-  for (int32_t i = 0; i < inputData.size(); ++i) {
-    ASSERT_EQ(flatResult->valueAt(i), inputData[i].second);
-  }
-}
-
 TEST_F(StringTest, translate) {
   EXPECT_EQ(translate("ab[cd]", "[]", "##"), "ab#cd#");
   EXPECT_EQ(translate("ab[cd]", "[]", "#"), "ab#cd");
@@ -568,43 +520,58 @@ TEST_F(StringTest, translate) {
   EXPECT_EQ(translate("abc", std::nullopt, "\u2029"), std::nullopt);
   EXPECT_EQ(translate("abc", "\u2028", std::nullopt), std::nullopt);
   EXPECT_EQ(translate(std::nullopt, "\u2028", "\u2029"), std::nullopt);
-
-  // Test constant dictionary cases.
-  auto rowTypePtr = ROW({{"c0", VARCHAR()}});
-  auto exprSet = compileExpression("translate(c0, 'ab', '12')", rowTypePtr);
-  // Input column data and the expected result of translate(c0, "ab", "12").
-  // Uses ascii batch as the input.
-  constant_dictionary_input_t asciiData = {
-      {{"abcd"}, {"12cd"}},
-      {{"cdab"}, {"cd12"}},
-  };
-  testTranslateConstantDictionary(*exprSet.get(), asciiData);
-  // Uses unicode batch as the next input.
-  constant_dictionary_input_t unicodeData = {
-      {{"abåæçè"}, {"12åæçè"}},
-      {{"åæçèab"}, {"åæçè12"}},
-  };
-  testTranslateConstantDictionary(*exprSet.get(), unicodeData);
-
-  // Test nonconstant dictionary cases.
-  rowTypePtr = ROW({{"c0", VARCHAR()}, {"c1", VARCHAR()}, {"c2", VARCHAR()}});
-  exprSet = compileExpression("translate(c0, c1, c2)", rowTypePtr);
-  nonconstant_dictionary_input_t allAsciiData = {
-      {{"abcd", "ab", "#"}, {"#cd"}},
-      {{"cdab", "ca", "@$"}, {"@d$b"}},
-  };
-  testTranslateNonconstantDictionary(*exprSet.get(), allAsciiData);
-  nonconstant_dictionary_input_t partialAsciiData = {
-      {{"abcd", "ac", "åç"}, {"åbçd"}},
-      {{"cdab", "ab", "æ"}, {"cdæ"}},
-  };
-  testTranslateNonconstantDictionary(*exprSet.get(), partialAsciiData);
-  nonconstant_dictionary_input_t allUnicodeData = {
-      {{"abåæçè", "aå", "åa"}, {"åbaæçè"}},
-      {{"åæçèac", "çc", "cç"}, {"åæcèaç"}},
-  };
-  testTranslateNonconstantDictionary(*exprSet.get(), allUnicodeData);
 }
 
+TEST_F(StringTest, translateConstantMatch) {
+  auto rowType = ROW({{"c0", VARCHAR()}});
+  auto exprSet = compileExpression("translate(c0, 'ab', '12')", rowType);
+
+  auto testTranslate = [&](const auto& input, const auto& expected) {
+    auto result = evaluate(*exprSet, makeRowVector({input}));
+    velox::test::assertEqualVectors(expected, result);
+  };
+
+  // Uses ascii batch as the initial input.
+  auto input = makeFlatVector<std::string>({"abcd", "cdab"});
+  auto expected = makeFlatVector<std::string>({"12cd", "cd12"});
+  testTranslate(input, expected);
+
+  // Uses unicode batch as the next input.
+  input = makeFlatVector<std::string>({"abåæçè", "åæçèab"});
+  expected = makeFlatVector<std::string>({"12åæçè", "åæçè12"});
+  testTranslate(input, expected);
+}
+
+TEST_F(StringTest, translateNonconstantMatch) {
+  auto rowType = ROW({{"c0", VARCHAR()}, {"c1", VARCHAR()}, {"c2", VARCHAR()}});
+  auto exprSet = compileExpression("translate(c0, c1, c2)", rowType);
+
+  auto testTranslate = [&](const std::vector<VectorPtr>& inputs,
+                           const auto& expected) {
+    auto result = evaluate(*exprSet, makeRowVector(inputs));
+    velox::test::assertEqualVectors(expected, result);
+  };
+
+  // All inputs are ascii encoded.
+  auto input1 = makeFlatVector<std::string>({"abcd", "cdab"});
+  auto input2 = makeFlatVector<std::string>({"ab", "ca"});
+  auto input3 = makeFlatVector<std::string>({"#", "@$"});
+  auto expected = makeFlatVector<std::string>({"#cd", "@d$b"});
+  testTranslate({input1, input2, input3}, expected);
+
+  // Partial inputs are ascii encoded.
+  input1 = makeFlatVector<std::string>({"abcd", "cdab"});
+  input2 = makeFlatVector<std::string>({"ac", "ab"});
+  input3 = makeFlatVector<std::string>({"åç", "æ"});
+  expected = makeFlatVector<std::string>({"åbçd", "cdæ"});
+  testTranslate({input1, input2, input3}, expected);
+
+  // All inputs are unicode encoded.
+  input1 = makeFlatVector<std::string>({"abåæçè", "åæçèac"});
+  input2 = makeFlatVector<std::string>({"aå", "çc"});
+  input3 = makeFlatVector<std::string>({"åa", "cç"});
+  expected = makeFlatVector<std::string>({"åbaæçè", "åæcèaç"});
+  testTranslate({input1, input2, input3}, expected);
+}
 } // namespace
 } // namespace facebook::velox::functions::sparksql::test
