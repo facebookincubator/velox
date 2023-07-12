@@ -163,14 +163,6 @@ class StringTest : public SparkFunctionBaseTest {
         pos,
         len);
   }
-
-  std::optional<std::string> translate(
-      std::optional<std::string> str,
-      std::optional<std::string> match,
-      std::optional<std::string> replace) {
-    return evaluateOnce<std::string>(
-        "translate(c0, c1, c2)", str, match, replace);
-  }
 };
 
 TEST_F(StringTest, Ascii) {
@@ -506,20 +498,29 @@ TEST_F(StringTest, left) {
 }
 
 TEST_F(StringTest, translate) {
-  EXPECT_EQ(translate("ab[cd]", "[]", "##"), "ab#cd#");
-  EXPECT_EQ(translate("ab[cd]", "[]", "#"), "ab#cd");
-  EXPECT_EQ(translate("ab[cd]", "[]", "#@$"), "ab#cd@");
-  EXPECT_EQ(translate("ab[cd]", "[]", "  "), "ab cd ");
-  EXPECT_EQ(translate("ab\u2028", "\u2028", "\u2029"), "ab\u2029");
-  EXPECT_EQ(translate("abcabc", "a", "\u2029"), "\u2029bc\u2029bc");
-  EXPECT_EQ(translate("abc", "", ""), "abc");
-  EXPECT_EQ(translate("translate", "rnlt", "123"), "1a2s3ae");
-  EXPECT_EQ(translate("translate", "rnlt", ""), "asae");
-  EXPECT_EQ(translate("abcd", "aba", "123"), "12cd");
+  auto testTranslate =
+      [&](const std::vector<std::optional<std::string>>& inputs,
+          auto& expected) {
+        EXPECT_EQ(
+            evaluateOnce<std::string>(
+                "translate(c0, c1, c2)", inputs[0], inputs[1], inputs[2]),
+            expected);
+      };
+
+  testTranslate({"ab[cd]", "[]", "##"}, "ab#cd#");
+  testTranslate({"ab[cd]", "[]", "#"}, "ab#cd");
+  testTranslate({"ab[cd]", "[]", "#@$"}, "ab#cd@");
+  testTranslate({"ab[cd]", "[]", "  "}, "ab cd ");
+  testTranslate({"ab\u2028", "\u2028", "\u2029"}, "ab\u2029");
+  testTranslate({"abcabc", "a", "\u2029"}, "\u2029bc\u2029bc");
+  testTranslate({"abc", "", ""}, "abc");
+  testTranslate({"translate", "rnlt", "123"}, "1a2s3ae");
+  testTranslate({"translate", "rnlt", ""}, "asae");
+  testTranslate({"abcd", "aba", "123"}, "12cd");
   // Test null input.
-  EXPECT_EQ(translate("abc", std::nullopt, "\u2029"), std::nullopt);
-  EXPECT_EQ(translate("abc", "\u2028", std::nullopt), std::nullopt);
-  EXPECT_EQ(translate(std::nullopt, "\u2028", "\u2029"), std::nullopt);
+  testTranslate({"abc", std::nullopt, "\u2029"}, std::nullopt);
+  testTranslate({"abc", "\u2028", std::nullopt}, std::nullopt);
+  testTranslate({std::nullopt, "\u2028", "\u2029"}, std::nullopt);
 }
 
 TEST_F(StringTest, translateConstantMatch) {
@@ -553,25 +554,25 @@ TEST_F(StringTest, translateNonconstantMatch) {
   };
 
   // All inputs are ascii encoded.
-  auto input1 = makeFlatVector<std::string>({"abcd", "cdab"});
-  auto input2 = makeFlatVector<std::string>({"ab", "ca"});
-  auto input3 = makeFlatVector<std::string>({"#", "@$"});
+  auto input = makeFlatVector<std::string>({"abcd", "cdab"});
+  auto match = makeFlatVector<std::string>({"ab", "ca"});
+  auto replace = makeFlatVector<std::string>({"#", "@$"});
   auto expected = makeFlatVector<std::string>({"#cd", "@d$b"});
-  testTranslate({input1, input2, input3}, expected);
+  testTranslate({input, match, replace}, expected);
 
   // Partial inputs are ascii encoded.
-  input1 = makeFlatVector<std::string>({"abcd", "cdab"});
-  input2 = makeFlatVector<std::string>({"ac", "ab"});
-  input3 = makeFlatVector<std::string>({"åç", "æ"});
+  input = makeFlatVector<std::string>({"abcd", "cdab"});
+  match = makeFlatVector<std::string>({"ac", "ab"});
+  replace = makeFlatVector<std::string>({"åç", "æ"});
   expected = makeFlatVector<std::string>({"åbçd", "cdæ"});
-  testTranslate({input1, input2, input3}, expected);
+  testTranslate({input, match, replace}, expected);
 
   // All inputs are unicode encoded.
-  input1 = makeFlatVector<std::string>({"abåæçè", "åæçèac"});
-  input2 = makeFlatVector<std::string>({"aå", "çc"});
-  input3 = makeFlatVector<std::string>({"åa", "cç"});
+  input = makeFlatVector<std::string>({"abåæçè", "åæçèac"});
+  match = makeFlatVector<std::string>({"aå", "çc"});
+  replace = makeFlatVector<std::string>({"åa", "cç"});
   expected = makeFlatVector<std::string>({"åbaæçè", "åæcèaç"});
-  testTranslate({input1, input2, input3}, expected);
+  testTranslate({input, match, replace}, expected);
 }
 } // namespace
 } // namespace facebook::velox::functions::sparksql::test
