@@ -17,7 +17,7 @@
 #include <exception>
 #include <fstream>
 #include <stdexcept>
-#include "glog/logging.h"
+#include <glog/logging.h>
 #include "gtest/gtest.h"
 
 #include "velox/expression/Expr.h"

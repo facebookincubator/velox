@@ -21,7 +21,7 @@
 #include <map>
 #include <string>
 #include <vector>
-#include "fmt/format.h"
+#include <fmt/format.h>
 #include "velox/experimental/codegen/library_loader/FunctionTable.h"
 #include "velox/experimental/codegen/library_loader/NativeLibraryLoader.h"
 #include "velox/experimental/codegen/library_loader/NativeLibraryLoaderException.h"

@@ -16,7 +16,7 @@
 
 #include "velox/expression/StringWriter.h"
 #include "folly/Range.h"
-#include "glog/logging.h"
+#include <glog/logging.h>
 #include "gtest/gtest.h"
 #include "velox/functions/prestosql/tests/utils/FunctionBaseTest.h"
 

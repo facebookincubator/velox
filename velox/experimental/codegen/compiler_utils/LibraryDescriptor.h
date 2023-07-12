@@ -22,7 +22,7 @@
 #include <string>
 #include <variant>
 #include <vector>
-#include "fmt/format.h"
+#include <fmt/format.h>
 #include "velox/experimental/codegen/proto/codegen_proto.pb.h"
 #include "velox/experimental/codegen/transform/utils/ranges_utils.h"
 
