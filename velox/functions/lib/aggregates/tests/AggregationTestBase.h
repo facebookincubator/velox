@@ -61,6 +61,7 @@ class AggregationTestBase : public exec::test::OperatorTestBase {
   /// @param groupingKeys A list of grouping keys. May be empty.
   /// @param aggregates A list of aggregates to compute.
   /// @param duckDbSql An equivalent DuckDB SQL query.
+  /// @param config The config to build core::QueryConfig in Aggregate.
   void testAggregations(
       std::function<void(exec::test::PlanBuilder&)> makeSource,
       const std::vector<std::string>& groupingKeys,
@@ -144,7 +145,7 @@ class AggregationTestBase : public exec::test::OperatorTestBase {
   // Note that we intentionally add an additional grouping key k1 at the
   // avg_partial operation so that the following avg_merge operation will have
   // multiple values to merge for each g0 group.
-  // config is used in Aggregate.core::QueryConfig
+  // This config is used in Aggregate parameter core::QueryConfig.
   void testAggregationsWithCompanion(
       const std::vector<RowVectorPtr>& data,
       const std::function<void(exec::test::PlanBuilder&)>&

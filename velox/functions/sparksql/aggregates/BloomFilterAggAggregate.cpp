@@ -63,11 +63,11 @@ class BloomFilterAggAggregate : public exec::Aggregate {
   explicit BloomFilterAggAggregate(
       const TypePtr& resultType,
       const core::QueryConfig& config)
-      : Aggregate(resultType) {
-    defaultExpectedNumItems_ = config.sparkRuntimeBloomFilterExpectedNumItems();
-    defaultNumBits_ = config.sparkRuntimeBloomFilterNumBits();
-    maxNumBits_ = config.sparkRuntimeBloomFilterMaxNumBits();
-  }
+      : Aggregate(resultType),
+        defaultExpectedNumItems_(
+            config.sparkRuntimeBloomFilterExpectedNumItems()),
+        defaultNumBits_(config.sparkRuntimeBloomFilterNumBits()),
+        maxNumBits_(config.sparkRuntimeBloomFilterMaxNumBits()) {}
 
   int32_t accumulatorFixedWidthSize() const override {
     return sizeof(BloomFilterAccumulator);
@@ -270,9 +270,9 @@ class BloomFilterAggAggregate : public exec::Aggregate {
   int64_t numBits_ = kMissingArgument;
   int32_t capacity_ = kMissingArgument;
 
-  int64_t defaultExpectedNumItems_;
-  int64_t defaultNumBits_;
-  int64_t maxNumBits_;
+  const int64_t defaultExpectedNumItems_;
+  const int64_t defaultNumBits_;
+  const int64_t maxNumBits_;
 };
 
 } // namespace

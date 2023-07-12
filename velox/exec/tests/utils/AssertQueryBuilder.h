@@ -39,7 +39,7 @@ class AssertQueryBuilder {
   /// properties.
   AssertQueryBuilder& config(const std::string& key, const std::string& value);
 
-  /// Set multiple configuration properties
+  /// Set multiple configuration properties.
   AssertQueryBuilder& configs(
       const std::unordered_map<std::string, std::string>& values);
 

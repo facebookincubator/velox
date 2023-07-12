@@ -420,7 +420,14 @@ class QueryConfig {
   // 256, so decrease it to not over memory limit.
   int64_t sparkRuntimeBloomFilterMaxNumBits() const {
     constexpr int64_t kDefault = 4'096 * 1024;
-    return get<int64_t>(kSparkRuntimeBloomFilterMaxNumBits, kDefault);
+    auto value = get<int64_t>(kSparkRuntimeBloomFilterMaxNumBits, kDefault);
+    VELOX_CHECK_LE(
+        value,
+        kDefault,
+        "{} cannot exceed the default value {} in case of memory limit",
+        kSparkRuntimeBloomFilterMaxNumBits,
+        kDefault);
+    return value;
   }
 
   bool exprTrackCpuUsage() const {

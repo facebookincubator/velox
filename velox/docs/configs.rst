@@ -386,12 +386,12 @@ Spark-specific Configuration
    * - spark.runtime.bloom_filter.expected_num_items
      - integer
      - 1000000
-     - The default number of expected items for the runtime bloom filter in ``bloom_filter_agg`` function.
+     - The default number of expected items for the runtime bloom filter in :spark:func:`bloom_filter_agg` function.
    * - spark.runtime.bloom_filter.num_bits
      - integer
      - 8388608
-     - The default number of bits to use for the runtime bloom filter in ``bloom_filter_agg`` function.
+     - The default number of bits to use for the runtime bloom filter in :spark:func:`bloom_filter_agg` function.
    * - spark.runtime.bloom_filter.max_num_bits
      - integer
      - 4194304
-     - The maximum number of bits to use for the runtime bloom filter in ``bloom_filter_agg`` function.
+     - The maximum number of bits to use for the runtime bloom filter in :spark:func:`bloom_filter_agg` function.
