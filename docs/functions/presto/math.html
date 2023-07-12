@@ -376,8 +376,8 @@ is assumed to be in sorted ascending order.</p>
 </dd></dl>
 
 </section>
-<section id="probability-functions">
-<h1>Probability Functions<a class="headerlink" href="#probability-functions" title="Permalink to this heading">¶</a></h1>
+<section id="probability-functions-cdf">
+<h1>Probability Functions: cdf<a class="headerlink" href="#probability-functions-cdf" title="Permalink to this heading">¶</a></h1>
 <dl class="py function">
 <dt class="sig sig-object py" id="beta_cdf">
 <span class="sig-name descname"><span class="pre">beta_cdf</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">a</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">b</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">value</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">double</span></span></span><a class="headerlink" href="#beta_cdf" title="Permalink to this definition">¶</a></dt>
@@ -403,6 +403,17 @@ positive value (all of type DOUBLE).</p>
 </dd></dl>
 
 </section>
+<section id="probability-functions-inverse-cdf">
+<h1>Probability Functions: inverse_cdf<a class="headerlink" href="#probability-functions-inverse-cdf" title="Permalink to this heading">¶</a></h1>
+<dl class="py function">
+<dt class="sig sig-object py" id="inverse_beta_cdf">
+<span class="sig-name descname"><span class="pre">inverse_beta_cdf</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">a</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">b</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">p</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">double</span></span></span><a class="headerlink" href="#inverse_beta_cdf" title="Permalink to this definition">¶</a></dt>
+<dd><p>Compute the inverse of the Beta cdf with given a, b parameters for the cumulative
+probability (p): P(N &lt; n). The a, b parameters must be positive real values (all of type DOUBLE).
+The probability p must lie on the interval [0, 1].</p>
+</dd></dl>
+
+</section>
 
 
             <div class="clearer"></div>
@@ -417,7 +428,8 @@ positive value (all of type DOUBLE).</p>
 <li><a class="reference internal" href="#">Mathematical Functions</a></li>
 <li><a class="reference internal" href="#trigonometric-functions">Trigonometric Functions</a></li>
 <li><a class="reference internal" href="#floating-point-functions">Floating Point Functions</a></li>
-<li><a class="reference internal" href="#probability-functions">Probability Functions</a></li>
+<li><a class="reference internal" href="#probability-functions-cdf">Probability Functions: cdf</a></li>
+<li><a class="reference internal" href="#probability-functions-inverse-cdf">Probability Functions: inverse_cdf</a></li>
 </ul>
 
   </div>
