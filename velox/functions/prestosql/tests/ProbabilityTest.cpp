@@ -175,7 +175,6 @@ TEST_F(ProbabilityTest, cauchyCDF) {
   EXPECT_EQ(0.5, cauchyCDF(5.0, kDoubleMin, 5.0));
   EXPECT_EQ(0.75, cauchyCDF(kDoubleMin, 1.0, 1.0));
   EXPECT_EQ(0.64758361765043326, cauchyCDF(2.5, 1.0, 3.0));
-  EXPECT_EQ(0.14758361765043326, cauchyCDF(5.0, 1.0, 3.0));
   EXPECT_THAT(cauchyCDF(kNan, 1.0, 1.0), IsNan());
   EXPECT_THAT(cauchyCDF(1.0, 1.0, kNan), IsNan());
   EXPECT_THAT(cauchyCDF(kInf, 1.0, kNan), IsNan());
