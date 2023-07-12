@@ -123,7 +123,6 @@ struct InverseWeibullCDFFunction {
     if ((a == kInf) || (b == kInf)) {
       result = 0.0;
     } else {
-      // In Presto it is defined using the formula
       // https://commons.apache.org/proper/commons-math/javadocs/api-3.6.1/org/apache/commons/math3/distribution/WeibullDistribution.html#inverseCumulativeProbability(double)
       result = b * std::pow(-std::log1p(-p), 1.0 / a);
     }
