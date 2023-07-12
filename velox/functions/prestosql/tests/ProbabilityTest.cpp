@@ -155,6 +155,45 @@ TEST_F(ProbabilityTest, binomialCDF) {
       binomialCDF(-2, 0.5, -1), "numberOfTrials must be greater than 0");
 }
 
+TEST_F(ProbabilityTest, invBetaCDF) {
+  const auto invBetaCDF = [&](std::optional<double> a,
+                              std::optional<double> b,
+                              std::optional<double> p) {
+    return evaluateOnce<double>("inverse_beta_cdf(c0, c1, c2)", a, b, p);
+  };
+
+  EXPECT_EQ(0.0, invBetaCDF(3, 3.6, 0.0));
+  EXPECT_EQ(1.0, invBetaCDF(3, 3.6, 1.0));
+  EXPECT_EQ(0.34696754854406159, invBetaCDF(3, 3.6, 0.3));
+  EXPECT_EQ(0.76002724631002683, invBetaCDF(3, 3.6, 0.95));
+
+  EXPECT_EQ(std::nullopt, invBetaCDF(std::nullopt, 3.6, 0.95));
+  EXPECT_EQ(std::nullopt, invBetaCDF(3.6, std::nullopt, 0.95));
+  EXPECT_EQ(std::nullopt, invBetaCDF(3.6, 3.6, std::nullopt));
+
+  // Boost libraries currently throw an assert. Created the expected values via
+  // Matlab. Presto currently throws an exception from Apache Math for these
+  // values
+  // EXPECT_EQ(0.5, invBetaCDF(kDoubleMax, kDoubleMax, 0.3));
+  // EXPECT_EQ(0.0, invBetaCDF(kDoubleMin, kDoubleMin, 0.3));
+
+  VELOX_ASSERT_THROW(invBetaCDF(kInf, 3, 0.2), "a must be > 0");
+  VELOX_ASSERT_THROW(invBetaCDF(kNan, 3, 0.5), "a must be > 0");
+  VELOX_ASSERT_THROW(invBetaCDF(0, 3, 0.5), "a must be > 0");
+
+  VELOX_ASSERT_THROW(invBetaCDF(3, kInf, 0.2), "b must be > 0");
+  VELOX_ASSERT_THROW(invBetaCDF(3, kNan, 0.5), "b must be > 0");
+  VELOX_ASSERT_THROW(invBetaCDF(3, 0, 0.5), "b must be > 0");
+
+  VELOX_ASSERT_THROW(
+      invBetaCDF(3, 3.6, kInf), "p must be in the interval [0, 1]");
+  VELOX_ASSERT_THROW(
+      invBetaCDF(3, 3.6, kNan), "p must be in the interval [0, 1]");
+  VELOX_ASSERT_THROW(
+      invBetaCDF(3, 5, -0.1), "p must be in the interval [0, 1]");
+  VELOX_ASSERT_THROW(invBetaCDF(3, 5, 1.1), "p must be in the interval [0, 1]");
+}
+
 TEST_F(ProbabilityTest, inverseWeibullCDF) {
   const auto inverseWeibullCDF = [&](std::optional<double> a,
                                      std::optional<double> b,
@@ -165,9 +204,11 @@ TEST_F(ProbabilityTest, inverseWeibullCDF) {
   EXPECT_EQ(inverseWeibullCDF(1.0, 1.0, 0.), 0.0);
   EXPECT_EQ(inverseWeibullCDF(1.0, 1.0, 0.632), 0.99967234081320622);
   EXPECT_EQ(inverseWeibullCDF(1.0, 0.6, 0.91), 1.4447673651911233);
+
   EXPECT_EQ(inverseWeibullCDF(std::nullopt, 1.0, 0.3), std::nullopt);
   EXPECT_EQ(inverseWeibullCDF(1.0, std::nullopt, 0.2), std::nullopt);
   EXPECT_EQ(inverseWeibullCDF(1.0, 0.4, std::nullopt), std::nullopt);
+
   EXPECT_EQ(inverseWeibullCDF(kDoubleMin, 1.0, 0.3), 0.0);
   EXPECT_EQ(inverseWeibullCDF(kDoubleMax, 1.0, 0.4), 1.0);
   EXPECT_EQ(inverseWeibullCDF(1.0, kDoubleMin, 0.5), 1.5423036715619055e-308);
@@ -177,6 +218,7 @@ TEST_F(ProbabilityTest, inverseWeibullCDF) {
   EXPECT_EQ(inverseWeibullCDF(kDoubleMin, kDoubleMin, 0.9), kInf);
   EXPECT_EQ(
       inverseWeibullCDF(kDoubleMax, kDoubleMax, 0.8), 1.7976931348623157e+308);
+
   VELOX_ASSERT_THROW(inverseWeibullCDF(0, 3, 0.5), "a must be greater than 0");
   VELOX_ASSERT_THROW(inverseWeibullCDF(3, 0, 0.5), "b must be greater than 0");
   VELOX_ASSERT_THROW(

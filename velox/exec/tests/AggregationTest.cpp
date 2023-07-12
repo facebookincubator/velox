@@ -391,9 +391,9 @@ TEST_F(AggregationTest, missingFunctionOrSignature) {
            .build()},
       [&](core::AggregationNode::Step step,
           const std::vector<TypePtr>& argTypes,
-          const TypePtr& resultType) -> std::unique_ptr<exec::Aggregate> {
-        VELOX_UNREACHABLE();
-      });
+          const TypePtr& resultType,
+          const core::QueryConfig& /*config*/)
+          -> std::unique_ptr<exec::Aggregate> { VELOX_UNREACHABLE(); });
 
   std::vector<core::TypedExprPtr> inputs = {
       std::make_shared<core::FieldAccessTypedExpr>(BIGINT(), "c0"),
@@ -443,6 +443,55 @@ TEST_F(AggregationTest, missingFunctionOrSignature) {
       readCursor(params, [](Task*) {}),
       "Aggregate function signature is not supported: test_aggregate(). "
       "Supported signatures: (smallint,varchar) -> tinyint -> bigint.");
+}
+
+TEST_F(AggregationTest, missingLambdaFunction) {
+  auto data = makeRowVector({
+      makeFlatVector<int64_t>({1, 2, 3}),
+  });
+
+  auto field = [](const std::string& name) {
+    return std::make_shared<core::FieldAccessTypedExpr>(BIGINT(), name);
+  };
+
+  std::vector<core::TypedExprPtr> inputs = {
+      field("c0"),
+      // (a, b) -> a + b.
+      std::make_shared<core::LambdaTypedExpr>(
+          ROW({"a", "b"}, {BIGINT(), BIGINT()}),
+          std::make_shared<core::CallTypedExpr>(
+              BIGINT(),
+              std::vector<core::TypedExprPtr>{field("a"), field("b")},
+              "multiply")),
+  };
+
+  auto plan = PlanBuilder()
+                  .values({data})
+                  .addNode([&](auto nodeId, auto source) -> core::PlanNodePtr {
+                    std::vector<core::AggregationNode::Aggregate> aggregates{
+                        {std::make_shared<core::CallTypedExpr>(
+                             BIGINT(), inputs, "missing-lambda"),
+                         nullptr,
+                         {},
+                         {}}};
+
+                    return std::make_shared<core::AggregationNode>(
+                        nodeId,
+                        core::AggregationNode::Step::kSingle,
+                        std::vector<core::FieldAccessTypedExprPtr>{},
+                        std::vector<core::FieldAccessTypedExprPtr>{},
+                        std::vector<std::string>{"agg"},
+                        aggregates,
+                        false,
+                        std::move(source));
+                  })
+                  .planNode();
+
+  CursorParameters params;
+  params.planNode = plan;
+  VELOX_ASSERT_THROW(
+      readCursor(params, [](Task*) {}),
+      "Aggregate function 'missing-lambda' not registered");
 }
 
 TEST_F(AggregationTest, global) {

@@ -92,6 +92,24 @@ struct BinomialCDFFunction {
 };
 
 template <typename T>
+struct InverseBetaCDFFunction {
+  VELOX_DEFINE_FUNCTION_TYPES(T);
+
+  FOLLY_ALWAYS_INLINE void call(double& result, double a, double b, double p) {
+    static constexpr double kInf = std::numeric_limits<double>::infinity();
+
+    VELOX_USER_CHECK(
+        (p >= 0) && (p <= 1) && (p != kInf),
+        "p must be in the interval [0, 1]");
+    VELOX_USER_CHECK((a > 0) && (a != kInf), "a must be > 0");
+    VELOX_USER_CHECK((b > 0) && (b != kInf), "b must be > 0");
+
+    boost::math::beta_distribution<> dist(a, b);
+    result = boost::math::quantile(dist, p);
+  }
+};
+
+template <typename T>
 struct InverseWeibullCDFFunction {
   VELOX_DEFINE_FUNCTION_TYPES(T);
 
@@ -105,6 +123,8 @@ struct InverseWeibullCDFFunction {
     if ((a == kInf) || (b == kInf)) {
       result = 0.0;
     } else {
+      // In Presto it is defined using the formula
+      // https://commons.apache.org/proper/commons-math/javadocs/api-3.6.1/org/apache/commons/math3/distribution/WeibullDistribution.html#inverseCumulativeProbability(double)
       result = b * std::pow(-std::log1p(-p), 1.0 / a);
     }
   }

@@ -1104,8 +1104,9 @@ TEST_F(ExprTest, overwriteInRegistry) {
       metadata,
       true);
   ASSERT_TRUE(inserted);
-
-  auto vectorFunction = exec::getVectorFunction("plus5", {INTEGER()}, {});
+  core::QueryConfig config({});
+  auto vectorFunction =
+      exec::getVectorFunction("plus5", {INTEGER()}, {}, config);
   ASSERT_TRUE(vectorFunction != nullptr);
 
   inserted = exec::registerVectorFunction(
@@ -1116,7 +1117,8 @@ TEST_F(ExprTest, overwriteInRegistry) {
       true);
   ASSERT_TRUE(inserted);
 
-  auto vectorFunction2 = exec::getVectorFunction("plus5", {INTEGER()}, {});
+  auto vectorFunction2 =
+      exec::getVectorFunction("plus5", {INTEGER()}, {}, config);
 
   ASSERT_TRUE(vectorFunction2 != nullptr);
   ASSERT_TRUE(vectorFunction != vectorFunction2);
@@ -1139,7 +1141,9 @@ TEST_F(ExprTest, keepInRegistry) {
 
   ASSERT_TRUE(inserted);
 
-  auto vectorFunction = exec::getVectorFunction("NonExistingFunction", {}, {});
+  core::QueryConfig config({});
+  auto vectorFunction =
+      exec::getVectorFunction("NonExistingFunction", {}, {}, config);
 
   inserted = exec::registerVectorFunction(
       "NonExistingFunction",
@@ -1149,7 +1153,8 @@ TEST_F(ExprTest, keepInRegistry) {
       false);
   ASSERT_FALSE(inserted);
   ASSERT_EQ(
-      vectorFunction, exec::getVectorFunction("NonExistingFunction", {}, {}));
+      vectorFunction,
+      exec::getVectorFunction("NonExistingFunction", {}, {}, config));
 }
 
 TEST_F(ExprTest, lazyVectors) {
@@ -2472,8 +2477,8 @@ TEST_F(ExprTest, constantToSql) {
   ASSERT_EQ(toSql(2134456LL), "'2134456'::BIGINT");
   ASSERT_EQ(toSql(variant::null(TypeKind::BIGINT)), "NULL::BIGINT");
 
-  ASSERT_EQ(toSql(Date(18'506)), "'2020-09-01'::DATE");
-  ASSERT_EQ(toSql(variant::null(TypeKind::DATE)), "NULL::DATE");
+  ASSERT_EQ(toSql(18'506, DATE()), "'2020-09-01'::DATE");
+  ASSERT_EQ(toSql(variant::null(TypeKind::INTEGER), DATE()), "NULL::DATE");
 
   ASSERT_EQ(
       toSql(Timestamp(123'456, 123'000)),

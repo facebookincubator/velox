@@ -6,6 +6,10 @@ Mathematical Functions
 
     Returns the absolute value of ``x``.
 
+.. spark:function:: acos(x) -> double
+
+    Returns the inverse cosine (a.k.a. arc cosine) of ``x``.
+
 .. spark:function:: acosh(x) -> double
 
     Returns inverse hyperbolic cosine of ``x``.
@@ -54,6 +58,15 @@ Mathematical Functions
     Returns ``x`` rounded down to the nearest integer.
     Supported types are: BIGINT and DOUBLE.
 
+.. spark:function:: hypot(a, b) -> double
+
+    Returns the square root of `a` squared plus `b` squared.
+
+
+.. function:: log1p(x) -> double
+
+    Returns the natural logarithm of the “given value ``x`` plus one”.
+    Return NULL if x is less than or equal to -1.
 .. spark:function:: multiply(x, y) -> [same as x]
 
     Returns the result of multiplying x by y. The types of x and y must be the same.
