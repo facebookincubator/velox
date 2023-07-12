@@ -1,0 +1,124 @@
+/*
+ * Copyright (c) Facebook, Inc. and its affiliates.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+#include <optional>
+#include "velox/common/base/tests/GTestUtils.h"
+#include "velox/functions/prestosql/tests/utils/FunctionBaseTest.h"
+
+using namespace facebook::velox;
+using namespace facebook::velox::test;
+using namespace facebook::velox::functions::test;
+
+namespace {
+class ArrayCumSumTest : public FunctionBaseTest {
+ protected:
+  template <typename T>
+  void testArrayCumSum(
+      const VectorPtr& expected,
+      const VectorPtr& input,
+      const TypePtr type = CppToType<T>::create()) {
+    if (type->isDecimal()) {
+      this->options_.parseDecimalAsDouble = false;
+    }
+    auto result = evaluate("array_cum_sum(c0)", makeRowVector({input}));
+    assertEqualVectors(expected, result);
+  }
+};
+
+} // namespace
+
+TEST_F(ArrayCumSumTest, bigint) {
+  auto input = makeNullableArrayVector<int64_t>(
+      {{},
+       {10000, 1000010000, 100001000010000},
+       {-976543210987654321, std::nullopt, std::numeric_limits<int64_t>::max()},
+       {std::nullopt}});
+  auto expected = makeNullableArrayVector<int64_t>(
+      {{},
+       {10000, 1000020000, 100002000030000},
+       {-976543210987654321, std::nullopt, std::nullopt},
+       {std::nullopt}});
+  testArrayCumSum<int64_t>(expected, input);
+}
+
+TEST_F(ArrayCumSumTest, integer) {
+  auto input = makeNullableArrayVector<int32_t>(
+      {{},
+       {1000, 10001000, 1010001000},
+       {-976543210, std::nullopt, std::numeric_limits<int32_t>::max()},
+       {std::nullopt}});
+  auto expected = makeNullableArrayVector<int32_t>(
+      {{},
+       {1000, 10002000, 1020003000},
+       {-976543210, std::nullopt, std::nullopt},
+       {std::nullopt}});
+  testArrayCumSum<int32_t>(expected, input);
+}
+
+TEST_F(ArrayCumSumTest, smallint) {
+  auto input = makeNullableArrayVector<int16_t>(
+      {{},
+       {10, 100, 10000},
+       {-9876, std::nullopt, std::numeric_limits<int16_t>::max()},
+       {std::nullopt}});
+  auto expected = makeNullableArrayVector<int16_t>(
+      {{},
+       {10, 110, 10110},
+       {-9876, std::nullopt, std::nullopt},
+       {std::nullopt}});
+  testArrayCumSum<int16_t>(expected, input);
+}
+
+TEST_F(ArrayCumSumTest, tinyint) {
+  auto input = makeNullableArrayVector<int8_t>(
+      {{},
+       {1, 2, 4},
+       {-99, std::nullopt, std::numeric_limits<int8_t>::max()},
+       {std::nullopt}});
+  auto expected = makeNullableArrayVector<int8_t>(
+      {{}, {1, 3, 7}, {-99, std::nullopt, std::nullopt}, {std::nullopt}});
+  testArrayCumSum<int8_t>(expected, input);
+}
+
+TEST_F(ArrayCumSumTest, real) {
+  auto input = makeNullableArrayVector<float>(
+      {{},
+       {1, 2, 3},
+       {-9, std::nullopt, std::numeric_limits<float>::max()},
+       {std::nullopt}});
+  auto expected = makeNullableArrayVector<float>(
+      {{}, {1, 3, 6}, {-9, std::nullopt, std::nullopt}, {std::nullopt}});
+  testArrayCumSum<float>(expected, input);
+}
+
+TEST_F(ArrayCumSumTest, double) {
+  auto input = makeNullableArrayVector<double>(
+      {{},
+       {1, 2, 3},
+       {-9, std::nullopt, std::numeric_limits<double>::max()},
+       {std::nullopt}});
+  auto expected = makeNullableArrayVector<double>(
+      {{}, {1, 3, 6}, {-9, std::nullopt, std::nullopt}, {std::nullopt}});
+  testArrayCumSum<double>(expected, input);
+}
+
+TEST_F(ArrayCumSumTest, bigintOverflow) {
+  auto input = makeNullableArrayVector<int64_t>(
+      {{1, 2, 3}, {1, std::numeric_limits<int64_t>::max(), 2, 3}, {}});
+  VELOX_ASSERT_THROW(
+      evaluate("array_cum_sum(c0)", makeRowVector({input})),
+      "integer overflow: 1 + 9223372036854775807");
+}
