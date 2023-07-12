@@ -21,7 +21,7 @@
 #include <optional>
 
 #include "folly/container/EvictingCacheMap.h"
-#include "glog/logging.h"
+#include <glog/logging.h>
 
 namespace facebook::velox {
 

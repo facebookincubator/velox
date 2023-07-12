@@ -18,7 +18,7 @@
 #include <google/protobuf/util/json_util.h>
 #include <filesystem>
 #include <string>
-#include "fmt/format.h"
+#include <fmt/format.h>
 #include "velox/experimental/codegen/compiler_utils/LibraryDescriptor.h"
 #include "velox/experimental/codegen/proto/ProtoUtils.h"
 #include "velox/experimental/codegen/proto/codegen_proto.pb.h"

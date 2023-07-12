@@ -213,7 +213,7 @@ TEST(Compiler, ExternalLibraries) {
 
   auto sourceCode = R"a(
   #include <string>
-  #include "fmt/format.h"
+  #include <fmt/format.h>
   extern "C" {
   std::string f() {
     return fmt::format("test {}",2);

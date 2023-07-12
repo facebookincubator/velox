@@ -17,7 +17,7 @@
 
 #include <exception>
 #include <string>
-#include "fmt/format.h"
+#include <fmt/format.h>
 
 namespace facebook::velox::codegen {
 /// An exception that is thrown during codegen if an expression/data type that

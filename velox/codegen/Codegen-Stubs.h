@@ -20,7 +20,7 @@
 #endif
 
 #include <filesystem>
-#include "glog/logging.h"
+#include <glog/logging.h>
 #include "velox/core/PlanNode.h"
 
 namespace facebook {

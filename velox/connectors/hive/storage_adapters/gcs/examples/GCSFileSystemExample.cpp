@@ -13,7 +13,7 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-#include "connectors/hive/storage_adapters/gcs/GCSFileSystem.h"
+#include "velox/connectors/hive/storage_adapters/gcs/GCSFileSystem.h"
 #include "velox/common/file/File.h"
 #include "velox/core/Config.h"
 

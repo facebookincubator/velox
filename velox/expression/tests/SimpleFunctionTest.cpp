@@ -19,7 +19,7 @@
 #include <string>
 
 #include "folly/lang/Hint.h"
-#include "glog/logging.h"
+#include <glog/logging.h>
 #include "gtest/gtest.h"
 #include "velox/expression/Expr.h"
 #include "velox/functions/Udf.h"

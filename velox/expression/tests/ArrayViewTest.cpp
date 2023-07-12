@@ -17,7 +17,7 @@
 #include <cstdint>
 #include <optional>
 #include <vector>
-#include "glog/logging.h"
+#include <glog/logging.h>
 #include "gtest/gtest.h"
 #include "velox/common/base/VeloxException.h"
 #include "velox/expression/VectorReaders.h"

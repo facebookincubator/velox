@@ -15,8 +15,8 @@
  */
 #include "velox/connectors/hive/storage_adapters/hdfs/HdfsFileSystem.h"
 #include <boost/format.hpp>
-#include <connectors/hive/storage_adapters/hdfs/HdfsReadFile.h>
-#include <connectors/hive/storage_adapters/hdfs/RegisterHdfsFileSystem.h>
+#include "velox/connectors/hive/storage_adapters/hdfs/HdfsReadFile.h"
+#include "velox/connectors/hive/storage_adapters/hdfs/RegisterHdfsFileSystem.h"
 #include <gmock/gmock-matchers.h>
 #include <hdfs/hdfs.h>
 #include <atomic>

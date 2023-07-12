@@ -14,8 +14,8 @@
  * limitations under the License.
  */
 
-#include "connectors/hive/storage_adapters/gcs/GCSFileSystem.h"
-#include "connectors/hive/storage_adapters/gcs/GCSUtil.h"
+#include "velox/connectors/hive/storage_adapters/gcs/GCSFileSystem.h"
+#include "velox/connectors/hive/storage_adapters/gcs/GCSUtil.h"
 #include "velox/common/base/tests/GTestUtils.h"
 #include "velox/common/file/File.h"
 #include "velox/connectors/hive/FileHandle.h"
