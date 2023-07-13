@@ -192,15 +192,15 @@ class QueryConfig {
   static constexpr const char* kSparkLegacySizeOfNull =
       "spark.legacy_size_of_null";
 
-  // The default number of expected items for the runtime bloomfilter.
+  // The default number of expected items for the bloomfilter.
   static constexpr const char* kSparkBloomFilterExpectedNumItems =
       "spark.bloom_filter.expected_num_items";
 
-  // The default number of bits to use for the runtime bloom filter.
+  // The default number of bits to use for the bloom filter.
   static constexpr const char* kSparkBloomFilterNumBits =
       "spark.bloom_filter.num_bits";
 
-  // The max number of bits to use for the runtime bloom filter.
+  // The max number of bits to use for the bloom filter.
   static constexpr const char* kSparkBloomFilterMaxNumBits =
       "spark.bloom_filter.max_num_bits";
 
