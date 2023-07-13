@@ -42,7 +42,7 @@ Mathematical Functions
 
 .. spark:function:: cot(x) -> double
 
-    Returns the cotangent of `x`.
+    Returns the cotangent of ``x``. Supported type is DOUBLE.
 
 .. spark:function:: csc(x) -> double
 
