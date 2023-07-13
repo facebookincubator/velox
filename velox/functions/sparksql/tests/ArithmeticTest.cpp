@@ -356,8 +356,10 @@ TEST_F(ArithmeticTest, cot) {
   };
 
   EXPECT_EQ(cot(0), kInf);
-  EXPECT_EQ(cot(std::nullopt), std::nullopt);
   EXPECT_TRUE(std::isnan(cot(kNan).value_or(0)));
+  EXPECT_EQ(cot(1), 1 / std::tan(1));
+  EXPECT_EQ(cot(-1), 1 / std::tan(-1));
+  EXPECT_EQ(cot(0), 1 / std::tan(0));
 }
 
 } // namespace
