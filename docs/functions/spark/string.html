@@ -251,6 +251,24 @@ Type of ‘start’ must be an INTEGER.</p>
 </dd></dl>
 
 <dl class="spark function">
+<dt class="sig sig-object spark" id="translate">
+<span class="sig-name descname"><span class="pre">translate</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">string</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">match</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">replace</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">varchar</span></span></span><a class="headerlink" href="#translate" title="Permalink to this definition">¶</a></dt>
+<dd><p>Returns a new translated string. It translates the character in <code class="docutils literal notranslate"><span class="pre">string</span></code> by a
+character in <code class="docutils literal notranslate"><span class="pre">replace</span></code>. The character in <code class="docutils literal notranslate"><span class="pre">replace</span></code> is corresponding to
+the character in <code class="docutils literal notranslate"><span class="pre">match</span></code>. The translation will happen when any character
+in <code class="docutils literal notranslate"><span class="pre">string</span></code> matching with a character in <code class="docutils literal notranslate"><span class="pre">match</span></code>. If <code class="docutils literal notranslate"><span class="pre">match's</span></code> character
+size is larger than <code class="docutils literal notranslate"><span class="pre">replace's</span></code>, the extra characters in <code class="docutils literal notranslate"><span class="pre">match</span></code> will be
+removed from <code class="docutils literal notranslate"><span class="pre">string</span></code>. In addition, this function only considers the first
+occurrence of a character in <code class="docutils literal notranslate"><span class="pre">match</span></code> and uses its corresponding character in
+<code class="docutils literal notranslate"><span class="pre">replace</span></code> for translation.</p>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">SELECT</span> <span class="n">translate</span><span class="p">(</span><span class="s1">&#39;spark&#39;</span><span class="p">,</span> <span class="s1">&#39;sa&#39;</span><span class="p">,</span> <span class="s1">&#39;12&#39;</span><span class="p">);</span>  <span class="o">--</span> <span class="s2">&quot;1p2rk&quot;</span>
+<span class="n">SELECT</span> <span class="n">translate</span><span class="p">(</span><span class="s1">&#39;spark&#39;</span><span class="p">,</span> <span class="s1">&#39;sa&#39;</span><span class="p">,</span> <span class="s1">&#39;1&#39;</span><span class="p">);</span>   <span class="o">--</span> <span class="s2">&quot;1prk&quot;</span>
+<span class="n">SELECT</span> <span class="n">translate</span><span class="p">(</span><span class="s1">&#39;spark&#39;</span><span class="p">,</span> <span class="s1">&#39;ss&#39;</span><span class="p">,</span> <span class="s1">&#39;12&#39;</span><span class="p">);</span>  <span class="o">--</span> <span class="s2">&quot;1park&quot;</span>
+</pre></div>
+</div>
+</dd></dl>
+
+<dl class="spark function">
 <dt class="sig sig-object spark" id="trim">
 <span class="sig-name descname"><span class="pre">trim</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">string</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">varchar</span></span></span><a class="headerlink" href="#trim" title="Permalink to this definition">¶</a></dt>
 <dd><p>Removes leading and trailing 0x20(space) characters from <code class="docutils literal notranslate"><span class="pre">string</span></code>.</p>
