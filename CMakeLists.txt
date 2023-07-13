@@ -482,9 +482,7 @@ include_directories(SYSTEM velox/external/duckdb/tpch/dbgen/include)
 if(NOT VELOX_DISABLE_GOOGLETEST)
   set(gtest_SOURCE BUNDLED)
   resolve_dependency(gtest)
-  set(VELOX_GTEST_INCUDE_DIR
-      "${gtest_SOURCE_DIR}/googletest/include"
-      PARENT_SCOPE)
+  set(VELOX_GTEST_INCUDE_DIR "${gtest_SOURCE_DIR}/googletest/include")
 endif()
 
 set(xsimd_SOURCE BUNDLED)
