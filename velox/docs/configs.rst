@@ -69,6 +69,12 @@ Generic Configuration
      - 32MB
      - The target size for a Task's buffered output. The producer Drivers are blocked when the buffered size exceeds this.
        The Drivers are resumed when the buffered size goes below PartitionedOutputBufferManager::kContinuePct (90)% of this.
+   * - exchange.max_buffer_size
+     - integer
+     - 32MB
+     - Size of buffer in the exchange client that holds data fetched from other nodes before it is processed.
+     - A larger buffer can increase network throughput for larger clusters and thus decrease query processing time,
+     - but will reduce the amount of memory available for other usages.
 
 Expression Evaluation Configuration
 -----------------------------------
@@ -280,7 +286,7 @@ Hive Connector
      - bool
      - false
      - True if reading the source file column names as lower case, and planner should guarantee
-     - the input column name and filter is also lower case to achive case-insensitive read..    
+     - the input column name and filter is also lower case to achive case-insensitive read..
    * - max-coalesced-bytes
      - integer
      - 512KB

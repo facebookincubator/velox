@@ -583,6 +583,12 @@ class Task : public std::enable_shared_from_this<Task> {
   /// Invoked to run provided 'callback' on each alive driver of the task.
   void testingVisitDrivers(const std::function<void(Driver*)>& callback);
 
+  std::vector<std::shared_ptr<ExchangeClient>> exchangeClients() const {
+    std::lock_guard<std::mutex> l(mutex_);
+    auto copy = exchangeClients_;
+    return copy;
+  }
+
  private:
   Task(
       const std::string& taskId,

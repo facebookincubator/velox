@@ -2245,10 +2245,10 @@ void Task::createExchangeClient(
       planNodeId);
   // Low-water mark for filling the exchange queue is 1/2 of the per worker
   // buffer size of the producers.
-  exchangeClients_[pipelineId] = std::make_shared<ExchangeClient>(
+  exchangeClients_[pipelineId] = ExchangeClient::create(
       destination_,
       addExchangeClientPool(planNodeId, pipelineId),
-      queryCtx()->queryConfig().maxPartitionedOutputBufferSize() / 2);
+      queryCtx()->queryConfig().exchangeBufferSize());
   exchangeClientByPlanNode_.emplace(planNodeId, exchangeClients_[pipelineId]);
 }
 

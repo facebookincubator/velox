@@ -122,7 +122,7 @@ class MergeExchangeSource : public MergeSource {
       int destination,
       memory::MemoryPool* FOLLY_NONNULL pool)
       : mergeExchange_(mergeExchange),
-        client_(std::make_unique<ExchangeClient>(destination, pool)) {
+        client_(ExchangeClient::create(destination, pool)) {
     client_->addRemoteTaskId(taskId);
     client_->noMoreRemoteTasks();
   }
@@ -181,7 +181,7 @@ class MergeExchangeSource : public MergeSource {
 
  private:
   MergeExchange* const mergeExchange_;
-  std::unique_ptr<ExchangeClient> client_;
+  std::shared_ptr<ExchangeClient> client_;
   std::unique_ptr<ByteStream> inputStream_;
   std::unique_ptr<SerializedPage> currentPage_;
   bool atEnd_ = false;

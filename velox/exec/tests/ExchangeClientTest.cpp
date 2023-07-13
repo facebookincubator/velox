@@ -32,14 +32,15 @@ TEST(ExchangeClientTest, nonVeloxCreateExchangeSourceException) {
         throw std::runtime_error("Testing error");
       });
 
-  ExchangeClient client(1, pool.get());
+  auto client =
+      ExchangeClient::create(1, pool.get(), ExchangeClient::kDefaultBufferSize);
   VELOX_ASSERT_THROW(
-      client.addRemoteTaskId("task.1.2.3"),
+      client->addRemoteTaskId("task.1.2.3"),
       "Failed to create ExchangeSource: Testing error. Task ID: task.1.2.3.");
 
   // Test with a very long task ID. Make sure it is truncated.
   VELOX_ASSERT_THROW(
-      client.addRemoteTaskId(std::string(1024, 'x')),
+      client->addRemoteTaskId(std::string(1024, 'x')),
       "Failed to create ExchangeSource: Testing error. "
       "Task ID: xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx.");
 }
