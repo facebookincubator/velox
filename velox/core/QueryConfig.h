@@ -193,16 +193,16 @@ class QueryConfig {
       "spark.legacy_size_of_null";
 
   // The default number of expected items for the runtime bloomfilter.
-  static constexpr const char* kSparkRuntimeBloomFilterExpectedNumItems =
-      "spark.runtime.bloom_filter.expected_num_items";
+  static constexpr const char* kSparkBloomFilterExpectedNumItems =
+      "spark.bloom_filter.expected_num_items";
 
   // The default number of bits to use for the runtime bloom filter.
-  static constexpr const char* kSparkRuntimeBloomFilterNumBits =
-      "spark.runtime.bloom_filter.num_bits";
+  static constexpr const char* kSparkBloomFilterNumBits =
+      "spark.bloom_filter.num_bits";
 
   // The max number of bits to use for the runtime bloom filter.
-  static constexpr const char* kSparkRuntimeBloomFilterMaxNumBits =
-      "spark.runtime.bloom_filter.max_num_bits";
+  static constexpr const char* kSparkBloomFilterMaxNumBits =
+      "spark.bloom_filter.max_num_bits";
 
   /// The number of local parallel table writer operators per task.
   static constexpr const char* kTaskWriterCount = "task_writer_count";
@@ -406,26 +406,26 @@ class QueryConfig {
     return get<bool>(kSparkLegacySizeOfNull, kDefault);
   }
 
-  int64_t sparkRuntimeBloomFilterExpectedNumItems() const {
+  int64_t sparkBloomFilterExpectedNumItems() const {
     constexpr int64_t kDefault = 1'000'000L;
-    return get<int64_t>(kSparkRuntimeBloomFilterExpectedNumItems, kDefault);
+    return get<int64_t>(kSparkBloomFilterExpectedNumItems, kDefault);
   }
 
-  int64_t sparkRuntimeBloomFilterNumBits() const {
+  int64_t sparkBloomFilterNumBits() const {
     constexpr int64_t kDefault = 8'388'608L;
-    return get<int64_t>(kSparkRuntimeBloomFilterNumBits, kDefault);
+    return get<int64_t>(kSparkBloomFilterNumBits, kDefault);
   }
 
   // Spark kMaxNumBits is 67'108'864, but velox has memory limit sizeClassSizes
   // 256, so decrease it to not over memory limit.
-  int64_t sparkRuntimeBloomFilterMaxNumBits() const {
+  int64_t sparkBloomFilterMaxNumBits() const {
     constexpr int64_t kDefault = 4'096 * 1024;
-    auto value = get<int64_t>(kSparkRuntimeBloomFilterMaxNumBits, kDefault);
+    auto value = get<int64_t>(kSparkBloomFilterMaxNumBits, kDefault);
     VELOX_CHECK_LE(
         value,
         kDefault,
         "{} cannot exceed the default value {} in case of memory limit",
-        kSparkRuntimeBloomFilterMaxNumBits,
+        kSparkBloomFilterMaxNumBits,
         kDefault);
     return value;
   }

@@ -16,6 +16,7 @@
 
 #include "velox/common/base/BloomFilter.h"
 #include "velox/common/base/tests/GTestUtils.h"
+#include "velox/exec/tests/utils/AssertQueryBuilder.h"
 #include "velox/exec/tests/utils/PlanBuilder.h"
 #include "velox/functions/lib/aggregates/tests/AggregationTestBase.h"
 #include "velox/functions/sparksql/aggregates/Register.h"
@@ -91,14 +92,26 @@ TEST_F(BloomFilterAggAggregateTest, config) {
   auto vector = {makeRowVector({makeFlatVector<int64_t>(
       100, [](vector_size_t row) { return row % 9; })})};
   auto bloomFilter = getSerializedBloomFilter(100);
-  auto expected = {
+  std::vector<RowVectorPtr> expected = {
       makeRowVector({makeConstant<StringView>(StringView(bloomFilter), 1)})};
 
+  // This config will decide the bloom filter capacity, the expected value is
+  // the serialized bloom filter, it should be consistent.
   testAggregations(
       vector,
       {},
       {"bloom_filter_agg(c0)"},
       expected,
-      {{core::QueryConfig::kSparkRuntimeBloomFilterMaxNumBits, "1600"}});
+      {{core::QueryConfig::kSparkBloomFilterMaxNumBits, "1600"}});
+
+  exec::test::PlanBuilder builder(pool());
+  builder.values(vector)
+      .partialAggregation({}, {"bloom_filter_agg(c0)"})
+      .finalAggregation();
+  exec::test::AssertQueryBuilder queryBuilder(
+      builder.planNode(), duckDbQueryRunner_);
+  auto actual = queryBuilder.copyResults(pool());
+  EXPECT_FALSE(
+      expected[0]->childAt(0)->equalValueAt(actual->childAt(0).get(), 0, 0));
 }
 } // namespace facebook::velox::functions::aggregate::sparksql::test

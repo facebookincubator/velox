@@ -64,10 +64,9 @@ class BloomFilterAggAggregate : public exec::Aggregate {
       const TypePtr& resultType,
       const core::QueryConfig& config)
       : Aggregate(resultType),
-        defaultExpectedNumItems_(
-            config.sparkRuntimeBloomFilterExpectedNumItems()),
-        defaultNumBits_(config.sparkRuntimeBloomFilterNumBits()),
-        maxNumBits_(config.sparkRuntimeBloomFilterMaxNumBits()) {}
+        defaultExpectedNumItems_(config.sparkBloomFilterExpectedNumItems()),
+        defaultNumBits_(config.sparkBloomFilterNumBits()),
+        maxNumBits_(config.sparkBloomFilterMaxNumBits()) {}
 
   int32_t accumulatorFixedWidthSize() const override {
     return sizeof(BloomFilterAccumulator);
