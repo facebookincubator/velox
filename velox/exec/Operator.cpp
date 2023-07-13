@@ -195,6 +195,7 @@ RowVectorPtr Operator::fillOutput(
     wrapResults = false;
   }
 
+  WrapState state;
   auto output{std::make_shared<RowVector>(
       operatorCtx_->pool(),
       outputType_,
@@ -207,13 +208,15 @@ RowVectorPtr Operator::fillOutput(
       input_,
       identityProjections_,
       size,
-      wrapResults ? mapping : nullptr);
+      wrapResults ? mapping : nullptr,
+      &state);
   projectChildren(
       output,
       results_,
       resultProjections_,
       size,
-      wrapResults ? mapping : nullptr);
+      wrapResults ? mapping : nullptr),
+      &state;
   return output;
 }
 

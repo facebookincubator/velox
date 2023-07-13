@@ -88,6 +88,30 @@ RowVectorPtr wrap(
     const std::vector<VectorPtr>& childVectors,
     memory::MemoryPool* FOLLY_NONNULL pool);
 
+/// Represents unique dictionary wrappers over a set of vectors when
+/// wrapping these inside another dictionary. When multiple wrapped
+/// vectors with the same wrapping get re-wrapped, we replace the
+/// wrapper with a composition of the two dictionaries. This needs to
+/// be done once per distinct wrapper in the input. WrapState records
+/// the compositions that are already made.
+struct WrapState {
+  // Records extra nulls added in wrapping. If extra nulls are added, the same
+  // extra nulls must be applied to all columns.
+  Buffer* nulls;
+
+  // Set of distinct wrappers with its transpose result as second. These are
+  // non-owning references and live during making a result vector that wraps
+  // inputs.
+  std::vector<std::pair<Buffer*, Buffer*>> transposeResults;
+};
+
+VectorPtr wrapOne(
+    vector_size_t size,
+    BufferPtr mapping,
+    const VectorPtr& vector,
+    BufferPtr extraNulls,
+    WrapState& state);
+
 // Ensures that all LazyVectors reachable from 'input' are loaded for all rows.
 void loadColumns(const RowVectorPtr& input, core::ExecCtx& execCtx);
 
@@ -136,15 +160,18 @@ folly::Range<vector_size_t*> initializeRowNumberMapping(
     vector_size_t size,
     memory::MemoryPool* pool);
 
-/// Projects children of 'src' row vector to 'dest' row vector according to
-/// 'projections' and 'mapping'. 'size' specifies number of projected rows in
-/// 'dest'.
+/// Projects children of 'src' row vector to 'dest' row vector
+/// according to 'projections' and 'mapping'. 'size' specifies number
+/// of projected rows in 'dest'. If 'state' is given, it is used to
+/// deduplicate dictionary merging when applying the same dictionary
+/// over more than one identical set of indices.
 void projectChildren(
     const RowVectorPtr& dest,
     const RowVectorPtr& src,
     const std::vector<IdentityProjection>& projections,
     int32_t size,
-    const BufferPtr& mapping);
+    const BufferPtr& mapping,
+    WrapState* state = nullptr);
 
 /// Overload of the above function that takes reference to const vector of
 /// VectorPtr as 'src' argument, instead of row vector.
@@ -153,6 +180,7 @@ void projectChildren(
     const std::vector<VectorPtr>& src,
     const std::vector<IdentityProjection>& projections,
     int32_t size,
-    const BufferPtr& mapping);
+    const BufferPtr& mapping,
+    WrapState* state = nullptr);
 
 } // namespace facebook::velox::exec

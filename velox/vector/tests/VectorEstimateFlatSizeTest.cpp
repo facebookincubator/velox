@@ -165,32 +165,32 @@ TEST_F(VectorEstimateFlatSizeTest, dictionaryFixedWidthNoExtraNulls) {
   };
 
   dict = makeDoubleDict(makeFlatVector<int16_t>(1'000, int16At));
-  EXPECT_EQ(3808, dict->retainedSize());
+  EXPECT_EQ(3392, dict->retainedSize());
   EXPECT_EQ(148, dict->estimateFlatSize());
   EXPECT_EQ(160, flatten(dict)->retainedSize());
 
   dict = makeDoubleDict(makeFlatVector<int32_t>(1'000, int32At));
-  EXPECT_EQ(4832, dict->retainedSize());
+  EXPECT_EQ(4416, dict->retainedSize());
   EXPECT_EQ(200, dict->estimateFlatSize());
   EXPECT_EQ(288, flatten(dict)->retainedSize());
 
   dict = makeDoubleDict(makeFlatVector<int64_t>(1'000, int64At));
-  EXPECT_EQ(8928, dict->retainedSize());
+  EXPECT_EQ(8512, dict->retainedSize());
   EXPECT_EQ(404, dict->estimateFlatSize());
   EXPECT_EQ(416, flatten(dict)->retainedSize());
 
   dict = makeDoubleDict(makeFlatVector<float>(1'000, floatAt));
-  EXPECT_EQ(4832, dict->retainedSize());
+  EXPECT_EQ(4416, dict->retainedSize());
   EXPECT_EQ(200, dict->estimateFlatSize());
   EXPECT_EQ(288, flatten(dict)->retainedSize());
 
   dict = makeDoubleDict(makeFlatVector<double>(1'000, doubleAt));
-  EXPECT_EQ(8928, dict->retainedSize());
+  EXPECT_EQ(8512, dict->retainedSize());
   EXPECT_EQ(404, dict->estimateFlatSize());
   EXPECT_EQ(416, flatten(dict)->retainedSize());
 
   dict = makeDoubleDict(makeFlatVector<bool>(1'000, boolAt));
-  EXPECT_EQ(992, dict->retainedSize());
+  EXPECT_EQ(576, dict->retainedSize());
   EXPECT_EQ(8, dict->estimateFlatSize());
   EXPECT_EQ(32, flatten(dict)->retainedSize());
 }

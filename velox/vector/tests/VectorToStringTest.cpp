@@ -217,7 +217,6 @@ TEST_F(VectorToStringTest, dictionary) {
   ASSERT_EQ(
       doubleDict->toString(true),
       "[DICTIONARY INTEGER: 4 elements, 2 nulls], "
-      "[DICTIONARY INTEGER: 3 elements, no nulls], "
       "[FLAT INTEGER: 5 elements, 1 nulls]");
 
   // Dictionary over constant.
