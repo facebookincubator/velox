@@ -362,7 +362,8 @@ exec::AggregateRegistrationResult registerEntropy(const std::string& name) {
           core::AggregationNode::Step step,
           const std::vector<TypePtr>& argTypes,
           const TypePtr& resultType,
-          const core::QueryConfig& /*config*/) -> std::unique_ptr<exec::Aggregate> {
+          const core::QueryConfig& /*config*/)
+          -> std::unique_ptr<exec::Aggregate> {
         VELOX_CHECK_LE(
             argTypes.size(), 1, "{} takes at most one argument", name);
         const auto& inputType = argTypes[0];
