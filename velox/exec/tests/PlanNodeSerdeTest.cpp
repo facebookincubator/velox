@@ -162,7 +162,10 @@ TEST_F(PlanNodeSerdeTest, groupId) {
 }
 
 TEST_F(PlanNodeSerdeTest, localPartition) {
-  auto plan = PlanBuilder().values({data_}).localPartition({}).planNode();
+  auto plan = PlanBuilder()
+                  .values({data_})
+                  .localPartition(std::vector<std::string>{})
+                  .planNode();
   testSerde(plan);
 
   plan = PlanBuilder().values({data_}).localPartition({"c0", "c1"}).planNode();
@@ -481,10 +484,10 @@ TEST_F(PlanNodeSerdeTest, write) {
   auto plan = planBuilder
                   .tableWrite(
                       tableColumnNames,
-                      insertHandle,
                       aggregationNode,
-                      connector::CommitStrategy::kTaskCommit,
-                      "rows")
+                      insertHandle,
+                      false,
+                      connector::CommitStrategy::kTaskCommit)
                   .planNode();
   testSerde(plan);
 }
@@ -527,10 +530,11 @@ TEST_F(PlanNodeSerdeTest, tableWriteMerge) {
   auto plan = planBuilder
                   .tableWrite(
                       tableColumnNames,
-                      insertHandle,
                       aggregationNode,
+                      insertHandle,
+                      false,
                       connector::CommitStrategy::kTaskCommit)
-                  .localPartition({})
+                  .localPartition(std::vector<std::string>{})
                   .tableWriteMerge()
                   .planNode();
   testSerde(plan);
