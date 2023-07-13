@@ -18,6 +18,7 @@
 #include <boost/math/distributions/weibull.hpp>
 #include "boost/math/distributions/beta.hpp"
 #include "boost/math/distributions/binomial.hpp"
+#include "boost/math/distributions/cauchy.hpp"
 #include "velox/common/base/Exceptions.h"
 #include "velox/functions/Macros.h"
 
@@ -93,20 +94,26 @@ struct BinomialCDFFunction {
 };
 
 template <typename T>
-struct WeibullCDFFunction {
+struct CauchyCDFFunction {
   VELOX_DEFINE_FUNCTION_TYPES(T);
 
   FOLLY_ALWAYS_INLINE void
-  call(double& result, double a, double b, double value) {
+  call(double& result, double median, double scale, double value) {
     static constexpr double kInf = std::numeric_limits<double>::infinity();
+    static constexpr double kDoubleMax = std::numeric_limits<double>::max();
 
-    VELOX_USER_CHECK_GT(a, 0, "a must be greater than 0");
-    VELOX_USER_CHECK_GT(b, 0, "b must be greater than 0");
-
-    if ((a == kInf) || (b == kInf)) {
+    if (std::isnan(median) || std::isnan(value)) {
+      result = std::numeric_limits<double>::quiet_NaN();
+    } else if (median == kInf || median == kDoubleMax) {
       result = 0.0;
+    } else if (scale == kInf) {
+      result = 0.5;
+    } else if (value == kInf) {
+      result = 1.0;
     } else {
-      boost::math::weibull_distribution<> dist(a, b);
+      VELOX_USER_CHECK_GE(scale, 0, "scale must be greater than 0");
+
+      boost::math::cauchy_distribution<> dist(median, scale);
       result = boost::math::cdf(dist, value);
     }
   }
@@ -127,6 +134,26 @@ struct InverseBetaCDFFunction {
 
     boost::math::beta_distribution<> dist(a, b);
     result = boost::math::quantile(dist, p);
+  }
+};
+
+template <typename T>
+struct WeibullCDFFunction {
+  VELOX_DEFINE_FUNCTION_TYPES(T);
+
+  FOLLY_ALWAYS_INLINE void
+  call(double& result, double a, double b, double value) {
+    static constexpr double kInf = std::numeric_limits<double>::infinity();
+
+    VELOX_USER_CHECK_GT(a, 0, "a must be greater than 0");
+    VELOX_USER_CHECK_GT(b, 0, "b must be greater than 0");
+
+    if ((a == kInf) || (b == kInf)) {
+      result = 0.0;
+    } else {
+      boost::math::weibull_distribution<> dist(a, b);
+      result = boost::math::cdf(dist, value);
+    }
   }
 };
 

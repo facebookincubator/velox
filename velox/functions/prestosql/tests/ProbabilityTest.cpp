@@ -155,37 +155,31 @@ TEST_F(ProbabilityTest, binomialCDF) {
       binomialCDF(-2, 0.5, -1), "numberOfTrials must be greater than 0");
 }
 
-TEST_F(ProbabilityTest, weibullCDF) {
-  const auto weibullCDF = [&](std::optional<double> a,
-                              std::optional<double> b,
-                              std::optional<double> value) {
-    return evaluateOnce<double>("weibull_cdf(c0, c1, c2)", a, b, value);
+TEST_F(ProbabilityTest, cauchyCDF) {
+  const auto cauchyCDF = [&](std::optional<double> median,
+                             std::optional<double> scale,
+                             std::optional<double> value) {
+    return evaluateOnce<double>("cauchy_cdf(c0, c1, c2)", median, scale, value);
   };
 
-  EXPECT_EQ(weibullCDF(1.0, 1.0, 0.0), 0.0);
-  EXPECT_EQ(weibullCDF(1.0, 1.0, 40.0), 1.0);
-  EXPECT_EQ(weibullCDF(1.0, 0.6, 3.0), 0.99326205300091452);
-  EXPECT_EQ(weibullCDF(1.0, 0.9, 2.0), 0.89163197677810413);
-
-  EXPECT_EQ(weibullCDF(std::nullopt, 1.0, 0.3), std::nullopt);
-  EXPECT_EQ(weibullCDF(1.0, std::nullopt, 0.2), std::nullopt);
-  EXPECT_EQ(weibullCDF(1.0, 0.4, std::nullopt), std::nullopt);
-
-  EXPECT_EQ(weibullCDF(kDoubleMin, 1.0, 2.0), 0.63212055882855767);
-  EXPECT_EQ(weibullCDF(kDoubleMax, 1.0, 3.0), 1.0);
-  EXPECT_EQ(weibullCDF(1.0, kDoubleMin, 2.0), 1.0);
-  EXPECT_EQ(weibullCDF(1.0, kDoubleMax, 3.0), 1.668805393880401e-308);
-  EXPECT_EQ(weibullCDF(kInf, 1.0, 3.0), 0.0);
-  EXPECT_EQ(weibullCDF(1.0, kInf, 20.0), 0.0);
-  EXPECT_EQ(weibullCDF(kDoubleMin, kDoubleMin, 1.0), 0.63212055882855767);
-  EXPECT_EQ(weibullCDF(kDoubleMax, kDoubleMax, 4.0), 0.0);
-
-  VELOX_ASSERT_THROW(
-      weibullCDF(kNan, kNan, kDoubleMin), "a must be greater than 0");
-  VELOX_ASSERT_THROW(weibullCDF(0, 3, 0.5), "a must be greater than 0");
-  VELOX_ASSERT_THROW(weibullCDF(3, 0, 0.5), "b must be greater than 0");
-  VELOX_ASSERT_THROW(weibullCDF(kNan, 3.0, 0.5), "a must be greater than 0");
-  VELOX_ASSERT_THROW(weibullCDF(3.0, kNan, 0.5), "b must be greater than 0");
+  EXPECT_EQ(0.5, cauchyCDF(0.0, 1.0, 0.0));
+  EXPECT_EQ(0.75, cauchyCDF(0.0, 1.0, 1.0));
+  EXPECT_EQ(0.25, cauchyCDF(5.0, 2.0, 3.0));
+  EXPECT_EQ(1.0, cauchyCDF(5.0, 2.0, kInf));
+  EXPECT_EQ(0.5, cauchyCDF(5.0, kInf, 3.0));
+  EXPECT_EQ(0.0, cauchyCDF(kInf, 2.0, 3.0));
+  EXPECT_EQ(1.0, cauchyCDF(5.0, 2.0, kDoubleMax));
+  EXPECT_EQ(0.5, cauchyCDF(5.0, kDoubleMax, 3.0));
+  EXPECT_EQ(0.0, cauchyCDF(kDoubleMax, 1.0, 1.0));
+  EXPECT_EQ(0.25, cauchyCDF(1.0, 1.0, kDoubleMin));
+  EXPECT_EQ(0.5, cauchyCDF(5.0, kDoubleMin, 5.0));
+  EXPECT_EQ(0.75, cauchyCDF(kDoubleMin, 1.0, 1.0));
+  EXPECT_EQ(0.64758361765043326, cauchyCDF(2.5, 1.0, 3.0));
+  EXPECT_THAT(cauchyCDF(kNan, 1.0, 1.0), IsNan());
+  EXPECT_THAT(cauchyCDF(1.0, 1.0, kNan), IsNan());
+  EXPECT_THAT(cauchyCDF(kInf, 1.0, kNan), IsNan());
+  VELOX_ASSERT_THROW(cauchyCDF(1.0, kNan, 1.0), "scale must be greater than 0");
+  VELOX_ASSERT_THROW(cauchyCDF(0, -1, 0), "scale must be greater than 0");
 }
 
 TEST_F(ProbabilityTest, invBetaCDF) {
@@ -225,6 +219,39 @@ TEST_F(ProbabilityTest, invBetaCDF) {
   VELOX_ASSERT_THROW(
       invBetaCDF(3, 5, -0.1), "p must be in the interval [0, 1]");
   VELOX_ASSERT_THROW(invBetaCDF(3, 5, 1.1), "p must be in the interval [0, 1]");
+}
+
+TEST_F(ProbabilityTest, weibullCDF) {
+  const auto weibullCDF = [&](std::optional<double> a,
+                              std::optional<double> b,
+                              std::optional<double> value) {
+    return evaluateOnce<double>("weibull_cdf(c0, c1, c2)", a, b, value);
+  };
+
+  EXPECT_EQ(weibullCDF(1.0, 1.0, 0.0), 0.0);
+  EXPECT_EQ(weibullCDF(1.0, 1.0, 40.0), 1.0);
+  EXPECT_EQ(weibullCDF(1.0, 0.6, 3.0), 0.99326205300091452);
+  EXPECT_EQ(weibullCDF(1.0, 0.9, 2.0), 0.89163197677810413);
+
+  EXPECT_EQ(weibullCDF(std::nullopt, 1.0, 0.3), std::nullopt);
+  EXPECT_EQ(weibullCDF(1.0, std::nullopt, 0.2), std::nullopt);
+  EXPECT_EQ(weibullCDF(1.0, 0.4, std::nullopt), std::nullopt);
+
+  EXPECT_EQ(weibullCDF(kDoubleMin, 1.0, 2.0), 0.63212055882855767);
+  EXPECT_EQ(weibullCDF(kDoubleMax, 1.0, 3.0), 1.0);
+  EXPECT_EQ(weibullCDF(1.0, kDoubleMin, 2.0), 1.0);
+  EXPECT_EQ(weibullCDF(1.0, kDoubleMax, 3.0), 1.668805393880401e-308);
+  EXPECT_EQ(weibullCDF(kInf, 1.0, 3.0), 0.0);
+  EXPECT_EQ(weibullCDF(1.0, kInf, 20.0), 0.0);
+  EXPECT_EQ(weibullCDF(kDoubleMin, kDoubleMin, 1.0), 0.63212055882855767);
+  EXPECT_EQ(weibullCDF(kDoubleMax, kDoubleMax, 4.0), 0.0);
+
+  VELOX_ASSERT_THROW(
+      weibullCDF(kNan, kNan, kDoubleMin), "a must be greater than 0");
+  VELOX_ASSERT_THROW(weibullCDF(0, 3, 0.5), "a must be greater than 0");
+  VELOX_ASSERT_THROW(weibullCDF(3, 0, 0.5), "b must be greater than 0");
+  VELOX_ASSERT_THROW(weibullCDF(kNan, 3.0, 0.5), "a must be greater than 0");
+  VELOX_ASSERT_THROW(weibullCDF(3.0, kNan, 0.5), "b must be greater than 0");
 }
 
 } // namespace
