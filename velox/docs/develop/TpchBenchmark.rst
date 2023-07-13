@@ -200,4 +200,4 @@ available flags in the TpchBenchmark tool.
 
 .. code:: shell
 
-   $ ./_build/release/velox/benchmarks/tpch/velox_tpch_benchmark --help
+   $ ./_build/release/velox/benchmarks/tpch/velox_tpch_benchmark -helpon=TpchBenchmark
