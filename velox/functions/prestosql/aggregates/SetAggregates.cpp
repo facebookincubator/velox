@@ -14,8 +14,8 @@
  * limitations under the License.
  */
 #include "velox/exec/Aggregate.h"
+#include "velox/exec/SetAccumulator.h"
 #include "velox/functions/prestosql/aggregates/AggregateNames.h"
-#include "velox/functions/prestosql/aggregates/SetAccumulator.h"
 #include "velox/vector/FlatVector.h"
 
 namespace facebook::velox::aggregate::prestosql {
@@ -28,7 +28,7 @@ class SetBaseAggregate : public exec::Aggregate {
   explicit SetBaseAggregate(const TypePtr& resultType)
       : exec::Aggregate(resultType) {}
 
-  using AccumulatorType = typename SetAccumulatorTypeTraits<T>::AccumulatorType;
+  using AccumulatorType = SetAccumulator<T>;
 
   int32_t accumulatorFixedWidthSize() const override {
     return sizeof(AccumulatorType);
@@ -261,8 +261,6 @@ std::unique_ptr<exec::Aggregate> create(
       return std::make_unique<Aggregate<double>>(resultType);
     case TypeKind::TIMESTAMP:
       return std::make_unique<Aggregate<Timestamp>>(resultType);
-    case TypeKind::DATE:
-      return std::make_unique<Aggregate<Date>>(resultType);
     case TypeKind::VARCHAR:
       return std::make_unique<Aggregate<StringView>>(resultType);
     case TypeKind::ARRAY:
@@ -289,7 +287,9 @@ exec::AggregateRegistrationResult registerSetAgg(const std::string& name) {
       [name](
           core::AggregationNode::Step step,
           const std::vector<TypePtr>& argTypes,
-          const TypePtr& resultType) -> std::unique_ptr<exec::Aggregate> {
+          const TypePtr& resultType,
+          const core::QueryConfig& /*config*/)
+          -> std::unique_ptr<exec::Aggregate> {
         VELOX_CHECK_EQ(argTypes.size(), 1);
 
         const TypeKind typeKind = exec::isRawInput(step)
@@ -315,7 +315,9 @@ exec::AggregateRegistrationResult registerSetUnion(const std::string& name) {
       [name](
           core::AggregationNode::Step /*step*/,
           const std::vector<TypePtr>& argTypes,
-          const TypePtr& resultType) -> std::unique_ptr<exec::Aggregate> {
+          const TypePtr& resultType,
+          const core::QueryConfig& /*config*/)
+          -> std::unique_ptr<exec::Aggregate> {
         VELOX_CHECK_EQ(argTypes.size(), 1);
 
         const TypeKind typeKind = argTypes[0]->childAt(0)->kind();

@@ -28,7 +28,6 @@
 #include "velox/common/base/Exceptions.h"
 #include "velox/common/base/SimdUtil.h"
 #include "velox/common/serialization/Serializable.h"
-#include "velox/type/Date.h"
 #include "velox/type/StringView.h"
 #include "velox/type/Type.h"
 
@@ -1903,8 +1902,6 @@ template <typename TFilter, typename T>
 static inline bool applyFilter(TFilter& filter, T value) {
   if constexpr (std::is_same_v<T, int128_t>) {
     return filter.testInt128(value);
-  } else if constexpr (std::is_same_v<T, Date>) {
-    return filter.testInt64(value.days());
   } else if constexpr (
       std::is_same_v<T, int8_t> || std::is_same_v<T, int16_t> ||
       std::is_same_v<T, int32_t> || std::is_same_v<T, int64_t>) {
@@ -1916,8 +1913,13 @@ static inline bool applyFilter(TFilter& filter, T value) {
   } else if constexpr (std::is_same_v<T, bool>) {
     return filter.testBool(value);
   } else {
-    VELOX_CHECK(false, "Bad argument type to filter");
+    VELOX_FAIL("Bad argument type to filter: {}", typeid(T).name());
   }
+}
+
+template <typename TFilter>
+static inline bool applyFilter(TFilter& filter, const std::string& value) {
+  return filter.testBytes(value.data(), value.size());
 }
 
 template <typename TFilter>

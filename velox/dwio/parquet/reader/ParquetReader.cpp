@@ -336,8 +336,8 @@ TypePtr ReaderBase::convertType(
       case thrift::ConvertedType::INT_64:
         VELOX_CHECK_EQ(
             schemaElement.type,
-            thrift::Type::INT32,
-            "INT64 converted type can only be set for value of thrift::Type::INT32");
+            thrift::Type::INT64,
+            "INT64 converted type can only be set for value of thrift::Type::INT64");
         return BIGINT();
 
       case thrift::ConvertedType::UINT_8:
@@ -570,7 +570,9 @@ void ParquetRowReader::filterRowGroups() {
     VELOX_CHECK_GT(rowGroups_[i].columns.size(), 0);
     auto fileOffset = rowGroups_[i].__isset.file_offset
         ? rowGroups_[i].file_offset
-        : rowGroups_[i].columns[0].file_offset;
+        : rowGroups_[i].columns[0].meta_data.__isset.dictionary_page_offset
+        ? rowGroups_[i].columns[0].meta_data.dictionary_page_offset
+        : rowGroups_[i].columns[0].meta_data.data_page_offset;
     VELOX_CHECK_GT(fileOffset, 0);
     auto rowGroupInRange =
         (fileOffset >= options_.getOffset() &&

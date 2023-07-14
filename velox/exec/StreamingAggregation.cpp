@@ -81,7 +81,8 @@ StreamingAggregation::StreamingAggregation(
         aggregate.call->name(),
         aggregationNode->step(),
         argTypes,
-        aggResultType));
+        aggResultType,
+        driverCtx->queryConfig()));
     args_.push_back(channels);
     constantArgs_.push_back(constants);
   }
@@ -95,7 +96,7 @@ StreamingAggregation::StreamingAggregation(
   std::vector<Accumulator> accumulators;
   accumulators.reserve(aggregates_.size());
   for (auto& aggregate : aggregates_) {
-    accumulators.push_back(aggregate.get());
+    accumulators.push_back(Accumulator{aggregate.get()});
   }
 
   rows_ = std::make_unique<RowContainer>(
