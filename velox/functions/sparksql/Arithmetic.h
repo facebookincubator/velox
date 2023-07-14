@@ -240,8 +240,7 @@ struct Log1pFunction {
 
 template <typename T>
 struct CotFunction {
-  template <typename TInput>
-  FOLLY_ALWAYS_INLINE void call(TInput& result, TInput a) {
+  FOLLY_ALWAYS_INLINE void call(double& result, double a) {
     result = 1 / std::tan(a);
   }
 };
