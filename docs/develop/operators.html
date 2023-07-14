@@ -134,47 +134,51 @@ of plan nodes can be located at the leaves of the plan tree. These are:</p>
 <td><p>TableWrite</p></td>
 <td></td>
 </tr>
-<tr class="row-odd"><td><p>PartitionedOutputNode</p></td>
+<tr class="row-odd"><td><p>TableWriteMergeNode</p></td>
+<td><p>TableWriteMerge</p></td>
+<td></td>
+</tr>
+<tr class="row-even"><td><p>PartitionedOutputNode</p></td>
 <td><p>PartitionedOutput</p></td>
 <td></td>
 </tr>
-<tr class="row-even"><td><p>ExchangeNode</p></td>
+<tr class="row-odd"><td><p>ExchangeNode</p></td>
 <td><p>Exchange</p></td>
 <td><p>Y</p></td>
 </tr>
-<tr class="row-odd"><td><p>MergeExchangeNode</p></td>
+<tr class="row-even"><td><p>MergeExchangeNode</p></td>
 <td><p>MergeExchange</p></td>
 <td><p>Y</p></td>
 </tr>
-<tr class="row-even"><td><p>ValuesNode</p></td>
+<tr class="row-odd"><td><p>ValuesNode</p></td>
 <td><p>Values</p></td>
 <td><p>Y</p></td>
 </tr>
-<tr class="row-odd"><td><p>LocalMergeNode</p></td>
+<tr class="row-even"><td><p>LocalMergeNode</p></td>
 <td><p>LocalMerge</p></td>
 <td></td>
 </tr>
-<tr class="row-even"><td><p>LocalPartitionNode</p></td>
+<tr class="row-odd"><td><p>LocalPartitionNode</p></td>
 <td><p>LocalPartition and LocalExchange</p></td>
 <td></td>
 </tr>
-<tr class="row-odd"><td><p>EnforceSingleRowNode</p></td>
+<tr class="row-even"><td><p>EnforceSingleRowNode</p></td>
 <td><p>EnforceSingleRow</p></td>
 <td></td>
 </tr>
-<tr class="row-even"><td><p>AssignUniqueIdNode</p></td>
+<tr class="row-odd"><td><p>AssignUniqueIdNode</p></td>
 <td><p>AssignUniqueId</p></td>
 <td></td>
 </tr>
-<tr class="row-odd"><td><p>WindowNode</p></td>
+<tr class="row-even"><td><p>WindowNode</p></td>
 <td><p>Window</p></td>
 <td></td>
 </tr>
-<tr class="row-even"><td><p>RowNumberNode</p></td>
+<tr class="row-odd"><td><p>RowNumberNode</p></td>
 <td><p>RowNumber</p></td>
 <td></td>
 </tr>
-<tr class="row-odd"><td><p>TopNRowNumberNode</p></td>
+<tr class="row-even"><td><p>TopNRowNumberNode</p></td>
 <td><p>TopNRowNumber</p></td>
 <td></td>
 </tr>
@@ -545,8 +549,9 @@ number starting with 1.</p>
 <h3>TableWriteNode<a class="headerlink" href="#tablewritenode" title="Permalink to this heading">¶</a></h3>
 <p>The table write operation consumes one output and writes it to storage via a
 connector. An example would be writing ORC or Parquet files. The table write
-operation return a single row with a single column containing the number of
-rows written to storage.</p>
+operation return a list of columns containing the metadata of the written
+data: the number of rows written to storage, the writer context information,
+the written file paths on storage and the collected column stats.</p>
 <table class="docutils align-left">
 <colgroup>
 <col style="width: 25%" />
@@ -564,11 +569,35 @@ rows written to storage.</p>
 <tr class="row-odd"><td><p>columnNames</p></td>
 <td><p>Column names to use when writing to storage. These can be different from the input column names.</p></td>
 </tr>
-<tr class="row-even"><td><p>insertTableHandle</p></td>
+<tr class="row-even"><td><p>aggregationNode</p></td>
+<td><p>Aggregation plan node used to collect the column stats of the data written to storage.</p></td>
+</tr>
+<tr class="row-odd"><td><p>insertTableHandle</p></td>
 <td><p>Connector-specific description of the destination table.</p></td>
 </tr>
-<tr class="row-odd"><td><p>outputType</p></td>
-<td><p>An output column containing a number of rows written to storage.</p></td>
+<tr class="row-even"><td><p>outputType</p></td>
+<td><p>A list of output columns containing the metadata of the data written storage.</p></td>
+</tr>
+</tbody>
+</table>
+</section>
+<section id="tablewritemergenode">
+<h3>TableWriteMergeNode<a class="headerlink" href="#tablewritemergenode" title="Permalink to this heading">¶</a></h3>
+<p>The table write merge operation aggregates the metadata outputs from multiple
+table write operations and returns the aggregated result.</p>
+<table class="docutils align-left">
+<colgroup>
+<col style="width: 25%" />
+<col style="width: 75%" />
+</colgroup>
+<thead>
+<tr class="row-odd"><th class="head"><p>Property</p></th>
+<th class="head"><p>Description</p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even"><td><p>outputType</p></td>
+<td><p>A list of output columns containing the metadata of the written data aggregated from multiple table write operations.</p></td>
 </tr>
 </tbody>
 </table>
@@ -984,6 +1013,7 @@ ALL.</p>
 <li><a class="reference internal" href="#limitnode">LimitNode</a></li>
 <li><a class="reference internal" href="#unnestnode">UnnestNode</a></li>
 <li><a class="reference internal" href="#tablewritenode">TableWriteNode</a></li>
+<li><a class="reference internal" href="#tablewritemergenode">TableWriteMergeNode</a></li>
 <li><a class="reference internal" href="#partitionedoutputnode">PartitionedOutputNode</a></li>
 <li><a class="reference internal" href="#valuesnode">ValuesNode</a></li>
 <li><a class="reference internal" href="#exchangenode">ExchangeNode</a></li>
