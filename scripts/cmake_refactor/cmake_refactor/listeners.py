@@ -3,21 +3,44 @@ from antlr4.error.Errors import CancellationException
 from .parser.CMakeListener import CMakeListener
 from .parser.CMakeParser import CMakeParser
 import os
+def list_if_none(arg: list | None) -> list:
+    if arg is None:
+        return []
+    else:
+        return arg
 
 
 class TargetNode:
     def __init__(
-            self, name: str, headers: list[str] = [], sources: list[str] = [],
-            is_interface: bool = False, alias_for=None
+            self, name: str, headers: list[str] = None, sources: list[str] = None,
+            is_interface: bool = False, alias_for=None, cml_path=None
     ) -> None:
         self.name: str = name
-        self.headers: list[str] = headers
+        self.headers: list[str] = list_if_none(headers)
         self.public_headers: list[str] = []
-        self.sources: list[str] = sources
+        self.sources: list[str] = list_if_none(sources)
         self.public_targets: list[TargetNode] = []
         self.private_targets: list[TargetNode] = []
         self.is_interface = is_interface
         self.alias_for: TargetNode = alias_for
+        self.cml_path: str = cml_path
+
+    def __str__(self) -> str:
+        message: str = self.name + ':\n'
+        if self.alias_for:
+            message += f"Alias for {self.alias_for.name}\n"
+            return message + self.alias_for.__str__()
+
+        if self.is_interface:
+            message += 'Interface Target\n'
+
+        message += 'Sources:\n'
+        message += '\n'.join(self.sources)
+        message += '\nPublic Targets:\n'
+        message += '\n'.join([t.name for t in self.public_targets])
+        message += '\nPrivate Targets:'
+        message += '\n'.join([t.name for t in self.private_targets])
+        return message
 
 
 class SyntaxErrorListener(ErrorListener):
