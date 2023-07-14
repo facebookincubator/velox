@@ -249,12 +249,33 @@ class DecimalUtil {
     }
   }
 
-  // This method refer to the BigInterger#toByteArray() method in Java side.
-  // Returns a byte array containing the two's-complement representation of this
-  // BigInteger. The byte array will be in big-endian byte-order: the most
-  // significant byte is in the zeroth element. The array will contain the
-  // minimum number of bytes required to represent this BigInteger, including at
-  // least one sign bit, which is (ceil((this.bitLength() + 1)/8)).
+  // Get the java method BigInterger#toByteArray() array length.
+  inline static int32_t getByteArrayLength(int128_t value) {
+    uint128_t absValue;
+    int32_t sig;
+    if (value > 0) {
+      absValue = value;
+      sig = 1;
+    } else if (value < 0) {
+      absValue = -value;
+      sig = -1;
+    } else {
+      absValue = value;
+      sig = 0;
+    }
+
+    std::vector<int32_t> mag = convertToIntMags(absValue);
+    return getBitLength(sig, mag) / 8 + 1;
+  }
+
+  /** This method refer to the BigInterger#toByteArray() method in Java side.
+   *
+   * Returns a byte array containing the two's-complement representation of this
+   * BigInteger. The byte array will be in big-endian byte-order: the most
+   * significant byte is in the zeroth element. The array will contain the
+   * minimum number of bytes required to represent this BigInteger, including at
+   * least one sign bit, which is (ceil((this.bitLength() + 1)/8)).
+   */
   inline static void toByteArray(int128_t value, char* out, int32_t* length) {
     uint128_t absValue;
     int8_t sig;
@@ -410,24 +431,6 @@ class DecimalUtil {
       mag.emplace_back(v4);
     }
     return mag;
-  }
-
-  inline static int32_t getByteArrayLength(int128_t value) {
-    uint128_t absValue;
-    int32_t sig;
-    if (value > 0) {
-      absValue = value;
-      sig = 1;
-    } else if (value < 0) {
-      absValue = -value;
-      sig = -1;
-    } else {
-      absValue = value;
-      sig = 0;
-    }
-
-    std::vector<int32_t> mag = convertToIntMags(absValue);
-    return getBitLength(sig, mag) / 8 + 1;
   }
 
 }; // DecimalUtil
