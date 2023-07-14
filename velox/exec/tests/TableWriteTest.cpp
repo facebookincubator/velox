@@ -841,12 +841,8 @@ class PartitionedTableWriterTest
   static std::vector<uint64_t> getTestParams() {
     std::vector<uint64_t> testParams;
     const std::vector<bool> multiDriverOptions = {false, true};
-    std::vector<FileFormat> fileFormats;
-    if (hasWriterFactory(FileFormat::PARQUET)) {
-      fileFormats = {FileFormat::DWRF, FileFormat::PARQUET};
-    } else {
-      fileFormats = {FileFormat::DWRF};
-    }
+    // Add Parquet with https://github.com/facebookincubator/velox/issues/5560
+    std::vector<FileFormat> fileFormats = {FileFormat::DWRF};
     for (bool multiDrivers : multiDriverOptions) {
       for (FileFormat fileFormat : fileFormats) {
         testParams.push_back(TestParam{
@@ -951,12 +947,8 @@ class BucketedTableOnlyWriteTest
   static std::vector<uint64_t> getTestParams() {
     std::vector<uint64_t> testParams;
     const std::vector<bool> multiDriverOptions = {false, true};
-    std::vector<FileFormat> fileFormats;
-    if (hasWriterFactory(FileFormat::PARQUET)) {
-      fileFormats = {FileFormat::DWRF, FileFormat::PARQUET};
-    } else {
-      fileFormats = {FileFormat::DWRF};
-    }
+    // Add Parquet with https://github.com/facebookincubator/velox/issues/5560
+    std::vector<FileFormat> fileFormats = {FileFormat::DWRF};
     for (bool multiDrivers : multiDriverOptions) {
       for (FileFormat fileFormat : fileFormats) {
         testParams.push_back(TestParam{
@@ -1006,12 +998,8 @@ class PartitionedWithoutBucketTableWriterTest
   static std::vector<uint64_t> getTestParams() {
     std::vector<uint64_t> testParams;
     const std::vector<bool> multiDriverOptions = {false, true};
-    std::vector<FileFormat> fileFormats;
-    if (hasWriterFactory(FileFormat::PARQUET)) {
-      fileFormats = {FileFormat::DWRF, FileFormat::PARQUET};
-    } else {
-      fileFormats = {FileFormat::DWRF};
-    }
+    // Add Parquet with https://github.com/facebookincubator/velox/issues/5560
+    std::vector<FileFormat> fileFormats = {FileFormat::DWRF};
     for (bool multiDrivers : multiDriverOptions) {
       for (FileFormat fileFormat : fileFormats) {
         testParams.push_back(TestParam{
@@ -1044,12 +1032,8 @@ class AllTableWriterTest : public TableWriteTest,
   static std::vector<uint64_t> getTestParams() {
     std::vector<uint64_t> testParams;
     const std::vector<bool> multiDriverOptions = {false, true};
-    std::vector<FileFormat> fileFormats;
-    if (hasWriterFactory(FileFormat::PARQUET)) {
-      fileFormats = {FileFormat::DWRF, FileFormat::PARQUET};
-    } else {
-      fileFormats = {FileFormat::DWRF};
-    }
+    // Add Parquet with https://github.com/facebookincubator/velox/issues/5560
+    std::vector<FileFormat> fileFormats = {FileFormat::DWRF};
     for (bool multiDrivers : multiDriverOptions) {
       for (FileFormat fileFormat : fileFormats) {
         testParams.push_back(TestParam{
