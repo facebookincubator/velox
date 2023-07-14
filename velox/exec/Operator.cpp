@@ -464,7 +464,7 @@ uint64_t Operator::MemoryReclaimer::reclaim(
   op_->reclaim(targetBytes);
   int64_t after = pool->reservedBytes();
   VELOX_CHECK_LE(after, before)
-  return after - before;
+  return before - after;
 }
 
 void Operator::MemoryReclaimer::abort(memory::MemoryPool* pool) {
