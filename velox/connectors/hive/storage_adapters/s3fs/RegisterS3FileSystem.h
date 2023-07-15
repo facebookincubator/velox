@@ -16,24 +16,9 @@
 
 #pragma once
 
-#include "velox/common/memory/AllocationPool.h"
+namespace facebook::velox::filesystems {
 
-namespace facebook::velox::dwrf {
+// Register the S3 filesystem.
+void registerS3FileSystem();
 
-class StreamLabels {
- public:
-  explicit StreamLabels(memory::AllocationPool& pool) : pool_(pool) {}
-
-  StreamLabels append(std::string_view suffix) const;
-
-  std::string_view label() const;
-
- private:
-  StreamLabels(memory::AllocationPool& pool, std::string_view label)
-      : pool_{pool}, label_{label} {}
-
-  memory::AllocationPool& pool_;
-  std::string_view label_;
-};
-
-} // namespace facebook::velox::dwrf
+} // namespace facebook::velox::filesystems
