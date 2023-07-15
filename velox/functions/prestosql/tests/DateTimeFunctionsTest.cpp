@@ -2945,59 +2945,55 @@ TEST_F(DateTimeFunctionsTest, dateParse) {
 
 // The test for the alias now() is integrated into this test.
 TEST_F(DateTimeFunctionsTest, currentTimestamp) {
-  const auto evaluateCurrentTimestamp =
-      [&](const std::string& functionName,
-          int64_t expectedTimestamp,
-          const std::string& expectedTimeZone) {
-        auto emptyRowVector = makeRowVector(ROW({}), 1);
+  const auto evaluateCurrentTimestamp = [&](const std::string& functionName,
+                                            int64_t expectedTimestamp,
+                                            int16_t expectedTimeZone) {
+    // Pass an empty vector here since current_timestamp has no parameter.
+    auto emptyRowVector = makeRowVector(ROW({}), 1);
 
-        auto callExpr = std::make_shared<const core::CallTypedExpr>(
-            TIMESTAMP_WITH_TIME_ZONE(),
-            std::vector<core::TypedExprPtr>{},
-            functionName);
+    // DuckDB uses function name get_current_timestamp
+    // so manually constructing the CallExpr here.
+    auto callExpr = std::make_shared<const core::CallTypedExpr>(
+        TIMESTAMP_WITH_TIME_ZONE(),
+        std::vector<core::TypedExprPtr>{},
+        functionName);
+    auto actual = evaluate(callExpr, emptyRowVector);
 
-        auto actual = evaluate(callExpr, emptyRowVector);
-        auto actualRow = actual->wrappedVector()->as<RowVector>();
+    auto actualConstant = actual->as<ConstantVector<ComplexType>>()
+                              ->valueVector()
+                              ->as<RowVector>();
+    auto actualTimestamp =
+        actualConstant->childAt(0)->asFlatVector<int64_t>()->valueAt(0);
+    auto actualTimezone =
+        actualConstant->childAt(1)->asFlatVector<int16_t>()->valueAt(0);
 
-        auto expected = makeTimestampWithTimeZoneVector(
-            expectedTimestamp, expectedTimeZone.c_str());
+    // Compare the timestamp and timezone. The difference between the actual
+    // and expected timestamp should be less than 5 milliseconds maximum
+    // acceptable lag since some machines are slow. The timezone should be
+    // identical.
+    ASSERT_TRUE(actualTimestamp - expectedTimestamp <= 5)
+        << "Expected " << expectedTimestamp << ", but got " << actualTimestamp
+        << ", which is larger than the acceptable lag of 5 milliseconds.";
+    ASSERT_TRUE(actualTimezone == expectedTimeZone)
+        << "Expected " << expectedTimeZone << ", but got " << actualTimezone
+        << ", which is not the exact same timezone.";
+  };
 
-        ASSERT_EQ(expected->size(), actual->size());
-        ASSERT_TRUE(expected->type()->equivalent(*actual->type()))
-            << "Expected " << expected->type()->toString() << ", but got "
-            << actual->type()->toString();
-        // Compare the timestamp and timezone. The difference between the actual
-        // and expected timestamp should be less than 5 milliseconds maximum
-        // acceptable lag since some machines are slow. The timezone should be
-        // identical.
-        ASSERT_TRUE(
-            actualRow->childAt(0)->compare(expected->childAt(0).get(), 0, 0) <=
-            5)
-            << "Expected " << expected->childAt(0)->toString(0) << ", but got "
-            << actualRow->childAt(0)->toString(0)
-            << ", which is larger than the acceptable lag of 5 milliseconds.";
+  // The timezone id is 0 by default.
+  evaluateCurrentTimestamp("current_timestamp", Timestamp::now().toMillis(), 0);
+  evaluateCurrentTimestamp("now", Timestamp::now().toMillis(), 0);
 
-        ASSERT_TRUE(
-            actualRow->childAt(1)->compare(expected->childAt(1).get(), 0, 0) ==
-            0)
-            << "Expected " << expected->childAt(1)->toString(0) << ", but got "
-            << actualRow->childAt(1)->toString(0)
-            << ", which is not the exact same timezone.";
-      };
-
-  evaluateCurrentTimestamp(
-      "current_timestamp", Timestamp::now().toMillis(), "+00:00");
-  evaluateCurrentTimestamp("now", Timestamp::now().toMillis(), "+00:00");
-
+  // The timezone id for -07:00 is 421.
   setQueryTimeZone("-07:00");
   evaluateCurrentTimestamp(
-      "current_timestamp", Timestamp::now().toMillis(), "-07:00");
-  evaluateCurrentTimestamp("now", Timestamp::now().toMillis(), "-07:00");
+      "current_timestamp", Timestamp::now().toMillis(), 421);
+  evaluateCurrentTimestamp("now", Timestamp::now().toMillis(), 421);
 
+  // The timezone id for +08:00 is 1320.
   setQueryTimeZone("+08:00");
   evaluateCurrentTimestamp(
-      "current_timestamp", Timestamp::now().toMillis(), "+08:00");
-  evaluateCurrentTimestamp("now", Timestamp::now().toMillis(), "+08:00");
+      "current_timestamp", Timestamp::now().toMillis(), 1320);
+  evaluateCurrentTimestamp("now", Timestamp::now().toMillis(), 1320);
 }
 
 TEST_F(DateTimeFunctionsTest, dateFunctionVarchar) {

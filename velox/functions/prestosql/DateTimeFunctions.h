@@ -1164,7 +1164,6 @@ struct CurrentTimeStampFunction : public TimestampWithTimezoneSupport<T> {
   }
 };
 
-  
 template <typename T>
 struct CurrentDateFunction {
   VELOX_DEFINE_FUNCTION_TYPES(T);
