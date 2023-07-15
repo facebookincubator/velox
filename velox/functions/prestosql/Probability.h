@@ -148,8 +148,12 @@ struct WeibullCDFFunction {
     VELOX_USER_CHECK_GT(a, 0, "a must be greater than 0");
     VELOX_USER_CHECK_GT(b, 0, "b must be greater than 0");
 
-    if ((a == kInf) || (b == kInf)) {
+    if (std::isnan(value)) {
+      result = std::numeric_limits<double>::quiet_NaN();
+    } else if (b == kInf) {
       result = 0.0;
+    } else if (a == kInf || value == kInf) {
+      result = 1.0;
     } else {
       boost::math::weibull_distribution<> dist(a, b);
       result = boost::math::cdf(dist, value);

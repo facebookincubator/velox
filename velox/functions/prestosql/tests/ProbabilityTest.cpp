@@ -241,10 +241,18 @@ TEST_F(ProbabilityTest, weibullCDF) {
   EXPECT_EQ(weibullCDF(kDoubleMax, 1.0, 3.0), 1.0);
   EXPECT_EQ(weibullCDF(1.0, kDoubleMin, 2.0), 1.0);
   EXPECT_EQ(weibullCDF(1.0, kDoubleMax, 3.0), 1.668805393880401e-308);
-  EXPECT_EQ(weibullCDF(kInf, 1.0, 3.0), 0.0);
+  EXPECT_EQ(weibullCDF(kInf, 1.0, 3.0), 1.0);
   EXPECT_EQ(weibullCDF(1.0, kInf, 20.0), 0.0);
   EXPECT_EQ(weibullCDF(kDoubleMin, kDoubleMin, 1.0), 0.63212055882855767);
   EXPECT_EQ(weibullCDF(kDoubleMax, kDoubleMax, 4.0), 0.0);
+  EXPECT_EQ(weibullCDF(kDoubleMax, kDoubleMin, kInf), 1.0);
+  EXPECT_EQ(weibullCDF(kInf, kInf, 10.0), 0.0);
+  EXPECT_EQ(weibullCDF(1.0, 1.0, kInf), 1.0);
+  EXPECT_EQ(weibullCDF(99999999999999, 999999999999999, kInf), 1.0);
+  EXPECT_EQ(weibullCDF(kInf, 1.0, 40.0), 1.0);
+  EXPECT_EQ(weibullCDF(1.0, kInf, 10.0), 0.0);
+  EXPECT_THAT(weibullCDF(1.0, 0.5, kNan), IsNan());
+  EXPECT_THAT(weibullCDF(99999999999999.0, 999999999999999.0, kNan), IsNan());
 
   VELOX_ASSERT_THROW(
       weibullCDF(kNan, kNan, kDoubleMin), "a must be greater than 0");
