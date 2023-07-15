@@ -11,6 +11,8 @@ These functions support TIMESTAMP and DATE input types.
 
     Returns the date that is num_days before start_date.
 
+    num_days can be positive or negative.
+
 .. spark:function:: last_day(date) -> date
 
     Returns the last day of the month which the date belongs to.
