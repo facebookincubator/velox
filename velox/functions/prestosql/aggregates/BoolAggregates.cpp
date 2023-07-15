@@ -16,9 +16,10 @@
 
 #include "velox/exec/Aggregate.h"
 #include "velox/expression/FunctionSignature.h"
-#include "velox/functions/lib/SimpleNumericAggregate.h"
+#include "velox/functions/lib/aggregates/SimpleNumericAggregate.h"
 #include "velox/functions/prestosql/aggregates/AggregateNames.h"
-#include "velox/vector/FlatVector.h"
+
+using namespace facebook::velox::functions::aggregate;
 
 namespace facebook::velox::aggregate::prestosql {
 
@@ -177,7 +178,7 @@ class BoolOrAggregate final : public BoolAndOrAggregate {
 };
 
 template <class T>
-bool registerBool(const std::string& name) {
+exec::AggregateRegistrationResult registerBool(const std::string& name) {
   // TODO Fix signature to match Presto.
   std::vector<std::shared_ptr<exec::AggregateFunctionSignature>> signatures = {
       exec::AggregateFunctionSignatureBuilder()
@@ -186,14 +187,15 @@ bool registerBool(const std::string& name) {
           .argumentType("boolean")
           .build()};
 
-  exec::registerAggregateFunction(
+  return exec::registerAggregateFunction(
       name,
       std::move(signatures),
       [name](
           core::AggregationNode::Step step,
           const std::vector<TypePtr>& argTypes,
-          const TypePtr&
-          /*resultType*/) -> std::unique_ptr<exec::Aggregate> {
+          const TypePtr& /*resultType*/,
+          const core::QueryConfig& /*config*/)
+          -> std::unique_ptr<exec::Aggregate> {
         VELOX_CHECK_EQ(argTypes.size(), 1, "{} takes only one argument", name);
         auto inputType = argTypes[0];
         VELOX_CHECK_EQ(
@@ -204,7 +206,6 @@ bool registerBool(const std::string& name) {
             inputType->kindName());
         return std::make_unique<T>();
       });
-  return true;
 }
 
 } // namespace

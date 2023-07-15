@@ -76,10 +76,10 @@ class FirstLastValueFunction : public exec::WindowFunction {
       return;
     }
     // Rows with empty (not-valid) frames have nullptr in the result.
-    // So mark rowNumber to copy as -1 for it.
+    // So mark rowNumber to copy as kNullRow for it.
     invalidRows_.resizeFill(validRows.size(), true);
     invalidRows_.deselect(validRows);
-    invalidRows_.applyToSelected([&](auto i) { rowNumbers_[i] = -1; });
+    invalidRows_.applyToSelected([&](auto i) { rowNumbers_[i] = kNullRow; });
   }
 
   // Index of the first_value / last_value argument column in the input row
@@ -116,7 +116,8 @@ void registerFirstLastInternal(const std::string& name) {
       [](const std::vector<exec::WindowFunctionArg>& args,
          const TypePtr& resultType,
          velox::memory::MemoryPool* pool,
-         HashStringAllocator* /*stringAllocator*/)
+         HashStringAllocator* /*stringAllocator*/,
+         const velox::core::QueryConfig& /*queryConfig*/)
           -> std::unique_ptr<exec::WindowFunction> {
         return std::make_unique<FirstLastValueFunction<TValue>>(
             args, resultType, pool);

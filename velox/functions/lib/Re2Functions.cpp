@@ -74,7 +74,7 @@ FlatVector<bool>& ensureWritableBool(
 FlatVector<StringView>& ensureWritableStringView(
     const SelectivityVector& rows,
     EvalCtx& context,
-    std::shared_ptr<BaseVector>& result) {
+    VectorPtr& result) {
   context.ensureWritable(rows, VARCHAR(), result);
   auto* flat = result->as<FlatVector<StringView>>();
   flat->mutableValues(rows.end());
@@ -160,9 +160,8 @@ std::string likePatternToRe2(
         case ']':
         case '{':
         case '}':
-          regex.append("\\");
-        // Append the meta character after the escape. Note: The fallthrough is
-        // intentional.
+          regex.append("\\"); // Append the meta character after the escape.
+          [[fallthrough]];
         default:
           regex.append(1, c);
           escaped = false;
@@ -726,7 +725,8 @@ std::shared_ptr<VectorFunction> makeRe2MatchImpl(
 
 std::shared_ptr<VectorFunction> makeRe2Match(
     const std::string& name,
-    const std::vector<VectorFunctionArg>& inputArgs) {
+    const std::vector<VectorFunctionArg>& inputArgs,
+    const core::QueryConfig& /*config*/) {
   return makeRe2MatchImpl<re2FullMatch>(name, inputArgs);
 }
 
@@ -741,7 +741,8 @@ std::vector<std::shared_ptr<exec::FunctionSignature>> re2MatchSignatures() {
 
 std::shared_ptr<VectorFunction> makeRe2Search(
     const std::string& name,
-    const std::vector<VectorFunctionArg>& inputArgs) {
+    const std::vector<VectorFunctionArg>& inputArgs,
+    const core::QueryConfig& /*config*/) {
   return makeRe2MatchImpl<re2PartialMatch>(name, inputArgs);
 }
 
@@ -757,6 +758,7 @@ std::vector<std::shared_ptr<exec::FunctionSignature>> re2SearchSignatures() {
 std::shared_ptr<VectorFunction> makeRe2Extract(
     const std::string& name,
     const std::vector<VectorFunctionArg>& inputArgs,
+    const core::QueryConfig& /*config*/,
     const bool emptyNoMatch) {
   auto numArgs = inputArgs.size();
   VELOX_USER_CHECK(
@@ -908,7 +910,8 @@ std::pair<PatternKind, vector_size_t> determinePatternKind(StringView pattern) {
 
 std::shared_ptr<exec::VectorFunction> makeLike(
     const std::string& name,
-    const std::vector<exec::VectorFunctionArg>& inputArgs) {
+    const std::vector<exec::VectorFunctionArg>& inputArgs,
+    const core::QueryConfig& /*config*/) {
   auto numArgs = inputArgs.size();
   VELOX_USER_CHECK(
       numArgs == 2 || numArgs == 3,
@@ -1014,7 +1017,8 @@ std::vector<std::shared_ptr<exec::FunctionSignature>> likeSignatures() {
 
 std::shared_ptr<VectorFunction> makeRe2ExtractAll(
     const std::string& name,
-    const std::vector<VectorFunctionArg>& inputArgs) {
+    const std::vector<VectorFunctionArg>& inputArgs,
+    const core::QueryConfig& /*config*/) {
   auto numArgs = inputArgs.size();
   VELOX_USER_CHECK(
       numArgs == 2 || numArgs == 3,

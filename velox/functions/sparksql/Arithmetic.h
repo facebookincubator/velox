@@ -15,6 +15,7 @@
  */
 #pragma once
 
+#include <bitset>
 #include <cmath>
 #include <limits>
 #include <system_error>
@@ -151,4 +152,81 @@ struct FloorFunction {
   }
 };
 
+template <typename T>
+struct AcoshFunction {
+  template <typename TInput>
+  FOLLY_ALWAYS_INLINE void call(TInput& result, TInput a) {
+    result = std::acosh(a);
+  }
+};
+
+template <typename T>
+struct AsinhFunction {
+  template <typename TInput>
+  FOLLY_ALWAYS_INLINE void call(TInput& result, TInput a) {
+    result = std::asinh(a);
+  }
+};
+
+template <typename T>
+struct AtanhFunction {
+  template <typename TInput>
+  FOLLY_ALWAYS_INLINE void call(TInput& result, TInput a) {
+    result = std::atanh(a);
+  }
+};
+
+template <typename T>
+struct SecFunction {
+  template <typename TInput>
+  FOLLY_ALWAYS_INLINE void call(TInput& result, TInput a) {
+    result = 1 / std::cos(a);
+  }
+};
+
+template <typename T>
+struct CscFunction {
+  template <typename TInput>
+  FOLLY_ALWAYS_INLINE void call(TInput& result, TInput a) {
+    result = 1 / std::sin(a);
+  }
+};
+
+template <typename T>
+struct ToBinaryStringFunction {
+  VELOX_DEFINE_FUNCTION_TYPES(T);
+
+  FOLLY_ALWAYS_INLINE
+  void call(out_type<Varchar>& result, const arg_type<int64_t>& input) {
+    auto str = std::bitset<64>(input).to_string();
+    str.erase(0, std::min(str.find_first_not_of('0'), str.size() - 1));
+    result = str;
+  }
+};
+
+template <typename T>
+struct SinhFunction {
+  template <typename TInput>
+  FOLLY_ALWAYS_INLINE void call(TInput& result, TInput a) {
+    result = std::sinh(a);
+  }
+};
+
+template <typename T>
+struct HypotFunction {
+  FOLLY_ALWAYS_INLINE void call(double& result, double a, double b) {
+    result = std::hypot(a, b);
+  }
+};
+
+template <typename T>
+struct Log1pFunction {
+  FOLLY_ALWAYS_INLINE bool call(double& result, double a) {
+    if (a <= -1) {
+      return false;
+    }
+    result = std::log1p(a);
+    return true;
+  }
+};
 } // namespace facebook::velox::functions::sparksql

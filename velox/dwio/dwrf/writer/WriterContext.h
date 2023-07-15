@@ -71,7 +71,7 @@ class WriterContext : public CompressionBufferPool {
       handler_ = std::make_unique<encryption::EncryptionHandler>();
     }
     validateConfigs();
-    VLOG(1) << fmt::format("Compression config: {}", compression);
+    VLOG(2) << fmt::format("Compression config: {}", compression);
     compressionBuffer_ = std::make_unique<dwio::common::DataBuffer<char>>(
         *generalPool_, compressionBlockSize + PAGE_HEADER_SIZE);
   }
@@ -239,14 +239,12 @@ class WriterContext : public CompressionBufferPool {
         getMemoryUsage(MemoryUsageCategory::DICTIONARY);
     const auto& generalPool = getMemoryUsage(MemoryUsageCategory::GENERAL);
 
-    return outputStreamPool.getCurrentBytes() +
-        dictionaryPool.getCurrentBytes() + generalPool.getCurrentBytes();
+    return outputStreamPool.currentBytes() + dictionaryPool.currentBytes() +
+        generalPool.currentBytes();
   }
 
   int64_t getMemoryBudget() const {
-    auto memoryUsageTracker = pool_->getMemoryUsageTracker();
-    return memoryUsageTracker ? memoryUsageTracker->maxMemory()
-                              : std::numeric_limits<int64_t>::max();
+    return pool_->capacity();
   }
 
   const encryption::EncryptionHandler& getEncryptionHandler() const {
@@ -331,7 +329,7 @@ class WriterContext : public CompressionBufferPool {
   void recordFlushOverhead(uint64_t flushOverhead) {
     flushOverheadRatioTracker_.takeSample(
         stripeRawSize +
-            getMemoryUsage(MemoryUsageCategory::DICTIONARY).getCurrentBytes(),
+            getMemoryUsage(MemoryUsageCategory::DICTIONARY).currentBytes(),
         flushOverhead);
   }
 
@@ -364,8 +362,8 @@ class WriterContext : public CompressionBufferPool {
 
   int64_t getEstimatedOutputStreamSize() const {
     return (int64_t)std::ceil(
-        (getMemoryUsage(MemoryUsageCategory::OUTPUT_STREAM).getCurrentBytes() +
-         getMemoryUsage(MemoryUsageCategory::DICTIONARY).getCurrentBytes()) /
+        (getMemoryUsage(MemoryUsageCategory::OUTPUT_STREAM).currentBytes() +
+         getMemoryUsage(MemoryUsageCategory::DICTIONARY).currentBytes()) /
         getConfig(Config::COMPRESSION_BLOCK_SIZE_EXTEND_RATIO));
   }
 
@@ -434,14 +432,12 @@ class WriterContext : public CompressionBufferPool {
       case TypeKind::SMALLINT:
       case TypeKind::INTEGER:
       case TypeKind::BIGINT:
+      case TypeKind::HUGEINT:
       case TypeKind::REAL:
       case TypeKind::DOUBLE:
       case TypeKind::VARCHAR:
       case TypeKind::VARBINARY:
       case TypeKind::TIMESTAMP:
-      case TypeKind::DATE:
-      case TypeKind::SHORT_DECIMAL:
-      case TypeKind::LONG_DECIMAL:
         physicalSizeAggregators_.emplace(
             type.id, std::make_unique<PhysicalSizeAggregator>(parent));
         break;

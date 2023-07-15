@@ -27,7 +27,6 @@
 #include <vector>
 #include "folly/CPortability.h"
 #include "folly/Likely.h"
-#include "folly/ssl/OpenSSLHash.h"
 #include "velox/common/base/Exceptions.h"
 #include "velox/external/md5/md5.h"
 #include "velox/functions/lib/string/StringCore.h"

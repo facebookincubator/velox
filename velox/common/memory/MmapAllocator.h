@@ -85,6 +85,10 @@ class MmapAllocator : public MemoryAllocator {
     return kind_;
   }
 
+  size_t capacity() const override {
+    return AllocationTraits::pageBytes(capacity_);
+  }
+
   bool allocateNonContiguous(
       MachinePageCount numPages,
       Allocation& out,
@@ -97,12 +101,12 @@ class MmapAllocator : public MemoryAllocator {
       MachinePageCount numPages,
       Allocation* collateral,
       ContiguousAllocation& allocation,
-      ReservationCallback reservationCB = nullptr) override {
-    VELOX_CHECK_GT(numPages, 0);
+      ReservationCallback reservationCB = nullptr,
+      MachinePageCount maxPages = 0) override {
     bool result;
     stats_.recordAllocate(numPages * AllocationTraits::kPageSize, 1, [&]() {
       result = allocateContiguousImpl(
-          numPages, collateral, allocation, reservationCB);
+          numPages, collateral, allocation, reservationCB, maxPages);
     });
     return result;
   }
@@ -111,6 +115,11 @@ class MmapAllocator : public MemoryAllocator {
     stats_.recordFree(
         allocation.size(), [&]() { freeContiguousImpl(allocation); });
   }
+
+  bool growContiguous(
+      MachinePageCount increment,
+      ContiguousAllocation& allocation,
+      ReservationCallback reservationCB = nullptr) override;
 
   /// Allocates 'bytes' contiguous bytes and returns the pointer to the first
   /// byte. If 'bytes' is less than 'maxMallocBytes_', delegates the allocation
@@ -137,16 +146,16 @@ class MmapAllocator : public MemoryAllocator {
   /// the data in the bitmaps in the size classes.
   bool checkConsistency() const override;
 
-  MachinePageCount capacity() const {
-    return capacity_;
-  }
-
   int32_t maxMallocBytes() const {
     return maxMallocBytes_;
   }
 
   size_t mallocReservedBytes() const {
     return mallocReservedBytes_;
+  }
+
+  size_t totalUsedBytes() const override {
+    return numMallocBytes_ + AllocationTraits::pageBytes(numAllocated_);
   }
 
   MachinePageCount numAllocated() const override {
@@ -334,7 +343,8 @@ class MmapAllocator : public MemoryAllocator {
       MachinePageCount numPages,
       Allocation* collateral,
       ContiguousAllocation& allocation,
-      ReservationCallback reservationCB);
+      ReservationCallback reservationCB,
+      MachinePageCount maxPages);
 
   void freeContiguousImpl(ContiguousAllocation& allocation);
 

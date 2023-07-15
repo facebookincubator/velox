@@ -409,11 +409,11 @@ class InstallSysDepsCmd(ProjectCmdBase):
         if manager == "rpm":
             packages = sorted(set(all_packages["rpm"]))
             if packages:
-                cmd_args = ["dnf", "install", "-y"] + packages
+                cmd_args = ["sudo", "dnf", "install", "-y"] + packages
         elif manager == "deb":
             packages = sorted(set(all_packages["deb"]))
             if packages:
-                cmd_args = ["apt-get", "install", "-y"] + packages
+                cmd_args = ["sudo", "apt", "install", "-y"] + packages
         elif manager == "homebrew":
             packages = sorted(set(all_packages["homebrew"]))
             if packages:
@@ -1043,11 +1043,7 @@ jobs:
                 if m != manifest:
                     if m.name == "rust":
                         out.write("    - name: Install Rust Stable\n")
-                        out.write("      uses: actions-rs/toolchain@v1\n")
-                        out.write("      with:\n")
-                        out.write("        toolchain: stable\n")
-                        out.write("        default: true\n")
-                        out.write("        profile: minimal\n")
+                        out.write("      uses: dtolnay/rust-toolchain@stable\n")
                     else:
                         ctx = loader.ctx_gen.get_context(m.name)
                         if m.get_repo_url(ctx) != main_repo_url:

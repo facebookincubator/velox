@@ -162,41 +162,15 @@ class AverageAggregate : public exec::Aggregate {
       const std::vector<VectorPtr>& args,
       bool /* mayPushdown */) override {
     decodedPartial_.decode(*args[0], rows);
-    auto baseRowVector = dynamic_cast<const RowVector*>(decodedPartial_.base());
-    auto baseSumVector =
-        baseRowVector->childAt(0)->as<SimpleVector<TAccumulator>>();
-    auto baseCountVector =
-        baseRowVector->childAt(1)->as<SimpleVector<int64_t>>();
+    auto baseRowVector = decodedPartial_.base()->template as<RowVector>();
 
-    if (decodedPartial_.isConstantMapping()) {
-      if (!decodedPartial_.isNullAt(0)) {
-        auto decodedIndex = decodedPartial_.index(0);
-        auto count = baseCountVector->valueAt(decodedIndex);
-        auto sum = baseSumVector->valueAt(decodedIndex);
-        rows.applyToSelected([&](vector_size_t i) {
-          updateNonNullValue(groups[i], count, sum);
-        });
-      }
-    } else if (decodedPartial_.mayHaveNulls()) {
-      rows.applyToSelected([&](vector_size_t i) {
-        if (decodedPartial_.isNullAt(i)) {
-          return;
-        }
-        auto decodedIndex = decodedPartial_.index(i);
-        updateNonNullValue(
-            groups[i],
-            baseCountVector->valueAt(decodedIndex),
-            baseSumVector->valueAt(decodedIndex));
-      });
-    } else {
-      rows.applyToSelected([&](vector_size_t i) {
-        auto decodedIndex = decodedPartial_.index(i);
-        updateNonNullValue(
-            groups[i],
-            baseCountVector->valueAt(decodedIndex),
-            baseSumVector->valueAt(decodedIndex));
-      });
+    if (validateIntermediateInputs_ &&
+        (baseRowVector->childAt(0)->mayHaveNulls() ||
+         baseRowVector->childAt(1)->mayHaveNulls())) {
+      addIntermediateResultsImpl<true>(groups, rows);
+      return;
     }
+    addIntermediateResultsImpl<false>(groups, rows);
   }
 
   void addSingleGroupIntermediateResults(
@@ -205,40 +179,15 @@ class AverageAggregate : public exec::Aggregate {
       const std::vector<VectorPtr>& args,
       bool /* mayPushdown */) override {
     decodedPartial_.decode(*args[0], rows);
-    auto baseRowVector = dynamic_cast<const RowVector*>(decodedPartial_.base());
-    auto baseSumVector =
-        baseRowVector->childAt(0)->as<SimpleVector<TAccumulator>>();
-    auto baseCountVector =
-        baseRowVector->childAt(1)->as<SimpleVector<int64_t>>();
+    auto baseRowVector = decodedPartial_.base()->template as<RowVector>();
 
-    if (decodedPartial_.isConstantMapping()) {
-      if (!decodedPartial_.isNullAt(0)) {
-        auto decodedIndex = decodedPartial_.index(0);
-        const auto numRows = rows.countSelected();
-        auto totalCount = baseCountVector->valueAt(decodedIndex) * numRows;
-        auto totalSum = baseSumVector->valueAt(decodedIndex) * numRows;
-        updateNonNullValue(group, totalCount, totalSum);
-      }
-    } else if (decodedPartial_.mayHaveNulls()) {
-      rows.applyToSelected([&](vector_size_t i) {
-        if (!decodedPartial_.isNullAt(i)) {
-          auto decodedIndex = decodedPartial_.index(i);
-          updateNonNullValue(
-              group,
-              baseCountVector->valueAt(decodedIndex),
-              baseSumVector->valueAt(decodedIndex));
-        }
-      });
-    } else {
-      TAccumulator totalSum(0);
-      int64_t totalCount = 0;
-      rows.applyToSelected([&](vector_size_t i) {
-        auto decodedIndex = decodedPartial_.index(i);
-        totalCount += baseCountVector->valueAt(decodedIndex);
-        totalSum += baseSumVector->valueAt(decodedIndex);
-      });
-      updateNonNullValue(group, totalCount, totalSum);
+    if (validateIntermediateInputs_ &&
+        (baseRowVector->childAt(0)->mayHaveNulls() ||
+         baseRowVector->childAt(1)->mayHaveNulls())) {
+      addSingleGroupIntermediateResultsImpl<true>(group, rows);
+      return;
     }
+    addSingleGroupIntermediateResultsImpl<false>(group, rows);
   }
 
  private:
@@ -263,6 +212,117 @@ class AverageAggregate : public exec::Aggregate {
 
   inline SumCount<TAccumulator>* accumulator(char* group) {
     return exec::Aggregate::value<SumCount<TAccumulator>>(group);
+  }
+
+  template <bool checkNullFields>
+  void addIntermediateResultsImpl(
+      char** groups,
+      const SelectivityVector& rows) {
+    auto baseRowVector = decodedPartial_.base()->template as<RowVector>();
+    auto baseSumVector =
+        baseRowVector->childAt(0)->template as<SimpleVector<TAccumulator>>();
+    auto baseCountVector =
+        baseRowVector->childAt(1)->template as<SimpleVector<int64_t>>();
+
+    if (decodedPartial_.isConstantMapping()) {
+      if (!decodedPartial_.isNullAt(0)) {
+        auto decodedIndex = decodedPartial_.index(0);
+        if constexpr (checkNullFields) {
+          VELOX_USER_CHECK(
+              !baseSumVector->isNullAt(decodedIndex) &&
+              !baseCountVector->isNullAt(decodedIndex));
+        }
+        auto count = baseCountVector->valueAt(decodedIndex);
+        auto sum = baseSumVector->valueAt(decodedIndex);
+        rows.applyToSelected([&](vector_size_t i) {
+          updateNonNullValue(groups[i], count, sum);
+        });
+      }
+    } else if (decodedPartial_.mayHaveNulls()) {
+      rows.applyToSelected([&](vector_size_t i) {
+        if (decodedPartial_.isNullAt(i)) {
+          return;
+        }
+        auto decodedIndex = decodedPartial_.index(i);
+        if constexpr (checkNullFields) {
+          VELOX_USER_CHECK(
+              !baseSumVector->isNullAt(decodedIndex) &&
+              !baseCountVector->isNullAt(decodedIndex));
+        }
+        updateNonNullValue(
+            groups[i],
+            baseCountVector->valueAt(decodedIndex),
+            baseSumVector->valueAt(decodedIndex));
+      });
+    } else {
+      rows.applyToSelected([&](vector_size_t i) {
+        auto decodedIndex = decodedPartial_.index(i);
+        if constexpr (checkNullFields) {
+          VELOX_USER_CHECK(
+              !baseSumVector->isNullAt(decodedIndex) &&
+              !baseCountVector->isNullAt(decodedIndex));
+        }
+        updateNonNullValue(
+            groups[i],
+            baseCountVector->valueAt(decodedIndex),
+            baseSumVector->valueAt(decodedIndex));
+      });
+    }
+  }
+
+  template <bool checkNullFields>
+  void addSingleGroupIntermediateResultsImpl(
+      char* group,
+      const SelectivityVector& rows) {
+    auto baseRowVector = decodedPartial_.base()->template as<RowVector>();
+    auto baseSumVector =
+        baseRowVector->childAt(0)->template as<SimpleVector<TAccumulator>>();
+    auto baseCountVector =
+        baseRowVector->childAt(1)->template as<SimpleVector<int64_t>>();
+
+    if (decodedPartial_.isConstantMapping()) {
+      if (!decodedPartial_.isNullAt(0)) {
+        auto decodedIndex = decodedPartial_.index(0);
+        if constexpr (checkNullFields) {
+          VELOX_USER_CHECK(
+              !baseSumVector->isNullAt(decodedIndex) &&
+              !baseCountVector->isNullAt(decodedIndex));
+        }
+        const auto numRows = rows.countSelected();
+        auto totalCount = baseCountVector->valueAt(decodedIndex) * numRows;
+        auto totalSum = baseSumVector->valueAt(decodedIndex) * numRows;
+        updateNonNullValue(group, totalCount, totalSum);
+      }
+    } else if (decodedPartial_.mayHaveNulls()) {
+      rows.applyToSelected([&](vector_size_t i) {
+        if (!decodedPartial_.isNullAt(i)) {
+          auto decodedIndex = decodedPartial_.index(i);
+          if constexpr (checkNullFields) {
+            VELOX_USER_CHECK(
+                !baseSumVector->isNullAt(decodedIndex) &&
+                !baseCountVector->isNullAt(decodedIndex));
+          }
+          updateNonNullValue(
+              group,
+              baseCountVector->valueAt(decodedIndex),
+              baseSumVector->valueAt(decodedIndex));
+        }
+      });
+    } else {
+      TAccumulator totalSum(0);
+      int64_t totalCount = 0;
+      rows.applyToSelected([&](vector_size_t i) {
+        auto decodedIndex = decodedPartial_.index(i);
+        if constexpr (checkNullFields) {
+          VELOX_USER_CHECK(
+              !baseSumVector->isNullAt(decodedIndex) &&
+              !baseCountVector->isNullAt(decodedIndex));
+        }
+        totalCount += baseCountVector->valueAt(decodedIndex);
+        totalSum += baseSumVector->valueAt(decodedIndex);
+      });
+      updateNonNullValue(group, totalCount, totalSum);
+    }
   }
 
   void extractValuesImpl(char** groups, int32_t numGroups, VectorPtr* result) {
@@ -298,7 +358,7 @@ void checkSumCountRowType(TypePtr type, const std::string& errorMessage) {
   }
   VELOX_CHECK(
       type->childAt(0)->kind() == TypeKind::DOUBLE ||
-          type->childAt(0)->kind() == TypeKind::LONG_DECIMAL,
+          type->childAt(0)->isLongDecimal(),
       "{}",
       errorMessage)
   VELOX_CHECK_EQ(
@@ -321,7 +381,7 @@ class DecimalAverageAggregate : public DecimalAggregate<TUnscaledType> {
   }
 };
 
-bool registerAverage(const std::string& name) {
+exec::AggregateRegistrationResult registerAverage(const std::string& name) {
   std::vector<std::shared_ptr<exec::AggregateFunctionSignature>> signatures;
 
   for (const auto& inputType : {"smallint", "integer", "bigint", "double"}) {
@@ -342,17 +402,19 @@ bool registerAverage(const std::string& name) {
                            .integerVariable("a_precision")
                            .integerVariable("a_scale")
                            .argumentType("DECIMAL(a_precision, a_scale)")
-                           .intermediateType("VARBINARY")
+                           .intermediateType("varbinary")
                            .returnType("DECIMAL(a_precision, a_scale)")
                            .build());
 
-  exec::registerAggregateFunction(
+  return exec::registerAggregateFunction(
       name,
       std::move(signatures),
       [name](
           core::AggregationNode::Step step,
           const std::vector<TypePtr>& argTypes,
-          const TypePtr& resultType) -> std::unique_ptr<exec::Aggregate> {
+          const TypePtr& resultType,
+          const core::QueryConfig& /*config*/)
+          -> std::unique_ptr<exec::Aggregate> {
         VELOX_CHECK_LE(
             argTypes.size(), 1, "{} takes at most one argument", name);
         auto inputType = argTypes[0];
@@ -364,21 +426,27 @@ bool registerAverage(const std::string& name) {
             case TypeKind::INTEGER:
               return std::make_unique<
                   AverageAggregate<int32_t, double, double>>(resultType);
-            case TypeKind::BIGINT:
+            case TypeKind::BIGINT: {
+              if (inputType->isShortDecimal()) {
+                return std::make_unique<DecimalAverageAggregate<int64_t>>(
+                    resultType);
+              }
               return std::make_unique<
                   AverageAggregate<int64_t, double, double>>(resultType);
+            }
+            case TypeKind::HUGEINT: {
+              if (inputType->isLongDecimal()) {
+                return std::make_unique<DecimalAverageAggregate<int128_t>>(
+                    resultType);
+              }
+              VELOX_NYI();
+            }
             case TypeKind::REAL:
               return std::make_unique<AverageAggregate<float, double, float>>(
                   resultType);
             case TypeKind::DOUBLE:
               return std::make_unique<AverageAggregate<double, double, double>>(
                   resultType);
-            case TypeKind::SHORT_DECIMAL:
-              return std::make_unique<
-                  DecimalAverageAggregate<UnscaledShortDecimal>>(resultType);
-            case TypeKind::LONG_DECIMAL:
-              return std::make_unique<
-                  DecimalAverageAggregate<UnscaledLongDecimal>>(resultType);
             default:
               VELOX_FAIL(
                   "Unknown input type for {} aggregation {}",
@@ -397,24 +465,24 @@ bool registerAverage(const std::string& name) {
             case TypeKind::ROW:
               return std::make_unique<
                   AverageAggregate<int64_t, double, double>>(resultType);
-            case TypeKind::SHORT_DECIMAL:
-              return std::make_unique<
-                  DecimalAverageAggregate<UnscaledShortDecimal>>(resultType);
-            case TypeKind::LONG_DECIMAL:
-              return std::make_unique<
-                  DecimalAverageAggregate<UnscaledLongDecimal>>(resultType);
+            case TypeKind::BIGINT:
+              return std::make_unique<DecimalAverageAggregate<int64_t>>(
+                  resultType);
+            case TypeKind::HUGEINT:
+              return std::make_unique<DecimalAverageAggregate<int128_t>>(
+                  resultType);
             case TypeKind::VARBINARY:
-              if (inputType->kind() == TypeKind::LONG_DECIMAL) {
-                return std::make_unique<
-                    DecimalAverageAggregate<UnscaledLongDecimal>>(resultType);
+              if (inputType->isLongDecimal()) {
+                return std::make_unique<DecimalAverageAggregate<int128_t>>(
+                    resultType);
               } else if (
-                  inputType->kind() == TypeKind::SHORT_DECIMAL ||
+                  inputType->isShortDecimal() ||
                   inputType->kind() == TypeKind::VARBINARY) {
                 // If the input and out type are VARBINARY, then the
                 // LongDecimalWithOverflowState is used and the template type
                 // does not matter.
-                return std::make_unique<
-                    DecimalAverageAggregate<UnscaledShortDecimal>>(resultType);
+                return std::make_unique<DecimalAverageAggregate<int64_t>>(
+                    resultType);
               }
             default:
               VELOX_FAIL(
@@ -422,8 +490,8 @@ bool registerAverage(const std::string& name) {
                   resultType->kindName());
           }
         }
-      });
-  return true;
+      },
+      /*registerCompanionFunctions*/ true);
 }
 
 } // namespace

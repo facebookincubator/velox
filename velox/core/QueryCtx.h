@@ -19,84 +19,57 @@
 #include <folly/executors/CPUThreadPoolExecutor.h>
 #include "velox/common/memory/Memory.h"
 #include "velox/common/memory/MemoryAllocator.h"
-#include "velox/core/Context.h"
 #include "velox/core/QueryConfig.h"
 #include "velox/vector/DecodedVector.h"
 #include "velox/vector/VectorPool.h"
 
 namespace facebook::velox::core {
 
-class QueryCtx : public Context {
+class QueryCtx {
  public:
-  // QueryCtx is used in different places. When used with `Task::start()`, it's
-  // required that the caller supplies the executor and ensure its lifetime
-  // outlives the tasks that use it. In contrast, when used in expression
-  // evaluation through `ExecCtx` or 'Task::next()' for single thread execution
-  // mode, executor is not needed. Hence, we don't require executor to always be
-  // passed in here, but instead, ensure that executor exists when actually
-  // being used.
+  /// QueryCtx is used in different places. When used with `Task::start()`, it's
+  /// required that the caller supplies the executor and ensure its lifetime
+  /// outlives the tasks that use it. In contrast, when used in expression
+  /// evaluation through `ExecCtx` or 'Task::next()' for single thread execution
+  /// mode, executor is not needed. Hence, we don't require executor to always
+  /// be passed in here, but instead, ensure that executor exists when actually
+  /// being used.
   QueryCtx(
-      folly::Executor* FOLLY_NULLABLE executor = nullptr,
-      std::shared_ptr<Config> config = std::make_shared<MemConfig>(),
+      folly::Executor* executor = nullptr,
+      std::unordered_map<std::string, std::string> queryConfigValues = {},
       std::unordered_map<std::string, std::shared_ptr<Config>>
           connectorConfigs = {},
-      memory::MemoryAllocator* FOLLY_NONNULL allocator =
+      memory::MemoryAllocator* allocator =
           memory::MemoryAllocator::getInstance(),
       std::shared_ptr<memory::MemoryPool> pool = nullptr,
       std::shared_ptr<folly::Executor> spillExecutor = nullptr,
-      const std::string& queryId = "")
-      : Context{ContextScope::QUERY},
-        connectorConfigs_(connectorConfigs),
-        allocator_(allocator),
-        pool_(std::move(pool)),
-        executor_(executor),
-        queryConfig_{this},
-        queryId_(queryId),
-        spillExecutor_(std::move(spillExecutor)) {
-    setConfigOverrides(config);
-    initPool(queryId);
-  }
+      const std::string& queryId = "");
 
-  // Constructor to block the destruction of executor while this
-  // object is alive.
-  //
-  // This constructor does not keep the ownership of executor.
+  /// Constructor to block the destruction of executor while this
+  /// object is alive.
+  ///
+  /// This constructor does not keep the ownership of executor.
   explicit QueryCtx(
       folly::Executor::KeepAlive<> executorKeepalive,
-      std::shared_ptr<Config> config = std::make_shared<MemConfig>(),
+      std::unordered_map<std::string, std::string> queryConfigValues = {},
       std::unordered_map<std::string, std::shared_ptr<Config>>
           connectorConfigs = {},
-      memory::MemoryAllocator* FOLLY_NONNULL allocator =
+      memory::MemoryAllocator* allocator =
           memory::MemoryAllocator::getInstance(),
       std::shared_ptr<memory::MemoryPool> pool = nullptr,
-      const std::string& queryId = "")
-      : Context{ContextScope::QUERY},
-        connectorConfigs_(connectorConfigs),
-        allocator_(allocator),
-        pool_(std::move(pool)),
-        executorKeepalive_(std::move(executorKeepalive)),
-        queryConfig_{this},
-        queryId_(queryId) {
-    setConfigOverrides(config);
-    initPool(queryId);
-  }
+      const std::string& queryId = "");
 
-  static std::string generatePoolName(const std::string& queryId) {
-    // We attach a monotonically increasing sequence number to ensure the pool
-    // name is unique.
-    static std::atomic<int64_t> seqNum{0};
-    return fmt::format("query.{}.{}", queryId.c_str(), seqNum++);
-  }
+  static std::string generatePoolName(const std::string& queryId);
 
-  memory::MemoryPool* FOLLY_NONNULL pool() const {
+  memory::MemoryPool* pool() const {
     return pool_.get();
   }
 
-  memory::MemoryAllocator* FOLLY_NONNULL allocator() const {
+  memory::MemoryAllocator* allocator() const {
     return allocator_;
   }
 
-  folly::Executor* FOLLY_NONNULL executor() const {
+  folly::Executor* executor() const {
     if (executor_ != nullptr) {
       return executor_;
     }
@@ -109,8 +82,7 @@ class QueryCtx : public Context {
     return queryConfig_;
   }
 
-  Config* FOLLY_NONNULL
-  getConnectorConfig(const std::string& connectorId) const {
+  Config* getConnectorConfig(const std::string& connectorId) const {
     auto it = connectorConfigs_.find(connectorId);
     if (it == connectorConfigs_.end()) {
       return getEmptyConfig();
@@ -118,12 +90,11 @@ class QueryCtx : public Context {
     return it->second.get();
   }
 
-  // Overrides the previous configuration. Note that this function is NOT
-  // thread-safe and should probably only be used in tests.
-  void setConfigOverridesUnsafe(
-      std::unordered_map<std::string, std::string>&& configOverrides) {
-    setConfigOverrides(
-        std::make_shared<const MemConfig>(std::move(configOverrides)));
+  /// Overrides the previous configuration. Note that this function is NOT
+  /// thread-safe and should probably only be used in tests.
+  void testingOverrideConfigUnsafe(
+      std::unordered_map<std::string, std::string>&& values) {
+    this->queryConfig_.testingOverrideConfigUnsafe(std::move(values));
   }
 
   // Overrides the previous connector-specific configuration. Note that this
@@ -135,7 +106,7 @@ class QueryCtx : public Context {
         std::make_shared<MemConfig>(std::move(configOverrides));
   }
 
-  folly::Executor* FOLLY_NULLABLE spillExecutor() const {
+  folly::Executor* spillExecutor() const {
     return spillExecutor_.get();
   }
 
@@ -148,7 +119,7 @@ class QueryCtx : public Context {
   }
 
  private:
-  static Config* FOLLY_NONNULL getEmptyConfig() {
+  static Config* getEmptyConfig() {
     static const std::unique_ptr<Config> kEmptyConfig =
         std::make_unique<MemConfig>();
     return kEmptyConfig.get();
@@ -161,32 +132,28 @@ class QueryCtx : public Context {
     }
   }
 
+  const std::string queryId_;
+
   std::unordered_map<std::string, std::shared_ptr<Config>> connectorConfigs_;
-  memory::MemoryAllocator* FOLLY_NONNULL allocator_;
+  memory::MemoryAllocator* allocator_;
   std::shared_ptr<memory::MemoryPool> pool_;
-  folly::Executor* FOLLY_NULLABLE executor_;
+  folly::Executor* executor_;
   folly::Executor::KeepAlive<> executorKeepalive_;
   QueryConfig queryConfig_;
-  const std::string queryId_;
   std::shared_ptr<folly::Executor> spillExecutor_;
 };
 
 // Represents the state of one thread of query execution.
-class ExecCtx : public Context {
+class ExecCtx {
  public:
-  ExecCtx(
-      memory::MemoryPool* FOLLY_NONNULL pool,
-      QueryCtx* FOLLY_NULLABLE queryCtx)
-      : Context{ContextScope::QUERY},
-        pool_(pool),
-        queryCtx_(queryCtx),
-        vectorPool_{pool} {}
+  ExecCtx(memory::MemoryPool* pool, QueryCtx* queryCtx)
+      : pool_(pool), queryCtx_(queryCtx), vectorPool_{pool} {}
 
-  velox::memory::MemoryPool* FOLLY_NONNULL pool() const {
+  velox::memory::MemoryPool* pool() const {
     return pool_;
   }
 
-  QueryCtx* FOLLY_NONNULL queryCtx() const {
+  QueryCtx* queryCtx() const {
     return queryCtx_;
   }
 
@@ -259,8 +226,8 @@ class ExecCtx : public Context {
 
  private:
   // Pool for all Buffers for this thread.
-  memory::MemoryPool* FOLLY_NONNULL pool_;
-  QueryCtx* FOLLY_NULLABLE queryCtx_;
+  memory::MemoryPool* pool_;
+  QueryCtx* queryCtx_;
   // A pool of preallocated DecodedVectors for use by expressions and operators.
   std::vector<std::unique_ptr<DecodedVector>> decodedVectorPool_;
   // A pool of preallocated SelectivityVectors for use by expressions

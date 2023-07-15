@@ -17,12 +17,13 @@
 #include "velox/common/memory/MemoryArbitrator.h"
 
 #include "velox/common/memory/Memory.h"
+#include "velox/common/memory/SharedArbitrator.h"
 
 namespace facebook::velox::memory {
 std::string MemoryArbitrator::kindString(Kind kind) {
   switch (kind) {
-    case Kind::kFixed:
-      return "FIXED";
+    case Kind::kNoOp:
+      return "NOOP";
     case Kind::kShared:
       return "SHARED";
     default:
@@ -40,45 +41,35 @@ std::ostream& operator<<(
 std::unique_ptr<MemoryArbitrator> MemoryArbitrator::create(
     const Config& config) {
   switch (config.kind) {
-    case Kind::kFixed:
-      FOLLY_FALLTHROUGH;
+    case Kind::kNoOp:
+      return nullptr;
     case Kind::kShared:
-      VELOX_UNSUPPORTED(
-          "{} arbitrator type not supported yet", kindString(config.kind));
+      return std::make_unique<SharedArbitrator>(config);
     default:
       VELOX_UNREACHABLE(kindString(config.kind));
   }
 }
 
-std::shared_ptr<MemoryReclaimer> MemoryReclaimer::create() {
-  return std::shared_ptr<MemoryReclaimer>(new MemoryReclaimer());
+std::unique_ptr<MemoryReclaimer> MemoryReclaimer::create() {
+  return std::unique_ptr<MemoryReclaimer>(new MemoryReclaimer());
 }
 
-bool MemoryReclaimer::canReclaim(const MemoryPool& pool) const {
+bool MemoryReclaimer::reclaimableBytes(
+    const MemoryPool& pool,
+    uint64_t& reclaimableBytes) const {
+  reclaimableBytes = 0;
   if (pool.kind() == MemoryPool::Kind::kLeaf) {
     return false;
   }
-  bool canReclaim = false;
+  bool reclaimable{false};
   pool.visitChildren([&](MemoryPool* pool) {
-    if (pool->canReclaim()) {
-      canReclaim = true;
-      return false;
-    }
+    uint64_t poolReclaimableBytes{0};
+    reclaimable |= pool->reclaimableBytes(poolReclaimableBytes);
+    reclaimableBytes += poolReclaimableBytes;
     return true;
   });
-  return canReclaim;
-}
-
-uint64_t MemoryReclaimer::reclaimableBytes(const MemoryPool& pool) const {
-  if (pool.kind() == MemoryPool::Kind::kLeaf) {
-    return 0;
-  }
-  uint64_t reclaimableBytes{0};
-  pool.visitChildren([&](MemoryPool* pool) {
-    reclaimableBytes += pool->reclaimableBytes();
-    return true;
-  });
-  return reclaimableBytes;
+  VELOX_CHECK(reclaimable || reclaimableBytes == 0);
+  return reclaimable;
 }
 
 uint64_t MemoryReclaimer::reclaim(MemoryPool* pool, uint64_t targetBytes) {
@@ -88,8 +79,8 @@ uint64_t MemoryReclaimer::reclaim(MemoryPool* pool, uint64_t targetBytes) {
   // TODO: add to sort the child memory pools based on the reclaimable bytes
   // before memory reclamation.
   uint64_t reclaimedBytes{0};
-  pool->visitChildren([&](MemoryPool* pool) {
-    const auto bytes = pool->reclaim(targetBytes);
+  pool->visitChildren([&targetBytes, &reclaimedBytes](MemoryPool* child) {
+    const auto bytes = child->reclaim(targetBytes);
     reclaimedBytes += bytes;
     if (targetBytes != 0) {
       if (bytes >= targetBytes) {
@@ -102,15 +93,33 @@ uint64_t MemoryReclaimer::reclaim(MemoryPool* pool, uint64_t targetBytes) {
   return reclaimedBytes;
 }
 
+void MemoryReclaimer::abort(MemoryPool* pool) {
+  if (pool->kind() == MemoryPool::Kind::kLeaf) {
+    VELOX_UNSUPPORTED(
+        "Don't support to abort a leaf memory pool {}", pool->name());
+  }
+  pool->visitChildren([&](MemoryPool* child) {
+    // NOTE: we issue abort request through the child pool's reclaimer directly
+    // instead of the child pool as the latter always forwards the abort to its
+    // root first.
+    auto* reclaimer = child->reclaimer();
+    VELOX_CHECK_NOT_NULL(reclaimer);
+    reclaimer->abort(child);
+    return true;
+  });
+}
+
 std::string MemoryArbitrator::Stats::toString() const {
   return fmt::format(
-      "STATS[numRequests {} numFailures {} numQueuedRequests {} queueTime {} arbitrationTime {} shrunkMemory {} reclaimedMemory {}]",
+      "STATS[numRequests {} numAborted {} numFailures {} queueTime {} arbitrationTime {} shrunkMemory {} reclaimedMemory {} maxCapacity {} freeCapacity {}]",
       numRequests,
+      numAborted,
       numFailures,
-      numQueuedRequests,
       succinctMicros(queueTimeUs),
       succinctMicros(arbitrationTimeUs),
       succinctBytes(numShrunkBytes),
-      succinctBytes(numReclaimedBytes));
+      succinctBytes(numReclaimedBytes),
+      succinctBytes(maxCapacityBytes),
+      succinctBytes(freeCapacityBytes));
 }
 } // namespace facebook::velox::memory

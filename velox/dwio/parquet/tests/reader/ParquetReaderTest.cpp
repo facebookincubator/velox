@@ -16,6 +16,7 @@
 
 #include "velox/dwio/parquet/reader/ParquetReader.h"
 #include "velox/dwio/parquet/tests/ParquetReaderTestBase.h"
+#include "velox/expression/ExprToSubfieldFilter.h"
 
 using namespace facebook::velox;
 using namespace facebook::velox::common;
@@ -58,6 +59,83 @@ TEST_F(ParquetReaderTest, parseSample) {
   EXPECT_EQ(type->childByName("b"), col1);
 }
 
+TEST_F(ParquetReaderTest, parseReadAsLowerCase) {
+  // upper.parquet holds two columns (A: BIGINT, b: BIGINT) and
+  // 2 rows.
+  const std::string upper(getExampleFilePath("upper.parquet"));
+
+  ReaderOptions readerOptions{defaultPool.get()};
+  readerOptions.setFileColumnNamesReadAsLowerCase(true);
+  ParquetReader reader = createReader(upper, readerOptions);
+  EXPECT_EQ(reader.numberOfRows(), 2ULL);
+
+  auto type = reader.typeWithId();
+  EXPECT_EQ(type->size(), 2ULL);
+  auto col0 = type->childAt(0);
+  EXPECT_EQ(col0->type->kind(), TypeKind::BIGINT);
+  auto col1 = type->childAt(1);
+  EXPECT_EQ(col1->type->kind(), TypeKind::BIGINT);
+  EXPECT_EQ(type->childByName("a"), col0);
+  EXPECT_EQ(type->childByName("b"), col1);
+}
+
+TEST_F(ParquetReaderTest, parseRowMapArrayReadAsLowerCase) {
+  // upper_complex.parquet holds one row of type
+  // root
+  //  |-- Cc: struct (nullable = true)
+  //  |    |-- CcLong0: long (nullable = true)
+  //  |    |-- CcMap1: map (nullable = true)
+  //  |    |    |-- key: string
+  //  |    |    |-- value: struct (valueContainsNull = true)
+  //  |    |    |    |-- CcArray2: array (nullable = true)
+  //  |    |    |    |    |-- element: struct (containsNull = true)
+  //  |    |    |    |    |    |-- CcInt3: integer (nullable = true)
+  // data
+  // +-----------------------+
+  // |Cc                     |
+  // +-----------------------+
+  // |{120, {key -> {[{1}]}}}|
+  // +-----------------------+
+  const std::string upper(getExampleFilePath("upper_complex.parquet"));
+
+  ReaderOptions readerOptions{defaultPool.get()};
+  readerOptions.setFileColumnNamesReadAsLowerCase(true);
+  ParquetReader reader = createReader(upper, readerOptions);
+
+  EXPECT_EQ(reader.numberOfRows(), 1ULL);
+
+  auto type = reader.typeWithId();
+  EXPECT_EQ(type->size(), 1ULL);
+
+  auto col0 = type->childAt(0);
+  EXPECT_EQ(col0->type->kind(), TypeKind::ROW);
+  EXPECT_EQ(type->childByName("cc"), col0);
+
+  auto col0_0 = col0->childAt(0);
+  EXPECT_EQ(col0_0->type->kind(), TypeKind::BIGINT);
+  EXPECT_EQ(col0->childByName("cclong0"), col0_0);
+
+  auto col0_1 = col0->childAt(1);
+  EXPECT_EQ(col0_1->type->kind(), TypeKind::MAP);
+  EXPECT_EQ(col0->childByName("ccmap1"), col0_1);
+
+  auto col0_1_0 = col0_1->childAt(0);
+  EXPECT_EQ(col0_1_0->type->kind(), TypeKind::VARCHAR);
+
+  auto col0_1_1 = col0_1->childAt(1);
+  EXPECT_EQ(col0_1_1->type->kind(), TypeKind::ROW);
+
+  auto col0_1_1_0 = col0_1_1->childAt(0);
+  EXPECT_EQ(col0_1_1_0->type->kind(), TypeKind::ARRAY);
+  EXPECT_EQ(col0_1_1->childByName("ccarray2"), col0_1_1_0);
+
+  auto col0_1_1_0_0 = col0_1_1_0->childAt(0);
+  EXPECT_EQ(col0_1_1_0_0->type->kind(), TypeKind::ROW);
+  auto col0_1_1_0_0_0 = col0_1_1_0_0->childAt(0);
+  EXPECT_EQ(col0_1_1_0_0_0->type->kind(), TypeKind::INTEGER);
+  EXPECT_EQ(col0_1_1_0_0->childByName("ccint3"), col0_1_1_0_0_0);
+}
+
 TEST_F(ParquetReaderTest, parseEmpty) {
   // empty.parquet holds two columns (a: BIGINT, b: DOUBLE) and
   // 0 rows.
@@ -92,7 +170,7 @@ TEST_F(ParquetReaderTest, parseDate) {
   auto type = reader.typeWithId();
   EXPECT_EQ(type->size(), 1ULL);
   auto col0 = type->childAt(0);
-  EXPECT_EQ(col0->type->kind(), TypeKind::DATE);
+  EXPECT_EQ(col0->type, DATE());
   EXPECT_EQ(type->childByName("date"), col0);
 }
 
@@ -173,23 +251,75 @@ TEST_F(ParquetReaderTest, parseIntDecimal) {
   EXPECT_EQ(type->size(), 2ULL);
   auto col0 = type->childAt(0);
   auto col1 = type->childAt(1);
-  EXPECT_EQ(col0->type->kind(), TypeKind::SHORT_DECIMAL);
-  EXPECT_EQ(col1->type->kind(), TypeKind::SHORT_DECIMAL);
+  EXPECT_EQ(col0->type->kind(), TypeKind::BIGINT);
+  EXPECT_EQ(col1->type->kind(), TypeKind::BIGINT);
 
   int64_t expectValues[3] = {1111, 2222, 3333};
   auto result = BaseVector::create(rowType, 1, pool_.get());
   rowReader->next(6, result);
   EXPECT_EQ(result->size(), 6ULL);
   auto decimals = result->as<RowVector>();
-  auto a =
-      decimals->childAt(0)->asFlatVector<UnscaledShortDecimal>()->rawValues();
-  auto b =
-      decimals->childAt(1)->asFlatVector<UnscaledShortDecimal>()->rawValues();
+  auto a = decimals->childAt(0)->asFlatVector<int64_t>()->rawValues();
+  auto b = decimals->childAt(1)->asFlatVector<int64_t>()->rawValues();
   for (int i = 0; i < 3; i++) {
     int index = 2 * i;
-    EXPECT_EQ(a[index].unscaledValue(), expectValues[i]);
-    EXPECT_EQ(a[index + 1].unscaledValue(), expectValues[i]);
-    EXPECT_EQ(b[index].unscaledValue(), expectValues[i]);
-    EXPECT_EQ(b[index + 1].unscaledValue(), expectValues[i]);
+    EXPECT_EQ(a[index], expectValues[i]);
+    EXPECT_EQ(a[index + 1], expectValues[i]);
+    EXPECT_EQ(b[index], expectValues[i]);
+    EXPECT_EQ(b[index + 1], expectValues[i]);
   }
+}
+
+TEST_F(ParquetReaderTest, intMultipleFilters) {
+  // Filter int BETWEEN 102 AND 120 AND bigint BETWEEN 900 AND 1006.
+  FilterMap filters;
+  filters.insert({"int", exec::between(102, 120)});
+  filters.insert({"bigint", exec::between(900, 1006)});
+
+  auto expected = vectorMaker_->rowVector(
+      {rangeVector<int32_t>(5, 102), rangeVector<int64_t>(5, 1002)});
+
+  const auto filePath(getExampleFilePath("int.parquet"));
+  ReaderOptions readerOpts{defaultPool.get()};
+  auto reader = createReader(filePath, readerOpts);
+  assertReadWithReaderAndFilters(
+      std::make_unique<ParquetReader>(reader),
+      "int.parquet",
+      intSchema(),
+      std::move(filters),
+      expected);
+}
+
+// This test is to verify filterRowGroups() doesn't throw the fileOffset Velox
+// check failure
+TEST_F(ParquetReaderTest, filterRowGroups) {
+  // decimal_no_ColumnMetadata.parquet has one columns a: DECIMAL(9,1). It
+  // doesn't have ColumnMetaData, and rowGroups_[0].columns[0].file_offset is 0.
+  auto rowType = ROW({"_c0"}, {DECIMAL(9, 1)});
+  ReaderOptions readerOpts{defaultPool.get()};
+  const std::string decimal_dict(
+      getExampleFilePath("decimal_no_ColumnMetadata.parquet"));
+
+  ParquetReader reader = createReader(decimal_dict, readerOpts);
+  RowReaderOptions rowReaderOpts;
+  rowReaderOpts.setScanSpec(makeScanSpec(rowType));
+  auto rowReader = reader.createRowReader(rowReaderOpts);
+
+  EXPECT_EQ(reader.numberOfRows(), 10ULL);
+}
+
+TEST_F(ParquetReaderTest, parseLongTagged) {
+  // This is a case for long with annonation read
+  const std::string sample(getExampleFilePath("tagged_long.parquet"));
+
+  ReaderOptions readerOptions{defaultPool.get()};
+  ParquetReader reader = createReader(sample, readerOptions);
+
+  EXPECT_EQ(reader.numberOfRows(), 4ULL);
+
+  auto type = reader.typeWithId();
+  EXPECT_EQ(type->size(), 1ULL);
+  auto col0 = type->childAt(0);
+  EXPECT_EQ(col0->type->kind(), TypeKind::BIGINT);
+  EXPECT_EQ(type->childByName("_c0"), col0);
 }

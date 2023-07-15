@@ -27,7 +27,6 @@
 #include "velox/common/base/CheckedArithmetic.h"
 #include "velox/common/base/Exceptions.h"
 #include "velox/common/memory/Allocation.h"
-#include "velox/common/memory/MemoryUsageTracker.h"
 #include "velox/common/time/Timer.h"
 
 DECLARE_bool(velox_use_malloc);
@@ -196,6 +195,9 @@ class MemoryAllocator : public std::enable_shared_from_this<MemoryAllocator> {
 
   using ReservationCallback = std::function<void(int64_t, bool)>;
 
+  /// Returns the capacity of the allocator in bytes.
+  virtual size_t capacity() const = 0;
+
   /// Allocates one or more runs that add up to at least 'numPages', with the
   /// smallest run being at least 'minSizeClass' pages. 'minSizeClass' must be
   /// <= the size of the largest size class. The new memory is returned in 'out'
@@ -210,8 +212,11 @@ class MemoryAllocator : public std::enable_shared_from_this<MemoryAllocator> {
   /// returns true if the allocation succeeded. If it returns false, 'out'
   /// references no memory and any partially allocated memory is freed.
   ///
-  /// NOTE: user needs to explicitly release allocation 'out' by calling
-  /// 'freeNonContiguous' on the same memory allocator object.
+  /// NOTE:
+  ///  - 'out' is guaranteed to be freed if it's not empty.
+  ///  - Allocation is not guaranteed even if collateral 'out' is larger than
+  ///    'numPages', because this method is not atomic.
+  ///  - Throws if allocation exceeds capacity.
   virtual bool allocateNonContiguous(
       MachinePageCount numPages,
       Allocation& out,
@@ -222,28 +227,46 @@ class MemoryAllocator : public std::enable_shared_from_this<MemoryAllocator> {
   /// function returns the actual freed bytes.
   virtual int64_t freeNonContiguous(Allocation& allocation) = 0;
 
-  /// Makes a contiguous mmap of 'numPages'. Advises away the required number of
-  /// free pages so as not to have resident size exceed the capacity if capacity
-  /// is bounded. Returns false if sufficient free pages do not exist.
-  /// 'collateral' and 'allocation' are freed and unmapped or advised away to
-  /// provide pages to back the new 'allocation'. This will always succeed if
-  /// collateral and allocation together cover the new size of allocation.
-  /// 'allocation' is newly mapped and hence zeroed. The contents of
-  /// 'allocation' and 'collateral' are freed in all cases, also if the
-  /// allocation fails. 'reservationCB' is used in the same way as allocate
-  /// does. It may throw and the end state will be consistent, with no new
-  /// allocation and 'allocation' and 'collateral' cleared.
+  /// Makes a contiguous mmap of 'numPages' or 'maxPages'. 'maxPages' defaults
+  /// to 'numPages'.  Advises away the required number of free pages so as not
+  /// to have resident size exceed the capacity if capacity is bounded. Returns
+  /// false if sufficient free pages do not exist. 'collateral' and 'allocation'
+  /// are freed and unmapped or advised away to provide pages to back the new
+  /// 'allocation'. This will always succeed if collateral and allocation
+  /// together cover the new size of allocation. 'allocation' is newly mapped
+  /// and hence zeroed. The contents of 'allocation' and 'collateral' are freed
+  /// in all cases, also if the allocation fails. 'reservationCB' is used in the
+  /// same way as allocate does. It may throw and the end state will be
+  /// consistent, with no new allocation and 'allocation' and 'collateral'
+  /// cleared.
   ///
-  /// NOTE: user needs to explicitly release allocation 'out' by calling
-  /// 'freeContiguous' on the same memory allocator object.
+  /// NOTE: - 'collateral' and passed in 'allocation' are guaranteed
+  /// to be freed.  If 'maxPages' is non-0, 'maxPages' worth of
+  /// address space is mapped but the utilization in the allocator and
+  /// pool is incremented by 'numPages'. This allows reserving
+  /// a large range of addresses for use with huge pages without
+  /// declaring the whole range as held by the query. The reservation
+  /// will be increased as and if addresses in the range are used. See
+  /// growContiguous().
   virtual bool allocateContiguous(
       MachinePageCount numPages,
       Allocation* collateral,
       ContiguousAllocation& allocation,
-      ReservationCallback reservationCB = nullptr) = 0;
+      ReservationCallback reservationCB = nullptr,
+      MachinePageCount maxPages = 0) = 0;
 
   /// Frees contiguous 'allocation'. 'allocation' is empty on return.
   virtual void freeContiguous(ContiguousAllocation& allocation) = 0;
+
+  /// Increments the reserved part of 'allocation' by
+  /// 'increment'. false if would exceed capacity, Throws if size
+  /// would exceed maxSize given in allocateContiguous(). Calls reservationCB
+  /// before increasing the utilization and returns false with no effect if this
+  /// fails.
+  virtual bool growContiguous(
+      MachinePageCount increment,
+      ContiguousAllocation& allocation,
+      ReservationCallback reservationCB = nullptr) = 0;
 
   /// Allocates contiguous 'bytes' and return the first byte. Returns nullptr if
   /// there is no space.
@@ -254,7 +277,8 @@ class MemoryAllocator : public std::enable_shared_from_this<MemoryAllocator> {
       uint64_t bytes,
       uint16_t alignment = kMinAlignment) = 0;
 
-  /// Allocates a zero-filled contiguous bytes.
+  /// Allocates a zero-filled contiguous bytes. Returns nullptr if there is no
+  /// space
   virtual void* allocateZeroFilled(uint64_t bytes);
 
   /// Frees contiguous memory allocated by allocateBytes, allocateZeroFilled,
@@ -274,6 +298,9 @@ class MemoryAllocator : public std::enable_shared_from_this<MemoryAllocator> {
     return sizeClassSizes_;
   }
 
+  /// Returns the total number of used bytes by this allocator
+  virtual size_t totalUsedBytes() const = 0;
+
   virtual MachinePageCount numAllocated() const = 0;
 
   virtual MachinePageCount numMapped() const = 0;
@@ -285,7 +312,13 @@ class MemoryAllocator : public std::enable_shared_from_this<MemoryAllocator> {
   virtual std::string toString() const = 0;
 
   /// Invoked to check if 'alignmentBytes' is valid and 'allocateBytes' is
-  /// multiple of 'alignmentBytes'.
+  /// multiple of 'alignmentBytes'. Returns true if check succeeds, false
+  /// otherwise
+  static bool isAlignmentValid(uint64_t allocateBytes, uint16_t alignmentBytes);
+
+  /// Invoked to check if 'alignmentBytes' is valid and 'allocateBytes' is
+  /// multiple of 'alignmentBytes'. Semantically the same as isAlignmentValid().
+  /// Throws if check fails.
   static void alignmentCheck(uint64_t allocateBytes, uint16_t alignmentBytes);
 
   /// Causes 'failure' to occur in memory allocation calls. This is a test-only
@@ -361,13 +394,26 @@ class MemoryAllocator : public std::enable_shared_from_this<MemoryAllocator> {
     return true;
   }
 
+  // If 'data' is sufficiently large, enables/disables adaptive  huge pages for
+  // the address raneg.
+  void useHugePages(const ContiguousAllocation& data, bool enable);
+
   // The machine page counts corresponding to different sizes in order
   // of increasing size.
   const std::vector<MachinePageCount>
       sizeClassSizes_{1, 2, 4, 8, 16, 32, 64, 128, 256};
 
+  // Tracks the number of allocated pages. Allocated pages are the memory pages
+  // that are currently being used.
   std::atomic<MachinePageCount> numAllocated_{0};
-  // Tracks the number of mapped pages.
+
+  // Tracks the number of mapped pages. Mapped pages are the memory pages that
+  // meet following requirements:
+  // 1. They are obtained from the operating system from mmap calls directly,
+  // without going through std::malloc.
+  // 2. They are currently being allocated (used) or they were allocated (used)
+  // and freed in the past but haven't been returned to the operating system by
+  // 'this' (via madvise calls).
   std::atomic<MachinePageCount> numMapped_{0};
 
   // Indicates if the failure injection is persistent or transient.

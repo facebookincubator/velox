@@ -55,9 +55,12 @@ uint64_t SelectiveStructColumnReaderBase::skip(uint64_t numValues) {
 void SelectiveStructColumnReaderBase::next(
     uint64_t numValues,
     VectorPtr& result,
-    const uint64_t* incomingNulls) {
-  VELOX_CHECK(!incomingNulls, "next may only be called for the root reader.");
+    const Mutation* mutation) {
   if (children_.empty()) {
+    if (mutation && mutation->deletedRows) {
+      numValues -= bits::countBits(mutation->deletedRows, 0, numValues);
+    }
+
     // no readers
     // This can be either count(*) query or a query that select only
     // constant columns (partition keys or columns missing from an old file
@@ -79,6 +82,8 @@ void SelectiveStructColumnReaderBase::next(
   if (numValues > oldSize) {
     std::iota(&rows_[oldSize], &rows_[rows_.size()], oldSize);
   }
+  mutation_ = mutation;
+  hasMutation_ = mutation && mutation->deletedRows;
   read(readOffset_, rows_, nullptr);
   getValues(outputRows(), &result);
 }
@@ -90,19 +95,32 @@ void SelectiveStructColumnReaderBase::read(
   numReads_ = scanSpec_->newRead();
   prepareRead<char>(offset, rows, incomingNulls);
   RowSet activeRows = rows;
-  auto& childSpecs = scanSpec_->children();
+  if (hasMutation_) {
+    // We handle the mutation after prepareRead so that output rows and format
+    // specific initializations (e.g. RepDef in Parquet) are done properly.
+    VELOX_DCHECK(!nullsInReadRange_, "Only top level can have mutation");
+    VELOX_DCHECK_EQ(
+        rows.back(), rows.size() - 1, "Top level should have a dense row set");
+    bits::forEachUnsetBit(
+        mutation_->deletedRows, 0, rows.back() + 1, [&](auto i) {
+          addOutputRow(i);
+        });
+    if (outputRows_.empty()) {
+      readOffset_ = offset + rows.back() + 1;
+      return;
+    }
+    activeRows = outputRows_;
+  }
   const uint64_t* structNulls =
       nullsInReadRange_ ? nullsInReadRange_->as<uint64_t>() : nullptr;
-  bool hasFilter = false;
   // a struct reader may have a null/non-null filter
   if (scanSpec_->filter()) {
     auto kind = scanSpec_->filter()->kind();
     VELOX_CHECK(
         kind == velox::common::FilterKind::kIsNull ||
         kind == velox::common::FilterKind::kIsNotNull);
-    hasFilter = true;
     filterNulls<int32_t>(
-        rows, kind == velox::common::FilterKind::kIsNull, false);
+        activeRows, kind == velox::common::FilterKind::kIsNull, false);
     if (outputRows_.empty()) {
       recordParentNullsInChildren(offset, rows);
       return;
@@ -110,7 +128,8 @@ void SelectiveStructColumnReaderBase::read(
     activeRows = outputRows_;
   }
 
-  assert(!children_.empty());
+  VELOX_CHECK(!children_.empty());
+  auto& childSpecs = scanSpec_->children();
   for (size_t i = 0; i < childSpecs.size(); ++i) {
     auto& childSpec = childSpecs[i];
     if (childSpec->isConstant()) {
@@ -125,7 +144,6 @@ void SelectiveStructColumnReaderBase::read(
     }
     advanceFieldReader(reader, offset);
     if (childSpec->hasFilter()) {
-      hasFilter = true;
       {
         SelectivityTimer timer(childSpec->selectivity(), activeRows.size());
 
@@ -149,7 +167,7 @@ void SelectiveStructColumnReaderBase::read(
   // here.
   recordParentNullsInChildren(offset, rows);
 
-  if (hasFilter) {
+  if (scanSpec_->hasFilter()) {
     setOutputRows(activeRows);
   }
   lazyVectorReadOffset_ = offset;
@@ -178,6 +196,7 @@ void SelectiveStructColumnReaderBase::recordParentNullsInChildren(
 }
 
 namespace {
+
 //   Recursively makes empty RowVectors for positions in 'children'
 //   where the corresponding child type in 'rowType' is a row. The
 //   reader expects RowVector outputs to be initialized so that the
@@ -198,12 +217,52 @@ void fillRowVectorChildren(
     }
   }
 }
+
+VectorPtr tryReuseResult(const VectorPtr& result) {
+  if (!result.unique()) {
+    return nullptr;
+  }
+  switch (result->encoding()) {
+    case VectorEncoding::Simple::ROW:
+      // Do not call prepareForReuse as it would throw away constant vectors
+      // that can be reused.  Reusability of children should be checked in
+      // getValues of child readers (all readers other than struct are
+      // recreating the result vector on each batch currently, so no issue with
+      // reusability now).
+      result->reuseNulls();
+      return result;
+    case VectorEncoding::Simple::LAZY: {
+      auto& lazy = static_cast<const LazyVector&>(*result);
+      if (!lazy.isLoaded()) {
+        return nullptr;
+      }
+      return tryReuseResult(lazy.loadedVectorShared());
+    }
+    case VectorEncoding::Simple::DICTIONARY:
+      return tryReuseResult(result->valueVector());
+    default:
+      return nullptr;
+  }
+}
+
+void setConstantField(
+    const VectorPtr& constant,
+    vector_size_t size,
+    VectorPtr& field) {
+  if (field && field->isConstantEncoding() && field.unique() &&
+      field->size() > 0 && field->equalValueAt(constant.get(), 0, 0)) {
+    field->resize(size);
+  } else {
+    field = BaseVector::wrapInConstant(size, 0, constant);
+  }
+}
+
 } // namespace
 
 void SelectiveStructColumnReaderBase::getValues(
     RowSet rows,
     VectorPtr* result) {
-  assert(!children_.empty());
+  VELOX_CHECK(!children_.empty());
   VELOX_CHECK(
       *result != nullptr,
       "SelectiveStructColumnReaderBase expects a non-null result");
@@ -211,10 +270,12 @@ void SelectiveStructColumnReaderBase::getValues(
       result->get()->type()->isRow(),
       "Struct reader expects a result of type ROW.");
   auto& rowType = result->get()->type()->asRow();
-  if (!result->unique() || result->get()->isLazy()) {
+  if (auto reused = tryReuseResult(*result)) {
+    *result = std::move(reused);
+  } else {
     std::vector<VectorPtr> children(rowType.size());
     fillRowVectorChildren(*result->get()->pool(), rowType, children);
-    *result = std::make_unique<RowVector>(
+    *result = std::make_shared<RowVector>(
         result->get()->pool(),
         result->get()->type(),
         nullptr,
@@ -236,35 +297,39 @@ void SelectiveStructColumnReaderBase::getValues(
     resultRow->clearNulls(0, rows.size());
   }
   bool lazyPrepared = false;
-  auto& childSpecs = scanSpec_->children();
-  for (auto i = 0; i < childSpecs.size(); ++i) {
-    auto& childSpec = childSpecs[i];
+  for (auto& childSpec : scanSpec_->children()) {
     if (!childSpec->projectOut()) {
       continue;
     }
-    auto index = childSpec->subscript();
-    auto channel = childSpec->channel();
+    auto& childResult = resultRow->childAt(childSpec->channel());
     if (childSpec->isConstant()) {
-      resultRow->childAt(channel) = BaseVector::wrapInConstant(
-          rows.size(), 0, childSpec->constantValue());
-    } else {
-      if (!childSpec->extractValues() && !childSpec->hasFilter() &&
-          children_[index]->isTopLevel()) {
-        // LazyVector result.
-        if (!lazyPrepared) {
-          if (rows.size() != outputRows_.size()) {
-            setOutputRows(rows);
-          }
-          lazyPrepared = true;
-        }
-        resultRow->childAt(channel) = std::make_shared<LazyVector>(
-            &memoryPool_,
-            resultRow->type()->childAt(channel),
-            rows.size(),
-            std::make_unique<ColumnLoader>(this, children_[index], numReads_));
-      } else {
-        children_[index]->getValues(rows, &resultRow->childAt(channel));
+      setConstantField(childSpec->constantValue(), rows.size(), childResult);
+      continue;
+    }
+    auto index = childSpec->subscript();
+    if (childSpec->extractValues() || childSpec->hasFilter() ||
+        !children_[index]->isTopLevel()) {
+      children_[index]->getValues(rows, &childResult);
+      continue;
+    }
+    // LazyVector result.
+    if (!lazyPrepared) {
+      if (rows.size() != outputRows_.size()) {
+        setOutputRows(rows);
       }
+      lazyPrepared = true;
+    }
+    auto loader =
+        std::make_unique<ColumnLoader>(this, children_[index], numReads_);
+    if (childResult && childResult->isLazy() && childResult.unique()) {
+      static_cast<LazyVector&>(*childResult)
+          .reset(std::move(loader), rows.size());
+    } else {
+      childResult = std::make_shared<LazyVector>(
+          &memoryPool_,
+          resultRow->type()->childAt(childSpec->channel()),
+          rows.size(),
+          std::move(loader));
     }
   }
 }

@@ -29,7 +29,10 @@ class ConstantExpr : public SpecialForm {
             false /* trackCpuUsage */),
         needToSetIsAscii_{value->type()->isVarchar()} {
     VELOX_CHECK_EQ(value->encoding(), VectorEncoding::Simple::CONSTANT);
-    sharedConstantValue_ = std::move(value);
+    // sharedConstantValue_ may be modified so we should take our own copy to
+    // prevent sharing across threads.
+    sharedConstantValue_ =
+        BaseVector::wrapInConstant(1, 0, std::move(value), true);
   }
 
   void evalSpecialForm(
@@ -43,6 +46,10 @@ class ConstantExpr : public SpecialForm {
       VectorPtr& result) override;
 
   const VectorPtr& value() const {
+    return sharedConstantValue_;
+  }
+
+  VectorPtr& mutableValue() {
     return sharedConstantValue_;
   }
 

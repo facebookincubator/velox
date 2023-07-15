@@ -34,6 +34,7 @@ using namespace facebook::velox::connector::hive;
 using namespace facebook::velox::common::testutil;
 using namespace facebook::velox::memory;
 
+using facebook::velox::common::testutil::TestValue;
 using facebook::velox::test::BatchMaker;
 
 class MultiFragmentTest : public HiveConnectorTestBase {
@@ -48,13 +49,14 @@ class MultiFragmentTest : public HiveConnectorTestBase {
       int destination,
       Consumer consumer = nullptr,
       int64_t maxMemory = kMaxMemory) {
+    auto configCopy = configSettings_;
     auto queryCtx = std::make_shared<core::QueryCtx>(
-        executor_.get(), std::make_shared<core::MemConfig>(configSettings_));
+        executor_.get(), std::move(configCopy));
     queryCtx->testingOverrideMemoryPool(
         memory::defaultMemoryManager().addRootPool(
             queryCtx->queryId(), maxMemory));
     core::PlanFragment planFragment{planNode};
-    return std::make_shared<Task>(
+    return Task::create(
         taskId,
         std::move(planFragment),
         destination,
@@ -99,7 +101,7 @@ class MultiFragmentTest : public HiveConnectorTestBase {
     task->noMoreSplits("0");
   }
 
-  void assertQuery(
+  std::shared_ptr<Task> assertQuery(
       const std::shared_ptr<const core::PlanNode>& plan,
       const std::vector<std::string>& remoteTaskIds,
       const std::string& duckDbSql,
@@ -108,7 +110,7 @@ class MultiFragmentTest : public HiveConnectorTestBase {
     for (auto& taskId : remoteTaskIds) {
       splits.push_back(std::make_shared<RemoteConnectorSplit>(taskId));
     }
-    OperatorTestBase::assertQuery(plan, splits, duckDbSql, sortingKeys);
+    return OperatorTestBase::assertQuery(plan, splits, duckDbSql, sortingKeys);
   }
 
   void assertQueryOrdered(
@@ -126,6 +128,16 @@ class MultiFragmentTest : public HiveConnectorTestBase {
       writeToFile(filePaths_[i]->path, vectors_[i]);
     }
     createDuckDbTable(vectors_);
+  }
+
+  void verifyExchangeStats(
+      const std::shared_ptr<Task>& task,
+      int32_t expectedCount) const {
+    auto exchangeStats =
+        task->taskStats().pipelineStats[0].operatorStats[0].runtimeStats;
+    ASSERT_EQ(1, exchangeStats.count("localExchangeSource.numPages"));
+    ASSERT_EQ(
+        expectedCount, exchangeStats.at("localExchangeSource.numPages").count);
   }
 
   RowTypePtr rowType_{
@@ -287,7 +299,10 @@ TEST_F(MultiFragmentTest, distributedTableScan) {
     addHiveSplits(leafTask, filePaths_);
 
     auto op = PlanBuilder().exchange(leafPlan->outputType()).planNode();
-    assertQuery(op, {leafTaskId}, "SELECT c2, c1 % 2, c0 % 10 FROM tmp");
+    auto task =
+        assertQuery(op, {leafTaskId}, "SELECT c2, c1 % 2, c0 % 10 FROM tmp");
+
+    verifyExchangeStats(task, 1);
 
     ASSERT_TRUE(waitForTaskCompletion(leafTask.get())) << leafTask->taskId();
   }
@@ -432,7 +447,10 @@ TEST_F(MultiFragmentTest, partitionedOutput) {
 
     auto op = PlanBuilder().exchange(intermediatePlan->outputType()).planNode();
 
-    assertQuery(op, intermediateTaskIds, "SELECT c3, c0, c2 FROM tmp");
+    auto task =
+        assertQuery(op, intermediateTaskIds, "SELECT c3, c0, c2 FROM tmp");
+
+    verifyExchangeStats(task, kFanout);
 
     ASSERT_TRUE(waitForTaskCompletion(leafTask.get())) << leafTask->taskId();
   }
@@ -481,10 +499,10 @@ TEST_F(MultiFragmentTest, broadcast) {
     auto task = makeTask(finalAggTaskIds.back(), finalAggPlan, i);
     tasks.emplace_back(task);
     Task::start(task, 1);
-    leafTask->updateBroadcastOutputBuffers(i + 1, false);
+    leafTask->updateOutputBuffers(i + 1, false);
     addRemoteSplits(task, {leafTaskId});
   }
-  leafTask->updateBroadcastOutputBuffers(finalAggTaskIds.size(), true);
+  leafTask->updateOutputBuffers(finalAggTaskIds.size(), true);
 
   // Collect results from multiple tasks.
   auto op = PlanBuilder().exchange(finalAggPlan->outputType()).planNode();
@@ -495,9 +513,9 @@ TEST_F(MultiFragmentTest, broadcast) {
     ASSERT_TRUE(waitForTaskCompletion(task.get())) << task->taskId();
   }
 
-  // Make sure duplicate 'updateBroadcastOutputBuffers' message after task
+  // Make sure duplicate 'updateOutputBuffers' message after task
   // completion doesn't cause an error.
-  leafTask->updateBroadcastOutputBuffers(finalAggTaskIds.size(), true);
+  leafTask->updateOutputBuffers(finalAggTaskIds.size(), true);
 }
 
 TEST_F(MultiFragmentTest, replicateNullsAndAny) {
@@ -583,7 +601,7 @@ TEST_F(MultiFragmentTest, limit) {
   // Make final task: Exchange -> FinalLimit(10).
   auto plan = PlanBuilder()
                   .exchange(leafPlan->outputType())
-                  .localPartition({})
+                  .localPartition(std::vector<std::string>{})
                   .limit(0, 10, false)
                   .planNode();
 
@@ -778,11 +796,11 @@ TEST_F(MultiFragmentTest, earlyCompletionBroadcast) {
     tasks.push_back(task);
     Task::start(task, 4);
 
-    leafTask->updateBroadcastOutputBuffers(i + 1, false);
+    leafTask->updateOutputBuffers(i + 1, false);
 
     addRemoteSplits(task, {leafTaskId});
   }
-  leafTask->updateBroadcastOutputBuffers(joinTaskIds.size(), true);
+  leafTask->updateOutputBuffers(joinTaskIds.size(), true);
 
   // Create output task.
   auto outputPlan = PlanBuilder().exchange(joinOutputType).planNode();
@@ -1152,7 +1170,9 @@ DEBUG_ONLY_TEST_F(
   addHiveSplits(leafTask, filePaths_);
 
   const std::string kRootTaskId("root-task");
+  std::atomic_bool readyToTerminate{false};
   folly::EventCount blockTerminate;
+  std::atomic_bool noMoreSplits{false};
   folly::EventCount blockNoMoreSplits;
   SCOPED_TESTVALUE_SET(
       "facebook::velox::exec::Task::setError",
@@ -1173,10 +1193,9 @@ DEBUG_ONLY_TEST_F(
           return;
         }
         // Unblock no more split call in the middle of task terminate execution.
-        blockNoMoreSplits.notify();
-        auto waitKey = blockTerminate.prepareWait();
-        // Block to wait for the no more split call to finish.
-        blockTerminate.wait(waitKey);
+        noMoreSplits.store(true);
+        blockNoMoreSplits.notifyAll();
+        blockTerminate.await([&]() { return readyToTerminate.load(); });
       })));
   auto rootPlan = PlanBuilder()
                       .exchange(leafPlan->outputType())
@@ -1197,12 +1216,11 @@ DEBUG_ONLY_TEST_F(
         exec::Split(std::make_shared<RemoteConnectorSplit>(leafTaskId), -1);
     rootTask->addSplit("0", std::move(split));
   }
-  auto waitKey = blockNoMoreSplits.prepareWait();
-  // Block to wait for task terminate execution.
-  blockNoMoreSplits.wait(waitKey);
+  blockNoMoreSplits.await([&]() { return noMoreSplits.load(); });
   rootTask->noMoreSplits("0");
   // Unblock task terminate execution after no more split call finishes.
-  blockTerminate.notify();
+  readyToTerminate.store(true);
+  blockTerminate.notifyAll();
   ASSERT_TRUE(waitForTaskFailure(rootTask.get(), 1'000'000'000));
 }
 
@@ -1270,4 +1288,61 @@ TEST_F(MultiFragmentTest, taskTerminateWithPendingOutputBuffers) {
   receivedIobufs.clear();
   ASSERT_EQ(task.use_count(), 1);
   task.reset();
+}
+
+DEBUG_ONLY_TEST_F(MultiFragmentTest, mergeWithEarlyTermination) {
+  setupSources(10, 1000);
+
+  std::vector<std::shared_ptr<TempFilePath>> filePaths(
+      filePaths_.begin(), filePaths_.begin());
+
+  std::vector<std::string> partialSortTaskIds;
+  auto sortTaskId = makeTaskId("orderby", 0);
+  partialSortTaskIds.push_back(sortTaskId);
+  auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
+  auto partialSortPlan = PlanBuilder(planNodeIdGenerator)
+                             .localMerge(
+                                 {"c0"},
+                                 {PlanBuilder(planNodeIdGenerator)
+                                      .tableScan(rowType_)
+                                      .orderBy({"c0"}, true)
+                                      .planNode()})
+                             .partitionedOutput({}, 1)
+                             .planNode();
+
+  auto partialSortTask = makeTask(sortTaskId, partialSortPlan, 1);
+  Task::start(partialSortTask, 1);
+  addHiveSplits(partialSortTask, filePaths);
+
+  std::atomic<bool> blockMergeOnce{true};
+  std::atomic<bool> mergeIsBlockedReady{false};
+  folly::EventCount mergeIsBlockedWait;
+  SCOPED_TESTVALUE_SET(
+      "facebook::velox::exec::Merge::isBlocked",
+      std::function<void(const Operator*)>([&](const Operator* op) {
+        if (op->operatorType() != "MergeExchange") {
+          return;
+        }
+        if (!blockMergeOnce.exchange(false)) {
+          return;
+        }
+        mergeIsBlockedWait.await([&]() { return mergeIsBlockedReady.load(); });
+        // Trigger early termination.
+        op->testingOperatorCtx()->task()->requestAbort();
+      }));
+
+  auto finalSortTaskId = makeTaskId("orderby", 1);
+  auto finalSortPlan = PlanBuilder()
+                           .mergeExchange(partialSortPlan->outputType(), {"c0"})
+                           .partitionedOutput({}, 1)
+                           .planNode();
+  auto finalSortTask = makeTask(finalSortTaskId, finalSortPlan, 0);
+  Task::start(finalSortTask, 1);
+  addRemoteSplits(finalSortTask, partialSortTaskIds);
+
+  mergeIsBlockedReady.store(true);
+  mergeIsBlockedWait.notifyAll();
+
+  ASSERT_TRUE(waitForTaskCompletion(partialSortTask.get(), 1'000'000'000));
+  ASSERT_TRUE(waitForTaskAborted(finalSortTask.get(), 1'000'000'000));
 }

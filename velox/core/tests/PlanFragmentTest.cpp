@@ -15,7 +15,6 @@
  */
 #include <gtest/gtest.h>
 
-#include "velox/core/Context.h"
 #include "velox/core/PlanFragment.h"
 #include "velox/core/QueryConfig.h"
 #include "velox/core/QueryCtx.h"
@@ -64,8 +63,7 @@ class PlanFragmentTest : public testing::Test {
         {QueryConfig::kOrderBySpillEnabled,
          orderBySpillEnabled ? "true" : "false"},
     });
-    return std::make_shared<QueryCtx>(
-        nullptr, std::make_shared<MemConfig>(configData));
+    return std::make_shared<QueryCtx>(nullptr, std::move(configData));
   }
 
   RowTypePtr rowType_;
@@ -127,10 +125,12 @@ TEST_F(PlanFragmentTest, aggregationCanSpill) {
   std::vector<std::string> emptyAggregateNames{};
   std::vector<TypedExprPtr> aggregateInputs{
       std::make_shared<InputTypedExpr>(BIGINT())};
-  const std::vector<CallTypedExprPtr> aggregates{
-      std::make_shared<core::CallTypedExpr>(BIGINT(), aggregateInputs, "sum")};
-  const std::vector<CallTypedExprPtr> emptyAggregates{};
-  const std::vector<FieldAccessTypedExprPtr> emptyAggregateMasks;
+  const std::vector<AggregationNode::Aggregate> aggregates{
+      {std::make_shared<core::CallTypedExpr>(BIGINT(), aggregateInputs, "sum"),
+       nullptr,
+       {},
+       {}}};
+  const std::vector<AggregationNode::Aggregate> emptyAggregates{};
 
   struct {
     AggregationNode::Step aggregationStep;
@@ -181,7 +181,6 @@ TEST_F(PlanFragmentTest, aggregationCanSpill) {
         testData.hasPreAggregation ? preGroupingKeys : emptyPreGroupingKeys,
         testData.isDistinct ? emptyAggregateNames : aggregateNames,
         testData.isDistinct ? emptyAggregates : aggregates,
-        emptyAggregateMasks,
         false,
         valueNode_);
     auto queryCtx = getSpillQueryCtx(

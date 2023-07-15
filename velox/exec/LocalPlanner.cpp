@@ -18,8 +18,6 @@
 #include "velox/exec/ArrowStream.h"
 #include "velox/exec/AssignUniqueId.h"
 #include "velox/exec/CallbackSink.h"
-#include "velox/exec/CrossJoinBuild.h"
-#include "velox/exec/CrossJoinProbe.h"
 #include "velox/exec/EnforceSingleRow.h"
 #include "velox/exec/Exchange.h"
 #include "velox/exec/FilterProject.h"
@@ -28,14 +26,20 @@
 #include "velox/exec/HashBuild.h"
 #include "velox/exec/HashProbe.h"
 #include "velox/exec/Limit.h"
+#include "velox/exec/MarkDistinct.h"
 #include "velox/exec/Merge.h"
 #include "velox/exec/MergeJoin.h"
+#include "velox/exec/NestedLoopJoinBuild.h"
+#include "velox/exec/NestedLoopJoinProbe.h"
 #include "velox/exec/OrderBy.h"
 #include "velox/exec/PartitionedOutput.h"
+#include "velox/exec/RowNumber.h"
 #include "velox/exec/StreamingAggregation.h"
 #include "velox/exec/TableScan.h"
+#include "velox/exec/TableWriteMerge.h"
 #include "velox/exec/TableWriter.h"
 #include "velox/exec/TopN.h"
+#include "velox/exec/TopNRowNumber.h"
 #include "velox/exec/Unnest.h"
 #include "velox/exec/Values.h"
 #include "velox/exec/Window.h"
@@ -104,9 +108,9 @@ OperatorSupplier makeConsumerSupplier(
   }
 
   if (auto join =
-          std::dynamic_pointer_cast<const core::CrossJoinNode>(planNode)) {
+          std::dynamic_pointer_cast<const core::NestedLoopJoinNode>(planNode)) {
     return [join](int32_t operatorId, DriverCtx* ctx) {
-      return std::make_unique<CrossJoinBuild>(operatorId, ctx, join);
+      return std::make_unique<NestedLoopJoinBuild>(operatorId, ctx, join);
     };
   }
 
@@ -166,7 +170,9 @@ uint32_t maxDriversForConsumer(
   return std::numeric_limits<uint32_t>::max();
 }
 
-uint32_t maxDrivers(const DriverFactory& driverFactory) {
+uint32_t maxDrivers(
+    const DriverFactory& driverFactory,
+    const core::QueryConfig& queryConfig) {
   uint32_t count = maxDriversForConsumer(driverFactory.consumerNode);
   if (count == 1) {
     return count;
@@ -218,10 +224,16 @@ uint32_t maxDrivers(const DriverFactory& driverFactory) {
     } else if (
         auto tableWrite =
             std::dynamic_pointer_cast<const core::TableWriteNode>(node)) {
-      if (!tableWrite->insertTableHandle()
-               ->connectorInsertTableHandle()
-               ->supportsMultiThreading()) {
+      const auto& connectorInsertHandle =
+          tableWrite->insertTableHandle()->connectorInsertTableHandle();
+      if (!connectorInsertHandle->supportsMultiThreading()) {
         return 1;
+      } else {
+        if (tableWrite->hasPartitioningScheme()) {
+          return queryConfig.taskPartitionedWriterCount();
+        } else {
+          return queryConfig.taskWriterCount();
+        }
       }
     } else {
       auto result = Operator::maxDrivers(node);
@@ -247,6 +259,7 @@ void LocalPlanner::plan(
     const core::PlanFragment& planFragment,
     ConsumerSupplier consumerSupplier,
     std::vector<std::unique_ptr<DriverFactory>>* driverFactories,
+    const core::QueryConfig& queryConfig,
     uint32_t maxDrivers) {
   detail::plan(
       planFragment.planNode,
@@ -264,7 +277,7 @@ void LocalPlanner::plan(
 
   // Determine number of drivers for each pipeline.
   for (auto& factory : *driverFactories) {
-    factory->maxDrivers = detail::maxDrivers(*factory);
+    factory->maxDrivers = detail::maxDrivers(*factory, queryConfig);
     factory->numDrivers = std::min(factory->maxDrivers, maxDrivers);
 
     // Pipelines running grouped/bucketed execution would have separate groups
@@ -343,15 +356,17 @@ void LocalPlanner::markMixedJoinBridges(
         }
       } else if (
           auto joinNode =
-              std::dynamic_pointer_cast<const core::CrossJoinNode>(planNode)) {
+              std::dynamic_pointer_cast<const core::NestedLoopJoinNode>(
+                  planNode)) {
         // See if the build source (2nd) belongs to an ungrouped execution.
         auto& buildSourceNode = planNode->sources()[1];
         for (auto& factoryOther : driverFactories) {
           if (!factoryOther->groupedExecution &&
               buildSourceNode->id() == factoryOther->outputNodeId()) {
-            factoryOther->mixedExecutionModeCrossJoinNodeIds.emplace(
+            factoryOther->mixedExecutionModeNestedLoopJoinNodeIds.emplace(
                 planNode->id());
-            factory->mixedExecutionModeCrossJoinNodeIds.emplace(planNode->id());
+            factory->mixedExecutionModeNestedLoopJoinNodeIds.emplace(
+                planNode->id());
             break;
           }
         }
@@ -364,6 +379,8 @@ std::shared_ptr<Driver> DriverFactory::createDriver(
     std::unique_ptr<DriverCtx> ctx,
     std::shared_ptr<ExchangeClient> exchangeClient,
     std::function<int(int pipelineId)> numDrivers) {
+  auto driver = std::shared_ptr<Driver>(new Driver());
+  ctx->driver = driver.get();
   std::vector<std::unique_ptr<Operator>> operators;
   operators.reserve(planNodes.size());
 
@@ -411,6 +428,12 @@ std::shared_ptr<Driver> DriverFactory::createDriver(
       operators.push_back(
           std::make_unique<TableWriter>(id, ctx.get(), tableWriteNode));
     } else if (
+        auto tableWriteMergeNode =
+            std::dynamic_pointer_cast<const core::TableWriteMergeNode>(
+                planNode)) {
+      operators.push_back(std::make_unique<TableWriteMerge>(
+          id, ctx.get(), tableWriteMergeNode));
+    } else if (
         auto mergeExchangeNode =
             std::dynamic_pointer_cast<const core::MergeExchangeNode>(
                 planNode)) {
@@ -435,9 +458,10 @@ std::shared_ptr<Driver> DriverFactory::createDriver(
       operators.push_back(std::make_unique<HashProbe>(id, ctx.get(), joinNode));
     } else if (
         auto joinNode =
-            std::dynamic_pointer_cast<const core::CrossJoinNode>(planNode)) {
+            std::dynamic_pointer_cast<const core::NestedLoopJoinNode>(
+                planNode)) {
       operators.push_back(
-          std::make_unique<CrossJoinProbe>(id, ctx.get(), joinNode));
+          std::make_unique<NestedLoopJoinProbe>(id, ctx.get(), joinNode));
     } else if (
         auto aggregationNode =
             std::dynamic_pointer_cast<const core::AggregationNode>(planNode)) {
@@ -472,6 +496,22 @@ std::shared_ptr<Driver> DriverFactory::createDriver(
         auto windowNode =
             std::dynamic_pointer_cast<const core::WindowNode>(planNode)) {
       operators.push_back(std::make_unique<Window>(id, ctx.get(), windowNode));
+    } else if (
+        auto rowNumberNode =
+            std::dynamic_pointer_cast<const core::RowNumberNode>(planNode)) {
+      operators.push_back(
+          std::make_unique<RowNumber>(id, ctx.get(), rowNumberNode));
+    } else if (
+        auto topNRowNumberNode =
+            std::dynamic_pointer_cast<const core::TopNRowNumberNode>(
+                planNode)) {
+      operators.push_back(
+          std::make_unique<TopNRowNumber>(id, ctx.get(), topNRowNumberNode));
+    } else if (
+        auto markDistinctNode =
+            std::dynamic_pointer_cast<const core::MarkDistinctNode>(planNode)) {
+      operators.push_back(
+          std::make_unique<MarkDistinct>(id, ctx.get(), markDistinctNode));
     } else if (
         auto localMerge =
             std::dynamic_pointer_cast<const core::LocalMergeNode>(planNode)) {
@@ -533,7 +573,8 @@ std::shared_ptr<Driver> DriverFactory::createDriver(
     operators.push_back(consumerSupplier(operators.size(), ctx.get()));
   }
 
-  return std::make_shared<Driver>(std::move(ctx), std::move(operators));
+  driver->init(std::move(ctx), std::move(operators));
+  return driver;
 }
 
 std::vector<core::PlanNodeId> DriverFactory::needsHashJoinBridges() const {
@@ -558,21 +599,23 @@ std::vector<core::PlanNodeId> DriverFactory::needsHashJoinBridges() const {
   return planNodeIds;
 }
 
-std::vector<core::PlanNodeId> DriverFactory::needsCrossJoinBridges() const {
+std::vector<core::PlanNodeId> DriverFactory::needsNestedLoopJoinBridges()
+    const {
   std::vector<core::PlanNodeId> planNodeIds;
   // Ungrouped execution pipelines need to take care of cross-mode bridges.
-  if (!groupedExecution && !mixedExecutionModeCrossJoinNodeIds.empty()) {
+  if (!groupedExecution && !mixedExecutionModeNestedLoopJoinNodeIds.empty()) {
     planNodeIds.insert(
         planNodeIds.end(),
-        mixedExecutionModeCrossJoinNodeIds.begin(),
-        mixedExecutionModeCrossJoinNodeIds.end());
+        mixedExecutionModeNestedLoopJoinNodeIds.begin(),
+        mixedExecutionModeNestedLoopJoinNodeIds.end());
   }
   for (const auto& planNode : planNodes) {
     if (auto joinNode =
-            std::dynamic_pointer_cast<const core::CrossJoinNode>(planNode)) {
+            std::dynamic_pointer_cast<const core::NestedLoopJoinNode>(
+                planNode)) {
       // Grouped execution pipelines should not create cross-mode bridges.
       if (!groupedExecution ||
-          !mixedExecutionModeCrossJoinNodeIds.contains(joinNode->id())) {
+          !mixedExecutionModeNestedLoopJoinNodeIds.contains(joinNode->id())) {
         planNodeIds.emplace_back(joinNode->id());
       }
     }

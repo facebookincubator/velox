@@ -44,6 +44,7 @@ class MockStripeStreams : public StripeStreams {
 
   std::unique_ptr<dwio::common::SeekableInputStream> getStream(
       const DwrfStreamIdentifier& si,
+      std::string_view /* unused */,
       bool throwIfNotFound) const override {
     return std::unique_ptr<dwio::common::SeekableInputStream>(getStreamProxy(
         si.encodingKey().node,
@@ -54,6 +55,7 @@ class MockStripeStreams : public StripeStreams {
   std::function<BufferPtr()> getIntDictionaryInitializerForNode(
       const EncodingKey& ek,
       uint64_t /* unused */,
+      const StreamLabels& /* streamLabels */,
       uint64_t /* unused */) override {
     return [this, nodeId = ek.node, sequenceId = ek.sequence]() {
       BufferPtr dictionaryData;

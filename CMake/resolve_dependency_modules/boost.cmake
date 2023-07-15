@@ -13,53 +13,32 @@
 # limitations under the License.
 include_guard(GLOBAL)
 
-if(DEFINED ENV{VELOX_BOOST_URL})
-  set(BOOST_SOURCE_URL "$ENV{VELOX_BOOST_URL}")
-else()
-  # We need to use boost > 1.70 to build it with CMake 1.81 was the first to be
-  # released as a github release INCLUDING the cmake files (which are not in the
-  # officale releases for some reason)
-  set(VELOX_BOOST_BUILD_VERSION 1.81.0)
-  string(
-    CONCAT BOOST_SOURCE_URL
-           "https://github.com/boostorg/boost/releases/download/"
-           "boost-${VELOX_BOOST_BUILD_VERSION}/"
-           "boost-${VELOX_BOOST_BUILD_VERSION}.tar.gz")
-  set(VELOX_BOOST_BUILD_SHA256_CHECKSUM
-      121da556b718fd7bd700b5f2e734f8004f1cfa78b7d30145471c526ba75a151c)
+if(CMAKE_SYSTEM_NAME MATCHES "Darwin")
+  if(ON_APPLE_M1)
+    list(APPEND CMAKE_PREFIX_PATH "/opt/homebrew/opt/icu4c")
+  else()
+    list(APPEND CMAKE_PREFIX_PATH "/usr/local/opt/icu4c")
+  endif()
 endif()
 
-message(STATUS "Building boost from source")
+# ICU is only needed with Boost build from source
+set_source(ICU)
+resolve_dependency(
+  ICU
+  COMPONENTS
+  data
+  i18n
+  io
+  uc
+  tu
+  test)
 
-# required for Boost::thread
-if(NOT TARGET Threads::Threads)
-  set(THREADS_PREFER_PTHREAD_FLAG ON)
-  find_package(Threads REQUIRED)
-endif()
-
-FetchContent_Declare(
-  Boost
-  URL ${BOOST_SOURCE_URL}
-  URL_HASH SHA256=${VELOX_BOOST_BUILD_SHA256_CHECKSUM})
-
-set(shared_libs ${BUILD_SHARED_LIBS})
-set(BUILD_SHARED_LIBS ON)
-FetchContent_MakeAvailable(Boost)
-set(BUILD_SHARED_LIBS ${shared_libs})
-
-# Manually construct include dirs. This is only necessary until we switch to
-# properly using targets.
-list_subdirs(boost_INCLUDE_DIRS ${boost_SOURCE_DIR}/libs)
-list(TRANSFORM boost_INCLUDE_DIRS APPEND /include)
-
-# numeric contains subdirs with their own include dir
-list_subdirs(numeric_subdirs ${boost_SOURCE_DIR}/libs/numeric)
-list(TRANSFORM numeric_subdirs APPEND /include)
-include_directories(${boost_INCLUDE_DIRS} ${numeric_subdirs})
-
+add_subdirectory(${CMAKE_CURRENT_LIST_DIR}/boost)
 if(${ICU_SOURCE} STREQUAL "BUNDLED")
+  # ensure ICU is built before Boost
   add_dependencies(boost_regex ICU ICU::i18n)
 endif()
+
 # This prevents system boost from leaking in
 set(Boost_NO_SYSTEM_PATHS ON)
 # We have to keep the FindBoost.cmake in an subfolder to prevent it from

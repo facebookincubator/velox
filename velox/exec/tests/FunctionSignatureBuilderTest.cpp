@@ -202,7 +202,8 @@ TEST_F(FunctionSignatureBuilderTest, aggregateConstantFlags) {
     EXPECT_FALSE(aggSignature->constantArguments().at(0));
     EXPECT_TRUE(aggSignature->constantArguments().at(1));
     EXPECT_FALSE(aggSignature->constantArguments().at(2));
-    EXPECT_EQ("(T,constant bigint,T) -> T", aggSignature->toString());
+    EXPECT_EQ(
+        "(T,constant bigint,T) -> array(T) -> T", aggSignature->toString());
   }
 
   {
@@ -220,7 +221,34 @@ TEST_F(FunctionSignatureBuilderTest, aggregateConstantFlags) {
     EXPECT_TRUE(aggSignature->constantArguments().at(1));
     EXPECT_FALSE(aggSignature->constantArguments().at(2));
     EXPECT_EQ(
-        "(bigint,constant T,T,constant double...) -> T",
+        "(bigint,constant T,T,constant double...) -> array(T) -> T",
         aggSignature->toString());
   }
+}
+
+TEST_F(FunctionSignatureBuilderTest, toString) {
+  auto signature = FunctionSignatureBuilder()
+                       .returnType("bigint")
+                       .argumentType("integer")
+                       .build();
+
+  ASSERT_EQ("(integer) -> bigint", toString({signature}));
+
+  signature = FunctionSignatureBuilder()
+                  .returnType("bigint")
+                  .argumentType("varchar")
+                  .argumentType("integer")
+                  .build();
+
+  ASSERT_EQ("(varchar,integer) -> bigint", toString({signature}));
+
+  signature = AggregateFunctionSignatureBuilder()
+                  .returnType("bigint")
+                  .argumentType("varchar")
+                  .intermediateType("varbinary")
+                  .build();
+
+  ASSERT_EQ("(varchar) -> varbinary -> bigint", toString({signature}));
+
+  ASSERT_EQ("foo(BIGINT, VARCHAR)", toString("foo", {BIGINT(), VARCHAR()}));
 }

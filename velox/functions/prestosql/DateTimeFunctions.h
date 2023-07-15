@@ -79,9 +79,64 @@ struct TimestampWithTimezoneSupport {
 
     return timestamp;
   }
+
+  // Get offset in seconds with GMT from timestampWithTimezone
+  FOLLY_ALWAYS_INLINE
+  int64_t getGMTOffsetSec(
+      const arg_type<TimestampWithTimezone>& timestampWithTimezone) {
+    Timestamp inputTimeStamp = this->toTimestamp(timestampWithTimezone);
+    // Get the given timezone name
+    auto timezone =
+        util::getTimeZoneName(*timestampWithTimezone.template at<1>());
+    auto* timezonePtr = date::locate_zone(timezone);
+    // Create a copy of inputTimeStamp and convert it to GMT
+    auto gmtTimeStamp = inputTimeStamp;
+    gmtTimeStamp.toGMT(*timezonePtr);
+    // Get offset in seconds with GMT and convert to hour
+    return (inputTimeStamp.getSeconds() - gmtTimeStamp.getSeconds());
+  }
 };
 
 } // namespace
+
+template <typename T>
+struct DateFunction : public TimestampWithTimezoneSupport<T> {
+  VELOX_DEFINE_FUNCTION_TYPES(T);
+
+  FOLLY_ALWAYS_INLINE void call(
+      out_type<Date>& result,
+      const arg_type<Varchar>& date) {
+    bool nullOutput;
+    result = DATE()->toDays(date);
+  }
+
+  int32_t timestampToDate(const Timestamp& t, bool& nullOutput) {
+    static const int32_t kSecsPerDay{86'400};
+    auto seconds = t.getSeconds();
+    if (seconds >= 0 || seconds % kSecsPerDay == 0) {
+      return seconds / kSecsPerDay;
+    }
+    // For division with negatives, minus 1 to compensate the discarded
+    // fractional part. e.g. -1/86'400 yields 0, yet it should be considered as
+    // -1 day.
+    return seconds / kSecsPerDay - 1;
+  }
+
+  FOLLY_ALWAYS_INLINE void call(
+      out_type<Date>& result,
+      const arg_type<Timestamp>& timestamp) {
+    bool nullOutput;
+    result = timestampToDate(timestamp, nullOutput);
+  }
+
+  FOLLY_ALWAYS_INLINE void call(
+      out_type<Date>& result,
+      const arg_type<TimestampWithTimezone>& timestampWithTimezone) {
+    bool nullOutput;
+    result =
+        timestampToDate(this->toTimestamp(timestampWithTimezone), nullOutput);
+  }
+};
 
 template <typename T>
 struct WeekFunction : public InitSessionTimezone<T>,
@@ -266,14 +321,13 @@ struct DateMinusIntervalDayTime {
   VELOX_DEFINE_FUNCTION_TYPES(T);
 
   FOLLY_ALWAYS_INLINE void call(
-      Date& result,
+      out_type<Date>& result,
       const arg_type<Date>& date,
       const arg_type<IntervalDayTime>& interval) {
     VELOX_USER_CHECK(
         isIntervalWholeDays(interval),
         "Cannot subtract hours, minutes, seconds or milliseconds from a date");
-    result = date;
-    result.addDays(-intervalDays(interval));
+    result = addToDate(date, DateTimeUnit::kDay, -intervalDays(interval));
   }
 };
 
@@ -282,14 +336,25 @@ struct DatePlusIntervalDayTime {
   VELOX_DEFINE_FUNCTION_TYPES(T);
 
   FOLLY_ALWAYS_INLINE void call(
-      Date& result,
+      out_type<Date>& result,
       const arg_type<Date>& date,
       const arg_type<IntervalDayTime>& interval) {
     VELOX_USER_CHECK(
         isIntervalWholeDays(interval),
         "Cannot add hours, minutes, seconds or milliseconds to a date");
-    result = date;
-    result.addDays(intervalDays(interval));
+    result = addToDate(date, DateTimeUnit::kDay, intervalDays(interval));
+  }
+};
+
+template <typename T>
+struct TimestampMinusIntervalDayTime {
+  VELOX_DEFINE_FUNCTION_TYPES(T);
+
+  FOLLY_ALWAYS_INLINE void call(
+      out_type<IntervalDayTime>& result,
+      const arg_type<Timestamp>& a,
+      const arg_type<Timestamp>& b) {
+    result = a.toMillis() - b.toMillis();
   }
 };
 
@@ -497,28 +562,30 @@ inline std::optional<DateTimeUnit> fromDateTimeUnitString(
   static const StringView kQuarter("quarter");
   static const StringView kYear("year");
 
-  if (unitString == kMillisecond) {
+  const auto unit = boost::algorithm::to_lower_copy(unitString.str());
+
+  if (unit == kMillisecond) {
     return DateTimeUnit::kMillisecond;
   }
-  if (unitString == kSecond) {
+  if (unit == kSecond) {
     return DateTimeUnit::kSecond;
   }
-  if (unitString == kMinute) {
+  if (unit == kMinute) {
     return DateTimeUnit::kMinute;
   }
-  if (unitString == kHour) {
+  if (unit == kHour) {
     return DateTimeUnit::kHour;
   }
-  if (unitString == kDay) {
+  if (unit == kDay) {
     return DateTimeUnit::kDay;
   }
-  if (unitString == kMonth) {
+  if (unit == kMonth) {
     return DateTimeUnit::kMonth;
   }
-  if (unitString == kQuarter) {
+  if (unit == kQuarter) {
     return DateTimeUnit::kQuarter;
   }
-  if (unitString == kYear) {
+  if (unit == kYear) {
     return DateTimeUnit::kYear;
   }
   // TODO Add support for "week".
@@ -664,14 +731,14 @@ struct DateTruncFunction : public TimestampWithTimezoneSupport<T> {
         : getDateUnit(unitString, true).value();
 
     if (unit == DateTimeUnit::kDay) {
-      result = Date(date.days());
+      result = date;
       return;
     }
 
     auto dateTime = getDateTime(date);
     adjustDateTime(dateTime, unit);
 
-    result = Date(timegm(&dateTime) / kSecondsInDay);
+    result = timegm(&dateTime) / kSecondsInDay;
   }
 
   FOLLY_ALWAYS_INLINE void call(
@@ -791,7 +858,7 @@ struct DateAddFunction {
 };
 
 template <typename T>
-struct DateDiffFunction {
+struct DateDiffFunction : public TimestampWithTimezoneSupport<T> {
   VELOX_DEFINE_FUNCTION_TYPES(T);
 
   const date::time_zone* sessionTimeZone_ = nullptr;
@@ -816,6 +883,16 @@ struct DateDiffFunction {
       const arg_type<Date>* /*date2*/) {
     if (unitString != nullptr) {
       unit_ = getDateUnit(*unitString, false);
+    }
+  }
+
+  FOLLY_ALWAYS_INLINE void initialize(
+      const core::QueryConfig& config,
+      const arg_type<Varchar>* unitString,
+      const arg_type<TimestampWithTimezone>* /*timestampWithTimezone1*/,
+      const arg_type<TimestampWithTimezone>* /*timestampWithTimezone2*/) {
+    if (unitString != nullptr) {
+      unit_ = fromDateTimeUnitString(*unitString, false /*throwIfInvalid*/);
     }
   }
 
@@ -862,6 +939,18 @@ struct DateDiffFunction {
 
     result = diffDate(unit, date1, date2);
     return true;
+  }
+
+  FOLLY_ALWAYS_INLINE bool call(
+      int64_t& result,
+      const arg_type<Varchar>& unitString,
+      const arg_type<TimestampWithTimezone>& timestamp1,
+      const arg_type<TimestampWithTimezone>& timestamp2) {
+    return call(
+        result,
+        unitString,
+        this->toTimestamp(timestamp1),
+        this->toTimestamp(timestamp2));
   }
 };
 
@@ -1072,6 +1161,56 @@ struct CurrentTimeStampFunction : public TimestampWithTimezoneSupport<T> {
 
   FOLLY_ALWAYS_INLINE void call(out_type<TimestampWithTimezone>& result) {
     result = std::make_tuple(Timestamp::now().toMillis(), timezoneId);
+  }
+};
+
+  
+template <typename T>
+struct CurrentDateFunction {
+  VELOX_DEFINE_FUNCTION_TYPES(T);
+
+  const date::time_zone* timeZone_ = nullptr;
+
+  FOLLY_ALWAYS_INLINE void initialize(const core::QueryConfig& config) {
+    timeZone_ = getTimeZoneFromConfig(config);
+  }
+
+  FOLLY_ALWAYS_INLINE void call(out_type<Date>& result) {
+    auto now = Timestamp::now();
+    if (timeZone_ != nullptr) {
+      now.toTimezone(*timeZone_);
+    }
+    const std::chrono::
+        time_point<std::chrono::system_clock, std::chrono::milliseconds>
+            localTimepoint(std::chrono::milliseconds(now.toMillis()));
+    result = std::chrono::floor<date::days>((localTimepoint).time_since_epoch())
+                 .count();
+  }
+};
+
+template <typename T>
+struct TimeZoneHourFunction : public TimestampWithTimezoneSupport<T> {
+  VELOX_DEFINE_FUNCTION_TYPES(T);
+
+  FOLLY_ALWAYS_INLINE void call(
+      int64_t& result,
+      const arg_type<TimestampWithTimezone>& input) {
+    // Get offset in seconds with GMT and convert to hour
+    auto offset = this->getGMTOffsetSec(input);
+    result = offset / 3600;
+  }
+};
+
+template <typename T>
+struct TimeZoneMinuteFunction : public TimestampWithTimezoneSupport<T> {
+  VELOX_DEFINE_FUNCTION_TYPES(T);
+
+  FOLLY_ALWAYS_INLINE void call(
+      int64_t& result,
+      const arg_type<TimestampWithTimezone>& input) {
+    // Get offset in seconds with GMT and convert to minute
+    auto offset = this->getGMTOffsetSec(input);
+    result = (offset / 60) % 60;
   }
 };
 

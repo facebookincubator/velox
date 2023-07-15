@@ -27,12 +27,15 @@
 #include <cstring>
 #include <functional>
 #include <istream>
+#include <numeric>
 #include <stdexcept>
 #include <string_view>
 #include <type_traits>
 
 #include "velox/common/time/Timer.h"
 #include "velox/dwio/common/exception/Exception.h"
+
+using ::facebook::velox::common::Region;
 
 namespace facebook::velox::dwio::common {
 
@@ -127,26 +130,22 @@ bool ReadFileInputStream::hasReadAsync() const {
   return readFile_->hasPreadvAsync();
 }
 
-bool Region::operator<(const Region& other) const {
-  return offset < other.offset ||
-      (offset == other.offset && length < other.length);
-}
-
-void InputStream::vread(
-    const std::vector<void*>& buffers,
-    const std::vector<Region>& regions,
+void ReadFileInputStream::vread(
+    folly::Range<const velox::common::Region*> regions,
+    folly::Range<folly::IOBuf*> iobufs,
     const LogType purpose) {
-  const auto size = buffers.size();
-  // the default implementation of this is to do the read sequentially
-  DWIO_ENSURE_GT(size, 0, "invalid vread parameters");
-  DWIO_ENSURE_EQ(regions.size(), size, "mismatched region->buffer");
-
-  // convert buffer to IOBufs and convert regions to VReadIntervals
-  LOG(INFO) << "[VREAD] fall back vread to sequential reads.";
-  for (size_t i = 0; i < size; ++i) {
-    // fill each buffer
-    const auto& r = regions[i];
-    read(buffers[i], r.length, r.offset, purpose);
+  DWIO_ENSURE_GT(regions.size(), 0, "regions to read can't be empty");
+  const size_t length = std::accumulate(
+      regions.cbegin(),
+      regions.cend(),
+      size_t(0),
+      [&](size_t acc, const auto& r) { return acc + r.length; });
+  logRead(regions[0].offset, length, purpose);
+  auto readStartMs = getCurrentTimeMs();
+  readFile_->preadv(regions, iobufs);
+  if (stats_) {
+    stats_->incRawBytesRead(length);
+    stats_->incTotalScanTime(getCurrentTimeMs() - readStartMs);
   }
 }
 

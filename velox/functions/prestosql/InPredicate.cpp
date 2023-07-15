@@ -120,7 +120,8 @@ class InPredicate : public exec::VectorFunction {
 
   static std::shared_ptr<InPredicate> create(
       const std::string& /*name*/,
-      const std::vector<exec::VectorFunctionArg>& inputArgs) {
+      const std::vector<exec::VectorFunctionArg>& inputArgs,
+      const core::QueryConfig& /*config*/) {
     VELOX_CHECK_EQ(inputArgs.size(), 2);
     auto inListType = inputArgs[1].type;
     VELOX_CHECK_EQ(inListType->kind(), TypeKind::ARRAY);
@@ -207,7 +208,13 @@ class InPredicate : public exec::VectorFunction {
     // tinyint|smallint|integer|bigint|varchar... -> boolean
     std::vector<std::shared_ptr<exec::FunctionSignature>> signatures;
     for (auto& type :
-         {"tinyint", "smallint", "integer", "bigint", "varchar", "varbinary"}) {
+         {"tinyint",
+          "smallint",
+          "integer",
+          "bigint",
+          "varchar",
+          "varbinary",
+          "date"}) {
       signatures.emplace_back(exec::FunctionSignatureBuilder()
                                   .returnType("boolean")
                                   .argumentType(type)
@@ -276,6 +283,7 @@ class InPredicate : public exec::VectorFunction {
     auto rawValues = flatArg->rawValues();
 
     context.ensureWritable(rows, BOOLEAN(), result);
+    result->clearNulls(rows);
     auto* boolResult = result->asUnchecked<FlatVector<bool>>();
 
     auto* rawResults = boolResult->mutableRawValues<uint64_t>();

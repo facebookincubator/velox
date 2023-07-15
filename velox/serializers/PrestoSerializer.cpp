@@ -17,7 +17,6 @@
 #include "velox/common/base/Crc.h"
 #include "velox/common/memory/ByteStream.h"
 #include "velox/functions/prestosql/types/TimestampWithTimeZoneType.h"
-#include "velox/type/Date.h"
 #include "velox/vector/BiasVector.h"
 #include "velox/vector/ComplexVector.h"
 #include "velox/vector/FlatVector.h"
@@ -49,10 +48,22 @@ int64_t computeChecksum(
     int uncompressedSize) {
   auto offset = source->tellp();
   bits::Crc32 crc32;
-
+  if (FOLLY_UNLIKELY(source->remainingSize() < uncompressedSize)) {
+    VELOX_FAIL(
+        "Tried to read {} bytes, larger than what's remained in source {} "
+        "bytes. Source details: {}",
+        uncompressedSize,
+        source->remainingSize(),
+        source->toString());
+  }
   auto remainingBytes = uncompressedSize;
   while (remainingBytes > 0) {
     auto data = source->nextView(remainingBytes);
+    if (FOLLY_UNLIKELY(data.size() == 0)) {
+      VELOX_FAIL(
+          "Reading 0 bytes from source. Source details: {}",
+          source->toString());
+    }
     crc32.process_bytes(data.data(), data.size());
     remainingBytes -= data.size();
   }
@@ -86,6 +97,10 @@ bool isChecksumBitSet(int8_t codec) {
 }
 
 std::string typeToEncodingName(const TypePtr& type) {
+  if (type->isDate()) {
+    return "INT_ARRAY";
+  }
+
   switch (type->kind()) {
     case TypeKind::BOOLEAN:
       return "BYTE_ARRAY";
@@ -97,6 +112,8 @@ std::string typeToEncodingName(const TypePtr& type) {
       return "INT_ARRAY";
     case TypeKind::BIGINT:
       return "LONG_ARRAY";
+    case TypeKind::HUGEINT:
+      return "INT128_ARRAY";
     case TypeKind::REAL:
       return "INT_ARRAY";
     case TypeKind::DOUBLE:
@@ -107,12 +124,6 @@ std::string typeToEncodingName(const TypePtr& type) {
       return "VARIABLE_WIDTH";
     case TypeKind::TIMESTAMP:
       return "LONG_ARRAY";
-    case TypeKind::DATE:
-      return "INT_ARRAY";
-    case TypeKind::SHORT_DECIMAL:
-      return "LONG_ARRAY";
-    case TypeKind::LONG_DECIMAL:
-      return "INT128_ARRAY";
     case TypeKind::ARRAY:
       return "ARRAY";
     case TypeKind::MAP:
@@ -233,37 +244,7 @@ void readLosslessTimestampValues(
   }
 }
 
-Date readDate(ByteStream* source) {
-  int32_t days = source->read<int32_t>();
-  return Date(days);
-}
-
-template <>
-void readValues<Date>(
-    ByteStream* source,
-    vector_size_t size,
-    BufferPtr nulls,
-    vector_size_t nullCount,
-    BufferPtr values) {
-  auto rawValues = values->asMutable<Date>();
-  if (nullCount) {
-    int32_t toClear = 0;
-    bits::forEachSetBit(nulls->as<uint64_t>(), 0, size, [&](int32_t row) {
-      // Set the values between the last non-null and this to type default.
-      for (; toClear < row; ++toClear) {
-        rawValues[toClear] = Date();
-      }
-      rawValues[row] = readDate(source);
-      toClear = row + 1;
-    });
-  } else {
-    for (int32_t row = 0; row < size; ++row) {
-      rawValues[row] = readDate(source);
-    }
-  }
-}
-
-UnscaledLongDecimal readUnscaledLongDecimal(ByteStream* source) {
+int128_t readJavaDecimal(ByteStream* source) {
   constexpr int64_t kInt64DeserializeMask = ~(static_cast<int64_t>(1) << 63);
   // ByteStream does not support reading int128_t values.
   auto low = source->read<int64_t>();
@@ -272,33 +253,31 @@ UnscaledLongDecimal readUnscaledLongDecimal(ByteStream* source) {
   if (high < 0) {
     // Remove the sign bit before building the int128 value.
     // Negate the value.
-    return UnscaledLongDecimal(
-        -1 * buildInt128(high & kInt64DeserializeMask, low));
+    return -1 * HugeInt::build(high & kInt64DeserializeMask, low);
   }
-  return UnscaledLongDecimal(buildInt128(high, low));
+  return HugeInt::build(high, low);
 }
 
-template <>
-void readValues<UnscaledLongDecimal>(
+void readDecimalValues(
     ByteStream* source,
     vector_size_t size,
     BufferPtr nulls,
     vector_size_t nullCount,
     BufferPtr values) {
-  auto rawValues = values->asMutable<UnscaledLongDecimal>();
+  auto rawValues = values->asMutable<int128_t>();
   if (nullCount) {
     int32_t toClear = 0;
     bits::forEachSetBit(nulls->as<uint64_t>(), 0, size, [&](int32_t row) {
       // Set the values between the last non-null and this to type default.
       for (; toClear < row; ++toClear) {
-        rawValues[toClear] = UnscaledLongDecimal();
+        rawValues[toClear] = 0;
       }
-      rawValues[row] = readUnscaledLongDecimal(source);
+      rawValues[row] = readJavaDecimal(source);
       toClear = row + 1;
     });
   } else {
     for (int32_t row = 0; row < size; ++row) {
-      rawValues[row] = readUnscaledLongDecimal(source);
+      rawValues[row] = readJavaDecimal(source);
     }
   }
 }
@@ -347,6 +326,10 @@ void read(
           source, size, flatResult->nulls(), nullCount, values);
       return;
     }
+  }
+  if (type->isLongDecimal()) {
+    readDecimalValues(source, size, flatResult->nulls(), nullCount, values);
+    return;
   }
   readValues<T>(source, size, flatResult->nulls(), nullCount, values);
 }
@@ -611,10 +594,10 @@ void readRowVector(
       if (!rawOffsets) {
         BaseVector::resizeIndices(
             size,
-            0,
             pool,
             &offsets,
-            const_cast<const vector_size_t**>(&rawOffsets));
+            const_cast<const vector_size_t**>(&rawOffsets),
+            0);
         for (int32_t child = 0; child < i; ++child) {
           rawOffsets[child] = child;
         }
@@ -687,12 +670,10 @@ void readColumns(
           {TypeKind::SMALLINT, &read<int16_t>},
           {TypeKind::INTEGER, &read<int32_t>},
           {TypeKind::BIGINT, &read<int64_t>},
+          {TypeKind::HUGEINT, &read<int128_t>},
           {TypeKind::REAL, &read<float>},
           {TypeKind::DOUBLE, &read<double>},
           {TypeKind::TIMESTAMP, &read<Timestamp>},
-          {TypeKind::DATE, &read<Date>},
-          {TypeKind::SHORT_DECIMAL, &read<UnscaledShortDecimal>},
-          {TypeKind::LONG_DECIMAL, &read<UnscaledLongDecimal>},
           {TypeKind::VARCHAR, &read<StringView>},
           {TypeKind::VARBINARY, &read<StringView>},
           {TypeKind::ARRAY, &readArrayVector},
@@ -754,7 +735,8 @@ class VectorStream {
           if (isTimestampWithTimeZoneType(type_)) {
             values_.startWrite(initialNumRows * 4);
             break;
-          } // else fall through
+          }
+          [[fallthrough]];
         case TypeKind::ARRAY:
         case TypeKind::MAP:
           hasLengths_ = true;
@@ -947,35 +929,34 @@ void VectorStream::append(folly::Range<const Timestamp*> values) {
 }
 
 template <>
-void VectorStream::append(folly::Range<const Date*> values) {
-  for (auto& value : values) {
-    appendOne(value.days());
-  }
-}
-
-template <>
-inline void VectorStream::append(
-    folly::Range<const UnscaledLongDecimal*> values) {
-  constexpr int128_t kInt128SerializeMask = (static_cast<int128_t>(1) << 127);
-  for (auto& value : values) {
-    int128_t val = value.unscaledValue();
-    // Presto Java UnscaledDecimal128 representation uses signed magnitude
-    // representation. Only negative values differ in this representation.
-    if (val < 0) {
-      val *= -1;
-      val |= kInt128SerializeMask;
-    }
-    appendOne(val);
-  }
-}
-
-template <>
 void VectorStream::append(folly::Range<const bool*> values) {
   // A bool constant is serialized via this. Accessing consecutive
   // elements via bool& does not work, hence the flat serialization is
   // specialized one level above this.
   VELOX_CHECK(values.size() == 1);
   appendOne<uint8_t>(values[0] ? 1 : 0);
+}
+
+FOLLY_ALWAYS_INLINE int128_t toJavaDecimalValue(int128_t value) {
+  constexpr int128_t kInt128SerializeMask = (static_cast<int128_t>(1) << 127);
+  // Presto Java UnscaledDecimal128 representation uses signed magnitude
+  // representation. Only negative values differ in this representation.
+  if (value < 0) {
+    value *= -1;
+    value |= kInt128SerializeMask;
+  }
+  return value;
+}
+
+template <>
+void VectorStream::append(folly::Range<const int128_t*> values) {
+  for (auto& value : values) {
+    int128_t val = value;
+    if (type_->isLongDecimal()) {
+      val = toJavaDecimalValue(value);
+    }
+    values_.append<int128_t>(folly::Range(&val, 1));
+  }
 }
 
 template <TypeKind kind>

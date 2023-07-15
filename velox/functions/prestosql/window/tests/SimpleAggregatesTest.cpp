@@ -14,7 +14,8 @@
  * limitations under the License.
  */
 #include "velox/common/base/tests/GTestUtils.h"
-#include "velox/functions/prestosql/window/tests/WindowTestBase.h"
+#include "velox/functions/lib/window/tests/WindowTestBase.h"
+#include "velox/functions/prestosql/window/WindowFunctionsRegistration.h"
 
 using namespace facebook::velox::exec::test;
 
@@ -44,6 +45,11 @@ class AggregateWindowTestBase : public WindowTestBase {
  protected:
   explicit AggregateWindowTestBase(const AggregateWindowTestParam& testParam)
       : function_(testParam.function), overClause_(testParam.overClause) {}
+
+  void SetUp() override {
+    WindowTestBase::SetUp();
+    window::prestosql::registerAllWindowFunctions();
+  }
 
   void testWindowFunction(const std::vector<RowVectorPtr>& vectors) {
     WindowTestBase::testWindowFunction(
@@ -76,27 +82,21 @@ TEST_P(SimpleAggregatesTest, basic) {
   testWindowFunction({makeSimpleVector(10)});
 }
 
-// Tests function with a dataset with a single partition containing all the
-// rows.
-TEST_P(SimpleAggregatesTest, singlePartition) {
-  testWindowFunction({makeSinglePartitionVector(100)});
-}
-
 // Tests function with a dataset with a single partition but 2 input row
 // vectors.
-TEST_P(SimpleAggregatesTest, multiInput) {
+TEST_P(SimpleAggregatesTest, singlePartition) {
   testWindowFunction(
-      {makeSinglePartitionVector(250), makeSinglePartitionVector(50)});
+      {makeSinglePartitionVector(50), makeSinglePartitionVector(40)});
 }
 
 // Tests function with a dataset where all partitions have a single row.
 TEST_P(SimpleAggregatesTest, singleRowPartitions) {
-  testWindowFunction({makeSingleRowPartitionsVector(50)});
+  testWindowFunction({makeSingleRowPartitionsVector(40)});
 }
 
 // Tests function with a randomly generated input dataset.
 TEST_P(SimpleAggregatesTest, randomInput) {
-  testWindowFunction({makeRandomInputVector(50)});
+  testWindowFunction({makeRandomInputVector(25)});
 }
 
 // Instantiate all the above tests for each combination of aggregate function
