@@ -15,10 +15,11 @@
  */
 #include "velox/common/base/tests/GTestUtils.h"
 #include "velox/exec/tests/utils/AssertQueryBuilder.h"
-#include "velox/functions/prestosql/aggregates/tests/AggregationTestBase.h"
+#include "velox/functions/lib/aggregates/tests/AggregationTestBase.h"
 
 using namespace facebook::velox::exec;
 using namespace facebook::velox::exec::test;
+using namespace facebook::velox::functions::aggregate::test;
 
 namespace facebook::velox::aggregate::test {
 
@@ -40,6 +41,42 @@ TEST_F(MapUnionSumTest, global) {
   auto expected = makeRowVector({
       makeMapVector<int64_t, int64_t>({
           {{1, 33}, {2, 20}, {3, 60}, {4, 40}, {5, 50}},
+      }),
+  });
+
+  testAggregations({data}, {}, {"map_union_sum(c0)"}, {expected});
+}
+
+TEST_F(MapUnionSumTest, globalVarcharKey) {
+  std::vector<std::string> keyStrings = {
+      "Tall mountains",
+      "Wide rivers",
+      "Deep oceans",
+      "Thick dark forests",
+      "Expansive vistas",
+  };
+  std::vector<StringView> keys;
+  for (const auto& key : keyStrings) {
+    keys.push_back(StringView(key));
+  }
+
+  auto data = makeRowVector({
+      makeNullableMapVector<StringView, int64_t>({
+          {{}}, // empty map
+          std::nullopt, // null map
+          {{{keys[0], 10}, {keys[1], 20}}},
+          {{{keys[0], 11}, {keys[2], 30}, {keys[3], 40}}},
+          {{{keys[2], 30}, {keys[4], 50}, {keys[0], 12}}},
+      }),
+  });
+
+  auto expected = makeRowVector({
+      makeMapVector<StringView, int64_t>({
+          {{keys[0], 33},
+           {keys[1], 20},
+           {keys[2], 60},
+           {keys[3], 40},
+           {keys[4], 50}},
       }),
   });
 
@@ -230,6 +267,41 @@ TEST_F(MapUnionSumTest, groupBy) {
       makeMapVector<int64_t, int64_t>({
           {{1, 22}, {2, 20}, {3, 30}, {5, 50}},
           {{1, 11}, {3, 30}, {4, 40}},
+      }),
+  });
+
+  testAggregations({data}, {"c0"}, {"map_union_sum(c1)"}, {expected});
+}
+
+TEST_F(MapUnionSumTest, groupByVarcharKey) {
+  std::vector<std::string> keyStrings = {
+      "Tall mountains",
+      "Wide rivers",
+      "Deep oceans",
+      "Thick dark forests",
+      "Expansive vistas",
+  };
+  std::vector<StringView> keys;
+  for (const auto& key : keyStrings) {
+    keys.push_back(StringView(key));
+  }
+
+  auto data = makeRowVector({
+      makeFlatVector<int64_t>({1, 2, 1, 2, 1}),
+      makeNullableMapVector<StringView, int64_t>({
+          {}, // empty map
+          std::nullopt, // null map
+          {{{keys[0], 10}, {keys[1], 20}}},
+          {{{keys[0], 11}, {keys[2], 30}, {keys[3], 40}}},
+          {{{keys[2], 30}, {keys[4], 50}, {keys[0], 12}}},
+      }),
+  });
+
+  auto expected = makeRowVector({
+      makeFlatVector<int64_t>({1, 2}),
+      makeMapVector<StringView, int64_t>({
+          {{keys[0], 22}, {keys[1], 20}, {keys[2], 30}, {keys[4], 50}},
+          {{keys[0], 11}, {keys[2], 30}, {keys[3], 40}},
       }),
   });
 

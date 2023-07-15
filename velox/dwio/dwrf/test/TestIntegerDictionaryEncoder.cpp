@@ -18,12 +18,21 @@
 #include <gtest/gtest.h>
 #include "velox/dwio/dwrf/writer/IntegerDictionaryEncoder.h"
 
+DECLARE_bool(velox_enable_memory_usage_track_in_default_memory_pool);
+
 using namespace testing;
 using namespace facebook::velox::memory;
 
 namespace facebook::velox::dwrf {
 
-TEST(TestIntegerDictionaryEncoder, AddKey) {
+class TestIntegerDictionaryEncoder : public ::testing::Test {
+ protected:
+  static void SetUpTestCase() {
+    FLAGS_velox_enable_memory_usage_track_in_default_memory_pool = true;
+  }
+};
+
+TEST_F(TestIntegerDictionaryEncoder, AddKey) {
   struct TestCase {
     explicit TestCase(
         const std::vector<int64_t>& addKeySequence,
@@ -51,7 +60,7 @@ TEST(TestIntegerDictionaryEncoder, AddKey) {
   }
 }
 
-TEST(TestIntegerDictionaryEncoder, GetCount) {
+TEST_F(TestIntegerDictionaryEncoder, GetCount) {
   struct TestCase {
     explicit TestCase(
         const std::vector<int64_t>& addKeySequence,
@@ -89,7 +98,7 @@ TEST(TestIntegerDictionaryEncoder, GetCount) {
   }
 }
 
-TEST(TestIntegerDictionaryEncoder, GetTotalCount) {
+TEST_F(TestIntegerDictionaryEncoder, GetTotalCount) {
   struct TestCase {
     explicit TestCase(
         const std::vector<int64_t>& addKeySequence,
@@ -116,7 +125,7 @@ TEST(TestIntegerDictionaryEncoder, GetTotalCount) {
   }
 }
 
-TEST(TestIntegerDictionaryEncoder, Clear) {
+TEST_F(TestIntegerDictionaryEncoder, Clear) {
   auto pool = addDefaultLeafMemoryPool();
   {
     IntegerDictionaryEncoder<int64_t> intDictEncoder{*pool, *pool};
@@ -132,7 +141,6 @@ TEST(TestIntegerDictionaryEncoder, Clear) {
     EXPECT_EQ(2500, intDictEncoder.getTotalCount());
     EXPECT_EQ(1, intDictEncoder.refCount_);
     EXPECT_EQ(0, intDictEncoder.clearCount_);
-    // auto peakMemory = pool.getCurrentBytes();
     intDictEncoder.clear();
     EXPECT_EQ(0, intDictEncoder.size());
     EXPECT_EQ(0, intDictEncoder.keyIndex_.size());
@@ -148,7 +156,7 @@ TEST(TestIntegerDictionaryEncoder, Clear) {
     // down. On test experiment it deallocated 4K and rellocated 64K.
     // When not compiled with ASAN, it correctly frees up the memory.
     // so disabling this check in the test for now.
-    // EXPECT_LT(pool.getCurrentBytes(), peakMemory);
+    // EXPECT_LT(pool.currentBytes(), peakMemory);
   }
   {
     IntegerDictionaryEncoder<int64_t> intDictEncoder{*pool, *pool};
@@ -168,7 +176,6 @@ TEST(TestIntegerDictionaryEncoder, Clear) {
     EXPECT_EQ(4, intDictEncoder.refCount_);
     EXPECT_EQ(0, intDictEncoder.clearCount_);
 
-    // auto peakMemory = pool.getCurrentBytes();
     intDictEncoder.clear();
     intDictEncoder.clear();
     EXPECT_EQ(2500, intDictEncoder.size());
@@ -195,11 +202,11 @@ TEST(TestIntegerDictionaryEncoder, Clear) {
     // down. On test experiment it deallocated 4K and rellocated 64K.
     // When not compiled with ASAN, it correctly frees up the memory.
     // so disabling this check in the test for now.
-    // EXPECT_LT(pool.getCurrentBytes(), peakMemory);
+    // EXPECT_LT(pool.currentBytes(), peakMemory);
   }
 }
 
-TEST(TestIntegerDictionaryEncoder, RepeatedFlush) {
+TEST_F(TestIntegerDictionaryEncoder, RepeatedFlush) {
   auto pool = addDefaultLeafMemoryPool();
   IntegerDictionaryEncoder<int64_t> intDictEncoder{*pool, *pool};
   std::vector<int> keys{0, 1, 4, 9, 16, 25, 9, 1};
@@ -225,7 +232,7 @@ TEST(TestIntegerDictionaryEncoder, RepeatedFlush) {
   EXPECT_ANY_THROW(intDictEncoder.getLookupTable());
 }
 
-TEST(TestIntegerDictionaryEncoder, Limit) {
+TEST_F(TestIntegerDictionaryEncoder, Limit) {
   auto pool = addDefaultLeafMemoryPool();
   IntegerDictionaryEncoder<int16_t> intDictEncoder{*pool, *pool};
   for (size_t iter = 0; iter < 2; ++iter) {
@@ -302,13 +309,13 @@ void testGetSortedIndexLookupTable() {
   }
 }
 
-TEST(TestIntegerDictionaryEncoder, GetSortedIndexLookupTable) {
+TEST_F(TestIntegerDictionaryEncoder, GetSortedIndexLookupTable) {
   testGetSortedIndexLookupTable<int16_t>();
   testGetSortedIndexLookupTable<int32_t>();
   testGetSortedIndexLookupTable<int64_t>();
 }
 
-TEST(TestIntegerDictionaryEncoder, ShortIntegerDictionary) {
+TEST_F(TestIntegerDictionaryEncoder, ShortIntegerDictionary) {
   // DictionaryEncoding lookupTable can contain the index into dictionary
   // or the actual value. For short integer, index can be  [0,2^16-1]
   // and the values can be from [-2^15, 2^15-1]. Integer writers always
@@ -485,7 +492,7 @@ void testInfrequentKeyOptimization() {
   }
 }
 
-TEST(TestIntegerDictionaryEncoder, InfrequentKeyOptimization) {
+TEST_F(TestIntegerDictionaryEncoder, InfrequentKeyOptimization) {
   testInfrequentKeyOptimization<int16_t>();
   testInfrequentKeyOptimization<int32_t>();
   testInfrequentKeyOptimization<int64_t>();

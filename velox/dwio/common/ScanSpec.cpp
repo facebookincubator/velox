@@ -337,6 +337,9 @@ bool testFilter(
   if (mayHaveNull && filter->testNull()) {
     return true;
   }
+  if (type->isDecimal()) {
+    return true;
+  }
   switch (type->kind()) {
     case TypeKind::BIGINT:
     case TypeKind::INTEGER:
@@ -384,6 +387,12 @@ std::string ScanSpec::toString() const {
     out << fieldName_;
     if (filter_) {
       out << " filter " << filter_->toString();
+    }
+    if (isConstant()) {
+      out << " constant";
+    }
+    if (!metadataFilters_.empty()) {
+      out << " metadata_filters(" << metadataFilters_.size() << ")";
     }
   }
   if (!children_.empty()) {

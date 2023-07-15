@@ -140,7 +140,9 @@ class SumNonPODAggregate : public Aggregate {
 
 } // namespace
 
-bool registerSumNonPODAggregate(const std::string& name, int alignment) {
+exec::AggregateRegistrationResult registerSumNonPODAggregate(
+    const std::string& name,
+    int alignment) {
   std::vector<std::shared_ptr<velox::exec::AggregateFunctionSignature>>
       signatures{
           velox::exec::AggregateFunctionSignatureBuilder()
@@ -150,17 +152,17 @@ bool registerSumNonPODAggregate(const std::string& name, int alignment) {
               .build(),
       };
 
-  velox::exec::registerAggregateFunction(
+  return velox::exec::registerAggregateFunction(
       name,
       std::move(signatures),
       [alignment](
           velox::core::AggregationNode::Step /*step*/,
           const std::vector<velox::TypePtr>& /*argTypes*/,
-          const velox::TypePtr& /*resultType*/)
+          const velox::TypePtr& /*resultType*/,
+          const core::QueryConfig& /*config*/)
           -> std::unique_ptr<velox::exec::Aggregate> {
         return std::make_unique<SumNonPODAggregate>(velox::BIGINT(), alignment);
       });
-  return true;
 }
 
 } // namespace facebook::velox::exec::test

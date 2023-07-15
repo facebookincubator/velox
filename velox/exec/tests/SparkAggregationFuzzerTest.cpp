@@ -36,7 +36,7 @@ DEFINE_string(
     "(e.g: --only \"min\" or --only \"sum,avg\").");
 
 int main(int argc, char** argv) {
-  facebook::velox::functions::sparksql::aggregates::registerAggregateFunctions(
+  facebook::velox::functions::aggregate::sparksql::registerAggregateFunctions(
       "");
 
   ::testing::InitGoogleTest(&argc, argv);
@@ -47,13 +47,26 @@ int main(int argc, char** argv) {
   folly::init(&argc, &argv);
 
   // TODO: List of the functions that at some point crash or fail and need to
-  // be fixed before we can enable.
-  std::unordered_set<std::string> skipFunctions = {
-      "last" // https://github.com/facebookincubator/velox/issues/4482
-  };
+  // be fixed before we can enable. Constant argument of bloom_filter_agg cause
+  // fuzzer test fail.
+  std::unordered_set<std::string> skipFunctions = {"bloom_filter_agg"};
 
-  std::unordered_map<std::string, std::string> orderDependentFunctions = {};
+  // The results of the following functions depend on the order of input
+  // rows. For some functions, the result can be transformed to a value that
+  // doesn't depend on the order of inputs. If such transformation exists, it
+  // can be specified to be used for results verification. If no transformation
+  // is specified, results are not verified.
+  std::unordered_map<std::string, std::string> customVerificationFunctions = {
+      {"last", ""},
+      {"last_ignore_null", ""},
+      {"first", ""},
+      {"first_ignore_null", ""}};
+
   size_t initialSeed = FLAGS_seed == 0 ? std::time(nullptr) : FLAGS_seed;
-  return AggregationFuzzerRunner::run(
-      FLAGS_only, initialSeed, skipFunctions, orderDependentFunctions);
+  return facebook::velox::exec::test::AggregationFuzzerRunner::runFuzzer(
+      FLAGS_only,
+      initialSeed,
+      std::nullopt,
+      skipFunctions,
+      customVerificationFunctions);
 }

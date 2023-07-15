@@ -23,16 +23,11 @@ namespace facebook::velox::exec {
 
 SerializedPage::SerializedPage(
     std::unique_ptr<folly::IOBuf> iobuf,
-    memory::MemoryPool* pool,
     std::function<void(folly::IOBuf&)> onDestructionCb)
     : iobuf_(std::move(iobuf)),
       iobufBytes_(chainBytes(*iobuf_.get())),
-      pool_(pool),
       onDestructionCb_(onDestructionCb) {
   VELOX_CHECK_NOT_NULL(iobuf_);
-  if (pool_ != nullptr) {
-    pool_->reserve(iobufBytes_);
-  }
   for (auto& buf : *iobuf_) {
     int32_t bufSize = buf.size();
     ranges_.push_back(ByteRange{
@@ -45,10 +40,6 @@ SerializedPage::SerializedPage(
 SerializedPage::~SerializedPage() {
   if (onDestructionCb_) {
     onDestructionCb_(*iobuf_.get());
-  }
-  if (pool_) {
-    // Release the tracked memory consumption for the query
-    pool_->release(iobufBytes_);
   }
 }
 
@@ -128,9 +119,10 @@ class LocalExchangeSource : public ExchangeSource {
             }
             inputPage->unshare();
             pages.push_back(
-                std::make_unique<SerializedPage>(std::move(inputPage), pool_));
+                std::make_unique<SerializedPage>(std::move(inputPage)));
             inputPage = nullptr;
           }
+          numPages_ += pages.size();
           int64_t ackSequence;
           {
             std::vector<ContinuePromise> promises;
@@ -164,8 +156,15 @@ class LocalExchangeSource : public ExchangeSource {
     buffers->deleteResults(taskId_, destination_);
   }
 
+  folly::F14FastMap<std::string, int64_t> stats() const override {
+    return {{"localExchangeSource.numPages", numPages_}};
+  }
+
  private:
   static constexpr uint64_t kMaxBytes = 32 * 1024 * 1024; // 32 MB
+
+  // Records the total number of pages fetched from sources.
+  int64_t numPages_{0};
 };
 
 std::unique_ptr<ExchangeSource> createLocalExchangeSource(
@@ -194,7 +193,19 @@ void ExchangeClient::addRemoteTaskId(const std::string& taskId) {
       // and the task updates have no guarantees of arriving in order.
       return;
     }
-    auto source = ExchangeSource::create(taskId, destination_, queue_, pool_);
+
+    std::shared_ptr<ExchangeSource> source;
+    try {
+      source = ExchangeSource::create(taskId, destination_, queue_, pool_);
+    } catch (const VeloxException& e) {
+      throw;
+    } catch (const std::exception& e) {
+      // Task ID can be very long. Truncate to 256 characters.
+      VELOX_FAIL(
+          "Failed to create ExchangeSource: {}. Task ID: {}.",
+          e.what(),
+          taskId.substr(0, 126));
+    }
 
     if (closed_) {
       toClose = std::move(source);
@@ -235,6 +246,17 @@ void ExchangeClient::close() {
     source->close();
   }
   queue_->close();
+}
+
+folly::F14FastMap<std::string, RuntimeMetric> ExchangeClient::stats() const {
+  folly::F14FastMap<std::string, RuntimeMetric> stats;
+  std::lock_guard<std::mutex> l(queue_->mutex());
+  for (const auto& source : sources_) {
+    for (const auto& [name, value] : source->stats()) {
+      stats[name].addValue(value);
+    }
+  }
+  return stats;
 }
 
 std::unique_ptr<SerializedPage> ExchangeClient::next(
@@ -306,6 +328,7 @@ bool Exchange::getSplits(ContinueFuture* future) {
         if (atEnd_) {
           operatorCtx_->task()->multipleSplitsFinished(
               stats_.rlock()->numSplits);
+          recordStats();
         }
         return false;
       }
@@ -333,6 +356,7 @@ BlockingReason Exchange::isBlocked(ContinueFuture* future) {
     if (atEnd_ && noMoreSplits_) {
       const auto numSplits = stats_.rlock()->numSplits;
       operatorCtx_->task()->multipleSplitsFinished(numSplits);
+      recordStats();
     }
     return BlockingReason::kNotBlocked;
   }
@@ -384,6 +408,13 @@ RowVectorPtr Exchange::getOutput() {
   }
 
   return result_;
+}
+
+void Exchange::recordStats() {
+  auto lockedStats = stats_.wlock();
+  for (const auto& [name, value] : exchangeClient_->stats()) {
+    lockedStats->runtimeStats[name].merge(value);
+  }
 }
 
 VectorSerde* Exchange::getSerde() {

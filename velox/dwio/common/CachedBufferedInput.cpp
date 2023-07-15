@@ -24,6 +24,8 @@ DEFINE_int32(
     80,
     "Minimum percentage of actual uses over references to a column for prefetching. No prefetch if > 100");
 
+using ::facebook::velox::common::Region;
+
 namespace facebook::velox::dwio::common {
 
 using cache::CachePin;
@@ -62,7 +64,7 @@ std::unique_ptr<SeekableInputStream> CachedBufferedInput::enqueue(
       tracker_,
       id,
       groupId_,
-      loadQuantum_);
+      options_.loadQuantum());
   requests_.back().stream = stream.get();
   return stream;
 }
@@ -80,12 +82,12 @@ bool CachedBufferedInput::shouldPreload(int32_t numPages) {
   }
   for (auto& request : requests_) {
     numPages += bits::roundUp(
-                    std::min<int32_t>(request.size, loadQuantum_),
+                    std::min<int32_t>(request.size, options_.loadQuantum()),
                     memory::AllocationTraits::kPageSize) /
         memory::AllocationTraits::kPageSize;
   }
   auto cachePages = cache_->incrementCachedPages(0);
-  auto maxPages = cache_->maxBytes() / memory::AllocationTraits::kPageSize;
+  auto maxPages = memory::AllocationTraits::numPages(cache_->capacity());
   auto allocatedPages = cache_->numAllocated();
   if (numPages < maxPages - allocatedPages) {
     // There is free space for the read-ahead.
@@ -181,7 +183,7 @@ void CachedBufferedInput::load(const LogType) {
       if (prefetchAnyway || adjustedReadPct(trackingData) >= readPct) {
         request.processed = true;
         auto parts = makeRequestParts(
-            request, trackingData, loadQuantum_, extraRequests);
+            request, trackingData, options_.loadQuantum(), extraRequests);
         for (auto part : parts) {
           if (cache_->exists(part->key)) {
             continue;
@@ -215,7 +217,7 @@ void CachedBufferedInput::makeLoads(
     return;
   }
   bool isSsd = !requests[0]->ssdPin.empty();
-  int32_t maxDistance = isSsd ? 20000 : maxCoalesceDistance_;
+  int32_t maxDistance = isSsd ? 20000 : options_.maxCoalesceDistance();
   std::sort(
       requests.begin(),
       requests.end(),
@@ -229,7 +231,7 @@ void CachedBufferedInput::makeLoads(
   // Combine adjacent short reads.
 
   int32_t numNewLoads = 0;
-
+  int64_t coalescedBytes = 0;
   coalesceIo<CacheRequest*, CacheRequest*>(
       requests,
       maxDistance,
@@ -239,8 +241,16 @@ void CachedBufferedInput::makeLoads(
         return isSsd ? requests[index]->ssdPin.run().offset()
                      : requests[index]->key.offset;
       },
-      [&](int32_t index) { return requests[index]->size; },
       [&](int32_t index) {
+        auto size = requests[index]->size;
+        coalescedBytes += size;
+        return size;
+      },
+      [&](int32_t index) {
+        if (coalescedBytes > options_.maxCoalesceBytes()) {
+          coalescedBytes = 0;
+          return kNoCoalesce;
+        }
         return requests[index]->coalesces ? 1 : kNoCoalesce;
       },
       [&](CacheRequest* request, std::vector<CacheRequest*>& ranges) {
@@ -260,6 +270,7 @@ void CachedBufferedInput::makeLoads(
     for (auto i = 0; i < allCoalescedLoads_.size(); ++i) {
       auto& load = allCoalescedLoads_[i];
       if (load->state() == LoadState::kPlanned) {
+        prefetchSize_ += load->size();
         executor_->add([pendingLoad = load]() {
           process::TraceContext trace("Read Ahead");
           pendingLoad->loadOrFuture(nullptr);
@@ -291,12 +302,17 @@ class DwioCoalescedLoadBase : public cache::CoalescedLoad {
         ioStats_(std::move(ioStats)),
         groupId_(groupId) {
     for (auto& request : requests) {
+      size_ += request->size;
       requests_.push_back(std::move(*request));
     }
   }
 
   const std::vector<CacheRequest>& requests() {
     return requests_;
+  }
+
+  int64_t size() const override {
+    return size_;
   }
 
   std::string toString() const override {
@@ -352,6 +368,7 @@ class DwioCoalescedLoadBase : public cache::CoalescedLoad {
   std::vector<CacheRequest> requests_;
   std::shared_ptr<IoStatistics> ioStats_;
   const uint64_t groupId_;
+  int64_t size_{0};
 };
 
 // Represents a CoalescedLoad from ReadFile, e.g. disagg disk.
@@ -449,7 +466,12 @@ void CachedBufferedInput::readRegion(
     load = std::make_shared<SsdLoad>(*cache_, ioStats_, groupId_, requests);
   } else {
     load = std::make_shared<DwioCoalescedLoad>(
-        *cache_, input_, ioStats_, groupId_, requests, maxCoalesceDistance_);
+        *cache_,
+        input_,
+        ioStats_,
+        groupId_,
+        requests,
+        options_.maxCoalesceDistance());
   }
   allCoalescedLoads_.push_back(load);
   coalescedLoads_.withWLock([&](auto& loads) {
@@ -490,7 +512,7 @@ std::unique_ptr<SeekableInputStream> CachedBufferedInput::read(
       nullptr,
       TrackingId(),
       0,
-      loadQuantum_);
+      options_.loadQuantum());
 }
 
 bool CachedBufferedInput::prefetch(Region region) {

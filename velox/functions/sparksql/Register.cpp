@@ -70,7 +70,7 @@ static void workAroundRegistrationMacro(const std::string& prefix) {
 namespace sparksql {
 
 void registerFunctions(const std::string& prefix) {
-  registerFunction<RandFunction, double>({"rand"});
+  registerFunction<RandFunction, double>({prefix + "rand"});
 
   // Register size functions
   registerSize(prefix + "size");
@@ -82,13 +82,36 @@ void registerFunctions(const std::string& prefix) {
   registerFunction<sparksql::ChrFunction, Varchar, int64_t>({prefix + "chr"});
   registerFunction<AsciiFunction, int32_t, Varchar>({prefix + "ascii"});
 
-  registerFunction<SubstrFunction, Varchar, Varchar, int32_t>(
+  registerFunction<sparksql::SubstrFunction, Varchar, Varchar, int32_t>(
       {prefix + "substring"});
-  registerFunction<SubstrFunction, Varchar, Varchar, int32_t, int32_t>(
-      {prefix + "substring"});
-  exec::registerStatefulVectorFunction("instr", instrSignatures(), makeInstr);
+  registerFunction<
+      sparksql::SubstrFunction,
+      Varchar,
+      Varchar,
+      int32_t,
+      int32_t>({prefix + "substring"});
+  registerFunction<
+      sparksql::OverlayVarcharFunction,
+      Varchar,
+      Varchar,
+      Varchar,
+      int32_t,
+      int32_t>({prefix + "overlay"});
+  registerFunction<
+      sparksql::OverlayVarbinaryFunction,
+      Varbinary,
+      Varbinary,
+      Varbinary,
+      int32_t,
+      int32_t>({prefix + "overlay"});
+
+  registerFunction<sparksql::LeftFunction, Varchar, Varchar, int32_t>(
+      {prefix + "left"});
+
   exec::registerStatefulVectorFunction(
-      "length", lengthSignatures(), makeLength);
+      prefix + "instr", instrSignatures(), makeInstr);
+  exec::registerStatefulVectorFunction(
+      prefix + "length", lengthSignatures(), makeLength);
 
   registerFunction<Md5Function, Varchar, Varbinary>({prefix + "md5"});
   registerFunction<Sha1HexStringFunction, Varchar, Varbinary>(
@@ -147,6 +170,9 @@ void registerFunctions(const std::string& prefix) {
   registerFunction<RTrimFunction, Varchar, Varchar, Varchar>(
       {prefix + "rtrim"});
 
+  registerFunction<TranslateFunction, Varchar, Varchar, Varchar, Varchar>(
+      {prefix + "translate"});
+
   // Register array sort functions.
   exec::registerStatefulVectorFunction(
       prefix + "array_sort", arraySortSignatures(), makeArraySort);
@@ -166,10 +192,14 @@ void registerFunctions(const std::string& prefix) {
       int64_t,
       Varchar,
       Varchar>({prefix + "unix_timestamp", prefix + "to_unix_timestamp"});
+  registerFunction<MakeDateFunction, Date, int32_t, int32_t, int32_t>(
+      {prefix + "make_date"});
+
+  registerFunction<LastDayFunction, Date, Date>({prefix + "last_day"});
 
   // Register bloom filter function
-  exec::registerVectorFunction(
-      prefix + "might_contain", mightContainSignatures(), makeMightContain());
+  registerFunction<BloomFilterMightContainFunction, bool, Varbinary, int64_t>(
+      {prefix + "might_contain"});
 }
 
 } // namespace sparksql

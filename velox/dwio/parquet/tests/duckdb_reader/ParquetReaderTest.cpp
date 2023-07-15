@@ -59,12 +59,6 @@ class ParquetReaderTest : public ParquetReaderTestBase {
   }
 };
 
-template <>
-VectorPtr ParquetReaderTestBase::rangeVector<Date>(size_t size, Date start) {
-  return vectorMaker_->flatVector<Date>(
-      size, [&](auto row) { return Date(start.days() + row); });
-}
-
 TEST_F(ParquetReaderTest, readSampleFull) {
   // sample.parquet holds two columns (a: BIGINT, b: DOUBLE) and
   // 20 rows (10 rows per group). Group offsets are 153 and 614.
@@ -93,7 +87,7 @@ TEST_F(ParquetReaderTest, readSampleFull) {
   auto rowReader = reader->createRowReader(rowReaderOpts);
   auto expected = vectorMaker_->rowVector(
       {rangeVector<int64_t>(20, 1), rangeVector<double>(20, 1)});
-  assertReadExpected(*rowReader, expected);
+  assertReadExpected(sampleSchema(), *rowReader, expected, *pool_);
 }
 
 TEST_F(ParquetReaderTest, readSampleRange1) {
@@ -109,7 +103,7 @@ TEST_F(ParquetReaderTest, readSampleRange1) {
   auto rowReader = reader->createRowReader(rowReaderOpts);
   auto expected = vectorMaker_->rowVector(
       {rangeVector<int64_t>(10, 1), rangeVector<double>(10, 1)});
-  assertReadExpected(*rowReader, expected);
+  assertReadExpected(sampleSchema(), *rowReader, expected, *pool_);
 }
 
 TEST_F(ParquetReaderTest, readSampleRange2) {
@@ -125,7 +119,7 @@ TEST_F(ParquetReaderTest, readSampleRange2) {
   auto rowReader = reader->createRowReader(rowReaderOpts);
   auto expected = vectorMaker_->rowVector(
       {rangeVector<int64_t>(10, 11), rangeVector<double>(10, 11)});
-  assertReadExpected(*rowReader, expected);
+  assertReadExpected(sampleSchema(), *rowReader, expected, *pool_);
 }
 
 TEST_F(ParquetReaderTest, readSampleEmptyRange) {
@@ -199,15 +193,15 @@ TEST_F(ParquetReaderTest, dateRead) {
   auto type = reader->typeWithId();
   EXPECT_EQ(type->size(), 1ULL);
   auto col0 = type->childAt(0);
-  EXPECT_EQ(col0->type->kind(), TypeKind::DATE);
+  EXPECT_EQ(col0->type, DATE());
 
   auto rowReaderOpts = getReaderOpts(dateSchema());
   auto scanSpec = makeScanSpec(dateSchema());
   rowReaderOpts.setScanSpec(scanSpec);
   auto rowReader = reader->createRowReader(rowReaderOpts);
 
-  auto expected = vectorMaker_->rowVector({rangeVector<Date>(25, -5)});
-  assertReadExpected(*rowReader, expected);
+  auto expected = vectorMaker_->rowVector({rangeVector<int32_t>(25, -5)});
+  assertReadExpected(dateSchema(), *rowReader, expected, *pool_);
 }
 
 TEST_F(ParquetReaderTest, dateFilter) {
@@ -215,7 +209,7 @@ TEST_F(ParquetReaderTest, dateFilter) {
   FilterMap filters;
   filters.insert({"date", exec::between(5, 14)});
 
-  auto expected = vectorMaker_->rowVector({rangeVector<Date>(10, 5)});
+  auto expected = vectorMaker_->rowVector({rangeVector<int32_t>(10, 5)});
 
   assertReadWithFilters(
       "date.parquet", dateSchema(), std::move(filters), expected);
@@ -248,7 +242,7 @@ TEST_F(ParquetReaderTest, intRead) {
 
   auto expected = vectorMaker_->rowVector(
       {rangeVector<int32_t>(10, 100), rangeVector<int64_t>(10, 1000)});
-  assertReadExpected(*rowReader, expected);
+  assertReadExpected(intSchema(), *rowReader, expected, *pool_);
 }
 
 TEST_F(ParquetReaderTest, intMultipleFilters) {

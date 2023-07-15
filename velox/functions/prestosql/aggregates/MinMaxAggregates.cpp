@@ -18,9 +18,11 @@
 #include "velox/exec/Aggregate.h"
 #include "velox/exec/AggregationHook.h"
 #include "velox/expression/FunctionSignature.h"
-#include "velox/functions/lib/SimpleNumericAggregate.h"
+#include "velox/functions/lib/aggregates/SimpleNumericAggregate.h"
+#include "velox/functions/lib/aggregates/SingleValueAccumulator.h"
 #include "velox/functions/prestosql/aggregates/AggregateNames.h"
-#include "velox/functions/prestosql/aggregates/SingleValueAccumulator.h"
+
+using namespace facebook::velox::functions::aggregate;
 
 namespace facebook::velox::aggregate::prestosql {
 
@@ -28,29 +30,6 @@ namespace {
 
 template <typename T>
 struct MinMaxTrait : public std::numeric_limits<T> {};
-
-template <>
-struct MinMaxTrait<Timestamp> {
-  static constexpr Timestamp lowest() {
-    return Timestamp(
-        MinMaxTrait<int64_t>::lowest(), MinMaxTrait<uint64_t>::lowest());
-  }
-
-  static constexpr Timestamp max() {
-    return Timestamp(MinMaxTrait<int64_t>::max(), MinMaxTrait<uint64_t>::max());
-  }
-};
-
-template <>
-struct MinMaxTrait<Date> {
-  static constexpr Date lowest() {
-    return Date(std::numeric_limits<int32_t>::lowest());
-  }
-
-  static constexpr Date max() {
-    return Date(std::numeric_limits<int32_t>::max());
-  }
-};
 
 template <typename T>
 class MinMaxAggregate : public SimpleNumericAggregate<T, T, T> {
@@ -88,9 +67,8 @@ class MinMaxAggregate : public SimpleNumericAggregate<T, T, T> {
 /// uses int128_t type. Some CPUs don't support misaligned access to int128_t
 /// type.
 template <>
-inline int32_t MinMaxAggregate<UnscaledLongDecimal>::accumulatorAlignmentSize()
-    const {
-  return static_cast<int32_t>(sizeof(UnscaledLongDecimal));
+inline int32_t MinMaxAggregate<int128_t>::accumulatorAlignmentSize() const {
+  return static_cast<int32_t>(sizeof(int128_t));
 }
 
 // Truncate timestamps to milliseconds precision.
@@ -467,7 +445,7 @@ class NonNumericMinAggregate : public NonNumericMinMaxAggregateBase {
 };
 
 template <template <typename T> class TNumeric, typename TNonNumeric>
-bool registerMinMax(const std::string& name) {
+exec::AggregateRegistrationResult registerMinMax(const std::string& name) {
   std::vector<std::shared_ptr<exec::AggregateFunctionSignature>> signatures;
   signatures.push_back(exec::AggregateFunctionSignatureBuilder()
                            .typeVariable("T")
@@ -482,7 +460,9 @@ bool registerMinMax(const std::string& name) {
       [name](
           core::AggregationNode::Step step,
           std::vector<TypePtr> argTypes,
-          const TypePtr& resultType) -> std::unique_ptr<exec::Aggregate> {
+          const TypePtr& resultType,
+          const core::QueryConfig& /*config*/)
+          -> std::unique_ptr<exec::Aggregate> {
         VELOX_CHECK_EQ(argTypes.size(), 1, "{} takes only one argument", name);
         auto inputType = argTypes[0];
         switch (inputType->kind()) {
@@ -502,12 +482,8 @@ bool registerMinMax(const std::string& name) {
             return std::make_unique<TNumeric<double>>(resultType);
           case TypeKind::TIMESTAMP:
             return std::make_unique<TNumeric<Timestamp>>(resultType);
-          case TypeKind::DATE:
-            return std::make_unique<TNumeric<Date>>(resultType);
-          case TypeKind::LONG_DECIMAL:
-            return std::make_unique<TNumeric<UnscaledLongDecimal>>(resultType);
-          case TypeKind::SHORT_DECIMAL:
-            return std::make_unique<TNumeric<UnscaledShortDecimal>>(resultType);
+          case TypeKind::HUGEINT:
+            return std::make_unique<TNumeric<int128_t>>(resultType);
           case TypeKind::VARCHAR:
           case TypeKind::ARRAY:
           case TypeKind::MAP:

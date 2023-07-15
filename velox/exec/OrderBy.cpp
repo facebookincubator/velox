@@ -14,9 +14,12 @@
  * limitations under the License.
  */
 #include "velox/exec/OrderBy.h"
+#include "velox/common/testutil/TestValue.h"
 #include "velox/exec/OperatorUtils.h"
 #include "velox/exec/Task.h"
 #include "velox/vector/FlatVector.h"
+
+using facebook::velox::common::testutil::TestValue;
 
 namespace facebook::velox::exec {
 
@@ -35,15 +38,16 @@ OrderBy::OrderBy(
           orderByNode->outputType(),
           operatorId,
           orderByNode->id(),
-          "OrderBy"),
+          "OrderBy",
+          orderByNode->canSpill(driverCtx->queryConfig())
+              ? driverCtx->makeSpillConfig(operatorId)
+              : std::nullopt),
       numSortKeys_(orderByNode->sortingKeys().size()),
       spillMemoryThreshold_(operatorCtx_->driverCtx()
                                 ->queryConfig()
-                                .orderBySpillMemoryThreshold()),
-      spillConfig_(
-          orderByNode->canSpill(driverCtx->queryConfig())
-              ? operatorCtx_->makeSpillConfig(Spiller::Type::kOrderBy)
-              : std::nullopt) {
+                                .orderBySpillMemoryThreshold()) {
+  VELOX_CHECK(pool()->trackUsage());
+
   std::vector<TypePtr> keyTypes;
   std::vector<TypePtr> dependentTypes;
   std::vector<TypePtr> types;
@@ -99,6 +103,10 @@ OrderBy::OrderBy(
 void OrderBy::addInput(RowVectorPtr input) {
   ensureInputFits(input);
 
+  // Prevents the memory arbitrator to reclaim memory from this operator during
+  // the execution below.
+  NonReclaimableSection guard(this);
+
   SelectivityVector allRows(input->size());
   std::vector<char*> rows(input->size());
   for (int row = 0; row < input->size(); ++row) {
@@ -113,15 +121,6 @@ void OrderBy::addInput(RowVectorPtr input) {
   }
 
   numRows_ += allRows.size();
-  if (spiller_ != nullptr) {
-    const auto spillStats = spiller_->stats();
-    auto lockedStats = stats_.wlock();
-    lockedStats->spilledBytes = spillStats.spilledBytes;
-    lockedStats->spilledRows = spillStats.spilledRows;
-    lockedStats->spilledPartitions = spillStats.spilledPartitions;
-    lockedStats->spilledFiles = spillStats.spilledFiles;
-    VELOX_DCHECK_LE(lockedStats->spilledPartitions, 1);
-  }
 }
 
 void OrderBy::ensureInputFits(const RowVectorPtr& input) {
@@ -153,9 +152,7 @@ void OrderBy::ensureInputFits(const RowVectorPtr& input) {
     return;
   }
 
-  auto tracker = pool()->getMemoryUsageTracker();
-  VELOX_CHECK_NOT_NULL(tracker);
-  const auto currentUsage = tracker->currentBytes();
+  const auto currentUsage = pool()->currentBytes();
   if (spillMemoryThreshold_ != 0 && currentUsage > spillMemoryThreshold_) {
     const int64_t bytesToSpill =
         currentUsage * spillConfig.spillableReservationGrowthPct / 100;
@@ -182,7 +179,7 @@ void OrderBy::ensureInputFits(const RowVectorPtr& input) {
       data_->sizeIncrement(input->size(), outOfLineBytes ? flatInputBytes : 0);
 
   // There must be at least 2x the increment in reservation.
-  if (tracker->availableReservation() > 2 * incrementBytes) {
+  if (pool()->availableReservation() > 2 * incrementBytes) {
     return;
   }
 
@@ -192,9 +189,12 @@ void OrderBy::ensureInputFits(const RowVectorPtr& input) {
   const auto targetIncrementBytes = std::max<int64_t>(
       incrementBytes * 2,
       currentUsage * spillConfig.spillableReservationGrowthPct / 100);
-  if (tracker->maybeReserve(targetIncrementBytes)) {
+  if (pool()->maybeReserve(targetIncrementBytes)) {
     return;
   }
+
+  // NOTE: disk spilling use the system disk spilling memory pool instead of
+  // the operator memory pool.
   const int64_t rowsToSpill = std::max<int64_t>(
       1, targetIncrementBytes / (data_->fixedRowSize() + outOfLineBytesPerRow));
   spill(
@@ -203,12 +203,35 @@ void OrderBy::ensureInputFits(const RowVectorPtr& input) {
           0, outOfLineBytes - (rowsToSpill * outOfLineBytesPerRow)));
 }
 
+void OrderBy::reclaim(uint64_t targetBytes) {
+  VELOX_CHECK(canReclaim());
+  auto* driver = operatorCtx_->driver();
+
+  // NOTE: an order by operator is reclaimable if it hasn't started output
+  // processing and is not under non-reclaimable execution section.
+  if (noMoreInput_ || nonReclaimableSection_) {
+    // TODO: add stats to record the non-reclaimable case and reduce the log
+    // frequency if it is too verbose.
+    LOG(WARNING) << "Can't reclaim from order by operator, noMoreInput_["
+                 << noMoreInput_ << "], nonReclaimableSection_["
+                 << nonReclaimableSection_ << "], " << toString();
+    return;
+  }
+
+  // TODO: support fine-grain disk spilling based on 'targetBytes' after having
+  // row container memory compaction support later.
+  spill(0, targetBytes);
+  VELOX_CHECK_EQ(data_->numRows(), 0);
+  data_->clear();
+  // Release the minimum reserved memory.
+  pool()->release();
+}
+
 void OrderBy::spill(int64_t targetRows, int64_t targetBytes) {
   VELOX_CHECK_GE(targetRows, 0);
   VELOX_CHECK_GE(targetBytes, 0);
 
   if (spiller_ == nullptr) {
-    VELOX_DCHECK_NOT_NULL(pool()->getMemoryUsageTracker());
     const auto& spillConfig = spillConfig_.value();
     spiller_ = std::make_unique<Spiller>(
         Spiller::Type::kOrderBy,
@@ -261,12 +284,26 @@ void OrderBy::noMoreInput() {
     // there is only one hash partition for orderBy operator.
     Spiller::SpillRows nonSpilledRows = spiller_->finishSpill();
     VELOX_CHECK(nonSpilledRows.empty());
-    VELOX_CHECK_NULL(spillMerge_);
 
+    VELOX_CHECK_NULL(spillMerge_);
+    recordSpillStats();
     spillMerge_ = spiller_->startMerge(0);
     spillSources_.resize(outputBatchSize_);
     spillSourceRows_.resize(outputBatchSize_);
   }
+}
+
+void OrderBy::recordSpillStats() {
+  VELOX_CHECK_NOT_NULL(spiller_);
+  VELOX_CHECK(noMoreInput_);
+
+  const auto spillStats = spiller_->stats();
+  auto lockedStats = stats_.wlock();
+  lockedStats->spilledBytes = spillStats.spilledBytes;
+  lockedStats->spilledRows = spillStats.spilledRows;
+  lockedStats->spilledPartitions = spillStats.spilledPartitions;
+  lockedStats->spilledFiles = spillStats.spilledFiles;
+  VELOX_DCHECK_LE(lockedStats->spilledPartitions, 1);
 }
 
 RowVectorPtr OrderBy::getOutput() {
@@ -370,5 +407,13 @@ void OrderBy::prepareOutput() {
   for (auto& child : output_->children()) {
     child->resize(batchSize);
   }
+}
+
+void OrderBy::close() {
+  Operator::close();
+
+  output_ = nullptr;
+  spiller_.reset();
+  data_.reset();
 }
 } // namespace facebook::velox::exec

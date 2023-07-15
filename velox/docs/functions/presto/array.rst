@@ -129,14 +129,39 @@ Array Functions
 
 .. function:: array_sort(array(E)) -> array(E)
 
-     Returns an array which has the sorted order of the input array x. The elements of x must
-     be orderable. Null elements will be placed at the end of the returned array.
+    Returns an array which has the sorted order of the input array x. The elements of x must
+    be orderable. Null elements will be placed at the end of the returned array.::
 
         SELECT array_sort(ARRAY [1, 2, 3]); -- [1, 2, 3]
         SELECT array_sort(ARRAY [3, 2, 1]); -- [1, 2, 3]
         SELECT array_sort(ARRAY [2, 1, NULL]; -- [1, 2, NULL]
         SELECT array_sort(ARRAY [NULL, 1, NULL]); -- [1, NULL, NULL]
-        SELECT array_sort(ARRAY [NULL, 2, 1]); -- [1, 2, NUL]
+        SELECT array_sort(ARRAY [NULL, 2, 1]); -- [1, 2, NULL]
+
+.. function:: array_sort(array(T), function(T,U)) -> array(T)
+
+    Returns the array sorted by values computed using specified lambda in ascending
+    order. Null elements will be placed at the end of the returned array. ::
+
+        SELECT array_sort(ARRAY ['cat', 'leopard', 'mouse'], x -> length(x)); -- ['cat', 'mouse', 'leopard']
+
+.. function:: array_sort_desc(array(E)) -> array(E)
+
+    Returns the array sorted in the descending order. The elements of the array must
+    be orderable. Null elements will be placed at the end of the returned array.::
+
+        SELECT array_sort_desc(ARRAY [1, 2, 3]); -- [3, 2, 1]
+        SELECT array_sort_desc(ARRAY [3, 2, 1]); -- [3, 2, 1]
+        SELECT array_sort_desc(ARRAY [2, 1, NULL]; -- [2, 1, NULL]
+        SELECT array_sort_desc(ARRAY [NULL, 1, NULL]); -- [1, NULL, NULL]
+        SELECT array_sort_desc(ARRAY [NULL, 2, 1]); -- [2, 1, NULL]
+
+.. function:: array_sort_desc(array(T), function(T,U)) -> array(T)
+
+    Returns the array sorted by values computed using specified lambda in descending
+    order. Null elements will be placed at the end of the returned array. ::
+
+        SELECT array_sort_desc(ARRAY ['cat', 'leopard', 'mouse'], x -> length(x)); -- ['leopard', 'mouse', 'cat']
 
 .. function:: array_sum(array(T)) -> bigint/double
 
@@ -155,6 +180,10 @@ Array Functions
         SELECT combinations(ARRAY[1,2,3,4,5],3); --[[1,2,3], [1,2,4], [1,3,4], [2,3,4]]
         SELECT combinations(ARRAY[1,2,2],2); --[[1,2],[1,2],[2,2]]
 
+.. function:: concat(array1, array2, ..., arrayN) -> array
+
+    Concatenates the arrays ``array1``, ``array2``, ..., ``arrayN``. This function provides the same functionality as the SQL-standard concatenation operator (``||``).
+
 .. function:: contains(x, element) -> boolean
 
     Returns true if the array ``x`` contains the ``element``.
@@ -172,6 +201,10 @@ Array Functions
         SELECT filter(ARRAY [], x -> true); -- []
         SELECT filter(ARRAY [5, -6, NULL, 7], x -> x > 0); -- [5, 7]
         SELECT filter(ARRAY [5, NULL, 7, NULL], x -> x IS NOT NULL); -- [5, 7]
+
+.. function:: flatten(array(array(T))) -> array(T)
+
+    Flattens an ``array(array(T))`` to an ``array(T)`` by concatenating the contained arrays.
 
 .. function:: reduce(array(T), initialState S, inputFunction(S,T,S), outputFunction(S,R)) -> R
 
@@ -214,6 +247,16 @@ Array Functions
     Returns a subarray starting from index ``start``(or starting from the end
     if ``start`` is negative) with a length of ``length``.
 
+.. function:: sequence(start, stop) -> array
+
+    Generate a sequence of integers from start to stop, incrementing by 1 if start is less than or equal to stop,
+    otherwise -1.
+
+.. function:: sequence(start, stop, step) -> array
+   :noindex:
+
+    Generate a sequence of integers from start to stop, incrementing by step.
+
 .. function:: subscript(array(E), index) -> E
 
     Returns element of ``array`` at given ``index``. The index starts from one.
@@ -230,6 +273,14 @@ Array Functions
         SELECT transform(ARRAY [5, NULL, 6], x -> COALESCE(x, 0) + 1); -- [6, 1, 7]
         SELECT transform(ARRAY ['x', 'abc', 'z'], x -> x || '0'); -- ['x0', 'abc0', 'z0']
         SELECT transform(ARRAY [ARRAY [1, NULL, 2], ARRAY[3, NULL]], a -> filter(a, x -> x IS NOT NULL)); -- [[1, 2], [3]]
+
+.. function:: trim_array(x, n) -> array
+
+    Remove n elements from the end of ``array``::
+
+        SELECT trim_array(ARRAY[1, 2, 3, 4], 1); -- [1, 2, 3]
+        SELECT trim_array(ARRAY[1, 2, 3, 4], 2); -- [1, 2]
+        SELECT trim_array(ARRAY[1, 2, 3, 4], 4); -- []
 
 .. function:: zip(array(T), array(U),..) -> array(row(T,U, ...))
 

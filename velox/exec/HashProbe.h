@@ -19,6 +19,7 @@
 #include "velox/exec/HashPartitionFunction.h"
 #include "velox/exec/HashTable.h"
 #include "velox/exec/Operator.h"
+#include "velox/exec/ProbeOperatorState.h"
 #include "velox/exec/VectorHasher.h"
 
 namespace facebook::velox::exec {
@@ -31,36 +32,9 @@ class HashProbe : public Operator {
       DriverCtx* driverCtx,
       const std::shared_ptr<const core::HashJoinNode>& hashJoinNode);
 
-  /// Define the internal execution state for hash probe. The valid state
-  /// transition is depicted as follows:
-  ///
-  ///                           +--------------------------------+
-  ///                           ^                                |
-  ///                           |                                V
-  ///   kWaitForBuild -->  kRunning  -->  kWaitForPeers --> kFinish
-  ///         ^                                |
-  ///         |                                v
-  ///         +--------------------------------+
-  ///
-  enum class State {
-    /// Wait for hash build operators to build the next hash table to join.
-    kWaitForBuild = 0,
-    /// The running state that join the probe input with the build table.
-    kRunning = 1,
-    /// Wait for all the peer hash probe operators to finish processing inputs.
-    /// This state only applies when disk spilling is enabled. The last finished
-    /// operator will notify the build operators to build the next hash table
-    /// from the spilled data. Then all the peer probe operators will wait for
-    /// the next hash table to build.
-    kWaitForPeers = 2,
-    /// The finishing state.
-    kFinish = 3,
-  };
-  static std::string stateName(State state);
-
   bool needsInput() const override {
-    if (state_ == State::kFinish || noMoreInput_ || noMoreSpillInput_ ||
-        input_ != nullptr) {
+    if (state_ == ProbeOperatorState::kFinish || noMoreInput_ ||
+        noMoreSpillInput_ || input_ != nullptr) {
       return false;
     }
     if (table_) {
@@ -83,11 +57,20 @@ class HashProbe : public Operator {
 
   bool isFinished() override;
 
+  /// NOTE: we can't reclaim memory from a hash probe operator. The disk
+  /// spilling in hash probe is used to coordinate with the disk spilling
+  /// triggered by the hash build operator.
+  bool canReclaim() const override {
+    return false;
+  }
+
+  void close() override;
+
   void clearDynamicFilters() override;
 
  private:
-  void setState(State state);
-  void checkStateTransition(State state);
+  void setState(ProbeOperatorState state);
+  void checkStateTransition(ProbeOperatorState state);
 
   void setRunning();
   void checkRunning() const;
@@ -262,13 +245,11 @@ class HashProbe : public Operator {
 
   const bool nullAware_;
 
-  const std::shared_ptr<HashJoinBridge> joinBridge_;
-
-  const std::optional<Spiller::Config> spillConfig_;
-
   const RowTypePtr probeType_;
 
-  State state_{State::kWaitForBuild};
+  std::shared_ptr<HashJoinBridge> joinBridge_;
+
+  ProbeOperatorState state_{ProbeOperatorState::kWaitForBuild};
 
   // Used for synchronization with the hash probe operators of the same pipeline
   // to handle the last probe processing for certain types of join and notify
@@ -314,6 +295,14 @@ class HashProbe : public Operator {
 
   // Indicates whether there was no input. Used for right semi join project.
   bool noInput_{true};
+
+  // Indicates whether to skip probe input data processing or not. It only
+  // applies for a specific set of join types (see skipProbeOnEmptyBuild()), and
+  // the build table is empty and the probe input is read from non-spilled
+  // source. This ensures the hash probe operator keeps running until all the
+  // probe input from the sources have been processed. It prevents the exchange
+  // hanging problem at the producer side caused by the early query finish.
+  bool skipInput_{false};
 
   // Indicates whether there are rows with null join keys on the build
   // side. Used by anti and left semi project join.
@@ -564,9 +553,6 @@ class HashProbe : public Operator {
   // corresponding spilled data on disk.
   std::unique_ptr<UnorderedStreamReader<BatchStream>> spillInputReader_;
 
-  // Used to read the probe inputs from 'spillInputReader_'.
-  RowVectorPtr spillInput_;
-
   // Sets to true after read all the probe inputs from 'spillInputReader_'.
   bool noMoreSpillInput_{false};
 
@@ -574,8 +560,8 @@ class HashProbe : public Operator {
   SpillPartitionSet spillPartitionSet_;
 };
 
-inline std::ostream& operator<<(std::ostream& os, HashProbe::State state) {
-  os << HashProbe::stateName(state);
+inline std::ostream& operator<<(std::ostream& os, ProbeOperatorState state) {
+  os << probeOperatorStateName(state);
   return os;
 }
 

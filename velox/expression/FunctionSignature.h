@@ -15,6 +15,7 @@
  */
 #pragma once
 
+#include <boost/algorithm/string.hpp>
 #include <memory>
 #include <optional>
 #include <string>
@@ -22,14 +23,11 @@
 #include <vector>
 
 #include "velox/common/base/Exceptions.h"
+#include "velox/type/Type.h"
 
 namespace facebook::velox::exec {
 
 std::string sanitizeName(const std::string& name);
-
-inline bool isCommonDecimalName(const std::string& typeName) {
-  return (typeName == "DECIMAL");
-}
 
 /// Return a list of primitive type names.
 const std::vector<std::string> primitiveTypeNames();
@@ -131,6 +129,8 @@ class FunctionSignature {
       std::vector<bool> constantArguments,
       bool variableArity);
 
+  virtual ~FunctionSignature() = default;
+
   const TypeSignature& returnType() const {
     return returnType_;
   }
@@ -147,7 +147,7 @@ class FunctionSignature {
     return variableArity_;
   }
 
-  std::string toString() const;
+  virtual std::string toString() const;
 
   const auto& variables() const {
     return variables_;
@@ -161,6 +161,10 @@ class FunctionSignature {
         argumentTypes_ == rhs.argumentTypes_ &&
         variableArity_ == rhs.variableArity_;
   }
+
+ protected:
+  // Return a string of the list of argument types.
+  std::string argumentsToString() const;
 
  private:
   const std::unordered_map<std::string, SignatureVariable> variables_;
@@ -193,9 +197,14 @@ class AggregateFunctionSignature : public FunctionSignature {
     return intermediateType_;
   }
 
+  std::string toString() const override;
+
  private:
   const TypeSignature intermediateType_;
 };
+
+using AggregateFunctionSignaturePtr =
+    std::shared_ptr<AggregateFunctionSignature>;
 
 namespace {
 
@@ -372,6 +381,22 @@ class AggregateFunctionSignatureBuilder {
   std::vector<bool> constantArguments_;
   bool variableArity_{false};
 };
+
+/// Return a string representation of function signature: name(type1,
+/// type1,...). For example, foo(bigint, boolean, varchar).
+std::string toString(
+    const std::string& name,
+    const std::vector<TypePtr>& types);
+
+/// Return a string representation of a list of scalar function signatures.
+/// For example, (boolean) -> integer, (varchar, integer) -> varchar.
+std::string toString(const std::vector<FunctionSignaturePtr>& signatures);
+
+/// Return a string representation of a list of aggregate function signatures.
+/// For example, (boolean) -> varbinary -> integer, (varchar, integer) ->
+/// varbinary -> varchar.
+std::string toString(
+    const std::vector<std::shared_ptr<AggregateFunctionSignature>>& signatures);
 
 } // namespace facebook::velox::exec
 

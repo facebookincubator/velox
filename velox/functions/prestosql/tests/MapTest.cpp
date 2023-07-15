@@ -280,12 +280,55 @@ TEST_F(MapTest, constantKeys) {
   auto expectedMap =
       makeMapVector<StringView, int32_t>(size, sizeAt, keyAt, valueAt);
 
-  auto result = evaluate<MapVector>(
+  auto result = evaluate(
       "map(array['key'], array_constructor(c0))",
       makeRowVector({
           makeFlatVector<int32_t>(size, valueAt),
       }));
   assertEqualVectors(expectedMap, result);
+
+  // Duplicate key.
+  VELOX_ASSERT_THROW(
+      evaluate<MapVector>(
+          "map(array['key', 'key'], array_constructor(c0, c0))",
+          makeRowVector({
+              makeFlatVector<int32_t>(size, valueAt),
+          })),
+      "Duplicate map keys (key) are not allowed");
+
+  result = evaluate(
+      "try(map(array['key', 'key'], array_constructor(c0, c0)))",
+      makeRowVector({
+          makeFlatVector<int32_t>(size, valueAt),
+      }));
+  auto nullMap =
+      BaseVector::createNullConstant(MAP(VARCHAR(), INTEGER()), size, pool());
+  assertEqualVectors(nullMap, result);
+
+  // Wrong number of values.
+  VELOX_ASSERT_THROW(
+      evaluate(
+          "map(array['key1', 'key2'], array_constructor(c0, c0, c0))",
+          makeRowVector({
+              makeFlatVector<int32_t>(size, valueAt),
+          })),
+      "(2 vs. 3) Key and value arrays must be the same length");
+
+  result = evaluate(
+      "try(map(array['key1', 'key2'], array_constructor(c0, c0, c0)))",
+      makeRowVector({
+          makeFlatVector<int32_t>(size, valueAt),
+      }));
+  assertEqualVectors(nullMap, result);
+
+  // Same order of keys regardless of input keys being constant or not.
+  auto result1 = evaluate(
+      "map_keys(map(array[1, 2, 3], array_constructor(c0, c0, c0)))",
+      makeRowVector({makeFlatVector<int32_t>(size, valueAt)}));
+  auto result2 = evaluate(
+      "map_keys(map(array[3, 2, 1], array_constructor(c0, c0, c0)))",
+      makeRowVector({makeFlatVector<int32_t>(size, valueAt)}));
+  assertEqualVectors(result1, result2);
 }
 
 // Test map function applied to a flat array of keys and constant array of

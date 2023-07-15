@@ -206,12 +206,12 @@ class StringFunctionsTest : public FunctionBaseTest {
     // We expect 2 allocations: one for the values buffer and another for the
     // strings buffer. I.e. FlatVector<StringView>::values and
     // FlatVector<StringView>::stringBuffers.
-    auto numAllocsBefore = pool()->getMemoryUsageTracker()->numAllocs();
+    auto numAllocsBefore = pool()->stats().numAllocs;
 
     auto result = evaluate<FlatVector<StringView>>(
         buildConcatQuery(), makeRowVector(inputVectors));
 
-    auto numAllocsAfter = pool()->getMemoryUsageTracker()->numAllocs();
+    auto numAllocsAfter = pool()->stats().numAllocs;
     ASSERT_EQ(numAllocsAfter - numAllocsBefore, 2);
 
     auto concatStd = [](const std::vector<std::string>& inputs) {
@@ -496,6 +496,19 @@ TEST_F(StringFunctionsTest, substrNegativeStarts) {
       "substr('my string here', -100)", dummyInput);
 
   EXPECT_EQ(result->valueAt(0).getString(), "");
+}
+
+TEST_F(StringFunctionsTest, substrNumericOverflow) {
+  const auto substr = [&](std::optional<std::string> str,
+                          std::optional<int32_t> start,
+                          std::optional<int32_t> length) {
+    return evaluateOnce<std::string>("substr(c0, c1, c2)", str, start, length);
+  };
+
+  EXPECT_EQ(substr("example", 4, 2147483645), "mple");
+  EXPECT_EQ(substr("example", 2147483645, 4), "");
+  EXPECT_EQ(substr("example", -4, -2147483645), "");
+  EXPECT_EQ(substr("example", -2147483645, -4), "");
 }
 
 /**
@@ -1152,8 +1165,9 @@ void StringFunctionsTest::testReplaceInPlace(
   // If its not expected make sure it did not happen.
   auto applyReplaceFunction = [&](std::vector<VectorPtr>& functionInputs,
                                   VectorPtr& resultPtr) {
+    core::QueryConfig config({});
     auto replaceFunction =
-        exec::getVectorFunction("replace", {VARCHAR(), VARCHAR()}, {});
+        exec::getVectorFunction("replace", {VARCHAR(), VARCHAR()}, {}, config);
     SelectivityVector rows(tests.size());
     ExprSet exprSet({}, &execCtx_);
     RowVectorPtr inputRows = makeRowVector({});

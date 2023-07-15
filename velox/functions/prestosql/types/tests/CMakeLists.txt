@@ -20,8 +20,7 @@ add_test(velox_presto_types_test velox_presto_types_test)
 target_link_libraries(
   velox_presto_types_test
   velox_presto_types
-  ${FOLLY}
-  ${DOUBLE_CONVERSION}
+  Folly::folly
   gtest
   gtest_main
   gmock

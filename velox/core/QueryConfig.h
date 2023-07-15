@@ -15,28 +15,31 @@
  */
 #pragma once
 
-#include "velox/core/Context.h"
+#include "velox/core/Config.h"
 
 namespace facebook::velox::core {
 
-/// A simple wrapper around BaseConfigManager. Defines constants for query
+/// A simple wrapper around velox::Config. Defines constants for query
 /// config properties and accessor methods.
+/// Create per query context. Does not have a singleton instance.
+/// Does not allow altering properties on the fly. Only at creation time.
 class QueryConfig {
  public:
-  explicit QueryConfig(BaseConfigManager* configManager)
-      : configManager_{configManager} {}
+  explicit QueryConfig(
+      const std::unordered_map<std::string, std::string>& values);
 
-  static constexpr const char* kCodegenEnabled = "driver.codegen.enabled";
+  explicit QueryConfig(std::unordered_map<std::string, std::string>&& values);
+
+  static constexpr const char* kCodegenEnabled = "codegen.enabled";
 
   static constexpr const char* kCodegenConfigurationFilePath =
-      "driver.codegen.configuration_file_path";
+      "codegen.configuration_file_path";
 
-  static constexpr const char* kCodegenLazyLoading =
-      "driver.codegen.lazy_loading";
+  static constexpr const char* kCodegenLazyLoading = "codegen.lazy_loading";
 
   // User provided session timezone. Stores a string with the actual timezone
   // name, e.g: "America/Los_Angeles".
-  static constexpr const char* kSessionTimezone = "driver.session.timezone";
+  static constexpr const char* kSessionTimezone = "session_timezone";
 
   // If true, timezone-less timestamp conversions (e.g. string to timestamp,
   // when the string does not specify a timezone) will be adjusted to the user
@@ -49,7 +52,7 @@ class QueryConfig {
   //
   // False by default.
   static constexpr const char* kAdjustTimestampToTimezone =
-      "driver.session.adjust_timestamp_to_timezone";
+      "adjust_timestamp_to_session_timezone";
 
   // Whether to use the simplified expression evaluation path. False by default.
   static constexpr const char* kExprEvalSimplified =
@@ -64,21 +67,21 @@ class QueryConfig {
   // Whether to track CPU usage for stages of individual operators. True by
   // default. Can be expensive when processing small batches, e.g. < 10K rows.
   static constexpr const char* kOperatorTrackCpuUsage =
-      "driver.track_operator_cpu_usage";
+      "track_operator_cpu_usage";
 
   // Flags used to configure the CAST operator:
 
-  // This flag makes the Row conversion to by applied
-  // in a way that the casting row field are matched by
-  // name instead of position
+  // This flag makes the Row conversion to by applied in a way that the casting
+  // row field are matched by name instead of position.
   static constexpr const char* kCastMatchStructByName =
-      "driver.cast.match_struct_by_name";
+      "cast_match_struct_by_name";
 
   // This flags forces the cast from float/double to integer to be performed by
   // truncating the decimal part instead of rounding.
-  static constexpr const char* kCastIntByTruncate =
-      "driver.cast.int_by_truncate";
+  static constexpr const char* kCastToIntByTruncate = "cast_to_int_by_truncate";
 
+  /// Used for backpressure to block local exchange producers when the local
+  /// exchange buffer reaches or exceeds this size.
   static constexpr const char* kMaxLocalExchangeBufferSize =
       "max_local_exchange_buffer_size";
 
@@ -88,8 +91,14 @@ class QueryConfig {
   static constexpr const char* kMaxExtendedPartialAggregationMemory =
       "max_extended_partial_aggregation_memory";
 
+  static constexpr const char* kAbandonPartialAggregationMinRows =
+      "abandon_partial_aggregation_min_rows";
+
+  static constexpr const char* kAbandonPartialAggregationMinPct =
+      "abandon_partial_aggregation_min_pct";
+
   static constexpr const char* kMaxPartitionedOutputBufferSize =
-      "driver.max-page-partitioning-buffer-size";
+      "max_page_partitioning_buffer_size";
 
   /// Preferred size of batches in bytes to be returned by operators from
   /// Operator::getOutput. It is used when an estimate of average row size is
@@ -110,19 +119,18 @@ class QueryConfig {
   /// output rows.
   static constexpr const char* kMaxOutputBatchRows = "max_output_batch_rows";
 
+  /// If false, the 'group by' code is forced to use generic hash mode
+  /// hashtable.
   static constexpr const char* kHashAdaptivityEnabled =
-      "driver.hash_adaptivity_enabled";
+      "hash_adaptivity_enabled";
 
+  /// If true, the conjunction expression can reorder inputs based on the time
+  /// taken to calculate them.
   static constexpr const char* kAdaptiveFilterReorderingEnabled =
-      "driver.adaptive_filter_reordering_enabled";
-
-  static constexpr const char* kCreateEmptyFiles = "driver.create_empty_files";
+      "adaptive_filter_reordering_enabled";
 
   /// Global enable spilling flag.
   static constexpr const char* kSpillEnabled = "spill_enabled";
-
-  /// Spill path. "/tmp" by default.
-  static constexpr const char* kSpillPath = "spiller-spill-path";
 
   /// Aggregation spilling flag, only applies if "spill_enabled" flag is set.
   static constexpr const char* kAggregationSpillEnabled =
@@ -149,7 +157,7 @@ class QueryConfig {
   static constexpr const char* kOrderBySpillMemoryThreshold =
       "order_by_spill_memory_threshold";
 
-  static constexpr const char* kTestingSpillPct = "testing.spill-pct";
+  static constexpr const char* kTestingSpillPct = "testing.spill_pct";
 
   /// The max allowed spilling level with zero being the initial spilling level.
   /// This only applies for hash build spilling which might trigger recursive
@@ -158,10 +166,10 @@ class QueryConfig {
   /// partition bits (see kSpillPartitionBits) at the end. The max spill level
   /// is used in production to prevent some bad user queries from using too much
   /// io and cpu resources.
-  static constexpr const char* kMaxSpillLevel = "max-spill-level";
+  static constexpr const char* kMaxSpillLevel = "max_spill_level";
 
   /// The max allowed spill file size. If it is zero, then there is no limit.
-  static constexpr const char* kMaxSpillFileSize = "max-spill-file-size";
+  static constexpr const char* kMaxSpillFileSize = "max_spill_file_size";
 
   /// The min spill run size limit used to select partitions for spilling. The
   /// spiller tries to spill a previously spilled partitions if its data size
@@ -170,15 +178,32 @@ class QueryConfig {
   /// partition if it has any data. This is to avoid spill from a partition with
   /// a small amount of data which might result in generating too many small
   /// spilled files.
-  static constexpr const char* kMinSpillRunSize = "min-spill-run-size";
+  static constexpr const char* kMinSpillRunSize = "min_spill_run_size";
 
   static constexpr const char* kSpillStartPartitionBit =
-      "spiller-start-partition-bit";
+      "spiller_start_partition_bit";
 
-  static constexpr const char* kSpillPartitionBits = "spiller-partition-bits";
+  static constexpr const char* kSpillPartitionBits = "spiller_partition_bits";
 
   static constexpr const char* kSpillableReservationGrowthPct =
-      "spillable-reservation-growth-pct";
+      "spillable_reservation_growth_pct";
+
+  /// If false, size function returns null for null input.
+  static constexpr const char* kSparkLegacySizeOfNull =
+      "spark.legacy_size_of_null";
+
+  /// The number of local parallel table writer operators per task.
+  static constexpr const char* kTaskWriterCount = "task_writer_count";
+
+  /// The number of local parallel table writer operators per task for
+  /// partitioned writes. If not set, use "task_writer_count".
+  static constexpr const char* kTaskPartitionedWriterCount =
+      "task_partitioned_writer_count";
+
+  /// If true, finish the hash probe on an empty build table for a specific set
+  /// of hash joins.
+  static constexpr const char* kHashProbeFinishEarlyOnEmptyBuild =
+      "hash_probe_finish_early_on_empty_build";
 
   uint64_t maxPartialAggregationMemoryUsage() const {
     static constexpr uint64_t kDefault = 1L << 24;
@@ -188,6 +213,14 @@ class QueryConfig {
   uint64_t maxExtendedPartialAggregationMemoryUsage() const {
     static constexpr uint64_t kDefault = 1L << 26;
     return get<uint64_t>(kMaxExtendedPartialAggregationMemory, kDefault);
+  }
+
+  int32_t abandonPartialAggregationMinRows() const {
+    return get<int32_t>(kAbandonPartialAggregationMinRows, 10000);
+  }
+
+  int32_t abandonPartialAggregationMinPct() const {
+    return get<int32_t>(kAbandonPartialAggregationMinPct, 80);
   }
 
   uint64_t aggregationSpillMemoryThreshold() const {
@@ -254,8 +287,8 @@ class QueryConfig {
     return get<bool>(kCastMatchStructByName, false);
   }
 
-  bool isCastIntByTruncate() const {
-    return get<bool>(kCastIntByTruncate, false);
+  bool isCastToIntByTruncate() const {
+    return get<bool>(kCastToIntByTruncate, false);
   }
 
   bool codegenEnabled() const {
@@ -268,10 +301,6 @@ class QueryConfig {
 
   bool codegenLazyLoading() const {
     return get<bool>(kCodegenLazyLoading, true);
-  }
-
-  bool createEmptyFiles() const {
-    return get<bool>(kCreateEmptyFiles, false);
   }
 
   bool adjustTimestampToTimezone() const {
@@ -289,17 +318,6 @@ class QueryConfig {
   /// Returns true if spilling is enabled.
   bool spillEnabled() const {
     return get<bool>(kSpillEnabled, false);
-  }
-
-  /// Returns the path for writing spill files. The path should be
-  /// interpretable by filesystems::getFileSystem and may refer to any writable
-  /// location. Actual file names are composed by appending '/' and a filename
-  /// composed of Task id and serial numbers. The files are automatically
-  /// deleted when no longer needed. Files may be left behind after crashes but
-  /// are identifiable based on the Task id in the name.
-  /// TODO(spershin): This method and kSpillPath will be removed.
-  std::optional<std::string> spillPath() const {
-    return get<std::string>(kSpillPath);
   }
 
   /// Returns 'is aggregation spilling enabled' flag. Must also check the
@@ -366,6 +384,11 @@ class QueryConfig {
     return get<double>(kSpillableReservationGrowthPct, kDefaultPct);
   }
 
+  bool sparkLegacySizeOfNull() const {
+    constexpr bool kDefault{true};
+    return get<bool>(kSparkLegacySizeOfNull, kDefault);
+  }
+
   bool exprTrackCpuUsage() const {
     return get<bool>(kExprTrackCpuUsage, false);
   }
@@ -374,16 +397,34 @@ class QueryConfig {
     return get<bool>(kOperatorTrackCpuUsage, true);
   }
 
+  uint32_t taskWriterCount() const {
+    return get<uint32_t>(kTaskWriterCount, 1);
+  }
+
+  uint32_t taskPartitionedWriterCount() const {
+    return get<uint32_t>(kTaskPartitionedWriterCount)
+        .value_or(taskWriterCount());
+  }
+
+  bool hashProbeFinishEarlyOnEmptyBuild() const {
+    return get<bool>(kHashProbeFinishEarlyOnEmptyBuild, true);
+  }
+
   template <typename T>
   T get(const std::string& key, const T& defaultValue) const {
-    return configManager_->get<T>(key, defaultValue);
+    return config_->get<T>(key, defaultValue);
   }
   template <typename T>
   std::optional<T> get(const std::string& key) const {
-    return std::optional<T>(configManager_->get<T>(key));
+    return std::optional<T>(config_->get<T>(key));
   }
 
+  /// Test-only method to override the current query config properties.
+  /// It is not thread safe.
+  void testingOverrideConfigUnsafe(
+      std::unordered_map<std::string, std::string>&& values);
+
  private:
-  BaseConfigManager* FOLLY_NONNULL configManager_;
+  std::unique_ptr<velox::Config> config_;
 };
 } // namespace facebook::velox::core

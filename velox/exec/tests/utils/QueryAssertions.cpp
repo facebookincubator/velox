@@ -58,33 +58,28 @@ template <>
 }
 
 template <>
-::duckdb::Value duckValueAt<TypeKind::DATE>(
+::duckdb::Value duckValueAt<TypeKind::BIGINT>(
     const VectorPtr& vector,
     vector_size_t index) {
-  using T = typename KindToFlatVector<TypeKind::DATE>::WrapperType;
-  return ::duckdb::Value::DATE(::duckdb::Date::EpochDaysToDate(
-      vector->as<SimpleVector<T>>()->valueAt(index).days()));
+  using T = typename KindToFlatVector<TypeKind::BIGINT>::WrapperType;
+  auto type = vector->type();
+  if (type->isShortDecimal()) {
+    const auto& decimalType = type->asShortDecimal();
+    return ::duckdb::Value::DECIMAL(
+        vector->as<SimpleVector<T>>()->valueAt(index),
+        decimalType.precision(),
+        decimalType.scale());
+  }
+  return ::duckdb::Value(vector->as<SimpleVector<T>>()->valueAt(index));
 }
 
 template <>
-::duckdb::Value duckValueAt<TypeKind::SHORT_DECIMAL>(
+::duckdb::Value duckValueAt<TypeKind::HUGEINT>(
     const VectorPtr& vector,
     vector_size_t index) {
-  using T = typename KindToFlatVector<TypeKind::SHORT_DECIMAL>::WrapperType;
-  auto type = vector->type()->asShortDecimal();
-  return ::duckdb::Value::DECIMAL(
-      vector->as<SimpleVector<T>>()->valueAt(index).unscaledValue(),
-      type.precision(),
-      type.scale());
-}
-
-template <>
-::duckdb::Value duckValueAt<TypeKind::LONG_DECIMAL>(
-    const VectorPtr& vector,
-    vector_size_t index) {
-  using T = typename KindToFlatVector<TypeKind::LONG_DECIMAL>::WrapperType;
+  using T = typename KindToFlatVector<TypeKind::HUGEINT>::WrapperType;
   auto type = vector->type()->asLongDecimal();
-  auto val = vector->as<SimpleVector<T>>()->valueAt(index).unscaledValue();
+  auto val = vector->as<SimpleVector<T>>()->valueAt(index);
   auto duckVal = ::duckdb::hugeint_t();
   duckVal.lower = (val << 64) >> 64;
   duckVal.upper = (val >> 64);
@@ -216,19 +211,12 @@ velox::variant variantAt<TypeKind::TIMESTAMP>(
       dataChunk->GetValue(column, row).GetValue<::duckdb::timestamp_t>()));
 }
 
-template <>
-velox::variant variantAt<TypeKind::DATE>(
-    ::duckdb::DataChunk* dataChunk,
-    int32_t row,
-    int32_t column) {
-  return velox::variant::date(::duckdb::Date::EpochDays(
-      dataChunk->GetValue(column, row).GetValue<::duckdb::date_t>()));
-}
-
 template <TypeKind kind>
 velox::variant variantAt(const ::duckdb::Value& value) {
   if (value.type() == ::duckdb::LogicalType::INTERVAL) {
     return ::duckdb::Interval::GetMicro(value.GetValue<::duckdb::interval_t>());
+  } else if (value.type() == ::duckdb::LogicalType::DATE) {
+    return ::duckdb::Date::EpochDays(value.GetValue<::duckdb::date_t>());
   } else {
     // NOTE: duckdb only support native cpp type for GetValue so we need to use
     // DeepCopiedType instead of WrapperType here.
@@ -243,22 +231,8 @@ velox::variant variantAt<TypeKind::TIMESTAMP>(const ::duckdb::Value& value) {
       duckdbTimestampToVelox(value.GetValue<::duckdb::timestamp_t>()));
 }
 
-template <>
-velox::variant variantAt<TypeKind::DATE>(const ::duckdb::Value& value) {
-  return velox::variant::date(
-      ::duckdb::Date::EpochDays(value.GetValue<::duckdb::date_t>()));
-}
-
 variant nullVariant(const TypePtr& type) {
-  auto typeKind = type->kind();
-  switch (typeKind) {
-    case TypeKind::SHORT_DECIMAL:
-      return variant::shortDecimal(std::nullopt, type);
-    case TypeKind::LONG_DECIMAL:
-      return variant::longDecimal(std::nullopt, type);
-    default:
-      return variant(typeKind);
-  }
+  return variant(type->kind());
 }
 
 velox::variant rowVariantAt(
@@ -373,11 +347,15 @@ std::vector<MaterializedRow> materialize(
         row.push_back(mapVariantAt(dataChunk->GetValue(j, i), type));
       } else if (typeKind == TypeKind::ROW) {
         row.push_back(rowVariantAt(dataChunk->GetValue(j, i), type));
-      } else if (isDecimalKind(typeKind)) {
+      } else if (type->isDecimal()) {
         row.push_back(duckdb::decimalVariant(dataChunk->GetValue(j, i)));
-      } else if (isIntervalDayTimeType(type)) {
+      } else if (type->isIntervalDayTime()) {
         auto value = variant(::duckdb::Interval::GetMicro(
             dataChunk->GetValue(j, i).GetValue<::duckdb::interval_t>()));
+        row.push_back(value);
+      } else if (type->isDate()) {
+        auto value = variant(::duckdb::Date::EpochDays(
+            dataChunk->GetValue(j, i).GetValue<::duckdb::date_t>()));
         row.push_back(value);
       } else {
         auto value = VELOX_DYNAMIC_SCALAR_TYPE_DISPATCH(
@@ -394,26 +372,6 @@ template <TypeKind kind>
 velox::variant variantAt(VectorPtr vector, int32_t row) {
   using T = typename KindToFlatVector<kind>::WrapperType;
   return velox::variant(vector->as<SimpleVector<T>>()->valueAt(row));
-}
-
-template <>
-velox::variant variantAt<TypeKind::SHORT_DECIMAL>(
-    VectorPtr vector,
-    int32_t row) {
-  using T = typename KindToFlatVector<TypeKind::SHORT_DECIMAL>::WrapperType;
-  return velox::variant::shortDecimal(
-      vector->as<SimpleVector<T>>()->valueAt(row).unscaledValue(),
-      vector->type());
-}
-
-template <>
-velox::variant variantAt<TypeKind::LONG_DECIMAL>(
-    VectorPtr vector,
-    int32_t row) {
-  using T = typename KindToFlatVector<TypeKind::LONG_DECIMAL>::WrapperType;
-  return velox::variant::longDecimal(
-      vector->as<SimpleVector<T>>()->valueAt(row).unscaledValue(),
-      vector->type());
 }
 
 variant variantAt(const VectorPtr& vector, vector_size_t row);
@@ -481,14 +439,6 @@ variant variantAt(const VectorPtr& vector, vector_size_t row) {
 
   if (typeKind == TypeKind::MAP) {
     return mapVariantAt(vector, row);
-  }
-
-  if (typeKind == TypeKind::SHORT_DECIMAL) {
-    return variantAt<TypeKind::SHORT_DECIMAL>(vector, row);
-  }
-
-  if (typeKind == TypeKind::LONG_DECIMAL) {
-    return variantAt<TypeKind::LONG_DECIMAL>(vector, row);
   }
 
   return VELOX_DYNAMIC_SCALAR_TYPE_DISPATCH(variantAt, typeKind, vector, row);
@@ -851,15 +801,17 @@ void DuckDbQueryRunner::createTable(
           appender.Append(duckValueAt<TypeKind::MAP>(columnVector, row));
         } else if (type->isRow()) {
           appender.Append(duckValueAt<TypeKind::ROW>(columnVector, row));
-        } else if (type->isShortDecimal()) {
-          appender.Append(
-              duckValueAt<TypeKind::SHORT_DECIMAL>(columnVector, row));
+        } else if (rowType.childAt(column)->isShortDecimal()) {
+          appender.Append(duckValueAt<TypeKind::BIGINT>(columnVector, row));
         } else if (rowType.childAt(column)->isLongDecimal()) {
-          appender.Append(
-              duckValueAt<TypeKind::LONG_DECIMAL>(columnVector, row));
-        } else if (isIntervalDayTimeType(type)) {
+          appender.Append(duckValueAt<TypeKind::HUGEINT>(columnVector, row));
+        } else if (type->isIntervalDayTime()) {
           auto value = ::duckdb::Value::INTERVAL(
               0, 0, columnVector->as<SimpleVector<int64_t>>()->valueAt(row));
+          appender.Append(value);
+        } else if (type->isDate()) {
+          auto value = ::duckdb::Value::DATE(::duckdb::Date::EpochDaysToDate(
+              columnVector->as<SimpleVector<int32_t>>()->valueAt(row)));
           appender.Append(value);
         } else {
           auto value = VELOX_DYNAMIC_SCALAR_TYPE_DISPATCH(
@@ -1226,7 +1178,8 @@ void assertResultsOrdered(
 
 std::pair<std::unique_ptr<TaskCursor>, std::vector<RowVectorPtr>> readCursor(
     const CursorParameters& params,
-    std::function<void(exec::Task*)> addSplits) {
+    std::function<void(exec::Task*)> addSplits,
+    uint64_t maxWaitMicros) {
   auto cursor = std::make_unique<TaskCursor>(params);
   // 'result' borrows memory from cursor so the life cycle must be shorter.
   std::vector<RowVectorPtr> result;
@@ -1238,7 +1191,7 @@ std::pair<std::unique_ptr<TaskCursor>, std::vector<RowVectorPtr>> readCursor(
     addSplits(task);
   }
 
-  EXPECT_TRUE(waitForTaskCompletion(task)) << task->taskId();
+  EXPECT_TRUE(waitForTaskCompletion(task, maxWaitMicros)) << task->taskId();
   return {std::move(cursor), std::move(result)};
 }
 
@@ -1265,6 +1218,10 @@ bool waitForTaskAborted(exec::Task* task, uint64_t maxWaitMicros) {
   return waitForTaskFinish(task, TaskState::kAborted, maxWaitMicros);
 }
 
+bool waitForTaskCancelled(exec::Task* task, uint64_t maxWaitMicros) {
+  return waitForTaskFinish(task, TaskState::kCanceled, maxWaitMicros);
+}
+
 bool waitForTaskStateChange(
     exec::Task* task,
     TaskState state,
@@ -1272,7 +1229,7 @@ bool waitForTaskStateChange(
   // Wait for task to transition to finished state.
   if (task->state() != state) {
     auto& executor = folly::QueuedImmediateExecutor::instance();
-    auto future = task->stateChangeFuture(maxWaitMicros).via(&executor);
+    auto future = task->taskCompletionFuture(maxWaitMicros).via(&executor);
     future.wait();
   }
 

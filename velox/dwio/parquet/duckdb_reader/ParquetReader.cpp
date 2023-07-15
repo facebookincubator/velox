@@ -257,7 +257,13 @@ ParquetRowReader::ParquetRowReader(
       state_, std::move(columnIds), std::move(groups), &filters_);
 }
 
-uint64_t ParquetRowReader::next(uint64_t /*size*/, velox::VectorPtr& result) {
+uint64_t ParquetRowReader::next(
+    uint64_t /*size*/,
+    velox::VectorPtr& result,
+    const dwio::common::Mutation* mutation) {
+  VELOX_CHECK(
+      !mutation || !mutation->deletedRows,
+      "Mutation pushdown is only supported in selective reader");
   ::duckdb::DataChunk output;
   // TODO: We are using the default duckdb allocator which uses Velox's default
   // memory manager, not the one specified in the ReaderOptions.
@@ -268,8 +274,8 @@ uint64_t ParquetRowReader::next(uint64_t /*size*/, velox::VectorPtr& result) {
   reader_->Scan(state_, output);
 
   if (output.size() > 0) {
-    std::vector<VectorPtr> columns;
-    columns.resize(output.data.size());
+    VELOX_CHECK(result);
+    std::vector<VectorPtr> columns(result->type()->size());
     for (auto& spec : scanSpec_->children()) {
       if (spec->isConstant()) {
         columns[spec->channel()] =
@@ -286,7 +292,7 @@ uint64_t ParquetRowReader::next(uint64_t /*size*/, velox::VectorPtr& result) {
 
     result = std::make_shared<RowVector>(
         &pool_,
-        rowType_,
+        result->type(),
         BufferPtr(nullptr),
         output.size(),
         columns,

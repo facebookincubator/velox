@@ -16,12 +16,17 @@
 #pragma once
 
 #include "velox/common/memory/MemoryAllocator.h"
-#include "velox/exec/Aggregate.h"
 #include "velox/exec/Operator.h"
 #include "velox/exec/RowContainer.h"
 #include "velox/exec/VectorHasher.h"
 
 namespace facebook::velox::exec {
+
+#ifdef VELOX_ENABLE_INT64_BUILD_PARTITION_BOUND
+using PartitionBoundIndexType = int64_t;
+#else
+using PartitionBoundIndexType = int32_t;
+#endif
 
 struct HashLookup {
   explicit HashLookup(const std::vector<std::unique_ptr<VectorHasher>>& h)
@@ -45,6 +50,7 @@ struct HashLookup {
   // Hit for each row of input. nullptr if no hit. Points to the
   // corresponding group row.
   raw_vector<char*> hits;
+  // Indices of newly inserted rows (not found during probe).
   std::vector<vector_size_t> newGroups;
 };
 
@@ -122,6 +128,12 @@ class BaseHashTable {
   virtual ~BaseHashTable() = default;
 
   virtual HashStringAllocator* FOLLY_NULLABLE stringAllocator() = 0;
+
+  void prepareForProbe(
+      HashLookup& lookup,
+      const RowVectorPtr& input,
+      SelectivityVector& rows,
+      bool ignoreNullKeys);
 
   /// Finds or creates a group for each key in 'lookup'. The keys are
   /// returned in 'lookup.hits'.
@@ -320,7 +332,7 @@ class HashTable : public BaseHashTable {
   // that matches join condition for right and full outer joins.
   HashTable(
       std::vector<std::unique_ptr<VectorHasher>>&& hashers,
-      const std::vector<std::unique_ptr<Aggregate>>& aggregates,
+      const std::vector<Accumulator>& accumulators,
       const std::vector<TypePtr>& dependentTypes,
       bool allowDuplicates,
       bool isJoinBuild,
@@ -329,11 +341,11 @@ class HashTable : public BaseHashTable {
 
   static std::unique_ptr<HashTable> createForAggregation(
       std::vector<std::unique_ptr<VectorHasher>>&& hashers,
-      const std::vector<std::unique_ptr<Aggregate>>& aggregates,
+      const std::vector<Accumulator>& accumulators,
       memory::MemoryPool* FOLLY_NULLABLE pool) {
     return std::make_unique<HashTable>(
         std::move(hashers),
-        aggregates,
+        accumulators,
         std::vector<TypePtr>{},
         false, // allowDuplicates
         false, // isJoinBuild
@@ -347,10 +359,9 @@ class HashTable : public BaseHashTable {
       bool allowDuplicates,
       bool hasProbedFlag,
       memory::MemoryPool* FOLLY_NULLABLE pool) {
-    static const std::vector<std::unique_ptr<Aggregate>> kNoAggregates;
     return std::make_unique<HashTable>(
         std::move(hashers),
-        kNoAggregates,
+        std::vector<Accumulator>{},
         dependentTypes,
         allowDuplicates,
         true, // isJoinBuild
@@ -473,6 +484,10 @@ class HashTable : public BaseHashTable {
     setHashMode(mode, numNew);
   }
 
+  auto& testingOtherTables() const {
+    return otherTables_;
+  }
+
  private:
   // Returns the number of entries after which the table gets rehashed.
   static uint64_t rehashSize(int64_t size) {
@@ -551,8 +566,9 @@ class HashTable : public BaseHashTable {
       char* FOLLY_NULLABLE* FOLLY_NULLABLE groups,
       uint64_t* FOLLY_NULLABLE hashes,
       int32_t numGroups,
-      int32_t partitionBegin = 0,
-      int32_t partitionEnd = std::numeric_limits<int32_t>::max(),
+      PartitionBoundIndexType partitionBegin = 0,
+      PartitionBoundIndexType partitionEnd =
+          std::numeric_limits<PartitionBoundIndexType>::max(),
       std::vector<char*>* FOLLY_NULLABLE overflows = nullptr);
 
   // Inserts 'numGroups' entries into 'this'. 'groups' point to
@@ -640,8 +656,8 @@ class HashTable : public BaseHashTable {
       uint64_t hash,
       char* FOLLY_NULLABLE row,
       bool extraCheck,
-      int32_t partitionBegin,
-      int32_t partitionEnd,
+      PartitionBoundIndexType partitionBegin,
+      PartitionBoundIndexType partitionEnd,
       std::vector<char*>* FOLLY_NULLABLE overflows);
 
   // Updates 'hashers_' to correspond to the keys in the
@@ -690,7 +706,7 @@ class HashTable : public BaseHashTable {
   // Bounds of independently buildable index ranges in the table. The
   // range of partition i starts at [i] and ends at [i +1]. Bounds are multiple
   // of cache line  size.
-  raw_vector<int32_t> buildPartitionBounds_;
+  raw_vector<PartitionBoundIndexType> buildPartitionBounds_;
 
   // Executor for parallelizing hash join build. This may be the
   // executor for Drivers. If this executor is indefinitely taken by

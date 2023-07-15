@@ -20,7 +20,7 @@
 
 namespace facebook::velox::exec {
 
-std::shared_ptr<PeeledEncoding> PeeledEncoding::Peel(
+std::shared_ptr<PeeledEncoding> PeeledEncoding::peel(
     const std::vector<VectorPtr>& vectorsToPeel,
     const SelectivityVector& rows,
     LocalDecodedVector& decodedVector,
@@ -57,12 +57,7 @@ SelectivityVector* PeeledEncoding::translateToInnerRows(
   auto flatNulls = wrapNulls_ ? wrapNulls_->as<uint64_t>() : nullptr;
 
   auto* newRows = innerRowsHolder.get(baseSize, false);
-  outerRows.applyToSelected([&](vector_size_t row) {
-    if (!(flatNulls && bits::isBitNull(flatNulls, row))) {
-      newRows->setValid(indices[row], true);
-    }
-  });
-  newRows->updateBounds();
+  velox::translateToInnerRows(outerRows, indices, flatNulls, *newRows);
 
   return newRows;
 }
@@ -116,7 +111,6 @@ bool PeeledEncoding::peelInternal(
   do {
     peeled = true;
     BufferPtr firstIndices;
-    BufferPtr firstLengths;
     maybePeeled.resize(numFields);
     for (int fieldIndex = 0; fieldIndex < numFields; fieldIndex++) {
       auto leaf = peeledVectors.empty() ? vectorsToPeel[fieldIndex]
@@ -148,11 +142,6 @@ bool PeeledEncoding::peelInternal(
       nonConstant = true;
       auto encoding = leaf->encoding();
       if (encoding == VectorEncoding::Simple::DICTIONARY) {
-        if (firstLengths) {
-          // having a mix of dictionary and sequence encoded fields
-          peeled = false;
-          break;
-        }
         if (!canPeelsHaveNulls && leaf->rawNulls()) {
           // A dictionary that adds nulls over an Expr that is not null for a
           // null argument cannot be peeled.
@@ -164,24 +153,6 @@ bool PeeledEncoding::peelInternal(
           firstIndices = std::move(indices);
         } else if (indices != firstIndices) {
           // different fields use different dictionaries
-          peeled = false;
-          break;
-        }
-        if (firstPeeled == -1) {
-          firstPeeled = fieldIndex;
-        }
-        setPeeled(leaf->valueVector(), fieldIndex, maybePeeled);
-      } else if (encoding == VectorEncoding::Simple::SEQUENCE) {
-        if (firstIndices) {
-          // having a mix of dictionary and sequence encoded fields
-          peeled = false;
-          break;
-        }
-        BufferPtr lengths = leaf->wrapInfo();
-        if (!firstLengths) {
-          firstLengths = std::move(lengths);
-        } else if (lengths != firstLengths) {
-          // different fields use different sequences
           peeled = false;
           break;
         }
@@ -255,7 +226,7 @@ bool PeeledEncoding::peelInternal(
   return true;
 }
 
-VectorEncoding::Simple PeeledEncoding::getWrapEncoding() const {
+VectorEncoding::Simple PeeledEncoding::wrapEncoding() const {
   return wrapEncoding_;
 }
 

@@ -21,6 +21,7 @@
 #include "velox/common/process/ProcessBase.h"
 #include "velox/common/testutil/TestValue.h"
 #include "velox/exec/ContainerRowSerde.h"
+#include "velox/exec/OperatorUtils.h"
 #include "velox/vector/VectorTypeUtils.h"
 
 using facebook::velox::common::testutil::TestValue;
@@ -48,7 +49,7 @@ std::string BaseHashTable::modeString(HashMode mode) {
 template <bool ignoreNullKeys>
 HashTable<ignoreNullKeys>::HashTable(
     std::vector<std::unique_ptr<VectorHasher>>&& hashers,
-    const std::vector<std::unique_ptr<Aggregate>>& aggregates,
+    const std::vector<Accumulator>& accumulators,
     const std::vector<TypePtr>& dependentTypes,
     bool allowDuplicates,
     bool isJoinBuild,
@@ -62,10 +63,11 @@ HashTable<ignoreNullKeys>::HashTable(
       hashMode_ = HashMode::kHash;
     }
   }
+
   rows_ = std::make_unique<RowContainer>(
       keys,
       !ignoreNullKeys,
-      aggregates,
+      accumulators,
       dependentTypes,
       allowDuplicates,
       isJoinBuild,
@@ -777,12 +779,17 @@ void HashTable<ignoreNullKeys>::parallelJoinBuild() {
   std::fill(
       buildPartitionBounds_.begin(),
       buildPartitionBounds_.begin() + buildPartitionBounds_.capacity(),
-      std::numeric_limits<int32_t>::max());
+      std::numeric_limits<PartitionBoundIndexType>::max());
   for (auto i = 0; i < numPartitions; ++i) {
     // The bounds are rounded up to cache line size.
     buildPartitionBounds_[i] = bits::roundUp(
         (capacity_ / numPartitions) * i,
         folly::hardware_destructive_interference_size);
+    // Bounds must always be positive
+    VELOX_CHECK_GE(
+        buildPartitionBounds_[i],
+        0,
+        "Turn on VELOX_ENABLE_INT64_BUILD_PARTITION_BOUND to avoid integer overflow in buildPartitionBounds_");
   }
   buildPartitionBounds_.back() = capacity_;
   std::vector<std::shared_ptr<AsyncSource<bool>>> partitionSteps;
@@ -847,14 +854,17 @@ void HashTable<ignoreNullKeys>::parallelJoinBuild() {
 namespace {
 // Returns an index into 'buildPartitionBounds_' given an index into tags of the
 // HashTable.
-int32_t
-findPartition(int32_t index, const int32_t* bounds, int32_t numPartitions) {
+int32_t findPartition(
+    PartitionBoundIndexType index,
+    const PartitionBoundIndexType* bounds,
+    int32_t numPartitions) {
   // The partition bounds are padded to batch size.
-  constexpr int32_t kBatch = xsimd::batch<int32_t>::size;
-  auto indexVector = xsimd::batch<int32_t>::broadcast(index);
+  constexpr int32_t kBatch = xsimd::batch<PartitionBoundIndexType>::size;
+  auto indexVector = xsimd::batch<PartitionBoundIndexType>::broadcast(index);
   for (auto i = 1; i < numPartitions; i += kBatch) {
-    uint8_t bits = simd::toBitMask(
-        indexVector < xsimd::batch<int32_t>::load_unaligned(bounds + i));
+    auto bits = simd::toBitMask(
+        indexVector <
+        xsimd::batch<PartitionBoundIndexType>::load_unaligned(bounds + i));
     if (bits) {
       return i + __builtin_ctz(bits) - 1;
     }
@@ -876,7 +886,8 @@ void HashTable<ignoreNullKeys>::partitionRows(
     hashRows(folly::Range<char**>(rows.data(), numRows), true, hashes);
     VELOX_DCHECK_EQ(
         0,
-        buildPartitionBounds_.capacity() % xsimd::batch<int32_t>::size,
+        buildPartitionBounds_.capacity() %
+            xsimd::batch<PartitionBoundIndexType>::size,
         "partition bounds must be padded to SIMD width");
     for (auto i = 0; i < numRows; ++i) {
       auto index = ProbeState::tagsByteOffset(hashes[i], sizeMask_);
@@ -996,10 +1007,10 @@ FOLLY_ALWAYS_INLINE void HashTable<ignoreNullKeys>::buildFullProbe(
     uint64_t hash,
     char* inserted,
     bool extraCheck,
-    int32_t partitionBegin,
-    int32_t partitionEnd,
+    PartitionBoundIndexType partitionBegin,
+    PartitionBoundIndexType partitionEnd,
     std::vector<char*>* FOLLY_NULLABLE overflows) {
-  auto insertFn = [&](int32_t /*row*/, int32_t index) {
+  auto insertFn = [&](int32_t /*row*/, PartitionBoundIndexType index) {
     if (index < partitionBegin || index >= partitionEnd) {
       overflows->push_back(inserted);
       return nullptr;
@@ -1054,8 +1065,8 @@ void HashTable<ignoreNullKeys>::insertForJoin(
     char** groups,
     uint64_t* hashes,
     int32_t numGroups,
-    int32_t partitionBegin,
-    int32_t partitionEnd,
+    PartitionBoundIndexType partitionBegin,
+    PartitionBoundIndexType partitionEnd,
     std::vector<char*>* overflow) {
   // The insertable rows are in the table, all get put in the hash
   // table or array.
@@ -1735,5 +1746,55 @@ void HashTable<ignoreNullKeys>::checkConsistency() const {
 
 template class HashTable<true>;
 template class HashTable<false>;
+
+void BaseHashTable::prepareForProbe(
+    HashLookup& lookup,
+    const RowVectorPtr& input,
+    SelectivityVector& rows,
+    bool ignoreNullKeys) {
+  auto& hashers = lookup.hashers;
+
+  for (auto& hasher : hashers) {
+    auto key = input->childAt(hasher->channel())->loadedVector();
+    hasher->decode(*key, rows);
+  }
+
+  if (ignoreNullKeys) {
+    // A null in any of the keys disables the row.
+    deselectRowsWithNulls(hashers, rows);
+  }
+
+  lookup.reset(rows.end());
+
+  bool rehash = false;
+  const auto mode = hashMode();
+  for (auto i = 0; i < hashers.size(); ++i) {
+    auto& hasher = hashers[i];
+    if (mode != BaseHashTable::HashMode::kHash) {
+      if (!hasher->computeValueIds(rows, lookup.hashes)) {
+        rehash = true;
+      }
+    } else {
+      hasher->hash(rows, i > 0, lookup.hashes);
+    }
+  }
+
+  if (rehash || capacity() == 0) {
+    if (mode != BaseHashTable::HashMode::kHash) {
+      decideHashMode(input->size());
+      // Do not forward 'ignoreNullKeys' to avoid redundant evaluation of
+      // deselectRowsWithNulls.
+      prepareForProbe(lookup, input, rows, false);
+      return;
+    }
+  }
+
+  if (rows.isAllSelected()) {
+    std::iota(lookup.rows.begin(), lookup.rows.end(), 0);
+  } else {
+    lookup.rows.clear();
+    rows.applyToSelected([&](auto row) { lookup.rows.push_back(row); });
+  }
+}
 
 } // namespace facebook::velox::exec

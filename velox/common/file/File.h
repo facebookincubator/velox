@@ -37,32 +37,54 @@
 #include <folly/futures/Future.h>
 
 #include "velox/common/base/Exceptions.h"
+#include "velox/common/file/Region.h"
 
 namespace facebook::velox {
 
-// A read-only file.
+// A read-only file.  All methods in this object should be thread safe.
 class ReadFile {
  public:
   virtual ~ReadFile() = default;
 
   // Reads the data at [offset, offset + length) into the provided pre-allocated
   // buffer 'buf'. The bytes are returned as a string_view pointing to 'buf'.
+  //
+  // This method should be thread safe.
   virtual std::string_view
   pread(uint64_t offset, uint64_t length, void* FOLLY_NONNULL buf) const = 0;
 
   // Same as above, but returns owned data directly.
+  //
+  // This method should be thread safe.
   virtual std::string pread(uint64_t offset, uint64_t length) const;
 
   // Reads starting at 'offset' into the memory referenced by the
   // Ranges in 'buffers'. The buffers are filled left to right. A
   // buffer with nullptr data will cause its size worth of bytes to be skipped.
+  //
+  // This method should be thread safe.
   virtual uint64_t preadv(
       uint64_t /*offset*/,
       const std::vector<folly::Range<char*>>& /*buffers*/) const;
 
+  // Vectorized read API. Implementations can coalesce and parallelize.
+  // The offsets don't need to be sorted.
+  // `iobufs` is a range of IOBufs to store the read data. They
+  // will be stored in the same order as the input `regions` vector. So the
+  // array must be pre-allocated by the caller, with the same size as `regions`,
+  // but don't need to be initialized, since each iobuf will be copy-constructed
+  // by the preadv.
+  //
+  // This method should be thread safe.
+  virtual void preadv(
+      folly::Range<const common::Region*> regions,
+      folly::Range<folly::IOBuf*> iobufs) const;
+
   // Like preadv but may execute asynchronously and returns the read
   // size or exception via SemiFuture. Use hasPreadvAsync() to check
   // if the implementation is in fact asynchronous.
+  //
+  // This method should be thread safe.
   virtual folly::SemiFuture<uint64_t> preadvAsync(
       uint64_t offset,
       const std::vector<folly::Range<char*>>& buffers) const {
@@ -246,8 +268,12 @@ class LocalReadFile final : public ReadFile {
 
 class LocalWriteFile final : public WriteFile {
  public:
-  // An error is thrown is a file already exists at |path|.
-  explicit LocalWriteFile(std::string_view path);
+  // An error is thrown is a file already exists at |path|,
+  // unless flag shouldThrowOnFileAlreadyExists is false
+  explicit LocalWriteFile(
+      std::string_view path,
+      bool shouldCreateParentDirectories = false,
+      bool shouldThrowOnFileAlreadyExists = true);
   ~LocalWriteFile();
 
   void append(std::string_view data) final;

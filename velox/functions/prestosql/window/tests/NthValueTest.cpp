@@ -14,7 +14,8 @@
  * limitations under the License.
  */
 #include "velox/common/base/tests/GTestUtils.h"
-#include "velox/functions/prestosql/window/tests/WindowTestBase.h"
+#include "velox/functions/lib/window/tests/WindowTestBase.h"
+#include "velox/functions/prestosql/window/WindowFunctionsRegistration.h"
 #include "velox/vector/fuzzer/VectorFuzzer.h"
 
 using namespace facebook::velox::exec::test;
@@ -33,6 +34,11 @@ class NthValueTest : public WindowTestBase {
   explicit NthValueTest(const std::string& overClause)
       : overClause_(overClause) {}
 
+  void SetUp() override {
+    WindowTestBase::SetUp();
+    window::prestosql::registerAllWindowFunctions();
+  }
+
   // These tests have all important variations of the (nth|first|last)_value
   // function invocations to be tested per (dataset, partition, frame) clause
   // combination. The following types of datasets are tested with this utility
@@ -49,22 +55,22 @@ class NthValueTest : public WindowTestBase {
     // This function invocation gets the column value of the 10th
     // frame row. Many tests have < 10 rows per partition. so the function
     // is expected to return null for such offsets.
-    testWindowFunction(input, "nth_value(c0, 10)");
+    testWindowFunction(input, "nth_value(c0, 10)", false);
 
     // This test gets the nth_value offset from a column c2. The offsets could
     // be outside the partition also. The error cases for -ve offset values
     // are tested separately.
-    testWindowFunction(input, "nth_value(c3, c2)");
+    testWindowFunction(input, "nth_value(c3, c2)", false);
 
     // The first_value, last_value functions are tested for columns c0, c1, and
     // c2, which contain data with different distributions.
-    testWindowFunction(input, "first_value(c0)");
-    testWindowFunction(input, "first_value(c1)");
-    testWindowFunction(input, "first_value(c2)");
+    testWindowFunction(input, "first_value(c0)", false);
+    testWindowFunction(input, "first_value(c1)", false);
+    testWindowFunction(input, "first_value(c2)", false);
 
-    testWindowFunction(input, "last_value(c0)");
-    testWindowFunction(input, "last_value(c1)");
-    testWindowFunction(input, "last_value(c2)");
+    testWindowFunction(input, "last_value(c0)", false);
+    testWindowFunction(input, "last_value(c1)", false);
+    testWindowFunction(input, "last_value(c2)", false);
   }
 
   // This is for testing different output column types in the
@@ -75,7 +81,7 @@ class NthValueTest : public WindowTestBase {
         makeFlatVector<int32_t>(size, [](auto row) { return row % 5; }),
         makeFlatVector<int32_t>(size, [](auto row) { return row; }),
         makeFlatVector<int64_t>(size, [](auto row) { return row % 3 + 1; }),
-        makeFlatVector<int64_t>(size, [](auto row) { return row % 3 + 1; }),
+        makeFlatVector<int64_t>(size, [](auto row) { return row % 3; }),
         // Note : The Fuzz vector used in nth_value can have null values.
         makeRandomInputVector(type, size, 0.3),
     });
@@ -90,22 +96,23 @@ class NthValueTest : public WindowTestBase {
     WindowTestBase::testWindowFunction(
         {vectors}, "nth_value(c4, 1)", {newOverClause}, kFrameClauses);
     WindowTestBase::testWindowFunction(
-        {vectors}, "nth_value(c4, 7)", {newOverClause}, kFrameClauses);
+        {vectors}, "nth_value(c4, 7)", {newOverClause}, kFrameClauses, false);
     WindowTestBase::testWindowFunction(
-        {vectors}, "nth_value(c4, c2)", {newOverClause}, kFrameClauses);
+        {vectors}, "nth_value(c4, c2)", {newOverClause}, kFrameClauses, false);
 
     WindowTestBase::testWindowFunction(
-        {vectors}, "first_value(c4)", {newOverClause}, kFrameClauses);
+        {vectors}, "first_value(c4)", {newOverClause}, kFrameClauses, false);
     WindowTestBase::testWindowFunction(
-        {vectors}, "last_value(c4)", {newOverClause}, kFrameClauses);
+        {vectors}, "last_value(c4)", {newOverClause}, kFrameClauses, false);
   }
 
  private:
   void testWindowFunction(
       const std::vector<RowVectorPtr>& input,
-      const std::string& function) {
+      const std::string& function,
+      bool createDuckDBTable = true) {
     WindowTestBase::testWindowFunction(
-        input, function, {overClause_}, kFrameClauses);
+        input, function, {overClause_}, kFrameClauses, createDuckDBTable);
   }
 
   const std::string overClause_;
@@ -118,24 +125,20 @@ class MultiNthValueTest : public NthValueTest,
 };
 
 TEST_P(MultiNthValueTest, basic) {
-  testValueFunctions({makeSimpleVector(50)});
+  testValueFunctions({makeSimpleVector(40)});
 }
 
 TEST_P(MultiNthValueTest, singlePartition) {
-  testValueFunctions({makeSinglePartitionVector(50)});
-}
-
-TEST_P(MultiNthValueTest, multiInput) {
   testValueFunctions(
-      {makeSinglePartitionVector(50), makeSinglePartitionVector(75)});
+      {makeSinglePartitionVector(40), makeSinglePartitionVector(50)});
 }
 
 TEST_P(MultiNthValueTest, singleRowPartitions) {
-  testValueFunctions({makeSingleRowPartitionsVector((50))});
+  testValueFunctions({makeSingleRowPartitionsVector((30))});
 }
 
 TEST_P(MultiNthValueTest, randomInput) {
-  testValueFunctions({makeRandomInputVector((50))});
+  testValueFunctions({makeRandomInputVector((25))});
 }
 
 TEST_P(MultiNthValueTest, integerValues) {
@@ -224,7 +227,7 @@ TEST_F(NthValueTest, invalidFrames) {
   auto vectors = makeRowVector({
       makeFlatVector<int32_t>(size, [](auto /* row */) { return 1; }),
       makeFlatVector<int32_t>(size, [](auto row) { return row % 50; }),
-      makeFlatVector<int64_t>(size, [](auto row) { return row % 5; }),
+      makeFlatVector<int64_t>(size, [](auto /* row */) { return -9; }),
   });
 
   std::string overClause = "partition by c0 order by c1";
@@ -232,14 +235,41 @@ TEST_F(NthValueTest, invalidFrames) {
       {vectors},
       "nth_value(c0, 5)",
       overClause,
-      "rows between 0 preceding and current row",
-      "k in frame bounds must be at least 1");
+      "rows between -1 preceding and current row",
+      "Window frame -1 offset must not be negative");
   assertWindowFunctionError(
       {vectors},
       "nth_value(c0, 5)",
       overClause,
       "rows between c2 preceding and current row",
-      "k in frame bounds must be at least 1");
+      "Window frame -9 offset must not be negative");
+}
+
+TEST_F(NthValueTest, int32FrameOffset) {
+  vector_size_t size = 100;
+  WindowTestBase::options_.parseIntegerAsBigint = false;
+
+  auto vectors = makeRowVector({
+      makeFlatVector<int32_t>(size, [](auto row) { return row % 5; }),
+      makeFlatVector<int32_t>(size, [](auto row) { return row % 50; }),
+      makeFlatVector<int64_t>(
+          size, [](auto row) { return row % 3 + 1; }, nullEvery(5)),
+      makeFlatVector<int32_t>(size, [](auto row) { return row % 50; }),
+  });
+
+  const std::vector<std::string> kPartitionClauses = {
+      "partition by c0 order by c1 nulls first, c2, c3",
+      "partition by c0, c2 order by c1 nulls first, c3",
+      "partition by c0 order by c1 desc, c2, c3",
+      "partition by c0, c2 order by c1 desc nulls first, c3",
+  };
+  WindowTestBase::testWindowFunction(
+      {vectors},
+      "nth_value(c0, c2)",
+      kPartitionClauses,
+      {"rows between 5 preceding and current row"});
+
+  WindowTestBase::options_.parseIntegerAsBigint = true;
 }
 
 }; // namespace

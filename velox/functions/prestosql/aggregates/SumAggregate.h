@@ -16,9 +16,11 @@
 #pragma once
 
 #include "velox/expression/FunctionSignature.h"
-#include "velox/functions/lib/SimpleNumericAggregate.h"
+#include "velox/functions/lib/aggregates/SimpleNumericAggregate.h"
 #include "velox/functions/prestosql/CheckedArithmeticImpl.h"
 #include "velox/functions/prestosql/aggregates/DecimalAggregate.h"
+
+using namespace facebook::velox::functions::aggregate;
 
 namespace facebook::velox::aggregate::prestosql {
 
@@ -169,13 +171,12 @@ class SumAggregate
 };
 
 template <typename TInputType>
-class DecimalSumAggregate
-    : public DecimalAggregate<UnscaledLongDecimal, TInputType> {
+class DecimalSumAggregate : public DecimalAggregate<int128_t, TInputType> {
  public:
   explicit DecimalSumAggregate(TypePtr resultType)
-      : DecimalAggregate<UnscaledLongDecimal, TInputType>(resultType) {}
+      : DecimalAggregate<int128_t, TInputType>(resultType) {}
 
-  virtual UnscaledLongDecimal computeFinalValue(
+  virtual int128_t computeFinalValue(
       LongDecimalWithOverflowState* accumulator) final {
     // Value is valid if the conditions below are true.
     int128_t sum = accumulator->sum;
@@ -188,13 +189,13 @@ class DecimalSumAggregate
       VELOX_CHECK(accumulator->overflow == 0, "Decimal overflow");
     }
 
-    VELOX_CHECK(UnscaledLongDecimal::valueInRange(sum), "Decimal overflow");
-    return UnscaledLongDecimal(sum);
+    DecimalUtil::valueInRange(sum);
+    return sum;
   }
 };
 
 template <template <typename U, typename V, typename W> class T>
-bool registerSum(const std::string& name) {
+exec::AggregateRegistrationResult registerSum(const std::string& name) {
   std::vector<std::shared_ptr<exec::AggregateFunctionSignature>> signatures{
       exec::AggregateFunctionSignatureBuilder()
           .returnType("real")
@@ -229,7 +230,9 @@ bool registerSum(const std::string& name) {
       [name](
           core::AggregationNode::Step step,
           const std::vector<TypePtr>& argTypes,
-          const TypePtr& resultType) -> std::unique_ptr<exec::Aggregate> {
+          const TypePtr& resultType,
+          const core::QueryConfig& /*config*/)
+          -> std::unique_ptr<exec::Aggregate> {
         VELOX_CHECK_EQ(argTypes.size(), 1, "{} takes only one argument", name);
         auto inputType = argTypes[0];
         switch (inputType->kind()) {
@@ -239,8 +242,19 @@ bool registerSum(const std::string& name) {
             return std::make_unique<T<int16_t, int64_t, int64_t>>(BIGINT());
           case TypeKind::INTEGER:
             return std::make_unique<T<int32_t, int64_t, int64_t>>(BIGINT());
-          case TypeKind::BIGINT:
+          case TypeKind::BIGINT: {
+            if (inputType->isShortDecimal()) {
+              return std::make_unique<DecimalSumAggregate<int64_t>>(resultType);
+            }
             return std::make_unique<T<int64_t, int64_t, int64_t>>(BIGINT());
+          }
+          case TypeKind::HUGEINT: {
+            if (inputType->isLongDecimal()) {
+              return std::make_unique<DecimalSumAggregate<int128_t>>(
+                  resultType);
+            }
+            VELOX_NYI();
+          }
           case TypeKind::REAL:
             if (resultType->kind() == TypeKind::REAL) {
               return std::make_unique<T<float, double, float>>(resultType);
@@ -251,16 +265,11 @@ bool registerSum(const std::string& name) {
               return std::make_unique<T<double, double, float>>(resultType);
             }
             return std::make_unique<T<double, double, double>>(DOUBLE());
-          case TypeKind::SHORT_DECIMAL:
-            return std::make_unique<DecimalSumAggregate<UnscaledShortDecimal>>(
-                resultType);
           case TypeKind::VARBINARY:
-          // Always use UnscaledLongDecimal template for Varbinary as the result
-          // type is either UnscaledLongDecimal or
-          // UnscaledLongDecimalWithOverflowState.
-          case TypeKind::LONG_DECIMAL:
-            return std::make_unique<DecimalSumAggregate<UnscaledLongDecimal>>(
-                resultType);
+            // Always use int128_t template for Varbinary as the result
+            // type is either int128_t or
+            // UnscaledLongDecimalWithOverflowState.
+            return std::make_unique<DecimalSumAggregate<int128_t>>(resultType);
 
           default:
             VELOX_CHECK(

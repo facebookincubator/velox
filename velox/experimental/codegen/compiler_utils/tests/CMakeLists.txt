@@ -29,11 +29,10 @@ target_link_libraries(
   velox_transform_utils
   velox_codegen_proto
   velox_exception
-  ${Boost_FILESYSTEM_LIBRARIES}
+  Boost::filesystem
   gtest
   gtest_main
-  ${FOLLY_WITH_DEPENDENCIES}
-  ${DOUBLE_CONVERSION}
+  Folly::folly
   gflags::gflags
   glog::glog
-  ${FMT})
+  fmt::fmt)

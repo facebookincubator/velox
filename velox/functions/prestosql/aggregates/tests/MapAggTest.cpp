@@ -13,10 +13,12 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-#include "velox/functions/prestosql/aggregates/tests/AggregationTestBase.h"
+#include "velox/exec/tests/utils/AssertQueryBuilder.h"
+#include "velox/functions/lib/aggregates/tests/AggregationTestBase.h"
 
 using namespace facebook::velox::exec;
 using namespace facebook::velox::exec::test;
+using namespace facebook::velox::functions::aggregate::test;
 
 namespace facebook::velox::aggregate::test {
 
@@ -206,6 +208,24 @@ TEST_F(MapAggTest, selectiveMaskWithDuplicates) {
                   .singleAggregation({"c0"}, {"map_agg(c1, c2)"}, {"c3"})
                   .planNode();
   assertQuery(plan, {expectedResult});
+}
+
+TEST_F(MapAggTest, stringLifeCycle) {
+  vector_size_t num = 10;
+  std::vector<std::string> s(num);
+  for (int i = 0; i < num; ++i) {
+    s[i] = std::string(StringView::kInlineSize + 1, 'a' + i);
+  }
+  auto vectors = {makeRowVector(
+      {makeFlatVector<StringView>(
+           num, [&](vector_size_t i) { return StringView(s[i]); }),
+       makeFlatVector<double>(num, [](vector_size_t i) { return i + 0.05; })})};
+  auto expectedResult = makeRowVector({makeMapVector<StringView, double>(
+      1,
+      [&](vector_size_t /*row*/) { return num; },
+      [&](vector_size_t i) { return StringView(s[i]); },
+      [&](vector_size_t i) { return i + 0.05; })});
+  testReadFromFiles(vectors, {}, {"map_agg(c0, c1)"}, {expectedResult});
 }
 
 } // namespace

@@ -31,6 +31,9 @@ namespace velox {
 template <typename T>
 class DictionaryVector : public SimpleVector<T> {
  public:
+  DictionaryVector(const DictionaryVector&) = delete;
+  DictionaryVector& operator=(const DictionaryVector&) = delete;
+
   static constexpr bool can_simd = std::is_same_v<T, int64_t>;
 
   // Creates dictionary vector using base vector (dictionaryValues) and a set
@@ -106,7 +109,7 @@ class DictionaryVector : public SimpleVector<T> {
     return indices_;
   }
 
-  VectorPtr valueVector() const override {
+  const VectorPtr& valueVector() const override {
     return dictionaryValues_;
   }
 
@@ -187,7 +190,8 @@ class DictionaryVector : public SimpleVector<T> {
   /// If setNotNull is false then the values and isNull is undefined.
   void resize(vector_size_t size, bool setNotNull = true) override {
     if (size > BaseVector::length_) {
-      BaseVector::resizeIndices(size, 0, &indices_, &rawIndices_);
+      this->resizeIndices(size, &indices_, &rawIndices_);
+      this->clearIndices(indices_, BaseVector::length_, size);
     }
 
     BaseVector::resize(size, setNotNull);
