@@ -260,6 +260,12 @@ TEST_F(ProbabilityTest, weibullCDF) {
   VELOX_ASSERT_THROW(weibullCDF(3, 0, 0.5), "b must be greater than 0");
   VELOX_ASSERT_THROW(weibullCDF(kNan, 3.0, 0.5), "a must be greater than 0");
   VELOX_ASSERT_THROW(weibullCDF(3.0, kNan, 0.5), "b must be greater than 0");
+  VELOX_ASSERT_THROW(weibullCDF(-1.0, 1.0, 30.0), "a must be greater than 0");
+  VELOX_ASSERT_THROW(weibullCDF(1.0, -1.0, 40.0), "b must be greater than 0");
+  VELOX_ASSERT_THROW(
+      weibullCDF(kNan, kDoubleMin, kDoubleMax), "a must be greater than 0");
+  VELOX_ASSERT_THROW(
+      weibullCDF(kDoubleMin, kNan, kDoubleMax), "b must be greater than 0");
 }
 
 } // namespace
