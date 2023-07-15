@@ -206,20 +206,17 @@ TEST_F(DateTimeFunctionsTest, dateSub) {
   const auto dateSubInt32 = [&](std::optional<int32_t> date,
                                 std::optional<int32_t> value) {
     return evaluateOnce<int32_t, int32_t>(
-        "date_sub(c0, c1)", {date, value},
-       	{DATE(), INTEGER()});
+        "date_sub(c0, c1)", {date, value}, {DATE(), INTEGER()});
   };
   const auto dateSubInt16 = [&](std::optional<int32_t> date,
                                 std::optional<int16_t> value) {
     return evaluateOnce<int32_t, int32_t>(
-        "date_sub(c0, c1)", {date, value},
-       	{DATE(), INTEGER()});
+        "date_sub(c0, c1)", {date, value}, {DATE(), INTEGER()});
   };
   const auto dateSubInt8 = [&](std::optional<int32_t> date,
                                std::optional<int8_t> value) {
     return evaluateOnce<int32_t, int32_t>(
-        "date_sub(c0, c1)", {date, value},
-       	{DATE(), INTEGER()});
+        "date_sub(c0, c1)", {date, value}, {DATE(), INTEGER()});
   };
 
   // Check null behaviors.
