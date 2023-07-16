@@ -18,8 +18,8 @@
 #include "velox/common/base/Exceptions.h"
 #include "velox/common/memory/HashStringAllocator.h"
 #include "velox/exec/Aggregate.h"
+#include "velox/exec/Strings.h"
 #include "velox/functions/prestosql/aggregates/AggregateNames.h"
-#include "velox/functions/prestosql/aggregates/Strings.h"
 #include "velox/vector/FlatVector.h"
 
 namespace facebook::velox::aggregate::prestosql {
@@ -91,14 +91,6 @@ struct StringViewAccumulator {
       vector_size_t index,
       HashStringAllocator* allocator) {
     auto value = decoded.valueAt<StringView>(index);
-    if (!value.isInline()) {
-      auto it = base.values.find(value);
-      if (it != base.values.end()) {
-        value = it->first;
-      } else {
-        value = strings.append(value, *allocator);
-      }
-    }
     base.values[store(value, allocator)]++;
   }
 

@@ -14,8 +14,8 @@
  * limitations under the License.
  */
 #include "velox/exec/Aggregate.h"
+#include "velox/exec/SetAccumulator.h"
 #include "velox/functions/prestosql/aggregates/AggregateNames.h"
-#include "velox/functions/prestosql/aggregates/SetAccumulator.h"
 #include "velox/vector/FlatVector.h"
 
 namespace facebook::velox::aggregate::prestosql {
@@ -28,7 +28,7 @@ class SetBaseAggregate : public exec::Aggregate {
   explicit SetBaseAggregate(const TypePtr& resultType)
       : exec::Aggregate(resultType) {}
 
-  using AccumulatorType = typename SetAccumulatorTypeTraits<T>::AccumulatorType;
+  using AccumulatorType = SetAccumulator<T>;
 
   int32_t accumulatorFixedWidthSize() const override {
     return sizeof(AccumulatorType);
