@@ -170,6 +170,72 @@ class GCSReadFile final : public ReadFile {
   std::atomic<int64_t> length_ = -1;
 };
 
+class GCSWriteFile final : public WriteFile {
+ public:
+  explicit GCSWriteFile(std::string path, std::shared_ptr<gcs::Client> client)
+      : client_(client) {
+    setBucketAndKeyFromGCSPath(path, bucket_, key_);
+  }
+
+  ~GCSWriteFile() {
+    close();
+  }
+
+  void initialize() {
+    // Make it a no-op if invoked twice.
+    if (size_ != -1) {
+      return;
+    }
+
+    // check that it doesn't exist , if it does throw an error
+    gc::StatusOr<gcs::ObjectMetadata> object_metadata =
+        client_->GetObjectMetadata(bucket_, key_);
+
+    if (object_metadata) {
+      VELOX_CHECK(false, "File already exists");
+    }
+
+    auto stream = client_->WriteObject(bucket_, key_);
+    checkGCSStatus(
+        stream.last_status(),
+        "Failed to open GCS object for writing",
+        bucket_,
+        key_);
+    stream_ = std::move(stream);
+    size_ = 0;
+  }
+
+  void append(std::string_view data) {
+    VELOX_CHECK((!closed_ && stream_.IsOpen()), "File is closed");
+    stream_ << data;
+    size_ += data.size();
+  }
+
+  void flush() {
+    if (!closed_ && stream_.IsOpen()) {
+      stream_.flush();
+    }
+  }
+
+  void close() {
+    if (!closed_ && stream_.IsOpen()) {
+      stream_.Close();
+      closed_ = true;
+    }
+  }
+
+  uint64_t size() const {
+    return size_;
+  }
+
+ private:
+  gcs::ObjectWriteStream stream_;
+  std::shared_ptr<gcs::Client> client_;
+  std::string bucket_;
+  std::string key_;
+  std::atomic<int64_t> size_{-1};
+  bool closed_{false};
+};
 } // namespace
 
 namespace filesystems {
@@ -241,7 +307,10 @@ std::unique_ptr<ReadFile> GCSFileSystem::openFileForRead(
 std::unique_ptr<WriteFile> GCSFileSystem::openFileForWrite(
     std::string_view path,
     const FileOptions& /*unused*/) {
-  VELOX_NYI();
+  const std::string gcspath = gcsPath(path);
+  auto gcsfile = std::make_unique<GCSWriteFile>(gcspath, impl_->getClient());
+  gcsfile->initialize();
+  return gcsfile;
 }
 
 void GCSFileSystem::remove(std::string_view path) {

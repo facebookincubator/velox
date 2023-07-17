@@ -210,6 +210,56 @@ TEST_F(GCSFileSystemTest, readFile) {
   ASSERT_EQ(std::string_view(buff3, sizeof(buff3)), kLoremIpsum.substr(80, 30));
 }
 
+TEST_F(GCSFileSystemTest, writeAndReadFile) {
+  const std::string newFile = "readWriteFile.txt";
+  const std::string gcsFile = gcsURI(preexistingBucketName(), newFile);
+
+  filesystems::GCSFileSystem gcfs(testGcsOptions());
+  gcfs.initializeClient();
+  auto writeFile = gcfs.openFileForWrite(gcsFile);
+  std::string dataContent =
+      "Dance me to your beauty with a burning violin"
+      "Dance me through the panic till I'm gathered safely in"
+      "Lift me like an olive branch and be my homeward dove"
+      "Dance me to the end of love";
+
+  EXPECT_EQ(writeFile->size(), 0);
+  std::int64_t contentSize = dataContent.length();
+  writeFile->append(dataContent.substr(0, 10));
+  EXPECT_EQ(writeFile->size(), 10);
+  writeFile->append(dataContent.substr(10, contentSize - 10));
+  EXPECT_EQ(writeFile->size(), contentSize);
+  writeFile->flush();
+  writeFile->close();
+
+  try {
+    writeFile->append(dataContent.substr(0, 10));
+    FAIL() << "Expected VeloxException";
+  } catch (VeloxException const& err) {
+    EXPECT_EQ(err.message(), std::string("File is closed"));
+  }
+
+  auto readFile = gcfs.openFileForRead(gcsFile);
+  std::int64_t size = readFile->size();
+  EXPECT_EQ(readFile->size(), contentSize);
+  EXPECT_EQ(readFile->pread(0, size), dataContent);
+}
+
+TEST_F(GCSFileSystemTest, openExistingFileForWrite) {
+  const std::string newFile = "readWriteFile.txt";
+  const std::string gcsFile = gcsURI(preexistingBucketName(), newFile);
+
+  filesystems::GCSFileSystem gcfs(testGcsOptions());
+  gcfs.initializeClient();
+
+  try {
+    auto writeFile = gcfs.openFileForWrite(gcsFile);
+    FAIL() << "Expected VeloxException";
+  } catch (VeloxException const& err) {
+    EXPECT_EQ(err.message(), std::string("File already exists"));
+  }
+}
+
 TEST_F(GCSFileSystemTest, renameNotImplemented) {
   const char* file = "newTest.txt";
   const std::string gcsExistingFile =
