@@ -27,3 +27,16 @@ target_link_libraries(
   Folly::folly
   ${FOLLY_BENCHMARK}
   gflags::gflags)
+
+add_executable(velox_aggregates_average_benchmark
+               AverageBenchmark.cpp)
+
+target_link_libraries(
+  velox_aggregates_average_benchmark
+  velox_aggregates
+  velox_exec
+  velox_exec_test_lib
+  velox_vector_test_lib
+  Folly::folly
+  ${FOLLY_BENCHMARK}
+  gflags::gflags)
