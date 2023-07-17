@@ -460,9 +460,9 @@ uint64_t Operator::MemoryReclaimer::reclaim(
       driver->state().isTerminated);
   VELOX_CHECK(driver->task()->pauseRequested());
 
-  int64_t before = pool->reservedBytes();
+  int64_t before = pool->root()->reservedBytes();
   op_->reclaim(targetBytes);
-  int64_t after = pool->reservedBytes();
+  int64_t after = pool->root()->reservedBytes();
   VELOX_CHECK_LE(after, before)
   return before - after;
 }
