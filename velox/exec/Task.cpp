@@ -413,7 +413,8 @@ bool Task::supportsSingleThreadedExecution() const {
   }
 
   std::vector<std::unique_ptr<DriverFactory>> driverFactories;
-  LocalPlanner::plan(planFragment_, nullptr, &driverFactories, 1);
+  LocalPlanner::plan(
+      planFragment_, nullptr, &driverFactories, queryCtx_->queryConfig(), 1);
 
   for (const auto& factory : driverFactories) {
     if (!factory->supportsSingleThreadedExecution()) {
@@ -450,7 +451,8 @@ RowVectorPtr Task::next(ContinueFuture* future) {
         "Single-threaded execution doesn't support delivering results to a "
         "callback");
 
-    LocalPlanner::plan(planFragment_, nullptr, &driverFactories_, 1);
+    LocalPlanner::plan(
+        planFragment_, nullptr, &driverFactories_, queryCtx_->queryConfig(), 1);
     exchangeClients_.resize(driverFactories_.size());
 
     // In Task::next() we always assume ungrouped execution.
@@ -576,6 +578,7 @@ void Task::start(
           self->planFragment_,
           self->consumerSupplier(),
           &self->driverFactories_,
+          self->queryCtx_->queryConfig(),
           maxDrivers);
 
       // Keep one exchange client per pipeline (NULL if not used).
@@ -1887,6 +1890,57 @@ std::string Task::toString() const {
   }
 
   return out.str();
+}
+
+std::string Task::toJsonString() const {
+  std::lock_guard<std::mutex> l(mutex_);
+  folly::dynamic obj = folly::dynamic::object;
+  obj["shortId"] = shortId(taskId_);
+  obj["id"] = taskId_;
+  obj["state"] = taskStateString(state_);
+  obj["numRunningDrivers"] = numRunningDrivers_;
+  obj["numTotalDrivers_"] = numTotalDrivers_;
+  obj["numFinishedDrivers"] = numFinishedDrivers_;
+  obj["numDriversPerSplitGroup"] = numDriversPerSplitGroup_;
+  obj["numDriversUngrouped"] = numDriversUngrouped_;
+  obj["groupedPartitionedOutput"] = groupedPartitionedOutput_;
+  obj["concurrentSplitGroups"] = concurrentSplitGroups_;
+  obj["numRunningSplitGroups"] = numRunningSplitGroups_;
+  obj["numDriversUngrouped"] = numDriversUngrouped_;
+  obj["partitionedOutputConsumed"] = partitionedOutputConsumed_;
+  obj["noMoreOutputBuffers"] = noMoreOutputBuffers_;
+  obj["numThreads"] = numThreads_;
+  obj["onThreadSince"] = std::to_string(onThreadSince_);
+  obj["terminateRequested_"] = std::to_string(terminateRequested_);
+
+  if (exception_) {
+    obj["exception"] = errorMessageLocked();
+  }
+
+  if (planFragment_.planNode) {
+    obj["plan"] = planFragment_.planNode->toString();
+  }
+
+  folly::dynamic driverObj = folly::dynamic::object;
+  int index = 0;
+  for (auto& driver : drivers_) {
+    driverObj[std::to_string(index++)] = driver ? driver->toString() : "null";
+  }
+  obj["drivers"] = driverObj;
+
+  if (auto buffers = bufferManager_.lock()) {
+    if (auto buffer = buffers->getBufferIfExists(taskId_)) {
+      obj["buffer"] = buffer->toString();
+    }
+  }
+
+  folly::dynamic exchangeClients = folly::dynamic::object;
+  for (const auto& [id, client] : exchangeClientByPlanNode_) {
+    exchangeClients[id] = client->toString();
+  }
+  obj["exchangeClientByPlanNode"] = exchangeClients;
+
+  return folly::toPrettyJson(obj);
 }
 
 std::shared_ptr<MergeSource> Task::addLocalMergeSource(

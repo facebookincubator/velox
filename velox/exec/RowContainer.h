@@ -36,7 +36,7 @@ class Accumulator {
       int32_t alignment,
       std::function<void(folly::Range<char**> groups)> destroyFunction);
 
-  Accumulator(Aggregate* aggregate);
+  explicit Accumulator(Aggregate* aggregate);
 
   bool isFixedSize() const;
 
@@ -67,7 +67,6 @@ using normalized_key_t = uint64_t;
 
 struct RowContainerIterator {
   int32_t allocationIndex = 0;
-  int32_t runIndex = 0;
   int32_t rowOffset = 0;
   // Number of unvisited entries that are prefixed by an uint64_t for
   // normalized key. Set in listRows() on first call.
@@ -77,7 +76,7 @@ struct RowContainerIterator {
   // Ordinal position of 'currentRow' in RowContainer.
   int32_t rowNumber{0};
   char* FOLLY_NULLABLE rowBegin{nullptr};
-  // First byte after the end of the PageRun containing 'currentRow'.
+  // First byte after the end of the range containing 'currentRow'.
   char* FOLLY_NULLABLE endOfRun{nullptr};
 
   // Returns the current row, skipping a possible normalized key below the first
@@ -310,6 +309,14 @@ class RowContainer {
       vector_size_t resultOffset,
       const VectorPtr& result);
 
+  /// Sets in result all locations with null values in col for rows
+  /// (for numRows number of rows).
+  static void extractNulls(
+      const char* FOLLY_NONNULL const* FOLLY_NONNULL rows,
+      int32_t numRows,
+      RowColumn col,
+      const BufferPtr& result);
+
   // Copies the values at 'columnIndex' into 'result' for the
   // 'numRows' rows pointed to by 'rows'. If an entry in 'rows' is null, sets
   //  corresponding row in 'result' to null.
@@ -348,6 +355,15 @@ class RowContainer {
       const VectorPtr& result) {
     extractColumn(
         rows, rowNumbers, columnAt(columnIndex), resultOffset, result);
+  }
+
+  /// Sets in result all locations with null values in columnIndex for rows.
+  void extractNulls(
+      const char* FOLLY_NONNULL const* FOLLY_NONNULL rows,
+      int32_t numRows,
+      int32_t columnIndex,
+      const BufferPtr& result) {
+    extractNulls(rows, numRows, columnAt(columnIndex), result);
   }
 
   /// Copies the 'probed' flags for the specified rows into 'result'.
@@ -389,69 +405,56 @@ class RowContainer {
       char* FOLLY_NONNULL* FOLLY_NONNULL rows) {
     int32_t count = 0;
     uint64_t totalBytes = 0;
-    VELOX_CHECK_EQ(rows_.numLargeAllocations(), 0);
-    auto numAllocations = rows_.numSmallAllocations();
-    if (iter->allocationIndex == 0 && iter->runIndex == 0 &&
-        iter->rowOffset == 0) {
+    auto numAllocations = rows_.numRanges();
+    if (iter->allocationIndex == 0 && iter->rowOffset == 0) {
       iter->normalizedKeysLeft = numRowsWithNormalizedKey_;
       iter->normalizedKeySize = originalNormalizedKeySize_;
     }
     int32_t rowSize = fixedRowSize_ +
         (iter->normalizedKeysLeft > 0 ? originalNormalizedKeySize_ : 0);
     for (auto i = iter->allocationIndex; i < numAllocations; ++i) {
-      auto allocation = rows_.allocationAt(i);
-      auto numRuns = allocation->numRuns();
-      for (auto runIndex = iter->runIndex; runIndex < numRuns; ++runIndex) {
-        memory::Allocation::PageRun run = allocation->runAt(runIndex);
-        auto* data =
-            run.data<char>() + memory::alignmentPadding(run.data(), alignment_);
-        int64_t limit;
-        if (i == numAllocations - 1 && runIndex == rows_.currentRunIndex()) {
-          limit = rows_.currentOffset();
-        } else {
-          limit = run.numPages() * memory::AllocationTraits::kPageSize;
+      auto range = rows_.rangeAt(i);
+      auto* data =
+          range.data() + memory::alignmentPadding(range.data(), alignment_);
+      auto limit = range.size();
+      auto row = iter->rowOffset;
+      while (row + rowSize <= limit) {
+        rows[count++] = data + row +
+            (iter->normalizedKeysLeft > 0 ? originalNormalizedKeySize_ : 0);
+        VELOX_DCHECK_EQ(
+            reinterpret_cast<uintptr_t>(rows[count - 1]) % alignment_, 0);
+        row += rowSize;
+        auto newTotalBytes = totalBytes + rowSize;
+        if (--iter->normalizedKeysLeft == 0) {
+          rowSize -= originalNormalizedKeySize_;
         }
-        auto row = iter->rowOffset;
-        while (row + rowSize <= limit) {
-          rows[count++] = data + row +
-              (iter->normalizedKeysLeft > 0 ? originalNormalizedKeySize_ : 0);
-          VELOX_DCHECK_EQ(
-              reinterpret_cast<uintptr_t>(rows[count - 1]) % alignment_, 0);
-          row += rowSize;
-          auto newTotalBytes = totalBytes + rowSize;
-          if (--iter->normalizedKeysLeft == 0) {
-            rowSize -= originalNormalizedKeySize_;
-          }
-          if (bits::isBitSet(rows[count - 1], freeFlagOffset_)) {
+        if (bits::isBitSet(rows[count - 1], freeFlagOffset_)) {
+          --count;
+          continue;
+        }
+        if constexpr (probeType == ProbeType::kNotProbed) {
+          if (bits::isBitSet(rows[count - 1], probedFlagOffset_)) {
             --count;
             continue;
           }
-          if constexpr (probeType == ProbeType::kNotProbed) {
-            if (bits::isBitSet(rows[count - 1], probedFlagOffset_)) {
-              --count;
-              continue;
-            }
-          }
-          if constexpr (probeType == ProbeType::kProbed) {
-            if (not(bits::isBitSet(rows[count - 1], probedFlagOffset_))) {
-              --count;
-              continue;
-            }
-          }
-          totalBytes = newTotalBytes;
-          if (rowSizeOffset_) {
-            totalBytes += variableRowSize(rows[count - 1]);
-          }
-          if (count == maxRows || totalBytes > maxBytes) {
-            iter->rowOffset = row;
-            iter->runIndex = runIndex;
-            iter->allocationIndex = i;
-            return count;
+        }
+        if constexpr (probeType == ProbeType::kProbed) {
+          if (not(bits::isBitSet(rows[count - 1], probedFlagOffset_))) {
+            --count;
+            continue;
           }
         }
-        iter->rowOffset = 0;
+        totalBytes = newTotalBytes;
+        if (rowSizeOffset_) {
+          totalBytes += variableRowSize(rows[count - 1]);
+        }
+        if (count == maxRows || totalBytes > maxBytes) {
+          iter->rowOffset = row;
+          iter->allocationIndex = i;
+          return count;
+        }
       }
-      iter->runIndex = 0;
+      iter->rowOffset = 0;
     }
     iter->allocationIndex = std::numeric_limits<int32_t>::max();
     return count;
@@ -582,7 +585,7 @@ class RowContainer {
   // reserved storage for variable length data.
   std::pair<uint64_t, uint64_t> freeSpace() const {
     return std::make_pair<uint64_t, uint64_t>(
-        rows_.availableInRun() / fixedRowSize_ + numFreeRows_,
+        rows_.freeBytes() / fixedRowSize_ + numFreeRows_,
         stringAllocator_.freeSpace());
   }
 
@@ -1133,7 +1136,7 @@ class RowContainer {
   char* FOLLY_NULLABLE firstFreeRow_ = nullptr;
   uint64_t numFreeRows_ = 0;
 
-  AllocationPool rows_;
+  memory::AllocationPool rows_;
   HashStringAllocator stringAllocator_;
 
   // Partition number for each row. Used only in parallel hash join build.
@@ -1277,6 +1280,29 @@ inline void RowContainer::extractColumn(
       column,
       resultOffset,
       result);
+}
+
+inline void RowContainer::extractNulls(
+    const char* FOLLY_NONNULL const* FOLLY_NONNULL rows,
+    int32_t numRows,
+    RowColumn column,
+    const BufferPtr& result) {
+  VELOX_DCHECK(result->size() >= bits::nbytes(numRows));
+  auto* rawResult = result->asMutable<uint64_t>();
+  bits::fillBits(rawResult, 0, numRows, false);
+
+  auto nullMask = column.nullMask();
+  if (!nullMask) {
+    return;
+  }
+
+  auto nullByte = column.nullByte();
+  for (int32_t i = 0; i < numRows; ++i) {
+    const char* row = rows[i];
+    if (row == nullptr || isNullAt(row, nullByte, nullMask)) {
+      bits::setBit(rawResult, i, true);
+    }
+  }
 }
 
 template <bool mayHaveNulls>

@@ -624,6 +624,85 @@ TEST_F(RowContainerTest, types) {
   EXPECT_LT(0, free.second);
 }
 
+TEST_F(RowContainerTest, extractNulls) {
+  constexpr int32_t kNumRows = 100;
+  auto batch = makeRowVector({
+      makeFlatVector<bool>(
+          kNumRows, [](auto row) { return row % 5 == 0; }, nullEvery(2)),
+      makeFlatVector<int8_t>(
+          kNumRows, [](auto row) { return row % 5; }, nullEvery(3)),
+      makeFlatVector<int16_t>(
+          kNumRows, [](auto row) { return row % 5; }, nullEvery(4)),
+      makeFlatVector<int32_t>(
+          kNumRows, [](auto row) { return row % 5; }, nullEvery(5)),
+      makeFlatVector<int64_t>(
+          kNumRows, [](auto row) { return row % 5; }, nullEvery(6)),
+      makeFlatVector<float>(
+          kNumRows, [](auto row) { return row % 5; }, nullEvery(7)),
+      makeFlatVector<double>(
+          kNumRows, [](auto row) { return row % 5; }, nullEvery(8)),
+      makeFlatVector<StringView>(
+          kNumRows,
+          [](auto /* row */) { return StringView("abcd"); },
+          nullEvery(9)),
+      makeArrayVector<int32_t>(
+          kNumRows,
+          [](auto i) { return i % 5; },
+          [](auto i) { return i % 10; },
+          nullEvery(10)),
+      makeMapVector<int32_t, int32_t>(
+          kNumRows,
+          [](auto i) { return i % 5; },
+          [](auto i) { return i % 10; },
+          [](auto i) { return i % 3; },
+          nullEvery(11)),
+      makeRowVector(
+          {"c0", "c1"},
+          {makeFlatVector<int32_t>(kNumRows, [](auto i) { return i % 5; }),
+           makeFlatVector<int32_t>(kNumRows, [](auto i) { return i % 7; })},
+          nullEvery(12)),
+  });
+
+  std::vector<TypePtr> rowType = {
+      BOOLEAN(),
+      TINYINT(),
+      SMALLINT(),
+      INTEGER(),
+      BIGINT(),
+      REAL(),
+      DOUBLE(),
+      VARCHAR(),
+      ARRAY(INTEGER()),
+      MAP(INTEGER(), INTEGER()),
+      ROW({INTEGER(), INTEGER()})};
+  auto data = makeRowContainer({}, rowType);
+  for (int i = 0; i < kNumRows; i++) {
+    data->newRow();
+  }
+
+  std::vector<char*> rows(kNumRows);
+  RowContainerIterator iter;
+  EXPECT_EQ(data->listRows(&iter, kNumRows, rows.data()), kNumRows);
+  SelectivityVector allRows(kNumRows);
+  for (int i = 0; i < batch->childrenSize(); i++) {
+    DecodedVector decoded(*batch->childAt(i), allRows);
+    for (auto j = 0; j < kNumRows; ++j) {
+      data->store(decoded, j, rows[j], i);
+    }
+  }
+
+  auto nulls = allocateNulls(kNumRows, pool());
+  auto rawNulls = nulls->as<uint64_t>();
+  for (int i = 0; i < 11; i++) {
+    data->extractNulls(rows.data(), kNumRows, i, nulls);
+
+    auto nullEvery = i + 2;
+    for (int j = 0; j < kNumRows; j += 1) {
+      EXPECT_EQ(bits::isBitSet(rawNulls, j), j % nullEvery == 0);
+    }
+  }
+}
+
 TEST_F(RowContainerTest, erase) {
   constexpr int32_t kNumRows = 100;
   auto data = makeRowContainer({SMALLINT()}, {SMALLINT()});
@@ -748,7 +827,7 @@ TEST_F(RowContainerTest, rowSizeWithNormalizedKey) {
 }
 
 TEST_F(RowContainerTest, estimateRowSize) {
-  auto numRows = 1000;
+  auto numRows = 200'000;
 
   // Make a RowContainer with a fixed-length key column and a variable-length
   // dependent column.
@@ -758,8 +837,10 @@ TEST_F(RowContainerTest, estimateRowSize) {
   // Store rows to the container.
   auto key =
       vectorMaker_.flatVector<int64_t>(numRows, [](auto row) { return row; });
-  auto dependent = vectorMaker_.flatVector<StringView>(numRows, [](auto row) {
-    return StringView::makeInline(fmt::format("str {}", row));
+  std::string str;
+  auto dependent = vectorMaker_.flatVector<StringView>(numRows, [&](auto row) {
+    str = fmt::format("string - {}", row);
+    return StringView(str);
   });
   SelectivityVector allRows(numRows);
   DecodedVector decodedKey(*key, allRows);
@@ -769,6 +850,10 @@ TEST_F(RowContainerTest, estimateRowSize) {
     rowContainer->store(decodedKey, i, row, 0);
     rowContainer->store(decodedDependent, i, row, 1);
   }
+  EXPECT_EQ(37, rowContainer->fixedRowSize());
+  EXPECT_EQ(64, rowContainer->estimateRowSize());
+  // 2*2MB huge page size blocks + 4 * 64K small allocations.
+  EXPECT_EQ(0x440000, rowContainer->stringAllocator().retainedSize());
 }
 
 class AggregateWithAlignment : public Aggregate {

@@ -17,6 +17,7 @@
 
 #include "velox/exec/AggregateInfo.h"
 #include "velox/exec/AggregationMasks.h"
+#include "velox/exec/DistinctAggregations.h"
 #include "velox/exec/HashTable.h"
 #include "velox/exec/SortedAggregations.h"
 #include "velox/exec/Spiller.h"
@@ -207,6 +208,7 @@ class GroupingSet {
   std::vector<AggregateInfo> aggregates_;
   AggregationMasks masks_;
   std::unique_ptr<SortedAggregations> sortedAggregations_;
+  std::vector<std::unique_ptr<DistinctAggregations>> distinctAggregations_;
 
   const bool ignoreNullKeys_;
 
@@ -235,7 +237,7 @@ class GroupingSet {
   // Used to allocate memory for a single row accumulating results of global
   // aggregation
   HashStringAllocator stringAllocator_;
-  AllocationPool rows_;
+  memory::AllocationPool rows_;
   const bool isAdaptive_;
 
   bool noMoreInput_{false};

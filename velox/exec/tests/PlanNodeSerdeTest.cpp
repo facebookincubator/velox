@@ -79,6 +79,14 @@ TEST_F(PlanNodeSerdeTest, aggregation) {
              .planNode();
 
   testSerde(plan);
+
+  // Aggregation over distinct inputs.
+  plan = PlanBuilder()
+             .values({data_})
+             .singleAggregation({"c0"}, {"sum(distinct c1)", "avg(c1)"})
+             .planNode();
+
+  testSerde(plan);
 }
 
 TEST_F(PlanNodeSerdeTest, assignUniqueId) {
@@ -162,7 +170,10 @@ TEST_F(PlanNodeSerdeTest, groupId) {
 }
 
 TEST_F(PlanNodeSerdeTest, localPartition) {
-  auto plan = PlanBuilder().values({data_}).localPartition({}).planNode();
+  auto plan = PlanBuilder()
+                  .values({data_})
+                  .localPartition(std::vector<std::string>{})
+                  .planNode();
   testSerde(plan);
 
   plan = PlanBuilder().values({data_}).localPartition({"c0", "c1"}).planNode();
@@ -459,12 +470,80 @@ TEST_F(PlanNodeSerdeTest, write) {
           tableColumnNames, tableColumnTypes, {"c2"}, locationHandle);
   auto insertHandle =
       std::make_shared<core::InsertTableHandle>("id", hiveInsertTableHandle);
+
+  core::TypedExprPtr inputField =
+      std::make_shared<const core::FieldAccessTypedExpr>(BIGINT(), "c0");
+  auto callExpr = std::make_shared<const core::CallTypedExpr>(
+      BIGINT(),
+      std::vector<core::TypedExprPtr>{inputField},
+      "presto.default.min");
+  std::vector<std::string> aggregateNames = {"min"};
+  std::vector<core::AggregationNode::Aggregate> aggregates = {
+      core::AggregationNode::Aggregate{callExpr, nullptr, {}, {}}};
+  auto aggregationNode = std::make_shared<core::AggregationNode>(
+      core::PlanNodeId(),
+      core::AggregationNode::Step::kPartial,
+      std::vector<core::FieldAccessTypedExprPtr>{},
+      std::vector<core::FieldAccessTypedExprPtr>{},
+      aggregateNames,
+      aggregates,
+      false, // ignoreNullKeys
+      planBuilder.planNode());
   auto plan = planBuilder
                   .tableWrite(
                       tableColumnNames,
+                      aggregationNode,
                       insertHandle,
-                      connector::CommitStrategy::kTaskCommit,
-                      "rows")
+                      false,
+                      connector::CommitStrategy::kTaskCommit)
+                  .planNode();
+  testSerde(plan);
+}
+
+TEST_F(PlanNodeSerdeTest, tableWriteMerge) {
+  auto rowTypePtr = ROW({"c0", "c1", "c2"}, {BIGINT(), BOOLEAN(), VARBINARY()});
+  auto planBuilder =
+      PlanBuilder(pool_.get()).tableScan(rowTypePtr, {"c1 = true"}, "c0 < 100");
+  planBuilder.planNode();
+  auto tableColumnNames = std::vector<std::string>{"c0", "c1", "c2"};
+  auto tableColumnTypes =
+      std::vector<TypePtr>{BIGINT(), BOOLEAN(), VARBINARY()};
+  auto locationHandle = exec::test::HiveConnectorTestBase::makeLocationHandle(
+      "targetDirectory",
+      std::optional("writeDirectory"),
+      connector::hive::LocationHandle::TableType::kNew);
+  auto hiveInsertTableHandle =
+      exec::test::HiveConnectorTestBase::makeHiveInsertTableHandle(
+          tableColumnNames, tableColumnTypes, {"c2"}, locationHandle);
+  auto insertHandle =
+      std::make_shared<core::InsertTableHandle>("id", hiveInsertTableHandle);
+  core::TypedExprPtr inputField =
+      std::make_shared<const core::FieldAccessTypedExpr>(BIGINT(), "c0");
+  auto callExpr = std::make_shared<const core::CallTypedExpr>(
+      BIGINT(),
+      std::vector<core::TypedExprPtr>{inputField},
+      "presto.default.min");
+  std::vector<std::string> aggregateNames = {"min"};
+  std::vector<core::AggregationNode::Aggregate> aggregates = {
+      core::AggregationNode::Aggregate{callExpr, nullptr, {}, {}}};
+  auto aggregationNode = std::make_shared<core::AggregationNode>(
+      core::PlanNodeId(),
+      core::AggregationNode::Step::kPartial,
+      std::vector<core::FieldAccessTypedExprPtr>{},
+      std::vector<core::FieldAccessTypedExprPtr>{},
+      aggregateNames,
+      aggregates,
+      false, // ignoreNullKeys
+      planBuilder.planNode());
+  auto plan = planBuilder
+                  .tableWrite(
+                      tableColumnNames,
+                      aggregationNode,
+                      insertHandle,
+                      false,
+                      connector::CommitStrategy::kTaskCommit)
+                  .localPartition(std::vector<std::string>{})
+                  .tableWriteMerge()
                   .planNode();
   testSerde(plan);
 }

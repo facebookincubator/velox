@@ -16,6 +16,7 @@
 #include "velox/exec/TableScan.h"
 #include "velox/common/base/Fs.h"
 #include "velox/common/base/tests/GTestUtils.h"
+#include "velox/common/testutil/TestValue.h"
 #include "velox/connectors/hive/HiveConnector.h"
 #include "velox/connectors/hive/HiveConnectorSplit.h"
 #include "velox/dwio/common/tests/utils/DataFiles.h"
@@ -2549,4 +2550,104 @@ TEST_F(TableScanTest, parallelPrepare) {
     splits.push_back(makeHiveSplit(filePath->path));
   }
   AssertQueryBuilder(plan).splits(splits).copyResults(pool_.get());
+}
+
+TEST_F(TableScanTest, dictionaryMemo) {
+  constexpr int kSize = 100;
+  const char* baseStrings[] = {
+      "qwertyuiopasdfghjklzxcvbnm",
+      "qazwsxedcrfvtgbyhnujmikolp",
+  };
+  auto indices = allocateIndices(kSize, pool_.get());
+  for (int i = 0; i < kSize; ++i) {
+    indices->asMutable<vector_size_t>()[i] = i % 2;
+  }
+  auto dict = BaseVector::wrapInDictionary(
+      nullptr,
+      indices,
+      kSize,
+      makeFlatVector<std::string>({baseStrings[0], baseStrings[1]}));
+  auto rows = makeRowVector({"a", "b"}, {dict, makeRowVector({"c"}, {dict})});
+  auto rowType = asRowType(rows->type());
+  auto file = TempFilePath::create();
+  writeToFile(file->path, {rows});
+  auto plan = PlanBuilder()
+                  .tableScan(rowType, {}, "a like '%m'")
+                  .project({"length(b.c)"})
+                  .planNode();
+#ifndef NDEBUG
+  int numPeelEncodings = 0;
+  SCOPED_TESTVALUE_SET(
+      "facebook::velox::exec::Expr::peelEncodings::mayCache",
+      std::function<void(bool*)>([&](bool* mayCache) {
+        if (numPeelEncodings++ == 0) {
+          ASSERT_TRUE(*mayCache) << "Memoize string dictionary base";
+        } else {
+          ASSERT_FALSE(*mayCache) << "Do not memoize filter result";
+        }
+      }));
+#endif
+  auto result = AssertQueryBuilder(plan)
+                    .splits({makeHiveSplit(file->path)})
+                    .copyResults(pool_.get());
+  ASSERT_EQ(result->size(), 50);
+#ifndef NDEBUG
+  ASSERT_EQ(numPeelEncodings, 2);
+#endif
+}
+
+TEST_F(TableScanTest, filterPushdownDisabledChecks) {
+  auto data = makeRowVector({makeFlatVector<int32_t>(10, folly::identity)});
+  auto rowType = asRowType(data->type());
+  auto file = TempFilePath::create();
+  writeToFile(file->path, {data});
+  ColumnHandleMap assignments = {
+      {"ds", partitionKey("ds", VARCHAR())},
+      {"c0", regularColumn("c0", INTEGER())},
+  };
+  auto split = HiveConnectorSplitBuilder(file->path)
+                   .partitionKey("ds", "2023-07-12")
+                   .build();
+
+  auto tableHandle = makeTableHandle(
+      SubfieldFiltersBuilder().add("ds", equal("2023-07-12")).build(),
+      nullptr,
+      "hive_table",
+      nullptr,
+      false);
+  auto plan = exec::test::PlanBuilder(pool_.get())
+                  .tableScan(rowType, tableHandle, assignments)
+                  .planNode();
+  AssertQueryBuilder(plan).splits({split}).assertResults(data);
+
+  tableHandle = makeTableHandle(
+      SubfieldFiltersBuilder().add("c0", equal(5)).build(),
+      nullptr,
+      "hive_table",
+      nullptr,
+      false);
+  plan = exec::test::PlanBuilder(pool_.get())
+             .tableScan(rowType, tableHandle, assignments)
+             .planNode();
+  auto query = AssertQueryBuilder(plan);
+  query.splits({split});
+  VELOX_ASSERT_THROW(
+      query.copyResults(pool_.get()),
+      "Unexpected filter on table hive_table, field c0");
+}
+
+TEST_F(TableScanTest, reuseRowVector) {
+  auto iota = makeFlatVector<int32_t>(10, folly::identity);
+  auto data = makeRowVector({iota, makeRowVector({iota})});
+  auto rowType = asRowType(data->type());
+  auto file = TempFilePath::create();
+  writeToFile(file->path, {data});
+  auto plan = PlanBuilder()
+                  .tableScan(rowType, {}, "c0 < 5")
+                  .project({"c1.c0"})
+                  .planNode();
+  auto split = HiveConnectorSplitBuilder(file->path).build();
+  auto expected = makeRowVector(
+      {makeFlatVector<int32_t>(10, [](auto i) { return i % 5; })});
+  AssertQueryBuilder(plan).splits({split, split}).assertResults(expected);
 }

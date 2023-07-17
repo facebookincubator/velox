@@ -17,13 +17,15 @@
 
 #include <folly/container/F14Set.h>
 #include "velox/common/memory/HashStringAllocator.h"
-#include "velox/functions/prestosql/aggregates/AddressableNonNullValueList.h"
-#include "velox/functions/prestosql/aggregates/Strings.h"
+#include "velox/exec/AddressableNonNullValueList.h"
+#include "velox/exec/Strings.h"
 #include "velox/vector/ComplexVector.h"
 #include "velox/vector/DecodedVector.h"
 #include "velox/vector/FlatVector.h"
 
 namespace facebook::velox::aggregate::prestosql {
+
+namespace detail {
 
 /// Maintains a set of unique values. Non-null values are stored in F14FastSet.
 /// A separate flag tracks presence of the null value.
@@ -229,5 +231,10 @@ template <>
 struct SetAccumulatorTypeTraits<ComplexType> {
   using AccumulatorType = ComplexTypeSetAccumulator;
 };
+} // namespace detail
+
+template <typename T>
+using SetAccumulator =
+    typename detail::SetAccumulatorTypeTraits<T>::AccumulatorType;
 
 } // namespace facebook::velox::aggregate::prestosql

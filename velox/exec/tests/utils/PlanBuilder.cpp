@@ -23,6 +23,7 @@
 #include "velox/exec/Aggregate.h"
 #include "velox/exec/HashPartitionFunction.h"
 #include "velox/exec/RoundRobinPartitionFunction.h"
+#include "velox/exec/TableWriter.h"
 #include "velox/exec/WindowFunction.h"
 #include "velox/expression/ExprToSubfieldFilter.h"
 #include "velox/expression/SignatureBinder.h"
@@ -277,49 +278,42 @@ PlanBuilder& PlanBuilder::filter(const std::string& filter) {
 
 PlanBuilder& PlanBuilder::tableWrite(
     const std::vector<std::string>& tableColumnNames,
+    const std::shared_ptr<core::AggregationNode>& aggregationNode,
     const std::shared_ptr<core::InsertTableHandle>& insertHandle,
-    CommitStrategy commitStrategy,
-    const std::string& rowCountColumnName) {
+    bool hasPartitioningScheme,
+    CommitStrategy commitStrategy) {
   return tableWrite(
       planNode_->outputType(),
       tableColumnNames,
+      aggregationNode,
       insertHandle,
-      commitStrategy,
-      rowCountColumnName);
+      hasPartitioningScheme,
+      commitStrategy);
 }
 
 PlanBuilder& PlanBuilder::tableWrite(
     const RowTypePtr& inputColumns,
     const std::vector<std::string>& tableColumnNames,
+    const std::shared_ptr<core::AggregationNode>& aggregationNode,
     const std::shared_ptr<core::InsertTableHandle>& insertHandle,
-    CommitStrategy commitStrategy,
-    const std::string& rowCountColumnName) {
-  auto outputType = ROW({rowCountColumnName}, {BIGINT()});
+    bool hasPartitioningScheme,
+    CommitStrategy commitStrategy) {
   planNode_ = std::make_shared<core::TableWriteNode>(
       nextPlanNodeId(),
       inputColumns,
       tableColumnNames,
+      aggregationNode,
       insertHandle,
-      outputType,
+      hasPartitioningScheme,
+      TableWriteTraits::outputType(),
       commitStrategy,
       planNode_);
   return *this;
 }
 
-PlanBuilder& PlanBuilder::tableWrite(
-    const RowTypePtr& inputColumns,
-    const std::vector<std::string>& tableColumnNames,
-    const std::shared_ptr<core::InsertTableHandle>& insertHandle,
-    CommitStrategy commitStrategy,
-    RowTypePtr outputType) {
-  planNode_ = std::make_shared<core::TableWriteNode>(
-      nextPlanNodeId(),
-      inputColumns,
-      tableColumnNames,
-      insertHandle,
-      outputType,
-      commitStrategy,
-      planNode_);
+PlanBuilder& PlanBuilder::tableWriteMerge() {
+  planNode_ = std::make_shared<core::TableWriteMergeNode>(
+      nextPlanNodeId(), TableWriteTraits::outputType(), planNode_);
   return *this;
 }
 
@@ -564,6 +558,8 @@ PlanBuilder::AggregatesAndNames PlanBuilder::createAggregateExpressionsAndNames(
     if (i < masks.size() && !masks[i].empty()) {
       agg.mask = field(masks[i]);
     }
+
+    agg.distinct = untypedExpr.distinct;
 
     if (!untypedExpr.orderBy.empty()) {
       VELOX_CHECK(
@@ -871,6 +867,29 @@ PlanBuilder& PlanBuilder::localPartition(const std::vector<std::string>& keys) {
   return *this;
 }
 
+#ifndef VELOX_ENABLE_BACKWARD_COMPATIBILITY
+PlanBuilder& PlanBuilder::localPartition(
+    const std::shared_ptr<connector::hive::HiveBucketProperty>&
+        bucketProperty) {
+  std::vector<column_index_t> bucketChannels;
+  for (const auto& bucketColumn : bucketProperty->bucketedBy()) {
+    bucketChannels.push_back(
+        planNode_->outputType()->getChildIdx(bucketColumn));
+  }
+  auto hivePartitionFunctionFactory =
+      std::make_shared<HivePartitionFunctionSpec>(
+          bucketProperty->bucketCount(),
+          bucketChannels,
+          std::vector<VectorPtr>{});
+  planNode_ = std::make_shared<core::LocalPartitionNode>(
+      nextPlanNodeId(),
+      core::LocalPartitionNode::Type::kRepartition,
+      std::move(hivePartitionFunctionFactory),
+      std::vector<core::PlanNodePtr>{planNode_});
+  return *this;
+}
+#endif
+
 namespace {
 core::PlanNodePtr createLocalPartitionRoundRobinNode(
     const core::PlanNodeId& planNodeId,
@@ -893,6 +912,63 @@ PlanBuilder& PlanBuilder::localPartitionRoundRobin(
 
 PlanBuilder& PlanBuilder::localPartitionRoundRobin() {
   planNode_ = createLocalPartitionRoundRobinNode(nextPlanNodeId(), {planNode_});
+  return *this;
+}
+
+namespace {
+class RoundRobinRowPartitionFunction : public core::PartitionFunction {
+ public:
+  explicit RoundRobinRowPartitionFunction(int numPartitions)
+      : numPartitions_{numPartitions} {}
+
+  std::optional<uint32_t> partition(
+      const RowVector& input,
+      std::vector<uint32_t>& partitions) override {
+    auto size = input.size();
+    partitions.resize(size);
+    for (auto i = 0; i < size; ++i) {
+      partitions[i] = counter_ % numPartitions_;
+      ++counter_;
+    }
+    return std::nullopt;
+  }
+
+ private:
+  const int numPartitions_;
+  uint32_t counter_{0};
+};
+
+class RoundRobinRowPartitionFunctionSpec : public core::PartitionFunctionSpec {
+ public:
+  std::unique_ptr<core::PartitionFunction> create(
+      int numPartitions) const override {
+    return std::make_unique<RoundRobinRowPartitionFunction>(numPartitions);
+  }
+
+  std::string toString() const override {
+    return "ROUND ROBIN ROW";
+  }
+
+  folly::dynamic serialize() const override {
+    folly::dynamic obj = folly::dynamic::object;
+    obj["name"] = fmt::format("RoundRobinRowPartitionFunctionSpec");
+    return obj;
+  }
+
+  static core::PartitionFunctionSpecPtr deserialize(
+      const folly::dynamic& /*obj*/,
+      void* /*context*/) {
+    return std::make_shared<RoundRobinRowPartitionFunctionSpec>();
+  }
+};
+} // namespace
+
+PlanBuilder& PlanBuilder::localPartitionRoundRobinRow() {
+  planNode_ = std::make_shared<core::LocalPartitionNode>(
+      nextPlanNodeId(),
+      core::LocalPartitionNode::Type::kRepartition,
+      std::make_shared<RoundRobinRowPartitionFunctionSpec>(),
+      std::vector<core::PlanNodePtr>{planNode_});
   return *this;
 }
 

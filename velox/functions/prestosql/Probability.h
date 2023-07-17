@@ -17,6 +17,7 @@
 
 #include "boost/math/distributions/beta.hpp"
 #include "boost/math/distributions/binomial.hpp"
+#include "boost/math/distributions/cauchy.hpp"
 #include "velox/common/base/Exceptions.h"
 #include "velox/functions/Macros.h"
 
@@ -88,6 +89,50 @@ struct BinomialCDFFunction {
 
     boost::math::binomial_distribution<> dist(numOfTrials, successProb);
     result = boost::math::cdf(dist, value);
+  }
+};
+
+template <typename T>
+struct CauchyCDFFunction {
+  VELOX_DEFINE_FUNCTION_TYPES(T);
+
+  FOLLY_ALWAYS_INLINE void
+  call(double& result, double median, double scale, double value) {
+    static constexpr double kInf = std::numeric_limits<double>::infinity();
+    static constexpr double kDoubleMax = std::numeric_limits<double>::max();
+
+    if (std::isnan(median) || std::isnan(value)) {
+      result = std::numeric_limits<double>::quiet_NaN();
+    } else if (median == kInf || median == kDoubleMax) {
+      result = 0.0;
+    } else if (scale == kInf) {
+      result = 0.5;
+    } else if (value == kInf) {
+      result = 1.0;
+    } else {
+      VELOX_USER_CHECK_GE(scale, 0, "scale must be greater than 0");
+
+      boost::math::cauchy_distribution<> dist(median, scale);
+      result = boost::math::cdf(dist, value);
+    }
+  }
+};
+
+template <typename T>
+struct InverseBetaCDFFunction {
+  VELOX_DEFINE_FUNCTION_TYPES(T);
+
+  FOLLY_ALWAYS_INLINE void call(double& result, double a, double b, double p) {
+    static constexpr double kInf = std::numeric_limits<double>::infinity();
+
+    VELOX_USER_CHECK(
+        (p >= 0) && (p <= 1) && (p != kInf),
+        "p must be in the interval [0, 1]");
+    VELOX_USER_CHECK((a > 0) && (a != kInf), "a must be > 0");
+    VELOX_USER_CHECK((b > 0) && (b != kInf), "b must be > 0");
+
+    boost::math::beta_distribution<> dist(a, b);
+    result = boost::math::quantile(dist, p);
   }
 };
 

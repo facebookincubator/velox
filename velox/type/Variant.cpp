@@ -69,19 +69,6 @@ struct VariantEquality<TypeKind::TIMESTAMP> {
   }
 };
 
-// date
-template <>
-struct VariantEquality<TypeKind::DATE> {
-  template <bool NullEqualsNull>
-  static bool equals(const variant& a, const variant& b) {
-    if (a.isNull() || b.isNull()) {
-      return evaluateNullEquality<NullEqualsNull>(a, b);
-    } else {
-      return a.value<TypeKind::DATE>() == b.value<TypeKind::DATE>();
-    }
-  }
-};
-
 // array
 template <>
 struct VariantEquality<TypeKind::ARRAY> {
@@ -196,6 +183,10 @@ std::string variant::toJson(const TypePtr& type) const {
     return "null";
   }
 
+  if (type->isDate()) {
+    return '"' + DATE()->toString(value<TypeKind::INTEGER>()) + '"';
+  }
+
   switch (kind_) {
     case TypeKind::MAP: {
       auto& map = value<TypeKind::MAP>();
@@ -299,14 +290,16 @@ std::string variant::toJson(const TypePtr& type) const {
       auto& timestamp = value<TypeKind::TIMESTAMP>();
       return '"' + timestamp.toString() + '"';
     }
-    case TypeKind::DATE: {
-      auto& date = value<TypeKind::DATE>();
-      return '"' + date.toString() + '"';
-    }
     case TypeKind::OPAQUE: {
-      // Return expression that we can't parse back - we use toJson for
-      // debugging only. Variant::serialize should actually serialize the data.
-      return "\"Opaque<" + value<TypeKind::OPAQUE>().type->toString() + ">\"";
+      // Although this is not used for deserialization, we need to include the
+      // real data because commonExpressionEliminationRules uses
+      // CallTypedExpr.toString as key, which ends up using this string.
+      // Opaque types that want to use common expression elimination need to
+      // make their serialization deterministic.
+      const detail::OpaqueCapsule& capsule = value<TypeKind::OPAQUE>();
+      auto serializeFunction = capsule.type->getSerializeFunc();
+      return "Opaque<type:" + capsule.type->toString() + ",value:\"" +
+          serializeFunction(capsule.obj) + "\">";
     }
     case TypeKind::FUNCTION:
     case TypeKind::UNKNOWN:
@@ -320,11 +313,12 @@ std::string variant::toJson(const TypePtr& type) const {
 
 void serializeOpaque(
     folly::dynamic& variantObj,
-    detail::OpaqueCapsule opaqueValue) {
+    const detail::OpaqueCapsule& opaqueValue) {
   try {
     auto serializeFunction = opaqueValue.type->getSerializeFunc();
     variantObj["value"] = serializeFunction(opaqueValue.obj);
-    variantObj["opaque_type"] = folly::toJson(opaqueValue.type->serialize());
+    variantObj["opaque_type"] = folly::json::serialize(
+        opaqueValue.type->serialize(), getSerializationOptions());
   } catch (VeloxRuntimeError& ex) {
     // Re-throw error for backwards compatibility.
     // Want to return error_code::kNotImplemented rather
@@ -407,10 +401,6 @@ folly::dynamic variant::serialize() const {
     }
     case TypeKind::VARCHAR: {
       objValue = value<TypeKind::VARCHAR>();
-      break;
-    }
-    case TypeKind::DATE: {
-      objValue = value<TypeKind::DATE>();
       break;
     }
     case TypeKind::OPAQUE: {
@@ -521,9 +511,6 @@ variant variant::create(const folly::dynamic& variantobj) {
     case TypeKind::OPAQUE: {
       return deserializeOpaque(variantobj);
     }
-    case TypeKind::DATE: {
-      return variant::create<TypeKind::DATE>(obj.asInt());
-    }
     case TypeKind::TIMESTAMP: {
       return variant::create<TypeKind::TIMESTAMP>(Timestamp(
           variantobj["seconds"].asInt(), variantobj["nanos"].asInt()));
@@ -582,10 +569,6 @@ uint64_t variant::hash() const {
             hasher, hash, rowVariant[i].hash());
       }
       return hash;
-    }
-    case TypeKind::DATE: {
-      auto dateValue = value<TypeKind::DATE>();
-      return folly::Hash{}(dateValue.days());
     }
     case TypeKind::TIMESTAMP: {
       auto timestampValue = value<TypeKind::TIMESTAMP>();

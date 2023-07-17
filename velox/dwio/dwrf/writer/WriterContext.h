@@ -71,7 +71,7 @@ class WriterContext : public CompressionBufferPool {
       handler_ = std::make_unique<encryption::EncryptionHandler>();
     }
     validateConfigs();
-    VLOG(1) << fmt::format("Compression config: {}", compression);
+    VLOG(2) << fmt::format("Compression config: {}", compression);
     compressionBuffer_ = std::make_unique<dwio::common::DataBuffer<char>>(
         *generalPool_, compressionBlockSize + PAGE_HEADER_SIZE);
   }
@@ -438,7 +438,6 @@ class WriterContext : public CompressionBufferPool {
       case TypeKind::VARCHAR:
       case TypeKind::VARBINARY:
       case TypeKind::TIMESTAMP:
-      case TypeKind::DATE:
         physicalSizeAggregators_.emplace(
             type.id, std::make_unique<PhysicalSizeAggregator>(parent));
         break;

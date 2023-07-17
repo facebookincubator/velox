@@ -22,6 +22,8 @@
 #include "velox/common/memory/Memory.h"
 #include "velox/common/testutil/TestValue.h"
 
+#include <re2/re2.h>
+
 DECLARE_bool(velox_suppress_memory_capacity_exceeding_error_message);
 
 using facebook::velox::common::testutil::TestValue;
@@ -238,12 +240,12 @@ MemoryPool* MemoryPool::parent() const {
   return parent_.get();
 }
 
-MemoryPool* MemoryPool::root() {
-  MemoryPool* root = this;
-  while (root->parent_ != nullptr) {
-    root = root->parent_.get();
+MemoryPool* MemoryPool::root() const {
+  const MemoryPool* pool = this;
+  while (pool->parent_ != nullptr) {
+    pool = pool->parent_.get();
   }
-  return root;
+  return const_cast<MemoryPool*>(pool);
 }
 
 uint64_t MemoryPool::getChildCount() const {
@@ -369,6 +371,7 @@ MemoryPoolImpl::MemoryPoolImpl(
       manager_{memoryManager},
       allocator_{&manager_->allocator()},
       destructionCb_(std::move(destructionCb)),
+      debugPoolNameRegex_(debugEnabled_ ? *(debugPoolNameRegex().rlock()) : ""),
       reclaimer_(std::move(reclaimer)),
       // The memory manager sets the capacity through grow() according to the
       // actually used memory arbitration policy.
@@ -534,22 +537,27 @@ const std::vector<MachinePageCount>& MemoryPoolImpl::sizeClasses() const {
 }
 
 void MemoryPoolImpl::allocateContiguous(
-    MachinePageCount numPages,
-    ContiguousAllocation& out) {
+    MachinePageCount maxPages,
+    ContiguousAllocation& out,
+    MachinePageCount numPages) {
   CHECK_AND_INC_MEM_OP_STATS(Allocs);
   if (!out.empty()) {
     INC_MEM_OP_STATS(Frees);
   }
-  VELOX_CHECK_GT(numPages, 0);
+  VELOX_CHECK_GT(maxPages, 0);
   DEBUG_RECORD_FREE(out);
   if (!allocator_->allocateContiguous(
-          numPages, nullptr, out, [this](int64_t allocBytes, bool preAlloc) {
+          maxPages,
+          nullptr,
+          out,
+          [this](int64_t allocBytes, bool preAlloc) {
             if (preAlloc) {
               reserve(allocBytes);
             } else {
               release(allocBytes);
             }
-          })) {
+          },
+          numPages)) {
     VELOX_CHECK(out.empty());
     VELOX_MEM_ALLOC_ERROR(fmt::format(
         "{} failed with {} pages from {}", __FUNCTION__, numPages, toString()));
@@ -567,6 +575,28 @@ void MemoryPoolImpl::freeContiguous(ContiguousAllocation& allocation) {
   allocator_->freeContiguous(allocation);
   VELOX_CHECK(allocation.empty());
   release(bytesToFree);
+}
+
+void MemoryPoolImpl::growContiguous(
+    MachinePageCount increment,
+    ContiguousAllocation& allocation) {
+  if (!allocator_->growContiguous(
+          increment, allocation, [this](int64_t allocBytes, bool preAlloc) {
+            if (preAlloc) {
+              reserve(allocBytes);
+            } else {
+              release(allocBytes);
+            }
+          })) {
+    VELOX_MEM_ALLOC_ERROR(fmt::format(
+        "{} failed with {} pages from {}",
+        __FUNCTION__,
+        increment,
+        toString()));
+  }
+  if (FOLLY_UNLIKELY(debugEnabled_)) {
+    recordGrowDbg(allocation.data(), allocation.size());
+  }
 }
 
 int64_t MemoryPoolImpl::capacity() const {
@@ -973,7 +1003,10 @@ void MemoryPoolImpl::testingSetCapacity(int64_t bytes) {
   capacity_ = bytes;
 }
 
-bool MemoryPoolImpl::needRecordDbg(bool isAlloc) {
+bool MemoryPoolImpl::needRecordDbg(bool /* isAlloc */) {
+  if (!debugPoolNameRegex_.empty()) {
+    return RE2::FullMatch(name_, debugPoolNameRegex_);
+  }
   // TODO(jtan6): Add sample based condition support.
   return true;
 }
@@ -1047,6 +1080,20 @@ void MemoryPoolImpl::recordFreeDbg(const ContiguousAllocation& allocation) {
     return;
   }
   recordFreeDbg(allocation.data(), allocation.size());
+}
+
+void MemoryPoolImpl::recordGrowDbg(const void* addr, uint64_t newSize) {
+  VELOX_CHECK(debugEnabled_);
+  if (!needRecordDbg(false) || addr == nullptr) {
+    return;
+  }
+  std::lock_guard<std::mutex> l(debugAllocMutex_);
+  uint64_t addrUint64 = reinterpret_cast<uint64_t>(addr);
+  auto allocResult = debugAllocRecords_.find(addrUint64);
+  if (allocResult == debugAllocRecords_.end()) {
+    VELOX_FAIL("Growing of un-allocated memory. Free address {}.", addrUint64);
+  }
+  allocResult->second.size = newSize;
 }
 
 void MemoryPoolImpl::leakCheckDbg() {

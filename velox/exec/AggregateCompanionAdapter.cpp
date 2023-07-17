@@ -157,7 +157,7 @@ int32_t AggregateCompanionAdapter::ExtractFunction::setOffset() const {
 }
 
 char** AggregateCompanionAdapter::ExtractFunction::allocateGroups(
-    AllocationPool& allocationPool,
+    memory::AllocationPool& allocationPool,
     const SelectivityVector& rows,
     uint64_t offsetInGroup) const {
   auto* groups =
@@ -197,7 +197,7 @@ void AggregateCompanionAdapter::ExtractFunction::apply(
     VectorPtr& result) const {
   // Set up data members of fn_.
   HashStringAllocator stringAllocator{context.pool()};
-  AllocationPool allocationPool{context.pool()};
+  memory::AllocationPool allocationPool{context.pool()};
   fn_->setAllocator(&stringAllocator);
 
   auto offset = setOffset();
@@ -217,6 +217,10 @@ void AggregateCompanionAdapter::ExtractFunction::apply(
   localResult = BaseVector::wrapInDictionary(
       nullptr, rowsToGroupsIndices, rows.end(), localResult);
   context.moveOrCopyResult(localResult, rows, result);
+
+  if (fn_->accumulatorUsesExternalMemory()) {
+    fn_->destroy(folly::Range(groups, groupCount));
+  }
 }
 
 bool CompanionFunctionsRegistrar::registerPartialFunction(
@@ -235,12 +239,14 @@ bool CompanionFunctionsRegistrar::registerPartialFunction(
              [name](
                  core::AggregationNode::Step step,
                  const std::vector<TypePtr>& argTypes,
-                 const TypePtr& resultType) -> std::unique_ptr<Aggregate> {
+                 const TypePtr& resultType,
+                 const core::QueryConfig& config)
+                 -> std::unique_ptr<Aggregate> {
                if (auto func = getAggregateFunctionEntry(name)) {
                  if (!exec::isRawInput(step)) {
                    step = core::AggregationNode::Step::kIntermediate;
                  }
-                 auto fn = func->factory(step, argTypes, resultType);
+                 auto fn = func->factory(step, argTypes, resultType, config);
                  VELOX_CHECK_NOT_NULL(fn);
                  return std::make_unique<
                      AggregateCompanionAdapter::PartialFunction>(
@@ -272,12 +278,15 @@ bool CompanionFunctionsRegistrar::registerMergeFunction(
              [name](
                  core::AggregationNode::Step /*step*/,
                  const std::vector<TypePtr>& argTypes,
-                 const TypePtr& resultType) -> std::unique_ptr<Aggregate> {
+                 const TypePtr& resultType,
+                 const core::QueryConfig& config)
+                 -> std::unique_ptr<Aggregate> {
                if (auto func = getAggregateFunctionEntry(name)) {
                  auto fn = func->factory(
                      core::AggregationNode::Step::kIntermediate,
                      argTypes,
-                     resultType);
+                     resultType,
+                     config);
                  VELOX_CHECK_NOT_NULL(fn);
                  return std::make_unique<
                      AggregateCompanionAdapter::MergeFunction>(
@@ -317,7 +326,8 @@ bool CompanionFunctionsRegistrar::registerMergeExtractFunctionWithSuffix(
             [name, mergeExtractFunctionName](
                 core::AggregationNode::Step /*step*/,
                 const std::vector<TypePtr>& argTypes,
-                const TypePtr& resultType) -> std::unique_ptr<Aggregate> {
+                const TypePtr& resultType,
+                const core::QueryConfig& config) -> std::unique_ptr<Aggregate> {
               const auto& [originalResultType, _] =
                   resolveAggregateFunction(mergeExtractFunctionName, argTypes);
               if (!originalResultType) {
@@ -331,7 +341,8 @@ bool CompanionFunctionsRegistrar::registerMergeExtractFunctionWithSuffix(
                 auto fn = func->factory(
                     core::AggregationNode::Step::kFinal,
                     argTypes,
-                    originalResultType);
+                    originalResultType,
+                    config);
                 VELOX_CHECK_NOT_NULL(fn);
                 return std::make_unique<
                     AggregateCompanionAdapter::MergeExtractFunction>(
@@ -372,7 +383,9 @@ bool CompanionFunctionsRegistrar::registerMergeExtractFunction(
              [name, mergeExtractFunctionName](
                  core::AggregationNode::Step /*step*/,
                  const std::vector<TypePtr>& argTypes,
-                 const TypePtr& resultType) -> std::unique_ptr<Aggregate> {
+                 const TypePtr& resultType,
+                 const core::QueryConfig& config)
+                 -> std::unique_ptr<Aggregate> {
                const auto& [originalResultType, _] =
                    resolveAggregateFunction(mergeExtractFunctionName, argTypes);
                if (!originalResultType) {
@@ -386,7 +399,8 @@ bool CompanionFunctionsRegistrar::registerMergeExtractFunction(
                  auto fn = func->factory(
                      core::AggregationNode::Step::kFinal,
                      argTypes,
-                     originalResultType);
+                     originalResultType,
+                     config);
                  VELOX_CHECK_NOT_NULL(fn);
                  return std::make_unique<
                      AggregateCompanionAdapter::MergeExtractFunction>(
@@ -418,7 +432,8 @@ bool CompanionFunctionsRegistrar::registerExtractFunctionWithSuffix(
 
     auto factory = [originalName](
                        const std::string& name,
-                       const std::vector<VectorFunctionArg>& inputArgs)
+                       const std::vector<VectorFunctionArg>& inputArgs,
+                       const core::QueryConfig& config)
         -> std::shared_ptr<VectorFunction> {
       std::vector<TypePtr> argTypes{inputArgs.size()};
       std::transform(
@@ -437,7 +452,7 @@ bool CompanionFunctionsRegistrar::registerExtractFunctionWithSuffix(
 
       if (auto func = getAggregateFunctionEntry(originalName)) {
         auto fn = func->factory(
-            core::AggregationNode::Step::kFinal, argTypes, resultType);
+            core::AggregationNode::Step::kFinal, argTypes, resultType, config);
         VELOX_CHECK_NOT_NULL(fn);
         return std::make_shared<AggregateCompanionAdapter::ExtractFunction>(
             std::move(fn));
@@ -472,10 +487,11 @@ bool CompanionFunctionsRegistrar::registerExtractFunction(
     return false;
   }
 
-  auto factory = [originalName](
-                     const std::string& name,
-                     const std::vector<VectorFunctionArg>& inputArgs)
-      -> std::shared_ptr<VectorFunction> {
+  auto factory =
+      [originalName](
+          const std::string& name,
+          const std::vector<VectorFunctionArg>& inputArgs,
+          const core::QueryConfig& config) -> std::shared_ptr<VectorFunction> {
     std::vector<TypePtr> argTypes{inputArgs.size()};
     std::transform(
         inputArgs.begin(),
@@ -493,7 +509,7 @@ bool CompanionFunctionsRegistrar::registerExtractFunction(
 
     if (auto func = getAggregateFunctionEntry(originalName)) {
       auto fn = func->factory(
-          core::AggregationNode::Step::kFinal, argTypes, resultType);
+          core::AggregationNode::Step::kFinal, argTypes, resultType, config);
       VELOX_CHECK_NOT_NULL(fn);
       return std::make_shared<AggregateCompanionAdapter::ExtractFunction>(
           std::move(fn));

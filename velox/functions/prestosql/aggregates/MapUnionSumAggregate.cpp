@@ -14,10 +14,10 @@
  * limitations under the License.
  */
 #include "velox/exec/Aggregate.h"
+#include "velox/exec/Strings.h"
 #include "velox/expression/FunctionSignature.h"
 #include "velox/functions/prestosql/CheckedArithmeticImpl.h"
 #include "velox/functions/prestosql/aggregates/AggregateNames.h"
-#include "velox/functions/prestosql/aggregates/Strings.h"
 #include "velox/vector/FlatVector.h"
 
 namespace facebook::velox::aggregate::prestosql {
@@ -342,7 +342,9 @@ exec::AggregateRegistrationResult registerMapUnionSum(const std::string& name) {
       [name](
           core::AggregationNode::Step /*step*/,
           const std::vector<TypePtr>& argTypes,
-          const TypePtr& resultType) -> std::unique_ptr<exec::Aggregate> {
+          const TypePtr& resultType,
+          const core::QueryConfig& /*config*/)
+          -> std::unique_ptr<exec::Aggregate> {
         VELOX_CHECK_EQ(argTypes.size(), 1);
         VELOX_CHECK(argTypes[0]->isMap());
         auto& mapType = argTypes[0]->asMap();
