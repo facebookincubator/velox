@@ -98,27 +98,27 @@ struct GreaterOrEqual : private Less<T> {
 std::shared_ptr<exec::VectorFunction> makeEqualTo(
     const std::string& name,
     const std::vector<exec::VectorFunctionArg>& inputArgs,
-    const core::QueryConfig& /*config*/);
+    const core::QueryConfig&);
 
 std::shared_ptr<exec::VectorFunction> makeLessThan(
     const std::string& name,
     const std::vector<exec::VectorFunctionArg>& inputArgs,
-    const core::QueryConfig& /*config*/);
+    const core::QueryConfig&);
 
 std::shared_ptr<exec::VectorFunction> makeGreaterThan(
     const std::string& name,
     const std::vector<exec::VectorFunctionArg>& inputArgs,
-    const core::QueryConfig& /*config*/);
+    const core::QueryConfig&);
 
 std::shared_ptr<exec::VectorFunction> makeLessThanOrEqual(
     const std::string& name,
     const std::vector<exec::VectorFunctionArg>& inputArgs,
-    const core::QueryConfig& /*config*/);
+    const core::QueryConfig&);
 
 std::shared_ptr<exec::VectorFunction> makeGreaterThanOrEqual(
     const std::string& name,
     const std::vector<exec::VectorFunctionArg>& inputArgs,
-    const core::QueryConfig& /*config*/);
+    const core::QueryConfig&);
 
 inline std::vector<std::shared_ptr<exec::FunctionSignature>>
 comparisonSignatures() {
