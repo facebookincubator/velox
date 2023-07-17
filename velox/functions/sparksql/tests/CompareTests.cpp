@@ -204,6 +204,11 @@ TEST_F(CompareTest, testflat) {
   auto actualResult = evaluate<SimpleVector<bool>>(
       "lessthan(c0, c1)", makeRowVector({vector0, vector1}));
   facebook::velox::test::assertEqualVectors(expectedResult, actualResult);
+  auto vectorBool0 = makeFlatVector<bool>({true, true, false, true});
+  auto vectorBool1 = makeConstant(true, 4);
+  auto actualBoolResult = evaluate<SimpleVector<bool>>(
+      "equalto(c0, c1)", makeRowVector({vectorBool0, vectorBool1}));
+  facebook::velox::test::assertEqualVectors(vectorBool0, actualBoolResult);
 }
 
 TEST_F(CompareTest, lessthan) {

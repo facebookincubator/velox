@@ -40,38 +40,25 @@ class ComparisonFunction final : public exec::VectorFunction {
     context.ensureWritable(rows, BOOLEAN(), result);
     auto* flatResult = result->asFlatVector<bool>();
     const Cmp cmp;
-    if (args[0]->isFlatEncoding() && args[1]->isFlatEncoding()) {
-      // Fast path for (flat, flat).
-      auto flatA = args[0]->asUnchecked<FlatVector<T>>();
-      auto rawA = flatA->mutableRawValues();
-      auto flatB = args[1]->asUnchecked<FlatVector<T>>();
-      auto rawB = flatB->mutableRawValues();
-      rows.applyToSelected(
-          [&](vector_size_t i) { flatResult->set(i, cmp(rawA[i], rawB[i])); });
-    } else if (args[0]->isConstantEncoding() && args[1]->isFlatEncoding()) {
-      // Fast path for (const, flat).
-      auto constant = args[0]->asUnchecked<ConstantVector<T>>()->valueAt(0);
-      auto flatValues = args[1]->asUnchecked<FlatVector<T>>();
-      auto rawValues = flatValues->mutableRawValues();
-      rows.applyToSelected([&](vector_size_t i) {
-        flatResult->set(i, cmp(constant, rawValues[i]));
+
+    exec::DecodedArgs decodedArgs(rows, args, context);
+    auto decodedArg0 = decodedArgs.at(0);
+    auto decodedArg1 = decodedArgs.at(1);
+    if (decodedArg0->isIdentityMapping() && decodedArg1->isConstantMapping()) {
+      rows.applyToSelected([&](auto i) {
+        flatResult->set(
+            i, cmp(decodedArg0->valueAt<T>(i), decodedArg1->valueAt<T>(0)));
       });
-    } else if (args[0]->isFlatEncoding() && args[1]->isConstantEncoding()) {
-      // Fast path for (flat, const).
-      auto flatValues = args[0]->asUnchecked<FlatVector<T>>();
-      auto constant = args[1]->asUnchecked<ConstantVector<T>>()->valueAt(0);
-      auto rawValues = flatValues->mutableRawValues();
-      rows.applyToSelected([&](vector_size_t i) {
-        flatResult->set(i, cmp(rawValues[i], constant));
+    } else if (
+        decodedArg0->isConstantMapping() && decodedArg1->isIdentityMapping()) {
+      rows.applyToSelected([&](auto i) {
+        flatResult->set(
+            i, cmp(decodedArg0->valueAt<T>(0), decodedArg1->valueAt<T>(i)));
       });
     } else {
-      // Fast path if one or more arguments are encoded.
-      exec::DecodedArgs decodedArgs(rows, args, context);
-      auto decoded0 = decodedArgs.at(0);
-      auto decoded1 = decodedArgs.at(1);
-      rows.applyToSelected([&](vector_size_t i) {
+      rows.applyToSelected([&](auto i) {
         flatResult->set(
-            i, cmp(decoded0->valueAt<T>(i), decoded1->valueAt<T>(i)));
+            i, cmp(decodedArg0->valueAt<T>(i), decodedArg1->valueAt<T>(i)));
       });
     }
   }
