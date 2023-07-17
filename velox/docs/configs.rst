@@ -280,7 +280,7 @@ Hive Connector
      - bool
      - false
      - True if reading the source file column names as lower case, and planner should guarantee
-       the input column name and filter is also lower case to achive case-insensitive read..    
+       the input column name and filter is also lower case to achive case-insensitive read.
    * - max-coalesced-bytes
      - integer
      - 512KB
