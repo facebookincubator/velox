@@ -14,6 +14,11 @@
 import argparse
 import json
 import sys
+import os.path
+import random
+import subprocess
+import sys
+
 
 import pyvelox.pyvelox as pv
 from deepdiff import DeepDiff
@@ -51,12 +56,16 @@ def export(args):
     return 0
 
 
-def diff(args):
-    """Diffs Velox function signatures."""
+def diff_signatures(args):
+    """Diffs Velox function signatures. Returns a tuple of the delta diff and exit status"""
     first_signatures = json.load(args.first)
     second_signatures = json.load(args.second)
     delta = DeepDiff(
-        first_signatures, second_signatures, ignore_order=True, report_repetition=True
+        first_signatures,
+        second_signatures,
+        ignore_order=True,
+        report_repetition=True,
+        view="tree",
     )
     exit_status = 0
     if delta:
@@ -93,7 +102,79 @@ def diff(args):
         """
         )
 
-    return exit_status
+    return delta, exit_status
+
+
+def diff(args):
+    """Diffs Velox function signatures."""
+    return diff_signatures(args)[1]
+
+
+def bias(args):
+    """Biases a provided fuzzer with newly added functions."""
+
+    delta, status = diff_signatures(args)
+
+    # Return if the signature check call flags incompatible changes.
+    if status:
+        return status
+
+    if not len(delta):
+        print(f"{bcolors.BOLD} No changes detected: Nothing to do!")
+        return 0
+
+    function_set = set()
+    for items in delta.values():
+        for item in items:
+            function_set.add(item.get_root_key())
+
+    # Split functions by presto, spark.
+    function_dict = {}
+    for item in function_set:
+        split = item.split("_")
+        function_dict.setdefault(split[0], []).append(split[1])
+
+    print(f"{bcolors.BOLD}Functions to be biased: {function_dict}")
+
+    # Create the executable string
+    fuzzer_path = args.presto_fuzzer_path
+    fuzzer_output = "/tmp/fuzzer.log"
+    # Currently only support Presto.
+    command = [
+        fuzzer_path,
+        f"--seed {random.randint(0, 99999)}",
+        f"--assign_function_tickets {'=10,'.join(function_dict['presto']) + '=10'}",
+        "--lazy_vector_generation_ratio 0.2",
+        "--duration_sec 3600 --enable_variadic_signatures",
+        "--velox_fuzzer_enable_complex_types",
+        "--velox_fuzzer_enable_column_reuse",
+        "--velox_fuzzer_enable_expression_reuse",
+        "--max_expression_trees_per_step 2",
+        "--retry_with_try",
+        "--enable_dereference",
+        "--logtostderr=1 --minloglevel=0",
+        "--repro_persist_path=/tmp/fuzzer_repro",
+    ]
+
+    print(f"Going to run command: {command}")
+
+    with open(fuzzer_output, "wb") as f:
+        process = subprocess.Popen(
+            command, stderr=subprocess.STDOUT, stdout=subprocess.PIPE, shell=True
+        )
+        # replace "" with b"" for Python 3
+        for line in iter(process.stdout.readline, b""):
+            sys.stdout.write(line.decode(sys.stdout.encoding))
+            f.write(line)
+
+        return process.returncode
+
+
+def check_fuzzer_executable(parser, arg):
+    if not os.path.exists(arg):
+        parser.error(f"The provided fuzzer path: {arg} doesnt exist!")
+    else:
+        return arg
 
 
 def parse_args():
@@ -113,6 +194,14 @@ def parse_args():
     diff_command_parser = command.add_parser("diff")
     diff_command_parser.add_argument("first", type=argparse.FileType("r"))
     diff_command_parser.add_argument("second", type=argparse.FileType("r"))
+
+    bias_command_parser = command.add_parser("bias")
+    bias_command_parser.add_argument("first", type=argparse.FileType("r"))
+    bias_command_parser.add_argument("second", type=argparse.FileType("r"))
+    bias_command_parser.add_argument(
+        "presto_fuzzer_path",
+        type=lambda arg: check_fuzzer_executable(bias_command_parser, arg),
+    )
 
     parser.set_defaults(command="help")
 
