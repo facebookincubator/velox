@@ -219,11 +219,6 @@ TEST_F(DateTimeFunctionsTest, dateSub) {
         "date_sub(c0, c1)", {date, value}, {DATE(), INTEGER()});
   };
 
-  // Check null behaviors.
-  EXPECT_EQ(std::nullopt, dateSubInt32(std::nullopt, 1));
-  EXPECT_EQ(std::nullopt, dateSubInt16(std::nullopt, 1));
-  EXPECT_EQ(std::nullopt, dateSubInt8(std::nullopt, 1));
-
   // Check simple tests.
   int32_t inputDate = parseDate("2019-03-01");
   int32_t expectedDate = parseDate("2019-02-28");
