@@ -160,5 +160,17 @@ TEST_F(EntropyAggregationTest, integerSomeNulls) {
   testGlobalAgg({globalCounts}, "a0", "c1");
 }
 
+TEST_F(EntropyAggregationTest, mayHaveNulls) {
+  // c0: [1, 1, 1, 2, 2, 2, 3, 3, 3]
+  // c1: [1, 1, null, 1, null, 2, null, 5, 6]
+  auto data = makeRowVector(
+      {makeFlatVector<int32_t>({1, 1, 1, 2, 2, 2, 3, 3, 3}),
+       makeNullableFlatVector<int32_t>(
+           {1, 1, std::nullopt, 1, std::nullopt, 2, std::nullopt, 5, 6})});
+  auto expectedResult = makeRowVector(
+      {makeFlatVector<double>({1.0, 0.9182958340544898, 0.9940302114769566})});
+  testAggregations({data}, {"c0"}, {"entropy(c1)"}, {"a0"}, {expectedResult});
+}
+
 } // namespace
 } // namespace facebook::velox::aggregate::test

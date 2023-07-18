@@ -113,11 +113,6 @@ class EntropyAggregate : public exec::Aggregate {
         }
         updateNonNullValue(groups[i], decodedRaw_.valueAt<T>(i));
       });
-    } else if (!exec::Aggregate::numNulls_ && decodedRaw_.isIdentityMapping()) {
-      auto data = decodedRaw_.data<T>();
-      rows.applyToSelected([&](vector_size_t i) {
-        updateNonNullValue<false>(groups[i], data[i]);
-      });
     } else {
       rows.applyToSelected([&](vector_size_t i) {
         updateNonNullValue(groups[i], decodedRaw_.valueAt<T>(i));
@@ -146,11 +141,6 @@ class EntropyAggregate : public exec::Aggregate {
           updateNonNullValue(group, decodedRaw_.valueAt<T>(i));
         }
       });
-    } else if (!exec::Aggregate::numNulls_ && decodedRaw_.isIdentityMapping()) {
-      const T* data = decodedRaw_.data<T>();
-      EntropyAccumulator accData;
-      rows.applyToSelected([&](vector_size_t i) { accData.update(data[i]); });
-      updateNonNullValue<false>(group, accData);
     } else {
       EntropyAccumulator accData;
       rows.applyToSelected(
