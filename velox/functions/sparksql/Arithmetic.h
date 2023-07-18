@@ -261,6 +261,4 @@ struct Log10Function {
     return true;
   }
 };
-
->>>>>>> add log2/log10 function
 } // namespace facebook::velox::functions::sparksql
