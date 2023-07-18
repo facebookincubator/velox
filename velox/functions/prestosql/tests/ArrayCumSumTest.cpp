@@ -26,13 +26,7 @@ namespace {
 class ArrayCumSumTest : public FunctionBaseTest {
  protected:
   template <typename T>
-  void testArrayCumSum(
-      const VectorPtr& expected,
-      const VectorPtr& input,
-      const TypePtr type = CppToType<T>::create()) {
-    if (type->isDecimal()) {
-      this->options_.parseDecimalAsDouble = false;
-    }
+  void testArrayCumSum(const VectorPtr& expected, const VectorPtr& input) {
     auto result = evaluate("array_cum_sum(c0)", makeRowVector({input}));
     assertEqualVectors(expected, result);
   }
@@ -45,12 +39,12 @@ TEST_F(ArrayCumSumTest, bigint) {
       {{},
        {10000, 1000010000, 100001000010000},
        {-976543210987654321, std::nullopt, std::numeric_limits<int64_t>::max()},
-       {std::nullopt}});
+       {std::nullopt, 100001000010000}});
   auto expected = makeNullableArrayVector<int64_t>(
       {{},
        {10000, 1000020000, 100002000030000},
        {-976543210987654321, std::nullopt, std::nullopt},
-       {std::nullopt}});
+       {std::nullopt, std::nullopt}});
   testArrayCumSum<int64_t>(expected, input);
 }
 
@@ -59,12 +53,12 @@ TEST_F(ArrayCumSumTest, integer) {
       {{},
        {1000, 10001000, 1010001000},
        {-976543210, std::nullopt, std::numeric_limits<int32_t>::max()},
-       {std::nullopt}});
+       {std::nullopt, 1010001000}});
   auto expected = makeNullableArrayVector<int32_t>(
       {{},
        {1000, 10002000, 1020003000},
        {-976543210, std::nullopt, std::nullopt},
-       {std::nullopt}});
+       {std::nullopt, std::nullopt}});
   testArrayCumSum<int32_t>(expected, input);
 }
 
@@ -73,12 +67,12 @@ TEST_F(ArrayCumSumTest, smallint) {
       {{},
        {10, 100, 10000},
        {-9876, std::nullopt, std::numeric_limits<int16_t>::max()},
-       {std::nullopt}});
+       {std::nullopt, 10000}});
   auto expected = makeNullableArrayVector<int16_t>(
       {{},
        {10, 110, 10110},
        {-9876, std::nullopt, std::nullopt},
-       {std::nullopt}});
+       {std::nullopt, std::nullopt}});
   testArrayCumSum<int16_t>(expected, input);
 }
 
@@ -87,9 +81,12 @@ TEST_F(ArrayCumSumTest, tinyint) {
       {{},
        {1, 2, 4},
        {-99, std::nullopt, std::numeric_limits<int8_t>::max()},
-       {std::nullopt}});
+       {std::nullopt, 4}});
   auto expected = makeNullableArrayVector<int8_t>(
-      {{}, {1, 3, 7}, {-99, std::nullopt, std::nullopt}, {std::nullopt}});
+      {{},
+       {1, 3, 7},
+       {-99, std::nullopt, std::nullopt},
+       {std::nullopt, std::nullopt}});
   testArrayCumSum<int8_t>(expected, input);
 }
 
@@ -98,9 +95,12 @@ TEST_F(ArrayCumSumTest, real) {
       {{},
        {1, 2, 3},
        {-9, std::nullopt, std::numeric_limits<float>::max()},
-       {std::nullopt}});
+       {std::nullopt, 3}});
   auto expected = makeNullableArrayVector<float>(
-      {{}, {1, 3, 6}, {-9, std::nullopt, std::nullopt}, {std::nullopt}});
+      {{},
+       {1, 3, 6},
+       {-9, std::nullopt, std::nullopt},
+       {std::nullopt, std::nullopt}});
   testArrayCumSum<float>(expected, input);
 }
 
@@ -109,16 +109,50 @@ TEST_F(ArrayCumSumTest, double) {
       {{},
        {1, 2, 3},
        {-9, std::nullopt, std::numeric_limits<double>::max()},
-       {std::nullopt}});
+       {std::nullopt, 3}});
   auto expected = makeNullableArrayVector<double>(
-      {{}, {1, 3, 6}, {-9, std::nullopt, std::nullopt}, {std::nullopt}});
+      {{},
+       {1, 3, 6},
+       {-9, std::nullopt, std::nullopt},
+       {std::nullopt, std::nullopt}});
   testArrayCumSum<double>(expected, input);
 }
 
 TEST_F(ArrayCumSumTest, bigintOverflow) {
-  auto input = makeNullableArrayVector<int64_t>(
-      {{1, 2, 3}, {1, std::numeric_limits<int64_t>::max(), 2, 3}, {}});
+  constexpr int64_t kMin = std::numeric_limits<int64_t>::min();
+  constexpr int64_t kMax = std::numeric_limits<int64_t>::max();
+
+  auto input = makeNullableArrayVector<int64_t>({{1, kMax, 2, 3}});
   VELOX_ASSERT_THROW(
       evaluate("array_cum_sum(c0)", makeRowVector({input})),
       "integer overflow: 1 + 9223372036854775807");
+
+  input = makeNullableArrayVector<int64_t>({{-1, kMin, -2, -3}});
+  VELOX_ASSERT_THROW(
+      evaluate("array_cum_sum(c0)", makeRowVector({input})),
+      "integer overflow: -1 + -9223372036854775808");
+
+  input = makeNullableArrayVector<int64_t>({{kMax, kMin, kMin}});
+  VELOX_ASSERT_THROW(
+      evaluate("array_cum_sum(c0)", makeRowVector({input})),
+      "integer overflow: -1 + -9223372036854775808");
+}
+
+TEST_F(ArrayCumSumTest, doubleLimits) {
+  constexpr double kInf = std::numeric_limits<double>::infinity();
+  constexpr double kNan = std::numeric_limits<double>::quiet_NaN();
+  constexpr double kLowest = std::numeric_limits<double>::lowest();
+  constexpr double kMax = std::numeric_limits<double>::max();
+
+  auto input = makeNullableArrayVector<double>(
+      {{1, kInf, 123.456},
+       {1, kNan, 123.456},
+       {1, kLowest, 123.456},
+       {1, kMax, 123.456}});
+  auto expected = makeNullableArrayVector<double>(
+      {{1, kInf, kInf},
+       {1, kNan, kNan},
+       {1, kLowest, kLowest},
+       {1, kMax, kMax}});
+  testArrayCumSum<double>(expected, input);
 }
