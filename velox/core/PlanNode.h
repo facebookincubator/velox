@@ -646,28 +646,6 @@ class TableWriteNode : public PlanNode {
     }
   }
 
-#ifdef VELOX_ENABLE_BACKWARD_COMPATIBILITY
-  TableWriteNode(
-      const PlanNodeId& id,
-      const RowTypePtr& columns,
-      const std::vector<std::string>& columnNames,
-      const std::shared_ptr<InsertTableHandle>& insertTableHandle,
-      RowTypePtr outputType,
-      connector::CommitStrategy commitStrategy,
-      std::shared_ptr<AggregationNode> aggregationNode,
-      const PlanNodePtr& source)
-      : TableWriteNode(
-            id,
-            columns,
-            columnNames,
-            std::move(aggregationNode),
-            insertTableHandle,
-            false,
-            outputType,
-            commitStrategy,
-            source) {}
-#endif
-
   const std::vector<PlanNodePtr>& sources() const override {
     return sources_;
   }
@@ -969,7 +947,10 @@ class PartitionFunction {
   /// @param input RowVector to split into partitions.
   /// @param [out] partitions Computed partition numbers for each row in
   /// 'input'.
-  virtual void partition(
+  /// @return Returns partition number in case all rows of 'input' are assigned
+  /// to the same partition. In this case 'partitions' vector is left unchanged.
+  /// Used to optimize round-robin partitioning in local exchange.
+  virtual std::optional<uint32_t> partition(
       const RowVector& input,
       std::vector<uint32_t>& partitions) = 0;
 };

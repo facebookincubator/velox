@@ -324,7 +324,7 @@ void AggregationTestBase::testAggregationsWithCompanion(
     // Spilling needs at least 2 batches of input. Use round-robin
     // repartitioning to split input into multiple batches.
     core::PlanNodeId partialNodeId;
-    builder.localPartitionRoundRobin()
+    builder.localPartitionRoundRobinRow()
         .partialAggregation(groupingKeysWithPartialKey, paritialAggregates)
         .capturePlanNodeId(partialNodeId)
         .localPartition(groupingKeysWithPartialKey)
@@ -433,7 +433,7 @@ void AggregationTestBase::testAggregationsWithCompanion(
         .partialAggregation(groupingKeys, mergeAggregates);
 
     if (groupingKeys.empty()) {
-      builder.localPartitionRoundRobin();
+      builder.localPartitionRoundRobinRow();
     } else {
       builder.localPartition(groupingKeys);
     }
@@ -644,7 +644,7 @@ void AggregationTestBase::testAggregations(
     // Spilling needs at least 2 batches of input. Use round-robin
     // repartitioning to split input into multiple batches.
     core::PlanNodeId partialNodeId;
-    builder.localPartitionRoundRobin()
+    builder.localPartitionRoundRobinRow()
         .partialAggregation(groupingKeys, aggregates)
         .capturePlanNodeId(partialNodeId)
         .localPartition(groupingKeys)
@@ -674,7 +674,7 @@ void AggregationTestBase::testAggregations(
     }
   }
 
-  if (!groupingKeys.empty() && allowInputShuffle_) {
+  if (!groupingKeys.empty()) {
     SCOPED_TRACE("Run partial + final with abandon partial agg");
     PlanBuilder builder(pool());
     makeSource(builder);
@@ -803,7 +803,7 @@ void AggregationTestBase::testAggregations(
     builder.partialAggregation(groupingKeys, aggregates);
 
     if (groupingKeys.empty()) {
-      builder.localPartitionRoundRobin();
+      builder.localPartitionRoundRobinRow();
     } else {
       builder.localPartition(groupingKeys);
     }
