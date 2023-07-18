@@ -362,7 +362,8 @@ std::shared_ptr<exec::VectorFunction> makeHash(
 
 std::shared_ptr<exec::VectorFunction> makeHashWithSeed(
     const std::string& name,
-    const std::vector<exec::VectorFunctionArg>& inputArgs) {
+    const std::vector<exec::VectorFunctionArg>& inputArgs,
+    const core::QueryConfig& /*config*/) {
   BaseVector* constantSeed = inputArgs[0].constantValue.get();
   auto seed = constantSeed->as<ConstantVector<int32_t>>()->valueAt(0);
   static const auto kHashFunction = std::make_shared<Murmur3HashFunction>(seed);
@@ -406,7 +407,8 @@ std::shared_ptr<exec::VectorFunction> makeXxHash64(
 
 std::shared_ptr<exec::VectorFunction> makeXxHash64WithSeed(
     const std::string& name,
-    const std::vector<exec::VectorFunctionArg>& inputArgs) {
+    const std::vector<exec::VectorFunctionArg>& inputArgs,
+    const core::QueryConfig& /*config*/) {
   BaseVector* constantSeed = inputArgs[0].constantValue.get();
   auto seed = constantSeed->as<ConstantVector<int64_t>>()->valueAt(0);
   static const auto kXxHash64Function =
