@@ -237,4 +237,5 @@ struct Atan2Function {
     result = std::atan2(y + 0.0, x + 0.0);
   }
 };
+
 } // namespace facebook::velox::functions::sparksql

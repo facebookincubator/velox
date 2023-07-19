@@ -169,8 +169,6 @@ void registerFunctions(const std::string& prefix) {
   registerFunction<RTrimSpaceFunction, Varchar, Varchar>({prefix + "rtrim"});
   registerFunction<RTrimFunction, Varchar, Varchar, Varchar>(
       {prefix + "rtrim"});
-  registerFunction<sparksql::Atan2Function, double, double, double>(
-      {prefix + "atan2"});
   registerFunction<TranslateFunction, Varchar, Varchar, Varchar, Varchar>(
       {prefix + "translate"});
 
