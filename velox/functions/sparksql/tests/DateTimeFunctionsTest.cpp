@@ -204,7 +204,7 @@ TEST_F(DateTimeFunctionsTest, lastDay) {
 
 TEST_F(DateTimeFunctionsTest, dateSub) {
   const auto dateSub = [&](std::optional<int32_t> date,
-                                std::optional<int32_t> value) {
+                           std::optional<int32_t> value) {
     return evaluateOnce<int32_t, int32_t>(
         "date_sub(c0, c1)", {date, value}, {DATE(), INTEGER()});
   };
