@@ -33,17 +33,6 @@ class ParquetTableScanTest : public HiveConnectorTestBase {
  protected:
   using OperatorTestBase::assertQuery;
 
-  void SetUp() override {
-    HiveConnectorTestBase::SetUp();
-    unregisterParquetReaderFactory();
-    registerParquetReaderFactory();
-  }
-
-  void TearDown() override {
-    unregisterParquetReaderFactory();
-    HiveConnectorTestBase::TearDown();
-  }
-
   void assertSelect(
       std::vector<std::string>&& outputColumnNames,
       const std::string& sql) {
