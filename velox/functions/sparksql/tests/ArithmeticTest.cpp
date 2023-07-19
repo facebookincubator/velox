@@ -339,10 +339,9 @@ TEST_F(ArithmeticTest, hypot) {
 }
 
 TEST_F(ArithmeticTest, atan2) {
-  const auto atan2 =
-      [&](std::optional<double> y, std::optional<double> x) {
-        return evaluateOnce<double>("atan2(c0, c1)", y, x);
-      }
+  const auto atan2 = [&](std::optional<double> y, std::optional<double> x) {
+    return evaluateOnce<double>("atan2(c0, c1)", y, x);
+  };
 
   EXPECT_EQ(atan2(0, 0), 0.0);
 }
