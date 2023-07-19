@@ -16,6 +16,7 @@
 
 #include "connectors/hive/storage_adapters/gcs/GCSFileSystem.h"
 #include "connectors/hive/storage_adapters/gcs/GCSUtil.h"
+#include "velox/common/base/tests/GTestUtils.h"
 #include "velox/common/file/File.h"
 #include "velox/connectors/hive/FileHandle.h"
 #include "velox/core/Config.h"
@@ -231,13 +232,8 @@ TEST_F(GCSFileSystemTest, writeAndReadFile) {
   EXPECT_EQ(writeFile->size(), contentSize);
   writeFile->flush();
   writeFile->close();
-
-  try {
-    writeFile->append(dataContent.substr(0, 10));
-    FAIL() << "Expected VeloxException";
-  } catch (VeloxException const& err) {
-    EXPECT_EQ(err.message(), std::string("File is closed"));
-  }
+  VELOX_ASSERT_THROW(
+      writeFile->append(dataContent.substr(0, 10)), "File is closed");
 
   auto readFile = gcfs.openFileForRead(gcsFile);
   std::int64_t size = readFile->size();
@@ -251,13 +247,7 @@ TEST_F(GCSFileSystemTest, openExistingFileForWrite) {
 
   filesystems::GCSFileSystem gcfs(testGcsOptions());
   gcfs.initializeClient();
-
-  try {
-    auto writeFile = gcfs.openFileForWrite(gcsFile);
-    FAIL() << "Expected VeloxException";
-  } catch (VeloxException const& err) {
-    EXPECT_EQ(err.message(), std::string("File already exists"));
-  }
+  VELOX_ASSERT_THROW(gcfs.openFileForWrite(gcsFile), "File already exists");
 }
 
 TEST_F(GCSFileSystemTest, renameNotImplemented) {
@@ -267,13 +257,10 @@ TEST_F(GCSFileSystemTest, renameNotImplemented) {
   const std::string gcsNewFile = gcsURI(preexistingBucketName(), file);
   filesystems::GCSFileSystem gcfs(testGcsOptions());
   gcfs.initializeClient();
-  try {
-    gcfs.openFileForRead(gcsExistingFile);
-    gcfs.rename(gcsExistingFile, gcsNewFile, true);
-    FAIL() << "Expected VeloxException";
-  } catch (VeloxException const& err) {
-    EXPECT_EQ(err.message(), std::string("rename for GCS not implemented"));
-  }
+  gcfs.openFileForRead(gcsExistingFile);
+  VELOX_ASSERT_THROW(
+      gcfs.rename(gcsExistingFile, gcsNewFile, true),
+      "rename for GCS not implemented");
 }
 
 TEST_F(GCSFileSystemTest, mkdirNotImplemented) {
@@ -281,12 +268,8 @@ TEST_F(GCSFileSystemTest, mkdirNotImplemented) {
   const std::string gcsNewDirectory = gcsURI(preexistingBucketName(), dir);
   filesystems::GCSFileSystem gcfs(testGcsOptions());
   gcfs.initializeClient();
-  try {
-    gcfs.mkdir(gcsNewDirectory);
-    FAIL() << "Expected VeloxException";
-  } catch (VeloxException const& err) {
-    EXPECT_EQ(err.message(), std::string("mkdir for GCS not implemented"));
-  }
+  VELOX_ASSERT_THROW(
+      gcfs.mkdir(gcsNewDirectory), "mkdir for GCS not implemented");
 }
 
 TEST_F(GCSFileSystemTest, rmdirNotImplemented) {
@@ -294,12 +277,7 @@ TEST_F(GCSFileSystemTest, rmdirNotImplemented) {
   const std::string gcsDirectory = gcsURI(preexistingBucketName(), dir);
   filesystems::GCSFileSystem gcfs(testGcsOptions());
   gcfs.initializeClient();
-  try {
-    gcfs.rmdir(gcsDirectory);
-    FAIL() << "Expected VeloxException";
-  } catch (VeloxException const& err) {
-    EXPECT_EQ(err.message(), std::string("rmdir for GCS not implemented"));
-  }
+  VELOX_ASSERT_THROW(gcfs.rmdir(gcsDirectory), "rmdir for GCS not implemented");
 }
 
 TEST_F(GCSFileSystemTest, missingFile) {

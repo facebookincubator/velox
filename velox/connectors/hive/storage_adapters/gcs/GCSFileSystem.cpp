@@ -129,8 +129,7 @@ class GCSReadFile final : public ReadFile {
   uint64_t memoryUsage() const override {
     return sizeof(GCSReadFile) // this class
         + sizeof(gcs::Client) // pointee
-        + kUploadBufferSize // buffer size
-        ;
+        + kUploadBufferSize; // buffer size
   }
 
   bool shouldCoalesce() const final {
@@ -188,10 +187,9 @@ class GCSWriteFile final : public WriteFile {
     }
 
     // check that it doesn't exist , if it does throw an error
-    gc::StatusOr<gcs::ObjectMetadata> object_metadata =
-        client_->GetObjectMetadata(bucket_, key_);
+    auto object_metadata = client_->GetObjectMetadata(bucket_, key_);
 
-    if (object_metadata) {
+    if (object_metadata.ok()) {
       VELOX_CHECK(false, "File already exists");
     }
 
@@ -205,7 +203,7 @@ class GCSWriteFile final : public WriteFile {
     size_ = 0;
   }
 
-  void append(std::string_view data) {
+  void append(const std::string_view data) {
     VELOX_CHECK((!closed_ && stream_.IsOpen()), "File is closed");
     stream_ << data;
     size_ += data.size();
@@ -219,6 +217,7 @@ class GCSWriteFile final : public WriteFile {
 
   void close() {
     if (!closed_ && stream_.IsOpen()) {
+      stream_.flush();
       stream_.Close();
       closed_ = true;
     }
@@ -234,7 +233,7 @@ class GCSWriteFile final : public WriteFile {
   std::string bucket_;
   std::string key_;
   std::atomic<int64_t> size_{-1};
-  bool closed_{false};
+  std::atomic<bool> closed_{false};
 };
 } // namespace
 
