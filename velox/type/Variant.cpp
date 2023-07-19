@@ -174,11 +174,6 @@ void variant::throwCheckPtrError() const {
   throw std::invalid_argument{"missing variant value"};
 }
 
-std::string variant::toJson() const {
-  const auto type = fromKindToScalerType(kind_);
-  return toJson(type);
-}
-
 std::string variant::toJson(const TypePtr& type) const {
   // todo(youknowjack): consistent story around std::stringifying, converting,
   // and other basic operations. Stringification logic should not be specific
@@ -203,9 +198,9 @@ std::string variant::toJson(const TypePtr& type) const {
           b += ",";
         }
         b += "{\"key\":";
-        b += pair.first.toJson();
+        b += pair.first.toJson(type);
         b += ",\"value\":";
-        b += pair.second.toJson();
+        b += pair.second.toJson(type);
         b += "}";
         first = false;
       }
@@ -221,7 +216,7 @@ std::string variant::toJson(const TypePtr& type) const {
         if (!first) {
           b += ",";
         }
-        b += v.toJson();
+        b += v.toJson(type);
         first = false;
       }
       b += "]";
@@ -236,7 +231,7 @@ std::string variant::toJson(const TypePtr& type) const {
         if (!first) {
           b += ",";
         }
-        b += v.toJson();
+        b += v.toJson(type);
         first = false;
       }
       b += "]";

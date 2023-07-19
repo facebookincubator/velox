@@ -264,7 +264,8 @@ TEST_F(VariantSerializationTest, serializeOpaque) {
 }
 
 TEST_F(VariantSerializationTest, opaqueToString) {
-  auto s = var_.toJson();
+  const auto type = fromKindToScalerType(var_.kind());
+  auto s = var_.toJson(type);
   EXPECT_EQ(
       s,
       "Opaque<type:OPAQUE<SerializableClass>,value:\"{\"name\":\"test_class\",\"value\":false}\">");

@@ -399,12 +399,10 @@ class variant {
   // Use type to interpret the output.
   std::string toJson(const TypePtr& type) const;
 
-  // Use the variant's physical type to interpret the output.
-  std::string toJson() const;
-
   // Used by python binding, do not change signature.
   std::string pyToJson() const {
-    return toJson();
+    const auto type = fromKindToScalerType(kind_);
+    return toJson(type);
   }
 
   folly::dynamic serialize() const;
@@ -540,11 +538,6 @@ class variant {
       default:
         return VELOX_DYNAMIC_SCALAR_TYPE_DISPATCH(kind2type, kind_);
     }
-  }
-
-  friend std::ostream& operator<<(std::ostream& stream, const variant& k) {
-    stream << k.toJson();
-    return stream;
   }
 
   // Uses kEpsilon to compare floating point types (REAL and DOUBLE).
