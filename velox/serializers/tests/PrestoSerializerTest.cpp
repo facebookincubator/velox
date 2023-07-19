@@ -147,6 +147,22 @@ TEST_F(PrestoSerializerTest, basic) {
   testRoundTrip(rowVector);
 }
 
+TEST_F(PrestoSerializerTest, metadataOnlyVector) {
+  vector_size_t numRows = 1'000;
+  auto vector = vectorMaker_->rowVector(ROW({"a"}, {BIGINT()}), numRows);
+  auto rowVector = vectorMaker_->rowVector({vector});
+  std::ostringstream out;
+  serialize(rowVector, &out, nullptr);
+
+  auto rowType = ROW({}, {});
+  auto byteStream = toByteStream(out.str());
+  RowVectorPtr deserialized = vectorMaker_->rowVector(ROW({}, {}), 0);
+  serde_->deserialize(
+      byteStream.get(), pool_.get(), rowType, &deserialized, nullptr);
+  ASSERT_EQ(byteStream->remainingSize(), 0);
+  ASSERT_EQ(rowVector->size(), deserialized->size());
+}
+
 /// Test serialization of a dictionary vector that adds nulls to the base
 /// vector.
 TEST_F(PrestoSerializerTest, dictionaryWithExtraNulls) {

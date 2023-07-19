@@ -1733,6 +1733,13 @@ void PrestoVectorSerde::deserialize(
   VELOX_CHECK_EQ(
       checksum, actualCheckSum, "Received corrupted serialized page.");
 
+  if (type->children().empty()) {
+    // Skip the reading of if we only need a trivially empty vector of its size
+    // set for certain optimizations like RowNumber.
+    source->skip(uncompressedSize);
+    return;
+  }
+
   // skip number of columns
   source->skip(4);
 
