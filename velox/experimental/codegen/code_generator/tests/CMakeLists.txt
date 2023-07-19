@@ -23,7 +23,6 @@ endforeach()
 add_executable(
   velox_codegen_expression_test
   BasicExprCodeGeneratorTest.cpp
-  resources/UDFTest.h
   LogicalExpressionsTest.cpp
   CastExpressionTest.cpp
   ArithmeticFunctionsTest.cpp

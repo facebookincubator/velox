@@ -12,7 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-add_executable(velox_transform_utils_test TestUtils.cpp ../ranges_utils.h)
+add_executable(velox_transform_utils_test TestUtils.cpp)
 
 add_test(velox_transform_utils_test velox_transform_utils_test)
 # target_compile_features(velox_transform_utils_test INTERFACE cxx_std_20)

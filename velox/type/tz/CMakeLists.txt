@@ -14,6 +14,6 @@
 if(${VELOX_BUILD_TESTING})
   add_subdirectory(tests)
 endif()
-add_library(velox_type_tz TimeZoneMap.h TimeZoneDatabase.cpp TimeZoneMap.cpp)
+add_library(velox_type_tz TimeZoneDatabase.cpp TimeZoneMap.cpp)
 
 target_link_libraries(velox_type_tz Boost::regex fmt::fmt Folly::folly)
