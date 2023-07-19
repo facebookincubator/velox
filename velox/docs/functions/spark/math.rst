@@ -74,11 +74,11 @@ Mathematical Functions
 
 .. spark:function:: log2(x) -> double
 
-    Returns the logarithm of ``x`` with base 2.
+    Returns the logarithm of ``x`` with base 2. Return null for zero input.
 
 .. spark:function:: log10(x) -> double
 
-    Returns the logarithm of ``x`` with base 10.
+    Returns the logarithm of ``x`` with base 10. Return null for zero input.
 
 .. spark:function:: multiply(x, y) -> [same as x]
 

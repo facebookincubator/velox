@@ -361,12 +361,21 @@ class LogNTest : public SparkFunctionBaseTest {
   }
 };
 
-TEST_F(LogNTest, logN) {
+TEST_F(LogNTest, log2) {
+  const auto log2 = [&](std::optional<double> a) {
+    return evaluateOnce<double>("log2(c0)", a);
+  };
   EXPECT_EQ(log2(8), 3.0);
-  EXPECT_EQ(log2(std::nullopt), std::nullopt);
   EXPECT_EQ(log2(-1.0), std::nullopt);
+  EXPECT_EQ(log2(0.0), std::nullopt);
+}
+
+TEST_F(LogNTest, log10) {
+  const auto log10 = [&](std::optional<double> a) {
+    return evaluateOnce<double>("log10(c0)", a);
+  };
   EXPECT_EQ(log10(100), 2.0);
-  EXPECT_EQ(log10(std::nullopt), std::nullopt);
+  EXPECT_EQ(log2(0.0), std::nullopt);
   EXPECT_EQ(log10(-1.0), std::nullopt);
 }
 
