@@ -198,9 +198,7 @@ void registerFunctions(const std::string& prefix) {
 
   registerFunction<LastDayFunction, Date, Date>({prefix + "last_day"});
 
-  registerFunction<DateSubFunction, Date, Date, int32_t>({"date_sub"});
-  registerFunction<DateSubFunction, Date, Date, int16_t>({"date_sub"});
-  registerFunction<DateSubFunction, Date, Date, int8_t>({"date_sub"});
+  registerFunction<DateSubFunction, Date, Date, int32_t>({prefix + "date_sub"});
 
   // Register bloom filter function
   registerFunction<BloomFilterMightContainFunction, bool, Varbinary, int64_t>(

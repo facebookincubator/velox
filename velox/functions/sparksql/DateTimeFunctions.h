@@ -213,9 +213,10 @@ template <typename T>
 struct DateSubFunction {
   VELOX_DEFINE_FUNCTION_TYPES(T);
 
-  template <typename U>
-  FOLLY_ALWAYS_INLINE void
-  call(out_type<Date>& result, const arg_type<Date>& date, const U value) {
+  FOLLY_ALWAYS_INLINE void call(
+      out_type<Date>& result,
+      const arg_type<Date>& date,
+      const int32_t value) {
     int32_t subValue = 0 - value;
     result = addToDate(date, DateTimeUnit::kDay, subValue);
   }

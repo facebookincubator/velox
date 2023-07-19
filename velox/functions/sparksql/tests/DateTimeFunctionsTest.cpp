@@ -203,18 +203,8 @@ TEST_F(DateTimeFunctionsTest, lastDay) {
 }
 
 TEST_F(DateTimeFunctionsTest, dateSub) {
-  const auto dateSubInt32 = [&](std::optional<int32_t> date,
+  const auto dateSub = [&](std::optional<int32_t> date,
                                 std::optional<int32_t> value) {
-    return evaluateOnce<int32_t, int32_t>(
-        "date_sub(c0, c1)", {date, value}, {DATE(), INTEGER()});
-  };
-  const auto dateSubInt16 = [&](std::optional<int32_t> date,
-                                std::optional<int16_t> value) {
-    return evaluateOnce<int32_t, int32_t>(
-        "date_sub(c0, c1)", {date, value}, {DATE(), INTEGER()});
-  };
-  const auto dateSubInt8 = [&](std::optional<int32_t> date,
-                               std::optional<int8_t> value) {
     return evaluateOnce<int32_t, int32_t>(
         "date_sub(c0, c1)", {date, value}, {DATE(), INTEGER()});
   };
@@ -222,21 +212,17 @@ TEST_F(DateTimeFunctionsTest, dateSub) {
   // Check simple tests.
   int32_t inputDate = parseDate("2019-03-01");
   int32_t expectedDate = parseDate("2019-02-28");
-  EXPECT_EQ(expectedDate, dateSubInt32(inputDate, 1));
-  EXPECT_EQ(expectedDate, dateSubInt16(inputDate, 1));
-  EXPECT_EQ(expectedDate, dateSubInt8(inputDate, 1));
+  EXPECT_EQ(expectedDate, dateSub(inputDate, 1));
 
   // Account for the last day of a year-month.
   inputDate = parseDate("2020-02-29");
   expectedDate = parseDate("2019-01-30");
-  EXPECT_EQ(expectedDate, dateSubInt32(inputDate, 395));
-  EXPECT_EQ(expectedDate, dateSubInt16(inputDate, 395));
+  EXPECT_EQ(expectedDate, dateSub(inputDate, 395));
 
   // Check for negative intervals.
   inputDate = parseDate("2019-02-28");
   expectedDate = parseDate("2020-02-29");
-  EXPECT_EQ(expectedDate, dateSubInt32(inputDate, -366));
-  EXPECT_EQ(expectedDate, dateSubInt16(inputDate, -366));
+  EXPECT_EQ(expectedDate, dateSub(inputDate, -366));
 }
 
 } // namespace
