@@ -169,7 +169,7 @@ class StringTest : public SparkFunctionBaseTest {
       std::optional<std::string> padString) {
     return evaluateOnce<std::string>(
         "rpad(c0, c1, c2)", string, size, padString);
-  };
+  }
 
   std::optional<std::string> lpad(
       std::optional<std::string> string,
@@ -177,19 +177,19 @@ class StringTest : public SparkFunctionBaseTest {
       std::optional<std::string> padString) {
     return evaluateOnce<std::string>(
         "lpad(c0, c1, c2)", string, size, padString);
-  };
+  }
 
   std::optional<std::string> rpad(
       std::optional<std::string> string,
       std::optional<int32_t> size) {
     return evaluateOnce<std::string>("rpad(c0, c1)", string, size);
-  };
+  }
 
   std::optional<std::string> lpad(
       std::optional<std::string> string,
       std::optional<int32_t> size) {
     return evaluateOnce<std::string>("lpad(c0, c1)", string, size);
-  };
+  }
 };
 
 TEST_F(StringTest, Ascii) {
