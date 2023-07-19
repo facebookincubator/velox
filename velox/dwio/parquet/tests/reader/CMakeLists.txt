@@ -71,6 +71,7 @@ target_link_libraries(
   velox_dwio_native_parquet_reader Folly::folly ${FOLLY_BENCHMARK})
 
 add_executable(velox_dwio_parquet_table_scan_test ParquetTableScanTest.cpp)
+add_test(velox_dwio_parquet_table_scan_test velox_dwio_parquet_table_scan_test)
 target_link_libraries(
   velox_dwio_parquet_table_scan_test
   velox_dwio_parquet_reader
