@@ -396,9 +396,13 @@ class variant {
     }
   }
 
-  std::string toJson(const TypePtr& type = nullptr) const;
+  // Use type to interpret the Variant.
+  std::string toJson(const TypePtr& type) const;
 
-  /// Used by python binding, do not change signature.
+  // Use physical types to interpret the Variant.
+  std::string toJson() const;
+
+  // Used by python binding, do not change signature.
   std::string pyToJson() const {
     return toJson();
   }

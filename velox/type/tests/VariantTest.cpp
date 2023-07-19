@@ -15,7 +15,6 @@
  */
 #include "velox/type/Variant.h"
 #include <gtest/gtest.h>
-#include <velox/type/Type.h>
 #include <numeric>
 
 using namespace facebook::velox;
