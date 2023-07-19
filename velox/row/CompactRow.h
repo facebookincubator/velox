@@ -43,7 +43,7 @@ class CompactRow {
       const RowTypePtr& rowType,
       memory::MemoryPool* pool);
 
- protected:
+ private:
   explicit CompactRow(const VectorPtr& vector);
 
   void initialize(const TypePtr& type);

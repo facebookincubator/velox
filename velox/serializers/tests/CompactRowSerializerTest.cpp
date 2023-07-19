@@ -94,7 +94,7 @@ TEST_F(CompactRowSerializerTest, fuzz) {
       ARRAY(INTEGER()),
       ARRAY(INTEGER()),
       MAP(VARCHAR(), INTEGER()),
-      //      MAP(VARCHAR(), ARRAY(INTEGER())),
+      MAP(VARCHAR(), ARRAY(INTEGER())),
   });
 
   VectorFuzzer::Options opts;
