@@ -124,10 +124,6 @@ class Destination {
 // dropping columns from its input.
 class PartitionedOutput : public Operator {
  public:
-  // Minimum flush size for non-final flush. 60KB + overhead fits a
-  // network MTU of 64K.
-  static constexpr uint64_t kMinDestinationSize = 60 * 1024;
-
   PartitionedOutput(
       int32_t operatorId,
       DriverCtx* FOLLY_NONNULL ctx,

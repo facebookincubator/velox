@@ -66,6 +66,18 @@ Generic Configuration
      - integer
      - 32MB
      - Used for backpressure to block local exchange producers when the local exchange buffer reaches or exceeds this size.
+   * - exchange.enable_flow_control
+     - boolean
+     - false
+     - If true, enable flow control in exchange. Flow control limits network bandwidth used by exchange client.
+       This helps in reducing memory usage at cost of efficiency. Flow control parameters are further controlled by
+       ``exchange.max_buffer_size``.
+   * - exchange.max_buffer_size
+     - integer
+     - 32MB
+     - Size of buffer in the exchange client that holds data fetched from other nodes before it is processed.
+       A larger buffer can increase network throughput for larger clusters and thus decrease query processing time,
+       but will reduce the amount of memory available for other usages.
    * - max_page_partitioning_buffer_size
      - integer
      - 32MB

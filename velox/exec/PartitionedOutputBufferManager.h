@@ -129,6 +129,10 @@ class DestinationBuffer {
 
 class PartitionedOutputBuffer {
  public:
+  // Minimum flush size for non-final flush. 60KB + overhead fits a
+  // network MTU of 64K.
+  static constexpr uint64_t kMinDestinationSize = 60 * 1024;
+
   PartitionedOutputBuffer(
       std::shared_ptr<Task> task,
       core::PartitionedOutputNode::Kind kind,

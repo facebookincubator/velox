@@ -85,6 +85,11 @@ class QueryConfig {
   static constexpr const char* kMaxLocalExchangeBufferSize =
       "max_local_exchange_buffer_size";
 
+  static constexpr const char* kExchangeFlowControl =
+      "exchange.enable_flow_control";
+
+  static constexpr const char* kExchangeBufferSize = "exchange.max_buffer_size";
+
   static constexpr const char* kMaxPartialAggregationMemory =
       "max_partial_aggregation_memory";
 
@@ -255,6 +260,15 @@ class QueryConfig {
   uint64_t maxLocalExchangeBufferSize() const {
     static constexpr uint64_t kDefault = 32UL << 20;
     return get<uint64_t>(kMaxLocalExchangeBufferSize, kDefault);
+  }
+
+  bool exchangeFlowControlEnabled() const {
+    return get<bool>(kExchangeFlowControl, false);
+  }
+
+  uint64_t exchangeBufferSize() const {
+    static constexpr uint64_t kDefault = 32UL << 20;
+    return get<uint64_t>(kExchangeBufferSize, kDefault);
   }
 
   uint64_t preferredOutputBatchBytes() const {

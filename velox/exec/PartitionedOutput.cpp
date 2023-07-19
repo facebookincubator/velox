@@ -32,7 +32,7 @@ BlockingReason Destination::advance(
     return BlockingReason::kNotBlocked;
   }
   uint32_t adjustedMaxBytes = std::max(
-      PartitionedOutput::kMinDestinationSize,
+      PartitionedOutputBuffer::kMinDestinationSize,
       (maxBytes * targetSizePct_) / 100);
   if (bytesInCurrent_ >= adjustedMaxBytes) {
     return flush(bufferManager, bufferReleaseFn, future);
@@ -324,7 +324,8 @@ RowVectorPtr PartitionedOutput::getOutput() {
     // small to be worth transfer.
     for (auto& destination : destinations_) {
       if (destination.get() == blockedDestination ||
-          destination->serializedBytes() < kMinDestinationSize) {
+          destination->serializedBytes() <
+              PartitionedOutputBuffer::kMinDestinationSize) {
         continue;
       }
       destination->flush(*bufferManager, bufferReleaseFn_, nullptr);

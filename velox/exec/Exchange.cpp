@@ -16,6 +16,7 @@
 #include "velox/exec/Exchange.h"
 #include <velox/common/base/Exceptions.h>
 #include <velox/common/memory/Memory.h>
+#include "velox/exec/PartitionedOutput.h"
 #include "velox/exec/PartitionedOutputBufferManager.h"
 #include "velox/vector/VectorStream.h"
 
@@ -85,6 +86,10 @@ class LocalExchangeSource : public ExchangeSource {
   }
 
   void request() override {
+    request(kMaxBytes);
+  }
+
+  void request(uint64_t bytes) override {
     auto buffers = PartitionedOutputBufferManager::getInstance().lock();
     VELOX_CHECK_NOT_NULL(buffers, "invalid PartitionedOutputBufferManager");
     VELOX_CHECK(requestPending_);
@@ -93,7 +98,7 @@ class LocalExchangeSource : public ExchangeSource {
     buffers->getData(
         taskId_,
         destination_,
-        kMaxBytes,
+        bytes,
         sequence_,
         // Since this lambda may outlive 'this', we need to capture a
         // shared_ptr to the current object (self).
@@ -123,29 +128,40 @@ class LocalExchangeSource : public ExchangeSource {
             inputPage = nullptr;
           }
           numPages_ += pages.size();
-          int64_t ackSequence;
+          int64_t ackSequence = kNoReply;
           {
             std::vector<ContinuePromise> promises;
             {
               std::lock_guard<std::mutex> l(queue_->mutex());
               requestPending_ = false;
+              uint64_t bytes = 0;
               for (auto& page : pages) {
+                bytes += page->size();
                 queue_->enqueueLocked(std::move(page), promises);
               }
+              queue_->recordReplyLocked(bytes);
               if (atEnd) {
                 queue_->enqueueLocked(nullptr, promises);
                 atEnd_ = true;
               }
-              ackSequence = sequence_ = sequence + pages.size();
+              if (pages.size() > 0) {
+                ackSequence = sequence_ = sequence + pages.size();
+              }
             }
             for (auto& promise : promises) {
               promise.setValue();
             }
           }
-          // Outside of queue mutex.
+          // Outside of queue mutex. Sends a delete results, ack or new
+          // request to self and requests more sources if there is space in the
+          // queue.
+          if (queue_->requestIfDue(self)) {
+            return;
+          }
+
           if (atEnd_) {
             buffers->deleteResults(taskId_, destination_);
-          } else {
+          } else if (ackSequence != kNoReply) {
             buffers->acknowledge(taskId_, destination_, ackSequence);
           }
         });
@@ -181,6 +197,34 @@ std::unique_ptr<ExchangeSource> createLocalExchangeSource(
 
 } // namespace
 
+uint64_t ExchangeQueue::expectedSerializedPageSize() const {
+  // Initially, max size / number of sources. Later, average of received sizes.
+  constexpr int32_t kMinExpectedSize =
+      PartitionedOutputBuffer::kMinDestinationSize;
+  if (!numSources_) {
+    return kMinExpectedSize;
+  }
+  // If not all sources have arrived, assume 100 sources. Otherwise,
+  // use numSources_
+  auto numSourcesGuess =
+      noMoreSources_ ? numSources_ : std::max(numSources_, 100);
+  // Initially, expected page size is maxBytes_ / receivedPages_.
+  // As we get more data, we can make the guess as receivedBytes_ /
+  // receivedPages_. This formula ensures the above.
+  return std::max<int64_t>(
+      kMinExpectedSize,
+      (maxBytes_ + receivedBytes_) / (receivedPages_ + numSourcesGuess));
+}
+
+int64_t ExchangeQueue::requestIfDue(
+    const std::shared_ptr<ExchangeSource>& replySource) {
+  auto client = client_.lock();
+  if (client) {
+    return client->requestIfDue(replySource);
+  }
+  return false;
+}
+
 void ExchangeClient::addRemoteTaskId(const std::string& taskId) {
   std::shared_ptr<ExchangeSource> toRequest;
   std::shared_ptr<ExchangeSource> toClose;
@@ -212,16 +256,28 @@ void ExchangeClient::addRemoteTaskId(const std::string& taskId) {
     } else {
       sources_.push_back(source);
       queue_->addSourceLocked();
-      if (source->shouldRequestLocked()) {
-        toRequest = source;
-      }
+      toRequest = source;
     }
   }
 
   // Outside of lock.
   if (toClose) {
-    toClose->close();
-  } else if (toRequest) {
+    return toClose->close();
+  }
+  if (!toRequest) {
+    return;
+  }
+  std::shared_ptr<ExchangeSource> empty;
+  if (requestIfDue(empty)) {
+    return;
+  }
+  {
+    std::lock_guard<std::mutex> l(queue_->mutex());
+    if (!toRequest->shouldRequestLocked()) {
+      toRequest = nullptr;
+    }
+  }
+  if (toRequest) {
     toRequest->request();
   }
 }
@@ -256,13 +312,15 @@ folly::F14FastMap<std::string, RuntimeMetric> ExchangeClient::stats() const {
       stats[name].addValue(value);
     }
   }
+  stats["peakBytes"] =
+      RuntimeMetric(queue_->peakBytes(), RuntimeCounter::Unit::kBytes);
+  stats["nothingRequestable"] = RuntimeMetric(numNothingRequestable_);
   return stats;
 }
 
 std::unique_ptr<SerializedPage> ExchangeClient::next(
     bool* atEnd,
     ContinueFuture* future) {
-  std::vector<std::shared_ptr<ExchangeSource>> toRequest;
   std::unique_ptr<SerializedPage> page;
   {
     std::lock_guard<std::mutex> l(queue_->mutex());
@@ -274,8 +332,18 @@ std::unique_ptr<SerializedPage> ExchangeClient::next(
     if (page && queue_->totalBytes() > queue_->minBytes()) {
       return page;
     }
-    // There is space for more data, send requests to sources with no pending
-    // request.
+  }
+
+  std::shared_ptr<ExchangeSource> empty;
+  if (requestIfDue(empty)) {
+    return page;
+  }
+
+  std::vector<std::shared_ptr<ExchangeSource>> toRequest;
+  // There is space for more data, send requests to sources with no pending
+  // request.
+  {
+    std::lock_guard<std::mutex> l(queue_->mutex());
     for (auto& source : sources_) {
       if (source->shouldRequestLocked()) {
         toRequest.push_back(source);
@@ -288,6 +356,11 @@ std::unique_ptr<SerializedPage> ExchangeClient::next(
     source->request();
   }
   return page;
+}
+
+bool ExchangeClient::requestIfDue(
+    const std::shared_ptr<ExchangeSource>& /*replySource*/) {
+  return enableFlowControl_;
 }
 
 ExchangeClient::~ExchangeClient() {
