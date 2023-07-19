@@ -16,7 +16,6 @@
 #include "velox/functions/sparksql/RegisterCompare.h"
 
 #include "velox/functions/lib/RegistrationHelpers.h"
-#include "velox/functions/sparksql/CompareFunctionsNullSafe.h"
 #include "velox/functions/sparksql/Comparisons.h"
 
 namespace facebook::velox::functions::sparksql {

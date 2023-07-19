@@ -142,4 +142,19 @@ struct BetweenFunction {
   }
 };
 
+inline std::vector<std::shared_ptr<exec::FunctionSignature>>
+equalNullSafeSignatures() {
+  return {exec::FunctionSignatureBuilder()
+              .typeVariable("T")
+              .returnType("boolean")
+              .argumentType("T")
+              .argumentType("T")
+              .build()};
+}
+
+std::shared_ptr<exec::VectorFunction> makeEqualNullSafe(
+    const std::string& name,
+    const std::vector<exec::VectorFunctionArg>& inputArgs,
+    const core::QueryConfig& config);
+
 } // namespace facebook::velox::functions::sparksql

@@ -6,7 +6,7 @@ Comparison Functions
 
     Returns true if x is within the specified [min, max] range
     inclusive. The types of all arguments must be the same.
-    Supported types are: TINYINT, SMALLINT, INTEGER, BIGINT, DOUBLE, REAL, HUGEINT.
+    Supported types are: TINYINT, SMALLINT, INTEGER, BIGINT, DOUBLE, REAL, DECIMAL.
 
 .. spark:function:: equalnullsafe(x, y) -> boolean
 
