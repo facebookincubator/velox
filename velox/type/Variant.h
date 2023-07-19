@@ -396,10 +396,10 @@ class variant {
     }
   }
 
-  // Use type to interpret the Variant.
+  // Use type to interpret the output.
   std::string toJson(const TypePtr& type) const;
 
-  // Use physical types to interpret the Variant.
+  // Use the variant's physical type to interpret the output.
   std::string toJson() const;
 
   // Used by python binding, do not change signature.
