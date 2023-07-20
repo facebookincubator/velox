@@ -104,13 +104,13 @@ TEST_F(BloomFilterAggAggregateTest, config) {
       expected,
       {{core::QueryConfig::kSparkBloomFilterMaxNumBits, "1600"}});
 
-  exec::test::PlanBuilder builder(pool());
-  builder.values(vector)
-      .partialAggregation({}, {"bloom_filter_agg(c0)"})
-      .finalAggregation();
-  exec::test::AssertQueryBuilder queryBuilder(
-      builder.planNode(), duckDbQueryRunner_);
-  auto actual = queryBuilder.copyResults(pool());
+  // Test fails without setting the config.
+  auto planNode = exec::test::PlanBuilder(pool())
+                      .values(vector)
+                      .partialAggregation({}, {"bloom_filter_agg(c0)"})
+                      .finalAggregation()
+                      .planNode();
+  auto actual = exec::test::AssertQueryBuilder(planNode).copyResults(pool());
   EXPECT_FALSE(
       expected[0]->childAt(0)->equalValueAt(actual->childAt(0).get(), 0, 0));
 }

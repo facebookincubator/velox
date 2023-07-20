@@ -595,18 +595,18 @@ RowVectorPtr AggregationTestBase::validateStreamingInTestAggregations(
     const std::unordered_map<std::string, std::string>& config) {
   PlanBuilder builder(pool());
   makeSource(builder);
-  auto inputQueryBuilder = AssertQueryBuilder(builder.planNode());
-  inputQueryBuilder.configs(config);
-  auto input = inputQueryBuilder.copyResults(pool());
+  auto input = AssertQueryBuilder(builder.planNode())
+                   .configs(config)
+                   .copyResults(pool());
   if (input->size() < 2) {
     return nullptr;
   }
   auto size1 = input->size() / 2;
   auto size2 = input->size() - size1;
   builder.singleAggregation({}, aggregates);
-  auto expectedQueryBuilder = AssertQueryBuilder(builder.planNode());
-  expectedQueryBuilder.configs(config);
-  auto expected = expectedQueryBuilder.copyResults(pool());
+  auto expected = AssertQueryBuilder(builder.planNode())
+                      .configs(config)
+                      .copyResults(pool());
   EXPECT_EQ(expected->size(), 1);
   auto& aggregationNode =
       static_cast<const core::AggregationNode&>(*builder.planNode());

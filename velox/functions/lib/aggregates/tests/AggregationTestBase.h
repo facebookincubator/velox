@@ -61,7 +61,7 @@ class AggregationTestBase : public exec::test::OperatorTestBase {
   /// @param groupingKeys A list of grouping keys. May be empty.
   /// @param aggregates A list of aggregates to compute.
   /// @param duckDbSql An equivalent DuckDB SQL query.
-  /// @param config The config to build core::QueryConfig in Aggregate.
+  /// @param config Optional configuration properties to use when evaluating aggregations.
   void testAggregations(
       std::function<void(exec::test::PlanBuilder&)> makeSource,
       const std::vector<std::string>& groupingKeys,

@@ -262,16 +262,16 @@ class BloomFilterAggAggregate : public exec::Aggregate {
   }
 
   static constexpr int64_t kMissingArgument = -1;
+  const int64_t defaultExpectedNumItems_;
+  const int64_t defaultNumBits_;
+  const int64_t maxNumBits_;
+  
   // Reusable instance of DecodedVector for decoding input vectors.
   DecodedVector decodedRaw_;
   DecodedVector decodedIntermediate_;
   int64_t estimatedNumItems_ = kMissingArgument;
   int64_t numBits_ = kMissingArgument;
   int32_t capacity_ = kMissingArgument;
-
-  const int64_t defaultExpectedNumItems_;
-  const int64_t defaultNumBits_;
-  const int64_t maxNumBits_;
 };
 
 } // namespace

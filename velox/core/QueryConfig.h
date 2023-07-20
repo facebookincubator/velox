@@ -421,12 +421,11 @@ class QueryConfig {
   int64_t sparkBloomFilterMaxNumBits() const {
     constexpr int64_t kDefault = 4'096 * 1024;
     auto value = get<int64_t>(kSparkBloomFilterMaxNumBits, kDefault);
-    VELOX_CHECK_LE(
+    VELOX_USER_CHECK_LE(
         value,
         kDefault,
-        "{} cannot exceed the default value {} in case of memory limit",
-        kSparkBloomFilterMaxNumBits,
-        kDefault);
+        "{} cannot exceed the default value",
+        kSparkBloomFilterMaxNumBits);
     return value;
   }
 
