@@ -14,12 +14,14 @@
  * limitations under the License.
  */
 #include "velox/exec/tests/JoinFuzzer.h"
+
+#include <boost/filesystem/exception.hpp>
 #include <boost/random/uniform_int_distribution.hpp>
+
 #include "velox/exec/tests/utils/AssertQueryBuilder.h"
 #include "velox/exec/tests/utils/PlanBuilder.h"
 #include "velox/exec/tests/utils/TempDirectoryPath.h"
 #include "velox/vector/fuzzer/VectorFuzzer.h"
-
 DEFINE_int32(steps, 10, "Number of plans to generate and test.");
 
 DEFINE_int32(
@@ -673,9 +675,31 @@ void JoinFuzzer::verify(core::JoinType joinType) {
           continue;
         }
       }
-
-      LOG(INFO) << "Testing plan #" << i << " with spilling";
-      actual = execute(altPlans[i], true /*injectSpill*/);
+      auto runWithSpilling = [&]() {
+        LOG(INFO) << "Testing plan #" << i << " with spilling";
+        int count = 0;
+        while (true) {
+          try {
+            count++;
+            actual = execute(altPlans[i], true /*injectSpill*/);
+            return;
+          } catch (boost::filesystem::filesystem_error&) {
+            // This error keeps happening on circle ci, it could be due to
+            // throttling on disk writes, here we retry 3 times before reporting
+            // a bug.
+            if (count == 3) {
+              LOG(ERROR)
+                  << "fuzzer run with spilling failed due to filesystem_error more than three times";
+              std::rethrow_exception(std::current_exception());
+            } else {
+              sleep(10);
+              LOG(WARNING)
+                  << "fuzzer run with spilling failed due to filesystem_error, retry";
+            }
+          }
+        }
+      };
+      runWithSpilling();
       VELOX_CHECK(
           assertEqualResults({expected}, {actual}),
           "Logically equivalent plans produced different results");
