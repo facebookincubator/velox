@@ -264,14 +264,15 @@ def update_links(src_dir: str, repo_root: str, excluded_dirs: list[str] = [],
 
     for t in targets.values():
         t.was_linked = False
-        if t.cml_path is None:
-            continue
 
-        cml = os.path.join(t.cml_path, file)
-        token_stream = get_token_stream(cml)
-        update_listener = listeners.UpdateTargetsListener(targets, token_stream)
+    for f in files:
+
+        token_stream = get_token_stream(f)
+        update_listener = listeners.UpdateTargetsListener(
+            targets, token_stream)
         walk_stream(token_stream, update_listener)
-        updated_cml = update_listener.token_stream.getText('default', 0, 999999999)
+        updated_cml = update_listener.token_stream.getText(
+            'default', 0, 999999999)
         if not dry_run:
-            with open(cml, 'w') as f:
-                f.write(updated_cml)
+            with open(f, 'w') as new_f:
+                new_f.write(updated_cml)
