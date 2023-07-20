@@ -50,7 +50,7 @@ def parse_targets(file: str, targets: dict[str, listeners.TargetNode],
 
 def get_includes(file_path: str) -> tuple[list[str], list[str]]:
     include_ptrn = re.compile(
-        "^#include\\s+[\"<]([\\w/]+\\.h)[\">]",
+        "^#include\\s+[\"<]([\\w/]+\\.h.*)[\">]",
         flags=re.IGNORECASE | re.MULTILINE)
     with open(file_path, "r") as file:
         src = file.read()
@@ -58,54 +58,6 @@ def get_includes(file_path: str) -> tuple[list[str], list[str]]:
 
     return ([h for h in includes if h.startswith('velox')],
             [h for h in includes if not h.startswith('velox')])
-
-
-# def create_header_map(targets: dict[str, listeners.TargetNode], repo_root=''):
-#     cpp_map: dict[str, list[str]] = {}
-#     header_map: dict[str, list[str]] = {}
-#
-#     for key, target in targets.items():
-#         if target.cml_path is None:
-#             print('skipping non-local target: ' + key)
-#             continue
-#
-#         # add local headers not add in cml
-#         target.headers.extend(
-#             [h for h in glob(target.cml_path + '/*.h*')])
-#         target.headers = [*set(target.headers)]
-#
-#         def map_headers(files, h_map):
-#             all = []
-#             for file in files:
-#                 includes = get_includes(file)
-#                 includes[0].extend(includes[1])
-#                 for header in includes[0]:
-#                     entry = h_map.get(header)
-#                     if entry is None:
-#                         h_map[header] = [file]
-#                     else:
-#                         entry.append(file)
-#                     all.extend(includes[0])
-#             return all
-#
-#         def only_local(hs, incs):
-#             return [h for h in hs
-#                     if h.removeprefix(repo_root) in incs
-#                     or os.path.basename(h) in incs]
-#
-#         cpp_incs = map_headers(target.sources, cpp_map)
-#         local_cpp_h = only_local(target.headers, cpp_incs)
-#         if key == 'velox_common_base':
-#             print(cpp_incs)
-#             print(target.headers)
-#             assert len(local_cpp_h) > 0
-#         h_incs = map_headers(local_cpp_h, header_map)
-#         # remove headers not used by the target
-#         local_h_h = only_local(target.headers, h_incs)
-#         target.headers = local_cpp_h + local_h_h
-#
-#     print(targets['velox_common_base'])
-#     # print(header_map['velox/common/base/Exceptions.h'])
 
 
 def map_local_headers(targets: dict[str, listeners.TargetNode],
@@ -267,6 +219,7 @@ def update_links(src_dir: str, repo_root: str, excluded_dirs: list[str] = [],
 
     for f in files:
 
+        print(f"Parsing: {f}")
         token_stream = get_token_stream(f)
         update_listener = listeners.UpdateTargetsListener(
             targets, token_stream)
