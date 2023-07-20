@@ -225,3 +225,10 @@ class UpdateTargetsListener(CMakeListener):
             new = f'{target.name} ' + p_text + pr_text
             self.token_stream.replaceRange(start, stop, new)
             target.was_linked = True
+        else:
+            if ctx.keyword() is None:
+                # if a target was linked with a keyword all other
+                # occurences of target_link_libraries must also use
+                # a keyword
+                self.token_stream.insertAfter(
+                    ctx.start.tokenIndex + 3, ' PUBLIC ')
