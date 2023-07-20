@@ -14,8 +14,7 @@
 
 add_library(velox_functions_window NthValue.cpp)
 
-target_link_libraries(velox_functions_window velox_buffer velox_exec
-                      Folly::folly)
+target_link_libraries(velox_functions_window PUBLIC velox_buffer velox_exec Folly::folly)
 
 if(${VELOX_BUILD_TESTING})
   add_subdirectory(tests)

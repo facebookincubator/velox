@@ -71,17 +71,7 @@ add_library(
   AssignUniqueId.cpp
   PartitionFunction.cpp)
 
-target_link_libraries(
-  velox_exec
-  velox_file
-  velox_core
-  velox_vector
-  velox_connector
-  velox_time
-  velox_codegen
-  velox_common_base
-  velox_test_util
-  velox_arrow_bridge)
+target_link_libraries(velox_exec PUBLIC velox_arrow_bridge velox_codegen velox_common_base velox_connector velox_core velox_file velox_test_util velox_time velox_vector Folly::folly fmt::fmt PRIVATE Boost::headers gflags::gflags re2::re2)
 
 if(${VELOX_BUILD_TESTING})
   add_subdirectory(tests)

@@ -14,18 +14,15 @@
 
 add_executable(velox_example_simple_functions SimpleFunctions.cpp)
 
-target_link_libraries(velox_example_simple_functions velox_functions_lib
-                      velox_core velox_expression re2::re2)
+target_link_libraries(velox_example_simple_functions PUBLIC velox_core velox_expression velox_functions_lib re2::re2)
 
 add_executable(velox_example_expression_eval ExpressionEval.cpp)
 
-target_link_libraries(velox_example_expression_eval velox_type velox_vector
-                      velox_memory velox_expression)
+target_link_libraries(velox_example_expression_eval PUBLIC velox_expression velox_memory velox_type velox_vector)
 
 add_executable(velox_example_opaque_type OpaqueType.cpp)
 
-target_link_libraries(velox_example_opaque_type velox_type velox_vector
-                      velox_expression velox_memory)
+target_link_libraries(velox_example_opaque_type PUBLIC velox_expression velox_memory velox_type velox_vector)
 
 # This is disabled temporarily until we figure out why g++ is crashing linking
 # it on linux builds.
@@ -38,27 +35,12 @@ target_link_libraries(velox_example_opaque_type velox_type velox_vector
 
 add_executable(velox_example_scan_orc ScanOrc.cpp)
 
-target_link_libraries(
-  velox_example_scan_orc
-  velox_type
-  velox_vector
-  velox_exec
-  velox_exec_test_lib
-  velox_hive_connector
-  velox_memory)
+target_link_libraries(velox_example_scan_orc PUBLIC velox_exec velox_exec_test_lib velox_hive_connector velox_memory velox_type velox_vector)
 
 add_executable(velox_example_vector_reader_writer VectorReaderWriter.cpp)
 
-target_link_libraries(velox_example_vector_reader_writer velox_expression
-                      velox_type velox_vector)
+target_link_libraries(velox_example_vector_reader_writer PUBLIC velox_expression velox_type velox_vector)
 
 add_executable(velox_example_operator_extensibility OperatorExtensibility.cpp)
 
-target_link_libraries(
-  velox_example_operator_extensibility
-  velox_type
-  velox_vector
-  velox_exec
-  velox_exec_test_lib
-  velox_memory
-  velox_vector_test_lib)
+target_link_libraries(velox_example_operator_extensibility PUBLIC velox_exec velox_exec_test_lib velox_memory velox_type velox_vector velox_vector_test_lib)

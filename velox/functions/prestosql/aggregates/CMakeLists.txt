@@ -43,15 +43,7 @@ add_library(
   MaxSizeForStatsAggregate.cpp
   RegisterAggregateFunctions.cpp)
 
-target_link_libraries(
-  velox_aggregates
-  velox_common_hyperloglog
-  velox_exec
-  velox_presto_serializer
-  velox_functions_aggregates
-  velox_functions_lib
-  velox_functions_util
-  Folly::folly)
+target_link_libraries(velox_aggregates PUBLIC velox_common_hyperloglog velox_exec velox_functions_aggregates velox_functions_lib velox_functions_util velox_presto_serializer PRIVATE Folly::folly)
 
 if(${VELOX_BUILD_TESTING})
   add_subdirectory(tests)

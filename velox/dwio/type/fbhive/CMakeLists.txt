@@ -14,7 +14,7 @@
 
 add_library(velox_dwio_type_fbhive HiveTypeParser.cpp HiveTypeSerializer.cpp)
 
-target_link_libraries(velox_dwio_type_fbhive velox_dwio_common)
+target_link_libraries(velox_dwio_type_fbhive PUBLIC velox_dwio_common Folly::folly)
 
 if(${VELOX_BUILD_TESTING})
   add_subdirectory(tests)

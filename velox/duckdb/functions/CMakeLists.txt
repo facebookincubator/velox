@@ -13,8 +13,7 @@
 # limitations under the License.
 add_library(velox_duckdb_functions DuckFunctions.cpp)
 
-target_link_libraries(velox_duckdb_functions velox_duckdb_conversion velox_core
-                      velox_vector duckdb)
+target_link_libraries(velox_duckdb_functions PUBLIC velox_core velox_duckdb_conversion velox_vector duckdb PRIVATE Boost::headers)
 
 if(${VELOX_BUILD_TESTING})
   add_subdirectory(tests)

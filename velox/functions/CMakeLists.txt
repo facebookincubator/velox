@@ -14,9 +14,8 @@
 add_library(velox_function_registry FunctionRegistry.cpp)
 add_library(velox_coverage_util CoverageUtil.cpp)
 
-target_link_libraries(velox_function_registry velox_expression velox_type
-                      velox_core velox_exception)
-target_link_libraries(velox_coverage_util velox_function_registry)
+target_link_libraries(velox_function_registry PUBLIC velox_core velox_exception velox_expression velox_type PRIVATE Boost::headers)
+target_link_libraries(velox_coverage_util PUBLIC velox_function_registry)
 add_subdirectory(lib)
 if(${VELOX_ENABLE_PRESTO_FUNCTIONS})
   add_subdirectory(prestosql)

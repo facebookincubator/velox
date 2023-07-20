@@ -35,12 +35,4 @@ add_library(
 
 add_dependencies(velox_dwio_dwrf_common velox_dwio_dwrf_proto)
 
-target_link_libraries(
-  velox_dwio_dwrf_common
-  velox_common_base
-  velox_dwio_common
-  velox_dwio_common_compression
-  velox_dwio_dwrf_proto
-  velox_caching
-  Snappy::snappy
-  zstd::zstd)
+target_link_libraries(velox_dwio_dwrf_common PUBLIC velox_caching velox_common_base velox_dwio_common velox_dwio_common_compression velox_dwio_dwrf_proto Folly::folly fmt::fmt PRIVATE Snappy::snappy ZLIB::ZLIB lz4::lz4 zstd::zstd)

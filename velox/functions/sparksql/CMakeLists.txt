@@ -37,9 +37,7 @@ if(CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
                          PRIVATE -Wno-deprecated-declarations)
 endif()
 
-target_link_libraries(
-  velox_functions_spark velox_functions_lib velox_functions_prestosql_impl
-  velox_is_null_functions velox_functions_util Folly::folly)
+target_link_libraries(velox_functions_spark PUBLIC velox_functions_lib velox_functions_prestosql_impl velox_functions_util velox_is_null_functions Folly::folly)
 
 set_property(TARGET velox_functions_spark PROPERTY JOB_POOL_COMPILE
                                                    high_memory_pool)

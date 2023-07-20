@@ -14,7 +14,7 @@
 
 add_library(velox_vector_fuzzer VectorFuzzer.cpp GeneratorSpec.cpp Utils.cpp)
 
-target_link_libraries(velox_vector_fuzzer velox_type velox_vector)
+target_link_libraries(velox_vector_fuzzer PUBLIC velox_type velox_vector Boost::headers PRIVATE fmt::fmt)
 if(CMAKE_CXX_COMPILER_ID MATCHES "Clang")
   target_compile_options(velox_vector_fuzzer
                          PRIVATE -Wno-deprecated-declarations)

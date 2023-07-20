@@ -26,14 +26,4 @@ add_library(
   StructColumnReader.cpp
   StringColumnReader.cpp)
 
-target_link_libraries(
-  velox_dwio_native_parquet_reader
-  velox_dwio_parquet_thrift
-  velox_type
-  velox_dwio_common
-  fmt::fmt
-  parquet
-  arrow
-  Snappy::snappy
-  thrift
-  zstd::zstd)
+target_link_libraries(velox_dwio_native_parquet_reader PUBLIC velox_dwio_common velox_dwio_parquet_thrift velox_type Folly::folly arrow fmt::fmt parquet thrift thrift::thrift PRIVATE Snappy::snappy ZLIB::ZLIB thrift::thrift zstd::zstd)

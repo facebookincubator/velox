@@ -62,17 +62,7 @@ add_library(
   Zip.cpp
   ZipWith.cpp)
 
-target_link_libraries(
-  velox_functions_prestosql_impl
-  velox_common_hyperloglog
-  velox_functions_json
-  velox_functions_lib
-  velox_expression
-  md5
-  velox_type_tz
-  velox_presto_types
-  velox_functions_util
-  Folly::folly)
+target_link_libraries(velox_functions_prestosql_impl PUBLIC velox_common_hyperloglog velox_expression velox_functions_json velox_functions_lib velox_functions_util velox_presto_types velox_type_tz Boost::regex md5 PRIVATE Boost::headers Folly::folly)
 
 set_property(TARGET velox_functions_prestosql_impl PROPERTY JOB_POOL_COMPILE
                                                             high_memory_pool)

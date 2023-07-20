@@ -14,4 +14,4 @@
 
 add_library(velox_dwio_common_exception Exception.cpp Exceptions.cpp)
 
-target_link_libraries(velox_dwio_common_exception Folly::folly glog::glog)
+target_link_libraries(velox_dwio_common_exception PUBLIC glog::glog PRIVATE Folly::folly)

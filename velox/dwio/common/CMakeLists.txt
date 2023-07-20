@@ -53,16 +53,4 @@ add_library(
   TypeWithId.cpp
   WriterFactory.cpp)
 
-target_link_libraries(
-  velox_dwio_common
-  velox_buffer
-  velox_caching
-  velox_dwio_common_compression
-  velox_dwio_common_encryption
-  velox_dwio_common_exception
-  velox_exception
-  velox_expression
-  velox_memory
-  Boost::regex
-  Folly::folly
-  glog::glog)
+target_link_libraries(velox_dwio_common PUBLIC velox_buffer velox_caching velox_dwio_common_compression velox_dwio_common_encryption velox_dwio_common_exception velox_exception velox_expression velox_memory Boost::regex Folly::folly xsimd PRIVATE fmt::fmt gflags::gflags glog::glog)

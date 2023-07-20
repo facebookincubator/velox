@@ -9,4 +9,4 @@ include_directories(..)
 add_subdirectory(dbgen)
 
 add_library(tpch_extension STATIC tpch-extension.cpp)
-target_link_libraries(tpch_extension dbgen)
+target_link_libraries(tpch_extension PUBLIC dbgen)
