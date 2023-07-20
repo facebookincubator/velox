@@ -3229,3 +3229,26 @@ TEST_F(DateTimeFunctionsTest, timestampWithTimezoneComparisons) {
   auto expectedGte = makeNullableFlatVector<bool>({true, false, true});
   runAndCompare("c0 >= c1", inputs, expectedGte);
 }
+
+TEST_F(DateTimeFunctionsTest, debug) {
+  auto c0 = makeFlatVector<double>(
+      {1623748302.,
+       1623748302.0,
+       1623748302.02,
+       1623748302.023,
+       1623748303.123,
+       1623748304.009,
+       1623748304.001});
+  auto input = makeRowVector({c0});
+  auto actual = evaluate("cast(from_unixtime(c0) as varchar)", input);
+  std::vector<StringView> expectedResult{
+      "2021-06-15T09:11:42.000",
+      "2021-06-15T09:11:42.000",
+      "2021-06-15T09:11:42.020",
+      "2021-06-15T09:11:42.023",
+      "2021-06-15T09:11:43.123",
+      "2021-06-15T09:11:44.009",
+      "2021-06-15T09:11:44.001",
+  };
+  assertEqualVectors(makeFlatVector<StringView>(expectedResult), actual);
+}
