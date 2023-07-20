@@ -692,7 +692,7 @@ void JoinFuzzer::verify(core::JoinType joinType) {
                   << "fuzzer run with spilling failed due to filesystem_error more than three times";
               std::rethrow_exception(std::current_exception());
             } else {
-              sleep(10);
+              sleep(4);
               LOG(WARNING)
                   << "fuzzer run with spilling failed due to filesystem_error, retry";
             }
