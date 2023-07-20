@@ -150,7 +150,12 @@ VectorPtr applyDecimalToIntegralCast(
   const auto simpleInput = input.as<SimpleVector<FromNativeType>>();
   const auto scaleFactor = DecimalUtil::kPowersOfTen[precisionScale.second];
   context.applyToSelectedNoThrow(rows, [&](int row) {
-    int128_t integralPart = simpleInput->valueAt(row) / scaleFactor;
+    int128_t integralPart = simpleInput->valueAt(row) / (scaleFactor >> 1);
+    bool needsRoundUp = (integralPart & 1);
+    integralPart = integralPart / 2;
+    if (needsRoundUp) {
+      integralPart += integralPart > 0 ? 1 : -1;
+    }
     if (integralPart > std::numeric_limits<To>::max() ||
         integralPart < std::numeric_limits<To>::min())
       VELOX_USER_FAIL(makeErrorMessage(input, row, toType) + " Out of bounds.");

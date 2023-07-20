@@ -226,7 +226,7 @@ class CastExprTest : public functions::test::CastBaseTest {
     VELOX_ASSERT_THROW(
         testComplexCast(
             "c0",
-            makeFlatVector<int64_t>({0, tooSmall}, DECIMAL(9, 0)),
+            makeFlatVector<int64_t>({0, tooSmall}, DECIMAL(10, 0)),
             makeFlatVector<T>(0, 0)),
         fmt::format(
             "Failed to cast from DECIMAL(9,0) to {}: -2147483649. Out of bounds.",
@@ -244,7 +244,7 @@ class CastExprTest : public functions::test::CastBaseTest {
     VELOX_ASSERT_THROW(
         testComplexCast(
             "c0",
-            makeFlatVector<int64_t>({0, tooBig}, DECIMAL(9, 0)),
+            makeFlatVector<int64_t>({0, tooBig}, DECIMAL(10, 0)),
             makeFlatVector<T>(0, 0)),
         fmt::format(
             "Failed to cast from DECIMAL(9,0) to {}: 2147483648. Out of bounds.",
@@ -263,29 +263,44 @@ class CastExprTest : public functions::test::CastBaseTest {
   template <typename T>
   void testDecimalToIntegralCasts(TypePtr type) {
     auto shortFlat = makeNullableFlatVector<int64_t>(
-        {-300, -230, -200, -100, 0, 5'500, 5755, 6'900, 7'200, std::nullopt},
+        {-300,
+         -260,
+         -230,
+         -200,
+         -100,
+         0,
+         5500,
+         5749,
+         5755,
+         6900,
+         7200,
+         std::nullopt},
         DECIMAL(6, 2));
     testComplexCast(
         "c0",
         shortFlat,
         makeNullableFlatVector<T>(
             {-3,
+             -3 /*-2.6 rounds to -3*/,
              -2 /*-2.3 rounds to -2*/,
              -2,
              -1,
              0,
              55,
-             57 /*57.55 rounds to 57*/,
+             57 /*57.49 rounds to 57*/,
+             58 /*57.55 rounds to 58*/,
              69,
              72,
              std::nullopt}));
     auto longFlat = makeNullableFlatVector<int128_t>(
         {-30'000'000'000,
          -25'500'000'000,
+         -24'500'000'000,
          -20'000'000'000,
          -10'000'000'000,
          0,
          550'000'000'000,
+         554'900'000'000,
          559'900'000'000,
          690'000'000'000,
          720'000'000'000,
@@ -296,12 +311,14 @@ class CastExprTest : public functions::test::CastBaseTest {
         longFlat,
         makeNullableFlatVector<T>(
             {-3,
-             -2 /*-2.55 rounds to -2*/,
+             -3 /*-2.55 rounds to -3*/,
+             -2 /*-2.45 rounds to -2*/,
              -2,
              -1,
              0,
              55,
-             55 /* 55.99 rounds to 55*/,
+             55 /* 55.49 rounds to 55*/,
+             56 /* 55.99 rounds to 56*/,
              69,
              72,
              std::nullopt}));
