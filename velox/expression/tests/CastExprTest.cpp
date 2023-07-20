@@ -231,7 +231,7 @@ class CastExprTest : public functions::test::CastBaseTest {
             makeFlatVector<int64_t>({0, tooSmall}, DECIMAL(10, 0)),
             makeFlatVector<T>(0, 0)),
         fmt::format(
-            "Failed to cast from DECIMAL(9,0) to {}: -2147483649. Out of bounds.",
+            "Failed to cast from DECIMAL(10,0) to {}: -2147483649. Out of bounds.",
             type->name()));
 
     VELOX_ASSERT_THROW(
@@ -249,7 +249,7 @@ class CastExprTest : public functions::test::CastBaseTest {
             makeFlatVector<int64_t>({0, tooBig}, DECIMAL(10, 0)),
             makeFlatVector<T>(0, 0)),
         fmt::format(
-            "Failed to cast from DECIMAL(9,0) to {}: 2147483648. Out of bounds.",
+            "Failed to cast from DECIMAL(10,0) to {}: 2147483648. Out of bounds.",
             type->name()));
 
     VELOX_ASSERT_THROW(

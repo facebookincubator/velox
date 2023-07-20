@@ -246,9 +246,12 @@ VectorPtr applyDecimalToIntegralCast(
   const auto simpleInput = input.as<SimpleVector<FromNativeType>>();
   const auto scaleFactor = DecimalUtil::kPowersOfTen[precisionScale.second];
   context.applyToSelectedNoThrow(rows, [&](int row) {
-    int128_t integralPart = simpleInput->valueAt(row) / (scaleFactor >> 1);
-    bool needsRoundUp = (integralPart & 1);
-    integralPart = integralPart / 2;
+    auto integralPart = simpleInput->valueAt(row) / scaleFactor;
+    auto fractionPart = simpleInput->valueAt(row) % scaleFactor;
+    if (fractionPart < 0)
+      fractionPart = -fractionPart;
+    bool needsRoundUp =
+        (scaleFactor != 1) && (fractionPart >= (scaleFactor >> 1));
     if (needsRoundUp) {
       integralPart += integralPart > 0 ? 1 : -1;
     }
