@@ -271,7 +271,7 @@ void checkColumnNameLowerCase(const std::shared_ptr<const Type>& type) {
 
 void checkColumnNameLowerCase(const SubfieldFilters& filters) {
   for (auto& pair : filters) {
-    if (pair.first.toString() == kPath || pair.first.toString() == kBucket) {
+    if (auto name = pair.first.toString(); name == kPath || name == kBucket) {
       continue;
     }
     auto& path = pair.first.path();
@@ -420,7 +420,27 @@ HiveDataSource::HiveDataSource(
         false,
         filters);
   } else {
-    VELOX_CHECK(hiveTableHandle->subfieldFilters().empty());
+    for (auto& [field, _] : hiveTableHandle->subfieldFilters()) {
+      VELOX_USER_CHECK_EQ(
+          field.path().size(),
+          1,
+          "Unexpected filter on table {}, field {}",
+          hiveTableHandle->tableName(),
+          field.toString());
+      auto* nestedField = dynamic_cast<const common::Subfield::NestedField*>(
+          field.path()[0].get());
+      VELOX_USER_CHECK_NOT_NULL(
+          nestedField,
+          "Unexpected filter on table {}, field {}",
+          hiveTableHandle->tableName(),
+          field.toString());
+      VELOX_USER_CHECK_GT(
+          partitionKeys_.count(nestedField->name()),
+          0,
+          "Unexpected filter on table {}, field {}",
+          hiveTableHandle->tableName(),
+          field.toString());
+    }
     remainingFilter = hiveTableHandle->remainingFilter();
   }
   std::vector<common::Subfield> remainingFilterInputs;
@@ -627,8 +647,14 @@ std::optional<RowVectorPtr> HiveDataSource::next(
     std::vector<VectorPtr> outputColumns;
     outputColumns.reserve(outputType_->size());
     for (int i = 0; i < outputType_->size(); i++) {
-      outputColumns.emplace_back(exec::wrapChild(
-          rowsRemaining, remainingIndices, rowVector->childAt(i)));
+      auto& child = rowVector->childAt(i);
+      if (remainingIndices) {
+        // Disable dictionary values caching in expression eval so that we don't
+        // need to reallocate the result for every batch.
+        child->disableMemo();
+      }
+      outputColumns.emplace_back(
+          exec::wrapChild(rowsRemaining, remainingIndices, child));
     }
 
     return std::make_shared<RowVector>(
@@ -734,6 +760,20 @@ std::shared_ptr<common::ScanSpec> HiveDataSource::makeScanSpec(
     VELOX_CHECK(field);
     remainingFilterInputNames.insert(field->name());
   }
+
+  std::unordered_map<std::string, std::vector<const common::Subfield*>>
+      requiredSubfieldsInFilters;
+  for (auto& [field, _] : filters) {
+    if (auto name = field.toString(); name == kPath || name == kBucket) {
+      continue;
+    }
+    VELOX_CHECK_GT(field.path().size(), 0);
+    auto* nestedField = dynamic_cast<const common::Subfield::NestedField*>(
+        field.path()[0].get());
+    VELOX_CHECK(nestedField);
+    requiredSubfieldsInFilters[nestedField->name()].push_back(&field);
+  }
+
   auto spec = std::make_shared<common::ScanSpec>("root");
   for (int i = 0; i < columnHandles.size(); ++i) {
     auto& name = rowType->nameOf(i);
@@ -752,6 +792,12 @@ std::shared_ptr<common::ScanSpec> HiveDataSource::makeScanSpec(
       VELOX_CHECK_EQ(field->name(), name);
       subfieldPtrs.push_back(&subfield);
     }
+    if (auto it = requiredSubfieldsInFilters.find(name);
+        it != requiredSubfieldsInFilters.end()) {
+      for (auto* subfield : it->second) {
+        subfieldPtrs.push_back(subfield);
+      }
+    }
     addSubfields(*type, subfieldPtrs, 1, pool, *spec->addField(name, i));
   }
 
@@ -763,7 +809,7 @@ std::shared_ptr<common::ScanSpec> HiveDataSource::makeScanSpec(
     // column. This filter is redundant and needs to be removed.
     // TODO Remove this check when Presto is fixed to not specify a filter
     // on $path and $bucket column.
-    if (pair.first.toString() == kPath || pair.first.toString() == kBucket) {
+    if (auto name = pair.first.toString(); name == kPath || name == kBucket) {
       continue;
     }
     auto fieldSpec = spec->getOrCreateChild(pair.first);

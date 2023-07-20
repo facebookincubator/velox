@@ -81,7 +81,7 @@ class NthValueTest : public WindowTestBase {
         makeFlatVector<int32_t>(size, [](auto row) { return row % 5; }),
         makeFlatVector<int32_t>(size, [](auto row) { return row; }),
         makeFlatVector<int64_t>(size, [](auto row) { return row % 3 + 1; }),
-        makeFlatVector<int64_t>(size, [](auto row) { return row % 3 + 1; }),
+        makeFlatVector<int64_t>(size, [](auto row) { return row % 3; }),
         // Note : The Fuzz vector used in nth_value can have null values.
         makeRandomInputVector(type, size, 0.3),
     });
@@ -227,7 +227,7 @@ TEST_F(NthValueTest, invalidFrames) {
   auto vectors = makeRowVector({
       makeFlatVector<int32_t>(size, [](auto /* row */) { return 1; }),
       makeFlatVector<int32_t>(size, [](auto row) { return row % 50; }),
-      makeFlatVector<int64_t>(size, [](auto row) { return row % 5; }),
+      makeFlatVector<int64_t>(size, [](auto /* row */) { return -9; }),
   });
 
   std::string overClause = "partition by c0 order by c1";
@@ -235,14 +235,41 @@ TEST_F(NthValueTest, invalidFrames) {
       {vectors},
       "nth_value(c0, 5)",
       overClause,
-      "rows between 0 preceding and current row",
-      "k in frame bounds must be at least 1");
+      "rows between -1 preceding and current row",
+      "Window frame -1 offset must not be negative");
   assertWindowFunctionError(
       {vectors},
       "nth_value(c0, 5)",
       overClause,
       "rows between c2 preceding and current row",
-      "k in frame bounds must be at least 1");
+      "Window frame -9 offset must not be negative");
+}
+
+TEST_F(NthValueTest, int32FrameOffset) {
+  vector_size_t size = 100;
+  WindowTestBase::options_.parseIntegerAsBigint = false;
+
+  auto vectors = makeRowVector({
+      makeFlatVector<int32_t>(size, [](auto row) { return row % 5; }),
+      makeFlatVector<int32_t>(size, [](auto row) { return row % 50; }),
+      makeFlatVector<int64_t>(
+          size, [](auto row) { return row % 3 + 1; }, nullEvery(5)),
+      makeFlatVector<int32_t>(size, [](auto row) { return row % 50; }),
+  });
+
+  const std::vector<std::string> kPartitionClauses = {
+      "partition by c0 order by c1 nulls first, c2, c3",
+      "partition by c0, c2 order by c1 nulls first, c3",
+      "partition by c0 order by c1 desc, c2, c3",
+      "partition by c0, c2 order by c1 desc nulls first, c3",
+  };
+  WindowTestBase::testWindowFunction(
+      {vectors},
+      "nth_value(c0, c2)",
+      kPartitionClauses,
+      {"rows between 5 preceding and current row"});
+
+  WindowTestBase::options_.parseIntegerAsBigint = true;
 }
 
 }; // namespace

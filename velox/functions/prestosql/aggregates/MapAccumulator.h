@@ -17,8 +17,8 @@
 
 #include <folly/container/F14Map.h>
 #include "velox/common/memory/HashStringAllocator.h"
-#include "velox/functions/prestosql/aggregates/AddressableNonNullValueList.h"
-#include "velox/functions/prestosql/aggregates/Strings.h"
+#include "velox/exec/AddressableNonNullValueList.h"
+#include "velox/exec/Strings.h"
 #include "velox/functions/prestosql/aggregates/ValueList.h"
 #include "velox/vector/ComplexVector.h"
 #include "velox/vector/DecodedVector.h"
@@ -63,17 +63,6 @@ struct MapAccumulator {
     auto cnt = keys.size();
     if (keys.insert({decodedKeys.valueAt<T>(index), cnt}).second) {
       values.appendValue(decodedValues, index, &allocator);
-    }
-  }
-
-  void insertRange(
-      const DecodedVector& decodedKeys,
-      const DecodedVector& decodedValues,
-      vector_size_t offset,
-      vector_size_t size,
-      HashStringAllocator& allocator) {
-    for (auto i = offset; i < offset + size; ++i) {
-      insert(decodedKeys, decodedValues, i, allocator);
     }
   }
 
@@ -150,15 +139,6 @@ struct StringViewMapAccumulator {
     }
   }
 
-  void insertRange(
-      const DecodedVector& decodedKeys,
-      const DecodedVector& decodedValues,
-      vector_size_t offset,
-      vector_size_t size,
-      HashStringAllocator& allocator) {
-    base.insertRange(decodedKeys, decodedValues, offset, size, allocator);
-  }
-
   size_t size() const {
     return base.size();
   }
@@ -172,6 +152,7 @@ struct StringViewMapAccumulator {
 
   void free(HashStringAllocator& allocator) {
     strings.free(allocator);
+    base.free(allocator);
   }
 };
 
@@ -207,15 +188,6 @@ struct ComplexTypeMapAccumulator {
     }
 
     base.values.appendValue(decodedValues, index, &allocator);
-  }
-
-  void insertRange(
-      const DecodedVector& decodedKeys,
-      const DecodedVector& decodedValues,
-      vector_size_t offset,
-      vector_size_t size,
-      HashStringAllocator& allocator) {
-    base.insertRange(decodedKeys, decodedValues, offset, size, allocator);
   }
 
   size_t size() const {

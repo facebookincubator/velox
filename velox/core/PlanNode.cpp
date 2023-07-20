@@ -195,6 +195,10 @@ void AggregationNode::addDetails(std::stringstream& stream) const {
     }
     const auto& aggregate = aggregates_[i];
     stream << aggregateNames_[i] << " := " << aggregate.call->toString();
+    if (aggregate.distinct) {
+      stream << " distinct";
+    }
+
     if (aggregate.mask) {
       stream << " mask: " << aggregate.mask->name();
     }
@@ -297,6 +301,7 @@ folly::dynamic AggregationNode::Aggregate::serialize() const {
   }
   obj["sortingKeys"] = ISerializable::serialize(sortingKeys);
   obj["sortingOrders"] = serializeSortingOrders(sortingOrders);
+  obj["distinct"] = distinct;
   return obj;
 }
 
@@ -311,7 +316,9 @@ AggregationNode::Aggregate AggregationNode::Aggregate::deserialize(
   }
   auto sortingKeys = deserializeFields(obj["sortingKeys"], context);
   auto sortingOrders = deserializeSortingOrders(obj["sortingOrders"]);
-  return {call, mask, std::move(sortingKeys), std::move(sortingOrders)};
+  bool distinct = obj["distinct"].asBool();
+  return {
+      call, mask, std::move(sortingKeys), std::move(sortingOrders), distinct};
 }
 
 // static
@@ -1514,18 +1521,20 @@ PlanNodePtr LocalMergeNode::create(const folly::dynamic& obj, void* context) {
       std::move(sources));
 }
 
-void TableWriteNode::addDetails(std::stringstream& /* stream */) const {
-  // TODO Add connector details.
-}
+void TableWriteNode::addDetails(std::stringstream& /*unused*/) const {}
 
 folly::dynamic TableWriteNode::serialize() const {
   auto obj = PlanNode::serialize();
   obj["sources"] = sources_.front()->serialize();
   obj["columns"] = columns_->serialize();
   obj["columnNames"] = ISerializable::serialize(columnNames_);
+  if (aggregationNode_ != nullptr) {
+    obj["aggregationNode"] = aggregationNode_->serialize();
+  }
   obj["connectorId"] = insertTableHandle_->connectorId();
   obj["connectorInsertTableHandle"] =
       insertTableHandle_->connectorInsertTableHandle()->serialize();
+  obj["hasPartitioningScheme"] = hasPartitioningScheme_;
   obj["outputType"] = outputType_->serialize();
   obj["commitStrategy"] = connector::commitStrategyToString(commitStrategy_);
   return obj;
@@ -1537,11 +1546,17 @@ PlanNodePtr TableWriteNode::create(const folly::dynamic& obj, void* context) {
   auto columns = deserializeRowType(obj["columns"]);
   auto columnNames =
       ISerializable::deserialize<std::vector<std::string>>(obj["columnNames"]);
+  std::shared_ptr<AggregationNode> aggregationNode;
+  if (obj.count("aggregationNode") != 0) {
+    aggregationNode = std::const_pointer_cast<AggregationNode>(
+        ISerializable::deserialize<AggregationNode>(obj["aggregationNode"]));
+  }
   auto connectorId = obj["connectorId"].asString();
   auto connectorInsertTableHandle =
       std::const_pointer_cast<connector::ConnectorInsertTableHandle>(
           ISerializable::deserialize<connector::ConnectorInsertTableHandle>(
               obj["connectorInsertTableHandle"]));
+  const bool hasPartitioningScheme = obj["hasPartitioningScheme"].asBool();
   auto outputType = deserializeRowType(obj["outputType"]);
   auto commitStrategy =
       connector::stringToCommitStrategy(obj["commitStrategy"].asString());
@@ -1550,11 +1565,34 @@ PlanNodePtr TableWriteNode::create(const folly::dynamic& obj, void* context) {
       id,
       columns,
       columnNames,
+      std::move(aggregationNode),
       std::make_shared<InsertTableHandle>(
           connectorId, connectorInsertTableHandle),
+      hasPartitioningScheme,
       outputType,
       commitStrategy,
       source);
+}
+
+void TableWriteMergeNode::addDetails(std::stringstream& /* stream */) const {}
+
+folly::dynamic TableWriteMergeNode::serialize() const {
+  auto obj = PlanNode::serialize();
+  VELOX_CHECK_EQ(
+      sources_.size(), 1, "TableWriteMergeNode can only have one source");
+  obj["sources"] = sources_.front()->serialize();
+  obj["outputType"] = outputType_->serialize();
+  return obj;
+}
+
+// static
+PlanNodePtr TableWriteMergeNode::create(
+    const folly::dynamic& obj,
+    void* /*unused*/) {
+  auto id = obj["id"].asString();
+  auto outputType = deserializeRowType(obj["outputType"]);
+  auto source = ISerializable::deserialize<PlanNode>(obj["sources"]);
+  return std::make_shared<TableWriteMergeNode>(id, outputType, source);
 }
 
 void MergeExchangeNode::addDetails(std::stringstream& stream) const {
@@ -1868,6 +1906,7 @@ void PlanNode::registerSerDe() {
   registry.Register("RowNumberNode", RowNumberNode::create);
   registry.Register("TableScanNode", TableScanNode::create);
   registry.Register("TableWriteNode", TableWriteNode::create);
+  registry.Register("TableWriteMergeNode", TableWriteMergeNode::create);
   registry.Register("TopNNode", TopNNode::create);
   registry.Register("TopNRowNumberNode", TopNRowNumberNode::create);
   registry.Register("UnnestNode", UnnestNode::create);

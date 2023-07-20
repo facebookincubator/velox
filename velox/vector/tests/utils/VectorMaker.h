@@ -196,52 +196,6 @@ class VectorMaker {
     return flatVector;
   }
 
-  /// Create a UnscaledShortDecimal FlatVector from unscaled values, type.
-  ///
-  /// Elements are not nullable.
-  ///
-  /// Examples:
-  ///  auto flatVector = shortDecimalFlatVector({1, 2, 3}, DECIMAL(8, 1));
-  template <typename T>
-  FlatVectorPtr<int64_t> shortDecimalFlatVector(
-      const std::vector<T>& unscaledValues,
-      const TypePtr& ptr);
-
-  /// Create a UnscaledLongDecimal FlatVector from unscaled values, type.
-  ///
-  /// Elements are not nullable.
-  ///
-  /// Examples:
-  ///  auto flatVector = longDecimalFlatVector({1, 2, 3}, DECIMAL(20, 4));
-  template <typename T>
-  FlatVectorPtr<int128_t> longDecimalFlatVector(
-      const std::vector<T>& unscaledValues,
-      const TypePtr& ptr);
-
-  /// Create a UnscaledShortDecimal FlatVector from values, type.
-  ///
-  /// Elements are nullable.
-  ///
-  /// Examples:
-  ///  auto flatVector = shortDecimalFlatVectorNullable({1, std::nullopt, 3},
-  ///  DECIMAL(8, 1));
-  template <typename T>
-  FlatVectorPtr<int64_t> shortDecimalFlatVectorNullable(
-      const std::vector<std::optional<T>>& data,
-      const TypePtr& ptr);
-
-  /// Create a UnscaledLongDecimal FlatVector from values, type.
-  ///
-  /// Elements are nullable.
-  ///
-  /// Examples:
-  ///  auto flatVector = longDecimalFlatVectorNullable({1, std::nullopt, 3},
-  ///  DECIMAL(20, 4));
-  template <typename T>
-  FlatVectorPtr<int128_t> longDecimalFlatVectorNullable(
-      const std::vector<std::optional<T>>& data,
-      const TypePtr& ptr);
-
   /// Create a BiasVector<T>
   /// creates a BiasVector (vector encoded using bias encoding) based on a flat
   /// input from an std::vector.
@@ -328,7 +282,8 @@ class VectorMaker {
       std::function<vector_size_t(vector_size_t /* row */)> sizeAt,
       std::function<T(vector_size_t /* idx */)> valueAt,
       std::function<bool(vector_size_t /*row */)> isNullAt = nullptr,
-      std::function<bool(vector_size_t /* idx */)> valueIsNullAt = nullptr) {
+      std::function<bool(vector_size_t /* idx */)> valueIsNullAt = nullptr,
+      const TypePtr& arrayType = ARRAY(CppToType<T>::create())) {
     BufferPtr nulls;
     BufferPtr offsets;
     BufferPtr sizes;
@@ -337,7 +292,7 @@ class VectorMaker {
 
     return std::make_shared<ArrayVector>(
         pool_,
-        ARRAY(CppToType<T>::create()),
+        arrayType,
         nulls,
         size,
         offsets,
@@ -393,9 +348,9 @@ class VectorMaker {
       std::function<vector_size_t(vector_size_t /* row */)> sizeAt,
       std::function<T(vector_size_t /* row */, vector_size_t /* idx */)>
           valueAt,
-      std::function<bool(vector_size_t /*row */)> isNullAt = nullptr) {
-    return arrayVectorImpl(
-        ARRAY(CppToType<T>::create()), size, sizeAt, valueAt, isNullAt);
+      std::function<bool(vector_size_t /*row */)> isNullAt = nullptr,
+      const TypePtr& arrayType = ARRAY(CppToType<T>::create())) {
+    return arrayVectorImpl(arrayType, size, sizeAt, valueAt, isNullAt);
   }
 
   template <typename T>

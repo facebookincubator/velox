@@ -113,29 +113,6 @@ std::pair<std::unique_ptr<common::Filter>, bool> createBytesValuesFilter(
   return {std::make_unique<common::BytesValues>(values, nullAllowed), false};
 }
 
-std::pair<std::unique_ptr<common::Filter>, bool> createDateValuesFilter(
-    const std::vector<exec::VectorFunctionArg>& inputArgs) {
-  auto valuesPair = toValues<Date, Date>(inputArgs);
-  if (!valuesPair.has_value()) {
-    return {nullptr, false};
-  }
-
-  const auto& values = valuesPair.value().first;
-  bool nullAllowed = valuesPair.value().second;
-
-  if (values.empty() && nullAllowed) {
-    return {nullptr, true};
-  }
-  VELOX_USER_CHECK(
-      !values.empty(),
-      "IN predicate expects at least one non-null value in the in-list");
-  std::vector<int64_t> dayValues;
-  for (auto date : values) {
-    dayValues.push_back(date.days());
-  }
-  return {common::createBigintValues(dayValues, nullAllowed), false};
-}
-
 class InPredicate : public exec::VectorFunction {
  public:
   explicit InPredicate(std::unique_ptr<common::Filter> filter, bool alwaysNull)
@@ -143,7 +120,8 @@ class InPredicate : public exec::VectorFunction {
 
   static std::shared_ptr<InPredicate> create(
       const std::string& /*name*/,
-      const std::vector<exec::VectorFunctionArg>& inputArgs) {
+      const std::vector<exec::VectorFunctionArg>& inputArgs,
+      const core::QueryConfig& /*config*/) {
     VELOX_CHECK_EQ(inputArgs.size(), 2);
     auto inListType = inputArgs[1].type;
     VELOX_CHECK_EQ(inListType->kind(), TypeKind::ARRAY);
@@ -165,9 +143,6 @@ class InPredicate : public exec::VectorFunction {
       case TypeKind::VARCHAR:
       case TypeKind::VARBINARY:
         filter = createBytesValuesFilter(inputArgs);
-        break;
-      case TypeKind::DATE:
-        filter = createDateValuesFilter(inputArgs);
         break;
       case TypeKind::UNKNOWN:
         filter = {nullptr, true};
@@ -221,11 +196,6 @@ class InPredicate : public exec::VectorFunction {
             rows, input, context, result, [&](StringView value) {
               return filter_->testBytes(value.data(), value.size());
             });
-        break;
-      case TypeKind::DATE:
-        applyTyped<Date>(rows, input, context, result, [&](Date value) {
-          return filter_->testInt64(value.days());
-        });
         break;
       default:
         VELOX_UNSUPPORTED(

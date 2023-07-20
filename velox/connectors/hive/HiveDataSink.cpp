@@ -19,10 +19,9 @@
 #include "velox/common/base/Fs.h"
 #include "velox/connectors/hive/HiveConfig.h"
 #include "velox/connectors/hive/HiveConnector.h"
+#include "velox/connectors/hive/HivePartitionFunction.h"
 #include "velox/core/ITypedExpr.h"
 #include "velox/dwio/dwrf/writer/Writer.h"
-#include "velox/exec/HashPartitionFunction.h"
-#include "velox/exec/Operator.h"
 
 #include <boost/lexical_cast.hpp>
 #include <boost/uuid/uuid_generators.hpp>
@@ -97,8 +96,8 @@ std::unique_ptr<core::PartitionFunction> createBucketFunction(
     }
     bucketedByChannels.push_back(inputChannel);
   }
-  return std::make_unique<exec::HashPartitionFunction>(
-      bucketProperty.bucketCount(), inputType, bucketedByChannels);
+  return std::make_unique<HivePartitionFunction>(
+      bucketProperty.bucketCount(), bucketedByChannels);
 }
 
 std::string computeBucketedFileName(
@@ -503,11 +502,15 @@ std::pair<std::string, std::string> HiveDataSink::getWriterFileNames(
     targetFileName = computeBucketedFileName(
         connectorQueryCtx_->queryId(), bucketId.value());
   } else {
+    // targetFileName includes planNodeId and Uuid. As a result, different table
+    // writers run by the same task driver or the same table writer run in
+    // different task tries would have different targetFileNames.
     targetFileName = fmt::format(
-        "{}_{}_{}",
+        "{}_{}_{}_{}",
         connectorQueryCtx_->taskId(),
         connectorQueryCtx_->driverId(),
-        isCommitRequired() ? "0" : makeUuid());
+        connectorQueryCtx_->planNodeId(),
+        makeUuid());
   }
   const std::string writeFileName = isCommitRequired()
       ? fmt::format(".tmp.velox.{}_{}", targetFileName, makeUuid())

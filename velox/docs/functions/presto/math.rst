@@ -240,7 +240,7 @@ Floating Point Functions
 
 
 ====================================
-Probability Functions
+Probability Functions: cdf
 ====================================
 
 .. function:: beta_cdf(a, b, value) -> double
@@ -255,9 +255,25 @@ Probability Functions
     The successProbability must be real value in [0, 1], numberOfTrials and value must be
     positive integers with numberOfTrials greater or equal to value
 
+.. function:: cauchy_cdf(median, scale, value) -> double
+
+    Compute the Cauchy cdf with given parameters median and scale (gamma): P(N; median, scale).
+    The scale parameter must be a positive double. The value parameter must be a double on the interval [0, 1].
+
 .. function:: normal_cdf(mean, sd, value) -> double
 
     Compute the Normal cdf with given mean and standard deviation (sd): P(N < value; mean, sd).
     The mean and value must be real values and the standard deviation must be a real and
     positive value (all of type DOUBLE).
+
+
+====================================
+Probability Functions: inverse_cdf
+====================================
+
+.. function:: inverse_beta_cdf(a, b, p) -> double
+
+    Compute the inverse of the Beta cdf with given a, b parameters for the cumulative
+    probability (p): P(N < n). The a, b parameters must be positive real values (all of type DOUBLE).
+    The probability p must lie on the interval [0, 1].
 
