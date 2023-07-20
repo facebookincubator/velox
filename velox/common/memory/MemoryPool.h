@@ -82,7 +82,7 @@ constexpr int64_t kMaxMemory = std::numeric_limits<int64_t>::max();
 /// node pool that corresponds to the plan node from which the operator is
 /// created. Operator and node pools are owned by the Task via 'childPools_'.
 ///
-/// The query pool is created from IMemoryManager::getChild() as a child of a
+/// The query pool is created from MemoryManager::getChild() as a child of a
 /// singleton root pool object (system pool). There is only one system pool for
 /// a velox process. Hence each query pool objects forms a subtree rooted from
 /// the system pool.
@@ -95,7 +95,7 @@ constexpr int64_t kMaxMemory = std::numeric_limits<int64_t>::max();
 ///
 /// NOTE: for the users that integrate at expression evaluation level, we don't
 /// need to build the memory pool hierarchy as described above. Users can either
-/// create a single memory pool from IMemoryManager::getChild() to share with
+/// create a single memory pool from MemoryManager::getChild() to share with
 /// all the concurrent expression evaluations or create one dedicated memory
 /// pool for each expression evaluation if they need per-expression memory quota
 /// enforcement.
@@ -189,7 +189,7 @@ class MemoryPool : public std::enable_shared_from_this<MemoryPool> {
   virtual MemoryPool* parent() const;
 
   /// Returns the root of this memory pool.
-  virtual MemoryPool* root();
+  virtual MemoryPool* root() const;
 
   /// Returns the number of child memory pools.
   virtual uint64_t getChildCount() const;
@@ -274,15 +274,29 @@ class MemoryPool : public std::enable_shared_from_this<MemoryPool> {
   /// memory allocation.
   virtual const std::vector<MachinePageCount>& sizeClasses() const = 0;
 
-  /// Makes a large contiguous mmap of 'numPages'. The new mapped pages are
-  /// returned in 'out' on success. Any formly mapped pages referenced by
-  /// 'out' is unmapped in all the cases even if the allocation fails.
+  /// Makes a large contiguous mmap of 'numPages'. The new mapped
+  /// pages are returned in 'out' on success. Any formly mapped pages
+  /// referenced by 'out' is unmapped in all the cases even if the
+  /// allocation fails. If 'numPages' is not given, this defaults to
+  /// 'maxPages'. 'maxPages' gives the size of the mmap in
+  /// addresses. 'numPages' gives the amount to declare as
+  /// used. growContiguous() is used to increase the
+  /// reservation up to 'maxPages'. This allows reserving a large
+  /// range of addresses for huge pages. The range can be larger than
+  /// is likely to be used because usage can be declared as needed but
+  /// the number of huge pages  can be set according to an assumption of large
+  /// utilization.
   virtual void allocateContiguous(
-      MachinePageCount numPages,
-      ContiguousAllocation& out) = 0;
+      MachinePageCount maxPages,
+      ContiguousAllocation& out,
+      MachinePageCount numPages = 0) = 0;
 
   /// Frees contiguous 'allocation'. 'allocation' is empty on return.
   virtual void freeContiguous(ContiguousAllocation& allocation) = 0;
+
+  virtual void growContiguous(
+      MachinePageCount increment,
+      ContiguousAllocation& allocation) = 0;
 
   /// Rounds up to a power of 2 >= size, or to a size halfway between
   /// two consecutive powers of two, i.e 8, 12, 16, 24, 32, .... This
@@ -553,10 +567,16 @@ class MemoryPoolImpl : public MemoryPool {
 
   const std::vector<MachinePageCount>& sizeClasses() const override;
 
-  void allocateContiguous(MachinePageCount numPages, ContiguousAllocation& out)
-      override;
+  void allocateContiguous(
+      MachinePageCount maxPages,
+      ContiguousAllocation& out,
+      MachinePageCount numPages = 0) override;
 
   void freeContiguous(ContiguousAllocation& allocation) override;
+
+  void growContiguous(
+      MachinePageCount increment,
+      ContiguousAllocation& allocation) override;
 
   int64_t capacity() const override;
 
@@ -629,6 +649,10 @@ class MemoryPoolImpl : public MemoryPool {
     return debugAllocRecords_;
   }
 
+  static void setDebugPoolNameRegex(const std::string& regex) {
+    debugPoolNameRegex() = regex;
+  }
+
  private:
   FOLLY_ALWAYS_INLINE static MemoryPoolImpl* toImpl(MemoryPool* pool) {
     return static_cast<MemoryPoolImpl*>(pool);
@@ -637,6 +661,11 @@ class MemoryPoolImpl : public MemoryPool {
   FOLLY_ALWAYS_INLINE static MemoryPoolImpl* toImpl(
       const std::shared_ptr<MemoryPool>& pool) {
     return static_cast<MemoryPoolImpl*>(pool.get());
+  }
+
+  static folly::Synchronized<std::string>& debugPoolNameRegex() {
+    static folly::Synchronized<std::string> debugPoolNameRegex_;
+    return debugPoolNameRegex_;
   }
 
   std::shared_ptr<MemoryPool> genChild(
@@ -841,7 +870,9 @@ class MemoryPoolImpl : public MemoryPool {
 
   FOLLY_ALWAYS_INLINE std::string toStringLocked() const {
     std::stringstream out;
-    out << "Memory Pool[" << name_ << " " << kindString(kind_) << " "
+    out << "Memory Pool[" << name_ << " " << kindString(kind_) << " root["
+        << root()->name() << "] parent["
+        << (isRoot() ? "null" : parent_->name()) << "] "
         << MemoryAllocator::kindString(allocator_->kind())
         << (trackUsage_ ? " track-usage" : " no-usage-track")
         << (threadSafe_ ? " thread-safe" : " non-thread-safe") << "]<";
@@ -899,6 +930,9 @@ class MemoryPoolImpl : public MemoryPool {
   // of this memory pool is enabled.
   void recordFreeDbg(const ContiguousAllocation& allocation);
 
+  // Accounts for ContiguousAllocation size change in growContiguous().
+  void recordGrowDbg(const void* addr, uint64_t newSize);
+
   // Invoked by memory pool destructor to detect the sources of leaked memory
   // allocations from the call sites which are still recorded in
   // 'debugAllocRecords_'. If there is no memory leaks, 'debugAllocRecords_'
@@ -910,6 +944,11 @@ class MemoryPoolImpl : public MemoryPool {
   MemoryManager* const manager_;
   MemoryAllocator* const allocator_;
   const DestructionCallback destructionCb_;
+
+  // Regex for filtering on 'name_' when debug mode is enabled. This allows us
+  // to only track the callsites of memory allocations for memory pools whose
+  // name matches the specified regular expression 'debugPoolNameRegex_'.
+  const std::string debugPoolNameRegex_;
 
   // Serializes updates on 'grantedReservationBytes_', 'usedReservationBytes_'
   // and 'minReservationBytes_' to make reservation decision on a consistent
@@ -961,6 +1000,7 @@ class MemoryPoolImpl : public MemoryPool {
 
   // Mutex for 'debugAllocRecords_'.
   std::mutex debugAllocMutex_;
+
   // Map from address to 'AllocationRecord'.
   std::unordered_map<uint64_t, AllocationRecord> debugAllocRecords_;
 };

@@ -17,9 +17,6 @@
 #include "velox/dwio/parquet/duckdb_reader/ParquetReader.h"
 #include "velox/dwio/parquet/tests/ParquetReaderTestBase.h"
 #include "velox/expression/ExprToSubfieldFilter.h"
-#include "velox/type/Filter.h"
-#include "velox/type/Type.h"
-#include "velox/vector/ComplexVector.h"
 
 #include <gtest/gtest.h>
 #include <array>
@@ -58,12 +55,6 @@ class ParquetReaderTest : public ParquetReaderTestBase {
         std::move(reader), fileName, fileSchema, std::move(filters), expected);
   }
 };
-
-template <>
-VectorPtr ParquetReaderTestBase::rangeVector<Date>(size_t size, Date start) {
-  return vectorMaker_->flatVector<Date>(
-      size, [&](auto row) { return Date(start.days() + row); });
-}
 
 TEST_F(ParquetReaderTest, readSampleFull) {
   // sample.parquet holds two columns (a: BIGINT, b: DOUBLE) and
@@ -199,14 +190,14 @@ TEST_F(ParquetReaderTest, dateRead) {
   auto type = reader->typeWithId();
   EXPECT_EQ(type->size(), 1ULL);
   auto col0 = type->childAt(0);
-  EXPECT_EQ(col0->type->kind(), TypeKind::DATE);
+  EXPECT_EQ(col0->type, DATE());
 
   auto rowReaderOpts = getReaderOpts(dateSchema());
   auto scanSpec = makeScanSpec(dateSchema());
   rowReaderOpts.setScanSpec(scanSpec);
   auto rowReader = reader->createRowReader(rowReaderOpts);
 
-  auto expected = vectorMaker_->rowVector({rangeVector<Date>(25, -5)});
+  auto expected = vectorMaker_->rowVector({rangeVector<int32_t>(25, -5)});
   assertReadExpected(dateSchema(), *rowReader, expected, *pool_);
 }
 
@@ -215,7 +206,7 @@ TEST_F(ParquetReaderTest, dateFilter) {
   FilterMap filters;
   filters.insert({"date", exec::between(5, 14)});
 
-  auto expected = vectorMaker_->rowVector({rangeVector<Date>(10, 5)});
+  auto expected = vectorMaker_->rowVector({rangeVector<int32_t>(10, 5)});
 
   assertReadWithFilters(
       "date.parquet", dateSchema(), std::move(filters), expected);

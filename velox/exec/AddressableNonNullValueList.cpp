@@ -13,7 +13,7 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-#include "velox/functions/prestosql/aggregates/AddressableNonNullValueList.h"
+#include "velox/exec/AddressableNonNullValueList.h"
 #include "velox/exec/ContainerRowSerde.h"
 
 namespace facebook::velox::aggregate::prestosql {
@@ -37,8 +37,6 @@ HashStringAllocator::Position AddressableNonNullValueList::append(
     allocator->extendWrite(currentPosition_, stream);
   }
 
-  const auto position = currentPosition_;
-
   // Write hash.
   stream.appendOne(decoded.base()->hashValueAt(decoded.index(index)));
   // Write value.
@@ -47,8 +45,9 @@ HashStringAllocator::Position AddressableNonNullValueList::append(
 
   ++size_;
 
-  currentPosition_ = allocator->finishWrite(stream, 1024);
-  return position;
+  auto startAndFinish = allocator->finishWrite(stream, 1024);
+  currentPosition_ = startAndFinish.second;
+  return startAndFinish.first;
 }
 
 namespace {

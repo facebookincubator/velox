@@ -42,9 +42,11 @@ std::unique_ptr<SelectiveColumnReader> buildIntegerReader(
   auto& stripe = params.stripeStreams();
   switch (static_cast<int64_t>(stripe.getEncoding(ek).kind())) {
     case proto::ColumnEncoding_Kind_DICTIONARY:
+    case proto::ColumnEncoding_Kind_DICTIONARY_V2:
       return std::make_unique<SelectiveIntegerDictionaryColumnReader>(
           requestedType, dataType, params, scanSpec, numBytes);
     case proto::ColumnEncoding_Kind_DIRECT:
+    case proto::ColumnEncoding_Kind_DIRECT_V2:
       return std::make_unique<SelectiveIntegerDirectColumnReader>(
           requestedType, dataType, params, numBytes, scanSpec);
     default:
@@ -57,7 +59,11 @@ std::unique_ptr<SelectiveColumnReader> SelectiveDwrfReader::build(
     const std::shared_ptr<const dwio::common::TypeWithId>& requestedType,
     const std::shared_ptr<const dwio::common::TypeWithId>& dataType,
     DwrfParams& params,
-    common::ScanSpec& scanSpec) {
+    common::ScanSpec& scanSpec,
+    bool isRoot) {
+  DWIO_ENSURE(
+      !isRoot || dataType->type->kind() == TypeKind::ROW,
+      "The root object can only be a row.");
   dwio::common::typeutils::checkTypeCompatibility(
       *dataType->type, *requestedType->type);
   EncodingKey ek{dataType->id, params.flatMapContext().sequence};
@@ -99,7 +105,7 @@ std::unique_ptr<SelectiveColumnReader> SelectiveDwrfReader::build(
           requestedType, dataType->type, params, scanSpec);
     case TypeKind::ROW:
       return std::make_unique<SelectiveStructColumnReader>(
-          requestedType, dataType, params, scanSpec);
+          requestedType, dataType, params, scanSpec, isRoot);
     case TypeKind::BOOLEAN:
       return std::make_unique<SelectiveByteRleColumnReader>(
           requestedType, dataType, params, scanSpec, true);
@@ -110,9 +116,11 @@ std::unique_ptr<SelectiveColumnReader> SelectiveDwrfReader::build(
     case TypeKind::VARCHAR:
       switch (static_cast<int64_t>(stripe.getEncoding(ek).kind())) {
         case proto::ColumnEncoding_Kind_DIRECT:
+        case proto::ColumnEncoding_Kind_DIRECT_V2:
           return std::make_unique<SelectiveStringDirectColumnReader>(
               requestedType, params, scanSpec);
         case proto::ColumnEncoding_Kind_DICTIONARY:
+        case proto::ColumnEncoding_Kind_DICTIONARY_V2:
           return std::make_unique<SelectiveStringDictionaryColumnReader>(
               requestedType, params, scanSpec);
         default:

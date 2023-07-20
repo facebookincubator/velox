@@ -82,6 +82,10 @@ option(VELOX_ENABLE_CCACHE "Use ccache if installed." ON)
 option(VELOX_BUILD_TEST_UTILS "Builds Velox test utilities" OFF)
 option(VELOX_BUILD_PYTHON_PACKAGE "Builds Velox Python bindings" OFF)
 option(VELOX_BUILD_BENCHMARKS "Builds Velox benchmarks" OFF)
+option(
+  VELOX_ENABLE_INT64_BUILD_PARTITION_BOUND
+  "make buildPartitionBounds_ a vector int64 instead of int32 to avoid integer overflow when the hashtable has billions of records"
+  OFF)
 
 if(${VELOX_BUILD_MINIMAL})
   # Enable and disable components for velox base build
@@ -131,7 +135,6 @@ if(${VELOX_BUILD_BENCHMARKS})
   set(VELOX_BUILD_TEST_UTILS ON)
   set(VELOX_BUILD_TESTING OFF)
   set(VELOX_ENABLE_EXAMPLES OFF)
-  set(VELOX_ENABLE_S3 OFF)
   set(VELOX_ENABLE_GCS OFF)
   set(VELOX_ENABLE_SUBSTRAIT OFF)
   set(VELOX_CODEGEN_SUPPORT OFF)
@@ -222,6 +225,12 @@ endif()
 # define processor variable for conditional compilation
 if(${VELOX_CODEGEN_SUPPORT})
   add_compile_definitions(CODEGEN_ENABLED=1)
+endif()
+
+# make buildPartitionBounds_ a vector int64 instead of int32 to avoid integer
+# overflow
+if(${VELOX_ENABLE_INT64_BUILD_PARTITION_BOUND})
+  add_compile_definitions(VELOX_ENABLE_INT64_BUILD_PARTITION_BOUND)
 endif()
 
 # MacOSX enables two-level namespace by default:

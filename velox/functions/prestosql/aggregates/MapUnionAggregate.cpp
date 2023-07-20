@@ -20,17 +20,18 @@ namespace facebook::velox::aggregate::prestosql {
 namespace {
 // See documentation at
 // https://prestodb.io/docs/current/functions/aggregate.html
-class MapUnionAggregate : public aggregate::MapAggregateBase {
+template <typename K>
+class MapUnionAggregate : public MapAggregateBase<K> {
  public:
   explicit MapUnionAggregate(TypePtr resultType)
-      : MapAggregateBase(resultType) {}
+      : MapAggregateBase<K>(resultType) {}
 
   void addRawInput(
       char** groups,
       const SelectivityVector& rows,
       const std::vector<VectorPtr>& args,
       bool /*mayPushdown*/) override {
-    addMapInputToAccumulator(groups, rows, args, false);
+    MapAggregateBase<K>::addMapInputToAccumulator(groups, rows, args, false);
   }
 
   void addSingleGroupRawInput(
@@ -38,7 +39,8 @@ class MapUnionAggregate : public aggregate::MapAggregateBase {
       const SelectivityVector& rows,
       const std::vector<VectorPtr>& args,
       bool /*mayPushdown*/) override {
-    addSingleGroupMapInputToAccumulator(group, rows, args, false);
+    MapAggregateBase<K>::addSingleGroupMapInputToAccumulator(
+        group, rows, args, false);
   }
 };
 
@@ -58,13 +60,16 @@ exec::AggregateRegistrationResult registerMapUnion(const std::string& name) {
       [name](
           core::AggregationNode::Step /*step*/,
           const std::vector<TypePtr>& argTypes,
-          const TypePtr& resultType) -> std::unique_ptr<exec::Aggregate> {
+          const TypePtr& resultType,
+          const core::QueryConfig& /*config*/)
+          -> std::unique_ptr<exec::Aggregate> {
         VELOX_CHECK_EQ(
             argTypes.size(),
             1,
             "{} ({}): unexpected number of arguments",
             name);
-        return std::make_unique<MapUnionAggregate>(resultType);
+
+        return createMapAggregate<MapUnionAggregate>(resultType);
       });
 }
 

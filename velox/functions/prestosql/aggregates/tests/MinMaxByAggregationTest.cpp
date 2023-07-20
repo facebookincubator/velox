@@ -37,6 +37,7 @@ struct TestParam {
 };
 
 const std::unordered_set<TypeKind> kSupportedTypes = {
+    TypeKind::BOOLEAN,
     TypeKind::TINYINT,
     TypeKind::SMALLINT,
     TypeKind::INTEGER,
@@ -44,7 +45,6 @@ const std::unordered_set<TypeKind> kSupportedTypes = {
     TypeKind::REAL,
     TypeKind::DOUBLE,
     TypeKind::VARCHAR,
-    TypeKind::DATE,
     TypeKind::TIMESTAMP};
 
 std::vector<TestParam> getTestParams() {
@@ -60,6 +60,9 @@ std::vector<TestParam> getTestParams() {
 #define EXECUTE_TEST_BY_VALUE_TYPE(testFunc, valueType)              \
   do {                                                               \
     switch (GetParam().comparisonType) {                             \
+      case TypeKind::BOOLEAN:                                        \
+        testFunc<valueType, bool>();                                 \
+        break;                                                       \
       case TypeKind::TINYINT:                                        \
         testFunc<valueType, int8_t>();                               \
         break;                                                       \
@@ -81,9 +84,6 @@ std::vector<TestParam> getTestParams() {
       case TypeKind::VARCHAR:                                        \
         testFunc<valueType, StringView>();                           \
         break;                                                       \
-      case TypeKind::DATE:                                           \
-        testFunc<valueType, Date>();                                 \
-        break;                                                       \
       case TypeKind::TIMESTAMP:                                      \
         testFunc<valueType, Timestamp>();                            \
         break;                                                       \
@@ -96,6 +96,9 @@ std::vector<TestParam> getTestParams() {
 #define EXECUTE_TEST(testFunc)                                  \
   do {                                                          \
     switch (GetParam().valueType) {                             \
+      case TypeKind::BOOLEAN:                                   \
+        EXECUTE_TEST_BY_VALUE_TYPE(testFunc, bool);             \
+        break;                                                  \
       case TypeKind::TINYINT:                                   \
         EXECUTE_TEST_BY_VALUE_TYPE(testFunc, int8_t);           \
         break;                                                  \
@@ -117,9 +120,6 @@ std::vector<TestParam> getTestParams() {
       case TypeKind::VARCHAR:                                   \
         EXECUTE_TEST_BY_VALUE_TYPE(testFunc, StringView);       \
         break;                                                  \
-      case TypeKind::DATE:                                      \
-        EXECUTE_TEST_BY_VALUE_TYPE(testFunc, Date);             \
-        break;                                                  \
       case TypeKind::TIMESTAMP:                                 \
         EXECUTE_TEST_BY_VALUE_TYPE(testFunc, Timestamp);        \
         break;                                                  \
@@ -131,17 +131,6 @@ std::vector<TestParam> getTestParams() {
 
 template <typename T>
 struct ExtremeValueTrait : public std::numeric_limits<T> {};
-
-template <>
-struct ExtremeValueTrait<Date> {
-  static constexpr Date lowest() {
-    return Date(std::numeric_limits<int32_t>::lowest());
-  }
-
-  static constexpr Date max() {
-    return Date(std::numeric_limits<int32_t>::max());
-  }
-};
 
 template <typename T>
 const T kMax = ExtremeValueTrait<T>::max();
@@ -201,8 +190,9 @@ class MinMaxByAggregationTestBase : public AggregationTestBase {
       folly::Range<const int*> values);
 
   const RowTypePtr rowType_{
-      ROW({"c0", "c1", "c2", "c3", "c4", "c5", "c6", "c7", "c8"},
+      ROW({"c0", "c1", "c2", "c3", "c4", "c5", "c6", "c7", "c8", "c9"},
           {
+              BOOLEAN(),
               TINYINT(),
               SMALLINT(),
               INTEGER(),
@@ -258,11 +248,27 @@ FlatVectorPtr<Timestamp> MinMaxByAggregationTestBase::buildDataVector(
   }
 }
 
+template <>
+FlatVectorPtr<bool> MinMaxByAggregationTestBase::buildDataVector(
+    vector_size_t size,
+    folly::Range<const int*> values) {
+  if (values.empty()) {
+    return makeFlatVector<bool>(
+        size, [](auto row) { return row % 2 == 0 ? true : false; });
+  } else {
+    VELOX_CHECK_EQ(values.size(), size);
+    return makeFlatVector<bool>(
+        size, [&](auto row) { return values[row] % 2 == 0 ? true : false; });
+  }
+}
+
 VectorPtr MinMaxByAggregationTestBase::buildDataVector(
     TypeKind kind,
     vector_size_t size,
     folly::Range<const int*> values) {
   switch (kind) {
+    case TypeKind::BOOLEAN:
+      return buildDataVector<bool>(size, values);
     case TypeKind::TINYINT:
       return buildDataVector<int8_t>(size, values);
     case TypeKind::SMALLINT:
@@ -277,8 +283,6 @@ VectorPtr MinMaxByAggregationTestBase::buildDataVector(
       return buildDataVector<double>(size, values);
     case TypeKind::VARCHAR:
       return buildDataVector<StringView>(size, values);
-    case TypeKind::DATE:
-      return buildDataVector<Date>(size, values);
     case TypeKind::TIMESTAMP:
       return buildDataVector<Timestamp>(size, values);
     default:
@@ -297,12 +301,20 @@ std::string asSql(Timestamp value) {
   return fmt::format("epoch_ms({})", value.toMillis());
 }
 
+template <>
+std::string asSql(bool value) {
+  return value ? "true" : "false";
+}
+
 void MinMaxByAggregationTestBase::SetUp() {
   AggregationTestBase::SetUp();
   AggregationTestBase::disallowInputShuffle();
 
   for (const TypeKind type : kSupportedTypes) {
     switch (type) {
+      case TypeKind::BOOLEAN:
+        dataVectorsByType_.emplace(type, buildDataVector<bool>(numValues_));
+        break;
       case TypeKind::TINYINT:
         dataVectorsByType_.emplace(type, buildDataVector<int8_t>(numValues_));
         break;
@@ -320,9 +332,6 @@ void MinMaxByAggregationTestBase::SetUp() {
         break;
       case TypeKind::DOUBLE:
         dataVectorsByType_.emplace(type, buildDataVector<double>(numValues_));
-        break;
-      case TypeKind::DATE:
-        dataVectorsByType_.emplace(type, buildDataVector<Date>(numValues_));
         break;
       case TypeKind::TIMESTAMP:
         dataVectorsByType_.emplace(
@@ -420,35 +429,35 @@ class MinMaxByGlobalByAggregationTest
              {makeNullableFlatVector<T>(
                   {std::nullopt, dataAt<T>(3), std::nullopt, dataAt<T>(4)}),
               makeNullableFlatVector<U>(
-                  {dataAt<U>(0), std::nullopt, dataAt<U>(1), dataAt<U>(2)})}),
+                  {dataAt<U>(1), std::nullopt, dataAt<U>(2), dataAt<U>(3)})}),
          "SELECT NULL"},
 
         {makeRowVector(
              {makeNullableFlatVector<T>(
                   {dataAt<T>(0), dataAt<T>(3), std::nullopt, dataAt<T>(4)}),
               makeNullableFlatVector<U>(
-                  {dataAt<U>(0), std::nullopt, dataAt<U>(1), dataAt<U>(2)})}),
+                  {dataAt<U>(1), std::nullopt, dataAt<U>(2), dataAt<U>(3)})}),
          fmt::format("SELECT {}", asSql(dataAt<T>(0)))},
 
         {makeRowVector(
              {makeNullableFlatVector<T>(
                   {dataAt<T>(0), dataAt<T>(3), std::nullopt, dataAt<T>(4)}),
               makeNullableFlatVector<U>(
-                  {dataAt<U>(2), std::nullopt, dataAt<U>(1), dataAt<U>(0)})}),
+                  {dataAt<U>(4), std::nullopt, dataAt<U>(2), dataAt<U>(1)})}),
          fmt::format("SELECT {}", asSql(dataAt<T>(4)))},
 
         {makeRowVector(
              {makeNullableFlatVector<T>(
                   {dataAt<T>(0), dataAt<T>(3), std::nullopt, dataAt<T>(4)}),
               makeNullableFlatVector<U>(
-                  {dataAt<U>(2), std::nullopt, dataAt<U>(0), dataAt<U>(3)})}),
+                  {dataAt<U>(2), std::nullopt, dataAt<U>(1), dataAt<U>(4)})}),
          "SELECT NULL"},
 
         {makeRowVector(
              {makeNullableFlatVector<T>(
                   {dataAt<T>(0), std::nullopt, dataAt<T>(3), dataAt<T>(4)}),
               makeNullableFlatVector<U>(
-                  {dataAt<U>(2), std::nullopt, dataAt<U>(0), dataAt<U>(3)})}),
+                  {dataAt<U>(2), std::nullopt, dataAt<U>(1), dataAt<U>(4)})}),
          fmt::format("SELECT {}", asSql(dataAt<T>(3)))}};
     for (const auto& testData : testSettings) {
       SCOPED_TRACE(testData.debugString());
@@ -528,21 +537,21 @@ class MinMaxByGlobalByAggregationTest
              {makeNullableFlatVector<T>(
                   {dataAt<T>(0), dataAt<T>(3), std::nullopt, dataAt<T>(4)}),
               makeNullableFlatVector<U>(
-                  {dataAt<U>(0), std::nullopt, dataAt<U>(1), dataAt<U>(2)})}),
+                  {dataAt<U>(1), std::nullopt, dataAt<U>(3), dataAt<U>(4)})}),
          fmt::format("SELECT {}", asSql(dataAt<T>(4)))},
 
         {makeRowVector(
              {makeNullableFlatVector<T>(
                   {dataAt<T>(0), dataAt<T>(3), std::nullopt, dataAt<T>(4)}),
               makeNullableFlatVector<U>(
-                  {dataAt<U>(2), std::nullopt, dataAt<U>(3), dataAt<U>(0)})}),
+                  {dataAt<U>(1), std::nullopt, dataAt<U>(4), dataAt<U>(0)})}),
          "SELECT NULL"},
 
         {makeRowVector(
              {makeNullableFlatVector<T>(
                   {dataAt<T>(0), std::nullopt, dataAt<T>(3), dataAt<T>(4)}),
               makeNullableFlatVector<U>(
-                  {dataAt<U>(2), std::nullopt, dataAt<U>(3), dataAt<U>(0)})}),
+                  {dataAt<U>(1), std::nullopt, dataAt<U>(4), dataAt<U>(0)})}),
          fmt::format("SELECT {}", asSql(dataAt<T>(3)))}};
     for (const auto& testData : testSettings) {
       SCOPED_TRACE(testData.debugString());
@@ -574,7 +583,7 @@ TEST_P(MinMaxByGlobalByAggregationTest, randomMinByGlobalBy) {
   // DuckDB).
   if (GetParam().comparisonType == TypeKind::TIMESTAMP ||
       GetParam().valueType == TypeKind::TIMESTAMP) {
-    GTEST_SKIP() << "Fuzzer test for timestamps is not supported yet.";
+    return;
   }
 
   testGlobalAggregation(
@@ -587,7 +596,7 @@ TEST_P(MinMaxByGlobalByAggregationTest, randomMinByGlobalBy) {
 TEST_P(MinMaxByGlobalByAggregationTest, randomMaxByGlobalBy) {
   if (GetParam().comparisonType == TypeKind::TIMESTAMP ||
       GetParam().valueType == TypeKind::TIMESTAMP) {
-    GTEST_SKIP() << "Fuzzer test for timestamps is not supported yet.";
+    return;
   }
 
   testGlobalAggregation(
@@ -602,7 +611,10 @@ TEST_P(
     randomMaxByGlobalByWithDistinctCompareValue) {
   if (GetParam().comparisonType == TypeKind::TIMESTAMP ||
       GetParam().valueType == TypeKind::TIMESTAMP) {
-    GTEST_SKIP() << "Fuzzer test for timestamps is not supported yet.";
+    return;
+  }
+  if (GetParam().comparisonType == TypeKind::BOOLEAN) {
+    GTEST_SKIP() << "Boolean comparison type is not supported in this test.";
   }
 
   // Enable disk spilling test with distinct comparison values.
@@ -669,11 +681,20 @@ class MinMaxByGroupByAggregationTest
     const std::string funcName = aggName == kMaxBy ? "max" : "min";
     const std::string aggregate = fmt::format(
         "{}({}, {})", aggName, valueColumnName, comparisonColumnName);
-    const std::string verifyDuckDbSql = fmt::format(
-        "SELECT {}, {} FROM tmp GROUP BY {}",
-        groupByColumnName,
-        aggregate,
-        groupByColumnName);
+    std::string verifyDuckDbSql;
+    if (GetParam().valueType == TypeKind::BOOLEAN) {
+      verifyDuckDbSql = fmt::format(
+          "SELECT {}, CAST({} as BOOLEAN) FROM tmp GROUP BY {}",
+          groupByColumnName,
+          aggregate,
+          groupByColumnName);
+    } else {
+      verifyDuckDbSql = fmt::format(
+          "SELECT {}, {} FROM tmp GROUP BY {}",
+          groupByColumnName,
+          aggregate,
+          groupByColumnName);
+    }
     SCOPED_TRACE(fmt::format(
         "{} GROUP BY {}\nverifyDuckDbSql: {}",
         aggregate,
@@ -773,11 +794,11 @@ class MinMaxByGroupByAggregationTest
                    dataAt<T>(0)}),
               makeNullableFlatVector<U>(
                   {dataAt<U>(4),
-                   dataAt<U>(5),
+                   dataAt<U>(4),
                    std::nullopt,
                    dataAt<U>(1),
-                   dataAt<U>(2),
-                   dataAt<U>(0)}),
+                   dataAt<U>(1),
+                   dataAt<U>(3)}),
               makeNullableFlatVector<int32_t>(
                   {dataAt<int32_t>(0),
                    dataAt<int32_t>(1),
@@ -802,12 +823,12 @@ class MinMaxByGroupByAggregationTest
                    std::nullopt,
                    dataAt<T>(0)}),
               makeNullableFlatVector<U>(
-                  {dataAt<U>(4),
-                   dataAt<U>(5),
+                  {dataAt<U>(3),
+                   dataAt<U>(4),
                    std::nullopt,
                    dataAt<U>(1),
                    dataAt<U>(2),
-                   dataAt<U>(0)}),
+                   dataAt<U>(1)}),
               makeNullableFlatVector<int32_t>(
                   {dataAt<int32_t>(0),
                    dataAt<int32_t>(0),
@@ -922,11 +943,11 @@ class MinMaxByGroupByAggregationTest
                    dataAt<T>(0)}),
               makeNullableFlatVector<U>(
                   {dataAt<U>(4),
-                   dataAt<U>(5),
+                   dataAt<U>(4),
                    std::nullopt,
                    dataAt<U>(1),
-                   dataAt<U>(2),
-                   dataAt<U>(0)}),
+                   dataAt<U>(3),
+                   dataAt<U>(3)}),
               makeNullableFlatVector<int32_t>(
                   {dataAt<int32_t>(0),
                    dataAt<int32_t>(1),
@@ -951,11 +972,11 @@ class MinMaxByGroupByAggregationTest
                    std::nullopt,
                    dataAt<T>(0)}),
               makeNullableFlatVector<U>(
-                  {dataAt<U>(5),
-                   dataAt<U>(4),
+                  {dataAt<U>(4),
+                   dataAt<U>(3),
                    std::nullopt,
                    dataAt<U>(1),
-                   dataAt<U>(0),
+                   dataAt<U>(1),
                    dataAt<U>(2)}),
               makeNullableFlatVector<int32_t>(
                   {dataAt<int32_t>(0),
@@ -983,26 +1004,18 @@ class MinMaxByGroupByAggregationTest
   }
 };
 
-TEST_P(MinMaxByGroupByAggregationTest, minByPartialGroupBy) {
+TEST_P(MinMaxByGroupByAggregationTest, minByGroupBy) {
   EXECUTE_TEST(testMinByGroupBy);
 }
 
-TEST_P(MinMaxByGroupByAggregationTest, maxByPartialGroupBy) {
-  EXECUTE_TEST(testMaxByGroupBy);
-}
-
-TEST_P(MinMaxByGroupByAggregationTest, minByFinalGroupBy) {
-  EXECUTE_TEST(testMinByGroupBy);
-}
-
-TEST_P(MinMaxByGroupByAggregationTest, maxByFinalGroupBy) {
+TEST_P(MinMaxByGroupByAggregationTest, maxByGroupBy) {
   EXECUTE_TEST(testMaxByGroupBy);
 }
 
 TEST_P(MinMaxByGroupByAggregationTest, randomMinByGroupBy) {
   if (GetParam().comparisonType == TypeKind::TIMESTAMP ||
       GetParam().valueType == TypeKind::TIMESTAMP) {
-    GTEST_SKIP() << "Fuzzer test for timestamps is not supported yet.";
+    return;
   }
 
   testGroupByAggregation(
@@ -1016,7 +1029,7 @@ TEST_P(MinMaxByGroupByAggregationTest, randomMinByGroupBy) {
 TEST_P(MinMaxByGroupByAggregationTest, randomMaxByGroupBy) {
   if (GetParam().comparisonType == TypeKind::TIMESTAMP ||
       GetParam().valueType == TypeKind::TIMESTAMP) {
-    GTEST_SKIP() << "Fuzzer test for timestamps is not supported yet.";
+    return;
   }
 
   testGroupByAggregation(
@@ -1032,7 +1045,10 @@ TEST_P(
     randomMinMaxByGroupByWithDistinctCompareValue) {
   if (GetParam().comparisonType == TypeKind::TIMESTAMP ||
       GetParam().valueType == TypeKind::TIMESTAMP) {
-    GTEST_SKIP() << "Fuzzer test for timestamps is not supported yet.";
+    return;
+  }
+  if (GetParam().comparisonType == TypeKind::BOOLEAN) {
+    GTEST_SKIP() << "Boolean comparison type is not supported in this test.";
   }
 
   // Enable disk spilling test with distinct comparison values.
@@ -1203,6 +1219,7 @@ class MinMaxByNTest : public AggregationTestBase {
   void SetUp() override {
     AggregationTestBase::SetUp();
     AggregationTestBase::allowInputShuffle();
+    AggregationTestBase::enableTestStreaming();
   }
 };
 
@@ -1240,6 +1257,42 @@ TEST_F(MinMaxByNTest, global) {
       }),
       makeNullableArrayVector<int32_t>({
           {1, 2, 3, std::nullopt},
+      }),
+  });
+
+  testAggregations(
+      {data}, {}, {"min_by(c0, c1, 3)", "max_by(c0, c1, 4)"}, {expected});
+
+  // bool type of comparison
+  data = makeRowVector({
+      makeFlatVector<int32_t>({1, 2}),
+      makeFlatVector<bool>({true, false}),
+  });
+
+  expected = makeRowVector({
+      makeArrayVector<int32_t>({
+          {2},
+      }),
+      makeArrayVector<int32_t>({
+          {1},
+      }),
+  });
+
+  testAggregations(
+      {data}, {}, {"min_by(c0, c1, 1)", "max_by(c0, c1, 1)"}, {expected});
+
+  // bool type of value
+  data = makeRowVector({
+      makeFlatVector<bool>({true, false, true, false, true, false, true}),
+      makeFlatVector<int64_t>({77, 66, 55, 44, 33, 22, 11}),
+  });
+
+  expected = makeRowVector({
+      makeArrayVector<bool>({
+          {true, false, true},
+      }),
+      makeArrayVector<bool>({
+          {true, false, true, false},
       }),
   });
 
@@ -1346,6 +1399,50 @@ TEST_F(MinMaxByNTest, groupBy) {
       makeNullableArrayVector<int32_t>({
           {1, std::nullopt, 5, std::nullopt},
           {2, std::nullopt, std::nullopt},
+      }),
+  });
+
+  testAggregations(
+      {data}, {"c0"}, {"min_by(c1, c2, 3)", "max_by(c1, c2, 4)"}, {expected});
+
+  // bool type of comparison
+  data = makeRowVector({
+      makeFlatVector<int16_t>({1, 2, 1, 2}),
+      makeFlatVector<int32_t>({1, 2, 3, 4}),
+      makeFlatVector<bool>({true, false, false, true}),
+  });
+
+  expected = makeRowVector({
+      makeFlatVector<int16_t>({1, 2}),
+      makeArrayVector<int32_t>({
+          {3},
+          {2},
+      }),
+      makeArrayVector<int32_t>({
+          {1},
+          {4},
+      }),
+  });
+
+  testAggregations(
+      {data}, {"c0"}, {"min_by(c1, c2, 1)", "max_by(c1, c2, 1)"}, {expected});
+
+  // bool type of value
+  data = makeRowVector({
+      makeFlatVector<int16_t>({1, 2, 1, 2, 1, 2, 1}),
+      makeFlatVector<bool>({true, false, false, true, true, false, true}),
+      makeFlatVector<int64_t>({77, 66, 55, 44, 33, 22, 11}),
+  });
+
+  expected = makeRowVector({
+      makeFlatVector<int16_t>({1, 2}),
+      makeArrayVector<bool>({
+          {true, true, false},
+          {false, true, false},
+      }),
+      makeArrayVector<bool>({
+          {true, false, true, true},
+          {false, true, false},
       }),
   });
 
@@ -1574,6 +1671,91 @@ TEST_F(MinMaxByNTest, groupByRow) {
 
   testAggregations(
       {data}, {"c0"}, {"min_by(c2, c1, 2)", "max_by(c2, c1, 2)"}, {expected});
+}
+
+namespace {
+std::vector<std::string> makeStrings(vector_size_t size) {
+  std::vector<std::string> s;
+  s.reserve(size);
+  for (auto i = 0; i < size; ++i) {
+    if (i % 7 == 0) {
+      // Short (inline) string.
+      s.push_back(fmt::format("s{}", i));
+    } else {
+      // Long (non-inline string).
+      s.push_back(fmt::format("Non-inline string #{}...", i));
+    }
+  }
+  return s;
+}
+} // namespace
+
+TEST_F(MinMaxByNTest, globalVarchar) {
+  // DuckDB doesn't support 3-argument versions of min_by and max_by.
+
+  vector_size_t size = 1'000;
+  auto s = makeStrings(size);
+
+  auto data = makeRowVector({
+      makeFlatVector<std::string>(s),
+      makeFlatVector<int32_t>(size, [](auto row) { return row; }),
+  });
+
+  auto expected = makeRowVector({
+      makeArrayVector<std::string>({
+          {s[0], s[1], s[2]},
+      }),
+      makeArrayVector<std::string>({
+          {s[size - 1], s[size - 2], s[size - 3], s[size - 4]},
+      }),
+  });
+
+  testAggregations(
+      {data}, {}, {"min_by(c0, c1, 3)", "max_by(c0, c1, 4)"}, {expected});
+}
+
+TEST_F(MinMaxByNTest, groupByVarchar) {
+  // DuckDB doesn't support 3-argument versions of min_by and max_by.
+
+  vector_size_t size = 1'000;
+  auto s = makeStrings(size);
+
+  auto data = makeRowVector({
+      makeFlatVector<int32_t>(size, [](auto row) { return row % 10; }),
+      makeFlatVector<std::string>(s),
+      makeFlatVector<int32_t>(size, [](auto row) { return row; }),
+  });
+
+  auto expected = makeRowVector({
+      makeFlatVector<int32_t>({0, 1, 2, 3, 4, 5, 6, 7, 8, 9}),
+      makeArrayVector<std::string>({
+          {s[0], s[10], s[20]},
+          {s[1], s[11], s[21]},
+          {s[2], s[12], s[22]},
+          {s[3], s[13], s[23]},
+          {s[4], s[14], s[24]},
+          {s[5], s[15], s[25]},
+          {s[6], s[16], s[26]},
+          {s[7], s[17], s[27]},
+          {s[8], s[18], s[28]},
+          {s[9], s[19], s[29]},
+      }),
+      makeArrayVector<std::string>({
+          {s[size - 10], s[size - 20], s[size - 30], s[size - 40]},
+          {s[size - 9], s[size - 19], s[size - 29], s[size - 39]},
+          {s[size - 8], s[size - 18], s[size - 28], s[size - 38]},
+          {s[size - 7], s[size - 17], s[size - 27], s[size - 37]},
+          {s[size - 6], s[size - 16], s[size - 26], s[size - 36]},
+          {s[size - 5], s[size - 15], s[size - 25], s[size - 35]},
+          {s[size - 4], s[size - 14], s[size - 24], s[size - 34]},
+          {s[size - 3], s[size - 13], s[size - 23], s[size - 33]},
+          {s[size - 2], s[size - 12], s[size - 22], s[size - 32]},
+          {s[size - 1], s[size - 11], s[size - 21], s[size - 31]},
+      }),
+  });
+
+  testAggregations(
+      {data}, {"c0"}, {"min_by(c1, c2, 3)", "max_by(c1, c2, 4)"}, {expected});
 }
 
 } // namespace

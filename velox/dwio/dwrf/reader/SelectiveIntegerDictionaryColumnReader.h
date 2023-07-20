@@ -17,6 +17,7 @@
 #pragma once
 
 #include "velox/dwio/common/SelectiveIntegerColumnReader.h"
+#include "velox/dwio/dwrf/common/DecoderUtil.h"
 #include "velox/dwio/dwrf/reader/DwrfData.h"
 
 namespace facebook::velox::dwrf {
@@ -34,7 +35,7 @@ class SelectiveIntegerDictionaryColumnReader
       uint32_t numBytes);
 
   void seekToRowGroup(uint32_t index) override {
-    SelectiveColumnReader::seekToRowGroup(index);
+    SelectiveIntegerColumnReader::seekToRowGroup(index);
     auto positionsProvider = formatData_->seekToRowGroup(index);
     if (inDictionaryReader_) {
       inDictionaryReader_->seekToRowGroup(positionsProvider);
@@ -69,14 +70,13 @@ void SelectiveIntegerDictionaryColumnReader::readWithVisitor(
     RowSet rows,
     ColumnVisitor visitor) {
   vector_size_t numRows = rows.back() + 1;
-  VELOX_CHECK_EQ(rleVersion_, RleVersion_1);
   auto dictVisitor = visitor.toDictionaryColumnVisitor();
-  auto reader = reinterpret_cast<RleDecoderV1<false>*>(dataReader_.get());
-  if (nullsInReadRange_) {
-    reader->readWithVisitor<true>(
-        nullsInReadRange_->as<uint64_t>(), dictVisitor);
+  if (rleVersion_ == RleVersion_1) {
+    decodeWithVisitor<velox::dwrf::RleDecoderV1<false>>(
+        dataReader_.get(), dictVisitor);
   } else {
-    reader->readWithVisitor<false>(nullptr, dictVisitor);
+    decodeWithVisitor<velox::dwrf::RleDecoderV2<false>>(
+        dataReader_.get(), dictVisitor);
   }
   readOffset_ += numRows;
 }

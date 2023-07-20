@@ -136,6 +136,11 @@ class DataSink {
   /// TODO maybe at some point we want to make it async.
   virtual void appendData(RowVectorPtr input) = 0;
 
+  /// Returns the number of bytes written on disk by this data sink so far.
+  virtual int64_t getCompletedBytes() const {
+    return 0;
+  }
+
   /// Called once after all data has been added via possibly multiple calls to
   /// appendData(). Could return data in the string form that would be included
   /// in the output. After calling this function, only close() could be called.
@@ -231,7 +236,8 @@ class ConnectorQueryCtx {
         scanId_(fmt::format("{}.{}", taskId, planNodeId)),
         queryId_(queryId),
         taskId_(taskId),
-        driverId_(driverId) {}
+        driverId_(driverId),
+        planNodeId_(planNodeId) {}
 
   /// Returns the associated operator's memory pool which is a leaf kind of
   /// memory pool, used for direct memory allocation use.
@@ -280,6 +286,10 @@ class ConnectorQueryCtx {
     return driverId_;
   }
 
+  const std::string& planNodeId() const {
+    return planNodeId_;
+  }
+
  private:
   memory::MemoryPool* operatorPool_;
   memory::MemoryPool* connectorPool_;
@@ -290,6 +300,7 @@ class ConnectorQueryCtx {
   const std::string queryId_;
   const std::string taskId_;
   const int driverId_;
+  const std::string planNodeId_;
 };
 
 class Connector {
@@ -366,6 +377,9 @@ class ConnectorFactory {
   explicit ConnectorFactory(const char* FOLLY_NONNULL name) : name_(name) {}
 
   virtual ~ConnectorFactory() = default;
+
+  // Initialize is called during the factory registration.
+  virtual void initialize() {}
 
   const std::string& connectorName() const {
     return name_;

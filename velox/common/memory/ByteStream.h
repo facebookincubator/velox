@@ -242,7 +242,7 @@ class ByteStream {
     }
   }
 
-  StreamArena* arena_;
+  StreamArena* arena_{nullptr};
 
   // Indicates that position in ranges_ is in bits, not bytes.
   const bool isBits_;
@@ -256,7 +256,7 @@ class ByteStream {
   std::vector<ByteRange> ranges_;
 
   // Pointer to the current element of 'ranges_'.
-  ByteRange* current_ = nullptr;
+  ByteRange* current_{nullptr};
 
   // Number of bits/bytes that have been written in the last element
   // of 'ranges_'. In a write situation, all non-last ranges are full
@@ -275,13 +275,6 @@ inline Timestamp ByteStream::read<Timestamp>() {
 template <>
 inline int128_t ByteStream::read<int128_t>() {
   int128_t value;
-  readBytes(reinterpret_cast<uint8_t*>(&value), sizeof(value));
-  return value;
-}
-
-template <>
-inline Date ByteStream::read<Date>() {
-  Date value;
   readBytes(reinterpret_cast<uint8_t*>(&value), sizeof(value));
   return value;
 }

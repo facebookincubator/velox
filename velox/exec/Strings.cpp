@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
-#include "velox/functions/prestosql/aggregates/Strings.h"
+#include "velox/exec/Strings.h"
 
 namespace facebook::velox::aggregate::prestosql {
 
@@ -52,7 +52,7 @@ StringView Strings::append(StringView value, HashStringAllocator& allocator) {
   // Copy the string and return a StringView over the copy.
   char* start = stream.writePosition();
   stream.appendStringPiece(folly::StringPiece(value.data(), value.size()));
-  currentBlock = allocator.finishWrite(stream, maxStringSize * 4);
+  currentBlock = allocator.finishWrite(stream, maxStringSize * 4).second;
   return StringView(start, value.size());
 }
 

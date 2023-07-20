@@ -244,6 +244,7 @@ class HashTableTest : public testing::TestWithParam<bool> {
             insertedRows.asMutableRange().bits(),
             0,
             batchSize);
+        insertedRows.updateBounds();
       }
       decoded.emplace_back(batch->childrenSize());
       VELOX_CHECK_EQ(batch->size(), batchSize);
@@ -546,15 +547,16 @@ TEST_P(HashTableTest, mixed6Sparse) {
 TEST_P(HashTableTest, clear) {
   std::vector<std::unique_ptr<VectorHasher>> keyHashers;
   keyHashers.push_back(std::make_unique<VectorHasher>(BIGINT(), 0 /*channel*/));
-
+  core::QueryConfig config({});
   auto aggregate = Aggregate::create(
       "sum",
       core::AggregationNode::Step::kPartial,
       std::vector<TypePtr>{BIGINT()},
-      BIGINT());
+      BIGINT(),
+      config);
 
   auto table = HashTable<true>::createForAggregation(
-      std::move(keyHashers), {{aggregate.get()}}, pool_.get());
+      std::move(keyHashers), {Accumulator{aggregate.get()}}, pool_.get());
   ASSERT_NO_THROW(table->clear());
 }
 

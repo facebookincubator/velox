@@ -34,6 +34,11 @@ Unless specified otherwise, all functions return NULL if at least one of the arg
     Returns the starting position of the first instance of ``substring`` in
     ``string``. Positions start with ``1``. Returns 0 if 'substring' is not found.
 
+.. spark:function:: left(string, length) -> string
+
+    Returns the leftmost length characters from the ``string``.
+    If ``length`` is less or equal than 0 the result is an empty string.
+
 .. spark:function:: length(string) -> integer
 
     Returns the length of ``string`` in characters.
@@ -43,6 +48,17 @@ Unless specified otherwise, all functions return NULL if at least one of the arg
     Returns string with all characters changed to lowercase. ::
 
         SELECT lower('SparkSql'); -- sparksql
+
+.. spark:function:: lpad(string, len, pad) -> string
+    
+    Returns ``string``, left-padded with pad to a length of ``len``. If ``string`` is
+    longer than ``len``, the return value is shortened to ``len`` characters or bytes.
+    If ``pad`` is not specified, ``string`` will be padded to the left with space characters
+    if it is a character string, and with zeros if it is a byte sequence. ::
+
+        SELECT lpad('hi', 5, '??'); -- ???hi
+        SELECT lpad('hi', 1, '??'); -- h
+        SELECT lpad('hi', 4); --   hi
 
 .. spark:function:: ltrim(string) -> varchar
 
@@ -84,6 +100,17 @@ Unless specified otherwise, all functions return NULL if at least one of the arg
     Replaces all occurrences of `search` with `replace`. ::
 
         SELECT replace('ABCabc', 'abc', 'DEF'); -- ABCDEF
+
+.. spark:function:: rpad(string, len, pad) -> string
+    
+    Returns ``string``, right-padded with ``pad`` to a length of ``len``. 
+    If ``string`` is longer than ``len``, the return value is shortened to ``len`` characters.
+    If ``pad`` is not specified, ``string`` will be padded to the right with space characters
+    if it is a character string, and with zeros if it is a binary string. ::
+
+        SELECT lpad('hi', 5, '??'); -- ???hi
+        SELECT lpad('hi', 1, '??'); -- h
+        SELECT lpad('hi', 4); -- hi  
 
 .. spark:function:: rtrim(string) -> varchar
 
@@ -149,6 +176,21 @@ Unless specified otherwise, all functions return NULL if at least one of the arg
         SELECT substring('Spark SQL', -9, 3); -- "Spa"
         SELECT substring('Spark SQL', -10, 3); -- "Sp"
         SELECT substring('Spark SQL', -20, 3); -- ""
+
+.. spark:function:: translate(string, match, replace) -> varchar
+
+    Returns a new translated string. It translates the character in ``string`` by a
+    character in ``replace``. The character in ``replace`` is corresponding to
+    the character in ``match``. The translation will happen when any character
+    in ``string`` matching with a character in ``match``. If ``match's`` character
+    size is larger than ``replace's``, the extra characters in ``match`` will be
+    removed from ``string``. In addition, this function only considers the first
+    occurrence of a character in ``match`` and uses its corresponding character in
+    ``replace`` for translation. ::
+
+        SELECT translate('spark', 'sa', '12');  -- "1p2rk"
+        SELECT translate('spark', 'sa', '1');   -- "1prk"
+        SELECT translate('spark', 'ss', '12');  -- "1park"
 
 .. spark:function:: trim(string) -> varchar
 

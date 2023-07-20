@@ -162,14 +162,14 @@ struct MakeDateFunction {
       const int32_t month,
       const int32_t day) {
     auto daysSinceEpoch = util::daysSinceEpochFromDate(year, month, day);
-    VELOX_CHECK_EQ(
+    VELOX_USER_CHECK_EQ(
         daysSinceEpoch,
         (int32_t)daysSinceEpoch,
         "Integer overflow in make_date({}, {}, {})",
         year,
         month,
         day);
-    result = Date(daysSinceEpoch);
+    result = daysSinceEpoch;
   }
 };
 
@@ -198,14 +198,14 @@ struct LastDayFunction {
     int32_t day = getMonth(dateTime);
     auto lastDay = util::getMaxDayOfMonth(year, month);
     auto daysSinceEpoch = util::daysSinceEpochFromDate(year, month, lastDay);
-    VELOX_CHECK_EQ(
+    VELOX_USER_CHECK_EQ(
         daysSinceEpoch,
         (int32_t)daysSinceEpoch,
         "Integer overflow in last_day({}-{}-{})",
         year,
         month,
         day);
-    result = Date(daysSinceEpoch);
+    result = daysSinceEpoch;
   }
 };
 

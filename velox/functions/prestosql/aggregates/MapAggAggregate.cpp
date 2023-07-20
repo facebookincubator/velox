@@ -20,27 +20,85 @@ namespace facebook::velox::aggregate::prestosql {
 namespace {
 // See documentation at
 // https://prestodb.io/docs/current/functions/aggregate.html
-class MapAggAggregate : public aggregate::MapAggregateBase {
+template <typename K>
+class MapAggAggregate : public MapAggregateBase<K> {
  public:
-  explicit MapAggAggregate(TypePtr resultType) : MapAggregateBase(resultType) {}
+  explicit MapAggAggregate(TypePtr resultType)
+      : MapAggregateBase<K>(std::move(resultType)) {}
+
+  using Base = MapAggregateBase<K>;
+
+  bool supportsToIntermediate() const override {
+    return true;
+  }
+
+  void toIntermediate(
+      const SelectivityVector& rows,
+      std::vector<VectorPtr>& args,
+      VectorPtr& result) const override {
+    const auto& keys = args[0];
+    const auto& values = args[1];
+
+    const auto numRows = rows.size();
+
+    // Convert input to a single-entry map. Convert entries with null keys to
+    // null maps.
+
+    // Set nulls for rows not present in 'rows'.
+    auto* pool = Base::allocator_->pool();
+    BufferPtr nulls = allocateNulls(numRows, pool);
+    auto* rawNulls = nulls->asMutable<uint64_t>();
+    memcpy(rawNulls, rows.asRange().bits(), bits::nbytes(numRows));
+
+    // Set nulls for rows with null keys.
+    if (keys->mayHaveNulls()) {
+      DecodedVector decodedKeys(*keys, rows);
+      if (decodedKeys.mayHaveNulls()) {
+        rows.applyToSelected([&](auto row) {
+          if (decodedKeys.isNullAt(row)) {
+            bits::setNull(rawNulls, row);
+          }
+        });
+      }
+    }
+
+    // Set offsets to 0, 1, 2, 3...
+    BufferPtr offsets = allocateOffsets(numRows, pool);
+    auto* rawOffsets = offsets->asMutable<vector_size_t>();
+    std::iota(rawOffsets, rawOffsets + numRows, 0);
+
+    // Set sizes to 1.
+    BufferPtr sizes = allocateSizes(numRows, pool);
+    auto* rawSizes = sizes->asMutable<vector_size_t>();
+    std::fill(rawSizes, rawSizes + numRows, 1);
+
+    result = std::make_shared<MapVector>(
+        pool,
+        MAP(keys->type(), values->type()),
+        nulls,
+        numRows,
+        offsets,
+        sizes,
+        BaseVector::loadedVectorShared(keys),
+        BaseVector::loadedVectorShared(values));
+  }
 
   void addRawInput(
       char** groups,
       const SelectivityVector& rows,
       const std::vector<VectorPtr>& args,
       bool /*mayPushdown*/) override {
-    decodedKeys_.decode(*args[0], rows);
-    decodedValues_.decode(*args[1], rows);
+    Base::decodedKeys_.decode(*args[0], rows);
+    Base::decodedValues_.decode(*args[1], rows);
 
     rows.applyToSelected([&](vector_size_t row) {
       // Skip null keys
-      if (!decodedKeys_.isNullAt(row)) {
+      if (!Base::decodedKeys_.isNullAt(row)) {
         auto group = groups[row];
-        clearNull(group);
-        auto accumulator = value<MapAccumulator>(group);
-        auto tracker = trackRowSize(group);
-        accumulator->keys.appendValue(decodedKeys_, row, allocator_);
-        accumulator->values.appendValue(decodedValues_, row, allocator_);
+        Base::clearNull(group);
+        auto tracker = Base::trackRowSize(group);
+        Base::accumulator(group)->insert(
+            Base::decodedKeys_, Base::decodedValues_, row, *Base::allocator_);
       }
     });
   }
@@ -50,19 +108,17 @@ class MapAggAggregate : public aggregate::MapAggregateBase {
       const SelectivityVector& rows,
       const std::vector<VectorPtr>& args,
       bool /* mayPushdown */) override {
-    auto accumulator = value<MapAccumulator>(group);
-    auto& keys = accumulator->keys;
-    auto& values = accumulator->values;
+    auto singleAccumulator = Base::accumulator(group);
 
-    decodedKeys_.decode(*args[0], rows);
-    decodedValues_.decode(*args[1], rows);
-    auto tracker = trackRowSize(group);
+    Base::decodedKeys_.decode(*args[0], rows);
+    Base::decodedValues_.decode(*args[1], rows);
+    auto tracker = Base::trackRowSize(group);
     rows.applyToSelected([&](vector_size_t row) {
       // Skip null keys
-      if (!decodedKeys_.isNullAt(row)) {
-        clearNull(group);
-        keys.appendValue(decodedKeys_, row, allocator_);
-        values.appendValue(decodedValues_, row, allocator_);
+      if (!Base::decodedKeys_.isNullAt(row)) {
+        Base::clearNull(group);
+        singleAccumulator->insert(
+            Base::decodedKeys_, Base::decodedValues_, row, *Base::allocator_);
       }
     });
   }
@@ -85,14 +141,17 @@ exec::AggregateRegistrationResult registerMapAgg(const std::string& name) {
       [name](
           core::AggregationNode::Step step,
           const std::vector<TypePtr>& argTypes,
-          const TypePtr& resultType) -> std::unique_ptr<exec::Aggregate> {
+          const TypePtr& resultType,
+          const core::QueryConfig& /*config*/)
+          -> std::unique_ptr<exec::Aggregate> {
         auto rawInput = exec::isRawInput(step);
         VELOX_CHECK_EQ(
             argTypes.size(),
             rawInput ? 2 : 1,
             "{} ({}): unexpected number of arguments",
             name);
-        return std::make_unique<MapAggAggregate>(resultType);
+
+        return createMapAggregate<MapAggAggregate>(resultType);
       });
 }
 

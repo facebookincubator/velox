@@ -30,6 +30,11 @@ struct ParseOptions {
   // Retain legacy behavior by default.
   bool parseDecimalAsDouble = true;
   bool parseIntegerAsBigint = true;
+
+  /// SQL functions could be registered with different prefixes by the user.
+  /// This parameter is the registered prefix of presto or spark functions,
+  /// which helps generate the correct Velox expression.
+  std::string functionPrefix = "";
 };
 
 // Parses an input expression using DuckDB's internal postgresql-based parser,
@@ -51,6 +56,8 @@ struct AggregateExpr {
   std::shared_ptr<const core::IExpr> expr;
   std::vector<std::pair<std::shared_ptr<const core::IExpr>, core::SortOrder>>
       orderBy;
+  bool distinct{false};
+  std::shared_ptr<const core::IExpr> maskExpr{nullptr};
 };
 
 /// Parses aggregate function call expression with optional ORDER by clause.

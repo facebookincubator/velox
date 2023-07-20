@@ -19,6 +19,7 @@
 
 #include "velox/common/memory/HashStringAllocator.h"
 #include "velox/core/PlanNode.h"
+#include "velox/core/QueryConfig.h"
 #include "velox/exec/AggregateUtil.h"
 #include "velox/expression/FunctionSignature.h"
 #include "velox/vector/BaseVector.h"
@@ -208,6 +209,11 @@ class Aggregate {
   /// which have the same meaning as in addRawInput. The result is
   /// placed in 'result'. 'result is allocated if nullptr, otherwise
   /// it is expected to be a writable flat vector of the right type.
+  ///
+  /// @param rows A set of rows to produce intermediate results for. The
+  /// 'result' is expected to have rows.size() rows. Invalid rows represent rows
+  /// that were masked out, these need to have correct intermediate results as
+  /// well. It is possible that all entries in 'rows' are invalid (masked out).
   virtual void toIntermediate(
       const SelectivityVector& rows,
       std::vector<VectorPtr>& args,
@@ -234,7 +240,8 @@ class Aggregate {
       const std::string& name,
       core::AggregationNode::Step step,
       const std::vector<TypePtr>& argTypes,
-      const TypePtr& resultType);
+      const TypePtr& resultType,
+      const core::QueryConfig& config);
 
   // Returns the intermediate type for 'name' with signature
   // 'argTypes'. Throws if cannot resolve.
@@ -352,7 +359,8 @@ class Aggregate {
 using AggregateFunctionFactory = std::function<std::unique_ptr<Aggregate>(
     core::AggregationNode::Step step,
     const std::vector<TypePtr>& argTypes,
-    const TypePtr& resultType)>;
+    const TypePtr& resultType,
+    const core::QueryConfig& config)>;
 
 /// Register an aggregate function with the specified name and signatures. If
 /// registerCompanionFunctions is true, also register companion aggregate and

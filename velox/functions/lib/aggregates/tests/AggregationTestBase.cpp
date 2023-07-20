@@ -17,11 +17,14 @@
 #include "velox/functions/lib/aggregates/tests/AggregationTestBase.h"
 
 #include "velox/common/file/FileSystems.h"
+#include "velox/connectors/hive/HiveConnector.h"
 #include "velox/dwio/common/tests/utils/BatchMaker.h"
+#include "velox/dwio/dwrf/reader/DwrfReader.h"
+#include "velox/dwio/dwrf/writer/Writer.h"
 #include "velox/exec/AggregateCompanionSignatures.h"
 #include "velox/exec/PlanNodeStats.h"
-#include "velox/exec/tests/utils/AssertQueryBuilder.h"
 #include "velox/exec/tests/utils/TempDirectoryPath.h"
+#include "velox/exec/tests/utils/TempFilePath.h"
 #include "velox/expression/SignatureBinder.h"
 #include "velox/vector/tests/utils/VectorMaker.h"
 
@@ -31,6 +34,10 @@ using facebook::velox::exec::test::PlanBuilder;
 using facebook::velox::test::VectorMaker;
 
 namespace facebook::velox::functions::aggregate::test {
+
+namespace {
+constexpr const char* kHiveConnectorId = "test-hive";
+}
 
 std::vector<RowVectorPtr> AggregationTestBase::makeVectors(
     const RowTypePtr& rowType,
@@ -46,8 +53,18 @@ std::vector<RowVectorPtr> AggregationTestBase::makeVectors(
 }
 
 void AggregationTestBase::SetUp() {
-  exec::test::OperatorTestBase::SetUp();
+  OperatorTestBase::SetUp();
   filesystems::registerLocalFileSystem();
+  auto hiveConnector =
+      connector::getConnectorFactory(
+          connector::hive::HiveConnectorFactory::kHiveConnectorName)
+          ->newConnector(kHiveConnectorId, nullptr);
+  connector::registerConnector(hiveConnector);
+}
+
+void AggregationTestBase::TearDown() {
+  connector::unregisterConnector(kHiveConnectorId);
+  OperatorTestBase::TearDown();
 }
 
 void AggregationTestBase::testAggregations(
@@ -307,7 +324,7 @@ void AggregationTestBase::testAggregationsWithCompanion(
     // Spilling needs at least 2 batches of input. Use round-robin
     // repartitioning to split input into multiple batches.
     core::PlanNodeId partialNodeId;
-    builder.localPartitionRoundRobin()
+    builder.localPartitionRoundRobinRow()
         .partialAggregation(groupingKeysWithPartialKey, paritialAggregates)
         .capturePlanNodeId(partialNodeId)
         .localPartition(groupingKeysWithPartialKey)
@@ -416,7 +433,7 @@ void AggregationTestBase::testAggregationsWithCompanion(
         .partialAggregation(groupingKeys, mergeAggregates);
 
     if (groupingKeys.empty()) {
-      builder.localPartitionRoundRobin();
+      builder.localPartitionRoundRobinRow();
     } else {
       builder.localPartition(groupingKeys);
     }
@@ -447,6 +464,82 @@ void AggregationTestBase::testAggregationsWithCompanion(
           [&](auto& builder) { builder.values({partialResult}); },
           mergeAggregates);
     }
+  }
+}
+
+namespace {
+
+void writeToFile(
+    const std::string& path,
+    const VectorPtr& vector,
+    memory::MemoryPool* pool) {
+  dwrf::WriterOptions options;
+  options.schema = vector->type();
+  options.memoryPool = pool;
+  auto writeFile = std::make_unique<LocalWriteFile>(path, true, false);
+  auto sink = std::make_unique<dwio::common::WriteFileDataSink>(
+      std::move(writeFile), path);
+  dwrf::Writer writer(std::move(sink), options);
+  writer.write(vector);
+  writer.close();
+}
+
+template <typename T>
+class ScopedChange {
+ public:
+  ScopedChange(T* value, const T& newValue) : value_(value) {
+    oldValue_ = *value_;
+    *value_ = newValue;
+  }
+
+  ~ScopedChange() {
+    *value_ = oldValue_;
+  }
+
+ private:
+  T oldValue_;
+  T* value_;
+};
+
+} // namespace
+
+void AggregationTestBase::testReadFromFiles(
+    std::function<void(exec::test::PlanBuilder&)> makeSource,
+    const std::vector<std::string>& groupingKeys,
+    const std::vector<std::string>& aggregates,
+    const std::vector<std::string>& postAggregationProjections,
+    std::function<std::shared_ptr<exec::Task>(exec::test::AssertQueryBuilder&)>
+        assertResults) {
+  PlanBuilder builder(pool());
+  makeSource(builder);
+  auto input = AssertQueryBuilder(builder.planNode()).copyResults(pool());
+  if (input->size() < 2) {
+    return;
+  }
+  auto size1 = input->size() / 2;
+  auto size2 = input->size() - size1;
+  auto input1 = input->slice(0, size1);
+  auto input2 = input->slice(size1, size2);
+  std::vector<std::shared_ptr<exec::test::TempFilePath>> files;
+  std::vector<exec::Split> splits;
+  auto writerPool = rootPool_->addAggregateChild("AggregationTestBase.writer");
+  for (auto& vector : {input1, input2}) {
+    auto file = exec::test::TempFilePath::create();
+    writeToFile(file->path, vector, writerPool.get());
+    files.push_back(file);
+    splits.emplace_back(std::make_shared<connector::hive::HiveConnectorSplit>(
+        kHiveConnectorId, file->path, dwio::common::FileFormat::DWRF));
+  }
+  // No need to test streaming as the streaming test generates its own inputs,
+  // so it would be the same as the original test.
+  {
+    ScopedChange<bool> disableTestStreaming(&testStreaming_, false);
+    testAggregations(
+        [&](auto& builder) { builder.tableScan(asRowType(input->type())); },
+        groupingKeys,
+        aggregates,
+        postAggregationProjections,
+        [&](auto& builder) { return assertResults(builder.splits(splits)); });
   }
 }
 
@@ -493,10 +586,19 @@ RowVectorPtr AggregationTestBase::validateStreamingInTestAggregations(
       static_cast<const core::AggregationNode&>(*builder.planNode());
   EXPECT_EQ(expected->childrenSize(), aggregationNode.aggregates().size());
   for (int i = 0; i < aggregationNode.aggregates().size(); ++i) {
-    auto& aggregate = aggregationNode.aggregates()[i].call;
-    SCOPED_TRACE(aggregate->name());
+    const auto& aggregate = aggregationNode.aggregates()[i];
+    if (aggregate.distinct || !aggregate.sortingKeys.empty() ||
+        aggregate.mask != nullptr) {
+      // TODO Add support for all these cases.
+      return nullptr;
+    }
+
+    const auto& aggregateExpr = aggregate.call;
+    const auto& name = aggregateExpr->name();
+
+    SCOPED_TRACE(name);
     std::vector<VectorPtr> rawInput1, rawInput2;
-    for (auto& arg : aggregate->inputs()) {
+    for (const auto& arg : aggregateExpr->inputs()) {
       VectorPtr column;
       auto channel = exec::exprToChannel(arg.get(), input->type());
       if (channel == kConstantChannel) {
@@ -509,13 +611,13 @@ RowVectorPtr AggregationTestBase::validateStreamingInTestAggregations(
       rawInput2.push_back(column->slice(size1, size2));
     }
 
-    auto actualResult1 = testStreaming(
-        aggregate->name(), true, rawInput1, size1, rawInput2, size2);
+    auto actualResult1 =
+        testStreaming(name, true, rawInput1, size1, rawInput2, size2);
     velox::exec::test::assertEqualResults(
         {makeRowVector({expected->childAt(i)})},
         {makeRowVector({actualResult1})});
-    auto actualResult2 = testStreaming(
-        aggregate->name(), false, rawInput1, size1, rawInput2, size2);
+    auto actualResult2 =
+        testStreaming(name, false, rawInput1, size1, rawInput2, size2);
     velox::exec::test::assertEqualResults(
         {makeRowVector({expected->childAt(i)})},
         {makeRowVector({actualResult2})});
@@ -551,7 +653,7 @@ void AggregationTestBase::testAggregations(
     // Spilling needs at least 2 batches of input. Use round-robin
     // repartitioning to split input into multiple batches.
     core::PlanNodeId partialNodeId;
-    builder.localPartitionRoundRobin()
+    builder.localPartitionRoundRobinRow()
         .partialAggregation(groupingKeys, aggregates)
         .capturePlanNodeId(partialNodeId)
         .localPartition(groupingKeys)
@@ -581,7 +683,7 @@ void AggregationTestBase::testAggregations(
     }
   }
 
-  if (!groupingKeys.empty() && allowInputShuffle_) {
+  if (!groupingKeys.empty()) {
     SCOPED_TRACE("Run partial + final with abandon partial agg");
     PlanBuilder builder(pool());
     makeSource(builder);
@@ -710,7 +812,7 @@ void AggregationTestBase::testAggregations(
     builder.partialAggregation(groupingKeys, aggregates);
 
     if (groupingKeys.empty()) {
-      builder.localPartitionRoundRobin();
+      builder.localPartitionRoundRobinRow();
     } else {
       builder.localPartition(groupingKeys);
     }
@@ -791,11 +893,13 @@ VectorPtr AggregationTestBase::testStreaming(
   auto [intermediateType, finalType] =
       getResultTypes(functionName, rawInputTypes);
   auto createFunction = [&, &finalType = finalType] {
+    core::QueryConfig config({});
     auto func = exec::Aggregate::create(
         functionName,
         core::AggregationNode::Step::kSingle,
         rawInputTypes,
-        finalType);
+        finalType,
+        config);
     func->setAllocator(&allocator);
     func->setOffsets(kOffset, 0, 1, kRowSizeOffset);
     return func;
@@ -815,6 +919,11 @@ VectorPtr AggregationTestBase::testStreaming(
   }
   auto intermediate = BaseVector::create(intermediateType, 1, pool());
   func->extractAccumulators(groups.data(), 1, &intermediate);
+  // Destroy accumulators to avoid memory leak.
+  if (func->accumulatorUsesExternalMemory()) {
+    func->destroy(folly::Range(groups.data(), 1));
+  }
+
   // Create a new function picking up the intermediate result.
   auto func2 = createFunction();
   func2->initializeNewGroups(groups.data(), indices);
@@ -835,6 +944,11 @@ VectorPtr AggregationTestBase::testStreaming(
   }
   auto result = BaseVector::create(finalType, 1, pool());
   func2->extractValues(groups.data(), 1, &result);
+  // Destroy accumulators to avoid memory leak.
+  if (func2->accumulatorUsesExternalMemory()) {
+    func2->destroy(folly::Range(groups.data(), 1));
+  }
+
   return result;
 }
 

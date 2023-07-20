@@ -208,6 +208,25 @@ Spilling
      - 0
      - Percentage of aggregation or join input batches that will be forced to spill for testing. 0 means no extra spilling.
 
+Table Writer
+------------
+.. list-table::
+   :widths: 20 10 10 70
+   :header-rows: 1
+
+   * - Property Name
+     - Type
+     - Default Value
+     - Description
+   * - task_writer_count
+     - integer
+     - 1
+     - The number of parallel table writer threads per task.
+   * - task_partitioned_writer_count
+     - integer
+     - task_writer_count
+     - The number of parallel table writer threads per task for bucketed table writes. If not set, use 'task_writer_count' as default.
+
 Codegen Configuration
 ---------------------
 .. list-table::
@@ -320,6 +339,29 @@ Hive Connector
      - string
      - velox-session
      - Session name associated with the IAM role.
+
+``Google Cloud Storage Configuration``
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+.. list-table::
+   :widths: 30 10 10 60
+   :header-rows: 1
+
+   * - Property Name
+     - Type
+     - Default Value
+     - Description
+   * - hive.gcs.endpoint
+     - string
+     -
+     - The GCS storage endpoint server.
+   * - hive.gcs.scheme
+     - string
+     -
+     - The GCS storage scheme, https for default credentials.
+   * - hive.gcs.credentials
+     - string
+     -
+     - The GCS service account configuration as json string.
 
 Spark-specific Configuration
 ----------------------------

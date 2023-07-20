@@ -673,6 +673,12 @@ bool isLazyNotLoaded(const BaseVector& vector) {
     case VectorEncoding::Simple::CONSTANT:
       return vector.valueVector() ? isLazyNotLoaded(*vector.valueVector())
                                   : false;
+    case VectorEncoding::Simple::ROW: {
+      const auto& children = vector.as<RowVector>()->children();
+      return std::any_of(children.begin(), children.end(), [](auto it) {
+        return it != nullptr && isLazyNotLoaded(*it);
+      });
+    }
     default:
       return false;
   }
@@ -752,7 +758,7 @@ void BaseVector::prepareForReuse(VectorPtr& vector, vector_size_t size) {
   vector->resize(size);
 }
 
-void BaseVector::prepareForReuse() {
+void BaseVector::reuseNulls() {
   // Check nulls buffer. Keep the buffer if singly-referenced and mutable and
   // there is at least one null bit set. Reset otherwise.
   if (nulls_) {
@@ -766,6 +772,10 @@ void BaseVector::prepareForReuse() {
       rawNulls_ = nullptr;
     }
   }
+}
+
+void BaseVector::prepareForReuse() {
+  reuseNulls();
   this->resetDataDependentFlags(nullptr);
 }
 
