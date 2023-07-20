@@ -175,6 +175,8 @@ def get_dep_name(header: str) -> str:
             target = 'Snappy::snappy'
         case 'thrift':
             target = 'thrift::thrift'
+        case 'xsimd':
+            target = 'xsimd'
         case 'zstd':
             target = 'zstd::zstd'
         case 'zlib':
