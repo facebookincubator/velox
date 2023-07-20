@@ -24,24 +24,28 @@
 namespace facebook::velox::functions::sparksql {
 namespace {
 
+const int32_t kDefaultSeed = 42;
+
 // ReturnType can be either int32_t or int64_t
 // HashClass contains the function like hashInt32
 template <typename ReturnType, typename HashClass, typename SeedType>
 void applyWithType(
     const SelectivityVector& rows,
     std::vector<VectorPtr>& args, // Not using const ref so we can reuse args
-    SeedType seed,
+    std::optional<SeedType> seed,
     exec::EvalCtx& context,
     VectorPtr& resultRef) {
   HashClass hash;
+  size_t hashIdx = seed ? 1 : 0;
+  SeedType hashSeed = seed ? *seed : kDefaultSeed;
 
   auto& result = *resultRef->as<FlatVector<ReturnType>>();
-  rows.applyToSelected([&](int row) { result.set(row, seed); });
+  rows.applyToSelected([&](int row) { result.set(row, hashSeed); });
 
   exec::LocalSelectivityVector selectedMinusNulls(context);
 
   exec::DecodedArgs decodedArgs(rows, args, context);
-  for (auto i = 0; i < args.size(); i++) {
+  for (auto i = hashIdx; i < args.size(); i++) {
     auto decoded = decodedArgs.at(i);
     const SelectivityVector* selected = &rows;
     if (args[i]->mayHaveNulls()) {
@@ -164,7 +168,7 @@ class Murmur3Hash final {
 
 class Murmur3HashFunction final : public exec::VectorFunction {
  public:
-  Murmur3HashFunction() : seed_(42) {}
+  Murmur3HashFunction() = default;
   explicit Murmur3HashFunction(int32_t seed) : seed_(seed) {}
 
   bool isDefaultNullBehavior() const final {
@@ -182,7 +186,7 @@ class Murmur3HashFunction final : public exec::VectorFunction {
   }
 
  private:
-  int32_t seed_;
+  std::optional<int32_t> seed_;
 };
 
 class XxHash64 final {
@@ -321,7 +325,7 @@ class XxHash64 final {
 
 class XxHash64Function final : public exec::VectorFunction {
  public:
-  XxHash64Function() : seed_(42) {}
+  XxHash64Function() = default;
   explicit XxHash64Function(int64_t seed) : seed_(seed) {}
 
   bool isDefaultNullBehavior() const final {
@@ -339,7 +343,7 @@ class XxHash64Function final : public exec::VectorFunction {
   }
 
  private:
-  int64_t seed_;
+  std::optional<int64_t> seed_;
 };
 
 } // namespace
@@ -366,8 +370,7 @@ std::shared_ptr<exec::VectorFunction> makeHashWithSeed(
     const core::QueryConfig& /*config*/) {
   BaseVector* constantSeed = inputArgs[0].constantValue.get();
   auto seed = constantSeed->as<ConstantVector<int32_t>>()->valueAt(0);
-  static const auto kHashFunction = std::make_shared<Murmur3HashFunction>(seed);
-  return kHashFunction;
+  return std::make_shared<Murmur3HashFunction>(seed);
 }
 
 std::vector<std::shared_ptr<exec::FunctionSignature>> hashWithSeedSignatures() {
@@ -411,9 +414,7 @@ std::shared_ptr<exec::VectorFunction> makeXxHash64WithSeed(
     const core::QueryConfig& /*config*/) {
   BaseVector* constantSeed = inputArgs[0].constantValue.get();
   auto seed = constantSeed->as<ConstantVector<int64_t>>()->valueAt(0);
-  static const auto kXxHash64Function =
-      std::make_shared<XxHash64Function>(seed);
-  return kXxHash64Function;
+  return std::make_shared<XxHash64Function>(seed);
 }
 
 } // namespace facebook::velox::functions::sparksql
