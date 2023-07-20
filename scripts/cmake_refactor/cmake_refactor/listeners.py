@@ -214,6 +214,8 @@ class UpdateTargetsListener(CMakeListener):
             private_targets.extend(
                 [t for t in target.pprivate_targets if t.is_object_lib
                  or t.is_interface or t.name.startswith('${')])
+            public_targets.extend(
+                [t for t in target.ppublic_targets if t not in public_targets and t not in private_targets])
             public_targets = sort_targets(
                 [*set([t.name for t in public_targets])])
             private_targets = sort_targets(
@@ -231,4 +233,5 @@ class UpdateTargetsListener(CMakeListener):
                 # occurences of target_link_libraries must also use
                 # a keyword
                 self.token_stream.insertAfter(
-                    ctx.start.tokenIndex + 3, ' PUBLIC ')
+                    ctx.start.tokenIndex + 3,
+                    f' {"INTERFACE" if target.is_interface else "PUBLIC"} ')
