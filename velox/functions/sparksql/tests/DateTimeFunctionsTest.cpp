@@ -204,13 +204,13 @@ TEST_F(DateTimeFunctionsTest, lastDay) {
 
 TEST_F(DateTimeFunctionsTest, dateSub) {
   const auto dateSubFunc = [&](std::optional<int32_t> date,
-                           std::optional<int32_t> value) {
+                               std::optional<int32_t> value) {
     return evaluateOnce<int32_t, int32_t>(
         "date_sub(c0, c1)", {date, value}, {DATE(), INTEGER()});
   };
 
   const auto dateSub = [&](const std::string& dateStr,
-                       std::optional<int32_t> value) {
+                           std::optional<int32_t> value) {
     return dateSubFunc(parseDate(dateStr), value);
   };
 
