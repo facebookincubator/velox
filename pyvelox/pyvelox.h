@@ -104,9 +104,6 @@ inline velox::variant pyToVariant(const py::handle& obj, const Type& dtype) {
     case TypeKind::TIMESTAMP: {
       return pyToVariant<velox::TypeKind::TIMESTAMP>(obj);
     }
-    case TypeKind::DATE: {
-      return pyToVariant<velox::TypeKind::DATE>(obj);
-    }
     default:
       throw py::type_error("Unsupported type supplied");
   }
@@ -464,20 +461,19 @@ static void addVectorBindings(
         checkBounds(indices, idx);
         return indices.indices->as<vector_size_t>()[idx];
       });
-
   m.def(
       "from_list",
       [](const py::list& list, const Type* dtype = nullptr) mutable {
         if (!dtype || py::isinstance<py::none>(py::cast(*dtype))) {
-          return pyListToVector(list, PyVeloxContext::getInstance().pool());
+          return pyListToVector(
+              list, PyVeloxContext::getSingletonInstance().pool());
         } else {
           return pyListToVector(
-              list, *dtype, PyVeloxContext::getInstance().pool());
+              list, *dtype, PyVeloxContext::getSingletonInstance().pool());
         }
       },
       py::arg("list"),
       py::arg("dtype") = nullptr);
-
   m.def(
       "constant_vector",
       [](const py::handle& obj, vector_size_t length, TypePtr type) {
