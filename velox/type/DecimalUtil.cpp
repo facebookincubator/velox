@@ -60,7 +60,7 @@ std::string formatDecimal(uint8_t scale, int128_t unscaledValue) {
  * <p>Note: never used for a BigInteger with a magnitude of zero.
  * @see #getInt
  */
-inline static int32_t lastNonzeroIntIndex(const std::vector<int32_t>& mag) {
+int32_t lastNonzeroIntIndex(const std::vector<int32_t>& mag) {
   int32_t i;
   for (i = mag.size() - 1; i >= 0 && mag[i] == 0; --i) {
     ;
@@ -76,7 +76,7 @@ inline static int32_t lastNonzeroIntIndex(const std::vector<int32_t>& mag) {
  * be arbitrarily high (values are logically preceded by infinitely many
  * sign ints).
  */
-inline static int32_t getInt(
+int32_t getInt(
     int32_t n,
     int8_t sig,
     const std::vector<int32_t>& mag,
@@ -92,7 +92,7 @@ inline static int32_t getInt(
   return (sig >= 0 ? magInt : (n <= lastNonzeroIntIndex ? -magInt : ~magInt));
 }
 
-inline static int32_t getBitCount(uint32_t i) {
+int32_t getBitCount(uint32_t i) {
   static constexpr int kMaxBits = std::numeric_limits<uint64_t>::digits;
   uint64_t num = static_cast<uint32_t>(i);
   return bits::countBits(reinterpret_cast<uint64_t*>(&num), 0, kMaxBits);
@@ -110,9 +110,7 @@ inline static int32_t getBitCount(uint32_t i) {
  * @return number of bits in the minimal two's-complement
  *         representation of this BigInteger, <em>excluding</em> a sign bit.
  */
-inline static int32_t getBitLength(
-    int8_t sig,
-    const std::vector<int32_t>& mag) {
+int32_t getBitLength(int8_t sig, const std::vector<int32_t>& mag) {
   int32_t len = mag.size();
   int32_t n = -1;
   if (len == 0) {
@@ -146,7 +144,7 @@ inline static int32_t getBitLength(
  * value.  Note that this implies that the BigInteger zero has a
  * zero-length mag array.
  */
-inline static std::vector<int32_t> convertToIntMags(uint128_t value) {
+std::vector<int32_t> convertToIntMags(uint128_t value) {
   std::vector<int32_t> mag;
   int32_t v1 = value >> 96;
   int32_t v2 = value >> 64;
@@ -194,8 +192,7 @@ int32_t DecimalUtil::getByteArrayLength(int128_t value) {
   return getBitLength(sig, mag) / 8 + 1;
 }
 
-void
-DecimalUtil::toByteArray(int128_t value, char* out, int32_t* length) {
+void DecimalUtil::toByteArray(int128_t value, char* out, int32_t* length) {
   uint128_t absValue;
   int8_t sig;
   if (value > 0) {
