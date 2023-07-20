@@ -225,6 +225,8 @@ class UpdateTargetsListener(CMakeListener):
             p_text = f'PUBLIC {" ".join(public_targets)}' if public_targets else ''
             pr_text = f' PRIVATE {" ".join(private_targets)}' if private_targets else ''
             new = f'{target.name} ' + p_text + pr_text
+            if target.is_interface:
+                new = f'{target.name} INTERFACE {" ".join(sort_targets(public_targets + private_targets))}'
             self.token_stream.replaceRange(start, stop, new)
             target.was_linked = True
         else:
