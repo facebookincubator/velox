@@ -14,4 +14,7 @@
 
 add_library(velox_dwio_duckdb_parquet_reader ParquetReader.cpp)
 
-target_link_libraries(velox_dwio_duckdb_parquet_reader PUBLIC velox_duckdb_allocator velox_duckdb_conversion velox_dwio_common duckdb fmt::fmt)
+target_link_libraries(
+  velox_dwio_duckdb_parquet_reader
+  PUBLIC velox_duckdb_allocator velox_duckdb_conversion velox_dwio_common
+         duckdb fmt::fmt)

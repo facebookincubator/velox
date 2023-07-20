@@ -16,7 +16,10 @@
 
 add_library(velox_s3fs S3FileSystem.cpp S3Util.cpp)
 target_include_directories(velox_s3fs PUBLIC ${AWSSDK_INCLUDE_DIRS})
-target_link_libraries(velox_s3fs PUBLIC ${AWSSDK_LIBRARIES} Folly::folly PRIVATE fmt::fmt glog::glog)
+target_link_libraries(
+  velox_s3fs
+  PUBLIC ${AWSSDK_LIBRARIES} Folly::folly
+  PRIVATE fmt::fmt glog::glog)
 
 if(${VELOX_BUILD_TESTING})
   add_subdirectory(tests)

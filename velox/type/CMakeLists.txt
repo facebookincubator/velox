@@ -30,4 +30,15 @@ add_library(
   Type.cpp
   Variant.cpp)
 
-target_link_libraries(velox_type PUBLIC velox_common_base velox_encode velox_exception velox_external_date velox_serialization velox_type_tz Boost::headers Folly::folly fmt::fmt PRIVATE re2::re2)
+target_link_libraries(
+  velox_type
+  PUBLIC velox_common_base
+         velox_encode
+         velox_exception
+         velox_external_date
+         velox_serialization
+         velox_type_tz
+         Boost::headers
+         Folly::folly
+         fmt::fmt
+  PRIVATE re2::re2)

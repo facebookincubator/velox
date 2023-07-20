@@ -20,4 +20,5 @@ add_library(velox_dwio_dwrf_utils ProtoUtils.cpp)
 
 add_dependencies(velox_dwio_dwrf_utils velox_dwio_dwrf_proto)
 
-target_link_libraries(velox_dwio_dwrf_utils PUBLIC velox_dwio_dwrf_proto velox_memory velox_type)
+target_link_libraries(velox_dwio_dwrf_utils PUBLIC velox_dwio_dwrf_proto
+                                                   velox_memory velox_type)

@@ -21,4 +21,13 @@ target_link_libraries(velox_config PUBLIC velox_exception Folly::folly)
 add_library(velox_core Expressions.cpp PlanFragment.cpp PlanNode.cpp
                        QueryConfig.cpp QueryCtx.cpp SimpleFunctionMetadata.cpp)
 
-target_link_libraries(velox_core PUBLIC velox_config velox_connector velox_expression_functions velox_serialization velox_type velox_vector Boost::headers Folly::folly)
+target_link_libraries(
+  velox_core
+  PUBLIC velox_config
+         velox_connector
+         velox_expression_functions
+         velox_serialization
+         velox_type
+         velox_vector
+         Boost::headers
+         Folly::folly)

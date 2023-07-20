@@ -14,7 +14,8 @@
 
 add_library(velox_functions_aggregates SingleValueAccumulator.cpp)
 
-target_link_libraries(velox_functions_aggregates PUBLIC velox_exec velox_presto_serializer Folly::folly)
+target_link_libraries(velox_functions_aggregates
+                      PUBLIC velox_exec velox_presto_serializer Folly::folly)
 
 if(${VELOX_BUILD_TESTING})
   add_subdirectory(tests)

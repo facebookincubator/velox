@@ -28,7 +28,17 @@ add_library(
   VectorStream.cpp
   VariantToVector.cpp)
 
-target_link_libraries(velox_vector PUBLIC velox_buffer velox_encode velox_memory velox_time velox_type Folly::folly fmt::fmt gflags::gflags glog::glog)
+target_link_libraries(
+  velox_vector
+  PUBLIC velox_buffer
+         velox_encode
+         velox_memory
+         velox_time
+         velox_type
+         Folly::folly
+         fmt::fmt
+         gflags::gflags
+         glog::glog)
 
 add_subdirectory(arrow)
 add_subdirectory(fuzzer)

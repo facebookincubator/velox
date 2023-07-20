@@ -13,7 +13,9 @@
 # limitations under the License.
 
 add_library(velox_exception Exceptions.cpp VeloxException.cpp)
-target_link_libraries(velox_exception PUBLIC velox_flag_definitions velox_process Folly::folly fmt::fmt gflags::gflags glog::glog)
+target_link_libraries(
+  velox_exception PUBLIC velox_flag_definitions velox_process Folly::folly
+                         fmt::fmt gflags::gflags glog::glog)
 
 add_library(
   velox_common_base
@@ -27,7 +29,10 @@ add_library(
   StatsReporter.cpp
   SuccinctPrinter.cpp)
 
-target_link_libraries(velox_common_base PUBLIC velox_exception velox_process Folly::folly fmt::fmt xsimd PRIVATE glog::glog)
+target_link_libraries(
+  velox_common_base
+  PUBLIC velox_exception velox_process Folly::folly fmt::fmt xsimd
+  PRIVATE glog::glog)
 
 if(${VELOX_BUILD_TESTING})
   add_subdirectory(tests)

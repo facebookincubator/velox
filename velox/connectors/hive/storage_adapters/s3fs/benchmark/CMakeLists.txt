@@ -15,4 +15,7 @@
 add_executable(velox_s3read_benchmark S3ReadBenchmark.cpp
                                       S3ReadBenchmarkMain.cpp)
 
-target_link_libraries(velox_s3read_benchmark PUBLIC velox_exception velox_exec_test_lib velox_read_benchmark_lib velox_s3fs Folly::folly fmt::fmt)
+target_link_libraries(
+  velox_s3read_benchmark
+  PUBLIC velox_exception velox_exec_test_lib velox_read_benchmark_lib
+         velox_s3fs Folly::folly fmt::fmt)

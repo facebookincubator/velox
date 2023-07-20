@@ -15,7 +15,10 @@
 # for generated headers
 
 add_library(velox_hdfs HdfsFileSystem.cpp HdfsReadFile.cpp HdfsWriteFile.cpp)
-target_link_libraries(velox_hdfs PUBLIC ${LIBHDFS3} PRIVATE Folly::folly)
+target_link_libraries(
+  velox_hdfs
+  PUBLIC ${LIBHDFS3}
+  PRIVATE Folly::folly)
 
 if(${VELOX_BUILD_TESTING})
   add_subdirectory(tests)

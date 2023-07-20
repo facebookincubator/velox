@@ -23,7 +23,11 @@ add_library(
   PartitionIdGenerator.cpp
   TableHandle.cpp)
 
-target_link_libraries(velox_hive_connector PUBLIC velox_connector velox_dwio_dwrf_reader velox_dwio_dwrf_writer velox_file velox_hive_partition_function Folly::folly PRIVATE Boost::headers)
+target_link_libraries(
+  velox_hive_connector
+  PUBLIC velox_connector velox_dwio_dwrf_reader velox_dwio_dwrf_writer
+         velox_file velox_hive_partition_function Folly::folly
+  PRIVATE Boost::headers)
 
 add_library(velox_hive_partition_function HivePartitionFunction.cpp)
 

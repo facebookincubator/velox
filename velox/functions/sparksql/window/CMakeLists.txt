@@ -13,7 +13,9 @@
 # limitations under the License.
 add_library(velox_functions_spark_window WindowFunctionsRegistration.cpp)
 
-target_link_libraries(velox_functions_spark_window PUBLIC velox_buffer velox_exec velox_functions_window Folly::folly)
+target_link_libraries(
+  velox_functions_spark_window PUBLIC velox_buffer velox_exec
+                                      velox_functions_window Folly::folly)
 
 if(${VELOX_BUILD_TESTING})
   add_subdirectory(tests)

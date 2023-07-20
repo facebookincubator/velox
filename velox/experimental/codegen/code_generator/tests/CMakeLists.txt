@@ -22,11 +22,8 @@ endforeach()
 
 add_executable(
   velox_codegen_expression_test
-  BasicExprCodeGeneratorTest.cpp
-  LogicalExpressionsTest.cpp
-  CastExpressionTest.cpp
-  ArithmeticFunctionsTest.cpp
-  StringExpressionsTest.cpp
+  BasicExprCodeGeneratorTest.cpp LogicalExpressionsTest.cpp
+  CastExpressionTest.cpp ArithmeticFunctionsTest.cpp StringExpressionsTest.cpp
   UDFCallTest.cpp)
 
 target_link_libraries(

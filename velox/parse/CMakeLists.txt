@@ -12,13 +12,18 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 add_library(velox_parse_expression Expressions.cpp)
-target_link_libraries(velox_parse_expression PUBLIC velox_expression velox_parse_utils velox_type)
+target_link_libraries(velox_parse_expression
+                      PUBLIC velox_expression velox_parse_utils velox_type)
 
 add_library(velox_parse_parser ExpressionsParser.cpp QueryPlanner.cpp)
-target_link_libraries(velox_parse_parser PUBLIC velox_duckdb_parser velox_parse_expression velox_type)
+target_link_libraries(
+  velox_parse_parser PUBLIC velox_duckdb_parser velox_parse_expression
+                            velox_type)
 
 add_library(velox_parse_utils TypeResolver.cpp)
-target_link_libraries(velox_parse_utils PUBLIC velox_buffer velox_function_registry velox_type velox_vector)
+target_link_libraries(
+  velox_parse_utils PUBLIC velox_buffer velox_function_registry velox_type
+                           velox_vector)
 
 if(${VELOX_BUILD_TESTING})
   add_subdirectory(tests)

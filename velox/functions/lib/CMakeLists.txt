@@ -18,7 +18,8 @@ target_link_libraries(velox_is_null_functions PUBLIC velox_expression)
 
 add_library(velox_functions_util LambdaFunctionUtil.cpp RowsTranslationUtil.cpp)
 
-target_link_libraries(velox_functions_util PUBLIC velox_common_base velox_vector)
+target_link_libraries(velox_functions_util PUBLIC velox_common_base
+                                                  velox_vector)
 
 add_library(
   velox_functions_lib
@@ -30,7 +31,9 @@ add_library(
   Re2Functions.cpp
   StringEncodingUtils.cpp)
 
-target_link_libraries(velox_functions_lib PUBLIC velox_functions_util velox_vector Folly::folly re2::re2)
+target_link_libraries(
+  velox_functions_lib PUBLIC velox_functions_util velox_vector Folly::folly
+                             re2::re2)
 
 add_subdirectory(aggregates)
 add_subdirectory(string)

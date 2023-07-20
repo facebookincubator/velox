@@ -14,10 +14,10 @@
  * limitations under the License.
  */
 
+#include <glog/logging.h>
 #include <exception>
 #include <fstream>
 #include <stdexcept>
-#include <glog/logging.h>
 #include "gtest/gtest.h"
 
 #include "velox/expression/Expr.h"

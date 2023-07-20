@@ -13,4 +13,7 @@
 # limitations under the License.
 add_executable(velox_sparksql_coverage Coverage.cpp)
 
-target_link_libraries(velox_sparksql_coverage PUBLIC velox_coverage_util velox_function_registry velox_functions_spark velox_functions_spark_aggregates velox_functions_spark_window)
+target_link_libraries(
+  velox_sparksql_coverage
+  PUBLIC velox_coverage_util velox_function_registry velox_functions_spark
+         velox_functions_spark_aggregates velox_functions_spark_window)

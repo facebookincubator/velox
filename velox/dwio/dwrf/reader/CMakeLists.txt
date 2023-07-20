@@ -34,4 +34,8 @@ add_library(
   StripeReaderBase.cpp
   StripeStream.cpp)
 
-target_link_libraries(velox_dwio_dwrf_reader PUBLIC velox_caching velox_dwio_common velox_dwio_dwrf_common velox_dwio_dwrf_utils Folly::folly PRIVATE fmt::fmt)
+target_link_libraries(
+  velox_dwio_dwrf_reader
+  PUBLIC velox_caching velox_dwio_common velox_dwio_dwrf_common
+         velox_dwio_dwrf_utils Folly::folly
+  PRIVATE fmt::fmt)

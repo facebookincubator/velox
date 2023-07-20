@@ -13,7 +13,10 @@
 # limitations under the License.
 add_library(velox_functions_json JsonExtractor.cpp JsonPathTokenizer.cpp)
 
-target_link_libraries(velox_functions_json PUBLIC velox_exception Folly::folly PRIVATE Boost::headers)
+target_link_libraries(
+  velox_functions_json
+  PUBLIC velox_exception Folly::folly
+  PRIVATE Boost::headers)
 
 if(${VELOX_BUILD_TESTING})
   add_subdirectory(tests)

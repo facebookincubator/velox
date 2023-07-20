@@ -25,4 +25,5 @@ add_library(
   RowNumber.cpp
   WindowFunctionsRegistration.cpp)
 
-target_link_libraries(velox_window PUBLIC velox_buffer velox_exec velox_functions_window Folly::folly)
+target_link_libraries(velox_window PUBLIC velox_buffer velox_exec
+                                          velox_functions_window Folly::folly)

@@ -13,7 +13,8 @@
 # limitations under the License.
 add_library(velox_arrow_bridge Bridge.cpp)
 
-target_link_libraries(velox_arrow_bridge PUBLIC velox_buffer velox_exception velox_memory velox_type)
+target_link_libraries(velox_arrow_bridge PUBLIC velox_buffer velox_exception
+                                                velox_memory velox_type)
 
 if(VELOX_BUILD_TESTING AND VELOX_ENABLE_ARROW)
   add_subdirectory(tests)

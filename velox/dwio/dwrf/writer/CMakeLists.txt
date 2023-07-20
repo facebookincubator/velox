@@ -26,4 +26,17 @@ add_library(
   WriterContext.cpp
   WriterSink.cpp)
 
-target_link_libraries(velox_dwio_dwrf_writer PUBLIC velox_dwio_common velox_dwio_dwrf_common velox_dwio_dwrf_utils velox_process velox_time velox_vector Boost::headers Folly::folly ZLIB::ZLIB lz4::lz4 lzo2::lzo2 zstd::zstd)
+target_link_libraries(
+  velox_dwio_dwrf_writer
+  PUBLIC velox_dwio_common
+         velox_dwio_dwrf_common
+         velox_dwio_dwrf_utils
+         velox_process
+         velox_time
+         velox_vector
+         Boost::headers
+         Folly::folly
+         ZLIB::ZLIB
+         lz4::lz4
+         lzo2::lzo2
+         zstd::zstd)
