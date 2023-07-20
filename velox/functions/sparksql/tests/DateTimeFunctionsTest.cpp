@@ -203,26 +203,25 @@ TEST_F(DateTimeFunctionsTest, lastDay) {
 }
 
 TEST_F(DateTimeFunctionsTest, dateSub) {
-  const auto dateSub = [&](std::optional<int32_t> date,
+  const auto dateSubFunc = [&](std::optional<int32_t> date,
                            std::optional<int32_t> value) {
     return evaluateOnce<int32_t, int32_t>(
         "date_sub(c0, c1)", {date, value}, {DATE(), INTEGER()});
   };
 
+  const auto dateSub = [&](const std::string& dateStr,
+                       std::optional<int32_t> value) {
+    return dateSubFunc(parseDate(dateStr), value);
+  };
+
   // Check simple tests.
-  int32_t inputDate = parseDate("2019-03-01");
-  int32_t expectedDate = parseDate("2019-02-28");
-  EXPECT_EQ(expectedDate, dateSub(inputDate, 1));
+  EXPECT_EQ(parseDate("2019-02-28"), dateSub("2019-03-01", 1));
 
   // Account for the last day of a year-month.
-  inputDate = parseDate("2020-02-29");
-  expectedDate = parseDate("2019-01-30");
-  EXPECT_EQ(expectedDate, dateSub(inputDate, 395));
+  EXPECT_EQ(parseDate("2019-01-30"), dateSub("2020-02-29", 395));
 
   // Check for negative intervals.
-  inputDate = parseDate("2019-02-28");
-  expectedDate = parseDate("2020-02-29");
-  EXPECT_EQ(expectedDate, dateSub(inputDate, -366));
+  EXPECT_EQ(parseDate("2020-02-29"), dateSub("2019-02-28", -366));
 }
 
 } // namespace
