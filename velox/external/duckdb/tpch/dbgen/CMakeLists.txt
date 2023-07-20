@@ -21,3 +21,5 @@ add_library(
 
 # Suppress warnings when compiling dbgen.
 target_compile_options(dbgen PRIVATE -w)
+
+target_link_libraries(dbgen PUBLIC duckdb)

@@ -16,7 +16,7 @@ add_library(velox_presto_serializer PrestoSerializer.cpp
 
 target_link_libraries(
   velox_presto_serializer
-  PUBLIC velox_vector
+  PUBLIC velox_vector velox_row_fast
   PRIVATE Folly::folly)
 
 if(${VELOX_BUILD_TESTING})
