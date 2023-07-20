@@ -138,8 +138,10 @@ def get_dep_name(header: str) -> str:
             target = '${LIBHDFS3}'
         case 'boost':
             boost_header = [
+                "algorithm",
                 "crc",
                 "circular_buffer",
+                'lexical_cast',
                 "math",
                 "multi_index",
                 "numeric",
