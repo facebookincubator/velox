@@ -35,7 +35,7 @@ include(ResolveDependency)
 
 set_with_default(VELOX_DEPENDENCY_SOURCE_DEFAULT VELOX_DEPENDENCY_SOURCE AUTO)
 message(STATUS "Build type: ${CMAKE_BUILD_TYPE}")
-set(BUILD_SHARED_LIBS ON)
+
 # Add all options below
 option(
   VELOX_BUILD_TESTING
@@ -494,6 +494,5 @@ if("${TREAT_WARNINGS_AS_ERRORS}")
   set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -Werror")
 endif()
 
-set(BUILD_SHARED_LIBS ON)
 add_subdirectory(third_party)
 add_subdirectory(velox)
