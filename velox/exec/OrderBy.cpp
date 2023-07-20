@@ -46,6 +46,11 @@ OrderBy::OrderBy(
       spillMemoryThreshold_(operatorCtx_->driverCtx()
                                 ->queryConfig()
                                 .orderBySpillMemoryThreshold()) {
+  auto setReclaimbaleGuard = folly::makeGuard([&]() {
+    if (canReclaim()) {
+      nonReclaimableSection_ = false;
+    }
+  });
   VELOX_CHECK(pool()->trackUsage());
 
   std::vector<TypePtr> keyTypes;

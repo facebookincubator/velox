@@ -205,6 +205,10 @@ class QueryConfig {
   static constexpr const char* kHashProbeFinishEarlyOnEmptyBuild =
       "hash_probe_finish_early_on_empty_build";
 
+  /// The minimum table size in row that triggers the parallel join table build.
+  static constexpr const char* kMinTableSizeForParallelJoinBuild =
+      "min_table_size_for_parallel_join_build";
+
   uint64_t maxPartialAggregationMemoryUsage() const {
     static constexpr uint64_t kDefault = 1L << 24;
     return get<uint64_t>(kMaxPartialAggregationMemory, kDefault);
@@ -408,6 +412,10 @@ class QueryConfig {
 
   bool hashProbeFinishEarlyOnEmptyBuild() const {
     return get<bool>(kHashProbeFinishEarlyOnEmptyBuild, true);
+  }
+
+  uint32_t minTableSizeForParallelJoinBuild() const {
+    return get<uint32_t>(kMinTableSizeForParallelJoinBuild, 1'000);
   }
 
   template <typename T>

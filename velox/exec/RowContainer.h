@@ -656,10 +656,18 @@ class RowContainer {
       int32_t maxRows,
       char* FOLLY_NONNULL* FOLLY_NONNULL result);
 
-  /// Returns a container with a partition number for each row. This
-  /// is created on first use. The caller is responsible for filling
+  /// Creates a container with memory space to store a partition number for each
+  /// row. This is used by parallel join build which is responsible for filling
   /// this.
-  RowPartitions& partitions();
+  ///
+  /// NOTE: this must be called after all the rows have been added to this
+  /// container. We expect the user only call this once.
+  void initRowPartitions(memory::MemoryPool& pool);
+
+  /// Returns a container with a partition number for each row.
+  ///
+  /// NOTE: this must be called after initRowPartitions().
+  RowPartitions& rowPartitions() const;
 
   /// Advances 'iterator' by 'numRows'. The current row after skip is
   /// in iter.currentRow(). This is null if past end. Public for testing.

@@ -88,6 +88,11 @@ HashAggregation::HashAggregation(
       abandonPartialAggregationMinPct_(
           driverCtx->queryConfig().abandonPartialAggregationMinPct()) {
   VELOX_CHECK(pool()->trackUsage());
+  auto setReclaimbaleGuard = folly::makeGuard([&]() {
+    if (canReclaim()) {
+      nonReclaimableSection_ = false;
+    }
+  });
 
   auto inputType = aggregationNode->sources()[0]->outputType();
 

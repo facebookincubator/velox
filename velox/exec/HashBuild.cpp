@@ -64,6 +64,11 @@ HashBuild::HashBuild(
           planNodeId())) {
   VELOX_CHECK(pool()->trackUsage());
   VELOX_CHECK_NOT_NULL(joinBridge_);
+  auto setReclaimbaleGuard = folly::makeGuard([&]() {
+    if (canReclaim()) {
+      nonReclaimableSection_ = false;
+    }
+  });
 
   spillGroup_ = spillEnabled()
       ? operatorCtx_->task()->getSpillOperatorGroupLocked(
@@ -138,6 +143,9 @@ void HashBuild::setupTable() {
         dependentTypes,
         true, // allowDuplicates
         true, // hasProbedFlag
+        operatorCtx_->driverCtx()
+            ->queryConfig()
+            .minTableSizeForParallelJoinBuild(),
         pool());
   } else {
     // (Left) semi and anti join with no extra filter only needs to know whether
@@ -155,6 +163,9 @@ void HashBuild::setupTable() {
           dependentTypes,
           !dropDuplicates, // allowDuplicates
           needProbedFlag, // hasProbedFlag
+          operatorCtx_->driverCtx()
+              ->queryConfig()
+              .minTableSizeForParallelJoinBuild(),
           pool());
     } else {
       // Ignore null keys
@@ -163,6 +174,9 @@ void HashBuild::setupTable() {
           dependentTypes,
           !dropDuplicates, // allowDuplicates
           needProbedFlag, // hasProbedFlag
+          operatorCtx_->driverCtx()
+              ->queryConfig()
+              .minTableSizeForParallelJoinBuild(),
           pool());
     }
   }
@@ -766,12 +780,22 @@ bool HashBuild::finishHashBuild() {
 
       // TODO: re-enable parallel join build with spilling triggered after
       // https://github.com/facebookincubator/velox/issues/3567 is fixed.
-      const bool allowPrallelJoinBuild =
+      const bool allowParallelJoinBuild =
           !otherTables.empty() && spillPartitions.empty();
+      if (TestValue::enabled()) {
+        std::vector<Operator*> buildOps;
+        buildOps.reserve(peers.size());
+        for (auto& peer : peers) {
+          auto* op = peer->findOperator(planNodeId());
+          buildOps.push_back(op);
+        }
+        TestValue::adjust(
+            "facebook::velox::exec::HashBuild::prepareJoinTable", &buildOps);
+      }
       table_->prepareJoinTable(
           std::move(otherTables),
-          allowPrallelJoinBuild ? operatorCtx_->task()->queryCtx()->executor()
-                                : nullptr);
+          allowParallelJoinBuild ? operatorCtx_->task()->queryCtx()->executor()
+                                 : nullptr);
 
       addRuntimeStats();
       if (joinBridge_->setHashTable(

@@ -237,10 +237,10 @@ RowContainer::RowContainer(
 }
 
 char* RowContainer::newRow() {
-  char* row;
-  VELOX_DCHECK(
-      !partitions_, "Rows may not be added after partitions() has been called");
+  VELOX_DCHECK_NULL(
+      partitions_, "Rows may not be added after partitions() has been called");
   ++numRows_;
+  char* row;
   if (firstFreeRow_) {
     row = firstFreeRow_;
     VELOX_CHECK(bits::isBitSet(row, freeFlagOffset_));
@@ -685,10 +685,13 @@ void RowContainer::skip(RowContainerIterator& iter, int32_t numRows) {
   iter.rowNumber += numRows;
 }
 
-RowPartitions& RowContainer::partitions() {
-  if (!partitions_) {
-    partitions_ = std::make_unique<RowPartitions>(numRows_, *rows_.pool());
-  }
+void RowContainer::initRowPartitions(memory::MemoryPool& pool) {
+  VELOX_CHECK_NULL(partitions_);
+  partitions_ = std::make_unique<RowPartitions>(numRows_, pool);
+}
+
+RowPartitions& RowContainer::rowPartitions() const {
+  VELOX_CHECK_NOT_NULL(partitions_);
   return *partitions_;
 }
 
@@ -700,7 +703,7 @@ int32_t RowContainer::listPartitionRows(
   if (!numRows_) {
     return 0;
   }
-  VELOX_CHECK(
+  VELOX_CHECK_NOT_NULL(
       partitions_, "partitions() must be called before listPartitionRows()");
   VELOX_CHECK_EQ(
       partitions_->size(), numRows_, "All rows must have a partition");

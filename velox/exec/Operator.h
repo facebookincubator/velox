@@ -586,7 +586,7 @@ class Operator : public BaseRuntimeStatWriter {
   /// This prevents the memory arbitrator from reclaiming memory from this
   /// operator if it happens to be suspended for memory arbitration processing.
   /// This only applies to a reclaimable operator.
-  tsan_atomic<bool> nonReclaimableSection_{false};
+  tsan_atomic<bool> nonReclaimableSection_{true};
 
   /// Holds the last data from addInput until it is processed. Reset after the
   /// input is processed.
