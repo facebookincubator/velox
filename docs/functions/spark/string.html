@@ -110,6 +110,20 @@ If <code class="docutils literal notranslate"><span class="pre">length</span></c
 </dd></dl>
 
 <dl class="spark function">
+<dt class="sig sig-object spark" id="lpad">
+<span class="sig-name descname"><span class="pre">lpad</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">string</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">len</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">pad</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">string</span></span></span><a class="headerlink" href="#lpad" title="Permalink to this definition">¶</a></dt>
+<dd><p>Returns <code class="docutils literal notranslate"><span class="pre">string</span></code>, left-padded with pad to a length of <code class="docutils literal notranslate"><span class="pre">len</span></code>. If <code class="docutils literal notranslate"><span class="pre">string</span></code> is
+longer than <code class="docutils literal notranslate"><span class="pre">len</span></code>, the return value is shortened to <code class="docutils literal notranslate"><span class="pre">len</span></code> characters or bytes.
+If <code class="docutils literal notranslate"><span class="pre">pad</span></code> is not specified, <code class="docutils literal notranslate"><span class="pre">string</span></code> will be padded to the left with space characters
+if it is a character string, and with zeros if it is a byte sequence.</p>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span>SELECT lpad(&#39;hi&#39;, 5, &#39;??&#39;); -- ???hi
+SELECT lpad(&#39;hi&#39;, 1, &#39;??&#39;); -- h
+SELECT lpad(&#39;hi&#39;, 4); --   hi
+</pre></div>
+</div>
+</dd></dl>
+
+<dl class="spark function">
 <dt class="sig sig-object spark" id="ltrim">
 <span class="sig-name descname"><span class="pre">ltrim</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">string</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">varchar</span></span></span><a class="headerlink" href="#ltrim" title="Permalink to this definition">¶</a></dt>
 <dd><p>Removes leading 0x20(space) characters from <code class="docutils literal notranslate"><span class="pre">string</span></code>.</p>
@@ -158,6 +172,20 @@ if pos + len is negative, it refers to -(pos + len)th element before the end of 
 <span class="sig-name descname"><span class="pre">replace</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">string</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">search</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">replace</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">string</span></span></span><a class="headerlink" href="#replace" title="Permalink to this definition">¶</a></dt>
 <dd><p>Replaces all occurrences of <cite>search</cite> with <cite>replace</cite>.</p>
 <div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">SELECT</span> <span class="n">replace</span><span class="p">(</span><span class="s1">&#39;ABCabc&#39;</span><span class="p">,</span> <span class="s1">&#39;abc&#39;</span><span class="p">,</span> <span class="s1">&#39;DEF&#39;</span><span class="p">);</span> <span class="o">--</span> <span class="n">ABCDEF</span>
+</pre></div>
+</div>
+</dd></dl>
+
+<dl class="spark function">
+<dt class="sig sig-object spark" id="rpad">
+<span class="sig-name descname"><span class="pre">rpad</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">string</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">len</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">pad</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">string</span></span></span><a class="headerlink" href="#rpad" title="Permalink to this definition">¶</a></dt>
+<dd><p>Returns <code class="docutils literal notranslate"><span class="pre">string</span></code>, right-padded with <code class="docutils literal notranslate"><span class="pre">pad</span></code> to a length of <code class="docutils literal notranslate"><span class="pre">len</span></code>.
+If <code class="docutils literal notranslate"><span class="pre">string</span></code> is longer than <code class="docutils literal notranslate"><span class="pre">len</span></code>, the return value is shortened to <code class="docutils literal notranslate"><span class="pre">len</span></code> characters.
+If <code class="docutils literal notranslate"><span class="pre">pad</span></code> is not specified, <code class="docutils literal notranslate"><span class="pre">string</span></code> will be padded to the right with space characters
+if it is a character string, and with zeros if it is a binary string.</p>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span>SELECT lpad(&#39;hi&#39;, 5, &#39;??&#39;); -- ???hi
+SELECT lpad(&#39;hi&#39;, 1, &#39;??&#39;); -- h
+SELECT lpad(&#39;hi&#39;, 4); -- hi
 </pre></div>
 </div>
 </dd></dl>

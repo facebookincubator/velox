@@ -113,6 +113,17 @@ This function is equivalent to <code class="docutils literal notranslate"><span 
 </dd></dl>
 
 <dl class="py function">
+<dt class="sig sig-object py" id="entropy">
+<span class="sig-name descname"><span class="pre">entropy</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">c</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">double</span></span></span><a class="headerlink" href="#entropy" title="Permalink to this definition">¶</a></dt>
+<dd><p>Returns the log-2 entropy of count input-values.</p>
+<div class="math">
+<p><span class="math">\mathrm{entropy}(c) = \sum_i \left[ {c_i \over \sum_j [c_j]} \log_2\left({\sum_j [c_j] \over c_i}\right) \right].</span></p>
+</div><p><code class="docutils literal notranslate"><span class="pre">c</span></code> must be a <code class="docutils literal notranslate"><span class="pre">integer</span></code> column of non-negative values.</p>
+<p>The function ignores any <code class="docutils literal notranslate"><span class="pre">NULL</span></code> count. If the sum of non-<code class="docutils literal notranslate"><span class="pre">NULL</span></code> counts is 0,
+it returns 0.</p>
+</dd></dl>
+
+<dl class="py function">
 <dt class="sig sig-object py" id="every">
 <span class="sig-name descname"><span class="pre">every</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">boolean</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">boolean</span></span></span><a class="headerlink" href="#every" title="Permalink to this definition">¶</a></dt>
 <dd><p>This is an alias for <a class="reference internal" href="#bool_and" title="bool_and"><code class="xref py py-func docutils literal notranslate"><span class="pre">bool_and()</span></code></a>.</p>
