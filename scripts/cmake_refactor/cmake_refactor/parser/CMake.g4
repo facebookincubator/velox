@@ -19,7 +19,7 @@ caseInsensitive = true;
 
 file_:  (add_library | add_alias | add_interface | link_libraries | include_directories | command )* EOF;
 
-add_library: Add_library '(' target ('STATIC' | 'SHARED' | 'MODULE' | 'OBJECT')? source_file+ Exclude? ')';
+add_library: Add_library '(' target library_type? source_file+ Exclude? ')';
 
 add_alias: Add_library '(' target alias target ')';
 
@@ -49,6 +49,8 @@ Variable: '${'  Name '}';
 Identifier_namespace: Identifier '::' Identifier;
  
 // Target:  Identifier;
+
+library_type: 'STATIC' | 'SHARED' | 'MODULE' | 'OBJECT';
 
 // with each keyword as a parser rule we can do .public() instead of having to resort to string cmp
 keyword:  public | private | interface;

@@ -125,6 +125,15 @@ class CMakeListener(ParseTreeListener):
         pass
 
 
+    # Enter a parse tree produced by CMakeParser#library_type.
+    def enterLibrary_type(self, ctx:CMakeParser.Library_typeContext):
+        pass
+
+    # Exit a parse tree produced by CMakeParser#library_type.
+    def exitLibrary_type(self, ctx:CMakeParser.Library_typeContext):
+        pass
+
+
     # Enter a parse tree produced by CMakeParser#keyword.
     def enterKeyword(self, ctx:CMakeParser.KeywordContext):
         pass
