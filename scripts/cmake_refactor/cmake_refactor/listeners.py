@@ -196,23 +196,32 @@ class UpdateTargetsListener(CMakeListener):
     def exitLink_libraries(self, ctx: CMakeParser.Link_librariesContext):
         target = self.targets.get(ctx.target().getText())
         assert target is not None
-        
-        def sort_targets(targets:list[str]):
+
+        def sort_targets(targets: list[str]):
+            # We want to list the internal targets first
             a = [t for t in targets if t.startswith('velox')]
             b = [t for t in targets if not t.startswith('velox')]
 
             return sorted(a) + sorted(b)
 
-            
         if not target.was_linked:
             public_targets = target.public_targets
-            public_targets.extend([t for t in target.ppublic_targets if t.is_object_lib or t.is_interface])
-            private_targets = [t for t in target.private_targets if t not in public_targets]
-            private_targets.extend([t for t in target.pprivate_targets if t.is_object_lib or t.is_interface])
-            public_targets = sort_targets([*set([t.name for t in public_targets])])
-            private_targets = sort_targets([*set([t.name for t in private_targets])])
+            public_targets.extend(
+                [t for t in target.ppublic_targets if t.is_object_lib
+                 or t.is_interface or t.name.startswith('${')])
+            private_targets = [
+                t for t in target.private_targets if t not in public_targets]
+            private_targets.extend(
+                [t for t in target.pprivate_targets if t.is_object_lib
+                 or t.is_interface or t.name.startswith('${')])
+            public_targets = sort_targets(
+                [*set([t.name for t in public_targets])])
+            private_targets = sort_targets(
+                [*set([t.name for t in private_targets])])
             start = ctx.start.tokenIndex + 2
             stop = ctx.stop.tokenIndex - 1
-            new = f'{target.name} PUBLIC {" ".join(public_targets)} PRIVATE {" ".join(private_targets)}'
+            p_text = f'PUBLIC {" ".join(public_targets)}' if public_targets else ''
+            pr_text = f' PRIVATE {" ".join(private_targets)}' if private_targets else ''
+            new = f'{target.name} ' + p_text + pr_text
             self.token_stream.replaceRange(start, stop, new)
             target.was_linked = True
