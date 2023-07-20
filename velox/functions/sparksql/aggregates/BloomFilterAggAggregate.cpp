@@ -265,7 +265,7 @@ class BloomFilterAggAggregate : public exec::Aggregate {
   const int64_t defaultExpectedNumItems_;
   const int64_t defaultNumBits_;
   const int64_t maxNumBits_;
-  
+
   // Reusable instance of DecodedVector for decoding input vectors.
   DecodedVector decodedRaw_;
   DecodedVector decodedIntermediate_;
