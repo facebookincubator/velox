@@ -264,6 +264,8 @@ def update_links(src_dir: str, repo_root: str, excluded_dirs: list[str] = [],
 
     for t in targets.values():
         t.was_linked = False
+        if t.cml_path is None:
+            continue
 
         cml = os.path.join(t.cml_path, file)
         token_stream = get_token_stream(cml)
