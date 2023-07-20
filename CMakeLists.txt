@@ -28,7 +28,8 @@ endif()
 # set the project name
 project(velox)
 
-list(PREPEND CMAKE_MODULE_PATH "${PROJECT_SOURCE_DIR}/CMake")
+list(PREPEND CMAKE_MODULE_PATH "${PROJECT_SOURCE_DIR}/CMake"
+     "${PROJECT_SOURCE_DIR}/CMake/third-party")
 
 # Include our ThirdPartyToolchain dependencies macros
 include(ResolveDependency)
@@ -77,7 +78,7 @@ option(VELOX_ENABLE_GCS "Build GCS Connector" OFF)
 option(VELOX_ENABLE_HDFS "Build Hdfs Connector" OFF)
 option(VELOX_ENABLE_PARQUET "Enable Parquet support" OFF)
 option(VELOX_ENABLE_ARROW "Enable Arrow support" OFF)
-option(VELOX_ENABLE_REMOTE_FUNCTIONS "Enable remote function support" ON) # XXX
+option(VELOX_ENABLE_REMOTE_FUNCTIONS "Enable remote function support" OFF)
 option(VELOX_ENABLE_CCACHE "Use ccache if installed." ON)
 
 option(VELOX_BUILD_TEST_UTILS "Builds Velox test utilities" OFF)
@@ -215,6 +216,7 @@ endif()
 if(VELOX_ENABLE_REMOTE_FUNCTIONS)
   # TODO: Move this to use resolve_dependency().
   find_package(FBThrift CONFIG REQUIRED)
+  find_package(wangle CONFIG REQUIRED)
 endif()
 
 # Turn on Codegen only for Clang and non Mac systems.
