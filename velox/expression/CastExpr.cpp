@@ -252,9 +252,7 @@ VectorPtr applyDecimalToIntegralCast(
     auto sign = value >= 0 ? 1 : -1;
     bool needsRoundUp =
         (scaleFactor != 1) && (sign * fractionPart >= (scaleFactor >> 1));
-    if (needsRoundUp) {
-      integralPart += sign;
-    }
+    integralPart += needsRoundUp ? sign : 0;
     if (integralPart > std::numeric_limits<To>::max() ||
         integralPart < std::numeric_limits<To>::min())
       VELOX_USER_FAIL(makeErrorMessage(input, row, toType) + " Out of bounds.");
