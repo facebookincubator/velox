@@ -44,17 +44,16 @@ std::unique_ptr<dwio::common::SelectiveColumnReader> ParquetColumnReader::build(
     case TypeKind::BIGINT:
     case TypeKind::SMALLINT:
     case TypeKind::TINYINT:
-    case TypeKind::DATE:
     case TypeKind::HUGEINT:
       return std::make_unique<IntegerColumnReader>(
           dataType, dataType, params, scanSpec);
 
     case TypeKind::REAL:
       return std::make_unique<FloatingPointColumnReader<float, float>>(
-          dataType, dataType->type, params, scanSpec);
+          dataType->type, dataType, params, scanSpec);
     case TypeKind::DOUBLE:
       return std::make_unique<FloatingPointColumnReader<double, double>>(
-          dataType, dataType->type, params, scanSpec);
+          dataType->type, dataType, params, scanSpec);
 
     case TypeKind::ROW:
       return std::make_unique<StructColumnReader>(dataType, params, scanSpec);

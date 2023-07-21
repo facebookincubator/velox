@@ -197,29 +197,30 @@ TEST_F(FirstAggregateTest, timestampGlobal) {
 TEST_F(FirstAggregateTest, dateGroupBy) {
   auto vectors = {makeRowVector({
       makeFlatVector<int32_t>(98, [](auto row) { return row % 7; }),
-      makeFlatVector<Date>(
+      makeFlatVector<int32_t>(
           98, // size
-          [](auto row) { return Date(row); }, // valueAt
-          nullEvery(3)),
+          [](auto row) { return row; }, // valueAt
+          nullEvery(3),
+          DATE()),
   })};
 
   auto ignoreNullData = {makeRowVector({
       makeFlatVector<int32_t>(7, [](auto row) { return row; }),
-      makeFlatVector<Date>(
+      makeFlatVector<int32_t>(
           7, // size
-          [](auto row) {
-            return row % 3 == 0 ? Date(row + 7) : Date(row);
-          } // valueAt
-          ),
+          [](auto row) { return row % 3 == 0 ? row + 7 : row; }, // valueAt
+          nullptr,
+          DATE()),
   })};
 
   // Expected result should have first 7 rows including nulls.
   auto hasNullData = {makeRowVector({
       makeFlatVector<int32_t>(7, [](auto row) { return row; }),
-      makeFlatVector<Date>(
+      makeFlatVector<int32_t>(
           7, // size
-          [](auto row) { return Date(row); }, // valueAt
-          [](auto row) { return row % 3 == 0; }), // nullAt
+          [](auto row) { return row; }, // valueAt
+          [](auto row) { return row % 3 == 0; },
+          DATE()), // nullAt
   })};
 
   testGroupBy(vectors, ignoreNullData, hasNullData);
@@ -227,14 +228,85 @@ TEST_F(FirstAggregateTest, dateGroupBy) {
 
 TEST_F(FirstAggregateTest, dateGlobal) {
   auto vectors = {makeRowVector({
-      makeNullableFlatVector<Date>(
-          {std::nullopt, Date(1), Date(2), std::nullopt}),
+      makeNullableFlatVector<int32_t>(
+          {std::nullopt, 1, 2, std::nullopt}, DATE()),
   })};
 
-  auto ignoreNullData = {makeRowVector({makeFlatVector<Date>({Date(1)})})};
+  auto ignoreNullData = {
+      makeRowVector({makeNullableFlatVector<int32_t>({1}, DATE())})};
 
   auto hasNullData = {
-      makeRowVector({makeNullableFlatVector<Date>({std::nullopt})})};
+      makeRowVector({makeNullableFlatVector<int32_t>({std::nullopt}, DATE())})};
+
+  testGlobalAggregate(vectors, ignoreNullData, hasNullData);
+}
+
+TEST_F(FirstAggregateTest, shortDecimalGroupBy) {
+  auto vectors = {makeRowVector({
+      makeFlatVector<int32_t>({0, 1, 0, 1}),
+      makeNullableFlatVector<int64_t>(
+          {1, std::nullopt, std::nullopt, 2}, DECIMAL(8, 2)),
+  })};
+
+  auto ignoreNullData = {makeRowVector({
+      makeFlatVector<int32_t>({0, 1}),
+      makeFlatVector<int64_t>({1, 2}, DECIMAL(8, 2)),
+  })};
+
+  auto hasNullData = {makeRowVector({
+      makeFlatVector<int32_t>({0, 1}),
+      makeNullableFlatVector<int64_t>({1, std::nullopt}, DECIMAL(8, 2)),
+  })};
+
+  testGroupBy(vectors, ignoreNullData, hasNullData);
+}
+
+TEST_F(FirstAggregateTest, shortDecimalGlobal) {
+  auto vectors = {makeRowVector({
+      makeNullableFlatVector<int64_t>({std::nullopt, 1}, DECIMAL(8, 2)),
+  })};
+
+  std::vector<int64_t> shortDecimalRawVector = {1};
+  auto ignoreNullData = {makeRowVector(
+      {makeFlatVector<int64_t>(shortDecimalRawVector, DECIMAL(8, 2))})};
+
+  auto hasNullData = {makeRowVector(
+      {makeNullableFlatVector<int64_t>({std::nullopt}, DECIMAL(8, 2))})};
+
+  testGlobalAggregate(vectors, ignoreNullData, hasNullData);
+}
+
+TEST_F(FirstAggregateTest, longDecimalGroupBy) {
+  auto vectors = {makeRowVector({
+      makeFlatVector<int32_t>({0, 1, 0, 1}),
+      makeNullableFlatVector<int128_t>(
+          {1, std::nullopt, std::nullopt, 2}, DECIMAL(38, 8)),
+  })};
+
+  auto ignoreNullData = {makeRowVector({
+      makeFlatVector<int32_t>({0, 1}),
+      makeFlatVector<int128_t>({1, 2}, DECIMAL(38, 8)),
+  })};
+
+  auto hasNullData = {makeRowVector({
+      makeFlatVector<int32_t>({0, 1}),
+      makeNullableFlatVector<int128_t>({1, std::nullopt}, DECIMAL(38, 8)),
+  })};
+
+  testGroupBy(vectors, ignoreNullData, hasNullData);
+}
+
+TEST_F(FirstAggregateTest, longDecimalGlobal) {
+  auto vectors = {makeRowVector({
+      makeNullableFlatVector<int128_t>({std::nullopt, 1}, DECIMAL(28, 2)),
+  })};
+
+  std::vector<int128_t> longDecimalRawVector = {1};
+  auto ignoreNullData = {makeRowVector(
+      {makeFlatVector<int128_t>(longDecimalRawVector, DECIMAL(28, 2))})};
+
+  auto hasNullData = {makeRowVector(
+      {makeNullableFlatVector<int128_t>({std::nullopt}, DECIMAL(28, 2))})};
 
   testGlobalAggregate(vectors, ignoreNullData, hasNullData);
 }

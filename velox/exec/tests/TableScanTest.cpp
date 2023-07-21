@@ -16,6 +16,7 @@
 #include "velox/exec/TableScan.h"
 #include "velox/common/base/Fs.h"
 #include "velox/common/base/tests/GTestUtils.h"
+#include "velox/common/testutil/TestValue.h"
 #include "velox/connectors/hive/HiveConnector.h"
 #include "velox/connectors/hive/HiveConnectorSplit.h"
 #include "velox/dwio/common/tests/utils/DataFiles.h"
@@ -2549,4 +2550,489 @@ TEST_F(TableScanTest, parallelPrepare) {
     splits.push_back(makeHiveSplit(filePath->path));
   }
   AssertQueryBuilder(plan).splits(splits).copyResults(pool_.get());
+}
+
+TEST_F(TableScanTest, dictionaryMemo) {
+  constexpr int kSize = 100;
+  const char* baseStrings[] = {
+      "qwertyuiopasdfghjklzxcvbnm",
+      "qazwsxedcrfvtgbyhnujmikolp",
+  };
+  auto indices = allocateIndices(kSize, pool_.get());
+  for (int i = 0; i < kSize; ++i) {
+    indices->asMutable<vector_size_t>()[i] = i % 2;
+  }
+  auto dict = BaseVector::wrapInDictionary(
+      nullptr,
+      indices,
+      kSize,
+      makeFlatVector<std::string>({baseStrings[0], baseStrings[1]}));
+  auto rows = makeRowVector({"a", "b"}, {dict, makeRowVector({"c"}, {dict})});
+  auto rowType = asRowType(rows->type());
+  auto file = TempFilePath::create();
+  writeToFile(file->path, {rows});
+  auto plan = PlanBuilder()
+                  .tableScan(rowType, {}, "a like '%m'")
+                  .project({"length(b.c)"})
+                  .planNode();
+#ifndef NDEBUG
+  int numPeelEncodings = 0;
+  SCOPED_TESTVALUE_SET(
+      "facebook::velox::exec::Expr::peelEncodings::mayCache",
+      std::function<void(bool*)>([&](bool* mayCache) {
+        if (numPeelEncodings++ == 0) {
+          ASSERT_TRUE(*mayCache) << "Memoize string dictionary base";
+        } else {
+          ASSERT_FALSE(*mayCache) << "Do not memoize filter result";
+        }
+      }));
+#endif
+  auto result = AssertQueryBuilder(plan)
+                    .splits({makeHiveSplit(file->path)})
+                    .copyResults(pool_.get());
+  ASSERT_EQ(result->size(), 50);
+#ifndef NDEBUG
+  ASSERT_EQ(numPeelEncodings, 2);
+#endif
+}
+
+TEST_F(TableScanTest, filterPushdownDisabledChecks) {
+  auto data = makeRowVector({makeFlatVector<int32_t>(10, folly::identity)});
+  auto rowType = asRowType(data->type());
+  auto file = TempFilePath::create();
+  writeToFile(file->path, {data});
+  ColumnHandleMap assignments = {
+      {"ds", partitionKey("ds", VARCHAR())},
+      {"c0", regularColumn("c0", INTEGER())},
+  };
+  auto split = HiveConnectorSplitBuilder(file->path)
+                   .partitionKey("ds", "2023-07-12")
+                   .build();
+
+  auto tableHandle = makeTableHandle(
+      SubfieldFiltersBuilder().add("ds", equal("2023-07-12")).build(),
+      nullptr,
+      "hive_table",
+      nullptr,
+      false);
+  auto plan = exec::test::PlanBuilder(pool_.get())
+                  .tableScan(rowType, tableHandle, assignments)
+                  .planNode();
+  AssertQueryBuilder(plan).splits({split}).assertResults(data);
+
+  tableHandle = makeTableHandle(
+      SubfieldFiltersBuilder().add("c0", equal(5)).build(),
+      nullptr,
+      "hive_table",
+      nullptr,
+      false);
+  plan = exec::test::PlanBuilder(pool_.get())
+             .tableScan(rowType, tableHandle, assignments)
+             .planNode();
+  auto query = AssertQueryBuilder(plan);
+  query.splits({split});
+  VELOX_ASSERT_THROW(
+      query.copyResults(pool_.get()),
+      "Unexpected filter on table hive_table, field c0");
+}
+
+TEST_F(TableScanTest, reuseRowVector) {
+  auto iota = makeFlatVector<int32_t>(10, folly::identity);
+  auto data = makeRowVector({iota, makeRowVector({iota})});
+  auto rowType = asRowType(data->type());
+  auto file = TempFilePath::create();
+  writeToFile(file->path, {data});
+  auto plan = PlanBuilder()
+                  .tableScan(rowType, {}, "c0 < 5")
+                  .project({"c1.c0"})
+                  .planNode();
+  auto split = HiveConnectorSplitBuilder(file->path).build();
+  auto expected = makeRowVector(
+      {makeFlatVector<int32_t>(10, [](auto i) { return i % 5; })});
+  AssertQueryBuilder(plan).splits({split, split}).assertResults(expected);
+}
+
+// Tests queries that use that read more row fields than exist in the data.
+TEST_F(TableScanTest, readMissingFields) {
+  vector_size_t size = 1'000;
+  auto rowVector = makeRowVector({makeRowVector({
+      makeFlatVector<int64_t>(size, [](auto row) { return row; }),
+      makeFlatVector<int64_t>(size, [](auto row) { return row; }),
+  })});
+
+  auto filePath = TempFilePath::create();
+  writeToFile(filePath->path, {rowVector});
+  // Create a row type with additional fields not present in the file.
+  auto rowType =
+      makeRowType({makeRowType({BIGINT(), BIGINT(), BIGINT(), BIGINT()})});
+
+  auto testQueryRow = [&](const std::vector<std::string>& projections,
+                          const std::vector<bool>& fieldShouldHaveValue) {
+    auto op = PlanBuilder().tableScan(rowType).project(projections).planNode();
+
+    auto split = makeHiveConnectorSplit(filePath->path);
+    auto result = AssertQueryBuilder(op).split(split).copyResults(pool());
+
+    ASSERT_EQ(result->size(), size);
+    auto rows = result->as<RowVector>();
+    ASSERT_TRUE(rows);
+    ASSERT_EQ(rows->childrenSize(), fieldShouldHaveValue.size());
+    for (int i = 0; i < fieldShouldHaveValue.size(); i++) {
+      auto val = rows->childAt(i)->as<SimpleVector<int64_t>>();
+      ASSERT_TRUE(val);
+      ASSERT_EQ(val->size(), size);
+      for (int j = 0; j < size; j++) {
+        if (fieldShouldHaveValue[i]) {
+          ASSERT_FALSE(val->isNullAt(j));
+          ASSERT_EQ(val->valueAt(j), j);
+        } else {
+          ASSERT_TRUE(val->isNullAt(j));
+        }
+      }
+    }
+  };
+
+  // Query all the fields.
+  testQueryRow(
+      {"c0.c0", "c0.c1", "c0.c2", "c0.c3"}, {true, true, false, false});
+
+  // Query some of the fields.
+  testQueryRow({"c0.c1", "c0.c3"}, {true, false});
+  testQueryRow({"c0.c0", "c0.c2"}, {true, false});
+
+  // Query the fields out of order.
+  testQueryRow(
+      {"c0.c3", "c0.c2", "c0.c1", "c0.c0"}, {false, false, true, true});
+  testQueryRow(
+      {"c0.c3", "c0.c0", "c0.c2", "c0.c1"}, {false, true, false, true});
+  testQueryRow(
+      {"c0.c0", "c0.c3", "c0.c1", "c0.c2"}, {true, false, true, false});
+}
+
+// Tests queries that use that read more row fields than exist in the data in
+// some files, but exist in other files.
+TEST_F(TableScanTest, readMissingFieldsFilesVary) {
+  vector_size_t size = 1000;
+  auto rowVectorMissingFields = makeRowVector({makeRowVector({
+      makeFlatVector<int64_t>(size, [](auto row) { return row; }),
+      makeFlatVector<int64_t>(size, [](auto row) { return row; }),
+  })});
+
+  auto missingFieldsFilePath = TempFilePath::create();
+  writeToFile(missingFieldsFilePath->path, {rowVectorMissingFields});
+
+  auto rowVectorWithAllFields = makeRowVector({makeRowVector({
+      makeFlatVector<int64_t>(size, [](auto row) { return row; }),
+      makeFlatVector<int64_t>(size, [](auto row) { return row; }),
+      makeFlatVector<int64_t>(size, [](auto row) { return row + 1; }),
+      makeFlatVector<int64_t>(size, [](auto row) { return row + 1; }),
+  })});
+
+  auto allFieldsFilePath = TempFilePath::create();
+  writeToFile(allFieldsFilePath->path, {rowVectorWithAllFields});
+
+  auto op = PlanBuilder()
+                .tableScan(asRowType(rowVectorWithAllFields->type()))
+                .project({"c0.c0", "c0.c1", "c0.c2", "c0.c3"})
+                .planNode();
+
+  auto result = AssertQueryBuilder(op)
+                    .split(makeHiveConnectorSplit(missingFieldsFilePath->path))
+                    .split(makeHiveConnectorSplit(allFieldsFilePath->path))
+                    .split(makeHiveConnectorSplit(missingFieldsFilePath->path))
+                    .split(makeHiveConnectorSplit(allFieldsFilePath->path))
+                    .copyResults(pool());
+
+  ASSERT_EQ(result->size(), size * 4);
+  auto rows = result->as<RowVector>();
+  ASSERT_TRUE(rows);
+  ASSERT_EQ(rows->childrenSize(), 4);
+  for (int i = 0; i < 4; i++) {
+    auto val = rows->childAt(i)->as<SimpleVector<int64_t>>();
+    ASSERT_TRUE(val);
+    ASSERT_EQ(val->size(), size * 4);
+    for (int j = 0; j < size * 4; j++) {
+      // These fields always exist.
+      if (i < 2) {
+        ASSERT_FALSE(val->isNullAt(j));
+        ASSERT_EQ(val->valueAt(j), j % size);
+      } else {
+        // The field doesn't exist in even files.
+        if ((j / size) % 2 == 0) {
+          ASSERT_TRUE(val->isNullAt(j));
+        } else {
+          ASSERT_FALSE(val->isNullAt(j));
+          ASSERT_EQ(val->valueAt(j), (j % size) + 1);
+        }
+      }
+    }
+  };
+}
+
+// Tests queries that use that read more row fields than exist in the data in an
+// array.
+TEST_F(TableScanTest, readMissingFieldsInArray) {
+  vector_size_t size = 1'000;
+  auto rowVector = makeRowVector({
+      makeFlatVector<int64_t>(size * 4, [](auto row) { return row; }),
+      makeFlatVector<int64_t>(size * 4, [](auto row) { return row; }),
+  });
+  std::vector<vector_size_t> offsets;
+  for (int i = 0; i < size; i++) {
+    offsets.push_back(i * 4);
+  }
+  auto arrayVector = makeArrayVector(offsets, rowVector);
+
+  auto filePath = TempFilePath::create();
+  writeToFile(filePath->path, {makeRowVector({arrayVector})});
+  // Create a row type with additional fields not present in the file.
+  auto rowType = makeRowType(
+      {ARRAY(makeRowType({BIGINT(), BIGINT(), BIGINT(), BIGINT()}))});
+
+  // Query all the fields.
+  auto op = PlanBuilder()
+                .tableScan(rowType)
+                .project({"c0[1].c0", "c0[2].c1", "c0[3].c2", "c0[4].c3"})
+                .planNode();
+
+  auto split = makeHiveConnectorSplit(filePath->path);
+  auto result = AssertQueryBuilder(op).split(split).copyResults(pool());
+
+  ASSERT_EQ(result->size(), size);
+  auto rows = result->as<RowVector>();
+  ASSERT_TRUE(rows);
+  ASSERT_EQ(rows->childrenSize(), 4);
+  // The fields that exist in the data should be present and correct.
+  for (int i = 0; i < 2; i++) {
+    auto val = rows->childAt(i)->as<SimpleVector<int64_t>>();
+    ASSERT_TRUE(val);
+    ASSERT_EQ(val->size(), size);
+    for (int j = 0; j < size; j++) {
+      ASSERT_FALSE(val->isNullAt(j));
+      ASSERT_EQ(val->valueAt(j), j * 4 + i);
+    }
+  }
+  // The fields that don't exist in the data should be null.
+  for (int i = 2; i < 4; i++) {
+    auto val = rows->childAt(i)->as<SimpleVector<int64_t>>();
+    ASSERT_TRUE(val);
+    ASSERT_EQ(val->size(), size);
+    for (int j = 0; j < size; j++) {
+      ASSERT_TRUE(val->isNullAt(j));
+    }
+  }
+}
+
+// Tests queries that use that read more row fields than exist in the data in a
+// map.
+TEST_F(TableScanTest, readMissingFieldsInMap) {
+  vector_size_t size = 1'000;
+  auto rowVector = makeRowVector({
+      makeFlatVector<int64_t>(size * 4, [](auto row) { return row; }),
+      makeFlatVector<int64_t>(size * 4, [](auto row) { return row; }),
+  });
+  auto keysVector =
+      makeFlatVector<int64_t>(size * 4, [](auto row) { return row % 4; });
+  std::vector<vector_size_t> offsets;
+  for (int i = 0; i < size; i++) {
+    offsets.push_back(i * 4);
+  }
+  auto mapVector = makeMapVector(offsets, keysVector, rowVector);
+
+  auto filePath = TempFilePath::create();
+  writeToFile(filePath->path, {makeRowVector({mapVector})});
+  // Create a row type with additional fields not present in the file.
+  auto rowType = makeRowType(
+      {MAP(BIGINT(), makeRowType({BIGINT(), BIGINT(), BIGINT(), BIGINT()}))});
+
+  // Query all the fields.
+  auto op = PlanBuilder()
+                .tableScan(rowType)
+                .project({"c0[0].c0", "c0[1].c1", "c0[2].c2", "c0[3].c3"})
+                .planNode();
+
+  auto split = makeHiveConnectorSplit(filePath->path);
+  auto result = AssertQueryBuilder(op).split(split).copyResults(pool());
+
+  ASSERT_EQ(result->size(), size);
+  auto rows = result->as<RowVector>();
+  ASSERT_TRUE(rows);
+  ASSERT_EQ(rows->childrenSize(), 4);
+  // The fields that exist in the data should be present and correct.
+  for (int i = 0; i < 2; i++) {
+    auto val = rows->childAt(i)->as<SimpleVector<int64_t>>();
+    ASSERT_TRUE(val);
+    ASSERT_EQ(val->size(), size);
+    for (int j = 0; j < size; j++) {
+      ASSERT_FALSE(val->isNullAt(j));
+      ASSERT_EQ(val->valueAt(j), j * 4 + i);
+    }
+  }
+  // The fields that don't exist in the data should be null.
+  for (int i = 2; i < 4; i++) {
+    auto val = rows->childAt(i)->as<SimpleVector<int64_t>>();
+    ASSERT_TRUE(val);
+    ASSERT_EQ(val->size(), size);
+    for (int j = 0; j < size; j++) {
+      ASSERT_TRUE(val->isNullAt(j));
+    }
+  }
+}
+
+// Tests various projections of top level columns using the output type passed
+// into TableScan.
+TEST_F(TableScanTest, tableScanProjections) {
+  vector_size_t size = 1'000;
+  auto rowVector = makeRowVector({
+      makeFlatVector<int64_t>(size, [](auto row) { return row; }),
+      makeFlatVector<int64_t>(size, [](auto row) { return row + 1; }),
+      makeFlatVector<int64_t>(size, [](auto row) { return row + 2; }),
+      makeFlatVector<int64_t>(size, [](auto row) { return row + 3; }),
+  });
+
+  auto filePath = TempFilePath::create();
+  writeToFile(filePath->path, {rowVector});
+
+  auto testQueryRow = [&](const std::vector<int32_t>& projections) {
+    std::vector<std::string> cols;
+    for (auto projection : projections) {
+      cols.push_back(fmt::format("c{}", projection));
+    }
+    auto scanRowType = ROW(
+        std::move(cols), std::vector<TypePtr>(projections.size(), BIGINT()));
+    auto op = PlanBuilder().tableScan(scanRowType).planNode();
+
+    auto split = makeHiveConnectorSplit(filePath->path);
+    auto result = AssertQueryBuilder(op).split(split).copyResults(pool());
+
+    ASSERT_EQ(result->size(), size);
+    auto rows = result->as<RowVector>();
+    ASSERT_TRUE(rows);
+    ASSERT_EQ(rows->childrenSize(), projections.size());
+    for (int i = 0; i < projections.size(); i++) {
+      auto val = rows->childAt(i)->as<SimpleVector<int64_t>>();
+      ASSERT_TRUE(val);
+      ASSERT_EQ(val->size(), size);
+      for (int j = 0; j < size; j++) {
+        ASSERT_FALSE(val->isNullAt(j));
+        ASSERT_EQ(val->valueAt(j), j + projections[i]);
+      }
+    }
+  };
+
+  // Vanilla, query all the fields in order.
+  testQueryRow({0, 1, 2, 3});
+
+  // Query all the fields in various orders.
+  testQueryRow({3, 2, 1, 0});
+  testQueryRow({3, 1, 2, 0});
+  testQueryRow({0, 3, 2, 1});
+  testQueryRow({1, 3, 0, 2});
+
+  // Query some of the fields in order.
+  testQueryRow({0, 1, 2});
+  testQueryRow({1, 2, 3});
+  testQueryRow({1, 3});
+  testQueryRow({0, 2});
+  testQueryRow({2});
+
+  // Query some of the fields in various orders.
+  testQueryRow({3, 2, 1});
+  testQueryRow({1, 2, 0});
+  testQueryRow({0, 2, 1});
+  testQueryRow({3, 1});
+  testQueryRow({2, 0});
+  testQueryRow({3, 2});
+}
+
+// Tests queries that use that read more row fields than exist in the data, and
+// read additional columns besides just the row.
+TEST_F(TableScanTest, readMissingFieldsWithMoreColumns) {
+  vector_size_t size = 1'000;
+  std::vector<StringView> fruitViews = {"apple", "banana", "cherry", "grapes"};
+  auto rowVector = makeRowVector(
+      {makeRowVector({
+           makeFlatVector<int64_t>(size, [](auto row) { return row; }),
+           makeFlatVector<int64_t>(size, [](auto row) { return row; }),
+       }),
+       makeFlatVector<int32_t>(size, [](auto row) { return -row; }),
+       makeFlatVector<double>(size, [](auto row) { return row * 0.1; }),
+       makeFlatVector<bool>(size, [](auto row) { return row % 2 == 0; }),
+       makeFlatVector<StringView>(size, [&fruitViews](auto row) {
+         return fruitViews[row % fruitViews.size()];
+       })});
+
+  auto filePath = TempFilePath::create();
+  writeToFile(filePath->path, {rowVector});
+  // Create a row type with additional fields not present in the file.
+  auto rowType = makeRowType(
+      {makeRowType({BIGINT(), BIGINT(), BIGINT(), BIGINT()}),
+       INTEGER(),
+       DOUBLE(),
+       BOOLEAN(),
+       VARCHAR()});
+
+  auto op =
+      PlanBuilder()
+          .tableScan(rowType)
+          .project({"c0.c0", "c0.c1", "c0.c2", "c0.c3", "c1", "c2", "c3", "c4"})
+          .planNode();
+
+  auto split = makeHiveConnectorSplit(filePath->path);
+  auto result = AssertQueryBuilder(op).split(split).copyResults(pool());
+
+  ASSERT_EQ(result->size(), size);
+  auto rows = result->as<RowVector>();
+  ASSERT_TRUE(rows);
+  ASSERT_EQ(rows->childrenSize(), 8);
+  for (int i = 0; i < 2; i++) {
+    auto val = rows->childAt(i)->as<SimpleVector<int64_t>>();
+    ASSERT_TRUE(val);
+    ASSERT_EQ(val->size(), size);
+    for (int j = 0; j < size; j++) {
+      ASSERT_FALSE(val->isNullAt(j));
+      ASSERT_EQ(val->valueAt(j), j);
+    }
+  }
+
+  for (int i = 2; i < 4; i++) {
+    auto val = rows->childAt(i)->as<SimpleVector<int64_t>>();
+    ASSERT_TRUE(val);
+    ASSERT_EQ(val->size(), size);
+    for (int j = 0; j < size; j++) {
+      ASSERT_TRUE(val->isNullAt(j));
+    }
+  }
+
+  auto intCol = rows->childAt(4)->as<SimpleVector<int32_t>>();
+  ASSERT_TRUE(intCol);
+  ASSERT_EQ(intCol->size(), size);
+  for (int j = 0; j < size; j++) {
+    ASSERT_FALSE(intCol->isNullAt(j));
+    ASSERT_EQ(intCol->valueAt(j), -j);
+  }
+
+  auto doubleCol = rows->childAt(5)->as<SimpleVector<double>>();
+  ASSERT_TRUE(doubleCol);
+  ASSERT_EQ(doubleCol->size(), size);
+  for (int j = 0; j < size; j++) {
+    ASSERT_FALSE(doubleCol->isNullAt(j));
+    ASSERT_EQ(doubleCol->valueAt(j), j * 0.1);
+  }
+
+  auto boolCol = rows->childAt(6)->as<SimpleVector<bool>>();
+  ASSERT_TRUE(boolCol);
+  ASSERT_EQ(boolCol->size(), size);
+  for (int j = 0; j < size; j++) {
+    ASSERT_FALSE(boolCol->isNullAt(j));
+    ASSERT_EQ(boolCol->valueAt(j), j % 2 == 0);
+  }
+
+  auto stringCol = rows->childAt(7)->as<SimpleVector<StringView>>();
+  ASSERT_TRUE(stringCol);
+  ASSERT_EQ(stringCol->size(), size);
+  for (int j = 0; j < size; j++) {
+    ASSERT_FALSE(stringCol->isNullAt(j));
+    ASSERT_EQ(stringCol->valueAt(j), fruitViews[j % fruitViews.size()]);
+  }
 }

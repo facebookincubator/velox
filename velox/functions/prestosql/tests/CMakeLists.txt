@@ -42,6 +42,7 @@ add_executable(
   ArraysOverlapTest.cpp
   ArraySumTest.cpp
   ArrayTrimTest.cpp
+  ArrayUnionTest.cpp
   BinaryFunctionsTest.cpp
   BitwiseTest.cpp
   CardinalityTest.cpp
@@ -72,6 +73,7 @@ add_executable(
   ReverseTest.cpp
   RoundTest.cpp
   ScalarFunctionRegTest.cpp
+  SimpleComparisonMatcherTest.cpp
   SliceTest.cpp
   SequenceTest.cpp
   SplitTest.cpp

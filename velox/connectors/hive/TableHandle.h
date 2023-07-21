@@ -53,20 +53,6 @@ class HiveColumnHandle : public ColumnHandle {
         hiveType_->toString());
   }
 
-#ifdef VELOX_ENABLE_BACKWARD_COMPATIBILITY
-  HiveColumnHandle(
-      const std::string& name,
-      ColumnType columnType,
-      TypePtr dataType,
-      std::vector<common::Subfield> requiredSubfields = {})
-      : HiveColumnHandle(
-            name,
-            columnType,
-            dataType,
-            dataType,
-            std::move(requiredSubfields)) {}
-#endif
-
   const std::string& name() const {
     return name_;
   }
@@ -135,6 +121,10 @@ class HiveTableHandle : public ConnectorTableHandle {
       SubfieldFilters subfieldFilters,
       const core::TypedExprPtr& remainingFilter,
       const RowTypePtr& dataColumns = nullptr);
+
+  const std::string& tableName() const {
+    return tableName_;
+  }
 
   bool isFilterPushdownEnabled() const {
     return filterPushdownEnabled_;

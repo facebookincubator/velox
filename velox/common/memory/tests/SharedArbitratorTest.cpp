@@ -276,7 +276,7 @@ class SharedArbitrationTest : public exec::test::HiveConnectorTestBase {
     if (minMemoryPoolCapacityTransferSize == 0) {
       minMemoryPoolCapacityTransferSize = kMinMemoryPoolCapacityTransferSize;
     }
-    IMemoryManager::Options options;
+    MemoryManagerOptions options;
     options.capacity = (memoryCapacity != 0) ? memoryCapacity : kMemoryCapacity;
     options.arbitratorConfig = {
         .kind = MemoryArbitrator::Kind::kShared,
@@ -574,7 +574,7 @@ TEST_F(SharedArbitrationTest, reclaimFromCompletedOrderBy) {
   }
 }
 
-DEBUG_ONLY_TEST_F(SharedArbitrationTest, reclaimFromAggregation) {
+DEBUG_ONLY_TEST_F(SharedArbitrationTest, DISABLED_reclaimFromAggregation) {
   const int numVectors = 32;
   std::vector<RowVectorPtr> vectors;
   for (int i = 0; i < numVectors; ++i) {

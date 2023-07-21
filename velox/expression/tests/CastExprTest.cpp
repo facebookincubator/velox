@@ -140,7 +140,9 @@ class CastExprTest : public functions::test::CastBaseTest {
       std::vector<std::optional<TFrom>> input,
       std::vector<std::optional<TTo>> expectedResult,
       bool expectFailure = false,
-      bool tryCast = false) {
+      bool tryCast = false,
+      const TypePtr& fromType = CppToType<TFrom>::create(),
+      const TypePtr& toType = CppToType<TTo>::create()) {
     std::vector<TFrom> rawInput(input.size());
     for (auto index = 0; index < input.size(); index++) {
       if (input[index].has_value()) {
@@ -148,7 +150,7 @@ class CastExprTest : public functions::test::CastBaseTest {
       }
     }
     // Create input vector using values and nulls
-    auto inputVector = makeFlatVector(rawInput);
+    auto inputVector = makeFlatVector(rawInput, fromType);
 
     for (auto index = 0; index < input.size(); index++) {
       if (!input[index].has_value()) {
@@ -167,7 +169,7 @@ class CastExprTest : public functions::test::CastBaseTest {
     // run try cast and get the result vector
     auto result =
         evaluate(castFunction + "(c0 as " + typeString + ")", rowVector);
-    auto expected = makeNullableFlatVector<TTo>(expectedResult);
+    auto expected = makeNullableFlatVector<TTo>(expectedResult, toType);
     assertEqualVectors(expected, result);
   }
 
@@ -178,14 +180,14 @@ class CastExprTest : public functions::test::CastBaseTest {
     testComplexCast(
         "c0",
         input,
-        makeShortDecimalFlatVector(
+        makeFlatVector<int64_t>(
             {-300, -200, -100, 0, 5'500, 6'900, 7'200}, DECIMAL(6, 2)));
 
     // integer to long decimal
     testComplexCast(
         "c0",
         input,
-        makeLongDecimalFlatVector(
+        makeFlatVector<int128_t>(
             {-30'000'000'000,
              -20'000'000'000,
              -10'000'000'000,
@@ -201,7 +203,7 @@ class CastExprTest : public functions::test::CastBaseTest {
         testComplexCast(
             "c0",
             makeFlatVector<T>(std::vector<T>{std::numeric_limits<T>::min()}),
-            makeShortDecimalFlatVector({0}, DECIMAL(3, 1))),
+            makeFlatVector(std::vector<int64_t>{0}, DECIMAL(3, 1))),
         fmt::format(
             "Cannot cast {} '{}' to DECIMAL(3,1)",
             CppToType<T>::name,
@@ -210,14 +212,14 @@ class CastExprTest : public functions::test::CastBaseTest {
         testComplexCast(
             "c0",
             makeFlatVector<T>(std::vector<T>{-100}),
-            makeShortDecimalFlatVector({0}, DECIMAL(17, 16))),
+            makeFlatVector(std::vector<int64_t>{0}, DECIMAL(17, 16))),
         fmt::format(
             "Cannot cast {} '-100' to DECIMAL(17,16)", CppToType<T>::name));
     VELOX_ASSERT_THROW(
         testComplexCast(
             "c0",
             makeFlatVector<T>(std::vector<T>{100}),
-            makeShortDecimalFlatVector({0}, DECIMAL(17, 16))),
+            makeFlatVector(std::vector<int64_t>{0}, DECIMAL(17, 16))),
         fmt::format(
             "Cannot cast {} '100' to DECIMAL(17,16)", CppToType<T>::name));
   }
@@ -307,12 +309,12 @@ TEST_F(CastExprTest, timestampToString) {
 }
 
 TEST_F(CastExprTest, dateToTimestamp) {
-  testCast<Date, Timestamp>(
+  testCast<int32_t, Timestamp>(
       "timestamp",
       {
-          Date(0),
-          Date(10957),
-          Date(14557),
+          0,
+          10957,
+          14557,
           std::nullopt,
       },
       {
@@ -320,24 +322,50 @@ TEST_F(CastExprTest, dateToTimestamp) {
           Timestamp(946684800, 0),
           Timestamp(1257724800, 0),
           std::nullopt,
-      });
+      },
+      false,
+      false,
+      DATE(),
+      TIMESTAMP());
 }
 
 TEST_F(CastExprTest, timestampToDate) {
-  testCast<Timestamp, Date>(
+  setTimezone("");
+  std::vector<std::optional<Timestamp>> inputTimestamps = {
+      Timestamp(0, 0),
+      Timestamp(946684800, 0),
+      Timestamp(1257724800, 0),
+      std::nullopt,
+  };
+
+  testCast<Timestamp, int32_t>(
       "date",
+      inputTimestamps,
       {
-          Timestamp(0, 0),
-          Timestamp(946684800, 0),
-          Timestamp(1257724800, 0),
+          0,
+          10957,
+          14557,
           std::nullopt,
       },
+      false,
+      false,
+      TIMESTAMP(),
+      DATE());
+
+  setTimezone("America/Los_Angeles");
+  testCast<Timestamp, int32_t>(
+      "date",
+      inputTimestamps,
       {
-          Date(0),
-          Date(10957),
-          Date(14557),
+          -1,
+          10956,
+          14556,
           std::nullopt,
-      });
+      },
+      false,
+      false,
+      TIMESTAMP(),
+      DATE());
 }
 
 TEST_F(CastExprTest, timestampInvalid) {
@@ -401,33 +429,40 @@ TEST_F(CastExprTest, date) {
       "1920-01-02",
       std::nullopt,
   };
-  std::vector<std::optional<Date>> result{
-      Date(0),
-      Date(18262),
-      Date(60577),
-      Date(-5),
-      Date(-57604),
-      Date(-18262),
+  std::vector<std::optional<int32_t>> result{
+      0,
+      18262,
+      60577,
+      -5,
+      -57604,
+      -18262,
       std::nullopt,
   };
 
-  testCast<std::string, Date>("date", input, result);
+  testCast<std::string, int32_t>(
+      "date", input, result, false, false, VARCHAR(), DATE());
 
   setCastIntByTruncate(true);
-  testCast<std::string, Date>("date", input, result);
+  testCast<std::string, int32_t>(
+      "date", input, result, false, false, VARCHAR(), DATE());
 }
 
 TEST_F(CastExprTest, invalidDate) {
-  testCast<int8_t, Date>("date", {12}, {Date(0)}, true);
-  testCast<int16_t, Date>("date", {1234}, {Date(0)}, true);
-  testCast<int32_t, Date>("date", {1234}, {Date(0)}, true);
-  testCast<int64_t, Date>("date", {1234}, {Date(0)}, true);
+  testCast<int8_t, int32_t>("date", {12}, {0}, true, false, TINYINT(), DATE());
+  testCast<int16_t, int32_t>(
+      "date", {1234}, {0}, true, false, SMALLINT(), DATE());
+  testCast<int32_t, int32_t>(
+      "date", {1234}, {0}, true, false, INTEGER(), DATE());
+  testCast<int64_t, int32_t>(
+      "date", {1234}, {0}, true, false, BIGINT(), DATE());
 
-  testCast<float, Date>("date", {12.99}, {Date(0)}, true);
-  testCast<double, Date>("date", {12.99}, {Date(0)}, true);
+  testCast<float, int32_t>("date", {12.99}, {0}, true, false, REAL(), DATE());
+  testCast<double, int32_t>(
+      "date", {12.99}, {0}, true, false, DOUBLE(), DATE());
 
   // Parsing an ill-formated date.
-  testCast<std::string, Date>("date", {"2012-Oct-23"}, {Date(0)}, true);
+  testCast<std::string, int32_t>(
+      "date", {"2012-Oct-23"}, {0}, true, false, VARCHAR(), DATE());
 }
 
 TEST_F(CastExprTest, truncateVsRound) {
@@ -807,7 +842,7 @@ TEST_F(CastExprTest, toString) {
 
 TEST_F(CastExprTest, decimalToDouble) {
   // short to short, scale up.
-  auto shortFlat = makeNullableShortDecimalFlatVector(
+  auto shortFlat = makeNullableFlatVector<int64_t>(
       {-999999999999999999, -3, 0, 55, 999999999999999999, std::nullopt},
       DECIMAL(18, 18));
   testComplexCast(
@@ -820,7 +855,7 @@ TEST_F(CastExprTest, decimalToDouble) {
            0.000000000000000055,
            0.999999999999999999,
            std::nullopt}));
-  auto longFlat = makeNullableLongDecimalFlatVector(
+  auto longFlat = makeNullableFlatVector<int128_t>(
       {DecimalUtil::kLongDecimalMin,
        0,
        DecimalUtil::kLongDecimalMax,
@@ -837,39 +872,39 @@ TEST_F(CastExprTest, decimalToDouble) {
 TEST_F(CastExprTest, decimalToDecimal) {
   // short to short, scale up.
   auto shortFlat =
-      makeShortDecimalFlatVector({-3, -2, -1, 0, 55, 69, 72}, DECIMAL(2, 2));
+      makeFlatVector<int64_t>({-3, -2, -1, 0, 55, 69, 72}, DECIMAL(2, 2));
   testComplexCast(
       "c0",
       shortFlat,
-      makeShortDecimalFlatVector(
+      makeFlatVector<int64_t>(
           {-300, -200, -100, 0, 5'500, 6'900, 7'200}, DECIMAL(4, 4)));
 
   // short to short, scale down.
   testComplexCast(
       "c0",
       shortFlat,
-      makeShortDecimalFlatVector({0, 0, 0, 0, 6, 7, 7}, DECIMAL(4, 1)));
+      makeFlatVector<int64_t>({0, 0, 0, 0, 6, 7, 7}, DECIMAL(4, 1)));
 
   // long to short, scale up.
   auto longFlat =
-      makeLongDecimalFlatVector({-201, -109, 0, 105, 208}, DECIMAL(20, 2));
+      makeFlatVector<int128_t>({-201, -109, 0, 105, 208}, DECIMAL(20, 2));
   testComplexCast(
       "c0",
       longFlat,
-      makeShortDecimalFlatVector(
+      makeFlatVector<int64_t>(
           {-201'000, -109'000, 0, 105'000, 208'000}, DECIMAL(10, 5)));
 
   // long to short, scale down.
   testComplexCast(
       "c0",
       longFlat,
-      makeShortDecimalFlatVector({-20, -11, 0, 11, 21}, DECIMAL(10, 1)));
+      makeFlatVector<int64_t>({-20, -11, 0, 11, 21}, DECIMAL(10, 1)));
 
   // long to long, scale up.
   testComplexCast(
       "c0",
       longFlat,
-      makeLongDecimalFlatVector(
+      makeFlatVector<int128_t>(
           {-20'100'000'000, -10'900'000'000, 0, 10'500'000'000, 20'800'000'000},
           DECIMAL(20, 10)));
 
@@ -877,13 +912,13 @@ TEST_F(CastExprTest, decimalToDecimal) {
   testComplexCast(
       "c0",
       longFlat,
-      makeLongDecimalFlatVector({-20, -11, 0, 11, 21}, DECIMAL(20, 1)));
+      makeFlatVector<int128_t>({-20, -11, 0, 11, 21}, DECIMAL(20, 1)));
 
   // short to long, scale up.
   testComplexCast(
       "c0",
       shortFlat,
-      makeLongDecimalFlatVector(
+      makeFlatVector<int128_t>(
           {-3'000'000'000,
            -2'000'000'000,
            -1'000'000'000,
@@ -896,14 +931,13 @@ TEST_F(CastExprTest, decimalToDecimal) {
   // short to long, scale down.
   testComplexCast(
       "c0",
-      makeShortDecimalFlatVector(
-          {-20'500, -190, 12'345, 19'999}, DECIMAL(6, 4)),
-      makeLongDecimalFlatVector({-21, 0, 12, 20}, DECIMAL(20, 1)));
+      makeFlatVector<int64_t>({-20'500, -190, 12'345, 19'999}, DECIMAL(6, 4)),
+      makeFlatVector<int128_t>({-21, 0, 12, 20}, DECIMAL(20, 1)));
 
   // NULLs and overflow.
-  longFlat = makeNullableLongDecimalFlatVector(
+  longFlat = makeNullableFlatVector<int128_t>(
       {-20'000, -1'000'000, 10'000, std::nullopt}, DECIMAL(20, 3));
-  auto expectedShort = makeNullableShortDecimalFlatVector(
+  auto expectedShort = makeNullableFlatVector<int64_t>(
       {-200'000, std::nullopt, 100'000, std::nullopt}, DECIMAL(6, 4));
 
   // Throws exception if CAST fails.
@@ -917,7 +951,7 @@ TEST_F(CastExprTest, decimalToDecimal) {
   // long to short, big numbers.
   testComplexCast(
       "c0",
-      makeNullableLongDecimalFlatVector(
+      makeNullableFlatVector<int128_t>(
           {HugeInt::build(-2, 200),
            HugeInt::build(-1, 300),
            HugeInt::build(0, 400),
@@ -925,7 +959,7 @@ TEST_F(CastExprTest, decimalToDecimal) {
            HugeInt::build(10, 100),
            std::nullopt},
           DECIMAL(23, 8)),
-      makeNullableShortDecimalFlatVector(
+      makeNullableFlatVector<int64_t>(
           {-368934881474,
            -184467440737,
            0,
@@ -939,16 +973,16 @@ TEST_F(CastExprTest, decimalToDecimal) {
   VELOX_ASSERT_THROW(
       testComplexCast(
           "c0",
-          makeNullableLongDecimalFlatVector(
+          makeNullableFlatVector<int128_t>(
               {DecimalUtil::kLongDecimalMax}, DECIMAL(38, 0)),
-          makeNullableLongDecimalFlatVector({0}, DECIMAL(38, 1))),
+          makeNullableFlatVector<int128_t>({0}, DECIMAL(38, 1))),
       "Cannot cast DECIMAL '99999999999999999999999999999999999999' to DECIMAL(38,1)");
   VELOX_ASSERT_THROW(
       testComplexCast(
           "c0",
-          makeNullableLongDecimalFlatVector(
+          makeNullableFlatVector<int128_t>(
               {DecimalUtil::kLongDecimalMin}, DECIMAL(38, 0)),
-          makeNullableLongDecimalFlatVector({0}, DECIMAL(38, 1))),
+          makeNullableFlatVector<int128_t>({0}, DECIMAL(38, 1))),
       "Cannot cast DECIMAL '-99999999999999999999999999999999999999' to DECIMAL(38,1)");
 }
 

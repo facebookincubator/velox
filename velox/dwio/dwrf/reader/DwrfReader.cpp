@@ -407,7 +407,7 @@ void DwrfRowReader::startNextStripe() {
   auto dataType = getReader().getSchemaWithId();
   FlatMapContext flatMapContext;
   flatMapContext.keySelectionCallback = options_.getKeySelectionCallback();
-  AllocationPool pool(&getReader().getMemoryPool());
+  memory::AllocationPool pool(&getReader().getMemoryPool());
   StreamLabels streamLabels(pool);
 
   if (scanSpec) {
@@ -417,7 +417,8 @@ void DwrfRowReader::startNextStripe() {
         stripeStreams,
         streamLabels,
         scanSpec,
-        flatMapContext);
+        flatMapContext,
+        true); // isRoot
     selectiveColumnReader_->setIsTopLevel();
   } else {
     columnReader_ = ColumnReader::build(
@@ -479,9 +480,6 @@ std::optional<size_t> DwrfRowReader::estimatedRowSizeHelper(
     }
     case TypeKind::DOUBLE: {
       return valueCount * sizeof(double);
-    }
-    case TypeKind::DATE: {
-      return valueCount * sizeof(uint32_t);
     }
     case TypeKind::VARCHAR: {
       auto stringStats =
@@ -626,7 +624,6 @@ uint64_t maxStreamsForType(const TypeWrapper& type) {
       case TypeKind::REAL:
       case TypeKind::DOUBLE:
       case TypeKind::BOOLEAN:
-      case TypeKind::DATE:
       case TypeKind::ARRAY:
       case TypeKind::MAP:
         return 2;

@@ -19,10 +19,9 @@
 #include "velox/common/base/Fs.h"
 #include "velox/connectors/hive/HiveConfig.h"
 #include "velox/connectors/hive/HiveConnector.h"
+#include "velox/connectors/hive/HivePartitionFunction.h"
 #include "velox/core/ITypedExpr.h"
 #include "velox/dwio/dwrf/writer/Writer.h"
-#include "velox/exec/HashPartitionFunction.h"
-#include "velox/exec/Operator.h"
 
 #include <boost/lexical_cast.hpp>
 #include <boost/uuid/uuid_generators.hpp>
@@ -97,8 +96,8 @@ std::unique_ptr<core::PartitionFunction> createBucketFunction(
     }
     bucketedByChannels.push_back(inputChannel);
   }
-  return std::make_unique<exec::HashPartitionFunction>(
-      bucketProperty.bucketCount(), inputType, bucketedByChannels);
+  return std::make_unique<HivePartitionFunction>(
+      bucketProperty.bucketCount(), bucketedByChannels);
 }
 
 std::string computeBucketedFileName(
@@ -358,11 +357,20 @@ void HiveDataSink::computePartitionAndBucketIds(const RowVectorPtr& input) {
   }
 }
 
+int64_t HiveDataSink::getCompletedBytes() const {
+  int64_t completedBytes{0};
+  for (const auto& ioStats : ioStats_) {
+    completedBytes += ioStats->rawBytesWritten();
+  }
+  return completedBytes;
+}
+
 std::vector<std::string> HiveDataSink::finish() const {
   std::vector<std::string> partitionUpdates;
   partitionUpdates.reserve(writerInfo_.size());
 
-  for (const auto& info : writerInfo_) {
+  for (int i = 0; i < writerInfo_.size(); ++i) {
+    const auto& info = writerInfo_.at(i);
     VELOX_CHECK_NOT_NULL(info);
     // clang-format off
       auto partitionUpdateJson = folly::toJson(
@@ -377,12 +385,12 @@ std::vector<std::string> HiveDataSink::finish() const {
             folly::dynamic::object
               ("writeFileName", info->writerParameters.writeFileName())
               ("targetFileName", info->writerParameters.targetFileName())
-              ("fileSize", 0)))
+              ("fileSize", ioStats_.at(i)->rawBytesWritten())))
           ("rowCount", info->numWrittenRows)
-         // TODO(gaoge): track and send the fields when inMemoryDataSizeInBytes, onDiskDataSizeInBytes
+         // TODO(gaoge): track and send the fields when inMemoryDataSizeInBytes
          // and containsNumberedFileNames are needed at coordinator when file_renaming_enabled are turned on.
           ("inMemoryDataSizeInBytes", 0)
-          ("onDiskDataSizeInBytes", 0)
+          ("onDiskDataSizeInBytes", ioStats_.at(i)->rawBytesWritten())
           ("containsNumberedFileNames", true));
     // clang-format on
     partitionUpdates.push_back(partitionUpdateJson);
@@ -430,8 +438,14 @@ uint32_t HiveDataSink::appendWriter(const HiveWriterId& id) {
   dwio::common::WriterOptions options;
   options.schema = inputType_;
   options.memoryPool = connectorQueryCtx_->connectorMemoryPool();
+  ioStats_.emplace_back(std::make_shared<dwio::common::IoStatistics>());
   writers_.emplace_back(writerFactory->createWriter(
-      dwio::common::DataSink::create(writePath), options));
+      dwio::common::DataSink::create(
+          writePath,
+          connectorQueryCtx_->memoryPool(),
+          dwio::common::MetricsLog::voidLog(),
+          ioStats_.back().get()),
+      options));
   // Extends the buffer used for partition rows calculations.
   partitionSizes_.emplace_back(0);
   partitionRows_.emplace_back(nullptr);
@@ -503,11 +517,15 @@ std::pair<std::string, std::string> HiveDataSink::getWriterFileNames(
     targetFileName = computeBucketedFileName(
         connectorQueryCtx_->queryId(), bucketId.value());
   } else {
+    // targetFileName includes planNodeId and Uuid. As a result, different table
+    // writers run by the same task driver or the same table writer run in
+    // different task tries would have different targetFileNames.
     targetFileName = fmt::format(
-        "{}_{}_{}",
+        "{}_{}_{}_{}",
         connectorQueryCtx_->taskId(),
         connectorQueryCtx_->driverId(),
-        isCommitRequired() ? "0" : makeUuid());
+        connectorQueryCtx_->planNodeId(),
+        makeUuid());
   }
   const std::string writeFileName = isCommitRequired()
       ? fmt::format(".tmp.velox.{}_{}", targetFileName, makeUuid())

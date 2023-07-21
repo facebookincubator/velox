@@ -18,8 +18,8 @@
 #include "velox/common/base/Exceptions.h"
 #include "velox/common/memory/HashStringAllocator.h"
 #include "velox/exec/Aggregate.h"
+#include "velox/exec/Strings.h"
 #include "velox/functions/prestosql/aggregates/AggregateNames.h"
-#include "velox/functions/prestosql/aggregates/Strings.h"
 #include "velox/vector/FlatVector.h"
 
 namespace facebook::velox::aggregate::prestosql {
@@ -91,14 +91,6 @@ struct StringViewAccumulator {
       vector_size_t index,
       HashStringAllocator* allocator) {
     auto value = decoded.valueAt<StringView>(index);
-    if (!value.isInline()) {
-      auto it = base.values.find(value);
-      if (it != base.values.end()) {
-        value = it->first;
-      } else {
-        value = strings.append(value, *allocator);
-      }
-    }
     base.values[store(value, allocator)]++;
   }
 
@@ -377,7 +369,9 @@ exec::AggregateRegistrationResult registerHistogram(const std::string& name) {
       [name](
           core::AggregationNode::Step step,
           const std::vector<TypePtr>& argTypes,
-          const TypePtr& resultType) -> std::unique_ptr<exec::Aggregate> {
+          const TypePtr& resultType,
+          const core::QueryConfig& /*config*/)
+          -> std::unique_ptr<exec::Aggregate> {
         VELOX_CHECK_EQ(
             argTypes.size(),
             1,
@@ -403,8 +397,6 @@ exec::AggregateRegistrationResult registerHistogram(const std::string& name) {
             return std::make_unique<HistogramAggregate<double>>(resultType);
           case TypeKind::TIMESTAMP:
             return std::make_unique<HistogramAggregate<Timestamp>>(resultType);
-          case TypeKind::DATE:
-            return std::make_unique<HistogramAggregate<Date>>(resultType);
           case TypeKind::VARCHAR:
             return std::make_unique<HistogramAggregate<StringView>>(resultType);
           default:

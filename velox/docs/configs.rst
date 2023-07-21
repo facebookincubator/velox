@@ -46,7 +46,9 @@ Generic Configuration
      - false
      - If true, timezone-less timestamp conversions (e.g. string to timestamp, when the string does not specify a timezone)
        will be adjusted to the user provided `session_timezone` (if any). For instance: if this option is true and user
-       supplied "America/Los_Angeles", then "1970-01-01" will be converted to -28800 instead of 0.
+       supplied "America/Los_Angeles", then "1970-01-01" will be converted to -28800 instead of 0. Similarly, timestamp
+       to date conversions will adhere to user 'session_timezone', e.g: Timestamp(0) to Date will be -1 (number of days
+       since epoch) for "America/Los_Angeles".
    * - track_operator_cpu_usage
      - bool
      - true
@@ -208,6 +210,25 @@ Spilling
      - 0
      - Percentage of aggregation or join input batches that will be forced to spill for testing. 0 means no extra spilling.
 
+Table Writer
+------------
+.. list-table::
+   :widths: 20 10 10 70
+   :header-rows: 1
+
+   * - Property Name
+     - Type
+     - Default Value
+     - Description
+   * - task_writer_count
+     - integer
+     - 1
+     - The number of parallel table writer threads per task.
+   * - task_partitioned_writer_count
+     - integer
+     - task_writer_count
+     - The number of parallel table writer threads per task for bucketed table writes. If not set, use 'task_writer_count' as default.
+
 Codegen Configuration
 ---------------------
 .. list-table::
@@ -320,6 +341,29 @@ Hive Connector
      - string
      - velox-session
      - Session name associated with the IAM role.
+
+``Google Cloud Storage Configuration``
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+.. list-table::
+   :widths: 30 10 10 60
+   :header-rows: 1
+
+   * - Property Name
+     - Type
+     - Default Value
+     - Description
+   * - hive.gcs.endpoint
+     - string
+     -
+     - The GCS storage endpoint server.
+   * - hive.gcs.scheme
+     - string
+     -
+     - The GCS storage scheme, https for default credentials.
+   * - hive.gcs.credentials
+     - string
+     -
+     - The GCS service account configuration as json string.
 
 Spark-specific Configuration
 ----------------------------

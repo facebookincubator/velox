@@ -42,15 +42,15 @@ void ScanState::updateRawState() {
 }
 
 SelectiveColumnReader::SelectiveColumnReader(
-    std::shared_ptr<const dwio::common::TypeWithId> requestedType,
+    const TypePtr& requestedType,
     dwio::common::FormatParams& params,
     velox::common::ScanSpec& scanSpec,
-    const TypePtr& type)
+    std::shared_ptr<const dwio::common::TypeWithId> type)
     : memoryPool_(params.pool()),
-      nodeType_(requestedType),
-      formatData_(params.toFormatData(requestedType, scanSpec)),
+      fileType_(type),
+      formatData_(params.toFormatData(type, scanSpec)),
       scanSpec_(&scanSpec),
-      type_{type} {}
+      requestedType_(requestedType) {}
 
 void SelectiveColumnReader::filterRowGroups(
     uint64_t rowGroupSize,
@@ -179,9 +179,6 @@ void SelectiveColumnReader::getIntValues(
             VELOX_FAIL("Unsupported value size: {}", valueSize_);
         }
         break;
-      case TypeKind::DATE:
-        getFlatValues<Date, Date>(rows, result, requestedType);
-        break;
       case TypeKind::HUGEINT:
         getFlatValues<int128_t, int128_t>(rows, result, requestedType);
         break;
@@ -290,11 +287,11 @@ void SelectiveColumnReader::compactScalarValues<bool, bool>(
 char* SelectiveColumnReader::copyStringValue(folly::StringPiece value) {
   uint64_t size = value.size();
   if (stringBuffers_.empty() || rawStringUsed_ + size > rawStringSize_) {
-    if (!stringBuffers_.empty()) {
-      stringBuffers_.back()->setSize(rawStringUsed_);
-    }
     auto bytes = std::max(size, kStringBufferSize);
     BufferPtr buffer = AlignedBuffer::allocate<char>(bytes, &memoryPool_);
+    // Use the prefered size instead of the requested one to improve memory
+    // efficiency.
+    buffer->setSize(buffer->capacity());
     stringBuffers_.push_back(buffer);
     rawStringBuffer_ = buffer->asMutable<char>();
     rawStringUsed_ = 0;

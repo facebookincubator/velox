@@ -32,8 +32,10 @@ static void scatter(RowSet rows, VectorPtr* result) {
   for (int32_t i = 0; i < rows.size(); ++i) {
     rawIndices[rows[i]] = i;
   }
-  *result =
-      BaseVector::wrapInDictionary(BufferPtr(nullptr), indices, end, *result);
+  // Disable dictionary values caching in expression eval so that we don't need
+  // to reallocate the result for every batch.
+  result->get()->disableMemo();
+  *result = BaseVector::wrapInDictionary(nullptr, indices, end, *result);
 }
 } // namespace
 
@@ -74,7 +76,7 @@ void ColumnLoader::loadInternal(
   structReader_->advanceFieldReader(fieldReader_, offset);
   fieldReader_->scanSpec()->setValueHook(hook);
   fieldReader_->read(offset, effectiveRows, incomingNulls);
-  if (fieldReader_->type()->kind() == TypeKind::ROW) {
+  if (fieldReader_->fileType().type->kind() == TypeKind::ROW) {
     // 'fieldReader_' may itself produce LazyVectors. For this it must have its
     // result row numbers set.
     static_cast<SelectiveStructColumnReaderBase*>(fieldReader_)

@@ -81,7 +81,14 @@ void registerFunctions(const std::string& prefix) {
   // Register string functions.
   registerFunction<sparksql::ChrFunction, Varchar, int64_t>({prefix + "chr"});
   registerFunction<AsciiFunction, int32_t, Varchar>({prefix + "ascii"});
-
+  registerFunction<sparksql::LPadFunction, Varchar, Varchar, int32_t, Varchar>(
+      {prefix + "lpad"});
+  registerFunction<sparksql::RPadFunction, Varchar, Varchar, int32_t, Varchar>(
+      {prefix + "rpad"});
+  registerFunction<sparksql::LPadFunction, Varchar, Varchar, int32_t>(
+      {prefix + "lpad"});
+  registerFunction<sparksql::RPadFunction, Varchar, Varchar, int32_t>(
+      {prefix + "rpad"});
   registerFunction<sparksql::SubstrFunction, Varchar, Varchar, int32_t>(
       {prefix + "substring"});
   registerFunction<
@@ -104,6 +111,10 @@ void registerFunctions(const std::string& prefix) {
       Varbinary,
       int32_t,
       int32_t>({prefix + "overlay"});
+
+  registerFunction<sparksql::LeftFunction, Varchar, Varchar, int32_t>(
+      {prefix + "left"});
+
   exec::registerStatefulVectorFunction(
       prefix + "instr", instrSignatures(), makeInstr);
   exec::registerStatefulVectorFunction(
@@ -165,6 +176,9 @@ void registerFunctions(const std::string& prefix) {
   registerFunction<RTrimSpaceFunction, Varchar, Varchar>({prefix + "rtrim"});
   registerFunction<RTrimFunction, Varchar, Varchar, Varchar>(
       {prefix + "rtrim"});
+
+  registerFunction<TranslateFunction, Varchar, Varchar, Varchar, Varchar>(
+      {prefix + "translate"});
 
   // Register array sort functions.
   exec::registerStatefulVectorFunction(

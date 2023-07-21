@@ -21,6 +21,8 @@ elseif(${VELOX_BUILD_TEST_UTILS})
   add_subdirectory(tests/utils)
 endif()
 
+include_directories(/opt/homebrew/opt/protobuf/include)
+
 add_library(
   velox_dwio_common
   BitConcatenation.cpp
@@ -41,6 +43,7 @@ add_library(
   MetadataFilter.cpp
   Options.cpp
   Range.cpp
+  Reader.cpp
   ReaderFactory.cpp
   ScanSpec.cpp
   ColumnLoader.cpp

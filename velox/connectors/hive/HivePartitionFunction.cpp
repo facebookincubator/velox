@@ -173,16 +173,6 @@ void hashTyped<TypeKind::TIMESTAMP>(
   abstractHashTyped<Timestamp>(values, size, mix, hashTimestamp, hashes);
 }
 
-template <>
-void hashTyped<TypeKind::DATE>(
-    const DecodedVector& values,
-    vector_size_t size,
-    bool mix,
-    std::vector<uint32_t>& hashes) {
-  auto hashDate = [](const Date& value) { return value.days(); };
-  abstractHashTyped<Date>(values, size, mix, hashDate, hashes);
-}
-
 void hash(
     const DecodedVector& values,
     TypeKind typeKind,
@@ -229,7 +219,7 @@ HivePartitionFunction::HivePartitionFunction(
   }
 }
 
-void HivePartitionFunction::partition(
+std::optional<uint32_t> HivePartitionFunction::partition(
     const RowVector& input,
     std::vector<uint32_t>& partitions) {
   const auto numRows = input.size();
@@ -256,10 +246,20 @@ void HivePartitionFunction::partition(
 
   static const int32_t kInt32Max = std::numeric_limits<int32_t>::max();
 
-  for (auto i = 0; i < numRows; ++i) {
-    partitions[i] =
-        bucketToPartition_[((hashes_[i] & kInt32Max) % numBuckets_)];
+  if (bucketToPartition_.empty()) {
+    // NOTE: if bucket to partition mapping is empty, then we do identical
+    // mapping.
+    for (auto i = 0; i < numRows; ++i) {
+      partitions[i] = (hashes_[i] & kInt32Max) % numBuckets_;
+    }
+  } else {
+    for (auto i = 0; i < numRows; ++i) {
+      partitions[i] =
+          bucketToPartition_[((hashes_[i] & kInt32Max) % numBuckets_)];
+    }
   }
+
+  return std::nullopt;
 }
 
 void HivePartitionFunction::precompute(

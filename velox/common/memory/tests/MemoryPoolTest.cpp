@@ -120,13 +120,13 @@ class MemoryPoolTest : public testing::TestWithParam<TestParam> {
     SetUp();
   }
 
-  std::shared_ptr<IMemoryManager> getMemoryManager(int64_t quota) {
+  std::shared_ptr<MemoryManager> getMemoryManager(int64_t quota) {
     return std::make_shared<MemoryManager>(
-        IMemoryManager::Options{.capacity = quota});
+        MemoryManagerOptions{.capacity = quota});
   }
 
-  std::shared_ptr<IMemoryManager> getMemoryManager(
-      const IMemoryManager::Options& options) {
+  std::shared_ptr<MemoryManager> getMemoryManager(
+      const MemoryManagerOptions& options) {
     return std::make_shared<MemoryManager>(options);
   }
 
@@ -513,7 +513,7 @@ TEST_P(MemoryPoolTest, alignmentCheck) {
       MemoryAllocator::kMaxAlignment};
   for (const auto& alignment : alignments) {
     SCOPED_TRACE(fmt::format("alignment:{}", alignment));
-    IMemoryManager::Options options;
+    MemoryManagerOptions options;
     options.capacity = 8 * GB;
     options.alignment = alignment;
     auto manager =
@@ -550,7 +550,7 @@ TEST_P(MemoryPoolTest, MemoryCapExceptions) {
         ASSERT_EQ(error_code::kMemCapExceeded.c_str(), ex.errorCode());
         ASSERT_TRUE(ex.isRetriable());
         ASSERT_EQ(
-            "\nExceeded memory pool cap of 127.00MB with max 127.00MB when requesting 128.00MB, memory manager cap is 127.00MB\nMemoryCapExceptions usage 0B peak 0B\n\nFailed memory pool: static_quota: 0B\n",
+            "Exceeded memory pool cap of 127.00MB with max 127.00MB when requesting 128.00MB, memory manager cap is 127.00MB\nMemoryCapExceptions usage 0B peak 0B\n\nFailed memory pool: static_quota: 0B\n",
             ex.message());
       }
     }
@@ -570,7 +570,7 @@ TEST_P(MemoryPoolTest, MemoryCapExceptions) {
         ASSERT_EQ(error_code::kMemCapExceeded.c_str(), ex.errorCode());
         ASSERT_TRUE(ex.isRetriable());
         ASSERT_EQ(
-            "\nExceeded memory manager cap of 127.00MB when requesting 127.00MB, memory pool cap is 254.00MB\nMemoryCapExceptions usage 0B peak 128.00MB\n\nFailed memory pool: static_quota: 0B\n",
+            "Exceeded memory manager cap of 127.00MB when requesting 127.00MB, memory pool cap is 254.00MB\nMemoryCapExceptions usage 0B peak 128.00MB\n\nFailed memory pool: static_quota: 0B\n",
             ex.message());
       }
     }
@@ -1538,6 +1538,165 @@ TEST_P(MemoryPoolTest, contiguousAllocateExceedMemoryPoolLimit) {
   ASSERT_FALSE(allocation2.empty());
 }
 
+TEST_P(MemoryPoolTest, persistentContiguousGrowAllocateFailure) {
+  struct {
+    MachinePageCount numInitialPages;
+    MachinePageCount numGrowPages;
+    MemoryAllocator::InjectedFailure injectedFailure;
+    std::string expectedErrorMessage;
+    std::string debugString() const {
+      return fmt::format(
+          "numInitialPages:{}, numGrowPages:{}, injectedFailure:{}, expectedErrorMessage:{}",
+          numInitialPages,
+          numGrowPages,
+          injectedFailure,
+          expectedErrorMessage);
+    }
+  } testSettings[] = {// Cap failure injection.
+                      {10,
+                       100,
+                       MemoryAllocator::InjectedFailure::kCap,
+                       "growContiguous failed with 100 pages from Memory Pool"},
+                      {100,
+                       10,
+                       MemoryAllocator::InjectedFailure::kCap,
+                       "growContiguous failed with 10 pages from Memory Pool"},
+                      // Mmap failure injection.
+                      {10,
+                       100,
+                       MemoryAllocator::InjectedFailure::kMmap,
+                       "growContiguous failed with 100 pages from Memory Pool"},
+                      {100,
+                       10,
+                       MemoryAllocator::InjectedFailure::kMmap,
+                       "growContiguous failed with 10 pages from Memory Pool"},
+                      // Madvise failure injection.
+                      {10,
+                       100,
+                       MemoryAllocator::InjectedFailure::kMadvise,
+                       "growContiguous failed with 100 pages from Memory Pool"},
+                      {100,
+                       10,
+                       MemoryAllocator::InjectedFailure::kMadvise,
+                       "growContiguous failed with 10 pages from Memory Pool"}};
+  for (const auto& testData : testSettings) {
+    SCOPED_TRACE(testData.debugString());
+    if (!useMmap_) {
+      // No failure injections supported for contiguous allocation of
+      // MallocAllocator.
+      continue;
+    }
+    auto manager = getMemoryManager(8 * GB);
+    auto root = manager->addRootPool();
+    auto pool = root->addLeafChild(
+        "persistentContiguousGrowAllocateFailure", isLeafThreadSafe_);
+    ContiguousAllocation allocation;
+    pool->allocateContiguous(
+        testData.numInitialPages,
+        allocation,
+        testData.numGrowPages + testData.numInitialPages);
+    allocator_->testingSetFailureInjection(testData.injectedFailure, true);
+    ASSERT_EQ(allocation.numPages(), testData.numInitialPages);
+    ASSERT_EQ(
+        allocation.maxSize(),
+        AllocationTraits::pageBytes(
+            testData.numInitialPages + testData.numGrowPages));
+    VELOX_ASSERT_THROW(
+        pool->growContiguous(testData.numGrowPages, allocation),
+        testData.expectedErrorMessage);
+    ASSERT_EQ(allocation.numPages(), testData.numInitialPages);
+    allocator_->testingClearFailureInjection();
+  }
+}
+
+TEST_P(MemoryPoolTest, transientContiguousGrowAllocateFailure) {
+  struct {
+    MachinePageCount numInitialPages;
+    MachinePageCount numGrowPages;
+    MemoryAllocator::InjectedFailure injectedFailure;
+    std::string debugString() const {
+      return fmt::format(
+          "numInitialPages:{}, numGrowPages:{}, injectedFailure:{}",
+          numInitialPages,
+          numGrowPages,
+          injectedFailure);
+    }
+  } testSettings[] = {// Cap failure injection.
+                      {10, 100, MemoryAllocator::InjectedFailure::kCap},
+                      {100, 10, MemoryAllocator::InjectedFailure::kCap},
+                      // Mmap failure injection.
+                      {10, 100, MemoryAllocator::InjectedFailure::kMmap},
+                      {100, 10, MemoryAllocator::InjectedFailure::kMmap},
+                      // Madvise failure injection.
+                      {10, 100, MemoryAllocator::InjectedFailure::kMadvise},
+                      {100, 10, MemoryAllocator::InjectedFailure::kMadvise}};
+  for (const auto& testData : testSettings) {
+    SCOPED_TRACE(fmt::format(
+        "{}, useCache:{} , useMmap:{}",
+        testData.debugString(),
+        useCache_,
+        useMmap_));
+    if (!useMmap_) {
+      // No failure injections supported for contiguous allocation of
+      // MallocAllocator.
+      continue;
+    }
+    auto manager = getMemoryManager(8 * GB);
+    auto root = manager->addRootPool();
+    auto pool = root->addLeafChild(
+        "transientContiguousGrowAllocateFailure", isLeafThreadSafe_);
+    ContiguousAllocation allocation;
+    pool->allocateContiguous(
+        testData.numInitialPages,
+        allocation,
+        testData.numGrowPages + testData.numInitialPages);
+    allocator_->testingSetFailureInjection(testData.injectedFailure, false);
+    ASSERT_EQ(allocation.numPages(), testData.numInitialPages);
+    ASSERT_EQ(
+        allocation.maxSize(),
+        AllocationTraits::pageBytes(
+            testData.numInitialPages + testData.numGrowPages));
+    // NOTE: AsyncDataCache will retry on the transient memory allocation
+    // failures from the underlying allocator.
+    if (useCache_) {
+      pool->growContiguous(testData.numGrowPages, allocation);
+      ASSERT_EQ(
+          allocation.numPages(),
+          testData.numInitialPages + testData.numGrowPages);
+      ASSERT_EQ(
+          allocation.maxSize(),
+          AllocationTraits::pageBytes(
+              testData.numInitialPages + testData.numGrowPages));
+    } else {
+      ASSERT_THROW(
+          pool->growContiguous(testData.numInitialPages, allocation),
+          VeloxRuntimeError);
+      ASSERT_EQ(allocation.numPages(), testData.numInitialPages);
+    }
+    allocator_->testingClearFailureInjection();
+  }
+}
+
+TEST_P(MemoryPoolTest, contiguousAllocateGrowExceedMemoryPoolLimit) {
+  const MachinePageCount kMaxNumPages = 1 << 10;
+  const auto kMemoryCapBytes = kMaxNumPages * AllocationTraits::kPageSize;
+  auto manager = getMemoryManager(1 << 30);
+  auto root = manager->addRootPool(
+      "contiguousAllocateGrowExceedMemoryPoolLimit", kMemoryCapBytes);
+  auto pool = root->addLeafChild(
+      "contiguousAllocateGrowExceedMemoryPoolLimit", isLeafThreadSafe_);
+
+  ContiguousAllocation allocation;
+  pool->allocateContiguous(kMaxNumPages / 2, allocation, kMaxNumPages * 2);
+  ASSERT_EQ(allocation.numPages(), kMaxNumPages / 2);
+  ASSERT_EQ(
+      allocation.maxSize(), AllocationTraits::pageBytes(kMaxNumPages * 2));
+  VELOX_ASSERT_THROW(
+      pool->growContiguous(kMaxNumPages, allocation),
+      "Exceeded memory pool cap");
+  ASSERT_EQ(allocation.numPages(), kMaxNumPages / 2);
+}
+
 TEST_P(MemoryPoolTest, badNonContiguousAllocation) {
   auto manager = getMemoryManager(8 * GB);
   auto pool = manager->addLeafPool("badNonContiguousAllocation");
@@ -2167,6 +2326,120 @@ TEST(MemoryPoolTest, debugMode) {
   EXPECT_EQ(allocRecords.size(), 0);
 }
 
+TEST(MemoryPoolTest, debugModeWithFilter) {
+  constexpr int64_t kMaxMemory = 10 * GB;
+  constexpr int64_t kNumIterations = 100;
+  const std::vector<int64_t> kAllocSizes = {128, 8 * KB, 2 * MB};
+  const std::vector<bool> debugEnabledSet{true, false};
+  for (const auto& debugEnabled : debugEnabledSet) {
+    MemoryManager manager{
+        {.capacity = kMaxMemory, .debugEnabled = debugEnabled}};
+
+    // leaf child created from MemoryPool, not match filter
+    MemoryPoolImpl::setDebugPoolNameRegex("NO-MATCH");
+    auto root0 = manager.addRootPool("root0");
+    auto pool0 = root0->addLeafChild("PartialAggregation.0.0");
+    auto* buffer0 = pool0->allocate(1 * KB);
+    EXPECT_TRUE(std::dynamic_pointer_cast<MemoryPoolImpl>(pool0)
+                    ->testingDebugAllocRecords()
+                    .empty());
+    pool0->free(buffer0, 1 * KB);
+
+    // leaf child created from MemoryPool, match filter
+    MemoryPoolImpl::setDebugPoolNameRegex(".*PartialAggregation.*");
+    auto root1 = manager.addRootPool("root1");
+    auto pool1 = root1->addLeafChild("PartialAggregation.0.1");
+    auto* buffer1 = pool1->allocate(1 * KB);
+    if (!debugEnabled) {
+      EXPECT_EQ(
+          std::dynamic_pointer_cast<MemoryPoolImpl>(pool1)
+              ->testingDebugAllocRecords()
+              .size(),
+          0);
+    } else {
+      EXPECT_EQ(
+          std::dynamic_pointer_cast<MemoryPoolImpl>(pool1)
+              ->testingDebugAllocRecords()
+              .size(),
+          1);
+    }
+    pool1->free(buffer1, 1 * KB);
+
+    // old pool should not be affected by updated filter
+    buffer0 = pool0->allocate(1 * KB);
+    EXPECT_TRUE(std::dynamic_pointer_cast<MemoryPoolImpl>(pool0)
+                    ->testingDebugAllocRecords()
+                    .empty());
+    pool0->free(buffer0, 1 * KB);
+
+    // leaf child created from MemoryPool, match filter
+    MemoryPoolImpl::setDebugPoolNameRegex(".*OrderBy.*");
+    auto root2 = manager.addRootPool("root2");
+    auto pool2 = root2->addLeafChild("OrderBy.0.0");
+    auto* buffer2 = pool2->allocate(1 * KB);
+    if (!debugEnabled) {
+      EXPECT_EQ(
+          std::dynamic_pointer_cast<MemoryPoolImpl>(pool2)
+              ->testingDebugAllocRecords()
+              .size(),
+          0);
+    } else {
+      EXPECT_EQ(
+          std::dynamic_pointer_cast<MemoryPoolImpl>(pool2)
+              ->testingDebugAllocRecords()
+              .size(),
+          1);
+    }
+    pool2->free(buffer2, 1 * KB);
+
+    // leaf child created from aggr MemoryPool, match filter
+    auto intPool = root2->addAggregateChild("AGG-Pool");
+    auto pool3 = intPool->addLeafChild("OrderBy.0.1");
+    auto* buffer3 = pool3->allocate(1 * KB);
+    if (!debugEnabled) {
+      EXPECT_EQ(
+          std::dynamic_pointer_cast<MemoryPoolImpl>(pool3)
+              ->testingDebugAllocRecords()
+              .size(),
+          0);
+    } else {
+      EXPECT_EQ(
+          std::dynamic_pointer_cast<MemoryPoolImpl>(pool3)
+              ->testingDebugAllocRecords()
+              .size(),
+          1);
+    }
+    pool3->free(buffer3, 1 * KB);
+
+    // leaf child created from MemoryManager, not match filter
+    auto pool4 = manager.addLeafPool("Arbitrator.0.0");
+    auto* buffer4 = pool4->allocate(1 * KB);
+    EXPECT_TRUE(std::dynamic_pointer_cast<MemoryPoolImpl>(pool4)
+                    ->testingDebugAllocRecords()
+                    .empty());
+    pool4->free(buffer4, 1 * KB);
+
+    // leaf child created from MemoryManager, match filter
+    MemoryPoolImpl::setDebugPoolNameRegex(".*Arbitrator.*");
+    auto pool5 = manager.addLeafPool("Arbitrator.0.1");
+    auto* buffer5 = pool5->allocate(1 * KB);
+    if (!debugEnabled) {
+      EXPECT_EQ(
+          std::dynamic_pointer_cast<MemoryPoolImpl>(pool5)
+              ->testingDebugAllocRecords()
+              .size(),
+          0);
+    } else {
+      EXPECT_EQ(
+          std::dynamic_pointer_cast<MemoryPoolImpl>(pool5)
+              ->testingDebugAllocRecords()
+              .size(),
+          1);
+    }
+    pool5->free(buffer5, 1 * KB);
+  }
+}
+
 TEST_P(MemoryPoolTest, shrinkAndGrowAPIs) {
   MemoryManager manager;
   std::vector<uint64_t> capacities = {kMaxMemory, 128 * MB};
@@ -2447,13 +2720,13 @@ TEST_P(MemoryPoolTest, usageTrackerOptionTest) {
   ASSERT_EQ(
       child->toString(),
       fmt::format(
-          "Memory Pool[usageTrackerOptionTest LEAF {} track-usage {}]<unlimited max capacity unlimited capacity used 0B available 0B reservation [used 0B, reserved 0B, min 0B] counters [allocs 0, frees 0, reserves 0, releases 0, collisions 0])>",
+          "Memory Pool[usageTrackerOptionTest LEAF root[usageTrackerOptionTest] parent[usageTrackerOptionTest] {} track-usage {}]<unlimited max capacity unlimited capacity used 0B available 0B reservation [used 0B, reserved 0B, min 0B] counters [allocs 0, frees 0, reserves 0, releases 0, collisions 0])>",
           useMmap_ ? "MMAP" : "MALLOC",
           isLeafThreadSafe_ ? "thread-safe" : "non-thread-safe"));
   ASSERT_EQ(
       root->toString(),
       fmt::format(
-          "Memory Pool[usageTrackerOptionTest AGGREGATE {} track-usage thread-safe]<unlimited max capacity unlimited capacity used 0B available 0B reservation [used 0B, reserved 0B, min 0B] counters [allocs 0, frees 0, reserves 0, releases 0, collisions 0])>",
+          "Memory Pool[usageTrackerOptionTest AGGREGATE root[usageTrackerOptionTest] parent[null] {} track-usage thread-safe]<unlimited max capacity unlimited capacity used 0B available 0B reservation [used 0B, reserved 0B, min 0B] counters [allocs 0, frees 0, reserves 0, releases 0, collisions 0])>",
           useMmap_ ? "MMAP" : "MALLOC"));
 }
 
@@ -2474,7 +2747,7 @@ TEST_P(MemoryPoolTest, statsAndToString) {
   ASSERT_EQ(
       leafChild1->toString(),
       fmt::format(
-          "Memory Pool[leaf-child1 LEAF {} track-usage {}]<unlimited max capacity capacity 4.00GB used 1.00KB available 1023.00KB reservation [used 1.00KB, reserved 1.00MB, min 0B] counters [allocs 1, frees 0, reserves 0, releases 0, collisions 0])>",
+          "Memory Pool[leaf-child1 LEAF root[stats] parent[stats] {} track-usage {}]<unlimited max capacity capacity 4.00GB used 1.00KB available 1023.00KB reservation [used 1.00KB, reserved 1.00MB, min 0B] counters [allocs 1, frees 0, reserves 0, releases 0, collisions 0])>",
           useMmap_ ? "MMAP" : "MALLOC",
           isLeafThreadSafe_ ? "thread-safe" : "non-thread-safe"));
   ASSERT_EQ(
@@ -2483,7 +2756,7 @@ TEST_P(MemoryPoolTest, statsAndToString) {
   ASSERT_EQ(
       leafChild1->toString(),
       fmt::format(
-          "Memory Pool[leaf-child1 LEAF {} track-usage {}]<unlimited max capacity capacity 4.00GB used 1.00KB available 1023.00KB reservation [used 1.00KB, reserved 1.00MB, min 0B] counters [allocs 1, frees 0, reserves 0, releases 0, collisions 0])>",
+          "Memory Pool[leaf-child1 LEAF root[stats] parent[stats] {} track-usage {}]<unlimited max capacity capacity 4.00GB used 1.00KB available 1023.00KB reservation [used 1.00KB, reserved 1.00MB, min 0B] counters [allocs 1, frees 0, reserves 0, releases 0, collisions 0])>",
           useMmap_ ? "MMAP" : "MALLOC",
           isLeafThreadSafe_ ? "thread-safe" : "non-thread-safe"));
   ASSERT_EQ(

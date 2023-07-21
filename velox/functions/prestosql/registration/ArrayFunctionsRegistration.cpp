@@ -17,6 +17,7 @@
 #include "velox/functions/Registerer.h"
 #include "velox/functions/prestosql/ArrayConstructor.h"
 #include "velox/functions/prestosql/ArrayFunctions.h"
+#include "velox/functions/prestosql/ArraySort.h"
 #include "velox/functions/prestosql/WidthBucketArray.h"
 
 namespace facebook::velox::functions {
@@ -82,6 +83,12 @@ inline void registerArrayTrimFunctions(const std::string& prefix) {
       {prefix + "trim_array"});
 }
 
+template <typename T>
+inline void registerArrayUnionFunctions(const std::string& prefix) {
+  registerFunction<ArrayUnionFunction, Array<T>, Array<T>, Array<T>>(
+      {prefix + "array_union"});
+}
+
 void registerArrayFunctions(const std::string& prefix) {
   registerArrayConstructor(prefix + "array_constructor");
   VELOX_REGISTER_VECTOR_FUNCTION(udf_all_match, prefix + "all_match");
@@ -100,7 +107,15 @@ void registerArrayFunctions(const std::string& prefix) {
   VELOX_REGISTER_VECTOR_FUNCTION(udf_zip_with, prefix + "zip_with");
   VELOX_REGISTER_VECTOR_FUNCTION(udf_array_position, prefix + "array_position");
   VELOX_REGISTER_VECTOR_FUNCTION(udf_array_shuffle, prefix + "shuffle");
+
   VELOX_REGISTER_VECTOR_FUNCTION(udf_array_sort, prefix + "array_sort");
+  VELOX_REGISTER_VECTOR_FUNCTION(
+      udf_array_sort_desc, prefix + "array_sort_desc");
+
+  exec::registerExpressionRewrite([prefix](const auto& expr) {
+    return rewriteArraySortCall(prefix, expr);
+  });
+
   VELOX_REGISTER_VECTOR_FUNCTION(udf_array_sum, prefix + "array_sum");
   VELOX_REGISTER_VECTOR_FUNCTION(udf_repeat, prefix + "repeat");
   VELOX_REGISTER_VECTOR_FUNCTION(udf_sequence, prefix + "sequence");
@@ -178,6 +193,24 @@ void registerArrayFunctions(const std::string& prefix) {
       Array<Generic<T1>>,
       Array<Generic<T1>>,
       int64_t>({prefix + "trim_array"});
+
+  registerFunction<
+      ArrayUnionFunctionString,
+      Array<Varchar>,
+      Array<Varchar>,
+      Array<Varchar>>({prefix + "array_union"});
+  registerArrayUnionFunctions<int8_t>(prefix);
+  registerArrayUnionFunctions<int16_t>(prefix);
+  registerArrayUnionFunctions<int32_t>(prefix);
+  registerArrayUnionFunctions<int64_t>(prefix);
+  registerArrayUnionFunctions<int128_t>(prefix);
+  registerArrayUnionFunctions<float>(prefix);
+  registerArrayUnionFunctions<double>(prefix);
+  registerArrayUnionFunctions<bool>(prefix);
+  registerArrayUnionFunctions<Timestamp>(prefix);
+  registerArrayUnionFunctions<Date>(prefix);
+  registerArrayUnionFunctions<Varbinary>(prefix);
+  registerArrayUnionFunctions<Generic<T1>>(prefix);
 
   registerArrayCombinationsFunctions<int8_t>(prefix);
   registerArrayCombinationsFunctions<int16_t>(prefix);

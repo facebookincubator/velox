@@ -156,8 +156,6 @@ class VectorTestBase {
     return vectorMaker_.flatVector<T>(size, valueAt, isNullAt, type);
   }
 
-  /// Decimal Vector type cannot be inferred from the cpp type alone as the cpp
-  /// type does not contain the precision and scale.
   template <typename T>
   FlatVectorPtr<EvalType<T>> makeFlatVector(
       const std::vector<T>& data,
@@ -192,30 +190,6 @@ class VectorTestBase {
   template <typename T>
   FlatVectorPtr<T> makeAllNullFlatVector(vector_size_t size) {
     return vectorMaker_.allNullFlatVector<T>(size);
-  }
-
-  FlatVectorPtr<int64_t> makeShortDecimalFlatVector(
-      const std::vector<int64_t>& unscaledValues,
-      const TypePtr& type) {
-    return vectorMaker_.shortDecimalFlatVector(unscaledValues, type);
-  }
-
-  FlatVectorPtr<int128_t> makeLongDecimalFlatVector(
-      const std::vector<int128_t>& unscaledValues,
-      const TypePtr& type) {
-    return vectorMaker_.longDecimalFlatVector(unscaledValues, type);
-  }
-
-  FlatVectorPtr<int64_t> makeNullableShortDecimalFlatVector(
-      const std::vector<std::optional<int64_t>>& unscaledValues,
-      const TypePtr& type) {
-    return vectorMaker_.shortDecimalFlatVectorNullable(unscaledValues, type);
-  }
-
-  FlatVectorPtr<int128_t> makeNullableLongDecimalFlatVector(
-      const std::vector<std::optional<int128_t>>& unscaledValues,
-      const TypePtr& type) {
-    return vectorMaker_.longDecimalFlatVectorNullable(unscaledValues, type);
   }
 
   // Convenience function to create arrayVectors (vector of arrays) based on
@@ -448,8 +422,9 @@ class VectorTestBase {
   //   });
   template <typename T>
   ArrayVectorPtr makeNullableArrayVector(
-      const std::vector<std::optional<std::vector<std::optional<T>>>>& data) {
-    return vectorMaker_.arrayVectorNullable<T>(data);
+      const std::vector<std::optional<std::vector<std::optional<T>>>>& data,
+      const TypePtr& arrayType = ARRAY(CppToType<T>::create())) {
+    return vectorMaker_.arrayVectorNullable<T>(data, arrayType);
   }
 
   template <typename T>
@@ -458,9 +433,10 @@ class VectorTestBase {
       std::function<vector_size_t(vector_size_t /* row */)> sizeAt,
       std::function<T(vector_size_t /* idx */)> valueAt,
       std::function<bool(vector_size_t /* row */)> isNullAt = nullptr,
-      std::function<bool(vector_size_t /* idx */)> valueIsNullAt = nullptr) {
+      std::function<bool(vector_size_t /* idx */)> valueIsNullAt = nullptr,
+      const TypePtr& arrayType = ARRAY(CppToType<T>::create())) {
     return vectorMaker_.arrayVector<T>(
-        size, sizeAt, valueAt, isNullAt, valueIsNullAt);
+        size, sizeAt, valueAt, isNullAt, valueIsNullAt, arrayType);
   }
 
   template <typename T>
@@ -469,8 +445,10 @@ class VectorTestBase {
       std::function<vector_size_t(vector_size_t /* row */)> sizeAt,
       std::function<T(vector_size_t /* row */, vector_size_t /* idx */)>
           valueAt,
-      std::function<bool(vector_size_t /*row */)> isNullAt = nullptr) {
-    return vectorMaker_.arrayVector<T>(size, sizeAt, valueAt, isNullAt);
+      std::function<bool(vector_size_t /*row */)> isNullAt = nullptr,
+      const TypePtr& arrayType = ARRAY(CppToType<T>::create())) {
+    return vectorMaker_.arrayVector<T>(
+        size, sizeAt, valueAt, isNullAt, arrayType);
   }
 
   // Convenience function to create vector from a base vector.
@@ -513,29 +491,7 @@ class VectorTestBase {
           maps,
       const TypePtr& type =
           MAP(CppToType<TKey>::create(), CppToType<TValue>::create())) {
-    std::vector<vector_size_t> lengths;
-    std::vector<TKey> keys;
-    std::vector<TValue> values;
-    std::vector<bool> nullValues;
-    auto undefined = TValue();
-
-    for (const auto& map : maps) {
-      lengths.push_back(map.size());
-      for (const auto& [key, value] : map) {
-        keys.push_back(key);
-        values.push_back(value.value_or(undefined));
-        nullValues.push_back(!value.has_value());
-      }
-    }
-
-    return makeMapVector<TKey, TValue>(
-        maps.size(),
-        [&](vector_size_t row) { return lengths[row]; },
-        [&](vector_size_t idx) { return keys[idx]; },
-        [&](vector_size_t idx) { return values[idx]; },
-        nullptr,
-        [&](vector_size_t idx) { return nullValues[idx]; },
-        type);
+    return vectorMaker_.mapVector(maps, type);
   }
 
   // Create nullabe map vector from nested std::vector representation.
