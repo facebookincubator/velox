@@ -324,7 +324,7 @@ void AggregationTestBase::testAggregationsWithCompanion(
     // Spilling needs at least 2 batches of input. Use round-robin
     // repartitioning to split input into multiple batches.
     core::PlanNodeId partialNodeId;
-    builder.localPartitionRoundRobin()
+    builder.localPartitionRoundRobinRow()
         .partialAggregation(groupingKeysWithPartialKey, paritialAggregates)
         .capturePlanNodeId(partialNodeId)
         .localPartition(groupingKeysWithPartialKey)
@@ -433,7 +433,7 @@ void AggregationTestBase::testAggregationsWithCompanion(
         .partialAggregation(groupingKeys, mergeAggregates);
 
     if (groupingKeys.empty()) {
-      builder.localPartitionRoundRobin();
+      builder.localPartitionRoundRobinRow();
     } else {
       builder.localPartition(groupingKeys);
     }
@@ -586,10 +586,19 @@ RowVectorPtr AggregationTestBase::validateStreamingInTestAggregations(
       static_cast<const core::AggregationNode&>(*builder.planNode());
   EXPECT_EQ(expected->childrenSize(), aggregationNode.aggregates().size());
   for (int i = 0; i < aggregationNode.aggregates().size(); ++i) {
-    auto& aggregate = aggregationNode.aggregates()[i].call;
-    SCOPED_TRACE(aggregate->name());
+    const auto& aggregate = aggregationNode.aggregates()[i];
+    if (aggregate.distinct || !aggregate.sortingKeys.empty() ||
+        aggregate.mask != nullptr) {
+      // TODO Add support for all these cases.
+      return nullptr;
+    }
+
+    const auto& aggregateExpr = aggregate.call;
+    const auto& name = aggregateExpr->name();
+
+    SCOPED_TRACE(name);
     std::vector<VectorPtr> rawInput1, rawInput2;
-    for (auto& arg : aggregate->inputs()) {
+    for (const auto& arg : aggregateExpr->inputs()) {
       VectorPtr column;
       auto channel = exec::exprToChannel(arg.get(), input->type());
       if (channel == kConstantChannel) {
@@ -602,13 +611,13 @@ RowVectorPtr AggregationTestBase::validateStreamingInTestAggregations(
       rawInput2.push_back(column->slice(size1, size2));
     }
 
-    auto actualResult1 = testStreaming(
-        aggregate->name(), true, rawInput1, size1, rawInput2, size2);
+    auto actualResult1 =
+        testStreaming(name, true, rawInput1, size1, rawInput2, size2);
     velox::exec::test::assertEqualResults(
         {makeRowVector({expected->childAt(i)})},
         {makeRowVector({actualResult1})});
-    auto actualResult2 = testStreaming(
-        aggregate->name(), false, rawInput1, size1, rawInput2, size2);
+    auto actualResult2 =
+        testStreaming(name, false, rawInput1, size1, rawInput2, size2);
     velox::exec::test::assertEqualResults(
         {makeRowVector({expected->childAt(i)})},
         {makeRowVector({actualResult2})});
@@ -644,7 +653,7 @@ void AggregationTestBase::testAggregations(
     // Spilling needs at least 2 batches of input. Use round-robin
     // repartitioning to split input into multiple batches.
     core::PlanNodeId partialNodeId;
-    builder.localPartitionRoundRobin()
+    builder.localPartitionRoundRobinRow()
         .partialAggregation(groupingKeys, aggregates)
         .capturePlanNodeId(partialNodeId)
         .localPartition(groupingKeys)
@@ -674,7 +683,7 @@ void AggregationTestBase::testAggregations(
     }
   }
 
-  if (!groupingKeys.empty() && allowInputShuffle_) {
+  if (!groupingKeys.empty()) {
     SCOPED_TRACE("Run partial + final with abandon partial agg");
     PlanBuilder builder(pool());
     makeSource(builder);
@@ -803,7 +812,7 @@ void AggregationTestBase::testAggregations(
     builder.partialAggregation(groupingKeys, aggregates);
 
     if (groupingKeys.empty()) {
-      builder.localPartitionRoundRobin();
+      builder.localPartitionRoundRobinRow();
     } else {
       builder.localPartition(groupingKeys);
     }

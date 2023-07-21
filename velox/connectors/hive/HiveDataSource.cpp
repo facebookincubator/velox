@@ -16,6 +16,9 @@
 
 #include "velox/connectors/hive/HiveDataSource.h"
 
+#include <string>
+#include <unordered_map>
+
 #include "velox/common/caching/AsyncDataCache.h"
 #include "velox/connectors/hive/HiveConnectorSplit.h"
 #include "velox/dwio/common/CachedBufferedInput.h"
@@ -271,7 +274,7 @@ void checkColumnNameLowerCase(const std::shared_ptr<const Type>& type) {
 
 void checkColumnNameLowerCase(const SubfieldFilters& filters) {
   for (auto& pair : filters) {
-    if (pair.first.toString() == kPath || pair.first.toString() == kBucket) {
+    if (auto name = pair.first.toString(); name == kPath || name == kBucket) {
       continue;
     }
     auto& path = pair.first.path();
@@ -539,6 +542,12 @@ void HiveDataSource::addSplit(std::shared_ptr<ConnectorSplit> split) {
 
   auto& fileType = reader_->rowType();
 
+  std::vector<std::string> columnNames = fileType->names();
+  std::unordered_map<std::string, size_t> columnIndex;
+  for (int i = 0; i < columnNames.size(); ++i) {
+    columnIndex[columnNames[i]] = i;
+  }
+  std::vector<TypePtr> columnTypes = fileType->children();
   for (int i = 0; i < readerOutputType_->size(); i++) {
     auto fieldName = readerOutputType_->nameOf(i);
     auto scanChildSpec = scanSpec_->childByName(fieldName);
@@ -560,6 +569,9 @@ void HiveDataSource::addSplit(std::shared_ptr<ConnectorSplit> split) {
       // Column is missing. Most likely due to schema evolution.
       setNullConstantValue(scanChildSpec, readerOutputType_->childAt(i));
     } else {
+      // We know the fieldName exists in the file, make the type at that
+      // position match what we expect in the output.
+      columnTypes[columnIndex[fieldName]] = readerOutputType_->childAt(i);
       scanChildSpec->setConstantValue(nullptr);
     }
   }
@@ -586,7 +598,8 @@ void HiveDataSource::addSplit(std::shared_ptr<ConnectorSplit> split) {
         velox::variant(split_->tableBucketNumber.value()));
   }
   scanSpec_->resetCachedValues(false);
-  configureRowReaderOptions(rowReaderOpts_);
+  configureRowReaderOptions(
+      rowReaderOpts_, ROW(std::move(columnNames), std::move(columnTypes)));
   rowReader_ = createRowReader(rowReaderOpts_);
 }
 
@@ -760,6 +773,20 @@ std::shared_ptr<common::ScanSpec> HiveDataSource::makeScanSpec(
     VELOX_CHECK(field);
     remainingFilterInputNames.insert(field->name());
   }
+
+  std::unordered_map<std::string, std::vector<const common::Subfield*>>
+      requiredSubfieldsInFilters;
+  for (auto& [field, _] : filters) {
+    if (auto name = field.toString(); name == kPath || name == kBucket) {
+      continue;
+    }
+    VELOX_CHECK_GT(field.path().size(), 0);
+    auto* nestedField = dynamic_cast<const common::Subfield::NestedField*>(
+        field.path()[0].get());
+    VELOX_CHECK(nestedField);
+    requiredSubfieldsInFilters[nestedField->name()].push_back(&field);
+  }
+
   auto spec = std::make_shared<common::ScanSpec>("root");
   for (int i = 0; i < columnHandles.size(); ++i) {
     auto& name = rowType->nameOf(i);
@@ -778,6 +805,12 @@ std::shared_ptr<common::ScanSpec> HiveDataSource::makeScanSpec(
       VELOX_CHECK_EQ(field->name(), name);
       subfieldPtrs.push_back(&subfield);
     }
+    if (auto it = requiredSubfieldsInFilters.find(name);
+        it != requiredSubfieldsInFilters.end()) {
+      for (auto* subfield : it->second) {
+        subfieldPtrs.push_back(subfield);
+      }
+    }
     addSubfields(*type, subfieldPtrs, 1, pool, *spec->addField(name, i));
   }
 
@@ -789,7 +822,7 @@ std::shared_ptr<common::ScanSpec> HiveDataSource::makeScanSpec(
     // column. This filter is redundant and needs to be removed.
     // TODO Remove this check when Presto is fixed to not specify a filter
     // on $path and $bucket column.
-    if (pair.first.toString() == kPath || pair.first.toString() == kBucket) {
+    if (auto name = pair.first.toString(); name == kPath || name == kBucket) {
       continue;
     }
     auto fieldSpec = spec->getOrCreateChild(pair.first);
@@ -863,7 +896,8 @@ void HiveDataSource::resetSplit() {
 }
 
 void HiveDataSource::configureRowReaderOptions(
-    dwio::common::RowReaderOptions& options) const {
+    dwio::common::RowReaderOptions& options,
+    const RowTypePtr& rowType) const {
   std::vector<std::string> columnNames;
   for (auto& spec : scanSpec_->children()) {
     if (!spec->isConstant()) {
@@ -875,8 +909,7 @@ void HiveDataSource::configureRowReaderOptions(
     static const RowTypePtr kEmpty{ROW({}, {})};
     cs = std::make_shared<dwio::common::ColumnSelector>(kEmpty);
   } else {
-    cs = std::make_shared<dwio::common::ColumnSelector>(
-        reader_->rowType(), columnNames);
+    cs = std::make_shared<dwio::common::ColumnSelector>(rowType, columnNames);
   }
   options.select(cs).range(split_->start, split_->length);
 }

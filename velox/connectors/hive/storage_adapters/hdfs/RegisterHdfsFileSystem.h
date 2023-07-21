@@ -16,14 +16,9 @@
 
 #pragma once
 
-#include "velox/dwio/common/Statistics.h"
+namespace facebook::velox::filesystems {
 
-namespace facebook::velox::parquet::duckdb_reader {
+// Register the HDFS.
+void registerHdfsFileSystem();
 
-class ColumnStatistics : public dwio::common::ColumnStatistics {
- public:
-  ColumnStatistics() {}
-  ~ColumnStatistics() override = default;
-};
-
-} // namespace facebook::velox::parquet::duckdb_reader
+} // namespace facebook::velox::filesystems

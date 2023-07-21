@@ -13,17 +13,9 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-#include "velox/exec/RowContainer.h"
-#include <gtest/gtest.h>
-#include <algorithm>
-#include <random>
-#include "velox/common/file/FileSystems.h"
-#include "velox/dwio/common/tests/utils/BatchMaker.h"
 #include "velox/exec/Aggregate.h"
-#include "velox/exec/ContainerRowSerde.h"
 #include "velox/exec/VectorHasher.h"
 #include "velox/exec/tests/utils/RowContainerTestBase.h"
-#include "velox/serializers/PrestoSerializer.h"
 
 using namespace facebook::velox;
 using namespace facebook::velox::exec;
@@ -827,7 +819,7 @@ TEST_F(RowContainerTest, rowSizeWithNormalizedKey) {
 }
 
 TEST_F(RowContainerTest, estimateRowSize) {
-  auto numRows = 1000;
+  auto numRows = 200'000;
 
   // Make a RowContainer with a fixed-length key column and a variable-length
   // dependent column.
@@ -837,8 +829,10 @@ TEST_F(RowContainerTest, estimateRowSize) {
   // Store rows to the container.
   auto key =
       vectorMaker_.flatVector<int64_t>(numRows, [](auto row) { return row; });
-  auto dependent = vectorMaker_.flatVector<StringView>(numRows, [](auto row) {
-    return StringView::makeInline(fmt::format("str {}", row));
+  std::string str;
+  auto dependent = vectorMaker_.flatVector<StringView>(numRows, [&](auto row) {
+    str = fmt::format("string - {}", row);
+    return StringView(str);
   });
   SelectivityVector allRows(numRows);
   DecodedVector decodedKey(*key, allRows);
@@ -848,6 +842,10 @@ TEST_F(RowContainerTest, estimateRowSize) {
     rowContainer->store(decodedKey, i, row, 0);
     rowContainer->store(decodedDependent, i, row, 1);
   }
+  EXPECT_EQ(37, rowContainer->fixedRowSize());
+  EXPECT_EQ(64, rowContainer->estimateRowSize());
+  // 2*2MB huge page size blocks + 4 * 64K small allocations.
+  EXPECT_EQ(0x440000, rowContainer->stringAllocator().retainedSize());
 }
 
 class AggregateWithAlignment : public Aggregate {
@@ -917,8 +915,7 @@ TEST_F(RowContainerTest, alignment) {
       false,
       true,
       true,
-      pool_.get(),
-      ContainerRowSerde::instance());
+      pool_.get());
   constexpr int kNumRows = 100;
   char* rows[kNumRows];
   for (int i = 0; i < kNumRows; ++i) {
@@ -1029,8 +1026,7 @@ TEST_F(RowContainerTest, probedFlag) {
       true, // isJoinBuild
       true, // hasProbedFlag
       false, // hasNormalizedKey
-      pool_.get(),
-      ContainerRowSerde::instance());
+      pool_.get());
 
   auto input = makeRowVector({
       makeNullableFlatVector<int64_t>({1, 2, 3, 4, std::nullopt, 5}),

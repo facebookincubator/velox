@@ -46,7 +46,9 @@ Generic Configuration
      - false
      - If true, timezone-less timestamp conversions (e.g. string to timestamp, when the string does not specify a timezone)
        will be adjusted to the user provided `session_timezone` (if any). For instance: if this option is true and user
-       supplied "America/Los_Angeles", then "1970-01-01" will be converted to -28800 instead of 0.
+       supplied "America/Los_Angeles", then "1970-01-01" will be converted to -28800 instead of 0. Similarly, timestamp
+       to date conversions will adhere to user 'session_timezone', e.g: Timestamp(0) to Date will be -1 (number of days
+       since epoch) for "America/Los_Angeles".
    * - track_operator_cpu_usage
      - bool
      - true
@@ -69,6 +71,10 @@ Generic Configuration
      - 32MB
      - The target size for a Task's buffered output. The producer Drivers are blocked when the buffered size exceeds this.
        The Drivers are resumed when the buffered size goes below PartitionedOutputBufferManager::kContinuePct (90)% of this.
+   * - min_table_rows_for_parallel_join_build
+     - integer
+     - 1000
+     - The minimum number of table rows that can trigger the parallel hash join table build.
 
 Expression Evaluation Configuration
 -----------------------------------

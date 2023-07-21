@@ -323,15 +323,7 @@ class HashStringAllocator : public StreamArena {
   }
 
   // Frees all memory associated with 'this' and leaves 'this' ready for reuse.
-  void clear() {
-    numFree_ = 0;
-    freeBytes_ = 0;
-    freeNonEmpty_ = 0;
-    for (auto i = 0; i < kNumFreeLists; ++i) {
-      new (&free_[i]) CompactDoubleList();
-    }
-    pool_.clear();
-  }
+  void clear();
 
   memory::MemoryPool* FOLLY_NONNULL pool() const {
     return pool_.pool();
@@ -533,10 +525,10 @@ struct AlignedStlAllocator {
 
   static_assert(
       Alignment != 0,
-      "Alignment of AlignmentStlAllocator cannot be 0.");
+      "Alignment of AlignedStlAllocator cannot be 0.");
   static_assert(
       (Alignment & (Alignment - 1)) == 0,
-      "Alignment of AlignmentStlAllocator must be a power of 2.");
+      "Alignment of AlignedStlAllocator must be a power of 2.");
 
   template <class Other>
   struct rebind {
