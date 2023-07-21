@@ -39,14 +39,15 @@ namespace {
 std::string makeErrorMessage(
     const BaseVector& input,
     vector_size_t row,
-    const TypePtr& toType) {
+    const TypePtr& toType,
+    const std::string& details = "") {
   return fmt::format(
-      "Failed to cast from {} to {}: {}.",
+      "Failed to cast from {} to {}: {}. {}",
       input.type()->toString(),
       toType->toString(),
-      input.toString(row));
+      input.toString(row),
+      details);
 }
-
 /// The per-row level Kernel
 /// @tparam ToKind The cast target type
 /// @tparam FromKind The expression type
@@ -118,6 +119,32 @@ VectorPtr castFromDate(
   }
 }
 
+template <bool adjustForTimeZone>
+void castTimestampToDate(
+    const SelectivityVector& rows,
+    const BaseVector& input,
+    exec::EvalCtx& context,
+    FlatVector<int32_t>* resultFlatVector,
+    const date::time_zone* timeZone = nullptr) {
+  static const int32_t kSecsPerDay{86'400};
+  auto inputVector = input.as<SimpleVector<Timestamp>>();
+  context.applyToSelectedNoThrow(rows, [&](int row) {
+    auto input = inputVector->valueAt(row);
+    if constexpr (adjustForTimeZone) {
+      input.toTimezone(*timeZone);
+    }
+    auto seconds = input.getSeconds();
+    if (seconds >= 0 || seconds % kSecsPerDay == 0) {
+      resultFlatVector->set(row, seconds / kSecsPerDay);
+    } else {
+      // For division with negatives, minus 1 to compensate the discarded
+      // fractional part. e.g. -1/86'400 yields 0, yet it should be
+      // considered as -1 day.
+      resultFlatVector->set(row, seconds / kSecsPerDay - 1);
+    }
+  });
+}
+
 VectorPtr castToDate(
     const SelectivityVector& rows,
     const BaseVector& input,
@@ -145,20 +172,15 @@ VectorPtr castToDate(
       return castResult;
     }
     case TypeKind::TIMESTAMP: {
-      auto* inputVector = input.as<SimpleVector<Timestamp>>();
-      static const int32_t kSecsPerDay{86'400};
-      context.applyToSelectedNoThrow(rows, [&](int row) {
-        auto input = inputVector->valueAt(row);
-        auto seconds = input.getSeconds();
-        if (seconds >= 0 || seconds % kSecsPerDay == 0) {
-          resultFlatVector->set(row, seconds / kSecsPerDay);
-        } else {
-          // For division with negatives, minus 1 to compensate the discarded
-          // fractional part. e.g. -1/86'400 yields 0, yet it should be
-          // considered as -1 day.
-          resultFlatVector->set(row, seconds / kSecsPerDay - 1);
-        }
-      });
+      const auto& queryConfig = context.execCtx()->queryCtx()->queryConfig();
+      auto sessionTzName = queryConfig.sessionTimezone();
+      if (queryConfig.adjustTimestampToTimezone() && !sessionTzName.empty()) {
+        auto* timeZone = date::locate_zone(sessionTzName);
+        castTimestampToDate<true>(
+            rows, input, context, resultFlatVector, timeZone);
+      } else {
+        castTimestampToDate<false>(rows, input, context, resultFlatVector);
+      }
       return castResult;
     }
     default:
@@ -254,24 +276,26 @@ void applyCastPrimitives(
 
   const auto& queryConfig = context.execCtx()->queryCtx()->queryConfig();
 
+  auto& resultType = resultFlatVector->type();
+  auto makeException =
+      [&](const auto& input, auto row, const std::string& errorDetails) {
+        return std::make_exception_ptr(VeloxUserError(
+            std::current_exception(),
+            makeErrorMessage(input, row, resultType, errorDetails),
+            false));
+      };
+
   if (!queryConfig.isCastToIntByTruncate()) {
     context.applyToSelectedNoThrow(rows, [&](int row) {
       try {
         // Passing a false truncate flag
         applyCastKernel<ToKind, FromKind, false>(
             row, inputSimpleVector, resultFlatVector);
-      } catch (const VeloxRuntimeError& re) {
-        VELOX_FAIL(
-            makeErrorMessage(input, row, resultFlatVector->type()) + " " +
-            re.message());
       } catch (const VeloxUserError& ue) {
-        VELOX_USER_FAIL(
-            makeErrorMessage(input, row, resultFlatVector->type()) + " " +
-            ue.message());
+        context.setError(row, makeException(input, row, ue.message()));
+
       } catch (const std::exception& e) {
-        VELOX_USER_FAIL(
-            makeErrorMessage(input, row, resultFlatVector->type()) + " " +
-            e.what());
+        context.setError(row, makeException(input, row, e.what()));
       }
     });
   } else {
@@ -280,24 +304,16 @@ void applyCastPrimitives(
         // Passing a true truncate flag
         applyCastKernel<ToKind, FromKind, true>(
             row, inputSimpleVector, resultFlatVector);
-      } catch (const VeloxRuntimeError& re) {
-        VELOX_FAIL(
-            makeErrorMessage(input, row, resultFlatVector->type()) + " " +
-            re.message());
       } catch (const VeloxUserError& ue) {
-        VELOX_USER_FAIL(
-            makeErrorMessage(input, row, resultFlatVector->type()) + " " +
-            ue.message());
+        context.setError(row, makeException(input, row, ue.message()));
       } catch (const std::exception& e) {
-        VELOX_USER_FAIL(
-            makeErrorMessage(input, row, resultFlatVector->type()) + " " +
-            e.what());
+        context.setError(row, makeException(input, row, e.what()));
       }
     });
   }
 
-  // If we're converting to a TIMESTAMP, check if we need to adjust the current
-  // GMT timezone to the user provided session timezone.
+  // If we're converting to a TIMESTAMP, check if we need to adjust the
+  // current GMT timezone to the user provided session timezone.
   if constexpr (ToKind == TypeKind::TIMESTAMP) {
     // If user explicitly asked us to adjust the timezone.
     if (queryConfig.adjustTimestampToTimezone()) {

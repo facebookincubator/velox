@@ -12,7 +12,5 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-add_library(velox_dwio_duckdb_parquet_reader ParquetReader.cpp)
-
-target_link_libraries(velox_dwio_duckdb_parquet_reader velox_duckdb_allocator
-                      velox_dwio_common velox_duckdb_conversion duckdb fmt::fmt)
+add_library(velox_common_compression Compression.cpp LzoDecompressor.cpp)
+target_link_libraries(velox_common_compression Folly::folly)
