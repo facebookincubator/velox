@@ -371,5 +371,52 @@ TEST_F(ProbabilityTest, gammaCDF) {
       gammaCDF(2.0, 3.0, kNan), "value must be greater than, or equal to, 0");
 }
 
+TEST_F(ProbabilityTest, inverseWeibullCDF) {
+  const auto inverseWeibullCDF = [&](std::optional<double> a,
+                                     std::optional<double> b,
+                                     std::optional<double> p) {
+    return evaluateOnce<double>("inverse_weibull_cdf(c0, c1, c2)", a, b, p);
+  };
+
+  EXPECT_EQ(inverseWeibullCDF(1.0, 1.0, 0.), 0.0);
+  EXPECT_EQ(inverseWeibullCDF(1.0, 1.0, 0.632), 0.99967234081320622);
+  EXPECT_EQ(inverseWeibullCDF(1.0, 0.6, 0.91), 1.4447673651911233);
+
+  EXPECT_EQ(inverseWeibullCDF(std::nullopt, 1.0, 0.3), std::nullopt);
+  EXPECT_EQ(inverseWeibullCDF(1.0, std::nullopt, 0.2), std::nullopt);
+  EXPECT_EQ(inverseWeibullCDF(1.0, 0.4, std::nullopt), std::nullopt);
+
+  EXPECT_EQ(inverseWeibullCDF(kDoubleMin, 1.0, 0.3), 0.0);
+  EXPECT_EQ(inverseWeibullCDF(kDoubleMax, 1.0, 0.4), 1.0);
+  EXPECT_EQ(inverseWeibullCDF(1.0, kDoubleMin, 0.5), 1.5423036715619055e-308);
+  EXPECT_EQ(inverseWeibullCDF(1.0, kDoubleMax, 0.7), kInf);
+  EXPECT_EQ(inverseWeibullCDF(kInf, 1.0, 0.1), 1.0);
+  EXPECT_EQ(inverseWeibullCDF(kDoubleMin, kDoubleMin, 0.9), kInf);
+  EXPECT_EQ(
+      inverseWeibullCDF(kDoubleMax, kDoubleMax, 0.8), 1.7976931348623157e+308);
+  EXPECT_EQ(inverseWeibullCDF(kInf, 999999999.9, 0.4), 9.999999999E8);
+  EXPECT_THAT(inverseWeibullCDF(1.0, kInf, 0.2), IsInf());
+
+  VELOX_ASSERT_THROW(inverseWeibullCDF(0, 3, 0.5), "a must be greater than 0");
+  VELOX_ASSERT_THROW(inverseWeibullCDF(3, 0, 0.5), "b must be greater than 0");
+  VELOX_ASSERT_THROW(
+      inverseWeibullCDF(3, 5, -0.1), "p must be in the interval [0, 1]");
+  VELOX_ASSERT_THROW(
+      inverseWeibullCDF(3, 5, 1.1), "p must be in the interval [0, 1]");
+  VELOX_ASSERT_THROW(
+      inverseWeibullCDF(kNan, 1.0, 0.1), "a must be greater than 0");
+  VELOX_ASSERT_THROW(
+      inverseWeibullCDF(1.0, kNan, 0.4), "b must be greater than 0");
+  VELOX_ASSERT_THROW(
+      inverseWeibullCDF(1.0, 1.0, kNan), "p must be in the interval [0, 1]");
+  VELOX_ASSERT_THROW(
+      inverseWeibullCDF(999999999.9, 999999999.0, kInf),
+      "p must be in the interval [0, 1]");
+  VELOX_ASSERT_THROW(
+      inverseWeibullCDF(-1.0, 1.0, 0.1), "a must be greater than 0");
+  VELOX_ASSERT_THROW(
+      inverseWeibullCDF(1.0, -1.0, 0.4), "b must be greater than 0");
+}
+
 } // namespace
 } // namespace facebook::velox
