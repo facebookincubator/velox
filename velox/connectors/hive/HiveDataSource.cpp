@@ -20,7 +20,6 @@
 #include <unordered_map>
 
 #include "velox/common/caching/AsyncDataCache.h"
-#include "velox/connectors/hive/HiveConnectorSplit.h"
 #include "velox/dwio/common/CachedBufferedInput.h"
 #include "velox/dwio/common/ReaderFactory.h"
 #include "velox/expression/ExprToSubfieldFilter.h"

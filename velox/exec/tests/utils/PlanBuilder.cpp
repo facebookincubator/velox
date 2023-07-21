@@ -15,9 +15,8 @@
  */
 
 #include "velox/exec/tests/utils/PlanBuilder.h"
-#include <velox/core/ITypedExpr.h>
-#include "velox/common/memory/Memory.h"
 #include "velox/connectors/hive/HiveConnector.h"
+#include "velox/connectors/hive/TableHandle.h"
 #include "velox/connectors/tpch/TpchConnector.h"
 #include "velox/duckdb/conversion/DuckParser.h"
 #include "velox/exec/Aggregate.h"
@@ -25,10 +24,10 @@
 #include "velox/exec/RoundRobinPartitionFunction.h"
 #include "velox/exec/TableWriter.h"
 #include "velox/exec/WindowFunction.h"
+#include "velox/expression/Expr.h"
 #include "velox/expression/ExprToSubfieldFilter.h"
 #include "velox/expression/SignatureBinder.h"
 #include "velox/parse/Expressions.h"
-#include "velox/parse/ExpressionsParser.h"
 
 using namespace facebook::velox;
 using namespace facebook::velox::connector;
@@ -98,7 +97,7 @@ PlanBuilder& PlanBuilder::tableScan(
   SubfieldFilters filters;
   filters.reserve(subfieldFilters.size());
   core::QueryCtx queryCtx;
-  SimpleExpressionEvaluator evaluator(&queryCtx, pool_);
+  exec::SimpleExpressionEvaluator evaluator(&queryCtx, pool_);
   for (const auto& filter : subfieldFilters) {
     auto filterExpr = parseExpr(filter, outputType, options_, pool_);
     auto [subfield, subfieldFilter] =

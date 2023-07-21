@@ -19,6 +19,7 @@
 
 #include "velox/connectors/hive/HiveConfig.h"
 #include "velox/connectors/hive/HiveConnector.h"
+#include "velox/connectors/hive/HiveDataSource.h"
 #include "velox/expression/ExprToSubfieldFilter.h"
 
 namespace facebook::velox::connector::hive {

@@ -18,10 +18,11 @@
 
 #include "velox/common/base/Fs.h"
 #include "velox/connectors/hive/HiveConfig.h"
-#include "velox/connectors/hive/HiveConnector.h"
 #include "velox/connectors/hive/HivePartitionFunction.h"
+#include "velox/connectors/hive/TableHandle.h"
 #include "velox/core/ITypedExpr.h"
 #include "velox/dwio/dwrf/writer/Writer.h"
+#include "velox/exec/OperatorUtils.h"
 
 #include <boost/lexical_cast.hpp>
 #include <boost/uuid/uuid_generators.hpp>
