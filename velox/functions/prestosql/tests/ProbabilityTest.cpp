@@ -221,5 +221,59 @@ TEST_F(ProbabilityTest, invBetaCDF) {
   VELOX_ASSERT_THROW(invBetaCDF(3, 5, 1.1), "p must be in the interval [0, 1]");
 }
 
+TEST_F(ProbabilityTest, inverseFCDF) {
+  const auto inverseFCDF = [&](std::optional<double> df1,
+                               std::optional<double> df2,
+                               std::optional<double> p) {
+    return evaluateOnce<double>("inverse_f_cdf(c0, c1, c2)", df1, df2, p);
+  };
+
+  EXPECT_EQ(inverseFCDF(2.0, 5.0, 0.0), 0.0);
+  EXPECT_EQ(inverseFCDF(12.12, 4.2015, 0), 0);
+  EXPECT_EQ(inverseFCDF(2.0, 5.0, 0.9), 3.779716078773951);
+  EXPECT_EQ(inverseFCDF(2.0, 5.0, 0.5), 0.79876977693223572);
+  EXPECT_EQ(inverseFCDF(5.02, 10.0, 0.3763), 0.72002849078906817);
+  EXPECT_EQ(inverseFCDF(10.0283, 0.02, 0.062), 9.5969289856751434);
+
+  EXPECT_EQ(inverseFCDF(2.0, 5.0, std::nullopt), std::nullopt);
+  EXPECT_EQ(inverseFCDF(2.0, std::nullopt, 3.7797), std::nullopt);
+  EXPECT_EQ(inverseFCDF(std::nullopt, 5.0, 3.7797), std::nullopt);
+
+  EXPECT_EQ(inverseFCDF(kDoubleMax, 5.0, 1), kInf);
+  EXPECT_EQ(inverseFCDF(1, kDoubleMax, 1), kInf);
+  EXPECT_EQ(inverseFCDF(82.6, 901.10, 1), kInf);
+  EXPECT_EQ(inverseFCDF(kDoubleMin, 50.620, 1), kInf);
+  EXPECT_EQ(
+      inverseFCDF(kBigIntMax, 5.0, 0.93256230095450132), 3.7796999999999996);
+  EXPECT_EQ(inverseFCDF(76.901, kBigIntMax, 1), kInf);
+  EXPECT_EQ(inverseFCDF(2.0, 5.0, 1), kInf);
+
+  // Test invalid inputs for df1.
+  VELOX_ASSERT_THROW(
+      inverseFCDF(0, 3, 0.5), "numerator df must be greater than 0");
+  VELOX_ASSERT_THROW(
+      inverseFCDF(kBigIntMin, 5.0, 0.999),
+      "numerator df must be greater than 0");
+
+  // Test invalid inputs for df2.
+  VELOX_ASSERT_THROW(
+      inverseFCDF(3, 0, 0.5), "denominator df must be greater than 0");
+  VELOX_ASSERT_THROW(
+      inverseFCDF(2.0, kBigIntMin, 0.0001),
+      "denominator df must be greater than 0");
+
+  // Test invalid inputs for p.
+  VELOX_ASSERT_THROW(
+      inverseFCDF(3, 5, -0.1), "p must be in the interval [0, 1]");
+  VELOX_ASSERT_THROW(
+      inverseFCDF(2.0, 5.0, kBigIntMin), "p must be in the interval [0, 1]");
+
+  // Test a combination of invalid inputs.
+  VELOX_ASSERT_THROW(
+      inverseFCDF(-1.2, 0, -0.1), "p must be in the interval [0, 1]");
+  VELOX_ASSERT_THROW(
+      inverseFCDF(1, -kInf, -0.1), "p must be in the interval [0, 1]");
+}
+
 } // namespace
 } // namespace facebook::velox

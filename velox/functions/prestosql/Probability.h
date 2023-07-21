@@ -18,6 +18,7 @@
 #include "boost/math/distributions/beta.hpp"
 #include "boost/math/distributions/binomial.hpp"
 #include "boost/math/distributions/cauchy.hpp"
+#include "boost/math/distributions/fisher_f.hpp"
 #include "velox/common/base/Exceptions.h"
 #include "velox/functions/Macros.h"
 
@@ -132,6 +133,21 @@ struct InverseBetaCDFFunction {
     VELOX_USER_CHECK((b > 0) && (b != kInf), "b must be > 0");
 
     boost::math::beta_distribution<> dist(a, b);
+    result = boost::math::quantile(dist, p);
+  }
+};
+
+template <typename T>
+struct InverseFCDFFunction {
+  VELOX_DEFINE_FUNCTION_TYPES(T);
+
+  FOLLY_ALWAYS_INLINE void
+  call(double& result, double df1, double df2, double p) {
+    VELOX_USER_CHECK((p >= 0) && (p <= 1), "p must be in the interval [0, 1]")
+    VELOX_USER_CHECK_GT(df1, 0, "numerator df must be greater than 0");
+    VELOX_USER_CHECK_GT(df2, 0, "denominator df must be greater than 0");
+
+    boost::math::fisher_f_distribution<> dist(df1, df2);
     result = boost::math::quantile(dist, p);
   }
 };
