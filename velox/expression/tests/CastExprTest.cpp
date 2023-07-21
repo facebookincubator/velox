@@ -1497,6 +1497,80 @@ TEST_F(CastExprTest, integerToDecimal) {
   testIntToDecimalCasts<int64_t>();
 }
 
+TEST_F(CastExprTest, doubleToDecimal) {
+  // Double to short decimal.
+  auto input =
+      makeFlatVector<double>({-3333.03, -2222.02, -1.0, 0.00, 100, 99999.99});
+  testComplexCast(
+      "c0",
+      input,
+      makeFlatVector<int64_t>(
+          {-33'330'300, -22'220'200, -10'000, 0, 1'000'000, 999'999'900},
+          DECIMAL(10, 4)));
+
+  // Double to long decimal.
+  testComplexCast(
+      "c0",
+      input,
+      makeFlatVector<int128_t>(
+          {-33'330'300'000'000,
+           -22'220'200'000'000,
+           -10'000'000'000,
+           0,
+           1'000'000'000'000,
+           999'999'900'000'000},
+          DECIMAL(20, 10)));
+  testComplexCast(
+      "c0",
+      input,
+      makeFlatVector<int128_t>(
+          {-33'330, -22'220, -10, 0, 1'000, 1'000'000}, DECIMAL(20, 1)));
+
+  auto checkThrowError = [this](double value, TypePtr& type) {
+    auto trivialResult = type->isShortDecimal()
+        ? makeConstant<int64_t>(0, 1, type)
+        : makeConstant<int128_t>(0, 1, type);
+    VELOX_ASSERT_THROW(
+        testComplexCast("c0", makeConstant<double>(value, 1), trivialResult),
+        fmt::format(
+            "Cannot cast DOUBLE '{:f}' to {}", value, type->toString()));
+  };
+
+  auto numberBiggerThanInt64Max = static_cast<double>(
+      static_cast<int128_t>(std::numeric_limits<int64_t>::max()) + 1);
+  auto numberSmallerThanInt64Min = static_cast<double>(
+      static_cast<int128_t>(std::numeric_limits<int64_t>::min()) - 1);
+  auto decimalTypePrecision10Scale2 = DECIMAL(10, 2);
+
+  // Expected failures.
+  checkThrowError(9999999999999999999999.99, decimalTypePrecision10Scale2);
+  checkThrowError(numberBiggerThanInt64Max, decimalTypePrecision10Scale2);
+  checkThrowError(numberSmallerThanInt64Min, decimalTypePrecision10Scale2);
+
+  auto numberBiggerThanDecimal20 =
+      static_cast<double>(DecimalUtil::kLongDecimalMax);
+  auto numberSmallerThanDecimal20 =
+      static_cast<double>(DecimalUtil::kLongDecimalMin);
+  auto decimalTypePrecision20Scale2 = DECIMAL(20, 2);
+
+  checkThrowError(numberBiggerThanDecimal20, decimalTypePrecision20Scale2);
+  checkThrowError(numberSmallerThanDecimal20, decimalTypePrecision20Scale2);
+
+  double inf = INFINITY;
+  double nan = NAN;
+  auto doubleMax = std::numeric_limits<double>::max();
+  auto doubleMin = std::numeric_limits<double>::min();
+  auto decimalTypePrecision38Scale2 = DECIMAL(38, 2);
+
+  checkThrowError(inf, decimalTypePrecision38Scale2);
+  checkThrowError(nan, decimalTypePrecision38Scale2);
+  checkThrowError(doubleMax, decimalTypePrecision38Scale2);
+  testComplexCast(
+      "c0",
+      makeConstant<double>(doubleMin, 1),
+      makeConstant<int128_t>(0, 1, decimalTypePrecision38Scale2));
+}
+
 TEST_F(CastExprTest, castInTry) {
   // Test try(cast(array(varchar) as array(bigint))) whose input vector is
   // wrapped in dictinary encoding. The row of ["2a"] should trigger an error

@@ -128,7 +128,7 @@ supported conversions to/from JSON are listed in :doc:`json`.
      - Y
      -
      -
-     -
+     - Y
    * - varchar
      - Y
      - Y
@@ -488,7 +488,7 @@ Cast to Decimal
 From integral types
 ^^^^^^^^^^^^^^^^^^^
 
-Casting an integral numberto a decimal of given precision and scale is allowed
+Casting an integral number to a decimal of given precision and scale is allowed
 if the input value can be represented by the precision and scale. Casting from
 invalid input values throws.
 
@@ -506,6 +506,28 @@ Invalid examples
 
   SELECT cast(123 as decimal(6, 4)); -- Out of range
   SELECT cast(123 as decimal(4, 2)); -- Out of range
+
+From double precision floating-point types
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+Casting a double precision floating-point type number to a decimal of given precision
+and scale is allowed if the input value can be represented by the precision and scale.
+Casting from invalid input values throws.
+
+Valid example
+
+::
+
+  SELECT cast(0.12 as decimal(4,4)); -- decimal '0.1200'
+  SELECT cast(0.12 as decimal(4,1)); -- decimal '0.1'
+  SELECT cast(0.19 as decimal(4,1)); -- decimal '0.2'
+
+Invalid example
+
+::
+
+  SELECT cast(123.12 as decimal(6,4)); -- Out of range
+  SELECT cast(99999.99 as decimal(6,2)); -- Out of range
 
 From decimal
 ^^^^^^^^^^^^

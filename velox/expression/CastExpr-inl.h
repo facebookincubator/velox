@@ -209,6 +209,30 @@ void CastExpr::applyIntToDecimalCastKernel(
       });
 }
 
+template <typename TOutput>
+void CastExpr::applyDoubleToDecimal(
+    const SelectivityVector& rows,
+    const BaseVector& input,
+    exec::EvalCtx& context,
+    const TypePtr& toType,
+    VectorPtr& castResult) {
+  auto sourceVector = input.as<SimpleVector<double>>();
+  auto rawResults =
+      castResult->asUnchecked<FlatVector<TOutput>>()->mutableRawValues();
+  const auto toPrecisionScale = getDecimalPrecisionScale(*toType);
+  applyToSelectedNoThrowLocal(
+      context, rows, castResult, [&](vector_size_t row) {
+        if (sourceVector->isNullAt(row)) {
+          castResult->setNull(row, true);
+          return;
+        }
+        rawResults[row] = DecimalUtil::rescaleDouble<TOutput>(
+            sourceVector->valueAt(row),
+            toPrecisionScale.first,
+            toPrecisionScale.second);
+      });
+}
+
 template <typename FromNativeType, TypeKind ToKind>
 VectorPtr CastExpr::applyDecimalToFloatCast(
     const SelectivityVector& rows,
