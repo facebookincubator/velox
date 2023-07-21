@@ -141,7 +141,7 @@ SelectiveListColumnReader::SelectiveListColumnReader(
     const std::shared_ptr<const dwio::common::TypeWithId>& dataType,
     FormatParams& params,
     velox::common::ScanSpec& scanSpec)
-    : SelectiveRepeatedColumnReader(dataType, params, scanSpec, dataType->type),
+    : SelectiveRepeatedColumnReader(dataType->type, params, scanSpec, dataType),
       requestedType_{requestedType} {}
 
 uint64_t SelectiveListColumnReader::skip(uint64_t numValues) {
@@ -187,7 +187,7 @@ void SelectiveListColumnReader::getValues(RowSet rows, VectorPtr* result) {
   makeOffsetsAndSizes(rows);
   VectorPtr elements;
   if (child_ && !nestedRows_.empty()) {
-    prepareStructResult(type_->childAt(0), &elements);
+    prepareStructResult(requestedType_->type->childAt(0), &elements);
     child_->getValues(nestedRows_, &elements);
   }
   *result = std::make_shared<ArrayVector>(
@@ -205,7 +205,7 @@ SelectiveMapColumnReader::SelectiveMapColumnReader(
     const std::shared_ptr<const dwio::common::TypeWithId>& dataType,
     FormatParams& params,
     velox::common::ScanSpec& scanSpec)
-    : SelectiveRepeatedColumnReader(dataType, params, scanSpec, dataType->type),
+    : SelectiveRepeatedColumnReader(dataType->type, params, scanSpec, dataType),
       requestedType_{requestedType} {}
 
 uint64_t SelectiveMapColumnReader::skip(uint64_t numValues) {
@@ -274,7 +274,7 @@ void SelectiveMapColumnReader::getValues(RowSet rows, VectorPtr* result) {
       "SelectiveMapColumnReader::getValues");
   if (!nestedRows_.empty()) {
     keyReader_->getValues(nestedRows_, &keys);
-    prepareStructResult(type_->childAt(1), &values);
+    prepareStructResult(requestedType_->type->childAt(1), &values);
     elementReader_->getValues(nestedRows_, &values);
   }
   *result = std::make_shared<MapVector>(

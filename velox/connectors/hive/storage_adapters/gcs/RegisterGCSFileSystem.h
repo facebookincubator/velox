@@ -16,22 +16,9 @@
 
 #pragma once
 
-#include "velox/external/duckdb/duckdb.hpp"
+namespace facebook::velox::filesystems {
 
-namespace facebook::velox::duckdb {
+// Register the GCS filesystem.
+void registerGCSFileSystem();
 
-class InputStreamFileSystem;
-
-// Implements the DuckDB FileHandle API
-class InputStreamFileHandle : public ::duckdb::FileHandle {
- public:
-  explicit InputStreamFileHandle(::duckdb::FileSystem& fileSystem)
-      : FileHandle(fileSystem, "") {}
-
-  ~InputStreamFileHandle() override {}
-
- protected:
-  void Close() override {}
-};
-
-} // namespace facebook::velox::duckdb
+} // namespace facebook::velox::filesystems

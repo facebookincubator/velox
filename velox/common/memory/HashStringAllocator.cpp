@@ -57,9 +57,21 @@ void markAsFree(HashStringAllocator::Header* FOLLY_NONNULL header) {
 } // namespace
 
 HashStringAllocator::~HashStringAllocator() {
+  clear();
+}
+
+void HashStringAllocator::clear() {
+  numFree_ = 0;
+  freeBytes_ = 0;
+  freeNonEmpty_ = 0;
   for (auto& pair : allocationsFromPool_) {
     pool()->free(pair.first, pair.second);
   }
+  allocationsFromPool_.clear();
+  for (auto i = 0; i < kNumFreeLists; ++i) {
+    new (&free_[i]) CompactDoubleList();
+  }
+  pool_.clear();
 }
 
 void* HashStringAllocator::allocateFromPool(size_t size) {
@@ -293,16 +305,15 @@ int32_t HashStringAllocator::freeListIndex(int32_t size, uint32_t mask) {
     auto bits = simd::toBitMask(vsize < sizes) & mask;
     return count_trailing_zeros(bits);
   } else {
-    int offset = 0;
-    for (;;) {
+    for (int offset = 0; offset <= kNumFreeLists; offset += vsize.size) {
       auto sizes = xsimd::load_unaligned(freeListSizes_ + offset);
       auto bits = simd::toBitMask(vsize < sizes) & mask;
       if (bits) {
         return offset + count_trailing_zeros(bits);
       }
-      offset += xsimd::batch<int32_t>::size;
-      mask >>= xsimd::batch<int32_t>::size;
+      mask >>= vsize.size;
     }
+    return count_trailing_zeros(0);
   }
 }
 

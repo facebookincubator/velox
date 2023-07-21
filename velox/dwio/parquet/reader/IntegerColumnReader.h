@@ -24,25 +24,25 @@ namespace facebook::velox::parquet {
 class IntegerColumnReader : public dwio::common::SelectiveIntegerColumnReader {
  public:
   IntegerColumnReader(
-      std::shared_ptr<const dwio::common::TypeWithId> requestedType,
-      const std::shared_ptr<const dwio::common::TypeWithId>& dataType,
+      const std::shared_ptr<const dwio::common::TypeWithId>& requestedType,
+      std::shared_ptr<const dwio::common::TypeWithId> dataType,
       ParquetParams& params,
       common::ScanSpec& scanSpec)
       : SelectiveIntegerColumnReader(
-            std::move(requestedType),
+            requestedType->type,
             params,
             scanSpec,
-            dataType->type) {}
+            std::move(dataType)) {}
 
   bool hasBulkPath() const override {
-    return !this->type()->isLongDecimal() &&
-        ((this->type()->isShortDecimal())
+    return !this->fileType().type->isLongDecimal() &&
+        ((this->fileType().type->isShortDecimal())
              ? formatData_->as<ParquetData>().hasDictionary()
              : true);
   }
 
   void seekToRowGroup(uint32_t index) override {
-    SelectiveColumnReader::seekToRowGroup(index);
+    SelectiveIntegerColumnReader::seekToRowGroup(index);
     scanState().clear();
     readOffset_ = 0;
     formatData_->as<ParquetData>().seekToRowGroup(index);
@@ -59,7 +59,7 @@ class IntegerColumnReader : public dwio::common::SelectiveIntegerColumnReader {
       const uint64_t* /*incomingNulls*/) override {
     auto& data = formatData_->as<ParquetData>();
     VELOX_WIDTH_DISPATCH(
-        parquetSizeOfIntKind(type_->kind()),
+        parquetSizeOfIntKind(fileType_->type->kind()),
         prepareRead,
         offset,
         rows,
