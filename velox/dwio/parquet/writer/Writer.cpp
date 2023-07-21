@@ -29,8 +29,12 @@ class ArrowDataBufferSink : public arrow::io::OutputStream {
   ArrowDataBufferSink(
       std::unique_ptr<dwio::common::DataSink> sink,
       memory::MemoryPool& pool,
-      double growRatio = 1)
-      : sink_(std::move(sink)), growRatio_(growRatio), buffer_(pool) {}
+      double growRatio = 1,
+      int64_t maxFlushSize = 1024 * 1024)
+      : sink_(std::move(sink)),
+        growRatio_(growRatio),
+        buffer_(pool),
+        maxFlushSize_(maxFlushSize) {}
 
   arrow::Status Write(const std::shared_ptr<arrow::Buffer>& data) override {
     auto requestCapacity = buffer_.size() + data->size();
@@ -41,6 +45,9 @@ class ArrowDataBufferSink : public arrow::io::OutputStream {
         buffer_.size(),
         reinterpret_cast<const char*>(data->data()),
         data->size());
+    if (buffer_.size() >= maxFlushSize_) {
+      return Flush();
+    }
     return arrow::Status::OK();
   }
 
@@ -50,6 +57,9 @@ class ArrowDataBufferSink : public arrow::io::OutputStream {
       buffer_.reserve(growRatio_ * (requestCapacity));
     }
     buffer_.append(buffer_.size(), reinterpret_cast<const char*>(data), nbytes);
+    if (buffer_.size() >= maxFlushSize_) {
+      return Flush();
+    }
     return arrow::Status::OK();
   }
 
@@ -78,6 +88,7 @@ class ArrowDataBufferSink : public arrow::io::OutputStream {
   const double growRatio_;
   dwio::common::DataBuffer<char> buffer_;
   int64_t bytesFlushed_ = 0;
+  const int64_t maxFlushSize_;
 };
 
 struct ArrowContext {
@@ -123,7 +134,8 @@ Writer::Writer(
       stream_(std::make_shared<ArrowDataBufferSink>(
           std::move(sink),
           *generalPool_,
-          options.bufferGrowRatio)),
+          options.bufferGrowRatio,
+          options.maxFlushSize)),
       arrowContext_(std::make_shared<ArrowContext>()) {
   arrowContext_->properties = getArrowParquetWriterOptions(options);
 }

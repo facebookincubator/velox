@@ -33,6 +33,7 @@ struct ArrowContext;
 struct WriterOptions {
   bool enableDictionary = true;
   int64_t dataPageSize = 1'024 * 1'024;
+  int64_t maxFlushSize = 1'024 * 1'024; // 1M
   int32_t rowsInRowGroup = 10'000;
   int64_t maxRowGroupLength = 1'024 * 1'024;
   int64_t dictionaryPageSizeLimit = 1'024 * 1'024;
