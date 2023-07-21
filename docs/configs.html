@@ -100,7 +100,9 @@ then this partial aggregation will be a subject to being abandoned.</p></td>
 <td><p>false</p></td>
 <td><p>If true, timezone-less timestamp conversions (e.g. string to timestamp, when the string does not specify a timezone)
 will be adjusted to the user provided <cite>session_timezone</cite> (if any). For instance: if this option is true and user
-supplied “America/Los_Angeles”, then “1970-01-01” will be converted to -28800 instead of 0.</p></td>
+supplied “America/Los_Angeles”, then “1970-01-01” will be converted to -28800 instead of 0. Similarly, timestamp
+to date conversions will adhere to user ‘session_timezone’, e.g: Timestamp(0) to Date will be -1 (number of days
+since epoch) for “America/Los_Angeles”.</p></td>
 </tr>
 <tr class="row-odd"><td><p>track_operator_cpu_usage</p></td>
 <td><p>bool</p></td>
