@@ -124,7 +124,6 @@ class ExchangeQueue {
       return;
     }
 
-    auto pageSize = page->size();
     totalBytes_ += page->size();
     receivedBytes_ += page->size();
     if (totalBytes_ > peakBytes_) {
@@ -265,6 +264,8 @@ class ExchangeQueue {
   /// method in ExchangeClient for the meaning of the arguments.
   int64_t requestIfDue(const std::shared_ptr<ExchangeSource>& replySource);
 
+  bool enableFlowControl() const;
+
  private:
   std::vector<ContinuePromise> closeLocked() {
     queue_.clear();
@@ -399,7 +400,7 @@ class ExchangeSource : public std::enable_shared_from_this<ExchangeSource> {
 
   // Requests the producer to generate more data. Call only if
   // shouldRequest() was true. The object handles its own lifetime by
-  // acquiring a shared_from_this() pointer if needed.  'mexBytes'
+  // acquiring a shared_from_this() pointer if needed. 'maxBytes'
   // specifies a cap on the data to receive. The cap can be exceeded
   // if the producer has a single indivisible item that is larger than
   // the cap.
@@ -549,10 +550,14 @@ class ExchangeClient {
 
   std::string toJsonString() const;
 
+  bool enableFlowControl() const {
+    return enableFlowControl_;
+  }
+
  private:
   const int destination_;
   memory::MemoryPool* const pool_;
-  bool enableFlowControl_;
+  const bool enableFlowControl_;
   std::shared_ptr<ExchangeQueue> queue_;
   std::unordered_set<std::string> taskIds_;
   std::vector<std::shared_ptr<ExchangeSource>> sources_;

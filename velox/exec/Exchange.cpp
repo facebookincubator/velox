@@ -133,14 +133,17 @@ class LocalExchangeSource : public ExchangeSource {
             std::vector<ContinuePromise> promises;
             {
               std::lock_guard<std::mutex> l(queue_->mutex());
-              requestPending_ = false;
               uint64_t bytes = 0;
+              if (!queue_->enableFlowControl()) {
+                requestPending_ = false;
+              }
               for (auto& page : pages) {
                 bytes += page->size();
                 queue_->enqueueLocked(std::move(page), promises);
               }
               queue_->recordReplyLocked(bytes);
               if (atEnd) {
+                requestPending_ = false;
                 queue_->enqueueLocked(nullptr, promises);
                 atEnd_ = true;
               }
@@ -152,22 +155,31 @@ class LocalExchangeSource : public ExchangeSource {
               promise.setValue();
             }
           }
-          // Outside of queue mutex. Sends a delete results, ack or new
-          // request to self and requests more sources if there is space in the
-          // queue.
-          if (queue_->requestIfDue(self)) {
-            return;
-          }
 
           if (atEnd_) {
             buffers->deleteResults(taskId_, destination_);
-          } else if (ackSequence != kNoReply) {
+          }
+
+          // Outside of queue mutex. Sends a delete results, ack or new
+          // request to self and requests more sources if there is space in the
+          // queue.
+          if (auto bytes = queue_->requestIfDue(self)) {
+            self->request(bytes);
+            return;
+          }
+
+          if (!atEnd_ && ackSequence != kNoReply) {
             buffers->acknowledge(taskId_, destination_, ackSequence);
           }
         });
   }
 
   void close() override {
+    auto buffers = PartitionedOutputBufferManager::getInstance().lock();
+    buffers->deleteResults(taskId_, destination_);
+  }
+
+  void deleteResults() {
     auto buffers = PartitionedOutputBufferManager::getInstance().lock();
     buffers->deleteResults(taskId_, destination_);
   }
@@ -225,6 +237,13 @@ int64_t ExchangeQueue::requestIfDue(
   return false;
 }
 
+bool ExchangeQueue::enableFlowControl() const {
+  if (auto client = client_.lock()) {
+    return client->enableFlowControl();
+  }
+  return false;
+}
+
 void ExchangeClient::addRemoteTaskId(const std::string& taskId) {
   std::shared_ptr<ExchangeSource> toRequest;
   std::shared_ptr<ExchangeSource> toClose;
@@ -271,6 +290,10 @@ void ExchangeClient::addRemoteTaskId(const std::string& taskId) {
   if (requestIfDue(empty)) {
     return;
   }
+  if (enableFlowControl()) {
+    return;
+  }
+
   {
     std::lock_guard<std::mutex> l(queue_->mutex());
     if (!toRequest->shouldRequestLocked()) {
@@ -338,6 +361,9 @@ std::unique_ptr<SerializedPage> ExchangeClient::next(
   if (requestIfDue(empty)) {
     return page;
   }
+  if (enableFlowControl()) {
+    return page;
+  }
 
   std::vector<std::shared_ptr<ExchangeSource>> toRequest;
   // There is space for more data, send requests to sources with no pending
@@ -358,9 +384,105 @@ std::unique_ptr<SerializedPage> ExchangeClient::next(
   return page;
 }
 
-bool ExchangeClient::requestIfDue(
-    const std::shared_ptr<ExchangeSource>& /*replySource*/) {
-  return enableFlowControl_;
+int64_t ExchangeClient::requestIfDue(
+    const std::shared_ptr<ExchangeSource>& replySource) {
+  if (!enableFlowControl_) {
+    return 0;
+  }
+  // Requests data from as many next sources as will fit based on average
+  // response size and space in the queue. If 'replySource' is given and not at
+  // end, sends a data request to it if it fits in the new  requests batch and
+  // an ack if it had data but was not rerequested.
+
+  std::vector<std::shared_ptr<ExchangeSource>> toRequest;
+  int64_t requestSize = 0;
+  int64_t requestedBytes = 0;
+  bool isDirectRerequest = false;
+  bool replySourcePending = false;
+  if (replySource && !replySource->isAtEnd()) {
+    VELOX_CHECK(replySource->isPending());
+    replySourcePending = true;
+  }
+  bool requestMore = false;
+  {
+    bool fullRequestBatch = false;
+    std::lock_guard<std::mutex> l(queue_->mutex());
+    if (closed_) {
+      return 0;
+    }
+    if (queue_->numPending() == (replySourcePending ? 1 : 0)) {
+      // If there are no sources pending or if replySource is the only one
+      // pending and jus got a reply, there can be no pending bytes expected for
+      // the queue.
+      queue_->clearExpectedBytes();
+    }
+    int64_t space =
+        queue_->maxBytes() - queue_->totalBytes() - queue_->expectedBytes();
+    int64_t unit = queue_->expectedSerializedPageSize();
+    int64_t numToRequest = std::max<int64_t>(0, space / unit);
+    int32_t numRequestable =
+        sources_.size() - queue_->numCompleted() - queue_->numPending();
+    int32_t numRequestableCheck = 0;
+    for (const auto& source : sources_) {
+      numRequestableCheck += source->isRequestable();
+    }
+    VELOX_CHECK_EQ(numRequestable, numRequestableCheck);
+    // Note that space can be negative. Make requestSize no less than minimum
+    // reply.
+    requestSize = numRequestable
+        ? bits::roundUp(std::max<int64_t>(1, space / numRequestable), unit)
+        : unit;
+    // No new requests if there is no space and there is something already
+    // received or expected.
+    fullRequestBatch = numToRequest == 0 &&
+        (queue_->totalBytes() > 0 || queue_->expectedBytes() > 0);
+    for (auto i = 0; !fullRequestBatch && i < sources_.size(); ++i) {
+      if (++nextSourceIndex_ >= sources_.size()) {
+        nextSourceIndex_ = 0;
+      }
+      auto& source = sources_[nextSourceIndex_];
+      // 'replySource' is pending, so will not be added to 'toRequest.
+      if (source->shouldRequestLocked()) {
+        requestedBytes += requestSize;
+        toRequest.push_back(source);
+        if (toRequest.size() >= numToRequest || requestedBytes > space) {
+          // If we expect a full buffer from sources other than the one that
+          // replied, we ack the reply instead of direct rerequest.
+          fullRequestBatch = true;
+          break;
+        }
+      }
+    }
+    if (replySource && !replySource->isAtEnd()) {
+      // After requesting others, check if replySource 1. must send an ack, 2.
+      // must send a rerequest, 3. becomes not pending.
+      if (!fullRequestBatch) {
+        // There is space after requesting other sources. Send a new request in
+        // the place of ack. Saves a message.
+        isDirectRerequest = true;
+        requestedBytes += requestSize;
+        requestMore = true;
+      } else {
+        // replySource will send an ack, and becomes not pending.
+        --queue_->numPending();
+        replySource->clearPendingLocked();
+      }
+    }
+    if (!toRequest.empty()) {
+      // If one source is already pending, substract it from the new request
+      // count.
+      queue_->recordRequestLocked(
+          toRequest.size() - isDirectRerequest, requestedBytes);
+    } else {
+      ++numNothingRequestable_;
+    }
+  }
+
+  // Outside of lock
+  for (auto& source : toRequest) {
+    source->request(requestSize);
+  }
+  return requestMore ? requestSize : 0;
 }
 
 ExchangeClient::~ExchangeClient() {
@@ -497,7 +619,12 @@ RowVectorPtr Exchange::getOutput() {
 void Exchange::recordStats() {
   auto lockedStats = stats_.wlock();
   for (const auto& [name, value] : exchangeClient_->stats()) {
-    lockedStats->runtimeStats[name].merge(value);
+    auto it = lockedStats->runtimeStats.find(name);
+    if (it == lockedStats->runtimeStats.end()) {
+      lockedStats->runtimeStats[name] = value;
+    } else {
+      lockedStats->runtimeStats[name].merge(value);
+    }
   }
 }
 

@@ -24,6 +24,7 @@
 #include "velox/exec/PartitionedOutputBufferManager.h"
 #include "velox/exec/PlanNodeStats.h"
 #include "velox/exec/RoundRobinPartitionFunction.h"
+#include "velox/exec/tests/utils/AssertQueryBuilder.h"
 #include "velox/exec/tests/utils/HiveConnectorTestBase.h"
 #include "velox/exec/tests/utils/OperatorTestBase.h"
 #include "velox/exec/tests/utils/PlanBuilder.h"
@@ -38,8 +39,47 @@ using namespace facebook::velox::memory;
 using facebook::velox::common::testutil::TestValue;
 using facebook::velox::test::BatchMaker;
 
+class PartitionedOutputBufferTimeout {
+ public:
+  PartitionedOutputBufferTimeout(const int32_t intervalMillis)
+      : intervalMillis_(intervalMillis) {
+    thread = std::thread([&]() {
+      while (!stopping_) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(intervalMillis_));
+        auto mgr = PartitionedOutputBufferManager::getInstance().lock();
+        if (mgr) {
+          mgr->testingClearNotifys([](const std::string& s) {
+            return s.find("$clear") != std::string::npos;
+          });
+        }
+      }
+    });
+  }
+
+  ~PartitionedOutputBufferTimeout() {
+    stopping_ = true;
+    thread.join();
+  }
+
+ private:
+  const int32_t intervalMillis_;
+  std::atomic<bool> stopping_{false};
+  std::thread thread;
+};
+
 class MultiFragmentTest : public HiveConnectorTestBase {
  protected:
+  void SetUp() override {
+    HiveConnectorTestBase::SetUp();
+    periodicTimeout_ =
+        std::make_unique<PartitionedOutputBufferTimeout>(clearInterval_);
+  }
+
+  void TearDown() override {
+    periodicTimeout_.reset();
+    HiveConnectorTestBase::TearDown();
+  }
+
   static std::string makeTaskId(const std::string& prefix, int num) {
     return fmt::format("local://{}-{}", prefix, num);
   }
@@ -141,11 +181,164 @@ class MultiFragmentTest : public HiveConnectorTestBase {
         expectedCount, exchangeStats.at("localExchangeSource.numPages").count);
   }
 
+  // Returns a power law distributed pseudorandom size as a function of counter.
+  int32_t randomSize(int32_t counter, int32_t max) {
+    int32_t range = 30;
+    auto hash = folly::hasher<uint64_t>()(counter) >> 15;
+    int32_t low = (hash >> 10) & 1023;
+    if (low > 1010) {
+      range = 30;
+    } else if (low > 990) {
+      range = 20;
+    } else if (low > 950) {
+      range = 12;
+    } else {
+      range = 10;
+    }
+    auto size = 1 << (hash % range);
+    return size % max;
+  }
+
+  // Parameters for aggregationFlow test.
+  struct FlowTestParams {
+    // number of partitions in the shuffle.
+    int32_t numPartitions{11};
+
+    // Drivers in each of the Tasks
+    int32_t taskWidth{5};
+
+    // Number of bytes produced by each of 'numPartitions * taskWidth' drivers.
+    int64_t bytesPerSource{10000000};
+
+    // Minimum payload row size.
+    int32_t minRowBytes{100};
+
+    // Maximum payload row size.
+    int32_t maxRowBytes{1000};
+
+    // PartitionedOutputBufferManager capacity. Each task divides these bytes
+    // across its producers.
+    int32_t partitionBufferSize{20000};
+    // Maximum size of exchange queue for each consumer task. Determines request
+    // sizes.
+    int32_t exchangeBufferSize{10000};
+
+    // Enable flow control in exchange
+    bool enableFlowControl{true};
+  };
+
+  /// Tests a shuffle with parameters in 'params'. Returns the aggregated stats
+  /// of Exchanges and PartitionedOutputs from the plan.
+  std::pair<OperatorStats, OperatorStats> aggregationFlow(
+      FlowTestParams params) {
+    configSettings_[core::QueryConfig::kMaxPartitionedOutputBufferSize] =
+        fmt::format("{}", params.partitionBufferSize);
+    configSettings_[core::QueryConfig::kExchangeBufferSize] =
+        fmt::format("{}", params.exchangeBufferSize);
+    configSettings_[core::QueryConfig::kExchangeFlowControl] =
+        fmt::format("{}", params.enableFlowControl);
+    std::vector<std::shared_ptr<Task>> tasks;
+    int32_t taskWidth = 5;
+    constexpr int32_t kVectorSize = 1000;
+    std::vector<RowVectorPtr> vectors;
+    int64_t bytes = 0;
+    int32_t counter = 0;
+    do {
+      std::string temp;
+      auto row = makeRowVector(
+          {makeFlatVector<int64_t>(kVectorSize, [](auto row) { return row; }),
+           makeFlatVector<StringView>(kVectorSize, [&](auto row) {
+             auto stringBytes = params.minRowBytes +
+                 randomSize(++counter, params.maxRowBytes - params.minRowBytes);
+             temp.resize(stringBytes);
+             return StringView(temp.data(), temp.size());
+           })});
+      bytes += row->retainedSize();
+      vectors.push_back(row);
+    } while (bytes < params.bytesPerSource);
+
+    RowTypePtr leafType;
+    std::vector<std::string> leafTaskIds;
+    auto leafTaskPrefix = params.enableFlowControl ? "leaf$clear" : "leaf";
+    for (int32_t i = 0; i < params.numPartitions; ++i) {
+      auto leafTaskId = makeTaskId(leafTaskPrefix, i);
+      leafTaskIds.push_back(leafTaskId);
+      core::PlanNodePtr leafPlan;
+      leafPlan = PlanBuilder()
+                     .values(vectors, true)
+                     .partitionedOutput({"c0"}, params.numPartitions)
+                     .planNode();
+      auto leafTask = makeTask(leafTaskId, leafPlan, 0);
+      leafType = leafPlan->outputType();
+      tasks.push_back(leafTask);
+      Task::start(leafTask, taskWidth);
+    }
+
+    core::PlanNodePtr finalAggPlan;
+    std::vector<Split> finalAggSplits;
+    for (int i = 0; i < params.numPartitions; i++) {
+      finalAggPlan = PlanBuilder()
+                         .exchange(leafType)
+                         .singleAggregation({"c0"}, {"count(1)"})
+                         .partitionedOutput({}, 1)
+                         .planNode();
+
+      auto taskId = makeTaskId("final-agg", i);
+      finalAggSplits.push_back(
+          exec::Split(std::make_shared<RemoteConnectorSplit>(taskId), -1));
+      auto task = makeTask(taskId, finalAggPlan, i);
+      tasks.push_back(task);
+      Task::start(task, taskWidth);
+      addRemoteSplits(task, leafTaskIds);
+    }
+
+    auto expected =
+        makeRowVector({makeFlatVector<int64_t>(1, [&](auto /*row*/) {
+          return vectors.size() * kVectorSize * params.numPartitions *
+              params.taskWidth;
+        })});
+
+    auto op = PlanBuilder()
+                  .exchange(finalAggPlan->outputType())
+                  .singleAggregation({}, {"sum(a0)"})
+                  .planNode();
+
+    AssertQueryBuilder(op)
+        .config(core::QueryConfig::kExchangeBufferSize, "10000")
+        .config(
+            core::QueryConfig::kExchangeFlowControl,
+            fmt::format("{}", params.enableFlowControl))
+        .splits(finalAggSplits)
+        .assertResults(expected);
+
+    OperatorStats allExchanges(0, 0, "0", "Exchange");
+    OperatorStats allRepartitions(0, 0, "0", "PartitionedOutput");
+    for (auto& task : tasks) {
+      auto stats = task->taskStats();
+      for (auto& pipeline : stats.pipelineStats) {
+        for (auto& op : pipeline.operatorStats) {
+          if (op.operatorType == "Exchange") {
+            allExchanges.add(op);
+          } else if (op.operatorType == "PartitionedOutput") {
+            allRepartitions.add(op);
+          }
+        }
+      }
+    }
+    return std::make_pair(allExchanges, allRepartitions);
+  }
+
   RowTypePtr rowType_{
       ROW({"c0", "c1", "c2", "c3", "c4", "c5"},
           {BIGINT(), INTEGER(), SMALLINT(), REAL(), DOUBLE(), VARCHAR()})};
   std::unordered_map<std::string, std::string> configSettings_;
   std::vector<std::shared_ptr<TempFilePath>> filePaths_;
+
+  std::unique_ptr<PartitionedOutputBufferTimeout> periodicTimeout_;
+
+  // Millisecond interval for clearing notifications for data that has not
+  // arrived from PartitionedOutputBufferManager.
+  int32_t clearInterval_{10};
   std::vector<RowVectorPtr> vectors_;
 };
 
@@ -1353,6 +1546,37 @@ TEST_F(MultiFragmentTest, taskTerminateWithPendingOutputBuffers) {
   receivedIobufs.clear();
   ASSERT_EQ(task.use_count(), 1);
   task.reset();
+}
+
+TEST_F(MultiFragmentTest, flowControl) {
+  FlowTestParams params;
+
+  {
+    auto [exchange, partition] = aggregationFlow(params);
+    auto& stats = exchange.runtimeStats;
+    EXPECT_LT(stats["peakBytes"].max, 124000);
+  }
+
+  params.enableFlowControl = false;
+
+  {
+    auto [exchange, partition] = aggregationFlow(params);
+    auto& stats = exchange.runtimeStats;
+    EXPECT_GT(stats["peakBytes"].max, 124000);
+  }
+
+  params.enableFlowControl = true;
+  params.numPartitions = 21;
+  params.bytesPerSource = 100000000;
+  params.minRowBytes = 100;
+  params.maxRowBytes = 100000;
+  params.partitionBufferSize = 16000000;
+  int32_t exchangeBufferSize = 9000000;
+  {
+    auto [exchange, partition] = aggregationFlow(params);
+    auto& stats = exchange.runtimeStats;
+    EXPECT_LT(stats["peakBytes"].max, 10000000);
+  }
 }
 
 DEBUG_ONLY_TEST_F(MultiFragmentTest, mergeWithEarlyTermination) {

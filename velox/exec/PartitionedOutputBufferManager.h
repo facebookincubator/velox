@@ -185,6 +185,11 @@ class PartitionedOutputBuffer {
   // producer task has an error or cancellation.
   void terminate();
 
+  /// Removes any DataAvailable callbacks that may have been added to
+  /// destination buffers. Calls the callback of each with no data. Used for
+  /// simulating a 'no data' response from a remote source.
+  void testingClearNotifys();
+
   std::string toString();
 
   // Gets the memory utilization ratio in this output buffer.
@@ -358,6 +363,12 @@ class PartitionedOutputBufferManager {
       std::function<std::unique_ptr<OutputStreamListener>()> factory) {
     listenerFactory_ = factory;
   }
+
+  /// Removes any DataAvailable callbacks that may have been added to
+  /// destination buffers. Calls the callback of each with no data. Used for
+  /// simulating a 'no data' response from a remote source.
+  void testingClearNotifys(
+      std::function<bool(const std::string&)> tasksToClear);
 
   std::string toString();
 

@@ -49,14 +49,16 @@ class TestingExchangeSource : public ExchangeSource {
       std::lock_guard<std::mutex> l(queue_->mutex());
       requestPending_ = false;
       if (sentBytes_ == 10) {
-        queue_->enqueueLocked(nullptr, promises);
         atEnd_ = true;
+        queue_->enqueueLocked(nullptr, promises);
       } else {
         auto page =
             std::make_unique<SerializedPage>(folly::IOBuf::copyBuffer("a", 1));
         sentBytes_ += page->size();
-        queue_->recordReplyLocked(page->size());
+        int size = page->size();
         queue_->enqueueLocked(std::move(page), promises);
+        queue_->recordReplyLocked(size);
+        --queue_->numPending();
       }
     }
     for (auto& promise : promises) {
@@ -118,15 +120,14 @@ TEST(ExchangeClientTest, basic) {
   client->addRemoteTaskId("0");
   client->addRemoteTaskId("1");
   client->noMoreRemoteTasks();
-  VELOX_CHECK_EQ(client->queue()->totalBytes(), 2);
 
   bool atEnd = false;
   ContinueFuture dataFuture;
-  auto page = client->next(&atEnd, &dataFuture);
-  // next() will add 2 pages, and dequeue 1 page.
-  VELOX_CHECK_EQ(client->queue()->totalBytes(), 3);
 
-  for (int i = 0; i < 19; ++i) {
+  for (int i = 0; i < 20; ++i) {
+    // In each iteration, 2 pages get queued, and 1 page gets dequeued.
+    int queueSize = i < 10 ? 2 + i : 20 - i;
+    VELOX_CHECK_EQ(client->queue()->totalBytes(), queueSize);
     auto page = client->next(&atEnd, &dataFuture);
     VELOX_CHECK_EQ(page->size(), 1);
   }
@@ -135,6 +136,43 @@ TEST(ExchangeClientTest, basic) {
   int expectedSize = (bufferSize + 20) / 22;
   VELOX_CHECK_EQ(client->queue()->expectedSerializedPageSize(), expectedSize);
   VELOX_CHECK_EQ(client->stats()["peakBytes"].max, 11);
+  VELOX_CHECK(atEnd);
+}
+
+TEST(ExchangeClientTest, withFlowControl) {
+  auto executor = std::make_unique<folly::IOThreadPoolExecutor>(10);
+  std::shared_ptr<memory::MemoryPool> rootPool{
+      memory::defaultMemoryManager().addRootPool()};
+  std::shared_ptr<memory::MemoryPool> pool{rootPool->addLeafChild("leaf")};
+
+  ExchangeSource::registerFactory(
+      [](const std::string& taskId,
+         int destination,
+         std::shared_ptr<velox::exec::ExchangeQueue> queue,
+         velox::memory::MemoryPool* pool) {
+        return std::make_unique<TestingExchangeSource>(
+            taskId, destination, queue, pool);
+      });
+  int bufferSize = 60 * 1024;
+  auto client = ExchangeClient::create(1, pool.get(), bufferSize, true);
+  client->addRemoteTaskId("0");
+  client->addRemoteTaskId("1");
+  client->noMoreRemoteTasks();
+
+  bool atEnd = false;
+  ContinueFuture dataFuture;
+
+  for (int i = 0; i < 20; ++i) {
+    // Only have 1 page in queue
+    VELOX_CHECK_EQ(client->queue()->totalBytes(), 1);
+    auto page = client->next(&atEnd, &dataFuture);
+    VELOX_CHECK_EQ(page->size(), 1);
+  }
+  VELOX_CHECK_NULL(client->next(&atEnd, &dataFuture));
+  VELOX_CHECK_NULL(client->next(&atEnd, &dataFuture));
+  VELOX_CHECK_EQ(client->queue()->numCompleted(), 2);
+  VELOX_CHECK_EQ(client->queue()->expectedSerializedPageSize(), bufferSize);
+  VELOX_CHECK_EQ(client->stats()["peakBytes"].max, 1);
   VELOX_CHECK(atEnd);
 }
 
