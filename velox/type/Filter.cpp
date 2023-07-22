@@ -1036,6 +1036,12 @@ std::unique_ptr<Filter> createBigintValuesFilter(
       min = values[i];
     }
   }
+  if (min == max) {
+    if (negated) {
+      return std::make_unique<NegatedBigintRange>(min, max, nullAllowed);
+    }
+    return std::make_unique<BigintRange>(min, max, nullAllowed);
+  }
   // If bitmap would have more than 4 words per set bit, we prefer a
   // hash table. If bitmap fits in under 32 words, we use bitmap anyhow.
   int64_t range;

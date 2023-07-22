@@ -169,6 +169,35 @@ class InPredicateTest : public FunctionBaseTest {
   }
 };
 
+TEST_F(InPredicateTest, bigIntDuplicate) {
+  auto input = makeRowVector({
+      makeFlatVector<int64_t>({1, 2}, BIGINT()),
+  });
+  std::string predicate = "c0 IN ( 2, 2, 2, 2 )";
+  auto expected = makeNullableFlatVector<bool>({false, true});
+  auto result = evaluate<SimpleVector<bool>>(predicate, input);
+  assertEqualVectors(expected, result);
+
+  // NOT IN
+  input = makeRowVector({
+      makeFlatVector<int64_t>({3, 4, 5}, BIGINT()),
+  });
+  predicate = "c0 NOT IN ( 4, 4, 4, 4 )";
+  expected = makeNullableFlatVector<bool>({true, false, true});
+  result = evaluate<SimpleVector<bool>>(predicate, input);
+  assertEqualVectors(expected, result);
+}
+
+TEST_F(InPredicateTest, bigIntContinuousBlock) {
+  auto input = makeRowVector({
+      makeNullableFlatVector<int64_t>({1, 3, 9}, BIGINT()),
+  });
+  auto predicate = "c0 IN ( 1, 2, 3 )";
+  auto result = evaluate<SimpleVector<bool>>(predicate, input);
+  auto expected = makeNullableFlatVector<bool>({true, true, false});
+  assertEqualVectors(expected, result);
+}
+
 TEST_F(InPredicateTest, bigint) {
   testIntegers<int64_t>();
   testsIntegerConstant<int64_t>();
