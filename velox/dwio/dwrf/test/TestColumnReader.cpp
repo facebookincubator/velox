@@ -136,7 +136,7 @@ class ColumnReaderTestBase {
     if (useSelectiveReader()) {
       if (!scanSpec) {
         scanSpec_ = std::make_unique<common::ScanSpec>("root");
-        scanSpec_->addAllChildFields(*dataTypeWithId->type);
+        scanSpec_->addAllChildFields(dataTypeWithId->type);
         scanSpec = scanSpec_.get();
       }
       makeFieldSpecs("", 0, rowType, scanSpec);
@@ -811,7 +811,7 @@ TEST_P(TestColumnReader, testIntegerRLEv2) {
   VectorPtr batch = newBatch(rowType);
   if (useSelectiveReader()) {
     auto scanSpec = std::make_unique<common::ScanSpec>("root");
-    scanSpec->addAllChildFields(*dataType);
+    scanSpec->addAllChildFields(dataType);
     scanSpec->childByName("col_0")->setFilter(
         std::make_unique<common::BigintRange>(2100, 2140, false));
     scanSpec->childByName("col_1")->setFilter(

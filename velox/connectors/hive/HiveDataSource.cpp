@@ -65,7 +65,7 @@ bool applyPartitionFilter(
 
 // Recursively add subfields to scan spec.
 void addSubfields(
-    const Type& type,
+    const TypePtr& type,
     const std::vector<const common::Subfield*>& subfields,
     int level,
     memory::MemoryPool* pool,
@@ -76,7 +76,7 @@ void addSubfields(
       return;
     }
   }
-  switch (type.kind()) {
+  switch (type->kind()) {
     case TypeKind::ROW: {
       folly::F14FastMap<std::string, std::vector<const common::Subfield*>>
           required;
@@ -90,7 +90,7 @@ void addSubfields(
             element->toString());
         required[nestedField->name()].push_back(subfield);
       }
-      auto& rowType = type.asRow();
+      auto& rowType = type->asRow();
       for (int i = 0; i < rowType.size(); ++i) {
         auto& childName = rowType.nameOf(i);
         auto& childType = rowType.childAt(i);
@@ -100,16 +100,16 @@ void addSubfields(
           child->setConstantValue(
               BaseVector::createNullConstant(childType, 1, pool));
         } else {
-          addSubfields(*childType, it->second, level + 1, pool, *child);
+          addSubfields(childType, it->second, level + 1, pool, *child);
         }
       }
       break;
     }
     case TypeKind::MAP: {
-      auto& keyType = type.childAt(0);
-      auto* keys = spec.addMapKeyFieldRecursively(*keyType);
+      auto& keyType = type->childAt(0);
+      auto* keys = spec.addMapKeyFieldRecursively(keyType);
       addSubfields(
-          *type.childAt(1),
+          type->childAt(1),
           subfields,
           level + 1,
           pool,
@@ -151,7 +151,7 @@ void addSubfields(
     }
     case TypeKind::ARRAY: {
       addSubfields(
-          *type.childAt(0),
+          type->childAt(0),
           subfields,
           level + 1,
           pool,
@@ -175,7 +175,8 @@ void addSubfields(
       break;
     }
     default:
-      VELOX_FAIL("Subfields pruning not supported on type {}", type.toString());
+      VELOX_FAIL(
+          "Subfields pruning not supported on type {}", type->toString());
   }
 }
 
@@ -484,7 +485,7 @@ HiveDataSource::HiveDataSource(
       // all but used in remaining filter.
       //
       // TODO: Put only selected subfields in the scan spec.
-      scanSpec_->addFieldRecursively(input->field(), *input->type(), channel++);
+      scanSpec_->addFieldRecursively(input->field(), input->type(), channel++);
     }
     readerOutputType_ = ROW(std::move(names), std::move(types));
   }
@@ -793,7 +794,7 @@ std::shared_ptr<common::ScanSpec> HiveDataSource::makeScanSpec(
     auto& type = rowType->childAt(i);
     auto& subfields = columnHandles[i]->requiredSubfields();
     if (subfields.empty() || remainingFilterInputNames.count(name) > 0) {
-      spec->addFieldRecursively(name, *type, i);
+      spec->addFieldRecursively(name, type, i);
       continue;
     }
     std::vector<const common::Subfield*> subfieldPtrs;
@@ -811,7 +812,7 @@ std::shared_ptr<common::ScanSpec> HiveDataSource::makeScanSpec(
         subfieldPtrs.push_back(subfield);
       }
     }
-    addSubfields(*type, subfieldPtrs, 1, pool, *spec->addField(name, i));
+    addSubfields(type, subfieldPtrs, 1, pool, *spec->addField(name, i));
   }
 
   for (auto& pair : filters) {

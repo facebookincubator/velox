@@ -584,7 +584,7 @@ void E2EFilterTestBase::testMetadataFilter() {
         vectorMaker.rowVector({"a", "b", "c"}, {column, column, column})};
     writeToMemory(batches[0]->type(), batches, false);
     auto spec = std::make_shared<common::ScanSpec>("<root>");
-    spec->addAllChildFields(*batches[0]->type());
+    spec->addAllChildFields(batches[0]->type());
     auto untypedExpr = parse::parseExpr("a = 1 or b + c = 2", {});
     auto typedExpr = core::Expressions::inferTypes(
         untypedExpr, batches[0]->type(), leafPool_.get());
@@ -632,19 +632,19 @@ void E2EFilterTestBase::testSubfieldsPruning() {
       requiredA.push_back(i);
     }
   }
-  spec->addFieldRecursively("a", *BIGINT(), 0)
+  spec->addFieldRecursively("a", BIGINT(), 0)
       ->setFilter(common::createBigintValues(requiredA, false));
   std::vector<int64_t> requiredB;
   for (int i = 0; i < kMapSize; i += 2) {
     requiredB.push_back(i);
   }
-  auto specB = spec->addFieldRecursively("b", *MAP(BIGINT(), BIGINT()), 1);
+  auto specB = spec->addFieldRecursively("b", MAP(BIGINT(), BIGINT()), 1);
   specB->setFilter(exec::isNotNull());
   specB->childByName(common::ScanSpec::kMapKeysFieldName)
       ->setFilter(common::createBigintValues(requiredB, false));
-  spec->addFieldRecursively("c", *ARRAY(BIGINT()), 2)
+  spec->addFieldRecursively("c", ARRAY(BIGINT()), 2)
       ->setMaxArrayElementsCount(6);
-  auto specD = spec->addFieldRecursively("d", *MAP(BIGINT(), VARCHAR()), 3);
+  auto specD = spec->addFieldRecursively("d", MAP(BIGINT(), VARCHAR()), 3);
   specD->childByName(common::ScanSpec::kMapKeysFieldName)
       ->setFilter(common::createBigintValues({1}, false));
   ReaderOptions readerOpts{leafPool_.get()};
@@ -723,7 +723,7 @@ void E2EFilterTestBase::testMutationCornerCases() {
   // 2. Whole batch deletion.
   // 3. Delete last a few rows in a batch.
   auto spec = std::make_shared<common::ScanSpec>("<root>");
-  spec->addAllChildFields(*rowType);
+  spec->addAllChildFields(rowType);
   RowReaderOptions rowReaderOpts;
   setUpRowReaderOptions(rowReaderOpts, spec);
   auto rowReader = reader->createRowReader(rowReaderOpts);

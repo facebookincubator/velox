@@ -350,7 +350,7 @@ std::vector<FilterSpec> FilterGenerator::makeRandomSpecs(
 std::shared_ptr<ScanSpec> FilterGenerator::makeScanSpec(
     const SubfieldFilters& filters) {
   auto spec = std::make_shared<ScanSpec>("root");
-  spec->addAllChildFields(*rowType_);
+  spec->addAllChildFields(rowType_);
   addToScanSpec(filters, *spec);
   return spec;
 }
@@ -676,7 +676,7 @@ std::shared_ptr<ScanSpec> FilterGenerator::makeScanSpec(
     std::vector<RowVectorPtr>& batches,
     memory::MemoryPool* pool) {
   auto root = std::make_shared<ScanSpec>("<root>");
-  root->addAllChildFields(*rowType_);
+  root->addAllChildFields(rowType_);
   auto* first = batches[0].get();
   for (auto& path : prunable) {
     Subfield subfield(path);

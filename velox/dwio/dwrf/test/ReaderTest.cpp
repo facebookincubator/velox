@@ -1816,7 +1816,7 @@ TEST(TestReader, appendRowNumberColumn) {
   auto [writer, reader] = createWriterReader(batches, *pool);
 
   auto spec = std::make_shared<common::ScanSpec>("<root>");
-  spec->addAllChildFields(*schema);
+  spec->addAllChildFields(schema);
   RowReaderOptions rowReaderOpts;
   rowReaderOpts.setScanSpec(spec);
   rowReaderOpts.setAppendRowNumberColumn(true);
@@ -1843,7 +1843,7 @@ TEST(TestReader, reuseRowNumberColumn) {
   auto [writer, reader] = createWriterReader(batches, *pool);
 
   auto spec = std::make_shared<common::ScanSpec>("<root>");
-  spec->addAllChildFields(*schema);
+  spec->addAllChildFields(schema);
   RowReaderOptions rowReaderOpts;
   rowReaderOpts.setScanSpec(spec);
   rowReaderOpts.setAppendRowNumberColumn(true);

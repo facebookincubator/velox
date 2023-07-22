@@ -320,33 +320,37 @@ class ScanSpec {
   // out.
   ScanSpec* addFieldRecursively(
       const std::string& name,
-      const Type&,
+      const TypePtr& type,
       column_index_t channel);
 
   // Add a field for map key.
   ScanSpec* addMapKeyField();
 
   // Add a field for map key, along with its child recursively.
-  ScanSpec* addMapKeyFieldRecursively(const Type&);
+  ScanSpec* addMapKeyFieldRecursively(const TypePtr&);
 
   // Add a field for map value.
   ScanSpec* addMapValueField();
 
   // Add a field for map value, along with its child recursively.
-  ScanSpec* addMapValueFieldRecursively(const Type&);
+  ScanSpec* addMapValueFieldRecursively(const TypePtr&);
 
   // Add a field for array element.
   ScanSpec* addArrayElementField();
 
   // Add a field for array element, along with its child recursively.
-  ScanSpec* addArrayElementFieldRecursively(const Type&);
+  ScanSpec* addArrayElementFieldRecursively(const TypePtr&);
 
   // Add all child fields on the type recursively to this ScanSpec, all
   // projected out.
-  void addAllChildFields(const Type&);
+  void addAllChildFields(const TypePtr&);
+
+  const TypePtr& getOutputType() const;
 
  private:
   void reorder();
+
+  TypePtr outputType_;
 
   // Serializes stableChildren().
   std::mutex mutex_;

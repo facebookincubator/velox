@@ -429,7 +429,7 @@ ScanSpec* ScanSpec::addField(const std::string& name, column_index_t channel) {
 
 ScanSpec* ScanSpec::addFieldRecursively(
     const std::string& name,
-    const Type& type,
+    const TypePtr& type,
     column_index_t channel) {
   auto* child = addField(name, channel);
   child->addAllChildFields(type);
@@ -442,7 +442,7 @@ ScanSpec* ScanSpec::addMapKeyField() {
   return child;
 }
 
-ScanSpec* ScanSpec::addMapKeyFieldRecursively(const Type& type) {
+ScanSpec* ScanSpec::addMapKeyFieldRecursively(const TypePtr& type) {
   auto* child = addFieldRecursively(kMapKeysFieldName, type, kNoChannel);
   child->isArrayElementOrMapEntry_ = true;
   return child;
@@ -454,7 +454,7 @@ ScanSpec* ScanSpec::addMapValueField() {
   return child;
 }
 
-ScanSpec* ScanSpec::addMapValueFieldRecursively(const Type& type) {
+ScanSpec* ScanSpec::addMapValueFieldRecursively(const TypePtr& type) {
   auto* child = addFieldRecursively(kMapValuesFieldName, type, kNoChannel);
   child->isArrayElementOrMapEntry_ = true;
   return child;
@@ -466,31 +466,36 @@ ScanSpec* ScanSpec::addArrayElementField() {
   return child;
 }
 
-ScanSpec* ScanSpec::addArrayElementFieldRecursively(const Type& type) {
+ScanSpec* ScanSpec::addArrayElementFieldRecursively(const TypePtr& type) {
   auto* child = addFieldRecursively(kArrayElementsFieldName, type, kNoChannel);
   child->isArrayElementOrMapEntry_ = true;
   return child;
 }
 
-void ScanSpec::addAllChildFields(const Type& type) {
-  switch (type.kind()) {
+void ScanSpec::addAllChildFields(const TypePtr& type) {
+  outputType_ = type;
+  switch (type->kind()) {
     case TypeKind::ROW: {
-      auto& rowType = type.asRow();
-      for (auto i = 0; i < type.size(); ++i) {
-        addFieldRecursively(rowType.nameOf(i), *type.childAt(i), i);
+      auto& rowType = type->asRow();
+      for (auto i = 0; i < type->size(); ++i) {
+        addFieldRecursively(rowType.nameOf(i), type->childAt(i), i);
       }
       break;
     }
     case TypeKind::MAP:
-      addMapKeyFieldRecursively(*type.childAt(0));
-      addMapValueFieldRecursively(*type.childAt(1));
+      addMapKeyFieldRecursively(type->childAt(0));
+      addMapValueFieldRecursively(type->childAt(1));
       break;
     case TypeKind::ARRAY:
-      addArrayElementFieldRecursively(*type.childAt(0));
+      addArrayElementFieldRecursively(type->childAt(0));
       break;
     default:
       break;
   }
+}
+
+const TypePtr& ScanSpec::getOutputType() const {
+  return outputType_;
 }
 
 } // namespace facebook::velox::common
