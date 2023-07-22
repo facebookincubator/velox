@@ -222,6 +222,14 @@ TEST_F(DateTimeFunctionsTest, dateSub) {
 
   // Check for negative intervals.
   EXPECT_EQ(parseDate("2020-02-29"), dateSub("2019-02-28", -366));
+
+  //Check for minimum and maximum.
+  constexpr int32_t kMin = std::numeric_limits<int32_t>::min();
+  constexpr int32_t kMax = std::numeric_limits<int32_t>::max();
+  EXPECT_EQ(parseDate("1970-01-03"), dateSub("-5877641-06-25", kMin));
+  EXPECT_EQ(parseDate("1969-12-31"), dateSub("5881580-07-10", kMax));
+  EXPECT_EQ(parseDate("5881580-07-10"), dateSub("1969-12-30", kMin));
+  EXPECT_EQ(parseDate("-5877641-06-25"), dateSub("1970-01-02", kMax));
 }
 
 } // namespace
