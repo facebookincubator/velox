@@ -607,6 +607,18 @@ int64_t MemoryPoolImpl::capacity() const {
   return capacity_;
 }
 
+bool MemoryPoolImpl::highUsage() {
+  if (parent_ != nullptr) {
+    return parent_->highUsage();
+  }
+
+  if (highUsageCallback_ != nullptr) {
+    return highUsageCallback_(*this);
+  }
+
+  return false;
+}
+
 std::shared_ptr<MemoryPool> MemoryPoolImpl::genChild(
     std::shared_ptr<MemoryPool> parent,
     const std::string& name,

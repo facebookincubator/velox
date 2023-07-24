@@ -105,6 +105,7 @@ constexpr int64_t kMaxMemory = std::numeric_limits<int64_t>::max();
 /// be merged into memory pool object later.
 class MemoryPool : public std::enable_shared_from_this<MemoryPool> {
  public:
+  using HighUsageCallBack = std::function<bool(MemoryPool& Pool)>;
   /// Defines the kinds of a memory pool.
   enum class Kind {
     /// The leaf memory pool is used for memory allocation. User can allocate
@@ -325,6 +326,14 @@ class MemoryPool : public std::enable_shared_from_this<MemoryPool> {
   /// 'capacity()' is fixed and set to 'maxCapacity()' on creation.
   virtual int64_t capacity() const = 0;
 
+  virtual bool highUsage() = 0;
+
+  virtual void setHighUsageCallback(HighUsageCallBack func) {
+    VELOX_CHECK_NULL(
+        parent_, "Only root memory pool allows to set high-usage callback");
+    highUsageCallback_ = func;
+  }
+
   /// Returns the currently used memory in bytes of this memory pool.
   virtual int64_t currentBytes() const = 0;
 
@@ -527,6 +536,8 @@ class MemoryPool : public std::enable_shared_from_this<MemoryPool> {
   // visitChildren() cost as we don't have to upgrade the weak pointer and copy
   // out the upgraded shared pointers.git
   std::unordered_map<std::string, std::weak_ptr<MemoryPool>> children_;
+
+  HighUsageCallBack highUsageCallback_{};
 };
 
 std::ostream& operator<<(std::ostream& out, MemoryPool::Kind kind);
@@ -579,6 +590,8 @@ class MemoryPoolImpl : public MemoryPool {
       ContiguousAllocation& allocation) override;
 
   int64_t capacity() const override;
+
+  bool highUsage() override;
 
   int64_t currentBytes() const override {
     std::lock_guard<std::mutex> l(mutex_);
@@ -637,6 +650,14 @@ class MemoryPoolImpl : public MemoryPool {
 
   MemoryAllocator* testingAllocator() const {
     return allocator_;
+  }
+
+  MemoryAllocator* getAllocator() {
+    return allocator_;
+  }
+
+  void setAllocator(MemoryAllocator* allocator) {
+    allocator_ = allocator;
   }
 
   /// Structure to store allocation details in debug mode.
@@ -942,7 +963,7 @@ class MemoryPoolImpl : public MemoryPool {
   void leakCheckDbg();
 
   MemoryManager* const manager_;
-  MemoryAllocator* const allocator_;
+  MemoryAllocator* allocator_;
   const DestructionCallback destructionCb_;
 
   // Regex for filtering on 'name_' when debug mode is enabled. This allows us
