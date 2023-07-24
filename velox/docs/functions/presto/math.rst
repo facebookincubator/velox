@@ -277,3 +277,8 @@ Probability Functions: inverse_cdf
     probability (p): P(N < n). The a, b parameters must be positive real values (all of type DOUBLE).
     The probability p must lie on the interval [0, 1].
 
+.. function:: inverse_gamma_cdf(shape, scale, p) -> double
+
+    Compute the inverse of the Gamma cdf with given shape and scale parameters for the cumulative
+    probability (p): P(N < n). The shape and scale parameters must be positive real values.
+    The probability p must lie on the interval [0, 1].

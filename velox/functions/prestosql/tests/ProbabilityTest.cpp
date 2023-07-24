@@ -221,5 +221,60 @@ TEST_F(ProbabilityTest, invBetaCDF) {
   VELOX_ASSERT_THROW(invBetaCDF(3, 5, 1.1), "p must be in the interval [0, 1]");
 }
 
+TEST_F(ProbabilityTest, inverseGammaCDF) {
+  const auto inverseGammaCDF = [&](std::optional<double> shape,
+                                   std::optional<double> scale,
+                                   std::optional<double> p) {
+    return evaluateOnce<double>(
+        "inverse_gamma_cdf(c0, c1, c2)", shape, scale, p);
+  };
+
+  EXPECT_EQ(inverseGammaCDF(3, 3.6, 0.0), 0.0);
+  EXPECT_EQ(inverseGammaCDF(3, 4, 0.99), 33.623787659541861);
+  EXPECT_EQ(inverseGammaCDF(3, 4, 0.50), 10.696241254894241);
+
+  // Gamma with shape 10k/2 and scale 2 is chisquare with df=10k, which is
+  // approximatly Normal with mu=10k Hence, we expect that the quantile
+  // will be close to 10k.
+  EXPECT_EQ(inverseGammaCDF(10000.0 / 2, 2.0, 0.50), 9999.333341235144);
+
+  EXPECT_EQ(inverseGammaCDF(std::nullopt, 2.0, 0.5), std::nullopt);
+  EXPECT_EQ(inverseGammaCDF(3, std::nullopt, 0.50), std::nullopt);
+  EXPECT_EQ(inverseGammaCDF(3, 4, std::nullopt), std::nullopt);
+  EXPECT_EQ(
+      inverseGammaCDF(std::nullopt, std::nullopt, std::nullopt), std::nullopt);
+
+  EXPECT_EQ(inverseGammaCDF(kDoubleMax, 3.6, 0.0), 0.0);
+  EXPECT_THAT(inverseGammaCDF(3, kDoubleMax, 0.99), IsInf());
+  EXPECT_EQ(inverseGammaCDF(kDoubleMin, 3.6, 0.0), 0.0);
+  EXPECT_EQ(inverseGammaCDF(3, kDoubleMin, 0.99), 1.8703852736310908e-307);
+
+  // Test invalid inputs.
+  VELOX_ASSERT_THROW(
+      inverseGammaCDF(-0.00001, 3, 0.5), "shape must be greater than 0");
+  VELOX_ASSERT_THROW(
+      inverseGammaCDF(3, -0.00001, 0.5), "scale must be greater than 0");
+  VELOX_ASSERT_THROW(
+      inverseGammaCDF(3, 5, -0.00001), "p must be in the interval [0, 1]");
+  VELOX_ASSERT_THROW(
+      inverseGammaCDF(3, 5, 1.00001), "p must be in the interval [0, 1]");
+
+  VELOX_ASSERT_THROW(
+      inverseGammaCDF(kInf, 3.6, 0.0),
+      "Error in function boost::math::gamma_distribution<double>::gamma_distribution: Shape parameter is inf, but must be > 0 !");
+  VELOX_ASSERT_THROW(
+      inverseGammaCDF(3, kInf, 0.99),
+      "Error in function boost::math::gamma_distribution<double>::gamma_distribution: Scale parameter is inf, but must be > 0 !");
+  VELOX_ASSERT_THROW(
+      inverseGammaCDF(3, 4, kInf), "p must be in the interval [0, 1]");
+
+  VELOX_ASSERT_THROW(
+      inverseGammaCDF(kNan, 3.6, 0.0), "shape must be greater than 0");
+  VELOX_ASSERT_THROW(
+      inverseGammaCDF(3, kNan, 0.99), "scale must be greater than 0");
+  VELOX_ASSERT_THROW(
+      inverseGammaCDF(3, 4, kNan), "p must be in the interval [0, 1]");
+}
+
 } // namespace
 } // namespace facebook::velox

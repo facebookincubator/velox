@@ -18,6 +18,7 @@
 #include "boost/math/distributions/beta.hpp"
 #include "boost/math/distributions/binomial.hpp"
 #include "boost/math/distributions/cauchy.hpp"
+#include "boost/math/distributions/gamma.hpp"
 #include "velox/common/base/Exceptions.h"
 #include "velox/functions/Macros.h"
 
@@ -132,6 +133,21 @@ struct InverseBetaCDFFunction {
     VELOX_USER_CHECK((b > 0) && (b != kInf), "b must be > 0");
 
     boost::math::beta_distribution<> dist(a, b);
+    result = boost::math::quantile(dist, p);
+  }
+};
+
+template <typename T>
+struct InverseGammaCDFFunction {
+  VELOX_DEFINE_FUNCTION_TYPES(T);
+
+  FOLLY_ALWAYS_INLINE void
+  call(double& result, double shape, double scale, double p) {
+    VELOX_USER_CHECK((p >= 0) && (p <= 1), "p must be in the interval [0, 1]");
+    VELOX_CHECK_GT(shape, 0, "shape must be greater than 0");
+    VELOX_CHECK_GT(scale, 0, "scale must be greater than 0");
+
+    boost::math::gamma_distribution<> dist(shape, scale);
     result = boost::math::quantile(dist, p);
   }
 };
