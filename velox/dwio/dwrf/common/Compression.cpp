@@ -40,7 +40,7 @@ namespace {
 class ZstdCompressor : public Compressor {
  public:
   explicit ZstdCompressor(int32_t level) : Compressor{level} {}
-  
+
   uint64_t compress(const void* src, void* dest, uint64_t length) override;
 };
 
