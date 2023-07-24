@@ -1858,6 +1858,13 @@ class MultiRange final : public Filter {
         filters_(std::move(filters)),
         nanAllowed_(nanAllowed) {}
 
+  MultiRange(
+      std::vector<std::unique_ptr<Filter>> filters,
+      bool nullAllowed)
+      : Filter(true, nullAllowed, FilterKind::kMultiRange),
+        filters_(std::move(filters)),
+        nanAllowed_(true) {}
+
   folly::dynamic serialize() const override;
 
   static FilterPtr create(const folly::dynamic& obj);
