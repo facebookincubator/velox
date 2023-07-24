@@ -16,14 +16,13 @@
 
 #include "velox/substrait/tests/JsonToProtoConverter.h"
 
-#include "velox/common/base/Fs.h"
 #include "velox/common/base/tests/GTestUtils.h"
+#include "velox/core/QueryCtx.h"
 #include "velox/dwio/common/tests/utils/DataFiles.h"
 
 #include "velox/substrait/SubstraitToVeloxPlan.h"
 #include "velox/substrait/TypeUtils.h"
 #include "velox/substrait/VariantToVectorConverter.h"
-#include "velox/substrait/VeloxToSubstraitType.h"
 
 using namespace facebook::velox;
 using namespace facebook::velox::test;
