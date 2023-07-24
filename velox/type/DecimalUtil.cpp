@@ -66,14 +66,12 @@ int32_t lastNonzeroIntIndex(const std::vector<int32_t>& mag) {
   return mag.size() - i - 1;
 }
 
-/**
- * Origins from BigInteger#getInt.
- *
- * Returns the specified int of the little-endian two's complement
- * representation (int 0 is the least significant).  The int number can
- * be arbitrarily high (values are logically preceded by infinitely many
- * sign ints).
- */
+// Origins from BigInteger#getInt.
+//
+// Returns the specified int of the little-endian two's complement
+// representation (int 0 is the least significant).  The int number can
+// be arbitrarily high (values are logically preceded by infinitely many
+// sign ints).
 int32_t getInt(
     int32_t n,
     int8_t sig,
