@@ -260,6 +260,11 @@ Probability Functions: cdf
     Compute the Cauchy cdf with given parameters median and scale (gamma): P(N; median, scale).
     The scale parameter must be a positive double. The value parameter must be a double on the interval [0, 1].
 
+.. function:: f_cdf(df1, df2, value) -> double
+
+    Compute the F cdf with given df1 (numerator degrees of freedom) and df2 (denominator degrees of freedom) parameters:  P(N < value; df1, df2).
+    The numerator and denominator df parameters must be positive real numbers. The value must be a non-negative real number.
+
 .. function:: normal_cdf(mean, sd, value) -> double
 
     Compute the Normal cdf with given mean and standard deviation (sd): P(N < value; mean, sd).
