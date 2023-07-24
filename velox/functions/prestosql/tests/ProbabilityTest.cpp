@@ -221,5 +221,55 @@ TEST_F(ProbabilityTest, invBetaCDF) {
   VELOX_ASSERT_THROW(invBetaCDF(3, 5, 1.1), "p must be in the interval [0, 1]");
 }
 
+TEST_F(ProbabilityTest, inverseChiSquaredCDF) {
+  const auto invChiSquaredCDF = [&](std::optional<double> df,
+                                    std::optional<double> p) {
+    return evaluateOnce<double>("inverse_chi_squared_cdf(c0, c1)", df, p);
+  };
+
+  EXPECT_EQ(0.0, invChiSquaredCDF(3, 0.0));
+  EXPECT_EQ(1.4236522430352796, invChiSquaredCDF(3, 0.3));
+  EXPECT_EQ(11.344866730144370, invChiSquaredCDF(3, 0.99));
+  EXPECT_EQ(2.8093008564672404e-123, invChiSquaredCDF(5, kDoubleMin));
+  EXPECT_EQ(1.7976931348623157e+308, invChiSquaredCDF(kDoubleMax, 0.95));
+  EXPECT_EQ(std::nullopt, invChiSquaredCDF(std::nullopt, 0.94));
+  EXPECT_EQ(std::nullopt, invChiSquaredCDF(142.345, std::nullopt));
+  EXPECT_EQ(std::nullopt, invChiSquaredCDF(std::nullopt, std::nullopt));
+
+  // Test invalid inputs for df.
+  VELOX_ASSERT_THROW(invChiSquaredCDF(-3, 0.3), "df must be greater than 0");
+  VELOX_ASSERT_THROW(invChiSquaredCDF(kNan, 0.99), "df must be greater than 0");
+  VELOX_ASSERT_THROW(
+      invChiSquaredCDF(kInf, 0.99),
+      "Error in function boost::math::chi_squared_distribution<double>::chi_squared_distribution: Degrees of freedom argument is inf, but must be > 0 !");
+  VELOX_ASSERT_THROW(
+      invChiSquaredCDF(kBigIntMin, 0.15), "df must be greater than 0");
+
+  // Test invalid inputs for p.
+  VELOX_ASSERT_THROW(
+      invChiSquaredCDF(3, 1.00001), "p must be in the interval [0, 1]");
+  VELOX_ASSERT_THROW(
+      invChiSquaredCDF(40, kNan), "p must be in the interval [0, 1]");
+  VELOX_ASSERT_THROW(
+      invChiSquaredCDF(40, kInf), "p must be in the interval [0, 1]");
+  VELOX_ASSERT_THROW(
+      invChiSquaredCDF(11, kDoubleMax), "p must be in the interval [0, 1]");
+  VELOX_ASSERT_THROW(
+      invChiSquaredCDF(500, kBigIntMin), "p must be in the interval [0, 1]");
+  VELOX_ASSERT_THROW(
+      invChiSquaredCDF(234, kBigIntMax), "p must be in the interval [0, 1]");
+
+  // Test invalid inputs for both params.
+  VELOX_ASSERT_THROW(
+      invChiSquaredCDF(-3, -0.001), "p must be in the interval [0, 1]");
+  VELOX_ASSERT_THROW(
+      invChiSquaredCDF(kNan, kNan), "p must be in the interval [0, 1]");
+  VELOX_ASSERT_THROW(
+      invChiSquaredCDF(kInf, kInf), "p must be in the interval [0, 1]");
+  VELOX_ASSERT_THROW(
+      invChiSquaredCDF(kBigIntMin, kBigIntMax),
+      "p must be in the interval [0, 1]");
+}
+
 } // namespace
 } // namespace facebook::velox
