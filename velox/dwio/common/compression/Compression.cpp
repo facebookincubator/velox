@@ -26,6 +26,7 @@
 #include <zlib.h>
 #include <zstd.h>
 #include <zstd_errors.h>
+#include <qatseqprod.h>
 
 namespace facebook::velox::dwio::common::compression {
 
@@ -38,13 +39,38 @@ namespace {
 
 class ZstdCompressor : public Compressor {
  public:
-  explicit ZstdCompressor(int32_t level) : Compressor{level} {}
+  explicit ZstdCompressor(int32_t level) : Compressor{level} {
+  #ifdef VELOX_ENABLE_QAT_OT
+    zc = ZSTD_createCCtx();
+    QZSTD_startQatDevice();
+    void *sequenceProducerState = QZSTD_createSeqProdState();
+    ZSTD_registerSequenceProducer(
+        zc,
+        sequenceProducerState,
+        qatSequenceProducer
+    );
+    ZSTD_CCtx_setParameter(zc, ZSTD_c_enableSeqProducerFallback, 1);
+  #endif
+  }
+  #ifdef VELOX_ENABLE_QAT_OT
+    ZSTD_CCtx* zc;
+  #endif
 
   uint64_t compress(const void* src, void* dest, uint64_t length) override;
 };
 
 uint64_t
 ZstdCompressor::compress(const void* src, void* dest, uint64_t length) {
+  #ifdef VELOX_ENABLE_QAT_OT
+    size_t ret = ZSTD_compress2(zc, dest, length, src, length);
+    if ((int)cSize <= 0) {
+        printf("Compress failed\n");
+        ZSTD_freeCCtx(zc);
+        QZSTD_freeSeqProdState(sequenceProducerState);
+        return static_cast<int64_t>(cSize);
+    }
+    return ret;
+  #endif
   auto ret = ZSTD_compress(dest, length, src, length, level_);
   if (ZSTD_isError(ret)) {
     // it's fine to hit dest size too small
