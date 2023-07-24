@@ -186,7 +186,7 @@ class GCSWriteFile final : public WriteFile {
       return;
     }
 
-    // check that it doesn't exist , if it does throw an error
+    // Check that it doesn't exist, if it does throw an error
     auto object_metadata = client_->GetObjectMetadata(bucket_, key_);
 
     if (object_metadata.ok()) {
@@ -204,19 +204,19 @@ class GCSWriteFile final : public WriteFile {
   }
 
   void append(const std::string_view data) {
-    VELOX_CHECK((!closed_ && stream_.IsOpen()), "File is closed");
+    VELOX_CHECK(isFileOpen(), "File is closed");
     stream_ << data;
     size_ += data.size();
   }
 
   void flush() {
-    if (!closed_ && stream_.IsOpen()) {
+    if (isFileOpen()) {
       stream_.flush();
     }
   }
 
   void close() {
-    if (!closed_ && stream_.IsOpen()) {
+    if (isFileOpen()) {
       stream_.flush();
       stream_.Close();
       closed_ = true;
@@ -228,6 +228,10 @@ class GCSWriteFile final : public WriteFile {
   }
 
  private:
+  inline bool isFileOpen() {
+    return (!closed_ && stream_.IsOpen());
+  }
+
   gcs::ObjectWriteStream stream_;
   std::shared_ptr<gcs::Client> client_;
   std::string bucket_;
