@@ -50,16 +50,14 @@ std::string formatDecimal(uint8_t scale, int128_t unscaledValue) {
       "{}{}{}", isNegative ? "-" : "", integralPart, fractionString);
 }
 
-/**
- * Origins from BigInteger#firstNonzeroIntNum.
- *
- * Returns the index of the int that contains the first nonzero int in the
- * little-endian binary representation of the magnitude (int 0 is the
- * least significant). If the magnitude is zero, return value is undefined.
- *
- * <p>Note: never used for a BigInteger with a magnitude of zero.
- * @see #getInt
- */
+// Origins from BigInteger#firstNonzeroIntNum.
+//
+// Returns the index of the int that contains the first nonzero int in the
+// little-endian binary representation of the magnitude (int 0 is the
+// least significant). If the magnitude is zero, return value is undefined.
+//
+// <p>Note: never used for a BigInteger with a magnitude of zero.
+// @see #getInt
 int32_t lastNonzeroIntIndex(const std::vector<int32_t>& mag) {
   int32_t i;
   for (i = mag.size() - 1; i >= 0 && mag[i] == 0; --i) {
@@ -98,18 +96,16 @@ int32_t getBitCount(uint32_t i) {
   return bits::countBits(reinterpret_cast<uint64_t*>(&num), 0, kMaxBits);
 }
 
-/**
- * Origins from java side BigInteger#bitLength.
- *
- * Returns the number of bits in the minimal two's-complement
- * representation of this BigInteger, <em>excluding</em> a sign bit.
- * For positive BigIntegers, this is equivalent to the number of bits in
- * the ordinary binary representation.  For zero this method returns
- * {@code 0}.  (Computes {@code (ceil(log2(this < 0 ? -this : this+1)))}.)
- *
- * @return number of bits in the minimal two's-complement
- *         representation of this BigInteger, <em>excluding</em> a sign bit.
- */
+// Origins from java side BigInteger#bitLength.
+//
+// Returns the number of bits in the minimal two's-complement
+// representation of this BigInteger, <em>excluding</em> a sign bit.
+// For positive BigIntegers, this is equivalent to the number of bits in
+// the ordinary binary representation.  For zero this method returns
+// {@code 0}.  (Computes {@code (ceil(log2(this < 0 ? -this : this+1)))}.)
+//
+// @return number of bits in the minimal two's-complement
+//         representation of this BigInteger, <em>excluding</em> a sign bit.
 int32_t getBitLength(int8_t sig, const std::vector<int32_t>& mag) {
   int32_t len = mag.size();
   int32_t n = -1;
@@ -133,17 +129,13 @@ int32_t getBitLength(int8_t sig, const std::vector<int32_t>& mag) {
   return n;
 }
 
-/**
- * Refer to BigInteger(byte[] val) to get the mag definition
- *
- * The magnitude of this BigInteger, in <i>big-endian</i> order: the
- * zeroth element of this array is the most-significant int of the
- * magnitude.  The magnitude must be "minimal" in that the most-significant
- * int ({@code mag[0]}) must be non-zero.  This is necessary to
- * ensure that there is exactly one representation for each BigInteger
- * value.  Note that this implies that the BigInteger zero has a
- * zero-length mag array.
- */
+// The magnitude of this BigInteger, in <i>big-endian</i> order: the
+// zeroth element of this array is the most-significant int of the
+// magnitude.  The magnitude must be "minimal" in that the most-significant
+// int ({@code mag[0]}) must be non-zero.  This is necessary to
+// ensure that there is exactly one representation for each BigInteger
+// value.  Note that this implies that the BigInteger zero has a
+// zero-length mag array.
 std::vector<int32_t> convertToIntMags(uint128_t value) {
   std::vector<int32_t> mag;
   int32_t v1 = value >> 96;
