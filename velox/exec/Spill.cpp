@@ -29,7 +29,7 @@ namespace facebook::velox::exec {
 static const serializer::presto::PrestoVectorSerde::PrestoOptions
     kDefaultSerdeOptions(
         /*useLosslessTimestamp*/ true,
-        dwio::common::CompressionKind::CompressionKind_NONE);
+        common::CompressionKind::CompressionKind_NONE);
 
 std::atomic<int32_t> SpillFile::ordinalCounter_;
 

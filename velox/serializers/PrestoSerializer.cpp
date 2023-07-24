@@ -1571,9 +1571,9 @@ class PrestoVectorSerializer : public VectorSerializer {
       int32_t numRows,
       StreamArena* streamArena,
       bool useLosslessTimestamp,
-      dwio::common::CompressionKind compressionKind)
+      common::CompressionKind compressionKind)
       : streamArena_(streamArena),
-        codec_(dwio::common::compressionKindToCodec(compressionKind)) {
+        codec_(common::compressionKindToCodec(compressionKind)) {
     auto types = rowType->children();
     auto numTypes = types.size();
     streams_.resize(numTypes);
@@ -1808,8 +1808,7 @@ void PrestoVectorSerde::deserialize(
     const Options* options) {
   auto prestoOptions = toPrestoOptions(options);
   const bool useLosslessTimestamp = prestoOptions.useLosslessTimestamp;
-  auto codec =
-      dwio::common::compressionKindToCodec(prestoOptions.compressionKind);
+  auto codec = common::compressionKindToCodec(prestoOptions.compressionKind);
   auto numRows = source->read<int32_t>();
   if (!(*result) || !result->unique() || (*result)->type() != type) {
     *result = std::dynamic_pointer_cast<RowVector>(
@@ -1836,8 +1835,8 @@ void PrestoVectorSerde::deserialize(
       needCompression(*codec),
       isCompressedBitSet(pageCodecMarker),
       "Compression kind {} should align with codec marker.",
-      dwio::common::compressionKindToString(
-          dwio::common::codecTypeToCompressionKind(codec->type())));
+      common::compressionKindToString(
+          common::codecTypeToCompressionKind(codec->type())));
 
   auto children = &(*result)->children();
   auto childTypes = type->as<TypeKind::ROW>().children();

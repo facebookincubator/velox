@@ -15,7 +15,7 @@
  */
 #pragma once
 #include "velox/common/base/Crc.h"
-#include "velox/dwio/common/Common.h"
+#include "velox/common/compression/Compression.h"
 #include "velox/vector/VectorStream.h"
 
 namespace facebook::velox::serializer::presto {
@@ -27,7 +27,7 @@ class PrestoVectorSerde : public VectorSerde {
 
     PrestoOptions(
         bool _useLosslessTimestamp,
-        dwio::common::CompressionKind _compressionKind)
+        common::CompressionKind _compressionKind)
         : useLosslessTimestamp(_useLosslessTimestamp),
           compressionKind(_compressionKind) {}
 
@@ -36,8 +36,8 @@ class PrestoVectorSerde : public VectorSerde {
     // This option allows it to serialize with nanosecond precision and is
     // currently used for spilling. Is false by default.
     bool useLosslessTimestamp{false};
-    dwio::common::CompressionKind compressionKind{
-        dwio::common::CompressionKind::CompressionKind_NONE};
+    common::CompressionKind compressionKind{
+        common::CompressionKind::CompressionKind_NONE};
   };
 
   void estimateSerializedSize(

@@ -20,7 +20,6 @@ add_executable(
   BitPackDecoderTest.cpp
   ChainedBufferTests.cpp
   ColumnSelectorTests.cpp
-  CommonTest.cpp
   DataBufferTests.cpp
   DecoderUtilTest.cpp
   LocalFileSinkTest.cpp

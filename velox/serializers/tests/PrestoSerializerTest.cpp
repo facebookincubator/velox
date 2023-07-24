@@ -28,7 +28,7 @@ using namespace facebook::velox;
 using namespace facebook::velox::test;
 
 class PrestoSerializerTest
-    : public ::testing::TestWithParam<dwio::common::CompressionKind> {
+    : public ::testing::TestWithParam<common::CompressionKind> {
  protected:
   static void SetUpTestCase() {
     serializer::presto::PrestoVectorSerde::registerVectorSerde();
@@ -62,7 +62,7 @@ class PrestoSerializerTest
           serdeOptions) {
     const bool useLosslessTimestamp =
         serdeOptions == nullptr ? false : serdeOptions->useLosslessTimestamp;
-    dwio::common::CompressionKind kind = GetParam();
+    common::CompressionKind kind = GetParam();
     serializer::presto::PrestoVectorSerde::PrestoOptions paramOptions{
         useLosslessTimestamp, kind};
     return paramOptions;
@@ -322,7 +322,7 @@ TEST_P(PrestoSerializerTest, timestampWithNanosecondPrecision) {
   // passed to the serde.
   const serializer::presto::PrestoVectorSerde::PrestoOptions
       kUseLosslessTimestampOptions(
-          true, dwio::common::CompressionKind::CompressionKind_NONE);
+          true, common::CompressionKind::CompressionKind_NONE);
   auto timestamp = vectorMaker_->flatVector<Timestamp>(
       {Timestamp{0, 0},
        Timestamp{12, 0},
@@ -430,8 +430,8 @@ INSTANTIATE_TEST_SUITE_P(
     PrestoSerializerTest,
     PrestoSerializerTest,
     ::testing::Values(
-        dwio::common::CompressionKind::CompressionKind_NONE,
-        dwio::common::CompressionKind::CompressionKind_ZLIB,
-        dwio::common::CompressionKind::CompressionKind_SNAPPY,
-        dwio::common::CompressionKind::CompressionKind_ZSTD,
-        dwio::common::CompressionKind::CompressionKind_LZ4));
+        common::CompressionKind::CompressionKind_NONE,
+        common::CompressionKind::CompressionKind_ZLIB,
+        common::CompressionKind::CompressionKind_SNAPPY,
+        common::CompressionKind::CompressionKind_ZSTD,
+        common::CompressionKind::CompressionKind_LZ4));
