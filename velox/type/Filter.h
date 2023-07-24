@@ -618,6 +618,27 @@ class BigintRange final : public Filter {
         upper16_(std::min<int64_t>(upper, std::numeric_limits<int16_t>::max())),
         isSingleValue_(upper_ == lower_) {}
 
+  BigintRange(
+      int64_t lower,
+      bool lowerUnbounded,
+      bool lowerExclusive,
+      int64_t upper,
+      bool upperUnbounded,
+      bool upperExclusive,
+      bool nullAllowed)
+      : Filter(true, nullAllowed, FilterKind::kBigintRange),
+        lower_(lowerExclusive ? lower + 1 : lower),
+        upper_(upperExclusive ? upper - 1 : upper),
+        lower32_(
+            std::max<int64_t>(lower_, std::numeric_limits<int32_t>::min())),
+        upper32_(
+            std::min<int64_t>(upper_, std::numeric_limits<int32_t>::max())),
+        lower16_(
+            std::max<int64_t>(lower_, std::numeric_limits<int16_t>::min())),
+        upper16_(
+            std::min<int64_t>(upper_, std::numeric_limits<int16_t>::max())),
+        isSingleValue_(upper_ == lower_) {}
+  
   folly::dynamic serialize() const override;
 
   static FilterPtr create(const folly::dynamic& obj);
