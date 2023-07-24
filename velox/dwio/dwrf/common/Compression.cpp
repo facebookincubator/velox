@@ -40,6 +40,7 @@ namespace {
 class ZstdCompressor : public Compressor {
  public:
   explicit ZstdCompressor(int32_t level) : Compressor{level} {}
+  
   uint64_t compress(const void* src, void* dest, uint64_t length) override;
 };
 
@@ -483,7 +484,7 @@ std::unique_ptr<BufferedOutputStream> createCompressor(
       break;
     }
     case common::CompressionKind_ZSTD: {
-      int32_t zstdCompressionLevel = config.get(Config::ZSTD_COMPRESSION_LEVEL);      
+      int32_t zstdCompressionLevel = config.get(Config::ZSTD_COMPRESSION_LEVEL);
       compressor = std::make_unique<ZstdCompressor>(zstdCompressionLevel);
       #ifdef VELOX_ENABLE_QAT_OT
         compressor = std::make_unique<ZstdQatCompressor>(zstdCompressionLevel);
