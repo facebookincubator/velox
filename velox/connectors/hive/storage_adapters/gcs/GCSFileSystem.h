@@ -32,13 +32,33 @@ class GCSFileSystem : public FileSystem {
   // parameters.
   void initializeClient();
 
-  // Initialize a ReadFile using
-  // google::cloud::storage::Client::GetObjectMetadata
+  // Initialize a ReadFile
+  // First the method google::cloud::storage::Client::GetObjectMetadata
+  // is used to validate
+  // [[https://cloud.google.com/storage/docs/samples/storage-get-metadata]] then
+  // the method google::cloud::storage::Client::ReadObject
+  // is used to read sequentially
+  // [[https://cloud.google.com/storage/docs/samples/storage-stream-file-download]].
   std::unique_ptr<ReadFile> openFileForRead(
       std::string_view path,
       const FileOptions& options = {}) override;
 
-  // Not yet implemented
+  // Initialize a WriteFile
+  // First the method google::cloud::storage::Client::GetObjectMetadata
+  // is used to validate
+  // [[https://cloud.google.com/storage/docs/samples/storage-get-metadata]]
+  // then the method google::cloud::storage::Client::WriteObject
+  // is used to append sequentially
+  // [[https://cloud.google.com/storage/docs/samples/storage-stream-file-upload]].
+  // The default buffer size is currently 8 MiB
+  // but this default value can change.
+  // [[https://cloud.google.com/storage/docs/resumable-uploads]].
+  // The in-memory buffer is kept until the instance is closed or there is an
+  // excess of data. If any previously buffered data and the data to append are
+  // larger than the maximum size of the internal buffer then the largest amount
+  // of data that is a multiple of the upload quantum (256KiB) is flushed. Any
+  // data in excess of a multiple of the upload quantum are buffered
+  // for the next upload.
   std::unique_ptr<WriteFile> openFileForWrite(
       std::string_view path,
       const FileOptions& options = {}) override;
