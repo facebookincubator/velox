@@ -41,6 +41,7 @@ class TypedDistinctAggregations : public DistinctAggregations {
         sizeof(AccumulatorType),
         false, // usesExternalMemory
         1, // alignment
+        false, // supportsToIntermediate
         [this](folly::Range<char**> groups) {
           for (auto* group : groups) {
             auto* accumulator =

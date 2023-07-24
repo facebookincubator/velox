@@ -110,6 +110,7 @@ Accumulator SortedAggregations::accumulator() const {
       sizeof(RowPointers),
       false,
       1,
+      false,
       [this](folly::Range<char**> groups) {
         for (auto* group : groups) {
           auto* accumulator = reinterpret_cast<RowPointers*>(group + offset_);

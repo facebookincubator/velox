@@ -36,6 +36,7 @@ class Accumulator {
       int32_t fixedSize,
       bool usesExternalMemory,
       int32_t alignment,
+      bool supportsToIntermediate,
       std::function<void(folly::Range<char**> groups)> destroyFunction);
 
   explicit Accumulator(Aggregate* aggregate);
@@ -47,6 +48,10 @@ class Accumulator {
   bool usesExternalMemory() const;
 
   int32_t alignment() const;
+
+  bool supportsToIntermediate() const {
+    return supportsToIntermediate_;
+  }
 
   void destroy(folly::Range<char**> groups);
 
@@ -61,6 +66,7 @@ class Accumulator {
   const int32_t fixedSize_;
   const bool usesExternalMemory_;
   const int32_t alignment_;
+  const bool supportsToIntermediate_;
   std::function<void(folly::Range<char**> groups)> destroyFunction_;
   Aggregate* aggregate_{nullptr};
 };
@@ -251,7 +257,9 @@ class RowContainer {
 
   // Adds 'rows' to the free rows list and frees any associated
   // variable length data.
-  void eraseRows(folly::Range<char**> rows);
+  void eraseRows(
+      folly::Range<char**> rows,
+      bool skipToIntermediateAggregates = false);
 
   void incrementRowSize(char* FOLLY_NONNULL row, uint64_t bytes) {
     uint32_t* ptr = reinterpret_cast<uint32_t*>(row + rowSizeOffset_);

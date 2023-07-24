@@ -58,8 +58,8 @@ TEST_F(ArrayAggTest, groupBy) {
   testAggregations(
       batches,
       {"c0"},
-      {"array_agg(a)"},
-      "SELECT c0, array_agg(a) FROM tmp GROUP BY c0");
+      {"array_agg(a)", "max(c0)"},
+      "SELECT c0, array_agg(a), max(c0) FROM tmp GROUP BY c0");
 }
 
 TEST_F(ArrayAggTest, sortedGroupBy) {

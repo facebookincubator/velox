@@ -52,6 +52,7 @@ Accumulator::Accumulator(Aggregate* aggregate)
       fixedSize_{aggregate->accumulatorFixedWidthSize()},
       usesExternalMemory_{aggregate->accumulatorUsesExternalMemory()},
       alignment_{aggregate->accumulatorAlignmentSize()},
+      supportsToIntermediate_{aggregate->supportsToIntermediate()},
       destroyFunction_{[aggregate](folly::Range<char**> groups) {
         aggregate->destroy(groups);
       }},
@@ -64,11 +65,13 @@ Accumulator::Accumulator(
     int32_t fixedSize,
     bool usesExternalMemory,
     int32_t alignment,
+    bool supportsToIntermediate,
     std::function<void(folly::Range<char**> groups)> destroyFunction)
     : isFixedSize_{isFixedSize},
       fixedSize_{fixedSize},
       usesExternalMemory_{usesExternalMemory},
       alignment_{alignment},
+      supportsToIntermediate_{supportsToIntermediate},
       destroyFunction_{destroyFunction} {}
 
 bool Accumulator::isFixedSize() const {
@@ -283,9 +286,16 @@ char* RowContainer::initializeRow(char* row, bool reuse) {
   return row;
 }
 
-void RowContainer::eraseRows(folly::Range<char**> rows) {
+void RowContainer::eraseRows(
+    folly::Range<char**> rows,
+    bool skipToIntermediateAggregates) {
   freeVariableWidthFields(rows);
-  freeAggregates(rows);
+  for (auto& accumulator : accumulators_) {
+    if (!skipToIntermediateAggregates ||
+        !accumulator.supportsToIntermediate()) {
+      accumulator.destroy(rows);
+    }
+  }
   numRows_ -= rows.size();
   for (auto* row : rows) {
     VELOX_CHECK(!bits::isBitSet(row, freeFlagOffset_), "Double free of row");
