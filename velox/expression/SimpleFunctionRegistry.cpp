@@ -36,12 +36,20 @@ SimpleFunctionRegistry& mutableSimpleFunctions() {
 void SimpleFunctionRegistry::registerFunctionInternal(
     const std::string& name,
     const std::shared_ptr<const Metadata>& metadata,
-    const FunctionFactory& factory) {
+    const FunctionFactory& factory,
+    std::optional<std::vector<std::shared_ptr<FunctionSignature>>> fsigns) {
   const auto sanitizedName = sanitizeName(name);
   registeredFunctions_.withWLock([&](auto& map) {
     SignatureMap& signatureMap = map[sanitizedName];
     signatureMap[*metadata->signature()] =
         std::make_unique<const FunctionEntry>(metadata, factory);
+
+    if (fsigns.has_value()) {
+      for (auto fsgn : *fsigns) {
+        signatureMap[*fsgn] =
+            std::make_unique<const FunctionEntry>(metadata, factory);
+      }
+    }
   });
 }
 

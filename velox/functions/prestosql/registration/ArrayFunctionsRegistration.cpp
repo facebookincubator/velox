@@ -87,6 +87,17 @@ template <typename T>
 inline void registerArrayUnionFunctions(const std::string& prefix) {
   registerFunction<ArrayUnionFunction, Array<T>, Array<T>, Array<T>>(
       {prefix + "array_union"});
+
+  std::vector<std::shared_ptr<exec::FunctionSignature>> sgns = {
+      exec::FunctionSignatureBuilder()
+          .integerVariable("precision")
+          .integerVariable("scale")
+          .returnType("ARRAY(DECIMAL(precision, scale))")
+          .argumentType("ARRAY(DECIMAL(precision, scale))")
+          .argumentType("ARRAY(DECIMAL(precision, scale))")
+          .build()};
+  registerFunction<ArrayUnionFunction, Array<T>, Array<T>, Array<T>>(
+      {prefix + "array_union"}, sgns);
 }
 
 void registerArrayFunctions(const std::string& prefix) {

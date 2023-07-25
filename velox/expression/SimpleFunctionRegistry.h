@@ -59,15 +59,18 @@ using FunctionMap = std::unordered_map<std::string, SignatureMap>;
 class SimpleFunctionRegistry {
  public:
   template <typename UDF>
-  void registerFunction(const std::vector<std::string>& aliases = {}) {
+  void registerFunction(
+      const std::vector<std::string>& aliases = {},
+      std::optional<std::vector<std::shared_ptr<FunctionSignature>>> fsigns =
+          {}) {
     const auto& metadata = singletonUdfMetadata<typename UDF::Metadata>();
     const auto factory = [metadata]() { return CreateUdf<UDF>(); };
 
     if (aliases.empty()) {
-      registerFunctionInternal(metadata->getName(), metadata, factory);
+      registerFunctionInternal(metadata->getName(), metadata, factory, fsigns);
     } else {
       for (const auto& name : aliases) {
-        registerFunctionInternal(name, metadata, factory);
+        registerFunctionInternal(name, metadata, factory, fsigns);
       }
     }
   }
@@ -128,7 +131,9 @@ class SimpleFunctionRegistry {
   void registerFunctionInternal(
       const std::string& name,
       const std::shared_ptr<const Metadata>& metadata,
-      const FunctionFactory& factory);
+      const FunctionFactory& factory,
+      std::optional<std::vector<std::shared_ptr<FunctionSignature>>> fsigns =
+          {});
 
   folly::Synchronized<FunctionMap> registeredFunctions_;
 };
@@ -139,9 +144,13 @@ SimpleFunctionRegistry& mutableSimpleFunctions();
 
 // This function should be called once and alone.
 template <typename UDFHolder>
-void registerSimpleFunction(const std::vector<std::string>& names) {
+void registerSimpleFunction(
+    const std::vector<std::string>& names,
+    std::optional<std::vector<std::shared_ptr<FunctionSignature>>> fsigns =
+        {}) {
   mutableSimpleFunctions()
-      .registerFunction<SimpleFunctionAdapterFactoryImpl<UDFHolder>>(names);
+      .registerFunction<SimpleFunctionAdapterFactoryImpl<UDFHolder>>(
+          names, fsigns);
 }
 
 } // namespace facebook::velox::exec

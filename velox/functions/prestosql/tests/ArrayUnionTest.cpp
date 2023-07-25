@@ -129,4 +129,32 @@ TEST_F(ArrayUnionTest, complexTypes) {
   testExpression(
       "array_union(c0, c1)", {arrayOfArrays1, arrayOfArrays2}, expected);
 }
+
+TEST_F(ArrayUnionTest, decimalArray) {
+  const auto array1 = makeArrayVector<int64_t>(
+      {{1, 2, 3, 4}, {3, 4, 5}, {7, 8, 9}, {10, 20, 30}}, DECIMAL(10, 2));
+  const auto array2 = makeArrayVector<int64_t>(
+      {{2, 4, 5}, {3, 4, 5}, {}, {40, 50}}, DECIMAL(10, 2));
+  VectorPtr expected;
+
+  expected = makeArrayVector<int64_t>(
+      {
+          {1, 2, 3, 4, 5},
+          {3, 4, 5},
+          {7, 8, 9},
+          {10, 20, 30, 40, 50},
+      },
+      DECIMAL(10, 2));
+  testExpression("array_union(c0, c1)", {array1, array2}, expected);
+
+  expected = makeArrayVector<int64_t>(
+      {
+          {2, 4, 5, 1, 3},
+          {3, 4, 5},
+          {7, 8, 9},
+          {40, 50, 10, 20, 30},
+      },
+      DECIMAL(10, 2));
+  testExpression("array_union(c0, c1)", {array2, array1}, expected);
+}
 } // namespace

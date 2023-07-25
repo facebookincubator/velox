@@ -47,11 +47,14 @@ void registerFunction(const std::vector<std::string>& aliases = {}) {
 // a while to maintain backwards compatibility, but the idea is to remove the
 // one above eventually.
 template <template <class> typename Func, typename TReturn, typename... TArgs>
-void registerFunction(const std::vector<std::string>& aliases = {}) {
+void registerFunction(
+    const std::vector<std::string>& aliases = {},
+    std::optional<std::vector<std::shared_ptr<exec::FunctionSignature>>>
+        fsigns = {}) {
   using funcClass = Func<exec::VectorExec>;
   using holderClass =
       core::UDFHolder<funcClass, exec::VectorExec, TReturn, TArgs...>;
-  exec::registerSimpleFunction<holderClass>(aliases);
+  exec::registerSimpleFunction<holderClass>(aliases, fsigns);
 }
 
 } // namespace facebook::velox
