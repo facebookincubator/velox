@@ -162,7 +162,7 @@ commands:
       - run:
           name: "Run << parameters.fuzzer_name >> Fuzzer"
           command: |
-            eval " << parameters.fuzzer_exe >> << parameters.fuzzer_args >> " \
+            eval ' << parameters.fuzzer_exe >> << parameters.fuzzer_args >> ' \
                   2>&1 | tee "<< parameters.fuzzer_output >>" || ( \
                     tail -n 1000 "<< parameters.fuzzer_output >>" ; \
                     echo "FAIL: << parameters.fuzzer_name >> run failed"; \
@@ -691,7 +691,7 @@ jobs:
           fuzzer_output: "/tmp/fuzzer.log"
           fuzzer_repro: "/tmp/fuzzer_repro"
           fuzzer_name: "Expression Bias Run"
-          fuzzer_exe: "[ -f /tmp/presto_bias_functions ] && _build/debug/velox/expression/tests/velox_expression_fuzzer_test"
+          fuzzer_exe: "if [ -f /tmp/presto_bias_functions ]; then _build/debug/velox/expression/tests/velox_expression_fuzzer_test"
           fuzzer_args: " --seed ${RANDOM} --lazy_vector_generation_ratio 0.2 \
           --assign_function_tickets  $(cat /tmp/presto_bias_functions) \
           --duration_sec 3600 --enable_variadic_signatures \
@@ -702,14 +702,14 @@ jobs:
           --retry_with_try \
           --enable_dereference \
           --logtostderr=1 --minloglevel=0 \
-          --repro_persist_path=/tmp/fuzzer_repro"
+          --repro_persist_path=/tmp/fuzzer_repro ; fi"
 
       - fuzzer-run:
           fuzzer_output: "/tmp/spark_fuzzer.log"
           fuzzer_repro: "/tmp/spark_fuzzer_repro"
           fuzzer_name: "Spark Bias Run"
-          fuzzer_exe: "[ -f /tmp/spark_bias_functions ] &&_build/debug/velox/expression/tests/spark_expression_fuzzer_test"
+          fuzzer_exe: "if [ -f /tmp/spark_bias_functions ];  then _build/debug/velox/expression/tests/spark_expression_fuzzer_test"
           fuzzer_args: " --seed ${RANDOM} --duration_sec 3600 --logtostderr=1 --minloglevel=0 \
           --assign_function_tickets  $(cat /tmp/spark_bias_functions) \
-          --repro_persist_path=/tmp/spark_fuzzer_repro"
+          --repro_persist_path=/tmp/spark_fuzzer_repro ; fi"
 
