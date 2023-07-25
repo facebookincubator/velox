@@ -18,13 +18,6 @@ workflows:
   version: 2
   dist-compile:
     jobs:
-      - linux-build
-      - linux-build-options
-      - linux-adapters
-      - macos-build:
-          matrix:
-            parameters:
-              os: [macos-intel]
       - format-check
       - header-check
 
