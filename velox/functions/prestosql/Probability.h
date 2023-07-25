@@ -19,6 +19,7 @@
 #include "boost/math/distributions/binomial.hpp"
 #include "boost/math/distributions/cauchy.hpp"
 #include "boost/math/distributions/chi_squared.hpp"
+#include "boost/math/special_functions/erf.hpp"
 #include "velox/common/base/Exceptions.h"
 #include "velox/functions/Macros.h"
 
@@ -147,6 +148,19 @@ struct ChiSquaredCDFFunction {
 
     boost::math::chi_squared_distribution<> dist(df);
     result = boost::math::cdf(dist, value);
+  }
+};
+
+template <typename T>
+struct InverseNormalCDFFunction {
+  VELOX_DEFINE_FUNCTION_TYPES(T);
+
+  FOLLY_ALWAYS_INLINE void call(double& result, double m, double sd, double p) {
+    VELOX_USER_CHECK((p >= 0) && (p <= 1), "p must be 0 > p > 1");
+    VELOX_USER_CHECK_GT(sd, 0, "standardDeviation must be > 0");
+
+    static const double kSqrtOfTwo = sqrt(2);
+    result = m + sd * kSqrtOfTwo * boost::math::erf_inv(2 * p - 1);
   }
 };
 
