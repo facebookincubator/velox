@@ -171,7 +171,9 @@ class GCSReadFile final : public ReadFile {
 
 class GCSWriteFile final : public WriteFile {
  public:
-  explicit GCSWriteFile(std::string path, std::shared_ptr<gcs::Client> client)
+  explicit GCSWriteFile(
+      const std::string& path,
+      std::shared_ptr<gcs::Client> client)
       : client_(client) {
     setBucketAndKeyFromGCSPath(path, bucket_, key_);
   }
