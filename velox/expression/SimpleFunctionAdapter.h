@@ -600,15 +600,23 @@ class SimpleFunctionAdapter : public VectorFunction {
           });
         }
       } else if (allNotNull) {
-        applyContext.applyToSelectedNoThrow([&](auto row) INLINE_LAMBDA {
-          // Passing a stack variable have shown to be boost the performance
-          // of functions that repeatedly update the output. The opposite
-          // optimization (eliminating the temp) is easier to do by the
-          // compiler (assuming the function call is inlined).
-          typename return_type_traits::NativeType out{};
-          bool notNull = doApplyNotNull<0>(row, out, readers...);
-          writeResult(row, notNull, out);
-        });
+        if (applyContext.allAscii) {
+          applyContext.applyToSelectedNoThrow([&](auto row) INLINE_LAMBDA {
+            typename return_type_traits::NativeType out{};
+            bool notNull = doApplyAsciiNotNull<0>(row, out, readers...);
+            writeResult(row, notNull, out);
+          });
+        } else {
+          applyContext.applyToSelectedNoThrow([&](auto row) INLINE_LAMBDA {
+            // Passing a stack variable have shown to be boost the performance
+            // of functions that repeatedly update the output. The opposite
+            // optimization (eliminating the temp) is easier to do by the
+            // compiler (assuming the function call is inlined).
+            typename return_type_traits::NativeType out{};
+            bool notNull = doApplyNotNull<0>(row, out, readers...);
+            writeResult(row, notNull, out);
+          });
+        }
       } else {
         applyContext.applyToSelectedNoThrow([&](auto row) INLINE_LAMBDA {
           typename return_type_traits::NativeType out{};
