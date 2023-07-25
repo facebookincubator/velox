@@ -537,7 +537,7 @@ TEST_F(PlanNodeToStringTest, partitionedOutput) {
 
   ASSERT_EQ("-- PartitionedOutput\n", plan->toString());
   ASSERT_EQ(
-      "-- PartitionedOutput[HASH(c0) 4] -> c0:SMALLINT, c1:INTEGER, c2:BIGINT\n",
+      "-- PartitionedOutput[partitionFunction: HASH(c0) with 4 partitions] -> c0:SMALLINT, c1:INTEGER, c2:BIGINT\n",
       plan->toString(true, false));
 
   plan = PlanBuilder().values({data_}).partitionedOutputBroadcast().planNode();
@@ -561,7 +561,7 @@ TEST_F(PlanNodeToStringTest, partitionedOutput) {
 
   ASSERT_EQ("-- PartitionedOutput\n", plan->toString());
   ASSERT_EQ(
-      "-- PartitionedOutput[HASH(c1, c2) 5 replicate nulls and any] -> c0:SMALLINT, c1:INTEGER, c2:BIGINT\n",
+      "-- PartitionedOutput[partitionFunction: HASH(c1, c2) with 5 partitions replicate nulls and any] -> c0:SMALLINT, c1:INTEGER, c2:BIGINT\n",
       plan->toString(true, false));
 
   auto hiveSpec = std::make_shared<connector::hive::HivePartitionFunctionSpec>(
@@ -576,7 +576,7 @@ TEST_F(PlanNodeToStringTest, partitionedOutput) {
              .planNode();
   ASSERT_EQ("-- PartitionedOutput\n", plan->toString());
   ASSERT_EQ(
-      "-- PartitionedOutput[HIVE((1, 2) buckets: 4) 2] -> c0:SMALLINT, c1:INTEGER, c2:BIGINT\n",
+      "-- PartitionedOutput[partitionFunction: HIVE((1, 2) buckets: 4) with 2 partitions] -> c0:SMALLINT, c1:INTEGER, c2:BIGINT\n",
       plan->toString(true, false));
 }
 
@@ -701,6 +701,7 @@ TEST_F(PlanNodeToStringTest, window) {
 }
 
 TEST_F(PlanNodeToStringTest, rowNumber) {
+  // Emit row number.
   auto plan =
       PlanBuilder().tableScan(ROW({"a"}, {VARCHAR()})).rowNumber({}).planNode();
 
@@ -709,6 +710,16 @@ TEST_F(PlanNodeToStringTest, rowNumber) {
       "-- RowNumber[] -> a:VARCHAR, row_number:BIGINT\n",
       plan->toString(true, false));
 
+  // Dont' emit row number.
+  plan = PlanBuilder()
+             .tableScan(ROW({"a"}, {VARCHAR()}))
+             .rowNumber({}, std::nullopt, false)
+             .planNode();
+
+  ASSERT_EQ("-- RowNumber\n", plan->toString());
+  ASSERT_EQ("-- RowNumber[] -> a:VARCHAR\n", plan->toString(true, false));
+
+  // Emit row number.
   plan = PlanBuilder()
              .tableScan(ROW({"a", "b"}, {BIGINT(), VARCHAR()}))
              .rowNumber({"a", "b"})
@@ -719,6 +730,18 @@ TEST_F(PlanNodeToStringTest, rowNumber) {
       "-- RowNumber[partition by (a, b)] -> a:BIGINT, b:VARCHAR, row_number:BIGINT\n",
       plan->toString(true, false));
 
+  // Don't emit row number.
+  plan = PlanBuilder()
+             .tableScan(ROW({"a", "b"}, {BIGINT(), VARCHAR()}))
+             .rowNumber({"a", "b"}, std::nullopt, false)
+             .planNode();
+
+  ASSERT_EQ("-- RowNumber\n", plan->toString());
+  ASSERT_EQ(
+      "-- RowNumber[partition by (a, b)] -> a:BIGINT, b:VARCHAR\n",
+      plan->toString(true, false));
+
+  // Emit row number.
   plan = PlanBuilder()
              .tableScan(ROW({"a", "b"}, {BIGINT(), VARCHAR()}))
              .rowNumber({"b"}, 10)
@@ -727,6 +750,17 @@ TEST_F(PlanNodeToStringTest, rowNumber) {
   ASSERT_EQ("-- RowNumber\n", plan->toString());
   ASSERT_EQ(
       "-- RowNumber[partition by (b) limit 10] -> a:BIGINT, b:VARCHAR, row_number:BIGINT\n",
+      plan->toString(true, false));
+
+  // Don't emit row number.
+  plan = PlanBuilder()
+             .tableScan(ROW({"a", "b"}, {BIGINT(), VARCHAR()}))
+             .rowNumber({"b"}, 10, false)
+             .planNode();
+
+  ASSERT_EQ("-- RowNumber\n", plan->toString());
+  ASSERT_EQ(
+      "-- RowNumber[partition by (b) limit 10] -> a:BIGINT, b:VARCHAR\n",
       plan->toString(true, false));
 }
 

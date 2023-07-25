@@ -555,7 +555,21 @@ PlanBuilder::AggregatesAndNames PlanBuilder::createAggregateExpressionsAndNames(
     core::AggregationNode::Aggregate agg;
     agg.call = std::dynamic_pointer_cast<const core::CallTypedExpr>(
         inferTypes(untypedExpr.expr));
+    if (untypedExpr.maskExpr != nullptr) {
+      auto maskExpr =
+          std::dynamic_pointer_cast<const core::FieldAccessTypedExpr>(
+              inferTypes(untypedExpr.maskExpr));
+      VELOX_CHECK_NOT_NULL(
+          maskExpr,
+          "FILTER clause must use a column name, not an expression: {}",
+          aggregate);
+      agg.mask = maskExpr;
+    }
+
     if (i < masks.size() && !masks[i].empty()) {
+      VELOX_CHECK_NULL(
+          agg.mask,
+          "Aggregation mask should be specified only once (either explicitly or using FILTER clause)");
       agg.mask = field(masks[i]);
     }
 
@@ -834,9 +848,9 @@ PlanBuilder& PlanBuilder::partitionedOutput(
       : extract(planNode_->outputType(), outputLayout);
   planNode_ = std::make_shared<core::PartitionedOutputNode>(
       nextPlanNodeId(),
+      core::PartitionedOutputNode::Kind::kPartitioned,
       exprs(keys),
       numPartitions,
-      false,
       replicateNullsAndAny,
       std::move(partitionFunctionSpec),
       outputType,
@@ -867,7 +881,6 @@ PlanBuilder& PlanBuilder::localPartition(const std::vector<std::string>& keys) {
   return *this;
 }
 
-#ifndef VELOX_ENABLE_BACKWARD_COMPATIBILITY
 PlanBuilder& PlanBuilder::localPartition(
     const std::shared_ptr<connector::hive::HiveBucketProperty>&
         bucketProperty) {
@@ -888,7 +901,6 @@ PlanBuilder& PlanBuilder::localPartition(
       std::vector<core::PlanNodePtr>{planNode_});
   return *this;
 }
-#endif
 
 namespace {
 core::PlanNodePtr createLocalPartitionRoundRobinNode(
@@ -1412,9 +1424,18 @@ PlanBuilder& PlanBuilder::window(
 
 PlanBuilder& PlanBuilder::rowNumber(
     const std::vector<std::string>& partitionKeys,
-    std::optional<int32_t> limit) {
+    std::optional<int32_t> limit,
+    const bool generateRowNumber) {
+  std::optional<std::string> rowNumberColumnName;
+  if (generateRowNumber) {
+    rowNumberColumnName = "row_number";
+  }
   planNode_ = std::make_shared<core::RowNumberNode>(
-      nextPlanNodeId(), fields(partitionKeys), "row_number", limit, planNode_);
+      nextPlanNodeId(),
+      fields(partitionKeys),
+      rowNumberColumnName,
+      limit,
+      planNode_);
   return *this;
 }
 

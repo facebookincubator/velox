@@ -20,6 +20,7 @@
 #include "velox/common/process/ProcessBase.h"
 #include "velox/dwio/common/ColumnSelector.h"
 #include "velox/dwio/common/FormatData.h"
+#include "velox/dwio/common/IntDecoder.h"
 #include "velox/dwio/common/Mutation.h"
 #include "velox/dwio/common/ScanSpec.h"
 #include "velox/type/Filter.h"
@@ -122,10 +123,10 @@ class SelectiveColumnReader {
   static constexpr uint64_t kStringBufferSize = 16 * 1024;
 
   SelectiveColumnReader(
-      std::shared_ptr<const dwio::common::TypeWithId> requestedType,
+      const TypePtr& requestedType,
       dwio::common::FormatParams& params,
       velox::common::ScanSpec& scanSpec,
-      const TypePtr& type);
+      std::shared_ptr<const dwio::common::TypeWithId> type);
 
   virtual ~SelectiveColumnReader() = default;
 
@@ -193,12 +194,12 @@ class SelectiveColumnReader {
     parentNullsRecordedTo_ = 0;
   }
 
-  const TypePtr& type() const {
-    return type_;
+  const TypePtr& requestedType() const {
+    return requestedType_;
   }
 
-  const TypeWithId& nodeType() const {
-    return *nodeType_;
+  const TypeWithId& fileType() const {
+    return *fileType_;
   }
 
   // The below functions are called from ColumnVisitor to fill the result set.
@@ -509,10 +510,28 @@ class SelectiveColumnReader {
     return false;
   }
 
+  template <typename Decoder, typename ColumnVisitor>
+  void decodeWithVisitor(
+      IntDecoder<Decoder::kIsSigned>* intDecoder,
+      ColumnVisitor& visitor) {
+    auto decoder = dynamic_cast<Decoder*>(intDecoder);
+    VELOX_CHECK(
+        decoder,
+        "Unexpected Decoder type, Expected: {}",
+        typeid(Decoder).name());
+    const uint64_t* nulls =
+        nullsInReadRange_ ? nullsInReadRange_->as<uint64_t>() : nullptr;
+    if (nulls) {
+      decoder->template readWithVisitor<true>(nulls, visitor);
+    } else {
+      decoder->template readWithVisitor<false>(nulls, visitor);
+    }
+  }
+
   memory::MemoryPool& memoryPool_;
 
-  // Requested Velox type
-  std::shared_ptr<const dwio::common::TypeWithId> nodeType_;
+  // The file data type
+  std::shared_ptr<const dwio::common::TypeWithId> fileType_;
 
   // Format specific state and functions.
   std::unique_ptr<dwio::common::FormatData> formatData_;
@@ -522,8 +541,8 @@ class SelectiveColumnReader {
   // run time based on adaptation. Owned by caller.
   velox::common::ScanSpec* FOLLY_NONNULL scanSpec_;
 
-  // The file data type?
-  TypePtr type_;
+  // The requested data type
+  TypePtr requestedType_;
 
   // Row number after last read row, relative to stripe start.
   vector_size_t readOffset_ = 0;

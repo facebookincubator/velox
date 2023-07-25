@@ -138,6 +138,9 @@ void HashBuild::setupTable() {
         dependentTypes,
         true, // allowDuplicates
         true, // hasProbedFlag
+        operatorCtx_->driverCtx()
+            ->queryConfig()
+            .minTableRowsForParallelJoinBuild(),
         pool());
   } else {
     // (Left) semi and anti join with no extra filter only needs to know whether
@@ -155,6 +158,9 @@ void HashBuild::setupTable() {
           dependentTypes,
           !dropDuplicates, // allowDuplicates
           needProbedFlag, // hasProbedFlag
+          operatorCtx_->driverCtx()
+              ->queryConfig()
+              .minTableRowsForParallelJoinBuild(),
           pool());
     } else {
       // Ignore null keys
@@ -163,6 +169,9 @@ void HashBuild::setupTable() {
           dependentTypes,
           !dropDuplicates, // allowDuplicates
           needProbedFlag, // hasProbedFlag
+          operatorCtx_->driverCtx()
+              ->queryConfig()
+              .minTableRowsForParallelJoinBuild(),
           pool());
     }
   }
@@ -766,13 +775,12 @@ bool HashBuild::finishHashBuild() {
 
       // TODO: re-enable parallel join build with spilling triggered after
       // https://github.com/facebookincubator/velox/issues/3567 is fixed.
-      const bool allowPrallelJoinBuild =
+      const bool allowParallelJoinBuild =
           !otherTables.empty() && spillPartitions.empty();
       table_->prepareJoinTable(
           std::move(otherTables),
-          allowPrallelJoinBuild ? operatorCtx_->task()->queryCtx()->executor()
-                                : nullptr);
-
+          allowParallelJoinBuild ? operatorCtx_->task()->queryCtx()->executor()
+                                 : nullptr);
       addRuntimeStats();
       if (joinBridge_->setHashTable(
               std::move(table_),

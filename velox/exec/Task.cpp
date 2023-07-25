@@ -539,6 +539,9 @@ void Task::start(
     std::shared_ptr<Task> self,
     uint32_t maxDrivers,
     uint32_t concurrentSplitGroups) {
+  facebook::velox::process::ThreadDebugInfo threadDebugInfo{
+      .queryId_ = self->queryCtx()->queryId()};
+  facebook::velox::process::ScopedThreadDebugInfo scopedInfo(threadDebugInfo);
   try {
     VELOX_CHECK_GE(
         maxDrivers,
@@ -629,11 +632,7 @@ void Task::start(
             : factory->numDrivers;
         bufferManager->initializeTask(
             self,
-            // TODO: change PartitionedOutputNode to pass partition output type
-            // which include arbitrary.
-            partitionedOutputNode->isBroadcast()
-                ? PartitionedOutputBuffer::Kind::kBroadcast
-                : PartitionedOutputBuffer::Kind::kPartitioned,
+            partitionedOutputNode->kind(),
             partitionedOutputNode->numPartitions(),
             totalOutputDrivers);
       }
@@ -1798,6 +1797,10 @@ TaskStats Task::taskStats() const {
       ++taskStats.numBlockedDrivers[driver->blockingReason()];
     }
   }
+
+  auto bufferManager = bufferManager_.lock();
+  taskStats.outputBufferUtilization = bufferManager->getUtilization(taskId_);
+  taskStats.outputBufferOverutilized = bufferManager->isOverutilized(taskId_);
 
   return taskStats;
 }

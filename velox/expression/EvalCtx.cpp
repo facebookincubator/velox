@@ -167,6 +167,18 @@ void EvalCtx::setError(
   addError(index, toVeloxException(exceptionPtr), errors_);
 }
 
+// This should be used onlly when exceptionPtr is guranteed to be a
+// VeloxException.
+void EvalCtx::setVeloxExceptionError(
+    vector_size_t index,
+    const std::exception_ptr& exceptionPtr) {
+  if (throwOnError_) {
+    std::rethrow_exception(exceptionPtr);
+  }
+
+  addError(index, exceptionPtr, errors_);
+}
+
 void EvalCtx::setErrors(
     const SelectivityVector& rows,
     const std::exception_ptr& exceptionPtr) {
@@ -195,6 +207,23 @@ void EvalCtx::addElementErrorsToTopLevel(
           rawElementToTopLevelRows[row],
           *std::static_pointer_cast<std::exception_ptr>(errors_->valueAt(row)),
           topLevelErrors);
+    }
+  });
+}
+
+void EvalCtx::convertElementErrorsToTopLevelNulls(
+    const SelectivityVector& elementRows,
+    const BufferPtr& elementToTopLevelRows,
+    VectorPtr& result) {
+  if (!errors_) {
+    return;
+  }
+
+  const auto* rawElementToTopLevelRows =
+      elementToTopLevelRows->as<vector_size_t>();
+  elementRows.applyToSelected([&](auto row) {
+    if (errors_->isIndexInRange(row) && !errors_->isNullAt(row)) {
+      result->setNull(rawElementToTopLevelRows[row], true);
     }
   });
 }

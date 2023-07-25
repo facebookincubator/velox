@@ -27,6 +27,7 @@
 #include "velox/common/memory/MemoryArbitrator.h"
 #include "velox/common/memory/SharedArbitrator.h"
 #include "velox/common/testutil/TestValue.h"
+#include "velox/exec/HashTable.h"
 #include "velox/exec/tests/utils/AssertQueryBuilder.h"
 #include "velox/exec/tests/utils/HiveConnectorTestBase.h"
 #include "velox/exec/tests/utils/PlanBuilder.h"
@@ -47,12 +48,27 @@ constexpr int64_t KB = 1024L;
 constexpr int64_t MB = 1024L * KB;
 
 constexpr uint64_t kMemoryCapacity = 512 * MB;
-constexpr uint64_t kInitMemoryPoolCapacity = 16 * MB;
-constexpr uint64_t kMinMemoryPoolCapacityTransferSize = 8 * MB;
+constexpr uint64_t kMemoryPoolInitCapacity = 16 * MB;
+constexpr uint64_t kMemoryPoolTransferCapacity = 8 * MB;
 
 struct Allocation {
+  MemoryPool* pool{nullptr};
   void* buffer{nullptr};
   size_t size{0};
+
+  size_t free() {
+    const size_t freedBytes = size;
+    if (pool == nullptr) {
+      VELOX_CHECK_EQ(freedBytes, 0);
+      return freedBytes;
+    }
+    VELOX_CHECK_GT(freedBytes, 0);
+    pool->free(buffer, freedBytes);
+    pool = nullptr;
+    buffer = nullptr;
+    size = 0;
+    return freedBytes;
+  }
 };
 
 // Custom node for the custom factory.
@@ -169,9 +185,8 @@ class FakeMemoryOperator : public Operator {
  private:
   void clear() {
     for (auto& allocation : allocations_) {
-      totalBytes_ -= allocation.size;
+      totalBytes_ -= allocation.free();
       VELOX_CHECK_GE(totalBytes_, 0);
-      pool()->free(allocation.buffer, allocation.size);
     }
     allocations_.clear();
     VELOX_CHECK_EQ(totalBytes_, 0);
@@ -267,23 +282,15 @@ class SharedArbitrationTest : public exec::test::HiveConnectorTestBase {
 
   void setupMemory(
       int64_t memoryCapacity = 0,
-      uint64_t initMemoryPoolCapacity = 0,
-      uint64_t minMemoryPoolCapacityTransferSize = 0,
-      bool retryArbitrationFailure = true) {
-    if (initMemoryPoolCapacity == 0) {
-      initMemoryPoolCapacity = kInitMemoryPoolCapacity;
-    }
-    if (minMemoryPoolCapacityTransferSize == 0) {
-      minMemoryPoolCapacityTransferSize = kMinMemoryPoolCapacityTransferSize;
-    }
-    IMemoryManager::Options options;
+      uint64_t memoryPoolInitCapacity = kMemoryPoolInitCapacity,
+      uint64_t memoryPoolTransferCapacity = kMemoryPoolTransferCapacity) {
+    MemoryManagerOptions options;
     options.capacity = (memoryCapacity != 0) ? memoryCapacity : kMemoryCapacity;
     options.arbitratorConfig = {
         .kind = MemoryArbitrator::Kind::kShared,
         .capacity = options.capacity,
-        .initMemoryPoolCapacity = initMemoryPoolCapacity,
-        .minMemoryPoolCapacityTransferSize = minMemoryPoolCapacityTransferSize,
-        .retryArbitrationFailure = retryArbitrationFailure};
+        .initMemoryPoolCapacity = memoryPoolInitCapacity,
+        .minMemoryPoolCapacityTransferSize = memoryPoolTransferCapacity};
     options.checkUsageLeak = true;
     memoryManager_ = std::make_unique<MemoryManager>(options);
     ASSERT_EQ(
@@ -305,7 +312,7 @@ class SharedArbitrationTest : public exec::test::HiveConnectorTestBase {
         executor_.get(),
         std::unordered_map<std::string, std::string>{},
         configs,
-        memory::MemoryAllocator::getInstance(),
+        cache::AsyncDataCache::getInstance(),
         std::move(pool));
     return queryCtx;
   }
@@ -350,11 +357,11 @@ DEBUG_ONLY_TEST_F(SharedArbitrationTest, reclaimFromOrderBy) {
     std::atomic<bool> injectAllocationOnce{true};
     fakeOperatorFactory_->setAllocationCallback([&](Operator* op) {
       if (!injectAllocationOnce.exchange(false)) {
-        return Allocation{nullptr, 0};
+        return Allocation{};
       }
       fakeAllocationWait.wait(fakeAllocationWaitKey);
       auto buffer = op->pool()->allocate(fakeAllocationSize);
-      return Allocation{buffer, fakeAllocationSize};
+      return Allocation{op->pool(), buffer, fakeAllocationSize};
     });
 
     std::atomic<bool> injectOrderByOnce{true};
@@ -446,13 +453,13 @@ DEBUG_ONLY_TEST_F(SharedArbitrationTest, reclaimToOrderBy) {
     std::atomic<bool> injectAllocationOnce{true};
     fakeOperatorFactory_->setAllocationCallback([&](Operator* op) {
       if (!injectAllocationOnce.exchange(false)) {
-        return Allocation{nullptr, 0};
+        return Allocation{};
       }
       auto buffer = op->pool()->allocate(fakeAllocationSize);
       orderByWait.notify();
       // Wait for pause to be triggered.
       taskPauseWait.wait(taskPauseWaitKey);
-      return Allocation{buffer, fakeAllocationSize};
+      return Allocation{op->pool(), buffer, fakeAllocationSize};
     });
 
     std::atomic<bool> injectOrderByOnce{true};
@@ -538,7 +545,7 @@ TEST_F(SharedArbitrationTest, reclaimFromCompletedOrderBy) {
       }
       fakeAllocationWait.wait(fakeAllocationWaitKey);
       auto buffer = op->pool()->allocate(fakeAllocationSize);
-      return Allocation{buffer, fakeAllocationSize};
+      return Allocation{op->pool(), buffer, fakeAllocationSize};
     });
 
     std::thread orderByThread([&]() {
@@ -606,11 +613,11 @@ DEBUG_ONLY_TEST_F(SharedArbitrationTest, DISABLED_reclaimFromAggregation) {
     std::atomic<bool> injectAllocationOnce{true};
     fakeOperatorFactory_->setAllocationCallback([&](Operator* op) {
       if (!injectAllocationOnce.exchange(false)) {
-        return Allocation{nullptr, 0};
+        return Allocation{};
       }
       fakeAllocationWait.wait(fakeAllocationWaitKey);
       auto buffer = op->pool()->allocate(fakeAllocationSize);
-      return Allocation{buffer, fakeAllocationSize};
+      return Allocation{op->pool(), buffer, fakeAllocationSize};
     });
 
     std::atomic<bool> injectAggregationByOnce{true};
@@ -703,13 +710,13 @@ DEBUG_ONLY_TEST_F(SharedArbitrationTest, reclaimToAggregation) {
     std::atomic<bool> injectAllocationOnce{true};
     fakeOperatorFactory_->setAllocationCallback([&](Operator* op) {
       if (!injectAllocationOnce.exchange(false)) {
-        return Allocation{nullptr, 0};
+        return Allocation{};
       }
       auto buffer = op->pool()->allocate(fakeAllocationSize);
       aggregationWait.notify();
       // Wait for pause to be triggered.
       taskPauseWait.wait(taskPauseWaitKey);
-      return Allocation{buffer, fakeAllocationSize};
+      return Allocation{op->pool(), buffer, fakeAllocationSize};
     });
 
     std::atomic<bool> injectAggregationOnce{true};
@@ -796,7 +803,7 @@ TEST_F(SharedArbitrationTest, reclaimFromCompletedAggregation) {
       }
       fakeAllocationWait.wait(fakeAllocationWaitKey);
       auto buffer = op->pool()->allocate(fakeAllocationSize);
-      return Allocation{buffer, fakeAllocationSize};
+      return Allocation{op->pool(), buffer, fakeAllocationSize};
     });
 
     std::thread aggregationThread([&]() {
@@ -863,11 +870,11 @@ DEBUG_ONLY_TEST_F(SharedArbitrationTest, reclaimFromJoinBuilder) {
     std::atomic<bool> injectAllocationOnce{true};
     fakeOperatorFactory_->setAllocationCallback([&](Operator* op) {
       if (!injectAllocationOnce.exchange(false)) {
-        return Allocation{nullptr, 0};
+        return Allocation{};
       }
       fakeAllocationWait.wait(fakeAllocationWaitKey);
       auto buffer = op->pool()->allocate(fakeAllocationSize);
-      return Allocation{buffer, fakeAllocationSize};
+      return Allocation{op->pool(), buffer, fakeAllocationSize};
     });
 
     std::atomic<bool> injectAggregationByOnce{true};
@@ -971,13 +978,13 @@ DEBUG_ONLY_TEST_F(SharedArbitrationTest, reclaimToJoinBuilder) {
     std::atomic<bool> injectAllocationOnce{true};
     fakeOperatorFactory_->setAllocationCallback([&](Operator* op) {
       if (!injectAllocationOnce.exchange(false)) {
-        return Allocation{nullptr, 0};
+        return Allocation{};
       }
       auto buffer = op->pool()->allocate(fakeAllocationSize);
       joinWait.notify();
       // Wait for pause to be triggered.
       taskPauseWait.wait(taskPauseWaitKey);
-      return Allocation{buffer, fakeAllocationSize};
+      return Allocation{op->pool(), buffer, fakeAllocationSize};
     });
 
     std::atomic<bool> injectJoinOnce{true};
@@ -1075,7 +1082,7 @@ TEST_F(SharedArbitrationTest, reclaimFromCompletedJoinBuilder) {
       }
       fakeAllocationWait.wait(fakeAllocationWaitKey);
       auto buffer = op->pool()->allocate(fakeAllocationSize);
-      return Allocation{buffer, fakeAllocationSize};
+      return Allocation{op->pool(), buffer, fakeAllocationSize};
     });
 
     std::thread joinThread([&]() {
@@ -1135,8 +1142,7 @@ DEBUG_ONLY_TEST_F(
   }
   const int numDrivers = 4;
   createDuckDbTable(vectors);
-  // std::vector<bool> sameQueries = {false, true};
-  std::vector<bool> sameQueries = {false};
+  std::vector<bool> sameQueries = {false, true};
   for (bool sameQuery : sameQueries) {
     SCOPED_TRACE(fmt::format("sameQuery {}", sameQuery));
     const auto spillDirectory = exec::test::TempDirectoryPath::create();
@@ -1159,11 +1165,11 @@ DEBUG_ONLY_TEST_F(
     std::atomic<bool> injectAllocationOnce{true};
     fakeOperatorFactory_->setAllocationCallback([&](Operator* op) {
       if (!injectAllocationOnce.exchange(false)) {
-        return Allocation{nullptr, 0};
+        return Allocation{};
       }
       fakeAllocationWait.wait(fakeAllocationWaitKey);
       auto buffer = op->pool()->allocate(fakeAllocationSize);
-      return Allocation{buffer, fakeAllocationSize};
+      return Allocation{op->pool(), buffer, fakeAllocationSize};
     });
 
     std::atomic<int> injectCount{0};
@@ -1251,8 +1257,6 @@ DEBUG_ONLY_TEST_F(
 DEBUG_ONLY_TEST_F(
     SharedArbitrationTest,
     failedToReclaimFromHashJoinBuildersInNonReclaimableSection) {
-  // Disable the memory arbitration failure retry to ease testing.
-  setupMemory(0, 0, 0, false);
   const int numVectors = 32;
   std::vector<RowVectorPtr> vectors;
   fuzzerOpts_.vectorSize = 128;
@@ -1263,165 +1267,160 @@ DEBUG_ONLY_TEST_F(
   }
   const int numDrivers = 4;
   createDuckDbTable(vectors);
-  std::vector<bool> sameQueries = {false, true};
-  for (bool sameQuery : sameQueries) {
-    SCOPED_TRACE(fmt::format("sameQuery {}", sameQuery));
-    const auto spillDirectory = exec::test::TempDirectoryPath::create();
-    std::shared_ptr<core::QueryCtx> fakeMemoryQueryCtx =
-        newQueryCtx(kMemoryCapacity);
-    std::shared_ptr<core::QueryCtx> joinQueryCtx;
-    if (sameQuery) {
-      joinQueryCtx = fakeMemoryQueryCtx;
-    } else {
-      joinQueryCtx = newQueryCtx(kMemoryCapacity);
-    }
+  const auto spillDirectory = exec::test::TempDirectoryPath::create();
+  std::shared_ptr<core::QueryCtx> fakeMemoryQueryCtx =
+      newQueryCtx(kMemoryCapacity);
+  std::shared_ptr<core::QueryCtx> joinQueryCtx = newQueryCtx(kMemoryCapacity);
 
-    folly::EventCount allocationWait;
-    auto allocationWaitKey = allocationWait.prepareWait();
-    folly::EventCount allocationDoneWait;
-    auto allocationDoneWaitKey = allocationDoneWait.prepareWait();
+  folly::EventCount allocationWait;
+  auto allocationWaitKey = allocationWait.prepareWait();
+  folly::EventCount allocationDoneWait;
+  auto allocationDoneWaitKey = allocationDoneWait.prepareWait();
 
-    const auto joinMemoryUsage = 8L << 20;
-    const auto fakeAllocationSize = kMemoryCapacity - joinMemoryUsage / 2;
+  const auto joinMemoryUsage = 8L << 20;
+  const auto fakeAllocationSize = kMemoryCapacity - joinMemoryUsage / 2;
 
-    std::atomic<bool> injectAllocationOnce{true};
-    fakeOperatorFactory_->setAllocationCallback([&](Operator* op) {
-      if (!injectAllocationOnce.exchange(false)) {
-        return Allocation{};
-      }
-      allocationWait.wait(allocationWaitKey);
-      EXPECT_ANY_THROW(op->pool()->allocate(fakeAllocationSize));
-      allocationDoneWait.notify();
+  std::atomic<bool> injectAllocationOnce{true};
+  fakeOperatorFactory_->setAllocationCallback([&](Operator* op) {
+    if (!injectAllocationOnce.exchange(false)) {
       return Allocation{};
-    });
+    }
+    allocationWait.wait(allocationWaitKey);
+    EXPECT_ANY_THROW(op->pool()->allocate(fakeAllocationSize));
+    allocationDoneWait.notify();
+    return Allocation{};
+  });
 
-    std::atomic<int> injectCount{0};
-    folly::futures::Barrier builderBarrier(numDrivers);
-    folly::futures::Barrier pauseBarrier(numDrivers + 1);
-    SCOPED_TESTVALUE_SET(
-        "facebook::velox::exec::Driver::runInternal::addInput",
-        std::function<void(Operator*)>(([&](Operator* op) {
-          if (op->operatorType() != "HashBuild") {
-            return;
-          }
-          // Check all the hash build operators' memory usage instead of
-          // individual operator.
-          if (op->pool()->parent()->currentBytes() < joinMemoryUsage) {
-            return;
-          }
-          if (++injectCount > numDrivers - 1) {
-            return;
-          }
-          if (builderBarrier.wait().get()) {
-            allocationWait.notify();
-          }
-          pauseBarrier.wait();
-        })));
+  std::atomic<int> injectCount{0};
+  folly::futures::Barrier builderBarrier(numDrivers);
+  folly::futures::Barrier pauseBarrier(numDrivers + 1);
+  SCOPED_TESTVALUE_SET(
+      "facebook::velox::exec::Driver::runInternal::addInput",
+      std::function<void(Operator*)>(([&](Operator* op) {
+        if (op->operatorType() != "HashBuild") {
+          return;
+        }
+        // Check all the hash build operators' memory usage instead of
+        // individual operator.
+        if (op->pool()->parent()->currentBytes() < joinMemoryUsage) {
+          return;
+        }
+        if (++injectCount > numDrivers - 1) {
+          return;
+        }
+        if (builderBarrier.wait().get()) {
+          allocationWait.notify();
+        }
+        pauseBarrier.wait();
+      })));
 
-    std::atomic<bool> injectNonReclaimableSectionOnce{true};
-    SCOPED_TESTVALUE_SET(
-        "facebook::velox::common::memory::MemoryPoolImpl::allocateNonContiguous",
-        std::function<void(memory::MemoryPoolImpl*)>(
-            ([&](memory::MemoryPoolImpl* pool) {
-              const std::string re(".*HashBuild");
-              if (!RE2::FullMatch(pool->name(), re)) {
-                return;
-              }
-              if (pool->parent()->currentBytes() < joinMemoryUsage) {
-                return;
-              }
-              if (!injectNonReclaimableSectionOnce.exchange(false)) {
-                return;
-              }
-              if (builderBarrier.wait().get()) {
-                allocationWait.notify();
-              }
-              pauseBarrier.wait();
-              // Suspend the driver to simulate the arbitration.
-              pool->reclaimer()->enterArbitration();
-              allocationDoneWait.wait(allocationDoneWaitKey);
-              pool->reclaimer()->leaveArbitration();
-            })));
+  std::atomic<bool> injectNonReclaimableSectionOnce{true};
+  SCOPED_TESTVALUE_SET(
+      "facebook::velox::common::memory::MemoryPoolImpl::allocateNonContiguous",
+      std::function<void(memory::MemoryPoolImpl*)>(
+          ([&](memory::MemoryPoolImpl* pool) {
+            const std::string re(".*HashBuild");
+            if (!RE2::FullMatch(pool->name(), re)) {
+              return;
+            }
+            if (pool->parent()->currentBytes() < joinMemoryUsage) {
+              return;
+            }
+            if (!injectNonReclaimableSectionOnce.exchange(false)) {
+              return;
+            }
+            if (builderBarrier.wait().get()) {
+              allocationWait.notify();
+            }
+            pauseBarrier.wait();
+            // Suspend the driver to simulate the arbitration.
+            pool->reclaimer()->enterArbitration();
+            allocationDoneWait.wait(allocationDoneWaitKey);
+            pool->reclaimer()->leaveArbitration();
+          })));
 
-    std::atomic<bool> injectPauseOnce{true};
-    SCOPED_TESTVALUE_SET(
-        "facebook::velox::exec::Task::requestPauseLocked",
-        std::function<void(Task*)>([&](Task* /*unused*/) {
-          if (!injectPauseOnce.exchange(false)) {
-            return;
-          }
-          pauseBarrier.wait();
-        }));
+  std::atomic<bool> injectPauseOnce{true};
+  SCOPED_TESTVALUE_SET(
+      "facebook::velox::exec::Task::requestPauseLocked",
+      std::function<void(Task*)>([&](Task* /*unused*/) {
+        if (!injectPauseOnce.exchange(false)) {
+          return;
+        }
+        pauseBarrier.wait();
+      }));
 
-    // Verifies that we only trigger the hash build reclaim once.
-    std::atomic<int> numHashBuildReclaims{0};
-    SCOPED_TESTVALUE_SET(
-        "facebook::velox::exec::HashBuild::reclaim",
-        std::function<void(Operator*)>([&](Operator* /*unused*/) {
-          ++numHashBuildReclaims;
-          ASSERT_EQ(numHashBuildReclaims, 1);
-        }));
+  // Verifies that we only trigger the hash build reclaim once.
+  std::atomic<int> numHashBuildReclaims{0};
+  SCOPED_TESTVALUE_SET(
+      "facebook::velox::exec::HashBuild::reclaim",
+      std::function<void(Operator*)>([&](Operator* /*unused*/) {
+        ++numHashBuildReclaims;
+        ASSERT_EQ(numHashBuildReclaims, 1);
+      }));
 
-    std::thread joinThread([&]() {
-      auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
-      auto task =
-          AssertQueryBuilder(duckDbQueryRunner_)
-              .spillDirectory(spillDirectory->path)
-              .config(core::QueryConfig::kSpillEnabled, "true")
-              .config(core::QueryConfig::kJoinSpillEnabled, "true")
-              .config(core::QueryConfig::kSpillPartitionBits, "2")
-              // NOTE: set an extreme large value to avoid non-reclaimable
-              // section in test.
-              .config(core::QueryConfig::kSpillableReservationGrowthPct, "8000")
-              .maxDrivers(numDrivers)
-              .queryCtx(joinQueryCtx)
-              .plan(PlanBuilder(planNodeIdGenerator)
-                        .values(vectors, true)
-                        .project({"c0 AS t0", "c1 AS t1", "c2 AS t2"})
-                        .hashJoin(
-                            {"t0"},
-                            {"u1"},
-                            PlanBuilder(planNodeIdGenerator)
-                                .values(vectors, true)
-                                .project({"c0 AS u0", "c1 AS u1", "c2 AS u2"})
-                                .planNode(),
-                            "",
-                            {"t1"},
-                            core::JoinType::kInner)
-                        .planNode())
-              .assertResults(
-                  "SELECT t.c1 FROM tmp as t, tmp AS u WHERE t.c0 == u.c1");
-      // We expect the spilling is not triggered because of non-reclaimable
-      // section.
-      auto stats = task->taskStats().pipelineStats;
-      ASSERT_EQ(stats[1].operatorStats[2].spilledBytes, 0);
-    });
+  std::thread joinThread([&]() {
+    auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
+    auto task =
+        AssertQueryBuilder(duckDbQueryRunner_)
+            .spillDirectory(spillDirectory->path)
+            .config(core::QueryConfig::kSpillEnabled, "true")
+            .config(core::QueryConfig::kJoinSpillEnabled, "true")
+            .config(core::QueryConfig::kSpillPartitionBits, "2")
+            // NOTE: set an extreme large value to avoid non-reclaimable
+            // section in test.
+            .config(core::QueryConfig::kSpillableReservationGrowthPct, "8000")
+            .maxDrivers(numDrivers)
+            .queryCtx(joinQueryCtx)
+            .plan(PlanBuilder(planNodeIdGenerator)
+                      .values(vectors, true)
+                      .project({"c0 AS t0", "c1 AS t1", "c2 AS t2"})
+                      .hashJoin(
+                          {"t0"},
+                          {"u1"},
+                          PlanBuilder(planNodeIdGenerator)
+                              .values(vectors, true)
+                              .project({"c0 AS u0", "c1 AS u1", "c2 AS u2"})
+                              .planNode(),
+                          "",
+                          {"t1"},
+                          core::JoinType::kInner)
+                      .planNode())
+            .assertResults(
+                "SELECT t.c1 FROM tmp as t, tmp AS u WHERE t.c0 == u.c1");
+    // We expect the spilling is not triggered because of non-reclaimable
+    // section.
+    auto stats = task->taskStats().pipelineStats;
+    ASSERT_EQ(stats[1].operatorStats[2].spilledBytes, 0);
+  });
 
-    std::thread memThread([&]() {
-      auto task =
-          AssertQueryBuilder(duckDbQueryRunner_)
-              .queryCtx(fakeMemoryQueryCtx)
-              .plan(PlanBuilder()
-                        .values(vectors)
-                        .addNode([&](std::string id, core::PlanNodePtr input) {
-                          return std::make_shared<FakeMemoryNode>(id, input);
-                        })
-                        .planNode())
-              .assertResults("SELECT * FROM tmp");
-    });
-    joinThread.join();
-    memThread.join();
-    // We only expect to reclaim from one hash build operator once.
-    ASSERT_EQ(numHashBuildReclaims, 1);
-    Task::testingWaitForAllTasksToBeDeleted();
-  }
+  std::thread memThread([&]() {
+    bool queryFailed{false};
+    try {
+      AssertQueryBuilder(duckDbQueryRunner_)
+          .queryCtx(fakeMemoryQueryCtx)
+          .plan(PlanBuilder()
+                    .values(vectors)
+                    .addNode([&](std::string id, core::PlanNodePtr input) {
+                      return std::make_shared<FakeMemoryNode>(id, input);
+                    })
+                    .planNode())
+          .assertResults("SELECT * FROM tmp");
+    } catch (const VeloxRuntimeError& error) {
+      ASSERT_EQ(error.message(), "Aborted for external error");
+      queryFailed = true;
+    }
+    ASSERT_TRUE(queryFailed);
+  });
+  joinThread.join();
+  memThread.join();
+  // We only expect to reclaim from one hash build operator once.
+  ASSERT_EQ(numHashBuildReclaims, 1);
+  Task::testingWaitForAllTasksToBeDeleted();
 }
 
 DEBUG_ONLY_TEST_F(
     SharedArbitrationTest,
     failedToReclaimFromHashJoinBuildersInNotRunningState) {
-  // Disable the memory arbitration failure retry to ease testing.
-  setupMemory(0, 0, 0, false);
   const int numVectors = 32;
   std::vector<RowVectorPtr> vectors;
   fuzzerOpts_.vectorSize = 128;
@@ -1432,148 +1431,233 @@ DEBUG_ONLY_TEST_F(
   }
   const int numDrivers = 4;
   createDuckDbTable(vectors);
-  std::vector<bool> sameQueries = {false, true};
-  for (bool sameQuery : sameQueries) {
-    SCOPED_TRACE(fmt::format("sameQuery {}", sameQuery));
-    const auto spillDirectory = exec::test::TempDirectoryPath::create();
-    std::shared_ptr<core::QueryCtx> fakeMemoryQueryCtx =
-        newQueryCtx(kMemoryCapacity);
-    std::shared_ptr<core::QueryCtx> joinQueryCtx;
-    if (sameQuery) {
-      joinQueryCtx = fakeMemoryQueryCtx;
-    } else {
-      joinQueryCtx = newQueryCtx(kMemoryCapacity);
-    }
+  const auto spillDirectory = exec::test::TempDirectoryPath::create();
+  std::shared_ptr<core::QueryCtx> fakeMemoryQueryCtx =
+      newQueryCtx(kMemoryCapacity);
+  std::shared_ptr<core::QueryCtx> joinQueryCtx = newQueryCtx(kMemoryCapacity);
 
-    folly::EventCount allocationWait;
-    auto allocationWaitKey = allocationWait.prepareWait();
+  folly::EventCount allocationWait;
+  auto allocationWaitKey = allocationWait.prepareWait();
 
-    const auto joinMemoryUsage = 8L << 20;
-    const auto fakeAllocationSize = kMemoryCapacity - joinMemoryUsage / 2;
+  const auto joinMemoryUsage = 8L << 20;
+  const auto fakeAllocationSize = kMemoryCapacity - joinMemoryUsage / 2;
 
-    std::atomic<bool> injectAllocationOnce{true};
-    fakeOperatorFactory_->setAllocationCallback([&](Operator* op) {
-      if (!injectAllocationOnce.exchange(false)) {
-        return Allocation{};
-      }
-      allocationWait.wait(allocationWaitKey);
-      EXPECT_ANY_THROW(op->pool()->allocate(fakeAllocationSize));
+  std::atomic<bool> injectAllocationOnce{true};
+  fakeOperatorFactory_->setAllocationCallback([&](Operator* op) {
+    if (!injectAllocationOnce.exchange(false)) {
       return Allocation{};
-    });
+    }
+    allocationWait.wait(allocationWaitKey);
+    EXPECT_ANY_THROW(op->pool()->allocate(fakeAllocationSize));
+    return Allocation{};
+  });
 
-    std::atomic<int> injectCount{0};
-    folly::futures::Barrier builderBarrier(numDrivers);
-    folly::futures::Barrier pauseBarrier(numDrivers + 1);
-    SCOPED_TESTVALUE_SET(
-        "facebook::velox::exec::Driver::runInternal::addInput",
-        std::function<void(Operator*)>(([&](Operator* op) {
-          if (op->operatorType() != "HashBuild") {
-            return;
-          }
-          // Check all the hash build operators' memory usage instead of
-          // individual operator.
-          if (op->pool()->parent()->currentBytes() < joinMemoryUsage) {
-            return;
-          }
-          if (++injectCount > numDrivers - 1) {
-            return;
-          }
-          if (builderBarrier.wait().get()) {
-            allocationWait.notify();
-          }
-          // Wait for pause to be triggered.
-          pauseBarrier.wait();
-        })));
+  std::atomic<int> injectCount{0};
+  folly::futures::Barrier builderBarrier(numDrivers);
+  folly::futures::Barrier pauseBarrier(numDrivers + 1);
+  SCOPED_TESTVALUE_SET(
+      "facebook::velox::exec::Driver::runInternal::addInput",
+      std::function<void(Operator*)>(([&](Operator* op) {
+        if (op->operatorType() != "HashBuild") {
+          return;
+        }
+        // Check all the hash build operators' memory usage instead of
+        // individual operator.
+        if (op->pool()->parent()->currentBytes() < joinMemoryUsage) {
+          return;
+        }
+        if (++injectCount > numDrivers - 1) {
+          return;
+        }
+        if (builderBarrier.wait().get()) {
+          allocationWait.notify();
+        }
+        // Wait for pause to be triggered.
+        pauseBarrier.wait();
+      })));
 
-    std::atomic<bool> injectNoMoreInputOnce{true};
-    SCOPED_TESTVALUE_SET(
-        "facebook::velox::exec::Driver::runInternal::noMoreInput",
-        std::function<void(Operator*)>(([&](Operator* op) {
-          if (op->operatorType() != "HashBuild") {
-            return;
-          }
-          if (!injectNoMoreInputOnce.exchange(false)) {
-            return;
-          }
-          if (builderBarrier.wait().get()) {
-            allocationWait.notify();
-          }
-          // Wait for pause to be triggered.
-          pauseBarrier.wait();
-        })));
+  std::atomic<bool> injectNoMoreInputOnce{true};
+  SCOPED_TESTVALUE_SET(
+      "facebook::velox::exec::Driver::runInternal::noMoreInput",
+      std::function<void(Operator*)>(([&](Operator* op) {
+        if (op->operatorType() != "HashBuild") {
+          return;
+        }
+        if (!injectNoMoreInputOnce.exchange(false)) {
+          return;
+        }
+        if (builderBarrier.wait().get()) {
+          allocationWait.notify();
+        }
+        // Wait for pause to be triggered.
+        pauseBarrier.wait();
+      })));
 
-    std::atomic<bool> injectPauseOnce{true};
-    SCOPED_TESTVALUE_SET(
-        "facebook::velox::exec::Task::requestPauseLocked",
-        std::function<void(Task*)>([&](Task* /*unused*/) {
-          if (!injectPauseOnce.exchange(false)) {
-            return;
-          }
-          pauseBarrier.wait();
-        }));
+  std::atomic<bool> injectPauseOnce{true};
+  SCOPED_TESTVALUE_SET(
+      "facebook::velox::exec::Task::requestPauseLocked",
+      std::function<void(Task*)>([&](Task* /*unused*/) {
+        if (!injectPauseOnce.exchange(false)) {
+          return;
+        }
+        pauseBarrier.wait();
+      }));
 
-    // Verifies that we only trigger the hash build reclaim once.
-    std::atomic<int> numHashBuildReclaims{0};
-    SCOPED_TESTVALUE_SET(
-        "facebook::velox::exec::HashBuild::reclaim",
-        std::function<void(Operator*)>(([&](Operator* /*unused*/) {
-          ++numHashBuildReclaims;
-          ASSERT_EQ(numHashBuildReclaims, 1);
-        })));
+  // Verifies that we only trigger the hash build reclaim once.
+  std::atomic<int> numHashBuildReclaims{0};
+  SCOPED_TESTVALUE_SET(
+      "facebook::velox::exec::HashBuild::reclaim",
+      std::function<void(Operator*)>(([&](Operator* /*unused*/) {
+        ++numHashBuildReclaims;
+        ASSERT_EQ(numHashBuildReclaims, 1);
+      })));
 
-    std::thread joinThread([&]() {
-      auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
-      auto task =
-          AssertQueryBuilder(duckDbQueryRunner_)
-              .spillDirectory(spillDirectory->path)
-              .config(core::QueryConfig::kSpillEnabled, "true")
-              .config(core::QueryConfig::kJoinSpillEnabled, "true")
-              .config(core::QueryConfig::kSpillPartitionBits, "2")
-              // NOTE: set an extreme large value to avoid non-reclaimable
-              // section in test.
-              .config(core::QueryConfig::kSpillableReservationGrowthPct, "8000")
-              .maxDrivers(numDrivers)
-              .queryCtx(joinQueryCtx)
-              .plan(PlanBuilder(planNodeIdGenerator)
-                        .values(vectors, true)
-                        .project({"c0 AS t0", "c1 AS t1", "c2 AS t2"})
-                        .hashJoin(
-                            {"t0"},
-                            {"u1"},
-                            PlanBuilder(planNodeIdGenerator)
-                                .values(vectors, true)
-                                .project({"c0 AS u0", "c1 AS u1", "c2 AS u2"})
-                                .planNode(),
-                            "",
-                            {"t1"},
-                            core::JoinType::kInner)
-                        .planNode())
-              .assertResults(
-                  "SELECT t.c1 FROM tmp as t, tmp AS u WHERE t.c0 == u.c1");
-      // We expect the spilling is not triggered because of non-reclaimable
-      // section.
-      auto stats = task->taskStats().pipelineStats;
-      ASSERT_EQ(stats[1].operatorStats[2].spilledBytes, 0);
-    });
+  std::thread joinThread([&]() {
+    auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
+    auto task =
+        AssertQueryBuilder(duckDbQueryRunner_)
+            .spillDirectory(spillDirectory->path)
+            .config(core::QueryConfig::kSpillEnabled, "true")
+            .config(core::QueryConfig::kJoinSpillEnabled, "true")
+            .config(core::QueryConfig::kSpillPartitionBits, "2")
+            // NOTE: set an extreme large value to avoid non-reclaimable
+            // section in test.
+            .config(core::QueryConfig::kSpillableReservationGrowthPct, "8000")
+            .maxDrivers(numDrivers)
+            .queryCtx(joinQueryCtx)
+            .plan(PlanBuilder(planNodeIdGenerator)
+                      .values(vectors, true)
+                      .project({"c0 AS t0", "c1 AS t1", "c2 AS t2"})
+                      .hashJoin(
+                          {"t0"},
+                          {"u1"},
+                          PlanBuilder(planNodeIdGenerator)
+                              .values(vectors, true)
+                              .project({"c0 AS u0", "c1 AS u1", "c2 AS u2"})
+                              .planNode(),
+                          "",
+                          {"t1"},
+                          core::JoinType::kInner)
+                      .planNode())
+            .assertResults(
+                "SELECT t.c1 FROM tmp as t, tmp AS u WHERE t.c0 == u.c1");
+    // We expect the spilling is not triggered because of non-reclaimable
+    // section.
+    auto stats = task->taskStats().pipelineStats;
+    ASSERT_EQ(stats[1].operatorStats[2].spilledBytes, 0);
+  });
 
-    std::thread memThread([&]() {
-      auto task =
-          AssertQueryBuilder(duckDbQueryRunner_)
-              .queryCtx(fakeMemoryQueryCtx)
-              .plan(PlanBuilder()
-                        .values(vectors)
-                        .addNode([&](std::string id, core::PlanNodePtr input) {
-                          return std::make_shared<FakeMemoryNode>(id, input);
-                        })
-                        .planNode())
-              .assertResults("SELECT * FROM tmp");
-    });
-    joinThread.join();
-    memThread.join();
-    // We only expect to reclaim from one hash build operator once.
-    ASSERT_EQ(numHashBuildReclaims, 1);
-    Task::testingWaitForAllTasksToBeDeleted();
+  std::thread memThread([&]() {
+    bool queryFailed{false};
+    try {
+      AssertQueryBuilder(duckDbQueryRunner_)
+          .queryCtx(fakeMemoryQueryCtx)
+          .plan(PlanBuilder()
+                    .values(vectors)
+                    .addNode([&](std::string id, core::PlanNodePtr input) {
+                      return std::make_shared<FakeMemoryNode>(id, input);
+                    })
+                    .planNode())
+          .assertResults("SELECT * FROM tmp");
+    } catch (const VeloxRuntimeError& error) {
+      ASSERT_EQ(error.message(), "Aborted for external error");
+      queryFailed = true;
+    }
+    ASSERT_TRUE(queryFailed);
+  });
+  joinThread.join();
+  memThread.join();
+  // We only expect to reclaim from one hash build operator once.
+  ASSERT_EQ(numHashBuildReclaims, 1);
+  Task::testingWaitForAllTasksToBeDeleted();
+}
+
+DEBUG_ONLY_TEST_F(
+    SharedArbitrationTest,
+    arbitrationTriggeredDuringParallelJoinBuild) {
+  const int numVectors = 2;
+  std::vector<RowVectorPtr> vectors;
+  // Build a large vector to trigger memory arbitration.
+  fuzzerOpts_.vectorSize = 10'000;
+  for (int i = 0; i < numVectors; ++i) {
+    vectors.push_back(newVector());
   }
+  createDuckDbTable(vectors);
+
+  std::shared_ptr<core::QueryCtx> joinQueryCtx = newQueryCtx(kMemoryCapacity);
+
+  // Make sure the parallel build has been triggered.
+  std::atomic<bool> parallelBuildTriggered{false};
+  SCOPED_TESTVALUE_SET(
+      "facebook::velox::exec::HashTable::parallelJoinBuild",
+      std::function<void(void*)>(
+          [&](void*) { parallelBuildTriggered = true; }));
+
+  // TODO: add driver context to test if the memory allocation is triggered in
+  // driver context or not.
+
+  auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
+  AssertQueryBuilder(duckDbQueryRunner_)
+      // Set very low table size threshold to trigger parallel build.
+      .config(
+          core::QueryConfig::kMinTableRowsForParallelJoinBuild,
+          std::to_string(0))
+      // Set multiple hash build drivers to trigger parallel build.
+      .maxDrivers(4)
+      .queryCtx(joinQueryCtx)
+      .plan(PlanBuilder(planNodeIdGenerator)
+                .values(vectors, true)
+                .project({"c0 AS t0", "c1 AS t1", "c2 AS t2"})
+                .hashJoin(
+                    {"t0", "t1"},
+                    {"u1", "u0"},
+                    PlanBuilder(planNodeIdGenerator)
+                        .values(vectors, true)
+                        .project({"c0 AS u0", "c1 AS u1", "c2 AS u2"})
+                        .planNode(),
+                    "",
+                    {"t1"},
+                    core::JoinType::kInner)
+                .planNode())
+      .assertResults(
+          "SELECT t.c1 FROM tmp as t, tmp AS u WHERE t.c0 == u.c1 AND t.c1 == u.c0");
+  ASSERT_TRUE(parallelBuildTriggered);
+  Task::testingWaitForAllTasksToBeDeleted();
+}
+
+DEBUG_ONLY_TEST_F(SharedArbitrationTest, driverInitTriggeredArbitration) {
+  const int numVectors = 2;
+  std::vector<RowVectorPtr> vectors;
+  const int vectorSize = 100;
+  fuzzerOpts_.vectorSize = vectorSize;
+  for (int i = 0; i < numVectors; ++i) {
+    vectors.push_back(newVector());
+  }
+  const int expectedResultVectorSize = numVectors * vectorSize;
+  const auto expectedVector = makeRowVector(
+      {"c0", "c1"},
+      {makeFlatVector<int64_t>(
+           expectedResultVectorSize, [&](auto /*unused*/) { return 6; }),
+       makeFlatVector<int64_t>(
+           expectedResultVectorSize, [&](auto /*unused*/) { return 7; })});
+
+  createDuckDbTable(vectors);
+  setupMemory(kMemoryCapacity, 0);
+  std::shared_ptr<core::QueryCtx> queryCtx = newQueryCtx(kMemoryCapacity);
+  ASSERT_EQ(queryCtx->pool()->capacity(), 0);
+  ASSERT_EQ(queryCtx->pool()->maxCapacity(), kMemoryCapacity);
+
+  auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
+  AssertQueryBuilder(duckDbQueryRunner_)
+      .config(core::QueryConfig::kSpillEnabled, "false")
+      .queryCtx(queryCtx)
+      .plan(PlanBuilder(planNodeIdGenerator, pool())
+                .values(vectors)
+                // Set filter projection to trigger memory allocation on driver
+                // init.
+                .project({"1+1+4 as t0", "1+3+3 as t1"})
+                .planNode())
+      .assertResults(expectedVector);
 }
 
 TEST_F(SharedArbitrationTest, concurrentArbitration) {
@@ -1616,7 +1700,7 @@ TEST_F(SharedArbitrationTest, concurrentArbitration) {
     const size_t allocationSize = std::max(
         kMemoryCapacity / 16, folly::Random::rand32() % kMemoryCapacity);
     auto buffer = op->pool()->allocate(allocationSize);
-    return Allocation{buffer, allocationSize};
+    return Allocation{op->pool(), buffer, allocationSize};
   });
   fakeOperatorFactory_->setMaxDrivers(numDrivers);
   const std::string injectReclaimErrorMessage("Inject reclaim failure");

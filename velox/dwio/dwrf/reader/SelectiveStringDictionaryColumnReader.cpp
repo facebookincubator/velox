@@ -26,13 +26,12 @@ SelectiveStringDictionaryColumnReader::SelectiveStringDictionaryColumnReader(
     const std::shared_ptr<const TypeWithId>& nodeType,
     DwrfParams& params,
     common::ScanSpec& scanSpec)
-    : SelectiveColumnReader(nodeType, params, scanSpec, nodeType->type),
+    : SelectiveColumnReader(nodeType->type, params, scanSpec, nodeType),
       lastStrideIndex_(-1),
       provider_(params.stripeStreams().getStrideIndexProvider()) {
   auto& stripe = params.stripeStreams();
-  EncodingKey encodingKey{nodeType_->id, params.flatMapContext().sequence};
-  RleVersion rleVersion =
-      convertRleVersion(stripe.getEncoding(encodingKey).kind());
+  EncodingKey encodingKey{fileType_->id, params.flatMapContext().sequence};
+  version_ = convertRleVersion(stripe.getEncoding(encodingKey).kind());
   scanState_.dictionary.numValues =
       stripe.getEncoding(encodingKey).dictionarysize();
 
@@ -40,7 +39,7 @@ SelectiveStringDictionaryColumnReader::SelectiveStringDictionaryColumnReader(
   bool dictVInts = stripe.getUseVInts(dataId);
   dictIndex_ = createRleDecoder</*isSigned*/ false>(
       stripe.getStream(dataId, params.streamLabels().label(), true),
-      rleVersion,
+      version_,
       memoryPool_,
       dictVInts,
       dwio::common::INT_BYTE_SIZE);
@@ -49,7 +48,7 @@ SelectiveStringDictionaryColumnReader::SelectiveStringDictionaryColumnReader(
   bool lenVInts = stripe.getUseVInts(lenId);
   lengthDecoder_ = createRleDecoder</*isSigned*/ false>(
       stripe.getStream(lenId, params.streamLabels().label(), false),
-      rleVersion,
+      version_,
       memoryPool_,
       lenVInts,
       dwio::common::INT_BYTE_SIZE);
@@ -82,7 +81,7 @@ SelectiveStringDictionaryColumnReader::SelectiveStringDictionaryColumnReader(
     bool strideLenVInt = stripe.getUseVInts(strideDictLenId);
     strideDictLengthDecoder_ = createRleDecoder</*isSigned*/ false>(
         stripe.getStream(strideDictLenId, params.streamLabels().label(), true),
-        rleVersion,
+        version_,
         memoryPool_,
         strideLenVInt,
         dwio::common::INT_BYTE_SIZE);
@@ -182,7 +181,7 @@ void SelectiveStringDictionaryColumnReader::makeDictionaryBaseVector() {
 
     dictionaryValues_ = std::make_shared<FlatVector<StringView>>(
         &memoryPool_,
-        type_,
+        fileType_->type,
         BufferPtr(nullptr), // TODO nulls
         scanState_.dictionary.numValues +
             scanState_.dictionary2.numValues, // length
@@ -192,7 +191,7 @@ void SelectiveStringDictionaryColumnReader::makeDictionaryBaseVector() {
   } else {
     dictionaryValues_ = std::make_shared<FlatVector<StringView>>(
         &memoryPool_,
-        type_,
+        fileType_->type,
         BufferPtr(nullptr), // TODO nulls
         scanState_.dictionary.numValues /*length*/,
         scanState_.dictionary.values,

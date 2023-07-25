@@ -129,20 +129,13 @@ class DestinationBuffer {
 
 class PartitionedOutputBuffer {
  public:
-  enum class Kind {
-    kPartitioned,
-    kBroadcast,
-    kArbitrary,
-  };
-  static std::string kindString(Kind kind);
-
   PartitionedOutputBuffer(
       std::shared_ptr<Task> task,
-      Kind kind,
+      core::PartitionedOutputNode::Kind kind,
       int numDestinations,
       uint32_t numDrivers);
 
-  Kind kind() const {
+  core::PartitionedOutputNode::Kind kind() const {
     return kind_;
   }
 
@@ -190,6 +183,13 @@ class PartitionedOutputBuffer {
 
   std::string toString();
 
+  // Gets the memory utilization ratio in this output buffer.
+  double getUtilization();
+
+  // Indicates if this output buffer is over-utilized and thus blocks its
+  // producers.
+  bool isOverutilized();
+
  private:
   // Percentage of maxSize below which a blocked producer should
   // be unblocked.
@@ -226,19 +226,19 @@ class PartitionedOutputBuffer {
   std::string toStringLocked() const;
 
   FOLLY_ALWAYS_INLINE bool isBroadcast() const {
-    return kind_ == Kind::kBroadcast;
+    return kind_ == core::PartitionedOutputNode::Kind::kBroadcast;
   }
 
   FOLLY_ALWAYS_INLINE bool isPartitioned() const {
-    return kind_ == Kind::kPartitioned;
+    return kind_ == core::PartitionedOutputNode::Kind::kPartitioned;
   }
 
   FOLLY_ALWAYS_INLINE bool isArbitrary() const {
-    return kind_ == Kind::kArbitrary;
+    return kind_ == core::PartitionedOutputNode::Kind::kArbitrary;
   }
 
   const std::shared_ptr<Task> task_;
-  const Kind kind_;
+  const core::PartitionedOutputNode::Kind kind_;
   /// If 'totalSize_' > 'maxSize_', each producer is blocked after adding
   /// data.
   const uint64_t maxSize_;
@@ -276,17 +276,11 @@ class PartitionedOutputBuffer {
   bool atEnd_ = false;
 };
 
-FOLLY_ALWAYS_INLINE std::ostream& operator<<(
-    std::ostream& out,
-    const PartitionedOutputBuffer::Kind kind) {
-  return out << PartitionedOutputBuffer::kindString(kind);
-}
-
 class PartitionedOutputBufferManager {
  public:
   void initializeTask(
       std::shared_ptr<Task> task,
-      PartitionedOutputBuffer::Kind kind,
+      core::PartitionedOutputNode::Kind kind,
       int numDestinations,
       int numDrivers);
 
@@ -362,6 +356,14 @@ class PartitionedOutputBufferManager {
   }
 
   std::string toString();
+
+  // Gets the memory utilization ratio for the output buffer from a task of
+  // taskId, if the task of this taskId is not found, return 0.
+  double getUtilization(const std::string& taskId);
+
+  // If the output buffer from a task of taskId is over-utilized and blocks its
+  // producers. When the task of this taskId is not found, return false.
+  bool isOverutilized(const std::string& taskId);
 
   // Retrieves the set of buffers for a query if exists.
   // Returns NULL if task not found.

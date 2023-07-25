@@ -99,6 +99,7 @@ TEST_F(HashStringAllocatorTest, allocate) {
     for (auto i = 0; i < 10'000; ++i) {
       headers.push_back(allocate((i % 10) * 10));
     }
+    EXPECT_THROW(allocator_->checkEmpty(), VeloxException);
     allocator_->checkConsistency();
     for (int32_t step = 7; step >= 1; --step) {
       for (auto i = 0; i < headers.size(); i += step) {
@@ -110,6 +111,7 @@ TEST_F(HashStringAllocatorTest, allocate) {
       allocator_->checkConsistency();
     }
   }
+  allocator_->checkEmpty();
   // We allow for some free overhead for free lists after all is freed.
   EXPECT_LE(allocator_->retainedSize() - allocator_->freeSpace(), 250);
 }
@@ -389,6 +391,31 @@ TEST_F(HashStringAllocatorTest, stlAllocatorOverflow) {
   VELOX_ASSERT_THROW(alloc.allocate(1ULL << 62), "integer overflow");
   AlignedStlAllocator<int64_t, 16> alignedAlloc(allocator_.get());
   VELOX_ASSERT_THROW(alignedAlloc.allocate(1ULL << 62), "integer overflow");
+}
+
+TEST_F(HashStringAllocatorTest, externalLeak) {
+  constexpr int32_t kSize = HashStringAllocator ::kMaxAlloc * 10;
+  auto root =
+      memory::MemoryManager::getInstance().addRootPool("HSALeakTestRoot");
+  auto pool = root->addLeafChild("HSALeakLeaf");
+  auto initialBytes = pool->currentBytes();
+  auto allocator = std::make_unique<HashStringAllocator>(pool.get());
+
+  for (auto i = 0; i < 100; ++i) {
+    allocator->allocate(kSize);
+  }
+  EXPECT_LE(100 * kSize, pool->currentBytes());
+
+  StlAllocator<char> stlAlloc(allocator.get());
+  for (auto i = 0; i < 100; ++i) {
+    stlAlloc.allocate(kSize);
+  }
+  EXPECT_LE(200 * kSize, pool->currentBytes());
+  allocator->clear();
+  EXPECT_GE(initialBytes + 1000, pool->currentBytes());
+
+  allocator.reset();
+  EXPECT_EQ(initialBytes, pool->currentBytes());
 }
 
 } // namespace

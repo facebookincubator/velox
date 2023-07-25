@@ -581,13 +581,11 @@ class PlanBuilder {
   /// current plan node).
   PlanBuilder& localPartition(const std::vector<std::string>& keys);
 
-#ifndef VELOX_ENABLE_BACKWARD_COMPATIBILITY
   /// A convenience method to add a LocalPartitionNode with a single source (the
   /// current plan node) and hive bucket property.
   PlanBuilder& localPartition(
       const std::shared_ptr<connector::hive::HiveBucketProperty>&
           bucketProperty);
-#endif
 
   /// Add a LocalPartitionNode to partition the input using batch-level
   /// round-robin. Number of partitions is determined at runtime based on
@@ -724,7 +722,8 @@ class PlanBuilder {
   /// optional limit and no sorting.
   PlanBuilder& rowNumber(
       const std::vector<std::string>& partitionKeys,
-      std::optional<int32_t> limit = std::nullopt);
+      std::optional<int32_t> limit = std::nullopt,
+      bool generateRowNumber = true);
 
   /// Add a TopNRowNumberNode to compute single row_number window function with
   /// a limit applied to sorted partitions.
