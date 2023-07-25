@@ -1,0 +1,306 @@
+
+<!DOCTYPE html>
+
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" /><meta name="generator" content="Docutils 0.18.1: http://docutils.sourceforge.net/" />
+
+    <title>CompactRow Serialization Format &#8212; Velox  documentation</title>
+    <link rel="stylesheet" type="text/css" href="../_static/pygments.css" />
+    <link rel="stylesheet" type="text/css" href="../_static/nature.css" />
+    <script data-url_root="../" id="documentation_options" src="../_static/documentation_options.js"></script>
+    <script src="../_static/jquery.js"></script>
+    <script src="../_static/underscore.js"></script>
+    <script src="../_static/_sphinx_javascript_frameworks_compat.js"></script>
+    <script src="../_static/doctools.js"></script>
+    <link rel="index" title="Index" href="../genindex.html" />
+    <link rel="search" title="Search" href="../search.html" />
+    <link rel="next" title="Testing Tools" href="testing.html" />
+    <link rel="prev" title="UnsafeRow Serialization Format" href="unsaferow.html" /> 
+  </head><body>
+    <div class="related" role="navigation" aria-label="related navigation">
+      <h3>Navigation</h3>
+      <ul>
+        <li class="right" style="margin-right: 10px">
+          <a href="../genindex.html" title="General Index"
+             accesskey="I">index</a></li>
+        <li class="right" >
+          <a href="testing.html" title="Testing Tools"
+             accesskey="N">next</a> |</li>
+        <li class="right" >
+          <a href="unsaferow.html" title="UnsafeRow Serialization Format"
+             accesskey="P">previous</a> |</li>
+        <li class="nav-item nav-item-0"><a href="../index.html">Velox  documentation</a> &#187;</li>
+          <li class="nav-item nav-item-1"><a href="../develop.html" accesskey="U">Developer Guide</a> &#187;</li>
+        <li class="nav-item nav-item-this"><a href="">CompactRow Serialization Format</a></li> 
+      </ul>
+    </div>  
+
+    <div class="document">
+      <div class="documentwrapper">
+        <div class="bodywrapper">
+          <div class="body" role="main">
+            
+  <section id="compactrow-serialization-format">
+<h1>CompactRow Serialization Format<a class="headerlink" href="#compactrow-serialization-format" title="Permalink to this heading">¶</a></h1>
+<p>CompactRow is a row-wise serialization format provided by Velox as an
+alternative to UnsafeRow format. CompactRow is more space efficient then
+UnsafeRow and results in fewer bytes shuffled which has a cascading effect on
+CPU usage (for compression and checksumming) and memory (for buffering).</p>
+<p>A row is a contiguous buffer that starts with null flags, followed by individual
+fields.</p>
+<p>nulls | field1 | field 2 | …</p>
+<p>Nulls section uses one bit per field to indicate which fields are null. If there
+are 10 fields, there will be 2 bytes of null flags (16 bits total, 10 bits
+used, 6 bits unused).</p>
+<p>Fixed-width fields (integers, boolean, floating point numbers) take up a fixed
+number of bytes regardless of whether they are null or not. A row with 10
+bigint fields takes up 2 + 10 * 8 = 82 bytes. 2 bytes for null flags + 8 bytes
+per field.</p>
+<p>The sizes of fixed-width fields are:</p>
+<table class="docutils align-default">
+<thead>
+<tr class="row-odd"><th class="head"><p>Type</p></th>
+<th class="head"><p>Number of bytes used for serialization</p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even"><td><p>BOOLEAN</p></td>
+<td><p>1</p></td>
+</tr>
+<tr class="row-odd"><td><p>TINYINT</p></td>
+<td><p>1</p></td>
+</tr>
+<tr class="row-even"><td><p>SMALLINT</p></td>
+<td><p>2</p></td>
+</tr>
+<tr class="row-odd"><td><p>INTEGER</p></td>
+<td><p>4</p></td>
+</tr>
+<tr class="row-even"><td><p>BIGINT</p></td>
+<td><p>8</p></td>
+</tr>
+<tr class="row-odd"><td><p>HUGEINT</p></td>
+<td><p>16</p></td>
+</tr>
+<tr class="row-even"><td><p>REAL</p></td>
+<td><p>4</p></td>
+</tr>
+<tr class="row-odd"><td><p>DOUBLE</p></td>
+<td><p>8</p></td>
+</tr>
+<tr class="row-even"><td><p>TIMESTAMP</p></td>
+<td><p>8</p></td>
+</tr>
+<tr class="row-odd"><td><p>UNKNOWN</p></td>
+<td><p>0</p></td>
+</tr>
+</tbody>
+</table>
+<p>Strings (VARCHAR and VARBINARY) use 4 bytes for size plus the length of the
+string. Empty string uses 4 bytes. 1-character string uses 5 bytes.
+20-character ASCII string uses 24 bytes. Null strings do not take up space
+(other than one bit in the nulls section).</p>
+<p>Arrays of fixed-width values or strings, e.g. arrays of integers, use 4 bytes
+for the size of the array, a few bytes for nulls flags indicating null-ness of
+the elements (1 bit per element) plus the space taken by the elements
+themselves.</p>
+<p>For example, an array of 5 integers [1, 2, 3, 4, 5] uses 4 bytes for size, 1
+byte for 5 null flags and 5 * 4 bytes for 5 values. A total of 25 bytes.</p>
+<table class="docutils align-default">
+<thead>
+<tr class="row-odd"><th class="head"><p>Description</p></th>
+<th class="head"><p>Size</p></th>
+<th class="head"><p>Nulls</p></th>
+<th class="head"><p>Elem 1</p></th>
+<th class="head"><p>Elem 2</p></th>
+<th class="head"><p>Elem 3</p></th>
+<th class="head"><p>Elem 4</p></th>
+<th class="head"><p>Elem 5</p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even"><td><p># of bytes</p></td>
+<td><p>4</p></td>
+<td><p>1</p></td>
+<td><p>4</p></td>
+<td><p>4</p></td>
+<td><p>4</p></td>
+<td><p>4</p></td>
+<td><p>4</p></td>
+</tr>
+<tr class="row-odd"><td><p>Value</p></td>
+<td><p>5</p></td>
+<td><p>00000000</p></td>
+<td><p>1</p></td>
+<td><p>2</p></td>
+<td><p>3</p></td>
+<td><p>4</p></td>
+<td><p>5</p></td>
+</tr>
+</tbody>
+</table>
+<p>An array of 4 strings [null, “Abc”, null, “Mountains and rivers”] uses 36 bytes:</p>
+<table class="docutils align-default">
+<thead>
+<tr class="row-odd"><th class="head"><p>Description</p></th>
+<th class="head"><p>Size</p></th>
+<th class="head"><p>Nulls</p></th>
+<th class="head"><p>Size s2</p></th>
+<th class="head"><p>s2</p></th>
+<th class="head"><p>Size s4</p></th>
+<th class="head"><p>s4</p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even"><td><p># of bytes</p></td>
+<td><p>4</p></td>
+<td><p>1</p></td>
+<td><p>4</p></td>
+<td><p>3</p></td>
+<td><p>4</p></td>
+<td><p>20</p></td>
+</tr>
+<tr class="row-odd"><td><p>Value</p></td>
+<td><p>4</p></td>
+<td><p>10100000</p></td>
+<td><p>1</p></td>
+<td><p>Abc</p></td>
+<td><p>20</p></td>
+<td><p>Mountains and rivers</p></td>
+</tr>
+</tbody>
+</table>
+<p>Serialization of an array of complex type elements, e.g. an array of arrays, maps or structs, includes a few additional fields: the total serialized size plus offset of each element in the serialized buffer.</p>
+<ul class="simple">
+<li><p>4 bytes - array size.</p></li>
+<li><p>N bytes - null flags, 1 bit per element.</p></li>
+<li><p>4 bytes - Total serialized size of the array excluding first 2 fields (size and nulls).</p></li>
+<li><p>4 bytes per element - Offsets of the elements in the serialized buffer relative to the position right after the total serialized size.</p></li>
+<li><p>Elements.</p></li>
+</ul>
+<p>For example, an array of integers [[1, 2, 3], [4, 5], [6]] uses N bytes:</p>
+<ul class="simple">
+<li><p>4 bytes - size - 3</p></li>
+<li><p>1 byte - nulls - 00000000</p></li>
+<li><p>4 bytes - total serialized size - 55</p></li>
+<li><p>4 bytes - offset of the 1st element - 12</p></li>
+<li><p>4 bytes - offset of the 2nd element - 29</p></li>
+<li><p>4 bytes - offset of the 3rd element - 42</p></li>
+<li><p>—– Start of the 1st element: [1, 2, 3]</p></li>
+<li><p>4 bytes - size - 3</p></li>
+<li><p>1 byte - nulls - 00000000</p></li>
+<li><p>4 bytes - element 1 - 1</p></li>
+<li><p>4 bytes - element 2 - 2</p></li>
+<li><p>4 bytes - element 3 - 3</p></li>
+<li><p>—– Start of the 2nd element: [4, 5]</p></li>
+<li><p>4 bytes - size - 2</p></li>
+<li><p>1 byte - nulls - 00000000</p></li>
+<li><p>4 bytes - element 1 - 4</p></li>
+<li><p>4 bytes - element 2 - 5</p></li>
+<li><p>—– Start of the 2nd element: [6]</p></li>
+<li><p>4 bytes - size - 1</p></li>
+<li><p>1 byte - nulls - 00000000</p></li>
+<li><p>4 bytes - element 1 - 6</p></li>
+</ul>
+<p>A map is serialized as the keys array followed by the values array.</p>
+<p>A struct is serialized the same as the top-level row.</p>
+<p>Compared to UnsafeRow, on average CompactRow serialization is about twice shorter. Some examples are:</p>
+<table class="docutils align-default">
+<thead>
+<tr class="row-odd"><th class="head"><p>Type</p></th>
+<th class="head"><p>UnsafeRow</p></th>
+<th class="head"><p>CompactRow</p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even"><td><p>INTEGER</p></td>
+<td><p>8</p></td>
+<td><p>4</p></td>
+</tr>
+<tr class="row-odd"><td><p>BIGINT</p></td>
+<td><p>8</p></td>
+<td><p>8</p></td>
+</tr>
+<tr class="row-even"><td><p>REAL</p></td>
+<td><p>8</p></td>
+<td><p>4</p></td>
+</tr>
+<tr class="row-odd"><td><p>DOUBLE</p></td>
+<td><p>8</p></td>
+<td><p>8</p></td>
+</tr>
+<tr class="row-even"><td><p>VARCHAR: “” (empty)</p></td>
+<td><p>8</p></td>
+<td><p>4</p></td>
+</tr>
+<tr class="row-odd"><td><p>VARCHAR: “Abc”</p></td>
+<td><p>16</p></td>
+<td><p>7</p></td>
+</tr>
+</tbody>
+</table>
+</section>
+
+
+            <div class="clearer"></div>
+          </div>
+        </div>
+      </div>
+      <div class="sphinxsidebar" role="navigation" aria-label="main navigation">
+        <div class="sphinxsidebarwrapper">
+  <div>
+    <h4>Previous topic</h4>
+    <p class="topless"><a href="unsaferow.html"
+                          title="previous chapter">UnsafeRow Serialization Format</a></p>
+  </div>
+  <div>
+    <h4>Next topic</h4>
+    <p class="topless"><a href="testing.html"
+                          title="next chapter">Testing Tools</a></p>
+  </div>
+  <div role="note" aria-label="source link">
+    <h3>This Page</h3>
+    <ul class="this-page-menu">
+      <li><a href="../_sources/develop/compactrow.rst.txt"
+            rel="nofollow">Show Source</a></li>
+    </ul>
+   </div>
+<div id="searchbox" style="display: none" role="search">
+  <h3 id="searchlabel">Quick search</h3>
+    <div class="searchformwrapper">
+    <form class="search" action="../search.html" method="get">
+      <input type="text" name="q" aria-labelledby="searchlabel" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false"/>
+      <input type="submit" value="Go" />
+    </form>
+    </div>
+</div>
+<script>document.getElementById('searchbox').style.display = "block"</script>
+        </div>
+      </div>
+      <div class="clearer"></div>
+    </div>
+    <div class="related" role="navigation" aria-label="related navigation">
+      <h3>Navigation</h3>
+      <ul>
+        <li class="right" style="margin-right: 10px">
+          <a href="../genindex.html" title="General Index"
+             >index</a></li>
+        <li class="right" >
+          <a href="testing.html" title="Testing Tools"
+             >next</a> |</li>
+        <li class="right" >
+          <a href="unsaferow.html" title="UnsafeRow Serialization Format"
+             >previous</a> |</li>
+        <li class="nav-item nav-item-0"><a href="../index.html">Velox  documentation</a> &#187;</li>
+          <li class="nav-item nav-item-1"><a href="../develop.html" >Developer Guide</a> &#187;</li>
+        <li class="nav-item nav-item-this"><a href="">CompactRow Serialization Format</a></li> 
+      </ul>
+    </div>
+    <div class="footer" role="contentinfo">
+        &#169; Copyright TBD.
+      Created using <a href="https://www.sphinx-doc.org/">Sphinx</a> 5.0.2.
+    </div>
+  </body>
+</html>
