@@ -359,6 +359,8 @@ class LogNTest : public SparkFunctionBaseTest {
   std::optional<double> log10(std::optional<double> arg) {
     return evaluateOnce<double>("log10(c0)", arg);
   }
+
+  static constexpr float kInf = std::numeric_limits<double>::infinity();
 };
 
 TEST_F(LogNTest, log2) {
@@ -368,6 +370,7 @@ TEST_F(LogNTest, log2) {
   EXPECT_EQ(log2(8), 3.0);
   EXPECT_EQ(log2(-1.0), std::nullopt);
   EXPECT_EQ(log2(0.0), std::nullopt);
+  EXPECT_EQ(log2(kInf), kInf);
 }
 
 TEST_F(LogNTest, log10) {
@@ -375,8 +378,9 @@ TEST_F(LogNTest, log10) {
     return evaluateOnce<double>("log10(c0)", a);
   };
   EXPECT_EQ(log10(100), 2.0);
-  EXPECT_EQ(log2(0.0), std::nullopt);
+  EXPECT_EQ(log10(0.0), std::nullopt);
   EXPECT_EQ(log10(-1.0), std::nullopt);
+  EXPECT_EQ(log10(kInf), kInf);
 }
 
 } // namespace
