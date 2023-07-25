@@ -13,9 +13,12 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+#include "velox/common/base/tests/GTestUtils.h"
 #include "velox/exec/Aggregate.h"
 #include "velox/exec/VectorHasher.h"
 #include "velox/exec/tests/utils/RowContainerTestBase.h"
+
+DECLARE_bool(velox_row_container_check_free);
 
 using namespace facebook::velox;
 using namespace facebook::velox::exec;
@@ -957,8 +960,8 @@ TEST_F(RowContainerTest, compareDouble) {
 }
 
 TEST_F(RowContainerTest, partition) {
-  // We assign an arbitrary partition number to each row and iterate
-  // over the rows a partition at a time.
+  // We assign an arbitrary partition number to each row and iterate over the
+  // rows a partition at a time.
   constexpr int32_t kNumRows = 100019;
   constexpr uint8_t kNumPartitions = 16;
   auto batch = makeDataset(
@@ -986,7 +989,32 @@ TEST_F(RowContainerTest, partition) {
     }
   }
 
-  auto& partitions = data->partitions();
+  // Expect throws before we get row partitions from this row container.
+  for (auto partition = 0; partition < kNumPartitions; ++partition) {
+    char* dummyBuffer;
+    RowPartitions dummyRowPartitions(data->numRows(), *pool_);
+    VELOX_ASSERT_THROW(
+        data->listPartitionRows(
+            iter,
+            partition,
+            1'000, /* maxRows */
+            dummyRowPartitions,
+            &dummyBuffer),
+        "Can't list partition rows from a mutable row container");
+  }
+
+  auto partitions = data->createRowPartitions(*pool_);
+  ASSERT_FALSE(data->testingMutable());
+  // Verify we can only get row partitions once from a row container.
+  VELOX_ASSERT_THROW(
+      data->createRowPartitions(*pool_),
+      "Can only create RowPartitions once from a row container");
+  // Verify we can't insert new row into a immutable row container.
+#ifndef NDEBUG
+  VELOX_ASSERT_THROW(
+      data->newRow(), "Can't add row into an immutable row container")
+#endif
+
   std::vector<uint8_t> rowPartitions(kNumRows);
   // Assign a partition to each row based on  modulo of first column.
   std::vector<std::vector<char*>> partitionRows(kNumPartitions);
@@ -997,7 +1025,7 @@ TEST_F(RowContainerTest, partition) {
     rowPartitions[i] = partition;
     partitionRows[partition].push_back(rows[i]);
   }
-  partitions.appendPartitions(
+  partitions->appendPartitions(
       folly::Range<const uint8_t*>(rowPartitions.data(), kNumRows));
   for (auto partition = 0; partition < kNumPartitions; ++partition) {
     std::vector<char*> result(partitionRows[partition].size() + 10);
@@ -1006,7 +1034,11 @@ TEST_F(RowContainerTest, partition) {
     int32_t resultBatch = 1;
     // Read the rows in multiple batches.
     while (auto numResults = data->listPartitionRows(
-               iter, partition, resultBatch, result.data() + numFound)) {
+               iter,
+               partition,
+               resultBatch,
+               *partitions,
+               result.data() + numFound)) {
       numFound += numResults;
       resultBatch += 13;
     }
@@ -1014,6 +1046,17 @@ TEST_F(RowContainerTest, partition) {
     result.resize(numFound);
     EXPECT_EQ(partitionRows[partition], result);
   }
+}
+
+TEST_F(RowContainerTest, partitionWithEmptyRowContainer) {
+  auto rowType = ROW(
+      {{"int_val", INTEGER()},
+       {"long_val", BIGINT()},
+       {"string_val", VARCHAR()}});
+  auto rowContainer =
+      std::make_unique<RowContainer>(rowType->children(), pool_.get());
+  auto partitions = rowContainer->createRowPartitions(*pool_);
+  ASSERT_EQ(partitions->size(), 0);
 }
 
 TEST_F(RowContainerTest, probedFlag) {
@@ -1127,4 +1170,58 @@ TEST_F(RowContainerTest, probedFlag) {
       makeNullableFlatVector<bool>(
           {true, true, true, true, std::nullopt, true}),
       result);
+}
+
+template <typename T>
+inline T* valueAt(char* row, int32_t offset) {
+  return reinterpret_cast<T*>(row + offset);
+}
+
+TEST_F(RowContainerTest, shareAndClear) {
+  gflags::FlagSaver save;
+  FLAGS_velox_row_container_check_free = true;
+
+  std::vector<TypePtr> types = {VARCHAR()};
+  static constexpr int32_t kLength = 1000;
+  auto firstRowContainer = std::make_unique<RowContainer>(types, pool_.get());
+  auto firstRow = firstRowContainer->newRow();
+  auto offset = firstRowContainer->columnAt(0).offset();
+  *valueAt<StringView>(firstRow, offset) = StringView(
+      firstRowContainer->stringAllocator().allocate(kLength)->begin(), kLength);
+
+  auto secondRowContainer = std::make_unique<RowContainer>(
+      types,
+      true,
+      std::vector<Accumulator>(),
+      std::vector<TypePtr>(),
+      false,
+      false,
+      false,
+      false,
+      pool_.get(),
+      firstRowContainer->stringAllocatorShared());
+
+  auto secondRow = secondRowContainer->newRow();
+  *valueAt<StringView>(secondRow, offset) = StringView(
+      secondRowContainer->stringAllocator().allocate(kLength)->begin(),
+      kLength);
+
+  // Both containers have each one string in the shared stringAllocator().
+  EXPECT_EQ(
+      2 * kLength, secondRowContainer->stringAllocator().checkConsistency());
+
+  auto extra = secondRowContainer->stringAllocator().allocate(kLength);
+
+  firstRowContainer.reset();
+
+  // Now there is the string from second and the extra string in the allocator.
+  EXPECT_EQ(
+      2 * kLength, secondRowContainer->stringAllocator().checkConsistency());
+
+  // The second deletes its rows but the allocator is now singly
+  // referenced but not empty because of 'extra'.
+  VELOX_ASSERT_THROW(secondRowContainer->clear(), "");
+  secondRowContainer->stringAllocator().free(extra);
+
+  secondRowContainer->clear();
 }

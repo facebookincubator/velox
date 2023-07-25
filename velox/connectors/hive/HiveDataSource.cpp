@@ -292,6 +292,9 @@ void checkColumnNameLowerCase(const SubfieldFilters& filters) {
 }
 
 void checkColumnNameLowerCase(const core::TypedExprPtr& typeExpr) {
+  if (typeExpr == nullptr) {
+    return;
+  }
   checkColumnNameLowerCase(typeExpr->type());
   for (auto& type : typeExpr->inputs()) {
     checkColumnNameLowerCase(type);
@@ -358,9 +361,8 @@ HiveDataSource::HiveDataSource(
         std::shared_ptr<connector::ColumnHandle>>& columnHandles,
     FileHandleFactory* fileHandleFactory,
     core::ExpressionEvaluator* expressionEvaluator,
-    memory::MemoryAllocator* allocator,
+    cache::AsyncDataCache* cache,
     const std::string& scanId,
-    bool fileColumnNamesReadAsLowerCase,
     folly::Executor* executor,
     const dwio::common::ReaderOptions& options)
     : fileHandleFactory_(fileHandleFactory),
@@ -368,7 +370,7 @@ HiveDataSource::HiveDataSource(
       pool_(&options.getMemoryPool()),
       outputType_(outputType),
       expressionEvaluator_(expressionEvaluator),
-      allocator_(allocator),
+      cache_(cache),
       scanId_(scanId),
       executor_(executor) {
   // Column handled keyed on the column alias, the name used in the query.
@@ -405,7 +407,7 @@ HiveDataSource::HiveDataSource(
   VELOX_CHECK(
       hiveTableHandle != nullptr,
       "TableHandle must be an instance of HiveTableHandle");
-  if (fileColumnNamesReadAsLowerCase) {
+  if (readerOpts_.isFileColumnNamesReadAsLowerCase()) {
     checkColumnNameLowerCase(outputType);
     checkColumnNameLowerCase(hiveTableHandle->subfieldFilters());
     checkColumnNameLowerCase(hiveTableHandle->remainingFilter());
@@ -835,12 +837,12 @@ std::unique_ptr<dwio::common::BufferedInput>
 HiveDataSource::createBufferedInput(
     const FileHandle& fileHandle,
     const dwio::common::ReaderOptions& readerOpts) {
-  if (auto* asyncCache = dynamic_cast<cache::AsyncDataCache*>(allocator_)) {
+  if (cache_) {
     return std::make_unique<dwio::common::CachedBufferedInput>(
         fileHandle.file,
         dwio::common::MetricsLog::voidLog(),
         fileHandle.uuid.id(),
-        asyncCache,
+        cache_,
         Connector::getTracker(scanId_, readerOpts.loadQuantum()),
         fileHandle.groupId.id(),
         ioStats_,
