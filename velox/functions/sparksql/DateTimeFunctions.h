@@ -217,8 +217,12 @@ struct DateSubFunction {
       out_type<Date>& result,
       const arg_type<Date>& date,
       const int32_t value) {
-    int32_t subValue = 0 - (int32_t)value;
-    result = addToDate(date, DateTimeUnit::kDay, subValue);
+    int64_t subValue = 0 - (int64_t)value;
+    if (subValue != (int32_t)subValue) {
+      VELOX_UNSUPPORTED("integer overflow");
+    }
+
+    result = addToDate(date, DateTimeUnit::kDay, (int32_t)subValue);
   }
 };
 
