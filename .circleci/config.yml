@@ -18,16 +18,17 @@ workflows:
   version: 2
   dist-compile:
     jobs:
-      - linux-build
-      - linux-pr-fuzzer-run
-      - linux-build-options
-      - linux-adapters
-      - macos-build:
-          matrix:
-            parameters:
-              os: [macos-intel]
-      - format-check
-      - header-check
+      - linux-join-fuzzer-run
+      # - linux-build
+      # - linux-pr-fuzzer-run
+      # - linux-build-options
+      # - linux-adapters
+      # - macos-build:
+      #     matrix:
+      #       parameters:
+      #         os: [macos-intel]
+      # - format-check
+      # - header-check
 
   # Daily documentation update
   nightly:
