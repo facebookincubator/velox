@@ -27,7 +27,9 @@
 #include <zlib.h>
 #include <zstd.h>
 #include <zstd_errors.h>
-#include <qatseqprod.h>
+#ifdef VELOX_ENABLE_QAT_ZSTD_OT
+  #include <qatseqprod.h>
+#endif
 
 namespace facebook::velox::dwrf {
 
@@ -57,6 +59,7 @@ ZstdCompressor::compress(const void* src, void* dest, uint64_t length) {
   return ret;
 }
 
+#ifdef VELOX_ENABLE_QAT_ZSTD_OT
 class ZstdQatCompressor : public Compressor {
  public:
   explicit ZstdQatCompressor(int32_t level) : Compressor{level} {
@@ -84,6 +87,7 @@ ZstdQatCompressor::compress(const void* src, void* dest, uint64_t length) {
     }
     return ret;
 }
+#endif
 
 class ZlibCompressor : public Compressor {
  public:
@@ -486,7 +490,7 @@ std::unique_ptr<BufferedOutputStream> createCompressor(
     case common::CompressionKind_ZSTD: {
       int32_t zstdCompressionLevel = config.get(Config::ZSTD_COMPRESSION_LEVEL);
       compressor = std::make_unique<ZstdCompressor>(zstdCompressionLevel);
-      #ifdef VELOX_ENABLE_QAT_OT
+      #ifdef VELOX_ENABLE_QAT_ZSTD_OT
         compressor = std::make_unique<ZstdQatCompressor>(zstdCompressionLevel);
       #endif
       XLOG_FIRST_N(INFO, 1) << fmt::format(
