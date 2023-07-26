@@ -117,7 +117,8 @@ TEST_P(CompressionTest, compressZstd) {
   char testData[] = "hello world!";
   auto compressTime = benchmarkCompress(
       CompressionKind_ZSTD, memSink, block, *pool, testData, sizeof(testData), encrypter_);
-  printf("Compress time: ", compressTime);
+  auto t = std::chrono::duration_cast<std::chrono::seconds>(compressTime);
+  printf("Compress time: %ld", t.count());
 }
 
 
