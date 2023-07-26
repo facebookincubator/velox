@@ -194,7 +194,6 @@ jobs:
                 --baseline_path ${BASELINE_OUTPUT_PATH} \
                 --contender_path ${CONTENDER_OUTPUT_PATH} \
                 --recursive \
-                --do_not_fail
           echo "::endgroup::"
 
       - name: "Save PR number"
