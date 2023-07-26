@@ -148,20 +148,23 @@ int32_t CompactRow::serializeRow(vector_size_t index, char* buffer) {
   for (auto i = 0; i < children_.size(); ++i) {
     auto& child = children_[i];
 
-    // Write fixed-width value.
-    if (childIsFixedWidth_[i]) {
-      child.serializeFixedWidth(childIndex, buffer + valuesOffset);
-      valuesOffset += child.valueBytes_;
-    }
-
-    // Write null bit.
+    // Write null bit. Advance offset if 'fixed-width'.
     if (child.isNullAt(childIndex)) {
       bits::setBit(nulls, i, true);
+      if (childIsFixedWidth_[i]) {
+        valuesOffset += child.valueBytes_;
+      }
       continue;
     }
 
-    // Write non-null variable-width value.
-    if (!childIsFixedWidth_[i]) {
+    if (childIsFixedWidth_[i]) {
+      // Write fixed-width value.
+      if (child.valueBytes_ > 0) {
+        child.serializeFixedWidth(childIndex, buffer + valuesOffset);
+      }
+      valuesOffset += child.valueBytes_;
+    } else {
+      // Write non-null variable-width value.
       auto size =
           child.serializeVariableWidth(childIndex, buffer + valuesOffset);
       valuesOffset += size;
@@ -920,11 +923,10 @@ RowVectorPtr deserializeRows(
     auto* rawFieldNulls = fieldNulls.back()->asMutable<uint8_t>();
     for (auto row = 0; row < numRows; ++row) {
       auto* serializedNulls = readNulls(data[row].data() + offsets[row]);
-      bits::setBit(
-          rawFieldNulls,
-          row,
+      const auto isNull =
           (rawNulls != nullptr && bits::isBitNull(rawNulls, row)) ||
-              !bits::isBitSet(serializedNulls, i));
+          bits::isBitSet(serializedNulls, i);
+      bits::setBit(rawFieldNulls, row, !isNull);
     }
   }
 

@@ -60,11 +60,6 @@ class CompactRowTest : public ::testing::Test, public VectorTestBase {
     VELOX_CHECK_EQ(offset, totalSize);
 
     auto copy = CompactRow::deserialize(serialized, rowType, pool());
-
-    //    LOG(ERROR) << data->toString(0, 10);
-
-    //    LOG(ERROR) << copy->toString(0, 10);
-
     assertEqualVectors(data, copy);
   }
 };
@@ -276,13 +271,20 @@ TEST_F(CompactRowTest, timestamp) {
 
   testRoundTrip(data);
 
+  // Serialize null Timestamp values with null flags set over a large
+  // non-serializable value (e.g. a value that triggers an exception in
+  // Timestamp::toMicros()).
   data = makeRowVector({
-      makeNullableFlatVector<Timestamp>({
+      makeFlatVector<Timestamp>({
           ts(0),
-          std::nullopt,
+          Timestamp::max(),
           ts(123'456),
+          Timestamp::min(),
       }),
   });
+
+  data->childAt(0)->setNull(1, true);
+  data->childAt(0)->setNull(3, true);
 
   testRoundTrip(data);
 }
@@ -418,7 +420,7 @@ TEST_F(CompactRowTest, map) {
       }),
   });
 
-  //  testRoundTrip(data);
+  testRoundTrip(data);
 }
 
 TEST_F(CompactRowTest, row) {
@@ -448,6 +450,8 @@ TEST_F(CompactRowTest, row) {
               makeFlatVector<int32_t>({1, 2, 3, 4, 5}),
               makeNullableFlatVector<int64_t>({-1, 2, -3, std::nullopt, -5}),
               makeFlatVector<double>({1.05, 2.05, 3.05, 4.05, 5.05}),
+              makeFlatVector<std::string>(
+                  {"a", "Abc", "Long test string", "", "d"}),
           },
           nullEvery(2)),
   });
@@ -501,8 +505,6 @@ TEST_F(CompactRowTest, fuzz) {
 
     fuzzer.reSeed(seed);
     auto data = fuzzer.fuzzInputRow(rowType);
-
-    //    LOG(ERROR) << data->toString(0, 10);
 
     testRoundTrip(data);
 
