@@ -435,5 +435,28 @@ TEST_F(ApproxPercentileTest, invalidWeight) {
   }
 }
 
+TEST_F(ApproxPercentileTest, columnAsPercentage) {
+  vector_size_t size = 1'000;
+  auto values = makeRowVector(
+      {makeFlatVector<int32_t>(size, [](auto row) { return row % 23; }),
+       makeConstant(0.567, size),
+       makeConstant(0.754, size),
+       makeFlatVector<double>(size, [](auto row) { return row * 0.01; })});
+  auto expectedResult =
+      makeRowVector({makeFlatVector(std::vector<int32_t>{12})});
+
+  testAggregations(
+      {values}, {}, {"approx_percentile(c0, c1)"}, {expectedResult});
+
+  expectedResult = makeRowVector({makeFlatVector(std::vector<int32_t>{17})});
+  testAggregations(
+      {values}, {}, {"approx_percentile(c0, c2)"}, {expectedResult});
+
+  VELOX_ASSERT_THROW(
+      testAggregations(
+          {values}, {}, {"approx_percentile(c0, c3)"}, {expectedResult}),
+      "Percentile must be between 0 and 1");
+}
+
 } // namespace
 } // namespace facebook::velox::aggregate::test

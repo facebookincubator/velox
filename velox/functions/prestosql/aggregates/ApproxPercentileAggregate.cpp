@@ -456,17 +456,31 @@ class ApproxPercentileAggregate : public exec::Aggregate {
       const BaseVector& vec) {
     DecodedVector decoded(vec, rows);
     VELOX_USER_CHECK(
-        decoded.isConstantMapping(),
-        "Percentile argument must be constant for all input rows");
+        decoded.isConstantMapping() || decoded.isIdentityMapping(),
+        "Percentile argument must be a constant or column for all input rows");
     bool isArray;
     const double* data;
     vector_size_t len;
     auto i = decoded.index(0);
     if (decoded.base()->typeKind() == TypeKind::DOUBLE) {
       isArray = false;
-      data =
-          decoded.base()->asUnchecked<ConstantVector<double>>()->rawValues() +
-          i;
+      if (decoded.base()->isConstantEncoding()) {
+        data =
+            decoded.base()->asUnchecked<ConstantVector<double>>()->rawValues() +
+            i;
+      } else {
+        auto vec = decoded.base()->as<FlatVector<double>>();
+        VELOX_CHECK(vec != nullptr);
+        auto sz = vec->size();
+        auto values = vec->rawValues();
+        for (int idx = 0; idx < sz; idx++) {
+          VELOX_USER_CHECK_GE(
+              values[idx], 0, "Percentile must be between 0 and 1");
+          VELOX_USER_CHECK_LE(
+              values[idx], 1, "Percentile must be between 0 and 1");
+        }
+        data = vec->rawValues() + vec->size() - 1;
+      }
       len = 1;
     } else if (decoded.base()->typeKind() == TypeKind::ARRAY) {
       isArray = true;
