@@ -504,3 +504,15 @@ target_link_libraries(
   zstd::zstd
   ZLIB::ZLIB
   ${TEST_LINK_LIBS})
+
+add_executable(QatZstdCompressionBenchmark QatZstdCompressionBenchmark.cpp)
+target_link_libraries(
+  velox_dwio_dwrf_compression_test
+  velox_link_libs
+  Folly::folly
+  glog::glog
+  lz4::lz4
+  lzo2::lzo2
+  zstd::zstd
+  ZLIB::ZLIB
+  ${TEST_LINK_LIBS})
