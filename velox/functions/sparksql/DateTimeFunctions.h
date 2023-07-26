@@ -218,12 +218,11 @@ struct DateSubFunction {
       const arg_type<Date>& date,
       const int32_t value) {
     constexpr int32_t kMin = std::numeric_limits<int32_t>::min();
-    int32_t subValue = 0;
     if (value > kMin) {
-      subValue = 0 - value;
+      int32_t subValue = 0 - value;
       result = addToDate(date, DateTimeUnit::kDay, subValue);
     } else {
-      subValue = 0 - (kMin + 1);
+      int32_t subValue = 0 - (kMin + 1);
       result = addToDate(date, DateTimeUnit::kDay, subValue);
       result = addToDate(result, DateTimeUnit::kDay, 1);
     }
