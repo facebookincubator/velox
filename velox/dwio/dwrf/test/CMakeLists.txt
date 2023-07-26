@@ -508,8 +508,8 @@ target_link_libraries(
   ${TEST_LINK_LIBS})
 
 add_executable(QatZstdCompressionBenchmark QatZstdCompressionBenchmark.cpp)
-target_link_libraries(
-  velox_dwio_dwrf_compression_test
+target_link_libraries(  
+  QatZstdCompressionBenchmark
   velox_link_libs
   Folly::folly
   glog::glog
