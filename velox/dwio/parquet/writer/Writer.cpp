@@ -149,13 +149,14 @@ void Writer::write(const VectorPtr& data) {
       recordBatch->schema(), recordBatch->columns(), data->size());
   if (!arrowContext_->writer) {
     auto arrowProperties = ::parquet::ArrowWriterProperties::Builder().build();
-    PARQUET_THROW_NOT_OK(::parquet::arrow::FileWriter::Open(
-        *recordBatch->schema(),
-        arrow::default_memory_pool(),
-        stream_,
-        arrowContext_->properties,
-        arrowProperties,
-        &arrowContext_->writer));
+    PARQUET_ASSIGN_OR_THROW(
+        arrowContext_->writer,
+        ::parquet::arrow::FileWriter::Open(
+            *recordBatch->schema(),
+            arrow::default_memory_pool(),
+            stream_,
+            arrowContext_->properties,
+            arrowProperties));
   }
 
   PARQUET_THROW_NOT_OK(
