@@ -174,7 +174,7 @@ class CastExprTest : public functions::test::CastBaseTest {
   }
 
   template <typename T>
-  void testDecimalToFloatCasts(TypePtr type) {
+  void testDecimalToFloatCasts() {
     // short to short, scale up.
     auto shortFlat = makeNullableFlatVector<int64_t>(
         {DecimalUtil::kShortDecimalMin,
@@ -217,9 +217,10 @@ class CastExprTest : public functions::test::CastBaseTest {
             {-1e33, 0, 1e33, 1.2089258196146293E19, std::nullopt}));
   }
 
-  template <typename T>
-  void testDecimalToIntegralCastsOutOfBounds(TypePtr type) {
-    VELOX_CHECK(!(std::is_same<int64_t, T>::value));
+  template <TypeKind KIND>
+  void testDecimalToIntegralCastsOutOfBounds() {
+    using NativeType = typename TypeTraits<KIND>::NativeType;
+    VELOX_CHECK(!(std::is_same<int64_t, NativeType>::value));
     const auto tooSmall =
         static_cast<int64_t>(std::numeric_limits<int32_t>::min()) - 1;
     const auto tooBig =
@@ -229,41 +230,41 @@ class CastExprTest : public functions::test::CastBaseTest {
         testComplexCast(
             "c0",
             makeFlatVector<int64_t>({0, tooSmall}, DECIMAL(10, 0)),
-            makeFlatVector<T>(0, 0)),
+            makeFlatVector<NativeType>(0, 0)),
         fmt::format(
             "Failed to cast from DECIMAL(10,0) to {}: -2147483649. Out of bounds.",
-            type->name()));
+            TypeTraits<KIND>::name));
 
     VELOX_ASSERT_THROW(
         testComplexCast(
             "c0",
             makeFlatVector<int128_t>({0, tooSmall}, DECIMAL(19, 0)),
-            makeFlatVector<T>(0, 0)),
+            makeFlatVector<NativeType>(0, 0)),
         fmt::format(
             "Failed to cast from DECIMAL(19,0) to {}: -2147483649. Out of bounds.",
-            type->name()));
+            TypeTraits<KIND>::name));
 
     VELOX_ASSERT_THROW(
         testComplexCast(
             "c0",
             makeFlatVector<int64_t>({0, tooBig}, DECIMAL(10, 0)),
-            makeFlatVector<T>(0, 0)),
+            makeFlatVector<NativeType>(0, 0)),
         fmt::format(
             "Failed to cast from DECIMAL(10,0) to {}: 2147483648. Out of bounds.",
-            type->name()));
+            TypeTraits<KIND>::name));
 
     VELOX_ASSERT_THROW(
         testComplexCast(
             "c0",
             makeFlatVector<int128_t>({0, tooBig}, DECIMAL(19, 0)),
-            makeFlatVector<T>(0, 0)),
+            makeFlatVector<NativeType>(0, 0)),
         fmt::format(
             "Failed to cast from DECIMAL(19,0) to {}: 2147483648. Out of bounds.",
-            type->name()));
+            TypeTraits<KIND>::name));
   }
 
   template <typename T>
-  void testDecimalToIntegralCasts(TypePtr type) {
+  void testDecimalToIntegralCasts() {
     auto shortFlat = makeNullableFlatVector<int64_t>(
         {-300,
          -260,
@@ -1097,21 +1098,21 @@ TEST_F(CastExprTest, toString) {
 }
 
 TEST_F(CastExprTest, decimalToIntegral) {
-  testDecimalToIntegralCasts<int64_t>(BIGINT());
-  testDecimalToIntegralCasts<int32_t>(INTEGER());
-  testDecimalToIntegralCasts<int16_t>(SMALLINT());
-  testDecimalToIntegralCasts<int8_t>(TINYINT());
+  testDecimalToIntegralCasts<int64_t>();
+  testDecimalToIntegralCasts<int32_t>();
+  testDecimalToIntegralCasts<int16_t>();
+  testDecimalToIntegralCasts<int8_t>();
 }
 
 TEST_F(CastExprTest, decimalToIntegralOutOfBounds) {
-  testDecimalToIntegralCastsOutOfBounds<int32_t>(INTEGER());
-  testDecimalToIntegralCastsOutOfBounds<int16_t>(SMALLINT());
-  testDecimalToIntegralCastsOutOfBounds<int8_t>(TINYINT());
+  testDecimalToIntegralCastsOutOfBounds<TypeKind::INTEGER>();
+  testDecimalToIntegralCastsOutOfBounds<TypeKind::SMALLINT>();
+  testDecimalToIntegralCastsOutOfBounds<TypeKind::TINYINT>();
 }
 
 TEST_F(CastExprTest, decimalToFloat) {
-  testDecimalToFloatCasts<float>(REAL());
-  testDecimalToFloatCasts<double>(DOUBLE());
+  testDecimalToFloatCasts<float>();
+  testDecimalToFloatCasts<double>();
 }
 
 TEST_F(CastExprTest, decimalToDecimal) {
