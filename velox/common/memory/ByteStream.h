@@ -223,6 +223,7 @@ class ByteStream {
     append(folly::Range(&value, 1));
   }
 
+  // Returns the size to flush the data to OutputStream before calling `flush`
   size_t flushSize();
 
   void flush(OutputStream* stream);
