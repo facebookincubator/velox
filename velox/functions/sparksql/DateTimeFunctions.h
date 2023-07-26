@@ -222,6 +222,8 @@ struct DateSubFunction {
       int32_t subValue = 0 - value;
       result = addToDate(date, DateTimeUnit::kDay, subValue);
     } else {
+      // If input value is minimum value kMin, use two steps to do DateSub.
+      // Firstly DateSub (kMin+1),then DateSub (-1).
       int32_t subValue = 0 - (kMin + 1);
       result = addToDate(date, DateTimeUnit::kDay, subValue);
       result = addToDate(result, DateTimeUnit::kDay, 1);
