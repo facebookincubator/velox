@@ -186,7 +186,7 @@ class Murmur3HashFunction final : public exec::VectorFunction {
   }
 
  private:
-  std::optional<int32_t> seed_;
+  const std::optional<int32_t> seed_;
 };
 
 class XxHash64 final {
@@ -343,7 +343,7 @@ class XxHash64Function final : public exec::VectorFunction {
   }
 
  private:
-  std::optional<int64_t> seed_;
+  const std::optional<int64_t> seed_;
 };
 
 } // namespace
@@ -368,7 +368,8 @@ std::shared_ptr<exec::VectorFunction> makeHashWithSeed(
     const std::string& name,
     const std::vector<exec::VectorFunctionArg>& inputArgs,
     const core::QueryConfig& /*config*/) {
-  BaseVector* constantSeed = inputArgs[0].constantValue.get();
+  const auto& constantSeed = inputArgs[0].constantValue;
+  VELOX_USER_CHECK_NOT_NULL(constantSeed, "Hash seed cannot be null");
   auto seed = constantSeed->as<ConstantVector<int32_t>>()->valueAt(0);
   return std::make_shared<Murmur3HashFunction>(seed);
 }
@@ -384,7 +385,7 @@ std::vector<std::shared_ptr<exec::FunctionSignature>> hashWithSeedSignatures() {
 
 std::vector<std::shared_ptr<exec::FunctionSignature>> xxhash64Signatures() {
   return {exec::FunctionSignatureBuilder()
-              .returnType("integer")
+              .returnType("bigint")
               .argumentType("any")
               .variableArity()
               .build()};
@@ -393,7 +394,7 @@ std::vector<std::shared_ptr<exec::FunctionSignature>> xxhash64Signatures() {
 std::vector<std::shared_ptr<exec::FunctionSignature>>
 xxhash64WithSeedSignatures() {
   return {exec::FunctionSignatureBuilder()
-              .returnType("integer")
+              .returnType("bigint")
               .constantArgumentType("bigint")
               .argumentType("any")
               .variableArity()
@@ -412,7 +413,8 @@ std::shared_ptr<exec::VectorFunction> makeXxHash64WithSeed(
     const std::string& name,
     const std::vector<exec::VectorFunctionArg>& inputArgs,
     const core::QueryConfig& /*config*/) {
-  BaseVector* constantSeed = inputArgs[0].constantValue.get();
+  const auto& constantSeed = inputArgs[0].constantValue;
+  VELOX_USER_CHECK_NOT_NULL(constantSeed, "Hash seed cannot be null");
   auto seed = constantSeed->as<ConstantVector<int64_t>>()->valueAt(0);
   return std::make_shared<XxHash64Function>(seed);
 }
