@@ -223,6 +223,8 @@ class ByteStream {
     append(folly::Range(&value, 1));
   }
 
+  size_t flushSize();
+
   void flush(OutputStream* stream);
 
   /// Returns the next byte that would be written to by a write. This

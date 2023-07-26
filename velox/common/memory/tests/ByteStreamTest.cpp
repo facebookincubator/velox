@@ -138,6 +138,38 @@ TEST_F(ByteStreamTest, remainingSize) {
   pool_->free(tempBuffer, kReadBytes);
 }
 
+TEST_F(ByteStreamTest, flushSize) {
+  const int32_t kSize = 10;
+  const int32_t kBufferSize = 4096;
+  std::vector<void*> buffers;
+  std::vector<ByteRange> byteRanges;
+  for (int32_t i = 0; i < kSize; i++) {
+    buffers.push_back(pool_->allocate(kBufferSize));
+    byteRanges.push_back(
+        ByteRange{reinterpret_cast<uint8_t*>(buffers.back()), kBufferSize, 0});
+  }
+  ByteStream byteStream;
+  byteStream.resetInput(std::move(byteRanges));
+  ASSERT_EQ(40960, byteStream.flushSize());
+  for (int32_t i = 0; i < kSize; i++) {
+    pool_->free(buffers[i], kBufferSize);
+  }
+
+  StreamArena arena{pool_.get()};
+  ByteStream byteStream2{&arena};
+  byteStream2.startWrite(10);
+  byteStream2.appendOne<int64_t>(24);
+  ASSERT_EQ(8, byteStream2.tellp());
+  ASSERT_EQ(8, byteStream2.flushSize());
+
+  ByteStream byteStream3{&arena, true, true};
+  byteStream3.startWrite(10);
+  byteStream3.appendBool(true, 2);
+  byteStream3.appendBool(false, 1);
+  ASSERT_EQ(3, byteStream3.tellp());
+  ASSERT_EQ(1, byteStream3.flushSize());
+}
+
 TEST_F(ByteStreamTest, toString) {
   const int32_t kSize = 10;
   const int32_t kBufferSize = 4096;
