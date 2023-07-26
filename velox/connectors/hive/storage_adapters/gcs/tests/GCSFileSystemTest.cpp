@@ -233,7 +233,7 @@ TEST_F(GCSFileSystemTest, writeAndReadFile) {
   writeFile->flush();
   writeFile->close();
   VELOX_ASSERT_THROW(
-      writeFile->append(dataContent.substr(0, 10)), "File is closed");
+      writeFile->append(dataContent.substr(0, 10)), "File is not open");
 
   auto readFile = gcfs.openFileForRead(gcsFile);
   std::int64_t size = readFile->size();

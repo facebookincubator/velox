@@ -206,7 +206,7 @@ class GCSWriteFile final : public WriteFile {
   }
 
   void append(const std::string_view data) {
-    VELOX_CHECK(isFileOpen(), "File is closed");
+    VELOX_CHECK(isFileOpen(), "File is not open");
     stream_ << data;
     size_ += data.size();
   }
