@@ -142,8 +142,9 @@ void propagateErrorsOrSetNulls(
       context.addElementErrorsToTopLevel(
           nestedRows, elementToTopLevelRows, oldErrors);
     }
-  });
+  }
 }
+} // namespace
 
 #define VELOX_DYNAMIC_DECIMAL_TYPE_DISPATCH(       \
     TEMPLATE_FUNC, decimalTypePtr, ...)            \
@@ -245,81 +246,6 @@ VectorPtr applyDecimalToPrimitiveCast(
           toType->toString());
   }
 }
-
-template <TypeKind ToKind, TypeKind FromKind>
-void applyCastPrimitives(
-    const SelectivityVector& rows,
-    exec::EvalCtx& context,
-    const BaseVector& input,
-    VectorPtr& result) {
-  using To = typename TypeTraits<ToKind>::NativeType;
-  using From = typename TypeTraits<FromKind>::NativeType;
-  auto* resultFlatVector = result->as<FlatVector<To>>();
-  auto* inputSimpleVector = input.as<SimpleVector<From>>();
-
-  const auto& queryConfig = context.execCtx()->queryCtx()->queryConfig();
-
-  if (!queryConfig.isCastToIntByTruncate()) {
-    context.applyToSelectedNoThrow(rows, [&](int row) {
-      try {
-        // Passing a false truncate flag
-        applyCastKernel<ToKind, FromKind, false>(
-            row, inputSimpleVector, resultFlatVector);
-      } catch (const VeloxRuntimeError& re) {
-        VELOX_FAIL(
-            makeErrorMessage(input, row, resultFlatVector->type()) + " " +
-            re.message());
-      } catch (const VeloxUserError& ue) {
-        VELOX_USER_FAIL(
-            makeErrorMessage(input, row, resultFlatVector->type()) + " " +
-            ue.message());
-      } catch (const std::exception& e) {
-        VELOX_USER_FAIL(
-            makeErrorMessage(input, row, resultFlatVector->type()) + " " +
-            e.what());
-      }
-    });
-  } else {
-    context.applyToSelectedNoThrow(rows, [&](int row) {
-      try {
-        // Passing a true truncate flag
-        applyCastKernel<ToKind, FromKind, true>(
-            row, inputSimpleVector, resultFlatVector);
-      } catch (const VeloxRuntimeError& re) {
-        VELOX_FAIL(
-            makeErrorMessage(input, row, resultFlatVector->type()) + " " +
-            re.message());
-      } catch (const VeloxUserError& ue) {
-        VELOX_USER_FAIL(
-            makeErrorMessage(input, row, resultFlatVector->type()) + " " +
-            ue.message());
-      } catch (const std::exception& e) {
-        VELOX_USER_FAIL(
-            makeErrorMessage(input, row, resultFlatVector->type()) + " " +
-            e.what());
-      }
-    });
-  }
-
-  // If we're converting to a TIMESTAMP, check if we need to adjust the current
-  // GMT timezone to the user provided session timezone.
-  if constexpr (ToKind == TypeKind::TIMESTAMP) {
-    // If user explicitly asked us to adjust the timezone.
-    if (queryConfig.adjustTimestampToTimezone()) {
-      auto sessionTzName = queryConfig.sessionTimezone();
-      if (!sessionTzName.empty()) {
-        // locate_zone throws runtime_error if the timezone couldn't be found
-        // (so we're safe to dereference the pointer).
-        auto* timeZone = date::locate_zone(sessionTzName);
-        auto rawTimestamps = resultFlatVector->mutableRawValues();
-
-        rows.applyToSelected(
-            [&](int row) { rawTimestamps[row].toGMT(*timeZone); });
-      }
-    }
-  }
-}
-} // namespace
 
 VectorPtr CastExpr::applyMap(
     const SelectivityVector& rows,
