@@ -848,8 +848,8 @@ within each partition starting from 1. The operator runs in streaming mode. For
 each batch of input it computes and returns the results before accepting the
 next batch of input.</p>
 <p>This operator accumulates state: a hash table mapping partition keys to total
-number of rows seen in this partition so far. This operator doesn’t support
-spilling yet.</p>
+number of rows seen in this partition so far. Returning the row numbers as
+a column in the output is optional. This operator doesn’t support spilling yet.</p>
 <p>This operator is equivalent to a WindowNode followed by
 FilterNode(row_number &lt;= limit), but it uses less memory and CPU and makes
 results available before seeing all input.</p>
@@ -868,7 +868,7 @@ results available before seeing all input.</p>
 <td><p>Partition by columns.</p></td>
 </tr>
 <tr class="row-odd"><td><p>rowNumberColumnName</p></td>
-<td><p>Output column name for the row numbers.</p></td>
+<td><p>Optional output column name for the row numbers. If specified, the generated row numbers are returned as an output column appearing after all input columns.</p></td>
 </tr>
 <tr class="row-even"><td><p>limit</p></td>
 <td><p>Optional per-partition limit. If specified, the number of rows produced by this node will not exceed this value for any given partition. Extra rows will be dropped.</p></td>
@@ -884,8 +884,8 @@ limit over sorted partitions.</p>
 a ‘limit’ number of top rows for each partition. After receiving all input,
 assigns row numbers within each partition starting from 1.</p>
 <p>This operator accumulates state: a hash table mapping partition keys to a list
-of top ‘limit’ rows within that partition. This operator doesn’t support
-spilling yet.</p>
+of top ‘limit’ rows within that partition.  Returning the row numbers as
+a column in the output is optional. This operator doesn’t support spilling yet.</p>
 <p>This operator is logically equivalent to a WindowNode followed by
 FilterNode(row_number &lt;= limit), but it uses less memory and CPU.</p>
 <table class="docutils align-left">
@@ -909,7 +909,7 @@ FilterNode(row_number &lt;= limit), but it uses less memory and CPU.</p>
 <td><p>Sorting order for each sorting key above. The supported sort orders are asc nulls first, asc nulls last, desc nulls first and desc nulls last.</p></td>
 </tr>
 <tr class="row-odd"><td><p>rowNumberColumnName</p></td>
-<td><p>Output column name for the row numbers.</p></td>
+<td><p>Optional output column name for the row numbers. If specified, the generated row numbers are returned as an output column appearing after all input columns.</p></td>
 </tr>
 <tr class="row-even"><td><p>limit</p></td>
 <td><p>Per-partition limit. If specified, the number of rows produced by this node will not exceed this value for any given partition. Extra rows will be dropped.</p></td>

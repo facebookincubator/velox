@@ -54,7 +54,9 @@
 <dl class="spark function">
 <dt class="sig sig-object spark" id="chr">
 <span class="sig-name descname"><span class="pre">chr</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">n</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">varchar</span></span></span><a class="headerlink" href="#chr" title="Permalink to this definition">¶</a></dt>
-<dd><p>Returns the Unicode code point <code class="docutils literal notranslate"><span class="pre">n</span></code> as a single character string.</p>
+<dd><p>Returns the Unicode code point <code class="docutils literal notranslate"><span class="pre">n</span></code> as a single character string.
+If <code class="docutils literal notranslate"><span class="pre">n</span> <span class="pre">&lt;</span> <span class="pre">0</span></code>, the result is an empty string.
+If <code class="docutils literal notranslate"><span class="pre">n</span> <span class="pre">&gt;=</span> <span class="pre">256</span></code>, the result is equivalent to chr(<code class="docutils literal notranslate"><span class="pre">n</span> <span class="pre">%</span> <span class="pre">256</span></code>).</p>
 </dd></dl>
 
 <dl class="spark function">
