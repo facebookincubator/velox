@@ -78,11 +78,6 @@ class HashAggregation : public Operator {
 
   int64_t maxPartialAggregationMemoryUsage_;
   std::unique_ptr<GroupingSet> groupingSet_;
-  std::vector<bool> aggregationDistincts_;
-  const bool hasDistinctAggregation_;
-  const int64_t distinctCount_;
-  std::vector<std::unique_ptr<GroupingSet>> distinctSets_;
-  std::shared_ptr<const RowType> rowTypeWithMaskChannels_;
 
   bool partialFull_ = false;
   bool newDistincts_ = false;
@@ -97,6 +92,12 @@ class HashAggregation : public Operator {
   // Min unique rows pct for partial aggregation. If more than this many rows
   // are unique, the partial aggregation is not worthwhile.
   const int32_t abandonPartialAggregationMinPct_;
+
+  std::vector<bool> aggregationDistincts_;
+  const bool hasDistinctAggregation_;
+  const int64_t distinctCount_;
+  std::vector<std::unique_ptr<GroupingSet>> distinctSets_;
+  std::shared_ptr<const RowType> rowTypeWithMaskChannels_;
 
   RowContainerIterator resultIterator_;
   bool pushdownChecked_ = false;
