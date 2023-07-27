@@ -1097,14 +1097,13 @@ class PartitionedOutputNode : public PlanNode {
       PlanNodePtr source)
       : PartitionedOutputNode(
             id,
+            broadcast ? Kind::kBroadcast : Kind::kPartitioned,
             keys,
             numPartitions,
-            broadcast ? Kind::kBroadcast : Kind::kPartitioned,
             replicateNullsAndAny,
             partitionFunctionSpec,
             outputType,
             source) {}
-#endif
 
   PartitionedOutputNode(
       const PlanNodeId& id,
@@ -1115,11 +1114,31 @@ class PartitionedOutputNode : public PlanNode {
       PartitionFunctionSpecPtr partitionFunctionSpec,
       RowTypePtr outputType,
       PlanNodePtr source)
+      : PartitionedOutputNode(
+            id,
+            kind,
+            keys,
+            numPartitions,
+            replicateNullsAndAny,
+            std::move(partitionFunctionSpec),
+            std::move(outputType),
+            std::move(source)) {}
+#endif
+
+  PartitionedOutputNode(
+      const PlanNodeId& id,
+      Kind kind,
+      const std::vector<TypedExprPtr>& keys,
+      int numPartitions,
+      bool replicateNullsAndAny,
+      PartitionFunctionSpecPtr partitionFunctionSpec,
+      RowTypePtr outputType,
+      PlanNodePtr source)
       : PlanNode(id),
+        kind_(kind),
         sources_{{std::move(source)}},
         keys_(keys),
         numPartitions_(numPartitions),
-        kind_(kind),
         replicateNullsAndAny_(replicateNullsAndAny),
         partitionFunctionSpec_(std::move(partitionFunctionSpec)),
         outputType_(std::move(outputType)) {
@@ -1129,10 +1148,11 @@ class PartitionedOutputNode : public PlanNode {
           keys_.empty(),
           "Non-empty partitioning keys require more than one partition");
     }
-    if (isBroadcast()) {
+    if (!isPartitioned()) {
       VELOX_CHECK(
           keys_.empty(),
-          "Broadcast partitioning doesn't allow for partitioning keys");
+          "{} partitioning doesn't allow for partitioning keys",
+          kindString(kind_));
     }
   }
 
@@ -1144,9 +1164,23 @@ class PartitionedOutputNode : public PlanNode {
     std::vector<TypedExprPtr> noKeys;
     return std::make_shared<PartitionedOutputNode>(
         id,
+        Kind::kBroadcast,
         noKeys,
         numPartitions,
-        Kind::kBroadcast,
+        false,
+        std::make_shared<GatherPartitionFunctionSpec>(),
+        std::move(outputType),
+        std::move(source));
+  }
+
+  static std::shared_ptr<PartitionedOutputNode>
+  arbitrary(const PlanNodeId& id, RowTypePtr outputType, PlanNodePtr source) {
+    std::vector<TypedExprPtr> noKeys;
+    return std::make_shared<PartitionedOutputNode>(
+        id,
+        Kind::kArbitrary,
+        noKeys,
+        1,
         false,
         std::make_shared<GatherPartitionFunctionSpec>(),
         std::move(outputType),
@@ -1158,9 +1192,9 @@ class PartitionedOutputNode : public PlanNode {
     std::vector<TypedExprPtr> noKeys;
     return std::make_shared<PartitionedOutputNode>(
         id,
+        Kind::kPartitioned,
         noKeys,
         1,
-        Kind::kPartitioned,
         false,
         std::make_shared<GatherPartitionFunctionSpec>(),
         std::move(outputType),
@@ -1187,8 +1221,16 @@ class PartitionedOutputNode : public PlanNode {
     return numPartitions_;
   }
 
+  bool isPartitioned() const {
+    return kind_ == Kind::kPartitioned;
+  }
+
   bool isBroadcast() const {
     return kind_ == Kind::kBroadcast;
+  }
+
+  bool isArbitrary() const {
+    return kind_ == Kind::kArbitrary;
   }
 
   Kind kind() const {
@@ -1222,10 +1264,10 @@ class PartitionedOutputNode : public PlanNode {
  private:
   void addDetails(std::stringstream& stream) const override;
 
+  const Kind kind_;
   const std::vector<PlanNodePtr> sources_;
   const std::vector<TypedExprPtr> keys_;
   const int numPartitions_;
-  const Kind kind_;
   const bool replicateNullsAndAny_;
   const PartitionFunctionSpecPtr partitionFunctionSpec_;
   const RowTypePtr outputType_;
@@ -2066,19 +2108,21 @@ class WindowNode : public PlanNode {
 
 /// Optimized version of a WindowNode for a single row_number function with an
 /// optional limit and no sorting.
-/// The output of this node contains all input columns followed by a
+/// The output of this node contains all input columns followed by an optional
 /// 'rowNumberColumnName' BIGINT column.
 class RowNumberNode : public PlanNode {
  public:
   /// @param partitionKeys Partitioning keys. May be empty.
-  /// @param rowNumberColumnName Name of the column containing row numbers.
+  /// @param rowNumberColumnName Optional name of the column containing row
+  /// numbers. If not specified, the output doesn't include 'row number' column.
+  /// This is used when computing partial results.
   /// @param limit Optional per-partition limit. If specified, the number of
   /// rows produced by this node will not exceed this value for any given
   /// partition. Extra rows will be dropped.
   RowNumberNode(
       PlanNodeId id,
       std::vector<FieldAccessTypedExprPtr> partitionKeys,
-      const std::string& rowNumberColumnName,
+      const std::optional<std::string>& rowNumberColumnName,
       std::optional<int32_t> limit,
       PlanNodePtr source);
 
@@ -2096,6 +2140,10 @@ class RowNumberNode : public PlanNode {
 
   std::optional<int32_t> limit() const {
     return limit_;
+  }
+
+  bool generateRowNumber() const {
+    return outputType_->size() > sources_[0]->outputType()->size();
   }
 
   std::string_view name() const override {

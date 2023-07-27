@@ -186,6 +186,8 @@ class RowContainer {
             false, // hasNormalizedKey
             pool) {}
 
+  ~RowContainer();
+
   static int32_t combineAlignments(int32_t a, int32_t b);
 
   // 'keyTypes' gives the type of the key of each row. For a group by,
@@ -204,6 +206,10 @@ class RowContainer {
   // into one word for faster comparison. The bulk allocation is done
   // from 'allocator'. ContainerRowSerde is used for serializing complex
   // type values into the container.
+  /// ''stringAllocator' allows sharing the variable length data arena with
+  /// another RowContainer. this is
+  // needed for spilling where the same aggregates are used for
+  // reading one container and merging into another.
   RowContainer(
       const std::vector<TypePtr>& keyTypes,
       bool nullableKeys,
@@ -213,7 +219,8 @@ class RowContainer {
       bool isJoinBuild,
       bool hasProbedFlag,
       bool hasNormalizedKey,
-      memory::MemoryPool* FOLLY_NONNULL pool);
+      memory::MemoryPool* FOLLY_NONNULL pool,
+      std::shared_ptr<HashStringAllocator> stringAllocator = nullptr);
 
   // Allocates a new row and initializes possible aggregates to null.
   char* FOLLY_NONNULL newRow();
@@ -264,6 +271,10 @@ class RowContainer {
       int32_t columnIndex);
 
   HashStringAllocator& stringAllocator() {
+    return *stringAllocator_;
+  }
+
+  const std::shared_ptr<HashStringAllocator>& stringAllocatorShared() {
     return stringAllocator_;
   }
 
@@ -414,7 +425,9 @@ class RowContainer {
       auto range = rows_.rangeAt(i);
       auto* data =
           range.data() + memory::alignmentPadding(range.data(), alignment_);
-      auto limit = range.size();
+      auto limit = range.size() -
+          (reinterpret_cast<uintptr_t>(data) -
+           reinterpret_cast<uintptr_t>(range.data()));
       auto row = iter->rowOffset;
       while (row + rowSize <= limit) {
         rows[count++] = data + row +
@@ -575,7 +588,7 @@ class RowContainer {
       uint64_t* FOLLY_NONNULL result);
 
   uint64_t allocatedBytes() const {
-    return rows_.allocatedBytes() + stringAllocator_.retainedSize();
+    return rows_.allocatedBytes() + stringAllocator_->retainedSize();
   }
 
   // Returns the number of fixed size rows that can be allocated
@@ -584,7 +597,7 @@ class RowContainer {
   std::pair<uint64_t, uint64_t> freeSpace() const {
     return std::make_pair<uint64_t, uint64_t>(
         rows_.freeBytes() / fixedRowSize_ + numFreeRows_,
-        stringAllocator_.freeSpace());
+        stringAllocator_->freeSpace());
   }
 
   // Returns the average size of rows in bytes stored in this container.
@@ -614,7 +627,7 @@ class RowContainer {
   }
 
   memory::MemoryPool* FOLLY_NONNULL pool() const {
-    return stringAllocator_.pool();
+    return stringAllocator_->pool();
   }
 
   // Returns the types of all non-aggregate columns of 'this', keys first.
@@ -631,7 +644,7 @@ class RowContainer {
   }
 
   const HashStringAllocator& stringAllocator() const {
-    return stringAllocator_;
+    return *stringAllocator_;
   }
 
   // Checks that row and free row counts match and that free list
@@ -643,25 +656,31 @@ class RowContainer {
     return (row[nullByte] & nullMask) != 0;
   }
 
-  /// Retrieves rows from 'iterator' whose partition equals
-  /// 'partition'. Writes up to 'maxRows' pointers to the rows in
-  /// 'result'. Returns the number of rows retrieved, 0 when no more
-  /// rows are found. 'iterator' is expected to be in initial state
-  /// on first call.
+  /// Creates a container to store a partition number for each row in this row
+  /// container. This is used by parallel join build which is responsible for
+  /// filling this. This function also marks this row container as immutable
+  /// after this call, we expect the user only call this once.
+  std::unique_ptr<RowPartitions> createRowPartitions(memory::MemoryPool& pool);
+
+  /// Retrieves rows from 'iterator' whose partition equals 'partition'. Writes
+  /// up to 'maxRows' pointers to the rows in 'result'. 'rowPartitions' contains
+  /// the partition number of each row in this container. The function returns
+  /// the number of rows retrieved, 0 when no more rows are found. 'iterator' is
+  /// expected to be in initial state on first call.
   int32_t listPartitionRows(
       RowContainerIterator& iterator,
       uint8_t partition,
       int32_t maxRows,
+      const RowPartitions& rowPartitions,
       char* FOLLY_NONNULL* FOLLY_NONNULL result);
-
-  /// Returns a container with a partition number for each row. This
-  /// is created on first use. The caller is responsible for filling
-  /// this.
-  RowPartitions& partitions();
 
   /// Advances 'iterator' by 'numRows'. The current row after skip is
   /// in iter.currentRow(). This is null if past end. Public for testing.
   void skip(RowContainerIterator& iterator, int32_t numRows);
+
+  bool testingMutable() const {
+    return mutable_;
+  }
 
  private:
   // Offset of the pointer to the next free row on a free row.
@@ -758,8 +777,8 @@ class RowContainer {
     }
     *reinterpret_cast<T*>(row + offset) = decoded.valueAt<T>(index);
     if constexpr (std::is_same_v<T, StringView>) {
-      RowSizeTracker tracker(row[rowSizeOffset_], stringAllocator_);
-      stringAllocator_.copyMultipart(row, offset);
+      RowSizeTracker tracker(row[rowSizeOffset_], *stringAllocator_);
+      stringAllocator_->copyMultipart(row, offset);
     }
   }
 
@@ -772,8 +791,8 @@ class RowContainer {
     using T = typename TypeTraits<Kind>::NativeType;
     *reinterpret_cast<T*>(group + offset) = decoded.valueAt<T>(index);
     if constexpr (std::is_same_v<T, StringView>) {
-      RowSizeTracker tracker(group[rowSizeOffset_], stringAllocator_);
-      stringAllocator_.copyMultipart(group, offset);
+      RowSizeTracker tracker(group[rowSizeOffset_], *stringAllocator_);
+      stringAllocator_->copyMultipart(group, offset);
     }
   }
 
@@ -1085,8 +1104,16 @@ class RowContainer {
   // Free any aggregates associated with the 'rows'.
   void freeAggregates(folly::Range<char**> rows);
 
+  const bool checkFree_ = false;
+
   const std::vector<TypePtr> keyTypes_;
   const bool nullableKeys_;
+  const bool isJoinBuild_;
+
+  // Indicates if we can add new row to this row container. It is set to false
+  // after user calls 'getRowPartitions()' to create 'rowPartitions' object for
+  // parallel join build.
+  bool mutable_{true};
 
   std::vector<Accumulator> accumulators_;
 
@@ -1095,7 +1122,6 @@ class RowContainer {
   // to 'typeKinds_' and 'rowColumns_'.
   std::vector<TypePtr> types_;
   std::vector<TypeKind> typeKinds_;
-  const bool isJoinBuild_;
   int32_t nextOffset_ = 0;
   // Bit position of null bit  in the row. 0 if no null flag. Order is keys,
   // accumulators, dependent.
@@ -1134,10 +1160,7 @@ class RowContainer {
   uint64_t numFreeRows_ = 0;
 
   memory::AllocationPool rows_;
-  HashStringAllocator stringAllocator_;
-
-  // Partition number for each row. Used only in parallel hash join build.
-  std::unique_ptr<RowPartitions> partitions_;
+  std::shared_ptr<HashStringAllocator> stringAllocator_;
 
   int alignment_ = 1;
 };

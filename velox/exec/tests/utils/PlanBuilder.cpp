@@ -848,9 +848,9 @@ PlanBuilder& PlanBuilder::partitionedOutput(
       : extract(planNode_->outputType(), outputLayout);
   planNode_ = std::make_shared<core::PartitionedOutputNode>(
       nextPlanNodeId(),
+      core::PartitionedOutputNode::Kind::kPartitioned,
       exprs(keys),
       numPartitions,
-      core::PartitionedOutputNode::Kind::kPartitioned,
       replicateNullsAndAny,
       std::move(partitionFunctionSpec),
       outputType,
@@ -1424,9 +1424,18 @@ PlanBuilder& PlanBuilder::window(
 
 PlanBuilder& PlanBuilder::rowNumber(
     const std::vector<std::string>& partitionKeys,
-    std::optional<int32_t> limit) {
+    std::optional<int32_t> limit,
+    const bool generateRowNumber) {
+  std::optional<std::string> rowNumberColumnName;
+  if (generateRowNumber) {
+    rowNumberColumnName = "row_number";
+  }
   planNode_ = std::make_shared<core::RowNumberNode>(
-      nextPlanNodeId(), fields(partitionKeys), "row_number", limit, planNode_);
+      nextPlanNodeId(),
+      fields(partitionKeys),
+      rowNumberColumnName,
+      limit,
+      planNode_);
   return *this;
 }
 
