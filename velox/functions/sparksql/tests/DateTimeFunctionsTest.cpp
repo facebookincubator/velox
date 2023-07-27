@@ -231,6 +231,8 @@ TEST_F(DateTimeFunctionsTest, dateSub) {
   EXPECT_EQ(parseDate("1969-12-31"), dateSub("5881580-07-10", kMax));
   EXPECT_EQ(parseDate("5881580-07-10"), dateSub("1969-12-30", kMin));
   EXPECT_EQ(parseDate("-5877641-06-25"), dateSub("1970-01-02", kMax));
+  EXPECT_EQ(parseDate("5881580-07-11"), dateSub("1969-12-31", kMin));
+  EXPECT_EQ(parseDate("-5877641-06-23"), dateSub("1969-12-31", kMax));
 }
 
 } // namespace
