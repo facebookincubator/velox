@@ -26,10 +26,10 @@
 #include "velox/exec/tests/utils/TempDirectoryPath.h"
 #include "velox/expression/ConjunctExpr.h"
 #include "velox/expression/ConstantExpr.h"
+#include "velox/expression/FieldReference.h"
 #include "velox/functions/Udf.h"
 #include "velox/functions/prestosql/registration/RegistrationFunctions.h"
 #include "velox/functions/prestosql/tests/utils/FunctionBaseTest.h"
-
 #include "velox/parse/Expressions.h"
 #include "velox/parse/ExpressionsParser.h"
 #include "velox/parse/TypeResolver.h"
@@ -327,6 +327,17 @@ class ExprTest : public testing::Test, public VectorTestBase {
     return sql;
   }
 
+  template <typename F>
+  void assertError(F&& func, const std::string& expectedErrorMessage) {
+    try {
+      func();
+
+      ASSERT_TRUE(false) << "Expected an error";
+    } catch (VeloxException& e) {
+      ASSERT_EQ(expectedErrorMessage, e.message());
+    }
+  }
+
   void assertError(
       const std::string& expression,
       const VectorPtr& input,
@@ -504,8 +515,8 @@ TEST_F(ExprTest, constantNull) {
   assertEqualVectors(expected, result.front());
 }
 
-// Tests that exprCompiler throws if there's a return type mismatch between what
-// the user specific in ConstantTypedExpr, and the available signatures.
+// Tests that exprCompiler throws if there's a return type mismatch between
+// what the user specific in ConstantTypedExpr, and the available signatures.
 TEST_F(ExprTest, validateReturnType) {
   auto inputExpr =
       std::make_shared<core::FieldAccessTypedExpr>(INTEGER(), "c0");
@@ -1052,8 +1063,8 @@ TEST_F(ExprTest, csePartialEvaluationWithEncodings) {
                makeFlatVector<int64_t>({0, 10, 20, 30, 40}))),
        makeFlatVector<int64_t>({3, 33, 333, 3333, 33333})});
 
-  // Compile the expressions once, then execute two times. First time, evaluate
-  // on 2 rows (0, 1). Seconds time, one 4 rows (0, 1, 2, 3).
+  // Compile the expressions once, then execute two times. First time,
+  // evaluate on 2 rows (0, 1). Seconds time, one 4 rows (0, 1, 2, 3).
   auto exprSet = compileMultiple(
       {
           "concat(concat(cast(c0 as varchar), ',', cast(c1 as varchar)), 'xxx')",
@@ -2725,11 +2736,10 @@ TEST_F(ExprTest, dictionaryResizedInAddNulls) {
       "last_row_null",
       LastRowNullFunc::signatures(),
       std::make_unique<LastRowNullFunc>());
-  // This test verifies an edge case where applyFunctionWithPeeling may produce
-  // a result vector which is dictionary encoded and has fewer values than
-  // are rows.
-  // The expression bellow make sure that we call a resize on a dictonary
-  // vector during addNulls after function `dict_wrap` is evaluated.
+  // This test verifies an edge case where applyFunctionWithPeeling may
+  // produce a result vector which is dictionary encoded and has fewer values
+  // than are rows. The expression bellow make sure that we call a resize on a
+  // dictonary vector during addNulls after function `dict_wrap` is evaluated.
 
   // Making the last rows NULL, so we call addNulls in eval.
   auto c0 = makeFlatVector<int64_t>({1, 2, 3, 4, 5});
@@ -2975,7 +2985,8 @@ TEST_F(ExprTest, commonSubExpressionWithEncodedInput) {
   // c2 > 1 is a common sub-expression. It is used in 3 top-level expressions.
   // In the first expression, c2 > 1 is evaluated for rows 2, 3.
   // In the second expression, c2 > 1 is evaluated for rows 0, 1.
-  // In the third expression. c2 > 1 returns pre-computed results for rows 2, 3
+  // In the third expression. c2 > 1 returns pre-computed results for rows 2,
+  // 3
   auto results = makeRowVector(evaluateMultiple(
       {"c0 = 2 AND c2 > 1", "c0 = 1 AND c2 > 1", "c1 = 20 AND c2 > 1"}, data));
   auto expectedResults = makeRowVector(
@@ -2998,11 +3009,11 @@ TEST_F(ExprTest, commonSubExpressionWithEncodedInput) {
   // In the first expression, c2 > 1 is evaluated for rows 2, 3.
   // In the second expression, c0 = 1 filters out row 2, 3 and the OR
   // expression sets the final selection to rows 0, 1. Finally, c2 > 1 is
-  // evaluated for rows 0, 1. If finalSelection was not updated to the union of
-  // cached rows and the existing finalSelection then the vector containing
+  // evaluated for rows 0, 1. If finalSelection was not updated to the union
+  // of cached rows and the existing finalSelection then the vector containing
   // cached values would have been override.
-  // In the third expression. c2 > 1 returns pre-computed results for rows 3, 4
-  // verifying that the vector containing cached values was not overridden.
+  // In the third expression. c2 > 1 returns pre-computed results for rows 3,
+  // 4 verifying that the vector containing cached values was not overridden.
   results = makeRowVector(evaluateMultiple(
       {"c0 = 2 AND c2 > 1",
        "c0 = 1 AND ( c1 = 20 OR c2 > 1 )",
@@ -3016,10 +3027,10 @@ TEST_F(ExprTest, commonSubExpressionWithEncodedInput) {
 }
 
 TEST_F(ExprTest, preservePartialResultsWithEncodedInput) {
-  // This test verifies that partially populated results are preserved when the
-  // input contains an encoded vector. We do this by using an if statement where
-  // partial results are passed between its children expressions based on the
-  // condition.
+  // This test verifies that partially populated results are preserved when
+  // the input contains an encoded vector. We do this by using an if statement
+  // where partial results are passed between its children expressions based
+  // on the condition.
   auto data = makeRowVector({
       makeFlatVector<int64_t>({1, 2, 3, 4, 5, 6}),
       wrapInDictionary(
@@ -3035,9 +3046,9 @@ TEST_F(ExprTest, preservePartialResultsWithEncodedInput) {
 }
 
 // Verify code paths in Expr::applyFunctionWithPeeling for the case when one
-// input is a constant of size N, while another input is a dictionary of size N
-// over base vector with size > N. After peeling encodings, first input has size
-// N, while second input has size > N (the size of the base vector). The
+// input is a constant of size N, while another input is a dictionary of size
+// N over base vector with size > N. After peeling encodings, first input has
+// size N, while second input has size > N (the size of the base vector). The
 // translated set of rows now contains row numbers > N, hence, constant input
 // needs to be resized, otherwise, accessing rows numbers > N will cause an
 // error.
@@ -3188,9 +3199,9 @@ TEST_F(ExprTest, addNulls) {
   }
 
   // Lazy reading sometimes generates row vector that has child with length
-  // shorter than the parent.  The extra rows in parent are all marked as nulls
-  // so it is valid.  We need to handle this situation when propagating nulls
-  // from parent to child.
+  // shorter than the parent.  The extra rows in parent are all marked as
+  // nulls so it is valid.  We need to handle this situation when propagating
+  // nulls from parent to child.
   {
     auto a = makeFlatVector<int64_t>(kSize - 1, folly::identity);
     auto b = makeArrayVector<int64_t>(
@@ -3289,8 +3300,8 @@ TEST_F(ExprTest, applyFunctionNoResult) {
 TEST_F(ExprTest, mapKeysAndValues) {
   // Verify that the right size of maps and keys arrays are created. This is
   // done by executing eval with a selectivity vector larger than the size of
-  // the input map but with the extra trailing rows marked invalid. Finally, if
-  // map_keys/_values tried to create a larger result array (equivalent to
+  // the input map but with the extra trailing rows marked invalid. Finally,
+  // if map_keys/_values tried to create a larger result array (equivalent to
   // rows.size()) this will throw.
   vector_size_t vectorSize = 100;
   VectorPtr mapVector = std::make_shared<MapVector>(
@@ -3618,22 +3629,21 @@ TEST_F(ExprTest, cseOverDictionaryAcrossMultipleExpressions) {
           makeIndices({1, 3}),
           makeFlatVector<StringView>({"aa1"_sv, "bb2"_sv, "cc3"_sv, "dd4"_sv})),
   });
-  // Case 1: Peeled and unpeeled set of rows have overlap. This will ensure the
-  // right pre-computed values are used.
-  // upper(c0) is the CSE here having c0 as a distinct field. Initially its
-  // distinct fields is empty as concat (its parent) will have the same
-  // fields. If during compilation distinct field is not set when it is
-  // identified as a CSE then it will be empty and peeling
-  // will not occur the second time CSE is employed. Here the peeled rows are
-  // {0,1,2,3} and unpeeled are {0,1}. If peeling is performed in the first
-  // encounter, rows to compute will be {_ , 1, _, 3} and in the second
+  // Case 1: Peeled and unpeeled set of rows have overlap. This will ensure
+  // the right pre-computed values are used. upper(c0) is the CSE here having
+  // c0 as a distinct field. Initially its distinct fields is empty as concat
+  // (its parent) will have the same fields. If during compilation distinct
+  // field is not set when it is identified as a CSE then it will be empty and
+  // peeling will not occur the second time CSE is employed. Here the peeled
+  // rows are {0,1,2,3} and unpeeled are {0,1}. If peeling is performed in the
+  // first encounter, rows to compute will be {_ , 1, _, 3} and in the second
   // instance if peeling is not performed then rows to computed would be {0,
   // 1} where row 0 will be computed and 1 will be re-used so row 1 would have
   // wrong result.
   {
     // Use an allocated result vector to force copying of values to the result
-    // vector. Otherwise, we might end up with a result vector pointing directly
-    // to the shared values vector from CSE.
+    // vector. Otherwise, we might end up with a result vector pointing
+    // directly to the shared values vector from CSE.
     std::vector<VectorPtr> resultToReuse = {
         makeFlatVector<StringView>({"x"_sv, "y"_sv}),
         makeFlatVector<StringView>({"x"_sv, "y"_sv})};
@@ -3648,17 +3658,18 @@ TEST_F(ExprTest, cseOverDictionaryAcrossMultipleExpressions) {
   }
 
   // Case 2: Here a CSE_1 "substr(upper(c0),2)" shared twice has a child
-  // expression which itself is a CSE_2 "upper(c0)" shared thrice. If expression
-  // compilation were not fixed, CSE_1 will have distinct fields set but
-  // the CSE_2 has a parent in one of the other expression trees and therefore
-  // will have its distinct fields set properly. This would result in CSE_1 not
-  // peeling but CSE_2 will. In the first expression tree peeling happens
-  // before CSE so both CSE_1 and CSE_2 are tracking peeled rows. In the second
-  // expression CSE_2 is used again will peeled rows, however in third
-  // expression CSE_1 is not peeled but its child CSE_2 attempts peeling and
-  // runs into an error while creating the peel.
+  // expression which itself is a CSE_2 "upper(c0)" shared thrice. If
+  // expression compilation were not fixed, CSE_1 will have distinct fields
+  // set but the CSE_2 has a parent in one of the other expression trees and
+  // therefore will have its distinct fields set properly. This would result
+  // in CSE_1 not peeling but CSE_2 will. In the first expression tree peeling
+  // happens before CSE so both CSE_1 and CSE_2 are tracking peeled rows. In
+  // the second expression CSE_2 is used again will peeled rows, however in
+  // third expression CSE_1 is not peeled but its child CSE_2 attempts peeling
+  // and runs into an error while creating the peel.
   {
-    // Use an allocated result vector to force copying of values to the result.
+    // Use an allocated result vector to force copying of values to the
+    // result.
     std::vector<VectorPtr> resultToReuse = {
         makeFlatVector<StringView>({"x"_sv, "y"_sv}),
         makeFlatVector<StringView>({"x"_sv, "y"_sv}),
@@ -3755,10 +3766,10 @@ TEST_F(ExprTest, nullPropagation) {
 }
 
 TEST_F(ExprTest, peelingWithSmallerConstantInput) {
-  // This test ensures that when a dictionary-encoded vector is peeled together
-  // with a constant vector whose size is smaller than the corresponding
-  // selected rows of the dictionary base vector, the subsequent evaluation on
-  // the constant vector doesn't access values beyond its size.
+  // This test ensures that when a dictionary-encoded vector is peeled
+  // together with a constant vector whose size is smaller than the
+  // corresponding selected rows of the dictionary base vector, the subsequent
+  // evaluation on the constant vector doesn't access values beyond its size.
   auto data = makeRowVector({makeFlatVector<int64_t>({1, 2})});
   auto c0 = makeRowVector(
       {makeFlatVector<int64_t>({1, 3, 5, 7, 9})}, nullEvery(1, 2));
@@ -3885,8 +3896,8 @@ TEST_F(ExprTest, dictionaryOverLoadedLazy) {
   // Dict1(Flat2). Note c0 and c1 have the same top encoding layer.
 
   // Generate indices that randomly point to different rows of the base flat
-  // layer. This makes sure that wrong values are copied over if there is a bug
-  // in shared sub-expressions evaluation.
+  // layer. This makes sure that wrong values are copied over if there is a
+  // bug in shared sub-expressions evaluation.
   std::vector<int> indicesUnderLazy = {2, 5, 4, 1, 2, 4, 5, 6, 4, 9};
   auto smallFlat =
       makeFlatVector<int64_t>(kSize / 10, [](auto row) { return row * 2; });
@@ -3913,13 +3924,13 @@ TEST_F(ExprTest, dictionaryOverLoadedLazy) {
       makeFlatVector<int64_t>(kSize, [](auto row) { return row; }));
 
   // "(c0 < 5 and c1 < 90)" would peel Dict1 layer in the top level conjunct
-  // expression then when peeled c0 is passed to the inner "c0 < 5" expression,
-  // a call to EvalCtx::getField() removes the lazy layer which ensures the last
-  // dictionary layer is peeled. This means that shared sub-expression
-  // evaluation is done on the lowest flat layer. In the second expression "c0 <
-  // 5" the input is Dict1(Lazy(Dict2(Flat1))) and if peeling only removed till
-  // the lazy layer, the shared sub-expression evaluation gets called on
-  // Lazy(Dict2(Flat1)) which then results in wrong results.
+  // expression then when peeled c0 is passed to the inner "c0 < 5"
+  // expression, a call to EvalCtx::getField() removes the lazy layer which
+  // ensures the last dictionary layer is peeled. This means that shared
+  // sub-expression evaluation is done on the lowest flat layer. In the second
+  // expression "c0 < 5" the input is Dict1(Lazy(Dict2(Flat1))) and if peeling
+  // only removed till the lazy layer, the shared sub-expression evaluation
+  // gets called on Lazy(Dict2(Flat1)) which then results in wrong results.
   auto result = evaluateMultiple(
       {"(c0 < 5 and c1 < 90)", "c0 < 5"}, makeRowVector({c0, c1}));
   auto resultFromLazy = evaluate("c0 < 5", makeRowVector({c0, c1}));
@@ -3984,8 +3995,8 @@ TEST_F(ExprTest, multiplyReferencedConstantField) {
 
 TEST_F(ExprTest, dereference) {
   // Make a vector of Row<Row<int64_t>> where the middle-layer has dictionary
-  // over constant encoding. Evaluate nested dereference c0.d0.f0 on it so that
-  // the outer dereference expression (i.e., dereference of f0) receive
+  // over constant encoding. Evaluate nested dereference c0.d0.f0 on it so
+  // that the outer dereference expression (i.e., dereference of f0) receive
   // dictionary-encoded input without peeling.
   auto child = makeFlatVector<int64_t>({1, 2});
   auto d0 = makeRowVector({"f0"}, {child});
@@ -3997,8 +4008,8 @@ TEST_F(ExprTest, dereference) {
   auto c0 = makeRowVector({"d0"}, {dictionaryD0});
   auto input = makeRowVector({"c0"}, {c0});
 
-  // Skip row 4 during evaluation. FieldReference should not have errors dealing
-  // with this situation.
+  // Skip row 4 during evaluation. FieldReference should not have errors
+  // dealing with this situation.
   SelectivityVector rows(input->size(), true);
   rows.setValid(4, false);
   rows.updateBounds();
@@ -4012,9 +4023,9 @@ TEST_F(ExprTest, dereference) {
   EXPECT_EQ(flatResult->valueAt(3), 1);
   EXPECT_TRUE(flatResult->isNullAt(5));
 
-  // Test dereferencing a field vector that is shorter than the struct. Evaluate
-  // nested dereference so that the outer dereference expression receives
-  // constant-encoded input.
+  // Test dereferencing a field vector that is shorter than the struct.
+  // Evaluate nested dereference so that the outer dereference expression
+  // receives constant-encoded input.
   auto rowType = ROW({"f0"}, {BIGINT()});
   constantD0 = BaseVector::createNullConstant(rowType, 6, pool());
   c0 = makeRowVector({"d0"}, {constantD0});
@@ -4031,6 +4042,58 @@ TEST_F(ExprTest, inputFreeFieldReferenceMetaData) {
 
   EXPECT_TRUE(expr->propagatesNulls());
   EXPECT_TRUE(expr->isDeterministic());
+}
+
+TEST_F(ExprTest, constructingWrongFieldAccessor) {
+  auto vector = makeFlatVector<int32_t>({1, 2, 3});
+  auto rowVector = makeRowVector(
+      {"a", "b"},
+      {makeFlatVector<int32_t>({1, 2, 3}), makeFlatVector<double>({1, 2, 3})});
+  auto constantIntTypedExpr = std::make_shared<core::ConstantTypedExpr>(vector);
+  auto constantRowTypedExpr =
+      std::make_shared<core::ConstantTypedExpr>(rowVector);
+
+  assertError(
+      [&]() {
+        core::FieldAccessTypedExpr(INTEGER(), constantIntTypedExpr, "a");
+      },
+      "Input of field access must have a row type.");
+
+  assertError(
+      [&]() {
+        core::FieldAccessTypedExpr(INTEGER(), constantRowTypedExpr, "c");
+      },
+      "Field c not found in type ROW<a:INTEGER,b:DOUBLE>.");
+
+  EXPECT_NO_THROW(
+      core::FieldAccessTypedExpr(INTEGER(), constantRowTypedExpr, "a"));
+  EXPECT_NO_THROW(
+      core::FieldAccessTypedExpr(INTEGER(), constantRowTypedExpr, "b"));
+
+  auto constantIntExecExpr = std::make_shared<exec::ConstantExpr>(
+      constantIntTypedExpr->toConstantVector(this->pool()));
+  auto constantRowExecExpr = std::make_shared<exec::ConstantExpr>(
+      constantRowTypedExpr->toConstantVector(this->pool()));
+
+  assertError(
+      [&]() { exec::FieldReference x(INTEGER(), {constantIntExecExpr}, "a"); },
+      "Input of field reference must have a row type.");
+
+  assertError(
+      [&]() { exec::FieldReference x(INTEGER(), {constantRowExecExpr}, "c"); },
+      "Field c not found in type ROW<a:INTEGER,b:DOUBLE>.");
+
+  assertError(
+      [&]() {
+        exec::FieldReference x(
+            INTEGER(), {constantRowExecExpr, constantRowExecExpr}, "a");
+      },
+      "Field reference can have a max of 1 input.");
+
+  EXPECT_NO_THROW(
+      exec::FieldReference x(INTEGER(), {constantRowExecExpr}, "a"));
+  EXPECT_NO_THROW(
+      exec::FieldReference x(INTEGER(), {constantRowExecExpr}, "b"));
 }
 } // namespace
 } // namespace facebook::velox::test

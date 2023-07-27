@@ -31,7 +31,20 @@ class FieldReference : public SpecialForm {
             field,
             inputs.empty() ? true : false,
             false /* trackCpuUsage */),
-        field_(field) {}
+        field_(field) {
+    if (!inputs.empty()) {
+      VELOX_CHECK(
+          inputs.size() == 1, "Field reference can have a max of 1 input.")
+
+      // Check that field exists in the input row type.
+      auto rowType = asRowType(inputs[0]->type());
+      VELOX_CHECK(rowType, "Input of field reference must be a row type.")
+      VELOX_CHECK(
+          rowType->getChildIdxIfExists(field_).has_value(),
+          fmt::format(
+              "Field {} not found in type {}.", field_, rowType->toString()));
+    }
+  }
 
   const std::string& field() const {
     return field_;

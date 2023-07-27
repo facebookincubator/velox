@@ -243,6 +243,12 @@ class FieldAccessTypedExpr : public ITypedExpr {
       : ITypedExpr{std::move(type), {std::move(input)}},
         name_(std::move(name)),
         isInputColumn_(dynamic_cast<const InputTypedExpr*>(inputs()[0].get())) {
+    auto rowType = asRowType(inputs()[0]->type());
+    VELOX_CHECK(rowType, "Input of field access must have a row type.")
+    VELOX_CHECK(
+        rowType->getChildIdxIfExists(name_).has_value(),
+        fmt::format(
+            "Field {} not found in type {}.", name_, rowType->toString()));
   }
 
   const std::string& name() const {

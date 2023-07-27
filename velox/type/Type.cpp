@@ -353,7 +353,7 @@ const TypePtr& RowType::findChild(folly::StringPiece name) const {
   if (idx) {
     return children_[*idx];
   }
-  VELOX_USER_FAIL(makeFieldNotFoundErrorMessage(name, names_));
+  VELOX_FAIL(makeFieldNotFoundErrorMessage(name, names_));
 }
 
 bool RowType::containsChild(std::string_view name) const {
