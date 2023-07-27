@@ -40,6 +40,7 @@ enum class TestMode {
   kUnpartitioned,
   kPartitioned,
   kBucketed,
+  kBucketedWithoutPartition,
 };
 
 std::string testModeString(TestMode mode) {
@@ -50,6 +51,8 @@ std::string testModeString(TestMode mode) {
       return "PARTITIONED";
     case TestMode::kBucketed:
       return "BUCKETED";
+    case TestMode::kBucketedWithoutPartition:
+      return "BUCKETED_WITHOUT_PARTITION";
   }
 }
 
@@ -134,12 +137,14 @@ class TableWriteTest : public HiveConnectorTestBase {
         ROW({"c0", "c1", "c2", "c3", "c4", "c5"},
             {BIGINT(), INTEGER(), SMALLINT(), REAL(), DOUBLE(), VARCHAR()});
     setDataTypes(rowType);
-    if (testMode_ != TestMode::kUnpartitioned) {
+    if ((testMode_ != TestMode::kUnpartitioned) &&
+        testMode_ != TestMode::kBucketedWithoutPartition) {
       const std::vector<std::string> partitionBy = {"c0", "c1"};
       setPartitionBy(partitionBy);
       numPartitionKeyValues_ = {4, 4};
     }
-    if (testMode_ == TestMode::kBucketed) {
+    if (testMode_ == TestMode::kBucketed ||
+        testMode_ == TestMode::kBucketedWithoutPartition) {
       std::vector<std::string> bucketedBy = {"c3", "c5"};
       std::vector<TypePtr> bucketedTypes = {REAL(), VARCHAR()};
       std::vector<std::shared_ptr<const HiveSortingColumn>> sortedBy;
@@ -299,7 +304,8 @@ class TableWriteTest : public HiveConnectorTestBase {
       int32_t rowsPerVector) {
     auto rowVectors =
         HiveConnectorTestBase::makeVectors(rowType_, numVectors, rowsPerVector);
-    if (testMode_ == TestMode::kUnpartitioned) {
+    if (testMode_ == TestMode::kUnpartitioned ||
+        testMode_ == TestMode::kBucketedWithoutPartition) {
       return rowVectors;
     }
     // In case of partitioned table write test case, we ensure the number of
@@ -622,7 +628,9 @@ class TableWriteTest : public HiveConnectorTestBase {
   void verifyBucketedFilePath(
       const std::filesystem::path& filePath,
       const std::string& targetDir) {
-    verifyPartitionedDirPath(filePath, targetDir);
+    if (testMode_ == TestMode::kBucketed) {
+      verifyPartitionedDirPath(filePath, targetDir);
+    }
     if (commitStrategy_ == CommitStrategy::kNoCommit) {
       ASSERT_TRUE(RE2::FullMatch(
           filePath.filename().string(), "0[0-9]+_0_TaskCursorQuery_[0-9]+"))
@@ -761,9 +769,24 @@ class TableWriteTest : public HiveConnectorTestBase {
     if (testMode_ == TestMode::kUnpartitioned) {
       ASSERT_EQ(dirPaths.size(), 0);
       ASSERT_LE(filePaths.size(), numTableWriterCount_);
-      verifyUnbucketedFilePath(filePaths[0], targetDir);
+      for (const auto& filePath : filePaths) {
+        verifyUnbucketedFilePath(filePaths[0], targetDir);
+      }
       return;
     }
+
+    if (testMode_ == TestMode::kBucketedWithoutPartition) {
+      ASSERT_EQ(dirPaths.size(), 0);
+      ASSERT_LE(filePaths.size(), bucketProperty_->bucketCount());
+      for (const auto& filePath : filePaths) {
+        verifyBucketedFilePath(filePath, targetDir);
+        if (verifyBucketedData) {
+          verifyBucketedFileData(filePath);
+        }
+      }
+      return;
+    }
+
     ASSERT_EQ(numPartitionKeyValues_.size(), 2);
     const int32_t totalPartitions =
         numPartitionKeyValues_[0] * numPartitionKeyValues_[1];
@@ -948,44 +971,47 @@ class BucketedTableOnlyWriteTest
   BucketedTableOnlyWriteTest() : TableWriteTest(GetParam()) {}
 
   static std::vector<uint64_t> getTestParams() {
-    std::vector<uint64_t> testParams;
+    const std::vector<TestMode> testModes = {
+        TestMode::kBucketed, TestMode::kBucketedWithoutPartition};
     const std::vector<bool> multiDriverOptions = {false, true};
     // Add Parquet with https://github.com/facebookincubator/velox/issues/5560
     std::vector<FileFormat> fileFormats = {FileFormat::DWRF};
-    for (bool multiDrivers : multiDriverOptions) {
-      for (FileFormat fileFormat : fileFormats) {
-        testParams.push_back(TestParam{
-            fileFormat,
-            TestMode::kBucketed,
-            CommitStrategy::kNoCommit,
-            HiveBucketProperty::Kind::kHiveCompatible,
-            false,
-            multiDrivers}
-                                 .value);
-        testParams.push_back(TestParam{
-            fileFormat,
-            TestMode::kBucketed,
-            CommitStrategy::kTaskCommit,
-            HiveBucketProperty::Kind::kHiveCompatible,
-            false,
-            multiDrivers}
-                                 .value);
-        testParams.push_back(TestParam{
-            fileFormat,
-            TestMode::kBucketed,
-            CommitStrategy::kNoCommit,
-            HiveBucketProperty::Kind::kPrestoNative,
-            false,
-            multiDrivers}
-                                 .value);
-        testParams.push_back(TestParam{
-            fileFormat,
-            TestMode::kBucketed,
-            CommitStrategy::kTaskCommit,
-            HiveBucketProperty::Kind::kPrestoNative,
-            false,
-            multiDrivers}
-                                 .value);
+    for (TestMode testMode : testModes) {
+      for (bool multiDrivers : multiDriverOptions) {
+        for (FileFormat fileFormat : fileFormats) {
+          testParams.push_back(TestParam{
+              fileFormat,
+              testMode,
+              CommitStrategy::kNoCommit,
+              HiveBucketProperty::Kind::kHiveCompatible,
+              false,
+              multiDrivers}
+                                   .value);
+          testParams.push_back(TestParam{
+              fileFormat,
+              testMode,
+              CommitStrategy::kTaskCommit,
+              HiveBucketProperty::Kind::kHiveCompatible,
+              false,
+              multiDrivers}
+                                   .value);
+          testParams.push_back(TestParam{
+              fileFormat,
+              testMode,
+              CommitStrategy::kNoCommit,
+              HiveBucketProperty::Kind::kPrestoNative,
+              false,
+              multiDrivers}
+                                   .value);
+          testParams.push_back(TestParam{
+              fileFormat,
+              testMode,
+              CommitStrategy::kTaskCommit,
+              HiveBucketProperty::Kind::kPrestoNative,
+              false,
+              multiDrivers}
+                                   .value);
+        }
       }
     }
     return testParams;
@@ -1103,6 +1129,38 @@ class AllTableWriterTest : public TableWriteTest,
             false,
             multiDrivers}
                                  .value);
+        testParams.push_back(TestParam{
+            fileFormat,
+            TestMode::kBucketedWithoutPartition,
+            CommitStrategy::kNoCommit,
+            HiveBucketProperty::Kind::kHiveCompatible,
+            false,
+            multiDrivers}
+                                 .value);
+        testParams.push_back(TestParam{
+            fileFormat,
+            TestMode::kBucketedWithoutPartition,
+            CommitStrategy::kTaskCommit,
+            HiveBucketProperty::Kind::kHiveCompatible,
+            false,
+            multiDrivers}
+                                 .value);
+        testParams.push_back(TestParam{
+            fileFormat,
+            TestMode::kBucketedWithoutPartition,
+            CommitStrategy::kNoCommit,
+            HiveBucketProperty::Kind::kPrestoNative,
+            false,
+            multiDrivers}
+                                 .value);
+        testParams.push_back(TestParam{
+            fileFormat,
+            TestMode::kBucketedWithoutPartition,
+            CommitStrategy::kTaskCommit,
+            HiveBucketProperty::Kind::kPrestoNative,
+            false,
+            multiDrivers}
+                                 .value);
       }
     }
     return testParams;
@@ -1166,11 +1224,13 @@ TEST_P(AllTableWriterTest, renameAndReorderColumns) {
 
   auto outputDirectory = TempDirectoryPath::create();
 
-  if (testMode_ != TestMode::kUnpartitioned) {
+  if (testMode_ != TestMode::kUnpartitioned &&
+      testMode_ != TestMode::kBucketedWithoutPartition) {
     const std::vector<std::string> partitionBy = {"x", "y"};
     setPartitionBy(partitionBy);
   }
-  if (testMode_ == TestMode::kBucketed) {
+  if (testMode_ == TestMode::kBucketed ||
+      testMode_ == TestMode::kBucketedWithoutPartition) {
     setBucketProperty(
         bucketProperty_->kind(),
         bucketProperty_->bucketCount(),

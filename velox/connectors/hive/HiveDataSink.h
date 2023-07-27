@@ -341,7 +341,9 @@ struct HiveWriterId {
   explicit HiveWriterId(uint32_t _partitionId)
       : HiveWriterId(_partitionId, std::nullopt) {}
 
-  HiveWriterId(uint32_t _partitionId, std::optional<uint32_t> _bucketId)
+  HiveWriterId(
+      std::optional<uint32_t> _partitionId,
+      std::optional<uint32_t> _bucketId)
       : partitionId(_partitionId), bucketId(_bucketId) {}
 
   /// Returns the special writer id for the un-partitioned table.
@@ -413,6 +415,20 @@ class HiveDataSink : public DataSink {
   // bucket ids calculated by 'computePartitionAndBucketIds'. The function also
   // ensures that there is a writer created for each (bucketed) partition.
   void splitInputRowsAndEnsureWriters();
+
+  // Computes the writer id for a given 'row'.
+  FOLLY_ALWAYS_INLINE HiveWriterId getWriterId(size_t row) const {
+    std::optional<int32_t> partitionId;
+    if (isPartitioned()) {
+      VELOX_CHECK_LT(partitionIds_[row], std::numeric_limits<uint32_t>::max());
+      partitionId = static_cast<uint32_t>(partitionIds_[row]);
+    }
+    std::optional<int32_t> bucketId;
+    if (isBucketed()) {
+      bucketId = bucketIds_[row];
+    }
+    return HiveWriterId{partitionId, bucketId};
+  }
 
   // Makes sure to create one writer for the given writer id. The function
   // returns the corresponding index in 'writers_'.

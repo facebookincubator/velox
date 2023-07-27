@@ -294,8 +294,6 @@ HiveDataSink::HiveDataSink(
                              *insertTableHandle_->bucketProperty(),
                              inputType_)
                        : nullptr) {
-  VELOX_USER_CHECK(
-      !isBucketed() || isPartitioned(), "A bucket table must be partitioned");
   if (isBucketed()) {
     VELOX_USER_CHECK_LT(
         bucketCount_, maxBucketCount(), "bucketCount exceeds the limit");
@@ -309,7 +307,7 @@ HiveDataSink::HiveDataSink(
 
 void HiveDataSink::appendData(RowVectorPtr input) {
   // Write to unpartitioned table.
-  if (!isPartitioned()) {
+  if (!isPartitioned() && !isBucketed()) {
     const auto index = ensureWriter(HiveWriterId::unpartitionedId());
     writers_[index]->write(input);
     writerInfo_[index]->numWrittenRows += input->size();
@@ -350,8 +348,10 @@ void HiveDataSink::appendData(RowVectorPtr input) {
 }
 
 void HiveDataSink::computePartitionAndBucketIds(const RowVectorPtr& input) {
-  VELOX_CHECK(isPartitioned());
-  partitionIdGenerator_->run(input, partitionIds_);
+  VELOX_CHECK(isPartitioned() || isBucketed());
+  if (isPartitioned()) {
+    partitionIdGenerator_->run(input, partitionIds_);
+  }
   if (isBucketed()) {
     bucketFunction_->partition(*input, bucketIds_);
   }
@@ -456,18 +456,17 @@ uint32_t HiveDataSink::appendWriter(const HiveWriterId& id) {
 }
 
 void HiveDataSink::splitInputRowsAndEnsureWriters() {
-  VELOX_CHECK(isPartitioned());
-  if (isBucketed()) {
+  VELOX_CHECK_GE(!!isPartitioned() + !!isBucketed(), 1);
+
+  if (isBucketed() && isPartitioned()) {
     VELOX_CHECK_EQ(bucketIds_.size(), partitionIds_.size());
   }
   std::fill(partitionSizes_.begin(), partitionSizes_.end(), 0);
 
-  const auto numRows = partitionIds_.size();
+  const auto numRows =
+      isPartitioned() ? partitionIds_.size() : bucketIds_.size();
   for (auto row = 0; row < numRows; ++row) {
-    VELOX_CHECK_LT(partitionIds_[row], std::numeric_limits<uint32_t>::max());
-    const uint32_t partitionId = static_cast<uint32_t>(partitionIds_[row]);
-    const auto id = isBucketed() ? HiveWriterId{partitionId, bucketIds_[row]}
-                                 : HiveWriterId{partitionId};
+    const auto id = getWriterId(row);
     const uint32_t index = ensureWriter(id);
     VELOX_DCHECK_LT(index, partitionSizes_.size());
     VELOX_DCHECK_EQ(partitionSizes_.size(), partitionRows_.size());
@@ -517,9 +516,9 @@ std::pair<std::string, std::string> HiveDataSink::getWriterFileNames(
     targetFileName = computeBucketedFileName(
         connectorQueryCtx_->queryId(), bucketId.value());
   } else {
-    // targetFileName includes planNodeId and Uuid. As a result, different table
-    // writers run by the same task driver or the same table writer run in
-    // different task tries would have different targetFileNames.
+    // targetFileName includes planNodeId and Uuid. As a result, different
+    // table writers run by the same task driver or the same table writer run
+    // in different task tries would have different targetFileNames.
     targetFileName = fmt::format(
         "{}_{}_{}_{}",
         connectorQueryCtx_->taskId(),
