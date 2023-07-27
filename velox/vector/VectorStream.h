@@ -51,8 +51,9 @@ class VectorSerializer {
   ///
   /// Returns the maximum serialized size of the data previously added via
   /// 'append' methods. Can be used to allocate buffer of exact or maximum size
-  /// before calling 'flush'. Returns the exact serialized size when data is not
-  /// compressed Returns the maximum serialized size when data is compressed
+  /// before calling 'flush'.
+  /// Returns the exact serialized size when data is not compressed.
+  /// Returns the maximum serialized size when data is compressed
   virtual size_t maxSerializedSize() const = 0;
 
   /// Write serialized data to 'stream'.
