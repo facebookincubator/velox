@@ -26,10 +26,7 @@ namespace facebook::velox::exec {
 // with presto. Since velox's native timestamp implementation supports
 // nanosecond precision, we use this serde option to ensure the serializer
 // preserves precision.
-static const serializer::presto::PrestoVectorSerde::PrestoOptions
-    kDefaultSerdeOptions(
-        /*useLosslessTimestamp*/ true,
-        common::CompressionKind::CompressionKind_NONE);
+static const bool kDefaultUseLosslessTimestamp = true;
 
 std::atomic<int32_t> SpillFile::ordinalCounter_;
 
@@ -71,8 +68,9 @@ bool SpillFile::nextBatch(RowVectorPtr& rowVector) {
   if (input_->atEnd()) {
     return false;
   }
-  VectorStreamGroup::read(
-      input_.get(), &pool_, type_, &rowVector, &kDefaultSerdeOptions);
+  serializer::presto::PrestoVectorSerde::PrestoOptions options = {
+      kDefaultUseLosslessTimestamp, compressionKind_};
+  VectorStreamGroup::read(input_.get(), &pool_, type_, &rowVector, &options);
   return true;
 }
 
@@ -87,6 +85,7 @@ WriteFile& SpillFileList::currentOutput() {
         numSortingKeys_,
         sortCompareFlags_,
         fmt::format("{}-{}", path_, files_.size()),
+        compressionKind_,
         pool_));
   }
   return files_.back()->output();
@@ -111,11 +110,12 @@ void SpillFileList::write(
     const RowVectorPtr& rows,
     const folly::Range<IndexRange*>& indices) {
   if (!batch_) {
+    serializer::presto::PrestoVectorSerde::PrestoOptions options = {
+        kDefaultUseLosslessTimestamp, compressionKind_};
     batch_ = std::make_unique<VectorStreamGroup>(&pool_);
+
     batch_->createStreamTree(
-        std::static_pointer_cast<const RowType>(rows->type()),
-        1000,
-        &kDefaultSerdeOptions);
+        std::static_pointer_cast<const RowType>(rows->type()), 1000, &options);
   }
   batch_->append(rows, indices);
 
@@ -175,6 +175,7 @@ void SpillState::appendToPartition(
         sortCompareFlags_,
         fmt::format("{}-spill-{}", path_, partition),
         targetFileSize_,
+        compressionKind_,
         pool_);
   }
 

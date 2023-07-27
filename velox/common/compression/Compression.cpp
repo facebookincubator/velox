@@ -75,4 +75,22 @@ std::string compressionKindToString(CompressionKind kind) {
   }
   return folly::to<std::string>("unknown - ", kind);
 }
+
+CompressionKind stringToCompressionKind(const std::string& kind) {
+  const std::unordered_map<std::string, CompressionKind>
+      stringToCompressionKindMap = {
+          {"none", CompressionKind_NONE},
+          {"zlib", CompressionKind_ZLIB},
+          {"snappy", CompressionKind_SNAPPY},
+          {"lzo", CompressionKind_LZO},
+          {"zstd", CompressionKind_ZSTD},
+          {"lz4", CompressionKind_LZ4},
+          {"gzip", CompressionKind_GZIP}};
+  auto iter = stringToCompressionKindMap.find(kind);
+  if (iter != stringToCompressionKindMap.end()) {
+    return iter->second;
+  } else {
+    VELOX_UNSUPPORTED("Not support compression kind {}", kind);
+  }
+}
 } // namespace facebook::velox::common

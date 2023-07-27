@@ -37,6 +37,7 @@ Spiller::Spiller(
     const std::string& path,
     uint64_t targetFileSize,
     uint64_t minSpillRunSize,
+    common::CompressionKind compressionKind,
     memory::MemoryPool& pool,
     folly::Executor* executor)
     : Spiller(
@@ -50,6 +51,7 @@ Spiller::Spiller(
           path,
           targetFileSize,
           minSpillRunSize,
+          compressionKind,
           pool,
           executor) {
   VELOX_CHECK_EQ(type_, Type::kOrderBy);
@@ -62,6 +64,7 @@ Spiller::Spiller(
     const std::string& path,
     uint64_t targetFileSize,
     uint64_t minSpillRunSize,
+    common::CompressionKind compressionKind,
     memory::MemoryPool& pool,
     folly::Executor* FOLLY_NULLABLE executor)
     : Spiller(
@@ -75,6 +78,7 @@ Spiller::Spiller(
           path,
           targetFileSize,
           minSpillRunSize,
+          compressionKind,
           pool,
           executor) {
   VELOX_CHECK_EQ(type_, Type::kHashJoinProbe);
@@ -91,6 +95,7 @@ Spiller::Spiller(
     const std::string& path,
     uint64_t targetFileSize,
     uint64_t minSpillRunSize,
+    common::CompressionKind compressionKind,
     memory::MemoryPool& pool,
     folly::Executor* executor)
     : type_(type),
@@ -105,6 +110,7 @@ Spiller::Spiller(
           numSortingKeys,
           sortCompareFlags,
           targetFileSize,
+          compressionKind,
           pool),
       pool_(pool),
       executor_(executor) {
