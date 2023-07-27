@@ -20,15 +20,13 @@
 #include "velox/dwio/dwrf/common/wrap/dwrf-proto-wrapper.h"
 #include "velox/dwio/dwrf/test/OrcTest.h"
 
+#include <folly/Benchmark.h>
 #include <folly/Random.h>
 #include <gtest/gtest.h>
-#include <folly/Benchmark.h>
-
 
 #include <algorithm>
+#include <ctime>
 #include <iostream>
-#include <chrono>
-#include <ctime>   
 
 using namespace ::testing;
 using namespace facebook::velox::common;
@@ -67,23 +65,7 @@ class TestBufferPool : public CompressionBufferPool {
   std::unique_ptr<DataBuffer<char>> buffer_;
 };
 
-
-class CompressionTest : public TestWithParam<TestParams> {
- public:
-  void SetUp() override {
-    auto tuple = GetParam();
-    kind_ = std::get<0>(tuple);
-    encrypter_ = std::get<1>(tuple);
-    decrypter_ = std::get<2>(tuple);
-  }
-
- protected:
-  CompressionKind kind_;
-  const Encrypter* encrypter_;
-  const Decrypter* decrypter_;
-};
-
-std::chrono::duration<double>  benchmarkCompress(
+void benchmarkCompress(
     CompressionKind kind,
     DataSink& sink,
     uint64_t block,
@@ -126,8 +108,14 @@ BENCHMARK(compressZstd) {
   uint64_t block = 128;
 
   char testData[] = "hello world!";
-  auto compressTime = benchmarkCompress(
-      CompressionKind_ZSTD, memSink, block, *pool, testData, sizeof(testData), NULL);
+  benchmarkCompress(
+      CompressionKind_ZSTD, 
+      memSink, 
+      block, 
+      *pool, 
+      testData, 
+      sizeof(testData), 
+      NULL);
 }
 
 int main() {

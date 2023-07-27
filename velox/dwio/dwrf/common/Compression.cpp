@@ -28,7 +28,7 @@
 #include <zstd.h>
 #include <zstd_errors.h>
 #ifdef VELOX_ENABLE_QAT_ZSTD_OT
-  #include <qatseqprod.h>
+#include <qatseqprod.h>
 #endif
 
 namespace facebook::velox::dwrf {
@@ -66,26 +66,22 @@ class ZstdQatCompressor : public Compressor {
     zc = ZSTD_createCCtx();
     QZSTD_startQatDevice();
     sequenceProducerState = QZSTD_createSeqProdState();
-    ZSTD_registerSequenceProducer(
-        zc,
-        sequenceProducerState,
-        qatSequenceProducer
-    );
+    ZSTD_registerSequenceProducer(zc, sequenceProducerState, qatSequenceProducer);
     ZSTD_CCtx_setParameter(zc, ZSTD_c_enableSeqProducerFallback, 1);
   }
 
   ZSTD_CCtx* zc;
-  void *sequenceProducerState;
+  void* sequenceProducerState;
   uint64_t compress(const void* src, void* dest, uint64_t length) override;
 };
 
 uint64_t
 ZstdQatCompressor::compress(const void* src, void* dest, uint64_t length) {
   size_t ret = ZSTD_compress2(zc, dest, length, src, length);
-    if ((int)ret <= 0) {        
-        DWIO_RAISE("ZSTD QAT returned an error: ", ZSTD_getErrorName(ret));
-    }
-    return ret;
+  if ((int)ret <= 0) {        
+      DWIO_RAISE("ZSTD QAT returned an error: ", ZSTD_getErrorName(ret));
+  }
+  return ret;
 }
 #endif
 
@@ -490,9 +486,9 @@ std::unique_ptr<BufferedOutputStream> createCompressor(
     case common::CompressionKind_ZSTD: {
       int32_t zstdCompressionLevel = config.get(Config::ZSTD_COMPRESSION_LEVEL);
       compressor = std::make_unique<ZstdCompressor>(zstdCompressionLevel);
-      #ifdef VELOX_ENABLE_QAT_ZSTD_OT
-        compressor = std::make_unique<ZstdQatCompressor>(zstdCompressionLevel);
-      #endif
+#ifdef VELOX_ENABLE_QAT_ZSTD_OT
+      compressor = std::make_unique<ZstdQatCompressor>(zstdCompressionLevel);
+#endif
       XLOG_FIRST_N(INFO, 1) << fmt::format(
           "Initialized zstd compressor with compression level {}",
           zstdCompressionLevel);
