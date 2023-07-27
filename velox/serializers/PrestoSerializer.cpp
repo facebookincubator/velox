@@ -850,7 +850,7 @@ class VectorStream {
     return children_[index].get();
   }
 
-  // Similiar as flush(OutputStream* out)
+  // Returns the size to flush to OutputStream before calling `flush`
   size_t serializedSize() {
     CountingOutputStream out;
     flush(&out);
