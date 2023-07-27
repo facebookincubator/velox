@@ -34,6 +34,8 @@ using namespace facebook::velox::common::testutil;
 namespace facebook::velox::exec::test {
 
 OperatorTestBase::OperatorTestBase() {
+  using memory::MemoryAllocator;
+  facebook::velox::exec::ExchangeSource::registerFactory();
   parse::registerTypeResolver();
 }
 

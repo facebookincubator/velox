@@ -21,7 +21,6 @@ add_library(
   AssertQueryBuilder.cpp
   Cursor.cpp
   HiveConnectorTestBase.cpp
-  LocalExchangeSource.cpp
   OperatorTestBase.cpp
   PlanBuilder.cpp
   QueryAssertions.cpp
