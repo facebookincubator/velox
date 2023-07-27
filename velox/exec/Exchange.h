@@ -15,64 +15,10 @@
  */
 #pragma once
 
-#include <velox/common/memory/Memory.h>
-#include <velox/common/memory/MemoryAllocator.h>
-#include <memory>
-#include "velox/common/memory/ByteStream.h"
+#include "velox/exec/ExchangeQueue.h"
 #include "velox/exec/Operator.h"
 
 namespace facebook::velox::exec {
-
-// Corresponds to Presto SerializedPage, i.e. a container for
-// serialize vectors in Presto wire format.
-class SerializedPage {
- public:
-  static constexpr int kSerializedPageOwner = -11;
-
-  // Construct from IOBuf chain.
-  explicit SerializedPage(
-      std::unique_ptr<folly::IOBuf> iobuf,
-      std::function<void(folly::IOBuf&)> onDestructionCb = nullptr);
-
-  ~SerializedPage();
-
-  // Returns the size of the serialized data in bytes.
-  uint64_t size() const {
-    return iobufBytes_;
-  }
-
-  // Makes 'input' ready for deserializing 'this' with
-  // VectorStreamGroup::read().
-  void prepareStreamForDeserialize(ByteStream* input);
-
-  std::unique_ptr<folly::IOBuf> getIOBuf() const {
-    return iobuf_->clone();
-  }
-
- private:
-  static int64_t chainBytes(folly::IOBuf& iobuf) {
-    int64_t size = 0;
-    for (auto& range : iobuf) {
-      size += range.size();
-    }
-    return size;
-  }
-
-  // Buffers containing the serialized data. The memory is owned by 'iobuf_'.
-  std::vector<ByteRange> ranges_;
-
-  // IOBuf holding the data in 'ranges_.
-  std::unique_ptr<folly::IOBuf> iobuf_;
-
-  // Number of payload bytes in 'iobuf_'.
-  const int64_t iobufBytes_;
-
-  // Callback that will be called on destruction of the SerializedPage,
-  // primarily used to free externally allocated memory backing folly::IOBuf
-  // from caller. Caller is responsible to pass in proper cleanup logic to
-  // prevent any memory leak.
-  std::function<void(folly::IOBuf&)> onDestructionCb_;
-};
 
 // Queue of results retrieved from source. Owned by shared_ptr by
 // Exchange and client threads and registered callbacks waiting
@@ -95,69 +41,16 @@ class ExchangeQueue {
 
   void enqueueLocked(
       std::unique_ptr<SerializedPage>&& page,
-      std::vector<ContinuePromise>& promises) {
-    if (page == nullptr) {
-      ++numCompleted_;
-      auto completedPromises = checkCompleteLocked();
-      promises.reserve(promises.size() + completedPromises.size());
-      for (auto& promise : completedPromises) {
-        promises.push_back(std::move(promise));
-      }
-      return;
-    }
-    totalBytes_ += page->size();
-    queue_.push_back(std::move(page));
-    if (!promises_.empty()) {
-      // Resume one of the waiting drivers.
-      promises.push_back(std::move(promises_.back()));
-      promises_.pop_back();
-    }
-  }
+      std::vector<ContinuePromise>& promises);
 
   // If data is permanently not available, e.g. the source cannot be
   // contacted, this registers an error message and causes the reading
   // Exchanges to throw with the message.
-  void setError(const std::string& error) {
-    std::vector<ContinuePromise> promises;
-    {
-      std::lock_guard<std::mutex> l(mutex_);
-      if (!error_.empty()) {
-        return;
-      }
-      error_ = error;
-      atEnd_ = true;
-      // NOTE: clear the serialized page queue as we won't consume from an
-      // errored queue.
-      queue_.clear();
-      promises = clearAllPromisesLocked();
-    }
-    clearPromises(promises);
-  }
+  void setError(const std::string& error);
 
   std::unique_ptr<SerializedPage> dequeueLocked(
       bool* atEnd,
-      ContinueFuture* future) {
-    VELOX_CHECK(future);
-    if (!error_.empty()) {
-      *atEnd = true;
-      throw std::runtime_error(error_);
-    }
-    if (queue_.empty()) {
-      if (atEnd_) {
-        *atEnd = true;
-      } else {
-        promises_.emplace_back("ExchangeQueue::dequeue");
-        *future = promises_.back().getSemiFuture();
-        *atEnd = false;
-      }
-      return nullptr;
-    }
-    auto page = std::move(queue_.front());
-    queue_.pop_front();
-    *atEnd = false;
-    totalBytes_ -= page->size();
-    return page;
-  }
+      ContinueFuture* future);
 
   // Returns the total bytes held by SerializedPages in 'this'.
   uint64_t totalBytes() const {
@@ -176,24 +69,9 @@ class ExchangeQueue {
     numSources_++;
   }
 
-  void noMoreSources() {
-    std::vector<ContinuePromise> promises;
-    {
-      std::lock_guard<std::mutex> l(mutex_);
-      noMoreSources_ = true;
-      promises = checkCompleteLocked();
-    }
-    clearPromises(promises);
-  }
+  void noMoreSources();
 
-  void close() {
-    std::vector<ContinuePromise> promises;
-    {
-      std::lock_guard<std::mutex> l(mutex_);
-      promises = closeLocked();
-    }
-    clearPromises(promises);
-  }
+  void close();
 
  private:
   std::vector<ContinuePromise> closeLocked() {
@@ -228,10 +106,11 @@ class ExchangeQueue {
     }
   }
 
-  int numCompleted_ = 0;
-  int numSources_ = 0;
-  bool noMoreSources_ = false;
-  bool atEnd_ = false;
+  int numCompleted_;
+  int numSources_;
+  bool noMoreSources_{false};
+  bool atEnd_{false};
+
   std::mutex mutex_;
   std::deque<std::unique_ptr<SerializedPage>> queue_;
   std::vector<ContinuePromise> promises_;
@@ -243,7 +122,7 @@ class ExchangeQueue {
 
   // If 'totalBytes_' < 'minBytes_', an exchange should request more data from
   // producers.
-  uint64_t minBytes_;
+  const uint64_t minBytes_;
 };
 
 class ExchangeSource : public std::enable_shared_from_this<ExchangeSource> {
