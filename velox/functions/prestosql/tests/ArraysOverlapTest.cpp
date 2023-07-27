@@ -47,7 +47,7 @@ class ArraysOverlapTest : public FunctionBaseTest {
   }
 
   template <typename T>
-  void testInt() {
+  void testInt(const TypePtr& type = CppToType<T>::create()) {
     auto array1 = makeNullableArrayVector<T>(
         {{1, -2, 3, std::nullopt, 4, 5, 6, std::nullopt},
          {1, 2, -2, 1},
@@ -55,7 +55,8 @@ class ArraysOverlapTest : public FunctionBaseTest {
          {1, 1, -2, -2, -2, 4, 8},
          {2, -1},
          {1, 2, 3},
-         {std::nullopt}});
+         {std::nullopt}},
+        ARRAY(type));
     auto array2 = makeNullableArrayVector<T>(
         {{1, -2, 4},
          {1, -2, 4},
@@ -63,7 +64,8 @@ class ArraysOverlapTest : public FunctionBaseTest {
          {1, -2, 4},
          {1, -2, std::nullopt},
          {5, 6, 7},
-         {std::nullopt}});
+         {std::nullopt}},
+        ARRAY(type));
     auto expected = makeNullableFlatVector<bool>(
         {true, true, std::nullopt, true, std::nullopt, false, std::nullopt});
     testExpr(expected, "arrays_overlap(C0, C1)", {array1, array2});
@@ -106,6 +108,11 @@ TEST_F(ArraysOverlapTest, intArrays) {
 TEST_F(ArraysOverlapTest, floatArrays) {
   testFloatingPoint<float>();
   testFloatingPoint<double>();
+}
+
+TEST_F(ArraysOverlapTest, decimalArrays) {
+  testInt<int64_t>(DECIMAL(15, 4));
+  testInt<int128_t>(DECIMAL(38, 10));
 }
 
 TEST_F(ArraysOverlapTest, boolArrays) {

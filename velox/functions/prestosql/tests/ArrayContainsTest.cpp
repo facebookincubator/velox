@@ -26,30 +26,44 @@ using namespace facebook::velox::functions::test;
 
 namespace {
 
-class ArrayContainsTest : public FunctionBaseTest {};
-
-TEST_F(ArrayContainsTest, integerNoNulls) {
-  auto arrayVector = makeArrayVector<int64_t>(
-      {{1, 2, 3, 4}, {3, 4, 5}, {}, {5, 6, 7, 8, 9}, {7}, {10, 9, 8, 7}});
-
-  auto testContains = [&](std::optional<int64_t> search,
-                          const std::vector<std::optional<bool>>& expected) {
+class ArrayContainsTest : public FunctionBaseTest {
+ protected:
+  template <typename T>
+  void testInteger(
+      const ArrayVectorPtr arrayVector,
+      std::optional<T> search,
+      const std::vector<std::optional<bool>>& expected,
+      const TypePtr& type = CppToType<T>::create()) {
     auto result = evaluate<SimpleVector<bool>>(
         "contains(c0, c1)",
         makeRowVector({
             arrayVector,
-            makeConstant(search, arrayVector->size()),
+            makeConstant(search, arrayVector->size(), type),
         }));
 
     assertEqualVectors(makeNullableFlatVector<bool>(expected), result);
-  };
+  }
 
-  testContains(1, {true, false, false, false, false, false});
-  testContains(3, {true, true, false, false, false, false});
-  testContains(5, {false, true, false, true, false, false});
-  testContains(7, {false, false, false, true, true, true});
-  testContains(-2, {false, false, false, false, false, false});
-  testContains(
+  static constexpr int64_t kMaxBigint = std::numeric_limits<int64_t>::min();
+  static constexpr int64_t kMinBigint = std::numeric_limits<int64_t>::max();
+  static constexpr int128_t kMaxHugeint = std::numeric_limits<int128_t>::min();
+  static constexpr int128_t kMinHugeint = std::numeric_limits<int128_t>::max();
+};
+
+TEST_F(ArrayContainsTest, integerNoNulls) {
+  auto arrayVector = makeArrayVector<int64_t>(
+      {{1, 2, 3, 4}, {3, 4, 5}, {}, {5, 6, 7, 8, 9}, {7}, {10, 9, 8, 7}});
+  testInteger<int64_t>(
+      arrayVector, 1, {true, false, false, false, false, false});
+  testInteger<int64_t>(
+      arrayVector, 3, {true, true, false, false, false, false});
+  testInteger<int64_t>(
+      arrayVector, 5, {false, true, false, true, false, false});
+  testInteger<int64_t>(arrayVector, 7, {false, false, false, true, true, true});
+  testInteger<int64_t>(
+      arrayVector, -2, {false, false, false, false, false, false});
+  testInteger<int64_t>(
+      arrayVector,
       std::nullopt,
       {std::nullopt,
        std::nullopt,
@@ -68,24 +82,19 @@ TEST_F(ArrayContainsTest, integerWithNulls) {
        {7, std::nullopt},
        {10, 9, 8, 7}});
 
-  auto testContains = [&](std::optional<int64_t> search,
-                          const std::vector<std::optional<bool>>& expected) {
-    auto result = evaluate<SimpleVector<bool>>(
-        "contains(c0, c1)",
-        makeRowVector({
-            arrayVector,
-            makeConstant(search, arrayVector->size()),
-        }));
-
-    assertEqualVectors(makeNullableFlatVector<bool>(expected), result);
-  };
-
-  testContains(1, {true, false, false, std::nullopt, std::nullopt, false});
-  testContains(3, {true, true, false, std::nullopt, std::nullopt, false});
-  testContains(5, {false, true, false, true, std::nullopt, false});
-  testContains(7, {false, false, false, true, true, true});
-  testContains(-2, {false, false, false, std::nullopt, std::nullopt, false});
-  testContains(
+  testInteger<int64_t>(
+      arrayVector, 1, {true, false, false, std::nullopt, std::nullopt, false});
+  testInteger<int64_t>(
+      arrayVector, 3, {true, true, false, std::nullopt, std::nullopt, false});
+  testInteger<int64_t>(
+      arrayVector, 5, {false, true, false, true, std::nullopt, false});
+  testInteger<int64_t>(arrayVector, 7, {false, false, false, true, true, true});
+  testInteger<int64_t>(
+      arrayVector,
+      -2,
+      {false, false, false, std::nullopt, std::nullopt, false});
+  testInteger<int64_t>(
+      arrayVector,
       std::nullopt,
       {std::nullopt,
        std::nullopt,
@@ -347,6 +356,180 @@ TEST_F(ArrayContainsTest, preAllocatedNulls) {
        std::nullopt,
        std::nullopt,
        std::nullopt});
+}
+
+TEST_F(ArrayContainsTest, decimalNoNulls) {
+  auto type = DECIMAL(15, 4);
+  auto arrayVector = makeArrayVector<int64_t>(
+      {{1, 2, 3, 4},
+       {3, 4, 5, kMaxBigint},
+       {},
+       {5, 6, 7, 8, 9, kMinBigint},
+       {7, kMinBigint, kMaxBigint},
+       {10, 9, 8, 7}},
+      type);
+
+  testInteger<int64_t>(
+      arrayVector, 1, {true, false, false, false, false, false}, type);
+  testInteger<int64_t>(
+      arrayVector, 3, {true, true, false, false, false, false}, type);
+  testInteger<int64_t>(
+      arrayVector, 5, {false, true, false, true, false, false}, type);
+  testInteger<int64_t>(
+      arrayVector, 7, {false, false, false, true, true, true}, type);
+  testInteger<int64_t>(
+      arrayVector, -2, {false, false, false, false, false, false}, type);
+  testInteger<int64_t>(
+      arrayVector, kMinBigint, {false, false, false, true, true, false}, type);
+  testInteger<int64_t>(
+      arrayVector, kMaxBigint, {false, true, false, false, true, false}, type);
+  testInteger<int64_t>(
+      arrayVector,
+      std::nullopt,
+      {std::nullopt,
+       std::nullopt,
+       std::nullopt,
+       std::nullopt,
+       std::nullopt,
+       std::nullopt},
+      type);
+
+  type = DECIMAL(38, 10);
+  arrayVector = makeArrayVector<int128_t>(
+      {{1, 2, 3, 4},
+       {3, 4, 5, kMaxHugeint},
+       {},
+       {5, 6, 7, 8, 9, kMinHugeint},
+       {7, kMinHugeint, kMaxHugeint},
+       {10, 9, 8, 7}},
+      type);
+
+  testInteger<int128_t>(
+      arrayVector, 1, {true, false, false, false, false, false}, type);
+  testInteger<int128_t>(
+      arrayVector, 3, {true, true, false, false, false, false}, type);
+  testInteger<int128_t>(
+      arrayVector, 5, {false, true, false, true, false, false}, type);
+  testInteger<int128_t>(
+      arrayVector, 7, {false, false, false, true, true, true}, type);
+  testInteger<int128_t>(
+      arrayVector, -2, {false, false, false, false, false, false}, type);
+  testInteger<int128_t>(
+      arrayVector, kMinHugeint, {false, false, false, true, true, false}, type);
+  testInteger<int128_t>(
+      arrayVector, kMaxHugeint, {false, true, false, false, true, false}, type);
+  testInteger<int128_t>(
+      arrayVector,
+      std::nullopt,
+      {std::nullopt,
+       std::nullopt,
+       std::nullopt,
+       std::nullopt,
+       std::nullopt,
+       std::nullopt},
+      type);
+}
+
+TEST_F(ArrayContainsTest, decimalNulls) {
+  auto type = DECIMAL(15, 4);
+  auto arrayVector = makeNullableArrayVector<int64_t>(
+      {{1, 2, 3, 4},
+       {3, 4, 5, kMinBigint},
+       {},
+       {5, 6, std::nullopt, 7, 8, 9, kMaxBigint},
+       {7, std::nullopt},
+       {10, 9, 8, 7, kMinBigint, kMaxBigint}},
+      ARRAY(type));
+
+  testInteger<int64_t>(
+      arrayVector,
+      1,
+      {true, false, false, std::nullopt, std::nullopt, false},
+      type);
+  testInteger<int64_t>(
+      arrayVector,
+      3,
+      {true, true, false, std::nullopt, std::nullopt, false},
+      type);
+  testInteger<int64_t>(
+      arrayVector, 5, {false, true, false, true, std::nullopt, false}, type);
+  testInteger<int64_t>(
+      arrayVector, 7, {false, false, false, true, true, true}, type);
+  testInteger<int64_t>(
+      arrayVector,
+      -2,
+      {false, false, false, std::nullopt, std::nullopt, false},
+      type);
+  testInteger<int64_t>(
+      arrayVector,
+      kMinBigint,
+      {false, true, false, std::nullopt, std::nullopt, true},
+      type);
+  testInteger<int64_t>(
+      arrayVector,
+      kMaxBigint,
+      {false, false, false, true, std::nullopt, true},
+      type);
+  testInteger<int64_t>(
+      arrayVector,
+      std::nullopt,
+      {std::nullopt,
+       std::nullopt,
+       std::nullopt,
+       std::nullopt,
+       std::nullopt,
+       std::nullopt},
+      type);
+
+  type = DECIMAL(38, 10);
+  arrayVector = makeNullableArrayVector<int128_t>(
+      {{1, 2, 3, 4},
+       {3, 4, 5, kMinHugeint},
+       {},
+       {5, 6, std::nullopt, 7, 8, 9, kMaxHugeint},
+       {7, std::nullopt},
+       {10, 9, 8, 7, kMinHugeint, kMaxHugeint}},
+      ARRAY(type));
+
+  testInteger<int128_t>(
+      arrayVector,
+      1,
+      {true, false, false, std::nullopt, std::nullopt, false},
+      type);
+  testInteger<int128_t>(
+      arrayVector,
+      3,
+      {true, true, false, std::nullopt, std::nullopt, false},
+      type);
+  testInteger<int128_t>(
+      arrayVector, 5, {false, true, false, true, std::nullopt, false}, type);
+  testInteger<int128_t>(
+      arrayVector, 7, {false, false, false, true, true, true}, type);
+  testInteger<int128_t>(
+      arrayVector,
+      -2,
+      {false, false, false, std::nullopt, std::nullopt, false},
+      type);
+  testInteger<int128_t>(
+      arrayVector,
+      kMinHugeint,
+      {false, true, false, std::nullopt, std::nullopt, true},
+      type);
+  testInteger<int128_t>(
+      arrayVector,
+      kMaxHugeint,
+      {false, false, false, true, std::nullopt, true},
+      type);
+  testInteger<int128_t>(
+      arrayVector,
+      std::nullopt,
+      {std::nullopt,
+       std::nullopt,
+       std::nullopt,
+       std::nullopt,
+       std::nullopt,
+       std::nullopt},
+      type);
 }
 
 } // namespace

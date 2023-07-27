@@ -206,6 +206,16 @@ std::shared_ptr<exec::VectorFunction> create(
     const std::vector<exec::VectorFunctionArg>& inputArgs,
     const core::QueryConfig& /*config*/) {
   auto elementType = inputArgs.front().type->childAt(0);
+  if (elementType->isDecimal()) {
+    if (elementType->isShortDecimal()) {
+      return std::make_shared<
+          ArraySumFunction<TypeTraits<TypeKind::BIGINT>::NativeType, double>>();
+    } else {
+      return std::make_shared<ArraySumFunction<
+          TypeTraits<TypeKind::HUGEINT>::NativeType,
+          double>>();
+    }
+  }
 
   switch (elementType->kind()) {
     case TypeKind::TINYINT: {
@@ -261,6 +271,12 @@ std::vector<std::shared_ptr<exec::FunctionSignature>> signatures() {
                                 .argumentType(fmt::format("array({})", argType))
                                 .build());
   }
+  signatures.emplace_back(exec::FunctionSignatureBuilder()
+                              .integerVariable("precision")
+                              .integerVariable("scale")
+                              .returnType("double")
+                              .argumentType("array(DECIMAL(precision, scale))")
+                              .build());
   return signatures;
 }
 } // namespace

@@ -199,6 +199,12 @@ std::vector<std::shared_ptr<exec::FunctionSignature>> signatures() {
       exec::FunctionSignatureBuilder()
           .returnType("array(varchar)")
           .argumentType("array(varchar)")
+          .build(),
+      exec::FunctionSignatureBuilder()
+          .integerVariable("precision")
+          .integerVariable("scale")
+          .returnType("array(DECIMAL(precision, scale))")
+          .argumentType("array(DECIMAL(precision, scale))")
           .build()};
 }
 

@@ -53,47 +53,59 @@ class ArrayExceptTest : public FunctionBaseTest {
   }
 
   template <typename T>
-  void testInt() {
-    auto array1 = makeNullableArrayVector<T>({
-        {1, -2, 3, std::nullopt, 4, 5, 6, std::nullopt},
-        {1, 2, -2, 1},
-        {3, 8, std::nullopt},
-        {1, 1, -2, -2, -2, 4, 8},
-    });
-    auto array2 = makeNullableArrayVector<T>({
-        {1, -2, 4},
-        {1, -2, 4},
-        {1, -2, 4},
-        {1, -2, 4},
-    });
-    auto expected = makeNullableArrayVector<T>({
-        {3, std::nullopt, 5, 6},
-        {2},
-        {3, 8, std::nullopt},
-        {8},
-    });
+  void testInt(const TypePtr& type = CppToType<T>::create()) {
+    auto array1 = makeNullableArrayVector<T>(
+        {
+            {1, -2, 3, std::nullopt, 4, 5, 6, std::nullopt},
+            {1, 2, -2, 1},
+            {3, 8, std::nullopt},
+            {1, 1, -2, -2, -2, 4, 8},
+        },
+        ARRAY(type));
+    auto array2 = makeNullableArrayVector<T>(
+        {
+            {1, -2, 4},
+            {1, -2, 4},
+            {1, -2, 4},
+            {1, -2, 4},
+        },
+        ARRAY(type));
+    auto expected = makeNullableArrayVector<T>(
+        {
+            {3, std::nullopt, 5, 6},
+            {2},
+            {3, 8, std::nullopt},
+            {8},
+        },
+        ARRAY(type));
     testExpr(expected, "array_except(C0, C1)", {array1, array2});
-    expected = makeNullableArrayVector<T>({
-        {},
-        {4},
-        {1, -2, 4},
-        {},
-    });
+    expected = makeNullableArrayVector<T>(
+        {
+            {},
+            {4},
+            {1, -2, 4},
+            {},
+        },
+        ARRAY(type));
     testExpr(expected, "array_except(C1, C0)", {array1, array2});
 
     // Change C1.
-    array2 = makeNullableArrayVector<T>({
-        {10, -24, 43},
-        {std::nullopt, -2, 2},
-        {std::nullopt, std::nullopt, std::nullopt},
-        {8, 1, 8, 1},
-    });
-    expected = makeNullableArrayVector<T>({
-        {1, -2, 3, std::nullopt, 4, 5, 6},
-        {1},
-        {3, 8},
-        {-2, 4},
-    });
+    array2 = makeNullableArrayVector<T>(
+        {
+            {10, -24, 43},
+            {std::nullopt, -2, 2},
+            {std::nullopt, std::nullopt, std::nullopt},
+            {8, 1, 8, 1},
+        },
+        ARRAY(type));
+    expected = makeNullableArrayVector<T>(
+        {
+            {1, -2, 3, std::nullopt, 4, 5, 6},
+            {1},
+            {3, 8},
+            {-2, 4},
+        },
+        ARRAY(type));
     testExpr(expected, "array_except(C0, C1)", {array1, array2});
   }
 
@@ -148,6 +160,11 @@ TEST_F(ArrayExceptTest, intArrays) {
 TEST_F(ArrayExceptTest, floatArrays) {
   testFloatingPoint<float>();
   testFloatingPoint<double>();
+}
+
+TEST_F(ArrayExceptTest, decimalArrays) {
+  testInt<int64_t>(DECIMAL(15, 4));
+  testInt<int128_t>(DECIMAL(38, 10));
 }
 
 TEST_F(ArrayExceptTest, boolArrays) {

@@ -37,48 +37,52 @@ class ArrayDistinctTest : public FunctionBaseTest {
 
   // Execute test for integer types.
   template <typename T>
-  void testInt() {
-    auto array = makeNullableArrayVector<T>({
-        {},
-        {0},
-        {1},
-        {std::numeric_limits<T>::min()},
-        {std::numeric_limits<T>::max()},
-        {std::nullopt},
-        {-1},
-        {1, 2, 3},
-        {1, 2, 1},
-        {1, 1, 1},
-        {-1, -2, -3},
-        {-1, -2, -1},
-        {-1, -1, -1},
-        {std::nullopt, std::nullopt, std::nullopt},
-        {1, 2, -2, 1},
-        {1, 1, -2, -2, -2, 4, 8},
-        {3, 8, std::nullopt},
-        {1, 2, 3, std::nullopt, 4, 1, 2, std::nullopt},
-    });
+  void testInt(const TypePtr& type = CppToType<T>::create()) {
+    auto array = makeNullableArrayVector<T>(
+        {
+            {},
+            {0},
+            {1},
+            {std::numeric_limits<T>::min()},
+            {std::numeric_limits<T>::max()},
+            {std::nullopt},
+            {-1},
+            {1, 2, 3},
+            {1, 2, 1},
+            {1, 1, 1},
+            {-1, -2, -3},
+            {-1, -2, -1},
+            {-1, -1, -1},
+            {std::nullopt, std::nullopt, std::nullopt},
+            {1, 2, -2, 1},
+            {1, 1, -2, -2, -2, 4, 8},
+            {3, 8, std::nullopt},
+            {1, 2, 3, std::nullopt, 4, 1, 2, std::nullopt},
+        },
+        ARRAY(type));
 
-    auto expected = makeNullableArrayVector<T>({
-        {},
-        {0},
-        {1},
-        {std::numeric_limits<T>::min()},
-        {std::numeric_limits<T>::max()},
-        {std::nullopt},
-        {-1},
-        {1, 2, 3},
-        {1, 2},
-        {1},
-        {-1, -2, -3},
-        {-1, -2},
-        {-1},
-        {std::nullopt},
-        {1, 2, -2},
-        {1, -2, 4, 8},
-        {3, 8, std::nullopt},
-        {1, 2, 3, std::nullopt, 4},
-    });
+    auto expected = makeNullableArrayVector<T>(
+        {
+            {},
+            {0},
+            {1},
+            {std::numeric_limits<T>::min()},
+            {std::numeric_limits<T>::max()},
+            {std::nullopt},
+            {-1},
+            {1, 2, 3},
+            {1, 2},
+            {1},
+            {-1, -2, -3},
+            {-1, -2},
+            {-1},
+            {std::nullopt},
+            {1, 2, -2},
+            {1, -2, 4, 8},
+            {3, 8, std::nullopt},
+            {1, 2, 3, std::nullopt, 4},
+        },
+        ARRAY(type));
 
     testExpr(expected, "array_distinct(C0)", {array});
   }
@@ -275,6 +279,12 @@ TEST_F(ArrayDistinctTest, stringArrays) {
   });
 
   testExpr(expected, "array_distinct(C0)", {array});
+}
+
+// Test decimal arrays.
+TEST_F(ArrayDistinctTest, decimalArrays) {
+  testInt<int64_t>(DECIMAL(15, 4));
+  testInt<int128_t>(DECIMAL(38, 10));
 }
 
 TEST_F(ArrayDistinctTest, nonContiguousRows) {

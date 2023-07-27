@@ -109,6 +109,21 @@ TEST_F(ArraySumTest, overflow) {
       result);
 }
 
+TEST_F(ArraySumTest, decimalInput) {
+  auto type = DECIMAL(15, 4);
+  auto input = makeNullableArrayVector<int64_t>(
+      {{0, 1, 2}, {std::nullopt, 1, 2}, {std::nullopt}}, ARRAY(type));
+  auto expected = makeNullableFlatVector<double>({3, 3, 0});
+  testArraySum<double>(expected, input);
+
+  type = DECIMAL(38, 10);
+  input = makeNullableArrayVector<int128_t>(
+      {{100, -200, 3000}, {std::nullopt, 999, -101}, {std::nullopt}},
+      ARRAY(type));
+  expected = makeNullableFlatVector<double>({2900, 898, 0});
+  testArraySum<double>(expected, input);
+}
+
 // Test floating point arrays
 TEST_F(ArraySumTest, realInput) {
   auto input = makeNullableArrayVector<float>(

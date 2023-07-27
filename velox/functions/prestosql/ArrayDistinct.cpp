@@ -184,6 +184,12 @@ std::vector<std::shared_ptr<exec::FunctionSignature>> signatures() {
                              .argumentType(fmt::format("array({})", type))
                              .build());
   }
+  signatures.push_back(exec::FunctionSignatureBuilder()
+                           .integerVariable("precision")
+                           .integerVariable("scale")
+                           .returnType("ARRAY(DECIMAL(precision, scale))")
+                           .argumentType("ARRAY(DECIMAL(precision, scale))")
+                           .build());
   return signatures;
 }
 

@@ -53,46 +53,56 @@ class ArrayIntersectTest : public FunctionBaseTest {
   }
 
   template <typename T>
-  void testInt() {
-    auto array1 = makeNullableArrayVector<T>({
-        {{1, -2, 3, std::nullopt, 4, 5, 6, std::nullopt}},
-        {{1, 2, -2, 1}},
-        {{3, 8, std::nullopt}},
-        std::nullopt,
-        {{1, 1, -2, -2, -2, 4, 8}},
-    });
-    auto array2 = makeNullableArrayVector<T>({
-        {1, -2, 4},
-        {1, -2, 4},
-        {1, -2, 4},
-        {1, 2},
-        {1, -2, 4},
-    });
-    auto expected = makeNullableArrayVector<T>({
-        {{1, -2, 4}},
-        {{1, -2}},
-        {{}},
-        std::nullopt,
-        {{1, -2, 4}},
-    });
+  void testInt(const TypePtr& type = CppToType<T>::create()) {
+    auto array1 = makeNullableArrayVector<T>(
+        {
+            {{1, -2, 3, std::nullopt, 4, 5, 6, std::nullopt}},
+            {{1, 2, -2, 1}},
+            {{3, 8, std::nullopt}},
+            std::nullopt,
+            {{1, 1, -2, -2, -2, 4, 8}},
+        },
+        ARRAY(type));
+    auto array2 = makeNullableArrayVector<T>(
+        {
+            {1, -2, 4},
+            {1, -2, 4},
+            {1, -2, 4},
+            {1, 2},
+            {1, -2, 4},
+        },
+        ARRAY(type));
+    auto expected = makeNullableArrayVector<T>(
+        {
+            {{1, -2, 4}},
+            {{1, -2}},
+            {{}},
+            std::nullopt,
+            {{1, -2, 4}},
+        },
+        ARRAY(type));
     testExpr(expected, "array_intersect(C0, C1)", {array1, array2});
     testExpr(expected, "array_intersect(C1, C0)", {array1, array2});
 
     // Change C1.
-    array2 = makeNullableArrayVector<T>({
-        {10, -24, 43},
-        {std::nullopt, -2, 2},
-        {std::nullopt, std::nullopt, std::nullopt},
-        {0, 0, 0},
-        {8, 1, 8, 1},
-    });
-    expected = makeNullableArrayVector<T>({
-        {{}},
-        {{2, -2}},
-        {std::vector<std::optional<T>>{std::nullopt}},
-        std::nullopt,
-        {{1, 8}},
-    });
+    array2 = makeNullableArrayVector<T>(
+        {
+            {10, -24, 43},
+            {std::nullopt, -2, 2},
+            {std::nullopt, std::nullopt, std::nullopt},
+            {0, 0, 0},
+            {8, 1, 8, 1},
+        },
+        ARRAY(type));
+    expected = makeNullableArrayVector<T>(
+        {
+            {{}},
+            {{2, -2}},
+            {std::vector<std::optional<T>>{std::nullopt}},
+            std::nullopt,
+            {{1, 8}},
+        },
+        ARRAY(type));
     testExpr(expected, "array_intersect(C0, C1)", {array1, array2});
   }
 
@@ -139,6 +149,11 @@ TEST_F(ArrayIntersectTest, intArrays) {
 TEST_F(ArrayIntersectTest, floatArrays) {
   testFloatingPoint<float>();
   testFloatingPoint<double>();
+}
+
+TEST_F(ArrayIntersectTest, decimalArrays) {
+  testInt<int64_t>(DECIMAL(15, 4));
+  testInt<int128_t>(DECIMAL(38, 10));
 }
 
 TEST_F(ArrayIntersectTest, boolArrays) {

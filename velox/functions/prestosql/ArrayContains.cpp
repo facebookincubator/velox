@@ -196,12 +196,20 @@ class ArrayContainsFunction : public exec::VectorFunction {
 
   static std::vector<std::shared_ptr<exec::FunctionSignature>> signatures() {
     // array(T), T -> boolean
-    return {exec::FunctionSignatureBuilder()
-                .typeVariable("T")
-                .returnType("boolean")
-                .argumentType("array(T)")
-                .argumentType("T")
-                .build()};
+    return {
+        exec::FunctionSignatureBuilder()
+            .typeVariable("T")
+            .returnType("boolean")
+            .argumentType("array(T)")
+            .argumentType("T")
+            .build(),
+        exec::FunctionSignatureBuilder()
+            .returnType("boolean")
+            .integerVariable("precision")
+            .integerVariable("scale")
+            .argumentType("ARRAY(DECIMAL(precision, scale))")
+            .argumentType("DECIMAL(precision, scale)")
+            .build()};
   }
 };
 

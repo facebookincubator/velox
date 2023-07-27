@@ -35,42 +35,45 @@ class ArrayDuplicatesTest : public FunctionBaseTest {
     assertEqualVectors(expected, result);
   }
 
-  // Execute test for bigint type.
-  void testBigint() {
-    auto array = makeNullableArrayVector<int64_t>({
-        {},
-        {1,
-         std::numeric_limits<int64_t>::min(),
-         std::numeric_limits<int64_t>::max()},
-        {std::nullopt},
-        {1, 2, 3},
-        {2, 1, 1, -2},
-        {1, 1, 1},
-        {-1, std::nullopt, -1, -1},
-        {std::nullopt, std::nullopt, std::nullopt},
-        {1, -2, -2, 8, -2, 4, 8, 1},
-        {std::numeric_limits<int64_t>::max(),
-         std::numeric_limits<int64_t>::max(),
-         1,
-         std::nullopt,
-         0,
-         1,
-         std::nullopt,
-         0},
-    });
+  // Execute test for bigint and decimal types.
+  template <typename T>
+  void testInt(const TypePtr& type = CppToType<T>::create()) {
+    auto array = makeNullableArrayVector<T>(
+        {
+            {},
+            {1, std::numeric_limits<T>::min(), std::numeric_limits<T>::max()},
+            {std::nullopt},
+            {1, 2, 3},
+            {2, 1, 1, -2},
+            {1, 1, 1},
+            {-1, std::nullopt, -1, -1},
+            {std::nullopt, std::nullopt, std::nullopt},
+            {1, -2, -2, 8, -2, 4, 8, 1},
+            {std::numeric_limits<T>::max(),
+             std::numeric_limits<T>::max(),
+             1,
+             std::nullopt,
+             0,
+             1,
+             std::nullopt,
+             0},
+        },
+        ARRAY(type));
 
-    auto expected = makeNullableArrayVector<int64_t>({
-        {},
-        {},
-        {},
-        {},
-        {1},
-        {1},
-        {-1},
-        {std::nullopt},
-        {-2, 1, 8},
-        {std::nullopt, 0, 1, std::numeric_limits<int64_t>::max()},
-    });
+    auto expected = makeNullableArrayVector<T>(
+        {
+            {},
+            {},
+            {},
+            {},
+            {1},
+            {1},
+            {-1},
+            {std::nullopt},
+            {-2, 1, 8},
+            {std::nullopt, 0, 1, std::numeric_limits<T>::max()},
+        },
+        ARRAY(type));
 
     testExpr(expected, "array_duplicates(C0)", {array});
   }
@@ -80,7 +83,7 @@ class ArrayDuplicatesTest : public FunctionBaseTest {
 
 // Test integer arrays.
 TEST_F(ArrayDuplicatesTest, integerArrays) {
-  testBigint();
+  testInt<int64_t>();
 }
 
 // Test inline (short) strings.
@@ -144,6 +147,12 @@ TEST_F(ArrayDuplicatesTest, stringArrays) {
   });
 
   testExpr(expected, "array_duplicates(C0)", {array});
+}
+
+// Test decimal arrays.
+TEST_F(ArrayDuplicatesTest, decimalArrays) {
+  testInt<int64_t>(DECIMAL(15, 4));
+  testInt<int128_t>(DECIMAL(38, 10));
 }
 
 TEST_F(ArrayDuplicatesTest, nonContiguousRows) {
