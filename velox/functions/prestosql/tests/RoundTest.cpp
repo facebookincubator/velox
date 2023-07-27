@@ -86,6 +86,11 @@ class RoundTest : public functions::test::FunctionBaseTest {
   }
 
   template <typename T>
+  std::vector<std::tuple<T, int32_t, T>> testRoundWithDecDoubleData() {
+    return {{0.575, 2, 0.58}};
+  }
+
+  template <typename T>
   std::vector<std::tuple<T, int32_t, T>> testRoundWithDecIntegralData() {
     return {
         {1, 0, 1},
@@ -116,6 +121,7 @@ TEST_F(RoundTest, round) {
 TEST_F(RoundTest, roundWithDecimal) {
   runRoundWithDecimalTest<float>(testRoundWithDecFloatData<float>());
   runRoundWithDecimalTest<double>(testRoundWithDecFloatData<double>());
+  runRoundWithDecimalTest<double>(testRoundWithDecDoubleData<double>());
 
   runRoundWithDecimalTest<int64_t>(testRoundWithDecIntegralData<int64_t>());
   runRoundWithDecimalTest<int32_t>(testRoundWithDecIntegralData<int32_t>());
