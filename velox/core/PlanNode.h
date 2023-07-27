@@ -524,6 +524,17 @@ class AggregationNode : public PlanNode {
       const std::vector<FieldAccessTypedExprPtr>& preGroupedKeys,
       const std::vector<std::string>& aggregateNames,
       const std::vector<Aggregate>& aggregates,
+      const std::vector<bool>& aggregateDistincts = {},
+      bool ignoreNullKeys,
+      PlanNodePtr source);
+
+  AggregationNode(
+      const PlanNodeId& id,
+      Step step,
+      const std::vector<FieldAccessTypedExprPtr>& groupingKeys,
+      const std::vector<FieldAccessTypedExprPtr>& preGroupedKeys,
+      const std::vector<std::string>& aggregateNames,
+      const std::vector<Aggregate>& aggregates,
       const std::vector<bool>& aggregateDistincts,
       bool ignoreNullKeys,
       PlanNodePtr source);
