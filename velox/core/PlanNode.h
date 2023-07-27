@@ -524,6 +524,7 @@ class AggregationNode : public PlanNode {
       const std::vector<FieldAccessTypedExprPtr>& preGroupedKeys,
       const std::vector<std::string>& aggregateNames,
       const std::vector<Aggregate>& aggregates,
+      const std::vector<bool>& aggregateDistincts,
       bool ignoreNullKeys,
       PlanNodePtr source);
 
@@ -553,6 +554,10 @@ class AggregationNode : public PlanNode {
 
   const std::vector<Aggregate>& aggregates() const {
     return aggregates_;
+  }
+
+  const std::vector<bool>& aggregateDistincts() const {
+    return aggregateDistincts_;
   }
 
   bool ignoreNullKeys() const {
@@ -592,6 +597,7 @@ class AggregationNode : public PlanNode {
   const std::vector<FieldAccessTypedExprPtr> preGroupedKeys_;
   const std::vector<std::string> aggregateNames_;
   const std::vector<Aggregate> aggregates_;
+  const std::vector<bool> aggregateDistincts_;
   const bool ignoreNullKeys_;
   const std::vector<PlanNodePtr> sources_;
   const RowTypePtr outputType_;

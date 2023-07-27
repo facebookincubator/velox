@@ -78,6 +78,11 @@ class HashAggregation : public Operator {
 
   int64_t maxPartialAggregationMemoryUsage_;
   std::unique_ptr<GroupingSet> groupingSet_;
+  std::vector<bool> aggregationDistincts_;
+  const bool hasDistinctAggregation_;
+  const int64_t distinctCount_;
+  std::vector<std::unique_ptr<GroupingSet>> distinctSets_;
+  std::shared_ptr<const RowType> rowTypeWithMaskChannels_;
 
   bool partialFull_ = false;
   bool newDistincts_ = false;

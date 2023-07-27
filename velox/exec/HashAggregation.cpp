@@ -86,14 +86,63 @@ HashAggregation::HashAggregation(
       abandonPartialAggregationMinRows_(
           driverCtx->queryConfig().abandonPartialAggregationMinRows()),
       abandonPartialAggregationMinPct_(
-          driverCtx->queryConfig().abandonPartialAggregationMinPct()) {
-  VELOX_CHECK(pool()->trackUsage());
+          driverCtx->queryConfig().abandonPartialAggregationMinPct()),
+      aggregationDistincts_(aggregationNode->aggregateDistincts()),
+      hasDistinctAggregation_(std::any_of(
+              aggregationDistincts_.cbegin(),
+              aggregationDistincts_.cend(),
+              [](bool b) { return b; })),
+      distinctCount_(std::count_if(
+              aggregationDistincts_.cbegin(),
+              aggregationDistincts_.cend(),
+              [](bool b) { return b; })),
+      distinctSets_(std::vector<std::unique_ptr<GroupingSet>>(0)) {
+    VELOX_CHECK(pool()->trackUsage());
 
   auto inputType = aggregationNode->sources()[0]->outputType();
 
   auto hashers =
       createVectorHashers(inputType, aggregationNode->groupingKeys());
   auto numHashers = hashers.size();
+  if (hasDistinctAggregation_) {
+    VELOX_CHECK_EQ(
+        aggregationDistincts_.size(),
+        aggregationNode->aggregates().size(),
+        "aggregationDistincts_ doesn't match number of aggregates");
+    std::vector<TypePtr> types(
+        aggregationNode->sources()[0]->outputType()->children().size() +
+        distinctCount_);
+    std::vector<std::string> names(
+        aggregationNode->sources()[0]->outputType()->children().size() +
+        distinctCount_);
+    for (auto i = 0;
+         i < aggregationNode->sources()[0]->outputType()->children().size();
+         i++) {
+      types[i] =
+          aggregationNode->sources()[0].get()->outputType()->children()[i];
+      names[i] = aggregationNode->sources()[0].get()->outputType()->names()[i];
+    }
+    auto nextIndexForTypesAndNames = 0;
+    for (auto i = 0; i < aggregationDistincts_.size(); i++) {
+      if (not aggregationDistincts_[i]) {
+        continue;
+      }
+      auto channel =
+          exprToChannel(aggregationNode->aggregates()[i].call->inputs()[0].get(), inputType);
+      types
+          [aggregationNode->sources()[0]->outputType()->children().size() +
+           nextIndexForTypesAndNames] = BOOLEAN();
+      names
+          [aggregationNode->sources()[0]->outputType()->children().size() +
+           nextIndexForTypesAndNames] = aggregationNode->sources()[0]
+                                            .get()
+                                            ->outputType()
+                                            ->names()[channel] +
+          "$" + "distinct";
+      nextIndexForTypesAndNames++;
+    }
+    rowTypeWithMaskChannels_ = ROW(std::move(names), std::move(types));
+  }
 
   std::vector<column_index_t> preGroupedChannels;
   preGroupedChannels.reserve(aggregationNode->preGroupedKeys().size());
@@ -172,6 +221,59 @@ HashAggregation::HashAggregation(
     }
   }
 
+  if (hasDistinctAggregation_) {
+    distinctSets_.resize(numAggregates);
+    std::vector<std::optional<std::vector<std::unique_ptr<VectorHasher>>>>
+        distinct_set_hashers(0);
+
+    for (int i = 0; i < numAggregates; i++) {
+      if (not aggregationDistincts_[i]) {
+        distinct_set_hashers.push_back(std::nullopt);
+        continue;
+      }
+
+      const auto& aggregate = aggregationNode->aggregates()[i];
+      std::vector<std::unique_ptr<VectorHasher>> distinct_set_hashers_elem;
+      distinct_set_hashers_elem.reserve(
+          numHashers + aggregate.call->inputs().size());
+      for (const auto& key : aggregationNode->groupingKeys()) {
+        auto channel = exprToChannel(key.get(), inputType);
+        VELOX_CHECK_NE(
+            channel,
+            kConstantChannel,
+            "Aggregation doesn't allow constant grouping keys");
+        distinct_set_hashers_elem.push_back(
+            VectorHasher::create(key->type(), channel));
+      }
+
+      for (auto& arg : aggregate.call->inputs()) {
+        distinct_set_hashers_elem.push_back(VectorHasher::create(
+            arg->type(), exprToChannel(arg.get(), inputType)));
+      }
+      distinct_set_hashers.emplace_back(std::move(distinct_set_hashers_elem));
+    }
+    auto distinctMaskChannelIndex = 0;
+    for (int i = 0; i < numAggregates; i++) {
+      if (aggregationDistincts_[i]) {
+        aggregateInfos[i].mask =
+            inputType->asRow().children().size() + distinctMaskChannelIndex;
+        distinctMaskChannelIndex++;
+
+        distinctSets_[i] = std::make_unique<GroupingSet>(
+            inputType,
+            std::move(distinct_set_hashers[i].value()),
+            std::vector<column_index_t>{},
+            std::vector<AggregateInfo>{},
+            true,
+            false,
+            false,
+            nullptr,
+            &nonReclaimableSection_,
+            operatorCtx_.get());
+      }
+    }
+  }
+
   groupingSet_ = std::make_unique<GroupingSet>(
       inputType,
       std::move(hashers),
@@ -196,6 +298,59 @@ void HashAggregation::addInput(RowVectorPtr input) {
     mayPushdown_ = operatorCtx_->driver()->mayPushdownAggregation(this);
     pushdownChecked_ = true;
   }
+
+  if (hasDistinctAggregation_) {
+    VELOX_CHECK_EQ(
+        hasDistinctAggregation_,
+        rowTypeWithMaskChannels_ != nullptr,
+        "hasDistinctAggregation_ true if and only if rowTypeWithMaskChannels_ is not nullptr");
+    std::vector<VectorPtr> children;
+
+    for (auto& child : input->children()) {
+      children.push_back(child);
+    }
+    for (auto i = 0; i < aggregationDistincts_.size(); i++) {
+      if (not aggregationDistincts_[i]) {
+        continue;
+      }
+      auto boolValues = AlignedBuffer::allocate<bool>(
+          input->size(), operatorCtx_->pool(), false);
+
+      auto distinctCol = std::make_shared<FlatVector<bool>>(
+          operatorCtx_->pool(),
+          BOOLEAN(),
+          input->nulls(),
+          input->size(),
+          boolValues,
+          std::vector<BufferPtr>{});
+
+      auto resultBits =
+          distinctCol->as<FlatVector<bool>>()->mutableRawValues<uint64_t>();
+      distinctSets_[i]->addInput(input, false);
+      auto newGroupIter = distinctSets_[i]->hashLookup().newGroups.cbegin();
+      const auto newGroupIterEnd =
+           distinctSets_[i]->hashLookup().newGroups.cend();
+      for (vector_size_t j = 0; j < input->size(); j++) {
+        if (newGroupIter != newGroupIterEnd && j == *newGroupIter) {
+          bits::setBit(resultBits, j, true);
+          newGroupIter++;
+        } else {
+          bits::setBit(resultBits, j, false);
+        }
+      }
+
+      children.push_back(distinctCol);
+    }
+
+    input = std::make_shared<RowVector>(
+        operatorCtx_->pool(),
+        rowTypeWithMaskChannels_,
+        input->nulls(),
+        input->size(),
+        children);
+    input_ = input;
+  }
+
   if (abandonedPartialAggregation_) {
     input_ = input;
     numInputRows_ += input->size();

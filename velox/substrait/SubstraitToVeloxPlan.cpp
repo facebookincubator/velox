@@ -129,6 +129,7 @@ core::PlanNodePtr SubstraitVeloxPlanConverter::toVeloxPlan(
   // Each measure represents one aggregate expression.
   std::vector<core::AggregationNode::Aggregate> aggregates;
   aggregates.reserve(aggRel.measures().size());
+  const auto aggregateDistincts = std::vector<bool>(aggRel.measures().size());
 
   for (const auto& measure : aggRel.measures()) {
     core::FieldAccessTypedExprPtr mask;
@@ -177,6 +178,7 @@ core::PlanNodePtr SubstraitVeloxPlanConverter::toVeloxPlan(
       preGroupingExprs,
       aggOutNames,
       aggregates,
+      aggregateDistincts,
       ignoreNullKeys,
       childNode);
 

@@ -131,6 +131,7 @@ TEST_F(PlanFragmentTest, aggregationCanSpill) {
        {},
        {}}};
   const std::vector<AggregationNode::Aggregate> emptyAggregates{};
+  const std::vector<bool> aggregateDistincts;
 
   struct {
     AggregationNode::Step aggregationStep;
@@ -181,6 +182,7 @@ TEST_F(PlanFragmentTest, aggregationCanSpill) {
         testData.hasPreAggregation ? preGroupingKeys : emptyPreGroupingKeys,
         testData.isDistinct ? emptyAggregateNames : aggregateNames,
         testData.isDistinct ? emptyAggregates : aggregates,
+        aggregateDistincts,
         false,
         valueNode_);
     auto queryCtx = getSpillQueryCtx(

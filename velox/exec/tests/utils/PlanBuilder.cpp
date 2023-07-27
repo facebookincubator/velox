@@ -442,6 +442,7 @@ core::PlanNodePtr PlanBuilder::createIntermediateOrFinalAggregation(
 
   std::vector<core::AggregationNode::Aggregate> aggregates;
   aggregates.reserve(numAggregates);
+  const auto aggregateDistincts = std::vector<bool>(numAggregates);
   for (auto i = 0; i < numAggregates; i++) {
     // Resolve final or intermediate aggregation result type using raw input
     // types for the partial aggregation.
@@ -469,6 +470,7 @@ core::PlanNodePtr PlanBuilder::createIntermediateOrFinalAggregation(
       partialAggNode->preGroupedKeys(),
       partialAggNode->aggregateNames(),
       aggregates,
+      aggregateDistincts,
       partialAggNode->ignoreNullKeys(),
       planNode_);
 }
@@ -612,6 +614,7 @@ PlanBuilder& PlanBuilder::aggregation(
     const std::vector<std::string>& preGroupedKeys,
     const std::vector<std::string>& aggregates,
     const std::vector<std::string>& masks,
+    const std::vector<bool>& aggregateDistincts,
     core::AggregationNode::Step step,
     bool ignoreNullKeys,
     const std::vector<TypePtr>& resultTypes) {
@@ -624,6 +627,8 @@ PlanBuilder& PlanBuilder::aggregation(
       fields(preGroupedKeys),
       aggregatesAndNames.names,
       aggregatesAndNames.aggregates,
+      aggregateDistincts.empty() ? std::vector<bool>(aggregates.size())
+                                 : aggregateDistincts,
       ignoreNullKeys,
       planNode_);
   return *this;
@@ -638,6 +643,7 @@ PlanBuilder& PlanBuilder::streamingAggregation(
     const std::vector<TypePtr>& resultTypes) {
   auto aggregatesAndNames =
       createAggregateExpressionsAndNames(aggregates, masks, step, resultTypes);
+  const auto aggregateDistincts = std::vector<bool>(numAggregates);
   planNode_ = std::make_shared<core::AggregationNode>(
       nextPlanNodeId(),
       step,
@@ -645,6 +651,7 @@ PlanBuilder& PlanBuilder::streamingAggregation(
       fields(groupingKeys),
       aggregatesAndNames.names,
       aggregatesAndNames.aggregates,
+      aggregateDistincts,
       ignoreNullKeys,
       planNode_);
   return *this;

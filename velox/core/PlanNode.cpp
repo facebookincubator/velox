@@ -99,6 +99,7 @@ AggregationNode::AggregationNode(
     const std::vector<FieldAccessTypedExprPtr>& preGroupedKeys,
     const std::vector<std::string>& aggregateNames,
     const std::vector<Aggregate>& aggregates,
+    const std::vector<bool>& aggregateDistincts,
     bool ignoreNullKeys,
     PlanNodePtr source)
     : PlanNode(id),
@@ -107,6 +108,7 @@ AggregationNode::AggregationNode(
       preGroupedKeys_(preGroupedKeys),
       aggregateNames_(aggregateNames),
       aggregates_(aggregates),
+      aggregateDistincts_(aggregateDistincts),
       ignoreNullKeys_(ignoreNullKeys),
       sources_{source},
       outputType_(getAggregationOutputType(
@@ -328,6 +330,7 @@ PlanNodePtr AggregationNode::create(const folly::dynamic& obj, void* context) {
   auto groupingKeys = deserializeFields(obj["groupingKeys"], context);
   auto preGroupedKeys = deserializeFields(obj["preGroupedKeys"], context);
   auto aggregateNames = deserializeStrings(obj["aggregateNames"]);
+  const auto aggregateDistincts = std::vector<bool>(aggregateNames.size());
 
   std::vector<Aggregate> aggregates;
   for (const auto& aggregate : obj["aggregates"]) {
@@ -341,6 +344,7 @@ PlanNodePtr AggregationNode::create(const folly::dynamic& obj, void* context) {
       preGroupedKeys,
       aggregateNames,
       aggregates,
+      aggregateDistincts,
       obj["ignoreNullKeys"].asBool(),
       deserializeSingleSource(obj, context));
 }

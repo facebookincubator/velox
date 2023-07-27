@@ -29,6 +29,7 @@ target_link_libraries(aggregate_companion_functions_test velox_exec
 add_executable(
   velox_exec_test
   AddressableNonNullValueListTest.cpp
+  AggregationDistinctTest.cpp
   AggregationTest.cpp
   AggregateFunctionRegistryTest.cpp
   ArrowStreamTest.cpp

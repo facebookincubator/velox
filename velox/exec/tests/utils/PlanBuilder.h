@@ -361,12 +361,15 @@ class PlanBuilder {
   PlanBuilder& singleAggregation(
       const std::vector<std::string>& groupingKeys,
       const std::vector<std::string>& aggregates,
-      const std::vector<std::string>& masks = {}) {
+      const std::vector<std::string>& masks = {},
+      const std::vector<bool>& aggregateDistincts = {}) {
     return aggregation(
         groupingKeys,
         {},
         aggregates,
         masks,
+        aggregateDistincts.empty() ? std::vector<bool>(aggregates.size())
+                                   : aggregateDistincts,
         core::AggregationNode::Step::kSingle,
         false);
   }
@@ -399,7 +402,15 @@ class PlanBuilder {
       bool ignoreNullKeys,
       const std::vector<TypePtr>& resultTypes = {}) {
     return aggregation(
-        groupingKeys, {}, aggregates, masks, step, ignoreNullKeys, resultTypes);
+        groupingKeys,
+        {},
+        aggregates,
+        masks,
+        std::vector<bool>(aggregates.size()),
+        step,
+        ignoreNullKeys,
+        resultTypes);
+
   }
 
   /// Same as above, but also allows to specify a subset of grouping keys on
@@ -413,6 +424,27 @@ class PlanBuilder {
       const std::vector<std::string>& preGroupedKeys,
       const std::vector<std::string>& aggregates,
       const std::vector<std::string>& masks,
+      core::AggregationNode::Step step,
+      bool ignoreNullKeys,
+      const std::vector<TypePtr>& resultTypes = {}) {
+    return aggregation(
+        groupingKeys,
+        preGroupedKeys,
+        aggregates,
+        masks,
+        std::vector<bool>(aggregates.size()),
+        step,
+        ignoreNullKeys,
+        resultTypes);
+  }
+
+  /// Same as above, but also allows to specify which aggregates are distinct.
+  PlanBuilder& aggregation(
+      const std::vector<std::string>& groupingKeys,
+      const std::vector<std::string>& preGroupedKeys,
+      const std::vector<std::string>& aggregates,
+      const std::vector<std::string>& masks,
+      const std::vector<bool>& distinctAggregates,
       core::AggregationNode::Step step,
       bool ignoreNullKeys,
       const std::vector<TypePtr>& resultTypes = {});
