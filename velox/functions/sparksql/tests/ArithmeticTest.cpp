@@ -75,12 +75,15 @@ TEST_F(PmodTest, float) {
   EXPECT_FLOAT_EQ(0.2, pmod<float>(0.5, 0.3).value());
   EXPECT_FLOAT_EQ(0.9, pmod<float>(-1.1, 2).value());
   EXPECT_EQ(std::nullopt, pmod<float>(2.14159, 0.0));
+  EXPECT_DOUBLE_EQ(0.1, pmod<double>(0.7, -0.3).value());
+
 }
 
 TEST_F(PmodTest, double) {
   EXPECT_DOUBLE_EQ(0.2, pmod<double>(0.5, 0.3).value());
   EXPECT_DOUBLE_EQ(0.9, pmod<double>(-1.1, 2).value());
   EXPECT_EQ(std::nullopt, pmod<double>(2.14159, 0.0));
+  EXPECT_DOUBLE_EQ(0.1, pmod<double>(0.7, -0.3).value());
 }
 
 class RemainderTest : public SparkFunctionBaseTest {
