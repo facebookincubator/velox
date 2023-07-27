@@ -580,7 +580,7 @@ TEST_F(SharedArbitrationTest, reclaimFromCompletedOrderBy) {
   }
 }
 
-DEBUG_ONLY_TEST_F(SharedArbitrationTest, DISABLED_reclaimFromAggregation) {
+DEBUG_ONLY_TEST_F(SharedArbitrationTest, reclaimFromAggregation) {
   const int numVectors = 32;
   std::vector<RowVectorPtr> vectors;
   for (int i = 0; i < numVectors; ++i) {
