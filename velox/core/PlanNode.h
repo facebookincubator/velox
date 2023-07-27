@@ -526,7 +526,7 @@ class AggregationNode : public PlanNode {
       const std::vector<Aggregate>& aggregates,
       bool ignoreNullKeys,
       PlanNodePtr source) {
-    aggregateDistincts_(const std::vector<bool>(aggregates.size()))
+    aggregateDistincts_()
   }
 
   AggregationNode(
