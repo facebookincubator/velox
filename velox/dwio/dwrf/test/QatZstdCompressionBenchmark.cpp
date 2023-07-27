@@ -1,3 +1,19 @@
+/*
+ * Copyright (c) Facebook, Inc. and its affiliates.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
 #include "velox/common/base/tests/GTestUtils.h"
 #include "velox/dwio/common/encryption/TestProvider.h"
 #include "velox/dwio/dwrf/common/Compression.h"
@@ -6,6 +22,8 @@
 
 #include <folly/Random.h>
 #include <gtest/gtest.h>
+#include <folly/Benchmark.h>
+
 
 #include <algorithm>
 #include <iostream>
@@ -20,6 +38,8 @@ using namespace facebook::velox::dwio::common::encryption;
 using namespace facebook::velox::dwio::common::encryption::test;
 using namespace facebook::velox::dwrf;
 using namespace facebook::velox::memory;
+using namespace std;
+using namespace folly;
 
 typedef std::tuple<CompressionKind, const Encrypter*, const Decrypter*>
     TestParams;
@@ -78,9 +98,6 @@ std::chrono::duration<double>  benchmarkCompress(
   config.set<uint32_t>(Config::COMPRESSION_THRESHOLD, 128);
   std::unique_ptr<BufferedOutputStream> compressStream =
       createCompressor(kind, bufferPool, holder, config, encrypter);
-
-  auto start_time = std::chrono::system_clock::now();
-
   size_t pos = 0;
   char* compressBuffer;
   int32_t compressBufferSize = 0;
@@ -98,17 +115,11 @@ std::chrono::duration<double>  benchmarkCompress(
 
     pos += copy_size;
     dataSize -= copy_size;
-  }
-
-  auto end_time = std::chrono::system_clock::now();
-  std::chrono::duration<double> elapsed_seconds = end_time-start_time;
-
-  
+  }  
   compressStream->flush();
-  return elapsed_seconds;
 }
 
-TEST_P(CompressionTest, compressZstd) {
+BENCHMARK(compressZstd) {
   auto pool = addDefaultLeafMemoryPool();
   MemorySink memSink(*pool, DEFAULT_MEM_STREAM_SIZE);
 
@@ -116,12 +127,9 @@ TEST_P(CompressionTest, compressZstd) {
 
   char testData[] = "hello world!";
   auto compressTime = benchmarkCompress(
-      CompressionKind_ZSTD, memSink, block, *pool, testData, sizeof(testData), encrypter_);
-  auto t = std::chrono::duration_cast<std::chrono::seconds>(compressTime);
-  printf("Compress time: %ld", t.count());
+      CompressionKind_ZSTD, memSink, block, *pool, testData, sizeof(testData), NULL);
 }
 
-
-
-
-
+int main() {
+  runBenchmarks();
+}

@@ -511,10 +511,11 @@ add_executable(QatZstdCompressionBenchmark QatZstdCompressionBenchmark.cpp)
 target_link_libraries(  
   QatZstdCompressionBenchmark
   velox_link_libs
+  fmt::fmt
   Folly::folly
   glog::glog
   lz4::lz4
   lzo2::lzo2
   zstd::zstd
   ZLIB::ZLIB
-  ${TEST_LINK_LIBS})
+  ${FOLLY_BENCHMARK})
