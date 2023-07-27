@@ -97,7 +97,7 @@ void benchmarkCompress(
 
     pos += copy_size;
     dataSize -= copy_size;
-  }  
+  }
   compressStream->flush();
 }
 
