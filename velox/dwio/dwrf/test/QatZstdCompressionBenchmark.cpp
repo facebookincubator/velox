@@ -39,11 +39,6 @@ using namespace facebook::velox::memory;
 using namespace std;
 using namespace folly;
 
-typedef std::tuple<CompressionKind, const Encrypter*, const Decrypter*>
-    TestParams;
-TestEncrypter testEncrypter;
-TestDecrypter testDecrypter;
-
 const int32_t DEFAULT_MEM_STREAM_SIZE = 1024 * 1024 * 2; // 2M
 
 class TestBufferPool : public CompressionBufferPool {

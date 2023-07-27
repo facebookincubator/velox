@@ -66,7 +66,8 @@ class ZstdQatCompressor : public Compressor {
     zc = ZSTD_createCCtx();
     QZSTD_startQatDevice();
     sequenceProducerState = QZSTD_createSeqProdState();
-    ZSTD_registerSequenceProducer(zc, sequenceProducerState, qatSequenceProducer);
+    ZSTD_registerSequenceProducer(
+      zc, sequenceProducerState, qatSequenceProducer);
     ZSTD_CCtx_setParameter(zc, ZSTD_c_enableSeqProducerFallback, 1);
   }
 
@@ -79,7 +80,7 @@ uint64_t
 ZstdQatCompressor::compress(const void* src, void* dest, uint64_t length) {
   size_t ret = ZSTD_compress2(zc, dest, length, src, length);
   if ((int)ret <= 0) {        
-      DWIO_RAISE("ZSTD QAT returned an error: ", ZSTD_getErrorName(ret));
+    DWIO_RAISE("ZSTD QAT returned an error: ", ZSTD_getErrorName(ret));
   }
   return ret;
 }
