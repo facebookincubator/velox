@@ -77,7 +77,7 @@ class SsdCache {
   void write(std::vector<CachePin> pins);
 
   /// Returns stats aggregated from all shards.
-  SsdCacheStats stats() const;
+  SsdCacheStats refreshStats() const;
 
   FileGroupStats& groupStats() const {
     return *groupStats_;

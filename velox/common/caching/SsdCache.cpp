@@ -129,7 +129,7 @@ void SsdCache::write(std::vector<CachePin> pins) {
   writesInProgress_.fetch_sub(numNoStore);
 }
 
-SsdCacheStats SsdCache::stats() const {
+SsdCacheStats SsdCache::refreshStats() const {
   SsdCacheStats stats;
   for (auto& file : files_) {
     file->updateStats(stats);
@@ -144,7 +144,7 @@ void SsdCache::clear() {
 }
 
 std::string SsdCache::toString() const {
-  auto data = stats();
+  auto data = refreshStats();
   uint64_t capacity = maxBytes();
   std::stringstream out;
   out << "Ssd cache IO: Write " << (data.bytesWritten >> 20) << "MB read "

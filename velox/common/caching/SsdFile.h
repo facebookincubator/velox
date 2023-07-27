@@ -135,6 +135,10 @@ struct SsdCacheStats {
     bytesCached = tsanAtomicValue(other.bytesCached);
     numPins = tsanAtomicValue(other.numPins);
 
+    entryAgeSecsMin = tsanAtomicValue(other.entryAgeSecsMin);
+    entryAgeSecsMax = tsanAtomicValue(other.entryAgeSecsMax);
+    entryAgeSecsAvg = tsanAtomicValue(other.entryAgeSecsAvg);
+
     openFileErrors = tsanAtomicValue(other.openFileErrors);
     openCheckpointErrors = tsanAtomicValue(other.openCheckpointErrors);
     openLogErrors = tsanAtomicValue(other.openLogErrors);
@@ -153,6 +157,10 @@ struct SsdCacheStats {
   tsan_atomic<uint64_t> entriesCached{0};
   tsan_atomic<uint64_t> bytesCached{0};
   tsan_atomic<int32_t> numPins{0};
+
+  tsan_atomic<uint64_t> entryAgeSecsMin{std::numeric_limits<uint64_t>::max()};
+  tsan_atomic<uint64_t> entryAgeSecsMax{0};
+  tsan_atomic<uint64_t> entryAgeSecsAvg{0};
 
   tsan_atomic<uint32_t> openFileErrors{0};
   tsan_atomic<uint32_t> openCheckpointErrors{0};
@@ -238,6 +246,9 @@ class SsdFile {
 
   // Adds 'stats_' to 'stats'.
   void updateStats(SsdCacheStats& stats) const;
+
+  // Adds entry age stats to 'stats'.
+  void updateEntryAgeStats(SsdCacheStats& stats) const;
 
   // Resets this' to a post-construction empty state. See SsdCache::clear().
   void clear();

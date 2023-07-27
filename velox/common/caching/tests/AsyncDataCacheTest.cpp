@@ -644,7 +644,7 @@ TEST_F(AsyncDataCacheTest, ssd) {
   // write does not wait for the workload.
   runThreads(16, [&](int32_t /*i*/) { loadLoop(0, kSsdBytes, 11); });
   LOG(INFO) << "Stats after first pass: " << cache_->toString();
-  auto ssdStats = cache_->ssdCache()->stats();
+  auto ssdStats = cache_->ssdCache()->refreshStats();
   ASSERT_LE(kRamBytes, ssdStats.bytesWritten);
 
   // We allow writes to proceed faster.
@@ -653,7 +653,7 @@ TEST_F(AsyncDataCacheTest, ssd) {
   // 13 batch loads.
   runThreads(16, [&](int32_t /*i*/) { loadLoop(0, kSsdBytes, 13); });
   LOG(INFO) << "Stats after second pass:" << cache_->toString();
-  ssdStats = cache_->ssdCache()->stats();
+  ssdStats = cache_->ssdCache()->refreshStats();
   ASSERT_LE(kRamBytes, ssdStats.bytesRead);
 
   // We re-read the second half and add another half capacity of new entries. We
@@ -665,7 +665,7 @@ TEST_F(AsyncDataCacheTest, ssd) {
 
   // Wait for writes to finish and make a checkpoint.
   cache_->ssdCache()->shutdown();
-  auto ssdStatsAfterShutdown = cache_->ssdCache()->stats();
+  auto ssdStatsAfterShutdown = cache_->ssdCache()->refreshStats();
   ASSERT_GT(ssdStatsAfterShutdown.bytesWritten, ssdStats.bytesWritten);
   ASSERT_GT(ssdStatsAfterShutdown.bytesRead, ssdStats.bytesRead);
 
@@ -687,7 +687,7 @@ TEST_F(AsyncDataCacheTest, ssd) {
   });
   LOG(INFO) << "State after starting 3/4 shards from checkpoint: "
             << cache_->toString();
-  const auto ssdStatsFromCP = cache_->ssdCache()->stats();
+  const auto ssdStatsFromCP = cache_->ssdCache()->refreshStats();
   ASSERT_EQ(ssdStatsFromCP.readCheckpointErrors, 1);
 }
 

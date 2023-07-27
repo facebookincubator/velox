@@ -69,6 +69,9 @@ class ClockTimer {
   uint64_t start_;
 };
 
+// Returns the current epoch time in seconds.
+size_t getCurrentTimeSec();
+
 /// Returns the current epoch time in milliseconds.
 size_t getCurrentTimeMs();
 

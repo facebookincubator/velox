@@ -110,6 +110,7 @@ struct RawFileCacheKey {
     return offset == other.offset && fileNum == other.fileNum;
   }
 };
+
 } // namespace facebook::velox::cache
 
 namespace std {
@@ -509,6 +510,12 @@ struct CacheStats {
   // Sum of scores of evicted entries. This serves to infer an average
   // lifetime for entries in cache.
   int64_t sumEvictScore{};
+  // Min age of entries since the raw file was opened to load the cache.
+  int64_t entryAgeSecsMin{std::numeric_limits<int64_t>::max()};
+  // Max age of entries since the raw file was opened to load the cache.
+  int64_t entryAgeSecsMax{};
+  // Average age of entries since the raw file was opened to load the cache.
+  int64_t entryAgeSecsAvg{};
 
   std::shared_ptr<SsdCacheStats> ssdStats = nullptr;
 };
@@ -687,6 +694,8 @@ class AsyncDataCache : public memory::Cache {
   /// Returns true if there is an entry for 'key'. Updates access time.
   bool exists(RawFileCacheKey key) const;
 
+  /// Returns snapshot of the aggregated stats from all shards and the stats of
+  /// SSD cache if used.
   CacheStats refreshStats() const;
 
   std::string toString() const;

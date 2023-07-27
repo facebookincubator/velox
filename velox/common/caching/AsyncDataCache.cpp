@@ -17,6 +17,7 @@
 #include "velox/common/caching/AsyncDataCache.h"
 #include <velox/common/base/BitUtil.h>
 #include "velox/common/caching/FileIds.h"
+#include "velox/common/caching/FileInfoMap.h"
 #include "velox/common/caching/SsdCache.h"
 
 #include <folly/executors/QueuedImmediateExecutor.h>
@@ -453,20 +454,47 @@ void CacheShard::calibrateThreshold() {
 
 void CacheShard::updateStats(CacheStats& stats) {
   std::lock_guard<std::mutex> l(mutex_);
+
+  const auto fileInfoMap = FileInfoMap::getInstance();
+  const int64_t current = getCurrentTimeSec();
   for (auto& entry : entries_) {
     if (!entry || !entry->key_.fileNum.hasValue()) {
       ++stats.numEmptyEntries;
       continue;
-    } else if (entry->isExclusive()) {
-      ++stats.numExclusive;
-    } else if (entry->isShared()) {
-      ++stats.numShared;
+    } else {
+      ++stats.numEntries;
+      if (entry->isExclusive()) {
+        ++stats.numExclusive;
+      } else if (entry->isShared()) {
+        ++stats.numShared;
+      }
+
+      if (fileInfoMap != nullptr) {
+        const auto* fileInfo = fileInfoMap->find(entry->key_.fileNum.id());
+        if (fileInfo == nullptr) {
+          VELOX_CACHE_LOG(ERROR) << fmt::format(
+              "Cannot find the raw file open info for file id {}.",
+              entry->key_.fileNum.id());
+        }
+
+        const double entryAge = fileInfo ? current - fileInfo->openTimeSec : 0;
+        VELOX_DCHECK_GE(
+            entryAge,
+            0,
+            "AsyncDataCache entry age is negative for file id {}",
+            entry->key_.fileNum.id());
+        stats.entryAgeSecsMin =
+            std::min<int64_t>(stats.entryAgeSecsMin, entryAge);
+        stats.entryAgeSecsMax =
+            std::max<int64_t>(stats.entryAgeSecsMax, entryAge);
+        stats.entryAgeSecsAvg +=
+            (entryAge - stats.entryAgeSecsAvg) / stats.numEntries;
+      }
     }
     if (entry->isPrefetch_) {
       ++stats.numPrefetch;
       stats.prefetchBytes += entry->size();
     }
-    ++stats.numEntries;
     stats.tinySize += entry->tinyData_.size();
     stats.tinyPadding += entry->tinyData_.capacity() - entry->tinyData_.size();
     stats.largeSize += entry->size_;
@@ -480,6 +508,11 @@ void CacheShard::updateStats(CacheStats& stats) {
   stats.numWaitExclusive += numWaitExclusive_;
   stats.sumEvictScore += sumEvictScore_;
   stats.allocClocks += allocClocks_;
+
+  VELOX_DCHECK_GE(
+      stats.entryAgeSecsAvg,
+      0,
+      "Average AsyncDataCache entry age is negative.");
 }
 
 void CacheShard::appendSsdSaveable(std::vector<CachePin>& pins) {
@@ -701,12 +734,16 @@ void AsyncDataCache::saveToSsd() {
 }
 
 CacheStats AsyncDataCache::refreshStats() const {
+  auto* mutex =
+      FileInfoMap::exists() ? &FileInfoMap::getInstance()->mutex() : nullptr;
+  folly::SharedMutex::ReadHolder l(mutex);
+
   CacheStats stats;
   for (auto& shard : shards_) {
     shard->updateStats(stats);
   }
   if (ssdCache_ != nullptr) {
-    stats.ssdStats = std::make_shared<SsdCacheStats>(ssdCache_->stats());
+    stats.ssdStats = std::make_shared<SsdCacheStats>(ssdCache_->refreshStats());
   }
   return stats;
 }

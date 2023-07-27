@@ -15,6 +15,7 @@
 add_library(
   velox_caching
   FileIds.cpp
+  FileInfoMap.cpp
   StringIdMap.cpp
   AsyncDataCache.cpp
   ScanTracker.cpp

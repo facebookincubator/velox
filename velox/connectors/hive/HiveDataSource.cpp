@@ -20,6 +20,7 @@
 #include <unordered_map>
 
 #include "velox/common/caching/AsyncDataCache.h"
+#include "velox/common/caching/FileInfoMap.h"
 #include "velox/dwio/common/CachedBufferedInput.h"
 #include "velox/dwio/common/ReaderFactory.h"
 #include "velox/expression/ExprToSubfieldFilter.h"
@@ -543,6 +544,16 @@ void HiveDataSource::addSplit(std::shared_ptr<ConnectorSplit> split) {
   VLOG(1) << "Adding split " << split_->toString();
 
   fileHandle_ = fileHandleFactory_->generate(split_->filePath).second;
+  // Here we keep adding new entries to the FileInfoMap when new fileHandles are
+  // generated. Creator of FileInfoMap (calling FileInfoMap::create()) is
+  // responsible for FileInfoMap size control, for example, by calling
+  // FileInfoMap::deleteNotInCache.
+  if (cache::FileInfoMap::exists()) {
+    cache::FileInfoMap::getInstance()->withWLock<void>(
+        [fileNum = fileHandle_->uuid.id()](cache::FileInfoMap& fileInfoMap) {
+          fileInfoMap.addOpenFileInfo(fileNum);
+        });
+  }
   auto input = createBufferedInput(*fileHandle_, readerOpts_);
 
   if (readerOpts_.getFileFormat() != dwio::common::FileFormat::UNKNOWN) {

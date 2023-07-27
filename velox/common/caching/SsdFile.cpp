@@ -15,11 +15,13 @@
  */
 
 #include "velox/common/caching/SsdFile.h"
+
 #include <folly/Executor.h>
 #include <folly/portability/SysUio.h>
 #include "velox/common/base/AsyncSource.h"
 #include "velox/common/base/SuccinctPrinter.h"
 #include "velox/common/caching/FileIds.h"
+#include "velox/common/caching/FileInfoMap.h"
 #include "velox/common/caching/SsdCache.h"
 
 #include <fcntl.h>
@@ -475,6 +477,10 @@ void SsdFile::updateStats(SsdCacheStats& stats) const {
   // Lock only in tsan build. Incrementing the counters has no synchronized
   // emantics.
   std::shared_lock<std::shared_mutex> l(mutex_);
+  // Call before stats.entriesCached is updated which carries the number of
+  // entries seen so far.
+  updateEntryAgeStats(stats);
+
   stats.entriesWritten += stats_.entriesWritten;
   stats.bytesWritten += stats_.bytesWritten;
   stats.entriesRead += stats_.entriesRead;
@@ -496,6 +502,42 @@ void SsdFile::updateStats(SsdCacheStats& stats) const {
   stats.writeCheckpointErrors += stats_.writeCheckpointErrors;
   stats.readSsdErrors += stats_.readSsdErrors;
   stats.readCheckpointErrors += stats_.readCheckpointErrors;
+}
+
+void SsdFile::updateEntryAgeStats(SsdCacheStats& stats) const {
+  const auto fileInfoMap = FileInfoMap::getInstance();
+  if (!fileInfoMap) {
+    return;
+  }
+
+  const int64_t current = getCurrentTimeSec();
+  int64_t count = 0;
+  for (const auto& entry : entries_) {
+    if (!entry.first.fileNum.hasValue()) {
+      continue;
+    }
+    count++;
+
+    const auto* fileInfo = fileInfoMap->find(entry.first.fileNum.id());
+    if (fileInfo == nullptr) {
+      VELOX_SSD_CACHE_LOG(ERROR) << fmt::format(
+          "Cannot find the raw file open info for file id {}.",
+          entry.first.fileNum.id());
+    }
+
+    const int64_t entryAge = fileInfo ? current - fileInfo->openTimeSec : 0;
+    VELOX_DCHECK_GE(
+        entryAge,
+        0,
+        "SSD entry age is negative for file id {}",
+        entryAge,
+        entry.first.fileNum.id());
+    stats.entryAgeSecsMin = std::min<int64_t>(stats.entryAgeSecsMin, entryAge);
+    stats.entryAgeSecsMax = std::max<int64_t>(stats.entryAgeSecsMax, entryAge);
+    stats.entryAgeSecsAvg +=
+        ((double)entryAge - (double)stats.entryAgeSecsAvg) /
+        (stats.entriesCached + count);
+  }
 }
 
 void SsdFile::clear() {
