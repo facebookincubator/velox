@@ -12,10 +12,12 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-add_library(velox_duckdb_allocator Allocator.cpp)
+add_library(velox_functions_remote_thrift_client ThriftClient.cpp)
+target_link_libraries(velox_functions_remote_thrift_client
+                      PUBLIC velox_remote_function_thrift)
 
-target_link_libraries(velox_duckdb_allocator velox_dwio_common duckdb fmt::fmt)
-
-if(NOT VELOX_DISABLE_GOOGLETEST)
-  target_link_libraries(velox_duckdb_allocator gtest)
-endif()
+add_library(velox_functions_remote Remote.cpp)
+target_link_libraries(
+  velox_functions_remote
+  PUBLIC velox_expression velox_functions_remote_thrift_client
+         velox_type_fbhive Folly::folly)

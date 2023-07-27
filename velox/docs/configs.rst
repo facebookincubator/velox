@@ -286,7 +286,7 @@ Hive Connector
      - bool
      - false
      - True if reading the source file column names as lower case, and planner should guarantee
-     - the input column name and filter is also lower case to achive case-insensitive read..    
+       the input column name and filter is also lower case to achive case-insensitive read.
    * - max-coalesced-bytes
      - integer
      - 512KB
@@ -327,7 +327,7 @@ Hive Connector
      - bool
      - false
      - Use path-style access for all requests to the S3-compatible storage. This is for S3-compatible storage that
-       doesn’t support virtual-hosted-style access.
+       doesn't support virtual-hosted-style access.
    * - hive.s3.ssl.enabled
      - bool
      - true
@@ -383,3 +383,16 @@ Spark-specific Configuration
      - bool
      - true
      - If false, ``size`` function returns null for null input.
+   * - spark.bloom_filter.expected_num_items
+     - integer
+     - 1000000
+     - The default number of expected items for the bloom filter in :spark:func:`bloom_filter_agg` function.
+   * - spark.bloom_filter.num_bits
+     - integer
+     - 8388608
+     - The default number of bits to use for the bloom filter in :spark:func:`bloom_filter_agg` function.
+   * - spark.bloom_filter.max_num_bits
+     - integer
+     - 4194304
+     - The maximum number of bits to use for the bloom filter in :spark:func:`bloom_filter_agg` function,
+       the value of this config can not exceed the default value.
