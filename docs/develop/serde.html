@@ -6,7 +6,7 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" /><meta name="generator" content="Docutils 0.18.1: http://docutils.sourceforge.net/" />
 
-    <title>Testing Tools &#8212; Velox  documentation</title>
+    <title>Serialization Formats &#8212; Velox  documentation</title>
     <link rel="stylesheet" type="text/css" href="../_static/pygments.css" />
     <link rel="stylesheet" type="text/css" href="../_static/nature.css" />
     <script data-url_root="../" id="documentation_options" src="../_static/documentation_options.js"></script>
@@ -16,8 +16,8 @@
     <script src="../_static/doctools.js"></script>
     <link rel="index" title="Index" href="../genindex.html" />
     <link rel="search" title="Search" href="../search.html" />
-    <link rel="next" title="Expression and Aggregation Fuzzer" href="testing/fuzzer.html" />
-    <link rel="prev" title="CompactRow" href="serde/compactrow.html" /> 
+    <link rel="next" title="UnsafeRow" href="serde/unsaferow.html" />
+    <link rel="prev" title="Spilling" href="spilling.html" /> 
   </head><body>
     <div class="related" role="navigation" aria-label="related navigation">
       <h3>Navigation</h3>
@@ -26,14 +26,14 @@
           <a href="../genindex.html" title="General Index"
              accesskey="I">index</a></li>
         <li class="right" >
-          <a href="testing/fuzzer.html" title="Expression and Aggregation Fuzzer"
+          <a href="serde/unsaferow.html" title="UnsafeRow"
              accesskey="N">next</a> |</li>
         <li class="right" >
-          <a href="serde/compactrow.html" title="CompactRow"
+          <a href="spilling.html" title="Spilling"
              accesskey="P">previous</a> |</li>
         <li class="nav-item nav-item-0"><a href="../index.html">Velox  documentation</a> &#187;</li>
           <li class="nav-item nav-item-1"><a href="../develop.html" accesskey="U">Developer Guide</a> &#187;</li>
-        <li class="nav-item nav-item-this"><a href="">Testing Tools</a></li> 
+        <li class="nav-item nav-item-this"><a href="">Serialization Formats</a></li> 
       </ul>
     </div>  
 
@@ -42,14 +42,27 @@
         <div class="bodywrapper">
           <div class="body" role="main">
             
-  <section id="testing-tools">
-<h1>Testing Tools<a class="headerlink" href="#testing-tools" title="Permalink to this heading">¶</a></h1>
+  <section id="serialization-formats">
+<h1>Serialization Formats<a class="headerlink" href="#serialization-formats" title="Permalink to this heading">¶</a></h1>
+<p>Velox supports three data serialization formats that can be used for data shuffle:
+<a class="reference external" href="https://prestodb.io/docs/current/develop/serialized-page.html">PrestoPage</a>,
+UnsafeRow and CompactRow. PrestoPage is a columnar format. UnsafeRow and CompactRow
+are row-wise formats.</p>
+<p>Velox applications can register their own formats as well.</p>
+<p>PrestoPage format is described in the <a class="reference external" href="https://prestodb.io/docs/current/develop/serialized-page.html">Presto documentation</a>.</p>
+<p>UnsafeRow format comes from <a class="reference external" href="https://jaceklaskowski.gitbooks.io/mastering-spark-sql/content/spark-sql-UnsafeRow.html">Apache Spark</a>.</p>
+<p>CompactRow is similar to UnsafeRow, but it is more space efficient and results in
+fewer bytes shuffled which has a cascading effect on CPU usage (for compression
+and checksumming) and memory (for buffering).</p>
+<p>The details of UnsafeRow and CompactRow formats can be found in the following articles.</p>
 <div class="toctree-wrapper compound">
 <ul>
-<li class="toctree-l1"><a class="reference internal" href="testing/fuzzer.html">Expression and Aggregation Fuzzer</a></li>
-<li class="toctree-l1"><a class="reference internal" href="testing/join-fuzzer.html">Join Fuzzer</a></li>
+<li class="toctree-l1"><a class="reference internal" href="serde/unsaferow.html">UnsafeRow</a></li>
+<li class="toctree-l1"><a class="reference internal" href="serde/compactrow.html">CompactRow</a></li>
 </ul>
 </div>
+<p>Velox also uses another row-wise serialization format, ContainerRowSerde, for storing
+data in aggregation and join operators. This format is similar to CompactRow.</p>
 </section>
 
 
@@ -61,18 +74,18 @@
         <div class="sphinxsidebarwrapper">
   <div>
     <h4>Previous topic</h4>
-    <p class="topless"><a href="serde/compactrow.html"
-                          title="previous chapter">CompactRow</a></p>
+    <p class="topless"><a href="spilling.html"
+                          title="previous chapter">Spilling</a></p>
   </div>
   <div>
     <h4>Next topic</h4>
-    <p class="topless"><a href="testing/fuzzer.html"
-                          title="next chapter">Expression and Aggregation Fuzzer</a></p>
+    <p class="topless"><a href="serde/unsaferow.html"
+                          title="next chapter">UnsafeRow</a></p>
   </div>
   <div role="note" aria-label="source link">
     <h3>This Page</h3>
     <ul class="this-page-menu">
-      <li><a href="../_sources/develop/testing.rst.txt"
+      <li><a href="../_sources/develop/serde.rst.txt"
             rel="nofollow">Show Source</a></li>
     </ul>
    </div>
@@ -97,14 +110,14 @@
           <a href="../genindex.html" title="General Index"
              >index</a></li>
         <li class="right" >
-          <a href="testing/fuzzer.html" title="Expression and Aggregation Fuzzer"
+          <a href="serde/unsaferow.html" title="UnsafeRow"
              >next</a> |</li>
         <li class="right" >
-          <a href="serde/compactrow.html" title="CompactRow"
+          <a href="spilling.html" title="Spilling"
              >previous</a> |</li>
         <li class="nav-item nav-item-0"><a href="../index.html">Velox  documentation</a> &#187;</li>
           <li class="nav-item nav-item-1"><a href="../develop.html" >Developer Guide</a> &#187;</li>
-        <li class="nav-item nav-item-this"><a href="">Testing Tools</a></li> 
+        <li class="nav-item nav-item-this"><a href="">Serialization Formats</a></li> 
       </ul>
     </div>
     <div class="footer" role="contentinfo">

@@ -648,21 +648,241 @@ when they are resolved for a given expression.</p>
 </section>
 <section id="accumulator">
 <h2>Accumulator<a class="headerlink" href="#accumulator" title="Permalink to this heading">¶</a></h2>
-<p>Variable-width accumulators need to use <a class="reference internal" href="arena.html"><span class="doc">HashStringAllocator</span></a> to allocate memory. An instance of the allocator is available in the base class: <em>velox::exec::Aggregate::allocator_</em>.</p>
-<p>Sometimes you’ll need to create a custom accumulator. Sometimes one of the existing accumulators would do the jobs.</p>
-<p>SingleValueAccumulator used by <a class="reference internal" href="../functions/presto/aggregate.html#min" title="min"><code class="xref py py-func docutils literal notranslate"><span class="pre">min()</span></code></a>, <a class="reference internal" href="../functions/presto/aggregate.html#max" title="max"><code class="xref py py-func docutils literal notranslate"><span class="pre">max()</span></code></a> and <a class="reference internal" href="../functions/presto/aggregate.html#arbitrary" title="arbitrary"><code class="xref py py-func docutils literal notranslate"><span class="pre">arbitrary()</span></code></a> functions can be used to store a single value of variable-width type, e.g. string, array, map or struct.</p>
-<p>ValueList accumulator used by <a class="reference internal" href="../functions/presto/aggregate.html#array_agg" title="array_agg"><code class="xref py py-func docutils literal notranslate"><span class="pre">array_agg()</span></code></a> and <a class="reference internal" href="../functions/presto/aggregate.html#map_agg" title="map_agg"><code class="xref py py-func docutils literal notranslate"><span class="pre">map_agg()</span></code></a> accumulates a list of values. This is an append-only accumulator.</p>
-<p>An StlAllocator defined in velox/exec/HashStringAllocator.h can be used to make STL containers (e.g. std::vector) backed by memory allocated via the HashStringAllocator. StlAllocator is not an accumulator itself, but can be used to design accumulators that use STL containers. It is used by <a class="reference internal" href="../functions/presto/aggregate.html#approx_percentile" title="approx_percentile"><code class="xref py py-func docutils literal notranslate"><span class="pre">approx_percentile()</span></code></a> and <a class="reference internal" href="../functions/presto/aggregate.html#approx_distinct" title="approx_distinct"><code class="xref py py-func docutils literal notranslate"><span class="pre">approx_distinct()</span></code></a>.</p>
-<p>Memory allocated from the HashStringAllocator needs to be released in the destroy() method. See velox/aggregates/ArrayAgg.cpp for an example.</p>
-<div class="highlight-c++ notranslate"><div class="highlight"><pre><span></span><span class="kt">void</span><span class="w"> </span><span class="nf">destroy</span><span class="p">(</span><span class="n">folly</span><span class="o">::</span><span class="n">Range</span><span class="o">&lt;</span><span class="kt">char</span><span class="o">**&gt;</span><span class="w"> </span><span class="n">groups</span><span class="p">)</span><span class="w"> </span><span class="k">override</span><span class="w"> </span><span class="p">{</span><span class="w"></span>
-<span class="w">  </span><span class="k">for</span><span class="w"> </span><span class="p">(</span><span class="k">auto</span><span class="w"> </span><span class="n">group</span><span class="w"> </span><span class="o">:</span><span class="w"> </span><span class="n">groups</span><span class="p">)</span><span class="w"> </span><span class="p">{</span><span class="w"></span>
-<span class="w">    </span><span class="k">if</span><span class="w"> </span><span class="p">(</span><span class="k">auto</span><span class="w"> </span><span class="n">header</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">value</span><span class="o">&lt;</span><span class="n">ArrayAccumulator</span><span class="o">&gt;</span><span class="p">(</span><span class="n">group</span><span class="p">)</span><span class="o">-&gt;</span><span class="n">elements</span><span class="p">.</span><span class="n">begin</span><span class="p">())</span><span class="w"> </span><span class="p">{</span><span class="w"></span>
-<span class="w">      </span><span class="n">allocator_</span><span class="o">-&gt;</span><span class="n">free</span><span class="p">(</span><span class="n">header</span><span class="p">);</span><span class="w"></span>
-<span class="w">    </span><span class="p">}</span><span class="w"></span>
-<span class="w">  </span><span class="p">}</span><span class="w"></span>
+<p>In Velox, efficient use of memory is a priority. This includes both optimizing
+the total amount of memory used as well as the number of memory allocations.
+Note that runtime statistics reported by Velox include both peak memory usage
+(in bytes) and number of memory allocations for each operator.</p>
+<p>Aggregate functions use memory to store intermediate results in the
+accumulators. They allocate memory from an arena (<a class="reference internal" href="arena.html"><span class="doc">HashStringAllocator</span></a> class).</p>
+<section id="array-agg-and-valuelist">
+<h3>array_agg and ValueList<a class="headerlink" href="#array-agg-and-valuelist" title="Permalink to this heading">¶</a></h3>
+<p>StlAllocator is an STL-compatible allocator backed by HashStringAllocator that
+can be used with STL containers. For example, one can define an std::vector
+that allocates memory from the arena like so:</p>
+<div class="highlight-c++ notranslate"><div class="highlight"><pre><span></span><span class="n">std</span><span class="o">::</span><span class="n">vector</span><span class="o">&lt;</span><span class="kt">int64_t</span><span class="p">,</span><span class="w"> </span><span class="n">StlAllocator</span><span class="o">&lt;</span><span class="kt">int64_t</span><span class="o">&gt;&gt;</span><span class="w"></span>
+</pre></div>
+</div>
+<p>This is used, for example, in 3-arg versions of <a class="reference internal" href="../functions/presto/aggregate.html#id1" title="min_by"><code class="xref py py-func docutils literal notranslate"><span class="pre">min_by()</span></code></a> and <a class="reference internal" href="../functions/presto/aggregate.html#id0" title="max_by"><code class="xref py py-func docutils literal notranslate"><span class="pre">max_by()</span></code></a> with
+fixed-width type inputs (e.g. integers).</p>
+<p>There is also an AlignedStlAllocator that provides aligned allocations from the
+arena and can be used with <a class="reference external" href="https://engineering.fb.com/2019/04/25/developer-tools/f14/">F14</a>
+containers which require 16-byte alignment. One can define an F14FastMap that
+allocates memory from the arena like so:</p>
+<div class="highlight-c++ notranslate"><div class="highlight"><pre><span></span><span class="n">folly</span><span class="o">::</span><span class="n">F14FastMap</span><span class="o">&lt;</span><span class="w"></span>
+<span class="w">      </span><span class="kt">int64_t</span><span class="p">,</span><span class="w"></span>
+<span class="w">      </span><span class="kt">double</span><span class="p">,</span><span class="w"></span>
+<span class="w">      </span><span class="n">std</span><span class="o">::</span><span class="n">hash</span><span class="o">&lt;</span><span class="kt">int64_t</span><span class="o">&gt;</span><span class="p">,</span><span class="w"></span>
+<span class="w">      </span><span class="n">std</span><span class="o">::</span><span class="n">equal_to</span><span class="o">&lt;</span><span class="kt">int64_t</span><span class="o">&gt;</span><span class="p">,</span><span class="w"></span>
+<span class="w">      </span><span class="n">AlignedStlAllocator</span><span class="o">&lt;</span><span class="n">std</span><span class="o">::</span><span class="n">pair</span><span class="o">&lt;</span><span class="k">const</span><span class="w"> </span><span class="kt">int64_t</span><span class="p">,</span><span class="w"> </span><span class="kt">double</span><span class="o">&gt;</span><span class="p">,</span><span class="w"> </span><span class="mi">16</span><span class="o">&gt;&gt;</span><span class="w"></span>
+</pre></div>
+</div>
+<p>You can find an example usage in <a class="reference internal" href="../functions/presto/aggregate.html#histogram" title="histogram"><code class="xref py py-func docutils literal notranslate"><span class="pre">histogram()</span></code></a> aggregation function.</p>
+<p>An <a class="reference internal" href="../functions/presto/aggregate.html#array_agg" title="array_agg"><code class="xref py py-func docutils literal notranslate"><span class="pre">array_agg()</span></code></a> function on primitive types could be implemented using
+std::vector&lt;T&gt;, but it would not be efficient. Why is that? If one doesn’t
+use ‘reserve’ method to provide a hint to std::vector about how many entries will be
+added, the default behavior is to allocate memory in powers of 2, e.g. first
+allocate 1 entry, then 2, then 4, 8, 16, etc. Every time new allocation is
+made the data is copied into the new memory buffer and the old buffer is
+released. One can see this by instrumenting StlAllocator::allocate and
+deallocate methods to add logging and run a simple loop to add elements to a
+vector:</p>
+<div class="highlight-c++ notranslate"><div class="highlight"><pre><span></span><span class="n">std</span><span class="o">::</span><span class="n">vector</span><span class="o">&lt;</span><span class="kt">double</span><span class="p">,</span><span class="w"> </span><span class="n">StlAllocator</span><span class="o">&lt;</span><span class="kt">double</span><span class="o">&gt;&gt;</span><span class="w"> </span><span class="n">data</span><span class="p">(</span><span class="w"></span>
+<span class="w">   </span><span class="mi">0</span><span class="p">,</span><span class="w"> </span><span class="n">StlAllocator</span><span class="o">&lt;</span><span class="kt">double</span><span class="o">&gt;</span><span class="p">(</span><span class="n">allocator_</span><span class="p">.</span><span class="n">get</span><span class="p">()));</span><span class="w"></span>
+
+
+<span class="k">for</span><span class="w"> </span><span class="p">(</span><span class="k">auto</span><span class="w"> </span><span class="n">i</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">0</span><span class="p">;</span><span class="w"> </span><span class="n">i</span><span class="w"> </span><span class="o">&lt;</span><span class="w"> </span><span class="mi">100</span><span class="p">;</span><span class="w"> </span><span class="o">++</span><span class="n">i</span><span class="p">)</span><span class="w"> </span><span class="p">{</span><span class="w"></span>
+<span class="w"> </span><span class="n">data</span><span class="p">.</span><span class="n">push_back</span><span class="p">(</span><span class="n">i</span><span class="p">);</span><span class="w"></span>
 <span class="p">}</span><span class="w"></span>
 </pre></div>
 </div>
+<div class="highlight-text notranslate"><div class="highlight"><pre><span></span>E20230714 14:57:33.717708 975289 HashStringAllocator.h:497] allocate 1
+E20230714 14:57:33.734280 975289 HashStringAllocator.h:497] allocate 2
+E20230714 14:57:33.734321 975289 HashStringAllocator.h:506] free 1
+E20230714 14:57:33.734352 975289 HashStringAllocator.h:497] allocate 4
+E20230714 14:57:33.734381 975289 HashStringAllocator.h:506] free 2
+E20230714 14:57:33.734416 975289 HashStringAllocator.h:497] allocate 8
+E20230714 14:57:33.734445 975289 HashStringAllocator.h:506] free 4
+E20230714 14:57:33.734481 975289 HashStringAllocator.h:497] allocate 16
+E20230714 14:57:33.734513 975289 HashStringAllocator.h:506] free 8
+E20230714 14:57:33.734544 975289 HashStringAllocator.h:497] allocate 32
+E20230714 14:57:33.734575 975289 HashStringAllocator.h:506] free 16
+E20230714 14:57:33.734606 975289 HashStringAllocator.h:497] allocate 64
+E20230714 14:57:33.734637 975289 HashStringAllocator.h:506] free 32
+E20230714 14:57:33.734668 975289 HashStringAllocator.h:497] allocate 128
+E20230714 14:57:33.734699 975289 HashStringAllocator.h:506] free 64
+E20230714 14:57:33.734731 975289 HashStringAllocator.h:506] free 128
+</pre></div>
+</div>
+<p>Reallocating memory and copying data is not cheap. To avoid this overhead we
+introduced ValueList primitive and used it to implement array_agg.</p>
+<p>ValueList is an append-only data structure that allows appending values from any
+Velox Vector and reading values back into a Velox Vector. ValueList doesn’t
+require a contiguous chunk of memory and therefore doesn’t need to re-allocate
+and copy when it runs out of space. It just allocates another chunk and starts
+filling that up.</p>
+<p>ValueList is designed to work with data that comes from Velox Vectors, hence,
+its API is different from std::vector. You append values from a DecodedVector
+and read values back into a flat vector. Here is an example of usage:</p>
+<div class="highlight-c++ notranslate"><div class="highlight"><pre><span></span><span class="n">DecodedVector</span><span class="w"> </span><span class="nf">decoded</span><span class="p">(</span><span class="o">*</span><span class="n">data</span><span class="p">);</span><span class="w"></span>
+
+<span class="c1">// Store data.</span>
+<span class="n">ValueList</span><span class="w"> </span><span class="n">values</span><span class="p">;</span><span class="w"></span>
+<span class="k">for</span><span class="w"> </span><span class="p">(</span><span class="k">auto</span><span class="w"> </span><span class="n">i</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">0</span><span class="p">;</span><span class="w"> </span><span class="n">i</span><span class="w"> </span><span class="o">&lt;</span><span class="w"> </span><span class="mi">100</span><span class="p">;</span><span class="w"> </span><span class="o">++</span><span class="n">i</span><span class="p">)</span><span class="w"> </span><span class="p">{</span><span class="w"></span>
+<span class="w"> </span><span class="n">values</span><span class="p">.</span><span class="n">appendValue</span><span class="p">(</span><span class="n">decoded</span><span class="p">,</span><span class="w"> </span><span class="n">i</span><span class="p">,</span><span class="w"> </span><span class="n">allocator</span><span class="p">());</span><span class="w"></span>
+<span class="p">}</span><span class="w"></span>
+
+
+<span class="c1">// Read data back.</span>
+<span class="k">auto</span><span class="w"> </span><span class="n">copy</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">BaseVector</span><span class="o">::</span><span class="n">create</span><span class="p">(</span><span class="n">DOUBLE</span><span class="p">(),</span><span class="w"> </span><span class="mi">100</span><span class="p">,</span><span class="w"> </span><span class="n">pool</span><span class="p">());</span><span class="w"></span>
+<span class="n">aggregate</span><span class="o">::</span><span class="n">ValueListReader</span><span class="w"> </span><span class="nf">reader</span><span class="p">(</span><span class="n">values</span><span class="p">);</span><span class="w"></span>
+<span class="k">for</span><span class="w"> </span><span class="p">(</span><span class="k">auto</span><span class="w"> </span><span class="n">i</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">0</span><span class="p">;</span><span class="w"> </span><span class="n">i</span><span class="w"> </span><span class="o">&lt;</span><span class="w"> </span><span class="mi">100</span><span class="p">;</span><span class="w"> </span><span class="o">++</span><span class="n">i</span><span class="p">)</span><span class="w"> </span><span class="p">{</span><span class="w"></span>
+<span class="w"> </span><span class="n">reader</span><span class="p">.</span><span class="n">next</span><span class="p">(</span><span class="o">*</span><span class="n">copy</span><span class="p">,</span><span class="w"> </span><span class="n">i</span><span class="p">);</span><span class="w"></span>
+<span class="p">}</span><span class="w"></span>
+</pre></div>
+</div>
+<p>ValueList supports all types, so you can use it to append fixed-width values as
+well as strings, arrays, maps and structs.</p>
+<p>When storing complex types, ValueList serializes the values using
+ContainerRowSerde.</p>
+<p>ValueList preserves the null flags as well, so you can store a list of nullable
+values in it.</p>
+<p>The array_agg is implemented using ValueList for the accumulator.</p>
+<p>ValueList needs a pointer to the arena for appending data. It doesn’t take an
+arena in the constructor and doesn’t store it, because that would require 8
+bytes of memory per group in the aggregation operator. Instead,
+ValueList::appendValue method takes a pointer to the arena as an argument.
+Consequently, ValueList’s destructor cannot release the memory back to the
+arena and requires the user to explicitly call the free
+(HashStringAllocator*) method.</p>
+</section>
+<section id="min-max-and-singlevalueaccumulator">
+<h3>min, max, and SingleValueAccumulator<a class="headerlink" href="#min-max-and-singlevalueaccumulator" title="Permalink to this heading">¶</a></h3>
+<p><a class="reference internal" href="../functions/presto/aggregate.html#min" title="min"><code class="xref py py-func docutils literal notranslate"><span class="pre">min()</span></code></a> and <a class="reference internal" href="../functions/presto/aggregate.html#max" title="max"><code class="xref py py-func docutils literal notranslate"><span class="pre">max()</span></code></a> functions store a single value in the accumulator
+(the current min or max value). They use SingleValueAccumulator to store
+strings, arrays, maps and structs. When processing a new value, we compare
+it with the stored value and replace the stored value if necessary.</p>
+<p>Similar to ValueList, SingleValueAccumulator serializes the values using
+ContainerRowSerde. SingleValueAccumulator provides a compare method to compare
+stored value with a row of a DecodedVector.</p>
+<p>This accumulator is also used in the implementation of the <a class="reference internal" href="../functions/presto/aggregate.html#arbitrary" title="arbitrary"><code class="xref py py-func docutils literal notranslate"><span class="pre">arbitrary()</span></code></a>
+aggregate function which stores the first value in the accumulator.</p>
+</section>
+<section id="set-agg-set-union-strings-and-addressablenonnullvaluelist">
+<h3>set_agg, set_union, Strings and AddressableNonNullValueList<a class="headerlink" href="#set-agg-set-union-strings-and-addressablenonnullvaluelist" title="Permalink to this heading">¶</a></h3>
+<p><a class="reference internal" href="../functions/presto/aggregate.html#set_agg" title="set_agg"><code class="xref py py-func docutils literal notranslate"><span class="pre">set_agg()</span></code></a> function accumulates a set of unique values into an F14FastSet
+configured to allocate memory from the arena via AlignedStlAllocator.
+Fixed-width values are stored directly in F14FastSet. Memory allocation pattern
+for F14 data structures is similar to std::vector. F14 allocates memory in
+powers on 2, copies data and frees previously allocated memory. Hence, we do
+not store strings directly in the F14 set. Instead, Velox writes strings into
+the arena and stores a StringView pointing to the arena in the set.</p>
+<p>In general, when writing to the arena, one is not guaranteed a contiguous write.
+However, for StringViews to work we must ensure that strings written into the
+arena are contiguous. Strings helper class provides this functionality. Its
+append method takes a StringView and a pointer to the arena, copies the string
+into the arena and returns a StringView pointing to the copy.</p>
+<div class="highlight-c++ notranslate"><div class="highlight"><pre><span></span><span class="c1">/// Copies the string into contiguous memory allocated via</span>
+<span class="c1">/// HashStringAllocator. Returns StringView over the copy.</span>
+<span class="n">StringView</span><span class="w"> </span><span class="nf">append</span><span class="p">(</span><span class="n">StringView</span><span class="w"> </span><span class="n">value</span><span class="p">,</span><span class="w"> </span><span class="n">HashStringAllocator</span><span class="o">&amp;</span><span class="w"> </span><span class="n">allocator</span><span class="p">);</span><span class="w"></span>
+</pre></div>
+</div>
+<p>Strings class provides a free method to release memory back to the arena.</p>
+<div class="highlight-c++ notranslate"><div class="highlight"><pre><span></span><span class="c1">/// Frees memory used by the strings. StringViews returned from &#39;append&#39;</span>
+<span class="c1">/// become invalid after this call.</span>
+<span class="kt">void</span><span class="w"> </span><span class="nf">free</span><span class="p">(</span><span class="n">HashStringAllocator</span><span class="o">&amp;</span><span class="w"> </span><span class="n">allocator</span><span class="p">);</span><span class="w"></span>
+</pre></div>
+</div>
+<p>When aggregating complex types (arrays, maps or structs), we use
+AddressableNonNullValueList which writes values to the arena and returns
+a “pointer” to the written value which we store in the F14 set.
+AddressableNonNullValueList provides methods to compute a hash of a value and
+compare two values. AddressableNonNullValueList uses ContainerRowSerde for
+serializing data and comparing serialized values.</p>
+<div class="highlight-c++ notranslate"><div class="highlight"><pre><span></span><span class="c1">/// A set of pointers to values stored in AddressableNonNullValueList.</span>
+<span class="n">SetAccumulator</span><span class="o">&lt;</span><span class="w"></span>
+<span class="w">   </span><span class="n">HashStringAllocator</span><span class="o">::</span><span class="n">Position</span><span class="p">,</span><span class="w"></span>
+<span class="w">   </span><span class="n">AddressableNonNullValueList</span><span class="o">::</span><span class="n">Hash</span><span class="p">,</span><span class="w"></span>
+<span class="w">   </span><span class="n">AddressableNonNullValueList</span><span class="o">::</span><span class="n">EqualTo</span><span class="o">&gt;</span><span class="w"></span>
+<span class="w">   </span><span class="n">base</span><span class="p">;</span><span class="w"></span>
+</pre></div>
+</div>
+<p>AddressableNonNullValueList allows to append a value and erase the last value.
+This functionality is sufficient for set_agg and set_union. When processing a
+new value, we append it to the list, get a “pointer”, insert that “pointer”
+into F14 set and if the “pointer” points to a duplicate value we remove it from
+the list.</p>
+<p>Like all other arena-based accumulators, AddressableNonNullValueList provides a
+free method to return memory back to the arena.</p>
+<p>Note: AddressableNonNullValueList is different from ValueList in that it
+provides access to individual values (hence, the “Addressable” prefix in the
+name) while ValueList does not. With ValueList one can append values, then copy
+all the values into a Vector. Adhoc access to individual elements is not
+available in ValueList.</p>
+<p>SetAccumulator&lt;T&gt; template implements a simple interface to accumulate unique
+values. It is implemented using F14FastSet, Strings and
+AddressableNonNullValueList. T can be a fixed-width type like int32_t or
+int64_t, StringView or ComplexType.</p>
+<p>addValue and addValues method allow to add one or multiple values from a vector.</p>
+<div class="highlight-c++ notranslate"><div class="highlight"><pre><span></span><span class="c1">/// Adds value if new. No-op if the value was added before.</span>
+<span class="kt">void</span><span class="w"> </span><span class="n">addValue</span><span class="p">(</span><span class="w"></span>
+<span class="w">   </span><span class="k">const</span><span class="w"> </span><span class="n">DecodedVector</span><span class="o">&amp;</span><span class="w"> </span><span class="n">decoded</span><span class="p">,</span><span class="w"></span>
+<span class="w">   </span><span class="n">vector_size_t</span><span class="w"> </span><span class="n">index</span><span class="p">,</span><span class="w"></span>
+<span class="w">   </span><span class="n">HashStringAllocator</span><span class="o">*</span><span class="w"> </span><span class="n">allocator</span><span class="p">)</span><span class="c1">/// Adds new values from an array.</span>
+
+<span class="kt">void</span><span class="w"> </span><span class="n">addValues</span><span class="p">(</span><span class="w"></span>
+<span class="w">   </span><span class="k">const</span><span class="w"> </span><span class="n">ArrayVector</span><span class="o">&amp;</span><span class="w"> </span><span class="n">arrayVector</span><span class="p">,</span><span class="w"></span>
+<span class="w">   </span><span class="n">vector_size_t</span><span class="w"> </span><span class="n">index</span><span class="p">,</span><span class="w"></span>
+<span class="w">   </span><span class="k">const</span><span class="w"> </span><span class="n">DecodedVector</span><span class="o">&amp;</span><span class="w"> </span><span class="n">values</span><span class="p">,</span><span class="w"></span>
+<span class="w">   </span><span class="n">HashStringAllocator</span><span class="o">*</span><span class="w"> </span><span class="n">allocator</span><span class="p">)</span><span class="w"></span>
+</pre></div>
+</div>
+<p>size() method returns the number of unique values.</p>
+<div class="highlight-c++ notranslate"><div class="highlight"><pre><span></span><span class="c1">/// Returns number of unique values including null.</span>
+<span class="kt">size_t</span><span class="w"> </span><span class="n">size</span><span class="p">()</span><span class="w"> </span><span class="k">const</span><span class="w"></span>
+</pre></div>
+</div>
+<p>extractValues method allows to extract unique values into a vector.</p>
+<div class="highlight-c++ notranslate"><div class="highlight"><pre><span></span><span class="c1">/// Copies the unique values and null into the specified vector starting at</span>
+<span class="c1">/// the specified offset.</span>
+<span class="n">vector_size_t</span><span class="w"> </span><span class="n">extractValues</span><span class="p">(</span><span class="n">FlatVector</span><span class="o">&lt;</span><span class="n">T</span><span class="o">&gt;&amp;</span><span class="w"> </span><span class="n">values</span><span class="p">,</span><span class="w"> </span><span class="n">vector_size_t</span><span class="w"> </span><span class="n">offset</span><span class="p">)</span><span class="w"></span>
+
+<span class="c1">/// For complex types.</span>
+<span class="n">vector_size_t</span><span class="w"> </span><span class="n">extractValues</span><span class="p">(</span><span class="n">BaseVector</span><span class="o">&amp;</span><span class="w"> </span><span class="n">values</span><span class="p">,</span><span class="w"> </span><span class="n">vector_size_t</span><span class="w"> </span><span class="n">offset</span><span class="p">)</span><span class="w"></span>
+</pre></div>
+</div>
+<p>Both <a class="reference internal" href="../functions/presto/aggregate.html#set_agg" title="set_agg"><code class="xref py py-func docutils literal notranslate"><span class="pre">set_agg()</span></code></a> and <a class="reference internal" href="../functions/presto/aggregate.html#set_union" title="set_union"><code class="xref py py-func docutils literal notranslate"><span class="pre">set_union()</span></code></a> functions are implemented using
+SetAccumulator.</p>
+</section>
+<section id="map-agg-map-union-and-mapaccumulator">
+<h3>map_agg, map_union, and MapAccumulator<a class="headerlink" href="#map-agg-map-union-and-mapaccumulator" title="Permalink to this heading">¶</a></h3>
+<p><a class="reference internal" href="../functions/presto/aggregate.html#map_agg" title="map_agg"><code class="xref py py-func docutils literal notranslate"><span class="pre">map_agg()</span></code></a> function accumulates keys and values into a map. It discards
+duplicate keys and keeps only one value for each unique key. Map_agg uses
+MapAccumulator&lt;T&gt; template to accumulate the values. Similar to SetAccumulator,
+MapAccumulator is built using F14FastMap, AlignedStlAllocator, Strings and
+AddressableNonNullValueList.</p>
+<p>insert() method adds a pair of (key, value) to the map discarding the value if matching key already exists.</p>
+<div class="highlight-c++ notranslate"><div class="highlight"><pre><span></span><span class="c1">/// Adds key-value pair if entry with that key doesn&#39;t exist yet.</span>
+<span class="kt">void</span><span class="w"> </span><span class="n">insert</span><span class="p">(</span><span class="w"></span>
+<span class="w">   </span><span class="k">const</span><span class="w"> </span><span class="n">DecodedVector</span><span class="o">&amp;</span><span class="w"> </span><span class="n">decodedKeys</span><span class="p">,</span><span class="w"></span>
+<span class="w">   </span><span class="k">const</span><span class="w"> </span><span class="n">DecodedVector</span><span class="o">&amp;</span><span class="w"> </span><span class="n">decodedValues</span><span class="p">,</span><span class="w"></span>
+<span class="w">   </span><span class="n">vector_size_t</span><span class="w"> </span><span class="n">index</span><span class="p">,</span><span class="w"></span>
+<span class="w">   </span><span class="n">HashStringAllocator</span><span class="o">&amp;</span><span class="w"> </span><span class="n">allocator</span><span class="p">)</span><span class="w"></span>
+</pre></div>
+</div>
+<p>size() method returns the number of unique values.</p>
+<p>extract() method copies the keys and the values into vectors, which can be combined to form a MapVector.</p>
+<div class="highlight-c++ notranslate"><div class="highlight"><pre><span></span><span class="kt">void</span><span class="w"> </span><span class="n">extract</span><span class="p">(</span><span class="w"></span>
+<span class="w">   </span><span class="k">const</span><span class="w"> </span><span class="n">VectorPtr</span><span class="o">&amp;</span><span class="w"> </span><span class="n">mapKeys</span><span class="p">,</span><span class="w"></span>
+<span class="w">   </span><span class="k">const</span><span class="w"> </span><span class="n">VectorPtr</span><span class="o">&amp;</span><span class="w"> </span><span class="n">mapValues</span><span class="p">,</span><span class="w"></span>
+<span class="w">   </span><span class="n">vector_size_t</span><span class="w"> </span><span class="n">offset</span><span class="p">)</span><span class="w"></span>
+</pre></div>
+</div>
+<p>Both <a class="reference internal" href="../functions/presto/aggregate.html#map_agg" title="map_agg"><code class="xref py py-func docutils literal notranslate"><span class="pre">map_agg()</span></code></a> and <a class="reference internal" href="../functions/presto/aggregate.html#map_union" title="map_union"><code class="xref py py-func docutils literal notranslate"><span class="pre">map_union()</span></code></a> functions are implemented using
+MapAccumulator.</p>
+<p>When implementing new aggregate functions, consider using ValueList,
+SingleValueAccumulator, Strings, AddressableNonNullValueList and F14
+containers to put together an accumulator that uses memory efficiently.</p>
+</section>
 </section>
 <section id="end-to-end-testing">
 <h2>End-to-End Testing<a class="headerlink" href="#end-to-end-testing" title="Permalink to this heading">¶</a></h2>
@@ -708,7 +928,13 @@ example pull request can be found at
 <li><a class="reference internal" href="#testing">Testing</a></li>
 <li><a class="reference internal" href="#function-names">Function names</a></li>
 <li><a class="reference internal" href="#documentation">Documentation</a></li>
-<li><a class="reference internal" href="#accumulator">Accumulator</a></li>
+<li><a class="reference internal" href="#accumulator">Accumulator</a><ul>
+<li><a class="reference internal" href="#array-agg-and-valuelist">array_agg and ValueList</a></li>
+<li><a class="reference internal" href="#min-max-and-singlevalueaccumulator">min, max, and SingleValueAccumulator</a></li>
+<li><a class="reference internal" href="#set-agg-set-union-strings-and-addressablenonnullvaluelist">set_agg, set_union, Strings and AddressableNonNullValueList</a></li>
+<li><a class="reference internal" href="#map-agg-map-union-and-mapaccumulator">map_agg, map_union, and MapAccumulator</a></li>
+</ul>
+</li>
 <li><a class="reference internal" href="#end-to-end-testing">End-to-End Testing</a></li>
 <li><a class="reference internal" href="#overwrite-intermediate-type-in-presto">Overwrite Intermediate Type in Presto</a></li>
 </ul>
