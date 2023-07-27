@@ -109,12 +109,12 @@ BENCHMARK(compressZstd) {
 
   char testData[] = "hello world!";
   benchmarkCompress(
-      CompressionKind_ZSTD, 
-      memSink, 
-      block, 
-      *pool, 
-      testData, 
-      sizeof(testData), 
+      CompressionKind_ZSTD,
+      memSink,
+      block,
+      *pool,
+      testData,
+      sizeof(testData),
       NULL);
 }
 
