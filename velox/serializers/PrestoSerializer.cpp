@@ -719,6 +719,34 @@ void writeInt64(OutputStream* out, int64_t value) {
   out->write(reinterpret_cast<char*>(&value), sizeof(value));
 }
 
+class CountingOutputStream : public OutputStream {
+ public:
+  explicit CountingOutputStream() : OutputStream{nullptr} {}
+
+  void write(const char* s, std::streamsize count) override {
+    pos_ += count;
+    if (numBytes_ < pos_) {
+      numBytes_ = pos_;
+    }
+  }
+
+  std::streampos tellp() const override {
+    return pos_;
+  }
+
+  void seekp(std::streampos pos) override {
+    pos_ = pos;
+  }
+
+  std::streamsize size() const {
+    return numBytes_;
+  }
+
+ private:
+  std::streamsize numBytes_{0};
+  std::streampos pos_{0};
+};
+
 // Appendable container for serialized values. To append a value at a
 // time, call appendNull or appendNonNull first. Then call
 // appendLength if the type has a length. A null value has a length of
@@ -824,80 +852,9 @@ class VectorStream {
 
   // Similiar as flush(OutputStream* out)
   size_t serializedSize() {
-    size_t size = 0;
-    size += header_.size;
-    switch (type_->kind()) {
-      case TypeKind::ROW:
-        if (isTimestampWithTimeZoneType(type_)) {
-          size += sizeof(int32_t);
-          size += nullsSize();
-          size += values_.size();
-          return size;
-        }
-        size += sizeof(int32_t);
-
-        for (auto& child : children_) {
-          size += child->serializedSize();
-        }
-        size += sizeof(int32_t);
-        if (nullCount_ + nonNullCount_ == 0) {
-          size += sizeof(int32_t);
-          // If nothing was added, there is still one offset in the wire format.
-        }
-        size += lengths_.size();
-        size += nullsSize();
-        return size;
-
-      case TypeKind::ARRAY:
-        size += children_[0]->serializedSize();
-        size += sizeof(int32_t);
-        if (nullCount_ + nonNullCount_ == 0) {
-          // If nothing was added, there is still one offset in the wire format.
-          size += sizeof(int32_t);
-        }
-        size += lengths_.size();
-        size += nullsSize();
-        return size;
-
-      case TypeKind::MAP: {
-        size += children_[0]->serializedSize();
-        size += children_[1]->serializedSize();
-        // hash table size. -1 means not included in serialization.
-        size += sizeof(int32_t);
-        size += sizeof(int32_t);
-        if (nullCount_ + nonNullCount_ == 0) {
-          size += sizeof(int32_t);
-          // If nothing was added, there is still one offset in the wire format.
-        }
-        size += lengths_.size();
-        size += nullsSize();
-        return size;
-      }
-
-      case TypeKind::VARCHAR:
-      case TypeKind::VARBINARY:
-        size += sizeof(int32_t);
-        size += lengths_.size();
-        size += nullsSize();
-        size += sizeof(int32_t);
-        size += values_.size();
-        return size;
-
-      default:
-        size += sizeof(int32_t);
-        size += nullsSize();
-        size += values_.size();
-    }
-    return size;
-  }
-
-  size_t nullsSize() {
-    size_t size = 0;
-    size += 1;
-    if (nullCount_) {
-      size += nulls_.flushSize();
-    }
-    return size;
+    CountingOutputStream out;
+    flush(&out);
+    return out.size();
   }
 
   // Writes out the accumulated contents. Does not change the state.

@@ -204,17 +204,6 @@ void ByteStream::seekp(std::streampos position) {
   VELOX_FAIL("Seeking past end of ByteStream: {}", position);
 }
 
-size_t ByteStream::flushSize() {
-  updateEnd();
-  size_t size = 0;
-  for (int32_t i = 0; i < ranges_.size(); ++i) {
-    int32_t count = i == ranges_.size() - 1 ? lastRangeEnd_ : ranges_[i].size;
-    int32_t bytes = isBits_ ? bits::nbytes(count) : count;
-    size += bytes;
-  }
-  return size;
-}
-
 void ByteStream::flush(OutputStream* out) {
   updateEnd();
   for (int32_t i = 0; i < ranges_.size(); ++i) {
