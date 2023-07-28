@@ -138,6 +138,52 @@ AggregationNode::AggregationNode(
   }
 }
 
+AggregationNode::AggregationNode(
+    const PlanNodeId& id,
+    Step step,
+    const std::vector<FieldAccessTypedExprPtr>& groupingKeys,
+    const std::vector<FieldAccessTypedExprPtr>& preGroupedKeys,
+    const std::vector<std::string>& aggregateNames,
+    const std::vector<Aggregate>& aggregates,
+    const std::vector<bool>& aggregateDistincts,
+    bool ignoreNullKeys,
+    PlanNodePtr source)
+    : PlanNode(id),
+      step_(step),
+      groupingKeys_(groupingKeys),
+      preGroupedKeys_(preGroupedKeys),
+      aggregateNames_(aggregateNames),
+      aggregates_(aggregates),
+      aggregateDistincts_(aggregateDistincts),
+      ignoreNullKeys_(ignoreNullKeys),
+      sources_{source},
+      outputType_(getAggregationOutputType(
+          groupingKeys_,
+          aggregateNames_,
+          aggregates_)) {
+  // Empty grouping keys are used in global aggregation:
+  //    SELECT sum(c) FROM t
+  // Empty aggregates are used in distinct:
+  //    SELECT distinct(b, c) FROM t GROUP BY a
+  VELOX_CHECK(
+      !groupingKeys_.empty() || !aggregates_.empty(),
+      "Aggregation must specify either grouping keys or aggregates");
+
+  std::unordered_set<std::string> groupingKeyNames;
+  groupingKeyNames.reserve(groupingKeys.size());
+  for (const auto& key : groupingKeys) {
+    groupingKeyNames.insert(key->name());
+  }
+
+  for (const auto& key : preGroupedKeys) {
+    VELOX_CHECK_EQ(
+        1,
+        groupingKeyNames.count(key->name()),
+        "Pre-grouped key must be one of the grouping keys: {}.",
+        key->name());
+  }
+}
+
 namespace {
 void addFields(
     std::stringstream& stream,

@@ -525,8 +525,7 @@ class AggregationNode : public PlanNode {
       const std::vector<std::string>& aggregateNames,
       const std::vector<Aggregate>& aggregates,
       bool ignoreNullKeys,
-      PlanNodePtr source,
-      const std::vector<bool>& aggregateDistincts = std::vector<bool>());
+      PlanNodePtr source);
 
   AggregationNode(
       const PlanNodeId& id,
