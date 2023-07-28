@@ -43,17 +43,17 @@ class VectorSerializer {
   /// Serialize all rows in a vector.
   void append(const RowVectorPtr& vector);
 
+  /// Returns the maximum serialized size of the data previously added via
+  /// 'append' methods. Can be used to allocate buffer of exact or maximum size
+  /// before calling 'flush'.
+  /// Returns the exact serialized size when data is not compressed.
+  /// Returns the maximum serialized size when data is compressed.
+  ///
   /// Usage
   /// append(vector, ranges);
   /// size_t size = maxSerializedSize();
   /// OutputStream* stream = allocateBuffer(size);
   /// flush(stream);
-  ///
-  /// Returns the maximum serialized size of the data previously added via
-  /// 'append' methods. Can be used to allocate buffer of exact or maximum size
-  /// before calling 'flush'.
-  /// Returns the exact serialized size when data is not compressed.
-  /// Returns the maximum serialized size when data is compressed
   virtual size_t maxSerializedSize() const = 0;
 
   /// Write serialized data to 'stream'.

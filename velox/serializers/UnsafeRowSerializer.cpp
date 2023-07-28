@@ -82,7 +82,7 @@ class UnsafeRowVectorSerializer : public VectorSerializer {
       totalSize += buffer->size();
     }
     return totalSize;
-  };
+  }
 
   void flush(OutputStream* stream) override {
     for (const auto& buffer : buffers_) {

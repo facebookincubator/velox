@@ -723,7 +723,7 @@ class CountingOutputStream : public OutputStream {
  public:
   explicit CountingOutputStream() : OutputStream{nullptr} {}
 
-  void write(const char* s, std::streamsize count) override {
+  void write(const char* /*s*/, std::streamsize count) override {
     pos_ += count;
     if (numBytes_ < pos_) {
       numBytes_ = pos_;
@@ -850,7 +850,7 @@ class VectorStream {
     return children_[index].get();
   }
 
-  // Returns the size to flush to OutputStream before calling `flush`
+  // Returns the size to flush to OutputStream before calling `flush`.
   size_t serializedSize() {
     CountingOutputStream out;
     flush(&out);
