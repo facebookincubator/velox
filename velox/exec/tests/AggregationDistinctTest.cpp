@@ -480,3 +480,4 @@ class AggregationDistinctTest : public OperatorTestBase {
          makeFlatVector<int64_t>({15, 56, 88})});
     assertEqualVectors(expected, actual[0]);
   }
+}
