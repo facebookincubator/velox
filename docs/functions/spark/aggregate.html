@@ -67,7 +67,7 @@ In Velox implementation, <code class="docutils literal notranslate"><span class=
 <p><code class="docutils literal notranslate"><span class="pre">hash</span></code> cannot be null.
 <code class="docutils literal notranslate"><span class="pre">numBits</span></code> specifies max capacity of the bloom filter, which allows to trade accuracy for memory.
 In Spark, the value of <code class="docutils literal notranslate"><span class="pre">numBits</span></code> is automatically capped at config value 67,108,864.
-In Velox, the value of <code class="docutils literal notranslate"><span class="pre">numBits</span></code> is automatically capped at fixed value 4,194,304.</p>
+In Velox, the value of <code class="docutils literal notranslate"><span class="pre">numBits</span></code> is automatically capped at the value of spark.bloom_filter.max_num_bits configuration property.</p>
 <p><code class="docutils literal notranslate"><span class="pre">hash</span></code>, <code class="docutils literal notranslate"><span class="pre">estimatedNumItems</span></code> and <code class="docutils literal notranslate"><span class="pre">numBits</span></code> must be <code class="docutils literal notranslate"><span class="pre">BIGINT</span></code>.</p>
 </dd></dl>
 
@@ -84,7 +84,7 @@ But Spark allows for changing the defaults while Velox does not.</p>
 <dl class="spark function">
 <dt class="sig sig-object spark" id="id1">
 <span class="sig-name descname"><span class="pre">bloom_filter_agg</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">hash</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">varbinary</span></span></span><a class="headerlink" href="#id1" title="Permalink to this definition">¶</a></dt>
-<dd><p>A version of <code class="docutils literal notranslate"><span class="pre">bloom_filter_agg</span></code> that use 4,194,304 as <code class="docutils literal notranslate"><span class="pre">numBits</span></code>.</p>
+<dd><p>A version of <code class="docutils literal notranslate"><span class="pre">bloom_filter_agg</span></code> that use the value of spark.bloom_filter.max_num_bits configuration property as <code class="docutils literal notranslate"><span class="pre">numBits</span></code>.</p>
 <p><code class="docutils literal notranslate"><span class="pre">hash</span></code> cannot be null.</p>
 </dd></dl>
 

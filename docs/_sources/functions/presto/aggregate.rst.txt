@@ -100,9 +100,22 @@ General Aggregate Functions
 
     Returns the maximum value of all input values.
 
+.. function:: max(x, n) -> array<[same as x]>
+
+    Returns ``n`` largest values of all input values of ``x``.
+
 .. function:: min(x) -> [same as input]
 
     Returns the minimum value of all input values.
+
+.. function:: min(x, n) -> array<[same as x]>
+
+    Returns ``n`` smallest values of all input values of ``x``.
+
+.. function:: multimap_agg(key, value) -> map(K,array(V))
+
+    Returns a multimap created from the input ``key`` / ``value`` pairs.
+    Each key can be associated with multiple values.
 
 .. function:: set_agg(x) -> array<[same as input]>
 

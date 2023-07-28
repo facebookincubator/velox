@@ -101,7 +101,7 @@ input and output.</p>
 </tbody>
 </table>
 <p>In some cases, the calculations performed by partial and final aggregations are
-the same. This is the case for the <a class="reference internal" href="../functions/presto/aggregate.html#sum" title="sum"><code class="xref py py-func docutils literal notranslate"><span class="pre">sum()</span></code></a>, <a class="reference internal" href="../functions/presto/aggregate.html#min" title="min"><code class="xref py py-func docutils literal notranslate"><span class="pre">min()</span></code></a> and <a class="reference internal" href="../functions/presto/aggregate.html#max" title="max"><code class="xref py py-func docutils literal notranslate"><span class="pre">max()</span></code></a>
+the same. This is the case for the <a class="reference internal" href="../functions/presto/aggregate.html#sum" title="sum"><code class="xref py py-func docutils literal notranslate"><span class="pre">sum()</span></code></a>, <a class="reference internal" href="../functions/presto/aggregate.html#id3" title="min"><code class="xref py py-func docutils literal notranslate"><span class="pre">min()</span></code></a> and <a class="reference internal" href="../functions/presto/aggregate.html#id2" title="max"><code class="xref py py-func docutils literal notranslate"><span class="pre">max()</span></code></a>
 aggregates. In most cases they are different. For example, partial <a class="reference internal" href="../functions/presto/aggregate.html#count" title="count"><code class="xref py py-func docutils literal notranslate"><span class="pre">count()</span></code></a>
 aggregate counts incoming values and final <a class="reference internal" href="../functions/presto/aggregate.html#count" title="count"><code class="xref py py-func docutils literal notranslate"><span class="pre">count()</span></code></a> aggregate sums up partial
 counts to produce a total.</p>
@@ -120,7 +120,7 @@ computing running total that uses <a class="reference internal" href="../functio
 <li><dl class="simple">
 <dt>Fixed width accumulators:</dt><dd><ul>
 <li><p><a class="reference internal" href="../functions/presto/aggregate.html#count" title="count"><code class="xref py py-func docutils literal notranslate"><span class="pre">count()</span></code></a>, <a class="reference internal" href="../functions/presto/aggregate.html#sum" title="sum"><code class="xref py py-func docutils literal notranslate"><span class="pre">sum()</span></code></a>, <a class="reference internal" href="../functions/presto/aggregate.html#avg" title="avg"><code class="xref py py-func docutils literal notranslate"><span class="pre">avg()</span></code></a></p></li>
-<li><p><a class="reference internal" href="../functions/presto/aggregate.html#min" title="min"><code class="xref py py-func docutils literal notranslate"><span class="pre">min()</span></code></a>, <a class="reference internal" href="../functions/presto/aggregate.html#max" title="max"><code class="xref py py-func docutils literal notranslate"><span class="pre">max()</span></code></a>, <a class="reference internal" href="../functions/presto/aggregate.html#arbitrary" title="arbitrary"><code class="xref py py-func docutils literal notranslate"><span class="pre">arbitrary()</span></code></a> (for fixed-width types)</p></li>
+<li><p><a class="reference internal" href="../functions/presto/aggregate.html#id3" title="min"><code class="xref py py-func docutils literal notranslate"><span class="pre">min()</span></code></a>, <a class="reference internal" href="../functions/presto/aggregate.html#id2" title="max"><code class="xref py py-func docutils literal notranslate"><span class="pre">max()</span></code></a>, <a class="reference internal" href="../functions/presto/aggregate.html#arbitrary" title="arbitrary"><code class="xref py py-func docutils literal notranslate"><span class="pre">arbitrary()</span></code></a> (for fixed-width types)</p></li>
 </ul>
 </dd>
 </dl>
@@ -135,7 +135,7 @@ computing running total that uses <a class="reference internal" href="../functio
 </li>
 <li><dl class="simple">
 <dt>Variable width accumulators which can be modified in any way, not just appended to.</dt><dd><ul>
-<li><p><a class="reference internal" href="../functions/presto/aggregate.html#min" title="min"><code class="xref py py-func docutils literal notranslate"><span class="pre">min()</span></code></a>, <a class="reference internal" href="../functions/presto/aggregate.html#max" title="max"><code class="xref py py-func docutils literal notranslate"><span class="pre">max()</span></code></a> (for strings)</p></li>
+<li><p><a class="reference internal" href="../functions/presto/aggregate.html#id3" title="min"><code class="xref py py-func docutils literal notranslate"><span class="pre">min()</span></code></a>, <a class="reference internal" href="../functions/presto/aggregate.html#id2" title="max"><code class="xref py py-func docutils literal notranslate"><span class="pre">max()</span></code></a> (for strings)</p></li>
 <li><p><a class="reference internal" href="../functions/presto/aggregate.html#arbitrary" title="arbitrary"><code class="xref py py-func docutils literal notranslate"><span class="pre">arbitrary()</span></code></a> (for variable-width types)</p></li>
 <li><p><a class="reference internal" href="../functions/presto/aggregate.html#approx_percentile" title="approx_percentile"><code class="xref py py-func docutils literal notranslate"><span class="pre">approx_percentile()</span></code></a></p></li>
 <li><p><a class="reference internal" href="../functions/presto/aggregate.html#approx_distinct" title="approx_distinct"><code class="xref py py-func docutils literal notranslate"><span class="pre">approx_distinct()</span></code></a></p></li>
@@ -757,7 +757,7 @@ arena and requires the user to explicitly call the free
 </section>
 <section id="min-max-and-singlevalueaccumulator">
 <h3>min, max, and SingleValueAccumulator<a class="headerlink" href="#min-max-and-singlevalueaccumulator" title="Permalink to this heading">¶</a></h3>
-<p><a class="reference internal" href="../functions/presto/aggregate.html#min" title="min"><code class="xref py py-func docutils literal notranslate"><span class="pre">min()</span></code></a> and <a class="reference internal" href="../functions/presto/aggregate.html#max" title="max"><code class="xref py py-func docutils literal notranslate"><span class="pre">max()</span></code></a> functions store a single value in the accumulator
+<p><a class="reference internal" href="../functions/presto/aggregate.html#id3" title="min"><code class="xref py py-func docutils literal notranslate"><span class="pre">min()</span></code></a> and <a class="reference internal" href="../functions/presto/aggregate.html#id2" title="max"><code class="xref py py-func docutils literal notranslate"><span class="pre">max()</span></code></a> functions store a single value in the accumulator
 (the current min or max value). They use SingleValueAccumulator to store
 strings, arrays, maps and structs. When processing a new value, we compare
 it with the stored value and replace the stored value if necessary.</p>
