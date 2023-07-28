@@ -281,7 +281,7 @@ std::unique_ptr<Spiller::SpillStatus> Spiller::writeSpill(int32_t partition) {
       totalBytes += extractSpillVector(
           run.rows, kTargetBatchRows, kTargetBatchBytes, spillVector, written);
       state_.appendToPartition(partition, spillVector);
-      if (totalBytes > state_.targetFileSize()) {
+      if (state_.compressedSize(totalBytes) > state_.targetFileSize()) {
         break;
       }
     }

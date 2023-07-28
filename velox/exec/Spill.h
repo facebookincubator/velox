@@ -571,6 +571,7 @@ class SpillState {
         sortCompareFlags_(sortCompareFlags),
         targetFileSize_(targetFileSize),
         compressionKind_(compressionKind),
+        codec_(compressionKindToCodec(compressionKind)),
         pool_(pool),
         files_(maxPartitions_) {}
 
@@ -590,6 +591,16 @@ class SpillState {
 
   uint64_t targetFileSize() const {
     return targetFileSize_;
+  }
+
+  common::CompressionKind compressionKind() const {
+    return compressionKind_;
+  }
+
+  uint64_t compressedSize(int64_t totalBytes) const {
+    return compressionKind_ == common::CompressionKind_NONE
+        ? totalBytes
+        : codec_->maxCompressedLength(totalBytes);
   }
 
   memory::MemoryPool& pool() const {
@@ -656,6 +667,7 @@ class SpillState {
   const std::vector<CompareFlags> sortCompareFlags_;
   const uint64_t targetFileSize_;
   const common::CompressionKind compressionKind_;
+  const std::unique_ptr<folly::io::Codec> codec_;
 
   memory::MemoryPool& pool_;
 

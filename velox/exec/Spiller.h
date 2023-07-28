@@ -121,7 +121,7 @@ class Spiller {
     // spilling for test.
     int32_t testSpillPct;
 
-    // CompressionKind when spilling, CompressionKind_NONE means no compression
+    // CompressionKind when spilling, CompressionKind_NONE means no compression.
     common::CompressionKind compressionKind;
   };
 

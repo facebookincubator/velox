@@ -49,7 +49,7 @@ class TestRuntimeStatWriter : public BaseRuntimeStatWriter {
 };
 } // namespace
 
-class SpillTest : public testing::Test,
+class SpillTest : public ::testing::TestWithParam<common::CompressionKind>,
                   public facebook::velox::test::VectorTestBase {
  public:
   explicit SpillTest()
@@ -71,6 +71,7 @@ class SpillTest : public testing::Test,
     }
     filesystems::registerLocalFileSystem();
     rng_.seed(1);
+    compressionKind_ = GetParam();
   }
 
   uint8_t randPartitionBitOffset() {
@@ -149,13 +150,14 @@ class SpillTest : public testing::Test,
         1,
         compareFlags,
         targetFileSize,
-        common::CompressionKind_NONE,
+        compressionKind_,
         *pool());
     EXPECT_EQ(targetFileSize, state_->targetFileSize());
     EXPECT_EQ(numPartitions, state_->maxPartitions());
     EXPECT_EQ(0, state_->spilledPartitions());
     EXPECT_TRUE(state_->spilledPartitionSet().empty());
     EXPECT_EQ(0, state_->spilledFiles());
+    EXPECT_EQ(compressionKind_, state_->compressionKind());
 
     for (auto partition = 0; partition < state_->maxPartitions(); ++partition) {
       EXPECT_FALSE(state_->isPartitionSpilled(partition));
@@ -316,6 +318,7 @@ class SpillTest : public testing::Test,
   folly::Random::DefaultGenerator rng_;
   std::shared_ptr<TempDirectoryPath> tempDir_;
   memory::MemoryAllocator* allocator_;
+  common::CompressionKind compressionKind_;
   std::vector<std::optional<int64_t>> values_;
   std::vector<std::vector<RowVectorPtr>> batchesByPartition_;
   std::string spillPath_;
@@ -324,7 +327,7 @@ class SpillTest : public testing::Test,
   std::unique_ptr<TestRuntimeStatWriter> statWriter_;
 };
 
-TEST_F(SpillTest, spillState) {
+TEST_P(SpillTest, spillState) {
   // Set the target file size to a large value to avoid new file creation
   // triggered by batch write.
 
@@ -343,7 +346,7 @@ TEST_F(SpillTest, spillState) {
   spillStateTest(kGB, 2, 10, 10, {}, 10);
 }
 
-TEST_F(SpillTest, spillTimestamp) {
+TEST_P(SpillTest, spillTimestamp) {
   // Verify that timestamp type retains it nanosecond precision when spilled and
   // read back.
   auto tempDirectory = exec::test::TempDirectoryPath::create();
@@ -357,13 +360,7 @@ TEST_F(SpillTest, spillTimestamp) {
       Timestamp{-1, 17'123'456}};
 
   SpillState state(
-      spillPath,
-      1,
-      1,
-      emptyCompareFlags,
-      1024,
-      common::CompressionKind_NONE,
-      *pool());
+      spillPath, 1, 1, emptyCompareFlags, 1024, compressionKind_, *pool());
   int partitionIndex = 0;
   state.setPartitionSpilled(partitionIndex);
   EXPECT_TRUE(state.isPartitionSpilled(partitionIndex));
@@ -385,7 +382,7 @@ TEST_F(SpillTest, spillTimestamp) {
   ASSERT_EQ(nullptr, merge->next());
 }
 
-TEST_F(SpillTest, spillStateWithSmallTargetFileSize) {
+TEST_P(SpillTest, spillStateWithSmallTargetFileSize) {
   // Set the target file size to a small value to open a new file on each batch
   // write.
 
@@ -404,7 +401,7 @@ TEST_F(SpillTest, spillStateWithSmallTargetFileSize) {
   spillStateTest(1, 2, 10, 10, {}, 10 * 2);
 }
 
-TEST_F(SpillTest, spillPartitionId) {
+TEST_P(SpillTest, spillPartitionId) {
   SpillPartitionId partitionId1_2(1, 2);
   ASSERT_EQ(partitionId1_2.partitionBitOffset(), 1);
   ASSERT_EQ(partitionId1_2.partitionNumber(), 2);
@@ -451,7 +448,7 @@ TEST_F(SpillTest, spillPartitionId) {
   }
 }
 
-TEST_F(SpillTest, spillPartitionSet) {
+TEST_P(SpillTest, spillPartitionSet) {
   for (int iter = 0; iter < 5; ++iter) {
     folly::Random::DefaultGenerator rng;
     rng.seed(iter);
@@ -548,7 +545,7 @@ TEST_F(SpillTest, spillPartitionSet) {
   }
 }
 
-TEST_F(SpillTest, spillPartitionSpilt) {
+TEST_P(SpillTest, spillPartitionSpilt) {
   for (int seed = 0; seed < 5; ++seed) {
     SCOPED_TRACE(fmt::format("seed: {}", seed));
     int numBatches = 100;
@@ -594,7 +591,7 @@ TEST_F(SpillTest, spillPartitionSpilt) {
   }
 }
 
-TEST_F(SpillTest, nonExistSpillFileOnDeletion) {
+TEST_P(SpillTest, nonExistSpillFileOnDeletion) {
   const int32_t numRowsPerBatch = 100;
   std::vector<RowVectorPtr> batches;
   setupSpillState(kGB, 1, 2, numRowsPerBatch);
@@ -603,3 +600,10 @@ TEST_F(SpillTest, nonExistSpillFileOnDeletion) {
   tempDir_.reset();
   state_.reset();
 }
+
+INSTANTIATE_TEST_SUITE_P(
+    SpillTestSuite,
+    SpillTest,
+    ::testing::Values(
+        common::CompressionKind_NONE,
+        common::CompressionKind_LZ4));
