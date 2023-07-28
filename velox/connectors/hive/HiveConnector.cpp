@@ -40,6 +40,7 @@
 #include "velox/dwio/parquet/RegisterParquetReader.h" // @manual
 #include "velox/dwio/parquet/RegisterParquetWriter.h" // @manual
 #endif
+#include "velox/connectors/hive/iceberg/IcebergDataSource.h"
 #include "velox/expression/FieldReference.h"
 
 #include <boost/lexical_cast.hpp>
@@ -76,7 +77,8 @@ std::unique_ptr<DataSource> HiveConnector::createDataSource(
     const std::unordered_map<
         std::string,
         std::shared_ptr<connector::ColumnHandle>>& columnHandles,
-    ConnectorQueryCtx* connectorQueryCtx) {
+    ConnectorQueryCtx* connectorQueryCtx,
+    std::shared_ptr<velox::connector::ConnectorSplit> connectorSplit) {
   dwio::common::ReaderOptions options(connectorQueryCtx->memoryPool());
   options.setMaxCoalesceBytes(
       HiveConfig::maxCoalescedBytes(connectorQueryCtx->config()));
@@ -85,16 +87,34 @@ std::unique_ptr<DataSource> HiveConnector::createDataSource(
   options.setFileColumnNamesReadAsLowerCase(
       HiveConfig::isFileColumnNamesReadAsLowerCase(
           connectorQueryCtx->config()));
-  return std::make_unique<HiveDataSource>(
-      outputType,
-      tableHandle,
-      columnHandles,
-      &fileHandleFactory_,
-      connectorQueryCtx->expressionEvaluator(),
-      connectorQueryCtx->cache(),
-      connectorQueryCtx->scanId(),
-      executor_,
-      options);
+
+  auto splitInfo =
+      std::dynamic_pointer_cast<HiveConnectorSplit>(connectorSplit);
+  if (splitInfo->customSplitInfo["table_format"] == "hive_iceberg") {
+    return std::make_unique<iceberg::HiveIcebergDataSource>(
+        outputType,
+        tableHandle,
+        columnHandles,
+        &fileHandleFactory_,
+        connectorQueryCtx->expressionEvaluator(),
+        connectorQueryCtx->cache(),
+        connectorQueryCtx->scanId(),
+        executor_,
+        options,
+        connectorSplit);
+  } else {
+    return std::make_unique<HiveDataSource>(
+        outputType,
+        tableHandle,
+        columnHandles,
+        &fileHandleFactory_,
+        connectorQueryCtx->expressionEvaluator(),
+        connectorQueryCtx->cache(),
+        connectorQueryCtx->scanId(),
+        executor_,
+        options,
+        connectorSplit);
+  }
 }
 
 std::unique_ptr<DataSink> HiveConnector::createDataSink(

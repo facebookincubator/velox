@@ -389,15 +389,16 @@ HiveDataSource::HiveDataSource(
     cache::AsyncDataCache* cache,
     const std::string& scanId,
     folly::Executor* executor,
-    const dwio::common::ReaderOptions& options)
+    const dwio::common::ReaderOptions& options,
+    std::shared_ptr<velox::connector::ConnectorSplit> /*connectorSplit*/)
     : fileHandleFactory_(fileHandleFactory),
       readerOpts_(options),
       pool_(&options.getMemoryPool()),
-      outputType_(outputType),
       expressionEvaluator_(expressionEvaluator),
       cache_(cache),
       scanId_(scanId),
-      executor_(executor) {
+      executor_(executor),
+      outputType_(outputType) {
   // Column handled keyed on the column alias, the name used in the query.
   for (const auto& [canonicalizedName, columnHandle] : columnHandles) {
     auto handle = std::dynamic_pointer_cast<HiveColumnHandle>(columnHandle);

@@ -41,6 +41,7 @@ target_link_libraries(
   velox_functions_lib
   velox_functions_prestosql
   velox_hive_connector
+  velox_hive_iceberg_datasource
   velox_type
   velox_serialization
   velox_exec_test_lib

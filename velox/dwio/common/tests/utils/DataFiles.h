@@ -23,4 +23,5 @@ std::string getDataFilePath(
     const std::string& baseDir,
     const std::string& filePath);
 
+uint64_t getFileSize(const std::string& filePath);
 }

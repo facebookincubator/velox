@@ -51,6 +51,7 @@ target_link_libraries(
   velox_exec_test_lib
   velox_exec
   velox_hive_connector
+  velox_hive_iceberg_datasource
   Folly::folly
   ${FOLLY_BENCHMARK})
 
@@ -81,6 +82,7 @@ target_link_libraries(
   velox_exec_test_lib
   velox_exec
   velox_hive_connector
+  velox_hive_iceberg_datasource
   velox_link_libs
   ${TEST_LINK_LIBS})
 

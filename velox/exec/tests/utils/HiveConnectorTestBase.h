@@ -229,7 +229,7 @@ class HiveConnectorSplitBuilder {
         tableBucketNumber_);
   }
 
- private:
+ protected:
   const std::string filePath_;
   dwio::common::FileFormat fileFormat_{dwio::common::FileFormat::DWRF};
   uint64_t start_{0};

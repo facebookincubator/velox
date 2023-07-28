@@ -64,8 +64,10 @@ target_link_libraries(
   velox_expression_test
   velox_aggregates
   velox_hive_connector
+  velox_hive_iceberg_datasource
   velox_dwio_common
   velox_dwio_common_exception
+  velox_dwio_common_test_utils
   velox_exec_test_lib
   velox_expression
   velox_expression_test_utility

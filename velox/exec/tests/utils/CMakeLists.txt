@@ -44,6 +44,7 @@ target_link_libraries(
   velox_dwio_common_test_utils
   velox_type_fbhive
   velox_hive_connector
+  velox_hive_iceberg_datasource
   velox_tpch_connector
   velox_presto_serializer
   velox_functions_prestosql

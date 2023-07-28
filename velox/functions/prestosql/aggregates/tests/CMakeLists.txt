@@ -66,6 +66,7 @@ target_link_libraries(
   velox_functions_prestosql
   velox_functions_lib
   velox_hive_connector
+  velox_hive_iceberg_datasource
   velox_simple_aggregate
   velox_type
   velox_vector_fuzzer

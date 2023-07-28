@@ -24,6 +24,7 @@ target_link_libraries(
   velox_dwio_parquet_reader
   velox_dwio_common_test_utils
   velox_hive_connector
+  velox_hive_iceberg_datasource
   velox_exception
   velox_memory
   velox_process

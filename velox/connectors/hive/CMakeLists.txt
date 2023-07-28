@@ -32,6 +32,7 @@ target_link_libraries(
   velox_dwio_parquet_reader
   velox_dwio_parquet_writer
   velox_file
+  velox_hive_iceberg_datasource
   velox_hive_partition_function
   velox_s3fs
   velox_hdfs
@@ -42,6 +43,8 @@ add_library(velox_hive_partition_function HivePartitionFunction.cpp)
 target_link_libraries(velox_hive_partition_function velox_core velox_exec)
 
 add_subdirectory(storage_adapters)
+
+add_subdirectory(iceberg)
 
 if(${VELOX_BUILD_TESTING})
   add_subdirectory(tests)

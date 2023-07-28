@@ -45,6 +45,7 @@ target_link_libraries(
   velox_exec
   velox_exec_test_lib
   velox_hive_connector
+  velox_hive_iceberg_datasource
   velox_memory)
 
 add_executable(velox_example_vector_reader_writer VectorReaderWriter.cpp)

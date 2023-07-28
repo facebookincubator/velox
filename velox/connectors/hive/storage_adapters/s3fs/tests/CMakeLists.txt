@@ -21,6 +21,7 @@ target_link_libraries(
   velox_core
   velox_exec_test_lib
   velox_hive_connector
+  velox_hive_iceberg_datasource
   velox_dwio_common_exception
   velox_exec
   gtest

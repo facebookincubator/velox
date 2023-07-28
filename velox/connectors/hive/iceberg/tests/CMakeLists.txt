@@ -11,31 +11,19 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
+add_executable(velox_hive_iceberg_test IcebergReadTest.cpp)
+add_test(velox_hive_iceberg_test velox_hive_iceberg_test)
 
-set(TEST_LINK_LIBS
-    velox_dwio_common_test_utils
-    velox_vector_test_lib
-    gtest
-    gtest_main
-    gmock
-    gflags::gflags
-    ${GLOG}
-    ${FILESYSTEM})
-
-add_subdirectory(reader)
-add_subdirectory(thrift)
-
-add_executable(velox_dwio_parquet_tpch_test ParquetTpchTest.cpp)
-add_test(
-  NAME velox_dwio_parquet_tpch_test
-  COMMAND velox_dwio_parquet_tpch_test
-  WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR})
 target_link_libraries(
-  velox_dwio_parquet_tpch_test
-  velox_dwio_parquet_reader
-  velox_exec_test_lib
-  velox_exec
+  velox_hive_iceberg_test
   velox_hive_connector
   velox_hive_iceberg_datasource
-  velox_aggregates
-  ${TEST_LINK_LIBS})
+  velox_hive_partition_function
+  velox_hive_iceberg_datasource
+  velox_dwio_common_exception
+  velox_dwio_common_test_utils
+  velox_vector_test_lib
+  velox_exec
+  velox_exec_test_lib
+  gtest
+  gtest_main)

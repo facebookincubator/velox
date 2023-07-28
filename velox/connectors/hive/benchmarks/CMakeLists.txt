@@ -27,6 +27,7 @@ target_link_libraries(
   velox_exec
   velox_exec_test_lib
   velox_hive_connector
+  velox_hive_iceberg_datasource
   velox_hive_partition_function
   velox_memory
   Folly::folly

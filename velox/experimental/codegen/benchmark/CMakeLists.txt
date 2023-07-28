@@ -23,6 +23,7 @@ target_link_libraries(
   velox_codegen_utils_resource_path
   velox_codegen_code_generator
   velox_hive_connector
+  velox_hive_iceberg_datasource
   ${FOLLY_BENCHMARK}
   Folly::folly
   Boost::filesystem

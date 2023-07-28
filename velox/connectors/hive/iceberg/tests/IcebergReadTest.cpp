@@ -1,0 +1,230 @@
+/*
+ * Copyright (c) Facebook, Inc. and its affiliates.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+#include "velox/common/file/FileSystems.h"
+#include "velox/connectors/Connector.h"
+#include "velox/connectors/hive/HiveConnectorSplit.h"
+#include "velox/connectors/hive/iceberg/IcebergDeleteFile.h"
+#include "velox/connectors/hive/iceberg/IcebergMetadataColumn.h"
+#include "velox/connectors/hive/iceberg/IcebergSplit.h"
+#include "velox/dwio/common/tests/utils/BatchMaker.h"
+#include "velox/dwio/dwrf/reader/DwrfReader.h"
+#include "velox/dwio/dwrf/writer/Writer.h"
+#include "velox/exec/PlanNodeStats.h"
+#include "velox/exec/tests/utils/HiveConnectorTestBase.h"
+#include "velox/exec/tests/utils/PlanBuilder.h"
+
+#include <folly/Singleton.h>
+#include <string>
+
+using namespace facebook::velox::exec::test;
+using namespace facebook::velox::exec;
+using namespace facebook::velox::dwio::common;
+using namespace facebook::velox::test;
+
+namespace facebook::velox::connector::hive::iceberg {
+
+class HiveIcebergTest : public HiveConnectorTestBase {
+ public:
+  void SetUp() override {
+    folly::SingletonVault::singleton()->registrationComplete();
+    auto hiveConnector =
+        connector::getConnectorFactory(
+            connector::hive::HiveConnectorFactory::kHiveConnectorName)
+            ->newConnector(kHiveConnectorId, nullptr, ioExecutor_.get());
+    connector::registerConnector(hiveConnector);
+    dwrf::registerDwrfReaderFactory();
+    dwrf::registerDwrfWriterFactory();
+  }
+
+  void TearDown() override {
+    ioExecutor_.reset();
+    dwrf::unregisterDwrfReaderFactory();
+    dwrf::unregisterDwrfWriterFactory();
+    connector::unregisterConnector(kHiveConnectorId);
+    OperatorTestBase::TearDown();
+  }
+
+  void assertPositionalDeletes(const std::vector<int64_t>& deleteRows) {
+    assertPositionalDeletes(
+        deleteRows,
+        "SELECT * FROM tmp WHERE c0 NOT IN (" + makeNotInList(deleteRows) +
+            ")");
+  }
+  void assertPositionalDeletes(
+      const std::vector<int64_t>& deleteRows,
+      std::string duckdbSql) {
+    std::shared_ptr<TempFilePath> dataFilePath = writeDataFile(rowCount);
+    std::shared_ptr<TempFilePath> deleteFilePath =
+        writePositionDeleteFile(dataFilePath->path, deleteRows);
+
+    IcebergDeleteFile deleteFile(
+        FileContent::kPositionalDeletes,
+        deleteFilePath->path,
+        fileFomat_,
+        deleteRows.size(),
+        testing::internal::GetFileSize(
+            std::fopen(deleteFilePath->path.c_str(), "r")));
+
+    auto icebergSplit = makeIcebergSplit(dataFilePath->path, {deleteFile});
+
+    auto plan = tableScanNode();
+    auto task = OperatorTestBase::assertQuery(plan, {icebergSplit}, duckdbSql);
+
+    auto planStats = toPlanStats(task->taskStats());
+    auto scanNodeId = plan->id();
+    auto it = planStats.find(scanNodeId);
+    ASSERT_TRUE(it != planStats.end());
+    ASSERT_TRUE(it->second.peakMemoryBytes > 0);
+  }
+
+  std::vector<int64_t> makeRandomDeleteRows(int32_t maxRowNumber) {
+    std::mt19937 gen{0};
+    std::vector<int64_t> deleteRows;
+    for (int i = 0; i < maxRowNumber; i++) {
+      if (folly::Random::rand32(0, 10, gen) > 8) {
+        deleteRows.push_back(i);
+      }
+    }
+    return deleteRows;
+  }
+
+  std::vector<int64_t> makeFullDeleteRows(int32_t maxRowNumber) {
+    std::vector<int64_t> deleteRows;
+    deleteRows.resize(maxRowNumber);
+    std::iota(deleteRows.begin(), deleteRows.end(), 0);
+    return deleteRows;
+  }
+
+  const static int rowCount = 20000;
+
+ private:
+  std::shared_ptr<connector::ConnectorSplit> makeIcebergSplit(
+      const std::string& dataFilePath,
+      const std::vector<IcebergDeleteFile>& deleteFiles = {}) {
+    std::unordered_map<std::string, std::optional<std::string>> partitionKeys;
+    std::unordered_map<std::string, std::string> customSplitInfo;
+    customSplitInfo["table_format"] = "hive_iceberg";
+
+    auto file = filesystems::getFileSystem(dataFilePath, nullptr)
+                    ->openFileForRead(dataFilePath);
+    const int64_t fileSize = file->size();
+
+    return std::make_shared<HiveIcebergSplit>(
+        kHiveConnectorId,
+        dataFilePath,
+        fileFomat_,
+        0,
+        fileSize,
+        partitionKeys,
+        std::nullopt,
+        customSplitInfo,
+        nullptr,
+        deleteFiles);
+  }
+
+  std::vector<RowVectorPtr> makeVectors(int32_t count, int32_t rowsPerVector) {
+    std::vector<RowVectorPtr> vectors;
+
+    for (int i = 0; i < count; i++) {
+      VectorPtr c0 = BatchMaker::createOrderedVector<TypeKind::BIGINT>(
+          BIGINT(), rowsPerVector, rowsPerVector * i, *pool_, [](size_t i) {
+            return false;
+          });
+      vectors.push_back(makeRowVector({"c0"}, {c0}));
+    }
+
+    return vectors;
+  }
+
+  std::shared_ptr<TempFilePath> writeDataFile(uint64_t numRows) {
+    auto dataVectors = makeVectors(1, numRows);
+
+    auto dataFilePath = TempFilePath::create();
+    writeToFile(dataFilePath->path, dataVectors);
+    createDuckDbTable(dataVectors);
+    return dataFilePath;
+  }
+
+  std::shared_ptr<TempFilePath> writePositionDeleteFile(
+      const std::string& dataFilePath,
+      const std::vector<int64_t>& deleteRows) {
+    uint32_t numDeleteRows = deleteRows.size();
+
+    auto filePathVector = makeFlatVector<StringView>(
+        numDeleteRows, [&](auto row) { return StringView(dataFilePath); });
+    auto deletePositionsVector = makeFlatVector<int64_t>(deleteRows);
+    RowVectorPtr deleteFileVectors = makeRowVector(
+        {pathColumn_->name, posColumn_->name},
+        {filePathVector, deletePositionsVector});
+
+    auto deleteFilePath = TempFilePath::create();
+    writeToFile(deleteFilePath->path, deleteFileVectors);
+
+    return deleteFilePath;
+  }
+
+  std::string makeNotInList(const std::vector<int64_t>& deleteRows) {
+    if (deleteRows.empty()) {
+      return "";
+    }
+
+    return std::accumulate(
+        deleteRows.begin() + 1,
+        deleteRows.end(),
+        std::to_string(deleteRows[0]),
+        [](const std::string& a, int64_t b) {
+          return a + ", " + std::to_string(b);
+        });
+  }
+
+  std::shared_ptr<exec::Task> assertQuery(
+      const core::PlanNodePtr& plan,
+      std::shared_ptr<TempFilePath> dataFilePath,
+      const std::vector<IcebergDeleteFile>& deleteFiles,
+      const std::string& duckDbSql) {
+    auto icebergSplit = makeIcebergSplit(dataFilePath->path, deleteFiles);
+    return OperatorTestBase::assertQuery(plan, {icebergSplit}, duckDbSql);
+  }
+
+  core::PlanNodePtr tableScanNode() {
+    return PlanBuilder(pool_.get()).tableScan(rowType_).planNode();
+  }
+
+ private:
+  dwio::common::FileFormat fileFomat_{dwio::common::FileFormat::DWRF};
+  RowTypePtr rowType_{ROW({"c0"}, {BIGINT()})};
+  std::shared_ptr<IcebergMetadataColumn> pathColumn_ =
+      ICEBERG_DELETE_FILE_PATH_COLUMN();
+  std::shared_ptr<IcebergMetadataColumn> posColumn_ =
+      ICEBERG_DELETE_FILE_POSITIONS_COLUMN();
+};
+
+TEST_F(HiveIcebergTest, positionalDeletes) {
+  // Delete row 0, 1, 2, 3 from 20000 rows
+  assertPositionalDeletes({0, 1, 2, 3});
+  // Delete the first and last row in each batch (10000 rows per batch)
+  assertPositionalDeletes({0, 9999, 10000, 19999});
+  // Delete random rows
+  assertPositionalDeletes(makeRandomDeleteRows(rowCount));
+  // Delete 0 rows
+  assertPositionalDeletes({}, "SELECT * FROM tmp");
+  // Delete all rows
+  assertPositionalDeletes(
+      makeFullDeleteRows(rowCount), "SELECT * FROM tmp WHERE 1 = 0");
+}
+
+} // namespace facebook::velox::connector::hive::iceberg

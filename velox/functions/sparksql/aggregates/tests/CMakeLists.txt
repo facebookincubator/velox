@@ -32,6 +32,7 @@ target_link_libraries(
   velox_functions_aggregates_test_lib
   velox_functions_spark_aggregates
   velox_hive_connector
+  velox_hive_iceberg_datasource
   gflags::gflags
   gtest
   gtest_main)

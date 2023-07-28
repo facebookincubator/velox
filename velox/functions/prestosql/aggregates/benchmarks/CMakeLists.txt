@@ -18,6 +18,7 @@ target_link_libraries(
   velox_aggregates_simple_aggregates_benchmarks
   velox_aggregates
   velox_hive_connector
+  velox_hive_iceberg_datasource
   velox_functions_lib
   velox_exec_test_lib
   velox_functions_prestosql

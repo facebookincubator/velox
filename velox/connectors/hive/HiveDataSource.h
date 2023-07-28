@@ -40,7 +40,8 @@ class HiveDataSource : public DataSource {
       cache::AsyncDataCache* cache,
       const std::string& scanId,
       folly::Executor* executor,
-      const dwio::common::ReaderOptions& options);
+      const dwio::common::ReaderOptions& options,
+      std::shared_ptr<velox::connector::ConnectorSplit> connectorSplit);
 
   void addSplit(std::shared_ptr<ConnectorSplit> split) override;
 
@@ -101,12 +102,18 @@ class HiveDataSource : public DataSource {
   }
 
   std::shared_ptr<HiveConnectorSplit> split_;
+  std::shared_ptr<common::ScanSpec> scanSpec_;
   FileHandleFactory* fileHandleFactory_;
   dwio::common::ReaderOptions readerOpts_;
   memory::MemoryPool* pool_;
   VectorPtr output_;
   RowTypePtr readerOutputType_;
+  std::unique_ptr<dwio::common::Reader> reader_;
   std::unique_ptr<dwio::common::RowReader> rowReader_;
+  core::ExpressionEvaluator* expressionEvaluator_;
+  cache::AsyncDataCache* const cache_{nullptr};
+  const std::string& scanId_;
+  folly::Executor* executor_;
 
  private:
   // Evaluates remainingFilter_ on the specified vector. Returns number of rows
@@ -143,27 +150,18 @@ class HiveDataSource : public DataSource {
   std::unordered_map<std::string, std::shared_ptr<HiveColumnHandle>>
       partitionKeys_;
   std::shared_ptr<dwio::common::IoStatistics> ioStats_;
-  std::shared_ptr<common::ScanSpec> scanSpec_;
   std::shared_ptr<common::MetadataFilter> metadataFilter_;
   dwio::common::RowReaderOptions rowReaderOpts_;
-  std::unique_ptr<dwio::common::Reader> reader_;
   std::unique_ptr<exec::ExprSet> remainingFilterExprSet_;
   bool emptySplit_;
-
   dwio::common::RuntimeStatistics runtimeStats_;
-
   std::shared_ptr<FileHandle> fileHandle_;
-  core::ExpressionEvaluator* expressionEvaluator_;
   uint64_t completedRows_ = 0;
 
   // Reusable memory for remaining filter evaluation.
   VectorPtr filterResult_;
   SelectivityVector filterRows_;
   exec::FilterEvalCtx filterEvalCtx_;
-
-  cache::AsyncDataCache* const cache_{nullptr};
-  const std::string& scanId_;
-  folly::Executor* executor_;
 };
 
 } // namespace facebook::velox::connector::hive

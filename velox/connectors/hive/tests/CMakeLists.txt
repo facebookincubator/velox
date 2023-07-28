@@ -26,6 +26,7 @@ add_test(velox_hive_connector_test velox_hive_connector_test)
 target_link_libraries(
   velox_hive_connector_test
   velox_hive_connector
+  velox_hive_iceberg_datasource
   velox_hive_partition_function
   velox_dwio_common_exception
   velox_vector_fuzzer

@@ -142,7 +142,9 @@ class TestConnector : public connector::Connector {
       const std::unordered_map<
           std::string,
           std::shared_ptr<connector::ColumnHandle>>& /* columnHandles */,
-      connector::ConnectorQueryCtx* connectorQueryCtx) override {
+      connector::ConnectorQueryCtx* connectorQueryCtx,
+      std::shared_ptr<velox::connector::ConnectorSplit> connectorSplit)
+      override {
     return std::make_unique<TestDataSource>(connectorQueryCtx->memoryPool());
   }
 

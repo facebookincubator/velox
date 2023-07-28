@@ -106,7 +106,8 @@ RowVectorPtr TableScan::getOutput() {
             outputType_,
             tableHandle_,
             columnHandles_,
-            connectorQueryCtx_.get());
+            connectorQueryCtx_.get(),
+            connectorSplit);
         for (const auto& entry : pendingDynamicFilters_) {
           dataSource_->addDynamicFilter(entry.first, entry.second);
         }
@@ -233,7 +234,9 @@ void TableScan::preload(std::shared_ptr<connector::ConnectorSplit> split) {
              },
              &debugString});
 
-        auto ptr = connector->createDataSource(type, table, columns, ctx.get());
+        auto ptr =
+            connector->createDataSource(type, table, columns, ctx.get(), split);
+
         if (task->isCancelled()) {
           return nullptr;
         }
