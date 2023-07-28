@@ -227,10 +227,12 @@ TEST_F(DateTimeFunctionsTest, dateSub) {
   // Check for minimum and maximum tests.
   constexpr int32_t kMin = std::numeric_limits<int32_t>::min();
   constexpr int32_t kMax = std::numeric_limits<int32_t>::max();
-  EXPECT_EQ(parseDate("1970-01-01"), dateSub("-5877641-06-23", kMin));
-  EXPECT_EQ(parseDate("1970-01-01"), dateSub("5881580-07-11", kMax));
-  EXPECT_EQ(parseDate("5881580-07-11"), dateSub("1969-12-31", kMin));
   EXPECT_EQ(parseDate("-5877641-06-23"), dateSub("1969-12-31", kMax));
+  EXPECT_EQ(parseDate("1970-01-01"), dateSub("5881580-07-11", kMax));
+  EXPECT_EQ(parseDate("1970-01-01"), dateSub("-5877641-06-23", kMin));
+  EXPECT_EQ(parseDate("5881580-07-11"), dateSub("1969-12-31", kMin));
+  // When input are bigger date and kMin,result will wrap around.
+  EXPECT_EQ(parseDate("-5877588-12-29"), dateSub("2023-07-10", kMin));
 }
 
 } // namespace
