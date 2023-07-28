@@ -41,7 +41,7 @@ template <typename T>
 VectorPtr createScalar(
     size_t size,
     std::mt19937& gen,
-    std::function<T()> val,
+    std::function<T(size_t)> val,
     MemoryPool& pool,
     std::function<bool(vector_size_t /*index*/)> isNullAt,
     const TypePtr type = CppToType<T>::create()) {
@@ -56,7 +56,7 @@ VectorPtr createScalar(
     auto notNull = isNotNull(gen, i, isNullAt);
     bits::setNull(nullsPtr, i, !notNull);
     if (notNull) {
-      valuesPtr[i] = val();
+      valuesPtr[i] = val(i);
     } else {
       nullCount++;
     }
@@ -86,7 +86,7 @@ VectorPtr BatchMaker::createVector<TypeKind::BOOLEAN>(
   return createScalar<bool>(
       size,
       gen,
-      [&gen]() { return Random::rand32(0, 2, gen) == 0; },
+      [&gen](size_t) { return Random::rand32(0, 2, gen) == 0; },
       pool,
       isNullAt);
 }
@@ -101,7 +101,7 @@ VectorPtr BatchMaker::createVector<TypeKind::TINYINT>(
   return createScalar<int8_t>(
       size,
       gen,
-      [&gen]() { return static_cast<int8_t>(Random::rand32(gen)); },
+      [&gen](size_t) { return static_cast<int8_t>(Random::rand32(gen)); },
       pool,
       isNullAt);
 }
@@ -116,7 +116,7 @@ VectorPtr BatchMaker::createVector<TypeKind::SMALLINT>(
   return createScalar<int16_t>(
       size,
       gen,
-      [&gen]() { return static_cast<int16_t>(Random::rand32(gen)); },
+      [&gen](size_t) { return static_cast<int16_t>(Random::rand32(gen)); },
       pool,
       isNullAt);
 }
@@ -131,7 +131,7 @@ VectorPtr BatchMaker::createVector<TypeKind::INTEGER>(
   return createScalar<int32_t>(
       size,
       gen,
-      [&gen]() { return static_cast<int32_t>(Random::rand32(gen)); },
+      [&gen](size_t) { return static_cast<int32_t>(Random::rand32(gen)); },
       pool,
       isNullAt);
 }
@@ -144,7 +144,11 @@ VectorPtr BatchMaker::createVector<TypeKind::BIGINT>(
     std::mt19937& gen,
     std::function<bool(vector_size_t /*index*/)> isNullAt) {
   return createScalar<int64_t>(
-      size, gen, [&gen]() { return Random::rand64(gen); }, pool, isNullAt);
+      size,
+      gen,
+      [&gen](size_t) { return Random::rand64(gen); },
+      pool,
+      isNullAt);
 }
 
 template <>
@@ -157,7 +161,7 @@ VectorPtr BatchMaker::createVector<TypeKind::REAL>(
   return createScalar<float>(
       size,
       gen,
-      [&gen]() { return static_cast<float>(Random::randDouble01(gen)); },
+      [&gen](size_t) { return static_cast<float>(Random::randDouble01(gen)); },
       pool,
       isNullAt);
 }
@@ -172,7 +176,7 @@ VectorPtr BatchMaker::createVector<TypeKind::DOUBLE>(
   return createScalar<double>(
       size,
       gen,
-      [&gen]() { return Random::randDouble01(gen); },
+      [&gen](size_t) { return Random::randDouble01(gen); },
       pool,
       isNullAt);
 }
@@ -187,7 +191,7 @@ VectorPtr BatchMaker::createVector<TypeKind::HUGEINT>(
   return createScalar<int128_t>(
       size,
       gen,
-      [&gen]() {
+      [&gen](size_t) {
         return HugeInt::build(Random::rand32(gen), Random::rand32(gen));
       },
       pool,
@@ -270,7 +274,7 @@ VectorPtr BatchMaker::createVector<TypeKind::TIMESTAMP>(
   return createScalar<Timestamp>(
       size,
       gen,
-      [&gen]() {
+      [&gen](size_t) {
         return Timestamp(
             TIME_OFFSET + Random::rand32(0, 60 * 60 * 24 * 365, gen),
             Random::rand32(0, 1'000'000, gen));
@@ -594,6 +598,32 @@ VectorPtr BatchMaker::createVector<TypeKind::MAP>(
 
   return std::make_shared<MapVector>(
       &pool, type, nulls, size, offsets, lengths, keys, values, nullCount);
+}
+
+template <TypeKind KIND>
+VectorPtr BatchMaker::createOrderedVector(
+    const std::shared_ptr<const Type>& type,
+    size_t size,
+    size_t base,
+    memory::MemoryPool& pool,
+    std::function<bool(vector_size_t /*index*/)> isNullAt) {
+  VELOX_NYI();
+}
+
+template <>
+VectorPtr BatchMaker::createOrderedVector<TypeKind::BIGINT>(
+    const std::shared_ptr<const Type>& type,
+    size_t size,
+    size_t base,
+    memory::MemoryPool& pool,
+    std::function<bool(vector_size_t /*index*/)> isNullAt) {
+  std::mt19937 gen{0};
+  return createScalar<int64_t>(
+      size,
+      gen,
+      [&base](size_t i) { return static_cast<int64_t>(i) + base; },
+      pool,
+      isNullAt);
 }
 
 VectorPtr BatchMaker::createBatch(

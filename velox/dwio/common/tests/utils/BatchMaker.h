@@ -62,6 +62,14 @@ struct BatchMaker {
     std::mt19937 gen{seed};
     return createVector<KIND>(type, size, pool, gen, isNullAt);
   }
+
+  template <TypeKind KIND>
+  static VectorPtr createOrderedVector(
+      const std::shared_ptr<const Type>& type,
+      size_t size,
+      size_t base,
+      memory::MemoryPool& pool,
+      std::function<bool(vector_size_t /*index*/)> isNullAt = nullptr);
 };
 
 } // namespace facebook::velox::test
