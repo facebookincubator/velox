@@ -255,8 +255,20 @@ VectorPtr CastExpr::applyDecimalToIntegralCast(
         (scaleFactor != 1) && (sign * fractionPart >= (scaleFactor >> 1));
     integralPart += needsRoundUp ? sign : 0;
     if (integralPart > std::numeric_limits<To>::max() ||
-        integralPart < std::numeric_limits<To>::min())
-      VELOX_USER_FAIL(makeErrorMessage(input, row, toType) + "Out of bounds.");
+        integralPart < std::numeric_limits<To>::min()) {
+      if (setNullInResultAtError()) {
+        result->setNull(row, true);
+      } else {
+        context.setVeloxExceptionError(
+            row,
+            makeBadCastException(
+                result->type(),
+                input,
+                row,
+                makeErrorMessage(input, row, toType) + "Out of bounds."));
+        return;
+      }
+    }
 
     resultBuffer[row] = static_cast<To>(integralPart);
   });
