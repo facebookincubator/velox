@@ -32,7 +32,7 @@ class AggregationDistinctTest : public OperatorTestBase {
           2, [&](vector_size_t row) { return (NativeType)(row % 2); }, nullptr);
     };
   }
-}
+};
 
 // This test verifies this query:
 // WITH sample AS ( SELECT * FROM (VALUES (1,1,1), (1,1,2), (1,1,100),
