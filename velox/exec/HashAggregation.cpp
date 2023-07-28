@@ -135,11 +135,11 @@ HashAggregation::HashAggregation(
       names
           [aggregationNode->sources()[0]->outputType()->children().size() +
            nextIndexForTypesAndNames] = aggregationNode->sources()[0]
-                                           .get()
-                                           ->outputType()
-                                           ->names()[channel] +
+                                            .get()
+                                            ->outputType()
+                                            ->names()[channel] +
           "$" + "distinct";
-           nextIndexForTypesAndNames++;
+      nextIndexForTypesAndNames++;
     }
     rowTypeWithMaskChannels_ = ROW(std::move(names), std::move(types));
   }
@@ -252,7 +252,7 @@ HashAggregation::HashAggregation(
       }
       distinct_set_hashers.emplace_back(std::move(distinct_set_hashers_elem));
     }
-    
+
     auto distinctMaskChannelIndex = 0;
     for (int i = 0; i < numAggregates; i++) {
       if (aggregationDistincts_[i]) {
@@ -565,7 +565,7 @@ RowVectorPtr HashAggregation::getOutput() {
     resultIterator_.reset();
     if (noMoreInput_) {
       finished_ = true;
-     }
+    }
     resetPartialOutputIfNeed();
     return nullptr;
   }
