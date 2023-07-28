@@ -16,12 +16,7 @@
 
 #include "velox/expression/FunctionCallToSpecialForm.h"
 
-#include "velox/expression/CastExpr.h"
-#include "velox/expression/CoalesceExpr.h"
-#include "velox/expression/ConjunctExpr.h"
 #include "velox/expression/SpecialFormRegistry.h"
-#include "velox/expression/SwitchExpr.h"
-#include "velox/expression/TryExpr.h"
 
 namespace facebook::velox::exec {
 

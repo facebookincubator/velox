@@ -20,7 +20,6 @@
 #include "velox/expression/CoalesceExpr.h"
 #include "velox/expression/ConjunctExpr.h"
 #include "velox/expression/ConstantExpr.h"
-#include "velox/expression/FunctionCallToSpecialForm.h"
 #include "velox/expression/RegisterSpecialForm.h"
 #include "velox/expression/SpecialFormRegistry.h"
 #include "velox/expression/SwitchExpr.h"
