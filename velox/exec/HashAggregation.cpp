@@ -305,7 +305,6 @@ void HashAggregation::addInput(RowVectorPtr input) {
         rowTypeWithMaskChannels_ != nullptr,
         "hasDistinctAggregation_ true if and only if rowTypeWithMaskChannels_ is not nullptr");
     std::vector<VectorPtr> children;
-
     for (auto& child : input->children()) {
       children.push_back(child);
     }
