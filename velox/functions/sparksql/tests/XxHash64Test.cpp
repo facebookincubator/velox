@@ -26,12 +26,6 @@ class XxHash64Test : public SparkFunctionBaseTest {
   std::optional<int64_t> xxhash64(std::optional<T> arg) {
     return evaluateOnce<int64_t>("xxhash64(c0)", arg);
   }
-
-  template <typename T>
-  std::optional<int64_t> xxhash64WithSeed(int64_t seed, std::optional<T> arg) {
-    return evaluateOnce<int64_t>(
-        fmt::format("xxhash64_with_seed({}, c0)", seed), arg);
-  }
 };
 
 // The expected result was obtained by running SELECT xxhash64("Spark") query
@@ -126,24 +120,42 @@ TEST_F(XxHash64Test, float) {
 }
 
 TEST_F(XxHash64Test, hashSeed) {
-  using long_limits = std::numeric_limits<int64_t>;
-  using int_limits = std::numeric_limits<int32_t>;
-  std::vector<int64_t> seeds = {
-      long_limits::min(),
-      static_cast<int64_t>(int_limits::min()) - 1L,
-      0L,
-      static_cast<int64_t>(int_limits::max()) + 1L,
-      long_limits::max()};
-  std::vector<int64_t> expected = {
-      -6671470883434376173,
-      8765374525824963196,
-      -5379971487550586029,
-      8810073187160811495,
-      4605443450566835086};
+  auto xxhash64WithSeed = [&](int64_t seed, const std::optional<int64_t>& arg) {
+    return evaluateOnce<int64_t>(
+        fmt::format("xxhash64_with_seed({}, c0)", seed), arg);
+  };
 
-  for (auto i = 0; i < seeds.size(); ++i) {
-    EXPECT_EQ(xxhash64WithSeed<int64_t>(seeds[i], 42), expected[i]);
-  }
+  static const auto kIntMin = std::numeric_limits<int32_t>::min();
+  static const auto kIntMax = std::numeric_limits<int32_t>::max();
+  static const auto kLongMin = std::numeric_limits<int64_t>::min();
+  static const auto kLongMax = std::numeric_limits<int64_t>::max();
+
+  EXPECT_EQ(xxhash64WithSeed(0L, 42), -5379971487550586029);
+  EXPECT_EQ(xxhash64WithSeed(kLongMin, 42), -6671470883434376173);
+  EXPECT_EQ(xxhash64WithSeed(kLongMax, 42), 4605443450566835086);
+  EXPECT_EQ(
+      xxhash64WithSeed(static_cast<int64_t>(kIntMin) - 1L, 42),
+      8765374525824963196);
+  EXPECT_EQ(
+      xxhash64WithSeed(static_cast<int64_t>(kIntMax) + 1L, 42),
+      8810073187160811495);
+}
+
+// The expected result was obtained by running SELECT xxhash64("hello", "world")
+// query using spark-sql CLI.
+TEST_F(XxHash64Test, hashSeedVarcharArgs) {
+  auto xxhash64WithSeed = [&](int64_t seed,
+                              const std::optional<std::string>& arg1,
+                              const std::optional<std::string>& arg2) {
+    return evaluateOnce<int64_t>(
+        fmt::format("xxhash64_with_seed({}, c0, c1)", seed), arg1, arg2);
+  };
+
+  EXPECT_EQ(xxhash64WithSeed(42L, "hello", "world"), 7824066149349576922);
+  EXPECT_EQ(xxhash64WithSeed(42L, "hello", std::nullopt), -4367754540140381902);
+  EXPECT_EQ(xxhash64WithSeed(42L, "hello", ""), -5179011742163812830);
+  EXPECT_EQ(xxhash64WithSeed(0L, std::nullopt, "hello"), 2794345569481354659);
+  EXPECT_EQ(xxhash64WithSeed(0L, "", "hello"), 1992633642622160295);
 }
 
 } // namespace
