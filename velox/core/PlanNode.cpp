@@ -145,7 +145,6 @@ AggregationNode::AggregationNode(
     const std::vector<FieldAccessTypedExprPtr>& preGroupedKeys,
     const std::vector<std::string>& aggregateNames,
     const std::vector<Aggregate>& aggregates,
-    const std::vector<bool>& aggregateDistincts,
     bool ignoreNullKeys,
     PlanNodePtr source)
     : PlanNode(id),
@@ -154,7 +153,7 @@ AggregationNode::AggregationNode(
       preGroupedKeys_(preGroupedKeys),
       aggregateNames_(aggregateNames),
       aggregates_(aggregates),
-      aggregateDistincts_(aggregateDistincts),
+      aggregateDistincts_(std::vector<bool>(aggregates.size())),
       ignoreNullKeys_(ignoreNullKeys),
       sources_{source},
       outputType_(getAggregationOutputType(
