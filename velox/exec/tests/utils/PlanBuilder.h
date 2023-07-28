@@ -410,7 +410,6 @@ class PlanBuilder {
         step,
         ignoreNullKeys,
         resultTypes);
-
   }
 
   /// Same as above, but also allows to specify a subset of grouping keys on
