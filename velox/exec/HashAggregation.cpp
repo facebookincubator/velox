@@ -252,7 +252,6 @@ HashAggregation::HashAggregation(
       }
       distinct_set_hashers.emplace_back(std::move(distinct_set_hashers_elem));
     }
-
     auto distinctMaskChannelIndex = 0;
     for (int i = 0; i < numAggregates; i++) {
       if (aggregationDistincts_[i]) {
