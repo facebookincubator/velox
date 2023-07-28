@@ -643,7 +643,7 @@ PlanBuilder& PlanBuilder::streamingAggregation(
     const std::vector<TypePtr>& resultTypes) {
   auto aggregatesAndNames =
       createAggregateExpressionsAndNames(aggregates, masks, step, resultTypes);
-  const auto aggregateDistincts = std::vector<bool>(numAggregates);
+  const auto aggregateDistincts = std::vector<bool>(aggregates.size());
   planNode_ = std::make_shared<core::AggregationNode>(
       nextPlanNodeId(),
       step,
