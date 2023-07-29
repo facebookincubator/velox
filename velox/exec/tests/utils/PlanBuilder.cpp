@@ -16,7 +16,6 @@
 
 #include "velox/exec/tests/utils/PlanBuilder.h"
 #include "velox/connectors/hive/HiveConnector.h"
-#include "velox/connectors/hive/TableHandle.h"
 #include "velox/connectors/tpch/TpchConnector.h"
 #include "velox/duckdb/conversion/DuckParser.h"
 #include "velox/exec/Aggregate.h"
@@ -24,10 +23,18 @@
 #include "velox/exec/RoundRobinPartitionFunction.h"
 #include "velox/exec/TableWriter.h"
 #include "velox/exec/WindowFunction.h"
-#include "velox/expression/Expr.h"
 #include "velox/expression/ExprToSubfieldFilter.h"
 #include "velox/expression/SignatureBinder.h"
 #include "velox/parse/Expressions.h"
+
+#ifndef VELOX_ENABLE_BACKWARD_COMPATIBILITY
+#include "velox/connectors/hive/TableHandle.h"
+#include "velox/expression/Expr.h"
+#else
+#include <velox/core/ITypedExpr.h>
+#include "velox/common/memory/Memory.h"
+#include "velox/parse/ExpressionsParser.h"
+#endif
 
 using namespace facebook::velox;
 using namespace facebook::velox::connector;

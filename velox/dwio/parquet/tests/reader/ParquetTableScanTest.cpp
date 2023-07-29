@@ -17,13 +17,16 @@
 #include <folly/init/Init.h>
 
 #include "velox/common/base/tests/GTestUtils.h"
-#include "velox/connectors/hive/HiveConfig.h"
 #include "velox/dwio/common/tests/utils/DataFiles.h"
 #include "velox/dwio/parquet/RegisterParquetReader.h"
 #include "velox/dwio/parquet/reader/ParquetReader.h"
 #include "velox/exec/tests/utils/HiveConnectorTestBase.h"
 #include "velox/exec/tests/utils/PlanBuilder.h"
 #include "velox/type/tests/SubfieldFiltersBuilder.h"
+
+#ifndef VELOX_ENABLE_BACKWARD_COMPATIBILITY
+#include "velox/connectors/hive/HiveConfig.h"
+#endif
 
 using namespace facebook::velox;
 using namespace facebook::velox::exec;

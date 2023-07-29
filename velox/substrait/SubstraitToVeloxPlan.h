@@ -17,10 +17,13 @@
 #pragma once
 
 #include "velox/connectors/hive/HiveConnector.h"
-#include "velox/connectors/hive/TableHandle.h"
 #include "velox/core/PlanNode.h"
-#include "velox/dwio/common/Options.h"
 #include "velox/substrait/SubstraitToVeloxExpr.h"
+
+#ifndef VELOX_ENABLE_BACKWARD_COMPATIBILITY
+#include "velox/connectors/hive/TableHandle.h"
+#include "velox/dwio/common/Options.h"
+#endif
 
 namespace facebook::velox::substrait {
 
