@@ -48,6 +48,18 @@
 <section id="general-aggregate-functions">
 <h2>General Aggregate Functions<a class="headerlink" href="#general-aggregate-functions" title="Permalink to this heading">¶</a></h2>
 <dl class="spark function">
+<dt class="sig sig-object spark" id="avg">
+<span class="sig-name descname"><span class="pre">avg</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">x</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">double</span><span class="w"> </span><span class="p"><span class="pre">|</span></span><span class="w"> </span><span class="pre">decimal</span></span></span><a class="headerlink" href="#avg" title="Permalink to this definition">¶</a></dt>
+<dd><p>Returns the average (arithmetic mean) of all non-null input values.
+When x is of type DECIMAL, the result type is DECIMAL,
+and the intermediate results are varbinarys or (sum, count) pairs represented as row(decimal, bigint).
+For all other input types, the result type is DOUBLE,
+and the intermediate results are (sum, count) pairs represented as row(double, bigint).
+When all inputs are nulls, the intermediate result is row(0, 0),
+and the final result is null.</p>
+</dd></dl>
+
+<dl class="spark function">
 <dt class="sig sig-object spark" id="bit_xor">
 <span class="sig-name descname"><span class="pre">bit_xor</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">x</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">bigint</span></span></span><a class="headerlink" href="#bit_xor" title="Permalink to this definition">¶</a></dt>
 <dd><p>Returns the bitwise XOR of all non-null input values, or null if none.</p>
