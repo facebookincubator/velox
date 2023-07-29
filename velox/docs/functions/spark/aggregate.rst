@@ -7,6 +7,16 @@ Aggregate functions operate on a set of values to compute a single result.
 General Aggregate Functions
 ---------------------------
 
+.. spark:function:: avg(x) -> double|decimal
+
+    Returns the average (arithmetic mean) of all non-null input values.
+    When x is of type DECIMAL, the result type is DECIMAL,
+    and the intermediate results are varbinarys or (sum, count) pairs represented as row(decimal, bigint).
+    For all other input types, the result type is DOUBLE,
+    and the intermediate results are (sum, count) pairs represented as row(double, bigint).
+    When all inputs are nulls, the intermediate result is row(0, 0),
+    and the final result is null.
+
 .. spark:function:: bit_xor(x) -> bigint
 
     Returns the bitwise XOR of all non-null input values, or null if none.
@@ -24,7 +34,7 @@ General Aggregate Functions
     ``hash`` cannot be null.
     ``numBits`` specifies max capacity of the bloom filter, which allows to trade accuracy for memory.
     In Spark, the value of ``numBits`` is automatically capped at config value 67,108,864.
-    In Velox, the value of ``numBits`` is automatically capped at fixed value 4,194,304.
+    In Velox, the value of ``numBits`` is automatically capped at the value of spark.bloom_filter.max_num_bits configuration property.
 
     ``hash``, ``estimatedNumItems`` and ``numBits`` must be ``BIGINT``.
 
@@ -39,7 +49,7 @@ General Aggregate Functions
 
 .. spark:function:: bloom_filter_agg(hash) -> varbinary
     
-    A version of ``bloom_filter_agg`` that use 4,194,304 as ``numBits``.
+    A version of ``bloom_filter_agg`` that use the value of spark.bloom_filter.max_num_bits configuration property as ``numBits``.
 
     ``hash`` cannot be null.
 

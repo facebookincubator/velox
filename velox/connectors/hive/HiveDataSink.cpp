@@ -18,10 +18,16 @@
 
 #include "velox/common/base/Fs.h"
 #include "velox/connectors/hive/HiveConfig.h"
-#include "velox/connectors/hive/HiveConnector.h"
 #include "velox/connectors/hive/HivePartitionFunction.h"
 #include "velox/core/ITypedExpr.h"
 #include "velox/dwio/dwrf/writer/Writer.h"
+
+#ifdef VELOX_ENABLE_BACKWARD_COMPATIBILITY
+#include "velox/connectors/hive/HiveConnector.h"
+#else
+#include "velox/connectors/hive/TableHandle.h"
+#include "velox/exec/OperatorUtils.h"
+#endif
 
 #include <boost/lexical_cast.hpp>
 #include <boost/uuid/uuid_generators.hpp>
@@ -438,6 +444,7 @@ uint32_t HiveDataSink::appendWriter(const HiveWriterId& id) {
   dwio::common::WriterOptions options;
   options.schema = inputType_;
   options.memoryPool = connectorQueryCtx_->connectorMemoryPool();
+  options.compressionKind = insertTableHandle_->compressionKind();
   ioStats_.emplace_back(std::make_shared<dwio::common::IoStatistics>());
   writers_.emplace_back(writerFactory->createWriter(
       dwio::common::DataSink::create(
