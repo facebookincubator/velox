@@ -68,7 +68,7 @@ class LambdaFlushPolicy : public DefaultFlushPolicy {
       int64_t bytesInRowGroup,
       std::function<bool()> lambda)
       : DefaultFlushPolicy(rowsInRowGroup, bytesInRowGroup) {
-    lambda_ = lambda;
+    lambda_ = std::move(lambda);
   }
   virtual ~LambdaFlushPolicy() override = default;
 
