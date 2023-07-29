@@ -229,8 +229,7 @@ void Writer::write(const VectorPtr& data) {
   }
 
   for (int colIdx = 0; colIdx < recordBatch->num_columns(); colIdx++) {
-    auto array = recordBatch->column(colIdx);
-    arrowContext_->stagingChunks.at(colIdx).push_back(array);
+    arrowContext_->stagingChunks.at(colIdx).push_back(recordBatch->column(colIdx));
   }
   arrowContext_->stagingRows += numRows;
   arrowContext_->stagingBytes += bytes;
