@@ -13,17 +13,22 @@
 # limitations under the License.
 add_library(
   velox_exec
+  AddressableNonNullValueList.cpp
   Aggregate.cpp
+  AggregateCompanionAdapter.cpp
+  AggregateCompanionSignatures.cpp
   AggregateFunctionRegistry.cpp
   AggregationMasks.cpp
   AggregateWindow.cpp
   ArrowStream.cpp
   ContainerRowSerde.cpp
-  CrossJoinBuild.cpp
-  CrossJoinProbe.cpp
+  DistinctAggregations.cpp
   Driver.cpp
   EnforceSingleRow.cpp
   Exchange.cpp
+  ExchangeClient.cpp
+  ExchangeQueue.cpp
+  ExchangeSource.cpp
   FilterProject.cpp
   GroupId.cpp
   GroupingSet.cpp
@@ -37,31 +42,41 @@ add_library(
   Limit.cpp
   LocalPartition.cpp
   LocalPlanner.cpp
+  MarkDistinct.cpp
   Merge.cpp
   MergeJoin.cpp
   MergeSource.cpp
+  NestedLoopJoinBuild.cpp
+  NestedLoopJoinProbe.cpp
   Operator.cpp
   OperatorUtils.cpp
   OrderBy.cpp
   PartitionedOutput.cpp
   PartitionedOutputBufferManager.cpp
   PlanNodeStats.cpp
+  ProbeOperatorState.cpp
   RowContainer.cpp
+  RowNumber.cpp
+  SortedAggregations.cpp
   Spill.cpp
   SpillOperatorGroup.cpp
   Spiller.cpp
   StreamingAggregation.cpp
+  Strings.cpp
   TableScan.cpp
+  TableWriteMerge.cpp
   TableWriter.cpp
   Task.cpp
   TopN.cpp
+  TopNRowNumber.cpp
   Unnest.cpp
   Values.cpp
   VectorHasher.cpp
   Window.cpp
   WindowFunction.cpp
   WindowPartition.cpp
-  AssignUniqueId.cpp)
+  AssignUniqueId.cpp
+  PartitionFunction.cpp)
 
 target_link_libraries(
   velox_exec

@@ -18,11 +18,20 @@
 #include <gtest/gtest.h>
 #include "velox/dwio/dwrf/writer/StringDictionaryEncoder.h"
 
+DECLARE_bool(velox_enable_memory_usage_track_in_default_memory_pool);
+
 using namespace facebook::velox::memory;
 
 namespace facebook::velox::dwrf {
 
-TEST(TestStringDictionaryEncoder, AddKey) {
+class TestStringDictionaryEncoder : public ::testing::Test {
+ protected:
+  static void SetUpTestCase() {
+    FLAGS_velox_enable_memory_usage_track_in_default_memory_pool = true;
+  }
+};
+
+TEST_F(TestStringDictionaryEncoder, AddKey) {
   struct TestCase {
     explicit TestCase(
         const std::vector<folly::StringPiece>& addKeySequence,
@@ -40,7 +49,7 @@ TEST(TestStringDictionaryEncoder, AddKey) {
       TestCase{{"doe", "sow", "sow", "doe", "sow"}, {0, 1, 1, 0, 1}}};
 
   for (const auto& testCase : testCases) {
-    auto pool = getDefaultMemoryPool();
+    auto pool = addDefaultLeafMemoryPool();
     StringDictionaryEncoder stringDictEncoder{*pool, *pool};
     std::vector<size_t> actualEncodedSequence{};
     for (const auto& key : testCase.addKeySequence) {
@@ -50,7 +59,7 @@ TEST(TestStringDictionaryEncoder, AddKey) {
   }
 }
 
-TEST(TestStringDictionaryEncoder, GetIndex) {
+TEST_F(TestStringDictionaryEncoder, GetIndex) {
   struct TestCase {
     explicit TestCase(
         const std::vector<folly::StringPiece>& addKeySequence,
@@ -84,7 +93,7 @@ TEST(TestStringDictionaryEncoder, GetIndex) {
           {0, 3, 4, 2, 1, 3, 2, 4, 2, 0, 1, 0, 3}}};
 
   for (const auto& testCase : testCases) {
-    auto pool = getDefaultMemoryPool();
+    auto pool = addDefaultLeafMemoryPool();
     StringDictionaryEncoder stringDictEncoder{*pool, *pool};
     for (const auto& key : testCase.addKeySequence) {
       stringDictEncoder.addKey(key, 0);
@@ -98,7 +107,7 @@ TEST(TestStringDictionaryEncoder, GetIndex) {
   }
 }
 
-TEST(TestStringDictionaryEncoder, GetCount) {
+TEST_F(TestStringDictionaryEncoder, GetCount) {
   struct TestCase {
     explicit TestCase(
         const std::vector<folly::StringPiece>& addKeySequence,
@@ -133,7 +142,7 @@ TEST(TestStringDictionaryEncoder, GetCount) {
           {3, 2, 3, 3, 2}}};
 
   for (const auto& testCase : testCases) {
-    auto pool = getDefaultMemoryPool();
+    auto pool = addDefaultLeafMemoryPool();
     StringDictionaryEncoder stringDictEncoder{*pool, *pool};
     for (const auto& key : testCase.addKeySequence) {
       stringDictEncoder.addKey(key, 0);
@@ -148,7 +157,7 @@ TEST(TestStringDictionaryEncoder, GetCount) {
   }
 }
 
-TEST(TestStringDictionaryEncoder, GetStride) {
+TEST_F(TestStringDictionaryEncoder, GetStride) {
   struct TestCase {
     explicit TestCase(
         const std::vector<std::pair<folly::StringPiece, size_t>>&
@@ -187,7 +196,7 @@ TEST(TestStringDictionaryEncoder, GetStride) {
           {1, 1, 6, 3, 4}}};
 
   for (const auto& testCase : testCases) {
-    auto pool = getDefaultMemoryPool();
+    auto pool = addDefaultLeafMemoryPool();
     StringDictionaryEncoder stringDictEncoder{*pool, *pool};
     for (const auto& kv : testCase.addKeySequence) {
       stringDictEncoder.addKey(kv.first, kv.second);
@@ -209,14 +218,14 @@ std::string genPaddedIntegerString(size_t integer, size_t length) {
   return padding + origString;
 }
 
-TEST(TestStringDictionaryEncoder, Clear) {
-  auto pool = getDefaultMemoryPool();
+TEST_F(TestStringDictionaryEncoder, Clear) {
+  auto pool = addDefaultLeafMemoryPool();
   StringDictionaryEncoder stringDictEncoder{*pool, *pool};
   std::string baseString{"jjkkll"};
   for (size_t i = 0; i != 2500; ++i) {
     stringDictEncoder.addKey(baseString + genPaddedIntegerString(i, 4), 0);
   }
-  auto peakMemory = pool->getCurrentBytes();
+  auto peakMemory = pool->currentBytes();
   stringDictEncoder.clear();
   EXPECT_EQ(0, stringDictEncoder.size());
   EXPECT_EQ(0, stringDictEncoder.keyIndex_.size());
@@ -228,22 +237,22 @@ TEST(TestStringDictionaryEncoder, Clear) {
   EXPECT_EQ(0, stringDictEncoder.counts_.capacity());
   EXPECT_EQ(0, stringDictEncoder.firstSeenStrideIndex_.size());
   EXPECT_EQ(0, stringDictEncoder.firstSeenStrideIndex_.capacity());
-  EXPECT_LT(pool->getCurrentBytes(), peakMemory);
+  EXPECT_LT(pool->currentBytes(), peakMemory);
 }
 
-TEST(TestStringDictionaryEncoder, MemBenchmark) {
-  auto pool = getDefaultMemoryPool();
+TEST_F(TestStringDictionaryEncoder, MemBenchmark) {
+  auto pool = addDefaultLeafMemoryPool();
   StringDictionaryEncoder stringDictEncoder{*pool, *pool};
   std::string baseString{"jjkkll"};
   for (size_t i = 0; i != 10000; ++i) {
     stringDictEncoder.addKey(baseString + genPaddedIntegerString(i, 4), 0);
   }
 
-  LOG(INFO) << "Total memory bytes: " << pool->getCurrentBytes();
+  LOG(INFO) << "Total memory bytes: " << pool->currentBytes();
 }
 
-TEST(TestStringDictionaryEncoder, Limit) {
-  auto pool = getDefaultMemoryPool();
+TEST_F(TestStringDictionaryEncoder, Limit) {
+  auto pool = addDefaultLeafMemoryPool();
   StringDictionaryEncoder encoder{*pool, *pool};
   encoder.addKey(folly::StringPiece{"abc"}, 0);
   dwio::common::DataBuffer<char> buf{*pool};

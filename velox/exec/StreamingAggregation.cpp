@@ -31,7 +31,7 @@ StreamingAggregation::StreamingAggregation(
           aggregationNode->step() == core::AggregationNode::Step::kPartial
               ? "PartialAggregation"
               : "Aggregation"),
-      outputBatchSize_{driverCtx->queryConfig().preferredOutputBatchSize()},
+      outputBatchSize_{outputBatchRows()},
       step_{aggregationNode->step()} {
   auto numKeys = aggregationNode->groupingKeys().size();
   decodedKeys_.resize(numKeys);
@@ -58,7 +58,7 @@ StreamingAggregation::StreamingAggregation(
     std::vector<column_index_t> channels;
     std::vector<VectorPtr> constants;
     std::vector<TypePtr> argTypes;
-    for (auto& arg : aggregate->inputs()) {
+    for (auto& arg : aggregate.call->inputs()) {
       argTypes.push_back(arg->type());
       channels.push_back(exprToChannel(arg.get(), inputType));
       if (channels.back() == kConstantChannel) {
@@ -70,16 +70,19 @@ StreamingAggregation::StreamingAggregation(
       }
     }
 
-    const auto& mask = aggregationNode->aggregateMasks()[i];
-    if (mask == nullptr) {
-      maskChannels.emplace_back(std::nullopt);
-    } else {
+    if (const auto& mask = aggregate.mask) {
       maskChannels.emplace_back(inputType->asRow().getChildIdx(mask->name()));
+    } else {
+      maskChannels.emplace_back(std::nullopt);
     }
 
     const auto& aggResultType = outputType_->childAt(numKeys + i);
     aggregates_.push_back(Aggregate::create(
-        aggregate->name(), aggregationNode->step(), argTypes, aggResultType));
+        aggregate.call->name(),
+        aggregationNode->step(),
+        argTypes,
+        aggResultType,
+        driverCtx->queryConfig()));
     args_.push_back(channels);
     constantArgs_.push_back(constants);
   }
@@ -90,25 +93,37 @@ StreamingAggregation::StreamingAggregation(
 
   masks_ = std::make_unique<AggregationMasks>(std::move(maskChannels));
 
+  std::vector<Accumulator> accumulators;
+  accumulators.reserve(aggregates_.size());
+  for (auto& aggregate : aggregates_) {
+    accumulators.push_back(Accumulator{aggregate.get()});
+  }
+
   rows_ = std::make_unique<RowContainer>(
       groupingKeyTypes,
       !aggregationNode->ignoreNullKeys(),
-      aggregates_,
+      accumulators,
       std::vector<TypePtr>{},
       false,
       false,
       false,
       false,
-      pool(),
-      ContainerRowSerde::instance());
+      pool());
+
+  for (auto i = 0; i < aggregates_.size(); ++i) {
+    aggregates_[i]->setAllocator(&rows_->stringAllocator());
+
+    const auto rowColumn = rows_->columnAt(numKeys + i);
+    aggregates_[i]->setOffsets(
+        rowColumn.offset(),
+        rowColumn.nullByte(),
+        rowColumn.nullMask(),
+        rows_->rowSizeOffset());
+  }
 }
 
 void StreamingAggregation::close() {
-  for (int32_t i = 0; i < aggregates_.size(); ++i) {
-    if (aggregates_[i]->accumulatorUsesExternalMemory()) {
-      aggregates_[i]->destroy(folly::Range(groups_.data(), groups_.size()));
-    }
-  }
+  rows_->clear();
   Operator::close();
 }
 

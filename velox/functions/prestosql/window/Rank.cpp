@@ -48,7 +48,7 @@ class RankFunction : public exec::WindowFunction {
       const BufferPtr& /*peerGroupEnds*/,
       const BufferPtr& /*frameStarts*/,
       const BufferPtr& /*frameEnds*/,
-      const SelectivityVector& /*validRows*/,
+      const SelectivityVector& validRows,
       vector_size_t resultOffset,
       const VectorPtr& result) override {
     int numRows = peerGroupStarts->size() / sizeof(vector_size_t);
@@ -103,8 +103,10 @@ void registerRankInternal(
       [name](
           const std::vector<exec::WindowFunctionArg>& /*args*/,
           const TypePtr& resultType,
+          bool /*ignoreNulls*/,
           velox::memory::MemoryPool* /*pool*/,
-          HashStringAllocator* /*stringAllocator*/)
+          HashStringAllocator* /*stringAllocator*/,
+          const core::QueryConfig& /*queryConfig*/)
           -> std::unique_ptr<exec::WindowFunction> {
         return std::make_unique<RankFunction<TRank, TResult>>(resultType);
       });

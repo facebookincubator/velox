@@ -30,7 +30,7 @@ using MemoryPool = facebook::velox::memory::MemoryPool;
 
 TEST(DataBuffer, ZeroOut) {
   const uint8_t VALUE = 13;
-  auto pool = facebook::velox::memory::getDefaultMemoryPool();
+  auto pool = facebook::velox::memory::addDefaultLeafMemoryPool();
   DataBuffer<uint8_t> buffer(*pool, 16);
   for (auto i = 0; i < buffer.size(); i++) {
     auto data = buffer.data();
@@ -58,7 +58,7 @@ TEST(DataBuffer, ZeroOut) {
 }
 
 TEST(DataBuffer, At) {
-  auto pool = facebook::velox::memory::getDefaultMemoryPool();
+  auto pool = facebook::velox::memory::addDefaultLeafMemoryPool();
 
   DataBuffer<uint8_t> buffer{*pool};
   for (auto i = 0; i != 15; ++i) {
@@ -80,7 +80,7 @@ TEST(DataBuffer, At) {
 }
 
 TEST(DataBuffer, Reset) {
-  auto pool = facebook::velox::memory::getDefaultMemoryPool();
+  auto pool = facebook::velox::memory::addDefaultLeafMemoryPool();
 
   DataBuffer<uint8_t> buffer{*pool};
   buffer.reserve(16);
@@ -136,7 +136,7 @@ TEST(DataBuffer, Reset) {
 }
 
 TEST(DataBuffer, Wrap) {
-  auto pool = facebook::velox::memory::getDefaultMemoryPool();
+  auto pool = facebook::velox::memory::addDefaultLeafMemoryPool();
   auto size = 26;
   auto buffer = velox::AlignedBuffer::allocate<char>(size, pool.get());
   auto raw = buffer->asMutable<char>();
@@ -153,7 +153,7 @@ TEST(DataBuffer, Wrap) {
 }
 
 TEST(DataBuffer, Move) {
-  auto pool = facebook::velox::memory::getDefaultMemoryPool();
+  auto pool = facebook::velox::memory::addDefaultLeafMemoryPool();
   {
     DataBuffer<uint8_t> buffer{*pool};
     buffer.reserve(16);
@@ -162,15 +162,15 @@ TEST(DataBuffer, Move) {
     }
     ASSERT_EQ(15, buffer.size());
     ASSERT_EQ(16, buffer.capacity());
-    const auto usedBytes = pool->getCurrentBytes();
+    const auto usedBytes = pool->currentBytes();
 
     // Expect no double freeing from memory pool.
     DataBuffer<uint8_t> newBuffer{std::move(buffer)};
     ASSERT_EQ(15, newBuffer.size());
     ASSERT_EQ(16, newBuffer.capacity());
-    ASSERT_EQ(usedBytes, pool->getCurrentBytes());
+    ASSERT_EQ(usedBytes, pool->currentBytes());
   }
-  ASSERT_EQ(0, pool->getCurrentBytes());
+  ASSERT_EQ(0, pool->currentBytes());
 }
 } // namespace common
 } // namespace dwio

@@ -207,6 +207,10 @@ class Subfield {
     return path_;
   }
 
+  std::vector<std::unique_ptr<PathElement>>& path() {
+    return path_;
+  }
+
   bool isPrefix(const Subfield& other) const {
     if (path_.size() < other.path_.size()) {
       for (int i = 0; i < path_.size(); ++i) {
@@ -220,6 +224,9 @@ class Subfield {
   }
 
   std::string toString() const {
+    if (!valid()) {
+      return "";
+    }
     std::ostringstream out;
     out << static_cast<const NestedField*>(path_[0].get())->name();
     for (int i = 1; i < path_.size(); i++) {
@@ -251,6 +258,12 @@ class Subfield {
     }
     return result;
   }
+
+  bool valid() const {
+    return !path_.empty() && path_[0]->kind() == kNestedField;
+  }
+
+  Subfield clone() const;
 
  private:
   std::vector<std::unique_ptr<PathElement>> path_;

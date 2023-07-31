@@ -14,13 +14,51 @@
  * limitations under the License.
  */
 #include "velox/core/PlanNode.h"
+#include "velox/common/encode/Base64.h"
+#include "velox/vector/VectorSaver.h"
 
 namespace facebook::velox::core {
+
+namespace {
+std::vector<PlanNodePtr> deserializeSources(
+    const folly::dynamic& obj,
+    void* context) {
+  if (obj.count("sources")) {
+    return ISerializable::deserialize<std::vector<PlanNode>>(
+        obj["sources"], context);
+  }
+
+  return {};
+}
+
+PlanNodePtr deserializeSingleSource(const folly::dynamic& obj, void* context) {
+  auto sources = deserializeSources(obj, context);
+  VELOX_CHECK_EQ(1, sources.size());
+
+  return sources[0];
+}
+
+PlanNodeId deserializePlanNodeId(const folly::dynamic& obj) {
+  return obj["id"].asString();
+}
+} // namespace
 
 const SortOrder kAscNullsFirst(true, true);
 const SortOrder kAscNullsLast(true, false);
 const SortOrder kDescNullsFirst(false, true);
 const SortOrder kDescNullsLast(false, false);
+
+folly::dynamic SortOrder::serialize() const {
+  folly::dynamic obj = folly::dynamic::object();
+  obj["ascending"] = ascending_;
+  obj["nullsFirst"] = nullsFirst_;
+  return obj;
+}
+
+// static
+SortOrder SortOrder::deserialize(const folly::dynamic& obj) {
+  return SortOrder(obj["ascending"].asBool(), obj["nullsFirst"].asBool());
+}
 
 namespace {
 const std::vector<PlanNodePtr> kEmptySources;
@@ -28,7 +66,7 @@ const std::vector<PlanNodePtr> kEmptySources;
 RowTypePtr getAggregationOutputType(
     const std::vector<FieldAccessTypedExprPtr>& groupingKeys,
     const std::vector<std::string>& aggregateNames,
-    const std::vector<CallTypedExprPtr>& aggregates) {
+    const std::vector<AggregationNode::Aggregate>& aggregates) {
   VELOX_CHECK_EQ(
       aggregateNames.size(),
       aggregates.size(),
@@ -47,7 +85,7 @@ RowTypePtr getAggregationOutputType(
 
   for (int32_t i = 0; i < aggregateNames.size(); i++) {
     names.push_back(aggregateNames[i]);
-    types.push_back(aggregates[i]->type());
+    types.push_back(aggregates[i].call->type());
   }
 
   return std::make_shared<RowType>(std::move(names), std::move(types));
@@ -60,8 +98,7 @@ AggregationNode::AggregationNode(
     const std::vector<FieldAccessTypedExprPtr>& groupingKeys,
     const std::vector<FieldAccessTypedExprPtr>& preGroupedKeys,
     const std::vector<std::string>& aggregateNames,
-    const std::vector<CallTypedExprPtr>& aggregates,
-    const std::vector<FieldAccessTypedExprPtr>& aggregateMasks,
+    const std::vector<Aggregate>& aggregates,
     bool ignoreNullKeys,
     PlanNodePtr source)
     : PlanNode(id),
@@ -70,7 +107,6 @@ AggregationNode::AggregationNode(
       preGroupedKeys_(preGroupedKeys),
       aggregateNames_(aggregateNames),
       aggregates_(aggregates),
-      aggregateMasks_(aggregateMasks),
       ignoreNullKeys_(ignoreNullKeys),
       sources_{source},
       outputType_(getAggregationOutputType(
@@ -81,9 +117,9 @@ AggregationNode::AggregationNode(
   //    SELECT sum(c) FROM t
   // Empty aggregates are used in distinct:
   //    SELECT distinct(b, c) FROM t GROUP BY a
-  VELOX_CHECK(
-      !groupingKeys_.empty() || !aggregates_.empty(),
-      "Aggregation must specify either grouping keys or aggregates");
+  // Sometimes there are no grouping keys and no aggregations:
+  //    WITH a AS (SELECT sum(x) from t)
+  //    SELECT y FROM a, UNNEST(array[1, 2,3]) as u(y)
 
   std::unordered_set<std::string> groupingKeyNames;
   groupingKeyNames.reserve(groupingKeys.size());
@@ -130,6 +166,18 @@ void addKeys(std::stringstream& stream, const std::vector<TypedExprPtr>& keys) {
     }
   }
 }
+
+void addSortingKeys(
+    const std::vector<FieldAccessTypedExprPtr>& sortingKeys,
+    const std::vector<SortOrder>& sortingOrders,
+    std::stringstream& stream) {
+  for (auto i = 0; i < sortingKeys.size(); ++i) {
+    if (i > 0) {
+      stream << ", ";
+    }
+    stream << sortingKeys[i]->name() << " " << sortingOrders[i].toString();
+  }
+}
 } // namespace
 
 void AggregationNode::addDetails(std::stringstream& stream) const {
@@ -145,11 +193,156 @@ void AggregationNode::addDetails(std::stringstream& stream) const {
     if (i > 0) {
       stream << ", ";
     }
-    stream << aggregateNames_[i] << " := " << aggregates_[i]->toString();
-    if (aggregateMasks_.size() > i && aggregateMasks_[i]) {
-      stream << " mask: " << aggregateMasks_[i]->name();
+    const auto& aggregate = aggregates_[i];
+    stream << aggregateNames_[i] << " := " << aggregate.call->toString();
+    if (aggregate.distinct) {
+      stream << " distinct";
+    }
+
+    if (aggregate.mask) {
+      stream << " mask: " << aggregate.mask->name();
+    }
+
+    if (!aggregate.sortingKeys.empty()) {
+      stream << " ORDER BY ";
+      addSortingKeys(aggregate.sortingKeys, aggregate.sortingOrders, stream);
     }
   }
+}
+
+namespace {
+std::unordered_map<AggregationNode::Step, std::string> stepNames() {
+  return {
+      {AggregationNode::Step::kPartial, "PARTIAL"},
+      {AggregationNode::Step::kFinal, "FINAL"},
+      {AggregationNode::Step::kIntermediate, "INTERMEDIATE"},
+      {AggregationNode::Step::kSingle, "SINGLE"},
+  };
+}
+
+template <typename K, typename V>
+std::unordered_map<V, K> invertMap(const std::unordered_map<K, V>& mapping) {
+  std::unordered_map<V, K> inverted;
+  for (const auto& [key, value] : mapping) {
+    inverted.emplace(value, key);
+  }
+  return inverted;
+}
+} // namespace
+
+// static
+const char* AggregationNode::stepName(AggregationNode::Step step) {
+  static const auto kSteps = stepNames();
+  return kSteps.at(step).c_str();
+}
+
+// static
+AggregationNode::Step AggregationNode::stepFromName(const std::string& name) {
+  static const auto kSteps = invertMap(stepNames());
+  return kSteps.at(name);
+}
+
+folly::dynamic AggregationNode::serialize() const {
+  auto obj = PlanNode::serialize();
+  obj["step"] = stepName(step_);
+  obj["groupingKeys"] = ISerializable::serialize(groupingKeys_);
+  obj["preGroupedKeys"] = ISerializable::serialize(preGroupedKeys_);
+  obj["aggregateNames"] = ISerializable::serialize(aggregateNames_);
+  obj["aggregates"] = folly::dynamic::array;
+  for (const auto& aggregate : aggregates_) {
+    obj["aggregates"].push_back(aggregate.serialize());
+  }
+
+  obj["ignoreNullKeys"] = ignoreNullKeys_;
+  return obj;
+}
+
+namespace {
+std::vector<FieldAccessTypedExprPtr> deserializeFields(
+    const folly::dynamic& array,
+    void* context) {
+  return ISerializable::deserialize<std::vector<FieldAccessTypedExpr>>(
+      array, context);
+}
+
+std::vector<std::string> deserializeStrings(const folly::dynamic& array) {
+  return ISerializable::deserialize<std::vector<std::string>>(array);
+}
+
+RowTypePtr deserializeRowType(const folly::dynamic& obj) {
+  return ISerializable::deserialize<RowType>(obj);
+}
+
+folly::dynamic serializeSortingOrders(
+    const std::vector<SortOrder>& sortingOrders) {
+  auto array = folly::dynamic::array();
+  for (const auto& order : sortingOrders) {
+    array.push_back(order.serialize());
+  }
+
+  return array;
+}
+
+std::vector<SortOrder> deserializeSortingOrders(const folly::dynamic& array) {
+  std::vector<SortOrder> sortingOrders;
+  sortingOrders.reserve(array.size());
+  for (const auto& order : array) {
+    sortingOrders.push_back(SortOrder::deserialize(order));
+  }
+  return sortingOrders;
+}
+} // namespace
+
+folly::dynamic AggregationNode::Aggregate::serialize() const {
+  folly::dynamic obj = folly::dynamic::object();
+  obj["call"] = call->serialize();
+  if (mask) {
+    obj["mask"] = mask->serialize();
+  }
+  obj["sortingKeys"] = ISerializable::serialize(sortingKeys);
+  obj["sortingOrders"] = serializeSortingOrders(sortingOrders);
+  obj["distinct"] = distinct;
+  return obj;
+}
+
+// static
+AggregationNode::Aggregate AggregationNode::Aggregate::deserialize(
+    const folly::dynamic& obj,
+    void* context) {
+  auto call = ISerializable::deserialize<CallTypedExpr>(obj["call"]);
+  FieldAccessTypedExprPtr mask;
+  if (obj.count("mask")) {
+    mask = ISerializable::deserialize<FieldAccessTypedExpr>(obj["mask"]);
+  }
+  auto sortingKeys = deserializeFields(obj["sortingKeys"], context);
+  auto sortingOrders = deserializeSortingOrders(obj["sortingOrders"]);
+  bool distinct = obj["distinct"].asBool();
+  return {
+      call, mask, std::move(sortingKeys), std::move(sortingOrders), distinct};
+}
+
+// static
+PlanNodePtr AggregationNode::create(const folly::dynamic& obj, void* context) {
+  auto source = deserializeSingleSource(obj, context);
+
+  auto groupingKeys = deserializeFields(obj["groupingKeys"], context);
+  auto preGroupedKeys = deserializeFields(obj["preGroupedKeys"], context);
+  auto aggregateNames = deserializeStrings(obj["aggregateNames"]);
+
+  std::vector<Aggregate> aggregates;
+  for (const auto& aggregate : obj["aggregates"]) {
+    aggregates.push_back(Aggregate::deserialize(aggregate, context));
+  }
+
+  return std::make_shared<AggregationNode>(
+      deserializePlanNodeId(obj),
+      stepFromName(obj["step"].asString()),
+      groupingKeys,
+      preGroupedKeys,
+      aggregateNames,
+      aggregates,
+      obj["ignoreNullKeys"].asBool(),
+      deserializeSingleSource(obj, context));
 }
 
 namespace {
@@ -219,6 +412,45 @@ void GroupIdNode::addDetails(std::stringstream& stream) const {
   }
 }
 
+folly::dynamic GroupIdNode::GroupingKeyInfo::serialize() const {
+  folly::dynamic obj = folly::dynamic::object;
+  obj["output"] = output;
+  obj["input"] = input->serialize();
+  return obj;
+}
+
+folly::dynamic GroupIdNode::serialize() const {
+  auto obj = PlanNode::serialize();
+  obj["groupingSets"] = ISerializable::serialize(groupingSets_);
+  obj["aggregationInputs"] = ISerializable::serialize(aggregationInputs_);
+  obj["groupIdName"] = groupIdName_;
+  obj["groupingKeyInfos"] = folly::dynamic::array();
+  for (const auto& info : groupingKeyInfos_) {
+    obj["groupingKeyInfos"].push_back(info.serialize());
+  }
+  return obj;
+}
+
+// static
+PlanNodePtr GroupIdNode::create(const folly::dynamic& obj, void* context) {
+  auto source = deserializeSingleSource(obj, context);
+  auto groupingSets = ISerializable::deserialize<
+      std::vector<std::vector<FieldAccessTypedExpr>>>(obj["groupingSets"]);
+  std::vector<GroupingKeyInfo> groupingKeyInfos;
+  for (const auto& info : obj["groupingKeyInfos"]) {
+    groupingKeyInfos.push_back(
+        {info["output"].asString(),
+         ISerializable::deserialize<FieldAccessTypedExpr>(info["input"])});
+  }
+  return std::make_shared<GroupIdNode>(
+      deserializePlanNodeId(obj),
+      std::move(groupingSets),
+      std::move(groupingKeyInfos),
+      deserializeFields(obj["aggregationInputs"], context),
+      obj["groupIdName"].asString(),
+      std::move(source));
+}
+
 const std::vector<PlanNodePtr>& ValuesNode::sources() const {
   return kEmptySources;
 }
@@ -238,6 +470,48 @@ void ValuesNode::addDetails(std::stringstream& stream) const {
   }
 }
 
+folly::dynamic ValuesNode::serialize() const {
+  auto obj = PlanNode::serialize();
+
+  // Serialize data using VectorSaver.
+  std::ostringstream out;
+  for (const auto& vector : values_) {
+    saveVector(*vector, out);
+  }
+
+  auto serializedData = out.str();
+
+  obj["data"] =
+      encoding::Base64::encode(serializedData.data(), serializedData.size());
+  obj["parallelizable"] = parallelizable_;
+  obj["repeatTimes"] = repeatTimes_;
+  return obj;
+}
+
+// static
+PlanNodePtr ValuesNode::create(const folly::dynamic& obj, void* context) {
+  auto sources = deserializeSources(obj, context);
+  VELOX_CHECK_EQ(0, sources.size());
+
+  auto encodedData = obj["data"].asString();
+  auto serializedData = encoding::Base64::decode(encodedData);
+  std::istringstream dataStream(serializedData);
+
+  auto* pool = static_cast<memory::MemoryPool*>(context);
+
+  std::vector<RowVectorPtr> values;
+  while (dataStream.tellg() < serializedData.size()) {
+    values.push_back(
+        std::dynamic_pointer_cast<RowVector>(restoreVector(dataStream, pool)));
+  }
+
+  return std::make_shared<ValuesNode>(
+      deserializePlanNodeId(obj),
+      std::move(values),
+      obj["parallelizable"].asBool(),
+      obj["repeatTimes"].asInt());
+}
+
 void ProjectNode::addDetails(std::stringstream& stream) const {
   stream << "expressions: ";
   for (auto i = 0; i < projections_.size(); i++) {
@@ -250,12 +524,70 @@ void ProjectNode::addDetails(std::stringstream& stream) const {
   }
 }
 
+folly::dynamic ProjectNode::serialize() const {
+  auto obj = PlanNode::serialize();
+  obj["names"] = ISerializable::serialize(names_);
+  obj["projections"] = ISerializable::serialize(projections_);
+  return obj;
+}
+
+// static
+PlanNodePtr ProjectNode::create(const folly::dynamic& obj, void* context) {
+  auto source = deserializeSingleSource(obj, context);
+
+  auto names = deserializeStrings(obj["names"]);
+  auto projections = ISerializable::deserialize<std::vector<ITypedExpr>>(
+      obj["projections"], context);
+  return std::make_shared<ProjectNode>(
+      deserializePlanNodeId(obj),
+      std::move(names),
+      std::move(projections),
+      std::move(source));
+}
+
 const std::vector<PlanNodePtr>& TableScanNode::sources() const {
   return kEmptySources;
 }
 
 void TableScanNode::addDetails(std::stringstream& stream) const {
   stream << tableHandle_->toString();
+}
+
+folly::dynamic TableScanNode::serialize() const {
+  auto obj = PlanNode::serialize();
+  obj["outputType"] = outputType_->serialize();
+  obj["tableHandle"] = tableHandle_->serialize();
+  folly::dynamic assignments = folly::dynamic::array;
+  for (const auto& [assign, columnHandle] : assignments_) {
+    folly::dynamic pair = folly::dynamic::object;
+    pair["assign"] = assign;
+    pair["columnHandle"] = columnHandle->serialize();
+    assignments.push_back(std::move(pair));
+  }
+  obj["assignments"] = std::move(assignments);
+  return obj;
+}
+
+// static
+PlanNodePtr TableScanNode::create(const folly::dynamic& obj, void* context) {
+  auto planNodeId = obj["id"].asString();
+  auto outputType = deserializeRowType(obj["outputType"]);
+  auto tableHandle = std::const_pointer_cast<connector::ConnectorTableHandle>(
+      ISerializable::deserialize<connector::ConnectorTableHandle>(
+          obj["tableHandle"], context));
+
+  std::unordered_map<std::string, std::shared_ptr<connector::ColumnHandle>>
+      assignments;
+  for (const auto& pair : obj["assignments"]) {
+    auto assign = pair["assign"].asString();
+    auto columnHandle = ISerializable::deserialize<connector::ColumnHandle>(
+        pair["columnHandle"]);
+    assignments[assign] =
+        std::const_pointer_cast<connector::ColumnHandle>(columnHandle);
+  }
+
+  return std::make_shared<const TableScanNode>(
+      planNodeId, outputType, tableHandle, assignments);
 }
 
 const std::vector<PlanNodePtr>& ArrowStreamNode::sources() const {
@@ -272,6 +604,18 @@ const std::vector<PlanNodePtr>& ExchangeNode::sources() const {
 
 void ExchangeNode::addDetails(std::stringstream& /* stream */) const {
   // Nothing to add.
+}
+
+folly::dynamic ExchangeNode::serialize() const {
+  auto obj = PlanNode::serialize();
+  obj["outputType"] = ExchangeNode::outputType()->serialize();
+  return obj;
+}
+
+// static
+PlanNodePtr ExchangeNode::create(const folly::dynamic& obj, void* context) {
+  auto outputType = deserializeRowType(obj["outputType"]);
+  return std::make_shared<ExchangeNode>(deserializePlanNodeId(obj), outputType);
 }
 
 UnnestNode::UnnestNode(
@@ -327,6 +671,49 @@ void UnnestNode::addDetails(std::stringstream& stream) const {
   addFields(stream, unnestVariables_);
 }
 
+folly::dynamic UnnestNode::serialize() const {
+  auto obj = PlanNode::serialize();
+  obj["replicateVariables"] = ISerializable::serialize(replicateVariables_);
+  obj["unnestVariables"] = ISerializable::serialize(unnestVariables_);
+
+  obj["unnestNames"] = folly::dynamic::array();
+
+  // Extract 'unnest' column names from the 'outputType'.
+  // Output types contains 'replicated' column names, followed by 'unnest'
+  // column names, followed by an optional 'ordinal' column name.
+  for (auto i = replicateVariables_.size();
+       i < outputType()->size() - (withOrdinality_ ? 1 : 0);
+       ++i) {
+    obj["unnestNames"].push_back(outputType()->names()[i]);
+  }
+
+  if (withOrdinality_) {
+    obj["ordinalityName"] = outputType()->names().back();
+  }
+  return obj;
+}
+
+// static
+PlanNodePtr UnnestNode::create(const folly::dynamic& obj, void* context) {
+  auto source = deserializeSingleSource(obj, context);
+  auto replicateVariables =
+      deserializeFields(obj["replicateVariables"], context);
+  auto unnestVariables = deserializeFields(obj["unnestVariables"], context);
+  auto unnestNames = deserializeStrings(obj["unnestNames"]);
+  std::optional<std::string> ordinalityName = std::nullopt;
+  if (obj.count("ordinalityName")) {
+    ordinalityName = obj["ordinalityName"].asString();
+  }
+
+  return std::make_shared<UnnestNode>(
+      deserializePlanNodeId(obj),
+      std::move(replicateVariables),
+      std::move(unnestVariables),
+      std::move(unnestNames),
+      ordinalityName,
+      std::move(source));
+}
+
 AbstractJoinNode::AbstractJoinNode(
     const PlanNodeId& id,
     JoinType joinType,
@@ -335,14 +722,14 @@ AbstractJoinNode::AbstractJoinNode(
     TypedExprPtr filter,
     PlanNodePtr left,
     PlanNodePtr right,
-    const RowTypePtr outputType)
+    RowTypePtr outputType)
     : PlanNode(id),
       joinType_(joinType),
       leftKeys_(leftKeys),
       rightKeys_(rightKeys),
       filter_(std::move(filter)),
       sources_({std::move(left), std::move(right)}),
-      outputType_(outputType) {
+      outputType_(std::move(outputType)) {
   VELOX_CHECK(!leftKeys_.empty(), "JoinNode requires at least one join key");
   VELOX_CHECK_EQ(
       leftKeys_.size(),
@@ -378,7 +765,7 @@ AbstractJoinNode::AbstractJoinNode(
 
     // Verify that 'match' column name doesn't match any column from left or
     // right source.
-    const auto& name = outputType->nameOf(numOutputColumms);
+    const auto& name = outputType_->nameOf(numOutputColumms);
     VELOX_CHECK(!leftType->containsChild(name));
     VELOX_CHECK(!rightType->containsChild(name));
   }
@@ -429,6 +816,44 @@ void AbstractJoinNode::addDetails(std::stringstream& stream) const {
   }
 }
 
+folly::dynamic AbstractJoinNode::serializeBase() const {
+  auto obj = PlanNode::serialize();
+  obj["joinType"] = joinTypeName(joinType_);
+  obj["leftKeys"] = ISerializable::serialize(leftKeys_);
+  obj["rightKeys"] = ISerializable::serialize(rightKeys_);
+  if (filter_) {
+    obj["filter"] = filter_->serialize();
+  }
+  obj["outputType"] = outputType_->serialize();
+  return obj;
+}
+
+namespace {
+std::unordered_map<JoinType, std::string> joinTypeNames() {
+  return {
+      {JoinType::kInner, "INNER"},
+      {JoinType::kLeft, "LEFT"},
+      {JoinType::kRight, "RIGHT"},
+      {JoinType::kFull, "FULL"},
+      {JoinType::kLeftSemiFilter, "LEFT SEMI (FILTER)"},
+      {JoinType::kRightSemiFilter, "RIGHT SEMI (FILTER)"},
+      {JoinType::kLeftSemiProject, "LEFT SEMI (PROJECT)"},
+      {JoinType::kRightSemiProject, "RIGHT SEMI (PROJECT)"},
+      {JoinType::kAnti, "ANTI"},
+  };
+}
+} // namespace
+
+const char* joinTypeName(JoinType joinType) {
+  static const auto kJoinTypes = joinTypeNames();
+  return kJoinTypes.at(joinType).c_str();
+}
+
+JoinType joinTypeFromName(const std::string& name) {
+  static const auto kJoinTypes = invertMap(joinTypeNames());
+  return kJoinTypes.at(name);
+}
+
 void HashJoinNode::addDetails(std::stringstream& stream) const {
   AbstractJoinNode::addDetails(stream);
   if (nullAware_) {
@@ -436,17 +861,155 @@ void HashJoinNode::addDetails(std::stringstream& stream) const {
   }
 }
 
-CrossJoinNode::CrossJoinNode(
+folly::dynamic HashJoinNode::serialize() const {
+  auto obj = serializeBase();
+  obj["nullAware"] = nullAware_;
+  return obj;
+}
+
+// static
+PlanNodePtr HashJoinNode::create(const folly::dynamic& obj, void* context) {
+  auto sources = deserializeSources(obj, context);
+  VELOX_CHECK_EQ(2, sources.size());
+
+  auto nullAware = obj["nullAware"].asBool();
+  auto leftKeys = deserializeFields(obj["leftKeys"], context);
+  auto rightKeys = deserializeFields(obj["rightKeys"], context);
+
+  TypedExprPtr filter;
+  if (obj.count("filter")) {
+    filter = ISerializable::deserialize<ITypedExpr>(obj["filter"]);
+  }
+
+  auto outputType = deserializeRowType(obj["outputType"]);
+
+  return std::make_shared<HashJoinNode>(
+      deserializePlanNodeId(obj),
+      joinTypeFromName(obj["joinType"].asString()),
+      nullAware,
+      std::move(leftKeys),
+      std::move(rightKeys),
+      filter,
+      sources[0],
+      sources[1],
+      outputType);
+}
+
+folly::dynamic MergeJoinNode::serialize() const {
+  return serializeBase();
+}
+
+// static
+PlanNodePtr MergeJoinNode::create(const folly::dynamic& obj, void* context) {
+  auto sources = deserializeSources(obj, context);
+  VELOX_CHECK_EQ(2, sources.size());
+
+  auto leftKeys = deserializeFields(obj["leftKeys"], context);
+  auto rightKeys = deserializeFields(obj["rightKeys"], context);
+
+  TypedExprPtr filter;
+  if (obj.count("filter")) {
+    filter = ISerializable::deserialize<ITypedExpr>(obj["filter"]);
+  }
+
+  auto outputType = deserializeRowType(obj["outputType"]);
+
+  return std::make_shared<MergeJoinNode>(
+      deserializePlanNodeId(obj),
+      joinTypeFromName(obj["joinType"].asString()),
+      std::move(leftKeys),
+      std::move(rightKeys),
+      filter,
+      sources[0],
+      sources[1],
+      outputType);
+}
+
+NestedLoopJoinNode::NestedLoopJoinNode(
     const PlanNodeId& id,
+    JoinType joinType,
+    TypedExprPtr joinCondition,
     PlanNodePtr left,
     PlanNodePtr right,
     RowTypePtr outputType)
     : PlanNode(id),
+      joinType_(joinType),
+      joinCondition_(std::move(joinCondition)),
       sources_({std::move(left), std::move(right)}),
-      outputType_(std::move(outputType)) {}
+      outputType_(std::move(outputType)) {
+  VELOX_USER_CHECK(
+      core::isInnerJoin(joinType_) || core::isLeftJoin(joinType_) ||
+          core::isRightJoin(joinType_) || core::isFullJoin(joinType_),
+      "{} unsupported, NestedLoopJoin only supports inner and outer join",
+      joinTypeName(joinType_));
 
-void CrossJoinNode::addDetails(std::stringstream& /* stream */) const {
-  // Nothing to add.
+  auto leftType = sources_[0]->outputType();
+  auto rightType = sources_[1]->outputType();
+  for (const auto& name : outputType_->names()) {
+    const bool leftContains = leftType->containsChild(name);
+    const bool rightContains = rightType->containsChild(name);
+    VELOX_USER_CHECK(
+        !(leftContains && rightContains),
+        "Duplicate column name found on join's left and right sides: {}",
+        name);
+    VELOX_USER_CHECK(
+        leftContains || rightContains,
+        "Join's output column not found in either left or right sides: {}",
+        name);
+  }
+}
+
+NestedLoopJoinNode::NestedLoopJoinNode(
+    const PlanNodeId& id,
+    PlanNodePtr left,
+    PlanNodePtr right,
+    RowTypePtr outputType)
+    : NestedLoopJoinNode(
+          id,
+          JoinType::kInner,
+          nullptr,
+          left,
+          right,
+          outputType) {}
+
+void NestedLoopJoinNode::addDetails(std::stringstream& stream) const {
+  stream << joinTypeName(joinType_);
+  if (joinCondition_) {
+    stream << ", joinCondition: " << joinCondition_->toString();
+  }
+}
+
+folly::dynamic NestedLoopJoinNode::serialize() const {
+  auto obj = PlanNode::serialize();
+  obj["joinType"] = joinTypeName(joinType_);
+  if (joinCondition_) {
+    obj["joinCondition"] = joinCondition_->serialize();
+  }
+  obj["outputType"] = outputType_->serialize();
+  return obj;
+}
+
+PlanNodePtr NestedLoopJoinNode::create(
+    const folly::dynamic& obj,
+    void* context) {
+  auto sources = deserializeSources(obj, context);
+  VELOX_CHECK_EQ(2, sources.size());
+
+  TypedExprPtr joinCondition;
+  if (obj.count("joinCondition")) {
+    joinCondition =
+        ISerializable::deserialize<ITypedExpr>(obj["joinCondition"], context);
+  }
+
+  auto outputType = deserializeRowType(obj["outputType"]);
+
+  return std::make_shared<NestedLoopJoinNode>(
+      deserializePlanNodeId(obj),
+      joinTypeFromName(obj["joinType"].asString()),
+      joinCondition,
+      sources[0],
+      sources[1],
+      outputType);
 }
 
 AssignUniqueIdNode::AssignUniqueIdNode(
@@ -466,6 +1029,26 @@ AssignUniqueIdNode::AssignUniqueIdNode(
 
 void AssignUniqueIdNode::addDetails(std::stringstream& /* stream */) const {
   // Nothing to add.
+}
+
+folly::dynamic AssignUniqueIdNode::serialize() const {
+  auto obj = PlanNode::serialize();
+  obj["idName"] = outputType_->names().back();
+  obj["taskUniqueId"] = taskUniqueId_;
+  return obj;
+}
+
+// static
+PlanNodePtr AssignUniqueIdNode::create(
+    const folly::dynamic& obj,
+    void* context) {
+  auto source = deserializeSingleSource(obj, context);
+
+  return std::make_shared<AssignUniqueIdNode>(
+      deserializePlanNodeId(obj),
+      obj["idName"].asString(),
+      obj["taskUniqueId"].asInt(),
+      std::move(source));
 }
 
 namespace {
@@ -488,32 +1071,6 @@ RowTypePtr getWindowOutputType(
   return ROW(std::move(names), std::move(types));
 }
 
-const char* frameBoundString(const WindowNode::BoundType boundType) {
-  switch (boundType) {
-    case WindowNode::BoundType::kCurrentRow:
-      return "CURRENT ROW";
-    case WindowNode::BoundType::kPreceding:
-      return "PRECEDING";
-    case WindowNode::BoundType::kFollowing:
-      return "FOLLOWING";
-    case WindowNode::BoundType::kUnboundedPreceding:
-      return "UNBOUNDED PRECEDING";
-    case WindowNode::BoundType::kUnboundedFollowing:
-      return "UNBOUNDED FOLLOWING";
-  }
-  VELOX_UNREACHABLE();
-}
-
-const char* windowTypeString(const WindowNode::WindowType windowType) {
-  switch (windowType) {
-    case WindowNode::WindowType::kRows:
-      return "ROWS";
-    case WindowNode::WindowType::kRange:
-      return "RANGE";
-  }
-  VELOX_UNREACHABLE();
-}
-
 void addWindowFunction(
     std::stringstream& stream,
     const WindowNode::Function& windowFunction) {
@@ -526,17 +1083,17 @@ void addWindowFunction(
     VELOX_USER_FAIL("Window frame end cannot be UNBOUNDED PRECEDING");
   }
 
-  stream << windowTypeString(frame.type) << " between ";
+  stream << WindowNode::windowTypeName(frame.type) << " between ";
   if (frame.startValue) {
     addKeys(stream, {frame.startValue});
     stream << " ";
   }
-  stream << frameBoundString(frame.startType) << " and ";
+  stream << WindowNode::boundTypeName(frame.startType) << " and ";
   if (frame.endValue) {
     addKeys(stream, {frame.endValue});
     stream << " ";
   }
-  stream << frameBoundString(frame.endType);
+  stream << WindowNode::boundTypeName(frame.endType);
 }
 
 } // namespace
@@ -569,62 +1126,648 @@ WindowNode::WindowNode(
       "Number of sorting keys must be equal to the number of sorting orders");
 }
 
-namespace {
-void addSortingKeys(
-    std::stringstream& stream,
-    const std::vector<FieldAccessTypedExprPtr>& sortingKeys,
-    const std::vector<SortOrder>& sortingOrders) {
-  for (auto i = 0; i < sortingKeys.size(); ++i) {
-    if (i > 0) {
+void WindowNode::addDetails(std::stringstream& stream) const {
+  stream << "partition by [";
+  if (!partitionKeys_.empty()) {
+    addFields(stream, partitionKeys_);
+  }
+  stream << "] ";
+
+  stream << "order by [";
+  addSortingKeys(sortingKeys_, sortingOrders_, stream);
+  stream << "] ";
+
+  auto numInputCols = sources_[0]->outputType()->size();
+  auto numOutputCols = outputType_->size();
+  for (auto i = numInputCols; i < numOutputCols; i++) {
+    if (i >= numInputCols + 1) {
       stream << ", ";
     }
-    stream << sortingKeys[i]->name() << " " << sortingOrders[i].toString();
+    stream << outputType_->names()[i] << " := ";
+    addWindowFunction(stream, windowFunctions_[i - numInputCols]);
   }
+}
+
+namespace {
+std::unordered_map<WindowNode::BoundType, std::string> boundTypeNames() {
+  return {
+      {WindowNode::BoundType::kCurrentRow, "CURRENT ROW"},
+      {WindowNode::BoundType::kPreceding, "PRECEDING"},
+      {WindowNode::BoundType::kFollowing, "FOLLOWING"},
+      {WindowNode::BoundType::kUnboundedPreceding, "UNBOUNDED PRECEDING"},
+      {WindowNode::BoundType::kUnboundedFollowing, "UNBOUNDED FOLLOWING"},
+  };
 }
 } // namespace
 
-void LocalMergeNode::addDetails(std::stringstream& stream) const {
-  addSortingKeys(stream, sortingKeys_, sortingOrders_);
+// static
+const char* WindowNode::boundTypeName(WindowNode::BoundType type) {
+  static const auto kTypes = boundTypeNames();
+  return kTypes.at(type).c_str();
 }
 
-void TableWriteNode::addDetails(std::stringstream& /* stream */) const {
-  // TODO Add connector details.
+// static
+WindowNode::BoundType WindowNode::boundTypeFromName(const std::string& name) {
+  static const auto kTypes = invertMap(boundTypeNames());
+  return kTypes.at(name);
+}
+
+namespace {
+std::unordered_map<WindowNode::WindowType, std::string> windowTypeNames() {
+  return {
+      {WindowNode::WindowType::kRows, "ROWS"},
+      {WindowNode::WindowType::kRange, "RANGE"},
+  };
+}
+} // namespace
+
+// static
+const char* WindowNode::windowTypeName(WindowNode::WindowType type) {
+  static const auto kTypes = windowTypeNames();
+  return kTypes.at(type).c_str();
+}
+
+// static
+WindowNode::WindowType WindowNode::windowTypeFromName(const std::string& name) {
+  static const auto kTypes = invertMap(windowTypeNames());
+  return kTypes.at(name);
+}
+
+folly::dynamic WindowNode::Frame::serialize() const {
+  folly::dynamic obj = folly::dynamic::object();
+  obj["type"] = windowTypeName(type);
+  obj["startType"] = boundTypeName(startType);
+  if (startValue) {
+    obj["startValue"] = startValue->serialize();
+  }
+  obj["endType"] = boundTypeName(endType);
+  if (endValue) {
+    obj["endValue"] = endValue->serialize();
+  }
+  return obj;
+}
+
+// static
+WindowNode::Frame WindowNode::Frame::deserialize(const folly::dynamic& obj) {
+  TypedExprPtr startValue;
+  if (obj.count("startValue")) {
+    startValue = ISerializable::deserialize<ITypedExpr>(obj["startValue"]);
+  }
+
+  TypedExprPtr endValue;
+  if (obj.count("endValue")) {
+    endValue = ISerializable::deserialize<ITypedExpr>(obj["endValue"]);
+  }
+
+  return {
+      windowTypeFromName(obj["type"].asString()),
+      boundTypeFromName(obj["startType"].asString()),
+      startValue,
+      boundTypeFromName(obj["endType"].asString()),
+      endValue};
+}
+
+folly::dynamic WindowNode::Function::serialize() const {
+  folly::dynamic obj = folly::dynamic::object();
+  obj["functionCall"] = functionCall->serialize();
+  obj["frame"] = frame.serialize();
+  obj["ignoreNulls"] = ignoreNulls;
+  return obj;
+}
+
+// static
+WindowNode::Function WindowNode::Function::deserialize(
+    const folly::dynamic& obj) {
+  return {
+      ISerializable::deserialize<CallTypedExpr>(obj["functionCall"]),
+      WindowNode::Frame::deserialize(obj["frame"]),
+      obj["ignoreNulls"].asBool()};
+}
+
+folly::dynamic WindowNode::serialize() const {
+  auto obj = PlanNode::serialize();
+  obj["partitionKeys"] = ISerializable::serialize(partitionKeys_);
+  obj["sortingKeys"] = ISerializable::serialize(sortingKeys_);
+  obj["sortingOrders"] = serializeSortingOrders(sortingOrders_);
+
+  obj["functions"] = folly::dynamic::array();
+  for (const auto& function : windowFunctions_) {
+    obj["functions"].push_back(function.serialize());
+  }
+
+  auto numInputs = sources()[0]->outputType()->size();
+  auto numOutputs = outputType()->size();
+  std::vector<std::string> windowNames;
+  for (auto i = numInputs; i < numOutputs; ++i) {
+    windowNames.push_back(outputType_->nameOf(i));
+  }
+  obj["names"] = ISerializable::serialize(windowNames);
+
+  return obj;
+}
+
+// static
+PlanNodePtr WindowNode::create(const folly::dynamic& obj, void* context) {
+  auto source = deserializeSingleSource(obj, context);
+  auto partitionKeys = deserializeFields(obj["partitionKeys"], context);
+  auto sortingKeys = deserializeFields(obj["sortingKeys"], context);
+
+  auto sortingOrders = deserializeSortingOrders(obj["sortingOrders"]);
+
+  std::vector<Function> functions;
+  for (const auto& function : obj["functions"]) {
+    functions.push_back(Function::deserialize(function));
+  }
+
+  auto windowNames = deserializeStrings(obj["names"]);
+
+  return std::make_shared<WindowNode>(
+      deserializePlanNodeId(obj),
+      partitionKeys,
+      sortingKeys,
+      sortingOrders,
+      windowNames,
+      functions,
+      source);
+}
+
+RowTypePtr getMarkDistinctOutputType(
+    const RowTypePtr& inputType,
+    const std::string& markerName) {
+  std::vector<std::string> names = inputType->names();
+  std::vector<TypePtr> types = inputType->children();
+
+  names.emplace_back(markerName);
+  types.emplace_back(BOOLEAN());
+  return ROW(std::move(names), std::move(types));
+}
+
+MarkDistinctNode::MarkDistinctNode(
+    PlanNodeId id,
+    std::string markerName,
+    std::vector<FieldAccessTypedExprPtr> distinctKeys,
+    PlanNodePtr source)
+    : PlanNode(std::move(id)),
+      markerName_(std::move(markerName)),
+      distinctKeys_(std::move(distinctKeys)),
+      sources_{std::move(source)},
+      outputType_(
+          getMarkDistinctOutputType(sources_[0]->outputType(), markerName_)) {
+  VELOX_USER_CHECK_GT(markerName_.size(), 0)
+  VELOX_USER_CHECK_GT(distinctKeys_.size(), 0);
+}
+
+folly::dynamic MarkDistinctNode::serialize() const {
+  auto obj = PlanNode::serialize();
+  obj["distinctKeys"] = ISerializable::serialize(this->distinctKeys_);
+  obj["markerName"] = this->markerName_;
+  return obj;
+}
+
+// static
+PlanNodePtr MarkDistinctNode::create(const folly::dynamic& obj, void* context) {
+  auto source = deserializeSingleSource(obj, context);
+  auto distinctKeys = deserializeFields(obj["distinctKeys"], context);
+  auto markerName = obj["markerName"].asString();
+
+  return std::make_shared<MarkDistinctNode>(
+      deserializePlanNodeId(obj), markerName, distinctKeys, source);
+}
+
+namespace {
+RowTypePtr getRowNumberOutputType(
+    const RowTypePtr& inputType,
+    const std::string& rowNumberColumnName) {
+  std::vector<std::string> names = inputType->names();
+  std::vector<TypePtr> types = inputType->children();
+
+  names.push_back(rowNumberColumnName);
+  types.push_back(BIGINT());
+
+  return ROW(std::move(names), std::move(types));
+}
+
+RowTypePtr getOptionalRowNumberOutputType(
+    const RowTypePtr& inputType,
+    const std::optional<std::string>& rowNumberColumnName) {
+  if (rowNumberColumnName) {
+    return getRowNumberOutputType(inputType, rowNumberColumnName.value());
+  }
+
+  return inputType;
+}
+} // namespace
+
+RowNumberNode::RowNumberNode(
+    PlanNodeId id,
+    std::vector<FieldAccessTypedExprPtr> partitionKeys,
+    const std::optional<std::string>& rowNumberColumnName,
+    std::optional<int32_t> limit,
+    PlanNodePtr source)
+    : PlanNode(std::move(id)),
+      partitionKeys_{std::move(partitionKeys)},
+      limit_{limit},
+      sources_{std::move(source)},
+      outputType_(getOptionalRowNumberOutputType(
+          sources_[0]->outputType(),
+          rowNumberColumnName)) {}
+
+void RowNumberNode::addDetails(std::stringstream& stream) const {
+  if (!partitionKeys_.empty()) {
+    stream << "partition by (";
+    addFields(stream, partitionKeys_);
+    stream << ")";
+  }
+
+  if (limit_) {
+    if (!partitionKeys_.empty()) {
+      stream << " ";
+    }
+    stream << "limit " << limit_.value();
+  }
+}
+
+folly::dynamic RowNumberNode::serialize() const {
+  auto obj = PlanNode::serialize();
+  obj["partitionKeys"] = ISerializable::serialize(partitionKeys_);
+  if (generateRowNumber()) {
+    obj["rowNumberColumnName"] = outputType_->names().back();
+  }
+  if (limit_) {
+    obj["limit"] = limit_.value();
+  }
+
+  return obj;
+}
+
+// static
+PlanNodePtr RowNumberNode::create(const folly::dynamic& obj, void* context) {
+  auto source = deserializeSingleSource(obj, context);
+  auto partitionKeys = deserializeFields(obj["partitionKeys"], context);
+
+  std::optional<int32_t> limit;
+  if (obj.count("limit")) {
+    limit = obj["limit"].asInt();
+  }
+
+  std::optional<std::string> rowNumberColumnName;
+  if (obj.count("rowNumberColumnName")) {
+    rowNumberColumnName = obj["rowNumberColumnName"].asString();
+  }
+
+  return std::make_shared<RowNumberNode>(
+      deserializePlanNodeId(obj),
+      partitionKeys,
+      rowNumberColumnName,
+      limit,
+      source);
+}
+
+TopNRowNumberNode::TopNRowNumberNode(
+    PlanNodeId id,
+    std::vector<FieldAccessTypedExprPtr> partitionKeys,
+    std::vector<FieldAccessTypedExprPtr> sortingKeys,
+    std::vector<SortOrder> sortingOrders,
+    const std::optional<std::string>& rowNumberColumnName,
+    int32_t limit,
+    PlanNodePtr source)
+    : PlanNode(std::move(id)),
+      partitionKeys_{std::move(partitionKeys)},
+      sortingKeys_{std::move(sortingKeys)},
+      sortingOrders_{std::move(sortingOrders)},
+      limit_{limit},
+      sources_{std::move(source)},
+      outputType_{getOptionalRowNumberOutputType(
+          sources_[0]->outputType(),
+          rowNumberColumnName)} {
+  VELOX_USER_CHECK_EQ(
+      sortingKeys_.size(),
+      sortingOrders_.size(),
+      "Number of sorting keys must be equal to the number of sorting orders");
+
+  VELOX_USER_CHECK_GT(
+      sortingKeys_.size(),
+      0,
+      "Number of sorting keys must be greater than zero");
+}
+
+void TopNRowNumberNode::addDetails(std::stringstream& stream) const {
+  if (!partitionKeys_.empty()) {
+    stream << "partition by (";
+    addFields(stream, partitionKeys_);
+    stream << ") ";
+  }
+
+  stream << "order by (";
+  addSortingKeys(sortingKeys_, sortingOrders_, stream);
+  stream << ") ";
+
+  stream << "limit " << limit_;
+}
+
+folly::dynamic TopNRowNumberNode::serialize() const {
+  auto obj = PlanNode::serialize();
+  obj["partitionKeys"] = ISerializable::serialize(partitionKeys_);
+  obj["sortingKeys"] = ISerializable::serialize(sortingKeys_);
+  obj["sortingOrders"] = serializeSortingOrders(sortingOrders_);
+  if (generateRowNumber()) {
+    obj["rowNumberColumnName"] = outputType_->names().back();
+  }
+  obj["limit"] = limit_;
+  return obj;
+}
+
+// static
+PlanNodePtr TopNRowNumberNode::create(
+    const folly::dynamic& obj,
+    void* context) {
+  auto source = deserializeSingleSource(obj, context);
+  auto partitionKeys = deserializeFields(obj["partitionKeys"], context);
+  auto sortingKeys = deserializeFields(obj["sortingKeys"], context);
+
+  auto sortingOrders = deserializeSortingOrders(obj["sortingOrders"]);
+
+  std::optional<std::string> rowNumberColumnName;
+  if (obj.count("rowNumberColumnName")) {
+    rowNumberColumnName = obj["rowNumberColumnName"].asString();
+  }
+
+  return std::make_shared<TopNRowNumberNode>(
+      deserializePlanNodeId(obj),
+      partitionKeys,
+      sortingKeys,
+      sortingOrders,
+      rowNumberColumnName,
+      obj["limit"].asInt(),
+      source);
+}
+
+void LocalMergeNode::addDetails(std::stringstream& stream) const {
+  addSortingKeys(sortingKeys_, sortingOrders_, stream);
+}
+
+folly::dynamic LocalMergeNode::serialize() const {
+  auto obj = PlanNode::serialize();
+  obj["sortingKeys"] = ISerializable::serialize(sortingKeys_);
+  obj["sortingOrders"] = serializeSortingOrders(sortingOrders_);
+  return obj;
+}
+
+// static
+PlanNodePtr LocalMergeNode::create(const folly::dynamic& obj, void* context) {
+  auto sources = deserializeSources(obj, context);
+  auto sortingKeys = deserializeFields(obj["sortingKeys"], context);
+  auto sortingOrders = deserializeSortingOrders(obj["sortingOrders"]);
+
+  return std::make_shared<LocalMergeNode>(
+      deserializePlanNodeId(obj),
+      std::move(sortingKeys),
+      std::move(sortingOrders),
+      std::move(sources));
+}
+
+void TableWriteNode::addDetails(std::stringstream& /*unused*/) const {}
+
+folly::dynamic TableWriteNode::serialize() const {
+  auto obj = PlanNode::serialize();
+  obj["sources"] = sources_.front()->serialize();
+  obj["columns"] = columns_->serialize();
+  obj["columnNames"] = ISerializable::serialize(columnNames_);
+  if (aggregationNode_ != nullptr) {
+    obj["aggregationNode"] = aggregationNode_->serialize();
+  }
+  obj["connectorId"] = insertTableHandle_->connectorId();
+  obj["connectorInsertTableHandle"] =
+      insertTableHandle_->connectorInsertTableHandle()->serialize();
+  obj["hasPartitioningScheme"] = hasPartitioningScheme_;
+  obj["outputType"] = outputType_->serialize();
+  obj["commitStrategy"] = connector::commitStrategyToString(commitStrategy_);
+  return obj;
+}
+
+// static
+PlanNodePtr TableWriteNode::create(const folly::dynamic& obj, void* context) {
+  auto id = obj["id"].asString();
+  auto columns = deserializeRowType(obj["columns"]);
+  auto columnNames =
+      ISerializable::deserialize<std::vector<std::string>>(obj["columnNames"]);
+  std::shared_ptr<AggregationNode> aggregationNode;
+  if (obj.count("aggregationNode") != 0) {
+    aggregationNode = std::const_pointer_cast<AggregationNode>(
+        ISerializable::deserialize<AggregationNode>(obj["aggregationNode"]));
+  }
+  auto connectorId = obj["connectorId"].asString();
+  auto connectorInsertTableHandle =
+      std::const_pointer_cast<connector::ConnectorInsertTableHandle>(
+          ISerializable::deserialize<connector::ConnectorInsertTableHandle>(
+              obj["connectorInsertTableHandle"]));
+  const bool hasPartitioningScheme = obj["hasPartitioningScheme"].asBool();
+  auto outputType = deserializeRowType(obj["outputType"]);
+  auto commitStrategy =
+      connector::stringToCommitStrategy(obj["commitStrategy"].asString());
+  auto source = ISerializable::deserialize<PlanNode>(obj["sources"]);
+  return std::make_shared<TableWriteNode>(
+      id,
+      columns,
+      columnNames,
+      std::move(aggregationNode),
+      std::make_shared<InsertTableHandle>(
+          connectorId, connectorInsertTableHandle),
+      hasPartitioningScheme,
+      outputType,
+      commitStrategy,
+      source);
+}
+
+void TableWriteMergeNode::addDetails(std::stringstream& /* stream */) const {}
+
+folly::dynamic TableWriteMergeNode::serialize() const {
+  auto obj = PlanNode::serialize();
+  VELOX_CHECK_EQ(
+      sources_.size(), 1, "TableWriteMergeNode can only have one source");
+  obj["sources"] = sources_.front()->serialize();
+  obj["outputType"] = outputType_->serialize();
+  return obj;
+}
+
+// static
+PlanNodePtr TableWriteMergeNode::create(
+    const folly::dynamic& obj,
+    void* /*unused*/) {
+  auto id = obj["id"].asString();
+  auto outputType = deserializeRowType(obj["outputType"]);
+  auto source = ISerializable::deserialize<PlanNode>(obj["sources"]);
+  return std::make_shared<TableWriteMergeNode>(id, outputType, source);
 }
 
 void MergeExchangeNode::addDetails(std::stringstream& stream) const {
-  addSortingKeys(stream, sortingKeys_, sortingOrders_);
+  addSortingKeys(sortingKeys_, sortingOrders_, stream);
+}
+
+folly::dynamic MergeExchangeNode::serialize() const {
+  auto obj = PlanNode::serialize();
+  obj["outputType"] = ExchangeNode::outputType()->serialize();
+  obj["sortingKeys"] = ISerializable::serialize(sortingKeys_);
+  obj["sortingOrders"] = serializeSortingOrders(sortingOrders_);
+  return obj;
+}
+
+// static
+PlanNodePtr MergeExchangeNode::create(
+    const folly::dynamic& obj,
+    void* context) {
+  auto outputType = deserializeRowType(obj["outputType"]);
+  auto sortingKeys = deserializeFields(obj["sortingKeys"], context);
+  auto sortingOrders = deserializeSortingOrders(obj["sortingOrders"]);
+  return std::make_shared<MergeExchangeNode>(
+      deserializePlanNodeId(obj), outputType, sortingKeys, sortingOrders);
 }
 
 void LocalPartitionNode::addDetails(std::stringstream& stream) const {
-  // Nothing to add.
-  switch (type_) {
-    case Type::kGather:
-      stream << "GATHER";
-      break;
-    case Type::kRepartition:
-      stream << "REPARTITION";
-      break;
+  stream << typeName(type_);
+  if (type_ != Type::kGather) {
+    stream << " " << partitionFunctionSpec_->toString();
   }
+}
+
+folly::dynamic LocalPartitionNode::serialize() const {
+  auto obj = PlanNode::serialize();
+  obj["type"] = typeName(type_);
+  obj["partitionFunctionSpec"] = partitionFunctionSpec_->serialize();
+  return obj;
+}
+
+// static
+PlanNodePtr LocalPartitionNode::create(
+    const folly::dynamic& obj,
+    void* context) {
+  return std::make_shared<LocalPartitionNode>(
+      deserializePlanNodeId(obj),
+      typeFromName(obj["type"].asString()),
+      ISerializable::deserialize<PartitionFunctionSpec>(
+          obj["partitionFunctionSpec"]),
+      deserializeSources(obj, context));
+}
+
+// static
+const char* LocalPartitionNode::typeName(Type type) {
+  switch (type) {
+    case Type::kGather:
+      return "GATHER";
+    case Type::kRepartition:
+      return "REPARTITION";
+  }
+  VELOX_UNREACHABLE();
+}
+
+namespace {
+std::unordered_map<LocalPartitionNode::Type, std::string>
+localPartitionTypeNames() {
+  return {
+      {LocalPartitionNode::Type::kGather, "GATHER"},
+      {LocalPartitionNode::Type::kRepartition, "REPARTITION"},
+  };
+}
+} // namespace
+
+// static
+LocalPartitionNode::Type LocalPartitionNode::typeFromName(
+    const std::string& name) {
+  static const auto kTypes = invertMap(localPartitionTypeNames());
+
+  return kTypes.at(name);
 }
 
 void EnforceSingleRowNode::addDetails(std::stringstream& /* stream */) const {
   // Nothing to add.
 }
 
-void PartitionedOutputNode::addDetails(std::stringstream& stream) const {
-  if (broadcast_) {
-    stream << "BROADCAST";
-  } else if (numPartitions_ == 1) {
-    stream << "SINGLE";
+folly::dynamic EnforceSingleRowNode::serialize() const {
+  return PlanNode::serialize();
+}
+
+// static
+PlanNodePtr EnforceSingleRowNode::create(
+    const folly::dynamic& obj,
+    void* context) {
+  return std::make_shared<EnforceSingleRowNode>(
+      deserializePlanNodeId(obj), deserializeSingleSource(obj, context));
+}
+
+// static
+std::string PartitionedOutputNode::kindString(Kind kind) {
+  switch (kind) {
+    case Kind::kPartitioned:
+      return "PARTITIONED";
+    case Kind::kBroadcast:
+      return "BROADCAST";
+    case Kind::kArbitrary:
+      return "ARBITRARY";
+    default:
+      return fmt::format("INVALID OUTPUT KIND {}", static_cast<int>(kind));
+  }
+}
+
+// static
+PartitionedOutputNode::Kind PartitionedOutputNode::stringToKind(
+    std::string str) {
+  if (str == "PARTITIONED") {
+    return Kind::kPartitioned;
+  } else if (str == "BROADCAST") {
+    return Kind::kBroadcast;
+  } else if (str == "ARBITRARY") {
+    return Kind::kArbitrary;
   } else {
-    stream << "HASH(";
-    addKeys(stream, keys_);
-    stream << ") " << numPartitions_;
+    VELOX_FAIL("Unknown output buffer type: {}", str);
+  }
+}
+
+void PartitionedOutputNode::addDetails(std::stringstream& stream) const {
+  if (kind_ == Kind::kBroadcast) {
+    stream << "BROADCAST";
+  } else if (kind_ == Kind::kPartitioned) {
+    if (numPartitions_ == 1) {
+      stream << "SINGLE";
+    } else {
+      stream << fmt::format(
+          "partitionFunction: {} with {} partitions",
+          partitionFunctionSpec_->toString(),
+          numPartitions_);
+    }
+  } else {
+    stream << "ARBITRARY";
   }
 
   if (replicateNullsAndAny_) {
     stream << " replicate nulls and any";
   }
+}
+
+folly::dynamic PartitionedOutputNode::serialize() const {
+  auto obj = PlanNode::serialize();
+  obj["kind"] = kindString(kind_);
+  obj["numPartitions"] = numPartitions_;
+  obj["keys"] = ISerializable::serialize(keys_);
+  obj["replicateNullsAndAny"] = replicateNullsAndAny_;
+  obj["partitionFunctionSpec"] = partitionFunctionSpec_->serialize();
+  obj["outputType"] = outputType_->serialize();
+  return obj;
+}
+
+// static
+PlanNodePtr PartitionedOutputNode::create(
+    const folly::dynamic& obj,
+    void* context) {
+  return std::make_shared<PartitionedOutputNode>(
+      deserializePlanNodeId(obj),
+      stringToKind(obj["kind"].asString()),
+      ISerializable::deserialize<std::vector<ITypedExpr>>(obj["keys"], context),
+      obj["numPartitions"].asInt(),
+      obj["replicateNullsAndAny"].asBool(),
+      ISerializable::deserialize<PartitionFunctionSpec>(
+          obj["partitionFunctionSpec"], context),
+      deserializeRowType(obj["outputType"]),
+      deserializeSingleSource(obj, context));
 }
 
 void TopNNode::addDetails(std::stringstream& stream) const {
@@ -633,7 +1776,31 @@ void TopNNode::addDetails(std::stringstream& stream) const {
   }
   stream << count_ << " ";
 
-  addSortingKeys(stream, sortingKeys_, sortingOrders_);
+  addSortingKeys(sortingKeys_, sortingOrders_, stream);
+}
+
+folly::dynamic TopNNode::serialize() const {
+  auto obj = PlanNode::serialize();
+  obj["sortingKeys"] = ISerializable::serialize(sortingKeys_);
+  obj["sortingOrders"] = serializeSortingOrders(sortingOrders_);
+  obj["count"] = count_;
+  obj["partial"] = isPartial_;
+  return obj;
+}
+
+// static
+PlanNodePtr TopNNode::create(const folly::dynamic& obj, void* context) {
+  auto source = deserializeSingleSource(obj, context);
+  auto sortingKeys = deserializeFields(obj["sortingKeys"], context);
+  auto sortingOrders = deserializeSortingOrders(obj["sortingOrders"]);
+
+  return std::make_shared<TopNNode>(
+      deserializePlanNodeId(obj),
+      std::move(sortingKeys),
+      std::move(sortingOrders),
+      obj["count"].asInt(),
+      obj["partial"].asBool(),
+      std::move(source));
 }
 
 void LimitNode::addDetails(std::stringstream& stream) const {
@@ -646,33 +1813,57 @@ void LimitNode::addDetails(std::stringstream& stream) const {
   }
 }
 
+folly::dynamic LimitNode::serialize() const {
+  auto obj = PlanNode::serialize();
+  obj["partial"] = isPartial_;
+  obj["count"] = count_;
+  obj["offset"] = offset_;
+  return obj;
+}
+
+// static
+PlanNodePtr LimitNode::create(const folly::dynamic& obj, void* context) {
+  auto source = deserializeSingleSource(obj, context);
+
+  return std::make_shared<LimitNode>(
+      deserializePlanNodeId(obj),
+      obj["offset"].asInt(),
+      obj["count"].asInt(),
+      obj["partial"].asBool(),
+      std::move(source));
+}
+
 void OrderByNode::addDetails(std::stringstream& stream) const {
   if (isPartial_) {
     stream << "PARTIAL ";
   }
-  addSortingKeys(stream, sortingKeys_, sortingOrders_);
+  addSortingKeys(sortingKeys_, sortingOrders_, stream);
 }
 
-void WindowNode::addDetails(std::stringstream& stream) const {
-  stream << "partition by [";
-  if (!partitionKeys_.empty()) {
-    addFields(stream, partitionKeys_);
-  }
-  stream << "] ";
+folly::dynamic OrderByNode::serialize() const {
+  auto obj = PlanNode::serialize();
+  obj["sortingKeys"] = ISerializable::serialize(sortingKeys_);
+  obj["sortingOrders"] = serializeSortingOrders(sortingOrders_);
+  obj["partial"] = isPartial_;
+  return obj;
+}
 
-  stream << "order by [";
-  addSortingKeys(stream, sortingKeys_, sortingOrders_);
-  stream << "] ";
+// static
+PlanNodePtr OrderByNode::create(const folly::dynamic& obj, void* context) {
+  auto source = deserializeSingleSource(obj, context);
+  auto sortingKeys = deserializeFields(obj["sortingKeys"], context);
+  auto sortingOrders = deserializeSortingOrders(obj["sortingOrders"]);
 
-  auto numInputCols = sources_[0]->outputType()->size();
-  auto numOutputCols = outputType_->size();
-  for (auto i = numInputCols; i < numOutputCols; i++) {
-    if (i >= numInputCols + 1) {
-      stream << ", ";
-    }
-    stream << outputType_->names()[i] << " := ";
-    addWindowFunction(stream, windowFunctions_[i - numInputCols]);
-  }
+  return std::make_shared<OrderByNode>(
+      deserializePlanNodeId(obj),
+      std::move(sortingKeys),
+      std::move(sortingOrders),
+      obj["partial"].asBool(),
+      std::move(source));
+}
+
+void MarkDistinctNode::addDetails(std::stringstream& stream) const {
+  addFields(stream, distinctKeys_);
 }
 
 void PlanNode::toString(
@@ -730,6 +1921,72 @@ std::unordered_set<core::PlanNodeId> PlanNode::leafPlanNodeIds() const {
   std::unordered_set<core::PlanNodeId> leafIds;
   collectLeafPlanNodeIds(*this, leafIds);
   return leafIds;
+}
+
+// static
+void PlanNode::registerSerDe() {
+  auto& registry = DeserializationWithContextRegistryForSharedPtr();
+
+  registry.Register("AggregationNode", AggregationNode::create);
+  registry.Register("AssignUniqueIdNode", AssignUniqueIdNode::create);
+  registry.Register("EnforceSingleRowNode", EnforceSingleRowNode::create);
+  registry.Register("ExchangeNode", ExchangeNode::create);
+  registry.Register("FilterNode", FilterNode::create);
+  registry.Register("GroupIdNode", GroupIdNode::create);
+  registry.Register("HashJoinNode", HashJoinNode::create);
+  registry.Register("MergeExchangeNode", MergeExchangeNode::create);
+  registry.Register("MergeJoinNode", MergeJoinNode::create);
+  registry.Register("NestedLoopJoinNode", NestedLoopJoinNode::create);
+  registry.Register("LimitNode", LimitNode::create);
+  registry.Register("LocalMergeNode", LocalMergeNode::create);
+  registry.Register("LocalPartitionNode", LocalPartitionNode::create);
+  registry.Register("OrderByNode", OrderByNode::create);
+  registry.Register("PartitionedOutputNode", PartitionedOutputNode::create);
+  registry.Register("ProjectNode", ProjectNode::create);
+  registry.Register("RowNumberNode", RowNumberNode::create);
+  registry.Register("TableScanNode", TableScanNode::create);
+  registry.Register("TableWriteNode", TableWriteNode::create);
+  registry.Register("TableWriteMergeNode", TableWriteMergeNode::create);
+  registry.Register("TopNNode", TopNNode::create);
+  registry.Register("TopNRowNumberNode", TopNRowNumberNode::create);
+  registry.Register("UnnestNode", UnnestNode::create);
+  registry.Register("ValuesNode", ValuesNode::create);
+  registry.Register("WindowNode", WindowNode::create);
+  registry.Register("MarkDistinctNode", MarkDistinctNode::create);
+  registry.Register(
+      "GatherPartitionFunctionSpec", GatherPartitionFunctionSpec::deserialize);
+}
+
+folly::dynamic PlanNode::serialize() const {
+  folly::dynamic obj = folly::dynamic::object;
+  obj["name"] = fmt::format("{}Node", name());
+  obj["id"] = id_;
+
+  if (!sources().empty()) {
+    folly::dynamic serializedSources = folly::dynamic::array;
+    for (const auto& source : sources()) {
+      serializedSources.push_back(source->serialize());
+    }
+
+    obj["sources"] = serializedSources;
+  }
+
+  return obj;
+}
+
+folly::dynamic FilterNode::serialize() const {
+  auto obj = PlanNode::serialize();
+  obj["filter"] = filter_->serialize();
+  return obj;
+}
+
+// static
+PlanNodePtr FilterNode::create(const folly::dynamic& obj, void* context) {
+  auto source = deserializeSingleSource(obj, context);
+
+  auto filter = ISerializable::deserialize<ITypedExpr>(obj["filter"]);
+  return std::make_shared<FilterNode>(
+      deserializePlanNodeId(obj), filter, std::move(source));
 }
 
 } // namespace facebook::velox::core

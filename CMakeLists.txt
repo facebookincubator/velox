@@ -17,10 +17,19 @@ cmake_minimum_required(VERSION 3.14)
 cmake_policy(SET CMP0077 NEW)
 set(CMAKE_POLICY_DEFAULT_CMP0077 NEW)
 
+# Sets new behavior for CMP0135, which controls how timestamps are extracted
+# when using ExternalProject_Add():
+# https://cmake.org/cmake/help/latest/policy/CMP0135.html
+if(POLICY CMP0135)
+  cmake_policy(SET CMP0135 NEW)
+  set(CMAKE_POLICY_DEFAULT_CMP0135 NEW)
+endif()
+
 # set the project name
 project(velox)
 
-list(PREPEND CMAKE_MODULE_PATH "${PROJECT_SOURCE_DIR}/CMake")
+list(PREPEND CMAKE_MODULE_PATH "${PROJECT_SOURCE_DIR}/CMake"
+     "${PROJECT_SOURCE_DIR}/CMake/third-party")
 
 # Include our ThirdPartyToolchain dependencies macros
 include(ResolveDependency)
@@ -61,18 +70,24 @@ option(VELOX_ENABLE_PARSE "Build parser used for unit tests." ON)
 option(VELOX_ENABLE_EXAMPLES
        "Build examples. This will enable VELOX_ENABLE_EXPRESSION automatically."
        OFF)
-option(VELOX_ENABLE_SUBSTRAIT "Buid Substrait-to-Velox converter." OFF)
+option(VELOX_ENABLE_SUBSTRAIT "Build Substrait-to-Velox converter." OFF)
 option(VELOX_ENABLE_BENCHMARKS "Enable Velox top level benchmarks." OFF)
 option(VELOX_ENABLE_BENCHMARKS_BASIC "Enable Velox basic benchmarks." OFF)
 option(VELOX_ENABLE_S3 "Build S3 Connector" OFF)
+option(VELOX_ENABLE_GCS "Build GCS Connector" OFF)
 option(VELOX_ENABLE_HDFS "Build Hdfs Connector" OFF)
 option(VELOX_ENABLE_PARQUET "Enable Parquet support" OFF)
 option(VELOX_ENABLE_ARROW "Enable Arrow support" OFF)
+option(VELOX_ENABLE_REMOTE_FUNCTIONS "Enable remote function support" OFF)
 option(VELOX_ENABLE_CCACHE "Use ccache if installed." ON)
 
 option(VELOX_BUILD_TEST_UTILS "Builds Velox test utilities" OFF)
 option(VELOX_BUILD_PYTHON_PACKAGE "Builds Velox Python bindings" OFF)
 option(VELOX_BUILD_BENCHMARKS "Builds Velox benchmarks" OFF)
+option(
+  VELOX_ENABLE_INT64_BUILD_PARTITION_BOUND
+  "make buildPartitionBounds_ a vector int64 instead of int32 to avoid integer overflow when the hashtable has billions of records"
+  OFF)
 
 if(${VELOX_BUILD_MINIMAL})
   # Enable and disable components for velox base build
@@ -88,6 +103,7 @@ if(${VELOX_BUILD_MINIMAL})
   set(VELOX_ENABLE_SPARK_FUNCTIONS OFF)
   set(VELOX_ENABLE_EXAMPLES OFF)
   set(VELOX_ENABLE_S3 OFF)
+  set(VELOX_ENABLE_GCS OFF)
   set(VELOX_ENABLE_SUBSTRAIT OFF)
   set(VELOX_CODEGEN_SUPPORT OFF)
 endif()
@@ -121,7 +137,7 @@ if(${VELOX_BUILD_BENCHMARKS})
   set(VELOX_BUILD_TEST_UTILS ON)
   set(VELOX_BUILD_TESTING OFF)
   set(VELOX_ENABLE_EXAMPLES OFF)
-  set(VELOX_ENABLE_S3 OFF)
+  set(VELOX_ENABLE_GCS OFF)
   set(VELOX_ENABLE_SUBSTRAIT OFF)
   set(VELOX_CODEGEN_SUPPORT OFF)
 endif()
@@ -136,9 +152,10 @@ if(${VELOX_BUILD_PYTHON_PACKAGE})
   set(VELOX_ENABLE_AGGREGATES OFF)
   set(VELOX_ENABLE_HIVE_CONNECTOR OFF)
   set(VELOX_ENABLE_TPCH_CONNECTOR OFF)
-  set(VELOX_ENABLE_SPARK_FUNCTIONS OFF)
+  set(VELOX_ENABLE_SPARK_FUNCTIONS ON)
   set(VELOX_ENABLE_EXAMPLES OFF)
   set(VELOX_ENABLE_S3 OFF)
+  set(VELOX_ENABLE_GCS OFF)
   set(VELOX_ENABLE_SUBSTRAIT OFF)
   set(VELOX_CODEGEN_SUPPORT OFF)
   set(VELOX_ENABLE_BENCHMARKS_BASIC OFF)
@@ -159,6 +176,10 @@ if(VELOX_ENABLE_CCACHE
   endif()
 endif()
 
+# At the moment we prefer static linking but by default cmake looks for shared
+# libs first. This will still fallback to shared libs when static ones are not
+# found
+list(INSERT CMAKE_FIND_LIBRARY_SUFFIXES 0 a)
 if(VELOX_ENABLE_S3)
   # Set AWS_ROOT_DIR if you have a custom install location of AWS SDK CPP.
   if(AWSSDK_ROOT_DIR)
@@ -166,6 +187,15 @@ if(VELOX_ENABLE_S3)
   endif()
   find_package(AWSSDK REQUIRED COMPONENTS s3;identity-management)
   add_definitions(-DVELOX_ENABLE_S3)
+endif()
+
+if(VELOX_ENABLE_GCS)
+  # Set GCS_ROOT_DIR if you have a custom install location of GCS SDK CPP.
+  if(GCSSDK_ROOT_DIR)
+    list(APPEND CMAKE_PREFIX_PATH ${GCSSDK_ROOT_DIR})
+  endif()
+  find_package(google_cloud_cpp_storage REQUIRED)
+  add_definitions(-DVELOX_ENABLE_GCS)
 endif()
 
 if(VELOX_ENABLE_HDFS)
@@ -183,6 +213,12 @@ if(VELOX_ENABLE_PARQUET)
   set(VELOX_ENABLE_ARROW ON)
 endif()
 
+if(VELOX_ENABLE_REMOTE_FUNCTIONS)
+  # TODO: Move this to use resolve_dependency().
+  find_package(FBThrift CONFIG REQUIRED)
+  find_package(wangle CONFIG REQUIRED)
+endif()
+
 # Turn on Codegen only for Clang and non Mac systems.
 if((NOT DEFINED VELOX_CODEGEN_SUPPORT)
    AND (CMAKE_CXX_COMPILER_ID MATCHES "Clang")
@@ -197,6 +233,12 @@ endif()
 # define processor variable for conditional compilation
 if(${VELOX_CODEGEN_SUPPORT})
   add_compile_definitions(CODEGEN_ENABLED=1)
+endif()
+
+# make buildPartitionBounds_ a vector int64 instead of int32 to avoid integer
+# overflow
+if(${VELOX_ENABLE_INT64_BUILD_PARTITION_BOUND})
+  add_compile_definitions(VELOX_ENABLE_INT64_BUILD_PARTITION_BOUND)
 endif()
 
 # MacOSX enables two-level namespace by default:
@@ -257,10 +299,6 @@ if("${MAX_LINK_JOBS}")
   set(CMAKE_JOB_POOL_LINK link_job_pool)
 endif()
 
-if("${TREAT_WARNINGS_AS_ERRORS}")
-  set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -Werror")
-endif()
-
 if("${ENABLE_ALL_WARNINGS}")
   if(CMAKE_CXX_COMPILER_ID MATCHES "Clang")
     set(KNOWN_COMPILER_SPECIFIC_WARNINGS
@@ -281,7 +319,9 @@ if("${ENABLE_ALL_WARNINGS}")
          -Wno-format-overflow \
          -Wno-strict-aliasing \
          -Wno-type-limits \
-         -Wno-stringop-overflow")
+         -Wno-stringop-overflow \
+         -Wno-stringop-overread \
+         -Wno-return-type")
   endif()
 
   set(KNOWN_WARNINGS
@@ -296,26 +336,16 @@ endif()
 
 message("FINAL CMAKE_CXX_FLAGS=${CMAKE_CXX_FLAGS}")
 
-set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
-
-set_source(Boost)
-set_source(ICU)
-
-if(CMAKE_SYSTEM_NAME MATCHES "Darwin" OR ${Boost_SOURCE} STREQUAL "BUNDLED")
-  if(${ICU_SOURCE} STREQUAL "BUNDLED")
-    resolve_dependency(ICU)
-    include_directories(${ICU_INCLUDE_DIRS})
-    link_directories(${ICU_LIBRARIES})
-  else()
-    if(ON_APPLE_M1)
-      set(CMAKE_PREFIX_PATH "/opt/homebrew/opt/icu4c" ${CMAKE_PREFIX_PATH})
-    else()
-      set(CMAKE_PREFIX_PATH "/usr/local/opt/icu4c" ${CMAKE_PREFIX_PATH})
-    endif()
-  endif()
+if(${VELOX_ENABLE_GPU})
+  enable_language(CUDA)
+  # Determine CUDA_ARCHITECTURES automatically.
+  cmake_policy(SET CMP0104 NEW)
 endif()
 
+set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
+
 set(BOOST_INCLUDE_LIBRARIES
+    headers
     atomic
     context
     date_time
@@ -325,6 +355,7 @@ set(BOOST_INCLUDE_LIBRARIES
     system
     thread)
 
+set_source(Boost)
 resolve_dependency(Boost 1.66.0 COMPONENTS ${BOOST_INCLUDE_LIBRARIES})
 
 # Range-v3 will be enable when the codegen code actually lands keeping it here
@@ -354,21 +385,24 @@ resolve_dependency(glog)
 set_source(fmt)
 resolve_dependency(fmt)
 
-find_library(EVENT event)
-
-find_library(DOUBLE_CONVERSION double-conversion)
-
-# Required for boost.
-find_package(ZLIB)
-
 if(NOT ${VELOX_BUILD_MINIMAL})
-  find_library(LZ4 lz4)
-  find_library(LZO lzo2)
-  find_library(ZSTD zstd)
-  find_library(SNAPPY snappy)
+  find_package(ZLIB REQUIRED)
+  find_package(lz4 REQUIRED)
+  find_package(lzo2 REQUIRED)
+  find_package(zstd REQUIRED)
+  find_package(Snappy REQUIRED)
+  if(NOT TARGET zstd::zstd)
+    if(TARGET zstd::libzstd_static)
+      set(ZSTD_TYPE static)
+    else()
+      set(ZSTD_TYPE shared)
+    endif()
+    add_library(zstd::zstd ALIAS zstd::libzstd_${ZSTD_TYPE})
+  endif()
 endif()
 
-find_library(RE2 re2 REQUIRED)
+set_source(re2)
+resolve_dependency(re2)
 
 if(${VELOX_BUILD_PYTHON_PACKAGE})
   set_source(pybind11)
@@ -376,39 +410,19 @@ if(${VELOX_BUILD_PYTHON_PACKAGE})
   add_subdirectory(pyvelox)
 endif()
 
+set_source(simdjson)
+resolve_dependency(simdjson 3.1.5)
+
 # Locate or build folly.
+add_compile_definitions(FOLLY_HAVE_INT128_T=1)
 set_source(folly)
 resolve_dependency(folly)
-
-# If we use BUNDLED boost we need to set this manually AFTER folly is configured
-if(NOT DEFINED Boost_LIBRARIES)
-  set(Boost_LIBRARIES ${BOOST_INCLUDE_LIBRARIES})
-  list(TRANSFORM Boost_LIBRARIES PREPEND Boost::)
-endif()
-
-set(FOLLY_WITH_DEPENDENCIES
-    ${FOLLY_LIBRARIES}
-    ${Boost_LIBRARIES}
-    ${DOUBLE_CONVERSION}
-    ${EVENT}
-    ${SNAPPY}
-    ${CMAKE_DL_LIBS}
-    ${FMT})
 
 if(DEFINED FOLLY_BENCHMARK_STATIC_LIB)
   set(FOLLY_BENCHMARK ${FOLLY_BENCHMARK_STATIC_LIB})
 else()
   set(FOLLY_BENCHMARK Folly::follybenchmark)
 endif()
-
-if(NOT ${VELOX_BUILD_MINIMAL})
-  find_package(BZip2 MODULE)
-  if(BZIP2_FOUND)
-    list(APPEND FOLLY_WITH_DEPENDENCIES ${BZIP2_LIBRARIES})
-  endif()
-endif()
-
-include_directories(SYSTEM ${FOLLY_INCLUDE_DIRS})
 
 if(NOT ${VELOX_BUILD_MINIMAL})
   # Locate or build protobuf.
@@ -496,6 +510,12 @@ include_directories(.)
 # TODO: Include all other installation files. For now just making sure this
 # generates an installable makefile.
 install(FILES velox/type/Type.h DESTINATION "include/velox")
+
+# Adding this down here prevents warnings in dependencies from stopping the
+# build
+if("${TREAT_WARNINGS_AS_ERRORS}")
+  set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -Werror")
+endif()
 
 add_subdirectory(third_party)
 add_subdirectory(velox)

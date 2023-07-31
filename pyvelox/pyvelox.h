@@ -27,60 +27,21 @@
 #include <velox/parse/TypeResolver.h>
 #include <velox/type/Type.h>
 #include <velox/type/Variant.h>
+#include <velox/vector/DictionaryVector.h>
 #include <velox/vector/FlatVector.h>
 #include "folly/json.h"
+
+#include "context.h"
 
 namespace facebook::velox::py {
 
 namespace py = pybind11;
 
-struct PyVeloxContext {
-  PyVeloxContext() = default;
-  PyVeloxContext(const PyVeloxContext&) = delete;
-  PyVeloxContext(const PyVeloxContext&&) = delete;
-  PyVeloxContext& operator=(const PyVeloxContext&) = delete;
-  PyVeloxContext& operator=(const PyVeloxContext&&) = delete;
-
-  static inline PyVeloxContext& getInstance() {
-    if (!instance_) {
-      instance_ = std::make_unique<PyVeloxContext>();
-    }
-    return *instance_.get();
-  }
-
-  facebook::velox::memory::MemoryPool* pool() {
-    return pool_.get();
-  }
-  facebook::velox::core::QueryCtx* queryCtx() {
-    return queryCtx_.get();
-  }
-  facebook::velox::core::ExecCtx* execCtx() {
-    return execCtx_.get();
-  }
-
-  static inline void cleanup() {
-    if (instance_) {
-      instance_.reset();
-    }
-  }
-
- private:
-  std::shared_ptr<facebook::velox::memory::MemoryPool> pool_ =
-      facebook::velox::memory::getDefaultMemoryPool();
-  std::shared_ptr<facebook::velox::core::QueryCtx> queryCtx_ =
-      std::make_shared<facebook::velox::core::QueryCtx>();
-  std::unique_ptr<facebook::velox::core::ExecCtx> execCtx_ =
-      std::make_unique<facebook::velox::core::ExecCtx>(
-          pool_.get(),
-          queryCtx_.get());
-
-  static inline std::unique_ptr<PyVeloxContext> instance_;
-};
-
 static std::string serializeType(
     const std::shared_ptr<const velox::Type>& type);
 
-inline void checkBounds(VectorPtr& v, vector_size_t idx) {
+template <typename VecPtr>
+inline void checkBounds(VecPtr& v, vector_size_t idx) {
   if (idx < 0 || idx >= v->size()) {
     throw std::out_of_range("Index out of range");
   }
@@ -108,119 +69,46 @@ inline velox::variant pyToVariant(const py::handle& obj) {
   }
 }
 
+static VectorPtr pyToConstantVector(
+    const py::handle& obj,
+    vector_size_t length,
+    facebook::velox::memory::MemoryPool* pool,
+    TypePtr type = nullptr);
+
 template <TypeKind T>
-static inline VectorPtr variantsToFlatVector(
+static VectorPtr variantsToFlatVector(
     const std::vector<velox::variant>& variants,
-    facebook::velox::memory::MemoryPool* pool) {
-  using NativeType = typename TypeTraits<T>::NativeType;
-  constexpr bool kNeedsHolder =
-      (T == TypeKind::VARCHAR || T == TypeKind::VARBINARY);
-
-  TypePtr type = fromKindToScalerType(T);
-  auto result =
-      BaseVector::create<FlatVector<NativeType>>(type, variants.size(), pool);
-
-  std::conditional_t<
-      kNeedsHolder,
-      velox::StringViewBufferHolder,
-      velox::memory::MemoryPool*>
-      holder{pool};
-  for (int i = 0; i < variants.size(); i++) {
-    if (variants[i].isNull()) {
-      result->setNull(i, true);
-    } else {
-      if constexpr (kNeedsHolder) {
-        velox::StringView view =
-            holder.getOwnedValue(variants[i].value<std::string>());
-        result->set(i, view);
-      } else {
-        result->set(i, variants[i].value<NativeType>());
-      }
-    }
-  }
-  return result;
-}
+    facebook::velox::memory::MemoryPool* pool);
 
 static inline VectorPtr pyListToVector(
     const py::list& list,
+    facebook::velox::memory::MemoryPool* pool);
+
+template <TypeKind T>
+static VectorPtr createDictionaryVector(
+    BufferPtr baseVector,
+    VectorPtr values,
     facebook::velox::memory::MemoryPool* pool) {
-  std::vector<velox::variant> variants;
-  variants.reserve(list.size());
-  for (auto item : list) {
-    variants.push_back(pyToVariant(item));
-  }
-
-  if (variants.empty()) {
-    throw py::value_error("Can't create a Velox vector from an empty list");
-  }
-
-  velox::TypeKind first_kind = velox::TypeKind::INVALID;
-  for (velox::variant& var : variants) {
-    if (var.hasValue()) {
-      if (first_kind == velox::TypeKind::INVALID) {
-        first_kind = var.kind();
-      } else if (var.kind() != first_kind) {
-        throw py::type_error(
-            "Velox Vector must consist of items of the same type");
-      }
-    }
-  }
-
-  if (first_kind == velox::TypeKind::INVALID) {
-    throw py::value_error(
-        "Can't create a Velox vector consisting of only None");
-  }
-
-  return VELOX_DYNAMIC_SCALAR_TYPE_DISPATCH(
-      variantsToFlatVector, first_kind, variants, pool);
-}
-
-template <TypeKind T>
-inline py::object getItemFromVector(VectorPtr& v, vector_size_t idx) {
   using NativeType = typename TypeTraits<T>::NativeType;
-  if (std::is_same_v<NativeType, velox::StringView>) {
-    const auto* flat = v->asFlatVector<velox::StringView>();
-    const velox::StringView value = flat->valueAt(idx);
-    py::str result = std::string_view(value);
-    return result;
-  } else {
-    const auto* flat = v->asFlatVector<NativeType>();
-    py::object result = py::cast(flat->valueAt(idx));
-    return result;
-  }
+  size_t length = baseVector->size() / sizeof(vector_size_t);
+  return std::make_shared<DictionaryVector<NativeType>>(
+      pool,
+      /*nulls=*/nullptr,
+      length,
+      std::move(values),
+      std::move(baseVector));
 }
 
-inline py::object getItemFromVector(VectorPtr& v, vector_size_t idx) {
-  checkBounds(v, idx);
-  if (v->isNullAt(idx)) {
-    return py::none();
-  }
-  return VELOX_DYNAMIC_SCALAR_TYPE_DISPATCH(
-      getItemFromVector, v->typeKind(), v, idx);
-}
+template <typename NativeType>
+static py::object getItemFromSimpleVector(
+    SimpleVectorPtr<NativeType>& vector,
+    vector_size_t idx);
 
-template <TypeKind T>
-inline void
-setItemInVector(VectorPtr& v, vector_size_t idx, velox::variant& var) {
-  using NativeType = typename TypeTraits<T>::NativeType;
-  auto* flat = v->asFlatVector<NativeType>();
-  flat->set(idx, NativeType{var.value<NativeType>()});
-}
-
-inline void setItemInVector(VectorPtr& v, vector_size_t idx, py::handle& obj) {
-  checkBounds(v, idx);
-
-  velox::variant var = pyToVariant(obj);
-  if (var.kind() == velox::TypeKind::INVALID) {
-    return v->setNull(idx, true);
-  }
-
-  if (var.kind() != v->typeKind()) {
-    throw py::type_error("Attempted to insert value of mismatched types");
-  }
-  return VELOX_DYNAMIC_SCALAR_TYPE_DISPATCH(
-      setItemInVector, v->typeKind(), v, idx, var);
-}
+template <typename NativeType>
+inline void setItemInFlatVector(
+    FlatVectorPtr<NativeType>& vector,
+    vector_size_t idx,
+    py::handle& obj);
 
 inline void appendVectors(VectorPtr& u, VectorPtr& v) {
   if (u->typeKind() != v->typeKind()) {
@@ -362,7 +250,86 @@ inline void addDataTypeBindings(
   rowType.def("names", &RowType::names, "Return the names of the columns");
 }
 
-inline void addVectorBindings(
+struct DictionaryIndices {
+  const BufferPtr indices;
+};
+
+template <>
+inline void checkBounds(DictionaryIndices& indices, vector_size_t idx) {
+  if (idx < 0 || idx >= (indices.indices->size() / sizeof(vector_size_t))) {
+    throw std::out_of_range("Index out of range");
+  }
+}
+
+// Currently PyVelox will only register vectors for primitive types.
+template <TypeKind T>
+static void registerTypedVectors(
+    py::module& m,
+    bool asModuleLocalDefinitions = true) {
+  using NativeType = typename TypeTraits<T>::NativeType;
+  const std::string typeName = TypeTraits<T>::name;
+  py::class_<SimpleVector<NativeType>, SimpleVectorPtr<NativeType>, BaseVector>(
+      m,
+      ("SimpleVector_" + typeName).c_str(),
+      py::module_local(asModuleLocalDefinitions))
+      .def(
+          "__getitem__",
+          [](SimpleVectorPtr<NativeType> v, vector_size_t idx) {
+            return getItemFromSimpleVector(v, idx);
+          })
+      .def(
+          "__getitem__",
+          [](std::shared_ptr<SimpleVector<NativeType>> v, py::slice slice) {
+            size_t start, stop, step, length;
+            if (!slice.compute(v->size(), &start, &stop, &step, &length)) {
+              throw py::error_already_set();
+            }
+            if (step != 1) {
+              PyErr_SetString(
+                  PyExc_NotImplementedError,
+                  "Slicing with step other than 1 is not supported");
+              throw py::error_already_set();
+            }
+            return v->slice(start, length);
+          });
+
+  py::class_<
+      FlatVector<NativeType>,
+      FlatVectorPtr<NativeType>,
+      SimpleVector<NativeType>>(
+      m,
+      ("FlatVector_" + typeName).c_str(),
+      py::module_local(asModuleLocalDefinitions))
+      .def(
+          "__setitem__",
+          [](FlatVectorPtr<NativeType> v, vector_size_t idx, py::handle& obj) {
+            setItemInFlatVector(v, idx, obj);
+          });
+
+  py::class_<
+      ConstantVector<NativeType>,
+      ConstantVectorPtr<NativeType>,
+      SimpleVector<NativeType>>(
+      m,
+      ("ConstantVector_" + typeName).c_str(),
+      py::module_local(asModuleLocalDefinitions));
+
+  py::class_<
+      DictionaryVector<NativeType>,
+      DictionaryVectorPtr<NativeType>,
+      SimpleVector<NativeType>>(
+      m,
+      ("DictionaryVector_" + typeName).c_str(),
+      py::module_local(asModuleLocalDefinitions))
+      .def(
+          "indices",
+          [](DictionaryVectorPtr<NativeType> vec) {
+            return DictionaryIndices{vec->indices()};
+          })
+      .def("values", &DictionaryVector<NativeType>::valueVector);
+}
+
+static void addVectorBindings(
     py::module& m,
     bool asModuleLocalDefinitions = true) {
   using namespace facebook::velox;
@@ -385,16 +352,6 @@ inline void addVectorBindings(
       .def("__str__", [](VectorPtr& v) { return v->toString(); })
       .def("__len__", &BaseVector::size)
       .def("size", &BaseVector::size)
-      .def(
-          "__getitem__",
-          [](VectorPtr& v, vector_size_t idx) {
-            return getItemFromVector(v, idx);
-          })
-      .def(
-          "__setitem__",
-          [](VectorPtr& v, vector_size_t idx, py::handle& obj) {
-            setItemInVector(v, idx, obj);
-          })
       .def("dtype", &BaseVector::type)
       .def("typeKind", &BaseVector::typeKind)
       .def("mayHaveNulls", &BaseVector::mayHaveNulls)
@@ -412,10 +369,87 @@ inline void addVectorBindings(
             return v->hashValueAt(idx);
           })
       .def("encoding", &BaseVector::encoding)
-      .def("append", [](VectorPtr& u, VectorPtr& v) { appendVectors(u, v); });
+      .def("append", [](VectorPtr& u, VectorPtr& v) { appendVectors(u, v); })
+      .def("resize", &BaseVector::resize)
+      .def(
+          "slice",
+          [](VectorPtr& u,
+             vector_size_t start,
+             vector_size_t stop,
+             vector_size_t step) {
+            if (step != 1) {
+              PyErr_SetString(
+                  PyExc_NotImplementedError,
+                  "Slicing with step other than 1 is not supported");
+              throw py::error_already_set();
+            }
+            return u->slice(start, stop - start);
+          },
+          py::arg("start"),
+          py::arg("stop"),
+          py::arg("step") = 1);
+
+  constexpr TypeKind supportedTypes[] = {
+      TypeKind::BOOLEAN,
+      TypeKind::TINYINT,
+      TypeKind::SMALLINT,
+      TypeKind::INTEGER,
+      TypeKind::BIGINT,
+      TypeKind::REAL,
+      TypeKind::DOUBLE,
+      TypeKind::VARBINARY,
+      TypeKind::TIMESTAMP};
+
+  for (int i = 0; i < sizeof(supportedTypes) / sizeof(supportedTypes[0]); i++) {
+    VELOX_DYNAMIC_SCALAR_TYPE_DISPATCH(
+        registerTypedVectors, supportedTypes[i], m, asModuleLocalDefinitions);
+  }
+
+  py::class_<DictionaryIndices>(
+      m, "DictionaryIndices", py::module_local(asModuleLocalDefinitions))
+      .def(
+          "__len__",
+          [](DictionaryIndices indices) {
+            return (indices.indices->size()) / sizeof(vector_size_t);
+          })
+      .def("__getitem__", [](DictionaryIndices indices, vector_size_t idx) {
+        checkBounds(indices, idx);
+        return indices.indices->as<vector_size_t>()[idx];
+      });
+
   m.def("from_list", [](const py::list& list) mutable {
-    return pyListToVector(list, PyVeloxContext::getInstance().pool());
+    return pyListToVector(list, PyVeloxContext::getSingletonInstance().pool());
   });
+  m.def(
+      "constant_vector",
+      [](const py::handle& obj, vector_size_t length, TypePtr type) {
+        return pyToConstantVector(
+            obj, length, PyVeloxContext::getSingletonInstance().pool(), type);
+      },
+      py::arg("value"),
+      py::arg("length"),
+      py::arg("type") = nullptr);
+
+  m.def(
+      "dictionary_vector",
+      [](VectorPtr baseVector, const py::list& indices_list) {
+        BufferPtr indices_buffer = AlignedBuffer::allocate<vector_size_t>(
+            indices_list.size(), PyVeloxContext::getSingletonInstance().pool());
+        vector_size_t* indices_ptr = indices_buffer->asMutable<vector_size_t>();
+        for (size_t i = 0; i < indices_list.size(); i++) {
+          if (!py::isinstance<py::int_>(indices_list[i]))
+            throw py::type_error("Found an index that's not an integer");
+          vector_size_t idx = py::cast<vector_size_t>(indices_list[i]);
+          checkBounds(baseVector, idx);
+          indices_ptr[i] = py::cast<vector_size_t>(indices_list[i]);
+        }
+        return VELOX_DYNAMIC_SCALAR_TYPE_DISPATCH(
+            createDictionaryVector,
+            baseVector->typeKind(),
+            std::move(indices_buffer),
+            std::move(baseVector),
+            PyVeloxContext::getSingletonInstance().pool());
+      });
 }
 
 static void addExpressionBindings(

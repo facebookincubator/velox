@@ -13,16 +13,10 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-#include "velox/exec/RowContainer.h"
-#include <gtest/gtest.h>
-#include <algorithm>
-#include <random>
-#include "velox/common/file/FileSystems.h"
-#include "velox/dwio/common/tests/utils/BatchMaker.h"
-#include "velox/exec/ContainerRowSerde.h"
+#include "velox/common/base/tests/GTestUtils.h"
+#include "velox/exec/Aggregate.h"
 #include "velox/exec/VectorHasher.h"
 #include "velox/exec/tests/utils/RowContainerTestBase.h"
-#include "velox/serializers/PrestoSerializer.h"
 
 using namespace facebook::velox;
 using namespace facebook::velox::exec;
@@ -463,13 +457,13 @@ TEST_F(RowContainerTest, types) {
       ROW(
           {{"bool_val", BOOLEAN()},
            {"tiny_val", TINYINT()},
-           {"long_decimal_val", LONG_DECIMAL(20, 3)},
            {"small_val", SMALLINT()},
            {"int_val", INTEGER()},
            {"long_val", BIGINT()},
            {"float_val", REAL()},
-           {"short_decimal_val", SHORT_DECIMAL(10, 2)},
            {"double_val", DOUBLE()},
+           {"long_decimal_val", DECIMAL(20, 3)},
+           {"short_decimal_val", DECIMAL(10, 2)},
            {"string_val", VARCHAR()},
            {"array_val", ARRAY(VARCHAR())},
            {"struct_val",
@@ -481,13 +475,13 @@ TEST_F(RowContainerTest, types) {
 
            {"bool_val2", BOOLEAN()},
            {"tiny_val2", TINYINT()},
-           {"long_decimal_val2", LONG_DECIMAL(20, 0)},
-           {"short_decimal_val2", SHORT_DECIMAL(3, 3)},
            {"small_val2", SMALLINT()},
            {"int_val2", INTEGER()},
            {"long_val2", BIGINT()},
            {"float_val2", REAL()},
            {"double_val2", DOUBLE()},
+           {"long_decimal_val2", DECIMAL(20, 3)},
+           {"short_decimal_val2", DECIMAL(10, 2)},
            {"string_val2", VARCHAR()},
            {"array_val2", ARRAY(VARCHAR())},
            {"struct_val2",
@@ -573,6 +567,13 @@ TEST_F(RowContainerTest, types) {
         folly::Range<char**>(rows.data(), rows.size()),
         false,
         rowHashes.data());
+
+    // The RowContainer has corresponding key and dependent columns
+    // of each type.
+    // This pairing of columns can be used to test the compare API
+    // of 2 rows with 2 different columns.
+    column_index_t dependantColumn =
+        column < keys.size() ? column + keys.size() : column - keys.size();
     for (auto i = 0; i < kNumRows; ++i) {
       if (column) {
         EXPECT_EQ(hashes[i], rowHashes[i]);
@@ -589,13 +590,23 @@ TEST_F(RowContainerTest, types) {
             data->equals<true>(rows[i], data->columnAt(column), decoded, i));
       }
       if (i > 0) {
-        // We compare the values on consecutive rows
+        // We compare the values on consecutive rows.
         auto result = sign(source->compare(source.get(), i, i - 1));
         EXPECT_EQ(
             result,
             sign(data->compare(
                 rows[i], data->columnAt(column), decoded, i - 1)));
         EXPECT_EQ(result, sign(data->compare(rows[i], rows[i - 1], column)));
+        EXPECT_EQ(
+            result, sign(data->compare(rows[i], rows[i - 1], column, column)));
+
+        // This variation of the API compares the values on consecutive rows
+        // between the same column type (used as a key and as a dependent) in
+        // the row structure.
+        EXPECT_EQ(
+            sign(data->compare(rows[i], rows[i - 1], column, dependantColumn)),
+            -sign(
+                data->compare(rows[i - 1], rows[i], dependantColumn, column)));
       }
     }
   }
@@ -604,6 +615,85 @@ TEST_F(RowContainerTest, types) {
   auto free = data->freeSpace();
   EXPECT_LT(0, free.first);
   EXPECT_LT(0, free.second);
+}
+
+TEST_F(RowContainerTest, extractNulls) {
+  constexpr int32_t kNumRows = 100;
+  auto batch = makeRowVector({
+      makeFlatVector<bool>(
+          kNumRows, [](auto row) { return row % 5 == 0; }, nullEvery(2)),
+      makeFlatVector<int8_t>(
+          kNumRows, [](auto row) { return row % 5; }, nullEvery(3)),
+      makeFlatVector<int16_t>(
+          kNumRows, [](auto row) { return row % 5; }, nullEvery(4)),
+      makeFlatVector<int32_t>(
+          kNumRows, [](auto row) { return row % 5; }, nullEvery(5)),
+      makeFlatVector<int64_t>(
+          kNumRows, [](auto row) { return row % 5; }, nullEvery(6)),
+      makeFlatVector<float>(
+          kNumRows, [](auto row) { return row % 5; }, nullEvery(7)),
+      makeFlatVector<double>(
+          kNumRows, [](auto row) { return row % 5; }, nullEvery(8)),
+      makeFlatVector<StringView>(
+          kNumRows,
+          [](auto /* row */) { return StringView("abcd"); },
+          nullEvery(9)),
+      makeArrayVector<int32_t>(
+          kNumRows,
+          [](auto i) { return i % 5; },
+          [](auto i) { return i % 10; },
+          nullEvery(10)),
+      makeMapVector<int32_t, int32_t>(
+          kNumRows,
+          [](auto i) { return i % 5; },
+          [](auto i) { return i % 10; },
+          [](auto i) { return i % 3; },
+          nullEvery(11)),
+      makeRowVector(
+          {"c0", "c1"},
+          {makeFlatVector<int32_t>(kNumRows, [](auto i) { return i % 5; }),
+           makeFlatVector<int32_t>(kNumRows, [](auto i) { return i % 7; })},
+          nullEvery(12)),
+  });
+
+  std::vector<TypePtr> rowType = {
+      BOOLEAN(),
+      TINYINT(),
+      SMALLINT(),
+      INTEGER(),
+      BIGINT(),
+      REAL(),
+      DOUBLE(),
+      VARCHAR(),
+      ARRAY(INTEGER()),
+      MAP(INTEGER(), INTEGER()),
+      ROW({INTEGER(), INTEGER()})};
+  auto data = makeRowContainer({}, rowType);
+  for (int i = 0; i < kNumRows; i++) {
+    data->newRow();
+  }
+
+  std::vector<char*> rows(kNumRows);
+  RowContainerIterator iter;
+  EXPECT_EQ(data->listRows(&iter, kNumRows, rows.data()), kNumRows);
+  SelectivityVector allRows(kNumRows);
+  for (int i = 0; i < batch->childrenSize(); i++) {
+    DecodedVector decoded(*batch->childAt(i), allRows);
+    for (auto j = 0; j < kNumRows; ++j) {
+      data->store(decoded, j, rows[j], i);
+    }
+  }
+
+  auto nulls = allocateNulls(kNumRows, pool());
+  auto rawNulls = nulls->as<uint64_t>();
+  for (int i = 0; i < 11; i++) {
+    data->extractNulls(rows.data(), kNumRows, i, nulls);
+
+    auto nullEvery = i + 2;
+    for (int j = 0; j < kNumRows; j += 1) {
+      EXPECT_EQ(bits::isBitSet(rawNulls, j), j % nullEvery == 0);
+    }
+  }
 }
 
 TEST_F(RowContainerTest, erase) {
@@ -729,6 +819,36 @@ TEST_F(RowContainerTest, rowSizeWithNormalizedKey) {
   ASSERT_EQ(numRows, 1);
 }
 
+TEST_F(RowContainerTest, estimateRowSize) {
+  auto numRows = 200'000;
+
+  // Make a RowContainer with a fixed-length key column and a variable-length
+  // dependent column.
+  auto rowContainer = makeRowContainer({BIGINT()}, {VARCHAR()});
+  EXPECT_FALSE(rowContainer->estimateRowSize().has_value());
+
+  // Store rows to the container.
+  auto key =
+      vectorMaker_.flatVector<int64_t>(numRows, [](auto row) { return row; });
+  std::string str;
+  auto dependent = vectorMaker_.flatVector<StringView>(numRows, [&](auto row) {
+    str = fmt::format("string - {}", row);
+    return StringView(str);
+  });
+  SelectivityVector allRows(numRows);
+  DecodedVector decodedKey(*key, allRows);
+  DecodedVector decodedDependent(*dependent, allRows);
+  for (size_t i = 0; i < numRows; i++) {
+    auto row = rowContainer->newRow();
+    rowContainer->store(decodedKey, i, row, 0);
+    rowContainer->store(decodedDependent, i, row, 1);
+  }
+  EXPECT_EQ(37, rowContainer->fixedRowSize());
+  EXPECT_EQ(64, rowContainer->estimateRowSize());
+  // 2*2MB huge page size blocks + 4 * 64K small allocations.
+  EXPECT_EQ(0x440000, rowContainer->stringAllocator().retainedSize());
+}
+
 class AggregateWithAlignment : public Aggregate {
  public:
   explicit AggregateWithAlignment(TypePtr resultType, int alignment)
@@ -785,19 +905,18 @@ class AggregateWithAlignment : public Aggregate {
 };
 
 TEST_F(RowContainerTest, alignment) {
-  std::vector<std::unique_ptr<Aggregate>> aggregates;
-  aggregates.emplace_back(new AggregateWithAlignment(BIGINT(), 64));
+  AggregateWithAlignment aggregate(BIGINT(), 64);
+  std::vector<Accumulator> accumulators{Accumulator(&aggregate)};
   RowContainer data(
       {SMALLINT()},
       true,
-      aggregates,
+      accumulators,
       {},
       false,
       false,
       true,
       true,
-      pool_.get(),
-      ContainerRowSerde::instance());
+      pool_.get());
   constexpr int kNumRows = 100;
   char* rows[kNumRows];
   for (int i = 0; i < kNumRows; ++i) {
@@ -839,8 +958,8 @@ TEST_F(RowContainerTest, compareDouble) {
 }
 
 TEST_F(RowContainerTest, partition) {
-  // We assign an arbitrary partition number to each row and iterate
-  // over the rows a partition at a time.
+  // We assign an arbitrary partition number to each row and iterate over the
+  // rows a partition at a time.
   constexpr int32_t kNumRows = 100019;
   constexpr uint8_t kNumPartitions = 16;
   auto batch = makeDataset(
@@ -868,7 +987,32 @@ TEST_F(RowContainerTest, partition) {
     }
   }
 
-  auto& partitions = data->partitions();
+  // Expect throws before we get row partitions from this row container.
+  for (auto partition = 0; partition < kNumPartitions; ++partition) {
+    char* dummyBuffer;
+    RowPartitions dummyRowPartitions(data->numRows(), *pool_);
+    VELOX_ASSERT_THROW(
+        data->listPartitionRows(
+            iter,
+            partition,
+            1'000, /* maxRows */
+            dummyRowPartitions,
+            &dummyBuffer),
+        "Can't list partition rows from a mutable row container");
+  }
+
+  auto partitions = data->createRowPartitions(*pool_);
+  ASSERT_FALSE(data->testingMutable());
+  // Verify we can only get row partitions once from a row container.
+  VELOX_ASSERT_THROW(
+      data->createRowPartitions(*pool_),
+      "Can only create RowPartitions once from a row container");
+  // Verify we can't insert new row into a immutable row container.
+#ifndef NDEBUG
+  VELOX_ASSERT_THROW(
+      data->newRow(), "Can't add row into an immutable row container")
+#endif
+
   std::vector<uint8_t> rowPartitions(kNumRows);
   // Assign a partition to each row based on  modulo of first column.
   std::vector<std::vector<char*>> partitionRows(kNumPartitions);
@@ -879,7 +1023,7 @@ TEST_F(RowContainerTest, partition) {
     rowPartitions[i] = partition;
     partitionRows[partition].push_back(rows[i]);
   }
-  partitions.appendPartitions(
+  partitions->appendPartitions(
       folly::Range<const uint8_t*>(rowPartitions.data(), kNumRows));
   for (auto partition = 0; partition < kNumPartitions; ++partition) {
     std::vector<char*> result(partitionRows[partition].size() + 10);
@@ -888,7 +1032,11 @@ TEST_F(RowContainerTest, partition) {
     int32_t resultBatch = 1;
     // Read the rows in multiple batches.
     while (auto numResults = data->listPartitionRows(
-               iter, partition, resultBatch, result.data() + numFound)) {
+               iter,
+               partition,
+               resultBatch,
+               *partitions,
+               result.data() + numFound)) {
       numFound += numResults;
       resultBatch += 13;
     }
@@ -898,19 +1046,28 @@ TEST_F(RowContainerTest, partition) {
   }
 }
 
+TEST_F(RowContainerTest, partitionWithEmptyRowContainer) {
+  auto rowType = ROW(
+      {{"int_val", INTEGER()},
+       {"long_val", BIGINT()},
+       {"string_val", VARCHAR()}});
+  auto rowContainer =
+      std::make_unique<RowContainer>(rowType->children(), pool_.get());
+  auto partitions = rowContainer->createRowPartitions(*pool_);
+  ASSERT_EQ(partitions->size(), 0);
+}
+
 TEST_F(RowContainerTest, probedFlag) {
-  static const std::vector<std::unique_ptr<Aggregate>> kEmptyAggregates;
   auto rowContainer = std::make_unique<RowContainer>(
       std::vector<TypePtr>{BIGINT()}, // keyTypes
       true, // nullableKeys
-      kEmptyAggregates,
+      std::vector<Accumulator>{},
       std::vector<TypePtr>{BIGINT()}, // dependentTypes
       true, // hasNext
       true, // isJoinBuild
       true, // hasProbedFlag
       false, // hasNormalizedKey
-      pool_.get(),
-      ContainerRowSerde::instance());
+      pool_.get());
 
   auto input = makeRowVector({
       makeNullableFlatVector<int64_t>({1, 2, 3, 4, std::nullopt, 5}),

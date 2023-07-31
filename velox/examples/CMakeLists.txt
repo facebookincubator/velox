@@ -11,22 +11,21 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-find_library(RE2 re2 REQUIRED)
 
 add_executable(velox_example_simple_functions SimpleFunctions.cpp)
 
 target_link_libraries(velox_example_simple_functions velox_functions_lib
-                      velox_core velox_expression ${RE2})
+                      velox_core velox_expression re2::re2)
 
 add_executable(velox_example_expression_eval ExpressionEval.cpp)
 
 target_link_libraries(velox_example_expression_eval velox_type velox_vector
-                      velox_memory velox_expression)
+                      velox_caching velox_memory velox_expression)
 
 add_executable(velox_example_opaque_type OpaqueType.cpp)
 
 target_link_libraries(velox_example_opaque_type velox_type velox_vector
-                      velox_expression velox_memory)
+                      velox_caching velox_expression velox_memory)
 
 # This is disabled temporarily until we figure out why g++ is crashing linking
 # it on linux builds.

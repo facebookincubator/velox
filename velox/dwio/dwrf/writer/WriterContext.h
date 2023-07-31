@@ -42,9 +42,9 @@ class WriterContext : public CompressionBufferPool {
       std::unique_ptr<encryption::EncryptionHandler> handler = nullptr)
       : config_{config},
         pool_{std::move(pool)},
-        dictionaryPool_{pool_->addChild(".dictionary")},
-        outputStreamPool_{pool_->addChild(".compression")},
-        generalPool_{pool_->addChild(".general")},
+        dictionaryPool_{pool_->addLeafChild(".dictionary")},
+        outputStreamPool_{pool_->addLeafChild(".compression")},
+        generalPool_{pool_->addLeafChild(".general")},
         handler_{std::move(handler)},
         compression{getConfig(Config::COMPRESSION)},
         compressionBlockSize{getConfig(Config::COMPRESSION_BLOCK_SIZE)},
@@ -71,12 +71,7 @@ class WriterContext : public CompressionBufferPool {
       handler_ = std::make_unique<encryption::EncryptionHandler>();
     }
     validateConfigs();
-    VLOG(1) << fmt::format("Compression config: {}", compression);
-    if (auto tracker = pool_->getMemoryUsageTracker()) {
-      dictionaryPool_->setMemoryUsageTracker(tracker->addChild());
-      outputStreamPool_->setMemoryUsageTracker(tracker->addChild());
-      generalPool_->setMemoryUsageTracker(tracker->addChild());
-    }
+    VLOG(2) << fmt::format("Compression config: {}", compression);
     compressionBuffer_ = std::make_unique<dwio::common::DataBuffer<char>>(
         *generalPool_, compressionBlockSize + PAGE_HEADER_SIZE);
   }
@@ -134,7 +129,7 @@ class WriterContext : public CompressionBufferPool {
   }
 
   std::unique_ptr<BufferedOutputStream> newStream(
-      dwio::common::CompressionKind kind,
+      common::CompressionKind kind,
       DataBufferHolder& holder,
       const dwio::common::encryption::Encrypter* encrypter = nullptr) {
     return createCompressor(kind, *this, holder, *config_, encrypter);
@@ -182,8 +177,7 @@ class WriterContext : public CompressionBufferPool {
   }
 
   bool isStreamPaged(uint32_t nodeId) const {
-    return (compression !=
-            dwio::common::CompressionKind::CompressionKind_NONE) ||
+    return (compression != common::CompressionKind::CompressionKind_NONE) ||
         handler_->isEncrypted(nodeId);
   }
 
@@ -244,14 +238,12 @@ class WriterContext : public CompressionBufferPool {
         getMemoryUsage(MemoryUsageCategory::DICTIONARY);
     const auto& generalPool = getMemoryUsage(MemoryUsageCategory::GENERAL);
 
-    return outputStreamPool.getCurrentBytes() +
-        dictionaryPool.getCurrentBytes() + generalPool.getCurrentBytes();
+    return outputStreamPool.currentBytes() + dictionaryPool.currentBytes() +
+        generalPool.currentBytes();
   }
 
   int64_t getMemoryBudget() const {
-    auto memoryUsageTracker = pool_->getMemoryUsageTracker();
-    return memoryUsageTracker ? memoryUsageTracker->maxMemory()
-                              : std::numeric_limits<int64_t>::max();
+    return pool_->capacity();
   }
 
   const encryption::EncryptionHandler& getEncryptionHandler() const {
@@ -336,7 +328,7 @@ class WriterContext : public CompressionBufferPool {
   void recordFlushOverhead(uint64_t flushOverhead) {
     flushOverheadRatioTracker_.takeSample(
         stripeRawSize +
-            getMemoryUsage(MemoryUsageCategory::DICTIONARY).getCurrentBytes(),
+            getMemoryUsage(MemoryUsageCategory::DICTIONARY).currentBytes(),
         flushOverhead);
   }
 
@@ -369,8 +361,8 @@ class WriterContext : public CompressionBufferPool {
 
   int64_t getEstimatedOutputStreamSize() const {
     return (int64_t)std::ceil(
-        (getMemoryUsage(MemoryUsageCategory::OUTPUT_STREAM).getCurrentBytes() +
-         getMemoryUsage(MemoryUsageCategory::DICTIONARY).getCurrentBytes()) /
+        (getMemoryUsage(MemoryUsageCategory::OUTPUT_STREAM).currentBytes() +
+         getMemoryUsage(MemoryUsageCategory::DICTIONARY).currentBytes()) /
         getConfig(Config::COMPRESSION_BLOCK_SIZE_EXTEND_RATIO));
   }
 
@@ -439,15 +431,12 @@ class WriterContext : public CompressionBufferPool {
       case TypeKind::SMALLINT:
       case TypeKind::INTEGER:
       case TypeKind::BIGINT:
+      case TypeKind::HUGEINT:
       case TypeKind::REAL:
       case TypeKind::DOUBLE:
       case TypeKind::VARCHAR:
       case TypeKind::VARBINARY:
       case TypeKind::TIMESTAMP:
-      case TypeKind::DATE:
-      case TypeKind::INTERVAL_DAY_TIME:
-      case TypeKind::SHORT_DECIMAL:
-      case TypeKind::LONG_DECIMAL:
         physicalSizeAggregators_.emplace(
             type.id, std::make_unique<PhysicalSizeAggregator>(parent));
         break;
@@ -568,7 +557,7 @@ class WriterContext : public CompressionBufferPool {
   uint64_t stripeRawSize = 0;
 
   // config
-  const dwio::common::CompressionKind compression;
+  const common::CompressionKind compression;
   const uint64_t compressionBlockSize;
   const bool isIndexEnabled;
   const uint32_t indexStride;

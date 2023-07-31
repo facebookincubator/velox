@@ -13,3 +13,7 @@
 # limitations under the License.
 message("Using ICU - Bundled")
 set(ICU_FOUND TRUE)
+set(icu_components data i18n io uc tu test)
+foreach(component icu_components)
+  set(ICU_${component}_FOUND TRUE)
+endforeach()

@@ -15,13 +15,15 @@
  */
 
 #include "velox/common/base/tests/GTestUtils.h"
+#include "velox/common/encode/Coding.h"
 #include "velox/dwio/common/Adaptor.h"
 #include "velox/dwio/common/exception/Exceptions.h"
 #include "velox/dwio/dwrf/common/wrap/dwrf-proto-wrapper.h"
 #include "velox/dwio/dwrf/reader/ColumnReader.h"
 #include "velox/dwio/dwrf/reader/SelectiveDwrfReader.h"
+#include "velox/dwio/dwrf/reader/StreamLabels.h"
 #include "velox/dwio/dwrf/test/OrcTest.h"
-#include "velox/dwio/type/fbhive/HiveTypeParser.h"
+#include "velox/type/fbhive/HiveTypeParser.h"
 #include "velox/vector/ComplexVector.h"
 #include "velox/vector/DictionaryVector.h"
 #include "velox/vector/FlatVector.h"
@@ -36,7 +38,7 @@ using namespace facebook::velox::dwio::common;
 using namespace facebook::velox;
 using namespace facebook::velox::dwrf;
 using namespace facebook::velox::test;
-using facebook::velox::dwio::type::fbhive::HiveTypeParser;
+using facebook::velox::type::fbhive::HiveTypeParser;
 
 class TestStrideIndexProvider : public StrideIndexProvider {
  public:
@@ -108,6 +110,8 @@ std::shared_ptr<T> getChild(std::shared_ptr<F>& batch, size_t index) {
 
 class ColumnReaderTestBase {
  protected:
+  ColumnReaderTestBase() : pool_{&streams_.getMemoryPool()}, labels_{pool_} {}
+
   virtual ~ColumnReaderTestBase() = default;
 
   void buildReader(
@@ -140,13 +144,14 @@ class ColumnReaderTestBase {
           cs.getSchemaWithId(),
           dataTypeWithId,
           streams_,
+          labels_,
           scanSpec,
-          FlatMapContext::nonFlatMapContext());
+          FlatMapContext{});
       selectiveColumnReader_->setIsTopLevel();
       columnReader_ = nullptr;
     } else {
-      columnReader_ =
-          ColumnReader::build(cs.getSchemaWithId(), dataTypeWithId, streams_);
+      columnReader_ = ColumnReader::build(
+          cs.getSchemaWithId(), dataTypeWithId, streams_, labels_);
       selectiveColumnReader_ = nullptr;
     }
   }
@@ -155,7 +160,7 @@ class ColumnReaderTestBase {
     if (columnReader_) {
       columnReader_->next(numValues, result);
     } else {
-      selectiveColumnReader_->next(numValues, result);
+      selectiveColumnReader_->next(numValues, result, nullptr);
     }
   }
 
@@ -181,7 +186,7 @@ class ColumnReaderTestBase {
     if (columnReader_) {
       columnReader_->next(readSize, batch);
     } else {
-      selectiveColumnReader_->next(readSize, batch);
+      selectiveColumnReader_->next(readSize, batch, nullptr);
     }
 
     ASSERT_EQ(readSize, batch->size());
@@ -203,6 +208,8 @@ class ColumnReaderTestBase {
   virtual bool returnFlatVector() const = 0;
 
   MockStripeStreams streams_;
+  memory::AllocationPool pool_;
+  StreamLabels labels_;
   std::unique_ptr<ColumnReader> columnReader_;
   std::unique_ptr<SelectiveColumnReader> selectiveColumnReader_;
 
@@ -721,6 +728,132 @@ TEST_P(TestColumnReader, testByteSkipsWithNulls) {
   EXPECT_TRUE(byteBatch->isNullAt(4));
 }
 
+TEST_P(TestColumnReader, testIntegerRLEv2) {
+  // col_0's data (RLEv2 with PATCHED_BASE)
+  int32_t col0[] = {2030, 2000, 2020, 1000000, 2040, 2050, 2060,
+                    2070, 2080, 2090, 2100,    2110, 2120, 2130,
+                    2140, 2150, 2160, 2170,    2180, 2190};
+  const unsigned char buffer0[] = {0x8e, 0x13, 0x2b, 0x21, 0x07, 0xd0, 0x1e,
+                                   0x00, 0x14, 0x70, 0x28, 0x32, 0x3c, 0x46,
+                                   0x50, 0x5a, 0x64, 0x6e, 0x78, 0x82, 0x8c,
+                                   0x96, 0xa0, 0xaa, 0xb4, 0xbe, 0xfc, 0xe8};
+  // col_2's data (RLEv2 with Delta)
+  int32_t col2[] = {1,  2,  4,  6,  10, 12, 16, 18, 22, 28,
+                    30, 32, 34, 36, 38, 40, 42, 44, 46, 48};
+  const unsigned char buffer2[] = {
+      0xc6,
+      0x13,
+      0x02,
+      0x02,
+      0x22,
+      0x42,
+      0x42,
+      0x46,
+      0x22,
+      0x22,
+      0x22,
+      0x22,
+      0x22};
+
+  // expects that with Filter
+  int32_t expects_col0[] = {2110, 2120, 2130, 2140};
+  int32_t expects_col1[] = {11, 12, 13, 14};
+  int32_t expects_col2[] = {32, 34, 36, 38};
+  int32_t size = VELOX_ARRAY_SIZE(col0);
+
+  // set format
+  streams_.setFormat(DwrfFormat::kOrc);
+  // set getEncoding
+  proto::ColumnEncoding directEncoding;
+  proto::ColumnEncoding directv2Encoding;
+  directEncoding.set_kind(proto::ColumnEncoding_Kind_DIRECT);
+  directv2Encoding.set_kind(proto::ColumnEncoding_Kind_DIRECT_V2);
+  EXPECT_CALL(streams_, getEncodingProxy(0))
+      .WillRepeatedly(Return(&directEncoding)); // row type use direct only
+  EXPECT_CALL(streams_, getEncodingProxy(1))
+      .WillRepeatedly(Return(&directv2Encoding)); // col_0 use RLEv2
+  EXPECT_CALL(streams_, getEncodingProxy(2))
+      .WillRepeatedly(Return(&directEncoding)); // col_1 use RLEv1
+  EXPECT_CALL(streams_, getEncodingProxy(3))
+      .WillRepeatedly(Return(&directv2Encoding)); // col_2 use RLEv2
+
+  // set getStream
+  EXPECT_CALL(streams_, getStreamProxy(_, proto::Stream_Kind_PRESENT, false))
+      .WillRepeatedly(Return(nullptr));
+  EXPECT_CALL(streams_, getStreamProxy(_, proto::Stream_Kind_ROW_INDEX, false))
+      .WillRepeatedly(Return(nullptr));
+  // col_0's DATA stream
+  EXPECT_CALL(streams_, getStreamProxy(1, proto::Stream_Kind_DATA, true))
+      .WillRepeatedly(Return(
+          new SeekableArrayInputStream(buffer0, VELOX_ARRAY_SIZE(buffer0))));
+  // col_1's DATA stream
+  std::array<char, 1024> data;
+  std::vector<int64_t> v;
+  data[0] = 0x9c; // rle literal, -100
+  for (int64_t i = 0; i < size; ++i) {
+    v.push_back(i);
+  }
+  auto count = writeVsLongs(data.data() + 1, v);
+  EXPECT_CALL(streams_, getStreamProxy(2, proto::Stream_Kind_DATA, true))
+      .WillRepeatedly(
+          Invoke([&](auto /* unused */, auto /* unused */, auto /* unused */) {
+            return new SeekableArrayInputStream(data.data(), count + 1);
+          }));
+  // col_2's DATA stream
+  EXPECT_CALL(streams_, getStreamProxy(3, proto::Stream_Kind_DATA, true))
+      .WillRepeatedly(Return(
+          new SeekableArrayInputStream(buffer2, VELOX_ARRAY_SIZE(buffer2))));
+
+  // create the row type
+  auto rowType =
+      HiveTypeParser().parse("struct<col_0:int,col_1:int,col_2:int>");
+  auto dataType = TypeWithId::create(rowType)->type;
+  VectorPtr batch = newBatch(rowType);
+  if (useSelectiveReader()) {
+    auto scanSpec = std::make_unique<common::ScanSpec>("root");
+    scanSpec->addAllChildFields(*dataType);
+    scanSpec->childByName("col_0")->setFilter(
+        std::make_unique<common::BigintRange>(2100, 2140, false));
+    scanSpec->childByName("col_1")->setFilter(
+        std::make_unique<common::BigintRange>(11, 20, false));
+    buildReader(rowType, {}, nullptr, scanSpec.get());
+    selectiveColumnReader_->next(size, batch, nullptr);
+
+    auto rowVector = std::dynamic_pointer_cast<RowVector>(batch);
+    ASSERT_NE(rowVector->childAt(0)->encoding(), VectorEncoding::Simple::LAZY);
+    ASSERT_NE(rowVector->childAt(1)->encoding(), VectorEncoding::Simple::LAZY);
+    ASSERT_EQ(rowVector->childAt(2)->encoding(), VectorEncoding::Simple::LAZY);
+
+    auto colBatch = getChild<FlatVector<int32_t>>(batch, 0);
+    auto colBatch2 = getChild<FlatVector<int32_t>>(batch, 1);
+    auto colBatch3 = getChild<FlatVector<int32_t>>(batch, 2);
+    ASSERT_EQ(VELOX_ARRAY_SIZE(expects_col0), colBatch->size());
+    ASSERT_EQ(colBatch->size(), colBatch2->size());
+    ASSERT_EQ(colBatch2->size(), colBatch3->size());
+    for (size_t i = 0; i < batch->size(); ++i) {
+      ASSERT_EQ(expects_col0[i], colBatch->valueAt(i));
+      ASSERT_EQ(expects_col1[i], colBatch2->valueAt(i));
+      ASSERT_EQ(expects_col2[i], colBatch3->valueAt(i));
+    }
+  } else {
+    buildReader(rowType);
+    skipAndRead(batch, /* read */ size);
+    auto colBatch = getChild<FlatVector<int32_t>>(batch, 0);
+    auto colBatch2 = getChild<FlatVector<int32_t>>(batch, 1);
+    auto colBatch3 = getChild<FlatVector<int32_t>>(batch, 2);
+    ASSERT_EQ(size, colBatch->size());
+    ASSERT_EQ(colBatch->size(), colBatch2->size());
+    ASSERT_EQ(colBatch2->size(), colBatch3->size());
+    for (size_t i = 0; i < batch->size(); ++i) {
+      ASSERT_EQ(col0[i], colBatch->valueAt(i));
+      ASSERT_EQ(i, colBatch2->valueAt(i));
+      ASSERT_EQ(col2[i], colBatch3->valueAt(i));
+    }
+  }
+  // reset format
+  streams_.setFormat(DwrfFormat::kDwrf);
+}
+
 TEST_P(TestColumnReader, testIntegerWithNulls) {
   // set getEncoding
   proto::ColumnEncoding directEncoding;
@@ -1194,7 +1327,7 @@ TEST_P(StringReaderTests, testStringDictSkipNoNulls) {
     if (columnReader_) {
       columnReader_->next(rowsRead, batch);
     } else {
-      selectiveColumnReader_->next(rowsRead, batch);
+      selectiveColumnReader_->next(rowsRead, batch, nullptr);
     }
 
     ASSERT_EQ(rowsRead, batch->size());

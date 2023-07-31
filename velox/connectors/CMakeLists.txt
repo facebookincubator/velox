@@ -24,3 +24,7 @@ endif()
 if(${VELOX_ENABLE_TPCH_CONNECTOR})
   add_subdirectory(tpch)
 endif()
+
+if(${VELOX_BUILD_TESTING})
+  add_subdirectory(tests)
+endif()

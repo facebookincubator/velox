@@ -24,31 +24,31 @@
 namespace facebook::velox {
 
 template <typename T>
-T checkedPlus(const T& a, const T& b) {
+T checkedPlus(const T& a, const T& b, const char* typeName = "integer") {
   T result;
   bool overflow = __builtin_add_overflow(a, b, &result);
   if (UNLIKELY(overflow)) {
-    VELOX_ARITHMETIC_ERROR("integer overflow: {} + {}", a, b);
+    VELOX_ARITHMETIC_ERROR("{} overflow: {} + {}", typeName, a, b);
   }
   return result;
 }
 
 template <typename T>
-T checkedMinus(const T& a, const T& b) {
+T checkedMinus(const T& a, const T& b, const char* typeName = "integer") {
   T result;
   bool overflow = __builtin_sub_overflow(a, b, &result);
   if (UNLIKELY(overflow)) {
-    VELOX_ARITHMETIC_ERROR("integer overflow: {} - {}", a, b);
+    VELOX_ARITHMETIC_ERROR("{} overflow: {} - {}", typeName, a, b);
   }
   return result;
 }
 
 template <typename T>
-T checkedMultiply(const T& a, const T& b) {
+T checkedMultiply(const T& a, const T& b, const char* typeName = "integer") {
   T result;
   bool overflow = __builtin_mul_overflow(a, b, &result);
   if (UNLIKELY(overflow)) {
-    VELOX_ARITHMETIC_ERROR("integer overflow: {} * {}", a, b);
+    VELOX_ARITHMETIC_ERROR("{} overflow: {} * {}", typeName, a, b);
   }
   return result;
 }
@@ -58,6 +58,13 @@ T checkedDivide(const T& a, const T& b) {
   if (b == 0) {
     VELOX_ARITHMETIC_ERROR("division by zero");
   }
+
+  // Type T can not represent abs(std::numeric_limits<T>::min()).
+  if constexpr (std::is_integral_v<T>) {
+    if (UNLIKELY(a == std::numeric_limits<T>::min() && b == -1)) {
+      VELOX_ARITHMETIC_ERROR("integer overflow: {} / {}", a, b);
+    }
+  }
   return a / b;
 }
 
@@ -65,6 +72,12 @@ template <typename T>
 T checkedModulus(const T& a, const T& b) {
   if (UNLIKELY(b == 0)) {
     VELOX_ARITHMETIC_ERROR("Cannot divide by 0");
+  }
+  // std::numeric_limits<int64_t>::min() % -1 could crash the program since
+  // abs(std::numeric_limits<int64_t>::min()) can not be represented in
+  // int64_t.
+  if (b == -1) {
+    return 0;
   }
   return (a % b);
 }

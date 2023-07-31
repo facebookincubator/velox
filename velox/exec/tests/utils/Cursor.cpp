@@ -17,6 +17,8 @@
 #include "velox/common/file/FileSystems.h"
 #include "velox/exec/Operator.h"
 
+#include <filesystem>
+
 namespace facebook::velox::exec::test {
 
 exec::BlockingReason TaskQueue::enqueue(
@@ -118,17 +120,28 @@ TaskCursor::TaskCursor(const CursorParameters& params)
     // activities to finish on TaskCursor destruction.
     executor_ = std::make_shared<folly::CPUThreadPoolExecutor>(
         std::thread::hardware_concurrency());
-    queryCtx = std::make_shared<core::QueryCtx>(executor_.get());
+    static std::atomic<uint64_t> cursorQueryId{0};
+    queryCtx = std::make_shared<core::QueryCtx>(
+        executor_.get(),
+        std::unordered_map<std::string, std::string>{},
+        std::unordered_map<std::string, std::shared_ptr<Config>>{},
+        cache::AsyncDataCache::getInstance(),
+        nullptr,
+        nullptr,
+        fmt::format("TaskCursorQuery_{}", cursorQueryId++));
   }
 
   queue_ = std::make_shared<TaskQueue>(params.bufferedBytes);
   // Captured as a shared_ptr by the consumer callback of task_.
   auto queue = queue_;
   core::PlanFragment planFragment{
-      params.planNode, params.executionStrategy, params.numSplitGroups};
+      params.planNode,
+      params.executionStrategy,
+      params.numSplitGroups,
+      params.groupedExecutionLeafNodeIds};
   const std::string taskId = fmt::format("test_cursor {}", ++serial_);
 
-  task_ = std::make_shared<exec::Task>(
+  task_ = Task::create(
       taskId,
       std::move(planFragment),
       params.destination,
@@ -153,7 +166,18 @@ TaskCursor::TaskCursor(const CursorParameters& params)
     auto fileSystem =
         velox::filesystems::getFileSystem(taskSpillDirectory, nullptr);
     VELOX_CHECK_NOT_NULL(fileSystem, "File System is null!");
-    fileSystem->mkdir(taskSpillDirectory);
+    try {
+      fileSystem->mkdir(taskSpillDirectory);
+    } catch (...) {
+      LOG(ERROR) << "Faield to create task spill directory "
+                 << taskSpillDirectory << " base director "
+                 << params.spillDirectory << " exists["
+                 << std::filesystem::exists(taskSpillDirectory) << "]";
+
+      std::rethrow_exception(std::current_exception());
+    }
+
+    LOG(INFO) << "Task spill directory " << taskSpillDirectory << "created ";
     task_->setSpillDirectory(taskSpillDirectory);
   }
 }

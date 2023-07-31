@@ -15,6 +15,7 @@
  */
 #include "velox/exec/VectorHasher.h"
 #include <gtest/gtest.h>
+#include "velox/common/base/tests/GTestUtils.h"
 #include "velox/type/Type.h"
 #include "velox/vector/tests/utils/VectorMaker.h"
 
@@ -24,7 +25,7 @@ using namespace facebook::velox::exec;
 class VectorHasherTest : public testing::Test {
  protected:
   void SetUp() override {
-    pool_ = facebook::velox::memory::getDefaultMemoryPool();
+    pool_ = facebook::velox::memory::addDefaultLeafMemoryPool();
     allRows_ = SelectivityVector(100);
 
     oddRows_ = VectorHasherTest::makeOddRows(100);
@@ -449,11 +450,11 @@ TEST_F(VectorHasherTest, integerIds) {
 
 TEST_F(VectorHasherTest, dateIds) {
   auto vector = BaseVector::create(DATE(), 100, pool_.get());
-  auto* dates = vector->as<FlatVector<Date>>();
+  auto* dates = vector->as<FlatVector<int32_t>>();
   static constexpr int32_t kMin = std::numeric_limits<int32_t>::min();
   dates->setNull(0, true);
   for (auto i = 0; i < 99; ++i) {
-    dates->set(i + 1, Date(kMin + i * 10));
+    dates->set(i + 1, kMin + i * 10);
   }
   auto hasher = exec::VectorHasher::create(DATE(), 1);
   raw_vector<uint64_t> hashes(dates->size());
@@ -491,7 +492,7 @@ TEST_F(VectorHasherTest, dateIds) {
   for (auto count = 0; count < 1000; ++count) {
     vector_size_t index = 0;
     for (int64_t value = count * 100; value < count * 100 + 100; ++value) {
-      dates->set(index++, Date(value));
+      dates->set(index++, value);
     }
     hasher->decode(*vector, rows);
     hasher->computeValueIds(rows, hashes);
@@ -941,4 +942,16 @@ TEST_F(VectorHasherTest, simdRange) {
           result[i]);
     }
   }
+}
+
+TEST_F(VectorHasherTest, typeMismatch) {
+  auto hasher = VectorHasher::create(BIGINT(), 0);
+
+  auto data = vectorMaker_->flatVector<std::string>(
+      {"a",
+       "b"
+       "c"});
+  SelectivityVector rows(data->size());
+  VELOX_ASSERT_THROW(
+      hasher->decode(*data, rows), "Type mismatch: BIGINT vs. VARCHAR");
 }

@@ -66,6 +66,10 @@ class ReaderBase {
     return schemaWithId_;
   }
 
+  bool isFileColumnNamesReadAsLowerCase() const {
+    return options_.isFileColumnNamesReadAsLowerCase();
+  }
+
   /// Ensures that streams are enqueued and loading for the row group at
   /// 'currentGroup'. May start loading one or more subsequent groups.
   void scheduleRowGroups(
@@ -97,12 +101,14 @@ class ReaderBase {
 
   static std::shared_ptr<const RowType> createRowType(
       std::vector<std::shared_ptr<const ParquetTypeWithId::TypeWithId>>
-          children);
+          children,
+      bool fileColumnNamesReadAsLowerCase);
 
   memory::MemoryPool& pool_;
   const uint64_t directorySizeGuess_;
   const uint64_t filePreloadThreshold_;
-  const dwio::common::ReaderOptions& options_;
+  // Copy of options. Must be owned by 'this'.
+  const dwio::common::ReaderOptions options_;
   std::unique_ptr<velox::dwio::common::BufferedInput> input_;
   uint64_t fileLength_;
   std::unique_ptr<thrift::FileMetaData> fileMetaData_;
@@ -124,7 +130,14 @@ class ParquetRowReader : public dwio::common::RowReader {
       const dwio::common::RowReaderOptions& options);
   ~ParquetRowReader() override = default;
 
-  uint64_t next(uint64_t size, velox::VectorPtr& result) override;
+  int64_t nextRowNumber() override;
+
+  int64_t nextReadSize(uint64_t size) override;
+
+  uint64_t next(
+      uint64_t size,
+      velox::VectorPtr& result,
+      const dwio::common::Mutation* = nullptr) override;
 
   void updateRuntimeStats(
       dwio::common::RuntimeStatistics& stats) const override;
@@ -153,14 +166,15 @@ class ParquetRowReader : public dwio::common::RowReader {
 
   memory::MemoryPool& pool_;
   const std::shared_ptr<ReaderBase> readerBase_;
-  const dwio::common::RowReaderOptions& options_;
+  const dwio::common::RowReaderOptions options_;
 
   // All row groups from file metadata.
   const std::vector<thrift::RowGroup>& rowGroups_;
 
   // Indices of row groups where stats match filters.
   std::vector<uint32_t> rowGroupIds_;
-  uint32_t currentRowGroupIdsIdx_;
+  std::vector<uint64_t> firstRowOfRowGroup_;
+  uint32_t nextRowGroupIdsIdx_;
   const thrift::RowGroup* FOLLY_NULLABLE currentRowGroupPtr_{nullptr};
   uint64_t rowsInCurrentRowGroup_;
   uint64_t currentRowInGroup_;

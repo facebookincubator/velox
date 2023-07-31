@@ -21,6 +21,7 @@
 #include "velox/functions/Udf.h"
 #include "velox/functions/prestosql/tests/utils/FunctionBaseTest.h"
 #include "velox/vector/ConstantVector.h"
+#include "velox/vector/tests/TestingAlwaysThrowsFunction.h"
 
 namespace facebook::velox {
 
@@ -61,8 +62,7 @@ struct CountCallsFunction {
 };
 
 TEST_F(TryExprTest, skipExecution) {
-  registerFunction<CountCallsFunction, int64_t, int64_t>(
-      {"count_calls"}, BIGINT());
+  registerFunction<CountCallsFunction, int64_t, int64_t>({"count_calls"});
 
   std::vector<std::optional<int64_t>> expected{
       0, std::nullopt, 1, std::nullopt, 2};
@@ -132,8 +132,7 @@ TEST_F(TryExprTest, nestedTryParentErrors) {
 }
 
 TEST_F(TryExprTest, skipExecutionEvalSimplified) {
-  registerFunction<CountCallsFunction, int64_t, int64_t>(
-      {"count_calls"}, BIGINT());
+  registerFunction<CountCallsFunction, int64_t, int64_t>({"count_calls"});
 
   // Test that when a subset of the inputs to a function wrapped in a TRY throw
   // exceptions, that function is only evaluated on the inputs that did not
@@ -148,8 +147,7 @@ TEST_F(TryExprTest, skipExecutionEvalSimplified) {
 }
 
 TEST_F(TryExprTest, skipExecutionWholeBatchEvalSimplified) {
-  registerFunction<CountCallsFunction, int64_t, int64_t>(
-      {"count_calls"}, BIGINT());
+  registerFunction<CountCallsFunction, int64_t, int64_t>({"count_calls"});
 
   // Test that when all the inputs to a function wrapped in a TRY throw
   // exceptions, that function isn't evaluated and a NULL constant is returned
@@ -292,8 +290,7 @@ TEST_F(TryExprTest, constant) {
 }
 
 TEST_F(TryExprTest, evalSimplified) {
-  registerFunction<CountCallsFunction, int64_t, int64_t>(
-      {"count_calls"}, BIGINT());
+  registerFunction<CountCallsFunction, int64_t, int64_t>({"count_calls"});
 
   std::vector<std::optional<int64_t>> expected{0, 1, 2, 3};
   auto constant = makeConstant<int64_t>(0, 4);
@@ -335,5 +332,116 @@ TEST_F(TryExprTest, nonDefaultNulls) {
   auto commonResult = evaluate<SimpleVector<bool>>(
       "try(distinct_from(10::INTEGER, codepoint(c0)))", input);
   assertEqualVectors(expected, commonResult);
+}
+
+TEST_F(TryExprTest, branchingSpecialForm) {
+  registerFunction<TestingAlwaysThrowsFunction, bool, bool>({"always_throws"});
+  auto data = makeRowVector(
+      {makeNullableFlatVector<bool>({true, true, std::nullopt}),
+       makeFlatVector<double>({1.1, 2.2, 3.3}),
+       makeFlatVector<double>({1.1, 2.1, 3.1}),
+       makeNullableFlatVector<bool>({false, false, std::nullopt}),
+       makeNullableFlatVector<bool>({std::nullopt, std::nullopt, std::nullopt}),
+       makeFlatVector<bool>({true, true, true}),
+       makeNullableFlatVector<bool>({std::nullopt, std::nullopt, true}),
+       makeConstant<double>(1.1, 3)});
+
+  // Test Conjunct with pre-existing errors in Coalesce and Switch. Pre-existing
+  // error should be preserved.
+  auto result = evaluate(
+      "try(coalesce(always_throws(c0), is_nan(c1) or is_nan(c2)))", data);
+  auto expected =
+      makeNullableFlatVector<bool>({std::nullopt, std::nullopt, false});
+  assertEqualVectors(expected, result);
+
+  result = evaluate(
+      "try(switch(always_throws(c0), c3, is_nan(c1) or is_finite(c2)))", data);
+  auto switchExpected =
+      makeNullableFlatVector<bool>({std::nullopt, std::nullopt, true});
+  assertEqualVectors(switchExpected, result);
+
+  // Test Coalesce and Switch over two Conjuncts on the same rows where the
+  // first Conjunct throws. The errors from the first Conjunct should be
+  // preserved.
+  result = evaluate(
+      "try(coalesce(always_throws(c0) or always_throws(c3), is_nan(c1) or is_nan(c2)))",
+      data);
+  assertEqualVectors(expected, result);
+
+  result = evaluate(
+      "try(switch(always_throws(c0) or always_throws(c3), is_nan(c2) or is_finite(c1), is_nan(c1) or is_finite(c2)))",
+      data);
+  assertEqualVectors(switchExpected, result);
+
+  // Test Coalesce and Switch in Conjunct on rows that has pre-existing errors.
+  // Coalesce and Switch should be evaluated on these rows and these rows should
+  // not throw.
+  result = evaluate("always_throws(c0) or coalesce(c4, is_finite(c1))", data);
+  expected = makeFlatVector<bool>({true, true, true});
+  assertEqualVectors(expected, result);
+
+  result = evaluate("always_throws(c0) or switch(c4, c3, is_finite(c1))", data);
+  assertEqualVectors(expected, result);
+
+  // Test Switch where the condition has errors on all rows.
+  result = evaluate(
+      "try(switch(always_throws(c5), is_finite(c1), is_finite(c2)))", data);
+  expected =
+      makeNullableFlatVector<bool>({std::nullopt, std::nullopt, std::nullopt});
+  assertEqualVectors(expected, result);
+
+  // Test Switch where then and else clauses only evaluate on the first two
+  // rows.
+  result = evaluate(
+      "try(switch(always_throws(c6), is_finite(c1), is_finite(c7)))", data);
+  expected = makeNullableFlatVector<bool>({true, true, std::nullopt});
+  assertEqualVectors(expected, result);
+}
+
+TEST_F(TryExprTest, earlyTerminationWithEmptyRows) {
+  registerFunction<TestingAlwaysThrowsFunction, bool, bool>({"always_throws"});
+  auto data = makeRowVector({
+      makeFlatVector<bool>({true, true, true}),
+      makeNullableFlatVector<bool>({true, true, std::nullopt}),
+      makeFlatVector<double>({1.1, 2.2, 3.3}),
+  });
+  auto expected =
+      makeNullableFlatVector<bool>({std::nullopt, std::nullopt, std::nullopt});
+
+  auto result =
+      evaluate("try(switch(always_throws(c0), is_finite(c2), c0))", data);
+  assertEqualVectors(expected, result);
+
+  result = evaluate("try(switch(c0, always_throws(c0), c0))", data);
+  assertEqualVectors(expected, result);
+
+  result = evaluate("try(coalesce(always_throws(c0), is_finite(c2)))", data);
+  assertEqualVectors(expected, result);
+
+  result = evaluate("try(always_throws(c0) and is_finite(c2))", data);
+  assertEqualVectors(expected, result);
+
+  // Test Switch where the first case produces a partial result while the second
+  // case condition throws at all remaining rows. SwitchExpr may still evaluate
+  // the second then clause with an empty selectivity vector. This test case
+  // ensures that the evaluation of the second then clause doesn't overwrite the
+  // existing partial results from the first case.
+  result = evaluate(
+      "try(switch(c1, is_nan(c2), always_throws(c0), is_finite(c2), c0))",
+      data);
+  assertEqualVectors(
+      makeNullableFlatVector<bool>({false, false, std::nullopt}), result);
+}
+
+TEST_F(TryExprTest, doesNotMutateSharedResults) {
+  auto input = makeFlatVector<StringView>({"1", "", ""});
+
+  auto data = makeRowVector({input});
+  // The cast here will throw an error, the result of the switch will be c0, but
+  // then the try will set errors on top of c0 for all rows. c0 vector must not
+  // be changed.
+  auto result = evaluate("try(switch(cast(c0 as bool), c0, '1'))", data);
+  // Make sure input did not change.
+  assertEqualVectors(input, makeFlatVector<StringView>({"1", "", ""}));
 }
 } // namespace facebook::velox

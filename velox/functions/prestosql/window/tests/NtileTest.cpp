@@ -13,7 +13,8 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-#include "velox/functions/prestosql/window/tests/WindowTestBase.h"
+#include "velox/functions/lib/window/tests/WindowTestBase.h"
+#include "velox/functions/prestosql/window/WindowFunctionsRegistration.h"
 
 using namespace facebook::velox::exec::test;
 
@@ -23,70 +24,62 @@ namespace {
 
 class NtileTest : public WindowTestBase {
  protected:
-  void testWindowFunction(
+  void testNtile(const std::vector<RowVectorPtr>& vectors) {
+    // Tests ntile with a column.
+    WindowTestBase::testWindowFunction(vectors, "ntile(c2)", kOverClauses);
+    // Tests ntile with constant value arguments.
+    testNtileWithConstants(vectors, kOverClauses);
+  }
+
+  void SetUp() override {
+    WindowTestBase::SetUp();
+    window::prestosql::registerAllWindowFunctions();
+  }
+
+ private:
+  // Note: This function assumes that the DuckDB table has been previously
+  // constructed from the data.
+  void testNtileWithConstants(
       const std::vector<RowVectorPtr>& vectors,
       const std::vector<std::string>& overClauses) {
     // These invocations of ntile check the following cases :
     // i) Constant buckets
     // ii) Number of buckets <, =, > number of rows in the partition.
     // iii) Number of buckets evenly divide (value 10) or not (other values).
-    // TODO: Add null value testing also pending issues with DuckDB.
-    for (auto i = 1; i < 20; i += 3) {
-      WindowTestBase::testWindowFunction(
-          vectors, fmt::format("ntile({})", i), overClauses);
-    }
-  }
+    static const std::vector<std::string> kNtileInvocations = {
+        "ntile(1)",
+        "ntile(7)",
+        "ntile(10)",
+        "ntile(16)",
+    };
 
-  RowVectorPtr makeSimpleVector(vector_size_t size) {
-    return makeRowVector({
-        makeFlatVector<int64_t>(size, [](auto row) { return row % 5 + 1; }),
-        makeFlatVector<int64_t>(
-            size, [](auto row) { return row % 7 + 1; }, nullEvery(15)),
-        makeFlatVector<int64_t>(size, [](auto row) { return row % 11; }),
-    });
+    // Note: The DuckDB table has been previously created.
+    for (auto function : kNtileInvocations) {
+      WindowTestBase::testWindowFunction(
+          vectors, function, overClauses, {""}, false);
+    }
   }
 };
 
+// Tests ntile with uniformly distributed data.
 TEST_F(NtileTest, basic) {
-  NtileTest::testWindowFunction({makeSimpleVector(50)}, kBasicOverClauses);
+  testNtile({makeSimpleVector(30)});
 }
 
-TEST_F(NtileTest, basicWithSortOrders) {
-  NtileTest::testWindowFunction(
-      {makeSimpleVector(50)}, kSortOrderBasedOverClauses);
-}
-
-TEST_F(NtileTest, columnBasic) {
-  auto vector = NtileTest::makeSimpleVector(100);
-  WindowTestBase::testWindowFunction({vector}, "ntile(c0)", kBasicOverClauses);
-}
-
-TEST_F(NtileTest, columnBasicWithSortOrders) {
-  auto vector = NtileTest::makeSimpleVector(100);
-  WindowTestBase::testWindowFunction(
-      {vector}, "ntile(c0)", kSortOrderBasedOverClauses);
-}
-
+// Test ntile with a dataset with all rows in a single partition but in
+// 2 input vectors.
 TEST_F(NtileTest, singlePartition) {
-  NtileTest::testWindowFunction(
-      {makeSinglePartitionVector(75)}, kBasicOverClauses);
+  testNtile({makeSinglePartitionVector(25), makeSinglePartitionVector(30)});
 }
 
-TEST_F(NtileTest, singlePartitionWithSortOrders) {
-  NtileTest::testWindowFunction(
-      {makeSinglePartitionVector(50)}, kSortOrderBasedOverClauses);
+// Tests ntile with a dataset in which all partitions have a single row.
+TEST_F(NtileTest, singleRowPartitions) {
+  testNtile({makeSingleRowPartitionsVector(25)});
 }
 
-TEST_F(NtileTest, multiInput) {
-  NtileTest::testWindowFunction(
-      {makeSinglePartitionVector(100), makeSinglePartitionVector(75)},
-      kBasicOverClauses);
-}
-
-TEST_F(NtileTest, multiInputWithSortOrders) {
-  NtileTest::testWindowFunction(
-      {makeSinglePartitionVector(75), makeSinglePartitionVector(50)},
-      kSortOrderBasedOverClauses);
+// Tests ntile with a dataset with random values.
+TEST_F(NtileTest, randomInput) {
+  testNtile({makeRandomInputVector(20)});
 }
 
 TEST_F(NtileTest, errorCases) {

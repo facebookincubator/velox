@@ -96,6 +96,7 @@ class TestStripeStreams : public StripeStreamsBase {
 
   std::unique_ptr<SeekableInputStream> getStream(
       const DwrfStreamIdentifier& si,
+      std::string_view /* label */,
       bool throwIfNotFound) const override {
     const DataBufferHolder* stream = nullptr;
     if (context_.hasStream(si)) {
@@ -311,8 +312,8 @@ void testDataTypeWriter(
   std::shuffle(data.begin(), data.end(), std::default_random_engine(seed));
 
   auto config = std::make_shared<Config>();
-  auto pool = getDefaultMemoryPool();
-  WriterContext context{config, getProcessDefaultMemoryManager().getPool()};
+  auto pool = addDefaultLeafMemoryPool();
+  WriterContext context{config, defaultMemoryManager().addRootPool()};
   auto rowType = ROW({type});
   auto dataTypeWithId = TypeWithId::create(type, 1);
 
@@ -336,8 +337,18 @@ void testDataTypeWriter(
     TestStripeStreams streams(context, sf, rowType, pool.get());
     auto typeWithId = TypeWithId::create(rowType);
     auto reqType = typeWithId->childAt(0);
+
+    memory::AllocationPool allocPool(pool.get());
+    StreamLabels labels(allocPool);
     auto reader = ColumnReader::build(
-        reqType, reqType, streams, FlatMapContext{sequence, nullptr});
+        reqType,
+        reqType,
+        streams,
+        labels,
+        FlatMapContext{
+            .sequence = sequence,
+            .inMapDecoder = nullptr,
+            .keySelectionCallback = nullptr});
     VectorPtr out;
     for (auto strideI = 0; strideI < strideCount; ++strideI) {
       reader->next(size, out);
@@ -358,8 +369,7 @@ TEST(ColumnWriterTests, LowMemoryModeConfig) {
   auto dataTypeWithId = TypeWithId::create(std::make_shared<VarcharType>(), 1);
   auto config = std::make_shared<Config>();
   WriterContext context{
-      config,
-      facebook::velox::memory::getProcessDefaultMemoryManager().getPool()};
+      config, facebook::velox::memory::defaultMemoryManager().addRootPool()};
   auto writer = BaseColumnWriter::create(context, *dataTypeWithId);
   EXPECT_TRUE(writer->useDictionaryEncoding());
 }
@@ -414,10 +424,10 @@ TEST(ColumnWriterTests, TestTimestampBoundaryValuesWriter) {
   std::vector<std::optional<Timestamp>> data;
   for (int64_t i = 0; i < ITERATIONS; ++i) {
     if (i & 1) {
-      Timestamp ts(INT64_MAX, MAX_NANOS);
+      Timestamp ts(Timestamp::kMaxSeconds, MAX_NANOS);
       data.emplace_back(ts);
     } else {
-      Timestamp ts(MIN_SECONDS, MAX_NANOS);
+      Timestamp ts(Timestamp::kMinSeconds, MAX_NANOS);
       data.emplace_back(ts);
     }
     data.emplace_back();
@@ -428,11 +438,8 @@ TEST(ColumnWriterTests, TestTimestampBoundaryValuesWriter) {
 TEST(ColumnWriterTests, TestTimestampMixedWriter) {
   std::vector<std::optional<Timestamp>> data;
   for (int64_t i = 0; i < ITERATIONS; ++i) {
-    int64_t seconds = static_cast<int64_t>(Random::rand64());
-    if (seconds < MIN_SECONDS) {
-      seconds = MIN_SECONDS;
-    }
-    int64_t nanos = Random::rand32(0, MAX_NANOS + 1);
+    int64_t seconds = Random::rand64(Timestamp::kMaxSeconds);
+    int64_t nanos = Random::rand32(MAX_NANOS + 1);
     Timestamp ts(seconds, nanos);
     data.emplace_back(ts);
     // Add null value
@@ -451,16 +458,6 @@ void verifyInvalidTimestamp(int64_t seconds, int64_t nanos) {
   data.emplace_back(ts);
   EXPECT_THROW(
       testDataTypeWriter(TIMESTAMP(), data), exception::LoggedException);
-}
-
-TEST(ColumnWriterTests, TestTimestampInvalidWriter) {
-  // Nanos invalid range.
-  verifyInvalidTimestamp(ITERATIONS, UINT64_MAX);
-  verifyInvalidTimestamp(ITERATIONS, MAX_NANOS + 1);
-
-  // Seconds invalid range.
-  verifyInvalidTimestamp(INT64_MIN, 0);
-  verifyInvalidTimestamp(MIN_SECONDS - 1, MAX_NANOS);
 }
 
 TEST(ColumnWriterTests, TestTimestampNullWriter) {
@@ -885,7 +882,7 @@ void testMapWriter(
     // expect that if we pass useStruct true with useFlatMap false, it will fail
   }
 
-  WriterContext context{config, getProcessDefaultMemoryManager().getPool()};
+  WriterContext context{config, defaultMemoryManager().addRootPool()};
   const auto writer = BaseColumnWriter::create(context, *writerDataTypeWithId);
   // For writing flat map with encoded input, we'd like to test all 4
   // combinations.
@@ -927,8 +924,11 @@ void testMapWriter(
     auto validate = [&](bool returnFlatVector = false) {
       TestStripeStreams streams(
           context, sf, rowType, &pool, returnFlatVector, structReaderContext);
+      auto pool = addDefaultLeafMemoryPool();
+      memory::AllocationPool allocPool(pool.get());
+      StreamLabels labels(allocPool);
       const auto reader =
-          ColumnReader::build(dataTypeWithId, dataTypeWithId, streams);
+          ColumnReader::build(dataTypeWithId, dataTypeWithId, streams, labels);
       VectorPtr out;
 
       // Read map/row
@@ -1031,7 +1031,7 @@ void testMapWriterRow(
   config->set(
       Config::MAP_FLAT_DISABLE_DICT_ENCODING, disableDictionaryEncoding);
 
-  WriterContext context{config, getProcessDefaultMemoryManager().getPool()};
+  WriterContext context{config, defaultMemoryManager().addRootPool()};
   const auto writer = BaseColumnWriter::create(context, *writerDataTypeWithId);
 
   // Each batch represents an input for a separate stripe
@@ -1059,8 +1059,11 @@ void testMapWriterRow(
     auto validate = [&](bool returnFlatVector = false) {
       TestStripeStreams streams(
           context, sf, rowType, &pool, returnFlatVector, structReaderContext);
+      auto pool = addDefaultLeafMemoryPool();
+      memory::AllocationPool allocPool(pool.get());
+      StreamLabels labels(allocPool);
       const auto reader =
-          ColumnReader::build(dataTypeWithId, dataTypeWithId, streams);
+          ColumnReader::build(dataTypeWithId, dataTypeWithId, streams, labels);
       VectorPtr out;
 
       // Read map/row
@@ -1118,7 +1121,7 @@ template <typename TVALUE>
 void testMapWriterRowImpl() {
   auto type = CppToType<Row<TVALUE, TVALUE>>::create();
 
-  auto pool = getDefaultMemoryPool();
+  auto pool = addDefaultLeafMemoryPool();
   auto batch = BatchMaker::createVector<TypeKind::ROW>(type, 10, *pool);
 
   std::vector<VectorPtr> batches{batch, batch};
@@ -1163,7 +1166,7 @@ template <typename T>
 void testMapWriterNumericKey(bool useFlatMap, bool useStruct = false) {
   using b = MapBuilder<T, T>;
 
-  auto pool = getDefaultMemoryPool();
+  auto pool = addDefaultLeafMemoryPool();
   auto batch = b::create(
       *pool,
       {typename b::row{
@@ -1221,7 +1224,7 @@ TEST(ColumnWriterTests, TestMapWriterStringKey) {
   using valueType = StringView;
   using b = MapBuilder<keyType, valueType>;
 
-  auto pool = getDefaultMemoryPool();
+  auto pool = addDefaultLeafMemoryPool();
   auto batch = b::create(
       *pool,
       {b::row{b::pair{"1", "3"}, b::pair{"2", "2"}},
@@ -1238,7 +1241,7 @@ TEST(ColumnWriterTests, TestMapWriterDifferentNumericKeyValue) {
   using valueType = int32_t;
   using b = MapBuilder<keyType, valueType>;
 
-  auto pool = getDefaultMemoryPool();
+  auto pool = addDefaultLeafMemoryPool();
   auto batch = b::create(
       *pool,
       {b::row{b::pair{1, 3}, b::pair{2, 2}},
@@ -1252,7 +1255,7 @@ TEST(ColumnWriterTests, TestMapWriterDifferentKeyValue) {
   using valueType = StringView;
   using b = MapBuilder<keyType, valueType>;
 
-  auto pool = getDefaultMemoryPool();
+  auto pool = addDefaultLeafMemoryPool();
   auto batch = b::create(
       *pool,
       {b::row{b::pair{1, "3"}, b::pair{2, "2"}},
@@ -1269,7 +1272,7 @@ TEST(ColumnWriterTests, TestMapWriterMixedBatchTypeHandling) {
   using valueType2 = StringView;
   using b2 = MapBuilder<keyType, valueType2>;
 
-  auto pool = getDefaultMemoryPool();
+  auto pool = addDefaultLeafMemoryPool();
   auto batch1 = b::create(
       *pool,
       {b::row{b::pair{1, 3}, b::pair{2, 2}},
@@ -1299,7 +1302,7 @@ TEST(ColumnWriterTests, TestMapWriterBinaryKey) {
   using valueType = int32_t;
   using b = MapBuilder<keyType, valueType>;
 
-  auto pool = getDefaultMemoryPool();
+  auto pool = addDefaultLeafMemoryPool();
   auto batch = b::create(
       *pool,
       {b::row{b::pair{"1", 3}, b::pair{"2", 2}},
@@ -1315,7 +1318,7 @@ template <typename keyType, typename valueType>
 void testMapWriterImpl() {
   auto type = CppToType<Map<keyType, valueType>>::create();
 
-  auto pool = getDefaultMemoryPool();
+  auto pool = addDefaultLeafMemoryPool();
   auto batch = BatchMaker::createVector<TypeKind::MAP>(type, 100, *pool);
 
   testMapWriter<keyType, valueType>(*pool, batch, /* useFlatMap */ false);
@@ -1341,7 +1344,7 @@ TEST(ColumnWriterTests, TestMapWriterDifferentStripeBatches) {
   using valueType = int32_t;
   using b = MapBuilder<keyType, valueType>;
 
-  auto pool = getDefaultMemoryPool();
+  auto pool = addDefaultLeafMemoryPool();
   auto batch1 = b::create(
       *pool,
       {b::row{b::pair{1, 3}, b::pair{2, 2}},
@@ -1373,7 +1376,7 @@ TEST(ColumnWriterTests, TestMapWriterNullValues) {
   using valueType = int32_t;
   using b = MapBuilder<keyType, valueType>;
 
-  auto pool = getDefaultMemoryPool();
+  auto pool = addDefaultLeafMemoryPool();
   auto batch = b::create(
       *pool,
       {b::row{b::pair{1, std::nullopt}, b::pair{2, 2}},
@@ -1388,7 +1391,7 @@ TEST(ColumnWriterTests, TestMapWriterNullRows) {
   using valueType = int32_t;
   using b = MapBuilder<keyType, valueType>;
 
-  auto pool = getDefaultMemoryPool();
+  auto pool = addDefaultLeafMemoryPool();
   auto batch = b::create(
       *pool,
       {std::nullopt,
@@ -1406,7 +1409,7 @@ TEST(ColumnWriterTests, TestMapWriterDuplicateKeys) {
   using valueType = int32_t;
   using b = MapBuilder<keyType, valueType>;
 
-  auto pool = getDefaultMemoryPool();
+  auto pool = addDefaultLeafMemoryPool();
   auto batch = b::create(
       *pool,
       {
@@ -1430,7 +1433,7 @@ TEST(ColumnWriterTests, TestMapWriterBigBatch) {
   const auto maxDictionarySize = 50;
   const auto nullEvery = 10;
 
-  auto pool = getDefaultMemoryPool();
+  auto pool = addDefaultLeafMemoryPool();
   b::rows rows;
   for (int32_t i = 0; i < size; ++i) {
     if ((i % nullEvery) == 0) {
@@ -1455,6 +1458,51 @@ TEST(ColumnWriterTests, TestMapWriterBigBatch) {
       *pool,
       batch,
       /* useFlatMap */ true);
+}
+
+TEST(ColumnWriterTests, TestMapWriterUnalignedKeyValueCount) {
+  auto pool = addDefaultLeafMemoryPool();
+  VectorMaker maker(pool.get());
+  auto keys = maker.flatVector<int64_t>(11, folly::identity);
+  auto values = maker.flatVector<int64_t>(12, folly::identity);
+  auto offsets = allocateIndices(3, pool.get());
+  auto sizes = allocateIndices(3, pool.get());
+
+  for (int i = 0; i < 3; ++i) {
+    offsets->asMutable<vector_size_t>()[i] = 3 * i;
+    sizes->asMutable<vector_size_t>()[i] = 3;
+  }
+  auto batch = std::make_shared<MapVector>(
+      pool.get(),
+      MAP(BIGINT(), BIGINT()),
+      nullptr,
+      3,
+      offsets,
+      sizes,
+      keys,
+      values);
+  testMapWriter<int64_t, int64_t>(*pool, batch, false);
+  testMapWriter<int64_t, int64_t>(*pool, batch, true);
+
+  for (int i = 0; i < 3; ++i) {
+    offsets->asMutable<vector_size_t>()[i] = 4 * i;
+    sizes->asMutable<vector_size_t>()[i] = 4;
+  }
+  batch = std::make_shared<MapVector>(
+      pool.get(),
+      MAP(BIGINT(), BIGINT()),
+      nullptr,
+      3,
+      offsets,
+      sizes,
+      keys,
+      values);
+  ASSERT_THROW(
+      (testMapWriter<int64_t, int64_t>(*pool, batch, false)),
+      exception::LoggedException);
+  ASSERT_THROW(
+      (testMapWriter<int64_t, int64_t>(*pool, batch, true)),
+      exception::LoggedException);
 }
 
 TEST(ColumnWriterTests, TestStructKeysConfigSerializationDeserialization) {
@@ -1483,7 +1531,7 @@ std::unique_ptr<DwrfReader> getDwrfReader(
   auto sink = std::make_unique<MemorySink>(leafPool, 2 * 1024 * 1024);
   auto sinkPtr = sink.get();
 
-  WriterOptions options;
+  dwrf::WriterOptions options;
   options.config = config;
   options.schema = type;
   options.flushPolicyFactory = [&]() {
@@ -1491,7 +1539,8 @@ std::unique_ptr<DwrfReader> getDwrfReader(
       return true; // Flushes every batch.
     });
   };
-  Writer writer{options, std::move(sink), rootPool};
+  options.memoryPool = &rootPool;
+  dwrf::Writer writer{std::move(sink), options};
   writer.write(batch);
   writer.close();
 
@@ -1516,8 +1565,8 @@ void removeSizeFromStats(std::string& input) {
 }
 
 void testMapWriterStats(const std::shared_ptr<const RowType> type) {
-  auto rootPool = getProcessDefaultMemoryManager().getPool();
-  auto leafPool = getDefaultMemoryPool();
+  auto rootPool = defaultMemoryManager().addRootPool();
+  auto leafPool = addDefaultLeafMemoryPool();
   auto batch = BatchMaker::createBatch(type, 10, *leafPool);
   auto mapReader = getDwrfReader(*rootPool, *leafPool, type, batch, false);
   auto flatMapReader = getDwrfReader(*rootPool, *leafPool, type, batch, true);
@@ -1931,7 +1980,7 @@ struct IntegerColumnWriterTypedTestCase {
   void runTest() const {
     auto type = CppToType<Integer>::create();
     auto typeWithId = TypeWithId::create(type, 1);
-    auto pool = getDefaultMemoryPool();
+    auto pool = addDefaultLeafMemoryPool();
 
     // Prepare input
     BufferPtr nulls = allocateNulls(size, pool.get());
@@ -1983,7 +2032,7 @@ struct IntegerColumnWriterTypedTestCase {
     config->set(
         Config::DICTIONARY_NUMERIC_KEY_SIZE_THRESHOLD,
         dictionaryWriteThreshold);
-    WriterContext context{config, getProcessDefaultMemoryManager().getPool()};
+    WriterContext context{config, defaultMemoryManager().addRootPool()};
     // Register root node.
     auto columnWriter = BaseColumnWriter::create(context, *typeWithId);
 
@@ -2018,7 +2067,10 @@ struct IntegerColumnWriterTypedTestCase {
       }
 
       auto reqType = TypeWithId::create(rowType)->childAt(0);
-      auto columnReader = ColumnReader::build(reqType, reqType, streams);
+      memory::AllocationPool allocPool(pool.get());
+      StreamLabels labels(allocPool);
+      auto columnReader =
+          ColumnReader::build(reqType, reqType, streams, labels);
 
       for (size_t j = 0; j != repetitionCount; ++j) {
         // TODO Make reuse work
@@ -3074,20 +3126,20 @@ template <typename Integer>
 void testIntegerDictionaryEncodableWriterConstructor() {
   auto type = CppToType<Integer>::create();
   auto typeWithId = TypeWithId::create(type, 1);
-  auto pool = getDefaultMemoryPool();
+  auto pool = addDefaultLeafMemoryPool();
 
   // Write input
   auto config = std::make_shared<Config>();
   float slightlyOver = 1.0f + std::numeric_limits<float>::epsilon() * 2;
   {
     config->set(Config::DICTIONARY_NUMERIC_KEY_SIZE_THRESHOLD, slightlyOver);
-    WriterContext context{config, getProcessDefaultMemoryManager().getPool()};
+    WriterContext context{config, defaultMemoryManager().addRootPool()};
     EXPECT_ANY_THROW(BaseColumnWriter::create(context, *typeWithId));
   }
   float slightlyUnder = -std::numeric_limits<float>::epsilon();
   {
     config->set(Config::DICTIONARY_NUMERIC_KEY_SIZE_THRESHOLD, slightlyUnder);
-    WriterContext context{config, getProcessDefaultMemoryManager().getPool()};
+    WriterContext context{config, defaultMemoryManager().addRootPool()};
     EXPECT_ANY_THROW(BaseColumnWriter::create(context, *typeWithId));
   }
 }
@@ -3193,7 +3245,7 @@ struct StringColumnWriterTestCase {
   }
 
   void runTest() const {
-    auto pool = getDefaultMemoryPool();
+    auto pool = addDefaultLeafMemoryPool();
 
     // Set up writer.
     auto config = std::make_shared<Config>();
@@ -3203,7 +3255,7 @@ struct StringColumnWriterTestCase {
     config->set(
         Config::DICTIONARY_STRING_KEY_SIZE_THRESHOLD,
         dictionaryKeyEfficiencyThreshold);
-    WriterContext context{config, getProcessDefaultMemoryManager().getPool()};
+    WriterContext context{config, defaultMemoryManager().addRootPool()};
     // Register root node.
     auto typeWithId = TypeWithId::create(type, 1);
     auto columnWriter = BaseColumnWriter::create(context, *typeWithId);
@@ -3249,7 +3301,10 @@ struct StringColumnWriterTestCase {
       }
 
       auto reqType = TypeWithId::create(rowType)->childAt(0);
-      auto columnReader = ColumnReader::build(reqType, reqType, streams);
+      memory::AllocationPool allocPool(pool.get());
+      StreamLabels labels(allocPool);
+      auto columnReader =
+          ColumnReader::build(reqType, reqType, streams, labels);
 
       for (size_t j = 0; j != repetitionCount; ++j) {
         if (!writeDirect) {
@@ -4035,11 +4090,10 @@ TEST(ColumnWriterTests, StringColumnWriterAbandonLowValueDictionaries) {
 
 TEST(ColumnWriterTests, IntDictWriterDirectValueOverflow) {
   auto config = std::make_shared<Config>();
-  auto pool = getDefaultMemoryPool();
+  auto pool = addDefaultLeafMemoryPool();
   WriterContext context{
       config,
-      getProcessDefaultMemoryManager().getPool(
-          "IntDictWriterDirectValueOverflow")};
+      defaultMemoryManager().addRootPool("IntDictWriterDirectValueOverflow")};
   auto type = std::make_shared<const IntegerType>();
   auto typeWithId = TypeWithId::create(type, 1);
 
@@ -4064,7 +4118,7 @@ TEST(ColumnWriterTests, IntDictWriterDirectValueOverflow) {
   // get data stream
   TestStripeStreams streams(context, sf, ROW({"foo"}, {type}), pool.get());
   DwrfStreamIdentifier si{1, 0, 0, proto::Stream_Kind_DATA};
-  auto stream = streams.getStream(si, true);
+  auto stream = streams.getStream(si, {}, true);
 
   // read it as long
   auto decoder = createRleDecoder<false>(
@@ -4078,8 +4132,8 @@ TEST(ColumnWriterTests, IntDictWriterDirectValueOverflow) {
 
 TEST(ColumnWriterTests, ShortDictWriterDictValueOverflow) {
   auto config = std::make_shared<Config>();
-  auto pool = getDefaultMemoryPool();
-  WriterContext context{config, getProcessDefaultMemoryManager().getPool()};
+  auto pool = addDefaultLeafMemoryPool();
+  WriterContext context{config, defaultMemoryManager().addRootPool()};
   auto type = std::make_shared<const SmallintType>();
   auto typeWithId = TypeWithId::create(type, 1);
 
@@ -4109,7 +4163,7 @@ TEST(ColumnWriterTests, ShortDictWriterDictValueOverflow) {
   // get data stream
   TestStripeStreams streams(context, sf, ROW({"foo"}, {type}), pool.get());
   DwrfStreamIdentifier si{1, 0, 0, proto::Stream_Kind_DATA};
-  auto stream = streams.getStream(si, true);
+  auto stream = streams.getStream(si, {}, true);
 
   // read it as long
   auto decoder = createRleDecoder<false>(
@@ -4123,7 +4177,7 @@ TEST(ColumnWriterTests, ShortDictWriterDictValueOverflow) {
 
 TEST(ColumnWriterTests, RemovePresentStream) {
   auto config = std::make_shared<Config>();
-  auto pool = getDefaultMemoryPool();
+  auto pool = addDefaultLeafMemoryPool();
 
   std::vector<std::optional<int32_t>> data;
   auto size = 100;
@@ -4131,7 +4185,7 @@ TEST(ColumnWriterTests, RemovePresentStream) {
     data.push_back(i);
   }
   auto vector = populateBatch<int32_t>(data, pool.get());
-  WriterContext context{config, getProcessDefaultMemoryManager().getPool()};
+  WriterContext context{config, defaultMemoryManager().addRootPool()};
   auto type = std::make_shared<const IntegerType>();
   auto typeWithId = TypeWithId::create(type, 1);
 
@@ -4148,12 +4202,12 @@ TEST(ColumnWriterTests, RemovePresentStream) {
   // get data stream
   TestStripeStreams streams(context, sf, ROW({"foo"}, {type}), pool.get());
   DwrfStreamIdentifier si{1, 0, 0, proto::Stream_Kind_PRESENT};
-  ASSERT_EQ(streams.getStream(si, false), nullptr);
+  ASSERT_EQ(streams.getStream(si, {}, false), nullptr);
 }
 
 TEST(ColumnWriterTests, ColumnIdInStream) {
   auto config = std::make_shared<Config>();
-  auto pool = getDefaultMemoryPool();
+  auto pool = addDefaultLeafMemoryPool();
 
   std::vector<std::optional<int32_t>> data;
   auto size = 100;
@@ -4162,7 +4216,7 @@ TEST(ColumnWriterTests, ColumnIdInStream) {
   }
   auto vector = populateBatch<int32_t>(data, pool.get());
   WriterContext context{
-      config, getProcessDefaultMemoryManager().getPool("ColumnIdInStream")};
+      config, defaultMemoryManager().addRootPool("ColumnIdInStream")};
   auto type = std::make_shared<const IntegerType>();
   const uint32_t kNodeId = 4;
   const uint32_t kColumnId = 2;
@@ -4187,7 +4241,7 @@ TEST(ColumnWriterTests, ColumnIdInStream) {
   TestStripeStreams streams(context, sf, ROW({"foo"}, {type}), pool.get());
   DwrfStreamIdentifier si{
       kNodeId, /* sequence */ 0, kColumnId, proto::Stream_Kind_DATA};
-  ASSERT_NE(streams.getStream(si, false), nullptr);
+  ASSERT_NE(streams.getStream(si, {}, false), nullptr);
 }
 
 template <typename T>
@@ -4287,7 +4341,7 @@ struct DictColumnWriterTestCase {
     auto typeWithId = TypeWithId::create(type_, 1);
     auto rowType = ROW({type_});
 
-    WriterContext context{config, getProcessDefaultMemoryManager().getPool()};
+    WriterContext context{config, defaultMemoryManager().addRootPool()};
 
     // complexVectorType will be nullptr if the vector is not complex.
     bool isComplexType = std::dynamic_pointer_cast<const RowType>(type_) ||
@@ -4312,14 +4366,16 @@ struct DictColumnWriterTestCase {
       return *sf.add_encoding();
     });
 
-    auto pool = getDefaultMemoryPool();
+    auto pool = addDefaultLeafMemoryPool();
     // Reading the vector out
     TestStripeStreams streams(context, sf, rowType, pool.get());
     EXPECT_CALL(streams.getMockStrideIndexProvider(), getStrideIndex())
         .WillRepeatedly(Return(0));
     auto rowTypeWithId = TypeWithId::create(rowType);
     auto reqType = rowTypeWithId->childAt(0);
-    auto reader = ColumnReader::build(reqType, reqType, streams);
+    memory::AllocationPool allocPool(pool.get());
+    StreamLabels labels(allocPool);
+    auto reader = ColumnReader::build(reqType, reqType, streams, labels);
     VectorPtr out;
     reader->next(batch->size(), out);
     compareResults(batch, out);
@@ -4336,7 +4392,7 @@ struct DictColumnWriterTestCase {
     }
   }
 
-  std::shared_ptr<MemoryPool> pool_ = getDefaultMemoryPool();
+  std::shared_ptr<MemoryPool> pool_ = addDefaultLeafMemoryPool();
 };
 
 std::function<bool(vector_size_t /*index*/)> randomNulls(int32_t n) {

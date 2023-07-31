@@ -43,36 +43,54 @@ class ExprCallable : public Callable {
 
   void apply(
       const SelectivityVector& rows,
-      const SelectivityVector& finalSelection,
+      const SelectivityVector* validRowsInReusedResult,
       const BufferPtr& wrapCapture,
       EvalCtx* context,
       const std::vector<VectorPtr>& args,
       const BufferPtr& elementToTopLevelRows,
       VectorPtr* result) override {
-    std::vector<VectorPtr> allVectors = args;
-    for (auto index = args.size(); index < capture_->childrenSize(); ++index) {
-      auto values = capture_->childAt(index);
-      if (wrapCapture) {
-        values = BaseVector::wrapInDictionary(
-            BufferPtr(nullptr), wrapCapture, rows.end(), values);
-      }
-      allVectors.push_back(values);
-    }
-    auto row = std::make_shared<RowVector>(
-        context->pool(),
-        capture_->type(),
-        BufferPtr(nullptr),
-        rows.end(),
-        std::move(allVectors));
-    EvalCtx lambdaCtx(context->execCtx(), context->exprSet(), row.get());
+    auto row = createRowVector(context, wrapCapture, args, rows.end());
+    EvalCtx lambdaCtx = createLambdaCtx(context, row, validRowsInReusedResult);
     ScopedVarSetter throwOnError(
         lambdaCtx.mutableThrowOnError(), context->throwOnError());
-    if (!context->isFinalSelection()) {
-      *lambdaCtx.mutableIsFinalSelection() = false;
-      *lambdaCtx.mutableFinalSelection() = &finalSelection;
-    }
     body_->eval(rows, lambdaCtx, *result);
+    transformErrorVector(lambdaCtx, context, rows, elementToTopLevelRows);
+  }
 
+  void applyNoThrow(
+      const SelectivityVector& rows,
+      const SelectivityVector* validRowsInReusedResult,
+      const BufferPtr& wrapCapture,
+      EvalCtx* context,
+      const std::vector<VectorPtr>& args,
+      ErrorVectorPtr& elementErrors,
+      VectorPtr* result) override {
+    auto row = createRowVector(context, wrapCapture, args, rows.end());
+    EvalCtx lambdaCtx = createLambdaCtx(context, row, validRowsInReusedResult);
+    ScopedVarSetter throwOnError(lambdaCtx.mutableThrowOnError(), false);
+    body_->eval(rows, lambdaCtx, *result);
+    lambdaCtx.swapErrors(elementErrors);
+  }
+
+ private:
+  EvalCtx createLambdaCtx(
+      EvalCtx* context,
+      std::shared_ptr<RowVector>& row,
+      const SelectivityVector* validRowsInReusedResult) {
+    EvalCtx lambdaCtx{context->execCtx(), context->exprSet(), row.get()};
+    if (validRowsInReusedResult != nullptr) {
+      *lambdaCtx.mutableIsFinalSelection() = false;
+      *lambdaCtx.mutableFinalSelection() = validRowsInReusedResult;
+    }
+    return lambdaCtx;
+  }
+
+  // Transform error vector to map element rows back to top-level rows.
+  void transformErrorVector(
+      EvalCtx& lambdaCtx,
+      EvalCtx* context,
+      const SelectivityVector& rows,
+      const BufferPtr& elementToTopLevelRows) {
     // Transform error vector to map element rows back to top-level rows.
     if (elementToTopLevelRows) {
       lambdaCtx.addElementErrorsToTopLevel(
@@ -82,7 +100,31 @@ class ExprCallable : public Callable {
     }
   }
 
- private:
+  std::shared_ptr<RowVector> createRowVector(
+      EvalCtx* context,
+      const BufferPtr& wrapCapture,
+      const std::vector<VectorPtr>& args,
+      vector_size_t size) {
+    std::vector<VectorPtr> allVectors = args;
+    for (auto index = args.size(); index < capture_->childrenSize(); ++index) {
+      auto values = capture_->childAt(index);
+      VELOX_DCHECK(!isLazyNotLoaded(*values));
+      if (wrapCapture) {
+        values = BaseVector::wrapInDictionary(
+            BufferPtr(nullptr), wrapCapture, size, values);
+      }
+      allVectors.push_back(values);
+    }
+
+    auto row = std::make_shared<RowVector>(
+        context->pool(),
+        capture_->type(),
+        BufferPtr(nullptr),
+        size,
+        std::move(allVectors));
+    return row;
+  }
+
   RowTypePtr signature_;
   RowVectorPtr capture_;
   std::shared_ptr<Expr> body_;
@@ -140,6 +182,10 @@ void LambdaExpr::evalSpecialForm(
   std::vector<VectorPtr> values(typeWithCapture_->size());
   for (auto i = 0; i < captureChannels_.size(); ++i) {
     assert(!values.empty());
+    // Ensure all captured fields are loaded.
+    const auto& rowsToLoad =
+        context.isFinalSelection() ? rows : *context.finalSelection();
+    context.ensureFieldLoaded(captureChannels_[i], rowsToLoad);
     values[signature_->size() + i] = context.getField(captureChannels_[i]);
   }
   auto capture = std::make_shared<RowVector>(

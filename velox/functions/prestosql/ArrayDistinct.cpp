@@ -62,7 +62,7 @@ class ArrayDistinctFunction : public exec::VectorFunction {
       exec::LocalSingleRow singleRow(context, flatIndex);
       localResult = applyFlat(*singleRow, flatArray, context);
       localResult =
-          BaseVector::wrapInConstant(rows.size(), flatIndex, localResult);
+          BaseVector::wrapInConstant(rows.end(), flatIndex, localResult);
     } else {
       localResult = applyFlat(rows, arg, context);
     }
@@ -81,8 +81,8 @@ class ArrayDistinctFunction : public exec::VectorFunction {
         toElementRows(elementsVector->size(), rows, arrayVector);
     exec::LocalDecodedVector elements(context, *elementsVector, elementsRows);
 
-    vector_size_t elementsCount = elementsRows.size();
-    vector_size_t rowCount = arrayVector->size();
+    vector_size_t elementsCount = elementsRows.end();
+    vector_size_t rowCount = rows.end();
 
     // Allocate new vectors for indices, length and offsets.
     memory::MemoryPool* pool = context.pool();
@@ -165,7 +165,8 @@ std::shared_ptr<exec::VectorFunction> createTyped(
 // Create function.
 std::shared_ptr<exec::VectorFunction> create(
     const std::string& /* name */,
-    const std::vector<exec::VectorFunctionArg>& inputArgs) {
+    const std::vector<exec::VectorFunctionArg>& inputArgs,
+    const core::QueryConfig& /*config*/) {
   validateType(inputArgs);
   auto elementType = inputArgs.front().type->childAt(0);
 

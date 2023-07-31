@@ -99,6 +99,7 @@ std::vector<KeyNode<T>> getKeyNodes(
     }
     if (auto values =
             scanSpec.childByName(common::ScanSpec::kMapValuesFieldName)) {
+      VELOX_CHECK(!values->hasFilter());
       valuesSpec = scanSpec.removeChild(values);
     }
   }
@@ -121,9 +122,10 @@ std::vector<KeyNode<T>> getKeyNodes(
       dataValueType->id, [&](const StreamInformation& stream) {
         auto sequence = stream.getSequence();
         // No need to load shared dictionary stream here.
-        if (sequence == 0 || processed.count(sequence) > 0) {
+        if (sequence == 0 || processed.count(sequence)) {
           return;
         }
+        processed.insert(sequence);
         EncodingKey seqEk(dataValueType->id, sequence);
         const auto& keyInfo = stripe.getEncoding(seqEk).key();
         auto key = extractKey<T>(keyInfo);
@@ -132,7 +134,8 @@ std::vector<KeyNode<T>> getKeyNodes(
           return;
         }
         common::ScanSpec* childSpec;
-        if (auto it = childSpecs.find(key); it != childSpecs.end()) {
+        if (auto it = childSpecs.find(key);
+            it != childSpecs.end() && !it->second->isConstant()) {
           childSpec = it->second;
         } else if (asStruct) {
           // Column not selected in 'scanSpec', skipping it.
@@ -147,25 +150,26 @@ std::vector<KeyNode<T>> getKeyNodes(
           childSpec->setProjectOut(true);
           childSpec->setExtractValues(true);
           if (valuesSpec) {
-            for (auto& valuesChild : valuesSpec->children()) {
-              auto c = childSpec->getOrCreateChild(
-                  common::Subfield(valuesChild->fieldName()));
-              *c = *valuesChild;
-            }
+            *childSpec = *valuesSpec;
           }
           childSpecs[key] = childSpec;
         }
-        auto inMap =
-            stripe.getStream(seqEk.forKind(proto::Stream_Kind_IN_MAP), true);
+        auto labels = params.streamLabels().append(toString(key.get()));
+        auto inMap = stripe.getStream(
+            seqEk.forKind(proto::Stream_Kind_IN_MAP), labels.label(), true);
         VELOX_CHECK(inMap, "In map stream is required");
         auto inMapDecoder = createBooleanRleDecoder(std::move(inMap), seqEk);
         DwrfParams childParams(
-            stripe, FlatMapContext(sequence, inMapDecoder.get()));
+            stripe,
+            labels,
+            FlatMapContext{
+                .sequence = sequence,
+                .inMapDecoder = inMapDecoder.get(),
+                .keySelectionCallback = nullptr});
         auto reader = SelectiveDwrfReader::build(
             requestedValueType, dataValueType, childParams, *childSpec);
         keyNodes.emplace_back(
             key, sequence, std::move(reader), std::move(inMapDecoder));
-        processed.insert(sequence);
       });
 
   VLOG(1) << "[Flat-Map] Initialized a flat-map column reader for node "
@@ -247,11 +251,27 @@ class SelectiveFlatMapReader : public SelectiveStructColumnReaderBase {
       override {
     numReads_ = scanSpec_->newRead();
     prepareRead<char>(offset, rows, incomingNulls);
+    VELOX_DCHECK(!hasMutation());
+    auto activeRows = rows;
     auto* mapNulls =
         nullsInReadRange_ ? nullsInReadRange_->as<uint64_t>() : nullptr;
+    if (scanSpec_->filter()) {
+      auto kind = scanSpec_->filter()->kind();
+      VELOX_CHECK(
+          kind == common::FilterKind::kIsNull ||
+          kind == common::FilterKind::kIsNotNull);
+      filterNulls<int32_t>(rows, kind == common::FilterKind::kIsNull, false);
+      if (outputRows_.empty()) {
+        for (auto* reader : children_) {
+          reader->addParentNulls(offset, mapNulls, rows);
+        }
+        return;
+      }
+      activeRows = outputRows_;
+    }
     for (auto* reader : children_) {
       advanceFieldReader(reader, offset);
-      reader->read(offset, rows, mapNulls);
+      reader->read(offset, activeRows, mapNulls);
       reader->addParentNulls(offset, mapNulls, rows);
     }
     lazyVectorReadOffset_ = offset;
@@ -336,7 +356,9 @@ class SelectiveFlatMapReader : public SelectiveStructColumnReaderBase {
       if constexpr (std::is_same_v<T, StringView>) {
         strKey = keyNodes_[k].key.get();
         if (!strKey.isInline()) {
-          strKey = {&rawStrKeyBuffer[strKeySize], strKey.size()};
+          strKey = {
+              &rawStrKeyBuffer[strKeySize],
+              static_cast<int32_t>(strKey.size())};
           strKeySize += strKey.size();
         }
       }

@@ -18,7 +18,6 @@
 #include <folly/synchronization/CallOnce.h>
 #include "velox/common/base/Exceptions.h"
 #include "velox/common/file/File.h"
-#include "velox/core/Context.h"
 
 #include <cstdio>
 #include <filesystem>
@@ -31,7 +30,8 @@ constexpr std::string_view kFileScheme("file:");
 
 using RegisteredFileSystems = std::vector<std::pair<
     std::function<bool(std::string_view)>,
-    std::function<std::shared_ptr<FileSystem>(std::shared_ptr<const Config>)>>>;
+    std::function<std::shared_ptr<
+        FileSystem>(std::shared_ptr<const Config>, std::string_view)>>>;
 
 RegisteredFileSystems& registeredFileSystems() {
   // Meyers singleton.
@@ -43,21 +43,22 @@ RegisteredFileSystems& registeredFileSystems() {
 
 void registerFileSystem(
     std::function<bool(std::string_view)> schemeMatcher,
-    std::function<std::shared_ptr<FileSystem>(std::shared_ptr<const Config>)>
-        fileSystemGenerator) {
+    std::function<std::shared_ptr<FileSystem>(
+        std::shared_ptr<const Config>,
+        std::string_view)> fileSystemGenerator) {
   registeredFileSystems().emplace_back(schemeMatcher, fileSystemGenerator);
 }
 
 std::shared_ptr<FileSystem> getFileSystem(
-    std::string_view filename,
+    std::string_view filePath,
     std::shared_ptr<const Config> properties) {
   const auto& filesystems = registeredFileSystems();
   for (const auto& p : filesystems) {
-    if (p.first(filename)) {
-      return p.second(properties);
+    if (p.first(filePath)) {
+      return p.second(properties, filePath);
     }
   }
-  VELOX_FAIL("No registered file system matched with filename '{}'", filename);
+  VELOX_FAIL("No registered file system matched with file path '{}'", filePath);
 }
 
 namespace {
@@ -83,11 +84,15 @@ class LocalFileSystem : public FileSystem {
     return path;
   }
 
-  std::unique_ptr<ReadFile> openFileForRead(std::string_view path) override {
+  std::unique_ptr<ReadFile> openFileForRead(
+      std::string_view path,
+      const FileOptions& /*unused*/) override {
     return std::make_unique<LocalReadFile>(extractPath(path));
   }
 
-  std::unique_ptr<WriteFile> openFileForWrite(std::string_view path) override {
+  std::unique_ptr<WriteFile> openFileForWrite(
+      std::string_view path,
+      const FileOptions& /*unused*/) override {
     return std::make_unique<LocalWriteFile>(extractPath(path));
   }
 
@@ -98,6 +103,7 @@ class LocalFileSystem : public FileSystem {
       VELOX_USER_FAIL(
           "Failed to delete file {} with errno {}", file, strerror(errno));
     }
+    VLOG(1) << "LocalFileSystem::remove " << path;
   }
 
   void rename(
@@ -123,6 +129,8 @@ class LocalFileSystem : public FileSystem {
           newFile,
           folly::errnoStr(errno));
     }
+    VLOG(1) << "LocalFileSystem::rename oldFile: " << oldFile
+            << ", newFile:" << newFile;
   }
 
   bool exists(std::string_view path) override {
@@ -150,6 +158,7 @@ class LocalFileSystem : public FileSystem {
         path,
         ec,
         ec.message());
+    VLOG(1) << "LocalFileSystem::mkdir " << path;
   }
 
   void rmdir(std::string_view path) override {
@@ -162,20 +171,22 @@ class LocalFileSystem : public FileSystem {
         path,
         ec,
         ec.message());
+    VLOG(1) << "LocalFileSystem::rmdir " << path;
   }
 
   static std::function<bool(std::string_view)> schemeMatcher() {
     // Note: presto behavior is to prefix local paths with 'file:'.
     // Check for that prefix and prune to absolute regular paths as needed.
-    return [](std::string_view filename) {
-      return filename.find("/") == 0 || filename.find(kFileScheme) == 0;
+    return [](std::string_view filePath) {
+      return filePath.find("/") == 0 || filePath.find(kFileScheme) == 0;
     };
   }
 
-  static std::function<
-      std::shared_ptr<FileSystem>(std::shared_ptr<const Config>)>
+  static std::function<std::shared_ptr<
+      FileSystem>(std::shared_ptr<const Config>, std::string_view)>
   fileSystemGenerator() {
-    return [](std::shared_ptr<const Config> properties) {
+    return [](std::shared_ptr<const Config> properties,
+              std::string_view filePath) {
       // One instance of Local FileSystem is sufficient.
       // Initialize on first access and reuse after that.
       static std::shared_ptr<FileSystem> lfs;
@@ -192,5 +203,4 @@ void registerLocalFileSystem() {
   registerFileSystem(
       LocalFileSystem::schemeMatcher(), LocalFileSystem::fileSystemGenerator());
 }
-
 } // namespace facebook::velox::filesystems

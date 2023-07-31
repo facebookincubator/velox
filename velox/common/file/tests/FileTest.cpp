@@ -24,6 +24,7 @@
 #include "gtest/gtest.h"
 
 using namespace facebook::velox;
+using facebook::velox::common::Region;
 
 constexpr int kOneMB = 1 << 20;
 
@@ -84,6 +85,33 @@ TEST(InMemoryFile, writeAndRead) {
   }
   InMemoryReadFile readFile(buf);
   readData(&readFile);
+}
+
+TEST(InMemoryFile, preadv) {
+  std::string buf;
+  {
+    InMemoryWriteFile writeFile(&buf);
+    writeData(&writeFile);
+  }
+  // aaaaa bbbbb c*1MB ddddd
+  InMemoryReadFile readFile(buf);
+  std::vector<std::string> expected = {"ab", "a", "cccdd", "ddd"};
+  std::vector<Region> readRegions = std::vector<Region>{
+      {4, 2UL, {}},
+      {0, 1UL, {}},
+      {5 + 5 + kOneMB - 3, 5UL, {}},
+      {5 + 5 + kOneMB + 2, 3UL, {}}};
+
+  std::vector<folly::IOBuf> iobufs(readRegions.size());
+  readFile.preadv(readRegions, {iobufs.data(), iobufs.size()});
+  std::vector<std::string> values;
+  values.reserve(iobufs.size());
+  for (auto& iobuf : iobufs) {
+    values.push_back(std::string{
+        reinterpret_cast<const char*>(iobuf.data()), iobuf.length()});
+  }
+
+  EXPECT_EQ(expected, values);
 }
 
 TEST(LocalFile, writeAndRead) {

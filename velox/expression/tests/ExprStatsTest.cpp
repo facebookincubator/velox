@@ -32,11 +32,8 @@ class ExprStatsTest : public functions::test::FunctionBaseTest {
   void SetUp() override {
     functions::prestosql::registerAllScalarFunctions();
     parse::registerTypeResolver();
-
-    pool_->setMemoryUsageTracker(tracker_->addChild());
-
     // Enable CPU usage tracking.
-    queryCtx_->setConfigOverridesUnsafe({
+    queryCtx_->testingOverrideConfigUnsafe({
         {core::QueryConfig::kExprTrackCpuUsage, "true"},
     });
   }
@@ -174,7 +171,8 @@ class TestListener : public exec::ExprSetListener {
 
   void onError(
       const SelectivityVector& rows,
-      const ::facebook::velox::exec::EvalCtx::ErrorVector& errors) override {
+      const ::facebook::velox::ErrorVector& errors,
+      const std::string& /*queryId*/) override {
     rows.applyToSelected([&](auto row) {
       exceptionCount_++;
 

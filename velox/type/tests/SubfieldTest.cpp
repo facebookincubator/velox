@@ -78,6 +78,7 @@ std::vector<std::unique_ptr<Subfield::PathElement>> createElements() {
 
 void testRoundTrip(const Subfield& path) {
   auto actual = Subfield(tokenize(path.toString()));
+  ASSERT_TRUE(actual.valid());
   EXPECT_EQ(actual, path) << "at " << path.toString() << ", "
                           << actual.toString();
 }
@@ -113,6 +114,9 @@ TEST(SubfieldTest, basic) {
       }
     }
   }
+
+  ASSERT_FALSE(Subfield().valid());
+  ASSERT_EQ(Subfield().toString(), "");
 }
 
 TEST(SubfieldTest, prefix) {
@@ -134,4 +138,13 @@ TEST(SubfieldTest, hash) {
   subfields.emplace("a.b.c");
   subfields.emplace("a[\"b\"]");
   EXPECT_EQ(subfields.size(), 3);
+}
+
+TEST(SubfieldTest, longSubscript) {
+  Subfield subfield("a[3309189884973035076]");
+  ASSERT_EQ(subfield.path().size(), 2);
+  auto* longSubscript =
+      dynamic_cast<const Subfield::LongSubscript*>(subfield.path()[1].get());
+  ASSERT_TRUE(longSubscript);
+  ASSERT_EQ(longSubscript->index(), 3309189884973035076);
 }

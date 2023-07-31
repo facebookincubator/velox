@@ -17,8 +17,6 @@
 #include "velox/common/base/Crc.h"
 #include "velox/common/memory/ByteStream.h"
 #include "velox/functions/prestosql/types/TimestampWithTimeZoneType.h"
-#include "velox/type/Date.h"
-#include "velox/type/IntervalDayTime.h"
 #include "velox/vector/BiasVector.h"
 #include "velox/vector/ComplexVector.h"
 #include "velox/vector/FlatVector.h"
@@ -50,10 +48,22 @@ int64_t computeChecksum(
     int uncompressedSize) {
   auto offset = source->tellp();
   bits::Crc32 crc32;
-
+  if (FOLLY_UNLIKELY(source->remainingSize() < uncompressedSize)) {
+    VELOX_FAIL(
+        "Tried to read {} bytes, larger than what's remained in source {} "
+        "bytes. Source details: {}",
+        uncompressedSize,
+        source->remainingSize(),
+        source->toString());
+  }
   auto remainingBytes = uncompressedSize;
   while (remainingBytes > 0) {
     auto data = source->nextView(remainingBytes);
+    if (FOLLY_UNLIKELY(data.size() == 0)) {
+      VELOX_FAIL(
+          "Reading 0 bytes from source. Source details: {}",
+          source->toString());
+    }
     crc32.process_bytes(data.data(), data.size());
     remainingBytes -= data.size();
   }
@@ -87,6 +97,10 @@ bool isChecksumBitSet(int8_t codec) {
 }
 
 std::string typeToEncodingName(const TypePtr& type) {
+  if (type->isDate()) {
+    return "INT_ARRAY";
+  }
+
   switch (type->kind()) {
     case TypeKind::BOOLEAN:
       return "BYTE_ARRAY";
@@ -98,6 +112,8 @@ std::string typeToEncodingName(const TypePtr& type) {
       return "INT_ARRAY";
     case TypeKind::BIGINT:
       return "LONG_ARRAY";
+    case TypeKind::HUGEINT:
+      return "INT128_ARRAY";
     case TypeKind::REAL:
       return "INT_ARRAY";
     case TypeKind::DOUBLE:
@@ -108,14 +124,6 @@ std::string typeToEncodingName(const TypePtr& type) {
       return "VARIABLE_WIDTH";
     case TypeKind::TIMESTAMP:
       return "LONG_ARRAY";
-    case TypeKind::DATE:
-      return "INT_ARRAY";
-    case TypeKind::INTERVAL_DAY_TIME:
-      return "LONG_ARRAY";
-    case TypeKind::SHORT_DECIMAL:
-      return "LONG_ARRAY";
-    case TypeKind::LONG_DECIMAL:
-      return "INT128_ARRAY";
     case TypeKind::ARRAY:
       return "ARRAY";
     case TypeKind::MAP:
@@ -127,6 +135,18 @@ std::string typeToEncodingName(const TypePtr& type) {
     default:
       throw std::runtime_error("Unknown type kind");
   }
+}
+
+PrestoVectorSerde::PrestoOptions toPrestoOptions(
+    const VectorSerde::Options* options) {
+  if (options == nullptr) {
+    return PrestoVectorSerde::PrestoOptions();
+  }
+  return *(static_cast<const PrestoVectorSerde::PrestoOptions*>(options));
+}
+
+FOLLY_ALWAYS_INLINE bool needCompression(const folly::io::Codec& codec) {
+  return codec.type() != folly::io::CodecType::NO_COMPRESSION;
 }
 
 template <typename T>
@@ -236,66 +256,7 @@ void readLosslessTimestampValues(
   }
 }
 
-Date readDate(ByteStream* source) {
-  int32_t days = source->read<int32_t>();
-  return Date(days);
-}
-
-template <>
-void readValues<Date>(
-    ByteStream* source,
-    vector_size_t size,
-    BufferPtr nulls,
-    vector_size_t nullCount,
-    BufferPtr values) {
-  auto rawValues = values->asMutable<Date>();
-  if (nullCount) {
-    int32_t toClear = 0;
-    bits::forEachSetBit(nulls->as<uint64_t>(), 0, size, [&](int32_t row) {
-      // Set the values between the last non-null and this to type default.
-      for (; toClear < row; ++toClear) {
-        rawValues[toClear] = Date();
-      }
-      rawValues[row] = readDate(source);
-      toClear = row + 1;
-    });
-  } else {
-    for (int32_t row = 0; row < size; ++row) {
-      rawValues[row] = readDate(source);
-    }
-  }
-}
-
-IntervalDayTime readIntervalDayTime(ByteStream* source) {
-  return IntervalDayTime(source->read<int64_t>());
-}
-
-template <>
-void readValues<IntervalDayTime>(
-    ByteStream* source,
-    vector_size_t size,
-    BufferPtr nulls,
-    vector_size_t nullCount,
-    BufferPtr values) {
-  auto rawValues = values->asMutable<IntervalDayTime>();
-  if (nullCount) {
-    int32_t toClear = 0;
-    bits::forEachSetBit(nulls->as<uint64_t>(), 0, size, [&](int32_t row) {
-      // Set the values between the last non-null and this to type default.
-      for (; toClear < row; ++toClear) {
-        rawValues[toClear] = IntervalDayTime();
-      }
-      rawValues[row] = readIntervalDayTime(source);
-      toClear = row + 1;
-    });
-  } else {
-    for (int32_t row = 0; row < size; ++row) {
-      rawValues[row] = readIntervalDayTime(source);
-    }
-  }
-}
-
-UnscaledLongDecimal readUnscaledLongDecimal(ByteStream* source) {
+int128_t readJavaDecimal(ByteStream* source) {
   constexpr int64_t kInt64DeserializeMask = ~(static_cast<int64_t>(1) << 63);
   // ByteStream does not support reading int128_t values.
   auto low = source->read<int64_t>();
@@ -304,33 +265,31 @@ UnscaledLongDecimal readUnscaledLongDecimal(ByteStream* source) {
   if (high < 0) {
     // Remove the sign bit before building the int128 value.
     // Negate the value.
-    return UnscaledLongDecimal(
-        -1 * buildInt128(high & kInt64DeserializeMask, low));
+    return -1 * HugeInt::build(high & kInt64DeserializeMask, low);
   }
-  return UnscaledLongDecimal(buildInt128(high, low));
+  return HugeInt::build(high, low);
 }
 
-template <>
-void readValues<UnscaledLongDecimal>(
+void readDecimalValues(
     ByteStream* source,
     vector_size_t size,
     BufferPtr nulls,
     vector_size_t nullCount,
     BufferPtr values) {
-  auto rawValues = values->asMutable<UnscaledLongDecimal>();
+  auto rawValues = values->asMutable<int128_t>();
   if (nullCount) {
     int32_t toClear = 0;
     bits::forEachSetBit(nulls->as<uint64_t>(), 0, size, [&](int32_t row) {
       // Set the values between the last non-null and this to type default.
       for (; toClear < row; ++toClear) {
-        rawValues[toClear] = UnscaledLongDecimal();
+        rawValues[toClear] = 0;
       }
-      rawValues[row] = readUnscaledLongDecimal(source);
+      rawValues[row] = readJavaDecimal(source);
       toClear = row + 1;
     });
   } else {
     for (int32_t row = 0; row < size; ++row) {
-      rawValues[row] = readUnscaledLongDecimal(source);
+      rawValues[row] = readJavaDecimal(source);
     }
   }
 }
@@ -379,6 +338,10 @@ void read(
           source, size, flatResult->nulls(), nullCount, values);
       return;
     }
+  }
+  if (type->isLongDecimal()) {
+    readDecimalValues(source, size, flatResult->nulls(), nullCount, values);
+    return;
   }
   readValues<T>(source, size, flatResult->nulls(), nullCount, values);
 }
@@ -643,10 +606,10 @@ void readRowVector(
       if (!rawOffsets) {
         BaseVector::resizeIndices(
             size,
-            0,
             pool,
             &offsets,
-            const_cast<const vector_size_t**>(&rawOffsets));
+            const_cast<const vector_size_t**>(&rawOffsets),
+            0);
         for (int32_t child = 0; child < i; ++child) {
           rawOffsets[child] = child;
         }
@@ -719,13 +682,10 @@ void readColumns(
           {TypeKind::SMALLINT, &read<int16_t>},
           {TypeKind::INTEGER, &read<int32_t>},
           {TypeKind::BIGINT, &read<int64_t>},
+          {TypeKind::HUGEINT, &read<int128_t>},
           {TypeKind::REAL, &read<float>},
           {TypeKind::DOUBLE, &read<double>},
           {TypeKind::TIMESTAMP, &read<Timestamp>},
-          {TypeKind::DATE, &read<Date>},
-          {TypeKind::INTERVAL_DAY_TIME, &read<IntervalDayTime>},
-          {TypeKind::SHORT_DECIMAL, &read<UnscaledShortDecimal>},
-          {TypeKind::LONG_DECIMAL, &read<UnscaledLongDecimal>},
           {TypeKind::VARCHAR, &read<StringView>},
           {TypeKind::VARBINARY, &read<StringView>},
           {TypeKind::ARRAY, &readArrayVector},
@@ -787,7 +747,8 @@ class VectorStream {
           if (isTimestampWithTimeZoneType(type_)) {
             values_.startWrite(initialNumRows * 4);
             break;
-          } // else fall through
+          }
+          [[fallthrough]];
         case TypeKind::ARRAY:
         case TypeKind::MAP:
           hasLengths_ = true;
@@ -980,42 +941,34 @@ void VectorStream::append(folly::Range<const Timestamp*> values) {
 }
 
 template <>
-void VectorStream::append(folly::Range<const Date*> values) {
-  for (auto& value : values) {
-    appendOne(value.days());
-  }
-}
-
-template <>
-void VectorStream::append(folly::Range<const IntervalDayTime*> values) {
-  for (auto& value : values) {
-    appendOne(value.milliseconds());
-  }
-}
-
-template <>
-inline void VectorStream::append(
-    folly::Range<const UnscaledLongDecimal*> values) {
-  constexpr int128_t kInt128SerializeMask = (static_cast<int128_t>(1) << 127);
-  for (auto& value : values) {
-    int128_t val = value.unscaledValue();
-    // Presto Java UnscaledDecimal128 representation uses signed magnitude
-    // representation. Only negative values differ in this representation.
-    if (val < 0) {
-      val *= -1;
-      val |= kInt128SerializeMask;
-    }
-    appendOne(val);
-  }
-}
-
-template <>
 void VectorStream::append(folly::Range<const bool*> values) {
   // A bool constant is serialized via this. Accessing consecutive
   // elements via bool& does not work, hence the flat serialization is
   // specialized one level above this.
   VELOX_CHECK(values.size() == 1);
   appendOne<uint8_t>(values[0] ? 1 : 0);
+}
+
+FOLLY_ALWAYS_INLINE int128_t toJavaDecimalValue(int128_t value) {
+  constexpr int128_t kInt128SerializeMask = (static_cast<int128_t>(1) << 127);
+  // Presto Java UnscaledDecimal128 representation uses signed magnitude
+  // representation. Only negative values differ in this representation.
+  if (value < 0) {
+    value *= -1;
+    value |= kInt128SerializeMask;
+  }
+  return value;
+}
+
+template <>
+void VectorStream::append(folly::Range<const int128_t*> values) {
+  for (auto& value : values) {
+    int128_t val = value;
+    if (type_->isLongDecimal()) {
+      val = toJavaDecimalValue(value);
+    }
+    values_.append<int128_t>(folly::Range(&val, 1));
+  }
 }
 
 template <TypeKind kind>
@@ -1617,7 +1570,10 @@ class PrestoVectorSerializer : public VectorSerializer {
       std::shared_ptr<const RowType> rowType,
       int32_t numRows,
       StreamArena* streamArena,
-      bool useLosslessTimestamp) {
+      bool useLosslessTimestamp,
+      common::CompressionKind compressionKind)
+      : streamArena_(streamArena),
+        codec_(common::compressionKindToCodec(compressionKind)) {
     auto types = rowType->children();
     auto numTypes = types.size();
     streams_.resize(numTypes);
@@ -1639,6 +1595,9 @@ class PrestoVectorSerializer : public VectorSerializer {
     }
   }
 
+  // The SerializedPage layout is:
+  // numRows(4) | codec(1) | uncompressedSize(4) | compressedSize(4) |
+  // checksum(8) | data
   void flush(OutputStream* out) override {
     flushInternal(numRows_, false /*rle*/, out);
   }
@@ -1655,21 +1614,18 @@ class PrestoVectorSerializer : public VectorSerializer {
     flushInternal(vector->size(), true /*rle*/, out);
   }
 
-  // Writes the contents to 'stream' in wire format
-  void flushInternal(int32_t numRows, bool rle, OutputStream* out) {
-    auto listener = dynamic_cast<PrestoOutputStreamListener*>(out->listener());
-    // Reset CRC computation
-    if (listener) {
-      listener->reset();
-    }
+ private:
+  void flushUncompressed(
+      int32_t numRows,
+      bool rle,
+      OutputStream* out,
+      PrestoOutputStreamListener* listener) {
+    int32_t offset = out->tellp();
 
     char codec = 0;
     if (listener) {
       codec = getCodecMarker();
     }
-
-    int32_t offset = out->tellp();
-
     // Pause CRC computation
     if (listener) {
       listener->pause();
@@ -1681,7 +1637,8 @@ class PrestoVectorSerializer : public VectorSerializer {
     // Make space for uncompressedSizeInBytes & sizeInBytes
     writeInt32(out, 0);
     writeInt32(out, 0);
-    writeInt64(out, 0); // Write zero checksum
+    // Write zero checksum.
+    writeInt64(out, 0);
 
     // Number of columns and stream content. Unpause CRC.
     if (listener) {
@@ -1721,10 +1678,92 @@ class PrestoVectorSerializer : public VectorSerializer {
     out->seekp(offset + size);
   }
 
- private:
+  void flushCompressed(
+      int32_t numRows,
+      bool rle,
+      OutputStream* output,
+      PrestoOutputStreamListener* listener) {
+    const int32_t offset = output->tellp();
+    char codec = kCompressedBitMask;
+    if (listener) {
+      codec |= kCheckSumBitMask;
+    }
+
+    // Pause CRC computation
+    if (listener) {
+      listener->pause();
+    }
+
+    writeInt32(output, numRows);
+    output->write(&codec, 1);
+
+    IOBufOutputStream out(
+        *(streamArena_->pool()), nullptr, streamArena_->size());
+    writeInt32(&out, streams_.size());
+    if (rle) {
+      // Write RLE encoding marker.
+      writeInt32(&out, kRLE.size());
+      out.write(kRLE.data(), kRLE.size());
+      // Write number of RLE values.
+      writeInt32(&out, numRows);
+    }
+
+    for (auto& stream : streams_) {
+      stream->flush(&out);
+    }
+    const int32_t uncompressedSize = out.tellp();
+    VELOX_CHECK_LE(
+        uncompressedSize,
+        codec_->maxUncompressedLength(),
+        "UncompressedSize exceeds limit");
+    auto compressed = codec_->compress(out.getIOBuf().get());
+    const int32_t compressedSize = compressed->length();
+    writeInt32(output, uncompressedSize);
+    writeInt32(output, compressedSize);
+    const int32_t crcOffset = output->tellp();
+    writeInt64(output, 0); // Write zero checksum
+    // Number of columns and stream content. Unpause CRC.
+    if (listener) {
+      listener->resume();
+    }
+    output->write(
+        reinterpret_cast<const char*>(compressed->writableData()),
+        compressed->length());
+    // Pause CRC computation
+    if (listener) {
+      listener->pause();
+    }
+    const int32_t endSize = output->tellp();
+    // Fill in crc
+    int64_t crc = 0;
+    if (listener) {
+      crc = computeChecksum(listener, codec, numRows, compressedSize);
+    }
+    output->seekp(crcOffset);
+    writeInt64(output, crc);
+    output->seekp(endSize);
+  }
+
+  // Writes the contents to 'stream' in wire format
+  void flushInternal(int32_t numRows, bool rle, OutputStream* out) {
+    auto listener = dynamic_cast<PrestoOutputStreamListener*>(out->listener());
+    // Reset CRC computation
+    if (listener) {
+      listener->reset();
+    }
+
+    if (!needCompression(*codec_)) {
+      flushUncompressed(numRows, rle, out, listener);
+    } else {
+      flushCompressed(numRows, rle, out, listener);
+    }
+  }
+
   static const int32_t kSizeInBytesOffset{4 + 1};
   static const int32_t kHeaderSize{kSizeInBytesOffset + 4 + 4 + 8};
 
+  StreamArena* const streamArena_;
+  const std::unique_ptr<folly::io::Codec> codec_;
   int32_t numRows_{0};
   std::vector<std::unique_ptr<VectorStream>> streams_;
 };
@@ -1742,11 +1781,13 @@ std::unique_ptr<VectorSerializer> PrestoVectorSerde::createSerializer(
     int32_t numRows,
     StreamArena* streamArena,
     const Options* options) {
-  bool useLosslessTimestamp = options != nullptr
-      ? static_cast<const PrestoOptions*>(options)->useLosslessTimestamp
-      : false;
+  auto prestoOptions = toPrestoOptions(options);
   return std::make_unique<PrestoVectorSerializer>(
-      type, numRows, streamArena, useLosslessTimestamp);
+      type,
+      numRows,
+      streamArena,
+      prestoOptions.useLosslessTimestamp,
+      prestoOptions.compressionKind);
 }
 
 void PrestoVectorSerde::serializeConstants(
@@ -1766,9 +1807,9 @@ void PrestoVectorSerde::deserialize(
     std::shared_ptr<const RowType> type,
     std::shared_ptr<RowVector>* result,
     const Options* options) {
-  bool useLosslessTimestamp = options != nullptr
-      ? static_cast<const PrestoOptions*>(options)->useLosslessTimestamp
-      : false;
+  auto prestoOptions = toPrestoOptions(options);
+  const bool useLosslessTimestamp = prestoOptions.useLosslessTimestamp;
+  auto codec = common::compressionKindToCodec(prestoOptions.compressionKind);
   auto numRows = source->read<int32_t>();
   if (!(*result) || !result->unique() || (*result)->type() != type) {
     *result = std::dynamic_pointer_cast<RowVector>(
@@ -1779,25 +1820,44 @@ void PrestoVectorSerde::deserialize(
 
   auto pageCodecMarker = source->read<int8_t>();
   auto uncompressedSize = source->read<int32_t>();
-  // skip size in bytes
-  source->skip(4);
+  auto compressedSize = source->read<int32_t>();
   auto checksum = source->read<int64_t>();
 
   int64_t actualCheckSum = 0;
   if (isChecksumBitSet(pageCodecMarker)) {
     actualCheckSum =
-        computeChecksum(source, pageCodecMarker, numRows, uncompressedSize);
+        computeChecksum(source, pageCodecMarker, numRows, compressedSize);
   }
 
   VELOX_CHECK_EQ(
       checksum, actualCheckSum, "Received corrupted serialized page.");
 
-  // skip number of columns
-  source->skip(4);
+  VELOX_CHECK_EQ(
+      needCompression(*codec),
+      isCompressedBitSet(pageCodecMarker),
+      "Compression kind {} should align with codec marker.",
+      common::compressionKindToString(
+          common::codecTypeToCompressionKind(codec->type())));
 
   auto children = &(*result)->children();
   auto childTypes = type->as<TypeKind::ROW>().children();
-  readColumns(source, pool, childTypes, children, useLosslessTimestamp);
+  if (!needCompression(*codec)) {
+    auto numColumns = source->read<int32_t>();
+    readColumns(source, pool, childTypes, children, useLosslessTimestamp);
+  } else {
+    auto compressBuf = folly::IOBuf::create(compressedSize);
+    source->readBytes(compressBuf->writableData(), compressedSize);
+    compressBuf->append(compressedSize);
+    auto uncompress = codec->uncompress(compressBuf.get(), uncompressedSize);
+    ByteRange byteRange{
+        uncompress->writableData(), (int32_t)uncompress->length(), 0};
+    ByteStream uncompressedSource;
+    uncompressedSource.resetInput({byteRange});
+    auto numColumns = uncompressedSource.read<int32_t>();
+    VELOX_CHECK_EQ(numColumns, type->as<TypeKind::ROW>().size());
+    readColumns(
+        &uncompressedSource, pool, childTypes, children, useLosslessTimestamp);
+  }
 }
 
 // static

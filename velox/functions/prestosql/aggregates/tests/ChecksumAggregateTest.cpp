@@ -16,10 +16,11 @@
 #include <boost/algorithm/string/join.hpp>
 #include "velox/common/encode/Base64.h"
 #include "velox/exec/tests/utils/PlanBuilder.h"
-#include "velox/functions/prestosql/aggregates/tests/AggregationTestBase.h"
+#include "velox/functions/lib/aggregates/tests/AggregationTestBase.h"
 #include "velox/functions/prestosql/types/TimestampWithTimeZoneType.h"
 
 using namespace facebook::velox::exec::test;
+using namespace facebook::velox::functions::aggregate::test;
 
 namespace facebook::velox::aggregate::test {
 
@@ -33,8 +34,9 @@ class ChecksumAggregateTest : public AggregationTestBase {
   template <typename T>
   void assertSingleGroupChecksum(
       const std::vector<std::optional<T>>& data,
-      const std::string& checksum) {
-    auto inputVector = makeNullableFlatVector<T>(data);
+      const std::string& checksum,
+      const TypePtr& type = CppToType<T>::create()) {
+    auto inputVector = makeNullableFlatVector<T>(data, type);
     assertChecksum(inputVector, checksum);
   }
 
@@ -137,9 +139,9 @@ TEST_F(ChecksumAggregateTest, reals) {
 }
 
 TEST_F(ChecksumAggregateTest, dates) {
-  assertSingleGroupChecksum<Date>({Date(0)}, "AAAAAAAAAAA=");
-  assertSingleGroupChecksum<Date>({Date(1)}, "vmaSXOnPGBc=");
-  assertSingleGroupChecksum<Date>({{}}, "h8rrhbF5N54=");
+  assertSingleGroupChecksum<int32_t>({0}, "AAAAAAAAAAA=", DATE());
+  assertSingleGroupChecksum<int32_t>({1}, "vmaSXOnPGBc=", DATE());
+  assertSingleGroupChecksum<int32_t>({{}}, "h8rrhbF5N54=", DATE());
 }
 
 TEST_F(ChecksumAggregateTest, timestamps) {

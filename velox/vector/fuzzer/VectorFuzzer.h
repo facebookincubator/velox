@@ -116,7 +116,7 @@ class VectorFuzzer {
 
     /// If true, the length of array/map are randomly generated and
     /// `containerLength` is treated as maximum length.
-    bool containerVariableLength{false};
+    bool containerVariableLength{true};
 
     /// Restricts the maximum inner (elements) vector size created when
     /// generating nested vectors (arrays, maps, and rows).
@@ -125,9 +125,15 @@ class VectorFuzzer {
     /// If true, generated map keys are normalized (unique and not-null).
     bool normalizeMapKeys{true};
 
-    /// If true, the random generated timestamp value will only be in
-    /// microsecond precision (default is nanosecond).
-    bool useMicrosecondPrecisionTimestamp{false};
+    /// Control the precision of timestamps generated. By default generate using
+    /// nanoseconds precision.
+    enum class TimestampPrecision : int8_t {
+      kNanoSeconds = 0,
+      kMicroSeconds = 1,
+      kMilliSeconds = 2,
+      kSeconds = 3,
+    };
+    TimestampPrecision timestampPrecision{TimestampPrecision::kNanoSeconds};
 
     /// If true, fuzz() will randomly generate lazy vectors and fuzzInputRow()
     /// will generate a raw vector with children that can randomly be lazy
@@ -238,14 +244,16 @@ class VectorFuzzer {
 
   // Generates short decimal TypePtr with random precision and scale.
   inline TypePtr randShortDecimalType() {
-    auto [precision, scale] = randPrecisionScale(TypeKind::SHORT_DECIMAL);
-    return SHORT_DECIMAL(precision, scale);
+    auto [precision, scale] =
+        randPrecisionScale(ShortDecimalType::kMaxPrecision);
+    return DECIMAL(precision, scale);
   }
 
   // Generates long decimal TypePtr with random precision and scale.
   inline TypePtr randLongDecimalType() {
-    auto [precision, scale] = randPrecisionScale(TypeKind::LONG_DECIMAL);
-    return LONG_DECIMAL(precision, scale);
+    auto [precision, scale] =
+        randPrecisionScale(LongDecimalType::kMaxPrecision);
+    return DECIMAL(precision, scale);
   }
 
   // Generate a random non-floating-point primitive type to be used as join keys
@@ -274,28 +282,34 @@ class VectorFuzzer {
   // Returns a copy of 'rowVector' but with the columns having indices listed in
   // 'columnsToWrapInLazy' wrapped in lazy encoding. Must only be used for input
   // row vectors where all children are non-null and non-lazy.
-  // 'columnsToWrapInLazy' should be a sorted list of column indices.
+  // 'columnsToWrapInLazy' can contain negative column indices that represent
+  // lazy vectors that should be preloaded before being fed to the evaluator.
+  // This list is sorted on the absolute value of the entries.
   static RowVectorPtr fuzzRowChildrenToLazy(
       RowVectorPtr rowVector,
-      const std::vector<column_index_t>& columnsToWrapInLazy);
+      const std::vector<int>& columnsToWrapInLazy);
+
+  // Generate a random null buffer.
+  BufferPtr fuzzNulls(vector_size_t size);
+
+  // Generate a random indices buffer of 'size' with maximum possible index
+  // pointing to (baseVectorSize-1).
+  BufferPtr fuzzIndices(vector_size_t size, vector_size_t baseVectorSize);
 
  private:
   // Generates a flat vector for primitive types.
   VectorPtr fuzzFlatPrimitive(const TypePtr& type, vector_size_t size);
 
-  /// Generates random precision in range [1, max precision for decimal
-  /// TypeKind] and scale in range [0, random precision generated].
-  /// @param kind must be a decimal type kind.
-  std::pair<int8_t, int8_t> randPrecisionScale(TypeKind kind);
+  /// Generates random precision in range [1, maxPrecision]
+  // and scale in range [0, random precision generated].
+  /// @param maximum precision.
+  std::pair<int8_t, int8_t> randPrecisionScale(int8_t maxPrecision);
 
   // Returns a complex vector with randomized data and nulls.  The children and
   // all other descendant vectors will randomly use constant, dictionary, or
   // flat encodings if flatEncoding is set to false, otherwise they will all be
   // flat.
   VectorPtr fuzzComplex(const TypePtr& type, vector_size_t size);
-
-  // Generate a random null buffer.
-  BufferPtr fuzzNulls(vector_size_t size);
 
   void fuzzOffsetsAndSizes(
       BufferPtr& offsets,

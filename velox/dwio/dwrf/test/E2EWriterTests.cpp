@@ -26,7 +26,7 @@
 #include "velox/dwio/dwrf/test/OrcTest.h"
 #include "velox/dwio/dwrf/test/utils/E2EWriterTestUtil.h"
 #include "velox/dwio/dwrf/writer/Writer.h"
-#include "velox/dwio/type/fbhive/HiveTypeParser.h"
+#include "velox/type/fbhive/HiveTypeParser.h"
 #include "velox/vector/FlatVector.h"
 #include "velox/vector/fuzzer/VectorFuzzer.h"
 #include "velox/vector/tests/utils/VectorMaker.h"
@@ -38,7 +38,7 @@ using namespace facebook::velox::dwio::common::encryption::test;
 using namespace facebook::velox::test;
 using namespace facebook::velox::dwrf;
 using namespace facebook::velox::dwrf::encryption;
-using namespace facebook::velox::dwio::type::fbhive;
+using namespace facebook::velox::type::fbhive;
 using namespace facebook::velox;
 using facebook::velox::memory::MemoryPool;
 using folly::Random;
@@ -46,15 +46,14 @@ using folly::Random;
 constexpr uint64_t kSizeMB = 1024UL * 1024UL;
 
 namespace {
-auto defaultPool = memory::getDefaultMemoryPool();
+auto defaultPool = memory::addDefaultLeafMemoryPool();
 }
 
 class E2EWriterTests : public Test {
  protected:
   E2EWriterTests() {
-    rootPool_ =
-        memory::getProcessDefaultMemoryManager().getPool("E2EWriterTests");
-    leafPool_ = rootPool_->addChild("leaf");
+    rootPool_ = memory::defaultMemoryManager().addRootPool("E2EWriterTests");
+    leafPool_ = rootPool_->addLeafChild("leaf");
   }
 
   std::unique_ptr<DwrfReader> createReader(
@@ -84,10 +83,11 @@ class E2EWriterTests : public Test {
     auto sink = std::make_unique<MemorySink>(*leafPool_, 200 * 1024 * 1024);
     auto sinkPtr = sink.get();
 
-    WriterOptions options;
+    dwrf::WriterOptions options;
     options.config = config;
     options.schema = type;
-    Writer writer{options, std::move(sink), *rootPool_};
+    options.memoryPool = rootPool_.get();
+    dwrf::Writer writer{std::move(sink), options};
 
     for (size_t i = 0; i < stripes; ++i) {
       writer.write(BatchMaker::createBatch(type, size, *leafPool_, nullptr, i));
@@ -135,10 +135,11 @@ class E2EWriterTests : public Test {
     auto sink = std::make_unique<MemorySink>(*leafPool_, 400 * 1024 * 1024);
     auto sinkPtr = sink.get();
 
-    WriterOptions options;
+    dwrf::WriterOptions options;
     options.config = config;
     options.schema = type;
-    Writer writer{options, std::move(sink), *rootPool_};
+    options.memoryPool = rootPool_.get();
+    dwrf::Writer writer{std::move(sink), options};
 
     const size_t seed = std::time(nullptr);
     LOG(INFO) << "seed: " << seed;
@@ -269,7 +270,10 @@ TEST_F(E2EWriterTests, DISABLED_TestFileCreation) {
         BatchMaker::createBatch(type, size, *leafPool_, nullptr, i));
   }
 
-  auto sink = std::make_unique<LocalFileSink>("/tmp/e2e_generated_file.orc");
+  auto path = "/tmp/e2e_generated_file.orc";
+  auto localWriteFile = std::make_unique<LocalWriteFile>(path, true, false);
+  auto sink =
+      std::make_unique<WriteFileDataSink>(std::move(localWriteFile), path);
   E2EWriterTestUtil::writeData(
       std::move(sink),
       type,
@@ -339,7 +343,7 @@ TEST_F(E2EWriterTests, FlatMapDictionaryEncoding) {
   // Start with a size larger than stride to cover splitting into
   // strides. Continue with smaller size for faster test.
   size_t size = 1100;
-  auto pool = memory::getDefaultMemoryPool();
+  auto pool = memory::addDefaultLeafMemoryPool();
 
   HiveTypeParser parser;
   auto type = parser.parse(
@@ -379,7 +383,7 @@ TEST_F(E2EWriterTests, MaxFlatMapKeys) {
   const uint32_t keyLimit = 2000;
   const auto randomStart = Random::rand32(100);
 
-  auto pool = memory::getDefaultMemoryPool();
+  auto pool = memory::addDefaultLeafMemoryPool();
   b::row row;
   for (int32_t i = 0; i < keyLimit; ++i) {
     row.push_back(b::pair{randomStart + i, Random::rand64()});
@@ -405,7 +409,7 @@ TEST_F(E2EWriterTests, PresentStreamIsSuppressedOnFlatMap) {
 
   const auto randomStart = Random::rand32(100);
 
-  auto pool = facebook::velox::memory::getDefaultMemoryPool();
+  auto pool = facebook::velox::memory::addDefaultLeafMemoryPool();
   b::row row;
   row.push_back(b::pair{randomStart, Random::rand64()});
 
@@ -452,7 +456,7 @@ TEST_F(E2EWriterTests, TooManyFlatMapKeys) {
   const uint32_t keyLimit = 2000;
   const auto randomStart = Random::rand32(100);
 
-  auto pool = memory::getDefaultMemoryPool();
+  auto pool = memory::addDefaultLeafMemoryPool();
   b::row row;
   for (int32_t i = 0; i < (keyLimit + 1); ++i) {
     row.push_back(b::pair{randomStart + i, Random::rand64()});
@@ -474,7 +478,7 @@ TEST_F(E2EWriterTests, TooManyFlatMapKeys) {
 }
 
 TEST_F(E2EWriterTests, FlatMapBackfill) {
-  auto pool = memory::getDefaultMemoryPool();
+  auto pool = memory::addDefaultLeafMemoryPool();
 
   using keyType = int32_t;
   using valueType = int32_t;
@@ -537,7 +541,7 @@ void testFlatMapWithNulls(
     bool firstRowNotNull,
     bool enableFlatmapDictionaryEncoding = false,
     bool shareDictionary = false) {
-  auto pool = memory::getDefaultMemoryPool();
+  auto pool = memory::addDefaultLeafMemoryPool();
 
   using keyType = int32_t;
   using valueType = int32_t;
@@ -604,7 +608,7 @@ TEST_F(E2EWriterTests, FlatMapWithNullsSharedDict) {
 }
 
 TEST_F(E2EWriterTests, FlatMapEmpty) {
-  auto pool = memory::getDefaultMemoryPool();
+  auto pool = memory::addDefaultLeafMemoryPool();
 
   using keyType = int32_t;
   using valueType = int32_t;
@@ -754,10 +758,11 @@ TEST_F(E2EWriterTests, PartialStride) {
   auto sink = std::make_unique<MemorySink>(*leafPool_, 2 * 1024 * 1024);
   auto sinkPtr = sink.get();
 
-  WriterOptions options;
+  dwrf::WriterOptions options;
   options.config = config;
   options.schema = type;
-  Writer writer{options, std::move(sink), *rootPool_};
+  options.memoryPool = rootPool_.get();
+  dwrf::Writer writer{std::move(sink), options};
 
   auto nulls = allocateNulls(size, leafPool_.get());
   auto* nullsPtr = nulls->asMutable<uint64_t>();
@@ -800,7 +805,7 @@ TEST_F(E2EWriterTests, PartialStride) {
 }
 
 TEST_F(E2EWriterTests, OversizeRows) {
-  auto pool = facebook::velox::memory::getDefaultMemoryPool();
+  auto pool = facebook::velox::memory::addDefaultLeafMemoryPool();
 
   HiveTypeParser parser;
   auto type = parser.parse(
@@ -838,7 +843,7 @@ TEST_F(E2EWriterTests, OversizeRows) {
 }
 
 TEST_F(E2EWriterTests, OversizeBatches) {
-  auto pool = facebook::velox::memory::getDefaultMemoryPool();
+  auto pool = facebook::velox::memory::addDefaultLeafMemoryPool();
 
   HiveTypeParser parser;
   auto type = parser.parse(
@@ -886,7 +891,7 @@ TEST_F(E2EWriterTests, OversizeBatches) {
 }
 
 TEST_F(E2EWriterTests, OverflowLengthIncrements) {
-  auto pool = facebook::velox::memory::getDefaultMemoryPool();
+  auto pool = facebook::velox::memory::addDefaultLeafMemoryPool();
 
   HiveTypeParser parser;
   auto type = parser.parse(
@@ -965,12 +970,12 @@ class E2EEncryptionTest : public E2EWriterTests {
     config->set(Config::ENTROPY_KEY_STRING_SIZE_THRESHOLD, 0.0f);
     auto sink = std::make_unique<MemorySink>(*leafPool_, 16 * 1024 * 1024);
     sink_ = sink.get();
-    WriterOptions options;
+    dwrf::WriterOptions options;
     options.config = config;
     options.schema = type;
     options.encryptionSpec = spec;
     options.encrypterFactory = std::make_shared<TestEncrypterFactory>();
-    writer_ = std::make_unique<Writer>(options, std::move(sink), rootPool_);
+    writer_ = std::make_unique<Writer>(std::move(sink), options, rootPool_);
 
     for (size_t i = 0; i < batchCount_; ++i) {
       auto batch =
@@ -1294,7 +1299,7 @@ VectorPtr createKeys(
 } // namespace
 
 TEST_F(E2EWriterTests, fuzzSimple) {
-  auto pool = memory::getDefaultMemoryPool();
+  auto pool = memory::addDefaultLeafMemoryPool();
   auto type = ROW({
       {"bool_val", BOOLEAN()},
       {"byte_val", TINYINT()},
@@ -1343,7 +1348,7 @@ TEST_F(E2EWriterTests, fuzzSimple) {
 }
 
 TEST_F(E2EWriterTests, fuzzComplex) {
-  auto pool = memory::getDefaultMemoryPool();
+  auto pool = memory::addDefaultLeafMemoryPool();
   auto type = ROW({
       {"array", ARRAY(REAL())},
       {"map", MAP(INTEGER(), DOUBLE())},
@@ -1398,7 +1403,7 @@ TEST_F(E2EWriterTests, fuzzComplex) {
 }
 
 TEST_F(E2EWriterTests, fuzzFlatmap) {
-  auto pool = memory::getDefaultMemoryPool();
+  auto pool = memory::addDefaultLeafMemoryPool();
   auto type = ROW({
       {"flatmap1", MAP(INTEGER(), REAL())},
       {"flatmap2", MAP(VARCHAR(), ARRAY(REAL()))},

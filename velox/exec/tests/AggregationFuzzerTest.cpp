@@ -47,28 +47,8 @@ int main(int argc, char** argv) {
   // experience, and initialize glog and gflags.
   folly::init(&argc, &argv);
 
-  // TODO: List of the functions that at some point crash or fail and need to
-  // be fixed before we can enable.
-  std::unordered_set<std::string> skipFunctions = {
-      "stddev_pop", // https://github.com/facebookincubator/velox/issues/3493
-  };
-
-  // The results of the following functions depend on the order of input
-  // rows. For some functions, the result can be transformed to a value that
-  // doesn't dopend on the order of inputs. If such transformation exists, it
-  // can be specified to be used for results verification. If no transformation
-  // is specified, results are not verified.
-  std::unordered_map<std::string, std::string> orderDependentFunctions = {
-      {"approx_distinct", ""},
-      {"approx_set", ""},
-      {"arbitrary", ""},
-      {"array_agg", "array_sort({})"},
-      {"map_agg", "array_sort(map_keys({}))"},
-      {"map_union", "array_sort(map_keys({}))"},
-      {"max_by", ""},
-      {"min_by", ""},
-  };
   size_t initialSeed = FLAGS_seed == 0 ? std::time(nullptr) : FLAGS_seed;
-  return AggregationFuzzerRunner::run(
-      FLAGS_only, initialSeed, skipFunctions, orderDependentFunctions);
+
+  return facebook::velox::exec::test::AggregationFuzzerRunner::run(
+      FLAGS_only, initialSeed);
 }

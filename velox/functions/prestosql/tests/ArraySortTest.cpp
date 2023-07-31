@@ -90,10 +90,25 @@ class ArraySortTest : public FunctionBaseTest,
   }
 
   template <typename T>
+  VectorPtr makeDataArray(const std::vector<std::optional<int32_t>>& indices) {
+    std::vector<std::optional<T>> data;
+    data.reserve(indices.size());
+    for (auto i : indices) {
+      if (i.has_value()) {
+        data.push_back(dataAt<T>(i.value()));
+      } else {
+        data.push_back(std::nullopt);
+      }
+    }
+    return arrayVector(data);
+  }
+
+  template <typename T>
   void test() {
     struct {
       const RowVectorPtr inputVector;
       const VectorPtr expectedResult;
+      const VectorPtr expectedDescResult;
 
       const std::string debugString() const {
         return fmt::format(
@@ -103,86 +118,87 @@ class ArraySortTest : public FunctionBaseTest,
             expectedResult->toString(0, expectedResult->size()));
       }
     } testSettings[] = {
-        {makeRowVector({arrayVector(std::vector<std::optional<T>>(
-             {dataAt<T>(2), dataAt<T>(1), dataAt<T>(0)}))}),
-         arrayVector(std::vector<std::optional<T>>{
-             dataAt<T>(0), dataAt<T>(1), dataAt<T>(2)})},
+        {
+            makeRowVector({makeDataArray<T>({2, 1, 0})}),
+            makeDataArray<T>({0, 1, 2}),
+            makeDataArray<T>({2, 1, 0}),
+        },
 
-        {makeRowVector({arrayVector(std::vector<std::optional<T>>(
-             {dataAt<T>(0), dataAt<T>(1), dataAt<T>(2)}))}),
-         arrayVector(std::vector<std::optional<T>>{
-             dataAt<T>(0), dataAt<T>(1), dataAt<T>(2)})},
+        {
+            makeRowVector({makeDataArray<T>({0, 1, 2})}),
+            makeDataArray<T>({0, 1, 2}),
+            makeDataArray<T>({2, 1, 0}),
+        },
 
-        {makeRowVector({arrayVector(std::vector<std::optional<T>>(
-             {dataAt<T>(0), dataAt<T>(0), dataAt<T>(0)}))}),
-         arrayVector(std::vector<std::optional<T>>{
-             dataAt<T>(0), dataAt<T>(0), dataAt<T>(0)})},
+        {
+            makeRowVector({makeDataArray<T>({0, 0, 0})}),
+            makeDataArray<T>({0, 0, 0}),
+            makeDataArray<T>({0, 0, 0}),
+        },
 
-        {makeRowVector({arrayVector(std::vector<std::optional<T>>(
-             {dataAt<T>(1), dataAt<T>(0), dataAt<T>(2)}))}),
-         arrayVector(std::vector<std::optional<T>>{
-             dataAt<T>(0), dataAt<T>(1), dataAt<T>(2)})},
+        {
+            makeRowVector({makeDataArray<T>({1, 0, 2})}),
+            makeDataArray<T>({0, 1, 2}),
+            makeDataArray<T>({2, 1, 0}),
+        },
 
-        {makeRowVector({arrayVector(std::vector<std::optional<T>>(
-             {std::nullopt, dataAt<T>(1), dataAt<T>(0), dataAt<T>(2)}))}),
-         arrayVector(std::vector<std::optional<T>>{
-             dataAt<T>(0), dataAt<T>(1), dataAt<T>(2), std::nullopt})},
+        {
+            makeRowVector({makeDataArray<T>({std::nullopt, 1, 0, 2})}),
+            makeDataArray<T>({0, 1, 2, std::nullopt}),
+            makeDataArray<T>({2, 1, 0, std::nullopt}),
+        },
 
-        {makeRowVector({arrayVector(std::vector<std::optional<T>>(
-             {std::nullopt,
-              std::nullopt,
-              dataAt<T>(1),
-              dataAt<T>(0),
-              dataAt<T>(2)}))}),
-         arrayVector(std::vector<std::optional<T>>{
-             dataAt<T>(0),
-             dataAt<T>(1),
-             dataAt<T>(2),
-             std::nullopt,
-             std::nullopt})},
+        {
+            makeRowVector(
+                {makeDataArray<T>({std::nullopt, std::nullopt, 1, 0, 2})}),
+            makeDataArray<T>({0, 1, 2, std::nullopt, std::nullopt}),
+            makeDataArray<T>({2, 1, 0, std::nullopt, std::nullopt}),
+        },
 
-        {makeRowVector({arrayVector(std::vector<std::optional<T>>(
-             {std::nullopt,
-              dataAt<T>(1),
-              dataAt<T>(0),
-              std::nullopt,
-              dataAt<T>(2)}))}),
-         arrayVector(std::vector<std::optional<T>>{
-             dataAt<T>(0),
-             dataAt<T>(1),
-             dataAt<T>(2),
-             std::nullopt,
-             std::nullopt})},
+        {
+            makeRowVector(
+                {makeDataArray<T>({std::nullopt, 1, 0, std::nullopt, 2})}),
+            makeDataArray<T>({0, 1, 2, std::nullopt, std::nullopt}),
+            makeDataArray<T>({2, 1, 0, std::nullopt, std::nullopt}),
+        },
 
-        {makeRowVector({arrayVector(std::vector<std::optional<T>>(
-             {dataAt<T>(1),
-              std::nullopt,
-              dataAt<T>(0),
-              dataAt<T>(2),
-              std::nullopt}))}),
-         arrayVector(std::vector<std::optional<T>>{
-             dataAt<T>(0),
-             dataAt<T>(1),
-             dataAt<T>(2),
-             std::nullopt,
-             std::nullopt})},
-        {makeRowVector({arrayVector(std::vector<std::optional<T>>(
-             {std::nullopt,
-              std::nullopt,
-              std::nullopt,
-              std::nullopt,
-              std::nullopt}))}),
-         arrayVector(std::vector<std::optional<T>>{
-             std::nullopt,
-             std::nullopt,
-             std::nullopt,
-             std::nullopt,
-             std::nullopt})}};
+        {
+            makeRowVector(
+                {makeDataArray<T>({1, std::nullopt, 0, 2, std::nullopt})}),
+            makeDataArray<T>({0, 1, 2, std::nullopt, std::nullopt}),
+            makeDataArray<T>({2, 1, 0, std::nullopt, std::nullopt}),
+        },
+
+        {
+            makeRowVector({makeDataArray<T>(
+                {std::nullopt,
+                 std::nullopt,
+                 std::nullopt,
+                 std::nullopt,
+                 std::nullopt})}),
+            makeDataArray<T>(
+                {std::nullopt,
+                 std::nullopt,
+                 std::nullopt,
+                 std::nullopt,
+                 std::nullopt}),
+            makeDataArray<T>(
+                {std::nullopt,
+                 std::nullopt,
+                 std::nullopt,
+                 std::nullopt,
+                 std::nullopt}),
+        },
+    };
     for (const auto& testData : testSettings) {
       SCOPED_TRACE(testData.debugString());
       auto actualResult =
           evaluate<ArrayVector>("array_sort(c0)", testData.inputVector);
       assertEqualVectors(testData.expectedResult, actualResult);
+
+      auto descResult =
+          evaluate<ArrayVector>("array_sort_desc(c0)", testData.inputVector);
+      assertEqualVectors(testData.expectedDescResult, descResult);
     }
   }
 
@@ -463,6 +479,108 @@ TEST_P(ArraySortTest, encodedElements) {
   // Apply sort twice.
   result = evaluate("array_sort(array_sort(c0))", {makeRowVector({array})});
   assertEqualVectors(expected, result);
+}
+
+TEST_F(ArraySortTest, wellFormedVectors) {
+  // A test that make sure that offsets of unselected indices that appears in
+  // the output are still valid (refer to addressable locations in the elements
+  // vector) in the final output vector.
+  auto base = makeFlatVector<int64_t>({1, 2, 3, 4, 5, 6, 7, 8, 9, 10});
+
+  auto makeBuffer = [&](const std::vector<vector_size_t>& values) {
+    BufferPtr buffer = facebook::velox::allocateOffsets(values.size(), pool());
+    auto rawBuffer = buffer->asMutable<vector_size_t>();
+
+    for (int i = 0; i < values.size(); i++) {
+      rawBuffer[i] = values[i];
+    }
+    return buffer;
+  };
+
+  // Make array of size 3 but with offset at position 2 > position 3.
+  auto offsets = makeBuffer({0, 4, 1});
+  auto sizes = makeBuffer({1, 5, 1});
+
+  auto array = std::make_shared<ArrayVector>(
+      pool(), ARRAY(BIGINT()), nullptr, 3, offsets, sizes, base);
+  auto data = makeRowVector({array});
+  const std::string expression = "array_sort(c0)";
+  auto typedExpr = makeTypedExpr(expression, asRowType(data->type()));
+
+  SelectivityVector rows(data->size(), false);
+
+  std::vector<VectorPtr> results(1);
+  exec::ExprSet exprSet({typedExpr}, &execCtx_);
+  exec::EvalCtx evalCtx(&execCtx_, &exprSet, data.get());
+
+  // Evaluate and ensure middle row is not selected.
+  rows.setValid(0, true);
+  rows.setValid(2, true);
+  rows.updateBounds();
+  exprSet.eval(rows, evalCtx, results);
+  VectorPtr result = results[0];
+
+  // Ensure that array vector is addressable right.
+  // That is all offset + size should be < element.size().
+  // In https://github.com/facebookincubator/velox/issues/4754 we found a bug
+  // that caused us to create element vectors with size < offsets + size.
+  auto arrayVec = result->asUnchecked<ArrayVector>();
+  EXPECT_TRUE(arrayVec);
+  EXPECT_GT(arrayVec->offsetAt(2), 0);
+  EXPECT_LE(
+      arrayVec->offsetAt(1) + arrayVec->sizeAt(1),
+      arrayVec->elements()->size());
+}
+
+TEST_F(ArraySortTest, lambda) {
+  auto data = makeRowVector({makeNullableArrayVector<std::string>({
+      {"abc123", "abc", std::nullopt, "abcd"},
+      {std::nullopt, "x", "xyz123", "xyz"},
+  })});
+
+  auto sortedAsc = makeNullableArrayVector<std::string>({
+      {"abc", "abcd", "abc123", std::nullopt},
+      {"x", "xyz", "xyz123", std::nullopt},
+  });
+
+  auto sortedDesc = makeNullableArrayVector<std::string>({
+      {"abc123", "abcd", "abc", std::nullopt},
+      {"xyz123", "xyz", "x", std::nullopt},
+  });
+
+  auto testAsc = [&](const std::string& name, const std::string& lambdaExpr) {
+    SCOPED_TRACE(name);
+    SCOPED_TRACE(lambdaExpr);
+    auto result = evaluate(fmt::format("{}(c0, {})", name, lambdaExpr), data);
+    assertEqualVectors(sortedAsc, result);
+  };
+
+  auto testDesc = [&](const std::string& name, const std::string& lambdaExpr) {
+    SCOPED_TRACE(name);
+    SCOPED_TRACE(lambdaExpr);
+    auto result = evaluate(fmt::format("{}(c0, {})", name, lambdaExpr), data);
+    assertEqualVectors(sortedDesc, result);
+  };
+
+  // Different ways to sort by length ascending.
+  testAsc("array_sort", "x -> length(x)");
+  testAsc("array_sort_desc", "x -> length(x) * -1");
+  testAsc(
+      "array_sort",
+      "(x, y) -> if(length(x) < length(y), -1, if(length(x) > length(y), 1, 0))");
+  testAsc(
+      "array_sort",
+      "(x, y) -> if(length(x) < length(y), -1, if(length(x) = length(y), 0, 1))");
+
+  // Different ways to sort by length descending.
+  testDesc("array_sort", "x -> length(x) * -1");
+  testDesc("array_sort_desc", "x -> length(x)");
+  testDesc(
+      "array_sort",
+      "(x, y) -> if(length(x) < length(y), 1, if(length(x) > length(y), -1, 0))");
+  testDesc(
+      "array_sort",
+      "(x, y) -> if(length(x) < length(y), 1, if(length(x) = length(y), 0, -1))");
 }
 
 VELOX_INSTANTIATE_TEST_SUITE_P(

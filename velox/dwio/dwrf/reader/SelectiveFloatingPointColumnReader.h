@@ -28,18 +28,18 @@ class SelectiveFloatingPointColumnReader
  public:
   using ValueType = TRequested;
 
-  using root = dwio::common::SelectiveColumnReader;
   using base =
       dwio::common::SelectiveFloatingPointColumnReader<TData, TRequested>;
 
   SelectiveFloatingPointColumnReader(
-      std::shared_ptr<const dwio::common::TypeWithId> requestedType,
-      const TypePtr& dataType,
+      const TypePtr& requestedType,
+      std::shared_ptr<const dwio::common::TypeWithId> dataType,
       DwrfParams& params,
       common::ScanSpec& scanSpec);
 
   void seekToRowGroup(uint32_t index) override {
-    auto positionsProvider = root::formatData_->seekToRowGroup(index);
+    base::seekToRowGroup(index);
+    auto positionsProvider = this->formatData_->seekToRowGroup(index);
     decoder_.seekToRowGroup(positionsProvider);
     VELOX_CHECK(!positionsProvider.hasNext());
   }
@@ -49,7 +49,7 @@ class SelectiveFloatingPointColumnReader
   void read(vector_size_t offset, RowSet rows, const uint64_t* incomingNulls)
       override {
     using T = SelectiveFloatingPointColumnReader<TData, TRequested>;
-    base::template readCommon<T>(offset, rows, incomingNulls);
+    this->template readCommon<T>(offset, rows, incomingNulls);
   }
 
   template <typename TVisitor>
@@ -61,24 +61,25 @@ class SelectiveFloatingPointColumnReader
 template <typename TData, typename TRequested>
 SelectiveFloatingPointColumnReader<TData, TRequested>::
     SelectiveFloatingPointColumnReader(
-        std::shared_ptr<const dwio::common::TypeWithId> requestedType,
-        const TypePtr& dataType,
+        const TypePtr& requestedType,
+        std::shared_ptr<const dwio::common::TypeWithId> dataType,
         DwrfParams& params,
         common::ScanSpec& scanSpec)
     : dwio::common::SelectiveFloatingPointColumnReader<TData, TRequested>(
-          std::move(requestedType),
-          dataType,
+          requestedType,
+          std::move(dataType),
           params,
           scanSpec),
       decoder_(params.stripeStreams().getStream(
-          EncodingKey{root::nodeType_->id, params.flatMapContext().sequence}
+          EncodingKey{this->fileType_->id, params.flatMapContext().sequence}
               .forKind(proto::Stream_Kind_DATA),
+          params.streamLabels().label(),
           true)) {}
 
 template <typename TData, typename TRequested>
 uint64_t SelectiveFloatingPointColumnReader<TData, TRequested>::skip(
     uint64_t numValues) {
-  numValues = root::formatData_->skipNulls(numValues);
+  numValues = this->formatData_->skipNulls(numValues);
   decoder_.skip(numValues);
   return numValues;
 }
@@ -89,13 +90,13 @@ void SelectiveFloatingPointColumnReader<TData, TRequested>::readWithVisitor(
     RowSet rows,
     TVisitor visitor) {
   vector_size_t numRows = rows.back() + 1;
-  if (root::nullsInReadRange_) {
+  if (this->nullsInReadRange_) {
     decoder_.template readWithVisitor<true, TVisitor>(
-        root::nullsInReadRange_->as<uint64_t>(), visitor);
+        this->nullsInReadRange_->template as<uint64_t>(), visitor);
   } else {
     decoder_.template readWithVisitor<false, TVisitor>(nullptr, visitor);
   }
-  root::readOffset_ += numRows;
+  this->readOffset_ += numRows;
 }
 
 } // namespace facebook::velox::dwrf

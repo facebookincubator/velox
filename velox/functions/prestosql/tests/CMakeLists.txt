@@ -17,25 +17,33 @@ add_subdirectory(utils)
 add_executable(
   velox_functions_test
   ArithmeticTest.cpp
+  ArrayAllMatchTest.cpp
+  ArrayAnyMatchTest.cpp
   ArrayAverageTest.cpp
   ArrayCombinationsTest.cpp
+  ArrayConcatTest.cpp
   ArrayConstructorTest.cpp
   ArrayContainsTest.cpp
   ArrayDistinctTest.cpp
   ArrayDuplicatesTest.cpp
   ArrayExceptTest.cpp
   ArrayFilterTest.cpp
+  ArrayFlattenTest.cpp
   ArrayJoinTest.cpp
   ArrayHasDuplicatesTest.cpp
   ArrayIntersectTest.cpp
   ArrayMaxTest.cpp
   ArrayMinTest.cpp
+  ArrayNoneMatchTest.cpp
   ArrayNormalizeTest.cpp
   ArrayPositionTest.cpp
   ArraySortTest.cpp
   ArrayShuffleTest.cpp
   ArraysOverlapTest.cpp
   ArraySumTest.cpp
+  ArrayTrimTest.cpp
+  ArrayUnionTest.cpp
+  BinaryFunctionsTest.cpp
   BitwiseTest.cpp
   CardinalityTest.cpp
   CeilFloorTest.cpp
@@ -43,6 +51,7 @@ add_executable(
   DateTimeFunctionsTest.cpp
   DecimalArithmeticTest.cpp
   ElementAtTest.cpp
+  FromUtf8Test.cpp
   HyperLogLogCastTest.cpp
   HyperLogLogFunctionsTest.cpp
   InPredicateTest.cpp
@@ -51,23 +60,29 @@ add_executable(
   JsonFunctionsTest.cpp
   MapEntriesTest.cpp
   MapFilterTest.cpp
+  MapFromEntriesTest.cpp
   MapKeysAndValuesTest.cpp
   MapTest.cpp
   MapZipWithTest.cpp
   NotTest.cpp
+  ProbabilityTest.cpp
+  RandTest.cpp
   ReduceTest.cpp
   RegexpReplaceTest.cpp
   RepeatTest.cpp
   ReverseTest.cpp
   RoundTest.cpp
   ScalarFunctionRegTest.cpp
+  SimpleComparisonMatcherTest.cpp
   SliceTest.cpp
+  SequenceTest.cpp
   SplitTest.cpp
   StringFunctionsTest.cpp
   TransformTest.cpp
   TransformKeysTest.cpp
   TransformValuesTest.cpp
   URLFunctionsTest.cpp
+  Utf8Test.cpp
   WidthBucketArrayTest.cpp
   GreatestLeastTest.cpp
   ZipTest.cpp

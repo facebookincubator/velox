@@ -33,6 +33,13 @@ class ValueListTest : public functions::test::FunctionBaseTest {
   read(aggregate::ValueList& values, const TypePtr& type, vector_size_t size) {
     aggregate::ValueListReader reader(values);
     auto result = BaseVector::create(type, size, pool());
+
+    // Initialize result to all-nulls to ensure ValueListReader::next() reset
+    // null bits correctly.
+    for (auto i = 0; i < size; ++i) {
+      result->setNull(i, true);
+    }
+
     for (auto i = 0; i < size; i++) {
       reader.next(*result, i);
     }
@@ -72,7 +79,7 @@ class ValueListTest : public functions::test::FunctionBaseTest {
     return allocator_.get();
   }
 
-  std::shared_ptr<memory::MemoryPool> pool_{memory::getDefaultMemoryPool()};
+  std::shared_ptr<memory::MemoryPool> pool_{memory::addDefaultLeafMemoryPool()};
   std::unique_ptr<HashStringAllocator> allocator_{
       std::make_unique<HashStringAllocator>(pool_.get())};
 };

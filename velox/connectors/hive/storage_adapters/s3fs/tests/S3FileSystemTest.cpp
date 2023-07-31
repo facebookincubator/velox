@@ -15,6 +15,7 @@
  */
 
 #include "connectors/hive/storage_adapters/s3fs/S3FileSystem.h"
+#include "connectors/hive/storage_adapters/s3fs/RegisterS3FileSystem.h"
 #include "connectors/hive/storage_adapters/s3fs/S3Util.h"
 #include "connectors/hive/storage_adapters/s3fs/tests/MinioServer.h"
 #include "velox/common/file/File.h"
@@ -34,7 +35,6 @@ class S3FileSystemTest : public testing::Test {
       minioServer_ = std::make_shared<MinioServer>();
       minioServer_->start();
     }
-    filesystems::registerS3FileSystem();
   }
 
   static void TearDownTestSuite() {
@@ -146,9 +146,10 @@ TEST_F(S3FileSystemTest, fileHandle) {
   }
   auto hiveConfig = minioServer_->hiveConfig();
   FileHandleFactory factory(
-      std::make_unique<SimpleLRUCache<std::string, FileHandle>>(1000),
+      std::make_unique<
+          SimpleLRUCache<std::string, std::shared_ptr<FileHandle>>>(1000),
       std::make_unique<FileHandleGenerator>(hiveConfig));
-  auto fileHandle = factory.generate(s3File);
+  auto fileHandle = factory.generate(s3File).second;
   readData(fileHandle->file.get());
 }
 

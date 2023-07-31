@@ -48,10 +48,7 @@ void assertCopyableVector(const VectorPtr& vector);
 
 class VectorTestBase {
  protected:
-  VectorTestBase() {
-    pool_->parent()->setMemoryUsageTracker(tracker_);
-    pool_->setMemoryUsageTracker(tracker_->addChild());
-  }
+  VectorTestBase() = default;
 
   ~VectorTestBase();
 
@@ -159,8 +156,6 @@ class VectorTestBase {
     return vectorMaker_.flatVector<T>(size, valueAt, isNullAt, type);
   }
 
-  /// Decimal Vector type cannot be inferred from the cpp type alone as the cpp
-  /// type does not contain the precision and scale.
   template <typename T>
   FlatVectorPtr<EvalType<T>> makeFlatVector(
       const std::vector<T>& data,
@@ -197,30 +192,6 @@ class VectorTestBase {
     return vectorMaker_.allNullFlatVector<T>(size);
   }
 
-  FlatVectorPtr<UnscaledShortDecimal> makeShortDecimalFlatVector(
-      const std::vector<int64_t>& unscaledValues,
-      const TypePtr& type) {
-    return vectorMaker_.shortDecimalFlatVector(unscaledValues, type);
-  }
-
-  FlatVectorPtr<UnscaledLongDecimal> makeLongDecimalFlatVector(
-      const std::vector<int128_t>& unscaledValues,
-      const TypePtr& type) {
-    return vectorMaker_.longDecimalFlatVector(unscaledValues, type);
-  }
-
-  FlatVectorPtr<UnscaledShortDecimal> makeNullableShortDecimalFlatVector(
-      const std::vector<std::optional<int64_t>>& unscaledValues,
-      const TypePtr& type) {
-    return vectorMaker_.shortDecimalFlatVectorNullable(unscaledValues, type);
-  }
-
-  FlatVectorPtr<UnscaledLongDecimal> makeNullableLongDecimalFlatVector(
-      const std::vector<std::optional<int128_t>>& unscaledValues,
-      const TypePtr& type) {
-    return vectorMaker_.longDecimalFlatVectorNullable(unscaledValues, type);
-  }
-
   // Convenience function to create arrayVectors (vector of arrays) based on
   // input values from nested std::vectors. The underlying elements are
   // non-nullable.
@@ -233,8 +204,10 @@ class VectorTestBase {
   //   });
   //   EXPECT_EQ(3, arrayVector->size());
   template <typename T>
-  ArrayVectorPtr makeArrayVector(const std::vector<std::vector<T>>& data) {
-    return vectorMaker_.arrayVector<T>(data);
+  ArrayVectorPtr makeArrayVector(
+      const std::vector<std::vector<T>>& data,
+      const TypePtr& elementType = CppToType<T>::create()) {
+    return vectorMaker_.arrayVector<T>(data, elementType);
   }
 
   ArrayVectorPtr makeAllNullArrayVector(
@@ -245,9 +218,7 @@ class VectorTestBase {
 
   // Create an ArrayVector<ROW> from nested std::vectors of variants.
   // Example:
-  //   auto arrayVector = makeArrayOfRowVector(
-  //     ROW({INTEGER(), VARCHAR()}),
-  //     {
+  //   auto arrayVector = makeArrayOfRowVector({
   //       {variant::row({1, "red"}), variant::row({1, "blue"})},
   //       {},
   //       {variant::row({3, "green"})},
@@ -451,8 +422,9 @@ class VectorTestBase {
   //   });
   template <typename T>
   ArrayVectorPtr makeNullableArrayVector(
-      const std::vector<std::optional<std::vector<std::optional<T>>>>& data) {
-    return vectorMaker_.arrayVectorNullable<T>(data);
+      const std::vector<std::optional<std::vector<std::optional<T>>>>& data,
+      const TypePtr& arrayType = ARRAY(CppToType<T>::create())) {
+    return vectorMaker_.arrayVectorNullable<T>(data, arrayType);
   }
 
   template <typename T>
@@ -461,9 +433,10 @@ class VectorTestBase {
       std::function<vector_size_t(vector_size_t /* row */)> sizeAt,
       std::function<T(vector_size_t /* idx */)> valueAt,
       std::function<bool(vector_size_t /* row */)> isNullAt = nullptr,
-      std::function<bool(vector_size_t /* idx */)> valueIsNullAt = nullptr) {
+      std::function<bool(vector_size_t /* idx */)> valueIsNullAt = nullptr,
+      const TypePtr& arrayType = ARRAY(CppToType<T>::create())) {
     return vectorMaker_.arrayVector<T>(
-        size, sizeAt, valueAt, isNullAt, valueIsNullAt);
+        size, sizeAt, valueAt, isNullAt, valueIsNullAt, arrayType);
   }
 
   template <typename T>
@@ -472,8 +445,10 @@ class VectorTestBase {
       std::function<vector_size_t(vector_size_t /* row */)> sizeAt,
       std::function<T(vector_size_t /* row */, vector_size_t /* idx */)>
           valueAt,
-      std::function<bool(vector_size_t /*row */)> isNullAt = nullptr) {
-    return vectorMaker_.arrayVector<T>(size, sizeAt, valueAt, isNullAt);
+      std::function<bool(vector_size_t /*row */)> isNullAt = nullptr,
+      const TypePtr& arrayType = ARRAY(CppToType<T>::create())) {
+    return vectorMaker_.arrayVector<T>(
+        size, sizeAt, valueAt, isNullAt, arrayType);
   }
 
   // Convenience function to create vector from a base vector.
@@ -516,29 +491,7 @@ class VectorTestBase {
           maps,
       const TypePtr& type =
           MAP(CppToType<TKey>::create(), CppToType<TValue>::create())) {
-    std::vector<vector_size_t> lengths;
-    std::vector<TKey> keys;
-    std::vector<TValue> values;
-    std::vector<bool> nullValues;
-    auto undefined = TValue();
-
-    for (const auto& map : maps) {
-      lengths.push_back(map.size());
-      for (const auto& [key, value] : map) {
-        keys.push_back(key);
-        values.push_back(value.value_or(undefined));
-        nullValues.push_back(!value.has_value());
-      }
-    }
-
-    return makeMapVector<TKey, TValue>(
-        maps.size(),
-        [&](vector_size_t row) { return lengths[row]; },
-        [&](vector_size_t idx) { return keys[idx]; },
-        [&](vector_size_t idx) { return values[idx]; },
-        nullptr,
-        [&](vector_size_t idx) { return nullValues[idx]; },
-        type);
+    return vectorMaker_.mapVector(maps, type);
   }
 
   // Create nullabe map vector from nested std::vector representation.
@@ -739,12 +692,10 @@ class VectorTestBase {
     return pool_.get();
   }
 
-  std::shared_ptr<memory::MemoryUsageTracker> tracker_{
-      memory::MemoryUsageTracker::create()};
-  std::shared_ptr<memory::MemoryPool> pool_{memory::getDefaultMemoryPool()};
-  velox::test::VectorMaker vectorMaker_{pool_.get()};
   std::shared_ptr<memory::MemoryPool> rootPool_{
-      memory::getProcessDefaultMemoryManager().getPool()};
+      memory::defaultMemoryManager().addRootPool()};
+  std::shared_ptr<memory::MemoryPool> pool_{rootPool_->addLeafChild("leaf")};
+  velox::test::VectorMaker vectorMaker_{pool_.get()};
   std::shared_ptr<folly::Executor> executor_{
       std::make_shared<folly::CPUThreadPoolExecutor>(
           std::thread::hardware_concurrency())};

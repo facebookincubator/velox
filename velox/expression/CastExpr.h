@@ -22,6 +22,7 @@
 namespace facebook::velox::exec {
 
 constexpr folly::StringPiece kCast = "cast";
+constexpr folly::StringPiece kTryCast = "try_cast";
 
 /// Custom operator for casts from and to custom types.
 class CastOperator {
@@ -71,13 +72,14 @@ class CastExpr : public SpecialForm {
   /// @param type The target type of the cast expression
   /// @param expr The expression to cast
   /// @param trackCpuUsage Whether to track CPU usage
-  CastExpr(TypePtr type, ExprPtr&& expr, bool trackCpuUsage)
+  CastExpr(TypePtr type, ExprPtr&& expr, bool trackCpuUsage, bool nullOnFailure)
       : SpecialForm(
             type,
             std::vector<ExprPtr>({expr}),
-            kCast.data(),
+            nullOnFailure ? kTryCast.data() : kCast.data(),
             false /* supportsFlatNoNullsFastPath */,
-            trackCpuUsage) {
+            trackCpuUsage),
+        nullOnFailure_(nullOnFailure) {
     auto fromType = inputs_[0]->type();
     castFromOperator_ = getCustomTypeCastOperator(fromType->toString());
     if (castFromOperator_ && !castFromOperator_->isSupportedToType(type)) {
@@ -102,35 +104,6 @@ class CastExpr : public SpecialForm {
   std::string toSql(std::vector<VectorPtr>*) const override;
 
  private:
-  /// @tparam To The cast target type
-  /// @tparam From The expression type
-  /// @param rows The list of rows being processed
-  /// @param context The context
-  /// @param input The input vector (of type From)
-  /// @param resultFlatVector The output vector (of type To)
-  template <typename To, typename From>
-  void applyCastWithTry(
-      const SelectivityVector& rows,
-      exec::EvalCtx& context,
-      const BaseVector& input,
-      FlatVector<To>* resultFlatVector);
-
-  /// @tparam To The target template
-  /// @param fromType The source type pointer
-  /// @param toType The target type pointer
-  /// @param rows The list of rows
-  /// @param context The context
-  /// @param input The input vector (of type From)
-  /// @param result The output vector (of type To)
-  template <TypeKind To>
-  void applyCast(
-      const TypePtr& fromType,
-      const TypePtr& toType,
-      const SelectivityVector& rows,
-      exec::EvalCtx& context,
-      const BaseVector& input,
-      VectorPtr& result);
-
   /// Apply the cast after generating the input vectors
   /// @param rows The list of rows being processed
   /// @param input The input vector to be casted
@@ -171,6 +144,7 @@ class CastExpr : public SpecialForm {
   /// @param rows Non-null rows of the input vector.
   /// @param input The input decimal vector. It is guaranteed to be flat or
   /// constant.
+  template <typename ToDecimalType>
   VectorPtr applyDecimal(
       const SelectivityVector& rows,
       const BaseVector& input,
@@ -188,6 +162,94 @@ class CastExpr : public SpecialForm {
       const TypePtr& toType,
       VectorPtr& result);
 
+  template <typename Func>
+  void applyToSelectedNoThrowLocal(
+      EvalCtx& context,
+      const SelectivityVector& rows,
+      VectorPtr& result,
+      Func&& func);
+
+  /// The per-row level Kernel
+  /// @tparam ToKind The cast target type
+  /// @tparam FromKind The expression type
+  /// @param row The index of the current row
+  /// @param input The input vector (of type FromKind)
+  /// @param result The output vector (of type ToKind)
+  template <TypeKind ToKind, TypeKind FromKind, bool Truncate>
+  void applyCastKernel(
+      vector_size_t row,
+      EvalCtx& context,
+      const SimpleVector<typename TypeTraits<FromKind>::NativeType>* input,
+      FlatVector<typename TypeTraits<ToKind>::NativeType>* result);
+
+  VectorPtr castFromDate(
+      const SelectivityVector& rows,
+      const BaseVector& input,
+      exec::EvalCtx& context,
+      const TypePtr& toType);
+
+  VectorPtr castToDate(
+      const SelectivityVector& rows,
+      const BaseVector& input,
+      exec::EvalCtx& context,
+      const TypePtr& fromType);
+
+  template <typename TInput, typename TOutput>
+  void applyDecimalCastKernel(
+      const SelectivityVector& rows,
+      const BaseVector& input,
+      exec::EvalCtx& context,
+      const TypePtr& fromType,
+      const TypePtr& toType,
+      VectorPtr& castResult);
+
+  template <typename TInput, typename TOutput>
+  void applyIntToDecimalCastKernel(
+      const SelectivityVector& rows,
+      const BaseVector& input,
+      exec::EvalCtx& context,
+      const TypePtr& toType,
+      VectorPtr& castResult);
+
+  template <typename TInput>
+  VectorPtr applyDecimalToDoubleCast(
+      const SelectivityVector& rows,
+      const BaseVector& input,
+      exec::EvalCtx& context,
+      const TypePtr& fromType);
+
+  template <TypeKind ToKind, TypeKind FromKind>
+  void applyCastPrimitives(
+      const SelectivityVector& rows,
+      exec::EvalCtx& context,
+      const BaseVector& input,
+      VectorPtr& result);
+
+  template <TypeKind ToKind>
+  void applyCastPrimitivesDispatch(
+      const TypePtr& fromType,
+      const TypePtr& toType,
+      const SelectivityVector& rows,
+      exec::EvalCtx& context,
+      const BaseVector& input,
+      VectorPtr& result);
+
+  template <bool adjustForTimeZone>
+  void castTimestampToDate(
+      const SelectivityVector& rows,
+      const BaseVector& input,
+      exec::EvalCtx& context,
+      VectorPtr& result,
+      const date::time_zone* timeZone = nullptr);
+
+  bool nullOnFailure() const {
+    return nullOnFailure_;
+  }
+
+  bool setNullInResultAtError() const {
+    return nullOnFailure() && inTopLevel;
+  }
+
   // Custom cast operator for the from-type. Nullptr if the type is native or
   // doesn't support cast-from.
   CastOperatorPtr castFromOperator_;
@@ -195,6 +257,10 @@ class CastExpr : public SpecialForm {
   // Custom cast operator for the to-type. Nullptr if the type is native or
   // doesn't support cast-to.
   CastOperatorPtr castToOperator_;
+
+  bool nullOnFailure_;
+
+  bool inTopLevel = false;
 };
 
 class CastCallToSpecialForm : public FunctionCallToSpecialForm {
@@ -207,4 +273,15 @@ class CastCallToSpecialForm : public FunctionCallToSpecialForm {
       bool trackCpuUsage) override;
 };
 
+class TryCastCallToSpecialForm : public FunctionCallToSpecialForm {
+ public:
+  TypePtr resolveType(const std::vector<TypePtr>& argTypes) override;
+
+  ExprPtr constructSpecialForm(
+      const TypePtr& type,
+      std::vector<ExprPtr>&& compiledChildren,
+      bool trackCpuUsage) override;
+};
 } // namespace facebook::velox::exec
+
+#include "velox/expression/CastExpr-inl.h"

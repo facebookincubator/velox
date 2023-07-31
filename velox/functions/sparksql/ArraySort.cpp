@@ -176,7 +176,7 @@ void ArraySort::apply(
     exec::LocalSingleRow singleRow(context, flatIndex);
     localResult = applyFlat(*singleRow, flatArray, context);
     localResult =
-        BaseVector::wrapInConstant(rows.size(), flatIndex, localResult);
+        BaseVector::wrapInConstant(rows.end(), flatIndex, localResult);
   } else {
     localResult = applyFlat(rows, arg, context);
   }
@@ -232,7 +232,8 @@ std::vector<std::shared_ptr<exec::FunctionSignature>> arraySortSignatures() {
 
 std::shared_ptr<exec::VectorFunction> makeArraySort(
     const std::string& name,
-    const std::vector<exec::VectorFunctionArg>& inputArgs) {
+    const std::vector<exec::VectorFunctionArg>& inputArgs,
+    const core::QueryConfig& /*config*/) {
   VELOX_CHECK_EQ(inputArgs.size(), 1);
   // Nulls are considered largest.
   return std::make_shared<ArraySort>(/*ascending=*/true, /*nullsFirst=*/false);
@@ -259,7 +260,8 @@ std::vector<std::shared_ptr<exec::FunctionSignature>> sortArraySignatures() {
 
 std::shared_ptr<exec::VectorFunction> makeSortArray(
     const std::string& name,
-    const std::vector<exec::VectorFunctionArg>& inputArgs) {
+    const std::vector<exec::VectorFunctionArg>& inputArgs,
+    const core::QueryConfig& /*config*/) {
   VELOX_CHECK(
       inputArgs.size() == 1 || inputArgs.size() == 2,
       "Invalid number of arguments {}, expected 1 or 2",

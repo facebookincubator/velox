@@ -18,13 +18,14 @@ target_link_libraries(
   velox_flag_definitions
   velox_process
   glog::glog
-  ${FOLLY_WITH_DEPENDENCIES}
-  ${FMT}
+  Folly::folly
+  fmt::fmt
   gflags::gflags)
 
 add_library(
   velox_common_base
   BitUtil.cpp
+  Counters.cpp
   Fs.cpp
   RandomUtil.cpp
   RawVector.cpp

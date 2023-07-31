@@ -15,6 +15,7 @@
  */
 
 #include "velox/dwio/dwrf/reader/SelectiveStructColumnReader.h"
+#include "folly/Conv.h"
 #include "velox/dwio/common/ColumnLoader.h"
 #include "velox/dwio/dwrf/reader/SelectiveDwrfReader.h"
 
@@ -26,13 +27,15 @@ SelectiveStructColumnReader::SelectiveStructColumnReader(
     const std::shared_ptr<const TypeWithId>& requestedType,
     const std::shared_ptr<const TypeWithId>& dataType,
     DwrfParams& params,
-    common::ScanSpec& scanSpec)
+    common::ScanSpec& scanSpec,
+    bool isRoot)
     : SelectiveStructColumnReaderBase(
           requestedType,
           dataType,
           params,
-          scanSpec) {
-  EncodingKey encodingKey{nodeType_->id, params.flatMapContext().sequence};
+          scanSpec,
+          isRoot) {
+  EncodingKey encodingKey{fileType_->id, params.flatMapContext().sequence};
   auto& stripe = params.stripeStreams();
   auto encoding = static_cast<int64_t>(stripe.getEncoding(encodingKey).kind());
   DWIO_ENSURE_EQ(
@@ -47,14 +50,21 @@ SelectiveStructColumnReader::SelectiveStructColumnReader(
   auto& childSpecs = scanSpec.stableChildren();
   for (auto i = 0; i < childSpecs.size(); ++i) {
     auto childSpec = childSpecs[i];
-    if (childSpec->isConstant()) {
+    if (isChildConstant(*childSpec)) {
+      childSpec->setSubscript(kConstantChildSpecSubscript);
       continue;
     }
-    auto childDataType = nodeType_->childByName(childSpec->fieldName());
+    auto childDataType = fileType_->childByName(childSpec->fieldName());
     auto childRequestedType =
         requestedType_->childByName(childSpec->fieldName());
-    auto childParams =
-        DwrfParams(stripe, FlatMapContext{encodingKey.sequence, nullptr});
+    auto labels = params.streamLabels().append(folly::to<std::string>(i));
+    auto childParams = DwrfParams(
+        stripe,
+        labels,
+        FlatMapContext{
+            .sequence = encodingKey.sequence,
+            .inMapDecoder = nullptr,
+            .keySelectionCallback = nullptr});
     VELOX_CHECK(cs.shouldReadNode(childDataType->id));
     addChild(SelectiveDwrfReader::build(
         childRequestedType, childDataType, childParams, *childSpec));

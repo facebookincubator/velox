@@ -27,6 +27,7 @@
 
 #include "velox/common/base/Exceptions.h"
 #include "velox/core/CoreTypeSystem.h"
+#include "velox/core/Metaprogramming.h"
 #include "velox/expression/ComplexViewTypes.h"
 #include "velox/expression/UdfTypeResolver.h"
 #include "velox/type/Type.h"
@@ -90,7 +91,7 @@ struct PrimitiveWriter {
 
 template <typename V>
 bool constexpr provide_std_interface =
-    CppToType<V>::isPrimitiveType && !std::is_same_v<Varchar, V> &&
+    SimpleTypeTrait<V>::isPrimitiveType && !std::is_same_v<Varchar, V> &&
     !std::is_same_v<Varbinary, V> && !std::is_same_v<Any, V>;
 
 // bool is an exception, it requires commit but also provides std::interface.
@@ -211,6 +212,16 @@ class ArrayWriter {
     add_items(data);
   }
 
+  // Don't mutate elementVecotr_ through this API unless you know what you're
+  // doing.
+  typename child_writer_t::vector_t* elementsVector() {
+    return elementsVector_;
+  }
+
+  vector_size_t valuesOffset() const {
+    return valuesOffset_;
+  }
+
   // Any vector type with std-like optional-free interface.
   template <typename VectorType>
   void add_items(const VectorType& data) {
@@ -224,7 +235,14 @@ class ArrayWriter {
     } else {
       for (const auto& item : data) {
         auto& writer = add_item();
-        writer.copy_from(item);
+        // Handle copy_from for opaque and opaque custom types.
+        using unwrapped_type = typename UnwrapCustomType<V>::type;
+        if constexpr (util::is_shared_ptr<unwrapped_type>::value) {
+          writer =
+              std::make_shared<typename unwrapped_type::element_type>(item);
+        } else {
+          writer.copy_from(item);
+        }
       }
     }
   }
@@ -776,19 +794,22 @@ class GenericWriter {
     return vector_->typeKind();
   }
 
-  const TypePtr type() const {
+  const TypePtr& type() const {
     return vector_->type();
   }
 
+  void copy_from(const GenericView& view);
+
   template <typename ToType>
   typename VectorWriter<ToType, void>::exec_out_t& castTo() {
-    VELOX_USER_CHECK(
+    VELOX_USER_DCHECK(
         CastTypeChecker<ToType>::check(type()),
         "castTo type is not compatible with type of vector, vector type is {}, casted to type is {}",
         type()->toString(),
         std::is_same_v<ToType, DynamicRow>
             ? "DynamicRow"
             : CppToType<ToType>::create()->toString());
+
     return castToImpl<ToType>();
   }
 
@@ -808,7 +829,7 @@ class GenericWriter {
 
   template <typename ToType>
   typename VectorWriter<ToType, void>::exec_out_t& castToImpl() {
-    writer_ptr_t<ToType> writer;
+    VectorWriter<ToType, void>* writer;
     if (castType_) {
       writer = retrieveCastedWriter<ToType>();
       if (!writer) {
@@ -831,14 +852,16 @@ class GenericWriter {
   // return a pointer to the casted writer if B matches with the previous
   // cast type exactly. Return nullptr otherwise.
   template <typename B>
-  writer_ptr_t<B> retrieveCastedWriter() {
+  VectorWriter<B, void>* retrieveCastedWriter() {
     DCHECK(castType_);
-    // TODO: optimize this check using disjoint type of sets (see GenericView)
-    return std::dynamic_pointer_cast<VectorWriter<B, void>>(castWriter_);
+    DCHECK(castWriter_);
+
+    // TODO: optimize this check using disjoint sets of types (see GenericView).
+    return dynamic_cast<VectorWriter<B, void>*>(castWriter_.get());
   }
 
   template <typename B>
-  writer_ptr_t<B> ensureWriter() {
+  VectorWriter<B, void>* ensureWriter() {
     DCHECK(!castType_ && !castWriter_);
 
     static_assert(
@@ -848,14 +871,15 @@ class GenericWriter {
     if constexpr (std::is_same_v<B, DynamicRow>) {
       castType_ = vector_->type();
     } else {
+      // TODO CppToType<B> will not work with custom types.
       auto requestedType = CppToType<B>::create();
       castType_ = std::move(requestedType);
     }
 
-    auto newWriter = std::make_shared<VectorWriter<B, void>>();
-    castWriter_ = newWriter;
-    newWriter->init(*vector_->as<typename TypeToFlatVector<B>::type>());
-    return newWriter;
+    castWriter_ = std::make_shared<VectorWriter<B, void>>();
+    auto* typedWriter = static_cast<VectorWriter<B, void>*>(castWriter_.get());
+    typedWriter->init(*vector_->as<typename TypeToFlatVector<B>::type>());
+    return typedWriter;
   }
 
   BaseVector* vector_;

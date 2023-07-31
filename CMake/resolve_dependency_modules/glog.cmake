@@ -13,22 +13,20 @@
 # limitations under the License.
 include_guard(GLOBAL)
 
-if(DEFINED ENV{VELOX_GLOG_URL})
-  set(VELOX_GLOG_SOURCE_URL "$ENV{VELOX_GLOG_URL}")
-else()
-  set(VELOX_GLOG_VERSION 0.6.0)
-  set(VELOX_GLOG_SOURCE_URL
-      "https://github.com/google/glog/archive/refs/tags/v${VELOX_GLOG_VERSION}.tar.gz"
-  )
-  set(VELOX_GLOG_BUILD_SHA256_CHECKSUM
-      8a83bf982f37bb70825df71a9709fa90ea9f4447fb3c099e1d720a439d88bad6)
-endif()
+set(VELOX_GLOG_VERSION 0.6.0)
+set(VELOX_GLOG_BUILD_SHA256_CHECKSUM
+    8a83bf982f37bb70825df71a9709fa90ea9f4447fb3c099e1d720a439d88bad6)
+set(VELOX_GLOG_SOURCE_URL
+    "https://github.com/google/glog/archive/refs/tags/v${VELOX_GLOG_VERSION}.tar.gz"
+)
+
+resolve_dependency_url(GLOG)
 
 message(STATUS "Building glog from source")
 FetchContent_Declare(
   glog
   URL ${VELOX_GLOG_SOURCE_URL}
-  URL_HASH SHA256=${VELOX_GLOG_BUILD_SHA256_CHECKSUM}
+  URL_HASH ${VELOX_GLOG_BUILD_SHA256_CHECKSUM}
   PATCH_COMMAND git apply ${CMAKE_CURRENT_LIST_DIR}/glog/glog-no-export.patch
                 && git apply ${CMAKE_CURRENT_LIST_DIR}/glog/glog-config.patch)
 
@@ -45,7 +43,9 @@ list(PREPEND CMAKE_MODULE_PATH ${CMAKE_CURRENT_LIST_DIR}/glog)
 set(glog_INCLUDE_DIR ${glog_BINARY_DIR})
 set(glog_LIBRARY ${glog_BINARY_DIR}/libglog$<$<CONFIG:Debug>:d>.a)
 
-# platform.h is missing from the include dir but adding the src dir causes
+# These headers are missing from the include dir but adding the src dir causes
 # issues with folly so we just copy it to the include dir
 file(COPY ${glog_SOURCE_DIR}/src/glog/platform.h
+     DESTINATION ${glog_BINARY_DIR}/glog)
+file(COPY ${glog_SOURCE_DIR}/src/glog/log_severity.h
      DESTINATION ${glog_BINARY_DIR}/glog)

@@ -29,6 +29,17 @@ class FunctionBenchmarkBase {
     parse::registerTypeResolver();
   }
 
+  void setTimezone(const std::string& value) {
+    queryCtx_->testingOverrideConfigUnsafe({
+        {core::QueryConfig::kSessionTimezone, value},
+    });
+  }
+
+  void setAdjustTimestampToTimezone(const std::string& value) {
+    queryCtx_->testingOverrideConfigUnsafe(
+        {{core::QueryConfig::kAdjustTimestampToTimezone, value}});
+  }
+
   exec::ExprSet compileExpression(
       const std::string& text,
       const TypePtr& rowType) {
@@ -68,7 +79,7 @@ class FunctionBenchmarkBase {
 
  protected:
   std::shared_ptr<core::QueryCtx> queryCtx_{std::make_shared<core::QueryCtx>()};
-  std::shared_ptr<memory::MemoryPool> pool_{memory::getDefaultMemoryPool()};
+  std::shared_ptr<memory::MemoryPool> pool_{memory::addDefaultLeafMemoryPool()};
   core::ExecCtx execCtx_{pool_.get(), queryCtx_.get()};
   facebook::velox::test::VectorMaker vectorMaker_{execCtx_.pool()};
   parse::ParseOptions options_;

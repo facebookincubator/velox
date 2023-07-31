@@ -14,9 +14,10 @@
  * limitations under the License.
  */
 #include "velox/exec/tests/utils/PlanBuilder.h"
-#include "velox/functions/prestosql/aggregates/tests/AggregationTestBase.h"
+#include "velox/functions/lib/aggregates/tests/AggregationTestBase.h"
 
 using namespace facebook::velox::exec::test;
+using namespace facebook::velox::functions::aggregate::test;
 
 namespace facebook::velox::aggregate::test {
 
@@ -39,7 +40,7 @@ TEST_F(MaxSizeForStatsTest, nullValues) {
       makeNullableFlatVector<float>({std::nullopt, std::nullopt}),
       makeNullableFlatVector<double>({std::nullopt, std::nullopt}),
       makeNullableFlatVector<bool>({std::nullopt, std::nullopt}),
-      makeNullableFlatVector<Date>({std::nullopt, std::nullopt}),
+      makeNullableFlatVector<int32_t>({std::nullopt, std::nullopt}, DATE()),
       makeNullableFlatVector<Timestamp>({std::nullopt, std::nullopt}),
       makeNullableFlatVector<StringView>({std::nullopt, std::nullopt}),
   })};
@@ -69,7 +70,7 @@ TEST_F(MaxSizeForStatsTest, nullAndNonNullValues) {
       makeNullableFlatVector<float>({std::nullopt, 0}),
       makeNullableFlatVector<double>({std::nullopt, 0}),
       makeNullableFlatVector<bool>({std::nullopt, 0}),
-      makeNullableFlatVector<Date>({std::nullopt, 0}),
+      makeNullableFlatVector<int32_t>({std::nullopt, 0}, DATE()),
       makeNullableFlatVector<Timestamp>({std::nullopt, Timestamp(0, 0)}),
       makeNullableFlatVector<StringView>({std::nullopt, "std::nullopt"}),
   })};
@@ -108,7 +109,7 @@ TEST_F(MaxSizeForStatsTest, allScalarTypes) {
        makeFlatVector<float>(4, generator<float>),
        makeFlatVector<double>(4, generator<double>),
        makeFlatVector<bool>(4, generator<bool>),
-       makeFlatVector<Date>(4, generator<Date>),
+       makeFlatVector<int32_t>(4, generator<int32_t>, nullptr, DATE()),
        makeFlatVector<Timestamp>(4, generator<Timestamp>)})};
 
   // With grouping keys.

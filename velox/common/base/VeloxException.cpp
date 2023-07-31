@@ -22,6 +22,17 @@
 namespace facebook {
 namespace velox {
 
+std::exception_ptr toVeloxException(const std::exception_ptr& exceptionPtr) {
+  try {
+    std::rethrow_exception(exceptionPtr);
+  } catch (const VeloxException& e) {
+    return exceptionPtr;
+  } catch (const std::exception& e) {
+    return std::make_exception_ptr(
+        VeloxUserError(std::current_exception(), e.what(), false));
+  }
+}
+
 ExceptionContext& getExceptionContext() {
   thread_local ExceptionContext context;
   return context;
@@ -83,6 +94,7 @@ VeloxException::VeloxException(
     const std::exception_ptr& e,
     std::string_view message,
     std::string_view errorSource,
+    std::string_view errorCode,
     bool isRetriable,
     Type exceptionType,
     std::string_view exceptionName)
@@ -95,7 +107,7 @@ VeloxException::VeloxException(
         state.failingExpression = "";
         state.message = message;
         state.errorSource = errorSource;
-        state.errorCode = "";
+        state.errorCode = errorCode;
         state.context = getExceptionContext().message(exceptionType);
         state.topLevelContext =
             getTopLevelExceptionContextString(exceptionType, state.context);

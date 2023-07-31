@@ -27,6 +27,7 @@
 #include <cstdio>
 #include <cstring>
 
+using namespace facebook::velox::common;
 using namespace facebook::velox::dwio::common;
 using namespace facebook::velox::dwrf;
 using namespace facebook::velox::memory;
@@ -35,7 +36,7 @@ using namespace folly::io;
 
 const std::string simpleFile(getExampleFilePath("simple-file.binary"));
 
-std::shared_ptr<MemoryPool> pool = getDefaultMemoryPool();
+std::shared_ptr<MemoryPool> pool = addDefaultLeafMemoryPool();
 
 TEST(TestDecompression, testPrintBufferEmpty) {
   std::ostringstream str;
@@ -805,7 +806,7 @@ class TestSeek : public ::testing::Test {
     size_t offset1;
     size_t offset2;
     prepareTestData(codec, input1, input2, inputSize, output, offset1, offset2);
-    auto pool = getDefaultMemoryPool();
+    auto pool = addDefaultLeafMemoryPool();
 
     std::unique_ptr<SeekableInputStream> stream = createDecompressor(
         kind,

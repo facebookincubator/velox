@@ -40,9 +40,9 @@ std::optional<std::pair<std::vector<T>, bool>> toValues(
   auto size = arrayVector->sizeAt(constantInput->index());
   VELOX_USER_CHECK_GT(size, 0, "IN list must not be empty");
 
+  bool nullAllowed = false;
   std::vector<T> values;
   values.reserve(size);
-  bool nullAllowed = false;
 
   for (auto i = offset; i < offset + size; i++) {
     if (elementsVector->isNullAt(i)) {
@@ -51,6 +51,11 @@ std::optional<std::pair<std::vector<T>, bool>> toValues(
       values.emplace_back(elementsVector->valueAt(i));
     }
   }
+
+  // In-place sort, remove duplicates, and later std::move to save memory
+  std::sort(values.begin(), values.end());
+  auto last = std::unique(values.begin(), values.end());
+  values.resize(std::distance(values.begin(), last));
 
   return std::optional<std::pair<std::vector<T>, bool>>(
       {std::move(values), nullAllowed});
@@ -84,6 +89,43 @@ std::pair<std::unique_ptr<common::Filter>, bool> createBigintValuesFilter(
   }
 
   return {common::createBigintValues(values, nullAllowed), false};
+}
+
+// Cast double to Int64 and reuse Int64 filters
+template <typename T>
+std::pair<std::unique_ptr<common::Filter>, bool>
+createFloatingPointValuesFilter(
+    const std::vector<exec::VectorFunctionArg>& inputArgs) {
+  auto valuesPair = toValues<double, T>(inputArgs);
+  if (!valuesPair.has_value()) {
+    return {nullptr, false};
+  }
+
+  auto& values = valuesPair.value().first;
+  bool nullAllowed = valuesPair.value().second;
+
+  if (values.empty() && nullAllowed) {
+    return {nullptr, true};
+  }
+  VELOX_USER_CHECK(
+      !values.empty(),
+      "IN predicate expects at least one non-null value in the in-list");
+
+  if (values.size() == 1) {
+    return {
+        std::make_unique<common::FloatingPointRange<double>>(
+            values[0], false, false, values[0], false, false, nullAllowed),
+        false};
+  }
+
+  std::vector<int64_t> intValues(values.size());
+  for (size_t i = 0; i < values.size(); ++i) {
+    if (values[i] == double{}) {
+      values[i] = 0;
+    }
+    intValues[i] = reinterpret_cast<const int64_t&>(values[i]);
+  }
+  return {common::createBigintValues(intValues, nullAllowed), false};
 }
 
 // See createBigintValuesFilter.
@@ -120,7 +162,8 @@ class InPredicate : public exec::VectorFunction {
 
   static std::shared_ptr<InPredicate> create(
       const std::string& /*name*/,
-      const std::vector<exec::VectorFunctionArg>& inputArgs) {
+      const std::vector<exec::VectorFunctionArg>& inputArgs,
+      const core::QueryConfig& /*config*/) {
     VELOX_CHECK_EQ(inputArgs.size(), 2);
     auto inListType = inputArgs[1].type;
     VELOX_CHECK_EQ(inListType->kind(), TypeKind::ARRAY);
@@ -138,6 +181,13 @@ class InPredicate : public exec::VectorFunction {
         break;
       case TypeKind::TINYINT:
         filter = createBigintValuesFilter<int8_t>(inputArgs);
+        break;
+      case TypeKind::DOUBLE:
+        filter = createFloatingPointValuesFilter<double>(inputArgs);
+        break;
+      case TypeKind::BOOLEAN:
+        // Hack: using BIGINT filter for bool, which is essentially "int1_t".
+        filter = createBigintValuesFilter<bool>(inputArgs);
         break;
       case TypeKind::VARCHAR:
       case TypeKind::VARBINARY:
@@ -189,6 +239,24 @@ class InPredicate : public exec::VectorFunction {
           return filter_->testInt64(value);
         });
         break;
+      case TypeKind::DOUBLE:
+        applyTyped<double>(rows, input, context, result, [&](double value) {
+          auto* derived =
+              dynamic_cast<common::FloatingPointRange<double>*>(filter_.get());
+          if (derived) {
+            return filter_->testDouble(value);
+          }
+          if (value == double{}) {
+            value = 0;
+          }
+          return filter_->testInt64(reinterpret_cast<const int64_t&>(value));
+        });
+        break;
+      case TypeKind::BOOLEAN:
+        applyTyped<bool>(rows, input, context, result, [&](bool value) {
+          return filter_->testInt64(value);
+        });
+        break;
       case TypeKind::VARCHAR:
       case TypeKind::VARBINARY:
         applyTyped<StringView>(
@@ -204,10 +272,18 @@ class InPredicate : public exec::VectorFunction {
   }
 
   static std::vector<std::shared_ptr<exec::FunctionSignature>> signatures() {
-    // tinyint|smallint|integer|bigint|varchar... -> boolean
+    // boolean|tinyint|smallint|integer|bigint|varchar... -> boolean
     std::vector<std::shared_ptr<exec::FunctionSignature>> signatures;
     for (auto& type :
-         {"tinyint", "smallint", "integer", "bigint", "varchar", "varbinary"}) {
+         {"boolean",
+          "tinyint",
+          "smallint",
+          "integer",
+          "bigint",
+          "varchar",
+          "varbinary",
+          "double",
+          "date"}) {
       signatures.emplace_back(exec::FunctionSignatureBuilder()
                                   .returnType("boolean")
                                   .argumentType(type)
@@ -244,7 +320,7 @@ class InPredicate : public exec::VectorFunction {
       VectorPtr& result,
       F&& testFunction) const {
     if (alwaysNull_) {
-      auto localResult = createBoolConstantNull(rows.size(), context);
+      auto localResult = createBoolConstantNull(rows.end(), context);
       context.moveOrCopyResult(localResult, rows, result);
       return;
     }
@@ -257,13 +333,13 @@ class InPredicate : public exec::VectorFunction {
       auto simpleArg = arg->asUnchecked<SimpleVector<T>>();
       VectorPtr localResult;
       if (simpleArg->isNullAt(rows.begin())) {
-        localResult = createBoolConstantNull(rows.size(), context);
+        localResult = createBoolConstantNull(rows.end(), context);
       } else {
         bool pass = testFunction(simpleArg->valueAt(rows.begin()));
         if (!pass && passOrNull) {
-          localResult = createBoolConstantNull(rows.size(), context);
+          localResult = createBoolConstantNull(rows.end(), context);
         } else {
-          localResult = createBoolConstant(pass, rows.size(), context);
+          localResult = createBoolConstant(pass, rows.end(), context);
         }
       }
 
@@ -273,9 +349,9 @@ class InPredicate : public exec::VectorFunction {
 
     VELOX_CHECK_EQ(arg->encoding(), VectorEncoding::Simple::FLAT);
     auto flatArg = arg->asUnchecked<FlatVector<T>>();
-    auto rawValues = flatArg->rawValues();
 
     context.ensureWritable(rows, BOOLEAN(), result);
+    result->clearNulls(rows);
     auto* boolResult = result->asUnchecked<FlatVector<bool>>();
 
     auto* rawResults = boolResult->mutableRawValues<uint64_t>();
@@ -285,7 +361,7 @@ class InPredicate : public exec::VectorFunction {
         if (flatArg->isNullAt(row)) {
           boolResult->setNull(row, true);
         } else {
-          bool pass = testFunction(rawValues[row]);
+          bool pass = testFunction(flatArg->valueAtFast(row));
           if (!pass && passOrNull) {
             boolResult->setNull(row, true);
           } else {
@@ -295,7 +371,7 @@ class InPredicate : public exec::VectorFunction {
       });
     } else {
       rows.applyToSelected([&](auto row) {
-        bool pass = testFunction(rawValues[row]);
+        bool pass = testFunction(flatArg->valueAtFast(row));
         bits::setBit(rawResults, row, pass);
       });
     }

@@ -21,25 +21,28 @@ void ConstantExpr::evalSpecialForm(
     const SelectivityVector& rows,
     EvalCtx& context,
     VectorPtr& result) {
+  if (sharedConstantValue_.unique()) {
+    sharedConstantValue_->resize(rows.end());
+  } else {
+    // By reassigning sharedConstantValue_ we increase the chances that it will
+    // be unique the next time this expression is evaluated.
+    sharedConstantValue_ =
+        BaseVector::wrapInConstant(rows.end(), 0, sharedConstantValue_);
+  }
+
   if (needToSetIsAscii_) {
+    // sharedConstantValue_ must be unique because computeAndSetIsAscii may
+    // modify it.
+    VELOX_CHECK(sharedConstantValue_.unique());
     auto* vector =
-        sharedSubexprValues_->asUnchecked<SimpleVector<StringView>>();
+        sharedConstantValue_->asUnchecked<SimpleVector<StringView>>();
     LocalSingleRow singleRow(context, 0);
     bool isAscii = vector->computeAndSetIsAscii(*singleRow);
     vector->setAllIsAscii(isAscii);
     needToSetIsAscii_ = false;
   }
 
-  if (sharedSubexprValues_.unique()) {
-    sharedSubexprValues_->resize(rows.end());
-  } else {
-    // By reassigning sharedSubexprValues_ we increase the chances that it will
-    // be unique the next time this expression is evaluated.
-    sharedSubexprValues_ =
-        BaseVector::wrapInConstant(rows.end(), 0, sharedSubexprValues_);
-  }
-
-  context.moveOrCopyResult(sharedSubexprValues_, rows, result);
+  context.moveOrCopyResult(sharedConstantValue_, rows, result);
 }
 
 void ConstantExpr::evalSpecialFormSimplified(
@@ -56,12 +59,12 @@ void ConstantExpr::evalSpecialFormSimplified(
   // pre-allocated.
   VELOX_CHECK_NULL(result);
 
-  result = BaseVector::wrapInConstant(rows.end(), 0, sharedSubexprValues_);
+  result = BaseVector::wrapInConstant(rows.end(), 0, sharedConstantValue_);
 }
 
 std::string ConstantExpr::toString(bool /*recursive*/) const {
   return fmt::format(
-      "{}:{}", sharedSubexprValues_->toString(0), type()->toString());
+      "{}:{}", sharedConstantValue_->toString(0), type()->toString());
 }
 
 namespace {
@@ -138,6 +141,14 @@ void appendSqlLiteral(
     return;
   }
 
+  if (vector.type()->isDate()) {
+    auto dateVector = vector.wrappedVector()->as<SimpleVector<int32_t>>();
+    out << "'"
+        << DATE()->toString(dateVector->valueAt(vector.wrappedIndex(row)))
+        << "'::" << vector.type()->toString();
+    return;
+  }
+
   switch (vector.typeKind()) {
     case TypeKind::BOOLEAN: {
       auto value = vector.as<SimpleVector<bool>>()->valueAt(row);
@@ -148,18 +159,12 @@ void appendSqlLiteral(
     case TypeKind::SMALLINT:
     case TypeKind::INTEGER:
     case TypeKind::BIGINT:
-    case TypeKind::DATE:
     case TypeKind::TIMESTAMP:
     case TypeKind::REAL:
     case TypeKind::DOUBLE:
       out << "'" << vector.wrappedVector()->toString(vector.wrappedIndex(row))
           << "'::" << vector.type()->toString();
       break;
-    case TypeKind::INTERVAL_DAY_TIME: {
-      auto interval = vector.as<SimpleVector<IntervalDayTime>>()->valueAt(row);
-      out << "INTERVAL " << interval.milliseconds() << " MILLISECONDS";
-      break;
-    }
     case TypeKind::VARCHAR:
       appendSqlString(
           vector.wrappedVector()->toString(vector.wrappedIndex(row)), out);
@@ -210,14 +215,14 @@ void appendSqlLiteral(
 
 std::string ConstantExpr::toSql(
     std::vector<VectorPtr>* complexConstants) const {
-  VELOX_CHECK_NOT_NULL(sharedSubexprValues_);
+  VELOX_CHECK_NOT_NULL(sharedConstantValue_);
   std::ostringstream out;
-  if (complexConstants && !sharedSubexprValues_->type()->isPrimitiveType()) {
+  if (complexConstants && !sharedConstantValue_->type()->isPrimitiveType()) {
     int idx = complexConstants->size();
     out << "__complex_constant(c" << idx << ")";
-    complexConstants->push_back(sharedSubexprValues_);
+    complexConstants->push_back(sharedConstantValue_);
   } else {
-    appendSqlLiteral(*sharedSubexprValues_, 0, out);
+    appendSqlLiteral(*sharedConstantValue_, 0, out);
   }
   return out.str();
 }

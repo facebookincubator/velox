@@ -57,8 +57,6 @@ class TableScan : public SourceOperator {
   }
 
  private:
-  static constexpr int32_t kDefaultBatchSize = 1024;
-
   // Sets 'maxPreloadSplits' and 'splitPreloader' if prefetching
   // splits is appropriate. The preloader will be applied to the
   // 'first 'maxPreloadSplits' of the Tasks's split queue for 'this'
@@ -71,20 +69,21 @@ class TableScan : public SourceOperator {
   // needed before prepare is done, it will be made when needed.
   void preload(std::shared_ptr<connector::ConnectorSplit> split);
 
-  // Adjust batch size according to split information.
-  void setBatchSize();
+  // Process-wide IO wait time.
+  static std::atomic<uint64_t> ioWaitNanos_;
 
   const std::shared_ptr<connector::ConnectorTableHandle> tableHandle_;
   const std::
       unordered_map<std::string, std::shared_ptr<connector::ColumnHandle>>
           columnHandles_;
-  DriverCtx* driverCtx_;
+  DriverCtx* const driverCtx_;
+  memory::MemoryPool* const connectorPool_;
   ContinueFuture blockingFuture_{ContinueFuture::makeEmpty()};
   BlockingReason blockingReason_;
   bool needNewSplit_ = true;
   std::shared_ptr<connector::Connector> connector_;
   std::shared_ptr<connector::ConnectorQueryCtx> connectorQueryCtx_;
-  std::shared_ptr<connector::DataSource> dataSource_;
+  std::unique_ptr<connector::DataSource> dataSource_;
   bool noMoreSplits_ = false;
   // Dynamic filters to add to the data source when it gets created.
   std::unordered_map<column_index_t, std::shared_ptr<common::Filter>>
@@ -106,7 +105,7 @@ class TableScan : public SourceOperator {
   // Count of splits that finished preloading before being read.
   int32_t numReadyPreloadedSplits_{0};
 
-  int32_t readBatchSize_{kDefaultBatchSize};
+  int32_t readBatchSize_;
 
   // String shown in ExceptionContext inside DataSource and LazyVector loading.
   std::string debugString_;
@@ -114,8 +113,5 @@ class TableScan : public SourceOperator {
   // The last value of the IO wait time of 'this' that has been added to the
   // global static 'ioWaitNanos_'.
   uint64_t lastIoWaitNanos_{0};
-
-  // Process-wide IO wait time.
-  static std::atomic<uint64_t> ioWaitNanos_;
 };
 } // namespace facebook::velox::exec

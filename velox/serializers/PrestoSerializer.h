@@ -15,6 +15,7 @@
  */
 #pragma once
 #include "velox/common/base/Crc.h"
+#include "velox/common/compression/Compression.h"
 #include "velox/vector/VectorStream.h"
 
 namespace facebook::velox::serializer::presto {
@@ -22,17 +23,25 @@ class PrestoVectorSerde : public VectorSerde {
  public:
   // Input options that the serializer recognizes.
   struct PrestoOptions : VectorSerde::Options {
-    explicit PrestoOptions(bool useLosslessTimestamp)
-        : useLosslessTimestamp(useLosslessTimestamp) {}
+    PrestoOptions() = default;
+
+    PrestoOptions(
+        bool _useLosslessTimestamp,
+        common::CompressionKind _compressionKind)
+        : useLosslessTimestamp(_useLosslessTimestamp),
+          compressionKind(_compressionKind) {}
+
     // Currently presto only supports millisecond precision and the serializer
     // converts velox native timestamp to that resulting in loss of precision.
     // This option allows it to serialize with nanosecond precision and is
     // currently used for spilling. Is false by default.
     bool useLosslessTimestamp{false};
+    common::CompressionKind compressionKind{
+        common::CompressionKind::CompressionKind_NONE};
   };
 
   void estimateSerializedSize(
-      std::shared_ptr<BaseVector> vector,
+      VectorPtr vector,
       const folly::Range<const IndexRange*>& ranges,
       vector_size_t** sizes) override;
 

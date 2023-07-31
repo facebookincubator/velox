@@ -276,12 +276,11 @@ void PageReader::prepareDataPageV1(const PageHeader& pageHeader, int64_t row) {
           pageData_,
           pageData_ + defineLength,
           arrow::bit_util::NumRequiredBits(maxDefine_));
-    } else {
-      wideDefineDecoder_ = std::make_unique<arrow::util::RleDecoder>(
-          reinterpret_cast<const uint8_t*>(pageData_),
-          defineLength,
-          arrow::bit_util::NumRequiredBits(maxDefine_));
     }
+    wideDefineDecoder_ = std::make_unique<arrow::util::RleDecoder>(
+        reinterpret_cast<const uint8_t*>(pageData_),
+        defineLength,
+        arrow::bit_util::NumRequiredBits(maxDefine_));
     pageData_ += defineLength;
   }
   encodedDataSize_ = pageEnd - pageData_;
@@ -471,10 +470,9 @@ void PageReader::prepareDictionary(const PageHeader& pageHeader) {
             values[i] = value;
           }
         }
-        auto values = dictionary_.values->asMutable<UnscaledShortDecimal>();
+        auto values = dictionary_.values->asMutable<int64_t>();
         for (auto i = 0; i < dictionary_.numValues; ++i) {
-          values[i] = UnscaledShortDecimal(
-              __builtin_bswap64(values[i].unscaledValue()));
+          values[i] = __builtin_bswap64(values[i]);
         }
         break;
       } else if (type_->type->isLongDecimal()) {
@@ -495,10 +493,9 @@ void PageReader::prepareDictionary(const PageHeader& pageHeader) {
             values[i] = value;
           }
         }
-        auto values = dictionary_.values->asMutable<UnscaledLongDecimal>();
+        auto values = dictionary_.values->asMutable<int128_t>();
         for (auto i = 0; i < dictionary_.numValues; ++i) {
-          values[i] = UnscaledLongDecimal(
-              dwio::common::builtin_bswap128(values[i].unscaledValue()));
+          values[i] = dwio::common::builtin_bswap128(values[i]);
         }
         break;
       }
@@ -579,7 +576,7 @@ void PageReader::preloadRepDefs() {
 }
 
 void PageReader::decodeRepDefs(int32_t numTopLevelRows) {
-  if (definitionLevels_.empty()) {
+  if (definitionLevels_.empty() && maxDefine_ > 0) {
     preloadRepDefs();
   }
   repDefBegin_ = repDefEnd_;

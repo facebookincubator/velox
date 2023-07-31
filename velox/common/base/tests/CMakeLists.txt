@@ -22,6 +22,7 @@ add_executable(
   FsTest.cpp
   RangeTest.cpp
   RawVectorTest.cpp
+  RuntimeMetricsTest.cpp
   ScopedLockTest.cpp
   SemaphoreTest.cpp
   SimdUtilTest.cpp
@@ -33,6 +34,8 @@ add_test(velox_base_test velox_base_test)
 target_link_libraries(
   velox_base_test
   velox_common_base
+  Boost::headers
+  Boost::filesystem
   gflags::gflags
   glog::glog
   gtest

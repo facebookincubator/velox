@@ -28,8 +28,7 @@ using namespace facebook::velox;
 static void mockRelease(ArrowSchema*) {}
 
 void exportToArrow(const TypePtr& type, ArrowSchema& out) {
-  auto pool = &facebook::velox::memory::getProcessDefaultMemoryManager()
-                   .deprecatedGetPool();
+  auto pool = &facebook::velox::memory::deprecatedSharedLeafPool();
   exportToArrow(BaseVector::create(type, 0, pool), out);
 }
 

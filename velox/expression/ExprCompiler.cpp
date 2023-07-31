@@ -92,12 +92,26 @@ struct Scope {
   }
 };
 
+// Utility method to check eligibility for flattening.
+bool allInputTypesEquivalent(const TypedExprPtr& expr) {
+  const auto& inputs = expr->inputs();
+  for (int i = 1; i < inputs.size(); i++) {
+    if (!inputs[0]->type()->equivalent(*inputs[i]->type())) {
+      return false;
+    }
+  }
+  return true;
+}
+
 std::optional<std::string> shouldFlatten(
     const TypedExprPtr& expr,
     const std::unordered_set<std::string>& flatteningCandidates) {
   if (auto call = std::dynamic_pointer_cast<const core::CallTypedExpr>(expr)) {
+    // Currently only supports the most common case for flattening where all
+    // inputs are of the same type.
     if (call->name() == kAnd || call->name() == kOr ||
-        flatteningCandidates.count(call->name())) {
+        (flatteningCandidates.count(call->name()) &&
+         allInputTypesEquivalent(expr))) {
       return call->name();
     }
   }
@@ -111,18 +125,27 @@ bool isCall(const TypedExprPtr& expr, const std::string& name) {
   return false;
 }
 
-// Flattens nested ANDs or ORs into a vector of conjuncts
+// Recursively flattens nested ANDs, ORs or eligible callable expressions into a
+// vector of their inputs. Recursive flattening ceases exploring an input branch
+// if it encounters either an expression different from 'flattenCall' or its
+// inputs are not the same type.
 // Examples:
+// flattenCall: AND
 // in: a AND (b AND (c AND d))
 // out: [a, b, c, d]
 //
+// flattenCall: OR
 // in: (a OR b) OR (c OR d)
 // out: [a, b, c, d]
+//
+// flattenCall: concat
+// in: (array1, concat(array2, concat(array2, intVal))
+// out: [array1, array2, concat(array2, intVal)]
 void flattenInput(
     const TypedExprPtr& input,
     const std::string& flattenCall,
     std::vector<TypedExprPtr>& flat) {
-  if (isCall(input, flattenCall)) {
+  if (isCall(input, flattenCall) && allInputTypesEquivalent(input)) {
     for (auto& child : input->inputs()) {
       flattenInput(child, flattenCall, flat);
     }
@@ -195,13 +218,15 @@ std::vector<TypePtr> getTypes(const std::vector<ExprPtr>& exprs) {
 }
 
 ExprPtr getRowConstructorExpr(
+    const core::QueryConfig& config,
     const TypePtr& type,
     std::vector<ExprPtr>&& compiledChildren,
     bool trackCpuUsage) {
   static auto rowConstructorVectorFunction =
-      vectorFunctionFactories().withRLock([](auto& functionMap) {
+      vectorFunctionFactories().withRLock([&config](auto& functionMap) {
         auto functionIterator = functionMap.find(exec::kRowConstructor);
-        return functionIterator->second.factory(exec::kRowConstructor, {});
+        return functionIterator->second.factory(
+            exec::kRowConstructor, {}, config);
       });
 
   return std::make_shared<Expr>(
@@ -213,13 +238,14 @@ ExprPtr getRowConstructorExpr(
 }
 
 ExprPtr getSpecialForm(
+    const core::QueryConfig& config,
     const std::string& name,
     const TypePtr& type,
     std::vector<ExprPtr>&& compiledChildren,
     bool trackCpuUsage) {
   if (name == kRowConstructor) {
     return getRowConstructorExpr(
-        type, std::move(compiledChildren), trackCpuUsage);
+        config, type, std::move(compiledChildren), trackCpuUsage);
   }
 
   // If we just check the output of constructSpecialForm we'll have moved
@@ -296,8 +322,7 @@ std::shared_ptr<Expr> compileLambda(
 }
 
 ExprPtr tryFoldIfConstant(const ExprPtr& expr, Scope* scope) {
-  if (expr->isConstant() && !expr->inputs().empty() &&
-      scope->exprSet->execCtx()) {
+  if (expr->isConstant() && scope->exprSet->execCtx()) {
     try {
       auto rowType = ROW({}, {});
       auto execCtx = scope->exprSet->execCtx();
@@ -344,7 +369,16 @@ std::vector<VectorPtr> getConstantInputs(const std::vector<ExprPtr>& exprs) {
   return constants;
 }
 
-ExprPtr compileExpression(
+core::TypedExprPtr rewriteExpression(const core::TypedExprPtr& expr) {
+  for (auto& rewrite : expressionRewrites()) {
+    if (auto rewritten = rewrite(expr)) {
+      return rewritten;
+    }
+  }
+  return expr;
+}
+
+ExprPtr compileRewrittenExpression(
     const TypedExprPtr& expr,
     Scope* scope,
     const core::QueryConfig& config,
@@ -358,6 +392,7 @@ ExprPtr compileExpression(
       alreadyCompiled->setMultiplyReferenced();
       // A property of this expression changed, namely isMultiplyReferenced_,
       // that affects metadata, so we re-compute it.
+      alreadyCompiled->clearMetaData();
       alreadyCompiled->computeMetadata();
     }
     return alreadyCompiled;
@@ -370,21 +405,21 @@ ExprPtr compileExpression(
   auto compiledInputs = compileInputs(
       expr, scope, config, pool, flatteningCandidates, enableConstantFolding);
   auto inputTypes = getTypes(compiledInputs);
-
+  bool isConstantExpr = false;
   if (dynamic_cast<const core::ConcatTypedExpr*>(expr.get())) {
     result = getRowConstructorExpr(
-        resultType, std::move(compiledInputs), trackCpuUsage);
+        config, resultType, std::move(compiledInputs), trackCpuUsage);
   } else if (auto cast = dynamic_cast<const core::CastTypedExpr*>(expr.get())) {
     VELOX_CHECK(!compiledInputs.empty());
     auto castExpr = std::make_shared<CastExpr>(
-        resultType, std::move(compiledInputs[0]), trackCpuUsage);
-    if (cast->nullOnFailure()) {
-      result = getSpecialForm("try", resultType, {castExpr}, trackCpuUsage);
-    } else {
-      result = castExpr;
-    }
+        resultType,
+        std::move(compiledInputs[0]),
+        trackCpuUsage,
+        cast->nullOnFailure());
+    result = castExpr;
   } else if (auto call = dynamic_cast<const core::CallTypedExpr*>(expr.get())) {
     if (auto specialForm = getSpecialForm(
+            config,
             call->name(),
             resultType,
             std::move(compiledInputs),
@@ -392,7 +427,10 @@ ExprPtr compileExpression(
       result = specialForm;
     } else if (
         auto func = getVectorFunction(
-            call->name(), inputTypes, getConstantInputs(compiledInputs))) {
+            call->name(),
+            inputTypes,
+            getConstantInputs(compiledInputs),
+            config)) {
       result = std::make_shared<Expr>(
           resultType,
           std::move(compiledInputs),
@@ -401,10 +439,9 @@ ExprPtr compileExpression(
           trackCpuUsage);
     } else if (
         auto simpleFunctionEntry =
-            SimpleFunctions().resolveFunction(call->name(), inputTypes)) {
-      const auto& metadata = simpleFunctionEntry->getMetadata();
+            simpleFunctions().resolveFunction(call->name(), inputTypes)) {
       VELOX_USER_CHECK(
-          resultType->kindEquals(metadata.returnType()),
+          resultType->equivalent(*simpleFunctionEntry->type().get()),
           "Found incompatible return types for '{}' ({} vs. {}) "
           "for input types ({}).",
           call->name(),
@@ -412,7 +449,7 @@ ExprPtr compileExpression(
           resultType,
           folly::join(", ", inputTypes));
       auto func = simpleFunctionEntry->createFunction()->createVectorFunction(
-          config, getConstantInputs(compiledInputs));
+          getConstantInputs(compiledInputs), config);
       result = std::make_shared<Expr>(
           resultType,
           std::move(compiledInputs),
@@ -423,7 +460,7 @@ ExprPtr compileExpression(
       const auto& functionName = call->name();
       auto vectorFunctionSignatures = getVectorFunctionSignatures(functionName);
       auto simpleFunctionSignatures =
-          SimpleFunctions().getFunctionSignatures(functionName);
+          simpleFunctions().getFunctionSignatures(functionName);
       std::vector<std::string> signatures;
 
       if (vectorFunctionSignatures.has_value()) {
@@ -437,12 +474,12 @@ ExprPtr compileExpression(
       }
 
       if (signatures.empty()) {
-        VELOX_FAIL(
+        VELOX_USER_FAIL(
             "Scalar function name not registered: {}, called with arguments: ({}).",
             call->name(),
             folly::join(", ", inputTypes));
       } else {
-        VELOX_FAIL(
+        VELOX_USER_FAIL(
             "Scalar function {} not registered with arguments: ({}). "
             "Found function registered with the following signatures:\n{}",
             call->name(),
@@ -467,6 +504,7 @@ ExprPtr compileExpression(
       auto constant =
           dynamic_cast<const core::ConstantTypedExpr*>(expr.get())) {
     result = std::make_shared<ConstantExpr>(constant->toConstantVector(pool));
+    isConstantExpr = true;
   } else if (
       auto lambda = dynamic_cast<const core::LambdaTypedExpr*>(expr.get())) {
     result = compileLambda(
@@ -482,10 +520,29 @@ ExprPtr compileExpression(
 
   result->computeMetadata();
 
-  auto folded =
-      enableConstantFolding ? tryFoldIfConstant(result, scope) : result;
+  // If the expression is constant folding it is redundant.
+  auto folded = enableConstantFolding && !isConstantExpr
+      ? tryFoldIfConstant(result, scope)
+      : result;
   scope->visited[expr.get()] = folded;
   return folded;
+}
+
+ExprPtr compileExpression(
+    const TypedExprPtr& expr,
+    Scope* scope,
+    const core::QueryConfig& config,
+    memory::MemoryPool* pool,
+    const std::unordered_set<std::string>& flatteningCandidates,
+    bool enableConstantFolding) {
+  auto rewritten = rewriteExpression(expr);
+  return compileRewrittenExpression(
+      rewritten == nullptr ? expr : rewritten,
+      scope,
+      config,
+      pool,
+      flatteningCandidates,
+      enableConstantFolding);
 }
 
 /// Walk expression tree and collect names of functions used in CallTypedExpr

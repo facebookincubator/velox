@@ -15,9 +15,10 @@
  */
 #include "velox/common/base/tests/GTestUtils.h"
 #include "velox/exec/tests/utils/PlanBuilder.h"
-#include "velox/functions/prestosql/aggregates/tests/AggregationTestBase.h"
+#include "velox/functions/lib/aggregates/tests/AggregationTestBase.h"
 
 using namespace facebook::velox::exec::test;
+using namespace facebook::velox::functions::aggregate::test;
 
 namespace facebook::velox::aggregate::test {
 
@@ -114,5 +115,10 @@ TEST_P(CovarianceAggregationTest, floatSomeNulls) {
 VELOX_INSTANTIATE_TEST_SUITE_P(
     CovarianceAggregationTest,
     CovarianceAggregationTest,
-    testing::Values("covar_samp", "covar_pop", "corr"));
+    testing::Values(
+        "covar_samp",
+        "covar_pop",
+        "corr",
+        "regr_intercept",
+        "regr_slope"));
 } // namespace facebook::velox::aggregate::test

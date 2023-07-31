@@ -16,6 +16,7 @@
 #include <folly/Random.h>
 #include <folly/init/Init.h>
 
+#include "velox/common/base/tests/GTestUtils.h"
 #include "velox/exec/tests/utils/OperatorTestBase.h"
 #include "velox/exec/tests/utils/PlanBuilder.h"
 #include "velox/vector/tests/utils/VectorMaker.h"
@@ -72,6 +73,27 @@ class VeloxSubstraitRoundTripTest : public OperatorTestBase {
     assertQuery(samePlan, duckDbSql);
   }
 
+  void assertFailingPlanConversion(
+      const std::shared_ptr<const core::PlanNode>& plan,
+      const std::string& expectedErrorMessage) {
+    CursorParameters params;
+    params.planNode = plan;
+    VELOX_ASSERT_THROW(
+        readCursor(params, [](auto /*task*/) {}), expectedErrorMessage);
+
+    // Convert Velox Plan to Substrait Plan.
+    google::protobuf::Arena arena;
+    auto substraitPlan = veloxConvertor_->toSubstrait(arena, plan);
+
+    // Convert Substrait Plan to the same Velox Plan.
+    auto samePlan = substraitConverter_->toVeloxPlan(substraitPlan);
+
+    // Assert velox again.
+    params.planNode = samePlan;
+    VELOX_ASSERT_THROW(
+        readCursor(params, [](auto /*task*/) {}), expectedErrorMessage);
+  }
+
   std::shared_ptr<VeloxToSubstraitPlanConvertor> veloxConvertor_ =
       std::make_shared<VeloxToSubstraitPlanConvertor>();
   std::shared_ptr<SubstraitVeloxPlanConverter> substraitConverter_ =
@@ -84,6 +106,29 @@ TEST_F(VeloxSubstraitRoundTripTest, project) {
   auto plan =
       PlanBuilder().values(vectors).project({"c0 + c1", "c1 / c2"}).planNode();
   assertPlanConversion(plan, "SELECT c0 + c1, c1 / c2 FROM tmp");
+}
+
+TEST_F(VeloxSubstraitRoundTripTest, cast) {
+  auto vectors = makeVectors(3, 4, 2);
+  createDuckDbTable(vectors);
+  // Cast int32 to int64.
+  auto plan =
+      PlanBuilder().values(vectors).project({"cast(c0 as bigint)"}).planNode();
+  assertPlanConversion(plan, "SELECT cast(c0 as bigint) FROM tmp");
+
+  // Cast literal "abc" to int64 and allow cast failure, expecting no exception.
+  plan = PlanBuilder()
+             .values(vectors)
+             .project({"try_cast('abc' as bigint)"})
+             .planNode();
+  assertPlanConversion(plan, "SELECT try_cast('abc' as bigint) FROM tmp");
+
+  // Cast literal "abc" to int64, expecting an exception to be thrown.
+  plan = PlanBuilder()
+             .values(vectors)
+             .project({"cast('abc' as bigint)"})
+             .planNode();
+  assertFailingPlanConversion(plan, "Failed to cast from VARCHAR to BIGINT");
 }
 
 TEST_F(VeloxSubstraitRoundTripTest, filter) {
@@ -420,9 +465,9 @@ TEST_F(VeloxSubstraitRoundTripTest, arrayLiteral) {
                     makeArrayVector<StringView>({{StringView("6")}})),
                 makeConstantExpr(makeArrayVector<Timestamp>(
                     {{Timestamp(123'456, 123'000)}})),
-                makeConstantExpr(makeArrayVector<Date>({{Date(8035)}})),
-                makeConstantExpr(makeArrayVector<IntervalDayTime>(
-                    {{IntervalDayTime(54 * 1000)}})),
+                makeConstantExpr(makeArrayVector<int32_t>({{8035}}, DATE())),
+                makeConstantExpr(makeArrayVector<int64_t>(
+                    {{54 * 1000}}, INTERVAL_DAY_TIME())),
                 makeConstantExpr(makeArrayVector<int64_t>({{}})),
                 // Nested array: [[1, 2, 3], [4, 5]]
                 makeConstantExpr(makeArrayVector(
@@ -450,7 +495,7 @@ TEST_F(VeloxSubstraitRoundTripTest, arrayLiteral) {
 TEST_F(VeloxSubstraitRoundTripTest, dateType) {
   auto a = makeFlatVector<int32_t>({0, 1});
   auto b = makeFlatVector<double_t>({0.3, 0.4});
-  auto c = makeFlatVector<Date>({Date(8036), Date(8035)});
+  auto c = makeFlatVector<int32_t>({8036, 8035}, DATE());
 
   auto vectors = makeRowVector({"a", "b", "c"}, {a, b, c});
   createDuckDbTable({vectors});

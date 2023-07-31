@@ -16,6 +16,7 @@ add_library(
   velox_functions_prestosql
   ArithmeticFunctionsRegistration.cpp
   ArrayFunctionsRegistration.cpp
+  BinaryFunctionsRegistration.cpp
   CheckedArithmeticRegistration.cpp
   ComparisonFunctionsRegistration.cpp
   DateTimeFunctionsRegistration.cpp
@@ -28,8 +29,16 @@ add_library(
   URLFunctionsRegistration.cpp
   RegistrationFunctions.cpp)
 
+# GCC 12 has a bug where it does not respect "pragma ignore" directives and ends
+# up failing compilation in an openssl header included by a hash-related
+# function.
+if(CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
+  target_compile_options(velox_functions_prestosql
+                         PRIVATE -Wno-deprecated-declarations)
+endif()
+
 target_link_libraries(velox_functions_prestosql velox_functions_prestosql_impl
-                      velox_is_null_functions)
+                      velox_is_null_functions simdjson)
 
 set_property(TARGET velox_functions_prestosql PROPERTY JOB_POOL_COMPILE
                                                        high_memory_pool)

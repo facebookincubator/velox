@@ -19,12 +19,13 @@ workflows:
   dist-compile:
     jobs:
       - linux-build
+      - linux-pr-fuzzer-run
       - linux-build-options
       - linux-adapters
       - macos-build:
           matrix:
             parameters:
-              os: [macos-intel, macos-m1]
+              os: [macos-intel]
       - format-check
       - header-check
 
@@ -41,11 +42,16 @@ workflows:
       - doc-gen-job
       - linux-presto-fuzzer-run
       - linux-spark-fuzzer-run
+      - linux-spark-aggregate-fuzzer-run
       - linux-aggregate-fuzzer-run
       - linux-join-fuzzer-run
       - docker-compose-ubuntu-cpp
       - docker-compose-centos-cpp
       - docker-compose-presto-native
+      - macos-build:
+          matrix:
+            parameters:
+              os: [ macos-m1 ]
 
 
   # Hourly build on weekdays
@@ -65,7 +71,7 @@ workflows:
       - macos-build:
           matrix:
             parameters:
-              os: [macos-intel, macos-m1]
+              os: [macos-intel]
 
 commands:
   update-submodules:
@@ -150,13 +156,13 @@ commands:
       - run:
           name: Build
           command: |
-            make debug NUM_THREADS=16 MAX_HIGH_MEM_JOBS=8 MAX_LINK_JOBS=8
+            make debug NUM_THREADS=16 MAX_HIGH_MEM_JOBS=8 MAX_LINK_JOBS=6
             ccache -s
           no_output_timeout: 1h
       - run:
           name: "Run << parameters.fuzzer_name >> Fuzzer"
           command: |
-            eval " << parameters.fuzzer_exe >> << parameters.fuzzer_args >> " \
+            eval ' << parameters.fuzzer_exe >> << parameters.fuzzer_args >> ' \
                   2>&1 | tee "<< parameters.fuzzer_output >>" || ( \
                     tail -n 1000 "<< parameters.fuzzer_output >>" ; \
                     echo "FAIL: << parameters.fuzzer_name >> run failed"; \
@@ -179,12 +185,13 @@ executors:
         CC:  /opt/rh/gcc-toolset-9/root/bin/gcc
         CXX: /opt/rh/gcc-toolset-9/root/bin/g++
         VELOX_DEPENDENCY_SOURCE: BUNDLED
+        simdjson_SOURCE: BUNDLED
   check:
     docker:
       - image : ghcr.io/facebookincubator/velox-dev:check-avx
   macos-intel:
     macos:
-      xcode: "14.2.0"
+      xcode: "14.3.0"
     resource_class: macos.x86.medium.gen2
   macos-m1:
     macos:
@@ -199,6 +206,7 @@ jobs:
     executor: << parameters.os >>
     environment:
       ICU_SOURCE: BUNDLED
+      simdjson_SOURCE: BUNDLED
     steps:
       - checkout
       - update-submodules
@@ -243,6 +251,9 @@ jobs:
             mkdir -p .ccache
             export CCACHE_DIR=$(pwd)/.ccache
             ccache -sz -M 5Gi
+            brew install openssl@1.1
+            brew link --overwrite --force openssl@1.1
+            export PATH="/Users/distiller/deps/opt/openssl@1.1/bin:$PATH"
             export OPENSSL_ROOT_DIR=$(brew --prefix openssl@1.1)
             cmake -B _build/debug -GNinja -DTREAT_WARNINGS_AS_ERRORS=1 -DENABLE_ALL_WARNINGS=1 -DCMAKE_BUILD_TYPE=Debug -DCMAKE_PREFIX_PATH=~/deps -DCMAKE_CXX_COMPILER_LAUNCHER=ccache -DFLEX_INCLUDE_DIR=~/deps/opt/flex/include
             ninja -C _build/debug
@@ -261,17 +272,9 @@ jobs:
       - run:
           name: "Build"
           command: |
-            make debug NUM_THREADS=16 MAX_HIGH_MEM_JOBS=8 MAX_LINK_JOBS=8 EXTRA_CMAKE_FLAGS="-DVELOX_ENABLE_ARROW=ON"
+            make debug NUM_THREADS=16 MAX_HIGH_MEM_JOBS=8 MAX_LINK_JOBS=5 EXTRA_CMAKE_FLAGS="-DVELOX_ENABLE_ARROW=ON"
             ccache -s
           no_output_timeout: 1h
-      - run:
-          name: "Build and Test PyVelox"
-          command: |
-            conda init bash
-            source ~/.bashrc
-            conda create -y --name pyveloxenv python=3.7
-            conda activate pyveloxenv
-            LD_LIBRARY_PATH=/usr/local/lib make python-test
       - run:
           name: "Run Unit Tests"
           command: |
@@ -293,7 +296,9 @@ jobs:
                 --lazy_vector_generation_ratio 0.2 \
                 --velox_fuzzer_enable_column_reuse \
                 --velox_fuzzer_enable_expression_reuse \
+                --max_expression_trees_per_step 2 \
                 --retry_with_try \
+                --enable_dereference \
                 --duration_sec 60 \
                 --logtostderr=1 \
                 --minloglevel=0 \
@@ -317,6 +322,21 @@ jobs:
           no_output_timeout: 5m
       - store_artifacts:
           path: '/tmp/spark_fuzzer_repro'
+      - run:
+          name: "Run Spark Aggregate Fuzzer Tests"
+          command: |
+            mkdir -p /tmp/spark_aggregate_fuzzer_repro/
+            chmod -R 777 /tmp/spark_aggregate_fuzzer_repro
+            _build/debug/velox/exec/tests/spark_aggregation_fuzzer_test \
+                --seed ${RANDOM} \
+                --duration_sec 60 \
+                --logtostderr=1 \
+                --minloglevel=0 \
+                --repro_persist_path=/tmp/spark_aggregate_fuzzer_repro \
+            && echo -e "\n\nSpark Aggregation Fuzzer run finished successfully."
+          no_output_timeout: 5m
+      - store_artifacts:
+          path: '/tmp/spark_aggregate_fuzzer_repro'
       - run:
           name: "Run Aggregate Fuzzer Tests"
           # Run aggregation fuzzer using the built executable.
@@ -382,12 +402,13 @@ jobs:
     environment:
       VELOX_DEPENDENCY_SOURCE: SYSTEM
       ICU_SOURCE: BUNDLED
+      simdjson_SOURCE: BUNDLED
     steps:
       - pre-steps
       - run:
           name: "Install Adapter Dependencies"
           command: |
-            mkdir ~/adapter-deps ~/adapter-deps/install
+            mkdir -p ~/adapter-deps/install/bin
             source /opt/rh/gcc-toolset-9/enable
             set -xu
             DEPENDENCY_DIR=~/adapter-deps PROMPT_ALWAYS_RESPOND=n ./scripts/setup-adapters.sh
@@ -407,12 +428,28 @@ jobs:
       - run:
           name: Build including all Benchmarks
           command: |
-            make release EXTRA_CMAKE_FLAGS="-DVELOX_ENABLE_BENCHMARKS=ON -DVELOX_ENABLE_ARROW=ON -DVELOX_ENABLE_PARQUET=ON -DVELOX_ENABLE_HDFS=ON -DVELOX_ENABLE_S3=ON -DVELOX_ENABLE_SUBSTRAIT=ON" AWSSDK_ROOT_DIR=~/adapter-deps/install NUM_THREADS=16 MAX_HIGH_MEM_JOBS=8 MAX_LINK_JOBS=8
+            EXTRA_CMAKE_FLAGS=(
+              "-DVELOX_ENABLE_BENCHMARKS=ON"
+              "-DVELOX_ENABLE_ARROW=ON"
+              "-DVELOX_ENABLE_PARQUET=ON"
+              "-DVELOX_ENABLE_HDFS=ON"
+              "-DVELOX_ENABLE_S3=ON"
+              "-DVELOX_ENABLE_GCS=ON"
+              "-DVELOX_ENABLE_SUBSTRAIT=ON"
+              "-DVELOX_ENABLE_REMOTE_FUNCTIONS=ON"
+            )
+            make release EXTRA_CMAKE_FLAGS="${EXTRA_CMAKE_FLAGS[*]}" AWSSDK_ROOT_DIR=~/adapter-deps/install GCSSDK_ROOT_DIR=~/adapter-deps/install NUM_THREADS=16 MAX_HIGH_MEM_JOBS=8 MAX_LINK_JOBS=8
             ccache -s
           no_output_timeout: 1h
       - run:
           name: "Run Unit Tests"
           command: |
+            conda init bash
+            source ~/.bashrc
+            conda create -y --name testbench python=3.7
+            conda activate testbench
+            pip install https://github.com/googleapis/storage-testbench/archive/refs/tags/v0.36.0.tar.gz
+            export LC_ALL=C
             export JAVA_HOME=/usr/lib/jvm/jre-1.8.0-openjdk
             export HADOOP_ROOT_LOGGER="WARN,DRFA"
             export LIBHDFS3_CONF=$(pwd)/.circleci/hdfs-client.xml
@@ -426,6 +463,7 @@ jobs:
     executor: build
     environment:
       VELOX_DEPENDENCY_SOURCE: SYSTEM
+      simdjson_SOURCE: BUNDLED
     steps:
       - fuzzer-run:
           fuzzer_output: "/tmp/fuzzer.log"
@@ -437,7 +475,9 @@ jobs:
           --velox_fuzzer_enable_complex_types \
           --velox_fuzzer_enable_column_reuse \
           --velox_fuzzer_enable_expression_reuse \
+          --max_expression_trees_per_step 2 \
           --retry_with_try \
+          --enable_dereference \
           --logtostderr=1 --minloglevel=0 \
           --repro_persist_path=/tmp/fuzzer_repro"
 
@@ -445,40 +485,57 @@ jobs:
     executor: build
     environment:
       VELOX_DEPENDENCY_SOURCE: SYSTEM
+      simdjson_SOURCE: BUNDLED
     steps:
       - fuzzer-run:
           fuzzer_output: "/tmp/spark_fuzzer.log"
           fuzzer_repro: "/tmp/spark_fuzzer_repro"
           fuzzer_name: "Spark"
           fuzzer_exe: "_build/debug/velox/expression/tests/spark_expression_fuzzer_test"
-          fuzzer_args: " --seed ${RANDOM} --duration_sec 600 --logtostderr=1 --minloglevel=0 \ 
+          fuzzer_args: " --seed ${RANDOM} --duration_sec 600 --logtostderr=1 --minloglevel=0 \
           --repro_persist_path=/tmp/spark_fuzzer_repro"
+
+  linux-spark-aggregate-fuzzer-run:
+    executor: build
+    environment:
+      VELOX_DEPENDENCY_SOURCE: SYSTEM
+      simdjson_SOURCE: BUNDLED
+    steps:
+      - fuzzer-run:
+          fuzzer_output: "/tmp/spark_aggregate_fuzzer.log"
+          fuzzer_repro: "/tmp/spark_aggregate_fuzzer_repro"
+          fuzzer_name: "SparkAggregate"
+          fuzzer_exe: "_build/debug/velox/exec/tests/spark_aggregation_fuzzer_test"
+          fuzzer_args: " --seed ${RANDOM} --duration_sec 600 --logtostderr=1 --minloglevel=0 \
+          --repro_persist_path=/tmp/spark_aggregate_fuzzer_repro"
 
 
   linux-aggregate-fuzzer-run:
     executor: build
     environment:
       VELOX_DEPENDENCY_SOURCE: SYSTEM
+      simdjson_SOURCE: BUNDLED
     steps:
       - fuzzer-run:
           fuzzer_output: "/tmp/aggregate_fuzzer.log"
           fuzzer_repro: "/tmp/aggregate_fuzzer_repro"
           fuzzer_name: "Aggregate"
           fuzzer_exe: "_build/debug/velox/exec/tests/velox_aggregation_fuzzer_test"
-          fuzzer_args: " --seed ${RANDOM} --duration_sec 3600 --logtostderr=1 --minloglevel=0 \ 
+          fuzzer_args: " --seed ${RANDOM} --duration_sec 3600 --logtostderr=1 --minloglevel=0 \
           --repro_persist_path=/tmp/aggregate_fuzzer_repro"
 
   linux-join-fuzzer-run:
     executor: build
     environment:
       VELOX_DEPENDENCY_SOURCE: SYSTEM
+      simdjson_SOURCE: BUNDLED
     steps:
       - fuzzer-run:
           fuzzer_output: "/tmp/join_fuzzer.log"
           fuzzer_repro: "/tmp/join_fuzzer_repro"
           fuzzer_name: "Join"
           fuzzer_exe: "_build/debug/velox/exec/tests/velox_join_fuzzer_test"
-          fuzzer_args: " --seed ${RANDOM} --duration_sec 3600 --logtostderr=1 --minloglevel=0"
+          fuzzer_args: " --seed ${RANDOM} --duration_sec 3600 --logtostderr=1 --minloglevel=0 --v=1"
 
   format-check:
     executor: check
@@ -536,7 +593,7 @@ jobs:
             git checkout gh-pages
             cp -R velox/docs/_build/html/* docs
             git add docs
-            if [ -n "$(git status --porcelain)" ]
+            if [ -n "$(git status --porcelain --untracked-files=no)" ]
             then
               git commit -m "Update documentation"
               git push
@@ -597,3 +654,77 @@ jobs:
             git config --global user.name "velox"
             cd presto/presto-native-execution
             make runtime-container
+
+  linux-pr-fuzzer-run:
+    executor: build
+    steps:
+      - pre-steps
+      - run:
+          name: "Get merge base function signatures"
+          command: |
+            source ~/.bashrc
+            conda create -y --name pyveloxenv python=3.7
+            conda activate pyveloxenv
+            cp ./scripts/signature.py /tmp/signature.py
+            pip install deepdiff
+            git remote add upstream https://github.com/facebookincubator/velox
+            git fetch upstream
+            merge_base=$(git merge-base  'upstream/main' `git rev-parse HEAD`) || \
+            { echo "::error::Failed to find merge_base"; exit 1; }
+            echo "Merge Base: $merge_base"
+            git checkout $merge_base
+            git submodule update --init --recursive
+            LD_LIBRARY_PATH=/usr/local/lib make python-clean
+            LD_LIBRARY_PATH=/usr/local/lib make python-build
+            python /tmp/signature.py export --spark spark_merge_base_signatures.json
+            python /tmp/signature.py export --presto presto_merge_base_signatures.json
+      - checkout
+      - run:
+          name: "Build"
+          command: |
+              make debug NUM_THREADS=16 MAX_HIGH_MEM_JOBS=8 MAX_LINK_JOBS=6 EXTRA_CMAKE_FLAGS="-DVELOX_ENABLE_ARROW=ON"
+              ccache -s
+          no_output_timeout: 1h
+      - run:
+          name: "Build and test PyVelox"
+          command: |
+            conda init bash
+            source ~/.bashrc
+            conda activate pyveloxenv
+            LD_LIBRARY_PATH=/usr/local/lib make python-test
+      - run:
+          name: "Check and create bias function signatures"
+          command: |
+            source ~/.bashrc
+            conda activate pyveloxenv
+            pip install deepdiff
+            python ./scripts/signature.py export --presto presto_pr_signatures.json
+            python ./scripts/signature.py export --spark spark_pr_signatures.json
+            python ./scripts/signature.py bias presto_merge_base_signatures.json presto_pr_signatures.json /tmp/presto_bias_functions
+            python ./scripts/signature.py bias spark_merge_base_signatures.json spark_pr_signatures.json /tmp/spark_bias_functions
+
+      - fuzzer-run:
+          fuzzer_output: "/tmp/fuzzer.log"
+          fuzzer_repro: "/tmp/fuzzer_repro"
+          fuzzer_name: "Expression Bias Run"
+          fuzzer_exe: "if [ -f /tmp/presto_bias_functions ]; then _build/debug/velox/expression/tests/velox_expression_fuzzer_test"
+          fuzzer_args: " --seed ${RANDOM} --lazy_vector_generation_ratio 0.2 \
+          --assign_function_tickets  $(cat /tmp/presto_bias_functions) \
+          --duration_sec 3600 --enable_variadic_signatures \
+          --velox_fuzzer_enable_complex_types \
+          --velox_fuzzer_enable_column_reuse \
+          --velox_fuzzer_enable_expression_reuse \
+          --max_expression_trees_per_step 2 \
+          --retry_with_try \
+          --enable_dereference \
+          --logtostderr=1 --minloglevel=0 \
+          --repro_persist_path=/tmp/fuzzer_repro ; fi"
+
+      - fuzzer-run:
+          fuzzer_output: "/tmp/spark_fuzzer.log"
+          fuzzer_repro: "/tmp/spark_fuzzer_repro"
+          fuzzer_name: "Spark Bias Run"
+          fuzzer_exe: "if [ -f /tmp/spark_bias_functions ];  then _build/debug/velox/expression/tests/spark_expression_fuzzer_test"
+          fuzzer_args: " --seed ${RANDOM} --duration_sec 3600 --logtostderr=1 --minloglevel=0 \
+          --assign_function_tickets  $(cat /tmp/spark_bias_functions) \
+          --repro_persist_path=/tmp/spark_fuzzer_repro ; fi"

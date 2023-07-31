@@ -15,9 +15,14 @@
  */
 
 #pragma once
+
+#include <folly/Range.h>
+
 namespace facebook::velox {
 
 // Velox Counter Registration
-void registerVeloxCounters() {}
+void registerVeloxCounters();
 
+constexpr folly::StringPiece kCounterHiveFileHandleGenerateLatencyMs{
+    "velox.hive_file_handle_generate_latency_ms"};
 } // namespace facebook::velox

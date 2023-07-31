@@ -19,9 +19,9 @@
 #include "velox/dwio/common/Statistics.h"
 #include "velox/dwio/common/tests/utils/DataSetBuilder.h"
 #include "velox/dwio/parquet/RegisterParquetReader.h"
-#include "velox/dwio/parquet/duckdb_reader/ParquetReader.h"
 #include "velox/dwio/parquet/reader/ParquetReader.h"
 #include "velox/dwio/parquet/writer/Writer.h"
+#include "velox/exec/tests/utils/TempDirectoryPath.h"
 
 #include <folly/Benchmark.h>
 #include <folly/init/Init.h>
@@ -41,21 +41,20 @@ class ParquetReaderBenchmark {
  public:
   explicit ParquetReaderBenchmark(bool disableDictionary)
       : disableDictionary_(disableDictionary) {
-    pool_ = memory::getDefaultMemoryPool();
+    pool_ = memory::addDefaultLeafMemoryPool();
     dataSetBuilder_ = std::make_unique<DataSetBuilder>(*pool_.get(), 0);
-
-    auto sink = std::make_unique<LocalFileSink>("test.parquet");
-    std::shared_ptr<::parquet::WriterProperties> writerProperties;
+    auto path = fileFolder_->path + "/" + fileName_;
+    auto localWriteFile = std::make_unique<LocalWriteFile>(path, true, false);
+    auto sink =
+        std::make_unique<WriteFileDataSink>(std::move(localWriteFile), path);
+    facebook::velox::parquet::WriterOptions options;
     if (disableDictionary_) {
       // The parquet file is in plain encoding format.
-      writerProperties =
-          ::parquet::WriterProperties::Builder().disable_dictionary()->build();
-    } else {
-      // The parquet file is in dictionary encoding format.
-      writerProperties = ::parquet::WriterProperties::Builder().build();
+      options.enableDictionary = false;
     }
+    options.memoryPool = pool_.get();
     writer_ = std::make_unique<facebook::velox::parquet::Writer>(
-        std::move(sink), *pool_, 10000, writerProperties);
+        std::move(sink), options);
   }
 
   ~ParquetReaderBenchmark() {
@@ -109,33 +108,22 @@ class ParquetReaderBenchmark {
       std::vector<uint64_t>& hitRows) {
     std::unique_ptr<FilterGenerator> filterGenerator =
         std::make_unique<FilterGenerator>(rowType, 0);
-    auto filters =
-        filterGenerator->makeSubfieldFilters(filterSpecs, batches, hitRows);
+    auto filters = filterGenerator->makeSubfieldFilters(
+        filterSpecs, batches, nullptr, hitRows);
     auto scanSpec = filterGenerator->makeScanSpec(std::move(filters));
     return scanSpec;
   }
 
   std::unique_ptr<RowReader> createReader(
-      const ParquetReaderType& parquetReaderType,
       std::shared_ptr<ScanSpec> scanSpec,
       const RowTypePtr& rowType) {
     dwio::common::ReaderOptions readerOpts{pool_.get()};
     auto input = std::make_unique<BufferedInput>(
-        std::make_shared<LocalReadFile>("test.parquet"),
+        std::make_shared<LocalReadFile>(fileFolder_->path + "/" + fileName_),
         readerOpts.getMemoryPool());
 
-    std::unique_ptr<Reader> reader;
-    switch (parquetReaderType) {
-      case ParquetReaderType::NATIVE:
-        reader = std::make_unique<ParquetReader>(std::move(input), readerOpts);
-        break;
-      case ParquetReaderType::DUCKDB:
-        reader = std::make_unique<duckdb_reader::ParquetReader>(
-            input->getInputStream(), readerOpts);
-        break;
-      default:
-        VELOX_UNSUPPORTED("Only native or DuckDB Parquet reader is supported");
-    }
+    std::unique_ptr<Reader> reader =
+        std::make_unique<ParquetReader>(std::move(input), readerOpts);
 
     dwio::common::RowReaderOptions rowReaderOpts;
     rowReaderOpts.select(
@@ -148,11 +136,10 @@ class ParquetReaderBenchmark {
   }
 
   int read(
-      const ParquetReaderType& parquetReaderType,
       const RowTypePtr& rowType,
       std::shared_ptr<ScanSpec> scanSpec,
       uint32_t nextSize) {
-    auto rowReader = createReader(parquetReaderType, scanSpec, rowType);
+    auto rowReader = createReader(scanSpec, rowType);
     runtimeStats_ = dwio::common::RuntimeStatistics();
 
     rowReader->resetFilterCaches();
@@ -188,7 +175,6 @@ class ParquetReaderBenchmark {
   }
 
   void readSingleColumn(
-      const ParquetReaderType& parquetReaderType,
       const std::string& columnName,
       const TypePtr& type,
       float startPct,
@@ -219,7 +205,7 @@ class ParquetReaderBenchmark {
 
     // Filter range is generated from a small sample data of 4096 rows. So the
     // upperBound and lowerBound are introduced to estimate the result size.
-    auto resultSize = read(parquetReaderType, rowType, scanSpec, nextSize);
+    auto resultSize = read(rowType, scanSpec, nextSize);
 
     // Add one to expected to avoid 0 in calculating upperBound and lowerBound.
     int expected = kNumBatches * kNumRowsPerBatch *
@@ -242,12 +228,16 @@ class ParquetReaderBenchmark {
   }
 
  private:
+  const std::string fileName_ = "test.parquet";
+  const std::shared_ptr<facebook::velox::exec::test::TempDirectoryPath>
+      fileFolder_ = facebook::velox::exec::test::TempDirectoryPath::create();
+  const bool disableDictionary_;
+
   std::unique_ptr<test::DataSetBuilder> dataSetBuilder_;
   std::shared_ptr<memory::MemoryPool> pool_;
   dwio::common::DataSink* sinkPtr_;
   std::unique_ptr<facebook::velox::parquet::Writer> writer_;
   RuntimeStatistics runtimeStats_;
-  bool disableDictionary_;
 };
 
 void run(
@@ -261,13 +251,7 @@ void run(
   ParquetReaderBenchmark benchmark(disableDictionary);
   BIGINT()->toString();
   benchmark.readSingleColumn(
-      ParquetReaderType::NATIVE,
-      columnName,
-      type,
-      0,
-      filterRateX100,
-      nullsRateX100,
-      nextSize);
+      columnName, type, 0, filterRateX100, nullsRateX100, nextSize);
 }
 
 #define PARQUET_BENCHMARKS_FILTER_NULLS(_type_, _name_, _filter_, _null_) \

@@ -128,6 +128,7 @@ class LazyVector : public BaseVector {
     BaseVector::length_ = size;
     loader_ = std::move(loader);
     allLoaded_ = false;
+    containsLazyAndIsWrapped_ = false;
   }
 
   inline bool isLoaded() const {
@@ -269,6 +270,12 @@ class LazyVector : public BaseVector {
       SelectivityVector& baseRows);
 
  private:
+  static void ensureLoadedRowsImpl(
+      VectorPtr& vector,
+      DecodedVector& decoded,
+      const SelectivityVector& rows,
+      SelectivityVector& baseRows);
+
   std::unique_ptr<VectorLoader> loader_;
 
   // True if all values are loaded.

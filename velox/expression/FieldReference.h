@@ -23,18 +23,22 @@ class FieldReference : public SpecialForm {
  public:
   FieldReference(
       TypePtr type,
-      std::vector<ExprPtr>&& inputs,
+      const std::vector<ExprPtr>& inputs,
       const std::string& field)
       : SpecialForm(
             std::move(type),
-            std::move(inputs),
+            inputs,
             field,
-            true /* supportsFlatNoNullsFastPath */,
+            inputs.empty() ? true : false,
             false /* trackCpuUsage */),
         field_(field) {}
 
   const std::string& field() const {
     return field_;
+  }
+
+  bool isConstant() const override {
+    return SpecialForm::isConstant() && !inputs_.empty();
   }
 
   int32_t index(const EvalCtx& context) {
@@ -57,16 +61,10 @@ class FieldReference : public SpecialForm {
       EvalCtx& context,
       VectorPtr& result) override;
 
- protected:
-  void computeMetadata() override {
-    propagatesNulls_ = true;
-    if (inputs_.empty()) {
-      distinctFields_.resize(1);
-      distinctFields_[0] = this;
-    } else {
-      Expr::computeMetadata();
-    }
-  }
+  std::string toString(bool recursive = true) const override;
+
+  std::string toSql(
+      std::vector<VectorPtr>* complexConstants = nullptr) const override;
 
  private:
   const std::string field_;

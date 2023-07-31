@@ -16,12 +16,14 @@
 
 #include "velox/connectors/hive/HivePartitionUtil.h"
 #include "velox/common/base/tests/GTestUtils.h"
+#include "velox/dwio/catalog/fbhive/FileUtils.h"
 #include "velox/vector/tests/utils/VectorTestBase.h"
 
 #include "gtest/gtest.h"
 
 using namespace facebook::velox::connector::hive;
 using namespace facebook::velox;
+using namespace facebook::velox::dwio::catalog::fbhive;
 
 class HivePartitionUtilTest : public ::testing::Test,
                               public test::VectorTestBase {
@@ -73,7 +75,7 @@ TEST_F(HivePartitionUtilTest, partitionName) {
          makeFlatVector<int32_t>(std::vector<int32_t>{1000}),
          makeFlatVector<int64_t>(std::vector<int64_t>{10000}),
          makeDictionary<StringView>(std::vector<StringView>{"str1000"}),
-         makeConstant<Date>(Date(10000), 1)});
+         makeConstant<int32_t>(10000, 1, DATE())});
 
     std::vector<std::string> expectedPartitionKeyValues{
         "flat_bool_col=false",
@@ -90,7 +92,8 @@ TEST_F(HivePartitionUtilTest, partitionName) {
       std::iota(partitionChannels.begin(), partitionChannels.end(), 0);
 
       EXPECT_EQ(
-          makePartitionName(makePartitionsVector(input, partitionChannels), 0),
+          FileUtils::makePartName(extractPartitionKeyValues(
+              makePartitionsVector(input, partitionChannels), 0)),
           folly::join(
               "/",
               std::vector<std::string>(
@@ -109,7 +112,8 @@ TEST_F(HivePartitionUtilTest, partitionName) {
     std::vector<column_index_t> partitionChannels{0};
 
     VELOX_ASSERT_THROW(
-        makePartitionName(makePartitionsVector(input, partitionChannels), 0),
+        FileUtils::makePartName(extractPartitionKeyValues(
+            makePartitionsVector(input, partitionChannels), 0)),
         "Unsupported partition type: MAP");
   }
 }

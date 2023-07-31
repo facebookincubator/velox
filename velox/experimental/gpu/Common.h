@@ -16,9 +16,8 @@
 
 #pragma once
 
+#include <cuda_runtime.h>
 #include <cstdio>
-#include <cuda/atomic>
-#include <cuda/semaphore>
 #include <memory>
 #include <type_traits>
 
@@ -95,6 +94,20 @@ struct CudaStreamDestroyDeleter {
 /// number of elements initialized thus cannot call destructor on each of them.
 template <typename T>
 using CudaPtr = std::unique_ptr<T, detail::CudaFreeDeleter<T>>;
+
+template <typename T>
+CudaPtr<T[]> allocateDeviceMemory(size_t count) {
+  T* ptr;
+  CUDA_CHECK_FATAL(cudaMalloc(&ptr, count * sizeof(T)));
+  return CudaPtr<T[]>(ptr);
+}
+
+template <typename T>
+CudaPtr<T> allocateManagedMemory() {
+  T* ptr;
+  CUDA_CHECK_FATAL(cudaMallocManaged(&ptr, sizeof(T)));
+  return CudaPtr<T>(ptr);
+}
 
 using CudaEvent = std::unique_ptr<CUevent_st, detail::CudaEventDestroyDeleter>;
 

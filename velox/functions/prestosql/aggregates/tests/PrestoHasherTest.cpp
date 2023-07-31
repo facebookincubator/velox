@@ -171,22 +171,18 @@ TEST_F(PrestoHasherTest, timestamp) {
 }
 
 TEST_F(PrestoHasherTest, date) {
-  assertHash<Date>(
-      {Date(0), Date(1000), std::nullopt}, {0, 2343331593029422743, 0});
+  assertHash<int32_t>(
+      {0, 1000, std::nullopt}, {0, 2343331593029422743, 0}, DATE());
 }
 
 TEST_F(PrestoHasherTest, unscaledShortDecimal) {
-  assertHash<UnscaledShortDecimal>(
-      {UnscaledShortDecimal(0), UnscaledShortDecimal(1000), std::nullopt},
-      {0, 2343331593029422743, 0},
-      DECIMAL(10, 5));
+  assertHash<int64_t>(
+      {0, 1000, std::nullopt}, {0, 2343331593029422743, 0}, DECIMAL(10, 5));
 }
 
 TEST_F(PrestoHasherTest, unscaledLongDecimal) {
-  assertHash<UnscaledLongDecimal>(
-      {UnscaledLongDecimal(0), UnscaledLongDecimal(1000), std::nullopt},
-      {0, 2343331593029422743, 0},
-      DECIMAL(20, 5));
+  assertHash<int128_t>(
+      {0, 1000, std::nullopt}, {0, 2343331593029422743, 0}, DECIMAL(20, 5));
 }
 
 TEST_F(PrestoHasherTest, doubles) {

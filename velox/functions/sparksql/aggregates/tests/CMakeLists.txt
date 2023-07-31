@@ -12,8 +12,11 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-add_executable(velox_functions_spark_aggregates_test LastAggregateTest.cpp
-                                                     Main.cpp)
+add_executable(
+  velox_functions_spark_aggregates_test
+  BitwiseXorAggregationTest.cpp BloomFilterAggAggregateTest.cpp
+  FirstAggregateTest.cpp LastAggregateTest.cpp AverageAggregationTest.cpp
+  Main.cpp)
 
 add_test(velox_functions_spark_aggregates_test
          velox_functions_spark_aggregates_test)
@@ -22,8 +25,9 @@ target_link_libraries(
   velox_functions_spark_aggregates_test
   velox_exec_test_lib
   velox_vector_test_lib
-  velox_aggregates_test_lib
+  velox_functions_aggregates_test_lib
   velox_functions_spark_aggregates
+  velox_hive_connector
   gflags::gflags
   gtest
   gtest_main)

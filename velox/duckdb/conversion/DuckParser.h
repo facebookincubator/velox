@@ -30,6 +30,11 @@ struct ParseOptions {
   // Retain legacy behavior by default.
   bool parseDecimalAsDouble = true;
   bool parseIntegerAsBigint = true;
+
+  /// SQL functions could be registered with different prefixes by the user.
+  /// This parameter is the registered prefix of presto or spark functions,
+  /// which helps generate the correct Velox expression.
+  std::string functionPrefix = "";
 };
 
 // Parses an input expression using DuckDB's internal postgresql-based parser,
@@ -44,6 +49,23 @@ std::shared_ptr<const core::IExpr> parseExpr(
     const ParseOptions& options);
 
 std::vector<std::shared_ptr<const core::IExpr>> parseMultipleExpressions(
+    const std::string& exprString,
+    const ParseOptions& options);
+
+struct AggregateExpr {
+  std::shared_ptr<const core::IExpr> expr;
+  std::vector<std::pair<std::shared_ptr<const core::IExpr>, core::SortOrder>>
+      orderBy;
+  bool distinct{false};
+  std::shared_ptr<const core::IExpr> maskExpr{nullptr};
+};
+
+/// Parses aggregate function call expression with optional ORDER by clause.
+/// Examples:
+///     sum(a)
+///     sum(a) as s
+///     array_agg(x ORDER BY y DESC)
+AggregateExpr parseAggregateExpr(
     const std::string& exprString,
     const ParseOptions& options);
 
@@ -86,6 +108,8 @@ struct IExprWindowFunction {
       orderBy;
 };
 
-const IExprWindowFunction parseWindowExpr(const std::string& windowString);
+IExprWindowFunction parseWindowExpr(
+    const std::string& windowString,
+    const ParseOptions& options);
 
 } // namespace facebook::velox::duckdb

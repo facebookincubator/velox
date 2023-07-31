@@ -66,7 +66,7 @@ std::string TypeSignature::toString() const {
   return out.str();
 }
 
-std::string FunctionSignature::toString() const {
+std::string FunctionSignature::argumentsToString() const {
   std::vector<std::string> arguments;
   auto size = argumentTypes_.size();
   arguments.reserve(size);
@@ -79,11 +79,16 @@ std::string FunctionSignature::toString() const {
     }
   }
   std::ostringstream out;
-  out << "(" << folly::join(",", arguments);
+  out << folly::join(",", arguments);
   if (variableArity_) {
     out << "...";
   }
-  out << ") -> " << returnType_.toString();
+  return out.str();
+}
+
+std::string FunctionSignature::toString() const {
+  std::ostringstream out;
+  out << "(" << argumentsToString() << ") -> " << returnType_.toString();
   return out.str();
 }
 
@@ -160,10 +165,10 @@ void validateBaseTypeAndCollectTypeParams(
       return;
     }
 
-    if (!isPositiveInteger(typeName) && !isCommonDecimalName(typeName) &&
-        !customTypeExists(typeName)) {
-      // Check to ensure base type is supported.
-      mapNameToTypeKind(typeName);
+    if (!isPositiveInteger(typeName) &&
+        !tryMapNameToTypeKind(typeName).has_value() &&
+        !isDecimalName(typeName) && !isDateName(typeName)) {
+      VELOX_USER_CHECK(hasType(typeName), "Type doesn't exist: {}", typeName);
     }
 
     // Ensure all params are similarly supported.
@@ -252,6 +257,13 @@ FunctionSignature::FunctionSignature(
   validate(variables_, returnType_, argumentTypes_, constantArguments_);
 }
 
+std::string AggregateFunctionSignature::toString() const {
+  std::ostringstream out;
+  out << "(" << argumentsToString() << ") -> " << intermediateType_.toString()
+      << " -> " << returnType().toString();
+  return out.str();
+}
+
 FunctionSignaturePtr FunctionSignatureBuilder::build() {
   VELOX_CHECK(returnType_.has_value());
   return std::make_shared<FunctionSignature>(
@@ -274,4 +286,44 @@ AggregateFunctionSignatureBuilder::build() {
       std::move(constantArguments_),
       variableArity_);
 }
+
+std::string toString(
+    const std::string& name,
+    const std::vector<TypePtr>& types) {
+  std::ostringstream signature;
+  signature << name << "(";
+  for (auto i = 0; i < types.size(); i++) {
+    if (i > 0) {
+      signature << ", ";
+    }
+    signature << types[i]->toString();
+  }
+  signature << ")";
+  return signature.str();
+}
+
+std::string toString(const std::vector<FunctionSignaturePtr>& signatures) {
+  std::stringstream out;
+  for (auto i = 0; i < signatures.size(); ++i) {
+    if (i > 0) {
+      out << ", ";
+    }
+    out << signatures[i]->toString();
+  }
+  return out.str();
+}
+
+std::string toString(
+    const std::vector<std::shared_ptr<AggregateFunctionSignature>>&
+        signatures) {
+  std::stringstream out;
+  for (auto i = 0; i < signatures.size(); ++i) {
+    if (i > 0) {
+      out << ", ";
+    }
+    out << signatures[i]->toString();
+  }
+  return out.str();
+}
+
 } // namespace facebook::velox::exec

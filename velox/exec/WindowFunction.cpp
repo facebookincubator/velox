@@ -60,14 +60,31 @@ std::unique_ptr<WindowFunction> WindowFunction::create(
     const std::string& name,
     const std::vector<WindowFunctionArg>& args,
     const TypePtr& resultType,
+    bool ignoreNulls,
     memory::MemoryPool* pool,
-    HashStringAllocator* stringAllocator) {
+    HashStringAllocator* stringAllocator,
+    const core::QueryConfig& config) {
   // Lookup the function in the new registry first.
   if (auto func = getWindowFunctionEntry(name)) {
-    return func.value()->factory(args, resultType, pool, stringAllocator);
+    return func.value()->factory(
+        args, resultType, ignoreNulls, pool, stringAllocator, config);
   }
 
   VELOX_USER_FAIL("Window function not registered: {}", name);
+}
+
+void WindowFunction::setNullEmptyFramesResults(
+    const SelectivityVector& validRows,
+    vector_size_t resultOffset,
+    const VectorPtr& result) {
+  if (validRows.isAllSelected()) {
+    return;
+  }
+
+  invalidRows_.resizeFill(validRows.size(), true);
+  invalidRows_.deselect(validRows);
+  invalidRows_.applyToSelected(
+      [&](auto i) { result->setNull(resultOffset + i, true); });
 }
 
 } // namespace facebook::velox::exec

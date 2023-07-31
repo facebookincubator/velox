@@ -24,6 +24,7 @@ add_executable(
   InTest.cpp
   LeastGreatestTest.cpp
   MapTest.cpp
+  MightContainTest.cpp
   RegexFunctionsTest.cpp
   SizeTest.cpp
   SortArrayTest.cpp
@@ -38,7 +39,7 @@ target_link_libraries(
   velox_functions_spark
   velox_functions_test_lib
   velox_exec_test_lib
-  ${FMT}
+  fmt::fmt
   gtest
   gtest_main
   gmock

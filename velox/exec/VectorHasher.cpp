@@ -40,12 +40,6 @@ namespace facebook::velox::exec {
       case TypeKind::BIGINT: {                                           \
         return TEMPLATE_FUNC<TypeKind::BIGINT>(__VA_ARGS__);             \
       }                                                                  \
-      case TypeKind::DATE: {                                             \
-        return TEMPLATE_FUNC<TypeKind::DATE>(__VA_ARGS__);               \
-      }                                                                  \
-      case TypeKind::INTERVAL_DAY_TIME: {                                \
-        return TEMPLATE_FUNC<TypeKind::INTERVAL_DAY_TIME>(__VA_ARGS__);  \
-      }                                                                  \
       case TypeKind::VARCHAR:                                            \
       case TypeKind::VARBINARY: {                                        \
         return TEMPLATE_FUNC<TypeKind::VARCHAR>(__VA_ARGS__);            \
@@ -681,7 +675,6 @@ void extendRange(
       extendRange<int16_t>(reserve, min, max);
       break;
     case TypeKind::INTEGER:
-    case TypeKind::DATE:
       extendRange<int32_t>(reserve, min, max);
       break;
     case TypeKind::BIGINT:
@@ -838,6 +831,21 @@ std::string VectorHasher::toString() const {
       << " multiplier=" << multiplier_
       << " numDistinct=" << uniqueValues_.size() << ">";
   return out.str();
+}
+
+std::vector<std::unique_ptr<VectorHasher>> createVectorHashers(
+    const RowTypePtr& rowType,
+    const std::vector<core::FieldAccessTypedExprPtr>& keys) {
+  const auto numKeys = keys.size();
+
+  std::vector<std::unique_ptr<VectorHasher>> hashers;
+  hashers.reserve(numKeys);
+  for (const auto& key : keys) {
+    const auto channel = exprToChannel(key.get(), rowType);
+    hashers.push_back(VectorHasher::create(key->type(), channel));
+  }
+
+  return hashers;
 }
 
 } // namespace facebook::velox::exec

@@ -30,10 +30,7 @@ class SelectiveStructColumnReaderBase : public SelectiveColumnReader {
 
   uint64_t skip(uint64_t numValues) override;
 
-  void next(
-      uint64_t numValues,
-      VectorPtr& result,
-      const uint64_t* incomingNulls) override;
+  void next(uint64_t numValues, VectorPtr& result, const Mutation*) override;
 
   void filterRowGroups(
       uint64_t rowGroupSize,
@@ -99,21 +96,35 @@ class SelectiveStructColumnReaderBase : public SelectiveColumnReader {
   }
 
  protected:
+  // The subscript of childSpecs will be set to this value if the column is
+  // constant (either explicitly or because it's missing).
+  static constexpr int32_t kConstantChildSpecSubscript = -1;
+
   SelectiveStructColumnReaderBase(
       const std::shared_ptr<const dwio::common::TypeWithId>& requestedType,
       const std::shared_ptr<const dwio::common::TypeWithId>& dataType,
       FormatParams& params,
-      velox::common::ScanSpec& scanSpec)
-      : SelectiveColumnReader(dataType, params, scanSpec, dataType->type),
+      velox::common::ScanSpec& scanSpec,
+      bool isRoot = false)
+      : SelectiveColumnReader(dataType->type, params, scanSpec, dataType),
         requestedType_(requestedType),
         debugString_(
-            getExceptionContext().message(VeloxException::Type::kSystem)) {}
+            getExceptionContext().message(VeloxException::Type::kSystem)),
+        isRoot_(isRoot) {}
 
   // Records the number of nulls added by 'this' between the end
   // position of each child reader and the end of the range of
   // 'read(). This must be done also if a child is not read so that we
   // know how much to skip when seeking forward within the row group.
   void recordParentNullsInChildren(vector_size_t offset, RowSet rows);
+
+  bool hasMutation() const override {
+    return hasMutation_;
+  }
+
+  // Returns true if we'll return a constant for that childSpec (i.e. we don't
+  // need to read it).
+  bool isChildConstant(const velox::common::ScanSpec& childSpec) const;
 
   const std::shared_ptr<const dwio::common::TypeWithId> requestedType_;
 
@@ -128,12 +139,22 @@ class SelectiveStructColumnReaderBase : public SelectiveColumnReader {
   // Dense set of rows to read in next().
   raw_vector<vector_size_t> rows_;
 
+  const Mutation* mutation_ = nullptr;
+
+  // After read() call mutation_ could go out of scope.  Need to keep this
+  // around for lazy columns.
+  bool hasMutation_ = false;
+
   // Context information obtained from ExceptionContext. Stored here
   // so that LazyVector readers under this can add this to their
   // ExceptionContext. Allows contextualizing reader errors to split
   // and query. Set at construction, which takes place on first
   // use. If no ExceptionContext is in effect, this is "".
   const std::string debugString_;
+
+  // Whether or not this is the root Struct that represents entire rows of the
+  // table.
+  const bool isRoot_;
 };
 
 struct SelectiveStructColumnReader : SelectiveStructColumnReaderBase {

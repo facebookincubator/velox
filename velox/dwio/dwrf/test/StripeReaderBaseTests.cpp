@@ -19,7 +19,7 @@
 #include "velox/dwio/common/encryption/TestProvider.h"
 #include "velox/dwio/dwrf/reader/StripeReaderBase.h"
 #include "velox/dwio/dwrf/utils/ProtoUtils.h"
-#include "velox/dwio/type/fbhive/HiveTypeParser.h"
+#include "velox/type/fbhive/HiveTypeParser.h"
 
 using namespace ::testing;
 using namespace facebook::velox::dwio::common;
@@ -27,7 +27,7 @@ using namespace facebook::velox::dwio::common::encryption::test;
 using namespace facebook::velox::dwrf;
 using namespace facebook::velox::dwrf::encryption;
 using namespace facebook::velox::memory;
-using namespace facebook::velox::dwio::type::fbhive;
+using namespace facebook::velox::type::fbhive;
 
 namespace facebook::velox::dwrf {
 
@@ -63,7 +63,7 @@ class StripeLoadKeysTest : public Test {
 
     TestDecrypterFactory factory;
     auto handler = DecryptionHandler::create(FooterWrapper(footer), &factory);
-    pool_ = getDefaultMemoryPool();
+    pool_ = addDefaultLeafMemoryPool();
 
     reader_ = std::make_unique<ReaderBase>(
         *pool_,

@@ -25,7 +25,7 @@ using facebook::velox::test::VectorMaker;
 
 class VectorMakerTest : public ::testing::Test {
  protected:
-  std::shared_ptr<memory::MemoryPool> pool_{memory::getDefaultMemoryPool()};
+  std::shared_ptr<memory::MemoryPool> pool_{memory::addDefaultLeafMemoryPool()};
   VectorMaker maker_{pool_.get()};
 };
 
@@ -202,106 +202,6 @@ TEST_F(VectorMakerTest, nullableFlatVectorBool) {
   }
 }
 
-class DecimalVectorMakerTest {
- public:
-  template <typename T, typename P>
-  static void verifyStats(
-      const std::shared_ptr<FlatVector<T>>& flatVector,
-      const std::vector<P>& data) {
-    // No VectorMakerStats for DECIMAL flat vectors.
-    EXPECT_FALSE(flatVector->getNullCount().has_value());
-    EXPECT_FALSE(flatVector->isSorted().has_value());
-    EXPECT_FALSE(flatVector->getDistinctValueCount().has_value());
-    EXPECT_FALSE(flatVector->getMin().has_value());
-    EXPECT_FALSE(flatVector->getMax().has_value());
-  }
-
-  template <typename T, typename P>
-  static void verify(
-      const std::shared_ptr<FlatVector<T>>& flatVector,
-      const std::vector<P>& data) {
-    EXPECT_EQ(data.size(), flatVector->size());
-    verifyStats(flatVector, data);
-    for (vector_size_t i = 0; i < data.size(); i++) {
-      EXPECT_FALSE(flatVector->isNullAt(i));
-      EXPECT_EQ(data[i], flatVector->valueAt(i).unscaledValue());
-    }
-  }
-
-  template <typename T, typename P>
-  static void verifyNullable(
-      const std::shared_ptr<FlatVector<T>>& flatVector,
-      const std::vector<std::optional<P>>& data) {
-    EXPECT_EQ(data.size(), flatVector->size());
-    verifyStats(flatVector, data);
-    for (vector_size_t i = 0; i < data.size(); i++) {
-      if (data[i] == std::nullopt) {
-        EXPECT_TRUE(flatVector->isNullAt(i));
-      } else {
-        EXPECT_FALSE(flatVector->isNullAt(i));
-        EXPECT_EQ(data[i].value(), flatVector->valueAt(i).unscaledValue());
-      }
-    }
-  }
-};
-
-TEST_F(VectorMakerTest, flatVectorDecimal) {
-  // int64_t values can be used to build both short and long decimal vectors.
-  {
-    std::vector<int64_t> data = {1000265, 35610, -314159, 7, 0};
-    {
-      auto flatVector = maker_.shortDecimalFlatVector(data, DECIMAL(10, 7));
-      DecimalVectorMakerTest::verify(flatVector, data);
-      EXPECT_FALSE(flatVector->mayHaveNulls());
-    }
-    {
-      auto flatVector = maker_.longDecimalFlatVector(data, DECIMAL(20, 7));
-      DecimalVectorMakerTest::verify(flatVector, data);
-      EXPECT_FALSE(flatVector->mayHaveNulls());
-    }
-  }
-  // int128_t values can be used to build long decimal vectors.
-  {
-    std::vector<int128_t> data = {1000265, 35610, -314159, 7, 0};
-    {
-      auto flatVector = maker_.longDecimalFlatVector(data, DECIMAL(20, 7));
-      DecimalVectorMakerTest::verify(flatVector, data);
-      EXPECT_FALSE(flatVector->mayHaveNulls());
-    }
-  }
-}
-
-TEST_F(VectorMakerTest, nullableFlatVectorDecimal) {
-  // int64_t values can be used to build both short and long decimal vectors.
-  {
-    std::vector<std::optional<int64_t>> data = {
-        1000265, 35610, -314159, 7, std::nullopt};
-    {
-      auto flatVector =
-          maker_.shortDecimalFlatVectorNullable(data, DECIMAL(10, 7));
-      DecimalVectorMakerTest::verifyNullable(flatVector, data);
-      EXPECT_TRUE(flatVector->mayHaveNulls());
-    }
-    {
-      auto flatVector =
-          maker_.longDecimalFlatVectorNullable(data, DECIMAL(20, 7));
-      DecimalVectorMakerTest::verifyNullable(flatVector, data);
-      EXPECT_TRUE(flatVector->mayHaveNulls());
-    }
-  }
-  // int128_t values can be used to build long decimal vectors.
-  {
-    std::vector<std::optional<int128_t>> data = {
-        1000265, 35610, -314159, 7, std::nullopt};
-    {
-      auto flatVector =
-          maker_.longDecimalFlatVectorNullable(data, DECIMAL(20, 7));
-      DecimalVectorMakerTest::verifyNullable(flatVector, data);
-      EXPECT_TRUE(flatVector->mayHaveNulls());
-    }
-  }
-}
-
 TEST_F(VectorMakerTest, arrayVector) {
   std::vector<std::vector<int64_t>> data = {
       {0, 0},
@@ -341,6 +241,37 @@ TEST_F(VectorMakerTest, arrayVector) {
       EXPECT_EQ(i, elementsVector->valueAt(idx++));
     }
   }
+}
+
+TEST_F(VectorMakerTest, arrayVectorString) {
+  auto arrayVector = maker_.arrayVector<std::string>({
+      {"a", "abc", "Somewhat long", "test"},
+      {"b", "Another long string"},
+  });
+
+  EXPECT_FALSE(arrayVector->mayHaveNulls());
+
+  // Validate array sizes and offsets.
+  EXPECT_EQ(2, arrayVector->size());
+
+  EXPECT_EQ(4, arrayVector->sizeAt(0));
+  EXPECT_EQ(2, arrayVector->sizeAt(1));
+
+  EXPECT_EQ(0, arrayVector->offsetAt(0));
+  EXPECT_EQ(4, arrayVector->offsetAt(1));
+
+  // Validate actual vector elements.
+  auto elementsVector = arrayVector->elements()->asFlatVector<StringView>();
+
+  EXPECT_FALSE(elementsVector->mayHaveNulls());
+
+  EXPECT_EQ("a", elementsVector->valueAt(0).str());
+  EXPECT_EQ("abc", elementsVector->valueAt(1).str());
+  EXPECT_EQ("Somewhat long", elementsVector->valueAt(2).str());
+  EXPECT_EQ("test", elementsVector->valueAt(3).str());
+
+  EXPECT_EQ("b", elementsVector->valueAt(4).str());
+  EXPECT_EQ("Another long string", elementsVector->valueAt(5).str());
 }
 
 TEST_F(VectorMakerTest, nullableArrayVector) {
@@ -600,6 +531,45 @@ TEST_F(VectorMakerTest, mapVectorUsingKeyValueVectorsNullsInvalidIndices) {
   // should fail.
   EXPECT_THROW(
       maker_.mapVector({0, 2, 4}, keys, values, {1}), VeloxRuntimeError);
+}
+
+TEST_F(VectorMakerTest, mapVectorStringString) {
+  auto mapVector = maker_.mapVector<std::string, std::string>({
+      {{"a", "1"}, {"b", "2"}},
+      {{"a", "This is a test"}, {"b", "This is another test"}, {"c", "test"}},
+  });
+
+  EXPECT_FALSE(mapVector->mayHaveNulls());
+
+  // Validate map sizes and offsets.
+  EXPECT_EQ(2, mapVector->size());
+
+  EXPECT_EQ(2, mapVector->sizeAt(0));
+  EXPECT_EQ(3, mapVector->sizeAt(1));
+
+  EXPECT_EQ(0, mapVector->offsetAt(0));
+  EXPECT_EQ(2, mapVector->offsetAt(1));
+
+  // Validate map keys and values.
+  auto keys = mapVector->mapKeys()->asFlatVector<StringView>();
+  auto values = mapVector->mapValues()->asFlatVector<StringView>();
+
+  EXPECT_FALSE(keys->mayHaveNulls());
+
+  EXPECT_EQ("a", keys->valueAt(0));
+  EXPECT_EQ("1", values->valueAt(0));
+
+  EXPECT_EQ("b", keys->valueAt(1));
+  EXPECT_EQ("2", values->valueAt(1));
+
+  EXPECT_EQ("a", keys->valueAt(2));
+  EXPECT_EQ("This is a test", values->valueAt(2));
+
+  EXPECT_EQ("b", keys->valueAt(3));
+  EXPECT_EQ("This is another test", values->valueAt(3));
+
+  EXPECT_EQ("c", keys->valueAt(4));
+  EXPECT_EQ("test", values->valueAt(4));
 }
 
 TEST_F(VectorMakerTest, biasVector) {

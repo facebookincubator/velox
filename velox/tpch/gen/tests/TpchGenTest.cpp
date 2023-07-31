@@ -31,8 +31,7 @@ using namespace facebook::velox::tpch;
 class TpchGenTestNationTest : public testing::Test {
  protected:
   void SetUp() override {
-    pool_ = memory::getProcessDefaultMemoryManager().getPool(
-        "TpchGenTestNationTest", memory::MemoryPool::Kind::kLeaf);
+    pool_ = memory::defaultMemoryManager().addLeafPool("TpchGenTestNationTest");
   }
 
   std::shared_ptr<memory::MemoryPool> pool_;
@@ -135,8 +134,7 @@ TEST_F(TpchGenTestNationTest, reproducible) {
 class TpchGenTestRegionTest : public testing::Test {
  protected:
   void SetUp() override {
-    pool_ = memory::getProcessDefaultMemoryManager().getPool(
-        "TpchGenTestRegionTest", memory::MemoryPool::Kind::kLeaf);
+    pool_ = memory::defaultMemoryManager().addLeafPool("TpchGenTestRegionTest");
   }
 
   std::shared_ptr<memory::MemoryPool> pool_;
@@ -198,8 +196,7 @@ TEST_F(TpchGenTestRegionTest, reproducible) {
 class TpchGenTestOrdersTest : public testing::Test {
  protected:
   void SetUp() override {
-    pool_ = memory::getProcessDefaultMemoryManager().getPool(
-        "TpchGenTestOrdersTest", memory::MemoryPool::Kind::kLeaf);
+    pool_ = memory::defaultMemoryManager().addLeafPool("TpchGenTestOrdersTest");
   }
 
   std::shared_ptr<memory::MemoryPool> pool_;
@@ -213,16 +210,16 @@ TEST_F(TpchGenTestOrdersTest, batches) {
 
   auto orderKey = rowVector1->childAt(0)->asFlatVector<int64_t>();
   auto orderTotalPrice = rowVector1->childAt(3)->asFlatVector<double>();
-  auto orderDate = rowVector1->childAt(4)->asFlatVector<Date>();
+  auto orderDate = rowVector1->childAt(4)->asFlatVector<int32_t>();
 
   EXPECT_EQ(1, orderKey->valueAt(0));
   EXPECT_EQ(173665.47, orderTotalPrice->valueAt(0));
-  EXPECT_EQ("1996-01-02", orderDate->valueAt(0).toString());
+  EXPECT_EQ("1996-01-02", DATE()->toString(orderDate->valueAt(0)));
   LOG(INFO) << rowVector1->toString(0);
 
   EXPECT_EQ(40'000, orderKey->valueAt(9999));
   EXPECT_EQ(87784.83, orderTotalPrice->valueAt(9999));
-  EXPECT_EQ("1995-01-30", orderDate->valueAt(9999).toString());
+  EXPECT_EQ("1995-01-30", DATE()->toString(orderDate->valueAt(9999)));
   LOG(INFO) << rowVector1->toString(9999);
 
   // Get second batch.
@@ -233,16 +230,16 @@ TEST_F(TpchGenTestOrdersTest, batches) {
 
   orderKey = rowVector2->childAt(0)->asFlatVector<int64_t>();
   orderTotalPrice = rowVector2->childAt(3)->asFlatVector<double>();
-  orderDate = rowVector2->childAt(4)->asFlatVector<Date>();
+  orderDate = rowVector2->childAt(4)->asFlatVector<int32_t>();
 
   EXPECT_EQ(40001, orderKey->valueAt(0));
   EXPECT_EQ(100589.02, orderTotalPrice->valueAt(0));
-  EXPECT_EQ("1995-02-25", orderDate->valueAt(0).toString());
+  EXPECT_EQ("1995-02-25", DATE()->toString(orderDate->valueAt(0)));
   LOG(INFO) << rowVector2->toString(0);
 
   EXPECT_EQ(80000, orderKey->valueAt(9999));
   EXPECT_EQ(142775.84, orderTotalPrice->valueAt(9999));
-  EXPECT_EQ("1995-12-15", orderDate->valueAt(9999).toString());
+  EXPECT_EQ("1995-12-15", DATE()->toString(orderDate->valueAt(9999)));
   LOG(INFO) << rowVector2->toString(9999);
 }
 
@@ -305,8 +302,8 @@ TEST_F(TpchGenTestOrdersTest, reproducible) {
 class TpchGenTestLineItemTest : public testing::Test {
  protected:
   void SetUp() override {
-    pool_ = memory::getProcessDefaultMemoryManager().getPool(
-        "TpchGenTestLineItemTest", memory::MemoryPool::Kind::kLeaf);
+    pool_ =
+        memory::defaultMemoryManager().addLeafPool("TpchGenTestLineItemTest");
   }
 
   std::shared_ptr<memory::MemoryPool> pool_;
@@ -323,15 +320,15 @@ TEST_F(TpchGenTestLineItemTest, batches) {
   EXPECT_LE(rowVector1->size(), ordersMaxSize * 7);
 
   auto orderKey = rowVector1->childAt(0)->asFlatVector<int64_t>();
-  auto shipDate = rowVector1->childAt(10)->asFlatVector<Date>();
+  auto shipDate = rowVector1->childAt(10)->asFlatVector<int32_t>();
 
   EXPECT_EQ(1, orderKey->valueAt(0));
-  EXPECT_EQ("1996-03-13", shipDate->valueAt(0).toString());
+  EXPECT_EQ("1996-03-13", DATE()->toString(shipDate->valueAt(0)));
   LOG(INFO) << rowVector1->toString(0);
 
   vector_size_t lastRow = rowVector1->size() - 1;
   EXPECT_EQ(388, orderKey->valueAt(lastRow));
-  EXPECT_EQ("1992-12-24", shipDate->valueAt(lastRow).toString());
+  EXPECT_EQ("1992-12-24", DATE()->toString(shipDate->valueAt(lastRow)));
   LOG(INFO) << rowVector1->toString(lastRow);
 
   // Get next batch.
@@ -342,15 +339,15 @@ TEST_F(TpchGenTestLineItemTest, batches) {
   EXPECT_LE(rowVector2->size(), ordersMaxSize * 7);
 
   orderKey = rowVector2->childAt(0)->asFlatVector<int64_t>();
-  shipDate = rowVector2->childAt(10)->asFlatVector<Date>();
+  shipDate = rowVector2->childAt(10)->asFlatVector<int32_t>();
 
   EXPECT_EQ(389, orderKey->valueAt(0));
-  EXPECT_EQ("1994-04-13", shipDate->valueAt(0).toString());
+  EXPECT_EQ("1994-04-13", DATE()->toString(shipDate->valueAt(0)));
   LOG(INFO) << rowVector2->toString(0);
 
   lastRow = rowVector2->size() - 1;
   EXPECT_EQ(800, orderKey->valueAt(lastRow));
-  EXPECT_EQ("1998-07-23", shipDate->valueAt(lastRow).toString());
+  EXPECT_EQ("1998-07-23", DATE()->toString(shipDate->valueAt(lastRow)));
   LOG(INFO) << rowVector2->toString(lastRow);
 }
 
@@ -417,8 +414,8 @@ TEST_F(TpchGenTestLineItemTest, reproducible) {
 class TpchGenTestSupplierTest : public testing::Test {
  protected:
   void SetUp() override {
-    pool_ = memory::getProcessDefaultMemoryManager().getPool(
-        "TpchGenTestSupplierTest", memory::MemoryPool::Kind::kLeaf);
+    pool_ =
+        memory::defaultMemoryManager().addLeafPool("TpchGenTestSupplierTest");
   }
 
   std::shared_ptr<memory::MemoryPool> pool_;
@@ -510,8 +507,7 @@ TEST_F(TpchGenTestSupplierTest, reproducible) {
 class TpchGenTestPartTest : public testing::Test {
  protected:
   void SetUp() override {
-    pool_ = memory::getProcessDefaultMemoryManager().getPool(
-        "TpchGenTestPartTest", memory::MemoryPool::Kind::kLeaf);
+    pool_ = memory::defaultMemoryManager().addLeafPool("TpchGenTestPartTest");
   }
 
   std::shared_ptr<memory::MemoryPool> pool_;
@@ -596,8 +592,8 @@ TEST_F(TpchGenTestPartTest, reproducible) {
 class TpchGenTestPartSuppTest : public testing::Test {
  protected:
   void SetUp() override {
-    pool_ = memory::getProcessDefaultMemoryManager().getPool(
-        "TpchGenTestPartSuppTest", memory::MemoryPool::Kind::kLeaf);
+    pool_ =
+        memory::defaultMemoryManager().addLeafPool("TpchGenTestPartSuppTest");
   }
 
   bool partSuppCheck(
@@ -741,8 +737,8 @@ TEST_F(TpchGenTestPartSuppTest, reproducible) {
 class TpchGenTestCustomerTest : public testing::Test {
  protected:
   void SetUp() override {
-    pool_ = memory::getProcessDefaultMemoryManager().getPool(
-        "TpchGenTestCustomerTest", memory::MemoryPool::Kind::kLeaf);
+    pool_ =
+        memory::defaultMemoryManager().addLeafPool("TpchGenTestCustomerTest");
   }
 
   std::shared_ptr<memory::MemoryPool> pool_;

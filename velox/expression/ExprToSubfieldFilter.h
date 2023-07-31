@@ -15,6 +15,7 @@
  */
 #pragma once
 
+#include "velox/core/ExpressionEvaluator.h"
 #include "velox/core/Expressions.h"
 #include "velox/core/ITypedExpr.h"
 #include "velox/type/Filter.h"
@@ -331,8 +332,48 @@ std::unique_ptr<common::MultiRange> orFilter(
       std::move(filters), nullAllowed, nanAllowed);
 }
 
+inline std::unique_ptr<common::HugeintRange> lessThanHugeint(
+    int128_t max,
+    bool nullAllowed = false) {
+  return std::make_unique<common::HugeintRange>(
+      std::numeric_limits<int128_t>::min(), max - 1, nullAllowed);
+}
+
+inline std::unique_ptr<common::HugeintRange> lessThanOrEqualHugeint(
+    int128_t max,
+    bool nullAllowed = false) {
+  return std::make_unique<common::HugeintRange>(
+      std::numeric_limits<int128_t>::min(), max, nullAllowed);
+}
+
+inline std::unique_ptr<common::HugeintRange> greaterThanHugeint(
+    int128_t min,
+    bool nullAllowed = false) {
+  return std::make_unique<common::HugeintRange>(
+      min + 1, std::numeric_limits<int128_t>::max(), nullAllowed);
+}
+
+inline std::unique_ptr<common::HugeintRange> greaterThanOrEqualHugeint(
+    int128_t min,
+    bool nullAllowed = false) {
+  return std::make_unique<common::HugeintRange>(
+      min, std::numeric_limits<int128_t>::max(), nullAllowed);
+}
+
+inline std::unique_ptr<common::HugeintRange> equalHugeint(
+    int128_t value,
+    bool nullAllowed = false) {
+  return std::make_unique<common::HugeintRange>(value, value, nullAllowed);
+}
+
+inline std::unique_ptr<common::HugeintRange>
+betweenHugeint(int128_t min, int128_t max, bool nullAllowed = false) {
+  return std::make_unique<common::HugeintRange>(min, max, nullAllowed);
+}
+
 std::pair<common::Subfield, std::unique_ptr<common::Filter>> toSubfieldFilter(
-    const core::TypedExprPtr& expr);
+    const core::TypedExprPtr& expr,
+    core::ExpressionEvaluator*);
 
 /// Convert a leaf call expression (no conjunction like AND/OR) to subfield and
 /// filter.  Return nullptr if not supported for pushdown.  This is needed
@@ -341,6 +382,8 @@ std::pair<common::Subfield, std::unique_ptr<common::Filter>> toSubfieldFilter(
 /// execution.
 std::unique_ptr<common::Filter> leafCallToSubfieldFilter(
     const core::CallTypedExpr&,
-    common::Subfield&);
+    common::Subfield&,
+    core::ExpressionEvaluator*,
+    bool negated = false);
 
 } // namespace facebook::velox::exec

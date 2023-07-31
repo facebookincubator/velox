@@ -199,7 +199,11 @@ ValueWriter& FlatMapColumnWriter<K>::getValueWriter(
   }
 
   if (valueWriters_.size() >= maxKeyCount_) {
-    DWIO_RAISE("Too many map keys requested. Allowed: ", maxKeyCount_);
+    DWIO_RAISE(fmt::format(
+        "Too many map keys requested in (node {}, column {}). Allowed: {}",
+        id_,
+        type_.column,
+        maxKeyCount_));
   }
 
   auto keyInfo = getKeyInfo(key);
@@ -373,9 +377,13 @@ uint64_t FlatMapColumnWriter<K>::writeMap(
 
   // Lambda that iterates keys of a map and records the offsets to write to
   // particular value node.
-  auto processMap = [&](uint64_t offsetIndex, const auto& keysVector) {
+  auto processMap = [&](const MapVector* mapSlice,
+                        const uint64_t offsetIndex,
+                        const auto& keysVector) {
     auto begin = offsets[offsetIndex];
     auto end = begin + lengths[offsetIndex];
+    DWIO_ENSURE_LE(end, mapSlice->mapKeys()->size());
+    DWIO_ENSURE_LE(end, mapSlice->mapValues()->size());
 
     for (auto i = begin; i < end; ++i) {
       auto key = keysVector.valueAt(i);
@@ -402,16 +410,18 @@ uint64_t FlatMapColumnWriter<K>::writeMap(
     if (keysFlat) {
       // Keys are flat
       Flat<KeyType> keysVector{mapKeys};
-      return iterateMaps(
-          ranges, map, [&](auto offset) { processMap(offset, keysVector); });
+      return iterateMaps(ranges, map, [&](auto offset) {
+        processMap(mapSlice, offset, keysVector);
+      });
     } else {
       // Keys are encoded. Decode.
       iterateMaps(ranges, map, computeKeyRanges);
       auto localDecodedKeys = decode(mapKeys, keyRanges);
       auto& decodedKeys = localDecodedKeys.get();
       Decoded<KeyType> keysVector{decodedKeys};
-      return iterateMaps(
-          ranges, map, [&](auto offset) { processMap(offset, keysVector); });
+      return iterateMaps(ranges, map, [&](auto offset) {
+        processMap(mapSlice, offset, keysVector);
+      });
     }
   };
 

@@ -15,6 +15,7 @@
  */
 
 #include "velox/connectors/hive/HiveConfig.h"
+#include "velox/core/Config.h"
 
 #include <boost/algorithm/string.hpp>
 
@@ -40,16 +41,123 @@ stringToInsertExistingPartitionsBehavior(const std::string& strValue) {
 // static
 HiveConfig::InsertExistingPartitionsBehavior
 HiveConfig::insertExistingPartitionsBehavior(const Config* config) {
-  auto strBehavior =
+  const auto behavior =
       config->get<std::string>(kInsertExistingPartitionsBehavior);
-  return strBehavior.has_value()
-      ? stringToInsertExistingPartitionsBehavior(strBehavior.value())
+  return behavior.has_value()
+      ? stringToInsertExistingPartitionsBehavior(behavior.value())
       : InsertExistingPartitionsBehavior::kError;
+}
+
+// static
+std::string HiveConfig::insertExistingPartitionsBehaviorString(
+    InsertExistingPartitionsBehavior behavior) {
+  switch (behavior) {
+    case InsertExistingPartitionsBehavior::kError:
+      return "ERROR";
+    case InsertExistingPartitionsBehavior::kOverwrite:
+      return "OVERWRITE";
+    default:
+      return fmt::format("UNKNOWN BEHAVIOR {}", static_cast<int>(behavior));
+  }
 }
 
 // static
 uint32_t HiveConfig::maxPartitionsPerWriters(const Config* config) {
   return config->get<uint32_t>(kMaxPartitionsPerWriters, 100);
+}
+
+// static
+bool HiveConfig::immutablePartitions(const Config* config) {
+  return config->get<bool>(kImmutablePartitions, false);
+}
+
+// static
+bool HiveConfig::s3UseVirtualAddressing(const Config* config) {
+  return !config->get(kS3PathStyleAccess, false);
+}
+
+// static
+std::string HiveConfig::s3GetLogLevel(const Config* config) {
+  return config->get(kS3LogLevel, std::string("FATAL"));
+}
+
+// static
+bool HiveConfig::s3UseSSL(const Config* config) {
+  return config->get(kS3SSLEnabled, true);
+}
+
+// static
+bool HiveConfig::s3UseInstanceCredentials(const Config* config) {
+  return config->get(kS3UseInstanceCredentials, false);
+}
+
+// static
+std::string HiveConfig::s3Endpoint(const Config* config) {
+  return config->get(kS3Endpoint, std::string(""));
+}
+
+// static
+std::optional<std::string> HiveConfig::s3AccessKey(const Config* config) {
+  if (config->isValueExists(kS3AwsAccessKey)) {
+    return config->get(kS3AwsAccessKey).value();
+  }
+  return {};
+}
+
+// static
+std::optional<std::string> HiveConfig::s3SecretKey(const Config* config) {
+  if (config->isValueExists(kS3AwsSecretKey)) {
+    return config->get(kS3AwsSecretKey).value();
+  }
+  return {};
+}
+
+// static
+std::optional<std::string> HiveConfig::s3IAMRole(const Config* config) {
+  if (config->isValueExists(kS3IamRole)) {
+    return config->get(kS3IamRole).value();
+  }
+  return {};
+}
+
+// static
+std::string HiveConfig::s3IAMRoleSessionName(const Config* config) {
+  return config->get(kS3IamRoleSessionName, std::string("velox-session"));
+}
+
+// static
+std::string HiveConfig::gcsEndpoint(const Config* config) {
+  return config->get<std::string>(kGCSEndpoint, std::string(""));
+}
+
+// static
+std::string HiveConfig::gcsScheme(const Config* config) {
+  return config->get<std::string>(kGCSScheme, std::string(""));
+}
+
+// static
+std::string HiveConfig::gcsCredentials(const Config* config) {
+  return config->get<std::string>(kGCSCredentials, std::string(""));
+}
+
+// static.
+bool HiveConfig::isFileColumnNamesReadAsLowerCase(const Config* config) {
+  return config->get<bool>(kFileColumnNamesReadAsLowerCase, false);
+}
+
+// static.
+int64_t HiveConfig::maxCoalescedBytes(const Config* config) {
+  return config->get<int64_t>(kMaxCoalescedBytes, 128 << 20);
+}
+
+// static.
+int32_t HiveConfig::maxCoalescedDistanceBytes(const Config* config) {
+  return config->get<int32_t>(kMaxCoalescedDistanceBytes, 512 << 10);
+}
+
+// static.
+int32_t HiveConfig::numCacheFileHandles(const Config* config) {
+  return config->get<int32_t>(kNumCacheFileHandles, 20'000);
 }
 
 } // namespace facebook::velox::connector::hive

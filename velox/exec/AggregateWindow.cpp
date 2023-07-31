@@ -35,9 +35,13 @@ class AggregateWindowFunction : public exec::WindowFunction {
       const std::string& name,
       const std::vector<exec::WindowFunctionArg>& args,
       const TypePtr& resultType,
+      bool ignoreNulls,
       velox::memory::MemoryPool* pool,
-      HashStringAllocator* stringAllocator)
+      HashStringAllocator* stringAllocator,
+      const core::QueryConfig& config)
       : WindowFunction(resultType, pool, stringAllocator) {
+    VELOX_USER_CHECK(
+        !ignoreNulls, "Aggregate window functions do not support IGNORE NULLS");
     argTypes_.reserve(args.size());
     argIndices_.reserve(args.size());
     argVectors_.reserve(args.size());
@@ -56,7 +60,11 @@ class AggregateWindowFunction : public exec::WindowFunction {
     // function usage only requires single group aggregation for calculating
     // the function value for each row.
     aggregate_ = exec::Aggregate::create(
-        name, core::AggregationNode::Step::kSingle, argTypes_, resultType);
+        name,
+        core::AggregationNode::Step::kSingle,
+        argTypes_,
+        resultType,
+        config);
     aggregate_->setAllocator(stringAllocator_);
 
     // Aggregate initialization.
@@ -300,7 +308,7 @@ class AggregateWindowFunction : public exec::WindowFunction {
     });
 
     // Set null values for empty (non valid) frames in the output block.
-    setEmptyFramesResults(validRows, resultOffset, result);
+    setNullEmptyFramesResults(validRows, resultOffset, result);
   }
 
   void simpleAggregation(
@@ -333,22 +341,9 @@ class AggregateWindowFunction : public exec::WindowFunction {
     });
 
     // Set null values for empty (non valid) frames in the output block.
-    setEmptyFramesResults(validRows, resultOffset, result);
+    setNullEmptyFramesResults(validRows, resultOffset, result);
   }
 
-  void setEmptyFramesResults(
-      const SelectivityVector& validRows,
-      vector_size_t resultOffset,
-      const VectorPtr& result) {
-    if (validRows.isAllSelected()) {
-      return;
-    }
-    // Rows with empty (not-valid) frames have nullptr in the result.
-    invalidRows_.resizeFill(validRows.size(), true);
-    invalidRows_.deselect(validRows);
-    invalidRows_.applyToSelected(
-        [&](auto i) { result->setNull(resultOffset + i, true); });
-  }
   // Aggregate function object required for this window function evaluation.
   std::unique_ptr<exec::Aggregate> aggregate_;
 
@@ -379,9 +374,6 @@ class AggregateWindowFunction : public exec::WindowFunction {
   // Stores metadata about the previous output block of the partition
   // to optimize aggregate computation and reading argument vectors.
   std::optional<FrameMetadata> previousFrameMetadata_;
-
-  // Used for setting null for empty frames.
-  SelectivityVector invalidRows_;
 };
 
 } // namespace
@@ -402,11 +394,19 @@ void registerAggregateWindowFunction(const std::string& name) {
         [name](
             const std::vector<exec::WindowFunctionArg>& args,
             const TypePtr& resultType,
+            bool ignoreNulls,
             velox::memory::MemoryPool* pool,
-            HashStringAllocator* stringAllocator)
+            HashStringAllocator* stringAllocator,
+            const core::QueryConfig& config)
             -> std::unique_ptr<exec::WindowFunction> {
           return std::make_unique<AggregateWindowFunction>(
-              name, args, resultType, pool, stringAllocator);
+              name,
+              args,
+              resultType,
+              ignoreNulls,
+              pool,
+              stringAllocator,
+              config);
         });
   }
 }

@@ -21,8 +21,48 @@
 
 namespace facebook::velox::exec {
 
+/// Defines table writer output related config properties that are shared
+/// between TableWriter and TableWriteMerger.
+///
+/// TODO: the table write output processing is Prestissimo specific. Consider
+/// move these part logic to Prestissimo and pass to Velox through a customized
+/// output processing callback.
+class TableWriteTraits {
+ public:
+  /// Defines the column names/types in table write output.
+  static std::string rowCountColumnName();
+  static std::string fragmentColumnName();
+  static std::string contextColumnName();
+
+  static const TypePtr& rowCountColumnType();
+  static const TypePtr& fragmentColumnType();
+  static const TypePtr& contextColumnType();
+
+  /// Defines the column channels in table write output.
+  static constexpr int32_t kRowCountChannel = 0;
+  static constexpr int32_t kFragmentChannel = 1;
+  static constexpr int32_t kContextChannel = 2;
+  static constexpr int32_t kStatsChannel = 3;
+
+  /// Defines the names of metadata in commit context in table writer output.
+  static constexpr std::string_view kLifeSpanContextKey = "lifespan";
+  static constexpr std::string_view kTaskIdContextKey = "taskId";
+  static constexpr std::string_view kCommitStrategyContextKey =
+      "pageSinkCommitStrategy";
+  static constexpr std::string_view klastPageContextKey = "lastPage";
+
+  /// TODO: add column stats support.
+  static const RowTypePtr& outputType();
+
+  /// Returns the parsed commit context from table writer 'output'.
+  static folly::dynamic getTableCommitContext(const RowVectorPtr& output);
+
+  /// Returns the sum of row counts from table writer 'output'.
+  static int64_t getRowCount(const RowVectorPtr& output);
+};
+
 /**
- * The class implements a simple table writer VELOX operator
+ * Implements a simple table writer operator.
  */
 class TableWriter : public Operator {
  public:
@@ -64,18 +104,22 @@ class TableWriter : public Operator {
  private:
   void createDataSink();
 
-  const DriverCtx* driverCtx_;
+  // Updates physicalWrittenBytes in OperatorStats with current written bytes.
+  void updateWrittenBytes();
+
+  const DriverCtx* const driverCtx_;
+  memory::MemoryPool* const connectorPool_;
   const std::shared_ptr<connector::ConnectorInsertTableHandle>
       insertTableHandle_;
   const connector::CommitStrategy commitStrategy_;
   std::shared_ptr<connector::Connector> connector_;
   std::shared_ptr<connector::ConnectorQueryCtx> connectorQueryCtx_;
-  std::shared_ptr<connector::DataSink> dataSink_;
+  std::unique_ptr<connector::DataSink> dataSink_;
   std::vector<column_index_t> inputMapping_;
   std::shared_ptr<const RowType> mappedType_;
 
-  bool finished_ = false;
-  bool closed_ = false;
-  vector_size_t numWrittenRows_ = 0;
+  bool finished_{false};
+  bool closed_{false};
+  vector_size_t numWrittenRows_{0};
 };
 } // namespace facebook::velox::exec

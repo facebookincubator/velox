@@ -107,17 +107,26 @@ std::function<BufferPtr()>
 StripeStreamsBase::getIntDictionaryInitializerForNode(
     const EncodingKey& ek,
     uint64_t elementWidth,
+    const StreamLabels& streamLabels,
     uint64_t dictionaryWidth) {
   // Create local copy for manipulation
   EncodingKey localEk{ek};
   auto dictData = localEk.forKind(proto::Stream_Kind_DICTIONARY_DATA);
-  auto dataStream = getStream(dictData, false);
+  auto dataStream = getStream(dictData, streamLabels.label(), false);
   auto dictionarySize = getEncoding(localEk).dictionarysize();
   // Try fetching shared dictionary streams instead.
   if (!dataStream) {
+    // Get the label of the top level column, since this dictionary is shared by
+    // the entire column
+    auto label = streamLabels.label();
+    // Shouldn't be empty, but just in case
+    if (!label.empty()) {
+      // Ex: "/5/1759392083" -> "/5"
+      label = label.substr(0, label.find('/', 1));
+    }
     localEk = EncodingKey(ek.node, 0);
     dictData = localEk.forKind(proto::Stream_Kind_DICTIONARY_DATA);
-    dataStream = getStream(dictData, false);
+    dataStream = getStream(dictData, label, false);
   }
   bool dictVInts = getUseVInts(dictData);
   DWIO_ENSURE(dataStream.get());
@@ -214,7 +223,9 @@ void StripeStreamsImpl::loadStreams() {
 }
 
 std::unique_ptr<dwio::common::SeekableInputStream>
-StripeStreamsImpl::getCompressedStream(const DwrfStreamIdentifier& si) const {
+StripeStreamsImpl::getCompressedStream(
+    const DwrfStreamIdentifier& si,
+    std::string_view label) const {
   const auto& info = getStreamInfo(si);
 
   std::unique_ptr<dwio::common::SeekableInputStream> streamRead;
@@ -224,7 +235,7 @@ StripeStreamsImpl::getCompressedStream(const DwrfStreamIdentifier& si) const {
 
   if (!streamRead) {
     streamRead = reader_.getStripeInput().enqueue(
-        {info.getOffset() + stripeStart_, info.getLength()}, &si);
+        {info.getOffset() + stripeStart_, info.getLength(), label}, &si);
   }
 
   DWIO_ENSURE(streamRead != nullptr, " Stream can't be read", si.toString());
@@ -261,6 +272,7 @@ StripeStreamsImpl::getStreamIdentifiers() const {
 
 std::unique_ptr<dwio::common::SeekableInputStream> StripeStreamsImpl::getStream(
     const DwrfStreamIdentifier& si,
+    std::string_view label,
     bool /* throwIfNotFound*/) const {
   // if not found, return an empty {}
   const auto& info = getStreamInfo(si, false /* throwIfNotFound */);
@@ -275,7 +287,7 @@ std::unique_ptr<dwio::common::SeekableInputStream> StripeStreamsImpl::getStream(
 
   if (!streamRead) {
     streamRead = reader_.getStripeInput().enqueue(
-        {info.getOffset() + stripeStart_, info.getLength()}, &si);
+        {info.getOffset() + stripeStart_, info.getLength(), label}, &si);
   }
 
   if (!streamRead) {

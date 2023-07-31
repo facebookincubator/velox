@@ -52,8 +52,6 @@ Window::Window(
           operatorId,
           windowNode->id(),
           "Window"),
-      outputBatchSizeInBytes_(
-          driverCtx->queryConfig().preferredOutputBatchSize()),
       numInputColumns_(windowNode->sources()[0]->outputType()->size()),
       data_(std::make_unique<RowContainer>(
           windowNode->sources()[0]->outputType()->children(),
@@ -84,12 +82,26 @@ Window::Window(
   windowPartition_ =
       std::make_unique<WindowPartition>(inputColumns, inputType->children());
 
-  createWindowFunctions(windowNode, inputType);
+  createWindowFunctions(windowNode, inputType, driverCtx->queryConfig());
 }
 
 Window::WindowFrame Window::createWindowFrame(
     core::WindowNode::Frame frame,
     const RowTypePtr& inputType) {
+  if (frame.type == core::WindowNode::WindowType::kRows) {
+    auto frameBoundCheck = [&](const core::TypedExprPtr& frame) -> void {
+      if (frame == nullptr) {
+        return;
+      }
+
+      VELOX_USER_CHECK(
+          frame->type() == INTEGER() || frame->type() == BIGINT(),
+          "k frame bound must be INTEGER or BIGINT type");
+    };
+    frameBoundCheck(frame.startValue);
+    frameBoundCheck(frame.endValue);
+  }
+
   auto createFrameChannelArg =
       [&](const core::TypedExprPtr& frame) -> std::optional<FrameChannelArg> {
     // frame is nullptr for non (kPreceding or kFollowing) frames.
@@ -101,14 +113,18 @@ Window::WindowFrame Window::createWindowFrame(
       auto constant =
           std::dynamic_pointer_cast<const core::ConstantTypedExpr>(frame)
               ->value();
-      VELOX_CHECK(!constant.isNull(), "k in frame bounds must not be null");
+      VELOX_CHECK(!constant.isNull(), "Window frame offset must not be null");
+      auto value = VariantConverter::convert(constant, TypeKind::BIGINT)
+                       .value<int64_t>();
       VELOX_USER_CHECK_GE(
-          constant.value<int64_t>(), 1, "k in frame bounds must be at least 1");
-      return std::make_optional(FrameChannelArg{
-          kConstantChannel, nullptr, constant.value<int64_t>()});
+          value, 0, "Window frame {} offset must not be negative", value);
+      return std::make_optional(
+          FrameChannelArg{kConstantChannel, nullptr, value});
     } else {
       return std::make_optional(FrameChannelArg{
-          frameChannel, BaseVector::create(BIGINT(), 0, pool()), std::nullopt});
+          frameChannel,
+          BaseVector::create(frame->type(), 0, pool()),
+          std::nullopt});
     }
   };
 
@@ -122,7 +138,8 @@ Window::WindowFrame Window::createWindowFrame(
 
 void Window::createWindowFunctions(
     const std::shared_ptr<const core::WindowNode>& windowNode,
-    const RowTypePtr& inputType) {
+    const RowTypePtr& inputType,
+    const core::QueryConfig& config) {
   for (const auto& windowNodeFunction : windowNode->windowFunctions()) {
     std::vector<WindowFunctionArg> functionArgs;
     functionArgs.reserve(windowNodeFunction.functionCall->inputs().size());
@@ -142,8 +159,10 @@ void Window::createWindowFunctions(
         windowNodeFunction.functionCall->name(),
         functionArgs,
         windowNodeFunction.functionCall->type(),
+        windowNodeFunction.ignoreNulls,
         operatorCtx_->pool(),
-        &stringAllocator_));
+        &stringAllocator_,
+        config));
 
     windowFrames_.push_back(
         createWindowFrame(windowNodeFunction.frame, inputType));
@@ -151,10 +170,8 @@ void Window::createWindowFunctions(
 }
 
 void Window::addInput(RowVectorPtr input) {
-  inputRows_.resize(input->size());
-
   for (auto col = 0; col < input->childrenSize(); ++col) {
-    decodedInputVectors_[col].decode(*input->childAt(col), inputRows_);
+    decodedInputVectors_[col].decode(*input->childAt(col));
   }
 
   // Add all the rows into the RowContainer.
@@ -165,7 +182,7 @@ void Window::addInput(RowVectorPtr input) {
       data_->store(decodedInputVectors_[col], row, newRow, col);
     }
   }
-  numRows_ += inputRows_.size();
+  numRows_ += input->size();
 }
 
 inline bool Window::compareRowsWithKeys(
@@ -190,7 +207,7 @@ inline bool Window::compareRowsWithKeys(
 void Window::createPeerAndFrameBuffers() {
   // TODO: This computation needs to be revised. It only takes into account
   // the input columns size. We need to also account for the output columns.
-  numRowsPerOutput_ = data_->estimatedNumRowsPerBatch(outputBatchSizeInBytes_);
+  numRowsPerOutput_ = outputBatchRows(data_->estimateRowSize());
 
   peerStartBuffer_ = AlignedBuffer::allocate<vector_size_t>(
       numRowsPerOutput_, operatorCtx_->pool());
@@ -289,6 +306,38 @@ void Window::callResetPartition(vector_size_t partitionNumber) {
   }
 }
 
+namespace {
+
+template <typename T>
+void updateKRowsOffsetsColumn(
+    bool isKPreceding,
+    const VectorPtr& value,
+    vector_size_t firstPartitionRow,
+    vector_size_t startRow,
+    vector_size_t numRows,
+    vector_size_t* rawFrameBounds) {
+  auto offsets = value->values()->as<T>();
+  for (auto i = 0; i < numRows; i++) {
+    VELOX_USER_CHECK(
+        !value->isNullAt(i), "Window frame offset must not be null");
+    VELOX_USER_CHECK_GE(
+        offsets[i],
+        0,
+        "Window frame {} offset must not be negative",
+        offsets[i]);
+  }
+
+  // Preceding involves subtracting from the current position, while following
+  // moves ahead.
+  int precedingFactor = isKPreceding ? -1 : 1;
+  for (auto i = 0; i < numRows; i++) {
+    rawFrameBounds[i] = (startRow + i) +
+        vector_size_t(precedingFactor * offsets[i]) - firstPartitionRow;
+  }
+}
+
+}; // namespace
+
 void Window::updateKRowsFrameBounds(
     bool isKPreceding,
     const FrameChannelArg& frameArg,
@@ -299,27 +348,28 @@ void Window::updateKRowsFrameBounds(
 
   if (frameArg.index == kConstantChannel) {
     auto constantOffset = frameArg.constant.value();
-    std::iota(
-        rawFrameBounds,
-        rawFrameBounds + numRows,
-        startRow + (isKPreceding ? -constantOffset : constantOffset) -
-            firstPartitionRow);
+    auto startValue = startRow +
+        (isKPreceding ? -constantOffset : constantOffset) - firstPartitionRow;
+    std::iota(rawFrameBounds, rawFrameBounds + numRows, startValue);
   } else {
     windowPartition_->extractColumn(
         frameArg.index, partitionOffset_, numRows, 0, frameArg.value);
-    auto offsets = frameArg.value->values()->as<int64_t>();
-    for (auto i = 0; i < numRows; i++) {
-      VELOX_USER_CHECK(
-          !frameArg.value->isNullAt(i), "k in frame bounds cannot be null");
-      VELOX_USER_CHECK_GE(
-          offsets[i], 1, "k in frame bounds must be at least 1");
-    }
-
-    for (auto i = 0; i < numRows; i++) {
-      rawFrameBounds[i] = (startRow + i) +
-          (isKPreceding ? -vector_size_t(offsets[i])
-                        : vector_size_t(offsets[i])) -
-          firstPartitionRow;
+    if (frameArg.value->typeKind() == TypeKind::INTEGER) {
+      updateKRowsOffsetsColumn<int32_t>(
+          isKPreceding,
+          frameArg.value,
+          firstPartitionRow,
+          startRow,
+          numRows,
+          rawFrameBounds);
+    } else {
+      updateKRowsOffsetsColumn<int64_t>(
+          isKPreceding,
+          frameArg.value,
+          firstPartitionRow,
+          startRow,
+          numRows,
+          rawFrameBounds);
     }
   }
 }

@@ -60,6 +60,21 @@ class MmapAllocator : public MemoryAllocator {
     /// Used to determine MmapArena capacity. The ratio represents system memory
     /// capacity to single MmapArena capacity ratio.
     int32_t mmapArenaCapacityRatio = 10;
+
+    /// If not zero, reserve 'smallAllocationReservePct'% of space from
+    /// 'capacity' for ad hoc small allocations. And those allocations are
+    /// delegated to std::malloc.
+    ///
+    /// NOTE: if 'maxMallocBytes' is 0, this value will be disregarded.
+    uint32_t smallAllocationReservePct = 0;
+
+    /// The allocation threshold less than which an allocation is delegated to
+    /// std::malloc().
+    ///
+    /// NOTE: if it is zero, then we don't delegate any allocation std::malloc,
+    /// and 'smallAllocationReservePct' will be automatically set to 0
+    /// disregarding any passed in value.
+    int32_t maxMallocBytes = 3072;
   };
 
   explicit MmapAllocator(const Options& options);
@@ -70,34 +85,29 @@ class MmapAllocator : public MemoryAllocator {
     return kind_;
   }
 
-  bool allocateNonContiguous(
-      MachinePageCount numPages,
-      Allocation& out,
-      ReservationCallback reservationCB = nullptr,
-      MachinePageCount minSizeClass = 0) override;
+  void registerCache(const std::shared_ptr<Cache>& cache) override {
+    VELOX_CHECK_NULL(cache_);
+    VELOX_CHECK_NOT_NULL(cache);
+    VELOX_CHECK(cache->allocator() == this);
+    cache_ = cache;
+  }
+
+  Cache* cache() const override {
+    return cache_.get();
+  }
+
+  size_t capacity() const override {
+    return AllocationTraits::pageBytes(capacity_);
+  }
+
+  bool growContiguousWithoutRetry(
+      MachinePageCount increment,
+      ContiguousAllocation& allocation,
+      ReservationCallback reservationCB = nullptr) override;
+
+  void freeContiguous(ContiguousAllocation& allocation) override;
 
   int64_t freeNonContiguous(Allocation& allocation) override;
-
-  bool allocateContiguous(
-      MachinePageCount numPages,
-      Allocation* collateral,
-      ContiguousAllocation& allocation,
-      ReservationCallback reservationCB = nullptr) override {
-    VELOX_CHECK_GT(numPages, 0);
-    bool result;
-    stats_.recordAllocate(numPages * AllocationTraits::kPageSize, 1, [&]() {
-      result = allocateContiguousImpl(
-          numPages, collateral, allocation, reservationCB);
-    });
-    return result;
-  }
-
-  void freeContiguous(ContiguousAllocation& allocation) override {
-    stats_.recordFree(
-        allocation.size(), [&]() { freeContiguousImpl(allocation); });
-  }
-
-  void* allocateBytes(uint64_t bytes, uint16_t alignment) override;
 
   void freeBytes(void* p, uint64_t bytes) noexcept override;
 
@@ -109,8 +119,16 @@ class MmapAllocator : public MemoryAllocator {
   /// the data in the bitmaps in the size classes.
   bool checkConsistency() const override;
 
-  MachinePageCount capacity() const {
-    return capacity_;
+  int32_t maxMallocBytes() const {
+    return maxMallocBytes_;
+  }
+
+  size_t mallocReservedBytes() const {
+    return mallocReservedBytes_;
+  }
+
+  size_t totalUsedBytes() const override {
+    return numMallocBytes_ + AllocationTraits::pageBytes(numAllocated_);
   }
 
   MachinePageCount numAllocated() const override {
@@ -123,6 +141,10 @@ class MmapAllocator : public MemoryAllocator {
 
   MachinePageCount numExternalMapped() const {
     return numExternalMapped_;
+  }
+
+  uint64_t numMallocBytes() const {
+    return numMallocBytes_;
   }
 
   Stats stats() const override {
@@ -290,13 +312,42 @@ class MmapAllocator : public MemoryAllocator {
     uint64_t numAdvisedAway_ = 0;
   };
 
+  bool allocateNonContiguousWithoutRetry(
+      MachinePageCount numPages,
+      Allocation& out,
+      ReservationCallback reservationCB = nullptr,
+      MachinePageCount minSizeClass = 0) override;
+
+  bool allocateContiguousWithoutRetry(
+      MachinePageCount numPages,
+      Allocation* collateral,
+      ContiguousAllocation& allocation,
+      ReservationCallback reservationCB = nullptr,
+      MachinePageCount maxPages = 0) override;
+
   bool allocateContiguousImpl(
       MachinePageCount numPages,
       Allocation* collateral,
       ContiguousAllocation& allocation,
-      ReservationCallback reservationCB);
+      ReservationCallback reservationCB,
+      MachinePageCount maxPages);
 
   void freeContiguousImpl(ContiguousAllocation& allocation);
+
+  // Allocates 'bytes' contiguous bytes and returns the pointer to the first
+  // byte. If 'bytes' is less than 'maxMallocBytes_', delegates the allocation
+  // to malloc. If the size is above that and below the largest size classes'
+  // size, allocates one element of the next size classes' size. If 'size' is
+  // greater than the largest size classes' size, calls allocateContiguous().
+  // Returns nullptr if there is no space. The amount to allocate is subject to
+  // the size limit of 'this'. This function is not virtual but calls the
+  // virtual functions allocateNonContiguous and allocateContiguous, which can
+  // track sizes and enforce caps etc. If 'alignment' is not kMinAlignment,
+  // then 'bytes' must be a multiple of 'alignment'.
+  //
+  // NOTE: 'alignment' must be power of two and in range of [kMinAlignment,
+  // kMaxAlignment].
+  void* allocateBytesWithoutRetry(uint64_t bytes, uint16_t alignment) override;
 
   // Ensures that there are at least 'newMappedNeeded' pages that are
   // not backing any existing allocation. If capacity_ - numMapped_ <
@@ -317,6 +368,8 @@ class MmapAllocator : public MemoryAllocator {
   // advises them away. Returns the number of pages advised away.
   MachinePageCount adviseAway(MachinePageCount target);
 
+  bool useMalloc(uint64_t bytes);
+
   const Kind kind_;
 
   // If set true, allocations larger than the largest size class size will be
@@ -334,7 +387,24 @@ class MmapAllocator : public MemoryAllocator {
   // 'numAllocated_' and 'numMapped_'. This counter is informational
   // only.
   std::atomic<MachinePageCount> numExternalMapped_{0};
-  MachinePageCount capacity_ = 0;
+
+  // Allocations smaller than 'maxMallocBytes' will be delegated to
+  // std::malloc().
+  //
+  // NOTE: if it is zero, then there is no delegation to std::malloc.
+  const int32_t maxMallocBytes_ = 0;
+
+  // Reserved capacity for small allocations made by MmapAllocator through
+  // std::malloc().
+  //
+  // TODO: we don't put limit on the ad hoc small memory allocation usage for
+  // now. Might consider to add later after analyzing memory metrics in prod if
+  // required.
+  const size_t mallocReservedBytes_ = 0;
+
+  // Capacity for allocations made by MmapAllocator excluding the ones delegated
+  // to std::malloc().
+  const MachinePageCount capacity_ = 0;
 
   std::vector<std::unique_ptr<SizeClass>> sizeClasses_;
 
@@ -342,13 +412,14 @@ class MmapAllocator : public MemoryAllocator {
   std::atomic<uint64_t> numAllocations_ = 0;
   std::atomic<uint64_t> numAllocatedPages_ = 0;
   std::atomic<uint64_t> numAdvisedPages_ = 0;
+  std::atomic<uint64_t> numMallocBytes_ = 0;
 
   // Allocations that are larger than largest size classes will be delegated to
   // ManagedMmapArenas, to avoid calling mmap on every allocation.
   std::mutex arenaMutex_;
   std::unique_ptr<ManagedMmapArenas> managedArenas_;
 
-  Stats stats_;
+  std::shared_ptr<Cache> cache_;
 };
 
 } // namespace facebook::velox::memory

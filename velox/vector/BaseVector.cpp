@@ -137,12 +137,17 @@ VectorPtr BaseVector::wrapInDictionary(
     if (size == vector->size()) {
       return vector;
     }
-    return BaseVector::wrapInConstant(size, 0, vector);
+    return BaseVector::wrapInConstant(size, 0, std::move(vector));
   }
 
   auto kind = vector->typeKind();
   return VELOX_DYNAMIC_TYPE_DISPATCH_ALL(
-      addDictionary, kind, nulls, indices, size, std::move(vector));
+      addDictionary,
+      kind,
+      std::move(nulls),
+      std::move(indices),
+      size,
+      std::move(vector));
 }
 
 template <TypeKind kind>
@@ -175,12 +180,15 @@ VectorPtr BaseVector::wrapInSequence(
     VectorPtr vector) {
   auto kind = vector->typeKind();
   return VELOX_DYNAMIC_TYPE_DISPATCH_ALL(
-      addSequence, kind, lengths, size, std::move(vector));
+      addSequence, kind, std::move(lengths), size, std::move(vector));
 }
 
 template <TypeKind kind>
-static VectorPtr
-addConstant(vector_size_t size, vector_size_t index, VectorPtr vector) {
+static VectorPtr addConstant(
+    vector_size_t size,
+    vector_size_t index,
+    VectorPtr vector,
+    bool copyBase) {
   using T = typename KindToFlatVector<kind>::WrapperType;
 
   auto pool = vector->pool();
@@ -219,6 +227,13 @@ addConstant(vector_size_t size, vector_size_t index, VectorPtr vector) {
     }
   }
 
+  if (copyBase) {
+    VectorPtr copy = BaseVector::create(vector->type(), 1, pool);
+    copy->copy(vector.get(), 0, index, 1);
+    return std::make_shared<ConstantVector<T>>(
+        pool, size, 0, std::move(copy), SimpleVectorStats<T>{});
+  }
+
   return std::make_shared<ConstantVector<T>>(
       pool, size, index, std::move(vector), SimpleVectorStats<T>{});
 }
@@ -227,10 +242,11 @@ addConstant(vector_size_t size, vector_size_t index, VectorPtr vector) {
 VectorPtr BaseVector::wrapInConstant(
     vector_size_t length,
     vector_size_t index,
-    VectorPtr vector) {
+    VectorPtr vector,
+    bool copyBase) {
   auto kind = vector->typeKind();
   return VELOX_DYNAMIC_TYPE_DISPATCH_ALL(
-      addConstant, kind, length, index, std::move(vector));
+      addConstant, kind, length, index, std::move(vector), copyBase);
 }
 
 template <TypeKind kind>
@@ -397,10 +413,10 @@ void BaseVector::setNulls(const BufferPtr& nulls) {
 // static
 void BaseVector::resizeIndices(
     vector_size_t size,
-    vector_size_t initialValue,
     velox::memory::MemoryPool* pool,
     BufferPtr* indices,
-    const vector_size_t** raw) {
+    const vector_size_t** raw,
+    std::optional<vector_size_t> initialValue) {
   if (indices->get() && indices->get()->isMutable()) {
     auto newByteSize = byteSize<vector_size_t>(size);
     if (indices->get()->size() < newByteSize) {
@@ -489,7 +505,7 @@ std::string BaseVector::toString(
 }
 
 void BaseVector::ensureWritable(const SelectivityVector& rows) {
-  auto newSize = std::max<vector_size_t>(rows.size(), length_);
+  auto newSize = std::max<vector_size_t>(rows.end(), length_);
   if (nulls_ && !(nulls_->unique() && nulls_->isMutable())) {
     BufferPtr newNulls = AlignedBuffer::allocate<bool>(newSize, pool_);
     auto rawNewNulls = newNulls->asMutable<uint64_t>();
@@ -511,9 +527,9 @@ void BaseVector::ensureWritable(
     VectorPool* vectorPool) {
   if (!result) {
     if (vectorPool) {
-      result = vectorPool->get(type, rows.size());
+      result = vectorPool->get(type, rows.end());
     } else {
-      result = BaseVector::create(type, rows.size(), pool);
+      result = BaseVector::create(type, rows.end(), pool);
     }
     return;
   }
@@ -542,7 +558,7 @@ void BaseVector::ensureWritable(
 
   // The copy-on-write size is the max of the writable row set and the
   // vector.
-  auto targetSize = std::max<vector_size_t>(rows.size(), result->size());
+  auto targetSize = std::max<vector_size_t>(rows.end(), result->size());
 
   VectorPtr copy;
   if (vectorPool) {
@@ -551,8 +567,7 @@ void BaseVector::ensureWritable(
     copy =
         BaseVector::create(isUnknownType ? type : resultType, targetSize, pool);
   }
-  SelectivityVector copyRows(
-      std::min<vector_size_t>(targetSize, result->size()));
+  SelectivityVector copyRows(result->size());
   copyRows.deselect(rows);
   if (copyRows.hasSelections()) {
     copy->copy(result.get(), copyRows, nullptr);
@@ -575,10 +590,6 @@ VectorPtr newConstant(
   T copy;
   if constexpr (std::is_same_v<T, StringView>) {
     copy = StringView(value.value<kind>());
-  } else if constexpr (
-      std::is_same_v<T, UnscaledShortDecimal> ||
-      std::is_same_v<T, UnscaledLongDecimal>) {
-    copy = value.value<kind>().value();
   } else {
     copy = value.value<T>();
   }
@@ -622,7 +633,7 @@ VectorPtr newNullConstant(
 }
 } // namespace
 
-std::shared_ptr<BaseVector> BaseVector::createNullConstant(
+VectorPtr BaseVector::createNullConstant(
     const TypePtr& type,
     vector_size_t size,
     velox::memory::MemoryPool* pool) {
@@ -649,19 +660,31 @@ VectorPtr BaseVector::transpose(BufferPtr indices, VectorPtr&& source) {
       BufferPtr(nullptr),
       indices,
       indices->size() / sizeof(vector_size_t),
-      source);
+      std::move(source));
 }
 
 bool isLazyNotLoaded(const BaseVector& vector) {
   switch (vector.encoding()) {
     case VectorEncoding::Simple::LAZY:
-      return !vector.as<LazyVector>()->isLoaded();
+      if (!vector.as<LazyVector>()->isLoaded()) {
+        return true;
+      }
+
+      // Lazy Vectors may wrap lazy vectors (e.g. nested Rows) so we need to go
+      // deeper.
+      return isLazyNotLoaded(*vector.as<LazyVector>()->loadedVector());
     case VectorEncoding::Simple::DICTIONARY:
     case VectorEncoding::Simple::SEQUENCE:
       return isLazyNotLoaded(*vector.valueVector());
     case VectorEncoding::Simple::CONSTANT:
       return vector.valueVector() ? isLazyNotLoaded(*vector.valueVector())
                                   : false;
+    case VectorEncoding::Simple::ROW: {
+      const auto& children = vector.as<RowVector>()->children();
+      return std::any_of(children.begin(), children.end(), [](auto it) {
+        return it != nullptr && isLazyNotLoaded(*it);
+      });
+    }
     default:
       return false;
   }
@@ -700,9 +723,38 @@ bool isReusableEncoding(VectorEncoding::Simple encoding) {
 } // namespace
 
 // static
-void BaseVector::prepareForReuse(
-    std::shared_ptr<BaseVector>& vector,
-    vector_size_t size) {
+void BaseVector::flattenVector(VectorPtr& vector) {
+  if (!vector) {
+    return;
+  }
+  switch (vector->encoding()) {
+    case VectorEncoding::Simple::FLAT:
+      return;
+    case VectorEncoding::Simple::ROW: {
+      auto* rowVector = vector->asUnchecked<RowVector>();
+      for (auto& child : rowVector->children()) {
+        BaseVector::flattenVector(child);
+      }
+      return;
+    }
+    case VectorEncoding::Simple::ARRAY: {
+      auto* arrayVector = vector->asUnchecked<ArrayVector>();
+      BaseVector::flattenVector(arrayVector->elements());
+      return;
+    }
+    case VectorEncoding::Simple::MAP: {
+      auto* mapVector = vector->asUnchecked<MapVector>();
+      BaseVector::flattenVector(mapVector->mapKeys());
+      BaseVector::flattenVector(mapVector->mapValues());
+      return;
+    }
+    default:
+      BaseVector::ensureWritable(
+          SelectivityVector::empty(), vector->type(), vector->pool(), vector);
+  }
+}
+
+void BaseVector::prepareForReuse(VectorPtr& vector, vector_size_t size) {
   if (!vector.unique() || !isReusableEncoding(vector->encoding())) {
     vector = BaseVector::create(vector->type(), size, vector->pool());
     return;
@@ -712,7 +764,7 @@ void BaseVector::prepareForReuse(
   vector->resize(size);
 }
 
-void BaseVector::prepareForReuse() {
+void BaseVector::reuseNulls() {
   // Check nulls buffer. Keep the buffer if singly-referenced and mutable and
   // there is at least one null bit set. Reset otherwise.
   if (nulls_) {
@@ -726,6 +778,10 @@ void BaseVector::prepareForReuse() {
       rawNulls_ = nullptr;
     }
   }
+}
+
+void BaseVector::prepareForReuse() {
+  reuseNulls();
   this->resetDataDependentFlags(nullptr);
 }
 
@@ -791,6 +847,32 @@ BufferPtr BaseVector::sliceBuffer(
   bits::copyBits(
       buf->as<uint64_t>(), offset, ans->asMutable<uint64_t>(), 0, length);
   return ans;
+}
+
+std::optional<vector_size_t> BaseVector::findDuplicateValue(
+    vector_size_t start,
+    vector_size_t size,
+    CompareFlags flags) {
+  if (length_ == 0 || size == 0) {
+    return std::nullopt;
+  }
+
+  VELOX_DCHECK_GE(start, 0, "Start index must not be negative");
+  VELOX_DCHECK_LT(start, length_, "Start index is too large");
+  VELOX_DCHECK_GT(size, 0, "Size must not be negative");
+  VELOX_DCHECK_LE(start + size, length_, "Size is too large");
+
+  std::vector<vector_size_t> indices(size);
+  std::iota(indices.begin(), indices.end(), start);
+  sortIndices(indices, flags);
+
+  for (auto i = 1; i < size; ++i) {
+    if (equalValueAt(this, indices[i], indices[i - 1])) {
+      return indices[i];
+    }
+  }
+
+  return std::nullopt;
 }
 
 std::string printNulls(const BufferPtr& nulls, vector_size_t maxBitsToPrint) {

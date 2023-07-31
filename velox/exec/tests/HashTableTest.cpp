@@ -17,6 +17,7 @@
 #include "velox/exec/HashTable.h"
 #include "velox/common/base/SelectivityInfo.h"
 #include "velox/common/base/tests/GTestUtils.h"
+#include "velox/exec/Aggregate.h"
 #include "velox/exec/VectorHasher.h"
 #include "velox/functions/prestosql/aggregates/RegisterAggregateFunctions.h"
 #include "velox/vector/tests/utils/VectorMaker.h"
@@ -78,7 +79,12 @@ class HashTableTest : public testing::TestWithParam<bool> {
             buildType->childAt(channel), channel));
       }
       auto table = HashTable<true>::createForJoin(
-          std::move(keyHashers), dependentTypes, true, false, pool_.get());
+          std::move(keyHashers),
+          dependentTypes,
+          true,
+          false,
+          1'000,
+          pool_.get());
 
       makeRows(size, 1, sequence, buildType, batches);
       copyVectorsToTable(batches, startOffset, table.get());
@@ -151,9 +157,9 @@ class HashTableTest : public testing::TestWithParam<bool> {
       keyHashers.emplace_back(
           std::make_unique<VectorHasher>(tableType->childAt(channel), channel));
     }
-    static std::vector<std::unique_ptr<Aggregate>> empty;
+
     return HashTable<false>::createForAggregation(
-        std::move(keyHashers), empty, pool_.get());
+        std::move(keyHashers), std::vector<Accumulator>{}, pool_.get());
   }
 
   void insertGroups(
@@ -218,9 +224,9 @@ class HashTableTest : public testing::TestWithParam<bool> {
   }
 
   void copyVectorsToTable(
-      std::vector<RowVectorPtr>& batches,
+      const std::vector<RowVectorPtr>& batches,
       int32_t tableOffset,
-      HashTable<true>* table) {
+      BaseHashTable* table) {
     int32_t batchSize = batches[0]->size();
     raw_vector<uint64_t> dummy(batchSize);
     int32_t batchOffset = 0;
@@ -243,6 +249,7 @@ class HashTableTest : public testing::TestWithParam<bool> {
             insertedRows.asMutableRange().bits(),
             0,
             batchSize);
+        insertedRows.updateBounds();
       }
       decoded.emplace_back(batch->childrenSize());
       VELOX_CHECK_EQ(batch->size(), batchSize);
@@ -250,12 +257,11 @@ class HashTableTest : public testing::TestWithParam<bool> {
       for (auto i = 0; i < batch->childrenSize(); ++i) {
         decoders[i].decode(*batch->childAt(i), rows);
         if (i < numKeys) {
-          if (table->hashMode() != BaseHashTable::HashMode::kHash) {
-            auto hasher = table->hashers()[i].get();
-            if (hasher->mayUseValueIds()) {
-              hasher->decode(*batch->childAt(i), insertedRows);
-              hasher->computeValueIds(insertedRows, dummy);
-            }
+          auto hasher = table->hashers()[i].get();
+          hasher->decode(*batch->childAt(i), insertedRows);
+          if (table->hashMode() != BaseHashTable::HashMode::kHash &&
+              hasher->mayUseValueIds()) {
+            hasher->computeValueIds(insertedRows, dummy);
           }
         }
       }
@@ -287,7 +293,7 @@ class HashTableTest : public testing::TestWithParam<bool> {
           *reinterpret_cast<char**>(newRow + nextOffset) = nullptr;
         }
         ++numInserted;
-        for (auto i = 0; i < hashers.size(); ++i) {
+        for (auto i = 0; i < batches[batchIndex]->type()->size(); ++i) {
           rowContainer->store(decoded[batchIndex][i], rowIndex, newRow, i);
         }
       }
@@ -435,7 +441,43 @@ class HashTableTest : public testing::TestWithParam<bool> {
     topTable_->erase(folly::Range<char**>(toErase.data(), toErase.size()));
   }
 
-  std::shared_ptr<memory::MemoryPool> pool_{memory::getDefaultMemoryPool()};
+  void testListNullKeyRows(
+      const VectorPtr& keys,
+      BaseHashTable::HashMode mode) {
+    folly::F14FastSet<int> nullValues;
+    for (int i = 0; i < keys->size(); ++i) {
+      if (i % 97 == 0) {
+        keys->setNull(i, true);
+        nullValues.insert(i);
+      }
+    }
+    auto batch = vectorMaker_->rowVector(
+        {keys,
+         vectorMaker_->flatVector<int64_t>(keys->size(), folly::identity)});
+    std::vector<std::unique_ptr<VectorHasher>> hashers;
+    hashers.push_back(std::make_unique<VectorHasher>(keys->type(), 0));
+    auto table = HashTable<false>::createForJoin(
+        std::move(hashers), {BIGINT()}, true, false, 1'000, pool_.get());
+    copyVectorsToTable({batch}, 0, table.get());
+    table->prepareJoinTable({}, executor_.get());
+    ASSERT_EQ(table->hashMode(), mode);
+    std::vector<char*> rows(nullValues.size());
+    BaseHashTable::NullKeyRowsIterator iter;
+    auto numRows = table->listNullKeyRows(&iter, rows.size(), rows.data());
+    ASSERT_EQ(numRows, nullValues.size());
+    auto actual =
+        BaseVector::create<FlatVector<int64_t>>(BIGINT(), numRows, pool_.get());
+    table->rows()->extractColumn(rows.data(), numRows, 1, actual);
+    for (int i = 0; i < actual->size(); ++i) {
+      auto it = nullValues.find(actual->valueAt(i));
+      ASSERT_TRUE(it != nullValues.end());
+      nullValues.erase(it);
+    }
+    ASSERT_TRUE(nullValues.empty());
+    ASSERT_EQ(0, table->listNullKeyRows(&iter, rows.size(), rows.data()));
+  }
+
+  std::shared_ptr<memory::MemoryPool> pool_{memory::addDefaultLeafMemoryPool()};
   std::unique_ptr<test::VectorMaker> vectorMaker_{
       std::make_unique<test::VectorMaker>(pool_.get())};
   // Bitmap of positions in batches_ that end up in the table.
@@ -510,15 +552,17 @@ TEST_P(HashTableTest, mixed6Sparse) {
 TEST_P(HashTableTest, clear) {
   std::vector<std::unique_ptr<VectorHasher>> keyHashers;
   keyHashers.push_back(std::make_unique<VectorHasher>(BIGINT(), 0 /*channel*/));
-  std::vector<std::unique_ptr<Aggregate>> aggregates;
-  aggregates.push_back(Aggregate::create(
+  core::QueryConfig config({});
+  auto aggregate = Aggregate::create(
       "sum",
-      facebook::velox::core::AggregationNode::Step::kPartial,
+      core::AggregationNode::Step::kPartial,
       std::vector<TypePtr>{BIGINT()},
-      BIGINT()));
+      BIGINT(),
+      config);
+
   auto table = HashTable<true>::createForAggregation(
-      std::move(keyHashers), aggregates, pool_.get());
-  table->clear();
+      std::move(keyHashers), {Accumulator{aggregate.get()}}, pool_.get());
+  ASSERT_NO_THROW(table->clear());
 }
 
 // Test a specific code path in HashTable::decodeHashMode where
@@ -664,7 +708,7 @@ TEST_P(HashTableTest, regularHashingTableSize) {
           std::make_unique<VectorHasher>(type->childAt(channel), channel));
     }
     auto table = HashTable<true>::createForJoin(
-        std::move(keyHashers), {}, true, false, pool_.get());
+        std::move(keyHashers), {}, true, false, 1'000, pool_.get());
     std::vector<RowVectorPtr> batches;
     makeRows(1 << 12, 1, 0, type, batches);
     copyVectorsToTable(batches, 0, table.get());
@@ -715,6 +759,17 @@ TEST_P(HashTableTest, checkSizeValidation) {
   // the number of distinct entries that it stores.
   insertGroups(*vector3, *lookup, *table);
   ASSERT_EQ(table->capacity(), 512 << 10);
+}
+
+TEST_P(HashTableTest, listNullKeyRows) {
+  VectorPtr keys = vectorMaker_->flatVector<int64_t>(500, folly::identity);
+  testListNullKeyRows(keys, BaseHashTable::HashMode::kArray);
+  {
+    auto flat = vectorMaker_->flatVector<int64_t>(
+        10'000, [](auto i) { return i * 1000; });
+    keys = vectorMaker_->rowVector({flat, flat});
+  }
+  testListNullKeyRows(keys, BaseHashTable::HashMode::kHash);
 }
 
 VELOX_INSTANTIATE_TEST_SUITE_P(

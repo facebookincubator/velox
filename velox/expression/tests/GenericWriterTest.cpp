@@ -13,16 +13,18 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-
-#include <velox/expression/VectorReaders.h>
-#include <velox/vector/ComplexVector.h>
-#include <velox/vector/DecodedVector.h>
-#include <velox/vector/SelectivityVector.h>
-#include <cstdint>
+#include <optional>
+#include "velox/expression/VectorReaders.h"
 #include "velox/expression/VectorWriters.h"
 #include "velox/functions/Udf.h"
+#include "velox/functions/prestosql/registration/RegistrationFunctions.h"
 #include "velox/functions/prestosql/tests/utils/FunctionBaseTest.h"
+#include "velox/functions/prestosql/types/JsonType.h"
 #include "velox/type/Type.h"
+#include "velox/vector/ComplexVector.h"
+#include "velox/vector/DecodedVector.h"
+#include "velox/vector/SelectivityVector.h"
+#include "velox/vector/fuzzer/VectorFuzzer.h"
 #include "velox/vector/tests/utils/VectorTestBase.h"
 
 using namespace facebook::velox::exec;
@@ -78,6 +80,75 @@ TEST_F(GenericWriterTest, integer) {
   test::assertEqualVectors(
       makeFlatVector<int64_t>(100, [](auto row) { return row + 1000; }),
       result);
+}
+
+TEST_F(GenericWriterTest, ArrayOfGeneric) {
+  VectorPtr result;
+  BaseVector::ensureWritable(
+      SelectivityVector(2), ARRAY(BIGINT()), pool(), result);
+
+  VectorWriter<Array<Any>> writer;
+  writer.init(*result->as<ArrayVector>());
+
+  for (int i = 0; i < 2; ++i) {
+    writer.setOffset(i);
+
+    auto& arrayWriter = writer.current();
+    arrayWriter.add_item().castTo<int64_t>() = 100 * i;
+    arrayWriter.add_item().castTo<int64_t>() = 101 * i;
+    arrayWriter.add_null();
+
+    writer.commit(true);
+  }
+  writer.finish();
+  test::assertEqualVectors(
+      makeNullableArrayVector<int64_t>(
+          {{0, 0, std::nullopt}, {100, 101, std::nullopt}}),
+      result);
+}
+
+template <typename T>
+struct ArrayTrimFunction {
+  VELOX_DEFINE_FUNCTION_TYPES(T);
+
+  FOLLY_ALWAYS_INLINE void call(
+      out_type<Array<Generic<T1>>>& out,
+      const arg_type<Array<Generic<T1>>>& inputArray,
+      const int64_t& n) {
+    int64_t end = inputArray.size() - n;
+    for (int i = 0; i < end; ++i) {
+      if (inputArray[i].has_value()) {
+        auto& newItem = out.add_item();
+        newItem.copy_from(inputArray[i].value());
+      } else {
+        out.add_null();
+      }
+    }
+  }
+};
+
+TEST_F(GenericWriterTest, ArrayTrim) {
+  registerFunction<
+      ArrayTrimFunction,
+      Array<Generic<T1>>,
+      Array<Generic<T1>>,
+      int64_t>({"trim_array"});
+
+  auto input = makeNullableArrayVector<int64_t>(
+      {{1, 2, 3}, {1, std::nullopt, std::nullopt, 5}});
+  auto result = evaluate("trim_array(c0, 2)", makeRowVector({input}));
+  auto expected = makeNullableArrayVector<int64_t>({{1}, {1, std::nullopt}});
+  test::assertEqualVectors(expected, result);
+}
+
+TEST_F(GenericWriterTest, ensureSizeDoesNotResize) {
+  VectorPtr result;
+  BaseVector::ensureWritable(SelectivityVector(6), VARCHAR(), pool(), result);
+  EXPECT_EQ(result->size(), 6);
+  VectorWriter<Any> writer;
+  writer.init(*result);
+  writer.ensureSize(1);
+  EXPECT_EQ(result->size(), 6);
 }
 
 TEST_F(GenericWriterTest, varchar) {
@@ -475,7 +546,7 @@ TEST_F(GenericWriterTest, dynamicRow) {
 
   writer2.setOffset(0);
   auto& current2 = writer2.current();
-  ASSERT_THROW(current2.castTo<DynamicRow>(), VeloxUserError);
+  ASSERT_EQ(current2.tryCastTo<DynamicRow>(), nullptr);
 }
 
 TEST_F(GenericWriterTest, nested) {
@@ -650,6 +721,91 @@ TEST_F(GenericWriterTest, handleMisuse) {
     auto rowVector = makeRowVector({child1, child2});
     rowVector->setNull(0, true);
     test::assertEqualVectors(rowVector, result);
+  }
+}
+
+template <typename T>
+struct SubscriptSimpleFunc {
+  VELOX_DEFINE_FUNCTION_TYPES(T);
+  bool call(
+      out_type<Generic<T1>>& out,
+      const arg_type<Array<Generic<T1>>>& input,
+      int64_t index) {
+    if (!input[index - 1].has_value()) {
+      return false;
+    }
+
+    out.copy_from(input[index - 1].value());
+    return true;
+  }
+};
+
+TEST_F(GenericWriterTest, copyFromGeneric) {
+  facebook::velox::functions::prestosql::registerGeneralFunctions();
+  registerFunction<
+      SubscriptSimpleFunc,
+      Generic<T1>,
+      Array<Generic<T1>>,
+      int64_t>({"subscript_simple"});
+
+  // Generate input data.
+  VectorFuzzer::Options opts;
+  opts.vectorSize = 10;
+  opts.nullRatio = 0.2;
+  opts.containerLength = 10;
+  opts.containerVariableLength = false;
+  VectorFuzzer fuzzer(opts, pool());
+  std::vector<int64_t> v;
+  for (int i = 0; i < 10; i++) {
+    v.push_back(i + 1);
+  }
+  auto indicesVector = makeFlatVector<int64_t>(v);
+
+  auto test = [&](const TypePtr& type) {
+    auto input = fuzzer.fuzzFlat(ARRAY(type));
+    auto result1 = evaluate(
+        "subscript_simple(c0, c1)", makeRowVector({input, indicesVector}));
+    auto result2 =
+        evaluate("subscript(c0, c1)", makeRowVector({input, indicesVector}));
+    test::assertEqualVectors(result1, result2);
+  };
+
+  test(INTEGER());
+  test(ARRAY(INTEGER()));
+  test(VARCHAR());
+  test(MAP(INTEGER(), INTEGER()));
+  test(MAP(INTEGER(), ARRAY(INTEGER())));
+  test(ROW({INTEGER()}));
+  test(ROW({INTEGER(), ARRAY(INTEGER())}));
+  test(ROW({}));
+
+  // Unknown.
+  test(UNKNOWN());
+  test(ARRAY(UNKNOWN()));
+
+  // Custom types.
+  test(JSON());
+  test(ARRAY(JSON()));
+
+  // Test Opaque
+  {
+    auto input = makeArrayVector<std::shared_ptr<int>>({});
+    input->resize(3);
+    input->setOffsetAndSize(0, 0, 3);
+    input->setOffsetAndSize(1, 3, 3);
+    input->setOffsetAndSize(2, 6, 3);
+    auto* elementsFlat =
+        input->elements()->asFlatVector<std::shared_ptr<void>>();
+    elementsFlat->resize(9);
+    for (int i = 0; i < 9; i++) {
+      elementsFlat->set(i, std::make_shared<int>(i));
+    }
+    indicesVector->resize(3);
+    auto result1 = evaluate(
+        "subscript_simple(c0, c1)", makeRowVector({input, indicesVector}));
+    auto result2 =
+        evaluate("subscript(c0, c1)", makeRowVector({input, indicesVector}));
+    test::assertEqualVectors(result1, result2);
   }
 }
 

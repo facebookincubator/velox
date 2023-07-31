@@ -86,21 +86,21 @@ class ScanSpec {
   }
 
   void addMetadataFilter(
-      MetadataFilter::LeafNode* leaf,
-      std::unique_ptr<common::Filter> filter) {
-    metadataFilters_.emplace_back(leaf, std::move(filter));
+      const MetadataFilter::LeafNode* leaf,
+      common::Filter* filter) {
+    metadataFilters_.emplace_back(leaf, filter);
   }
 
   int numMetadataFilters() const {
     return metadataFilters_.size();
   }
 
-  MetadataFilter::LeafNode* metadataFilterNodeAt(int i) const {
+  const MetadataFilter::LeafNode* metadataFilterNodeAt(int i) const {
     return metadataFilters_[i].first;
   }
 
   common::Filter* metadataFilterAt(int i) const {
-    return metadataFilters_[i].second.get();
+    return metadataFilters_[i].second;
   }
 
   // Returns a constant vector if 'this' corresponds to a partitioning
@@ -286,13 +286,14 @@ class ScanSpec {
 
   // Resets cached values after this or children were updated, e.g. a new filter
   // was added or existing filter was modified.
-  void resetCachedValues() {
+  void resetCachedValues(bool doReorder) {
     hasFilter_.reset();
     for (auto& child : children_) {
-      child->resetCachedValues();
+      child->resetCachedValues(doReorder);
     }
-
-    reorder();
+    if (doReorder) {
+      reorder();
+    }
   }
 
   void setEnableFilterReorder(bool enableFilterReorder) {
@@ -312,16 +313,33 @@ class ScanSpec {
 
   std::string toString() const;
 
+  // Add a field to this ScanSpec, with content projected out.
+  ScanSpec* addField(const std::string& name, column_index_t channel);
+
   // Add a field and its children recursively to this ScanSpec, all projected
   // out.
-  ScanSpec*
-  addField(const std::string& name, const Type&, column_index_t channel);
+  ScanSpec* addFieldRecursively(
+      const std::string& name,
+      const Type&,
+      column_index_t channel);
 
-  ScanSpec* addMapKeys(const Type&);
+  // Add a field for map key.
+  ScanSpec* addMapKeyField();
 
-  ScanSpec* addMapValues(const Type&);
+  // Add a field for map key, along with its child recursively.
+  ScanSpec* addMapKeyFieldRecursively(const Type&);
 
-  ScanSpec* addArrayElements(const Type&);
+  // Add a field for map value.
+  ScanSpec* addMapValueField();
+
+  // Add a field for map value, along with its child recursively.
+  ScanSpec* addMapValueFieldRecursively(const Type&);
+
+  // Add a field for array element.
+  ScanSpec* addArrayElementField();
+
+  // Add a field for array element, along with its child recursively.
+  ScanSpec* addArrayElementFieldRecursively(const Type&);
 
   // Add all child fields on the type recursively to this ScanSpec, all
   // projected out.
@@ -364,8 +382,7 @@ class ScanSpec {
   // the pointers to LeafNodes are stored here.  We need to keep these pointers
   // so that we can match the leaf node filter results and apply logical
   // conjunctions later properly.
-  std::vector<
-      std::pair<MetadataFilter::LeafNode*, std::shared_ptr<common::Filter>>>
+  std::vector<std::pair<const MetadataFilter::LeafNode*, common::Filter*>>
       metadataFilters_;
 
   SelectivityInfo selectivity_;

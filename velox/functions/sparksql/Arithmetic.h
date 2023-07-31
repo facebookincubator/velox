@@ -15,6 +15,7 @@
  */
 #pragma once
 
+#include <bitset>
 #include <cmath>
 #include <limits>
 #include <system_error>
@@ -23,6 +24,26 @@
 #include "velox/functions/Macros.h"
 
 namespace facebook::velox::functions::sparksql {
+
+template <typename T>
+struct RemainderFunction {
+  template <typename TInput>
+  FOLLY_ALWAYS_INLINE bool
+  call(TInput& result, const TInput a, const TInput n) {
+    if (UNLIKELY(n == 0)) {
+      return false;
+    }
+    // std::numeric_limits<int64_t>::min() % -1 could crash the program since
+    // abs(std::numeric_limits<int64_t>::min()) can not be represented in
+    // int64_t.
+    if (UNLIKELY(n == 1 || n == -1)) {
+      result = 0;
+    } else {
+      result = a % n;
+    }
+    return true;
+  }
+};
 
 template <typename T>
 struct PModFunction {
@@ -34,28 +55,13 @@ struct PModFunction {
 #endif
 #endif
   {
-    if (UNLIKELY(n == 0)) {
+    TInput r;
+    bool notNull = RemainderFunction<T>().call(r, a, n);
+    if (!notNull) {
       return false;
     }
-    TInput r = a % n;
-    result = (r > 0) ? r : (r + n) % n;
-    return true;
-  }
-};
 
-template <typename T>
-struct RemainderFunction {
-  template <typename TInput>
-  FOLLY_ALWAYS_INLINE bool
-  call(TInput& result, const TInput a, const TInput n) {
-    if (UNLIKELY(n == 0)) {
-      return false;
-    }
-    if (UNLIKELY(n == 1 || n == -1)) {
-      result = 0;
-    } else {
-      result = a % n;
-    }
+    result = (r > 0) ? r : (r + n) % n;
     return true;
   }
 };
@@ -146,4 +152,89 @@ struct FloorFunction {
   }
 };
 
+template <typename T>
+struct AcoshFunction {
+  template <typename TInput>
+  FOLLY_ALWAYS_INLINE void call(TInput& result, TInput a) {
+    result = std::acosh(a);
+  }
+};
+
+template <typename T>
+struct AsinhFunction {
+  template <typename TInput>
+  FOLLY_ALWAYS_INLINE void call(TInput& result, TInput a) {
+    result = std::asinh(a);
+  }
+};
+
+template <typename T>
+struct AtanhFunction {
+  template <typename TInput>
+  FOLLY_ALWAYS_INLINE void call(TInput& result, TInput a) {
+    result = std::atanh(a);
+  }
+};
+
+template <typename T>
+struct SecFunction {
+  template <typename TInput>
+  FOLLY_ALWAYS_INLINE void call(TInput& result, TInput a) {
+    result = 1 / std::cos(a);
+  }
+};
+
+template <typename T>
+struct CscFunction {
+  template <typename TInput>
+  FOLLY_ALWAYS_INLINE void call(TInput& result, TInput a) {
+    result = 1 / std::sin(a);
+  }
+};
+
+template <typename T>
+struct CoshFunction {
+  template <typename TInput>
+  FOLLY_ALWAYS_INLINE void call(TInput& result, TInput a) {
+    result = std::cosh(a);
+  }
+};
+
+template <typename T>
+struct ToBinaryStringFunction {
+  VELOX_DEFINE_FUNCTION_TYPES(T);
+
+  FOLLY_ALWAYS_INLINE
+  void call(out_type<Varchar>& result, const arg_type<int64_t>& input) {
+    auto str = std::bitset<64>(input).to_string();
+    str.erase(0, std::min(str.find_first_not_of('0'), str.size() - 1));
+    result = str;
+  }
+};
+
+template <typename T>
+struct SinhFunction {
+  template <typename TInput>
+  FOLLY_ALWAYS_INLINE void call(TInput& result, TInput a) {
+    result = std::sinh(a);
+  }
+};
+
+template <typename T>
+struct HypotFunction {
+  FOLLY_ALWAYS_INLINE void call(double& result, double a, double b) {
+    result = std::hypot(a, b);
+  }
+};
+
+template <typename T>
+struct Log1pFunction {
+  FOLLY_ALWAYS_INLINE bool call(double& result, double a) {
+    if (a <= -1) {
+      return false;
+    }
+    result = std::log1p(a);
+    return true;
+  }
+};
 } // namespace facebook::velox::functions::sparksql

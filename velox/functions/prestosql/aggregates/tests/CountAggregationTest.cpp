@@ -13,10 +13,13 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+#include "velox/exec/PlanNodeStats.h"
+#include "velox/exec/tests/utils/AssertQueryBuilder.h"
 #include "velox/exec/tests/utils/PlanBuilder.h"
-#include "velox/functions/prestosql/aggregates/tests/AggregationTestBase.h"
+#include "velox/functions/lib/aggregates/tests/AggregationTestBase.h"
 
 using namespace facebook::velox::exec::test;
+using namespace facebook::velox::functions::aggregate::test;
 
 namespace facebook::velox::aggregate::test {
 
@@ -79,34 +82,39 @@ TEST_F(CountAggregationTest, count) {
 }
 
 TEST_F(CountAggregationTest, mask) {
-  auto data = makeRowVector(
-      {"c", "m"},
-      {
-          makeFlatVector<int64_t>({0, 1, 2, 3, 4, 5, 6, 7, 8, 9}),
-          makeFlatVector<bool>(
-              {true,
-               false,
-               true,
-               false,
-               true,
-               false,
-               true,
-               false,
-               true,
-               false}),
-      });
+  std::vector<RowVectorPtr> data;
+  // Make batches where some batches have mask all true, some half and half and
+  // some all false. All batches repeat the same grouping keys. The data to
+  // count is null for 1/3 of the rows.
+  constexpr int32_t kNumBatches = 10;
+  constexpr int32_t kRowsInBatch = 100;
+  for (auto counter = 0; counter < kNumBatches; ++counter) {
+    data.push_back(makeRowVector(
+        {"k", "c", "m"},
+        {makeFlatVector<int64_t>(
+             kRowsInBatch, [](auto row) { return row / 10; }),
+         makeFlatVector<int64_t>(
+             kRowsInBatch,
+             [](auto row) { return row; },
+             [](auto row) { return row % 3 == 0; }),
+         makeFlatVector<bool>(kRowsInBatch, [&](auto row) {
+           return counter % 3 == 0 ? false
+               : counter % 3 == 1  ? false
+                                   : row % 2 == 0;
+         })}));
+  }
 
-  createDuckDbTable({data});
+  createDuckDbTable(data);
 
   // count(c)
   auto plan = PlanBuilder()
-                  .values({data})
+                  .values(data)
                   .singleAggregation({}, {"count(c)"}, {"m"})
                   .planNode();
   assertQuery(plan, "SELECT count(c) FILTER (where m) FROM tmp");
 
   plan = PlanBuilder()
-             .values({data})
+             .values(data)
              .partialAggregation({}, {"count(c)"}, {"m"})
              .finalAggregation()
              .planNode();
@@ -114,17 +122,146 @@ TEST_F(CountAggregationTest, mask) {
 
   // count(1)
   plan = PlanBuilder()
-             .values({data})
+             .values(data)
              .singleAggregation({}, {"count()"}, {"m"})
              .planNode();
   assertQuery(plan, "SELECT count(1) FILTER (where m) FROM tmp");
 
   plan = PlanBuilder()
-             .values({data})
+             .values(data)
              .partialAggregation({}, {"count()"}, {"m"})
              .finalAggregation()
              .planNode();
   assertQuery(plan, "SELECT count(1) FILTER (where m) FROM tmp");
+
+  core::PlanNodeId partialNodeId;
+  plan = PlanBuilder()
+             .values(data)
+             .partialAggregation({"k"}, {"count(c)"}, {"m"})
+             .capturePlanNodeId(partialNodeId)
+             .finalAggregation()
+             .planNode();
+  auto task =
+      AssertQueryBuilder(plan, duckDbQueryRunner_)
+          .maxDrivers(1)
+          .config(core::QueryConfig::kAbandonPartialAggregationMinRows, "1")
+          .config(core::QueryConfig::kAbandonPartialAggregationMinPct, "0")
+          .assertResults(
+              "SELECT k, count(c) FILTER (where m) FROM tmp GROUP BY k");
+  auto taskStats = toPlanStats(task->taskStats());
+  auto partialStats = taskStats.at(partialNodeId).customStats;
+  EXPECT_LT(0, partialStats.at("abandonedPartialAggregation").count);
+}
+
+TEST_F(CountAggregationTest, distinct) {
+  auto data = makeRowVector({
+      makeFlatVector<int16_t>({1, 2, 1, 2, 1, 1, 2, 2}),
+      makeFlatVector<int32_t>({1, 1, 1, 2, 1, 1, 1, 2}),
+      makeNullableFlatVector<int64_t>(
+          {std::nullopt, 1, std::nullopt, 2, std::nullopt, 1, std::nullopt, 1}),
+      makeNullConstant(TypeKind::DOUBLE, 8),
+  });
+  createDuckDbTable({data});
+
+  // Global aggregation.
+  auto testGlobal = [&](const std::string& input) {
+    auto plan =
+        PlanBuilder()
+            .values({data})
+            .singleAggregation({}, {fmt::format("count(distinct {})", input)})
+            .planNode();
+    AssertQueryBuilder(plan, duckDbQueryRunner_)
+        .assertResults(
+            fmt::format("SELECT count(distinct {}) FROM tmp", input));
+  };
+
+  testGlobal("c1");
+  testGlobal("c2");
+  testGlobal("c3");
+
+  auto plan = PlanBuilder()
+                  .values({data})
+                  .singleAggregation(
+                      {},
+                      {"count(distinct c1)",
+                       "count(c1)",
+                       "count(distinct c2)",
+                       "count(c3)"})
+                  .planNode();
+  AssertQueryBuilder(plan, duckDbQueryRunner_)
+      .assertResults(
+          "SELECT count(distinct c1), count(c1), count(distinct c2), count(c3) FROM tmp");
+
+  // Global. Empty input.
+  plan = PlanBuilder()
+             .values({makeRowVector(ROW({"c0"}, {BIGINT()}), 0)})
+             .singleAggregation({}, {"count(distinct c0)"})
+             .planNode();
+  AssertQueryBuilder(plan, duckDbQueryRunner_).assertResults("SELECT 0");
+
+  // Group by.
+  auto testGroupBy = [&](const std::string& input) {
+    auto plan = PlanBuilder()
+                    .values({data})
+                    .singleAggregation(
+                        {"c0"}, {fmt::format("count(distinct {})", input)})
+                    .planNode();
+    AssertQueryBuilder(plan, duckDbQueryRunner_)
+        .assertResults(fmt::format(
+            "SELECT c0, count(distinct {}) FROM tmp GROUP BY 1", input));
+  };
+
+  testGroupBy("c1");
+  testGroupBy("c2");
+  testGroupBy("c3");
+
+  plan = PlanBuilder()
+             .values({data})
+             .singleAggregation(
+                 {"c0"},
+                 {"count(distinct c1)",
+                  "count(c1)",
+                  "count(distinct c2)",
+                  "count(c3)"})
+             .planNode();
+  AssertQueryBuilder(plan, duckDbQueryRunner_)
+      .assertResults(
+          "SELECT c0, count(distinct c1), count(c1), count(distinct c2), count(c3) FROM tmp GROUP BY 1");
+
+  // Group by. Empty input.
+  plan =
+      PlanBuilder()
+          .values({makeRowVector(ROW({"c0", "c1"}, {BIGINT(), VARCHAR()}), 0)})
+          .singleAggregation({"c0"}, {"count(distinct c1)"})
+          .planNode();
+  AssertQueryBuilder(plan, duckDbQueryRunner_).assertEmptyResults();
+}
+
+TEST_F(CountAggregationTest, distinctMask) {
+  auto data = makeRowVector({
+      makeFlatVector<int16_t>({1, 2, 1, 2, 1, 1, 2, 2}),
+      makeFlatVector<bool>(
+          {true, false, false, true, false, true, false, true}),
+      makeFlatVector<int32_t>({1, -1, -1, 2, -1, 1, -1, 1}),
+  });
+  createDuckDbTable({data});
+
+  // Global.
+  auto plan = PlanBuilder()
+                  .values({data})
+                  .singleAggregation({}, {"count(distinct c2)"}, {"c1"})
+                  .planNode();
+  AssertQueryBuilder(plan, duckDbQueryRunner_)
+      .assertResults("SELECT count(distinct c2) FILTER (WHERE c1) FROM tmp");
+
+  // Group by.
+  plan = PlanBuilder()
+             .values({data})
+             .singleAggregation({"c0"}, {"count(distinct c2)"}, {"c1"})
+             .planNode();
+  AssertQueryBuilder(plan, duckDbQueryRunner_)
+      .assertResults(
+          "SELECT c0, count(distinct c2) FILTER (WHERE c1) FROM tmp GROUP BY 1");
 }
 
 } // namespace

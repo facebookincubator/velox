@@ -26,6 +26,7 @@
 #include <algorithm>
 
 using namespace ::testing;
+using namespace facebook::velox::common;
 using namespace facebook::velox::dwio;
 using namespace facebook::velox::dwio::common;
 using namespace facebook::velox::dwio::common::encryption;
@@ -160,7 +161,7 @@ class CompressionTest : public TestWithParam<TestParams> {
 };
 
 TEST_P(CompressionTest, compressOriginalString) {
-  auto pool = getDefaultMemoryPool();
+  auto pool = addDefaultLeafMemoryPool();
   MemorySink memSink(*pool, DEFAULT_MEM_STREAM_SIZE);
 
   uint64_t block = 128;
@@ -174,7 +175,7 @@ TEST_P(CompressionTest, compressOriginalString) {
 }
 
 TEST_P(CompressionTest, compressSimpleRepeatedString) {
-  auto pool = getDefaultMemoryPool();
+  auto pool = addDefaultLeafMemoryPool();
   MemorySink memSink(*pool, DEFAULT_MEM_STREAM_SIZE);
 
   constexpr uint64_t block = 128;
@@ -188,7 +189,7 @@ TEST_P(CompressionTest, compressSimpleRepeatedString) {
 }
 
 TEST_P(CompressionTest, compressTwoBlocks) {
-  auto pool = getDefaultMemoryPool();
+  auto pool = addDefaultLeafMemoryPool();
   MemorySink memSink(*pool, DEFAULT_MEM_STREAM_SIZE);
 
   uint64_t block = 128;
@@ -202,7 +203,7 @@ TEST_P(CompressionTest, compressTwoBlocks) {
 }
 
 TEST_P(CompressionTest, compressRandomLetters) {
-  auto pool = getDefaultMemoryPool();
+  auto pool = addDefaultLeafMemoryPool();
   MemorySink memSink(*pool, DEFAULT_MEM_STREAM_SIZE);
 
   uint64_t block = 1024;
@@ -218,7 +219,7 @@ TEST_P(CompressionTest, compressRandomLetters) {
 }
 
 TEST_P(CompressionTest, compressRandomBytes) {
-  auto pool = getDefaultMemoryPool();
+  auto pool = addDefaultLeafMemoryPool();
   MemorySink memSink(*pool, DEFAULT_MEM_STREAM_SIZE);
 
   uint64_t block = 1024;
@@ -255,7 +256,7 @@ void verifyProto(
 }
 
 TEST_P(CompressionTest, compressProtoBuf) {
-  auto pool = getDefaultMemoryPool();
+  auto pool = addDefaultLeafMemoryPool();
   MemorySink memSink(*pool, DEFAULT_MEM_STREAM_SIZE);
 
   uint64_t block = 256;
@@ -305,7 +306,7 @@ class RecordPositionTest : public TestWithParam<TestParams2> {
 };
 
 TEST_P(RecordPositionTest, testRecordPosition) {
-  auto pool = getDefaultMemoryPool();
+  auto pool = addDefaultLeafMemoryPool();
   MemorySink memSink(*pool, DEFAULT_MEM_STREAM_SIZE);
   uint64_t block = 256;
   uint64_t initial = 128;

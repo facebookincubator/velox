@@ -71,20 +71,6 @@ Timestamp getLiteralValue(const ::substrait::Expression::Literal& literal) {
   return Timestamp::fromMicros(literal.timestamp());
 }
 
-template <>
-Date getLiteralValue(const ::substrait::Expression::Literal& literal) {
-  return Date(literal.date());
-}
-
-template <>
-IntervalDayTime getLiteralValue(
-    const ::substrait::Expression::Literal& literal) {
-  const auto& interval = literal.interval_day_to_second();
-  int64_t milliseconds = interval.days() * kMillisInDay +
-      interval.seconds() * kMillisInSecond + interval.microseconds() / 1000;
-  return IntervalDayTime(milliseconds);
-}
-
 ArrayVectorPtr makeArrayVector(const VectorPtr& elements) {
   BufferPtr offsets = allocateOffsets(1, elements->pool());
   BufferPtr sizes = allocateOffsets(1, elements->pool());
@@ -122,6 +108,9 @@ void setLiteralValue(
     } else {
       VELOX_FAIL("Unexpected string literal");
     }
+  } else if (vector->type()->isDate()) {
+    auto dateVector = vector->template asFlatVector<int32_t>();
+    dateVector->set(index, int(literal.date()));
   } else {
     vector->set(index, getLiteralValue<T>(literal));
   }
@@ -143,6 +132,24 @@ VectorPtr constructFlatVector(
     setLiteralValue(child, flatVector, index++);
   }
   return vector;
+}
+
+/// Whether null will be returned on cast failure.
+bool isNullOnFailure(
+    ::substrait::Expression::Cast::FailureBehavior failureBehavior) {
+  switch (failureBehavior) {
+    case ::substrait::
+        Expression_Cast_FailureBehavior_FAILURE_BEHAVIOR_UNSPECIFIED:
+    case ::substrait::
+        Expression_Cast_FailureBehavior_FAILURE_BEHAVIOR_THROW_EXCEPTION:
+      return false;
+    case ::substrait::
+        Expression_Cast_FailureBehavior_FAILURE_BEHAVIOR_RETURN_NULL:
+      return true;
+    default:
+      VELOX_NYI(
+          "The given failure behavior is NOT supported: '{}'", failureBehavior);
+  }
 }
 
 } // namespace
@@ -178,8 +185,7 @@ SubstraitVeloxExprConverter::toVeloxExpr(
   }
 }
 
-std::shared_ptr<const core::ITypedExpr>
-SubstraitVeloxExprConverter::toVeloxExpr(
+core::TypedExprPtr SubstraitVeloxExprConverter::toVeloxExpr(
     const ::substrait::Expression::ScalarFunction& substraitFunc,
     const RowTypePtr& inputType) {
   std::vector<core::TypedExprPtr> params;
@@ -242,7 +248,7 @@ SubstraitVeloxExprConverter::toVeloxExpr(
     }
     case ::substrait::Expression_Literal::LiteralTypeCase::kDate:
       return std::make_shared<core::ConstantTypedExpr>(
-          DATE(), variant(Date(substraitLit.date())));
+          DATE(), variant(int(substraitLit.date())));
     default:
       VELOX_NYI(
           "Substrait conversion not supported for type case '{}'", typeCase);
@@ -290,13 +296,13 @@ ArrayVectorPtr SubstraitVeloxExprConverter::literalsToArrayVector(
           constructFlatVector, kind, listLiteral, childSize, veloxType, pool_));
     }
     case ::substrait::Expression_Literal::LiteralTypeCase::kDate:
-      return makeArrayVector(constructFlatVector<TypeKind::DATE>(
+      return makeArrayVector(constructFlatVector<TypeKind::INTEGER>(
           listLiteral, childSize, DATE(), pool_));
     case ::substrait::Expression_Literal::LiteralTypeCase::kTimestamp:
       return makeArrayVector(constructFlatVector<TypeKind::TIMESTAMP>(
           listLiteral, childSize, TIMESTAMP(), pool_));
     case ::substrait::Expression_Literal::LiteralTypeCase::kIntervalDayToSecond:
-      return makeArrayVector(constructFlatVector<TypeKind::INTERVAL_DAY_TIME>(
+      return makeArrayVector(constructFlatVector<TypeKind::BIGINT>(
           listLiteral, childSize, INTERVAL_DAY_TIME(), pool_));
     case ::substrait::Expression_Literal::LiteralTypeCase::kList: {
       VectorPtr elements;
@@ -316,14 +322,12 @@ ArrayVectorPtr SubstraitVeloxExprConverter::literalsToArrayVector(
   }
 }
 
-std::shared_ptr<const core::ITypedExpr>
-SubstraitVeloxExprConverter::toVeloxExpr(
+core::TypedExprPtr SubstraitVeloxExprConverter::toVeloxExpr(
     const ::substrait::Expression::Cast& castExpr,
     const RowTypePtr& inputType) {
   auto substraitType = substraitParser_.parseType(castExpr.type());
   auto type = toVeloxType(substraitType->type);
-  // TODO add flag in substrait after. now is set false.
-  bool nullOnFailure = false;
+  bool nullOnFailure = isNullOnFailure(castExpr.failure_behavior());
 
   std::vector<core::TypedExprPtr> inputs{
       toVeloxExpr(castExpr.input(), inputType)};
@@ -331,11 +335,10 @@ SubstraitVeloxExprConverter::toVeloxExpr(
   return std::make_shared<core::CastTypedExpr>(type, inputs, nullOnFailure);
 }
 
-std::shared_ptr<const core::ITypedExpr>
-SubstraitVeloxExprConverter::toVeloxExpr(
+core::TypedExprPtr SubstraitVeloxExprConverter::toVeloxExpr(
     const ::substrait::Expression& substraitExpr,
     const RowTypePtr& inputType) {
-  std::shared_ptr<const core::ITypedExpr> veloxExpr;
+  core::TypedExprPtr veloxExpr;
   auto typeCase = substraitExpr.rex_type_case();
   switch (typeCase) {
     case ::substrait::Expression::RexTypeCase::kLiteral:
@@ -354,8 +357,7 @@ SubstraitVeloxExprConverter::toVeloxExpr(
   }
 }
 
-std::shared_ptr<const core::ITypedExpr>
-SubstraitVeloxExprConverter::toVeloxExpr(
+core::TypedExprPtr SubstraitVeloxExprConverter::toVeloxExpr(
     const ::substrait::Expression_IfThen& substraitIfThen,
     const RowTypePtr& inputType) {
   std::vector<core::TypedExprPtr> inputs;

@@ -39,6 +39,9 @@ dnf remove -y gflags
 # Required for Thrift
 dnf_install autoconf automake libtool bison flex python3
 
+# Required for google-cloud-storage
+dnf_install curl-devel c-ares-devel
+
 dnf_install conda
 
 # Activate gcc9; enable errors on unset variables afterwards.
@@ -89,4 +92,3 @@ cmake_install_deps snappy -DSNAPPY_BUILD_TESTS=OFF
 cmake_install_deps fmt -DFMT_TEST=OFF
 
 dnf clean all
-

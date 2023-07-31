@@ -15,26 +15,26 @@
  */
 #include "velox/connectors/hive/storage_adapters/hdfs/HdfsFileSystem.h"
 #include <hdfs/hdfs.h>
-#include "velox/common/file/FileSystems.h"
+#include <mutex>
 #include "velox/connectors/hive/storage_adapters/hdfs/HdfsReadFile.h"
 #include "velox/connectors/hive/storage_adapters/hdfs/HdfsWriteFile.h"
-#include "velox/core/Context.h"
+#include "velox/core/Config.h"
 
 namespace facebook::velox::filesystems {
-folly::once_flag hdfsInitiationFlag;
 std::string_view HdfsFileSystem::kScheme("hdfs://");
 
 class HdfsFileSystem::Impl {
  public:
-  explicit Impl(const Config* config) {
-    auto endpointInfo = getServiceEndpoint(config);
+  // Keep config here for possible use in the future.
+  explicit Impl(const Config* config, const HdfsServiceEndpoint& endpoint) {
     auto builder = hdfsNewBuilder();
-    hdfsBuilderSetNameNode(builder, endpointInfo.host.c_str());
-    hdfsBuilderSetNameNodePort(builder, endpointInfo.port);
+    hdfsBuilderSetNameNode(builder, endpoint.host.c_str());
+    hdfsBuilderSetNameNodePort(builder, atoi(endpoint.port.data()));
     hdfsClient_ = hdfsBuilderConnect(builder);
     VELOX_CHECK_NOT_NULL(
         hdfsClient_,
-        "Unable to connect to HDFS, got error: {}.",
+        "Unable to connect to HDFS: {}, got error: {}.",
+        endpoint.identity(),
         hdfsGetLastError())
   }
 
@@ -47,19 +47,6 @@ class HdfsFileSystem::Impl {
     }
   }
 
-  static HdfsServiceEndpoint getServiceEndpoint(const Config* config) {
-    auto hdfsHost = config->get("hive.hdfs.host");
-    VELOX_CHECK(
-        hdfsHost.hasValue(),
-        "hdfsHost is empty, configuration missing for hdfs host");
-    auto hdfsPort = config->get("hive.hdfs.port");
-    VELOX_CHECK(
-        hdfsPort.hasValue(),
-        "hdfsPort is empty, configuration missing for hdfs port");
-    HdfsServiceEndpoint endpoint{*hdfsHost, atoi(hdfsPort->data())};
-    return endpoint;
-  }
-
   hdfsFS hdfsClient() {
     return hdfsClient_;
   }
@@ -68,9 +55,11 @@ class HdfsFileSystem::Impl {
   hdfsFS hdfsClient_;
 };
 
-HdfsFileSystem::HdfsFileSystem(const std::shared_ptr<const Config>& config)
+HdfsFileSystem::HdfsFileSystem(
+    const std::shared_ptr<const Config>& config,
+    const HdfsServiceEndpoint& endpoint)
     : FileSystem(config) {
-  impl_ = std::make_shared<Impl>(config.get());
+  impl_ = std::make_shared<Impl>(config.get(), endpoint);
 }
 
 std::string HdfsFileSystem::name() const {
@@ -78,7 +67,8 @@ std::string HdfsFileSystem::name() const {
 }
 
 std::unique_ptr<ReadFile> HdfsFileSystem::openFileForRead(
-    std::string_view path) {
+    std::string_view path,
+    const FileOptions& /*unused*/) {
   if (path.find(kScheme) == 0) {
     path.remove_prefix(kScheme.length());
   }
@@ -90,28 +80,51 @@ std::unique_ptr<ReadFile> HdfsFileSystem::openFileForRead(
 }
 
 std::unique_ptr<WriteFile> HdfsFileSystem::openFileForWrite(
-    std::string_view path) {
+    std::string_view path,
+    const FileOptions& /*unused*/) {
   return std::make_unique<HdfsWriteFile>(impl_->hdfsClient(), path);
 }
 
-bool HdfsFileSystem::isHdfsFile(const std::string_view filename) {
-  return filename.find(kScheme) == 0;
+bool HdfsFileSystem::isHdfsFile(const std::string_view filePath) {
+  return filePath.find(kScheme) == 0;
 }
 
-static std::function<std::shared_ptr<FileSystem>(std::shared_ptr<const Config>)>
-    filesystemGenerator = [](std::shared_ptr<const Config> properties) {
-      static std::shared_ptr<FileSystem> filesystem;
-      folly::call_once(hdfsInitiationFlag, [&properties]() {
-        filesystem = std::make_shared<HdfsFileSystem>(properties);
-      });
-      return filesystem;
-    };
+/// Gets hdfs endpoint from a given file path. If not found, fall back to get a
+/// fixed one from configuration.
+HdfsServiceEndpoint HdfsFileSystem::getServiceEndpoint(
+    const std::string_view filePath,
+    const Config* config) {
+  auto endOfIdentityInfo = filePath.find('/', kScheme.size());
+  std::string hdfsIdentity{
+      filePath.data(), kScheme.size(), endOfIdentityInfo - kScheme.size()};
+  if (hdfsIdentity.empty()) {
+    // Fall back to get a fixed endpoint from config.
+    auto hdfsHost = config->get("hive.hdfs.host");
+    VELOX_CHECK(
+        hdfsHost.hasValue(),
+        "hdfsHost is empty, configuration missing for hdfs host");
+    auto hdfsPort = config->get("hive.hdfs.port");
+    VELOX_CHECK(
+        hdfsPort.hasValue(),
+        "hdfsPort is empty, configuration missing for hdfs port");
+    return HdfsServiceEndpoint{*hdfsHost, *hdfsPort};
+  }
+
+  auto hostAndPortSeparator = hdfsIdentity.find(':', 0);
+  // In HDFS HA mode, the hdfsIdentity is a nameservice ID with no port.
+  if (hostAndPortSeparator == std::string::npos) {
+    return HdfsServiceEndpoint{hdfsIdentity, ""};
+  }
+  std::string host{hdfsIdentity.data(), 0, hostAndPortSeparator};
+  std::string port{
+      hdfsIdentity.data(),
+      hostAndPortSeparator + 1,
+      hdfsIdentity.size() - hostAndPortSeparator - 1};
+  return HdfsServiceEndpoint{host, port};
+}
 
 void HdfsFileSystem::remove(std::string_view path) {
   VELOX_UNSUPPORTED("Does not support removing files from hdfs");
 }
 
-void registerHdfsFileSystem() {
-  registerFileSystem(HdfsFileSystem::isHdfsFile, filesystemGenerator);
-}
 } // namespace facebook::velox::filesystems

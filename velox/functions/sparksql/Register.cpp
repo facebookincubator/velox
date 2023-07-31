@@ -28,6 +28,7 @@
 #include "velox/functions/sparksql/Hash.h"
 #include "velox/functions/sparksql/In.h"
 #include "velox/functions/sparksql/LeastGreatest.h"
+#include "velox/functions/sparksql/MightContain.h"
 #include "velox/functions/sparksql/RegexFunctions.h"
 #include "velox/functions/sparksql/RegisterArithmetic.h"
 #include "velox/functions/sparksql/RegisterCompare.h"
@@ -69,7 +70,7 @@ static void workAroundRegistrationMacro(const std::string& prefix) {
 namespace sparksql {
 
 void registerFunctions(const std::string& prefix) {
-  registerFunction<RandFunction, double>({"rand"});
+  registerFunction<RandFunction, double>({prefix + "rand"});
 
   // Register size functions
   registerSize(prefix + "size");
@@ -80,14 +81,44 @@ void registerFunctions(const std::string& prefix) {
   // Register string functions.
   registerFunction<sparksql::ChrFunction, Varchar, int64_t>({prefix + "chr"});
   registerFunction<AsciiFunction, int32_t, Varchar>({prefix + "ascii"});
+  registerFunction<sparksql::LPadFunction, Varchar, Varchar, int32_t, Varchar>(
+      {prefix + "lpad"});
+  registerFunction<sparksql::RPadFunction, Varchar, Varchar, int32_t, Varchar>(
+      {prefix + "rpad"});
+  registerFunction<sparksql::LPadFunction, Varchar, Varchar, int32_t>(
+      {prefix + "lpad"});
+  registerFunction<sparksql::RPadFunction, Varchar, Varchar, int32_t>(
+      {prefix + "rpad"});
+  registerFunction<sparksql::SubstrFunction, Varchar, Varchar, int32_t>(
+      {prefix + "substring"});
+  registerFunction<
+      sparksql::SubstrFunction,
+      Varchar,
+      Varchar,
+      int32_t,
+      int32_t>({prefix + "substring"});
+  registerFunction<
+      sparksql::OverlayVarcharFunction,
+      Varchar,
+      Varchar,
+      Varchar,
+      int32_t,
+      int32_t>({prefix + "overlay"});
+  registerFunction<
+      sparksql::OverlayVarbinaryFunction,
+      Varbinary,
+      Varbinary,
+      Varbinary,
+      int32_t,
+      int32_t>({prefix + "overlay"});
 
-  registerFunction<SubstrFunction, Varchar, Varchar, int32_t>(
-      {prefix + "substring"});
-  registerFunction<SubstrFunction, Varchar, Varchar, int32_t, int32_t>(
-      {prefix + "substring"});
-  exec::registerStatefulVectorFunction("instr", instrSignatures(), makeInstr);
+  registerFunction<sparksql::LeftFunction, Varchar, Varchar, int32_t>(
+      {prefix + "left"});
+
   exec::registerStatefulVectorFunction(
-      "length", lengthSignatures(), makeLength);
+      prefix + "instr", instrSignatures(), makeInstr);
+  exec::registerStatefulVectorFunction(
+      prefix + "length", lengthSignatures(), makeLength);
 
   registerFunction<Md5Function, Varchar, Varbinary>({prefix + "md5"});
   registerFunction<Sha1HexStringFunction, Varchar, Varbinary>(
@@ -146,14 +177,36 @@ void registerFunctions(const std::string& prefix) {
   registerFunction<RTrimFunction, Varchar, Varchar, Varchar>(
       {prefix + "rtrim"});
 
+  registerFunction<TranslateFunction, Varchar, Varchar, Varchar, Varchar>(
+      {prefix + "translate"});
+
   // Register array sort functions.
   exec::registerStatefulVectorFunction(
       prefix + "array_sort", arraySortSignatures(), makeArraySort);
   exec::registerStatefulVectorFunction(
       prefix + "sort_array", sortArraySignatures(), makeSortArray);
 
+  // Register date functions.
   registerFunction<YearFunction, int32_t, Timestamp>({prefix + "year"});
   registerFunction<YearFunction, int32_t, Date>({prefix + "year"});
+
+  registerFunction<UnixTimestampFunction, int64_t>({prefix + "unix_timestamp"});
+
+  registerFunction<UnixTimestampParseFunction, int64_t, Varchar>(
+      {prefix + "unix_timestamp", prefix + "to_unix_timestamp"});
+  registerFunction<
+      UnixTimestampParseWithFormatFunction,
+      int64_t,
+      Varchar,
+      Varchar>({prefix + "unix_timestamp", prefix + "to_unix_timestamp"});
+  registerFunction<MakeDateFunction, Date, int32_t, int32_t, int32_t>(
+      {prefix + "make_date"});
+
+  registerFunction<LastDayFunction, Date, Date>({prefix + "last_day"});
+
+  // Register bloom filter function
+  registerFunction<BloomFilterMightContainFunction, bool, Varbinary, int64_t>(
+      {prefix + "might_contain"});
 }
 
 } // namespace sparksql

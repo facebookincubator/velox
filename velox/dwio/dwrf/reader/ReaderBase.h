@@ -68,7 +68,8 @@ class ReaderBase {
           dwio::common::ReaderOptions::kDefaultDirectorySizeGuess,
       uint64_t filePreloadThreshold =
           dwio::common::ReaderOptions::kDefaultFilePreloadThreshold,
-      dwio::common::FileFormat fileFormat = dwio::common::FileFormat::DWRF);
+      dwio::common::FileFormat fileFormat = dwio::common::FileFormat::DWRF,
+      bool fileColumnNamesReadAsLowerCase = false);
 
   ReaderBase(
       memory::MemoryPool& pool,
@@ -158,13 +159,13 @@ class ReaderBase {
   uint64_t getCompressionBlockSize() const {
     return postScript_->hasCompressionBlockSize()
         ? postScript_->compressionBlockSize()
-        : dwio::common::DEFAULT_COMPRESSION_BLOCK_SIZE;
+        : common::DEFAULT_COMPRESSION_BLOCK_SIZE;
   }
 
-  dwio::common::CompressionKind getCompressionKind() const {
+  common::CompressionKind getCompressionKind() const {
     return postScript_->hasCompressionBlockSize()
         ? postScript_->compression()
-        : dwio::common::CompressionKind::CompressionKind_NONE;
+        : common::CompressionKind::CompressionKind_NONE;
   }
 
   WriterVersion getWriterVersion() const {
@@ -228,7 +229,8 @@ class ReaderBase {
  private:
   static std::shared_ptr<const Type> convertType(
       const FooterWrapper& footer,
-      uint32_t index = 0);
+      uint32_t index = 0,
+      bool fileColumnNamesReadAsLowerCase = false);
 
   memory::MemoryPool& pool_;
   std::unique_ptr<google::protobuf::Arena> arena_;

@@ -15,9 +15,10 @@
  */
 
 #include "velox/exec/tests/utils/PlanBuilder.h"
-#include "velox/functions/prestosql/aggregates/tests/AggregationTestBase.h"
+#include "velox/functions/lib/aggregates/tests/AggregationTestBase.h"
 
 using namespace facebook::velox::exec::test;
+using namespace facebook::velox::functions::aggregate::test;
 
 namespace facebook::velox::aggregate::test {
 
@@ -280,22 +281,15 @@ TEST_F(ArbitraryTest, date) {
       // Grouping key.
       makeFlatVector<int64_t>({1, 1, 2, 2, 3, 3, 4, 4}),
       // Input values: constant within groups.
-      makeNullableFlatVector<Date>(
-          {Date(125),
-           Date(125),
-           Date(126),
-           Date(126),
-           std::nullopt,
-           std::nullopt,
-           std::nullopt,
-           Date(128)}),
+      makeNullableFlatVector<int32_t>(
+          {125, 125, 126, 126, std::nullopt, std::nullopt, std::nullopt, 128},
+          DATE()),
       makeConstant<Timestamp>(std::nullopt, 8),
   });
 
   auto expectedResult = makeRowVector({
       makeFlatVector<int64_t>({1, 2, 3, 4}),
-      makeNullableFlatVector<Date>(
-          {Date(125), Date(126), std::nullopt, Date(128)}),
+      makeNullableFlatVector<int32_t>({125, 126, std::nullopt, 128}, DATE()),
   });
 
   testAggregations({data}, {"c0"}, {"arbitrary(c1)"}, {expectedResult});
@@ -308,10 +302,10 @@ TEST_F(ArbitraryTest, date) {
 
   auto result = readSingleValue(plan);
   ASSERT_TRUE(!result.isNull());
-  ASSERT_EQ(result.kind(), TypeKind::DATE);
+  ASSERT_EQ(result.kind(), TypeKind::INTEGER);
 
-  auto date = result.value<Date>();
-  ASSERT_EQ(date, Date(125));
+  auto date = result.value<int32_t>();
+  ASSERT_EQ(date, 125);
 
   testAggregations({data}, {}, {"arbitrary(c2)"}, "SELECT null");
 }
@@ -321,25 +315,16 @@ TEST_F(ArbitraryTest, interval) {
       // Grouping key.
       makeFlatVector<int64_t>({1, 1, 2, 2, 3, 3, 4, 4}),
       // Input values: constant within groups.
-      makeNullableFlatVector<IntervalDayTime>(
-          {IntervalDayTime(125),
-           IntervalDayTime(125),
-           IntervalDayTime(126),
-           IntervalDayTime(126),
-           std::nullopt,
-           std::nullopt,
-           std::nullopt,
-           IntervalDayTime(128)}),
+      makeNullableFlatVector<int64_t>(
+          {125, 125, 126, 126, std::nullopt, std::nullopt, std::nullopt, 128},
+          INTERVAL_DAY_TIME()),
       makeConstant<Timestamp>(std::nullopt, 8),
   });
 
   auto expectedResult = makeRowVector({
       makeFlatVector<int64_t>({1, 2, 3, 4}),
-      makeNullableFlatVector<IntervalDayTime>(
-          {IntervalDayTime(125),
-           IntervalDayTime(126),
-           std::nullopt,
-           IntervalDayTime(128)}),
+      makeNullableFlatVector<int64_t>(
+          {125, 126, std::nullopt, 128}, INTERVAL_DAY_TIME()),
   });
 
   testAggregations({data}, {"c0"}, {"arbitrary(c1)"}, {expectedResult});
@@ -350,12 +335,8 @@ TEST_F(ArbitraryTest, interval) {
                   .singleAggregation({}, {"arbitrary(c1)"})
                   .planNode();
 
-  auto result = readSingleValue(plan);
-  ASSERT_TRUE(!result.isNull());
-  ASSERT_EQ(result.kind(), TypeKind::INTERVAL_DAY_TIME);
-
-  auto interval = result.value<IntervalDayTime>();
-  ASSERT_EQ(interval, IntervalDayTime(125));
+  auto interval = readSingleValue(plan);
+  ASSERT_EQ(interval.value<int64_t>(), 125);
 
   testAggregations({data}, {}, {"arbitrary(c2)"}, "SELECT null");
 }

@@ -178,34 +178,17 @@ VectorPtr BatchMaker::createVector<TypeKind::DOUBLE>(
 }
 
 template <>
-VectorPtr BatchMaker::createVector<TypeKind::SHORT_DECIMAL>(
+VectorPtr BatchMaker::createVector<TypeKind::HUGEINT>(
     const std::shared_ptr<const Type>& type,
     size_t size,
     MemoryPool& pool,
     std::mt19937& gen,
     std::function<bool(vector_size_t /*index*/)> isNullAt) {
-  return createScalar<UnscaledShortDecimal>(
-      size,
-      gen,
-      [&gen]() { return UnscaledShortDecimal(Random::rand32(gen)); },
-      pool,
-      isNullAt,
-      type);
-}
-
-template <>
-VectorPtr BatchMaker::createVector<TypeKind::LONG_DECIMAL>(
-    const std::shared_ptr<const Type>& type,
-    size_t size,
-    MemoryPool& pool,
-    std::mt19937& gen,
-    std::function<bool(vector_size_t /*index*/)> isNullAt) {
-  return createScalar<UnscaledLongDecimal>(
+  return createScalar<int128_t>(
       size,
       gen,
       [&gen]() {
-        return UnscaledLongDecimal(
-            buildInt128(Random::rand32(gen), Random::rand32(gen)));
+        return HugeInt::build(Random::rand32(gen), Random::rand32(gen));
       },
       pool,
       isNullAt,
@@ -292,21 +275,6 @@ VectorPtr BatchMaker::createVector<TypeKind::TIMESTAMP>(
             TIME_OFFSET + Random::rand32(0, 60 * 60 * 24 * 365, gen),
             Random::rand32(0, 1'000'000, gen));
       },
-      pool,
-      isNullAt);
-}
-
-template <>
-VectorPtr BatchMaker::createVector<TypeKind::DATE>(
-    const std::shared_ptr<const Type>& /* unused */,
-    size_t size,
-    MemoryPool& pool,
-    std::mt19937& gen,
-    std::function<bool(vector_size_t /*index*/)> isNullAt) {
-  return createScalar<Date>(
-      size,
-      gen,
-      [&gen]() { return Date(Random::rand32(gen)); },
       pool,
       isNullAt);
 }

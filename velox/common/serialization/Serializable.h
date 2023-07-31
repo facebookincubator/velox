@@ -88,7 +88,8 @@ class ISerializable {
   template <
       typename T,
       typename = std::enable_if_t<std::is_base_of_v<ISerializable, T>>>
-  static folly::dynamic serialize(std::shared_ptr<const T> serializable) {
+  static folly::dynamic serialize(
+      const std::shared_ptr<const T>& serializable) {
     return serializable->serialize();
   }
 
@@ -103,11 +104,15 @@ class ISerializable {
       typename T,
       typename = std::enable_if_t<
           is_any_of<T, int64_t, double, std::string, bool>::value>>
-  static folly::dynamic serialize(T val) {
+  static folly::dynamic serialize(const T& val) {
     return val;
   }
 
   static folly::dynamic serialize(int32_t val) {
+    return folly::dynamic{(int64_t)val};
+  }
+
+  static folly::dynamic serialize(uint32_t val) {
     return folly::dynamic{(int64_t)val};
   }
 
@@ -164,6 +169,12 @@ class ISerializable {
     // use the key to lookup creator and call it.
     // creator generally be a static method in the class.
     auto name = obj["name"].asString();
+
+    auto res = deserializeAsUniquePtr<T>(obj);
+    if (res != nullptr) {
+      return std::dynamic_pointer_cast<const T>(
+          std::shared_ptr(std::move(res)));
+    }
 
     const auto& registryWithContext =
         velox::DeserializationWithContextRegistryForSharedPtr();
@@ -309,6 +320,23 @@ class ISerializable {
   }
 
   virtual ~ISerializable() = default;
+
+ private:
+  template <
+      class T,
+      typename = std::enable_if_t<std::is_base_of_v<ISerializable, T>>>
+  static auto deserializeAsUniquePtr(const folly::dynamic& obj) {
+    auto name = obj["name"].asString();
+    const auto& registry = velox::deserializationRegistryForUniquePtr();
+    using deserializeType =
+        decltype(DeserializationRegistryUniquePtrType::Create(
+            std::declval<std::string>(), std::declval<folly::dynamic>()));
+    if (registry.Has(name)) {
+      return registry.Create(name, obj);
+    } else {
+      return static_cast<deserializeType>(nullptr);
+    }
+  }
 };
 
 } // namespace velox

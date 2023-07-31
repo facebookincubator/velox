@@ -15,17 +15,14 @@
  */
 
 #include "velox/connectors/hive/FileHandle.h"
+#include "velox/common/base/Counters.h"
+#include "velox/common/base/StatsReporter.h"
 #include "velox/common/file/FileSystems.h"
+#include "velox/common/time/Timer.h"
 
 #include <atomic>
 
 namespace facebook::velox {
-
-uint64_t FileHandleSizer::operator()(const FileHandle& fileHandle) {
-  // TODO: remember to add in the size of the hash map and its contents
-  // when we add it later.
-  return fileHandle.file->memoryUsage();
-}
 
 namespace {
 // The group tracking is at the level of the directory, i.e. Hive partition.
@@ -36,15 +33,25 @@ std::string groupName(const std::string& filename) {
 }
 } // namespace
 
-std::unique_ptr<FileHandle> FileHandleGenerator::operator()(
+std::shared_ptr<FileHandle> FileHandleGenerator::operator()(
     const std::string& filename) {
-  auto fileHandle = std::make_unique<FileHandle>();
-  fileHandle->file = filesystems::getFileSystem(filename, properties_)
-                         ->openFileForRead(filename);
-  fileHandle->uuid = StringIdLease(fileIds(), filename);
-  fileHandle->groupId = StringIdLease(fileIds(), groupName(filename));
-  VLOG(1) << "Generating file handle for: " << filename
-          << " uuid: " << fileHandle->uuid.id();
+  // We have seen cases where drivers are stuck when creating file handles.
+  // Adding a trace here to spot this more easily in future.
+  process::TraceContext trace("FileHandleGenerator::operator()");
+  uint64_t elapsedTimeUs{0};
+  std::shared_ptr<FileHandle> fileHandle;
+  {
+    MicrosecondTimer timer(&elapsedTimeUs);
+    fileHandle = std::make_shared<FileHandle>();
+    fileHandle->file = filesystems::getFileSystem(filename, properties_)
+                           ->openFileForRead(filename);
+    fileHandle->uuid = StringIdLease(fileIds(), filename);
+    fileHandle->groupId = StringIdLease(fileIds(), groupName(filename));
+    VLOG(1) << "Generating file handle for: " << filename
+            << " uuid: " << fileHandle->uuid.id();
+  }
+  REPORT_ADD_HISTOGRAM_VALUE(
+      kCounterHiveFileHandleGenerateLatencyMs, elapsedTimeUs / 1000);
   // TODO: build the hash map/etc per file type -- presumably after reading
   // the appropriate magic number from the file, or perhaps we include the file
   // type in the file handle key.

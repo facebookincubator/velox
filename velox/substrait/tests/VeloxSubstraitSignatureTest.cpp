@@ -31,7 +31,7 @@ class VeloxSubstraitSignatureTest : public ::testing::Test {
   }
 
   static std::string toSubstraitSignature(const TypePtr& type) {
-    return VeloxSubstraitSignature::toSubstraitSignature(type->kind());
+    return VeloxSubstraitSignature::toSubstraitSignature(type);
   }
 
   static std::string toSubstraitSignature(
@@ -55,8 +55,6 @@ TEST_F(VeloxSubstraitSignatureTest, toSubstraitSignatureWithType) {
   ASSERT_EQ(toSubstraitSignature(VARBINARY()), "vbin");
   ASSERT_EQ(toSubstraitSignature(TIMESTAMP()), "ts");
   ASSERT_EQ(toSubstraitSignature(DATE()), "date");
-  ASSERT_EQ(toSubstraitSignature(SHORT_DECIMAL(18, 2)), "dec");
-  ASSERT_EQ(toSubstraitSignature(LONG_DECIMAL(18, 2)), "dec");
   ASSERT_EQ(toSubstraitSignature(ARRAY(BOOLEAN())), "list");
   ASSERT_EQ(toSubstraitSignature(ARRAY(INTEGER())), "list");
   ASSERT_EQ(toSubstraitSignature(MAP(INTEGER(), BIGINT())), "map");
@@ -65,8 +63,6 @@ TEST_F(VeloxSubstraitSignatureTest, toSubstraitSignatureWithType) {
   ASSERT_EQ(toSubstraitSignature(ROW({MAP(INTEGER(), INTEGER())})), "struct");
   ASSERT_EQ(toSubstraitSignature(ROW({ROW({INTEGER()})})), "struct");
   ASSERT_EQ(toSubstraitSignature(UNKNOWN()), "u!name");
-
-  ASSERT_ANY_THROW(toSubstraitSignature(INTERVAL_DAY_TIME()));
 }
 
 TEST_F(

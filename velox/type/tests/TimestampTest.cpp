@@ -71,25 +71,92 @@ TEST(TimestampTest, fromNanos) {
 }
 
 TEST(TimestampTest, arithmeticOverflow) {
-  int64_t positiveSecond = 9223372036854776;
-  uint64_t nano = 123 * 1'000'000;
+  int64_t positiveSecond = Timestamp::kMaxSeconds;
+  int64_t negativeSecond = Timestamp::kMinSeconds;
+  uint64_t nano = Timestamp::kMaxNanos;
 
   Timestamp ts1(positiveSecond, nano);
-  VELOX_ASSERT_THROW(
-      ts1.toMillis(), "integer overflow: 9223372036854776 * 1000");
-  VELOX_ASSERT_THROW(
-      ts1.toMicros(), "integer overflow: 9223372036854776 * 1000000");
-  VELOX_ASSERT_THROW(
-      ts1.toNanos(), "integer overflow: 9223372036854776 * 1000000000");
+  VELOX_ASSERT_THROW(ts1.toMillis(), "Could not convert Timestamp");
+  VELOX_ASSERT_THROW(ts1.toMicros(), "Could not convert Timestamp");
+  VELOX_ASSERT_THROW(ts1.toNanos(), "Could not convert Timestamp");
 
-  Timestamp ts2(-positiveSecond, nano);
-  VELOX_ASSERT_THROW(
-      ts2.toMillis(), "integer overflow: -9223372036854776 * 1000");
-  VELOX_ASSERT_THROW(
-      ts2.toMicros(), "integer overflow: -9223372036854776 * 1000000");
-  VELOX_ASSERT_THROW(
-      ts2.toNanos(), "integer overflow: -9223372036854776 * 1000000000");
+  Timestamp ts2(negativeSecond, 0);
+  VELOX_ASSERT_THROW(ts2.toMillis(), "Could not convert Timestamp");
+  VELOX_ASSERT_THROW(ts2.toMicros(), "Could not convert Timestamp");
+  VELOX_ASSERT_THROW(ts2.toNanos(), "Could not convert Timestamp");
 }
 
+TEST(TimestampTest, toAppend) {
+  std::string tsStringZeroValue;
+  toAppend(Timestamp(0, 0), &tsStringZeroValue);
+  EXPECT_EQ("1970-01-01T00:00:00.000000000", tsStringZeroValue);
+
+  std::string tsStringCommonValue;
+  toAppend(Timestamp(946729316, 0), &tsStringCommonValue);
+  EXPECT_EQ("2000-01-01T12:21:56.000000000", tsStringCommonValue);
+
+  std::string tsStringFarInFuture;
+  toAppend(Timestamp(94668480000, 0), &tsStringFarInFuture);
+  EXPECT_EQ("4969-12-04T00:00:00.000000000", tsStringFarInFuture);
+
+  std::string tsStringWithNanos;
+  toAppend(Timestamp(946729316, 123), &tsStringWithNanos);
+  EXPECT_EQ("2000-01-01T12:21:56.000000123", tsStringWithNanos);
+
+  EXPECT_EQ(
+      "2000-01-01T00:00:00.000000000",
+      folly::to<std::string>(Timestamp(946684800, 0)));
+  EXPECT_EQ(
+      "2000-01-01T12:21:56.000000123",
+      folly::to<std::string>(Timestamp(946729316, 123)));
+  EXPECT_EQ(
+      "1970-01-01T02:01:06.000000000",
+      folly::to<std::string>(Timestamp(7266, 0)));
+  EXPECT_EQ(
+      "2000-01-01T12:21:56.129900000",
+      folly::to<std::string>(Timestamp(946729316, 129900000)));
+}
+
+TEST(TimestampTest, now) {
+  using namespace std::chrono;
+
+  auto now = Timestamp::now();
+
+  auto expectedEpochSecs =
+      duration_cast<seconds>(system_clock::now().time_since_epoch()).count();
+  auto expectedEpochMs =
+      duration_cast<milliseconds>(system_clock::now().time_since_epoch())
+          .count();
+
+  EXPECT_GE(expectedEpochSecs, now.getSeconds());
+  EXPECT_GE(expectedEpochMs, now.toMillis());
+}
+
+DEBUG_ONLY_TEST(TimestampTest, invalidInput) {
+  constexpr uint64_t kUint64Max = std::numeric_limits<uint64_t>::max();
+  constexpr int64_t kInt64Min = std::numeric_limits<int64_t>::min();
+  constexpr int64_t kInt64Max = std::numeric_limits<int64_t>::max();
+  // Seconds invalid range.
+  VELOX_ASSERT_THROW(Timestamp(kInt64Min, 1), "Timestamp seconds out of range");
+  VELOX_ASSERT_THROW(Timestamp(kInt64Max, 1), "Timestamp seconds out of range");
+  VELOX_ASSERT_THROW(
+      Timestamp(Timestamp::kMinSeconds - 1, 1),
+      "Timestamp seconds out of range");
+  VELOX_ASSERT_THROW(
+      Timestamp(Timestamp::kMaxSeconds + 1, 1),
+      "Timestamp seconds out of range");
+
+  // Nanos invalid range.
+  VELOX_ASSERT_THROW(Timestamp(1, kUint64Max), "Timestamp nanos out of range");
+  VELOX_ASSERT_THROW(
+      Timestamp(1, Timestamp::kMaxNanos + 1), "Timestamp nanos out of range");
+}
+
+TEST(TimestampTest, toString) {
+  auto kMin = Timestamp(Timestamp::kMinSeconds, 0);
+  auto kMax = Timestamp(Timestamp::kMaxSeconds, Timestamp::kMaxNanos);
+  EXPECT_EQ("-292275055-05-16T16:47:04.000000000", kMin.toString());
+  EXPECT_EQ("292278994-08-17T07:12:55.999999999", kMax.toString());
+}
 } // namespace
 } // namespace facebook::velox

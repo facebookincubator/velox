@@ -15,33 +15,39 @@
  */
 #pragma once
 
+#include "velox/exec/AggregateInfo.h"
 #include "velox/exec/AggregationMasks.h"
+#include "velox/exec/DistinctAggregations.h"
 #include "velox/exec/HashTable.h"
+#include "velox/exec/SortedAggregations.h"
 #include "velox/exec/Spiller.h"
 #include "velox/exec/TreeOfLosers.h"
 #include "velox/exec/VectorHasher.h"
 
 namespace facebook::velox::exec {
 
-class Aggregate;
-
 class GroupingSet {
  public:
   GroupingSet(
+      const RowTypePtr& inputType,
       std::vector<std::unique_ptr<VectorHasher>>&& hashers,
       std::vector<column_index_t>&& preGroupedKeys,
-      std::vector<std::unique_ptr<Aggregate>>&& aggregates,
-      std::vector<std::optional<column_index_t>>&& aggrMaskChannels,
-      std::vector<std::vector<column_index_t>>&& channelLists,
-      std::vector<std::vector<VectorPtr>>&& constantLists,
-      std::vector<TypePtr>&& intermediateTypes,
+      std::vector<AggregateInfo>&& aggregates,
       bool ignoreNullKeys,
       bool isPartial,
       bool isRawInput,
-      const Spiller::Config* FOLLY_NULLABLE spillConfig,
-      OperatorCtx* FOLLY_NONNULL operatorCtx);
+      const Spiller::Config* spillConfig,
+      tsan_atomic<bool>* nonReclaimableSection,
+      OperatorCtx* operatorCtx);
 
   ~GroupingSet();
+
+  // Used by MarkDistinct operator to identify rows with unique values.
+  static std::unique_ptr<GroupingSet> createForMarkDistinct(
+      const RowTypePtr& inputType,
+      std::vector<std::unique_ptr<VectorHasher>>&& hashers,
+      OperatorCtx* operatorCtx,
+      tsan_atomic<bool>* nonReclaimableSection);
 
   void addInput(const RowVectorPtr& input, bool mayPushdown);
 
@@ -65,6 +71,19 @@ class GroupingSet {
   uint64_t allocatedBytes() const;
 
   void resetPartial();
+
+  /// Returns true if 'this' should start producing partial
+  /// aggregation results. Checks the memory consumption against
+  /// 'maxBytes'. If exceeding 'maxBytes', sees if changing hash mode
+  /// can free up space and rehashes and returns false if significant
+  /// space was recovered. In specific, changing from an array hash
+  /// based on value ranges to one based on value ids can save a lot.
+  bool isPartialFull(int64_t maxBytes);
+
+  /// Returns the count of the hash table, if any.
+  int64_t numDistinct() const {
+    return table_ ? table_->numDistinct() : 0;
+  }
 
   const HashLookup& hashLookup() const;
 
@@ -91,6 +110,17 @@ class GroupingSet {
   int64_t numRows() const {
     return table_ ? table_->rows()->numRows() : 0;
   }
+
+  // Frees hash tables and other state when giving up partial aggregation as
+  // non-productive. Must be called before toIntermediate() is used.
+  void abandonPartialAggregation();
+
+  /// Translates the raw input in input to accumulators initialized from a
+  /// single input row. Passes grouping keys through.
+  void toIntermediate(const RowVectorPtr& input, RowVectorPtr& result);
+
+  /// Returns an estimate of the average row size.
+  std::optional<int64_t> estimateRowSize() const;
 
  private:
   void addInputForActiveRows(const RowVectorPtr& input, bool mayPushdown);
@@ -150,16 +180,22 @@ class GroupingSet {
   // accumulated and we have a new key, we produce the output and
   // clear 'mergeRows_' with extractSpillResult() and only then do
   // initializeRow().
-  void initializeRow(SpillMergeStream& keys, char* FOLLY_NONNULL row);
+  void initializeRow(SpillMergeStream& keys, char* row);
 
   // Updates the accumulators in 'row' with the intermediate type data from
   // 'keys'. This is called for each row received from a merge of spilled data.
-  void updateRow(SpillMergeStream& keys, char* FOLLY_NONNULL row);
+  void updateRow(SpillMergeStream& keys, char* row);
 
   // Copies the finalized state from 'mergeRows' to 'result' and clears
   // 'mergeRows'. Used for producing a batch of results when aggregating spilled
   // groups.
   void extractSpillResult(const RowVectorPtr& result);
+
+  // Return a list of accumulators for 'aggregates_', plus one more accumulator
+  // for 'sortedAggregations_', and one for each 'distinctAggregations_'.  When
+  // 'excludeToIntermediate' is true, skip the functions that support
+  // 'toIntermediate'.
+  std::vector<Accumulator> accumulators(bool excludeToIntermediate);
 
   std::vector<column_index_t> keyChannels_;
 
@@ -170,17 +206,11 @@ class GroupingSet {
   const bool isGlobal_;
   const bool isPartial_;
   const bool isRawInput_;
-  std::vector<std::unique_ptr<Aggregate>> aggregates_;
-  AggregationMasks masks_;
-  // Argument list for the corresponding element of 'aggregates_'.
-  const std::vector<std::vector<column_index_t>> channelLists_;
-  // Constant arguments to aggregates. Corresponds pairwise to
-  // 'channelLists_'. This is used when channelLists_[i][j] ==
-  // kConstantChannel.
-  const std::vector<std::vector<VectorPtr>> constantLists_;
 
-  // Types for extracting accumulators for spilling.
-  const std::vector<TypePtr> intermediateTypes_;
+  std::vector<AggregateInfo> aggregates_;
+  AggregationMasks masks_;
+  std::unique_ptr<SortedAggregations> sortedAggregations_;
+  std::vector<std::unique_ptr<DistinctAggregations>> distinctAggregations_;
 
   const bool ignoreNullKeys_;
 
@@ -188,7 +218,11 @@ class GroupingSet {
   // If it is zero, then there is no such limit.
   const uint64_t spillMemoryThreshold_;
 
-  const Spiller::Config* FOLLY_NULLABLE const spillConfig_; // Not owned.
+  const Spiller::Config* const spillConfig_; // Not owned.
+
+  // Indicates if this grouping set and the associated hash aggregation operator
+  // is under non-reclaimable execution section or not.
+  tsan_atomic<bool>* const nonReclaimableSection_;
 
   // Boolean indicating whether accumulators for a global aggregation (i.e.
   // aggregation with no grouping keys) have been initialized.
@@ -205,7 +239,7 @@ class GroupingSet {
   // Used to allocate memory for a single row accumulating results of global
   // aggregation
   HashStringAllocator stringAllocator_;
-  AllocationPool rows_;
+  memory::AllocationPool rows_;
   const bool isAdaptive_;
 
   bool noMoreInput_{false};
@@ -229,7 +263,7 @@ class GroupingSet {
   std::unique_ptr<RowContainer> mergeRows_;
 
   // The row with the current merge state, allocated from 'mergeRow_'.
-  char* FOLLY_NULLABLE mergeState_ = nullptr;
+  char* mergeState_ = nullptr;
 
   // The currently running spill partition in producing spilld output.
   int32_t outputPartition_{-1};
@@ -262,6 +296,22 @@ class GroupingSet {
   // Counts input batches and triggers spilling if folly hash of this % 100 <=
   // 'testSpillPct_';.
   uint64_t spillTestCounter_{0};
+
+  // True if partial aggregation has been given up as non-productive.
+  bool abandonedPartialAggregation_{false};
+
+  // True if partial aggregation and all aggregates have a fast path from raw
+  // input to intermediate. Initialized in abandonPartialAggregation().
+  bool allSupportToIntermediate_;
+
+  // RowContainer for toIntermediate for aggregates that do not have a
+  // toIntermediate() fast path
+  std::unique_ptr<RowContainer> intermediateRows_;
+  std::vector<char*> intermediateGroups_;
+  std::vector<vector_size_t> intermediateRowNumbers_;
+  // Temporary for case where an aggregate in toIntermediate() outputs post-init
+  // state of aggregate for all rows.
+  std::vector<char*> firstGroup_;
 };
 
 } // namespace facebook::velox::exec

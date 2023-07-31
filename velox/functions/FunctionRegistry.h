@@ -25,7 +25,6 @@ namespace facebook::velox {
 
 using FunctionSignatureMap = std::
     unordered_map<std::string, std::vector<const exec::FunctionSignature*>>;
-
 /// Returns a mapping of all Simple and Vector functions registered in Velox
 /// The mapping is function name -> list of function signatures
 FunctionSignatureMap getFunctionSignatures();
@@ -67,4 +66,6 @@ std::shared_ptr<const Type> resolveVectorFunction(
     const std::string& functionName,
     const std::vector<TypePtr>& argTypes);
 
+/// Clears the function registry.
+void clearFunctionRegistry();
 } // namespace facebook::velox

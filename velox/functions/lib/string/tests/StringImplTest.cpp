@@ -15,6 +15,7 @@
  */
 
 #include "velox/functions/lib/string/StringImpl.h"
+#include "velox/common/base/tests/GTestUtils.h"
 #include "velox/core/CoreTypeSystem.h"
 #include "velox/type/StringView.h"
 
@@ -246,6 +247,39 @@ TEST_F(StringImplTest, charToCodePoint) {
   testExpectDeath("hello");
   testExpectDeath("\u666E\u5217\u65AF\u6258");
   testExpectDeath("");
+}
+
+TEST_F(StringImplTest, stringToCodePoints) {
+  auto testStringToCodePoints =
+      [](const std::string& charString,
+         const std::vector<int32_t>& expectedCodePoints) {
+        std::vector<int32_t> codePoints = stringToCodePoints(charString);
+        ASSERT_EQ(codePoints.size(), expectedCodePoints.size());
+        for (int i = 0; i < codePoints.size(); i++) {
+          ASSERT_EQ(codePoints.at(i), expectedCodePoints.at(i));
+        }
+      };
+
+  testStringToCodePoints("", {});
+  testStringToCodePoints("h", {0x0068});
+  testStringToCodePoints("hello", {0x0068, 0x0065, 0x006C, 0x006C, 0x006F});
+
+  testStringToCodePoints("hïllo", {0x0068, 0x00EF, 0x006C, 0x006C, 0x006F});
+  testStringToCodePoints("hüóOO", {0x0068, 0x00FC, 0x00F3, 0x004F, 0x004F});
+  testStringToCodePoints("\u840C", {0x840C});
+
+  VELOX_ASSERT_THROW(
+      testStringToCodePoints("\xA9", {}),
+      "Invalid UTF-8 encoding in characters");
+  VELOX_ASSERT_THROW(
+      testStringToCodePoints("ü\xA9", {}),
+      "Invalid UTF-8 encoding in characters");
+  VELOX_ASSERT_THROW(
+      testStringToCodePoints("ü\xA9hello wooooorld", {}),
+      "Invalid UTF-8 encoding in characters");
+  VELOX_ASSERT_THROW(
+      testStringToCodePoints("ü\xA9hello wooooooooorrrrrld", {}),
+      "Invalid UTF-8 encoding in characters");
 }
 
 TEST_F(StringImplTest, stringPosition) {
@@ -495,4 +529,45 @@ TEST_F(StringImplTest, pad) {
   runTestUserError("text", -1, "a");
   runTestUserError(
       "text", ((int64_t)std::numeric_limits<int32_t>::max()) + 1, "a");
+}
+
+// Make sure that utf8proc_codepoint returns invalid codepoint (-1) for
+// incomplete character of length>1.
+TEST_F(StringImplTest, utf8proc_codepoint) {
+  int size;
+
+  std::string twoBytesChar = "\xdd\x81";
+  EXPECT_EQ(
+      utf8proc_codepoint(twoBytesChar.data(), twoBytesChar.data() + 1, size),
+      -1);
+  EXPECT_NE(
+      utf8proc_codepoint(twoBytesChar.data(), twoBytesChar.data() + 2, size),
+      -1);
+  EXPECT_EQ(size, 2);
+
+  std::string threeBytesChar = "\xe0\xa4\x86";
+  for (int i = 1; i <= 2; i++) {
+    EXPECT_EQ(
+        utf8proc_codepoint(
+            threeBytesChar.data(), threeBytesChar.data() + i, size),
+        -1);
+  }
+
+  EXPECT_NE(
+      utf8proc_codepoint(
+          threeBytesChar.data(), threeBytesChar.data() + 3, size),
+      -1);
+  EXPECT_EQ(size, 3);
+
+  std::string fourBytesChar = "\xf0\x92\x80\x85";
+  for (int i = 1; i <= 3; i++) {
+    EXPECT_EQ(
+        utf8proc_codepoint(
+            fourBytesChar.data(), fourBytesChar.data() + i, size),
+        -1);
+  }
+  EXPECT_NE(
+      utf8proc_codepoint(fourBytesChar.data(), fourBytesChar.data() + 4, size),
+      -1);
+  EXPECT_EQ(size, 4);
 }

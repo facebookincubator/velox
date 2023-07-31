@@ -12,11 +12,38 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import pyarrow as pa
 import pyvelox.pyvelox as pv
 import unittest
 
 
 class TestVeloxVector(unittest.TestCase):
+    def test_inheritance(self):
+        v1 = pv.from_list([1, 2, 3])
+        v2 = pv.from_list(["hello", "world"])
+        v3 = pv.constant_vector(1000, 10)
+        v4 = pv.dictionary_vector(pv.from_list([1, 2, 3]), [0, 0, 1])
+
+        self.assertTrue(isinstance(v1, pv.BaseVector))
+        self.assertTrue(isinstance(v2, pv.BaseVector))
+        self.assertTrue(isinstance(v3, pv.BaseVector))
+        self.assertTrue(isinstance(v4, pv.BaseVector))
+
+        self.assertTrue(isinstance(v1, pv.SimpleVector_BIGINT))
+        self.assertTrue(isinstance(v2, pv.SimpleVector_VARBINARY))
+        self.assertTrue(isinstance(v3, pv.SimpleVector_BIGINT))
+        self.assertTrue(isinstance(v4, pv.SimpleVector_BIGINT))
+
+        self.assertTrue(isinstance(v1, pv.FlatVector_BIGINT))
+        self.assertTrue(isinstance(v2, pv.FlatVector_VARBINARY))
+        self.assertTrue(isinstance(v3, pv.ConstantVector_BIGINT))
+        self.assertTrue(isinstance(v4, pv.DictionaryVector_BIGINT))
+
+        self.assertFalse(isinstance(v1, pv.ConstantVector_BIGINT))
+        self.assertFalse(isinstance(v2, pv.ConstantVector_VARBINARY))
+        self.assertFalse(isinstance(v3, pv.FlatVector_BIGINT))
+        self.assertFalse(isinstance(v4, pv.ConstantVector_BIGINT))
+
     def test_from_list(self):
         self.assertTrue(isinstance(pv.from_list([1, 2, 3]), pv.BaseVector))
         self.assertTrue(isinstance(pv.from_list([1, None, None]), pv.BaseVector))
@@ -27,6 +54,77 @@ class TestVeloxVector(unittest.TestCase):
             pv.from_list([None, None, None])
         with self.assertRaises(ValueError):
             pv.from_list([])
+
+    def test_constant_encoding(self):
+        ints = pv.constant_vector(1000, 10)
+        strings = pv.constant_vector("hello", 100)
+        null = pv.constant_vector(None, 1000, pv.SmallintType())
+        floats = pv.constant_vector(-3.14, 499)
+        self.assertEqual(ints.encoding(), pv.VectorEncodingSimple.CONSTANT)
+        self.assertEqual(strings.encoding(), pv.VectorEncodingSimple.CONSTANT)
+        self.assertEqual(null.encoding(), pv.VectorEncodingSimple.CONSTANT)
+        self.assertEqual(floats.encoding(), pv.VectorEncodingSimple.CONSTANT)
+        self.assertEqual(len(ints), 10)
+        self.assertEqual(len(strings), 100)
+        self.assertEqual(len(null), 1000)
+        self.assertEqual(len(floats), 499)
+        self.assertEqual(ints.typeKind(), pv.TypeKind.BIGINT)
+        self.assertEqual(strings.typeKind(), pv.TypeKind.VARCHAR)
+        self.assertEqual(null.typeKind(), pv.TypeKind.SMALLINT)
+        self.assertEqual(floats.typeKind(), pv.TypeKind.DOUBLE)
+
+        for i in range(len(ints)):
+            self.assertEqual(ints[i], 1000)
+        for x in ints:
+            self.assertEqual(x, 1000)
+
+        for i in range(len(strings)):
+            self.assertEqual(strings[i], "hello")
+        for x in strings:
+            self.assertEqual(x, "hello")
+
+        for i in range(len(null)):
+            self.assertEqual(null[i], None)
+        for x in null:
+            self.assertEqual(x, None)
+
+        for i in range(len(floats)):
+            self.assertEqual(floats[i], -3.14)
+        for x in floats:
+            self.assertEqual(x, -3.14)
+
+        with self.assertRaises(IndexError):
+            ints[10]
+        with self.assertRaises(TypeError):
+            ints[1] = -1
+
+    def test_dictionary_encoding(self):
+        base_indices = [0, 0, 1, 0, 2]
+        vec = pv.dictionary_vector(pv.from_list([1, 2, 3]), base_indices)
+        self.assertTrue(isinstance(vec, pv.DictionaryVector_BIGINT))
+        expected_values = [1, 1, 2, 1, 3]
+        self.assertEqual(len(vec), len(expected_values))
+        for i in range(len(vec)):
+            self.assertEqual(vec[i], expected_values[i])
+
+        indices = vec.indices()
+        self.assertTrue(isinstance(indices, pv.DictionaryIndices))
+        self.assertEqual(len(indices), len(base_indices))
+        for i in range(len(indices)):
+            self.assertEqual(indices[i], base_indices[i])
+
+        base_vector = pv.from_list([1, 2, 3, 4, 5, 6, 7])
+        base_indices = [6, 6]
+        vec = pv.dictionary_vector(base_vector, base_indices)
+        expected_values = [7, 7]
+        for i in range(len(vec)):
+            self.assertEqual(vec[i], expected_values[i])
+
+        with self.assertRaises(TypeError):
+            pv.dictionary_vector(pv.from_list([1, 2, 3]), ["a", 0, 0, "b"])
+        with self.assertRaises(IndexError):
+            pv.dictionary_vector(pv.from_list([1, 2, 3]), [1, 2, 1000000])
+            pv.dictionary_vector(pv.from_list([1, 2, 3]), [0, -1, -2])
 
     def test_to_string(self):
         self.assertEqual(
@@ -156,3 +254,70 @@ class TestVeloxVector(unittest.TestCase):
 
         with self.assertRaises(TypeError):
             ints2.append(strs2)
+
+    def test_slice(self):
+        a = pv.from_list(list(range(0, 10)))
+
+        b = a.slice(2, 6)
+        self.assertEqual(len(b), 4)
+        for i in range(4):
+            self.assertEqual(b[i], i + 2)
+
+        with self.assertRaises(NotImplementedError):
+            c = a.slice(2, 6, 2)
+
+        d = a[3:6]
+        self.assertEqual(len(d), 3)
+        for i in range(3):
+            self.assertEqual(d[i], i + 3)
+
+        with self.assertRaises(NotImplementedError):
+            e = a[3:8:3]
+
+    def test_export_to_arrow(self):
+        test_cases = [
+            ([1, 2, 3], pa.int64()),
+            ([1.1, 2.2, 3.3], pa.float64()),
+            (["ab", "bc", "ca"], pa.string()),
+        ]
+        for data, expected_type in test_cases:
+            with self.subTest(data=data):
+                vector = pv.from_list(data)
+                array = pv.export_to_arrow(vector)
+
+                self.assertEqual(array.type, expected_type)
+                self.assertEqual(len(array), len(data))
+                self.assertListEqual(array.tolist(), data)
+
+    def test_import_from_arrow(self):
+        test_cases = [
+            ([11, 26, 31], pa.int64(), pv.IntegerType()),
+            ([0.1, 2.5, 3.9], pa.float64(), pv.DoubleType()),
+            (["az", "by", "cx"], pa.string(), pv.VarcharType()),
+        ]
+        for data, dtype, expected_type in test_cases:
+            with self.subTest(data=data):
+                array = pa.array(data, type=dtype)
+                velox_vector = pv.import_from_arrow(array)
+
+                self.assertEqual(velox_vector.size(), len(data))
+                self.assertTrue(velox_vector.dtype(), expected_type)
+                for i in range(0, len(data)):
+                    self.assertEqual(velox_vector[i], data[i])
+
+    def test_roundtrip_conversion(self):
+        test_cases = [
+            ([41, 92, 13], pv.IntegerType()),
+            ([17.19, 22.25, 13.3], pv.DoubleType()),
+            (["aa1", "bb2", "cc3"], pv.VarcharType()),
+        ]
+        for data, expected_type in test_cases:
+            with self.subTest(data=data):
+                vector = pv.from_list(data)
+                array = pv.export_to_arrow(vector)
+
+                velox_vector = pv.import_from_arrow(array)
+                self.assertEqual(velox_vector.size(), len(data))
+                self.assertTrue(velox_vector.dtype(), expected_type)
+                for i in range(0, len(data)):
+                    self.assertEqual(velox_vector[i], data[i])

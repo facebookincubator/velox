@@ -19,7 +19,7 @@ add_test(
   WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR})
 target_link_libraries(
   velox_dwio_parquet_reader_test velox_dwio_native_parquet_reader
-  ${VELOX_LINK_LIBS} ${TEST_LINK_LIBS})
+  velox_link_libs ${TEST_LINK_LIBS})
 
 add_executable(velox_dwio_parquet_page_reader_test ParquetPageReaderTest.cpp)
 add_test(
@@ -28,7 +28,7 @@ add_test(
   WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR})
 target_link_libraries(
   velox_dwio_parquet_page_reader_test velox_dwio_native_parquet_reader
-  ${VELOX_LINK_LIBS} ${TEST_LINK_LIBS})
+  velox_link_libs ${TEST_LINK_LIBS})
 
 add_executable(velox_parquet_e2e_filter_test E2EFilterTest.cpp)
 add_test(velox_parquet_e2e_filter_test velox_parquet_e2e_filter_test)
@@ -37,10 +37,10 @@ target_link_libraries(
   velox_e2e_filter_test_base
   velox_dwio_parquet_writer
   velox_dwio_native_parquet_reader
-  ${LZ4}
-  ${LZO}
-  ${ZSTD}
-  ${ZLIB_LIBRARIES}
+  lz4::lz4
+  lzo2::lzo2
+  zstd::zstd
+  ZLIB::ZLIB
   ${TEST_LINK_LIBS})
 
 add_executable(velox_dwio_parquet_reader_benchmark ParquetReaderBenchmark.cpp)
@@ -51,7 +51,7 @@ target_link_libraries(
   velox_exec_test_lib
   velox_exec
   velox_hive_connector
-  ${FOLLY_WITH_DEPENDENCIES}
+  Folly::folly
   ${FOLLY_BENCHMARK})
 
 add_executable(velox_dwio_parquet_structure_decoder_test
@@ -62,14 +62,27 @@ add_test(
   WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR})
 target_link_libraries(
   velox_dwio_parquet_structure_decoder_test velox_dwio_native_parquet_reader
-  ${VELOX_LINK_LIBS} ${TEST_LINK_LIBS})
+  velox_link_libs ${TEST_LINK_LIBS})
 
 add_executable(velox_dwio_parquet_structure_decoder_benchmark
                NestedStructureDecoderBenchmark.cpp)
 target_link_libraries(
   velox_dwio_parquet_structure_decoder_benchmark
-  velox_dwio_native_parquet_reader ${FOLLY_WITH_DEPENDENCIES}
-  ${FOLLY_BENCHMARK})
+  velox_dwio_native_parquet_reader Folly::folly ${FOLLY_BENCHMARK})
+
+add_executable(velox_dwio_parquet_table_scan_test ParquetTableScanTest.cpp)
+add_test(
+  NAME velox_dwio_parquet_table_scan_test
+  COMMAND velox_dwio_parquet_table_scan_test
+  WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR})
+target_link_libraries(
+  velox_dwio_parquet_table_scan_test
+  velox_dwio_parquet_reader
+  velox_exec_test_lib
+  velox_exec
+  velox_hive_connector
+  velox_link_libs
+  ${TEST_LINK_LIBS})
 
 if(${VELOX_ENABLE_ARROW})
 
@@ -80,6 +93,6 @@ if(${VELOX_ENABLE_ARROW})
     WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR})
   target_link_libraries(
     velox_dwio_parquet_rlebp_decoder_test velox_dwio_native_parquet_reader
-    arrow ${VELOX_LINK_LIBS} ${TEST_LINK_LIBS})
+    arrow velox_link_libs ${TEST_LINK_LIBS})
 
 endif()

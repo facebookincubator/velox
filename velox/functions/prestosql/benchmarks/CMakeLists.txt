@@ -13,8 +13,13 @@
 # limitations under the License.
 
 set(BENCHMARK_DEPENDENCIES_NO_FUNC
-    velox_functions_test_lib velox_exec velox_exec_test_lib gflags::gflags
-    ${FOLLY_WITH_DEPENDENCIES} ${FOLLY_BENCHMARK})
+    velox_functions_test_lib
+    velox_exec
+    velox_exec_test_lib
+    gflags::gflags
+    Folly::folly
+    ${FOLLY_BENCHMARK}
+    velox_benchmark_builder)
 
 set(BENCHMARK_DEPENDENCIES
     velox_functions_prestosql velox_functions_lib velox_vector_fuzzer
@@ -160,4 +165,9 @@ target_link_libraries(velox_functions_prestosql_benchmarks_map_zip_with
 add_executable(velox_functions_prestosql_benchmarks_cardinality
                CardinalityBenchmark.cpp)
 target_link_libraries(velox_functions_prestosql_benchmarks_cardinality
+                      ${BENCHMARK_DEPENDENCIES})
+
+add_executable(velox_functions_benchmarks_simdjson_function_with_expr
+               JsonExprBenchmark.cpp)
+target_link_libraries(velox_functions_benchmarks_simdjson_function_with_expr
                       ${BENCHMARK_DEPENDENCIES})

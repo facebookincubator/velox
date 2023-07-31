@@ -18,9 +18,8 @@
 #include <folly/init/Init.h>
 #include <random>
 
-#include "velox/row/UnsafeRowBatchDeserializer.h"
-#include "velox/row/UnsafeRowDeserializer.h"
-#include "velox/row/UnsafeRowDynamicSerializer.h"
+#include "velox/row/UnsafeRowDeserializers.h"
+#include "velox/row/UnsafeRowFast.h"
 #include "velox/type/Type.h"
 #include "velox/vector/fuzzer/VectorFuzzer.h"
 #include "velox/vector/tests/utils/VectorMaker.h"
@@ -39,21 +38,6 @@ class Deserializer {
       const TypePtr& type) = 0;
 };
 
-class UnsaferowDeserializer : public Deserializer {
- public:
-  UnsaferowDeserializer() {}
-
-  void deserialize(
-      const std::vector<std::optional<std::string_view>>& data,
-      const TypePtr& type) override {
-    UnsafeRowDynamicVectorDeserializer::deserializeComplex(
-        data, type, pool_.get());
-  }
-
- private:
-  std::shared_ptr<memory::MemoryPool> pool_ = memory::getDefaultMemoryPool();
-};
-
 class UnsaferowBatchDeserializer : public Deserializer {
  public:
   UnsaferowBatchDeserializer() {}
@@ -61,12 +45,12 @@ class UnsaferowBatchDeserializer : public Deserializer {
   void deserialize(
       const std::vector<std::optional<std::string_view>>& data,
       const TypePtr& type) override {
-    UnsafeRowDynamicVectorBatchDeserializer::deserializeComplex(
-        data, type, pool_.get());
+    UnsafeRowDeserializer::deserialize(data, type, pool_.get());
   }
 
  private:
-  std::shared_ptr<memory::MemoryPool> pool_ = memory::getDefaultMemoryPool();
+  std::shared_ptr<memory::MemoryPool> pool_ =
+      memory::addDefaultLeafMemoryPool();
 };
 
 class BenchmarkHelper {
@@ -96,21 +80,22 @@ class BenchmarkHelper {
     opts.stringVariableLength = true;
     opts.stringLength = 20;
     // Spark uses microseconds to store timestamp
-    opts.useMicrosecondPrecisionTimestamp = true;
+    opts.timestampPrecision =
+        VectorFuzzer::Options::TimestampPrecision::kMicroSeconds;
 
     auto seed = folly::Random::rand32();
     VectorFuzzer fuzzer(opts, pool_.get(), seed);
-    const auto& inputVector = fuzzer.fuzzRow(rowType);
+    const auto inputVector = fuzzer.fuzzInputRow(rowType);
     std::vector<std::optional<std::string_view>> results;
     results.reserve(nRows);
     // Serialize rowVector into bytes.
+    UnsafeRowFast unsafeRow(inputVector);
     for (int32_t i = 0; i < nRows; ++i) {
       BufferPtr bufferPtr =
           AlignedBuffer::allocate<char>(1024, pool_.get(), true);
       char* buffer = bufferPtr->asMutable<char>();
-      auto rowSize = UnsafeRowDynamicSerializer::serialize(
-          rowType, inputVector, buffer, /*idx=*/0);
-      results.push_back(std::string_view(buffer, rowSize.value()));
+      auto rowSize = unsafeRow.serialize(0, buffer);
+      results.push_back(std::string_view(buffer, rowSize));
     }
     return {results, rowType};
   }
@@ -130,7 +115,8 @@ class BenchmarkHelper {
       MAP(VARCHAR(), ARRAY(INTEGER())),
       ROW({INTEGER()})};
 
-  std::shared_ptr<memory::MemoryPool> pool_ = memory::getDefaultMemoryPool();
+  std::shared_ptr<memory::MemoryPool> pool_ =
+      memory::addDefaultLeafMemoryPool();
 };
 
 int deserialize(
@@ -153,13 +139,6 @@ int deserialize(
 
 BENCHMARK_NAMED_PARAM_MULTI(
     deserialize,
-    row_10_100k_string_only,
-    10,
-    100000,
-    true,
-    std::make_unique<UnsaferowDeserializer>());
-BENCHMARK_RELATIVE_NAMED_PARAM_MULTI(
-    deserialize,
     batch_10_100k_string_only,
     10,
     100000,
@@ -167,13 +146,6 @@ BENCHMARK_RELATIVE_NAMED_PARAM_MULTI(
     std::make_unique<UnsaferowBatchDeserializer>());
 
 BENCHMARK_NAMED_PARAM_MULTI(
-    deserialize,
-    row_100_100k_string_only,
-    100,
-    100000,
-    true,
-    std::make_unique<UnsaferowDeserializer>());
-BENCHMARK_RELATIVE_NAMED_PARAM_MULTI(
     deserialize,
     batch_100_100k_string_only,
     100,
@@ -183,13 +155,6 @@ BENCHMARK_RELATIVE_NAMED_PARAM_MULTI(
 
 BENCHMARK_NAMED_PARAM_MULTI(
     deserialize,
-    row_10_100k_all_types,
-    10,
-    100000,
-    true,
-    std::make_unique<UnsaferowDeserializer>());
-BENCHMARK_RELATIVE_NAMED_PARAM_MULTI(
-    deserialize,
     batch_10_100k_all_types,
     10,
     100000,
@@ -197,13 +162,6 @@ BENCHMARK_RELATIVE_NAMED_PARAM_MULTI(
     std::make_unique<UnsaferowBatchDeserializer>());
 
 BENCHMARK_NAMED_PARAM_MULTI(
-    deserialize,
-    row_100_100k_all_types,
-    100,
-    100000,
-    false,
-    std::make_unique<UnsaferowDeserializer>());
-BENCHMARK_RELATIVE_NAMED_PARAM_MULTI(
     deserialize,
     batch_100_100k_all_types,
     100,

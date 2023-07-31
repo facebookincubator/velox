@@ -16,14 +16,19 @@
 
 #include "velox/substrait/tests/JsonToProtoConverter.h"
 
-#include "velox/common/base/Fs.h"
 #include "velox/common/base/tests/GTestUtils.h"
 #include "velox/dwio/common/tests/utils/DataFiles.h"
 
 #include "velox/substrait/SubstraitToVeloxPlan.h"
 #include "velox/substrait/TypeUtils.h"
 #include "velox/substrait/VariantToVectorConverter.h"
+
+#ifndef VELOX_ENABLE_BACKWARD_COMPATIBILITY
+#include "velox/core/QueryCtx.h"
+#else
+#include "velox/common/base/Fs.h"
 #include "velox/substrait/VeloxToSubstraitType.h"
+#endif
 
 using namespace facebook::velox;
 using namespace facebook::velox::test;
@@ -35,7 +40,8 @@ class FunctionTest : public ::testing::Test {
   std::shared_ptr<core::QueryCtx> queryCtx_ =
       std::make_shared<core::QueryCtx>();
 
-  std::shared_ptr<memory::MemoryPool> pool_ = memory::getDefaultMemoryPool();
+  std::shared_ptr<memory::MemoryPool> pool_ =
+      memory::addDefaultLeafMemoryPool();
 
   std::shared_ptr<vestrait::SubstraitParser> substraitParser_ =
       std::make_shared<vestrait::SubstraitParser>();
@@ -186,20 +192,23 @@ TEST_F(FunctionTest, setVectorFromVariants) {
       resultVec->asFlatVector<Timestamp>()->valueAt(1).toString());
 
   resultVec = setVectorFromVariants(
-      DATE(), {variant(Date(9020)), variant(Date(8875))}, pool_.get());
+      DATE(), {variant(9020), variant(8875)}, pool_.get());
   ASSERT_EQ(
-      "1994-09-12", resultVec->asFlatVector<Date>()->valueAt(0).toString());
+      "1994-09-12",
+      DATE()->toString(resultVec->asFlatVector<int32_t>()->valueAt(0)));
   ASSERT_EQ(
-      "1994-04-20", resultVec->asFlatVector<Date>()->valueAt(1).toString());
+      "1994-04-20",
+      DATE()->toString(resultVec->asFlatVector<int32_t>()->valueAt(1)));
 
   resultVec = setVectorFromVariants(
-      INTERVAL_DAY_TIME(),
-      {variant(IntervalDayTime(9020)), variant(IntervalDayTime(8875))},
-      pool_.get());
-  ASSERT_EQ(
-      "0 00:00:09.020",
-      resultVec->asFlatVector<IntervalDayTime>()->valueAt(0).toString());
-  ASSERT_EQ(
-      "0 00:00:08.875",
-      resultVec->asFlatVector<IntervalDayTime>()->valueAt(1).toString());
+      INTERVAL_DAY_TIME(), {variant(9020LL), variant(8875LL)}, pool_.get());
+  ASSERT_TRUE(resultVec->type()->isIntervalDayTime());
+  ASSERT_EQ(9020, resultVec->asFlatVector<int64_t>()->valueAt(0));
+  ASSERT_EQ(8875, resultVec->asFlatVector<int64_t>()->valueAt(1));
+
+  resultVec = setVectorFromVariants(
+      INTERVAL_YEAR_MONTH(), {variant(20), variant(30)}, pool_.get());
+  ASSERT_TRUE(resultVec->type()->isIntervalYearMonth());
+  ASSERT_EQ(20, resultVec->asFlatVector<int32_t>()->valueAt(0));
+  ASSERT_EQ(30, resultVec->asFlatVector<int32_t>()->valueAt(1));
 }

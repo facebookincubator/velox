@@ -23,7 +23,7 @@ using namespace facebook::velox;
 class EnsureWritableVectorTest : public testing::Test {
  protected:
   void SetUp() override {
-    pool_ = memory::getDefaultMemoryPool();
+    pool_ = memory::addDefaultLeafMemoryPool();
     vectorMaker_ = std::make_unique<test::VectorMaker>(pool_.get());
   }
 
@@ -421,18 +421,17 @@ TEST_F(EnsureWritableVectorTest, constant) {
   }
 
   // If constant has smaller size, check that we follow the selectivity vector
-  // size.
+  // max seleced row size.
   {
     const vector_size_t selectivityVectorSize = 100;
     auto constant = BaseVector::createConstant(
         BIGINT(), variant::create<TypeKind::BIGINT>(123), 1, pool_.get());
-    BaseVector::ensureWritable(
-        SelectivityVector::empty(selectivityVectorSize),
-        BIGINT(),
-        pool_.get(),
-        constant);
+    SelectivityVector rows(selectivityVectorSize);
+    rows.setValid(99, false);
+    rows.updateBounds();
+    BaseVector::ensureWritable(rows, BIGINT(), pool_.get(), constant);
     EXPECT_EQ(VectorEncoding::Simple::FLAT, constant->encoding());
-    EXPECT_EQ(selectivityVectorSize, constant->size());
+    EXPECT_EQ(99, constant->size());
   }
 
   // If constant has larger size, check that we follow the constant vector

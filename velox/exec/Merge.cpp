@@ -37,7 +37,7 @@ Merge::Merge(
           operatorId,
           planNodeId,
           operatorType),
-      outputBatchSize_{driverCtx->queryConfig().preferredOutputBatchSize()} {
+      outputBatchSize_{outputBatchRows()} {
   auto numKeys = sortingKeys.size();
   sortingKeys_.reserve(numKeys);
   for (int i = 0; i < numKeys; ++i) {
@@ -74,9 +74,18 @@ void Merge::initializeTreeOfLosers() {
 }
 
 BlockingReason Merge::isBlocked(ContinueFuture* future) {
+  TestValue::adjust("facebook::velox::exec::Merge::isBlocked", this);
+
   auto reason = addMergeSources(future);
   if (reason != BlockingReason::kNotBlocked) {
     return reason;
+  }
+
+  // NOTE: the task might terminate early which leaves empty sources. Once it
+  // happens, we shall simply mark the merge operator as finished.
+  if (sources_.empty()) {
+    finished_ = true;
+    return BlockingReason::kNotBlocked;
   }
 
   // No merging is needed if there is only one source.
@@ -93,7 +102,7 @@ BlockingReason Merge::isBlocked(ContinueFuture* future) {
   if (!sourceBlockingFutures_.empty()) {
     *future = std::move(sourceBlockingFutures_.back());
     sourceBlockingFutures_.pop_back();
-    return BlockingReason::kWaitForExchange;
+    return BlockingReason::kWaitForProducer;
   }
 
   return BlockingReason::kNotBlocked;

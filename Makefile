@@ -42,6 +42,10 @@ ifdef AWSSDK_ROOT_DIR
 CMAKE_FLAGS += -DAWSSDK_ROOT_DIR=$(AWSSDK_ROOT_DIR)
 endif
 
+ifdef GCSSDK_ROOT_DIR
+CMAKE_FLAGS += -DGCSSDK_ROOT_DIR=$(GCSSDK_ROOT_DIR)
+endif
+
 # Use Ninja if available. If Ninja is used, pass through parallelism control flags.
 USE_NINJA ?= 1
 ifeq ($(USE_NINJA), 1)
@@ -78,6 +82,9 @@ cmake:					#: Use CMake to create a Makefile build system
 		$(USE_CCACHE) \
 		$(FORCE_COLOR) \
 		${EXTRA_CMAKE_FLAGS}
+
+cmake-gpu:
+	$(MAKE) EXTRA_CMAKE_FLAGS=-DVELOX_ENABLE_GPU=ON cmake
 
 build:					#: Build the software based in BUILD_DIR and BUILD_TYPE variables
 	cmake --build $(BUILD_BASE_DIR)/$(BUILD_DIR) -j $(NUM_THREADS)
@@ -155,7 +162,8 @@ python-clean:
 	DEBUG=1 ${PYTHON_EXECUTABLE} setup.py clean
 
 python-build:
-	DEBUG=1 CMAKE_BUILD_PARALLEL_LEVEL=4 ${PYTHON_EXECUTABLE} setup.py develop
+	DEBUG=1 CMAKE_BUILD_PARALLEL_LEVEL=4 ${PYTHON_EXECUTABLE} -m pip install -e .$(extras) --verbose
 
-python-test: python-build
+python-test: 
+	$(MAKE) python-build extras="[tests]"
 	DEBUG=1 ${PYTHON_EXECUTABLE} -m unittest -v

@@ -11,15 +11,16 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-add_executable(velox_functions_json_test JsonExtractorTest.cpp
-                                         JsonPathTokenizerTest.cpp)
+add_executable(
+  velox_functions_json_test JsonExtractorTest.cpp JsonPathTokenizerTest.cpp
+                            SIMDJsonExtractorTest.cpp)
 
 add_test(velox_functions_json_test velox_functions_json_test)
 
 target_link_libraries(
   velox_functions_json_test
   velox_functions_json
-  ${FOLLY_WITH_DEPENDENCIES}
+  Folly::folly
   gtest
   gtest_main
   gflags::gflags

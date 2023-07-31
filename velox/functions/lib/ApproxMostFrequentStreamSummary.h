@@ -78,6 +78,10 @@ struct ApproxMostFrequentStreamSummary {
     return counts_.data();
   }
 
+  bool contains(T value) const {
+    return indices_.count(value) > 0;
+  }
+
  private:
   template <typename U>
   using RebindAlloc =
@@ -321,7 +325,7 @@ void ApproxMostFrequentStreamSummary<T, A>::mergeSerialized(const char* other) {
     auto v = values[i];
     if constexpr (std::is_same_v<T, StringView>) {
       if (!v.isInline()) {
-        v = {other, v.size()};
+        v = {other, static_cast<int32_t>(v.size())};
         other += v.size();
       }
     }

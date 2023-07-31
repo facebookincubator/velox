@@ -31,13 +31,19 @@ TableWriter::TableWriter(
           tableWriteNode->id(),
           "TableWrite"),
       driverCtx_(driverCtx),
+      connectorPool_(driverCtx_->task->addConnectorPoolLocked(
+          planNodeId(),
+          driverCtx_->pipelineId,
+          driverCtx_->driverId,
+          operatorType(),
+          tableWriteNode->insertTableHandle()->connectorId())),
       insertTableHandle_(
           tableWriteNode->insertTableHandle()->connectorInsertTableHandle()),
       commitStrategy_(tableWriteNode->commitStrategy()) {
   const auto& connectorId = tableWriteNode->insertTableHandle()->connectorId();
   connector_ = connector::getConnector(connectorId);
-  connectorQueryCtx_ =
-      operatorCtx_->createConnectorQueryCtx(connectorId, planNodeId(), false);
+  connectorQueryCtx_ = operatorCtx_->createConnectorQueryCtx(
+      connectorId, planNodeId(), connectorPool_);
 
   auto names = tableWriteNode->columnNames();
   auto types = tableWriteNode->columns()->children();
@@ -85,6 +91,7 @@ void TableWriter::addInput(RowVectorPtr input) {
   }
   dataSink_->appendData(mappedInput);
   numWrittenRows_ += input->size();
+  updateWrittenBytes();
 }
 
 RowVectorPtr TableWriter::getOutput() {
@@ -93,11 +100,10 @@ RowVectorPtr TableWriter::getOutput() {
     return nullptr;
   }
   finished_ = true;
+  updateWrittenBytes();
 
-  if (outputType_->size() == 0) {
-    return nullptr;
-  }
   if (outputType_->size() == 1) {
+    // NOTE: this is for non-prestissimo use cases.
     return std::make_shared<RowVector>(
         pool(),
         outputType_,
@@ -124,7 +130,7 @@ RowVectorPtr TableWriter::getOutput() {
       BaseVector::create<FlatVector<StringView>>(
           VARBINARY(), numOutputRows, pool());
   fragmentsVector->setNull(0, true);
-  for (int i = 1; i < numOutputRows; i++) {
+  for (int i = 1; i < numOutputRows; ++i) {
     fragmentsVector->set(i, StringView(fragments[i - 1]));
   }
 
@@ -132,10 +138,10 @@ RowVectorPtr TableWriter::getOutput() {
   // clang-format off
     auto commitContextJson = folly::toJson(
       folly::dynamic::object
-          ("lifespan", "TaskWide")
-          ("taskId", connectorQueryCtx_->taskId())
-          ("pageSinkCommitStrategy", commitStrategyToString(commitStrategy_))
-          ("lastPage", true));
+          (TableWriteTraits::kLifeSpanContextKey, "TaskWide")
+          (TableWriteTraits::kTaskIdContextKey, connectorQueryCtx_->taskId())
+          (TableWriteTraits::kCommitStrategyContextKey, commitStrategyToString(commitStrategy_))
+          (TableWriteTraits::klastPageContextKey, true));
   // clang-format on
 
   auto commitContextVector = std::make_shared<ConstantVector<StringView>>(
@@ -150,5 +156,70 @@ RowVectorPtr TableWriter::getOutput() {
 
   return std::make_shared<RowVector>(
       pool(), outputType_, nullptr, numOutputRows, columns);
+}
+
+void TableWriter::updateWrittenBytes() {
+  const auto writtenBytes = dataSink_->getCompletedBytes();
+  auto lockedStats = stats_.wlock();
+  lockedStats->physicalWrittenBytes = writtenBytes;
+}
+
+std::string TableWriteTraits::rowCountColumnName() {
+  static const std::string kRowCountName = "rows";
+  return kRowCountName;
+}
+
+std::string TableWriteTraits::fragmentColumnName() {
+  static const std::string kFragmentName = "fragments";
+  return kFragmentName;
+}
+
+std::string TableWriteTraits::contextColumnName() {
+  static const std::string kContextName = "commitcontext";
+  return kContextName;
+}
+
+const TypePtr& TableWriteTraits::rowCountColumnType() {
+  static const TypePtr kRowCountType = BIGINT();
+  return kRowCountType;
+}
+
+const TypePtr& TableWriteTraits::fragmentColumnType() {
+  static const TypePtr kFragmentType = VARBINARY();
+  return kFragmentType;
+}
+
+const TypePtr& TableWriteTraits::contextColumnType() {
+  static const TypePtr kContextType = VARBINARY();
+  return kContextType;
+}
+
+const RowTypePtr& TableWriteTraits::outputType() {
+  static const auto kOutputType =
+      ROW({rowCountColumnName(), fragmentColumnName(), contextColumnName()},
+          {rowCountColumnType(), fragmentColumnType(), contextColumnType()});
+  return kOutputType;
+}
+
+folly::dynamic TableWriteTraits::getTableCommitContext(
+    const RowVectorPtr& input) {
+  VELOX_CHECK_GT(input->size(), 0);
+  auto* contextVector =
+      input->childAt(kContextChannel)->as<SimpleVector<StringView>>();
+  return folly::parseJson(contextVector->valueAt(input->size() - 1));
+}
+
+int64_t TableWriteTraits::getRowCount(const RowVectorPtr& output) {
+  VELOX_CHECK_GT(output->size(), 0);
+  auto rowCountVector =
+      output->childAt(kRowCountChannel)->asFlatVector<int64_t>();
+  VELOX_CHECK_NOT_NULL(rowCountVector);
+  int64_t rowCount{0};
+  for (int i = 0; i < output->size(); ++i) {
+    if (!rowCountVector->isNullAt(i)) {
+      rowCount += rowCountVector->valueAt(i);
+    }
+  }
+  return rowCount;
 }
 } // namespace facebook::velox::exec

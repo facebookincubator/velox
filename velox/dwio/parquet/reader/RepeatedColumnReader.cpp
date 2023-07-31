@@ -35,7 +35,7 @@ PageReader* FOLLY_NULLABLE readLeafRepDefs(
     return pageReader;
   }
   PageReader* pageReader = nullptr;
-  auto& type = *reinterpret_cast<const ParquetTypeWithId*>(&reader->nodeType());
+  auto& type = *reinterpret_cast<const ParquetTypeWithId*>(&reader->fileType());
   if (type.type->kind() == TypeKind::ARRAY) {
     pageReader = readLeafRepDefs(children[0], numTop, true);
     auto list = dynamic_cast<ListColumnReader*>(reader);
@@ -70,11 +70,11 @@ void skipUnreadLengthsAndNulls(dwio::common::SelectiveColumnReader& reader) {
   if (children.empty()) {
     return;
   }
-  if (reader.type()->kind() == TypeKind::ARRAY) {
+  if (reader.fileType().type->kind() == TypeKind::ARRAY) {
     reinterpret_cast<ListColumnReader*>(&reader)->skipUnreadLengths();
-  } else if (reader.type()->kind() == TypeKind::ROW) {
+  } else if (reader.fileType().type->kind() == TypeKind::ROW) {
     reinterpret_cast<StructColumnReader*>(&reader)->seekToEndOfPresetNulls();
-  } else if (reader.type()->kind() == TypeKind::MAP) {
+  } else if (reader.fileType().type->kind() == TypeKind::MAP) {
     reinterpret_cast<MapColumnReader*>(&reader)->skipUnreadLengths();
   } else {
     VELOX_UNREACHABLE();
@@ -100,7 +100,7 @@ void ensureRepDefs(
     dwio::common::SelectiveColumnReader& reader,
     int32_t numTop) {
   auto& nodeType =
-      *reinterpret_cast<const ParquetTypeWithId*>(&reader.nodeType());
+      *reinterpret_cast<const ParquetTypeWithId*>(&reader.fileType());
   // Check that this is a direct child of the root struct.
   if (nodeType.parent && !nodeType.parent->parent) {
     skipUnreadLengthsAndNulls(reader);
@@ -135,7 +135,7 @@ void MapColumnReader::enqueueRowGroup(
 }
 
 void MapColumnReader::seekToRowGroup(uint32_t index) {
-  SelectiveColumnReader::seekToRowGroup(index);
+  SelectiveMapColumnReader::seekToRowGroup(index);
   readOffset_ = 0;
   childTargetReadOffset_ = 0;
   BufferPtr noBuffer;
@@ -185,6 +185,13 @@ void MapColumnReader::read(
     const uint64_t* incomingNulls) {
   // The topmost list reader reads the repdefs for the left subtree.
   ensureRepDefs(*this, offset + rows.back() + 1 - readOffset_);
+  if (offset > readOffset_) {
+    // There is no page reader on this level so cannot call skipNullsOnly on it.
+    if (fileType().parent && !fileType().parent->parent) {
+      skip(offset - readOffset_);
+    }
+    readOffset_ = offset;
+  }
   SelectiveMapColumnReader::read(offset, rows, incomingNulls);
 
   // The child should be at the end of the range provided to this
@@ -233,7 +240,7 @@ void ListColumnReader::enqueueRowGroup(
 }
 
 void ListColumnReader::seekToRowGroup(uint32_t index) {
-  SelectiveColumnReader::seekToRowGroup(index);
+  SelectiveListColumnReader::seekToRowGroup(index);
   readOffset_ = 0;
   childTargetReadOffset_ = 0;
   BufferPtr noBuffer;
@@ -281,6 +288,13 @@ void ListColumnReader::read(
     const uint64_t* incomingNulls) {
   // The topmost list reader reads the repdefs for the left subtree.
   ensureRepDefs(*this, offset + rows.back() + 1 - readOffset_);
+  if (offset > readOffset_) {
+    // There is no page reader on this level so cannot call skipNullsOnly on it.
+    if (fileType().parent && !fileType().parent->parent) {
+      skip(offset - readOffset_);
+    }
+    readOffset_ = offset;
+  }
   SelectiveListColumnReader::read(offset, rows, incomingNulls);
 
   // The child should be at the end of the range provided to this

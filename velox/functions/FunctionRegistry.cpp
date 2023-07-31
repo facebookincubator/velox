@@ -46,7 +46,7 @@ exec::TypeSignature typeToTypeSignature(std::shared_ptr<const Type> type) {
 }
 
 void populateSimpleFunctionSignatures(FunctionSignatureMap& map) {
-  const auto& simpleFunctions = exec::SimpleFunctions();
+  const auto& simpleFunctions = exec::simpleFunctions();
   for (const auto& functionName : simpleFunctions.getFunctionNames()) {
     map[functionName] = simpleFunctions.getFunctionSignatures(functionName);
   }
@@ -75,6 +75,12 @@ FunctionSignatureMap getFunctionSignatures() {
   populateSimpleFunctionSignatures(result);
   populateVectorFunctionSignatures(result);
   return result;
+}
+
+void clearFunctionRegistry() {
+  exec::mutableSimpleFunctions().clearRegistry();
+  exec::vectorFunctionFactories().withWLock(
+      [](auto& functionMap) { functionMap.clear(); });
 }
 
 std::shared_ptr<const Type> resolveFunction(
@@ -121,7 +127,7 @@ std::shared_ptr<const Type> resolveSimpleFunction(
     const std::string& functionName,
     const std::vector<TypePtr>& argTypes) {
   if (auto resolvedFunction =
-          exec::SimpleFunctions().resolveFunction(functionName, argTypes)) {
+          exec::simpleFunctions().resolveFunction(functionName, argTypes)) {
     return resolvedFunction->type();
   }
 

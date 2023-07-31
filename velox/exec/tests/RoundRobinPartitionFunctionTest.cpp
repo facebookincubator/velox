@@ -16,24 +16,34 @@
 #include "velox/exec/RoundRobinPartitionFunction.h"
 #include <gtest/gtest.h>
 #include "velox/vector/tests/utils/VectorMaker.h"
+#include "velox/vector/tests/utils/VectorTestBase.h"
 
 using namespace facebook::velox;
+using namespace facebook::velox::exec;
 
-TEST(RoundRobinPartitionFunctionTest, basic) {
+class RoundRobinPartitionFunctionTest : public test::VectorTestBase,
+                                        public testing::Test {};
+
+TEST_F(RoundRobinPartitionFunctionTest, basic) {
   exec::RoundRobinPartitionFunction partitionFunction(10);
 
-  auto pool = memory::getDefaultMemoryPool();
+  auto pool = memory::addDefaultLeafMemoryPool();
   test::VectorMaker vm(pool.get());
 
-  auto data = vm.rowVector(ROW({}, {}), 31);
+  auto data = vm.rowVector(ROW({}, {}), 1024);
   std::vector<uint32_t> partitions;
-  partitionFunction.partition(*data, partitions);
   for (auto i = 0; i < 31; ++i) {
-    ASSERT_EQ(i % 10, partitions[i]) << "at " << i;
+    SCOPED_TRACE(i);
+    auto partition = partitionFunction.partition(*data, partitions);
+    ASSERT_TRUE(partition.has_value());
+    ASSERT_EQ(i % 10, partition.value());
+    ASSERT_TRUE(partitions.empty());
   }
+}
 
-  partitionFunction.partition(*data, partitions);
-  for (auto i = 0; i < 31; ++i) {
-    ASSERT_EQ((i + 31) % 10, partitions[i]) << "at " << i;
-  }
+TEST_F(RoundRobinPartitionFunctionTest, spec) {
+  auto roundRobinSpec = std::make_unique<RoundRobinPartitionFunctionSpec>();
+  auto serialized = roundRobinSpec->serialize();
+  auto copy = RoundRobinPartitionFunctionSpec::deserialize(serialized, pool());
+  ASSERT_EQ(roundRobinSpec->toString(), copy->toString());
 }

@@ -20,6 +20,7 @@
 #include "velox/dwio/common/Options.h"
 #include "velox/dwio/common/SeekableInputStream.h"
 #include "velox/dwio/dwrf/common/Common.h"
+#include "velox/dwio/dwrf/reader/StreamLabels.h"
 #include "velox/dwio/dwrf/reader/StripeDictionaryCache.h"
 #include "velox/dwio/dwrf/reader/StripeReaderBase.h"
 
@@ -120,6 +121,7 @@ class StripeStreams {
    */
   virtual std::unique_ptr<dwio::common::SeekableInputStream> getStream(
       const DwrfStreamIdentifier& si,
+      std::string_view label,
       bool throwIfNotFound) const = 0;
 
   /// Get the integer dictionary data for the given node and sequence.
@@ -131,6 +133,7 @@ class StripeStreams {
   virtual std::function<BufferPtr()> getIntDictionaryInitializerForNode(
       const EncodingKey& ek,
       uint64_t elementWidth,
+      const StreamLabels& streamLabels,
       uint64_t dictionaryWidth = sizeof(int64_t)) = 0;
 
   virtual std::shared_ptr<StripeDictionaryCache> getStripeDictionaryCache() = 0;
@@ -185,6 +188,7 @@ class StripeStreamsBase : public StripeStreams {
   std::function<BufferPtr()> getIntDictionaryInitializerForNode(
       const EncodingKey& ek,
       uint64_t elementWidth,
+      const StreamLabels& streamLabels,
       uint64_t dictionaryWidth = sizeof(int64_t)) override;
 
   std::shared_ptr<StripeDictionaryCache> getStripeDictionaryCache() override {
@@ -272,7 +276,8 @@ class StripeStreamsImpl : public StripeStreamsBase {
   void loadReadPlan();
 
   std::unique_ptr<dwio::common::SeekableInputStream> getCompressedStream(
-      const DwrfStreamIdentifier& si) const;
+      const DwrfStreamIdentifier& si,
+      std::string_view label) const;
 
   uint64_t getStreamLength(const DwrfStreamIdentifier& si) const {
     return getStreamInfo(si).getLength();
@@ -285,6 +290,7 @@ class StripeStreamsImpl : public StripeStreamsBase {
 
   std::unique_ptr<dwio::common::SeekableInputStream> getStream(
       const DwrfStreamIdentifier& si,
+      std::string_view label,
       bool throwIfNotFound) const override;
 
   uint32_t visitStreamsOfNode(

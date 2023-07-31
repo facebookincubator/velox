@@ -17,6 +17,7 @@
 #include "velox/functions/lib/RegistrationHelpers.h"
 #include "velox/functions/prestosql/Arithmetic.h"
 #include "velox/functions/prestosql/Bitwise.h"
+#include "velox/functions/prestosql/Probability.h"
 #include "velox/functions/prestosql/Rand.h"
 
 namespace facebook::velox::functions {
@@ -90,6 +91,7 @@ void registerSimpleFunctions(const std::string& prefix) {
   registerFunction<IsNanFunction, bool, double>({prefix + "is_nan"});
   registerFunction<NanFunction, double>({prefix + "nan"});
   registerFunction<RandFunction, double>({prefix + "rand", prefix + "random"});
+  registerUnaryIntegral<RandFunction>({prefix + "rand", prefix + "random"});
   registerFunction<FromBaseFunction, int64_t, Varchar, int64_t>(
       {prefix + "from_base"});
   registerFunction<ToBaseFunction, Varchar, int64_t, int64_t>(
@@ -99,6 +101,20 @@ void registerSimpleFunctions(const std::string& prefix) {
   registerFunction<TruncateFunction, double, double>({prefix + "truncate"});
   registerFunction<TruncateFunction, double, double, int32_t>(
       {prefix + "truncate"});
+  registerFunction<BetaCDFFunction, double, double, double, double>(
+      {prefix + "beta_cdf"});
+  registerFunction<NormalCDFFunction, double, double, double, double>(
+      {prefix + "normal_cdf"});
+  registerFunction<BinomialCDFFunction, double, int64_t, double, int64_t>(
+      {prefix + "binomial_cdf"});
+  registerFunction<CauchyCDFFunction, double, double, double, double>(
+      {prefix + "cauchy_cdf"});
+  registerFunction<ChiSquaredCDFFunction, double, double, double>(
+      {prefix + "chi_squared_cdf"});
+  registerFunction<InverseBetaCDFFunction, double, double, double, double>(
+      {prefix + "inverse_beta_cdf"});
+  registerFunction<FCDFFunction, double, double, double, double>(
+      {prefix + "f_cdf"});
 }
 
 } // namespace
@@ -110,6 +126,9 @@ void registerArithmeticFunctions(const std::string& prefix = "") {
   VELOX_REGISTER_VECTOR_FUNCTION(udf_decimal_sub, prefix + "minus");
   VELOX_REGISTER_VECTOR_FUNCTION(udf_decimal_mul, prefix + "multiply");
   VELOX_REGISTER_VECTOR_FUNCTION(udf_decimal_div, prefix + "divide");
+  VELOX_REGISTER_VECTOR_FUNCTION(udf_decimal_round, prefix + "round");
+  VELOX_REGISTER_VECTOR_FUNCTION(udf_decimal_abs, prefix + "abs");
+  VELOX_REGISTER_VECTOR_FUNCTION(udf_decimal_negate, prefix + "negate");
 }
 
 } // namespace facebook::velox::functions

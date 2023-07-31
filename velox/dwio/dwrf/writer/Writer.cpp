@@ -26,162 +26,6 @@
 
 namespace facebook::velox::dwrf {
 
-EncodingIter::EncodingIter(
-    const proto::StripeFooter& footer,
-    const std::vector<proto::StripeEncryptionGroup>& encryptionGroups,
-    int32_t encryptionGroupIndex,
-    google::protobuf::RepeatedPtrField<proto::ColumnEncoding>::const_iterator
-        current,
-    google::protobuf::RepeatedPtrField<proto::ColumnEncoding>::const_iterator
-        currentEnd)
-    : footer_{footer},
-      encryptionGroups_{encryptionGroups},
-      encryptionGroupIndex_{encryptionGroupIndex},
-      current_{std::move(current)},
-      currentEnd_{std::move(currentEnd)} {
-  // Move to the end or a valid position.
-  if (current_ == currentEnd_) {
-    next();
-  }
-}
-
-/* static */ EncodingIter EncodingIter::begin(
-    const proto::StripeFooter& footer,
-    const std::vector<proto::StripeEncryptionGroup>& encryptionGroups) {
-  return EncodingIter{
-      footer,
-      encryptionGroups,
-      -1,
-      footer.encoding().begin(),
-      footer.encoding().end()};
-}
-
-/* static */ EncodingIter EncodingIter::end(
-    const proto::StripeFooter& footer,
-    const std::vector<proto::StripeEncryptionGroup>& encryptionGroups) {
-  if (encryptionGroups.empty()) {
-    const auto& footerEncodings = footer.encoding();
-    return EncodingIter{
-        footer,
-        encryptionGroups,
-        -1,
-        footerEncodings.end(),
-        footerEncodings.end()};
-  }
-  const auto lastEncryptionGroupIndex =
-      folly::to<int32_t>(encryptionGroups.size()) - 1;
-  const auto& lastEncryptionGroupEncodings = encryptionGroups.back().encoding();
-  return EncodingIter{
-      footer,
-      encryptionGroups,
-      lastEncryptionGroupIndex,
-      lastEncryptionGroupEncodings.end(),
-      lastEncryptionGroupEncodings.end()};
-}
-
-void EncodingIter::next() {
-  // The check is needed for the initial position
-  // if footer is empty but encryption groups are not.
-  if (current_ != currentEnd_) {
-    ++current_;
-  }
-  // Get to the absolute end or a valid position.
-  while (current_ == currentEnd_) {
-    if (encryptionGroupIndex_ == encryptionGroups_.size() - 1) {
-      return;
-    }
-    const auto& encryptionGroup = encryptionGroups_.at(++encryptionGroupIndex_);
-    current_ = encryptionGroup.encoding().begin();
-    currentEnd_ = encryptionGroup.encoding().end();
-  }
-  return;
-}
-
-EncodingIter& EncodingIter::operator++() {
-  next();
-  return *this;
-}
-
-EncodingIter EncodingIter::operator++(int) {
-  auto current = *this;
-  next();
-  return current;
-}
-
-bool EncodingIter::operator==(const EncodingIter& other) const {
-  return current_ == other.current_;
-}
-
-bool EncodingIter::operator!=(const EncodingIter& other) const {
-  return current_ != other.current_;
-}
-
-EncodingIter::reference EncodingIter::operator*() const {
-  return *current_;
-}
-
-EncodingIter::pointer EncodingIter::operator->() const {
-  return &(*current_);
-}
-
-EncodingManager::EncodingManager(
-    const encryption::EncryptionHandler& encryptionHandler)
-    : encryptionHandler_{encryptionHandler} {
-  initEncryptionGroups();
-}
-
-proto::ColumnEncoding& EncodingManager::addEncodingToFooter(uint32_t nodeId) {
-  if (encryptionHandler_.isEncrypted(nodeId)) {
-    auto index = encryptionHandler_.getEncryptionGroupIndex(nodeId);
-    return *encryptionGroups_.at(index).add_encoding();
-  } else {
-    return *footer_.add_encoding();
-  }
-}
-
-proto::Stream* EncodingManager::addStreamToFooter(
-    uint32_t nodeId,
-    uint32_t& currentIndex) {
-  if (encryptionHandler_.isEncrypted(nodeId)) {
-    currentIndex = encryptionHandler_.getEncryptionGroupIndex(nodeId);
-    return encryptionGroups_.at(currentIndex).add_streams();
-  } else {
-    currentIndex = std::numeric_limits<uint32_t>::max();
-    return footer_.add_streams();
-  }
-}
-
-std::string* EncodingManager::addEncryptionGroupToFooter() {
-  return footer_.add_encryptiongroups();
-}
-
-proto::StripeEncryptionGroup EncodingManager::getEncryptionGroup(uint32_t i) {
-  return encryptionGroups_.at(i);
-}
-
-const proto::StripeFooter& EncodingManager::getFooter() const {
-  return footer_;
-}
-
-EncodingIter EncodingManager::begin() const {
-  return EncodingIter::begin(footer_, encryptionGroups_);
-}
-
-EncodingIter EncodingManager::end() const {
-  return EncodingIter::end(footer_, encryptionGroups_);
-}
-
-void EncodingManager::initEncryptionGroups() {
-  // initialize encryption groups
-  if (encryptionHandler_.isEncrypted()) {
-    auto count = encryptionHandler_.getEncryptionGroupCount();
-    // We use uint32_t::max to represent non-encrypted when adding streams, so
-    // make sure number of encryption groups is smaller than that
-    DWIO_ENSURE_LT(count, std::numeric_limits<uint32_t>::max());
-    encryptionGroups_.resize(count);
-  }
-}
-
 namespace {
 // We currently use previous stripe raw size as the proxy for the expected
 // stripe raw size. For the first stripe, we are more conservative about
@@ -197,7 +41,7 @@ size_t estimateNextWriteSize(const WriterContext& context, size_t numRows) {
 } // namespace
 
 void Writer::write(const VectorPtr& slice) {
-  auto& context = getContext();
+  auto& context = writerBase_->getContext();
   size_t offset = 0;
   // Calculate length increment based on linear projection of micro batch size.
   // Total length is capped later.
@@ -212,7 +56,7 @@ void Writer::write(const VectorPtr& slice) {
   if (UNLIKELY(
           sliceMemoryEstimate == 0 ||
           sliceMemoryEstimate > context.rawDataSizePerBatch)) {
-    LOG(WARNING) << fmt::format(
+    VLOG(1) << fmt::format(
         "Unpopulated or huge vector memory estimate! Micro batch size {} rows. "
         "Slice memory estimate {} bytes. Batching threshold {} bytes.",
         lengthIncrement,
@@ -243,7 +87,7 @@ void Writer::write(const VectorPtr& slice) {
     auto rawSize =
         writer_->write(slice, common::Ranges::of(offset, offset + length));
     offset += length;
-    getContext().incRawSize(rawSize);
+    writerBase_->getContext().incRawSize(rawSize);
 
     if (context.isIndexEnabled &&
         context.indexRowCount >= context.indexStride) {
@@ -329,17 +173,16 @@ bool Writer::shouldFlush(const WriterContext& context, size_t nextWriteLength) {
     VLOG(1) << fmt::format(
         "overMemoryBudget: {}, dictionaryMemUsage: {}, outputStreamSize: {}, generalMemUsage: {}, estimatedStripeSize: {}",
         overBudget,
-        context.getMemoryUsage(MemoryUsageCategory::DICTIONARY)
-            .getCurrentBytes(),
+        context.getMemoryUsage(MemoryUsageCategory::DICTIONARY).currentBytes(),
         context.getEstimatedOutputStreamSize(),
-        context.getMemoryUsage(MemoryUsageCategory::GENERAL).getCurrentBytes(),
+        context.getMemoryUsage(MemoryUsageCategory::GENERAL).currentBytes(),
         context.getEstimatedStripeSize(context.stripeRawSize));
   }
   return decision;
 }
 
 void Writer::setLowMemoryMode() {
-  getContext().setLowMemoryMode();
+  writerBase_->getContext().setLowMemoryMode();
 }
 
 // Low memory allows for the writer to write the same data with a lower
@@ -349,7 +192,7 @@ void Writer::setLowMemoryMode() {
 // NOTE: switching encoding is not a good mitigation for immediate memory
 // pressure because the switch consumes even more memory than a flush.
 void Writer::enterLowMemoryMode() {
-  auto& context = getContext();
+  auto& context = writerBase_->getContext();
   // Until we have capability to abandon dictionary after the first
   // stripe, do nothing and rely solely on flush to comply with budget.
   if (UNLIKELY(context.checkLowMemoryMode() && context.stripeIndex == 0)) {
@@ -359,10 +202,9 @@ void Writer::enterLowMemoryMode() {
 }
 
 void Writer::flushStripe(bool close) {
-  auto& context = getContext();
+  auto& context = writerBase_->getContext();
   int64_t preFlushStreamMemoryUsage =
-      context.getMemoryUsage(MemoryUsageCategory::OUTPUT_STREAM)
-          .getCurrentBytes();
+      context.getMemoryUsage(MemoryUsageCategory::OUTPUT_STREAM).currentBytes();
   if (context.stripeRowCount == 0) {
     return;
   }
@@ -390,14 +232,14 @@ void Writer::flushStripe(bool close) {
   // Collects the memory increment from flushing data to output streams.
   auto flushOverhead =
       context.getMemoryUsage(MemoryUsageCategory::OUTPUT_STREAM)
-          .getCurrentBytes() -
+          .currentBytes() -
       preFlushStreamMemoryUsage;
   context.recordFlushOverhead(flushOverhead);
   metrics.flushOverhead = flushOverhead;
 
   auto postFlushMem = context.getTotalMemoryUsage();
 
-  auto& sink = getSink();
+  auto& sink = writerBase_->getSink();
   auto stripeOffset = sink.size();
 
   uint32_t lastIndex = 0;
@@ -419,7 +261,7 @@ void Writer::flushStripe(bool close) {
     lastIndex = currentIndex;
 
     // Jolly/Presto readers can't read streams bigger than 2GB.
-    validateStreamSize(stream, out.size());
+    writerBase_->validateStreamSize(stream, out.size());
 
     s->set_kind(static_cast<proto::Stream_Kind>(stream.kind()));
     s->set_node(nodeId);
@@ -436,9 +278,8 @@ void Writer::flushStripe(bool close) {
   // deals with streams
   uint64_t indexLength = 0;
   sink.setMode(WriterSink::Mode::Index);
-  auto planner = layoutPlannerFactory_(getStreamList(context), encodingManager);
-  planner->plan();
-  planner->iterateIndexStreams([&](auto& streamId, auto& content) {
+  auto result = layoutPlanner_->plan(encodingManager, getStreamList(context));
+  result.iterateIndexStreams([&](auto& streamId, auto& content) {
     DWIO_ENSURE(
         isIndexStream(streamId.kind()),
         "unexpected stream kind ",
@@ -450,7 +291,7 @@ void Writer::flushStripe(bool close) {
 
   uint64_t dataLength = 0;
   sink.setMode(WriterSink::Mode::Data);
-  planner->iterateDataStreams([&](auto& streamId, auto& content) {
+  result.iterateDataStreams([&](auto& streamId, auto& content) {
     DWIO_ENSURE(
         !isIndexStream(streamId.kind()),
         "unexpected stream kind ",
@@ -466,7 +307,7 @@ void Writer::flushStripe(bool close) {
     // fill encryption metadata
     for (uint32_t i = 0; i < handler.getEncryptionGroupCount(); ++i) {
       auto group = encodingManager.addEncryptionGroupToFooter();
-      writeProtoAsString(
+      writerBase_->writeProtoAsString(
           *group,
           encodingManager.getEncryptionGroup(i),
           std::addressof(handler.getEncryptionProviderByIndex(i)));
@@ -478,10 +319,10 @@ void Writer::flushStripe(bool close) {
   DWIO_ENSURE_EQ(footerOffset, stripeOffset + dataLength + indexLength);
 
   sink.setMode(WriterSink::Mode::Footer);
-  writeProto(encodingManager.getFooter());
+  writerBase_->writeProto(encodingManager.getFooter());
   sink.setMode(WriterSink::Mode::None);
 
-  auto& stripe = addStripeInfo();
+  auto& stripe = writerBase_->addStripeInfo();
   stripe.set_offset(stripeOffset);
   stripe.set_indexlength(indexLength);
   stripe.set_datalength(dataLength);
@@ -504,9 +345,9 @@ void Writer::flushStripe(bool close) {
 
   auto& dictionaryDataMemoryUsage =
       context.getMemoryUsage(MemoryUsageCategory::DICTIONARY);
-  metrics.dictionaryMemory = dictionaryDataMemoryUsage.getCurrentBytes();
+  metrics.dictionaryMemory = dictionaryDataMemoryUsage.currentBytes();
   // TODO: what does this try to capture?
-  metrics.maxDictSize = dictionaryDataMemoryUsage.getMaxBytes();
+  metrics.maxDictSize = dictionaryDataMemoryUsage.stats().peakBytes;
 
   metrics.stripeIndex = context.stripeIndex;
   metrics.rawStripeSize = context.stripeRawSize;
@@ -534,9 +375,9 @@ void Writer::flushStripe(bool close) {
 }
 
 void Writer::flushInternal(bool close) {
-  auto& context = getContext();
-  auto& footer = getFooter();
-  auto& sink = getSink();
+  auto& context = writerBase_->getContext();
+  auto& footer = writerBase_->getFooter();
+  auto& sink = writerBase_->getSink();
   {
     CpuWallTimer timer{context.flushTiming};
     flushStripe(close);
@@ -604,7 +445,7 @@ void Writer::flushInternal(bool close) {
           // set stats. No need to set key metadata since it just reused the
           // same key of the first stripe
           for (auto& s : stats.at(i)) {
-            writeProtoAsString(
+            writerBase_->writeProtoAsString(
                 *group->add_statistics(),
                 s,
                 std::addressof(handler.getEncryptionProviderByIndex(i)));
@@ -612,7 +453,7 @@ void Writer::flushInternal(bool close) {
         }
       }
 
-      writeFooter(*schema_->type);
+      writerBase_->writeFooter(*schema_->type);
     }
 
     // flush to sink
@@ -636,10 +477,10 @@ void Writer::flushInternal(bool close) {
             .totalMemory = context.getTotalMemoryUsage(),
             .dictionaryMemory =
                 context.getMemoryUsage(MemoryUsageCategory::DICTIONARY)
-                    .getCurrentBytes(),
+                    .currentBytes(),
             .generalMemory =
                 context.getMemoryUsage(MemoryUsageCategory::GENERAL)
-                    .getCurrentBytes()});
+                    .currentBytes()});
   }
 }
 
@@ -650,7 +491,36 @@ void Writer::flush() {
 void Writer::close() {
   auto exitGuard = folly::makeGuard([this]() { flushPolicy_->onClose(); });
   flushInternal(true);
-  WriterBase::close();
+  writerBase_->close();
+}
+
+dwrf::WriterOptions getDwrfOptions(const dwio::common::WriterOptions& options) {
+  std::map<std::string, std::string> configs;
+  if (options.compressionKind.has_value()) {
+    configs.emplace(
+        Config::COMPRESSION.configKey(),
+        std::to_string(options.compressionKind.value()));
+  }
+  dwrf::WriterOptions dwrfOptions;
+  dwrfOptions.config = Config::fromMap(configs);
+  dwrfOptions.schema = std::move(options.schema);
+  dwrfOptions.memoryPool = options.memoryPool;
+  return dwrfOptions;
+}
+
+std::unique_ptr<dwio::common::Writer> DwrfWriterFactory::createWriter(
+    std::unique_ptr<dwio::common::DataSink> sink,
+    const dwio::common::WriterOptions& options) {
+  auto dwrfOptions = getDwrfOptions(options);
+  return std::make_unique<Writer>(std::move(sink), dwrfOptions);
+}
+
+void registerDwrfWriterFactory() {
+  dwio::common::registerWriterFactory(std::make_shared<DwrfWriterFactory>());
+}
+
+void unregisterDwrfWriterFactory() {
+  dwio::common::unregisterWriterFactory(dwio::common::FileFormat::DWRF);
 }
 
 } // namespace facebook::velox::dwrf

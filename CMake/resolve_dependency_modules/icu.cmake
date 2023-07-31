@@ -13,19 +13,16 @@
 # limitations under the License.
 include_guard(GLOBAL)
 
-if(DEFINED ENV{VELOX_ICU4C_URL})
-  set(ICU4C_SOURCE_URL "$ENV{VELOX_ICU4C_URL}")
-else()
-  set(VELOX_ICU4C_BUILD_VERSION 72)
-  string(
-    CONCAT ICU4C_SOURCE_URL
-           "https://github.com/unicode-org/icu/releases/download/"
-           "release-${VELOX_ICU4C_BUILD_VERSION}-1/"
-           "icu4c-${VELOX_ICU4C_BUILD_VERSION}_1-src.tgz")
+set(VELOX_ICU4C_BUILD_VERSION 72)
+set(VELOX_ICU4C_BUILD_SHA256_CHECKSUM
+    a2d2d38217092a7ed56635e34467f92f976b370e20182ad325edea6681a71d68)
+string(
+  CONCAT VELOX_ICU4C_SOURCE_URL
+         "https://github.com/unicode-org/icu/releases/download/"
+         "release-${VELOX_ICU4C_BUILD_VERSION}-1/"
+         "icu4c-${VELOX_ICU4C_BUILD_VERSION}_1-src.tgz")
 
-  set(VELOX_ICU4C_BUILD_SHA256_CHECKSUM
-      a2d2d38217092a7ed56635e34467f92f976b370e20182ad325edea6681a71d68)
-endif()
+resolve_dependency_url(ICU4C)
 
 message(STATUS "Building ICU4C from source")
 
@@ -41,17 +38,17 @@ set(HOST_ENV_CMAKE
     CC="${CMAKE_C_COMPILER}"
     CXX="${CMAKE_CXX_COMPILER}"
     CFLAGS="${CMAKE_C_FLAGS}"
-    CXXFLAGS="${CMAKE_CXX_FLAGS}"
+    CXXFLAGS="${CMAKE_CXX_FLAGS} -w"
     LDFLAGS="${CMAKE_MODULE_LINKER_FLAGS}")
-set(ICU_DIR ${CMAKE_CURRENT_BINARY_DIR}/icu)
+set(ICU_DIR ${CMAKE_CURRENT_BINARY_DIR}/_deps/icu)
 set(ICU_INCLUDE_DIRS ${ICU_DIR}/include)
 set(ICU_LIBRARIES ${ICU_DIR}/lib)
 
 # We can not use FetchContent as ICU does not use cmake
 ExternalProject_Add(
   ICU
-  URL ${ICU4C_SOURCE_URL}
-  URL_HASH SHA256=${VELOX_ICU4C_BUILD_SHA256_CHECKSUM}
+  URL ${VELOX_ICU4C_SOURCE_URL}
+  URL_HASH ${VELOX_ICU4C_BUILD_SHA256_CHECKSUM}
   SOURCE_DIR ${CMAKE_CURRENT_BINARY_DIR}/icu-src
   BINARY_DIR ${CMAKE_CURRENT_BINARY_DIR}/icu-bld
   CONFIGURE_COMMAND <SOURCE_DIR>/source/configure --prefix=${ICU_DIR}
@@ -61,9 +58,26 @@ ExternalProject_Add(
 
 add_library(ICU::ICU UNKNOWN IMPORTED)
 add_dependencies(ICU::ICU ICU-build)
-set_target_properties(
-  ICU::ICU PROPERTIES INTERFACE_INCLUDE_DIRECTORIES ${ICU_INCLUDE_DIRS}
-                      INTERFACE_LINK_LIBRARIES ${ICU_LIBRARIES})
+
+# We have to manually create these files and folders so that the checks for the
+# files made at configure time (before icu is built) pass
+file(MAKE_DIRECTORY ${ICU_INCLUDE_DIRS})
+file(MAKE_DIRECTORY ${ICU_LIBRARIES})
+
+# Create a target for each component
+set(icu_components data i18n io uc tu test)
+
+foreach(component ${icu_components})
+  add_library(ICU::${component} SHARED IMPORTED)
+  string(CONCAT ICU_${component}_LIBRARY ${ICU_LIBRARIES} "/libicu"
+                ${component} ".so")
+  file(TOUCH ${ICU_${component}_LIBRARY})
+  set_target_properties(
+    ICU::${component}
+    PROPERTIES IMPORTED_LOCATION ${ICU_${component}_LIBRARY}
+               INTERFACE_SYSTEM_INCLUDE_DIRECTORIES ${ICU_INCLUDE_DIRS})
+  target_link_libraries(ICU::ICU INTERFACE ICU::${component})
+endforeach()
 
 # We have to keep the FindICU.cmake in a subfolder to prevent it from overriding
 # the system provided one when ICU_SOURCE=SYSTEM

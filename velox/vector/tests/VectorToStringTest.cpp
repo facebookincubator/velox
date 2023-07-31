@@ -103,8 +103,8 @@ TEST_F(VectorToStringTest, opaque) {
 }
 
 TEST_F(VectorToStringTest, decimals) {
-  auto shortDecimalFlatVector = makeShortDecimalFlatVector(
-      {1000265, 35610, -314159, 7, 0}, DECIMAL(10, 3));
+  auto shortDecimalFlatVector =
+      makeFlatVector<int64_t>({1000265, 35610, -314159, 7, 0}, DECIMAL(10, 3));
   ASSERT_EQ(
       shortDecimalFlatVector->toString(),
       "[FLAT DECIMAL(10,3): 5 elements, no nulls]");
@@ -116,8 +116,8 @@ TEST_F(VectorToStringTest, decimals) {
       "3: 0.007\n"
       "4: 0");
 
-  auto longDecimalFlatVector = makeLongDecimalFlatVector(
-      {1000265, 35610, -314159, 7, 0}, DECIMAL(20, 4));
+  auto longDecimalFlatVector =
+      makeFlatVector<int128_t>({1000265, 35610, -314159, 7, 0}, DECIMAL(20, 4));
   ASSERT_EQ(
       longDecimalFlatVector->toString(),
       "[FLAT DECIMAL(20,4): 5 elements, no nulls]");
@@ -131,7 +131,7 @@ TEST_F(VectorToStringTest, decimals) {
 }
 
 TEST_F(VectorToStringTest, nullableDecimals) {
-  auto shortDecimalFlatVector = makeNullableShortDecimalFlatVector(
+  auto shortDecimalFlatVector = makeNullableFlatVector<int64_t>(
       {1000265, 35610, -314159, 7, std::nullopt}, DECIMAL(10, 3));
   ASSERT_EQ(
       shortDecimalFlatVector->toString(),
@@ -144,7 +144,7 @@ TEST_F(VectorToStringTest, nullableDecimals) {
       "3: 0.007\n"
       "4: null");
 
-  auto longDecimalFlatVector = makeNullableLongDecimalFlatVector(
+  auto longDecimalFlatVector = makeNullableFlatVector<int128_t>(
       {1000265, 35610, -314159, 7, std::nullopt}, DECIMAL(20, 4));
   ASSERT_EQ(
       longDecimalFlatVector->toString(),
@@ -307,5 +307,28 @@ TEST_F(VectorToStringTest, indexOverflow) {
   // No nulls.
   auto flat = makeFlatVector<int32_t>({1, 2, 3});
   ASSERT_THROW(flat->toString(4), VeloxException);
+}
+
+TEST_F(VectorToStringTest, constantgPrimitiveTypes) {
+  auto flat = makeFlatVector<int64_t>(100, [](vector_size_t i) { return i; });
+
+  // Index in values vector > constant vector size.
+  auto constantVector = BaseVector::wrapInConstant(10, 20, flat);
+  EXPECT_EQ(
+      constantVector->toString(true), "[CONSTANT BIGINT: 10 elements, 20]");
+
+  // Empty vector.
+  constantVector->resize(0);
+  EXPECT_EQ(
+      constantVector->toString(true), "[CONSTANT BIGINT: 0 elements, 20]");
+
+  // Null constant.
+  auto nulls = vectorMaker_.flatVectorNullable<int64_t>({std::nullopt});
+  auto nullConstant = BaseVector::wrapInConstant(20, 0, nulls);
+  EXPECT_EQ(
+      nullConstant->toString(true), "[CONSTANT BIGINT: 20 elements, null]");
+  nullConstant->resize(0);
+  EXPECT_EQ(
+      nullConstant->toString(true), "[CONSTANT BIGINT: 0 elements, null]");
 }
 } // namespace facebook::velox::test

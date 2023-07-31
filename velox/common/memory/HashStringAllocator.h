@@ -23,6 +23,8 @@
 #include "velox/common/memory/StreamArena.h"
 #include "velox/type/StringView.h"
 
+#include <folly/container/F14Map.h>
+
 namespace facebook::velox {
 
 // Implements an arena backed by MappedMemory::Allocation. This is for backing
@@ -44,12 +46,17 @@ class HashStringAllocator : public StreamArena {
   static constexpr int32_t kMinAlloc =
       sizeof(CompactDoubleList) + sizeof(uint32_t);
 
+  // Sizes larger than this will come direct from 'pool().
+  static constexpr int32_t kMaxAlloc =
+      memory::AllocationTraits::kPageSize / 4 * 3;
+
   class Header {
    public:
     static constexpr uint32_t kFree = 1U << 31;
     static constexpr uint32_t kContinued = 1U << 30;
     static constexpr uint32_t kPreviousFree = 1U << 29;
     static constexpr uint32_t kSizeMask = (1U << 29) - 1;
+    static constexpr uint32_t kContinuedPtrSize = sizeof(void*);
 
     // Marker at end of a PageRun. Distinct from valid headers since
     // all the 3 high bits are set, which is not valid for a header.
@@ -103,6 +110,10 @@ class HashStringAllocator : public StreamArena {
       return data_ & kSizeMask;
     }
 
+    int32_t usableSize() const {
+      return isContinued() ? (size() - kContinuedPtrSize) : size();
+    }
+
     void setSize(int32_t size) {
       VELOX_CHECK(size <= kSizeMask);
       data_ = size | (data_ & ~kSizeMask);
@@ -116,10 +127,19 @@ class HashStringAllocator : public StreamArena {
       return begin() + size();
     }
 
-    // Returns Header of the next block or null if at the end of arena.
+    /// Returns the Header of the block that is physically next to this block or
+    /// null if this is the last block of the arena.
     Header* FOLLY_NULLABLE next() {
       auto next = reinterpret_cast<Header*>(end());
       return next->data_ == kArenaEnd ? nullptr : next;
+    }
+
+    /// Returns the header of the next block in a multi-part allocation. The
+    /// caller must ensure that isContinued() returns true before calling this
+    /// method.
+    HashStringAllocator::Header* nextContinued() {
+      VELOX_DCHECK(isContinued());
+      return *reinterpret_cast<Header**>(end() - kContinuedPtrSize);
     }
 
    private:
@@ -127,12 +147,35 @@ class HashStringAllocator : public StreamArena {
   };
 
   struct Position {
-    Header* FOLLY_NULLABLE header;
-    char* FOLLY_NULLABLE position;
+    Header* FOLLY_NULLABLE header{nullptr};
+    char* FOLLY_NULLABLE position{nullptr};
+
+    int32_t offset() const {
+      VELOX_DCHECK_NOT_NULL(header);
+      VELOX_DCHECK_NOT_NULL(position);
+      return position - header->begin();
+    }
+
+    bool isSet() const {
+      return header != nullptr && position != nullptr;
+    }
+
+    static Position atOffset(Header* header, int32_t offset) {
+      VELOX_DCHECK_NOT_NULL(header);
+      VELOX_DCHECK_GE(offset, 0);
+      VELOX_DCHECK_LE(offset, header->usableSize());
+      return {header, header->begin() + offset};
+    }
+
+    static Position null() {
+      return {nullptr, nullptr};
+    }
   };
 
   explicit HashStringAllocator(memory::MemoryPool* FOLLY_NONNULL pool)
       : StreamArena(pool), pool_(pool) {}
+
+  ~HashStringAllocator();
 
   // Copies a StringView at 'offset' in 'group' to storage owned by
   // the hash table. Updates the StringView.
@@ -186,6 +229,15 @@ class HashStringAllocator : public StreamArena {
     return allocate(std::max(size, kMinAlloc), true);
   }
 
+  /// Allocates a block that is independently freeable but is freed on
+  /// destruction of 'this'. The block has no header and must be freed by
+  /// freeToPool() if to be freed before destruction of 'this'.
+  void* allocateFromPool(size_t size);
+
+  /// Frees a block allocated with allocateFromPool(). The pointer and size must
+  /// match.
+  void freeToPool(void* ptr, size_t size);
+
   // Returns the header immediately below 'data'.
   static Header* FOLLY_NONNULL headerOf(const void* FOLLY_NONNULL data) {
     return reinterpret_cast<Header*>(
@@ -229,14 +281,22 @@ class HashStringAllocator : public StreamArena {
 
   // Completes a write prepared with newWrite or
   // extendWrite. Up to 'numReserveBytes' unused bytes, if available, are left
-  // after the end of the write to accommodate another write. Returns the
-  // position immediately after the last written byte.
-  Position finishWrite(ByteStream& stream, int32_t numReserveBytes);
+  // after the end of the write to accommodate another write. Returns a pair of
+  // positions: (1) position at the start of this 'write', (2) position
+  // immediately after the last written byte.
+  std::pair<Position, Position> finishWrite(
+      ByteStream& stream,
+      int32_t numReserveBytes);
 
-  // Allocates a new range for a stream writing to 'this'. Sets the last word of
-  // the previous range to point to the new range and copies the overwritten
-  // word as the first word of the new range.
+  /// Allocates a new range for a stream writing to 'this'. Sets the last word
+  /// of the previous range to point to the new range and copies the overwritten
+  /// word as the first word of the new range.
+  ///
+  /// May allocate less than 'bytes'.
   void newRange(int32_t bytes, ByteRange* FOLLY_NONNULL range) override;
+
+  /// Allocates a new range of at least 'bytes' size.
+  void newContiguousRange(int32_t bytes, ByteRange* range);
 
   void newTinyRange(int32_t bytes, ByteRange* FOLLY_NONNULL range) override {
     newRange(bytes, range);
@@ -244,7 +304,7 @@ class HashStringAllocator : public StreamArena {
 
   // Returns the total memory footprint of 'this'.
   int64_t retainedSize() const {
-    return pool_.allocatedBytes();
+    return pool_.allocatedBytes() + sizeFromPool_;
   }
 
   // Adds the allocation of 'header' and any extensions (if header has
@@ -263,12 +323,7 @@ class HashStringAllocator : public StreamArena {
   }
 
   // Frees all memory associated with 'this' and leaves 'this' ready for reuse.
-  void clear() {
-    numFree_ = 0;
-    freeBytes_ = 0;
-    new (&free_) CompactDoubleList();
-    pool_.clear();
-  }
+  void clear();
 
   memory::MemoryPool* FOLLY_NONNULL pool() const {
     return pool_.pool();
@@ -279,12 +334,28 @@ class HashStringAllocator : public StreamArena {
   }
 
   // Checks the free space accounting and consistency of
-  // Headers. Throws when detects corruption.
-  void checkConsistency() const;
+  // Headers. Throws when detects corruption. Returns the number of allocated
+  // payload bytes, excluding headers, continue links and other overhead.
+  int64_t checkConsistency() const;
+
+  /// Throws if 'this' is not empty. Checks consistency of
+  /// 'this'. This is a fast check for RowContainer users freeing the
+  /// variable length data they store. Can be used in non-debug
+  /// builds.
+  void checkEmpty() const;
 
  private:
   static constexpr int32_t kUnitSize = 16 * memory::AllocationTraits::kPageSize;
   static constexpr int32_t kMinContiguous = 48;
+  static constexpr int32_t kNumFreeLists = 7;
+
+  // different sizes have different free lists. Sizes below first size go to
+  // freeLists_[0]. Sizes >= freeListSize_[i] go to freeLists_[i + 1]. The sizes
+  // match the size progression for growing F14 containers. Static array of
+  // exactly 8 ints for simd.
+  static int32_t freeListSizes_[HashStringAllocator::kNumFreeLists + 1];
+
+  void newRange(int32_t bytes, ByteRange* range, bool contiguous);
 
   // Adds 'bytes' worth of contiguous space to the free list. This
   // grows the footprint in MemoryAllocator but does not allocate
@@ -297,7 +368,11 @@ class HashStringAllocator : public StreamArena {
   void removeFromFreeList(Header* FOLLY_NONNULL header) {
     VELOX_CHECK(header->isFree());
     header->clearFree();
+    auto index = freeListIndex(header->size());
     reinterpret_cast<CompactDoubleList*>(header->begin())->remove();
+    if (free_[index].empty()) {
+      freeNonEmpty_ &= ~(1 << index);
+    }
   }
 
   /// Allocates a block of specified size. If exactSize is false, the block may
@@ -311,20 +386,35 @@ class HashStringAllocator : public StreamArena {
   // return a block that is much larger than preferredSize. Otherwise,
   // the block can be larger and the user is expected to call
   // freeRestOfBlock to finalize the allocation.
-  Header* FOLLY_NULLABLE allocateFromFreeList(
+  Header* FOLLY_NULLABLE allocateFromFreeLists(
       int32_t preferredSize,
       bool mustHaveSize,
       bool isFinalSize);
+
+  Header* FOLLY_NULLABLE allocateFromFreeList(
+      int32_t preferredSize,
+      bool mustHaveSize,
+      bool isFinalSize,
+      int32_t freeListIndex);
 
   // Sets 'header' to be 'keepBytes' long and adds the remainder of
   // 'header's memory to free list. Does nothing if the resulting
   // blocks would be below minimum size.
   void freeRestOfBlock(Header* FOLLY_NONNULL header, int32_t keepBytes);
 
-  // Circular list of free blocks.
-  CompactDoubleList free_;
+  // Returns the free list index for 'size'. Masks out empty sizes that can be
+  // given by 'mask'. If 'mask' excludes all free lists, returns >
+  // kNumFreeLists.
+  int32_t freeListIndex(int32_t size, uint32_t mask = ~0);
 
-  // Count of elements in 'free_'. This is 0 when free_.next() == &free_.
+  // Circular list of free blocks.
+  CompactDoubleList free_[kNumFreeLists];
+
+  // Bitmap with a 1 if the corresponding list in 'free_' is not empty.
+  int32_t freeNonEmpty_{0};
+
+  // Count of elements in 'free_'. This is 0 when all free_[i].next() ==
+  // &free_[i].
   uint64_t numFree_ = 0;
 
   // Sum of the size of blocks in 'free_', excluding headers.
@@ -338,10 +428,17 @@ class HashStringAllocator : public StreamArena {
 
   // Pointer to Header for the range being written. nullptr if a write is not in
   // progress.
+  Position startPosition_;
   Header* FOLLY_NULLABLE currentHeader_ = nullptr;
 
   // Pool for getting new slabs.
-  AllocationPool pool_;
+  memory::AllocationPool pool_;
+
+  // Map from pointer to size for large blocks allocated from pool().
+  folly::F14FastMap<void*, size_t> allocationsFromPool_;
+
+  // Sum of sizes in 'allocationsFromPool_'.
+  int64_t sizeFromPool_{0};
 };
 
 // Utility for keeping track of allocation between two points in
@@ -396,11 +493,17 @@ struct StlAllocator {
   }
 
   T* FOLLY_NONNULL allocate(std::size_t n) {
+    if (n * sizeof(T) > HashStringAllocator::kMaxAlloc) {
+      return reinterpret_cast<T*>(allocator_->allocateFromPool(n * sizeof(T)));
+    }
     return reinterpret_cast<T*>(
         allocator_->allocate(checkedMultiply(n, sizeof(T)))->begin());
   }
 
-  void deallocate(T* FOLLY_NONNULL p, std::size_t /*n*/) noexcept {
+  void deallocate(T* FOLLY_NONNULL p, std::size_t n) noexcept {
+    if (n * sizeof(T) > HashStringAllocator::kMaxAlloc) {
+      return allocator_->freeToPool(p, n * sizeof(T));
+    }
     allocator_->free(HashStringAllocator::headerOf(p));
   }
 
@@ -429,10 +532,10 @@ struct AlignedStlAllocator {
 
   static_assert(
       Alignment != 0,
-      "Alignment of AlignmentStlAllocator cannot be 0.");
+      "Alignment of AlignedStlAllocator cannot be 0.");
   static_assert(
       (Alignment & (Alignment - 1)) == 0,
-      "Alignment of AlignmentStlAllocator must be a power of 2.");
+      "Alignment of AlignedStlAllocator must be a power of 2.");
 
   template <class Other>
   struct rebind {
@@ -440,17 +543,22 @@ struct AlignedStlAllocator {
   };
 
   explicit AlignedStlAllocator(HashStringAllocator* FOLLY_NONNULL allocator)
-      : allocator_{allocator} {
+      : allocator_{allocator},
+        poolAligned_(allocator_->pool()->alignment() >= Alignment) {
     VELOX_CHECK(allocator);
   }
 
   template <class U, uint8_t A>
   explicit AlignedStlAllocator(const AlignedStlAllocator<U, A>& allocator)
-      : allocator_{allocator.allocator()} {
+      : allocator_{allocator.allocator()},
+        poolAligned_(allocator_->pool()->alignment() >= Alignment) {
     VELOX_CHECK(allocator_);
   }
 
   T* FOLLY_NONNULL allocate(std::size_t n) {
+    if (n * sizeof(T) > HashStringAllocator::kMaxAlloc && poolAligned_) {
+      return reinterpret_cast<T*>(allocator_->allocateFromPool(n * sizeof(T)));
+    }
     // Allocate extra Alignment bytes for alignment and 4 bytes to store the
     // delta between unaligned and aligned pointers.
     auto size =
@@ -469,7 +577,10 @@ struct AlignedStlAllocator {
     return reinterpret_cast<T*>(alignedPtr);
   }
 
-  void deallocate(T* FOLLY_NONNULL p, std::size_t /*n*/) noexcept {
+  void deallocate(T* FOLLY_NONNULL p, std::size_t n) noexcept {
+    if (n * sizeof(T) > HashStringAllocator::kMaxAlloc) {
+      return allocator_->freeToPool(p, n * sizeof(T));
+    }
     auto delta = *reinterpret_cast<int32_t*>((char*)p - 4);
     allocator_->free(HashStringAllocator::headerOf((char*)p - 4 - delta));
   }
@@ -492,6 +603,7 @@ struct AlignedStlAllocator {
 
  private:
   HashStringAllocator* FOLLY_NONNULL allocator_;
+  const bool poolAligned_;
 };
 
 } // namespace facebook::velox

@@ -18,6 +18,8 @@
 #include <cfloat>
 #include "common/encode/Base64.h"
 #include "folly/json.h"
+#include "velox/type/DecimalUtil.h"
+#include "velox/type/HugeInt.h"
 
 namespace facebook::velox {
 
@@ -63,71 +65,6 @@ struct VariantEquality<TypeKind::TIMESTAMP> {
       return evaluateNullEquality<NullEqualsNull>(a, b);
     } else {
       return a.value<TypeKind::TIMESTAMP>() == b.value<TypeKind::TIMESTAMP>();
-    }
-  }
-};
-
-// date
-template <>
-struct VariantEquality<TypeKind::DATE> {
-  template <bool NullEqualsNull>
-  static bool equals(const variant& a, const variant& b) {
-    if (a.isNull() || b.isNull()) {
-      return evaluateNullEquality<NullEqualsNull>(a, b);
-    } else {
-      return a.value<TypeKind::DATE>() == b.value<TypeKind::DATE>();
-    }
-  }
-};
-
-template <>
-struct VariantEquality<TypeKind::SHORT_DECIMAL> {
-  template <bool NullEqualsNull>
-  static bool equals(const variant& a, const variant& b) {
-    const auto lhs = a.value<TypeKind::SHORT_DECIMAL>();
-    const auto rhs = b.value<TypeKind::SHORT_DECIMAL>();
-    const auto lType = DECIMAL(lhs.precision, lhs.scale);
-    const auto rType = DECIMAL(rhs.precision, rhs.scale);
-    if (!lType->equivalent(*rType)) {
-      return false;
-    }
-    if (a.isNull() || b.isNull()) {
-      return evaluateNullEquality<NullEqualsNull>(a, b);
-    } else {
-      return lhs.value() == rhs.value();
-    }
-  }
-};
-
-template <>
-struct VariantEquality<TypeKind::LONG_DECIMAL> {
-  template <bool NullEqualsNull>
-  static bool equals(const variant& a, const variant& b) {
-    const auto lhs = a.value<TypeKind::LONG_DECIMAL>();
-    const auto rhs = b.value<TypeKind::LONG_DECIMAL>();
-    const auto lType = DECIMAL(lhs.precision, lhs.scale);
-    const auto rType = DECIMAL(rhs.precision, rhs.scale);
-    if (!lType->equivalent(*rType)) {
-      return false;
-    }
-    if (a.isNull() || b.isNull()) {
-      return evaluateNullEquality<NullEqualsNull>(a, b);
-    } else {
-      return lhs.value() == rhs.value();
-    }
-  }
-};
-
-// interval day time
-template <>
-struct VariantEquality<TypeKind::INTERVAL_DAY_TIME> {
-  template <bool NullEqualsNull>
-  static bool equals(const variant& a, const variant& b) {
-    if (a.isNull() || b.isNull()) {
-      return evaluateNullEquality<NullEqualsNull>(a, b);
-    } else {
-      return a.value<TypeKind::INTERVAL_DAY_TIME>() ==
-          b.value<TypeKind::INTERVAL_DAY_TIME>();
     }
   }
 };
@@ -237,13 +174,17 @@ void variant::throwCheckPtrError() const {
   throw std::invalid_argument{"missing variant value"};
 }
 
-std::string variant::toJson() const {
+std::string variant::toJson(const TypePtr& type) const {
   // todo(youknowjack): consistent story around std::stringifying, converting,
   // and other basic operations. Stringification logic should not be specific
   // to variants; it should be consistent for all map representations
 
   if (isNull()) {
     return "null";
+  }
+
+  if (type->isDate()) {
+    return '"' + DATE()->toString(value<TypeKind::INTEGER>()) + '"';
   }
 
   switch (kind_) {
@@ -307,10 +248,20 @@ std::string variant::toJson() const {
       folly::json::escapeString(str, target, getOpts());
       return target;
     }
+    case TypeKind::HUGEINT:
+      VELOX_CHECK(type && type->isLongDecimal());
+      return DecimalUtil::toString(value<TypeKind::HUGEINT>(), type);
     case TypeKind::TINYINT:
+      FOLLY_FALLTHROUGH;
     case TypeKind::SMALLINT:
+      FOLLY_FALLTHROUGH;
     case TypeKind::INTEGER:
+      FOLLY_FALLTHROUGH;
     case TypeKind::BIGINT:
+      if (type && type->isShortDecimal()) {
+        return DecimalUtil::toString(value<TypeKind::BIGINT>(), type);
+      }
+      FOLLY_FALLTHROUGH;
     case TypeKind::BOOLEAN: {
       auto converted = VariantConverter::convert<TypeKind::VARCHAR>(*this);
       if (converted.isNull()) {
@@ -339,26 +290,16 @@ std::string variant::toJson() const {
       auto& timestamp = value<TypeKind::TIMESTAMP>();
       return '"' + timestamp.toString() + '"';
     }
-    case TypeKind::DATE: {
-      auto& date = value<TypeKind::DATE>();
-      return '"' + date.toString() + '"';
-    }
-    case TypeKind::INTERVAL_DAY_TIME: {
-      auto& interval = value<TypeKind::INTERVAL_DAY_TIME>();
-      return '"' + interval.toString() + '"';
-    }
     case TypeKind::OPAQUE: {
-      // Return expression that we can't parse back - we use toJson for
-      // debugging only. Variant::serialize should actually serialize the data.
-      return "\"Opaque<" + value<TypeKind::OPAQUE>().type->toString() + ">\"";
-    }
-    case TypeKind::SHORT_DECIMAL: {
-      return DecimalUtil::toString(
-          value<TypeKind::SHORT_DECIMAL>().value(), inferType());
-    }
-    case TypeKind::LONG_DECIMAL: {
-      return DecimalUtil::toString(
-          value<TypeKind::LONG_DECIMAL>().value(), inferType());
+      // Although this is not used for deserialization, we need to include the
+      // real data because commonExpressionEliminationRules uses
+      // CallTypedExpr.toString as key, which ends up using this string.
+      // Opaque types that want to use common expression elimination need to
+      // make their serialization deterministic.
+      const detail::OpaqueCapsule& capsule = value<TypeKind::OPAQUE>();
+      auto serializeFunction = capsule.type->getSerializeFunc();
+      return "Opaque<type:" + capsule.type->toString() + ",value:\"" +
+          serializeFunction(capsule.obj) + "\">";
     }
     case TypeKind::FUNCTION:
     case TypeKind::UNKNOWN:
@@ -372,11 +313,12 @@ std::string variant::toJson() const {
 
 void serializeOpaque(
     folly::dynamic& variantObj,
-    detail::OpaqueCapsule opaqueValue) {
+    const detail::OpaqueCapsule& opaqueValue) {
   try {
     auto serializeFunction = opaqueValue.type->getSerializeFunc();
     variantObj["value"] = serializeFunction(opaqueValue.obj);
-    variantObj["opaque_type"] = folly::toJson(opaqueValue.type->serialize());
+    variantObj["opaque_type"] = folly::json::serialize(
+        opaqueValue.type->serialize(), getSerializationOptions());
   } catch (VeloxRuntimeError& ex) {
     // Re-throw error for backwards compatibility.
     // Want to return error_code::kNotImplemented rather
@@ -441,6 +383,10 @@ folly::dynamic variant::serialize() const {
       objValue = value<TypeKind::BIGINT>();
       break;
     }
+    case TypeKind::HUGEINT: {
+      objValue = value<TypeKind::HUGEINT>();
+      break;
+    }
     case TypeKind::BOOLEAN: {
       objValue = value<TypeKind::BOOLEAN>();
       break;
@@ -455,14 +401,6 @@ folly::dynamic variant::serialize() const {
     }
     case TypeKind::VARCHAR: {
       objValue = value<TypeKind::VARCHAR>();
-      break;
-    }
-    case TypeKind::DATE: {
-      objValue = value<TypeKind::DATE>();
-      break;
-    }
-    case TypeKind::INTERVAL_DAY_TIME: {
-      objValue = value<TypeKind::INTERVAL_DAY_TIME>();
       break;
     }
     case TypeKind::OPAQUE: {
@@ -550,6 +488,8 @@ variant variant::create(const folly::dynamic& variantobj) {
       return variant::create<TypeKind::INTEGER>(obj.asInt());
     case TypeKind::BIGINT:
       return variant::create<TypeKind::BIGINT>(obj.asInt());
+    case TypeKind::HUGEINT:
+      return variant::create<TypeKind::HUGEINT>(obj.asInt());
     case TypeKind::BOOLEAN: {
       return variant(obj.asBool());
     }
@@ -571,13 +511,6 @@ variant variant::create(const folly::dynamic& variantobj) {
     case TypeKind::OPAQUE: {
       return deserializeOpaque(variantobj);
     }
-    case TypeKind::DATE: {
-      return variant::create<TypeKind::DATE>(obj.asInt());
-    }
-    case TypeKind::INTERVAL_DAY_TIME: {
-      return variant::create<TypeKind::INTERVAL_DAY_TIME>(
-          IntervalDayTime(obj.asInt()));
-    }
     case TypeKind::TIMESTAMP: {
       return variant::create<TypeKind::TIMESTAMP>(Timestamp(
           variantobj["seconds"].asInt(), variantobj["nanos"].asInt()));
@@ -595,18 +528,14 @@ variant variant::create(const folly::dynamic& variantobj) {
 uint64_t variant::hash() const {
   uint64_t hash = 0;
   if (isNull()) {
-    if (kind_ == TypeKind::SHORT_DECIMAL) {
-      return value<TypeKind::SHORT_DECIMAL>().hash();
-    }
-    if (kind_ == TypeKind::LONG_DECIMAL) {
-      return value<TypeKind::LONG_DECIMAL>().hash();
-    }
     return folly::Hash{}(static_cast<int32_t>(kind_));
   }
 
   switch (kind_) {
     case TypeKind::BIGINT:
       return folly::Hash{}(value<TypeKind::BIGINT>());
+    case TypeKind::HUGEINT:
+      return folly::Hash{}(value<TypeKind::HUGEINT>());
     case TypeKind::INTEGER:
       return folly::Hash{}(value<TypeKind::INTEGER>());
     case TypeKind::SMALLINT:
@@ -641,24 +570,10 @@ uint64_t variant::hash() const {
       }
       return hash;
     }
-    case TypeKind::DATE: {
-      auto dateValue = value<TypeKind::DATE>();
-      return folly::Hash{}(dateValue.days());
-    }
-    case TypeKind::INTERVAL_DAY_TIME: {
-      auto interval = value<TypeKind::INTERVAL_DAY_TIME>();
-      return folly::Hash{}(interval.milliseconds());
-    }
     case TypeKind::TIMESTAMP: {
       auto timestampValue = value<TypeKind::TIMESTAMP>();
       return folly::Hash{}(
           timestampValue.getSeconds(), timestampValue.getNanos());
-    }
-    case TypeKind::SHORT_DECIMAL: {
-      return value<TypeKind::SHORT_DECIMAL>().hash();
-    }
-    case TypeKind::LONG_DECIMAL: {
-      return value<TypeKind::LONG_DECIMAL>().hash();
     }
     case TypeKind::MAP: {
       auto hasher = folly::Hash{};
@@ -692,6 +607,12 @@ template <TypeKind KIND, typename TFloat>
 bool equalsFloatingPointWithEpsilonTyped(const variant& a, const variant& b) {
   TFloat f1 = a.value<KIND>();
   TFloat f2 = b.value<KIND>();
+
+  // Check if the numbers are all NaN value, we need to treat two NaN values to
+  // be equal as well.
+  if (std::isnan(f1) && std::isnan(f2)) {
+    return true;
+  }
 
   // Check if the numbers are really close -- needed
   // when comparing numbers near zero.

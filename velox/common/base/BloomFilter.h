@@ -44,7 +44,7 @@ class BloomFilter {
     bits_.resize(std::max<int32_t>(4, bits::nextPowerOfTwo(capacity) / 4));
   }
 
-  bool isSet() {
+  bool isSet() const {
     return bits_.size() > 0;
   }
 
@@ -64,7 +64,7 @@ class BloomFilter {
   void merge(const char* serialized) {
     common::InputByteStream stream(serialized);
     auto version = stream.read<int8_t>();
-    VELOX_CHECK_EQ(kBloomFilterV1, version);
+    VELOX_USER_CHECK_EQ(kBloomFilterV1, version);
     auto size = stream.read<int32_t>();
     bits_.resize(size);
     auto bitsdata =
@@ -81,13 +81,13 @@ class BloomFilter {
     bits::orBits(bits_.data(), bitsdata, 0, 64 * size);
   }
 
-  uint32_t serializedSize() {
+  uint32_t serializedSize() const {
     return 1 /* version */
         + 4 /* number of bits */
         + bits_.size() * 8;
   }
 
-  void serialize(char* output) {
+  void serialize(char* output) const {
     common::OutputByteStream stream(output);
     stream.appendOne(kBloomFilterV1);
     stream.appendOne((int32_t)bits_.size());

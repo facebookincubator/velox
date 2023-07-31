@@ -28,20 +28,22 @@ class SelectiveStructColumnReaderBase
       const std::shared_ptr<const dwio::common::TypeWithId>& requestedType,
       const std::shared_ptr<const dwio::common::TypeWithId>& dataType,
       DwrfParams& params,
-      common::ScanSpec& scanSpec)
+      common::ScanSpec& scanSpec,
+      bool isRoot = false)
       : dwio::common::SelectiveStructColumnReaderBase(
             requestedType,
             dataType,
             params,
-            scanSpec),
+            scanSpec,
+            isRoot),
         rowsPerRowGroup_(formatData_->rowsPerRowGroup().value()) {
-    VELOX_CHECK_EQ(nodeType_->id, dataType->id, "working on the same node");
+    VELOX_CHECK_EQ(fileType_->id, dataType->id, "working on the same node");
   }
 
   void seekTo(vector_size_t offset, bool readsNullsOnly) override;
 
   void seekToRowGroup(uint32_t index) override {
-    SelectiveColumnReader::seekToRowGroup(index);
+    dwio::common::SelectiveStructColumnReaderBase::seekToRowGroup(index);
     if (isTopLevel_ && !formatData_->hasNulls()) {
       readOffset_ = index * rowsPerRowGroup_;
       return;
@@ -81,7 +83,8 @@ struct SelectiveStructColumnReader : SelectiveStructColumnReaderBase {
       const std::shared_ptr<const dwio::common::TypeWithId>& requestedType,
       const std::shared_ptr<const dwio::common::TypeWithId>& dataType,
       DwrfParams& params,
-      common::ScanSpec& scanSpec);
+      common::ScanSpec& scanSpec,
+      bool isRoot = false);
 
  private:
   void addChild(std::unique_ptr<SelectiveColumnReader> child) {
