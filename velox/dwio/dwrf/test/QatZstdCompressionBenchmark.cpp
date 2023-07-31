@@ -22,6 +22,7 @@
 
 #include <folly/Benchmark.h>
 #include <folly/Random.h>
+#include <folly/init/Init.h>
 #include <gtest/gtest.h>
 
 #include <algorithm>
@@ -113,8 +114,8 @@ BENCHMARK(compressZstd) {
   auto pool = addDefaultLeafMemoryPool();
   MemorySink memSink(*pool, DEFAULT_MEM_STREAM_SIZE);
   uint64_t block = 1024 * 4;
-  auto dataSize = 1 * 1024 * 1024 * 1024; 
-  // auto dataSize = 1 * 1024 * 1024; 
+  // auto dataSize = 1 * 1024 * 1024 * 1024;
+  auto dataSize = 1 * 1024 * 1024;
   char testData[dataSize];
   generateRandomData(testData, dataSize, true);
   benchmarkCompress(
@@ -127,6 +128,8 @@ BENCHMARK(compressZstd) {
       NULL);
 }
 
-int main() {
-  runBenchmarks();
+int main(int argc, char** argv) {
+  folly::init(&argc, &argv);
+  folly::runBenchmarks();
+  return 0;
 }
