@@ -263,6 +263,32 @@ class CastExprTest : public functions::test::CastBaseTest {
             TypeTraits<KIND>::name));
   }
 
+  template <TypeKind KIND>
+  void testDecimalToIntegralCastsOutOfBoundsSetNullOnFailure() {
+    using NativeType = typename TypeTraits<KIND>::NativeType;
+    VELOX_CHECK(!(std::is_same<int64_t, NativeType>::value));
+    const auto tooSmall =
+        static_cast<int64_t>(std::numeric_limits<int32_t>::min()) - 1;
+    const auto tooBig =
+        static_cast<int64_t>(std::numeric_limits<int32_t>::max()) + 1;
+
+    testComplexCast(
+        "c0",
+        makeNullableFlatVector<int64_t>(
+            {0, tooSmall, 0, tooBig, 0, std::nullopt, 0}, DECIMAL(10, 0)),
+        makeNullableFlatVector<NativeType>(
+            {0, std::nullopt, 0, std::nullopt, 0, std::nullopt, 0}),
+        true);
+
+    testComplexCast(
+        "c0",
+        makeNullableFlatVector<int128_t>(
+            {0, tooSmall, 0, tooBig, 0, std::nullopt, 0}, DECIMAL(19, 0)),
+        makeNullableFlatVector<NativeType>(
+            {0, std::nullopt, 0, std::nullopt, 0, std::nullopt, 0}),
+        true);
+  }
+
   template <typename T>
   void testDecimalToIntegralCasts() {
     auto shortFlat = makeNullableFlatVector<int64_t>(
@@ -1107,6 +1133,12 @@ TEST_F(CastExprTest, decimalToIntegralOutOfBounds) {
   testDecimalToIntegralCastsOutOfBounds<TypeKind::INTEGER>();
   testDecimalToIntegralCastsOutOfBounds<TypeKind::SMALLINT>();
   testDecimalToIntegralCastsOutOfBounds<TypeKind::TINYINT>();
+}
+
+TEST_F(CastExprTest, decimalToIntegralOutOfBoundsSetNullOnFailure) {
+  testDecimalToIntegralCastsOutOfBoundsSetNullOnFailure<TypeKind::INTEGER>();
+  testDecimalToIntegralCastsOutOfBoundsSetNullOnFailure<TypeKind::SMALLINT>();
+  testDecimalToIntegralCastsOutOfBoundsSetNullOnFailure<TypeKind::TINYINT>();
 }
 
 TEST_F(CastExprTest, decimalToFloat) {
