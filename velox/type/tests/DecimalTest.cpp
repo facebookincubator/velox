@@ -26,7 +26,7 @@ namespace {
 void testToByteArray(int128_t value, int8_t* expected, int32_t size) {
   int32_t length;
   char out[size];
-  DecimalUtil::toByteArray(value, out, &length);
+  DecimalUtil::toByteArray(value, out, length);
   EXPECT_EQ(length, size);
   EXPECT_EQ(DecimalUtil::getByteArrayLength(value), size);
   EXPECT_EQ(std::memcmp(expected, out, length), 0);

@@ -50,44 +50,6 @@ std::string formatDecimal(uint8_t scale, int128_t unscaledValue) {
       "{}{}{}", isNegative ? "-" : "", integralPart, fractionString);
 }
 
-// Origins from BigInteger#firstNonzeroIntNum.
-//
-// Returns the index of the int that contains the first nonzero int in the
-// little-endian binary representation of the magnitude (int 0 is the
-// least significant). If the magnitude is zero, return value is undefined.
-//
-// <p>Note: never used for a BigInteger with a magnitude of zero.
-// @see #getInt
-int32_t lastNonzeroIntIndex(const std::vector<int32_t>& mag) {
-  int32_t i;
-  for (i = mag.size() - 1; i >= 0 && mag[i] == 0; --i) {
-    ;
-  }
-  return mag.size() - i - 1;
-}
-
-// Origins from BigInteger#getInt.
-//
-// Returns the specified int of the little-endian two's complement
-// representation (int 0 is the least significant).  The int number can
-// be arbitrarily high (values are logically preceded by infinitely many
-// sign ints).
-int32_t getInt(
-    int32_t n,
-    int8_t sig,
-    const std::vector<int32_t>& mag,
-    int32_t lastNonzeroIntIndex) {
-  if (n < 0) {
-    return 0;
-  }
-  if (n >= mag.size()) {
-    return sig < 0 ? -1 : 0;
-  }
-
-  int32_t magInt = mag[mag.size() - n - 1];
-  return (sig >= 0 ? magInt : (n <= lastNonzeroIntIndex ? -magInt : ~magInt));
-}
-
 int32_t getBitCount(uint32_t i) {
   static constexpr int kMaxBits = std::numeric_limits<uint64_t>::digits;
   uint64_t num = static_cast<uint32_t>(i);
@@ -182,37 +144,18 @@ int32_t DecimalUtil::getByteArrayLength(int128_t value) {
   return getBitLength(sig, mag) / 8 + 1;
 }
 
-void DecimalUtil::toByteArray(int128_t value, char* out, int32_t* length) {
-  uint128_t absValue;
-  int8_t sig;
-  if (value > 0) {
-    absValue = value;
-    sig = 1;
-  } else if (value < 0) {
-    absValue = -value;
-    sig = -1;
+void DecimalUtil::toByteArray(int128_t value, char* out, int32_t& length) {
+  length = getByteArrayLength(value);
+  auto lowBig = folly::Endian::big<int64_t>(value);
+  uint8_t* lowAddr = reinterpret_cast<uint8_t*>(&lowBig);
+  if (length <= sizeof(int64_t)) {
+    memcpy(out, lowAddr + sizeof(int64_t) - length, length);
   } else {
-    absValue = value;
-    sig = 0;
+    auto highBig = folly::Endian::big<int64_t>(value >> 64);
+    uint8_t* highAddr = reinterpret_cast<uint8_t*>(&highBig);
+    memcpy(out, highAddr + sizeof(int128_t) - length, length - sizeof(int64_t));
+    memcpy(out + length - sizeof(int64_t), lowAddr, sizeof(int64_t));
   }
-
-  std::vector<int32_t> mag = convertToIntMags(absValue);
-  int32_t byteLength = getBitLength(sig, mag) / 8 + 1;
-
-  uint32_t nextInt;
-  int32_t lastNonzeroIntIndexValue = lastNonzeroIntIndex(mag);
-  for (int32_t i = byteLength - 1, bytesCopied = 4, intIndex = 0; i >= 0; --i) {
-    if (bytesCopied == 4) {
-      nextInt = getInt(intIndex++, sig, mag, lastNonzeroIntIndexValue);
-      bytesCopied = 1;
-    } else {
-      nextInt >>= 8;
-      bytesCopied++;
-    }
-
-    out[i] = (uint8_t)nextInt;
-  }
-  *length = byteLength;
 }
 
 } // namespace facebook::velox

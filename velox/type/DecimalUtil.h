@@ -252,14 +252,15 @@ class DecimalUtil {
   // Get the java method BigInterger#toByteArray() array length.
   static int32_t getByteArrayLength(int128_t value);
 
-  /// This method refer to the BigInterger#toByteArray() method in Java side.
+  /// This method return the same result with the BigInterger#toByteArray()
+  /// method in Java side.
   ///
   /// Returns a byte array containing the two's-complement representation of
   /// this BigInteger. The byte array will be in big-endian byte-order: the most
   /// significant byte is in the zeroth element. The array will contain the
   /// minimum number of bytes required to represent this BigInteger, including
   /// at least one sign bit, which is (ceil((this.bitLength() + 1)/8)).
-  static void toByteArray(int128_t value, char* out, int32_t* length);
+  static void toByteArray(int128_t value, char* out, int32_t& length);
 
   static constexpr __uint128_t kOverflowMultiplier = ((__uint128_t)1 << 127);
 }; // DecimalUtil
