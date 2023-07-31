@@ -486,9 +486,10 @@ std::unique_ptr<BufferedOutputStream> createCompressor(
     }
     case common::CompressionKind_ZSTD: {
       int32_t zstdCompressionLevel = config.get(Config::ZSTD_COMPRESSION_LEVEL);
-      compressor = std::make_unique<ZstdCompressor>(zstdCompressionLevel);
 #ifdef VELOX_ENABLE_QAT_ZSTD_OT
       compressor = std::make_unique<ZstdQatCompressor>(zstdCompressionLevel);
+#else
+      compressor = std::make_unique<ZstdCompressor>(zstdCompressionLevel);
 #endif
       XLOG_FIRST_N(INFO, 1) << fmt::format(
           "Initialized zstd compressor with compression level {}",
