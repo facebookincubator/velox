@@ -294,6 +294,17 @@ struct Converter<
 
   template <typename From>
   static T cast(const From& v) {
+    if constexpr (std::is_same_v<From, double> && std::is_same_v<T, float>) {
+      // No need to compare with epsilon because we don't care about the exact
+      // value of v. We just need to make sure v can be represented as a float
+      // variable.
+      if (v > std::numeric_limits<float>::max() ||
+          v < -std::numeric_limits<float>::max()) {
+        return v > 0 ? std::numeric_limits<float>::infinity()
+                     : -std::numeric_limits<float>::infinity();
+      }
+    }
+
     try {
       return folly::to<T>(v);
     } catch (const std::exception& e) {

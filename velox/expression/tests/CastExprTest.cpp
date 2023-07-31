@@ -503,9 +503,6 @@ TEST_F(CastExprTest, primitiveInvalidCornerCases) {
 
   // To floating-point.
   {
-    // TODO: Presto returns Infinity in this case.
-    testCast<double, float>("real", {1.7E308}, {0}, true);
-
     // Invalid strings.
     testCast<std::string, float>("real", {"1.2a"}, {0}, true);
     testCast<std::string, float>("real", {"1.2.3"}, {0}, true);
@@ -567,6 +564,9 @@ TEST_F(CastExprTest, primitiveValidCornerCases) {
 
   // To floating-point.
   {
+    testCast<double, float>("real", {1.7E308}, {kInf}, false);
+    testCast<double, float>("real", {-1.7E308}, {-kInf}, false);
+
     testCast<std::string, float>("real", {"1.7E308"}, {kInf}, false);
     testCast<std::string, float>("real", {"1."}, {1.0}, false);
     testCast<std::string, float>("real", {"1"}, {1}, false);
