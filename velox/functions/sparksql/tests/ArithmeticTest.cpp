@@ -352,14 +352,6 @@ TEST_F(ArithmeticTest, hypot) {
 
 class LogNTest : public SparkFunctionBaseTest {
  protected:
-  std::optional<double> log2(std::optional<double> arg) {
-    return evaluateOnce<double>("log2(c0)", arg);
-  }
-
-  std::optional<double> log10(std::optional<double> arg) {
-    return evaluateOnce<double>("log10(c0)", arg);
-  }
-
   static constexpr float kInf = std::numeric_limits<double>::infinity();
 };
 
