@@ -38,7 +38,8 @@ class SpecialFormRegistry {
   /// @brief Return null if the FunctionCallToSpeicalForm not exists
   /// @param name Function name
   /// @return FunctionCallToSpecialForm
-  FunctionCallToSpecialForm* getSpecialForm(const std::string& name) const;
+  FunctionCallToSpecialForm* FOLLY_NULLABLE
+  getSpecialForm(const std::string& name) const;
 
  private:
   folly::Synchronized<RegistryType> registry_;

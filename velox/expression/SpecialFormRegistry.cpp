@@ -37,8 +37,8 @@ void SpecialFormRegistry::unregisterAllFunctionCallTpSpecialForm() {
   registry_.withWLock([&](auto& map) { map.clear(); });
 }
 
-FunctionCallToSpecialForm* SpecialFormRegistry::getSpecialForm(
-    const std::string& name) const {
+FunctionCallToSpecialForm* FOLLY_NULLABLE
+SpecialFormRegistry::getSpecialForm(const std::string& name) const {
   FunctionCallToSpecialForm* specialForm = nullptr;
   registry_.withRLock([&](const auto& map) {
     auto it = map.find(name);
