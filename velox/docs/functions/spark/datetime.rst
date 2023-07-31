@@ -7,6 +7,13 @@ Convenience Extraction Functions
 
 These functions support TIMESTAMP and DATE input types.
 
+.. spark:function:: add_months(startDate, numMonths) -> integer
+
+    Returns the date that is ``numMonths`` after ``startDate``.
+    When ``numMonths`` is zero returns ``startDate`` unmodified.
+    When ``numMonths`` is negative subtracts that many months from the ``startDate``.
+    Throws an error when inputs lead to int overflow, eg, add_months('2023-07-10', -2147483648).
+
 .. spark:function:: date_add(start_date, num_days) -> date
 
     Returns the date that is num_days after start_date.
@@ -109,3 +116,4 @@ These functions support TIMESTAMP and DATE input types.
 .. spark:function:: year(x) -> integer
 
     Returns the year from ``x``.
+    

@@ -14,6 +14,7 @@
  * limitations under the License.
  */
 
+#include <common/base/Exceptions.h>
 #include "velox/functions/lib/DateTimeFormatter.h"
 #include "velox/functions/lib/TimeUtils.h"
 #include "velox/functions/prestosql/DateTimeImpl.h"
@@ -334,6 +335,50 @@ struct DateDiffFunction {
 #endif
   {
     result = endDate - startDate;
+  }
+};
+
+template <typename T>
+struct AddMonthsFunction {
+  VELOX_DEFINE_FUNCTION_TYPES(T);
+
+  FOLLY_ALWAYS_INLINE int getYear(const std::tm& time) {
+    return 1900 + time.tm_year;
+  }
+
+  FOLLY_ALWAYS_INLINE int getMonth(const std::tm& time) {
+    return 1 + time.tm_mon;
+  }
+
+  FOLLY_ALWAYS_INLINE int getDay(const std::tm& time) {
+    return time.tm_mday;
+  }
+
+  FOLLY_ALWAYS_INLINE void call(
+      out_type<Date>& result,
+      const arg_type<Date>& date,
+      const int32_t value) {
+    auto dateTime = getDateTime(date);
+    auto year = getYear(dateTime);
+    auto month = getMonth(dateTime);
+    auto day = getDay(dateTime);
+
+    int64_t m = month - 1 + value;
+    int64_t y = (m >= 0 ? m : m - 11) / 12;
+    auto dm = static_cast<int32_t>(m - y * 12 + 1);
+    auto dy = year + y;
+
+    auto lastDay = util::getMaxDayOfMonth(dy, dm);
+    auto daysSinceEpoch =
+        util::daysSinceEpochFromDate(dy, dm, lastDay < day ? lastDay : day);
+    VELOX_USER_CHECK_EQ(
+        daysSinceEpoch,
+        (int32_t)daysSinceEpoch,
+        "Integer overflow in add_months({}-{}-{})",
+        year,
+        month,
+        day);
+    result = daysSinceEpoch;
   }
 };
 } // namespace facebook::velox::functions::sparksql

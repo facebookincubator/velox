@@ -14,6 +14,10 @@
  * limitations under the License.
  */
 
+#include <stdint.h>
+
+#include <type/Type.h>
+#include <optional>
 #include "velox/common/base/tests/GTestUtils.h"
 #include "velox/functions/sparksql/tests/SparkFunctionBaseTest.h"
 #include "velox/type/tz/TimeZoneMap.h"
@@ -404,5 +408,37 @@ TEST_F(DateTimeFunctionsTest, dateDiffDate) {
       dateDiff(parseDate("-5877641-06-23"), parseDate("1994-09-12")));
 }
 
+TEST_F(DateTimeFunctionsTest, addMonths) {
+  const auto parseDate =
+      [](const std::optional<const char*> date) -> std::optional<int32_t> {
+    if (date.has_value()) {
+      return DATE()->toDays(date.value());
+    }
+    return std::nullopt;
+  };
+
+  const auto addMonths =
+      [&](const std::optional<const char*> date,
+          std::optional<int32_t> value) -> std::optional<std::string> {
+    auto res = evaluateOnce<int32_t, int32_t>(
+        "add_months(c0, c1)", {parseDate(date), value}, {DATE(), INTEGER()});
+    if (res.has_value()) {
+      return DATE()->toString(res.value());
+    }
+    return std::nullopt;
+  };
+
+  EXPECT_EQ("2015-02-28", addMonths("2015-01-30", 1));
+  EXPECT_EQ("2015-01-30", addMonths("2015-01-30", 0));
+  EXPECT_EQ("2016-02-29", addMonths("2016-03-30", -1));
+  EXPECT_EQ("2014-11-30", addMonths("2015-01-30", -2));
+
+  constexpr int32_t kMin = std::numeric_limits<int32_t>::min();
+  constexpr int32_t kMax = std::numeric_limits<int32_t>::max();
+  VELOX_ASSERT_THROW(
+      addMonths("2023-07-10", kMin), "Integer overflow in add_months");
+  VELOX_ASSERT_THROW(
+      addMonths("2023-07-10", kMax), "Integer overflow in add_months");
+}
 } // namespace
 } // namespace facebook::velox::functions::sparksql::test
