@@ -16,6 +16,7 @@
 
 #include "velox/functions/sparksql/aggregates/Register.h"
 
+#include "velox/functions/sparksql/aggregates/AverageAggregate.h"
 #include "velox/functions/sparksql/aggregates/BitwiseXorAggregate.h"
 #include "velox/functions/sparksql/aggregates/BloomFilterAggAggregate.h"
 
@@ -27,5 +28,6 @@ void registerAggregateFunctions(const std::string& prefix) {
   registerFirstLastAggregates(prefix);
   registerBitwiseXorAggregate(prefix);
   registerBloomFilterAggAggregate(prefix + "bloom_filter_agg");
+  registerAverage(prefix + "avg");
 }
 } // namespace facebook::velox::functions::aggregate::sparksql

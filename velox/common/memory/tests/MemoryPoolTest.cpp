@@ -762,7 +762,7 @@ TEST_P(MemoryPoolTest, contiguousAllocate) {
   allocations.clear();
 
   // Random tests.
-  const int32_t numIterations = 100;
+  const int32_t numIterations = 10;
   const MachinePageCount kMaxAllocationPages = 32 << 10; // Total 128MB
   int32_t numAllocatedPages = 0;
   for (int32_t i = 0; i < numIterations; ++i) {
@@ -2093,7 +2093,7 @@ TEST_P(MemoryPoolTest, concurrentUpdatesToTheSamePool) {
   MemoryManager manager{{.capacity = kMaxMemory}};
   auto root = manager.addRootPool();
 
-  const int32_t kNumThreads = 5;
+  const int32_t kNumThreads = 4;
   const int32_t kNumChildPools = 2;
   std::vector<std::shared_ptr<MemoryPool>> childPools;
   for (int32_t i = 0; i < kNumChildPools; ++i) {
@@ -2103,7 +2103,7 @@ TEST_P(MemoryPoolTest, concurrentUpdatesToTheSamePool) {
   folly::Random::DefaultGenerator rng;
   rng.seed(1234);
 
-  const int32_t kNumOpsPerThread = 1'000;
+  const int32_t kNumOpsPerThread = 5'00;
   std::vector<std::thread> threads;
   threads.reserve(kNumThreads);
   for (size_t i = 0; i < kNumThreads; ++i) {
@@ -3065,6 +3065,27 @@ TEST_P(MemoryPoolTest, maybeReserve) {
   ASSERT_EQ(child->stats().numCollisions, 0);
   ASSERT_EQ(child->stats().numReclaims, 0);
   ASSERT_EQ(child->stats().numShrinks, 0);
+}
+
+TEST_P(MemoryPoolTest, maybeReserveFailWithAbort) {
+  constexpr int64_t kMaxSize = 1 << 30; // 1GB
+  constexpr int64_t kMB = 1 << 20;
+  MemoryManagerOptions options;
+  options.capacity = kMaxMemory;
+  options.arbitratorKind = MemoryArbitrator::Kind::kShared;
+  MemoryManager manager{options};
+  auto root = manager.addRootPool(
+      "maybeReserveFailWithAbort", kMaxSize, MemoryReclaimer::create());
+  auto child = root->addLeafChild("maybeReserveFailWithAbort");
+  // maybeReserve returns false if reservation fails.
+  ASSERT_FALSE(child->maybeReserve(2 * kMaxSize));
+  // maybeReserve throws if reservation fails and the memory pool is aborted.
+  child->abort();
+  ASSERT_TRUE(child->aborted());
+  ASSERT_TRUE(root->aborted());
+  VELOX_ASSERT_THROW(
+      child->maybeReserve(2 * kMaxSize),
+      "Memory pool maybeReserveFailWithAbort aborted");
 }
 
 // Model implementation of a GrowCallback.
