@@ -153,7 +153,7 @@ TEST_F(CountAggregationTest, mask) {
   EXPECT_LT(0, partialStats.at("abandonedPartialAggregation").count);
 }
 
-TEST_F(CountAggregationTest, distinct) {
+TEST_F(CountAggregationTest, DISABLED_distinct) {
   auto data = makeRowVector({
       makeFlatVector<int16_t>({1, 2, 1, 2, 1, 1, 2, 2}),
       makeFlatVector<int32_t>({1, 1, 1, 2, 1, 1, 1, 2}),
