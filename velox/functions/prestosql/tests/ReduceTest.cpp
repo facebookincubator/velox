@@ -125,7 +125,7 @@ TEST_F(ReduceTest, finalSelection) {
       "reduce(c0, 10, (s, x) -> s + x, s -> row_constructor(s)))",
       input);
 
-  auto expectedResult = makeRowVector({makeFlatVector<int64_t>(
+  auto expectedResult = makeFlatVector<int64_t>(
       size,
       [](auto row) -> int64_t {
         if (row < 100) {
@@ -138,8 +138,8 @@ TEST_F(ReduceTest, finalSelection) {
           return sum;
         }
       },
-      nullEvery(11))});
-  assertEqualVectors(expectedResult, result);
+      nullEvery(11));
+  assertEqualVectors(expectedResult, result->childAt(0));
 }
 
 TEST_F(ReduceTest, elementIndicesOverwrite) {
@@ -204,4 +204,14 @@ TEST_F(ReduceTest, finalSelectionLargerThanInput) {
       input);
 
   assertEqualVectors(makeFlatVector<int64_t>({2, 1}), result);
+}
+
+TEST_F(ReduceTest, nullArray) {
+  auto arrayVector = makeNullableArrayVector<int64_t>(
+      {std::nullopt, {{1, std::nullopt}}, {{std::nullopt, 2}}, {{1, 2, 3}}});
+  auto data = makeRowVector({arrayVector});
+  auto result = evaluate(
+      "reduce(c0, 0, (s, x) -> s + x, s -> coalesce(s, 0) * 10)", data);
+  assertEqualVectors(
+      makeNullableFlatVector<int64_t>({std::nullopt, 0, 0, 60}), result);
 }
