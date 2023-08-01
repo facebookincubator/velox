@@ -311,7 +311,7 @@ PlanBuilder& PlanBuilder::tableWrite(
       aggregationNode,
       insertHandle,
       hasPartitioningScheme,
-      TableWriteTraits::outputType(),
+      TableWriteTraits::outputType(aggregationNode),
       commitStrategy,
       planNode_);
   return *this;
