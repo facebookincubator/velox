@@ -517,3 +517,16 @@ target_link_libraries(
   zstd::zstd
   ${FOLLY_BENCHMARK}
   ${TEST_LINK_LIBS})
+
+add_executable(velox_dwrf_writer_benchmark DwrfWriterBenchmark.cpp)
+target_link_libraries(
+  velox_dwrf_writer_benchmark
+  velox_vector_test_lib
+  velox_link_libs
+  velox_tpch_gen
+  fmt::fmt
+  Folly::folly
+  glog::glog
+  zstd::zstd
+  ${FOLLY_BENCHMARK}
+  ${TEST_LINK_LIBS})
