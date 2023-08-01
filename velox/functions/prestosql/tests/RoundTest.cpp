@@ -87,7 +87,11 @@ class RoundTest : public functions::test::FunctionBaseTest {
 
   template <typename T>
   std::vector<std::tuple<T, int32_t, T>> testRoundWithDecDoubleData() {
-    return {{0.575, 2, 0.58}, {0.574, 2, 0.57}};
+    return {
+        {0.575, 2, 0.58},
+        {0.574, 2, 0.57},
+        {-0.575, 2, -0.58},
+        {-0.574, 2, -0.57}};
   }
 
   template <typename T>
