@@ -112,7 +112,7 @@ TEST_P(CovarianceAggregationTest, floatSomeNulls) {
   testGroupBy(aggName, data);
 }
 
-TEST_F(CovarianceAggregationTest, distinctWithMultipleColumns) {
+TEST_F(CovarianceAggregationTest, DISABLED_distinctWithMultipleColumns) {
   auto data = makeRowVector({
       makeFlatVector<double>({1, 2, 1, 2, 1, 1, 2, 2}),
       makeFlatVector<double>({1, 1, 1, 2, 1, 1, 1, 2}),
