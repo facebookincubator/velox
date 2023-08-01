@@ -66,6 +66,9 @@ class GCSFileSystem : public FileSystem {
   // Unsupported
   void rmdir(std::string_view path) override;
 
+  // Unsupported
+  void refreshAccessToken() override;
+
  protected:
   class Impl;
   std::shared_ptr<Impl> impl_;

@@ -61,6 +61,16 @@ std::shared_ptr<FileSystem> getFileSystem(
   VELOX_FAIL("No registered file system matched with file path '{}'", filePath);
 }
 
+std::vector<std::shared_ptr<filesystems::FileSystem>>
+getRegisteredFileSystems() {
+  std::vector<std::shared_ptr<filesystems::FileSystem>> fileSystems;
+  const auto& filesystems = registeredFileSystems();
+  for (const auto& p : filesystems) {
+    fileSystems.push_back(p.second(nullptr, ""));
+  }
+  return fileSystems;
+}
+
 namespace {
 
 folly::once_flag localFSInstantiationFlag;
@@ -172,6 +182,10 @@ class LocalFileSystem : public FileSystem {
         ec,
         ec.message());
     VLOG(1) << "LocalFileSystem::rmdir " << path;
+  }
+
+  virtual void refreshAccessToken() override {
+    // No-op.
   }
 
   static std::function<bool(std::string_view)> schemeMatcher() {

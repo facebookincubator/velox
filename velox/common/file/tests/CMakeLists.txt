@@ -28,3 +28,8 @@ target_link_libraries(
   gtest
   gtest_main
   gmock)
+
+add_executable(velox_file_system_test FileSystemTest.cpp)
+add_test(velox_file_system_test velox_file_system_test)
+
+target_link_libraries(velox_file_system_test velox_file gmock gtest gtest_main)

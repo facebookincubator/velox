@@ -84,6 +84,10 @@ class HdfsFileSystem : public FileSystem {
     VELOX_UNSUPPORTED("rmdir for HDFS not implemented");
   }
 
+  void refreshAccessToken() override {
+    VELOX_UNSUPPORTED("refreshAccessToken for S3 not implemented");
+  }
+
   static bool isHdfsFile(std::string_view filename);
 
   /// The given filePath is used to infer hdfs endpoint. If hdfs identity is

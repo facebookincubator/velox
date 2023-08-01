@@ -329,5 +329,9 @@ void GCSFileSystem::rmdir(std::string_view path) {
   VELOX_UNSUPPORTED("rmdir for GCS not implemented");
 }
 
+void GCSFileSystem::refreshAccessToken() {
+  VELOX_UNSUPPORTED("refreshAccessToken for GCS not implemented");
+}
+
 }; // namespace filesystems
 }; // namespace facebook::velox

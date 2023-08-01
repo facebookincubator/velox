@@ -82,6 +82,10 @@ class FileSystem {
   /// recursively). Throws velox exception on failure.
   virtual void rmdir(std::string_view path) = 0;
 
+  /// Refresh access token used to access the file system.
+  /// This is a no-op if no access token is needed.
+  virtual void refreshAccessToken() = 0;
+
  protected:
   std::shared_ptr<const Config> config_;
 };
@@ -89,6 +93,10 @@ class FileSystem {
 std::shared_ptr<FileSystem> getFileSystem(
     std::string_view filename,
     std::shared_ptr<const Config> config);
+
+/// Get all the registered file systems
+std::vector<std::shared_ptr<filesystems::FileSystem>>
+getRegisteredFileSystems();
 
 /// FileSystems must be registered explicitly.
 /// The registration function takes two parameters:

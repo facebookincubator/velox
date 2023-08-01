@@ -68,6 +68,10 @@ class S3FileSystem : public FileSystem {
     VELOX_UNSUPPORTED("rmdir for S3 not implemented");
   }
 
+  void refreshAccessToken() override {
+    VELOX_UNSUPPORTED("refreshAccessToken for S3 not implemented");
+  }
+
   std::string getLogLevelName() const;
 
  protected:
