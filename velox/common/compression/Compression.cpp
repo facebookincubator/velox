@@ -33,6 +33,8 @@ std::unique_ptr<folly::io::Codec> compressionKindToCodec(CompressionKind kind) {
       return getCodec(folly::io::CodecType::ZSTD);
     case CompressionKind_LZ4:
       return getCodec(folly::io::CodecType::LZ4);
+    case CompressionKind_GZIP:
+      return getCodec(folly::io::CodecType::GZIP);
     default:
       VELOX_UNSUPPORTED(
           "Not support {} in folly", compressionKindToString(kind));
@@ -51,6 +53,8 @@ CompressionKind codecTypeToCompressionKind(folly::io::CodecType type) {
       return CompressionKind_ZSTD;
     case folly::io::CodecType::LZ4:
       return CompressionKind_LZ4;
+    case folly::io::CodecType::GZIP:
+      return CompressionKind_GZIP;
     default:
       VELOX_UNSUPPORTED("Not support folly codec type {}", type);
   }
