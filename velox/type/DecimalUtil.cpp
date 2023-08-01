@@ -58,13 +58,22 @@ std::string formatDecimal(uint8_t scale, int128_t unscaledValue) {
 // ensure that there is exactly one representation for each BigInteger
 // value.  Note that this implies that the BigInteger zero has a
 // zero-length mag array.
-
 std::pair<int32_t, int32_t> getFirstMag(uint128_t value) {
-  int32_t* valuePtr = reinterpret_cast<int32_t*>(&value);
-  for (auto i = 3; i >= 0; --i) {
-    if (valuePtr[i] != 0) {
-      return {valuePtr[i], i + 1};
-    }
+  int32_t v1 = value >> 96;
+  if (v1 != 0) {
+    return {v1, 4};
+  }
+  int32_t v2 = value >> 64;
+  if (v2 != 0) {
+    return {v2, 3};
+  }
+  int32_t v3 = value >> 32;
+  if (v3 != 0) {
+    return {v3, 2};
+  }
+  int32_t v4 = value;
+  if (v4 != 0) {
+    return {v4, 1};
   }
   return {-1, 0};
 }
