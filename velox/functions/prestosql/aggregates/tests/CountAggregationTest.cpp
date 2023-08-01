@@ -155,8 +155,8 @@ TEST_F(CountAggregationTest, mask) {
 
 TEST_F(CountAggregationTest, DISABLED_distinct) {
   auto data = makeRowVector({
-      makeFlatVector<int16_t>({1, 2, 1, 2, 1, 1, 2, 2}),
-      makeFlatVector<int32_t>({1, 1, 1, 2, 1, 1, 1, 2}),
+      makeFlatVector<double>({1, 2, 1, 2, 1, 1, 2, 2}),
+      makeFlatVector<double>({1, 1, 1, 2, 1, 1, 1, 2}),
       makeNullableFlatVector<int64_t>(
           {std::nullopt, 1, std::nullopt, 2, std::nullopt, 1, std::nullopt, 1}),
       makeNullConstant(TypeKind::DOUBLE, 8),
@@ -187,11 +187,11 @@ TEST_F(CountAggregationTest, DISABLED_distinct) {
                        "count(c1)",
                        "count(distinct c2)",
                        "count(c3)",
-                       "count(distinct c0, c1)"})
+                       "covar_pop(distinct c0, c1)"})
                   .planNode();
   AssertQueryBuilder(plan, duckDbQueryRunner_)
       .assertResults(
-          "SELECT count(distinct c1), count(c1), count(distinct c2), count(c3), count(distinct c0, c1) FROM tmp");
+          "SELECT count(distinct c1), count(c1), count(distinct c2), count(c3), covar_pop(distinct c0, c1) FROM tmp");
 
   // Global. Empty input.
   plan = PlanBuilder()
