@@ -174,6 +174,8 @@ class LocalFileSystem : public FileSystem {
     VLOG(1) << "LocalFileSystem::rmdir " << path;
   }
 
+  virtual void refreshAccessToken() override {}
+
   static std::function<bool(std::string_view)> schemeMatcher() {
     // Note: presto behavior is to prefix local paths with 'file:'.
     // Check for that prefix and prune to absolute regular paths as needed.
