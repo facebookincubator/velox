@@ -237,47 +237,6 @@ TEST_F(CountAggregationTest, distinct) {
   AssertQueryBuilder(plan, duckDbQueryRunner_).assertEmptyResults();
 }
 
-TEST_F(CountAggregationTest, DISABLED_distinctWithMultipleColumns) {
-  auto data = makeRowVector({
-      makeFlatVector<double>({1, 2, 1, 2, 1, 1, 2, 2}),
-      makeFlatVector<double>({1, 1, 1, 2, 1, 1, 1, 2}),
-      makeNullableFlatVector<int64_t>(
-          {std::nullopt, 1, std::nullopt, 2, std::nullopt, 1, std::nullopt, 1}),
-      makeNullConstant(TypeKind::DOUBLE, 8),
-  });
-  createDuckDbTable({data});
-
-  // Global aggregation.
-  auto testGlobal = [&](const std::string& input) {
-    auto plan =
-        PlanBuilder()
-            .values({data})
-            .singleAggregation({}, {fmt::format("count(distinct {})", input)})
-            .planNode();
-    AssertQueryBuilder(plan, duckDbQueryRunner_)
-        .assertResults(
-            fmt::format("SELECT count(distinct {}) FROM tmp", input));
-  };
-
-  testGlobal("c1");
-  testGlobal("c2");
-  testGlobal("c3");
-
-  auto plan = PlanBuilder()
-                  .values({data})
-                  .singleAggregation(
-                      {},
-                      {"count(distinct c1)",
-                       "count(c1)",
-                       "count(distinct c2)",
-                       "count(c3)",
-                       "covar_pop(distinct c0, c1)"})
-                  .planNode();
-  AssertQueryBuilder(plan, duckDbQueryRunner_)
-      .assertResults(
-          "SELECT count(distinct c1), count(c1), count(distinct c2), count(c3), covar_pop(distinct c0, c1) FROM tmp");
-}
-
 TEST_F(CountAggregationTest, distinctMask) {
   auto data = makeRowVector({
       makeFlatVector<int16_t>({1, 2, 1, 2, 1, 1, 2, 2}),

@@ -112,6 +112,24 @@ TEST_P(CovarianceAggregationTest, floatSomeNulls) {
   testGroupBy(aggName, data);
 }
 
+TEST_F(CovarianceAggregationTest, distinctWithMultipleColumns) {
+  auto data = makeRowVector({
+      makeFlatVector<double>({1, 2, 1, 2, 1, 1, 2, 2}),
+      makeFlatVector<double>({1, 1, 1, 2, 1, 1, 1, 2}),
+  });
+  createDuckDbTable({data});
+
+  auto plan = PlanBuilder()
+                  .values({data})
+                  .singleAggregation(
+                      {},
+                      {"covar_pop(distinct c0, c1)"})
+                  .planNode();
+  AssertQueryBuilder(plan, duckDbQueryRunner_)
+      .assertResults(
+          "SELECT covar_pop(distinct c0, c1) FROM tmp");
+}
+
 VELOX_INSTANTIATE_TEST_SUITE_P(
     CovarianceAggregationTest,
     CovarianceAggregationTest,
