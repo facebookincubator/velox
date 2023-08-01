@@ -85,6 +85,11 @@ class QueryConfig {
   static constexpr const char* kMaxLocalExchangeBufferSize =
       "max_local_exchange_buffer_size";
 
+  /// Maximum size in bytes to accumulate in ExchangeQueue. Enforced
+  /// approximately, not strictly.
+  static constexpr const char* kMaxExchangeBufferSize =
+      "exchange.max_buffer_size";
+
   static constexpr const char* kMaxPartialAggregationMemory =
       "max_partial_aggregation_memory";
 
@@ -267,6 +272,11 @@ class QueryConfig {
   uint64_t maxLocalExchangeBufferSize() const {
     static constexpr uint64_t kDefault = 32UL << 20;
     return get<uint64_t>(kMaxLocalExchangeBufferSize, kDefault);
+  }
+
+  uint64_t maxExchangeBufferSize() const {
+    static constexpr uint64_t kDefault = 32UL << 20;
+    return get<uint64_t>(kMaxExchangeBufferSize, kDefault);
   }
 
   uint64_t preferredOutputBatchBytes() const {
