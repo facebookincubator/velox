@@ -50,10 +50,23 @@ std::string formatDecimal(uint8_t scale, int128_t unscaledValue) {
       "{}{}{}", isNegative ? "-" : "", integralPart, fractionString);
 }
 
-int32_t getBitCount(uint32_t i) {
-  static constexpr int kMaxBits = std::numeric_limits<uint64_t>::digits;
-  uint64_t num = static_cast<uint32_t>(i);
-  return bits::countBits(reinterpret_cast<uint64_t*>(&num), 0, kMaxBits);
+// Returns first mag and magLength.
+// The magnitude of this BigInteger, in <i>big-endian</i> order: the
+// zeroth element of this array is the most-significant int of the
+// magnitude.  The magnitude must be "minimal" in that the most-significant
+// int ({@code mag[0]}) must be non-zero.  This is necessary to
+// ensure that there is exactly one representation for each BigInteger
+// value.  Note that this implies that the BigInteger zero has a
+// zero-length mag array.
+
+std::pair<int32_t, int32_t> getFirstMag(uint128_t value) {
+  int32_t* valuePtr = reinterpret_cast<int32_t*>(&value);
+  for (auto i = 3; i >= 0; --i) {
+    if (valuePtr[i] != 0) {
+      return {valuePtr[i], i + 1};
+    }
+  }
+  return {-1, 0};
 }
 
 // Origins from java side BigInteger#bitLength.
@@ -66,21 +79,20 @@ int32_t getBitCount(uint32_t i) {
 //
 // @return number of bits in the minimal two's-complement
 //         representation of this BigInteger, <em>excluding</em> a sign bit.
-int32_t getBitLength(int8_t sig, const std::vector<int32_t>& mag) {
-  int32_t len = mag.size();
+int32_t getBitLength(int8_t sig, uint128_t value) {
   int32_t n = -1;
-  if (len == 0) {
+  if (value == 0) {
     n = 0;
   } else {
-    // Calculate the bit length of the magnitude.
+    auto [firstMag, len] = getFirstMag(value);
     int32_t magBitLength = ((len - 1) << 5) + 64 -
-        bits::countLeadingZeros(static_cast<uint64_t>(mag[0]));
+        bits::countLeadingZeros(static_cast<uint64_t>(firstMag));
     if (sig < 0) {
-      // Check if magnitude is a power of two.
-      bool pow2 = (getBitCount((uint32_t)mag[0]) == 1);
-      for (int i = 1; i < len && pow2; ++i) {
-        pow2 = (mag[i] == 0);
-      }
+      // Check if value is a power of two.
+      bool pow2 =
+          bits::countBits(
+              reinterpret_cast<uint64_t*>(&value), 0, sizeof(uint128_t) * 8) <=
+          1;
       n = (pow2 ? magBitLength - 1 : magBitLength);
     } else {
       n = magBitLength;
@@ -89,36 +101,6 @@ int32_t getBitLength(int8_t sig, const std::vector<int32_t>& mag) {
   return n;
 }
 
-// The magnitude of this BigInteger, in <i>big-endian</i> order: the
-// zeroth element of this array is the most-significant int of the
-// magnitude.  The magnitude must be "minimal" in that the most-significant
-// int ({@code mag[0]}) must be non-zero.  This is necessary to
-// ensure that there is exactly one representation for each BigInteger
-// value.  Note that this implies that the BigInteger zero has a
-// zero-length mag array.
-std::vector<int32_t> convertToIntMags(uint128_t value) {
-  std::vector<int32_t> mag;
-  int32_t v1 = value >> 96;
-  int32_t v2 = value >> 64;
-  int32_t v3 = value >> 32;
-  int32_t v4 = value;
-  if (v1 != 0) {
-    mag.emplace_back(v1);
-    mag.emplace_back(v2);
-    mag.emplace_back(v3);
-    mag.emplace_back(v4);
-  } else if (v2 != 0) {
-    mag.emplace_back(v2);
-    mag.emplace_back(v3);
-    mag.emplace_back(v4);
-  } else if (v3 != 0) {
-    mag.emplace_back(v3);
-    mag.emplace_back(v4);
-  } else if (v4 != 0) {
-    mag.emplace_back(v4);
-  }
-  return mag;
-}
 } // namespace
 
 std::string DecimalUtil::toString(const int128_t value, const TypePtr& type) {
@@ -128,20 +110,16 @@ std::string DecimalUtil::toString(const int128_t value, const TypePtr& type) {
 
 int32_t DecimalUtil::getByteArrayLength(int128_t value) {
   uint128_t absValue;
-  int32_t sig;
-  if (value > 0) {
+  int8_t sig;
+  if (value >= 0) {
     absValue = value;
     sig = 1;
-  } else if (value < 0) {
+  } else {
     absValue = -value;
     sig = -1;
-  } else {
-    absValue = value;
-    sig = 0;
   }
 
-  std::vector<int32_t> mag = convertToIntMags(absValue);
-  return getBitLength(sig, mag) / 8 + 1;
+  return getBitLength(sig, absValue) / 8 + 1;
 }
 
 void DecimalUtil::toByteArray(int128_t value, char* out, int32_t& length) {
