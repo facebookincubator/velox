@@ -317,9 +317,13 @@ PlanBuilder& PlanBuilder::tableWrite(
   return *this;
 }
 
-PlanBuilder& PlanBuilder::tableWriteMerge() {
+PlanBuilder& PlanBuilder::tableWriteMerge(
+    const std::shared_ptr<core::AggregationNode>& aggregationNode) {
   planNode_ = std::make_shared<core::TableWriteMergeNode>(
-      nextPlanNodeId(), TableWriteTraits::outputType(), planNode_);
+      nextPlanNodeId(),
+      TableWriteTraits::outputType(aggregationNode),
+      aggregationNode,
+      planNode_);
   return *this;
 }
 
