@@ -186,11 +186,12 @@ TEST_F(CountAggregationTest, distinct) {
                       {"count(distinct c1)",
                        "count(c1)",
                        "count(distinct c2)",
-                       "count(c3)"})
+                       "count(c3)",
+                       "count(distinct c0, c1)"})
                   .planNode();
   AssertQueryBuilder(plan, duckDbQueryRunner_)
       .assertResults(
-          "SELECT count(distinct c1), count(c1), count(distinct c2), count(c3) FROM tmp");
+          "SELECT count(distinct c1), count(c1), count(distinct c2), count(c3), count(distinct c0, c1) FROM tmp");
 
   // Global. Empty input.
   plan = PlanBuilder()
