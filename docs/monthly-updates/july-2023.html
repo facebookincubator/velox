@@ -1,0 +1,199 @@
+
+<!DOCTYPE html>
+
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" /><meta name="generator" content="Docutils 0.18.1: http://docutils.sourceforge.net/" />
+
+    <title>July 2023 Update &#8212; Velox  documentation</title>
+    <link rel="stylesheet" type="text/css" href="../_static/pygments.css" />
+    <link rel="stylesheet" type="text/css" href="../_static/nature.css" />
+    <script data-url_root="../" id="documentation_options" src="../_static/documentation_options.js"></script>
+    <script src="../_static/jquery.js"></script>
+    <script src="../_static/underscore.js"></script>
+    <script src="../_static/_sphinx_javascript_frameworks_compat.js"></script>
+    <script src="../_static/doctools.js"></script>
+    <link rel="index" title="Index" href="../genindex.html" />
+    <link rel="search" title="Search" href="../search.html" />
+    <link rel="next" title="June 2023 Update" href="june-2023.html" />
+    <link rel="prev" title="Monthly Updates" href="../monthly-updates.html" /> 
+  </head><body>
+    <div class="related" role="navigation" aria-label="related navigation">
+      <h3>Navigation</h3>
+      <ul>
+        <li class="right" style="margin-right: 10px">
+          <a href="../genindex.html" title="General Index"
+             accesskey="I">index</a></li>
+        <li class="right" >
+          <a href="june-2023.html" title="June 2023 Update"
+             accesskey="N">next</a> |</li>
+        <li class="right" >
+          <a href="../monthly-updates.html" title="Monthly Updates"
+             accesskey="P">previous</a> |</li>
+        <li class="nav-item nav-item-0"><a href="../index.html">Velox  documentation</a> &#187;</li>
+          <li class="nav-item nav-item-1"><a href="../monthly-updates.html" accesskey="U">Monthly Updates</a> &#187;</li>
+        <li class="nav-item nav-item-this"><a href="">July 2023 Update</a></li> 
+      </ul>
+    </div>  
+
+    <div class="document">
+      <div class="documentwrapper">
+        <div class="bodywrapper">
+          <div class="body" role="main">
+            
+  <section id="july-2023-update">
+<h1>July 2023 Update<a class="headerlink" href="#july-2023-update" title="Permalink to this heading">¶</a></h1>
+<section id="documentation">
+<h2>Documentation<a class="headerlink" href="#documentation" title="Permalink to this heading">¶</a></h2>
+<ul class="simple">
+<li><p>Add <a class="reference internal" href="../develop/TpchBenchmark.html"><span class="doc">I/O Optimizations and the TpchBenchmark</span></a> article.</p></li>
+<li><p>Add <a class="reference external" href="https://velox-lib.io/blog/array-sort">array_sort lambda function</a> blog post.</p></li>
+<li><p>Add documentation for the new <a class="reference internal" href="../develop/serde.html"><span class="doc">CompactRow</span></a> row-wise serialization format.</p></li>
+<li><p>Expand documentation for <a class="reference internal" href="../develop/aggregate-functions.html"><span class="doc">aggregate functions with variable-width accumulators</span></a>.</p></li>
+</ul>
+</section>
+<section id="core-library">
+<h2>Core Library<a class="headerlink" href="#core-library" title="Permalink to this heading">¶</a></h2>
+<ul class="simple">
+<li><p>Add support for aggregations over distinct inputs: <cite>SELECT sum(distinct a)</cite>.</p></li>
+<li><p>Add TableWriteMerge operator. <a class="reference external" href="https://github.com/facebookincubator/velox/issues/5546">#5546</a></p></li>
+<li><p>Add <a class="reference internal" href="../develop/serde.html"><span class="doc">CompactRow</span></a> row-wise serialization format to optimize shuffle for Presto-on-Spark.</p></li>
+<li><p>Convert DATE to logical type backed by INTEGER physical type.</p></li>
+<li><p>Enhance Aggregate and Window functions APIs to provide access to configuration properties.</p></li>
+<li><p>Add support for compressing spill data. <a class="reference external" href="https://github.com/facebookincubator/velox/pull/5544">#5544</a></p></li>
+</ul>
+</section>
+<section id="presto-functions">
+<h2>Presto Functions<a class="headerlink" href="#presto-functions" title="Permalink to this heading">¶</a></h2>
+<ul class="simple">
+<li><p>Add <a class="reference internal" href="../functions/presto/array.html#id1" title="array_sort_desc"><code class="xref py py-func docutils literal notranslate"><span class="pre">array_sort_desc()</span></code></a>, <cite>array_union</cite> functions.</p></li>
+<li><p>Add <a class="reference internal" href="../functions/presto/array.html#id0" title="array_sort"><code class="xref py py-func docutils literal notranslate"><span class="pre">array_sort()</span></code></a> lambda function.</p></li>
+<li><p>Add <a class="reference internal" href="../functions/presto/math.html#cauchy_cdf" title="cauchy_cdf"><code class="xref py py-func docutils literal notranslate"><span class="pre">cauchy_cdf()</span></code></a>, <a class="reference internal" href="../functions/presto/math.html#chi_squared_cdf" title="chi_squared_cdf"><code class="xref py py-func docutils literal notranslate"><span class="pre">chi_squared_cdf()</span></code></a>, <a class="reference internal" href="../functions/presto/math.html#f_cdf" title="f_cdf"><code class="xref py py-func docutils literal notranslate"><span class="pre">f_cdf()</span></code></a>, <a class="reference internal" href="../functions/presto/math.html#inverse_beta_cdf" title="inverse_beta_cdf"><code class="xref py py-func docutils literal notranslate"><span class="pre">inverse_beta_cdf()</span></code></a> function.</p></li>
+<li><p>Add <a class="reference internal" href="../functions/presto/string.html#levenshtein_distance" title="levenshtein_distance"><code class="xref py py-func docutils literal notranslate"><span class="pre">levenshtein_distance()</span></code></a> function.</p></li>
+<li><p>Add 2-arg versions of <a class="reference internal" href="../functions/presto/aggregate.html#id3" title="min"><code class="xref py py-func docutils literal notranslate"><span class="pre">min()</span></code></a> and <a class="reference internal" href="../functions/presto/aggregate.html#id2" title="max"><code class="xref py py-func docutils literal notranslate"><span class="pre">max()</span></code></a> aggregate functions.</p></li>
+<li><p>Add <a class="reference internal" href="../functions/presto/aggregate.html#multimap_agg" title="multimap_agg"><code class="xref py py-func docutils literal notranslate"><span class="pre">multimap_agg()</span></code></a> aggregate function.</p></li>
+<li><p>Add <a class="reference internal" href="../functions/presto/aggregate.html#entropy" title="entropy"><code class="xref py py-func docutils literal notranslate"><span class="pre">entropy()</span></code></a> aggregate function.</p></li>
+<li><p>Add support for BOOLEAN comparison argument to <a class="reference internal" href="../functions/presto/aggregate.html#id1" title="min_by"><code class="xref py py-func docutils literal notranslate"><span class="pre">min_by()</span></code></a> and <a class="reference internal" href="../functions/presto/aggregate.html#id0" title="max_by"><code class="xref py py-func docutils literal notranslate"><span class="pre">max_by()</span></code></a>.</p></li>
+<li><p>Add support for IGNORE NULLs to Window value functions.</p></li>
+<li><p>Optimize <a class="reference internal" href="../functions/presto/aggregate.html#map_agg" title="map_agg"><code class="xref py py-func docutils literal notranslate"><span class="pre">map_agg()</span></code></a> function for inputs with many duplicate keys.</p></li>
+<li><p>Optimize <a class="reference internal" href="../functions/presto/aggregate.html#array_agg" title="array_agg"><code class="xref py py-func docutils literal notranslate"><span class="pre">array_agg()</span></code></a>, <a class="reference internal" href="../functions/presto/aggregate.html#map_agg" title="map_agg"><code class="xref py py-func docutils literal notranslate"><span class="pre">map_agg()</span></code></a>, <a class="reference internal" href="../functions/presto/aggregate.html#set_agg" title="set_agg"><code class="xref py py-func docutils literal notranslate"><span class="pre">set_agg()</span></code></a>, <a class="reference internal" href="../functions/presto/aggregate.html#id3" title="min"><code class="xref py py-func docutils literal notranslate"><span class="pre">min()</span></code></a>, <a class="reference internal" href="../functions/presto/aggregate.html#id2" title="max"><code class="xref py py-func docutils literal notranslate"><span class="pre">max()</span></code></a> for abandon-partial-aggregation use case.</p></li>
+<li><p>Optimize <a class="reference internal" href="../functions/presto/json.html#json_extract" title="json_extract"><code class="xref py py-func docutils literal notranslate"><span class="pre">json_extract()</span></code></a>, <a class="reference internal" href="../functions/presto/json.html#json_extract_scalar" title="json_extract_scalar"><code class="xref py py-func docutils literal notranslate"><span class="pre">json_extract_scalar()</span></code></a>, <a class="reference internal" href="../functions/presto/json.html#json_size" title="json_size"><code class="xref py py-func docutils literal notranslate"><span class="pre">json_size()</span></code></a> using SIMD.</p></li>
+</ul>
+</section>
+<section id="spark-functions">
+<h2>Spark Functions<a class="headerlink" href="#spark-functions" title="Permalink to this heading">¶</a></h2>
+<ul class="simple">
+<li><p>Add <a class="reference internal" href="../functions/spark/math.html#acos" title="acos"><code class="xref spark spark-func docutils literal notranslate"><span class="pre">acos()</span></code></a>, <a class="reference internal" href="../functions/spark/math.html#cosh" title="cosh"><code class="xref spark spark-func docutils literal notranslate"><span class="pre">cosh()</span></code></a>, <a class="reference internal" href="../functions/spark/math.html#hypot" title="hypot"><code class="xref spark spark-func docutils literal notranslate"><span class="pre">hypot()</span></code></a>, <a class="reference internal" href="../functions/spark/string.html#left" title="left"><code class="xref spark spark-func docutils literal notranslate"><span class="pre">left()</span></code></a>, <code class="xref spark spark-func docutils literal notranslate"><span class="pre">log1p()</span></code>,
+<a class="reference internal" href="../functions/spark/string.html#lpad" title="lpad"><code class="xref spark spark-func docutils literal notranslate"><span class="pre">lpad()</span></code></a>, <a class="reference internal" href="../functions/spark/string.html#rpad" title="rpad"><code class="xref spark spark-func docutils literal notranslate"><span class="pre">rpad()</span></code></a>, <a class="reference internal" href="../functions/spark/math.html#sinh" title="sinh"><code class="xref spark spark-func docutils literal notranslate"><span class="pre">sinh()</span></code></a>, <a class="reference internal" href="../functions/spark/string.html#translate" title="translate"><code class="xref spark spark-func docutils literal notranslate"><span class="pre">translate()</span></code></a> functions.</p></li>
+<li><p>Fix return type of <a class="reference internal" href="../functions/spark/array.html#size" title="size"><code class="xref spark spark-func docutils literal notranslate"><span class="pre">size()</span></code></a> function.</p></li>
+<li><p>Fix intermediate type of <a class="reference internal" href="../functions/spark/aggregate.html#first" title="first"><code class="xref spark spark-func docutils literal notranslate"><span class="pre">first()</span></code></a> and <a class="reference internal" href="../functions/spark/aggregate.html#last" title="last"><code class="xref spark spark-func docutils literal notranslate"><span class="pre">last()</span></code></a> functions.</p></li>
+</ul>
+</section>
+<section id="hive-connector">
+<h2>Hive Connector<a class="headerlink" href="#hive-connector" title="Permalink to this heading">¶</a></h2>
+<ul class="simple">
+<li><p>Add support for <a class="reference external" href="https://www.tencentcloud.com/products/cos">Tencent Cloud Object Storage</a>. <a class="reference external" href="https://github.com/facebookincubator/velox/pull/5619">#5619</a></p></li>
+<li><p>Add support for reading from <a class="reference external" href="https://cloud.google.com/storage">Google Cloud Storage</a>. <a class="reference external" href="https://github.com/facebookincubator/velox/pull/5069">#5069</a></p></li>
+</ul>
+</section>
+<section id="performance-and-correctness">
+<h2>Performance and Correctness<a class="headerlink" href="#performance-and-correctness" title="Permalink to this heading">¶</a></h2>
+<ul class="simple">
+<li><p>Optimize round-robin exchange. <a class="reference external" href="https://github.com/facebookincubator/velox/pull/5651">#5651</a></p></li>
+<li><p>Optimize try_cast expression for the case when many rows fail the cast.</p></li>
+</ul>
+</section>
+<section id="credits">
+<h2>Credits<a class="headerlink" href="#credits" title="Permalink to this heading">¶</a></h2>
+<p>Aditi Pandit, Amit Dutta, Arpit Porwal, Austin Dickey, Bikramjeet Vig,
+Chad Austin, Chen Zhang, Chengcheng Jin, Christian Clauss, Christian Zentgraf,
+Deepak Majeti, Eric Liu, GOPU-Krishna-S, Ge Gao, Gufan Yin, Harsha Rastogi,
+Iosif Spulber, Jacob Wujciak-Jens, Jialiang Tan, Jiayan Wei, Jimmy Lu,
+Jin Chengcheng, John Elliott, Kapil Sharma, Karteekmurthys, Ke, Kevin Wilfong,
+Konstantin Tsoy, Krishna Pai, Laith Sakka, Logan Wendholt, Ma-Jian1,
+Masha Basmanova, Orri Erling, PHILO-HE, Paul Amonson, Pedro Pedreira, Pramod,
+Pranjal Shankhdhar, Sandino Flores, Srikrishna Gopu, Srinivas S T, Taras Galkovskyi,
+Tiziano Carotti, Wei He, Xiaoxuan Meng, Yang Zhang, Ying, Zac, Zhaolong Zhu,
+Zhongjun Jin, duanmeng, joey.ljy, kayagokalp, mayan, mohsaka, rrando901,
+rui-mo, wypb, xiaodou, xiaoxmeng, yangchuan, yanmin, zhejiangxiaomai, 陈旭</p>
+</section>
+</section>
+
+
+            <div class="clearer"></div>
+          </div>
+        </div>
+      </div>
+      <div class="sphinxsidebar" role="navigation" aria-label="main navigation">
+        <div class="sphinxsidebarwrapper">
+  <div>
+    <h3><a href="../index.html">Table of Contents</a></h3>
+    <ul>
+<li><a class="reference internal" href="#">July 2023 Update</a><ul>
+<li><a class="reference internal" href="#documentation">Documentation</a></li>
+<li><a class="reference internal" href="#core-library">Core Library</a></li>
+<li><a class="reference internal" href="#presto-functions">Presto Functions</a></li>
+<li><a class="reference internal" href="#spark-functions">Spark Functions</a></li>
+<li><a class="reference internal" href="#hive-connector">Hive Connector</a></li>
+<li><a class="reference internal" href="#performance-and-correctness">Performance and Correctness</a></li>
+<li><a class="reference internal" href="#credits">Credits</a></li>
+</ul>
+</li>
+</ul>
+
+  </div>
+  <div>
+    <h4>Previous topic</h4>
+    <p class="topless"><a href="../monthly-updates.html"
+                          title="previous chapter">Monthly Updates</a></p>
+  </div>
+  <div>
+    <h4>Next topic</h4>
+    <p class="topless"><a href="june-2023.html"
+                          title="next chapter">June 2023 Update</a></p>
+  </div>
+  <div role="note" aria-label="source link">
+    <h3>This Page</h3>
+    <ul class="this-page-menu">
+      <li><a href="../_sources/monthly-updates/july-2023.rst.txt"
+            rel="nofollow">Show Source</a></li>
+    </ul>
+   </div>
+<div id="searchbox" style="display: none" role="search">
+  <h3 id="searchlabel">Quick search</h3>
+    <div class="searchformwrapper">
+    <form class="search" action="../search.html" method="get">
+      <input type="text" name="q" aria-labelledby="searchlabel" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false"/>
+      <input type="submit" value="Go" />
+    </form>
+    </div>
+</div>
+<script>document.getElementById('searchbox').style.display = "block"</script>
+        </div>
+      </div>
+      <div class="clearer"></div>
+    </div>
+    <div class="related" role="navigation" aria-label="related navigation">
+      <h3>Navigation</h3>
+      <ul>
+        <li class="right" style="margin-right: 10px">
+          <a href="../genindex.html" title="General Index"
+             >index</a></li>
+        <li class="right" >
+          <a href="june-2023.html" title="June 2023 Update"
+             >next</a> |</li>
+        <li class="right" >
+          <a href="../monthly-updates.html" title="Monthly Updates"
+             >previous</a> |</li>
+        <li class="nav-item nav-item-0"><a href="../index.html">Velox  documentation</a> &#187;</li>
+          <li class="nav-item nav-item-1"><a href="../monthly-updates.html" >Monthly Updates</a> &#187;</li>
+        <li class="nav-item nav-item-this"><a href="">July 2023 Update</a></li> 
+      </ul>
+    </div>
+    <div class="footer" role="contentinfo">
+        &#169; Copyright TBD.
+      Created using <a href="https://www.sphinx-doc.org/">Sphinx</a> 5.0.2.
+    </div>
+  </body>
+</html>
