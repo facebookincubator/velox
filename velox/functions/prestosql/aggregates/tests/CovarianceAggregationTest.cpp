@@ -47,6 +47,43 @@ class CovarianceAggregationTest
   }
 };
 
+//[(1-2)(1-3)+(2-2)(4-3)+(3-2)(4-3)]/3=1
+//[(2-2)(1-1.5)+(2-2)(2-1.5)]/2=0
+TEST_F(CovarianceAggregationTest, distinctWithMultipleColumns) {
+  std::vector<RowVectorPtr> vectors;
+  // Simulate the input over 3 splits.
+  vectors.push_back(makeRowVector(
+      {makeFlatVector<int32_t>({1, 1}),
+       makeFlatVector<double>({1, 2}),
+       makeFlatVector<double>({1, 4})}));
+  vectors.push_back(makeRowVector(
+      {makeFlatVector<int32_t>({1, 1}),
+       makeFlatVector<double>({2, 3}),
+       makeFlatVector<double>({4, 4})}));
+  vectors.push_back(makeRowVector(
+      {makeFlatVector<int32_t>({2, 2}),
+       makeFlatVector<double>({2, 2}),
+       makeFlatVector<double>({1, 2})}));
+
+  auto op =
+      PlanBuilder()
+          .values(vectors)
+          .singleAggregation({"c0"}, {"covar_pop(c1, c2)"}, {}, {true})
+          .orderBy({"c0"}, false)
+          .planNode();
+
+  CursorParameters params;
+  params.planNode = op;
+
+  auto result = readCursor(params, [](auto) {});
+  auto actual = result.second;
+
+  RowVectorPtr expected = makeRowVector(
+      {makeFlatVector<int32_t>({1, 2}),
+       makeFlatVector<double>({1, 0})});
+  facebook::velox::test::assertEqualVectors(expected, actual[0]);
+}
+
 TEST_P(CovarianceAggregationTest, doubleNoNulls) {
   vector_size_t size = 1'000;
   auto data = makeRowVector({
