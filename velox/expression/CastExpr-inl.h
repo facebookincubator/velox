@@ -266,8 +266,8 @@ VectorPtr CastExpr::applyDecimalToIntegralCast(
                 input,
                 row,
                 makeErrorMessage(input, row, toType) + "Out of bounds."));
-        return;
       }
+      return;
     }
 
     resultBuffer[row] = static_cast<To>(integralPart);
