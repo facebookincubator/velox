@@ -9,7 +9,10 @@ These functions support TIMESTAMP and DATE input types.
 
 .. spark:function:: date_sub(start_date, num_days) -> date
 
-    Returns the date that is num_days before start_date.
+    Returns the date that is num_days before start_date. According to the inputs,
+    the returned date will wrap around between the minimum negative date and
+    maximum positive date. date_sub('1969-12-31', -2147483648) get 5881580-07-11,
+    and date_sub('2023-07-10', -2147483648) get -5877588-12-29.
 
     num_days can be positive or negative.
 
