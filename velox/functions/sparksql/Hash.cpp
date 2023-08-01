@@ -370,7 +370,7 @@ std::shared_ptr<exec::VectorFunction> makeHashWithSeed(
     const core::QueryConfig& /*config*/) {
   const auto& constantSeed = inputArgs[0].constantValue;
   if (!constantSeed || constantSeed->isNullAt(0)) {
-    VELOX_USER_FAIL("{} requires a constant seed argument.", name);
+    VELOX_USER_FAIL("{} requires a constant non-null seed argument.", name);
   }
   auto seed = constantSeed->as<ConstantVector<int32_t>>()->valueAt(0);
   return std::make_shared<Murmur3HashFunction>(seed);
@@ -417,7 +417,7 @@ std::shared_ptr<exec::VectorFunction> makeXxHash64WithSeed(
     const core::QueryConfig& /*config*/) {
   const auto& constantSeed = inputArgs[0].constantValue;
   if (!constantSeed || constantSeed->isNullAt(0)) {
-    VELOX_USER_FAIL("{} requires a constant seed argument.", name);
+    VELOX_USER_FAIL("{} requires a constant non-null seed argument.", name);
   }
   auto seed = constantSeed->as<ConstantVector<int64_t>>()->valueAt(0);
   return std::make_shared<XxHash64Function>(seed);
