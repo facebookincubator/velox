@@ -20,7 +20,6 @@
 #include <folly/Range.h>
 #include <folly/Varint.h>
 #include "velox/common/encode/Coding.h"
-#include "velox/common/encode/Int128.h"
 #include "velox/dwio/common/IntCodecCommon.h"
 #include "velox/dwio/common/SeekableInputStream.h"
 #include "velox/dwio/common/StreamUtil.h"
@@ -175,7 +174,8 @@ class IntDecoder {
  private:
   uint64_t skipVarintsInBuffer(uint64_t items);
   void skipVarints(uint64_t items);
-  Int128 readVInt128();
+  int128_t readVsHugeInt();
+  uint128_t readVuHugeInt();
 
  protected:
   // note: there is opportunity for performance gains here by avoiding
@@ -312,7 +312,7 @@ FOLLY_ALWAYS_INLINE uint64_t IntDecoder<isSigned>::readVuLong() {
 
 template <bool isSigned>
 FOLLY_ALWAYS_INLINE int64_t IntDecoder<isSigned>::readVsLong() {
-  return ZigZag::decode(readVuLong());
+  return ZigZag::decode<uint64_t>(readVuLong());
 }
 
 template <bool isSigned>
@@ -403,6 +403,64 @@ inline cppType IntDecoder<isSigned>::readLittleEndianFromBigEndian() {
     return dwio::common::builtin_bswap128(bigEndianValue);
   } else {
     return __builtin_bswap64(bigEndianValue);
+  }
+}
+
+template <bool isSigned>
+inline int128_t IntDecoder<isSigned>::readVsHugeInt() {
+  return ZigZag::decode<uint128_t>(readVuHugeInt());
+}
+
+template <bool isSigned>
+inline uint128_t IntDecoder<isSigned>::readVuHugeInt() {
+  uint128_t value = 0;
+  uint128_t work;
+  uint32_t offset = 0;
+  signed char ch;
+  while (true) {
+    ch = readByte();
+    work = ch & 0x7f;
+    work <<= offset;
+    value |= work;
+    offset += 7;
+    if (!(ch & 0x80)) {
+      break;
+    }
+  }
+  return value;
+}
+
+template <bool isSigned>
+template <typename T>
+inline T IntDecoder<isSigned>::readInt() {
+  if (useVInts) {
+    return readVInt<T>();
+  }
+  if (bigEndian) {
+    return readLittleEndianFromBigEndian<T>();
+  } else {
+    if constexpr (std::is_same_v<T, int128_t>) {
+      VELOX_NYI();
+    }
+    return readLongLE();
+  }
+}
+
+template <bool isSigned>
+template <typename T>
+inline T IntDecoder<isSigned>::readVInt() {
+  if constexpr (isSigned) {
+    if constexpr (std::is_same_v<T, int128_t>) {
+      return readVsHugeInt();
+    } else {
+      return readVsLong();
+    }
+  } else {
+    if constexpr (std::is_same_v<T, int128_t>) {
+      return readVuHugeInt();
+    } else {
+      return readVuLong();
+    }
   }
 }
 

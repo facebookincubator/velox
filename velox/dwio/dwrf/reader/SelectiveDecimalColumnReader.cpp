@@ -58,6 +58,7 @@ uint64_t SelectiveDecimalColumnReader<DataT>::skip(uint64_t numValues) {
 
 template <typename DataT>
 void SelectiveDecimalColumnReader<DataT>::seekToRowGroup(uint32_t index) {
+  SelectiveColumnReader::seekToRowGroup(index);
   auto positionsProvider = formatData_->seekToRowGroup(index);
   valueDecoder_->seekToRowGroup(positionsProvider);
   scaleDecoder_->seekToRowGroup(positionsProvider);
@@ -65,7 +66,7 @@ void SelectiveDecimalColumnReader<DataT>::seekToRowGroup(uint32_t index) {
 }
 
 template <typename DataT>
-template <bool dense>
+template <bool kDense>
 void SelectiveDecimalColumnReader<DataT>::readHelper(RowSet rows) {
   vector_size_t numRows = rows.back() + 1;
   ExtractToReader extractValues(this);
@@ -74,7 +75,7 @@ void SelectiveDecimalColumnReader<DataT>::readHelper(RowSet rows) {
       int64_t,
       common::AlwaysTrue,
       decltype(extractValues),
-      dense>
+      kDense>
       visitor(filter, this, rows, extractValues);
 
   // decode scale stream
@@ -99,7 +100,7 @@ void SelectiveDecimalColumnReader<DataT>::readHelper(RowSet rows) {
 
   // decode value stream
   facebook::velox::dwio::common::
-      ColumnVisitor<DataT, common::AlwaysTrue, decltype(extractValues), dense>
+      ColumnVisitor<DataT, common::AlwaysTrue, decltype(extractValues), kDense>
           valueVisitor(filter, this, rows, extractValues);
   decodeWithVisitor<DirectDecoder<true>>(valueDecoder_.get(), valueVisitor);
   readOffset_ += numRows;

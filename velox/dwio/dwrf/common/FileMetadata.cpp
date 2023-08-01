@@ -14,7 +14,6 @@
  * limitations under the License.
  */
 #include "velox/dwio/dwrf/common/FileMetadata.h"
-#include "velox/common/encode/Int128.h"
 
 namespace facebook::velox::dwrf {
 namespace detail {

@@ -70,25 +70,6 @@ IntDecoder<isSigned>::skipVarintsInBuffer(uint64_t items) {
 }
 
 template <bool isSigned>
-FOLLY_ALWAYS_INLINE Int128 IntDecoder<isSigned>::readVInt128() {
-  Int128 value = 0;
-  Int128 work;
-  uint32_t offset = 0;
-  signed char ch;
-  while (true) {
-    ch = readByte();
-    work = ch & 0x7f;
-    work <<= offset;
-    value |= work;
-    offset += 7;
-    if (!(ch & 0x80)) {
-      break;
-    }
-  }
-  return value;
-}
-
-template <bool isSigned>
 void IntDecoder<isSigned>::skipLongsFast(uint64_t numValues) {
   if (useVInts) {
     skipVarints(numValues);
@@ -179,43 +160,6 @@ void IntDecoder<isSigned>::bulkReadRowsFixed(
         break;
       default:
         VELOX_FAIL("Bad fixed width {}", numBytes);
-    }
-  }
-}
-
-template <bool isSigned>
-template <typename T>
-T IntDecoder<isSigned>::readInt() {
-  if (useVInts) {
-    return readVInt<T>();
-  }
-  if (bigEndian) {
-    return readLittleEndianFromBigEndian<T>();
-  } else {
-    if constexpr (std::is_same_v<T, int128_t>) {
-      VELOX_NYI();
-    }
-    return readLongLE();
-  }
-}
-
-template <bool isSigned>
-template <typename T>
-T IntDecoder<isSigned>::readVInt() {
-  if constexpr (isSigned) {
-    if constexpr (std::is_same_v<T, int128_t>) {
-      Int128 value = readVInt128();
-      ZigZag::decodeInt128(value);
-      return value.toHugeInt();
-    } else {
-      return readVsLong();
-    }
-  } else {
-    if constexpr (std::is_same_v<T, int128_t>) {
-      Int128 value = readVInt128();
-      return value.toHugeInt();
-    } else {
-      return readVuLong();
     }
   }
 }
@@ -2440,22 +2384,6 @@ template void IntDecoder<false>::bulkReadRows(
     RowSet rows,
     int16_t* result,
     int32_t initialRow);
-
-template int64_t IntDecoder<true>::readInt();
-
-template int64_t IntDecoder<false>::readInt();
-
-template int128_t IntDecoder<true>::readInt();
-
-template int128_t IntDecoder<false>::readInt();
-
-template int64_t IntDecoder<true>::readVInt();
-
-template int64_t IntDecoder<false>::readVInt();
-
-template int128_t IntDecoder<true>::readVInt();
-
-template int128_t IntDecoder<false>::readVInt();
 
 #ifdef CODEGEN_BULK_VARINTS
 // Codegen for vint bulk decode. This is to document how varintSwitch

@@ -41,7 +41,7 @@ class SelectiveDecimalColumnReader : public SelectiveColumnReader {
   void getValues(RowSet rows, VectorPtr* result) override;
 
  private:
-  template <bool dense>
+  template <bool kDense>
   void readHelper(RowSet rows);
 
   std::unique_ptr<IntDecoder<true>> valueDecoder_;
