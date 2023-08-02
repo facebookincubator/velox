@@ -29,7 +29,7 @@ class ArrowDataBufferSink : public arrow::io::OutputStream {
   ArrowDataBufferSink(
       std::unique_ptr<dwio::common::DataSink> sink,
       memory::MemoryPool& pool,
-      double growRatio = 1)
+      double growRatio)
       : sink_(std::move(sink)), growRatio_(growRatio), buffer_(pool) {}
 
   arrow::Status Write(const std::shared_ptr<arrow::Buffer>& data) override {
@@ -75,6 +75,9 @@ class ArrowDataBufferSink : public arrow::io::OutputStream {
 
  private:
   std::unique_ptr<dwio::common::DataSink> sink_;
+  // growRatio_ parameter determines the growth factor used when invoking
+  // the reserve method of DataSink, thereby helping to minimize frequent memcpy
+  // operations.
   const double growRatio_;
   dwio::common::DataBuffer<char> buffer_;
   int64_t bytesFlushed_ = 0;
