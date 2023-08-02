@@ -16,6 +16,7 @@
 #pragma once
 
 #include <string_view>
+#include "velox/external/date/tz.h"
 #include "velox/functions/lib/DateTimeFormatter.h"
 #include "velox/functions/lib/TimeUtils.h"
 #include "velox/functions/prestosql/DateTimeImpl.h"
@@ -23,7 +24,6 @@
 #include "velox/type/TimestampConversion.h"
 #include "velox/type/Type.h"
 #include "velox/type/tz/TimeZoneMap.h"
-#include "velox/external/date/tz.h"
 
 namespace facebook::velox::functions {
 
@@ -1193,42 +1193,37 @@ struct ToISO8601Function : public TimestampWithTimezoneSupport<T> {
   FOLLY_ALWAYS_INLINE void call(
       out_type<Varchar>& result,
       const arg_type<TimestampWithTimezone>& timestampWithTimezone) {
-
     const auto milliseconds = *timestampWithTimezone.template at<0>();
     Timestamp timestamp = Timestamp::fromMillis(milliseconds);
     auto tsStr = timestamp.toString().substr(0, 23);
 
     // Get the given timezone name
-    auto timezone = util::getTimeZoneName(*timestampWithTimezone.template at<1>());
+    auto timezone =
+        util::getTimeZoneName(*timestampWithTimezone.template at<1>());
 
-    if (isalpha(timezone[0]))
-    {
-      // Get offset in seconds with GMT and convert to hour & minue
+    // Some processing required if alphabetical timezone name was input,
+    // as ISO8601 output should contain timezone as UTC offset
+    if (isalpha(timezone[0])) {
+      // Get offset in seconds with GMT and convert to hour & minute
       auto offset = this->getGMTOffsetSec(timestampWithTimezone);
 
       auto tzHour = offset / 3600;
       auto tzMin = (offset / 60) % 60;
       std::string tzHourStr;
 
-      if (tzHour < 10)
-      {
+      if (tzHour < 10) {
         tzHourStr = "0" + std::to_string(abs(tzHour));
       }
 
-      if (tzHour < 0)
-      {
+      if (tzHour < 0) {
         tzHourStr = "-" + tzHourStr;
-      }
-      else
-      {
+      } else {
         tzHourStr = "+" + tzHourStr;
       }
-      
-      result = tsStr + tzHourStr + ":" + std::to_string(tzMin) + "0"; 
-    }
-    else
-    {
-      result = tsStr + timezone; 
+
+      result = tsStr + tzHourStr + ":" + std::to_string(tzMin) + "0";
+    } else {
+      result = tsStr + timezone;
     }
   }
 };

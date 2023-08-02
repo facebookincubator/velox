@@ -3192,10 +3192,24 @@ TEST_F(DateTimeFunctionsTest, toISO8601TestTimestampWithTimezone) {
         "to_iso8601(c0)", timestamp, timeZoneName);
   };
 
-  EXPECT_EQ("2020-02-05T22:31:07.000-08:00", toISO8601((18297 * kSecondsInDay + 22 * 3600 + 31 * 60 + 7) * 1000, "America/Los_Angeles"));
-  EXPECT_EQ("2020-02-05T22:31:07.000+08:00", toISO8601((18297 * kSecondsInDay + 22 * 3600 + 31 * 60 + 7) * 1000, "Asia/Brunei"));
-  EXPECT_EQ("2020-02-05T22:31:07.000-08:00", toISO8601((18297 * kSecondsInDay + 22 * 3600 + 31 * 60 + 7) * 1000, "-08:00"));
-  EXPECT_EQ("2020-02-05T22:31:07.000+08:00", toISO8601((18297 * kSecondsInDay + 22 * 3600 + 31 * 60 + 7) * 1000, "+08:00"));
+  EXPECT_EQ(
+      "2020-02-05T22:31:07.000-08:00",
+      toISO8601(
+          (18297 * kSecondsInDay + 22 * 3600 + 31 * 60 + 7) * 1000,
+          "America/Los_Angeles"));
+  EXPECT_EQ(
+      "2020-02-05T22:31:07.000+08:00",
+      toISO8601(
+          (18297 * kSecondsInDay + 22 * 3600 + 31 * 60 + 7) * 1000,
+          "Asia/Brunei"));
+  EXPECT_EQ(
+      "2020-02-05T22:31:07.000-08:00",
+      toISO8601(
+          (18297 * kSecondsInDay + 22 * 3600 + 31 * 60 + 7) * 1000, "-08:00"));
+  EXPECT_EQ(
+      "2020-02-05T22:31:07.000+08:00",
+      toISO8601(
+          (18297 * kSecondsInDay + 22 * 3600 + 31 * 60 + 7) * 1000, "+08:00"));
 
   EXPECT_EQ("1970-01-01T00:00:00.000+00:00", toISO8601(0, "+00:00"));
   EXPECT_EQ("1970-01-01T00:00:00.000+00:00", toISO8601(0, "Africa/Abidjan"));
@@ -3210,8 +3224,14 @@ TEST_F(DateTimeFunctionsTest, toISO8601TestTimestampWithTimezone) {
       toISO8601(
           (3 * kSecondsInHour + 19 * kSecondsInMinute + 58) * 1'000, "-06:00"));
 
-  EXPECT_EQ("1969-12-31T19:00:00.000-05:00", toISO8601((-1 * kSecondsInDay + 19 * kSecondsInHour) * 1000, "-05:00"));
-  EXPECT_EQ("1969-12-31T19:00:00.000-05:00", toISO8601((-1 * kSecondsInDay + 19 * kSecondsInHour) * 1000, "America/New_York"));
+  EXPECT_EQ(
+      "1969-12-31T19:00:00.000-05:00",
+      toISO8601((-1 * kSecondsInDay + 19 * kSecondsInHour) * 1000, "-05:00"));
+  EXPECT_EQ(
+      "1969-12-31T19:00:00.000-05:00",
+      toISO8601(
+          (-1 * kSecondsInDay + 19 * kSecondsInHour) * 1000,
+          "America/New_York"));
 
   // Last second of day 0
   EXPECT_EQ(
