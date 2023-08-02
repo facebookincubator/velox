@@ -404,6 +404,20 @@ TEST_F(HdfsFileSystemTest, write) {
   ASSERT_EQ(writeFile->size(), data.size() * 3);
 }
 
+TEST_F(HdfsFileSystemTest, writeWithParentDirNotExist) {
+  std::string path = "/parent/directory/that/does/not/exist/a.txt";
+  auto writeFile = openFileForWrite(path);
+  std::string data = "abcdefghijk";
+  writeFile->append(data);
+  writeFile->flush();
+  ASSERT_EQ(writeFile->size(), 0);
+  writeFile->append(data);
+  writeFile->append(data);
+  writeFile->flush();
+  writeFile->close();
+  ASSERT_EQ(writeFile->size(), data.size() * 3);
+}
+
 TEST_F(HdfsFileSystemTest, missingFileForWrite) {
   const std::string filePath = "hdfs://localhost:7777/path/that/does/not/exist";
   const std::string errorMsg =
