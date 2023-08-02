@@ -2954,7 +2954,7 @@ TEST_F(DateTimeFunctionsTest, dateFunctionTimestampWithTimezone) {
   // 2020-02-05 10:00:00.000 +08:00
   EXPECT_EQ(
       Date(18297),
-      dateFunction((18297 * kSecondsInDay + 10 * 3600) * 1000, "+08:00"));
+      dateFunction((18297 * kSecondsInDay + 10 * 3'600) * 1'000, "+08:00"));
   EXPECT_EQ(
       Date(18297),
       dateFunction(
