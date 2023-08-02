@@ -1206,19 +1206,6 @@ struct ParseDateTimeFunction {
   }
 };
 
-// template <typename T>
-// struct FromISO8601TimestampFunction : public TimestampWithTimezoneSupport<T>
-// {
-//   VELOX_DEFINE_FUNCTION_TYPES(T);
-
-//   FOLLY_ALWAYS_INLINE void call(
-//       out_type<TimestampWithTimezone>& result,
-//       const arg_type<Varchar>& isoDateStr) {
-
-//     ParseDateTimeFunction.call(result, isoDateStr, 'YYYY-MM-dd+HH:mm:ssZZ');
-//   }
-// };
-
 template <typename T>
 struct CurrentDateFunction {
   VELOX_DEFINE_FUNCTION_TYPES(T);
