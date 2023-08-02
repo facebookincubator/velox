@@ -19,6 +19,7 @@
 #include "velox/common/base/VeloxException.h"
 #include "velox/common/base/tests/GTestUtils.h"
 #include "velox/common/memory/Memory.h"
+#include "velox/common/memory/MallocAllocator.h"
 
 DECLARE_int32(velox_memory_num_shared_leaf_pools);
 
@@ -39,9 +40,10 @@ MemoryManager& toMemoryManager(MemoryManager& manager) {
 TEST(MemoryManagerTest, Ctor) {
   const auto kSharedPoolCount = FLAGS_velox_memory_num_shared_leaf_pools;
   {
-    MemoryManager manager{};
+    const auto capacity = 8L * 1024 * 1024;
+    MemoryManager manager{{.capacity = capacity}};
     ASSERT_EQ(manager.numPools(), 0);
-    ASSERT_EQ(manager.capacity(), kMaxMemory);
+    ASSERT_EQ(manager.capacity(), capacity);
     ASSERT_EQ(0, manager.getTotalBytes());
     ASSERT_EQ(manager.alignment(), MemoryAllocator::kMaxAlignment);
     ASSERT_EQ(manager.testingDefaultRoot().alignment(), manager.alignment());
@@ -50,32 +52,45 @@ TEST(MemoryManagerTest, Ctor) {
     ASSERT_EQ(manager.arbitrator(), nullptr);
   }
   {
-    MemoryManager manager{{.capacity = 8L * 1024 * 1024}};
-    ASSERT_EQ(8L * 1024 * 1024, manager.capacity());
+    const auto capacity = 8L * 1024 * 1024;
+    const auto allocator = std::make_shared<memory::MallocAllocator>(capacity);
+    MemoryManager manager{
+        {.capacity = (int64_t)capacity, .allocator = allocator.get()}};
+    ASSERT_EQ(capacity, manager.capacity());
     ASSERT_EQ(manager.numPools(), 0);
     ASSERT_EQ(0, manager.getTotalBytes());
     ASSERT_EQ(manager.testingDefaultRoot().alignment(), manager.alignment());
   }
   {
-    MemoryManager manager{{.alignment = 0, .capacity = 8L * 1024 * 1024}};
+    const auto capacity = 8L * 1024 * 1024;
+    MemoryManager manager{{.alignment = 0, .capacity = (int64_t)capacity}};
 
     ASSERT_EQ(manager.alignment(), MemoryAllocator::kMinAlignment);
     ASSERT_EQ(manager.testingDefaultRoot().alignment(), manager.alignment());
     // TODO: replace with root pool memory tracker quota check.
     ASSERT_EQ(kSharedPoolCount, manager.testingDefaultRoot().getChildCount());
-    ASSERT_EQ(8L * 1024 * 1024, manager.capacity());
+    ASSERT_EQ(capacity, manager.capacity());
     ASSERT_EQ(0, manager.getTotalBytes());
   }
   { ASSERT_ANY_THROW(MemoryManager manager{{.capacity = -1}}); }
   {
     MemoryManagerOptions options;
     const auto capacity = folly::Random::rand32();
+    auto allocator = std::make_shared<MallocAllocator>(capacity);
     options.capacity = capacity;
     options.arbitratorKind = MemoryArbitrator::Kind::kShared;
     MemoryManager manager{options};
     auto* arbitrator = manager.arbitrator();
     ASSERT_EQ(arbitrator->kind(), MemoryArbitrator::Kind::kShared);
     ASSERT_EQ(arbitrator->stats().maxCapacityBytes, capacity);
+  }
+  {
+    const auto capacity = 8L * 1024 * 1024;
+    auto allocator = std::make_shared<MallocAllocator>(capacity);
+    MemoryManagerOptions options;
+    options.capacity = (int64_t)(capacity - 1024);
+    options.allocator = allocator.get();
+    EXPECT_THROW(std::make_unique<MemoryManager>(options), VeloxException);
   }
 }
 

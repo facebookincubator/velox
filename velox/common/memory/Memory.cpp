@@ -58,7 +58,11 @@ MemoryManager::MemoryManager(const MemoryManagerOptions& options)
               .checkUsageLeak = options.checkUsageLeak,
               .debugEnabled = options.debugEnabled})} {
   VELOX_CHECK_NOT_NULL(allocator_);
-  VELOX_USER_CHECK_GE(capacity_, 0);
+  if (allocator_->capacity() > 0) {
+    VELOX_USER_CHECK_EQ(capacity_, allocator_->capacity());
+  } else {
+    VELOX_USER_CHECK_GE(capacity_, 0);
+  }
   MemoryAllocator::alignmentCheck(0, alignment_);
   defaultRoot_->grow(defaultRoot_->maxCapacity());
   const size_t numSharedPools =
