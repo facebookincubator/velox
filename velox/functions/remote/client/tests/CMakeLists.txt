@@ -11,14 +11,19 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-add_library(
-  velox_functions_spark_aggregates
-  BitwiseXorAggregate.cpp BloomFilterAggAggregate.cpp FirstLastAggregate.cpp
-  AverageAggregate.cpp MinMaxByAggregate.cpp Register.cpp)
 
-target_link_libraries(velox_functions_spark_aggregates fmt::fmt velox_exec
-                      velox_expression_functions velox_aggregates velox_vector)
+add_executable(velox_functions_remote_client_test RemoteFunctionTest.cpp)
 
-if(${VELOX_BUILD_TESTING})
-  add_subdirectory(tests)
-endif()
+add_test(velox_functions_remote_client_test velox_functions_remote_client_test)
+
+target_link_libraries(
+  velox_functions_remote_client_test
+  velox_remote_function_thrift
+  velox_functions_remote_server
+  velox_functions_remote
+  velox_function_registry
+  velox_functions_test_lib
+  velox_exec_test_lib
+  gmock
+  gtest
+  gtest_main)
