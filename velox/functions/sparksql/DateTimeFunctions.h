@@ -217,6 +217,12 @@ struct DateSubFunction {
       out_type<Date>& result,
       const arg_type<Date>& date,
       const int32_t value) {
+    // Check inputs overflow.
+    int64_t tmp = date - (int64_t)value;
+    if (tmp != (int32_t)tmp) {
+      VELOX_UNSUPPORTED("integer overflow");
+    }
+
     constexpr int32_t kMin = std::numeric_limits<int32_t>::min();
     if (value > kMin) {
       int32_t subValue = 0 - value;
