@@ -172,6 +172,25 @@ class ParquetData : public dwio::common::FormatData {
     return true;
   }
 
+  // Returns the <offset, length> of the row group.
+  std::pair<int64_t, int64_t> getRowGroupRegion(uint32_t index) const {
+    auto& rowGroup = rowGroups_[index];
+
+    VELOX_CHECK_GT(rowGroup.columns.size(), 0);
+    auto fileOffset = rowGroup.__isset.file_offset ? rowGroup.file_offset
+        : rowGroup.columns[0].meta_data.__isset.dictionary_page_offset
+        ? rowGroup.columns[0].meta_data.dictionary_page_offset
+        : rowGroup.columns[0].meta_data.data_page_offset;
+    VELOX_CHECK_GT(fileOffset, 0);
+
+    auto length = rowGroup.__isset.total_compressed_size
+        ? rowGroup.total_compressed_size
+        : rowGroup.total_byte_size;
+    VELOX_CHECK_GT(length, 0);
+
+    return {fileOffset, length};
+  }
+
  private:
   /// True if 'filter' may have hits for the column of 'this' according to the
   /// stats in 'rowGroup'.

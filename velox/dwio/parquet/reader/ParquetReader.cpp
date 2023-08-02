@@ -118,8 +118,6 @@ class ReaderBase {
 
   const bool binaryAsString = false;
 
-  bool preloadFile_ = false;
-
   // Map from row group index to pre-created loading BufferedInput.
   std::unordered_map<uint32_t, std::shared_ptr<dwio::common::BufferedInput>>
       inputs_;
@@ -142,14 +140,13 @@ ReaderBase::ReaderBase(
 }
 
 void ReaderBase::loadFileMetaData() {
-  preloadFile_ = fileLength_ <= filePreloadThreshold_ ||
-      fileLength_ <= directorySizeGuess_;
-  uint64_t readSize =
-      preloadFile_ ? fileLength_ : std::min(fileLength_, directorySizeGuess_);
+  bool preloadFile =
+      fileLength_ <= std::max(filePreloadThreshold_, directorySizeGuess_);
+  uint64_t readSize = preloadFile ? fileLength_ : directorySizeGuess_;
 
-  std::unique_ptr<dwio::common::SeekableInputStream> stream = nullptr;
-  if (preloadFile_) {
-    stream = input_->readFile(fileLength_, dwio::common::LogType::FOOTER);
+  std::unique_ptr<dwio::common::SeekableInputStream> stream;
+  if (preloadFile) {
+    stream = input_->loadCompleteFile();
   } else {
     stream = input_->read(
         fileLength_ - readSize, readSize, dwio::common::LogType::FOOTER);
@@ -577,30 +574,21 @@ void ReaderBase::scheduleRowGroups(
       currentGroup + 1 < rowGroupIds.size() ? rowGroupIds[currentGroup + 1] : 0;
   auto input = inputs_[thisGroup].get();
   if (!input) {
-    if (preloadFile_) {
-      // Read data from buffer directly.
-      reader.enqueueRowGroup(thisGroup, *input_);
-      inputs_[thisGroup] = input_;
-    } else {
-      auto newInput = input_->clone();
-      reader.enqueueRowGroup(thisGroup, *newInput);
+    auto newInput = reader.enqueueRowGroup(thisGroup, input_);
+    if (newInput != input_) {
       newInput->load(dwio::common::LogType::STRIPE);
-      inputs_[thisGroup] = std::move(newInput);
     }
+    inputs_[thisGroup] = std::move(newInput);
   }
   for (auto counter = 0; counter < FLAGS_parquet_prefetch_rowgroups;
        ++counter) {
     if (nextGroup) {
-      if (inputs_.count(nextGroup) == 0) {
-        if (preloadFile_) {
-          reader.enqueueRowGroup(nextGroup, *input_);
-          inputs_[nextGroup] = input_;
-        } else {
-          auto newInput = input_->clone();
-          reader.enqueueRowGroup(nextGroup, *newInput);
+      if (inputs_.count(nextGroup) != 0) {
+        auto newInput = reader.enqueueRowGroup(thisGroup, input_);
+        if (newInput != input_) {
           newInput->load(dwio::common::LogType::STRIPE);
-          inputs_[nextGroup] = std::move(newInput);
         }
+        inputs_[nextGroup] = std::move(newInput);
       }
     } else {
       break;
