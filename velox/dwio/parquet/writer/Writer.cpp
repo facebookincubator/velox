@@ -26,9 +26,8 @@ namespace facebook::velox::parquet {
 // Utility for buffering Arrow output with a DataBuffer.
 class ArrowDataBufferSink : public arrow::io::OutputStream {
  public:
-  /// @param growRatio Determines the growth factor used when invoking
-  /// the reserve method of DataSink, thereby helping to minimize frequent
-  /// memcpy operations.
+  /// @param growRatio Growth factor used when invoking the reserve() method of
+  /// DataSink, thereby helping to minimize frequent memcpy operations.
   ArrowDataBufferSink(
       std::unique_ptr<dwio::common::DataSink> sink,
       memory::MemoryPool& pool,
