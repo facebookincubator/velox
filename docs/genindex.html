@@ -603,6 +603,8 @@
 </li>
         <li><a href="functions/presto/array.html#cardinality">cardinality()</a>
 </li>
+        <li><a href="functions/presto/conversion.html#cast">cast()</a>
+</li>
         <li><a href="functions/presto/math.html#cauchy_cdf">cauchy_cdf()</a>
 </li>
         <li><a href="functions/presto/math.html#cbrt">cbrt()</a>
@@ -632,6 +634,8 @@
         <li><a href="functions/presto/math.html#cos">cos()</a>
 </li>
         <li><a href="functions/presto/math.html#cosh">cosh()</a>, <a href="functions/spark/math.html#cosh">[1]</a>
+</li>
+        <li><a href="functions/spark/math.html#cot">cot()</a>
 </li>
         <li><a href="functions/presto/aggregate.html#count">count()</a>
 </li>
@@ -823,11 +827,11 @@
 </li>
         <li><a href="functions/presto/math.html#ln">ln()</a>
 </li>
-        <li><a href="functions/presto/math.html#log10">log10()</a>
+        <li><a href="functions/presto/math.html#log10">log10()</a>, <a href="functions/spark/math.html#log10">[1]</a>
 </li>
         <li><a href="functions/spark/math.html#log1p">log1p()</a>
 </li>
-        <li><a href="functions/presto/math.html#log2">log2()</a>
+        <li><a href="functions/presto/math.html#log2">log2()</a>, <a href="functions/spark/math.html#log2">[1]</a>
 </li>
         <li><a href="functions/presto/string.html#lower">lower()</a>, <a href="functions/spark/string.html#lower">[1]</a>
 </li>
@@ -867,7 +871,7 @@
 </li>
         <li><a href="functions/presto/aggregate.html#id2">max()</a>, <a href="functions/presto/aggregate.html#max">[1]</a>
 </li>
-        <li><a href="functions/presto/aggregate.html#id0">max_by()</a>, <a href="functions/presto/aggregate.html#max_by">[1]</a>
+        <li><a href="functions/presto/aggregate.html#id0">max_by()</a>, <a href="functions/presto/aggregate.html#max_by">[1]</a>, <a href="functions/spark/aggregate.html#max_by">[2]</a>
 </li>
         <li><a href="functions/presto/aggregate.html#max_data_size_for_stats">max_data_size_for_stats()</a>
 </li>
@@ -881,7 +885,7 @@
 </li>
         <li><a href="functions/presto/aggregate.html#id3">min()</a>, <a href="functions/presto/aggregate.html#min">[1]</a>
 </li>
-        <li><a href="functions/presto/aggregate.html#id1">min_by()</a>, <a href="functions/presto/aggregate.html#min_by">[1]</a>
+        <li><a href="functions/presto/aggregate.html#id1">min_by()</a>, <a href="functions/presto/aggregate.html#min_by">[1]</a>, <a href="functions/spark/aggregate.html#min_by">[2]</a>
 </li>
         <li><a href="functions/presto/math.html#minus">minus()</a>
 </li>
@@ -1083,6 +1087,8 @@
 </li>
         <li><a href="functions/presto/math.html#truncate">truncate()</a>
 </li>
+        <li><a href="functions/presto/conversion.html#try_cast">try_cast()</a>
+</li>
         <li><a href="functions/spark/math.html#unaryminus">unaryminus()</a>
 </li>
         <li><a href="functions/spark/datetime.html#unix_timestamp">unix_timestamp()</a>
@@ -1143,6 +1149,13 @@
 
       <ul>
         <li><a href="functions/presto/array.html#cardinality">built-in function</a>
+</li>
+      </ul></li>
+      <li>
+    cast()
+
+      <ul>
+        <li><a href="functions/presto/conversion.html#cast">built-in function</a>
 </li>
       </ul></li>
       <li>
@@ -1250,6 +1263,13 @@
 
       <ul>
         <li><a href="functions/presto/math.html#cosh">built-in function</a>, <a href="functions/spark/math.html#cosh">[1]</a>
+</li>
+      </ul></li>
+      <li>
+    cot()
+
+      <ul>
+        <li><a href="functions/spark/math.html#cot">built-in function</a>
 </li>
       </ul></li>
       <li>
@@ -1991,7 +2011,7 @@
     log10()
 
       <ul>
-        <li><a href="functions/presto/math.html#log10">built-in function</a>
+        <li><a href="functions/presto/math.html#log10">built-in function</a>, <a href="functions/spark/math.html#log10">[1]</a>
 </li>
       </ul></li>
       <li>
@@ -2005,7 +2025,7 @@
     log2()
 
       <ul>
-        <li><a href="functions/presto/math.html#log2">built-in function</a>
+        <li><a href="functions/presto/math.html#log2">built-in function</a>, <a href="functions/spark/math.html#log2">[1]</a>
 </li>
       </ul></li>
       <li>
@@ -2153,7 +2173,7 @@
     max_by()
 
       <ul>
-        <li><a href="functions/presto/aggregate.html#id0">built-in function</a>, <a href="functions/presto/aggregate.html#max_by">[1]</a>
+        <li><a href="functions/presto/aggregate.html#id0">built-in function</a>, <a href="functions/presto/aggregate.html#max_by">[1]</a>, <a href="functions/spark/aggregate.html#max_by">[2]</a>
 </li>
       </ul></li>
       <li>
@@ -2202,7 +2222,7 @@
     min_by()
 
       <ul>
-        <li><a href="functions/presto/aggregate.html#id1">built-in function</a>, <a href="functions/presto/aggregate.html#min_by">[1]</a>
+        <li><a href="functions/presto/aggregate.html#id1">built-in function</a>, <a href="functions/presto/aggregate.html#min_by">[1]</a>, <a href="functions/spark/aggregate.html#min_by">[2]</a>
 </li>
       </ul></li>
       <li>
@@ -2955,6 +2975,13 @@
 
       <ul>
         <li><a href="functions/presto/math.html#truncate">built-in function</a>
+</li>
+      </ul></li>
+      <li>
+    try_cast()
+
+      <ul>
+        <li><a href="functions/presto/conversion.html#try_cast">built-in function</a>
 </li>
       </ul></li>
   </ul></td>

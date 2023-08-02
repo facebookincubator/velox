@@ -124,6 +124,28 @@ But Spark allows for changing the defaults while Velox does not.</p>
 <dd><p>Returns the last non-null value of <cite>x</cite>.</p>
 </dd></dl>
 
+<dl class="spark function">
+<dt class="sig sig-object spark" id="max_by">
+<span class="sig-name descname"><span class="pre">max_by</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">x</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">y</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">x</span></span></span><a class="headerlink" href="#max_by" title="Permalink to this definition">¶</a></dt>
+<dd><p>Returns the value of <cite>x</cite> associated with the maximum value of <cite>y</cite>.
+Note: Spark provides a non-strictly comparator which is greater than or equals to.
+Eg. SELECT max_by(x, y) FROM VALUES ((‘a’, 10)), ((‘b’, 50)), ((‘c’, 50)) AS tab(x, y);</p>
+<blockquote>
+<div><p>&gt; c</p>
+</div></blockquote>
+</dd></dl>
+
+<dl class="spark function">
+<dt class="sig sig-object spark" id="min_by">
+<span class="sig-name descname"><span class="pre">min_by</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">x</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">y</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">x</span></span></span><a class="headerlink" href="#min_by" title="Permalink to this definition">¶</a></dt>
+<dd><p>Returns the value of <cite>x</cite> associated with the minimum value of <cite>y</cite>.
+Note: Spark provides a non-strictly comparator which is less than or equals to.
+Eg. SELECT min_by(x, y) FROM VALUES ((‘a’, 10)), ((‘b’, 10)), ((‘c’, 50)) AS tab(x, y);</p>
+<blockquote>
+<div><p>&gt; b</p>
+</div></blockquote>
+</dd></dl>
+
 </section>
 </section>
 

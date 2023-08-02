@@ -1,0 +1,631 @@
+
+<!DOCTYPE html>
+
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" /><meta name="generator" content="Docutils 0.18.1: http://docutils.sourceforge.net/" />
+
+    <title>Conversion Functions &#8212; Velox  documentation</title>
+    <link rel="stylesheet" type="text/css" href="../../_static/pygments.css" />
+    <link rel="stylesheet" type="text/css" href="../../_static/nature.css" />
+    <script data-url_root="../../" id="documentation_options" src="../../_static/documentation_options.js"></script>
+    <script src="../../_static/jquery.js"></script>
+    <script src="../../_static/underscore.js"></script>
+    <script src="../../_static/_sphinx_javascript_frameworks_compat.js"></script>
+    <script src="../../_static/doctools.js"></script>
+    <link rel="index" title="Index" href="../../genindex.html" />
+    <link rel="search" title="Search" href="../../search.html" />
+    <link rel="next" title="URL Functions" href="url.html" />
+    <link rel="prev" title="JSON Functions" href="json.html" /> 
+  </head><body>
+    <div class="related" role="navigation" aria-label="related navigation">
+      <h3>Navigation</h3>
+      <ul>
+        <li class="right" style="margin-right: 10px">
+          <a href="../../genindex.html" title="General Index"
+             accesskey="I">index</a></li>
+        <li class="right" >
+          <a href="url.html" title="URL Functions"
+             accesskey="N">next</a> |</li>
+        <li class="right" >
+          <a href="json.html" title="JSON Functions"
+             accesskey="P">previous</a> |</li>
+        <li class="nav-item nav-item-0"><a href="../../index.html">Velox  documentation</a> &#187;</li>
+          <li class="nav-item nav-item-1"><a href="../../functions.html" accesskey="U">Presto Functions</a> &#187;</li>
+        <li class="nav-item nav-item-this"><a href="">Conversion Functions</a></li> 
+      </ul>
+    </div>  
+
+    <div class="document">
+      <div class="documentwrapper">
+        <div class="bodywrapper">
+          <div class="body" role="main">
+            
+  <section id="conversion-functions">
+<h1>Conversion Functions<a class="headerlink" href="#conversion-functions" title="Permalink to this heading">¶</a></h1>
+<p>During expression evaluations, Velox doesn’t implicitly convert expression
+arguments to the correct types. If such a conversion is necessary, two provided
+conversion functions can be used explicitly cast values to a particular type.</p>
+<section id="id1">
+<h2>Conversion Functions<a class="headerlink" href="#id1" title="Permalink to this heading">¶</a></h2>
+<dl class="py function">
+<dt class="sig sig-object py" id="cast">
+<span class="sig-name descname"><span class="pre">cast</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">value</span> <span class="pre">AS</span> <span class="pre">type</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">type</span></span></span><a class="headerlink" href="#cast" title="Permalink to this definition">¶</a></dt>
+<dd><p>Explicitly cast a value as a type. This can be used to cast a varchar to a
+numeric value type and vice versa.</p>
+</dd></dl>
+
+<dl class="py function">
+<dt class="sig sig-object py" id="try_cast">
+<span class="sig-name descname"><span class="pre">try_cast</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">value</span> <span class="pre">AS</span> <span class="pre">type</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">type</span></span></span><a class="headerlink" href="#try_cast" title="Permalink to this definition">¶</a></dt>
+<dd><p>Like <a class="reference internal" href="#cast" title="cast"><code class="xref py py-func docutils literal notranslate"><span class="pre">cast()</span></code></a>, but returns null if the cast fails. <code class="docutils literal notranslate"><span class="pre">try_cast(x</span> <span class="pre">AS</span> <span class="pre">type)</span></code>
+is different from <code class="docutils literal notranslate"><span class="pre">try(cast(x</span> <span class="pre">AS</span> <span class="pre">type))</span></code> in that <code class="docutils literal notranslate"><span class="pre">try_cast</span></code> only suppresses
+errors happening during the casting itself but not those during the evaluation
+of its argument. For example, <code class="docutils literal notranslate"><span class="pre">try_cast(x</span> <span class="pre">/</span> <span class="pre">0</span> <span class="pre">as</span> <span class="pre">double)</span></code> throws a divide-by-0
+error, while <code class="docutils literal notranslate"><span class="pre">try(cast(x</span> <span class="pre">/</span> <span class="pre">0</span> <span class="pre">as</span> <span class="pre">double))</span></code> returns a NULL.</p>
+</dd></dl>
+
+</section>
+<section id="supported-conversions">
+<h2>Supported Conversions<a class="headerlink" href="#supported-conversions" title="Permalink to this heading">¶</a></h2>
+<p>The supported conversions are listed below, with from-types given at rows and to-types given at columns. Conversions of ARRAY, MAP, and ROW types
+are supported if the conversion of their element types are supported. In addition,
+supported conversions to/from JSON are listed in <a class="reference internal" href="json.html"><span class="doc">JSON Functions</span></a>.</p>
+<table class="docutils align-default">
+<colgroup>
+<col style="width: 8%" />
+<col style="width: 8%" />
+<col style="width: 8%" />
+<col style="width: 8%" />
+<col style="width: 8%" />
+<col style="width: 8%" />
+<col style="width: 8%" />
+<col style="width: 8%" />
+<col style="width: 8%" />
+<col style="width: 8%" />
+<col style="width: 8%" />
+<col style="width: 8%" />
+</colgroup>
+<thead>
+<tr class="row-odd"><th class="head"></th>
+<th class="head"><p>tinyint</p></th>
+<th class="head"><p>smallint</p></th>
+<th class="head"><p>integer</p></th>
+<th class="head"><p>bigint</p></th>
+<th class="head"><p>boolean</p></th>
+<th class="head"><p>real</p></th>
+<th class="head"><p>double</p></th>
+<th class="head"><p>varchar</p></th>
+<th class="head"><p>timestamp</p></th>
+<th class="head"><p>date</p></th>
+<th class="head"><p>decimal</p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even"><td><p>tinyint</p></td>
+<td><p>Y</p></td>
+<td><p>Y</p></td>
+<td><p>Y</p></td>
+<td><p>Y</p></td>
+<td><p>Y</p></td>
+<td><p>Y</p></td>
+<td><p>Y</p></td>
+<td><p>Y</p></td>
+<td></td>
+<td></td>
+<td><p>Y</p></td>
+</tr>
+<tr class="row-odd"><td><p>smallint</p></td>
+<td><p>Y</p></td>
+<td><p>Y</p></td>
+<td><p>Y</p></td>
+<td><p>Y</p></td>
+<td><p>Y</p></td>
+<td><p>Y</p></td>
+<td><p>Y</p></td>
+<td><p>Y</p></td>
+<td></td>
+<td></td>
+<td><p>Y</p></td>
+</tr>
+<tr class="row-even"><td><p>integer</p></td>
+<td><p>Y</p></td>
+<td><p>Y</p></td>
+<td><p>Y</p></td>
+<td><p>Y</p></td>
+<td><p>Y</p></td>
+<td><p>Y</p></td>
+<td><p>Y</p></td>
+<td><p>Y</p></td>
+<td></td>
+<td></td>
+<td><p>Y</p></td>
+</tr>
+<tr class="row-odd"><td><p>bigint</p></td>
+<td><p>Y</p></td>
+<td><p>Y</p></td>
+<td><p>Y</p></td>
+<td><p>Y</p></td>
+<td><p>Y</p></td>
+<td><p>Y</p></td>
+<td><p>Y</p></td>
+<td><p>Y</p></td>
+<td></td>
+<td></td>
+<td><p>Y</p></td>
+</tr>
+<tr class="row-even"><td><p>boolean</p></td>
+<td><p>Y</p></td>
+<td><p>Y</p></td>
+<td><p>Y</p></td>
+<td><p>Y</p></td>
+<td><p>Y</p></td>
+<td><p>Y</p></td>
+<td><p>Y</p></td>
+<td><p>Y</p></td>
+<td></td>
+<td></td>
+<td></td>
+</tr>
+<tr class="row-odd"><td><p>real</p></td>
+<td><p>Y</p></td>
+<td><p>Y</p></td>
+<td><p>Y</p></td>
+<td><p>Y</p></td>
+<td><p>Y</p></td>
+<td><p>Y</p></td>
+<td><p>Y</p></td>
+<td><p>Y</p></td>
+<td></td>
+<td></td>
+<td></td>
+</tr>
+<tr class="row-even"><td><p>double</p></td>
+<td><p>Y</p></td>
+<td><p>Y</p></td>
+<td><p>Y</p></td>
+<td><p>Y</p></td>
+<td><p>Y</p></td>
+<td><p>Y</p></td>
+<td><p>Y</p></td>
+<td><p>Y</p></td>
+<td></td>
+<td></td>
+<td></td>
+</tr>
+<tr class="row-odd"><td><p>varchar</p></td>
+<td><p>Y</p></td>
+<td><p>Y</p></td>
+<td><p>Y</p></td>
+<td><p>Y</p></td>
+<td><p>Y</p></td>
+<td><p>Y</p></td>
+<td><p>Y</p></td>
+<td><p>Y</p></td>
+<td><p>Y</p></td>
+<td><p>Y</p></td>
+<td></td>
+</tr>
+<tr class="row-even"><td><p>timestamp</p></td>
+<td></td>
+<td></td>
+<td></td>
+<td></td>
+<td></td>
+<td></td>
+<td></td>
+<td><p>Y</p></td>
+<td></td>
+<td><p>Y</p></td>
+<td></td>
+</tr>
+<tr class="row-odd"><td><p>date</p></td>
+<td></td>
+<td></td>
+<td></td>
+<td></td>
+<td></td>
+<td></td>
+<td></td>
+<td></td>
+<td><p>Y</p></td>
+<td></td>
+<td></td>
+</tr>
+<tr class="row-even"><td><p>decimal</p></td>
+<td></td>
+<td></td>
+<td></td>
+<td></td>
+<td></td>
+<td></td>
+<td><p>Y</p></td>
+<td></td>
+<td></td>
+<td></td>
+<td><p>Y</p></td>
+</tr>
+</tbody>
+</table>
+</section>
+<section id="cast-to-integral-types">
+<h2>Cast to Integral Types<a class="headerlink" href="#cast-to-integral-types" title="Permalink to this heading">¶</a></h2>
+<p>Integral types include bigint, integer, smallint, and tinyint.</p>
+<section id="from-integral-types">
+<h3>From integral types<a class="headerlink" href="#from-integral-types" title="Permalink to this heading">¶</a></h3>
+<p>Casting one integral type to another is allowed when the input value is within
+the range of the result type. Casting from invalid input values throws.</p>
+<p>Valid examples:</p>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">SELECT</span> <span class="n">cast</span><span class="p">(</span><span class="mi">1234567</span> <span class="k">as</span> <span class="n">bigint</span><span class="p">);</span> <span class="o">--</span> <span class="mi">1234567</span>
+<span class="n">SELECT</span> <span class="n">cast</span><span class="p">(</span><span class="mi">12</span> <span class="k">as</span> <span class="n">tinyint</span><span class="p">);</span> <span class="o">--</span> <span class="mi">12</span>
+</pre></div>
+</div>
+<p>Invalid examples:</p>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">SELECT</span> <span class="n">cast</span><span class="p">(</span><span class="mi">1234</span> <span class="k">as</span> <span class="n">tinyint</span><span class="p">);</span> <span class="o">--</span> <span class="n">Out</span> <span class="n">of</span> <span class="nb">range</span>
+<span class="n">SELECT</span> <span class="n">cast</span><span class="p">(</span><span class="mi">1234567</span> <span class="k">as</span> <span class="n">smallint</span><span class="p">);</span> <span class="o">--</span> <span class="n">Out</span> <span class="n">of</span> <span class="nb">range</span>
+</pre></div>
+</div>
+</section>
+<section id="from-floating-point-types">
+<h3>From floating-point types<a class="headerlink" href="#from-floating-point-types" title="Permalink to this heading">¶</a></h3>
+<p>Casting from floating-point input to an integral type rounds the input value to
+the closest integral value. It is allowed when the rounded result is within the
+range of the result type. Casting from invalid input values throws.</p>
+<p>Valid examples</p>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">SELECT</span> <span class="n">cast</span><span class="p">(</span><span class="mf">12345.12</span> <span class="k">as</span> <span class="n">bigint</span><span class="p">);</span> <span class="o">--</span> <span class="mi">12345</span>
+<span class="n">SELECT</span> <span class="n">cast</span><span class="p">(</span><span class="mf">12345.67</span> <span class="k">as</span> <span class="n">bigint</span><span class="p">);</span> <span class="o">--</span> <span class="mi">12346</span>
+<span class="n">SELECT</span> <span class="n">cast</span><span class="p">(</span><span class="mf">127.1</span> <span class="k">as</span> <span class="n">tinyint</span><span class="p">);</span> <span class="o">--</span> <span class="mi">127</span>
+<span class="n">SELECT</span> <span class="n">cast</span><span class="p">(</span><span class="n">nan</span><span class="p">()</span> <span class="k">as</span> <span class="n">integer</span><span class="p">);</span> <span class="o">--</span> <span class="mi">0</span>
+<span class="n">SELECT</span> <span class="n">cast</span><span class="p">(</span><span class="n">nan</span><span class="p">()</span> <span class="k">as</span> <span class="n">smallint</span><span class="p">);</span> <span class="o">--</span> <span class="mi">0</span>
+<span class="n">SELECT</span> <span class="n">cast</span><span class="p">(</span><span class="n">nan</span><span class="p">()</span> <span class="k">as</span> <span class="n">tinyint</span><span class="p">);</span> <span class="o">--</span> <span class="mi">0</span>
+</pre></div>
+</div>
+<p>Invalid examples</p>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">SELECT</span> <span class="n">cast</span><span class="p">(</span><span class="mf">127.8</span> <span class="k">as</span> <span class="n">tinyint</span><span class="p">);</span> <span class="o">--</span> <span class="n">Out</span> <span class="n">of</span> <span class="nb">range</span>
+<span class="n">SELECT</span> <span class="n">cast</span><span class="p">(</span><span class="mf">1234567.89</span> <span class="k">as</span> <span class="n">smallint</span><span class="p">);</span> <span class="o">--</span> <span class="n">Out</span> <span class="n">of</span> <span class="nb">range</span>
+<span class="n">SELECT</span> <span class="n">cast</span><span class="p">(</span><span class="n">infinity</span><span class="p">()</span> <span class="k">as</span> <span class="n">bigint</span><span class="p">);</span> <span class="o">--</span> <span class="n">Out</span> <span class="n">of</span> <span class="nb">range</span>
+</pre></div>
+</div>
+<p>Casting NaN to bigint returns 0 in Velox but throws in Presto. We keep the
+behavior of Velox by intention because this is more consistent with other
+supported cases.</p>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">SELECT</span> <span class="n">cast</span><span class="p">(</span><span class="n">nan</span><span class="p">()</span> <span class="k">as</span> <span class="n">bigint</span><span class="p">);</span> <span class="o">--</span> <span class="mi">0</span>
+</pre></div>
+</div>
+</section>
+<section id="from-strings">
+<h3>From strings<a class="headerlink" href="#from-strings" title="Permalink to this heading">¶</a></h3>
+<p>Casting a string to an integral type is allowed if the string represents an
+integral number within the range of the result type. Casting from strings that
+represent floating-point numbers is not allowed. Casting from invalid input
+values throws.</p>
+<p>Valid examples</p>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">SELECT</span> <span class="n">cast</span><span class="p">(</span><span class="s1">&#39;12345&#39;</span> <span class="k">as</span> <span class="n">bigint</span><span class="p">);</span> <span class="o">--</span> <span class="mi">12345</span>
+<span class="n">SELECT</span> <span class="n">cast</span><span class="p">(</span><span class="s1">&#39;+1&#39;</span> <span class="k">as</span> <span class="n">tinyint</span><span class="p">);</span> <span class="o">--</span> <span class="mi">1</span>
+<span class="n">SELECT</span> <span class="n">cast</span><span class="p">(</span><span class="s1">&#39;-1&#39;</span> <span class="k">as</span> <span class="n">tinyint</span><span class="p">);</span> <span class="o">--</span> <span class="o">-</span><span class="mi">1</span>
+</pre></div>
+</div>
+<p>Invalid examples</p>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">SELECT</span> <span class="n">cast</span><span class="p">(</span><span class="s1">&#39;1234567&#39;</span> <span class="k">as</span> <span class="n">tinyint</span><span class="p">);</span> <span class="o">--</span> <span class="n">Out</span> <span class="n">of</span> <span class="nb">range</span>
+<span class="n">SELECT</span> <span class="n">cast</span><span class="p">(</span><span class="s1">&#39;12345.67&#39;</span> <span class="k">as</span> <span class="n">tinyint</span><span class="p">);</span> <span class="o">--</span> <span class="n">Invalid</span> <span class="n">argument</span>
+<span class="n">SELECT</span> <span class="n">cast</span><span class="p">(</span><span class="s1">&#39;1.2&#39;</span> <span class="k">as</span> <span class="n">tinyint</span><span class="p">);</span> <span class="o">--</span> <span class="n">Invalid</span> <span class="n">argument</span>
+<span class="n">SELECT</span> <span class="n">cast</span><span class="p">(</span><span class="s1">&#39;1a&#39;</span> <span class="k">as</span> <span class="n">tinyint</span><span class="p">);</span> <span class="o">--</span> <span class="n">Invalid</span> <span class="n">argument</span>
+<span class="n">SELECT</span> <span class="n">cast</span><span class="p">(</span><span class="s1">&#39;&#39;</span> <span class="k">as</span> <span class="n">tinyint</span><span class="p">);</span> <span class="o">--</span> <span class="n">Invalid</span> <span class="n">argument</span>
+<span class="n">SELECT</span> <span class="n">cast</span><span class="p">(</span><span class="s1">&#39;1,234,567&#39;</span> <span class="k">as</span> <span class="n">bigint</span><span class="p">);</span> <span class="o">--</span> <span class="n">Invalid</span> <span class="n">argument</span>
+<span class="n">SELECT</span> <span class="n">cast</span><span class="p">(</span><span class="s1">&#39;1&#39;</span><span class="mi">234</span><span class="s1">&#39;567&#39;</span> <span class="k">as</span> <span class="n">bigint</span><span class="p">);</span> <span class="o">--</span> <span class="n">Invalid</span> <span class="n">argument</span>
+<span class="n">SELECT</span> <span class="n">cast</span><span class="p">(</span><span class="s1">&#39;nan&#39;</span> <span class="k">as</span> <span class="n">bigint</span><span class="p">);</span> <span class="o">--</span> <span class="n">Invalid</span> <span class="n">argument</span>
+<span class="n">SELECT</span> <span class="n">cast</span><span class="p">(</span><span class="s1">&#39;infinity&#39;</span> <span class="k">as</span> <span class="n">bigint</span><span class="p">);</span> <span class="o">--</span> <span class="n">Invalid</span> <span class="n">argument</span>
+</pre></div>
+</div>
+</section>
+</section>
+<section id="cast-to-boolean">
+<h2>Cast to Boolean<a class="headerlink" href="#cast-to-boolean" title="Permalink to this heading">¶</a></h2>
+<section id="from-integral-and-floating-point-types">
+<h3>From integral and floating-point types<a class="headerlink" href="#from-integral-and-floating-point-types" title="Permalink to this heading">¶</a></h3>
+<p>Casting from integral or floating-point numbers to boolean is allowed. Non-zero
+numbers are converted to <cite>true</cite> while zero is converted to <cite>false</cite>.</p>
+<p>Valid examples</p>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">SELECT</span> <span class="n">cast</span><span class="p">(</span><span class="mi">1</span> <span class="k">as</span> <span class="n">boolean</span><span class="p">);</span> <span class="o">--</span> <span class="n">true</span>
+<span class="n">SELECT</span> <span class="n">cast</span><span class="p">(</span><span class="mi">0</span> <span class="k">as</span> <span class="n">boolean</span><span class="p">);</span> <span class="o">--</span> <span class="n">false</span>
+<span class="n">SELECT</span> <span class="n">cast</span><span class="p">(</span><span class="mi">12</span> <span class="k">as</span> <span class="n">boolean</span><span class="p">);</span> <span class="o">--</span> <span class="n">true</span>
+<span class="n">SELECT</span> <span class="n">cast</span><span class="p">(</span><span class="o">-</span><span class="mi">1</span> <span class="k">as</span> <span class="n">boolean</span><span class="p">);</span> <span class="o">--</span> <span class="n">true</span>
+<span class="n">SELECT</span> <span class="n">cast</span><span class="p">(</span><span class="mf">1.0</span> <span class="k">as</span> <span class="n">boolean</span><span class="p">);</span> <span class="o">--</span> <span class="n">true</span>
+<span class="n">SELECT</span> <span class="n">cast</span><span class="p">(</span><span class="mf">1.1</span> <span class="k">as</span> <span class="n">boolean</span><span class="p">);</span> <span class="o">--</span> <span class="n">true</span>
+<span class="n">SELECT</span> <span class="n">cast</span><span class="p">(</span><span class="o">-</span><span class="mf">1.1</span> <span class="k">as</span> <span class="n">boolean</span><span class="p">);</span> <span class="o">--</span> <span class="n">true</span>
+<span class="n">SELECT</span> <span class="n">cast</span><span class="p">(</span><span class="n">nan</span><span class="p">()</span> <span class="k">as</span> <span class="n">boolean</span><span class="p">);</span> <span class="o">--</span> <span class="n">true</span>
+<span class="n">SELECT</span> <span class="n">cast</span><span class="p">(</span><span class="n">infinity</span><span class="p">()</span> <span class="k">as</span> <span class="n">boolean</span><span class="p">);</span> <span class="o">--</span> <span class="n">true</span>
+<span class="n">SELECT</span> <span class="n">cast</span><span class="p">(</span><span class="mf">0.0000000000001</span> <span class="k">as</span> <span class="n">boolean</span><span class="p">);</span> <span class="o">--</span> <span class="n">true</span>
+</pre></div>
+</div>
+</section>
+<section id="id2">
+<h3>From strings<a class="headerlink" href="#id2" title="Permalink to this heading">¶</a></h3>
+<p>There is a set of strings allowed to be casted to boolean. Casting from other strings to boolean throws.</p>
+<p>Valid examples</p>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">SELECT</span> <span class="n">cast</span><span class="p">(</span><span class="s1">&#39;1&#39;</span> <span class="k">as</span> <span class="n">boolean</span><span class="p">);</span> <span class="o">--</span> <span class="n">true</span>
+<span class="n">SELECT</span> <span class="n">cast</span><span class="p">(</span><span class="s1">&#39;0&#39;</span> <span class="k">as</span> <span class="n">boolean</span><span class="p">);</span> <span class="o">--</span> <span class="n">false</span>
+<span class="n">SELECT</span> <span class="n">cast</span><span class="p">(</span><span class="s1">&#39;t&#39;</span> <span class="k">as</span> <span class="n">boolean</span><span class="p">);</span> <span class="o">--</span> <span class="n">true</span> <span class="p">(</span><span class="n">case</span> <span class="n">insensitive</span><span class="p">)</span>
+<span class="n">SELECT</span> <span class="n">cast</span><span class="p">(</span><span class="s1">&#39;true&#39;</span> <span class="k">as</span> <span class="n">boolean</span><span class="p">);</span> <span class="o">--</span> <span class="n">true</span> <span class="p">(</span><span class="n">case</span> <span class="n">insensitive</span><span class="p">)</span>
+<span class="n">SELECT</span> <span class="n">cast</span><span class="p">(</span><span class="s1">&#39;f&#39;</span> <span class="k">as</span> <span class="n">boolean</span><span class="p">);</span> <span class="o">--</span> <span class="n">false</span> <span class="p">(</span><span class="n">case</span> <span class="n">insensitive</span><span class="p">)</span>
+<span class="n">SELECT</span> <span class="n">cast</span><span class="p">(</span><span class="s1">&#39;false&#39;</span> <span class="k">as</span> <span class="n">boolean</span><span class="p">);</span> <span class="o">--</span> <span class="n">false</span> <span class="p">(</span><span class="n">case</span> <span class="n">insensitive</span><span class="p">)</span>
+</pre></div>
+</div>
+<p>Invalid examples</p>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">SELECT</span> <span class="n">cast</span><span class="p">(</span><span class="s1">&#39;1.7E308&#39;</span> <span class="k">as</span> <span class="n">boolean</span><span class="p">);</span> <span class="o">--</span> <span class="n">Invalid</span> <span class="n">argument</span>
+<span class="n">SELECT</span> <span class="n">cast</span><span class="p">(</span><span class="s1">&#39;nan&#39;</span> <span class="k">as</span> <span class="n">boolean</span><span class="p">);</span> <span class="o">--</span> <span class="n">Invalid</span> <span class="n">argument</span>
+<span class="n">SELECT</span> <span class="n">cast</span><span class="p">(</span><span class="s1">&#39;infinity&#39;</span> <span class="k">as</span> <span class="n">boolean</span><span class="p">);</span> <span class="o">--</span> <span class="n">Invalid</span> <span class="n">argument</span>
+<span class="n">SELECT</span> <span class="n">cast</span><span class="p">(</span><span class="s1">&#39;12&#39;</span> <span class="k">as</span> <span class="n">boolean</span><span class="p">);</span> <span class="o">--</span> <span class="n">Invalid</span> <span class="n">argument</span>
+<span class="n">SELECT</span> <span class="n">cast</span><span class="p">(</span><span class="s1">&#39;-1&#39;</span> <span class="k">as</span> <span class="n">boolean</span><span class="p">);</span> <span class="o">--</span> <span class="n">Invalid</span> <span class="n">argument</span>
+<span class="n">SELECT</span> <span class="n">cast</span><span class="p">(</span><span class="s1">&#39;tr&#39;</span> <span class="k">as</span> <span class="n">boolean</span><span class="p">);</span> <span class="o">--</span> <span class="n">Invalid</span> <span class="n">argument</span>
+<span class="n">SELECT</span> <span class="n">cast</span><span class="p">(</span><span class="s1">&#39;tru&#39;</span> <span class="k">as</span> <span class="n">boolean</span><span class="p">);</span> <span class="o">--</span> <span class="n">Invalid</span> <span class="n">argument</span>
+</pre></div>
+</div>
+</section>
+</section>
+<section id="cast-to-floating-point-types">
+<h2>Cast to Floating-Point Types<a class="headerlink" href="#cast-to-floating-point-types" title="Permalink to this heading">¶</a></h2>
+<section id="from-integral-or-floating-point-types">
+<h3>From integral or floating-point types<a class="headerlink" href="#from-integral-or-floating-point-types" title="Permalink to this heading">¶</a></h3>
+<p>Casting from an integral or floating-point number is allowed.</p>
+<p>Valid examples</p>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">SELECT</span> <span class="n">cast</span><span class="p">(</span><span class="mi">1</span> <span class="k">as</span> <span class="n">real</span><span class="p">);</span> <span class="o">--</span> <span class="mf">1.0</span>
+<span class="n">SELECT</span> <span class="n">cast</span><span class="p">(</span><span class="mf">123.45</span> <span class="k">as</span> <span class="n">real</span><span class="p">);</span> <span class="o">--</span> <span class="mf">123.45</span>
+</pre></div>
+</div>
+<p>There are two cases where Velox behaves differently from Presto (<a class="reference external" href="https://github.com/facebookincubator/velox/issues/5934">#5934</a>) when casting
+to real from a value beyond real’s limit. We will fix them to follow Presto’s
+behavior.</p>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">SELECT</span> <span class="n">cast</span><span class="p">(</span><span class="mf">1.7E308</span> <span class="k">as</span> <span class="n">real</span><span class="p">);</span> <span class="o">--</span> <span class="n">Presto</span> <span class="n">returns</span> <span class="n">Infinity</span> <span class="n">but</span> <span class="n">Velox</span> <span class="n">throws</span>
+<span class="n">SELECT</span> <span class="n">cast</span><span class="p">(</span><span class="o">-</span><span class="mf">1.7E308</span> <span class="k">as</span> <span class="n">real</span><span class="p">);</span> <span class="o">--</span> <span class="n">Presto</span> <span class="n">returns</span> <span class="o">-</span><span class="n">Infinity</span> <span class="n">but</span> <span class="n">Velox</span> <span class="n">throws</span>
+</pre></div>
+</div>
+</section>
+<section id="id3">
+<h3>From strings<a class="headerlink" href="#id3" title="Permalink to this heading">¶</a></h3>
+<p>Casting a string to real is allowed if the string represents an integral or
+floating-point number. Casting from invalid input values throws.</p>
+<p>Valid examples</p>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">SELECT</span> <span class="n">cast</span><span class="p">(</span><span class="s1">&#39;1.&#39;</span> <span class="k">as</span> <span class="n">real</span><span class="p">);</span> <span class="o">--</span> <span class="mf">1.0</span>
+<span class="n">SELECT</span> <span class="n">cast</span><span class="p">(</span><span class="s1">&#39;1&#39;</span> <span class="k">as</span> <span class="n">real</span><span class="p">);</span> <span class="o">--</span> <span class="mf">1.0</span>
+<span class="n">SELECT</span> <span class="n">cast</span><span class="p">(</span><span class="s1">&#39;1.7E308&#39;</span> <span class="k">as</span> <span class="n">real</span><span class="p">);</span> <span class="o">--</span> <span class="n">Infinity</span>
+<span class="n">SELECT</span> <span class="n">cast</span><span class="p">(</span><span class="s1">&#39;infinity&#39;</span> <span class="k">as</span> <span class="n">real</span><span class="p">);</span> <span class="o">--</span> <span class="n">Infinity</span> <span class="p">(</span><span class="n">case</span> <span class="n">insensitive</span><span class="p">)</span>
+<span class="n">SELECT</span> <span class="n">cast</span><span class="p">(</span><span class="s1">&#39;-infinity&#39;</span> <span class="k">as</span> <span class="n">real</span><span class="p">);</span> <span class="o">--</span> <span class="o">-</span><span class="n">Infinity</span> <span class="p">(</span><span class="n">case</span> <span class="n">insensitive</span><span class="p">)</span>
+<span class="n">SELECT</span> <span class="n">cast</span><span class="p">(</span><span class="s1">&#39;nan&#39;</span> <span class="k">as</span> <span class="n">real</span><span class="p">);</span> <span class="o">--</span> <span class="n">NaN</span> <span class="p">(</span><span class="n">case</span> <span class="n">insensitive</span><span class="p">)</span>
+</pre></div>
+</div>
+<p>Invalid examples</p>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">SELECT</span> <span class="n">cast</span><span class="p">(</span><span class="s1">&#39;1.7E308&#39;</span> <span class="k">as</span> <span class="n">real</span><span class="p">);</span> <span class="o">--</span> <span class="n">Out</span> <span class="n">of</span> <span class="nb">range</span>
+<span class="n">SELECT</span> <span class="n">cast</span><span class="p">(</span><span class="s1">&#39;1.2a&#39;</span> <span class="k">as</span> <span class="n">real</span><span class="p">);</span> <span class="o">--</span> <span class="n">Invalid</span> <span class="n">argument</span>
+<span class="n">SELECT</span> <span class="n">cast</span><span class="p">(</span><span class="s1">&#39;1.2.3&#39;</span> <span class="k">as</span> <span class="n">real</span><span class="p">);</span> <span class="o">--</span> <span class="n">Invalid</span> <span class="n">argument</span>
+</pre></div>
+</div>
+<p>There are a few corner cases where Velox behaves differently from Presto.
+Presto throws INVALID_CAST_ARGUMENT on these queries, while Velox allows these
+conversions. We keep the Velox behaivor by intention because it is more
+consistent with other supported cases of cast.</p>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">SELECT</span> <span class="n">cast</span><span class="p">(</span><span class="s1">&#39;InfiNiTy&#39;</span> <span class="k">as</span> <span class="n">real</span><span class="p">);</span> <span class="o">--</span> <span class="n">Infinity</span>
+<span class="n">SELECT</span> <span class="n">cast</span><span class="p">(</span><span class="s1">&#39;nAn&#39;</span> <span class="k">as</span> <span class="n">real</span><span class="p">);</span> <span class="o">--</span> <span class="n">NaN</span>
+</pre></div>
+</div>
+</section>
+<section id="from-decimal">
+<h3>From decimal<a class="headerlink" href="#from-decimal" title="Permalink to this heading">¶</a></h3>
+<p>Casting from decimal to double is allowed.</p>
+<p>Valid example</p>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">SELECT</span> <span class="n">cast</span><span class="p">(</span><span class="n">decimal</span> <span class="s1">&#39;10.001&#39;</span> <span class="k">as</span> <span class="n">double</span><span class="p">);</span> <span class="o">--</span> <span class="mf">10.001</span>
+</pre></div>
+</div>
+</section>
+</section>
+<section id="cast-to-string">
+<h2>Cast to String<a class="headerlink" href="#cast-to-string" title="Permalink to this heading">¶</a></h2>
+<p>Valid examples</p>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">SELECT</span> <span class="n">cast</span><span class="p">(</span><span class="mi">123</span> <span class="k">as</span> <span class="n">varchar</span><span class="p">);</span> <span class="o">--</span> <span class="s1">&#39;123&#39;</span>
+<span class="n">SELECT</span> <span class="n">cast</span><span class="p">(</span><span class="mf">123.45</span> <span class="k">as</span> <span class="n">varchar</span><span class="p">);</span> <span class="o">--</span> <span class="s1">&#39;123.45&#39;</span>
+<span class="n">SELECT</span> <span class="n">cast</span><span class="p">(</span><span class="n">nan</span><span class="p">()</span> <span class="k">as</span> <span class="n">varchar</span><span class="p">);</span> <span class="o">--</span> <span class="s1">&#39;NaN&#39;</span>
+<span class="n">SELECT</span> <span class="n">cast</span><span class="p">(</span><span class="n">infinity</span><span class="p">()</span> <span class="k">as</span> <span class="n">varchar</span><span class="p">);</span> <span class="o">--</span> <span class="s1">&#39;Infinity&#39;</span>
+<span class="n">SELECT</span> <span class="n">cast</span><span class="p">(</span><span class="n">true</span> <span class="k">as</span> <span class="n">varchar</span><span class="p">);</span> <span class="o">--</span> <span class="s1">&#39;true&#39;</span>
+<span class="n">SELECT</span> <span class="n">cast</span><span class="p">(</span><span class="n">timestamp</span> <span class="s1">&#39;1970-01-01 00:00:00&#39;</span> <span class="k">as</span> <span class="n">varchar</span><span class="p">);</span> <span class="o">--</span> <span class="s1">&#39;1970-01-01T00:00:00.000&#39;</span>
+</pre></div>
+</div>
+</section>
+<section id="cast-to-timestamp">
+<h2>Cast to Timestamp<a class="headerlink" href="#cast-to-timestamp" title="Permalink to this heading">¶</a></h2>
+<section id="id4">
+<h3>From strings<a class="headerlink" href="#id4" title="Permalink to this heading">¶</a></h3>
+<p>Casting from a string to timestamp is allowed if the string represents a
+timestamp in the format <cite>YYYY-MM-DD</cite> followed by an optional <cite>hh:mm:ssZZ</cite>.
+Casting from invalid input values throws.</p>
+<p>Valid examples</p>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">SELECT</span> <span class="n">cast</span><span class="p">(</span><span class="s1">&#39;1970-01-01&#39;</span> <span class="k">as</span> <span class="n">timestamp</span><span class="p">);</span> <span class="o">--</span> <span class="mi">1970</span><span class="o">-</span><span class="mi">01</span><span class="o">-</span><span class="mi">01</span> <span class="mi">00</span><span class="p">:</span><span class="mi">00</span><span class="p">:</span><span class="mi">00</span>
+<span class="n">SELECT</span> <span class="n">cast</span><span class="p">(</span><span class="s1">&#39;1970-01-01 00:00:00&#39;</span> <span class="k">as</span> <span class="n">timestamp</span><span class="p">);</span> <span class="o">--</span> <span class="mi">1970</span><span class="o">-</span><span class="mi">01</span><span class="o">-</span><span class="mi">01</span> <span class="mi">00</span><span class="p">:</span><span class="mi">00</span><span class="p">:</span><span class="mi">00</span>
+<span class="n">SELECT</span> <span class="n">cast</span><span class="p">(</span><span class="s1">&#39;1970-01-01 02:01&#39;</span> <span class="k">as</span> <span class="n">timestamp</span><span class="p">);</span> <span class="o">--</span> <span class="mi">1970</span><span class="o">-</span><span class="mi">01</span><span class="o">-</span><span class="mi">01</span> <span class="mi">02</span><span class="p">:</span><span class="mi">01</span><span class="p">:</span><span class="mi">00</span>
+<span class="n">SELECT</span> <span class="n">cast</span><span class="p">(</span><span class="s1">&#39;1970-01-01 00:00:00-02:00&#39;</span> <span class="k">as</span> <span class="n">timestamp</span><span class="p">);</span> <span class="o">--</span> <span class="mi">1970</span><span class="o">-</span><span class="mi">01</span><span class="o">-</span><span class="mi">01</span> <span class="mi">02</span><span class="p">:</span><span class="mi">00</span><span class="p">:</span><span class="mi">00</span>
+</pre></div>
+</div>
+<p>Invalid example</p>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">SELECT</span> <span class="n">cast</span><span class="p">(</span><span class="s1">&#39;2012-Oct-23&#39;</span> <span class="k">as</span> <span class="n">timestamp</span><span class="p">);</span> <span class="o">--</span> <span class="n">Invalid</span> <span class="n">argument</span>
+</pre></div>
+</div>
+</section>
+<section id="from-date">
+<h3>From date<a class="headerlink" href="#from-date" title="Permalink to this heading">¶</a></h3>
+<p>Casting from date to timestamp is allowed.</p>
+<p>Valid examples</p>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">SELECT</span> <span class="n">cast</span><span class="p">(</span><span class="n">date</span> <span class="s1">&#39;1970-01-01&#39;</span> <span class="k">as</span> <span class="n">timestamp</span><span class="p">);</span> <span class="o">--</span> <span class="mi">1970</span><span class="o">-</span><span class="mi">01</span><span class="o">-</span><span class="mi">01</span> <span class="mi">00</span><span class="p">:</span><span class="mi">00</span><span class="p">:</span><span class="mi">00</span>
+<span class="n">SELECT</span> <span class="n">cast</span><span class="p">(</span><span class="n">date</span> <span class="s1">&#39;2012-03-09&#39;</span> <span class="k">as</span> <span class="n">timestamp</span><span class="p">);</span> <span class="o">--</span> <span class="mi">2012</span><span class="o">-</span><span class="mi">03</span><span class="o">-</span><span class="mi">09</span> <span class="mi">00</span><span class="p">:</span><span class="mi">00</span><span class="p">:</span><span class="mi">00</span>
+</pre></div>
+</div>
+</section>
+</section>
+<section id="cast-to-date">
+<h2>Cast to Date<a class="headerlink" href="#cast-to-date" title="Permalink to this heading">¶</a></h2>
+<section id="id5">
+<h3>From strings<a class="headerlink" href="#id5" title="Permalink to this heading">¶</a></h3>
+<p>Casting from a string to date is allowed if the string represents a date in the
+format <cite>YYYY-MM-DD</cite>. Casting from invalid input values throws.</p>
+<p>Valid example</p>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">SELECT</span> <span class="n">cast</span><span class="p">(</span><span class="s1">&#39;1970-01-01&#39;</span> <span class="k">as</span> <span class="n">date</span><span class="p">);</span> <span class="o">--</span> <span class="mi">1970</span><span class="o">-</span><span class="mi">01</span><span class="o">-</span><span class="mi">01</span>
+</pre></div>
+</div>
+<p>Invalid example</p>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">SELECT</span> <span class="n">cast</span><span class="p">(</span><span class="s1">&#39;2012-Oct-23&#39;</span> <span class="k">as</span> <span class="n">date</span><span class="p">);</span> <span class="o">--</span> <span class="n">Invalid</span> <span class="n">argument</span>
+</pre></div>
+</div>
+</section>
+<section id="from-timestamp">
+<h3>From timestamp<a class="headerlink" href="#from-timestamp" title="Permalink to this heading">¶</a></h3>
+<p>Casting from timestamp to date is allowed. If present, the part of <cite>hh:mm:ss</cite>
+in the input is ignored.</p>
+<p>Valid examples</p>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">SELECT</span> <span class="n">cast</span><span class="p">(</span><span class="n">timestamp</span> <span class="s1">&#39;1970-01-01 00:00:00&#39;</span> <span class="k">as</span> <span class="n">date</span><span class="p">);</span> <span class="o">--</span> <span class="mi">1970</span><span class="o">-</span><span class="mi">01</span><span class="o">-</span><span class="mi">01</span>
+<span class="n">SELECT</span> <span class="n">cast</span><span class="p">(</span><span class="n">timestamp</span> <span class="s1">&#39;1970-01-01 23:59:59&#39;</span> <span class="k">as</span> <span class="n">date</span><span class="p">);</span> <span class="o">--</span> <span class="mi">1970</span><span class="o">-</span><span class="mi">01</span><span class="o">-</span><span class="mi">01</span>
+</pre></div>
+</div>
+</section>
+</section>
+<section id="cast-to-decimal">
+<h2>Cast to Decimal<a class="headerlink" href="#cast-to-decimal" title="Permalink to this heading">¶</a></h2>
+<section id="id6">
+<h3>From integral types<a class="headerlink" href="#id6" title="Permalink to this heading">¶</a></h3>
+<p>Casting an integral numberto a decimal of given precision and scale is allowed
+if the input value can be represented by the precision and scale. Casting from
+invalid input values throws.</p>
+<p>Valid examples</p>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">SELECT</span> <span class="n">cast</span><span class="p">(</span><span class="mi">1</span> <span class="k">as</span> <span class="n">decimal</span><span class="p">(</span><span class="mi">4</span><span class="p">,</span> <span class="mi">2</span><span class="p">));</span> <span class="o">--</span> <span class="n">decimal</span> <span class="s1">&#39;1.00&#39;</span>
+<span class="n">SELECT</span> <span class="n">cast</span><span class="p">(</span><span class="mi">10</span> <span class="k">as</span> <span class="n">decimal</span><span class="p">(</span><span class="mi">4</span><span class="p">,</span> <span class="mi">2</span><span class="p">));</span> <span class="o">--</span> <span class="n">decimal</span> <span class="s1">&#39;10.00&#39;</span>
+<span class="n">SELECT</span> <span class="n">cast</span><span class="p">(</span><span class="mi">123</span> <span class="k">as</span> <span class="n">decimal</span><span class="p">(</span><span class="mi">5</span><span class="p">,</span> <span class="mi">2</span><span class="p">));</span> <span class="o">--</span> <span class="n">decimal</span> <span class="s1">&#39;123.00&#39;</span>
+</pre></div>
+</div>
+<p>Invalid examples</p>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">SELECT</span> <span class="n">cast</span><span class="p">(</span><span class="mi">123</span> <span class="k">as</span> <span class="n">decimal</span><span class="p">(</span><span class="mi">6</span><span class="p">,</span> <span class="mi">4</span><span class="p">));</span> <span class="o">--</span> <span class="n">Out</span> <span class="n">of</span> <span class="nb">range</span>
+<span class="n">SELECT</span> <span class="n">cast</span><span class="p">(</span><span class="mi">123</span> <span class="k">as</span> <span class="n">decimal</span><span class="p">(</span><span class="mi">4</span><span class="p">,</span> <span class="mi">2</span><span class="p">));</span> <span class="o">--</span> <span class="n">Out</span> <span class="n">of</span> <span class="nb">range</span>
+</pre></div>
+</div>
+</section>
+<section id="id7">
+<h3>From decimal<a class="headerlink" href="#id7" title="Permalink to this heading">¶</a></h3>
+<p>Casting one decimal to another is allowed if the input value can be represented
+by the result decimal type. When casting from a larger scale to a smaller one,
+the fraction part is rounded.</p>
+<p>Valid example</p>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">SELECT</span> <span class="n">cast</span><span class="p">(</span><span class="n">decimal</span> <span class="s1">&#39;0.69&#39;</span> <span class="k">as</span> <span class="n">decimal</span><span class="p">(</span><span class="mi">4</span><span class="p">,</span> <span class="mi">3</span><span class="p">));</span> <span class="o">--</span> <span class="n">decimal</span> <span class="s1">&#39;0.690&#39;</span>
+<span class="n">SELECT</span> <span class="n">cast</span><span class="p">(</span><span class="n">decimal</span> <span class="s1">&#39;0.69&#39;</span> <span class="k">as</span> <span class="n">decimal</span><span class="p">(</span><span class="mi">4</span><span class="p">,</span> <span class="mi">1</span><span class="p">));</span> <span class="o">--</span> <span class="n">decimal</span> <span class="s1">&#39;0.7&#39;</span>
+</pre></div>
+</div>
+<p>Invalid example</p>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">SELECT</span> <span class="n">cast</span><span class="p">(</span><span class="n">decimal</span> <span class="s1">&#39;-1000.000&#39;</span> <span class="k">as</span> <span class="n">decimal</span><span class="p">(</span><span class="mi">6</span><span class="p">,</span> <span class="mi">4</span><span class="p">));</span> <span class="o">--</span> <span class="n">Out</span> <span class="n">of</span> <span class="nb">range</span>
+<span class="n">SELECT</span> <span class="n">cast</span><span class="p">(</span><span class="n">decimal</span> <span class="s1">&#39;123456789&#39;</span> <span class="k">as</span> <span class="n">decimal</span><span class="p">(</span><span class="mi">9</span><span class="p">,</span> <span class="mi">1</span><span class="p">));</span> <span class="o">--</span> <span class="n">Out</span> <span class="n">of</span> <span class="nb">range</span>
+</pre></div>
+</div>
+</section>
+</section>
+</section>
+
+
+            <div class="clearer"></div>
+          </div>
+        </div>
+      </div>
+      <div class="sphinxsidebar" role="navigation" aria-label="main navigation">
+        <div class="sphinxsidebarwrapper">
+  <div>
+    <h3><a href="../../index.html">Table of Contents</a></h3>
+    <ul>
+<li><a class="reference internal" href="#">Conversion Functions</a><ul>
+<li><a class="reference internal" href="#id1">Conversion Functions</a></li>
+<li><a class="reference internal" href="#supported-conversions">Supported Conversions</a></li>
+<li><a class="reference internal" href="#cast-to-integral-types">Cast to Integral Types</a><ul>
+<li><a class="reference internal" href="#from-integral-types">From integral types</a></li>
+<li><a class="reference internal" href="#from-floating-point-types">From floating-point types</a></li>
+<li><a class="reference internal" href="#from-strings">From strings</a></li>
+</ul>
+</li>
+<li><a class="reference internal" href="#cast-to-boolean">Cast to Boolean</a><ul>
+<li><a class="reference internal" href="#from-integral-and-floating-point-types">From integral and floating-point types</a></li>
+<li><a class="reference internal" href="#id2">From strings</a></li>
+</ul>
+</li>
+<li><a class="reference internal" href="#cast-to-floating-point-types">Cast to Floating-Point Types</a><ul>
+<li><a class="reference internal" href="#from-integral-or-floating-point-types">From integral or floating-point types</a></li>
+<li><a class="reference internal" href="#id3">From strings</a></li>
+<li><a class="reference internal" href="#from-decimal">From decimal</a></li>
+</ul>
+</li>
+<li><a class="reference internal" href="#cast-to-string">Cast to String</a></li>
+<li><a class="reference internal" href="#cast-to-timestamp">Cast to Timestamp</a><ul>
+<li><a class="reference internal" href="#id4">From strings</a></li>
+<li><a class="reference internal" href="#from-date">From date</a></li>
+</ul>
+</li>
+<li><a class="reference internal" href="#cast-to-date">Cast to Date</a><ul>
+<li><a class="reference internal" href="#id5">From strings</a></li>
+<li><a class="reference internal" href="#from-timestamp">From timestamp</a></li>
+</ul>
+</li>
+<li><a class="reference internal" href="#cast-to-decimal">Cast to Decimal</a><ul>
+<li><a class="reference internal" href="#id6">From integral types</a></li>
+<li><a class="reference internal" href="#id7">From decimal</a></li>
+</ul>
+</li>
+</ul>
+</li>
+</ul>
+
+  </div>
+  <div>
+    <h4>Previous topic</h4>
+    <p class="topless"><a href="json.html"
+                          title="previous chapter">JSON Functions</a></p>
+  </div>
+  <div>
+    <h4>Next topic</h4>
+    <p class="topless"><a href="url.html"
+                          title="next chapter">URL Functions</a></p>
+  </div>
+  <div role="note" aria-label="source link">
+    <h3>This Page</h3>
+    <ul class="this-page-menu">
+      <li><a href="../../_sources/functions/presto/conversion.rst.txt"
+            rel="nofollow">Show Source</a></li>
+    </ul>
+   </div>
+<div id="searchbox" style="display: none" role="search">
+  <h3 id="searchlabel">Quick search</h3>
+    <div class="searchformwrapper">
+    <form class="search" action="../../search.html" method="get">
+      <input type="text" name="q" aria-labelledby="searchlabel" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false"/>
+      <input type="submit" value="Go" />
+    </form>
+    </div>
+</div>
+<script>document.getElementById('searchbox').style.display = "block"</script>
+        </div>
+      </div>
+      <div class="clearer"></div>
+    </div>
+    <div class="related" role="navigation" aria-label="related navigation">
+      <h3>Navigation</h3>
+      <ul>
+        <li class="right" style="margin-right: 10px">
+          <a href="../../genindex.html" title="General Index"
+             >index</a></li>
+        <li class="right" >
+          <a href="url.html" title="URL Functions"
+             >next</a> |</li>
+        <li class="right" >
+          <a href="json.html" title="JSON Functions"
+             >previous</a> |</li>
+        <li class="nav-item nav-item-0"><a href="../../index.html">Velox  documentation</a> &#187;</li>
+          <li class="nav-item nav-item-1"><a href="../../functions.html" >Presto Functions</a> &#187;</li>
+        <li class="nav-item nav-item-this"><a href="">Conversion Functions</a></li> 
+      </ul>
+    </div>
+    <div class="footer" role="contentinfo">
+        &#169; Copyright TBD.
+      Created using <a href="https://www.sphinx-doc.org/">Sphinx</a> 5.0.2.
+    </div>
+  </body>
+</html>
