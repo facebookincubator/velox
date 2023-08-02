@@ -1155,8 +1155,8 @@ struct FromISO8601DateFunction {
 
     std::string isoDateExtracted =
         std::string(isoDateStr.data(), isoDateStr.size()).substr(0, 10);
-    result =
-        util::Converter<TypeKind::DATE>::cast(isoDateExtracted, nullOutput);
+
+    result = DATE()->toDays(isoDateExtracted.c_str(), 10);
   }
 };
 

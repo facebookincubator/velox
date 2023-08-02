@@ -10,6 +10,10 @@ Date and Time Functions
 
     This is an alias for ``CAST(x AS date)``.
 
+.. function:: from_iso8601_date(string) -> date
+
+    Parses the ISO 8601 formatted ``string`` into a ``date``.
+
 .. function:: from_unixtime(unixtime) -> timestamp
 
     Returns the UNIX timestamp ``unixtime`` as a timestamp.
@@ -23,10 +27,6 @@ Date and Time Functions
 .. function:: to_unixtime(timestamp) -> double
 
     Returns ``timestamp`` as a UNIX timestamp.
-
-.. function:: from_iso8601_date(string) -> date
-
-    Parses the ISO 8601 formatted ``string`` into a ``date``.
 
 Truncation Function
 -------------------
