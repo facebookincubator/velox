@@ -21,5 +21,6 @@ target_link_libraries(
   velox_exec_test_lib
   velox_exec
   velox_hive_connector
+  velox_tpch_gen
   Folly::folly
   ${FOLLY_BENCHMARK})
