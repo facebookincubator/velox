@@ -23,6 +23,7 @@
 #include "velox/type/TimestampConversion.h"
 #include "velox/type/Type.h"
 #include "velox/type/tz/TimeZoneMap.h"
+#include "velox/external/date/tz.h"
 
 namespace facebook::velox::functions {
 
@@ -1192,13 +1193,43 @@ struct ToISO8601Function : public TimestampWithTimezoneSupport<T> {
   FOLLY_ALWAYS_INLINE void call(
       out_type<Varchar>& result,
       const arg_type<TimestampWithTimezone>& timestampWithTimezone) {
-    auto timestamp = this->toTimestamp(timestampWithTimezone);
 
-    // timestamp.toString() returns in format
-    // "1919-11-28T00:00:00.000000000"
-    // truncate nanosecond precision for ISO 8601 string
-    result = timestamp.toString().substr(0, 23) + std::to_string(timezone);
-    result.resize(23);
+    const auto milliseconds = *timestampWithTimezone.template at<0>();
+    Timestamp timestamp = Timestamp::fromMillis(milliseconds);
+    auto tsStr = timestamp.toString().substr(0, 23);
+
+    // Get the given timezone name
+    auto timezone = util::getTimeZoneName(*timestampWithTimezone.template at<1>());
+
+    if (isalpha(timezone[0]))
+    {
+      // Get offset in seconds with GMT and convert to hour & minue
+      auto offset = this->getGMTOffsetSec(timestampWithTimezone);
+
+      auto tzHour = offset / 3600;
+      auto tzMin = (offset / 60) % 60;
+      std::string tzHourStr;
+
+      if (tzHour < 10)
+      {
+        tzHourStr = "0" + std::to_string(abs(tzHour));
+      }
+
+      if (tzHour < 0)
+      {
+        tzHourStr = "-" + tzHourStr;
+      }
+      else
+      {
+        tzHourStr = "+" + tzHourStr;
+      }
+      
+      result = tsStr + tzHourStr + ":" + std::to_string(tzMin) + "0"; 
+    }
+    else
+    {
+      result = tsStr + timezone; 
+    }
   }
 };
 
