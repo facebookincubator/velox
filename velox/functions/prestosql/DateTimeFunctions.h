@@ -1151,12 +1151,15 @@ struct FromISO8601DateFunction {
   FOLLY_ALWAYS_INLINE void call(
       out_type<Date>& result,
       const arg_type<Varchar>& isoDateStr) {
-    bool nullOutput;
+    int len = isoDateStr.size();
+    std::string isoDateExtracted = std::string(isoDateStr.data(), len);
 
-    std::string isoDateExtracted =
-        std::string(isoDateStr.data(), isoDateStr.size()).substr(0, 10);
+    if (len > 10 ) {
+      isoDateExtracted = isoDateExtracted.substr(0, 10);
+      len = 10;
+    }
 
-    result = DATE()->toDays(isoDateExtracted.c_str(), 10);
+    result = DATE()->toDays(isoDateExtracted.c_str(), len);
   }
 };
 

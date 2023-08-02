@@ -3436,4 +3436,13 @@ TEST_F(DateTimeFunctionsTest, fromISO8601FunctionDate) {
   EXPECT_EQ(-18297, fromISODate("1919-11-28T23:59:59.999"));
   EXPECT_EQ(-18297, fromISODate("1919-11-28T23:59:59.999+08:00"));
   EXPECT_EQ(-2, fromISODate("1969-12-30T19:00:00.000-05:00"));
+
+  // "Unable to parse date value: \"{}\", expected format is (YYYY-MM-DD)"
+  VELOX_ASSERT_THROW(
+      fromISODate("abcdefghijklmn"),
+      "Unable to parse date value: \"abcdefghij\", expected format is (YYYY-MM-DD)");
+
+  VELOX_ASSERT_THROW(
+      fromISODate("1234567"),
+      "Unable to parse date value: \"1234567\", expected format is (YYYY-MM-DD)");
 }
