@@ -69,8 +69,6 @@ void generateRandomData(char* data, size_t size, bool letter) {
   // VectorFuzzer fuzzer(options, NULL, size);
   // fuzzer.fuzzArray(data, size);
 
-
-
   for (size_t i = 0; i < size; ++i) {
     if (letter) {
       bool capitalized = folly::Random::rand32() % 2 == 0;
@@ -131,7 +129,7 @@ BENCHMARK(compressZstd) {
   generateRandomData(testData, dataSize, true);
 
   suspender.dismiss();
-  
+
   benchmarkCompress(
       CompressionKind_ZSTD,
       memSink,
