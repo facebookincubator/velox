@@ -41,6 +41,7 @@ const uint32_t kNumRowsPerBatch = 60000;
 const uint32_t kNumBatches = 50;
 const uint32_t kNumRowsPerRowGroup = 10000;
 const double kFilterErrorMargin = 0.2;
+const double scale_factor = 10;
 
 class ParquetWriterBenchmark {
  public:
@@ -68,78 +69,61 @@ class ParquetWriterBenchmark {
 
   void writeToFile() {
     RowVectorPtr rowVector1;
-    std::cout << "table name: " << FLAGS_table_name;
+    LOG(INFO) << "table name: " << FLAGS_table_name;
+
+    folly::BenchmarkSuspender suspender;
+
     if (FLAGS_table_name.compare("part") == 0) {
-      rowVector1 =
-          facebook::velox::tpch::genTpchPart(leafPool_.get(), 200000, 0, 10);
-      for (int i = 0; i < 10; i++) {
-        writer_->write(rowVector1);
-      }
-    } else if (FLAGS_table_name.compare("region") == 0) {
-      rowVector1 =
-          facebook::velox::tpch::genTpchRegion(leafPool_.get(), 5, 0, 10);
-      writer_->write(rowVector1);
+      rowVector1 = facebook::velox::tpch::genTpchPart(
+          leafPool_.get(), 200000, 0, scale_factor);
     } else if (FLAGS_table_name.compare("partsupp") == 0) {
       rowVector1 = facebook::velox::tpch::genTpchPartSupp(
           leafPool_.get(), 800000, 0, 10);
-      for (int i = 0; i < 10; i++) {
-        std::cout << "i: " << i << ", num row: " << rowVector1->size()
-                  << std::endl;
-        writer_->write(rowVector1);
-      }
+    } else if (FLAGS_table_name.compare("orders") == 0) {
+      rowVector1 = facebook::velox::tpch::genTpchOrders(
+          leafPool_.get(), 150000, 0, scale_factor);
+    } else if (FLAGS_table_name.compare("customer") == 0) {
+      rowVector1 = facebook::velox::tpch::genTpchCustomer(
+          leafPool_.get(), 150000, 0, scale_factor);
+    } else if (FLAGS_table_name.compare("lineitem") == 0) {
+      rowVector1 = facebook::velox::tpch::genTpchLineItem(
+          leafPool_.get(), 600000, 0, scale_factor);
+    } else if (FLAGS_table_name.compare("region") == 0) {
+      rowVector1 = facebook::velox::tpch::genTpchRegion(
+          leafPool_.get(), 5, 0, scale_factor);
     } else if (FLAGS_table_name.compare("supplier") == 0) {
       rowVector1 = facebook::velox::tpch::genTpchSupplier(
           leafPool_.get(), 100000, 0, 10);
-      writer_->write(rowVector1);
     } else if (FLAGS_table_name.compare("nation") == 0) {
-      rowVector1 =
-          facebook::velox::tpch::genTpchNation(leafPool_.get(), 25, 0, 10);
-      writer_->write(rowVector1);
-    } else if (FLAGS_table_name.compare("orders") == 0) {
-      rowVector1 =
-          facebook::velox::tpch::genTpchOrders(leafPool_.get(), 150000, 0, 10);
-      for (int i = 0; i < 20; i++) {
-        std::cout << "i: " << i << ", num row: " << rowVector1->size()
-                  << std::endl;
-        writer_->write(rowVector1);
-      }
-    } else if (FLAGS_table_name.compare("customer") == 0) {
-      rowVector1 =
-          facebook::velox::tpch::genTpchCustomer(leafPool_.get(), 150000);
-      for (int i = 0; i < 10; i++) {
-        std::cout << "i: " << i << ", num row: " << rowVector1->size()
-                  << std::endl;
-        writer_->write(rowVector1);
-      }
-    } else if (FLAGS_table_name.compare("lineitem") == 0) {
-      rowVector1 = facebook::velox::tpch::genTpchLineItem(
-          leafPool_.get(), 600000, 0, 100);
-      for (int i = 0; i < 10; i++) {
-        std::cout << "i: " << i << ", num row: " << rowVector1->size()
-                  << std::endl;
-        writer_->write(rowVector1);
-      }
-    } else {
-      // for (auto& batch : batches) {
-      //   writer_->write(batch);
-      // }
+      rowVector1 = facebook::velox::tpch::genTpchNation(
+          leafPool_.get(), 25, 0, scale_factor);
     }
-    std::cout << "success write " << FLAGS_table_name << std::endl;
+
+    suspender.dismiss();
+
+    if (FLAGS_table_name.compare("part") == 0 ||
+        FLAGS_table_name.compare("partsupp") == 0 ||
+        FLAGS_table_name.compare("orders") == 0 ||
+        FLAGS_table_name.compare("customer") == 0 ||
+        FLAGS_table_name.compare("lineitem") == 0) {
+      for (int i = 0; i < 10; i++) {
+        LOG(INFO) << "i: " << i << ", num row: " << rowVector1->size()
+                  << std::endl;
+        writer_->write(rowVector1);
+      }
+    } else if (
+        FLAGS_table_name.compare("region") == 0 ||
+        FLAGS_table_name.compare("supplier") == 0 ||
+        FLAGS_table_name.compare("nation") == 0) {
+      rowVector1 = facebook::velox::tpch::genTpchRegion(
+          leafPool_.get(), 5, 0, scale_factor);
+      writer_->write(rowVector1);
+    }
+
+    suspender.rehire();
+
+    LOG(INFO) << "success write " << FLAGS_table_name << std::endl;
     writer_->flush();
-  }
-
-  void writeTpchTable() {
-    auto startTime = system_clock::now();
-
-    writeToFile();
-
-    auto curTime = system_clock::now();
-
-    size_t msElapsed = std::chrono::duration_cast<std::chrono::microseconds>(
-                           curTime - startTime)
-                           .count();
-
-    printf("parquetWriter_%d    time:%dus\n", 1024, (int)(msElapsed));
   }
 
  private:
@@ -153,10 +137,10 @@ class ParquetWriterBenchmark {
 
 void run() {
   ParquetWriterBenchmark benchmark(true);
-  benchmark.writeTpchTable();
+  benchmark.writeToFile();
 }
 
-BENCHMARK(writeZstdCompress) {
+BENCHMARK(parquetZSTDWrite) {
   run();
 }
 

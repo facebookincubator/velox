@@ -435,6 +435,7 @@ resolve_dependency(simdjson 3.1.5)
 if(${VELOX_ENABLE_QAT_ZSTD_OT})
   set_source(qatzstd)
   resolve_dependency(qatzstd)
+  # add_definitions(-DVELOX_ENABLE_QAT_ZSTD_OT)
 endif()
 
 # Locate or build folly.
