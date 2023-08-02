@@ -17,6 +17,7 @@
 #include "velox/exec/tests/utils/OperatorTestBase.h"
 #include "velox/common/caching/AsyncDataCache.h"
 #include "velox/common/file/FileSystems.h"
+#include "velox/common/memory/SharedArbitrator.h"
 #include "velox/common/testutil/TestValue.h"
 #include "velox/dwio/common/DataSink.h"
 #include "velox/exec/Exchange.h"
@@ -47,6 +48,7 @@ OperatorTestBase::~OperatorTestBase() {
 }
 
 void OperatorTestBase::SetUpTestCase() {
+  memory::SharedArbitrator::registerFactory();
   functions::prestosql::registerAllScalarFunctions();
   aggregate::prestosql::registerAllAggregateFunctions();
   TestValue::enable();

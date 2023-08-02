@@ -370,13 +370,14 @@ class MockSharedArbitrationTest : public testing::Test {
     }
     MemoryManagerOptions options;
     options.capacity = (memoryCapacity != 0) ? memoryCapacity : kMemoryCapacity;
-    options.arbitratorKind = MemoryArbitrator::Kind::kShared;
+    std::string arbitratorKind = "SHARED";
+    options.arbitratorKind = arbitratorKind;
     options.capacity = options.capacity;
     options.memoryPoolInitCapacity = memoryPoolInitCapacity;
     options.memoryPoolTransferCapacity = memoryPoolTransferCapacity;
     options.checkUsageLeak = true;
     manager_ = std::make_unique<MemoryManager>(options);
-    ASSERT_EQ(manager_->arbitrator()->kind(), MemoryArbitrator::Kind::kShared);
+    ASSERT_EQ(manager_->arbitrator()->kind(), arbitratorKind);
     arbitrator_ = static_cast<SharedArbitrator*>(manager_->arbitrator());
   }
 

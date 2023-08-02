@@ -40,30 +40,17 @@ class MemoryPool;
 /// (see Kind definition below).
 class MemoryArbitrator {
  public:
-  /// Defines the kind of memory arbitrators.
-  enum class Kind {
-    /// Used to enforce the fixed query memory isolation across running queries.
-    /// When a memory pool exceeds the fixed capacity limit, the query just
-    /// fails with memory capacity exceeded error without arbitration. This is
-    /// used to match the current memory isolation behavior adopted by
-    /// Prestissimo.
-    ///
-    /// TODO: deprecate this legacy policy with kShared policy for Prestissimo
-    /// later.
-    kNoOp,
-    /// Used to achieve dynamic memory sharing among running queries. When a
-    /// memory pool exceeds its current memory capacity, the arbitrator tries to
-    /// grow its capacity by reclaim the overused memory from the query with
-    /// more memory usage. We can configure memory arbitrator the way to reclaim
-    /// memory. For Prestissimo, we can configure it to reclaim memory by
-    /// aborting a query. For Prestissimo-on-Spark, we can configure it to
-    /// reclaim from a running query through techniques such as disk-spilling,
-    /// partial aggregation or persistent shuffle data flushes.
-    kShared,
+#ifdef VELOX_ENABLE_BACKWARD_COMPATIBILITY
+  static struct Kind {
+    static std::string kShared;
   };
+#endif
 
   struct Config {
-    Kind kind{Kind::kNoOp};
+    /// The string kind of this memory arbitrator. Note that the arbitrator
+    /// will only be created if its kind is set explicitly. Otherwise
+    /// MemoryArbitrator::create returns a nullptr.
+    std::string kind;
 
     /// The total memory capacity in bytes of all the running queries.
     ///
@@ -86,12 +73,30 @@ class MemoryArbitrator {
     /// happens to trigger the failed memory arbitration.
     bool retryArbitrationFailure{true};
   };
+
+  using Factory = std::function<std::unique_ptr<MemoryArbitrator>(
+      const MemoryArbitrator::Config& config)>;
+
+  /// Register factory for a specific kind of memory arbitrator.
+  /// MemoryArbitrator::Create looks up the registry to find the factory to
+  /// create arbitrator instance based on the kind specified in arbitrator
+  /// config.
+  static void registerFactory(const std::string& kind, Factory factory);
+
+  /// Invoked by the memory manager to create an instance of memory arbitrator
+  /// based on the kind specified in 'config'. The arbitrator kind must be
+  /// registered through MemoryArbitrator::registerFactory, otherwise the
+  /// function throws a velox user exception error.
+  ///
+  /// NOTE: if arbitrator kind is not set in 'config', then the function returns
+  /// nullptr.
   static std::unique_ptr<MemoryArbitrator> create(const Config& config);
 
-  Kind kind() const {
-    return kind_;
+  virtual std::string kind() = 0;
+
+  uint64_t capacity() const {
+    return capacity_;
   }
-  static std::string kindString(Kind kind);
 
   virtual ~MemoryArbitrator() = default;
 
@@ -158,18 +163,18 @@ class MemoryArbitrator {
 
  protected:
   explicit MemoryArbitrator(const Config& config)
-      : kind_(config.kind),
-        capacity_(config.capacity),
+      : capacity_(config.capacity),
         memoryPoolInitCapacity_(config.memoryPoolInitCapacity),
         memoryPoolTransferCapacity_(config.memoryPoolTransferCapacity) {}
 
-  const Kind kind_;
   const uint64_t capacity_;
   const uint64_t memoryPoolInitCapacity_;
   const uint64_t memoryPoolTransferCapacity_;
 };
 
-std::ostream& operator<<(std::ostream& out, const MemoryArbitrator::Kind& kind);
+#ifdef VELOX_ENABLE_BACKWARD_COMPATIBILITY
+std::string MemoryArbitrator::Kind::kShared{"SHARED"};
+#endif
 
 /// The memory reclaimer interface is used by memory pool to participate in
 /// the memory arbitration execution (enter/leave arbitration process) as well

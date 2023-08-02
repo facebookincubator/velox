@@ -24,7 +24,6 @@
 #include "folly/futures/Barrier.h"
 #include "velox/common/base/tests/GTestUtils.h"
 #include "velox/common/memory/Memory.h"
-#include "velox/common/memory/MemoryArbitrator.h"
 #include "velox/common/memory/SharedArbitrator.h"
 #include "velox/common/testutil/TestValue.h"
 #include "velox/exec/HashBuild.h"
@@ -250,6 +249,7 @@ class FakeMemoryOperatorFactory : public Operator::PlanNodeTranslator {
 class SharedArbitrationTest : public exec::test::HiveConnectorTestBase {
  protected:
   static void SetUpTestCase() {
+    SharedArbitrator::registerFactory();
     exec::test::HiveConnectorTestBase::SetUpTestCase();
     auto fakeOperatorFactory = std::make_unique<FakeMemoryOperatorFactory>();
     fakeOperatorFactory_ = fakeOperatorFactory.get();
@@ -287,14 +287,13 @@ class SharedArbitrationTest : public exec::test::HiveConnectorTestBase {
       uint64_t memoryPoolTransferCapacity = kMemoryPoolTransferCapacity) {
     MemoryManagerOptions options;
     options.capacity = (memoryCapacity != 0) ? memoryCapacity : kMemoryCapacity;
-    options.arbitratorKind = MemoryArbitrator::Kind::kShared;
+    options.arbitratorKind = "SHARED";
     options.capacity = options.capacity;
     options.memoryPoolInitCapacity = memoryPoolInitCapacity;
     options.memoryPoolTransferCapacity = memoryPoolTransferCapacity;
     options.checkUsageLeak = true;
     memoryManager_ = std::make_unique<MemoryManager>(options);
-    ASSERT_EQ(
-        memoryManager_->arbitrator()->kind(), MemoryArbitrator::Kind::kShared);
+    ASSERT_EQ(memoryManager_->arbitrator()->kind(), "SHARED");
     arbitrator_ = static_cast<SharedArbitrator*>(memoryManager_->arbitrator());
   }
 
