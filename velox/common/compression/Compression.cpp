@@ -81,7 +81,7 @@ std::string compressionKindToString(CompressionKind kind) {
 }
 
 CompressionKind stringToCompressionKind(const std::string& kind) {
-  const std::unordered_map<std::string, CompressionKind>
+  static const std::unordered_map<std::string, CompressionKind>
       stringToCompressionKindMap = {
           {"none", CompressionKind_NONE},
           {"zlib", CompressionKind_ZLIB},

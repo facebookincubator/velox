@@ -196,7 +196,8 @@ class SpillFileList {
   /// must produce a view where the rows are sorted if sorting is desired.
   /// Consecutive calls must have sorted data so that the first row of the
   /// next call is not less than the last row of the previous call.
-  void write(
+  /// Returns the size to write.
+  uint64_t write(
       const RowVectorPtr& rows,
       const folly::Range<IndexRange*>& indices);
 
@@ -223,8 +224,9 @@ class SpillFileList {
   // Returns the current file to write to and creates one if needed.
   WriteFile& currentOutput();
 
-  // Writes data from 'batch_' to the current output file.
-  void flush();
+  /// Writes data from 'batch_' to the current output file.
+  /// Returns the flushed size.
+  uint64_t flush();
 
   // Invoked by 'files()' to record stats when finish writing all the spill
   // files.
@@ -571,7 +573,6 @@ class SpillState {
         sortCompareFlags_(sortCompareFlags),
         targetFileSize_(targetFileSize),
         compressionKind_(compressionKind),
-        codec_(compressionKindToCodec(compressionKind)),
         pool_(pool),
         files_(maxPartitions_) {}
 
@@ -597,12 +598,6 @@ class SpillState {
     return compressionKind_;
   }
 
-  uint64_t compressedSize(int64_t totalBytes) const {
-    return compressionKind_ == common::CompressionKind_NONE
-        ? totalBytes
-        : codec_->maxCompressedLength(totalBytes);
-  }
-
   memory::MemoryPool& pool() const {
     return pool_;
   }
@@ -620,7 +615,8 @@ class SpillState {
   // sorted for a sorted spill and must hash to 'partition'. It is
   // safe to call this on multiple threads if all threads specify a
   // different partition.
-  void appendToPartition(int32_t partition, const RowVectorPtr& rows);
+  // Returns the size to sppend to partition.
+  uint64_t appendToPartition(int32_t partition, const RowVectorPtr& rows);
 
   // Finishes a sorted run for 'partition'. If write is called for 'partition'
   // again, the data does not have to be sorted relative to the data
@@ -667,7 +663,6 @@ class SpillState {
   const std::vector<CompareFlags> sortCompareFlags_;
   const uint64_t targetFileSize_;
   const common::CompressionKind compressionKind_;
-  const std::unique_ptr<folly::io::Codec> codec_;
 
   memory::MemoryPool& pool_;
 

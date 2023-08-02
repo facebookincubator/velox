@@ -91,7 +91,8 @@ WriteFile& SpillFileList::currentOutput() {
   return files_.back()->output();
 }
 
-void SpillFileList::flush() {
+uint64_t SpillFileList::flush() {
+  uint64_t totalBytes = 0;
   if (batch_) {
     IOBufOutputStream out(
         pool_, nullptr, std::max<int64_t>(64 * 1024, batch_->size()));
@@ -102,11 +103,13 @@ void SpillFileList::flush() {
     for (auto& range : *iobuf) {
       file.append(std::string_view(
           reinterpret_cast<const char*>(range.data()), range.size()));
+      totalBytes += range.size();
     }
   }
+  return totalBytes;
 }
 
-void SpillFileList::write(
+uint64_t SpillFileList::write(
     const RowVectorPtr& rows,
     const folly::Range<IndexRange*>& indices) {
   if (!batch_) {
@@ -119,7 +122,7 @@ void SpillFileList::write(
   }
   batch_->append(rows, indices);
 
-  flush();
+  return flush();
 }
 
 void SpillFileList::finishFile() {
@@ -163,7 +166,7 @@ void SpillState::setPartitionSpilled(int32_t partition) {
   spilledPartitionSet_.insert(partition);
 }
 
-void SpillState::appendToPartition(
+uint64_t SpillState::appendToPartition(
     int32_t partition,
     const RowVectorPtr& rows) {
   VELOX_CHECK(isPartitionSpilled(partition));
@@ -180,7 +183,7 @@ void SpillState::appendToPartition(
   }
 
   IndexRange range{0, rows->size()};
-  files_[partition]->write(rows, folly::Range<IndexRange*>(&range, 1));
+  return files_[partition]->write(rows, folly::Range<IndexRange*>(&range, 1));
 }
 
 std::unique_ptr<TreeOfLosers<SpillMergeStream>> SpillState::startMerge(
