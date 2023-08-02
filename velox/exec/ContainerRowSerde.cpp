@@ -16,16 +16,10 @@
 
 #include "velox/exec/ContainerRowSerde.h"
 #include "velox/common/base/Exceptions.h"
-#include "velox/common/memory/ByteStream.h"
 #include "velox/vector/ComplexVector.h"
 #include "velox/vector/FlatVector.h"
 
 namespace facebook::velox::exec {
-
-const ContainerRowSerde& ContainerRowSerde::instance() {
-  static auto instance = std::make_unique<ContainerRowSerde>();
-  return *instance;
-}
 
 namespace {
 
@@ -127,7 +121,7 @@ void writeNulls(
 }
 
 void serializeArray(
-    BaseVector& elements,
+    const BaseVector& elements,
     vector_size_t offset,
     vector_size_t size,
     ByteStream& out) {
@@ -141,7 +135,7 @@ void serializeArray(
 }
 
 void serializeArray(
-    BaseVector& elements,
+    const BaseVector& elements,
     folly::Range<const vector_size_t*> indices,
     ByteStream& out) {
   out.appendOne<int32_t>(indices.size());
@@ -196,7 +190,7 @@ template <TypeKind Kind>
 void deserializeOne(ByteStream& in, vector_size_t index, BaseVector& result) {
   using T = typename TypeTraits<Kind>::NativeType;
   // Check that the vector is writable. This is faster than dynamic_cast.
-  VELOX_CHECK(result.encoding() == VectorEncoding::Simple::FLAT);
+  VELOX_CHECK_EQ(result.encoding(), VectorEncoding::Simple::FLAT);
   auto values = result.asUnchecked<FlatVector<T>>();
   values->set(index, in.read<T>());
 }
@@ -205,7 +199,7 @@ void deserializeString(
     ByteStream& in,
     vector_size_t index,
     BaseVector& result) {
-  VELOX_CHECK(result.encoding() == VectorEncoding::Simple::FLAT);
+  VELOX_CHECK_EQ(result.encoding(), VectorEncoding::Simple::FLAT);
   auto values = result.asUnchecked<FlatVector<StringView>>();
   auto size = in.read<int32_t>();
   auto buffer = values->getBufferWithSpace(size);
@@ -249,10 +243,10 @@ void deserializeOne<TypeKind::ROW>(
     vector_size_t index,
     BaseVector& result) {
   const auto& type = result.type()->as<TypeKind::ROW>();
-  VELOX_CHECK(result.encoding() == VectorEncoding::Simple::ROW);
+  VELOX_CHECK_EQ(result.encoding(), VectorEncoding::Simple::ROW);
   auto row = result.asUnchecked<RowVector>();
   auto childrenSize = type.size();
-  VELOX_CHECK(childrenSize == row->childrenSize());
+  VELOX_CHECK_EQ(childrenSize, row->childrenSize());
   auto nulls = readNulls(in, childrenSize);
   for (auto i = 0; i < childrenSize; ++i) {
     auto child = row->childAt(i);
@@ -265,6 +259,7 @@ void deserializeOne<TypeKind::ROW>(
       deserializeSwitch(in, index, *child);
     }
   }
+  result.setNull(index, false);
 }
 
 // Reads the size, null flags and deserializes from 'in', appending to
@@ -291,7 +286,7 @@ void deserializeOne<TypeKind::ARRAY>(
     ByteStream& in,
     vector_size_t index,
     BaseVector& result) {
-  VELOX_CHECK(result.encoding() == VectorEncoding::Simple::ARRAY);
+  VELOX_CHECK_EQ(result.encoding(), VectorEncoding::Simple::ARRAY);
   auto array = result.asUnchecked<ArrayVector>();
   if (array->size() <= index) {
     array->resize(index + 1);
@@ -299,6 +294,7 @@ void deserializeOne<TypeKind::ARRAY>(
   vector_size_t offset;
   auto size = deserializeArray(in, *array->elements(), offset);
   array->setOffsetAndSize(index, offset, size);
+  result.setNull(index, false);
 }
 
 template <>
@@ -306,7 +302,7 @@ void deserializeOne<TypeKind::MAP>(
     ByteStream& in,
     vector_size_t index,
     BaseVector& result) {
-  VELOX_CHECK(result.encoding() == VectorEncoding::Simple::MAP);
+  VELOX_CHECK_EQ(result.encoding(), VectorEncoding::Simple::MAP);
   auto map = result.asUnchecked<MapVector>();
   if (map->size() <= index) {
     map->resize(index + 1);
@@ -315,9 +311,10 @@ void deserializeOne<TypeKind::MAP>(
   auto keySize = deserializeArray(in, *map->mapKeys(), keyOffset);
   vector_size_t valueOffset;
   auto valueSize = deserializeArray(in, *map->mapValues(), valueOffset);
-  VELOX_CHECK(keySize == valueSize);
-  VELOX_CHECK(keyOffset == valueOffset);
+  VELOX_CHECK_EQ(keySize, valueSize);
+  VELOX_CHECK_EQ(keyOffset, valueOffset);
   map->setOffsetAndSize(index, keyOffset, keySize);
+  result.setNull(index, false);
 }
 
 void deserializeSwitch(
@@ -409,10 +406,10 @@ int compare<TypeKind::ROW>(
 
   auto row = right.wrappedVector()->asUnchecked<RowVector>();
   auto wrappedIndex = right.wrappedIndex(index);
-  VELOX_CHECK(row->encoding() == VectorEncoding::Simple::ROW);
+  VELOX_CHECK_EQ(row->encoding(), VectorEncoding::Simple::ROW);
   const auto& type = row->type()->as<TypeKind::ROW>();
   auto childrenSize = type.size();
-  VELOX_CHECK(childrenSize == row->childrenSize());
+  VELOX_CHECK_EQ(childrenSize, row->childrenSize());
   auto nulls = readNulls(left, childrenSize);
   for (auto i = 0; i < childrenSize; ++i) {
     auto child = row->childAt(i);
@@ -514,7 +511,7 @@ int compare<TypeKind::ARRAY>(
   VELOX_DCHECK(!flags.stopAtNull, "not supported compare flag");
 
   auto array = right.wrappedVector()->asUnchecked<ArrayVector>();
-  VELOX_CHECK(array->encoding() == VectorEncoding::Simple::ARRAY);
+  VELOX_CHECK_EQ(array->encoding(), VectorEncoding::Simple::ARRAY);
   auto wrappedIndex = right.wrappedIndex(index);
   return compareArrays(
       left,
@@ -533,7 +530,7 @@ int compare<TypeKind::MAP>(
   VELOX_DCHECK(!flags.stopAtNull, "not supported compare flag");
 
   auto map = right.wrappedVector()->asUnchecked<MapVector>();
-  VELOX_CHECK(map->encoding() == VectorEncoding::Simple::MAP);
+  VELOX_CHECK_EQ(map->encoding(), VectorEncoding::Simple::MAP);
   auto wrappedIndex = right.wrappedIndex(index);
   auto size = map->sizeAt(wrappedIndex);
   std::vector<vector_size_t> indices(size);
@@ -804,41 +801,48 @@ uint64_t hashSwitch(ByteStream& in, const Type* type) {
 
 } // namespace
 
+// static
 void ContainerRowSerde::serialize(
     const BaseVector& source,
     vector_size_t index,
-    ByteStream& out) const {
+    ByteStream& out) {
+  VELOX_DCHECK(
+      !source.isNullAt(index), "Null top-level values are not supported");
   serializeSwitch(source, index, out);
 }
 
+// static
 void ContainerRowSerde::deserialize(
     ByteStream& in,
     vector_size_t index,
-    BaseVector* result) const {
+    BaseVector* result) {
   deserializeSwitch(in, index, *result);
 }
 
+// static
 int32_t ContainerRowSerde::compare(
     ByteStream& left,
     const DecodedVector& right,
     vector_size_t index,
-    CompareFlags flags) const {
+    CompareFlags flags) {
   VELOX_DCHECK(!flags.stopAtNull, "not supported compare flag");
 
   return compareSwitch(left, *right.base(), right.index(index), flags);
 }
 
+// static
 int32_t ContainerRowSerde::compare(
     ByteStream& left,
     ByteStream& right,
     const Type* type,
-    CompareFlags flags) const {
+    CompareFlags flags) {
   VELOX_DCHECK(!flags.stopAtNull, "not supported compare flag");
 
   return compareSwitch(left, right, type, flags);
 }
 
-uint64_t ContainerRowSerde::hash(ByteStream& in, const Type* type) const {
+// static
+uint64_t ContainerRowSerde::hash(ByteStream& in, const Type* type) {
   return hashSwitch(in, type);
 }
 

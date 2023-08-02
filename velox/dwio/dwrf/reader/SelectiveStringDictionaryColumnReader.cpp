@@ -26,21 +26,20 @@ SelectiveStringDictionaryColumnReader::SelectiveStringDictionaryColumnReader(
     const std::shared_ptr<const TypeWithId>& nodeType,
     DwrfParams& params,
     common::ScanSpec& scanSpec)
-    : SelectiveColumnReader(nodeType, params, scanSpec, nodeType->type),
+    : SelectiveColumnReader(nodeType->type, params, scanSpec, nodeType),
       lastStrideIndex_(-1),
       provider_(params.stripeStreams().getStrideIndexProvider()) {
   auto& stripe = params.stripeStreams();
-  EncodingKey encodingKey{nodeType_->id, params.flatMapContext().sequence};
-  RleVersion rleVersion =
-      convertRleVersion(stripe.getEncoding(encodingKey).kind());
+  EncodingKey encodingKey{fileType_->id, params.flatMapContext().sequence};
+  version_ = convertRleVersion(stripe.getEncoding(encodingKey).kind());
   scanState_.dictionary.numValues =
       stripe.getEncoding(encodingKey).dictionarysize();
 
   const auto dataId = encodingKey.forKind(proto::Stream_Kind_DATA);
   bool dictVInts = stripe.getUseVInts(dataId);
   dictIndex_ = createRleDecoder</*isSigned*/ false>(
-      stripe.getStream(dataId, true),
-      rleVersion,
+      stripe.getStream(dataId, params.streamLabels().label(), true),
+      version_,
       memoryPool_,
       dictVInts,
       dwio::common::INT_BYTE_SIZE);
@@ -48,18 +47,22 @@ SelectiveStringDictionaryColumnReader::SelectiveStringDictionaryColumnReader(
   const auto lenId = encodingKey.forKind(proto::Stream_Kind_LENGTH);
   bool lenVInts = stripe.getUseVInts(lenId);
   lengthDecoder_ = createRleDecoder</*isSigned*/ false>(
-      stripe.getStream(lenId, false),
-      rleVersion,
+      stripe.getStream(lenId, params.streamLabels().label(), false),
+      version_,
       memoryPool_,
       lenVInts,
       dwio::common::INT_BYTE_SIZE);
 
   blobStream_ = stripe.getStream(
-      encodingKey.forKind(proto::Stream_Kind_DICTIONARY_DATA), false);
+      encodingKey.forKind(proto::Stream_Kind_DICTIONARY_DATA),
+      params.streamLabels().label(),
+      false);
 
   // handle in dictionary stream
   std::unique_ptr<SeekableInputStream> inDictStream = stripe.getStream(
-      encodingKey.forKind(proto::Stream_Kind_IN_DICTIONARY), false);
+      encodingKey.forKind(proto::Stream_Kind_IN_DICTIONARY),
+      params.streamLabels().label(),
+      false);
   if (inDictStream) {
     formatData_->as<DwrfData>().ensureRowGroupIndex();
 
@@ -68,15 +71,17 @@ SelectiveStringDictionaryColumnReader::SelectiveStringDictionaryColumnReader(
 
     // stride dictionary only exists if in dictionary exists
     strideDictStream_ = stripe.getStream(
-        encodingKey.forKind(proto::Stream_Kind_STRIDE_DICTIONARY), true);
+        encodingKey.forKind(proto::Stream_Kind_STRIDE_DICTIONARY),
+        params.streamLabels().label(),
+        true);
     DWIO_ENSURE_NOT_NULL(strideDictStream_, "Stride dictionary is missing");
 
     const auto strideDictLenId =
         encodingKey.forKind(proto::Stream_Kind_STRIDE_DICTIONARY_LENGTH);
     bool strideLenVInt = stripe.getUseVInts(strideDictLenId);
     strideDictLengthDecoder_ = createRleDecoder</*isSigned*/ false>(
-        stripe.getStream(strideDictLenId, true),
-        rleVersion,
+        stripe.getStream(strideDictLenId, params.streamLabels().label(), true),
+        version_,
         memoryPool_,
         strideLenVInt,
         dwio::common::INT_BYTE_SIZE);
@@ -148,13 +153,15 @@ void SelectiveStringDictionaryColumnReader::loadStrideDictionary() {
   lastStrideIndex_ = nextStride;
   dictionaryValues_ = nullptr;
 
-  scanState_.filterCache.resize(
-      scanState_.dictionary.numValues + scanState_.dictionary2.numValues);
+  if (scanSpec_->hasFilter()) {
+    scanState_.filterCache.resize(
+        scanState_.dictionary.numValues + scanState_.dictionary2.numValues);
+    simd::memset(
+        scanState_.filterCache.data() + scanState_.dictionary.numValues,
+        FilterResult::kUnknown,
+        scanState_.dictionary2.numValues);
+  }
   scanState_.updateRawState();
-  simd::memset(
-      scanState_.filterCache.data() + scanState_.dictionary.numValues,
-      FilterResult::kUnknown,
-      scanState_.dictionary2.numValues);
 }
 
 void SelectiveStringDictionaryColumnReader::makeDictionaryBaseVector() {
@@ -174,7 +181,7 @@ void SelectiveStringDictionaryColumnReader::makeDictionaryBaseVector() {
 
     dictionaryValues_ = std::make_shared<FlatVector<StringView>>(
         &memoryPool_,
-        type_,
+        fileType_->type,
         BufferPtr(nullptr), // TODO nulls
         scanState_.dictionary.numValues +
             scanState_.dictionary2.numValues, // length
@@ -184,7 +191,7 @@ void SelectiveStringDictionaryColumnReader::makeDictionaryBaseVector() {
   } else {
     dictionaryValues_ = std::make_shared<FlatVector<StringView>>(
         &memoryPool_,
-        type_,
+        fileType_->type,
         BufferPtr(nullptr), // TODO nulls
         scanState_.dictionary.numValues /*length*/,
         scanState_.dictionary.values,
@@ -287,11 +294,13 @@ void SelectiveStringDictionaryColumnReader::ensureInitialized() {
 
   loadDictionary(*blobStream_, *lengthDecoder_, scanState_.dictionary);
 
-  scanState_.filterCache.resize(scanState_.dictionary.numValues);
-  simd::memset(
-      scanState_.filterCache.data(),
-      FilterResult::kUnknown,
-      scanState_.dictionary.numValues);
+  if (scanSpec_->hasFilter()) {
+    scanState_.filterCache.resize(scanState_.dictionary.numValues);
+    simd::memset(
+        scanState_.filterCache.data(),
+        FilterResult::kUnknown,
+        scanState_.dictionary.numValues);
+  }
 
   // handle in dictionary stream
   if (inDictionaryReader_) {

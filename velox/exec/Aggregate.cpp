@@ -18,8 +18,8 @@
 
 #include <unordered_map>
 #include "velox/exec/AggregateCompanionAdapter.h"
+#include "velox/exec/AggregateCompanionSignatures.h"
 #include "velox/exec/AggregateWindow.h"
-#include "velox/expression/FunctionSignature.h"
 #include "velox/expression/SignatureBinder.h"
 
 namespace facebook::velox::exec {
@@ -43,34 +43,59 @@ const AggregateFunctionEntry* FOLLY_NULLABLE
 getAggregateFunctionEntry(const std::string& name) {
   auto sanitizedName = sanitizeName(name);
 
-  auto& functionsMap = aggregateFunctions();
-  auto it = functionsMap.find(sanitizedName);
-  if (it != functionsMap.end()) {
-    return &it->second;
-  }
-  return nullptr;
+  return aggregateFunctions().withRLock(
+      [&](const auto& functionsMap) -> const AggregateFunctionEntry* {
+        auto it = functionsMap.find(sanitizedName);
+        if (it != functionsMap.end()) {
+          return &it->second;
+        }
+        return nullptr;
+      });
 }
 
-bool registerAggregateFunction(
+AggregateRegistrationResult registerAggregateFunction(
     const std::string& name,
     std::vector<std::shared_ptr<AggregateFunctionSignature>> signatures,
     AggregateFunctionFactory factory,
-    bool registerCompanionFunctions) {
+    bool registerCompanionFunctions,
+    bool overwrite) {
   auto sanitizedName = sanitizeName(name);
+  AggregateRegistrationResult registered;
 
-  aggregateFunctions()[sanitizedName] = {signatures, std::move(factory)};
+  if (overwrite) {
+    aggregateFunctions().withWLock([&](auto& aggregationFunctionMap) {
+      aggregationFunctionMap[sanitizedName] = {signatures, std::move(factory)};
+    });
+    registered.mainFunction = true;
+  } else {
+    auto inserted =
+        aggregateFunctions().withWLock([&](auto& aggregationFunctionMap) {
+          auto [_, inserted] = aggregationFunctionMap.insert(
+              {sanitizedName, {signatures, factory}});
+          return inserted;
+        });
+    registered.mainFunction = inserted;
+  }
 
   // Register the aggregate as a window function also.
   registerAggregateWindowFunction(sanitizedName);
 
   // Register companion function if needed.
   if (registerCompanionFunctions) {
-    CompanionFunctionsRegistrar::registerPartialFunction(name, signatures);
-    CompanionFunctionsRegistrar::registerMergeFunction(name, signatures);
-    CompanionFunctionsRegistrar::registerExtractFunction(name, signatures);
-    CompanionFunctionsRegistrar::registerMergeExtractFunction(name, signatures);
+    registered.partialFunction =
+        CompanionFunctionsRegistrar::registerPartialFunction(
+            name, signatures, overwrite);
+    registered.mergeFunction =
+        CompanionFunctionsRegistrar::registerMergeFunction(
+            name, signatures, overwrite);
+    registered.extractFunction =
+        CompanionFunctionsRegistrar::registerExtractFunction(
+            name, signatures, overwrite);
+    registered.mergeExtractFunction =
+        CompanionFunctionsRegistrar::registerMergeExtractFunction(
+            name, signatures, overwrite);
   }
-  return true;
+  return registered;
 }
 
 std::unordered_map<
@@ -81,10 +106,12 @@ getAggregateFunctionSignatures() {
       std::string,
       std::vector<std::shared_ptr<AggregateFunctionSignature>>>
       map;
-  auto aggregateFunctions = exec::aggregateFunctions();
-  for (const auto& aggregateFunction : aggregateFunctions) {
-    map[aggregateFunction.first] = aggregateFunction.second.signatures;
-  }
+  exec::aggregateFunctions().withRLock([&](const auto& aggregateFunctions) {
+    for (const auto& aggregateFunction : aggregateFunctions) {
+      map[aggregateFunction.first] = aggregateFunction.second.signatures;
+    }
+  });
+
   return map;
 }
 
@@ -97,14 +124,117 @@ getAggregateFunctionSignatures(const std::string& name) {
   return std::nullopt;
 }
 
+namespace {
+
+// return a vector of one single CompanionSignatureEntry instance {name,
+// signatues}.
+std::vector<CompanionSignatureEntry> getCompanionSignatures(
+    std::string&& name,
+    std::vector<AggregateFunctionSignaturePtr>&& signatures) {
+  std::vector<CompanionSignatureEntry> entries;
+  entries.push_back(
+      {std::move(name),
+       std::vector<FunctionSignaturePtr>{
+           signatures.begin(), signatures.end()}});
+  return entries;
+}
+
+std::vector<CompanionSignatureEntry> getCompanionSignatures(
+    std::string&& name,
+    std::vector<FunctionSignaturePtr>&& signatures) {
+  std::vector<CompanionSignatureEntry> entries;
+  entries.push_back({std::move(name), std::move(signatures)});
+  return entries;
+}
+
+// Process original signatures grouped by return type and construct new
+// signatures through `getNewSignatures`. For each signature group, construct a
+// companion function name with suffix of the return type via `getNewName`.
+// Finally, add a vector of the companion function names and their signatures to
+// signatureMap at the key `companionType`.
+template <typename T>
+std::vector<CompanionSignatureEntry> getCompanionSignaturesWithSuffix(
+    const std::string& name,
+    const std::vector<AggregateFunctionSignaturePtr>& signatures,
+    const std::function<std::vector<T>(
+        const std::vector<AggregateFunctionSignaturePtr>&)>& getNewSignatures,
+    const std::function<std::string(const std::string&, const TypeSignature&)>&
+        getNewName) {
+  std::vector<CompanionSignatureEntry> entries;
+  auto groupedSignatures =
+      CompanionSignatures::groupSignaturesByReturnType(signatures);
+  for (const auto& [type, signatureGroup] : groupedSignatures) {
+    auto newSignatures = getNewSignatures(signatureGroup);
+    if (newSignatures.empty()) {
+      continue;
+    }
+
+    if constexpr (std::is_same_v<T, FunctionSignaturePtr>) {
+      entries.push_back({getNewName(name, type), std::move(newSignatures)});
+    } else {
+      entries.push_back(
+          {getNewName(name, type),
+           std::vector<FunctionSignaturePtr>{
+               newSignatures.begin(), newSignatures.end()}});
+    }
+  }
+  return entries;
+}
+
+} // namespace
+
+std::optional<CompanionFunctionSignatureMap> getCompanionFunctionSignatures(
+    const std::string& name) {
+  auto* entry = getAggregateFunctionEntry(name);
+  if (!entry) {
+    return std::nullopt;
+  }
+
+  const auto& signatures = entry->signatures;
+  CompanionFunctionSignatureMap companionSignatures;
+
+  companionSignatures.partial = getCompanionSignatures(
+      CompanionSignatures::partialFunctionName(name),
+      CompanionSignatures::partialFunctionSignatures(signatures));
+
+  companionSignatures.merge = getCompanionSignatures(
+      CompanionSignatures::mergeFunctionName(name),
+      CompanionSignatures::mergeFunctionSignatures(signatures));
+
+  if (CompanionSignatures::hasSameIntermediateTypesAcrossSignatures(
+          signatures)) {
+    companionSignatures.extract =
+        getCompanionSignaturesWithSuffix<FunctionSignaturePtr>(
+            name,
+            signatures,
+            CompanionSignatures::extractFunctionSignatures,
+            CompanionSignatures::extractFunctionNameWithSuffix);
+    companionSignatures.mergeExtract =
+        getCompanionSignaturesWithSuffix<AggregateFunctionSignaturePtr>(
+            name,
+            signatures,
+            CompanionSignatures::mergeExtractFunctionSignatures,
+            CompanionSignatures::mergeExtractFunctionNameWithSuffix);
+  } else {
+    companionSignatures.extract = getCompanionSignatures(
+        CompanionSignatures::extractFunctionName(name),
+        CompanionSignatures::extractFunctionSignatures(signatures));
+    companionSignatures.mergeExtract = getCompanionSignatures(
+        CompanionSignatures::mergeExtractFunctionName(name),
+        CompanionSignatures::mergeExtractFunctionSignatures(signatures));
+  }
+  return companionSignatures;
+}
+
 std::unique_ptr<Aggregate> Aggregate::create(
     const std::string& name,
     core::AggregationNode::Step step,
     const std::vector<TypePtr>& argTypes,
-    const TypePtr& resultType) {
+    const TypePtr& resultType,
+    const core::QueryConfig& config) {
   // Lookup the function in the new registry first.
   if (auto func = getAggregateFunctionEntry(name)) {
-    return func->factory(step, argTypes, resultType);
+    return func->factory(step, argTypes, resultType, config);
   }
 
   VELOX_USER_FAIL("Aggregate function not registered: {}", name);
@@ -116,28 +246,25 @@ TypePtr Aggregate::intermediateType(
     const std::vector<TypePtr>& argTypes) {
   auto signatures = getAggregateFunctionSignatures(name);
   if (!signatures.has_value()) {
-    VELOX_FAIL("Aggregate {} not registered", name);
+    VELOX_USER_FAIL("Aggregate function not registered: {}", name);
   }
   for (auto& signature : signatures.value()) {
     SignatureBinder binder(*signature, argTypes);
     if (binder.tryBind()) {
       auto type = binder.tryResolveType(signature->intermediateType());
-      VELOX_CHECK(type, "failed to resolve intermediate type for {}", name);
+      VELOX_USER_CHECK(
+          type,
+          "Cannot resolve intermediate type for aggregate function {}",
+          toString(name, argTypes));
       return type;
     }
   }
-  VELOX_FAIL("Could not infer intermediate type for aggregate {}", name);
-}
 
-int32_t Aggregate::combineAlignmentInternal(int32_t otherAlignment) const {
-  auto thisAlignment = accumulatorAlignmentSize();
-  VELOX_CHECK_EQ(
-      __builtin_popcount(thisAlignment), 1, "Alignment can only be power of 2");
-  VELOX_CHECK_EQ(
-      __builtin_popcount(otherAlignment),
-      1,
-      "Alignment can only be power of 2");
-  return std::max(thisAlignment, otherAlignment);
+  std::stringstream error;
+  error << "Aggregate function signature is not supported: "
+        << toString(name, argTypes)
+        << ". Supported signatures: " << toString(signatures.value()) << ".";
+  VELOX_USER_FAIL(error.str());
 }
 
 void Aggregate::setAllocatorInternal(HashStringAllocator* allocator) {

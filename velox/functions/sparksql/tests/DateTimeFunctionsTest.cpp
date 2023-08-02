@@ -15,6 +15,7 @@
  */
 
 #include <stdint.h>
+#include "velox/common/base/tests/GTestUtils.h"
 #include "velox/functions/sparksql/tests/SparkFunctionBaseTest.h"
 #include "velox/type/tz/TimeZoneMap.h"
 
@@ -24,7 +25,7 @@ namespace {
 class DateTimeFunctionsTest : public SparkFunctionBaseTest {
  protected:
   void setQueryTimeZone(const std::string& timeZone) {
-    queryCtx_->setConfigOverridesUnsafe({
+    queryCtx_->testingOverrideConfigUnsafe({
         {core::QueryConfig::kSessionTimezone, timeZone},
         {core::QueryConfig::kAdjustTimestampToTimezone, "true"},
     });
@@ -47,7 +48,7 @@ TEST_F(DateTimeFunctionsTest, year) {
 
   EXPECT_EQ(std::nullopt, year(std::nullopt));
   EXPECT_EQ(1969, year(Timestamp(0, 0)));
-  EXPECT_EQ(1969, year(Timestamp(-1, 12300000000)));
+  EXPECT_EQ(1969, year(Timestamp(-1, Timestamp::kMaxNanos)));
   EXPECT_EQ(2096, year(Timestamp(4000000000, 0)));
   EXPECT_EQ(2096, year(Timestamp(4000000000, 123000000)));
   EXPECT_EQ(2001, year(Timestamp(998474645, 321000000)));
@@ -55,14 +56,14 @@ TEST_F(DateTimeFunctionsTest, year) {
 }
 
 TEST_F(DateTimeFunctionsTest, yearDate) {
-  const auto year = [&](std::optional<Date> date) {
-    return evaluateOnce<int32_t>("year(c0)", date);
+  const auto year = [&](std::optional<int32_t> date) {
+    return evaluateOnce<int32_t, int32_t>("year(c0)", {date}, {DATE()});
   };
   EXPECT_EQ(std::nullopt, year(std::nullopt));
-  EXPECT_EQ(1970, year(Date(0)));
-  EXPECT_EQ(1969, year(Date(-1)));
-  EXPECT_EQ(2020, year(Date(18262)));
-  EXPECT_EQ(1920, year(Date(-18262)));
+  EXPECT_EQ(1970, year(DATE()->toDays("1970-05-05")));
+  EXPECT_EQ(1969, year(DATE()->toDays("1969-12-31")));
+  EXPECT_EQ(2020, year(DATE()->toDays("2020-01-01")));
+  EXPECT_EQ(1920, year(DATE()->toDays("1920-01-01")));
 }
 
 TEST_F(DateTimeFunctionsTest, unixTimestamp) {
@@ -140,6 +141,61 @@ TEST_F(DateTimeFunctionsTest, toUnixTimestamp) {
 
   // to_unix_timestamp does not provide an overoaded without any parameters.
   EXPECT_THROW(evaluateOnce<int64_t>("to_unix_timestamp()"), VeloxUserError);
+}
+
+TEST_F(DateTimeFunctionsTest, makeDate) {
+  const auto makeDate = [&](std::optional<int32_t> year,
+                            std::optional<int32_t> month,
+                            std::optional<int32_t> day) {
+    return evaluateOnce<int32_t>("make_date(c0, c1, c2)", year, month, day);
+  };
+  EXPECT_EQ(makeDate(1920, 1, 25), DATE()->toDays("1920-01-25"));
+  EXPECT_EQ(makeDate(-10, 1, 30), DATE()->toDays("-0010-01-30"));
+
+  constexpr int32_t kMax = std::numeric_limits<int32_t>::max();
+  auto errorMessage = fmt::format("Date out of range: {}-12-15", kMax);
+  VELOX_ASSERT_THROW(makeDate(kMax, 12, 15), errorMessage);
+
+  constexpr const int32_t kJodaMaxYear{292278994};
+  VELOX_ASSERT_THROW(makeDate(kJodaMaxYear - 10, 12, 15), "Integer overflow");
+
+  VELOX_ASSERT_THROW(makeDate(2021, 13, 1), "Date out of range: 2021-13-1");
+  VELOX_ASSERT_THROW(makeDate(2022, 3, 35), "Date out of range: 2022-3-35");
+
+  VELOX_ASSERT_THROW(makeDate(2023, 4, 31), "Date out of range: 2023-4-31");
+  EXPECT_EQ(makeDate(2023, 3, 31), DATE()->toDays("2023-03-31"));
+
+  VELOX_ASSERT_THROW(makeDate(2023, 2, 29), "Date out of range: 2023-2-29");
+  EXPECT_EQ(makeDate(2023, 3, 29), DATE()->toDays("2023-03-29"));
+}
+
+TEST_F(DateTimeFunctionsTest, lastDay) {
+  const auto lastDayFunc = [&](const std::optional<int32_t> date) {
+    return evaluateOnce<int32_t, int32_t>("last_day(c0)", {date}, {DATE()});
+  };
+
+  const auto lastDay = [&](const std::string& dateStr) {
+    return lastDayFunc(DATE()->toDays(dateStr));
+  };
+
+  const auto parseDateStr = [&](const std::string& dateStr) {
+    return DATE()->toDays(dateStr);
+  };
+
+  EXPECT_EQ(lastDay("2015-02-28"), parseDateStr("2015-02-28"));
+  EXPECT_EQ(lastDay("2015-03-27"), parseDateStr("2015-03-31"));
+  EXPECT_EQ(lastDay("2015-04-26"), parseDateStr("2015-04-30"));
+  EXPECT_EQ(lastDay("2015-05-25"), parseDateStr("2015-05-31"));
+  EXPECT_EQ(lastDay("2015-06-24"), parseDateStr("2015-06-30"));
+  EXPECT_EQ(lastDay("2015-07-23"), parseDateStr("2015-07-31"));
+  EXPECT_EQ(lastDay("2015-08-01"), parseDateStr("2015-08-31"));
+  EXPECT_EQ(lastDay("2015-09-02"), parseDateStr("2015-09-30"));
+  EXPECT_EQ(lastDay("2015-10-03"), parseDateStr("2015-10-31"));
+  EXPECT_EQ(lastDay("2015-11-04"), parseDateStr("2015-11-30"));
+  EXPECT_EQ(lastDay("2015-12-05"), parseDateStr("2015-12-31"));
+  EXPECT_EQ(lastDay("2016-01-06"), parseDateStr("2016-01-31"));
+  EXPECT_EQ(lastDay("2016-02-07"), parseDateStr("2016-02-29"));
+  EXPECT_EQ(lastDayFunc(std::nullopt), std::nullopt);
 }
 
 } // namespace

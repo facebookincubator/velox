@@ -224,6 +224,9 @@ class Subfield {
   }
 
   std::string toString() const {
+    if (!valid()) {
+      return "";
+    }
     std::ostringstream out;
     out << static_cast<const NestedField*>(path_[0].get())->name();
     for (int i = 1; i < path_.size(); i++) {
@@ -255,6 +258,12 @@ class Subfield {
     }
     return result;
   }
+
+  bool valid() const {
+    return !path_.empty() && path_[0]->kind() == kNestedField;
+  }
+
+  Subfield clone() const;
 
  private:
   std::vector<std::unique_ptr<PathElement>> path_;

@@ -78,9 +78,6 @@ class RankFunction : public exec::WindowFunction {
       }
       previousPeerCount_ += 1;
     }
-
-    // Set NULL values for rows with empty frames.
-    setNullEmptyFramesResults(validRows, resultOffset, result);
   }
 
  private:
@@ -106,8 +103,10 @@ void registerRankInternal(
       [name](
           const std::vector<exec::WindowFunctionArg>& /*args*/,
           const TypePtr& resultType,
+          bool /*ignoreNulls*/,
           velox::memory::MemoryPool* /*pool*/,
-          HashStringAllocator* /*stringAllocator*/)
+          HashStringAllocator* /*stringAllocator*/,
+          const core::QueryConfig& /*queryConfig*/)
           -> std::unique_ptr<exec::WindowFunction> {
         return std::make_unique<RankFunction<TRank, TResult>>(resultType);
       });

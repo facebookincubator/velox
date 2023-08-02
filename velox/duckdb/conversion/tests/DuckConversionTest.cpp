@@ -63,35 +63,31 @@ TEST(DuckConversionTest, duckValueToVariant) {
     EXPECT_NO_THROW(duckValueToVariant(Value::FLOAT(i)));
   }
 
+  // Timestamp.
+  for (const auto ts : {
+           Timestamp::fromMillis(123),
+           Timestamp::fromMillis(-123),
+           Timestamp::fromMillis(0),
+           Timestamp::fromMillis(123'456'789),
+           Timestamp::fromMillis(-123'456'789),
+       }) {
+    SCOPED_TRACE(ts.toString());
+    EXPECT_EQ(
+        variant(ts),
+        duckValueToVariant(
+            Value::TIMESTAMP(::duckdb::Timestamp::FromEpochMs(ts.toMillis()))));
+  }
+
   // Strings.
   std::vector<std::string> vec = {"", "asdf", "aS$!#^*HFD"};
   for (const auto& i : vec) {
     EXPECT_EQ(variant(i), duckValueToVariant(Value(i)));
   }
-
-  // Decimal type inference.
-  EXPECT_EQ(
-      *DECIMAL(4, 2),
-      *duckValueToVariant(Value::DECIMAL(static_cast<int16_t>(10), 4, 2))
-           .inferType());
-  EXPECT_EQ(
-      *DECIMAL(9, 2),
-      *duckValueToVariant(Value::DECIMAL(static_cast<int32_t>(10), 9, 2))
-           .inferType());
-  EXPECT_EQ(
-      *DECIMAL(17, 2),
-      *duckValueToVariant(Value::DECIMAL(static_cast<int64_t>(10), 17, 2))
-           .inferType());
-  EXPECT_EQ(
-      *DECIMAL(20, 2),
-      *duckValueToVariant(Value::DECIMAL(::duckdb::hugeint_t(100), 20, 2))
-           .inferType());
 }
 
 TEST(DuckConversionTest, duckValueToVariantUnsupported) {
   std::vector<LogicalType> unsupported = {
       LogicalType::TIME,
-      LogicalType::TIMESTAMP,
       LogicalType::INTERVAL,
       LogicalType::LIST({LogicalType::INTEGER}),
       LogicalType::STRUCT(
@@ -124,8 +120,8 @@ TEST(DuckConversionTest, types) {
   testRoundTrip(DATE());
   testRoundTrip(INTERVAL_DAY_TIME());
 
-  testRoundTrip(LONG_DECIMAL(22, 5));
-  testRoundTrip(SHORT_DECIMAL(16, 8));
+  testRoundTrip(DECIMAL(22, 5));
+  testRoundTrip(DECIMAL(16, 8));
 
   testRoundTrip(ARRAY(BIGINT()));
   testRoundTrip(MAP(VARCHAR(), REAL()));

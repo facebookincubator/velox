@@ -36,6 +36,9 @@ struct DummyReleaser {
 template <typename T>
 class ConstantVector final : public SimpleVector<T> {
  public:
+  ConstantVector(const ConstantVector&) = delete;
+  ConstantVector& operator=(const ConstantVector&) = delete;
+
   static constexpr bool can_simd =
       (std::is_same_v<T, int64_t> || std::is_same_v<T, int32_t> ||
        std::is_same_v<T, int16_t> || std::is_same_v<T, int8_t> ||
@@ -242,7 +245,7 @@ class ConstantVector final : public SimpleVector<T> {
 
   // Base vector if isScalar() is false (e.g. complex type vector) or if base
   // vector is a lazy vector that hasn't been loaded yet.
-  VectorPtr valueVector() const override {
+  const VectorPtr& valueVector() const override {
     return valueVector_;
   }
 

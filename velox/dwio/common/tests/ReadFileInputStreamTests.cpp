@@ -17,11 +17,13 @@
 #include "velox/dwio/common/InputStream.h"
 
 #include <string_view>
+#include "folly/io/Cursor.h"
 
 #include "gtest/gtest.h"
 
 using namespace facebook::velox;
 using namespace facebook::velox::dwio::common;
+using facebook::velox::common::Region;
 
 TEST(ReadFileInputStream, SimpleUsage) {
   std::string fileData;
@@ -43,4 +45,31 @@ TEST(ReadFileInputStream, SimpleUsage) {
   inputStream.read(buf.get(), 15, 0, LogType::STREAM);
   read_value = {buf.get(), 15};
   ASSERT_EQ(read_value, "aaaaabbbbbccccc");
+}
+
+TEST(ReadFileInputStream, VReadIOBufs) {
+  std::string fileData;
+  {
+    InMemoryWriteFile writeFile(&fileData);
+    writeFile.append("aaaaa");
+    writeFile.append("bbbbb");
+    writeFile.append("ccccc");
+  }
+  auto readFile = std::make_shared<InMemoryReadFile>(fileData);
+  ReadFileInputStream inputStream(readFile);
+  ASSERT_EQ(inputStream.getLength(), 15);
+  std::vector<Region> regions = {{0, 6}, {9, 5}};
+  std::vector<folly::IOBuf> iobufs(regions.size());
+  inputStream.vread(regions, {iobufs.data(), iobufs.size()}, LogType::STREAM);
+  std::vector<std::string> result;
+  std::transform(
+      iobufs.cbegin(),
+      iobufs.cend(),
+      std::back_inserter(result),
+      [](const auto& iobuf) {
+        folly::io::Cursor cursor(&iobuf);
+        return cursor.readFixedString(cursor.totalLength());
+      });
+  std::vector<std::string> expected = {"aaaaab", "bcccc"};
+  EXPECT_EQ(result, expected);
 }

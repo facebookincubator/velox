@@ -34,6 +34,24 @@ add_test(velox_base_test velox_base_test)
 target_link_libraries(
   velox_base_test
   velox_common_base
+  Boost::headers
+  Boost::filesystem
+  gflags::gflags
+  glog::glog
+  gtest
+  gtest_main
+  pthread)
+
+add_executable(velox_id_map_test IdMapTest.cpp)
+
+add_test(velox_id_map_test velox_id_map_test)
+
+target_link_libraries(
+  velox_id_map_test
+  velox_id_map
+  velox_common_base
+  velox_memory
+  Boost::headers
   gflags::gflags
   glog::glog
   gtest

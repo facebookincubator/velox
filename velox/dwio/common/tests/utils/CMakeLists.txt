@@ -17,13 +17,13 @@ add_library(velox_dwio_common_test_utils BatchMaker.cpp DataFiles.cpp
 
 target_link_libraries(
   velox_dwio_common_test_utils
-  ${FOLLY_WITH_DEPENDENCIES}
+  Folly::folly
   velox_dwio_common
   velox_dwio_common_exception
-  velox_dwio_type_fbhive
   velox_exception
   velox_memory
   velox_type
+  velox_type_fbhive
   velox_vector)
 
 # older versions of GCC need it to allow std::filesystem

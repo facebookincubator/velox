@@ -21,6 +21,7 @@
 #include <folly/container/F14Map.h>
 
 #include "velox/common/time/CpuWallTimer.h"
+#include "velox/core/ExpressionEvaluator.h"
 #include "velox/core/Expressions.h"
 #include "velox/expression/DecodedArgs.h"
 #include "velox/expression/EvalCtx.h"
@@ -171,13 +172,15 @@ class Expr {
 
   /// Evaluates the expression for the specified 'rows'.
   ///
-  /// @param topLevel Boolean indicating whether this is a top-level expression
-  /// or one of the sub-expressions. Used to setup exception context.
+  /// @param parentExprSet pointer to the parent ExprSet which is calling
+  /// evaluate on this expression. Should only be set for top level expressions
+  /// and not passed on to child expressions as it is ssed to setup exception
+  /// context.
   void eval(
       const SelectivityVector& rows,
       EvalCtx& context,
       VectorPtr& result,
-      bool topLevel = false);
+      const ExprSet* FOLLY_NULLABLE parentExprSet = nullptr);
 
   /// Evaluates the expression using fast path that assumes all inputs and
   /// intermediate results are flat or constant and have no nulls.
@@ -188,19 +191,21 @@ class Expr {
   /// path is enabled only for batch sizes less than 1'000 and expressions where
   /// all input and intermediate types are primitive and not strings.
   ///
-  /// @param topLevel Boolean indicating whether this is a top-level expression
-  /// or one of the sub-expressions. Used to setup exception context.
+  /// @param parentExprSet pointer to the parent ExprSet which is calling
+  /// evaluate on this expression. Should only be set for top level expressions
+  /// and not passed on to child expressions as it is ssed to setup exception
+  /// context.
   void evalFlatNoNulls(
       const SelectivityVector& rows,
       EvalCtx& context,
       VectorPtr& result,
-      bool topLevel = false);
+      const ExprSet* FOLLY_NULLABLE parentExprSet = nullptr);
 
   void evalFlatNoNullsImpl(
       const SelectivityVector& rows,
       EvalCtx& context,
       VectorPtr& result,
-      bool topLevel);
+      const ExprSet* FOLLY_NULLABLE parentExprSet);
 
   // Simplified path for expression evaluation (flattens all vectors).
   void evalSimplified(
@@ -227,7 +232,10 @@ class Expr {
     evalSpecialForm(rows, context, result);
   }
 
-  virtual void computeMetadata();
+  // Compute the following properties: deterministic_, propagatesNulls_,
+  // distinctFields_, multiplyReferencedFields_, hasConditionals_ and
+  // sameAsParentDistinctFields_.
+  void computeMetadata();
 
   virtual void reset() {
     sharedSubexprResults_.clear();
@@ -277,9 +285,24 @@ class Expr {
     isMultiplyReferenced_ = true;
   }
 
+  template <typename T>
+  const T* as() const {
+    return dynamic_cast<const T*>(this);
+  }
+
+  template <typename T>
+  T* as() {
+    return dynamic_cast<T*>(this);
+  }
+
+  template <typename T>
+  bool is() const {
+    return as<T>() != nullptr;
+  }
+
   // True if 'this' Expr tree is null for a null in any of the columns
   // this depends on.
-  virtual bool propagatesNulls() const {
+  bool propagatesNulls() const {
     return propagatesNulls_;
   }
 
@@ -347,6 +370,23 @@ class Expr {
       const SelectivityVector& rows,
       EvalCtx& context,
       VectorPtr& result) const;
+
+  void clearMetaData();
+
+  // No need to peel encoding or remove sure nulls for default null propagating
+  // expressions when the expression has single parent(the expression that
+  // reference it) and have the same distinct fields as its parent.
+  // The reason is because such optimizations would be redundant in that case,
+  // since they would have been performed identically on the parent.
+  bool skipFieldDependentOptimizations() const {
+    if (!isMultiplyReferenced_ && sameAsParentDistinctFields_) {
+      return true;
+    }
+    if (distinctFields_.empty()) {
+      return true;
+    }
+    return false;
+  }
 
  private:
   struct PeelEncodingsResult {
@@ -566,6 +606,14 @@ class Expr {
 
   /// Runtime statistics. CPU time, wall time and number of processed rows.
   ExprStats stats_;
+
+  // If true computeMetaData returns, otherwise meta data is computed and the
+  // flag is set to true.
+  bool metaDataComputed_ = false;
+
+  // True if distinctFields_ are identical to at least one of the parent
+  // expression's distinct fields.
+  bool sameAsParentDistinctFields_ = false;
 };
 
 /// Generate a selectivity vector of a single row.
@@ -743,7 +791,8 @@ class ExprSetListener {
   /// @param errors Error vector produced inside the try expression.
   virtual void onError(
       const SelectivityVector& rows,
-      const ErrorVector& errors) = 0;
+      const ErrorVector& errors,
+      const std::string& queryId) = 0;
 };
 
 /// Return the ExprSetListeners having been registered.
@@ -759,5 +808,34 @@ bool registerExprSetListener(std::shared_ptr<ExprSetListener> listener);
 /// unregistered successfully, false if listener was not found.
 bool unregisterExprSetListener(
     const std::shared_ptr<ExprSetListener>& listener);
+
+class SimpleExpressionEvaluator : public core::ExpressionEvaluator {
+ public:
+  SimpleExpressionEvaluator(core::QueryCtx* queryCtx, memory::MemoryPool* pool)
+      : queryCtx_(queryCtx), pool_(pool) {}
+
+  std::unique_ptr<ExprSet> compile(
+      const core::TypedExprPtr& expression) override {
+    return std::make_unique<ExprSet>(
+        std::vector<core::TypedExprPtr>{expression}, ensureExecCtx());
+  }
+
+  void evaluate(
+      ExprSet* exprSet,
+      const SelectivityVector& rows,
+      const RowVector& input,
+      VectorPtr& result) override;
+
+  memory::MemoryPool* pool() override {
+    return pool_;
+  }
+
+ private:
+  core::ExecCtx* ensureExecCtx();
+
+  core::QueryCtx* const queryCtx_;
+  memory::MemoryPool* const pool_;
+  std::unique_ptr<core::ExecCtx> execCtx_;
+};
 
 } // namespace facebook::velox::exec

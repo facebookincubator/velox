@@ -18,7 +18,7 @@
 #include "velox/common/file/File.h"
 #include "velox/connectors/hive/HiveConfig.h"
 #include "velox/connectors/hive/storage_adapters/s3fs/S3Util.h"
-#include "velox/core/Context.h"
+#include "velox/core/Config.h"
 
 #include <fmt/format.h>
 #include <glog/logging.h>
@@ -222,6 +222,7 @@ class S3FileSystem::Impl {
   ~Impl() {
     const size_t newCount = --initCounter_;
     if (newCount == 0) {
+      client_.reset();
       Aws::SDKOptions awsOptions;
       awsOptions.loggingOptions.logLevel =
           inferS3LogLevel(HiveConfig::s3GetLogLevel(config_));
@@ -331,7 +332,6 @@ class S3FileSystem::Impl {
 };
 
 std::atomic<size_t> S3FileSystem::Impl::initCounter_(0);
-folly::once_flag S3FSInstantiationFlag;
 
 S3FileSystem::S3FileSystem(std::shared_ptr<const Config> config)
     : FileSystem(config) {
@@ -363,30 +363,6 @@ std::unique_ptr<WriteFile> S3FileSystem::openFileForWrite(
 
 std::string S3FileSystem::name() const {
   return "S3";
-}
-
-static std::function<std::shared_ptr<FileSystem>(std::shared_ptr<const Config>)>
-    filesystemGenerator = [](std::shared_ptr<const Config> properties) {
-      // Only one instance of S3FileSystem is supported for now.
-      // TODO: Support multiple S3FileSystem instances using a cache
-      // Initialize on first access and reuse after that.
-      static std::shared_ptr<FileSystem> s3fs;
-      folly::call_once(S3FSInstantiationFlag, [&properties]() {
-        std::shared_ptr<S3FileSystem> fs;
-        if (properties != nullptr) {
-          fs = std::make_shared<S3FileSystem>(properties);
-        } else {
-          fs = std::make_shared<S3FileSystem>(
-              std::make_shared<core::MemConfig>());
-        }
-        fs->initializeClient();
-        s3fs = fs;
-      });
-      return s3fs;
-    };
-
-void registerS3FileSystem() {
-  registerFileSystem(isS3File, filesystemGenerator);
 }
 
 } // namespace filesystems

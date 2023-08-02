@@ -45,13 +45,6 @@ class UniqueValue {
     }
   }
 
-  explicit UniqueValue(Date value) {
-    // The number of valid bytes of Date stored in data_ is
-    // (int64_t)value.days().
-    size_ = sizeof(int64_t);
-    data_ = value.days();
-  }
-
   uint32_t size() const {
     return size_;
   }
@@ -172,6 +165,11 @@ class VectorHasher {
   // computeValueIds(). The decoded vector can be accessed via decodedVector()
   // getter.
   void decode(const BaseVector& vector, const SelectivityVector& rows) {
+    VELOX_CHECK(
+        type_->kindEquals(vector.type()),
+        "Type mismatch: {} vs. {}",
+        type_->toString(),
+        vector.type()->toString());
     decoded_.decode(vector, rows);
   }
 
@@ -296,7 +294,6 @@ class VectorHasher {
       case TypeKind::BIGINT:
       case TypeKind::VARCHAR:
       case TypeKind::VARBINARY:
-      case TypeKind::DATE:
         return true;
       default:
         return false;
@@ -573,11 +570,6 @@ class VectorHasher {
 };
 
 template <>
-inline int64_t VectorHasher::toInt64(Date value) const {
-  return value.days();
-}
-
-template <>
 bool VectorHasher::makeValueIdsForRows<TypeKind::VARCHAR>(
     char** groups,
     int32_t numGroups,
@@ -696,6 +688,11 @@ template <>
 bool VectorHasher::makeValueIdsDecoded<bool, false>(
     const SelectivityVector& rows,
     uint64_t* result);
+
+/// Creates VectorHasher instances for specified columns.
+std::vector<std::unique_ptr<VectorHasher>> createVectorHashers(
+    const RowTypePtr& rowType,
+    const std::vector<core::FieldAccessTypedExprPtr>& keys);
 
 } // namespace facebook::velox::exec
 

@@ -39,6 +39,7 @@ String Functions
     are replaced with the Unicode replacement character ``U+FFFD``.
 
 .. function:: from_utf8(binary, replace) -> varchar
+   :noindex:
 
     Decodes a UTF-8 encoded string from ``binary``. Invalid UTF-8 sequences are
     replaced with `replace`. The `replace` argument can be either Unicode code
@@ -48,6 +49,11 @@ String Functions
 .. function:: length(string) -> bigint
 
     Returns the length of ``string`` in characters.
+
+.. function:: levenshtein_distance(string_1, string_2) -> bigint
+
+    Returns the Levenshtein edit distance of 2 strings. I.e. the minimum number of single-character edits
+    (insertions, deletions or substitutions) needed to convert ``string_1`` to ``string_2``.
 
 .. function:: lower(string) -> varchar
 
@@ -69,6 +75,7 @@ String Functions
     Removes all instances of ``search`` from ``string``.
 
 .. function:: replace(string, search, replace) -> varchar
+   :noindex:
 
     Replaces all instances of ``search`` with ``replace`` in ``string``.
 
@@ -76,6 +83,7 @@ String Functions
     character and at the end of the ``string``.
 
 .. function:: reverse(string) -> varchar
+   :noindex:
 
     Reverses ``string``.
 
@@ -95,6 +103,7 @@ String Functions
     Splits ``string`` on ``delimiter`` and returns an array.
 
 .. function:: split(string, delimiter, limit) -> array(string)
+   :noindex:
 
     Splits ``string`` on ``delimiter`` and returns an array of size at most ``limit``.
 
@@ -114,6 +123,7 @@ String Functions
     ``string``. Positions start with ``1``. If not found, ``0`` is returned.
 
 .. function:: strpos(string, substring, instance) -> bigint
+   :noindex:
 
     Returns the position of the N-th ``instance`` of ``substring`` in ``string``.
     ``instance`` must be a positive number.
@@ -125,6 +135,7 @@ String Functions
     ``string``. Positions start with ``1``. If not found, ``0`` is returned.
 
 .. function:: strrpos(string, substring, instance) -> bigint
+   :noindex:
 
     Returns the position of the N-th ``instance`` of ``substring`` in ``string`` starting from the end of the string.
     ``instance`` must be a positive number.
@@ -138,6 +149,7 @@ String Functions
     value of ``start`` is greater then length of the ``string``.
 
 .. function:: substr(string, start, length) -> varchar
+   :noindex:
 
     Returns a substring from ``string`` of length ``length`` from the starting
     position ``start``. Positions start with ``1``. A negative starting

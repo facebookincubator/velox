@@ -35,10 +35,7 @@ class HashAggregation : public Operator {
     return !noMoreInput_ && !partialFull_;
   }
 
-  void noMoreInput() override {
-    groupingSet_->noMoreInput();
-    Operator::noMoreInput();
-  }
+  void noMoreInput() override;
 
   BlockingReason isBlocked(ContinueFuture* /* unused */) override {
     return BlockingReason::kNotBlocked;
@@ -46,12 +43,13 @@ class HashAggregation : public Operator {
 
   bool isFinished() override;
 
-  void close() override {
-    Operator::close();
-    groupingSet_.reset();
-  }
+  void reclaim(uint64_t targetBytes) override;
+
+  void close() override;
 
  private:
+  void updateRuntimeStats();
+
   void prepareOutput(vector_size_t size);
 
   // Invoked to reset partial aggregation state if it was full and has been
@@ -69,11 +67,14 @@ class HashAggregation : public Operator {
   // 'abandonPartialAggregationMinPct_' % of rows are unique.
   bool abandonPartialAggregationEarly(int64_t numOutput) const;
 
+  // Invoked to record the spilling stats in operator stats after processing all
+  // the inputs.
+  void recordSpillStats();
+
   const bool isPartialOutput_;
-  const bool isDistinct_;
   const bool isGlobal_;
+  const bool isDistinct_;
   const int64_t maxExtendedPartialAggregationMemoryUsage_;
-  const std::optional<Spiller::Config> spillConfig_;
 
   int64_t maxPartialAggregationMemoryUsage_;
   std::unique_ptr<GroupingSet> groupingSet_;
@@ -96,14 +97,14 @@ class HashAggregation : public Operator {
   bool pushdownChecked_ = false;
   bool mayPushdown_ = false;
 
-  /// Count the number of input rows. It is reset on partial aggregation output
-  /// flush.
+  // Count the number of input rows. It is reset on partial aggregation output
+  // flush.
   int64_t numInputRows_ = 0;
-  /// Count the number of output rows. It is reset on partial aggregation output
-  /// flush.
+  // Count the number of output rows. It is reset on partial aggregation output
+  // flush.
   int64_t numOutputRows_ = 0;
 
-  /// Possibly reusable output vector.
+  // Possibly reusable output vector.
   RowVectorPtr output_;
 };
 

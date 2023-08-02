@@ -73,12 +73,12 @@ class LocalPartitionTest : public HiveConnectorTestBase {
     ASSERT_EQ(expected, task.use_count());
   }
 
-  void waitForTaskState(
+  void waitForTaskCompletion(
       const std::shared_ptr<exec::Task>& task,
       exec::TaskState expected) {
     if (task->state() != expected) {
       auto& executor = folly::QueuedImmediateExecutor::instance();
-      auto future = task->stateChangeFuture(1'000'000).via(&executor);
+      auto future = task->taskCompletionFuture(1'000'000).via(&executor);
       future.wait();
       EXPECT_EQ(expected, task->state());
     }
@@ -260,24 +260,26 @@ TEST_F(LocalPartitionTest, maxBufferSizePartition) {
                 .partialAggregation({"c0"}, {"count(1)"})
                 .planNode();
 
-  AssertQueryBuilder queryBuilder(op, duckDbQueryRunner_);
-  queryBuilder.maxDrivers(2);
-  for (auto i = 0; i < filePaths.size(); ++i) {
-    queryBuilder.split(
-        scanNodeIds[i % 3], makeHiveConnectorSplit(filePaths[i]->path));
-  }
+  auto makeQueryBuilder = [&](const char* bufferSize) {
+    AssertQueryBuilder queryBuilder(op, duckDbQueryRunner_);
+    queryBuilder.maxDrivers(2);
+    for (auto i = 0; i < filePaths.size(); ++i) {
+      queryBuilder.split(
+          scanNodeIds[i % 3], makeHiveConnectorSplit(filePaths[i]->path));
+    }
+    queryBuilder.config(
+        core::QueryConfig::kMaxLocalExchangeBufferSize, bufferSize);
+    return queryBuilder;
+  };
 
   // Set an artificially low buffer size limit to trigger blocking behavior.
-  queryBuilder.config(core::QueryConfig::kMaxLocalExchangeBufferSize, "100");
-
-  auto task =
-      queryBuilder.assertResults("SELECT c0, count(1) FROM tmp GROUP BY 1");
+  auto task = makeQueryBuilder("100").assertResults(
+      "SELECT c0, count(1) FROM tmp GROUP BY 1");
   verifyExchangeSourceOperatorStats(task, 2100, 42);
 
   // Re-run with higher memory limit (enough to hold ~10 vectors at a time).
-  queryBuilder.config(core::QueryConfig::kMaxLocalExchangeBufferSize, "10240");
-
-  task = queryBuilder.assertResults("SELECT c0, count(1) FROM tmp GROUP BY 1");
+  task = makeQueryBuilder("10240").assertResults(
+      "SELECT c0, count(1) FROM tmp GROUP BY 1");
   verifyExchangeSourceOperatorStats(task, 2100, 42);
 }
 
@@ -473,7 +475,7 @@ TEST_F(LocalPartitionTest, earlyCancelation) {
   }
 
   // Wait for task to transition to final state.
-  waitForTaskState(task, exec::kCanceled);
+  waitForTaskCompletion(task, exec::kCanceled);
 
   // Make sure there is only one reference to Task left, i.e. no Driver is
   // blocked forever.
@@ -510,7 +512,7 @@ TEST_F(LocalPartitionTest, producerError) {
       while (cursor->moveNext()) { ; }, VeloxException);
 
   // Wait for task to transition to failed state.
-  waitForTaskState(task, exec::kFailed);
+  waitForTaskCompletion(task, exec::kFailed);
 
   // Make sure there is only one reference to Task left, i.e. no Driver is
   // blocked forever.

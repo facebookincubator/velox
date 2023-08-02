@@ -20,9 +20,12 @@
 #include <unordered_set>
 
 #include <folly/Executor.h>
+#include "velox/common/compression/Compression.h"
 #include "velox/common/memory/Memory.h"
 #include "velox/dwio/common/ColumnSelector.h"
 #include "velox/dwio/common/ErrorTolerance.h"
+#include "velox/dwio/common/FlatMapHelper.h"
+#include "velox/dwio/common/FlushPolicy.h"
 #include "velox/dwio/common/InputStream.h"
 #include "velox/dwio/common/ScanSpec.h"
 #include "velox/dwio/common/encryption/Encryption.h"
@@ -47,6 +50,13 @@ enum class FileFormat {
 
 FileFormat toFileFormat(std::string s);
 std::string toString(FileFormat fmt);
+
+FOLLY_ALWAYS_INLINE std::ostream& operator<<(
+    std::ostream& output,
+    const FileFormat& fmt) {
+  output << toString(fmt);
+  return output;
+}
 
 /**
  * Formatting options for serialization.
@@ -102,22 +112,15 @@ class RowReaderOptions {
   std::shared_ptr<folly::Executor> decodingExecutor_;
   std::shared_ptr<folly::Executor> ioExecutor_;
   bool appendRowNumberColumn_ = false;
+  // Function to populate metrics related to feature projection stats
+  // in Koski. This gets fired in FlatMapColumnReader.
+  // This is a bit of a hack as there is (by design) no good way
+  // To propogate information from column reader to Koski
+  std::function<void(
+      facebook::velox::dwio::common::flatmap::FlatMapKeySelectionStats)>
+      keySelectionCallback_;
 
  public:
-  RowReaderOptions(const RowReaderOptions& other) {
-    dataStart = other.dataStart;
-    dataLength = other.dataLength;
-    preloadStripe = other.preloadStripe;
-    projectSelectedType = other.projectSelectedType;
-    errorTolerance_ = other.errorTolerance_;
-    selector_ = other.selector_;
-    scanSpec_ = other.scanSpec_;
-    metadataFilter_ = other.metadataFilter_;
-    returnFlatVector_ = other.returnFlatVector_;
-    flatmapNodeIdAsStruct_ = other.flatmapNodeIdAsStruct_;
-    appendRowNumberColumn_ = other.appendRowNumberColumn_;
-  }
-
   RowReaderOptions() noexcept
       : dataStart(0),
         dataLength(std::numeric_limits<uint64_t>::max()),
@@ -291,6 +294,19 @@ class RowReaderOptions {
     return appendRowNumberColumn_;
   }
 
+  void setKeySelectionCallback(
+      std::function<void(
+          facebook::velox::dwio::common::flatmap::FlatMapKeySelectionStats)>
+          keySelectionCallback) {
+    keySelectionCallback_ = std::move(keySelectionCallback);
+  }
+
+  const std::function<
+      void(facebook::velox::dwio::common::flatmap::FlatMapKeySelectionStats)>
+  getKeySelectionCallback() const {
+    return keySelectionCallback_;
+  }
+
   const std::shared_ptr<folly::Executor>& getDecodingExecutor() const {
     return decodingExecutor_;
   }
@@ -346,25 +362,29 @@ class ReaderOptions {
   PrefetchMode prefetchMode;
   int32_t loadQuantum_{kDefaultLoadQuantum};
   int32_t maxCoalesceDistance_{kDefaultCoalesceDistance};
+  int64_t maxCoalesceBytes_{kDefaultCoalesceBytes};
   SerDeOptions serDeOptions;
   std::shared_ptr<encryption::DecrypterFactory> decrypterFactory_;
   uint64_t directorySizeGuess{kDefaultDirectorySizeGuess};
   uint64_t filePreloadThreshold{kDefaultFilePreloadThreshold};
+  bool fileColumnNamesReadAsLowerCase = false;
 
  public:
   static constexpr int32_t kDefaultLoadQuantum = 8 << 20; // 8MB
   static constexpr int32_t kDefaultCoalesceDistance = 512 << 10; // 512K
+  static constexpr int32_t kDefaultCoalesceBytes = 128 << 20; // 128M
   static constexpr uint64_t kDefaultDirectorySizeGuess = 1024 * 1024; // 1MB
   static constexpr uint64_t kDefaultFilePreloadThreshold =
       1024 * 1024 * 8; // 8MB
 
-  ReaderOptions(velox::memory::MemoryPool* pool)
+  explicit ReaderOptions(velox::memory::MemoryPool* pool)
       : tailLocation(std::numeric_limits<uint64_t>::max()),
         memoryPool(pool),
         fileFormat(FileFormat::UNKNOWN),
         fileSchema(nullptr),
         autoPreloadLength(DEFAULT_AUTO_PRELOAD_SIZE),
-        prefetchMode(PrefetchMode::PREFETCH) {
+        prefetchMode(PrefetchMode::PREFETCH),
+        fileColumnNamesReadAsLowerCase(false) {
     // PASS
   }
 
@@ -383,6 +403,9 @@ class ReaderOptions {
     decrypterFactory_ = other.decrypterFactory_;
     directorySizeGuess = other.directorySizeGuess;
     filePreloadThreshold = other.filePreloadThreshold;
+    fileColumnNamesReadAsLowerCase = other.fileColumnNamesReadAsLowerCase;
+    maxCoalesceDistance_ = other.maxCoalesceDistance_;
+    maxCoalesceBytes_ = other.maxCoalesceBytes_;
     return *this;
   }
 
@@ -461,6 +484,13 @@ class ReaderOptions {
     maxCoalesceDistance_ = distance;
     return *this;
   }
+  /**
+   * Modify the maximum load coalesce bytes.
+   */
+  ReaderOptions& setMaxCoalesceBytes(int64_t bytes) {
+    maxCoalesceBytes_ = bytes;
+    return *this;
+  }
 
   /**
    * Modify the serialization-deserialization options.
@@ -483,6 +513,12 @@ class ReaderOptions {
 
   ReaderOptions& setFilePreloadThreshold(uint64_t threshold) {
     filePreloadThreshold = threshold;
+    return *this;
+  }
+
+  ReaderOptions& setFileColumnNamesReadAsLowerCase(
+      bool fileColumnNamesReadAsLowerCaseMode) {
+    fileColumnNamesReadAsLowerCase = fileColumnNamesReadAsLowerCaseMode;
     return *this;
   }
 
@@ -531,6 +567,10 @@ class ReaderOptions {
     return maxCoalesceDistance_;
   }
 
+  int64_t maxCoalesceBytes() const {
+    return maxCoalesceBytes_;
+  }
+
   SerDeOptions& getSerDeOptions() {
     return serDeOptions;
   }
@@ -551,6 +591,16 @@ class ReaderOptions {
   uint64_t getFilePreloadThreshold() const {
     return filePreloadThreshold;
   }
+
+  bool isFileColumnNamesReadAsLowerCase() const {
+    return fileColumnNamesReadAsLowerCase;
+  }
+};
+
+struct WriterOptions {
+  TypePtr schema;
+  velox::memory::MemoryPool* memoryPool;
+  std::optional<velox::common::CompressionKind> compressionKind = {};
 };
 
 } // namespace common

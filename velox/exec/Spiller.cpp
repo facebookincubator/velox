@@ -18,6 +18,7 @@
 #include <folly/ScopeGuard.h>
 #include "velox/common/base/AsyncSource.h"
 #include "velox/common/testutil/TestValue.h"
+#include "velox/exec/Aggregate.h"
 
 using facebook::velox::common::testutil::TestValue;
 
@@ -132,10 +133,12 @@ void Spiller::extractSpill(folly::Range<char**> rows, RowVectorPtr& resultPtr) {
   for (auto i = 0; i < types.size(); ++i) {
     container_->extractColumn(rows.data(), rows.size(), i, result->childAt(i));
   }
-  auto& aggregates = container_->aggregates();
+
+  auto& accumulators = container_->accumulators();
+
   auto numKeys = types.size();
-  for (auto i = 0; i < aggregates.size(); ++i) {
-    aggregates[i]->extractAccumulators(
+  for (auto i = 0; i < accumulators.size(); ++i) {
+    accumulators[i].aggregateForSpill()->extractAccumulators(
         rows.data(), rows.size(), &result->childAt(i + numKeys));
   }
 }
@@ -410,22 +413,27 @@ void Spiller::spill(uint64_t targetRows, uint64_t targetBytes) {
 
 void Spiller::spill(const SpillPartitionNumSet& partitions) {
   VELOX_CHECK(!spillFinalized_);
-
-  if (FOLLY_UNLIKELY(type_ == Type::kHashJoinProbe)) {
+  if (type_ == Type::kHashJoinProbe) {
     VELOX_FAIL("There is no row container for {}", typeName(type_));
   }
-  if (FOLLY_UNLIKELY(!pendingSpillPartitions_.empty())) {
+  if (!pendingSpillPartitions_.empty()) {
     VELOX_FAIL(
         "There are pending spilling operations on partitions: {}",
         folly::join(",", pendingSpillPartitions_));
   }
 
-  for (auto partition : partitions) {
-    if (FOLLY_LIKELY(!state_.isPartitionSpilled(partition))) {
+  std::vector<uint32_t> partitionsToSpill(partitions.begin(), partitions.end());
+  if (partitionsToSpill.empty()) {
+    partitionsToSpill.resize(state_.maxPartitions());
+    std::iota(partitionsToSpill.begin(), partitionsToSpill.end(), 0);
+  }
+
+  for (auto partition : partitionsToSpill) {
+    if (!state_.isPartitionSpilled(partition)) {
       state_.setPartitionSpilled(partition);
-    }
-    if (FOLLY_LIKELY(!spillRuns_[partition].rows.empty())) {
-      pendingSpillPartitions_.insert(partition);
+      if (!spillRuns_[partition].rows.empty()) {
+        pendingSpillPartitions_.insert(partition);
+      }
     }
   }
 
@@ -586,15 +594,15 @@ std::string Spiller::toString() const {
       spillFinalized_);
 }
 
-int32_t Spiller::Config::spillLevel(uint8_t startBitOffset) const {
-  const auto numPartitionBits = hashBitRange.numBits();
+int32_t Spiller::Config::joinSpillLevel(uint8_t startBitOffset) const {
+  const auto numPartitionBits = joinPartitionBits;
   VELOX_CHECK_LE(
       startBitOffset + numPartitionBits,
       64,
       "startBitOffset:{} numPartitionsBits:{}",
       startBitOffset,
       numPartitionBits);
-  const int32_t deltaBits = startBitOffset - hashBitRange.begin();
+  const int32_t deltaBits = startBitOffset - startPartitionBit;
   VELOX_CHECK_GE(deltaBits, 0, "deltaBits:{}", deltaBits);
   VELOX_CHECK_EQ(
       deltaBits % numPartitionBits,
@@ -605,14 +613,14 @@ int32_t Spiller::Config::spillLevel(uint8_t startBitOffset) const {
   return deltaBits / numPartitionBits;
 }
 
-bool Spiller::Config::exceedSpillLevelLimit(uint8_t startBitOffset) const {
-  if (startBitOffset + hashBitRange.numBits() > 64) {
+bool Spiller::Config::exceedJoinSpillLevelLimit(uint8_t startBitOffset) const {
+  if (startBitOffset + joinPartitionBits > 64) {
     return true;
   }
   if (maxSpillLevel == -1) {
     return false;
   }
-  return spillLevel(startBitOffset) > maxSpillLevel;
+  return joinSpillLevel(startBitOffset) > maxSpillLevel;
 }
 
 // static
@@ -651,7 +659,7 @@ void Spiller::fillSpillRuns(std::vector<SpillableStats>& statsList) {
 
 // static
 memory::MemoryPool& Spiller::spillPool() {
-  static auto pool = memory::addDefaultLeafMemoryPool();
+  static auto pool = memory::addDefaultLeafMemoryPool("spilling");
   return *pool;
 }
 

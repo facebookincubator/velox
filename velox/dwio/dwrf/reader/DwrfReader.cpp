@@ -17,6 +17,8 @@
 #include "velox/dwio/dwrf/reader/DwrfReader.h"
 #include "velox/dwio/common/TypeUtils.h"
 #include "velox/dwio/common/exception/Exception.h"
+#include "velox/dwio/dwrf/reader/ColumnReader.h"
+#include "velox/dwio/dwrf/reader/StreamLabels.h"
 #include "velox/vector/FlatVector.h"
 
 namespace facebook::velox::dwrf {
@@ -403,15 +405,24 @@ void DwrfRowReader::startNextStripe() {
   auto scanSpec = options_.getScanSpec().get();
   auto requestedType = getColumnSelector().getSchemaWithId();
   auto dataType = getReader().getSchemaWithId();
-  auto flatMapContext = FlatMapContext::nonFlatMapContext();
+  FlatMapContext flatMapContext;
+  flatMapContext.keySelectionCallback = options_.getKeySelectionCallback();
+  memory::AllocationPool pool(&getReader().getMemoryPool());
+  StreamLabels streamLabels(pool);
 
   if (scanSpec) {
     selectiveColumnReader_ = SelectiveDwrfReader::build(
-        requestedType, dataType, stripeStreams, scanSpec, flatMapContext);
+        requestedType,
+        dataType,
+        stripeStreams,
+        streamLabels,
+        scanSpec,
+        flatMapContext,
+        true); // isRoot
     selectiveColumnReader_->setIsTopLevel();
   } else {
     columnReader_ = ColumnReader::build(
-        requestedType, dataType, stripeStreams, flatMapContext);
+        requestedType, dataType, stripeStreams, streamLabels, flatMapContext);
   }
   DWIO_ENSURE(
       (columnReader_ != nullptr) != (selectiveColumnReader_ != nullptr),
@@ -470,9 +481,6 @@ std::optional<size_t> DwrfRowReader::estimatedRowSizeHelper(
     case TypeKind::DOUBLE: {
       return valueCount * sizeof(double);
     }
-    case TypeKind::DATE: {
-      return valueCount * sizeof(uint32_t);
-    }
     case TypeKind::VARCHAR: {
       auto stringStats =
           dynamic_cast<const dwio::common::StringColumnStatistics*>(&s);
@@ -505,9 +513,10 @@ std::optional<size_t> DwrfRowReader::estimatedRowSizeHelper(
     case TypeKind::ROW: {
       // start the estimate with the offsets and hasNulls vectors sizes
       size_t totalEstimate = valueCount * (sizeof(uint8_t) + sizeof(uint64_t));
-      for (int32_t i = 0; i < t.subtypesSize() &&
-           columnSelector_->shouldReadNode(t.subtypes(i));
-           ++i) {
+      for (int32_t i = 0; i < t.subtypesSize(); ++i) {
+        if (!columnSelector_->shouldReadNode(t.subtypes(i))) {
+          continue;
+        }
         auto subtypeEstimate =
             estimatedRowSizeHelper(footer, stats, t.subtypes(i));
         if (subtypeEstimate.has_value()) {
@@ -556,7 +565,8 @@ DwrfReader::DwrfReader(
           options.getDirectorySizeGuess(),
           options.getFilePreloadThreshold(),
           options.getFileFormat() == FileFormat::ORC ? FileFormat::ORC
-                                                     : FileFormat::DWRF)),
+                                                     : FileFormat::DWRF,
+          options.isFileColumnNamesReadAsLowerCase())),
       options_(options) {}
 
 std::unique_ptr<StripeInformation> DwrfReader::getStripe(
@@ -614,13 +624,10 @@ uint64_t maxStreamsForType(const TypeWrapper& type) {
       case TypeKind::REAL:
       case TypeKind::DOUBLE:
       case TypeKind::BOOLEAN:
-      case TypeKind::DATE:
       case TypeKind::ARRAY:
       case TypeKind::MAP:
         return 2;
       case TypeKind::VARBINARY:
-      case TypeKind::SHORT_DECIMAL:
-      case TypeKind::LONG_DECIMAL:
       case TypeKind::TIMESTAMP:
         return 3;
       case TypeKind::TINYINT:
@@ -747,7 +754,7 @@ uint64_t DwrfReader::getMemoryUse(
   // Decompressors need buffers for each stream
   uint64_t decompressorMemory = 0;
   auto compression = readerBase.getCompressionKind();
-  if (compression != dwio::common::CompressionKind_NONE) {
+  if (compression != common::CompressionKind_NONE) {
     for (int32_t i = 0; i < footer.typesSize(); i++) {
       if (cs.shouldReadNode(i)) {
         const auto type = footer.types(i);
@@ -755,7 +762,7 @@ uint64_t DwrfReader::getMemoryUse(
             maxStreamsForType(type) * readerBase.getCompressionBlockSize();
       }
     }
-    if (compression == dwio::common::CompressionKind_SNAPPY) {
+    if (compression == common::CompressionKind_SNAPPY) {
       decompressorMemory *= 2; // Snappy decompressor uses a second buffer
     }
   }
@@ -765,13 +772,7 @@ uint64_t DwrfReader::getMemoryUse(
 
 std::unique_ptr<dwio::common::RowReader> DwrfReader::createRowReader(
     const RowReaderOptions& opts) const {
-  auto rowReader = std::make_unique<DwrfRowReader>(readerBase_, opts);
-  // Load the first stripe on construction so that readers created in
-  // background have a reader tree and can preload the first
-  // stripe. Also the reader tree needs to exist in order to receive
-  // adaptation from a previous reader.
-  rowReader->startNextStripe();
-  return rowReader;
+  return createDwrfRowReader(opts);
 }
 
 std::unique_ptr<DwrfRowReader> DwrfReader::createDwrfRowReader(

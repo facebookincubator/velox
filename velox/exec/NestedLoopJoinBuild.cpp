@@ -18,23 +18,23 @@
 
 namespace facebook::velox::exec {
 
-void NestedLoopJoinBridge::setData(std::vector<VectorPtr> data) {
+void NestedLoopJoinBridge::setData(std::vector<RowVectorPtr> buildVectors) {
   std::vector<ContinuePromise> promises;
   {
     std::lock_guard<std::mutex> l(mutex_);
-    VELOX_CHECK(!data_.has_value(), "setData may be called only once");
-    data_ = std::move(data);
+    VELOX_CHECK(!buildVectors_.has_value(), "setData must be called only once");
+    buildVectors_ = std::move(buildVectors);
     promises = std::move(promises_);
   }
   notify(std::move(promises));
 }
 
-std::optional<std::vector<VectorPtr>> NestedLoopJoinBridge::dataOrFuture(
+std::optional<std::vector<RowVectorPtr>> NestedLoopJoinBridge::dataOrFuture(
     ContinueFuture* future) {
   std::lock_guard<std::mutex> l(mutex_);
   VELOX_CHECK(!cancelled_, "Getting data after the build side is aborted");
-  if (data_.has_value()) {
-    return data_;
+  if (buildVectors_.has_value()) {
+    return buildVectors_;
   }
   promises_.emplace_back("NestedLoopJoinBridge::tableOrFuture");
   *future = promises_.back().getSemiFuture();
@@ -58,7 +58,7 @@ void NestedLoopJoinBuild::addInput(RowVectorPtr input) {
     for (auto& child : input->children()) {
       child->loadedVector();
     }
-    data_.emplace_back(std::move(input));
+    dataVectors_.emplace_back(std::move(input));
   }
 }
 
@@ -84,24 +84,31 @@ void NestedLoopJoinBuild::noMoreInput() {
     return;
   }
 
-  for (auto& peer : peers) {
-    auto op = peer->findOperator(planNodeId());
-    auto* build = dynamic_cast<NestedLoopJoinBuild*>(op);
-    VELOX_CHECK(build);
-    data_.insert(data_.begin(), build->data_.begin(), build->data_.end());
-  }
+  {
+    auto promisesGuard = folly::makeGuard([&]() {
+      // Realize the promises so that the other Drivers (which were not
+      // the last to finish) can continue from the barrier and finish.
+      peers.clear();
+      for (auto& promise : promises) {
+        promise.setValue();
+      }
+    });
 
-  // Realize the promises so that the other Drivers (which were not
-  // the last to finish) can continue from the barrier and finish.
-  peers.clear();
-  for (auto& promise : promises) {
-    promise.setValue();
+    for (auto& peer : peers) {
+      auto op = peer->findOperator(planNodeId());
+      auto* build = dynamic_cast<NestedLoopJoinBuild*>(op);
+      VELOX_CHECK_NOT_NULL(build);
+      dataVectors_.insert(
+          dataVectors_.begin(),
+          build->dataVectors_.begin(),
+          build->dataVectors_.end());
+    }
   }
 
   operatorCtx_->task()
       ->getNestedLoopJoinBridge(
           operatorCtx_->driverCtx()->splitGroupId, planNodeId())
-      ->setData(std::move(data_));
+      ->setData(std::move(dataVectors_));
 }
 
 bool NestedLoopJoinBuild::isFinished() {

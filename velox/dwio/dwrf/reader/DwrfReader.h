@@ -17,10 +17,11 @@
 #pragma once
 
 #include "velox/dwio/common/ReaderFactory.h"
-#include "velox/dwio/dwrf/reader/ColumnReader.h"
 #include "velox/dwio/dwrf/reader/SelectiveDwrfReader.h"
 
 namespace facebook::velox::dwrf {
+
+class ColumnReader;
 
 class DwrfRowReader : public StrideIndexProvider,
                       public StripeReaderBase,
@@ -188,7 +189,7 @@ class DwrfReader : public dwio::common::Reader {
 
   ~DwrfReader() override = default;
 
-  dwio::common::CompressionKind getCompression() const {
+  common::CompressionKind getCompression() const {
     return readerBase_->getCompressionKind();
   }
 

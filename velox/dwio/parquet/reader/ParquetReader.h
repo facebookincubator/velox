@@ -66,6 +66,10 @@ class ReaderBase {
     return schemaWithId_;
   }
 
+  bool isFileColumnNamesReadAsLowerCase() const {
+    return options_.isFileColumnNamesReadAsLowerCase();
+  }
+
   /// Ensures that streams are enqueued and loading for the row group at
   /// 'currentGroup'. May start loading one or more subsequent groups.
   void scheduleRowGroups(
@@ -97,7 +101,8 @@ class ReaderBase {
 
   static std::shared_ptr<const RowType> createRowType(
       std::vector<std::shared_ptr<const ParquetTypeWithId::TypeWithId>>
-          children);
+          children,
+      bool fileColumnNamesReadAsLowerCase);
 
   memory::MemoryPool& pool_;
   const uint64_t directorySizeGuess_;
@@ -207,6 +212,10 @@ class ParquetReader : public dwio::common::Reader {
   const std::shared_ptr<const dwio::common::TypeWithId>& typeWithId()
       const override {
     return readerBase_->schemaWithId();
+  }
+
+  size_t numberOfRowGroups() const {
+    return readerBase_->fileMetaData().row_groups.size();
   }
 
   std::unique_ptr<dwio::common::RowReader> createRowReader(

@@ -12,12 +12,13 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-add_executable(velox_row_test UnsafeRowSerdeTest.cpp UnsafeRowFuzzTest.cpp)
+add_executable(velox_row_test UnsafeRowFuzzTest.cpp CompactRowTest.cpp)
 
 add_test(velox_row_test velox_row_test)
 
 target_link_libraries(
   velox_row_test
+  velox_row_fast
   velox_exec
   velox_exec_test_lib
   velox_functions_lib
@@ -28,7 +29,7 @@ target_link_libraries(
   velox_vector
   velox_vector_fuzzer
   velox_vector_test_lib
-  ${FOLLY}
+  Folly::folly
   gtest
   gtest_main
   gflags::gflags

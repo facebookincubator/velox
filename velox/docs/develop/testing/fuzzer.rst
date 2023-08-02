@@ -122,6 +122,10 @@ There are also arguments that toggle certain fuzzer features:
 
 * ``--enable_variadic_signatures``: Enable testing of function signatures with variadic arguments. Default is false.
 
+* ``--special_forms``: Enable testing of specified special forms, including `and`, `or`, `cast`, `coalesce`, `if`, and `switch`. Every fuzzer test specifies the enabled special forms of its own. velox_expression_fuzzer_test has all the aforementioned special forms enabled by default.
+
+* ``--enable_dereference``: Enable testing of the field-reference from structs and row_constructor functions. Default is false.
+
 * ``--velox_fuzzer_enable_complex_types``: Enable testing of function signatures with complex argument or return types. Default is false.
 
 * ``--lazy_vector_generation_ratio``: Specifies the probability with which columns in the input row vector will be selected to be wrapped in lazy encoding (expressed as double from 0 to 1). Default is 0.0.
@@ -131,6 +135,8 @@ There are also arguments that toggle certain fuzzer features:
 * ``--velox_fuzzer_enable_expression_reuse``: Enable generation of expressions that re-uses already generated subexpressions. Default is false.
 
 * ``--assign_function_tickets``: Comma separated list of function names and their tickets in the format <function_name>=<tickets>. Every ticket represents an opportunity for a function to be chosen from a pool of candidates. By default, every function has one ticket, and the likelihood of a function being picked can be increased by allotting it more tickets. Note that in practice, increasing the number of tickets does not proportionally increase the likelihood of selection, as the selection process involves filtering the pool of candidates by a required return type so not all functions may compete against the same number of functions at every instance. Number of tickets must be a positive integer. Example: eq=3,floor=5.
+
+* ``--max_expression_trees_per_step``: This sets an upper limit on the number of expression trees to generate per step. These trees would be executed in the same ExprSet and can re-use already generated columns and subexpressions (if re-use is enabled). Default is 1.
 
 In addition, Aggregation Fuzzer also supports tuning parameters:
 
@@ -154,6 +160,9 @@ An example set of arguments to run the fuzzer with all features enabled is as fo
 --velox_fuzzer_enable_expression_reuse
 --velox_fuzzer_enable_column_reuse
 --retry_with_try
+--enable_dereference
+--special_forms="and,or,cast,coalesce,if,switch"
+--max_expression_trees_per_step=2
 --repro_persist_path=<a_valid_local_path>
 --logtostderr=1``
 

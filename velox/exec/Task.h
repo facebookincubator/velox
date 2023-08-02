@@ -48,7 +48,7 @@ class Task : public std::enable_shared_from_this<Task> {
   /// thread are passed on to a separate consumer.
   /// @param onError Optional callback to receive an exception if task
   /// execution fails.
-  Task(
+  static std::shared_ptr<Task> create(
       const std::string& taskId,
       core::PlanFragment planFragment,
       int destination,
@@ -56,7 +56,7 @@ class Task : public std::enable_shared_from_this<Task> {
       Consumer consumer = nullptr,
       std::function<void(std::exception_ptr)> onError = nullptr);
 
-  Task(
+  static std::shared_ptr<Task> create(
       const std::string& taskId,
       core::PlanFragment planFragment,
       int destination,
@@ -73,6 +73,8 @@ class Task : public std::enable_shared_from_this<Task> {
   }
 
   std::string toString() const;
+
+  std::string toJsonString() const;
 
   /// Returns universally unique identifier of the task.
   const std::string& uuid() const {
@@ -99,7 +101,7 @@ class Task : public std::enable_shared_from_this<Task> {
 
   /// Returns MemoryPool used to allocate memory during execution. This instance
   /// is a child of the MemoryPool passed in the constructor.
-  memory::MemoryPool* FOLLY_NONNULL pool() const {
+  memory::MemoryPool* pool() const {
     return pool_.get();
   }
 
@@ -152,7 +154,7 @@ class Task : public std::enable_shared_from_this<Task> {
   /// updates `future`. `future` is realized when the operators are no longer
   /// blocked. Caller thread is responsible to wait for future before calling
   /// `next` again.
-  RowVectorPtr next(ContinueFuture* FOLLY_NULLABLE future = nullptr);
+  RowVectorPtr next(ContinueFuture* future = nullptr);
 
   /// Resumes execution of 'self' after a successful pause. All 'drivers_' must
   /// be off-thread and there must be no 'exception_'
@@ -193,9 +195,9 @@ class Task : public std::enable_shared_from_this<Task> {
   /// corresponding to plan node with specified ID.
   void noMoreSplits(const core::PlanNodeId& planNodeId);
 
-  /// Updates the total number of output buffers to broadcast the results of the
-  /// execution to. Used when plan tree ends with a PartitionedOutputNode with
-  /// broadcast flag set to true.
+  /// Updates the total number of output buffers to broadcast or arbitrarily
+  /// distribute the results of the execution to. Used when plan tree ends with
+  /// a PartitionedOutputNode with broadcast of arbitrary output type.
   /// @param numBuffers Number of output buffers. Must not decrease on
   /// subsequent calls.
   /// @param noMoreBuffers A flag indicating that numBuffers is the final number
@@ -205,7 +207,7 @@ class Task : public std::enable_shared_from_this<Task> {
   /// @return true if update was successful.
   ///         false if noMoreBuffers was previously set to true.
   ///         false if buffer was not found for a given task.
-  bool updateBroadcastOutputBuffers(int numBuffers, bool noMoreBuffers);
+  bool updateOutputBuffers(int numBuffers, bool noMoreBuffers);
 
   /// Returns true if state is 'running'.
   bool isRunning() const;
@@ -219,12 +221,20 @@ class Task : public std::enable_shared_from_this<Task> {
     return state_;
   }
 
-  /// Returns a future which is realized when 'this' is no longer in
-  /// running state. If 'this' is not in running state at the time of
-  /// call, the future is immediately realized. The future is realized
-  /// with an exception after maxWaitMicros. A zero max wait means no
-  /// timeout.
+  /// Returns a future which is realized when the task's state has changed and
+  /// the Task is ready to report some progress (such as split group finished or
+  /// task is completed).
+  /// If the task is not in running state at the time of call, the future is
+  /// immediately realized. The future is realized with an exception after
+  /// maxWaitMicros. A zero max wait means no timeout.
   ContinueFuture stateChangeFuture(uint64_t maxWaitMicros);
+
+  /// Returns a future which is realized when the task is no longer in
+  /// running state.
+  /// If the task is not in running state at the time of call, the future is
+  /// immediately realized. The future is realized with an exception after
+  /// maxWaitMicros. A zero max wait means no timeout.
+  ContinueFuture taskCompletionFuture(uint64_t maxWaitMicros);
 
   /// Returns task execution error or nullptr if no error occurred.
   std::exception_ptr error() const {
@@ -278,7 +288,7 @@ class Task : public std::enable_shared_from_this<Task> {
   /// Creates new instance of MemoryPool for an operator, stores it in the task
   /// to ensure lifetime and returns a raw pointer. Not thread safe, e.g. must
   /// be called from the Operator's constructor.
-  velox::memory::MemoryPool* FOLLY_NONNULL addOperatorPool(
+  velox::memory::MemoryPool* addOperatorPool(
       const core::PlanNodeId& planNodeId,
       int pipelineId,
       uint32_t driverId,
@@ -297,7 +307,7 @@ class Task : public std::enable_shared_from_this<Task> {
   /// Creates new instance of MemoryPool for a merge source in a
   /// MergeExchangeNode, stores it in the task to ensure lifetime and returns a
   /// raw pointer.
-  velox::memory::MemoryPool* FOLLY_NONNULL addMergeSourcePool(
+  velox::memory::MemoryPool* addMergeSourcePool(
       const core::PlanNodeId& planNodeId,
       uint32_t pipelineId,
       uint32_t sourceId);
@@ -306,9 +316,7 @@ class Task : public std::enable_shared_from_this<Task> {
   /// alive by 'self'. 'self' going out of scope may cause the Task to
   /// be freed. This happens if a cancelled task is decoupled from the
   /// task manager and threads are left to finish themselves.
-  static void removeDriver(
-      std::shared_ptr<Task> self,
-      Driver* FOLLY_NONNULL instance);
+  static void removeDriver(std::shared_ptr<Task> self, Driver* instance);
 
   /// Returns a split for the source operator corresponding to plan
   /// node with specified ID. If there are no splits and no-more-splits
@@ -371,24 +379,35 @@ class Task : public std::enable_shared_from_this<Task> {
 
   void setError(const std::string& message);
 
+  /// Returns all the peer operators of the 'caller' operator from a given
+  /// 'pipelindId' in this task.
+  std::vector<Operator*> findPeerOperators(int pipelineId, Operator* caller);
+
   /// Synchronizes completion of an Operator across Drivers of 'this'.
-  /// 'planNodeId' identifies the Operator within all
-  /// Operators/pipelines of 'this'.  Each Operator instance calls this
-  /// once. All but the last get a false return value and 'future' is
-  /// set to a future the caller should block on. At this point the
-  /// caller should go off thread as in any blocking situation.  The
-  /// last to call gets a true return value and 'peers' is set to all
-  /// Drivers except 'caller'. 'promises' coresponds pairwise to
-  /// 'peers'. Realizing the promise will continue the peer. This
-  /// effects a synchronization barrier between Drivers of a pipeline
-  /// inside one worker. This is used for example for multithreaded
-  /// hash join build to ensure all build threads are completed before
-  /// allowing the probe pipeline to proceed. Throws a cancelled error
-  /// if 'this' is in an error state.
+  /// 'planNodeId' identifies the Operator within all Operators/pipelines of
+  /// 'this'.  Each Operator instance calls this once. All but the last get a
+  /// false return value and 'future' is set to a future the caller should block
+  /// on. At this point the caller should go off thread as in any blocking
+  /// situation.  The last to call gets a true return value and 'peers' is set
+  /// to all Drivers except 'caller'. 'promises' corresponds pairwise to
+  /// 'peers'. Realizing the promise will continue the peer. This effects a
+  /// synchronization barrier between Drivers of a pipeline inside one worker.
+  /// This is used for example for multithreaded hash join build to ensure all
+  /// build threads are completed before allowing the probe pipeline to proceed.
+  /// Throws a cancelled error if 'this' is in an error state.
+  ///
+  /// NOTE: if 'future' is null, then the caller doesn't intend to wait for the
+  /// other peers to finish. The function won't set its promise and record it in
+  /// peers. This is used in scenario that the caller only needs to know whether
+  /// it is the last one to reach the barrier.
+  ///
+  /// NOTE: The last peer (the one that got 'true' returned and a bunch of
+  /// promises) is responsible for promises' fulfillment even in case of an
+  /// exception!
   bool allPeersFinished(
       const core::PlanNodeId& planNodeId,
-      Driver* FOLLY_NONNULL caller,
-      ContinueFuture* FOLLY_NONNULL future,
+      Driver* caller,
+      ContinueFuture* future,
       std::vector<ContinuePromise>& promises,
       std::vector<std::shared_ptr<Driver>>& peers);
 
@@ -458,13 +477,18 @@ class Task : public std::enable_shared_from_this<Task> {
   StopReason enterForTerminateLocked(ThreadState& state);
 
   /// Marks that the Driver is not on thread. If no more Drivers in the
-  /// CancelPool are on thread, this realizes
-  /// threadFinishFutures_. These allow syncing with pause or
-  /// termination. The Driver may go off thread because of
+  /// CancelPool are on thread, this realizes threadFinishFutures_. These allow
+  /// syncing with pause or termination. The Driver may go off thread because of
   /// hasBlockingFuture or pause requested or terminate requested. The
   /// return value indicates the reason. If kTerminate is returned, the
-  /// isTerminated flag is set.
-  StopReason leave(ThreadState& state);
+  /// isTerminated flag is set. 'driverCb' is called to close the driver before
+  /// it goes off thread if the task has been terminated. It ensures that the
+  /// driver close operation is always executed on driver thread. This helps to
+  /// avoid the race condition between driver close and operator abort
+  /// operations.
+  void leave(
+      ThreadState& state,
+      const std::function<void(StopReason)>& driverCb);
 
   /// Enters a suspended section where the caller stays on thread but
   /// is not accounted as being on the thread.  Returns kNone if no
@@ -562,6 +586,14 @@ class Task : public std::enable_shared_from_this<Task> {
   void testingVisitDrivers(const std::function<void(Driver*)>& callback);
 
  private:
+  Task(
+      const std::string& taskId,
+      core::PlanFragment planFragment,
+      int destination,
+      std::shared_ptr<core::QueryCtx> queryCtx,
+      ConsumerSupplier consumerSupplier,
+      std::function<void(std::exception_ptr)> onError = nullptr);
+
   // Returns time (ms) since the task execution started or zero, if not started.
   uint64_t timeSinceStartMsLocked() const;
 
@@ -580,21 +612,62 @@ class Task : public std::enable_shared_from_this<Task> {
   // spilling.
   void removeSpillDirectoryIfExists();
 
+  // Invoked to initialize the memory pool for this task on creation.
+  void initTaskPool();
+
   // Creates new instance of MemoryPool for a plan node, stores it in the task
   // to ensure lifetime and returns a raw pointer.
-  memory::MemoryPool* FOLLY_NONNULL
-  getOrAddNodePool(const core::PlanNodeId& planNodeId);
+  memory::MemoryPool* getOrAddNodePool(
+      const core::PlanNodeId& planNodeId,
+      bool isHashJoinNode = false);
+
+  // Creates a memory reclaimer instance for a plan node if the task memory
+  // pool has set memory reclaimer. If 'isHashJoinNode' is true, it creates a
+  // customized instance for hash join plan node, otherwise creates a default
+  // memory reclaimer.
+  std::unique_ptr<memory::MemoryReclaimer> createNodeReclaimer(
+      bool isHashJoinNode) const;
+
+  // Creates a memory reclaimer instance for this task. If the query memory
+  // pool doesn't set memory reclaimer, then the function simply returns null.
+  // Otherwise, it creates a customized memory reclaimer for this task.
+  std::unique_ptr<memory::MemoryReclaimer> createTaskReclaimer();
 
   // Creates new instance of MemoryPool for the exchange client of an
   // ExchangeNode in a pipeline, stores it in the task to ensure lifetime and
   // returns a raw pointer.
-  velox::memory::MemoryPool* FOLLY_NONNULL addExchangeClientPool(
+  velox::memory::MemoryPool* addExchangeClientPool(
       const core::PlanNodeId& planNodeId,
       uint32_t pipelineId);
 
   /// Returns task execution error message or empty string if not error
   /// occurred. This should only be called inside mutex_ protection.
   std::string errorMessageLocked() const;
+
+  class MemoryReclaimer : public memory::MemoryReclaimer {
+   public:
+    static std::unique_ptr<memory::MemoryReclaimer> create(
+        const std::shared_ptr<Task>& task);
+
+    uint64_t reclaim(memory::MemoryPool* pool, uint64_t targetBytes) override;
+
+    void abort(memory::MemoryPool* pool) override;
+
+   private:
+    explicit MemoryReclaimer(const std::shared_ptr<Task>& task) : task_(task) {
+      VELOX_CHECK_NOT_NULL(task);
+    }
+
+    // Gets the shared pointer to the driver to ensure its liveness during the
+    // memory reclaim operation.
+    //
+    // NOTE: a task's memory pool might outlive the task itself.
+    std::shared_ptr<Task> ensureTask() const {
+      return task_.lock();
+    }
+
+    std::weak_ptr<Task> task_;
+  };
 
   // Counts the number of created tasks which is incremented on each task
   // creation.
@@ -697,7 +770,9 @@ class Task : public std::enable_shared_from_this<Task> {
       SplitsStore& splitsStore,
       exec::Split&& split);
 
-  void finishedLocked();
+  // Invoked when all the driver threads are off thread. The function returns
+  // 'threadFinishPromises_' to fulfill.
+  std::vector<ContinuePromise> allThreadsFinishedLocked();
 
   StopReason shouldStopLocked();
 
@@ -719,7 +794,7 @@ class Task : public std::enable_shared_from_this<Task> {
     return makeFinishFutureLocked(comment);
   }
 
-  ContinueFuture makeFinishFutureLocked(const char* FOLLY_NONNULL comment);
+  ContinueFuture makeFinishFutureLocked(const char* comment);
 
   bool isOutputPipeline(int pipelineId) const {
     return driverFactories_[pipelineId]->outputDriver;
@@ -754,36 +829,6 @@ class Task : public std::enable_shared_from_this<Task> {
   // 'pipelineId' set in 'exchangeClients_'.
   std::shared_ptr<ExchangeClient> getExchangeClientLocked(
       int32_t pipelineId) const;
-
-  // RAII helper class to satisfy 'stateChangePromises_' and notify listeners
-  // that task is complete outside of the mutex. Inactive on creation. Must be
-  // activated explicitly by calling 'activate'.
-  class TaskCompletionNotifier {
-   public:
-    /// Calls notify() if it hasn't been called yet.
-    ~TaskCompletionNotifier();
-
-    /// Activates the notifier and provides a callback to invoke and promises to
-    /// satisfy on destruction or a call to 'notify'.
-    void activate(
-        std::function<void()> callback,
-        std::vector<ContinuePromise> promises);
-
-    /// Satisfies the promises passed to 'activate' and invokes the callback.
-    /// Does nothing if 'activate' hasn't been called or 'notify' has been
-    /// called already.
-    void notify();
-
-   private:
-    bool active_{false};
-    std::function<void()> callback_;
-    std::vector<ContinuePromise> promises_;
-  };
-
-  void activateTaskCompletionNotifier(TaskCompletionNotifier& notifier) {
-    notifier.activate(
-        [&]() { onTaskCompletion(); }, std::move(stateChangePromises_));
-  }
 
   // The helper class used to maintain 'numCreatedTasks_' and 'numDeletedTasks_'
   // on task construction and destruction.
@@ -925,6 +970,11 @@ class Task : public std::enable_shared_from_this<Task> {
   /// manage splits of the plan nodes that expect splits.
   std::unordered_map<core::PlanNodeId, SplitsState> splitsStates_;
 
+  // Promises that are fulfilled when the task is completed (terminated).
+  std::vector<ContinuePromise> taskCompletionPromises_;
+
+  // Promises that are fulfilled when the task's state has changed and ready to
+  // report some progress (such as split group finished or task is completed).
   std::vector<ContinuePromise> stateChangePromises_;
 
   TaskStats taskStats_;
@@ -935,9 +985,9 @@ class Task : public std::enable_shared_from_this<Task> {
 
   std::weak_ptr<PartitionedOutputBufferManager> bufferManager_;
 
-  /// Boolean indicating that we have already recieved no-more-broadcast-buffers
-  /// message. Subsequent messagees will be ignored.
-  bool noMoreBroadcastBuffers_{false};
+  /// Boolean indicating that we have already received no-more-output-buffers
+  /// message. Subsequent messages will be ignored.
+  bool noMoreOutputBuffers_{false};
 
   // Thread counts and cancellation -related state.
   //

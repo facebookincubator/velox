@@ -46,6 +46,7 @@ TEST(DuckParserTest, constants) {
 
   // Nulls
   EXPECT_EQ("null", parseExpr("NULL")->toString());
+  EXPECT_EQ("null", parseExpr("NULL::double")->toString());
 
   // Booleans
   EXPECT_EQ("true", parseExpr("TRUE")->toString());
@@ -95,6 +96,76 @@ TEST(DuckParserTest, functions) {
   // Nested calls.
   EXPECT_EQ(
       "f(100,g(h(3.6)),99)", parseExpr("f(100, g(h(3.6)), 99)")->toString());
+}
+
+namespace {
+std::string toString(
+    const std::vector<
+        std::pair<std::shared_ptr<const core::IExpr>, core::SortOrder>>&
+        orderBy) {
+  std::stringstream out;
+  if (!orderBy.empty()) {
+    out << "ORDER BY ";
+    for (auto i = 0; i < orderBy.size(); ++i) {
+      if (i > 0) {
+        out << ", ";
+      }
+      out << orderBy[i].first->toString() << " "
+          << orderBy[i].second.toString();
+    }
+  }
+
+  return out.str();
+}
+
+std::string parseAgg(const std::string& expression) {
+  ParseOptions options;
+  auto aggregateExpr = parseAggregateExpr(expression, options);
+  std::stringstream out;
+  out << aggregateExpr.expr->toString();
+
+  if (aggregateExpr.distinct) {
+    out << " DISTINCT";
+  }
+
+  if (!aggregateExpr.orderBy.empty()) {
+    out << " " << toString(aggregateExpr.orderBy);
+  }
+
+  if (aggregateExpr.maskExpr != nullptr) {
+    out << " FILTER " << aggregateExpr.maskExpr->toString();
+  }
+
+  return out.str();
+}
+} // namespace
+
+TEST(DuckParserTest, aggregates) {
+  EXPECT_EQ("array_agg(\"x\")", parseAgg("array_agg(x)"));
+  EXPECT_EQ(
+      "array_agg(\"x\") ORDER BY \"y\" ASC NULLS LAST",
+      parseAgg("array_agg(x ORDER BY y)"));
+  EXPECT_EQ(
+      "array_agg(\"x\") ORDER BY \"y\" DESC NULLS LAST",
+      parseAgg("array_agg(x ORDER BY y DESC)"));
+  EXPECT_EQ(
+      "array_agg(\"x\") ORDER BY \"y\" ASC NULLS FIRST",
+      parseAgg("array_agg(x ORDER BY y NULLS FIRST)"));
+  EXPECT_EQ(
+      "array_agg(\"x\") ORDER BY \"y\" ASC NULLS LAST, \"z\" ASC NULLS LAST",
+      parseAgg("array_agg(x ORDER BY y, z)"));
+}
+
+TEST(DuckParserTest, aggregatesWithMasks) {
+  EXPECT_EQ(
+      "array_agg(\"x\") FILTER \"m\"",
+      parseAgg("array_agg(x) filter (where m)"));
+}
+
+TEST(DuckParserTest, distinctAggregates) {
+  EXPECT_EQ("count(\"x\") DISTINCT", parseAgg("count(distinct x)"));
+  EXPECT_EQ("count(\"x\",\"y\") DISTINCT", parseAgg("count(distinct x, y)"));
+  EXPECT_EQ("sum(\"x\") DISTINCT", parseAgg("sum(distinct x)"));
 }
 
 TEST(DuckParserTest, subscript) {
@@ -336,8 +407,9 @@ TEST(DuckParserTest, invalid) {
   EXPECT_THROW(parseExpr("f(1"), std::exception);
 
   // Wrong number of expressions.
-  EXPECT_THROW(parseExpr("1, 10"), std::invalid_argument);
-  EXPECT_THROW(parseExpr("a, 99.8, 'c'"), std::invalid_argument);
+  VELOX_ASSERT_THROW(parseExpr("1, 10"), "Expected exactly one expression");
+  VELOX_ASSERT_THROW(
+      parseExpr("a, 99.8, 'c'"), "Expected exactly one expression");
 }
 
 TEST(DuckParserTest, isNull) {
@@ -439,7 +511,8 @@ const std::string boundTypeString(BoundType b) {
 }
 
 const std::string parseWindow(const std::string& expr) {
-  auto windowExpr = parseWindowExpr(expr);
+  ParseOptions options;
+  auto windowExpr = parseWindowExpr(expr, options);
   std::string concatPartitions = "";
   int i = 0;
   for (const auto& partition : windowExpr.partitionBy) {
@@ -453,19 +526,7 @@ const std::string parseWindow(const std::string& expr) {
       ? ""
       : fmt::format("PARTITION BY {}", concatPartitions);
 
-  std::string concatOrderBys = "";
-  i = 0;
-  for (const auto& orderBy : windowExpr.orderBy) {
-    concatOrderBys += fmt::format(
-        " {} {}", orderBy.first->toString(), orderBy.second.toString());
-    if (i > 0) {
-      concatOrderBys += " , ";
-    }
-    i++;
-  }
-  auto orderByString = windowExpr.orderBy.empty()
-      ? ""
-      : fmt::format("ORDER BY {}", concatOrderBys);
+  auto orderByString = toString(windowExpr.orderBy);
 
   auto frameString = fmt::format(
       "{} BETWEEN {}{} AND{} {}",
@@ -489,14 +550,14 @@ const std::string parseWindow(const std::string& expr) {
 
 TEST(DuckParserTest, window) {
   EXPECT_EQ(
-      "row_number() AS c OVER (PARTITION BY \"a\" ORDER BY  \"b\" ASC NULLS LAST"
+      "row_number() AS c OVER (PARTITION BY \"a\" ORDER BY \"b\" ASC NULLS LAST"
       " RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW)",
       parseWindow("row_number() over (partition by a order by b) as c"));
   EXPECT_EQ(
       "row_number() AS a OVER (  RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW)",
       parseWindow("row_number() over () as a"));
   EXPECT_EQ(
-      "row_number() AS a OVER ( ORDER BY  \"b\" ASC NULLS LAST "
+      "row_number() AS a OVER ( ORDER BY \"b\" ASC NULLS LAST "
       "RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW)",
       parseWindow("row_number() over (order by b) as a"));
   EXPECT_EQ(
@@ -505,16 +566,46 @@ TEST(DuckParserTest, window) {
       parseWindow(
           "row_number() over (partition by a rows between unbounded preceding and current row)"));
   EXPECT_EQ(
-      "row_number() OVER (PARTITION BY \"a\" ORDER BY  \"b\" ASC NULLS LAST "
+      "row_number() OVER (PARTITION BY \"a\" ORDER BY \"b\" ASC NULLS LAST "
       "ROWS BETWEEN plus(\"a\",10) PRECEDING AND 10 FOLLOWING)",
       parseWindow("row_number() over (partition by a order by b "
                   "rows between a + 10 preceding and 10 following)"));
   EXPECT_EQ(
-      "row_number() OVER (PARTITION BY \"a\" ORDER BY  \"b\" DESC NULLS FIRST "
+      "row_number() OVER (PARTITION BY \"a\" ORDER BY \"b\" DESC NULLS FIRST "
       "ROWS BETWEEN plus(\"a\",10) PRECEDING AND 10 FOLLOWING)",
       parseWindow(
           "row_number() over (partition by a order by b desc nulls first "
           "rows between a + 10 preceding and 10 following)"));
+
+  EXPECT_EQ(
+      "lead(\"x\",\"y\",\"z\") OVER (  "
+      "RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW)",
+      parseWindow("lead(x, y, z) over ()"));
+
+  EXPECT_EQ(
+      "lag(\"x\",3,\"z\") OVER (  "
+      "RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW)",
+      parseWindow("lag(x, 3, z) over ()"));
+
+  EXPECT_EQ(
+      "nth_value(\"x\",3) OVER (  "
+      "RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW)",
+      parseWindow("nth_value(x, 3) over ()"));
+}
+
+TEST(DuckParserTest, windowWithIntegerConstant) {
+  ParseOptions options;
+  options.parseIntegerAsBigint = false;
+  auto windowExpr = parseWindowExpr("nth_value(x, 3) over ()", options);
+  auto func =
+      std::dynamic_pointer_cast<const core::CallExpr>(windowExpr.functionCall);
+  ASSERT_TRUE(func != nullptr)
+      << windowExpr.functionCall->toString() << " is not a call expr";
+  EXPECT_EQ(func->getInputs().size(), 2);
+  auto param = func->getInputs()[1];
+  auto constant = std::dynamic_pointer_cast<const core::ConstantExpr>(param);
+  ASSERT_TRUE(constant != nullptr) << param->toString() << " is not a constant";
+  EXPECT_EQ(*constant->type(), *INTEGER());
 }
 
 TEST(DuckParserTest, invalidExpression) {
@@ -545,6 +636,83 @@ TEST(DuckParserTest, parseInteger) {
   } else {
     FAIL() << expr->toString() << " is not a constant";
   }
+}
+
+TEST(DuckParserTest, parseWithPrefix) {
+  ParseOptions options;
+  options.functionPrefix = "prefix.";
+  EXPECT_EQ(
+      "prefix.in(\"col1\",[1,2,3])",
+      parseExpr("col1 in (1, 2, 3)", options)->toString());
+  EXPECT_EQ(
+      "prefix.like(\"name\",\"%b%\")",
+      parseExpr("name LIKE '%b%'", options)->toString());
+  EXPECT_EQ(
+      "prefix.not(prefix.like(\"name\",\"%b%\"))",
+      parseExpr("name NOT LIKE '%b%'", options)->toString());
+
+  // Arithmetic operators.
+  EXPECT_EQ("prefix.plus(1,0)", parseExpr("1 + 0", options)->toString());
+  EXPECT_EQ("prefix.minus(1,0)", parseExpr("1 - 0", options)->toString());
+  EXPECT_EQ("prefix.multiply(1,0)", parseExpr("1 * 0", options)->toString());
+  EXPECT_EQ("prefix.divide(1,0)", parseExpr("1 / 0", options)->toString());
+  EXPECT_EQ("prefix.mod(1,0)", parseExpr("1 % 0", options)->toString());
+
+  // Comparisons.
+  EXPECT_EQ("prefix.eq(1,0)", parseExpr("1 = 0", options)->toString());
+  EXPECT_EQ("prefix.neq(1,0)", parseExpr("1 != 0", options)->toString());
+  EXPECT_EQ("prefix.neq(1,0)", parseExpr("1 <> 0", options)->toString());
+  EXPECT_EQ("prefix.not(1)", parseExpr("!1", options)->toString());
+  EXPECT_EQ("prefix.gt(1,0)", parseExpr("1 > 0", options)->toString());
+  EXPECT_EQ("prefix.gte(1,0)", parseExpr("1 >= 0", options)->toString());
+  EXPECT_EQ("prefix.lt(1,0)", parseExpr("1 < 0", options)->toString());
+  EXPECT_EQ("prefix.lte(1,0)", parseExpr("1 <= 0", options)->toString());
+  EXPECT_EQ(
+      "prefix.distinct_from(1,0)",
+      parseExpr("1 IS DISTINCT FROM 0", options)->toString());
+  EXPECT_EQ(
+      "prefix.between(\"c0\",0,1)",
+      parseExpr("c0 between 0 and 1", options)->toString());
+
+  EXPECT_EQ("prefix.not(1)", parseExpr("not 1", options)->toString());
+  EXPECT_EQ("prefix.count()", parseExpr("count()", options)->toString());
+  EXPECT_EQ(
+      "prefix.array_constructor(1,2,3,4,5)",
+      parseExpr("array_constructor(1, 2, 3, 4, 5)", options)->toString());
+  EXPECT_EQ(
+      "prefix.is_null(\"a\")", parseExpr("a IS NULL", options)->toString());
+  EXPECT_EQ(
+      "prefix.not(prefix.is_null(\"a\"))",
+      parseExpr("a IS NOT NULL", options)->toString());
+  EXPECT_EQ(
+      "prefix.avg(\"col1\")", parseExpr("avg(col1)", options)->toString());
+  EXPECT_EQ(
+      "prefix.f(100,prefix.g(prefix.h(3.6)),99)",
+      parseExpr("f(100, g(h(3.6)), 99)", options)->toString());
+  EXPECT_EQ(
+      "prefix.subscript(\"c\",0)", parseExpr("c[0]", options)->toString());
+
+  // Functions which prefix should not be applied to.
+  EXPECT_EQ("and(1,0)", parseExpr("1 and 0", options)->toString());
+  EXPECT_EQ("or(1,0)", parseExpr("1 or 0", options)->toString());
+  EXPECT_EQ("dot(\"a\",\"b\")", parseExpr("(a).b", options)->toString());
+  EXPECT_EQ("if(99,1,0)", parseExpr("if(99, 1, 0)", options)->toString());
+  EXPECT_EQ(
+      "switch(prefix.gt(\"a\",0),1,prefix.lt(\"a\",0),-1,0)",
+      parseExpr("case when a > 0 then 1 when a < 0 then -1 else 0 end", options)
+          ->toString());
+  EXPECT_EQ(
+      "coalesce(null,0)", parseExpr("coalesce(NULL, 0)", options)->toString());
+  EXPECT_EQ(
+      "cast(\"1\", BIGINT)",
+      parseExpr("cast('1' as bigint)", options)->toString());
+  EXPECT_EQ(
+      "try(prefix.plus(\"c0\",\"c1\"))",
+      parseExpr("try(c0 + c1)", options)->toString());
+  // Alias.
+  EXPECT_EQ(
+      "prefix.plus(\"a\",\"b\") AS sum",
+      parseExpr("a + b AS sum", options)->toString());
 }
 
 TEST(DuckParserTest, lambda) {

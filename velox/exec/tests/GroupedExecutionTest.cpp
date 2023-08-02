@@ -15,6 +15,7 @@
  */
 #include <velox/type/Timestamp.h>
 #include "velox/common/base/tests/GTestUtils.h"
+#include "velox/connectors/hive/HiveConnectorSplit.h"
 #include "velox/exec/PartitionedOutputBufferManager.h"
 #include "velox/exec/TableScan.h"
 #include "velox/exec/tests/utils/Cursor.h"
@@ -117,8 +118,7 @@ TEST_F(GroupedExecutionTest, groupedExecutionErrors) {
   planFragment.groupedExecutionLeafNodeIds.clear();
   planFragment.groupedExecutionLeafNodeIds.emplace(tableScanNodeId);
   queryCtx = std::make_shared<core::QueryCtx>(executor_.get());
-  task =
-      std::make_shared<exec::Task>("0", planFragment, 0, std::move(queryCtx));
+  task = exec::Task::create("0", planFragment, 0, std::move(queryCtx));
   VELOX_ASSERT_THROW(
       task->start(task, 3, 1),
       "groupedExecutionLeafNodeIds must be empty in ungrouped execution mode");
@@ -127,8 +127,7 @@ TEST_F(GroupedExecutionTest, groupedExecutionErrors) {
   planFragment.executionStrategy = core::ExecutionStrategy::kGrouped;
   planFragment.groupedExecutionLeafNodeIds.clear();
   queryCtx = std::make_shared<core::QueryCtx>(executor_.get());
-  task =
-      std::make_shared<exec::Task>("0", planFragment, 0, std::move(queryCtx));
+  task = exec::Task::create("0", planFragment, 0, std::move(queryCtx));
   VELOX_ASSERT_THROW(
       task->start(task, 3, 1),
       "groupedExecutionLeafNodeIds must not be empty in "
@@ -139,8 +138,7 @@ TEST_F(GroupedExecutionTest, groupedExecutionErrors) {
   planFragment.groupedExecutionLeafNodeIds.clear();
   planFragment.groupedExecutionLeafNodeIds.emplace(projectNodeId);
   queryCtx = std::make_shared<core::QueryCtx>(executor_.get());
-  task =
-      std::make_shared<exec::Task>("0", planFragment, 0, std::move(queryCtx));
+  task = exec::Task::create("0", planFragment, 0, std::move(queryCtx));
   VELOX_ASSERT_THROW(
       task->start(task, 3, 1),
       fmt::format(
@@ -153,8 +151,7 @@ TEST_F(GroupedExecutionTest, groupedExecutionErrors) {
   planFragment.groupedExecutionLeafNodeIds.emplace(tableScanNodeId);
   planFragment.groupedExecutionLeafNodeIds.emplace(projectNodeId);
   queryCtx = std::make_shared<core::QueryCtx>(executor_.get());
-  task =
-      std::make_shared<exec::Task>("0", planFragment, 0, std::move(queryCtx));
+  task = exec::Task::create("0", planFragment, 0, std::move(queryCtx));
   VELOX_ASSERT_THROW(
       task->start(task, 3, 1),
       fmt::format(
@@ -167,8 +164,7 @@ TEST_F(GroupedExecutionTest, groupedExecutionErrors) {
   planFragment.groupedExecutionLeafNodeIds.clear();
   planFragment.groupedExecutionLeafNodeIds.emplace(localPartitionNodeId);
   queryCtx = std::make_shared<core::QueryCtx>(executor_.get());
-  task =
-      std::make_shared<exec::Task>("0", planFragment, 0, std::move(queryCtx));
+  task = exec::Task::create("0", planFragment, 0, std::move(queryCtx));
   VELOX_ASSERT_THROW(
       task->start(task, 3, 1),
       fmt::format(
@@ -189,28 +185,23 @@ TEST_F(GroupedExecutionTest, groupedExecutionWithOutputBuffer) {
   // running grouped execution.
   auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
   core::PlanNodeId tableScanNodeId;
-  auto pipe0Node =
+
+  auto planFragment =
       PlanBuilder(planNodeIdGenerator)
           .tableScan(rowType_)
           .capturePlanNodeId(tableScanNodeId)
           .project({"c3 as x", "c2 as y", "c1 as z", "c0 as w", "c4", "c5"})
-          .planNode();
-  auto pipe1Node =
-      PlanBuilder(planNodeIdGenerator)
-          .localPartitionRoundRobin({pipe0Node})
+          .localPartitionRoundRobinRow()
           .project({"w as c0", "z as c1", "y as c2", "x as c3", "c4", "c5"})
-          .planNode();
-  auto planFragment =
-      PlanBuilder(planNodeIdGenerator)
-          .localPartitionRoundRobin({pipe1Node})
+          .localPartitionRoundRobinRow()
           .partitionedOutput({}, 1, {"c0", "c1", "c2", "c3", "c4", "c5"})
           .planFragment();
   planFragment.executionStrategy = core::ExecutionStrategy::kGrouped;
   planFragment.groupedExecutionLeafNodeIds.emplace(tableScanNodeId);
   planFragment.numSplitGroups = 10;
   auto queryCtx = std::make_shared<core::QueryCtx>(executor_.get());
-  auto task = std::make_shared<exec::Task>(
-      "0", std::move(planFragment), 0, std::move(queryCtx));
+  auto task =
+      exec::Task::create("0", std::move(planFragment), 0, std::move(queryCtx));
   // 3 drivers max and 1 concurrent split group.
   task->start(task, 3, 1);
 
@@ -273,6 +264,22 @@ TEST_F(GroupedExecutionTest, groupedExecutionWithOutputBuffer) {
   EXPECT_EQ(exec::TaskState::kFinished, task->state());
   EXPECT_EQ(
       std::unordered_set<int32_t>({1, 5, 8}), getCompletedSplitGroups(task));
+
+  // Check that stats are properly assembled.
+  auto taskStats = task->taskStats();
+
+  // Expect 9 drivers in total: 3 drivers x 3 groups.
+  for (const auto& pipeStats : taskStats.pipelineStats) {
+    for (const auto& opStats : pipeStats.operatorStats) {
+      EXPECT_EQ(
+          9, opStats.runtimeStats.find("runningFinishWallNanos")->second.count);
+    }
+  }
+
+  // Check TableScan for total number of splits.
+  EXPECT_EQ(6, taskStats.pipelineStats[2].operatorStats[0].numSplits);
+  // Check FilterProject for total number of vectors/batches.
+  EXPECT_EQ(18, taskStats.pipelineStats[1].operatorStats[1].inputVectors);
 }
 
 // Here we test various aspects of grouped/bucketed execution involving
@@ -288,55 +295,42 @@ TEST_F(GroupedExecutionTest, groupedExecutionWithHashAndNestedLoopJoin) {
     auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
     core::PlanNodeId probeScanNodeId;
     core::PlanNodeId buildScanNodeId;
-    core::PlanNodePtr pipe0Node;
-    core::PlanNodePtr pipe1Node;
 
+    PlanBuilder planBuilder(planNodeIdGenerator, pool_.get());
+    planBuilder.tableScan(rowType_)
+        .capturePlanNodeId(probeScanNodeId)
+        .project({"c3 as x", "c2 as y", "c1 as z", "c0 as w", "c4", "c5"});
     // Hash or Nested Loop join.
     if (i == 0) {
-      pipe0Node =
-          PlanBuilder(planNodeIdGenerator)
-              .tableScan(rowType_)
-              .capturePlanNodeId(probeScanNodeId)
-              .project({"c3 as x", "c2 as y", "c1 as z", "c0 as w", "c4", "c5"})
-              .hashJoin(
-                  {"w"},
-                  {"r"},
-                  PlanBuilder(planNodeIdGenerator)
-                      .tableScan(rowType_, {"c0 > 0"})
-                      .capturePlanNodeId(buildScanNodeId)
-                      .project({"c0 as r"})
-                      .planNode(),
-                  "",
-                  {"x", "y", "z", "w", "c4", "c5"})
-              .planNode();
-      pipe1Node =
-          PlanBuilder(planNodeIdGenerator)
-              .localPartitionRoundRobin({pipe0Node})
-              .project({"w as c0", "z as c1", "y as c2", "x as c3", "c4", "c5"})
-              .planNode();
+      planBuilder
+          .hashJoin(
+              {"w"},
+              {"r"},
+              PlanBuilder(planNodeIdGenerator, pool_.get())
+                  .tableScan(rowType_, {"c0 > 0"})
+                  .capturePlanNodeId(buildScanNodeId)
+                  .project({"c0 as r"})
+                  .planNode(),
+              "",
+              {"x", "y", "z", "w", "c4", "c5"})
+          .localPartitionRoundRobinRow()
+          .project({"w as c0", "z as c1", "y as c2", "x as c3", "c4", "c5"})
+          .planNode();
     } else {
-      pipe0Node =
-          PlanBuilder(planNodeIdGenerator)
-              .tableScan(rowType_)
-              .capturePlanNodeId(probeScanNodeId)
-              .project({"c3 as x", "c2 as y", "c1 as z", "c0 as w", "c4", "c5"})
-              .nestedLoopJoin(
-                  PlanBuilder(planNodeIdGenerator)
-                      .tableScan(rowType_, {"c0 > 0"})
-                      .capturePlanNodeId(buildScanNodeId)
-                      .project({"c0 as r"})
-                      .planNode(),
-                  {"x", "y", "z", "r", "c4", "c5"})
-              .planNode();
-      pipe1Node =
-          PlanBuilder(planNodeIdGenerator)
-              .localPartitionRoundRobin({pipe0Node})
-              .project({"r as c0", "z as c1", "y as c2", "x as c3", "c4", "c5"})
-              .planNode();
+      planBuilder
+          .nestedLoopJoin(
+              PlanBuilder(planNodeIdGenerator, pool_.get())
+                  .tableScan(rowType_, {"c0 > 0"})
+                  .capturePlanNodeId(buildScanNodeId)
+                  .project({"c0 as r"})
+                  .planNode(),
+              {"x", "y", "z", "r", "c4", "c5"})
+          .localPartitionRoundRobinRow()
+          .project({"r as c0", "z as c1", "y as c2", "x as c3", "c4", "c5"})
+          .planNode();
     }
     auto planFragment =
-        PlanBuilder(planNodeIdGenerator)
-            .localPartitionRoundRobin({pipe1Node})
+        planBuilder.localPartitionRoundRobinRow()
             .partitionedOutput({}, 1, {"c0", "c1", "c2", "c3", "c4", "c5"})
             .planFragment();
 
@@ -344,7 +338,7 @@ TEST_F(GroupedExecutionTest, groupedExecutionWithHashAndNestedLoopJoin) {
     planFragment.groupedExecutionLeafNodeIds.emplace(probeScanNodeId);
     planFragment.numSplitGroups = 10;
     auto queryCtx = std::make_shared<core::QueryCtx>(executor_.get());
-    auto task = std::make_shared<exec::Task>(
+    auto task = exec::Task::create(
         "0", std::move(planFragment), 0, std::move(queryCtx));
     // 3 drivers max and 1 concurrent split group.
     task->start(task, 3, 1);

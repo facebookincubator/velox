@@ -70,7 +70,7 @@ class BitwiseAggregateBase : public SimpleNumericAggregate<T, T, T> {
 };
 
 template <template <typename U> class T>
-bool registerBitwise(const std::string& name) {
+exec::AggregateRegistrationResult registerBitwise(const std::string& name) {
   std::vector<std::shared_ptr<exec::AggregateFunctionSignature>> signatures;
   for (const auto& inputType : {"tinyint", "smallint", "integer", "bigint"}) {
     signatures.push_back(exec::AggregateFunctionSignatureBuilder()
@@ -80,13 +80,14 @@ bool registerBitwise(const std::string& name) {
                              .build());
   }
 
-  exec::registerAggregateFunction(
+  return exec::registerAggregateFunction(
       name,
       std::move(signatures),
       [name](
           core::AggregationNode::Step /*step*/,
           const std::vector<TypePtr>& argTypes,
-          const TypePtr& resultType) -> std::unique_ptr<exec::Aggregate> {
+          const TypePtr& resultType,
+          const core::QueryConfig& config) -> std::unique_ptr<exec::Aggregate> {
         VELOX_CHECK_LE(argTypes.size(), 1, "{} takes only one argument", name);
         auto inputType = argTypes[0];
         switch (inputType->kind()) {
@@ -106,7 +107,6 @@ bool registerBitwise(const std::string& name) {
                 inputType->kindName());
         }
       });
-  return true;
 }
 
 } // namespace facebook::velox::functions::aggregate

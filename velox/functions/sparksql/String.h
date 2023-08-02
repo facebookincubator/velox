@@ -15,6 +15,11 @@
  */
 #pragma once
 
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wdeprecated-declarations"
+#include "folly/ssl/OpenSSLHash.h"
+#pragma GCC diagnostic pop
+
 #include "velox/expression/VectorFunction.h"
 #include "velox/functions/Macros.h"
 #include "velox/functions/UDFOutputString.h"
@@ -22,28 +27,93 @@
 
 namespace facebook::velox::functions::sparksql {
 
-template <typename T>
-struct AsciiFunction {
+template <typename T, bool lpad>
+struct PadFunctionBase {
   VELOX_DEFINE_FUNCTION_TYPES(T);
 
-  FOLLY_ALWAYS_INLINE bool call(int32_t& result, const arg_type<Varchar>& s) {
-    result = s.empty() ? 0 : s.data()[0];
-    return true;
+  // ASCII input always produces ASCII result.
+  static constexpr bool is_default_ascii_behavior = true;
+
+  FOLLY_ALWAYS_INLINE void call(
+      out_type<Varchar>& result,
+      const arg_type<Varchar>& string,
+      const arg_type<int64_t>& size,
+      const arg_type<Varchar>& padString) {
+    stringImpl::pad<lpad, false /*isAscii*/>(result, string, size, padString);
+  }
+
+  FOLLY_ALWAYS_INLINE void call(
+      out_type<Varchar>& result,
+      const arg_type<Varchar>& string,
+      const arg_type<int64_t>& size) {
+    stringImpl::pad<lpad, false /*isAscii*/>(result, string, size, {" "});
+  }
+
+  FOLLY_ALWAYS_INLINE void callAscii(
+      out_type<Varchar>& result,
+      const arg_type<Varchar>& string,
+      const arg_type<int64_t>& size,
+      const arg_type<Varchar>& padString) {
+    stringImpl::pad<lpad, true /*isAscii*/>(result, string, size, padString);
+  }
+
+  FOLLY_ALWAYS_INLINE void callAscii(
+      out_type<Varchar>& result,
+      const arg_type<Varchar>& string,
+      const arg_type<int64_t>& size) {
+    stringImpl::pad<lpad, true /*isAscii*/>(result, string, size, {" "});
   }
 };
 
 template <typename T>
+struct LPadFunction : public PadFunctionBase<T, true> {};
+
+template <typename T>
+struct RPadFunction : public PadFunctionBase<T, false> {};
+
+template <typename T>
+struct AsciiFunction {
+  VELOX_DEFINE_FUNCTION_TYPES(T);
+
+  FOLLY_ALWAYS_INLINE void call(int32_t& result, const arg_type<Varchar>& s) {
+    if (s.empty()) {
+      result = 0;
+      return;
+    }
+    int size;
+    result = utf8proc_codepoint(s.data(), s.data() + s.size(), size);
+  }
+
+  FOLLY_ALWAYS_INLINE void callAscii(
+      int32_t& result,
+      const arg_type<Varchar>& s) {
+    result = s.empty() ? 0 : s.data()[0];
+  }
+};
+
+/// chr function
+/// chr(n) -> string
+/// Returns the Unicode code point ``n`` as a single character string.
+/// If ``n < 0``, the result is an empty string.
+/// If ``n >= 256``, the result is equivalent to chr(``n % 256``).
+template <typename T>
 struct ChrFunction {
   VELOX_DEFINE_FUNCTION_TYPES(T);
 
-  FOLLY_ALWAYS_INLINE bool call(out_type<Varchar>& result, int64_t ord) {
-    if (ord < 0) {
+  FOLLY_ALWAYS_INLINE void call(out_type<Varchar>& result, int64_t n) {
+    if (n < 0) {
       result.resize(0);
     } else {
-      result.resize(1);
-      *result.data() = ord;
+      n = n & 0xFF;
+      if (n < 0x80) {
+        result.resize(1);
+        result.data()[0] = n;
+      } else {
+        result.resize(2);
+        result.data()[0] = 0xC0 + (n >> 6);
+        result.data()[1] = 0x80 + (n & 0x3F);
+      }
     }
-    return true;
   }
 };
 
@@ -62,13 +132,15 @@ std::vector<std::shared_ptr<exec::FunctionSignature>> instrSignatures();
 
 std::shared_ptr<exec::VectorFunction> makeInstr(
     const std::string& name,
-    const std::vector<exec::VectorFunctionArg>& inputArgs);
+    const std::vector<exec::VectorFunctionArg>& inputArgs,
+    const core::QueryConfig& config);
 
 std::vector<std::shared_ptr<exec::FunctionSignature>> lengthSignatures();
 
 std::shared_ptr<exec::VectorFunction> makeLength(
     const std::string& name,
-    const std::vector<exec::VectorFunctionArg>& inputArgs);
+    const std::vector<exec::VectorFunctionArg>& inputArgs,
+    const core::QueryConfig& config);
 
 /// Expands each char of the digest data to two chars,
 /// representing the hex value of each digest char, in order.
@@ -224,7 +296,7 @@ template <typename T, bool leftTrim, bool rightTrim>
 struct TrimFunctionBase {
   VELOX_DEFINE_FUNCTION_TYPES(T);
 
-  // Results refer to strings in the first argument.
+  // Results refer to strings in the second argument.
   static constexpr int32_t reuse_strings_from_arg = 1;
 
   // ASCII input always produces ASCII result.
@@ -447,6 +519,330 @@ struct SubstrFunction {
     // Generating output string
     result.setNoCopy(StringView(
         input.data() + byteRange.first, byteRange.second - byteRange.first));
+  }
+};
+
+struct OverlayFunctionBase {
+  template <bool isAscii, bool isVarchar>
+  FOLLY_ALWAYS_INLINE void doCall(
+      exec::StringWriter<false>& result,
+      StringView input,
+      StringView replace,
+      int32_t pos,
+      int32_t len) {
+    // Calculate and append first part.
+    auto startAndLength = substring<isAscii, isVarchar>(input, 1, pos - 1);
+    append<isAscii, isVarchar>(result, input, startAndLength);
+
+    // Append second part.
+    result.append(replace);
+
+    // Calculate and append last part.
+    int32_t length = 0;
+    if (len >= 0) {
+      length = len;
+    } else {
+      if constexpr (isVarchar && !isAscii) {
+        length = stringImpl::lengthUnicode(replace.data(), replace.size());
+      } else {
+        length = replace.size();
+      }
+    }
+    int64_t start = (int64_t)pos + (int64_t)length;
+    startAndLength = substring<isAscii, isVarchar>(input, start, INT32_MAX);
+    append<isAscii, isVarchar>(result, input, startAndLength);
+  }
+
+  template <bool isAscii, bool isVarchar>
+  FOLLY_ALWAYS_INLINE void append(
+      exec::StringWriter<false>& result,
+      StringView input,
+      std::pair<int32_t, int32_t> pair) {
+    if constexpr (isVarchar && !isAscii) {
+      auto byteRange = stringCore::getByteRange<false>(
+          input.data(), pair.first + 1, pair.second);
+      result.append(StringView(
+          input.data() + byteRange.first, byteRange.second - byteRange.first));
+    } else {
+      result.append(StringView(input.data() + pair.first, pair.second));
+    }
+  }
+
+  // Information regarding the pos calculation:
+  // Hive and SQL use one-based indexing for SUBSTR arguments but also accept
+  // zero and negative indices for start positions. If a start index i is
+  // greater than 0, it refers to element i-1 in the sequence. If a start index
+  // i is less than 0, it refers to the -ith element before the end of the
+  // sequence. If a start index i is 0, it refers to the first element. Return
+  // pair of first indices and length.
+  template <bool isAscii, bool isVarchar>
+  FOLLY_ALWAYS_INLINE std::pair<int32_t, int32_t>
+  substring(const StringView& input, const int64_t pos, const int64_t length) {
+    int64_t len = 0;
+    if constexpr (isVarchar && !isAscii) {
+      len = stringImpl::lengthUnicode(input.data(), input.size());
+    } else {
+      len = input.size();
+    }
+    int64_t start = (pos > 0) ? pos - 1 : ((pos < 0) ? len + pos : 0);
+    int64_t end = 0;
+    if (start + length > INT32_MAX) {
+      end = INT32_MAX;
+    } else if (start + length < INT32_MIN) {
+      end = INT32_MIN;
+    } else {
+      end = start + length;
+    }
+
+    if (end <= start || start >= len) {
+      return std::make_pair(0, 0);
+    }
+
+    int64_t zero = 0;
+    int32_t i = std::min(len, std::max(zero, start));
+    int32_t j = std::min(len, std::max(zero, end));
+
+    if (j > i) {
+      return std::make_pair(i, j - i);
+    } else {
+      return std::make_pair(0, 0);
+    }
+  }
+};
+
+template <typename T>
+struct OverlayVarcharFunction : public OverlayFunctionBase {
+  VELOX_DEFINE_FUNCTION_TYPES(T);
+
+  // ASCII input always produces ASCII result.
+  static constexpr bool is_default_ascii_behavior = true;
+
+  FOLLY_ALWAYS_INLINE void call(
+      out_type<Varchar>& result,
+      const arg_type<Varchar>& input,
+      const arg_type<Varchar>& replace,
+      const int32_t pos,
+      const int32_t len) {
+    OverlayFunctionBase::doCall<false, true>(result, input, replace, pos, len);
+  }
+
+  FOLLY_ALWAYS_INLINE void callAscii(
+      out_type<Varchar>& result,
+      const arg_type<Varchar>& input,
+      const arg_type<Varchar>& replace,
+      const int32_t pos,
+      const int32_t len) {
+    OverlayFunctionBase::doCall<true, true>(result, input, replace, pos, len);
+  }
+};
+
+template <typename T>
+struct OverlayVarbinaryFunction : public OverlayFunctionBase {
+  VELOX_DEFINE_FUNCTION_TYPES(T);
+
+  FOLLY_ALWAYS_INLINE void call(
+      out_type<Varbinary>& result,
+      const arg_type<Varbinary>& input,
+      const arg_type<Varbinary>& replace,
+      const int32_t pos,
+      const int32_t len) {
+    OverlayFunctionBase::doCall<false, false>(result, input, replace, pos, len);
+  }
+};
+
+/// left function
+/// left(string, length) -> string
+/// Returns the leftmost length characters from the string
+/// Return an empty string if length is less or equal than 0
+template <typename T>
+struct LeftFunction {
+  VELOX_DEFINE_FUNCTION_TYPES(T);
+
+  // Results refer to strings in the first argument.
+  static constexpr int32_t reuse_strings_from_arg = 0;
+
+  // ASCII input always produces ASCII result.
+  static constexpr bool is_default_ascii_behavior = true;
+
+  FOLLY_ALWAYS_INLINE void call(
+      out_type<Varchar>& result,
+      const arg_type<Varchar>& input,
+      int32_t length) {
+    doCall<false>(result, input, length);
+  }
+
+  FOLLY_ALWAYS_INLINE void callAscii(
+      out_type<Varchar>& result,
+      const arg_type<Varchar>& input,
+      int32_t length) {
+    doCall<true>(result, input, length);
+  }
+
+  template <bool isAscii>
+  FOLLY_ALWAYS_INLINE void doCall(
+      out_type<Varchar>& result,
+      const arg_type<Varchar>& input,
+      int32_t length) {
+    if (length <= 0) {
+      result.setEmpty();
+      return;
+    }
+
+    int32_t numCharacters = stringImpl::length<isAscii>(input);
+
+    if (length > numCharacters) {
+      length = numCharacters;
+    }
+
+    int32_t start = 1;
+
+    auto byteRange =
+        stringCore::getByteRange<isAscii>(input.data(), start, length);
+
+    // Generating output string
+    result.setNoCopy(StringView(
+        input.data() + byteRange.first, byteRange.second - byteRange.first));
+  }
+};
+
+/// translate(string, match, replace) -> varchar
+///
+///   Returns a new translated string. It translates the character in ``string``
+///   by a character in ``replace``. The character in ``replace`` is
+///   corresponding to the character in ``match``. The translation will
+///   happen when any character in ``string`` matching with a character in
+///   ``match``.
+template <typename T>
+struct TranslateFunction {
+  VELOX_DEFINE_FUNCTION_TYPES(T);
+
+  // ASCII input always produces ASCII result.
+  static constexpr bool is_default_ascii_behavior = true;
+
+  std::optional<folly::F14FastMap<std::string, std::string>> unicodeDictionary_;
+  std::optional<folly::F14FastMap<char, char>> asciiDictionary_;
+
+  bool isConstantDictionary_ = false;
+
+  folly::F14FastMap<std::string, std::string> buildUnicodeDictionary(
+      const arg_type<Varchar>& match,
+      const arg_type<Varchar>& replace) {
+    folly::F14FastMap<std::string, std::string> dictionary;
+    int i = 0;
+    int j = 0;
+    while (i < match.size()) {
+      std::string replaceChar;
+      // If match's character size is larger than replace's, the extra
+      // characters in match will be removed from input string.
+      if (j < replace.size()) {
+        int replaceCharLength = utf8proc_char_length(replace.data() + j);
+        replaceChar = std::string(replace.data() + j, replaceCharLength);
+        j += replaceCharLength;
+      }
+      int matchCharLength = utf8proc_char_length(match.data() + i);
+      std::string matchChar = std::string(match.data() + i, matchCharLength);
+      // Only considers the first occurrence of a character in match.
+      dictionary.emplace(matchChar, replaceChar);
+      i += matchCharLength;
+    }
+    return dictionary;
+  }
+
+  folly::F14FastMap<char, char> buildAsciiDictionary(
+      const arg_type<Varchar>& match,
+      const arg_type<Varchar>& replace) {
+    folly::F14FastMap<char, char> dictionary;
+    int i = 0;
+    for (; i < std::min(match.size(), replace.size()); i++) {
+      char matchChar = *(match.data() + i);
+      char replaceChar = *(replace.data() + i);
+      // Only consider the first occurrence of a character in match.
+      dictionary.emplace(matchChar, replaceChar);
+    }
+    for (; i < match.size(); i++) {
+      char matchChar = *(match.data() + i);
+      dictionary.emplace(matchChar, '\0');
+    }
+    return dictionary;
+  }
+
+  FOLLY_ALWAYS_INLINE void initialize(
+      const core::QueryConfig& /*config*/,
+      const arg_type<Varchar>* /*string*/,
+      const arg_type<Varchar>* match,
+      const arg_type<Varchar>* replace) {
+    if (match != nullptr && replace != nullptr) {
+      isConstantDictionary_ = true;
+    }
+  }
+
+  FOLLY_ALWAYS_INLINE void call(
+      out_type<Varchar>& result,
+      const arg_type<Varchar>& input,
+      const arg_type<Varchar>& match,
+      const arg_type<Varchar>& replace) {
+    if (!isConstantDictionary_ || !unicodeDictionary_.has_value()) {
+      unicodeDictionary_ = buildUnicodeDictionary(match, replace);
+    }
+    // No need to do the translation.
+    if (unicodeDictionary_->empty()) {
+      result.append(input);
+      return;
+    }
+    // Initial capacity is input size. Larger capacity can be reserved below.
+    result.reserve(input.size());
+    int i = 0;
+    int k = 0;
+    while (k < input.size()) {
+      int inputCharLength = utf8proc_char_length(input.data() + k);
+      auto inputChar = std::string(input.data() + k, inputCharLength);
+      auto it = unicodeDictionary_->find(inputChar);
+      if (it == unicodeDictionary_->end()) {
+        // Final result size can be larger than the initial size (input size),
+        // e.g., replace a ascii character with a longer utf8 character.
+        result.reserve(i + inputCharLength);
+        std::memcpy(result.data() + i, inputChar.data(), inputCharLength);
+        i += inputCharLength;
+      } else {
+        result.reserve(i + it->second.size());
+        std::memcpy(result.data() + i, it->second.data(), it->second.size());
+        i += it->second.size();
+      }
+      k += inputCharLength;
+    }
+    result.resize(i);
+  }
+
+  FOLLY_ALWAYS_INLINE void callAscii(
+      out_type<Varchar>& result,
+      const arg_type<Varchar>& input,
+      const arg_type<Varchar>& match,
+      const arg_type<Varchar>& replace) {
+    if (!isConstantDictionary_ || !asciiDictionary_.has_value()) {
+      asciiDictionary_ = buildAsciiDictionary(match, replace);
+    }
+    // No need to do the translation.
+    if (asciiDictionary_->empty()) {
+      result.append(input);
+      return;
+    }
+    // Result size cannot be larger than input size for all ascii input.
+    result.reserve(input.size());
+    int i = 0;
+    for (int k = 0; k < input.size(); k++) {
+      auto inputChar = *(input.data() + k);
+      auto it = asciiDictionary_->find(inputChar);
+      if (it == asciiDictionary_->end()) {
+        std::memcpy(result.data() + i, &inputChar, 1);
+        ++i;
+      } else {
+        if (it->second != '\0') {
+          std::memcpy(result.data() + i, &(it->second), 1);
+          ++i;
+        }
+      }
+    }
+    result.resize(i);
   }
 };
 

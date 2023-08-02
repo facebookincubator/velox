@@ -36,25 +36,24 @@ target_link_libraries(
   velox_functions_json
   velox_vector
   velox_memory
-  velox_dwio_type_fbhive
   velox_dwio_common_exception
   velox_dwio_common_test_utils
   velox_presto_serializer
   velox_transform_utils
   ${ANTLR4_RUNTIME}
-  ${Boost_ATOMIC_LIBRARIES}
-  ${Boost_CONTEXT_LIBRARIES}
-  ${Boost_DATE_TIME_LIBRARIES}
-  ${Boost_FILESYSTEM_LIBRARIES}
-  ${Boost_PROGRAM_OPTIONS_LIBRARIES}
-  ${Boost_REGEX_LIBRARIES}
-  ${Boost_THREAD_LIBRARIES}
-  ${Boost_SYSTEM_LIBRARIES}
+  Boost::atomic
+  Boost::context
+  Boost::date_time
+  Boost::filesystem
+  Boost::program_options
+  Boost::regex
+  Boost::thread
+  Boost::system
   gflags::gflags
   gtest
   gtest_main
-  ${FOLLY_WITH_DEPENDENCIES}
+  Folly::folly
   gflags::gflags
   glog::glog
-  ${FMT}
+  fmt::fmt
   dl)

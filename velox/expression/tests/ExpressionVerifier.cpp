@@ -18,8 +18,8 @@
 #include "velox/common/base/Fs.h"
 #include "velox/expression/Expr.h"
 #include "velox/vector/VectorSaver.h"
-#include "velox/vector/fuzzer/VectorFuzzer.h"
 #include "velox/vector/tests/utils/VectorMaker.h"
+#include "velox/vector/tests/utils/VectorTestBase.h"
 
 namespace facebook::velox::test {
 
@@ -42,71 +42,76 @@ void logRowVector(const RowVectorPtr& rowVector) {
     }
   }
 }
+namespace {
+auto createCopy(const VectorPtr& input) {
+  VectorPtr result;
+  SelectivityVector rows(input->size());
+  BaseVector::ensureWritable(rows, input->type(), input->pool(), result);
+  result->copy(input.get(), rows, nullptr);
+  return result;
+}
+} // namespace
 
-void compareVectors(const VectorPtr& left, const VectorPtr& right) {
-  VELOX_CHECK_EQ(left->size(), right->size());
-
+void compareVectors(
+    const VectorPtr& left,
+    const VectorPtr& right,
+    const SelectivityVector& rows) {
   // Print vector contents if in verbose mode.
   size_t vectorSize = left->size();
   if (VLOG_IS_ON(1)) {
     LOG(INFO) << "== Result contents (common vs. simple): ";
-    for (auto i = 0; i < vectorSize; i++) {
-      LOG(INFO) << "At " << i << ": [" << left->toString(i) << " vs "
-                << right->toString(i) << "]";
-    }
+    rows.applyToSelected([&](vector_size_t row) {
+      LOG(INFO) << fmt::format(
+          "At {} [ {} vs {} ]", row, left->toString(row), right->toString(row));
+    });
     LOG(INFO) << "===================";
   }
 
-  for (auto i = 0; i < vectorSize; i++) {
+  rows.applyToSelected([&](vector_size_t row) {
     VELOX_CHECK(
-        left->equalValueAt(right.get(), i, i),
+        left->equalValueAt(right.get(), row, row),
         "Different results at idx '{}': '{}' vs. '{}'",
-        i,
-        left->toString(i),
-        right->toString(i));
-  }
-  LOG(INFO) << "All results match.";
-}
+        row,
+        left->toString(row),
+        right->toString(row));
+  });
 
-RowVectorPtr makeRowVector(const VectorPtr& vector) {
-  return std::make_shared<RowVector>(
-      vector->pool(),
-      ROW({vector->type()}),
-      nullptr,
-      vector->size(),
-      std::vector<VectorPtr>{vector});
+  LOG(INFO) << "All results match.";
 }
 
 } // namespace
 
 ResultOrError ExpressionVerifier::verify(
-    const core::TypedExprPtr& plan,
+    const std::vector<core::TypedExprPtr>& plans,
     const RowVectorPtr& rowVector,
     VectorPtr&& resultVector,
     bool canThrow,
-    std::vector<column_index_t> columnsToWrapInLazy) {
-  LOG(INFO) << "Executing expression: " << plan->toString();
-
+    std::vector<int> columnsToWrapInLazy) {
+  for (int i = 0; i < plans.size(); ++i) {
+    LOG(INFO) << "Executing expression " << i << " : " << plans[i]->toString();
+  }
   logRowVector(rowVector);
 
   // Store data and expression in case of reproduction.
   VectorPtr copiedResult;
-  std::string sql;
+  std::string sql = "";
 
-  // Complex constants that aren't all expressable in sql
+  // Complex constants that aren't all expressible in sql
   std::vector<VectorPtr> complexConstants;
   // Deep copy to preserve the initial state of result vector.
   if (!options_.reproPersistPath.empty()) {
     if (resultVector) {
       copiedResult = BaseVector::copy(*resultVector);
     }
-    std::vector<core::TypedExprPtr> typedExprs = {plan};
-    // Disabling constant folding in order to preserver the original
-    // expression
+    // Disabling constant folding in order to preserve the original expression
     try {
-      sql = exec::ExprSet(std::move(typedExprs), execCtx_, false)
-                .expr(0)
-                ->toSql(&complexConstants);
+      auto exprs = exec::ExprSet(plans, execCtx_, false).exprs();
+      for (int i = 0; i < exprs.size(); ++i) {
+        if (i > 0) {
+          sql += ", ";
+        }
+        sql += exprs[i]->toSql(&complexConstants);
+      }
     } catch (const std::exception& e) {
       LOG(WARNING) << "Failed to generate SQL: " << e.what();
       sql = "<failed to generate>";
@@ -118,11 +123,22 @@ ResultOrError ExpressionVerifier::verify(
   }
 
   // Execute expression plan using both common and simplified evals.
-  std::vector<VectorPtr> commonEvalResult(1);
-  std::vector<VectorPtr> simplifiedEvalResult(1);
-
-  commonEvalResult[0] = resultVector;
-
+  std::vector<VectorPtr> commonEvalResult;
+  std::vector<VectorPtr> simplifiedEvalResult;
+  if (resultVector && resultVector->encoding() == VectorEncoding::Simple::ROW) {
+    auto resultRowVector = resultVector->asUnchecked<RowVector>();
+    auto children = resultRowVector->children();
+    commonEvalResult.resize(children.size());
+    simplifiedEvalResult.resize(children.size());
+    for (int i = 0; i < children.size(); ++i) {
+      commonEvalResult[i] = children[i];
+    }
+  } else {
+    // For backwards compatibility where there was a single result and plan.
+    VELOX_CHECK_EQ(plans.size(), 1);
+    commonEvalResult.push_back(resultVector);
+    simplifiedEvalResult.resize(1);
+  }
   std::exception_ptr exceptionCommonPtr;
   std::exception_ptr exceptionSimplifiedPtr;
 
@@ -133,7 +149,7 @@ ResultOrError ExpressionVerifier::verify(
   // vector will be wrapped in lazy as specified in 'columnsToWrapInLazy'.
   try {
     exec::ExprSet exprSetCommon(
-        {plan}, execCtx_, !options_.disableConstantFolding);
+        plans, execCtx_, !options_.disableConstantFolding);
     auto inputRowVector = rowVector;
     if (!columnsToWrapInLazy.empty()) {
       inputRowVector =
@@ -141,9 +157,13 @@ ResultOrError ExpressionVerifier::verify(
       LOG(INFO) << "Modified inputs for common eval path: ";
       logRowVector(inputRowVector);
     }
-    exec::EvalCtx evalCtxCommon(execCtx_, &exprSetCommon, inputRowVector.get());
 
+    auto copy = createCopy(inputRowVector);
+
+    exec::EvalCtx evalCtxCommon(execCtx_, &exprSetCommon, inputRowVector.get());
     exprSetCommon.eval(rows, evalCtxCommon, commonEvalResult);
+    assertEqualVectors(copy, inputRowVector);
+
   } catch (const VeloxUserError&) {
     if (!canThrow) {
       LOG(ERROR)
@@ -165,11 +185,14 @@ ResultOrError ExpressionVerifier::verify(
 
   // Execute with simplified expression eval path.
   try {
-    exec::ExprSetSimplified exprSetSimplified({plan}, execCtx_);
+    exec::ExprSetSimplified exprSetSimplified(plans, execCtx_);
     exec::EvalCtx evalCtxSimplified(
         execCtx_, &exprSetSimplified, rowVector.get());
 
+    auto copy = createCopy(rowVector);
     exprSetSimplified.eval(rows, evalCtxSimplified, simplifiedEvalResult);
+    assertEqualVectors(copy, rowVector);
+
   } catch (const VeloxUserError&) {
     exceptionSimplifiedPtr = std::current_exception();
   } catch (...) {
@@ -181,7 +204,7 @@ ResultOrError ExpressionVerifier::verify(
   }
 
   try {
-    // Compare results or exceptions (if any). Fail is anything is different.
+    // Compare results or exceptions (if any). Fail if anything is different.
     if (exceptionCommonPtr || exceptionSimplifiedPtr) {
       // Throws in case exceptions are not compatible. If they are compatible,
       // return false to signal that the expression failed.
@@ -189,7 +212,11 @@ ResultOrError ExpressionVerifier::verify(
       return {nullptr, exceptionCommonPtr};
     } else {
       // Throws in case output is different.
-      compareVectors(commonEvalResult.front(), simplifiedEvalResult.front());
+      VELOX_CHECK_EQ(commonEvalResult.size(), plans.size());
+      VELOX_CHECK_EQ(simplifiedEvalResult.size(), plans.size());
+      for (int i = 0; i < plans.size(); ++i) {
+        compareVectors(commonEvalResult[i], simplifiedEvalResult[i], rows);
+      }
     }
   } catch (...) {
     persistReproInfoIfNeeded(
@@ -208,12 +235,14 @@ ResultOrError ExpressionVerifier::verify(
     exit(0);
   }
 
-  return {makeRowVector(commonEvalResult[0]), nullptr};
+  return {
+      VectorMaker(commonEvalResult[0]->pool()).rowVector(commonEvalResult),
+      nullptr};
 }
 
 void ExpressionVerifier::persistReproInfoIfNeeded(
     const VectorPtr& inputVector,
-    const std::vector<column_index_t>& columnsToWrapInLazy,
+    const std::vector<int>& columnsToWrapInLazy,
     const VectorPtr& resultVector,
     const std::string& sql,
     const std::vector<VectorPtr>& complexConstants) {
@@ -227,7 +256,7 @@ void ExpressionVerifier::persistReproInfoIfNeeded(
 
 void ExpressionVerifier::persistReproInfo(
     const VectorPtr& inputVector,
-    std::vector<column_index_t> columnsToWrapInLazy,
+    std::vector<int> columnsToWrapInLazy,
     const VectorPtr& resultVector,
     const std::string& sql,
     const std::vector<VectorPtr>& complexConstants) {
@@ -261,8 +290,7 @@ void ExpressionVerifier::persistReproInfo(
     lazyListPath =
         fmt::format("{}/{}", dirPath->c_str(), kIndicesOfLazyColumnsFileName);
     try {
-      saveStdVectorToFile<column_index_t>(
-          columnsToWrapInLazy, lazyListPath.c_str());
+      saveStdVectorToFile<int>(columnsToWrapInLazy, lazyListPath.c_str());
     } catch (std::exception& e) {
       lazyListPath = e.what();
     }
@@ -314,6 +342,146 @@ void ExpressionVerifier::persistReproInfo(
     ss << " --complex_constant_path " << complexConstantsPath;
   }
   LOG(INFO) << ss.str();
+}
+
+namespace {
+class MinimalSubExpressionFinder {
+ public:
+  MinimalSubExpressionFinder(
+      ExpressionVerifier&& verifier,
+      VectorFuzzer& vectorFuzzer)
+      : verifier_(verifier), vectorFuzzer_(vectorFuzzer) {}
+
+  // Tries subexpressions of plan until finding the minimal failing subtree.
+  void findMinimalExpression(
+      core::TypedExprPtr plan,
+      const RowVectorPtr& rowVector,
+      const std::vector<int>& columnsToWrapInLazy) {
+    if (verifyWithResults(plan, rowVector, columnsToWrapInLazy)) {
+      errorExit("Retry should have failed");
+    }
+    bool minimalFound =
+        findMinimalRecursive(plan, rowVector, columnsToWrapInLazy);
+    if (minimalFound) {
+      errorExit("Found minimal failing expression.");
+    } else {
+      errorExit("Only the top level expression failed!");
+    }
+  }
+
+ private:
+  // Central point for failure exit.
+  void errorExit(const std::string& text) {
+    VELOX_FAIL(text);
+  }
+
+  // Verifies children of 'plan'. If all succeed, sets minimalFound to
+  // true and reruns 'plan' wth and without lazy vectors. Set
+  // breakpoint inside this to debug failures.
+  bool findMinimalRecursive(
+      core::TypedExprPtr plan,
+      const RowVectorPtr& rowVector,
+      const std::vector<int>& columnsToWrapInLazy) {
+    bool anyFailed = false;
+    for (auto& input : plan->inputs()) {
+      if (!verifyWithResults(input, rowVector, columnsToWrapInLazy)) {
+        anyFailed = true;
+        bool minimalFound =
+            findMinimalRecursive(input, rowVector, columnsToWrapInLazy);
+        if (minimalFound) {
+          return true;
+        }
+      }
+    }
+    if (!anyFailed) {
+      LOG(INFO) << "Failed with all children succeeding: " << plan->toString();
+      // Re-running the minimum failed. Put breakpoint here to debug.
+      verifyWithResults(plan, rowVector, columnsToWrapInLazy);
+      if (!columnsToWrapInLazy.empty()) {
+        LOG(INFO) << "Trying without lazy:";
+        if (verifyWithResults(plan, rowVector, {})) {
+          LOG(INFO) << "Minimal failure succeeded without lazy vectors";
+        }
+      }
+      LOG(INFO) << fmt::format(
+          "Found minimal failing subexpression: {}", plan->toString());
+      return true;
+    }
+
+    return false;
+  }
+
+  // Verifies a 'plan' against a 'rowVector' with and without pre-existing
+  // contents in result vector.
+  bool verifyWithResults(
+      core::TypedExprPtr plan,
+      const RowVectorPtr& rowVector,
+      const std::vector<int>& columnsToWrapInLazy) {
+    VectorPtr result;
+    LOG(INFO) << "Running with empty results vector :" << plan->toString();
+    bool emptyResult = verifyPlan(plan, rowVector, columnsToWrapInLazy, result);
+    LOG(INFO) << "Running with non empty vector :" << plan->toString();
+    result = vectorFuzzer_.fuzzFlat(plan->type());
+    bool filledResult =
+        verifyPlan(plan, rowVector, columnsToWrapInLazy, result);
+    if (emptyResult != filledResult) {
+      LOG(ERROR) << fmt::format(
+          "Different results for empty vs populated ! Empty result = {} filledResult = {}",
+          emptyResult,
+          filledResult);
+    }
+    return filledResult && emptyResult;
+  }
+
+  // Runs verification on a plan with a provided result vector.
+  // Returns true if the verification is successful.
+  bool verifyPlan(
+      core::TypedExprPtr plan,
+      const RowVectorPtr& rowVector,
+      const std::vector<int>& columnsToWrapInLazy,
+      VectorPtr results) {
+    // Turn off unnecessary logging.
+    FLAGS_minloglevel = 2;
+    bool success = true;
+
+    try {
+      verifier_.verify(
+          {plan},
+          rowVector,
+          results ? BaseVector::copy(*results) : nullptr,
+          true, // canThrow
+          columnsToWrapInLazy);
+    } catch (const std::exception& e) {
+      success = false;
+    }
+    FLAGS_minloglevel = 0;
+    return success;
+  }
+
+  ExpressionVerifier verifier_;
+  VectorFuzzer& vectorFuzzer_;
+};
+} // namespace
+
+void computeMinimumSubExpression(
+    ExpressionVerifier&& minimalVerifier,
+    VectorFuzzer& fuzzer,
+    const std::vector<core::TypedExprPtr>& plans,
+    const RowVectorPtr& rowVector,
+    const std::vector<int>& columnsToWrapInLazy) {
+  auto finder = MinimalSubExpressionFinder(std::move(minimalVerifier), fuzzer);
+  if (plans.size() > 1) {
+    LOG(INFO)
+        << "Found more than one expression, minimal subexpression might not work"
+           " in cases where bugs are due to side effects when evaluating multiple"
+           " expressions.";
+  }
+  for (auto plan : plans) {
+    LOG(INFO) << "============================================";
+    LOG(INFO) << "Finding minimal subexpression for plan:" << plan->toString();
+    finder.findMinimalExpression(plan, rowVector, columnsToWrapInLazy);
+    LOG(INFO) << "============================================";
+  }
 }
 
 } // namespace facebook::velox::test

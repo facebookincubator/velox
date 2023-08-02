@@ -13,13 +13,13 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+#include "velox/exec/PartitionFunction.h"
 #include "velox/exec/WindowFunction.h"
 #include "velox/exec/tests/utils/HiveConnectorTestBase.h"
 #include "velox/exec/tests/utils/PlanBuilder.h"
 #include "velox/functions/prestosql/aggregates/RegisterAggregateFunctions.h"
 #include "velox/functions/prestosql/registration/RegistrationFunctions.h"
 #include "velox/parse/TypeResolver.h"
-#include "velox/vector/tests/utils/VectorTestBase.h"
 
 #include <gtest/gtest.h>
 
@@ -34,9 +34,14 @@ class PlanNodeSerdeTest : public testing::Test,
     parse::registerTypeResolver();
 
     Type::registerSerDe();
+    common::Filter::registerSerDe();
+    connector::hive::HiveTableHandle::registerSerDe();
+    connector::hive::LocationHandle::registerSerDe();
+    connector::hive::HiveColumnHandle::registerSerDe();
+    connector::hive::HiveInsertTableHandle::registerSerDe();
     core::PlanNode::registerSerDe();
     core::ITypedExpr::registerSerDe();
-    PlanBuilder::registerSerDe();
+    registerPartitionFunctionSerDe();
 
     data_ = {makeRowVector({
         makeFlatVector<int64_t>({1, 2, 3}),
@@ -65,10 +70,35 @@ TEST_F(PlanNodeSerdeTest, aggregation) {
                   .planNode();
 
   testSerde(plan);
+
+  // Aggregation over sorted inputs.
+  plan = PlanBuilder()
+             .values({data_})
+             .singleAggregation(
+                 {"c0"}, {"array_agg(c1 ORDER BY c2 DESC)", "sum(c1)"})
+             .planNode();
+
+  testSerde(plan);
+
+  // Aggregation over distinct inputs.
+  plan = PlanBuilder()
+             .values({data_})
+             .singleAggregation({"c0"}, {"sum(distinct c1)", "avg(c1)"})
+             .planNode();
+
+  testSerde(plan);
 }
 
 TEST_F(PlanNodeSerdeTest, assignUniqueId) {
   auto plan = PlanBuilder().values({data_}).assignUniqueId().planNode();
+  testSerde(plan);
+}
+
+TEST_F(PlanNodeSerdeTest, markDistinct) {
+  auto plan = PlanBuilder()
+                  .values({data_})
+                  .markDistinct("marker", {"c0", "c1", "c2"})
+                  .planNode();
   testSerde(plan);
 }
 
@@ -90,14 +120,27 @@ TEST_F(PlanNodeSerdeTest, nestedLoopJoin) {
       });
 
   auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
-  auto plan =
-      PlanBuilder(planNodeIdGenerator)
-          .values({left})
-          .nestedLoopJoin(
-              PlanBuilder(planNodeIdGenerator).values({right}).planNode(),
-              {"t0", "u1", "t2", "t1"})
-          .planNode();
-  testSerde(plan);
+  {
+    auto plan =
+        PlanBuilder(planNodeIdGenerator)
+            .values({left})
+            .nestedLoopJoin(
+                PlanBuilder(planNodeIdGenerator).values({right}).planNode(),
+                {"t0", "u1", "t2", "t1"})
+            .planNode();
+    testSerde(plan);
+  }
+  {
+    auto plan =
+        PlanBuilder(planNodeIdGenerator)
+            .values({left})
+            .nestedLoopJoin(
+                PlanBuilder(planNodeIdGenerator).values({right}).planNode(),
+                "t0 < u0",
+                {"t0", "u1", "t2", "t1"})
+            .planNode();
+    testSerde(plan);
+  }
 }
 
 TEST_F(PlanNodeSerdeTest, enforceSingleRow) {
@@ -127,7 +170,10 @@ TEST_F(PlanNodeSerdeTest, groupId) {
 }
 
 TEST_F(PlanNodeSerdeTest, localPartition) {
-  auto plan = PlanBuilder().values({data_}).localPartition({}).planNode();
+  auto plan = PlanBuilder()
+                  .values({data_})
+                  .localPartition(std::vector<std::string>{})
+                  .planNode();
   testSerde(plan);
 
   plan = PlanBuilder().values({data_}).localPartition({"c0", "c1"}).planNode();
@@ -363,6 +409,163 @@ TEST_F(PlanNodeSerdeTest, window) {
              .window({"sum(c0) over (partition by c1 order by c2)"})
              .planNode();
 
+  testSerde(plan);
+}
+
+TEST_F(PlanNodeSerdeTest, rowNumber) {
+  // Test with emitting the row number.
+  auto plan = PlanBuilder().values({data_}).rowNumber({}).planNode();
+  testSerde(plan);
+
+  plan = PlanBuilder().values({data_}).rowNumber({"c2", "c0"}).planNode();
+  testSerde(plan);
+
+  plan = PlanBuilder().values({data_}).rowNumber({"c1", "c2"}, 10).planNode();
+  testSerde(plan);
+
+  // Test without emitting the row number.
+  plan = PlanBuilder()
+             .values({data_})
+             .rowNumber({}, std::nullopt, false)
+             .planNode();
+  testSerde(plan);
+
+  plan = PlanBuilder()
+             .values({data_})
+             .rowNumber({"c2", "c0"}, std::nullopt, false)
+             .planNode();
+  testSerde(plan);
+
+  plan = PlanBuilder()
+             .values({data_})
+             .rowNumber({"c1", "c2"}, 10, false)
+             .planNode();
+  testSerde(plan);
+}
+
+TEST_F(PlanNodeSerdeTest, scan) {
+  auto plan = PlanBuilder(pool_.get())
+                  .tableScan(
+                      ROW({"a", "b", "c", "d"},
+                          {BIGINT(), BIGINT(), BOOLEAN(), DOUBLE()}),
+                      {"a < 5", "b = 7", "c = true", "d > 0.01"},
+                      "a + b < 100")
+                  .planNode();
+  testSerde(plan);
+}
+
+TEST_F(PlanNodeSerdeTest, topNRowNumber) {
+  auto plan = PlanBuilder()
+                  .values({data_})
+                  .topNRowNumber({}, {"c0", "c2"}, 10, false)
+                  .planNode();
+  testSerde(plan);
+
+  plan = PlanBuilder()
+             .values({data_})
+             .topNRowNumber({}, {"c0", "c2"}, 10, true)
+             .planNode();
+  testSerde(plan);
+
+  plan = PlanBuilder()
+             .values({data_})
+             .topNRowNumber({"c0"}, {"c1", "c2"}, 10, false)
+             .planNode();
+  testSerde(plan);
+}
+
+TEST_F(PlanNodeSerdeTest, write) {
+  auto rowTypePtr = ROW({"c0", "c1", "c2"}, {BIGINT(), BOOLEAN(), VARBINARY()});
+  auto planBuilder =
+      PlanBuilder(pool_.get()).tableScan(rowTypePtr, {"c1 = true"}, "c0 < 100");
+  planBuilder.planNode();
+  auto tableColumnNames = std::vector<std::string>{"c0", "c1", "c2"};
+  auto tableColumnTypes =
+      std::vector<TypePtr>{BIGINT(), BOOLEAN(), VARBINARY()};
+  auto locationHandle = exec::test::HiveConnectorTestBase::makeLocationHandle(
+      "targetDirectory",
+      std::optional("writeDirectory"),
+      connector::hive::LocationHandle::TableType::kNew);
+  auto hiveInsertTableHandle =
+      exec::test::HiveConnectorTestBase::makeHiveInsertTableHandle(
+          tableColumnNames, tableColumnTypes, {"c2"}, locationHandle);
+  auto insertHandle =
+      std::make_shared<core::InsertTableHandle>("id", hiveInsertTableHandle);
+
+  core::TypedExprPtr inputField =
+      std::make_shared<const core::FieldAccessTypedExpr>(BIGINT(), "c0");
+  auto callExpr = std::make_shared<const core::CallTypedExpr>(
+      BIGINT(),
+      std::vector<core::TypedExprPtr>{inputField},
+      "presto.default.min");
+  std::vector<std::string> aggregateNames = {"min"};
+  std::vector<core::AggregationNode::Aggregate> aggregates = {
+      core::AggregationNode::Aggregate{callExpr, nullptr, {}, {}}};
+  auto aggregationNode = std::make_shared<core::AggregationNode>(
+      core::PlanNodeId(),
+      core::AggregationNode::Step::kPartial,
+      std::vector<core::FieldAccessTypedExprPtr>{},
+      std::vector<core::FieldAccessTypedExprPtr>{},
+      aggregateNames,
+      aggregates,
+      false, // ignoreNullKeys
+      planBuilder.planNode());
+  auto plan = planBuilder
+                  .tableWrite(
+                      tableColumnNames,
+                      aggregationNode,
+                      insertHandle,
+                      false,
+                      connector::CommitStrategy::kTaskCommit)
+                  .planNode();
+  testSerde(plan);
+}
+
+TEST_F(PlanNodeSerdeTest, tableWriteMerge) {
+  auto rowTypePtr = ROW({"c0", "c1", "c2"}, {BIGINT(), BOOLEAN(), VARBINARY()});
+  auto planBuilder =
+      PlanBuilder(pool_.get()).tableScan(rowTypePtr, {"c1 = true"}, "c0 < 100");
+  planBuilder.planNode();
+  auto tableColumnNames = std::vector<std::string>{"c0", "c1", "c2"};
+  auto tableColumnTypes =
+      std::vector<TypePtr>{BIGINT(), BOOLEAN(), VARBINARY()};
+  auto locationHandle = exec::test::HiveConnectorTestBase::makeLocationHandle(
+      "targetDirectory",
+      std::optional("writeDirectory"),
+      connector::hive::LocationHandle::TableType::kNew);
+  auto hiveInsertTableHandle =
+      exec::test::HiveConnectorTestBase::makeHiveInsertTableHandle(
+          tableColumnNames, tableColumnTypes, {"c2"}, locationHandle);
+  auto insertHandle =
+      std::make_shared<core::InsertTableHandle>("id", hiveInsertTableHandle);
+  core::TypedExprPtr inputField =
+      std::make_shared<const core::FieldAccessTypedExpr>(BIGINT(), "c0");
+  auto callExpr = std::make_shared<const core::CallTypedExpr>(
+      BIGINT(),
+      std::vector<core::TypedExprPtr>{inputField},
+      "presto.default.min");
+  std::vector<std::string> aggregateNames = {"min"};
+  std::vector<core::AggregationNode::Aggregate> aggregates = {
+      core::AggregationNode::Aggregate{callExpr, nullptr, {}, {}}};
+  auto aggregationNode = std::make_shared<core::AggregationNode>(
+      core::PlanNodeId(),
+      core::AggregationNode::Step::kPartial,
+      std::vector<core::FieldAccessTypedExprPtr>{},
+      std::vector<core::FieldAccessTypedExprPtr>{},
+      aggregateNames,
+      aggregates,
+      false, // ignoreNullKeys
+      planBuilder.planNode());
+  auto plan = planBuilder
+                  .tableWrite(
+                      tableColumnNames,
+                      aggregationNode,
+                      insertHandle,
+                      false,
+                      connector::CommitStrategy::kTaskCommit)
+                  .localPartition(std::vector<std::string>{})
+                  .tableWriteMerge()
+                  .planNode();
   testSerde(plan);
 }
 

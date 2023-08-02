@@ -210,6 +210,17 @@ static void releaseArrowSchema(ArrowSchema* arrowSchema) {
 const char* exportArrowFormatStr(
     const TypePtr& type,
     std::string& formatBuffer) {
+  if (type->isDecimal()) {
+    // Decimal types encode the precision, scale values.
+    const auto& [precision, scale] = getDecimalPrecisionScale(*type);
+    formatBuffer = fmt::format("d:{},{}", precision, scale);
+    return formatBuffer.c_str();
+  }
+
+  if (type->isDate()) {
+    return "tdD";
+  }
+
   switch (type->kind()) {
     // Scalar types.
     case TypeKind::BOOLEAN:
@@ -226,13 +237,6 @@ const char* exportArrowFormatStr(
       return "f"; // float32
     case TypeKind::DOUBLE:
       return "g"; // float64
-    // Decimal types encode the precision, scale values.
-    case TypeKind::SHORT_DECIMAL:
-    case TypeKind::LONG_DECIMAL: {
-      const auto& [precision, scale] = getDecimalPrecisionScale(*type);
-      formatBuffer = fmt::format("d:{},{}", precision, scale);
-      return formatBuffer.c_str();
-    }
     // We always map VARCHAR and VARBINARY to the "small" version (lower case
     // format string), which uses 32 bit offsets.
     case TypeKind::VARCHAR:
@@ -244,8 +248,6 @@ const char* exportArrowFormatStr(
       // TODO: need to figure out how we'll map this since in Velox we currently
       // store timestamps as two int64s (epoch in sec and nanos).
       return "ttn"; // time64 [nanoseconds]
-    case TypeKind::DATE:
-      return "tdD"; // date32[days]
     // Complex/nested types.
     case TypeKind::ARRAY:
       static_assert(sizeof(vector_size_t) == 4);
@@ -321,10 +323,9 @@ void gatherFromBuffer(
     rows.apply([&](vector_size_t i) {
       bits::setBit(dst, j++, bits::isBitSet(src, i));
     });
-  } else if (type.kind() == TypeKind::SHORT_DECIMAL) {
+  } else if (type.isShortDecimal()) {
     rows.apply([&](vector_size_t i) {
-      auto decimalSrc = buf.as<UnscaledShortDecimal>();
-      int128_t value = decimalSrc[i].unscaledValue();
+      int128_t value = buf.as<int64_t>()[i];
       memcpy(dst + (j++) * sizeof(int128_t), &value, sizeof(int128_t));
     });
   } else {
@@ -426,11 +427,9 @@ void exportFlat(
     case TypeKind::SMALLINT:
     case TypeKind::INTEGER:
     case TypeKind::BIGINT:
-    case TypeKind::DATE:
+    case TypeKind::HUGEINT:
     case TypeKind::REAL:
     case TypeKind::DOUBLE:
-    case TypeKind::SHORT_DECIMAL:
-    case TypeKind::LONG_DECIMAL:
       exportValues(vec, rows, out, pool, holder);
       break;
     case TypeKind::VARCHAR:

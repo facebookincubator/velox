@@ -23,16 +23,16 @@ using namespace dwio::common;
 
 SelectiveIntegerDictionaryColumnReader::SelectiveIntegerDictionaryColumnReader(
     const std::shared_ptr<const TypeWithId>& requestedType,
-    const std::shared_ptr<const TypeWithId>& dataType,
+    std::shared_ptr<const TypeWithId> dataType,
     DwrfParams& params,
     common::ScanSpec& scanSpec,
     uint32_t numBytes)
     : SelectiveIntegerColumnReader(
-          std::move(requestedType),
+          requestedType->type,
           params,
           scanSpec,
-          dataType->type) {
-  EncodingKey encodingKey{nodeType_->id, params.flatMapContext().sequence};
+          std::move(dataType)) {
+  EncodingKey encodingKey{fileType_->id, params.flatMapContext().sequence};
   auto& stripe = params.stripeStreams();
   auto encoding = stripe.getEncoding(encodingKey);
   scanState_.dictionary.numValues = encoding.dictionarysize();
@@ -40,7 +40,7 @@ SelectiveIntegerDictionaryColumnReader::SelectiveIntegerDictionaryColumnReader(
   auto data = encodingKey.forKind(proto::Stream_Kind_DATA);
   bool dataVInts = stripe.getUseVInts(data);
   dataReader_ = createRleDecoder</* isSigned = */ false>(
-      stripe.getStream(data, true),
+      stripe.getStream(data, params.streamLabels().label(), true),
       rleVersion_,
       memoryPool_,
       dataVInts,
@@ -48,10 +48,12 @@ SelectiveIntegerDictionaryColumnReader::SelectiveIntegerDictionaryColumnReader(
 
   // make a lazy dictionary initializer
   dictInit_ = stripe.getIntDictionaryInitializerForNode(
-      encodingKey, numBytes, numBytes);
+      encodingKey, numBytes, params.streamLabels(), numBytes);
 
   auto inDictStream = stripe.getStream(
-      encodingKey.forKind(proto::Stream_Kind_IN_DICTIONARY), false);
+      encodingKey.forKind(proto::Stream_Kind_IN_DICTIONARY),
+      params.streamLabels().label(),
+      false);
   if (inDictStream) {
     inDictionaryReader_ =
         createBooleanRleDecoder(std::move(inDictStream), encodingKey);
@@ -73,7 +75,11 @@ void SelectiveIntegerDictionaryColumnReader::read(
     RowSet rows,
     const uint64_t* incomingNulls) {
   VELOX_WIDTH_DISPATCH(
-      sizeOfIntKind(type_->kind()), prepareRead, offset, rows, incomingNulls);
+      sizeOfIntKind(fileType_->type->kind()),
+      prepareRead,
+      offset,
+      rows,
+      incomingNulls);
   auto end = rows.back() + 1;
   const auto* rawNulls =
       nullsInReadRange_ ? nullsInReadRange_->as<uint64_t>() : nullptr;
@@ -109,15 +115,16 @@ void SelectiveIntegerDictionaryColumnReader::ensureInitialized() {
 
   Timer timer;
   scanState_.dictionary.values = dictInit_();
-  // Make sure there is a cache even for an empty dictionary because
-  // of asan failure when preparing a gather with all lanes masked
-  // out.
-  scanState_.filterCache.resize(
-      std::max<int32_t>(1, scanState_.dictionary.numValues));
-  simd::memset(
-      scanState_.filterCache.data(),
-      FilterResult::kUnknown,
-      scanState_.filterCache.size());
+  if (scanSpec_->hasFilter()) {
+    // Make sure there is a cache even for an empty dictionary because of asan
+    // failure when preparing a gather with all lanes masked out.
+    scanState_.filterCache.resize(
+        std::max<int32_t>(1, scanState_.dictionary.numValues));
+    simd::memset(
+        scanState_.filterCache.data(),
+        FilterResult::kUnknown,
+        scanState_.filterCache.size());
+  }
   initialized_ = true;
   initTimeClocks_ = timer.elapsedClocks();
   scanState_.updateRawState();

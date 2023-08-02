@@ -15,55 +15,16 @@
  */
 #include "velox/exec/Operator.h"
 #include "velox/common/base/SuccinctPrinter.h"
-#include "velox/common/process/ProcessBase.h"
+#include "velox/common/testutil/TestValue.h"
 #include "velox/exec/Driver.h"
+#include "velox/exec/HashJoinBridge.h"
 #include "velox/exec/OperatorUtils.h"
 #include "velox/exec/Task.h"
 #include "velox/expression/Expr.h"
 
+using facebook::velox::common::testutil::TestValue;
+
 namespace facebook::velox::exec {
-namespace {
-// Basic implementation of the connector::ExpressionEvaluator interface.
-class SimpleExpressionEvaluator : public connector::ExpressionEvaluator {
- public:
-  explicit SimpleExpressionEvaluator(
-      core::QueryCtx* queryCtx,
-      memory::MemoryPool* pool)
-      : queryCtx_(queryCtx), pool_(pool) {}
-
-  std::unique_ptr<exec::ExprSet> compile(
-      const core::TypedExprPtr& expression) const override {
-    auto expressions = {expression};
-    return std::make_unique<exec::ExprSet>(
-        std::move(expressions), ensureExecCtx());
-  }
-
-  void evaluate(
-      exec::ExprSet* exprSet,
-      const SelectivityVector& rows,
-      RowVectorPtr& input,
-      VectorPtr* result) const override {
-    exec::EvalCtx context(ensureExecCtx(), exprSet, input.get());
-
-    std::vector<VectorPtr> results = {*result};
-    exprSet->eval(0, 1, true, rows, context, results);
-
-    *result = results[0];
-  }
-
- private:
-  core::ExecCtx* ensureExecCtx() const {
-    if (!execCtx_) {
-      execCtx_ = std::make_unique<core::ExecCtx>(pool_, queryCtx_);
-    }
-    return execCtx_.get();
-  }
-
-  core::QueryCtx* const queryCtx_;
-  memory::MemoryPool* const pool_;
-  mutable std::unique_ptr<core::ExecCtx> execCtx_;
-};
-} // namespace
 
 OperatorCtx::OperatorCtx(
     DriverCtx* driverCtx,
@@ -95,37 +56,11 @@ OperatorCtx::createConnectorQueryCtx(
       driverCtx_->task->queryCtx()->getConnectorConfig(connectorId),
       std::make_unique<SimpleExpressionEvaluator>(
           execCtx()->queryCtx(), execCtx()->pool()),
-      driverCtx_->task->queryCtx()->allocator(),
+      driverCtx_->task->queryCtx()->cache(),
+      driverCtx_->task->queryCtx()->queryId(),
       taskId(),
       planNodeId,
       driverCtx_->driverId);
-}
-
-std::optional<Spiller::Config> OperatorCtx::makeSpillConfig(
-    Spiller::Type type) const {
-  const auto& queryConfig = driverCtx_->task->queryCtx()->queryConfig();
-  if (!queryConfig.spillEnabled()) {
-    return std::nullopt;
-  }
-  if (driverCtx_->task->spillDirectory().empty()) {
-    return std::nullopt;
-  }
-  return Spiller::Config(
-      makeOperatorSpillPath(
-          driverCtx_->task->spillDirectory(),
-          driverCtx()->pipelineId,
-          driverCtx()->driverId,
-          operatorId_),
-      queryConfig.maxSpillFileSize(),
-      queryConfig.minSpillRunSize(),
-      driverCtx_->task->queryCtx()->spillExecutor(),
-      queryConfig.spillableReservationGrowthPct(),
-      HashBitRange(
-          queryConfig.spillStartPartitionBit(),
-          queryConfig.spillStartPartitionBit() +
-              queryConfig.spillPartitionBits()),
-      queryConfig.maxSpillLevel(),
-      queryConfig.testingSpillPct());
 }
 
 Operator::Operator(
@@ -133,18 +68,32 @@ Operator::Operator(
     RowTypePtr outputType,
     int32_t operatorId,
     std::string planNodeId,
-    std::string operatorType)
+    std::string operatorType,
+    std::optional<Spiller::Config> spillConfig)
     : operatorCtx_(std::make_unique<OperatorCtx>(
           driverCtx,
           planNodeId,
           operatorId,
           operatorType)),
+      outputType_(std::move(outputType)),
+      spillConfig_(std::move(spillConfig)),
       stats_(OperatorStats{
           operatorId,
           driverCtx->pipelineId,
           std::move(planNodeId),
-          std::move(operatorType)}),
-      outputType_(std::move(outputType)) {}
+          std::move(operatorType)}) {
+  maybeSetReclaimer();
+}
+
+void Operator::maybeSetReclaimer() {
+  VELOX_CHECK_NULL(pool()->reclaimer());
+
+  if (pool()->parent()->reclaimer() == nullptr) {
+    return;
+  }
+  pool()->setReclaimer(
+      Operator::MemoryReclaimer::create(operatorCtx_->driverCtx(), this));
+}
 
 std::vector<std::unique_ptr<Operator::PlanNodeTranslator>>&
 Operator::translators() {
@@ -204,6 +153,11 @@ void Operator::registerOperator(
   translators().emplace_back(std::move(translator));
 }
 
+// static
+void Operator::unregisterAllOperators() {
+  translators().clear();
+}
+
 std::optional<uint32_t> Operator::maxDrivers(
     const core::PlanNodePtr& planNode) {
   for (auto& translator : translators()) {
@@ -231,7 +185,9 @@ static bool isSequence(
   return true;
 }
 
-RowVectorPtr Operator::fillOutput(vector_size_t size, BufferPtr mapping) {
+RowVectorPtr Operator::fillOutput(
+    vector_size_t size,
+    const BufferPtr& mapping) {
   bool wrapResults = true;
   if (size == input_->size() &&
       (!mapping || isSequence(mapping->as<vector_size_t>(), 0, size))) {
@@ -241,27 +197,26 @@ RowVectorPtr Operator::fillOutput(vector_size_t size, BufferPtr mapping) {
     wrapResults = false;
   }
 
-  std::vector<VectorPtr> columns(outputType_->size());
-  if (!identityProjections_.empty()) {
-    auto input = input_->children();
-    for (auto& projection : identityProjections_) {
-      columns[projection.outputChannel] = wrapResults
-          ? wrapChild(size, mapping, input[projection.inputChannel])
-          : input[projection.inputChannel];
-    }
-  }
-  for (auto& projection : resultProjections_) {
-    columns[projection.outputChannel] = wrapResults
-        ? wrapChild(size, mapping, results_[projection.inputChannel])
-        : results_[projection.inputChannel];
-  }
-
-  return std::make_shared<RowVector>(
+  auto output{std::make_shared<RowVector>(
       operatorCtx_->pool(),
       outputType_,
-      BufferPtr(nullptr),
+      nullptr,
       size,
-      std::move(columns));
+      std::vector<VectorPtr>(outputType_->size(), nullptr))};
+  output->resize(size);
+  projectChildren(
+      output,
+      input_,
+      identityProjections_,
+      size,
+      wrapResults ? mapping : nullptr);
+  projectChildren(
+      output,
+      results_,
+      resultProjections_,
+      size,
+      wrapResults ? mapping : nullptr);
+  return output;
 }
 
 OperatorStats Operator::stats(bool clear) {
@@ -283,7 +238,7 @@ uint32_t Operator::outputBatchRows(
     return queryConfig.preferredOutputBatchRows();
   }
 
-  uint64_t rowSize = averageRowSize.value();
+  const uint64_t rowSize = averageRowSize.value();
   VELOX_CHECK_GE(
       rowSize,
       0,
@@ -450,4 +405,101 @@ void OperatorStats::clear() {
   runtimeStats.clear();
 }
 
+std::unique_ptr<memory::MemoryReclaimer> Operator::MemoryReclaimer::create(
+    DriverCtx* driverCtx,
+    Operator* op) {
+  return std::unique_ptr<memory::MemoryReclaimer>(
+      new Operator::MemoryReclaimer(driverCtx->driver->shared_from_this(), op));
+}
+
+void Operator::MemoryReclaimer::enterArbitration() {
+  std::shared_ptr<Driver> driver = ensureDriver();
+  // The driver must be alive as the operator is still under memory arbitration
+  // processing.
+  VELOX_CHECK_NOT_NULL(driver);
+  if (FOLLY_UNLIKELY(
+          !driver->state().isOnThread() ||
+          (std::this_thread::get_id() != driver->state().thread))) {
+    // NOTE: some memory arbitration are triggered from non-driver execution
+    // context such as async streaming shuffle, table scan prefetch etc. And
+    // those async operations might execute in parallel with the driver threads.
+    // Therefore, it is possible that driver is not on the thread or the
+    // arbitration thread is not the current running driver thread. If memory
+    // arbitration is triggered in non-driver context, then we can't and also
+    // don't need to enter driver suspension state which only applies for driver
+    // thread so that the task pause operation can wait for all driver threads
+    // to stop. We only need to guarantee that such async operations won't
+    // mutate the operator state.g
+    return;
+  }
+  if (driver->task()->enterSuspended(driver->state()) != StopReason::kNone) {
+    // There is no need for arbitration if the associated task has already
+    // terminated.
+    VELOX_FAIL("Terminate detected when entering suspension");
+  }
+}
+
+void Operator::MemoryReclaimer::leaveArbitration() noexcept {
+  std::shared_ptr<Driver> driver = ensureDriver();
+  // The driver must be alive as the operator is still under memory arbitration
+  // processing.
+  VELOX_CHECK_NOT_NULL(driver);
+  if (FOLLY_UNLIKELY(
+          !driver->state().isOnThread() ||
+          (std::this_thread::get_id() != driver->state().thread))) {
+    // NOTE: see the comment in enterArbitration.
+    return;
+  }
+  driver->task()->leaveSuspended(driver->state());
+}
+
+bool Operator::MemoryReclaimer::reclaimableBytes(
+    const memory::MemoryPool& pool,
+    uint64_t& reclaimableBytes) const {
+  reclaimableBytes = 0;
+  std::shared_ptr<Driver> driver = ensureDriver();
+  if (FOLLY_UNLIKELY(driver == nullptr)) {
+    return false;
+  }
+  VELOX_CHECK_EQ(pool.name(), op_->pool()->name());
+  return op_->reclaimableBytes(reclaimableBytes);
+}
+
+uint64_t Operator::MemoryReclaimer::reclaim(
+    memory::MemoryPool* pool,
+    uint64_t targetBytes) {
+  std::shared_ptr<Driver> driver = ensureDriver();
+  if (FOLLY_UNLIKELY(driver == nullptr)) {
+    return 0;
+  }
+  if (!op_->canReclaim()) {
+    return 0;
+  }
+  VELOX_CHECK_EQ(pool->name(), op_->pool()->name());
+  VELOX_CHECK(
+      !driver->state().isOnThread() || driver->state().isSuspended ||
+      driver->state().isTerminated);
+  VELOX_CHECK(driver->task()->pauseRequested());
+
+  TestValue::adjust(
+      "facebook::velox::exec::Operator::MemoryReclaimer::reclaim", pool);
+
+  op_->reclaim(targetBytes);
+  return pool->shrink(targetBytes);
+}
+
+void Operator::MemoryReclaimer::abort(memory::MemoryPool* pool) {
+  std::shared_ptr<Driver> driver = ensureDriver();
+  if (FOLLY_UNLIKELY(driver == nullptr)) {
+    return;
+  }
+  VELOX_CHECK_EQ(pool->name(), op_->pool()->name());
+  VELOX_CHECK(
+      !driver->state().isOnThread() || driver->state().isSuspended ||
+      driver->state().isTerminated);
+  VELOX_CHECK(driver->task()->isCancelled());
+
+  // Calls operator close to free up major memory usage.
+  op_->close();
+}
 } // namespace facebook::velox::exec

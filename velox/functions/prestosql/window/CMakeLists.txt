@@ -19,11 +19,11 @@ add_library(
   velox_window
   CumeDist.cpp
   FirstLastValue.cpp
-  NthValue.cpp
+  LeadLag.cpp
   Ntile.cpp
   Rank.cpp
   RowNumber.cpp
   WindowFunctionsRegistration.cpp)
 
 target_link_libraries(velox_window velox_buffer velox_exec
-                      ${FOLLY_WITH_DEPENDENCIES})
+                      velox_functions_window Folly::folly)

@@ -51,20 +51,19 @@ MmapAllocator::~MmapAllocator() {
       (numAllocated_ == 0) && (numExternalMapped_ == 0), "{}", toString());
 }
 
-bool MmapAllocator::allocateNonContiguous(
+bool MmapAllocator::allocateNonContiguousWithoutRetry(
     MachinePageCount numPages,
     Allocation& out,
     ReservationCallback reservationCB,
     MachinePageCount minSizeClass) {
-  VELOX_CHECK_GT(numPages, 0);
-
-  const SizeMix mix = allocationSize(numPages, minSizeClass);
-
   const int64_t numFreed = freeInternal(out);
   if (numFreed != 0) {
     numAllocated_.fetch_sub(numFreed);
   }
-
+  if (numPages == 0) {
+    return true;
+  }
+  const SizeMix mix = allocationSize(numPages, minSizeClass);
   if (testingHasInjectedFailure(InjectedFailure::kCap)) {
     if ((numFreed != 0) && (reservationCB != nullptr)) {
       reservationCB(AllocationTraits::pageBytes(numFreed), false);
@@ -212,11 +211,32 @@ MachinePageCount MmapAllocator::freeInternal(Allocation& allocation) {
   return numFreed;
 }
 
+bool MmapAllocator::allocateContiguousWithoutRetry(
+    MachinePageCount numPages,
+    Allocation* collateral,
+    ContiguousAllocation& allocation,
+    ReservationCallback reservationCB,
+    MachinePageCount maxPages) {
+  bool result;
+  stats_.recordAllocate(AllocationTraits::pageBytes(numPages), 1, [&]() {
+    result = allocateContiguousImpl(
+        numPages, collateral, allocation, reservationCB, maxPages);
+  });
+  return result;
+}
+
 bool MmapAllocator::allocateContiguousImpl(
     MachinePageCount numPages,
     Allocation* collateral,
     ContiguousAllocation& allocation,
-    ReservationCallback reservationCB) {
+    ReservationCallback reservationCB,
+    MachinePageCount maxPages) {
+  if (maxPages == 0) {
+    maxPages = numPages;
+  } else {
+    VELOX_CHECK_LE(numPages, maxPages);
+  }
+
   MachinePageCount numCollateralPages = 0;
   // 'collateral' and 'allocation' get freed anyway. But the counters are not
   // updated to reflect this. Rather, we add the delta that is needed on top of
@@ -237,16 +257,20 @@ bool MmapAllocator::allocateContiguousImpl(
   }
   const auto numLargeCollateralPages = allocation.numPages();
   if (numLargeCollateralPages > 0) {
+    useHugePages(allocation, false);
     if (useMmapArena_) {
       std::lock_guard<std::mutex> l(arenaMutex_);
-      managedArenas_->free(allocation.data(), allocation.size());
+      managedArenas_->free(allocation.data(), allocation.maxSize());
     } else {
-      if (::munmap(allocation.data(), allocation.size()) < 0) {
+      if (::munmap(allocation.data(), allocation.maxSize()) < 0) {
         VELOX_MEM_LOG(ERROR) << "munmap got " << folly::errnoStr(errno)
                              << " for " << allocation.toString();
       }
     }
     allocation.clear();
+  }
+  if (numPages == 0) {
+    return true;
   }
 
   const auto totalCollateralPages =
@@ -267,7 +291,7 @@ bool MmapAllocator::allocateContiguousImpl(
       // We failed to grow by 'newPages. So we record the freeing off the whole
       // collateral and the unmap of former 'allocation'.
       reservationCB(AllocationTraits::pageBytes(totalCollateralPages), false);
-      throw;
+      std::rethrow_exception(std::current_exception());
     }
   }
 
@@ -325,11 +349,11 @@ bool MmapAllocator::allocateContiguousImpl(
   } else {
     if (useMmapArena_) {
       std::lock_guard<std::mutex> l(arenaMutex_);
-      data = managedArenas_->allocate(AllocationTraits::pageBytes(numPages));
+      data = managedArenas_->allocate(AllocationTraits::pageBytes(maxPages));
     } else {
       data = ::mmap(
           nullptr,
-          AllocationTraits::pageBytes(numPages),
+          AllocationTraits::pageBytes(maxPages),
           PROT_READ | PROT_WRITE,
           MAP_PRIVATE | MAP_ANONYMOUS,
           -1,
@@ -346,19 +370,29 @@ bool MmapAllocator::allocateContiguousImpl(
     rollbackAllocation(numToMap);
     return false;
   }
-  allocation.set(data, AllocationTraits::pageBytes(numPages));
+  allocation.set(
+      data,
+      AllocationTraits::pageBytes(numPages),
+      AllocationTraits::pageBytes(maxPages));
+  useHugePages(allocation, true);
   return true;
+}
+
+void MmapAllocator::freeContiguous(ContiguousAllocation& allocation) {
+  stats_.recordFree(
+      allocation.size(), [&]() { freeContiguousImpl(allocation); });
 }
 
 void MmapAllocator::freeContiguousImpl(ContiguousAllocation& allocation) {
   if (allocation.empty()) {
     return;
   }
+  useHugePages(allocation, false);
   if (useMmapArena_) {
     std::lock_guard<std::mutex> l(arenaMutex_);
-    managedArenas_->free(allocation.data(), allocation.size());
+    managedArenas_->free(allocation.data(), allocation.maxSize());
   } else {
-    if (::munmap(allocation.data(), allocation.size()) < 0) {
+    if (::munmap(allocation.data(), allocation.maxSize()) < 0) {
       VELOX_MEM_LOG(ERROR) << "munmap returned " << folly::errnoStr(errno)
                            << " for " << allocation.toString();
     }
@@ -369,7 +403,55 @@ void MmapAllocator::freeContiguousImpl(ContiguousAllocation& allocation) {
   allocation.clear();
 }
 
-void* MmapAllocator::allocateBytes(uint64_t bytes, uint16_t alignment) {
+bool MmapAllocator::growContiguousWithoutRetry(
+    MachinePageCount increment,
+    ContiguousAllocation& allocation,
+    ReservationCallback reservationCB) {
+  VELOX_CHECK_LE(
+      allocation.size() + increment * AllocationTraits::kPageSize,
+      allocation.maxSize());
+  if (reservationCB != nullptr) {
+    // May throw. If does, there is nothing to revert.
+    reservationCB(AllocationTraits::pageBytes(increment), true);
+  }
+  auto numAllocated = numAllocated_.fetch_add(increment) + increment;
+  if (numAllocated > capacity_ ||
+      testingHasInjectedFailure(InjectedFailure::kCap)) {
+    VELOX_MEM_LOG_EVERY_MS(WARNING, 1000)
+        << "Exceeded memory allocator limit when adding " << increment
+        << " new pages for total allocation of " << allocation.numPages()
+        << " pages, the memory allocator capacity is " << capacity_;
+    numAllocated_ -= increment;
+    if (reservationCB != nullptr) {
+      reservationCB(AllocationTraits::pageBytes(increment), false);
+    }
+    return false;
+  }
+
+  // Check if need to advise away
+  if (!ensureEnoughMappedPages(increment) ||
+      testingHasInjectedFailure(InjectedFailure::kMmap)) {
+    VELOX_MEM_LOG(WARNING) << "Could not advise away enough for " << increment
+                           << " pages for growing allocation of "
+                           << allocation.numPages() << " pages";
+    if (reservationCB != nullptr) {
+      reservationCB(AllocationTraits::pageBytes(increment), false);
+    }
+    numAllocated_.fetch_sub(increment);
+    return false;
+  }
+
+  numExternalMapped_ += increment;
+  allocation.set(
+      allocation.data(),
+      allocation.size() + AllocationTraits::pageBytes(increment),
+      allocation.maxSize());
+  return true;
+}
+
+void* MmapAllocator::allocateBytesWithoutRetry(
+    uint64_t bytes,
+    uint16_t alignment) {
   alignmentCheck(bytes, alignment);
 
   if (useMalloc(bytes)) {
@@ -387,7 +469,8 @@ void* MmapAllocator::allocateBytes(uint64_t bytes, uint16_t alignment) {
   if (bytes <= AllocationTraits::pageBytes(sizeClassSizes_.back())) {
     Allocation allocation;
     const auto numPages = roundUpToSizeClassSize(bytes, sizeClassSizes_);
-    if (!allocateNonContiguous(numPages, allocation, nullptr, numPages)) {
+    if (!allocateNonContiguousWithoutRetry(
+            numPages, allocation, nullptr, numPages)) {
       return nullptr;
     }
     auto run = allocation.runAt(0);
@@ -402,7 +485,7 @@ void* MmapAllocator::allocateBytes(uint64_t bytes, uint16_t alignment) {
   ContiguousAllocation allocation;
   auto numPages = bits::roundUp(bytes, AllocationTraits::kPageSize) /
       AllocationTraits::kPageSize;
-  if (!allocateContiguous(numPages, nullptr, allocation)) {
+  if (!allocateContiguousWithoutRetry(numPages, nullptr, allocation)) {
     return nullptr;
   }
 

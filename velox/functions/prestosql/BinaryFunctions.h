@@ -19,7 +19,11 @@
 #define XXH_INLINE_ALL
 #include <xxhash.h>
 
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wdeprecated-declarations"
 #include "folly/ssl/OpenSSLHash.h"
+#pragma GCC diagnostic pop
+#include "velox/common/base/BitUtil.h"
 #include "velox/common/encode/Base64.h"
 #include "velox/external/md5/md5.h"
 #include "velox/functions/Udf.h"
@@ -330,10 +334,11 @@ struct FromBase64UrlFunction {
       const arg_type<Varchar>& input) {
     auto inputData = input.data();
     auto inputSize = input.size();
-    const bool hasPad =
-        (*(input.end()) == encoding::Base64::kBase64Pad) ? true : false;
+    bool hasPad =
+        inputSize > 0 && (*(input.end() - 1) == encoding::Base64::kBase64Pad);
     result.resize(
         encoding::Base64::calculateDecodedSize(inputData, inputSize, hasPad));
+    hasPad = false; // calculateDecodedSize() updated inputSize to exclude pad.
     encoding::Base64::decodeUrl(
         inputData, inputSize, result.data(), result.size(), hasPad);
   }
@@ -400,6 +405,19 @@ struct ToBigEndian64 {
     auto value = folly::Endian::big(input);
     result.setNoCopy(
         StringView(reinterpret_cast<const char*>(&value), kTypeLength));
+  }
+};
+
+template <typename T>
+struct ToIEEE754Bits64 {
+  VELOX_DEFINE_FUNCTION_TYPES(T);
+
+  FOLLY_ALWAYS_INLINE void call(
+      out_type<Varbinary>& result,
+      const arg_type<double>& input) {
+    result.resize(64);
+    bits::toString((const uint64_t*)&input, 0, 64, result.data());
+    std::reverse(result.data(), result.data() + 64);
   }
 };
 

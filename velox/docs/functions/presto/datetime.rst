@@ -2,6 +2,10 @@
 Date and Time Functions
 =====================================
 
+.. function:: current_date() -> date
+
+    Returns the current date.
+
 .. function:: date(x) -> date
 
     This is an alias for ``CAST(x AS date)``.
@@ -67,7 +71,7 @@ Unit            Description
 
 .. function:: date_add(unit, value, x) -> x
 
-    Adds an interval ``value`` of type ``unit`` to ``x``. The supported types for ``x`` are TIMESTAMP and DATE.
+    Adds an interval ``value`` of type ``unit`` to ``x``. The supported types for ``x`` are TIMESTAMP, DATE, and TIMESTAMP WITH TIME ZONE.
     Subtraction can be performed by using a negative value.
 
 .. function:: date_diff(unit, x1, x2) -> bigint
@@ -151,10 +155,10 @@ Convenience Extraction Functions
 
 These functions support TIMESTAMP, DATE, and TIMESTAMP WITH TIME ZONE input types.
 
-These functions are implemented using
-`std::gmtime <https://en.cppreference.com/w/c/chrono/gmtime>`_ which raises an
-error when input timestamp is too large (for example, > 100'000'000'000'000'000).
-This behavior is different from Presto Java that allows arbitrary large timestamps.
+For these functions, the input timestamp has range limitations on seconds and nanoseconds.
+Seconds should be in the range [INT64_MIN/1000 - 1, INT64_MAX/1000], nanoseconds should
+be in the range [0, 999999999]. This behavior is different from Presto Java that allows
+arbitrary large timestamps.
 
 .. function:: day(x) -> bigint
 

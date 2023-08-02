@@ -18,10 +18,12 @@
 #include <optional>
 #include <string>
 
+#include "folly/lang/Hint.h"
 #include "glog/logging.h"
 #include "gtest/gtest.h"
 #include "velox/expression/Expr.h"
 #include "velox/functions/Udf.h"
+#include "velox/functions/prestosql/registration/RegistrationFunctions.h"
 #include "velox/functions/prestosql/tests/utils/FunctionBaseTest.h"
 #include "velox/type/Type.h"
 #include "velox/vector/BaseVector.h"
@@ -932,10 +934,10 @@ VectorPtr testVariadicArgReuse(
   // especially since it requires the caller to register the function as well,
   // but it should be easier to maintain.
   auto function =
-      exec::SimpleFunctions()
+      exec::simpleFunctions()
           .resolveFunction(functionName, {})
           ->createFunction()
-          ->createVectorFunction(execCtx->queryCtx()->queryConfig(), {});
+          ->createVectorFunction({}, execCtx->queryCtx()->queryConfig());
 
   // Create a dummy EvalCtx.
   SelectivityVector rows(inputs[0]->size());
@@ -1062,6 +1064,28 @@ TEST_F(SimpleFunctionTest, isAsciiArgs) {
   ASSERT_TRUE(function_t::isAsciiArgs(rows, {input}));
 }
 
+template <typename T>
+struct StringInputIntOutputFunction {
+  VELOX_DEFINE_FUNCTION_TYPES(T);
+
+  void call(int32_t& out, const arg_type<Varchar>& input) {
+    throw std::runtime_error(
+        "This method is not expected to be called for all-ascii input!");
+  }
+
+  void callAscii(int32_t& out, const arg_type<Varchar>& input) {
+    out = input.size();
+  }
+};
+
+TEST_F(SimpleFunctionTest, TestcallAscii) {
+  registerFunction<StringInputIntOutputFunction, int32_t, Varchar>(
+      {"get_input_size"});
+  auto asciiInput = makeFlatVector<std::string>({"abc123", "10% #\0"});
+  EXPECT_NO_THROW(evaluate<SimpleVector<int32_t>>(
+      "get_input_size(c0)", makeRowVector({asciiInput})));
+}
+
 // Return false always.
 template <typename T>
 struct GenericOutputFunc {
@@ -1107,4 +1131,29 @@ TEST_F(SimpleFunctionTest, testAllNotNull) {
   assertEqualVectors(expected, result);
 }
 
+// Test that SimpleFunctionRegistry does not crash in multithreaded environment.
+TEST_F(SimpleFunctionTest, simpleFunctionRegistryThreadSafe) {
+  std::vector<std::thread> threads;
+  // create threads
+  for (int i = 1; i <= 200; ++i) {
+    threads.emplace_back(std::thread([]() {
+      for (int i = 0; i < 50; i++) {
+        functions::prestosql::registerArithmeticFunctions();
+        auto x = exec::simpleFunctions().getFunctionSignatures("add");
+        folly::compiler_must_not_elide(x);
+
+        auto y = exec::simpleFunctions().resolveFunction(
+            "plus", {BIGINT(), BIGINT()});
+        folly::compiler_must_not_elide(y);
+
+        auto z = exec::simpleFunctions().getFunctionNames();
+        folly::compiler_must_not_elide(z);
+      }
+    }));
+  }
+  // wait for them to complete
+  for (auto& th : threads) {
+    th.join();
+  }
+}
 } // namespace

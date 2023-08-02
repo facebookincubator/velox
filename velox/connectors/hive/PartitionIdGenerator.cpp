@@ -17,6 +17,9 @@
 #include "velox/connectors/hive/PartitionIdGenerator.h"
 
 #include "velox/connectors/hive/HivePartitionUtil.h"
+#include "velox/dwio/catalog/fbhive/FileUtils.h"
+
+using namespace facebook::velox::dwio::catalog::fbhive;
 
 namespace facebook::velox::connector::hive {
 
@@ -53,7 +56,7 @@ PartitionIdGenerator::PartitionIdGenerator(
 void PartitionIdGenerator::run(
     const RowVectorPtr& input,
     raw_vector<uint64_t>& result) {
-  auto numRows = input->size();
+  const auto numRows = input->size();
   result.resize(numRows);
 
   // TODO Check that there are no nulls in the partition keys.
@@ -89,7 +92,8 @@ void PartitionIdGenerator::run(
 }
 
 std::string PartitionIdGenerator::partitionName(uint64_t partitionId) const {
-  return makePartitionName(partitionValues_, partitionId);
+  return FileUtils::makePartName(
+      extractPartitionKeyValues(partitionValues_, partitionId));
 }
 
 void PartitionIdGenerator::computeValueIds(
@@ -134,7 +138,7 @@ void PartitionIdGenerator::updateValueToPartitionIdMapping() {
     return;
   }
 
-  auto numPartitions = partitionIds_.size();
+  const auto numPartitions = partitionIds_.size();
 
   partitionIds_.clear();
 

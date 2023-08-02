@@ -15,10 +15,12 @@
  */
 
 #include "velox/exec/Task.h"
+#include "folly/experimental/EventCount.h"
 #include "velox/common/base/tests/GTestUtils.h"
 #include "velox/common/future/VeloxPromise.h"
 #include "velox/common/testutil/TestValue.h"
 #include "velox/connectors/hive/HiveConnector.h"
+#include "velox/connectors/hive/HiveConnectorSplit.h"
 #include "velox/exec/PartitionedOutputBufferManager.h"
 #include "velox/exec/PlanNodeStats.h"
 #include "velox/exec/Values.h"
@@ -39,7 +41,7 @@ class TaskTest : public HiveConnectorTestBase {
       core::PlanFragment plan,
       const std::unordered_map<std::string, std::vector<std::string>>&
           filePaths = {}) {
-    auto task = std::make_shared<exec::Task>(
+    auto task = Task::create(
         "single.execution.task.0", plan, 0, std::make_shared<core::QueryCtx>());
 
     for (const auto& [nodeId, paths] : filePaths) {
@@ -91,50 +93,53 @@ TEST_F(TaskTest, wrongPlanNodeForSplit) {
                   .project({"a * a", "b + b"})
                   .planFragment();
 
-  exec::Task task(
+  auto task = Task::create(
       "task-1",
       std::move(plan),
       0,
       std::make_shared<core::QueryCtx>(driverExecutor_.get()));
 
   // Add split for the source node.
-  task.addSplit("0", exec::Split(folly::copy(connectorSplit)));
+  task->addSplit("0", exec::Split(folly::copy(connectorSplit)));
+
+  // Add an empty split.
+  task->addSplit("0", exec::Split());
 
   // Try to add split for a non-source node.
   auto errorMessage =
       "Splits can be associated only with leaf plan nodes which require splits. Plan node ID 1 doesn't refer to such plan node.";
   VELOX_ASSERT_THROW(
-      task.addSplit("1", exec::Split(folly::copy(connectorSplit))),
+      task->addSplit("1", exec::Split(folly::copy(connectorSplit))),
       errorMessage)
 
   VELOX_ASSERT_THROW(
-      task.addSplitWithSequence(
+      task->addSplitWithSequence(
           "1", exec::Split(folly::copy(connectorSplit)), 3),
       errorMessage)
 
-  VELOX_ASSERT_THROW(task.setMaxSplitSequenceId("1", 9), errorMessage)
+  VELOX_ASSERT_THROW(task->setMaxSplitSequenceId("1", 9), errorMessage)
 
-  VELOX_ASSERT_THROW(task.noMoreSplits("1"), errorMessage)
+  VELOX_ASSERT_THROW(task->noMoreSplits("1"), errorMessage)
 
-  VELOX_ASSERT_THROW(task.noMoreSplitsForGroup("1", 5), errorMessage)
+  VELOX_ASSERT_THROW(task->noMoreSplitsForGroup("1", 5), errorMessage)
 
   // Try to add split for non-existent node.
   errorMessage =
       "Splits can be associated only with leaf plan nodes which require splits. Plan node ID 12 doesn't refer to such plan node.";
   VELOX_ASSERT_THROW(
-      task.addSplit("12", exec::Split(folly::copy(connectorSplit))),
+      task->addSplit("12", exec::Split(folly::copy(connectorSplit))),
       errorMessage)
 
   VELOX_ASSERT_THROW(
-      task.addSplitWithSequence(
+      task->addSplitWithSequence(
           "12", exec::Split(folly::copy(connectorSplit)), 3),
       errorMessage)
 
-  VELOX_ASSERT_THROW(task.setMaxSplitSequenceId("12", 9), errorMessage)
+  VELOX_ASSERT_THROW(task->setMaxSplitSequenceId("12", 9), errorMessage)
 
-  VELOX_ASSERT_THROW(task.noMoreSplits("12"), errorMessage)
+  VELOX_ASSERT_THROW(task->noMoreSplits("12"), errorMessage)
 
-  VELOX_ASSERT_THROW(task.noMoreSplitsForGroup("12", 5), errorMessage)
+  VELOX_ASSERT_THROW(task->noMoreSplitsForGroup("12", 5), errorMessage)
 
   // Try to add split for a Values source node.
   plan =
@@ -143,7 +148,7 @@ TEST_F(TaskTest, wrongPlanNodeForSplit) {
           .project({"a * a", "b + b"})
           .planFragment();
 
-  exec::Task valuesTask(
+  auto valuesTask = Task::create(
       "task-2",
       std::move(plan),
       0,
@@ -151,7 +156,7 @@ TEST_F(TaskTest, wrongPlanNodeForSplit) {
   errorMessage =
       "Splits can be associated only with leaf plan nodes which require splits. Plan node ID 0 doesn't refer to such plan node.";
   VELOX_ASSERT_THROW(
-      valuesTask.addSplit("0", exec::Split(folly::copy(connectorSplit))),
+      valuesTask->addSplit("0", exec::Split(folly::copy(connectorSplit))),
       errorMessage)
 }
 
@@ -169,7 +174,7 @@ TEST_F(TaskTest, duplicatePlanNodeIds) {
                   .planFragment();
 
   VELOX_ASSERT_THROW(
-      exec::Task(
+      Task::create(
           "task-1",
           std::move(plan),
           0,
@@ -773,7 +778,7 @@ TEST_F(TaskTest, singleThreadedExecutionExternalBlockable) {
   ContinueFuture continueFuture = ContinueFuture::makeEmpty();
   // First pass, we don't activate the external blocker, expect the task to run
   // without being blocked.
-  auto nonBlockingTask = std::make_shared<exec::Task>(
+  auto nonBlockingTask = Task::create(
       "single.execution.task.0", plan, 0, std::make_shared<core::QueryCtx>());
   std::vector<RowVectorPtr> results;
   for (;;) {
@@ -789,7 +794,7 @@ TEST_F(TaskTest, singleThreadedExecutionExternalBlockable) {
   results.clear();
   continueFuture = ContinueFuture::makeEmpty();
   // Second pass, we will now use external blockers to block the task.
-  auto blockingTask = std::make_shared<exec::Task>(
+  auto blockingTask = Task::create(
       "single.execution.task.1", plan, 0, std::make_shared<core::QueryCtx>());
   // Before we block, we expect `next` to get data normally.
   results.push_back(blockingTask->next(&continueFuture));
@@ -821,7 +826,7 @@ TEST_F(TaskTest, supportsSingleThreadedExecution) {
                   .project({"c0 % 10"})
                   .partitionedOutput({}, 1, std::vector<std::string>{"p0"})
                   .planFragment();
-  auto task = std::make_shared<exec::Task>(
+  auto task = Task::create(
       "single.execution.task.0", plan, 0, std::make_shared<core::QueryCtx>());
 
   // PartitionedOutput does not support single threaded execution, therefore the
@@ -837,33 +842,33 @@ TEST_F(TaskTest, updateBroadCastOutputBuffers) {
                   .planFragment();
   auto bufferManager = PartitionedOutputBufferManager::getInstance().lock();
   {
-    auto task = std::make_shared<exec::Task>(
+    auto task = Task::create(
         "t0", plan, 0, std::make_shared<core::QueryCtx>(driverExecutor_.get()));
 
     task->start(task, 1, 1);
 
-    ASSERT_TRUE(task->updateBroadcastOutputBuffers(10, true /*noMoreBuffers*/));
+    ASSERT_TRUE(task->updateOutputBuffers(10, true /*noMoreBuffers*/));
 
     // Calls after no-more-buffers are ignored.
-    ASSERT_FALSE(task->updateBroadcastOutputBuffers(11, false));
+    ASSERT_FALSE(task->updateOutputBuffers(11, false));
 
     task->requestCancel();
   }
 
   {
-    auto task = std::make_shared<exec::Task>(
+    auto task = Task::create(
         "t1", plan, 0, std::make_shared<core::QueryCtx>(driverExecutor_.get()));
 
     task->start(task, 1, 1);
 
-    ASSERT_TRUE(task->updateBroadcastOutputBuffers(5, false));
-    ASSERT_TRUE(task->updateBroadcastOutputBuffers(10, false));
+    ASSERT_TRUE(task->updateOutputBuffers(5, false));
+    ASSERT_TRUE(task->updateOutputBuffers(10, false));
 
     task->requestAbort();
 
     // Calls after task has been removed from the buffer manager (via abort) are
     // ignored.
-    ASSERT_FALSE(task->updateBroadcastOutputBuffers(15, true));
+    ASSERT_FALSE(task->updateOutputBuffers(15, true));
   }
 }
 
@@ -893,6 +898,8 @@ DEBUG_ONLY_TEST_F(TaskTest, outputDriverFinishEarly) {
   ContinueFuture valueFuture = valuePromise.getSemiFuture();
   ContinuePromise driverPromise("driverPromise");
   ContinueFuture driverFuture = driverPromise.getSemiFuture();
+  ContinuePromise noMoreInputPromise("noMoreInputPromise");
+  ContinueFuture noMoreInputFuture = noMoreInputPromise.getSemiFuture();
 
   SCOPED_TESTVALUE_SET(
       "facebook::velox::exec::Values::getOutput",
@@ -902,14 +909,31 @@ DEBUG_ONLY_TEST_F(TaskTest, outputDriverFinishEarly) {
             if (values->testingCurrent() != 1) {
               return;
             }
+            noMoreInputPromise.setValue();
             std::move(valueFuture).wait();
             driverPromise.setValue();
           })));
 
+  // There's two Drivers on two separate threads that are run with a LocalMerge
+  // in between.  It's possible that the Driver executing the Values operator
+  // gets through one iteration, then the Driver executing the Limit operator
+  // gets through one iteration, at which point the Task is terminated.  To
+  // ensure the Driver executing the Values operator gets to the second
+  // iteration, we wait on the future here at the CallbackSink following the
+  // Limit operator.
+  SCOPED_TESTVALUE_SET(
+      "facebook::velox::exec::Driver::runInternal::noMoreInput",
+      std::function<void(Operator*)>(([&](Operator* op) {
+        if (op->operatorType() != "CallbackSink") {
+          return;
+        }
+        std::move(noMoreInputFuture).wait();
+      })));
+
   CursorParameters params;
   params.planNode = plan;
   params.queryCtx = std::make_shared<core::QueryCtx>(driverExecutor_.get());
-  params.queryCtx->setConfigOverridesUnsafe(
+  params.queryCtx->testingOverrideConfigUnsafe(
       {{core::QueryConfig::kPreferredOutputBatchRows, "1"}});
 
   {
@@ -955,7 +979,7 @@ DEBUG_ONLY_TEST_F(TaskTest, liveStats) {
   CursorParameters params;
   params.planNode = plan;
   params.queryCtx = std::make_shared<core::QueryCtx>(executor_.get());
-  params.queryCtx->setConfigOverridesUnsafe(
+  params.queryCtx->testingOverrideConfigUnsafe(
       {{core::QueryConfig::kPreferredOutputBatchRows, "1"}});
 
   auto cursor = std::make_unique<TaskCursor>(params);
@@ -995,6 +1019,185 @@ DEBUG_ONLY_TEST_F(TaskTest, liveStats) {
   EXPECT_EQ(3 * numBatches, operatorStats.outputPositions);
   EXPECT_EQ(numBatches, operatorStats.outputVectors);
   EXPECT_EQ(1, operatorStats.finishTiming.count);
+}
+
+TEST_F(TaskTest, outputBufferSize) {
+  constexpr int32_t numBatches = 10;
+  std::vector<RowVectorPtr> dataBatches;
+  dataBatches.reserve(numBatches);
+  for (int32_t i = 0; i < numBatches; ++i) {
+    dataBatches.push_back(makeRowVector({makeFlatVector<int64_t>({0, 1, 10})}));
+  }
+
+  auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
+  auto plan = PlanBuilder(planNodeIdGenerator)
+                  .values(dataBatches)
+                  .partitionedOutput({}, 1)
+                  .planNode();
+
+  CursorParameters params;
+  params.planNode = plan;
+  params.queryCtx = std::make_shared<core::QueryCtx>(executor_.get());
+
+  // Produce the results to output buffer manager but not consuming them to
+  // check the buffer utilization in test.
+  auto cursor = std::make_unique<TaskCursor>(params);
+  std::vector<RowVectorPtr> result;
+  Task* task = cursor->task().get();
+  while (cursor->moveNext()) {
+    result.push_back(cursor->current());
+  }
+
+  TaskStats finishStats = task->taskStats();
+  // We only have one task and the task has outputBuffer which won't be
+  // consumed, verify 0 < outputBufferUtilization < 1.
+  // Need to call requestCancel to explicitly terminate the task.
+  EXPECT_GT(finishStats.outputBufferUtilization, 0);
+  EXPECT_LT(finishStats.outputBufferUtilization, 1);
+  EXPECT_FALSE(finishStats.outputBufferOverutilized);
+  task->requestCancel();
+}
+
+DEBUG_ONLY_TEST_F(TaskTest, findPeerOperators) {
+  const std::vector<RowVectorPtr> probeVectors = {makeRowVector(
+      {"t_c0", "t_c1"},
+      {
+          makeFlatVector<int64_t>({1, 2, 3, 4}),
+          makeFlatVector<int64_t>({10, 20, 30, 40}),
+      })};
+
+  const std::vector<RowVectorPtr> buildVectors = {makeRowVector(
+      {"u_c0"},
+      {
+          makeFlatVector<int64_t>({0, 1, 3, 5}),
+      })};
+
+  const std::vector<int> numDrivers = {1, 4};
+  for (int numDriver : numDrivers) {
+    SCOPED_TRACE(fmt::format("numDriver {}", numDriver));
+    auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
+    CursorParameters params;
+    params.planNode = PlanBuilder(planNodeIdGenerator)
+                          .values(probeVectors, true)
+                          .hashJoin(
+                              {"t_c0"},
+                              {"u_c0"},
+                              PlanBuilder(planNodeIdGenerator)
+                                  .values(buildVectors, true)
+                                  .planNode(),
+                              "",
+                              {"t_c0", "t_c1", "u_c0"})
+                          .planNode();
+    params.queryCtx = std::make_shared<core::QueryCtx>(driverExecutor_.get());
+    params.maxDrivers = numDriver;
+
+    auto cursor = std::make_unique<TaskCursor>(params);
+    auto* task = cursor->task().get();
+
+    // Set up a testvalue to trigger task abort when hash build tries to reserve
+    // memory.
+    SCOPED_TESTVALUE_SET(
+        "facebook::velox::exec::Driver::runInternal::addInput",
+        std::function<void(Operator*)>([&](Operator* testOp) {
+          if (testOp->operatorType() != "HashBuild") {
+            return;
+          }
+          const int pipelineId =
+              testOp->testingOperatorCtx()->driverCtx()->pipelineId;
+          auto ops = task->findPeerOperators(pipelineId, testOp);
+          ASSERT_EQ(ops.size(), numDriver);
+          bool foundSelf{false};
+          for (auto* op : ops) {
+            auto* opCtx = op->testingOperatorCtx();
+            ASSERT_EQ(op->operatorType(), "HashBuild");
+            if (op == testOp) {
+              foundSelf = true;
+            }
+            auto* driver = opCtx->driver();
+            ASSERT_EQ(op, driver->findOperator(opCtx->operatorId()));
+            VELOX_ASSERT_THROW(driver->findOperator(-1), "");
+            VELOX_ASSERT_THROW(driver->findOperator(numDriver + 10), "");
+          }
+          ASSERT_TRUE(foundSelf);
+        }));
+
+    while (cursor->moveNext()) {
+    }
+    ASSERT_TRUE(waitForTaskCompletion(task, 5'000'000));
+  }
+}
+
+DEBUG_ONLY_TEST_F(TaskTest, raceBetweenTaskPauseAndTerminate) {
+  const std::vector<RowVectorPtr> values = {makeRowVector(
+      {"t_c0", "t_c1"},
+      {
+          makeFlatVector<int64_t>({1, 2, 3, 4}),
+          makeFlatVector<int64_t>({10, 20, 30, 40}),
+      })};
+
+  auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
+  CursorParameters params;
+  params.planNode =
+      PlanBuilder(planNodeIdGenerator).values(values, true).planNode();
+  params.queryCtx = std::make_shared<core::QueryCtx>(driverExecutor_.get());
+  params.maxDrivers = 1;
+
+  auto cursor = std::make_unique<TaskCursor>(params);
+  auto* task = cursor->task().get();
+  folly::EventCount taskPauseWait;
+  std::atomic<bool> taskPaused{false};
+
+  folly::EventCount taskPauseStartWait;
+  std::atomic<bool> taskPauseStarted{false};
+
+  // Set up a testvalue to trigger task abort when hash build tries to reserve
+  // memory.
+  SCOPED_TESTVALUE_SET(
+      "facebook::velox::exec::Driver::runInternal::addInput",
+      std::function<void(Operator*)>([&](Operator* testOp) {
+        if (taskPauseStarted.exchange(true)) {
+          return;
+        }
+        taskPauseStartWait.notifyAll();
+        taskPauseWait.await([&]() { return taskPaused.load(); });
+      }));
+
+  std::thread taskThread([&]() {
+    try {
+      while (cursor->moveNext()) {
+      };
+    } catch (VeloxRuntimeError& ex) {
+    }
+  });
+
+  taskPauseStartWait.await([&]() { return taskPauseStarted.load(); });
+
+  ASSERT_EQ(task->numTotalDrivers(), 1);
+  ASSERT_EQ(task->numFinishedDrivers(), 0);
+  ASSERT_EQ(task->numRunningDrivers(), 1);
+
+  auto pauseFuture = task->requestPause();
+  taskPaused = true;
+  taskPauseWait.notifyAll();
+  pauseFuture.wait();
+
+  ASSERT_EQ(task->numTotalDrivers(), 1);
+  ASSERT_EQ(task->numFinishedDrivers(), 0);
+  ASSERT_EQ(task->numRunningDrivers(), 1);
+
+  task->requestAbort().wait();
+
+  ASSERT_EQ(task->numTotalDrivers(), 1);
+  ASSERT_EQ(task->numFinishedDrivers(), 0);
+  ASSERT_EQ(task->numRunningDrivers(), 0);
+
+  Task::resume(task->shared_from_this());
+
+  ASSERT_EQ(task->numTotalDrivers(), 1);
+  ASSERT_EQ(task->numFinishedDrivers(), 1);
+  ASSERT_EQ(task->numRunningDrivers(), 0);
+
+  taskThread.join();
 }
 
 } // namespace facebook::velox::exec::test

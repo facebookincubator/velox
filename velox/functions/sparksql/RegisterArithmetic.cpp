@@ -31,6 +31,17 @@ void registerArithmeticFunctions(const std::string& prefix) {
   registerUnaryNumeric<UnaryMinusFunction>({prefix + "unaryminus"});
   // Math functions.
   registerUnaryNumeric<AbsFunction>({prefix + "abs"});
+  registerFunction<AcosFunction, double, double>({prefix + "acos"});
+  registerFunction<AcoshFunction, double, double>({prefix + "acosh"});
+  registerFunction<AsinhFunction, double, double>({prefix + "asinh"});
+  registerFunction<AtanhFunction, double, double>({prefix + "atanh"});
+  registerFunction<SecFunction, double, double>({prefix + "sec"});
+  registerFunction<CscFunction, double, double>({prefix + "csc"});
+  registerFunction<SinhFunction, double, double>({prefix + "sinh"});
+  registerFunction<CoshFunction, double, double>({prefix + "cosh"});
+  registerFunction<CotFunction, double, double>({prefix + "cot"});
+  registerFunction<Log1pFunction, double, double>({prefix + "log1p"});
+  registerFunction<ToBinaryStringFunction, Varchar, int64_t>({prefix + "bin"});
   registerFunction<ExpFunction, double, double>({prefix + "exp"});
   registerBinaryIntegral<PModFunction>({prefix + "pmod"});
   registerFunction<PowerFunction, double, double, double>({prefix + "power"});
@@ -51,6 +62,9 @@ void registerArithmeticFunctions(const std::string& prefix) {
       {prefix + "floor"});
   registerFunction<sparksql::FloorFunction, int64_t, double>(
       {prefix + "floor"});
+  registerFunction<HypotFunction, double, double, double>({prefix + "hypot"});
+  registerFunction<sparksql::Log2Function, double, double>({prefix + "log2"});
+  registerFunction<sparksql::Log10Function, double, double>({prefix + "log10"});
 }
 
 } // namespace facebook::velox::functions::sparksql

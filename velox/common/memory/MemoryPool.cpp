@@ -22,28 +22,14 @@
 #include "velox/common/memory/Memory.h"
 #include "velox/common/testutil/TestValue.h"
 
+#include <re2/re2.h>
+
+DECLARE_bool(velox_suppress_memory_capacity_exceeding_error_message);
+
 using facebook::velox::common::testutil::TestValue;
 
 namespace facebook::velox::memory {
 namespace {
-#define VELOX_MEM_POOL_CAP_EXCEEDED(errorMessage)                   \
-  _VELOX_THROW(                                                     \
-      ::facebook::velox::VeloxRuntimeError,                         \
-      ::facebook::velox::error_source::kErrorSourceRuntime.c_str(), \
-      ::facebook::velox::error_code::kMemCapExceeded.c_str(),       \
-      /* isRetriable */ true,                                       \
-      "{}",                                                         \
-      errorMessage);
-
-#define VELOX_MEM_MANAGER_CAP_EXCEEDED(cap)                         \
-  _VELOX_THROW(                                                     \
-      ::facebook::velox::VeloxRuntimeError,                         \
-      ::facebook::velox::error_source::kErrorSourceRuntime.c_str(), \
-      ::facebook::velox::error_code::kMemCapExceeded.c_str(),       \
-      /* isRetriable */ true,                                       \
-      "Exceeded memory manager cap of {}",                          \
-      succinctBytes(cap));
-
 // Check if memory operation is allowed and increment the named stats.
 #define CHECK_AND_INC_MEM_OP_STATS(stats)                             \
   do {                                                                \
@@ -54,6 +40,9 @@ namespace {
     }                                                                 \
     ++num##stats##_;                                                  \
   } while (0)
+
+// Check if memory operation is allowed and increment the named stats.
+#define INC_MEM_OP_STATS(stats) ++num##stats##_;
 
 // Check if a memory pool management operation is allowed.
 #define CHECK_POOL_MANAGEMENT_OP(opName)                                             \
@@ -116,6 +105,10 @@ void capExceedingMessageVisitor(
     MemoryUsageHeap& topLeafMemUsages,
     std::stringstream& out) {
   const MemoryPool::Stats stats = pool->stats();
+  // Avoid logging empty pools.
+  if (stats.empty()) {
+    return;
+  }
   const MemoryUsage usage{
       .name = pool->name(),
       .currentUsage = stats.currentBytes,
@@ -137,6 +130,23 @@ void capExceedingMessageVisitor(
         return true;
       });
 }
+
+std::string capacityToString(int64_t capacity) {
+  return capacity == kMaxMemory ? "UNLIMITED" : succinctBytes(capacity);
+}
+
+#define DEBUG_RECORD_ALLOC(...)        \
+  if (FOLLY_UNLIKELY(debugEnabled_)) { \
+    recordAllocDbg(__VA_ARGS__);       \
+  }
+#define DEBUG_RECORD_FREE(...)         \
+  if (FOLLY_UNLIKELY(debugEnabled_)) { \
+    recordFreeDbg(__VA_ARGS__);        \
+  }
+#define DEBUG_LEAK_CHECK()             \
+  if (FOLLY_UNLIKELY(debugEnabled_)) { \
+    leakCheckDbg();                    \
+  }
 } // namespace
 
 std::string MemoryPool::Stats::toString() const {
@@ -188,19 +198,19 @@ MemoryPool::MemoryPool(
       kind_(kind),
       alignment_(options.alignment),
       parent_(std::move(parent)),
+      maxCapacity_(parent_ == nullptr ? options.maxCapacity : kMaxMemory),
       trackUsage_(options.trackUsage),
       threadSafe_(options.threadSafe),
-      reclaimer_(options.reclaimer),
-      checkUsageLeak_(options.checkUsageLeak) {
+      checkUsageLeak_(options.checkUsageLeak),
+      debugEnabled_(options.debugEnabled) {
   VELOX_CHECK(!isRoot() || !isLeaf());
+  VELOX_CHECK_GT(
+      maxCapacity_, 0, "Memory pool {} max capacity can't be zero", name_);
   MemoryAllocator::alignmentCheck(0, alignment_);
 }
 
 MemoryPool::~MemoryPool() {
   VELOX_CHECK(children_.empty());
-  if (parent_ != nullptr) {
-    parent_->dropChild(this);
-  }
 }
 
 std::string MemoryPool::kindString(Kind kind) {
@@ -230,24 +240,45 @@ MemoryPool* MemoryPool::parent() const {
   return parent_.get();
 }
 
-MemoryPool* MemoryPool::root() {
-  MemoryPool* root = this;
-  while (root->parent_ != nullptr) {
-    root = root->parent_.get();
+MemoryPool* MemoryPool::root() const {
+  const MemoryPool* pool = this;
+  while (pool->parent_ != nullptr) {
+    pool = pool->parent_.get();
   }
-  return root;
+  return const_cast<MemoryPool*>(pool);
 }
 
 uint64_t MemoryPool::getChildCount() const {
-  folly::SharedMutex::ReadHolder guard{childrenMutex_};
+  folly::SharedMutex::ReadHolder guard{poolMutex_};
   return children_.size();
 }
 
 void MemoryPool::visitChildren(
     const std::function<bool(MemoryPool*)>& visitor) const {
-  folly::SharedMutex::ReadHolder guard{childrenMutex_};
-  for (const auto& entry : children_) {
-    if (!visitor(entry.second)) {
+  std::vector<std::shared_ptr<MemoryPool>> children;
+  {
+    folly::SharedMutex::ReadHolder guard{poolMutex_};
+    children.reserve(children_.size());
+    for (auto& entry : children_) {
+      auto child = entry.second.lock();
+      if (child != nullptr) {
+        children.push_back(std::move(child));
+      }
+    }
+  }
+
+  // NOTE: we should call 'visitor' on child pool object out of
+  // 'poolMutex_' to avoid potential recursive locking issues. Firstly, the
+  // user provided 'visitor' might try to acquire this memory pool lock again.
+  // Secondly, the shared child pool reference created from the weak pointer
+  // might be the last reference if some other threads drop all the external
+  // references during this time window. Then drop of this last shared reference
+  // after 'visitor' call will trigger child memory pool destruction in that
+  // case. The child memory pool destructor will remove its weak pointer
+  // reference from the parent pool which needs to acquire this memory pool lock
+  // again.
+  for (auto& child : children) {
+    if (!visitor(child.get())) {
       return;
     }
   }
@@ -256,10 +287,10 @@ void MemoryPool::visitChildren(
 std::shared_ptr<MemoryPool> MemoryPool::addLeafChild(
     const std::string& name,
     bool threadSafe,
-    std::shared_ptr<MemoryReclaimer> reclaimer) {
+    std::unique_ptr<MemoryReclaimer> reclaimer) {
   CHECK_POOL_MANAGEMENT_OP(addLeafChild);
 
-  folly::SharedMutex::WriteHolder guard{childrenMutex_};
+  folly::SharedMutex::WriteHolder guard{poolMutex_};
   VELOX_CHECK_EQ(
       children_.count(name),
       0,
@@ -272,16 +303,16 @@ std::shared_ptr<MemoryPool> MemoryPool::addLeafChild(
       MemoryPool::Kind::kLeaf,
       threadSafe,
       std::move(reclaimer));
-  children_.emplace(name, child.get());
+  children_.emplace(name, child);
   return child;
 }
 
 std::shared_ptr<MemoryPool> MemoryPool::addAggregateChild(
     const std::string& name,
-    std::shared_ptr<MemoryReclaimer> reclaimer) {
+    std::unique_ptr<MemoryReclaimer> reclaimer) {
   CHECK_POOL_MANAGEMENT_OP(addAggregateChild);
 
-  folly::SharedMutex::WriteHolder guard{childrenMutex_};
+  folly::SharedMutex::WriteHolder guard{poolMutex_};
   VELOX_CHECK_EQ(
       children_.count(name),
       0,
@@ -294,13 +325,13 @@ std::shared_ptr<MemoryPool> MemoryPool::addAggregateChild(
       MemoryPool::Kind::kAggregate,
       true,
       std::move(reclaimer));
-  children_.emplace(name, child.get());
+  children_.emplace(name, child);
   return child;
 }
 
 void MemoryPool::dropChild(const MemoryPool* child) {
   CHECK_POOL_MANAGEMENT_OP(dropChild);
-  folly::SharedMutex::WriteHolder guard{childrenMutex_};
+  folly::SharedMutex::WriteHolder guard{poolMutex_};
   const auto ret = children_.erase(child->name());
   VELOX_CHECK_EQ(
       ret,
@@ -310,7 +341,7 @@ void MemoryPool::dropChild(const MemoryPool* child) {
       toString());
 }
 
-size_t MemoryPool::getPreferredSize(size_t size) {
+size_t MemoryPool::preferredSize(size_t size) {
   if (size < 8) {
     return 8;
   }
@@ -328,59 +359,39 @@ size_t MemoryPool::getPreferredSize(size_t size) {
   return lower * 2;
 }
 
-MemoryReclaimer* MemoryPool::reclaimer() const {
-  return reclaimer_.get();
-}
-
-bool MemoryPool::canReclaim() const {
-  if (reclaimer_ == nullptr) {
-    return false;
-  }
-  return reclaimer_->canReclaim(*this);
-}
-
-uint64_t MemoryPool::reclaimableBytes() const {
-  if (reclaimer_ == nullptr) {
-    return 0;
-  }
-  return reclaimer_->reclaimableBytes(*this);
-}
-
-uint64_t MemoryPool::reclaim(uint64_t targetBytes) {
-  if (reclaimer_ == nullptr) {
-    return 0;
-  }
-  return reclaimer_->reclaim(this, targetBytes);
-}
-
-void MemoryPool::enterArbitration() {
-  if (reclaimer_ != nullptr) {
-    reclaimer_->enterArbitration();
-  }
-}
-
-void MemoryPool::leaveArbitration() {
-  if (reclaimer_ != nullptr) {
-    reclaimer_->leaveArbitration();
-  }
-}
-
 MemoryPoolImpl::MemoryPoolImpl(
     MemoryManager* memoryManager,
     const std::string& name,
     Kind kind,
     std::shared_ptr<MemoryPool> parent,
+    std::unique_ptr<MemoryReclaimer> reclaimer,
     DestructionCallback destructionCb,
     const Options& options)
     : MemoryPool{name, kind, parent, options},
       manager_{memoryManager},
-      allocator_{&manager_->getAllocator()},
+      allocator_{&manager_->allocator()},
       destructionCb_(std::move(destructionCb)),
-      capacity_(parent_ == nullptr ? options.capacity : kMaxMemory) {
+      debugPoolNameRegex_(debugEnabled_ ? *(debugPoolNameRegex().rlock()) : ""),
+      reclaimer_(std::move(reclaimer)),
+      // The memory manager sets the capacity through grow() according to the
+      // actually used memory arbitration policy.
+      capacity_(parent_ != nullptr ? kMaxMemory : 0) {
   VELOX_CHECK(options.threadSafe || isLeaf());
+  // NOTE: we shall only set reclaimer in a child pool if its parent has also
+  // set. Otherwise. it should be mis-configured.
+  VELOX_CHECK(
+      parent_ == nullptr || parent_->reclaimer() != nullptr ||
+          reclaimer_ == nullptr,
+      "Child memory pool {} shall only set memory reclaimer if its parent {} has also set",
+      name_,
+      parent_->name());
 }
 
 MemoryPoolImpl::~MemoryPoolImpl() {
+  DEBUG_LEAK_CHECK();
+  if (parent_ != nullptr) {
+    toImpl(parent_)->dropChild(this);
+  }
   if (checkUsageLeak_) {
     VELOX_CHECK(
         (usedReservationBytes_ == 0) && (reservationBytes_ == 0) &&
@@ -421,12 +432,14 @@ void* MemoryPoolImpl::allocate(int64_t size) {
     VELOX_MEM_ALLOC_ERROR(fmt::format(
         "{} failed with {} bytes from {}", __FUNCTION__, size, toString()));
   }
+  DEBUG_RECORD_ALLOC(buffer, size);
   return buffer;
 }
 
 void* MemoryPoolImpl::allocateZeroFilled(int64_t numEntries, int64_t sizeEach) {
   CHECK_AND_INC_MEM_OP_STATS(Allocs);
-  const auto alignedSize = sizeAlign(sizeEach * numEntries);
+  const auto size = sizeEach * numEntries;
+  const auto alignedSize = sizeAlign(size);
   reserve(alignedSize);
   void* buffer = allocator_->allocateZeroFilled(alignedSize);
   if (FOLLY_UNLIKELY(buffer == nullptr)) {
@@ -438,18 +451,17 @@ void* MemoryPoolImpl::allocateZeroFilled(int64_t numEntries, int64_t sizeEach) {
         sizeEach,
         toString()));
   }
+  DEBUG_RECORD_ALLOC(buffer, size);
   return buffer;
 }
 
 void* MemoryPoolImpl::reallocate(void* p, int64_t size, int64_t newSize) {
   CHECK_AND_INC_MEM_OP_STATS(Allocs);
-
-  const auto alignedSize = sizeAlign(size);
   const auto alignedNewSize = sizeAlign(newSize);
   reserve(alignedNewSize);
+
   void* newP = allocator_->allocateBytes(alignedNewSize, alignment_);
   if (FOLLY_UNLIKELY(newP == nullptr)) {
-    free(p, alignedSize);
     release(alignedNewSize);
     VELOX_MEM_ALLOC_ERROR(fmt::format(
         "{} failed with {} new bytes and {} old bytes from {}",
@@ -458,18 +470,18 @@ void* MemoryPoolImpl::reallocate(void* p, int64_t size, int64_t newSize) {
         size,
         toString()));
   }
-  VELOX_CHECK_NOT_NULL(newP);
-  if (p == nullptr) {
-    return newP;
+  DEBUG_RECORD_ALLOC(newP, newSize);
+  if (p != nullptr) {
+    ::memcpy(newP, p, std::min(size, newSize));
+    free(p, size);
   }
-  ::memcpy(newP, p, std::min(size, newSize));
-  free(p, alignedSize);
   return newP;
 }
 
 void MemoryPoolImpl::free(void* p, int64_t size) {
   CHECK_AND_INC_MEM_OP_STATS(Frees);
   const auto alignedSize = sizeAlign(size);
+  DEBUG_RECORD_FREE(p, size);
   allocator_->freeBytes(p, alignedSize);
   release(alignedSize);
 }
@@ -479,8 +491,14 @@ void MemoryPoolImpl::allocateNonContiguous(
     Allocation& out,
     MachinePageCount minSizeClass) {
   CHECK_AND_INC_MEM_OP_STATS(Allocs);
+  if (!out.empty()) {
+    INC_MEM_OP_STATS(Frees);
+  }
   VELOX_CHECK_GT(numPages, 0);
-
+  TestValue::adjust(
+      "facebook::velox::common::memory::MemoryPoolImpl::allocateNonContiguous",
+      this);
+  DEBUG_RECORD_FREE(out);
   if (!allocator_->allocateNonContiguous(
           numPages,
           out,
@@ -496,6 +514,7 @@ void MemoryPoolImpl::allocateNonContiguous(
     VELOX_MEM_ALLOC_ERROR(fmt::format(
         "{} failed with {} pages from {}", __FUNCTION__, numPages, toString()));
   }
+  DEBUG_RECORD_ALLOC(out);
   VELOX_CHECK(!out.empty());
   VELOX_CHECK_NULL(out.pool());
   out.setPool(this);
@@ -503,6 +522,7 @@ void MemoryPoolImpl::allocateNonContiguous(
 
 void MemoryPoolImpl::freeNonContiguous(Allocation& allocation) {
   CHECK_AND_INC_MEM_OP_STATS(Frees);
+  DEBUG_RECORD_FREE(allocation);
   const int64_t freedBytes = allocator_->freeNonContiguous(allocation);
   VELOX_CHECK(allocation.empty());
   release(freedBytes);
@@ -518,22 +538,31 @@ const std::vector<MachinePageCount>& MemoryPoolImpl::sizeClasses() const {
 
 void MemoryPoolImpl::allocateContiguous(
     MachinePageCount numPages,
-    ContiguousAllocation& out) {
+    ContiguousAllocation& out,
+    MachinePageCount maxPages) {
   CHECK_AND_INC_MEM_OP_STATS(Allocs);
+  if (!out.empty()) {
+    INC_MEM_OP_STATS(Frees);
+  }
   VELOX_CHECK_GT(numPages, 0);
-
+  DEBUG_RECORD_FREE(out);
   if (!allocator_->allocateContiguous(
-          numPages, nullptr, out, [this](int64_t allocBytes, bool preAlloc) {
+          numPages,
+          nullptr,
+          out,
+          [this](int64_t allocBytes, bool preAlloc) {
             if (preAlloc) {
               reserve(allocBytes);
             } else {
               release(allocBytes);
             }
-          })) {
+          },
+          maxPages)) {
     VELOX_CHECK(out.empty());
     VELOX_MEM_ALLOC_ERROR(fmt::format(
         "{} failed with {} pages from {}", __FUNCTION__, numPages, toString()));
   }
+  DEBUG_RECORD_ALLOC(out);
   VELOX_CHECK(!out.empty());
   VELOX_CHECK_NULL(out.pool());
   out.setPool(this);
@@ -542,9 +571,32 @@ void MemoryPoolImpl::allocateContiguous(
 void MemoryPoolImpl::freeContiguous(ContiguousAllocation& allocation) {
   CHECK_AND_INC_MEM_OP_STATS(Frees);
   const int64_t bytesToFree = allocation.size();
+  DEBUG_RECORD_FREE(allocation);
   allocator_->freeContiguous(allocation);
   VELOX_CHECK(allocation.empty());
   release(bytesToFree);
+}
+
+void MemoryPoolImpl::growContiguous(
+    MachinePageCount increment,
+    ContiguousAllocation& allocation) {
+  if (!allocator_->growContiguous(
+          increment, allocation, [this](int64_t allocBytes, bool preAlloc) {
+            if (preAlloc) {
+              reserve(allocBytes);
+            } else {
+              release(allocBytes);
+            }
+          })) {
+    VELOX_MEM_ALLOC_ERROR(fmt::format(
+        "{} failed with {} pages from {}",
+        __FUNCTION__,
+        increment,
+        toString()));
+  }
+  if (FOLLY_UNLIKELY(debugEnabled_)) {
+    recordGrowDbg(allocation.data(), allocation.size());
+  }
 }
 
 int64_t MemoryPoolImpl::capacity() const {
@@ -560,29 +612,39 @@ std::shared_ptr<MemoryPool> MemoryPoolImpl::genChild(
     const std::string& name,
     Kind kind,
     bool threadSafe,
-    std::shared_ptr<MemoryReclaimer> reclaimer) {
+    std::unique_ptr<MemoryReclaimer> reclaimer) {
   return std::make_shared<MemoryPoolImpl>(
       manager_,
       name,
       kind,
       parent,
+      std::move(reclaimer),
       nullptr,
       Options{
           .alignment = alignment_,
           .trackUsage = trackUsage_,
           .threadSafe = threadSafe,
-          .reclaimer = std::move(reclaimer)});
+          .checkUsageLeak = checkUsageLeak_,
+          .debugEnabled = debugEnabled_});
 }
 
 bool MemoryPoolImpl::maybeReserve(uint64_t increment) {
   CHECK_AND_INC_MEM_OP_STATS(Reserves);
   TestValue::adjust(
-      "facebook::velox::memory::MemoryPoolImpl::maybeReserve", this);
+      "facebook::velox::common::memory::MemoryPoolImpl::maybeReserve", this);
+  // TODO: make this a configurable memory pool option.
   constexpr int32_t kGrowthQuantum = 8 << 20;
   const auto reservationToAdd = bits::roundUp(increment, kGrowthQuantum);
   try {
     reserve(reservationToAdd, true);
   } catch (const std::exception& e) {
+    if (aborted()) {
+      // NOTE: we shall throw to stop the query execution if the root memory
+      // pool has been aborted. It is also unsafe to proceed as the memory abort
+      // code path might have already freed up the memory resource of this
+      // operator while it is under memory arbitration.
+      std::rethrow_exception(std::current_exception());
+    }
     return false;
   }
   return true;
@@ -605,7 +667,13 @@ void MemoryPoolImpl::reserve(uint64_t size, bool reserveOnly) {
     // is low-pri because we can only have inflated aggregates, and be on the
     // more conservative side.
     release(size);
-    VELOX_MEM_MANAGER_CAP_EXCEEDED(manager_->getMemoryQuota());
+    VELOX_MEM_POOL_CAP_EXCEEDED(toImpl(root())->capExceedingMessage(
+        this,
+        fmt::format(
+            "Exceeded memory manager cap of {} when requesting {}, memory pool cap is {}",
+            capacityToString(manager_->capacity()),
+            succinctBytes(size),
+            capacityToString(capacity()))));
   }
 }
 
@@ -632,7 +700,15 @@ void MemoryPoolImpl::reserveThreadSafe(uint64_t size, bool reserveOnly) {
     }
     TestValue::adjust(
         "facebook::velox::memory::MemoryPoolImpl::reserveThreadSafe", this);
-    incrementReservationThreadSafe(this, increment);
+    try {
+      incrementReservationThreadSafe(this, increment);
+    } catch (const std::exception& e) {
+      // When race with concurrent memory reservation free, we might end up with
+      // unused reservation but no used reservation if a retry memory
+      // reservation attempt run into memory capacity exceeded error.
+      releaseThreadSafe(0, false);
+      std::rethrow_exception(std::current_exception());
+    }
   }
 
   // NOTE: in case of concurrent reserve and release requests, we might see
@@ -668,7 +744,7 @@ bool MemoryPoolImpl::incrementReservationThreadSafe(
   }
   VELOX_CHECK_NULL(parent_);
 
-  if ((growCallback_ != nullptr) && growCallback_(size, *this)) {
+  if (manager_->growPool(requestor, size)) {
     TestValue::adjust(
         "facebook::velox::memory::MemoryPoolImpl::incrementReservationThreadSafe::AfterGrowCallback",
         this);
@@ -682,8 +758,14 @@ bool MemoryPoolImpl::incrementReservationThreadSafe(
     // pool which should happen rarely.
     return maybeIncrementReservation(size);
   }
-
-  VELOX_MEM_POOL_CAP_EXCEEDED(capExceedingMessage(requestor, size));
+  VELOX_MEM_POOL_CAP_EXCEEDED(capExceedingMessage(
+      requestor,
+      fmt::format(
+          "Exceeded memory pool cap of {} with max {} when requesting {}, memory manager cap is {}",
+          capacityToString(capacity()),
+          capacityToString(maxCapacity_),
+          succinctBytes(size),
+          capacityToString(manager_->capacity()))));
 }
 
 bool MemoryPoolImpl::maybeIncrementReservation(uint64_t size) {
@@ -692,36 +774,44 @@ bool MemoryPoolImpl::maybeIncrementReservation(uint64_t size) {
 }
 
 bool MemoryPoolImpl::maybeIncrementReservationLocked(uint64_t size) {
-  if (!isRoot() || (reservationBytes_ + size <= capacity_)) {
-    reservationBytes_ += size;
-    if (!isLeaf()) {
-      cumulativeBytes_ += size;
-      maybeUpdatePeakBytesLocked(reservationBytes_);
+  if (isRoot()) {
+    if (aborted()) {
+      // Throw exception if this root memory pool has been aborted by the memory
+      // arbitrator. This is to prevent it from triggering memory arbitration,
+      // and we expect the associated query will also abort soon.
+      VELOX_MEM_POOL_ABORTED(this);
     }
-    return true;
+    if (reservationBytes_ + size > capacity_) {
+      return false;
+    }
   }
-  return false;
+  reservationBytes_ += size;
+  if (!isLeaf()) {
+    cumulativeBytes_ += size;
+    maybeUpdatePeakBytesLocked(reservationBytes_);
+  }
+  return true;
 }
 
 void MemoryPoolImpl::release() {
   CHECK_AND_INC_MEM_OP_STATS(Releases);
-  release(0);
+  release(0, true);
 }
 
-void MemoryPoolImpl::release(uint64_t size) {
-  if (FOLLY_LIKELY(trackUsage_)) {
-    if (FOLLY_LIKELY(threadSafe_)) {
-      releaseThreadSafe(size);
-    } else {
-      releaseNonThreadSafe(size);
-    }
-  }
-  if (size > 0) {
+void MemoryPoolImpl::release(uint64_t size, bool releaseOnly) {
+  if (!releaseOnly) {
     manager_->release(size);
   }
+  if (FOLLY_LIKELY(trackUsage_)) {
+    if (FOLLY_LIKELY(threadSafe_)) {
+      releaseThreadSafe(size, releaseOnly);
+    } else {
+      releaseNonThreadSafe(size, releaseOnly);
+    }
+  }
 }
 
-void MemoryPoolImpl::releaseThreadSafe(uint64_t size) {
+void MemoryPoolImpl::releaseThreadSafe(uint64_t size, bool releaseOnly) {
   VELOX_CHECK(isLeaf());
   VELOX_DCHECK_NOT_NULL(parent_);
 
@@ -729,7 +819,8 @@ void MemoryPoolImpl::releaseThreadSafe(uint64_t size) {
   {
     std::lock_guard<std::mutex> l(mutex_);
     int64_t newQuantized;
-    if (size == 0) {
+    if (FOLLY_UNLIKELY(releaseOnly)) {
+      VELOX_DCHECK_EQ(size, 0);
       if (minReservationBytes_ == 0) {
         return;
       }
@@ -765,14 +856,16 @@ void MemoryPoolImpl::decrementReservation(uint64_t size) noexcept {
 
 std::string MemoryPoolImpl::capExceedingMessage(
     MemoryPool* requestor,
-    uint64_t incrementBytes) {
+    const std::string& errorMessage) {
   VELOX_CHECK_NULL(parent_);
 
   std::stringstream out;
+  out << errorMessage << "\n";
+  if (FLAGS_velox_suppress_memory_capacity_exceeding_error_message) {
+    return out.str();
+  }
   {
     std::lock_guard<std::mutex> l(mutex_);
-    out << "\nExceeded memory cap of " << succinctBytes(capacity_)
-        << " when requesting " << succinctBytes(incrementBytes) << "\n";
     const Stats stats = statsLocked();
     const MemoryUsage usage{
         .name = name(),
@@ -797,8 +890,116 @@ std::string MemoryPoolImpl::capExceedingMessage(
   }
 
   out << "\nFailed memory pool: " << requestor->name() << ": "
-      << succinctBytes(requestor->getCurrentBytes()) << "\n";
+      << succinctBytes(requestor->currentBytes()) << "\n";
   return out.str();
+}
+
+uint64_t MemoryPoolImpl::freeBytes() const {
+  if (parent_ != nullptr) {
+    return parent_->freeBytes();
+  }
+  std::lock_guard<std::mutex> l(mutex_);
+  if (capacity_ == kMaxMemory) {
+    return 0;
+  }
+  VELOX_CHECK_GE(capacity_, reservationBytes_);
+  return capacity_ - reservationBytes_;
+}
+
+void MemoryPoolImpl::setReclaimer(std::unique_ptr<MemoryReclaimer> reclaimer) {
+  VELOX_CHECK_NOT_NULL(reclaimer);
+  if (parent_ != nullptr) {
+    VELOX_CHECK_NOT_NULL(
+        parent_->reclaimer(),
+        "Child memory pool {} shall only set reclaimer if its parent {} has also set",
+        name_,
+        parent_->name());
+  }
+  std::lock_guard<std::mutex> l(mutex_);
+  VELOX_CHECK_NULL(reclaimer_);
+  reclaimer_ = std::move(reclaimer);
+}
+
+MemoryReclaimer* MemoryPoolImpl::reclaimer() const {
+  tsan_lock_guard<std::mutex> l(mutex_);
+  return reclaimer_.get();
+}
+
+bool MemoryPoolImpl::reclaimableBytes(uint64_t& reclaimableBytes) const {
+  reclaimableBytes = 0;
+  if (reclaimer() == nullptr) {
+    return false;
+  }
+  return reclaimer()->reclaimableBytes(*this, reclaimableBytes);
+}
+
+uint64_t MemoryPoolImpl::reclaim(uint64_t targetBytes) {
+  if (reclaimer() == nullptr) {
+    return 0;
+  }
+  return reclaimer()->reclaim(this, targetBytes);
+}
+
+void MemoryPoolImpl::enterArbitration() {
+  if (reclaimer() != nullptr) {
+    reclaimer()->enterArbitration();
+  }
+}
+
+void MemoryPoolImpl::leaveArbitration() noexcept {
+  if (reclaimer() != nullptr) {
+    reclaimer()->leaveArbitration();
+  }
+}
+
+uint64_t MemoryPoolImpl::shrink(uint64_t targetBytes) {
+  if (parent_ != nullptr) {
+    return parent_->shrink(targetBytes);
+  }
+  std::lock_guard<std::mutex> l(mutex_);
+  // We don't expect to shrink a memory pool without capacity limit.
+  VELOX_CHECK_NE(capacity_, kMaxMemory);
+  uint64_t freeBytes = std::max<uint64_t>(0, capacity_ - reservationBytes_);
+  if (targetBytes != 0) {
+    freeBytes = std::min(targetBytes, freeBytes);
+  }
+  capacity_ -= freeBytes;
+  return freeBytes;
+}
+
+uint64_t MemoryPoolImpl::grow(uint64_t bytes) noexcept {
+  if (parent_ != nullptr) {
+    return parent_->grow(bytes);
+  }
+  // TODO: add to prevent from growing beyond the max capacity and the
+  // corresponding support in memory arbitrator.
+  std::lock_guard<std::mutex> l(mutex_);
+  // We don't expect to grow a memory pool without capacity limit.
+  VELOX_CHECK_NE(capacity_, kMaxMemory, "Can't grow with unlimited capacity");
+  VELOX_CHECK_LE(
+      capacity_ + bytes, maxCapacity_, "Can't grow beyond the max capacity");
+  capacity_ += bytes;
+  VELOX_CHECK_GE(capacity_, bytes);
+  return capacity_;
+}
+
+bool MemoryPoolImpl::aborted() const {
+  if (parent_ != nullptr) {
+    return parent_->aborted();
+  }
+  return aborted_;
+}
+
+void MemoryPoolImpl::abort() {
+  if (parent_ != nullptr) {
+    parent_->abort();
+    return;
+  }
+  if (reclaimer() == nullptr) {
+    VELOX_FAIL("Can't abort the memory pool {} without reclaimer", name_);
+  }
+  aborted_ = true;
+  reclaimer()->abort(this);
 }
 
 void MemoryPoolImpl::testingSetCapacity(int64_t bytes) {
@@ -807,5 +1008,116 @@ void MemoryPoolImpl::testingSetCapacity(int64_t bytes) {
   }
   std::lock_guard<std::mutex> l(mutex_);
   capacity_ = bytes;
+}
+
+bool MemoryPoolImpl::needRecordDbg(bool /* isAlloc */) {
+  if (!debugPoolNameRegex_.empty()) {
+    return RE2::FullMatch(name_, debugPoolNameRegex_);
+  }
+  // TODO(jtan6): Add sample based condition support.
+  return true;
+}
+
+void MemoryPoolImpl::recordAllocDbg(const void* addr, uint64_t size) {
+  VELOX_CHECK(debugEnabled_);
+  if (!needRecordDbg(true)) {
+    return;
+  }
+  const auto stackTrace = process::StackTrace().toString();
+  std::lock_guard<std::mutex> l(debugAllocMutex_);
+  debugAllocRecords_.emplace(
+      reinterpret_cast<uint64_t>(addr), AllocationRecord{size, stackTrace});
+}
+
+void MemoryPoolImpl::recordAllocDbg(const Allocation& allocation) {
+  VELOX_CHECK(debugEnabled_);
+  if (!needRecordDbg(true) || allocation.empty()) {
+    return;
+  }
+  recordAllocDbg(allocation.runAt(0).data(), allocation.byteSize());
+}
+
+void MemoryPoolImpl::recordAllocDbg(const ContiguousAllocation& allocation) {
+  VELOX_CHECK(debugEnabled_);
+  if (!needRecordDbg(true) || allocation.empty()) {
+    return;
+  }
+  recordAllocDbg(allocation.data(), allocation.size());
+}
+
+void MemoryPoolImpl::recordFreeDbg(const void* addr, uint64_t size) {
+  VELOX_CHECK(debugEnabled_);
+  if (!needRecordDbg(false) || addr == nullptr) {
+    return;
+  }
+  std::lock_guard<std::mutex> l(debugAllocMutex_);
+  uint64_t addrUint64 = reinterpret_cast<uint64_t>(addr);
+  auto allocResult = debugAllocRecords_.find(addrUint64);
+  if (allocResult == debugAllocRecords_.end()) {
+    VELOX_FAIL("Freeing of un-allocated memory. Free address {}.", addrUint64);
+  }
+  const auto allocRecord = allocResult->second;
+  if (allocRecord.size != size) {
+    const auto freeStackTrace = process::StackTrace().toString();
+    VELOX_FAIL(fmt::format(
+        "[MemoryPool] Trying to free {} bytes on an allocation of {} bytes.\n"
+        "======== Allocation Stack ========\n"
+        "{}\n"
+        "============ Free Stack ==========\n"
+        "{}\n",
+        size,
+        allocRecord.size,
+        allocRecord.callStack,
+        freeStackTrace));
+  }
+  debugAllocRecords_.erase(addrUint64);
+}
+
+void MemoryPoolImpl::recordFreeDbg(const Allocation& allocation) {
+  VELOX_CHECK(debugEnabled_);
+  if (!needRecordDbg(false) || allocation.empty()) {
+    return;
+  }
+  recordFreeDbg(allocation.runAt(0).data(), allocation.byteSize());
+}
+
+void MemoryPoolImpl::recordFreeDbg(const ContiguousAllocation& allocation) {
+  VELOX_CHECK(debugEnabled_);
+  if (!needRecordDbg(false) || allocation.empty()) {
+    return;
+  }
+  recordFreeDbg(allocation.data(), allocation.size());
+}
+
+void MemoryPoolImpl::recordGrowDbg(const void* addr, uint64_t newSize) {
+  VELOX_CHECK(debugEnabled_);
+  if (!needRecordDbg(false) || addr == nullptr) {
+    return;
+  }
+  std::lock_guard<std::mutex> l(debugAllocMutex_);
+  uint64_t addrUint64 = reinterpret_cast<uint64_t>(addr);
+  auto allocResult = debugAllocRecords_.find(addrUint64);
+  if (allocResult == debugAllocRecords_.end()) {
+    VELOX_FAIL("Growing of un-allocated memory. Free address {}.", addrUint64);
+  }
+  allocResult->second.size = newSize;
+}
+
+void MemoryPoolImpl::leakCheckDbg() {
+  VELOX_CHECK(debugEnabled_);
+  if (debugAllocRecords_.empty()) {
+    return;
+  }
+  std::stringbuf buf;
+  std::ostream oss(&buf);
+  oss << "Detected total of " << debugAllocRecords_.size()
+      << " leaked allocations:\n";
+  for (const auto& itr : debugAllocRecords_) {
+    const auto& allocationRecord = itr.second;
+    oss << "======== Leaked memory allocation of " << allocationRecord.size
+        << " bytes ========\n"
+        << allocationRecord.callStack;
+  }
+  VELOX_FAIL(buf.str());
 }
 } // namespace facebook::velox::memory

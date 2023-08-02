@@ -134,6 +134,16 @@ struct SsdCacheStats {
     entriesCached = tsanAtomicValue(other.entriesCached);
     bytesCached = tsanAtomicValue(other.bytesCached);
     numPins = tsanAtomicValue(other.numPins);
+
+    openFileErrors = tsanAtomicValue(other.openFileErrors);
+    openCheckpointErrors = tsanAtomicValue(other.openCheckpointErrors);
+    openLogErrors = tsanAtomicValue(other.openLogErrors);
+    deleteCheckpointErrors = tsanAtomicValue(other.deleteCheckpointErrors);
+    growFileErrors = tsanAtomicValue(other.growFileErrors);
+    writeSsdErrors = tsanAtomicValue(other.writeSsdErrors);
+    writeCheckpointErrors = tsanAtomicValue(other.writeCheckpointErrors);
+    readSsdErrors = tsanAtomicValue(other.readSsdErrors);
+    readCheckpointErrors = tsanAtomicValue(other.readCheckpointErrors);
   }
 
   tsan_atomic<uint64_t> entriesWritten{0};
@@ -143,6 +153,16 @@ struct SsdCacheStats {
   tsan_atomic<uint64_t> entriesCached{0};
   tsan_atomic<uint64_t> bytesCached{0};
   tsan_atomic<int32_t> numPins{0};
+
+  tsan_atomic<uint32_t> openFileErrors{0};
+  tsan_atomic<uint32_t> openCheckpointErrors{0};
+  tsan_atomic<uint32_t> openLogErrors{0};
+  tsan_atomic<uint32_t> deleteCheckpointErrors{0};
+  tsan_atomic<uint32_t> growFileErrors{0};
+  tsan_atomic<uint32_t> writeSsdErrors{0};
+  tsan_atomic<uint32_t> writeCheckpointErrors{0};
+  tsan_atomic<uint32_t> readSsdErrors{0};
+  tsan_atomic<uint32_t> readCheckpointErrors{0};
 };
 
 // A shard of SsdCache. Corresponds to one file on SSD.  The data
@@ -194,7 +214,7 @@ class SsdFile {
   // Asserts that the region of 'offset' is pinned. This is called by
   // the pin holder. The pin count can be read without mutex.
   void checkPinned(uint64_t offset) const {
-    tsan_lock_guard<std::mutex> l(mutex_);
+    tsan_lock_guard<std::shared_mutex> l(mutex_);
     VELOX_CHECK_LT(0, regionPins_[regionIndex(offset)]);
   }
 
@@ -298,7 +318,7 @@ class SsdFile {
   void logEviction(const std::vector<int32_t>& regions);
 
   // Serializes access to all private data members.
-  mutable std::mutex mutex_;
+  mutable std::shared_mutex mutex_;
   // Name of cache file, used as prefix for checkpoint files.
   std::string fileName_;
   static constexpr const char* FOLLY_NONNULL kLogExtension = ".log";

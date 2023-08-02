@@ -16,79 +16,107 @@
 
 #pragma once
 
+#include "velox/common/compression/Compression.h"
 #include "velox/dwio/common/DataBuffer.h"
 #include "velox/dwio/common/DataSink.h"
-
+#include "velox/dwio/common/FlushPolicy.h"
+#include "velox/dwio/common/Options.h"
+#include "velox/dwio/common/Writer.h"
+#include "velox/dwio/common/WriterFactory.h"
 #include "velox/vector/ComplexVector.h"
-
-#include <parquet/arrow/writer.h> // @manual
 
 namespace facebook::velox::parquet {
 
-// Utility for capturing Arrow output into a DataBuffer.
-class DataBufferSink : public arrow::io::OutputStream {
+class ArrowDataBufferSink;
+
+struct ArrowContext;
+
+class DefaultFlushPolicy : public dwio::common::FlushPolicy {
  public:
-  explicit DataBufferSink(memory::MemoryPool& pool) : buffer_(pool) {}
+  DefaultFlushPolicy()
+      : rowsInRowGroup_(1'024 * 1'024), bytesInRowGroup_(128 * 1'024 * 1'024) {}
+  DefaultFlushPolicy(uint64_t rowsInRowGroup, int64_t bytesInRowGroup)
+      : rowsInRowGroup_(rowsInRowGroup), bytesInRowGroup_(bytesInRowGroup) {}
 
-  arrow::Status Write(const std::shared_ptr<arrow::Buffer>& data) override {
-    buffer_.append(
-        buffer_.size(),
-        reinterpret_cast<const char*>(data->data()),
-        data->size());
-    return arrow::Status::OK();
+  bool shouldFlush(
+      const dwio::common::StripeProgress& stripeProgress) override {
+    return stripeProgress.stripeRowCount >= rowsInRowGroup_ ||
+        stripeProgress.stripeSizeEstimate >= bytesInRowGroup_;
   }
 
-  arrow::Status Write(const void* data, int64_t nbytes) override {
-    buffer_.append(buffer_.size(), reinterpret_cast<const char*>(data), nbytes);
-    return arrow::Status::OK();
+  void onClose() override {
+    // No-op
   }
 
-  arrow::Status Flush() override {
-    return arrow::Status::OK();
+  uint64_t rowsInRowGroup() const {
+    return rowsInRowGroup_;
   }
 
-  arrow::Result<int64_t> Tell() const override {
-    return buffer_.size();
-  }
-
-  arrow::Status Close() override {
-    return arrow::Status::OK();
-  }
-
-  bool closed() const override {
-    return false;
-  }
-
-  dwio::common::DataBuffer<char>& dataBuffer() {
-    return buffer_;
+  int64_t bytesInRowGroup() const {
+    return bytesInRowGroup_;
   }
 
  private:
-  dwio::common::DataBuffer<char> buffer_;
+  const uint64_t rowsInRowGroup_;
+  const int64_t bytesInRowGroup_;
+};
+
+class LambdaFlushPolicy : public DefaultFlushPolicy {
+ public:
+  explicit LambdaFlushPolicy(
+      uint64_t rowsInRowGroup,
+      int64_t bytesInRowGroup,
+      std::function<bool()> lambda)
+      : DefaultFlushPolicy(rowsInRowGroup, bytesInRowGroup) {
+    lambda_ = std::move(lambda);
+  }
+  virtual ~LambdaFlushPolicy() override = default;
+
+  bool shouldFlush(
+      const dwio::common::StripeProgress& stripeProgress) override {
+    return lambda_() || DefaultFlushPolicy::shouldFlush(stripeProgress);
+  }
+
+ private:
+  std::function<bool()> lambda_;
+};
+
+struct WriterOptions {
+  bool enableDictionary = true;
+  int64_t dataPageSize = 1'024 * 1'024;
+  int64_t dictionaryPageSizeLimit = 1'024 * 1'024;
+  double bufferGrowRatio = 1;
+  common::CompressionKind compression = common::CompressionKind_NONE;
+  velox::memory::MemoryPool* memoryPool;
+  // The default factory allows the writer to construct the default flush
+  // policy with the configs in its ctor.
+  std::function<std::unique_ptr<DefaultFlushPolicy>()> flushPolicyFactory;
 };
 
 // Writes Velox vectors into  a DataSink using Arrow Parquet writer.
-class Writer {
+class Writer : public dwio::common::Writer {
  public:
-  // Constructts a writer with output to 'sink'. A new row group is
+  // Constructs a writer with output to 'sink'. A new row group is
   // started every 'rowsInRowGroup' top level rows. 'pool' is used for
   // temporary memory. 'properties' specifies Parquet-specific
   // options.
   Writer(
       std::unique_ptr<dwio::common::DataSink> sink,
-      memory::MemoryPool& pool,
-      int32_t rowsInRowGroup,
-      std::shared_ptr<::parquet::WriterProperties> properties =
-          ::parquet::WriterProperties::Builder().build())
-      : rowsInRowGroup_(rowsInRowGroup),
-        pool_(pool),
-        finalSink_(std::move(sink)),
-        properties_(std::move(properties)) {}
+      const WriterOptions& options,
+      std::shared_ptr<memory::MemoryPool> pool);
+
+  Writer(
+      std::unique_ptr<dwio::common::DataSink> sink,
+      const WriterOptions& options);
+
+  ~Writer() override = default;
+
+  static bool isCodecAvailable(common::CompressionKind compression);
 
   // Appends 'data' into the writer.
-  void write(const RowVectorPtr& data);
+  void write(const VectorPtr& data) override;
 
-  void flush();
+  void flush() override;
 
   // Forces a row group boundary before the data added by next write().
   void newRowGroup(int32_t numRows);
@@ -96,23 +124,28 @@ class Writer {
   // Closes 'this', After close, data can no longer be added and the completed
   // Parquet file is flushed into 'sink' provided at construction. 'sink' stays
   // live until destruction of 'this'.
-  void close();
+  void close() override;
 
  private:
-  const int32_t rowsInRowGroup_;
-
   // Pool for 'stream_'.
-  memory::MemoryPool& pool_;
-
-  // Final destination of output.
-  std::unique_ptr<dwio::common::DataSink> finalSink_;
+  std::shared_ptr<memory::MemoryPool> pool_;
+  std::shared_ptr<memory::MemoryPool> generalPool_;
 
   // Temporary Arrow stream for capturing the output.
-  std::shared_ptr<DataBufferSink> stream_;
+  std::shared_ptr<ArrowDataBufferSink> stream_;
 
-  std::unique_ptr<::parquet::arrow::FileWriter> arrowWriter_;
+  std::shared_ptr<ArrowContext> arrowContext_;
 
-  std::shared_ptr<::parquet::WriterProperties> properties_;
+  std::unique_ptr<DefaultFlushPolicy> flushPolicy_;
+};
+
+class ParquetWriterFactory : public dwio::common::WriterFactory {
+ public:
+  ParquetWriterFactory() : WriterFactory(dwio::common::FileFormat::PARQUET) {}
+
+  std::unique_ptr<dwio::common::Writer> createWriter(
+      std::unique_ptr<dwio::common::DataSink> sink,
+      const dwio::common::WriterOptions& options) override;
 };
 
 } // namespace facebook::velox::parquet

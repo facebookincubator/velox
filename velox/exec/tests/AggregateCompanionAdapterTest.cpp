@@ -19,6 +19,7 @@
 
 #include "velox/exec/Aggregate.h"
 #include "velox/exec/AggregateFunctionRegistry.h"
+#include "velox/exec/tests/DummyAggregateFunction.h"
 #include "velox/expression/FunctionSignature.h"
 #include "velox/functions/FunctionRegistry.h"
 
@@ -28,74 +29,15 @@ namespace facebook::velox::exec::test {
 
 namespace {
 
-class AggregateFunc : public Aggregate {
+class AggregateCompanionRegistryTest : public testing::Test {
  public:
-  explicit AggregateFunc(TypePtr resultType) : Aggregate(resultType) {}
-
-  int32_t accumulatorFixedWidthSize() const override {
-    return 0;
+  AggregateCompanionRegistryTest() {
+    exec::aggregateFunctions().withWLock([&](auto& functionsMap) {
+      functionsMap.clear();
+      EXPECT_EQ(0, functionsMap.size());
+    });
   }
 
-  void initializeNewGroups(
-      char** /*groups*/,
-      folly::Range<const vector_size_t*> /*indices*/) override {}
-
-  void addRawInput(
-      char** /*groups*/,
-      const SelectivityVector& /*rows*/,
-      const std::vector<VectorPtr>& /*args*/,
-      bool /*mayPushdown*/) override {}
-
-  void addIntermediateResults(
-      char** /*groups*/,
-      const SelectivityVector& /*rows*/,
-      const std::vector<VectorPtr>& /*args*/,
-      bool /*mayPushdown*/) override {}
-
-  void addSingleGroupRawInput(
-      char* /*group*/,
-      const SelectivityVector& /*rows*/,
-      const std::vector<VectorPtr>& /*args*/,
-      bool /*mayPushdown*/) override {}
-
-  void addSingleGroupIntermediateResults(
-      char* /*group*/,
-      const SelectivityVector& /*rows*/,
-      const std::vector<VectorPtr>& /*args*/,
-      bool /*mayPushdown*/) override {}
-
-  void extractValues(
-      char** /*groups*/,
-      int32_t /*numGroups*/,
-      VectorPtr* /*result*/) override {}
-
-  void extractAccumulators(
-      char** /*groups*/,
-      int32_t /*numGroups*/,
-      VectorPtr* /*result*/) override {}
-};
-
-bool registerAggregateFunc(
-    const std::string& name,
-    const std::vector<AggregateFunctionSignaturePtr>& signatures) {
-  registerAggregateFunction(
-      name,
-      signatures,
-      [&](core::AggregationNode::Step step,
-          const std::vector<TypePtr>& argTypes,
-          const TypePtr& resultType) -> std::unique_ptr<exec::Aggregate> {
-        VELOX_CHECK_GE(argTypes.size(), 1);
-        if (isPartialOutput(step)) {
-          return std::make_unique<AggregateFunc>(argTypes[0]);
-        }
-        return std::make_unique<AggregateFunc>(resultType);
-      },
-      /*registerCompanionFunctions*/ true);
-
-  return true;
-}
-
-class AggregateCompanionRegistryTest : public testing::Test {
  protected:
   void checkEqual(const TypePtr& actual, const TypePtr& expected) {
     if (expected) {
@@ -162,7 +104,7 @@ TEST_F(AggregateCompanionRegistryTest, basic) {
           .intermediateType("array(bigint)")
           .argumentType("bigint")
           .build()};
-  registerAggregateFunc("aggregateFunc1", signatures);
+  registerDummyAggregateFunction("aggregateFunc1", signatures);
 
   checkAggregateSignaturesCount("aggregateFunc1_partial", 2);
   checkAggregateTypeResolution(
@@ -230,7 +172,7 @@ TEST_F(AggregateCompanionRegistryTest, extractFunctionNameWithSuffix) {
           .argumentType("bigint")
           .argumentType("double")
           .build()};
-  registerAggregateFunc("aggregateFunc2", signatures);
+  registerDummyAggregateFunction("aggregateFunc2", signatures);
 
   checkAggregateSignaturesCount("aggregateFunc2_partial", 5);
   checkAggregateTypeResolution(
@@ -325,7 +267,7 @@ TEST_F(
           .intermediateType("row(bigint, double)")
           .argumentType("bigint")
           .build()};
-  registerAggregateFunc("aggregateFunc3", signatures);
+  registerDummyAggregateFunction("aggregateFunc3", signatures);
 
   checkAggregateSignaturesCount(
       "aggregateFunc3_merge_extract_row_row_bigint_double_endrow_endrow", 1);
@@ -371,7 +313,7 @@ TEST_F(AggregateCompanionRegistryTest, templateSignature) {
           .intermediateType("array(T)")
           .argumentType("T")
           .build()};
-  registerAggregateFunc("aggregateFunc4", signatures);
+  registerDummyAggregateFunction("aggregateFunc4", signatures);
 
   checkAggregateSignaturesCount("aggregateFunc4_partial", 2);
   checkAggregateTypeResolution(
@@ -432,7 +374,7 @@ TEST_F(
           .argumentType("bigint")
           .argumentType("K")
           .build()};
-  registerAggregateFunc("aggregateFunc5", signatures);
+  registerDummyAggregateFunction("aggregateFunc5", signatures);
 
   checkAggregateSignaturesCount("aggregateFunc5_partial", 2);
   checkAggregateTypeResolution(
@@ -481,7 +423,7 @@ TEST_F(
           .intermediateType("varbinary")
           .argumentType("T")
           .build()};
-  registerAggregateFunc("aggregateFunc6", signatures);
+  registerDummyAggregateFunction("aggregateFunc6", signatures);
 
   checkAggregateSignaturesCount("aggregateFunc6_partial", 0);
 
@@ -490,6 +432,61 @@ TEST_F(
   checkAggregateSignaturesCount("aggregateFunc6_merge_extract", 0);
 
   checkScalarSignaturesCount("aggregateFunc6_extract", 0);
+}
+
+namespace {
+class DummyVectorFunction : public exec::VectorFunction {
+ public:
+  void apply(
+      const SelectivityVector& /* rows */,
+      std::vector<VectorPtr>& /* args */,
+      const TypePtr& /* outputType */,
+      exec::EvalCtx& /* context */,
+      VectorPtr& /* result */) const override {}
+
+  static std::vector<std::shared_ptr<exec::FunctionSignature>> signatures() {
+    return {exec::FunctionSignatureBuilder()
+                .returnType("boolean")
+                .argumentType("integer")
+                .build()};
+  }
+};
+} // namespace
+
+TEST_F(AggregateCompanionRegistryTest, duplicateRegistration) {
+  std::vector<std::shared_ptr<AggregateFunctionSignature>> signatures{
+      AggregateFunctionSignatureBuilder()
+          .returnType("double")
+          .intermediateType("array(double)")
+          .argumentType("double")
+          .build()};
+
+  // Manual registration of a function with the same name as an already
+  // registered companion function.
+  registerDummyAggregateFunction("aggregateFunc7", signatures);
+  EXPECT_FALSE(
+      registerDummyAggregateFunction("aggregateFunc7_partial", signatures)
+          .mainFunction);
+  EXPECT_TRUE(
+      registerDummyAggregateFunction("aggregateFunc7_partial", signatures, true)
+          .mainFunction);
+
+  // Register companion functions with the same name as an already registered
+  // function.
+  registerDummyAggregateFunction("aggregateFunc8_partial", signatures);
+  EXPECT_FALSE(registerDummyAggregateFunction("aggregateFunc8", signatures)
+                   .partialFunction);
+  EXPECT_TRUE(registerDummyAggregateFunction("aggregateFunc8", signatures, true)
+                  .partialFunction);
+
+  exec::registerVectorFunction(
+      "aggregateFunc9_extract",
+      DummyVectorFunction::signatures(),
+      std::make_unique<DummyVectorFunction>());
+  EXPECT_FALSE(registerDummyAggregateFunction("aggregateFunc9", signatures)
+                   .extractFunction);
+  EXPECT_TRUE(registerDummyAggregateFunction("aggregateFunc9", signatures, true)
+                  .extractFunction);
 }
 
 } // namespace

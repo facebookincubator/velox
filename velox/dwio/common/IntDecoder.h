@@ -31,6 +31,7 @@ template <bool isSigned>
 class IntDecoder {
  public:
   static constexpr int32_t kMinDenseBatch = 8;
+  static constexpr bool kIsSigned = isSigned;
 
   IntDecoder(
       std::unique_ptr<dwio::common::SeekableInputStream> input,
@@ -120,7 +121,9 @@ class IntDecoder {
     return inputStream->positionSize() + startIndex + 1;
   }
 
-  void skipLongs(uint64_t numValues);
+  void skipLongs(uint64_t numValues) {
+    skipLongsFast(numValues);
+  }
 
   // Optimized variant of skipLongs using popcnt. Used on selective
   // path only pending validation.

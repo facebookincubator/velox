@@ -86,8 +86,11 @@ inline constexpr auto kUnreachableCode = "UNREACHABLE_CODE"_fs;
 // An error raised when a requested operation is not yet supported.
 inline constexpr auto kNotImplemented = "NOT_IMPLEMENTED"_fs;
 
-// An error raised when memory exceeded limits.
+// An error raised when memory pool exceeds limits.
 inline constexpr auto kMemCapExceeded = "MEM_CAP_EXCEEDED"_fs;
+
+// An error raised when memory pool is aborted.
+inline constexpr auto kMemAborted = "MEM_ABORTED"_fs;
 
 // Error caused by memory allocation failure.
 inline constexpr auto kMemAllocError = "MEM_ALLOC_ERROR"_fs;
@@ -123,9 +126,26 @@ class VeloxException : public std::exception {
       const std::exception_ptr& e,
       std::string_view message,
       std::string_view errorSource,
+      std::string_view errorCode,
       bool isRetriable,
       Type exceptionType = Type::kSystem,
       std::string_view exceptionName = "VeloxException");
+
+  VeloxException(
+      const std::exception_ptr& e,
+      std::string_view message,
+      std::string_view errorSource,
+      bool isRetriable,
+      Type exceptionType = Type::kSystem,
+      std::string_view exceptionName = "VeloxException")
+      : VeloxException(
+            e,
+            message,
+            errorSource,
+            "",
+            isRetriable,
+            exceptionType,
+            exceptionName) {}
 
   // Inherited
   const char* what() const noexcept override {
@@ -266,6 +286,7 @@ class VeloxUserError : public VeloxException {
             e,
             message,
             error_source::kErrorSourceUser,
+            error_code::kInvalidArgument,
             isRetriable,
             Type::kUser,
             exceptionName) {}
@@ -349,6 +370,10 @@ struct ExceptionContext {
 
   bool suspended{false};
 };
+
+/// If exceptionPtr represents an std::exception, convert it to VeloxUserError
+/// to add useful context for debugging.
+std::exception_ptr toVeloxException(const std::exception_ptr& exceptionPtr);
 
 /// Returns a reference to thread_local variable that holds a function that can
 /// be used to get addition context to be added to the detailed error message in

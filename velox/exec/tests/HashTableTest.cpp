@@ -17,6 +17,7 @@
 #include "velox/exec/HashTable.h"
 #include "velox/common/base/SelectivityInfo.h"
 #include "velox/common/base/tests/GTestUtils.h"
+#include "velox/exec/Aggregate.h"
 #include "velox/exec/VectorHasher.h"
 #include "velox/functions/prestosql/aggregates/RegisterAggregateFunctions.h"
 #include "velox/vector/tests/utils/VectorMaker.h"
@@ -78,7 +79,12 @@ class HashTableTest : public testing::TestWithParam<bool> {
             buildType->childAt(channel), channel));
       }
       auto table = HashTable<true>::createForJoin(
-          std::move(keyHashers), dependentTypes, true, false, pool_.get());
+          std::move(keyHashers),
+          dependentTypes,
+          true,
+          false,
+          1'000,
+          pool_.get());
 
       makeRows(size, 1, sequence, buildType, batches);
       copyVectorsToTable(batches, startOffset, table.get());
@@ -151,9 +157,9 @@ class HashTableTest : public testing::TestWithParam<bool> {
       keyHashers.emplace_back(
           std::make_unique<VectorHasher>(tableType->childAt(channel), channel));
     }
-    static std::vector<std::unique_ptr<Aggregate>> empty;
+
     return HashTable<false>::createForAggregation(
-        std::move(keyHashers), empty, pool_.get());
+        std::move(keyHashers), std::vector<Accumulator>{}, pool_.get());
   }
 
   void insertGroups(
@@ -243,6 +249,7 @@ class HashTableTest : public testing::TestWithParam<bool> {
             insertedRows.asMutableRange().bits(),
             0,
             batchSize);
+        insertedRows.updateBounds();
       }
       decoded.emplace_back(batch->childrenSize());
       VELOX_CHECK_EQ(batch->size(), batchSize);
@@ -450,7 +457,7 @@ class HashTableTest : public testing::TestWithParam<bool> {
     std::vector<std::unique_ptr<VectorHasher>> hashers;
     hashers.push_back(std::make_unique<VectorHasher>(keys->type(), 0));
     auto table = HashTable<false>::createForJoin(
-        std::move(hashers), {BIGINT()}, true, false, pool_.get());
+        std::move(hashers), {BIGINT()}, true, false, 1'000, pool_.get());
     copyVectorsToTable({batch}, 0, table.get());
     table->prepareJoinTable({}, executor_.get());
     ASSERT_EQ(table->hashMode(), mode);
@@ -545,15 +552,17 @@ TEST_P(HashTableTest, mixed6Sparse) {
 TEST_P(HashTableTest, clear) {
   std::vector<std::unique_ptr<VectorHasher>> keyHashers;
   keyHashers.push_back(std::make_unique<VectorHasher>(BIGINT(), 0 /*channel*/));
-  std::vector<std::unique_ptr<Aggregate>> aggregates;
-  aggregates.push_back(Aggregate::create(
+  core::QueryConfig config({});
+  auto aggregate = Aggregate::create(
       "sum",
-      facebook::velox::core::AggregationNode::Step::kPartial,
+      core::AggregationNode::Step::kPartial,
       std::vector<TypePtr>{BIGINT()},
-      BIGINT()));
+      BIGINT(),
+      config);
+
   auto table = HashTable<true>::createForAggregation(
-      std::move(keyHashers), aggregates, pool_.get());
-  table->clear();
+      std::move(keyHashers), {Accumulator{aggregate.get()}}, pool_.get());
+  ASSERT_NO_THROW(table->clear());
 }
 
 // Test a specific code path in HashTable::decodeHashMode where
@@ -699,7 +708,7 @@ TEST_P(HashTableTest, regularHashingTableSize) {
           std::make_unique<VectorHasher>(type->childAt(channel), channel));
     }
     auto table = HashTable<true>::createForJoin(
-        std::move(keyHashers), {}, true, false, pool_.get());
+        std::move(keyHashers), {}, true, false, 1'000, pool_.get());
     std::vector<RowVectorPtr> batches;
     makeRows(1 << 12, 1, 0, type, batches);
     copyVectorsToTable(batches, 0, table.get());

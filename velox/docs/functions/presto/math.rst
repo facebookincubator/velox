@@ -115,6 +115,7 @@ Mathematical Functions
     Returns a pseudo-random value in the range 0.0 <= x < 1.0.
 
 .. function:: random(n) -> [same as n]
+   :noindex:
 
     Returns a pseudo-random value in the range 0.0 <= x < n.
 
@@ -123,6 +124,7 @@ Mathematical Functions
     Returns ``x`` rounded to the nearest integer.
 
 .. function:: round(x, d) -> [same as x]
+   :noindex:
 
     Returns ``x`` rounded to ``d`` decimal places.
 
@@ -151,6 +153,7 @@ Mathematical Functions
     Returns x rounded to integer by dropping digits after decimal point.
 
 .. function:: truncate(x, n) -> double
+   :noindex:
 
     Returns x truncated to n decimal places. n can be negative to truncate n digits left of the decimal point.
 
@@ -160,6 +163,7 @@ Mathematical Functions
     specified ``bound1`` and ``bound2`` bounds and ``n`` number of buckets.
 
 .. function:: width_bucket(x, bins) -> bigint
+   :noindex:
 
     Returns the zero-based bin number of ``x`` according to the bins specified
     by the array ``bins``. The ``bins`` parameter must be an array of doubles and
@@ -233,3 +237,53 @@ Floating Point Functions
 .. function:: nan() -> double
 
     Returns the constant representing not-a-number.
+
+
+====================================
+Probability Functions: cdf
+====================================
+
+.. function:: beta_cdf(a, b, value) -> double
+
+    Compute the `Beta cdf <https://en.wikipedia.org/wiki/Beta_distribution>`_ with given a, b parameters:  P(N < value; a, b).
+    The a, b parameters must be positive real numbers and value must be a real value (all of type DOUBLE).
+    The value must lie on the interval [0, 1].
+
+.. function:: binomial_cdf(numberOfTrials, successProbability, value) -> double
+
+    Compute the Binomial cdf with given numberOfTrials and successProbability (for a single trial):  P(N < value).
+    The successProbability must be real value in [0, 1], numberOfTrials and value must be
+    positive integers with numberOfTrials greater or equal to value
+
+.. function:: cauchy_cdf(median, scale, value) -> double
+
+    Compute the Cauchy cdf with given parameters median and scale (gamma): P(N; median, scale).
+    The scale parameter must be a positive double. The value parameter must be a double on the interval [0, 1].
+
+.. function:: chi_squared_cdf(df, value) -> double
+
+    Compute the Chi-square cdf with given df (degrees of freedom) parameter:  P(N < value; df).
+    The df parameter must be a positive real number, and value must be a non-negative real value (both of type DOUBLE).
+
+.. function:: f_cdf(df1, df2, value) -> double
+
+    Compute the F cdf with given df1 (numerator degrees of freedom) and df2 (denominator degrees of freedom) parameters:  P(N < value; df1, df2).
+    The numerator and denominator df parameters must be positive real numbers. The value must be a non-negative real number.
+
+.. function:: normal_cdf(mean, sd, value) -> double
+
+    Compute the Normal cdf with given mean and standard deviation (sd): P(N < value; mean, sd).
+    The mean and value must be real values and the standard deviation must be a real and
+    positive value (all of type DOUBLE).
+
+
+====================================
+Probability Functions: inverse_cdf
+====================================
+
+.. function:: inverse_beta_cdf(a, b, p) -> double
+
+    Compute the inverse of the Beta cdf with given a, b parameters for the cumulative
+    probability (p): P(N < n). The a, b parameters must be positive real values (all of type DOUBLE).
+    The probability p must lie on the interval [0, 1].
+

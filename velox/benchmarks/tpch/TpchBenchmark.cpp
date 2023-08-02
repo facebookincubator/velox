@@ -28,10 +28,9 @@
 #include "velox/common/base/SuccinctPrinter.h"
 #include "velox/common/file/FileSystems.h"
 #include "velox/common/memory/MmapAllocator.h"
+#include "velox/connectors/hive/HiveConfig.h"
 #include "velox/connectors/hive/HiveConnector.h"
 #include "velox/dwio/common/Options.h"
-#include "velox/dwio/dwrf/reader/DwrfReader.h"
-#include "velox/dwio/parquet/RegisterParquetReader.h"
 #include "velox/exec/PlanNodeStats.h"
 #include "velox/exec/Split.h"
 #include "velox/exec/tests/utils/HiveConnectorTestBase.h"
@@ -118,7 +117,6 @@ DEFINE_bool(
     false,
     "Include custom statistics along with execution statistics");
 DEFINE_bool(include_results, false, "Include results in the output");
-DEFINE_bool(use_native_parquet_reader, true, "Use Native Parquet Reader");
 DEFINE_int32(num_drivers, 4, "Number of drivers");
 DEFINE_string(data_format, "parquet", "Data format");
 DEFINE_int32(num_splits_per_file, 10, "Number of splits per file");
@@ -166,6 +164,16 @@ DEFINE_bool(
 
 DEFINE_validator(data_path, &notEmpty);
 DEFINE_validator(data_format, &validateDataFormat);
+
+DEFINE_int64(
+    max_coalesced_bytes,
+    128 << 20,
+    "Maximum size of single coalesced IO");
+
+DEFINE_int32(
+    max_coalesced_distance_bytes,
+    512 << 10,
+    "Maximum distance in bytes in which coalesce will combine requests");
 
 struct RunStats {
   std::map<std::string, std::string> flags;
@@ -222,29 +230,40 @@ class TpchBenchmark {
             static_cast<uint64_t>(FLAGS_ssd_checkpoint_interval_gb) << 30);
       }
 
-      auto allocator = std::make_shared<memory::MmapAllocator>(options);
-      allocator_ = std::make_shared<cache::AsyncDataCache>(
-          allocator, memoryBytes, std::move(ssdCache));
+      allocator_ = std::make_shared<memory::MmapAllocator>(options);
+      cache_ =
+          cache::AsyncDataCache::create(allocator_.get(), std::move(ssdCache));
+      cache::AsyncDataCache::setInstance(cache_.get());
       memory::MemoryAllocator::setDefaultInstance(allocator_.get());
     }
     functions::prestosql::registerAllScalarFunctions();
     aggregate::prestosql::registerAllAggregateFunctions();
     parse::registerTypeResolver();
     filesystems::registerLocalFileSystem();
-    if (FLAGS_use_native_parquet_reader) {
-      parquet::registerParquetReaderFactory(parquet::ParquetReaderType::NATIVE);
-    } else {
-      parquet::registerParquetReaderFactory(parquet::ParquetReaderType::DUCKDB);
-    }
-    dwrf::registerDwrfReaderFactory();
+
     ioExecutor_ =
         std::make_unique<folly::IOThreadPoolExecutor>(FLAGS_num_io_threads);
 
+    // Add new values into the hive configuration...
+    auto configurationValues = std::unordered_map<std::string, std::string>();
+    configurationValues[connector::hive::HiveConfig::kMaxCoalescedBytes] =
+        std::to_string(FLAGS_max_coalesced_bytes);
+    configurationValues
+        [connector::hive::HiveConfig::kMaxCoalescedDistanceBytes] =
+            std::to_string(FLAGS_max_coalesced_distance_bytes);
+    auto properties =
+        std::make_shared<const core::MemConfig>(configurationValues);
+
+    // Create hive connector with config...
     auto hiveConnector =
         connector::getConnectorFactory(
             connector::hive::HiveConnectorFactory::kHiveConnectorName)
-            ->newConnector(kHiveConnectorId, nullptr, ioExecutor_.get());
+            ->newConnector(kHiveConnectorId, properties, ioExecutor_.get());
     connector::registerConnector(hiveConnector);
+  }
+
+  void shutdown() {
+    cache_->prepareShutdown();
   }
 
   std::pair<std::unique_ptr<TaskCursor>, std::vector<RowVectorPtr>> run(
@@ -368,15 +387,13 @@ class TpchBenchmark {
         }
 #endif
 
-        auto cache = dynamic_cast<cache::AsyncDataCache*>(allocator_.get());
-        if (cache) {
-          cache->clear();
+        if (cache_) {
+          cache_->clear();
         }
       }
       if (FLAGS_clear_ssd_cache) {
-        auto cache = dynamic_cast<cache::AsyncDataCache*>(allocator_.get());
-        if (cache) {
-          auto ssdCache = cache->ssdCache();
+        if (cache_) {
+          auto ssdCache = cache_->ssdCache();
           if (ssdCache) {
             ssdCache->clear();
           }
@@ -448,7 +465,7 @@ class TpchBenchmark {
   std::unique_ptr<folly::IOThreadPoolExecutor> ioExecutor_;
   std::unique_ptr<folly::IOThreadPoolExecutor> cacheExecutor_;
   std::shared_ptr<memory::MemoryAllocator> allocator_;
-
+  std::shared_ptr<cache::AsyncDataCache> cache_;
   // Parameter combinations to try. Each element specifies a flag and possible
   // values. All permutations are tried.
   std::vector<ParameterDim> parameters_;
@@ -564,6 +581,7 @@ int tpchBenchmarkMain() {
   } else {
     benchmark.runAllCombinations();
   }
+  benchmark.shutdown();
   queryBuilder.reset();
   return 0;
 }

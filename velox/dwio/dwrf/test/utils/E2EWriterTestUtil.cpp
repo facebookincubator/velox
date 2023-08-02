@@ -35,21 +35,20 @@ namespace facebook::velox::dwrf {
     const std::vector<VectorPtr>& batches,
     const std::shared_ptr<Config>& config,
     std::function<std::unique_ptr<DWRFFlushPolicy>()> flushPolicyFactory,
-    std::function<
-        std::unique_ptr<LayoutPlanner>(StreamList, const EncodingContainer&)>
+    std::function<std::unique_ptr<LayoutPlanner>(const TypeWithId&)>
         layoutPlannerFactory,
     const int64_t writerMemoryCap) {
   // write file to memory
-  WriterOptions options;
+  dwrf::WriterOptions options;
   options.config = config;
   options.schema = type;
   options.memoryBudget = writerMemoryCap;
   options.flushPolicyFactory = flushPolicyFactory;
   options.layoutPlannerFactory = layoutPlannerFactory;
 
-  auto writer = std::make_unique<Writer>(
-      options,
+  auto writer = std::make_unique<dwrf::Writer>(
       std::move(sink),
+      options,
       velox::memory::defaultMemoryManager().addRootPool());
 
   for (size_t i = 0; i < batches.size(); ++i) {
@@ -70,8 +69,7 @@ namespace facebook::velox::dwrf {
     size_t numStripesUpper,
     const std::shared_ptr<Config>& config,
     std::function<std::unique_ptr<DWRFFlushPolicy>()> flushPolicyFactory,
-    std::function<
-        std::unique_ptr<LayoutPlanner>(StreamList, const EncodingContainer&)>
+    std::function<std::unique_ptr<LayoutPlanner>(const TypeWithId&)>
         layoutPlannerFactory,
     const int64_t writerMemoryCap,
     const bool verifyContent) {

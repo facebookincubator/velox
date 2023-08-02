@@ -47,24 +47,29 @@ HashBuild::HashBuild(
     int32_t operatorId,
     DriverCtx* driverCtx,
     std::shared_ptr<const core::HashJoinNode> joinNode)
-    : Operator(driverCtx, nullptr, operatorId, joinNode->id(), "HashBuild"),
+    : Operator(
+          driverCtx,
+          nullptr,
+          operatorId,
+          joinNode->id(),
+          "HashBuild",
+          joinNode->canSpill(driverCtx->queryConfig())
+              ? driverCtx->makeSpillConfig(operatorId)
+              : std::nullopt),
       joinNode_(std::move(joinNode)),
       joinType_{joinNode_->joinType()},
       nullAware_{joinNode_->isNullAware()},
       joinBridge_(operatorCtx_->task()->getHashJoinBridgeLocked(
           operatorCtx_->driverCtx()->splitGroupId,
-          planNodeId())),
-      spillConfig_(
-          joinNode_->canSpill(driverCtx->queryConfig())
-              ? operatorCtx_->makeSpillConfig(Spiller::Type::kHashJoinBuild)
-              : std::nullopt),
-      spillGroup_(
-          spillEnabled() ? operatorCtx_->task()->getSpillOperatorGroupLocked(
-                               operatorCtx_->driverCtx()->splitGroupId,
-                               planNodeId())
-                         : nullptr) {
+          planNodeId())) {
   VELOX_CHECK(pool()->trackUsage());
   VELOX_CHECK_NOT_NULL(joinBridge_);
+
+  spillGroup_ = spillEnabled()
+      ? operatorCtx_->task()->getSpillOperatorGroupLocked(
+            operatorCtx_->driverCtx()->splitGroupId, planNodeId())
+      : nullptr;
+
   joinBridge_->addBuilder();
 
   auto outputType = joinNode_->sources()[1]->outputType();
@@ -115,8 +120,8 @@ void HashBuild::setupTable() {
   std::vector<std::unique_ptr<VectorHasher>> keyHashers;
   keyHashers.reserve(numKeys);
   for (vector_size_t i = 0; i < numKeys; ++i) {
-    keyHashers.emplace_back(std::make_unique<VectorHasher>(
-        tableType_->childAt(i), keyChannels_[i]));
+    keyHashers.emplace_back(
+        VectorHasher::create(tableType_->childAt(i), keyChannels_[i]));
   }
 
   const auto numDependents = tableType_->size() - numKeys;
@@ -133,6 +138,9 @@ void HashBuild::setupTable() {
         dependentTypes,
         true, // allowDuplicates
         true, // hasProbedFlag
+        operatorCtx_->driverCtx()
+            ->queryConfig()
+            .minTableRowsForParallelJoinBuild(),
         pool());
   } else {
     // (Left) semi and anti join with no extra filter only needs to know whether
@@ -150,6 +158,9 @@ void HashBuild::setupTable() {
           dependentTypes,
           !dropDuplicates, // allowDuplicates
           needProbedFlag, // hasProbedFlag
+          operatorCtx_->driverCtx()
+              ->queryConfig()
+              .minTableRowsForParallelJoinBuild(),
           pool());
     } else {
       // Ignore null keys
@@ -158,6 +169,9 @@ void HashBuild::setupTable() {
           dependentTypes,
           !dropDuplicates, // allowDuplicates
           needProbedFlag, // hasProbedFlag
+          operatorCtx_->driverCtx()
+              ->queryConfig()
+              .minTableRowsForParallelJoinBuild(),
           pool());
     }
   }
@@ -172,8 +186,9 @@ void HashBuild::setupSpiller(SpillPartition* spillPartition) {
     return;
   }
   const auto& spillConfig = spillConfig_.value();
-  HashBitRange hashBits = spillConfig.hashBitRange;
-
+  HashBitRange hashBits(
+      spillConfig.startPartitionBit,
+      spillConfig.startPartitionBit + spillConfig.joinPartitionBits);
   if (spillPartition == nullptr) {
     spillGroup_->addOperator(
         *this,
@@ -182,14 +197,13 @@ void HashBuild::setupSpiller(SpillPartition* spillPartition) {
     spillInputReader_ = spillPartition->createReader();
 
     const auto startBit = spillPartition->id().partitionBitOffset() +
-        spillConfig.hashBitRange.numBits();
+        spillConfig.joinPartitionBits;
     // Disable spilling if exceeding the max spill level and the query might run
     // out of memory if the restored partition still can't fit in memory.
-    if (spillConfig.exceedSpillLevelLimit(startBit)) {
+    if (spillConfig.exceedJoinSpillLevelLimit(startBit)) {
       return;
     }
-    hashBits =
-        HashBitRange(startBit, startBit + spillConfig.hashBitRange.numBits());
+    hashBits = HashBitRange(startBit, startBit + spillConfig.joinPartitionBits);
   }
 
   spiller_ = std::make_unique<Spiller>(
@@ -284,6 +298,10 @@ void HashBuild::addInput(RowVectorPtr input) {
     VELOX_CHECK(future_.valid());
     return;
   }
+
+  // Prevents the memory arbitrator to reclaim memory from this operator during
+  // the execution belowg.
+  NonReclaimableSection guard(this);
 
   activeRows_.resize(input->size());
   activeRows_.setAll();
@@ -448,7 +466,7 @@ bool HashBuild::reserveMemory(const RowVectorPtr& input) {
   // 'spillableReservationGrowthPct_' of the current reservation.
   auto targetIncrement = std::max<int64_t>(
       increment * 2,
-      pool()->getCurrentBytes() * spillConfig()->spillableReservationGrowthPct /
+      pool()->currentBytes() * spillConfig()->spillableReservationGrowthPct /
           100);
   if (pool()->maybeReserve(targetIncrement)) {
     return true;
@@ -697,6 +715,15 @@ bool HashBuild::finishHashBuild() {
     return false;
   }
 
+  auto promisesGuard = folly::makeGuard([&]() {
+    // Realize the promises so that the other Drivers (which were not
+    // the last to finish) can continue from the barrier and finish.
+    peers.clear();
+    for (auto& promise : promises) {
+      promise.setValue();
+    }
+  });
+
   std::vector<std::unique_ptr<BaseHashTable>> otherTables;
   otherTables.reserve(peers.size());
   SpillPartitionSet spillPartitions;
@@ -748,13 +775,12 @@ bool HashBuild::finishHashBuild() {
 
       // TODO: re-enable parallel join build with spilling triggered after
       // https://github.com/facebookincubator/velox/issues/3567 is fixed.
-      const bool allowPrallelJoinBuild =
+      const bool allowParallelJoinBuild =
           !otherTables.empty() && spillPartitions.empty();
       table_->prepareJoinTable(
           std::move(otherTables),
-          allowPrallelJoinBuild ? operatorCtx_->task()->queryCtx()->executor()
-                                : nullptr);
-
+          allowParallelJoinBuild ? operatorCtx_->task()->queryCtx()->executor()
+                                 : nullptr);
       addRuntimeStats();
       if (joinBridge_->setHashTable(
               std::move(table_),
@@ -765,12 +791,6 @@ bool HashBuild::finishHashBuild() {
     }
   }
 
-  // Realize the promises so that the other Drivers (which were not
-  // the last to finish) can continue from the barrier and finish.
-  peers.clear();
-  for (auto& promise : promises) {
-    promise.setValue();
-  }
   return true;
 }
 
@@ -870,7 +890,7 @@ void HashBuild::addRuntimeStats() {
     lockedStats->addRuntimeStat(
         "maxSpillLevel",
         RuntimeCounter(
-            spillConfig()->spillLevel(spiller_->hashBits().begin())));
+            spillConfig()->joinSpillLevel(spiller_->hashBits().begin())));
   }
 }
 
@@ -981,4 +1001,65 @@ bool HashBuild::testingTriggerSpill() {
       spillConfig()->testSpillPct;
 }
 
+void HashBuild::reclaim(uint64_t /*unused*/) {
+  VELOX_CHECK(canReclaim());
+  auto* driver = operatorCtx_->driver();
+
+  TestValue::adjust("facebook::velox::exec::HashBuild::reclaim", this);
+
+  // NOTE: a hash build operator is reclaimable if it is in the middle of table
+  // build processing and is not under non-reclaimable execution section.
+  if ((state_ != State::kRunning) || nonReclaimableSection_) {
+    // TODO: add stats to record the non-reclaimable case and reduce the log
+    // frequency if it is too verbose.
+    LOG(WARNING) << "Can't reclaim from hash build operator, state_["
+                 << stateName(state_) << "], nonReclaimableSection_["
+                 << nonReclaimableSection_ << "], " << toString();
+    return;
+  }
+
+  const auto& task = driver->task();
+  VELOX_CHECK(task->pauseRequested());
+  const std::vector<Operator*> operators =
+      task->findPeerOperators(operatorCtx_->driverCtx()->pipelineId, this);
+  for (auto* op : operators) {
+    HashBuild* buildOp = dynamic_cast<HashBuild*>(op);
+    VELOX_CHECK_NOT_NULL(buildOp);
+    VELOX_CHECK(buildOp->canReclaim());
+    if ((buildOp->state_ != State::kRunning) ||
+        buildOp->nonReclaimableSection_) {
+      // TODO: add stats to record the non-reclaimable case and reduce the log
+      // frequency if it is too verbose.
+      LOG(WARNING) << "Can't reclaim from hash build operator, state_["
+                   << stateName(buildOp->state_) << "], nonReclaimableSection_["
+                   << buildOp->nonReclaimableSection_ << "], "
+                   << buildOp->toString();
+      return;
+    }
+  }
+
+  std::vector<Spiller::SpillableStats> spillableStats;
+  spillableStats.reserve(spiller_->hashBits().numPartitions());
+  // TODO: consider to parallelize this disk spilling processing.
+  for (auto* op : operators) {
+    HashBuild* buildOp = static_cast<HashBuild*>(op);
+    buildOp->spiller_->fillSpillRuns(spillableStats);
+    // TODO: support fine-grain disk spilling based on 'targetBytes' after
+    // having row container memory compaction support later.
+    buildOp->spiller_->spill();
+    VELOX_CHECK_EQ(buildOp->table_->numDistinct(), 0);
+    buildOp->table_->clear();
+    // Release the minimum reserved memory.
+    op->pool()->release();
+  }
+}
+
+void HashBuild::close() {
+  Operator::close();
+
+  // Free up major memory usage.
+  joinBridge_.reset();
+  spiller_.reset();
+  table_.reset();
+}
 } // namespace facebook::velox::exec

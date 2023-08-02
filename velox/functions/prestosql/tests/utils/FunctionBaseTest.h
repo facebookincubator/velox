@@ -28,18 +28,6 @@ namespace facebook::velox::functions::test {
 class FunctionBaseTest : public testing::Test,
                          public velox::test::VectorTestBase {
  public:
-  // This class generates test name suffixes based on the type.
-  // We use the type's toString() return value as the test name.
-  // Used as the third argument for GTest TYPED_TEST_SUITE.
-  class TypeNames {
-   public:
-    template <typename T>
-    static std::string GetName(int) {
-      T type;
-      return type.toString();
-    }
-  };
-
   using IntegralTypes =
       ::testing::Types<TinyintType, SmallintType, IntegerType, BigintType>;
 
@@ -83,15 +71,19 @@ class FunctionBaseTest : public testing::Test,
   // tree and don't want it to cast the returned vector.
   VectorPtr evaluate(
       const core::TypedExprPtr& typedExpr,
-      const RowVectorPtr& data) {
-    return evaluateImpl<exec::ExprSet>(typedExpr, data);
+      const RowVectorPtr& data,
+      const std::optional<SelectivityVector>& rows = std::nullopt) {
+    return evaluateImpl<exec::ExprSet>(typedExpr, data, rows);
   }
 
   // Use this directly if you don't want it to cast the returned vector.
-  VectorPtr evaluate(const std::string& expression, const RowVectorPtr& data) {
+  VectorPtr evaluate(
+      const std::string& expression,
+      const RowVectorPtr& data,
+      const std::optional<SelectivityVector>& rows = std::nullopt) {
     auto typedExpr = makeTypedExpr(expression, asRowType(data->type()));
 
-    return evaluate(typedExpr, data);
+    return evaluate(typedExpr, data, rows);
   }
 
   /// Evaluates the expression on specified inputs and returns a pair of result
@@ -101,34 +93,43 @@ class FunctionBaseTest : public testing::Test,
   /// across all calls. Statistics will be missing for functions and
   /// special forms that didn't get evaluated.
   std::pair<VectorPtr, std::unordered_map<std::string, exec::ExprStats>>
-  evaluateWithStats(const std::string& expression, const RowVectorPtr& data);
+  evaluateWithStats(
+      const std::string& expression,
+      const RowVectorPtr& data,
+      const std::optional<SelectivityVector>& rows = std::nullopt);
 
   // Use this function if you want to evaluate a manually-constructed expression
   // tree.
   template <typename T>
   std::shared_ptr<T> evaluate(
       const core::TypedExprPtr& typedExpr,
-      const RowVectorPtr& data) {
-    auto result = evaluate(typedExpr, data);
-    return castEvaluateResult<T>(result, typedExpr->toString());
+      const RowVectorPtr& data,
+      const std::optional<SelectivityVector>& rows = std::nullopt,
+      const TypePtr& resultType = nullptr) {
+    auto result = evaluate(typedExpr, data, rows);
+    return castEvaluateResult<T>(result, typedExpr->toString(), resultType);
   }
 
   template <typename T>
   std::shared_ptr<T> evaluate(
       const std::string& expression,
-      const RowVectorPtr& data) {
-    auto result = evaluate(expression, data);
-    return castEvaluateResult<T>(result, expression);
+      const RowVectorPtr& data,
+      const std::optional<SelectivityVector>& rows = std::nullopt,
+      const TypePtr& resultType = nullptr) {
+    auto result = evaluate(expression, data, rows);
+    return castEvaluateResult<T>(result, expression, resultType);
   }
 
   template <typename T>
   std::shared_ptr<T> evaluateSimplified(
       const std::string& expression,
-      const RowVectorPtr& data) {
+      const RowVectorPtr& data,
+      const std::optional<SelectivityVector>& rows = std::nullopt,
+      const TypePtr& resultType = nullptr) {
     auto typedExpr = makeTypedExpr(expression, asRowType(data->type()));
-    auto result = evaluateImpl<exec::ExprSetSimplified>(typedExpr, data);
+    auto result = evaluateImpl<exec::ExprSetSimplified>(typedExpr, data, rows);
 
-    return castEvaluateResult<T>(result, expression);
+    return castEvaluateResult<T>(result, expression, resultType);
   }
 
   template <typename T>
@@ -136,7 +137,8 @@ class FunctionBaseTest : public testing::Test,
       const std::string& expression,
       RowVectorPtr data,
       const SelectivityVector& rows,
-      VectorPtr& result) {
+      VectorPtr& result,
+      const TypePtr& resultType = nullptr) {
     exec::ExprSet exprSet(
         {makeTypedExpr(expression, asRowType(data->type()))}, &execCtx_);
 
@@ -145,6 +147,11 @@ class FunctionBaseTest : public testing::Test,
     exprSet.eval(rows, evalCtx, results);
     result = results[0];
 
+    // reinterpret_cast is used for functions that return logical types like
+    // DATE().
+    if (resultType != nullptr) {
+      return std::reinterpret_pointer_cast<T>(results[0]);
+    }
     return std::dynamic_pointer_cast<T>(results[0]);
   }
 
@@ -172,22 +179,26 @@ class FunctionBaseTest : public testing::Test,
   std::optional<ReturnType> evaluateOnce(
       const std::string& expr,
       const std::vector<std::optional<Args>>& args,
-      const std::vector<TypePtr>& types) {
+      const std::vector<TypePtr>& types,
+      const std::optional<SelectivityVector>& rows = std::nullopt,
+      const TypePtr& resultType = nullptr) {
     std::vector<VectorPtr> flatVectors;
     for (vector_size_t i = 0; i < args.size(); ++i) {
       flatVectors.emplace_back(makeNullableFlatVector(
           std::vector<std::optional<Args>>{args[i]}, types[i]));
     }
     auto rowVectorPtr = makeRowVector(flatVectors);
-    return evaluateOnce<ReturnType>(expr, rowVectorPtr);
+    return evaluateOnce<ReturnType>(expr, rowVectorPtr, rows, resultType);
   }
 
-  template <typename ReturnType, typename... Args>
+  template <typename ReturnType>
   std::optional<ReturnType> evaluateOnce(
       const std::string& expr,
-      const RowVectorPtr rowVectorPtr) {
-    auto result =
-        evaluate<SimpleVector<EvalType<ReturnType>>>(expr, rowVectorPtr);
+      const RowVectorPtr rowVectorPtr,
+      const std::optional<SelectivityVector>& rows = std::nullopt,
+      const TypePtr& resultType = nullptr) {
+    auto result = evaluate<SimpleVector<EvalType<ReturnType>>>(
+        expr, rowVectorPtr, rows, resultType);
     return result->isNullAt(0) ? std::optional<ReturnType>{}
                                : ReturnType(result->valueAt(0));
   }
@@ -218,12 +229,19 @@ class FunctionBaseTest : public testing::Test,
     return std::make_unique<exec::ExprSet>(std::move(expressions), &execCtx_);
   }
 
-  VectorPtr evaluate(exec::ExprSet& exprSet, const RowVectorPtr& input) {
+  VectorPtr evaluate(
+      exec::ExprSet& exprSet,
+      const RowVectorPtr& input,
+      const std::optional<SelectivityVector>& rows = std::nullopt) {
     exec::EvalCtx context(&execCtx_, &exprSet, input.get());
 
-    SelectivityVector rows(input->size());
     std::vector<VectorPtr> result(1);
-    exprSet.eval(rows, context, result);
+    if (rows.has_value()) {
+      exprSet.eval(*rows, context, result);
+    } else {
+      SelectivityVector defaultRows(input->size());
+      exprSet.eval(defaultRows, context, result);
+    }
     return result[0];
   }
 
@@ -240,8 +258,22 @@ class FunctionBaseTest : public testing::Test,
   template <typename T>
   std::shared_ptr<T> castEvaluateResult(
       const VectorPtr& result,
-      const std::string& expression) {
+      const std::string& expression,
+      const TypePtr& expectedType = nullptr) {
+    // reinterpret_cast is used for functions that return logical types
+    // like DATE().
     VELOX_CHECK(result, "Expression evaluation result is null: {}", expression);
+    if (expectedType != nullptr) {
+      VELOX_CHECK_EQ(
+          result->type()->kind(),
+          expectedType->kind(),
+          "Expression evaluation result is not of expected type kind: {} -> {} vector of type {}",
+          expression,
+          result->encoding(),
+          result->type()->kindName());
+      auto castedResult = std::reinterpret_pointer_cast<T>(result);
+      return castedResult;
+    }
 
     auto castedResult = std::dynamic_pointer_cast<T>(result);
     VELOX_CHECK(
@@ -256,15 +288,10 @@ class FunctionBaseTest : public testing::Test,
   template <typename ExprSet>
   VectorPtr evaluateImpl(
       const core::TypedExprPtr& typedExpr,
-      const RowVectorPtr& data) {
-    SelectivityVector rows(data->size());
-    std::vector<VectorPtr> results(1);
-
+      const RowVectorPtr& data,
+      const std::optional<SelectivityVector>& rows = std::nullopt) {
     ExprSet exprSet({typedExpr}, &execCtx_);
-    exec::EvalCtx evalCtx(&execCtx_, &exprSet, data.get());
-    exprSet.eval(rows, evalCtx, results);
-
-    return results[0];
+    return evaluate(exprSet, data, rows);
   }
 };
 

@@ -20,9 +20,7 @@
 #include <folly/init/Init.h>
 
 #include "velox/row/UnsafeRowDeserializers.h"
-#include "velox/row/UnsafeRowSerializers.h"
-#include "velox/type/Type.h"
-#include "velox/vector/BaseVector.h"
+#include "velox/row/UnsafeRowFast.h"
 #include "velox/vector/fuzzer/VectorFuzzer.h"
 #include "velox/vector/tests/utils/VectorTestBase.h"
 
@@ -43,75 +41,127 @@ class UnsafeRowFuzzTests : public ::testing::Test {
     }
   }
 
-  static constexpr uint64_t kBufferSize = 20 << 10; // 20k
+  void doTest(
+      const RowTypePtr& rowType,
+      std::function<std::vector<std::optional<std::string_view>>(
+          const RowVectorPtr& data)> serializeFunc) {
+    VectorFuzzer::Options opts;
+    opts.vectorSize = kNumBuffers;
+    opts.nullRatio = 0.1;
+    opts.containerHasNulls = false;
+    opts.dictionaryHasNulls = false;
+    opts.stringVariableLength = true;
+    opts.stringLength = 20;
+    opts.containerVariableLength = true;
+    opts.complexElementsMaxSize = 10'000;
 
-  std::array<char[kBufferSize], 100> buffers_{};
+    // Spark uses microseconds to store timestamp
+    opts.timestampPrecision =
+        VectorFuzzer::Options::TimestampPrecision::kMicroSeconds,
+    opts.containerLength = 10;
+
+    VectorFuzzer fuzzer(opts, pool_.get());
+
+    const auto iterations = 200;
+    for (size_t i = 0; i < iterations; ++i) {
+      clearBuffers();
+
+      auto seed = folly::Random::rand32();
+
+      LOG(INFO) << "seed: " << seed;
+      SCOPED_TRACE(fmt::format("seed: {}", seed));
+
+      fuzzer.reSeed(seed);
+      const auto& inputVector = fuzzer.fuzzInputRow(rowType);
+
+      // Serialize rowVector into bytes.
+      auto serialized = serializeFunc(inputVector);
+
+      // Deserialize previous bytes back to row vector
+      VectorPtr outputVector =
+          UnsafeRowDeserializer::deserialize(serialized, rowType, pool_.get());
+
+      assertEqualVectors(inputVector, outputVector);
+    }
+  }
+
+  static constexpr uint64_t kBufferSize = 70 << 10; // 70kb
+  static constexpr uint64_t kNumBuffers = 100;
+
+  std::array<char[kBufferSize], kNumBuffers> buffers_{};
 
   std::shared_ptr<memory::MemoryPool> pool_ =
       memory::addDefaultLeafMemoryPool();
 };
 
-TEST_F(UnsafeRowFuzzTests, simpleTypeRoundTripTest) {
-  auto rowType = ROW(
-      {BOOLEAN(),
-       TINYINT(),
-       SMALLINT(),
-       INTEGER(),
-       BIGINT(),
-       REAL(),
-       DOUBLE(),
-       VARCHAR(),
-       TIMESTAMP(),
-       ROW({VARCHAR(), INTEGER()}),
-       ARRAY(INTEGER()),
-       ARRAY(INTEGER()),
-       MAP(VARCHAR(), ARRAY(INTEGER()))});
+TEST_F(UnsafeRowFuzzTests, fast) {
+  auto rowType = ROW({
+      BOOLEAN(),
+      TINYINT(),
+      SMALLINT(),
+      INTEGER(),
+      VARCHAR(),
+      BIGINT(),
+      REAL(),
+      DOUBLE(),
+      VARCHAR(),
+      VARBINARY(),
+      UNKNOWN(),
+      // Arrays.
+      ARRAY(BOOLEAN()),
+      ARRAY(TINYINT()),
+      ARRAY(SMALLINT()),
+      ARRAY(INTEGER()),
+      ARRAY(BIGINT()),
+      ARRAY(REAL()),
+      ARRAY(DOUBLE()),
+      ARRAY(VARCHAR()),
+      ARRAY(VARBINARY()),
+      ARRAY(UNKNOWN()),
+      // Nested arrays.
+      ARRAY(ARRAY(INTEGER())),
+      ARRAY(ARRAY(BIGINT())),
+      ARRAY(ARRAY(VARCHAR())),
+      ARRAY(ARRAY(UNKNOWN())),
+      // Maps.
+      MAP(BIGINT(), REAL()),
+      MAP(BIGINT(), BIGINT()),
+      MAP(BIGINT(), VARCHAR()),
+      MAP(INTEGER(), MAP(BIGINT(), DOUBLE())),
+      MAP(VARCHAR(), BOOLEAN()),
+      MAP(INTEGER(), MAP(BIGINT(), ARRAY(REAL()))),
+      // Timestamp and date types.
+      TIMESTAMP(),
+      DATE(),
+      ARRAY(TIMESTAMP()),
+      ARRAY(DATE()),
+      MAP(DATE(), ARRAY(TIMESTAMP())),
+      // Structs.
+      ROW({BOOLEAN(), INTEGER(), TIMESTAMP(), VARCHAR(), ARRAY(BIGINT())}),
+      ROW(
+          {BOOLEAN(),
+           ROW({INTEGER(), TIMESTAMP()}),
+           VARCHAR(),
+           ARRAY(BIGINT())}),
+      ARRAY({ROW({BIGINT(), VARCHAR()})}),
+      MAP(BIGINT(), ROW({BOOLEAN(), TINYINT(), REAL()})),
+  });
 
-  VectorFuzzer::Options opts;
-  opts.vectorSize = 100;
-  opts.nullRatio = 0.1;
-  opts.containerHasNulls = false;
-  opts.dictionaryHasNulls = false;
-  opts.stringVariableLength = true;
-  opts.stringLength = 20;
-  opts.containerVariableLength = true;
-  opts.complexElementsMaxSize = 10'000;
-
-  // Spark uses microseconds to store timestamp
-  opts.timestampPrecision =
-      VectorFuzzer::Options::TimestampPrecision::kMicroSeconds,
-  opts.containerLength = 10;
-
-  auto seed = folly::Random::rand32();
-  LOG(INFO) << "seed: " << seed;
-  SCOPED_TRACE(fmt::format("seed: {}", seed));
-  VectorFuzzer fuzzer(opts, pool_.get(), seed);
-
-  const auto iterations = 1000;
-  for (size_t i = 0; i < iterations; ++i) {
-    clearBuffers();
-
-    const auto& inputVector = fuzzer.fuzzInputRow(rowType);
-    // Serialize rowVector into bytes.
+  doTest(rowType, [&](const RowVectorPtr& data) {
     std::vector<std::optional<std::string_view>> serialized;
-    serialized.reserve(inputVector->size());
-    for (auto j = 0; j < inputVector->size(); ++j) {
-      UnsafeRowSerializer::preloadVector(inputVector);
-      auto rowSize =
-          UnsafeRowSerializer::serialize(inputVector, buffers_[j], j);
+    serialized.reserve(data->size());
 
-      auto rowSizeMeasured =
-          UnsafeRowSerializer::getSizeRow(inputVector.get(), j);
-      EXPECT_EQ(rowSize.value_or(0), rowSizeMeasured);
-      serialized.push_back(std::string_view(buffers_[j], rowSize.value()));
+    UnsafeRowFast fast(data);
+    for (auto i = 0; i < data->size(); ++i) {
+      auto rowSize = fast.serialize(i, buffers_[i]);
+      VELOX_CHECK_LE(rowSize, kBufferSize);
+
+      EXPECT_EQ(rowSize, fast.rowSize(i)) << i << ", " << data->toString(i);
+
+      serialized.push_back(std::string_view(buffers_[i], rowSize));
     }
-
-    // Deserialize previous bytes back to row vector
-    VectorPtr outputVector =
-        UnsafeRowDeserializer::deserialize(serialized, rowType, pool_.get());
-
-    assertEqualVectors(inputVector, outputVector);
-  }
+    return serialized;
+  });
 }
 
 } // namespace

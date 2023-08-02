@@ -20,25 +20,47 @@
 
 namespace facebook::velox::exec {
 
+/// Assigns batches of rows to different partitions in a round-robin fashion.
 class RoundRobinPartitionFunction : public core::PartitionFunction {
  public:
   explicit RoundRobinPartitionFunction(int numPartitions)
       : numPartitions_{numPartitions} {}
 
-  ~RoundRobinPartitionFunction() override = default;
-
-  void partition(const RowVector& input, std::vector<uint32_t>& partitions)
-      override {
-    auto size = input.size();
-    partitions.resize(size);
-    for (auto i = 0; i < size; ++i) {
-      partitions[i] = counter_ % numPartitions_;
-      ++counter_;
-    }
+  std::optional<uint32_t> partition(
+      const RowVector& /*input*/,
+      std::vector<uint32_t>& /*partitions*/) override {
+    const auto partition = counter_ % numPartitions_;
+    ++counter_;
+    return partition;
   }
 
  private:
   const int numPartitions_;
   uint32_t counter_{0};
+};
+
+class RoundRobinPartitionFunctionSpec : public core::PartitionFunctionSpec {
+ public:
+  std::unique_ptr<core::PartitionFunction> create(
+      int numPartitions) const override {
+    return std::make_unique<velox::exec::RoundRobinPartitionFunction>(
+        numPartitions);
+  }
+
+  std::string toString() const override {
+    return "ROUND ROBIN";
+  }
+
+  folly::dynamic serialize() const override {
+    folly::dynamic obj = folly::dynamic::object;
+    obj["name"] = fmt::format("RoundRobinPartitionFunctionSpec");
+    return obj;
+  }
+
+  static core::PartitionFunctionSpecPtr deserialize(
+      const folly::dynamic& obj,
+      void* context) {
+    return std::make_shared<RoundRobinPartitionFunctionSpec>();
+  }
 };
 } // namespace facebook::velox::exec

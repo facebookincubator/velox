@@ -22,7 +22,7 @@
 #include "velox/dwio/dwrf/reader/DwrfReader.h"
 #include "velox/dwio/dwrf/writer/FlushPolicy.h"
 #include "velox/dwio/dwrf/writer/Writer.h"
-#include "velox/dwio/type/fbhive/HiveTypeParser.h"
+#include "velox/type/fbhive/HiveTypeParser.h"
 #include "velox/vector/ComplexVector.h"
 #include "velox/vector/FlatVector.h"
 
@@ -30,7 +30,7 @@ using namespace ::testing;
 using namespace facebook::velox::dwio::common;
 using namespace facebook::velox::test;
 using namespace facebook::velox::dwrf;
-using namespace facebook::velox::dwio::type::fbhive;
+using namespace facebook::velox::type::fbhive;
 using namespace facebook::velox;
 using namespace facebook::velox::memory;
 using folly::Random;
@@ -118,7 +118,7 @@ void verifyStats(
   for (auto nodeId = 0; nodeId < strideSize; nodeId++) {
     auto si = EncodingKey(nodeId).forKind(proto::Stream::ROW_INDEX);
     auto rowIndex =
-        ProtoUtils::readProto<proto::RowIndex>(streams.getStream(si, true));
+        ProtoUtils::readProto<proto::RowIndex>(streams.getStream(si, {}, true));
     EXPECT_NE(rowIndex, nullptr);
     EXPECT_EQ(rowIndex->entry_size(), repeat) << " entry size mismatch";
 
@@ -160,7 +160,7 @@ class ColumnWriterStatsTest : public ::testing::Test {
       config->set(Config::FLATTEN_MAP, true);
       config->set(Config::MAP_FLAT_COLS, {folly::to<uint32_t>(flatMapColId)});
     }
-    WriterOptions options;
+    dwrf::WriterOptions options;
     options.config = config;
     options.schema = type;
     options.flushPolicyFactory = [&]() {
@@ -169,7 +169,7 @@ class ColumnWriterStatsTest : public ::testing::Test {
       });
     };
 
-    Writer writer{options, std::move(sink), rootPool_};
+    dwrf::Writer writer{std::move(sink), options, rootPool_};
 
     for (size_t i = 0; i < repeat; ++i) {
       writer.write(batch);

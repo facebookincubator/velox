@@ -55,9 +55,6 @@ class CumeDistFunction : public exec::WindowFunction {
       }
       rawValues[resultOffset + i] = cumeDist_;
     }
-
-    // Set NULL values for rows with empty frames.
-    setNullEmptyFramesResults(validRows, resultOffset, result);
   }
 
  private:
@@ -80,8 +77,10 @@ void registerCumeDist(const std::string& name) {
       [name](
           const std::vector<exec::WindowFunctionArg>& /*args*/,
           const TypePtr& /*resultType*/,
+          bool /*ignoreNulls*/,
           velox::memory::MemoryPool* /*pool*/,
-          HashStringAllocator* /*stringAllocator*/)
+          HashStringAllocator* /*stringAllocator*/,
+          const velox::core::QueryConfig& /*queryConfig*/)
           -> std::unique_ptr<exec::WindowFunction> {
         return std::make_unique<CumeDistFunction>();
       });

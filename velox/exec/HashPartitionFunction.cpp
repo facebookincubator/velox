@@ -54,7 +54,7 @@ void HashPartitionFunction::init(
   }
 }
 
-void HashPartitionFunction::partition(
+std::optional<uint32_t> HashPartitionFunction::partition(
     const RowVector& input,
     std::vector<uint32_t>& partitions) {
   auto size = input.size();
@@ -83,5 +83,66 @@ void HashPartitionFunction::partition(
       partitions[i] = hashes_[i] % numPartitions_;
     }
   }
+
+  return std::nullopt;
+}
+
+std::unique_ptr<core::PartitionFunction> HashPartitionFunctionSpec::create(
+    int numPartitions) const {
+  return std::make_unique<exec::HashPartitionFunction>(
+      numPartitions, inputType_, keyChannels_, constValues_);
+}
+
+std::string HashPartitionFunctionSpec::toString() const {
+  std::ostringstream keys;
+  size_t constIndex = 0;
+  for (auto i = 0; i < keyChannels_.size(); ++i) {
+    if (i > 0) {
+      keys << ", ";
+    }
+    auto channel = keyChannels_[i];
+    if (channel == kConstantChannel) {
+      keys << "\"" << constValues_[constIndex++]->toString(0) << "\"";
+    } else {
+      keys << inputType_->nameOf(channel);
+    }
+  }
+
+  return fmt::format("HASH({})", keys.str());
+}
+
+folly::dynamic HashPartitionFunctionSpec::serialize() const {
+  folly::dynamic obj = folly::dynamic::object;
+  obj["name"] = "HashPartitionFunctionSpec";
+  obj["inputType"] = inputType_->serialize();
+  obj["keyChannels"] = ISerializable::serialize(keyChannels_);
+  std::vector<velox::core::ConstantTypedExpr> constValues;
+  constValues.reserve(constValues_.size());
+  for (const auto& value : constValues_) {
+    VELOX_CHECK_NOT_NULL(value);
+    constValues.emplace_back(value);
+  }
+  obj["constants"] = ISerializable::serialize(constValues);
+  return obj;
+}
+
+// static
+core::PartitionFunctionSpecPtr HashPartitionFunctionSpec::deserialize(
+    const folly::dynamic& obj,
+    void* context) {
+  const auto keys = ISerializable::deserialize<std::vector<column_index_t>>(
+      obj["keyChannels"], context);
+  const auto constTypeExprs =
+      ISerializable::deserialize<std::vector<velox::core::ConstantTypedExpr>>(
+          obj["constants"], context);
+
+  auto* pool = static_cast<memory::MemoryPool*>(context);
+  std::vector<VectorPtr> constValues;
+  constValues.reserve(constTypeExprs.size());
+  for (const auto& value : constTypeExprs) {
+    constValues.emplace_back(value->toConstantVector(pool));
+  }
+  return std::make_shared<HashPartitionFunctionSpec>(
+      ISerializable::deserialize<RowType>(obj["inputType"]), keys, constValues);
 }
 } // namespace facebook::velox::exec

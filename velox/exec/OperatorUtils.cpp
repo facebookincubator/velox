@@ -385,4 +385,35 @@ void aggregateOperatorRuntimeStats(
   }
 }
 
+folly::Range<vector_size_t*> initializeRowNumberMapping(
+    BufferPtr& mapping,
+    vector_size_t size,
+    memory::MemoryPool* pool) {
+  if (!mapping || !mapping->unique() ||
+      mapping->size() < sizeof(vector_size_t) * size) {
+    mapping = allocateIndices(size, pool);
+  }
+  return folly::Range(mapping->asMutable<vector_size_t>(), size);
+}
+
+void projectChildren(
+    const RowVectorPtr& dest,
+    const RowVectorPtr& src,
+    const std::vector<IdentityProjection>& projections,
+    int32_t size,
+    const BufferPtr& mapping) {
+  projectChildren(dest, src->children(), projections, size, mapping);
+}
+
+void projectChildren(
+    const RowVectorPtr& dest,
+    const std::vector<VectorPtr>& src,
+    const std::vector<IdentityProjection>& projections,
+    int32_t size,
+    const BufferPtr& mapping) {
+  for (const auto& projection : projections) {
+    dest->childAt(projection.outputChannel) =
+        wrapChild(size, mapping, src[projection.inputChannel]);
+  }
+}
 } // namespace facebook::velox::exec

@@ -133,22 +133,94 @@ class StringTest : public SparkFunctionBaseTest {
     return evaluateOnce<std::string>(
         "substring(c0, c1, c2)", str, start, length);
   }
+
+  std::optional<std::string> left(
+      std::optional<std::string> str,
+      std::optional<int32_t> length) {
+    return evaluateOnce<std::string>("left(c0, c1)", str, length);
+  }
+
+  std::optional<std::string> overlay(
+      std::optional<std::string> input,
+      std::optional<std::string> replace,
+      std::optional<int32_t> pos,
+      std::optional<int32_t> len) {
+    // overlay is a keyword of DuckDB, use double quote avoid parse error.
+    return evaluateOnce<std::string>(
+        "\"overlay\"(c0, c1, c2, c3)", input, replace, pos, len);
+  }
+
+  std::optional<std::string> overlayVarbinary(
+      std::optional<std::string> input,
+      std::optional<std::string> replace,
+      std::optional<int32_t> pos,
+      std::optional<int32_t> len) {
+    // overlay is a keyword of DuckDB, use double quote avoid parse error.
+    return evaluateOnce<std::string>(
+        "\"overlay\"(cast(c0 as varbinary), cast(c1 as varbinary), c2, c3)",
+        input,
+        replace,
+        pos,
+        len);
+  }
+  std::optional<std::string> rpad(
+      std::optional<std::string> string,
+      std::optional<int32_t> size,
+      std::optional<std::string> padString) {
+    return evaluateOnce<std::string>(
+        "rpad(c0, c1, c2)", string, size, padString);
+  }
+
+  std::optional<std::string> lpad(
+      std::optional<std::string> string,
+      std::optional<int32_t> size,
+      std::optional<std::string> padString) {
+    return evaluateOnce<std::string>(
+        "lpad(c0, c1, c2)", string, size, padString);
+  }
+
+  std::optional<std::string> rpad(
+      std::optional<std::string> string,
+      std::optional<int32_t> size) {
+    return evaluateOnce<std::string>("rpad(c0, c1)", string, size);
+  }
+
+  std::optional<std::string> lpad(
+      std::optional<std::string> string,
+      std::optional<int32_t> size) {
+    return evaluateOnce<std::string>("lpad(c0, c1)", string, size);
+  }
 };
 
 TEST_F(StringTest, Ascii) {
   EXPECT_EQ(ascii(std::string("\0", 1)), 0);
   EXPECT_EQ(ascii(" "), 32);
-  EXPECT_EQ(ascii("😋"), -16);
+  EXPECT_EQ(ascii("😋"), 128523);
   EXPECT_EQ(ascii(""), 0);
+  EXPECT_EQ(ascii("¥"), 165);
+  EXPECT_EQ(ascii("®"), 174);
+  EXPECT_EQ(ascii("©"), 169);
+  EXPECT_EQ(ascii("VELOX"), 86);
+  EXPECT_EQ(ascii("VIP"), 86);
+  EXPECT_EQ(ascii("Viod"), 86);
+  EXPECT_EQ(ascii("V®"), 86);
+  EXPECT_EQ(ascii("ÇÉµABC"), 199);
+  EXPECT_EQ(ascii("Ȼ %($)"), 571);
+  EXPECT_EQ(ascii("@£Ɇ123"), 64);
   EXPECT_EQ(ascii(std::nullopt), std::nullopt);
 }
 
 TEST_F(StringTest, Chr) {
-  EXPECT_EQ(chr(0), std::string("\0", 1));
-  EXPECT_EQ(chr(32), " ");
   EXPECT_EQ(chr(-16), "");
-  EXPECT_EQ(chr(256), std::string("\0", 1));
-  EXPECT_EQ(chr(256 + 32), std::string(" ", 1));
+  EXPECT_EQ(chr(0), std::string("\0", 1));
+  EXPECT_EQ(chr(0x100), std::string("\0", 1));
+  EXPECT_EQ(chr(0x1100), std::string("\0", 1));
+  EXPECT_EQ(chr(0x20), "\x20");
+  EXPECT_EQ(chr(0x100 + 0x20), "\x20");
+  EXPECT_EQ(chr(0x80), "\xC2\x80");
+  EXPECT_EQ(chr(0x100 + 0x80), "\xC2\x80");
+  EXPECT_EQ(chr(0xFF), "\xC3\xBF");
+  EXPECT_EQ(chr(0x100 + 0xFF), "\xC3\xBF");
   EXPECT_EQ(chr(std::nullopt), std::nullopt);
 }
 
@@ -418,5 +490,197 @@ TEST_F(StringTest, substring) {
   EXPECT_EQ(substring("da\u6570\u636Eta", -3), "\u636Eta");
 }
 
+TEST_F(StringTest, overlayVarchar) {
+  EXPECT_EQ(overlay("Spark\u6570\u636ESQL", "_", 6, -1), "Spark_\u636ESQL");
+  EXPECT_EQ(
+      overlay("Spark\u6570\u636ESQL", "_", 6, 0), "Spark_\u6570\u636ESQL");
+  EXPECT_EQ(overlay("Spark\u6570\u636ESQL", "_", -6, 2), "_\u636ESQL");
+
+  EXPECT_EQ(overlay("Spark SQL", "_", 6, -1), "Spark_SQL");
+  EXPECT_EQ(overlay("Spark SQL", "CORE", 7, -1), "Spark CORE");
+  EXPECT_EQ(overlay("Spark SQL", "ANSI ", 7, 0), "Spark ANSI SQL");
+  EXPECT_EQ(overlay("Spark SQL", "tructured", 2, 4), "Structured SQL");
+
+  EXPECT_EQ(overlay("Spark SQL", "##", 10, -1), "Spark SQL##");
+  EXPECT_EQ(overlay("Spark SQL", "##", 10, 4), "Spark SQL##");
+  EXPECT_EQ(overlay("Spark SQL", "##", 0, -1), "##park SQL");
+  EXPECT_EQ(overlay("Spark SQL", "##", 0, 4), "##rk SQL");
+  EXPECT_EQ(overlay("Spark SQL", "##", -10, -1), "##park SQL");
+  EXPECT_EQ(overlay("Spark SQL", "##", -10, 4), "##rk SQL");
+}
+
+TEST_F(StringTest, overlayVarbinary) {
+  EXPECT_EQ(overlay("Spark\x65\x20SQL", "_", 6, -1), "Spark_\x20SQL");
+  EXPECT_EQ(overlay("Spark\x65\x20SQL", "_", 6, 0), "Spark_\x65\x20SQL");
+  EXPECT_EQ(overlay("Spark\x65\x20SQL", "_", -6, 2), "_\x20SQL");
+
+  EXPECT_EQ(overlayVarbinary("Spark SQL", "_", 6, -1), "Spark_SQL");
+  EXPECT_EQ(overlayVarbinary("Spark SQL", "CORE", 7, -1), "Spark CORE");
+  EXPECT_EQ(overlayVarbinary("Spark SQL", "ANSI ", 7, 0), "Spark ANSI SQL");
+  EXPECT_EQ(overlayVarbinary("Spark SQL", "tructured", 2, 4), "Structured SQL");
+
+  EXPECT_EQ(overlayVarbinary("Spark SQL", "##", 10, -1), "Spark SQL##");
+  EXPECT_EQ(overlayVarbinary("Spark SQL", "##", 10, 4), "Spark SQL##");
+  EXPECT_EQ(overlayVarbinary("Spark SQL", "##", 0, -1), "##park SQL");
+  EXPECT_EQ(overlayVarbinary("Spark SQL", "##", 0, 4), "##rk SQL");
+  EXPECT_EQ(overlayVarbinary("Spark SQL", "##", -10, -1), "##park SQL");
+  EXPECT_EQ(overlayVarbinary("Spark SQL", "##", -10, 4), "##rk SQL");
+}
+
+TEST_F(StringTest, rpad) {
+  const std::string invalidString = "Ψ\xFF\xFFΣΓΔA";
+  const std::string invalidPadString = "\xFFΨ\xFF";
+
+  // ASCII strings with various values for size and padString
+  EXPECT_EQ("textx", rpad("text", 5, "x"));
+  EXPECT_EQ("text", rpad("text", 4, "x"));
+  EXPECT_EQ("textxyx", rpad("text", 7, "xy"));
+  EXPECT_EQ("text  ", rpad("text", 6));
+
+  // Non-ASCII strings with various values for size and padString
+  EXPECT_EQ(
+      "\u4FE1\u5FF5 \u7231 \u5E0C\u671B  \u671B\u671B",
+      rpad("\u4FE1\u5FF5 \u7231 \u5E0C\u671B  ", 11, "\u671B"));
+  EXPECT_EQ(
+      "\u4FE1\u5FF5 \u7231 \u5E0C\u671B  \u5E0C\u671B\u5E0C",
+      rpad("\u4FE1\u5FF5 \u7231 \u5E0C\u671B  ", 12, "\u5E0C\u671B"));
+
+  // Empty string
+  EXPECT_EQ("aaa", rpad("", 3, "a"));
+
+  // Truncating string
+  EXPECT_EQ("", rpad("abc", 0, "e"));
+  EXPECT_EQ("tex", rpad("text", 3, "xy"));
+  EXPECT_EQ(
+      "\u4FE1\u5FF5 \u7231 ",
+      rpad("\u4FE1\u5FF5 \u7231 \u5E0C\u671B  ", 5, "\u671B"));
+
+  // Invalid UTF-8 chars
+  EXPECT_EQ(invalidString + "x", rpad(invalidString, 8, "x"));
+  EXPECT_EQ("abc" + invalidPadString, rpad("abc", 6, invalidPadString));
+}
+
+TEST_F(StringTest, lpad) {
+  std::string invalidString = "Ψ\xFF\xFFΣΓΔA";
+  std::string invalidPadString = "\xFFΨ\xFF";
+
+  // ASCII strings with various values for size and padString
+  EXPECT_EQ("xtext", lpad("text", 5, "x"));
+  EXPECT_EQ("text", lpad("text", 4, "x"));
+  EXPECT_EQ("xyxtext", lpad("text", 7, "xy"));
+  EXPECT_EQ("  text", lpad("text", 6));
+
+  // Non-ASCII strings with various values for size and padString
+  EXPECT_EQ(
+      "\u671B\u671B\u4FE1\u5FF5 \u7231 \u5E0C\u671B  ",
+      lpad("\u4FE1\u5FF5 \u7231 \u5E0C\u671B  ", 11, "\u671B"));
+  EXPECT_EQ(
+      "\u5E0C\u671B\u5E0C\u4FE1\u5FF5 \u7231 \u5E0C\u671B  ",
+      lpad("\u4FE1\u5FF5 \u7231 \u5E0C\u671B  ", 12, "\u5E0C\u671B"));
+
+  // Empty string
+  EXPECT_EQ("aaa", lpad("", 3, "a"));
+
+  // Truncating string
+  EXPECT_EQ("", lpad("abc", 0, "e"));
+  EXPECT_EQ("tex", lpad("text", 3, "xy"));
+  EXPECT_EQ(
+      "\u4FE1\u5FF5 \u7231 ",
+      lpad("\u4FE1\u5FF5 \u7231 \u5E0C\u671B  ", 5, "\u671B"));
+
+  // Invalid UTF-8 chars
+  EXPECT_EQ("x" + invalidString, lpad(invalidString, 8, "x"));
+  EXPECT_EQ(invalidPadString + "abc", lpad("abc", 6, invalidPadString));
+}
+
+TEST_F(StringTest, left) {
+  EXPECT_EQ(left("example", -2), "");
+  EXPECT_EQ(left("example", 0), "");
+  EXPECT_EQ(left("example", 2), "ex");
+  EXPECT_EQ(left("example", 7), "example");
+  EXPECT_EQ(left("example", 20), "example");
+
+  EXPECT_EQ(left("da\u6570\u636Eta", 2), "da");
+  EXPECT_EQ(left("da\u6570\u636Eta", 3), "da\u6570");
+  EXPECT_EQ(left("da\u6570\u636Eta", 30), "da\u6570\u636Eta");
+}
+
+TEST_F(StringTest, translate) {
+  auto testTranslate =
+      [&](const std::vector<std::optional<std::string>>& inputs,
+          auto& expected) {
+        EXPECT_EQ(
+            evaluateOnce<std::string>(
+                "translate(c0, c1, c2)", inputs[0], inputs[1], inputs[2]),
+            expected);
+      };
+
+  testTranslate({"ab[cd]", "[]", "##"}, "ab#cd#");
+  testTranslate({"ab[cd]", "[]", "#"}, "ab#cd");
+  testTranslate({"ab[cd]", "[]", "#@$"}, "ab#cd@");
+  testTranslate({"ab[cd]", "[]", "  "}, "ab cd ");
+  testTranslate({"ab\u2028", "\u2028", "\u2029"}, "ab\u2029");
+  testTranslate({"abcabc", "a", "\u2029"}, "\u2029bc\u2029bc");
+  testTranslate({"abc", "", ""}, "abc");
+  testTranslate({"translate", "rnlt", "123"}, "1a2s3ae");
+  testTranslate({"translate", "rnlt", ""}, "asae");
+  testTranslate({"abcd", "aba", "123"}, "12cd");
+  // Test null input.
+  testTranslate({"abc", std::nullopt, "\u2029"}, std::nullopt);
+  testTranslate({"abc", "\u2028", std::nullopt}, std::nullopt);
+  testTranslate({std::nullopt, "\u2028", "\u2029"}, std::nullopt);
+}
+
+TEST_F(StringTest, translateConstantMatch) {
+  auto rowType = ROW({{"c0", VARCHAR()}});
+  auto exprSet = compileExpression("translate(c0, 'ab', '12')", rowType);
+
+  auto testTranslate = [&](const auto& input, const auto& expected) {
+    auto result = evaluate(*exprSet, makeRowVector({input}));
+    velox::test::assertEqualVectors(expected, result);
+  };
+
+  // Uses ascii batch as the initial input.
+  auto input = makeFlatVector<std::string>({"abcd", "cdab"});
+  auto expected = makeFlatVector<std::string>({"12cd", "cd12"});
+  testTranslate(input, expected);
+
+  // Uses unicode batch as the next input.
+  input = makeFlatVector<std::string>({"abåæçè", "åæçèab"});
+  expected = makeFlatVector<std::string>({"12åæçè", "åæçè12"});
+  testTranslate(input, expected);
+}
+
+TEST_F(StringTest, translateNonconstantMatch) {
+  auto rowType = ROW({{"c0", VARCHAR()}, {"c1", VARCHAR()}, {"c2", VARCHAR()}});
+  auto exprSet = compileExpression("translate(c0, c1, c2)", rowType);
+
+  auto testTranslate = [&](const std::vector<VectorPtr>& inputs,
+                           const auto& expected) {
+    auto result = evaluate(*exprSet, makeRowVector(inputs));
+    velox::test::assertEqualVectors(expected, result);
+  };
+
+  // All inputs are ascii encoded.
+  auto input = makeFlatVector<std::string>({"abcd", "cdab"});
+  auto match = makeFlatVector<std::string>({"ab", "ca"});
+  auto replace = makeFlatVector<std::string>({"#", "@$"});
+  auto expected = makeFlatVector<std::string>({"#cd", "@d$b"});
+  testTranslate({input, match, replace}, expected);
+
+  // Partial inputs are ascii encoded.
+  input = makeFlatVector<std::string>({"abcd", "cdab"});
+  match = makeFlatVector<std::string>({"ac", "ab"});
+  replace = makeFlatVector<std::string>({"åç", "æ"});
+  expected = makeFlatVector<std::string>({"åbçd", "cdæ"});
+  testTranslate({input, match, replace}, expected);
+
+  // All inputs are unicode encoded.
+  input = makeFlatVector<std::string>({"abåæçè", "åæçèac"});
+  match = makeFlatVector<std::string>({"aå", "çc"});
+  replace = makeFlatVector<std::string>({"åa", "cç"});
+  expected = makeFlatVector<std::string>({"åbaæçè", "åæcèaç"});
+  testTranslate({input, match, replace}, expected);
+}
 } // namespace
 } // namespace facebook::velox::functions::sparksql::test

@@ -21,6 +21,7 @@
 #include "velox/exec/Exchange.h"
 #include "velox/exec/PlanNodeStats.h"
 #include "velox/exec/tests/utils/AssertQueryBuilder.h"
+#include "velox/exec/tests/utils/LocalExchangeSource.h"
 #include "velox/exec/tests/utils/PlanBuilder.h"
 #include "velox/functions/prestosql/aggregates/RegisterAggregateFunctions.h"
 #include "velox/functions/prestosql/registration/RegistrationFunctions.h"
@@ -171,7 +172,7 @@ class ExchangeBenchmark : public VectorTestBase {
                     .localPartition({"c0"})
                     .capturePlanNodeId(exchangeId)
                     .singleAggregation({}, aggregates)
-                    .localPartition({})
+                    .localPartition(std::vector<std::string>{})
                     .singleAggregation({}, {"sum(a0)"})
                     .planNode();
     auto startMicros = getCurrentTimeMicro();
@@ -243,13 +244,14 @@ class ExchangeBenchmark : public VectorTestBase {
       int destination,
       Consumer consumer = nullptr,
       int64_t maxMemory = kMaxMemory) {
+    auto configCopy = configSettings_;
     auto queryCtx = std::make_shared<core::QueryCtx>(
-        executor_.get(), std::make_shared<core::MemConfig>(configSettings_));
+        executor_.get(), std::move(configCopy));
     queryCtx->testingOverrideMemoryPool(
         memory::defaultMemoryManager().addRootPool(
             queryCtx->queryId(), maxMemory));
     core::PlanFragment planFragment{planNode};
-    return std::make_shared<Task>(
+    return Task::create(
         taskId,
         std::move(planFragment),
         destination,
@@ -305,19 +307,19 @@ Counters flat50Counters;
 Counters deep50Counters;
 Counters localFlat10kCounters;
 
-BENCHMARK(exchanegeFlat10k) {
+BENCHMARK(exchangeFlat10k) {
   bm.run(flat10k, FLAGS_width, FLAGS_task_width, flat10kCounters);
 }
 
-BENCHMARK_RELATIVE(exchanegeFlat50) {
+BENCHMARK_RELATIVE(exchangeFlat50) {
   bm.run(flat50, FLAGS_width, FLAGS_task_width, flat50Counters);
 }
 
-BENCHMARK(exchanegeDeep10k) {
+BENCHMARK(exchangeDeep10k) {
   bm.run(deep10k, FLAGS_width, FLAGS_task_width, deep10kCounters);
 }
 
-BENCHMARK_RELATIVE(exchanegeDeep50) {
+BENCHMARK_RELATIVE(exchangeDeep50) {
   bm.run(deep50, FLAGS_width, FLAGS_task_width, deep50Counters);
 }
 
@@ -334,17 +336,17 @@ int main(int argc, char** argv) {
   aggregate::prestosql::registerAllAggregateFunctions();
   parse::registerTypeResolver();
   serializer::presto::PrestoVectorSerde::registerVectorSerde();
-  exec::ExchangeSource::registerFactory();
+  exec::ExchangeSource::registerFactory(exec::test::createLocalExchangeSource);
   std::vector<std::string> flatNames = {"c0"};
   std::vector<TypePtr> flatTypes = {BIGINT()};
   std::vector<TypePtr> typeSelection = {
       BOOLEAN(),
       TINYINT(),
-      LONG_DECIMAL(20, 3),
+      DECIMAL(20, 3),
       INTEGER(),
       BIGINT(),
       REAL(),
-      SHORT_DECIMAL(10, 2),
+      DECIMAL(10, 2),
       DOUBLE(),
       VARCHAR()};
 

@@ -19,6 +19,7 @@
 #include <velox/core/PlanFragment.h>
 #include <velox/core/PlanNode.h>
 #include "velox/common/memory/Memory.h"
+#include "velox/connectors/hive/HiveDataSink.h"
 #include "velox/parse/ExpressionsParser.h"
 #include "velox/parse/PlanNodeIdGenerator.h"
 
@@ -233,30 +234,43 @@ class PlanBuilder {
   /// @param tableColumnNames Column names in the target table corresponding to
   /// inputColumns. The names may or may not match. tableColumnNames[i]
   /// corresponds to inputColumns[i].
+  /// @param aggregationNode Optional aggregation node for collecting column
+  /// statistics.
   /// @param insertHandle Connector-specific table handle.
-  /// @param rowCountColumnName The name of the output column containing the
-  /// number of rows written.
+  /// @param hasPartitioningScheme indicates if table partitioning scheme is
+  /// required for this table write which is only true for bucketed hive table
+  /// for now.
   PlanBuilder& tableWrite(
       const RowTypePtr& inputColumns,
       const std::vector<std::string>& tableColumnNames,
+      const std::shared_ptr<core::AggregationNode>& aggregationNode,
       const std::shared_ptr<core::InsertTableHandle>& insertHandle,
+      bool hasPartitioningScheme,
       connector::CommitStrategy commitStrategy =
-          connector::CommitStrategy::kNoCommit,
-      const std::string& rowCountColumnName = "rowCount");
+          connector::CommitStrategy::kNoCommit);
 
   /// Add a TableWriteNode assuming that input columns match the source node
   /// columns in order.
   ///
-  /// @param tableColumnNames Column names in the target table.
+  /// @param tableColumnNames Column names in the target table corresponding to
+  /// inputColumns. The names may or may not match. tableColumnNames[i]
+  /// corresponds to inputColumns[i].
+  /// @param aggregationNode Optional aggregation node for collecting column
+  /// statistics.
   /// @param insertHandle Connector-specific table handle.
-  /// @param rowCountColumnName The name of the output column containing the
-  /// number of rows written.
+  /// @param hasPartitioningScheme indicates if table partitioning scheme is
+  /// required for this table write which is only true for bucketed hive table
+  /// for now.
   PlanBuilder& tableWrite(
       const std::vector<std::string>& tableColumnNames,
+      const std::shared_ptr<core::AggregationNode>& aggregationNode,
       const std::shared_ptr<core::InsertTableHandle>& insertHandle,
+      bool hasPartitioningScheme,
       connector::CommitStrategy commitStrategy =
-          connector::CommitStrategy::kNoCommit,
-      const std::string& rowCountColumnName = "rowCount");
+          connector::CommitStrategy::kNoCommit);
+
+  /// Add a TableWriteMergeNode.
+  PlanBuilder& tableWriteMerge();
 
   /// Add an AggregationNode representing partial aggregation with the
   /// specified grouping keys, aggregates and optional masks.
@@ -535,6 +549,14 @@ class PlanBuilder {
       int numPartitions,
       const std::vector<std::string>& outputLayout = {});
 
+  /// Same as above, but allows to provide custom partition function.
+  PlanBuilder& partitionedOutput(
+      const std::vector<std::string>& keys,
+      int numPartitions,
+      bool replicateNullsAndAny,
+      core::PartitionFunctionSpecPtr partitionFunctionSpec,
+      const std::vector<std::string>& outputLayout = {});
+
   /// Add a PartitionedOutputNode to broadcast the input data.
   ///
   /// @param outputLayout Optional output layout in case it is different then
@@ -559,7 +581,13 @@ class PlanBuilder {
   /// current plan node).
   PlanBuilder& localPartition(const std::vector<std::string>& keys);
 
-  /// Add a LocalPartitionNode to partition the input using row-wise
+  /// A convenience method to add a LocalPartitionNode with a single source (the
+  /// current plan node) and hive bucket property.
+  PlanBuilder& localPartition(
+      const std::shared_ptr<connector::hive::HiveBucketProperty>&
+          bucketProperty);
+
+  /// Add a LocalPartitionNode to partition the input using batch-level
   /// round-robin. Number of partitions is determined at runtime based on
   /// parallelism of the downstream pipeline.
   ///
@@ -570,6 +598,11 @@ class PlanBuilder {
   /// A convenience method to add a LocalPartitionNode with a single source (the
   /// current plan node).
   PlanBuilder& localPartitionRoundRobin();
+
+  /// Add a LocalPartitionNode to partition the input using row-wise
+  /// round-robin. Number of partitions is determined at runtime based on
+  /// parallelism of the downstream pipeline.
+  PlanBuilder& localPartitionRoundRobinRow();
 
   /// Add a HashJoinNode to join two inputs using one or more join keys and an
   /// optional filter.
@@ -608,6 +641,23 @@ class PlanBuilder {
       const std::vector<std::string>& rightKeys,
       const core::PlanNodePtr& build,
       const std::string& filter,
+      const std::vector<std::string>& outputLayout,
+      core::JoinType joinType = core::JoinType::kInner);
+
+  /// Add a NestedLoopJoinNode to join two inputs using filter as join
+  /// condition to perform equal/non-equal join. Only supports inner/outer
+  /// joins.
+  ///
+  /// @param right Right-side input. Typically, to reduce memory usage, the
+  /// smaller input is placed on the right-side.
+  /// @param joinCondition SQL expression as the join condition. Can
+  /// use columns from both probe and build sides of the join.
+  /// @param outputLayout Output layout consisting of columns from probe and
+  /// build sides.
+  /// @param joinType Type of the join: inner, left, right, full.
+  PlanBuilder& nestedLoopJoin(
+      const core::PlanNodePtr& right,
+      const std::string& joinCondition,
       const std::vector<std::string>& outputLayout,
       core::JoinType joinType = core::JoinType::kInner);
 
@@ -668,6 +718,28 @@ class PlanBuilder {
   ///  rows between a + 10 preceding and 10 following)"
   PlanBuilder& window(const std::vector<std::string>& windowFunctions);
 
+  /// Add a RowNumberNode to compute single row_number window function with an
+  /// optional limit and no sorting.
+  PlanBuilder& rowNumber(
+      const std::vector<std::string>& partitionKeys,
+      std::optional<int32_t> limit = std::nullopt,
+      bool generateRowNumber = true);
+
+  /// Add a TopNRowNumberNode to compute single row_number window function with
+  /// a limit applied to sorted partitions.
+  PlanBuilder& topNRowNumber(
+      const std::vector<std::string>& partitionKeys,
+      const std::vector<std::string>& sortingKeys,
+      int32_t limit,
+      bool generateRowNumber);
+
+  /// Add a MarkDistinctNode to compute aggregate mask channel
+  /// @param markerKey Name of output mask channel
+  /// @param distinctKeys List of columns to be marked distinct.
+  PlanBuilder& markDistinct(
+      std::string markerKey,
+      const std::vector<std::string>& distinctKeys);
+
   /// Stores the latest plan node ID into the specified variable. Useful for
   /// capturing IDs of the leaf plan nodes (table scans, exchanges, etc.) to use
   /// when adding splits at runtime.
@@ -712,8 +784,6 @@ class PlanBuilder {
     return *this;
   }
 
-  static void registerSerDe();
-
  protected:
   // Users who create custom operators might want to extend the PlanBuilder to
   // customize extended plan builders. Those functions are needed in such
@@ -757,20 +827,16 @@ class PlanBuilder {
       core::AggregationNode::Step step,
       const core::AggregationNode* partialAggNode);
 
-  struct ExpressionsAndNames {
-    std::vector<std::shared_ptr<const core::CallTypedExpr>> expressions;
+  struct AggregatesAndNames {
+    std::vector<core::AggregationNode::Aggregate> aggregates;
     std::vector<std::string> names;
   };
 
-  ExpressionsAndNames createAggregateExpressionsAndNames(
+  AggregatesAndNames createAggregateExpressionsAndNames(
       const std::vector<std::string>& aggregates,
+      const std::vector<std::string>& masks,
       core::AggregationNode::Step step,
       const std::vector<TypePtr>& resultTypes);
-
-  std::vector<std::shared_ptr<const core::FieldAccessTypedExpr>>
-  createAggregateMasks(
-      size_t numAggregates,
-      const std::vector<std::string>& masks);
 
  protected:
   core::PlanNodePtr planNode_;

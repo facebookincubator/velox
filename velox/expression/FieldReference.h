@@ -61,16 +61,10 @@ class FieldReference : public SpecialForm {
       EvalCtx& context,
       VectorPtr& result) override;
 
- protected:
-  void computeMetadata() override {
-    propagatesNulls_ = true;
-    if (inputs_.empty()) {
-      distinctFields_.resize(1);
-      distinctFields_[0] = this;
-    } else {
-      Expr::computeMetadata();
-    }
-  }
+  std::string toString(bool recursive = true) const override;
+
+  std::string toSql(
+      std::vector<VectorPtr>* complexConstants = nullptr) const override;
 
  private:
   const std::string field_;

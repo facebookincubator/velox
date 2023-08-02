@@ -47,9 +47,7 @@ void ValueList::writeLastNulls(HashStringAllocator* allocator) {
     nullsBegin_ = position.header;
   }
   stream.appendOne(lastNulls_);
-  nullsCurrent_ = allocator->finishWrite(stream, kInitialSize);
-
-  totalBytes_ += sizeof(uint64_t);
+  nullsCurrent_ = allocator->finishWrite(stream, kInitialSize).second;
 }
 
 void ValueList::appendNull(HashStringAllocator* allocator) {
@@ -65,11 +63,10 @@ void ValueList::appendNonNull(
   prepareAppend(allocator);
   ByteStream stream(allocator);
   allocator->extendWrite(dataCurrent_, stream);
-  exec::ContainerRowSerde::instance().serialize(values, index, stream);
-  totalBytes_ += stream.size();
+  exec::ContainerRowSerde::serialize(values, index, stream);
   ++size_;
-  auto reserve = std::max<int32_t>(1024, std::min<int64_t>(128, totalBytes_));
-  dataCurrent_ = allocator->finishWrite(stream, reserve);
+
+  dataCurrent_ = allocator->finishWrite(stream, 1024).second;
 }
 
 void ValueList::appendValue(
@@ -116,8 +113,7 @@ bool ValueListReader::next(BaseVector& output, vector_size_t outputIndex) {
   if (nulls_ & (1UL << (pos_ % 64))) {
     output.setNull(outputIndex, true);
   } else {
-    exec::ContainerRowSerde::instance().deserialize(
-        dataStream_, outputIndex, &output);
+    exec::ContainerRowSerde::deserialize(dataStream_, outputIndex, &output);
   }
 
   pos_++;

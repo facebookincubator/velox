@@ -13,26 +13,31 @@
 # limitations under the License.
 add_subdirectory(utils)
 
-add_executable(aggregate_companion_adapter_test
-               AggregateCompanionAdapterTest.cpp)
+add_executable(
+  aggregate_companion_functions_test
+  AggregateCompanionAdapterTest.cpp AggregateCompanionSignaturesTest.cpp
+  DummyAggregateFunction.cpp)
 
 add_test(
-  NAME aggregate_companion_adapter_test
-  COMMAND aggregate_companion_adapter_test
+  NAME aggregate_companion_functions_test
+  COMMAND aggregate_companion_functions_test
   WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR})
 
-target_link_libraries(aggregate_companion_adapter_test velox_exec
+target_link_libraries(aggregate_companion_functions_test velox_exec
                       velox_function_registry gtest gtest_main)
 
 add_executable(
   velox_exec_test
+  AddressableNonNullValueListTest.cpp
   AggregationTest.cpp
   AggregateFunctionRegistryTest.cpp
   ArrowStreamTest.cpp
   AssignUniqueIdTest.cpp
   AsyncConnectorTest.cpp
+  ContainerRowSerdeTest.cpp
   CustomJoinTest.cpp
   EnforceSingleRowTest.cpp
+  ExchangeClientTest.cpp
   FilterProjectTest.cpp
   FunctionResolutionTest.cpp
   HashJoinBridgeTest.cpp
@@ -52,18 +57,22 @@ add_executable(
   PlanNodeSerdeTest.cpp
   PlanNodeToStringTest.cpp
   PrintPlanWithStatsTest.cpp
+  ProbeOperatorStateTest.cpp
   RoundRobinPartitionFunctionTest.cpp
   RowContainerTest.cpp
-  MemoryCapExceededTest.cpp
+  RowNumberTest.cpp
+  MarkDistinctTest.cpp
   SpillTest.cpp
   SpillOperatorGroupTest.cpp
   SpillerTest.cpp
+  SplitToStringTest.cpp
   SqlTest.cpp
   StreamingAggregationTest.cpp
   TableScanTest.cpp
   TableWriteTest.cpp
   TaskListenerTest.cpp
   TopNTest.cpp
+  TopNRowNumberTest.cpp
   UnorderedStreamReaderTest.cpp
   UnnestTest.cpp
   VectorHasherTest.cpp
@@ -100,6 +109,8 @@ target_link_libraries(
   velox_dwio_common
   velox_dwio_common_exception
   velox_dwio_common_test_utils
+  velox_dwio_parquet_reader
+  velox_dwio_parquet_writer
   velox_exec
   velox_exec_test_lib
   velox_functions_json
@@ -113,21 +124,21 @@ target_link_libraries(
   velox_type
   velox_vector
   velox_vector_fuzzer
-  ${Boost_ATOMIC_LIBRARIES}
-  ${Boost_CONTEXT_LIBRARIES}
-  ${Boost_DATE_TIME_LIBRARIES}
-  ${Boost_FILESYSTEM_LIBRARIES}
-  ${Boost_PROGRAM_OPTIONS_LIBRARIES}
-  ${Boost_REGEX_LIBRARIES}
-  ${Boost_THREAD_LIBRARIES}
-  ${Boost_SYSTEM_LIBRARIES}
+  Boost::atomic
+  Boost::context
+  Boost::date_time
+  Boost::filesystem
+  Boost::program_options
+  Boost::regex
+  Boost::thread
+  Boost::system
   gtest
   gtest_main
   gmock
-  ${FOLLY_WITH_DEPENDENCIES}
+  Folly::folly
   gflags::gflags
   glog::glog
-  ${FMT}
+  fmt::fmt
   ${FILESYSTEM})
 
 target_link_libraries(
@@ -147,21 +158,21 @@ target_link_libraries(
   velox_type
   velox_vector
   velox_vector_fuzzer
-  ${Boost_ATOMIC_LIBRARIES}
-  ${Boost_CONTEXT_LIBRARIES}
-  ${Boost_DATE_TIME_LIBRARIES}
-  ${Boost_FILESYSTEM_LIBRARIES}
-  ${Boost_PROGRAM_OPTIONS_LIBRARIES}
-  ${Boost_REGEX_LIBRARIES}
-  ${Boost_THREAD_LIBRARIES}
-  ${Boost_SYSTEM_LIBRARIES}
+  Boost::atomic
+  Boost::context
+  Boost::date_time
+  Boost::filesystem
+  Boost::program_options
+  Boost::regex
+  Boost::thread
+  Boost::system
   gtest
   gtest_main
   gmock
-  ${FOLLY_WITH_DEPENDENCIES}
+  Folly::folly
   gflags::gflags
   glog::glog
-  ${FMT}
+  fmt::fmt
   ${FILESYSTEM})
 
 add_executable(velox_in_10_min_demo VeloxIn10MinDemo.cpp)
@@ -216,3 +227,20 @@ target_link_libraries(velox_join_fuzzer velox_type velox_vector_fuzzer
 add_executable(velox_join_fuzzer_test JoinFuzzerTest.cpp)
 
 target_link_libraries(velox_join_fuzzer_test velox_join_fuzzer gtest gtest_main)
+
+add_executable(velox_aggregation_runner_test AggregationRunnerTest.cpp)
+
+target_link_libraries(velox_aggregation_runner_test velox_aggregation_fuzzer
+                      velox_aggregates velox_vector_test_lib gtest gtest_main)
+
+add_library(velox_simple_aggregate SimpleAverageAggregate.cpp
+                                   SimpleArrayAggAggregate.cpp)
+
+target_link_libraries(velox_simple_aggregate velox_exec velox_expression
+                      velox_expression_functions velox_aggregates)
+
+add_executable(velox_simple_aggregate_test SimpleAggregateAdapterTest.cpp)
+
+target_link_libraries(
+  velox_simple_aggregate_test velox_simple_aggregate velox_exec
+  velox_functions_aggregates_test_lib gtest gtest_main)

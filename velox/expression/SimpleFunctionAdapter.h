@@ -359,7 +359,6 @@ class SimpleFunctionAdapter : public VectorFunction {
     auto reuseStringsFromArg = reuseStringsFromArgValue();
     if (reuseStringsFromArg >= 0) {
       VELOX_CHECK_LT(reuseStringsFromArg, args.size());
-      VELOX_CHECK_EQ(args[reuseStringsFromArg]->typeKind(), TypeKind::VARCHAR);
       if (decoded.size() == 0 || !decoded.at(reuseStringsFromArg).has_value()) {
         // If we're here, we're guaranteed the argument is either a Flat
         // or Constant vector so no decoding is necessary.
@@ -376,11 +375,12 @@ class SimpleFunctionAdapter : public VectorFunction {
     }
   }
 
-  // Acquire string buffer from source if vector is a string flat vector.
+  // All string vectors within `vector` will acquire shared ownership of all
+  // string buffers found within source.
   void tryAcquireStringBuffer(BaseVector* vector, const BaseVector* source)
       const {
     if (auto* flatVector = vector->asFlatVector<StringView>()) {
-      flatVector->acquireSharedStringBuffers(source);
+      flatVector->acquireSharedStringBuffersRecursive(source);
     } else if (auto* arrayVector = vector->as<ArrayVector>()) {
       tryAcquireStringBuffer(arrayVector->elements().get(), source);
     } else if (auto* mapVector = vector->as<MapVector>()) {
@@ -600,6 +600,16 @@ class SimpleFunctionAdapter : public VectorFunction {
           });
         }
       } else if (allNotNull) {
+        if constexpr (FUNC::has_ascii) {
+          if (applyContext.allAscii) {
+            applyContext.applyToSelectedNoThrow([&](auto row) INLINE_LAMBDA {
+              typename return_type_traits::NativeType out{};
+              bool notNull = doApplyAsciiNotNull<0>(row, out, readers...);
+              writeResult(row, notNull, out);
+            });
+            return;
+          }
+        }
         applyContext.applyToSelectedNoThrow([&](auto row) INLINE_LAMBDA {
           // Passing a stack variable have shown to be boost the performance
           // of functions that repeatedly update the output. The opposite
@@ -637,15 +647,17 @@ class SimpleFunctionAdapter : public VectorFunction {
           });
         }
       } else if (allNotNull) {
-        if (applyContext.allAscii) {
-          applyUdf(applyContext, [&](auto& out, auto row) INLINE_LAMBDA {
-            return doApplyAsciiNotNull<0>(row, out, readers...);
-          });
-        } else {
-          applyUdf(applyContext, [&](auto& out, auto row) INLINE_LAMBDA {
-            return doApplyNotNull<0>(row, out, readers...);
-          });
+        if constexpr (FUNC::has_ascii) {
+          if (applyContext.allAscii) {
+            applyUdf(applyContext, [&](auto& out, auto row) INLINE_LAMBDA {
+              return doApplyAsciiNotNull<0>(row, out, readers...);
+            });
+            return;
+          }
         }
+        applyUdf(applyContext, [&](auto& out, auto row) INLINE_LAMBDA {
+          return doApplyNotNull<0>(row, out, readers...);
+        });
       } else {
         applyUdf(applyContext, [&](auto& out, auto row) INLINE_LAMBDA {
           return doApply<0>(row, out, readers...);
@@ -855,8 +867,8 @@ class SimpleFunctionAdapterFactoryImpl : public SimpleFunctionAdapterFactory {
   explicit SimpleFunctionAdapterFactoryImpl() {}
 
   std::unique_ptr<VectorFunction> createVectorFunction(
-      const core::QueryConfig& config,
-      const std::vector<VectorPtr>& constantInputs) const override {
+      const std::vector<VectorPtr>& constantInputs,
+      const core::QueryConfig& config) const override {
     return std::make_unique<SimpleFunctionAdapter<UDFHolder>>(
         config, constantInputs);
   }

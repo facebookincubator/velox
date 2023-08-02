@@ -49,12 +49,17 @@ template <typename T>
 class FlatVector;
 
 class VectorPool;
+class BaseVector;
+using VectorPtr = std::shared_ptr<BaseVector>;
 
 /**
  * Base class for all columnar-based vectors of any type.
  */
 class BaseVector {
  public:
+  BaseVector(const BaseVector&) = delete;
+  BaseVector& operator=(const BaseVector&) = delete;
+
   static constexpr uint64_t kNullHash = 1;
 
   BaseVector(
@@ -282,6 +287,13 @@ class BaseVector {
         });
   }
 
+  /// Compares values in range [start, start + size) and returns an index of a
+  /// duplicate value if found.
+  std::optional<vector_size_t> findDuplicateValue(
+      vector_size_t start,
+      vector_size_t size,
+      CompareFlags flags);
+
   /**
    * @return the hash of the value at the given index in this vector
    */
@@ -361,6 +373,8 @@ class BaseVector {
     clearNulls(0, size());
   }
 
+  void reuseNulls();
+
   // Sets the size to 'newSize' and ensures there is space for the
   // indicated number of nulls and top level values (eg. values for Flat,
   // indices for Dictionary, etc). Any immutable buffers that need to be resized
@@ -390,7 +404,7 @@ class BaseVector {
   }
 
   // Utility for making a deep copy of a whole vector.
-  static std::shared_ptr<BaseVector> copy(const BaseVector& vector) {
+  static VectorPtr copy(const BaseVector& vector) {
     auto result =
         BaseVector::create(vector.type(), vector.size(), vector.pool());
     result->copy(&vector, 0, 0, vector.size());
@@ -425,9 +439,7 @@ class BaseVector {
 
   // Construct a zero-copy slice of the vector with the indicated offset and
   // length.
-  virtual std::shared_ptr<BaseVector> slice(
-      vector_size_t offset,
-      vector_size_t length) const = 0;
+  virtual VectorPtr slice(vector_size_t offset, vector_size_t length) const = 0;
 
   // Returns a vector of the type of 'source' where 'indices' contains
   // an index into 'source' for each element of 'source'. The
@@ -435,42 +447,41 @@ class BaseVector {
   // equivalent to wrapping 'source' in a dictionary with 'indices'
   // but this may reuse structure if said structure is uniquely owned
   // or if a copy is more efficient than dictionary wrapping.
-  static std::shared_ptr<BaseVector> transpose(
-      BufferPtr indices,
-      std::shared_ptr<BaseVector>&& source);
+  static VectorPtr transpose(BufferPtr indices, VectorPtr&& source);
 
-  static std::shared_ptr<BaseVector> createConstant(
+  static VectorPtr createConstant(
       const TypePtr& type,
       variant value,
       vector_size_t size,
       velox::memory::MemoryPool* pool);
 
-  static std::shared_ptr<BaseVector> createNullConstant(
+  static VectorPtr createNullConstant(
       const TypePtr& type,
       vector_size_t size,
       velox::memory::MemoryPool* pool);
 
-  static std::shared_ptr<BaseVector> wrapInDictionary(
+  static VectorPtr wrapInDictionary(
       BufferPtr nulls,
       BufferPtr indices,
       vector_size_t size,
-      std::shared_ptr<BaseVector> vector);
+      VectorPtr vector);
 
-  static std::shared_ptr<BaseVector> wrapInSequence(
-      BufferPtr lengths,
-      vector_size_t size,
-      std::shared_ptr<BaseVector> vector);
+  static VectorPtr
+  wrapInSequence(BufferPtr lengths, vector_size_t size, VectorPtr vector);
 
   // Creates a ConstantVector of specified length and value coming from the
   // 'index' element of the 'vector'. Peels off any encodings of the 'vector'
   // before making a new ConstantVector. The result vector is either a
   // ConstantVector holding a scalar value or a ConstantVector wrapping flat or
   // lazy vector. The result cannot be a wrapping over another constant or
-  // dictionary vector.
-  static std::shared_ptr<BaseVector> wrapInConstant(
+  // dictionary vector. If copyBase is true and the result vector wraps a
+  // vector, the wrapped vector is newly constructed by copying the value from
+  // the original, guaranteeing no Vectors are shared with 'vector'.
+  static VectorPtr wrapInConstant(
       vector_size_t length,
       vector_size_t index,
-      std::shared_ptr<BaseVector> vector);
+      VectorPtr vector,
+      bool copyBase = false);
 
   // Makes 'result' writable for 'rows'. A wrapper (e.g. dictionary, constant,
   // sequence) is flattened and a multiply referenced flat vector is copied.
@@ -486,7 +497,7 @@ class BaseVector {
       const SelectivityVector& rows,
       const TypePtr& type,
       velox::memory::MemoryPool* pool,
-      std::shared_ptr<BaseVector>& result,
+      VectorPtr& result,
       VectorPool* vectorPool = nullptr);
 
   virtual void ensureWritable(const SelectivityVector& rows);
@@ -512,22 +523,8 @@ class BaseVector {
     return false;
   }
 
-  // Flattens the input vector.
-  //
-  // TODO: This method reuses ensureWritable(), which ensures that both:
-  //  (a) the vector is flattened, and
-  //  (b) it's singly-referenced
-  //
-  // We don't necessarily need (b) if we only want to flatten vectors.
-  static void flattenVector(
-      std::shared_ptr<BaseVector>& vector,
-      size_t vectorSize) {
-    BaseVector::ensureWritable(
-        SelectivityVector::empty(vectorSize),
-        vector->type(),
-        vector->pool(),
-        vector);
-  }
+  // Flattens the input vector and all of its children.
+  static void flattenVector(VectorPtr& vector);
 
   template <typename T>
   static inline uint64_t byteSize(vector_size_t count) {
@@ -537,7 +534,7 @@ class BaseVector {
   // If 'vector' is a wrapper, returns the underlying values vector. This is
   // virtual and defined here because we must be able to access this in type
   // agnostic code without a switch on all data types.
-  virtual std::shared_ptr<BaseVector> valueVector() const {
+  virtual const VectorPtr& valueVector() const {
     VELOX_UNSUPPORTED("Vector is not a wrapper");
   }
 
@@ -549,8 +546,7 @@ class BaseVector {
     return this;
   }
 
-  static std::shared_ptr<BaseVector> loadedVectorShared(
-      std::shared_ptr<BaseVector>);
+  static VectorPtr loadedVectorShared(VectorPtr vector);
 
   virtual const BufferPtr& values() const {
     VELOX_UNSUPPORTED("Only flat vectors have a values buffer");
@@ -574,8 +570,8 @@ class BaseVector {
     return std::static_pointer_cast<T>(createInternal(type, size, pool));
   }
 
-  static std::shared_ptr<BaseVector> getOrCreateEmpty(
-      std::shared_ptr<BaseVector> vector,
+  static VectorPtr getOrCreateEmpty(
+      VectorPtr vector,
       const TypePtr& type,
       velox::memory::MemoryPool* pool) {
     return vector ? vector : create(type, 0, pool);
@@ -593,18 +589,27 @@ class BaseVector {
   // point to element 0 of (*indices)->as<vector_size_t>().
   void resizeIndices(
       vector_size_t size,
-      vector_size_t initialValue,
       BufferPtr* indices,
-      const vector_size_t** raw) {
-    resizeIndices(size, initialValue, this->pool(), indices, raw);
+      const vector_size_t** raw,
+      std::optional<vector_size_t> initialValue = std::nullopt) {
+    resizeIndices(size, this->pool(), indices, raw, initialValue);
+  }
+
+  void
+  clearIndices(BufferPtr& indices, vector_size_t start, vector_size_t end) {
+    if (start == end) {
+      return;
+    }
+    auto* data = indices->asMutable<vector_size_t>();
+    std::fill(data + start, data + end, 0);
   }
 
   static void resizeIndices(
       vector_size_t size,
-      vector_size_t initialValue,
       velox::memory::MemoryPool* pool,
       BufferPtr* indices,
-      const vector_size_t** raw);
+      const vector_size_t** raw,
+      std::optional<vector_size_t> initialValue = std::nullopt);
 
   // Makes sure '*buffer' has space for 'size' items of T and is writable. Sets
   // 'raw' to point to the writable contents of '*buffer'.
@@ -656,9 +661,7 @@ class BaseVector {
   /// buffers cannot be reused, these buffers are reset. Child vectors are
   /// updated by calling this method recursively with size zero. Data-dependent
   /// flags are reset after this call.
-  static void prepareForReuse(
-      std::shared_ptr<BaseVector>& vector,
-      vector_size_t size);
+  static void prepareForReuse(VectorPtr& vector, vector_size_t size);
 
   /// Resets non-reusable buffers and updates child vectors by calling
   /// BaseVector::prepareForReuse.
@@ -739,6 +742,18 @@ class BaseVector {
     }
     containsLazyAndIsWrapped_ = true;
     return true;
+  }
+
+  void clearContainingLazyAndWrapped() {
+    containsLazyAndIsWrapped_ = false;
+  }
+
+  bool memoDisabled() const {
+    return memoDisabled_;
+  }
+
+  void disableMemo() {
+    memoDisabled_ = true;
   }
 
  protected:
@@ -836,7 +851,7 @@ class BaseVector {
   ByteCount inMemoryBytes_ = 0;
 
  private:
-  static std::shared_ptr<BaseVector> createInternal(
+  static VectorPtr createInternal(
       const TypePtr& type,
       vector_size_t size,
       velox::memory::MemoryPool* pool);
@@ -851,6 +866,12 @@ class BaseVector {
   /// vectors. This would ensure we avoid it being loaded for two separate set
   /// of rows.
   bool containsLazyAndIsWrapped_{false};
+
+  // Whether we should use Expr::evalWithMemo to cache the result of evaluation
+  // on dictionary values (this vector).  Set to false when the dictionary
+  // values are not going to be reused (e.g. result of filtering), so that we
+  // don't need to reallocate the result for every batch.
+  bool memoDisabled_{false};
 };
 
 template <>
@@ -860,8 +881,6 @@ template <>
 inline uint64_t BaseVector::byteSize<UnknownValue>(vector_size_t) {
   return 0;
 }
-
-using VectorPtr = std::shared_ptr<BaseVector>;
 
 // Returns true if vector is a Lazy vector, possibly wrapped, that hasn't
 // been loaded yet.
@@ -932,7 +951,7 @@ struct fmt::formatter<facebook::velox::VectorEncoding::Simple> {
   template <typename FormatContext>
   auto format(
       const facebook::velox::VectorEncoding::Simple& x,
-      FormatContext& ctx) {
+      FormatContext& ctx) const {
     return format_to(
         ctx.out(), "{}", facebook::velox::VectorEncoding::mapSimpleToName(x));
   }

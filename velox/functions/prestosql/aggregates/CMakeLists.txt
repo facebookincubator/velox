@@ -22,33 +22,38 @@ add_library(
   AverageAggregate.cpp
   BitwiseAggregates.cpp
   BoolAggregates.cpp
+  CentralMomentsAggregates.cpp
   CountIfAggregate.cpp
   CovarianceAggregates.cpp
   ChecksumAggregate.cpp
+  EntropyAggregates.cpp
   HistogramAggregate.cpp
   MapAggAggregate.cpp
-  MapAggregateBase.cpp
   MapUnionAggregate.cpp
   MapUnionSumAggregate.cpp
   MinMaxAggregates.cpp
   MinMaxByAggregates.cpp
+  MultiMapAggAggregate.cpp
   CountAggregate.cpp
   PrestoHasher.cpp
+  SetAggregates.cpp
   SumAggregate.cpp
   ValueList.cpp
   VarianceAggregates.cpp
   MaxSizeForStatsAggregate.cpp
+  SumDataSizeForStatsAggregate.cpp
   RegisterAggregateFunctions.cpp)
 
 target_link_libraries(
   velox_aggregates
   velox_common_hyperloglog
   velox_exec
+  velox_expression
   velox_presto_serializer
   velox_functions_aggregates
   velox_functions_lib
   velox_functions_util
-  ${FOLLY_WITH_DEPENDENCIES})
+  Folly::folly)
 
 if(${VELOX_BUILD_TESTING})
   add_subdirectory(tests)

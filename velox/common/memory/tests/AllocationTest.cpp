@@ -22,9 +22,13 @@
 using namespace ::testing;
 using namespace facebook::velox::memory;
 
-namespace facebook::velox::exec::test {
+namespace facebook::velox::memory {
 
 class AllocationTest : public testing::Test {};
+
+TEST_F(AllocationTest, basic) {
+  ASSERT_EQ(AllocationTraits::numPagesInHugePage(), 512);
+}
 
 // This test is to verify that Allocation doesn't merge different append buffers
 // into the same PageRun even if two buffers are contiguous in memory space.
@@ -49,4 +53,4 @@ TEST_F(AllocationTest, append) {
   VELOX_ASSERT_THROW(allocation.append(thirdBufAddr, kNumPages), "");
   allocation.clear();
 }
-} // namespace facebook::velox::exec::test
+} // namespace facebook::velox::memory

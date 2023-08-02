@@ -15,6 +15,9 @@
  */
 #include "velox/connectors/hive/HivePartitionFunction.h"
 #include "gtest/gtest.h"
+#include "velox/common/base/tests/GTestUtils.h"
+#include "velox/connectors/hive/HiveConnector.h"
+#include "velox/vector/fuzzer/VectorFuzzer.h"
 #include "velox/vector/tests/utils/VectorTestBase.h"
 
 using namespace facebook::velox;
@@ -242,17 +245,13 @@ TEST_F(HivePartitionFunctionTest, timestamp) {
   auto values = makeNullableFlatVector<Timestamp>(
       {std::nullopt,
        Timestamp(100'000, 900'000),
-       Timestamp(
-           std::numeric_limits<int64_t>::min(),
-           std::numeric_limits<uint64_t>::min()),
-       Timestamp(
-           std::numeric_limits<int64_t>::max(),
-           std::numeric_limits<uint64_t>::max())});
+       Timestamp(Timestamp::kMinSeconds, std::numeric_limits<uint64_t>::min()),
+       Timestamp(Timestamp::kMaxSeconds, Timestamp::kMaxNanos)});
 
   assertPartitions(values, 1, {0, 0, 0, 0});
   assertPartitions(values, 2, {0, 0, 0, 0});
-  assertPartitions(values, 500, {0, 284, 0, 0});
-  assertPartitions(values, 997, {0, 514, 0, 0});
+  assertPartitions(values, 500, {0, 284, 122, 450});
+  assertPartitions(values, 997, {0, 514, 404, 733});
 
   assertPartitionsWithConstChannel(values, 1);
   assertPartitionsWithConstChannel(values, 2);
@@ -261,11 +260,12 @@ TEST_F(HivePartitionFunctionTest, timestamp) {
 }
 
 TEST_F(HivePartitionFunctionTest, date) {
-  auto values = makeNullableFlatVector<Date>(
+  auto values = makeNullableFlatVector<int32_t>(
       {std::nullopt,
-       Date(2'000'000'000),
-       Date(std::numeric_limits<int32_t>::min()),
-       Date(std::numeric_limits<int32_t>::max())});
+       2'000'000'000,
+       std::numeric_limits<int32_t>::min(),
+       std::numeric_limits<int32_t>::max()},
+      DATE());
 
   assertPartitions(values, 1, {0, 0, 0, 0});
   assertPartitions(values, 2, {0, 0, 0, 1});
@@ -276,4 +276,148 @@ TEST_F(HivePartitionFunctionTest, date) {
   assertPartitionsWithConstChannel(values, 2);
   assertPartitionsWithConstChannel(values, 500);
   assertPartitionsWithConstChannel(values, 997);
+}
+
+TEST_F(HivePartitionFunctionTest, spec) {
+  Type::registerSerDe();
+  core::ITypedExpr::registerSerDe();
+  const int bucketCount = 14;
+  // Build round-robin mapping for testing below.
+  const std::vector<int> bucketToPartition = {
+      0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 0, 1, 2, 3};
+  ASSERT_EQ(bucketToPartition.size(), bucketCount);
+  // std::iota(bucketToPartition.begin(), bucketToPartition.end(), 0);
+
+  // The test case with 1 constValues.
+  {
+    auto hiveSpec =
+        std::make_unique<connector::hive::HivePartitionFunctionSpec>(
+            bucketCount,
+            bucketToPartition,
+            std::vector<column_index_t>{
+                0, 1, kConstantChannel, 3, kConstantChannel},
+            std::vector<VectorPtr>{makeConstant(123, 1), makeConstant(17, 1)});
+    ASSERT_EQ(
+        hiveSpec->toString(), "HIVE((0, 1, \"123\", 3, \"17\") buckets: 14)");
+
+    auto serialized = hiveSpec->serialize();
+    ASSERT_EQ(serialized["constants"].size(), 2);
+
+    auto copy = connector::hive::HivePartitionFunctionSpec::deserialize(
+        serialized, pool());
+    ASSERT_EQ(hiveSpec->toString(), copy->toString());
+  }
+
+  // The test case with 0 constValues.
+  {
+    auto hiveSpec =
+        std::make_unique<connector::hive::HivePartitionFunctionSpec>(
+            bucketCount,
+            bucketToPartition,
+            std::vector<column_index_t>{0, 1, 2, 3, 4},
+            std::vector<VectorPtr>{});
+    ASSERT_EQ(hiveSpec->toString(), "HIVE((0, 1, 2, 3, 4) buckets: 14)");
+
+    auto serialized = hiveSpec->serialize();
+    ASSERT_EQ(serialized["constants"].size(), 0);
+
+    auto copy = connector::hive::HivePartitionFunctionSpec::deserialize(
+        serialized, pool());
+    ASSERT_EQ(hiveSpec->toString(), copy->toString());
+  }
+
+  // The test case without bucket to partition map.
+  {
+    auto hiveSpecWithoutPartitionMap =
+        std::make_unique<connector::hive::HivePartitionFunctionSpec>(
+            bucketCount,
+            std::vector<column_index_t>{0, 1, 2},
+            std::vector<VectorPtr>{});
+    ASSERT_EQ(
+        hiveSpecWithoutPartitionMap->toString(), "HIVE((0, 1, 2) buckets: 14)");
+    {
+      auto serialized = hiveSpecWithoutPartitionMap->serialize();
+
+      auto copy = connector::hive::HivePartitionFunctionSpec::deserialize(
+          serialized, pool());
+      ASSERT_EQ(hiveSpecWithoutPartitionMap->toString(), copy->toString());
+    }
+    auto hiveFunctionWithoutPartitionMap =
+        hiveSpecWithoutPartitionMap->create(10);
+
+    auto hiveSpecWithPartitionMap =
+        std::make_unique<connector::hive::HivePartitionFunctionSpec>(
+            bucketCount,
+            bucketToPartition,
+            std::vector<column_index_t>{0, 1, 2},
+            std::vector<VectorPtr>{});
+    ASSERT_EQ(
+        hiveSpecWithoutPartitionMap->toString(), "HIVE((0, 1, 2) buckets: 14)");
+    {
+      auto serialized = hiveSpecWithoutPartitionMap->serialize();
+
+      auto copy = connector::hive::HivePartitionFunctionSpec::deserialize(
+          serialized, pool());
+      ASSERT_EQ(hiveSpecWithPartitionMap->toString(), copy->toString());
+    }
+    auto hiveFunctionWithPartitionMap = hiveSpecWithPartitionMap->create(10);
+
+    // Test two functions generates the same result.
+    auto rowType =
+        ROW({"c0", "c1", "c2", "c3", "c4"},
+            {INTEGER(), VARCHAR(), BIGINT(), TINYINT(), TIMESTAMP()});
+    const int vectorSize = 1000;
+    VectorFuzzer fuzzer({.vectorSize = 1000}, pool());
+    std::vector<uint32_t> partitionIdsWithMap;
+    partitionIdsWithMap.reserve(vectorSize);
+    std::vector<uint32_t> partitionIdsWithoutMap;
+    partitionIdsWithoutMap.reserve(vectorSize);
+    for (int i = 0; i < 5; ++i) {
+      auto vector = fuzzer.fuzzRow(rowType);
+      hiveFunctionWithPartitionMap->partition(*vector, partitionIdsWithMap);
+      hiveFunctionWithoutPartitionMap->partition(
+          *vector, partitionIdsWithoutMap);
+      for (int j = 0; j < vectorSize; ++j) {
+        ASSERT_EQ(partitionIdsWithMap[j], partitionIdsWithoutMap[j]) << j;
+      }
+    }
+  }
+}
+
+TEST_F(HivePartitionFunctionTest, function) {
+  Type::registerSerDe();
+  core::ITypedExpr::registerSerDe();
+  const int bucketCount = 10;
+  // Build an identical bucket to partition map for testing below.
+  const std::vector<int> bucketToPartition = {0, 1, 2, 3, 4, 5, 6, 7, 8, 9};
+  auto hiveFunctionWithoutPartitionMap =
+      std::make_unique<connector::hive::HivePartitionFunction>(
+          bucketCount,
+          std::vector<column_index_t>{0, 1, 2},
+          std::vector<VectorPtr>{});
+
+  auto hiveFunctionWithPartitionMap =
+      std::make_unique<connector::hive::HivePartitionFunction>(
+          bucketCount,
+          bucketToPartition,
+          std::vector<column_index_t>{0, 1, 2},
+          std::vector<VectorPtr>{});
+  // Test two functions generates the same result.
+  auto rowType =
+      ROW({"c0", "c1", "c2", "c3", "c4"},
+          {INTEGER(), VARCHAR(), BIGINT(), TINYINT(), TIMESTAMP()});
+  const int vectorSize = 1000;
+  VectorFuzzer fuzzer({.vectorSize = 1000}, pool());
+  std::vector<uint32_t> partitionIdsWithMap;
+  partitionIdsWithMap.reserve(vectorSize);
+  std::vector<uint32_t> partitionIdsWithoutMap;
+  partitionIdsWithoutMap.reserve(vectorSize);
+  for (int i = 0; i < 5; ++i) {
+    auto vector = fuzzer.fuzzRow(rowType);
+    hiveFunctionWithPartitionMap->partition(*vector, partitionIdsWithMap);
+    hiveFunctionWithoutPartitionMap->partition(*vector, partitionIdsWithoutMap);
+    for (int j = 0; j < vectorSize; ++j) {
+      ASSERT_EQ(partitionIdsWithMap[j], partitionIdsWithoutMap[j]) << j;
+    }
+  }
 }

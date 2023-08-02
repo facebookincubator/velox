@@ -22,7 +22,6 @@
 #include <locale>
 
 #include "velox/common/base/Exceptions.h"
-#include "velox/type/Date.h"
 #include "velox/type/Timestamp.h"
 #include "velox/vector/FlatVector.h"
 #include "velox/vector/NullsBuilder.h"
@@ -115,15 +114,11 @@ uint64_t rand(FuzzerGenerator& rng) {
 
 template <>
 int128_t rand(FuzzerGenerator& rng) {
-  return buildInt128(rand<int64_t>(rng), rand<uint64_t>(rng));
+  return HugeInt::build(rand<int64_t>(rng), rand<uint64_t>(rng));
 }
 
 Timestamp randTimestamp(FuzzerGenerator& rng, VectorFuzzer::Options opts) {
-  auto precision = opts.useMicrosecondPrecisionTimestamp
-      ? VectorFuzzer::Options::TimestampPrecision::kMicroSeconds
-      : opts.timestampPrecision;
-
-  switch (precision) {
+  switch (opts.timestampPrecision) {
     case VectorFuzzer::Options::TimestampPrecision::kNanoSeconds:
       return Timestamp(rand<int32_t>(rng), (rand<int64_t>(rng) % MAX_NANOS));
     case VectorFuzzer::Options::TimestampPrecision::kMicroSeconds:
@@ -134,10 +129,6 @@ Timestamp randTimestamp(FuzzerGenerator& rng, VectorFuzzer::Options opts) {
       return Timestamp(rand<int32_t>(rng), 0);
   }
   return {}; // no-op.
-}
-
-Date randDate(FuzzerGenerator& rng) {
-  return Date(rand<int32_t>(rng));
 }
 
 size_t getElementsVectorLength(
@@ -153,18 +144,14 @@ size_t getElementsVectorLength(
   return std::min(size * opts.containerLength, opts.complexElementsMaxSize);
 }
 
-UnscaledShortDecimal randShortDecimal(
-    const TypePtr& type,
-    FuzzerGenerator& rng) {
+int64_t randShortDecimal(const TypePtr& type, FuzzerGenerator& rng) {
   auto precision = type->asShortDecimal().precision();
-  auto randVal = rand<int64_t>(rng) % DecimalUtil::kPowersOfTen[precision];
-  return UnscaledShortDecimal(randVal);
+  return rand<int64_t>(rng) % DecimalUtil::kPowersOfTen[precision];
 }
 
-UnscaledLongDecimal randLongDecimal(const TypePtr& type, FuzzerGenerator& rng) {
+int128_t randLongDecimal(const TypePtr& type, FuzzerGenerator& rng) {
   auto precision = type->asLongDecimal().precision();
-  auto randVal = rand<int128_t>(rng) % DecimalUtil::kPowersOfTen[precision];
-  return UnscaledLongDecimal(randVal);
+  return rand<int128_t>(rng) % DecimalUtil::kPowersOfTen[precision];
 }
 
 /// Unicode character ranges. Ensure the vector indexes match the UTF8CharList
@@ -262,14 +249,11 @@ VectorPtr fuzzConstantPrimitiveImpl(
   if constexpr (std::is_same_v<TCpp, Timestamp>) {
     return std::make_shared<ConstantVector<TCpp>>(
         pool, size, false, type, randTimestamp(rng, opts));
-  } else if constexpr (std::is_same_v<TCpp, Date>) {
-    return std::make_shared<ConstantVector<TCpp>>(
-        pool, size, false, type, randDate(rng));
-  } else if constexpr (std::is_same_v<TCpp, UnscaledShortDecimal>) {
-    return std::make_shared<ConstantVector<TCpp>>(
+  } else if (type->isShortDecimal()) {
+    return std::make_shared<ConstantVector<int64_t>>(
         pool, size, false, type, randShortDecimal(type, rng));
-  } else if constexpr (std::is_same_v<TCpp, UnscaledLongDecimal>) {
-    return std::make_shared<ConstantVector<TCpp>>(
+  } else if (type->isLongDecimal()) {
+    return std::make_shared<ConstantVector<int128_t>>(
         pool, size, false, type, randLongDecimal(type, rng));
   } else {
     return std::make_shared<ConstantVector<TCpp>>(
@@ -294,12 +278,18 @@ void fuzzFlatPrimitiveImpl(
       flatVector->set(i, randString(rng, opts, strBuf, converter));
     } else if constexpr (std::is_same_v<TCpp, Timestamp>) {
       flatVector->set(i, randTimestamp(rng, opts));
-    } else if constexpr (std::is_same_v<TCpp, Date>) {
-      flatVector->set(i, randDate(rng));
-    } else if constexpr (std::is_same_v<TCpp, UnscaledShortDecimal>) {
-      flatVector->set(i, randShortDecimal(vector->type(), rng));
-    } else if constexpr (std::is_same_v<TCpp, UnscaledLongDecimal>) {
-      flatVector->set(i, randLongDecimal(vector->type(), rng));
+    } else if constexpr (std::is_same_v<TCpp, int64_t>) {
+      if (vector->type()->isShortDecimal()) {
+        flatVector->set(i, randShortDecimal(vector->type(), rng));
+      } else {
+        flatVector->set(i, rand<TCpp>(rng));
+      }
+    } else if constexpr (std::is_same_v<TCpp, int128_t>) {
+      if (vector->type()->isLongDecimal()) {
+        flatVector->set(i, randLongDecimal(vector->type(), rng));
+      } else {
+        VELOX_NYI();
+      }
     } else {
       flatVector->set(i, rand<TCpp>(rng));
     }
@@ -772,13 +762,10 @@ BufferPtr VectorFuzzer::fuzzIndices(
   return indices;
 }
 
-std::pair<int8_t, int8_t> VectorFuzzer::randPrecisionScale(TypeKind kind) {
-  VELOX_DCHECK(isDecimalKind(kind));
+std::pair<int8_t, int8_t> VectorFuzzer::randPrecisionScale(
+    int8_t maxPrecision) {
   // Generate precision in range [1, Decimal type max precision]
-  auto precision = 1 +
-      rand<int8_t>(rng_) %
-          (kind == TypeKind::SHORT_DECIMAL ? ShortDecimalType::kMaxPrecision
-                                           : LongDecimalType::kMaxPrecision);
+  auto precision = 1 + rand<int8_t>(rng_) % maxPrecision;
   // Generate scale in range [0, precision]
   auto scale = rand<int8_t>(rng_) % (precision + 1);
   return {precision, scale};
@@ -794,7 +781,6 @@ TypePtr VectorFuzzer::randScalarNonFloatingPointType() {
       VARCHAR(),
       VARBINARY(),
       TIMESTAMP(),
-      DATE(),
   };
   static constexpr int kNumTypes =
       sizeof(kNonFloatingPointTypes) / sizeof(kNonFloatingPointTypes[0]);
@@ -815,7 +801,6 @@ TypePtr VectorFuzzer::randType(int maxDepth) {
       VARCHAR(),
       VARBINARY(),
       TIMESTAMP(),
-      DATE(),
   };
   static constexpr int kNumScalarTypes =
       sizeof(kScalarTypes) / sizeof(kScalarTypes[0]);
@@ -882,7 +867,7 @@ RowVectorPtr VectorFuzzer::fuzzRowChildrenToLazy(RowVectorPtr rowVector) {
 
 RowVectorPtr VectorFuzzer::fuzzRowChildrenToLazy(
     RowVectorPtr rowVector,
-    const std::vector<column_index_t>& columnsToWrapInLazy) {
+    const std::vector<int>& columnsToWrapInLazy) {
   if (columnsToWrapInLazy.empty()) {
     return rowVector;
   }
@@ -893,9 +878,13 @@ RowVectorPtr VectorFuzzer::fuzzRowChildrenToLazy(
     VELOX_USER_CHECK_NOT_NULL(child);
     VELOX_USER_CHECK(!child->isLazy());
     if (listIndex < columnsToWrapInLazy.size() &&
-        i == columnsToWrapInLazy[listIndex]) {
-      listIndex++;
+        i == (column_index_t)std::abs(columnsToWrapInLazy[listIndex])) {
       child = VectorFuzzer::wrapInLazyVector(child);
+      if (columnsToWrapInLazy[listIndex] < 0) {
+        // Negative index represents a lazy vector that is loaded.
+        child->loadedVector();
+      }
+      listIndex++;
     }
     children.push_back(child);
   }
