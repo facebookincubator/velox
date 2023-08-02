@@ -19,6 +19,7 @@
 #include "velox/dwio/dwrf/common/Compression.h"
 #include "velox/dwio/dwrf/common/wrap/dwrf-proto-wrapper.h"
 #include "velox/dwio/dwrf/test/OrcTest.h"
+#include "velox/vector/fuzzer/VectorFuzzer.h"
 
 #include <folly/Benchmark.h>
 #include <folly/Random.h>
@@ -30,6 +31,7 @@
 #include <iostream>
 
 using namespace ::testing;
+using namespace facebook::velox;
 using namespace facebook::velox::common;
 using namespace facebook::velox::dwio;
 using namespace facebook::velox::dwio::common;
@@ -62,6 +64,13 @@ class TestBufferPool : public CompressionBufferPool {
 };
 
 void generateRandomData(char* data, size_t size, bool letter) {
+  // facebook::velox::VectorFuzzer::Options options;
+  // options.vectorSize = size;
+  // VectorFuzzer fuzzer(options, NULL, size);
+  // fuzzer.fuzzArray(data, size);
+
+
+
   for (size_t i = 0; i < size; ++i) {
     if (letter) {
       bool capitalized = folly::Random::rand32() % 2 == 0;
@@ -111,6 +120,8 @@ void benchmarkCompress(
 }
 
 BENCHMARK(compressZstd) {
+  folly::BenchmarkSuspender suspender;
+
   auto pool = addDefaultLeafMemoryPool();
   MemorySink memSink(*pool, DEFAULT_MEM_STREAM_SIZE);
   uint64_t block = 1024 * 4;
@@ -118,6 +129,9 @@ BENCHMARK(compressZstd) {
   auto dataSize = 1 * 1024 * 1024;
   char testData[dataSize];
   generateRandomData(testData, dataSize, true);
+
+  suspender.dismiss();
+  
   benchmarkCompress(
       CompressionKind_ZSTD,
       memSink,
