@@ -30,3 +30,6 @@ FetchContent_Declare(
   URL_HASH ${VELOX_QATZSTD_BUILD_SHA256_CHECKSUM})
 
 FetchContent_MakeAvailable(qatzstd)
+
+set(qatzstd_LIBRARIES ${qatzstd_BINARY_DIR}/libqatseqprod.a)
+set(qatzstd_INCLUDE_DIRS ${qatzstd_SOURCE_DIR})

@@ -39,4 +39,5 @@ target_link_libraries(
   velox_dwio_dwrf_proto
   velox_caching
   Snappy::snappy
+  ${qatzstd_LIBRARIES}
   zstd::zstd)
