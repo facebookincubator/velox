@@ -31,9 +31,9 @@
 #include <gflags/gflags.h>
 #include "velox/tpch/gen/TpchGen.h"
 
-DEFINE_string(table_name, "lineitem", "Data format");
-DEFINE_string(compression, "zstd", "Data format");
-const double scale_factor = 100;
+DEFINE_string(table_name, "lineitem", "table name");
+DEFINE_bool(VELOX_ENABLE_QAT_ZSTD_OT, TRUE, "if to use qat for zstd compression");
+const double scale_factor = 10;
 using std::chrono::system_clock;
 
 using namespace ::testing;

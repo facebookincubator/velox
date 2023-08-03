@@ -35,8 +35,9 @@ using namespace facebook::velox::parquet;
 using namespace facebook::velox::test;
 using std::chrono::system_clock;
 
-DEFINE_string(table_name, "part", "Data format");
-DEFINE_string(compression, "zstd", "Data format");
+DEFINE_string(table_name, "lineitem", "table name");
+DEFINE_bool(VELOX_ENABLE_QAT_ZSTD_OT, TRUE, "if to use qat for zstd compression");
+const auto compression = CompressionKind_ZSTD;
 const uint32_t kNumRowsPerBatch = 60000;
 const uint32_t kNumBatches = 50;
 const uint32_t kNumRowsPerRowGroup = 10000;
@@ -54,7 +55,7 @@ class ParquetWriterBenchmark {
 
     facebook::velox::parquet::WriterOptions options;
     options.memoryPool = rootPool_.get();
-    options.compression = CompressionKind_ZSTD;
+    options.compression = compression;
     if (disableDictionary_) {
       // The parquet file is in plain encoding format.
       options.enableDictionary = false;
