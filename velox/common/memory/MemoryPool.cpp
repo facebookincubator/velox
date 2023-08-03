@@ -537,17 +537,17 @@ const std::vector<MachinePageCount>& MemoryPoolImpl::sizeClasses() const {
 }
 
 void MemoryPoolImpl::allocateContiguous(
-    MachinePageCount maxPages,
+    MachinePageCount numPages,
     ContiguousAllocation& out,
-    MachinePageCount numPages) {
+    MachinePageCount maxPages) {
   CHECK_AND_INC_MEM_OP_STATS(Allocs);
   if (!out.empty()) {
     INC_MEM_OP_STATS(Frees);
   }
-  VELOX_CHECK_GT(maxPages, 0);
+  VELOX_CHECK_GT(numPages, 0);
   DEBUG_RECORD_FREE(out);
   if (!allocator_->allocateContiguous(
-          maxPages,
+          numPages,
           nullptr,
           out,
           [this](int64_t allocBytes, bool preAlloc) {
@@ -557,7 +557,7 @@ void MemoryPoolImpl::allocateContiguous(
               release(allocBytes);
             }
           },
-          numPages)) {
+          maxPages)) {
     VELOX_CHECK(out.empty());
     VELOX_MEM_ALLOC_ERROR(fmt::format(
         "{} failed with {} pages from {}", __FUNCTION__, numPages, toString()));
@@ -638,6 +638,13 @@ bool MemoryPoolImpl::maybeReserve(uint64_t increment) {
   try {
     reserve(reservationToAdd, true);
   } catch (const std::exception& e) {
+    if (aborted()) {
+      // NOTE: we shall throw to stop the query execution if the root memory
+      // pool has been aborted. It is also unsafe to proceed as the memory abort
+      // code path might have already freed up the memory resource of this
+      // operator while it is under memory arbitration.
+      std::rethrow_exception(std::current_exception());
+    }
     return false;
   }
   return true;

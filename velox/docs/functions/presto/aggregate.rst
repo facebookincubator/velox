@@ -27,7 +27,7 @@ General Aggregate Functions
 
 .. function:: avg(x) -> double|real
 
-    Returns the average (arithmetic mean) of all input values.
+    Returns the average (arithmetic mean) of all non-null input values.
     When x is of type REAL, the result type is REAL.
     For all other input types, the result type is DOUBLE.
 
@@ -56,6 +56,19 @@ General Aggregate Functions
 
     Returns the number of ``TRUE`` input values.
     This function is equivalent to ``count(CASE WHEN x THEN 1 END)``.
+
+.. function:: entropy(c) -> double
+
+    Returns the log-2 entropy of count input-values.
+
+    .. math::
+
+        \mathrm{entropy}(c) = \sum_i \left[ {c_i \over \sum_j [c_j]} \log_2\left({\sum_j [c_j] \over c_i}\right) \right].
+
+    ``c`` must be a ``integer`` column of non-negative values.
+
+    The function ignores any ``NULL`` count. If the sum of non-``NULL`` counts is 0,
+    it returns 0.
 
 .. function:: every(boolean) -> boolean
 
@@ -87,9 +100,22 @@ General Aggregate Functions
 
     Returns the maximum value of all input values.
 
+.. function:: max(x, n) -> array<[same as x]>
+
+    Returns ``n`` largest values of all input values of ``x``.
+
 .. function:: min(x) -> [same as input]
 
     Returns the minimum value of all input values.
+
+.. function:: min(x, n) -> array<[same as x]>
+
+    Returns ``n`` smallest values of all input values of ``x``.
+
+.. function:: multimap_agg(key, value) -> map(K,array(V))
+
+    Returns a multimap created from the input ``key`` / ``value`` pairs.
+    Each key can be associated with multiple values.
 
 .. function:: set_agg(x) -> array<[same as input]>
 

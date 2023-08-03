@@ -46,7 +46,9 @@ Generic Configuration
      - false
      - If true, timezone-less timestamp conversions (e.g. string to timestamp, when the string does not specify a timezone)
        will be adjusted to the user provided `session_timezone` (if any). For instance: if this option is true and user
-       supplied "America/Los_Angeles", then "1970-01-01" will be converted to -28800 instead of 0.
+       supplied "America/Los_Angeles", then "1970-01-01" will be converted to -28800 instead of 0. Similarly, timestamp
+       to date conversions will adhere to user 'session_timezone', e.g: Timestamp(0) to Date will be -1 (number of days
+       since epoch) for "America/Los_Angeles".
    * - track_operator_cpu_usage
      - bool
      - true
@@ -64,11 +66,21 @@ Generic Configuration
      - integer
      - 32MB
      - Used for backpressure to block local exchange producers when the local exchange buffer reaches or exceeds this size.
+   * - exchange.max_buffer_size
+     - integer
+     - 32MB
+     - Size of buffer in the exchange client that holds data fetched from other nodes before it is processed.
+       A larger buffer can increase network throughput for larger clusters and thus decrease query processing time
+       at the expense of reducing the amount of memory available for other usage.
    * - max_page_partitioning_buffer_size
      - integer
      - 32MB
      - The target size for a Task's buffered output. The producer Drivers are blocked when the buffered size exceeds this.
        The Drivers are resumed when the buffered size goes below PartitionedOutputBufferManager::kContinuePct (90)% of this.
+   * - min_table_rows_for_parallel_join_build
+     - integer
+     - 1000
+     - The minimum number of table rows that can trigger the parallel hash join table build.
 
 Expression Evaluation Configuration
 -----------------------------------
@@ -280,7 +292,7 @@ Hive Connector
      - bool
      - false
      - True if reading the source file column names as lower case, and planner should guarantee
-     - the input column name and filter is also lower case to achive case-insensitive read..    
+       the input column name and filter is also lower case to achive case-insensitive read.
    * - max-coalesced-bytes
      - integer
      - 512KB
@@ -321,7 +333,7 @@ Hive Connector
      - bool
      - false
      - Use path-style access for all requests to the S3-compatible storage. This is for S3-compatible storage that
-       doesn’t support virtual-hosted-style access.
+       doesn't support virtual-hosted-style access.
    * - hive.s3.ssl.enabled
      - bool
      - true
@@ -377,3 +389,16 @@ Spark-specific Configuration
      - bool
      - true
      - If false, ``size`` function returns null for null input.
+   * - spark.bloom_filter.expected_num_items
+     - integer
+     - 1000000
+     - The default number of expected items for the bloom filter in :spark:func:`bloom_filter_agg` function.
+   * - spark.bloom_filter.num_bits
+     - integer
+     - 8388608
+     - The default number of bits to use for the bloom filter in :spark:func:`bloom_filter_agg` function.
+   * - spark.bloom_filter.max_num_bits
+     - integer
+     - 4194304
+     - The maximum number of bits to use for the bloom filter in :spark:func:`bloom_filter_agg` function,
+       the value of this config can not exceed the default value.

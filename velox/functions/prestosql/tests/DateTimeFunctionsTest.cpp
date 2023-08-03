@@ -1821,6 +1821,84 @@ TEST_F(DateTimeFunctionsTest, dateAddTimestamp) {
           Timestamp(1582970400, 500'999'999) /*2020-02-29 10:00:00.500*/));
 }
 
+TEST_F(DateTimeFunctionsTest, dateAddTimestampWithTimeZone) {
+  const auto dateAdd = [&](const std::string& unit,
+                           std::optional<int32_t> value,
+                           std::optional<int64_t> timestamp,
+                           const std::optional<std::string>& timeZoneName) {
+    return evaluateWithTimestampWithTimezone(
+        fmt::format("date_add('{}', {}, c0)", unit, *value),
+        timestamp,
+        timeZoneName);
+  };
+
+  // 1970-01-01 00:00:00.000 UTC-8
+  auto result = dateAdd("day", 5, 0, "-08:00");
+  auto expected = makeTimestampWithTimeZoneVector(432000000, "-08:00");
+  assertEqualVectors(expected, result);
+
+  // 2023-01-08 00:00:00.000 UTC-8
+  result = dateAdd("day", -7, 1673136000, "-08:00");
+  expected = makeTimestampWithTimeZoneVector(1068336000, "-08:00");
+  assertEqualVectors(expected, result);
+
+  // 2023-01-08 00:00:00.000 UTC-8
+  result = dateAdd("millisecond", -7, 1673136000, "-08:00");
+  expected = makeTimestampWithTimeZoneVector(1673135993, "-08:00");
+  assertEqualVectors(expected, result);
+
+  // 2023-01-08 00:00:00.000 UTC-8
+  result = dateAdd("millisecond", +7, 1673136000, "-08:00");
+  expected = makeTimestampWithTimeZoneVector(1673136007, "-08:00");
+  assertEqualVectors(expected, result);
+
+  const auto evaluateDateAddFromStrings = [&](const std::string& unit,
+                                              int32_t value,
+                                              const std::string& inputTimestamp,
+                                              const std::string&
+                                                  expectedTimestamp) {
+    assertEqualVectors(
+        evaluate<RowVector>(
+            "parse_datetime(c0, 'YYYY-MM-dd+HH:mm:ssZZ')",
+            makeRowVector({makeNullableFlatVector<StringView>(
+                {StringView{expectedTimestamp}})})),
+        evaluate<RowVector>(
+            fmt::format(
+                "date_add('{}', {}, parse_datetime(c0, 'YYYY-MM-dd+HH:mm:ssZZ'))",
+                unit,
+                value),
+            makeRowVector({makeNullableFlatVector<StringView>(
+                {StringView{inputTimestamp}})})));
+  };
+
+  evaluateDateAddFromStrings(
+      "second", 3, "1972-05-20+23:01:02+14:00", "1972-05-20+23:01:05+14:00");
+  evaluateDateAddFromStrings(
+      "minute", 5, "1972-05-20+23:01:02+14:00", "1972-05-20+23:06:02+14:00");
+  evaluateDateAddFromStrings(
+      "minute", 10, "1968-02-20+23:01:02+14:00", "1968-02-20+23:11:02+14:00");
+  evaluateDateAddFromStrings(
+      "hour", 5, "1972-05-20+23:01:02+14:00", "1972-05-21+04:01:02+14:00");
+  evaluateDateAddFromStrings(
+      "hour", 50, "1968-02-20+23:01:02+14:00", "1968-02-23+01:01:02+14:00");
+  evaluateDateAddFromStrings(
+      "day", 14, "1972-05-20+23:01:02+14:00", "1972-06-03+23:01:02+14:00");
+  evaluateDateAddFromStrings(
+      "day", 140, "1968-02-20+23:01:02+14:00", "1968-07-09+23:01:02+14:00");
+  evaluateDateAddFromStrings(
+      "month", 14, "1972-05-20+23:01:02+14:00", "1973-07-20+23:01:02+14:00");
+  evaluateDateAddFromStrings(
+      "month", 10, "1968-02-20+23:01:02+14:00", "1968-12-20+23:01:02+14:00");
+  evaluateDateAddFromStrings(
+      "quarter", 3, "1972-05-20+23:01:02+14:00", "1973-02-20+23:01:02+14:00");
+  evaluateDateAddFromStrings(
+      "quarter", 30, "1968-02-20+23:01:02+14:00", "1975-08-20+23:01:02+14:00");
+  evaluateDateAddFromStrings(
+      "year", 3, "1972-05-20+23:01:02+14:00", "1975-05-20+23:01:02+14:00");
+  evaluateDateAddFromStrings(
+      "year", 3, "1968-02-20+23:01:02+14:00", "1971-02-20+23:01:02+14:00");
+}
+
 TEST_F(DateTimeFunctionsTest, dateDiffDate) {
   const auto dateDiff = [&](const std::string& unit,
                             std::optional<int32_t> date1,
@@ -3102,6 +3180,58 @@ TEST_F(DateTimeFunctionsTest, dateFunctionTimestampWithTimezone) {
           (-18297 * kSecondsInDay + 6 * 3'600) * 1'000, "America/Los_Angeles"));
 }
 
+TEST_F(DateTimeFunctionsTest, castDateForDateFunction) {
+  setQueryTimeZone("America/Los_Angeles");
+
+  static const int64_t kSecondsInDay = 86'400;
+  static const uint64_t kNanosInSecond = 1'000'000'000;
+  const auto castDateTest = [&](std::optional<Timestamp> timestamp) {
+    auto r1 = evaluateOnce<int32_t>("cast(c0 as date)", timestamp);
+    auto r2 = evaluateOnce<int32_t>("date(c0)", timestamp);
+    EXPECT_EQ(r1, r2);
+    return r1;
+  };
+
+  // Note adjustments for PST timezone.
+  EXPECT_EQ(-1, castDateTest(Timestamp()));
+  EXPECT_EQ(0, castDateTest(Timestamp(kSecondsInDay, 0)));
+  EXPECT_EQ(-2, castDateTest(Timestamp(-kSecondsInDay, 0)));
+  EXPECT_EQ(18296, castDateTest(Timestamp(18297 * kSecondsInDay, 0)));
+  EXPECT_EQ(18296, castDateTest(Timestamp(18297 * kSecondsInDay, 123)));
+  EXPECT_EQ(-18298, castDateTest(Timestamp(-18297 * kSecondsInDay, 0)));
+  EXPECT_EQ(-18298, castDateTest(Timestamp(-18297 * kSecondsInDay, 123)));
+
+  // Last second of day 0.
+  EXPECT_EQ(0, castDateTest(Timestamp(kSecondsInDay - 1, 0)));
+  // Last nanosecond of day 0.
+  EXPECT_EQ(0, castDateTest(Timestamp(kSecondsInDay - 1, kNanosInSecond - 1)));
+
+  // Last second of day -1.
+  EXPECT_EQ(-1, castDateTest(Timestamp(-1, 0)));
+  // Last nanosecond of day -1.
+  EXPECT_EQ(-1, castDateTest(Timestamp(-1, kNanosInSecond - 1)));
+
+  // Last second of day 18297.
+  EXPECT_EQ(
+      18297,
+      castDateTest(Timestamp(18297 * kSecondsInDay + kSecondsInDay - 1, 0)));
+  // Last nanosecond of day 18297.
+  EXPECT_EQ(
+      18297,
+      castDateTest(Timestamp(
+          18297 * kSecondsInDay + kSecondsInDay - 1, kNanosInSecond - 1)));
+
+  // Last second of day -18297.
+  EXPECT_EQ(
+      -18297,
+      castDateTest(Timestamp(-18297 * kSecondsInDay + kSecondsInDay - 1, 0)));
+  // Last nanosecond of day -18297.
+  EXPECT_EQ(
+      -18297,
+      castDateTest(Timestamp(
+          -18297 * kSecondsInDay + kSecondsInDay - 1, kNanosInSecond - 1)));
+}
+
 TEST_F(DateTimeFunctionsTest, currentDateWithTimezone) {
   // Since the execution of the code is slightly delayed, it is difficult for us
   // to get the correct value of current_date. If you compare directly based on
@@ -3228,4 +3358,69 @@ TEST_F(DateTimeFunctionsTest, timestampWithTimezoneComparisons) {
 
   auto expectedGte = makeNullableFlatVector<bool>({true, false, true});
   runAndCompare("c0 >= c1", inputs, expectedGte);
+}
+
+TEST_F(DateTimeFunctionsTest, castDateToTimestamp) {
+  const int64_t kSecondsInDay = kMillisInDay / 1'000;
+  const auto castDateToTimestamp = [&](const std::optional<int32_t> date) {
+    return evaluateOnce<Timestamp, int32_t>(
+        "cast(c0 AS timestamp)", {date}, {DATE()});
+  };
+
+  EXPECT_EQ(Timestamp(0, 0), castDateToTimestamp(DATE()->toDays("1970-01-01")));
+  EXPECT_EQ(
+      Timestamp(kSecondsInDay, 0),
+      castDateToTimestamp(DATE()->toDays("1970-01-02")));
+  EXPECT_EQ(
+      Timestamp(2 * kSecondsInDay, 0),
+      castDateToTimestamp(DATE()->toDays("1970-01-03")));
+  EXPECT_EQ(
+      Timestamp(18297 * kSecondsInDay, 0),
+      castDateToTimestamp(DATE()->toDays("2020-02-05")));
+  EXPECT_EQ(
+      Timestamp(-1 * kSecondsInDay, 0),
+      castDateToTimestamp(DATE()->toDays("1969-12-31")));
+  EXPECT_EQ(
+      Timestamp(-18297 * kSecondsInDay, 0),
+      castDateToTimestamp(DATE()->toDays("1919-11-28")));
+
+  const auto tz = "America/Los_Angeles";
+  const auto kTimezoneOffset = 8 * kMillisInHour / 1'000;
+  setQueryTimeZone(tz);
+  EXPECT_EQ(
+      Timestamp(kTimezoneOffset, 0),
+      castDateToTimestamp(DATE()->toDays("1970-01-01")));
+  EXPECT_EQ(
+      Timestamp(kSecondsInDay + kTimezoneOffset, 0),
+      castDateToTimestamp(DATE()->toDays("1970-01-02")));
+  EXPECT_EQ(
+      Timestamp(2 * kSecondsInDay + kTimezoneOffset, 0),
+      castDateToTimestamp(DATE()->toDays("1970-01-03")));
+  EXPECT_EQ(
+      Timestamp(18297 * kSecondsInDay + kTimezoneOffset, 0),
+      castDateToTimestamp(DATE()->toDays("2020-02-05")));
+  EXPECT_EQ(
+      Timestamp(-1 * kSecondsInDay + kTimezoneOffset, 0),
+      castDateToTimestamp(DATE()->toDays("1969-12-31")));
+  EXPECT_EQ(
+      Timestamp(-18297 * kSecondsInDay + kTimezoneOffset, 0),
+      castDateToTimestamp(DATE()->toDays("1919-11-28")));
+
+  disableAdjustTimestampToTimezone();
+  EXPECT_EQ(Timestamp(0, 0), castDateToTimestamp(DATE()->toDays("1970-01-01")));
+  EXPECT_EQ(
+      Timestamp(kSecondsInDay, 0),
+      castDateToTimestamp(DATE()->toDays("1970-01-02")));
+  EXPECT_EQ(
+      Timestamp(2 * kSecondsInDay, 0),
+      castDateToTimestamp(DATE()->toDays("1970-01-03")));
+  EXPECT_EQ(
+      Timestamp(18297 * kSecondsInDay, 0),
+      castDateToTimestamp(DATE()->toDays("2020-02-05")));
+  EXPECT_EQ(
+      Timestamp(-1 * kSecondsInDay, 0),
+      castDateToTimestamp(DATE()->toDays("1969-12-31")));
+  EXPECT_EQ(
+      Timestamp(-18297 * kSecondsInDay, 0),
+      castDateToTimestamp(DATE()->toDays("1919-11-28")));
 }

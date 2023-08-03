@@ -15,8 +15,6 @@
  */
 
 #include "velox/exec/tests/utils/PlanBuilder.h"
-#include <velox/core/ITypedExpr.h>
-#include "velox/common/memory/Memory.h"
 #include "velox/connectors/hive/HiveConnector.h"
 #include "velox/connectors/tpch/TpchConnector.h"
 #include "velox/duckdb/conversion/DuckParser.h"
@@ -28,7 +26,15 @@
 #include "velox/expression/ExprToSubfieldFilter.h"
 #include "velox/expression/SignatureBinder.h"
 #include "velox/parse/Expressions.h"
+
+#ifndef VELOX_ENABLE_BACKWARD_COMPATIBILITY
+#include "velox/connectors/hive/TableHandle.h"
+#include "velox/expression/Expr.h"
+#else
+#include <velox/core/ITypedExpr.h>
+#include "velox/common/memory/Memory.h"
 #include "velox/parse/ExpressionsParser.h"
+#endif
 
 using namespace facebook::velox;
 using namespace facebook::velox::connector;
@@ -98,7 +104,7 @@ PlanBuilder& PlanBuilder::tableScan(
   SubfieldFilters filters;
   filters.reserve(subfieldFilters.size());
   core::QueryCtx queryCtx;
-  SimpleExpressionEvaluator evaluator(&queryCtx, pool_);
+  exec::SimpleExpressionEvaluator evaluator(&queryCtx, pool_);
   for (const auto& filter : subfieldFilters) {
     auto filterExpr = parseExpr(filter, outputType, options_, pool_);
     auto [subfield, subfieldFilter] =
@@ -848,9 +854,9 @@ PlanBuilder& PlanBuilder::partitionedOutput(
       : extract(planNode_->outputType(), outputLayout);
   planNode_ = std::make_shared<core::PartitionedOutputNode>(
       nextPlanNodeId(),
+      core::PartitionedOutputNode::Kind::kPartitioned,
       exprs(keys),
       numPartitions,
-      false,
       replicateNullsAndAny,
       std::move(partitionFunctionSpec),
       outputType,
@@ -1424,9 +1430,18 @@ PlanBuilder& PlanBuilder::window(
 
 PlanBuilder& PlanBuilder::rowNumber(
     const std::vector<std::string>& partitionKeys,
-    std::optional<int32_t> limit) {
+    std::optional<int32_t> limit,
+    const bool generateRowNumber) {
+  std::optional<std::string> rowNumberColumnName;
+  if (generateRowNumber) {
+    rowNumberColumnName = "row_number";
+  }
   planNode_ = std::make_shared<core::RowNumberNode>(
-      nextPlanNodeId(), fields(partitionKeys), "row_number", limit, planNode_);
+      nextPlanNodeId(),
+      fields(partitionKeys),
+      rowNumberColumnName,
+      limit,
+      planNode_);
   return *this;
 }
 

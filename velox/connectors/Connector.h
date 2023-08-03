@@ -17,6 +17,7 @@
 
 #include "velox/common/base/AsyncSource.h"
 #include "velox/common/base/RuntimeMetrics.h"
+#include "velox/common/caching/AsyncDataCache.h"
 #include "velox/common/caching/ScanTracker.h"
 #include "velox/common/future/VeloxPromise.h"
 #include "velox/core/ExpressionEvaluator.h"
@@ -136,6 +137,11 @@ class DataSink {
   /// TODO maybe at some point we want to make it async.
   virtual void appendData(RowVectorPtr input) = 0;
 
+  /// Returns the number of bytes written on disk by this data sink so far.
+  virtual int64_t getCompletedBytes() const {
+    return 0;
+  }
+
   /// Called once after all data has been added via possibly multiple calls to
   /// appendData(). Could return data in the string form that would be included
   /// in the output. After calling this function, only close() could be called.
@@ -218,7 +224,7 @@ class ConnectorQueryCtx {
       memory::MemoryPool* connectorPool,
       const Config* connectorConfig,
       std::unique_ptr<core::ExpressionEvaluator> expressionEvaluator,
-      memory::MemoryAllocator* FOLLY_NONNULL allocator,
+      cache::AsyncDataCache* cache,
       const std::string& queryId,
       const std::string& taskId,
       const std::string& planNodeId,
@@ -227,7 +233,7 @@ class ConnectorQueryCtx {
         connectorPool_(connectorPool),
         config_(connectorConfig),
         expressionEvaluator_(std::move(expressionEvaluator)),
-        allocator_(allocator),
+        cache_(cache),
         scanId_(fmt::format("{}.{}", taskId, planNodeId)),
         queryId_(queryId),
         taskId_(taskId),
@@ -255,10 +261,8 @@ class ConnectorQueryCtx {
     return expressionEvaluator_.get();
   }
 
-  // MemoryAllocator for large allocations. Used for caching with
-  // CachedBufferedImput if this implements cache::AsyncDataCache.
-  memory::MemoryAllocator* FOLLY_NONNULL allocator() const {
-    return allocator_;
+  cache::AsyncDataCache* cache() const {
+    return cache_;
   }
 
   // This is a combination of task id and the scan's PlanNodeId. This is an id
@@ -290,7 +294,7 @@ class ConnectorQueryCtx {
   memory::MemoryPool* connectorPool_;
   const Config* FOLLY_NONNULL config_;
   std::unique_ptr<core::ExpressionEvaluator> expressionEvaluator_;
-  memory::MemoryAllocator* FOLLY_NONNULL allocator_;
+  cache::AsyncDataCache* cache_;
   const std::string scanId_;
   const std::string queryId_;
   const std::string taskId_;

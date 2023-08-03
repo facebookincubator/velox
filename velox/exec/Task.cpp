@@ -539,6 +539,9 @@ void Task::start(
     std::shared_ptr<Task> self,
     uint32_t maxDrivers,
     uint32_t concurrentSplitGroups) {
+  facebook::velox::process::ThreadDebugInfo threadDebugInfo{
+      .queryId_ = self->queryCtx()->queryId()};
+  facebook::velox::process::ScopedThreadDebugInfo scopedInfo(threadDebugInfo);
   try {
     VELOX_CHECK_GE(
         maxDrivers,
@@ -629,11 +632,7 @@ void Task::start(
             : factory->numDrivers;
         bufferManager->initializeTask(
             self,
-            // TODO: change PartitionedOutputNode to pass partition output type
-            // which include arbitrary.
-            partitionedOutputNode->isBroadcast()
-                ? PartitionedOutputBuffer::Kind::kBroadcast
-                : PartitionedOutputBuffer::Kind::kPartitioned,
+            partitionedOutputNode->kind(),
             partitionedOutputNode->numPartitions(),
             totalOutputDrivers);
       }
@@ -724,31 +723,64 @@ void Task::start(
 
 // static
 void Task::resume(std::shared_ptr<Task> self) {
-  VELOX_CHECK(!self->exception_, "Cannot resume failed task");
-  std::lock_guard<std::mutex> l(self->mutex_);
-  // Setting pause requested must be atomic with the resuming so that
-  // suspended sections do not go back on thread during resume.
-  self->pauseRequested_ = false;
-  for (auto& driver : self->drivers_) {
-    if (driver) {
-      if (driver->state().isSuspended) {
-        // The Driver will come on thread in its own time as long as
-        // the cancel flag is reset. This check needs to be inside 'mutex_'.
-        continue;
+  std::vector<std::shared_ptr<Driver>> offThreadDrivers;
+  {
+    std::lock_guard<std::mutex> l(self->mutex_);
+    // Setting pause requested must be atomic with the resuming so that
+    // suspended sections do not go back on thread during resume.
+    self->pauseRequested_ = false;
+    if (!self->exception_) {
+      for (auto& driver : self->drivers_) {
+        if (driver) {
+          if (driver->state().isSuspended) {
+            // The Driver will come on thread in its own time as long as
+            // the cancel flag is reset. This check needs to be inside 'mutex_'.
+            continue;
+          }
+          if (driver->state().isEnqueued) {
+            // A Driver can wait for a thread and there can be a
+            // pause/resume during the wait. The Driver should not be
+            // enqueued twice.
+            continue;
+          }
+          VELOX_CHECK(!driver->isOnThread() && !driver->isTerminated());
+          if (!driver->state().hasBlockingFuture) {
+            // Do not continue a Driver that is blocked on external
+            // event. The Driver gets enqueued by the promise realization.
+            Driver::enqueue(driver);
+          }
+        }
       }
-      if (driver->state().isEnqueued) {
-        // A Driver can wait for a thread and there can be a
-        // pause/resume during the wait. The Driver should not be
-        // enqueued twice.
-        continue;
-      }
-      VELOX_CHECK(!driver->isOnThread() && !driver->isTerminated());
-      if (!driver->state().hasBlockingFuture) {
-        // Do not continue a Driver that is blocked on external
-        // event. The Driver gets enqueued by the promise realization.
-        Driver::enqueue(driver);
+    } else {
+      // NOTE: no need to resume task execution if the task has been terminated.
+      // But we need to close the drivers which are off threads as task
+      // terminate code path skips closing the off thread drivers if the task
+      // has been requested pause and leave the task resume path to handle. If
+      // a task has been paused, then there might be concurrent memory
+      // arbitration thread to reclaim the memory resource from the off thread
+      // driver operators.
+      for (auto& driver : self->drivers_) {
+        if (driver == nullptr) {
+          continue;
+        }
+        if (driver->isOnThread()) {
+          VELOX_CHECK(driver->isTerminated());
+          continue;
+        }
+        if (driver->isTerminated()) {
+          continue;
+        }
+        driver->state().isTerminated = true;
+        driver->state().setThread();
+        self->driverClosedLocked();
+        offThreadDrivers.push_back(std::move(driver));
       }
     }
+  }
+
+  // Get the stats and free the resources of Drivers that were not on thread.
+  for (auto& driver : offThreadDrivers) {
+    driver->closeByTask();
   }
 }
 
@@ -1799,6 +1831,10 @@ TaskStats Task::taskStats() const {
     }
   }
 
+  auto bufferManager = bufferManager_.lock();
+  taskStats.outputBufferUtilization = bufferManager->getUtilization(taskId_);
+  taskStats.outputBufferOverutilized = bufferManager->isOverutilized(taskId_);
+
   return taskStats;
 }
 
@@ -2119,6 +2155,11 @@ StopReason Task::enterForTerminateLocked(ThreadState& state) {
     state.isTerminated = true;
     return StopReason::kAlreadyOnThread;
   }
+  if (pauseRequested_) {
+    // NOTE: if the task has been requested to pause, then we let the task
+    // resume code path to close these off thread drivers.
+    return StopReason::kPause;
+  }
   state.isTerminated = true;
   state.setThread();
   return StopReason::kTerminate;
@@ -2302,7 +2343,7 @@ void Task::createExchangeClient(
   exchangeClients_[pipelineId] = std::make_shared<ExchangeClient>(
       destination_,
       addExchangeClientPool(planNodeId, pipelineId),
-      queryCtx()->queryConfig().maxPartitionedOutputBufferSize() / 2);
+      queryCtx()->queryConfig().maxExchangeBufferSize());
   exchangeClientByPlanNode_.emplace(planNodeId, exchangeClients_[pipelineId]);
 }
 

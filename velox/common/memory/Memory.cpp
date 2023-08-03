@@ -25,18 +25,18 @@ constexpr folly::StringPiece kDefaultRootName{"__default_root__"};
 constexpr folly::StringPiece kDefaultLeafName("__default_leaf__");
 } // namespace
 
-MemoryManager::MemoryManager(const Options& options)
+MemoryManager::MemoryManager(const MemoryManagerOptions& options)
     : capacity_{options.capacity},
       allocator_{options.allocator->shared_from_this()},
+      // TODO: consider to reserve a small amount of memory to compensate for
+      //  the unreclaimable cache memory which are pinned by query accesses if
+      //  enabled.
       arbitrator_(MemoryArbitrator::create(MemoryArbitrator::Config{
-          .kind = options.arbitratorConfig.kind,
+          .kind = options.arbitratorKind,
           .capacity = capacity_,
-          .initMemoryPoolCapacity =
-              options.arbitratorConfig.initMemoryPoolCapacity,
-          .minMemoryPoolCapacityTransferSize =
-              options.arbitratorConfig.minMemoryPoolCapacityTransferSize,
-          .retryArbitrationFailure =
-              options.arbitratorConfig.retryArbitrationFailure})),
+          .memoryPoolInitCapacity = options.memoryPoolInitCapacity,
+          .memoryPoolTransferCapacity = options.memoryPoolTransferCapacity,
+          .retryArbitrationFailure = options.retryArbitrationFailure})),
       alignment_(std::max(MemoryAllocator::kMinAlignment, options.alignment)),
       checkUsageLeak_(options.checkUsageLeak),
       debugEnabled_(options.debugEnabled),
@@ -86,6 +86,21 @@ MemoryManager::~MemoryManager() {
         "Leaked total memory of {}",
         succinctBytes(currentBytes));
   }
+}
+
+// static
+MemoryManager& MemoryManager::getInstance(
+    const MemoryManagerOptions& options,
+    bool ensureCapacity) {
+  static MemoryManager manager{options};
+  auto actualCapacity = manager.capacity();
+  VELOX_USER_CHECK(
+      !ensureCapacity || actualCapacity == options.capacity,
+      "Process level manager manager created with input capacity: {}, actual capacity: {}",
+      options.capacity,
+      actualCapacity);
+
+  return manager;
 }
 
 int64_t MemoryManager::capacity() const {
@@ -245,7 +260,7 @@ std::vector<std::shared_ptr<MemoryPool>> MemoryManager::getAlivePools() const {
   return pools;
 }
 
-IMemoryManager& defaultMemoryManager() {
+MemoryManager& defaultMemoryManager() {
   return MemoryManager::getInstance();
 }
 

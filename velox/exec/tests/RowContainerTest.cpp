@@ -13,17 +13,10 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-#include "velox/exec/RowContainer.h"
-#include <gtest/gtest.h>
-#include <algorithm>
-#include <random>
-#include "velox/common/file/FileSystems.h"
-#include "velox/dwio/common/tests/utils/BatchMaker.h"
+#include "velox/common/base/tests/GTestUtils.h"
 #include "velox/exec/Aggregate.h"
-#include "velox/exec/ContainerRowSerde.h"
 #include "velox/exec/VectorHasher.h"
 #include "velox/exec/tests/utils/RowContainerTestBase.h"
-#include "velox/serializers/PrestoSerializer.h"
 
 using namespace facebook::velox;
 using namespace facebook::velox::exec;
@@ -923,8 +916,7 @@ TEST_F(RowContainerTest, alignment) {
       false,
       true,
       true,
-      pool_.get(),
-      ContainerRowSerde::instance());
+      pool_.get());
   constexpr int kNumRows = 100;
   char* rows[kNumRows];
   for (int i = 0; i < kNumRows; ++i) {
@@ -966,8 +958,8 @@ TEST_F(RowContainerTest, compareDouble) {
 }
 
 TEST_F(RowContainerTest, partition) {
-  // We assign an arbitrary partition number to each row and iterate
-  // over the rows a partition at a time.
+  // We assign an arbitrary partition number to each row and iterate over the
+  // rows a partition at a time.
   constexpr int32_t kNumRows = 100019;
   constexpr uint8_t kNumPartitions = 16;
   auto batch = makeDataset(
@@ -995,7 +987,32 @@ TEST_F(RowContainerTest, partition) {
     }
   }
 
-  auto& partitions = data->partitions();
+  // Expect throws before we get row partitions from this row container.
+  for (auto partition = 0; partition < kNumPartitions; ++partition) {
+    char* dummyBuffer;
+    RowPartitions dummyRowPartitions(data->numRows(), *pool_);
+    VELOX_ASSERT_THROW(
+        data->listPartitionRows(
+            iter,
+            partition,
+            1'000, /* maxRows */
+            dummyRowPartitions,
+            &dummyBuffer),
+        "Can't list partition rows from a mutable row container");
+  }
+
+  auto partitions = data->createRowPartitions(*pool_);
+  ASSERT_FALSE(data->testingMutable());
+  // Verify we can only get row partitions once from a row container.
+  VELOX_ASSERT_THROW(
+      data->createRowPartitions(*pool_),
+      "Can only create RowPartitions once from a row container");
+  // Verify we can't insert new row into a immutable row container.
+#ifndef NDEBUG
+  VELOX_ASSERT_THROW(
+      data->newRow(), "Can't add row into an immutable row container")
+#endif
+
   std::vector<uint8_t> rowPartitions(kNumRows);
   // Assign a partition to each row based on  modulo of first column.
   std::vector<std::vector<char*>> partitionRows(kNumPartitions);
@@ -1006,7 +1023,7 @@ TEST_F(RowContainerTest, partition) {
     rowPartitions[i] = partition;
     partitionRows[partition].push_back(rows[i]);
   }
-  partitions.appendPartitions(
+  partitions->appendPartitions(
       folly::Range<const uint8_t*>(rowPartitions.data(), kNumRows));
   for (auto partition = 0; partition < kNumPartitions; ++partition) {
     std::vector<char*> result(partitionRows[partition].size() + 10);
@@ -1015,7 +1032,11 @@ TEST_F(RowContainerTest, partition) {
     int32_t resultBatch = 1;
     // Read the rows in multiple batches.
     while (auto numResults = data->listPartitionRows(
-               iter, partition, resultBatch, result.data() + numFound)) {
+               iter,
+               partition,
+               resultBatch,
+               *partitions,
+               result.data() + numFound)) {
       numFound += numResults;
       resultBatch += 13;
     }
@@ -1023,6 +1044,17 @@ TEST_F(RowContainerTest, partition) {
     result.resize(numFound);
     EXPECT_EQ(partitionRows[partition], result);
   }
+}
+
+TEST_F(RowContainerTest, partitionWithEmptyRowContainer) {
+  auto rowType = ROW(
+      {{"int_val", INTEGER()},
+       {"long_val", BIGINT()},
+       {"string_val", VARCHAR()}});
+  auto rowContainer =
+      std::make_unique<RowContainer>(rowType->children(), pool_.get());
+  auto partitions = rowContainer->createRowPartitions(*pool_);
+  ASSERT_EQ(partitions->size(), 0);
 }
 
 TEST_F(RowContainerTest, probedFlag) {
@@ -1035,8 +1067,7 @@ TEST_F(RowContainerTest, probedFlag) {
       true, // isJoinBuild
       true, // hasProbedFlag
       false, // hasNormalizedKey
-      pool_.get(),
-      ContainerRowSerde::instance());
+      pool_.get());
 
   auto input = makeRowVector({
       makeNullableFlatVector<int64_t>({1, 2, 3, 4, std::nullopt, 5}),
@@ -1137,4 +1168,62 @@ TEST_F(RowContainerTest, probedFlag) {
       makeNullableFlatVector<bool>(
           {true, true, true, true, std::nullopt, true}),
       result);
+}
+
+TEST_F(RowContainerTest, mixedFree) {
+  constexpr int32_t kNumRows = 100'000;
+  constexpr int32_t kNumBad = 100;
+  std::vector<TypePtr> dependent = {
+      TIMESTAMP(),
+      TIMESTAMP(),
+      TIMESTAMP(),
+      TIMESTAMP(),
+      TIMESTAMP(),
+      TIMESTAMP(),
+      TIMESTAMP(),
+      TIMESTAMP(),
+      TIMESTAMP(),
+      TIMESTAMP(),
+      TIMESTAMP()};
+  auto data1 = makeRowContainer({SMALLINT()}, dependent);
+  auto data2 = makeRowContainer({SMALLINT()}, dependent);
+  std::vector<char*> rows;
+
+  // We put every second row in one container and every second in the other.
+  for (auto i = 0; i < 100'000; ++i) {
+    rows.push_back(data1->newRow());
+    rows.push_back(data2->newRow());
+  }
+
+  // We add some bad rows that are in neither container.
+  for (auto i = 0; i < kNumBad; ++i) {
+    rows.push_back(reinterpret_cast<char*>(i));
+    rows.push_back(reinterpret_cast<char*>((1UL << 48) + i));
+  }
+
+  // We check that the containers correctly identify their own rows.
+  std::vector<char*> result1(rows.size());
+  std::vector<char*> result2(rows.size());
+  ASSERT_EQ(
+      kNumRows,
+      data1->findRows(
+          folly::Range<char**>(rows.data(), rows.size()), result1.data()));
+  for (auto i = 0; i < kNumRows * 2; i += 2) {
+    ASSERT_EQ(rows[i], result1[i / 2]);
+  }
+  ASSERT_EQ(
+      kNumRows,
+      data2->findRows(
+          folly::Range<char**>(rows.data(), rows.size()), result2.data()));
+  for (auto i = 1; i < kNumRows * 2; i += 2) {
+    ASSERT_EQ(rows[i], result2[i / 2]);
+  }
+
+  // We erase all rows from both containers and check there are no corruptions.
+  data1->eraseRows(folly::Range<char**>(result1.data(), kNumRows));
+  data2->eraseRows(folly::Range<char**>(result2.data(), kNumRows));
+  EXPECT_EQ(0, data1->numRows());
+  EXPECT_EQ(0, data2->numRows());
+  data1->checkConsistency();
+  data2->checkConsistency();
 }

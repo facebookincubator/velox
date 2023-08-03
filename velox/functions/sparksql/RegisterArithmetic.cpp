@@ -38,6 +38,8 @@ void registerArithmeticFunctions(const std::string& prefix) {
   registerFunction<SecFunction, double, double>({prefix + "sec"});
   registerFunction<CscFunction, double, double>({prefix + "csc"});
   registerFunction<SinhFunction, double, double>({prefix + "sinh"});
+  registerFunction<CoshFunction, double, double>({prefix + "cosh"});
+  registerFunction<CotFunction, double, double>({prefix + "cot"});
   registerFunction<Log1pFunction, double, double>({prefix + "log1p"});
   registerFunction<ToBinaryStringFunction, Varchar, int64_t>({prefix + "bin"});
   registerFunction<ExpFunction, double, double>({prefix + "exp"});
@@ -61,6 +63,8 @@ void registerArithmeticFunctions(const std::string& prefix) {
   registerFunction<sparksql::FloorFunction, int64_t, double>(
       {prefix + "floor"});
   registerFunction<HypotFunction, double, double, double>({prefix + "hypot"});
+  registerFunction<sparksql::Log2Function, double, double>({prefix + "log2"});
+  registerFunction<sparksql::Log10Function, double, double>({prefix + "log10"});
 }
 
 } // namespace facebook::velox::functions::sparksql

@@ -72,7 +72,7 @@ class ExpressionBenchmarkSet {
       : inputType_(inputType), builder_(builder) {}
 
   // All the expressions that belongs to this set.
-  std::map<std::string, exec::ExprSet> expressions_;
+  std::vector<std::pair<std::string, exec::ExprSet>> expressions_;
 
   // The input that will be used for for benchmarking expressions. If not set,
   // a flat input vector is fuzzed using fuzzerOptions_.
@@ -110,6 +110,10 @@ class ExpressionBenchmarkBuilder
   // All benchmarks within one group set are expected to have the same results.
   // If disbleTesting=true for a group set, testing is skipped.
   void testBenchmarks();
+
+  test::VectorMaker& vectorMaker() {
+    return vectorMaker_;
+  }
 
   ExpressionBenchmarkSet& addBenchmarkSet(
       const std::string& name,

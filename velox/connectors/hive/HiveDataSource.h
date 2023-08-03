@@ -37,9 +37,8 @@ class HiveDataSource : public DataSource {
           std::shared_ptr<connector::ColumnHandle>>& columnHandles,
       FileHandleFactory* fileHandleFactory,
       core::ExpressionEvaluator* expressionEvaluator,
-      memory::MemoryAllocator* allocator,
+      cache::AsyncDataCache* cache,
       const std::string& scanId,
-      bool fileColumnNamesReadAsLowerCase,
       folly::Executor* executor,
       const dwio::common::ReaderOptions& options);
 
@@ -134,7 +133,9 @@ class HiveDataSource : public DataSource {
   // hold adaptation.
   void resetSplit();
 
-  void configureRowReaderOptions(dwio::common::RowReaderOptions&) const;
+  void configureRowReaderOptions(
+      dwio::common::RowReaderOptions&,
+      const RowTypePtr& rowType) const;
 
   const RowTypePtr outputType_;
   // Column handles for the partition key columns keyed on partition key column
@@ -160,7 +161,7 @@ class HiveDataSource : public DataSource {
   SelectivityVector filterRows_;
   exec::FilterEvalCtx filterEvalCtx_;
 
-  memory::MemoryAllocator* const allocator_;
+  cache::AsyncDataCache* const cache_{nullptr};
   const std::string& scanId_;
   folly::Executor* executor_;
 };

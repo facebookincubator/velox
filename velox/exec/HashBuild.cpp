@@ -138,6 +138,9 @@ void HashBuild::setupTable() {
         dependentTypes,
         true, // allowDuplicates
         true, // hasProbedFlag
+        operatorCtx_->driverCtx()
+            ->queryConfig()
+            .minTableRowsForParallelJoinBuild(),
         pool());
   } else {
     // (Left) semi and anti join with no extra filter only needs to know whether
@@ -155,6 +158,9 @@ void HashBuild::setupTable() {
           dependentTypes,
           !dropDuplicates, // allowDuplicates
           needProbedFlag, // hasProbedFlag
+          operatorCtx_->driverCtx()
+              ->queryConfig()
+              .minTableRowsForParallelJoinBuild(),
           pool());
     } else {
       // Ignore null keys
@@ -163,6 +169,9 @@ void HashBuild::setupTable() {
           dependentTypes,
           !dropDuplicates, // allowDuplicates
           needProbedFlag, // hasProbedFlag
+          operatorCtx_->driverCtx()
+              ->queryConfig()
+              .minTableRowsForParallelJoinBuild(),
           pool());
     }
   }
@@ -177,8 +186,9 @@ void HashBuild::setupSpiller(SpillPartition* spillPartition) {
     return;
   }
   const auto& spillConfig = spillConfig_.value();
-  HashBitRange hashBits = spillConfig.hashBitRange;
-
+  HashBitRange hashBits(
+      spillConfig.startPartitionBit,
+      spillConfig.startPartitionBit + spillConfig.joinPartitionBits);
   if (spillPartition == nullptr) {
     spillGroup_->addOperator(
         *this,
@@ -187,14 +197,13 @@ void HashBuild::setupSpiller(SpillPartition* spillPartition) {
     spillInputReader_ = spillPartition->createReader();
 
     const auto startBit = spillPartition->id().partitionBitOffset() +
-        spillConfig.hashBitRange.numBits();
+        spillConfig.joinPartitionBits;
     // Disable spilling if exceeding the max spill level and the query might run
     // out of memory if the restored partition still can't fit in memory.
-    if (spillConfig.exceedSpillLevelLimit(startBit)) {
+    if (spillConfig.exceedJoinSpillLevelLimit(startBit)) {
       return;
     }
-    hashBits =
-        HashBitRange(startBit, startBit + spillConfig.hashBitRange.numBits());
+    hashBits = HashBitRange(startBit, startBit + spillConfig.joinPartitionBits);
   }
 
   spiller_ = std::make_unique<Spiller>(
@@ -766,13 +775,12 @@ bool HashBuild::finishHashBuild() {
 
       // TODO: re-enable parallel join build with spilling triggered after
       // https://github.com/facebookincubator/velox/issues/3567 is fixed.
-      const bool allowPrallelJoinBuild =
+      const bool allowParallelJoinBuild =
           !otherTables.empty() && spillPartitions.empty();
       table_->prepareJoinTable(
           std::move(otherTables),
-          allowPrallelJoinBuild ? operatorCtx_->task()->queryCtx()->executor()
-                                : nullptr);
-
+          allowParallelJoinBuild ? operatorCtx_->task()->queryCtx()->executor()
+                                 : nullptr);
       addRuntimeStats();
       if (joinBridge_->setHashTable(
               std::move(table_),
@@ -882,7 +890,7 @@ void HashBuild::addRuntimeStats() {
     lockedStats->addRuntimeStat(
         "maxSpillLevel",
         RuntimeCounter(
-            spillConfig()->spillLevel(spiller_->hashBits().begin())));
+            spillConfig()->joinSpillLevel(spiller_->hashBits().begin())));
   }
 }
 

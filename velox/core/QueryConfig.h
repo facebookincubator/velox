@@ -85,6 +85,11 @@ class QueryConfig {
   static constexpr const char* kMaxLocalExchangeBufferSize =
       "max_local_exchange_buffer_size";
 
+  /// Maximum size in bytes to accumulate in ExchangeQueue. Enforced
+  /// approximately, not strictly.
+  static constexpr const char* kMaxExchangeBufferSize =
+      "exchange.max_buffer_size";
+
   static constexpr const char* kMaxPartialAggregationMemory =
       "max_partial_aggregation_memory";
 
@@ -183,7 +188,15 @@ class QueryConfig {
   static constexpr const char* kSpillStartPartitionBit =
       "spiller_start_partition_bit";
 
+#ifdef VELOX_ENABLE_BACKWARD_COMPATIBILITY
   static constexpr const char* kSpillPartitionBits = "spiller_partition_bits";
+#endif
+
+  static constexpr const char* kJoinSpillPartitionBits =
+      "join_spiller_partition_bits";
+
+  static constexpr const char* kAggregationSpillPartitionBits =
+      "aggregation_spiller_partition_bits";
 
   static constexpr const char* kSpillableReservationGrowthPct =
       "spillable_reservation_growth_pct";
@@ -191,6 +204,18 @@ class QueryConfig {
   /// If false, size function returns null for null input.
   static constexpr const char* kSparkLegacySizeOfNull =
       "spark.legacy_size_of_null";
+
+  // The default number of expected items for the bloomfilter.
+  static constexpr const char* kSparkBloomFilterExpectedNumItems =
+      "spark.bloom_filter.expected_num_items";
+
+  // The default number of bits to use for the bloom filter.
+  static constexpr const char* kSparkBloomFilterNumBits =
+      "spark.bloom_filter.num_bits";
+
+  // The max number of bits to use for the bloom filter.
+  static constexpr const char* kSparkBloomFilterMaxNumBits =
+      "spark.bloom_filter.max_num_bits";
 
   /// The number of local parallel table writer operators per task.
   static constexpr const char* kTaskWriterCount = "task_writer_count";
@@ -204,6 +229,11 @@ class QueryConfig {
   /// of hash joins.
   static constexpr const char* kHashProbeFinishEarlyOnEmptyBuild =
       "hash_probe_finish_early_on_empty_build";
+
+  /// The minimum number of table rows that can trigger the parallel hash join
+  /// table build.
+  static constexpr const char* kMinTableRowsForParallelJoinBuild =
+      "min_table_rows_for_parallel_join_build";
 
   uint64_t maxPartialAggregationMemoryUsage() const {
     static constexpr uint64_t kDefault = 1L << 24;
@@ -250,6 +280,11 @@ class QueryConfig {
   uint64_t maxLocalExchangeBufferSize() const {
     static constexpr uint64_t kDefault = 32UL << 20;
     return get<uint64_t>(kMaxLocalExchangeBufferSize, kDefault);
+  }
+
+  uint64_t maxExchangeBufferSize() const {
+    static constexpr uint64_t kDefault = 32UL << 20;
+    return get<uint64_t>(kMaxExchangeBufferSize, kDefault);
   }
 
   uint64_t preferredOutputBatchBytes() const {
@@ -321,7 +356,7 @@ class QueryConfig {
   }
 
   /// Returns 'is aggregation spilling enabled' flag. Must also check the
-  /// spillEnabled()!
+  /// spillEnabled()!g
   bool aggregationSpillEnabled() const {
     return get<bool>(kAggregationSpillEnabled, true);
   }
@@ -348,21 +383,45 @@ class QueryConfig {
     return get<int32_t>(kMaxSpillLevel, 4);
   }
 
-  /// Returns the start partition bit which is used with 'kSpillPartitionBits'
-  /// together to calculate the spilling partition number.
+#ifdef VELOX_ENABLE_BACKWARD_COMPATIBILITY
+  int32_t spillPartitionBits() const {
+    constexpr int32_t kDefaultBits = 2;
+    constexpr int32_t kMaxBits = 3;
+    return std::min(kMaxBits, get<int32_t>(kSpillPartitionBits, kDefaultBits));
+  }
+#endif
+
+  /// Returns the start partition bit which is used with
+  /// 'kJoinSpillPartitionBits' or 'kAggregationSpillPartitionBits' together to
+  /// calculate the spilling partition number for join spill or aggregation
+  /// spill.
   uint8_t spillStartPartitionBit() const {
     constexpr uint8_t kDefaultStartBit = 29;
     return get<uint8_t>(kSpillStartPartitionBit, kDefaultStartBit);
   }
 
   /// Returns the number of bits used to calculate the spilling partition
-  /// number. The number of spilling partitions will be power of two.
+  /// number for hash join. The number of spilling partitions will be power of
+  /// two.
   ///
   /// NOTE: as for now, we only support up to 8-way spill partitioning.
-  int32_t spillPartitionBits() const {
-    constexpr int32_t kDefaultBits = 2;
-    constexpr int32_t kMaxBits = 3;
-    return std::min(kMaxBits, get<int32_t>(kSpillPartitionBits, kDefaultBits));
+  uint8_t joinSpillPartitionBits() const {
+    constexpr uint8_t kDefaultBits = 2;
+    constexpr uint8_t kMaxBits = 3;
+    return std::min(
+        kMaxBits, get<uint8_t>(kJoinSpillPartitionBits, kDefaultBits));
+  }
+
+  /// Returns the number of bits used to calculate the spilling partition
+  /// number for hash join. The number of spilling partitions will be power of
+  /// two.
+  ///
+  /// NOTE: as for now, we only support up to 8-way spill partitioning.
+  uint8_t aggregationSpillPartitionBits() const {
+    constexpr uint8_t kDefaultBits = 0;
+    constexpr uint8_t kMaxBits = 3;
+    return std::min(
+        kMaxBits, get<uint8_t>(kAggregationSpillPartitionBits, kDefaultBits));
   }
 
   uint64_t maxSpillFileSize() const {
@@ -389,6 +448,29 @@ class QueryConfig {
     return get<bool>(kSparkLegacySizeOfNull, kDefault);
   }
 
+  int64_t sparkBloomFilterExpectedNumItems() const {
+    constexpr int64_t kDefault = 1'000'000L;
+    return get<int64_t>(kSparkBloomFilterExpectedNumItems, kDefault);
+  }
+
+  int64_t sparkBloomFilterNumBits() const {
+    constexpr int64_t kDefault = 8'388'608L;
+    return get<int64_t>(kSparkBloomFilterNumBits, kDefault);
+  }
+
+  // Spark kMaxNumBits is 67'108'864, but velox has memory limit sizeClassSizes
+  // 256, so decrease it to not over memory limit.
+  int64_t sparkBloomFilterMaxNumBits() const {
+    constexpr int64_t kDefault = 4'096 * 1024;
+    auto value = get<int64_t>(kSparkBloomFilterMaxNumBits, kDefault);
+    VELOX_USER_CHECK_LE(
+        value,
+        kDefault,
+        "{} cannot exceed the default value",
+        kSparkBloomFilterMaxNumBits);
+    return value;
+  }
+
   bool exprTrackCpuUsage() const {
     return get<bool>(kExprTrackCpuUsage, false);
   }
@@ -398,7 +480,7 @@ class QueryConfig {
   }
 
   uint32_t taskWriterCount() const {
-    return get<uint32_t>(kTaskWriterCount, 1);
+    return get<uint32_t>(kTaskWriterCount, 4);
   }
 
   uint32_t taskPartitionedWriterCount() const {
@@ -408,6 +490,10 @@ class QueryConfig {
 
   bool hashProbeFinishEarlyOnEmptyBuild() const {
     return get<bool>(kHashProbeFinishEarlyOnEmptyBuild, true);
+  }
+
+  uint32_t minTableRowsForParallelJoinBuild() const {
+    return get<uint32_t>(kMinTableRowsForParallelJoinBuild, 1'000);
   }
 
   template <typename T>

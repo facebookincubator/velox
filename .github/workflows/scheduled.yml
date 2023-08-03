@@ -14,7 +14,9 @@
 
 name: "Scheduled Fuzzer Jobs"
 
-on: [pull_request]
+on:
+  schdule:
+    - cron: '0 3 * * *'
 
 defaults:
   run:

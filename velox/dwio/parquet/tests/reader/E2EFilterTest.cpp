@@ -55,18 +55,26 @@ class E2EFilterTest : public E2EFilterTestBase {
   void writeToMemory(
       const TypePtr&,
       const std::vector<RowVectorPtr>& batches,
-      bool /*forRowGroupSkip*/) override {
+      bool forRowGroupSkip = false) override {
     auto sink = std::make_unique<MemorySink>(*leafPool_, 200 * 1024 * 1024);
     sinkPtr_ = sink.get();
     options_.memoryPool = rootPool_.get();
+    int32_t flushCounter = 0;
+    options_.flushPolicyFactory = [&]() {
+      return std::make_unique<LambdaFlushPolicy>(
+          rowsInRowGroup_, bytesInRowGroup_, [&]() {
+            return forRowGroupSkip
+                ? false
+                : (++flushCounter % flushEveryNBatches_ == 0);
+          });
+    };
 
-    options_.bufferGrowRatio = 2;
     writer_ = std::make_unique<facebook::velox::parquet::Writer>(
         std::move(sink), options_);
     for (auto& batch : batches) {
       writer_->write(batch);
-      writer_->flush();
     }
+    writer_->flush();
     writer_->close();
   }
 
@@ -78,6 +86,8 @@ class E2EFilterTest : public E2EFilterTestBase {
 
   std::unique_ptr<facebook::velox::parquet::Writer> writer_;
   facebook::velox::parquet::WriterOptions options_;
+  uint64_t rowsInRowGroup_ = 10'000;
+  int64_t bytesInRowGroup_ = 128 * 1'024 * 1'024;
 };
 
 TEST_F(E2EFilterTest, writerMagic) {
@@ -118,10 +128,11 @@ TEST_F(E2EFilterTest, integerDirect) {
 }
 TEST_F(E2EFilterTest, compression) {
   for (const auto compression :
-       {dwio::common::CompressionKind_SNAPPY,
-        dwio::common::CompressionKind_ZSTD,
-        dwio::common::CompressionKind_GZIP,
-        dwio::common::CompressionKind_NONE}) {
+       {common::CompressionKind_SNAPPY,
+        common::CompressionKind_ZSTD,
+        common::CompressionKind_GZIP,
+        common::CompressionKind_NONE,
+        common::CompressionKind_LZ4}) {
     if (!facebook::velox::parquet::Writer::isCodecAvailable(compression)) {
       continue;
     }
@@ -130,6 +141,7 @@ TEST_F(E2EFilterTest, compression) {
     options_.compression = compression;
 
     testWithTypes(
+        "tinyint_val:tinyint,"
         "short_val:smallint,"
         "int_val:int,"
         "long_val:bigint",
@@ -163,9 +175,19 @@ TEST_F(E2EFilterTest, compression) {
               -999, // rareMin
               30000, // rareMax
               true); // keepNulls
+
+          makeIntDistribution<int8_t>(
+              "tinyint_val",
+              10, // min
+              100, // max
+              22, // repeats
+              19, // rareFrequency
+              -99, // rareMin
+              3000, // rareMax
+              true); // keepNulls
         },
         true,
-        {"short_val", "int_val", "long_val"},
+        {"tinyint_val", "short_val", "int_val", "long_val"},
         3);
   }
 }
@@ -422,7 +444,7 @@ TEST_F(E2EFilterTest, stringDictionary) {
 }
 
 TEST_F(E2EFilterTest, dedictionarize) {
-  options_.maxRowGroupLength = 10'000'000;
+  rowsInRowGroup_ = 10'000;
   options_.dictionaryPageSizeLimit = 20'000;
 
   testWithTypes(
@@ -472,6 +494,9 @@ TEST_F(E2EFilterTest, list) {
 }
 
 TEST_F(E2EFilterTest, metadataFilter) {
+  // Follow the batch size in `E2EFiltersTestBase`,
+  // so that each batch can produce a row group.
+  rowsInRowGroup_ = 10;
   testMetadataFilter();
 }
 
@@ -532,7 +557,7 @@ TEST_F(E2EFilterTest, varbinaryDictionary) {
 }
 
 TEST_F(E2EFilterTest, largeMetadata) {
-  options_.maxRowGroupLength = 1;
+  rowsInRowGroup_ = 1;
 
   rowType_ = ROW({INTEGER()});
   std::vector<RowVectorPtr> batches;
@@ -567,6 +592,25 @@ TEST_F(E2EFilterTest, date) {
       false,
       {"date_val"},
       20);
+}
+
+TEST_F(E2EFilterTest, combineRowGroup) {
+  rowsInRowGroup_ = 5;
+  rowType_ = ROW({INTEGER()});
+  std::vector<RowVectorPtr> batches;
+  for (int i = 0; i < 5; i++) {
+    batches.push_back(std::static_pointer_cast<RowVector>(
+        test::BatchMaker::createBatch(rowType_, 1, *leafPool_, nullptr, 0)));
+  }
+  writeToMemory(rowType_, batches, false);
+  std::string_view data(sinkPtr_->getData(), sinkPtr_->size());
+  dwio::common::ReaderOptions readerOpts{leafPool_.get()};
+  auto input = std::make_unique<BufferedInput>(
+      std::make_shared<InMemoryReadFile>(data), readerOpts.getMemoryPool());
+  auto reader = makeReader(readerOpts, std::move(input));
+  auto parquetReader = dynamic_cast<ParquetReader&>(*reader.get());
+  EXPECT_EQ(parquetReader.numberOfRowGroups(), 1);
+  EXPECT_EQ(parquetReader.numberOfRows(), 5);
 }
 
 // Define main so that gflags get processed.

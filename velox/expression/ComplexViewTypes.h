@@ -357,6 +357,7 @@ class OptionalAccessor {
   }
 
   element_t value() const {
+    VELOX_DCHECK(has_value());
     return (*reader_)[index_];
   }
 
@@ -365,6 +366,7 @@ class OptionalAccessor {
   }
 
   element_t operator*() const {
+    VELOX_DCHECK(has_value());
     return value();
   }
 
@@ -507,13 +509,13 @@ auto materializeElement(const T& element) {
 // When returnsOptionalValues is false, the interface is like std::vector<V>.
 template <bool returnsOptionalValues, typename V>
 class ArrayView {
+ public:
   using reader_t = VectorReader<V>;
   using element_t = typename std::conditional<
       returnsOptionalValues,
       typename reader_t::exec_in_t,
       typename reader_t::exec_null_free_in_t>::type;
 
- public:
   ArrayView(const reader_t* reader, vector_size_t offset, vector_size_t size)
       : reader_(reader), offset_(offset), size_(size) {}
 
@@ -1073,6 +1075,14 @@ class GenericView {
 
   uint64_t hash() const {
     return decoded_.base()->hashValueAt(decodedIndex());
+  }
+
+  bool isNull() const {
+    return decoded_.isNullAt(index_);
+  }
+
+  const BaseVector* base() const {
+    return decoded_.base();
   }
 
   bool operator==(const GenericView& other) const {
