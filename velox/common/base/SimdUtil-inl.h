@@ -1081,6 +1081,20 @@ struct ReinterpretBatch {
     return xsimd::batch<T, A>(data);
   }
 #endif
+
+#if XSIMD_WITH_NEON
+  static xsimd::batch<T, A> apply(xsimd::batch<U, A> data, const xsimd::neon&) {
+    return xsimd::batch<T, A>(data);
+  }
+#endif
+
+#if XSIMD_WITH_NEON64
+  static xsimd::batch<T, A> apply(
+      xsimd::batch<U, A> data,
+      const xsimd::neon64&) {
+    return xsimd::batch<T, A>(data);
+  }
+#endif
 };
 
 template <typename T, typename A>
