@@ -2,7 +2,7 @@
 Connectors
 ==========
 
-Connectors allow to read and write data to and from external sources.
+Connectors allow reading and writing data to and from external sources.
 This concept is similar to `Presto Connectors <https://prestodb.io/docs/current/develop/connectors.html>`_.
 The :ref:`TableScanNode<TableScanNode>` operator reads external data via a connector.
 The :ref:`TableWriteNode<TableWriteNode>` operator writes data externally via a connector.
@@ -18,7 +18,7 @@ Connector Interface
    * - Interface Name
      - Description
    * - ConnectorSplit
-     - Basic unit that describes a chunk of data for processing.
+     - A chunk of data to process. For example, a single file.
    * - DataSource
      - Provides methods to consume and process a split. A DataSource can optionally consume a
        dynamic filter during execution to prune some rows from the output vector.
@@ -29,19 +29,22 @@ Connector Interface
    * - Connector Factory
      - Enables creating instances of a particular connector.
 
-Velox currently has in-built support for the Hive Connector and the TPC-H Connector.
+Velox provides Hive and TPC-H Connectors out of the box.
 Let's see how the above connector interfaces are implemented in the Hive Connector in detail below.
 
 Hive Connector
 --------------
-The Hive Connector can be used to read and write data files (Parquet, DWRF) residing on
+The Hive Connector is used to read and write data files (Parquet, DWRF) residing on
 an external storage (S3, HDFS, GCS, Linux FS).
 
 HiveConnectorSplit
 ~~~~~~~~~~~~~~~~~~
 The HiveConnectorSplit describes a data chunk using parameters including `file-path`,
-`file-format`, `start position`, `length`, `storage format`, etc..
-Given a set of Parquet files, users or applications are responsible for defining the splits.
+`file-format`, `start`, `length`, `storage format`, etc..
+It is not necessary to specify start and length values that align with row boundaries.
+For example, in a Parquet file, those row groups with offset in the range of [start, length)
+are processed as part of the split.
+For a given a set of files, users or applications are responsible for defining the splits.
 
 HiveDataSource
 ~~~~~~~~~~~~~~
@@ -61,8 +64,8 @@ The `appendData` API instantiates a file writer based on the above parameters an
 
 HiveConnector
 ~~~~~~~~~~~~~
-The HiveConnector extends the `createDataSource` connector API to create instances of HiveDataSource.
-It also extends the `createDataSink` connector API to create instances of HiveDataSink.
+The HiveConnector implements the `createDataSource` connector API to create instances of HiveDataSource.
+It also implements the `createDataSink` connector API to create instances of HiveDataSink.
 One of the parameters to these APIs is `ConnectorQueryCtx`, which provides means to specify a
 memory pool and connector configuration.
 
@@ -70,12 +73,13 @@ HiveConnectorFactory
 ~~~~~~~~~~~~~~~~~~~~
 The HiveConnectorFactory enabled creating instances of the HiveConnector. A `connector name` say "hive"
 is required to register the HiveConnectorFactory. Multiple instances of the HiveConnector can then be
-created by using the `newConnector` API by specifying a `connectorId` and connector config listed
-:doc:`here</configs>`.
+created by using the `newConnector` API by specifying a `connectorId` and connector configuration listed
+:doc:`here</configs>`. Multiple instances of a connector are required if you have multiple external
+sources and each require a different configuration.
 
 Storage Adapters
 ~~~~~~~~~~~~~~~~
-The Hive Connector file reading and writing is supporting on a variety of distributed storage APIs.
+Hive Connector allows reading and writing files from a variety of distributed storage systems.
 The supported storage API are S3, HDFS, GCS, Linux FS.
 
 S3 is supported using the `AWS SDK for C++ <https://github.com/aws/aws-sdk-cpp>`_ library.
