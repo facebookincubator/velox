@@ -92,7 +92,7 @@ WriteFile& SpillFileList::currentOutput() {
 }
 
 uint64_t SpillFileList::flush() {
-  uint64_t totalBytes = 0;
+  uint64_t flushedBytes = 0;
   if (batch_) {
     IOBufOutputStream out(
         pool_, nullptr, std::max<int64_t>(64 * 1024, batch_->size()));
@@ -103,10 +103,10 @@ uint64_t SpillFileList::flush() {
     for (auto& range : *iobuf) {
       file.append(std::string_view(
           reinterpret_cast<const char*>(range.data()), range.size()));
-      totalBytes += range.size();
+      flushedBytes += range.size();
     }
   }
-  return totalBytes;
+  return flushedBytes;
 }
 
 uint64_t SpillFileList::write(

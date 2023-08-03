@@ -200,6 +200,13 @@ Spilling
        If the limit is zero, then the spiller always spills a previously spilled partition if it has any data. This is
        to avoid spill from a partition with a small amount of data which might result in generating too many small
        spilled files.
+   * - spill_compression_codec
+     - string
+     - none
+     - The compression codec used to control if compressing data when spilling to files. None means no compression.
+       This is to avoid to take too much storage space.
+       Available options are zlib, snappy, zstd, lz4, gzip.
+       
    * - spiller_start_partition_bit
      - integer
      - 29
