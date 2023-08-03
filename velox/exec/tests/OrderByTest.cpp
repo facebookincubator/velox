@@ -531,7 +531,7 @@ TEST_F(OrderByTest, spillWithDecimal) {
   constexpr int64_t kMaxBytes = 1LL << 30; // 1GB
   auto rowType =
       ROW({"c0", "c1", "c2"},
-          {INTEGER(), SHORT_DECIMAL(10, 5), LONG_DECIMAL(30, 5)});
+          {INTEGER(), DECIMAL(10, 5), DECIMAL(30, 5)});
   VectorFuzzer fuzzer({}, pool());
   const int32_t numBatches = 5;
   std::vector<RowVectorPtr> batches;
