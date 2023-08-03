@@ -249,16 +249,16 @@ class DecimalUtil {
     }
   }
 
-  // Origins from java side BigInteger#bitLength.
-  //
-  // Returns the number of bits in the minimal two's-complement
-  // representation of this BigInteger, <em>excluding</em> a sign bit.
-  // For positive BigIntegers, this is equivalent to the number of bits in
-  // the ordinary binary representation.  For zero this method returns
-  // {@code 0}.  (Computes {@code (ceil(log2(this < 0 ? -this : this+1)))}.)
-  //
-  // @return number of bits in the minimal two's-complement
-  //         representation of this BigInteger, <em>excluding</em> a sign bit.
+  /// Origins from java side BigInteger#bitLength.
+  ///
+  /// Returns the number of bits in the minimal two's-complement
+  /// representation of this BigInteger, <em>excluding</em> a sign bit.
+  /// For positive BigIntegers, this is equivalent to the number of bits in
+  /// the ordinary binary representation.  For zero this method returns
+  /// {@code 0}.  (Computes {@code (ceil(log2(this < 0 ? -this : this+1)))}.)
+  ///
+  /// @return number of bits in the minimal two's-complement
+  ///         representation of this BigInteger, <em>excluding</em> a sign bit.
   static int32_t getByteArrayLength(int128_t value);
 
   /// This method return the same result with the BigInterger#toByteArray()
