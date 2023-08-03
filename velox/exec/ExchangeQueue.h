@@ -73,7 +73,11 @@ class SerializedPage {
 // for input.
 class ExchangeQueue {
  public:
-  explicit ExchangeQueue(int64_t minBytes) : minBytes_(minBytes) {}
+#ifdef VELOX_ENABLE_BACKWARD_COMPATIBILITY
+  explicit ExchangeQueue(int64_t /*minBytes*/) {}
+
+  ExchangeQueue() = default;
+#endif
 
   ~ExchangeQueue() {
     clearAllPromises();
@@ -100,16 +104,25 @@ class ExchangeQueue {
       bool* atEnd,
       ContinueFuture* future);
 
-  // Returns the total bytes held by SerializedPages in 'this'.
+  /// Returns the total bytes held by SerializedPages in 'this'.
   uint64_t totalBytes() const {
     return totalBytes_;
   }
 
-  // Returns the target size for totalBytes(). An exchange client
-  // should not fetch more data until the queue totalBytes() is below
-  // minBytes().
-  uint64_t minBytes() const {
-    return minBytes_;
+  /// Returns the maximum value of total bytes.
+  uint64_t peakBytes() const {
+    return peakBytes_;
+  }
+
+  /// Returns total number of pages received from all sources.
+  uint64_t receivedPages() const {
+    return receivedPages_;
+  }
+
+  /// Returns an average size of received pages. Returns 0 if hasn't received
+  /// any pages yet.
+  uint64_t averageReceivedPageBytes() const {
+    return receivedPages_ > 0 ? receivedBytes_ / receivedPages_ : 0;
   }
 
   void addSourceLocked() {
@@ -167,9 +180,12 @@ class ExchangeQueue {
   std::string error_;
   // Total size of SerializedPages in queue.
   uint64_t totalBytes_{0};
-
-  // If 'totalBytes_' < 'minBytes_', an exchange should request more data from
-  // producers.
-  const uint64_t minBytes_;
+  // Number of SerializedPages received.
+  int64_t receivedPages_{0};
+  // Total size of SerializedPages received. Used to calculate an average
+  // expected size.
+  int64_t receivedBytes_{0};
+  // Maximum value of totalBytes_.
+  int64_t peakBytes_{0};
 };
 } // namespace facebook::velox::exec

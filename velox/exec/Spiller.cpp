@@ -37,6 +37,7 @@ Spiller::Spiller(
     const std::string& path,
     uint64_t targetFileSize,
     uint64_t minSpillRunSize,
+    common::CompressionKind compressionKind,
     memory::MemoryPool& pool,
     folly::Executor* executor)
     : Spiller(
@@ -50,6 +51,7 @@ Spiller::Spiller(
           path,
           targetFileSize,
           minSpillRunSize,
+          compressionKind,
           pool,
           executor) {
   VELOX_CHECK_EQ(type_, Type::kOrderBy);
@@ -62,6 +64,7 @@ Spiller::Spiller(
     const std::string& path,
     uint64_t targetFileSize,
     uint64_t minSpillRunSize,
+    common::CompressionKind compressionKind,
     memory::MemoryPool& pool,
     folly::Executor* FOLLY_NULLABLE executor)
     : Spiller(
@@ -75,6 +78,7 @@ Spiller::Spiller(
           path,
           targetFileSize,
           minSpillRunSize,
+          compressionKind,
           pool,
           executor) {
   VELOX_CHECK_EQ(type_, Type::kHashJoinProbe);
@@ -91,6 +95,7 @@ Spiller::Spiller(
     const std::string& path,
     uint64_t targetFileSize,
     uint64_t minSpillRunSize,
+    common::CompressionKind compressionKind,
     memory::MemoryPool& pool,
     folly::Executor* executor)
     : type_(type),
@@ -105,6 +110,7 @@ Spiller::Spiller(
           numSortingKeys,
           sortCompareFlags,
           targetFileSize,
+          compressionKind,
           pool),
       pool_(pool),
       executor_(executor) {
@@ -272,9 +278,9 @@ std::unique_ptr<Spiller::SpillStatus> Spiller::writeSpill(int32_t partition) {
     int64_t totalBytes = 0;
     size_t written = 0;
     while (written < run.rows.size()) {
-      totalBytes += extractSpillVector(
+      extractSpillVector(
           run.rows, kTargetBatchRows, kTargetBatchBytes, spillVector, written);
-      state_.appendToPartition(partition, spillVector);
+      totalBytes += state_.appendToPartition(partition, spillVector);
       if (totalBytes > state_.targetFileSize()) {
         break;
       }
@@ -594,15 +600,15 @@ std::string Spiller::toString() const {
       spillFinalized_);
 }
 
-int32_t Spiller::Config::spillLevel(uint8_t startBitOffset) const {
-  const auto numPartitionBits = hashBitRange.numBits();
+int32_t Spiller::Config::joinSpillLevel(uint8_t startBitOffset) const {
+  const auto numPartitionBits = joinPartitionBits;
   VELOX_CHECK_LE(
       startBitOffset + numPartitionBits,
       64,
       "startBitOffset:{} numPartitionsBits:{}",
       startBitOffset,
       numPartitionBits);
-  const int32_t deltaBits = startBitOffset - hashBitRange.begin();
+  const int32_t deltaBits = startBitOffset - startPartitionBit;
   VELOX_CHECK_GE(deltaBits, 0, "deltaBits:{}", deltaBits);
   VELOX_CHECK_EQ(
       deltaBits % numPartitionBits,
@@ -613,14 +619,14 @@ int32_t Spiller::Config::spillLevel(uint8_t startBitOffset) const {
   return deltaBits / numPartitionBits;
 }
 
-bool Spiller::Config::exceedSpillLevelLimit(uint8_t startBitOffset) const {
-  if (startBitOffset + hashBitRange.numBits() > 64) {
+bool Spiller::Config::exceedJoinSpillLevelLimit(uint8_t startBitOffset) const {
+  if (startBitOffset + joinPartitionBits > 64) {
     return true;
   }
   if (maxSpillLevel == -1) {
     return false;
   }
-  return spillLevel(startBitOffset) > maxSpillLevel;
+  return joinSpillLevel(startBitOffset) > maxSpillLevel;
 }
 
 // static

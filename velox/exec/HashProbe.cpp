@@ -242,10 +242,11 @@ void HashProbe::maybeSetupSpillInput(
       HashBitRange(
           spillInputPartitionIds_.begin()->partitionBitOffset(),
           spillInputPartitionIds_.begin()->partitionBitOffset() +
-              spillConfig.hashBitRange.numBits()),
+              spillConfig.joinPartitionBits),
       spillConfig.filePath,
       spillConfig.maxFileSize,
       spillConfig.minSpillRunSize,
+      spillConfig.compressionKind,
       Spiller::spillPool(),
       spillConfig.executor);
   // Set the spill partitions to the corresponding ones at the build side. The
