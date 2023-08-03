@@ -26,12 +26,14 @@ add_library(
   CountIfAggregate.cpp
   CovarianceAggregates.cpp
   ChecksumAggregate.cpp
+  EntropyAggregates.cpp
   HistogramAggregate.cpp
   MapAggAggregate.cpp
   MapUnionAggregate.cpp
   MapUnionSumAggregate.cpp
   MinMaxAggregates.cpp
   MinMaxByAggregates.cpp
+  MultiMapAggAggregate.cpp
   CountAggregate.cpp
   PrestoHasher.cpp
   SetAggregates.cpp
@@ -46,6 +48,7 @@ target_link_libraries(
   velox_aggregates
   velox_common_hyperloglog
   velox_exec
+  velox_expression
   velox_presto_serializer
   velox_functions_aggregates
   velox_functions_lib

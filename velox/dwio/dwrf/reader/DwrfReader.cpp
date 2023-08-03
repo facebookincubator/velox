@@ -417,7 +417,8 @@ void DwrfRowReader::startNextStripe() {
         stripeStreams,
         streamLabels,
         scanSpec,
-        flatMapContext);
+        flatMapContext,
+        true); // isRoot
     selectiveColumnReader_->setIsTopLevel();
   } else {
     columnReader_ = ColumnReader::build(
@@ -753,7 +754,7 @@ uint64_t DwrfReader::getMemoryUse(
   // Decompressors need buffers for each stream
   uint64_t decompressorMemory = 0;
   auto compression = readerBase.getCompressionKind();
-  if (compression != dwio::common::CompressionKind_NONE) {
+  if (compression != common::CompressionKind_NONE) {
     for (int32_t i = 0; i < footer.typesSize(); i++) {
       if (cs.shouldReadNode(i)) {
         const auto type = footer.types(i);
@@ -761,7 +762,7 @@ uint64_t DwrfReader::getMemoryUse(
             maxStreamsForType(type) * readerBase.getCompressionBlockSize();
       }
     }
-    if (compression == dwio::common::CompressionKind_SNAPPY) {
+    if (compression == common::CompressionKind_SNAPPY) {
       decompressorMemory *= 2; // Snappy decompressor uses a second buffer
     }
   }

@@ -334,8 +334,15 @@ class HashStringAllocator : public StreamArena {
   }
 
   // Checks the free space accounting and consistency of
-  // Headers. Throws when detects corruption.
-  void checkConsistency() const;
+  // Headers. Throws when detects corruption. Returns the number of allocated
+  // payload bytes, excluding headers, continue links and other overhead.
+  int64_t checkConsistency() const;
+
+  /// Throws if 'this' is not empty. Checks consistency of
+  /// 'this'. This is a fast check for RowContainer users freeing the
+  /// variable length data they store. Can be used in non-debug
+  /// builds.
+  void checkEmpty() const;
 
  private:
   static constexpr int32_t kUnitSize = 16 * memory::AllocationTraits::kPageSize;
@@ -350,13 +357,10 @@ class HashStringAllocator : public StreamArena {
 
   void newRange(int32_t bytes, ByteRange* range, bool contiguous);
 
-  // Adds 'bytes' worth of contiguous space to the free list. This
+  // Adds a new standard size slab to the free list. This
   // grows the footprint in MemoryAllocator but does not allocate
-  // anything yet. Throws if fails to grow. The caller typically knows
-  // a cap on memory to allocate and uses this and freeSpace() to make
-  // sure that there is space to accommodate the expected need before
-  // starting to process a batch of input.
-  void newSlab(int32_t size);
+  // anything yet. Throws if fails to grow.
+  void newSlab();
 
   void removeFromFreeList(Header* FOLLY_NONNULL header) {
     VELOX_CHECK(header->isFree());

@@ -103,7 +103,7 @@ BlockingReason Destination::flush(
 
 PartitionedOutput::PartitionedOutput(
     int32_t operatorId,
-    DriverCtx* FOLLY_NONNULL ctx,
+    DriverCtx* ctx,
     const std::shared_ptr<const core::PartitionedOutputNode>& planNode)
     : Operator(
           ctx,
@@ -131,9 +131,12 @@ PartitionedOutput::PartitionedOutput(
       maxBufferedBytes_(ctx->task->queryCtx()
                             ->queryConfig()
                             .maxPartitionedOutputBufferSize()) {
-  if (numDestinations_ == 1 || planNode->isBroadcast()) {
-    VELOX_CHECK(keyChannels_.empty());
-    VELOX_CHECK_NULL(partitionFunction_);
+  if (!planNode->isPartitioned()) {
+    VELOX_USER_CHECK_EQ(numDestinations_, 1);
+  }
+  if (numDestinations_ == 1) {
+    VELOX_USER_CHECK(keyChannels_.empty());
+    VELOX_USER_CHECK_NULL(partitionFunction_);
   }
 }
 
@@ -218,7 +221,7 @@ void PartitionedOutput::addInput(RowVectorPtr input) {
   if (numDestinations_ == 1) {
     destinations_[0]->addRows(IndexRange{0, numInput});
   } else {
-    partitionFunction_->partition(*input_, partitions_);
+    auto singlePartition = partitionFunction_->partition(*input_, partitions_);
     if (replicateNullsAndAny_) {
       collectNullRows();
 
@@ -237,12 +240,21 @@ void PartitionedOutput::addInput(RowVectorPtr input) {
             destination->addRow(i);
           }
         } else {
-          destinations_[partitions_[i]]->addRow(i);
+          if (singlePartition.has_value()) {
+            destinations_[singlePartition.value()]->addRow(i);
+          } else {
+            destinations_[partitions_[i]]->addRow(i);
+          }
         }
       }
     } else {
-      for (vector_size_t i = 0; i < numInput; ++i) {
-        destinations_[partitions_[i]]->addRow(i);
+      if (singlePartition.has_value()) {
+        destinations_[singlePartition.value()]->addRows(
+            IndexRange{0, numInput});
+      } else {
+        for (vector_size_t i = 0; i < numInput; ++i) {
+          destinations_[partitions_[i]]->addRow(i);
+        }
       }
     }
   }

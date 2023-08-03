@@ -77,10 +77,12 @@ class HashStringAllocatorTest : public testing::Test {
     return folly::Random::rand32(rng_);
   }
 
-  std::string randomString() {
+  std::string randomString(int32_t size = 0) {
     std::string result;
     result.resize(
-        20 + (rand32() % 10 > 8 ? rand32() % 200 : 1000 + rand32() % 1000));
+        size != 0 ? size
+                  : 20 +
+                (rand32() % 10 > 8 ? rand32() % 200 : 1000 + rand32() % 1000));
     for (auto i = 0; i < result.size(); ++i) {
       result[i] = 32 + (rand32() % 96);
     }
@@ -99,6 +101,7 @@ TEST_F(HashStringAllocatorTest, allocate) {
     for (auto i = 0; i < 10'000; ++i) {
       headers.push_back(allocate((i % 10) * 10));
     }
+    EXPECT_THROW(allocator_->checkEmpty(), VeloxException);
     allocator_->checkConsistency();
     for (int32_t step = 7; step >= 1; --step) {
       for (auto i = 0; i < headers.size(); i += step) {
@@ -110,6 +113,7 @@ TEST_F(HashStringAllocatorTest, allocate) {
       allocator_->checkConsistency();
     }
   }
+  allocator_->checkEmpty();
   // We allow for some free overhead for free lists after all is freed.
   EXPECT_LE(allocator_->retainedSize() - allocator_->freeSpace(), 250);
 }
@@ -176,6 +180,25 @@ TEST_F(HashStringAllocatorTest, finishWrite) {
   copy.resize(4);
   stream.readBytes(copy.data(), 4);
   ASSERT_EQ(copy, "abcd");
+
+  allocator_->checkConsistency();
+
+  std::vector<int32_t> sizes = {
+      50000, 100000, 200000, 1000000, 3000000, 5000000};
+  for (auto size : sizes) {
+    auto largeString = randomString(size);
+
+    auto start = allocator_->newWrite(stream);
+    stream.appendStringPiece(folly::StringPiece(largeString));
+    allocator_->finishWrite(stream, 0);
+
+    HSA::prepareRead(start.header, stream);
+    std::string copy;
+    copy.resize(largeString.size());
+    stream.readBytes(copy.data(), copy.size());
+    ASSERT_EQ(copy, largeString);
+    allocator_->checkConsistency();
+  }
 }
 
 TEST_F(HashStringAllocatorTest, multipart) {

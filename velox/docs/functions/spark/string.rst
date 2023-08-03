@@ -6,11 +6,13 @@ Unless specified otherwise, all functions return NULL if at least one of the arg
 
 .. spark:function:: ascii(string) -> integer
 
-    Returns the numeric value of the first character of ``string``.
+    Returns unicode code point of the first character of ``string``. Returns 0 if ``string`` is empty.
 
 .. spark:function:: chr(n) -> varchar
 
     Returns the Unicode code point ``n`` as a single character string.
+    If ``n < 0``, the result is an empty string.
+    If ``n >= 256``, the result is equivalent to chr(``n % 256``).
 
 .. spark:function:: contains(left, right) -> boolean
 
@@ -48,6 +50,17 @@ Unless specified otherwise, all functions return NULL if at least one of the arg
     Returns string with all characters changed to lowercase. ::
 
         SELECT lower('SparkSql'); -- sparksql
+
+.. spark:function:: lpad(string, len, pad) -> string
+    
+    Returns ``string``, left-padded with pad to a length of ``len``. If ``string`` is
+    longer than ``len``, the return value is shortened to ``len`` characters or bytes.
+    If ``pad`` is not specified, ``string`` will be padded to the left with space characters
+    if it is a character string, and with zeros if it is a byte sequence. ::
+
+        SELECT lpad('hi', 5, '??'); -- ???hi
+        SELECT lpad('hi', 1, '??'); -- h
+        SELECT lpad('hi', 4); --   hi
 
 .. spark:function:: ltrim(string) -> varchar
 
@@ -89,6 +102,17 @@ Unless specified otherwise, all functions return NULL if at least one of the arg
     Replaces all occurrences of `search` with `replace`. ::
 
         SELECT replace('ABCabc', 'abc', 'DEF'); -- ABCDEF
+
+.. spark:function:: rpad(string, len, pad) -> string
+    
+    Returns ``string``, right-padded with ``pad`` to a length of ``len``. 
+    If ``string`` is longer than ``len``, the return value is shortened to ``len`` characters.
+    If ``pad`` is not specified, ``string`` will be padded to the right with space characters
+    if it is a character string, and with zeros if it is a binary string. ::
+
+        SELECT lpad('hi', 5, '??'); -- ???hi
+        SELECT lpad('hi', 1, '??'); -- h
+        SELECT lpad('hi', 4); -- hi  
 
 .. spark:function:: rtrim(string) -> varchar
 

@@ -100,6 +100,8 @@ class AggregationFuzzerRunner {
           {"map_union_sum", "array_sort(map_keys({}))"},
           {"max_by", ""},
           {"min_by", ""},
+          {"map_union_sum", "array_sort(map_keys({}))"},
+          {"multimap_agg", "transform_values({}, (k, v) -> array_sort(v))"},
           // TODO: Skip result verification of companion functions that return
           // complex types that contain floating-point fields for now, until we
           // fix
@@ -111,6 +113,7 @@ class AggregationFuzzerRunner {
           // Semantically inconsistent functions
           {"skewness", ""},
           {"kurtosis", ""},
+          {"entropy", ""},
   };
 
   static int run(const std::string& planPath) {

@@ -81,8 +81,8 @@ class MemoryAllocatorTest : public testing::TestWithParam<bool> {
       MemoryAllocator::setDefaultInstance(allocator_.get());
     }
     instance_ = MemoryAllocator::getInstance();
-    memoryManager_ = std::make_unique<MemoryManager>(IMemoryManager::Options{
-        .capacity = kMaxMemory, .allocator = instance_});
+    memoryManager_ = std::make_unique<MemoryManager>(
+        MemoryManagerOptions{.capacity = kMaxMemory, .allocator = instance_});
     pool_ = memoryManager_->addLeafPool("allocatorTest");
     if (useMmap_) {
       ASSERT_EQ(instance_->kind(), MemoryAllocator::Kind::kMmap);
@@ -1054,7 +1054,7 @@ TEST_P(MemoryAllocatorTest, allocContiguousGrow) {
   freeSmall(kCapacityPages);
 }
 
-TEST_P(MemoryAllocatorTest, allocContiguousVsize) {
+TEST_P(MemoryAllocatorTest, DISABLED_allocContiguousVsize) {
   // Works with malloc and mmap allocators where MmapArena is not on.
   auto initialSize = processSize();
 

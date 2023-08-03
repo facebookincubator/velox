@@ -209,6 +209,11 @@ class Aggregate {
   /// which have the same meaning as in addRawInput. The result is
   /// placed in 'result'. 'result is allocated if nullptr, otherwise
   /// it is expected to be a writable flat vector of the right type.
+  ///
+  /// @param rows A set of rows to produce intermediate results for. The
+  /// 'result' is expected to have rows.size() rows. Invalid rows represent rows
+  /// that were masked out, these need to have correct intermediate results as
+  /// well. It is possible that all entries in 'rows' are invalid (masked out).
   virtual void toIntermediate(
       const SelectivityVector& rows,
       std::vector<VectorPtr>& args,
@@ -259,6 +264,7 @@ class Aggregate {
   // accumulator update methods. Use like: { auto tracker =
   // trackRowSize(group); update(group); }
   RowSizeTracker<char, uint32_t> trackRowSize(char* group) {
+    VELOX_DCHECK(!isFixedSize());
     return RowSizeTracker<char, uint32_t>(group[rowSizeOffset_], *allocator_);
   }
 

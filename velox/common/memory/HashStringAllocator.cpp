@@ -192,23 +192,19 @@ HashStringAllocator::finishWrite(ByteStream& stream, int32_t numReserveBytes) {
   return {startPosition_, currentPosition};
 }
 
-void HashStringAllocator::newSlab(int32_t size) {
+void HashStringAllocator::newSlab() {
   constexpr int32_t kSimdPadding = simd::kPadding - sizeof(Header);
-  char* run = nullptr;
-  uint64_t available = 0;
-  int32_t needed = std::max<int32_t>(
-      bits::roundUp(
-          size + 2 * sizeof(Header) + kSimdPadding,
-          memory::AllocationTraits::kPageSize),
-      kUnitSize);
-  auto pagesNeeded = memory::AllocationTraits::numPages(needed);
-  // All large allocations are made standalone in pool().
-  VELOX_CHECK_LE(pagesNeeded, pool()->largestSizeClass());
-  if (pool_.allocatedBytes() >= pool_.hugePageThreshold()) {
-    needed = memory::AllocationTraits::kHugePageSize;
-  }
-  run = pool_.allocateFixed(needed);
-  available = needed - sizeof(Header) - kSimdPadding;
+  const int64_t needed = pool_.allocatedBytes() >= pool_.hugePageThreshold()
+      ? memory::AllocationTraits::kHugePageSize
+      : kUnitSize;
+  auto run = pool_.allocateFixed(needed);
+  // We check we got exactly the requested amount. checkConsistency()
+  // depends on slabs made here coinciding with ranges from
+  // AllocationPool::rangeAt(). Sometimes the last range can be
+  // several huge pages for severl huge page sized arenas but
+  // checkConsistency() can interpret that.
+  VELOX_CHECK_EQ(0, pool_.freeBytes());
+  auto available = needed - sizeof(Header) - kSimdPadding;
 
   VELOX_CHECK_NOT_NULL(run);
   VELOX_CHECK_GT(available, 0);
@@ -328,7 +324,7 @@ HashStringAllocator::allocate(int32_t size, bool exactSize) {
   }
   auto header = allocateFromFreeLists(size, exactSize, exactSize);
   if (!header) {
-    newSlab(size);
+    newSlab();
     header = allocateFromFreeLists(size, exactSize, exactSize);
     VELOX_CHECK(header != nullptr);
     VELOX_CHECK_GT(header->size(), 0);
@@ -541,9 +537,10 @@ void HashStringAllocator::ensureAvailable(int32_t bytes, Position& position) {
   position = finishWrite(stream, 0).first;
 }
 
-void HashStringAllocator::checkConsistency() const {
+int64_t HashStringAllocator::checkConsistency() const {
   uint64_t numFree = 0;
   uint64_t freeBytes = 0;
+  int64_t allocatedBytes = 0;
   for (auto i = 0; i < pool_.numRanges(); ++i) {
     auto topRange = pool_.rangeAt(i);
     const auto kHugePageSize = memory::AllocationTraits::kHugePageSize;
@@ -586,6 +583,9 @@ void HashStringAllocator::checkConsistency() const {
           // continue header is readable and not free.
           auto continued = header->nextContinued();
           VELOX_CHECK(!continued->isFree());
+          allocatedBytes += header->size() - sizeof(void*);
+        } else {
+          allocatedBytes += header->size();
         }
         previousFree = header->isFree();
         header = reinterpret_cast<Header*>(header->end());
@@ -614,6 +614,12 @@ void HashStringAllocator::checkConsistency() const {
 
   VELOX_CHECK_EQ(numInFreeList, numFree_);
   VELOX_CHECK_EQ(bytesInFreeList, freeBytes_);
+  return allocatedBytes;
+}
+
+void HashStringAllocator::checkEmpty() const {
+  VELOX_CHECK_EQ(0, sizeFromPool_);
+  VELOX_CHECK_EQ(0, checkConsistency());
 }
 
 } // namespace facebook::velox

@@ -40,7 +40,8 @@ DriverCtx::DriverCtx(
       pipelineId(_pipelineId),
       splitGroupId(_splitGroupId),
       partitionId(_partitionId),
-      task(_task) {}
+      task(_task),
+      threadDebugInfo({.queryId_ = task->queryCtx()->queryId()}) {}
 
 const core::QueryConfig& DriverCtx::queryConfig() const {
   return task->queryCtx()->queryConfig();
@@ -68,10 +69,9 @@ std::optional<Spiller::Config> DriverCtx::makeSpillConfig(
       queryConfig.minSpillRunSize(),
       task->queryCtx()->spillExecutor(),
       queryConfig.spillableReservationGrowthPct(),
-      HashBitRange(
-          queryConfig.spillStartPartitionBit(),
-          queryConfig.spillStartPartitionBit() +
-              queryConfig.spillPartitionBits()),
+      queryConfig.spillStartPartitionBit(),
+      queryConfig.joinSpillPartitionBits(),
+      queryConfig.aggregationSpillPartitionBits(),
       queryConfig.maxSpillLevel(),
       queryConfig.testingSpillPct());
 }
@@ -280,8 +280,9 @@ void Driver::pushdownFilters(int operatorIndex) {
 
 RowVectorPtr Driver::next(std::shared_ptr<BlockingState>& blockingState) {
   enqueueInternal();
-
   auto self = shared_from_this();
+  facebook::velox::process::ScopedThreadDebugInfo scopedInfo(
+      self->driverCtx()->threadDebugInfo);
   RowVectorPtr result;
   auto stop = runInternal(self, blockingState, result);
 
@@ -545,6 +546,8 @@ StopReason Driver::runInternal(
 // static
 void Driver::run(std::shared_ptr<Driver> self) {
   process::TraceContext trace("Driver::run");
+  facebook::velox::process::ScopedThreadDebugInfo scopedInfo(
+      self->driverCtx()->threadDebugInfo);
   std::shared_ptr<BlockingState> blockingState;
   RowVectorPtr nullResult;
   auto reason = self->runInternal(self, blockingState, nullResult);
@@ -628,6 +631,7 @@ void Driver::close() {
 }
 
 void Driver::closeByTask() {
+  VELOX_CHECK(isOnThread());
   VELOX_CHECK(isTerminated());
   addStatsToTask();
   for (auto& op : operators_) {

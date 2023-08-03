@@ -15,6 +15,7 @@
  */
 
 #include "velox/exec/Task.h"
+#include "folly/experimental/EventCount.h"
 #include "velox/common/base/tests/GTestUtils.h"
 #include "velox/common/future/VeloxPromise.h"
 #include "velox/common/testutil/TestValue.h"
@@ -1020,6 +1021,43 @@ DEBUG_ONLY_TEST_F(TaskTest, liveStats) {
   EXPECT_EQ(1, operatorStats.finishTiming.count);
 }
 
+TEST_F(TaskTest, outputBufferSize) {
+  constexpr int32_t numBatches = 10;
+  std::vector<RowVectorPtr> dataBatches;
+  dataBatches.reserve(numBatches);
+  for (int32_t i = 0; i < numBatches; ++i) {
+    dataBatches.push_back(makeRowVector({makeFlatVector<int64_t>({0, 1, 10})}));
+  }
+
+  auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
+  auto plan = PlanBuilder(planNodeIdGenerator)
+                  .values(dataBatches)
+                  .partitionedOutput({}, 1)
+                  .planNode();
+
+  CursorParameters params;
+  params.planNode = plan;
+  params.queryCtx = std::make_shared<core::QueryCtx>(executor_.get());
+
+  // Produce the results to output buffer manager but not consuming them to
+  // check the buffer utilization in test.
+  auto cursor = std::make_unique<TaskCursor>(params);
+  std::vector<RowVectorPtr> result;
+  Task* task = cursor->task().get();
+  while (cursor->moveNext()) {
+    result.push_back(cursor->current());
+  }
+
+  TaskStats finishStats = task->taskStats();
+  // We only have one task and the task has outputBuffer which won't be
+  // consumed, verify 0 < outputBufferUtilization < 1.
+  // Need to call requestCancel to explicitly terminate the task.
+  EXPECT_GT(finishStats.outputBufferUtilization, 0);
+  EXPECT_LT(finishStats.outputBufferUtilization, 1);
+  EXPECT_FALSE(finishStats.outputBufferOverutilized);
+  task->requestCancel();
+}
+
 DEBUG_ONLY_TEST_F(TaskTest, findPeerOperators) {
   const std::vector<RowVectorPtr> probeVectors = {makeRowVector(
       {"t_c0", "t_c1"},
@@ -1087,6 +1125,79 @@ DEBUG_ONLY_TEST_F(TaskTest, findPeerOperators) {
     }
     ASSERT_TRUE(waitForTaskCompletion(task, 5'000'000));
   }
+}
+
+DEBUG_ONLY_TEST_F(TaskTest, raceBetweenTaskPauseAndTerminate) {
+  const std::vector<RowVectorPtr> values = {makeRowVector(
+      {"t_c0", "t_c1"},
+      {
+          makeFlatVector<int64_t>({1, 2, 3, 4}),
+          makeFlatVector<int64_t>({10, 20, 30, 40}),
+      })};
+
+  auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
+  CursorParameters params;
+  params.planNode =
+      PlanBuilder(planNodeIdGenerator).values(values, true).planNode();
+  params.queryCtx = std::make_shared<core::QueryCtx>(driverExecutor_.get());
+  params.maxDrivers = 1;
+
+  auto cursor = std::make_unique<TaskCursor>(params);
+  auto* task = cursor->task().get();
+  folly::EventCount taskPauseWait;
+  std::atomic<bool> taskPaused{false};
+
+  folly::EventCount taskPauseStartWait;
+  std::atomic<bool> taskPauseStarted{false};
+
+  // Set up a testvalue to trigger task abort when hash build tries to reserve
+  // memory.
+  SCOPED_TESTVALUE_SET(
+      "facebook::velox::exec::Driver::runInternal::addInput",
+      std::function<void(Operator*)>([&](Operator* testOp) {
+        if (taskPauseStarted.exchange(true)) {
+          return;
+        }
+        taskPauseStartWait.notifyAll();
+        taskPauseWait.await([&]() { return taskPaused.load(); });
+      }));
+
+  std::thread taskThread([&]() {
+    try {
+      while (cursor->moveNext()) {
+      };
+    } catch (VeloxRuntimeError& ex) {
+    }
+  });
+
+  taskPauseStartWait.await([&]() { return taskPauseStarted.load(); });
+
+  ASSERT_EQ(task->numTotalDrivers(), 1);
+  ASSERT_EQ(task->numFinishedDrivers(), 0);
+  ASSERT_EQ(task->numRunningDrivers(), 1);
+
+  auto pauseFuture = task->requestPause();
+  taskPaused = true;
+  taskPauseWait.notifyAll();
+  pauseFuture.wait();
+
+  ASSERT_EQ(task->numTotalDrivers(), 1);
+  ASSERT_EQ(task->numFinishedDrivers(), 0);
+  ASSERT_EQ(task->numRunningDrivers(), 1);
+
+  task->requestAbort().wait();
+
+  ASSERT_EQ(task->numTotalDrivers(), 1);
+  ASSERT_EQ(task->numFinishedDrivers(), 0);
+  ASSERT_EQ(task->numRunningDrivers(), 0);
+
+  Task::resume(task->shared_from_this());
+
+  ASSERT_EQ(task->numTotalDrivers(), 1);
+  ASSERT_EQ(task->numFinishedDrivers(), 1);
+  ASSERT_EQ(task->numRunningDrivers(), 0);
+
+  taskThread.join();
 }
 
 } // namespace facebook::velox::exec::test

@@ -31,7 +31,7 @@ namespace memory {
 namespace {
 constexpr folly::StringPiece kDefaultRootName{"__default_root__"};
 
-MemoryManager& toMemoryManager(IMemoryManager& manager) {
+MemoryManager& toMemoryManager(MemoryManager& manager) {
   return *static_cast<MemoryManager*>(&manager);
 }
 } // namespace
@@ -68,16 +68,14 @@ TEST(MemoryManagerTest, Ctor) {
   }
   { ASSERT_ANY_THROW(MemoryManager manager{{.capacity = -1}}); }
   {
-    IMemoryManager::Options options;
-    options.capacity = 32L << 30;
-    options.arbitratorConfig.kind = MemoryArbitrator::Kind::kShared;
-    // The arbitrator capacity will be overridden by the memory manager's
-    // capacity.
-    options.arbitratorConfig.capacity = folly::Random::rand32();
+    MemoryManagerOptions options;
+    const auto capacity = folly::Random::rand32();
+    options.capacity = capacity;
+    options.arbitratorKind = MemoryArbitrator::Kind::kShared;
     MemoryManager manager{options};
     auto* arbitrator = manager.arbitrator();
     ASSERT_EQ(arbitrator->kind(), MemoryArbitrator::Kind::kShared);
-    ASSERT_EQ(arbitrator->stats().maxCapacityBytes, 32L << 30);
+    ASSERT_EQ(arbitrator->stats().maxCapacityBytes, capacity);
   }
 }
 
@@ -109,14 +107,14 @@ TEST(MemoryManagerTest, addPool) {
 }
 
 TEST(MemoryManagerTest, addPoolWithArbitrator) {
-  IMemoryManager::Options options;
+  MemoryManagerOptions options;
   options.capacity = 32L << 30;
-  options.arbitratorConfig.kind = MemoryArbitrator::Kind::kShared;
+  options.arbitratorKind = MemoryArbitrator::Kind::kShared;
   // The arbitrator capacity will be overridden by the memory manager's
   // capacity.
-  options.arbitratorConfig.capacity = options.capacity;
-  const uint64_t initialPoolCapacity = options.arbitratorConfig.capacity / 32;
-  options.arbitratorConfig.initMemoryPoolCapacity = initialPoolCapacity;
+  options.capacity = options.capacity;
+  const uint64_t initialPoolCapacity = options.capacity / 32;
+  options.memoryPoolInitCapacity = initialPoolCapacity;
   MemoryManager manager{options};
 
   auto rootPool = manager.addRootPool(
@@ -232,7 +230,7 @@ TEST(MemoryHeaderTest, addDefaultLeafMemoryPool) {
 
 TEST(MemoryManagerTest, memoryPoolManagement) {
   const int alignment = 32;
-  IMemoryManager::Options options;
+  MemoryManagerOptions options;
   options.alignment = alignment;
   MemoryManager manager{options};
   ASSERT_EQ(manager.numPools(), 0);
@@ -395,7 +393,7 @@ TEST(MemoryManagerTest, alignmentOptionCheck) {
       {MemoryAllocator::kMaxAlignment * 2, false}};
   for (const auto& testData : testSettings) {
     SCOPED_TRACE(testData.debugString());
-    IMemoryManager::Options options;
+    MemoryManagerOptions options;
     options.alignment = testData.alignment;
     if (!testData.expectedSuccess) {
       ASSERT_THROW(MemoryManager{options}, VeloxRuntimeError);
@@ -502,7 +500,7 @@ TEST(MemoryManagerTest, quotaEnforcement) {
     for (const auto& contiguousAlloc : contiguousAllocations) {
       SCOPED_TRACE(fmt::format("contiguousAlloc {}", contiguousAlloc));
       const int alignment = 32;
-      IMemoryManager::Options options;
+      MemoryManagerOptions options;
       options.alignment = alignment;
       options.capacity = testData.memoryQuotaBytes;
       MemoryManager manager{options};
@@ -547,7 +545,7 @@ TEST(MemoryManagerTest, quotaEnforcement) {
 TEST(MemoryManagerTest, testCheckUsageLeak) {
   FLAGS_velox_memory_leak_check_enabled = true;
   auto& manager = MemoryManager::getInstance(
-      memory::MemoryManager::Options{.checkUsageLeak = false}, true);
+      memory::MemoryManagerOptions{.checkUsageLeak = false}, true);
 
   auto rootPool = manager.addRootPool("duplicateRootPool", kMaxMemory);
   auto leafPool = manager.addLeafPool("duplicateLeafPool", true);

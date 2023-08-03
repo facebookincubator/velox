@@ -853,7 +853,6 @@ class RowType : public TypeBase<TypeKind::ROW> {
 
   const std::shared_ptr<const Type>& findChild(folly::StringPiece name) const;
 
-  // Note: Internally does a linear search on all child names, cost is O(N).
   bool containsChild(std::string_view name) const;
 
   uint32_t getChildIdx(const std::string& name) const;
@@ -892,6 +891,7 @@ class RowType : public TypeBase<TypeKind::ROW> {
   const std::vector<std::string> names_;
   const std::vector<std::shared_ptr<const Type>> children_;
   const std::vector<TypeParameter> parameters_;
+  const folly::F14FastMap<std::string, uint32_t> childrenIndices_;
 };
 
 using RowTypePtr = std::shared_ptr<const RowType>;
@@ -1583,7 +1583,8 @@ VELOX_SCALAR_ACCESSOR(DOUBLE);
 VELOX_SCALAR_ACCESSOR(TIMESTAMP);
 VELOX_SCALAR_ACCESSOR(VARCHAR);
 VELOX_SCALAR_ACCESSOR(VARBINARY);
-VELOX_SCALAR_ACCESSOR(UNKNOWN);
+
+TypePtr UNKNOWN();
 
 template <TypeKind KIND>
 std::shared_ptr<const Type> createScalarType() {

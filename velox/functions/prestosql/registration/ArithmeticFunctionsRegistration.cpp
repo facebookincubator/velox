@@ -109,8 +109,12 @@ void registerSimpleFunctions(const std::string& prefix) {
       {prefix + "binomial_cdf"});
   registerFunction<CauchyCDFFunction, double, double, double, double>(
       {prefix + "cauchy_cdf"});
+  registerFunction<ChiSquaredCDFFunction, double, double, double>(
+      {prefix + "chi_squared_cdf"});
   registerFunction<InverseBetaCDFFunction, double, double, double, double>(
       {prefix + "inverse_beta_cdf"});
+  registerFunction<FCDFFunction, double, double, double, double>(
+      {prefix + "f_cdf"});
 }
 
 } // namespace

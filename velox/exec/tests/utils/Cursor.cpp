@@ -17,6 +17,8 @@
 #include "velox/common/file/FileSystems.h"
 #include "velox/exec/Operator.h"
 
+#include <filesystem>
+
 namespace facebook::velox::exec::test {
 
 exec::BlockingReason TaskQueue::enqueue(
@@ -123,7 +125,7 @@ TaskCursor::TaskCursor(const CursorParameters& params)
         executor_.get(),
         std::unordered_map<std::string, std::string>{},
         std::unordered_map<std::string, std::shared_ptr<Config>>{},
-        memory::MemoryAllocator::getInstance(),
+        cache::AsyncDataCache::getInstance(),
         nullptr,
         nullptr,
         fmt::format("TaskCursorQuery_{}", cursorQueryId++));
@@ -164,7 +166,18 @@ TaskCursor::TaskCursor(const CursorParameters& params)
     auto fileSystem =
         velox::filesystems::getFileSystem(taskSpillDirectory, nullptr);
     VELOX_CHECK_NOT_NULL(fileSystem, "File System is null!");
-    fileSystem->mkdir(taskSpillDirectory);
+    try {
+      fileSystem->mkdir(taskSpillDirectory);
+    } catch (...) {
+      LOG(ERROR) << "Faield to create task spill directory "
+                 << taskSpillDirectory << " base director "
+                 << params.spillDirectory << " exists["
+                 << std::filesystem::exists(taskSpillDirectory) << "]";
+
+      std::rethrow_exception(std::current_exception());
+    }
+
+    LOG(INFO) << "Task spill directory " << taskSpillDirectory << "created ";
     task_->setSpillDirectory(taskSpillDirectory);
   }
 }

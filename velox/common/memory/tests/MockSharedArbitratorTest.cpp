@@ -44,8 +44,8 @@ constexpr int64_t KB = 1024L;
 constexpr int64_t MB = 1024L * KB;
 
 constexpr uint64_t kMemoryCapacity = 512 * MB;
-constexpr uint64_t kInitMemoryPoolCapacity = 16 * MB;
-constexpr uint64_t kMinMemoryPoolCapacityTransferSize = 8 * MB;
+constexpr uint64_t kMemoryPoolInitCapacity = 16 * MB;
+constexpr uint64_t kMemoryPoolTransferCapacity = 8 * MB;
 
 class MockMemoryReclaimer;
 class MockMemoryOperator;
@@ -360,23 +360,20 @@ class MockSharedArbitrationTest : public testing::Test {
 
   void setupMemory(
       int64_t memoryCapacity = 0,
-      uint64_t initMemoryPoolCapacity = kMaxMemory,
-      uint64_t minMemoryPoolCapacityTransferSize = 0,
-      bool retryArbitrationFailure = true) {
-    if (initMemoryPoolCapacity == kMaxMemory) {
-      initMemoryPoolCapacity = kInitMemoryPoolCapacity;
+      uint64_t memoryPoolInitCapacity = kMaxMemory,
+      uint64_t memoryPoolTransferCapacity = 0) {
+    if (memoryPoolInitCapacity == kMaxMemory) {
+      memoryPoolInitCapacity = kMemoryPoolInitCapacity;
     }
-    if (minMemoryPoolCapacityTransferSize == 0) {
-      minMemoryPoolCapacityTransferSize = kMinMemoryPoolCapacityTransferSize;
+    if (memoryPoolTransferCapacity == 0) {
+      memoryPoolTransferCapacity = kMemoryPoolTransferCapacity;
     }
-    IMemoryManager::Options options;
+    MemoryManagerOptions options;
     options.capacity = (memoryCapacity != 0) ? memoryCapacity : kMemoryCapacity;
-    options.arbitratorConfig = {
-        .kind = MemoryArbitrator::Kind::kShared,
-        .capacity = options.capacity,
-        .initMemoryPoolCapacity = initMemoryPoolCapacity,
-        .minMemoryPoolCapacityTransferSize = minMemoryPoolCapacityTransferSize,
-        .retryArbitrationFailure = retryArbitrationFailure};
+    options.arbitratorKind = MemoryArbitrator::Kind::kShared;
+    options.capacity = options.capacity;
+    options.memoryPoolInitCapacity = memoryPoolInitCapacity;
+    options.memoryPoolTransferCapacity = memoryPoolTransferCapacity;
     options.checkUsageLeak = true;
     manager_ = std::make_unique<MemoryManager>(options);
     ASSERT_EQ(manager_->arbitrator()->kind(), MemoryArbitrator::Kind::kShared);
@@ -452,7 +449,7 @@ void verifyReclaimerStats(
 
 TEST_F(MockSharedArbitrationTest, constructor) {
   std::vector<std::shared_ptr<MockQuery>> queries;
-  for (int i = 0; i <= kMemoryCapacity / kInitMemoryPoolCapacity; ++i) {
+  for (int i = 0; i <= kMemoryCapacity / kMemoryPoolInitCapacity; ++i) {
     uint64_t poolCapacity = kMemoryCapacity;
     if (i % 3 == 0) {
       poolCapacity = 0;
@@ -461,8 +458,8 @@ TEST_F(MockSharedArbitrationTest, constructor) {
     }
     auto query = addQuery(kMemoryCapacity);
     ASSERT_NE(query->pool()->reclaimer(), nullptr);
-    if (i < kMemoryCapacity / kInitMemoryPoolCapacity) {
-      ASSERT_EQ(query->capacity(), kInitMemoryPoolCapacity);
+    if (i < kMemoryCapacity / kMemoryPoolInitCapacity) {
+      ASSERT_EQ(query->capacity(), kMemoryPoolInitCapacity);
     } else {
       ASSERT_EQ(query->capacity(), 0);
     }
@@ -486,22 +483,22 @@ TEST_F(MockSharedArbitrationTest, singlePoolGrowWithoutArbitration) {
       arbitrator_->stats(),
       kMemoryCapacity,
       0,
-      (kMemoryCapacity - kInitMemoryPoolCapacity) /
-          kMinMemoryPoolCapacityTransferSize);
+      (kMemoryCapacity - kMemoryPoolInitCapacity) /
+          kMemoryPoolTransferCapacity);
 
   verifyReclaimerStats(
       memOp->reclaimer()->stats(),
       0,
-      (kMemoryCapacity - kInitMemoryPoolCapacity) /
-          kMinMemoryPoolCapacityTransferSize);
+      (kMemoryCapacity - kMemoryPoolInitCapacity) /
+          kMemoryPoolTransferCapacity);
 
   clearQueries();
   verifyArbitratorStats(
       arbitrator_->stats(),
       kMemoryCapacity,
       kMemoryCapacity,
-      (kMemoryCapacity - kInitMemoryPoolCapacity) /
-          kMinMemoryPoolCapacityTransferSize);
+      (kMemoryCapacity - kMemoryPoolInitCapacity) /
+          kMemoryPoolTransferCapacity);
 }
 
 TEST_F(MockSharedArbitrationTest, maxCapacityReserve) {
@@ -779,8 +776,7 @@ TEST_F(MockSharedArbitrationTest, singlePoolGrowCapacityWithArbitration) {
     }
 
     // Do more allocations to trigger arbitration.
-    for (int i = 0; i < kMinMemoryPoolCapacityTransferSize / allocateSize;
-         ++i) {
+    for (int i = 0; i < kMemoryPoolTransferCapacity / allocateSize; ++i) {
       op->allocate(allocateSize);
     }
     verifyArbitratorStats(
@@ -850,16 +846,10 @@ TEST_F(MockSharedArbitrationTest, arbitrateWithMemoryReclaim) {
         arbitrator_->stats(), memoryCapacity, 0, 32, 0, 8388608);
 
     verifyReclaimerStats(
-        arbitrateOp->reclaimer()->stats(),
-        0,
-        1,
-        kMinMemoryPoolCapacityTransferSize);
+        arbitrateOp->reclaimer()->stats(), 0, 1, kMemoryPoolTransferCapacity);
 
     verifyReclaimerStats(
-        reclaimedOp->reclaimer()->stats(),
-        1,
-        31,
-        kMinMemoryPoolCapacityTransferSize);
+        reclaimedOp->reclaimer()->stats(), 1, 31, kMemoryPoolTransferCapacity);
     clearQueries();
   }
 }
@@ -1101,25 +1091,25 @@ TEST_F(MockSharedArbitrationTest, enterArbitrationException) {
 
 TEST_F(MockSharedArbitrationTest, noArbitratiognFromAbortedPool) {
   auto* reclaimedOp = addMemoryOp();
-  ASSERT_EQ(reclaimedOp->capacity(), kInitMemoryPoolCapacity);
+  ASSERT_EQ(reclaimedOp->capacity(), kMemoryPoolInitCapacity);
   reclaimedOp->allocate(128);
   reclaimedOp->pool()->abort();
   ASSERT_TRUE(reclaimedOp->pool()->aborted());
   ASSERT_TRUE(reclaimedOp->pool()->aborted());
-  const int largeAllocationSize = 2 * kInitMemoryPoolCapacity;
+  const int largeAllocationSize = 2 * kMemoryPoolInitCapacity;
   VELOX_ASSERT_THROW(reclaimedOp->allocate(largeAllocationSize), "");
   ASSERT_EQ(arbitrator_->stats().numRequests, 0);
   ASSERT_EQ(arbitrator_->stats().numAborted, 0);
   ASSERT_EQ(arbitrator_->stats().numFailures, 0);
   // Check we don't allow memory reservation increase or trigger memory
   // arbitration at root memory pool.
-  ASSERT_EQ(reclaimedOp->pool()->capacity(), kInitMemoryPoolCapacity);
+  ASSERT_EQ(reclaimedOp->pool()->capacity(), kMemoryPoolInitCapacity);
   ASSERT_EQ(reclaimedOp->pool()->currentBytes(), 0);
   VELOX_ASSERT_THROW(reclaimedOp->allocate(128), "");
   ASSERT_EQ(reclaimedOp->pool()->currentBytes(), 0);
-  ASSERT_EQ(reclaimedOp->pool()->capacity(), kInitMemoryPoolCapacity);
-  VELOX_ASSERT_THROW(reclaimedOp->allocate(kInitMemoryPoolCapacity * 2), "");
-  ASSERT_EQ(reclaimedOp->pool()->capacity(), kInitMemoryPoolCapacity);
+  ASSERT_EQ(reclaimedOp->pool()->capacity(), kMemoryPoolInitCapacity);
+  VELOX_ASSERT_THROW(reclaimedOp->allocate(kMemoryPoolInitCapacity * 2), "");
+  ASSERT_EQ(reclaimedOp->pool()->capacity(), kMemoryPoolInitCapacity);
   ASSERT_EQ(reclaimedOp->pool()->currentBytes(), 0);
   ASSERT_EQ(arbitrator_->stats().numRequests, 0);
   ASSERT_EQ(arbitrator_->stats().numAborted, 0);
@@ -1604,7 +1594,7 @@ DEBUG_ONLY_TEST_F(
     raceBetweenInitialReservationAndArbitration) {
   std::shared_ptr<MockQuery> arbitrationQuery = addQuery(kMemoryCapacity);
   MockMemoryOperator* arbitrationQueryOp = addMemoryOp(arbitrationQuery);
-  ASSERT_EQ(arbitrationQuery->pool()->capacity(), kInitMemoryPoolCapacity);
+  ASSERT_EQ(arbitrationQuery->pool()->capacity(), kMemoryPoolInitCapacity);
 
   folly::EventCount arbitrationRun;
   auto arbitrationRunKey = arbitrationRun.prepareWait();
@@ -1621,7 +1611,7 @@ DEBUG_ONLY_TEST_F(
   std::thread allocThread([&]() {
     // Allocate more than its capacity to trigger arbitration which is blocked
     // by the arbitration testvalue injection above.
-    arbitrationQueryOp->allocate(2 * kInitMemoryPoolCapacity);
+    arbitrationQueryOp->allocate(2 * kMemoryPoolInitCapacity);
   });
 
   arbitrationRun.wait(arbitrationRunKey);
@@ -1636,12 +1626,11 @@ DEBUG_ONLY_TEST_F(
   allocThread.join();
 }
 
-TEST_F(MockSharedArbitrationTest, arbitrationFailureRetry) {
+TEST_F(MockSharedArbitrationTest, arbitrationFailure) {
   int64_t maxCapacity = 128 * MB;
   int64_t initialCapacity = 0 * MB;
   int64_t minTransferCapacity = 1 * MB;
   struct {
-    bool retryArbitrationFailure;
     int64_t requestorCapacity;
     int64_t requestorRequestBytes;
     int64_t otherCapacity;
@@ -1650,8 +1639,7 @@ TEST_F(MockSharedArbitrationTest, arbitrationFailureRetry) {
 
     std::string debugString() const {
       return fmt::format(
-          "retryArbitrationFailure {} requestorCapacity {} requestorRequestBytes {} otherCapacity {} expectedAllocationSuccess {} expectedRequestorAborted {}",
-          retryArbitrationFailure,
+          "requestorCapacity {} requestorRequestBytes {} otherCapacity {} expectedAllocationSuccess {} expectedRequestorAborted {}",
           succinctBytes(requestorCapacity),
           succinctBytes(requestorRequestBytes),
           succinctBytes(otherCapacity),
@@ -1659,23 +1647,15 @@ TEST_F(MockSharedArbitrationTest, arbitrationFailureRetry) {
           expectedRequestorAborted);
     }
   } testSettings[] = {
-      {false, 64 * MB, 64 * MB, 32 * MB, false, false},
-      {false, 64 * MB, 48 * MB, 32 * MB, false, false},
-      {false, 32 * MB, 64 * MB, 64 * MB, false, false},
-      {false, 32 * MB, 32 * MB, 96 * MB, false, false},
-      {true, 64 * MB, 64 * MB, 32 * MB, false, true},
-      {true, 64 * MB, 48 * MB, 32 * MB, false, true},
-      {true, 32 * MB, 64 * MB, 64 * MB, false, true},
-      {true, 32 * MB, 32 * MB, 96 * MB, true, false}};
+      {64 * MB, 64 * MB, 32 * MB, false, true},
+      {64 * MB, 48 * MB, 32 * MB, false, true},
+      {32 * MB, 64 * MB, 64 * MB, false, true},
+      {32 * MB, 32 * MB, 96 * MB, true, false}};
 
   for (const auto& testData : testSettings) {
     SCOPED_TRACE(testData.debugString());
 
-    setupMemory(
-        maxCapacity,
-        initialCapacity,
-        minTransferCapacity,
-        testData.retryArbitrationFailure);
+    setupMemory(maxCapacity, initialCapacity, minTransferCapacity);
     std::shared_ptr<MockQuery> requestorQuery = addQuery();
     MockMemoryOperator* requestorOp = addMemoryOp(requestorQuery, false);
     requestorOp->allocate(testData.requestorCapacity);
@@ -1703,9 +1683,7 @@ TEST_F(MockSharedArbitrationTest, arbitrationFailureRetry) {
     ASSERT_EQ(
         arbitrator_->stats().numFailures,
         testData.expectedAllocationSuccess ? 0 : 1);
-    ASSERT_EQ(
-        arbitrator_->stats().numAborted,
-        testData.retryArbitrationFailure ? 1 : 0);
+    ASSERT_EQ(arbitrator_->stats().numAborted, 1);
   }
 }
 

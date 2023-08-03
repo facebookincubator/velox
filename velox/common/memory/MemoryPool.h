@@ -82,7 +82,7 @@ constexpr int64_t kMaxMemory = std::numeric_limits<int64_t>::max();
 /// node pool that corresponds to the plan node from which the operator is
 /// created. Operator and node pools are owned by the Task via 'childPools_'.
 ///
-/// The query pool is created from IMemoryManager::getChild() as a child of a
+/// The query pool is created from MemoryManager::getChild() as a child of a
 /// singleton root pool object (system pool). There is only one system pool for
 /// a velox process. Hence each query pool objects forms a subtree rooted from
 /// the system pool.
@@ -95,7 +95,7 @@ constexpr int64_t kMaxMemory = std::numeric_limits<int64_t>::max();
 ///
 /// NOTE: for the users that integrate at expression evaluation level, we don't
 /// need to build the memory pool hierarchy as described above. Users can either
-/// create a single memory pool from IMemoryManager::getChild() to share with
+/// create a single memory pool from MemoryManager::getChild() to share with
 /// all the concurrent expression evaluations or create one dedicated memory
 /// pool for each expression evaluation if they need per-expression memory quota
 /// enforcement.
@@ -277,8 +277,8 @@ class MemoryPool : public std::enable_shared_from_this<MemoryPool> {
   /// Makes a large contiguous mmap of 'numPages'. The new mapped
   /// pages are returned in 'out' on success. Any formly mapped pages
   /// referenced by 'out' is unmapped in all the cases even if the
-  /// allocation fails. If 'numPages' is not given, this defaults to
-  /// 'maxPages'. 'maxPages' gives the size of the mmap in
+  /// allocation fails. If 'maxPages' is not given, this defaults to
+  /// 'numPages'. 'maxPages' gives the size of the mmap in
   /// addresses. 'numPages' gives the amount to declare as
   /// used. growContiguous() is used to increase the
   /// reservation up to 'maxPages'. This allows reserving a large
@@ -287,9 +287,9 @@ class MemoryPool : public std::enable_shared_from_this<MemoryPool> {
   /// the number of huge pages  can be set according to an assumption of large
   /// utilization.
   virtual void allocateContiguous(
-      MachinePageCount maxPages,
+      MachinePageCount numPages,
       ContiguousAllocation& out,
-      MachinePageCount numPages = 0) = 0;
+      MachinePageCount maxPages = 0) = 0;
 
   /// Frees contiguous 'allocation'. 'allocation' is empty on return.
   virtual void freeContiguous(ContiguousAllocation& allocation) = 0;
@@ -568,9 +568,9 @@ class MemoryPoolImpl : public MemoryPool {
   const std::vector<MachinePageCount>& sizeClasses() const override;
 
   void allocateContiguous(
-      MachinePageCount maxPages,
+      MachinePageCount numPages,
       ContiguousAllocation& out,
-      MachinePageCount numPages = 0) override;
+      MachinePageCount maxPages = 0) override;
 
   void freeContiguous(ContiguousAllocation& allocation) override;
 

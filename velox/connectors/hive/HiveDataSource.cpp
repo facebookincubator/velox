@@ -16,12 +16,18 @@
 
 #include "velox/connectors/hive/HiveDataSource.h"
 
+#include <string>
+#include <unordered_map>
+
 #include "velox/common/caching/AsyncDataCache.h"
-#include "velox/connectors/hive/HiveConnectorSplit.h"
 #include "velox/dwio/common/CachedBufferedInput.h"
 #include "velox/dwio/common/ReaderFactory.h"
 #include "velox/expression/ExprToSubfieldFilter.h"
 #include "velox/expression/FieldReference.h"
+
+#ifdef VELOX_ENABLE_BACKWARD_COMPATIBILITY
+#include "velox/connectors/hive/HiveConnectorSplit.h"
+#endif
 
 namespace facebook::velox::connector::hive {
 
@@ -60,25 +66,39 @@ bool applyPartitionFilter(
   }
 }
 
+struct SubfieldSpec {
+  const common::Subfield* subfield;
+  bool filterOnly;
+};
+
+template <typename T>
+void deduplicate(std::vector<T>& values) {
+  std::sort(values.begin(), values.end());
+  values.erase(std::unique(values.begin(), values.end()), values.end());
+}
+
 // Recursively add subfields to scan spec.
 void addSubfields(
     const Type& type,
-    const std::vector<const common::Subfield*>& subfields,
+    std::vector<SubfieldSpec>& subfields,
     int level,
     memory::MemoryPool* pool,
     common::ScanSpec& spec) {
-  for (auto& subfield : subfields) {
-    if (level == subfield->path().size()) {
+  int newSize = 0;
+  for (int i = 0; i < subfields.size(); ++i) {
+    if (level < subfields[i].subfield->path().size()) {
+      subfields[newSize++] = subfields[i];
+    } else if (!subfields[i].filterOnly) {
       spec.addAllChildFields(type);
       return;
     }
   }
+  subfields.resize(newSize);
   switch (type.kind()) {
     case TypeKind::ROW: {
-      folly::F14FastMap<std::string, std::vector<const common::Subfield*>>
-          required;
+      folly::F14FastMap<std::string, std::vector<SubfieldSpec>> required;
       for (auto& subfield : subfields) {
-        auto* element = subfield->path()[level].get();
+        auto* element = subfield.subfield->path()[level].get();
         auto* nestedField =
             dynamic_cast<const common::Subfield::NestedField*>(element);
         VELOX_CHECK(
@@ -111,11 +131,14 @@ void addSubfields(
           level + 1,
           pool,
           *spec.addMapValueField());
+      if (subfields.empty()) {
+        return;
+      }
       bool stringKey = keyType->isVarchar() || keyType->isVarbinary();
       std::vector<std::string> stringSubscripts;
       std::vector<int64_t> longSubscripts;
       for (auto& subfield : subfields) {
-        auto* element = subfield->path()[level].get();
+        auto* element = subfield.subfield->path()[level].get();
         if (dynamic_cast<const common::Subfield::AllSubscripts*>(element)) {
           return;
         }
@@ -139,8 +162,10 @@ void addSubfields(
       }
       std::unique_ptr<common::Filter> filter;
       if (stringKey) {
+        deduplicate(stringSubscripts);
         filter = std::make_unique<common::BytesValues>(stringSubscripts, false);
       } else {
+        deduplicate(longSubscripts);
         filter = common::createBigintValues(longSubscripts, false);
       }
       keys->setFilter(std::move(filter));
@@ -153,10 +178,13 @@ void addSubfields(
           level + 1,
           pool,
           *spec.addArrayElementField());
+      if (subfields.empty()) {
+        return;
+      }
       constexpr long kMaxIndex = std::numeric_limits<vector_size_t>::max();
       long maxIndex = -1;
       for (auto& subfield : subfields) {
-        auto* element = subfield->path()[level].get();
+        auto* element = subfield.subfield->path()[level].get();
         if (dynamic_cast<const common::Subfield::AllSubscripts*>(element)) {
           return;
         }
@@ -172,7 +200,7 @@ void addSubfields(
       break;
     }
     default:
-      VELOX_FAIL("Subfields pruning not supported on type {}", type.toString());
+      break;
   }
 }
 
@@ -289,6 +317,9 @@ void checkColumnNameLowerCase(const SubfieldFilters& filters) {
 }
 
 void checkColumnNameLowerCase(const core::TypedExprPtr& typeExpr) {
+  if (typeExpr == nullptr) {
+    return;
+  }
   checkColumnNameLowerCase(typeExpr->type());
   for (auto& type : typeExpr->inputs()) {
     checkColumnNameLowerCase(type);
@@ -355,9 +386,8 @@ HiveDataSource::HiveDataSource(
         std::shared_ptr<connector::ColumnHandle>>& columnHandles,
     FileHandleFactory* fileHandleFactory,
     core::ExpressionEvaluator* expressionEvaluator,
-    memory::MemoryAllocator* allocator,
+    cache::AsyncDataCache* cache,
     const std::string& scanId,
-    bool fileColumnNamesReadAsLowerCase,
     folly::Executor* executor,
     const dwio::common::ReaderOptions& options)
     : fileHandleFactory_(fileHandleFactory),
@@ -365,7 +395,7 @@ HiveDataSource::HiveDataSource(
       pool_(&options.getMemoryPool()),
       outputType_(outputType),
       expressionEvaluator_(expressionEvaluator),
-      allocator_(allocator),
+      cache_(cache),
       scanId_(scanId),
       executor_(executor) {
   // Column handled keyed on the column alias, the name used in the query.
@@ -402,7 +432,7 @@ HiveDataSource::HiveDataSource(
   VELOX_CHECK(
       hiveTableHandle != nullptr,
       "TableHandle must be an instance of HiveTableHandle");
-  if (fileColumnNamesReadAsLowerCase) {
+  if (readerOpts_.isFileColumnNamesReadAsLowerCase()) {
     checkColumnNameLowerCase(outputType);
     checkColumnNameLowerCase(hiveTableHandle->subfieldFilters());
     checkColumnNameLowerCase(hiveTableHandle->remainingFilter());
@@ -539,6 +569,7 @@ void HiveDataSource::addSplit(std::shared_ptr<ConnectorSplit> split) {
 
   auto& fileType = reader_->rowType();
 
+  std::vector<TypePtr> columnTypes = fileType->children();
   for (int i = 0; i < readerOutputType_->size(); i++) {
     auto fieldName = readerOutputType_->nameOf(i);
     auto scanChildSpec = scanSpec_->childByName(fieldName);
@@ -560,6 +591,10 @@ void HiveDataSource::addSplit(std::shared_ptr<ConnectorSplit> split) {
       // Column is missing. Most likely due to schema evolution.
       setNullConstantValue(scanChildSpec, readerOutputType_->childAt(i));
     } else {
+      // We know the fieldName exists in the file, make the type at that
+      // position match what we expect in the output.
+      columnTypes[fileType->getChildIdx(fieldName)] =
+          readerOutputType_->childAt(i);
       scanChildSpec->setConstantValue(nullptr);
     }
   }
@@ -586,7 +621,9 @@ void HiveDataSource::addSplit(std::shared_ptr<ConnectorSplit> split) {
         velox::variant(split_->tableBucketNumber.value()));
   }
   scanSpec_->resetCachedValues(false);
-  configureRowReaderOptions(rowReaderOpts_);
+  configureRowReaderOptions(
+      rowReaderOpts_,
+      ROW(std::vector<std::string>(fileType->names()), std::move(columnTypes)));
   rowReader_ = createRowReader(rowReaderOpts_);
 }
 
@@ -783,22 +820,22 @@ std::shared_ptr<common::ScanSpec> HiveDataSource::makeScanSpec(
       spec->addFieldRecursively(name, *type, i);
       continue;
     }
-    std::vector<const common::Subfield*> subfieldPtrs;
+    std::vector<SubfieldSpec> subfieldSpecs;
     for (auto& subfield : subfields) {
       VELOX_CHECK_GT(subfield.path().size(), 0);
       auto* field = dynamic_cast<const common::Subfield::NestedField*>(
           subfield.path()[0].get());
       VELOX_CHECK(field);
       VELOX_CHECK_EQ(field->name(), name);
-      subfieldPtrs.push_back(&subfield);
+      subfieldSpecs.push_back({&subfield, false});
     }
     if (auto it = requiredSubfieldsInFilters.find(name);
         it != requiredSubfieldsInFilters.end()) {
       for (auto* subfield : it->second) {
-        subfieldPtrs.push_back(subfield);
+        subfieldSpecs.push_back({subfield, true});
       }
     }
-    addSubfields(*type, subfieldPtrs, 1, pool, *spec->addField(name, i));
+    addSubfields(*type, subfieldSpecs, 1, pool, *spec->addField(name, i));
   }
 
   for (auto& pair : filters) {
@@ -822,12 +859,12 @@ std::unique_ptr<dwio::common::BufferedInput>
 HiveDataSource::createBufferedInput(
     const FileHandle& fileHandle,
     const dwio::common::ReaderOptions& readerOpts) {
-  if (auto* asyncCache = dynamic_cast<cache::AsyncDataCache*>(allocator_)) {
+  if (cache_) {
     return std::make_unique<dwio::common::CachedBufferedInput>(
         fileHandle.file,
         dwio::common::MetricsLog::voidLog(),
         fileHandle.uuid.id(),
-        asyncCache,
+        cache_,
         Connector::getTracker(scanId_, readerOpts.loadQuantum()),
         fileHandle.groupId.id(),
         ioStats_,
@@ -883,7 +920,8 @@ void HiveDataSource::resetSplit() {
 }
 
 void HiveDataSource::configureRowReaderOptions(
-    dwio::common::RowReaderOptions& options) const {
+    dwio::common::RowReaderOptions& options,
+    const RowTypePtr& rowType) const {
   std::vector<std::string> columnNames;
   for (auto& spec : scanSpec_->children()) {
     if (!spec->isConstant()) {
@@ -895,8 +933,7 @@ void HiveDataSource::configureRowReaderOptions(
     static const RowTypePtr kEmpty{ROW({}, {})};
     cs = std::make_shared<dwio::common::ColumnSelector>(kEmpty);
   } else {
-    cs = std::make_shared<dwio::common::ColumnSelector>(
-        reader_->rowType(), columnNames);
+    cs = std::make_shared<dwio::common::ColumnSelector>(rowType, columnNames);
   }
   options.select(cs).range(split_->start, split_->length);
 }

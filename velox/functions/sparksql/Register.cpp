@@ -81,7 +81,14 @@ void registerFunctions(const std::string& prefix) {
   // Register string functions.
   registerFunction<sparksql::ChrFunction, Varchar, int64_t>({prefix + "chr"});
   registerFunction<AsciiFunction, int32_t, Varchar>({prefix + "ascii"});
-
+  registerFunction<sparksql::LPadFunction, Varchar, Varchar, int32_t, Varchar>(
+      {prefix + "lpad"});
+  registerFunction<sparksql::RPadFunction, Varchar, Varchar, int32_t, Varchar>(
+      {prefix + "rpad"});
+  registerFunction<sparksql::LPadFunction, Varchar, Varchar, int32_t>(
+      {prefix + "lpad"});
+  registerFunction<sparksql::RPadFunction, Varchar, Varchar, int32_t>(
+      {prefix + "rpad"});
   registerFunction<sparksql::SubstrFunction, Varchar, Varchar, int32_t>(
       {prefix + "substring"});
   registerFunction<
@@ -132,7 +139,13 @@ void registerFunctions(const std::string& prefix) {
   exec::registerStatefulVectorFunction(
       prefix + "hash", hashSignatures(), makeHash);
   exec::registerStatefulVectorFunction(
+      prefix + "hash_with_seed", hashWithSeedSignatures(), makeHashWithSeed);
+  exec::registerStatefulVectorFunction(
       prefix + "xxhash64", xxhash64Signatures(), makeXxHash64);
+  exec::registerStatefulVectorFunction(
+      prefix + "xxhash64_with_seed",
+      xxhash64WithSeedSignatures(),
+      makeXxHash64WithSeed);
   VELOX_REGISTER_VECTOR_FUNCTION(udf_map, prefix + "map");
 
   // Register 'in' functions.

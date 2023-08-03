@@ -31,14 +31,14 @@ namespace facebook::velox::dwio::common {
  */
 class DataSink : public Closeable {
  public:
-  explicit DataSink(
+  DataSink(
       std::string name,
       MetricsLogPtr metricLogger,
       IoStatistics* stats = nullptr)
       : name_{std::move(name)},
-        size_{0},
         metricLogger_{std::move(metricLogger)},
-        stats_{stats} {}
+        stats_{stats},
+        size_{0} {}
 
   ~DataSink() override {
     destroy();
@@ -100,22 +100,19 @@ class DataSink : public Closeable {
 
   using Factory = std::function<std::unique_ptr<DataSink>(
       const std::string&,
-      const common::MetricsLogPtr&,
+      memory::MemoryPool* pool,
+      const common::MetricsLogPtr& metricsLog,
       IoStatistics* stats)>;
 
   static std::unique_ptr<DataSink> create(
-      const std::string&,
+      const std::string& filePath,
+      memory::MemoryPool* pool,
       const common::MetricsLogPtr& = common::MetricsLog::voidLog(),
       IoStatistics* stats = nullptr);
 
   static bool registerFactory(const Factory& factory);
 
  protected:
-  std::string name_;
-  uint64_t size_;
-  MetricsLogPtr metricLogger_;
-  IoStatistics* stats_;
-
   void writeImpl(
       std::vector<DataBuffer<char>>& buffers,
       const std::function<uint64_t(const DataBuffer<char>&)>& callback) {
@@ -132,12 +129,18 @@ class DataSink : public Closeable {
     // buffers after all buffers are written.
     buffers.clear();
   }
+
+  const std::string name_;
+  const MetricsLogPtr metricLogger_;
+  IoStatistics* const stats_;
+
+  uint64_t size_;
 };
 
 // Wrapper class that delegates calls to the underlying WriteFile
 class WriteFileDataSink final : public DataSink {
  public:
-  explicit WriteFileDataSink(
+  WriteFileDataSink(
       std::unique_ptr<WriteFile> writeFile,
       std::string name,
       MetricsLogPtr metricLogger = MetricsLog::voidLog(),
@@ -163,8 +166,15 @@ class WriteFileDataSink final : public DataSink {
 
   void doClose() override;
 
+  // TODO: Hack to make Alpha writer work with Velox.  To be removed after Alpha
+  // writer takes DataSink directly.
+  std::unique_ptr<WriteFile> toWriteFile() {
+    markClosed();
+    return std::move(writeFile_);
+  }
+
  private:
-  std::shared_ptr<WriteFile> writeFile_;
+  std::unique_ptr<WriteFile> writeFile_;
 };
 
 class LocalFileSink : public DataSink {
