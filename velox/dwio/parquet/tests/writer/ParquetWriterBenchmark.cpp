@@ -102,22 +102,9 @@ class ParquetWriterBenchmark {
 
     suspender.dismiss();
 
-    if (FLAGS_table_name.compare("part") == 0 ||
-        FLAGS_table_name.compare("partsupp") == 0 ||
-        FLAGS_table_name.compare("orders") == 0 ||
-        FLAGS_table_name.compare("customer") == 0 ||
-        FLAGS_table_name.compare("lineitem") == 0) {
-      for (int i = 0; i < 10; i++) {
-        LOG(INFO) << "i: " << i << ", num row: " << rowVector1->size()
-                  << std::endl;
-        writer_->write(rowVector1);
-      }
-    } else if (
-        FLAGS_table_name.compare("region") == 0 ||
-        FLAGS_table_name.compare("supplier") == 0 ||
-        FLAGS_table_name.compare("nation") == 0) {
-      rowVector1 = facebook::velox::tpch::genTpchRegion(
-          leafPool_.get(), 5, 0, scale_factor);
+    for (int i = 0; i < 10; i++) {
+      LOG(INFO) << "i: " << i << ", num row: " << rowVector1->size()
+                << std::endl;
       writer_->write(rowVector1);
     }
 
