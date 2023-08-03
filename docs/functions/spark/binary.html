@@ -46,8 +46,26 @@
 <h1>Binary Functions<a class="headerlink" href="#binary-functions" title="Permalink to this heading">¶</a></h1>
 <dl class="spark function">
 <dt class="sig sig-object spark" id="hash">
-<span class="sig-name descname"><span class="pre">hash</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">x</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">integer</span></span></span><a class="headerlink" href="#hash" title="Permalink to this definition">¶</a></dt>
-<dd><p>Computes the hash of x.</p>
+<span class="sig-name descname"><span class="pre">hash</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">x</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">...</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">integer</span></span></span><a class="headerlink" href="#hash" title="Permalink to this definition">¶</a></dt>
+<dd><p>Computes the hash of one or more input values using seed value of 42.</p>
+</dd></dl>
+
+<dl class="spark function">
+<dt class="sig sig-object spark" id="hash_with_seed">
+<span class="sig-name descname"><span class="pre">hash_with_seed</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">seed</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">x</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">...</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">integer</span></span></span><a class="headerlink" href="#hash_with_seed" title="Permalink to this definition">¶</a></dt>
+<dd><p>Computes the hash of one or more input values using specified seed.</p>
+</dd></dl>
+
+<dl class="spark function">
+<dt class="sig sig-object spark" id="xxhash64">
+<span class="sig-name descname"><span class="pre">xxhash64</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">x</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">...</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">bigint</span></span></span><a class="headerlink" href="#xxhash64" title="Permalink to this definition">¶</a></dt>
+<dd><p>Computes the xxhash64 of one or more input values using seed value of 42.</p>
+</dd></dl>
+
+<dl class="spark function">
+<dt class="sig sig-object spark" id="xxhash64_with_seed">
+<span class="sig-name descname"><span class="pre">xxhash64_with_seed</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">seed</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">x</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">...</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">bigint</span></span></span><a class="headerlink" href="#xxhash64_with_seed" title="Permalink to this definition">¶</a></dt>
+<dd><p>Computes the xxhash64 of one or more input values using specified seed.</p>
 </dd></dl>
 
 <dl class="spark function">
@@ -80,12 +98,6 @@ The second argument indicates the desired bit length of the result, which must
 have a value of 224, 256, 384, 512, or 0 (which is equivalent to 256). If asking
 for an unsupported bitLength, the return value is NULL.
 Note: x can only be varbinary type.</p>
-</dd></dl>
-
-<dl class="spark function">
-<dt class="sig sig-object spark" id="xxhash64">
-<span class="sig-name descname"><span class="pre">xxhash64</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">x</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">integer</span></span></span><a class="headerlink" href="#xxhash64" title="Permalink to this definition">¶</a></dt>
-<dd><p>Computes the xxhash64 of x.</p>
 </dd></dl>
 
 </section>
