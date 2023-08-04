@@ -13,6 +13,13 @@ These functions support TIMESTAMP and DATE input types.
     If num_days is a negative value then these amount of days will be
     deducted from start_date.
 
+.. spark:function:: date_diff(endDate, startDate) -> integer
+    Returns the number of days from startDate to endDate. 
+    ``datediff`` is` an alias for ``date_diff``::
+
+    SELECT date_diff('2009-07-31', '2009-07-30'); -- 1
+    SELECT date_diff('2009-07-30', '2009-07-31'); -- -1
+
 .. spark:function:: date_sub(start_date, num_days) -> date
 
     Returns the date that is num_days before start_date. According to the inputs,
