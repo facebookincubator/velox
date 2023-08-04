@@ -78,29 +78,3 @@ set_target_properties(
              INTERFACE_LINK_LIBRARIES "${QATZSTD_LINK_LIBRARIES}")
 
 add_dependencies(qatzstd::qatzstd qatzstd)
-
-# We have to manually create these files and folders so that the checks for the
-# files made at configure time (before icu is built) pass set(QATZSTD_DIR
-# ${CMAKE_CURRENT_BINARY_DIR}/_deps/qatzstd) set(QATZSTD_LIBRARIES
-# ${QATZSTD_DIR}/lib)
-
-# file(MAKE_DIRECTORY ${QATZSTD_INCLUDE_DIRS}) file(MAKE_DIRECTORY
-# ${QATZSTD_LIBRARIES})
-
-# add_library(QATZSTD::QATZSTD SHARED IMPORTED)
-# add_dependencies(QATZSTD::QATZSTD QATZSTD-build)
-
-# set_target_properties( QATZSTD::QATZSTD PROPERTIES IMPORTED_LOCATION
-# ${QATZSTD_LIBRARY} INTERFACE_SYSTEM_INCLUDE_DIRECTORIES
-# ${QATZSTD_INCLUDE_DIRS}) target_link_libraries(QATZSTD::QATZSTD INTERFACE
-# QATZSTD::QATZSTD)
-
-# FetchContent_Declare( qatzstd URL ${VELOX_QATZSTD_SOURCE_URL} URL_HASH
-# ${VELOX_QATZSTD_BUILD_SHA256_CHECKSUM} BUILD_COMMAND "make ENABLE_USDM_DRV=1"
-# )
-
-# FetchContent_MakeAvailable(qatzstd)
-
-# add_library(qatzstd INTERFACE) # set(qatzstd_LIBRARIES
-# ${qatzstd_BINARY_DIR}/libqatseqprod.a) set(qatzstd_INCLUDE_DIRS
-# ${qatzstd_SOURCE_DIR}/src)
