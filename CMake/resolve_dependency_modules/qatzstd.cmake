@@ -27,8 +27,11 @@ message(STATUS "Building QATZSTD from source")
 FetchContent_Declare(
   qatzstd
   URL ${VELOX_QATZSTD_SOURCE_URL}
-  URL_HASH ${VELOX_QATZSTD_BUILD_SHA256_CHECKSUM})
+  URL_HASH ${VELOX_QATZSTD_BUILD_SHA256_CHECKSUM}
+  BUILD_COMMAND make ENABLE_USDM_DRV=1
+  SOURCE_DIR ${CMAKE_BINARY_DIR}/_deps/qatzstd-src/src)
 
+set(ENABLE_USDM_DRV 1)
 FetchContent_MakeAvailable(qatzstd)
 
 set(qatzstd_LIBRARIES ${qatzstd_BINARY_DIR}/libqatseqprod.a)
