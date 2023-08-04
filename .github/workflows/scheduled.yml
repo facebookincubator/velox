@@ -217,4 +217,3 @@ jobs:
           name: join-fuzzer-failure-artifacts
           path: |
             /tmp/join_fuzzer_repro
-
