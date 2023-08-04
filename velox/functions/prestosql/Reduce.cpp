@@ -81,14 +81,14 @@ class ReduceFunction : public exec::VectorFunction {
     const auto& initialState = args[1];
     auto partialResult =
         BaseVector::create(initialState->type(), rows.end(), context.pool());
-    std::vector<bool> isNullArrays(rows.end(), false);
+    std::vector<bool> isNulls(rows.end(), false);
     // Process null and empty arrays.
     auto* rawNulls = flatArray->rawNulls();
     auto* rawSizes = flatArray->rawSizes();
     rows.applyToSelected([&](auto row) {
       if (rawNulls && bits::isBitNull(rawNulls, row)) {
         partialResult->setNull(row, true);
-        isNullArrays[row] = true;
+        isNulls[row] = true;
       } else if (rawSizes[row] == 0) {
         partialResult->copy(initialState.get(), row, row, 1);
       }
@@ -171,7 +171,7 @@ class ReduceFunction : public exec::VectorFunction {
     }
     context.moveOrCopyResult(localResult, rows, result);
     for (int i = 0; i < rows.end(); i++) {
-      if (isNullArrays[i]) {
+      if (isNulls[i]) {
         result->setNull(i, true);
       }
     }
