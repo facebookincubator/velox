@@ -122,7 +122,7 @@ BinaryStreamReader::getStatistics() const {
     for (auto node = 0; node < footerStatsSize; node++) {
       if (columnSelector_.shouldReadNode(node)) {
         stats[node] =
-            stripeReaderBase_.getReader().getFooter().statistics(node);
+            stripeReaderBase_.getReader().getFooter().dwrfStatistics(node);
       }
     }
   }
