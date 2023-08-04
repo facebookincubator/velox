@@ -31,7 +31,6 @@ FetchContent_Declare(
   BUILD_COMMAND "make ENABLE_USDM_DRV=1"
   SOURCE_DIR ${CMAKE_BINARY_DIR}/_deps/qatzstd-src/src)
 
-set(ENABLE_USDM_DRV 1)
 FetchContent_MakeAvailable(qatzstd)
 
 set(qatzstd_LIBRARIES ${qatzstd_BINARY_DIR}/libqatseqprod.a)
