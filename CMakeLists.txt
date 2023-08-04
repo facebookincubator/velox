@@ -404,7 +404,7 @@ if(${VELOX_ENABLE_QAT_ZSTD_OT})
   set_source(qatzstd)
   resolve_dependency(qatzstd)
   include_directories(${qatzstd_INCLUDE_DIRS})
-  # add_definitions(-DVELOX_ENABLE_QAT_ZSTD_OT)
+  add_definitions(-DVELOX_ENABLE_QAT_ZSTD_OT)
 endif()
 
 # Locate or build folly.
