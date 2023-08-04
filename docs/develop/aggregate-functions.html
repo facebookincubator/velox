@@ -883,6 +883,26 @@ MapAccumulator.</p>
 SingleValueAccumulator, Strings, AddressableNonNullValueList and F14
 containers to put together an accumulator that uses memory efficiently.</p>
 </section>
+<section id="tracking-memory-usage">
+<h3>Tracking Memory Usage<a class="headerlink" href="#tracking-memory-usage" title="Permalink to this heading">¶</a></h3>
+<p>Aggregation operator needs to know how much memory is used for each group.
+For example, this information is used to decide how many and which rows to
+spill when memory is tight.</p>
+<p>Aggregation functions should use RowSizeTracker to help track memory usage
+per group. Aggregate base class provides helper method trackRowSize(group),
+which can be used like so:</p>
+<div class="highlight-c++ notranslate"><div class="highlight"><pre><span></span><span class="n">rows</span><span class="p">.</span><span class="n">applyToSelected</span><span class="p">([</span><span class="o">&amp;</span><span class="p">](</span><span class="n">vector_size_t</span><span class="w"> </span><span class="n">row</span><span class="p">)</span><span class="w"> </span><span class="p">{</span><span class="w"></span>
+<span class="w">    </span><span class="k">auto</span><span class="w"> </span><span class="n">group</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">groups</span><span class="p">[</span><span class="n">row</span><span class="p">];</span><span class="w"></span>
+<span class="w">    </span><span class="k">auto</span><span class="w"> </span><span class="n">tracker</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">trackRowSize</span><span class="p">(</span><span class="n">group</span><span class="p">);</span><span class="w"></span>
+<span class="w">    </span><span class="n">accumulator</span><span class="o">-&gt;</span><span class="n">append</span><span class="p">(...);</span><span class="w"></span>
+<span class="p">});</span><span class="w"></span>
+</pre></div>
+</div>
+<p>The ‘trackRowSize’ method returns an instance of RowSizeTracker initialized
+with a reference to the arena and a counter to increment on destruction. When
+object returned by trackRowSize goes out of scope, the counter is updated to
+add memory allocated since object’s creation.</p>
+</section>
 </section>
 <section id="end-to-end-testing">
 <h2>End-to-End Testing<a class="headerlink" href="#end-to-end-testing" title="Permalink to this heading">¶</a></h2>
@@ -933,6 +953,7 @@ example pull request can be found at
 <li><a class="reference internal" href="#min-max-and-singlevalueaccumulator">min, max, and SingleValueAccumulator</a></li>
 <li><a class="reference internal" href="#set-agg-set-union-strings-and-addressablenonnullvaluelist">set_agg, set_union, Strings and AddressableNonNullValueList</a></li>
 <li><a class="reference internal" href="#map-agg-map-union-and-mapaccumulator">map_agg, map_union, and MapAccumulator</a></li>
+<li><a class="reference internal" href="#tracking-memory-usage">Tracking Memory Usage</a></li>
 </ul>
 </li>
 <li><a class="reference internal" href="#end-to-end-testing">End-to-End Testing</a></li>

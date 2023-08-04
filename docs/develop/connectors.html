@@ -1,0 +1,226 @@
+
+<!DOCTYPE html>
+
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" /><meta name="generator" content="Docutils 0.18.1: http://docutils.sourceforge.net/" />
+
+    <title>Connectors &#8212; Velox  documentation</title>
+    <link rel="stylesheet" type="text/css" href="../_static/pygments.css" />
+    <link rel="stylesheet" type="text/css" href="../_static/nature.css" />
+    <script data-url_root="../" id="documentation_options" src="../_static/documentation_options.js"></script>
+    <script src="../_static/jquery.js"></script>
+    <script src="../_static/underscore.js"></script>
+    <script src="../_static/_sphinx_javascript_frameworks_compat.js"></script>
+    <script src="../_static/doctools.js"></script>
+    <link rel="index" title="Index" href="../genindex.html" />
+    <link rel="search" title="Search" href="../search.html" />
+    <link rel="next" title="Joins" href="joins.html" />
+    <link rel="prev" title="Aggregations" href="aggregations.html" /> 
+  </head><body>
+    <div class="related" role="navigation" aria-label="related navigation">
+      <h3>Navigation</h3>
+      <ul>
+        <li class="right" style="margin-right: 10px">
+          <a href="../genindex.html" title="General Index"
+             accesskey="I">index</a></li>
+        <li class="right" >
+          <a href="joins.html" title="Joins"
+             accesskey="N">next</a> |</li>
+        <li class="right" >
+          <a href="aggregations.html" title="Aggregations"
+             accesskey="P">previous</a> |</li>
+        <li class="nav-item nav-item-0"><a href="../index.html">Velox  documentation</a> &#187;</li>
+          <li class="nav-item nav-item-1"><a href="../develop.html" accesskey="U">Developer Guide</a> &#187;</li>
+        <li class="nav-item nav-item-this"><a href="">Connectors</a></li> 
+      </ul>
+    </div>  
+
+    <div class="document">
+      <div class="documentwrapper">
+        <div class="bodywrapper">
+          <div class="body" role="main">
+            
+  <section id="connectors">
+<h1>Connectors<a class="headerlink" href="#connectors" title="Permalink to this heading">¶</a></h1>
+<p>Connectors allow reading and writing data to and from external sources.
+This concept is similar to <a class="reference external" href="https://prestodb.io/docs/current/develop/connectors.html">Presto Connectors</a>.
+The <a class="reference internal" href="operators.html#tablescannode"><span class="std std-ref">TableScanNode</span></a> operator reads external data via a connector.
+The <a class="reference internal" href="operators.html#tablewritenode"><span class="std std-ref">TableWriteNode</span></a> operator writes data externally via a connector.
+The various connector interfaces in Velox are described below.</p>
+<section id="connector-interface">
+<h2>Connector Interface<a class="headerlink" href="#connector-interface" title="Permalink to this heading">¶</a></h2>
+<table class="docutils align-default">
+<colgroup>
+<col style="width: 20%" />
+<col style="width: 80%" />
+</colgroup>
+<thead>
+<tr class="row-odd"><th class="head"><p>Interface Name</p></th>
+<th class="head"><p>Description</p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even"><td><p>ConnectorSplit</p></td>
+<td><p>A chunk of data to process. For example, a single file.</p></td>
+</tr>
+<tr class="row-odd"><td><p>DataSource</p></td>
+<td><p>Provides methods to consume and process a split. A DataSource can optionally consume a
+dynamic filter during execution to prune some rows from the output vector.</p></td>
+</tr>
+<tr class="row-even"><td><p>DataSink</p></td>
+<td><p>Provides methods to write a Velox vector externally.</p></td>
+</tr>
+<tr class="row-odd"><td><p>Connector</p></td>
+<td><p>Allows creating instances of a DataSource or a DataSink.</p></td>
+</tr>
+<tr class="row-even"><td><p>Connector Factory</p></td>
+<td><p>Enables creating instances of a particular connector.</p></td>
+</tr>
+</tbody>
+</table>
+<p>Velox provides Hive and TPC-H Connectors out of the box.
+Let’s see how the above connector interfaces are implemented in the Hive Connector in detail below.</p>
+</section>
+<section id="hive-connector">
+<h2>Hive Connector<a class="headerlink" href="#hive-connector" title="Permalink to this heading">¶</a></h2>
+<p>The Hive Connector is used to read and write data files (Parquet, DWRF) residing on
+an external storage (S3, HDFS, GCS, Linux FS).</p>
+<section id="hiveconnectorsplit">
+<h3>HiveConnectorSplit<a class="headerlink" href="#hiveconnectorsplit" title="Permalink to this heading">¶</a></h3>
+<p>The HiveConnectorSplit describes a data chunk using parameters including <cite>file-path</cite>,
+<cite>file-format</cite>, <cite>start</cite>, <cite>length</cite>, <cite>storage format</cite>, etc..
+It is not necessary to specify start and length values that align with row boundaries.
+For example, in a Parquet file, those row groups with offset in the range of [start, length)
+are processed as part of the split.
+For a given a set of files, users or applications are responsible for defining the splits.</p>
+</section>
+<section id="hivedatasource">
+<h3>HiveDataSource<a class="headerlink" href="#hivedatasource" title="Permalink to this heading">¶</a></h3>
+<p>The HiveDataSource implements the <cite>addSplit</cite> API that consumes a HiveConnectorSplit.
+It creates a file reader based on the file format, offset, and length. The supported file formats
+are DWRF and Parquet.
+The <cite>next</cite> API processes the split and returns a batch of rows. Users can continue to call
+<cite>next</cite> until all the rows in the split are fully read.
+HiveDataSource allows adding a dynamic filter using the <cite>addDynamicFilter</cite> API. This allows
+supporting <a class="reference internal" href="joins.html#dynamicfilterpushdown"><span class="std std-ref">Dynamic Filter Pushdown</span></a>.</p>
+</section>
+<section id="hivedatasink">
+<h3>HiveDataSink<a class="headerlink" href="#hivedatasink" title="Permalink to this heading">¶</a></h3>
+<p>The HiveDataSink writes vectors to files on disk. The supported file formats are DWRF and Parquet.
+The parameters to HiveDataSink also include column names, sorting, partitioning, and bucketing information.
+The <cite>appendData</cite> API instantiates a file writer based on the above parameters and writes a vector to disk.</p>
+</section>
+<section id="hiveconnector">
+<h3>HiveConnector<a class="headerlink" href="#hiveconnector" title="Permalink to this heading">¶</a></h3>
+<p>The HiveConnector implements the <cite>createDataSource</cite> connector API to create instances of HiveDataSource.
+It also implements the <cite>createDataSink</cite> connector API to create instances of HiveDataSink.
+One of the parameters to these APIs is <cite>ConnectorQueryCtx</cite>, which provides means to specify a
+memory pool and connector configuration.</p>
+</section>
+<section id="hiveconnectorfactory">
+<h3>HiveConnectorFactory<a class="headerlink" href="#hiveconnectorfactory" title="Permalink to this heading">¶</a></h3>
+<p>The HiveConnectorFactory enabled creating instances of the HiveConnector. A <cite>connector name</cite> say “hive”
+is required to register the HiveConnectorFactory. Multiple instances of the HiveConnector can then be
+created by using the <cite>newConnector</cite> API by specifying a <cite>connectorId</cite> and connector configuration listed
+<a class="reference internal" href="../configs.html"><span class="doc">here</span></a>. Multiple instances of a connector are required if you have multiple external
+sources and each require a different configuration.</p>
+</section>
+<section id="storage-adapters">
+<h3>Storage Adapters<a class="headerlink" href="#storage-adapters" title="Permalink to this heading">¶</a></h3>
+<p>Hive Connector allows reading and writing files from a variety of distributed storage systems.
+The supported storage API are S3, HDFS, GCS, Linux FS.</p>
+<p>S3 is supported using the <a class="reference external" href="https://github.com/aws/aws-sdk-cpp">AWS SDK for C++</a> library.
+S3 supported schemes are <cite>s3://</cite> (Amazon S3, Minio), <cite>s3a://</cite> (Hadoop 3.x), <cite>s3n://</cite> (Deprecated in Hadoop 3.x),
+<cite>oss://</cite> (Alibaba cloud storage), and <cite>cos://</cite>, <cite>cosn://</cite> (Tencent cloud storage).</p>
+<p>HDFS is supported using the
+<a class="reference external" href="https://github.com/apache/hawq/tree/master/depends/libhdfs3">Apache Hawk libhdfs3</a> library. HDFS supported schemes
+are <cite>hdfs://</cite>.</p>
+<p>GCS is supported using the
+<a class="reference external" href="https://github.com/googleapis/google-cloud-cpp">Google Cloud Platform C++ Client Libraries</a>. GCS supported schemes
+are <cite>gs://</cite>.</p>
+</section>
+</section>
+</section>
+
+
+            <div class="clearer"></div>
+          </div>
+        </div>
+      </div>
+      <div class="sphinxsidebar" role="navigation" aria-label="main navigation">
+        <div class="sphinxsidebarwrapper">
+  <div>
+    <h3><a href="../index.html">Table of Contents</a></h3>
+    <ul>
+<li><a class="reference internal" href="#">Connectors</a><ul>
+<li><a class="reference internal" href="#connector-interface">Connector Interface</a></li>
+<li><a class="reference internal" href="#hive-connector">Hive Connector</a><ul>
+<li><a class="reference internal" href="#hiveconnectorsplit">HiveConnectorSplit</a></li>
+<li><a class="reference internal" href="#hivedatasource">HiveDataSource</a></li>
+<li><a class="reference internal" href="#hivedatasink">HiveDataSink</a></li>
+<li><a class="reference internal" href="#hiveconnector">HiveConnector</a></li>
+<li><a class="reference internal" href="#hiveconnectorfactory">HiveConnectorFactory</a></li>
+<li><a class="reference internal" href="#storage-adapters">Storage Adapters</a></li>
+</ul>
+</li>
+</ul>
+</li>
+</ul>
+
+  </div>
+  <div>
+    <h4>Previous topic</h4>
+    <p class="topless"><a href="aggregations.html"
+                          title="previous chapter">Aggregations</a></p>
+  </div>
+  <div>
+    <h4>Next topic</h4>
+    <p class="topless"><a href="joins.html"
+                          title="next chapter">Joins</a></p>
+  </div>
+  <div role="note" aria-label="source link">
+    <h3>This Page</h3>
+    <ul class="this-page-menu">
+      <li><a href="../_sources/develop/connectors.rst.txt"
+            rel="nofollow">Show Source</a></li>
+    </ul>
+   </div>
+<div id="searchbox" style="display: none" role="search">
+  <h3 id="searchlabel">Quick search</h3>
+    <div class="searchformwrapper">
+    <form class="search" action="../search.html" method="get">
+      <input type="text" name="q" aria-labelledby="searchlabel" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false"/>
+      <input type="submit" value="Go" />
+    </form>
+    </div>
+</div>
+<script>document.getElementById('searchbox').style.display = "block"</script>
+        </div>
+      </div>
+      <div class="clearer"></div>
+    </div>
+    <div class="related" role="navigation" aria-label="related navigation">
+      <h3>Navigation</h3>
+      <ul>
+        <li class="right" style="margin-right: 10px">
+          <a href="../genindex.html" title="General Index"
+             >index</a></li>
+        <li class="right" >
+          <a href="joins.html" title="Joins"
+             >next</a> |</li>
+        <li class="right" >
+          <a href="aggregations.html" title="Aggregations"
+             >previous</a> |</li>
+        <li class="nav-item nav-item-0"><a href="../index.html">Velox  documentation</a> &#187;</li>
+          <li class="nav-item nav-item-1"><a href="../develop.html" >Developer Guide</a> &#187;</li>
+        <li class="nav-item nav-item-this"><a href="">Connectors</a></li> 
+      </ul>
+    </div>
+    <div class="footer" role="contentinfo">
+        &#169; Copyright TBD.
+      Created using <a href="https://www.sphinx-doc.org/">Sphinx</a> 5.0.2.
+    </div>
+  </body>
+</html>

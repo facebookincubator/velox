@@ -17,7 +17,7 @@
     <link rel="index" title="Index" href="../genindex.html" />
     <link rel="search" title="Search" href="../search.html" />
     <link rel="next" title="Anti joins" href="anti-join.html" />
-    <link rel="prev" title="Aggregations" href="aggregations.html" /> 
+    <link rel="prev" title="Connectors" href="connectors.html" /> 
   </head><body>
     <div class="related" role="navigation" aria-label="related navigation">
       <h3>Navigation</h3>
@@ -29,7 +29,7 @@
           <a href="anti-join.html" title="Anti joins"
              accesskey="N">next</a> |</li>
         <li class="right" >
-          <a href="aggregations.html" title="Aggregations"
+          <a href="connectors.html" title="Connectors"
              accesskey="P">previous</a> |</li>
         <li class="nav-item nav-item-0"><a href="../index.html">Velox  documentation</a> &#187;</li>
           <li class="nav-item nav-item-1"><a href="../develop.html" accesskey="U">Developer Guide</a> &#187;</li>
@@ -239,7 +239,7 @@ parallel building of the hash table where the operator that finishes building
 its table last is responsible for merging it with all the other hash tables
 before making the hash table available over the JoinBridge.</p>
 <section id="dynamic-filter-pushdown">
-<h3>Dynamic Filter Pushdown<a class="headerlink" href="#dynamic-filter-pushdown" title="Permalink to this heading">¶</a></h3>
+<span id="dynamicfilterpushdown"></span><h3>Dynamic Filter Pushdown<a class="headerlink" href="#dynamic-filter-pushdown" title="Permalink to this heading">¶</a></h3>
 <p>In some queries the join runs in the same stage as the probe-side table scan.
 This happens if the join build side is broadcasted (when it is small enough) to
 all join nodes or if the query is using bucket-by-bucket execution mode. In
@@ -477,8 +477,8 @@ of how to build and execute a plan with a hash or merge join.</p>
   </div>
   <div>
     <h4>Previous topic</h4>
-    <p class="topless"><a href="aggregations.html"
-                          title="previous chapter">Aggregations</a></p>
+    <p class="topless"><a href="connectors.html"
+                          title="previous chapter">Connectors</a></p>
   </div>
   <div>
     <h4>Next topic</h4>
@@ -516,7 +516,7 @@ of how to build and execute a plan with a hash or merge join.</p>
           <a href="anti-join.html" title="Anti joins"
              >next</a> |</li>
         <li class="right" >
-          <a href="aggregations.html" title="Aggregations"
+          <a href="connectors.html" title="Connectors"
              >previous</a> |</li>
         <li class="nav-item nav-item-0"><a href="../index.html">Velox  documentation</a> &#187;</li>
           <li class="nav-item nav-item-1"><a href="../develop.html" >Developer Guide</a> &#187;</li>

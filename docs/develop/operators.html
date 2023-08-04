@@ -187,8 +187,8 @@ of plan nodes can be located at the leaves of the plan tree. These are:</p>
 <section id="plan-nodes">
 <h2>Plan Nodes<a class="headerlink" href="#plan-nodes" title="Permalink to this heading">¶</a></h2>
 <section id="tablescannode">
-<h3>TableScanNode<a class="headerlink" href="#tablescannode" title="Permalink to this heading">¶</a></h3>
-<p>The table scan operation reads data from a connector. For example, when used
+<span id="id1"></span><h3>TableScanNode<a class="headerlink" href="#tablescannode" title="Permalink to this heading">¶</a></h3>
+<p>The table scan operation reads data from a <a class="reference internal" href="connectors.html"><span class="doc">connector</span></a>. For example, when used
 with HiveConnector, table scan reads data from ORC or Parquet files.</p>
 <table class="docutils align-left">
 <colgroup>
@@ -546,9 +546,9 @@ number starting with 1.</p>
 </table>
 </section>
 <section id="tablewritenode">
-<h3>TableWriteNode<a class="headerlink" href="#tablewritenode" title="Permalink to this heading">¶</a></h3>
+<span id="id2"></span><h3>TableWriteNode<a class="headerlink" href="#tablewritenode" title="Permalink to this heading">¶</a></h3>
 <p>The table write operation consumes one output and writes it to storage via a
-connector. An example would be writing ORC or Parquet files. The table write
+<a class="reference internal" href="connectors.html"><span class="doc">connector</span></a>. An example would be writing ORC or Parquet files. The table write
 operation return a list of columns containing the metadata of the written
 data: the number of rows written to storage, the writer context information,
 the written file paths on storage and the collected column stats.</p>
