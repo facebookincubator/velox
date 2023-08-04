@@ -96,9 +96,9 @@ std::unique_ptr<BinaryStripeStreams> BinaryStreamReader::next() {
       stripeReaderBase_, columnSelector_, stripeIndex_++);
 }
 
-std::unordered_map<uint32_t, proto::ColumnStatistics>
+std::unordered_map<uint32_t, ColumnStatisticsWrapper>
 BinaryStreamReader::getStatistics() const {
-  std::unordered_map<uint32_t, proto::ColumnStatistics> stats;
+  std::unordered_map<uint32_t, ColumnStatisticsWrapper> stats;
   auto footerStatsSize =
       stripeReaderBase_.getReader().getFooter().statisticsSize();
   auto typesSize = stripeReaderBase_.getReader().getFooter().typesSize();
@@ -110,7 +110,8 @@ BinaryStreamReader::getStatistics() const {
         "Corrupted file detected, Footer stats are missing, but stripes are present");
     for (auto node = 0; node < typesSize; node++) {
       if (columnSelector_.shouldReadNode(node)) {
-        stats[node] = proto::ColumnStatistics();
+        const proto::ColumnStatistics c = proto::ColumnStatistics();
+        stats.insert({node, ColumnStatisticsWrapper(&c)});
       }
     }
   } else {
@@ -120,8 +121,8 @@ BinaryStreamReader::getStatistics() const {
     // disabled for the current use cases.
     for (auto node = 0; node < footerStatsSize; node++) {
       if (columnSelector_.shouldReadNode(node)) {
-        stats[node] =
-            stripeReaderBase_.getReader().getFooter().statistics(node);
+        stats.insert(
+            {node, stripeReaderBase_.getReader().getFooter().statistics(node)});
       }
     }
   }

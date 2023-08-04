@@ -75,7 +75,7 @@ class BinaryStreamReader {
 
   std::unique_ptr<BinaryStripeStreams> next();
 
-  std::unordered_map<uint32_t, proto::ColumnStatistics> getStatistics() const;
+  std::unordered_map<uint32_t, ColumnStatisticsWrapper> getStatistics() const;
 
   uint32_t getCurrentStripeIndex() const {
     return stripeIndex_;

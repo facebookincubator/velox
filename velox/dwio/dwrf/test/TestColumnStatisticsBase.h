@@ -14,16 +14,14 @@
  * limitations under the License.
  */
 
-#include <gmock/gmock.h>
 #include <gtest/gtest.h>
-#include <cmath>
 #include "velox/dwio/common/Statistics.h"
 #include "velox/dwio/dwrf/writer/StatisticsBuilder.h"
-#include "velox/type/fbhive/HiveTypeParser.h"
+
+namespace facebook::velox::dwrf {
 
 using namespace facebook::velox::dwio::common;
 using namespace facebook::velox::dwrf;
-using facebook::velox::type::fbhive::HiveTypeParser;
 
 StatisticsBuilderOptions options{16};
 
@@ -38,7 +36,7 @@ std::unique_ptr<T> as(std::unique_ptr<U>&& ptr) {
   return nullptr;
 }
 
-TEST(StatisticsBuilder, size) {
+void testSize() {
   {
     StatisticsBuilder missingSize{options};
     ASSERT_FALSE(missingSize.getSize().has_value());
@@ -81,7 +79,7 @@ TEST(StatisticsBuilder, size) {
   }
 }
 
-TEST(StatisticsBuilder, integer) {
+void testInteger() {
   IntegerStatisticsBuilder builder{options};
   // empty builder should have all defaults
   EXPECT_EQ(std::numeric_limits<int64_t>::max(), builder.getMinimum());
@@ -135,24 +133,36 @@ TEST(StatisticsBuilder, integer) {
   EXPECT_EQ(0, builder.getNumberOfValues());
 }
 
-TEST(StatisticsBuilder, integerMissingStats) {
+void testIntegerMissingStats(
+    ColumnStatisticsWrapper columnStatisticsWrapper,
+    void* protoPtr,
+    DwrfFormat format) {
   IntegerStatisticsBuilder target{options};
   target.addValues(1, 5);
   auto stats = as<IntegerColumnStatistics>(target.build());
   EXPECT_EQ(5, stats->getSum());
 
   // merge missing stats
-  proto::ColumnStatistics proto;
-  auto intProto = proto.mutable_intstatistics();
-  target.merge(*buildColumnStatisticsFromProto(proto, context));
+  target.merge(
+      *buildColumnStatisticsFromProto(columnStatisticsWrapper, context));
   stats = as<IntegerColumnStatistics>(target.build());
   EXPECT_EQ(stats, nullptr);
 
   // merge again
-  intProto->set_minimum(0);
-  intProto->set_maximum(1);
-  intProto->set_sum(100);
-  target.merge(*buildColumnStatisticsFromProto(proto, context));
+  if (format == DwrfFormat::kDwrf) {
+    auto intPtr = reinterpret_cast<proto::IntegerStatistics*>(protoPtr);
+    intPtr->set_minimum(0);
+    intPtr->set_maximum(1);
+    intPtr->set_sum(100);
+  } else {
+    auto intPtr = reinterpret_cast<proto::orc::IntegerStatistics*>(protoPtr);
+    intPtr->set_minimum(0);
+    intPtr->set_maximum(1);
+    intPtr->set_sum(100);
+  }
+
+  target.merge(
+      *buildColumnStatisticsFromProto(columnStatisticsWrapper, context));
   stats = as<IntegerColumnStatistics>(target.build());
   EXPECT_EQ(stats, nullptr);
 
@@ -162,27 +172,36 @@ TEST(StatisticsBuilder, integerMissingStats) {
   EXPECT_EQ(stats, nullptr);
 }
 
-TEST(StatisticsBuilder, integerEmptyStats) {
+void testIntegerEmptyStats(
+    ColumnStatisticsWrapper columnStatisticsWrapper,
+    void* protoPtr,
+    DwrfFormat format) {
   IntegerStatisticsBuilder target{options};
   target.addValues(1, 5);
   auto stats = as<IntegerColumnStatistics>(target.build());
   EXPECT_EQ(5, stats->getSum());
 
   // merge empty stats
-  proto::ColumnStatistics proto;
-  proto.set_numberofvalues(0);
-  target.merge(*buildColumnStatisticsFromProto(proto, context));
+  target.merge(
+      *buildColumnStatisticsFromProto(columnStatisticsWrapper, context));
   stats = as<IntegerColumnStatistics>(target.build());
   EXPECT_EQ(5, stats->getSum());
 
   // merge again
-  proto.clear_numberofvalues();
-  target.merge(*buildColumnStatisticsFromProto(proto, context));
+  if (format == DwrfFormat::kDwrf) {
+    auto columnPtr = reinterpret_cast<proto::ColumnStatistics*>(protoPtr);
+    columnPtr->clear_numberofvalues();
+  } else {
+    auto columnPtr = reinterpret_cast<proto::orc::ColumnStatistics*>(protoPtr);
+    columnPtr->clear_numberofvalues();
+  }
+  target.merge(
+      *buildColumnStatisticsFromProto(columnStatisticsWrapper, context));
   stats = as<IntegerColumnStatistics>(target.build());
   EXPECT_EQ(stats, nullptr);
 }
 
-TEST(StatisticsBuilder, integerOverflow) {
+void testIntegerOverflow() {
   IntegerStatisticsBuilder target{options};
   auto testMinMax = [&](int64_t val1, int64_t val2, int64_t min, int64_t max) {
     target.reset();
@@ -232,7 +251,7 @@ TEST(StatisticsBuilder, integerOverflow) {
   testMergeOverflow(std::numeric_limits<int64_t>::max(), 1);
 }
 
-TEST(StatisticsBuilder, doubles) {
+void testDoubles() {
   DoubleStatisticsBuilder builder{options};
   // empty builder should have all defaults
   EXPECT_EQ(std::numeric_limits<double>::infinity(), builder.getMinimum());
@@ -286,24 +305,35 @@ TEST(StatisticsBuilder, doubles) {
   EXPECT_EQ(0, builder.getNumberOfValues());
 }
 
-TEST(StatisticsBuilder, doubleMissingStats) {
+void testDoubleMissingStats(
+    ColumnStatisticsWrapper columnStatisticsWrapper,
+    void* protoPtr,
+    DwrfFormat format) {
   DoubleStatisticsBuilder target{options};
   target.addValues(1, 5);
   auto stats = as<DoubleColumnStatistics>(target.build());
   EXPECT_EQ(5, stats->getSum());
 
-  // merge missing stats
-  proto::ColumnStatistics proto;
-  auto doubleProto = proto.mutable_doublestatistics();
-  target.merge(*buildColumnStatisticsFromProto(proto, context));
+  target.merge(
+      *buildColumnStatisticsFromProto(columnStatisticsWrapper, context));
   stats = as<DoubleColumnStatistics>(target.build());
   EXPECT_EQ(stats, nullptr);
 
   // merge again
-  doubleProto->set_minimum(0);
-  doubleProto->set_maximum(1);
-  doubleProto->set_sum(100);
-  target.merge(*buildColumnStatisticsFromProto(proto, context));
+  if (format == DwrfFormat::kDwrf) {
+    auto doubleProto = reinterpret_cast<proto::DoubleStatistics*>(protoPtr);
+    doubleProto->set_minimum(0);
+    doubleProto->set_maximum(1);
+    doubleProto->set_sum(100);
+  } else {
+    auto doubleProto =
+        reinterpret_cast<proto::orc::DoubleStatistics*>(protoPtr);
+    doubleProto->set_minimum(0);
+    doubleProto->set_maximum(1);
+    doubleProto->set_sum(100);
+  }
+  target.merge(
+      *buildColumnStatisticsFromProto(columnStatisticsWrapper, context));
   stats = as<DoubleColumnStatistics>(target.build());
   EXPECT_EQ(stats, nullptr);
 
@@ -313,27 +343,36 @@ TEST(StatisticsBuilder, doubleMissingStats) {
   EXPECT_EQ(stats, nullptr);
 }
 
-TEST(StatisticsBuilder, doubleEmptyStats) {
+void testDoubleEmptyStats(
+    ColumnStatisticsWrapper columnStatisticsWrapper,
+    void* protoPtr,
+    DwrfFormat format) {
   DoubleStatisticsBuilder target{options};
   target.addValues(1, 5);
   auto stats = as<DoubleColumnStatistics>(target.build());
   EXPECT_EQ(5, stats->getSum());
 
   // merge empty stats
-  proto::ColumnStatistics proto;
-  proto.set_numberofvalues(0);
-  target.merge(*buildColumnStatisticsFromProto(proto, context));
+  target.merge(
+      *buildColumnStatisticsFromProto(columnStatisticsWrapper, context));
   stats = as<DoubleColumnStatistics>(target.build());
   EXPECT_EQ(5, stats->getSum());
 
   // merge again
-  proto.clear_numberofvalues();
-  target.merge(*buildColumnStatisticsFromProto(proto, context));
+  if (format == DwrfFormat::kDwrf) {
+    auto columnPtr = reinterpret_cast<proto::ColumnStatistics*>(protoPtr);
+    columnPtr->clear_numberofvalues();
+  } else {
+    auto columnPtr = reinterpret_cast<proto::orc::ColumnStatistics*>(protoPtr);
+    columnPtr->clear_numberofvalues();
+  }
+  target.merge(
+      *buildColumnStatisticsFromProto(columnStatisticsWrapper, context));
   stats = as<DoubleColumnStatistics>(target.build());
   EXPECT_EQ(stats, nullptr);
 }
 
-TEST(StatisticsBuilder, doubleNaN) {
+void testDoubleNaN() {
   DoubleStatisticsBuilder target{options};
   // test nan. Nan causes fallback to basic stats.
   target.addValues(std::numeric_limits<float>::quiet_NaN());
@@ -359,7 +398,7 @@ TEST(StatisticsBuilder, doubleNaN) {
   EXPECT_FALSE(stats->getSum().has_value());
 }
 
-TEST(StatisticsBuilder, string) {
+void testString() {
   StringStatisticsBuilder builder{options};
   // empty builder should have all defaults
   EXPECT_FALSE(builder.getMinimum().has_value());
@@ -413,24 +452,36 @@ TEST(StatisticsBuilder, string) {
   EXPECT_EQ(0, builder.getNumberOfValues());
 }
 
-TEST(StatisticsBuilder, stringMissingStats) {
+void testStringMissingStats(
+    ColumnStatisticsWrapper columnStatisticsWrapper,
+    void* protoPtr,
+    DwrfFormat format) {
   StringStatisticsBuilder target{options};
   target.addValues("zz", 5);
   auto stats = as<StringColumnStatistics>(target.build());
   EXPECT_EQ(10, stats->getTotalLength());
 
   // merge missing stats
-  proto::ColumnStatistics proto;
-  auto strProto = proto.mutable_stringstatistics();
-  target.merge(*buildColumnStatisticsFromProto(proto, context));
+  target.merge(
+      *buildColumnStatisticsFromProto(columnStatisticsWrapper, context));
   stats = as<StringColumnStatistics>(target.build());
   EXPECT_EQ(stats, nullptr);
 
   // merge again
-  strProto->set_minimum("aa");
-  strProto->set_maximum("bb");
-  strProto->set_sum(100);
-  target.merge(*buildColumnStatisticsFromProto(proto, context));
+  if (format == DwrfFormat::kDwrf) {
+    auto strProto = reinterpret_cast<proto::StringStatistics*>(protoPtr);
+    strProto->set_minimum("aa");
+    strProto->set_maximum("bb");
+    strProto->set_sum(100);
+  } else {
+    auto strProto = reinterpret_cast<proto::orc::StringStatistics*>(protoPtr);
+    strProto->set_minimum("aa");
+    strProto->set_maximum("bb");
+    strProto->set_sum(100);
+  }
+
+  target.merge(
+      *buildColumnStatisticsFromProto(columnStatisticsWrapper, context));
   stats = as<StringColumnStatistics>(target.build());
   EXPECT_EQ(stats, nullptr);
 
@@ -440,27 +491,37 @@ TEST(StatisticsBuilder, stringMissingStats) {
   EXPECT_EQ(stats, nullptr);
 }
 
-TEST(StatisticsBuilder, stringEmptyStats) {
+void testStringEmptyStats(
+    ColumnStatisticsWrapper columnStatisticsWrapper,
+    void* protoPtr,
+    DwrfFormat format) {
   StringStatisticsBuilder target{options};
   target.addValues("zz", 5);
   auto stats = as<StringColumnStatistics>(target.build());
   EXPECT_EQ(10, stats->getTotalLength());
 
   // merge empty stats
-  proto::ColumnStatistics proto;
-  proto.set_numberofvalues(0);
-  target.merge(*buildColumnStatisticsFromProto(proto, context));
+  target.merge(
+      *buildColumnStatisticsFromProto(columnStatisticsWrapper, context));
   stats = as<StringColumnStatistics>(target.build());
   EXPECT_EQ(10, stats->getTotalLength());
 
   // merge again
-  proto.clear_numberofvalues();
-  target.merge(*buildColumnStatisticsFromProto(proto, context));
+  if (format == DwrfFormat::kDwrf) {
+    auto proto = reinterpret_cast<proto::ColumnStatistics*>(protoPtr);
+    proto->clear_numberofvalues();
+  } else {
+    auto proto = reinterpret_cast<proto::orc::ColumnStatistics*>(protoPtr);
+    proto->clear_numberofvalues();
+  }
+
+  target.merge(
+      *buildColumnStatisticsFromProto(columnStatisticsWrapper, context));
   stats = as<StringColumnStatistics>(target.build());
   EXPECT_EQ(stats, nullptr);
 }
 
-TEST(StatisticsBuilder, stringLengthThreshold) {
+void testStringLengthThreshold() {
   StringStatisticsBuilder target{StatisticsBuilderOptions{2}};
   target.addValues("yyy");
   auto stats = as<StringColumnStatistics>(target.build());
@@ -475,15 +536,24 @@ TEST(StatisticsBuilder, stringLengthThreshold) {
   EXPECT_EQ(stats->getMaximum(), "zz");
 }
 
-TEST(StatisticsBuilder, stringLengthOverflow) {
+void testStringLengthOverflow(
+    ColumnStatisticsWrapper columnStatisticsWrapper,
+    void* protoPtr,
+    DwrfFormat format) {
   // add value causing overflow
   StringStatisticsBuilder target{options};
-  proto::ColumnStatistics proto;
-  proto.set_numberofvalues(1);
-  auto strProto = proto.mutable_stringstatistics();
-  strProto->set_sum(std::numeric_limits<int64_t>::max());
-  strProto->set_minimum("foo");
-  target.merge(*buildColumnStatisticsFromProto(proto, context));
+
+  if (format == DwrfFormat::kDwrf) {
+    auto strProto = reinterpret_cast<proto::StringStatistics*>(protoPtr);
+    strProto->set_sum(std::numeric_limits<int64_t>::max());
+    strProto->set_minimum("foo");
+  } else {
+    auto strProto = reinterpret_cast<proto::orc::StringStatistics*>(protoPtr);
+    strProto->set_sum(std::numeric_limits<int64_t>::max());
+    strProto->set_minimum("foo");
+  }
+  target.merge(
+      *buildColumnStatisticsFromProto(columnStatisticsWrapper, context));
   EXPECT_TRUE(target.getTotalLength().has_value());
   auto stats = as<StringColumnStatistics>(target.build());
   EXPECT_TRUE(stats->getTotalLength().has_value());
@@ -495,14 +565,16 @@ TEST(StatisticsBuilder, stringLengthOverflow) {
 
   // merge causing overflow
   target.reset();
-  target.merge(*buildColumnStatisticsFromProto(proto, context));
-  target.merge(*buildColumnStatisticsFromProto(proto, context));
+  target.merge(
+      *buildColumnStatisticsFromProto(columnStatisticsWrapper, context));
+  target.merge(
+      *buildColumnStatisticsFromProto(columnStatisticsWrapper, context));
   EXPECT_TRUE(target.getTotalLength().has_value());
   stats = as<StringColumnStatistics>(target.build());
   EXPECT_FALSE(stats->getTotalLength().has_value());
 }
 
-TEST(StatisticsBuilder, boolean) {
+void testBoolean() {
   BooleanStatisticsBuilder builder{options};
   // empty builder should have all defaults
   EXPECT_EQ(0, builder.getTrueCount());
@@ -535,22 +607,32 @@ TEST(StatisticsBuilder, boolean) {
   EXPECT_EQ(0, builder.getNumberOfValues());
 }
 
-TEST(StatisticsBuilder, booleanMissingStats) {
+void testBooleanMissingStats(
+    ColumnStatisticsWrapper columnStatisticsWrapper,
+    void* protoPtr,
+    DwrfFormat format) {
   BooleanStatisticsBuilder target{options};
   target.addValues(true, 5);
   auto stats = as<BooleanColumnStatistics>(target.build());
   EXPECT_EQ(5, stats->getTrueCount());
 
   // merge missing stats
-  proto::ColumnStatistics proto;
-  auto boolProto = proto.mutable_bucketstatistics();
-  target.merge(*buildColumnStatisticsFromProto(proto, context));
+  target.merge(
+      *buildColumnStatisticsFromProto(columnStatisticsWrapper, context));
   stats = as<BooleanColumnStatistics>(target.build());
   EXPECT_EQ(stats, nullptr);
 
   // merge again
-  boolProto->add_count(1);
-  target.merge(*buildColumnStatisticsFromProto(proto, context));
+  if (format == DwrfFormat::kDwrf) {
+    auto boolProto = reinterpret_cast<proto::BucketStatistics*>(protoPtr);
+    boolProto->add_count(1);
+  } else {
+    auto boolProto = reinterpret_cast<proto::orc::BucketStatistics*>(protoPtr);
+    boolProto->add_count(1);
+  }
+
+  target.merge(
+      *buildColumnStatisticsFromProto(columnStatisticsWrapper, context));
   stats = as<BooleanColumnStatistics>(target.build());
   EXPECT_EQ(stats, nullptr);
 
@@ -560,27 +642,37 @@ TEST(StatisticsBuilder, booleanMissingStats) {
   EXPECT_EQ(stats, nullptr);
 }
 
-TEST(StatisticsBuilder, booleanEmptyStats) {
+void testBooleanEmptyStats(
+    ColumnStatisticsWrapper columnStatisticsWrapper,
+    void* protoPtr,
+    DwrfFormat format) {
   BooleanStatisticsBuilder target{options};
   target.addValues(true, 5);
   auto stats = as<BooleanColumnStatistics>(target.build());
   EXPECT_EQ(5, stats->getTrueCount());
 
   // merge empty stats
-  proto::ColumnStatistics proto;
-  proto.set_numberofvalues(0);
-  target.merge(*buildColumnStatisticsFromProto(proto, context));
+  target.merge(
+      *buildColumnStatisticsFromProto(columnStatisticsWrapper, context));
   stats = as<BooleanColumnStatistics>(target.build());
   EXPECT_EQ(5, stats->getTrueCount());
 
   // merge again
-  proto.clear_numberofvalues();
-  target.merge(*buildColumnStatisticsFromProto(proto, context));
+  if (format == DwrfFormat::kDwrf) {
+    auto proto = reinterpret_cast<proto::ColumnStatistics*>(protoPtr);
+    proto->clear_numberofvalues();
+  } else {
+    auto proto = reinterpret_cast<proto::orc::ColumnStatistics*>(protoPtr);
+    proto->clear_numberofvalues();
+  }
+
+  target.merge(
+      *buildColumnStatisticsFromProto(columnStatisticsWrapper, context));
   stats = as<BooleanColumnStatistics>(target.build());
   EXPECT_EQ(stats, nullptr);
 }
 
-TEST(StatisticsBuilder, basic) {
+void testBasic() {
   StatisticsBuilder builder{options};
   EXPECT_EQ(0, builder.getNumberOfValues());
   EXPECT_EQ(0, builder.getRawSize());
@@ -620,7 +712,7 @@ TEST(StatisticsBuilder, basic) {
   EXPECT_FALSE(builder.hasNull().value());
 }
 
-TEST(StatisticsBuilder, basicMissingStats) {
+void testBasicMissingStats(ColumnStatisticsWrapper columnStatisticsWrapper) {
   StatisticsBuilder target{options};
   target.increaseValueCount(5);
   target.increaseRawSize(10);
@@ -630,8 +722,8 @@ TEST(StatisticsBuilder, basicMissingStats) {
   EXPECT_FALSE(stats->hasNull().value());
 
   // merge missing stats
-  proto::ColumnStatistics proto;
-  target.merge(*buildColumnStatisticsFromProto(proto, context));
+  target.merge(
+      *buildColumnStatisticsFromProto(columnStatisticsWrapper, context));
   stats = target.build();
   EXPECT_FALSE(stats->getNumberOfValues().has_value());
   EXPECT_FALSE(stats->getRawSize().has_value());
@@ -647,26 +739,40 @@ TEST(StatisticsBuilder, basicMissingStats) {
   EXPECT_TRUE(stats->hasNull().value());
 }
 
-TEST(StatisticsBuilder, basicHasNull) {
+void testBasicHasNull(
+    ColumnStatisticsWrapper columnStatisticsWrapper,
+    DwrfFormat format) {
   enum class State { kTrue = 0, kFalse, kMissing };
-  auto test = [](State to, State from, State expected) {
+  auto test = [&columnStatisticsWrapper, &format](
+                  State to, State from, State expected) {
     StatisticsBuilder target{options};
     if (to == State::kTrue) {
       target.setHasNull();
     } else if (to == State::kMissing) {
       // merge against unknown
+      target.merge(
+          *buildColumnStatisticsFromProto(columnStatisticsWrapper, context));
+    }
+
+    if (format == DwrfFormat::kDwrf) {
       proto::ColumnStatistics proto;
-      target.merge(*buildColumnStatisticsFromProto(proto, context));
+      if (from == State::kFalse) {
+        proto.set_hasnull(false);
+      } else if (from == State::kTrue) {
+        proto.set_hasnull(true);
+      }
+      target.merge(*buildColumnStatisticsFromProto(
+          ColumnStatisticsWrapper(&proto), context));
+    } else {
+      proto::orc::ColumnStatistics proto;
+      if (from == State::kFalse) {
+        proto.set_hasnull(false);
+      } else if (from == State::kTrue) {
+        proto.set_hasnull(true);
+      }
+      target.merge(*buildColumnStatisticsFromProto(
+          ColumnStatisticsWrapper(&proto), context));
     }
-
-    proto::ColumnStatistics proto;
-    if (from == State::kFalse) {
-      proto.set_hasnull(false);
-    } else if (from == State::kTrue) {
-      proto.set_hasnull(true);
-    }
-
-    target.merge(*buildColumnStatisticsFromProto(proto, context));
     auto stats = target.build();
     if (expected == State::kFalse) {
       EXPECT_FALSE(stats->hasNull().value());
@@ -694,7 +800,7 @@ TEST(StatisticsBuilder, basicHasNull) {
   test(State::kFalse, State::kTrue, State::kTrue);
 }
 
-TEST(StatisticsBuilder, binary) {
+void testBinary() {
   BinaryStatisticsBuilder builder{options};
   // empty builder should have all defaults
   EXPECT_EQ(0, builder.getTotalLength());
@@ -727,22 +833,32 @@ TEST(StatisticsBuilder, binary) {
   EXPECT_EQ(0, builder.getNumberOfValues());
 }
 
-TEST(StatisticsBuilder, binaryMissingStats) {
+void testBinaryMissingStats(
+    ColumnStatisticsWrapper columnStatisticsWrapper,
+    void* protoPtr,
+    DwrfFormat format) {
   BinaryStatisticsBuilder target{options};
   target.addValues(5);
   auto stats = as<BinaryColumnStatistics>(target.build());
   EXPECT_EQ(5, stats->getTotalLength());
 
   // merge missing stats
-  proto::ColumnStatistics proto;
-  auto binProto = proto.mutable_binarystatistics();
-  target.merge(*buildColumnStatisticsFromProto(proto, context));
+  target.merge(
+      *buildColumnStatisticsFromProto(columnStatisticsWrapper, context));
   stats = as<BinaryColumnStatistics>(target.build());
   EXPECT_EQ(stats, nullptr);
 
   // merge again
-  binProto->set_sum(100);
-  target.merge(*buildColumnStatisticsFromProto(proto, context));
+  if (format == DwrfFormat::kDwrf) {
+    auto binProto = reinterpret_cast<proto::BinaryStatistics*>(protoPtr);
+    binProto->set_sum(100);
+  } else {
+    auto binProto = reinterpret_cast<proto::orc::BinaryStatistics*>(protoPtr);
+    binProto->set_sum(100);
+  }
+
+  target.merge(
+      *buildColumnStatisticsFromProto(columnStatisticsWrapper, context));
   stats = as<BinaryColumnStatistics>(target.build());
   EXPECT_EQ(stats, nullptr);
 
@@ -752,27 +868,40 @@ TEST(StatisticsBuilder, binaryMissingStats) {
   EXPECT_EQ(stats, nullptr);
 }
 
-TEST(StatisticsBuilder, binaryEmptyStats) {
+void testBinaryEmptyStats(
+    ColumnStatisticsWrapper columnStatisticsWrapper,
+    void* protoPtr,
+    DwrfFormat format) {
   BinaryStatisticsBuilder target{options};
   target.addValues(5);
   auto stats = as<BinaryColumnStatistics>(target.build());
   EXPECT_EQ(5, stats->getTotalLength());
 
   // merge empty stats
-  proto::ColumnStatistics proto;
-  proto.set_numberofvalues(0);
-  target.merge(*buildColumnStatisticsFromProto(proto, context));
+  target.merge(
+      *buildColumnStatisticsFromProto(columnStatisticsWrapper, context));
   stats = as<BinaryColumnStatistics>(target.build());
   EXPECT_EQ(5, stats->getTotalLength());
 
   // merge again
-  proto.clear_numberofvalues();
-  target.merge(*buildColumnStatisticsFromProto(proto, context));
+  if (format == DwrfFormat::kDwrf) {
+    auto proto = reinterpret_cast<proto::ColumnStatistics*>(protoPtr);
+    proto->clear_numberofvalues();
+  } else {
+    auto proto = reinterpret_cast<proto::orc::ColumnStatistics*>(protoPtr);
+    proto->clear_numberofvalues();
+  }
+
+  target.merge(
+      *buildColumnStatisticsFromProto(columnStatisticsWrapper, context));
   stats = as<BinaryColumnStatistics>(target.build());
   EXPECT_EQ(stats, nullptr);
 }
 
-TEST(StatisticsBuilder, binaryLengthOverflow) {
+void testBinaryLengthOverflow(
+    ColumnStatisticsWrapper columnStatisticsWrapper,
+    void* protoPtr,
+    DwrfFormat format) {
   // add value causing overflow
   BinaryStatisticsBuilder target{options};
   target.addValues(std::numeric_limits<int64_t>::max());
@@ -786,16 +915,23 @@ TEST(StatisticsBuilder, binaryLengthOverflow) {
   // merge causing overflow
   target.reset();
   target.addValues(std::numeric_limits<int64_t>::max());
-  proto::ColumnStatistics proto;
-  auto binProto = proto.mutable_binarystatistics();
-  binProto->set_sum(1);
-  target.merge(*buildColumnStatisticsFromProto(proto, context));
+
+  if (format == DwrfFormat::kDwrf) {
+    auto binProto = reinterpret_cast<proto::BinaryStatistics*>(protoPtr);
+    binProto->set_sum(1);
+  } else {
+    auto binProto = reinterpret_cast<proto::orc::BinaryStatistics*>(protoPtr);
+    binProto->set_sum(1);
+  }
+
+  target.merge(*buildColumnStatisticsFromProto(
+      columnStatisticsWrapper, context));
   EXPECT_TRUE(target.getTotalLength().has_value());
   stats = as<BinaryColumnStatistics>(target.build());
   EXPECT_EQ(stats, nullptr);
 }
 
-TEST(StatisticsBuilder, initialSize) {
+void testInitialSize() {
   StatisticsBuilder target{options};
   target.increaseValueCount(1);
   EXPECT_FALSE(target.getSize().has_value());
@@ -812,327 +948,4 @@ TEST(StatisticsBuilder, initialSize) {
   stats = target2.build();
   EXPECT_EQ(stats->getSize().value(), 100);
 }
-
-proto::KeyInfo createKeyInfo(int64_t key) {
-  proto::KeyInfo keyInfo;
-  keyInfo.set_intkey(key);
-  return keyInfo;
-}
-
-inline bool operator==(
-    const ColumnStatistics& lhs,
-    const ColumnStatistics& rhs) {
-  return (lhs.hasNull() == rhs.hasNull()) &&
-      (lhs.getNumberOfValues() == rhs.getNumberOfValues()) &&
-      (lhs.getRawSize() == rhs.getRawSize());
-}
-
-void checkEntries(
-    const std::vector<ColumnStatistics>& entries,
-    const std::vector<ColumnStatistics>& expectedEntries) {
-  EXPECT_EQ(expectedEntries.size(), entries.size());
-  for (const auto& entry : entries) {
-    EXPECT_NE(
-        std::find_if(
-            expectedEntries.begin(),
-            expectedEntries.end(),
-            [&](const ColumnStatistics& expectedStats) {
-              return expectedStats == entry;
-            }),
-        expectedEntries.end());
-  }
-}
-
-struct TestKeyStats {
-  TestKeyStats(int64_t key, bool hasNull, uint64_t valueCount, uint64_t rawSize)
-      : key{key}, hasNull{hasNull}, valueCount{valueCount}, rawSize{rawSize} {}
-
-  int64_t key;
-  bool hasNull;
-  uint64_t valueCount;
-  uint64_t rawSize;
-};
-
-struct MapStatsAddValueTestCase {
-  explicit MapStatsAddValueTestCase(
-      const std::vector<TestKeyStats>& input,
-      const std::vector<TestKeyStats>& expected)
-      : input{input}, expected{expected} {}
-
-  std::vector<TestKeyStats> input;
-  std::vector<TestKeyStats> expected;
-};
-
-class MapStatisticsBuilderAddValueTest
-    : public ::testing::Test,
-      public ::testing::WithParamInterface<MapStatsAddValueTestCase> {};
-
-TEST_P(MapStatisticsBuilderAddValueTest, addValues) {
-  auto type = HiveTypeParser{}.parse("map<int, float>");
-  MapStatisticsBuilder mapStatsBuilder{*type, options};
-
-  for (const auto& entry : GetParam().input) {
-    StatisticsBuilder statsBuilder{options};
-    if (entry.hasNull) {
-      statsBuilder.setHasNull();
-    }
-    statsBuilder.increaseValueCount(entry.valueCount);
-    statsBuilder.increaseRawSize(entry.rawSize);
-    mapStatsBuilder.addValues(createKeyInfo(entry.key), statsBuilder);
-  }
-
-  const auto& expectedTestEntries = GetParam().expected;
-  std::vector<ColumnStatistics> expectedEntryStats{};
-  expectedEntryStats.reserve(expectedTestEntries.size());
-  for (const auto& entry : expectedTestEntries) {
-    StatisticsBuilder statsBuilder{options};
-    if (entry.hasNull) {
-      statsBuilder.setHasNull();
-    }
-    statsBuilder.increaseValueCount(entry.valueCount);
-    statsBuilder.increaseRawSize(entry.rawSize);
-    expectedEntryStats.push_back(statsBuilder);
-  }
-
-  std::vector<ColumnStatistics> entryStats;
-  const auto& outputEntries = mapStatsBuilder.getEntryStatistics();
-  entryStats.reserve(outputEntries.size());
-  for (const auto& entry : outputEntries) {
-    entryStats.push_back(*entry.second);
-  }
-
-  checkEntries(entryStats, expectedEntryStats);
-}
-
-INSTANTIATE_TEST_SUITE_P(
-    MapStatisticsBuilderAddValueTestSuite,
-    MapStatisticsBuilderAddValueTest,
-    testing::Values(
-        MapStatsAddValueTestCase{{}, {}},
-        MapStatsAddValueTestCase{
-            {TestKeyStats{1, false, 1, 21}},
-            {TestKeyStats{1, false, 1, 21}}},
-        MapStatsAddValueTestCase{
-            {TestKeyStats{1, false, 1, 21}, TestKeyStats{1, true, 3, 42}},
-            {TestKeyStats{1, true, 4, 63}}},
-        MapStatsAddValueTestCase{
-            {TestKeyStats{1, false, 1, 21}, TestKeyStats{2, true, 3, 42}},
-            {TestKeyStats{1, false, 1, 21}, TestKeyStats{2, true, 3, 42}}},
-        MapStatsAddValueTestCase{
-            {TestKeyStats{1, false, 1, 21},
-             TestKeyStats{2, false, 3, 42},
-             TestKeyStats{2, false, 3, 42},
-             TestKeyStats{1, true, 1, 42}},
-            {TestKeyStats{1, true, 2, 63}, TestKeyStats{2, false, 6, 84}}}));
-
-struct MapStatsMergeTestCase {
-  std::vector<std::vector<TestKeyStats>> inputs;
-  std::vector<TestKeyStats> expected;
-};
-
-class MapStatisticsBuilderMergeTest
-    : public ::testing::Test,
-      public ::testing::WithParamInterface<MapStatsMergeTestCase> {};
-
-TEST_P(MapStatisticsBuilderMergeTest, addValues) {
-  auto type = HiveTypeParser{}.parse("map<int, float>");
-
-  const auto& inputTestEntries = GetParam().inputs;
-  std::vector<std::unique_ptr<MapStatisticsBuilder>> mapStatsBuilders;
-  mapStatsBuilders.reserve(inputTestEntries.size());
-  for (const auto& input : inputTestEntries) {
-    std::unique_ptr<MapStatisticsBuilder> mapStatsBuilder =
-        std::make_unique<MapStatisticsBuilder>(*type, options);
-    for (const auto& entry : input) {
-      StatisticsBuilder statsBuilder{options};
-      if (entry.hasNull) {
-        statsBuilder.setHasNull();
-      }
-      statsBuilder.increaseValueCount(entry.valueCount);
-      statsBuilder.increaseRawSize(entry.rawSize);
-      mapStatsBuilder->addValues(createKeyInfo(entry.key), statsBuilder);
-    }
-    mapStatsBuilders.push_back(std::move(mapStatsBuilder));
-  }
-
-  MapStatisticsBuilder aggregateMapStatsBuilder{*type, options};
-  for (const auto& mapStatsBuilder : mapStatsBuilders) {
-    aggregateMapStatsBuilder.merge(*mapStatsBuilder);
-  }
-
-  const auto& expectedTestEntries = GetParam().expected;
-  std::vector<ColumnStatistics> expectedEntryStats{};
-  expectedEntryStats.reserve(expectedTestEntries.size());
-  for (const auto& entry : expectedTestEntries) {
-    StatisticsBuilder statsBuilder{options};
-    if (entry.hasNull) {
-      statsBuilder.setHasNull();
-    }
-    statsBuilder.increaseValueCount(entry.valueCount);
-    statsBuilder.increaseRawSize(entry.rawSize);
-    expectedEntryStats.push_back(statsBuilder);
-  }
-
-  std::vector<ColumnStatistics> entryStats;
-  const auto& aggregatedEntries = aggregateMapStatsBuilder.getEntryStatistics();
-  entryStats.reserve(aggregatedEntries.size());
-  for (const auto& entry : aggregatedEntries) {
-    entryStats.push_back(*entry.second);
-  }
-
-  checkEntries(entryStats, expectedEntryStats);
-}
-
-INSTANTIATE_TEST_SUITE_P(
-    MapStatisticsBuilderMergeTestSuite,
-    MapStatisticsBuilderMergeTest,
-    testing::Values(
-        MapStatsMergeTestCase{{}, {}},
-        MapStatsMergeTestCase{
-            {{TestKeyStats{1, false, 1, 21}}},
-            {TestKeyStats{1, false, 1, 21}}},
-        MapStatsMergeTestCase{
-            {{}, {TestKeyStats{1, false, 1, 21}}},
-            {TestKeyStats{1, false, 1, 21}}},
-        MapStatsMergeTestCase{
-            {{TestKeyStats{1, false, 1, 21}}, {TestKeyStats{1, true, 3, 42}}},
-            {TestKeyStats{1, true, 4, 63}}},
-        MapStatsMergeTestCase{
-            {{TestKeyStats{1, false, 1, 21}}, {TestKeyStats{2, true, 3, 42}}},
-            {TestKeyStats{1, false, 1, 21}, TestKeyStats{2, true, 3, 42}}},
-        MapStatsMergeTestCase{
-            {{TestKeyStats{1, false, 1, 21}, TestKeyStats{2, false, 3, 42}},
-             {TestKeyStats{2, false, 3, 42}},
-             {TestKeyStats{1, true, 1, 42}}},
-            {TestKeyStats{1, true, 2, 63}, TestKeyStats{2, false, 6, 84}}}));
-
-TEST(MapStatisticsBuilderTest, innerStatsType) {
-  {
-    auto type = HiveTypeParser{}.parse("map<int, float>");
-    MapStatisticsBuilder mapStatsBuilder{*type, options};
-
-    DoubleStatisticsBuilder statsBuilder{options};
-    statsBuilder.addValues(0.1);
-    statsBuilder.addValues(1.0);
-    mapStatsBuilder.addValues(createKeyInfo(1), statsBuilder);
-
-    auto& doubleStats = dynamic_cast<DoubleColumnStatistics&>(
-        *mapStatsBuilder.getEntryStatistics().at(KeyInfo{1}));
-
-    EXPECT_EQ(0.1, doubleStats.getMinimum());
-    EXPECT_EQ(1.0, doubleStats.getMaximum());
-  }
-  {
-    auto type = HiveTypeParser{}.parse("map<bigint, bigint>");
-    MapStatisticsBuilder mapStatsBuilder{*type, options};
-
-    IntegerStatisticsBuilder statsBuilder{options};
-    statsBuilder.addValues(1);
-    statsBuilder.addValues(2);
-    mapStatsBuilder.addValues(createKeyInfo(1), statsBuilder);
-
-    auto& intStats = dynamic_cast<IntegerColumnStatistics&>(
-        *mapStatsBuilder.getEntryStatistics().at(KeyInfo{1}));
-
-    EXPECT_EQ(1, intStats.getMinimum());
-    EXPECT_EQ(2, intStats.getMaximum());
-    EXPECT_EQ(3, intStats.getSum());
-  }
-}
-
-TEST(MapStatisticsBuilderTest, incrementSize) {
-  auto type = HiveTypeParser{}.parse("map<int, float>");
-  MapStatisticsBuilder mapStatsBuilder{*type, options};
-
-  DoubleStatisticsBuilder statsBuilder1{options};
-  statsBuilder1.addValues(0.1);
-  statsBuilder1.addValues(1.0);
-  ASSERT_FALSE(statsBuilder1.getSize().has_value());
-  mapStatsBuilder.addValues(createKeyInfo(1), statsBuilder1);
-  EXPECT_FALSE(mapStatsBuilder.getEntryStatistics()
-                   .at(KeyInfo{1})
-                   ->getSize()
-                   .has_value());
-
-  DoubleStatisticsBuilder statsBuilder2{options};
-  statsBuilder2.addValues(0.3);
-  statsBuilder2.addValues(3.0);
-  ASSERT_FALSE(statsBuilder2.getSize().has_value());
-  mapStatsBuilder.addValues(createKeyInfo(2), statsBuilder2);
-  EXPECT_FALSE(mapStatsBuilder.getEntryStatistics()
-                   .at(KeyInfo{2})
-                   ->getSize()
-                   .has_value());
-
-  mapStatsBuilder.incrementSize(createKeyInfo(1), 4);
-  ASSERT_TRUE(mapStatsBuilder.getEntryStatistics()
-                  .at(KeyInfo{1})
-                  ->getSize()
-                  .has_value());
-  EXPECT_EQ(
-      4,
-      mapStatsBuilder.getEntryStatistics().at(KeyInfo{1})->getSize().value());
-  ASSERT_FALSE(mapStatsBuilder.getEntryStatistics()
-                   .at(KeyInfo{2})
-                   ->getSize()
-                   .has_value());
-  mapStatsBuilder.incrementSize(createKeyInfo(2), 8);
-  ASSERT_TRUE(mapStatsBuilder.getEntryStatistics()
-                  .at(KeyInfo{1})
-                  ->getSize()
-                  .has_value());
-  EXPECT_EQ(
-      4,
-      mapStatsBuilder.getEntryStatistics().at(KeyInfo{1})->getSize().value());
-  ASSERT_TRUE(mapStatsBuilder.getEntryStatistics()
-                  .at(KeyInfo{2})
-                  ->getSize()
-                  .has_value());
-  EXPECT_EQ(
-      8,
-      mapStatsBuilder.getEntryStatistics().at(KeyInfo{2})->getSize().value());
-
-  mapStatsBuilder.incrementSize(createKeyInfo(1), 8);
-  ASSERT_TRUE(mapStatsBuilder.getEntryStatistics()
-                  .at(KeyInfo{1})
-                  ->getSize()
-                  .has_value());
-  EXPECT_EQ(
-      12,
-      mapStatsBuilder.getEntryStatistics().at(KeyInfo{1})->getSize().value());
-  ASSERT_TRUE(mapStatsBuilder.getEntryStatistics()
-                  .at(KeyInfo{2})
-                  ->getSize()
-                  .has_value());
-  EXPECT_EQ(
-      8,
-      mapStatsBuilder.getEntryStatistics().at(KeyInfo{2})->getSize().value());
-}
-
-TEST(MapStatisticsBuilderTest, mergeKeyStats) {
-  auto type = HiveTypeParser{}.parse("map<bigint, bigint>");
-  MapStatisticsBuilder mapStatsBuilder{*type, options};
-
-  mapStatsBuilder.incrementSize(createKeyInfo(1), 42);
-  auto& keyStats = dynamic_cast<StatisticsBuilder&>(
-      *mapStatsBuilder.getEntryStatistics().at(KeyInfo{1}));
-  ASSERT_EQ(0, keyStats.getNumberOfValues());
-  ASSERT_TRUE(keyStats.getRawSize().has_value());
-  ASSERT_EQ(0, keyStats.getRawSize().value());
-  ASSERT_TRUE(keyStats.getSize().has_value());
-  ASSERT_EQ(42, keyStats.getSize().value());
-
-  IntegerStatisticsBuilder statsBuilder{options};
-  statsBuilder.addValues(1);
-  statsBuilder.addValues(2);
-  statsBuilder.increaseRawSize(8);
-  mapStatsBuilder.addValues(createKeyInfo(1), statsBuilder);
-
-  keyStats = dynamic_cast<StatisticsBuilder&>(
-      *mapStatsBuilder.getEntryStatistics().at(KeyInfo{1}));
-  ASSERT_EQ(2, keyStats.getNumberOfValues());
-  ASSERT_TRUE(keyStats.getRawSize().has_value());
-  ASSERT_EQ(8, keyStats.getRawSize().value());
-  EXPECT_TRUE(keyStats.getSize().has_value());
-  EXPECT_EQ(42, keyStats.getSize().value());
-}
+} // namespace facebook::velox::dwrf

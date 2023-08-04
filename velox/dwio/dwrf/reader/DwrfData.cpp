@@ -159,8 +159,8 @@ void DwrfData::filterRowGroups(
   }
   for (auto i = 0; i < index_->entry_size(); i++) {
     const auto& entry = index_->entry(i);
-    auto columnStats =
-        buildColumnStatisticsFromProto(entry.statistics(), *dwrfContext);
+    auto columnStats = buildColumnStatisticsFromProto(
+        ColumnStatisticsWrapper(&entry.statistics()), *dwrfContext);
     if (filter &&
         !testFilter(
             filter, columnStats.get(), rowGroupSize, nodeType_->type())) {
