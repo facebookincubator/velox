@@ -18,6 +18,7 @@
 #include "velox/common/file/File.h"
 #include "velox/connectors/hive/HiveConfig.h"
 #include "velox/connectors/hive/storage_adapters/s3fs/S3Util.h"
+#include "velox/connectors/hive/storage_adapters/s3fs/S3WriteFile.h"
 #include "velox/core/Config.h"
 
 #include <fmt/format.h>
@@ -32,8 +33,15 @@
 #include <aws/core/utils/stream/PreallocatedStreamBuf.h>
 #include <aws/identity-management/auth/STSAssumeRoleCredentialsProvider.h>
 #include <aws/s3/S3Client.h>
+#include <aws/s3/model/CompleteMultipartUploadRequest.h>
+#include <aws/s3/model/CompletedMultipartUpload.h>
+#include <aws/s3/model/CompletedPart.h>
+#include <aws/s3/model/CreateBucketRequest.h>
+#include <aws/s3/model/CreateMultipartUploadRequest.h>
 #include <aws/s3/model/GetObjectRequest.h>
+#include <aws/s3/model/HeadBucketRequest.h>
 #include <aws/s3/model/HeadObjectRequest.h>
+#include <aws/s3/model/UploadPartRequest.h>
 
 namespace facebook::velox {
 namespace {
@@ -60,6 +68,7 @@ Aws::IOStreamFactory AwsWriteableStreamFactory(void* data, int64_t nbytes) {
   return [=]() { return Aws::New<StringViewStream>("", data, nbytes); };
 }
 
+// TODO: Implement retry on failure.
 class S3ReadFile final : public ReadFile {
  public:
   S3ReadFile(const std::string& path, Aws::S3::S3Client* client)
@@ -198,6 +207,213 @@ Aws::Utils::Logging::LogLevel inferS3LogLevel(std::string level) {
 } // namespace
 
 namespace filesystems {
+
+// AWS C++ SDK allows streaming writes via the MultiPart upload API.
+// Multipart upload allows you to upload a single object as a set of parts.
+// Each part is a contiguous portion of the object's data.
+// Each part size (except last) must be between [5 MiB, 5 GiB].
+// https://docs.aws.amazon.com/AmazonS3/latest/userguide/qfacts.html
+// You can upload these object parts independently and in any order.
+/// After all parts of your object are uploaded, Amazon S3 assembles these parts
+/// and creates the object.
+// https://docs.aws.amazon.com/AmazonS3/latest/userguide/mpuoverview.html
+// S3WriteFile uses the Apache Arrow implementation as a reference.
+// https://github.com/apache/arrow/blob/main/cpp/src/arrow/filesystem/s3fs.cc
+// S3WriteFile is not thread-safe.
+// UploadPart is currently synchronous during flush.
+// TODO: Evaluate and add option for asynchronous part uploads.
+// TODO: Implement retry on failure.
+class S3WriteFile::Impl {
+ public:
+  explicit Impl(const std::string& path, Aws::S3::S3Client* client)
+      : client_(client) {
+    getBucketAndKeyFromS3Path(path, bucket_, key_);
+
+    // Check that the object doesn't exist, if it does throw an error.
+    {
+      Aws::S3::Model::HeadObjectRequest request;
+      request.SetBucket(awsString(bucket_));
+      request.SetKey(awsString(key_));
+      auto objectMetadata = client_->HeadObject(request);
+      VELOX_CHECK(!objectMetadata.IsSuccess(), "S3 object already exists");
+    }
+
+    // Create bucket if not present.
+    {
+      Aws::S3::Model::HeadBucketRequest request;
+      request.SetBucket(awsString(bucket_));
+      auto bucketMetadata = client_->HeadBucket(request);
+      if (!bucketMetadata.IsSuccess()) {
+        Aws::S3::Model::CreateBucketRequest request;
+        request.SetBucket(bucket_);
+        auto outcome = client_->CreateBucket(request);
+        VELOX_CHECK_AWS_OUTCOME(
+            outcome, "Failed to create S3 bucket", bucket_, "");
+      }
+    }
+
+    // Initiate the multi-part upload.
+    {
+      Aws::S3::Model::CreateMultipartUploadRequest request;
+      request.SetBucket(awsString(bucket_));
+      request.SetKey(awsString(key_));
+
+      /// If we do not set anything then the SDK will default to application/xml
+      /// which confuses some tools
+      /// (https://github.com/apache/arrow/issues/11934). So we instead default
+      /// to application/octet-stream which is less misleading.
+      request.SetContentType(kApplicationOctetStream);
+
+      auto outcome = client_->CreateMultipartUpload(request);
+      VELOX_CHECK_AWS_OUTCOME(
+          outcome, "Failed initiating multiple part upload", bucket_, key_);
+      uploadState_.id = outcome.GetResult().GetUploadId();
+    }
+
+    // Create a StringStream to store the writes.
+    currentPart_ = Aws::MakeShared<Aws::StringStream>(
+        "PutObjectInputStream",
+        std::stringstream::in | std::stringstream::out |
+            std::stringstream::binary);
+    closed_ = false;
+    fileSize_ = 0;
+  }
+
+  // Appends data to the end of the file.
+  void append(std::string_view data) {
+    VELOX_CHECK(!closed_, "File is closed");
+    // 'flush' API should trigger uploadPart.
+    // But upload part if the maximum part size is reached.
+    if (currentPartSize_ + data.size() >= kMaxPartSize) {
+      uploadPart();
+    }
+    currentPart_->write(data.data(), data.size());
+    currentPartSize_ += data.size();
+    fileSize_ += data.size();
+  }
+
+  // Upload the current part.
+  void flush() {
+    VELOX_CHECK(!closed_, "File is closed");
+    // Skip flushing an empty part.
+    if (currentPartSize_ == 0) {
+      return;
+    }
+    // Skip if current part size is less than the minimum part size.
+    if (currentPartSize_ < kMinPartSize) {
+      return;
+    }
+    uploadPart();
+  }
+
+  // Complete the multipart upload and close the file.
+  void close() {
+    if (closed_) {
+      return;
+    }
+    uploadPart(true);
+    VELOX_CHECK_EQ(uploadState_.partNumber, uploadState_.completedParts.size());
+    // Complete the multipart upload.
+    {
+      Aws::S3::Model::CompletedMultipartUpload completedUpload;
+      completedUpload.SetParts(uploadState_.completedParts);
+      Aws::S3::Model::CompleteMultipartUploadRequest request;
+      request.SetBucket(awsString(bucket_));
+      request.SetKey(awsString(key_));
+      request.SetUploadId(uploadState_.id);
+      request.SetMultipartUpload(std::move(completedUpload));
+
+      auto outcome = client_->CompleteMultipartUpload(request);
+      VELOX_CHECK_AWS_OUTCOME(
+          outcome, "Failed to complete multiple part upload", bucket_, key_);
+    }
+    closed_ = true;
+  }
+
+  // Current file size, i.e. the sum of all previous appends.
+  uint64_t size() const {
+    return fileSize_;
+  }
+
+  int numPartsUploaded() const {
+    return uploadState_.partNumber;
+  }
+
+ private:
+  static constexpr size_t kMinPartSize = 5 * 1'024 * 1'024;
+  static constexpr size_t kMaxPartSize = 5l * 1'024 * 1'024 * 1'024;
+  static constexpr const char* kApplicationOctetStream =
+      "application/octet-stream";
+
+  // Holds state for the multipart upload.
+  struct UploadState {
+    Aws::Vector<Aws::S3::Model::CompletedPart> completedParts;
+    int64_t partNumber = 0;
+    Aws::String id;
+  };
+  UploadState uploadState_;
+
+  void uploadPart(bool isLast = false) {
+    // Upload the part.
+    // Only the last part can be less than kMinPartSize.
+    VELOX_CHECK(isLast || (!isLast && (currentPartSize_ >= kMinPartSize)));
+    {
+      Aws::S3::Model::UploadPartRequest request;
+      request.SetBucket(bucket_);
+      request.SetKey(key_);
+      request.SetUploadId(uploadState_.id);
+      request.SetPartNumber(++uploadState_.partNumber);
+      request.SetContentLength(currentPartSize_);
+      request.SetBody(currentPart_);
+      auto outcome = client_->UploadPart(request);
+      VELOX_CHECK_AWS_OUTCOME(outcome, "Failed to upload", bucket_, key_);
+      // Append ETag and part number for this uploaded part.
+      // This will be needed for upload completion in Close().
+      auto result = outcome.GetResult();
+      Aws::S3::Model::CompletedPart part;
+
+      part.SetPartNumber(uploadState_.partNumber);
+      part.SetETag(result.GetETag());
+      uploadState_.completedParts.push_back(std::move(part));
+    }
+    currentPart_->str(Aws::String());
+    currentPart_->clear();
+    currentPartSize_ = 0;
+  }
+
+  std::shared_ptr<Aws::StringStream> currentPart_;
+  Aws::S3::S3Client* client_;
+  std::string bucket_;
+  std::string key_;
+  size_t fileSize_ = -1;
+  uint32_t currentPartSize_ = 0;
+  bool closed_ = true;
+};
+
+S3WriteFile::S3WriteFile(const std::string& path, Aws::S3::S3Client* client) {
+  impl_ = std::make_shared<Impl>(path, client);
+}
+
+void S3WriteFile::append(std::string_view data) {
+  return impl_->append(data);
+}
+
+void S3WriteFile::flush() {
+  impl_->flush();
+}
+
+void S3WriteFile::close() {
+  impl_->close();
+}
+
+uint64_t S3WriteFile::size() const {
+  return impl_->size();
+}
+
+int S3WriteFile::numPartsUploaded() const {
+  return impl_->numPartsUploaded();
+}
+
 using namespace connector::hive;
 
 // Initialize and Finalize the AWS SDK C++ library.
@@ -404,7 +620,7 @@ std::string S3FileSystem::getLogLevelName() const {
 std::unique_ptr<ReadFile> S3FileSystem::openFileForRead(
     std::string_view path,
     const FileOptions& /*unused*/) {
-  const std::string file = s3Path(path);
+  const auto file = s3Path(path);
   auto s3file = std::make_unique<S3ReadFile>(file, impl_->s3Client());
   s3file->initialize();
   return s3file;
@@ -413,7 +629,9 @@ std::unique_ptr<ReadFile> S3FileSystem::openFileForRead(
 std::unique_ptr<WriteFile> S3FileSystem::openFileForWrite(
     std::string_view path,
     const FileOptions& /*unused*/) {
-  VELOX_NYI();
+  const auto file = s3Path(path);
+  auto s3file = std::make_unique<S3WriteFile>(file, impl_->s3Client());
+  return s3file;
 }
 
 std::string S3FileSystem::name() const {

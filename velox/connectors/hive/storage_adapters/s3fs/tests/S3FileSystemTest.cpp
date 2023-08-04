@@ -14,6 +14,7 @@
  * limitations under the License.
  */
 
+#include "velox/connectors/hive/storage_adapters/s3fs/S3WriteFile.h"
 #include "velox/connectors/hive/storage_adapters/s3fs/tests/S3Test.h"
 
 #include "gtest/gtest.h"
@@ -175,4 +176,62 @@ TEST_F(S3FileSystemTest, logLevel) {
   // It does not change with a new config.
   config["hive.s3.log-level"] = "Trace";
   checkLogLevelName("INFO");
+}
+
+TEST_F(S3FileSystemTest, writeFileAndRead) {
+  static constexpr size_t kMinPartSize = 5 * 1'024 * 1'024;
+  const auto bucketName = "writedata";
+  const auto file = "test.txt";
+  const auto filename = localPath(bucketName) + "/" + file;
+  const auto s3File = s3URI(bucketName, file);
+
+  auto hiveConfig = minioServer_->hiveConfig();
+  filesystems::S3FileSystem s3fs(hiveConfig);
+  auto writeFile = s3fs.openFileForWrite(s3File);
+  auto s3WriteFile = dynamic_cast<filesystems::S3WriteFile*>(writeFile.get());
+  std::string dataContent =
+      "Dance me to your beauty with a burning violin"
+      "Dance me through the panic till I'm gathered safely in"
+      "Lift me like an olive branch and be my homeward dove"
+      "Dance me to the end of love";
+
+  EXPECT_EQ(writeFile->size(), 0);
+  std::int64_t contentSize = dataContent.length();
+  // dataContent length is 178.
+  EXPECT_EQ(contentSize, 178);
+
+  writeFile->append(dataContent.substr(0, 10));
+  EXPECT_EQ(writeFile->size(), 10);
+  writeFile->append(dataContent.substr(10, contentSize - 10));
+  EXPECT_EQ(writeFile->size(), contentSize);
+  writeFile->flush();
+
+  EXPECT_EQ(s3WriteFile->numPartsUploaded(), 0);
+
+  // Write data 178 * 100'000 ~ 17MB.
+  // Should have 4 parts in total with kMinPartSize = 5MB.
+  int partCount = 0;
+  uint64_t partSize = contentSize;
+  for (int i = 0; i < 100'000; ++i) {
+    writeFile->append(dataContent);
+    writeFile->flush();
+    partSize += contentSize;
+    if (partSize > kMinPartSize) {
+      ++partCount;
+      EXPECT_EQ(s3WriteFile->numPartsUploaded(), partCount);
+      partSize = 0;
+    }
+  }
+  EXPECT_EQ(s3WriteFile->numPartsUploaded(), 3);
+
+  writeFile->close();
+  EXPECT_EQ(s3WriteFile->numPartsUploaded(), 4);
+
+  VELOX_ASSERT_THROW(
+      writeFile->append(dataContent.substr(0, 10)), "File is closed");
+
+  auto readFile = s3fs.openFileForRead(s3File);
+  std::int64_t size = readFile->size();
+  EXPECT_EQ(readFile->size(), contentSize * 100'001);
+  EXPECT_EQ(readFile->pread(0, size).substr(0, contentSize), dataContent);
 }
