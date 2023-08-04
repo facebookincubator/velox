@@ -36,10 +36,6 @@ using namespace facebook::velox::test;
 using std::chrono::system_clock;
 
 DEFINE_string(table_name, "lineitem", "table name");
-DEFINE_bool(
-    VELOX_ENABLE_QAT_ZSTD_OT,
-    true,
-    "if to use qat for zstd compression");
 const auto compression = CompressionKind_ZSTD;
 const uint32_t kNumRowsPerBatch = 60000;
 const uint32_t kNumBatches = 50;

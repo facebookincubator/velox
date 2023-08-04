@@ -23,13 +23,16 @@
 
 #include <folly/logging/xlog.h>
 #include <lz4.h>
+#include <qatseqprod.h>
 #include <snappy.h>
 #include <zlib.h>
 #include <zstd.h>
 #include <zstd_errors.h>
-#ifdef VELOX_ENABLE_QAT_ZSTD_OT
-#include <qatseqprod.h>
-#endif
+
+DEFINE_bool(
+    VELOX_ENABLE_QAT_ZSTD_OT,
+    true,
+    "if to use qat for zstd compression");
 
 namespace facebook::velox::dwrf {
 
@@ -59,7 +62,6 @@ ZstdCompressor::compress(const void* src, void* dest, uint64_t length) {
   return ret;
 }
 
-#ifdef VELOX_ENABLE_QAT_ZSTD_OT
 class ZstdQatCompressor : public Compressor {
  public:
   explicit ZstdQatCompressor(int32_t level) : Compressor{level} {
@@ -68,7 +70,7 @@ class ZstdQatCompressor : public Compressor {
     sequenceProducerState = QZSTD_createSeqProdState();
     ZSTD_registerSequenceProducer(
         zc, sequenceProducerState, qatSequenceProducer);
-    ZSTD_CCtx_setParameter(zc, ZSTD_c_enableSeqProducerFallback, 1);
+    ZSTD_CCtx_setParameter(zc, ZSTD_c_enableSeqProducerFallback, level);
   }
 
   ZSTD_CCtx* zc;
@@ -84,7 +86,6 @@ ZstdQatCompressor::compress(const void* src, void* dest, uint64_t length) {
   }
   return ret;
 }
-#endif
 
 class ZlibCompressor : public Compressor {
  public:
@@ -486,11 +487,10 @@ std::unique_ptr<BufferedOutputStream> createCompressor(
     }
     case common::CompressionKind_ZSTD: {
       int32_t zstdCompressionLevel = config.get(Config::ZSTD_COMPRESSION_LEVEL);
-#ifdef VELOX_ENABLE_QAT_ZSTD_OT
-      compressor = std::make_unique<ZstdQatCompressor>(zstdCompressionLevel);
-#else
-      compressor = std::make_unique<ZstdCompressor>(zstdCompressionLevel);
-#endif
+      if (FLAGS_VELOX_ENABLE_QAT_ZSTD_OT)
+        compressor = std::make_unique<ZstdQatCompressor>(zstdCompressionLevel);
+      else
+        compressor = std::make_unique<ZstdCompressor>(zstdCompressionLevel);
       XLOG_FIRST_N(INFO, 1) << fmt::format(
           "Initialized zstd compressor with compression level {}",
           zstdCompressionLevel);
