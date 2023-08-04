@@ -49,12 +49,11 @@ TEST_F(HashTest, longDecimal) {
 
 // Spark CLI select timestamp_micros(12345678) to get the Timestamp.
 // select hash(Timestamp("1970-01-01 00:00:12.345678")) to get the hash value.
-TEST_F(HashTest, TimeStamp) {
+TEST_F(HashTest, Timestamp) {
   EXPECT_EQ(hash<Timestamp>(Timestamp::fromMicros(12345678)), 1402875301);
 }
 
 TEST_F(HashTest, Int64) {
-  EXPECT_EQ(hash<int64_t>(12345678), 1402875301);
   EXPECT_EQ(hash<int64_t>(0xcafecafedeadbeef), -256235155);
   EXPECT_EQ(hash<int64_t>(0xdeadbeefcafecafe), 673261790);
   EXPECT_EQ(hash<int64_t>(INT64_MAX), -1604625029);

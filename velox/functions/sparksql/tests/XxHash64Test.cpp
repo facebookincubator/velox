@@ -58,7 +58,7 @@ TEST_F(XxHash64Test, longDecimal) {
 // Spark CLI select timestamp_micros(12345678) to get the Timestamp.
 // select xxhash64(Timestamp("1970-01-01 00:00:12.345678")) to get the hash
 // value.
-TEST_F(XxHash64Test, TimeStamp) {
+TEST_F(XxHash64Test, Timestamp) {
   EXPECT_EQ(
       xxhash64<Timestamp>(Timestamp::fromMicros(12345678)), 782671362992292307);
 }
