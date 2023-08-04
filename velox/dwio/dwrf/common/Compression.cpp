@@ -31,7 +31,7 @@
 
 DEFINE_bool(
     VELOX_ENABLE_QAT_ZSTD_OT,
-    true,
+    false,
     "if to use qat for zstd compression");
 
 namespace facebook::velox::dwrf {
@@ -82,6 +82,9 @@ uint64_t
 ZstdQatCompressor::compress(const void* src, void* dest, uint64_t length) {
   size_t ret = ZSTD_compress2(zc, dest, length, src, length);
   if ((int)ret <= 0) {
+    if (ZSTD_getErrorCode(ret) == ZSTD_ErrorCode::ZSTD_error_dstSize_tooSmall) {
+      return length;
+    }
     DWIO_RAISE("ZSTD QAT returned an error: ", ZSTD_getErrorName(ret));
   }
   return ret;
