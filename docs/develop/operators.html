@@ -617,14 +617,14 @@ distribution fields.</p>
 </tr>
 </thead>
 <tbody>
-<tr class="row-even"><td><p>keys</p></td>
+<tr class="row-even"><td><p>kind</p></td>
+<td><p>Specifies output buffer types: kPartitioned, kBroadcast and kArbitrary. For kPartitioned type, rows are partitioned and each sent to corresponding destination partition. For kBroadcast type, rows are not partitioned and sent to all the destination partitions. For kArbitrary type, rows are not partitioned and each sent to any one of the destination partitions.</p></td>
+</tr>
+<tr class="row-odd"><td><p>keys</p></td>
 <td><p>Zero or more input fields to use for calculating a partition for each row.</p></td>
 </tr>
-<tr class="row-odd"><td><p>numPartitions</p></td>
-<td><p>Number of partitions to split the data into.</p></td>
-</tr>
-<tr class="row-even"><td><p>broadcast</p></td>
-<td><p>Boolean flag indicating whether all rows should be sent to all partitions.</p></td>
+<tr class="row-even"><td><p>numPartitions</p></td>
+<td><p>Number of partitions to split the data into.g</p></td>
 </tr>
 <tr class="row-odd"><td><p>replicateNullsAndAny</p></td>
 <td><p>Boolean flag indicating whether rows with nulls in the keys should be sent to all partitions and, in case there are no such rows, whether a single arbitrarily chosen row should be sent to all partitions. Used to provide global-scope information necessary to implement anti join semantics on a single node.</p></td>

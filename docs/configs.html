@@ -317,13 +317,19 @@ spilled files.</p></td>
 <td><p>29</p></td>
 <td><p>The start partition bit which is used with <cite>spiller_partition_bits</cite> together to calculate the spilling partition number.</p></td>
 </tr>
-<tr class="row-even"><td><p>spiller_partition_bits</p></td>
+<tr class="row-even"><td><p>join_spiller_partition_bits</p></td>
 <td><p>integer</p></td>
 <td><p>2</p></td>
-<td><p>The number of bits used to calculate the spilling partition number. The number of spilling partitions will be power of
-two. At the moment the maximum value is 3, meaning we only support up to 8-way spill partitioning.</p></td>
+<td><p>The number of bits (N) used to calculate the spilling partition number for hash join: 2 ^ N. At the moment the maximum
+value is 3, meaning we only support up to 8-way spill partitioning.</p></td>
 </tr>
-<tr class="row-odd"><td><p>testing.spill_pct</p></td>
+<tr class="row-odd"><td><p>aggregation_spiller_partition_bits</p></td>
+<td><p>integer</p></td>
+<td><p>0</p></td>
+<td><p>The number of bits (N) used to calculate the spilling partition number for hash aggregation: 2 ^ N. At the moment the
+maximum value is 3, meaning we only support up to 8-way spill partitioning.</p></td>
+</tr>
+<tr class="row-even"><td><p>testing.spill_pct</p></td>
 <td><p>integer</p></td>
 <td><p>0</p></td>
 <td><p>Percentage of aggregation or join input batches that will be forced to spill for testing. 0 means no extra spilling.</p></td>
