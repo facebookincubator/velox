@@ -263,5 +263,106 @@ TEST(DecimalAggregateTest, adjustSumForOverflow) {
   EXPECT_FALSE(accumulator.adjustedSum().has_value());
 }
 
+template <typename T>
+void checkRescaleDouble(double value, const TypePtr& type, T expectedValue) {
+  auto [precision, scale] = getDecimalPrecisionScale(*type);
+  folly::Expected<T, DecimalUtil::RescalingErrors> result =
+      DecimalUtil::rescaleDouble<T>(value, precision, scale);
+  ASSERT_FALSE(result.hasError());
+  ASSERT_TRUE(result.hasValue());
+  ASSERT_EQ(result.value(), expectedValue);
+}
+
+template <typename T>
+void checkRescaleDoubleFails(
+    double value,
+    const TypePtr& type,
+    const DecimalUtil::RescalingErrors expectedErrorCode) {
+  auto [precision, scale] = getDecimalPrecisionScale(*type);
+  folly::Expected<T, DecimalUtil::RescalingErrors> result =
+      DecimalUtil::rescaleDouble<T>(value, precision, scale);
+  ASSERT_TRUE(result.hasError());
+  ASSERT_FALSE(result.hasValue());
+  ASSERT_EQ(result.error(), expectedErrorCode);
+}
+
+TEST(DecimalTest, rescaleDouble) {
+  checkRescaleDouble<int64_t>(-3333.03, DECIMAL(10, 4), -33'330'300);
+  checkRescaleDouble<int128_t>(-3333.03, DECIMAL(20, 1), -33'330);
+  checkRescaleDouble<int128_t>(-3333.03, DECIMAL(20, 10), -33'330'300'000'000);
+
+  checkRescaleDouble<int64_t>(-2222.02, DECIMAL(10, 4), -22'220'200);
+  checkRescaleDouble<int128_t>(-2222.02, DECIMAL(20, 1), -22'220);
+  checkRescaleDouble<int128_t>(-2222.02, DECIMAL(20, 10), -22'220'200'000'000);
+
+  checkRescaleDouble<int64_t>(-1.0, DECIMAL(10, 4), -10'000);
+  checkRescaleDouble<int128_t>(-1.0, DECIMAL(20, 1), -10);
+  checkRescaleDouble<int128_t>(-1.0, DECIMAL(20, 10), -10'000'000'000);
+
+  checkRescaleDouble<int64_t>(0.00, DECIMAL(10, 4), 0);
+  checkRescaleDouble<int128_t>(0.00, DECIMAL(20, 1), 0);
+  checkRescaleDouble<int128_t>(0.00, DECIMAL(20, 10), 0);
+
+  checkRescaleDouble<int64_t>(100, DECIMAL(10, 4), 1'000'000);
+  checkRescaleDouble<int128_t>(100, DECIMAL(20, 1), 1'000);
+  checkRescaleDouble<int128_t>(100, DECIMAL(20, 10), 1'000'000'000'000);
+
+  checkRescaleDouble<int64_t>(99999.99, DECIMAL(10, 4), 999'999'900);
+  checkRescaleDouble<int128_t>(99999.99, DECIMAL(20, 1), 1'000'000);
+  checkRescaleDouble<int128_t>(99999.99, DECIMAL(20, 10), 999'999'900'000'000);
+
+  checkRescaleDouble<int128_t>(
+      std::numeric_limits<double>::min(), DECIMAL(38, 2), 0);
+
+  checkRescaleDoubleFails<int128_t>(
+      std::numeric_limits<double>::max(),
+      DECIMAL(38, 2),
+      DecimalUtil::RescalingErrors::kOverflowedRescaledValue);
+
+  // Test infinity double type numbers.
+  checkRescaleDoubleFails<int64_t>(
+      NAN,
+      DECIMAL(10, 2),
+      DecimalUtil::RescalingErrors::kInfiniteFloatingNumber);
+  checkRescaleDoubleFails<int64_t>(
+      INFINITY,
+      DECIMAL(10, 2),
+      DecimalUtil::RescalingErrors::kInfiniteFloatingNumber);
+
+  checkRescaleDoubleFails<int64_t>(
+      9999999999999999999999.99,
+      DECIMAL(10, 2),
+      DecimalUtil::RescalingErrors::kOverflowedRescaledValue);
+
+  checkRescaleDoubleFails<int64_t>(
+      static_cast<double>(
+          static_cast<int128_t>(std::numeric_limits<int64_t>::max()) + 1),
+      DECIMAL(10, 2),
+      DecimalUtil::RescalingErrors::kOverflowedRescaledValue);
+  checkRescaleDoubleFails<int64_t>(
+      static_cast<double>(
+          static_cast<int128_t>(std::numeric_limits<int64_t>::min()) - 1),
+      DECIMAL(10, 2),
+      DecimalUtil::RescalingErrors::kOverflowedRescaledValue);
+
+  checkRescaleDoubleFails<int64_t>(
+      static_cast<double>(DecimalUtil::kShortDecimalMax),
+      DECIMAL(10, 2),
+      DecimalUtil::RescalingErrors::kOverflowedRescaledValue);
+  checkRescaleDoubleFails<int64_t>(
+      static_cast<double>(DecimalUtil::kShortDecimalMin),
+      DECIMAL(10, 2),
+      DecimalUtil::RescalingErrors::kOverflowedRescaledValue);
+
+  checkRescaleDoubleFails<int128_t>(
+      static_cast<double>(DecimalUtil::kLongDecimalMax),
+      DECIMAL(20, 2),
+      DecimalUtil::RescalingErrors::kOverflowedRescaledValue);
+  checkRescaleDoubleFails<int128_t>(
+      static_cast<double>(DecimalUtil::kLongDecimalMin),
+      DECIMAL(20, 2),
+      DecimalUtil::RescalingErrors::kOverflowedRescaledValue);
+}
+
 } // namespace
 } // namespace facebook::velox

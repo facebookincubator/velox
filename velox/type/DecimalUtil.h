@@ -16,6 +16,7 @@
 
 #pragma once
 
+#include <folly/Conv.h>
 #include <string>
 #include "velox/common/base/CheckedArithmetic.h"
 #include "velox/common/base/Exceptions.h"
@@ -28,6 +29,11 @@ namespace facebook::velox {
 /// A static class that holds helper functions for DECIMAL type.
 class DecimalUtil {
  public:
+  enum class RescalingErrors : unsigned char {
+    kInfiniteFloatingNumber,
+    kOverflowedRescaledValue,
+  };
+
   static constexpr int128_t kPowersOfTen[LongDecimalType::kMaxPrecision + 1] = {
       1,
       10,
@@ -201,6 +207,44 @@ class DecimalUtil {
           toScale);
     }
     return static_cast<TOutput>(rescaledValue);
+  }
+
+  /// Rescale a double value to decimal value.
+  ///
+  /// Use `folly::tryTo` to convert a double value to int128_t or int64_t. It
+  /// returns an error when overflow occurs so that we could determine whether
+  /// an overflow occurs through checking the result.
+  ///
+  /// Normally, return the rescaled value. Otherwise, if the `toValue` overflows
+  /// the TOutput's limits or the `toValue` exceeds the precision's limits, it
+  /// will set an error message in `error` field and return an std::nullopt.
+  template <typename TOutput>
+  inline static folly::Expected<TOutput, RescalingErrors>
+  rescaleDouble(double value, int precision, int scale) {
+    if (!std::isfinite(value)) {
+      return folly::makeUnexpected<RescalingErrors>(
+          RescalingErrors::kInfiniteFloatingNumber);
+    }
+
+    auto toValue = value * DecimalUtil::kPowersOfTen[scale];
+
+    TOutput rescaledValue;
+    bool isOverflow = !std::isfinite(toValue);
+    if (!isOverflow) {
+      auto result = folly::tryTo<TOutput>(std::round(toValue));
+      if (result.hasError()) {
+        isOverflow = true;
+      } else {
+        rescaledValue = result.value();
+      }
+    }
+
+    if (isOverflow || rescaledValue < -DecimalUtil::kPowersOfTen[precision] ||
+        rescaledValue > DecimalUtil::kPowersOfTen[precision]) {
+      return folly::makeUnexpected<RescalingErrors>(
+          RescalingErrors::kOverflowedRescaledValue);
+    }
+    return folly::makeExpected<RescalingErrors>(rescaledValue);
   }
 
   template <typename R, typename A, typename B>
