@@ -190,10 +190,7 @@ class GCSWriteFile final : public WriteFile {
 
     // Check that it doesn't exist, if it does throw an error
     auto object_metadata = client_->GetObjectMetadata(bucket_, key_);
-
-    if (object_metadata.ok()) {
-      VELOX_CHECK(false, "File already exists");
-    }
+    VELOX_CHECK(!object_metadata.ok(), "File already exists");
 
     auto stream = client_->WriteObject(bucket_, key_);
     checkGCSStatus(
