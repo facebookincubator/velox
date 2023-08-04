@@ -176,5 +176,88 @@ TEST(DecimalTest, toByteArray) {
   testToByteArray(DecimalUtil::kLongDecimalMax, expected8, 16);
 }
 
+TEST(DecimalTest, rescaleDouble) {
+  std::vector<double> inputs{-3333.03, -2222.02, -1.0, 0.00, 100, 99999.99};
+  std::vector<int64_t> precision10scale1{
+      -33'330'300, -22'220'200, -10'000, 0, 1'000'000, 999'999'900};
+  std::vector<int128_t> precision20scale1{
+      -33'330, -22'220, -10, 0, 1'000, 1'000'000};
+  std::vector<int128_t> precision20scale10{
+      -33'330'300'000'000,
+      -22'220'200'000'000,
+      -10'000'000'000,
+      0,
+      1'000'000'000'000,
+      999'999'900'000'000};
+
+  for (size_t index = 0; index < inputs.size(); ++index) {
+    ASSERT_EQ(
+        precision10scale1[index],
+        DecimalUtil::rescaleDouble<int64_t>(inputs[index], 10, 4));
+    ASSERT_EQ(
+        precision20scale1[index],
+        DecimalUtil::rescaleDouble<int128_t>(inputs[index], 20, 1));
+    ASSERT_EQ(
+        precision20scale10[index],
+        DecimalUtil::rescaleDouble<int128_t>(inputs[index], 20, 10));
+  }
+
+  auto checkThrowError = [](double value, TypePtr& type) {
+    if (type->isShortDecimal()) {
+      auto shortDecimalType = type->asShortDecimal();
+      VELOX_ASSERT_THROW(
+          DecimalUtil::rescaleDouble<int64_t>(
+              value, shortDecimalType.precision(), shortDecimalType.scale()),
+          fmt::format(
+              "Cannot cast DOUBLE '{:f}' to {}",
+              value,
+              shortDecimalType.toString()));
+    } else {
+      auto longDecimalType = type->asLongDecimal();
+      VELOX_ASSERT_THROW(
+          DecimalUtil::rescaleDouble<int128_t>(
+              value, longDecimalType.precision(), longDecimalType.scale()),
+          fmt::format(
+              "Cannot cast DOUBLE '{:f}' to {}",
+              value,
+              longDecimalType.toString()));
+    }
+  };
+
+  auto decimalTypePrecision10Scale2 = DECIMAL(10, 2);
+  auto decimalTypePrecision20Scale2 = DECIMAL(20, 2);
+  auto decimalTypePrecision38Scale2 = DECIMAL(38, 2);
+
+  // Test infinity double type numbers.
+  checkThrowError(NAN, decimalTypePrecision10Scale2);
+  checkThrowError(INFINITY, decimalTypePrecision10Scale2);
+
+  // Expected failures.
+  double numberExceededPrecision = 9999999999999999999999.99;
+  checkThrowError(numberExceededPrecision, decimalTypePrecision10Scale2);
+
+  double numberBiggerThanInt64Max = static_cast<double>(
+      static_cast<int128_t>(std::numeric_limits<int64_t>::max()) + 1);
+  checkThrowError(numberBiggerThanInt64Max, decimalTypePrecision10Scale2);
+
+  double numberSmallerThanInt64Min = static_cast<double>(
+      static_cast<int128_t>(std::numeric_limits<int64_t>::min()) - 1);
+  checkThrowError(numberSmallerThanInt64Min, decimalTypePrecision10Scale2);
+
+  double numberBiggerThanDecimal20 =
+      static_cast<double>(DecimalUtil::kLongDecimalMax);
+  checkThrowError(numberBiggerThanDecimal20, decimalTypePrecision20Scale2);
+
+  double numberSmallerThanDecimal20 =
+      static_cast<double>(DecimalUtil::kLongDecimalMin);
+  checkThrowError(numberSmallerThanDecimal20, decimalTypePrecision20Scale2);
+
+  double doubleMax = std::numeric_limits<double>::max();
+  checkThrowError(doubleMax, decimalTypePrecision38Scale2);
+
+  double doubleMin = std::numeric_limits<double>::min();
+  ASSERT_EQ(0, DecimalUtil::rescaleDouble<int128_t>(doubleMin, 38, 2));
+}
+
 } // namespace
 } // namespace facebook::velox
