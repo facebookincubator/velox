@@ -26,6 +26,7 @@
 #include "velox/functions/sparksql/ArraySort.h"
 #include "velox/functions/sparksql/Bitwise.h"
 #include "velox/functions/sparksql/DateTimeFunctions.h"
+#include "velox/functions/sparksql/DecimalVectorFunctions.h"
 #include "velox/functions/sparksql/Hash.h"
 #include "velox/functions/sparksql/In.h"
 #include "velox/functions/sparksql/LeastGreatest.h"
@@ -73,6 +74,13 @@ static void workAroundRegistrationMacro(const std::string& prefix) {
 }
 
 namespace sparksql {
+
+void registerDecimalVectorFunctions(const std::string& prefix) {
+  exec::registerVectorFunction(
+      prefix + "unscaled_value",
+      unscaledValueSignatures(),
+      makeUnscaledValue());
+}
 
 void registerAllSpecialFormGeneralFunctions() {
   exec::registerFunctionCallToSpecialForms();
@@ -269,6 +277,9 @@ void registerFunctions(const std::string& prefix) {
       {prefix + "might_contain"});
 
   registerArrayMinMaxFunctions(prefix);
+
+  // Register decimal vector functions.
+  registerDecimalVectorFunctions(prefix);
 }
 
 } // namespace sparksql
