@@ -246,6 +246,7 @@ void HashProbe::maybeSetupSpillInput(
       spillConfig.filePath,
       spillConfig.maxFileSize,
       spillConfig.minSpillRunSize,
+      spillConfig.compressionKind,
       Spiller::spillPool(),
       spillConfig.executor);
   // Set the spill partitions to the corresponding ones at the build side. The
@@ -1407,8 +1408,8 @@ void HashProbe::setRunning() {
   setState(ProbeOperatorState::kRunning);
 }
 
-void HashProbe::close() {
-  Operator::close();
+void HashProbe::abort() {
+  Operator::abort();
 
   // Free up major memory usage.
   joinBridge_.reset();

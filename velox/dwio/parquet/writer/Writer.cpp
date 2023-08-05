@@ -16,9 +16,9 @@
 
 #include "velox/vector/arrow/Bridge.h"
 
-#include <arrow/c/bridge.h> // @manual
-#include <arrow/table.h> // @manual
-#include <parquet/arrow/writer.h> // @manual
+#include <arrow/c/bridge.h>
+#include <arrow/table.h>
+#include <parquet/arrow/writer.h>
 #include "velox/dwio/parquet/writer/Writer.h"
 
 namespace facebook::velox::parquet {
@@ -26,10 +26,12 @@ namespace facebook::velox::parquet {
 // Utility for buffering Arrow output with a DataBuffer.
 class ArrowDataBufferSink : public arrow::io::OutputStream {
  public:
+  /// @param growRatio Growth factor used when invoking the reserve() method of
+  /// DataSink, thereby helping to minimize frequent memcpy operations.
   ArrowDataBufferSink(
       std::unique_ptr<dwio::common::DataSink> sink,
       memory::MemoryPool& pool,
-      double growRatio = 1)
+      double growRatio)
       : sink_(std::move(sink)), growRatio_(growRatio), buffer_(pool) {}
 
   arrow::Status Write(const std::shared_ptr<arrow::Buffer>& data) override {
@@ -257,6 +259,10 @@ void Writer::close() {
   PARQUET_THROW_NOT_OK(stream_->Close());
 
   arrowContext_->stagingChunks.clear();
+}
+
+void Writer::abort() {
+  VELOX_NYI("abort function for Parquet writer is not supported yet");
 }
 
 parquet::WriterOptions getParquetOptions(

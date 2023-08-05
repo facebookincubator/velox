@@ -16,17 +16,12 @@ add_library(
   velox_dwio_dwrf_common
   ByteRLE.cpp
   Common.cpp
-  Compression.cpp
   Config.cpp
-  DataBufferHolder.cpp
   Decryption.cpp
   Encryption.cpp
   EncryptionSpecification.cpp
   FileMetadata.cpp
   IntEncoder.cpp
-  OutputStream.cpp
-  PagedInputStream.cpp
-  PagedOutputStream.cpp
   RLEv1.cpp
   RLEv2.cpp
   Statistics.cpp

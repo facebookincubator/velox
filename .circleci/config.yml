@@ -28,6 +28,19 @@ workflows:
               os: [macos-intel]
       - format-check
       - header-check
+      - doc-gen-job:
+          filters:
+            branches:
+              only:
+                - main
+      - macos-build:
+          matrix:
+            parameters:
+              os: [ macos-m1 ]
+          filters:
+            branches:
+              only:
+                - main
 
   # Daily documentation update
   nightly:
@@ -39,19 +52,9 @@ workflows:
              only:
                - main
     jobs:
-      - doc-gen-job
-      - linux-presto-fuzzer-run
-      - linux-spark-fuzzer-run
-      - linux-spark-aggregate-fuzzer-run
-      - linux-aggregate-fuzzer-run
-      - linux-join-fuzzer-run
       - docker-compose-ubuntu-cpp
       - docker-compose-centos-cpp
       - docker-compose-presto-native
-      - macos-build:
-          matrix:
-            parameters:
-              os: [ macos-m1 ]
 
 
   # Hourly build on weekdays
@@ -700,7 +703,14 @@ jobs:
             python ./scripts/signature.py export --spark spark_pr_signatures.json
             python ./scripts/signature.py bias presto_merge_base_signatures.json presto_pr_signatures.json /tmp/presto_bias_functions
             python ./scripts/signature.py bias spark_merge_base_signatures.json spark_pr_signatures.json /tmp/spark_bias_functions
-
+      - store_artifacts:
+          path: 'presto_merge_base_signatures.json'
+      - store_artifacts:
+          path: 'presto_pr_signatures.json'
+      - store_artifacts:
+          path: 'spark_merge_base_signatures.json'
+      - store_artifacts:
+          path: 'spark_pr_signatures.json'
       - fuzzer-run:
           fuzzer_output: "/tmp/fuzzer.log"
           fuzzer_repro: "/tmp/fuzzer_repro"

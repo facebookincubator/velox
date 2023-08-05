@@ -85,7 +85,10 @@ struct WriterOptions {
   bool enableDictionary = true;
   int64_t dataPageSize = 1'024 * 1'024;
   int64_t dictionaryPageSizeLimit = 1'024 * 1'024;
-  double bufferGrowRatio = 1;
+  // Growth ratio passed to ArrowDataBufferSink. The default value is a
+  // heuristic borrowed from
+  // folly/FBVector(https://github.com/facebook/folly/blob/main/folly/docs/FBVector.md#memory-handling).
+  double bufferGrowRatio = 1.5;
   common::CompressionKind compression = common::CompressionKind_NONE;
   velox::memory::MemoryPool* memoryPool;
   // The default factory allows the writer to construct the default flush
@@ -125,6 +128,8 @@ class Writer : public dwio::common::Writer {
   // Parquet file is flushed into 'sink' provided at construction. 'sink' stays
   // live until destruction of 'this'.
   void close() override;
+
+  void abort() override;
 
  private:
   // Pool for 'stream_'.
