@@ -59,6 +59,7 @@ add_library(
   RowContainer.cpp
   RowNumber.cpp
   SortedAggregations.cpp
+  SortWindowBuild.cpp
   Spill.cpp
   SpillOperatorGroup.cpp
   Spiller.cpp
@@ -74,6 +75,7 @@ add_library(
   Values.cpp
   VectorHasher.cpp
   Window.cpp
+  WindowBuild.cpp
   WindowFunction.cpp
   WindowPartition.cpp
   AssignUniqueId.cpp
