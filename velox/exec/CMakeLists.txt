@@ -74,6 +74,7 @@ add_library(
   Values.cpp
   VectorHasher.cpp
   Window.cpp
+  WindowBuild.cpp
   WindowFunction.cpp
   WindowPartition.cpp
   AssignUniqueId.cpp
