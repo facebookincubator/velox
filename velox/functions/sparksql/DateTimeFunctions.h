@@ -216,13 +216,13 @@ struct DateSubFunction {
   FOLLY_ALWAYS_INLINE void call(
       out_type<Date>& result,
       const arg_type<Date>& date,
-      const int32_t value) {
-    // Check inputs overflow.
-    int64_t tmp = date - (int64_t)value;
-    if (tmp != (int32_t)tmp) {
-      VELOX_UNSUPPORTED("integer overflow");
-    }
-
+      const int32_t value) 
+#if defined(__has_feature)
+#if __has_feature(__address_sanitizer__)
+      __attribute__((__no_sanitize__("signed-integer-overflow")))
+#endif
+#endif
+  {
     constexpr int32_t kMin = std::numeric_limits<int32_t>::min();
     if (value > kMin) {
       int32_t subValue = 0 - value;

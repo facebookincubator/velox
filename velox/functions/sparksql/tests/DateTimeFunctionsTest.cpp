@@ -231,9 +231,8 @@ TEST_F(DateTimeFunctionsTest, dateSub) {
   EXPECT_EQ(parseDate("1970-01-01"), dateSub("5881580-07-11", kMax));
   EXPECT_EQ(parseDate("1970-01-01"), dateSub("-5877641-06-23", kMin));
   EXPECT_EQ(parseDate("5881580-07-11"), dateSub("1969-12-31", kMin));
-
-  // Check overflow.
-  VELOX_ASSERT_THROW(dateSub("2023-07-10", kMin), "integer overflow");
+  // When input are bigger date and kMin, result will wrap around.
+  EXPECT_EQ(parseDate("-5877588-12-29"), dateSub("2023-07-10", kMin));
 }
 
 } // namespace
