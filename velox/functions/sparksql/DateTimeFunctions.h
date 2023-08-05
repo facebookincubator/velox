@@ -214,7 +214,7 @@ struct DateSubFunction {
   VELOX_DEFINE_FUNCTION_TYPES(T);
 
   FOLLY_ALWAYS_INLINE void
-  call(out_type<Date>& result, const arg_type<Date>& date, const int32_t value) 
+  call(out_type<Date>& result, const arg_type<Date>& date, const int32_t value)
 #if defined(__has_feature)
 #if __has_feature(__address_sanitizer__)
       __attribute__((__no_sanitize__("signed-integer-overflow")))
