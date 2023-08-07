@@ -26,11 +26,11 @@ namespace {
 /// single character
 class SplitCharacter final : public exec::VectorFunction {
  public:
-  explicit SplitCharacter(const char pattern) : pattern_{pattern} {
+  explicit SplitCharacter(const std::string& pattern) : pattern_{pattern} {
     static constexpr std::string_view kRegexChars = ".$|()[{^?*+\\";
     VELOX_CHECK(
-        kRegexChars.find(pattern) == std::string::npos,
-        "This version of split supports single-length non-regex patterns");
+        pattern.find_first_of(kRegexChars) == std::string::npos,
+        "This version of split supports non-regex patterns");
   }
 
   void apply(
@@ -54,10 +54,14 @@ class SplitCharacter final : public exec::VectorFunction {
       const char* end = pos + current.size();
       const char* delim;
       do {
-        delim = std::find(pos, end, pattern_);
+        delim = std::search(pos, end, pattern_.begin(), pattern_.end());
         arrayWriter.add_item().setNoCopy(StringView(pos, delim - pos));
-        pos = delim + 1; // Skip past delim.
-      } while (delim != end);
+        if (delim != end) {
+          pos = delim + pattern_.size(); // Skip past delim.
+        } else {
+          pos = end;
+        }
+      } while (pos != end);
 
       resultWriter.commit();
     });
@@ -72,7 +76,7 @@ class SplitCharacter final : public exec::VectorFunction {
   }
 
  private:
-  const char pattern_;
+  const std::string pattern_;
 };
 
 /// This class will be updated in the future as we support more variants of
@@ -91,11 +95,7 @@ class Split final : public exec::VectorFunction {
     VELOX_CHECK(
         delimiterVector, "Split function supports only constant delimiter");
     auto patternString = args[1]->as<ConstantVector<StringView>>()->valueAt(0);
-    VELOX_CHECK_EQ(
-        patternString.size(),
-        1,
-        "split only supports only single-character pattern");
-    char pattern = patternString.data()[0];
+    std::string pattern(patternString.data());
     SplitCharacter splitCharacter(pattern);
     splitCharacter.apply(rows, args, nullptr, context, result);
   }
@@ -119,10 +119,10 @@ std::shared_ptr<exec::VectorFunction> createSplit(
   if (pattern.size() != 1) {
     return std::make_shared<Split>();
   }
-  char charPattern = pattern.data()[0];
-  // TODO: Add support for zero-length pattern, 2-character pattern
+  std::string strPattern(pattern.data());
+  // TODO: Add support for zero-length pattern
   // TODO: add support for general regex pattern using R2
-  return std::make_shared<SplitCharacter>(charPattern);
+  return std::make_shared<SplitCharacter>(strPattern);
 }
 
 std::vector<std::shared_ptr<exec::FunctionSignature>> signatures() {
