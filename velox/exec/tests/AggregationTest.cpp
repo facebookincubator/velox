@@ -816,6 +816,7 @@ TEST_F(AggregationTest, partialDistinctWithAbandon) {
   // so they are triggered on the second batch.
 
   // Distinct aggregation.
+  core::PlanNodeId aggNodeId;
   auto task = AssertQueryBuilder(duckDbQueryRunner_)
                   .config(QueryConfig::kAbandonPartialAggregationMinRows, "100")
                   .config(QueryConfig::kAbandonPartialAggregationMinPct, "50")
@@ -823,9 +824,14 @@ TEST_F(AggregationTest, partialDistinctWithAbandon) {
                   .plan(PlanBuilder()
                             .values(vectors)
                             .partialAggregation({"c0"}, {})
+                            .capturePlanNodeId(aggNodeId)
                             .finalAggregation()
                             .planNode())
                   .assertResults("SELECT distinct c0 FROM tmp");
+  auto customStats = toPlanStats(task->taskStats()).at(aggNodeId).customStats;
+  // Partial full is set as false due to no new distinct groups.
+  EXPECT_TRUE(
+      customStats.find("abandonedPartialAggregation") == customStats.end());
 
   // with aggregation, just in case.
   task = AssertQueryBuilder(duckDbQueryRunner_)
@@ -835,9 +841,34 @@ TEST_F(AggregationTest, partialDistinctWithAbandon) {
              .plan(PlanBuilder()
                        .values(vectors)
                        .partialAggregation({"c0"}, {"sum(c0)"})
+                       .capturePlanNodeId(aggNodeId)
                        .finalAggregation()
                        .planNode())
              .assertResults("SELECT distinct c0, sum(c0) FROM tmp group by c0");
+  EXPECT_EQ(
+      toPlanStats(task->taskStats())
+          .at(aggNodeId)
+          .customStats.at("abandonedPartialAggregation")
+          .sum,
+      1);
+
+  task = AssertQueryBuilder(duckDbQueryRunner_)
+             .config(QueryConfig::kAbandonPartialAggregationMinRows, "100")
+             .config(QueryConfig::kAbandonPartialAggregationMinPct, "50")
+             .config(QueryConfig::kAbandonPartialAggregationMinMemory, "10000")
+             .config("max_drivers_per_task", "1")
+             .plan(PlanBuilder()
+                       .values(vectors)
+                       .partialAggregation({"c0"}, {"sum(c0)"})
+                       .capturePlanNodeId(aggNodeId)
+                       .finalAggregation()
+                       .planNode())
+             .assertResults("SELECT distinct c0, sum(c0) FROM tmp group by c0");
+  customStats = toPlanStats(task->taskStats()).at(aggNodeId).customStats;
+  // The config kAbandonPartialAggregationMinMemory is set large enough to
+  // disable flush.
+  EXPECT_TRUE(
+      customStats.find("abandonedPartialAggregation") == customStats.end());
 }
 
 TEST_F(AggregationTest, largeValueRangeArray) {

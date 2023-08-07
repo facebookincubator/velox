@@ -99,6 +99,9 @@ class QueryConfig {
   static constexpr const char* kAbandonPartialAggregationMinRows =
       "abandon_partial_aggregation_min_rows";
 
+  static constexpr const char* kAbandonPartialAggregationMinMemory =
+      "min_abandon_partial_aggregation_memory";
+
   static constexpr const char* kAbandonPartialAggregationMinPct =
       "abandon_partial_aggregation_min_pct";
 
@@ -250,6 +253,11 @@ class QueryConfig {
 
   int32_t abandonPartialAggregationMinRows() const {
     return get<int32_t>(kAbandonPartialAggregationMinRows, 10000);
+  }
+
+  uint64_t abandonPartialAggregationMinMemoryUsage() const {
+    static constexpr uint64_t kDefault = 0;
+    return get<uint64_t>(kAbandonPartialAggregationMinMemory, kDefault);
   }
 
   int32_t abandonPartialAggregationMinPct() const {

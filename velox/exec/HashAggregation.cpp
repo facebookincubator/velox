@@ -85,6 +85,8 @@ HashAggregation::HashAggregation(
           driverCtx->queryConfig().maxPartialAggregationMemoryUsage()),
       abandonPartialAggregationMinRows_(
           driverCtx->queryConfig().abandonPartialAggregationMinRows()),
+      abandonPartialAggregationMinMemory_(
+          driverCtx->queryConfig().abandonPartialAggregationMinMemoryUsage()),
       abandonPartialAggregationMinPct_(
           driverCtx->queryConfig().abandonPartialAggregationMinPct()) {
   VELOX_CHECK(pool()->trackUsage());
@@ -187,7 +189,8 @@ HashAggregation::HashAggregation(
 
 bool HashAggregation::abandonPartialAggregationEarly(int64_t numOutput) const {
   VELOX_CHECK(isPartialOutput_ && !isGlobal_);
-  return numInputRows_ > abandonPartialAggregationMinRows_ &&
+  return groupingSet_->allocatedBytes() > abandonPartialAggregationMinMemory_ &&
+      numInputRows_ > abandonPartialAggregationMinRows_ &&
       100 * numOutput / numInputRows_ >= abandonPartialAggregationMinPct_;
 }
 

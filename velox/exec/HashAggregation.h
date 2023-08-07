@@ -91,6 +91,10 @@ class HashAggregation : public Operator {
   // aggregation.
   const int32_t abandonPartialAggregationMinRows_;
 
+  // Minimum size of memory usage in bytes to see before deciding to give up on
+  // partial aggregation.
+  const uint64_t abandonPartialAggregationMinMemory_;
+
   // Min unique rows pct for partial aggregation. If more than this many rows
   // are unique, the partial aggregation is not worthwhile.
   const int32_t abandonPartialAggregationMinPct_;
