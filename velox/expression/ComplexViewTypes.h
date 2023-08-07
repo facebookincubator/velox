@@ -785,6 +785,9 @@ class MapView {
     const value_reader_t* valueReader_;
   };
 
+  using key_type = const KeyAccessor;
+  using mapped_type = const ValueAccessor;
+
   using Iterator = IndexBasedIterator<ElementAccessor>;
 
   Iterator begin() const {
