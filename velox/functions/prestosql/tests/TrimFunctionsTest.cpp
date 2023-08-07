@@ -226,6 +226,13 @@ TEST_F(TrimFunctionsTest, trimCustomCharacters) {
   EXPECT_EQ("", trim("banana", "nba"));
   EXPECT_EQ("anana", trim("banana", "bn"));
   EXPECT_EQ("anana", trim("banana", "nb"));
+
+  // UTF-8 strings.
+  EXPECT_EQ("est\u4F60", trim("test\u4F60", "t"));
+  EXPECT_EQ("test", trim("test\u4F60", "\u4F60"));
+  EXPECT_EQ("e\u4F60s", trim("t\u4F60e\u4F60s\u4F60t\u4F60", "t\u4F60"));
+  EXPECT_EQ("s", trim("t\u4F60e\u4F60s\u4F60t\u4F60", "t\u4F60e"));
+  EXPECT_EQ("", trim("t\u4F60e\u4F60s\u4F60t\u4F60", "t\u4F60es"));
 }
 
 } // namespace

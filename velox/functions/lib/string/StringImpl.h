@@ -180,6 +180,15 @@ int32_t applyToCodePoints(const TString& input, Callable callable) {
   return offset;
 }
 
+/// Invokes 'callable' for each code point in 'input' in reverse order (starting
+/// from the last code point). Stops processing if 'callable' returns false.
+/// Throws if input is not a valid UTF-8 string.
+///
+/// @param input Valid UTF-8 string.
+/// @param callable A function taking a 'codePoint' integer and returning a
+/// boolean.
+/// @return The index of the start of the last codePoint successfully processed
+/// by 'callable' (i.e. 'callable' returned true).
 template <typename TString, typename Callable>
 int32_t applyToCodePointsInReverse(const TString& input, Callable callable) {
   const auto* bytes = input.data();
@@ -418,11 +427,13 @@ trimAscii(TOutString& output, const TInString& input, TShouldTrim shouldTrim) {
 template <
     bool leftTrim,
     bool rightTrim,
+    typename TShouldTrim,
     typename TOutString,
     typename TInString>
-FOLLY_ALWAYS_INLINE void trimUnicodeWhiteSpace(
+FOLLY_ALWAYS_INLINE void trimUnicode(
     TOutString& output,
-    const TInString& input) {
+    const TInString& input,
+    TShouldTrim shouldTrim) {
   if (input.empty()) {
     output.setEmpty();
     return;
@@ -430,7 +441,7 @@ FOLLY_ALWAYS_INLINE void trimUnicodeWhiteSpace(
 
   auto startIndex = 0;
   if constexpr (leftTrim) {
-    startIndex = applyToCodePoints(input, isUnicodeWhiteSpace);
+    startIndex = applyToCodePoints(input, shouldTrim);
 
     if (startIndex >= input.size()) {
       output.setEmpty();
@@ -444,8 +455,7 @@ FOLLY_ALWAYS_INLINE void trimUnicodeWhiteSpace(
   if constexpr (rightTrim) {
     // Right trim traverses the string backwards.
     trimmedSize = applyToCodePointsInReverse(
-        std::string_view(trimmedStart, input.size() - startIndex),
-        isUnicodeWhiteSpace);
+        std::string_view(trimmedStart, input.size() - startIndex), shouldTrim);
 
     if (trimmedSize == 0) {
       output.setEmpty();

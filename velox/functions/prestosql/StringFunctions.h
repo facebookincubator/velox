@@ -147,10 +147,20 @@ struct TrimFunctionBase {
   // ASCII input always produces ASCII result.
   static constexpr bool is_default_ascii_behavior = true;
 
+  FOLLY_ALWAYS_INLINE void initialize(
+      const core::QueryConfig& config,
+      const arg_type<Varchar>* date,
+      const arg_type<Varchar>* trimCharacters) {
+    if (trimCharacters != nullptr) {
+      trimCodePoints_ = stringImpl::stringToCodePoints(*trimCharacters);
+    }
+  }
+
   FOLLY_ALWAYS_INLINE void call(
       out_type<Varchar>& result,
       const arg_type<Varchar>& input) {
-    stringImpl::trimUnicodeWhiteSpace<leftTrim, rightTrim>(result, input);
+    stringImpl::trimUnicode<leftTrim, rightTrim>(
+        result, input, stringImpl::isUnicodeWhiteSpace);
   }
 
   FOLLY_ALWAYS_INLINE void call(
@@ -159,9 +169,26 @@ struct TrimFunctionBase {
       const arg_type<Varchar>& trimCharacters) {
     if (stringCore::isAscii(trimCharacters.data(), trimCharacters.size())) {
       callAscii(result, input, trimCharacters);
+    } else if (!trimCodePoints_.empty()) {
+      stringImpl::trimUnicode<leftTrim, rightTrim>(result, input, [&](auto c) {
+        for (auto trimCodePoint : trimCodePoints_) {
+          if (c == trimCodePoint) {
+            return true;
+          }
+        }
+        return false;
+      });
     } else {
-      VELOX_UNSUPPORTED(
-          "trim functions with custom trim characters and non-ASCII inputs are not supported yet");
+      const auto trimCodePoints =
+          stringImpl::stringToCodePoints(trimCharacters);
+      stringImpl::trimUnicode<leftTrim, rightTrim>(result, input, [&](auto c) {
+        for (auto trimCodePoint : trimCodePoints) {
+          if (c == trimCodePoint) {
+            return true;
+          }
+        }
+        return false;
+      });
     }
   }
 
@@ -178,7 +205,7 @@ struct TrimFunctionBase {
       const arg_type<Varchar>& trimCharacters) {
     const auto numChars = trimCharacters.size();
     const auto* chars = trimCharacters.data();
-    stringImpl::trimAscii<leftTrim, rightTrim>(result, input, [&](char c) {
+    stringImpl::trimAscii<leftTrim, rightTrim>(result, input, [&](auto c) {
       for (auto i = 0; i < numChars; ++i) {
         if (c == chars[i]) {
           return true;
@@ -187,6 +214,9 @@ struct TrimFunctionBase {
       return false;
     });
   }
+
+ private:
+  std::vector<int32_t> trimCodePoints_;
 };
 
 template <typename T>
