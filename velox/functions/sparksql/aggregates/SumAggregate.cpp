@@ -29,13 +29,7 @@ using SumAggregate = SumAggregateBase<TInput, TAccumulator, ResultType, true>;
 TypePtr getDecimalSumType(
     const TypePtr& resultType,
     core::AggregationNode::Step step) {
-  if (exec::isPartialOutput(step)) {
-    return resultType->childAt(0);
-  }
-  if (step == core::AggregationNode::Step::kSingle && resultType->isRow()) {
-    return resultType->childAt(0);
-  }
-  return resultType;
+  return exec::isPartialOutput(step) ? resultType->childAt(0) : resultType;
 }
 } // namespace
 
