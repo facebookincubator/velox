@@ -153,8 +153,7 @@ TEST_F(CompareTest, testdictionary) {
   auto makeConstantDic = [&](const VectorPtr& base) {
     return BaseVector::wrapInConstant(base->size(), 0, base);
   };
-  // lhs: 0, null, 2, null, 4
-
+  // Lhs: 0, null, 2, null, 4.
   auto lhs = makeFlatVector<int16_t>(
       5, [](auto row) { return row; }, nullEvery(2, 1));
   auto rhs = makeFlatVector<int16_t>({1, 0, 3, 0, 5});
@@ -164,7 +163,7 @@ TEST_F(CompareTest, testdictionary) {
   auto rowVector = makeRowVector({lhsVector, rhsVector});
   auto result = evaluate<SimpleVector<bool>>(
       fmt::format("{}(c0, c1)", "greaterthan"), rowVector);
-  // result : false, null, false, null, false
+  // Result : false, null, false, null, false.
   facebook::velox::test::assertEqualVectors(
       result,
       makeFlatVector<bool>(
@@ -172,18 +171,18 @@ TEST_F(CompareTest, testdictionary) {
   auto constVector = makeConstant(100, 5);
   auto testConstVector =
       makeRowVector({makeDictionary(lhs), makeConstantDic(constVector)});
-  // lhs: 0, null, 2, null, 4
-  // rhs: const 100
-  // lessthanorequal result : true, null, true, null, true
+  // Lhs: 0, null, 2, null, 4.
+  // Rhs: const 100.
+  // Lessthanorequal result : true, null, true, null, true.
   auto constResult = evaluate<SimpleVector<bool>>(
       fmt::format("{}(c0, c1)", "lessthanorequal"), testConstVector);
   facebook::velox::test::assertEqualVectors(
       constResult,
       makeFlatVector<bool>(
           5, [](auto row) { return true; }, nullEvery(2, 1)));
-  // lhs: const 100
-  // rhs: 0, null, 2, null, 4
-  // greaterthanorequal result : true, null, true, null, true
+  // Lhs: const 100.
+  // Rhs: 0, null, 2, null, 4.
+  // Greaterthanorequal result : true, null, true, null, true.
   auto testConstVector1 =
       makeRowVector({makeConstantDic(constVector), makeDictionary(lhs)});
   auto constResult1 = evaluate<SimpleVector<bool>>(
