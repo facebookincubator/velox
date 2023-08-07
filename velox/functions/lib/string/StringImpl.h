@@ -147,29 +147,50 @@ FOLLY_ALWAYS_INLINE int32_t charToCodePoint(const T& inputString) {
   return codePoint;
 }
 
+/// Invokes 'callable' for each code point in 'input'. Stops processing if
+/// 'callable' returns false. Throws if input is not a valid UTF-8 string.
+///
+/// @param input Valid UTF-8 string.
+/// @param callable A function taking a 'codePoint' integer and returning a
+/// boolean.
+/// @return The index of the start of the last codePoint successfully processed
+/// by 'callable' (i.e. 'callable' returned true).
+template <typename TString, typename Callable>
+int32_t applyToCodePoints(const TString& input, Callable callable) {
+  const auto* bytes = input.data();
+  const auto numBytes = input.size();
+
+  int32_t codePointSize = 0;
+  int32_t offset = 0;
+  while (offset < numBytes) {
+    auto codePoint =
+        utf8proc_codepoint(bytes + offset, bytes + numBytes, codePointSize);
+    VELOX_USER_CHECK_GE(
+        codePoint,
+        0,
+        "Invalid UTF-8 encoding in: {}",
+        std::string_view(
+            bytes + offset, std::min<int32_t>(numBytes - offset, 16)));
+    if (!callable(codePoint)) {
+      break;
+    }
+    offset += codePointSize;
+  }
+
+  return offset;
+}
+
 /// Returns the sequence of character Unicode code point of an input string.
 template <typename T>
 std::vector<int32_t> stringToCodePoints(const T& inputString) {
-  int64_t length = inputString.size();
   std::vector<int32_t> codePoints;
-  codePoints.reserve(length);
+  codePoints.reserve(inputString.size());
 
-  int64_t inputIndex = 0;
-  while (inputIndex < length) {
-    utf8proc_int32_t codepoint;
-    int size;
-    codepoint = utf8proc_codepoint(
-        inputString.data() + inputIndex, inputString.data() + length, size);
-    VELOX_USER_CHECK_GE(
-        codepoint,
-        0,
-        "Invalid UTF-8 encoding in characters: {}",
-        StringView(
-            inputString.data() + inputIndex,
-            std::min(length - inputIndex, inputIndex + 12)));
-    codePoints.push_back(codepoint);
-    inputIndex += size;
-  }
+  applyToCodePoints(inputString, [&](auto codePoint) {
+    codePoints.push_back(codePoint);
+    return true;
+  });
+
   return codePoints;
 }
 
@@ -411,17 +432,7 @@ FOLLY_ALWAYS_INLINE void trimUnicodeWhiteSpace(
 
   auto curStartPos = 0;
   if constexpr (leftTrim) {
-    int codePointSize = 0;
-    while (curStartPos < input.size()) {
-      auto codePoint = utf8proc_codepoint(
-          input.data() + curStartPos,
-          input.data() + input.size(),
-          codePointSize);
-      if (!isUnicodeWhiteSpace(codePoint)) {
-        break;
-      }
-      curStartPos += codePointSize;
-    }
+    curStartPos = applyToCodePoints(input, isUnicodeWhiteSpace);
 
     if (curStartPos >= input.size()) {
       output.setEmpty();

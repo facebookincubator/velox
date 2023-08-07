@@ -269,17 +269,15 @@ TEST_F(StringImplTest, stringToCodePoints) {
   testStringToCodePoints("\u840C", {0x840C});
 
   VELOX_ASSERT_THROW(
-      testStringToCodePoints("\xA9", {}),
-      "Invalid UTF-8 encoding in characters");
+      testStringToCodePoints("\xA9", {}), "Invalid UTF-8 encoding in: ");
   VELOX_ASSERT_THROW(
-      testStringToCodePoints("ü\xA9", {}),
-      "Invalid UTF-8 encoding in characters");
+      testStringToCodePoints("ü\xA9", {}), "Invalid UTF-8 encoding in: ");
   VELOX_ASSERT_THROW(
       testStringToCodePoints("ü\xA9hello wooooorld", {}),
-      "Invalid UTF-8 encoding in characters");
+      "Invalid UTF-8 encoding in: ");
   VELOX_ASSERT_THROW(
       testStringToCodePoints("ü\xA9hello wooooooooorrrrrld", {}),
-      "Invalid UTF-8 encoding in characters");
+      "Invalid UTF-8 encoding in: ");
 }
 
 TEST_F(StringImplTest, stringPosition) {

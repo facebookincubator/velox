@@ -1149,13 +1149,13 @@ TEST_F(StringFunctionsTest, unicodeLevenshteinDistance) {
 TEST_F(StringFunctionsTest, invalidLevenshteinDistance) {
   VELOX_ASSERT_THROW(
       levenshteinDistance("a\xA9ü", "hello world"),
-      "Invalid UTF-8 encoding in characters");
+      "Invalid UTF-8 encoding in: ");
   VELOX_ASSERT_THROW(
       levenshteinDistance("Ψ\xFF\xFFΣΓΔA", "abc"),
-      "Invalid UTF-8 encoding in characters");
+      "Invalid UTF-8 encoding in: ");
   VELOX_ASSERT_THROW(
       levenshteinDistance("ab", "AΔΓΣ\xFF\xFFΨ"),
-      "Invalid UTF-8 encoding in characters");
+      "Invalid UTF-8 encoding in: ");
 
   VELOX_ASSERT_THROW(
       levenshteinDistance(std::string(1001, 'h'), std::string(1001, 'o')),
