@@ -70,7 +70,8 @@ class ZstdQatCompressor : public Compressor {
     sequenceProducerState = QZSTD_createSeqProdState();
     ZSTD_registerSequenceProducer(
         zc, sequenceProducerState, qatSequenceProducer);
-    ZSTD_CCtx_setParameter(zc, ZSTD_c_enableSeqProducerFallback, level);
+    ZSTD_CCtx_setParameter(zc, ZSTD_c_enableSeqProducerFallback, 0);
+    ZSTD_CCtx_setParameter(zc, ZSTD_c_compressionLevel, level);
   }
 
   ZSTD_CCtx* zc;
