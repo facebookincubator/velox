@@ -180,6 +180,31 @@ int32_t applyToCodePoints(const TString& input, Callable callable) {
   return offset;
 }
 
+template <typename TString, typename Callable>
+int32_t applyToCodePointsInReverse(const TString& input, Callable callable) {
+  const auto* bytes = input.data();
+  const auto numBytes = input.size();
+
+  int32_t codePointSize = 0;
+  int32_t offset = 0;
+  while (offset < numBytes) {
+    auto codePoint = utf8proc_last_codepoint(
+        bytes, bytes + numBytes - offset, codePointSize);
+    VELOX_USER_CHECK_GE(
+        codePoint,
+        0,
+        "Invalid UTF-8 encoding around byte {} in: {}",
+        numBytes - offset,
+        std::string_view(bytes, std::min<int32_t>(numBytes, 64)));
+    if (!callable(codePoint)) {
+      return numBytes - offset;
+    }
+    offset += codePointSize;
+  }
+
+  return 0;
+}
+
 /// Returns the sequence of character Unicode code point of an input string.
 template <typename T>
 std::vector<int32_t> stringToCodePoints(const T& inputString) {
@@ -319,32 +344,6 @@ FOLLY_ALWAYS_INLINE bool isAsciiSpace(char ch) {
   return ch == ' ';
 }
 
-// Returns -1 if 'data' does not end with a white space, otherwise returns the
-// size of the white space character at the end of 'data'. 'size' is the size of
-// 'data' in bytes.
-FOLLY_ALWAYS_INLINE int endsWithUnicodeWhiteSpace(
-    const char* data,
-    size_t size) {
-  if (size >= 1) {
-    // check 1 byte characters.
-    // codepoints: 9, 10, 13, 32.
-    auto& lastChar = data[size - 1];
-    if (isAsciiWhiteSpace(lastChar)) {
-      return 1;
-    }
-  }
-
-  if (size >= 3) {
-    // Check if the last character is \u2028.
-    if (data[size - 3] == '\xe2' && data[size - 2] == '\x80' &&
-        data[size - 1] == '\xa8') {
-      return 3;
-    }
-  }
-
-  return -1;
-}
-
 template <typename TOutString, typename TInString>
 FOLLY_ALWAYS_INLINE bool splitPart(
     TOutString& output,
@@ -429,39 +428,32 @@ FOLLY_ALWAYS_INLINE void trimUnicodeWhiteSpace(
     return;
   }
 
-  auto curStartPos = 0;
+  auto startIndex = 0;
   if constexpr (leftTrim) {
-    curStartPos = applyToCodePoints(input, isUnicodeWhiteSpace);
+    startIndex = applyToCodePoints(input, isUnicodeWhiteSpace);
 
-    if (curStartPos >= input.size()) {
+    if (startIndex >= input.size()) {
       output.setEmpty();
       return;
     }
   }
 
-  const auto startIndex = curStartPos;
-  const auto* stringStart = input.data() + startIndex;
-  auto endIndex = input.size() - 1;
+  const auto* trimmedStart = input.data() + startIndex;
 
+  auto trimmedSize = input.size() - startIndex;
   if constexpr (rightTrim) {
     // Right trim traverses the string backwards.
+    trimmedSize = applyToCodePointsInReverse(
+        std::string_view(trimmedStart, input.size() - startIndex),
+        isUnicodeWhiteSpace);
 
-    while (endIndex >= startIndex) {
-      auto charSize =
-          endsWithUnicodeWhiteSpace(stringStart, endIndex - startIndex + 1);
-      if (charSize == -1) {
-        break;
-      }
-      endIndex -= charSize;
-    }
-
-    if (endIndex < startIndex) {
+    if (trimmedSize == 0) {
       output.setEmpty();
       return;
     }
   }
 
-  output.setNoCopy(StringView(stringStart, endIndex - startIndex + 1));
+  output.setNoCopy(StringView(trimmedStart, trimmedSize));
 }
 
 template <bool ascii, typename TOutString, typename TInString>

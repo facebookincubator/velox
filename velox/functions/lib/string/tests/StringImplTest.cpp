@@ -261,6 +261,17 @@ TEST_F(StringImplTest, stringToCodePoints) {
         }
 
         if (!charString.empty()) {
+          std::vector<int32_t> codePoints;
+          functions::stringImpl::applyToCodePointsInReverse(
+              charString, [&](auto codePoint) {
+                codePoints.push_back(codePoint);
+                return true;
+              });
+
+          std::reverse(codePoints.begin(), codePoints.end());
+
+          ASSERT_EQ(expectedCodePoints, codePoints);
+
           const auto* bytes = charString.data();
           const auto numBytes = charString.size();
 
