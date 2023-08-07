@@ -234,12 +234,12 @@ supported conversions to/from JSON are listed in <a class="reference internal" h
 <td></td>
 </tr>
 <tr class="row-even"><td><p>decimal</p></td>
+<td><p>Y</p></td>
+<td><p>Y</p></td>
+<td><p>Y</p></td>
+<td><p>Y</p></td>
 <td></td>
-<td></td>
-<td></td>
-<td></td>
-<td></td>
-<td></td>
+<td><p>Y</p></td>
 <td><p>Y</p></td>
 <td></td>
 <td></td>
@@ -412,9 +412,13 @@ consistent with other supported cases of cast.</p>
 </section>
 <section id="from-decimal">
 <h3>From decimal<a class="headerlink" href="#from-decimal" title="Permalink to this heading">¶</a></h3>
-<p>Casting from decimal to double is allowed.</p>
+<p>Casting from decimal to double, float or any integral type is allowed. During decimal to an integral type conversion, if result overflows, or underflows, an exception is thrown.</p>
 <p>Valid example</p>
 <div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">SELECT</span> <span class="n">cast</span><span class="p">(</span><span class="n">decimal</span> <span class="s1">&#39;10.001&#39;</span> <span class="k">as</span> <span class="n">double</span><span class="p">);</span> <span class="o">--</span> <span class="mf">10.001</span>
+</pre></div>
+</div>
+<p>Invalid example</p>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">SELECT</span> <span class="n">cast</span><span class="p">(</span><span class="n">decimal</span> <span class="s1">&#39;300.001&#39;</span> <span class="k">as</span> <span class="n">tinyint</span><span class="p">);</span> <span class="o">--</span> <span class="n">Out</span> <span class="n">of</span> <span class="nb">range</span>
 </pre></div>
 </div>
 </section>
