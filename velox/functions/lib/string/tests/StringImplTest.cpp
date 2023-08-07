@@ -253,10 +253,30 @@ TEST_F(StringImplTest, stringToCodePoints) {
   auto testStringToCodePoints =
       [](const std::string& charString,
          const std::vector<int32_t>& expectedCodePoints) {
+        SCOPED_TRACE(charString);
         std::vector<int32_t> codePoints = stringToCodePoints(charString);
         ASSERT_EQ(codePoints.size(), expectedCodePoints.size());
         for (int i = 0; i < codePoints.size(); i++) {
           ASSERT_EQ(codePoints.at(i), expectedCodePoints.at(i));
+        }
+
+        if (!charString.empty()) {
+          const auto* bytes = charString.data();
+          const auto numBytes = charString.size();
+
+          size_t index = expectedCodePoints.size() - 1;
+          size_t numProcessedBytes = 0;
+          while (numProcessedBytes < numBytes && index >= 0) {
+            int32_t codePointSize = 123;
+            auto codePoint = utf8proc_last_codepoint(
+                bytes, bytes + numBytes - numProcessedBytes, codePointSize);
+            ASSERT_EQ(codePoint, expectedCodePoints[index]) << "at " << index;
+            numProcessedBytes += codePointSize;
+            --index;
+          }
+
+          ASSERT_EQ(index, -1);
+          ASSERT_EQ(numProcessedBytes, numBytes);
         }
       };
 

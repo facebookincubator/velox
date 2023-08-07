@@ -926,13 +926,14 @@ UTF8PROC_DLLEXPORT utf8proc_uint8_t* utf8proc_NFKC_Casefold(
 // `end` is a pointer to the first byte past the end of the string.
 UTF8PROC_DLLEXPORT utf8proc_int32_t
 utf8proc_codepoint(const char* u_input, const char* end, int& sz) {
+  const auto numBytes = end - u_input;
   auto u = (const unsigned char*)u_input;
   unsigned char u0 = u[0];
   if (u0 <= 127) {
     sz = 1;
     return u0;
   }
-  if (end - u_input < 2) {
+  if (numBytes < 2) {
     return -1;
   }
   unsigned char u1 = u[1];
@@ -943,7 +944,7 @@ utf8proc_codepoint(const char* u_input, const char* end, int& sz) {
   if (u[0] == 0xed && (u[1] & 0xa0) == 0xa0) {
     return -1; // code points, 0xd800 to 0xdfff
   }
-  if (end - u_input < 3) {
+  if (numBytes < 3) {
     return -1;
   }
   unsigned char u2 = u[2];
@@ -951,7 +952,7 @@ utf8proc_codepoint(const char* u_input, const char* end, int& sz) {
     sz = 3;
     return (u0 - 224) * 4096 + (u1 - 128) * 64 + (u2 - 128);
   }
-  if (end - u_input < 4) {
+  if (numBytes < 4) {
     return -1;
   }
   unsigned char u3 = u[3];
@@ -960,6 +961,52 @@ utf8proc_codepoint(const char* u_input, const char* end, int& sz) {
     return (u0 - 240) * 262144 + (u1 - 128) * 4096 + (u2 - 128) * 64 +
         (u3 - 128);
   }
+  return -1;
+}
+
+UTF8PROC_DLLEXPORT utf8proc_int32_t
+utf8proc_last_codepoint(const char* u_input, const char* end, int& sz) {
+  const auto numBytes = end - u_input;
+  const auto u = (const unsigned char*)u_input;
+
+  // Count number of continuation bytes at the end of the string. There should
+  // be no more than 3 such bytes.
+  sz = 0;
+  for (auto i = 0; i < 4; ++i) {
+    if (numBytes < i) {
+      return -1;
+    }
+    auto c = u[numBytes - i - 1];
+    if ((c & 0b11000000) != 0b10000000) {
+      break;
+    }
+    ++sz;
+  }
+
+  if (sz == 4) {
+    return -1;
+  }
+
+  ++sz;
+
+  if (sz == 1) {
+    return u[numBytes - 1];
+  }
+
+  if (sz == 2) {
+    return (u[numBytes - 2] - 192) * 64 + (u[numBytes - 1] - 128);
+  }
+
+  if (sz == 3) {
+    return (u[numBytes - 3] - 224) * 4096 + (u[numBytes - 2] - 128) * 64 +
+        (u[numBytes - 1] - 128);
+  }
+
+  if (sz == 4) {
+    return (u[numBytes - 4] - 240) * 262144 + (u[numBytes - 3] - 128) * 4096 +
+        (u[numBytes - 2] - 128) * 64 + (u[numBytes - 1] - 128);
+  }
+
   return -1;
 }
 
