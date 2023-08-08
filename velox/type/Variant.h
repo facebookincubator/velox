@@ -538,11 +538,6 @@ class variant {
     }
   }
 
-  friend std::ostream& operator<<(std::ostream& stream, const variant& k) {
-    stream << k.toJson();
-    return stream;
-  }
-
   // Uses kEpsilon to compare floating point types (REAL and DOUBLE).
   // For testing purposes.
   bool lessThanWithEpsilon(const variant& other) const;

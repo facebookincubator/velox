@@ -365,6 +365,18 @@ TEST_F(QueryAssertionsTest, nullDecimalValue) {
       "Types of expected and actual results do not match");
 }
 
+TEST_F(QueryAssertionsTest, nonNullDecimalValue) {
+  auto test = makeRowVector({
+      makeFlatVector<int64_t>({10, 20}, DECIMAL(12, 2)),
+  });
+  createDuckDbTable({test});
+
+  auto plan = PlanBuilder().values({test}).project({"c0"}).planNode();
+  EXPECT_NONFATAL_FAILURE(
+      assertQuery(plan, "SELECT c0 + 1 FROM tmp"),
+      "Expected 2, got 2\n2 extra rows, 2 missing rows\n2 of extra rows:\n\t0.10\n\t0.20\n\n2 of missing rows:\n\t1.10\n\t1.20");
+}
+
 TEST_F(QueryAssertionsTest, nullVariant) {
   auto input = makeRowVector(
       {makeNullableArrayVector<int64_t>(
