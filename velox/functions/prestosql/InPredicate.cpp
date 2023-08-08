@@ -127,8 +127,9 @@ createFloatingPointValuesFilter(
       if (values[i] == float{}) {
         values[i] = 0;
       }
-      intValues[i] = reinterpret_cast<const int32_t&>(values[i]); // silently promote to int64
-    }else{
+      intValues[i] = reinterpret_cast<const int32_t&>(
+          values[i]); // silently promote to int64
+    } else {
       if (values[i] == double{}) {
         values[i] = 0;
       }
@@ -322,6 +323,13 @@ class InPredicate : public exec::VectorFunction {
                                   .argumentType("array(unknown)")
                                   .build());
     }
+    // logical type: Date
+    signatures.emplace_back(exec::FunctionSignatureBuilder()
+                                .returnType("boolean")
+                                .argumentType("date")
+                                .argumentType("array(integer)")
+                                .build());
+
     return signatures;
   }
 
