@@ -16,6 +16,7 @@
 
 #include "velox/common/base/tests/GTestUtils.h"
 #include "velox/common/caching/FileIds.h"
+#include "velox/common/caching/FileInfoMap.h"
 #include "velox/common/caching/SsdCache.h"
 #include "velox/common/file/FileSystems.h"
 #include "velox/common/memory/MmapAllocator.h"
@@ -125,8 +126,11 @@ class AsyncDataCacheTest : public testing::Test {
 
   // Brings the data for the ranges in 'requests' into cache. The individual
   // entries should be accessed with loadOne().
-  void
-  loadBatch(uint64_t fileNum, std::vector<Request>& requests, bool injectError);
+  void loadBatch(
+      uint64_t fileNum,
+      std::vector<Request>& requests,
+      std::vector<folly::SemiFuture<bool>>& waitFutures,
+      bool injectError);
 
   // Gets a pin on each of 'requests' individually. This checks the contents via
   // cache_'s verifyHook.
@@ -138,6 +142,8 @@ class AsyncDataCacheTest : public testing::Test {
       loadOne(fileNum, request, injectError);
     }
   }
+
+  void loadNFiles(int32_t numFiles, std::vector<int64_t> offsets);
 
   // Loads a sequence of entries from a number of files. Looks up a
   // number of entries, then loads the ones that nobody else is
@@ -375,6 +381,7 @@ void AsyncDataCacheTest::loadOne(
 void AsyncDataCacheTest::loadBatch(
     uint64_t fileNum,
     std::vector<Request>& requests,
+    std::vector<folly::SemiFuture<bool>>& waitFutures,
     bool injectError) {
   // Pattern for loading a set of buffers from a file: Divide the requested
   // ranges between already loaded and loadable from storage.
@@ -408,12 +415,15 @@ void AsyncDataCacheTest::loadBatch(
     }
     auto load = std::make_shared<TestingCoalescedLoad>(
         std::move(keys), std::move(sizes), cache_, injectError);
-    executor()->add([load]() {
+    auto [waitPromise, waitFuture] = folly::makePromiseContract<bool>();
+    waitFutures.emplace_back(std::move(waitFuture));
+    executor()->add([load, promise = std::move(waitPromise)]() mutable {
       try {
         load->loadOrFuture(nullptr);
       } catch (const std::exception& e) {
         // Expecting error, ignore.
       };
+      promise.setValue(true);
     });
   }
 
@@ -432,13 +442,37 @@ void AsyncDataCacheTest::loadBatch(
         std::move(ssdPins),
         cache_,
         injectError);
-    executor()->add([load]() {
+    auto [waitPromise, waitFuture] = folly::makePromiseContract<bool>();
+    waitFutures.emplace_back(std::move(waitFuture));
+    executor()->add([load, promise = std::move(waitPromise)]() mutable {
       try {
         load->loadOrFuture(nullptr);
       } catch (const std::exception& e) {
         // Expecting error, ignore.
       };
+      promise.setValue(true);
     });
+  }
+}
+
+void AsyncDataCacheTest::loadNFiles(
+    int32_t numFiles,
+    std::vector<int64_t> offsets) {
+  std::vector<folly::SemiFuture<bool>> waitFutures;
+  std::vector<Request> batch;
+  for (auto file = 0; file < numFiles; ++file) {
+    auto fileNum = filenames_[file].id();
+    FileInfoMap::getInstance()->addOpenFileInfo(fileNum);
+    for (auto i = 0; i < offsets.size() - 1; i++) {
+      batch.emplace_back(offsets[i], offsets[i + 1] - offsets[i]);
+      if (batch.size() == 8 || i == (offsets.size() - 2)) {
+        loadBatch(fileNum, batch, waitFutures, false);
+        batch.clear();
+      }
+    }
+  }
+  for (auto& future : waitFutures) {
+    std::move(future).via(executor()).wait();
   }
 }
 
@@ -453,6 +487,7 @@ void AsyncDataCacheTest::loadLoop(
   std::vector<Request> batch;
   for (auto i = 0; i < filenames_.size(); ++i) {
     const auto fileNum = filenames_[i].id();
+    std::vector<folly::SemiFuture<bool>> waitFutures;
     for (uint64_t offset = 100; offset < maxOffset;
          offset += sizeAtOffset(offset)) {
       const auto size = sizeAtOffset(offset);
@@ -466,7 +501,7 @@ void AsyncDataCacheTest::loadLoop(
         for (;;) {
           const bool injectError = (errorEveryNBatches > 0) &&
               (++errorCounter % errorEveryNBatches == 0);
-          loadBatch(fileNum, batch, injectError);
+          loadBatch(fileNum, batch, waitFutures, injectError);
           try {
             checkBatch(fileNum, batch, injectError);
           } catch (std::exception& e) {
@@ -563,6 +598,45 @@ TEST_F(AsyncDataCacheTest, replace) {
   EXPECT_GE(
       kMaxBytes / memory::AllocationTraits::kPageSize,
       cache_->incrementCachedPages(0));
+}
+
+TEST_F(AsyncDataCacheTest, ttl) {
+#ifdef TSAN_BUILD
+  // NOTE: scale down the test data set to prevent tsan tester from running out
+  // of memory.
+  constexpr uint64_t kRamBytes = 32 << 20;
+  constexpr uint64_t kSsdBytes = 128UL << 20;
+#else
+  constexpr uint64_t kRamBytes = 32 << 20;
+  constexpr uint64_t kSsdBytes = 128UL << 20;
+#endif
+
+  FileInfoMap::create();
+  initializeCache(kRamBytes, kSsdBytes);
+
+  std::vector<int64_t> offsets(32);
+  std::generate(offsets.begin(), offsets.end(), [&, n = 0]() mutable {
+    return n += (kRamBytes / kNumFiles / offsets.size());
+  });
+
+  loadNFiles(filenames_.size() * 2 / 3, offsets);
+  auto statsT1 = cache_->refreshStats();
+
+  std::this_thread::sleep_for(std::chrono::seconds(5));
+  auto t1 = getCurrentTimeSec();
+  std::this_thread::sleep_for(std::chrono::seconds(5));
+
+  loadNFiles(filenames_.size(), offsets);
+  auto statsT2 = cache_->refreshStats();
+  auto t2 = getCurrentTimeSec();
+
+  runThreads(2, [&](int32_t /*i*/) { cache_->applyTtl(t2 - t1); });
+
+  auto statsTtl = cache_->refreshStats();
+  EXPECT_EQ(statsTtl.numAged, statsT1.numEntries);
+  EXPECT_EQ(statsTtl.ssdStats->entriesAged, statsT1.ssdStats->entriesCached);
+
+  FileInfoMap::release();
 }
 
 TEST_F(AsyncDataCacheTest, outOfCapacity) {

@@ -110,7 +110,6 @@ struct RawFileCacheKey {
     return offset == other.offset && fileNum == other.fileNum;
   }
 };
-
 } // namespace facebook::velox::cache
 
 namespace std {
@@ -504,6 +503,9 @@ struct CacheStats {
   // Number of times a user waited for an entry to transit from exclusive to
   // shared mode.
   int64_t numWaitExclusive{};
+
+  int64_t numAged{};
+
   // Cumulative clocks spent in allocating or freeing memory for backing cache
   // entries.
   uint64_t allocClocks{};
@@ -572,6 +574,12 @@ class CacheShard {
   // calling this a second time.
   void appendSsdSaveable(std::vector<CachePin>& pins);
 
+  /// Evict all entries with their raw file open time prior to
+  /// maxFileOpenTime in seconds. It assumes the global FileInfoMap contains the
+  /// open time info of all the corresponding raw files and mutates the inCache
+  /// flags, and thus requires FileInfoMap to be locked.
+  void applyTtl(int64_t maxFileOpenTime);
+
   auto& allocClocks() {
     return allocClocks_;
   }
@@ -629,6 +637,8 @@ class CacheShard {
   uint64_t numEvictChecks_{};
   // Sum of evict scores. This divided by 'numEvict_' correlates to
   // time data stays in cache.
+  uint64_t numAged_{};
+
   uint64_t sumEvictScore_{};
   // Tracker of time spent in allocating/freeing MemoryAllocator space
   // for backing cached data.
@@ -759,6 +769,10 @@ class AsyncDataCache : public memory::Cache {
 
   // Saves all entries with 'ssdSaveable_' to 'ssdCache_'.
   void saveToSsd();
+
+  /// Evict all entries with age greater than ttlSecs. It uses the raw file open
+  /// time as the start time of age.
+  void applyTtl(int64_t ttlSecs);
 
   tsan_atomic<int32_t>& numSkippedSaves() {
     return numSkippedSaves_;

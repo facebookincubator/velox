@@ -330,6 +330,9 @@ void CacheShard::removeEntryLocked(AsyncDataCacheEntry* entry) {
     cache_->incrementCachedPages(-numPages);
     cache_->allocator()->freeNonContiguous(entry->data());
   }
+  entry->tinyData_.clear();
+  entry->tinyData_.shrink_to_fit();
+  entry->size_ = 0;
 }
 
 void CacheShard::evict(uint64_t bytesToFree, bool evictAllUnpinned) {
@@ -381,13 +384,10 @@ void CacheShard::evict(uint64_t bytesToFree, bool evictAllUnpinned) {
           continue;
         }
         largeFreed += candidate->data_.byteSize();
+        tinyFreed += candidate->tinyData_.size();
         toFree.push_back(std::move(candidate->data()));
         removeEntryLocked(candidate);
         emptySlots_.push_back(entryIndex);
-        tinyFreed += candidate->tinyData_.size();
-        candidate->tinyData_.clear();
-        candidate->tinyData_.shrink_to_fit();
-        candidate->size_ = 0;
         tryAddFreeEntry(std::move(*iter));
         ++numEvict_;
         if (score) {
@@ -506,6 +506,7 @@ void CacheShard::updateStats(CacheStats& stats) {
   stats.numEvict += numEvict_;
   stats.numEvictChecks += numEvictChecks_;
   stats.numWaitExclusive += numWaitExclusive_;
+  stats.numAged += numAged_;
   stats.sumEvictScore += sumEvictScore_;
   stats.allocClocks += allocClocks_;
 
@@ -536,6 +537,61 @@ void CacheShard::appendSsdSaveable(std::vector<CachePin>& pins) {
       }
     }
   }
+}
+
+void CacheShard::applyTtl(int64_t maxFileOpenTime) {
+  VELOX_CHECK(
+      FileInfoMap::exists(),
+      "File info map must be created to apply TTL for cache.");
+
+  int64_t pagesRemoved = 0;
+  std::vector<memory::Allocation> toFree;
+  {
+    std::lock_guard<std::mutex> l(mutex_);
+
+    auto entryIndex = -1;
+    for (auto& cacheEntry : entries_) {
+      entryIndex++;
+      if (!cacheEntry) {
+        continue;
+      }
+
+      if (cacheEntry->key_.fileNum.hasValue()) {
+        auto* fileInfo =
+            FileInfoMap::getInstance()->find(cacheEntry->key_.fileNum.id());
+        if (fileInfo == nullptr) {
+          VELOX_CACHE_LOG(ERROR) << fmt::format(
+              "Cannot find the raw file open info for file id {}.",
+              cacheEntry->key_.fileNum.id());
+          continue;
+        }
+        if (cacheEntry->isExclusive() || cacheEntry->isShared()) {
+          fileInfo->inCache = true;
+          continue;
+        }
+        if (fileInfo->openTimeSec >= maxFileOpenTime) {
+          fileInfo->inCache = true;
+          continue;
+        }
+      }
+
+      numAged_++;
+      pagesRemoved += (int64_t)cacheEntry->data().numPages();
+
+      toFree.push_back(std::move(cacheEntry->data()));
+      removeEntryLocked(cacheEntry.get());
+      emptySlots_.push_back(entryIndex);
+      tryAddFreeEntry(std::move(cacheEntry));
+      cacheEntry = nullptr;
+    }
+  }
+  VELOX_CACHE_LOG(INFO) << "Removed " << toFree.size()
+                        << " AsyncDataCache entries per TTL.";
+
+  // Free the memory allocation out of the cache shard lock.
+  ClockTimer t(allocClocks_);
+  freeAllocations(toFree);
+  cache_->incrementCachedPages(-pagesRemoved);
 }
 
 AsyncDataCache::AsyncDataCache(
@@ -733,6 +789,27 @@ void AsyncDataCache::saveToSsd() {
   ssdCache_->write(std::move(pins));
 }
 
+void AsyncDataCache::applyTtl(int64_t ttlSecs) {
+  VELOX_CHECK(
+      FileInfoMap::exists(),
+      "File info map must be created to apply TTL for cache.");
+
+  const int64_t maxFileOpenTime = getCurrentTimeSec() - ttlSecs;
+
+  folly::SharedMutex::WriteHolder wl(FileInfoMap::getInstance()->mutex());
+
+  FileInfoMap::getInstance()->resetInCache();
+
+  for (auto& shard : shards_) {
+    shard->applyTtl(maxFileOpenTime);
+  }
+  if (ssdCache_) {
+    ssdCache_->applyTtl(maxFileOpenTime);
+  }
+
+  FileInfoMap::getInstance()->deleteNotInCache();
+}
+
 CacheStats AsyncDataCache::refreshStats() const {
   auto* mutex =
       FileInfoMap::exists() ? &FileInfoMap::getInstance()->mutex() : nullptr;
@@ -757,20 +834,23 @@ void AsyncDataCache::clear() {
 std::string AsyncDataCache::toString() const {
   auto stats = refreshStats();
   std::stringstream out;
-  out << "AsyncDataCache: "
+  out << "[AsyncDataCache] Total cached: "
       << stats.tinySize + stats.largeSize + stats.tinyPadding +
           stats.largePadding
-      << " bytes\n"
-      << "Miss: " << stats.numNew << " Hit " << stats.numHit << " evict "
-      << stats.numEvict << "\n"
-      << " read pins " << stats.numShared << " write pins "
-      << stats.numExclusive << " unused prefetch " << stats.numPrefetch
-      << " Alloc Megaclocks " << (stats.allocClocks >> 20)
-      << " allocated pages " << allocator_->numAllocated() << " cached pages "
-      << cachedPages_;
-  out << "\nBacking: " << allocator_->toString();
+      << " bytes.\n"
+      << "Miss: " << stats.numNew << ", Hit: " << stats.numHit
+      << ", Evict: " << stats.numEvict << ".\n"
+      << "Entries: " << stats.numEntries
+      << ", Empty entries: " << stats.numEmptyEntries
+      << ", Read pins: " << stats.numShared
+      << ", Write pins: " << stats.numExclusive
+      << ", Unused prefetch: " << stats.numPrefetch << ".\n"
+      << "Alloc Megaclocks: " << (stats.allocClocks >> 20)
+      << ", Allocated pages: " << allocator_->numAllocated()
+      << ", Cached pages: " << cachedPages_ << ".\n";
+  out << "Backing: " << allocator_->toString() << "\n";
   if (ssdCache_) {
-    out << "\nSSD: " << ssdCache_->toString();
+    out << ssdCache_->toString();
   }
   return out.str();
 }

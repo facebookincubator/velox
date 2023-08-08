@@ -76,6 +76,12 @@ class SsdCache {
   /// have returned true.
   void write(std::vector<CachePin> pins);
 
+  /// Evict all entries with their raw file open time prior to
+  /// maxFileOpenTime in seconds. It assumes the global FileInfoMap contains all
+  /// the corresponding raw files and thus requires FileInfoMap to be locked. It
+  /// synchronously processes all SSD files in parallel.
+  void applyTtl(int64_t maxFileOpenTime);
+
   /// Returns stats aggregated from all shards.
   SsdCacheStats refreshStats() const;
 

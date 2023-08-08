@@ -397,8 +397,10 @@ void SsdFile::write(std::vector<CachePin>& pins) {
     if (rc != bytes) {
       VELOX_SSD_CACHE_LOG(ERROR)
           << "Failed to write to SSD, file name: " << fileName_
-          << ", fd: " << fd_ << ", size: " << iovecs.size()
-          << ", offset: " << offset << ", error code: " << errno
+          << ", fd: " << fd_ << ", iovecs size: " << iovecs.size()
+          << ", IOV_MAX: " << IOV_MAX << ", bytes: " << bytes
+          << ", SSIZE_MAX: " << SSIZE_MAX << ", offset: " << offset
+          << ", error code: " << errno
           << ", error string: " << folly::errnoStr(errno);
       ++stats_.writeSsdErrors;
       // If write fails, we return without adding the pins to the cache. The
@@ -489,6 +491,8 @@ void SsdFile::updateStats(SsdCacheStats& stats) const {
   for (auto& regionSize : regionSizes_) {
     stats.bytesCached += regionSize;
   }
+  stats.entriesAged += stats_.entriesAged;
+  stats.regionsAged += stats_.regionsAged;
   for (auto pins : regionPins_) {
     stats.numPins += pins;
   }
@@ -557,6 +561,77 @@ void SsdFile::deleteFile() {
   if (rc < 0) {
     VELOX_SSD_CACHE_LOG(ERROR)
         << "Error deleting cache file " << fileName_ << " rc: " << rc;
+  }
+}
+
+void SsdFile::applyTtl(int64_t maxFileOpenTime, bool skipAll) {
+  VELOX_CHECK(
+      FileInfoMap::exists(),
+      "File info map must be created to apply TTL for SSD.");
+
+  std::lock_guard<std::shared_mutex> l(mutex_);
+
+  if (!skipAll) {
+    std::vector<uint64_t> regionMask(bits::nwords(numRegions_));
+    std::fill(regionMask.begin(), regionMask.end(), 0);
+
+    int64_t entriesAged = 0;
+    for (const auto& [cacheKey, ssdRun] : entries_) {
+      auto region = regionIndex(ssdRun.offset());
+      if (regionPins_[region]) {
+        continue;
+      }
+
+      if (cacheKey.fileNum.hasValue()) {
+        auto* fileInfo =
+            FileInfoMap::getInstance()->find(cacheKey.fileNum.id());
+        if (fileInfo == nullptr) {
+          VELOX_SSD_CACHE_LOG(ERROR) << fmt::format(
+              "Cannot find the raw file open info for file id {}.",
+              cacheKey.fileNum.id());
+          continue;
+        }
+
+        if (fileInfo->openTimeSec >= maxFileOpenTime) {
+          continue;
+        }
+      }
+
+      entriesAged++;
+      bits::setBit(regionMask.data(), region);
+    }
+
+    std::vector<int32_t> toFree;
+    toFree.reserve(numRegions_);
+    bits::forEachSetBit(regionMask.data(), 0, numRegions_, [&toFree](auto idx) {
+      toFree.push_back(idx);
+    });
+
+    clearRegionEntriesLocked(toFree);
+    writableRegions_.reserve(writableRegions_.size() + toFree.size());
+    for (int32_t region : toFree) {
+      writableRegions_.push_back(region);
+    }
+
+    stats_.entriesAged += entriesAged;
+    stats_.regionsAged += toFree.size();
+    VELOX_SSD_CACHE_LOG(INFO)
+        << "Removed " << toFree.size() << " regions of " << fileName_
+        << " that contains " << entriesAged << " entries out of TTL.";
+  }
+
+  for (const auto& [cacheKey, _] : entries_) {
+    if (cacheKey.fileNum.hasValue()) {
+      auto* fileInfo = FileInfoMap::getInstance()->find(cacheKey.fileNum.id());
+      if (fileInfo == nullptr) {
+        VELOX_SSD_CACHE_LOG(ERROR) << fmt::format(
+            "Cannot find the raw file open info for file id {}.",
+            cacheKey.fileNum.id());
+        continue;
+      }
+
+      fileInfo->inCache = true;
+    }
   }
 }
 

@@ -133,6 +133,8 @@ struct SsdCacheStats {
     bytesRead = tsanAtomicValue(other.bytesRead);
     entriesCached = tsanAtomicValue(other.entriesCached);
     bytesCached = tsanAtomicValue(other.bytesCached);
+    entriesAged = tsanAtomicValue(other.entriesAged);
+    regionsAged = tsanAtomicValue(other.regionsAged);
     numPins = tsanAtomicValue(other.numPins);
 
     entryAgeSecsMin = tsanAtomicValue(other.entryAgeSecsMin);
@@ -156,6 +158,8 @@ struct SsdCacheStats {
   tsan_atomic<uint64_t> bytesRead{0};
   tsan_atomic<uint64_t> entriesCached{0};
   tsan_atomic<uint64_t> bytesCached{0};
+  tsan_atomic<uint64_t> entriesAged{0};
+  tsan_atomic<uint64_t> regionsAged{0};
   tsan_atomic<int32_t> numPins{0};
 
   tsan_atomic<uint64_t> entryAgeSecsMin{std::numeric_limits<uint64_t>::max()};
@@ -255,6 +259,14 @@ class SsdFile {
 
   // Deletes the backing file. Used in testing.
   void deleteFile();
+
+  /// Evict all entries with their raw file open time prior to
+  /// maxFileOpenTime in seconds, if skipAll is false by default. If skipAll is
+  /// true, will not evict entries but mark cached entries in FileInfoMap. It
+  /// assumes the global FileInfoMap contains the open time info of all the
+  /// corresponding raw files and mutates the inCache flags, and thus requires
+  /// FileInfoMap to be locked.
+  void applyTtl(int64_t maxFileOpenTime, bool skipAll);
 
   // Writes a checkpoint state that can be recovered from. The
   // checkpoint is serialized on 'mutex_'. If 'force' is false,

@@ -137,6 +137,43 @@ SsdCacheStats SsdCache::refreshStats() const {
   return stats;
 }
 
+void SsdCache::applyTtl(int64_t maxFileOpenTime) {
+  if (isShutdown_) {
+    return;
+  }
+
+  // If cache has writes in progress, skip entry eviction but mark the entries
+  // in cache.
+  bool writesInProgress = writesInProgress_.fetch_add(numShards_) > 0;
+
+  std::vector<folly::SemiFuture<bool>> waitFutures;
+  waitFutures.reserve(numShards_);
+  for (auto i = 0; i < numShards_; i++) {
+    auto [promise, future] = folly::makePromiseContract<bool>();
+    waitFutures.push_back(std::move(future));
+
+    executor_->add([this,
+                    i,
+                    maxFileOpenTime,
+                    writesInProgress,
+                    promise = std::move(promise)]() mutable {
+      try {
+        files_[i]->applyTtl(maxFileOpenTime, writesInProgress);
+      } catch (const std::exception& e) {
+        LOG(ERROR) << "Error applying TTL to SSD shard "
+                   << files_[i]->shardId();
+      }
+      --writesInProgress_;
+      promise.setValue(false);
+    });
+  }
+
+  for (auto& future : waitFutures) {
+    auto& exec = folly::QueuedImmediateExecutor::instance();
+    std::move(future).via(&exec).wait();
+  }
+}
+
 void SsdCache::clear() {
   for (auto& file : files_) {
     file->clear();
@@ -147,11 +184,11 @@ std::string SsdCache::toString() const {
   auto data = refreshStats();
   uint64_t capacity = maxBytes();
   std::stringstream out;
-  out << "Ssd cache IO: Write " << (data.bytesWritten >> 20) << "MB read "
-      << (data.bytesRead >> 20) << "MB Size " << (capacity >> 30)
-      << "GB Occupied " << (data.bytesCached >> 30) << "GB";
-  out << (data.entriesCached >> 10) << "K entries.";
-  out << "\nGroupStats: " << groupStats_->toString(capacity);
+  out << "[Ssd cache] IO: Write " << (data.bytesWritten) << " Bytes, Read "
+      << (data.bytesRead) << " Bytes, Size " << (capacity)
+      << " Bytes, Occupied " << (data.bytesCached) << " Bytes.\n";
+  out << "Internal: " << (data.entriesCached) << " entries.\n";
+  out << "GroupStats: " << groupStats_->toString(capacity) << ".\n";
   return out.str();
 }
 
