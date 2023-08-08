@@ -41,9 +41,7 @@ class MemoryPool;
 class MemoryArbitrator {
  public:
 #ifdef VELOX_ENABLE_BACKWARD_COMPATIBILITY
-  static struct Kind {
-    static std::string kShared;
-  };
+  static struct Kind { static std::string kShared; };
 #endif
 
   struct Config {
