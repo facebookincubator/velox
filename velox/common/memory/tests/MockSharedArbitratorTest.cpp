@@ -427,6 +427,10 @@ class MockSharedArbitrationTest : public testing::Test {
       ReclaimInjectionCallback reclaimInjectCb = nullptr,
       ArbitrationInjectionCallback arbitrationInjectCb = nullptr);
 
+  const std::vector<std::shared_ptr<MockTask>>& tasks() const {
+    return tasks_;
+  }
+
   void clearTasks() {
     tasks_.clear();
   }
@@ -893,8 +897,10 @@ TEST_F(MockSharedArbitrationTest, arbitrateWithMemoryReclaim) {
     }
     auto* arbitrateOp = addMemoryOp();
     if (!isLeafReclaimable) {
-      ASSERT_ANY_THROW(arbitrateOp->allocate(allocateSize));
-      ASSERT_EQ(arbitrator_->stats().numFailures, 1);
+      auto leafTask = tasks().front();
+      ASSERT_NO_THROW(arbitrateOp->allocate(allocateSize));
+      ASSERT_NE(leafTask->error(), nullptr);
+      ASSERT_EQ(arbitrator_->stats().numFailures, 0);
       continue;
     }
     arbitrateOp->allocate(allocateSize);

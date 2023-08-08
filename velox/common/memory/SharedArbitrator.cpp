@@ -119,11 +119,12 @@ SharedArbitrator::findCandidateWithLargestCapacity(
       maxCapacity = capacity;
       continue;
     }
-    if (maxCapacity > capacity) {
+    if (capacity < maxCapacity) {
       continue;
     }
-    if (capacity < maxCapacity) {
+    if (capacity > maxCapacity) {
       candidateIdx = i;
+      maxCapacity = capacity;
       continue;
     }
     // With the same amount of capacity, we prefer to kill the requestor itself
