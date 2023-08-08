@@ -322,6 +322,13 @@ class InPredicate : public exec::VectorFunction {
                                   .argumentType("array(unknown)")
                                   .build());
     }
+    // logical type: Date
+    signatures.emplace_back(exec::FunctionSignatureBuilder()
+                                .returnType("boolean")
+                                .argumentType("date")
+                                .argumentType("array(integer)")
+                                .build());
+
     return signatures;
   }
 
