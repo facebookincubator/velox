@@ -91,6 +91,7 @@ class MemoryArbitrator {
   ///
   /// NOTE: if arbitrator kind is not set in 'config', then the function returns
   /// nullptr.
+
   static std::unique_ptr<MemoryArbitrator> create(const Config& config);
 
   virtual std::string kind() = 0;
