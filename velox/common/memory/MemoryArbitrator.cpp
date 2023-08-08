@@ -46,6 +46,11 @@ class Registry {
     return map_[kind];
   }
 
+  bool isFactoryRegistered(const std::string& kind) {
+    std::lock_guard<std::mutex> l(mutex_);
+    return map_.find(kind) != map_.end();
+  }
+
  private:
   std::mutex mutex_;
   std::unordered_map<std::string, MemoryArbitrator::Factory> map_;
@@ -75,6 +80,10 @@ void MemoryArbitrator::registerFactory(
     const std::string& kind,
     MemoryArbitrator::Factory factory) {
   registry.registerFactory(kind, std::move(factory));
+}
+
+bool MemoryArbitrator::isFactoryRegistered(const std::string& kind) {
+  return registry.isFactoryRegistered(kind);
 }
 
 std::unique_ptr<MemoryReclaimer> MemoryReclaimer::create() {

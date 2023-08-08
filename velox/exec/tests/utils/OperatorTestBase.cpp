@@ -48,7 +48,6 @@ OperatorTestBase::~OperatorTestBase() {
 }
 
 void OperatorTestBase::SetUpTestCase() {
-  memory::SharedArbitrator::registerFactory();
   functions::prestosql::registerAllScalarFunctions();
   aggregate::prestosql::registerAllAggregateFunctions();
   TestValue::enable();
@@ -59,6 +58,9 @@ void OperatorTestBase::TearDownTestCase() {
 }
 
 void OperatorTestBase::SetUp() {
+  if (!memory::SharedArbitrator::isFactoryRegistered()) {
+    memory::SharedArbitrator::registerFactory();
+  }
   if (!isRegisteredVectorSerde()) {
     this->registerVectorSerde();
   }

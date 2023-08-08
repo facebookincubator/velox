@@ -542,4 +542,8 @@ void SharedArbitrator::registerFactory() {
         return std::make_unique<SharedArbitrator>(config);
       });
 }
+
+bool SharedArbitrator::isFactoryRegistered() {
+  return MemoryArbitrator::isFactoryRegistered(kind_);
+}
 } // namespace facebook::velox::memory

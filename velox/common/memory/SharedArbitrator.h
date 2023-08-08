@@ -35,6 +35,8 @@ class SharedArbitrator : public MemoryArbitrator {
  public:
   static void registerFactory();
 
+  static bool isFactoryRegistered();
+
   explicit SharedArbitrator(const Config& config);
 
   ~SharedArbitrator() override;

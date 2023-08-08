@@ -82,6 +82,8 @@ class MemoryArbitrator {
   /// config.
   static void registerFactory(const std::string& kind, Factory factory);
 
+  /// Check if factory is registered for the kind.
+  static bool isFactoryRegistered(const std::string& kind);
   /// Invoked by the memory manager to create an instance of memory arbitrator
   /// based on the kind specified in 'config'. The arbitrator kind must be
   /// registered through MemoryArbitrator::registerFactory, otherwise the
