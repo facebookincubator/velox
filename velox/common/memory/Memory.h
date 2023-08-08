@@ -82,8 +82,9 @@ struct MemoryManagerOptions {
 
   /// ================== 'MemoryArbitrator' settings ==================
 
-  /// The string kind of memory arbitrator used in the memory manager. Note that
-  /// the arbitrator will only be created if its kind is set explicitly.
+  /// The string kind of memory arbitrator used in the memory manager.
+  ///
+  /// NOTE: the arbitrator will only be created if its kind is set explicitly.
   /// Otherwise MemoryArbitrator::create returns a nullptr.
   std::string arbitratorKind{};
 

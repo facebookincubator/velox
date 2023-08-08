@@ -41,13 +41,16 @@ class MemoryPool;
 class MemoryArbitrator {
  public:
 #ifdef VELOX_ENABLE_BACKWARD_COMPATIBILITY
-  static struct Kind { static std::string kShared; };
+  static struct Kind {
+    static std::string kShared;
+  };
 #endif
 
   struct Config {
-    /// The string kind of this memory arbitrator. Note that the arbitrator
-    /// will only be created if its kind is set explicitly. Otherwise
-    /// MemoryArbitrator::create returns a nullptr.
+    /// The string kind of this memory arbitrator.
+    ///
+    /// NOTE: the arbitrator will only be created if its kind is set explicitly.
+    /// Otherwise MemoryArbitrator::create returns a nullptr.
     std::string kind;
 
     /// The total memory capacity in bytes of all the running queries.

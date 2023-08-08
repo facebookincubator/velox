@@ -49,7 +49,9 @@ class SharedArbitrator : public MemoryArbitrator {
       uint64_t targetBytes) final;
 
   Stats stats() const final;
+
   std::string kind() override;
+
   std::string toString() const final;
 
   // The candidate memory pool stats used by arbitration.
