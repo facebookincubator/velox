@@ -365,6 +365,49 @@ TEST_F(QueryAssertionsTest, nullDecimalValue) {
       "Types of expected and actual results do not match");
 }
 
+TEST_F(QueryAssertionsTest, valuesMismatch) {
+  auto test = makeRowVector({
+      makeFlatVector<int64_t>({10, 20}, DECIMAL(12, 2)),
+  });
+  createDuckDbTable({test});
+
+  // The expected values should be off by 1.
+  auto plan = PlanBuilder().values({test}).project({"c0"}).planNode();
+  EXPECT_NONFATAL_FAILURE(
+      assertQuery(plan, "SELECT c0 + 1 FROM tmp"),
+      "Expected 2, got 2\n2 extra rows, 2 missing rows\n2 of extra rows:\n\t0.10\n\t0.20\n\n2 of missing rows:\n\t1.10\n\t1.20");
+}
+
+TEST_F(QueryAssertionsTest, noExpectedRows) {
+  auto actual = makeRowVector({
+      makeFlatVector(std::vector<int64_t>{4000}, DECIMAL(6, 2)),
+  });
+  createDuckDbTable({actual});
+
+  auto expected = makeRowVector({
+      makeFlatVector<int64_t>({}, BIGINT()),
+  });
+  auto plan = PlanBuilder().values({actual}).project({"c0"}).planNode();
+  EXPECT_NONFATAL_FAILURE(
+      assertQuery(plan, expected),
+      "Expected 0, got 1\n1 extra rows, 0 missing rows\n1 of extra rows:\n\t4000\n\n0 of missing rows:");
+}
+
+TEST_F(QueryAssertionsTest, noActualRows) {
+  auto actual = makeRowVector({
+      makeFlatVector<int64_t>({}, BIGINT()),
+  });
+  createDuckDbTable({actual});
+
+  auto expected = makeRowVector({
+      makeFlatVector(std::vector<int64_t>{1000}, DECIMAL(6, 2)),
+  });
+  auto plan = PlanBuilder().values({actual}).project({"c0"}).planNode();
+  EXPECT_NONFATAL_FAILURE(
+      assertQuery(plan, expected),
+      "Expected 1, got 0\n0 extra rows, 1 missing rows\n0 of extra rows:\n\n1 of missing rows:\n\t10.00");
+}
+
 TEST_F(QueryAssertionsTest, nullVariant) {
   auto input = makeRowVector(
       {makeNullableArrayVector<int64_t>(

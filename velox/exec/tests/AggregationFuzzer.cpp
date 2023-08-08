@@ -1236,7 +1236,10 @@ void AggregationFuzzer::verifyWindow(
               partitionKeys, sortingKeys, aggregates, input, plan)) {
         ++stats_.numDuckVerified;
         VELOX_CHECK(
-            assertEqualResults(expectedResult.value(), {resultOrError.result}),
+            assertEqualResults(
+                expectedResult.value(),
+                plan->outputType(),
+                {resultOrError.result}),
             "Velox and DuckDB results don't match");
       }
     }
@@ -1393,7 +1396,10 @@ void AggregationFuzzer::verifyAggregation(
     if (expectedResult && resultOrError.result) {
       ++stats_.numDuckVerified;
       VELOX_CHECK(
-          assertEqualResults(expectedResult.value(), {resultOrError.result}),
+          assertEqualResults(
+              expectedResult.value(),
+              firstPlan->outputType(),
+              {resultOrError.result}),
           "Velox and DuckDB results don't match");
     }
 
@@ -1491,7 +1497,8 @@ void AggregationFuzzer::verifyAggregation(
   if (expectedResult && resultOrError.result) {
     ++stats_.numDuckVerified;
     VELOX_CHECK(
-        assertEqualResults(expectedResult.value(), {resultOrError.result}),
+        assertEqualResults(
+            expectedResult.value(), plan->outputType(), {resultOrError.result}),
         "Velox and DuckDB results don't match");
   }
 

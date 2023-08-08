@@ -217,7 +217,8 @@ bool assertEqualResults(
     const std::vector<RowVectorPtr>& actual);
 
 bool assertEqualResults(
-    const MaterializedRowMultiset& expected,
+    const MaterializedRowMultiset& expectedRows,
+    const TypePtr& expectedType,
     const std::vector<RowVectorPtr>& actual);
 
 /// Ensure both datasets have the same type and number of rows.
