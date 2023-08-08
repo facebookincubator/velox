@@ -73,6 +73,7 @@ class MemoryPoolTest : public testing::TestWithParam<TestParam> {
 
  protected:
   static void SetUpTestCase() {
+    SharedArbitrator::registerFactory();
     FLAGS_velox_memory_leak_check_enabled = true;
     TestValue::enable();
   }

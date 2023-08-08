@@ -249,7 +249,6 @@ class FakeMemoryOperatorFactory : public Operator::PlanNodeTranslator {
 class SharedArbitrationTest : public exec::test::HiveConnectorTestBase {
  protected:
   static void SetUpTestCase() {
-    SharedArbitrator::registerFactory();
     exec::test::HiveConnectorTestBase::SetUpTestCase();
     auto fakeOperatorFactory = std::make_unique<FakeMemoryOperatorFactory>();
     fakeOperatorFactory_ = fakeOperatorFactory.get();
