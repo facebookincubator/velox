@@ -68,15 +68,10 @@ find_library(
 message(STATUS "Found usdm_drv: ${USDM_DRV_LIBRARY}")
 message(STATUS "Found qat_s: ${QAT_S_LIBRARY}")
 
-set(QATZSTD_INCLUDE_DIRS "${QATZSTD_INCLUDE_DIR}" "${ZSTD_INCLUDE_DIR}")
-
-set(QATZSTD_LINK_LIBRARIES "${ZSTD_LIBRARY}" "${USDM_DRV_LIBRARY}"
-                           "${QAT_S_LIBRARY}")
-
 set_target_properties(
   qatzstd::qatzstd
-  PROPERTIES IMPORTED_LOCATION "${QATZSTD_STATIC_LIB_TARGETS}"
-             INTERFACE_INCLUDE_DIRECTORIES "${QATZSTD_INCLUDE_DIRS}"
-             INTERFACE_LINK_LIBRARIES "${QATZSTD_LINK_LIBRARIES}")
+  PROPERTIES IMPORTED_LOCATION ${QATZSTD_STATIC_LIB_TARGETS})
+  target_include_directories(qatzstd::qatzstd INTERFACE ${QATZSTD_INCLUDE_DIR})
+  target_link_libraries(qatzstd::qatzstd  INTERFACE zstd::zstd ${USDM_DRV_LIBRARY} ${QAT_S_LIBRARY})
 
 add_dependencies(qatzstd::qatzstd qatzstd)
