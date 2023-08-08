@@ -13,7 +13,9 @@
 # limitations under the License.
 include_guard(GLOBAL)
 
-include(Findzstd)
+if(NOT TARGET zstd::zstd)
+  find_package(zstd REQUIRED)
+endif()
 
 set(VELOX_QATZSTD_BUILD_VERSION 0.0.1)
 set(VELOX_QATZSTD_BUILD_SHA256_CHECKSUM
