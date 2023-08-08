@@ -433,7 +433,6 @@ resolve_dependency(simdjson 3.1.5)
 
 set_source(qatzstd)
 resolve_dependency(qatzstd)
-include_directories(${qatzstd_INCLUDE_DIRS})
 
 # Locate or build folly.
 add_compile_definitions(FOLLY_HAVE_INT128_T=1)
