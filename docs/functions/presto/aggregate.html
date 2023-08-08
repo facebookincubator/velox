@@ -64,7 +64,9 @@ depending on the order of input values.</p>
 <dl class="py function">
 <dt class="sig sig-object py" id="array_agg">
 <span class="sig-name descname"><span class="pre">array_agg</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">x</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">array&lt;[same</span> <span class="pre">as</span> <span class="pre">input]&gt;</span></span></span><a class="headerlink" href="#array_agg" title="Permalink to this definition">¶</a></dt>
-<dd><p>Returns an array created from the input <code class="docutils literal notranslate"><span class="pre">x</span></code> elements.</p>
+<dd><p>Returns an array created from the input <code class="docutils literal notranslate"><span class="pre">x</span></code> elements. Ignores null
+inputs if <a class="reference internal" href="../../configs.html"><span class="doc">presto.array_agg.ignore_nulls</span></a> is set
+to false.</p>
 </dd></dl>
 
 <dl class="py function">
