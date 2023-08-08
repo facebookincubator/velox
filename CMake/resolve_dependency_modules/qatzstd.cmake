@@ -38,15 +38,14 @@ set(QATZSTD_STATIC_LIB_TARGETS "${QATZSTD_SOURCE_DIR}/src/libqatseqprod.a")
 set(QATZSTD_MAKE_ARGS "ENABLE_USDM_DRV=1" "ZSTDLIB=${ZSTD_INCLUDE_DIR}")
 
 set(QATZSTD_SOURCE_URL
-      "https://github.com/intel-collab/applications.qat.shims.zstandard.qatzstdplugin.git")
-set(QATZSTD_SOURCE_BRANCH "main")
+      "https://github.com/intel-collab/applications.qat.shims.zstandard.qatzstdplugin/archive/refs/heads/main.tar.gz")
 
 ExternalProject_Add(
   qatzstd
-  # URL ${VELOX_QATZSTD_SOURCE_URL}
-  # URL_HASH ${VELOX_QATZSTD_BUILD_SHA256_CHECKSUM}
-  GIT_REPOSITORY ${QATZSTD_SOURCE_URL}
-  GIT_TAG ${QATZSTD_SOURCE_BRANCH}
+  URL ${VELOX_QATZSTD_SOURCE_URL}
+  URL_HASH ${VELOX_QATZSTD_BUILD_SHA256_CHECKSUM}
+  # GIT_REPOSITORY ${QATZSTD_SOURCE_URL}
+  # GIT_TAG ${QATZSTD_SOURCE_BRANCH}
   USES_TERMINAL_DOWNLOAD ON
   SOURCE_DIR ${QATZSTD_SOURCE_DIR}
   BINARY_DIR ${QATZSTD_BINARY_DIR}
