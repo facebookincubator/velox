@@ -63,6 +63,27 @@ TEST(DecimalTest, decimalToString) {
   ASSERT_EQ("-0.001000", DecimalUtil::toString(-1000, DECIMAL(20, 6)));
   ASSERT_EQ("0", DecimalUtil::toString(0, DECIMAL(20, 9)));
 
+  // Test decimal to string with leading zeroes.
+  ASSERT_EQ("0000001000", DecimalUtil::toString(1000, DECIMAL(10, 0), true));
+  ASSERT_EQ("0000001.000", DecimalUtil::toString(1000, DECIMAL(10, 3), true));
+  ASSERT_EQ("0000.001000", DecimalUtil::toString(1000, DECIMAL(10, 6), true));
+  ASSERT_EQ("-0000.001000", DecimalUtil::toString(-1000, DECIMAL(10, 6), true));
+  ASSERT_EQ(
+      "-0123.451000", DecimalUtil::toString(-123451000, DECIMAL(10, 6), true));
+
+  ASSERT_EQ(
+      "00000000000000001000",
+      DecimalUtil::toString(1000, DECIMAL(20, 0), true));
+  ASSERT_EQ(
+      "00000000000000001.000",
+      DecimalUtil::toString(1000, DECIMAL(20, 3), true));
+  ASSERT_EQ(
+      "0000000000.0000001000",
+      DecimalUtil::toString(1000, DECIMAL(20, 10), true));
+  ASSERT_EQ(
+      "-00000000000000.001000",
+      DecimalUtil::toString(-1000, DECIMAL(20, 6), true));
+
   const auto minShortDecimal =
       DecimalUtil::toString(DecimalUtil::kShortDecimalMin, DECIMAL(18, 0));
   ASSERT_EQ("-999999999999999999", minShortDecimal);

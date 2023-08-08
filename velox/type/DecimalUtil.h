@@ -86,7 +86,10 @@ class DecimalUtil {
   }
 
   /// Helper function to convert a decimal value to string.
-  static std::string toString(const int128_t value, const TypePtr& type);
+  static std::string toString(
+      const int128_t value,
+      const TypePtr& type,
+      bool hasLeadingZeroes = false);
 
   template <typename TInput, typename TOutput>
   inline static std::optional<TOutput> rescaleWithRoundUp(

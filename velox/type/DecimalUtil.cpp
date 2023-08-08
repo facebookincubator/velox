@@ -19,7 +19,11 @@
 
 namespace facebook::velox {
 namespace {
-std::string formatDecimal(uint8_t scale, int128_t unscaledValue) {
+std::string formatDecimal(
+    uint8_t precision,
+    uint8_t scale,
+    int128_t unscaledValue,
+    bool hasLeadingZeroes) {
   VELOX_DCHECK_GE(scale, 0);
   VELOX_DCHECK_LT(
       static_cast<size_t>(scale), sizeof(DecimalUtil::kPowersOfTen));
@@ -31,7 +35,15 @@ std::string formatDecimal(uint8_t scale, int128_t unscaledValue) {
   if (isNegative) {
     unscaledValue = ~unscaledValue + 1;
   }
-  int128_t integralPart = unscaledValue / DecimalUtil::kPowersOfTen[scale];
+  std::string integralString;
+  auto integral = std::to_string(
+      int128_t(unscaledValue / DecimalUtil::kPowersOfTen[scale]));
+  if (hasLeadingZeroes) {
+    integralString += std::string(
+        std::max(precision - scale - static_cast<int>(integral.size()), 0),
+        '0');
+  }
+  integralString += integral;
 
   bool isFraction = (scale > 0);
   std::string fractionString;
@@ -47,13 +59,16 @@ std::string formatDecimal(uint8_t scale, int128_t unscaledValue) {
   }
 
   return fmt::format(
-      "{}{}{}", isNegative ? "-" : "", integralPart, fractionString);
+      "{}{}{}", isNegative ? "-" : "", integralString, fractionString);
 }
 } // namespace
 
-std::string DecimalUtil::toString(const int128_t value, const TypePtr& type) {
+std::string DecimalUtil::toString(
+    const int128_t value,
+    const TypePtr& type,
+    bool hasLeadingZeroes) {
   auto [precision, scale] = getDecimalPrecisionScale(*type);
-  return formatDecimal(scale, value);
+  return formatDecimal(precision, scale, value, hasLeadingZeroes);
 }
 
 int32_t DecimalUtil::getByteArrayLength(int128_t value) {
