@@ -132,6 +132,16 @@ must be non-empty.</p>
 </dd></dl>
 
 <dl class="py function">
+<dt class="sig sig-object py" id="id0">
+<span class="sig-name descname"><span class="pre">ltrim</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">string</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">chars</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">varchar</span></span></span><a class="headerlink" href="#id0" title="Permalink to this definition">¶</a></dt>
+<dd><p>Removes the longest substring containing only characters in <code class="docutils literal notranslate"><span class="pre">chars</span></code> from the beginning of the <code class="docutils literal notranslate"><span class="pre">string</span></code>.</p>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">SELECT</span> <span class="n">ltrim</span><span class="p">(</span><span class="s1">&#39;test&#39;</span><span class="p">,</span> <span class="s1">&#39;t&#39;</span><span class="p">);</span> <span class="o">--</span> <span class="n">est</span>
+<span class="n">SELECT</span> <span class="n">ltrim</span><span class="p">(</span><span class="s1">&#39;tetris&#39;</span><span class="p">,</span> <span class="s1">&#39;te&#39;</span><span class="p">);</span> <span class="o">--</span> <span class="n">ris</span>
+</pre></div>
+</div>
+</dd></dl>
+
+<dl class="py function">
 <dt class="sig sig-object py" id="replace">
 <span class="sig-name descname"><span class="pre">replace</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">string</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">search</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">varchar</span></span></span><a class="headerlink" href="#replace" title="Permalink to this definition">¶</a></dt>
 <dd><p>Removes all instances of <code class="docutils literal notranslate"><span class="pre">search</span></code> from <code class="docutils literal notranslate"><span class="pre">string</span></code>.</p>
@@ -168,6 +178,16 @@ must be non-empty.</p>
 <dt class="sig sig-object py" id="rtrim">
 <span class="sig-name descname"><span class="pre">rtrim</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">string</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">varchar</span></span></span><a class="headerlink" href="#rtrim" title="Permalink to this definition">¶</a></dt>
 <dd><p>Removes trailing whitespace from string.</p>
+</dd></dl>
+
+<dl class="py function">
+<dt class="sig sig-object py" id="id1">
+<span class="sig-name descname"><span class="pre">rtrim</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">string</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">chars</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">varchar</span></span></span><a class="headerlink" href="#id1" title="Permalink to this definition">¶</a></dt>
+<dd><p>Removes the longest substring containing only characters in <code class="docutils literal notranslate"><span class="pre">chars</span></code> from the end of the <code class="docutils literal notranslate"><span class="pre">string</span></code>.</p>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">SELECT</span> <span class="n">rtrim</span><span class="p">(</span><span class="s1">&#39;test&#39;</span><span class="p">,</span> <span class="s1">&#39;t&#39;</span><span class="p">);</span> <span class="o">--</span> <span class="n">tes</span>
+<span class="n">SELECT</span> <span class="n">rtrim</span><span class="p">(</span><span class="s1">&#39;test...&#39;</span><span class="p">,</span> <span class="s1">&#39;.&#39;</span><span class="p">);</span> <span class="o">--</span> <span class="n">test</span>
+</pre></div>
+</div>
 </dd></dl>
 
 <dl class="py function">
@@ -253,6 +273,16 @@ length of the <code class="docutils literal notranslate"><span class="pre">strin
 <dt class="sig sig-object py" id="trim">
 <span class="sig-name descname"><span class="pre">trim</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">string</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">varchar</span></span></span><a class="headerlink" href="#trim" title="Permalink to this definition">¶</a></dt>
 <dd><p>Removes starting and ending whitespaces from <code class="docutils literal notranslate"><span class="pre">string</span></code>.</p>
+</dd></dl>
+
+<dl class="py function">
+<dt class="sig sig-object py" id="id2">
+<span class="sig-name descname"><span class="pre">trim</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">string</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">chars</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">varchar</span></span></span><a class="headerlink" href="#id2" title="Permalink to this definition">¶</a></dt>
+<dd><p>Removes the longest substring containing only characters in <code class="docutils literal notranslate"><span class="pre">chars</span></code> from the beginning and end of the <code class="docutils literal notranslate"><span class="pre">string</span></code>.</p>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">SELECT</span> <span class="n">trim</span><span class="p">(</span><span class="s1">&#39;test&#39;</span><span class="p">,</span> <span class="s1">&#39;t&#39;</span><span class="p">);</span> <span class="o">--</span> <span class="n">es</span>
+<span class="n">SELECT</span> <span class="n">trim</span><span class="p">(</span><span class="s1">&#39;.t.e.s.t.&#39;</span><span class="p">,</span> <span class="s1">&#39;.t&#39;</span><span class="p">);</span> <span class="o">--</span> <span class="n">e</span><span class="o">.</span><span class="n">s</span>
+</pre></div>
+</div>
 </dd></dl>
 
 <dl class="py function">
