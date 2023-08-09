@@ -27,6 +27,19 @@ Array Functions
 
         SELECT array_intersect(array(1, 2, 3), array(1, 3, 5)); -- [1,3]
 
+.. function:: array_min(array(E)) -> E
+
+    Returns the minimum value of input array. 
+    The result matches the type of the elements.
+    NULL elements are skipped. If array is empty, or contains only NULL elements, NULL is returned.
+    NaN is greater than any non-NaN elements for double/float type. ::
+
+        SELECT array_min(ARRAY [1, 2, 3]); -- 1
+        SELECT array_min(ARRAY [-1, -2, -2]); -- -2
+        SELECT array_min(ARRAY [-1, -2, NULL]); -- -2
+        SELECT array_min(ARRAY [NULL, NULL]); -- NULL
+        SELECT array_min(ARRAY []); -- NULL
+
 .. spark:function:: array_sort(array(E)) -> array(E)
 
     Returns an array which has the sorted order of the input array(E). The elements of array(E) must
