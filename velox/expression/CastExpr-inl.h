@@ -275,6 +275,28 @@ VectorPtr CastExpr::applyDecimalToIntegralCast(
   return result;
 }
 
+template <typename FromNativeType, TypeKind ToKind>
+VectorPtr CastExpr::applyDecimalToBooleanCast(
+    const SelectivityVector& rows,
+    const BaseVector& input,
+    exec::EvalCtx& context,
+    const TypePtr& fromType,
+    const TypePtr& toType) {
+  using To = typename TypeTraits<ToKind>::NativeType;
+  VectorPtr result;
+  context.ensureWritable(rows, toType, result);
+  (*result).clearNulls(rows);
+  auto resultBuffer = result->asUnchecked<FlatVector<To>>()->mutableRawValues();
+  const auto precisionScale = getDecimalPrecisionScale(*fromType);
+  const auto simpleInput = input.as<SimpleVector<FromNativeType>>();
+  const auto scaleFactor = DecimalUtil::kPowersOfTen[precisionScale.second];
+  applyToSelectedNoThrowLocal(context, rows, result, [&](int row) {
+    auto value = simpleInput->valueAt(row);
+    resultBuffer[row] = (value == 0 ? false : true);
+  });
+  return result;
+}
+
 template <typename FromNativeType>
 VectorPtr CastExpr::applyDecimalToPrimitiveCast(
     const SelectivityVector& rows,
@@ -283,6 +305,9 @@ VectorPtr CastExpr::applyDecimalToPrimitiveCast(
     const TypePtr& fromType,
     const TypePtr& toType) {
   switch (toType->kind()) {
+    case TypeKind::BOOLEAN:
+      return applyDecimalToBooleanCast<FromNativeType, TypeKind::BOOLEAN>(
+          rows, input, context, fromType, toType);
     case TypeKind::TINYINT:
       return applyDecimalToIntegralCast<FromNativeType, TypeKind::TINYINT>(
           rows, input, context, fromType, toType);
