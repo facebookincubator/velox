@@ -35,17 +35,21 @@ find_program(MAKE_PROGRAM make REQUIRED)
 set(QATZSTD_SOURCE_DIR "${CMAKE_CURRENT_BINARY_DIR}/_deps/qatzstd-src")
 set(QATZSTD_INCLUDE_DIR "${QATZSTD_SOURCE_DIR}/src")
 set(QATZSTD_STATIC_LIB_TARGETS "${QATZSTD_SOURCE_DIR}/src/libqatseqprod.a")
-set(QATZSTD_MAKE_ARGS "ENABLE_USDM_DRV=1" "ZSTDLIB=${ZSTD_INCLUDE_DIR}")
+set(QATZSTD_MAKE_ARGS "ENABLE_USDM_DRV=1" "ZSTDLIB=${ZSTD_INCLUDE_DIR}"
+                      "DEBUGLEVEL=1")
 
 set(QATZSTD_SOURCE_URL
-      "https://github.com/intel-collab/applications.qat.shims.zstandard.qatzstdplugin/archive/refs/heads/main.tar.gz")
+    "https://github.com/intel-collab/applications.qat.shims.zstandard.qatzstdplugin.git"
+)
+set(QATZSTD_SOURCE_BRANCH "main")
+set(QATZSTD_BASE_COMMIT "118cc226e8e8b539a5b349f5876fc21d8e4d1c1a")
 
 ExternalProject_Add(
   qatzstd
-  URL ${VELOX_QATZSTD_SOURCE_URL}
-  URL_HASH ${VELOX_QATZSTD_BUILD_SHA256_CHECKSUM}
-  # GIT_REPOSITORY ${QATZSTD_SOURCE_URL}
-  # GIT_TAG ${QATZSTD_SOURCE_BRANCH}
+  # URL ${VELOX_QATZSTD_SOURCE_URL} URL_HASH
+  # ${VELOX_QATZSTD_BUILD_SHA256_CHECKSUM}
+  GIT_REPOSITORY ${QATZSTD_SOURCE_URL}
+  GIT_TAG ${QATZSTD_BASE_COMMIT}
   USES_TERMINAL_DOWNLOAD ON
   SOURCE_DIR ${QATZSTD_SOURCE_DIR}
   BINARY_DIR ${QATZSTD_BINARY_DIR}
@@ -74,10 +78,10 @@ find_library(
 message(STATUS "Found usdm_drv: ${USDM_DRV_LIBRARY}")
 message(STATUS "Found qat_s: ${QAT_S_LIBRARY}")
 
-set_target_properties(
-  qatzstd::qatzstd
-  PROPERTIES IMPORTED_LOCATION ${QATZSTD_STATIC_LIB_TARGETS})
-  target_include_directories(qatzstd::qatzstd INTERFACE ${QATZSTD_INCLUDE_DIR})
-  target_link_libraries(qatzstd::qatzstd  INTERFACE zstd::zstd ${USDM_DRV_LIBRARY} ${QAT_S_LIBRARY})
+set_target_properties(qatzstd::qatzstd PROPERTIES IMPORTED_LOCATION
+                                                  ${QATZSTD_STATIC_LIB_TARGETS})
+target_include_directories(qatzstd::qatzstd INTERFACE ${QATZSTD_INCLUDE_DIR})
+target_link_libraries(qatzstd::qatzstd INTERFACE zstd::zstd ${USDM_DRV_LIBRARY}
+                                                 ${QAT_S_LIBRARY})
 
 add_dependencies(qatzstd::qatzstd qatzstd)

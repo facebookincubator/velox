@@ -51,6 +51,7 @@ class ZstdCompressor : public Compressor {
 
 uint64_t
 ZstdCompressor::compress(const void* src, void* dest, uint64_t length) {
+  XLOG_FIRST_N(INFO, 1) << fmt::format("sw compress");
   auto ret = ZSTD_compress(dest, length, src, length, level_);
   if (ZSTD_isError(ret)) {
     // it's fine to hit dest size too small
@@ -70,8 +71,15 @@ class ZstdQatCompressor : public Compressor {
     sequenceProducerState = QZSTD_createSeqProdState();
     ZSTD_registerSequenceProducer(
         zc, sequenceProducerState, qatSequenceProducer);
-    ZSTD_CCtx_setParameter(zc, ZSTD_c_enableSeqProducerFallback, 1);
+    ZSTD_CCtx_setParameter(zc, ZSTD_c_enableSeqProducerFallback, 0);
     ZSTD_CCtx_setParameter(zc, ZSTD_c_compressionLevel, level);
+  }
+
+  ~ZstdQatCompressor() {
+    ZSTD_freeCCtx(zc);
+    if (sequenceProducerState) {
+      QZSTD_freeSeqProdState(sequenceProducerState);
+    }
   }
 
   ZSTD_CCtx* zc;
@@ -81,6 +89,7 @@ class ZstdQatCompressor : public Compressor {
 
 uint64_t
 ZstdQatCompressor::compress(const void* src, void* dest, uint64_t length) {
+  XLOG_FIRST_N(INFO, 1) << fmt::format("qat compress");
   size_t ret = ZSTD_compress2(zc, dest, length, src, length);
   if ((int)ret <= 0) {
     if (ZSTD_getErrorCode(ret) == ZSTD_ErrorCode::ZSTD_error_dstSize_tooSmall) {
