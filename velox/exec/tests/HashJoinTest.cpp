@@ -2876,6 +2876,42 @@ TEST_P(MultiThreadedHashJoinTest, noSpillLevelLimit) {
       .run();
 }
 
+TEST_F(HashJoinTest, duplicatedJoinkeys) {
+  auto probeVectors = makeBatches(3, [&](int32_t /*unused*/) {
+    return makeRowVector({
+        makeFlatVector<int64_t>({1, 2, 2, 3, 3, 3, 4, 5, 5, 6, 7}),
+        makeFlatVector<int64_t>({1, 2, 2, 3, 3, 3, 4, 5, 5, 6, 8}),
+    });
+  });
+
+  auto buildVectors = makeBatches(3, [&](int32_t /*unused*/) {
+    return makeRowVector({
+        makeFlatVector<int64_t>({1, 1, 3, 4, 5, 5, 7, 8}),
+    });
+  });
+
+  createDuckDbTable("t", probeVectors);
+  createDuckDbTable("u", buildVectors);
+
+  auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
+  VELOX_ASSERT_THROW(
+      PlanBuilder(planNodeIdGenerator)
+          .values(probeVectors)
+          .project({"c0 AS t0", "c1 as t1"})
+          .hashJoin(
+              {"t0", "t1"},
+              {"u0", "u0"},
+              PlanBuilder(planNodeIdGenerator)
+                  .values(buildVectors)
+                  .project({"c0 AS u0"})
+                  .planNode(),
+              "",
+              {"t0", "t1", "u0"},
+              core::JoinType::kInner)
+          .planNode(),
+      "JoinNode requires distinct join keys");
+}
+
 TEST_F(HashJoinTest, semiProject) {
   // Some keys have multiple rows: 2, 3, 5.
   auto probeVectors = makeBatches(3, [&](int32_t /*unused*/) {

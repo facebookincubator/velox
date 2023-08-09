@@ -41,6 +41,17 @@ PlanNodePtr deserializeSingleSource(const folly::dynamic& obj, void* context) {
 PlanNodeId deserializePlanNodeId(const folly::dynamic& obj) {
   return obj["id"].asString();
 }
+
+bool containsDuplicates(const std::vector<FieldAccessTypedExprPtr>& fields) {
+  for (std::size_t i = 0; i < fields.size(); ++i) {
+    for (std::size_t j = 0; j < i; ++j) {
+      if (*fields[i] == *fields[j])
+        return true;
+    }
+  }
+  return false;
+}
+
 } // namespace
 
 const SortOrder kAscNullsFirst(true, true);
@@ -735,6 +746,9 @@ AbstractJoinNode::AbstractJoinNode(
       leftKeys_.size(),
       rightKeys_.size(),
       "JoinNode requires same number of join keys on left and right sides");
+  VELOX_CHECK(
+      !containsDuplicates(leftKeys) && !containsDuplicates(rightKeys),
+      "JoinNode requires distinct join keys");
   auto leftType = sources_[0]->outputType();
   for (auto key : leftKeys_) {
     VELOX_CHECK(
