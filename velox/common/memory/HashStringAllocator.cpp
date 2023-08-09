@@ -218,6 +218,26 @@ void HashStringAllocator::newSlab() {
   free(new (run) Header(available - sizeof(Header)));
 }
 
+void HashStringAllocator::removeFromFreeList(Header* FOLLY_NONNULL header) {
+  VELOX_CHECK(header->isFree());
+  header->clearFree();
+  auto index = freeListIndex(header->size());
+  auto removed = reinterpret_cast<CompactDoubleList*>(header->begin());
+  CompactDoubleList* beforeFreed = removed->previous();
+  removed->remove();
+  if (free_[index].empty()) {
+    freeNonEmpty_ &= ~(1 << index);
+  } else {
+    // The list did not go empty. We make the head of the list take
+    // the place of the deleted entry so we do a clock hand
+    // traversal for the free ring instead of starting at the head.
+    if (beforeFreed != &free_[index]) {
+      free_[index].remove();
+      beforeFreed->insert(&free_[index]);
+    }
+  }
+}
+
 void HashStringAllocator::newRange(
     int32_t bytes,
     ByteRange* range,
@@ -386,7 +406,10 @@ HashStringAllocator::allocateFromFreeList(
     if (!largest || size > largest->size()) {
       largest = header;
     }
-    if (!mustHaveSize && ++counter > kMaxCheckedForFit) {
+    if (++counter > kMaxCheckedForFit) {
+      // Next time start the lookup where left off.
+      free_[freeListIndex].remove();
+      item->previous()->insert(&free_[freeListIndex]);
       break;
     }
   }

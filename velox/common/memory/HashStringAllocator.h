@@ -362,15 +362,7 @@ class HashStringAllocator : public StreamArena {
   // anything yet. Throws if fails to grow.
   void newSlab();
 
-  void removeFromFreeList(Header* FOLLY_NONNULL header) {
-    VELOX_CHECK(header->isFree());
-    header->clearFree();
-    auto index = freeListIndex(header->size());
-    reinterpret_cast<CompactDoubleList*>(header->begin())->remove();
-    if (free_[index].empty()) {
-      freeNonEmpty_ &= ~(1 << index);
-    }
-  }
+  void removeFromFreeList(Header* FOLLY_NONNULL header);
 
   /// Allocates a block of specified size. If exactSize is false, the block may
   /// be smaller or larger. Checks free list before allocating new memory.

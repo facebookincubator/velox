@@ -439,5 +439,13 @@ TEST_F(HashStringAllocatorTest, externalLeak) {
   EXPECT_EQ(initialBytes, pool->currentBytes());
 }
 
+TEST_F(HashStringAllocatorTest, freeListOrder) {
+  using HSA = HashStringAllocator;
+
+  std::vector<HSA::Header> headers;
+
+  // **** fill in.
+}
+
 } // namespace
 } // namespace facebook::velox
