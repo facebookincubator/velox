@@ -105,6 +105,18 @@ constexpr int32_t kCumulativeYearDays[] = {
 
 namespace {
 
+// Enum to dictate parsing modes for date strings.
+//
+// kStrict: For date string conversion, align with DuckDB's implementation.
+//
+// kNonStrict: For timestamp string conversion, align with DuckDB's
+// implementation.
+//
+// kStandardCast: Strictly processes dates in the [+-](YYYY-MM-DD) format.
+// Align with Presto casting conventions.
+//
+// kNonStandardCast: Like standard but permits missing day/month and allows
+// trailing 'T' or spaces. Align with Spark SQL casting conventions.
 enum class ParseMode { kStrict, kNonStrict, kStandardCast, kNonStandardCast };
 
 inline bool characterIsSpace(char c) {
@@ -576,7 +588,10 @@ castFromDateString(const char* str, size_t len, bool isNonStandardCast) {
                                 : ParseMode::kStandardCast;
   if (!tryParseDateString(str, len, pos, daysSinceEpoch, mode)) {
     VELOX_USER_FAIL(
-        "Unable to parse date value: \"{}\", expected format is (YYYY-MM-DD)",
+        "Unable to parse date value: \"{}\"."
+        "In Spark SQL, valid date string patterns include "
+        "(YYYY, YYYY-MM, YYYY-MM-DD), and any pattern prefixed with [+-]; "
+        "while in Presto, the supported pattern is [+-](YYYY-MM-DD).",
         std::string(str, len));
   }
   return daysSinceEpoch;
