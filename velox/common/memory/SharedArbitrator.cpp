@@ -57,6 +57,11 @@ std::string memoryPoolAbortMessage(
 }
 } // namespace
 
+SharedArbitrator::SharedArbitrator(const MemoryArbitrator::Config& config)
+    : MemoryArbitrator(config), freeCapacity_(capacity_) {
+  VELOX_CHECK_EQ(kind_, config.kind);
+}
+
 std::string SharedArbitrator::Candidate::toString() const {
   return fmt::format(
       "CANDIDATE[{} RECLAIMABLE[{}] RECLAIMABLE_BYTES[{}] FREE_BYTES[{}]]",
@@ -480,7 +485,7 @@ std::string SharedArbitrator::toString() const {
 std::string SharedArbitrator::toStringLocked() const {
   return fmt::format(
       "ARBITRATOR[{}] CAPACITY {} {}",
-      kindString(kind_),
+      kind_,
       succinctBytes(capacity_),
       statsLocked().toString());
 }
@@ -551,5 +556,20 @@ void SharedArbitrator::finishArbitration() {
   if (resumePromise.valid()) {
     resumePromise.setValue();
   }
+}
+
+std::string SharedArbitrator::kind() {
+  return kind_;
+}
+
+void SharedArbitrator::registerFactory() {
+  MemoryArbitrator::registerFactory(
+      kind_, [](const MemoryArbitrator::Config& config) {
+        return std::make_unique<SharedArbitrator>(config);
+      });
+}
+
+void SharedArbitrator::unregisterFactory() {
+  MemoryArbitrator::unregisterFactory(kind_);
 }
 } // namespace facebook::velox::memory
