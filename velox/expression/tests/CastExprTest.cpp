@@ -223,26 +223,14 @@ class CastExprTest : public functions::test::CastBaseTest {
 
   void testDecimalToBoolCasts() {
     auto shortFlat = makeNullableFlatVector<int64_t>(
-        {DecimalUtil::kShortDecimalMin,
-         0,
-         std::nullopt},
-        DECIMAL(18, 18));
+        {DecimalUtil::kShortDecimalMin, 0, std::nullopt}, DECIMAL(18, 18));
     testComplexCast(
-        "c0",
-        shortFlat,
-        makeNullableFlatVector<bool>(
-            {1, 0, std::nullopt}));
+        "c0", shortFlat, makeNullableFlatVector<bool>({1, 0, std::nullopt}));
 
     auto longFlat = makeNullableFlatVector<int128_t>(
-        {DecimalUtil::kLongDecimalMin,
-         0,
-	 std::nullopt},
-        DECIMAL(38, 5));
+        {DecimalUtil::kLongDecimalMin, 0, std::nullopt}, DECIMAL(38, 5));
     testComplexCast(
-        "c0",
-        longFlat,
-        makeNullableFlatVector<bool>(
-            {1, 0, std::nullopt}));
+        "c0", longFlat, makeNullableFlatVector<bool>({1, 0, std::nullopt}));
   }
 
   template <TypeKind KIND>
