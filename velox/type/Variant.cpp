@@ -244,9 +244,13 @@ std::string variant::toJson(const TypePtr& type) const {
       folly::json::escapeString(str, target, getOpts());
       return target;
     }
-    case TypeKind::HUGEINT:
-      VELOX_CHECK(type && type->isLongDecimal());
-      return DecimalUtil::toString(value<TypeKind::HUGEINT>(), type);
+    case TypeKind::HUGEINT: {
+      if (type && type->isLongDecimal()) {
+        return DecimalUtil::toString(value<TypeKind::HUGEINT>(), type);
+      } else {
+        return std::to_string(value<TypeKind::HUGEINT>());
+      }
+    }
     case TypeKind::TINYINT:
       [[fallthrough]];
     case TypeKind::SMALLINT:

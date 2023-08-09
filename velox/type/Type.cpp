@@ -701,6 +701,7 @@ VELOX_DEFINE_SCALAR_ACCESSOR(BOOLEAN);
 VELOX_DEFINE_SCALAR_ACCESSOR(TINYINT);
 VELOX_DEFINE_SCALAR_ACCESSOR(SMALLINT);
 VELOX_DEFINE_SCALAR_ACCESSOR(BIGINT);
+VELOX_DEFINE_SCALAR_ACCESSOR(HUGEINT);
 VELOX_DEFINE_SCALAR_ACCESSOR(REAL);
 VELOX_DEFINE_SCALAR_ACCESSOR(DOUBLE);
 VELOX_DEFINE_SCALAR_ACCESSOR(TIMESTAMP);
@@ -858,6 +859,8 @@ TypePtr fromKindToScalerType(TypeKind kind) {
       return BIGINT();
     case TypeKind::INTEGER:
       return INTEGER();
+    case TypeKind::HUGEINT:
+      return HUGEINT();
     case TypeKind::REAL:
       return REAL();
     case TypeKind::VARCHAR:
@@ -990,6 +993,7 @@ const SingletonTypeMap& singletonBuiltInTypes() {
       {"SMALLINT", SMALLINT()},
       {"INTEGER", INTEGER()},
       {"BIGINT", BIGINT()},
+      {"HUGEINT", HUGEINT()},
       {"REAL", REAL()},
       {"DOUBLE", DOUBLE()},
       {"VARCHAR", VARCHAR()},

@@ -567,6 +567,9 @@ std::unique_ptr<exec::Aggregate> create(
     case TypeKind::BIGINT:
       return std::make_unique<Aggregate<W, int64_t, isMaxFunc, Comparator>>(
           resultType);
+    case TypeKind::HUGEINT:
+      return std::make_unique<Aggregate<W, int128_t, isMaxFunc, Comparator>>(
+          resultType);
     case TypeKind::REAL:
       return std::make_unique<Aggregate<W, float, isMaxFunc, Comparator>>(
           resultType);
@@ -625,6 +628,9 @@ std::unique_ptr<exec::Aggregate> create(
           resultType, compareType, errorMessage);
     case TypeKind::BIGINT:
       return create<Aggregate, isMaxFunc, Comparator, int64_t>(
+          resultType, compareType, errorMessage);
+    case TypeKind::HUGEINT:
+      return create<Aggregate, isMaxFunc, Comparator, int128_t>(
           resultType, compareType, errorMessage);
     case TypeKind::REAL:
       return create<Aggregate, isMaxFunc, Comparator, float>(

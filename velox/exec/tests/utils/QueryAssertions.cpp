@@ -88,11 +88,15 @@ template <>
     const VectorPtr& vector,
     vector_size_t index) {
   using T = typename KindToFlatVector<TypeKind::HUGEINT>::WrapperType;
-  auto type = vector->type()->asLongDecimal();
   auto val = vector->as<SimpleVector<T>>()->valueAt(index);
   auto duckVal = ::duckdb::hugeint_t();
   duckVal.lower = (val << 64) >> 64;
   duckVal.upper = (val >> 64);
+  if (vector->type()->isHugeint()) {
+    // Flat vector is HUGEINT type and not the logical decimal type.
+    return ::duckdb::Value::HUGEINT(duckVal);
+  }
+  auto type = vector->type()->asLongDecimal();
   return ::duckdb::Value::DECIMAL(duckVal, type.precision(), type.scale());
 }
 
@@ -192,6 +196,16 @@ velox::variant
 variantAt(::duckdb::DataChunk* dataChunk, int32_t row, int32_t column) {
   using T = typename KindToFlatVector<kind>::WrapperType;
   return velox::variant(dataChunk->GetValue(column, row).GetValue<T>());
+}
+
+template <>
+velox::variant variantAt<TypeKind::HUGEINT>(
+    ::duckdb::DataChunk* dataChunk,
+    int32_t row,
+    int32_t column) {
+  auto unscaledValue =
+      dataChunk->GetValue(column, row).GetValue<::duckdb::hugeint_t>();
+  return variant(HugeInt::build(unscaledValue.upper, unscaledValue.lower));
 }
 
 template <>

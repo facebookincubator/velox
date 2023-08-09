@@ -627,7 +627,7 @@ struct VariantConverter {
         // assumptions. Block converting timestamp to integer, double and
         // std::string types. The callers should implement their own conversion
         //  from value.
-        VELOX_NYI();
+        return convert<TypeKind::HUGEINT, ToKind>(value);
       default:
         VELOX_NYI();
     }

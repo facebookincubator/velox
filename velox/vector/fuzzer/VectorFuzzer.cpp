@@ -288,7 +288,7 @@ void fuzzFlatPrimitiveImpl(
       if (vector->type()->isLongDecimal()) {
         flatVector->set(i, randLongDecimal(vector->type(), rng));
       } else {
-        VELOX_NYI();
+        flatVector->set(i, rand<TCpp>(rng));
       }
     } else {
       flatVector->set(i, rand<TCpp>(rng));

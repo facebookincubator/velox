@@ -42,6 +42,7 @@ const std::unordered_set<TypeKind> kSupportedTypes = {
     TypeKind::SMALLINT,
     TypeKind::INTEGER,
     TypeKind::BIGINT,
+    TypeKind::HUGEINT,
     TypeKind::REAL,
     TypeKind::DOUBLE,
     TypeKind::VARCHAR,
@@ -74,6 +75,9 @@ std::vector<TestParam> getTestParams() {
         break;                                                       \
       case TypeKind::BIGINT:                                         \
         testFunc<valueType, int64_t>();                              \
+        break;                                                       \
+      case TypeKind::HUGEINT:                                        \
+        testFunc<valueType, int128_t>();                             \
         break;                                                       \
       case TypeKind::REAL:                                           \
         testFunc<valueType, float>();                                \
@@ -110,6 +114,9 @@ std::vector<TestParam> getTestParams() {
         break;                                                  \
       case TypeKind::BIGINT:                                    \
         EXECUTE_TEST_BY_VALUE_TYPE(testFunc, int64_t);          \
+        break;                                                  \
+      case TypeKind::HUGEINT:                                   \
+        EXECUTE_TEST_BY_VALUE_TYPE(testFunc, int128_t);         \
         break;                                                  \
       case TypeKind::REAL:                                      \
         EXECUTE_TEST_BY_VALUE_TYPE(testFunc, float);            \
@@ -190,25 +197,39 @@ class MinMaxByAggregationTestBase : public AggregationTestBase {
       folly::Range<const int*> values);
 
   const RowTypePtr rowType_{
-      ROW({"c0", "c1", "c2", "c3", "c4", "c5", "c6", "c7", "c8", "c9"},
-          {
-              BOOLEAN(),
-              TINYINT(),
-              SMALLINT(),
-              INTEGER(),
-              BIGINT(),
-              REAL(),
-              DOUBLE(),
-              VARCHAR(),
-              DATE(),
-              TIMESTAMP(),
-          })};
+      ROW({"c0", "c1", "c2", "c3", "c4", "c5", "c6", "c7", "c8", "c9", "c10"},
+          {BOOLEAN(),
+           TINYINT(),
+           SMALLINT(),
+           INTEGER(),
+           BIGINT(),
+           REAL(),
+           DOUBLE(),
+           VARCHAR(),
+           DATE(),
+           TIMESTAMP(),
+           HUGEINT()})};
   // Specify the number of values in each typed data vector in
   // 'dataVectorsByType_'.
   const int numValues_;
   std::unordered_map<TypeKind, VectorPtr> dataVectorsByType_;
   std::vector<RowVectorPtr> rowVectors_;
 };
+
+template <>
+FlatVectorPtr<int128_t> MinMaxByAggregationTestBase::buildDataVector(
+    vector_size_t size,
+    folly::Range<const int*> values) {
+  if (values.empty()) {
+    return makeFlatVector<int128_t>(
+        size, [](auto row) { return HugeInt::build(row - 3, row - 3); });
+  } else {
+    VELOX_CHECK_EQ(values.size(), size);
+    return makeFlatVector<int128_t>(size, [&](auto row) {
+      return HugeInt::build(values[row], values[row]);
+    });
+  }
+}
 
 // Build a flat vector with StringView. The value in the returned flat vector
 // is in ascending order.
@@ -277,6 +298,8 @@ VectorPtr MinMaxByAggregationTestBase::buildDataVector(
       return buildDataVector<int32_t>(size, values);
     case TypeKind::BIGINT:
       return buildDataVector<int64_t>(size, values);
+    case TypeKind::HUGEINT:
+      return buildDataVector<int128_t>(size, values);
     case TypeKind::REAL:
       return buildDataVector<float>(size, values);
     case TypeKind::DOUBLE:
@@ -326,6 +349,9 @@ void MinMaxByAggregationTestBase::SetUp() {
         break;
       case TypeKind::BIGINT:
         dataVectorsByType_.emplace(type, buildDataVector<int64_t>(numValues_));
+        break;
+      case TypeKind::HUGEINT:
+        dataVectorsByType_.emplace(type, buildDataVector<int128_t>(numValues_));
         break;
       case TypeKind::REAL:
         dataVectorsByType_.emplace(type, buildDataVector<float>(numValues_));
@@ -571,6 +597,53 @@ TEST_P(MinMaxByGlobalByAggregationTest, minByFinalGlobalBy) {
 
 TEST_P(MinMaxByGlobalByAggregationTest, maxByFinalGlobalBy) {
   EXECUTE_TEST(maxByGlobalByTest);
+}
+
+TEST_F(MinMaxByGlobalByAggregationTest, decimalSignatureTest) {
+  auto decimalType = DECIMAL(38, 4);
+  auto rowType = ROW({"c0", "c1"}, {decimalType, INTEGER()});
+  auto rowVector = makeRowVector(
+      {makeNullableFlatVector<int128_t>(
+           {dataAt<int128_t>(0),
+            dataAt<int128_t>(1),
+            dataAt<int128_t>(2),
+            dataAt<int128_t>(3),
+            dataAt<int128_t>(4),
+            std::nullopt},
+           decimalType),
+       makeNullableFlatVector<int128_t>(
+           {dataAt<int128_t>(5),
+            dataAt<int128_t>(4),
+            dataAt<int128_t>(3),
+            dataAt<int128_t>(2),
+            dataAt<int128_t>(1),
+            dataAt<int128_t>(0)},
+           decimalType)});
+  // Decimal value type and compare type.
+  testAggregations(
+      {rowVector},
+      {},
+      {/*"min_by(c0, c1)",
+       "max_by(c0, c1)",*/
+       "min_by(c0, c1, 4)",
+       "max_by(c0,c1,4)"},
+      {},
+      {makeRowVector(
+          {// makeNullableFlatVector<int128_t>({std::nullopt}, decimalType),
+           // makeNullableFlatVector<int128_t>({dataAt<int128_t>(0)},
+           // decimalType),
+           makeNullableArrayVector<int128_t>(
+               {{std::nullopt,
+                 dataAt<int128_t>(4),
+                 dataAt<int128_t>(3),
+                 dataAt<int128_t>(2)}},
+               ARRAY(decimalType)),
+           makeArrayVector<int128_t>(
+               {{dataAt<int128_t>(0),
+                 dataAt<int128_t>(1),
+                 dataAt<int128_t>(2),
+                 dataAt<int128_t>(3)}},
+               decimalType)})});
 }
 
 TEST_P(MinMaxByGlobalByAggregationTest, randomMinByGlobalBy) {
@@ -1018,6 +1091,11 @@ TEST_P(MinMaxByGroupByAggregationTest, randomMinByGroupBy) {
     return;
   }
 
+  if (GetParam().valueType == TypeKind::HUGEINT) {
+    GTEST_SKIP()
+        << "HUGEINT value type is skipped. DUCKDB min_by/max_by for HUGEINT are cast to double.";
+  }
+
   testGroupByAggregation(
       rowVectors_,
       kMinBy,
@@ -1031,7 +1109,10 @@ TEST_P(MinMaxByGroupByAggregationTest, randomMaxByGroupBy) {
       GetParam().valueType == TypeKind::TIMESTAMP) {
     return;
   }
-
+  if (GetParam().valueType == TypeKind::HUGEINT) {
+    GTEST_SKIP()
+        << "HUGEINT value type is skipped. DUCKDB min_by/max_by for HUGEINT are cast to double.";
+  }
   testGroupByAggregation(
       rowVectors_,
       kMaxBy,
@@ -1050,7 +1131,10 @@ TEST_P(
   if (GetParam().comparisonType == TypeKind::BOOLEAN) {
     GTEST_SKIP() << "Boolean comparison type is not supported in this test.";
   }
-
+  if (GetParam().valueType == TypeKind::HUGEINT) {
+    GTEST_SKIP()
+        << "HUGEINT value type is skipped. DUCKDB min_by/max_by for HUGEINT are cast to double.";
+  }
   // Enable disk spilling test with distinct comparison values.
   AggregationTestBase::allowInputShuffle();
 
