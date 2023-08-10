@@ -181,6 +181,11 @@ bool MemoryManager::growPool(MemoryPool* pool, uint64_t incrementBytes) {
   return arbitrator_->growMemory(pool, candidates, incrementBytes);
 }
 
+uint64_t MemoryManager::shrinkPools(uint64_t targetBytes) {
+  VELOX_CHECK_NOT_NULL(arbitrator_);
+  return arbitrator_->shrinkMemory(getAlivePools(), targetBytes);
+}
+
 void MemoryManager::dropPool(MemoryPool* pool) {
   VELOX_CHECK_NOT_NULL(pool);
   folly::SharedMutex::WriteHolder guard{mutex_};

@@ -157,6 +157,11 @@ class MemoryManager {
   /// 'incrementBytes'. The function returns true on success, otherwise false.
   bool growPool(MemoryPool* pool, uint64_t incrementBytes);
 
+  /// Invoked to shrink currently alive pools by 'targetBytes', by reducing this
+  /// memory pool's capacity without actually freeing any used memory. Returns
+  /// the actual shrank memory bytes.
+  uint64_t shrinkPools(uint64_t targetBytes);
+
   /// Default unmanaged leaf pool with no threadsafe stats support. Libraries
   /// using this method can get a pool that is shared with other threads. The
   /// goal is to minimize lock contention while supporting such use cases.
