@@ -27,6 +27,18 @@ Array Functions
 
         SELECT array_intersect(array(1, 2, 3), array(1, 3, 5)); -- [1,3]
 
+.. function:: array_max(array(E)) -> E
+
+    Returns the maximum value of input array.
+    The result matches the type of the elements.
+    NULL elements are skipped. If array is empty, or contains only NULL elements, NULL is returned.
+    NaN is greater than any non-NaN elements for double/float type. ::
+
+        SELECT array_max(ARRAY [1, 2, 3]); -- 3
+        SELECT array_max(ARRAY [-1, -2, -2]); -- -1
+        SELECT array_max(ARRAY [-1, -2, NULL]); -- NULL
+        SELECT array_max(ARRAY []); -- NULL
+
 .. function:: array_min(array(E)) -> E
 
     Returns the minimum value of input array. 
