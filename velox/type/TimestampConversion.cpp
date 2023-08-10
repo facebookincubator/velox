@@ -587,12 +587,20 @@ castFromDateString(const char* str, size_t len, bool isNonStandardCast) {
   auto mode = isNonStandardCast ? ParseMode::kNonStandardCast
                                 : ParseMode::kStandardCast;
   if (!tryParseDateString(str, len, pos, daysSinceEpoch, mode)) {
-    VELOX_USER_FAIL(
-        "Unable to parse date value: \"{}\"."
-        "In Spark SQL, valid date string patterns include "
-        "(YYYY, YYYY-MM, YYYY-MM-DD), and any pattern prefixed with [+-]; "
-        "while in Presto, the supported pattern is [+-](YYYY-MM-DD).",
-        std::string(str, len));
+    if (isNonStandardCast) {
+      VELOX_USER_FAIL(
+          "Unable to parse date value: \"{}\"."
+          "Valid date string patterns include "
+          "(YYYY, YYYY-MM, YYYY-MM-DD), and any pattern prefixed with [+-]",
+          std::string(str, len));
+
+    } else {
+      VELOX_USER_FAIL(
+          "Unable to parse date value: \"{}\"."
+          "Valid date string pattern is (YYYY-MM-DD), "
+          "and can be prefixed with [+-]",
+          std::string(str, len));
+    }
   }
   return daysSinceEpoch;
 }
