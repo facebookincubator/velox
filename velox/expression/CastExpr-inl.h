@@ -302,6 +302,31 @@ VectorPtr CastExpr::applyDecimalToBooleanCast(
 }
 
 template <typename FromNativeType>
+VectorPtr CastExpr::applyDecimalToVarcharCast(
+    const SelectivityVector& rows,
+    const BaseVector& input,
+    exec::EvalCtx& context,
+    const TypePtr& fromType,
+    const TypePtr& toType) {
+  VectorPtr result;
+  context.ensureWritable(rows, toType, result);
+  (*result).clearNulls(rows);
+  const auto simpleInput = input.as<SimpleVector<FromNativeType>>();
+  auto resultBuffer =
+      result->asUnchecked<FlatVector<StringView>>()->mutableRawValues();
+  applyToSelectedNoThrowLocal(context, rows, result, [&](int row) {
+    if (simpleInput->isNullAt(row)) {
+      result->setNull(row, true);
+    } else {
+      std::string output =
+          DecimalUtil::toString((int128_t)simpleInput->valueAt(row), fromType);
+      resultBuffer[row] = StringView(output);
+    }
+  });
+  return result;
+}
+
+template <typename FromNativeType>
 VectorPtr CastExpr::applyDecimalToPrimitiveCast(
     const SelectivityVector& rows,
     const BaseVector& input,

@@ -518,14 +518,27 @@ void CastExpr::applyPeeled(
   } else if (toType->isLongDecimal()) {
     result = applyDecimal<int128_t>(rows, input, context, fromType, toType);
   } else if (fromType->isDecimal()) {
-    result = VELOX_DYNAMIC_DECIMAL_TYPE_DISPATCH(
-        applyDecimalToPrimitiveCast,
-        fromType,
-        rows,
-        input,
-        context,
-        fromType,
-        toType);
+    switch (toType->kind()) {
+      case TypeKind::VARCHAR:
+        result = VELOX_DYNAMIC_DECIMAL_TYPE_DISPATCH(
+            applyDecimalToVarcharCast,
+            fromType,
+            rows,
+            input,
+            context,
+            fromType,
+            toType);
+        break;
+      default:
+        result = VELOX_DYNAMIC_DECIMAL_TYPE_DISPATCH(
+            applyDecimalToPrimitiveCast,
+            fromType,
+            rows,
+            input,
+            context,
+            fromType,
+            toType);
+    }
   } else {
     switch (toType->kind()) {
       case TypeKind::MAP:

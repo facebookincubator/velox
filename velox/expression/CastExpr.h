@@ -248,6 +248,22 @@ class CastExpr : public SpecialForm {
       const BaseVector& input,
       VectorPtr& result);
 
+  template <typename TOutput>
+  void applyVarCharToDecimalCastKernel(
+      const SelectivityVector& rows,
+      const BaseVector& input,
+      exec::EvalCtx& context,
+      const TypePtr& toType,
+      VectorPtr castResult);
+
+  template <typename FromNativeType>
+  VectorPtr applyDecimalToVarcharCast(
+      const SelectivityVector& rows,
+      const BaseVector& input,
+      exec::EvalCtx& context,
+      const TypePtr& fromType,
+      const TypePtr& toType);
+
   template <TypeKind ToKind>
   void applyCastPrimitivesDispatch(
       const TypePtr& fromType,
