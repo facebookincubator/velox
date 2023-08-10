@@ -45,16 +45,19 @@ void registerArithmeticFunctions(const std::string& prefix) {
   registerFunction<ExpFunction, double, double>({prefix + "exp"});
   registerBinaryIntegral<PModFunction>({prefix + "pmod"});
   registerFunction<PowerFunction, double, double, double>({prefix + "power"});
-  registerUnaryNumeric<RoundFunction>({prefix + "round"});
-  registerFunction<RoundFunction, int8_t, int8_t, int32_t>({prefix + "round"});
-  registerFunction<RoundFunction, int16_t, int16_t, int32_t>(
+  registerUnaryNumeric<sparksql::RoundFunction>({prefix + "round"});
+  registerFunction<sparksql::RoundFunction, int8_t, int8_t, int32_t>(
       {prefix + "round"});
-  registerFunction<RoundFunction, int32_t, int32_t, int32_t>(
+  registerFunction<sparksql::RoundFunction, int16_t, int16_t, int32_t>(
       {prefix + "round"});
-  registerFunction<RoundFunction, int64_t, int64_t, int32_t>(
+  registerFunction<sparksql::RoundFunction, int32_t, int32_t, int32_t>(
       {prefix + "round"});
-  registerFunction<RoundFunction, double, double, int32_t>({prefix + "round"});
-  registerFunction<RoundFunction, float, float, int32_t>({prefix + "round"});
+  registerFunction<sparksql::RoundFunction, int64_t, int64_t, int32_t>(
+      {prefix + "round"});
+  registerFunction<sparksql::RoundFunction, double, double, int32_t>(
+      {prefix + "round"});
+  registerFunction<sparksql::RoundFunction, float, float, int32_t>(
+      {prefix + "round"});
   // In Spark only long, double, and decimal have ceil/floor
   registerFunction<sparksql::CeilFunction, int64_t, int64_t>({prefix + "ceil"});
   registerFunction<sparksql::CeilFunction, int64_t, double>({prefix + "ceil"});
