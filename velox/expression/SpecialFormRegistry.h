@@ -27,13 +27,13 @@ class SpecialFormRegistry {
   /// Registers 'functionCallToSpecialForm' for mapping user defined
   /// FunctionCallToSpecialForm subclass instances to user-defined
   /// FunctionCallToSpecialForm.
-  void registerSpecialFormInternal(
+  void registerFunctionCallToSpecialForm(
       const std::string& name,
       std::unique_ptr<FunctionCallToSpecialForm> functionCallToSpecialForm);
 
   /// Removes all functionCallToSpecialForm registered earlier via calls to
   /// 'registerFunctionCallToSpecialForm'.
-  void unregisterAllFunctionCallTpSpecialForm();
+  void unregisterAllFunctionCallToSpecialForm();
 
   /// @brief Return null if the FunctionCallToSpeicalForm not exists
   /// @param name Function name
@@ -58,7 +58,7 @@ void registerFunctionCallToSpecialForm(
 
 /// Removes all functionCallToSpecialForm registered earlier via calls to
 /// 'registerFunctionCallToSpecialForm'.
-void unregisterAllFunctionCallTpSpecialForm();
+void unregisterAllFunctionCallToSpecialForm();
 
 /// Returns true if a FunctionCallToSpeicalForm object has been registered for
 /// the given functionName.

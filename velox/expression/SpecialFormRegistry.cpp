@@ -26,14 +26,14 @@ SpecialFormRegistry& specialFormRegistryInternal() {
 }
 } // namespace
 
-void SpecialFormRegistry::registerSpecialFormInternal(
+void SpecialFormRegistry::registerFunctionCallToSpecialForm(
     const std::string& name,
     std::unique_ptr<FunctionCallToSpecialForm> functionCallToSpecialForm) {
   registry_.withWLock(
       [&](auto& map) { map[name] = std::move(functionCallToSpecialForm); });
 }
 
-void SpecialFormRegistry::unregisterAllFunctionCallTpSpecialForm() {
+void SpecialFormRegistry::unregisterAllFunctionCallToSpecialForm() {
   registry_.withWLock([&](auto& map) { map.clear(); });
 }
 
@@ -60,12 +60,12 @@ SpecialFormRegistry& mutableSpecialFormRegistry() {
 void registerFunctionCallToSpecialForm(
     const std::string& name,
     std::unique_ptr<FunctionCallToSpecialForm> functionCallToSpecialForm) {
-  mutableSpecialFormRegistry().registerSpecialFormInternal(
+  mutableSpecialFormRegistry().registerFunctionCallToSpecialForm(
       name, std::move(functionCallToSpecialForm));
 }
 
-void unregisterAllFunctionCallTpSpecialForm() {
-  mutableSpecialFormRegistry().unregisterAllFunctionCallTpSpecialForm();
+void unregisterAllFunctionCallToSpecialForm() {
+  mutableSpecialFormRegistry().unregisterAllFunctionCallToSpecialForm();
 }
 
 bool isFunctionCallToSpecialFormRegistered(const std::string& functionName) {
