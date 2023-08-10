@@ -34,6 +34,11 @@ DEFINE_bool(
     false,
     "if to use qat for zstd compression");
 
+DEFINE_int32(
+    ENABLE_QAT_ZSTD_FALLBACK,
+    0,
+    "if to allow qat to fall back on sw when qat devices are not functional");
+
 namespace facebook::velox::dwrf {
 
 using dwio::common::encryption::Decrypter;
@@ -71,7 +76,7 @@ class ZstdQatCompressor : public Compressor {
     sequenceProducerState = QZSTD_createSeqProdState();
     ZSTD_registerSequenceProducer(
         zc, sequenceProducerState, qatSequenceProducer);
-    ZSTD_CCtx_setParameter(zc, ZSTD_c_enableSeqProducerFallback, 0);
+    ZSTD_CCtx_setParameter(zc, ZSTD_c_enableSeqProducerFallback, FLAGS_ENABLE_QAT_ZSTD_FALLBACK);
     ZSTD_CCtx_setParameter(zc, ZSTD_c_compressionLevel, level);
   }
 
@@ -90,6 +95,7 @@ class ZstdQatCompressor : public Compressor {
 uint64_t
 ZstdQatCompressor::compress(const void* src, void* dest, uint64_t length) {
   XLOG_FIRST_N(INFO, 1) << fmt::format("qat compress");
+  XLOG_FIRST_N(INFO, 1) << fmt::format("qat fallback {}", FLAGS_ENABLE_QAT_ZSTD_FALLBACK);
   size_t ret = ZSTD_compress2(zc, dest, length, src, length);
   if ((int)ret <= 0) {
     if (ZSTD_getErrorCode(ret) == ZSTD_ErrorCode::ZSTD_error_dstSize_tooSmall) {
