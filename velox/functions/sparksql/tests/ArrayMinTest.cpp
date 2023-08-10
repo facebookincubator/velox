@@ -14,6 +14,8 @@
  * limitations under the License.
  */
 
+#include <gtest/gtest.h>
+#include <type/Timestamp.h>
 #include <limits>
 #include <optional>
 #include "velox/functions/sparksql/tests/SparkFunctionBaseTest.h"
@@ -27,198 +29,143 @@ namespace {
 
 class ArrayMinTest : public SparkFunctionBaseTest {
  protected:
-  template <typename T, typename TExpected = T>
-  void testExpr(
-      const VectorPtr& expected,
-      const std::string& expression,
-      const std::vector<VectorPtr>& input) {
-    auto result =
-        evaluate<SimpleVector<TExpected>>(expression, makeRowVector(input));
-    assertEqualVectors(expected, result);
-  }
-
   template <typename T>
-  void testIntNullable() {
-    auto arrayVector = makeNullableArrayVector<T>(
-        {{-1, 0, 1, 2, 3, 4},
-         {4, 3, 2, 1, std::nullopt, 0, -1, -2},
-         {-5, -4, -3, -2, -1},
-         {101, 102, 103, 104, std::nullopt},
-         {std::nullopt, -1, -2, std::nullopt, -3, -4},
-         {},
-         {std::nullopt, std::nullopt}});
-    auto expected = makeNullableFlatVector<T>(
-        {-1, -2, -5, 101, -4, std::nullopt, std::nullopt});
-    testExpr<T>(expected, "array_min(C0)", {arrayVector});
-  }
-
-  template <typename T>
-  void testInt() {
-    auto arrayVector = makeArrayVector<T>(
-        {{-1, 0, 1, 2, 3, 4},
-         {4, 3, 2, 1, 0, -1, -2},
-         {-5, -4, -3, -2, -1},
-         {101, 102, 103, 104, 105},
-         {}});
-    auto expected = makeNullableFlatVector<T>({-1, -2, -5, 101, std::nullopt});
-    testExpr<T>(expected, "array_min(C0)", {arrayVector});
-  }
-
-  void testDateNullable() {
-    auto D = [](const std::string& dateStr) { return DATE()->toDays(dateStr); };
-    auto arrayVector = makeNullableArrayVector<int32_t>(
-        {{D("1970-01-01"), D("2023-08-23")},
-         {},
-         {D("1970-01-01"), std::nullopt}},
-        ARRAY(DATE()));
-    auto expected = makeNullableFlatVector<int32_t>(
-        {D("1970-01-01"), std::nullopt, D("1970-01-01")}, DATE());
-    testExpr<int32_t>(expected, "array_min(C0)", {arrayVector});
-  }
-
-  void testDate() {
-    auto D = [](const std::string& dateStr) { return DATE()->toDays(dateStr); };
-    auto arrayVector = makeArrayVector<int32_t>(
-        {{D("1970-01-01"), D("2023-08-23")}, {}}, DATE());
-    auto expected = makeNullableFlatVector<int32_t>(
-        {D("1970-01-01"), std::nullopt}, DATE());
-    testExpr<int32_t>(expected, "array_min(C0)", {arrayVector});
-  }
-
-  void testInLineVarcharNullable() {
-    using S = StringView;
-
-    auto arrayVector = makeNullableArrayVector<S>({
-        {S("red"), S("blue")},
-        {std::nullopt, S("blue"), S("yellow"), S("orange")},
-        {},
-        {std::nullopt, std::nullopt},
-        {S("red"), S("purple"), S("green")},
-    });
-    auto expected = makeNullableFlatVector<S>(
-        {S("blue"), S("blue"), std::nullopt, std::nullopt, S("green")});
-    testExpr<S>(expected, "array_min(C0)", {arrayVector});
-  }
-
-  void testVarcharNullable() {
-    using S = StringView;
-    // use > 12 length string to avoid inlining
-    auto arrayVector = makeNullableArrayVector<S>({
-        {S("red shiny car ahead"), S("blue clear sky above")},
-        {std::nullopt,
-         S("blue clear sky above"),
-         S("yellow rose flowers"),
-         S("orange beautiful sunset")},
-        {},
-        {std::nullopt, std::nullopt},
-        {S("red shiny car ahead"),
-         S("purple is an elegant color"),
-         S("green plants make us happy")},
-    });
-    auto expected = makeNullableFlatVector<S>(
-        {S("blue clear sky above"),
-         S("blue clear sky above"),
-         std::nullopt,
-         std::nullopt,
-         S("green plants make us happy")});
-    testExpr<S>(expected, "array_min(C0)", {arrayVector});
-  }
-
-  void testBoolNullable() {
-    auto arrayVector = makeNullableArrayVector<bool>(
-        {{true, false},
-         {true},
-         {false},
-         {},
-         {std::nullopt, std::nullopt},
-         {true, false, true, std::nullopt},
-         {std::nullopt, true, false, true},
-         {false, false, false},
-         {true, true, true}});
-
-    auto expected = makeNullableFlatVector<bool>(
-        {false,
-         true,
-         false,
-         std::nullopt,
-         std::nullopt,
-         false,
-         false,
-         false,
-         true});
-    testExpr<bool>(expected, "array_min(C0)", {arrayVector});
-  }
-
-  void testBool() {
-    auto arrayVector = makeArrayVector<bool>(
-        {{true, false},
-         {true},
-         {false},
-         {},
-         {false, false, false},
-         {true, true, true}});
-
-    auto expected = makeNullableFlatVector<bool>(
-        {false, true, false, std::nullopt, false, true});
-    testExpr<bool>(expected, "array_min(C0)", {arrayVector});
-  }
-
-  template <typename T>
-  void testNumNullable() {
-    constexpr T kNaN = std::numeric_limits<T>::quiet_NaN();
-    auto arrayVector = makeNullableArrayVector<T>(
-        {{-1.0, 0.0, 1.0, kNaN, 2.0, 3.0, 4.0},
-         {4.0, 3.0, 2.0, 1.0, std::nullopt, 0.0, -1.0, -2.0, kNaN},
-         {-5.0, -4.0, -3.0, -2.0, -1.0},
-         {101.0, 102.0, 103.0, 104.0, std::nullopt},
-         {std::nullopt, -1.0, -2.0, std::nullopt, -3.0, -4.0},
-         {},
-         {std::nullopt, std::nullopt},
-         {kNaN, std::nullopt, -1.0, kNaN, -2.0},
-         {std::nullopt, kNaN}});
-    auto expected = makeNullableFlatVector<T>(
-        {-1.0,
-         -2.0,
-         -5.0,
-         101.0,
-         -4.0,
-         std::nullopt,
-         std::nullopt,
-         -2.0,
-         kNaN});
-    testExpr<T>(expected, "array_min(C0)", {arrayVector});
+  std::optional<T> arrayMin(const std::vector<std::optional<T>>& input) {
+    std::vector<std::vector<std::optional<T>>> vec = {input};
+    auto row = makeRowVector({makeNullableArrayVector(vec)});
+    return evaluateOnce<T>("array_min(C0)", row);
   }
 };
 
-TEST_F(ArrayMinTest, intArrays) {
-  testIntNullable<int8_t>();
-  testIntNullable<int16_t>();
-  testIntNullable<int32_t>();
-  testIntNullable<int64_t>();
-  testInt<int8_t>();
-  testInt<int16_t>();
-  testInt<int32_t>();
-  testInt<int64_t>();
+TEST_F(ArrayMinTest, boolean) {
+  EXPECT_EQ(arrayMin<bool>({true, false}), false);
+  EXPECT_EQ(arrayMin<bool>({true}), true);
+  EXPECT_EQ(arrayMin<bool>({false}), false);
+  EXPECT_EQ(arrayMin<bool>({}), std::nullopt);
+  EXPECT_EQ(arrayMin<bool>({true, false, true, std::nullopt}), false);
+  EXPECT_EQ(arrayMin<bool>({std::nullopt, true, false, true}), false);
+  EXPECT_EQ(arrayMin<bool>({false, false, false}), false);
+  EXPECT_EQ(arrayMin<bool>({true, true, true}), true);
+} // namespace
+
+TEST_F(ArrayMinTest, varchar) {
+  EXPECT_EQ(arrayMin<StringView>({"red"_sv, "blue"_sv}), "blue"_sv);
+  EXPECT_EQ(
+      arrayMin<StringView>({std::nullopt, "blue"_sv, "yellow"_sv, "orange"_sv}),
+      "blue"_sv);
+  EXPECT_EQ(arrayMin<StringView>({}), std::nullopt);
+  EXPECT_EQ(arrayMin<StringView>({std::nullopt}), std::nullopt);
 }
 
-TEST_F(ArrayMinTest, varcharArrays) {
-  testInLineVarcharNullable();
-  testVarcharNullable();
+// Test non-inlined (> 12 length) nullable strings.
+TEST_F(ArrayMinTest, longVarchar) {
+  EXPECT_EQ(
+      arrayMin<StringView>(
+          {"red shiny car ahead"_sv, "blue clear sky above"_sv}),
+      "blue clear sky above"_sv);
+  EXPECT_EQ(
+      arrayMin<StringView>(
+          {std::nullopt,
+           "blue clear sky above"_sv,
+           "yellow rose flowers"_sv,
+           "orange beautiful sunset"_sv}),
+      "blue clear sky above"_sv);
+  EXPECT_EQ(arrayMin<StringView>({}), std::nullopt);
+  EXPECT_EQ(
+      arrayMin<StringView>(
+          {"red shiny car ahead"_sv,
+           "purple is an elegant color"_sv,
+           "green plants make us happy"_sv}),
+      "green plants make us happy"_sv);
 }
 
-TEST_F(ArrayMinTest, boolArrays) {
-  testBoolNullable();
-  testBool();
+TEST_F(ArrayMinTest, date) {
+  auto D = [](const std::string& dateStr) { return DATE()->toDays(dateStr); };
+  EXPECT_EQ(
+      arrayMin<int32_t>({D("1970-01-01"), D("2023-08-23")}), D("1970-01-01"));
+  EXPECT_EQ(arrayMin<int32_t>({}), std::nullopt);
+  EXPECT_EQ(
+      arrayMin<int32_t>({D("1970-01-01"), std::nullopt}), D("1970-01-01"));
 }
 
-TEST_F(ArrayMinTest, numArrays) {
-  testNumNullable<float>();
-  testNumNullable<double>();
+TEST_F(ArrayMinTest, timestamp) {
+  auto T = [](int64_t micros) { return Timestamp::fromMicros(micros); };
+  EXPECT_EQ(arrayMin<Timestamp>({T(0), T(1)}), T(0));
+  EXPECT_EQ(
+      arrayMin<Timestamp>({T(0), T(1), Timestamp::max(), Timestamp::min()}),
+      Timestamp::min());
+  EXPECT_EQ(arrayMin<Timestamp>({}), std::nullopt);
+  EXPECT_EQ(arrayMin<Timestamp>({T(0), std::nullopt}), T(0));
 }
 
-TEST_F(ArrayMinTest, dateArrays) {
-  testDate();
-  testDateNullable();
+template <typename Type>
+class ArrayMinIntegralTest : public ArrayMinTest {
+ public:
+  using T = typename Type::NativeType::NativeType;
+
+  void runTest() {
+    EXPECT_EQ(
+        arrayMin<T>(
+            {std::numeric_limits<T>::min(),
+             0,
+             1,
+             2,
+             3,
+             std::numeric_limits<T>::max()}),
+        std::numeric_limits<T>::min());
+    EXPECT_EQ(
+        arrayMin<T>(
+            {std::numeric_limits<T>::max(),
+             3,
+             2,
+             1,
+             0,
+             -1,
+             std::numeric_limits<T>::min()}),
+        std::numeric_limits<T>::min());
+    EXPECT_EQ(
+        arrayMin<T>(
+            {101, 102, 103, std::numeric_limits<T>::max(), std::nullopt}),
+        101);
+    EXPECT_EQ(
+        arrayMin<T>({std::nullopt, -1, -2, -3, std::numeric_limits<T>::min()}),
+        std::numeric_limits<T>::min());
+    EXPECT_EQ(arrayMin<T>({}), std::nullopt);
+    EXPECT_EQ(arrayMin<T>({std::nullopt}), std::nullopt);
+  }
+};
+
+TYPED_TEST_SUITE(ArrayMinIntegralTest, FunctionBaseTest::IntegralTypes);
+
+TYPED_TEST(ArrayMinIntegralTest, basic) {
+  this->runTest();
 }
+
+template <typename Type>
+class ArrayMinFloatingPointTest : public ArrayMinTest {
+ public:
+  using T = typename Type::NativeType::NativeType;
+  static constexpr T kMin = std::numeric_limits<T>::lowest();
+  static constexpr T kMax = std::numeric_limits<T>::max();
+  static constexpr T kNaN = std::numeric_limits<T>::quiet_NaN();
+
+  void runTest() {
+    EXPECT_EQ(arrayMin<T>({0.0000, 0.00001}), 0.0000);
+    EXPECT_EQ(arrayMin<T>({std::nullopt, 1.1, 1.11, -2.2, -1.0, kMin}), kMin);
+    EXPECT_EQ(arrayMin<T>({}), std::nullopt);
+    EXPECT_EQ(arrayMin<T>({kMin, 1.1, 1.22222, 1.33, std::nullopt}), kMin);
+    EXPECT_EQ(arrayMin<T>({-0.00001, -0.0002, 0.0001}), -0.0002);
+    EXPECT_EQ(arrayMin<T>({-0.0001, -0.0002, kMax, kNaN}), -0.0002);
+  }
+};
+
+TYPED_TEST_SUITE(
+    ArrayMinFloatingPointTest,
+    FunctionBaseTest::FloatingPointTypes);
+
+TYPED_TEST(ArrayMinFloatingPointTest, basic) {
+  this->runTest();
+}
+
 } // namespace
 } // namespace facebook::velox::functions::sparksql::test

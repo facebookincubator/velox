@@ -20,6 +20,7 @@
 #include "velox/functions/Udf.h"
 
 namespace facebook::velox::functions::sparksql {
+
 template <typename TExecCtx, bool isMax>
 struct ArrayMinMaxFunction {
   VELOX_DEFINE_FUNCTION_TYPES(TExecCtx);
@@ -84,16 +85,15 @@ struct ArrayMinMaxFunction {
 
     // Try to find the first non-null element.
     auto it = array.begin();
-    // NULL elements are skipped.
     while (it != array.end() && !it->has_value()) {
       ++it;
     }
-    // If array contains only NULL elements, NULL is returned.
+    // If array contains only NULL elements, return NULL.
     if (it == array.end()) {
       return false;
     }
 
-    // Now we got the first non-null element.
+    // Now 'it' point to the first non-null element.
     auto currentValue = it->value();
     ++it;
     while (it != array.end()) {

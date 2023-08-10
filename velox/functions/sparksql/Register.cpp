@@ -23,7 +23,7 @@
 #include "velox/functions/prestosql/JsonFunctions.h"
 #include "velox/functions/prestosql/Rand.h"
 #include "velox/functions/prestosql/StringFunctions.h"
-#include "velox/functions/sparksql/ArrayFunction.h"
+#include "velox/functions/sparksql/ArrayMinMaxFunction.h"
 #include "velox/functions/sparksql/ArraySort.h"
 #include "velox/functions/sparksql/Bitwise.h"
 #include "velox/functions/sparksql/CompareFunctionsNullSafe.h"
@@ -83,7 +83,7 @@ inline void registerArrayMinMaxFunctions(const std::string& prefix) {
   registerFunction<ArrayMaxFunction, T, Array<T>>({prefix + "array_max"});
 }
 
-inline void registerAllArrayMinMaxFunctions(const std::string& prefix) {
+inline void registerArrayMinMaxFunctions(const std::string& prefix) {
   registerArrayMinMaxFunctions<int8_t>(prefix);
   registerArrayMinMaxFunctions<int16_t>(prefix);
   registerArrayMinMaxFunctions<int32_t>(prefix);
@@ -263,7 +263,7 @@ void registerFunctions(const std::string& prefix) {
   registerFunction<BloomFilterMightContainFunction, bool, Varbinary, int64_t>(
       {prefix + "might_contain"});
 
-  registerAllArrayMinMaxFunctions(prefix);
+  registerArrayMinMaxFunctions(prefix);
 }
 
 } // namespace sparksql
