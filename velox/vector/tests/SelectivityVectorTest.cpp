@@ -280,6 +280,25 @@ TEST(SelectivityVectorTest, operatorEquals_dataNotEqual) {
       false /*expectEqual*/, [](auto& vector) { vector.setValid(10, false); });
 }
 
+TEST(SelectivityVectorTest, batchEmptyIterator) {
+  SelectivityVector vector(2011);
+  vector.clearAll();
+  SelectivityIterator empty(vector);
+  vector_size_t row = 0;
+  EXPECT_FALSE(empty.next(row));
+  int32_t count = 0;
+  vector.applyToSelected(
+      [&count](vector_size_t /* unused */) {
+        ++count;
+        return true;
+      },
+      [&count](vector_size_t begin, vector_size_t end) {
+        count += end - begin;
+        return true;
+      });
+  EXPECT_EQ(count, 0);
+}
+
 TEST(SelectivityVectorTest, emptyIterator) {
   SelectivityVector vector(2011);
   vector.clearAll();
@@ -292,6 +311,85 @@ TEST(SelectivityVectorTest, emptyIterator) {
     return true;
   });
   EXPECT_EQ(count, 0);
+}
+
+TEST(SelectivityVectorTest, batchIterator) {
+  SelectivityVector vector(2011);
+  vector.clearAll();
+  std::vector<int32_t> selected;
+  vector_size_t row = 0;
+  for (int32_t i = 0; i < 1000; ++i) {
+    selected.push_back(row);
+    vector.setValid(row, true);
+    row += (i & 7) | 1;
+    if (row > 1500) {
+      row += 64;
+    }
+    if (row > vector.size()) {
+      break;
+    }
+  }
+  vector.updateBounds();
+  int32_t count = 0;
+  SelectivityIterator iter(vector);
+  while (iter.next(row)) {
+    ASSERT_EQ(row, selected[count]);
+    count++;
+  }
+  ASSERT_EQ(count, selected.size());
+  count = 0;
+  vector.applyToSelected(
+      [selected, &count](int32_t row) {
+        count++;
+        return true;
+      },
+      [selected, &count](int32_t begin, int32_t end) {
+        count += end - begin;
+        return true;
+      });
+  ASSERT_EQ(count, selected.size());
+
+  std::vector<uint64_t> contiguous(10);
+  bits::fillBits(&contiguous[0], 67, 227, true);
+  // Set some trailing bits that are after the range.
+  bits::fillBits(&contiguous[0], 240, 540, true);
+  SelectivityVector fromBits;
+  fromBits.setFromBits(&contiguous[0], 64 * contiguous.size());
+  fromBits.resize(227);
+  EXPECT_EQ(fromBits.begin(), 67);
+  EXPECT_EQ(fromBits.end(), 227);
+  EXPECT_FALSE(fromBits.isAllSelected());
+  count = 0;
+  fromBits.applyToSelected(
+      [&count](int32_t row) {
+        count++;
+        return true;
+      },
+      [&count](int32_t begin, int32_t end) {
+        count += end - begin;
+        return true;
+      });
+  EXPECT_EQ(count, bits::countBits(&contiguous[0], 0, 240));
+  EXPECT_FALSE(fromBits.isAllSelected());
+  count = 0;
+  fromBits.applyToSelected(
+      [&count](int32_t row) {
+        EXPECT_EQ(row, count + 67);
+        count++;
+        return true;
+      },
+      [&count](int32_t begin, int32_t end) {
+        count += end - begin;
+        return true;
+      });
+  EXPECT_EQ(count, bits::countBits(&contiguous[0], 0, 240));
+  count = 0;
+  SelectivityIterator iter2(fromBits);
+  while (iter2.next(row)) {
+    EXPECT_EQ(row, count + 67);
+    count++;
+  }
+  EXPECT_EQ(count, bits::countBits(&contiguous[0], 0, 240));
 }
 
 TEST(SelectivityVectorTest, iterator) {

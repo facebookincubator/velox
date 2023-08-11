@@ -90,3 +90,45 @@ TEST_F(BloomFilterTest, merge) {
 
   EXPECT_EQ(bloom.serializedSize(), merge.serializedSize());
 }
+
+TEST_F(BloomFilterTest, SIMDMayContains) {
+  constexpr int32_t kSize = 1024;
+  BloomFilter bloom;
+  bloom.reset(kSize);
+  for (auto i = 0; i < kSize; ++i) {
+    bloom.insert(folly::hasher<int32_t>()(i));
+  }
+  int32_t numFalsePositives = 0;
+  uint64_t hashCodes[64];
+  bool results[64];
+  bool expectedResults[64];
+  for (auto i = 0; i < kSize / 64; i += 64) {
+    // i
+    for (auto j = 0; j < 64; ++j) {
+      hashCodes[j] = folly::hasher<int32_t>()(j + i);
+      expectedResults[j] = bloom.mayContain(hashCodes[j]);
+    }
+    bloom.mayContainForBatch(hashCodes, results, 64);
+    for (auto j = 0; j < 64; ++j) {
+      EXPECT_EQ(expectedResults[j], results[j]);
+    }
+    // i + kSize
+    for (auto j = 0; j < 64; ++j) {
+      hashCodes[j] = folly::hasher<int32_t>()(j + i + kSize);
+      expectedResults[j] = bloom.mayContain(hashCodes[j]);
+    }
+    bloom.mayContainForBatch(hashCodes, results, 64);
+    for (auto j = 0; j < 64; ++j) {
+      EXPECT_EQ(expectedResults[j], results[j]);
+    }
+    // (i + kSize) * 123451
+    for (auto j = 0; j < 64; ++j) {
+      hashCodes[j] = folly::hasher<int32_t>()((j + i + kSize) * 123451);
+      expectedResults[j] = bloom.mayContain(hashCodes[j]);
+    }
+    bloom.mayContainForBatch(hashCodes, results, 64);
+    for (auto j = 0; j < 64; ++j) {
+      EXPECT_EQ(expectedResults[j], results[j]);
+    }
+  }
+}

@@ -331,6 +331,9 @@ class SelectivityVector {
   template <typename Callable>
   void applyToSelected(Callable func) const;
 
+  template <typename Callable, typename CallableBatch64>
+  void applyToSelected(Callable func, CallableBatch64 batchFunc) const;
+
   /// Invokes a function on each selected row sequentially in order starting
   /// from the lowest row number until a function returns 'false' or all
   /// selected rows have been processed. The function must take a single "row"
@@ -430,6 +433,27 @@ inline void SelectivityVector::applyToSelected(Callable func) const {
     }
   } else {
     bits::forEachSetBit(bits_.data(), begin_, end_, func);
+  }
+}
+
+template <typename Callable, typename CallableBatch64>
+inline void SelectivityVector::applyToSelected(
+    Callable func,
+    CallableBatch64 batchFunc) const {
+  if (isAllSelected()) {
+    vector_size_t row = begin_;
+    while (end_ - row > 64) {
+      batchFunc(row, row + 64);
+      row += 64;
+    }
+
+    if (end_ - row > 0) {
+      for (; row < end_; ++row) {
+        func(row);
+      }
+    }
+  } else {
+    bits::forEachSetBit(bits_.data(), begin_, end_, func, batchFunc);
   }
 }
 

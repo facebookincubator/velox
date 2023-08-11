@@ -431,11 +431,58 @@ void forEachBit(
       });
 }
 
+template <typename Callable, typename CallableBatch64>
+void forEachBit(
+    const uint64_t* bits,
+    int32_t begin,
+    int32_t end,
+    bool isSet,
+    Callable func,
+    CallableBatch64 batchFunc) {
+  static constexpr uint64_t kAllSet = -1ULL;
+  forEachWord(
+      begin,
+      end,
+      [isSet, bits, func](int32_t idx, uint64_t mask) {
+        auto word = (isSet ? bits[idx] : ~bits[idx]) & mask;
+        if (!word) {
+          return;
+        }
+        while (word) {
+          func(idx * 64 + __builtin_ctzll(word));
+          word &= word - 1;
+        }
+      },
+      [isSet, bits, func, batchFunc](int32_t idx) {
+        auto word = (isSet ? bits[idx] : ~bits[idx]);
+        if (kAllSet == word) {
+          const size_t start = idx * 64;
+          const size_t end = (idx + 1) * 64;
+          batchFunc(start, end);
+        } else {
+          while (word) {
+            func(idx * 64 + __builtin_ctzll(word));
+            word &= word - 1;
+          }
+        }
+      });
+}
+
 /// Invokes a function for each set bit.
 template <typename Callable>
 inline void
 forEachSetBit(const uint64_t* bits, int32_t begin, int32_t end, Callable func) {
   forEachBit(bits, begin, end, true, func);
+}
+
+template <typename Callable, typename CallableBatch64>
+inline void forEachSetBit(
+    const uint64_t* bits,
+    int32_t begin,
+    int32_t end,
+    Callable func,
+    CallableBatch64 batchFunc) {
+  forEachBit(bits, begin, end, true, func, batchFunc);
 }
 
 /// Invokes a function for each unset bit.

@@ -16,6 +16,7 @@
 
 #pragma once
 
+#include <xsimd/xsimd.hpp>
 #include <cstdint>
 #include <vector>
 
@@ -59,6 +60,11 @@ class BloomFilter {
   // folly::hasher<InputType>()(value).
   bool mayContain(uint64_t value) const {
     return test(bits_.data(), bits_.size(), value);
+  }
+
+  void mayContainForBatch(const uint64_t* value, bool* result, int32_t size)
+      const {
+    testForBatch(bits_.data(), bits_.size(), value, result, size);
   }
 
   void merge(const char* serialized) {
@@ -127,6 +133,58 @@ class BloomFilter {
     auto mask = bloomMask(hashCode);
     auto index = bloomIndex(bloomSize, hashCode);
     return mask == (bloom[index] & mask);
+  }
+
+  inline static void testForBatch(
+      const uint64_t* FOLLY_NONNULL bloom,
+      int32_t bloomSize,
+      const uint64_t* hashCode,
+      bool* result,
+      int32_t size) {
+    VELOX_DCHECK_EQ(size, 64);
+#if XSIMD_WITH_AVX2
+    int64_t buffer[4];
+    int j = 0;
+    __m256i const1 = _mm256_set1_epi64x(1);
+    __m256i const63 = _mm256_set1_epi64x(63);
+    __m256i maskSize = _mm256_set1_epi64x(bloomSize - 1);
+    for (int i = 0; i < 16; ++i) {
+      __m256i hashVec = _mm256_loadu_si256((__m256i*)hashCode);
+      __m256i mask1 =
+          _mm256_sllv_epi64(const1, _mm256_and_si256(hashVec, const63));
+      __m256i mask2 = _mm256_or_si256(
+          mask1,
+          _mm256_sllv_epi64(
+              const1,
+              _mm256_and_si256(_mm256_srli_epi64(hashVec, 6), const63)));
+      __m256i mask3 = _mm256_or_si256(
+          mask2,
+          _mm256_sllv_epi64(
+              const1,
+              _mm256_and_si256(_mm256_srli_epi64(hashVec, 12), const63)));
+      __m256i mask = _mm256_or_si256(
+          mask3,
+          _mm256_sllv_epi64(
+              const1,
+              _mm256_and_si256(_mm256_srli_epi64(hashVec, 18), const63)));
+      __m256i index =
+          _mm256_and_si256(_mm256_srli_epi64(hashVec, 24), maskSize);
+      __m256i content = _mm256_i64gather_epi64(
+          reinterpret_cast<const long long*>(bloom), index, 8);
+      __m256i res = _mm256_cmpeq_epi64(_mm256_and_si256(content, mask), mask);
+      _mm256_storeu_si256((__m256i*)buffer, res);
+      result[j] = buffer[0] != 0;
+      result[j + 1] = buffer[1] != 0;
+      result[j + 2] = buffer[2] != 0;
+      result[j + 3] = buffer[3] != 0;
+      hashCode += 4;
+      j += 4;
+    }
+#else
+    for (int i = 0; i < 64; ++i) {
+      result[i] = test(bloom, bloomSize, hashCode[i]);
+    }
+#endif // XSIMD_WITH_AVX2
   }
 
   const int8_t kBloomFilterV1 = 1;
