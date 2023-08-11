@@ -32,6 +32,27 @@
 
 namespace facebook::velox::exec {
 
+namespace {
+std::string castFromDateErrorMessage(
+    const StringView& inputString,
+    bool isStandardCast) {
+  if (isStandardCast) {
+    return fmt::format(
+        "Unable to parse date value: \"{}\"."
+        "Valid date string pattern is (YYYY-MM-DD), "
+        "and can be prefixed with [+-]",
+        inputString);
+  } else {
+    return fmt::format(
+        "Unable to parse date value: \"{}\"."
+        "Valid date string patterns include "
+        "(YYYY, YYYY-MM, YYYY-MM-DD), and any pattern prefixed with \"[+-]\" "
+        "or suffixed with trailing spaces or trailing 'T' with any characters.",
+        inputString);
+  }
+}
+} // namespace
+
 VectorPtr CastExpr::castFromDate(
     const SelectivityVector& rows,
     const BaseVector& input,
@@ -103,10 +124,22 @@ VectorPtr CastExpr::castToDate(
   switch (fromType->kind()) {
     case TypeKind::VARCHAR: {
       auto* inputVector = input.as<SimpleVector<StringView>>();
-      applyToSelectedNoThrowLocal(context, rows, castResult, [&](int row) {
+      const auto& queryConfig = context.execCtx()->queryCtx()->queryConfig();
+      auto isStandardCast = queryConfig.isIso8601();
+      context.applyToSelectedNoThrow(rows, [&](vector_size_t row) {
         try {
           auto inputString = inputVector->valueAt(row);
-          resultFlatVector->set(row, DATE()->toDays(inputString));
+          auto date = util::castFromDateString(inputString, isStandardCast);
+          if (date.has_value()) {
+            resultFlatVector->set(row, *date);
+          } else {
+            if (setNullInResultAtError()) {
+              resultFlatVector->setNull(row, true);
+            } else {
+              VELOX_USER_FAIL(
+                  castFromDateErrorMessage(inputString, isStandardCast));
+            }
+          }
         } catch (const VeloxException& ue) {
           if (!ue.isUserError()) {
             throw;

@@ -85,8 +85,8 @@ inline int64_t fromDateString(const StringView& str) {
 }
 
 /// Cast string to date.
-/// When isNonStandardCast = false, only support "[+-]YYYY-MM-DD" format.
-/// When isNonStandardCast = true, supported date formats include:
+/// When isStandardCast = true, only support "[+-]YYYY-MM-DD" format (ISO 8601).
+/// When isStandardCast = false, supported date formats include:
 ///
 /// `[+-]YYYY*`
 /// `[+-]YYYY*-[M]M`
@@ -96,12 +96,13 @@ inline int64_t fromDateString(const StringView& str) {
 /// `[+-]YYYY*-[M]M-[D]DT*`
 ///
 /// Throws VeloxUserError if the format or date is invalid.
-int32_t castFromDateString(const char* buf, size_t len, bool isNonStandardCast);
+std::optional<int32_t>
+castFromDateString(const char* buf, size_t len, bool isStandardCast);
 
-inline int32_t castFromDateString(
+inline std::optional<int32_t> castFromDateString(
     const StringView& str,
-    bool isNonStandardCast) {
-  return castFromDateString(str.data(), str.size(), isNonStandardCast);
+    bool isStandardCast) {
+  return castFromDateString(str.data(), str.size(), isStandardCast);
 }
 
 // Extracts the day of the week from the number of days since epoch

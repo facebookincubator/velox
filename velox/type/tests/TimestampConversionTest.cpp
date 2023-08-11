@@ -110,42 +110,44 @@ TEST(DateTimeUtilTest, fromDateStrInvalid) {
 }
 
 TEST(DateTimeUtilTest, castFromDateString) {
-  for (bool nonStandard : {true, false}) {
-    EXPECT_EQ(0, castFromDateString("1970-01-01", nonStandard));
-    EXPECT_EQ(3789742, castFromDateString("12345-12-18", nonStandard));
+  for (bool standard : {true, false}) {
+    EXPECT_EQ(0, castFromDateString("1970-01-01", standard));
+    EXPECT_EQ(0, castFromDateString("1970-01-01 ", standard));
+    EXPECT_EQ(3789742, castFromDateString("12345-12-18", standard));
 
-    EXPECT_EQ(1, castFromDateString("+1970-1-2", nonStandard));
-    EXPECT_EQ(1, castFromDateString("+1970-01-2", nonStandard));
-    EXPECT_EQ(1, castFromDateString("+1970-1-02", nonStandard));
+    EXPECT_EQ(1, castFromDateString("+1970-1-2", standard));
+    EXPECT_EQ(1, castFromDateString("+1970-01-2", standard));
+    EXPECT_EQ(1, castFromDateString("+1970-1-02", standard));
 
-    EXPECT_EQ(1, castFromDateString("+1970-01-02", nonStandard));
-    EXPECT_EQ(-719893, castFromDateString("-1-1-1", nonStandard));
+    EXPECT_EQ(1, castFromDateString("+1970-01-02", standard));
+    EXPECT_EQ(-719893, castFromDateString("-1-1-1", standard));
   }
 
-  EXPECT_EQ(3789391, castFromDateString("12345", true));
-  EXPECT_EQ(16495, castFromDateString("2015-03", true));
-  EXPECT_EQ(16512, castFromDateString("2015-03-18 ", true));
-  EXPECT_EQ(16512, castFromDateString("2015-03-18 123412", true));
-  EXPECT_EQ(16512, castFromDateString("2015-03-18T", true));
-  EXPECT_EQ(16512, castFromDateString("2015-03-18T123412", true));
+  EXPECT_EQ(3789391, castFromDateString("12345", false));
+  EXPECT_EQ(16495, castFromDateString("2015-03", false));
+  EXPECT_EQ(16512, castFromDateString("2015-03-18 ", false));
+  EXPECT_EQ(16512, castFromDateString("2015-03-18 123412", false));
+  EXPECT_EQ(16512, castFromDateString("2015-03-18T", false));
+  EXPECT_EQ(16512, castFromDateString("2015-03-18T123412", false));
+  EXPECT_EQ(16512, castFromDateString("2015-03-18 (BC)", false));
 }
 
 TEST(DateTimeUtilTest, castFromDateStringInvalid) {
-  for (bool nonStandard : {true, false}) {
-    EXPECT_THROW(
-        castFromDateString("2015-03-18X", nonStandard), VeloxUserError);
-    EXPECT_THROW(castFromDateString("2015/03/18", nonStandard), VeloxUserError);
-    EXPECT_THROW(castFromDateString("2015.03.18", nonStandard), VeloxUserError);
-    EXPECT_THROW(castFromDateString("20150318", nonStandard), VeloxUserError);
-    EXPECT_THROW(castFromDateString("2015-031-8", nonStandard), VeloxUserError);
+  for (bool standard : {true, false}) {
+    EXPECT_EQ(std::nullopt, castFromDateString("2015-03-18X", standard));
+    EXPECT_EQ(std::nullopt, castFromDateString("2015/03/18", standard));
+    EXPECT_EQ(std::nullopt, castFromDateString("2015.03.18", standard));
+    EXPECT_EQ(std::nullopt, castFromDateString("20150318", standard));
+    EXPECT_EQ(std::nullopt, castFromDateString("2015-031-8", standard));
   }
 
-  EXPECT_THROW(castFromDateString("12345", false), VeloxUserError);
-  EXPECT_THROW(castFromDateString("2015-03", false), VeloxUserError);
-  EXPECT_THROW(castFromDateString("2015-03-18 ", false), VeloxUserError);
-  EXPECT_THROW(castFromDateString("2015-03-18 123412", false), VeloxUserError);
-  EXPECT_THROW(castFromDateString("2015-03-18T", false), VeloxUserError);
-  EXPECT_THROW(castFromDateString("2015-03-18T123412", false), VeloxUserError);
+  EXPECT_EQ(std::nullopt, castFromDateString("12345", true));
+  EXPECT_EQ(std::nullopt, castFromDateString("2015-03", true));
+  EXPECT_EQ(std::nullopt, castFromDateString("2015-03-18 ", true));
+  EXPECT_EQ(std::nullopt, castFromDateString("2015-03-18 123412", true));
+  EXPECT_EQ(std::nullopt, castFromDateString("2015-03-18T", true));
+  EXPECT_EQ(std::nullopt, castFromDateString("2015-03-18T123412", true));
+  EXPECT_EQ(std::nullopt, castFromDateString("2015-03-18 (BC)", true));
 }
 
 TEST(DateTimeUtilTest, fromTimeString) {

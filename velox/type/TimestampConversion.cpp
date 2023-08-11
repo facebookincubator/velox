@@ -270,6 +270,15 @@ bool tryParseDateString(
 
   // In standard-cast mode, no more trailing characters.
   if (mode == ParseMode::kStandardCast) {
+    // Skip trailing spaces.
+    while (pos < len && characterIsSpace(buf[pos])) {
+      pos++;
+    }
+    // Check position. if end was not reached, non-space chars remaining.
+    if (pos < len) {
+      return false;
+    }
+
     daysSinceEpoch = daysSinceEpochFromDate(year, month, day);
 
     if (pos == len) {
@@ -586,28 +595,15 @@ int64_t fromDateString(const char* str, size_t len) {
   return daysSinceEpoch;
 }
 
-int32_t
-castFromDateString(const char* str, size_t len, bool isNonStandardCast) {
+std::optional<int32_t>
+castFromDateString(const char* str, size_t len, bool isStandardCast) {
   int64_t daysSinceEpoch;
   size_t pos = 0;
 
-  auto mode = isNonStandardCast ? ParseMode::kNonStandardCast
-                                : ParseMode::kStandardCast;
+  auto mode =
+      isStandardCast ? ParseMode::kStandardCast : ParseMode::kNonStandardCast;
   if (!tryParseDateString(str, len, pos, daysSinceEpoch, mode)) {
-    if (isNonStandardCast) {
-      VELOX_USER_FAIL(
-          "Unable to parse date value: \"{}\"."
-          "Valid date string patterns include "
-          "(YYYY, YYYY-MM, YYYY-MM-DD), and any pattern prefixed with [+-]",
-          std::string(str, len));
-
-    } else {
-      VELOX_USER_FAIL(
-          "Unable to parse date value: \"{}\"."
-          "Valid date string pattern is (YYYY-MM-DD), "
-          "and can be prefixed with [+-]",
-          std::string(str, len));
-    }
+    return std::nullopt;
   }
   return daysSinceEpoch;
 }
