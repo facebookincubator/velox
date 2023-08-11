@@ -280,7 +280,7 @@ VectorPtr CastExpr::applyDecimalToBooleanCast(
     const SelectivityVector& rows,
     const BaseVector& input,
     exec::EvalCtx& context,
-    const TypePtr& fromType,
+    const TypePtr& /*fromType*/,
     const TypePtr& toType) {
   VectorPtr result;
   context.ensureWritable(rows, toType, result);
