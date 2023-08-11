@@ -263,22 +263,28 @@ bool testStringFilter(
     return true;
   }
 
-  if (stringStats->getMinimum().has_value() &&
-      stringStats->getMaximum().has_value()) {
-    const auto& min = stringStats->getMinimum().value();
-    const auto& max = stringStats->getMaximum().value();
+ auto min_optional = stringStats->getMinimum();
+ auto max_optional = stringStats->getMaximum();
+
+  if (min_optional.has_value() && max_optional.has_value()) {
+    const auto& min = min_optional.value();
+    const auto& max = max_optional.value();
+    if(min > max) {
+      return true;
+    }    
+   
     return filter->testBytesRange(min, max, mayHaveNull);
   }
 
   // only min value
-  if (stringStats->getMinimum().has_value()) {
-    const auto& min = stringStats->getMinimum().value();
+  if (min_optional.has_value()) {
+    const auto& min = min_optional.value();
     return filter->testBytesRange(min, std::nullopt, mayHaveNull);
   }
 
   // only max value
-  if (stringStats->getMaximum().has_value()) {
-    const auto& max = stringStats->getMaximum().value();
+  if (max_optional.has_value()) {
+    const auto& max = max_optional.value();
     return filter->testBytesRange(std::nullopt, max, mayHaveNull);
   }
 
