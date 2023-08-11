@@ -15,6 +15,7 @@
  */
 #pragma once
 
+#include "velox/exec/PlanNodeStats.h"
 #include "velox/exec/tests/utils/OperatorTestBase.h"
 
 namespace facebook::velox::window::test {
@@ -124,6 +125,8 @@ class WindowTestBase : public exec::test::OperatorTestBase {
     core::PlanNodePtr planNode;
     std::string functionSql;
     std::string querySql;
+    core::PlanNodeId windowId;
+    core::PlanNodeId valuesId;
   };
 
   QueryInfo buildWindowQuery(

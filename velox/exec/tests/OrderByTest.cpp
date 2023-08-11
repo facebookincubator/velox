@@ -434,9 +434,14 @@ TEST_F(OrderByTest, spill) {
   }
   createDuckDbTable(batches);
 
+  core::PlanNodeId valuesId;
+  core::PlanNodeId orderById;
+
   auto plan = PlanBuilder()
                   .values(batches)
+                  .capturePlanNodeId(valuesId)
                   .orderBy({fmt::format("{} ASC NULLS LAST", "c0")}, false)
+                  .capturePlanNodeId(orderById)
                   .planNode();
   auto spillDirectory = exec::test::TempDirectoryPath::create();
   auto queryCtx = std::make_shared<core::QueryCtx>(executor_.get());
@@ -463,6 +468,10 @@ TEST_F(OrderByTest, spill) {
   EXPECT_LT(0, stats[0].operatorStats[1].spilledBytes);
   EXPECT_EQ(1, stats[0].operatorStats[1].spilledPartitions);
   EXPECT_EQ(2, stats[0].operatorStats[1].spilledFiles);
+  auto planNodeStats = toPlanStats(task->taskStats());
+  EXPECT_GT(
+      planNodeStats.at(orderById).cpuWallTiming.wallNanos,
+      planNodeStats.at(valuesId).cpuWallTiming.wallNanos * 2);
   OperatorTestBase::deleteTaskAndCheckSpillDirectory(task);
 }
 

@@ -34,10 +34,15 @@ WindowTestBase::QueryInfo WindowTestBase::buildWindowQuery(
     const std::string& frameClause) {
   std::string functionSql =
       fmt::format("{} over ({} {})", function, overClause, frameClause);
+
+  core::PlanNodeId windowId;
+  core::PlanNodeId valuesId;
   auto op = PlanBuilder()
                 .setParseOptions(options_)
                 .values(input)
+                .capturePlanNodeId(valuesId)
                 .window({functionSql})
+                .capturePlanNodeId(windowId)
                 .planNode();
 
   auto rowType = asRowType(input[0]->type());
@@ -45,7 +50,7 @@ WindowTestBase::QueryInfo WindowTestBase::buildWindowQuery(
   std::string querySql =
       fmt::format("SELECT {}, {} FROM tmp", columnsString, functionSql);
 
-  return {op, functionSql, querySql};
+  return {op, functionSql, querySql, windowId, valuesId};
 }
 
 RowVectorPtr WindowTestBase::makeSimpleVector(vector_size_t size) {
@@ -117,7 +122,11 @@ void WindowTestBase::testWindowFunction(
       auto queryInfo =
           buildWindowQuery(input, function, overClause, frameClause);
       SCOPED_TRACE(queryInfo.functionSql);
-      assertQuery(queryInfo.planNode, queryInfo.querySql);
+      auto task = assertQuery(queryInfo.planNode, queryInfo.querySql);
+      auto planNodeStats = toPlanStats(task->taskStats());
+      EXPECT_GT(
+          planNodeStats.at(queryInfo.windowId).cpuWallTiming.wallNanos,
+          planNodeStats.at(queryInfo.valuesId).cpuWallTiming.wallNanos * 2);
     }
   }
 }
