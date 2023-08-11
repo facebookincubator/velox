@@ -227,7 +227,7 @@ class CastExpr : public SpecialForm {
       const TypePtr& fromType,
       const TypePtr& toType);
 
-  template <typename FromNativeType, TypeKind ToKind>
+  template <typename FromNativeType>
   VectorPtr applyDecimalToBooleanCast(
       const SelectivityVector& rows,
       const BaseVector& input,
