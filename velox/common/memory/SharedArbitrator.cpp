@@ -23,7 +23,9 @@
 using facebook::velox::common::testutil::TestValue;
 
 namespace facebook::velox::memory {
+
 namespace {
+
 // Returns the max capacity to grow of memory 'pool'. The calculation is based
 // on a memory pool's max capacity and its current capacity.
 uint64_t maxGrowBytes(const MemoryPool& pool) {
@@ -34,7 +36,34 @@ uint64_t maxGrowBytes(const MemoryPool& pool) {
 uint64_t capacityAfterGrowth(const MemoryPool& pool, uint64_t targetBytes) {
   return pool.capacity() + targetBytes;
 }
+
+std::string memoryPoolAbortMessage(
+    MemoryPool* victim,
+    MemoryPool* requestor,
+    size_t growBytes) {
+  std::stringstream out;
+  VELOX_CHECK(victim->isRoot());
+  VELOX_CHECK(requestor->isRoot());
+  if (requestor == victim) {
+    out << "\nFailed memory pool '" << victim->name()
+        << "' aborted by itself when tried to grow " << growBytes
+        << " bytes.\n";
+  } else {
+    out << "\nFailed memory pool '" << victim->name()
+        << "' aborted when requestor '" << requestor->name()
+        << "' tried to grow " << growBytes << " bytes.\n";
+  }
+  out << "Memory usage of the failed memory pool:\n"
+      << victim->treeMemoryUsage();
+  return out.str();
+}
+
 } // namespace
+
+SharedArbitrator::SharedArbitrator(const MemoryArbitrator::Config& config)
+    : MemoryArbitrator(config), freeCapacity_(capacity_) {
+  VELOX_CHECK_EQ(kind_, config.kind);
+}
 
 std::string SharedArbitrator::Candidate::toString() const {
   return fmt::format(
@@ -98,11 +127,12 @@ SharedArbitrator::findCandidateWithLargestCapacity(
       maxCapacity = capacity;
       continue;
     }
-    if (maxCapacity > capacity) {
+    if (capacity < maxCapacity) {
       continue;
     }
-    if (capacity < maxCapacity) {
+    if (capacity > maxCapacity) {
       candidateIdx = i;
+      maxCapacity = capacity;
       continue;
     }
     // With the same amount of capacity, we prefer to kill the requestor itself
@@ -160,7 +190,7 @@ bool SharedArbitrator::growMemory(
   MemoryPool* requestor = pool->root();
   if (FOLLY_UNLIKELY(requestor->aborted())) {
     ++numFailures_;
-    VELOX_MEM_POOL_ABORTED(requestor);
+    VELOX_MEM_POOL_ABORTED("The requestor has already been aborted");
   }
 
   if (FOLLY_UNLIKELY(!ensureCapacity(requestor, targetBytes))) {
@@ -222,7 +252,7 @@ bool SharedArbitrator::ensureCapacity(
   // Check if the requestor has been aborted in reclaim operation above.
   if (requestor->aborted()) {
     ++numFailures_;
-    VELOX_MEM_POOL_ABORTED(requestor);
+    VELOX_MEM_POOL_ABORTED("The requestor pool has been aborted");
   }
   return checkCapacityGrowth(*requestor, targetBytes);
 }
@@ -242,7 +272,12 @@ bool SharedArbitrator::handleOOM(
   VELOX_MEM_LOG(WARNING) << "Aborting victim memory pool " << victim->name()
                          << " to free up memory for requestor "
                          << requestor->name();
-  abort(victim);
+  try {
+    VELOX_MEM_POOL_ABORTED(
+        memoryPoolAbortMessage(victim, requestor, targetBytes));
+  } catch (VeloxRuntimeError& e) {
+    abort(victim, std::current_exception());
+  }
   // Free up all the unused capacity from the aborted memory pool and gives back
   // to the arbitrator.
   incrementFreeCapacity(victim->shrink());
@@ -286,7 +321,7 @@ bool SharedArbitrator::arbitrateMemory(
       requestor, candidates, growTarget - freedBytes);
   if (requestor->aborted()) {
     ++numFailures_;
-    VELOX_MEM_POOL_ABORTED(requestor);
+    VELOX_MEM_POOL_ABORTED("The requestor pool has been aborted.");
   }
 
   VELOX_CHECK(!requestor->aborted());
@@ -369,7 +404,7 @@ uint64_t SharedArbitrator::reclaim(
   } catch (const std::exception& e) {
     VELOX_MEM_LOG(ERROR) << "Failed to reclaim from memory pool "
                          << pool->name() << ", aborting it!";
-    abort(pool);
+    abort(pool, std::current_exception());
     // Free up all the free capacity from the aborted pool as the associated
     // query has failed at this point.
     pool->shrink();
@@ -382,10 +417,12 @@ uint64_t SharedArbitrator::reclaim(
   return reclaimedbytes;
 }
 
-void SharedArbitrator::abort(MemoryPool* pool) {
+void SharedArbitrator::abort(
+    MemoryPool* pool,
+    const std::exception_ptr& error) {
   ++numAborted_;
   try {
-    pool->abort();
+    pool->abort(error);
   } catch (const std::exception& e) {
     VELOX_MEM_LOG(WARNING) << "Failed to abort memory pool "
                            << pool->toString();
@@ -451,7 +488,7 @@ std::string SharedArbitrator::toString() const {
 std::string SharedArbitrator::toStringLocked() const {
   return fmt::format(
       "ARBITRATOR[{}] CAPACITY {} {}",
-      kindString(kind_),
+      kind_,
       succinctBytes(capacity_),
       statsLocked().toString());
 }
@@ -522,5 +559,20 @@ void SharedArbitrator::finishArbitration() {
   if (resumePromise.valid()) {
     resumePromise.setValue();
   }
+}
+
+std::string SharedArbitrator::kind() {
+  return kind_;
+}
+
+void SharedArbitrator::registerFactory() {
+  MemoryArbitrator::registerFactory(
+      kind_, [](const MemoryArbitrator::Config& config) {
+        return std::make_unique<SharedArbitrator>(config);
+      });
+}
+
+void SharedArbitrator::unregisterFactory() {
+  MemoryArbitrator::unregisterFactory(kind_);
 }
 } // namespace facebook::velox::memory

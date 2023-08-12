@@ -42,18 +42,22 @@ void OperatorTestBase::registerVectorSerde() {
 }
 
 OperatorTestBase::~OperatorTestBase() {
+  // Wait for all the tasks to be deleted.
+  exec::test::waitForAllTasksToBeDeleted();
   // Revert to default process-wide MemoryAllocator.
   memory::MemoryAllocator::setDefaultInstance(nullptr);
 }
 
 void OperatorTestBase::SetUpTestCase() {
+  memory::MemoryArbitrator::registerAllFactories();
   functions::prestosql::registerAllScalarFunctions();
   aggregate::prestosql::registerAllAggregateFunctions();
   TestValue::enable();
 }
 
 void OperatorTestBase::TearDownTestCase() {
-  Task::testingWaitForAllTasksToBeDeleted();
+  waitForAllTasksToBeDeleted();
+  memory::MemoryArbitrator::unregisterAllFactories();
 }
 
 void OperatorTestBase::SetUp() {
@@ -72,7 +76,7 @@ void OperatorTestBase::SetUp() {
 
 void OperatorTestBase::TearDown() {
   if (asyncDataCache_ != nullptr) {
-    asyncDataCache_->prepareShutdown();
+    asyncDataCache_->shutdown();
   }
 }
 
@@ -172,7 +176,7 @@ core::TypedExprPtr OperatorTestBase::parseExpr(
 
   // Wait for the task to go.
   task.reset();
-  Task::testingWaitForAllTasksToBeDeleted();
+  waitForAllTasksToBeDeleted();
 
   // If a spilling directory was set, ensure it was removed after the task is
   // gone.

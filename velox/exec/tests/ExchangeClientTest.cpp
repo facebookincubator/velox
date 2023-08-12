@@ -17,6 +17,7 @@
 #include "velox/common/base/tests/GTestUtils.h"
 #include "velox/exec/Exchange.h"
 #include "velox/exec/PartitionedOutputBufferManager.h"
+#include "velox/exec/Task.h"
 #include "velox/exec/tests/utils/LocalExchangeSource.h"
 #include "velox/exec/tests/utils/PlanBuilder.h"
 #include "velox/serializers/PrestoSerializer.h"
@@ -70,9 +71,9 @@ class ExchangeClientTest : public testing::Test,
     auto page = toSerializedPage(data);
     const auto pageSize = page->size();
     ContinueFuture unused;
-    auto blockingReason =
+    auto blocked =
         bufferManager_->enqueue(taskId, destination, std::move(page), &unused);
-    VELOX_CHECK(blockingReason == BlockingReason::kNotBlocked);
+    VELOX_CHECK(!blocked);
     return pageSize;
   }
 
@@ -95,7 +96,7 @@ TEST_F(ExchangeClientTest, nonVeloxCreateExchangeSourceException) {
         throw std::runtime_error("Testing error");
       });
 
-  ExchangeClient client(1, pool(), ExchangeClient::kDefaultMaxQueuedBytes);
+  ExchangeClient client("t", 1, pool(), ExchangeClient::kDefaultMaxQueuedBytes);
   VELOX_ASSERT_THROW(
       client.addRemoteTaskId("task.1.2.3"),
       "Failed to create ExchangeSource: Testing error. Task ID: task.1.2.3.");
@@ -104,7 +105,7 @@ TEST_F(ExchangeClientTest, nonVeloxCreateExchangeSourceException) {
   VELOX_ASSERT_THROW(
       client.addRemoteTaskId(std::string(1024, 'x')),
       "Failed to create ExchangeSource: Testing error. "
-      "Task ID: xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx.");
+      "Task ID: xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx.");
 }
 
 TEST_F(ExchangeClientTest, stats) {
@@ -124,7 +125,8 @@ TEST_F(ExchangeClientTest, stats) {
   bufferManager_->initializeTask(
       task, core::PartitionedOutputNode::Kind::kPartitioned, 100, 16);
 
-  ExchangeClient client(17, pool(), ExchangeClient::kDefaultMaxQueuedBytes);
+  ExchangeClient client(
+      "t", 17, pool(), ExchangeClient::kDefaultMaxQueuedBytes);
   client.addRemoteTaskId(taskId);
 
   // Enqueue 3 pages.
@@ -136,19 +138,63 @@ TEST_F(ExchangeClientTest, stats) {
     pageBytes.push_back(pageSize);
   }
 
-  // ExchangeSource should have fetched first page and placed it into the queue.
-  // Once we fetch this page from the queue, the ExchangeSource will go fetch
-  // the remaining 2 pages.
-
   fetchPages(client, 3);
 
   auto stats = client.stats();
-  EXPECT_EQ(pageBytes[1] + pageBytes[2], stats.at("peakBytes").sum);
+  EXPECT_EQ(totalBytes, stats.at("peakBytes").sum);
   EXPECT_EQ(data.size(), stats.at("numReceivedPages").sum);
   EXPECT_EQ(totalBytes / data.size(), stats.at("averageReceivedPageBytes").sum);
 
   task->requestCancel();
   bufferManager_->removeTask(taskId);
+}
+
+// Test scenario where fetching data from all sources at once would exceed queue
+// size. Verify that ExchangeClient is fetching data only from a few sources at
+// a time to avoid exceeding the limit.
+TEST_F(ExchangeClientTest, flowControl) {
+  auto data = makeRowVector({
+      makeFlatVector<int64_t>(10'000, [](auto row) { return row; }),
+  });
+
+  auto page = toSerializedPage(data);
+
+  // Set limit at 3.5 pages.
+  ExchangeClient client("flow.control", 17, pool(), page->size() * 3.5);
+
+  auto plan = test::PlanBuilder()
+                  .values({data})
+                  .partitionedOutput({"c0"}, 100)
+                  .planNode();
+  // Make 10 tasks.
+  std::vector<std::shared_ptr<Task>> tasks;
+  for (auto i = 0; i < 10; ++i) {
+    auto taskId = fmt::format("local://t{}", i);
+    auto task = makeTask(taskId, plan, 17);
+
+    bufferManager_->initializeTask(
+        task, core::PartitionedOutputNode::Kind::kPartitioned, 100, 16);
+
+    // Enqueue 3 pages.
+    for (auto j = 0; j < 3; ++j) {
+      enqueue(taskId, 17, data);
+    }
+
+    tasks.push_back(task);
+    client.addRemoteTaskId(taskId);
+  }
+
+  fetchPages(client, 3 * tasks.size());
+
+  auto stats = client.stats();
+  EXPECT_LE(stats.at("peakBytes").sum, page->size() * 4);
+  EXPECT_EQ(30, stats.at("numReceivedPages").sum);
+  EXPECT_EQ(page->size(), stats.at("averageReceivedPageBytes").sum);
+
+  for (auto& task : tasks) {
+    task->requestCancel();
+    bufferManager_->removeTask(task->taskId());
+  }
 }
 
 } // namespace

@@ -270,7 +270,8 @@ class PlanBuilder {
           connector::CommitStrategy::kNoCommit);
 
   /// Add a TableWriteMergeNode.
-  PlanBuilder& tableWriteMerge();
+  PlanBuilder& tableWriteMerge(
+      const std::shared_ptr<core::AggregationNode>& aggregationNode = nullptr);
 
   /// Add an AggregationNode representing partial aggregation with the
   /// specified grouping keys, aggregates and optional masks.
@@ -583,7 +584,7 @@ class PlanBuilder {
 
   /// A convenience method to add a LocalPartitionNode with a single source (the
   /// current plan node) and hive bucket property.
-  PlanBuilder& localPartition(
+  PlanBuilder& localPartitionByBucket(
       const std::shared_ptr<connector::hive::HiveBucketProperty>&
           bucketProperty);
 

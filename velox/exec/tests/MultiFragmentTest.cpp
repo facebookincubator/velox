@@ -49,6 +49,12 @@ class MultiFragmentTest : public HiveConnectorTestBase {
     return fmt::format("local://{}-{}", prefix, num);
   }
 
+  static exec::Consumer noopConsumer() {
+    return [](RowVectorPtr, ContinueFuture*) {
+      return BlockingReason::kNotBlocked;
+    };
+  }
+
   std::shared_ptr<Task> makeTask(
       const std::string& taskId,
       const core::PlanNodePtr& planNode,
@@ -96,13 +102,15 @@ class MultiFragmentTest : public HiveConnectorTestBase {
     task->noMoreSplits("0");
   }
 
+  exec::Split remoteSplit(const std::string& taskId) {
+    return exec::Split(std::make_shared<RemoteConnectorSplit>(taskId));
+  }
+
   void addRemoteSplits(
       std::shared_ptr<Task> task,
       const std::vector<std::string>& remoteTaskIds) {
     for (auto& taskId : remoteTaskIds) {
-      auto split =
-          exec::Split(std::make_shared<RemoteConnectorSplit>(taskId), -1);
-      task->addSplit("0", std::move(split));
+      task->addSplit("0", remoteSplit(taskId));
     }
     task->noMoreSplits("0");
   }
@@ -485,7 +493,7 @@ TEST_F(MultiFragmentTest, partitionedOutput) {
     }
 
     auto result = AssertQueryBuilder(op)
-                      .split(std::make_shared<RemoteConnectorSplit>(leafTaskId))
+                      .split(remoteSplit(leafTaskId))
                       .copyResults(pool());
     ASSERT_EQ(*result->type(), *ROW({}));
     ASSERT_EQ(result->size(), numRows);
@@ -707,9 +715,6 @@ TEST_F(MultiFragmentTest, limit) {
                   .limit(0, 10, false)
                   .planNode();
 
-  auto split =
-      exec::Split(std::make_shared<RemoteConnectorSplit>(leafTaskId), -1);
-
   // Expect the task to produce results before receiving no-more-splits message.
   bool splitAdded = false;
   auto task = ::assertQuery(
@@ -718,7 +723,7 @@ TEST_F(MultiFragmentTest, limit) {
         if (splitAdded) {
           return;
         }
-        task->addSplit("0", std::move(split));
+        task->addSplit("0", remoteSplit(leafTaskId));
         splitAdded = true;
       },
       "VALUES (null), (1), (2), (3), (4), (5), (6), (null), (8), (9)",
@@ -1237,14 +1242,15 @@ TEST_F(MultiFragmentTest, customPlanNodeWithExchangeClient) {
   addRemoteSplits(task, {leafTaskId});
   while (cursor->moveNext()) {
   }
+  ASSERT_TRUE(waitForTaskCompletion(leafTask.get(), 3'000'000))
+      << leafTask->taskId();
+  ASSERT_TRUE(waitForTaskCompletion(task.get(), 3'000'000)) << task->taskId();
+
   EXPECT_NE(
       toPlanStats(task->taskStats())
           .at(testNodeId)
           .customStats.count("testCustomExchangeStat"),
       0);
-  ASSERT_TRUE(waitForTaskCompletion(leafTask.get(), 3'000'000))
-      << leafTask->taskId();
-  ASSERT_TRUE(waitForTaskCompletion(task.get(), 3'000'000)) << task->taskId();
 }
 
 // This test is to reproduce the race condition between task terminate and no
@@ -1283,9 +1289,7 @@ DEBUG_ONLY_TEST_F(
           return;
         }
         // Trigger to add more split after the task has run into error.
-        auto split =
-            exec::Split(std::make_shared<RemoteConnectorSplit>(leafTaskId), -1);
-        task->addSplit("0", std::move(split));
+        task->addSplit("0", remoteSplit(leafTaskId));
       })));
 
   SCOPED_TESTVALUE_SET(
@@ -1313,11 +1317,7 @@ DEBUG_ONLY_TEST_F(
           -> BlockingReason { return BlockingReason::kNotBlocked; },
       kRootMemoryLimit);
   Task::start(rootTask, 1);
-  {
-    auto split =
-        exec::Split(std::make_shared<RemoteConnectorSplit>(leafTaskId), -1);
-    rootTask->addSplit("0", std::move(split));
-  }
+  rootTask->addSplit("0", remoteSplit(leafTaskId));
   blockNoMoreSplits.await([&]() { return noMoreSplits.load(); });
   rootTask->noMoreSplits("0");
   // Unblock task terminate execution after no more split call finishes.
@@ -1448,5 +1448,203 @@ DEBUG_ONLY_TEST_F(MultiFragmentTest, mergeWithEarlyTermination) {
   ASSERT_TRUE(waitForTaskCompletion(partialSortTask.get(), 1'000'000'000));
   ASSERT_TRUE(waitForTaskAborted(finalSortTask.get(), 1'000'000'000));
 }
+
+class DataFetcher {
+ public:
+  DataFetcher(const std::string& taskId, int32_t destination, int64_t maxBytes)
+      : taskId_{taskId}, destination_{destination}, maxBytes_{maxBytes} {}
+
+  /// Starts fetching data for the task and destination specified in the
+  /// constructor. Returns a future that gets completes once all the data has
+  /// been fetched.
+  ContinueFuture fetch() {
+    auto [p, f] = makeVeloxContinuePromiseContract("DataFetcher");
+    promise_ = std::move(p);
+    doFetch(kInitialSequence);
+    return std::move(f);
+  }
+
+  struct Stats {
+    /// Number of possibly multi-page packets received.
+    int32_t numPackets;
+    /// Number of pages received. Includes the last null page.
+    int32_t numPages;
+    /// Total number of bytes received across all pages.
+    int64_t totalBytes;
+
+    /// Average number of bytes per packet.
+    int64_t averagePacketBytes() const {
+      return numPackets > 0 ? (totalBytes / numPackets) : 0;
+    }
+  };
+
+  Stats stats() const {
+    return {numPackets_, numPages_, totalBytes_};
+  }
+
+ private:
+  static constexpr int64_t kInitialSequence = 0;
+
+  std::shared_ptr<PartitionedOutputBufferManager> bufferManager() {
+    return PartitionedOutputBufferManager::getInstance().lock();
+  }
+
+  void doFetch(int64_t sequence) {
+    bool ok = bufferManager()->getData(
+        taskId_,
+        destination_,
+        maxBytes_,
+        sequence,
+        [&](auto pages, auto sequence) mutable {
+          const auto nextSequence = sequence + pages.size();
+          const bool atEnd = processData(std::move(pages), sequence);
+          bufferManager()->acknowledge(taskId_, destination_, nextSequence);
+
+          if (atEnd) {
+            bufferManager()->deleteResults(taskId_, destination_);
+            promise_.setValue();
+          } else {
+            doFetch(nextSequence);
+          }
+        });
+    VELOX_CHECK(ok);
+  }
+
+  bool processData(
+      std::vector<std::unique_ptr<folly::IOBuf>> pages,
+      int64_t sequence) {
+    numPages_ += pages.size();
+    ++numPackets_;
+
+    int64_t numBytes = 0;
+    bool atEnd = false;
+    for (const auto& page : pages) {
+      if (page == nullptr) {
+        VELOX_CHECK(!atEnd);
+        atEnd = true;
+      } else {
+        numBytes += page->computeChainDataLength();
+      }
+    }
+
+    totalBytes_ += numBytes;
+    return atEnd;
+  }
+
+  const std::string taskId_;
+  const int32_t destination_;
+  const int64_t maxBytes_;
+  ContinuePromise promise_{ContinuePromise::makeEmpty()};
+  int32_t numPackets_{0};
+  int32_t numPages_{0};
+  int64_t totalBytes_{0};
+};
+
+/// Verify that POBM::getData() honors maxBytes parameter roughly at 1MB
+/// granularity. It can do so only if PartitionedOutput operator limits the size
+/// of individual pages. PartitionedOutput operator is expected to limit page
+/// sizes to no more than 1MB give and take 30%.
+TEST_F(MultiFragmentTest, maxBytes) {
+  std::string s(25, 'x');
+  auto data = makeRowVector({
+      makeFlatVector<int64_t>(10'000, [](auto row) { return row; }),
+      makeConstant(StringView(s), 10'000),
+  });
+
+  auto plan = PlanBuilder()
+                  .values({data}, false, 100)
+                  .partitionedOutput({}, 1)
+                  .planNode();
+
+  int32_t testIteration = 0;
+  DataFetcher::Stats prevStats;
+
+  auto test = [&](int64_t maxBytes) {
+    const auto taskId = fmt::format("test.{}", testIteration++);
+
+    SCOPED_TRACE(taskId);
+    auto task = makeTask(taskId, plan, 0);
+    Task::start(task, 1);
+    task->updateOutputBuffers(1, true);
+
+    // Allow for data to accumulate.
+    std::this_thread::sleep_for(std::chrono::seconds(2));
+
+    DataFetcher fetcher(taskId, 0, maxBytes);
+    fetcher.fetch().wait();
+
+    ASSERT_TRUE(waitForTaskCompletion(task.get()));
+
+    auto stats = fetcher.stats();
+    if (testIteration > 1) {
+      ASSERT_EQ(prevStats.numPages, stats.numPages);
+      ASSERT_EQ(prevStats.totalBytes, stats.totalBytes);
+      ASSERT_GT(prevStats.numPackets, stats.numPackets);
+    }
+
+    ASSERT_LT(stats.averagePacketBytes(), maxBytes * 1.5);
+
+    prevStats = stats;
+  };
+
+  auto verifyStats = [](auto prev, auto current) {
+    EXPECT_EQ(prev.numPages, current.numPages);
+  };
+
+  static const int64_t kMB = 1 << 20;
+  test(kMB);
+  test(3 * kMB);
+  test(5 * kMB);
+  test(10 * kMB);
+  test(20 * kMB);
+  test(32 * kMB);
+}
+
+/// Verify that ExchangeClient stats are populated even if task fails.
+DEBUG_ONLY_TEST_F(MultiFragmentTest, exchangeStatsOnFailure) {
+  // Trigger a failure after fetching first 10 pages.
+  SCOPED_TESTVALUE_SET(
+      "facebook::velox::exec::test::LocalExchangeSource",
+      std::function<void(void* data)>([&](void* data) {
+        int32_t numPages = *static_cast<int32_t*>(data);
+        if (numPages > 10) {
+          VELOX_FAIL("Forced failure after {} pages", numPages);
+        }
+      }));
+
+  std::string s(25, 'x');
+  auto data = makeRowVector({
+      makeFlatVector<int64_t>(10'000, [](auto row) { return row; }),
+      makeConstant(StringView(s), 10'000),
+  });
+
+  auto producerPlan = PlanBuilder()
+                          .values({data}, false, 100)
+                          .partitionedOutput({}, 1)
+                          .planNode();
+
+  auto producerTaskId = makeTaskId("producer", 0);
+  auto producerTask = makeTask(producerTaskId, producerPlan, 0);
+  Task::start(producerTask, 1);
+  producerTask->updateOutputBuffers(1, true);
+
+  auto plan = PlanBuilder().exchange(producerPlan->outputType()).planNode();
+
+  auto task = makeTask("t", plan, 0, noopConsumer());
+  Task::start(task, 4);
+  task->addSplit("0", remoteSplit(producerTaskId));
+  task->noMoreSplits("0");
+
+  ASSERT_TRUE(test::waitForTaskFailure(task.get(), 3'000'000));
+
+  ASSERT_TRUE(task->errorMessage().find("Forced failure") != std::string::npos)
+      << "Got: [" << task->errorMessage() << "]";
+
+  auto stats = toPlanStats(task->taskStats());
+  EXPECT_EQ(10, stats.at("0").customStats.at("numReceivedPages").sum);
+
+  ASSERT_TRUE(waitForTaskCompletion(producerTask.get(), 3'000'000));
+}
+
 } // namespace
 } // namespace facebook::velox::exec

@@ -31,12 +31,12 @@ MemoryManager::MemoryManager(const MemoryManagerOptions& options)
       // TODO: consider to reserve a small amount of memory to compensate for
       //  the unreclaimable cache memory which are pinned by query accesses if
       //  enabled.
-      arbitrator_(MemoryArbitrator::create(MemoryArbitrator::Config{
-          .kind = options.arbitratorKind,
-          .capacity = capacity_,
-          .memoryPoolInitCapacity = options.memoryPoolInitCapacity,
-          .memoryPoolTransferCapacity = options.memoryPoolTransferCapacity,
-          .retryArbitrationFailure = options.retryArbitrationFailure})),
+      arbitrator_(MemoryArbitrator::create(
+          {.kind = options.arbitratorKind,
+           .capacity = options.capacity,
+           .memoryPoolInitCapacity = options.memoryPoolInitCapacity,
+           .memoryPoolTransferCapacity = options.memoryPoolTransferCapacity,
+           .retryArbitrationFailure = options.retryArbitrationFailure})),
       alignment_(std::max(MemoryAllocator::kMinAlignment, options.alignment)),
       checkUsageLeak_(options.checkUsageLeak),
       debugEnabled_(options.debugEnabled),
@@ -58,6 +58,12 @@ MemoryManager::MemoryManager(const MemoryManagerOptions& options)
               .checkUsageLeak = options.checkUsageLeak,
               .debugEnabled = options.debugEnabled})} {
   VELOX_CHECK_NOT_NULL(allocator_);
+  if (arbitrator_ != nullptr) {
+    VELOX_CHECK_EQ(
+        arbitrator_->capacity(),
+        capacity_,
+        "Memory arbitrator and memory manager must have the same capacity");
+  }
   VELOX_USER_CHECK_GE(capacity_, 0);
   MemoryAllocator::alignmentCheck(0, alignment_);
   defaultRoot_->grow(defaultRoot_->maxCapacity());
@@ -78,28 +84,22 @@ MemoryManager::~MemoryManager() {
         "There are {} unexpected alive memory pools allocated by user on memory manager destruction:\n{}",
         numPools(),
         toString());
-
-    const auto currentBytes = getTotalBytes();
-    VELOX_CHECK_EQ(
-        currentBytes,
-        0,
-        "Leaked total memory of {}",
-        succinctBytes(currentBytes));
   }
 }
 
+#ifdef VELOX_ENABLE_BACKWARD_COMPATIBILITY
 // static
 MemoryManager& MemoryManager::getInstance(
     const MemoryManagerOptions& options,
     bool ensureCapacity) {
   static MemoryManager manager{options};
-  auto actualCapacity = manager.capacity();
-  VELOX_USER_CHECK(
-      !ensureCapacity || actualCapacity == options.capacity,
-      "Process level manager manager created with input capacity: {}, actual capacity: {}",
-      options.capacity,
-      actualCapacity);
+  return manager;
+}
+#endif
 
+// static
+MemoryManager& MemoryManager::getInstance(const MemoryManagerOptions& options) {
+  static MemoryManager manager{options};
   return manager;
 }
 
@@ -201,16 +201,7 @@ MemoryPool& MemoryManager::deprecatedSharedLeafPool() {
 }
 
 int64_t MemoryManager::getTotalBytes() const {
-  return totalBytes_.load(std::memory_order_relaxed);
-}
-
-bool MemoryManager::reserve(int64_t size) {
-  return totalBytes_.fetch_add(size, std::memory_order_relaxed) + size <=
-      capacity_;
-}
-
-void MemoryManager::release(int64_t size) {
-  totalBytes_.fetch_sub(size, std::memory_order_relaxed);
+  return allocator_->totalUsedBytes();
 }
 
 size_t MemoryManager::numPools() const {
@@ -235,7 +226,7 @@ std::string MemoryManager::toString() const {
   std::stringstream out;
   out << "Memory Manager[capacity " << succinctBytes(capacity_) << " alignment "
       << succinctBytes(alignment_) << " usedBytes "
-      << succinctBytes(totalBytes_) << " number of pools " << numPools()
+      << succinctBytes(getTotalBytes()) << " number of pools " << numPools()
       << "\n";
   out << "List of root pools:\n";
   out << "\t" << defaultRoot_->name() << "\n";

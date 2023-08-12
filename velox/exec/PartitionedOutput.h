@@ -22,6 +22,7 @@
 
 namespace facebook::velox::exec {
 
+namespace detail {
 class Destination {
  public:
   Destination(
@@ -84,9 +85,9 @@ class Destination {
   // the same time. This is done for each batch so that the average
   // batch size for each converges.
   void setTargetSizePct() {
-    // Flush at  70 to 120% of target row or byte count.
+    // Flush at 70 to 120% of target row or byte count.
     targetSizePct_ = 70 + (folly::Random::rand32(rng_) % 50);
-    targetNumRows_ = (10000 * targetSizePct_) / 100;
+    targetNumRows_ = (10'000 * targetSizePct_) / 100;
   }
 
   const std::string taskId_;
@@ -112,6 +113,7 @@ class Destination {
   // Generator for varying target batch size. Randomly seeded at construction.
   folly::Random::DefaultGenerator rng_;
 };
+} // namespace detail
 
 // In a distributed query engine data needs to be shuffled between workers so
 // that each worker only has to process a fraction of the total data. Because
@@ -192,7 +194,7 @@ class PartitionedOutput : public Operator {
   std::vector<IndexRange> topLevelRanges_;
   std::vector<vector_size_t*> sizePointers_;
   std::vector<vector_size_t> rowSize_;
-  std::vector<std::unique_ptr<Destination>> destinations_;
+  std::vector<std::unique_ptr<detail::Destination>> destinations_;
   bool replicatedAny_{false};
   RowVectorPtr output_;
 

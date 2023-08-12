@@ -14,6 +14,7 @@
  * limitations under the License.
  */
 #include "velox/exec/tests/utils/LocalExchangeSource.h"
+#include "velox/common/testutil/TestValue.h"
 #include "velox/exec/PartitionedOutputBufferManager.h"
 
 namespace facebook::velox::exec::test {
@@ -28,6 +29,10 @@ class LocalExchangeSource : public exec::ExchangeSource {
       memory::MemoryPool* pool)
       : ExchangeSource(taskId, destination, queue, pool) {}
 
+  bool supportsFlowControl() const override {
+    return true;
+  }
+
   bool shouldRequestLocked() override {
     if (atEnd_) {
       return false;
@@ -35,7 +40,23 @@ class LocalExchangeSource : public exec::ExchangeSource {
     return !requestPending_.exchange(true);
   }
 
-  void request() override {
+  ContinueFuture request(uint32_t maxBytes) override {
+    ++numRequests_;
+
+    auto [promise, future] =
+        makeVeloxContinuePromiseContract("LocalExchangeSource::request");
+    if (numRequests_ % 2 == 0) {
+      {
+        std::lock_guard<std::mutex> l(queue_->mutex());
+        requestPending_ = false;
+      }
+      // Simulate no-data.
+      promise.setValue();
+      return std::move(future);
+    }
+
+    promise_ = std::move(promise);
+
     auto buffers = PartitionedOutputBufferManager::getInstance().lock();
     VELOX_CHECK_NOT_NULL(buffers, "invalid PartitionedOutputBufferManager");
     VELOX_CHECK(requestPending_);
@@ -44,7 +65,7 @@ class LocalExchangeSource : public exec::ExchangeSource {
     buffers->getData(
         taskId_,
         destination_,
-        kMaxBytes,
+        maxBytes,
         sequence_,
         // Since this lambda may outlive 'this', we need to capture a
         // shared_ptr to the current object (self).
@@ -74,22 +95,34 @@ class LocalExchangeSource : public exec::ExchangeSource {
             inputPage = nullptr;
           }
           numPages_ += pages.size();
+
+          try {
+            common::testutil::TestValue::adjust(
+                "facebook::velox::exec::test::LocalExchangeSource", &numPages_);
+          } catch (const std::exception& e) {
+            queue_->setError(e.what());
+            checkSetRequestPromise();
+            return;
+          }
+
           int64_t ackSequence;
+          ContinuePromise requestPromise;
           {
-            std::vector<ContinuePromise> promises;
+            std::vector<ContinuePromise> queuePromises;
             {
               std::lock_guard<std::mutex> l(queue_->mutex());
               requestPending_ = false;
+              requestPromise = std::move(promise_);
               for (auto& page : pages) {
-                queue_->enqueueLocked(std::move(page), promises);
+                queue_->enqueueLocked(std::move(page), queuePromises);
               }
               if (atEnd) {
-                queue_->enqueueLocked(nullptr, promises);
+                queue_->enqueueLocked(nullptr, queuePromises);
                 atEnd_ = true;
               }
               ackSequence = sequence_ = sequence + pages.size();
             }
-            for (auto& promise : promises) {
+            for (auto& promise : queuePromises) {
               promise.setValue();
             }
           }
@@ -99,10 +132,18 @@ class LocalExchangeSource : public exec::ExchangeSource {
           } else {
             buffers->acknowledge(taskId_, destination_, ackSequence);
           }
+
+          if (!requestPromise.isFulfilled()) {
+            requestPromise.setValue();
+          }
         });
+
+    return std::move(future);
   }
 
   void close() override {
+    checkSetRequestPromise();
+
     auto buffers = PartitionedOutputBufferManager::getInstance().lock();
     buffers->deleteResults(taskId_, destination_);
   }
@@ -112,10 +153,24 @@ class LocalExchangeSource : public exec::ExchangeSource {
   }
 
  private:
-  static constexpr uint64_t kMaxBytes = 32 * 1024 * 1024; // 32 MB
+  bool checkSetRequestPromise() {
+    ContinuePromise promise;
+    {
+      std::lock_guard<std::mutex> l(queue_->mutex());
+      promise = std::move(promise_);
+    }
+    if (promise.valid() && !promise.isFulfilled()) {
+      promise.setValue();
+      return true;
+    }
+
+    return false;
+  }
 
   // Records the total number of pages fetched from sources.
   int64_t numPages_{0};
+  ContinuePromise promise_{ContinuePromise::makeEmpty()};
+  int32_t numRequests_{0};
 };
 
 } // namespace
