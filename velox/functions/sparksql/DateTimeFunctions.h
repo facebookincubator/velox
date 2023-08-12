@@ -270,7 +270,7 @@ struct DateSubFunction {
   FOLLY_ALWAYS_INLINE void call(
       out_type<Date>& result,
       const arg_type<Date>& date,
-      const int32_t value) {  
+      const int32_t value) {
     constexpr int32_t kMin = std::numeric_limits<int32_t>::min();
     if (value > kMin) {
       int32_t subValue = 0 - value;
