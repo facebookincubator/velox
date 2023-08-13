@@ -410,6 +410,6 @@ TEST_F(E2EFilterTest, mutationCornerCases) {
 // Define main so that gflags get processed.
 int main(int argc, char** argv) {
   testing::InitGoogleTest(&argc, argv);
-  folly::init(&argc, &argv, false);
+  folly::Init(&argc, &argv, false);
   return RUN_ALL_TESTS();
 }

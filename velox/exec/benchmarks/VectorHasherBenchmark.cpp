@@ -178,7 +178,7 @@ BENCHMARK_RELATIVE(computeValueIdsFlatStrings) {
 }
 
 int main(int argc, char** argv) {
-  folly::init(&argc, &argv);
+  folly::Init(&argc, &argv);
   folly::runBenchmarks();
   return 0;
 }

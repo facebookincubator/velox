@@ -137,7 +137,7 @@ BENCHMARK_MULTI(flattenAndConstantFold, n) {
 } // namespace
 
 int main(int argc, char** argv) {
-  folly::init(&argc, &argv);
+  folly::Init(&argc, &argv);
 
   LOG(ERROR) << "Seed: " << seed;
   {

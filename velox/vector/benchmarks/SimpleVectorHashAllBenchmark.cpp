@@ -467,7 +467,7 @@ BENCHMARK_DRAW_LINE();
 } // namespace facebook::velox::test
 
 int main(int argc, char** argv) {
-  folly::init(&argc, &argv);
+  folly::Init(&argc, &argv);
   folly::runBenchmarks();
   return 0;
 }

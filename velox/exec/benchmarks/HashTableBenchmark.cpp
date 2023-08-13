@@ -611,7 +611,7 @@ void combineResults(
 } // namespace
 
 int main(int argc, char** argv) {
-  folly::init(&argc, &argv);
+  folly::Init(&argc, &argv);
   memory::MmapAllocator::Options options;
   options.capacity = 10UL << 30;
   options.useMmapArena = true;

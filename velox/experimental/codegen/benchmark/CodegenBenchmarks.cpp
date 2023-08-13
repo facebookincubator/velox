@@ -24,7 +24,7 @@ using namespace facebook::velox;
 using namespace facebook::velox::codegen;
 
 int main(int argc, char** argv) {
-  folly::init(&argc, &argv);
+  folly::Init(&argc, &argv);
 
   CodegenBenchmark benchmark;
 

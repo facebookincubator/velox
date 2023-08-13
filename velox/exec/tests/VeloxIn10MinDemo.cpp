@@ -290,7 +290,7 @@ void VeloxIn10MinDemo::run() {
 }
 
 int main(int argc, char** argv) {
-  folly::init(&argc, &argv, false);
+  folly::Init(&argc, &argv, false);
 
   VeloxIn10MinDemo demo;
   demo.run();

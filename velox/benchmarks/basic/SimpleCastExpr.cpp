@@ -106,7 +106,7 @@ BENCHMARK(castTimestampDateAdjustTimeZone) {
 } // namespace
 
 int main(int argc, char* argv[]) {
-  folly::init(&argc, &argv);
+  folly::Init(&argc, &argv);
   gflags::ParseCommandLineFlags(&argc, &argv, true);
   benchmark = std::make_unique<SimpleCastBenchmark>();
   folly::runBenchmarks();

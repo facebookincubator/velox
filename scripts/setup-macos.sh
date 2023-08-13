@@ -34,7 +34,7 @@ source $SCRIPTDIR/setup-helper-functions.sh
 NPROC=$(getconf _NPROCESSORS_ONLN)
 
 DEPENDENCY_DIR=${DEPENDENCY_DIR:-$(pwd)}
-MACOS_DEPS="ninja flex bison cmake ccache protobuf@21 icu4c boost gflags glog libevent lz4 lzo snappy xz zstd openssl@1.1"
+MACOS_DEPS="ninja flex bison cmake ccache protobuf@21 icu4c boost gflags glog libevent lz4 lzo snappy xz zstd openssl@3"
 
 function run_and_time {
   time "$@" || (echo "Failed to run $* ." ; exit 1 )
@@ -93,8 +93,8 @@ function install_fmt {
 }
 
 function install_folly {
-  github_checkout facebook/folly "v2022.11.14.00"
-  OPENSSL_ROOT_DIR=$(brew --prefix openssl@1.1) \
+  github_checkout facebook/folly "v2023.08.07.00"
+  OPENSSL_ROOT_DIR=$(brew --prefix openssl@3) \
   cmake_install -DBUILD_TESTS=OFF -DFOLLY_HAVE_INT128_T=ON
 }
 

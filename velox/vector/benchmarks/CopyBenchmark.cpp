@@ -351,7 +351,7 @@ BENCHMARK_MULTI(copyStructNonContiguous) {
 } // namespace facebook::velox
 
 int main(int argc, char** argv) {
-  folly::init(&argc, &argv);
+  folly::Init(&argc, &argv);
 
   folly::runBenchmarks();
   return 0;

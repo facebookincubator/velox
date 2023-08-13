@@ -103,7 +103,7 @@ void registerRe2Functions() {
 } // namespace facebook::velox::functions::test
 
 int main(int argc, char** argv) {
-  folly::init(&argc, &argv);
+  folly::Init(&argc, &argv);
   facebook::velox::functions::test::registerRe2Functions();
   folly::runBenchmarks();
   return 0;

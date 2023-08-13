@@ -289,7 +289,7 @@ SERDE_BENCHMARKS(
 } // namespace facebook::velox::row
 
 int main(int argc, char** argv) {
-  folly::init(&argc, &argv);
+  folly::Init(&argc, &argv);
   folly::runBenchmarks();
   return 0;
 }
