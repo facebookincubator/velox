@@ -23,10 +23,20 @@ source $SCRIPTDIR/setup-helper-functions.sh
 CPU_TARGET="${CPU_TARGET:-avx}"
 COMPILER_FLAGS=$(get_cxx_flags "$CPU_TARGET")
 export COMPILER_FLAGS
-FB_OS_VERSION=v2022.11.14.00
+FB_OS_VERSION=v2023.08.07.00
 NPROC=$(getconf _NPROCESSORS_ONLN)
 DEPENDENCY_DIR=${DEPENDENCY_DIR:-$(pwd)}
 export CMAKE_BUILD_TYPE=Release
+
+function install_gflags {
+  github_checkout gflags/gflags "2.2.2"
+  cmake_install -DBUILD_SHARED_LIBS=ON -DBUILD_STATIC_LIBS=ON -DBUILD_gflags_LIB=ON
+}
+#
+#function install_glog {
+#  github_checkout google/glog "0.6.0"
+#  cmake_install -DBUILD_SHARED_LIBS=ON -DBUILD_STATIC_LIBS=ON -DBUILD_gflags_LIB=ON
+}
 
 # Install all velox and folly dependencies. 
 # The is an issue on 22.04 where a version conflict prevents glog install,
@@ -45,9 +55,8 @@ sudo --preserve-env apt update && sudo --preserve-env apt install -y libunwind-d
   libboost-all-dev \
   libicu-dev \
   libdouble-conversion-dev \
-  libgoogle-glog-dev \
   libbz2-dev \
-  libgflags-dev \
+  libgoogle-glog-dev \
   libgmock-dev \
   libevent-dev \
   liblz4-dev \

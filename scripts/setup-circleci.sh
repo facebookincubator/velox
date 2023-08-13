@@ -75,7 +75,7 @@ wget_and_untar https://github.com/fmtlib/fmt/archive/8.0.1.tar.gz fmt &
 wget_and_untar https://archive.apache.org/dist/hadoop/common/hadoop-2.10.1/hadoop-2.10.1.tar.gz hadoop
 wget_and_untar https://github.com/protocolbuffers/protobuf/releases/download/v21.4/protobuf-all-21.4.tar.gz protobuf &
 
-FB_OS_VERSION="v2022.11.14.00"
+FB_OS_VERSION="v2023.08.07.00"
 
 wget_and_untar https://github.com/facebook/folly/archive/${FB_OS_VERSION}.tar.gz folly &
 wget_and_untar https://github.com/facebookincubator/fizz/archive/refs/tags/${FB_OS_VERSION}.tar.gz fizz &

@@ -446,6 +446,6 @@ TEST_F(ParquetTableScanTest, readAsLowerCase) {
 
 int main(int argc, char** argv) {
   testing::InitGoogleTest(&argc, argv);
-  folly::init(&argc, &argv, false);
+  folly::Init(&argc, &argv, false);
   return RUN_ALL_TESTS();
 }

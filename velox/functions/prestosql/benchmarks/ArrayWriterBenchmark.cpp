@@ -275,7 +275,7 @@ BENCHMARK_MULTI(std_reference) {
 } // namespace facebook::velox::exec
 
 int main(int argc, char** argv) {
-  folly::init(&argc, &argv);
+  folly::Init(&argc, &argv);
 
   facebook::velox::exec::ArrayWriterBenchmark benchmark;
   benchmark.test();

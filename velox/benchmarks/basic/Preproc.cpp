@@ -444,7 +444,7 @@ BENCHMARK(allFusedWithNulls) {
 } // namespace
 
 int main(int argc, char** argv) {
-  folly::init(&argc, &argv);
+  folly::Init(&argc, &argv);
 
   benchmark = std::make_unique<PreprocBenchmark>();
   // Verify that benchmark calculations are correct.
