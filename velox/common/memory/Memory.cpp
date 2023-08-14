@@ -189,6 +189,11 @@ uint64_t MemoryManager::shrinkPools(uint64_t targetBytes) {
   return arbitrator_->shrinkMemory(getAlivePools(), targetBytes);
 }
 
+uint64_t MemoryManager::shrinkPools(uint64_t targetBytes) {
+  VELOX_CHECK_NOT_NULL(arbitrator_);
+  return arbitrator_->shrinkMemory(getAlivePools(), targetBytes);
+}
+
 void MemoryManager::dropPool(MemoryPool* pool) {
   VELOX_CHECK_NOT_NULL(pool);
   folly::SharedMutex::WriteHolder guard{mutex_};
