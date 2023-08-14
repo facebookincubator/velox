@@ -769,8 +769,8 @@ const velox::RowTypePtr& ParquetReader::rowType() const {
   return readerBase_->schema();
 }
 
-const std::shared_ptr<const dwio::common::TypeWithId>& ParquetReader::typeWithId()
-    const {
+const std::shared_ptr<const dwio::common::TypeWithId>&
+ParquetReader::typeWithId() const {
   return readerBase_->schemaWithId();
 }
 
