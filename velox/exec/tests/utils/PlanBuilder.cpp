@@ -1213,7 +1213,15 @@ PlanBuilder& PlanBuilder::unnest(
   for (const auto& name : unnestColumns) {
     auto input = planNode_->outputType()->findChild(name);
     if (input->isArray()) {
-      unnestNames.push_back(name + "_e");
+      if (input->childAt(0)->isRow()) {
+        auto row = asRowType(input->childAt(0));
+        auto size = row->size();
+        for (auto i = 0; i < size; i++) {
+          unnestNames.push_back(row->nameOf(i) + "_e");
+        }
+      } else {
+        unnestNames.push_back(name + "_e");
+      }
     } else if (input->isMap()) {
       unnestNames.push_back(name + "_k");
       unnestNames.push_back(name + "_v");

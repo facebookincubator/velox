@@ -1818,20 +1818,23 @@ class LimitNode : public PlanNode {
   const std::vector<PlanNodePtr> sources_;
 };
 
-/// Expands arrays and maps into separate columns. Arrays are expanded into a
-/// single column, and maps are expanded into two columns (key, value). Can be
-/// used to expand multiple columns. In this case will produce as many rows as
-/// the highest cardinality array or map (the other columns are padded with
-/// nulls). Optionally can produce an ordinality column that specifies the row
-/// number starting with 1.
+/// The unnest operation expands arrays and maps into separate columns. Arrays
+/// are expanded into a single column with the exception of arrays of rows.
+/// Arrays of ROW type are recursively unnested i.e each column from the ROW
+/// type is expanded into a separate output column. Maps are expanded into two
+/// columns (key, value). Can be used to expand multiple columns. In this case
+/// produces as many rows as the highest cardinality array or map (the other
+/// columns are padded with nulls). Optionally can produce an ordinality column
+/// that specifies the row number starting with 1.
 class UnnestNode : public PlanNode {
  public:
   /// @param replicateVariables Inputs that are projected as is
   /// @param unnestVariables Inputs that are unnested. Must be of type ARRAY or
   /// MAP.
   /// @param unnestNames Names to use for unnested outputs: one name for each
-  /// array (element); two names for each map (key and value). The output names
-  /// must appear in the same order as unnestVariables.
+  /// array (element) except for array (row), which would have as many names
+  /// as the cardinality of the row; two names for each map (key and value).
+  /// The output names must appear in the same order as unnestVariables.
   /// @param ordinalityName Optional name for the ordinality columns. If not
   /// present, ordinality column is not produced.
   UnnestNode(
