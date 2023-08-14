@@ -30,7 +30,8 @@ Unnest::Unnest(
           operatorId,
           unnestNode->id(),
           "Unnest"),
-      withOrdinality_(unnestNode->withOrdinality()) {
+      withOrdinality_(unnestNode->withOrdinality()),
+      legacyUnnest_(unnestNode->getLegacyUnnest()) {
   const auto& inputType = unnestNode->sources()[0]->outputType();
   const auto& unnestVariables = unnestNode->unnestVariables();
   for (const auto& variable : unnestVariables) {
@@ -220,13 +221,29 @@ RowVectorPtr Unnest::generateOutput(
       // Construct unnest column using Array elements wrapped using above
       // created dictionary.
       auto unnestBaseArray = currentDecoded.base()->as<ArrayVector>();
-      outputs[outputsIndex++] = identityMapping
-          ? unnestBaseArray->elements()
-          : wrapChild(
-                numElements,
-                elementIndices,
-                unnestBaseArray->elements(),
-                nulls);
+      auto elements = unnestBaseArray->elements();
+
+      if ((legacyUnnest_ == false) && (elements->typeKind() == TypeKind::ROW)) {
+        auto rowSize = elements->type()->size();
+        DecodedVector rowDecoded(*elements);
+        auto rowVector = rowDecoded.base()->as<RowVector>();
+        VELOX_CHECK(
+            rowVector,
+            "Unable to get rowVector from elements with {} encoding",
+            elements->encoding());
+
+        for (auto j = 0; j < rowSize; j++) {
+          VELOX_CHECK(rowVector->childAt(j), "Column at index {} is null", j);
+          outputs[outputsIndex++] = identityMapping
+              ? rowVector->childAt(j)
+              : wrapChild(
+                    numElements, elementIndices, rowVector->childAt(j), nulls);
+        }
+      } else {
+        outputs[outputsIndex++] = identityMapping
+            ? elements
+            : wrapChild(numElements, elementIndices, elements, nulls);
+      }
     } else {
       // Construct two unnest columns for Map keys and values vectors wrapped
       // using above created dictionary.

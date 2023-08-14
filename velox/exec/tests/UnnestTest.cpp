@@ -39,6 +39,32 @@ TEST_F(UnnestTest, basicArray) {
 
   auto op = PlanBuilder().values({vector}).unnest({"c0"}, {"c1"}).planNode();
   assertQuery(op, "SELECT c0, UNNEST(c1) FROM tmp WHERE c0 % 7 > 0");
+
+  // Test with array containing dictionary encoded elements.
+  vector_size_t size = 200;
+  auto offsets = makeIndicesInReverse(size);
+  auto dict = BaseVector::wrapInDictionary(
+      makeNulls(size, nullEvery(13)),
+      offsets,
+      size,
+      makeFlatVector<int64_t>(size, [](auto row) { return row; }));
+  size = 100;
+  offsets = makeIndicesInReverse(size);
+  auto constantVec = makeConstant<StringView>(StringView("abcd"), size);
+
+  size = 200;
+  vector = makeRowVector(
+      {makeArrayVector({0}, dict),
+       makeArrayVector({0}, wrapInDictionary(offsets, constantVec))});
+  op = PlanBuilder().values({vector}).unnest({}, {"c0", "c1"}).planNode();
+  auto expected = makeRowVector(
+      {makeFlatVector<int64_t>(
+           size, [size](auto row) { return (size - 1 - row); }, nullEvery(13)),
+       makeFlatVector<StringView>(
+           size,
+           [](auto /* row */) { return StringView("abcd"); },
+           nullEvery(1, 100))});
+  assertQuery(op, expected);
 }
 
 TEST_F(UnnestTest, arrayWithOrdinality) {
@@ -55,7 +81,7 @@ TEST_F(UnnestTest, arrayWithOrdinality) {
 
   auto op = PlanBuilder()
                 .values({vector})
-                .unnest({"c0"}, {"c1"}, "ordinal")
+                .unnest({"c0"}, {"c1"}, true, "ordinal")
                 .planNode();
 
   auto expected = makeRowVector(
@@ -82,7 +108,7 @@ TEST_F(UnnestTest, arrayWithOrdinality) {
        wrapInDictionary(reversedIndices, 6, array)});
   op = PlanBuilder()
            .values({vectorInDict})
-           .unnest({"c0"}, {"c1"}, "ordinal")
+           .unnest({"c0"}, {"c1"}, true, "ordinal")
            .planNode();
 
   auto expectedInDict = makeRowVector(
@@ -101,6 +127,190 @@ TEST_F(UnnestTest, arrayWithOrdinality) {
            {7, 8, 9, std::nullopt, 5, 6, 1, 2, std::nullopt, 4}),
        makeNullableFlatVector<int64_t>({1, 2, 3, 1, 1, 2, 1, 2, 3, 4})});
   assertQuery(op, expectedInDict);
+}
+
+TEST_F(UnnestTest, arrayOfRows) {
+  // Array of rows with legacy unnest set to false.
+  auto rowType1 = ROW({INTEGER(), VARCHAR()});
+  auto rowType2 = ROW({BIGINT(), DOUBLE(), VARCHAR()});
+  std::vector<std::vector<std::optional<std::tuple<int32_t, std::string>>>>
+      array1{
+          {
+              {{1, "red"}},
+              {{2, "blue"}},
+          },
+          {
+              {{3, "green"}},
+              {{4, "orange"}},
+              {{5, "black"}},
+              {{6, "white"}},
+          },
+      };
+  std::vector<
+      std::vector<std::optional<std::tuple<int64_t, double, std::string>>>>
+      array2{
+          {
+              {{-1, 1.0, "cat"}},
+              {{-2, 2.0, "tiger"}},
+              {{-3, 3.0, "lion"}},
+          },
+          {
+              {{-4, 4.0, "elephant"}},
+              {{-5, 5.0, "wolf"}},
+          },
+      };
+  auto vector = makeRowVector(
+      {makeArrayOfRowVector(array1, rowType1),
+       makeArrayOfRowVector(array2, rowType2)});
+
+  auto op =
+      PlanBuilder().values({vector}).unnest({}, {"c0", "c1"}, false).planNode();
+  auto expected = makeRowVector(
+      {makeNullableFlatVector<int32_t>({1, 2, std::nullopt, 3, 4, 5, 6}),
+       makeNullableFlatVector<StringView>(
+           {"red", "blue", std::nullopt, "green", "orange", "black", "white"}),
+       makeNullableFlatVector<int64_t>(
+           {-1, -2, -3, -4, -5, std::nullopt, std::nullopt}),
+       makeNullableFlatVector<double>(
+           {1.0, 2.0, 3.0, 4.0, 5.0, std::nullopt, std::nullopt}),
+       makeNullableFlatVector<StringView>(
+           {"cat",
+            "tiger",
+            "lion",
+            "elephant",
+            "wolf",
+            std::nullopt,
+            std::nullopt})});
+  assertQuery(op, expected);
+
+  // Test with array of rows wrapped in dictionary.
+  vector_size_t size = array1.size();
+  auto offsets = makeIndicesInReverse(size);
+  vector = makeRowVector(
+      {wrapInDictionary(offsets, size, makeArrayOfRowVector(array1, rowType1)),
+       BaseVector::wrapInConstant(
+           size, 0, makeArrayOfRowVector(array2, rowType2))});
+
+  op =
+      PlanBuilder().values({vector}).unnest({}, {"c0", "c1"}, false).planNode();
+  expected = makeRowVector(
+      {makeNullableFlatVector<int32_t>({1, 2, std::nullopt, 3, 4, 5, 6}),
+       makeNullableFlatVector<StringView>(
+           {"red", "blue", std::nullopt, "green", "orange", "black", "white"}),
+       makeNullableFlatVector<int64_t>({-1, -2, -3, -1, -2, -3, std::nullopt}),
+       makeNullableFlatVector<double>(
+           {1.0, 2.0, 3.0, 1.0, 2.0, 3.0, std::nullopt}),
+       makeNullableFlatVector<StringView>(
+           {"cat", "tiger", "lion", "cat", "tiger", "lion", std::nullopt})});
+  assertQuery(op, expected);
+
+  // Test with array containing dictionary encoded row elements.
+  size = 100;
+  offsets = makeIndicesInReverse(size);
+  auto vector1 = makeRowVector(
+      {makeFlatVector<int64_t>(size, [](auto row) { return row; }),
+       makeFlatVector<int32_t>(size, [](auto row) { return row; })});
+  auto dict = wrapInDictionary(offsets, vector1);
+  size = 200;
+  offsets = makeIndicesInReverse(size);
+  auto vector2 = makeRowVector(
+      {makeFlatVector<double>(
+           size, [](auto row) { return row; }, nullEvery(7)),
+       makeConstant<StringView>(StringView("abcd"), size)});
+
+  vector = makeRowVector(
+      {makeArrayVector({0}, dict),
+       makeArrayVector({0}, wrapInDictionary(offsets, vector2))});
+  op = PlanBuilder()
+           .values({vector})
+           .unnest({}, {"c0", "c1"}, false, "ordinal")
+           .planNode();
+  expected = makeRowVector(
+      {makeFlatVector<int64_t>(
+           size, [](auto row) { return row; }, nullEvery(1, 100)),
+       makeFlatVector<int32_t>(
+           size, [](auto row) { return row; }, nullEvery(1, 100)),
+       makeFlatVector<double>(
+           size, [](auto row) { return row; }, nullEvery(7)),
+       makeConstant<StringView>(StringView("abcd"), size),
+       makeFlatVector<int64_t>(size, [](auto row) { return row + 1; })});
+  assertQuery(op, expected);
+}
+
+TEST_F(UnnestTest, arrayOfMaps) {
+  // Test with arrays of map and constant encoding.
+  using S = StringView;
+  using P = std::pair<int64_t, std::optional<S>>;
+
+  std::vector<P> a{P{1, S{"red"}}, P{2, S{"blue"}}, P{3, S{"green"}}};
+  std::vector<P> b{P{1, S{"yellow"}}, P{2, S{"orange"}}};
+  std::vector<P> c{P{1, S{"red"}}, P{2, S{"yellow"}}, P{3, S{"purple"}}};
+  std::vector<std::vector<std::vector<P>>> data{{a, b, c}, {b}, {c, a}};
+  auto vector = makeRowVector({
+      makeArrayOfMapVector<int64_t, S>(data),
+      makeArrayVector({0, 2, 4}, makeConstant<int32_t>(1234, 6)),
+  });
+
+  auto op = PlanBuilder().values({vector}).unnest({}, {"c0", "c1"}).planNode();
+  auto expected = makeRowVector(
+      {makeNullableMapVector<int64_t, StringView>(
+           {a, b, c, b, std::nullopt, c, a}),
+       makeNullableFlatVector<int32_t>(
+           {1234, 1234, std::nullopt, 1234, 1234, 1234, 1234})});
+  assertQuery(op, expected);
+
+  // Array of dictionary encoded maps.
+  auto size = 100;
+  auto offsets = makeIndices(size, [](auto row) { return row; });
+  auto map1 = makeMapVector<int64_t, double>(
+      size,
+      [](auto i) { return i % 5; },
+      [](auto i) { return i % 10; },
+      [](auto i) { return i % 3; },
+      nullEvery(11));
+  auto map2 = makeMapVector<int8_t, int64_t>(
+      size,
+      [](auto i) { return i % 5; },
+      [](auto i) { return i % 10; },
+      [](auto i) { return i % 3; },
+      nullEvery(7));
+
+  vector = makeRowVector(
+      {makeArrayVector({0}, wrapInDictionary(offsets, map1)),
+       makeArrayVector({0}, wrapInDictionary(offsets, map2))});
+  op = PlanBuilder()
+           .values({vector})
+           .unnest({}, {"c0", "c1"}, true, "ordinal")
+           .planNode();
+  expected = makeRowVector(
+      {makeMapVector<int64_t, double>(
+           size,
+           [](auto i) { return i % 5; },
+           [](auto i) { return i % 10; },
+           [](auto i) { return i % 3; },
+           nullEvery(11)),
+       makeMapVector<int8_t, int64_t>(
+           size,
+           [](auto i) { return i % 5; },
+           [](auto i) { return i % 10; },
+           [](auto i) { return i % 3; },
+           nullEvery(7)),
+       makeFlatVector<int64_t>(size, [](auto row) { return row + 1; })});
+  assertQuery(op, expected);
+
+  // Array of maps with dictionary encoded keys and values.
+  std::vector<vector_size_t> mapOffsets(size);
+  std::iota(mapOffsets.begin(), mapOffsets.end(), 0);
+  auto keys = makeFlatVector<int64_t>(size, [](auto row) { return row; });
+  auto values = makeFlatVector<double>(size, [](auto row) { return row + 1; });
+  auto keyDict = wrapInDictionary(offsets, keys);
+  auto valueDict = wrapInDictionary(offsets, values);
+
+  vector = makeRowVector(
+      {makeArrayVector({0}, makeMapVector(mapOffsets, keyDict, valueDict))});
+  op = PlanBuilder().values({vector}).unnest({}, {"c0"}).planNode();
+  expected = makeRowVector({makeMapVector(mapOffsets, keyDict, valueDict)});
+  assertQuery(op, expected);
 }
 
 TEST_F(UnnestTest, basicMap) {
@@ -138,7 +348,7 @@ TEST_F(UnnestTest, mapWithOrdinality) {
 
   auto op = PlanBuilder()
                 .values({vector})
-                .unnest({"c0"}, {"c1"}, "ordinal")
+                .unnest({"c0"}, {"c1"}, true, "ordinal")
                 .planNode();
 
   auto expected = makeRowVector(
@@ -156,7 +366,7 @@ TEST_F(UnnestTest, mapWithOrdinality) {
        wrapInDictionary(reversedIndices, 3, map)});
   op = PlanBuilder()
            .values({vectorInDict})
-           .unnest({"c0"}, {"c1"}, "ordinal")
+           .unnest({"c0"}, {"c1"}, true, "ordinal")
            .planNode();
 
   auto expectedInDict = makeRowVector(
@@ -166,6 +376,29 @@ TEST_F(UnnestTest, mapWithOrdinality) {
            {std::nullopt, 3.3, 4.4, 5.5, 1.1, std::nullopt}),
        makeNullableFlatVector<int64_t>({1, 1, 2, 3, 1, 2})});
   assertQuery(op, expectedInDict);
+}
+
+TEST_F(UnnestTest, mapWithDictEncoding) {
+  auto size = 100;
+  std::vector<vector_size_t> mapOffsets(size);
+  std::iota(mapOffsets.begin(), mapOffsets.end(), 0);
+  auto offsets = makeIndices(size, [](auto row) { return row; });
+  auto keys = makeFlatVector<int64_t>(size, [](auto row) { return row % 2; });
+  auto values =
+      makeFlatVector<double>(size, [](auto row) { return row % 2 + 1; });
+
+  auto vector = makeRowVector(
+      {makeFlatVector<int64_t>(size, [](auto row) { return row; }),
+       makeMapVector(
+           mapOffsets,
+           wrapInDictionary(offsets, keys),
+           wrapInDictionary(offsets, values))});
+  auto op = PlanBuilder().values({vector}).unnest({"c0"}, {"c1"}).planNode();
+  auto expected = makeRowVector(
+      {makeFlatVector<int64_t>(size, [](auto row) { return row; }),
+       makeFlatVector<int64_t>(size, [](auto row) { return row % 2; }),
+       makeFlatVector<double>(size, [](auto row) { return row % 2 + 1; })});
+  assertQuery(op, expected);
 }
 
 TEST_F(UnnestTest, multipleColumns) {
@@ -242,7 +475,7 @@ TEST_F(UnnestTest, multipleColumnsWithOrdinality) {
 
   auto op = PlanBuilder()
                 .values({vector})
-                .unnest({"c0"}, {"c1", "c2", "c3"}, "ordinal")
+                .unnest({"c0"}, {"c1", "c2", "c3"}, true, "ordinal")
                 .planNode();
 
   // DuckDB doesn't support Unnest from MAP column. Hence,using 2 separate array
@@ -302,7 +535,7 @@ TEST_F(UnnestTest, multipleColumnsWithOrdinality) {
 
   op = PlanBuilder()
            .values({vector})
-           .unnest({"c0"}, {"c1", "c2"}, "ordinal")
+           .unnest({"c0"}, {"c1", "c2"}, true, "ordinal")
            .planNode();
 
   auto expected = makeRowVector(
@@ -374,7 +607,7 @@ TEST_F(UnnestTest, allEmptyOrNullArrays) {
 
   op = PlanBuilder()
            .values({vector})
-           .unnest({"c0"}, {"c1", "c2"}, "ordinal")
+           .unnest({"c0"}, {"c1", "c2"}, true, "ordinal")
            .planNode();
   assertQueryReturnsEmptyResult(op);
 }
@@ -401,7 +634,7 @@ TEST_F(UnnestTest, allEmptyOrNullMaps) {
 
   op = PlanBuilder()
            .values({vector})
-           .unnest({"c0"}, {"c1", "c2"}, "ordinal")
+           .unnest({"c0"}, {"c1", "c2"}, true, "ordinal")
            .planNode();
   assertQueryReturnsEmptyResult(op);
 }

@@ -640,11 +640,13 @@ UnnestNode::UnnestNode(
     std::vector<FieldAccessTypedExprPtr> unnestVariables,
     const std::vector<std::string>& unnestNames,
     const std::optional<std::string>& ordinalityName,
+    const bool legacyUnnest,
     const PlanNodePtr& source)
     : PlanNode(id),
       replicateVariables_{std::move(replicateVariables)},
       unnestVariables_{std::move(unnestVariables)},
       withOrdinality_{ordinalityName.has_value()},
+      legacyUnnest_(legacyUnnest),
       sources_{source} {
   // Calculate output type. First come "replicate" columns, followed by
   // "unnest" columns, followed by an optional ordinality column.
@@ -658,11 +660,30 @@ UnnestNode::UnnestNode(
 
   int unnestIndex = 0;
   for (const auto& variable : unnestVariables_) {
-    if (variable->type()->isArray()) {
-      names.emplace_back(unnestNames[unnestIndex++]);
-      types.emplace_back(variable->type()->asArray().elementType());
-    } else if (variable->type()->isMap()) {
-      const auto& mapType = variable->type()->asMap();
+    auto type = variable->type();
+    if (type->isArray()) {
+      bool isRowType = type->childAt(0)->isRow();
+      if ((legacyUnnest_ == false) && isRowType) {
+        auto rowType = asRowType(type->childAt(0));
+        auto size = rowType->size();
+        VELOX_USER_CHECK_LE(
+            unnestIndex + size,
+            unnestNames.size(),
+            "unnestNames should contain a name for each output column");
+        for (auto j = 0; j < size; j++) {
+          names.emplace_back(unnestNames[unnestIndex++]);
+          types.emplace_back(rowType->childAt(j));
+        }
+      } else {
+        VELOX_USER_CHECK_LT(
+            unnestIndex,
+            unnestNames.size(),
+            "unnestNames should contain a name for each output column");
+        names.emplace_back(unnestNames[unnestIndex++]);
+        types.emplace_back(type->asArray().elementType());
+      }
+    } else if (type->isMap()) {
+      const auto& mapType = type->asMap();
 
       names.emplace_back(unnestNames[unnestIndex++]);
       types.emplace_back(mapType.keyType());
@@ -672,9 +693,13 @@ UnnestNode::UnnestNode(
     } else {
       VELOX_FAIL(
           "Unexpected type of unnest variable. Expected ARRAY or MAP, but got {}.",
-          variable->type()->toString());
+          type->toString());
     }
   }
+  VELOX_USER_CHECK_EQ(
+      unnestNames.size(),
+      unnestIndex,
+      "Size of unnestNames should match the number of output columns");
 
   if (ordinalityName.has_value()) {
     names.emplace_back(ordinalityName.value());
@@ -727,6 +752,7 @@ PlanNodePtr UnnestNode::create(const folly::dynamic& obj, void* context) {
       std::move(unnestVariables),
       std::move(unnestNames),
       ordinalityName,
+      true,
       std::move(source));
 }
 

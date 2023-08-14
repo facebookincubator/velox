@@ -128,6 +128,7 @@ PlanNodePtr toVeloxPlan(
                 sources[0]->outputType()->asRow().nameOf(0))},
         std::vector<std::string>{"a"},
         std::nullopt, // ordinalityName
+        true,
         std::move(sources[0]));
   }
 

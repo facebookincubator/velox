@@ -1230,6 +1230,7 @@ PlanBuilder& PlanBuilder::nestedLoopJoin(
 PlanBuilder& PlanBuilder::unnest(
     const std::vector<std::string>& replicateColumns,
     const std::vector<std::string>& unnestColumns,
+    const std::optional<bool>& legacyUnnest,
     const std::optional<std::string>& ordinalColumn) {
   std::vector<std::shared_ptr<const core::FieldAccessTypedExpr>>
       replicateFields;
@@ -1244,11 +1245,20 @@ PlanBuilder& PlanBuilder::unnest(
     unnestFields.emplace_back(field(name));
   }
 
+  bool isLegacyUnnest = legacyUnnest.has_value() ? legacyUnnest.value() : true;
   std::vector<std::string> unnestNames;
   for (const auto& name : unnestColumns) {
     auto input = planNode_->outputType()->findChild(name);
     if (input->isArray()) {
-      unnestNames.push_back(name + "_e");
+      if ((isLegacyUnnest == false) && (input->childAt(0)->isRow())) {
+        auto row = asRowType(input->childAt(0));
+        auto size = row->size();
+        for (auto i = 0; i < size; i++) {
+          unnestNames.push_back(row->nameOf(i) + "_e");
+        }
+      } else {
+        unnestNames.push_back(name + "_e");
+      }
     } else if (input->isMap()) {
       unnestNames.push_back(name + "_k");
       unnestNames.push_back(name + "_v");
@@ -1265,6 +1275,7 @@ PlanBuilder& PlanBuilder::unnest(
       unnestFields,
       unnestNames,
       ordinalColumn,
+      isLegacyUnnest,
       planNode_);
   return *this;
 }

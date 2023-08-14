@@ -438,11 +438,13 @@ UnnestNode
 ~~~~~~~~~~
 
 The unnest operation expands arrays and maps into separate columns. Arrays are
-expanded into a single column, and maps are expanded into two columns
-(key, value). Can be used to expand multiple columns. In this case produces as
-many rows as the highest cardinality array or map (the other columns are padded
-with nulls). Optionally can produce an ordinality column that specifies the row
-number starting with 1.
+expanded into a single column with the exception of arrays of rows. Arrays of
+ROW type are recursively unnested i.e each column from the ROW type is expanded
+into a separate output column. Maps are expanded into two columns (key, value).
+Can be used to expand multiple columns. In this case produces as many rows as
+the highest cardinality array or map (the other columns are padded with nulls).
+Optionally can produce an ordinality column that specifies the row number
+starting with 1.
 
 .. list-table::
    :widths: 10 30

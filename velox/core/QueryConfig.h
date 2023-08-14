@@ -268,6 +268,9 @@ class QueryConfig {
   static constexpr const char* kPrestoArrayAggIgnoreNulls =
       "presto.array_agg.ignore_nulls";
 
+  /// Indicates if legacy_unnest is enabled in presto.
+  static constexpr const char* kPrestoLegacyUnnest = "presto.legacy_unnest";
+
   /// If false, size function returns null for null input.
   static constexpr const char* kSparkLegacySizeOfNull =
       "spark.legacy_size_of_null";
@@ -569,6 +572,10 @@ class QueryConfig {
 
   bool prestoArrayAggIgnoreNulls() const {
     return get<bool>(kPrestoArrayAggIgnoreNulls, false);
+  }
+
+  bool prestoLegacyUnnest() const {
+    return get<bool>(kPrestoLegacyUnnest, false);
   }
 
   int64_t sparkBloomFilterExpectedNumItems() const {
