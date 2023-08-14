@@ -158,9 +158,9 @@ void ByteStream::appendStringPiece(folly::StringPiece value) {
   int32_t bytes = value.size();
   int32_t offset = 0;
   for (;;) {
-    int32_t bytesFit =
+    const int32_t bytesFit =
         std::min(bytes - offset, current_->size - current_->position);
-    memcpy(
+    ::memcpy(
         current_->buffer + current_->position, value.data() + offset, bytesFit);
     current_->position += bytesFit;
     offset += bytesFit;

@@ -764,10 +764,10 @@ class VectorStream {
         lengths_(streamArena),
         values_(streamArena) {
     streamArena->newTinyRange(50, &header_);
-    auto name = typeToEncodingName(type);
+    const auto name = typeToEncodingName(type);
     header_.size = name.size() + sizeof(int32_t);
     *reinterpret_cast<int32_t*>(header_.buffer) = name.size();
-    memcpy(header_.buffer + sizeof(int32_t), &name[0], name.size());
+    ::memcpy(header_.buffer + sizeof(int32_t), &name[0], name.size());
     nulls_.startWrite(1 + (initialNumRows / 8));
     if (initialNumRows > 0) {
       switch (type_->kind()) {
@@ -776,7 +776,7 @@ class VectorStream {
             values_.startWrite(initialNumRows * 4);
             break;
           }
-          [[fallthrough]];
+          FOLLY_FALLTHROUGH;
         case TypeKind::ARRAY:
         case TypeKind::MAP:
           hasLengths_ = true;

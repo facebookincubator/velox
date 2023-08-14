@@ -107,14 +107,15 @@ void PartitionedOutputBufferManager::initializeTask(
     std::shared_ptr<Task> task,
     core::PartitionedOutputNode::Kind kind,
     int numDestinations,
-    int numDrivers) {
+    int numDrivers,
+    memory::MemoryPool* pool) {
   const auto& taskId = task->taskId();
 
   buffers_.withLock([&](auto& buffers) {
     auto it = buffers.find(taskId);
     if (it == buffers.end()) {
       buffers[taskId] = std::make_shared<PartitionedOutputBuffer>(
-          std::move(task), kind, numDestinations, numDrivers);
+          std::move(task), kind, numDestinations, numDrivers, pool);
     } else {
       VELOX_FAIL(
           "Registering an output buffer for pre-existing taskId {}", taskId);

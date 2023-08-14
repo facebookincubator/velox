@@ -204,28 +204,15 @@ std::string DestinationBuffer::toString() {
   return out.str();
 }
 
-namespace {
-// Frees 'freed' and realizes 'promises'. Used after
-// updateAfterAcknowledgeLocked. This runs outside of the mutex, so
-// that we do the expensive free outside and only then continue the
-// producers which will allocate more memory.
-void releaseAfterAcknowledge(
-    std::vector<std::shared_ptr<SerializedPage>>& freed,
-    std::vector<ContinuePromise>& promises) {
-  freed.clear();
-  for (auto& promise : promises) {
-    promise.setValue();
-  }
-}
-} // namespace
-
 PartitionedOutputBuffer::PartitionedOutputBuffer(
     std::shared_ptr<Task> task,
     PartitionedOutputNode::Kind kind,
     int numDestinations,
-    uint32_t numDrivers)
+    uint32_t numDrivers,
+    memory::MemoryPool* pool)
     : task_(std::move(task)),
       kind_(kind),
+      pool_(pool),
       maxSize_(
           task_->queryCtx()->queryConfig().maxPartitionedOutputBufferSize()),
       continueSize_((maxSize_ * kContinuePct) / 100),
@@ -319,6 +306,9 @@ bool PartitionedOutputBuffer::enqueue(
     VELOX_CHECK_LT(destination, buffers_.size());
 
     totalSize_ += data->size();
+    LOG(ERROR) << "enqueue totalSize_ " << succinctBytes(totalSize_)
+               << " pool size " << succinctBytes(pool_->currentBytes()) << " "
+               << pool_->name();
     switch (kind_) {
       case PartitionedOutputNode::Kind::kBroadcast:
         VELOX_CHECK_EQ(destination, 0, "Bad destination {}", destination);
@@ -417,6 +407,31 @@ void PartitionedOutputBuffer::enqueuePartitionedOutputLocked(
     // buffers. Further data for these buffers is dropped.
     totalSize_ -= data->size();
     VELOX_CHECK_GE(totalSize_, 0);
+    data.reset();
+    LOG(ERROR) << "enqueue failed totalSize_ " << succinctBytes(totalSize_)
+               << " pool size " << succinctBytes(pool_->currentBytes()) << " "
+               << pool_->name();
+  }
+}
+
+void PartitionedOutputBuffer::releaseAfterAcknowledge(
+    std::vector<std::shared_ptr<SerializedPage>>& freed,
+    std::vector<ContinuePromise>& promises) {
+  {
+    std::lock_guard<std::mutex> l(mutex_);
+    LOG(ERROR) << "before actual release totalSize_ "
+               << succinctBytes(totalSize_) << " pool size "
+               << succinctBytes(pool_->currentBytes()) << " " << pool_->name();
+  }
+  freed.clear();
+  for (auto& promise : promises) {
+    promise.setValue();
+  }
+  {
+    std::lock_guard<std::mutex> l(mutex_);
+    LOG(ERROR) << "after actual release totalSize_ "
+               << succinctBytes(totalSize_) << " pool size "
+               << succinctBytes(pool_->currentBytes()) << " " << pool_->name();
   }
 }
 
@@ -532,6 +547,9 @@ void PartitionedOutputBuffer::updateAfterAcknowledgeLocked(
       totalFreed,
       totalSize_);
   totalSize_ -= totalFreed;
+  LOG(ERROR) << "going to release " << succinctBytes(totalFreed)
+             << " totalSize_ " << succinctBytes(totalSize_) << " pool size "
+             << succinctBytes(pool_->currentBytes()) << " " << pool_->name();
   VELOX_CHECK_GE(totalSize_, 0);
   if (totalSize_ < continueSize_) {
     promises = std::move(promises_);

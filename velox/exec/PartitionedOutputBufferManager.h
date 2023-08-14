@@ -25,7 +25,8 @@ class PartitionedOutputBufferManager {
       std::shared_ptr<Task> task,
       core::PartitionedOutputNode::Kind kind,
       int numDestinations,
-      int numDrivers);
+      int numDrivers,
+      memory::MemoryPool* pool);
 
   /// Updates the number of buffers. Return true if the buffer exists for a
   /// given taskId, else returns false.

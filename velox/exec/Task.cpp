@@ -630,11 +630,13 @@ void Task::start(
         const auto totalOutputDrivers = factory->groupedExecution
             ? factory->numDrivers * self->planFragment_.numSplitGroups
             : factory->numDrivers;
+        auto* partitionedNodePool = self->getOrAddNodePool(partitionedOutputNode->id());
         bufferManager->initializeTask(
             self,
             partitionedOutputNode->kind(),
             partitionedOutputNode->numPartitions(),
-            totalOutputDrivers);
+            totalOutputDrivers,
+            partitionedNodePool);
       }
 
       // NOTE: MergeExchangeNode doesn't use the exchange client created here to
@@ -1832,6 +1834,7 @@ TaskStats Task::taskStats() const {
   }
 
   auto bufferManager = bufferManager_.lock();
+  VELOX_CHECK_NOT_NULL(bufferManager);
   taskStats.outputBufferUtilization = bufferManager->getUtilization(taskId_);
   taskStats.outputBufferOverutilized = bufferManager->isOverutilized(taskId_);
 

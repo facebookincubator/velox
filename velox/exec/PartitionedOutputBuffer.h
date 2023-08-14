@@ -134,7 +134,8 @@ class PartitionedOutputBuffer {
       std::shared_ptr<Task> task,
       core::PartitionedOutputNode::Kind kind,
       int numDestinations,
-      uint32_t numDrivers);
+      uint32_t numDrivers,
+      memory::MemoryPool* pool);
 
   core::PartitionedOutputNode::Kind kind() const {
     return kind_;
@@ -224,6 +225,14 @@ class PartitionedOutputBuffer {
       std::unique_ptr<SerializedPage> data,
       std::vector<DataAvailable>& dataAvailableCbs);
 
+  // Frees 'freed' and realizes 'promises'. Used after
+  // updateAfterAcknowledgeLocked. This runs outside of the mutex, so
+  // that we do the expensive free outside and only then continue the
+  // producers which will allocate more memory.
+  void releaseAfterAcknowledge(
+      std::vector<std::shared_ptr<SerializedPage>>& freed,
+      std::vector<ContinuePromise>& promises);
+
   std::string toStringLocked() const;
 
   FOLLY_ALWAYS_INLINE bool isBroadcast() const {
@@ -240,8 +249,8 @@ class PartitionedOutputBuffer {
 
   const std::shared_ptr<Task> task_;
   const core::PartitionedOutputNode::Kind kind_;
-  /// If 'totalSize_' > 'maxSize_', each producer is blocked after adding
-  /// data.
+  memory::MemoryPool* const pool_;
+  // If 'totalSize_' > 'maxSize_', each producer is blocked after adding data.
   const uint64_t maxSize_;
   // When 'totalSize_' goes below 'continueSize_', blocked producers are
   // resumed.
@@ -264,7 +273,7 @@ class PartitionedOutputBuffer {
 
   std::mutex mutex_;
   // Actual data size in 'buffers_'.
-  uint64_t totalSize_ = 0;
+  uint64_t totalSize_{0};
   std::vector<ContinuePromise> promises_;
   // The next buffer index in 'buffers_' to load data from arbitrary buffer
   // which is only used by arbitrary output type.
