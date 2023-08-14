@@ -16,6 +16,7 @@ add_executable(
   velox_functions_spark_aggregates_test
   BitwiseXorAggregationTest.cpp
   BloomFilterAggAggregateTest.cpp
+  DecimalSumAggregateTest.cpp
   FirstAggregateTest.cpp
   LastAggregateTest.cpp
   AverageAggregationTest.cpp
