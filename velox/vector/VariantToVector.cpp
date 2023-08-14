@@ -103,29 +103,8 @@ static void validateOrSetType(NestedTypeCounter& counter, const variant& v) {
     if (v.kind() != counter.kind) {
       if (counter.kind == TypeKind::UNKNOWN) {
         counter.kind = v.kind();
-        if (v.kind() == TypeKind::SHORT_DECIMAL) {
-          auto dec = v.value<TypeKind::SHORT_DECIMAL>();
-          counter.precision = dec.precision;
-          counter.scale = dec.scale;
-        } else if (v.kind() == TypeKind::LONG_DECIMAL) {
-          auto dec = v.value<TypeKind::LONG_DECIMAL>();
-          counter.precision = dec.precision;
-          counter.scale = dec.scale;
-        }
       } else {
         throw std::invalid_argument("Variant kind doesn't match predecessors");
-      }
-    } else if (v.kind() == TypeKind::SHORT_DECIMAL) {
-      auto dec = v.value<TypeKind::SHORT_DECIMAL>();
-      if (counter.precision != dec.precision || counter.scale != dec.scale) {
-        throw std::invalid_argument(
-            "Mismatch between expected and actual precision and scale");
-      }
-    } else if (v.kind() == TypeKind::LONG_DECIMAL) {
-      auto dec = v.value<TypeKind::LONG_DECIMAL>();
-      if (counter.precision != dec.precision || counter.scale != dec.scale) {
-        throw std::invalid_argument(
-            "Mismatch between expected and actual precision and scale");
       }
     }
   }
@@ -141,33 +120,11 @@ static void computeRowCountsAndType(
   }
   // At this point, we know that v.kind() equals counter.kind
   switch (counter.kind) {
-    case TypeKind::ROW: {
-      const std::vector<variant>& children = v.row();
-      if (counter.children.size() != children.size()) {
-        if (counter.children.size() == 0) {
-          counter.children.resize(children.size());
-        } else {
-          throw std::invalid_argument("Unexpected number of children");
-        }
-      }
-      for (size_t i = 0; i < children.size(); i++) {
-        computeRowCountsAndType(counter.children[i], children[i]);
-        counter.children[i].rowCount = counter.rowCount;
-      }
-    } break;
     case TypeKind::ARRAY: {
       const std::vector<variant>& elements = v.array();
       counter.children.resize(1);
       for (const variant& elt : elements) {
         computeRowCountsAndType(counter.children[0], elt);
-      }
-    } break;
-    case TypeKind::MAP: {
-      const std::map<variant, variant>& elements = v.map();
-      counter.children.resize(2);
-      for (const std::pair<variant, variant> pair : elements) {
-        computeRowCountsAndType(counter.children[0], pair.first);
-        computeRowCountsAndType(counter.children[1], pair.second);
       }
     } break;
     default:
@@ -180,22 +137,6 @@ static VectorPtr allocateVector(
     const NestedTypeCounter& counter,
     velox::memory::MemoryPool* pool) {
   switch (counter.kind) {
-    case TypeKind::ROW: {
-      std::vector<VectorPtr> children;
-      std::vector<TypePtr> types;
-      children.reserve(counter.children.size());
-      types.reserve(counter.children.size());
-      for (auto child_counter : counter.children) {
-        children.push_back(allocateVector(child_counter, pool));
-        types.push_back(children.back()->type());
-      }
-      return std::make_shared<RowVector>(
-          pool,
-          ROW(std::move(types)),
-          /*nulls=*/nullptr,
-          counter.rowCount,
-          std::move(children));
-    }
     case TypeKind::ARRAY: {
       BufferPtr sizes =
           AlignedBuffer::allocate<vector_size_t>(counter.rowCount, pool, 0);
@@ -211,32 +152,9 @@ static VectorPtr allocateVector(
           std::move(sizes),
           std::move(elements));
     }
-    case TypeKind::MAP: {
-      BufferPtr sizes =
-          AlignedBuffer::allocate<vector_size_t>(counter.rowCount, pool, 0);
-      BufferPtr offsets =
-          AlignedBuffer::allocate<vector_size_t>(counter.rowCount, pool, 0);
-      VectorPtr keys = allocateVector(counter.children.at(0), pool);
-      VectorPtr values = allocateVector(counter.children.at(1), pool);
-      return std::make_shared<MapVector>(
-          pool,
-          MAP(keys->type(), values->type()),
-          /*nulls=*/nullptr,
-          counter.rowCount,
-          std::move(offsets),
-          std::move(sizes),
-          std::move(keys),
-          std::move(values));
-    }
     default: {
       TypePtr type;
-      if (counter.kind == TypeKind::SHORT_DECIMAL) {
-        type = SHORT_DECIMAL(counter.precision, counter.scale);
-      } else if (counter.kind == TypeKind::LONG_DECIMAL) {
-        type = LONG_DECIMAL(counter.precision, counter.scale);
-      } else {
-        type = createScalarType(counter.kind);
-      }
+      type = createScalarType(counter.kind);
       return BaseVector::create(std::move(type), counter.rowCount, pool);
     }
   }
@@ -249,12 +167,7 @@ void setElementInFlatVector(
     VectorPtr& vector) {
   using NativeType = typename TypeTraits<Kind>::NativeType;
   auto asFlat = vector->asFlatVector<NativeType>();
-  if constexpr (
-      Kind == TypeKind::SHORT_DECIMAL || Kind == TypeKind::LONG_DECIMAL) {
-    asFlat->set(idx, NativeType{v.value<NativeType>().value()});
-  } else {
-    asFlat->set(idx, NativeType{v.value<NativeType>()});
-  }
+  asFlat->set(idx, NativeType{v.value<NativeType>()});
 }
 
 static void incrementChildRowsInserted(NestedTypeCounter& counter) {
@@ -275,15 +188,6 @@ static void insertVariantIntoVector(
     }
   } else
     switch (counter.kind) {
-      case TypeKind::ROW: {
-        auto asRow = vector->as<RowVector>();
-        const std::vector<variant>& children = v.row();
-        for (size_t i = 0; i < counter.children.size(); i++) {
-          insertVariantIntoVector(
-              counter.children[i], children[i], asRow->childAt(i));
-        }
-        break;
-      }
       case TypeKind::ARRAY: {
         auto asArray = vector->as<ArrayVector>();
         const std::vector<variant>& elements = v.array();
@@ -297,17 +201,6 @@ static void insertVariantIntoVector(
         for (const variant& elt : elements) {
           insertVariantIntoVector(
               counter.children.at(0), elt, asArray->elements());
-        }
-        break;
-      }
-      case TypeKind::MAP: {
-        auto asMap = vector->as<MapVector>();
-        const std::map<variant, variant>& elements = v.map();
-        VectorPtr& keys = asMap->mapKeys();
-        VectorPtr& values = asMap->mapValues();
-        for (const auto& pair : elements) {
-          insertVariantIntoVector(counter.children.at(0), pair.first, keys);
-          insertVariantIntoVector(counter.children.at(1), pair.second, values);
         }
         break;
       }

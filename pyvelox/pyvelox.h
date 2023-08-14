@@ -75,22 +75,6 @@ inline velox::variant pyToVariant(const py::handle& obj) {
       }
     }
     return velox::variant::array(std::move(result));
-  } else if (py::isinstance<py::dict>(obj)) {
-    py::dict objAsDict = py::cast<py::dict>(obj);
-    std::map<velox::variant, velox::variant> map;
-    for (auto item : objAsDict) {
-      map.emplace(
-          std::make_pair(pyToVariant(item.first), pyToVariant(item.second)));
-    }
-    return velox::variant::map(std::move(map));
-  } else if (py::isinstance<py::tuple>(obj)) {
-    py::tuple objAsTuple = py::cast<py::tuple>(obj);
-    std::vector<velox::variant> elements;
-    elements.reserve(py::len(objAsTuple));
-    for (auto item : objAsTuple) {
-      elements.emplace_back(pyToVariant(item));
-    }
-    return velox::variant::row(std::move(elements));
   } else {
     throw py::type_error("Invalid type of object");
   }
@@ -147,6 +131,9 @@ static VectorPtr variantsToFlatVector(
     const std::vector<velox::variant>& variants,
     facebook::velox::memory::MemoryPool* pool);
 
+static inline VectorPtr pyListToVector(
+    const py::list& list,
+    facebook::velox::memory::MemoryPool* pool);
 
 static inline VectorPtr pyListToVector(
     const py::list& list,
@@ -171,39 +158,13 @@ static VectorPtr createDictionaryVector(
 template <typename NativeType>
 inline py::object getItemFromSimpleVector(
     SimpleVectorPtr<NativeType>& v,
-    vector_size_t idx) {
-  checkBounds(v, idx);
-  if (v->isNullAt(idx)) {
-    return py::none();
-  }
-  if constexpr (std::is_same_v<NativeType, velox::StringView>) {
-    const velox::StringView value = v->valueAt(idx);
-    py::str result = std::string_view(value);
-    return result;
-  } else {
-    py::object result = py::cast(v->valueAt(idx));
-    return result;
-  }
-}
+    vector_size_t idx);
 
 template <typename NativeType>
 inline void setItemInFlatVector(
     FlatVectorPtr<NativeType>& v,
     vector_size_t idx,
-    py::handle& obj) {
-  checkBounds(v, idx);
-
-  velox::variant var = pyToVariant(obj);
-  if (var.kind() == velox::TypeKind::INVALID) {
-    return v->setNull(idx, true);
-  }
-
-  if (var.kind() != v->typeKind()) {
-    throw py::type_error("Attempted to insert value of mismatched types");
-  }
-
-  v->set(idx, NativeType{var.value<NativeType>()});
-}
+    py::handle& obj);
 
 inline void appendVectors(VectorPtr& u, VectorPtr& v) {
   if (u->typeKind() != v->typeKind()) {
@@ -488,26 +449,6 @@ static void addVectorBindings(
       m, "ArrayVector", py::module_local(asModuleLocalDefinitions))
       .def("elements", [](ArrayVectorPtr vec) -> VectorPtr {
         return vec->elements();
-      });
-
-  py::class_<MapVector, MapVectorPtr, BaseVector>(
-      m, "MapVector", py::module_local(asModuleLocalDefinitions))
-      .def(
-          "mapKeys",
-          [](MapVectorPtr vec) -> VectorPtr { return vec->mapKeys(); })
-      .def("mapValues", [](MapVectorPtr vec) -> VectorPtr {
-        return vec->mapValues();
-      });
-
-  py::class_<RowVector, RowVectorPtr, BaseVector>(
-      m, "RowVector", py::module_local(asModuleLocalDefinitions))
-      .def(
-          "children",
-          [](RowVectorPtr vec) -> std::vector<VectorPtr> {
-            return vec->children();
-          })
-      .def("childAt", [](RowVectorPtr vec, column_index_t idx) -> VectorPtr {
-        return vec->childAt(idx);
       });
 
   constexpr TypeKind supportedTypes[] = {
