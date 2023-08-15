@@ -3839,8 +3839,8 @@ TEST_P(TestColumnReader, testDecimal64WithSkip) {
       .WillRepeatedly(Return(nullptr));
   EXPECT_CALL(streams_, getStreamProxy(_, proto::Stream_Kind_PRESENT, false))
       .WillRepeatedly(Return(nullptr));
-  unsigned char presentBuffer[] = {0xfe, 0xff, 0x80}; // [0xff]
-  EXPECT_CALL(streams_, getStreamProxy(1, proto::Stream_Kind_PRESENT, true))
+  const unsigned char presentBuffer[] = {0xfe, 0xff, 0x80}; // [0xff]
+  EXPECT_CALL(streams_, getStreamProxy(1, proto::Stream_Kind_PRESENT, false))
       .WillRepeatedly(Return(new SeekableArrayInputStream(
           presentBuffer, VELOX_ARRAY_SIZE(presentBuffer))));
   const unsigned char numBuffer[] = {
@@ -3895,8 +3895,8 @@ TEST_P(TestColumnReader, testDecimal128WithSkip) {
       .WillRepeatedly(Return(nullptr));
   EXPECT_CALL(streams_, getStreamProxy(_, proto::Stream_Kind_PRESENT, false))
       .WillRepeatedly(Return(nullptr));
-  unsigned char presentBuffer[] = {0xfe, 0xff, 0xf8};
-  EXPECT_CALL(streams_, getStreamProxy(1, proto::Stream_Kind_PRESENT, true))
+  const unsigned char presentBuffer[] = {0xfe, 0xff, 0xf8};
+  EXPECT_CALL(streams_, getStreamProxy(1, proto::Stream_Kind_PRESENT, false))
       .WillRepeatedly(Return(new SeekableArrayInputStream(
           presentBuffer, VELOX_ARRAY_SIZE(presentBuffer))));
   const unsigned char numBuffer[] = {
