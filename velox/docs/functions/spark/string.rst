@@ -97,6 +97,14 @@ Unless specified otherwise, all functions return NULL if at least one of the arg
         SELECT overlay('Spark SQL', 'tructured', 2, 4); -- "Structured SQL"
         SELECT overlay('Spark SQL', '_', -6, 3); -- "_Sql"
 
+.. spark:function:: parse_url(url, partToExtract[, key]) -> string
+
+   Extracts a part from a URL.
+   ::
+        SELECT parse_url('http://spark.apache.org/path?query=1', 'HOST'); -- spark.apache.org
+        SELECT parse_url('http://spark.apache.org/path?query=1', 'QUERY'); -- query=1
+        SELECT parse_url('http://spark.apache.org/path?query=1', 'QUERY', "query"); -- 1
+
 .. spark:function:: replace(string, search, replace) -> string
 
     Replaces all occurrences of `search` with `replace`. ::
