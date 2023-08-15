@@ -601,6 +601,9 @@ AsyncDataCache::AsyncDataCache(
   for (auto i = 0; i < kNumShards; ++i) {
     shards_.push_back(std::make_unique<CacheShard>(this));
   }
+  if (ssdCache_) {
+    ssdCache_->readFileInfoMapCheckpoint();
+  }
 }
 
 AsyncDataCache::~AsyncDataCache() {}

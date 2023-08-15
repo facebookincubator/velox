@@ -17,8 +17,10 @@ add_test(simple_lru_cache_test simple_lru_cache_test)
 target_link_libraries(simple_lru_cache_test gtest gtest_main glog::glog
                       gflags::gflags Folly::folly)
 
-add_executable(velox_cache_test StringIdMapTest.cpp AsyncDataCacheTest.cpp
-                                SsdFileTest.cpp SsdFileTrackerTest.cpp)
+add_executable(
+  velox_cache_test StringIdMapTest.cpp AsyncDataCacheTest.cpp SsdCacheTest.cpp
+                   SsdFileTest.cpp SsdFileTrackerTest.cpp)
+add_test(velox_cache_test velox_cache_test)
 add_test(velox_cache_test velox_cache_test)
 target_link_libraries(
   velox_cache_test

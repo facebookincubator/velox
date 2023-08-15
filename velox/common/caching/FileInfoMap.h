@@ -95,6 +95,11 @@ class FileInfoMap {
     return function(*this);
   }
 
+  // For unit test only.
+  const folly::F14FastMap<uint64_t, RawFileInfo>& getMap() const {
+    return fileMap_;
+  }
+
  private:
   // A singleton instance.
   static std::shared_ptr<FileInfoMap> instance_;

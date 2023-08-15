@@ -17,10 +17,17 @@
 #include <folly/Executor.h>
 #include <folly/portability/SysUio.h>
 #include "velox/common/caching/FileIds.h"
+#include "velox/common/caching/FileInfoMap.h"
 #include "velox/common/file/FileSystems.h"
 #include "velox/common/time/Timer.h"
 
+#include <fcntl.h>
+#ifdef linux
+#include <linux/fs.h>
+#endif // linux
+
 #include <filesystem>
+#include <fstream>
 #include <numeric>
 
 namespace facebook::velox::cache {
@@ -34,6 +41,7 @@ SsdCache::SsdCache(
     bool disableFileCow)
     : filePrefix_(filePrefix),
       numShards_(numShards),
+      makeCheckpoint_(checkpointIntervalBytes > 0),
       groupStats_(std::make_unique<FileGroupStats>()),
       executor_(executor) {
   // Make sure the given path of Ssd files has the prefix for local file system.
@@ -55,6 +63,7 @@ SsdCache::SsdCache(
         fmt::format("{}{}", filePrefix_, i),
         i,
         fileMaxRegions,
+        this,
         checkpointIntervalBytes / numShards,
         disableFileCow));
   }
@@ -171,6 +180,145 @@ void SsdCache::applyTtl(int64_t maxFileOpenTime) {
   for (auto& future : waitFutures) {
     auto& exec = folly::QueuedImmediateExecutor::instance();
     std::move(future).via(&exec).wait();
+  }
+}
+
+void SsdCache::makeFileInfoMapCheckpoint() {
+  if (!FileInfoMap::exists() || !makeCheckpoint_) {
+    return;
+  }
+
+  folly::SharedMutex::ReadHolder l(FileInfoMap::getInstance()->mutex());
+
+  const auto checkpointPath = filePrefix_ + kFileInfoMapCheckpointExtension;
+  try {
+    std::ofstream state;
+    state.exceptions(std::ofstream::failbit);
+    state.open(checkpointPath, std::ios_base::out | std::ios_base::trunc);
+
+    state.write(kFileInfoMapCheckpointMagic, 7);
+    FileInfoMap::getInstance()->forEach(
+        [&state](uint64_t fileNum, RawFileInfo& rawFileInfo) {
+          auto fileName = fileIds().string(fileNum);
+          int32_t length = fileName.size();
+          state.write(reinterpret_cast<char*>(&length), sizeof(length));
+          state.write(fileName.data(), length);
+          state.write(
+              reinterpret_cast<const char*>(&rawFileInfo.openTimeSec),
+              sizeof(rawFileInfo.openTimeSec));
+        });
+    int32_t endMarker = kFileInfoMapCheckpointEndMarker;
+    state.write(reinterpret_cast<const char*>(&endMarker), sizeof(endMarker));
+
+    if (state.bad()) {
+      throw std::runtime_error(fmt::format(
+          "Error in writing file info map checkpoint file {}.",
+          checkpointPath));
+    }
+    state.close();
+
+    auto fd = open(checkpointPath.c_str(), O_WRONLY);
+    if (fd <= 0) {
+      throw std::runtime_error(fmt::format(
+          "Error in opening file info map checkpoint file for sync: {}.", fd));
+    }
+    auto rc = fsync(fd);
+    if (rc < 0) {
+      throw std::runtime_error(fmt::format(
+          "Error in syncing info file map checkpoint file: {}.", rc));
+    }
+    close(fd);
+
+    VELOX_SSD_CACHE_LOG(INFO)
+        << FileInfoMap::getInstance()->size()
+        << " entries from file info map are written to the checkpoint.";
+  } catch (const std::exception& e) {
+    VELOX_SSD_CACHE_LOG(ERROR)
+        << "Error in making checkpoint for the file info map. Deleting the checkpoint file "
+        << checkpointPath;
+    auto rc = unlink(checkpointPath.c_str());
+    if (rc) {
+      VELOX_SSD_CACHE_LOG(ERROR)
+          << "Error in deleting the file info map checkpoint file "
+          << checkpointPath << " after write failure. RC: " << rc;
+    }
+    throw e;
+  }
+}
+
+void SsdCache::readFileInfoMapCheckpoint() {
+  if (!FileInfoMap::exists() || !makeCheckpoint_) {
+    return;
+  }
+
+  folly::SharedMutex::WriteHolder l(FileInfoMap::getInstance()->mutex());
+
+  VELOX_CHECK_EQ(
+      FileInfoMap::getInstance()->size(),
+      0,
+      "File info map is not empty before recovering from checkpoint.");
+
+  auto checkpointPath = filePrefix_ + kFileInfoMapCheckpointExtension;
+  std::ifstream state(checkpointPath);
+  if (!state.is_open()) {
+    LOG(INFO) << "No file info map checkpoint file is found.";
+    return;
+  }
+
+  try {
+    state.exceptions(std::ifstream::failbit);
+
+    char magic[7];
+    state.read(magic, sizeof(magic));
+    VELOX_CHECK_EQ(
+        strncmp(magic, kFileInfoMapCheckpointMagic, sizeof(magic)), 0);
+
+    int64_t numEntries = 0;
+    for (;;) {
+      int32_t length;
+      state.read(reinterpret_cast<char*>(&length), sizeof(length));
+      if (length == kFileInfoMapCheckpointEndMarker) {
+        break;
+      }
+
+      std::string fileName;
+      fileName.resize(length);
+      state.read(fileName.data(), length);
+      uint64_t fileNum = fileIds().id(fileName);
+      bool skipEntry = fileNum == StringIdMap::kNoId;
+
+      int64_t openTimeSec;
+      state.read(reinterpret_cast<char*>(&openTimeSec), sizeof(openTimeSec));
+
+      if (skipEntry) {
+        continue;
+      }
+
+      FileInfoMap::getInstance()->addOpenFileInfo(fileNum, openTimeSec);
+      numEntries++;
+    }
+
+    VELOX_SSD_CACHE_LOG(INFO)
+        << "Recovered " << numEntries
+        << " entries of the file info map from checkpoint.";
+  } catch (const std::exception& e) {
+    try {
+      VELOX_SSD_CACHE_LOG(ERROR)
+          << "Error recovering file info map from the checkpoint file "
+          << checkpointPath << ": " << e.what()
+          << ". Starting with the file info map reset and deleting the checkpoint file.";
+      FileInfoMap::getInstance()->clear();
+      auto rc = unlink(checkpointPath.c_str());
+      if (rc) {
+        VELOX_SSD_CACHE_LOG(ERROR)
+            << "Error in deleting the file info map checkpoint file "
+            << checkpointPath << " after recovery failure. RC: " << rc;
+      }
+    } catch (const std::exception& e) {
+      VELOX_SSD_CACHE_LOG(ERROR)
+          << "Error in deleting the file info map checkpoint file "
+          << checkpointPath << " after recovery failure: " << e.what();
+    }
   }
 }
 

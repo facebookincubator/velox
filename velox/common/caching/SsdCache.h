@@ -26,6 +26,11 @@ namespace facebook::velox::cache {
 
 class SsdCache {
  public:
+  static constexpr const char* kFileInfoMapCheckpointExtension =
+      ".fileinfo.cpt";
+  static constexpr const char* kFileInfoMapCheckpointMagic = "FILEMAP";
+  static constexpr int32_t kFileInfoMapCheckpointEndMarker = 0xf11e;
+
   /// Constructs a cache with backing files at path 'filePrefix'.<ordinal>.
   /// <ordinal> ranges from 0 to 'numShards' - 1.
   /// 'maxBytes' is the total capacity of the cache. This is rounded up to the
@@ -82,6 +87,16 @@ class SsdCache {
   /// synchronously processes all SSD files in parallel.
   void applyTtl(int64_t maxFileOpenTime);
 
+  /// Make checkpoint for FileInfoMap by saving all its entry pairs to a
+  /// checkpoint state file. It must be invoked every time an SSD cache shard is
+  /// checkpointed to keep them in sync.
+  void makeFileInfoMapCheckpoint();
+
+  /// Restore FileInfoMap by reading entry pairs from the checkpoint state file.
+  /// It assumes the FileInfoMap has been created and empty. If the read fails,
+  /// set FileInfoMap empty and delete the checkpoint state file.
+  void readFileInfoMapCheckpoint();
+
   /// Returns stats aggregated from all shards.
   SsdCacheStats refreshStats() const;
 
@@ -108,6 +123,7 @@ class SsdCache {
   const int32_t numShards_;
   std::vector<std::unique_ptr<SsdFile>> files_;
 
+  bool makeCheckpoint_{false};
   // Count of shards with unfinished writes.
   std::atomic<int32_t> writesInProgress_{0};
 

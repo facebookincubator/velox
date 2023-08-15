@@ -195,6 +195,7 @@ class SsdFile {
       const std::string& filename,
       int32_t shardId,
       int32_t maxRegions,
+      SsdCache* ssdCache,
       int64_t checkpointInternalBytes = 0,
       bool disableFileCow = false,
       folly::Executor* executor = nullptr);
@@ -366,6 +367,8 @@ class SsdFile {
   // offset and the end of the region. This is subscripted with the region
   // index. The regionIndex times kRegionSize is an offset into the file.
   std::vector<uint32_t> regionSizes_;
+
+  SsdCache* const ssdCache_;
 
   // Indices of regions available for writing new entries.
   std::vector<int32_t> writableRegions_;

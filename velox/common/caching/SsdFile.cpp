@@ -122,12 +122,14 @@ SsdFile::SsdFile(
     const std::string& filename,
     int32_t shardId,
     int32_t maxRegions,
+    SsdCache* ssdCache,
     int64_t checkpointIntervalBytes,
     bool disableFileCow,
     folly::Executor* executor)
     : fileName_(filename),
       maxRegions_(maxRegions),
       shardId_(shardId),
+      ssdCache_(ssdCache),
       checkpointIntervalBytes_(checkpointIntervalBytes),
       executor_(executor) {
   int32_t oDirect = 0;
@@ -432,6 +434,7 @@ void SsdFile::write(std::vector<CachePin>& pins) {
   if ((checkpointIntervalBytes_ > 0) &&
       (bytesAfterCheckpoint_ >= checkpointIntervalBytes_)) {
     checkpoint();
+    ssdCache_->makeFileInfoMapCheckpoint();
   }
 }
 

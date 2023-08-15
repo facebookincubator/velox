@@ -65,6 +65,7 @@ class SsdFileTest : public testing::Test {
         fmt::format("{}/ssdtest", tempDirectory_->path),
         0, // shardId
         bits::roundUp(ssdBytes, SsdFile::kRegionSize) / SsdFile::kRegionSize,
+        nullptr, // ssdCache
         0, // checkpointInternalBytes
         setNoCowFlag);
   }
