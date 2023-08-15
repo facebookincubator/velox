@@ -104,6 +104,10 @@ struct Converter<
       }
       if (negative) {
         for (; index < len; index++) {
+          // Ignore the fractional part for floating point/decimal.
+          if (v[index] == '.') {
+            break;
+          }
           if (!std::isdigit(v[index])) {
             VELOX_USER_FAIL("Encountered a non-digit character");
           }
@@ -115,6 +119,10 @@ struct Converter<
         }
       } else {
         for (; index < len; index++) {
+          // Ignore the fractional part for floating point/decimal.
+          if (v[index] == '.') {
+            break;
+          }
           if (!std::isdigit(v[index])) {
             VELOX_USER_FAIL("Encountered a non-digit character");
           }

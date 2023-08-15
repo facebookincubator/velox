@@ -752,7 +752,6 @@ TEST_F(CastExprTest, primitiveInvalidCornerCases) {
   {
     // Invalid strings.
     testCast<std::string, int8_t>("tinyint", {"1234567"}, {0}, true);
-    testCast<std::string, int8_t>("tinyint", {"1.2"}, {0}, true);
     testCast<std::string, int8_t>("tinyint", {"1a"}, {0}, true);
     testCast<std::string, int8_t>("tinyint", {""}, {0}, true);
     testCast<std::string, int32_t>("integer", {"1'234'567"}, {0}, true);
@@ -836,6 +835,12 @@ TEST_F(CastExprTest, primitiveValidCornerCases) {
   setCastIntByTruncate(true);
   // To integer.
   {
+    // Valid strings.
+    testCast<std::string, int8_t>("tinyint", {"1.2"}, {1}, false);
+    testCast<std::string, int8_t>("tinyint", {"-1.8"}, {-1}, false);
+    testCast<std::string, int8_t>("tinyint", {"."}, {0}, false);
+    testCast<std::string, int8_t>("tinyint", {"-."}, {0}, false);
+
     testCast<int32_t, int8_t>("tinyint", {1234567}, {-121}, false);
     testCast<int32_t, int8_t>("tinyint", {-1234567}, {121}, false);
     testCast<double, int8_t>("tinyint", {12345.67}, {57}, false);
