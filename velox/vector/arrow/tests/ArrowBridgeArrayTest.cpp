@@ -801,7 +801,7 @@ class ArrowBridgeArrayImportTest : public ArrowBridgeArrayExportTest {
       totalLength = isInline ? 0 : totalLength;
       auto buffers = output->stringBuffers();
       size_t realLength = 0;
-      for (auto& buffer : stringBuffers_) {
+      for (auto& buffer : buffers) {
         realLength += buffer->capacity();
       }
       EXPECT_EQ(totalLength, realLength);
