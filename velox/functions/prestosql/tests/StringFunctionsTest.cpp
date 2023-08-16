@@ -1785,6 +1785,68 @@ TEST_F(StringFunctionsTest, lpad) {
   EXPECT_EQ(invalidPadString + "abc", lpad("abc", 6, invalidPadString));
 }
 
+TEST_F(StringFunctionsTest, hammingDistance) {
+  const auto hammingDistance = [&](std::optional<std::string> left,
+                                   std::optional<std::string> right) {
+    return evaluateOnce<int64_t>("hamming_distance(c0, c1)", left, right);
+  };
+
+  EXPECT_EQ(hammingDistance("", ""), 0);
+  EXPECT_EQ(hammingDistance(" ", " "), 0);
+  EXPECT_EQ(hammingDistance("6", "6"), 0);
+  EXPECT_EQ(hammingDistance("z", "z"), 0);
+  EXPECT_EQ(hammingDistance("a", "b"), 1);
+  EXPECT_EQ(hammingDistance("b", "B"), 1);
+  EXPECT_EQ(hammingDistance("hello", "hello"), 0);
+  EXPECT_EQ(hammingDistance("hello", "jello"), 1);
+  EXPECT_EQ(hammingDistance("like", "hate"), 3);
+  EXPECT_EQ(hammingDistance("hello", "world"), 4);
+  EXPECT_EQ(hammingDistance("Customs", "Luptoki"), 4);
+  EXPECT_EQ(hammingDistance("This is lame", "Why to slam "), 8);
+  EXPECT_EQ(hammingDistance(std::nullopt, std::nullopt), std::nullopt);
+  EXPECT_EQ(hammingDistance("hello", std::nullopt), std::nullopt);
+  EXPECT_EQ(hammingDistance(std::nullopt, "world"), std::nullopt);
+
+  // Tests for unicode
+  EXPECT_EQ(hammingDistance("hello na\u00EFve world", "hello naive world"), 1);
+  EXPECT_EQ(
+      hammingDistance(
+          "\u4FE1\u5FF5,\u7231,\u5E0C\u671B",
+          "\u4FE1\u4EF0,\u7231,\u5E0C\u671B"),
+      1);
+  EXPECT_EQ(
+      hammingDistance(
+          "\u4F11\u5FF5,\u7231,\u5E0C\u671B",
+          "\u4FE1\u5FF5,\u7231,\u5E0C\u671B"),
+      1);
+  EXPECT_EQ(hammingDistance("\u0001", "\u0001"), 0);
+  EXPECT_EQ(hammingDistance("\u0001", "\u0002"), 1);
+
+  // Tests for invalid arguments
+  VELOX_ASSERT_THROW(
+      hammingDistance("\u0000", "\u0001"),
+      "The input strings to hamming_distance function must have the same length");
+  VELOX_ASSERT_THROW(
+      hammingDistance("hello", ""),
+      "The input strings to hamming_distance function must have the same length");
+  VELOX_ASSERT_THROW(
+      hammingDistance("", "hello"),
+      "The input strings to hamming_distance function must have the same length");
+  VELOX_ASSERT_THROW(
+      hammingDistance("hello", "o"),
+      "The input strings to hamming_distance function must have the same length");
+  VELOX_ASSERT_THROW(
+      hammingDistance("h", "hello"),
+      "The input strings to hamming_distance function must have the same length");
+  VELOX_ASSERT_THROW(
+      hammingDistance("hello na\u00EFve world", "hello na:ive world"),
+      "The input strings to hamming_distance function must have the same length");
+  VELOX_ASSERT_THROW(
+      hammingDistance(
+          "\u4FE1\u5FF5,\u7231,\u5E0C\u671B", "\u4FE1\u5FF5\u5E0C\u671B"),
+      "The input strings to hamming_distance function must have the same length");
+}
+
 TEST_F(StringFunctionsTest, concatInSwitchExpr) {
   auto data = makeRowVector(
       {makeFlatVector<bool>({true, false}),

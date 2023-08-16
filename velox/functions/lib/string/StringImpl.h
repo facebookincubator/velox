@@ -173,6 +173,64 @@ std::vector<int32_t> stringToCodePoints(const T& inputString) {
   return codePoints;
 }
 
+template <typename TInString>
+FOLLY_ALWAYS_INLINE int64_t
+hammingDistanceUnicode(const TInString& left, const TInString& right) {
+  int64_t distance = 0;
+  int64_t leftPosition = 0;
+  int64_t rightPosition = 0;
+  std::string_view leftSV = std::string_view(left.data(), left.size());
+  std::string_view rightSV = std::string_view(right.data(), right.size());
+  int64_t leftLength = leftSV.size();
+  int64_t rightLength = rightSV.size();
+
+  while (leftPosition < leftLength && rightPosition < rightLength) {
+    int leftSize, rightSize;
+    auto codePointLeft = utf8proc_codepoint(
+        leftSV.data() + leftPosition, leftSV.data() + leftLength, leftSize);
+    auto codePointRight = utf8proc_codepoint(
+        rightSV.data() + rightPosition,
+        rightSV.data() + rightLength,
+        rightSize);
+
+    // if both code points are invalid, the behavior is undefined
+    // the following code skips one byte and continues
+    leftPosition += codePointLeft > 0 ? leftSize : -codePointLeft;
+    rightPosition += codePointRight > 0 ? rightSize : -codePointRight;
+
+    if (codePointLeft != codePointRight) {
+      distance++;
+    }
+  }
+
+  VELOX_USER_CHECK(
+      leftPosition == leftSV.size() && rightPosition == rightSV.size(),
+      "The input strings to hamming_distance function must have the same length");
+
+  return distance;
+}
+
+template <typename TInString>
+FOLLY_ALWAYS_INLINE int64_t
+hammingDistanceAscii(const TInString& left, const TInString& right) {
+  VELOX_USER_CHECK(
+      left.size() == right.size(),
+      "The input strings to hamming_distance function must have the same length");
+
+  int64_t distance = 0;
+  std::string_view leftSV = std::string_view(left.data(), left.size());
+  std::string_view rightSV = std::string_view(right.data(), right.size());
+  int64_t stringLength = leftSV.size();
+
+  for (int i = 0; i < stringLength; i++) {
+    if (leftSV.at(i) != rightSV.at(i)) {
+      distance++;
+    }
+  }
+
+  return distance;
+}
+
 /// Returns the starting position in characters of the Nth instance(counting
 /// from the left if lpos==true and from the end otherwise) of the substring in
 /// string. Positions start with 1. If not found, 0 is returned. If subString is

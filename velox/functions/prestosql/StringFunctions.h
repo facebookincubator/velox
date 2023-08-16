@@ -296,6 +296,23 @@ struct StrLPosFunction : public StrPosFunctionBase<T, true> {};
 template <typename T>
 struct StrRPosFunction : public StrPosFunctionBase<T, false> {};
 
+/// hamming_distance(string, string) -> bigint
+/// Computes the hamming distance between two strings.
+template <typename T>
+struct HammingDistanceFunction {
+  VELOX_DEFINE_FUNCTION_TYPES(T);
+
+  FOLLY_ALWAYS_INLINE void
+  call(int64_t& result, const StringView& left, const StringView& right) {
+    result = stringImpl::hammingDistanceUnicode(left, right);
+  }
+
+  FOLLY_ALWAYS_INLINE void
+  callAscii(int64_t& result, const StringView& left, const StringView& right) {
+    result = stringImpl::hammingDistanceAscii(left, right);
+  }
+};
+
 template <typename T>
 struct LevenshteinDistanceFunction {
   VELOX_DEFINE_FUNCTION_TYPES(T);
