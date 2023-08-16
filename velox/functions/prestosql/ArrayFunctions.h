@@ -728,16 +728,25 @@ struct ArrayRemoveFunction {
       const arg_type<Generic<T1>>& element) {
     static constexpr CompareFlags kFlags = {
         false, false, /*euqalsOnly*/ true, true /*stopAtNull*/};
+    std::vector<std::optional<exec::GenericView>> toCopyItems;
+
     for (const auto& item : array) {
       if (item.has_value()) {
         auto result = element.compare(item.value(), kFlags);
         VELOX_USER_CHECK(
             result.has_value(),
             "array_remove does not support arrays with elements that are null or contain null")
-        if (result.value()) {
-          auto& newItem = out.add_item();
-          newItem.copy_from(item.value());
-        }
+        toCopyItems.push_back(item.value());
+      } else {
+        toCopyItems.push_back(std::nullopt);
+      }
+    }
+
+    for (const auto& item : toCopyItems) {
+      if (item.has_value()) {
+        auto& newItem = out.add_item();
+        newItem.copy_from(item.value());
+
       } else {
         out.add_null();
       }
