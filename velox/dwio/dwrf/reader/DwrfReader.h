@@ -93,6 +93,7 @@ class DwrfRowReader : public StrideIndexProvider,
   void updateRuntimeStats(
       dwio::common::RuntimeStatistics& stats) const override {
     stats.skippedStrides += skippedStrides_;
+    stats.processedStrides += processedStrides_;
     stats.columnReaderStatistics.flattenStringDictionaryValues +=
         columnReaderStatistics_.flattenStringDictionaryValues;
   }
@@ -188,6 +189,8 @@ class DwrfRowReader : public StrideIndexProvider,
   std::unordered_map<uint32_t, std::vector<uint64_t>> stripeStridesToSkip_;
   // Number of skipped strides.
   int64_t skippedStrides_{0};
+  // Number of processed strides.
+  int64_t processedStrides_{0};
 
   // Set to true after clearing filter caches, i.e. adding a dynamic
   // filter. Causes filters to be re-evaluated against stride stats on
