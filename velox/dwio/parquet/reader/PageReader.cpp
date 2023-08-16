@@ -129,7 +129,7 @@ const char* FOLLY_NONNULL decompressLz4AndLzo(
     uint32_t compressedSize,
     uint32_t uncompressedSize,
     memory::MemoryPool& pool,
-    const thrift::CompressionCodec::type codec_) {
+    const thrift::CompressionCodec::type codec) {
   dwio::common::ensureCapacity<char>(uncompressedData, uncompressedSize, &pool);
 
   uint32_t decompressedTotalLength = 0;
@@ -141,7 +141,7 @@ const char* FOLLY_NONNULL decompressLz4AndLzo(
     if (inputLength < sizeof(uint32_t)) {
       VELOX_FAIL(
           "{} uncompress failed, input len is to small: {}",
-          codec_,
+          codec,
           inputLength)
     }
     uint32_t uncompressedBlockLength =
@@ -157,7 +157,7 @@ const char* FOLLY_NONNULL decompressLz4AndLzo(
           remainingOutputSize,
           uncompressedBlockLength)
     }
-    if (inputLength <= 0) {
+    if (inputLength == 0) {
       break;
     }
 
@@ -166,7 +166,7 @@ const char* FOLLY_NONNULL decompressLz4AndLzo(
       if (inputLength < sizeof(uint32_t)) {
         VELOX_FAIL(
             "{} uncompress failed, input len is to small: {}",
-            codec_,
+            codec,
             inputLength)
       }
       // Read the length of the next lz4/lzo compressed block.
@@ -189,24 +189,24 @@ const char* FOLLY_NONNULL decompressLz4AndLzo(
 
       // Decompress this block.
       remainingOutputSize = uncompressedSize - decompressedTotalLength;
-      uint64_t decompressedSize = -1;
-      if (codec_ == thrift::CompressionCodec::LZ4) {
+      uint64_t decompressedSize = std::numeric_limits<uint64_t>::max();
+      if (codec == thrift::CompressionCodec::LZ4) {
         decompressedSize = LZ4_decompress_safe(
             inputPtr,
             outPtr,
             static_cast<int32_t>(compressedLength),
             static_cast<int32_t>(remainingOutputSize));
-      } else if (codec_ == thrift::CompressionCodec::LZO) {
+      } else if (codec == thrift::CompressionCodec::LZO) {
         decompressedSize = common::compression::lzoDecompress(
             inputPtr,
             inputPtr + compressedLength,
             outPtr,
             outPtr + remainingOutputSize);
       } else {
-        VELOX_FAIL("Unsupported Parquet compression type '{}'", codec_);
+        VELOX_FAIL("Unsupported Parquet compression type '{}'", codec);
       }
 
-      VELOX_CHECK_EQ(decompressedSize, remainingOutputSize);
+      VELOX_CHECK_LE(decompressedSize, remainingOutputSize);
 
       outPtr += decompressedSize;
       inputPtr += compressedLength;
