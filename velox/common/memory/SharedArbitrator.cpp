@@ -561,7 +561,7 @@ void SharedArbitrator::finishArbitration() {
   }
 }
 
-std::string SharedArbitrator::kind() {
+const std::string& SharedArbitrator::kind() {
   return kind_;
 }
 

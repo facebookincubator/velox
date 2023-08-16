@@ -60,15 +60,24 @@ TEST_F(MemoryArbitrationTest, create) {
     config.capacity = 1 * GB;
     config.kind = kind;
     if (kind.empty()) {
-      ASSERT_EQ(MemoryArbitrator::create(config), nullptr);
+      VELOX_ASSERT_THROW(
+          MemoryArbitrator::create(config),
+          "Memory arbitrator kind must be set");
     } else if (kind == unknownType) {
       VELOX_ASSERT_THROW(
           MemoryArbitrator::create(config),
           "Arbitrator factory for kind UNKNOWN not registered");
     } else {
-      VELOX_ASSERT_THROW(MemoryArbitrator::create(config), "");
+      FAIL();
     }
   }
+}
+
+TEST_F(MemoryArbitrationTest, createWithDefaultConf) {
+  MemoryArbitrator::Config config;
+  config.capacity = 1 * GB;
+  const auto& arbitrator = MemoryArbitrator::create(config);
+  VELOX_CHECK_EQ(arbitrator->kind(), "NOOP");
 }
 
 TEST_F(MemoryArbitrationTest, queryMemoryCapacity) {
@@ -128,8 +137,9 @@ class FakeTestArbitrator : public MemoryArbitrator {
     VELOX_NYI();
   }
 
-  std::string kind() override {
-    return "USER";
+  const std::string& kind() override {
+    static const std::string kind = "USER";
+    return kind;
   }
 
   bool growMemory(
@@ -160,6 +170,10 @@ class MemoryArbitratorFactoryTest : public testing::Test {
  protected:
   static void SetUpTestCase() {
     MemoryArbitrator::registerFactory(kind_, factory_);
+  }
+
+  static void TearDownTestCase() {
+    MemoryArbitrator::unregisterFactory(kind_);
   }
 
  protected:

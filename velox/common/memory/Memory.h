@@ -97,7 +97,7 @@ struct MemoryManagerOptions {
   ///
   /// NOTE: the arbitrator will only be created if its kind is set explicitly.
   /// Otherwise MemoryArbitrator::create returns a nullptr.
-  std::string arbitratorKind{};
+  std::string arbitratorKind{"NOOP"};
 
   /// The initial memory capacity to reserve for a newly created memory pool.
   uint64_t memoryPoolInitCapacity{256 << 20};

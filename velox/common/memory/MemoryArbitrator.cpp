@@ -24,7 +24,7 @@
 namespace facebook::velox::memory {
 
 namespace {
-class Registry {
+class FactoryRegistry {
  public:
   void registerFactory(
       const std::string& kind,
@@ -60,34 +60,108 @@ class Registry {
   std::unordered_map<std::string, MemoryArbitrator::Factory> map_;
 };
 
-Registry registry;
+FactoryRegistry& arbitratorFactories() {
+  static FactoryRegistry registry;
+  return registry;
+}
+
+/// Used to enforce the fixed query memory isolation across running queries.
+/// When a memory pool exceeds the fixed capacity limit, the query just
+/// fails with memory capacity exceeded error without arbitration. This is
+/// used to match the current memory isolation behavior adopted by
+/// Prestissimo.
+///
+/// TODO: deprecate this legacy policy with kShared policy for Prestissimo
+/// later.
+class NoopArbitrator : public MemoryArbitrator {
+ public:
+  static void registerFactory() {
+    MemoryArbitrator::registerFactory(
+        kind_, [](const MemoryArbitrator::Config& config) {
+          return std::make_unique<NoopArbitrator>(config);
+        });
+  }
+
+  explicit NoopArbitrator(const Config& config) : MemoryArbitrator(config) {
+    VELOX_CHECK_EQ(kind_, config.kind);
+    VELOX_USER_CHECK_EQ(
+        config.capacity,
+        kMaxMemory,
+        "Noop arbitrator has capacity other than kMaxMemory")
+  }
+
+  const std::string& kind() override {
+    static const std::string kind = kind_;
+    return kind;
+  }
+
+  // In noop arbitrator, we set the memory pool's
+  // capacity to its configured max once reserveMemory is called.
+  void reserveMemory(MemoryPool* pool, uint64_t /*unused*/) override {
+    pool->grow(pool->maxCapacity());
+  }
+
+  // As the default arbitrator, noop arbitrator doesn't release the pool.
+  void releaseMemory(MemoryPool* /*unused*/) override {
+    // No-op
+  }
+
+  // As the default arbitrator, noop arbitrator doesn't grow the pool
+  // since the pool should be already granted maximum capacity.
+  bool growMemory(
+      MemoryPool* /*unused*/,
+      const std::vector<std::shared_ptr<MemoryPool>>& /*unused*/,
+      uint64_t /*unused*/) override {
+    return false;
+  }
+
+  // As the default arbitrator, noop arbitrator doesn't shrink the pool
+  // since the pool should be granted maximum capacity.
+  uint64_t shrinkMemory(
+      const std::vector<std::shared_ptr<MemoryPool>>& /*unused*/,
+      uint64_t /*unused*/) override {
+    return 0;
+  }
+
+  Stats stats() const override {
+    Stats stats;
+    stats.maxCapacityBytes = capacity_;
+    return stats;
+  }
+
+  std::string toString() const override {
+    return fmt::format("ARBITRATOR[{}]", kind_);
+  }
+
+ private:
+  static constexpr const char* kind_{"NOOP"};
+};
+
+bool registerNoopArbitratorFactory() {
+  NoopArbitrator::registerFactory();
+  return true;
+};
+
 } // namespace
 
 std::unique_ptr<MemoryArbitrator> MemoryArbitrator::create(
     const Config& config) {
-  if (config.kind.empty()) {
-    /// Used to enforce the fixed query memory isolation across running queries.
-    /// When a memory pool exceeds the fixed capacity limit, the query just
-    /// fails with memory capacity exceeded error without arbitration. This is
-    /// used to match the current memory isolation behavior adopted by
-    /// Prestissimo.
-    ///
-    /// TODO: deprecate this legacy policy with kShared policy for Prestissimo
-    /// later.
-    return nullptr;
-  }
-  auto& factory = registry.getFactory(config.kind);
+  static bool isNoopArbitratorFactoryRegistered =
+      registerNoopArbitratorFactory();
+  VELOX_DCHECK(isNoopArbitratorFactoryRegistered)
+  VELOX_USER_CHECK(!config.kind.empty(), "Memory arbitrator kind must be set")
+  auto& factory = arbitratorFactories().getFactory(config.kind);
   return factory(config);
 }
 
 void MemoryArbitrator::registerFactory(
     const std::string& kind,
     MemoryArbitrator::Factory factory) {
-  registry.registerFactory(kind, std::move(factory));
+  arbitratorFactories().registerFactory(kind, std::move(factory));
 }
 
 void MemoryArbitrator::unregisterFactory(const std::string& kind) {
-  registry.unregisterFactory(kind);
+  arbitratorFactories().unregisterFactory(kind);
 }
 
 void MemoryArbitrator::registerAllFactories() {
