@@ -799,7 +799,9 @@ class ArrowBridgeArrayImportTest : public ArrowBridgeArrayExportTest {
         }
       }
       totalLength = isInline ? 0 : totalLength;
-      auto buffers = output->stringBuffers();
+      auto buffers =
+          dynamic_cast<const FlatVector<StringView>*>(output->wrappedVector())
+              ->stringBuffers();
       size_t realLength = 0;
       for (auto& buffer : buffers) {
         realLength += buffer->capacity();
