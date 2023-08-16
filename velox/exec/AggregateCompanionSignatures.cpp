@@ -222,7 +222,8 @@ FunctionSignaturePtr CompanionSignatures::extractFunctionSignature(
       /*argumentTypes*/
       std::vector<TypeSignature>{signature->intermediateType()},
       /*constantArguments*/ std::vector<bool>{false},
-      /*variableArity*/ false);
+      /*variableArity*/ false,
+      /*isExcluded*/ false);
 }
 
 std::string CompanionSignatures::extractFunctionNameWithSuffix(

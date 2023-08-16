@@ -81,6 +81,55 @@ class VectorFunctionOneArg : public VectorFunctionTwoArgs {
                 .build()};
   }
 };
+
+class VectorFunctionExcludeSignatures : public exec::VectorFunction {
+ public:
+  void apply(
+      const SelectivityVector& rows,
+      std::vector<VectorPtr>& args,
+      const TypePtr& ptr,
+      exec::EvalCtx& context,
+      VectorPtr& result) const override {}
+
+  static std::vector<std::shared_ptr<exec::FunctionSignature>> signatures() {
+    return {
+        exec::FunctionSignatureBuilder()
+            .typeVariable("T")
+            .returnType("T")
+            .argumentType("T")
+            .build(),
+        exec::FunctionSignatureBuilder()
+            .exclude()
+            .returnType("varchar")
+            .argumentType("varchar")
+            .build()};
+  }
+};
+
+class VectorFunctionExcludeAllSignatures : public exec::VectorFunction {
+ public:
+  void apply(
+      const SelectivityVector& rows,
+      std::vector<VectorPtr>& args,
+      const TypePtr& ptr,
+      exec::EvalCtx& context,
+      VectorPtr& result) const override {}
+
+  static std::vector<std::shared_ptr<exec::FunctionSignature>> signatures() {
+    return {
+        exec::FunctionSignatureBuilder()
+            .returnType("varchar")
+            .argumentType("varchar")
+            .build(),
+        exec::FunctionSignatureBuilder()
+            .exclude()
+            .typeVariable("T")
+            .returnType("T")
+            .argumentType("T")
+            .build(),
+    };
+  }
+};
 } // namespace
 
 namespace facebook::velox::functions {
@@ -95,10 +144,25 @@ VELOX_DECLARE_VECTOR_FUNCTION(
     VectorFunctionOneArg::signatures(),
     std::make_unique<VectorFunctionOneArg>());
 
+VELOX_DECLARE_VECTOR_FUNCTION(
+    udf_vector_function_exclude_signatures,
+    VectorFunctionExcludeSignatures::signatures(),
+    std::make_unique<VectorFunctionExcludeSignatures>());
+
+VELOX_DECLARE_VECTOR_FUNCTION(
+    udf_vector_function_exclude_all_signatures,
+    VectorFunctionExcludeAllSignatures::signatures(),
+    std::make_unique<VectorFunctionExcludeAllSignatures>());
+
 void registerVectorFunctions() {
   VELOX_REGISTER_VECTOR_FUNCTION(udf_vector_function_two_args, "my_function");
   VELOX_REGISTER_VECTOR_FUNCTION(
       udf_vector_function_one_arg, "my_function_one_arg");
+  VELOX_REGISTER_VECTOR_FUNCTION(
+      udf_vector_function_exclude_signatures, "my_function_exclude_signatures");
+  VELOX_REGISTER_VECTOR_FUNCTION(
+      udf_vector_function_exclude_all_signatures,
+      "my_function_exclude_all_signatures");
 
   registerFunction<SimpleFunctionTwoArgs, bool, Generic<T1>, Generic<T1>>(
       {"my_function"});
@@ -116,6 +180,18 @@ class FunctionResolutionTest : public functions::test::FunctionBaseTest {
     auto results = evaluateOnce<int32_t, int32_t, int32_t>(
         fmt::format("{}(c0, c1)", func), 1, 2);
     ASSERT_EQ(results.value(), expected);
+  }
+
+  void testVectorFunction(
+      const std::string& name,
+      const std::vector<TypePtr>& inputTypes,
+      const TypePtr& expectedReturnType) {
+    auto actualReturnType = resolveVectorFunction(name, inputTypes);
+    if (expectedReturnType) {
+      ASSERT_TRUE(actualReturnType->equivalent(*expectedReturnType));
+    } else {
+      ASSERT_TRUE(actualReturnType == nullptr);
+    }
   }
 };
 
@@ -316,5 +392,21 @@ TEST_F(FunctionResolutionTest, resolveCustomTypeTimestampWithTimeZone) {
       exec::simpleFunctions().resolveFunction("f_timestampzone", {})->type();
   EXPECT_EQ(type->toString(), TIMESTAMP_WITH_TIME_ZONE()->toString());
 }
+
+TEST_F(FunctionResolutionTest, signatureExclusion) {
+  functions::registerVectorFunctions();
+
+  testVectorFunction("my_function_exclude_signatures", {BIGINT()}, BIGINT());
+  testVectorFunction(
+      "my_function_exclude_signatures", {ARRAY(BIGINT())}, ARRAY(BIGINT()));
+  testVectorFunction("my_function_exclude_signatures", {VARCHAR()}, nullptr);
+
+  testVectorFunction("my_function_exclude_all_signatures", {BIGINT()}, nullptr);
+  testVectorFunction(
+      "my_function_exclude_all_signatures", {ARRAY(BIGINT())}, nullptr);
+  testVectorFunction(
+      "my_function_exclude_all_signatures", {VARCHAR()}, nullptr);
+}
+
 } // namespace
 } // namespace facebook::velox::exec

@@ -127,7 +127,8 @@ class FunctionSignature {
       TypeSignature returnType,
       std::vector<TypeSignature> argumentTypes,
       std::vector<bool> constantArguments,
-      bool variableArity);
+      bool variableArity,
+      bool isExcluded);
 
   virtual ~FunctionSignature() = default;
 
@@ -145,6 +146,10 @@ class FunctionSignature {
 
   bool variableArity() const {
     return variableArity_;
+  }
+
+  bool isExcluded() const {
+    return isExcluded_;
   }
 
   virtual std::string toString() const;
@@ -172,6 +177,7 @@ class FunctionSignature {
   const std::vector<TypeSignature> argumentTypes_;
   const std::vector<bool> constantArguments_;
   const bool variableArity_;
+  const bool isExcluded_;
 };
 
 using FunctionSignaturePtr = std::shared_ptr<FunctionSignature>;
@@ -190,7 +196,8 @@ class AggregateFunctionSignature : public FunctionSignature {
             std::move(returnType),
             std::move(argumentTypes),
             std::move(constantArguments),
-            variableArity),
+            variableArity,
+            false),
         intermediateType_{std::move(intermediateType)} {}
 
   const TypeSignature& intermediateType() const {
@@ -296,6 +303,11 @@ class FunctionSignatureBuilder {
     return *this;
   }
 
+  FunctionSignatureBuilder& exclude() {
+    isExcluded_ = true;
+    return *this;
+  }
+
   FunctionSignaturePtr build();
 
  private:
@@ -304,6 +316,7 @@ class FunctionSignatureBuilder {
   std::vector<TypeSignature> argumentTypes_;
   std::vector<bool> constantArguments_;
   bool variableArity_{false};
+  bool isExcluded_{false};
 };
 
 /// Convenience class for creating AggregageFunctionSignature instances.

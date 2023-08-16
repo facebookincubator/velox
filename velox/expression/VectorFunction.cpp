@@ -44,6 +44,17 @@ std::shared_ptr<const Type> resolveVectorFunction(
   if (auto vectorFunctionSignatures =
           exec::getVectorFunctionSignatures(functionName)) {
     for (const auto& signature : vectorFunctionSignatures.value()) {
+      if (signature->isExcluded()) {
+        exec::SignatureBinder binder(*signature, argTypes);
+        if (binder.tryBind()) {
+          return nullptr;
+        }
+      }
+    }
+    for (const auto& signature : vectorFunctionSignatures.value()) {
+      if (signature->isExcluded()) {
+        continue;
+      }
       exec::SignatureBinder binder(*signature, argTypes);
       if (binder.tryBind()) {
         return binder.tryResolveReturnType();

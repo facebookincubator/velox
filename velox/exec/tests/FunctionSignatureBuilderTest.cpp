@@ -251,4 +251,12 @@ TEST_F(FunctionSignatureBuilderTest, toString) {
   ASSERT_EQ("(varchar) -> varbinary -> bigint", toString({signature}));
 
   ASSERT_EQ("foo(BIGINT, VARCHAR)", toString("foo", {BIGINT(), VARCHAR()}));
+
+  // Excluded signature.
+  signature = FunctionSignatureBuilder()
+                  .exclude()
+                  .returnType("bigint")
+                  .argumentType("integer")
+                  .build();
+  ASSERT_EQ("exclude (integer) -> bigint", toString({signature}));
 }

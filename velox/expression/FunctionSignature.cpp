@@ -88,6 +88,9 @@ std::string FunctionSignature::argumentsToString() const {
 
 std::string FunctionSignature::toString() const {
   std::ostringstream out;
+  if (isExcluded()) {
+    out << "exclude ";
+  }
   out << "(" << argumentsToString() << ") -> " << returnType_.toString();
   return out.str();
 }
@@ -248,12 +251,14 @@ FunctionSignature::FunctionSignature(
     TypeSignature returnType,
     std::vector<TypeSignature> argumentTypes,
     std::vector<bool> constantArguments,
-    bool variableArity)
+    bool variableArity,
+    bool isExcluded)
     : variables_{std::move(variables)},
       returnType_{std::move(returnType)},
       argumentTypes_{std::move(argumentTypes)},
       constantArguments_{std::move(constantArguments)},
-      variableArity_{variableArity} {
+      variableArity_{variableArity},
+      isExcluded_(isExcluded) {
   validate(variables_, returnType_, argumentTypes_, constantArguments_);
 }
 
@@ -271,7 +276,8 @@ FunctionSignaturePtr FunctionSignatureBuilder::build() {
       returnType_.value(),
       std::move(argumentTypes_),
       std::move(constantArguments_),
-      variableArity_);
+      variableArity_,
+      isExcluded_);
 }
 
 std::shared_ptr<AggregateFunctionSignature>
