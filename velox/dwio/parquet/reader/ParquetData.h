@@ -186,7 +186,6 @@ class ParquetData : public dwio::common::FormatData {
     auto length = rowGroup.__isset.total_compressed_size
         ? rowGroup.total_compressed_size
         : rowGroup.total_byte_size;
-    VELOX_CHECK_GT(length, 0);
 
     return {fileOffset, length};
   }
