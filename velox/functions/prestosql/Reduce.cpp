@@ -15,7 +15,6 @@
  */
 #include "velox/expression/VectorFunction.h"
 #include "velox/functions/lib/LambdaFunctionUtil.h"
-
 namespace facebook::velox::functions {
 namespace {
 
@@ -67,27 +66,24 @@ class ReduceFunction : public exec::VectorFunction {
   void apply(
       const SelectivityVector& rows,
       std::vector<VectorPtr>& args,
-      const TypePtr& outputType,
+      const TypePtr& /* outputType */,
       exec::EvalCtx& context,
       VectorPtr& result) const override {
     VELOX_CHECK_EQ(args.size(), 4);
+    // Flatten input array.
+    exec::LocalDecodedVector arrayDecoder(context, *args[0], rows);
+    auto& decodedArray = *arrayDecoder.get();
+
+    auto flatArray = flattenArray(rows, args[0], decodedArray);
     // Identify the rows need to be computed.
     exec::LocalSelectivityVector nonNullRowsHolder(*context.execCtx());
     const SelectivityVector* nonNullRows = &rows;
-    DecodedVector decodedArray;
-    decodedArray.decode(*args[0], rows);
-    if (decodedArray.mayHaveNulls()) {
+    if (flatArray->mayHaveNulls()) {
       nonNullRowsHolder.get(rows);
       nonNullRowsHolder->deselectNulls(
-          decodedArray.nulls(), rows.begin(), rows.end());
+          flatArray->rawNulls(), rows.begin(), rows.end());
       nonNullRows = nonNullRowsHolder.get();
-      auto selected = nonNullRows->countSelected();
-      auto test = selected;
-      auto selected_1 = rows.countSelected();
-      auto test_1 = selected_1;
     }
-    // Flatten input array.
-    auto flatArray = flattenArray(*nonNullRows, args[0], decodedArray);
     const auto& initialState = args[1];
     auto partialResult =
         BaseVector::create(initialState->type(), rows.end(), context.pool());
@@ -101,9 +97,8 @@ class ReduceFunction : public exec::VectorFunction {
 
     // Make sure already populated entries in 'partialResult' do not get
     // overwritten if 'arrayRows' shrinks in subsequent iterations.
-    // const SelectivityVector& validRowsInReusedResult = rows;
-
     const SelectivityVector& validRowsInReusedResult = *nonNullRows;
+
     // Loop over lambda functions and apply these to elements of the base array.
     // In most cases there will be only one function and the loop will run once.
     auto inputFuncIt =
@@ -161,10 +156,8 @@ class ReduceFunction : public exec::VectorFunction {
         n++;
       }
     }
-
     // Apply output function.
-    VectorPtr localResult =
-        BaseVector::create(outputType, rows.end(), context.pool());
+    VectorPtr localResult;
     auto outputFuncIt =
         args[3]->asUnchecked<FunctionVector>()->iterator(nonNullRows);
     while (auto entry = outputFuncIt.next()) {

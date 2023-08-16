@@ -207,6 +207,8 @@ TEST_F(ReduceTest, finalSelectionLargerThanInput) {
 }
 
 TEST_F(ReduceTest, nullArray) {
+  // Verify that NULL array is not passed on to lambda as it should be handled
+  // differently from array with null element
   auto arrayVector = makeNullableArrayVector<int64_t>(
       {std::nullopt, {{1, std::nullopt}}, {{std::nullopt, 2}}, {{1, 2, 3}}});
   auto data = makeRowVector({arrayVector});
