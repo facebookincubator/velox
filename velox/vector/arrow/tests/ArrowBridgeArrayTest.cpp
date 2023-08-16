@@ -799,7 +799,12 @@ class ArrowBridgeArrayImportTest : public ArrowBridgeArrayExportTest {
         }
       }
       totalLength = isInline ? 0 : totalLength;
-      EXPECT_EQ(totalLength, output->buffersSize());
+      auto buffers = output->stringBuffers();
+      size_t realLength = 0;
+      for (auto& buffer : stringBuffers_) {
+        realLength += buffer->capacity();
+      }
+      EXPECT_EQ(totalLength, realLength);
     }
   }
 
