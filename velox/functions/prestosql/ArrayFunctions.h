@@ -697,4 +697,76 @@ struct ArrayUnionFunction {
   }
 };
 
+/// This class implements the array_remove function.
+///
+/// DEFINITION:
+/// array_remove(x, element) -> array
+/// Remove all elements that equal element from array x.
+template <typename T>
+struct ArrayRemoveFunction {
+  VELOX_DEFINE_FUNCTION_TYPES(T);
+
+  // Fast path for primitives.
+  template <typename Out, typename In, typename E>
+  void call(Out& out, const In& inputArray, E element) {
+    for (const auto& item : inputArray) {
+      if (item.has_value()) {
+        if (element != item.value()) {
+          auto& newItem = out.add_item();
+          newItem = item.value();
+        }
+      } else {
+        out.add_null();
+      }
+    }
+  }
+
+  // Generic implementation.
+  void call(
+      out_type<Array<Generic<T1>>>& out,
+      const arg_type<Array<Generic<T1>>>& array,
+      const arg_type<Generic<T1>>& element) {
+    static constexpr CompareFlags kFlags = {
+        false, false, /*euqalsOnly*/ true, true /*stopAtNull*/};
+    for (const auto& item : array) {
+      if (item.has_value()) {
+        auto result = element.compare(item.value(), kFlags);
+        VELOX_USER_CHECK(
+            result.has_value(),
+            "array_remove does not support arrays with elements that are null or contain null")
+        if (result.value()) {
+          auto& newItem = out.add_item();
+          newItem.copy_from(item.value());
+        }
+      } else {
+        out.add_null();
+      }
+    }
+  }
+};
+
+template <typename T>
+struct ArrayRemoveFunctionString {
+  VELOX_DEFINE_FUNCTION_TYPES(T);
+
+  static constexpr int32_t reuse_strings_from_arg = 0;
+
+  // String version that avoids copy of strings.
+  FOLLY_ALWAYS_INLINE void call(
+      out_type<Array<Varchar>>& out,
+      const arg_type<Array<Varchar>>& inputArray,
+      const arg_type<Varchar>& element) {
+    for (const auto& item : inputArray) {
+      if (item.has_value()) {
+        auto result = element.compare(item.value());
+        if (result) {
+          auto& newItem = out.add_item();
+          newItem.setNoCopy(item.value());
+        }
+      } else {
+        out.add_null();
+      }
+    }
+  }
+};
 } // namespace facebook::velox::functions
