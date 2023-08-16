@@ -574,21 +574,13 @@ void ReaderBase::scheduleRowGroups(
       currentGroup + 1 < rowGroupIds.size() ? rowGroupIds[currentGroup + 1] : 0;
   auto input = inputs_[thisGroup].get();
   if (!input) {
-    auto newInput = reader.enqueueRowGroup(thisGroup, input_);
-    if (newInput != input_) {
-      newInput->load(dwio::common::LogType::STRIPE);
-    }
-    inputs_[thisGroup] = std::move(newInput);
+    inputs_[thisGroup] = reader.enqueueRowGroup(thisGroup, input_);
   }
   for (auto counter = 0; counter < FLAGS_parquet_prefetch_rowgroups;
        ++counter) {
     if (nextGroup) {
       if (inputs_.count(nextGroup) != 0) {
-        auto newInput = reader.enqueueRowGroup(thisGroup, input_);
-        if (newInput != input_) {
-          newInput->load(dwio::common::LogType::STRIPE);
-        }
-        inputs_[nextGroup] = std::move(newInput);
+        inputs_[nextGroup] = reader.enqueueRowGroup(thisGroup, input_);
       }
     } else {
       break;

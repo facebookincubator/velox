@@ -101,6 +101,10 @@ StructColumnReader::enqueueRowGroup(
   // Or else create a new input.
   auto newInput = isRowGroupBuffered(index, *input) ? input : input->clone();
   enqueueRowGroup0(index, *newInput);
+  // If a new input was created, then load it.
+  if (newInput != input) {
+    newInput->load(dwio::common::LogType::STRIPE);
+  }
   return newInput;
 }
 

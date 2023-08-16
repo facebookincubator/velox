@@ -35,7 +35,7 @@ class StructColumnReader : public dwio::common::SelectiveStructColumnReader {
 
   /// Creates the streams for 'rowGroup'. Checks whether row 'rowGroup'
   /// has been buffered in 'input'. If true, return the input. Or else creates
-  /// the streams in a new input. Does not load yet.
+  /// the streams in a new input and loads.
   std::shared_ptr<dwio::common::BufferedInput> enqueueRowGroup(
       uint32_t index,
       const std::shared_ptr<dwio::common::BufferedInput>& input);
