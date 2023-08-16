@@ -64,6 +64,8 @@ class ParquetRowReader : public dwio::common::RowReader {
     return true;
   }
 
+  bool isRowGroupBuffered(int32_t rowGroupIndex) const;
+
  private:
   // Compares row group  metadata to filters in ScanSpec in options of
   // ReaderBase and determines the set of row groups to scan.

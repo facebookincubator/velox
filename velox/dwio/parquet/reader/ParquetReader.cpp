@@ -81,11 +81,14 @@ class ReaderBase {
       StructColumnReader& reader);
 
   /// Returns the uncompressed size for columns in 'type' and its children in
-  /// row
-  /// group.
+  /// row group.
   int64_t rowGroupUncompressedSize(
       int32_t rowGroupIndex,
       const dwio::common::TypeWithId& type) const;
+
+  /// Checks whether the specific row group has been loaded and
+  /// the data still exists in the buffered inputs.
+  bool isRowGroupBuffered(int32_t rowGroupIndex) const;
 
  private:
   // Reads and parses file footer.
@@ -581,7 +584,7 @@ void ReaderBase::scheduleRowGroups(
   for (auto counter = 0; counter < FLAGS_parquet_prefetch_rowgroups;
        ++counter) {
     if (nextGroup) {
-      if (inputs_.count(nextGroup) != 0) {
+      if (inputs_.count(nextGroup) == 0) {
         inputs_[nextGroup] = reader.loadRowGroup(thisGroup, input_);
       }
     } else {
@@ -608,6 +611,10 @@ int64_t ReaderBase::rowGroupUncompressedSize(
     sum += rowGroupUncompressedSize(rowGroupIndex, *child);
   }
   return sum;
+}
+
+bool ReaderBase::isRowGroupBuffered(int32_t rowGroupIndex) const {
+  return inputs_.count(rowGroupIndex) != 0;
 }
 
 ParquetRowReader::ParquetRowReader(
@@ -750,6 +757,10 @@ void ParquetRowReader::updateRuntimeStats(
 
 void ParquetRowReader::resetFilterCaches() {
   columnReader_->resetFilterCaches();
+}
+
+bool ParquetRowReader::isRowGroupBuffered(int32_t rowGroupIndex) const {
+  return readerBase_->isRowGroupBuffered(rowGroupIndex);
 }
 
 std::optional<size_t> ParquetRowReader::estimatedRowSize() const {
