@@ -19,9 +19,13 @@
 
 namespace facebook::velox {
 
+/**
+ * Implementation of hdfs read file.
+ */
 class HdfsReadFile final : public ReadFile {
  public:
   explicit HdfsReadFile(hdfsFS hdfs, std::string_view path);
+  ~HdfsReadFile() override;
 
   std::string_view pread(uint64_t offset, uint64_t length, void* buf)
       const final;
@@ -44,10 +48,11 @@ class HdfsReadFile final : public ReadFile {
 
  private:
   void preadInternal(uint64_t offset, uint64_t length, char* pos) const;
-  void seekToPosition(hdfsFile file, uint64_t offset) const;
   void checkFileReadParameters(uint64_t offset, uint64_t length) const;
+
   hdfsFS hdfsClient_;
   hdfsFileInfo* fileInfo_;
   std::string filePath_;
 };
+
 } // namespace facebook::velox

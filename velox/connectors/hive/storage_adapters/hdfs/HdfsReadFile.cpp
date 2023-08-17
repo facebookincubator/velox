@@ -18,6 +18,45 @@
 #include <folly/synchronization/CallOnce.h>
 #include <hdfs/hdfs.h>
 
+namespace {
+
+struct HdfsFile {
+  hdfsFS client_;
+  hdfsFile handle_;
+  std::string path_;
+
+  HdfsFile(hdfsFS client) : client_(client), handle_(nullptr) {}
+
+  ~HdfsFile() {
+    if (handle_ && hdfsCloseFile(client_, handle_) == -1) {
+      LOG(ERROR) << "Unable to close file, errno: " << errno;
+    }
+  }
+
+  void openFileHandle() {
+    // close old first
+    if (handle_ && hdfsCloseFile(client_, handle_) == -1) {
+      LOG(ERROR) << "Unable to close file, errno: " << errno;
+    }
+    handle_ = hdfsOpenFile(client_, path_.data(), O_RDONLY, 0, 0, 0);
+    VELOX_CHECK_NOT_NULL(
+        handle_,
+        "Unable to open file {}. got error: {}",
+        path_,
+        hdfsGetLastError());
+  }
+
+  int seek(uint64_t offset) const {
+    return hdfsSeek(client_, handle_, offset);
+  }
+
+  int32_t read(char* pos, uint64_t length) const {
+    return hdfsRead(client_, handle_, pos, length);
+  }
+};
+
+} // namespace
+
 namespace facebook::velox {
 
 HdfsReadFile::HdfsReadFile(hdfsFS hdfs, const std::string_view path)
@@ -30,37 +69,35 @@ HdfsReadFile::HdfsReadFile(hdfsFS hdfs, const std::string_view path)
       hdfsGetLastError());
 }
 
+HdfsReadFile::~HdfsReadFile() {
+  // should call hdfsFreeFileInfo to avoid memory leak
+  hdfsFreeFileInfo(fileInfo_, 1);
+}
+
 void HdfsReadFile::preadInternal(uint64_t offset, uint64_t length, char* pos)
     const {
   checkFileReadParameters(offset, length);
-  auto file = hdfsOpenFile(hdfsClient_, filePath_.data(), O_RDONLY, 0, 0, 0);
-  VELOX_CHECK_NOT_NULL(
-      file,
-      "Unable to open file {}. got error: {}",
-      filePath_,
-      hdfsGetLastError());
-  seekToPosition(file, offset);
-  uint64_t totalBytesRead = 0;
-  while (totalBytesRead < length) {
-    auto bytesRead = hdfsRead(hdfsClient_, file, pos, length - totalBytesRead);
-    VELOX_CHECK(bytesRead >= 0, "Read failure in HDFSReadFile::preadInternal.")
-    totalBytesRead += bytesRead;
-    pos += bytesRead;
+  static thread_local HdfsFile file(hdfsClient_);
+  if (!file.handle_ || file.path_ != filePath_) {
+    file.path_ = filePath_;
+    file.openFileHandle();
   }
 
-  if (hdfsCloseFile(hdfsClient_, file) == -1) {
-    LOG(ERROR) << "Unable to close file, errno: " << errno;
-  }
-}
-
-void HdfsReadFile::seekToPosition(hdfsFile file, uint64_t offset) const {
-  auto seekStatus = hdfsSeek(hdfsClient_, file, offset);
+  auto seekStatus = file.seek(offset);
   VELOX_CHECK_EQ(
       seekStatus,
       0,
       "Cannot seek through HDFS file: {}, error: {}",
       filePath_,
       std::string(hdfsGetLastError()));
+
+  uint64_t totalBytesRead = 0;
+  while (totalBytesRead < length) {
+    auto bytesRead = file.read(pos, length - totalBytesRead);
+    VELOX_CHECK(bytesRead >= 0, "Read failure in HDFSReadFile::preadInternal.")
+    totalBytesRead += bytesRead;
+    pos += bytesRead;
+  }
 }
 
 std::string_view
