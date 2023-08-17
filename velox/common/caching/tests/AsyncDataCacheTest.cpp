@@ -44,7 +44,7 @@ struct Request {
   SsdPin ssdPin;
 };
 
-class AsyncDataCacheTest : public testing::Test {
+class AsyncDataCacheTest : public ::testing::TestWithParam<bool> {
  public:
   // Deterministically fills 'allocation'  based on 'sequence'
   static void initializeContents(int64_t sequence, memory::Allocation& alloc) {
@@ -101,7 +101,9 @@ class AsyncDataCacheTest : public testing::Test {
           ssdBytes,
           4,
           executor(),
-          ssdBytes / 20);
+          ssdBytes / 20,
+          false,
+          GetParam());
     }
     memory::MmapAllocator::Options options;
     options.capacity = maxBytes;
@@ -487,7 +489,7 @@ void AsyncDataCacheTest::loadLoop(
   }
 }
 
-TEST_F(AsyncDataCacheTest, pin) {
+TEST_P(AsyncDataCacheTest, pin) {
   constexpr int64_t kSize = 25000;
   initializeCache(1 << 20);
   auto& exec = folly::QueuedImmediateExecutor::instance();
@@ -554,7 +556,7 @@ TEST_F(AsyncDataCacheTest, pin) {
   EXPECT_EQ(0, cache_->incrementPrefetchPages(0));
 }
 
-TEST_F(AsyncDataCacheTest, replace) {
+TEST_P(AsyncDataCacheTest, replace) {
   constexpr int64_t kMaxBytes = 64 << 20;
   FLAGS_velox_exception_user_stacktrace_enabled = false;
   initializeCache(kMaxBytes);
@@ -572,7 +574,7 @@ TEST_F(AsyncDataCacheTest, replace) {
       cache_->incrementCachedPages(0));
 }
 
-TEST_F(AsyncDataCacheTest, outOfCapacity) {
+TEST_P(AsyncDataCacheTest, outOfCapacity) {
   const int64_t kMaxBytes = 64
       << 20; // 64MB as MmapAllocator's min size is 64MB
   const int32_t kSize = 16 << 10;
@@ -623,7 +625,7 @@ void corruptFile(const std::string& path) {
 }
 } // namespace
 
-TEST_F(AsyncDataCacheTest, ssd) {
+TEST_P(AsyncDataCacheTest, ssd) {
 #ifdef TSAN_BUILD
   // NOTE: scale down the test data set to prevent tsan tester from running out
   // of memory.
@@ -702,12 +704,18 @@ TEST_F(AsyncDataCacheTest, ssd) {
   ASSERT_LT(kSsdBytes / 2, stats2.bytesRead);
 }
 
-TEST_F(AsyncDataCacheTest, invalidSsdPath) {
+TEST_P(AsyncDataCacheTest, invalidSsdPath) {
   auto testPath = "hdfs:/test/prefix_";
   uint64_t ssdBytes = 256UL << 20;
   VELOX_ASSERT_THROW(
-      SsdCache(testPath, ssdBytes, 4, executor(), ssdBytes / 20),
+      SsdCache(
+          testPath, ssdBytes, 4, executor(), ssdBytes / 20, false, GetParam()),
       fmt::format(
           "Ssd path '{}' does not start with '/' that points to local file system.",
           testPath));
 }
+
+INSTANTIATE_TEST_SUITE_P(
+    AsyncDataCacheTest,
+    AsyncDataCacheTest,
+    ::testing::Values(true, false));

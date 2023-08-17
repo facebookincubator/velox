@@ -18,6 +18,7 @@
 #include <folly/Executor.h>
 #include <folly/portability/SysUio.h>
 #include "velox/common/base/AsyncSource.h"
+#include "velox/common/base/Crc.h"
 #include "velox/common/caching/FileIds.h"
 
 #include <fcntl.h>
@@ -101,13 +102,15 @@ SsdFile::SsdFile(
     int32_t maxRegions,
     int64_t checkpointIntervalBytes,
     bool disableFileCow,
-    folly::Executor* FOLLY_NULLABLE executor)
+    folly::Executor* FOLLY_NULLABLE executor,
+    bool enableChecksum)
     : fileName_(filename),
       shardId_(shardId),
       maxRegions_(maxRegions),
       filename_(filename),
       checkpointIntervalBytes_(checkpointIntervalBytes),
-      executor_(executor) {
+      executor_(executor),
+      enableChecksum_(enableChecksum) {
   int32_t oDirect = 0;
 #ifdef linux
   oDirect = FLAGS_ssd_odirect ? O_DIRECT : 0;
@@ -233,7 +236,7 @@ CoalesceIoStats SsdFile::load(
     VELOX_CHECK_GE(
         runSize,
         entry->size(),
-        "IOERR SSd cache entry shorter than requested range");
+        "IOERR: SSd cache entry shorter than requested range");
     payloadTotal += entry->size();
     regionRead(regionIndex(ssdPins[i].run().offset()), runSize);
     ++stats_.entriesRead;
@@ -260,6 +263,19 @@ CoalesceIoStats SsdFile::load(
 
   for (auto i = 0; i < ssdPins.size(); ++i) {
     pins[i].checkedEntry()->setSsdFile(this, ssdPins[i].run().offset());
+    // Verify that the checksum matches after we read from SSD.
+    uint32_t checksum = checksumEntry(*pins[i].checkedEntry());
+    if (FOLLY_UNLIKELY(checksum != ssdPins[i].run().checksum())) {
+      ++stats_.readSsdErrors;
+      ++stats_.readSsdCorruptions;
+    }
+    VELOX_CHECK_EQ(
+        checksum,
+        ssdPins[i].run().checksum(),
+        "IOERR: Corrupt SSD cache entry - File: {}, Offset: {}, Size: {}",
+        fileName_,
+        ssdPins[i].run().offset(),
+        ssdPins[i].run().size());
   }
   return stats;
 }
@@ -410,9 +426,10 @@ void SsdFile::write(std::vector<CachePin>& pins) {
         auto size = entry->size();
         FileCacheKey key = {
             entry->key().fileNum, static_cast<uint64_t>(entry->offset())};
-        entries_[std::move(key)] = SsdRun(offset, size);
+        uint32_t checksum = checksumEntry(*entry);
+        entries_[std::move(key)] = SsdRun(offset, size, checksum);
         if (FLAGS_ssd_verify_write) {
-          verifyWrite(*entry, SsdRun(offset, size));
+          verifyWrite(*entry, SsdRun(offset, size, checksum));
         }
         offset += size;
         ++stats_.entriesWritten;
@@ -602,7 +619,7 @@ void SsdFile::checkpoint(bool force) {
     // kMapMarker,
     // {fileId, offset, SSdRun} triples,
     // kEndMarker.
-    state.write(kCheckpointMagic, sizeof(int32_t));
+    state.write(checkpointMagic().data(), sizeof(int32_t));
     state.write(asChar(&maxRegions_), sizeof(maxRegions_));
     state.write(asChar(&numRegions_), sizeof(numRegions_));
 
@@ -626,8 +643,10 @@ void SsdFile::checkpoint(bool force) {
       auto id = pair.first.fileNum.id();
       state.write(asChar(&id), sizeof(id));
       state.write(asChar(&pair.first.offset), sizeof(pair.first.offset));
-      auto offsetAndSize = pair.second.bits();
+      auto offsetAndSize = pair.second.bitsWithoutChecksum();
       state.write(asChar(&offsetAndSize), sizeof(offsetAndSize));
+      auto checksum = pair.second.checksum();
+      state.write(asChar(&checksum), sizeof(checksum));
     }
     const auto endMarker = kCheckpointEndMarker;
     state.write(asChar(&endMarker), sizeof(endMarker));
@@ -707,6 +726,30 @@ void SsdFile::initializeCheckpoint() {
   }
 }
 
+uint32_t SsdFile::checksumEntry(AsyncDataCacheEntry& entry) {
+  // Always have 0 checksum when checksum is disabled.
+  if (!enableChecksum_) {
+    return 0;
+  }
+  bits::Crc32 crc;
+  if (entry.tinyData()) {
+    crc.process_bytes(entry.tinyData(), entry.size());
+  } else {
+    int64_t bytesLeft = entry.size();
+    auto& data = entry.data();
+    for (auto i = 0; i < data.numRuns(); ++i) {
+      auto run = data.runAt(i);
+      crc.process_bytes(
+          run.data<char>(), std::min<size_t>(bytesLeft, run.numBytes()));
+      bytesLeft -= run.numBytes();
+      if (bytesLeft <= 0) {
+        break;
+      };
+    }
+  }
+  return crc.checksum();
+}
+
 bool SsdFile::testingIsCowDisabled() const {
 #ifdef linux
   int attr{0};
@@ -736,7 +779,7 @@ T readNumber(std::ifstream& stream) {
 void SsdFile::readCheckpoint(std::ifstream& state) {
   char magic[4];
   state.read(magic, sizeof(magic));
-  VELOX_CHECK(strncmp(magic, kCheckpointMagic, 4) == 0);
+  VELOX_CHECK(strncmp(magic, checkpointMagic().data(), 4) == 0);
   auto maxRegions = readNumber<int32_t>(state);
   VELOX_CHECK_EQ(
       maxRegions,
@@ -771,7 +814,7 @@ void SsdFile::readCheckpoint(std::ifstream& state) {
       break;
     }
     uint64_t offset = readNumber<uint64_t>(state);
-    auto run = SsdRun(readNumber<uint64_t>(state));
+    auto run = SsdRun(readNumber<uint64_t>(state), readNumber<uint32_t>(state));
     // Check that the recovered entry does not fall in an evicted region.
     if (evictedMap.find(regionIndex(run.offset())) == evictedMap.end()) {
       // The file may have a different id on restore.

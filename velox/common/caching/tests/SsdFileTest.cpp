@@ -37,7 +37,7 @@ struct TestEntry {
       : key(_key), ssdOffset(_ssdOffset), size(_size) {}
 };
 
-class SsdFileTest : public testing::Test {
+class SsdFileTest : public ::testing::TestWithParam<bool> {
  protected:
   static constexpr int64_t kMB = 1 << 20;
 
@@ -66,7 +66,9 @@ class SsdFileTest : public testing::Test {
         0, // shardId
         bits::roundUp(ssdBytes, SsdFile::kRegionSize) / SsdFile::kRegionSize,
         0, // checkpointInternalBytes
-        setNoCowFlag);
+        setNoCowFlag,
+        nullptr,
+        GetParam());
   }
 
   static void initializeContents(int64_t sequence, memory::Allocation& alloc) {
@@ -232,10 +234,10 @@ class SsdFileTest : public testing::Test {
   std::unique_ptr<SsdFile> ssdFile_;
 };
 
-TEST_F(SsdFileTest, writeAndRead) {
+TEST_P(SsdFileTest, writeAndRead) {
   constexpr int64_t kSsdSize = 16 * SsdFile::kRegionSize;
   std::vector<TestEntry> allEntries;
-  initializeCache(128 * kMB, kSsdSize);
+  initializeCache(128 * kMB, kSsdSize, false);
   FLAGS_ssd_verify_write = true;
   for (auto startOffset = 0; startOffset <= kSsdSize - SsdFile::kRegionSize;
        startOffset += SsdFile::kRegionSize) {
@@ -275,7 +277,7 @@ TEST_F(SsdFileTest, writeAndRead) {
     }
   }
 
-  // We check howmany entries are found. The earliest writes will have been
+  // We check how many entries are found. The earliest writes will have been
   // evicted. We read back the found entries and check their contents.
   int32_t numFound = 0;
   for (auto& entry : allEntries) {
@@ -300,15 +302,20 @@ TEST_F(SsdFileTest, writeAndRead) {
 }
 
 #ifdef VELOX_SSD_FILE_TEST_SET_NO_COW_FLAG
-TEST_F(SsdFileTest, disabledCow) {
+TEST_P(SsdFileTest, disabledCow) {
   constexpr int64_t kSsdSize = 16 * SsdFile::kRegionSize;
   initializeCache(128 * kMB, kSsdSize, true);
   EXPECT_TRUE(ssdFile_->testingIsCowDisabled());
 }
 
-TEST_F(SsdFileTest, notDisabledCow) {
+TEST_P(SsdFileTest, notDisabledCow) {
   constexpr int64_t kSsdSize = 16 * SsdFile::kRegionSize;
   initializeCache(128 * kMB, kSsdSize, false);
   EXPECT_FALSE(ssdFile_->testingIsCowDisabled());
 }
 #endif // VELOX_SSD_FILE_TEST_SET_NO_COW_FLAG
+
+INSTANTIATE_TEST_SUITE_P(
+    SsdFileTest,
+    SsdFileTest,
+    ::testing::Values(false, true));

@@ -36,22 +36,24 @@ class SsdRun {
 
   SsdRun() : bits_(0) {}
 
-  SsdRun(uint64_t offset, uint32_t size)
-      : bits_((offset << kSizeBits) | ((size - 1))) {
+  SsdRun(uint64_t offset, uint32_t size, uint32_t checksum)
+      : bits_((offset << kSizeBits) | ((size - 1))), checksum_(checksum) {
     VELOX_CHECK_LT(offset, 1L << (64 - kSizeBits));
     VELOX_CHECK_LT(size - 1, 1 << kSizeBits);
   }
 
-  SsdRun(uint64_t bits) : bits_(bits) {}
+  SsdRun(uint64_t bits, uint32_t checksum) : bits_(bits), checksum_(checksum) {}
 
   SsdRun(const SsdRun& other) = default;
   SsdRun(SsdRun&& other) = default;
 
   void operator=(const SsdRun& other) {
     bits_ = other.bits_;
+    checksum_ = other.checksum_;
   }
   void operator=(SsdRun&& other) {
     bits_ = other.bits_;
+    checksum_ = other.checksum_;
   }
 
   uint64_t offset() const {
@@ -62,13 +64,18 @@ class SsdRun {
     return (bits_ & ((1 << kSizeBits) - 1)) + 1;
   }
 
-  // Returns raw bits for serialization.
-  uint64_t bits() const {
+  uint32_t checksum() const {
+    return checksum_;
+  }
+
+  // Returns raw bits for offset and size for serialization.
+  uint64_t bitsWithoutChecksum() const {
     return bits_;
   }
 
  private:
   uint64_t bits_;
+  uint32_t checksum_;
 };
 
 // Represents an SsdFile entry that is planned for load or being
@@ -144,6 +151,7 @@ struct SsdCacheStats {
     writeCheckpointErrors = tsanAtomicValue(other.writeCheckpointErrors);
     readSsdErrors = tsanAtomicValue(other.readSsdErrors);
     readCheckpointErrors = tsanAtomicValue(other.readCheckpointErrors);
+    readSsdCorruptions = tsanAtomicValue(other.readSsdCorruptions);
   }
 
   tsan_atomic<uint64_t> entriesWritten{0};
@@ -163,6 +171,7 @@ struct SsdCacheStats {
   tsan_atomic<uint32_t> writeCheckpointErrors{0};
   tsan_atomic<uint32_t> readSsdErrors{0};
   tsan_atomic<uint32_t> readCheckpointErrors{0};
+  tsan_atomic<uint32_t> readSsdCorruptions{0};
 };
 
 // A shard of SsdCache. Corresponds to one file on SSD.  The data
@@ -185,7 +194,8 @@ class SsdFile {
       int32_t maxRegions,
       int64_t checkpointInternalBytes = 0,
       bool disableFileCow = false,
-      folly::Executor* FOLLY_NULLABLE executor = nullptr);
+      folly::Executor* FOLLY_NULLABLE executor = nullptr,
+      bool enableChecksum = false);
 
   // Adds entries of  'pins'  to this file. 'pins' must be in read mode and
   // those pins that are successfully added to SSD are marked as being on SSD.
@@ -255,14 +265,17 @@ class SsdFile {
   bool testingIsCowDisabled() const;
 
  private:
-  // 4 first bytes of a checkpoint file. Allows distinguishing between format
-  // versions.
-  static constexpr const char* FOLLY_NONNULL kCheckpointMagic = "CPT1";
   // Magic number separating file names from cache entry data in checkpoint
   // file.
   static constexpr int64_t kCheckpointMapMarker = 0xfffffffffffffffe;
   // Magic number at end of completed checkpoint file.
   static constexpr int64_t kCheckpointEndMarker = 0xcbedf11e;
+
+  // 4 first bytes of a checkpoint file. Allows distinguishing between format
+  // versions.
+  std::string checkpointMagic() const {
+    return enableChecksum_ ? "CPT2" : "CPT3";
+  }
 
   // Increments the pin count of the region of 'offset'. Caller must hold
   // 'mutex_'.
@@ -316,6 +329,9 @@ class SsdFile {
   // Synchronously logs that 'regions' are no longer valid in a possibly xisting
   // checkpoint.
   void logEviction(const std::vector<int32_t>& regions);
+
+  // Compute checksum of date in 'entry'.
+  uint32_t checksumEntry(AsyncDataCacheEntry& entry);
 
   // Serializes access to all private data members.
   mutable std::shared_mutex mutex_;
@@ -387,6 +403,9 @@ class SsdFile {
 
   // True if there was an error with checkpoint and the checkpoint was deleted.
   bool checkpointDeleted_{false};
+
+  // If true, checksum is checked when reading from SSD.
+  bool enableChecksum_;
 };
 
 } // namespace facebook::velox::cache
