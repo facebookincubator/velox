@@ -574,13 +574,13 @@ void ReaderBase::scheduleRowGroups(
       currentGroup + 1 < rowGroupIds.size() ? rowGroupIds[currentGroup + 1] : 0;
   auto input = inputs_[thisGroup].get();
   if (!input) {
-    inputs_[thisGroup] = reader.enqueueRowGroup(thisGroup, input_);
+    inputs_[thisGroup] = reader.loadRowGroup(thisGroup, input_);
   }
   for (auto counter = 0; counter < FLAGS_parquet_prefetch_rowgroups;
        ++counter) {
     if (nextGroup) {
       if (inputs_.count(nextGroup) != 0) {
-        inputs_[nextGroup] = reader.enqueueRowGroup(thisGroup, input_);
+        inputs_[nextGroup] = reader.loadRowGroup(thisGroup, input_);
       }
     } else {
       break;

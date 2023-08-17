@@ -55,7 +55,7 @@ class ParquetData : public dwio::common::FormatData {
   /// Prepares to read data for 'index'th row group.
   void enqueueRowGroup(uint32_t index, dwio::common::BufferedInput& input);
 
-  /// Positions 'this' at 'index'th row group. enqueueRowGroup must be called
+  /// Positions 'this' at 'index'th row group. loadRowGroup must be called
   /// first. The returned PositionProvider is empty and should not be used.
   /// Other formats may use it.
   dwio::common::PositionProvider seekToRowGroup(uint32_t index) override;
@@ -173,22 +173,7 @@ class ParquetData : public dwio::common::FormatData {
   }
 
   // Returns the <offset, length> of the row group.
-  std::pair<int64_t, int64_t> getRowGroupRegion(uint32_t index) const {
-    auto& rowGroup = rowGroups_[index];
-
-    VELOX_CHECK_GT(rowGroup.columns.size(), 0);
-    auto fileOffset = rowGroup.__isset.file_offset ? rowGroup.file_offset
-        : rowGroup.columns[0].meta_data.__isset.dictionary_page_offset
-        ? rowGroup.columns[0].meta_data.dictionary_page_offset
-        : rowGroup.columns[0].meta_data.data_page_offset;
-    VELOX_CHECK_GT(fileOffset, 0);
-
-    auto length = rowGroup.__isset.total_compressed_size
-        ? rowGroup.total_compressed_size
-        : rowGroup.total_byte_size;
-
-    return {fileOffset, length};
-  }
+  std::pair<int64_t, int64_t> getRowGroupRegion(uint32_t index) const;
 
  private:
   /// True if 'filter' may have hits for the column of 'this' according to the

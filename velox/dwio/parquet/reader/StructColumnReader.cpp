@@ -92,19 +92,16 @@ void StructColumnReader::read(
   SelectiveStructColumnReader::read(offset, rows, nullptr);
 }
 
-std::shared_ptr<dwio::common::BufferedInput>
-StructColumnReader::enqueueRowGroup(
+std::shared_ptr<dwio::common::BufferedInput> StructColumnReader::loadRowGroup(
     uint32_t index,
     const std::shared_ptr<dwio::common::BufferedInput>& input) {
-  // Check whether the entire row group has already loaded. If true,
-  // reuse the input and data will be read from buffer.
-  // Or else create a new input.
-  auto newInput = isRowGroupBuffered(index, *input) ? input : input->clone();
-  enqueueRowGroup0(index, *newInput);
-  // If a new input was created, then load it.
-  if (newInput != input) {
-    newInput->load(dwio::common::LogType::STRIPE);
+  if (isRowGroupBuffered(index, *input)) {
+    enqueueRowGroup(index, *input);
+    return input;
   }
+  auto newInput = input->clone();
+  enqueueRowGroup(index, *newInput);
+  newInput->load(dwio::common::LogType::STRIPE);
   return newInput;
 }
 
@@ -116,12 +113,12 @@ bool StructColumnReader::isRowGroupBuffered(
   return input.isBuffered(offset, length);
 }
 
-void StructColumnReader::enqueueRowGroup0(
+void StructColumnReader::enqueueRowGroup(
     uint32_t index,
     dwio::common::BufferedInput& input) {
   for (auto& child : children_) {
     if (auto structChild = dynamic_cast<StructColumnReader*>(child)) {
-      structChild->enqueueRowGroup0(index, input);
+      structChild->enqueueRowGroup(index, input);
     } else if (auto listChild = dynamic_cast<ListColumnReader*>(child)) {
       listChild->enqueueRowGroup(index, input);
     } else if (auto mapChild = dynamic_cast<MapColumnReader*>(child)) {
