@@ -115,7 +115,6 @@ Top Optimization Recommendations
    "num_splits_per_file", "Row Group Size of Data", "Row Group Size of Data"
    "max_coalesce_bytes", "Minimum of 90MB", "Minimum of 90MB"
    "max_coalesce_distance_bytes", "Workload dependent**", "Workload dependent**"
-   "parquet_prefetch_rowgroups", "Best is 1", "Best is 1"
    "split_preload_per_driver", "Best is 2", "Best is 2"
    "cache_prefetch_min_pct", "Best is 80", "Best is 80"
 

@@ -24,8 +24,6 @@ using namespace facebook::velox::dwio::common;
 using namespace facebook::velox::dwio::parquet;
 using namespace facebook::velox::parquet;
 
-DECLARE_int32(parquet_prefetch_rowgroups);
-
 namespace {
 auto defaultPool = memory::addDefaultLeafMemoryPool();
 }
@@ -636,49 +634,42 @@ TEST_F(ParquetReaderTest, preloadSmallFile) {
 }
 
 TEST_F(ParquetReaderTest, prefetchRowGroups) {
-  EXPECT_EQ(FLAGS_parquet_prefetch_rowgroups, 1);
-
   auto rowType = ROW({"id"}, {BIGINT()});
   const std::string sample(getExampleFilePath("multiple_row_groups.parquet"));
+  const int numRowGroups = 4;
 
   ReaderOptions readerOptions{defaultPool.get()};
   // Disable preload of file
   readerOptions.setFilePreloadThreshold(0);
+  readerOptions.setPrefetchRowGroups(1);
 
   ParquetReader reader = createReader(sample, readerOptions);
-  EXPECT_EQ(reader.numberOfRowGroups(), 4);
+  EXPECT_EQ(reader.numberOfRowGroups(), numRowGroups);
 
   RowReaderOptions rowReaderOpts;
   rowReaderOpts.setScanSpec(makeScanSpec(rowType));
   auto rowReader = reader.createRowReader(rowReaderOpts);
   auto parquetRowReader = dynamic_cast<ParquetRowReader*>(rowReader.get());
 
-  // The first two row groups should be prefetched.
-  EXPECT_TRUE(parquetRowReader->isRowGroupBuffered(0));
-  EXPECT_TRUE(parquetRowReader->isRowGroupBuffered(1));
-
-  // Read the first row group.
   constexpr int kBatchSize = 1000;
   auto result = BaseVector::create(rowType, kBatchSize, pool_.get());
-  auto actualRows = parquetRowReader->next(kBatchSize, result);
-  // kBatchSize should be large enough to hold the entire row group.
-  EXPECT_LE(actualRows, kBatchSize);
 
-  // Advance to the second row group.
-  parquetRowReader->nextRowNumber();
-  // Check the next row group has been prefetched.
-  EXPECT_TRUE(parquetRowReader->isRowGroupBuffered(1));
-  EXPECT_TRUE(parquetRowReader->isRowGroupBuffered(2));
+  for (int i = 0; i < numRowGroups; i++) {
+    if (i > 0) {
+      // Check the previous row group has been evicted.
+      EXPECT_FALSE(parquetRowReader->isRowGroupBuffered(i - 1));
+    }
+    EXPECT_TRUE(parquetRowReader->isRowGroupBuffered(i));
+    if (i < numRowGroups - 1) {
+      // Check the next row group has been prefetched.
+      EXPECT_TRUE(parquetRowReader->isRowGroupBuffered(i + 1));
+    }
 
-  // Read the second row group.
-  actualRows = parquetRowReader->next(kBatchSize, result);
-  EXPECT_LE(actualRows, kBatchSize);
-
-  // Advance to the third row group.
-  parquetRowReader->nextRowNumber();
-  // Check the next row group has been prefetched.
-  // The previous one should be evicted.
-  EXPECT_FALSE(parquetRowReader->isRowGroupBuffered(1));
-  EXPECT_TRUE(parquetRowReader->isRowGroupBuffered(2));
-  EXPECT_TRUE(parquetRowReader->isRowGroupBuffered(3));
+    // Read current row group.
+    auto actualRows = parquetRowReader->next(kBatchSize, result);
+    // kBatchSize should be large enough to hold the entire row group.
+    EXPECT_LE(actualRows, kBatchSize);
+    // Advance to the next row group.
+    parquetRowReader->nextRowNumber();
+  }
 }
