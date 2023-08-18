@@ -221,18 +221,6 @@ class CastExprTest : public functions::test::CastBaseTest {
             {-1e33, 0, 1e33, 1.2089258196146293E19, std::nullopt}));
   }
 
-  void testDecimalToBoolCasts() {
-    auto shortFlat = makeNullableFlatVector<int64_t>(
-        {DecimalUtil::kShortDecimalMin, 0, std::nullopt}, DECIMAL(18, 18));
-    testComplexCast(
-        "c0", shortFlat, makeNullableFlatVector<bool>({1, 0, std::nullopt}));
-
-    auto longFlat = makeNullableFlatVector<int128_t>(
-        {DecimalUtil::kLongDecimalMin, 0, std::nullopt}, DECIMAL(38, 5));
-    testComplexCast(
-        "c0", longFlat, makeNullableFlatVector<bool>({1, 0, std::nullopt}));
-  }
-
   template <TypeKind KIND>
   void testDecimalToIntegralCastsOutOfBounds() {
     using NativeType = typename TypeTraits<KIND>::NativeType;
@@ -1372,7 +1360,15 @@ TEST_F(CastExprTest, decimalToFloat) {
 }
 
 TEST_F(CastExprTest, decimalToBool) {
-  testDecimalToBoolCasts();
+  auto shortFlat = makeNullableFlatVector<int64_t>(
+      {DecimalUtil::kShortDecimalMin, 0, std::nullopt}, DECIMAL(18, 18));
+  testComplexCast(
+      "c0", shortFlat, makeNullableFlatVector<bool>({1, 0, std::nullopt}));
+
+  auto longFlat = makeNullableFlatVector<int128_t>(
+      {DecimalUtil::kLongDecimalMin, 0, std::nullopt}, DECIMAL(38, 5));
+  testComplexCast(
+      "c0", longFlat, makeNullableFlatVector<bool>({1, 0, std::nullopt}));
 }
 
 TEST_F(CastExprTest, decimalToDecimal) {
