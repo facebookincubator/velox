@@ -68,6 +68,7 @@ class ParquetReaderBenchmark {
       writer_->write(batch);
     }
     writer_->flush();
+    writer_->close();
   }
 
   FilterSpec createFilterSpec(
