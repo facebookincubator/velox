@@ -48,6 +48,14 @@
 <h2>Convenience Extraction Functions<a class="headerlink" href="#convenience-extraction-functions" title="Permalink to this heading">¶</a></h2>
 <p>These functions support TIMESTAMP and DATE input types.</p>
 <dl class="spark function">
+<dt class="sig sig-object spark" id="date_add">
+<span class="sig-name descname"><span class="pre">date_add</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">start_date</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">num_days</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">date</span></span></span><a class="headerlink" href="#date_add" title="Permalink to this definition">¶</a></dt>
+<dd><p>Returns the date that is num_days after start_date.
+If num_days is a negative value then these amount of days will be
+deducted from start_date.</p>
+</dd></dl>
+
+<dl class="spark function">
 <dt class="sig sig-object spark" id="last_day">
 <span class="sig-name descname"><span class="pre">last_day</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">date</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">date</span></span></span><a class="headerlink" href="#last_day" title="Permalink to this definition">¶</a></dt>
 <dd><p>Returns the last day of the month which the date belongs to.</p>
