@@ -33,9 +33,9 @@ set_source_files_properties(${PROTO_OUTPUT_FILES} PROPERTIES GENERATED TRUE)
 add_custom_command(
   OUTPUT ${PROTO_OUTPUT_FILES}
   COMMAND
-    ${Protobuf_PROTOC_EXECUTABLE} --proto_path ${CMAKE_SOURCE_DIR}/ --proto_path
-    ${Protobuf_INCLUDE_DIRS} --cpp_out ${CMAKE_BINARY_DIR} ${PROTO_FILES_FULL}
-  DEPENDS ${Protobuf_PROTOC_EXECUTABLE}
+    ${protobuf_PROTOC_EXECUTABLE} --proto_path ${CMAKE_SOURCE_DIR}/ --proto_path
+    ${protobuf_INCLUDE_DIRS} --cpp_out ${CMAKE_BINARY_DIR} ${PROTO_FILES_FULL}
+  DEPENDS ${protobuf_PROTOC_EXECUTABLE}
   COMMENT "Running PROTO compiler"
   VERBATIM)
 add_custom_target(dwio_proto ALL DEPENDS ${PROTO_OUTPUT_FILES})
@@ -45,5 +45,5 @@ add_library(velox_dwio_dwrf_proto ${PROTO_HDRS} ${PROTO_SRCS})
 # Access generated proto file with.
 #
 # #include "velox/dwio/dwrf/proto/dwrf_proto.pb.h"
-target_link_libraries(velox_dwio_dwrf_proto ${Protobuf_LIBRARIES})
+target_link_libraries(velox_dwio_dwrf_proto ${protobuf_LIBRARIES})
 target_include_directories(velox_dwio_dwrf_proto PUBLIC ${PROJECT_BINARY_DIR})
