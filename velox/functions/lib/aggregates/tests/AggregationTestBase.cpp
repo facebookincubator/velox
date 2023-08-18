@@ -656,6 +656,26 @@ RowVectorPtr AggregationTestBase::validateStreamingInTestAggregations(
   return expected;
 }
 
+void AggregationTestBase::testSingleAggregation(
+    std::function<void(PlanBuilder&)> makeSource,
+    const std::vector<std::string>& groupingKeys,
+    const std::vector<std::string>& aggregates,
+    const std::vector<std::string>& postAggregationProjections,
+    std::function<std::shared_ptr<exec::Task>(AssertQueryBuilder&)>
+        assertResults,
+    const std::unordered_map<std::string, std::string>& config) {
+  SCOPED_TRACE("Run single");
+  PlanBuilder builder(pool());
+  makeSource(builder);
+  builder.singleAggregation(groupingKeys, aggregates);
+  if (!postAggregationProjections.empty()) {
+    builder.project(postAggregationProjections);
+  }
+
+  AssertQueryBuilder queryBuilder(builder.planNode(), duckDbQueryRunner_);
+  queryBuilder.configs(config);
+  assertResults(queryBuilder);
+}
 void AggregationTestBase::testAggregations(
     std::function<void(PlanBuilder&)> makeSource,
     const std::vector<std::string>& groupingKeys,
@@ -756,19 +776,13 @@ void AggregationTestBase::testAggregations(
     }
   }
 
-  {
-    SCOPED_TRACE("Run single");
-    PlanBuilder builder(pool());
-    makeSource(builder);
-    builder.singleAggregation(groupingKeys, aggregates);
-    if (!postAggregationProjections.empty()) {
-      builder.project(postAggregationProjections);
-    }
-
-    AssertQueryBuilder queryBuilder(builder.planNode(), duckDbQueryRunner_);
-    queryBuilder.configs(config);
-    assertResults(queryBuilder);
-  }
+  testSingleAggregation(
+      makeSource,
+      groupingKeys,
+      aggregates,
+      postAggregationProjections,
+      assertResults,
+      config);
 
   // TODO: turn on this after spilling for VarianceAggregationTest pass.
 #if 0

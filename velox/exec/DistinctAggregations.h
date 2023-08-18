@@ -24,6 +24,7 @@ namespace facebook::velox::exec {
 
 /// Computes aggregations over de-duplicated inputs. Supports aggregations with
 /// single input column only.
+// TODO consider renaming this class to singular, not plural.
 class DistinctAggregations {
  public:
   /// @param aggregates Non-empty list of
