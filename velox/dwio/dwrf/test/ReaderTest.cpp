@@ -14,22 +14,16 @@
  * limitations under the License.
  */
 
+#include "velox/dwio/dwrf/test/ReaderTest.h"
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
-#include <velox/buffer/Buffer.h>
 #include "folly/Random.h"
 #include "folly/lang/Assume.h"
 #include "velox/common/base/tests/GTestUtils.h"
-#include "velox/dwio/common/DataSink.h"
 #include "velox/dwio/common/tests/utils/BatchMaker.h"
-#include "velox/dwio/dwrf/common/Common.h"
-#include "velox/dwio/dwrf/reader/DwrfReader.h"
 #include "velox/dwio/dwrf/test/OrcTest.h"
 #include "velox/dwio/dwrf/test/utils/E2EWriterTestUtil.h"
-#include "velox/type/Type.h"
 #include "velox/type/fbhive/HiveTypeParser.h"
-#include "velox/vector/ComplexVector.h"
-#include "velox/vector/FlatVector.h"
 #include "velox/vector/tests/utils/VectorMaker.h"
 
 #include <fmt/core.h>
@@ -55,13 +49,6 @@ TEST(TestReader, testWriterVersions) {
   EXPECT_EQ("dwrf-6.0", writerVersionToString(DWRF_6_0));
   EXPECT_EQ(
       "future - 99", writerVersionToString(static_cast<WriterVersion>(99)));
-}
-
-std::unique_ptr<BufferedInput> createFileBufferedInput(
-    const std::string& path,
-    memory::MemoryPool& pool) {
-  return std::make_unique<BufferedInput>(
-      std::make_shared<LocalReadFile>(path), pool);
 }
 
 // schema of flat map sample file
@@ -1652,35 +1639,6 @@ TEST(TestReader, testFlatmapAsMapFieldLifeCycle) {
   testFlatmapAsMapFieldLifeCycle(schema, config, rng, batchSize, true);
 }
 
-TEST(TestReader, testOrcReaderSimple) {
-  const std::string simpleTest(
-      getExampleFilePath("TestStringDictionary.testRowIndex.orc"));
-  ReaderOptions readerOpts{defaultPool.get()};
-  // To make DwrfReader reads ORC file, setFileFormat to FileFormat::ORC
-  readerOpts.setFileFormat(dwio::common::FileFormat::ORC);
-  auto reader = DwrfReader::create(
-      createFileBufferedInput(simpleTest, readerOpts.getMemoryPool()),
-      readerOpts);
-
-  RowReaderOptions rowReaderOptions;
-  auto rowReader = reader->createRowReader(rowReaderOptions);
-
-  VectorPtr batch;
-  const std::string stringPrefix{"row "};
-  size_t rowNumber = 0;
-  while (rowReader->next(500, batch)) {
-    auto rowVector = batch->as<RowVector>();
-    auto strings = rowVector->childAt(0)->as<SimpleVector<StringView>>();
-    for (size_t i = 0; i < rowVector->size(); ++i) {
-      std::stringstream stream;
-      stream << std::setfill('0') << std::setw(6) << rowNumber;
-      EXPECT_EQ(stringPrefix + stream.str(), strings->valueAt(i).str());
-      rowNumber++;
-    }
-  }
-  EXPECT_EQ(rowNumber, 32768);
-}
-
 TEST(TestReader, testFooterWrapper) {
   proto::Footer impl;
   FooterWrapper wrapper(&impl);
@@ -1706,87 +1664,6 @@ TEST(TestReader, testOrcAndDwrfRowIndexStride) {
   dwrfFooter.set_rowindexstride(100);
   ASSERT_TRUE(dwrfFooterWrapper.hasRowIndexStride());
   EXPECT_EQ(dwrfFooterWrapper.rowIndexStride(), 100);
-}
-
-TEST(TestReader, testOrcReaderComplexTypes) {
-  const std::string icebergOrc(getExampleFilePath("complextypes_iceberg.orc"));
-  const std::shared_ptr<const RowType> expectedType =
-      std::dynamic_pointer_cast<const RowType>(HiveTypeParser().parse("struct<\
-      id:bigint,int_array:array<int>,int_array_array:array<array<int>>,\
-      int_map:map<string,int>,int_map_array:array<map<string,int>>,\
-      nested_struct:struct<\
-        a:int,b:array<int>,c:struct<\
-          d:array<array<struct<\
-            e:int,f:string>>>>,\
-          g:map<string,struct<\
-            h:struct<\
-              i:array<double>>>>>>"));
-  ReaderOptions readerOpts{defaultPool.get()};
-  readerOpts.setFileFormat(dwio::common::FileFormat::ORC);
-  auto reader = DwrfReader::create(
-      createFileBufferedInput(icebergOrc, readerOpts.getMemoryPool()),
-      readerOpts);
-  auto rowType = reader->rowType();
-  EXPECT_TRUE(rowType->equivalent(*expectedType));
-}
-
-TEST(TestReader, testOrcReaderVarchar) {
-  const std::string varcharOrc(getExampleFilePath("orc_index_int_string.orc"));
-  ReaderOptions readerOpts{defaultPool.get()};
-  readerOpts.setFileFormat(dwio::common::FileFormat::ORC);
-  auto reader = DwrfReader::create(
-      createFileBufferedInput(varcharOrc, readerOpts.getMemoryPool()),
-      readerOpts);
-
-  RowReaderOptions rowReaderOptions;
-  auto rowReader = reader->createRowReader(rowReaderOptions);
-
-  VectorPtr batch;
-  int counter = 0;
-  while (rowReader->next(500, batch)) {
-    auto rowVector = batch->as<RowVector>();
-    auto ints = rowVector->childAt(0)->as<SimpleVector<int32_t>>();
-    auto strings = rowVector->childAt(1)->as<SimpleVector<StringView>>();
-    for (size_t i = 0; i < rowVector->size(); ++i) {
-      counter++;
-      EXPECT_EQ(counter, ints->valueAt(i));
-      std::stringstream stream;
-      stream << counter;
-      if (counter < 1000) {
-        stream << "a";
-      }
-      EXPECT_EQ(stream.str(), strings->valueAt(i).str());
-    }
-  }
-  EXPECT_EQ(counter, 6000);
-}
-
-TEST(TestReader, testOrcReaderDate) {
-  const std::string dateOrc(getExampleFilePath("TestOrcFile.testDate1900.orc"));
-  ReaderOptions readerOpts{defaultPool.get()};
-  readerOpts.setFileFormat(dwio::common::FileFormat::ORC);
-  auto reader = DwrfReader::create(
-      createFileBufferedInput(dateOrc, readerOpts.getMemoryPool()), readerOpts);
-
-  RowReaderOptions rowReaderOptions;
-  auto rowReader = reader->createRowReader(rowReaderOptions);
-
-  VectorPtr batch;
-  int year = 1900;
-  while (rowReader->next(1000, batch)) {
-    auto rowVector = batch->as<RowVector>();
-    auto dates = rowVector->childAt(1)->as<SimpleVector<int32_t>>();
-
-    std::stringstream stream;
-    stream << year << "-12-25";
-    EXPECT_EQ(stream.str(), DATE()->toString(dates->valueAt(0)));
-
-    for (size_t i = 1; i < rowVector->size(); ++i) {
-      EXPECT_EQ(dates->valueAt(0), dates->valueAt(i));
-    }
-
-    year++;
-  }
 }
 
 namespace {
