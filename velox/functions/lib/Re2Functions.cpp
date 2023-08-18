@@ -698,6 +698,93 @@ class Re2ExtractAll final : public VectorFunction {
   }
 };
 
+void re2SplitAll(
+    exec::VectorWriter<Array<Varchar>>& resultWriter,
+    const RE2& re,
+    const exec::LocalDecodedVector& inputStrs,
+    const int row,
+    std::vector<re2::StringPiece>& groups) {
+  resultWriter.setOffset(row);
+
+  auto& arrayWriter = resultWriter.current();
+
+  const StringView str = inputStrs->valueAt<StringView>(row);
+  const re2::StringPiece input = toStringPiece(str);
+  size_t pos = 0;
+
+  while (re.Match(
+      input, pos, input.size(), RE2::UNANCHORED, groups.data(), 1)) {
+    const re2::StringPiece fullMatch = groups[0];
+    const re2::StringPiece subMatch =
+        input.substr(pos, fullMatch.data() - input.data() - pos);
+    LOG(ERROR) << "ggtest: input: " << input.data()
+               << ", pos : " << pos
+               << ", fullMatch : " << fullMatch.ToString()
+               << ", subMatch : " << subMatch.ToString();
+
+    arrayWriter.add_item().setNoCopy(
+        StringView(subMatch.data(), subMatch.size()));
+    pos = fullMatch.data() + fullMatch.size() - input.data();
+    if (UNLIKELY(fullMatch.size() == 0)) {
+      ++pos;
+    }
+  }
+
+  if (pos < input.size()) {
+    const re2::StringPiece remaining = input.substr(pos);
+    arrayWriter.add_item().setNoCopy(
+        StringView(remaining.data(), remaining.size()));
+  } else if (pos == input.size()) {
+    arrayWriter.add_item().setNoCopy(StringView(nullptr, 0));
+  }
+
+  resultWriter.commit();
+}
+
+class Re2SplitAllConstantPattern final : public VectorFunction {
+ public:
+  explicit Re2SplitAllConstantPattern(StringView pattern)
+      : re_(toStringPiece(pattern), RE2::Quiet) {}
+
+  void apply(
+      const SelectivityVector& rows,
+      std::vector<VectorPtr>& args,
+      const TypePtr& /* outputType */,
+      EvalCtx& context,
+      VectorPtr& resultRef) const final {
+    VELOX_CHECK(args.size() == 2);
+    try {
+      checkForBadPattern(re_);
+    } catch (const std::exception& e) {
+      context.setErrors(rows, std::current_exception());
+      return;
+    }
+
+    BaseVector::ensureWritable(
+        rows, ARRAY(VARCHAR()), context.pool(), resultRef);
+    exec::VectorWriter<Array<Varchar>> resultWriter;
+    resultWriter.init(*resultRef->as<ArrayVector>());
+
+    exec::LocalDecodedVector inputStrs(context, *args[0], rows);
+    FOLLY_DECLARE_REUSED(groups, std::vector<re2::StringPiece>);
+    groups.resize(1);
+
+    context.applyToSelectedNoThrow(rows, [&](vector_size_t row) {
+      re2SplitAll(resultWriter, re_, inputStrs, row, groups);
+    });
+
+    resultWriter.finish();
+
+    resultRef->as<ArrayVector>()
+        ->elements()
+        ->asFlatVector<StringView>()
+        ->acquireSharedStringBuffers(inputStrs->base());
+  }
+
+ private:
+  RE2 re_;
+};
+
 template <bool (*Fn)(StringView, const RE2&)>
 std::shared_ptr<VectorFunction> makeRe2MatchImpl(
     const std::string& name,

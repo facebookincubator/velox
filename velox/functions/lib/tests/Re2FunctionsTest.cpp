@@ -55,6 +55,8 @@ class Re2FunctionsTest : public test::FunctionBaseTest {
     exec::registerStatefulVectorFunction(
         "re2_extract_all", re2ExtractAllSignatures(), makeRe2ExtractAll);
     exec::registerStatefulVectorFunction("like", likeSignatures(), makeLike);
+    exec::registerStatefulVectorFunction(
+        "re2_split_all", re2SplitAllSignatures(), makeRe2SplitAll);
   }
 
  protected:
@@ -958,6 +960,139 @@ TEST_F(Re2FunctionsTest, tryException) {
             {std::nullopt, {{"123"_sv, "2"_sv}}, std::nullopt}),
         evaluate<ArrayVector>("try(re2_extract_all(c0, c1, c2))", input));
   }
+}
+
+void Re2FunctionsTest::testRe2SplitAll(
+    const std::vector<std::optional<std::string>>& inputs,
+    const std::vector<std::optional<std::string>>& patterns,
+    const std::vector<std::optional<std::vector<std::string>>>& output) {
+  std::string constantPattern = "";
+  std::string expression = "";
+
+  auto result = [&] {
+    auto input = makeFlatVector<StringView>(
+        inputs.size(),
+        [&inputs](vector_size_t row) {
+          return inputs[row] ? StringView(*inputs[row]) : StringView();
+        },
+        [&inputs](vector_size_t row) { return !inputs[row].has_value(); });
+
+    auto pattern = makeFlatVector<StringView>(
+        patterns.size(),
+        [&patterns](vector_size_t row) {
+          return patterns[row] ? StringView(*patterns[row]) : StringView();
+        },
+        [&patterns](vector_size_t row) { return !patterns[row].has_value(); });
+    if (patterns.size() == 1) {
+      // Constant pattern
+      constantPattern = std::string(", '") + patterns[0].value() + "'";
+    }
+
+    expression = std::string("re2_extract_all(c0, c1)");
+    return evaluate<ArrayVector>(expression, makeRowVector({input, pattern}));
+  }();
+
+  // Creating vectors for output string vectors
+  auto sizeAtOutput = [&output](vector_size_t row) {
+    return output[row] ? output[row]->size() : 0;
+  };
+  auto valueAtOutput = [&output](vector_size_t row, vector_size_t idx) {
+    return output[row] ? StringView(output[row]->at(idx)) : StringView("");
+  };
+  auto nullAtOutput = [&output](vector_size_t row) {
+    return !output[row].has_value();
+  };
+  auto expectedResult = makeArrayVector<StringView>(
+      output.size(), sizeAtOutput, valueAtOutput, nullAtOutput);
+
+  // Checking the results
+  assertEqualVectors(expectedResult, result);
+}
+
+TEST_F(Re2FunctionsTest, regexSpiltAllSingleCharPattern) {
+  // _
+  testRe2ExtractAll({"abc_ta"}, {"_"}, {{{"abc", "ta"}}});
+  testRe2ExtractAll({"_abc_ta_"}, {"_"}, {{{"","abc","ta",""}}});
+  testRe2ExtractAll({"abc_ta "}, {"_"}, {{{"abc","ta "}}});
+  testRe2ExtractAll({" abc_ta "}, {"_"}, {{{" abc","ta "}}});
+
+  // .
+  testRe2ExtractAll({"abc"}, {"."}, {{{"","","","",""}}});
+  testRe2ExtractAll({"abc "}, {"."}, {{{"","","","",""}}});
+  testRe2ExtractAll({" abc "}, {"."}, {{{"","","","","",""}}});
+
+  // \\.
+  testRe2ExtractAll({"abc"}, {"\\."}, {{{"abc"}}});
+  testRe2ExtractAll({"abc "}, {"\\."}, {{{"abc "}}});
+  testRe2ExtractAll({" abc "}, {"\\."}, {{{" abc "}}});
+
+  // \\|
+  testRe2ExtractAll({"abt|sc"}, {"\\|"}, {{{"abt","sc"}}});
+  testRe2ExtractAll({"|abc| "}, {"\\|"}, {{{"","abc"," "}}});
+  testRe2ExtractAll({" |ab|c | "}, {"\\|"}, {{{" ","ab","c "," "}}});
+
+  testRe2ExtractAll({"abcdef"}, {""}, {{{"a","b","c","d","e","f",""}}});
+}
+
+TEST_F(Re2FunctionsTest, regexSpiltAllSequenceCharPattern) {
+  testRe2ExtractAll({"dafefaatb"}, {"fe"}, {{{"da","faatb"}}});
+  testRe2ExtractAll({"abc_ta"}, {"abc_ta_t"}, {{{"abc_ta"}}});
+  testRe2ExtractAll({"abc dt dat"}, {" dt"}, {{{"abc"," dat"}}});
+
+  testRe2ExtractAll({"absdfghabiefjab"}, {"ab"}, {{{"","sdfgh","iefj",""}}});
+  testRe2ExtractAll({" absdfgha biefjab "}, {"ab"}, {{{" ","sdfgha biefj"," "}}});
+}
+
+TEST_F(Re2FunctionsTest, regexSpiltAllRegexSequencePattern) {
+  const std::vector<std::optional<std::string>> inputs = {
+      "  123a   2b   14m  ", "123a 2b     14m", "123a2b14m"};
+  const std::vector<std::optional<std::string>> constantPattern = {
+      "(\\d+)([a-z]+)"};
+  const std::vector<std::optional<std::vector<std::string>>> expectedOutputs = {
+      {{"  ","   ","   ","  "}},
+      {{""," ","     ",""}},
+      {{"","","",""}}};
+
+  testRe2SplitAll(inputs, constantPattern, expectedOutputs);
+
+  testRe2ExtractAll({"aa2bb3cc4"}, {"[1-9]+"}, {{{"aa", "bb", "cc", ""}}});
+  testRe2ExtractAll({""}, {"[0-9]+"}, {{{""}}});
+  testRe2ExtractAll({"abcde"}, {"[0-9]+"}, {{{"abcde"}}});
+  testRe2ExtractAll({"abcde"}, {"\\d+"}, {{{"abcde"}}});
+  testRe2ExtractAll({"23544"}, {"\\w+"}, {{{"",""}}});
+  testRe2ExtractAll({"(╯°□°)╯︵ ┻━┻"}, {"[0-9]+"}, {{{"(╯°□°)╯︵ ┻━┻"}}});
+}
+
+TEST_F(Re2FunctionsTest, regexSplitAllNonAscii) {
+  testRe2SplitAll(
+    // split('中国北京velox测试', '北京')
+    {"\\u4e2d\\u56fd\\u5317\\u4eac\\u0076\\u0065\\u006c\\u006f\\u0078\\u6d4b\\u8bd5"},
+    {"\\u5317\\u4eac"},
+    {{{"\\u4e2d\\u56fd", "\\u0076\\u0065\\u006c\\u006f\\u0078\\u6d4b\\u8bd5"}}});
+
+  testRe2SplitAll(
+      // split('中国北京velox测试', 'velox')
+      {"\\u4e2d\\u56fd\\u5317\\u4eac\\u0076\\u0065\\u006c\\u006f\\u0078\\u6d4b\\u8bd5"},
+      {"\\u0076\\u0065\\u006c\\u006f\\u0078"},
+      {{{"\\u4e2d\\u56fd\\u5317\\u4eac", "\\u6d4b\\u8bd5"}}});
+
+  testRe2SplitAll(
+      // split('测试velox', 'velox')
+      {"\\u6d4b\\u8bd5\\u0076\\u0065\\u006c\\u006f\\u0078"},
+      {"velox"},
+      {{{"\\u6d4b\\u8bd5", ""}}});
+
+  testRe2SplitAll(
+      // split('测试velox ', 'velox')
+      {"\\u6d4b\\u8bd5\\u0076\\u0065\\u006c\\u006f\\u0078\\u0020"},
+      {"velox"},
+      {{{"\\u6d4b\\u8bd5", " "}}});
+
+  testRe2SplitAll(
+      // split('velox测试', '测试')
+      {"\\u0076\\u0065\\u006c\\u006f\\u0078\\u6d4b\\u8bd5"},
+      {"\\u6d4b\\u8bd5"},
+      {{{"", "velox"}}});
 }
 
 } // namespace
