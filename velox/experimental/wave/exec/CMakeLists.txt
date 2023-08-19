@@ -12,5 +12,14 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-add_subdirectory(common)
-add_subdirectory(exec)
+add_library(velox_wave_exec ExprKernel.cu ToWave.cpp WaveOperator.cpp
+                            Values.cpp WaveDriver.cpp)
+
+set_target_properties(velox_wave_exec PROPERTIES CUDA_ARCHITECTURES native)
+
+target_link_libraries(velox_wave_exec velox_wave_common velox_exception
+                      velox_common_base velox_exec)
+
+if(${VELOX_BUILD_TESTING})
+  add_subdirectory(tests)
+endif()
