@@ -577,7 +577,7 @@ void ReaderBase::scheduleRowGroups(
   for (auto counter = 0; counter < options_.prefetchRowGroups(); ++counter) {
     if (nextGroup) {
       if (inputs_.count(nextGroup) == 0) {
-        inputs_[nextGroup] = reader.loadRowGroup(thisGroup, input_);
+        inputs_[nextGroup] = reader.loadRowGroup(nextGroup, input_);
       }
     } else {
       break;
