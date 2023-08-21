@@ -46,6 +46,19 @@ TEST_F(SetAggTest, global) {
 
   testAggregations({data}, {}, {"set_agg(c0)"}, {"array_sort(a0)"}, {expected});
 
+  // Test HUGEINT inputs
+  data = makeRowVector({
+      makeFlatVector<int128_t>({9, 0, 1, 1, 0, 5, 27, 9}),
+  });
+
+  expected = makeRowVector({
+      makeArrayVector<int128_t>({
+          {0, 1, 5, 9, 27},
+      }),
+  });
+
+  testAggregations({data}, {}, {"set_agg(c0)"}, {"array_sort(a0)"}, {expected});
+
   // Null inputs.
   data = makeRowVector({
       makeNullableFlatVector<int32_t>(

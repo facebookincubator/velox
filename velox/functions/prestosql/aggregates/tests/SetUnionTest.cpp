@@ -52,6 +52,26 @@ TEST_F(SetUnionTest, global) {
   testAggregations(
       {data}, {}, {"set_union(c0)"}, {"array_sort(a0)"}, {expected});
 
+  // Test HUGEINT inputs
+  data = makeRowVector({
+      makeArrayVector<int128_t>({
+          {},
+          {9, 0, 1},
+          {1, 0},
+          {2, 5, 0, 7},
+          {9, 2},
+      }),
+  });
+
+  expected = makeRowVector({
+      makeArrayVector<int128_t>({
+          {0, 1, 2, 5, 7, 9},
+      }),
+  });
+
+  testAggregations(
+      {data}, {}, {"set_union(c0)"}, {"array_sort(a0)"}, {expected});
+
   // Null inputs.
   data = makeRowVector({
       makeNullableArrayVector<int32_t>({

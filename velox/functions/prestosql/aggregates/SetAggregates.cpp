@@ -326,6 +326,8 @@ std::unique_ptr<exec::Aggregate> create(
       return std::make_unique<Aggregate<int32_t>>(resultType);
     case TypeKind::BIGINT:
       return std::make_unique<Aggregate<int64_t>>(resultType);
+    case TypeKind::HUGEINT:
+      return std::make_unique<Aggregate<int128_t>>(resultType);
     case TypeKind::REAL:
       return std::make_unique<Aggregate<float>>(resultType);
     case TypeKind::DOUBLE:
