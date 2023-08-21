@@ -72,33 +72,34 @@ class MemoryArbitrator {
   using Factory = std::function<std::unique_ptr<MemoryArbitrator>(
       const MemoryArbitrator::Config& config)>;
 
-  /// Register factory for a specific kind of memory arbitrator.
+  /// Register factory for a specific 'kind' of memory arbitrator
   /// MemoryArbitrator::Create looks up the registry to find the factory to
   /// create arbitrator instance based on the kind specified in arbitrator
   /// config.
+  ///
+  /// NOTE: we only allow the same 'kind' of memory arbitrator to be registered
+  /// once. The function throws an error if 'kind' is already registered.
   static void registerFactory(const std::string& kind, Factory factory);
 
-  /// Unregister the registered factory for this kind. The arbitrator kind must
-  /// be registered through MemoryArbitrator::registerFactory, otherwise the
-  /// function throws a velox user exception error.
+  /// Unregister the registered factory for a specifc kind.
+  ///
+  /// NOTE: the function throws if the specified arbitrator 'kind' is not
+  /// registered.
   static void unregisterFactory(const std::string& kind);
 
-  /// Register all memory arbitrator factories including the shared
-  /// arbitrator implementation.
+  /// Register all the supported memory arbitrator kinds.
   static void registerAllFactories();
 
-  /// Unregister all memory arbitrator factories including the shared
-  /// arbitrator implementation.
+  /// Unregister all the supported memory arbitrator kinds.
   static void unregisterAllFactories();
 
   /// Invoked by the memory manager to create an instance of memory arbitrator
   /// based on the kind specified in 'config'. The arbitrator kind must be
-  /// registered through MemoryArbitrator::registerFactory, otherwise the
+  /// registered through MemoryArbitrator::registerFactory(), otherwise the
   /// function throws a velox user exception error.
   ///
   /// NOTE: if arbitrator kind is not set in 'config', then the function returns
-  /// nullptr.
-
+  /// nullptr, and the memory arbitration function is disabled.
   static std::unique_ptr<MemoryArbitrator> create(const Config& config);
 
   virtual std::string kind() = 0;
@@ -138,6 +139,13 @@ class MemoryArbitrator {
   virtual bool growMemory(
       MemoryPool* pool,
       const std::vector<std::shared_ptr<MemoryPool>>& candidatePools,
+      uint64_t targetBytes) = 0;
+
+  /// Invoked by the memory manager to shrink memory from a given list of memory
+  /// pools. The freed memory capacity is given back to the arbitrator. The
+  /// function returns the actual freed memory capacity in bytes.
+  virtual uint64_t shrinkMemory(
+      const std::vector<std::shared_ptr<MemoryPool>>& pools,
       uint64_t targetBytes) = 0;
 
   /// The internal execution stats of the memory arbitrator.

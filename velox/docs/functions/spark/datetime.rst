@@ -7,6 +7,12 @@ Convenience Extraction Functions
 
 These functions support TIMESTAMP and DATE input types.
 
+.. spark:function:: date_add(start_date, num_days) -> date
+
+    Returns the date that is num_days after start_date.
+    If num_days is a negative value then these amount of days will be
+    deducted from start_date.
+
 .. spark:function:: date_sub(start_date, num_days) -> date
 
     Returns the date that is num_days before start_date. According to the inputs,

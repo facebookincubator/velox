@@ -15,8 +15,9 @@
  */
 
 #pragma once
-#include <memory>
 
+#include <functional>
+#include <memory>
 /// Contains wrappers for common Cuda objects. Wave does not directly
 /// include Cuda headers because of interference with BitUtils.h and
 /// SimdUtils.h.
@@ -37,7 +38,8 @@ void setDevice(Device* device);
 
 struct StreamImpl;
 
-struct Stream {
+class Stream {
+ public:
   Stream();
   virtual ~Stream();
 
@@ -47,7 +49,48 @@ struct Stream {
   /// Enqueus a prefetch. Prefetches to host if 'device' is nullptr, otherwise
   /// to 'device'.
   void prefetch(Device* device, void* address, size_t size);
-  std::unique_ptr<StreamImpl> stream;
+
+  /// Adds a callback to be invoked after pending processing is done.
+  void addCallback(std::function<void()> callback);
+
+ protected:
+  std::unique_ptr<StreamImpl> stream_;
+
+  friend class Event;
+};
+
+struct EventImpl;
+
+/// Wrapper on Cuda Event.
+class Event {
+ public:
+  Event(bool withTime = false);
+
+  ~Event();
+
+  ///  Recirds event on 'stream'. This must be called before other member
+  ///  functions.
+  void record(Stream&);
+
+  /// Returns true if the work captured by 'this' is complete. Throws for Cuda
+  /// error.
+  bool query() const;
+
+  /// Calling host thread waits  for work recorded by 'this' to complete.
+  void wait();
+
+  /// 'stream' will wait for the work recorded by 'this' to complete before
+  /// executing work enqueued after this call to wait()..
+  void wait(Stream& stream);
+
+  /// Returns time in ms betweene 'this' and an earlier 'start'. Both events
+  /// must enable timing.
+  float elapsedTime(const Event& start) const;
+
+ private:
+  std::unique_ptr<EventImpl> event_;
+  const bool hasTiming_;
+  bool recorded_{false};
 };
 
 // Abstract class wrapping device or universal address memory allocation.
@@ -63,8 +106,55 @@ class GpuAllocator {
   /// Frees a pointer from allocate(). 'size' must correspond to the size given
   /// to allocate(). A Memory must be freed to the same allocator it came from.
   virtual void free(void* ptr, size_t bytes) = 0;
+
+  class Deleter;
+
+  template <typename T>
+  using UniquePtr = std::unique_ptr<T, GpuAllocator::Deleter>;
+
+  /// Convenient method to do allocation with automatic life cycle management.
+  template <typename T>
+  UniquePtr<T> allocate();
+
+  /// Convenient method to do allocation with automatic life cycle management.
+  template <typename T>
+  UniquePtr<T[]> allocate(size_t n);
 };
 
 GpuAllocator* getAllocator(Device* device);
+
+class GpuAllocator::Deleter {
+ public:
+  Deleter() = default;
+
+  Deleter(GpuAllocator* allocator, size_t bytes)
+      : allocator_(allocator), bytes_(bytes) {}
+
+  void operator()(void* ptr) const {
+    if (ptr) {
+      allocator_->free(ptr, bytes_);
+    }
+  }
+
+ private:
+  GpuAllocator* allocator_;
+  size_t bytes_;
+};
+
+template <typename T>
+GpuAllocator::UniquePtr<T> GpuAllocator::allocate() {
+  static_assert(std::is_trivially_destructible_v<T>);
+  auto bytes = sizeof(T);
+  T* ptr = static_cast<T*>(allocate(bytes));
+  return UniquePtr<T>(ptr, Deleter(this, bytes));
+}
+
+template <typename T>
+GpuAllocator::UniquePtr<T[]> GpuAllocator::allocate(size_t n) {
+  static_assert(std::is_trivially_destructible_v<T>);
+  auto bytes = n * sizeof(T);
+  T* ptr = static_cast<T*>(allocate(bytes));
+  return UniquePtr<T[]>(ptr, Deleter(this, bytes));
+}
 
 } // namespace facebook::velox::wave

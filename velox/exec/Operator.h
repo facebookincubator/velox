@@ -584,10 +584,13 @@ class Operator : public BaseRuntimeStatWriter {
   uint32_t outputBatchRows(
       std::optional<uint64_t> averageRowSize = std::nullopt) const;
 
+  /// Invoked to record spill stats in operator stats.
+  void recordSpillStats(const SpillStats& spillStats);
+
   const std::unique_ptr<OperatorCtx> operatorCtx_;
   const RowTypePtr outputType_;
-  // Contains the disk spilling related configs if spilling is enabled (e.g.
-  // the fs dir path to store spill files), otherwise null.
+  /// Contains the disk spilling related configs if spilling is enabled (e.g.
+  /// the fs dir path to store spill files), otherwise null.
   const std::optional<Spiller::Config> spillConfig_;
 
   folly::Synchronized<OperatorStats> stats_;
@@ -615,6 +618,9 @@ class Operator : public BaseRuntimeStatWriter {
 
   std::unordered_map<column_index_t, std::shared_ptr<common::Filter>>
       dynamicFilters_;
+
+  /// The number of times that spilling run on this operator.
+  uint32_t numSpillRuns_{0};
 };
 
 /// Given a row type returns indices for the specified subset of columns.

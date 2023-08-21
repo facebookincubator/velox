@@ -231,6 +231,7 @@ void OrderBy::spill(int64_t targetRows, int64_t targetBytes) {
   VELOX_CHECK_GE(targetRows, 0);
   VELOX_CHECK_GE(targetBytes, 0);
 
+  ++numSpillRuns_;
   if (spiller_ == nullptr) {
     const auto& spillConfig = spillConfig_.value();
     spiller_ = std::make_unique<Spiller>(
@@ -244,7 +245,7 @@ void OrderBy::spill(int64_t targetRows, int64_t targetBytes) {
         spillConfig.maxFileSize,
         spillConfig.minSpillRunSize,
         spillConfig.compressionKind,
-        Spiller::spillPool(),
+        Spiller::pool(),
         spillConfig.executor);
     VELOX_CHECK_EQ(spiller_->state().maxPartitions(), 1);
   }
@@ -296,15 +297,9 @@ void OrderBy::noMoreInput() {
 
 void OrderBy::recordSpillStats() {
   VELOX_CHECK_NOT_NULL(spiller_);
-  VELOX_CHECK(noMoreInput_);
-
   const auto spillStats = spiller_->stats();
-  auto lockedStats = stats_.wlock();
-  lockedStats->spilledBytes = spillStats.spilledBytes;
-  lockedStats->spilledRows = spillStats.spilledRows;
-  lockedStats->spilledPartitions = spillStats.spilledPartitions;
-  lockedStats->spilledFiles = spillStats.spilledFiles;
-  VELOX_DCHECK_LE(lockedStats->spilledPartitions, 1);
+  VELOX_CHECK_LE(spillStats.spilledPartitions, 1);
+  Operator::recordSpillStats(spillStats);
 }
 
 RowVectorPtr OrderBy::getOutput() {

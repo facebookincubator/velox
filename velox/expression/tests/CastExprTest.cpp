@@ -437,6 +437,13 @@ TEST_F(CastExprTest, basics) {
       {1.888, 2.5, 3.6, 100.44, -100.101, 1.0, -2.0},
       {1.888, 2.5, 3.6, 100.44, -100.101, 1.0, -2.0});
   testCast<bool, std::string>("string", {true, false}, {"true", "false"});
+
+  gflags::FlagSaver flagSaver;
+  FLAGS_experimental_enable_legacy_cast = true;
+  testCast<double, std::string>(
+      "string",
+      {1.888, 2.5, 3.6, 100.44, -100.101, 1.0, -2.0},
+      {"1.888", "2.5", "3.6", "100.44", "-100.101", "1", "-2"});
 }
 
 TEST_F(CastExprTest, stringToTimestamp) {
@@ -769,6 +776,9 @@ TEST_F(CastExprTest, primitiveValidCornerCases) {
     testCast<int8_t, bool>("boolean", {-1}, {true}, false);
     testCast<double, bool>("boolean", {1.0}, {true}, false);
     testCast<double, bool>("boolean", {1.1}, {true}, false);
+    testCast<double, bool>("boolean", {0.1}, {true}, false);
+    testCast<double, bool>("boolean", {-0.1}, {true}, false);
+    testCast<double, bool>("boolean", {-1.0}, {true}, false);
     testCast<float, bool>("boolean", {kNan}, {true}, false);
     testCast<float, bool>("boolean", {kInf}, {true}, false);
     testCast<double, bool>("boolean", {0.0000000000001}, {true}, false);
@@ -826,6 +836,9 @@ TEST_F(CastExprTest, primitiveValidCornerCases) {
     testCast<int8_t, bool>("boolean", {-1}, {true}, false);
     testCast<double, bool>("boolean", {1.0}, {true}, false);
     testCast<double, bool>("boolean", {1.1}, {true}, false);
+    testCast<double, bool>("boolean", {0.1}, {true}, false);
+    testCast<double, bool>("boolean", {-0.1}, {true}, false);
+    testCast<double, bool>("boolean", {-1.0}, {true}, false);
     testCast<float, bool>("boolean", {kNan}, {false}, false);
     testCast<float, bool>("boolean", {kInf}, {true}, false);
     testCast<double, bool>("boolean", {0.0000000000001}, {true}, false);

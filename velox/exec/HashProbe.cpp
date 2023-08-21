@@ -236,6 +236,7 @@ void HashProbe::maybeSetupSpillInput(
   // If 'spillInputPartitionIds_' is not empty, then we set up a spiller to
   // spill the incoming probe inputs.
   const auto& spillConfig = spillConfig_.value();
+  ++numSpillRuns_;
   spiller_ = std::make_unique<Spiller>(
       Spiller::Type::kHashJoinProbe,
       probeType_,
@@ -247,7 +248,7 @@ void HashProbe::maybeSetupSpillInput(
       spillConfig.maxFileSize,
       spillConfig.minSpillRunSize,
       spillConfig.compressionKind,
-      Spiller::spillPool(),
+      Spiller::pool(),
       spillConfig.executor);
   // Set the spill partitions to the corresponding ones at the build side. The
   // hash probe operator itself won't trigger any spilling.
@@ -1358,6 +1359,7 @@ void HashProbe::noMoreInputInternal() {
     VELOX_CHECK_EQ(
         spillInputPartitionIds_.size(), spiller_->spilledPartitionSet().size());
     spiller_->finishSpill(spillPartitionSet_);
+    recordSpillStats();
   }
 
   // Setup spill partition data.
@@ -1390,6 +1392,14 @@ void HashProbe::noMoreInputInternal() {
   VELOX_CHECK(promises.empty());
   VELOX_CHECK(hasSpillData || peers.empty());
   lastProber_ = true;
+}
+
+void HashProbe::recordSpillStats() {
+  VELOX_CHECK_NOT_NULL(spiller_);
+  const auto spillStats = spiller_->stats();
+  VELOX_CHECK_EQ(spillStats.spillSortTimeUs, 0);
+  VELOX_CHECK_EQ(spillStats.spillFillTimeUs, 0);
+  Operator::recordSpillStats(spillStats);
 }
 
 bool HashProbe::isFinished() {

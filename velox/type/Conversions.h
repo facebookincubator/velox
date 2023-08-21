@@ -24,6 +24,8 @@
 #include "velox/type/TimestampConversion.h"
 #include "velox/type/Type.h"
 
+DECLARE_bool(experimental_enable_legacy_cast);
+
 namespace facebook::velox::util {
 
 template <TypeKind KIND, typename = void, bool TRUNCATE = false>
@@ -209,6 +211,9 @@ struct Converter<
       if (std::isnan(v)) {
         return 0;
       }
+      if constexpr (std::is_same_v<T, bool>) {
+        return v != 0;
+      }
       if constexpr (std::is_same_v<T, int128_t>) {
         return std::numeric_limits<int128_t>::max();
       } else if (v > LimitType::maxLimit()) {
@@ -232,6 +237,9 @@ struct Converter<
     if constexpr (TRUNCATE) {
       if (std::isnan(v)) {
         return 0;
+      }
+      if constexpr (std::is_same_v<T, bool>) {
+        return v != 0;
       }
       if constexpr (std::is_same_v<T, int128_t>) {
         return std::numeric_limits<int128_t>::max();
@@ -376,7 +384,8 @@ struct Converter<TypeKind::VARCHAR, void, TRUNCATE> {
   static std::string cast(const T& val) {
     if constexpr (std::is_same_v<T, double> || std::is_same_v<T, float>) {
       auto stringValue = folly::to<std::string>(val);
-      if (stringValue.find(".") == std::string::npos &&
+      if (!FLAGS_experimental_enable_legacy_cast &&
+          stringValue.find(".") == std::string::npos &&
           isdigit(stringValue[stringValue.length() - 1])) {
         stringValue += ".0";
       }

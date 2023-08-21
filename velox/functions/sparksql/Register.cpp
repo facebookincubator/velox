@@ -18,7 +18,6 @@
 #include "velox/functions/lib/IsNull.h"
 #include "velox/functions/lib/Re2Functions.h"
 #include "velox/functions/lib/RegistrationHelpers.h"
-#include "velox/functions/prestosql/DateTimeImpl.h"
 #include "velox/functions/prestosql/JsonFunctions.h"
 #include "velox/functions/prestosql/Rand.h"
 #include "velox/functions/prestosql/StringFunctions.h"
@@ -213,6 +212,7 @@ void registerFunctions(const std::string& prefix) {
 
   registerFunction<LastDayFunction, Date, Date>({prefix + "last_day"});
 
+  registerFunction<DateAddFunction, Date, Date, int32_t>({prefix + "date_add"});
   registerFunction<DateSubFunction, Date, Date, int32_t>({prefix + "date_sub"});
 
   // Register bloom filter function
