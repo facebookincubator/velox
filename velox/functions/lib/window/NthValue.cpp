@@ -22,6 +22,7 @@
 namespace facebook::velox::functions::window {
 
 namespace {
+template <typename T>
 class NthValueFunction : public exec::WindowFunction {
  public:
   explicit NthValueFunction(
@@ -33,35 +34,19 @@ class NthValueFunction : public exec::WindowFunction {
     VELOX_CHECK_EQ(args.size(), 2);
     VELOX_CHECK_NULL(args[0].constantValue);
     valueIndex_ = args[0].index.value();
-    if (args[1].type->isInteger()) {
-      VELOX_USER_CHECK(
-          args[1].constantValue, "Offset must be literal for spark");
+    if (args[1].constantValue) {
       if (args[1].constantValue->isNullAt(0)) {
         isConstantOffsetNull_ = true;
         return;
       }
       constantOffset_ =
-          args[1]
-              .constantValue->template as<ConstantVector<int32_t>>()
-              ->valueAt(0);
+          args[1].constantValue->template as<ConstantVector<T>>()->valueAt(0);
       VELOX_USER_CHECK_GE(
           constantOffset_.value(), 1, "Offset must be at least 1");
     } else {
-      if (args[1].constantValue) {
-        if (args[1].constantValue->isNullAt(0)) {
-          isConstantOffsetNull_ = true;
-          return;
-        }
-        constantOffset_ =
-            args[1]
-                .constantValue->template as<ConstantVector<int64_t>>()
-                ->valueAt(0);
-        VELOX_USER_CHECK_GE(
-            constantOffset_.value(), 1, "Offset must be at least 1");
-      } else {
-        offsetIndex_ = args[1].index.value();
-        offsets_ = BaseVector::create<FlatVector<int64_t>>(BIGINT(), 0, pool);
-      }
+      offsetIndex_ = args[1].index.value();
+      offsets_ =
+          BaseVector::create<FlatVector<T>>(CppToType<T>::create(), 0, pool);
     }
 
     nulls_ = allocateNulls(0, pool);
@@ -149,8 +134,7 @@ class NthValueFunction : public exec::WindowFunction {
       const vector_size_t* frameStarts,
       const vector_size_t* frameEnds,
       vector_size_t leastFrame) {
-    vector_size_t constantOffsetValue =
-        static_cast<vector_size_t>(constantOffset_.value());
+    T constantOffsetValue = constantOffset_.value();
     if (ignoreNulls) {
       auto rawNulls = nulls_->as<uint64_t>();
       validRows.applyToSelected([&](auto i) {
@@ -180,7 +164,7 @@ class NthValueFunction : public exec::WindowFunction {
       if (offsets_->isNullAt(i)) {
         rowNumbers_[i] = kNullRow;
       } else {
-        vector_size_t offset = offsets_->valueAt(i);
+        T offset = offsets_->valueAt(i);
         VELOX_USER_CHECK_GE(offset, 1, "Offset must be at least 1");
         if constexpr (ignoreNulls) {
           setRowNumberIgnoreNulls(
@@ -226,7 +210,7 @@ class NthValueFunction : public exec::WindowFunction {
       vector_size_t i,
       const vector_size_t* frameStarts,
       const vector_size_t* frameEnds,
-      vector_size_t offset) {
+      T offset) {
     auto frameStart = frameStarts[i];
     auto frameEnd = frameEnds[i];
     auto rowNumber = frameStart + offset - 1;
@@ -239,10 +223,10 @@ class NthValueFunction : public exec::WindowFunction {
       vector_size_t leastFrame,
       const vector_size_t* frameStarts,
       const vector_size_t* frameEnds,
-      vector_size_t offset) {
+      T offset) {
     auto frameStart = frameStarts[i];
     auto frameEnd = frameEnds[i];
-    vector_size_t nonNullCount = 0;
+    T nonNullCount = 0;
     for (auto j = frameStart; j <= frameEnd; j++) {
       if (!bits::isBitSet(rawNulls, j - leastFrame)) {
         ++nonNullCount;
@@ -266,12 +250,12 @@ class NthValueFunction : public exec::WindowFunction {
   const exec::WindowPartition* partition_;
 
   // These fields are set if the offset argument is a constant value.
-  std::optional<int64_t> constantOffset_;
+  std::optional<T> constantOffset_;
   bool isConstantOffsetNull_ = false;
 
   // This vector is used to extract values of the offset argument column
   // (if not a constant offset value).
-  FlatVectorPtr<int64_t> offsets_;
+  FlatVectorPtr<T> offsets_;
 
   // This offset tracks how far along the partition rows have been output.
   // This can be used to optimize reading offset column values corresponding
@@ -292,6 +276,7 @@ class NthValueFunction : public exec::WindowFunction {
 };
 } // namespace
 
+template <typename T>
 void registerNthValue(const std::string& name, TypeKind offsetTypeKind) {
   std::vector<exec::FunctionSignaturePtr> signatures{
       exec::FunctionSignatureBuilder()
@@ -313,16 +298,16 @@ void registerNthValue(const std::string& name, TypeKind offsetTypeKind) {
           HashStringAllocator* /*stringAllocator*/,
           const core::QueryConfig& /*queryConfig*/)
           -> std::unique_ptr<exec::WindowFunction> {
-        return std::make_unique<NthValueFunction>(
+        return std::make_unique<NthValueFunction<T>>(
             args, resultType, ignoreNulls, pool);
       });
 }
 
 void registerNthValueInteger(const std::string& name) {
-  registerNthValue(name, TypeKind::INTEGER);
+  registerNthValue<int32_t>(name, TypeKind::INTEGER);
 }
 
 void registerNthValueBigint(const std::string& name) {
-  registerNthValue(name, TypeKind::BIGINT);
+  registerNthValue<int64_t>(name, TypeKind::BIGINT);
 }
 } // namespace facebook::velox::functions::window
