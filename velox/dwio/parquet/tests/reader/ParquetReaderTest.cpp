@@ -639,7 +639,7 @@ TEST_F(ParquetReaderTest, prefetchRowGroups) {
   const int numRowGroups = 4;
 
   ReaderOptions readerOptions{defaultPool.get()};
-  // Disable preload of file
+  // Disable preload of file.
   readerOptions.setFilePreloadThreshold(0);
   readerOptions.setPrefetchRowGroups(1);
 
