@@ -80,6 +80,8 @@ class TypedDistinctAggregations : public DistinctAggregations {
           group[rowSizeOffset_], *allocator_);
       accumulator->addValue(decodedInput_, i, allocator_);
     });
+
+    inputForAccumulator_.reset();
   }
 
   void addSingleGroupInput(
@@ -93,6 +95,8 @@ class TypedDistinctAggregations : public DistinctAggregations {
     rows.applyToSelected([&](vector_size_t i) {
       accumulator->addValue(decodedInput_, i, allocator_);
     });
+
+    inputForAccumulator_.reset();
   }
 
   void extractValues(folly::Range<char**> groups, const RowVectorPtr& result)
@@ -107,8 +111,7 @@ class TypedDistinctAggregations : public DistinctAggregations {
 
         // TODO Process group rows in batches to avoid creating very large input
         // vectors.
-        std::shared_ptr<BaseVector> data =
-            BaseVector::create(inputType_, accumulator->size(), pool_);
+        auto data = BaseVector::create(inputType_, accumulator->size(), pool_);
         if constexpr (std::is_same_v<T, ComplexType>) {
           accumulator->extractValues(*data, 0);
         } else {
@@ -116,7 +119,8 @@ class TypedDistinctAggregations : public DistinctAggregations {
         }
 
         rows.resize(data->size());
-        inputForAggregation_ = makeInputForAggregation(data);
+        std::vector<VectorPtr> inputForAggregation_ =
+            makeInputForAggregation(data);
         aggregate.function->addSingleGroupRawInput(
             group, rows, inputForAggregation_, false);
       }
@@ -134,6 +138,7 @@ class TypedDistinctAggregations : public DistinctAggregations {
   bool isSingleInputAggregate() const {
     return aggregates_[0]->inputs.size() == 1;
   }
+
   void decodeInput(const RowVectorPtr& input, const SelectivityVector& rows) {
     inputForAccumulator_ = makeInputForAccumulator(input);
     decodedInput_.decode(*inputForAccumulator_, rows);
@@ -169,12 +174,9 @@ class TypedDistinctAggregations : public DistinctAggregations {
         pool_, inputType_, nullptr, input->size(), newChildren);
   }
 
-  std::vector<VectorPtr> makeInputForAggregation(
-      std::shared_ptr<BaseVector> input) const {
-    std::vector<VectorPtr> args;
+  std::vector<VectorPtr> makeInputForAggregation(const VectorPtr& input) const {
     if (isSingleInputAggregate()) {
-      args = {std::move(input)};
-      return args;
+      return {std::move(input)};
     }
     return input->template asUnchecked<RowVector>()->children();
   }
@@ -186,7 +188,6 @@ class TypedDistinctAggregations : public DistinctAggregations {
 
   DecodedVector decodedInput_;
   VectorPtr inputForAccumulator_;
-  std::vector<VectorPtr> inputForAggregation_;
 };
 
 } // namespace
