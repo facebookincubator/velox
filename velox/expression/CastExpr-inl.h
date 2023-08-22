@@ -309,18 +309,34 @@ VectorPtr CastExpr::applyDecimalToVarcharCast(
     const TypePtr& fromType,
     const TypePtr& toType) {
   VectorPtr result;
-  context.ensureWritable(rows, toType, result);
+  context.ensureWritable(rows, VARCHAR(), result);
   (*result).clearNulls(rows);
   const auto simpleInput = input.as<SimpleVector<FromNativeType>>();
-  auto resultBuffer =
-      result->asUnchecked<FlatVector<StringView>>()->mutableRawValues();
+  auto flatResult = result->asFlatVector<StringView>();
+
+  // Calculate the total size of the stringBuffers.
+  size_t totalResultBytes = 0;
+  applyToSelectedNoThrowLocal(context, rows, result, [&](int row) {
+    if (!simpleInput->isNullAt(row)) {
+      std::string output =
+          DecimalUtil::toString((int128_t)simpleInput->valueAt(row), fromType);
+      totalResultBytes += output.size();
+    }
+  });
+
+  auto rawBuffer = flatResult->getRawStringBufferWithSpace(totalResultBytes);
+  size_t offset = 0;
   applyToSelectedNoThrowLocal(context, rows, result, [&](int row) {
     if (simpleInput->isNullAt(row)) {
       result->setNull(row, true);
     } else {
       std::string output =
           DecimalUtil::toString((int128_t)simpleInput->valueAt(row), fromType);
-      resultBuffer[row] = StringView(output);
+      const char* start = rawBuffer + offset;
+      auto size = output.size();
+      memcpy(rawBuffer + offset, output.data(), size);
+      offset += size;
+      flatResult->setNoCopy(row, StringView(start, size));
     }
   });
   return result;
