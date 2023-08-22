@@ -958,8 +958,8 @@ inline void padToAlignment(
   }
 }
 
-/// Returns x with the order of the bytes reversed; for example, 0xaabb becomes
-/// 0xbbaa. Byte here always means exactly 8 bits.
+/// Returns value with the order of the bytes reversed; for example, 0xaabb
+/// becomes 0xbbaa. Byte here always means exactly 8 bits.
 inline __int128_t builtin_bswap128(__int128_t value) {
 #if defined __has_builtin
 #if __has_builtin(__builtin_bswap128)
