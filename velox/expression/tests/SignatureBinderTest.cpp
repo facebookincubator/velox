@@ -40,6 +40,16 @@ void assertCannotResolve(
   ASSERT_FALSE(binder.tryBind());
 }
 
+std::string getResultScale(std::string precision, std::string scale) {
+  return fmt::format(
+      "({}) <= 38 ? ({}) : max(({}) - ({}) + 38, min(({}), 6))",
+      precision,
+      scale,
+      scale,
+      precision,
+      scale);
+}
+
 TEST(SignatureBinderTest, decimals) {
   // Decimal Add/Subtract.
   {
@@ -237,6 +247,123 @@ TEST(SignatureBinderTest, decimals) {
               "TypeName", "a = b", exec::ParameterType::kTypeParameter),
           "Type variables cannot have constraints");
     }
+  }
+}
+
+TEST(SignatureBinderTest, computation) {
+  {
+    auto signature =
+        exec::FunctionSignatureBuilder()
+            .integerVariable("a_precision")
+            .integerVariable("a_scale")
+            .integerVariable("b_precision")
+            .integerVariable("b_scale")
+            .integerVariable(
+                "r_precision", "min(38, a_precision + b_precision + 1)")
+            .integerVariable(
+                "r_scale",
+                getResultScale(
+                    "a_precision + b_precision + 1", "a_scale + b_scale"))
+            .returnType("DECIMAL(r_precision, r_scale)")
+            .argumentType("DECIMAL(a_precision, a_scale)")
+            .argumentType("DECIMAL(b_precision, b_scale)")
+            .build();
+    testSignatureBinder(
+        signature, {DECIMAL(17, 3), DECIMAL(20, 3)}, DECIMAL(38, 6));
+    testSignatureBinder(
+        signature, {DECIMAL(6, 3), DECIMAL(6, 3)}, DECIMAL(13, 6));
+    testSignatureBinder(
+        signature, {DECIMAL(38, 20), DECIMAL(38, 20)}, DECIMAL(38, 6));
+  }
+
+  {
+    auto signature =
+        exec::FunctionSignatureBuilder()
+            .integerVariable("a_precision")
+            .integerVariable("a_scale")
+            .integerVariable("r_precision", "a_precision > 18 ? 18 : a_scale")
+            .integerVariable("r_scale", "a_scale")
+            .returnType("DECIMAL(r_precision, r_scale)")
+            .argumentType("DECIMAL(a_precision, a_scale)")
+            .build();
+    testSignatureBinder(signature, {DECIMAL(17, 3)}, DECIMAL(3, 3));
+    testSignatureBinder(signature, {DECIMAL(18, 3)}, DECIMAL(3, 3));
+    testSignatureBinder(signature, {DECIMAL(20, 3)}, DECIMAL(18, 3));
+  }
+
+  {
+    auto signature =
+        exec::FunctionSignatureBuilder()
+            .integerVariable("a_precision")
+            .integerVariable("a_scale")
+            .integerVariable("r_precision", "a_precision >= 18 ? 18 : a_scale")
+            .integerVariable("r_scale", "a_scale")
+            .returnType("DECIMAL(r_precision, r_scale)")
+            .argumentType("DECIMAL(a_precision, a_scale)")
+            .build();
+    testSignatureBinder(signature, {DECIMAL(17, 3)}, DECIMAL(3, 3));
+    testSignatureBinder(signature, {DECIMAL(18, 3)}, DECIMAL(18, 3));
+    testSignatureBinder(signature, {DECIMAL(20, 3)}, DECIMAL(18, 3));
+  }
+
+  {
+    auto signature =
+        exec::FunctionSignatureBuilder()
+            .integerVariable("a_precision")
+            .integerVariable("a_scale")
+            .integerVariable("r_precision", "a_precision != 18 ? 18 : a_scale")
+            .integerVariable("r_scale", "a_scale")
+            .returnType("DECIMAL(r_precision, r_scale)")
+            .argumentType("DECIMAL(a_precision, a_scale)")
+            .build();
+    testSignatureBinder(signature, {DECIMAL(17, 3)}, DECIMAL(18, 3));
+    testSignatureBinder(signature, {DECIMAL(18, 3)}, DECIMAL(3, 3));
+    testSignatureBinder(signature, {DECIMAL(20, 3)}, DECIMAL(18, 3));
+  }
+
+  {
+    auto signature =
+        exec::FunctionSignatureBuilder()
+            .integerVariable("a_precision")
+            .integerVariable("a_scale")
+            .integerVariable("r_precision", "a_precision == 18 ? 18 : a_scale")
+            .integerVariable("r_scale", "a_scale")
+            .returnType("DECIMAL(r_precision, r_scale)")
+            .argumentType("DECIMAL(a_precision, a_scale)")
+            .build();
+    testSignatureBinder(signature, {DECIMAL(17, 3)}, DECIMAL(3, 3));
+    testSignatureBinder(signature, {DECIMAL(18, 3)}, DECIMAL(18, 3));
+    testSignatureBinder(signature, {DECIMAL(20, 3)}, DECIMAL(3, 3));
+  }
+
+  {
+    auto signature =
+        exec::FunctionSignatureBuilder()
+            .integerVariable("a_precision")
+            .integerVariable("a_scale")
+            .integerVariable("r_precision", "a_precision < 18 ? 18 : a_scale")
+            .integerVariable("r_scale", "a_scale")
+            .returnType("DECIMAL(r_precision, r_scale)")
+            .argumentType("DECIMAL(a_precision, a_scale)")
+            .build();
+    testSignatureBinder(signature, {DECIMAL(17, 3)}, DECIMAL(18, 3));
+    testSignatureBinder(signature, {DECIMAL(18, 3)}, DECIMAL(3, 3));
+    testSignatureBinder(signature, {DECIMAL(20, 3)}, DECIMAL(3, 3));
+  }
+
+  {
+    auto signature =
+        exec::FunctionSignatureBuilder()
+            .integerVariable("a_precision")
+            .integerVariable("a_scale")
+            .integerVariable("r_precision", "a_precision <= 18 ? 18 : a_scale")
+            .integerVariable("r_scale", "a_scale")
+            .returnType("DECIMAL(r_precision, r_scale)")
+            .argumentType("DECIMAL(a_precision, a_scale)")
+            .build();
+    testSignatureBinder(signature, {DECIMAL(17, 3)}, DECIMAL(18, 3));
+    testSignatureBinder(signature, {DECIMAL(18, 3)}, DECIMAL(18, 3));
+    testSignatureBinder(signature, {DECIMAL(20, 3)}, DECIMAL(3, 3));
   }
 }
 
