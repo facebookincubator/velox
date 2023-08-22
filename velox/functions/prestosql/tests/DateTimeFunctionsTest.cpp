@@ -3498,6 +3498,29 @@ TEST_F(DateTimeFunctionsTest, timeZoneMinute) {
       "Unable to parse timestamp value: \"2023-\", expected format is (YYYY-MM-DD HH:MM:SS[.MS])");
 }
 
+TEST_F(DateTimeFunctionsTest, fromISO8601FunctionDate) {
+  const auto fromISODate =
+      [&](const std::optional<std::string>& isoDateString) {
+        return evaluateOnce<int32_t>("from_iso8601_date(c0)", isoDateString);
+      };
+
+  EXPECT_EQ(0, fromISODate("1970-01-01T03:19:58.000"));
+  EXPECT_EQ(18297, fromISODate("2020-02-05T14:27:39.000-07:00"));
+  EXPECT_EQ(-18297, fromISODate("1919-11-28T23:59:59.999"));
+  EXPECT_EQ(-18297, fromISODate("1919-11-28T23:59:59.999+08:00"));
+  EXPECT_EQ(-2, fromISODate("1969-12-30T19:00:00.000-05:00"));
+  EXPECT_EQ(-719528, fromISODate("0000-01-01T00:00:00.000+00:00"));
+  EXPECT_EQ(2932896, fromISODate("9999-12-31:23:59.999+00:00"));
+
+  VELOX_ASSERT_THROW(
+      fromISODate("abcdefghijklmn"),
+      "Unable to parse date value: \"abcdefghij\", expected format is (YYYY-MM-DD)");
+
+  VELOX_ASSERT_THROW(
+      fromISODate("1234567"),
+      "Unable to parse date value: \"1234567\", expected format is (YYYY-MM-DD)");
+}
+
 TEST_F(DateTimeFunctionsTest, timestampWithTimezoneComparisons) {
   auto runAndCompare = [&](std::string expr,
                            std::shared_ptr<RowVector>& inputs,

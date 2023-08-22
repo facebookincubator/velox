@@ -15,6 +15,7 @@
  */
 #pragma once
 
+#include <algorithm>
 #include <string_view>
 #include "velox/functions/lib/DateTimeFormatter.h"
 #include "velox/functions/lib/TimeUtils.h"
@@ -1283,6 +1284,19 @@ struct CurrentDateFunction {
             localTimepoint(std::chrono::milliseconds(now.toMillis()));
     result = std::chrono::floor<date::days>((localTimepoint).time_since_epoch())
                  .count();
+  }
+};
+
+template <typename T>
+struct FromISO8601DateFunction {
+  VELOX_DEFINE_FUNCTION_TYPES(T);
+
+  FOLLY_ALWAYS_INLINE void call(
+      out_type<Date>& result,
+      const arg_type<Varchar>& isoDateStr) {
+    int len = std::min((int)isoDateStr.size(), 10);
+    result = len < 10 ? DATE()->toDays(isoDateStr)
+                      : DATE()->toDays(isoDateStr.getString().substr(0, 10));
   }
 };
 
