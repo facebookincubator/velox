@@ -40,16 +40,6 @@ void assertCannotResolve(
   ASSERT_FALSE(binder.tryBind());
 }
 
-std::string getResultScale(std::string precision, std::string scale) {
-  return fmt::format(
-      "({}) <= 38 ? ({}) : max(({}) - ({}) + 38, min(({}), 6))",
-      precision,
-      scale,
-      scale,
-      precision,
-      scale);
-}
-
 TEST(SignatureBinderTest, decimals) {
   // Decimal Add/Subtract.
   {
@@ -262,8 +252,7 @@ TEST(SignatureBinderTest, computation) {
                 "r_precision", "min(38, a_precision + b_precision + 1)")
             .integerVariable(
                 "r_scale",
-                getResultScale(
-                    "a_precision + b_precision + 1", "a_scale + b_scale"))
+                "(a_precision + b_precision + 1) <= 38 ? (a_scale + b_scale) : max((a_scale + b_scale) - (a_precision + b_precision + 1) + 38, min(a_scale + b_scale, 6))")
             .returnType("DECIMAL(r_precision, r_scale)")
             .argumentType("DECIMAL(a_precision, a_scale)")
             .argumentType("DECIMAL(b_precision, b_scale)")
