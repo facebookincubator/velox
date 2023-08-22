@@ -145,6 +145,8 @@ class SpillFile {
 struct SpillStats {
   /// The number of times that spilling runs on an operator.
   uint64_t spillRuns{0};
+  // The number of bytes in memory to spill
+  uint64_t spilledMemoryBytes{0};
   /// The number of bytes spilled to disks.
   ///
   /// NOTE: if compression is enabled, this counts the compressed bytes.
@@ -172,6 +174,7 @@ struct SpillStats {
 
   SpillStats(
       uint64_t _spillRuns,
+      uint64_t _spilledMemoryBytes,
       uint64_t _spilledBytes,
       uint64_t _spilledRows,
       uint32_t _spilledPartitions,
@@ -649,6 +652,8 @@ class SpillState {
   std::vector<std::string> testingSpilledFilePaths() const;
 
  private:
+  void updateSpilledMemoryBytes(int32_t partition, uint64_t bytes, bool isAdd);
+
   const RowTypePtr type_;
   const std::string path_;
   const int32_t maxPartitions_;
@@ -665,6 +670,9 @@ class SpillState {
   // A file list for each spilled partition. Only partitions that have
   // started spilling have an entry here.
   std::vector<std::unique_ptr<SpillFileList>> files_;
+
+  // Bytes in memory to spill for each partition.
+  std::vector<uint64_t> spilledMemoryBytes_;
 };
 
 /// Generate partition id set from given spill partition set.
@@ -693,6 +701,10 @@ void updateGlobalSpillWriteStats(
     uint64_t spilledBytes,
     uint64_t flushTimeUs,
     uint64_t writeTimeUs);
+// Increment the spill memory bytes.
+void incrementGlobalSpillMemoryBytes(uint64_t spilledMemoryBytes);
+// Decrement the spill memory bytes.
+void decrementGlobalSpillMemoryBytes(uint64_t spilledMemoryBytes);
 /// Increments the spilled files by one.
 void incrementGlobalSpilledFiles();
 

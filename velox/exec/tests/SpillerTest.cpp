@@ -1454,30 +1454,35 @@ VELOX_INSTANTIATE_TEST_SUITE_P(
 TEST(SpillerTest, stats) {
   SpillStats sumStats;
   EXPECT_EQ(0, sumStats.spilledRows);
+  EXPECT_EQ(0, sumStats.spilledMemoryBytes);
   EXPECT_EQ(0, sumStats.spilledBytes);
   EXPECT_EQ(0, sumStats.spilledPartitions);
   EXPECT_EQ(0, sumStats.spilledFiles);
 
   SpillStats stats;
   stats.spilledRows = 10;
+  stats.spilledMemoryBytes = 200;
   stats.spilledBytes = 100;
   stats.spilledPartitions = 2;
   stats.spilledFiles = 3;
 
   sumStats += stats;
   EXPECT_EQ(stats.spilledRows, sumStats.spilledRows);
+  EXPECT_EQ(stats.spilledMemoryBytes, sumStats.spilledMemoryBytes);
   EXPECT_EQ(stats.spilledBytes, sumStats.spilledBytes);
   EXPECT_EQ(stats.spilledPartitions, sumStats.spilledPartitions);
   EXPECT_EQ(stats.spilledFiles, sumStats.spilledFiles);
 
   sumStats += stats;
   EXPECT_EQ(2 * stats.spilledRows, sumStats.spilledRows);
+  EXPECT_EQ(2 * stats.spilledMemoryBytes, sumStats.spilledMemoryBytes);
   EXPECT_EQ(2 * stats.spilledBytes, sumStats.spilledBytes);
   EXPECT_EQ(2 * stats.spilledPartitions, sumStats.spilledPartitions);
   EXPECT_EQ(2 * stats.spilledFiles, sumStats.spilledFiles);
 
   sumStats += stats;
   EXPECT_EQ(3 * stats.spilledRows, sumStats.spilledRows);
+  EXPECT_EQ(3 * stats.spilledMemoryBytes, sumStats.spilledMemoryBytes);
   EXPECT_EQ(3 * stats.spilledBytes, sumStats.spilledBytes);
   EXPECT_EQ(3 * stats.spilledPartitions, sumStats.spilledPartitions);
   EXPECT_EQ(3 * stats.spilledFiles, sumStats.spilledFiles);
