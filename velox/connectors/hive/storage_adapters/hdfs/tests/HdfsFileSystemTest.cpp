@@ -126,7 +126,9 @@ void checkReadErrorMessages(
   }
 }
 
-void verifyFailures(ReadFile* readFile) {
+void verifyFailures(hdfsFS hdfs) {
+  HdfsReadFile readFile(hdfs, destinationPath);
+  HdfsReadFile readFile2(hdfs, destinationPath);
   auto startPoint = 10 + kOneMB;
   auto size = 15 + kOneMB;
   auto endpoint = 10 + 2 * kOneMB;
@@ -136,6 +138,13 @@ void verifyFailures(ReadFile* readFile) {
        size % endpoint % size % startPoint % endpoint)
           .str();
   auto serverAddress = (boost::format("%s:%s") % localhost % hdfsPort).str();
+  auto readFailErrorMessage =
+      (boost::format(
+           "Unable to open file %s. got error: HdfsIOException: InputStreamImpl: cannot open file: %s.\t"
+           "Caused by: Hdfs::HdfsRpcException: HdfsFailoverException: Failed to invoke RPC call \"getBlockLocations\" on server \"%s\"\t\t"
+           "Caused by: HdfsNetworkConnectException: Connect to \"%s\" failed") %
+       destinationPath % destinationPath % serverAddress % serverAddress)
+          .str();
   auto builderErrorMessage =
       (boost::format(
            "Unable to connect to HDFS: %s, got error: Hdfs::HdfsRpcException: HdfsFailoverException: "
@@ -143,8 +152,9 @@ void verifyFailures(ReadFile* readFile) {
            "HdfsNetworkConnectException: Connect to \"%s\" failed") %
        serverAddress % serverAddress % serverAddress)
           .str();
-  checkReadErrorMessages(readFile, offsetErrorMessage, kOneMB);
+  checkReadErrorMessages(&readFile, offsetErrorMessage, kOneMB);
   HdfsFileSystemTest::miniCluster->stop();
+  checkReadErrorMessages(&readFile2, readFailErrorMessage, 1);
   try {
     auto memConfig =
         std::make_shared<const core::MemConfig>(configurationValues);
@@ -424,6 +434,5 @@ TEST_F(HdfsFileSystemTest, readFailures) {
   hdfsBuilderSetNameNode(builder, localhost.c_str());
   hdfsBuilderSetNameNodePort(builder, stoi(hdfsPort));
   auto hdfs = hdfsBuilderConnect(builder);
-  HdfsReadFile readFile(hdfs, destinationPath);
-  verifyFailures(&readFile);
+  verifyFailures(hdfs);
 }
