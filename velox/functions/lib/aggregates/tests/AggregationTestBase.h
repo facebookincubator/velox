@@ -81,15 +81,6 @@ class AggregationTestBase : public exec::test::OperatorTestBase {
           exec::test::AssertQueryBuilder& builder)> assertResults,
       const std::unordered_map<std::string, std::string>& config = {});
 
-  void testSingleAggregation(
-      std::function<void(exec::test::PlanBuilder&)> makeSource,
-      const std::vector<std::string>& groupingKeys,
-      const std::vector<std::string>& aggregates,
-      const std::vector<std::string>& postAggregationProjections,
-      std::function<std::shared_ptr<exec::Task>(
-          exec::test::AssertQueryBuilder& builder)> assertResults,
-      const std::unordered_map<std::string, std::string>& config = {});
-
   /// Convenience version that allows to specify input data instead of a
   /// function to build Values plan node.
   void testAggregations(

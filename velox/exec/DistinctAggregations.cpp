@@ -27,11 +27,12 @@ class TypedDistinctAggregations : public DistinctAggregations {
       std::vector<AggregateInfo*> aggregates,
       const RowTypePtr& inputType,
       memory::MemoryPool* pool)
-      : isMultichannelDistinct_(aggregates[0]->inputs.size() > 1),
-        pool_{pool},
+      : pool_{pool},
         aggregates_{std::move(aggregates)},
         inputs_{aggregates_[0]->inputs},
-        inputType_(createInputType(inputType)) {}
+        inputType_(TypedDistinctAggregations::makeInputTypeForAccumulator(
+            inputType,
+            inputs_)) {}
 
   using AccumulatorType = aggregate::prestosql::SetAccumulator<T>;
 
@@ -69,13 +70,7 @@ class TypedDistinctAggregations : public DistinctAggregations {
       char** groups,
       const RowVectorPtr& input,
       const SelectivityVector& rows) override {
-    VectorPtr multiChannelInputAsRow;
-    if (isMultichannelDistinct_) {
-      multiChannelInputAsRow = convertMultichannelInputToRow(input);
-      decodedInput_.decode(*multiChannelInputAsRow, rows);
-    } else {
-      decodedInput_.decode(*input->childAt(inputs_[0]), rows);
-    }
+    decodeInput(input, rows);
 
     rows.applyToSelected([&](vector_size_t i) {
       auto* group = groups[i];
@@ -91,13 +86,7 @@ class TypedDistinctAggregations : public DistinctAggregations {
       char* group,
       const RowVectorPtr& input,
       const SelectivityVector& rows) override {
-    VectorPtr multiChannelInputAsRow;
-    if (isMultichannelDistinct_) {
-      multiChannelInputAsRow = convertMultichannelInputToRow(input);
-      decodedInput_.decode(*multiChannelInputAsRow, rows);
-    } else {
-      decodedInput_.decode(*input->childAt(inputs_[0]), rows);
-    }
+    decodeInput(input, rows);
 
     auto* accumulator = reinterpret_cast<AccumulatorType*>(group + offset_);
     RowSizeTracker<char, uint32_t> tracker(group[rowSizeOffset_], *allocator_);
@@ -118,7 +107,8 @@ class TypedDistinctAggregations : public DistinctAggregations {
 
         // TODO Process group rows in batches to avoid creating very large input
         // vectors.
-        auto data = BaseVector::create(inputType_, accumulator->size(), pool_);
+        std::shared_ptr<BaseVector> data =
+            BaseVector::create(inputType_, accumulator->size(), pool_);
         if constexpr (std::is_same_v<T, ComplexType>) {
           accumulator->extractValues(*data, 0);
         } else {
@@ -126,11 +116,9 @@ class TypedDistinctAggregations : public DistinctAggregations {
         }
 
         rows.resize(data->size());
-        std::vector<VectorPtr> args = {data};
-        if (isMultichannelDistinct_) {
-          args = data->template asUnchecked<RowVector>()->children();
-        }
-        aggregate.function->addSingleGroupRawInput(group, rows, args, false);
+        inputForAggregation_ = makeInputForAggregation(data);
+        aggregate.function->addSingleGroupRawInput(
+            group, rows, inputForAggregation_, false);
       }
 
       aggregate.function->extractValues(
@@ -143,39 +131,62 @@ class TypedDistinctAggregations : public DistinctAggregations {
   }
 
  private:
-  TypePtr createInputType(const RowTypePtr rowType) const {
-    if (!isMultichannelDistinct_) {
-      return rowType->childAt(inputs_[0]);
+  bool isSingleInputAggregate() const {
+    return aggregates_[0]->inputs.size() == 1;
+  }
+  void decodeInput(const RowVectorPtr& input, const SelectivityVector& rows) {
+    inputForAccumulator_ = makeInputForAccumulator(input);
+    decodedInput_.decode(*inputForAccumulator_, rows);
+  }
+
+  static TypePtr makeInputTypeForAccumulator(
+      const RowTypePtr& rowType,
+      const std::vector<column_index_t>& inputs) {
+    if (inputs.size() == 1) {
+      return rowType->childAt(inputs[0]);
     }
 
     // Otherwise, synthesize a ROW(distinct_channels[0..N])
     std::vector<TypePtr> types;
     std::vector<std::string> names;
-    for (column_index_t channelIndex : inputs_) {
-      names.emplace_back(rowType->names()[channelIndex]);
-      types.emplace_back(rowType->children()[channelIndex]);
+    for (column_index_t channelIndex : inputs) {
+      names.emplace_back(rowType->nameOf(channelIndex));
+      types.emplace_back(rowType->childAt(channelIndex));
     }
     return ROW(std::move(names), std::move(types));
   }
 
-  [[nodiscard]] VectorPtr convertMultichannelInputToRow(
-      RowVectorPtr input) const {
+  VectorPtr makeInputForAccumulator(const RowVectorPtr& input) const {
+    if (isSingleInputAggregate()) {
+      return input->childAt(inputs_[0]);
+    }
+
     std::vector<VectorPtr> newChildren(inputs_.size());
     for (int i = 0; i < inputs_.size(); ++i) {
       newChildren[i] = input->childAt(inputs_[i]);
     }
-    VectorPtr multiChannelInputAsRow = std::make_shared<RowVector>(
-        pool_, inputType_, input->nulls(), input->size(), newChildren);
-    return multiChannelInputAsRow;
+    return std::make_shared<RowVector>(
+        pool_, inputType_, nullptr, input->size(), newChildren);
   }
 
-  const bool isMultichannelDistinct_;
+  std::vector<VectorPtr> makeInputForAggregation(
+      std::shared_ptr<BaseVector> input) const {
+    std::vector<VectorPtr> args;
+    if (isSingleInputAggregate()) {
+      args = {std::move(input)};
+      return args;
+    }
+    return input->template asUnchecked<RowVector>()->children();
+  }
+
   memory::MemoryPool* const pool_;
   const std::vector<AggregateInfo*> aggregates_;
   const std::vector<column_index_t> inputs_;
   const TypePtr inputType_;
 
   DecodedVector decodedInput_;
+  VectorPtr inputForAccumulator_;
+  std::vector<VectorPtr> inputForAggregation_;
 };
 
 } // namespace
@@ -185,11 +196,11 @@ std::unique_ptr<DistinctAggregations> DistinctAggregations::create(
     std::vector<AggregateInfo*> aggregates,
     const RowTypePtr& inputType,
     memory::MemoryPool* pool) {
-  VELOX_CHECK(aggregates.size() == 1);
+  VELOX_CHECK_EQ(aggregates.size(), 1);
   VELOX_CHECK(!aggregates[0]->inputs.empty());
 
-  const bool isMultichannelDistinct = aggregates[0]->inputs.size() > 1;
-  if (isMultichannelDistinct) {
+  const bool isSingleInput = aggregates[0]->inputs.size() == 1;
+  if (!isSingleInput) {
     return std::make_unique<TypedDistinctAggregations<ComplexType>>(
         aggregates, inputType, pool);
   }

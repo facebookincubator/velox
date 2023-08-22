@@ -53,13 +53,14 @@ class CovarianceAggregationTest
     auto sql = fmt::format(
         "SELECT c0, {}(distinct c1, c2) FROM tmp GROUP BY 1", aggName);
 
-    testSingleAggregation(
-        [&](PlanBuilder& builder) { builder.values({data}); },
-        {"c0"},
-        {partialAgg},
-        {},
-        [&](auto& builder) { return builder.assertResults(sql); },
-        {});
+    const std::vector<std::string>& groupingKeys = {"c0"};
+    const std::vector<std::string>& aggregates = {partialAgg};
+
+    PlanBuilder builder(pool());
+    builder.values({data}).singleAggregation(groupingKeys, aggregates);
+
+    AssertQueryBuilder queryBuilder(builder.planNode(), duckDbQueryRunner_);
+    queryBuilder.assertResults(sql);
   }
 
   void testDistinctGlobalAgg(
@@ -68,13 +69,14 @@ class CovarianceAggregationTest
     auto partialAgg = fmt::format("{}(distinct c1, c2)", aggName);
     auto sql = fmt::format("SELECT {}(distinct c1, c2) FROM tmp", aggName);
 
-    testSingleAggregation(
-        [&](PlanBuilder& builder) { builder.values({data}); },
-        {},
-        {partialAgg},
-        {},
-        [&](auto& builder) { return builder.assertResults(sql); },
-        {});
+    const std::vector<std::string>& groupingKeys = {};
+    const std::vector<std::string>& aggregates = {partialAgg};
+
+    PlanBuilder builder(pool());
+    builder.values({data}).singleAggregation(groupingKeys, aggregates);
+
+    AssertQueryBuilder queryBuilder(builder.planNode(), duckDbQueryRunner_);
+    queryBuilder.assertResults(sql);
   }
 };
 
