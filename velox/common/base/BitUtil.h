@@ -970,9 +970,8 @@ inline __int128_t builtin_bswap128(__int128_t value) {
 #if not VELOX_HAS_BUILTIN_BSWAP_INT128
   return (static_cast<__uint128_t>(__builtin_bswap64(value)) << 64) |
       __builtin_bswap64(value >> 64);
-#elif
-#undef VELOX_HAS_BUILTIN_BSWAP_INT128
 #endif
+#undef VELOX_HAS_BUILTIN_BSWAP_INT128
 }
 
 } // namespace bits
