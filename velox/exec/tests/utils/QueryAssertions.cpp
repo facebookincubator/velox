@@ -475,10 +475,20 @@ MaterializedRow getColumns(
   return columns;
 }
 
-void printRow(const MaterializedRow& row, std::ostringstream& out) {
-  out << row[0];
-  for (int32_t i = 1; i < row.size(); ++i) {
-    out << " | " << row[i];
+void printRow(
+    const MaterializedRow& row,
+    std::ostringstream& out,
+    const TypePtr& decTypePtr = nullptr) {
+  if (decTypePtr != nullptr) {
+    out << row[0].toJson(decTypePtr);
+    for (int32_t i = 1; i < row.size(); ++i) {
+      out << " | " << row[i].toJson(decTypePtr);
+    }
+  } else {
+    out << row[0].toJson(fromKindToScalerType(row[0].kind()));
+    for (int32_t i = 1; i < row.size(); ++i) {
+      out << " | " << row[i].toJson(fromKindToScalerType(row[i].kind()));
+    }
   }
 }
 
@@ -597,7 +607,8 @@ std::string makeErrorMessage(
     const std::vector<MaterializedRow>& missingRows,
     const std::vector<MaterializedRow>& extraRows,
     size_t expectedSize,
-    size_t actualSize) {
+    size_t actualSize,
+    const TypePtr& decTypePtr = nullptr) {
   std::ostringstream message;
   message << "Expected " << expectedSize << ", got " << actualSize << std::endl;
   message << extraRows.size() << " extra rows, " << missingRows.size()
@@ -608,7 +619,7 @@ std::string makeErrorMessage(
 
   for (int32_t i = 0; i < extraRowsToPrint; i++) {
     message << "\t";
-    printRow(extraRows[i], message);
+    printRow(extraRows[i], message, decTypePtr);
     message << std::endl;
   }
   message << std::endl;
@@ -617,7 +628,7 @@ std::string makeErrorMessage(
   message << missingRowsToPrint << " of missing rows:" << std::endl;
   for (int32_t i = 0; i < missingRowsToPrint; i++) {
     message << "\t";
-    printRow(missingRows[i], message);
+    printRow(missingRows[i], message, decTypePtr);
     message << std::endl;
   }
   message << std::endl;
@@ -746,7 +757,8 @@ std::optional<bool> MaterializedRowEpsilonComparator::areEqual(
 
 std::string generateUserFriendlyDiff(
     const MaterializedRowMultiset& expectedRows,
-    const MaterializedRowMultiset& actualRows) {
+    const MaterializedRowMultiset& actualRows,
+    const TypePtr& decTypePtr = nullptr) {
   std::vector<MaterializedRow> extraRows;
   std::set_difference(
       actualRows.begin(),
@@ -764,7 +776,11 @@ std::string generateUserFriendlyDiff(
       std::inserter(missingRows, missingRows.end()));
 
   return makeErrorMessage(
-      missingRows, extraRows, expectedRows.size(), actualRows.size());
+      missingRows,
+      extraRows,
+      expectedRows.size(),
+      actualRows.size(),
+      decTypePtr);
 }
 
 void verifyDuckDBResult(const DuckDBQueryResult& result, std::string_view sql) {
@@ -973,9 +989,11 @@ findFloatingPointColumns(const MaterializedRow& row) {
 bool assertEqualResults(
     const MaterializedRowMultiset& expectedRows,
     const MaterializedRowMultiset& actualRows,
-    const std::string& message) {
+    const std::string& message,
+    const TypePtr& decTypePtr = nullptr) {
   if (expectedRows.empty() != actualRows.empty()) {
-    ADD_FAILURE() << generateUserFriendlyDiff(expectedRows, actualRows)
+    ADD_FAILURE() << generateUserFriendlyDiff(
+                         expectedRows, actualRows, decTypePtr)
                   << message;
     return false;
   }
@@ -1010,7 +1028,8 @@ bool assertEqualResults(
     std::string note = numFloatingPointColumns > 0
         ? "\nNote: results are compared without epsilon because values at non-floating-point columns do not form unique keys."
         : "";
-    ADD_FAILURE() << generateUserFriendlyDiff(expectedRows, actualRows)
+    ADD_FAILURE() << generateUserFriendlyDiff(
+                         expectedRows, actualRows, decTypePtr)
                   << message << note;
     return false;
   }
@@ -1042,10 +1061,51 @@ void assertResults(
   }
 
   auto expectedRows = duckDbQueryRunner.execute(duckDbSql, resultType);
-  assertEqualResults(
-      expectedRows,
-      actualRows,
-      kDuckDbTimestampWarning + "\nDuckDB query: " + duckDbSql);
+
+  // For logical types like DECIMAL, we need to create the TypePtr
+  // from the plan provided for using it with variant::toJson().
+  if (resultType->size() > 0) {
+    switch (resultType->childAt(0)->kind()) {
+      case TypeKind::BIGINT: {
+        if (resultType->childAt(0)->isShortDecimal()) {
+          const auto precisionScale = getDecimalPrecisionScale(
+              resultType->childAt(0)->asShortDecimal());
+          TypePtr decimalTypePtr =
+              DECIMAL(precisionScale.first, precisionScale.second);
+          assertEqualResults(
+              expectedRows,
+              actualRows,
+              kDuckDbTimestampWarning + "\nDuckDB query: " + duckDbSql,
+              decimalTypePtr);
+        }
+      }
+        FOLLY_FALLTHROUGH;
+      case TypeKind::HUGEINT: {
+        if (resultType->childAt(0)->isLongDecimal()) {
+          const auto precisionScale =
+              getDecimalPrecisionScale(resultType->childAt(0)->asLongDecimal());
+          TypePtr decimalTypePtr =
+              DECIMAL(precisionScale.first, precisionScale.second);
+          assertEqualResults(
+              expectedRows,
+              actualRows,
+              kDuckDbTimestampWarning + "\nDuckDB query: " + duckDbSql,
+              decimalTypePtr);
+        }
+      }
+        FOLLY_FALLTHROUGH;
+      default:
+        assertEqualResults(
+            expectedRows,
+            actualRows,
+            kDuckDbTimestampWarning + "\nDuckDB query: " + duckDbSql);
+    }
+  } else {
+    assertEqualResults(
+        expectedRows,
+        actualRows,
+        kDuckDbTimestampWarning + "\nDuckDB query: " + duckDbSql);
+  }
 }
 
 // To handle the case when the sorting keys are not unique and the order

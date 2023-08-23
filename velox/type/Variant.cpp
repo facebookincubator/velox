@@ -183,6 +183,13 @@ std::string variant::toJson(const TypePtr& type) const {
     return "null";
   }
 
+  VELOX_USER_CHECK_EQ(
+      this->kind(),
+      type->kind(),
+      "variant TypeKind {} does not match input TypeKind {}",
+      this->kind(),
+      type->kind());
+
   if (type->isDate()) {
     return '"' + DATE()->toString(value<TypeKind::INTEGER>()) + '"';
   }
@@ -198,9 +205,9 @@ std::string variant::toJson(const TypePtr& type) const {
           b += ",";
         }
         b += "{\"key\":";
-        b += pair.first.toJson();
+        b += pair.first.toJson(type);
         b += ",\"value\":";
-        b += pair.second.toJson();
+        b += pair.second.toJson(type);
         b += "}";
         first = false;
       }
@@ -212,11 +219,18 @@ std::string variant::toJson(const TypePtr& type) const {
       std::string b{};
       b += "[";
       bool first = true;
+      uint32_t idx = 0;
+      VELOX_USER_CHECK_EQ(
+          row.size(),
+          type->size(),
+          "variant children count {} does not match the input type children count {}",
+          row.size(),
+          type->size());
       for (auto& v : row) {
         if (!first) {
           b += ",";
         }
-        b += v.toJson();
+        b += v.toJson(type->childAt(idx++));
         first = false;
       }
       b += "]";
@@ -227,11 +241,13 @@ std::string variant::toJson(const TypePtr& type) const {
       std::string b{};
       b += "[";
       bool first = true;
+      uint32_t idx = 0;
+      auto arrayElementType = type->childAt(0);
       for (auto& v : array) {
         if (!first) {
           b += ",";
         }
-        b += v.toJson();
+        b += v.toJson(arrayElementType);
         first = false;
       }
       b += "]";
@@ -248,19 +264,22 @@ std::string variant::toJson(const TypePtr& type) const {
       folly::json::escapeString(str, target, getOpts());
       return target;
     }
-    case TypeKind::HUGEINT:
-      VELOX_CHECK(type && type->isLongDecimal());
-      return DecimalUtil::toString(value<TypeKind::HUGEINT>(), type);
+    case TypeKind::HUGEINT: {
+      VELOX_CHECK(type && type->isLongDecimal()) {
+        return DecimalUtil::toString(value<TypeKind::HUGEINT>(), type);
+      }
+    }
     case TypeKind::TINYINT:
       FOLLY_FALLTHROUGH;
     case TypeKind::SMALLINT:
       FOLLY_FALLTHROUGH;
     case TypeKind::INTEGER:
       FOLLY_FALLTHROUGH;
-    case TypeKind::BIGINT:
+    case TypeKind::BIGINT: {
       if (type && type->isShortDecimal()) {
         return DecimalUtil::toString(value<TypeKind::BIGINT>(), type);
       }
+    }
       FOLLY_FALLTHROUGH;
     case TypeKind::BOOLEAN: {
       auto converted = VariantConverter::convert<TypeKind::VARCHAR>(*this);

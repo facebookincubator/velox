@@ -15,8 +15,8 @@
  */
 #include "velox/type/Variant.h"
 #include <gtest/gtest.h>
-#include <velox/type/Type.h>
 #include <numeric>
+#include "velox/common/base/tests/GTestUtils.h"
 
 using namespace facebook::velox;
 
@@ -265,7 +265,8 @@ TEST_F(VariantSerializationTest, serializeOpaque) {
 }
 
 TEST_F(VariantSerializationTest, opaqueToString) {
-  auto s = var_.toJson();
+  const auto type = var_.inferType();
+  auto s = var_.toJson(type);
   EXPECT_EQ(
       s,
       "Opaque<type:OPAQUE<SerializableClass>,value:\"{\"name\":\"test_class\",\"value\":false}\">");
@@ -284,4 +285,67 @@ TEST(VariantTest, opaqueSerializationNotRegistered) {
   auto opaqueAfterRegistration = variant::opaque<opaqueSerializationTestStruct>(
       std::make_shared<opaqueSerializationTestStruct>());
   EXPECT_THROW(opaqueAfterRegistration.serialize(), VeloxException);
+}
+
+TEST(VariantTest, toJson) {
+  auto rowTypePtr = ROW({{"c0", DECIMAL(20, 3)}});
+  EXPECT_EQ(
+      "[123456.789]",
+      variant::row({static_cast<int128_t>(123456789)}).toJson(rowTypePtr));
+  rowTypePtr = ROW({{"c0", DECIMAL(10, 2)}});
+  EXPECT_EQ(
+      "[12345.67]",
+      variant::row({static_cast<int64_t>(1234567)}).toJson(rowTypePtr));
+  rowTypePtr =
+      ROW({{"c0", DECIMAL(20, 1)}, {"c1", BOOLEAN()}, {"c3", VARCHAR()}});
+  EXPECT_EQ(
+      "[1234567890.1,true,\"test works fine\"]",
+      variant::row({static_cast<int128_t>(12345678901),
+                    variant((bool)true),
+                    variant((std::string) "test works fine")})
+          .toJson(rowTypePtr));
+  // Row variant negative tests
+  rowTypePtr = ROW({{"c0", DECIMAL(10, 3)}});
+  VELOX_ASSERT_THROW(
+      variant::row({static_cast<int128_t>(123456789)}).toJson(rowTypePtr),
+      "variant TypeKind HUGEINT does not match input TypeKind BIGINT");
+  rowTypePtr = ROW({{"c0", DECIMAL(20, 3)}});
+  VELOX_ASSERT_THROW(
+      variant::row({static_cast<int64_t>(123456789)}).toJson(rowTypePtr),
+      "variant TypeKind BIGINT does not match input TypeKind HUGEINT");
+  VELOX_ASSERT_THROW(
+      variant::row(
+          {static_cast<int128_t>(123456789),
+           variant((
+               std::
+                   string) "test confirms variant child count is greater than expected"),
+           variant((bool)false)})
+          .toJson(rowTypePtr),
+      "variant children count 3 does not match the input type children count 1");
+  rowTypePtr =
+      ROW({{"c0", DECIMAL(19, 4)}, {"c1", VARCHAR()}, {"c3", DECIMAL(10, 3)}});
+  VELOX_ASSERT_THROW(
+      variant::row(
+          {static_cast<int128_t>(12345678912),
+           variant((
+               std::
+                   string) "test confirms variant child count is lesser than expected")})
+          .toJson(rowTypePtr),
+      "variant children count 2 does not match the input type children count 3");
+  // Array variant tests
+  auto arrayTypePtr = ARRAY(DECIMAL(20, 3));
+  EXPECT_EQ(
+      "[123456.789,634565.464,234545.278]",
+      variant::array({static_cast<int128_t>(123456789),
+                      static_cast<int128_t>(634565464),
+                      static_cast<int128_t>(234545278)})
+          .toJson(arrayTypePtr));
+  VELOX_ASSERT_THROW(
+      variant::array(
+          {static_cast<int128_t>(123456789),
+           variant((
+               std::
+                   string) "Array should not support multiple element types.")})
+          .toJson(arrayTypePtr),
+      "variant TypeKind VARCHAR does not match input TypeKind HUGEINT");
 }
