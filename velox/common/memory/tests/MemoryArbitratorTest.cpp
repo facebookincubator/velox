@@ -62,7 +62,7 @@ TEST_F(MemoryArbitrationTest, create) {
     if (kind.empty()) {
       auto arbitrator = MemoryArbitrator::create(config);
       ASSERT_EQ(arbitrator->kind(), "NOOP");
-    } else if(kind == unknownType) {
+    } else if (kind == unknownType) {
       VELOX_ASSERT_THROW(
           MemoryArbitrator::create(config),
           "Arbitrator factory for kind UNKNOWN not registered");
