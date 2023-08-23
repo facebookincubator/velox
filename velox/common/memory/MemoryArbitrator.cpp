@@ -77,10 +77,6 @@ class NoopArbitrator : public MemoryArbitrator {
  public:
   explicit NoopArbitrator(const Config& config) : MemoryArbitrator(config) {
     VELOX_CHECK(config.kind.empty());
-    VELOX_USER_CHECK_EQ(
-        config.capacity,
-        kMaxMemory,
-        "Noop arbitrator doesn't have capacity limit")
   }
 
   std::string kind() override {
@@ -118,7 +114,7 @@ class NoopArbitrator : public MemoryArbitrator {
 
   Stats stats() const override {
     Stats stats;
-    stats.maxCapacityBytes = capacity_;
+    stats.maxCapacityBytes = kMaxMemory;
     return stats;
   }
 
