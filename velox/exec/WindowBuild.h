@@ -131,4 +131,46 @@ class SortWindowBuild : public WindowBuild {
   vector_size_t currentPartition_ = -1;
 };
 
+// This class a type of WindowBuild which does a streaming of input data.
+// The assumption is that the stream is ordered by (oartition, order by) keys
+// combination. So the partitions boundaries can be detected on the go by finding the
+// rows where the partition key changes.
+class StreamingWindowBuild : public WindowBuild {
+public:
+    StreamingWindowBuild(
+            const std::shared_ptr<const core::WindowNode>& windowNode,
+            velox::memory::MemoryPool* pool);
+
+    void noMoreInput() override;
+
+    WindowPartition* nextPartition() override;
+
+    void addInput(RowVectorPtr input);
+
+private:
+    void updatePartitions();
+
+    // Vector of pointers to each input row in the data_ RowContainer.
+    // The rows are sorted by partitionKeys + sortKeys. This total
+    // ordering can be used to split partitions (with the correct
+    // order by) for the processing.
+    std::vector<char*> sortedRows_;
+
+    // This is a vector that gives the index of the start row
+    // (in sortedRows_) of each partition in the RowContainer data_.
+    // This auxiliary structure helps demarcate partitions.
+    std::vector<vector_size_t> partitionStartRows_;
+
+    // Temporary variable to store the rows of a partition
+    std::vector<char*> partitionRows_;
+
+    // This variable is a temporary variable used to compare rows based on
+    // partitionKeys.
+    char* preRow_ = nullptr;
+
+    // Current partition being output. Used to construct WindowPartitions
+    // during resetPartition.
+    vector_size_t currentPartition_ = -1;
+};
+
 } // namespace facebook::velox::exec

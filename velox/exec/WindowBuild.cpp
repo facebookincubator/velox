@@ -198,4 +198,89 @@ WindowPartition* SortWindowBuild::nextPartition() {
   return windowPartition_.get();
 }
 
+StreamingWindowBuild::StreamingWindowBuild(
+        const std::shared_ptr<const core::WindowNode>& windowNode,
+        velox::memory::MemoryPool* pool)
+        : WindowBuild(windowNode, pool) {
+    partitionStartRows_.reserve(1000);
+    partitionStartRows_.push_back(0);
+}
+
+void StreamingWindowBuild::noMoreInput() {
+    if (numRows_ == 0) {
+        return;
+    }
+
+    // This would be the final update partition.
+    updatePartitions();
+}
+
+WindowPartition* StreamingWindowBuild::nextPartition() {
+    if (partitionStartRows_.size() == 1) {
+        // There are no partitions available at this point.
+        return nullptr;
+    }
+
+    // Clear out older partition if need be.
+    currentPartition_++;
+    if (currentPartition_ > partitionStartRows_.size() - 1) {
+        // All partitions are output. No more partitions available.
+        return nullptr;
+    }
+
+    // Erase previous partition and move ahead current partition
+    if (currentPartition_ > 0) {
+        auto numPreviousPartitionRows = partitionStartRows_[currentPartition_];
+        data_->eraseRows(
+                folly::Range<char**>(sortedRows_.data(), numPreviousPartitionRows));
+        for (int i = currentPartition_; i < partitionStartRows_.size(); i++) {
+            partitionStartRows_[i] = partitionStartRows_[i] - numPreviousPartitionRows;
+        }
+    }
+
+    // There is partition data available now.
+    auto partitionSize = partitionStartRows_[currentPartition_ + 1] -
+                         partitionStartRows_[currentPartition_];
+    auto partition = folly::Range(
+            sortedRows_.data() + partitionStartRows_[currentPartition_],
+            partitionSize);
+    windowPartition_->resetPartition(partition);
+
+    return windowPartition_.get();
+}
+
+void StreamingWindowBuild::updatePartitions() {
+    partitionStartRows_.push_back(sortedRows_.size());
+    sortedRows_.insert(
+            sortedRows_.end(), partitionRows_.begin(), partitionRows_.end());
+    partitionRows_.clear();
+}
+
+void StreamingWindowBuild::addInput(RowVectorPtr input) {
+    for (auto col = 0; col < input->childrenSize(); ++col) {
+        decodedInputVectors_[col].decode(*input->childAt(col));
+    }
+
+    auto partitionCompare = [&](const char* lhs, const char* rhs) -> bool {
+        return compareRowsWithKeys(lhs, rhs, partitionKeyInfo_);
+    };
+
+    for (auto row = 0; row < input->size(); ++row) {
+        char* newRow = data_->newRow();
+
+        for (auto col = 0; col < input->childrenSize(); ++col) {
+            data_->store(decodedInputVectors_[col], row, newRow, col);
+        }
+
+        if (preRow_ != nullptr && partitionCompare(preRow_, newRow)) {
+            updatePartitions();
+        }
+
+        partitionRows_.push_back(newRow);
+        preRow_ = newRow;
+    }
+
+    numRows_ += input->size();
+}
+
 } // namespace facebook::velox::exec

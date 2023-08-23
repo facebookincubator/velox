@@ -30,7 +30,7 @@ Window::Window(
           windowNode->id(),
           "Window"),
       numInputColumns_(windowNode->sources()[0]->outputType()->size()),
-      windowBuild_(std::make_unique<SortWindowBuild>(windowNode, pool())),
+      windowBuild_(std::make_unique<StreamingWindowBuild>(windowNode, pool())),
       currentPartition_(nullptr),
       stringAllocator_(pool()) {
   auto inputType = windowNode->sources()[0]->outputType();
