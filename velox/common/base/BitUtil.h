@@ -694,6 +694,9 @@ bool inline hasIntersection(
 template <typename T = uint64_t>
 inline int32_t countLeadingZeros(T word) {
   static_assert(std::is_same_v<T, uint64_t> || std::is_same_v<T, __uint128_t>);
+  if (word == 0) {
+    return sizeof(T) * 8;
+  }
   if constexpr (std::is_same_v<T, uint64_t>) {
     return __builtin_clzll(word);
   } else {
