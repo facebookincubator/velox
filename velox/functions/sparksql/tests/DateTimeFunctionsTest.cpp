@@ -291,5 +291,22 @@ TEST_F(DateTimeFunctionsTest, dateSub) {
   EXPECT_EQ(parseDate("5881580-07-11"), dateSub("1969-12-31", kMin));
 }
 
+TEST_F(DateTimeFunctionsTest, datediff) {
+  const auto dateSubFunc = [&](std::optional<int32_t> from,
+                               std::optional<int32_t> to) {
+    return evaluateOnce<int32_t, int32_t>(
+        "datediff(c0, c1)", {from, to}, {DATE(), DATE()});
+  };
+
+  const auto dateDiff = [&](const std::string& fromStr,
+                            const std::string& toStr) {
+    return dateSubFunc(parseDate(fromStr), parseDate(toStr));
+  };
+
+  EXPECT_EQ(1, dateDiff("2009-07-31", "2009-07-30"));
+  EXPECT_EQ(-1, dateDiff("2009-07-30", "2009-07-31"));
+  EXPECT_EQ(19592, dateDiff("2023-08-23", "1970-01-01"));
+}
+
 } // namespace
 } // namespace facebook::velox::functions::sparksql::test

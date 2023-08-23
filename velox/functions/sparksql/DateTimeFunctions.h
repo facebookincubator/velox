@@ -298,4 +298,14 @@ struct DateSubFunction {
   }
 };
 
+template <typename T>
+struct DateDiffFunction {
+  VELOX_DEFINE_FUNCTION_TYPES(T);
+
+  FOLLY_ALWAYS_INLINE void
+  call(int32_t& result, const arg_type<Date>& to, const arg_type<Date>& from) {
+    result = diffDate(DateTimeUnit::kDay, from, to);
+  }
+};
+
 } // namespace facebook::velox::functions::sparksql

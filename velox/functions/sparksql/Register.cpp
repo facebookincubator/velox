@@ -214,6 +214,8 @@ void registerFunctions(const std::string& prefix) {
 
   registerFunction<DateAddFunction, Date, Date, int32_t>({prefix + "date_add"});
   registerFunction<DateSubFunction, Date, Date, int32_t>({prefix + "date_sub"});
+  registerFunction<DateDiffFunction, int32_t, Date, Date>(
+      {prefix + "datediff"});
 
   // Register bloom filter function
   registerFunction<BloomFilterMightContainFunction, bool, Varbinary, int64_t>(

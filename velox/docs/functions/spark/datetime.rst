@@ -22,6 +22,13 @@ These functions support TIMESTAMP and DATE input types.
 
     num_days can be positive or negative.
 
+.. spark:function:: datediff(endDate, startDate) -> integer
+
+    Returns the number of days from startDate to endDate. ::
+
+    SELECT datediff('2009-07-31', '2009-07-30'); -- 1
+    SELECT datediff('2009-07-30', '2009-07-31'); -- -1
+
 .. spark:function:: last_day(date) -> date
 
     Returns the last day of the month which the date belongs to.
