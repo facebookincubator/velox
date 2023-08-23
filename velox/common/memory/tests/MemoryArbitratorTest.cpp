@@ -52,13 +52,17 @@ TEST_F(MemoryArbitrationTest, stats) {
 TEST_F(MemoryArbitrationTest, create) {
   const std::string unknownType = "UNKNOWN";
   const std::vector<std::string> kinds = {
+      std::string(),
       unknownType // expect error on unregistered type
   };
   for (const auto& kind : kinds) {
     MemoryArbitrator::Config config;
     config.capacity = 1 * GB;
     config.kind = kind;
-    if (kind == unknownType) {
+    if (kind.empty()) {
+      auto arbitrator = MemoryArbitrator::create(config);
+      ASSERT_EQ(arbitrator->kind(), "NOOP");
+    } else if(kind == unknownType) {
       VELOX_ASSERT_THROW(
           MemoryArbitrator::create(config),
           "Arbitrator factory for kind UNKNOWN not registered");
