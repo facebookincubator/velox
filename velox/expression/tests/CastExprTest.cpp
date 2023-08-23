@@ -838,6 +838,9 @@ TEST_F(CastExprTest, primitiveValidCornerCases) {
     // Valid strings.
     testCast<std::string, int8_t>("tinyint", {"1.2"}, {1}, false);
     testCast<std::string, int8_t>("tinyint", {"-1.8"}, {-1}, false);
+    testCast<std::string, int8_t>("tinyint", {"1."}, {1}, false);
+    testCast<std::string, int8_t>("tinyint", {"-1."}, {-1}, false);
+    testCast<std::string, int8_t>("tinyint", {"0."}, {0}, false);
     testCast<std::string, int8_t>("tinyint", {"."}, {0}, false);
     testCast<std::string, int8_t>("tinyint", {"-."}, {0}, false);
 
@@ -972,11 +975,21 @@ TEST_F(CastExprTest, errorHandling) {
        "-12-3",
        "1234",
        "-129",
+       "1.1.1",
+       "1..",
+       "1.abc",
+       "..",
+       "-..",
        "125.5",
        "127",
        "-128"},
       {std::nullopt,
        0,
+       std::nullopt,
+       std::nullopt,
+       std::nullopt,
+       std::nullopt,
+       std::nullopt,
        std::nullopt,
        std::nullopt,
        std::nullopt,
