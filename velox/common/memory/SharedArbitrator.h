@@ -58,7 +58,7 @@ class SharedArbitrator : public MemoryArbitrator {
 
   Stats stats() const final;
 
-  const std::string& kind() override;
+  std::string kind() override;
 
   std::string toString() const final;
 

@@ -77,7 +77,7 @@ TEST_F(MemoryArbitrationTest, createWithDefaultConf) {
   MemoryArbitrator::Config config;
   config.capacity = 1 * GB;
   const auto& arbitrator = MemoryArbitrator::create(config);
-  VELOX_CHECK_EQ(arbitrator->kind(), "NOOP");
+  ASSERT_EQ(arbitrator->kind(), "NOOP");
 }
 
 TEST_F(MemoryArbitrationTest, queryMemoryCapacity) {
@@ -137,9 +137,8 @@ class FakeTestArbitrator : public MemoryArbitrator {
     VELOX_NYI();
   }
 
-  const std::string& kind() override {
-    static const std::string kind = "USER";
-    return kind;
+  std::string kind() override {
+    return "USER";
   }
 
   bool growMemory(

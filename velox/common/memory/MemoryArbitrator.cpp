@@ -65,34 +65,26 @@ FactoryRegistry& arbitratorFactories() {
   return registry;
 }
 
-/// Used to enforce the fixed query memory isolation across running queries.
-/// When a memory pool exceeds the fixed capacity limit, the query just
-/// fails with memory capacity exceeded error without arbitration. This is
-/// used to match the current memory isolation behavior adopted by
-/// Prestissimo.
-///
-/// TODO: deprecate this legacy policy with kShared policy for Prestissimo
-/// later.
+// Used to enforce the fixed query memory isolation across running queries.
+// When a memory pool exceeds the fixed capacity limit, the query just
+// fails with memory capacity exceeded error without arbitration. This is
+// used to match the current memory isolation behavior adopted by
+// Prestissimo.
+//
+// TODO: deprecate this legacy policy with kShared policy for Prestissimo
+// later.
 class NoopArbitrator : public MemoryArbitrator {
  public:
-  static void registerFactory() {
-    MemoryArbitrator::registerFactory(
-        kind_, [](const MemoryArbitrator::Config& config) {
-          return std::make_unique<NoopArbitrator>(config);
-        });
-  }
-
   explicit NoopArbitrator(const Config& config) : MemoryArbitrator(config) {
-    VELOX_CHECK_EQ(kind_, config.kind);
+    VELOX_CHECK(config.kind.empty());
     VELOX_USER_CHECK_EQ(
         config.capacity,
         kMaxMemory,
-        "Noop arbitrator has capacity other than kMaxMemory")
+        "Noop arbitrator doesn't have capacity limit")
   }
 
-  const std::string& kind() override {
-    static const std::string kind = kind_;
-    return kind;
+  std::string kind() override {
+    return "NOOP";
   }
 
   // In noop arbitrator, we set the memory pool's
@@ -130,26 +122,18 @@ class NoopArbitrator : public MemoryArbitrator {
   }
 
   std::string toString() const override {
-    return fmt::format("ARBITRATOR[{}]", kind_);
+    return "NOOP ARBITRATOR";
   }
-
- private:
-  static constexpr const char* kind_{"NOOP"};
-};
-
-bool registerNoopArbitratorFactory() {
-  NoopArbitrator::registerFactory();
-  return true;
 };
 
 } // namespace
 
 std::unique_ptr<MemoryArbitrator> MemoryArbitrator::create(
     const Config& config) {
-  static bool isNoopArbitratorFactoryRegistered =
-      registerNoopArbitratorFactory();
-  VELOX_DCHECK(isNoopArbitratorFactoryRegistered)
-  VELOX_USER_CHECK(!config.kind.empty(), "Memory arbitrator kind must be set")
+  if (config.kind.empty()) {
+    // if kind is not set, return noop arbitrator
+    return std::make_unique<NoopArbitrator>(config);
+  }
   auto& factory = arbitratorFactories().getFactory(config.kind);
   return factory(config);
 }
