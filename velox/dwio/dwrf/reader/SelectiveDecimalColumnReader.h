@@ -34,15 +34,41 @@ class SelectiveDecimalColumnReader : public SelectiveColumnReader {
       common::ScanSpec& scanSpec);
 
   void seekToRowGroup(uint32_t index) override;
+
   uint64_t skip(uint64_t numValues) override;
 
   void read(vector_size_t offset, RowSet rows, const uint64_t* nulls) override;
 
   void getValues(RowSet rows, VectorPtr* result) override;
 
+  bool hasBulkPath() const override {
+    return bulkPathEnable_;
+  }
+
  private:
-  template <bool kDense>
-  void readHelper(RowSet rows);
+  /**
+   * helper method used by processFilter and processValueHook
+   * @param rows target rows to read
+   * @param decodeFilter Filter during decoding phase
+   *        maybe AlwaysTrue or IsNotNull
+   * @param extractValues Function class to extract values
+   * @param valuesFilter Filter during getValues phase
+   */
+  template <bool isDense, typename TFilter, typename ExtractValues>
+  void readHelper(
+      RowSet rows,
+      velox::common::Filter* decodeFilter,
+      ExtractValues extractValues,
+      const velox::common::Filter& valuesFilter);
+
+  template <bool isDense, typename ExtractValues>
+  void processFilter(
+      velox::common::Filter* filter,
+      ExtractValues extractValues,
+      RowSet rows);
+
+  template <bool isDence>
+  void processValueHook(RowSet rows, ValueHook* hook);
 
   std::unique_ptr<IntDecoder<true>> valueDecoder_;
   std::unique_ptr<IntDecoder<true>> scaleDecoder_;
@@ -50,6 +76,10 @@ class SelectiveDecimalColumnReader : public SelectiveColumnReader {
   BufferPtr scaleBuffer_;
   RleVersion version_;
   int32_t scale_ = 0;
+
+  // Will be false during prepare phase, in order to ensure that
+  // resultNulls_ will be allocated by prepareNulls(), or addNull() will fail.
+  bool bulkPathEnable_ = false;
 };
 
 } // namespace facebook::velox::dwrf

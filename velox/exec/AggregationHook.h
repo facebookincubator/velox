@@ -35,6 +35,8 @@ class AggregationHook : public ValueHook {
   static constexpr Kind kFloatMin = 8;
   static constexpr Kind kDoubleMax = 9;
   static constexpr Kind kDoubleMin = 10;
+  static constexpr Kind kHugeintMax = 11;
+  static constexpr Kind kHugeintMin = 12;
 
   // Make null behavior known at compile time. This is useful when
   // templating a column decoding loop with a hook.
@@ -192,6 +194,9 @@ class MinMaxHook final : public AggregationHook {
       if (std::is_same_v<T, int64_t>) {
         return kBigintMin;
       }
+      if (std::is_same_v<T, int128_t>) {
+        return kHugeintMin;
+      }
       if (std::is_same_v<T, float>) {
         return kFloatMin;
       }
@@ -201,6 +206,9 @@ class MinMaxHook final : public AggregationHook {
     } else {
       if (std::is_same_v<T, int64_t>) {
         return kBigintMax;
+      }
+      if (std::is_same_v<T, int128_t>) {
+        return kHugeintMax;
       }
       if (std::is_same_v<T, float>) {
         return kFloatMax;

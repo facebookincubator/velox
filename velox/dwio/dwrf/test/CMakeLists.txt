@@ -489,6 +489,16 @@ target_link_libraries(
   ${FOLLY_BENCHMARK}
   fmt::fmt)
 
+add_executable(velox_orc_column_reader_benchmark OrcColumnReaderBenchmark.cpp)
+target_link_libraries(
+  velox_orc_column_reader_benchmark
+  velox_dwio_dwrf_reader
+  velox_exec_test_lib
+  velox_exec
+  velox_hive_connector
+  Folly::folly
+  ${FOLLY_BENCHMARK})
+
 add_executable(velox_dwio_cache_test CacheInputTest.cpp)
 
 add_test(velox_dwio_cache_test velox_dwio_cache_test)
@@ -503,4 +513,20 @@ target_link_libraries(
   lzo2::lzo2
   zstd::zstd
   ZLIB::ZLIB
+  ${TEST_LINK_LIBS})
+
+add_executable(velox_dwio_orc_table_scan_test OrcTableScanTest.cpp)
+
+add_test(
+  NAME velox_dwio_orc_table_scan_test
+  COMMAND velox_dwio_orc_table_scan_test
+  WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR})
+
+target_link_libraries(
+  velox_dwio_orc_table_scan_test
+  velox_dwio_dwrf_reader
+  velox_exec_test_lib
+  velox_exec
+  velox_hive_connector
+  velox_link_libs
   ${TEST_LINK_LIBS})

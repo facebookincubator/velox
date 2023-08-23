@@ -426,7 +426,8 @@ class FooterWrapper : public ProtoWrapperBase {
 
   // TODO: ORC has not supported column statistics yet
   int statisticsSize() const {
-    return format_ == DwrfFormat::kDwrf ? dwrfPtr()->statistics_size() : 0;
+    return format_ == DwrfFormat::kDwrf ? dwrfPtr()->statistics_size()
+                                        : orcPtr()->statistics_size();
   }
 
   const ::google::protobuf::RepeatedPtrField<
@@ -438,7 +439,6 @@ class FooterWrapper : public ProtoWrapperBase {
 
   const ::facebook::velox::dwrf::proto::ColumnStatistics& statistics(
       int index) const {
-    VELOX_CHECK_EQ(format_, DwrfFormat::kDwrf);
     return dwrfPtr()->statistics(index);
   }
 

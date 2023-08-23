@@ -473,8 +473,11 @@ void DecimalColumnReader<DataT>::next(
   valueDecoder_->nextValues(valuesData, numValues, nullsPtr);
   scaleDecoder_->next(scalesData, numValues, nullsPtr);
   auto* valuesPtr = values->asMutable<DataT>();
+  raw_vector<int32_t> rows(numValues);
+  std::iota(&rows[0], &rows[numValues], 0); // process all rows
+  common::AlwaysTrue alwaysTrue;
   DecimalUtil::fillDecimals<DataT>(
-      valuesPtr, nullsPtr, valuesData, scalesData, numValues, scale_);
+      nullsPtr, valuesPtr, valuesData, scalesData, scale_, rows, alwaysTrue);
 }
 
 } // namespace

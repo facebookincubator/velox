@@ -352,6 +352,16 @@ toInt64List(const VectorPtr& vector, vector_size_t start, vector_size_t size) {
   return values;
 }
 
+std::vector<int128_t>
+toInt128List(const VectorPtr& vector, vector_size_t start, vector_size_t size) {
+  auto ints = vector->as<SimpleVector<int128_t>>();
+  std::vector<int128_t> values;
+  for (auto i = 0; i < size; i++) {
+    values.push_back(ints->valueAt(start + i));
+  }
+  return values;
+}
+
 std::unique_ptr<common::Filter> makeInFilter(
     const core::TypedExprPtr& expr,
     core::ExpressionEvaluator* evaluator,
@@ -384,6 +394,14 @@ std::unique_ptr<common::Filter> makeInFilter(
     case TypeKind::BIGINT: {
       auto values = toInt64List<int64_t>(elements, offset, size);
       return negated ? notIn(values) : in(values);
+    }
+    case TypeKind::HUGEINT: {
+      if (negated) {
+        // currently don't support kNegatedHugeintValues
+        return nullptr;
+      }
+      auto values = toInt128List(elements, offset, size);
+      return common::createHugeintValues(values, false /*nullAllowed*/);
     }
     case TypeKind::VARCHAR: {
       auto stringElements = elements->as<SimpleVector<StringView>>();

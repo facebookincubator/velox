@@ -20,6 +20,9 @@
 #include "velox/common/base/CheckedArithmetic.h"
 #include "velox/common/base/Exceptions.h"
 #include "velox/common/base/Nulls.h"
+#include "velox/common/base/RawVector.h"
+#include "velox/common/process/ProcessBase.h"
+#include "velox/type/Filter.h"
 #include "velox/type/Type.h"
 
 namespace facebook::velox {
@@ -27,6 +30,28 @@ namespace facebook::velox {
 /// A static class that holds helper functions for DECIMAL type.
 class DecimalUtil {
  public:
+  static constexpr int64_t
+      kPowersOfTenShort[ShortDecimalType::kMaxPrecision + 1] = {
+          1,
+          10,
+          100,
+          1'000,
+          10'000,
+          100'000,
+          1'000'000,
+          10'000'000,
+          100'000'000,
+          1'000'000'000,
+          10'000'000'000,
+          100'000'000'000,
+          1'000'000'000'000,
+          10'000'000'000'000,
+          100'000'000'000'000,
+          1'000'000'000'000'000,
+          10'000'000'000'000'000,
+          100'000'000'000'000'000,
+          1'000'000'000'000'000'000};
+
   static constexpr int128_t kPowersOfTen[LongDecimalType::kMaxPrecision + 1] = {
       1,
       10,
@@ -91,28 +116,126 @@ class DecimalUtil {
 
   template <typename T>
   inline static void fillDecimals(
-      T* decimals,
       const uint64_t* nullsPtr,
+      T* decimals,
       const T* values,
       const int64_t* scales,
-      int32_t numValues,
-      int32_t targetScale) {
-    for (int32_t i = 0; i < numValues; i++) {
-      if (!nullsPtr || !bits::isBitNull(nullsPtr, i)) {
-        int32_t currentScale = scales[i];
-        T value = values[i];
-        if constexpr (std::is_same_v<T, std::int64_t>) { // Short Decimal
+      int32_t targetScale,
+      raw_vector<int32_t>& rows,
+      const velox::common::Filter& filter) {
+    int32_t numRows = rows.size();
+    bool isDense = (rows.back() - rows[0] == numRows - 1);
+    int32_t rowsCnt = 0;
+    if constexpr (std::is_same_v<T, int64_t>) { // Short Decimal
+      int startIndex = 0;
+      // short decimal can go fast path
+      if (!nullsPtr && process::hasAvx2()) {
+        constexpr int kBatchSize = xsimd::batch<int32_t>::size;
+        int halfBatch = kBatchSize / 2;
+        int32_t vecSize = numRows - numRows % kBatchSize;
+        auto targetScales = xsimd::batch<int64_t>::broadcast(targetScale);
+        for (int32_t i = 0; i < vecSize; i += kBatchSize) {
+          // deal with first half
+          auto fstValues = xsimd::load_aligned(values + i);
+          auto scalesVec = xsimd::load_aligned(scales + i);
+          int32_t matchMask = simd::toBitMask(scalesVec == targetScales);
+          if (matchMask != simd::allSetBitMask<int64_t>()) {
+            auto powersVec = simd::gather<int64_t, int64_t>(
+                kPowersOfTenShort, xsimd::abs(scalesVec - targetScales));
+            fstValues = xsimd::select(
+                scalesVec < targetScales,
+                fstValues * powersVec,
+                fstValues / powersVec);
+          }
+          // deal with second half
+          int32_t startRow = i + halfBatch;
+          auto secValues = xsimd::load_aligned(values + startRow);
+          scalesVec = xsimd::load_aligned(scales + startRow);
+          matchMask = simd::toBitMask(scalesVec == targetScales);
+          if (matchMask != simd::allSetBitMask<int64_t>()) {
+            auto powersVec = simd::gather<int64_t, int64_t>(
+                kPowersOfTenShort, xsimd::abs(scalesVec - targetScales));
+            secValues = xsimd::select(
+                scalesVec < targetScales,
+                secValues * powersVec,
+                secValues / powersVec);
+          }
+          int32_t fstMask = simd::toBitMask(filter.testValues(fstValues));
+          int32_t secMask = simd::toBitMask(filter.testValues(secValues));
+          int32_t mask = fstMask | secMask << halfBatch;
+
+          // save values and outputRows
+          if (mask) {
+            if (mask == simd::allSetBitMask<int32_t>()) {
+              xsimd::load_aligned(&rows[i]).store_aligned(&rows[rowsCnt]);
+              fstValues.store_aligned(decimals + rowsCnt);
+              rowsCnt += halfBatch;
+              secValues.store_aligned(decimals + rowsCnt);
+              rowsCnt += halfBatch;
+            } else {
+              if (isDense) {
+                auto fstRow = rows[rowsCnt];
+                (xsimd::load_unaligned(simd::byteSetBits(mask)) + fstRow)
+                    .store_aligned(&rows[rowsCnt]);
+              } else {
+                simd::filter(xsimd::load_aligned(&rows[i]), mask)
+                    .store_aligned(&rows[rowsCnt]);
+              }
+              if (fstMask) {
+                if (fstMask == simd::allSetBitMask<int64_t>()) {
+                  fstValues.store_aligned(decimals + rowsCnt);
+                  rowsCnt += halfBatch;
+                } else {
+                  simd::filter(fstValues, fstMask)
+                      .store_aligned(decimals + rowsCnt);
+                  rowsCnt += __builtin_popcount(fstMask);
+                }
+              }
+              if (secMask) {
+                if (secMask == simd::allSetBitMask<int64_t>()) {
+                  secValues.store_aligned(decimals + rowsCnt);
+                  rowsCnt += halfBatch;
+                } else {
+                  simd::filter(secValues, secMask)
+                      .store_aligned(decimals + rowsCnt);
+                  rowsCnt += __builtin_popcount(secMask);
+                }
+              }
+            }
+          }
+        }
+        startIndex = vecSize;
+      }
+      // remaining part can't be vectorize
+      for (int32_t rowIndex = startIndex; rowIndex < numRows; rowIndex++) {
+        if (!nullsPtr || !bits::isBitNull(nullsPtr, rowIndex)) {
+          int64_t currentScale = scales[rowIndex];
+          T value = values[rowIndex];
           if (targetScale > currentScale &&
               targetScale - currentScale <= ShortDecimalType::kMaxPrecision) {
-            value *= static_cast<T>(kPowersOfTen[targetScale - currentScale]);
+            value *= kPowersOfTenShort[targetScale - currentScale];
           } else if (
               targetScale < currentScale &&
               currentScale - targetScale <= ShortDecimalType::kMaxPrecision) {
-            value /= static_cast<T>(kPowersOfTen[currentScale - targetScale]);
+            value /= kPowersOfTenShort[currentScale - targetScale];
           } else if (targetScale != currentScale) {
             VELOX_FAIL("Decimal scale out of range");
           }
-        } else { // Long Decimal
+          if (filter.testInt64(value)) {
+            if (nullsPtr) { // NULL value is needed in this case
+              decimals[rowIndex] = value;
+            } else { // we can skip NULL values
+              decimals[rowsCnt] = value;
+              rows[rowsCnt++] = rows[rowIndex];
+            }
+          }
+        }
+      }
+    } else { // Long Decimal
+      for (int32_t rowIndex = 0; rowIndex < numRows; rowIndex++) {
+        if (!nullsPtr || !bits::isBitNull(nullsPtr, rowIndex)) {
+          int32_t currentScale = scales[rowIndex];
+          T value = values[rowIndex];
           if (targetScale > currentScale) {
             while (targetScale > currentScale) {
               int32_t scaleAdjust = std::min<int32_t>(
@@ -128,9 +251,19 @@ class DecimalUtil {
               currentScale -= scaleAdjust;
             }
           }
+          if (filter.testInt128(value)) {
+            if (nullsPtr) { // NULL value is needed in this case
+              decimals[rowIndex] = value;
+            } else { // we can skip NULL values
+              decimals[rowsCnt] = value;
+              rows[rowsCnt++] = rows[rowIndex];
+            }
+          }
         }
-        decimals[i] = value;
       }
+    }
+    if (!nullsPtr) { // we can skip NULL values
+      rows.resize(rowsCnt);
     }
   }
 
@@ -320,5 +453,6 @@ class DecimalUtil {
   static int32_t toByteArray(int128_t value, char* out);
 
   static constexpr __uint128_t kOverflowMultiplier = ((__uint128_t)1 << 127);
+
 }; // DecimalUtil
 } // namespace facebook::velox

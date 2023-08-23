@@ -455,6 +455,10 @@ class IsNull final : public Filter {
     return false;
   }
 
+  bool testInt128(int128_t /* unused */) const final {
+    return false;
+  }
+
   bool testInt64Range(int64_t /*min*/, int64_t /*max*/, bool hasNull)
       const final {
     return hasNull;
@@ -518,6 +522,10 @@ class IsNotNull final : public Filter {
   }
 
   bool testInt64(int64_t /* unused */) const final {
+    return true;
+  }
+
+  bool testInt128(int128_t /* unused */) const final {
     return true;
   }
 
