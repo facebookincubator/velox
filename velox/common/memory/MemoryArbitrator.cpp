@@ -87,19 +87,20 @@ class NoopArbitrator : public MemoryArbitrator {
     return "NOOP";
   }
 
-  // In noop arbitrator, we set the memory pool's
-  // capacity to its configured max once reserveMemory is called.
+  // Noop arbitrator has no memory capacity limit so no operation needed for
+  // memory pool capacity reserve.
   void reserveMemory(MemoryPool* pool, uint64_t /*unused*/) override {
     pool->grow(pool->maxCapacity());
   }
 
-  // As the default arbitrator, noop arbitrator doesn't release the pool.
+  // Noop arbitrator has no memory capacity limit so no operation needed for
+  // memory pool capacity release.
   void releaseMemory(MemoryPool* /*unused*/) override {
     // No-op
   }
 
-  // As the default arbitrator, noop arbitrator doesn't grow the pool
-  // since the pool should be already granted maximum capacity.
+  // Noop arbitrator has no memory capacity limit so no operation needed for
+  // memory pool capacity grow.
   bool growMemory(
       MemoryPool* /*unused*/,
       const std::vector<std::shared_ptr<MemoryPool>>& /*unused*/,
@@ -107,8 +108,8 @@ class NoopArbitrator : public MemoryArbitrator {
     return false;
   }
 
-  // As the default arbitrator, noop arbitrator doesn't shrink the pool
-  // since the pool should be granted maximum capacity.
+  // Noop arbitrator has no memory capacity limit so no operation needed for
+  // memory pool capacity shrink.
   uint64_t shrinkMemory(
       const std::vector<std::shared_ptr<MemoryPool>>& /*unused*/,
       uint64_t /*unused*/) override {
@@ -131,7 +132,7 @@ class NoopArbitrator : public MemoryArbitrator {
 std::unique_ptr<MemoryArbitrator> MemoryArbitrator::create(
     const Config& config) {
   if (config.kind.empty()) {
-    // if kind is not set, return noop arbitrator
+    // if kind is not set, return noop arbitrator.
     return std::make_unique<NoopArbitrator>(config);
   }
   auto& factory = arbitratorFactories().getFactory(config.kind);

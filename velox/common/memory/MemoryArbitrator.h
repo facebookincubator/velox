@@ -43,9 +43,8 @@ class MemoryArbitrator {
   struct Config {
     /// The string kind of this memory arbitrator.
     ///
-    /// NOTE: If kind is not set, a noop arbitrator that directly grants maximum
-    /// capacity to all the pools requesting arbitration will be used by
-    /// default.
+    /// NOTE: If kind is not set, a noop arbitrator is created which grants the
+    /// maximum capacity to each newly created memory pool.
     std::string kind{};
 
     /// The total memory capacity in bytes of all the running queries.
