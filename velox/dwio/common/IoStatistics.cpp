@@ -18,6 +18,7 @@
 #include <atomic>
 #include <utility>
 
+#include "velox/common/base/Exceptions.h"
 #include "velox/dwio/common/IoStatistics.h"
 
 namespace facebook::velox::dwio::common {
@@ -46,6 +47,15 @@ uint64_t IoStatistics::totalScanTime() const {
   return totalScanTime_.load(std::memory_order_relaxed);
 }
 
+uint64_t IoStatistics::getMetricValue(const std::string& metricName) const {
+  std::lock_guard<std::mutex> lock{customMetricMutex_};
+  auto iter = metricNameToCustomMetric_.find(metricName);
+  if (iter == metricNameToCustomMetric_.end()) {
+    return 0;
+  }
+  return iter->second;
+}
+
 uint64_t IoStatistics::incRawBytesRead(int64_t v) {
   return rawBytesRead_.fetch_add(v, std::memory_order_relaxed);
 }
@@ -68,6 +78,12 @@ uint64_t IoStatistics::incRawOverreadBytes(int64_t v) {
 
 uint64_t IoStatistics::incTotalScanTime(int64_t v) {
   return totalScanTime_.fetch_add(v, std::memory_order_relaxed);
+}
+
+uint64_t IoStatistics::incMetric(const std::string& metricName, int64_t v) {
+  std::lock_guard<std::mutex> lock{customMetricMutex_};
+  metricNameToCustomMetric_[metricName] += v;
+  return metricNameToCustomMetric_[metricName];
 }
 
 void IoStatistics::incOperationCounters(
@@ -105,9 +121,24 @@ void IoStatistics::merge(const IoStatistics& other) {
   ramHit_.merge(other.ramHit_);
   ssdRead_.merge(other.ssdRead_);
   queryThreadIoLatency_.merge(other.queryThreadIoLatency_);
-  std::lock_guard<std::mutex> l(operationStatsMutex_);
-  for (auto& item : other.operationStats_) {
-    operationStats_[item.first].merge(item.second);
+  {
+    std::lock_guard<std::mutex> lock(operationStatsMutex_);
+    for (auto& item : other.operationStats_) {
+      operationStats_[item.first].merge(item.second);
+    }
+  }
+
+  {
+    std::lock_guard<std::mutex> lock{customMetricMutex_};
+    for (auto& item : metricNameToCustomMetric_) {
+      metricNameToCustomMetric_[item.first] += other.getMetricValue(item.first);
+    }
+
+    for (auto& item : other.metricNameToCustomMetric_) {
+      if (!metricNameToCustomMetric_.contains(item.first)) {
+        metricNameToCustomMetric_[item.first] += item.second;
+      }
+    }
   }
 }
 

@@ -17,6 +17,7 @@
 #pragma once
 
 #include <atomic>
+#include <cstdint>
 #include <memory>
 #include <mutex>
 #include <string>
@@ -71,6 +72,7 @@ class IoStatistics {
   uint64_t inputBatchSize() const;
   uint64_t outputBatchSize() const;
   uint64_t totalScanTime() const;
+  uint64_t getMetricValue(const std::string& metricName) const;
 
   uint64_t incRawBytesRead(int64_t);
   uint64_t incRawOverreadBytes(int64_t);
@@ -78,6 +80,7 @@ class IoStatistics {
   uint64_t incInputBatchSize(int64_t);
   uint64_t incOutputBatchSize(int64_t);
   uint64_t incTotalScanTime(int64_t);
+  uint64_t incMetric(const std::string&, int64_t);
 
   IoCounter& prefetch() {
     return prefetch_;
@@ -121,6 +124,7 @@ class IoStatistics {
   std::atomic<uint64_t> outputBatchSize_{0};
   std::atomic<uint64_t> rawOverreadBytes_{0};
   std::atomic<uint64_t> totalScanTime_{0};
+  std::atomic<uint64_t> totalMergeTime_{0};
 
   // Planned read from storage or SSD.
   IoCounter prefetch_;
@@ -141,6 +145,11 @@ class IoStatistics {
 
   std::unordered_map<std::string, OperationCounters> operationStats_;
   mutable std::mutex operationStatsMutex_;
+
+  // track custom stats,
+  // map of name of the metric and the metric value
+  mutable std::mutex customMetricMutex_;
+  std::unordered_map<std::string, uint64_t> metricNameToCustomMetric_;
 };
 
 } // namespace facebook::velox::dwio::common
