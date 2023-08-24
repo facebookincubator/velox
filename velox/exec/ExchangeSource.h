@@ -39,10 +39,12 @@ class ExchangeSource : public std::enable_shared_from_this<ExchangeSource> {
       std::shared_ptr<ExchangeQueue> queue,
       memory::MemoryPool* pool);
 
+#ifdef VELOX_ENABLE_BACKWARD_COMPATIBILITY
   /// Temporary API to indicate whether 'request(maxBytes)' API is supported.
   virtual bool supportsFlowControl() const {
     return false;
   }
+#endif
 
   // Returns true if there is no request to the source pending or if
   // this should be retried. If true, the caller is expected to call
@@ -57,23 +59,11 @@ class ExchangeSource : public std::enable_shared_from_this<ExchangeSource> {
     return requestPending_;
   }
 
-  // Requests the producer to generate more data. Call only if shouldRequest()
-  // was true. The object handles its own lifetime by acquiring a
-  // shared_from_this() pointer if needed.
-  virtual void request() {
-    VELOX_UNSUPPORTED();
-  }
-
   /// Requests the producer to generate up to 'maxBytes' more data.
   /// Returns a future that completes when producer responds either with 'data'
   /// or with a message indicating that all data has been already produced or
-  /// data will take more time to produce. Legacy ExchangeSources return empty
-  /// future and keep fetching data until it arrives or no-more-data message is
-  /// received.
-  virtual ContinueFuture request(uint32_t maxBytes) {
-    request();
-    return ContinueFuture::makeEmpty();
-  }
+  /// data will take more time to produce.
+  virtual ContinueFuture request(uint32_t maxBytes) = 0;
 
   // Close the exchange source. May be called before all data
   // has been received and proessed. This can happen in case
