@@ -14,16 +14,4 @@
 
 add_executable(velox_common_compression_test CompressionTest.cpp)
 add_test(velox_common_compression_test velox_common_compression_test)
-target_link_libraries(
-  velox_common_compression_test
-  velox_common_compression
-  Boost::regex
-  velox_link_libs
-  Folly::folly
-  ${TEST_LINK_LIBS}
-  gflags::gflags
-  gtest
-  gtest_main
-  gmock
-  glog::glog
-  fmt::fmt)
+target_link_libraries(velox_common_compression_test PUBLIC velox_link_libs ${TEST_LINK_LIBS} PRIVATE velox_common_compression velox_exception gtest gtest_main)
