@@ -21,7 +21,16 @@ add_library(
   SsdCache.cpp
   SsdFile.cpp
   SsdFileTracker.cpp)
-target_link_libraries(velox_caching PUBLIC velox_common_base velox_exception velox_file velox_memory Folly::folly fmt::fmt gflags::gflags PRIVATE velox_time)
+target_link_libraries(
+  velox_caching
+  PUBLIC velox_common_base
+         velox_exception
+         velox_file
+         velox_memory
+         Folly::folly
+         fmt::fmt
+         gflags::gflags
+  PRIVATE velox_time)
 
 if(${VELOX_BUILD_TESTING})
   add_subdirectory(tests)
