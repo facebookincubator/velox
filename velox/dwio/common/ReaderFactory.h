@@ -18,11 +18,11 @@
 
 #include <memory>
 
-#include "velox/dwio/common/BufferedInput.h"
 #include "velox/dwio/common/Options.h"
 #include "velox/dwio/common/Reader.h"
 
 namespace facebook::velox::dwio::common {
+class BufferedInput;
 
 /**
  * Reader factory interface.
