@@ -49,6 +49,23 @@ These functions support TIMESTAMP and DATE input types.
     ``day`` need to be from 1 to 31, and matches the number of days in each month.
     days of ``year-month-day - 1970-01-01`` need to be in the range of INTEGER type.
 
+.. spark:function:: next_day(start_date, day_of_week) -> date
+   
+    Returns the first date which is later than ``start_date`` and named as indicated.
+    Returns NULL if ``day_of_week`` is an invalid input.
+    ``day_of_week`` must be one of the following (case insensitive):
+    'SU', 'SUN', 'SUNDAY'
+    'MO', 'MON', 'MONDAY'
+    'TU', 'TUE', 'TUESDAY'
+    'WE', 'WED', 'WEDNESDAY'
+    'TH', 'THU', 'THURSDAY'
+    'FR', 'FRI', 'FRIDAY'
+    'SA', 'SAT', 'SATURDAY'
+    ::
+
+        SELECT next_day('2015-01-14', 'TU'); -- 2015-01-20
+        SELECT next_day('2015-01-14', 'NotValid'); -- NULL
+
 .. spark:function:: to_unix_timestamp(string) -> integer
 
     Alias for ``unix_timestamp(string) -> integer``.

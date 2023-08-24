@@ -14,6 +14,8 @@
  * limitations under the License.
  */
 
+#include <boost/algorithm/string/case_conv.hpp>
+
 #include "velox/functions/lib/DateTimeFormatter.h"
 #include "velox/functions/lib/TimeUtils.h"
 #include "velox/functions/prestosql/DateTimeImpl.h"
@@ -264,6 +266,40 @@ struct LastDayFunction {
   }
 };
 
+namespace {
+// clang-format off
+static const std::unordered_map<std::string, int> kWeekNum = {
+    {"SU", 0}, {"SUN", 0}, {"SUNDAY", 0},
+    {"MO", 1}, {"MON", 1}, {"MONDAY", 1},
+    {"TU", 2}, {"TUE", 2}, {"TUESDAY", 2},
+    {"WE", 3}, {"WED", 3}, {"WEDNESDAY", 3},
+    {"TH", 4}, {"THU", 4}, {"THURSDAY", 4},
+    {"FR", 5}, {"FRI", 5}, {"FRIDAY", 5},
+    {"SA", 6}, {"SAT", 6}, {"SATURDAY", 6}
+};
+// clang-format on
+} // namespace
+
+template <typename T>
+struct NextDayFunction {
+  VELOX_DEFINE_FUNCTION_TYPES(T);
+
+  FOLLY_ALWAYS_INLINE bool call(
+      out_type<Date>& result,
+      const arg_type<Date>& date,
+      const arg_type<Varchar>& dayOfWeek) {
+    auto dateTime = getDateTime(date);
+
+    auto iter = kWeekNum.find(boost::to_upper_copy<std::string>(dayOfWeek));
+    if (iter == kWeekNum.end()) {
+      return false;
+    }
+    auto added = ((iter->second - 1 - dateTime.tm_wday) % 7 + 7) % 7 + 1;
+    result = addToDate(date, DateTimeUnit::kDay, added);
+    return true;
+  }
+}; // namespace facebook::velox::functions::sparksql
+
 template <typename T>
 struct DateAddFunction {
   VELOX_DEFINE_FUNCTION_TYPES(T);
@@ -297,5 +333,4 @@ struct DateSubFunction {
     }
   }
 };
-
 } // namespace facebook::velox::functions::sparksql

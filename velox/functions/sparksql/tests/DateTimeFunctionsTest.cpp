@@ -225,6 +225,32 @@ TEST_F(DateTimeFunctionsTest, lastDay) {
   EXPECT_EQ(lastDayFunc(std::nullopt), std::nullopt);
 }
 
+TEST_F(DateTimeFunctionsTest, nextDay) {
+  const auto D = [](const std::string& date) -> std::optional<int32_t> {
+    return DATE()->toDays(date);
+  };
+
+  const auto nextDay = [&](const std::string& date,
+                           const std::optional<StringView> dow) {
+    std::vector<VectorPtr> flatVectors;
+    flatVectors.emplace_back(makeNullableFlatVector(
+        std::vector<std::optional<uint32_t>>{D(date)}, DATE()));
+    flatVectors.emplace_back(
+        makeNullableFlatVector(std::vector<std::optional<StringView>>{dow}));
+
+    auto rowVectorPtr = makeRowVector(flatVectors);
+    return evaluateOnce<int32_t>("next_day(c0, c1)", rowVectorPtr);
+  };
+
+  EXPECT_EQ(D("2015-01-20"), nextDay("2015-01-14", "TU"));
+  EXPECT_EQ(D("2015-07-27"), nextDay("2015-07-23", "MONDAY"));
+  EXPECT_EQ(D("2015-07-27"), nextDay("2015-07-23", "mon"));
+  EXPECT_EQ(D("2015-07-27"), nextDay("2015-07-20", "MONDAY"));
+  EXPECT_EQ(D("2015-07-21"), nextDay("2015-07-20", "tuesday"));
+  EXPECT_EQ(D("1970-01-05"), nextDay("1969-12-31", "MON"));
+  EXPECT_EQ(std::nullopt, nextDay("2015-07-20", "NonValidDay"));
+} // namespace
+
 TEST_F(DateTimeFunctionsTest, dateAdd) {
   const auto dateAdd = [&](std::optional<int32_t> date,
                            std::optional<int32_t> value) {
