@@ -56,6 +56,15 @@
 The offset should be a positive int literal. If the offset is greater than the number of values
 in the window, null is returned. It is an error for the offset to be zero or negative.</p>
 </section>
+<section id="rank-functions">
+<h2>Rank functions<a class="headerlink" href="#rank-functions" title="Permalink to this heading">¶</a></h2>
+<dl class="spark function">
+<dt class="sig sig-object spark" id="row_number">
+<span class="sig-name descname"><span class="pre">row_number</span></span><span class="sig-paren">(</span><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">integer</span></span></span><a class="headerlink" href="#row_number" title="Permalink to this definition">¶</a></dt>
+<dd></dd></dl>
+
+<p>Returns a unique, sequential number to each row, starting with one, according to the ordering of rows within the window partition.</p>
+</section>
 </section>
 
 
@@ -70,6 +79,7 @@ in the window, null is returned. It is an error for the offset to be zero or neg
     <ul>
 <li><a class="reference internal" href="#">Window functions</a><ul>
 <li><a class="reference internal" href="#value-functions">Value functions</a></li>
+<li><a class="reference internal" href="#rank-functions">Rank functions</a></li>
 </ul>
 </li>
 </ul>
