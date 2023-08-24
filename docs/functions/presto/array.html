@@ -215,6 +215,16 @@ Returns null if there are no non-null elements in common but either array contai
 </dd></dl>
 
 <dl class="py function">
+<dt class="sig sig-object py" id="array_remove">
+<span class="sig-name descname"><span class="pre">array_remove</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">x</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">element</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">array</span></span></span><a class="headerlink" href="#array_remove" title="Permalink to this definition">¶</a></dt>
+<dd><p>Remove all elements that equal <code class="docutils literal notranslate"><span class="pre">element</span></code> from array <code class="docutils literal notranslate"><span class="pre">x</span></code>.</p>
+<blockquote>
+<div><p>SELECT array_remove(ARRAY [1, 2, 3], 3); – [1, 2]
+SELECT array_remove(ARRAY [2, 1, NULL], 1); – [2, NULL]</p>
+</div></blockquote>
+</dd></dl>
+
+<dl class="py function">
 <dt class="sig sig-object py" id="array_sort">
 <span class="sig-name descname"><span class="pre">array_sort</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">array(E))</span> <span class="pre">-&gt;</span> <span class="pre">array(E</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#array_sort" title="Permalink to this definition">¶</a></dt>
 <dd><p>Returns an array which has the sorted order of the input array x. The elements of x must
