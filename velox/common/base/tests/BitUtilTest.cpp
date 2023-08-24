@@ -821,15 +821,17 @@ TEST_F(BitUtilTest, bswap128) {
 }
 
 TEST_F(BitUtilTest, countLeadingZeros) {
-  EXPECT_EQ(countLeadingZeros(static_cast<uint64_t>(0)), 64);
-  EXPECT_EQ(countLeadingZeros(static_cast<uint64_t>(1)), 63);
+  EXPECT_EQ(countLeadingZeros<uint64_t>(0), 64);
+  EXPECT_EQ(countLeadingZeros<uint64_t>(1), 63);
   EXPECT_EQ(countLeadingZeros<__uint128_t>(0), 128);
   EXPECT_EQ(countLeadingZeros<__uint128_t>(1), 127);
-  EXPECT_EQ(countLeadingZeros(static_cast<__uint128_t>(1)), 127);
+  EXPECT_EQ(countLeadingZeros<__uint128_t>(1), 127);
   EXPECT_EQ(
-      countLeadingZeros(static_cast<__uint128_t>(
-          HugeInt::build(0x08FFFFFFFFFFFFFF, 0xFFFFFFFFFFFFFFFF))),
+      countLeadingZeros<__uint128_t>(
+          HugeInt::build(0x08FFFFFFFFFFFFFF, 0xFFFFFFFFFFFFFFFF)),
       4);
+  EXPECT_EQ(
+      countLeadingZeros<__uint128_t>(HugeInt::build(0x08FFFFFFFFFFFFFF, 0)), 4);
 }
 } // namespace bits
 } // namespace velox

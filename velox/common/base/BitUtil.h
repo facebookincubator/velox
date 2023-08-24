@@ -691,6 +691,9 @@ bool inline hasIntersection(
       });
 }
 
+/// Built-in Function: int __builtin_clz (unsigned int x) returns the number of
+/// leading 0-bits in x, starting at the most significant bit position. If x is
+/// 0, the result is undefined.
 template <typename T = uint64_t>
 inline int32_t countLeadingZeros(T word) {
   static_assert(std::is_same_v<T, uint64_t> || std::is_same_v<T, __uint128_t>);
