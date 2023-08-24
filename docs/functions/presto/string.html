@@ -215,6 +215,17 @@ then null is returned.</p>
 </dd></dl>
 
 <dl class="py function">
+<dt class="sig sig-object py" id="split_to_map">
+<span class="sig-name descname"><span class="pre">split_to_map</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">string</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">entryDelimiter</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">keyValueDelimiter</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">map&lt;varchar,</span> <span class="pre">varchar&gt;</span></span></span><a class="headerlink" href="#split_to_map" title="Permalink to this definition">¶</a></dt>
+<dd><p>Splits <code class="docutils literal notranslate"><span class="pre">string</span></code> by <code class="docutils literal notranslate"><span class="pre">entryDelimiter</span></code> and <code class="docutils literal notranslate"><span class="pre">keyValueDelimiter</span></code> and returns a map.
+<code class="docutils literal notranslate"><span class="pre">entryDelimiter</span></code> splits <code class="docutils literal notranslate"><span class="pre">string</span></code> into key-value pairs. <code class="docutils literal notranslate"><span class="pre">keyValueDelimiter</span></code> splits
+each pair into key and value. Note that <code class="docutils literal notranslate"><span class="pre">entryDelimiter</span></code> and <code class="docutils literal notranslate"><span class="pre">keyValueDelimiter</span></code> are
+interpreted literally, i.e., as full string matches.</p>
+<p>entryDelimiter and keyValueDelimiter must not be empty and must not be the same.</p>
+<p>Raises an error if there are duplicate keys.</p>
+</dd></dl>
+
+<dl class="py function">
 <dt class="sig sig-object py" id="strpos">
 <span class="sig-name descname"><span class="pre">strpos</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">string</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">substring</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">bigint</span></span></span><a class="headerlink" href="#strpos" title="Permalink to this definition">¶</a></dt>
 <dd><p>Returns the starting position of the first instance of <code class="docutils literal notranslate"><span class="pre">substring</span></code> in
