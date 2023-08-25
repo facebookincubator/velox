@@ -770,7 +770,7 @@ uint64_t BaseVector::estimateFlatSize() const {
   }
 
   auto avgRowSize = 1.0 * leaf->retainedSize() / leaf->size();
-  return length_ * avgRowSize;
+  return BaseVector::retainedSize() + length_ * avgRowSize;
 }
 
 namespace {
