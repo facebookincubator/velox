@@ -198,7 +198,18 @@ inputs and intermediate results.</p></li>
 <span class="k">virtual</span><span class="w"> </span><span class="kt">int32_t</span><span class="w"> </span><span class="nf">accumulatorFixedWidthSize</span><span class="p">()</span><span class="w"> </span><span class="k">const</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">0</span><span class="p">;</span><span class="w"></span>
 </pre></div>
 </div>
-<p>The HashAggregation operator uses this method during initialization to calculate the total size of the row and figure out offsets at which different aggregates will be storing their data. The operator then calls velox::exec::Aggregate::setOffsets method for each aggregate to specify the location of the accumulator.</p>
+<p>If accumulator requires specific alignment you need to implement <em>accumulatorAlignmentSize()</em> method.</p>
+<div class="highlight-c++ notranslate"><div class="highlight"><pre><span></span><span class="c1">/// Returns the alignment size of the accumulator.  Some types such as</span>
+<span class="c1">/// int128_t require aligned access.  This value must be a power of 2.</span>
+<span class="k">virtual</span><span class="w"> </span><span class="kt">int32_t</span><span class="w"> </span><span class="nf">accumulatorAlignmentSize</span><span class="p">()</span><span class="w"> </span><span class="k">const</span><span class="w"> </span><span class="p">{</span><span class="w"></span>
+<span class="w">  </span><span class="k">return</span><span class="w"> </span><span class="mi">1</span><span class="p">;</span><span class="w"></span>
+<span class="p">}</span><span class="w"></span>
+</pre></div>
+</div>
+<p>The HashAggregation operator uses these methods during initialization to calculate the total size
+of the row and figure out offsets at which different aggregates will be storing their data. The
+operator then calls velox::exec::Aggregate::setOffsets method for each aggregate to specify the
+location of the accumulator.</p>
 <div class="highlight-c++ notranslate"><div class="highlight"><pre><span></span><span class="c1">// Sets the offset and null indicator position of &#39;this&#39;.</span>
 <span class="c1">// @param offset Offset in bytes from the start of the row of the accumulator</span>
 <span class="c1">// @param nullByte Offset in bytes from the start of the row of the null flag</span>
@@ -285,9 +296,16 @@ inputs and intermediate results.</p></li>
 </dd>
 </dl>
 </li>
+<li><dl class="simple">
+<dt>Optional logic for converting raw inputs into intermediate results:</dt><dd><ul>
+<li><p>supportsToIntermediate() and toIntermediate() methods.</p></li>
+</ul>
+</dd>
+</dl>
+</li>
 </ul>
 <p>Some methods are only used in a subset of aggregation workflows. The following
-tables shows which methods are used in which workflows.</p>
+table shows which methods are used in which workflows.</p>
 <table class="docutils align-default">
 <colgroup>
 <col style="width: 29%" />
@@ -339,6 +357,13 @@ tables shows which methods are used in which workflows.</p>
 <td><p>N</p></td>
 <td><p>Y</p></td>
 <td><p>Y</p></td>
+<td><p>N</p></td>
+<td><p>N</p></td>
+</tr>
+<tr class="row-odd"><td><p>toIntermediate</p></td>
+<td><p>Y</p></td>
+<td><p>N</p></td>
+<td><p>N</p></td>
 <td><p>N</p></td>
 <td><p>N</p></td>
 </tr>
@@ -407,6 +432,41 @@ tables shows which methods are used in which workflows.</p>
 <span class="w">    </span><span class="k">const</span><span class="w"> </span><span class="n">SelectivityVector</span><span class="o">&amp;</span><span class="w"> </span><span class="n">rows</span><span class="p">,</span><span class="w"></span>
 <span class="w">    </span><span class="k">const</span><span class="w"> </span><span class="n">std</span><span class="o">::</span><span class="n">vector</span><span class="o">&lt;</span><span class="n">VectorPtr</span><span class="o">&gt;&amp;</span><span class="w"> </span><span class="n">args</span><span class="p">,</span><span class="w"></span>
 <span class="w">    </span><span class="kt">bool</span><span class="w"> </span><span class="n">mayPushdown</span><span class="p">)</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">0</span><span class="p">;</span><span class="w"></span>
+</pre></div>
+</div>
+<p>Finally, we can implement optional methods for converting raw inputs into intermediate
+results. If partial aggregation encounters mostly unique keys and not able to meaningfully
+reduce cardinality, the operator may decide to abandon partial aggregation. In this case,
+the operator first emits already accumulated data (as in the case of flushing due to memory
+pressure), then converts each new batch of input into intermediate results and emit it right
+away. By default, to convert raw inputs into intermediate results, the operator creates fake
+groups, one per input row, initializes these groups by calling initializeNewGroups,
+adds each row to its own group using addRawInput, then calls extractAccumulators. This works,
+but is not very efficient. Individual aggregate functions can provide a more efficient
+implementation by implementing toIntermediate() method. If they decide to do so, they should
+also override supportsToIntermediate() method. For example, min and max aggregate functions
+implement toIntermediate() method which simply returns the input unmodified.</p>
+<div class="highlight-c++ notranslate"><div class="highlight"><pre><span></span><span class="c1">/// Returns true if toIntermediate() is supported.</span>
+<span class="k">virtual</span><span class="w"> </span><span class="kt">bool</span><span class="w"> </span><span class="nf">supportsToIntermediate</span><span class="p">()</span><span class="w"> </span><span class="k">const</span><span class="w"> </span><span class="p">{</span><span class="w"></span>
+<span class="w">  </span><span class="k">return</span><span class="w"> </span><span class="nb">false</span><span class="p">;</span><span class="w"></span>
+<span class="p">}</span><span class="w"></span>
+
+<span class="c1">/// Produces an accumulator initialized from a single value for each</span>
+<span class="c1">/// row in &#39;rows&#39;. The raw arguments of the aggregate are in &#39;args&#39;,</span>
+<span class="c1">/// which have the same meaning as in addRawInput. The result is</span>
+<span class="c1">/// placed in &#39;result&#39;. &#39;result is allocated if nullptr, otherwise</span>
+<span class="c1">/// it is expected to be a writable flat vector of the right type.</span>
+<span class="c1">///</span>
+<span class="c1">/// @param rows A set of rows to produce intermediate results for. The</span>
+<span class="c1">/// &#39;result&#39; is expected to have rows.size() rows. Invalid rows represent rows</span>
+<span class="c1">/// that were masked out, these need to have correct intermediate results as</span>
+<span class="c1">/// well. It is possible that all entries in &#39;rows&#39; are invalid (masked out).</span>
+<span class="k">virtual</span><span class="w"> </span><span class="kt">void</span><span class="w"> </span><span class="nf">toIntermediate</span><span class="p">(</span><span class="w"></span>
+<span class="w">    </span><span class="k">const</span><span class="w"> </span><span class="n">SelectivityVector</span><span class="o">&amp;</span><span class="w"> </span><span class="n">rows</span><span class="p">,</span><span class="w"></span>
+<span class="w">    </span><span class="n">std</span><span class="o">::</span><span class="n">vector</span><span class="o">&lt;</span><span class="n">VectorPtr</span><span class="o">&gt;&amp;</span><span class="w"> </span><span class="n">args</span><span class="p">,</span><span class="w"></span>
+<span class="w">    </span><span class="n">VectorPtr</span><span class="o">&amp;</span><span class="w"> </span><span class="n">result</span><span class="p">)</span><span class="w"> </span><span class="k">const</span><span class="w"> </span><span class="p">{</span><span class="w"></span>
+<span class="w">  </span><span class="n">VELOX_NYI</span><span class="p">(</span><span class="s">&quot;toIntermediate not supported&quot;</span><span class="p">);</span><span class="w"></span>
+<span class="p">}</span><span class="w"></span>
 </pre></div>
 </div>
 <p>GroupBy aggregation code path is done. We proceed to global aggregation.</p>
