@@ -1,0 +1,43 @@
+name: velox_base
+
+channels:
+  - conda-forge
+
+dependencies:
+# tools
+  - binutils
+  - bison
+  - cmake
+  - ccache
+  - elfutils
+  - flex
+  - gxx=12
+  - make
+  - ninja
+  - sysroot_linux-64=2.17
+# dependencies
+  - aws-sdk-cpp
+  - boost-cpp
+  - bzip2
+  - double-conversion
+  - fmt=8.0.*
+  - gflags=2.2.2
+  - glog=0.6.0
+  - gmock=1.13
+  - google-cloud-sdk
+  - gtest=1.13
+  - libaio
+  - libdwarf-dev
+  - libevent
+  - libprotobuf=3.21
+  - libsodium
+  - libtool
+  - libunwind
+  - lz4-c
+  - lzo
+  - openssl=1.1.*
+  - re2
+  - snappy
+  - xz
+  - zlib
+  - zstd
