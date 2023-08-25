@@ -96,8 +96,8 @@ class DecimalUtil {
   /// Divide a and b, set overflow to true if the result overflows. The caller
   /// should treat the overflow flag first. Using HALF_UP rounding, the digit 5
   /// is rounded up.
-  /// Compute the maximum bits required to increase, if it is less or equal than
-  /// 127 bits, int128_t is enough, if not, we should introduce int256_t as
+  /// Compute the maximum bits required to increase, if it is less than
+  /// result type bits, result type is enough, if not, we should introduce int256_t as
   /// intermediate type, and then convert to real result type with overflow
   /// flag.
   template <typename R, typename A, typename B>
@@ -127,7 +127,7 @@ class DecimalUtil {
       bSign = -1;
     }
     auto bitsRequiredAfterScaling = maxBitsRequiredAfterScaling<A>(a, aRescale);
-    if (bitsRequiredAfterScaling <= 127) {
+    if (bitsRequiredAfterScaling < sizeof(R) * 8) {
       // Fast-path. The dividend fits in 128-bit after scaling too.
       overflow = __builtin_mul_overflow(
           unsignedDividendRescaled,
