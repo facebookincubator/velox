@@ -100,7 +100,7 @@ struct PlanNodeStats {
   int numSplits{0};
 
   // Total bytes in memory for spilling
-  uint64_t spilledMemoryBytes{0};
+  uint64_t spilledInputBytes{0};
 
   /// Total bytes written for spilling.
   uint64_t spilledBytes{0};

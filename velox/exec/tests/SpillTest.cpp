@@ -356,9 +356,9 @@ class SpillTest : public ::testing::TestWithParam<common::CompressionKind>,
     ASSERT_EQ(
         finalStats.toString(),
         fmt::format(
-            "spillRuns[{}] spilledMemoryBytes[{}] spilledBytes[{}] spilledRows[{}] spilledPartitions[{}] spilledFiles[{}] spillFillTimeUs[{}] spillSortTime[{}] spillSerializationTime[{}] spillDiskWrites[{}] spillFlushTime[{}] spillWriteTime[{}]",
+            "spillRuns[{}] spilledInputBytes[{}] spilledBytes[{}] spilledRows[{}] spilledPartitions[{}] spilledFiles[{}] spillFillTimeUs[{}] spillSortTime[{}] spillSerializationTime[{}] spillDiskWrites[{}] spillFlushTime[{}] spillWriteTime[{}]",
             finalStats.spillRuns,
-            succinctBytes(finalStats.spilledMemoryBytes),
+            succinctBytes(finalStats.spilledInputBytes),
             succinctBytes(finalStats.spilledBytes),
             finalStats.spilledRows,
             finalStats.spilledPartitions,
@@ -686,7 +686,7 @@ INSTANTIATE_TEST_SUITE_P(
 TEST(SpillTest, spillStats) {
   SpillStats stats1;
   stats1.spillRuns = 100;
-  stats1.spilledMemoryBytes = 2048;
+  stats1.spilledInputBytes = 2048;
   stats1.spilledBytes = 1024;
   stats1.spilledPartitions = 1024;
   stats1.spilledFiles = 1023;
@@ -699,7 +699,7 @@ TEST(SpillTest, spillStats) {
   stats1.spillSerializationTimeUs = 1023;
   SpillStats stats2;
   stats2.spillRuns = 100;
-  stats2.spilledMemoryBytes = 2048;
+  stats2.spilledInputBytes = 2048;
   stats2.spilledBytes = 1024;
   stats2.spilledPartitions = 1025;
   stats2.spilledFiles = 1026;
@@ -725,7 +725,7 @@ TEST(SpillTest, spillStats) {
   ASSERT_TRUE(stats1 <= stats1);
 
   SpillStats delta = stats2 - stats1;
-  ASSERT_EQ(delta.spilledMemoryBytes, 0);
+  ASSERT_EQ(delta.spilledInputBytes, 0);
   ASSERT_EQ(delta.spilledBytes, 0);
   ASSERT_EQ(delta.spilledPartitions, 1);
   ASSERT_EQ(delta.spilledFiles, 3);
@@ -737,7 +737,7 @@ TEST(SpillTest, spillStats) {
   ASSERT_EQ(delta.spilledRows, 8);
   ASSERT_EQ(delta.spillSerializationTimeUs, 9);
   delta = stats1 - stats2;
-  ASSERT_EQ(delta.spilledMemoryBytes, 0);
+  ASSERT_EQ(delta.spilledInputBytes, 0);
   ASSERT_EQ(delta.spilledBytes, 0);
   ASSERT_EQ(delta.spilledPartitions, -1);
   ASSERT_EQ(delta.spilledFiles, -3);
@@ -748,7 +748,7 @@ TEST(SpillTest, spillStats) {
   ASSERT_EQ(delta.spillFillTimeUs, -7);
   ASSERT_EQ(delta.spilledRows, -8);
   ASSERT_EQ(delta.spillSerializationTimeUs, -9);
-  stats1.spilledMemoryBytes = 2060;
+  stats1.spilledInputBytes = 2060;
   stats1.spilledBytes = 1030;
   VELOX_ASSERT_THROW(stats1 < stats2, "");
   VELOX_ASSERT_THROW(stats1 > stats2, "");
@@ -761,5 +761,5 @@ TEST(SpillTest, spillStats) {
   ASSERT_EQ(zeroStats, stats1);
   ASSERT_EQ(
       stats2.toString(),
-      "spillRuns[100] spilledMemoryBytes[2.00KB] spilledBytes[1.00KB] spilledRows[1031] spilledPartitions[1025] spilledFiles[1026] spillFillTimeUs[1.03ms] spillSortTime[1.03ms] spillSerializationTime[1.03ms] spillDiskWrites[1028] spillFlushTime[1.03ms] spillWriteTime[1.03ms]");
+      "spillRuns[100] spilledInputBytes[2.00KB] spilledBytes[1.00KB] spilledRows[1031] spilledPartitions[1025] spilledFiles[1026] spillFillTimeUs[1.03ms] spillSortTime[1.03ms] spillSerializationTime[1.03ms] spillDiskWrites[1028] spillFlushTime[1.03ms] spillWriteTime[1.03ms]");
 }

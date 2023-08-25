@@ -300,8 +300,7 @@ SpillState::SpillState(
       compressionKind_(compressionKind),
       pool_(pool),
       stats_(stats),
-      files_(maxPartitions_),
-      spilledMemoryBytes_(maxPartitions_) {}
+      files_(maxPartitions_) {}
 
 void SpillState::setPartitionSpilled(int32_t partition) {
   VELOX_DCHECK_LT(partition, maxPartitions_);
@@ -312,20 +311,10 @@ void SpillState::setPartitionSpilled(int32_t partition) {
   incrementGlobalSpilledPartitionStats();
 }
 
-void SpillState::updateSpilledMemoryBytes(
-    int32_t partition,
-    uint64_t bytes,
-    bool isAdd) {
+void SpillState::updateSpilledInputBytes(int32_t partition, uint64_t bytes) {
   auto statsLocked = stats_->wlock();
-  if (isAdd) {
-    statsLocked->spilledMemoryBytes += bytes;
-    incrementGlobalSpillMemoryBytes(bytes);
-    spilledMemoryBytes_[partition] += bytes;
-  } else {
-    statsLocked->spilledMemoryBytes -= bytes;
-    decrementGlobalSpillMemoryBytes(bytes);
-    spilledMemoryBytes_[partition] -= bytes;
-  }
+  statsLocked->spilledInputBytes += bytes;
+  updateGlobalSpillMemoryBytes(bytes);
 }
 
 uint64_t SpillState::appendToPartition(
@@ -345,7 +334,7 @@ uint64_t SpillState::appendToPartition(
         pool_,
         stats_);
   }
-  updateSpilledMemoryBytes(partition, rows->estimateFlatSize(), true);
+  updateSpilledInputBytes(partition, rows->estimateFlatSize());
 
   IndexRange range{0, rows->size()};
   return files_[partition]->write(rows, folly::Range<IndexRange*>(&range, 1));
@@ -362,7 +351,6 @@ std::unique_ptr<TreeOfLosers<SpillMergeStream>> SpillState::startMerge(
       result.push_back(FileSpillMergeStream::create(std::move(file)));
     }
   }
-  updateSpilledMemoryBytes(partition, spilledMemoryBytes_[partition], false);
   VELOX_DCHECK_EQ(!result.empty(), isPartitionSpilled(partition));
   if (extra != nullptr) {
     result.push_back(std::move(extra));
@@ -434,7 +422,7 @@ SpillPartition::createReader() {
 
 SpillStats::SpillStats(
     uint64_t _spillRuns,
-    uint64_t _spilledMemoryBytes,
+    uint64_t _spilledInputBytes,
     uint64_t _spilledBytes,
     uint64_t _spilledRows,
     uint32_t _spilledPartitions,
@@ -446,7 +434,7 @@ SpillStats::SpillStats(
     uint64_t _spillFlushTimeUs,
     uint64_t _spillWriteTimeUs)
     : spillRuns(_spillRuns),
-      spilledMemoryBytes(_spilledMemoryBytes),
+      spilledInputBytes(_spilledInputBytes),
       spilledBytes(_spilledBytes),
       spilledRows(_spilledRows),
       spilledPartitions(_spilledPartitions),
@@ -460,7 +448,7 @@ SpillStats::SpillStats(
 
 SpillStats& SpillStats::operator+=(const SpillStats& other) {
   spillRuns += other.spillRuns;
-  spilledMemoryBytes += other.spilledMemoryBytes;
+  spilledInputBytes += other.spilledInputBytes;
   spilledBytes += other.spilledBytes;
   spilledRows += other.spilledRows;
   spilledPartitions += other.spilledPartitions;
@@ -477,7 +465,7 @@ SpillStats& SpillStats::operator+=(const SpillStats& other) {
 SpillStats SpillStats::operator-(const SpillStats& other) const {
   SpillStats result;
   result.spillRuns = spillRuns - other.spillRuns;
-  result.spilledMemoryBytes = spilledMemoryBytes - other.spilledMemoryBytes;
+  result.spilledInputBytes = spilledInputBytes - other.spilledInputBytes;
   result.spilledBytes = spilledBytes - other.spilledBytes;
   result.spilledRows = spilledRows - other.spilledRows;
   result.spilledPartitions = spilledPartitions - other.spilledPartitions;
@@ -508,7 +496,7 @@ bool SpillStats::operator<(const SpillStats& other) const {
   } while (0);
 
   UPDATE_COUNTER(spillRuns);
-  UPDATE_COUNTER(spilledMemoryBytes);
+  UPDATE_COUNTER(spilledInputBytes);
   UPDATE_COUNTER(spilledBytes);
   UPDATE_COUNTER(spilledRows);
   UPDATE_COUNTER(spilledPartitions);
@@ -543,7 +531,7 @@ bool SpillStats::operator<=(const SpillStats& other) const {
 bool SpillStats::operator==(const SpillStats& other) const {
   return std::tie(
              spillRuns,
-             spilledMemoryBytes,
+             spilledInputBytes,
              spilledBytes,
              spilledRows,
              spilledPartitions,
@@ -556,7 +544,7 @@ bool SpillStats::operator==(const SpillStats& other) const {
              spillWriteTimeUs) ==
       std::tie(
              other.spillRuns,
-             other.spilledMemoryBytes,
+             other.spilledInputBytes,
              other.spilledBytes,
              other.spilledRows,
              other.spilledPartitions,
@@ -571,7 +559,7 @@ bool SpillStats::operator==(const SpillStats& other) const {
 
 void SpillStats::reset() {
   spillRuns = 0;
-  spilledMemoryBytes = 0;
+  spilledInputBytes = 0;
   spilledBytes = 0;
   spilledRows = 0;
   spilledPartitions = 0;
@@ -586,9 +574,9 @@ void SpillStats::reset() {
 
 std::string SpillStats::toString() const {
   return fmt::format(
-      "spillRuns[{}] spilledMemoryBytes[{}] spilledBytes[{}] spilledRows[{}] spilledPartitions[{}] spilledFiles[{}] spillFillTimeUs[{}] spillSortTime[{}] spillSerializationTime[{}] spillDiskWrites[{}] spillFlushTime[{}] spillWriteTime[{}]",
+      "spillRuns[{}] spilledInputBytes[{}] spilledBytes[{}] spilledRows[{}] spilledPartitions[{}] spilledFiles[{}] spillFillTimeUs[{}] spillSortTime[{}] spillSerializationTime[{}] spillDiskWrites[{}] spillFlushTime[{}] spillWriteTime[{}]",
       spillRuns,
-      succinctBytes(spilledMemoryBytes),
+      succinctBytes(spilledInputBytes),
       succinctBytes(spilledBytes),
       spilledRows,
       spilledPartitions,
@@ -648,14 +636,14 @@ void updateGlobalSpillWriteStats(
   statsLocked->spillWriteTimeUs += writeTimeUs;
 }
 
-void incrementGlobalSpillMemoryBytes(uint64_t spilledMemoryBytes) {
+void updateGlobalSpillMemoryBytes(uint64_t spilledInputBytes) {
   auto statsLocked = localSpillStats().wlock();
-  statsLocked->spilledMemoryBytes += spilledMemoryBytes;
+  statsLocked->spilledInputBytes += spilledInputBytes;
 }
 
-void decrementGlobalSpillMemoryBytes(uint64_t spilledMemoryBytes) {
+void decrementGlobalSpillMemoryBytes(uint64_t spilledInputBytes) {
   auto statsLocked = localSpillStats().wlock();
-  statsLocked->spilledMemoryBytes -= spilledMemoryBytes;
+  statsLocked->spilledInputBytes -= spilledInputBytes;
 }
 
 void incrementGlobalSpilledFiles() {

@@ -72,13 +72,13 @@ std::pair<SpillStats, SpillStats> taskSpilledStats(const exec::Task& task) {
   for (auto& pipeline : stats.pipelineStats) {
     for (auto op : pipeline.operatorStats) {
       if (op.operatorType == "HashBuild") {
-        buildStats.spilledMemoryBytes += op.spilledMemoryBytes;
+        buildStats.spilledInputBytes += op.spilledInputBytes;
         buildStats.spilledBytes += op.spilledBytes;
         buildStats.spilledRows += op.spilledRows;
         buildStats.spilledPartitions += op.spilledPartitions;
         buildStats.spilledFiles += op.spilledFiles;
       } else if (op.operatorType == "HashProbe") {
-        probeStats.spilledMemoryBytes += op.spilledMemoryBytes;
+        probeStats.spilledInputBytes += op.spilledInputBytes;
         probeStats.spilledBytes += op.spilledBytes;
         probeStats.spilledRows += op.spilledRows;
         probeStats.spilledPartitions += op.spilledPartitions;
@@ -627,8 +627,8 @@ class HashJoinBuilder {
         ASSERT_GT(statsPair.second.spilledRows, 0);
         ASSERT_GT(statsPair.first.spilledBytes, 0);
         ASSERT_GT(statsPair.second.spilledBytes, 0);
-        ASSERT_GT(statsPair.first.spilledMemoryBytes, 0);
-        ASSERT_GT(statsPair.second.spilledMemoryBytes, 0);
+        ASSERT_GT(statsPair.first.spilledInputBytes, 0);
+        ASSERT_GT(statsPair.second.spilledInputBytes, 0);
         ASSERT_GT(statsPair.first.spilledPartitions, 0);
         ASSERT_GT(statsPair.second.spilledPartitions, 0);
         ASSERT_GT(statsPair.first.spilledFiles, 0);
@@ -642,7 +642,7 @@ class HashJoinBuilder {
       // set, the test might trigger spilling by its own.
     } else if (spillDirectory_.empty() && spillMemoryThreshold_ == 0) {
       ASSERT_EQ(statsPair.first.spilledRows, 0);
-      ASSERT_EQ(statsPair.first.spilledMemoryBytes, 0);
+      ASSERT_EQ(statsPair.first.spilledInputBytes, 0);
       ASSERT_EQ(statsPair.first.spilledBytes, 0);
       ASSERT_EQ(statsPair.first.spilledPartitions, 0);
       ASSERT_EQ(statsPair.first.spilledFiles, 0);

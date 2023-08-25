@@ -42,7 +42,7 @@ SpillStats spilledStats(const exec::Task& task) {
   auto stats = task.taskStats();
   for (auto& pipeline : stats.pipelineStats) {
     for (auto op : pipeline.operatorStats) {
-      spilledStats.spilledMemoryBytes += op.spilledMemoryBytes;
+      spilledStats.spilledInputBytes += op.spilledInputBytes;
       spilledStats.spilledBytes += op.spilledBytes;
       spilledStats.spilledRows += op.spilledRows;
       spilledStats.spilledPartitions += op.spilledPartitions;
@@ -194,14 +194,14 @@ class OrderByTest : public OperatorTestBase {
       auto task = assertQueryOrdered(params, duckDbSql, sortingKeys);
       auto inputRows = toPlanStats(task->taskStats()).at(orderById).inputRows;
       if (inputRows > 0) {
-        EXPECT_LT(0, spilledStats(*task).spilledMemoryBytes);
+        EXPECT_LT(0, spilledStats(*task).spilledInputBytes);
         EXPECT_LT(0, spilledStats(*task).spilledBytes);
         EXPECT_EQ(1, spilledStats(*task).spilledPartitions);
         EXPECT_LT(0, spilledStats(*task).spilledFiles);
         // NOTE: the last input batch won't go spilling.
         EXPECT_GT(inputRows, spilledStats(*task).spilledRows);
       } else {
-        EXPECT_EQ(0, spilledStats(*task).spilledMemoryBytes);
+        EXPECT_EQ(0, spilledStats(*task).spilledInputBytes);
         EXPECT_EQ(0, spilledStats(*task).spilledBytes);
       }
       OperatorTestBase::deleteTaskAndCheckSpillDirectory(task);
@@ -472,7 +472,7 @@ TEST_F(OrderByTest, spill) {
   ASSERT_GT(stats.spilledRows, 0);
   ASSERT_LT(stats.spilledRows, kNumBatches * kNumRows);
   ASSERT_GT(stats.spilledBytes, 0);
-  ASSERT_GT(stats.spilledMemoryBytes, 0);
+  ASSERT_GT(stats.spilledInputBytes, 0);
   ASSERT_EQ(stats.spilledPartitions, 1);
   ASSERT_EQ(stats.spilledFiles, 2);
   ASSERT_GT(stats.runtimeStats["spillRuns"].count, 0);
@@ -548,7 +548,7 @@ TEST_F(OrderByTest, spillWithMemoryLimit) {
 
     auto stats = task->taskStats().pipelineStats;
     ASSERT_EQ(
-        testData.expectSpill, stats[0].operatorStats[1].spilledMemoryBytes > 0);
+        testData.expectSpill, stats[0].operatorStats[1].spilledInputBytes > 0);
     ASSERT_EQ(testData.expectSpill, stats[0].operatorStats[1].spilledBytes > 0);
     OperatorTestBase::deleteTaskAndCheckSpillDirectory(task);
   }

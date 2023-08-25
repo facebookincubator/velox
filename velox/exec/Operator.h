@@ -127,7 +127,7 @@ struct OperatorStats {
   MemoryStats memoryStats;
 
   // Total bytes in memory for spilling
-  uint64_t spilledMemoryBytes{0};
+  uint64_t spilledInputBytes{0};
 
   // Total bytes written to file for spilling.
   uint64_t spilledBytes{0};
