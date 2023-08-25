@@ -50,6 +50,11 @@ ifdef AZURESDK_ROOT_DIR
 CMAKE_FLAGS += -DAZURESDK_ROOT_DIR=$(AZURESDK_ROOT_DIR)
 endif
 
+ifdef CONDA_PREFIX
+CMAKE_FLAGS += -DCMAKE_PREFIX_PATH=${CONDA_PREFIX}
+CMAKE_FLAGS += -DCMAKE_FIND_USE_SYSTEM_ENVIRONMENT_PATH=FALSE
+endif
+
 # Use Ninja if available. If Ninja is used, pass through parallelism control flags.
 USE_NINJA ?= 1
 ifeq ($(USE_NINJA), 1)
