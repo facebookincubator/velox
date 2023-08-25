@@ -416,11 +416,14 @@ class Addition {
       uint8_t aPrecision,
       uint8_t aScale,
       uint8_t bPrecision,
-      uint8_t bScale) {
+      uint8_t bScale,
+      bool allowPrecisionLoss) {
     auto precision = std::max(aPrecision - aScale, bPrecision - bScale) +
         std::max(aScale, bScale) + 1;
     auto scale = std::max(aScale, bScale);
-    return DecimalUtil::adjustPrecisionScale(precision, scale);
+    return allowPrecisionLoss
+        ? DecimalUtil::adjustPrecisionScale(precision, scale)
+        : DecimalUtil::bounded(precision, scale);
   }
 };
 
@@ -464,9 +467,10 @@ class Subtraction {
       uint8_t aPrecision,
       uint8_t aScale,
       uint8_t bPrecision,
-      uint8_t bScale) {
+      uint8_t bScale,
+      bool allowPrecisionLoss) {
     return Addition::computeResultPrecisionScale(
-        aPrecision, aScale, bPrecision, bScale);
+        aPrecision, aScale, bPrecision, bScale, allowPrecisionLoss);
   }
 };
 
@@ -566,9 +570,12 @@ class Multiply {
       uint8_t aPrecision,
       uint8_t aScale,
       uint8_t bPrecision,
-      uint8_t bScale) {
-    return DecimalUtil::adjustPrecisionScale(
-        aPrecision + bPrecision + 1, aScale + bScale);
+      uint8_t bScale,
+      const bool allowPrecisionLoss) {
+    return allowPrecisionLoss
+        ? DecimalUtil::adjustPrecisionScale(
+              aPrecision + bPrecision + 1, aScale + bScale)
+        : DecimalUtil::bounded(aPrecision + bPrecision + 1, aScale + bScale);
   }
 
  private:
@@ -616,10 +623,22 @@ class Divide {
       uint8_t aPrecision,
       uint8_t aScale,
       uint8_t bPrecision,
-      uint8_t bScale) {
-    auto scale = std::max(6, aScale + bPrecision + 1);
-    auto precision = aPrecision - aScale + bScale + scale;
-    return DecimalUtil::adjustPrecisionScale(precision, scale);
+      uint8_t bScale,
+      bool allowPrecisionLoss) {
+    if (allowPrecisionLoss) {
+      auto scale = std::max(6, aScale + bPrecision + 1);
+      auto precision = aPrecision - aScale + bScale + scale;
+      return DecimalUtil::adjustPrecisionScale(precision, scale);
+    } else {
+      auto intDig = std::min(38, aPrecision - aScale + bScale);
+      auto decDig = std::min(38, std::max(6, aScale + bPrecision + 1));
+      auto diff = (intDig + decDig) - 38;
+      if (diff > 0) {
+        decDig -= diff / 2 + 1;
+        intDig = 38 - decDig;
+      }
+      return DecimalUtil::bounded(intDig + decDig, decDig);
+    }
   }
 };
 
@@ -689,13 +708,14 @@ template <typename Operation>
 std::shared_ptr<exec::VectorFunction> createDecimalFunction(
     const std::string& name,
     const std::vector<exec::VectorFunctionArg>& inputArgs,
-    const core::QueryConfig& /*config*/) {
+    const core::QueryConfig& config) {
   const auto& aType = inputArgs[0].type;
   const auto& bType = inputArgs[1].type;
   const auto [aPrecision, aScale] = getDecimalPrecisionScale(*aType);
   const auto [bPrecision, bScale] = getDecimalPrecisionScale(*bType);
+  const bool allowPrecisionLoss = config.isAllowPrecisionLoss();
   const auto [rPrecision, rScale] = Operation::computeResultPrecisionScale(
-      aPrecision, aScale, bPrecision, bScale);
+      aPrecision, aScale, bPrecision, bScale, allowPrecisionLoss);
   const uint8_t aRescale =
       Operation::computeRescaleFactor(aScale, bScale, rScale);
   const uint8_t bRescale =

@@ -46,6 +46,16 @@ class DecimalUtil {
     }
   }
 
+  /// This method is used when
+  /// `spark.sql.decimalOperations.allowPrecisionLoss` is set to false.
+  inline static std::pair<uint8_t, uint8_t> bounded(
+      uint8_t rPrecision,
+      uint8_t rScale) {
+    return {
+        std::min(static_cast<int32_t>(rPrecision), 38),
+        std::min(static_cast<int32_t>(rScale), 38)};
+  }
+
   /// @brief Convert int256 value to int64 or int128, set overflow to true if
   /// value cannot convert to specific type.
   /// @return The converted value.

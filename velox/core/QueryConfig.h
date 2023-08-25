@@ -115,6 +115,9 @@ class QueryConfig {
   static constexpr const char* kCastMatchStructByName =
       "cast_match_struct_by_name";
 
+  // This flags forces to bound the decimal precision.
+  static constexpr const char* kAllowPrecisionLoss = "allow_precision_loss";
+
   /// Used for backpressure to block local exchange producers when the local
   /// exchange buffer reaches or exceeds this size.
   static constexpr const char* kMaxLocalExchangeBufferSize =
@@ -472,6 +475,10 @@ class QueryConfig {
 
   bool isMatchStructByName() const {
     return get<bool>(kCastMatchStructByName, false);
+  }
+
+  bool isAllowPrecisionLoss() const {
+    return get<bool>(kAllowPrecisionLoss, true);
   }
 
   bool adjustTimestampToTimezone() const {
