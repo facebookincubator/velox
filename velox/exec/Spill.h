@@ -652,7 +652,7 @@ class SpillState {
   std::vector<std::string> testingSpilledFilePaths() const;
 
  private:
-  void updateSpilledInputBytes(int32_t partition, uint64_t bytes);
+  void updateSpilledInputBytes(uint64_t bytes);
 
   const RowTypePtr type_;
   const std::string path_;
@@ -700,8 +700,7 @@ void updateGlobalSpillWriteStats(
     uint64_t writeTimeUs);
 // Increment the spill memory bytes.
 void updateGlobalSpillMemoryBytes(uint64_t spilledInputBytes);
-// Decrement the spill memory bytes.
-void decrementGlobalSpillMemoryBytes(uint64_t spilledInputBytes);
+
 /// Increments the spilled files by one.
 void incrementGlobalSpilledFiles();
 

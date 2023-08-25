@@ -311,7 +311,7 @@ void SpillState::setPartitionSpilled(int32_t partition) {
   incrementGlobalSpilledPartitionStats();
 }
 
-void SpillState::updateSpilledInputBytes(int32_t partition, uint64_t bytes) {
+void SpillState::updateSpilledInputBytes(uint64_t bytes) {
   auto statsLocked = stats_->wlock();
   statsLocked->spilledInputBytes += bytes;
   updateGlobalSpillMemoryBytes(bytes);
@@ -334,7 +334,7 @@ uint64_t SpillState::appendToPartition(
         pool_,
         stats_);
   }
-  updateSpilledInputBytes(partition, rows->estimateFlatSize());
+  updateSpilledInputBytes(rows->estimateFlatSize());
 
   IndexRange range{0, rows->size()};
   return files_[partition]->write(rows, folly::Range<IndexRange*>(&range, 1));
@@ -639,11 +639,6 @@ void updateGlobalSpillWriteStats(
 void updateGlobalSpillMemoryBytes(uint64_t spilledInputBytes) {
   auto statsLocked = localSpillStats().wlock();
   statsLocked->spilledInputBytes += spilledInputBytes;
-}
-
-void decrementGlobalSpillMemoryBytes(uint64_t spilledInputBytes) {
-  auto statsLocked = localSpillStats().wlock();
-  statsLocked->spilledInputBytes -= spilledInputBytes;
 }
 
 void incrementGlobalSpilledFiles() {
