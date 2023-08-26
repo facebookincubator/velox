@@ -3,15 +3,19 @@ name: velox_base
 channels:
   - conda-forge
 
+variables:
+  CC: clang
+  CXX: clang++
+
 dependencies:
 # tools
   - binutils
   - bison
+  - clangxx
   - cmake
   - ccache
-  - elfutils
   - flex
-  - gxx=12
+  - gxx=12 # has to be installed to get clang to work...
   - make
   - ninja
   - sysroot_linux-64=2.17
@@ -24,7 +28,7 @@ dependencies:
   - gflags=2.2.2
   - glog=0.6.0
   - gmock=1.13
-  - google-cloud-sdk
+  - google-cloud-cpp
   - gtest=1.13
   - libaio
   - libdwarf-dev
