@@ -21,9 +21,9 @@
 #include <iostream>
 #include "velox/exec/Aggregate.h"
 #include "velox/exec/WindowFunction.h"
-#include "velox/functions/FunctionRegistry.h"
-#include "velox/expression/VectorFunction.h"
 #include "velox/expression/SimpleFunctionRegistry.h"
+#include "velox/expression/VectorFunction.h"
+#include "velox/functions/FunctionRegistry.h"
 
 namespace facebook::velox::functions {
 
@@ -60,10 +60,10 @@ class TablePrinter {
   }
 
   void header_new(std::string functionName) {
-    std::string line(functionName.length()+2, '=');
-    out_ << line <<std::endl;;
-    out_ << " " << functionName <<std::endl;
-    out_ << line <<std::endl;;
+    std::string line(functionName.length() + 2, '=');
+    out_ << line << std::endl;
+    out_ << " " << functionName << std::endl;
+    out_ << line << std::endl;
   }
 
   void startRow() {
@@ -145,17 +145,17 @@ std::vector<std::string> readFunctionNamesFromFile(
   return names;
 }
 
-// std::string toFuncLink(
-//     const std::string& name,
-//     const std::string& domain = "") {
-//   return fmt::format("{}:func:`{}`", domain, name);
-// }
+std::string toFuncLink(
+    const std::string& name,
+    const std::string& domain = "") {
+  return fmt::format("{}:func:`{}`", domain, name);
+}
 
 std::string toFuncLinkNew(
     const std::string& name,
     const std::string& domain = "",
     const std::string& functiontype = "") {
-  if (functiontype == "signature"){
+  if (functiontype == "signature") {
     return fmt::format("\t - {}", name);
   } else {
     return fmt::format("- {}:func:`{}`", domain, name);
@@ -203,26 +203,28 @@ void printTableCss(
 
 /// Returns alphabetically sorted list of scalar functions available in Velox,
 /// excluding companion functions.
-std::pair<std::unordered_map<std::string, std::vector<std::string>>, int> getScalarSignatureMap(std::vector<std::string> names) {
-
+std::pair<std::unordered_map<std::string, std::vector<std::string>>, int>
+getScalarSignatureMap(std::vector<std::string> names) {
   std::unordered_map<std::string, std::vector<std::string>> signatureMap;
   int maxScalarLength = 0;
 
   for (const auto& scalarName : names) {
-      auto vectorFunctionSignatures = exec::getVectorFunctionSignatures(scalarName);
-      auto simpleFunctionSignatures = exec::simpleFunctions().getFunctionSignatures(scalarName);
-      std::vector<std::string> signatures;
+    auto vectorFunctionSignatures =
+        exec::getVectorFunctionSignatures(scalarName);
+    auto simpleFunctionSignatures =
+        exec::simpleFunctions().getFunctionSignatures(scalarName);
+    std::vector<std::string> signatures;
 
-      if (vectorFunctionSignatures.has_value()) {
-          for (const auto& signature : vectorFunctionSignatures.value()) {
-              signatures.push_back(fmt::format("{}", signature->toString()));
-          }
+    if (vectorFunctionSignatures.has_value()) {
+      for (const auto& signature : vectorFunctionSignatures.value()) {
+        signatures.push_back(fmt::format("{}", signature->toString()));
       }
+    }
 
-      for (const auto& signature : simpleFunctionSignatures) {
-          signatures.push_back(fmt::format("{}", signature->toString()));
-      }
-      signatureMap[scalarName] = signatures;
+    for (const auto& signature : simpleFunctionSignatures) {
+      signatures.push_back(fmt::format("{}", signature->toString()));
+    }
+    signatureMap[scalarName] = signatures;
   }
 
   return std::make_pair(signatureMap, maxScalarLength);
@@ -230,10 +232,11 @@ std::pair<std::unordered_map<std::string, std::vector<std::string>>, int> getSca
 
 /// Returns alphabetically sorted list of window functions available in Velox,
 /// excluding companion functions.
-std::pair<std::unordered_map<std::string, std::vector<std::string>>, int> getWindowSignatureMap(std::vector<std::string> names) {
-
+std::pair<std::unordered_map<std::string, std::vector<std::string>>, int>
+getWindowSignatureMap(std::vector<std::string> names) {
   std::unordered_map<std::string, std::vector<std::string>> signatureMap;
   int maxWindowLength = 0;
+
   for (const auto& name : names) {
     auto windowFunctionSignatures = exec::getWindowFunctionSignatures(name);
     std::vector<std::string> signatures;
@@ -248,15 +251,17 @@ std::pair<std::unordered_map<std::string, std::vector<std::string>>, int> getWin
 
 /// Returns alphabetically sorted list of aggregate functions available in
 /// Velox, excluding compaion functions.
-std::pair<std::unordered_map<std::string, std::vector<std::string>>, int> getAggregateSignatureMap(std::vector<std::string> names) {
+std::pair<std::unordered_map<std::string, std::vector<std::string>>, int>
+getAggregateSignatureMap(std::vector<std::string> names) {
   std::unordered_map<std::string, std::vector<std::string>> signatureMap;
   int maxAggregateLength = 0;
 
   for (const auto& name : names) {
-    auto aggregateFunctionSignatures = exec::getAggregateFunctionSignatures(name);
+    auto aggregateFunctionSignatures =
+        exec::getAggregateFunctionSignatures(name);
     std::vector<std::string> signatures;
     for (const auto& signature : aggregateFunctionSignatures.value()) {
-        signatures.push_back(fmt::format("{}", signature->toString()));
+      signatures.push_back(fmt::format("{}", signature->toString()));
     }
     signatureMap[name] = signatures;
   }
@@ -264,8 +269,100 @@ std::pair<std::unordered_map<std::string, std::vector<std::string>>, int> getAgg
   return std::make_pair(signatureMap, maxAggregateLength);
 }
 
-
 void printCoverageMap(
+    const std::vector<std::string>& scalarNames,
+    const std::vector<std::string>& aggNames,
+    const std::vector<std::string>& windowNames,
+    const std::unordered_set<std::string>& veloxNames,
+    const std::unordered_set<std::string>& veloxAggNames,
+    const std::unordered_set<std::string>& veloxWindowNames,
+    const std::string& domain) {
+  const auto scalarCnt = scalarNames.size();
+  const auto aggCnt = aggNames.size();
+  const auto windowCnt = windowNames.size();
+
+  // Make sure there is enough space for the longest function name + :func:
+  // syntax that turns function name into a link to function's description.
+  const int columnSize = std::max(
+                             {maxLength(scalarNames),
+                              maxLength(aggNames),
+                              maxLength(windowNames)}) +
+      toFuncLink("", domain).size();
+
+  const std::string indent(4, ' ');
+
+  const int numScalarColumns = 5;
+
+  // Split scalar functions into 'numScalarColumns' columns. Put all aggregate
+  // functions into one column.
+  auto numRows = std::max(
+      {(size_t)std::ceil((double)scalarCnt / numScalarColumns),
+       aggCnt,
+       windowCnt});
+
+  // Keep track of cells which contain functions available in Velox. These cells
+  // need to be highlighted using CSS rules.
+  TableCellTracker veloxCellTracker;
+
+  auto printName = [&](int row,
+                       int column,
+                       const std::string& name,
+                       const std::unordered_set<std::string>& veloxNames) {
+    if (veloxNames.count(name)) {
+      veloxCellTracker.add(row, column);
+      return toFuncLink(name, domain);
+    } else {
+      return name;
+    }
+  };
+
+  std::ostringstream out;
+  TablePrinter printer(numScalarColumns, columnSize, indent, out);
+  printer.header();
+  for (int i = 0; i < numRows; i++) {
+    printer.startRow();
+
+    // N columns of scalar functions.
+    for (int j = 0; j < numScalarColumns; j++) {
+      auto n = i + numRows * j;
+      n < scalarCnt
+          ? printer.addColumn(printName(i, j, scalarNames[n], veloxNames))
+          : printer.addEmptyColumn();
+    }
+
+    // 1 empty column.
+    printer.addEmptyColumn();
+
+    // 1 column of aggregate functions.
+    i < aggCnt ? printer.addColumn(printName(
+                     i, numScalarColumns + 1, aggNames[i], veloxAggNames))
+               : printer.addEmptyColumn();
+
+    // 1 empty column.
+    printer.addEmptyColumn();
+
+    // 1 column of window functions.
+    i < windowCnt
+        ? printer.addColumn(printName(
+              i, numScalarColumns + 3, windowNames[i], veloxWindowNames))
+        : printer.addEmptyColumn();
+
+    printer.endRow();
+  }
+  printer.footer();
+
+  std::cout << ".. raw:: html" << std::endl << std::endl;
+  std::cout << "    <style>" << std::endl;
+  printTableCss(numScalarColumns, veloxCellTracker, std::cout);
+  std::cout << "    </style>" << std::endl << std::endl;
+
+  std::cout << ".. table::" << std::endl;
+  std::cout << "    :widths: auto" << std::endl;
+  std::cout << "    :class: coverage" << std::endl << std::endl;
+  std::cout << out.str() << std::endl;
+}
+
+void printCoverageMapWithSignatures(
     const std::vector<std::string>& scalarNames,
     const std::vector<std::string>& aggNames,
     const std::vector<std::string>& windowNames,
@@ -277,9 +374,12 @@ void printCoverageMap(
   const auto aggCnt = aggNames.size();
   const auto windowCnt = windowNames.size();
 
-  std::vector<std::string> veloxNames(veloxNamesSet.begin(), veloxNamesSet.end());
-  std::vector<std::string> veloxAggNames(veloxAggNamesSet.begin(), veloxAggNamesSet.end());
-  std::vector<std::string> veloxWindowNames(veloxWindowNamesSet.begin(), veloxWindowNamesSet.end());
+  std::vector<std::string> veloxNames(
+      veloxNamesSet.begin(), veloxNamesSet.end());
+  std::vector<std::string> veloxAggNames(
+      veloxAggNamesSet.begin(), veloxAggNamesSet.end());
+  std::vector<std::string> veloxWindowNames(
+      veloxWindowNamesSet.begin(), veloxWindowNamesSet.end());
 
   auto scalarSignatureMap = getScalarSignatureMap(veloxNames);
   auto aggSignatureMap = getAggregateSignatureMap(veloxAggNames);
@@ -314,7 +414,8 @@ void printCoverageMap(
                        const std::string& functionname,
                        const std::vector<std::string>& veloxNames,
                        const std::string& functype) {
-    auto veloxFunctionExists = std::find(veloxNames.begin(), veloxNames.end(), functionname);
+    auto veloxFunctionExists =
+        std::find(veloxNames.begin(), veloxNames.end(), functionname);
     if (veloxFunctionExists != veloxNames.end()) {
       veloxCellTracker.add(row, column);
       return toFuncLinkNew(name, domain, functype);
@@ -327,63 +428,70 @@ void printCoverageMap(
   TablePrinter printer(3, 0, indent, out);
   int numRows = 0;
   printer.header_new("Scalar Functions");
-  
+
   for (const auto& scalarName : scalarNames) {
     numRows = numRows + 1;
     printer.startRow();
-    printer.addColumn(printName(numRows, 0, scalarName, scalarName, veloxNames, ""));
+    printer.addColumn(
+        printName(numRows, 0, scalarName, scalarName, veloxNames, ""));
     printer.endRow();
     auto scalarExists = scalarSignatureMap.first.find(scalarName);
     if (scalarExists != scalarSignatureMap.first.end()) {
-      for (const std::string& signature : scalarSignatureMap.first[scalarName]){
-      numRows = numRows + 1;
-      printer.startRow();
-      printer.addColumn(printName(numRows, 0, signature, scalarName, veloxNames, "signature"));
-      printer.endRow();
+      for (const std::string& signature :
+           scalarSignatureMap.first[scalarName]) {
+        numRows = numRows + 1;
+        printer.startRow();
+        printer.addColumn(printName(
+            numRows, 0, signature, scalarName, veloxNames, "signature"));
+        printer.endRow();
       }
     }
-      printer.startRow();
-      printer.endRow();
+    printer.startRow();
+    printer.endRow();
   }
   printer.header_new("Aggregate Functions");
 
-    for (const auto& aggName : aggNames) {
-      numRows = numRows + 1;
-      printer.startRow();
-      printer.addColumn(printName(numRows, 0, aggName, aggName, veloxAggNames, ""));
-      printer.endRow();
-      auto aggExists = aggSignatureMap.first.find(aggName);
-      if (aggExists != aggSignatureMap.first.end()) {
-        for (const std::string& signature : aggSignatureMap.first[aggName]){
+  for (const auto& aggName : aggNames) {
+    numRows = numRows + 1;
+    printer.startRow();
+    printer.addColumn(
+        printName(numRows, 0, aggName, aggName, veloxAggNames, ""));
+    printer.endRow();
+    auto aggExists = aggSignatureMap.first.find(aggName);
+    if (aggExists != aggSignatureMap.first.end()) {
+      for (const std::string& signature : aggSignatureMap.first[aggName]) {
         numRows = numRows + 1;
         printer.startRow();
-        printer.addColumn(printName(numRows, 0, signature, aggName, veloxAggNames, "signature"));
+        printer.addColumn(printName(
+            numRows, 0, signature, aggName, veloxAggNames, "signature"));
         printer.endRow();
-        }
       }
-      printer.startRow();
-      printer.endRow();
     }
+    printer.startRow();
+    printer.endRow();
+  }
 
   printer.header_new("Window Functions");
-  
-    for (const auto& windowName : windowNames) {
-      numRows = numRows + 1;
-      printer.startRow();
-      printer.addColumn(printName(numRows, 0, windowName, windowName, veloxWindowNames, ""));
-      printer.endRow();
-      auto windowExists = windowSignatureMap.first.find(windowName);
-      if (windowExists != windowSignatureMap.first.end()) {
-        for (const std::string& signature : windowSignatureMap.first[windowName]){
+  for (const auto& windowName : windowNames) {
+    numRows = numRows + 1;
+    printer.startRow();
+    printer.addColumn(
+        printName(numRows, 0, windowName, windowName, veloxWindowNames, ""));
+    printer.endRow();
+    auto windowExists = windowSignatureMap.first.find(windowName);
+    if (windowExists != windowSignatureMap.first.end()) {
+      for (const std::string& signature :
+           windowSignatureMap.first[windowName]) {
         numRows = numRows + 1;
         printer.startRow();
-        printer.addColumn(printName(numRows, 0, signature, windowName, veloxWindowNames, "signature"));
+        printer.addColumn(printName(
+            numRows, 0, signature, windowName, veloxWindowNames, "signature"));
         printer.endRow();
-        }
       }
-      printer.startRow();
-      printer.endRow();
     }
+    printer.startRow();
+    printer.endRow();
+  }
 
   printer.footer();
 
@@ -485,7 +593,8 @@ void printCoverageMap(
     const std::vector<std::string>& scalarNames,
     const std::vector<std::string>& aggNames,
     const std::vector<std::string>& windowNames,
-    const std::string& domain = "") {
+    const std::string& domain = "",
+    const std::string& typeOfOutput = "") {
   auto veloxFunctions = getFunctionSignatures();
 
   std::unordered_set<std::string> veloxNames;
@@ -513,17 +622,30 @@ void printCoverageMap(
         }
       });
 
-  printCoverageMap(
-      scalarNames,
-      aggNames,
-      windowNames,
-      veloxNames,
-      veloxAggNames,
-      veloxWindowNames,
-      domain);
+  if (typeOfOutput == "signatures") {
+    printCoverageMapWithSignatures(
+        scalarNames,
+        aggNames,
+        windowNames,
+        veloxNames,
+        veloxAggNames,
+        veloxWindowNames,
+        domain);
+  } else {
+    printCoverageMap(
+        scalarNames,
+        aggNames,
+        windowNames,
+        veloxNames,
+        veloxAggNames,
+        veloxWindowNames,
+        domain);
+  }
 }
 
-void printCoverageMapForAll(const std::string& domain) {
+void printCoverageMapForAll(
+    const std::string& domain,
+    const std::string& typeOfOutput) {
   auto scalarNames = readFunctionNamesFromFile("all_scalar_functions.txt");
   std::sort(scalarNames.begin(), scalarNames.end());
 
@@ -533,17 +655,71 @@ void printCoverageMapForAll(const std::string& domain) {
   auto windowNames = readFunctionNamesFromFile("all_window_functions.txt");
   std::sort(windowNames.begin(), windowNames.end());
 
-  printCoverageMap(scalarNames, aggNames, windowNames, domain);
+  printCoverageMap(scalarNames, aggNames, windowNames, domain, typeOfOutput);
 }
 
 void printVeloxFunctions(
     const std::unordered_set<std::string>& linkBlockList,
     const std::string& domain) {
-
   auto scalarNames = getSortedScalarNames();
   auto aggNames = getSortedAggregateNames();
   auto windowNames = getSortedWindowNames();
 
+  const int columnSize = std::max(
+                             {maxLength(scalarNames),
+                              maxLength(aggNames),
+                              maxLength(windowNames)}) +
+      toFuncLink("", domain).size();
+
+  const std::string indent(4, ' ');
+
+  auto scalarCnt = scalarNames.size();
+  auto aggCnt = aggNames.size();
+  auto windowCnt = windowNames.size();
+  auto numRows =
+      std::max({(size_t)std::ceil(scalarCnt / 3.0), aggCnt, windowCnt});
+
+  auto printName = [&](const std::string& name) {
+    return linkBlockList.count(name) == 0 ? toFuncLink(name, domain) : name;
+  };
+
+  TablePrinter printer(3, columnSize, indent, std::cout);
+  printer.header();
+  for (int i = 0; i < numRows; i++) {
+    printer.startRow();
+
+    // 3 columns of scalar functions.
+    for (int j = 0; j < 3; j++) {
+      auto n = i + numRows * j;
+      n < scalarCnt ? printer.addColumn(printName(scalarNames[n]))
+                    : printer.addEmptyColumn();
+    }
+
+    // 1 empty column.
+    printer.addEmptyColumn();
+
+    // 1 column of aggregate functions.
+    i < aggCnt ? printer.addColumn(printName(aggNames[i]))
+               : printer.addEmptyColumn();
+
+    // 1 empty column.
+    printer.addEmptyColumn();
+
+    // 1 column of window functions.
+    i < windowCnt ? printer.addColumn(printName(windowNames[i]))
+                  : printer.addEmptyColumn();
+
+    printer.endRow();
+  }
+  printer.footer();
+}
+
+void printVeloxFunctionsWithSignatures(
+    const std::unordered_set<std::string>& linkBlockList,
+    const std::string& domain) {
+  auto scalarNames = getSortedScalarNames();
+  auto aggNames = getSortedAggregateNames();
+  auto windowNames = getSortedWindowNames();
 
   auto scalarSignatureMap = getScalarSignatureMap(scalarNames);
   auto aggSignatureMap = getAggregateSignatureMap(aggNames);
@@ -563,9 +739,10 @@ void printVeloxFunctions(
   // auto numRows =
   //     std::max({(size_t)std::ceil(scalarCnt / 3.0), aggCnt, windowCnt});
 
-  auto printName = [&](const std::string& name,
-                       const std::string& functype) {
-    return linkBlockList.count(name) == 0 ? toFuncLinkNew(name, domain, functype) : name;
+  auto printName = [&](const std::string& name, const std::string& functype) {
+    return linkBlockList.count(name) == 0
+        ? toFuncLinkNew(name, domain, functype)
+        : name;
   };
 
   TablePrinter printer(3, 0, indent, std::cout);
@@ -574,43 +751,45 @@ void printVeloxFunctions(
     printer.startRow();
     printer.addColumn(printName(scalarName, ""));
     printer.endRow();
-    for (const std::string& signature : scalarSignatureMap.first[scalarName]){
-    printer.startRow();
-    printer.addColumn(printName(signature, "signature"));
-    printer.endRow();
+    for (const std::string& signature : scalarSignatureMap.first[scalarName]) {
+      printer.startRow();
+      printer.addColumn(printName(signature, "signature"));
+      printer.endRow();
     }
   }
 
   printer.header_new("Aggregate Functions");
 
-    for (const auto& aggName : aggNames) {
-      printer.startRow();
-      printer.addColumn(printName(aggName, ""));
-      printer.endRow();
-      for (const std::string& signature : aggSignatureMap.first[aggName]){
+  for (const auto& aggName : aggNames) {
+    printer.startRow();
+    printer.addColumn(printName(aggName, ""));
+    printer.endRow();
+    for (const std::string& signature : aggSignatureMap.first[aggName]) {
       printer.startRow();
       printer.addColumn(printName(signature, "signature"));
       printer.endRow();
-      }
     }
+  }
 
   printer.header_new("Window Functions");
-  
-    for (const auto& windowName : windowNames) {
-      printer.startRow();
-      printer.addColumn(printName(windowName, ""));
-      printer.endRow();
-      for (const std::string& signature : windowSignatureMap.first[windowName]){
+
+  for (const auto& windowName : windowNames) {
+    printer.startRow();
+    printer.addColumn(printName(windowName, ""));
+    printer.endRow();
+    for (const std::string& signature : windowSignatureMap.first[windowName]) {
       printer.startRow();
       printer.addColumn(printName(signature, "signature"));
       printer.endRow();
-      }
     }
+  }
 
   printer.footer();
 }
 
-void printCoverageMapForMostUsed(const std::string& domain) {
+void printCoverageMapForMostUsed(
+    const std::string& domain,
+    const std::string& typeOfOutput) {
   auto scalarNameList = readFunctionNamesFromFile("all_scalar_functions.txt");
   std::unordered_set<std::string> scalarNames(
       scalarNameList.begin(), scalarNameList.end());
@@ -645,9 +824,8 @@ void printCoverageMapForMostUsed(const std::string& domain) {
       std::back_inserter(windowMostUsed),
       [&](auto name) { return windowNames.count(name) > 0; });
 
-  printCoverageMap(scalarMostUsed, aggMostUsed, windowMostUsed, domain);
+  printCoverageMap(
+      scalarMostUsed, aggMostUsed, windowMostUsed, domain, typeOfOutput);
 }
 
 } // namespace facebook::velox::functions
-
-

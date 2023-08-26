@@ -21,11 +21,23 @@
 #include "velox/functions/prestosql/registration/RegistrationFunctions.h"
 #include "velox/functions/prestosql/window/WindowFunctionsRegistration.h"
 
+DEFINE_bool(
+    signatures,
+    false,
+    "Show all existing velox functions and their signatures");
 DEFINE_bool(all, false, "Generate coverage map for all Presto functions");
+DEFINE_bool(
+    all_signatures,
+    false,
+    "Generate coverage map for all Presto functions along with their signatures");
 DEFINE_bool(
     most_used,
     false,
     "Generate coverage map for a subset of most-used Presto functions");
+DEFINE_bool(
+    most_used_signatures,
+    false,
+    "Generate coverage map for a subset of most-used Presto functions along with their signatures");
 
 using namespace facebook::velox;
 
@@ -43,8 +55,24 @@ int main(int argc, char** argv) {
 
   if (FLAGS_all) {
     functions::printCoverageMapForAll();
+  } else if (FLAGS_all_signatures) {
+    functions::printCoverageMapForAll("", "signatures");
   } else if (FLAGS_most_used) {
     functions::printCoverageMapForMostUsed();
+  } else if (FLAGS_most_used_signatures) {
+    functions::printCoverageMapForMostUsed("", "signatures");
+  } else if (FLAGS_signatures) {
+    const std::unordered_set<std::string> linkBlockList = {
+        "checked_divide",
+        "checked_minus",
+        "checked_modulus",
+        "checked_multiply",
+        "checked_negate",
+        "checked_plus",
+        "in",
+        "modulus",
+        "not"};
+    functions::printVeloxFunctionsWithSignatures(linkBlockList);
   } else {
     const std::unordered_set<std::string> linkBlockList = {
         "checked_divide",

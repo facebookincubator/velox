@@ -26,12 +26,21 @@ namespace facebook::velox::functions {
 // for Presto, path is velox/functions/prestosql/coverage/data/
 // for Spark, path is velox/functions/sparksql/coverage/data/
 // domain is like a namespace. for spark function, domain is ":spark".
-void printCoverageMapForAll(const std::string& domain = "");
+void printCoverageMapForAll(
+    const std::string& domain = "",
+    const std::string& typeOfOutput = "");
 
 // Print a rst format string which contains Presto/Spark functions were
 // supported by velox. domain is like a namespace. for spark function, domain
 // is ":spark".
 void printVeloxFunctions(
+    const std::unordered_set<std::string>& linkBlockList,
+    const std::string& domain = "");
+
+// Print a rst format string which contains Presto/Spark functions were
+// supported by velox. domain is like a namespace. for spark function, domain
+// is ":spark".
+void printVeloxFunctionsWithSignatures(
     const std::unordered_set<std::string>& linkBlockList,
     const std::string& domain = "");
 
@@ -41,6 +50,8 @@ void printVeloxFunctions(
 // for Presto, path is velox/functions/prestosql/coverage/data/
 // for Spark, path is velox/functions/sparksql/coverage/data/
 // domain is like a namespace. for spark function, domain is ":spark".
-void printCoverageMapForMostUsed(const std::string& domain = "");
+void printCoverageMapForMostUsed(
+    const std::string& domain = "",
+    const std::string& typeOfOutput = "");
 
 } // namespace facebook::velox::functions
