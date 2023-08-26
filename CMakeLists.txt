@@ -233,16 +233,6 @@ if(VELOX_ENABLE_REMOTE_FUNCTIONS)
   find_package(FBThrift CONFIG REQUIRED)
 endif()
 
-# Turn on Codegen only for Clang and non Mac systems.
-if((NOT DEFINED VELOX_CODEGEN_SUPPORT)
-   AND (CMAKE_CXX_COMPILER_ID MATCHES "Clang")
-   AND NOT (${CMAKE_SYSTEM_NAME} MATCHES "Darwin"))
-  message(STATUS "Enabling Codegen")
-  set(VELOX_CODEGEN_SUPPORT True)
-else()
-  message(STATUS "Disabling Codegen")
-  set(VELOX_CODEGEN_SUPPORT False)
-endif()
 
 # define processor variable for conditional compilation
 if(${VELOX_CODEGEN_SUPPORT})
