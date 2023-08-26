@@ -265,6 +265,11 @@ Valid examples if cast_to_int_by_truncate=true
   SELECT cast('12345.67' as tinyint); -- 12345
   SELECT cast('1.2' as tinyint); -- 1
   SELECT cast('-1.8' as tinyint); -- -1
+  SELECT cast('1.' as tinyint); -- 1
+  SELECT cast('-1.' as tinyint); -- -1
+  SELECT cast('0.' as tinyint); -- 0
+  SELECT cast('.' as tinyint); -- 0
+  SELECT cast('-.' as tinyint); -- 0
 
 Invalid examples
 
@@ -285,6 +290,11 @@ Invalid examples if cast_to_int_by_truncate=false
   SELECT cast('12345.67' as tinyint); -- Invalid argument
   SELECT cast('1.2' as tinyint); -- Invalid argument
   SELECT cast('-1.8' as tinyint); -- Invalid argument
+  SELECT cast('1.' as tinyint); -- Invalid argument
+  SELECT cast('-1.' as tinyint); -- Invalid argument
+  SELECT cast('0.' as tinyint); -- Invalid argument
+  SELECT cast('.' as tinyint); -- Invalid argument
+  SELECT cast('-.' as tinyint); -- Invalid argument
 
 From decimal
 ^^^^^^^^^^^^
