@@ -93,6 +93,8 @@ TEST_F(FunctionTest, getNameBeforeDelimiter) {
 TEST_F(FunctionTest, constructFunctionMap) {
   std::string planPath =
       getDataFilePath("velox/substrait/tests", "data/q1_first_stage.json");
+  std::cout << "planPath " << planPath << std::endl;
+
   ::substrait::Plan substraitPlan;
   JsonToProtoConverter::readFromFile(planPath, substraitPlan);
   planConverter_->constructFunctionMap(substraitPlan);

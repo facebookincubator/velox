@@ -340,8 +340,24 @@ velox::variant arrayVariantAt(
 std::vector<MaterializedRow> materialize(
     ::duckdb::DataChunk* dataChunk,
     const std::shared_ptr<const RowType>& rowType) {
+  std::string rowTypeStr = rowType ? rowType->toString() : "";
+  std::string dataChunkTypeName = "";
+  for (const auto& type : dataChunk->GetTypes()) {
+    dataChunkTypeName += type.ToString() + " ";
+  }
+  int rowTypeSize = rowType ? rowType->size() : 0;
+  int dataChunkTypeSize = dataChunk->GetTypes().size();
   VELOX_CHECK_EQ(
-      rowType->size(), dataChunk->GetTypes().size(), "Wrong number of columns");
+      rowTypeSize,
+      dataChunkTypeSize,
+      "Wrong number of columns. rowType has ",
+      rowTypeSize,
+      " columns, ",
+      rowTypeStr,
+      " dataChunk has ",
+      dataChunkTypeSize,
+      "columns. ",
+      dataChunkTypeName);
 
   auto size = dataChunk->size();
   std::vector<MaterializedRow> rows;
