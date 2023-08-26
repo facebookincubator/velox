@@ -78,3 +78,7 @@ endif()
 if(${VELOX_ENABLE_SUBSTRAIT})
   add_subdirectory(substrait)
 endif()
+
+if(VELOX_ENABLE_PARQUET)
+  add_subdirectory(experimental/query)
+endif()

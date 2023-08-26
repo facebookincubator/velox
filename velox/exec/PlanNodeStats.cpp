@@ -195,7 +195,8 @@ void printCustomStats(
 std::string printPlanWithStats(
     const core::PlanNode& plan,
     const TaskStats& taskStats,
-    bool includeCustomStats) {
+    bool includeCustomStats,
+    std::function<std::string(const core::PlanNodeId& planNodeId)> annotation) {
   auto planStats = toPlanStats(taskStats);
   auto leafPlanNodes = plan.leafPlanNodeIds();
 
@@ -228,6 +229,9 @@ std::string printPlanWithStats(
           if (includeCustomStats) {
             printCustomStats(stats.customStats, indentation + "   ", stream);
           }
+        }
+        if (annotation) {
+          stream << indentation << annotation(planNodeId) << std::endl;
         }
       });
 }

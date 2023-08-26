@@ -192,6 +192,9 @@ void TaskCursor::start() {
 
 bool TaskCursor::moveNext() {
   start();
+  if (error_) {
+    std::rethrow_exception(error_);
+  }
   current_ = queue_->dequeue();
   if (task_->error()) {
     std::rethrow_exception(task_->error());

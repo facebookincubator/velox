@@ -129,6 +129,16 @@ class TaskCursor {
     return current_;
   }
 
+  void setError(std::exception_ptr e) {
+    auto task = task_;
+    error_ = e;
+    if (task) {
+      task->setError(e);
+    }
+    // Wake up the consumer if blocked.
+    queue_->enqueue(nullptr, nullptr);
+  }
+
   const std::shared_ptr<Task>& task() {
     return task_;
   }
@@ -146,6 +156,7 @@ class TaskCursor {
   std::shared_ptr<exec::Task> task_;
   RowVectorPtr current_;
   bool atEnd_{false};
+  std::exception_ptr error_;
 };
 
 class RowCursor {
@@ -184,6 +195,10 @@ class RowCursor {
   SelectivityVector allRows_;
   vector_size_t currentRow_ = 0;
   vector_size_t numRows_ = 0;
+
+  // error set by an external error source. Used when running a
+  // multifragment query where an error from an earlier fragment
+  // should appear to the end consumer.
 };
 
 } // namespace facebook::velox::exec::test

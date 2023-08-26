@@ -11,11 +11,11 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-add_library(velox_parse_expression Expressions.cpp)
+add_library(velox_parse_expression OBJECT Expressions.cpp)
 target_link_libraries(velox_parse_expression velox_type velox_parse_utils
                       velox_expression)
 
-add_library(velox_parse_parser ExpressionsParser.cpp QueryPlanner.cpp)
+add_library(velox_parse_parser OBJECT ExpressionsParser.cpp QueryPlanner.cpp)
 target_link_libraries(velox_parse_parser velox_parse_expression velox_type
                       velox_duckdb_parser)
 

@@ -145,5 +145,7 @@ folly::dynamic toPlanStatsJson(const facebook::velox::exec::TaskStats& stats);
 std::string printPlanWithStats(
     const core::PlanNode& plan,
     const TaskStats& taskStats,
-    bool includeCustomStats = false);
+    bool includeCustomStats = false,
+    std::function<std::string(const core::PlanNodeId& planNodeId)> annotation =
+        nullptr);
 } // namespace facebook::velox::exec

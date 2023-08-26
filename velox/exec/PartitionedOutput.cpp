@@ -18,6 +18,8 @@
 #include "velox/exec/PartitionedOutputBufferManager.h"
 #include "velox/exec/Task.h"
 
+#include <iostream>
+
 namespace facebook::velox::exec {
 
 namespace detail {
@@ -213,6 +215,9 @@ void PartitionedOutput::estimateRowSizes() {
 
 void PartitionedOutput::addInput(RowVectorPtr input) {
   // TODO Report outputBytes as bytes after serialization
+  if (input->childrenSize() > 3) {
+    std::cout << input->type()->toString();
+  }
   {
     auto lockedStats = stats_.wlock();
     lockedStats->addOutputVector(input->estimateFlatSize(), input->size());
