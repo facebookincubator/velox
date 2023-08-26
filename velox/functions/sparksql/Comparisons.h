@@ -84,6 +84,7 @@ struct GreaterOrEqual : private Less<T> {
 /// SMALLINT
 /// INTEGER
 /// BIGINT
+/// HUGEINT
 /// REAL
 /// DOUBLE
 /// BOOLEAN

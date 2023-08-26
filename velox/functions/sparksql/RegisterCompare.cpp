@@ -21,7 +21,6 @@
 namespace facebook::velox::functions::sparksql {
 
 void registerCompareFunctions(const std::string& prefix) {
-  // Register compare functions.
   exec::registerStatefulVectorFunction(
       prefix + "equalto", comparisonSignatures(), makeEqualTo);
   exec::registerStatefulVectorFunction(

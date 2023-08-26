@@ -21,10 +21,12 @@
 
 namespace facebook::velox::functions::sparksql::test {
 namespace {
+
 static constexpr double kInf = std::numeric_limits<double>::infinity();
 static constexpr float kInfF = std::numeric_limits<float>::infinity();
 static constexpr auto kNaN = std::numeric_limits<double>::quiet_NaN();
-class CompareTest : public SparkFunctionBaseTest {
+
+class ComparisonsTest : public SparkFunctionBaseTest {
  protected:
   template <typename T>
   std::optional<bool> equaltonullsafe(std::optional<T> a, std::optional<T> b) {
@@ -34,6 +36,12 @@ class CompareTest : public SparkFunctionBaseTest {
   template <typename T>
   std::optional<bool> equalto(std::optional<T> a, std::optional<T> b) {
     return evaluateOnce<bool>("equalto(c0, c1)", a, b);
+  }
+
+  template <typename T>
+  std::optional<bool>
+  between(std::optional<T> a, std::optional<T> b, std::optional<T> c) {
+    return evaluateOnce<bool>("c0 between c1 and c2", a, b, c);
   }
 
   template <typename T>
@@ -59,7 +67,7 @@ class CompareTest : public SparkFunctionBaseTest {
   }
 };
 
-TEST_F(CompareTest, equaltonullsafe) {
+TEST_F(ComparisonsTest, equaltonullsafe) {
   EXPECT_EQ(equaltonullsafe<int64_t>(1, 1), true);
   EXPECT_EQ(equaltonullsafe<int32_t>(1, 2), false);
   EXPECT_EQ(equaltonullsafe<float>(std::nullopt, std::nullopt), true);
@@ -71,7 +79,13 @@ TEST_F(CompareTest, equaltonullsafe) {
   EXPECT_EQ(equaltonullsafe<double>(kNaN, kNaN), true);
 }
 
-TEST_F(CompareTest, equalto) {
+TEST_F(ComparisonsTest, equalto) {
+  EXPECT_EQ(equalto<Timestamp>(Timestamp(2, 2), Timestamp(2, 2)), true);
+  EXPECT_EQ(
+      equalto<int128_t>(HugeInt::build(10, 300), HugeInt::build(-10, 300)),
+      false);
+  EXPECT_EQ(equalto<StringView>("test"_sv, "test"_sv), true);
+  EXPECT_EQ(equalto<StringView>("test"_sv, std::nullopt), std::nullopt);
   EXPECT_EQ(equalto<int64_t>(1, 1), true);
   EXPECT_EQ(equalto<int32_t>(1, 2), false);
   EXPECT_EQ(equalto<float>(std::nullopt, std::nullopt), std::nullopt);
@@ -92,7 +106,27 @@ TEST_F(CompareTest, equalto) {
   EXPECT_EQ(equalto<double>(kInf, kNaN), false);
 }
 
-TEST_F(CompareTest, testdecimal) {
+TEST_F(ComparisonsTest, between) {
+  EXPECT_EQ(between<int64_t>(2, 1, 3), true);
+  EXPECT_EQ(between<int32_t>(2, 1, 3), true);
+  EXPECT_EQ(
+      between<float>(std::nullopt, std::nullopt, std::nullopt), std::nullopt);
+  EXPECT_EQ(between<double>(1, std::nullopt, 3), std::nullopt);
+  EXPECT_EQ(between<double>(kNaN, std::nullopt, 4), std::nullopt);
+  EXPECT_EQ(between<double>(kNaN, 1, 5), false);
+  EXPECT_EQ(between<double>(0, -1, kNaN), false);
+  EXPECT_EQ(between<double>(kNaN, 0, kNaN), false);
+  EXPECT_EQ(between<double>(kInf, 0, kInf), true);
+  EXPECT_EQ(between<float>(kInfF, 0, kInfF), true);
+  EXPECT_EQ(between<double>(kInf, 2.0, 5.0), false);
+  EXPECT_EQ(between<double>(-kInf, 2.0, 5.0), false);
+  EXPECT_EQ(between<float>(kInfF, 1.0, 6.0), false);
+  EXPECT_EQ(between<float>(-kInfF, 1.0, 6.0), false);
+  EXPECT_EQ(between<float>(kInfF, -kInfF, kInfF), true);
+  EXPECT_EQ(between<double>(kInf, -kInf, kNaN), false);
+}
+
+TEST_F(ComparisonsTest, testdecimal) {
   auto runAndCompare = [&](const std::string& exprStr,
                            std::vector<VectorPtr>& input,
                            VectorPtr expectedResult) {
@@ -133,9 +167,9 @@ TEST_F(CompareTest, testdecimal) {
 
   // Test with different data types.
   std::vector<VectorPtr> invalidInputs = {
-      makeNullableFlatVector<int64_t>({1}, DECIMAL(10, 5)),
-      makeNullableFlatVector<int64_t>({1}, DECIMAL(10, 4))};
-  auto invalidResult = makeNullableFlatVector<bool>({true});
+      makeFlatVector<int64_t>({1}, DECIMAL(10, 5)),
+      makeFlatVector<int64_t>({1}, DECIMAL(10, 4))};
+  auto invalidResult = makeConstant<bool>({true}, 1);
   VELOX_ASSERT_THROW(
       runAndCompare(
           fmt::format("{}(c1, c0)", "equalto"), invalidInputs, invalidResult),
@@ -143,7 +177,7 @@ TEST_F(CompareTest, testdecimal) {
       "equalto(DECIMAL(10,4), DECIMAL(10,5))");
 }
 
-TEST_F(CompareTest, testdictionary) {
+TEST_F(ComparisonsTest, testdictionary) {
   // Identity mapping, however this will result in non-simd path.
   auto makeDictionary = [&](const VectorPtr& base) {
     auto indices = makeIndices(base->size(), [](auto row) { return row; });
@@ -193,8 +227,8 @@ TEST_F(CompareTest, testdictionary) {
           5, [](auto row) { return true; }, nullEvery(2, 1)));
 }
 
-TEST_F(CompareTest, testflat) {
-  auto vector0 = makeFlatVector<int32_t>({0, 1, 2, 3});
+TEST_F(ComparisonsTest, testflat) {
+  auto vector0 = makeNullableFlatVector<int32_t>({0, 1, 2, 3});
   auto vector1 = makeFlatVector<int32_t>(
       4, [](auto row) { return row + 1; }, nullEvery(2));
 
@@ -210,7 +244,7 @@ TEST_F(CompareTest, testflat) {
   facebook::velox::test::assertEqualVectors(vectorBool0, actualBoolResult);
 }
 
-TEST_F(CompareTest, lessthan) {
+TEST_F(ComparisonsTest, lessthan) {
   EXPECT_EQ(lessthan<int64_t>(1, 1), false);
   EXPECT_EQ(lessthan<int32_t>(1, 2), true);
   EXPECT_EQ(lessthan<float>(std::nullopt, std::nullopt), std::nullopt);
@@ -231,7 +265,7 @@ TEST_F(CompareTest, lessthan) {
   EXPECT_EQ(lessthan<double>(kInf, kNaN), true);
 }
 
-TEST_F(CompareTest, lessthanorequal) {
+TEST_F(ComparisonsTest, lessthanorequal) {
   EXPECT_EQ(lessthanorequal<int64_t>(1, 1), true);
   EXPECT_EQ(lessthanorequal<int32_t>(1, 2), true);
   EXPECT_EQ(lessthanorequal<float>(std::nullopt, std::nullopt), std::nullopt);
@@ -253,7 +287,7 @@ TEST_F(CompareTest, lessthanorequal) {
   EXPECT_EQ(lessthanorequal<double>(kInf, kNaN), true);
 }
 
-TEST_F(CompareTest, greaterthan) {
+TEST_F(ComparisonsTest, greaterthan) {
   EXPECT_EQ(greaterthan<int64_t>(1, 1), false);
   EXPECT_EQ(greaterthan<int32_t>(1, 2), false);
   EXPECT_EQ(greaterthan<float>(std::nullopt, std::nullopt), std::nullopt);
@@ -274,7 +308,7 @@ TEST_F(CompareTest, greaterthan) {
   EXPECT_EQ(greaterthan<float>(kInf, kNaN), false);
 }
 
-TEST_F(CompareTest, greaterthanorequal) {
+TEST_F(ComparisonsTest, greaterthanorequal) {
   EXPECT_EQ(greaterthanorequal<int64_t>(1, 1), true);
   EXPECT_EQ(greaterthanorequal<int32_t>(1, 2), false);
   EXPECT_EQ(
