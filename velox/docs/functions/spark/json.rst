@@ -25,3 +25,10 @@ JSON Functions
     Extracts a json object from path::
 
         SELECT get_json_object('{"a":"b"}', '$.a'); -- b
+
+.. spark:function:: to_json(expr[, options]) -> varchar
+
+    Returns a JSON string with a given struct value::
+
+        SELECT to_json(map('a', 1)); -- {"a":1}
+        SELECT to_json(array((map('a', 1)))); -- [{"a":1}]

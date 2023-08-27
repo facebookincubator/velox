@@ -19,6 +19,7 @@ add_library(
   CompareFunctionsNullSafe.cpp
   Hash.cpp
   In.cpp
+  Json.cpp
   LeastGreatest.cpp
   Map.cpp
   RegexFunctions.cpp
