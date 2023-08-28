@@ -178,12 +178,11 @@ TEST(DecimalTest, toByteArray) {
 
 template <typename T>
 void checkRescaleDouble(double value, const TypePtr& type, T expectedValue) {
-  std::string error;
   auto [precision, scale] = getDecimalPrecisionScale(*type);
-  std::optional<T> result =
-      DecimalUtil::rescaleDouble<T>(value, precision, scale, error);
-  ASSERT_TRUE(result.has_value());
-  ASSERT_TRUE(error.empty());
+  folly::Expected<T, std::string> result =
+      DecimalUtil::rescaleDouble<T>(value, precision, scale);
+  ASSERT_FALSE(result.hasError());
+  ASSERT_TRUE(result.hasValue());
   ASSERT_EQ(result.value(), expectedValue);
 }
 
@@ -192,13 +191,12 @@ void checkRescaleDoubleFails(
     double value,
     const TypePtr& type,
     const std::string& expectedError) {
-  std::string error;
   auto [precision, scale] = getDecimalPrecisionScale(*type);
-  std::optional<T> result =
-      DecimalUtil::rescaleDouble<T>(value, precision, scale, error);
-  ASSERT_FALSE(result.has_value());
-  ASSERT_FALSE(error.empty());
-  ASSERT_EQ(error, expectedError);
+  folly::Expected<T, std::string> result =
+      DecimalUtil::rescaleDouble<T>(value, precision, scale);
+  ASSERT_TRUE(result.hasError());
+  ASSERT_FALSE(result.hasValue());
+  ASSERT_EQ(result.error(), expectedError);
 }
 
 TEST(DecimalTest, rescaleDouble) {
@@ -251,6 +249,15 @@ TEST(DecimalTest, rescaleDouble) {
   checkRescaleDoubleFails<int64_t>(
       static_cast<double>(
           static_cast<int128_t>(std::numeric_limits<int64_t>::min()) - 1),
+      DECIMAL(10, 2),
+      kOverflowedValue);
+
+  checkRescaleDoubleFails<int64_t>(
+      static_cast<double>(DecimalUtil::kShortDecimalMax),
+      DECIMAL(10, 2),
+      kOverflowedValue);
+  checkRescaleDoubleFails<int64_t>(
+      static_cast<double>(DecimalUtil::kShortDecimalMin),
       DECIMAL(10, 2),
       kOverflowedValue);
 

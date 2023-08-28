@@ -204,11 +204,10 @@ class DecimalUtil {
   /// the TOutput's limits or the `toValue` exceeds the precision's limits, it
   /// will set an error message in `error` field and return an std::nullopt.
   template <typename TOutput>
-  inline static std::optional<TOutput>
-  rescaleDouble(double value, int precision, int scale, std::string& error) {
+  inline static folly::Expected<TOutput, std::string>
+  rescaleDouble(double value, int precision, int scale) {
     if (!std::isfinite(value)) {
-      error = "Value is not finite.";
-      return std::nullopt;
+      return folly::makeUnexpected<std::string>("Value is not finite.");
     }
 
     auto toValue = value * DecimalUtil::kPowersOfTen[scale];
@@ -226,10 +225,10 @@ class DecimalUtil {
 
     if (isOverflow || rescaledValue < -DecimalUtil::kPowersOfTen[precision] ||
         rescaledValue > DecimalUtil::kPowersOfTen[precision]) {
-      error = "Rescaled value is overflowed.";
-      return std::nullopt;
+      return folly::makeUnexpected<std::string>(
+          "Rescaled value is overflowed.");
     }
-    return rescaledValue;
+    return folly::makeExpected<std::string>(rescaledValue);
   }
 
   template <typename R, typename A, typename B>
