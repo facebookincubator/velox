@@ -228,43 +228,40 @@ TEST(DecimalTest, rescaleDouble) {
 
   checkRescaleDouble(std::numeric_limits<double>::min(), DECIMAL(38, 2), 0);
 
-  const std::string messageForInfiniteValue = "Value is not finite.";
-  const std::string messageForOverflowedValue = "Rescaled value is overflowed.";
+  static const std::string kValueNotFinite = "Value is not finite.";
+  static const std::string kOverflowedValue = "Rescaled value is overflowed.";
 
   checkRescaleDoubleFails<int128_t>(
-      std::numeric_limits<double>::max(),
-      DECIMAL(38, 2),
-      messageForOverflowedValue);
+      std::numeric_limits<double>::max(), DECIMAL(38, 2), kOverflowedValue);
 
   // Test infinity double type numbers.
-  checkRescaleDoubleFails<int64_t>(
-      NAN, DECIMAL(10, 2), messageForInfiniteValue);
-  checkRescaleDoubleFails<int64_t>(
-      INFINITY, DECIMAL(10, 2), messageForInfiniteValue);
+  checkRescaleDoubleFails<int64_t>(NAN, DECIMAL(10, 2), kValueNotFinite);
+  checkRescaleDoubleFails<int64_t>(INFINITY, DECIMAL(10, 2), kValueNotFinite);
 
-  // Expected failures.
   checkRescaleDoubleFails<int64_t>(
-      9999999999999999999999.99, DECIMAL(10, 2), messageForOverflowedValue);
+      9999999999999999999999.99, DECIMAL(10, 2), kOverflowedValue);
 
-  auto numberBiggerThanInt64Max = static_cast<double>(
-      static_cast<int128_t>(std::numeric_limits<int64_t>::max()) + 1);
   checkRescaleDoubleFails<int64_t>(
-      numberBiggerThanInt64Max, DECIMAL(10, 2), messageForOverflowedValue);
+      static_cast<double>(
+          static_cast<int128_t>(std::numeric_limits<int64_t>::max()) + 1),
+      DECIMAL(10, 2),
+      kOverflowedValue);
 
-  auto numberSmallerThanInt64Min = static_cast<double>(
-      static_cast<int128_t>(std::numeric_limits<int64_t>::min()) - 1);
   checkRescaleDoubleFails<int64_t>(
-      numberSmallerThanInt64Min, DECIMAL(10, 2), messageForOverflowedValue);
+      static_cast<double>(
+          static_cast<int128_t>(std::numeric_limits<int64_t>::min()) - 1),
+      DECIMAL(10, 2),
+      kOverflowedValue);
 
-  auto numberBiggerThanDecimal20 =
-      static_cast<double>(DecimalUtil::kLongDecimalMax);
   checkRescaleDoubleFails<int128_t>(
-      numberBiggerThanDecimal20, DECIMAL(20, 2), messageForOverflowedValue);
+      static_cast<double>(DecimalUtil::kLongDecimalMax),
+      DECIMAL(20, 2),
+      kOverflowedValue);
 
-  auto numberSmallerThanDecimal20 =
-      static_cast<double>(DecimalUtil::kLongDecimalMin);
   checkRescaleDoubleFails<int128_t>(
-      numberSmallerThanDecimal20, DECIMAL(20, 2), messageForOverflowedValue);
+      static_cast<double>(DecimalUtil::kLongDecimalMin),
+      DECIMAL(20, 2),
+      kOverflowedValue);
 }
 
 } // namespace
