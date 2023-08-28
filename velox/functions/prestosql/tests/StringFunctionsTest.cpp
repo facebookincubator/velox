@@ -176,8 +176,8 @@ class StringFunctionsTest : public FunctionBaseTest {
   void testConcatCommonFlatVector(
       const std::vector<std::vector<std::string>>& inputTable,
       const size_t argsCount,
-      const std::string& seperator = "") {
-    bool concatWs = seperator.size() > 0;
+      const std::string& separator = "") {
+    bool concatWs = separator.size() > 0;
     std::vector<VectorPtr> inputVectors;
 
     for (int i = 0; i < argsCount; i++) {
@@ -195,7 +195,7 @@ class StringFunctionsTest : public FunctionBaseTest {
     auto buildConcatQuery = [&]() {
       std::string output = "";
       if (concatWs) {
-        output += "concat_ws(" + seprator + ",";
+        output += "concat_ws(" + separator + ",";
       } else {
         output = "concat(";
       }
@@ -229,7 +229,7 @@ class StringFunctionsTest : public FunctionBaseTest {
       // }
       for (int i = 0; i < inputs.size(); i++) {
         if (i != 0) {
-          output += seperator;
+          output += separator;
         }
         output += inputs[i];
       }
