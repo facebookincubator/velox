@@ -3034,7 +3034,7 @@ TEST_F(TableScanTest, readMissingFieldsWithMoreColumns) {
   }
 }
 
-TEST_F(TableScanTest, varbinaryToVarchar) {
+TEST_F(TableScanTest, varbinaryPartitionKey) {
   auto vectors = makeVectors(1, 1'000);
   auto filePath = TempFilePath::create();
   writeToFile(filePath->path, vectors);
