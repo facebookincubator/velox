@@ -193,9 +193,9 @@ class StringFunctionsTest : public FunctionBaseTest {
     }
 
     auto buildConcatQuery = [&]() {
-      std::string output = "";
+      std::string output;
       if (concatWs) {
-        output += "concat_ws(" + separator + ",";
+        output = "concat_ws('" + separator + "',";
       } else {
         output = "concat(";
       }
