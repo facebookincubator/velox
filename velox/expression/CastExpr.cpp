@@ -526,8 +526,7 @@ void CastExpr::applyPeeled(
             rows,
             input,
             context,
-            fromType,
-            toType);
+            fromType);
         break;
       default:
         result = VELOX_DYNAMIC_DECIMAL_TYPE_DISPATCH(

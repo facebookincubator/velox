@@ -14,6 +14,9 @@
  * limitations under the License.
  */
 #pragma once
+
+#include <charconv>
+
 #include "velox/common/base/Exceptions.h"
 #include "velox/core/CoreTypeSystem.h"
 #include "velox/expression/StringWriter.h"
@@ -47,6 +50,81 @@ inline std::exception_ptr makeBadCastException(
       makeErrorMessage(input, row, resultType, errorDetails),
       false));
 };
+
+// Copied from format.h of fmt.
+inline int countDigits(uint128_t n) {
+  int count = 1;
+  for (;;) {
+    if (n < 10) {
+      return count;
+    }
+    if (n < 100) {
+      return count + 1;
+    }
+    if (n < 1000) {
+      return count + 2;
+    }
+    if (n < 10000) {
+      return count + 3;
+    }
+    n /= 10000u;
+    count += 4;
+  }
+}
+
+/// @brief Convert the unscaled value of a decimal to varchar and write to raw
+/// string buffer from start position.
+/// @tparam T The type of input value.
+/// @param unscaledValue The input unscaled value.
+/// @param scale The scale of decimal.
+/// @param maxVarcharSize The estimated max size of a varchar.
+/// @param startPosition The start position to write from.
+/// @return A string view.
+template <typename T>
+StringView convertToStringView(
+    T unscaledValue,
+    int32_t scale,
+    int32_t maxVarcharSize,
+    char* const startPosition) {
+  char* writePosition = startPosition;
+  if (unscaledValue == 0) {
+    *writePosition++ = '0';
+  } else {
+    if (unscaledValue < 0) {
+      *writePosition++ = '-';
+      unscaledValue = -unscaledValue;
+    }
+    auto [position, errorCode] = std::to_chars(
+        writePosition,
+        writePosition + maxVarcharSize,
+        unscaledValue / DecimalUtil::kPowersOfTen[scale]);
+    VELOX_DCHECK_EQ(
+        errorCode,
+        std::errc(),
+        "Failed to cast decimal to varchar: {}",
+        std::make_error_code(errorCode).message());
+    writePosition = position;
+
+    if (scale > 0) {
+      *writePosition++ = '.';
+      uint128_t fraction = unscaledValue % DecimalUtil::kPowersOfTen[scale];
+      // Append leading zeros.
+      int numLeadingZeros = std::max(scale - countDigits(fraction), 0);
+      std::memset(writePosition, '0', numLeadingZeros);
+      writePosition += numLeadingZeros;
+      // Append remaining fraction digits.
+      auto [position, errorCode] = std::to_chars(
+          writePosition, writePosition + maxVarcharSize, fraction);
+      VELOX_DCHECK_EQ(
+          errorCode,
+          std::errc(),
+          "Failed to cast decimal to varchar: {}",
+          std::make_error_code(errorCode).message());
+      writePosition = position;
+    }
+  }
+  return StringView(startPosition, writePosition - startPosition);
+}
 
 } // namespace
 
@@ -306,39 +384,59 @@ VectorPtr CastExpr::applyDecimalToVarcharCast(
     const SelectivityVector& rows,
     const BaseVector& input,
     exec::EvalCtx& context,
-    const TypePtr& fromType,
-    const TypePtr& toType) {
+    const TypePtr& fromType) {
   VectorPtr result;
   context.ensureWritable(rows, VARCHAR(), result);
   (*result).clearNulls(rows);
   const auto simpleInput = input.as<SimpleVector<FromNativeType>>();
+  int precision = getDecimalPrecisionScale(*fromType).first;
+  int scale = getDecimalPrecisionScale(*fromType).second;
+  // A varchar's size is estimated with unscaled value digits, dot, leading
+  // zero, and possible minus sign.
+  int32_t rowSize = precision + 1;
+  if (scale > 0) {
+    ++rowSize; // A dot.
+  }
+  if (precision == scale) {
+    ++rowSize; // Leading zero.
+  }
+
   auto flatResult = result->asFlatVector<StringView>();
+  if (StringView::isInline(rowSize)) {
+    char inlined[StringView::kInlineSize];
+    applyToSelectedNoThrowLocal(context, rows, result, [&](vector_size_t row) {
+      if (simpleInput->isNullAt(row)) {
+        result->setNull(row, true);
+      } else {
+        flatResult->setNoCopy(
+            row,
+            convertToStringView<FromNativeType>(
+                simpleInput->valueAt(row), scale, rowSize, inlined));
+      }
+    });
+    return result;
+  }
 
-  // Calculate the total size of the stringBuffers.
-  size_t totalResultBytes = 0;
-  applyToSelectedNoThrowLocal(context, rows, result, [&](int row) {
-    if (!simpleInput->isNullAt(row)) {
-      std::string output =
-          DecimalUtil::toString((int128_t)simpleInput->valueAt(row), fromType);
-      totalResultBytes += output.size();
-    }
-  });
+  Buffer* buffer =
+      flatResult->getBufferWithSpace(rows.countSelected() * rowSize);
+  char* rawBuffer = buffer->asMutable<char>() + buffer->size();
 
-  auto rawBuffer = flatResult->getRawStringBufferWithSpace(totalResultBytes);
-  size_t offset = 0;
-  applyToSelectedNoThrowLocal(context, rows, result, [&](int row) {
+  applyToSelectedNoThrowLocal(context, rows, result, [&](vector_size_t row) {
     if (simpleInput->isNullAt(row)) {
       result->setNull(row, true);
     } else {
-      std::string output =
-          DecimalUtil::toString((int128_t)simpleInput->valueAt(row), fromType);
-      const char* start = rawBuffer + offset;
-      auto size = output.size();
-      memcpy(rawBuffer + offset, output.data(), size);
-      offset += size;
-      flatResult->setNoCopy(row, StringView(start, size));
+      auto stringView = convertToStringView<FromNativeType>(
+          simpleInput->valueAt(row), scale, rowSize, rawBuffer);
+      flatResult->setNoCopy(row, stringView);
+      if (!stringView.isInline()) {
+        // If string view is inline, correponding bytes on the raw string buffer
+        // are not needed.
+        rawBuffer += stringView.size();
+      }
     }
   });
+  // Update the exact buffer size.
+  buffer->setSize(rawBuffer - buffer->asMutable<char>());
   return result;
 }
 
