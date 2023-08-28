@@ -331,7 +331,7 @@ TEST_F(DateTimeFunctionsTest, dayOfWeekDate) {
     EXPECT_EQ(7, dayOfWeek(parseDate("2023-08-26"), func));
     EXPECT_EQ(1, dayOfWeek(parseDate("2023-08-27"), func));
 
-    // test cases from spark's DateExpressionSuite
+    // test cases from spark's DateExpressionSuite.
     EXPECT_EQ(6, dayOfWeek(util::fromDateString("2011-05-06"), func));
   }
 }
@@ -369,7 +369,7 @@ TEST_F(DateTimeFunctionsTest, dayofWeekTs) {
     EXPECT_EQ(
         1,
         dayOfWeek(util::fromTimestampString("2023-08-27 01:13:00.000"), func));
-    // test cases from spark's DateExpressionSuite
+    // test cases from spark's DateExpressionSuite.
     EXPECT_EQ(
         4, dayOfWeek(util::fromTimestampString("2015-04-08 13:10:15"), func));
     EXPECT_EQ(
