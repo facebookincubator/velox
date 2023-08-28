@@ -222,11 +222,8 @@ class StringFunctionsTest : public FunctionBaseTest {
     auto numAllocsAfter = pool()->stats().numAllocs;
     ASSERT_EQ(numAllocsAfter - numAllocsBefore, 2);
 
-    auto concatStd = [](const std::vector<std::string>& inputs) {
+    auto concatStd = [&](const std::vector<std::string>& inputs) {
       std::string output;
-      // for (auto& input : inputs) {
-      //   output += input;
-      // }
       for (int i = 0; i < inputs.size(); i++) {
         if (i != 0) {
           output += separator;
