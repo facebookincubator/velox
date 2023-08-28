@@ -176,9 +176,34 @@ TEST(DecimalTest, toByteArray) {
   testToByteArray(DecimalUtil::kLongDecimalMax, expected8, 16);
 }
 
+template <typename T>
+void checkRescaleDouble(double value, TypePtr type, T expectValue) {
+  std::string error;
+  auto [precision, scale] = getDecimalPrecisionScale(*type);
+  std::optional<T> result =
+      DecimalUtil::rescaleDouble<T>(value, precision, scale, error);
+  ASSERT_TRUE(result.has_value());
+  ASSERT_TRUE(error.empty());
+  ASSERT_EQ(result.value(), expectValue);
+}
+
+template <typename T>
+void checkRescaleDoubleContainsError(
+    double value,
+    TypePtr type,
+    const std::string& expectError) {
+  std::string error;
+  auto [precision, scale] = getDecimalPrecisionScale(*type);
+  std::optional<T> result =
+      DecimalUtil::rescaleDouble<T>(value, precision, scale, error);
+  ASSERT_FALSE(result.has_value());
+  ASSERT_FALSE(error.empty());
+  ASSERT_EQ(error, expectError);
+}
+
 TEST(DecimalTest, rescaleDouble) {
   std::vector<double> inputs{-3333.03, -2222.02, -1.0, 0.00, 100, 99999.99};
-  std::vector<int64_t> precision10scale1{
+  std::vector<int64_t> precision10scale4{
       -33'330'300, -22'220'200, -10'000, 0, 1'000'000, 999'999'900};
   std::vector<int128_t> precision20scale1{
       -33'330, -22'220, -10, 0, 1'000, 1'000'000};
@@ -190,73 +215,70 @@ TEST(DecimalTest, rescaleDouble) {
       1'000'000'000'000,
       999'999'900'000'000};
 
-  for (size_t index = 0; index < inputs.size(); ++index) {
-    ASSERT_EQ(
-        precision10scale1[index],
-        DecimalUtil::rescaleDouble<int64_t>(inputs[index], 10, 4));
-    ASSERT_EQ(
-        precision20scale1[index],
-        DecimalUtil::rescaleDouble<int128_t>(inputs[index], 20, 1));
-    ASSERT_EQ(
-        precision20scale10[index],
-        DecimalUtil::rescaleDouble<int128_t>(inputs[index], 20, 10));
-  }
-
-  auto checkThrowError = [](double value, TypePtr& type) {
-    if (type->isShortDecimal()) {
-      auto shortDecimalType = type->asShortDecimal();
-      VELOX_ASSERT_THROW(
-          DecimalUtil::rescaleDouble<int64_t>(
-              value, shortDecimalType.precision(), shortDecimalType.scale()),
-          fmt::format(
-              "Cannot cast DOUBLE '{:f}' to {}",
-              value,
-              shortDecimalType.toString()));
-    } else {
-      auto longDecimalType = type->asLongDecimal();
-      VELOX_ASSERT_THROW(
-          DecimalUtil::rescaleDouble<int128_t>(
-              value, longDecimalType.precision(), longDecimalType.scale()),
-          fmt::format(
-              "Cannot cast DOUBLE '{:f}' to {}",
-              value,
-              longDecimalType.toString()));
-    }
-  };
-
   auto decimalTypePrecision10Scale2 = DECIMAL(10, 2);
+  auto decimalTypePrecision10Scale4 = DECIMAL(10, 4);
+  auto decimalTypePrecision20Scale1 = DECIMAL(20, 1);
   auto decimalTypePrecision20Scale2 = DECIMAL(20, 2);
+  auto decimalTypePrecision20Scale10 = DECIMAL(20, 10);
   auto decimalTypePrecision38Scale2 = DECIMAL(38, 2);
 
+  for (size_t index = 0; index < inputs.size(); ++index) {
+    checkRescaleDouble<int64_t>(
+        inputs[index], decimalTypePrecision10Scale4, precision10scale4[index]);
+    checkRescaleDouble<int128_t>(
+        inputs[index], decimalTypePrecision20Scale1, precision20scale1[index]);
+    checkRescaleDouble<int128_t>(
+        inputs[index],
+        decimalTypePrecision20Scale10,
+        precision20scale10[index]);
+  }
+
+  const std::string INFINITE_VALUE = "Value is not finite.";
+  const std::string OVERFLOWED_VALUE = "Rescaled value is overflowed.";
+
   // Test infinity double type numbers.
-  checkThrowError(NAN, decimalTypePrecision10Scale2);
-  checkThrowError(INFINITY, decimalTypePrecision10Scale2);
+  checkRescaleDoubleContainsError<int64_t>(
+      NAN, decimalTypePrecision10Scale2, INFINITE_VALUE);
+  checkRescaleDoubleContainsError<int64_t>(
+      INFINITY, decimalTypePrecision10Scale2, INFINITE_VALUE);
 
   // Expected failures.
   double numberExceededPrecision = 9999999999999999999999.99;
-  checkThrowError(numberExceededPrecision, decimalTypePrecision10Scale2);
+  checkRescaleDoubleContainsError<int64_t>(
+      numberExceededPrecision, decimalTypePrecision10Scale2, OVERFLOWED_VALUE);
 
   double numberBiggerThanInt64Max = static_cast<double>(
       static_cast<int128_t>(std::numeric_limits<int64_t>::max()) + 1);
-  checkThrowError(numberBiggerThanInt64Max, decimalTypePrecision10Scale2);
+  checkRescaleDoubleContainsError<int64_t>(
+      numberBiggerThanInt64Max, decimalTypePrecision10Scale2, OVERFLOWED_VALUE);
 
   double numberSmallerThanInt64Min = static_cast<double>(
       static_cast<int128_t>(std::numeric_limits<int64_t>::min()) - 1);
-  checkThrowError(numberSmallerThanInt64Min, decimalTypePrecision10Scale2);
+  checkRescaleDoubleContainsError<int64_t>(
+      numberSmallerThanInt64Min,
+      decimalTypePrecision10Scale2,
+      OVERFLOWED_VALUE);
 
   double numberBiggerThanDecimal20 =
       static_cast<double>(DecimalUtil::kLongDecimalMax);
-  checkThrowError(numberBiggerThanDecimal20, decimalTypePrecision20Scale2);
+  checkRescaleDoubleContainsError<int128_t>(
+      numberBiggerThanDecimal20,
+      decimalTypePrecision20Scale2,
+      OVERFLOWED_VALUE);
 
   double numberSmallerThanDecimal20 =
       static_cast<double>(DecimalUtil::kLongDecimalMin);
-  checkThrowError(numberSmallerThanDecimal20, decimalTypePrecision20Scale2);
+  checkRescaleDoubleContainsError<int128_t>(
+      numberSmallerThanDecimal20,
+      decimalTypePrecision20Scale2,
+      OVERFLOWED_VALUE);
 
   double doubleMax = std::numeric_limits<double>::max();
-  checkThrowError(doubleMax, decimalTypePrecision38Scale2);
+  checkRescaleDoubleContainsError<int128_t>(
+      doubleMax, decimalTypePrecision38Scale2, OVERFLOWED_VALUE);
 
   double doubleMin = std::numeric_limits<double>::min();
-  ASSERT_EQ(0, DecimalUtil::rescaleDouble<int128_t>(doubleMin, 38, 2));
+  checkRescaleDouble(doubleMin, decimalTypePrecision38Scale2, 0);
 }
 
 } // namespace

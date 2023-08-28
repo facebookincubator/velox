@@ -204,14 +204,15 @@ class DecimalUtil {
   /// the TOutput's limits or the `toValue` exceeds the precision's limits, it
   /// will throw an exception.
   template <typename TOutput>
-  inline static TOutput
-  rescaleDouble(double inputValue, const int toPrecision, const int toScale) {
-    VELOX_USER_CHECK(
-        std::isfinite(inputValue),
-        "Cannot cast DOUBLE '{}' to DECIMAL({},{})",
-        inputValue,
-        toPrecision,
-        toScale);
+  inline static std::optional<TOutput> rescaleDouble(
+      double inputValue,
+      const int toPrecision,
+      const int toScale,
+      std::string& error) {
+    if (!std::isfinite(inputValue)) {
+      error = "Value is not finite.";
+      return std::nullopt;
+    }
 
     auto toValue =
         inputValue * static_cast<double>(DecimalUtil::kPowersOfTen[toScale]);
@@ -229,11 +230,8 @@ class DecimalUtil {
 
     if (isOverflow || rescaledValue < -DecimalUtil::kPowersOfTen[toPrecision] ||
         rescaledValue > DecimalUtil::kPowersOfTen[toPrecision]) {
-      VELOX_USER_FAIL(
-          "Cannot cast DOUBLE '{:f}' to DECIMAL({},{})",
-          inputValue,
-          toPrecision,
-          toScale);
+      error = "Rescaled value is overflowed.";
+      return std::nullopt;
     }
     return rescaledValue;
   }
