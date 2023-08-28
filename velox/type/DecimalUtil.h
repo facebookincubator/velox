@@ -25,6 +25,11 @@
 
 namespace facebook::velox {
 
+enum class ConversionErrorCode : unsigned char {
+  INFINITE_FLOATING_NUMBER,
+  OVERFLOWED_RESCALED_VALUE,
+};
+
 /// A static class that holds helper functions for DECIMAL type.
 class DecimalUtil {
  public:
@@ -204,10 +209,11 @@ class DecimalUtil {
   /// the TOutput's limits or the `toValue` exceeds the precision's limits, it
   /// will set an error message in `error` field and return an std::nullopt.
   template <typename TOutput>
-  inline static folly::Expected<TOutput, std::string>
+  inline static folly::Expected<TOutput, ConversionErrorCode>
   rescaleDouble(double value, int precision, int scale) {
     if (!std::isfinite(value)) {
-      return folly::makeUnexpected<std::string>("Value is not finite.");
+      return folly::makeUnexpected<ConversionErrorCode>(
+          ConversionErrorCode::INFINITE_FLOATING_NUMBER);
     }
 
     auto toValue = value * DecimalUtil::kPowersOfTen[scale];
@@ -225,10 +231,10 @@ class DecimalUtil {
 
     if (isOverflow || rescaledValue < -DecimalUtil::kPowersOfTen[precision] ||
         rescaledValue > DecimalUtil::kPowersOfTen[precision]) {
-      return folly::makeUnexpected<std::string>(
-          "Rescaled value is overflowed.");
+      return folly::makeUnexpected<ConversionErrorCode>(
+          ConversionErrorCode::OVERFLOWED_RESCALED_VALUE);
     }
-    return folly::makeExpected<std::string>(rescaledValue);
+    return folly::makeExpected<ConversionErrorCode>(rescaledValue);
   }
 
   template <typename R, typename A, typename B>

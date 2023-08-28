@@ -179,7 +179,7 @@ TEST(DecimalTest, toByteArray) {
 template <typename T>
 void checkRescaleDouble(double value, const TypePtr& type, T expectedValue) {
   auto [precision, scale] = getDecimalPrecisionScale(*type);
-  folly::Expected<T, std::string> result =
+  folly::Expected<T, ConversionErrorCode> result =
       DecimalUtil::rescaleDouble<T>(value, precision, scale);
   ASSERT_FALSE(result.hasError());
   ASSERT_TRUE(result.hasValue());
@@ -190,13 +190,13 @@ template <typename T>
 void checkRescaleDoubleFails(
     double value,
     const TypePtr& type,
-    const std::string& expectedError) {
+    const ConversionErrorCode expectedErrorCode) {
   auto [precision, scale] = getDecimalPrecisionScale(*type);
-  folly::Expected<T, std::string> result =
+  folly::Expected<T, ConversionErrorCode> result =
       DecimalUtil::rescaleDouble<T>(value, precision, scale);
   ASSERT_TRUE(result.hasError());
   ASSERT_FALSE(result.hasValue());
-  ASSERT_EQ(result.error(), expectedError);
+  ASSERT_EQ(result.error(), expectedErrorCode);
 }
 
 TEST(DecimalTest, rescaleDouble) {
@@ -227,49 +227,52 @@ TEST(DecimalTest, rescaleDouble) {
   checkRescaleDouble<int128_t>(
       std::numeric_limits<double>::min(), DECIMAL(38, 2), 0);
 
-  static const std::string kValueNotFinite = "Value is not finite.";
-  static const std::string kOverflowedValue = "Rescaled value is overflowed.";
-
   checkRescaleDoubleFails<int128_t>(
-      std::numeric_limits<double>::max(), DECIMAL(38, 2), kOverflowedValue);
+      std::numeric_limits<double>::max(),
+      DECIMAL(38, 2),
+      ConversionErrorCode::OVERFLOWED_RESCALED_VALUE);
 
   // Test infinity double type numbers.
-  checkRescaleDoubleFails<int64_t>(NAN, DECIMAL(10, 2), kValueNotFinite);
-  checkRescaleDoubleFails<int64_t>(INFINITY, DECIMAL(10, 2), kValueNotFinite);
+  checkRescaleDoubleFails<int64_t>(
+      NAN, DECIMAL(10, 2), ConversionErrorCode::INFINITE_FLOATING_NUMBER);
+  checkRescaleDoubleFails<int64_t>(
+      INFINITY, DECIMAL(10, 2), ConversionErrorCode::INFINITE_FLOATING_NUMBER);
 
   checkRescaleDoubleFails<int64_t>(
-      9999999999999999999999.99, DECIMAL(10, 2), kOverflowedValue);
+      9999999999999999999999.99,
+      DECIMAL(10, 2),
+      ConversionErrorCode::OVERFLOWED_RESCALED_VALUE);
 
   checkRescaleDoubleFails<int64_t>(
       static_cast<double>(
           static_cast<int128_t>(std::numeric_limits<int64_t>::max()) + 1),
       DECIMAL(10, 2),
-      kOverflowedValue);
+      ConversionErrorCode::OVERFLOWED_RESCALED_VALUE);
 
   checkRescaleDoubleFails<int64_t>(
       static_cast<double>(
           static_cast<int128_t>(std::numeric_limits<int64_t>::min()) - 1),
       DECIMAL(10, 2),
-      kOverflowedValue);
+      ConversionErrorCode::OVERFLOWED_RESCALED_VALUE);
 
   checkRescaleDoubleFails<int64_t>(
       static_cast<double>(DecimalUtil::kShortDecimalMax),
       DECIMAL(10, 2),
-      kOverflowedValue);
+      ConversionErrorCode::OVERFLOWED_RESCALED_VALUE);
   checkRescaleDoubleFails<int64_t>(
       static_cast<double>(DecimalUtil::kShortDecimalMin),
       DECIMAL(10, 2),
-      kOverflowedValue);
+      ConversionErrorCode::OVERFLOWED_RESCALED_VALUE);
 
   checkRescaleDoubleFails<int128_t>(
       static_cast<double>(DecimalUtil::kLongDecimalMax),
       DECIMAL(20, 2),
-      kOverflowedValue);
+      ConversionErrorCode::OVERFLOWED_RESCALED_VALUE);
 
   checkRescaleDoubleFails<int128_t>(
       static_cast<double>(DecimalUtil::kLongDecimalMin),
       DECIMAL(20, 2),
-      kOverflowedValue);
+      ConversionErrorCode::OVERFLOWED_RESCALED_VALUE);
 }
 
 } // namespace
