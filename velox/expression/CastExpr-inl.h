@@ -236,7 +236,8 @@ void CastExpr::applyDoubleToDecimal(
           if (setNullInResultAtError()) {
             castResult->setNull(row, true);
           } else {
-            context.setVeloxExceptionError(row, makeBadCastException(toType, input, row, error));
+            context.setVeloxExceptionError(
+                row, makeBadCastException(toType, input, row, error));
           }
         } else if (rescaledValue.has_value()) {
           rawResults[row] = rescaledValue.value();
