@@ -1526,15 +1526,20 @@ TEST_F(CastExprTest, doubleToDecimal) {
       makeFlatVector<int128_t>(
           {-33'330, -22'220, -10, 0, 1'000, 1'000'000}, DECIMAL(20, 1)));
 
-  auto checkThrowError = [this](double value, TypePtr& type) {
-    auto trivialResult = type->isShortDecimal()
-        ? makeConstant<int64_t>(0, 1, type)
-        : makeConstant<int128_t>(0, 1, type);
-    VELOX_ASSERT_THROW(
-        testComplexCast("c0", makeConstant<double>(value, 1), trivialResult),
-        fmt::format(
-            "Cannot cast DOUBLE '{:f}' to {}", value, type->toString()));
-  };
+  auto checkThrowError =
+      [this](double value, TypePtr& type, const std::string& detail) {
+        auto trivialResult = type->isShortDecimal()
+            ? makeConstant<int64_t>(0, 1, type)
+            : makeConstant<int128_t>(0, 1, type);
+        VELOX_ASSERT_THROW(
+            testComplexCast(
+                "c0", makeConstant<double>(value, 1), trivialResult),
+            fmt::format(
+                "Failed to cast from DOUBLE to {}: {}. {}",
+                type->toString(),
+                value,
+                detail));
+      };
 
   auto numberBiggerThanInt64Max = static_cast<double>(
       static_cast<int128_t>(std::numeric_limits<int64_t>::max()) + 1);
@@ -1543,9 +1548,19 @@ TEST_F(CastExprTest, doubleToDecimal) {
   auto decimalTypePrecision10Scale2 = DECIMAL(10, 2);
 
   // Expected failures.
-  checkThrowError(9999999999999999999999.99, decimalTypePrecision10Scale2);
-  checkThrowError(numberBiggerThanInt64Max, decimalTypePrecision10Scale2);
-  checkThrowError(numberSmallerThanInt64Min, decimalTypePrecision10Scale2);
+  const std::string INFINITE_VALUE = "Value is not finite.";
+  const std::string OVERFLOWED_VALUE = "Rescaled value is overflowed.";
+
+  checkThrowError(
+      9999999999999999999999.99,
+      decimalTypePrecision10Scale2,
+      OVERFLOWED_VALUE);
+  checkThrowError(
+      numberBiggerThanInt64Max, decimalTypePrecision10Scale2, OVERFLOWED_VALUE);
+  checkThrowError(
+      numberSmallerThanInt64Min,
+      decimalTypePrecision10Scale2,
+      OVERFLOWED_VALUE);
 
   auto numberBiggerThanDecimal20 =
       static_cast<double>(DecimalUtil::kLongDecimalMax);
@@ -1553,8 +1568,14 @@ TEST_F(CastExprTest, doubleToDecimal) {
       static_cast<double>(DecimalUtil::kLongDecimalMin);
   auto decimalTypePrecision20Scale2 = DECIMAL(20, 2);
 
-  checkThrowError(numberBiggerThanDecimal20, decimalTypePrecision20Scale2);
-  checkThrowError(numberSmallerThanDecimal20, decimalTypePrecision20Scale2);
+  checkThrowError(
+      numberBiggerThanDecimal20,
+      decimalTypePrecision20Scale2,
+      OVERFLOWED_VALUE);
+  checkThrowError(
+      numberSmallerThanDecimal20,
+      decimalTypePrecision20Scale2,
+      OVERFLOWED_VALUE);
 
   double inf = INFINITY;
   double nan = NAN;
@@ -1562,9 +1583,9 @@ TEST_F(CastExprTest, doubleToDecimal) {
   auto doubleMin = std::numeric_limits<double>::min();
   auto decimalTypePrecision38Scale2 = DECIMAL(38, 2);
 
-  checkThrowError(inf, decimalTypePrecision38Scale2);
-  checkThrowError(nan, decimalTypePrecision38Scale2);
-  checkThrowError(doubleMax, decimalTypePrecision38Scale2);
+  checkThrowError(inf, decimalTypePrecision38Scale2, INFINITE_VALUE);
+  checkThrowError(nan, decimalTypePrecision38Scale2, INFINITE_VALUE);
+  checkThrowError(doubleMax, decimalTypePrecision38Scale2, OVERFLOWED_VALUE);
   testComplexCast(
       "c0",
       makeConstant<double>(doubleMin, 1),

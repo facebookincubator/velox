@@ -226,10 +226,23 @@ void CastExpr::applyDoubleToDecimal(
           castResult->setNull(row, true);
           return;
         }
-        rawResults[row] = DecimalUtil::rescaleDouble<TOutput>(
+        std::string error;
+        auto rescaledValue = DecimalUtil::rescaleDouble<TOutput>(
             sourceVector->valueAt(row),
             toPrecisionScale.first,
-            toPrecisionScale.second);
+            toPrecisionScale.second,
+            error);
+        if (!error.empty()) {
+          if (setNullInResultAtError()) {
+            castResult->setNull(row, true);
+          } else {
+            context.setVeloxExceptionError(row, makeBadCastException(toType, input, row, error));
+          }
+        } else if (rescaledValue.has_value()) {
+          rawResults[row] = rescaledValue.value();
+        } else {
+          castResult->setNull(row, true);
+        }
       });
 }
 
