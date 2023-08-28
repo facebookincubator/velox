@@ -13,6 +13,7 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+#include "velox/common/base/tests/GTestUtils.h"
 #include "velox/functions/sparksql/tests/SparkFunctionBaseTest.h"
 #include "velox/type/Type.h"
 
@@ -682,5 +683,28 @@ TEST_F(StringTest, translateNonconstantMatch) {
   expected = makeFlatVector<std::string>({"åbaæçè", "åæcèaç"});
   testTranslate({input, match, replace}, expected);
 }
+
+TEST_F(StringTest, urlDecode) {
+  auto UrlDecodeTest = [&](const std::optional<std::string>& input,
+                           const std::string& expected) {
+    EXPECT_EQ(
+        evaluateOnce<std::string>("url_decode(c0)", input).value(), expected);
+  };
+  UrlDecodeTest("AaBbC", "AaBbC");
+  UrlDecodeTest("A+B+C", "A B C");
+  UrlDecodeTest("AaBbC%23", "AaBbC#");
+  UrlDecodeTest("AaBbC%24%5A", "AaBbC$Z");
+  UrlDecodeTest("AaBbC%25FF", "AaBbC%FF");
+  UrlDecodeTest("https%3A%2F%2Fspark.apache.org", "https://spark.apache.org");
+  UrlDecodeTest("https%3A%2F%2Ftts%2Exxx%2Ecom", "https://tts.xxx.com");
+  // Illegal case.
+  VELOX_ASSERT_THROW(
+      evaluateOnce<std::string>("url_decode(c0)", std::optional{"AaBbC%5"}),
+      "[CANNOT_DECODE_URL] Cannot decode url");
+  VELOX_ASSERT_THROW(
+      evaluateOnce<std::string>("url_decode(c0)", std::optional{"Aa%6HBbC"}),
+      "[CANNOT_DECODE_URL] Cannot decode url");
+}
+
 } // namespace
 } // namespace facebook::velox::functions::sparksql::test

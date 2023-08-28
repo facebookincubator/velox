@@ -845,4 +845,76 @@ struct TranslateFunction {
   }
 };
 
+/// Decodes `string` in 'application/x-www-form-urlencoded' format using UTF-8
+/// encoding scheme.
+template <typename T>
+struct UrlDecoderFunction {
+  VELOX_DEFINE_FUNCTION_TYPES(T);
+
+  // ASCII input does NOT always produce ASCII result.
+  static constexpr bool is_default_ascii_behavior = false;
+
+  int decode(StringView input) {
+    auto toIntFromHex = [](char x) {
+      if (std::isdigit(x)) {
+        return x - '0';
+      }
+      if (x >= 'a' && x <= 'f') {
+        return x - 'a' + 10;
+      }
+      if (x >= 'A' && x <= 'F') {
+        return x - 'A' + 10;
+      }
+      return -1;
+    };
+    int highDigit = toIntFromHex(input.data()[0]);
+    if (highDigit == -1) {
+      return -1;
+    }
+    int lowDigit = toIntFromHex(input.data()[1]);
+    if (lowDigit == -1) {
+      return -1;
+    }
+    return highDigit << 4 | lowDigit;
+  }
+
+  FOLLY_ALWAYS_INLINE void call(
+      out_type<Varchar>& result,
+      const arg_type<Varchar>& input) {
+    if (input.size() == 0) {
+      result.setEmpty();
+      return;
+    }
+    auto size = input.size();
+    result.reserve(size);
+    int index = 0;
+    int i = 0;
+    while (i < size) {
+      if (input.data()[i] == '+') {
+        result.data()[index++] = ' ';
+        i++;
+      } else if (input.data()[i] == '%') {
+        while ((i + 2) < size && input.data()[i] == '%') {
+          auto codePoint = decode(StringView(input.data() + i + 1, 2));
+          if (codePoint == -1) {
+            VELOX_USER_FAIL("[CANNOT_DECODE_URL] Cannot decode url: {}", input);
+          }
+          auto charSize = utf8proc_encode_char(
+              codePoint, (unsigned char*)result.data() + index);
+          index += charSize;
+          i += 3;
+        }
+        // Illegal case.
+        if (i < size && input.data()[i] == '%') {
+          VELOX_USER_FAIL("[CANNOT_DECODE_URL] Cannot decode url: {}", input);
+        }
+      } else {
+        result.data()[index++] = input.data()[i++];
+      }
+    }
+
+    result.resize(index);
+  }
+};
+
 } // namespace facebook::velox::functions::sparksql

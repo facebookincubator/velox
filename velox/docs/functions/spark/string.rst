@@ -214,3 +214,10 @@ Unless specified otherwise, all functions return NULL if at least one of the arg
     Returns string with all characters changed to uppercase. ::
 
         SELECT upper('SparkSql'); -- SPARKSQL
+
+.. spark:function:: url_decode(string) -> string
+
+    An implementation for spark url_decode function avaliable since Spark-3.4.0.
+    Decodes `string` in 'application/x-www-form-urlencoded' format using UTF-8 encoding scheme. ::
+
+        SELECT url_decode('https%3A%2F%2Fspark.apache.org'); -- https://spark.apache.org
