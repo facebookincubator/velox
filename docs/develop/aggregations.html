@@ -52,12 +52,13 @@ grouping keys and zero, one or multiple aggregate functions.</p>
 <p><a class="reference internal" href="../functions/presto/aggregate.html"><span class="doc">Aggregate Functions</span></a> section of the documentation
 lists all available aggregate functions and <a class="reference internal" href="aggregate-functions.html"><span class="doc">How to add an aggregate
 function?</span></a> guide explains how to add more.</p>
-<p>Use AggregationNode to insert an aggregation into the query plan. Specify
-aggregation step (partial, intermediate, final, or single), grouping keys and
-aggregate functions. You may also specify boolean columns to mask out rows for
-some or all aggregations. Grouping keys must refer to input columns and cannot
-contain expressions. To compute aggregations over expressions add ProjectNode
-just before the AggregationNode.</p>
+<p>Use <a class="reference internal" href="operators.html#aggregationnode"><span class="std std-ref">AggregationNode</span></a> to insert an aggregation into the
+query plan. Specify aggregation step (partial, intermediate, final, or single),
+grouping keys and aggregate functions. You may also specify boolean columns to
+mask out rows for some or all aggregations as well as request aggregations to
+be computed on sorted or distinct inputs. Grouping keys must refer to input
+columns and cannot contain expressions. To compute aggregations over
+expressions add ProjectNode just before the AggregationNode.</p>
 <p>Here are examples of aggregation query plans:</p>
 <p>Group-by with a single grouping key and single aggregate function:</p>
 <div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="k">SELECT</span><span class="w"> </span><span class="n">a</span><span class="p">,</span><span class="w"> </span><span class="k">sum</span><span class="p">(</span><span class="n">b</span><span class="p">)</span><span class="w"> </span><span class="k">FROM</span><span class="w"> </span><span class="n">t</span><span class="w"> </span><span class="k">GROUP</span><span class="w"> </span><span class="k">BY</span><span class="w"> </span><span class="mi">1</span><span class="w"></span>
@@ -87,6 +88,20 @@ expression:</p>
 <ul class="simple">
 <li><p>AggregationNode: groupingKeys = {a, b}, aggregates = {sum(c), avg(c)}</p></li>
 </ul>
+<p>Group-by over distinct inputs:</p>
+<div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="k">SELECT</span><span class="w"> </span><span class="n">a</span><span class="p">,</span><span class="w"> </span><span class="k">count</span><span class="p">(</span><span class="k">DISTINCT</span><span class="w"> </span><span class="k">c</span><span class="p">)</span><span class="w"> </span><span class="k">FROM</span><span class="w"> </span><span class="n">t</span><span class="w"> </span><span class="k">GROUP</span><span class="w"> </span><span class="k">BY</span><span class="w"> </span><span class="mi">1</span><span class="w"></span>
+</pre></div>
+</div>
+<ul class="simple">
+<li><p>AggregationNode: groupingKeys = {a}, aggregates = {count(distinct c)}</p></li>
+</ul>
+<p>Group-by over sorted inputs:</p>
+<div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="k">SELECT</span><span class="w"> </span><span class="n">a</span><span class="p">,</span><span class="w"> </span><span class="n">array_agg</span><span class="p">(</span><span class="n">b</span><span class="w"> </span><span class="k">ORDER</span><span class="w"> </span><span class="k">BY</span><span class="w"> </span><span class="n">b</span><span class="p">)</span><span class="w"> </span><span class="k">FROM</span><span class="w"> </span><span class="n">t</span><span class="w"> </span><span class="k">GROUP</span><span class="w"> </span><span class="k">BY</span><span class="w"> </span><span class="mi">1</span><span class="w"></span>
+</pre></div>
+</div>
+<ul class="simple">
+<li><p>AggregationNode: groupingKeys = {a}, aggregates = {array_agg(b ORDER BY b ASC NULLS LAST)}</p></li>
+</ul>
 <p>Distinct aggregation:</p>
 <div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="k">SELECT</span><span class="w"> </span><span class="k">DISTINCT</span><span class="w"> </span><span class="n">a</span><span class="p">,</span><span class="w"> </span><span class="n">b</span><span class="w"> </span><span class="k">FROM</span><span class="w"> </span><span class="n">t</span><span class="w"></span>
 </pre></div>
@@ -95,7 +110,7 @@ expression:</p>
 <li><p>AggregationNode: groupingKeys = {a, b}, aggregates = {}</p></li>
 </ul>
 <p>Aggregation with a mask:</p>
-<div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="k">SELECT</span><span class="w"> </span><span class="n">a</span><span class="p">,</span><span class="w"> </span><span class="k">sum</span><span class="w"> </span><span class="p">(</span><span class="n">b</span><span class="p">)</span><span class="w"> </span><span class="n">filter</span><span class="w"> </span><span class="p">(</span><span class="k">where</span><span class="w"> </span><span class="k">c</span><span class="w"> </span><span class="o">&gt;</span><span class="w"> </span><span class="mi">10</span><span class="p">)</span><span class="w"> </span><span class="k">FROM</span><span class="w"> </span><span class="n">t</span><span class="w"> </span><span class="k">GROUP</span><span class="w"> </span><span class="k">BY</span><span class="w"> </span><span class="mi">1</span><span class="w"></span>
+<div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="k">SELECT</span><span class="w"> </span><span class="n">a</span><span class="p">,</span><span class="w"> </span><span class="k">sum</span><span class="w"> </span><span class="p">(</span><span class="n">b</span><span class="p">)</span><span class="w"> </span><span class="n">FILTER</span><span class="w"> </span><span class="p">(</span><span class="k">WHERE</span><span class="w"> </span><span class="k">c</span><span class="w"> </span><span class="o">&gt;</span><span class="w"> </span><span class="mi">10</span><span class="p">)</span><span class="w"> </span><span class="k">FROM</span><span class="w"> </span><span class="n">t</span><span class="w"> </span><span class="k">GROUP</span><span class="w"> </span><span class="k">BY</span><span class="w"> </span><span class="mi">1</span><span class="w"></span>
 </pre></div>
 </div>
 <ul class="simple">
@@ -114,13 +129,24 @@ expression:</p>
 <ul class="simple">
 <li><p>AggregationNode: groupingKeys = {}, aggregates = {sum(a), avg(b)}</p></li>
 </ul>
-<section id="hashaggregation-operator">
-<h2>HashAggregation Operator<a class="headerlink" href="#hashaggregation-operator" title="Permalink to this heading">¶</a></h2>
+<section id="hashaggregation-and-streamingaggregation-operators">
+<h2>HashAggregation and StreamingAggregation Operators<a class="headerlink" href="#hashaggregation-and-streamingaggregation-operators" title="Permalink to this heading">¶</a></h2>
 <p>AggregationNode is translated to the HashAggregation operator for execution.
 Distinct aggregations, e.g. aggregations with no aggregates, run in streaming
 mode. For each batch of input rows, the operator determines a set of new
 grouping key values and returns these as results. Aggregations with one or more
 aggregate functions need to process all input before producing the results.</p>
+<p>AggregationNode may indicate that inputs are pre-grouped on a subset of grouping
+keys. If inputs are pre-grouped on all grouping keys, the plan node is executed
+using StreamingAggregation operator. In this case it is not necessary to
+accumulate all inputs in memory before producing results. StreamingAggregation
+accumulates only a handful of groups at a time and therefore uses much less
+memory than HashAggregation operator.</p>
+<p>For the case when inputs are pre-grouped on a strict subset of grouping keys,
+HashAggregation includes an optimization where it flushes groups whenever it
+encounters a row with a different values in pre-grouped keys. This helps reduce
+the total amount of memory used and allows to unblock downstream operators
+faster.</p>
 </section>
 <section id="push-down-into-table-scan">
 <h2>Push-Down into Table Scan<a class="headerlink" href="#push-down-into-table-scan" title="Permalink to this heading">¶</a></h2>
@@ -289,6 +315,70 @@ table switches to normalized key or hash mode.</p>
 following types: boolean, tinyint, smallint, integer, bigint, varchar.</p>
 </section>
 </section>
+<section id="adaptive-disabling-of-partial-aggregation">
+<h2>Adaptive Disabling of Partial Aggregation<a class="headerlink" href="#adaptive-disabling-of-partial-aggregation" title="Permalink to this heading">¶</a></h2>
+<p>Sometimes partial aggregation encounters mostly unique keys and is not able to
+meaningfully reduce cardinality of the data. In this case, it is more efficient
+to skip partial aggregation and proceed to shuffle the data and compute final
+aggregation. The main savings come from not needing to hash the inputs, build
+and probe the hash table.</p>
+<p>HashAggregation operator includes logic to automatically detect non-productive
+partial aggregations and disable these. This logic is controlled by two
+configuration properties:</p>
+<ul class="simple">
+<li><p>abandon_partial_aggregation_min_pct - Maximum percentage of unique rows to continue partial aggregation. Default: 80%.</p></li>
+<li><p>abandon_partial_aggregation_min_rows - Minimum number of rows to receive before deciding to abandon partial aggregation. Default: 100’000.</p></li>
+</ul>
+<p>After receiving at least abandon_partial_aggregation_min_rows input rows, the
+operator checks the percentage of input rows that are unique, e.g. compares
+number of groups with number of input rows. If percentage of unique rows
+exceeds abandon_partial_aggregation_min_pct, the operator abandons partial
+aggregation.</p>
+<p>It is not possible to simply stop aggregating inputs and pass these as is to
+shuffle and final aggregation because final aggregation expects data type that
+is different from raw input type. For example, partial aggregation
+for <a class="reference internal" href="../functions/presto/aggregate.html#avg" title="avg"><code class="xref py py-func docutils literal notranslate"><span class="pre">avg()</span></code></a> may receive INTEGER inputs, but final aggregation
+for <a class="reference internal" href="../functions/presto/aggregate.html#avg" title="avg"><code class="xref py py-func docutils literal notranslate"><span class="pre">avg()</span></code></a> expects input of type ROW(sum DOUBLE, count BIGINT).</p>
+<p>HashAggregation operator needs to convert each row of raw input into a
+single-row intermediate result. For example, for <a class="reference internal" href="../functions/presto/aggregate.html#avg" title="avg"><code class="xref py py-func docutils literal notranslate"><span class="pre">avg()</span></code></a> it needs to
+convert each integer value <cite>n</cite> into a struct of <cite>{n, 1}</cite>. It does this by
+creating “fake” groups (one per input row) and using aggregation function APIs
+to add each row into its own accumulator, then extract intermediate results.
+This helps avoid the CPU cost of hashing inputs and building a hash table and
+also helps reduce memory usage. However, this process still incurs the cost of
+allocating accumulators, adding values to these and extracting results.</p>
+<p>Individual aggregate functions may implement an optional
+Aggregate::toIntermediate() API that allows HashAggregation operator to
+efficiently convert raw inputs into intermediate results without using
+accumulators.</p>
+<div class="highlight-c++ notranslate"><div class="highlight"><pre><span></span><span class="c1">/// Returns true if toIntermediate() is supported.</span>
+<span class="k">virtual</span><span class="w"> </span><span class="kt">bool</span><span class="w"> </span><span class="nf">supportsToIntermediate</span><span class="p">()</span><span class="w"> </span><span class="k">const</span><span class="w"> </span><span class="p">{</span><span class="w"></span>
+<span class="w">    </span><span class="k">return</span><span class="w"> </span><span class="nb">false</span><span class="p">;</span><span class="w"></span>
+<span class="p">}</span><span class="w"></span>
+
+<span class="c1">/// Produces an accumulator initialized from a single value for each</span>
+<span class="c1">/// row in &#39;rows&#39;. The raw arguments of the aggregate are in &#39;args&#39;,</span>
+<span class="c1">/// which have the same meaning as in addRawInput. The result is</span>
+<span class="c1">/// placed in &#39;result&#39;. &#39;result&#39; is expected to be a writable flat</span>
+<span class="c1">/// vector of the right type.</span>
+<span class="c1">///</span>
+<span class="c1">/// @param rows A set of rows to produce intermediate results for. The</span>
+<span class="c1">/// &#39;result&#39; is expected to have rows.size() rows. Invalid rows represent rows</span>
+<span class="c1">/// that were masked out, these need to have correct intermediate results as</span>
+<span class="c1">/// well. It is possible that all entries in &#39;rows&#39; are invalid (masked out).</span>
+<span class="k">virtual</span><span class="w"> </span><span class="kt">void</span><span class="w"> </span><span class="nf">toIntermediate</span><span class="p">(</span><span class="w"></span>
+<span class="w">  </span><span class="k">const</span><span class="w"> </span><span class="n">SelectivityVector</span><span class="o">&amp;</span><span class="w"> </span><span class="n">rows</span><span class="p">,</span><span class="w"></span>
+<span class="w">  </span><span class="n">std</span><span class="o">::</span><span class="n">vector</span><span class="o">&lt;</span><span class="n">VectorPtr</span><span class="o">&gt;&amp;</span><span class="w"> </span><span class="n">args</span><span class="p">,</span><span class="w"></span>
+<span class="w">  </span><span class="n">VectorPtr</span><span class="o">&amp;</span><span class="w"> </span><span class="n">result</span><span class="p">)</span><span class="w"> </span><span class="k">const</span><span class="w"> </span><span class="p">{</span><span class="w"></span>
+<span class="w">    </span><span class="n">VELOX_NYI</span><span class="p">(</span><span class="s">&quot;toIntermediate not supported&quot;</span><span class="p">);</span><span class="w"></span>
+<span class="p">}</span><span class="w"></span>
+</pre></div>
+</div>
+<p>Many aggregate functions implement toIntermediate() fast path. Some examples include:
+<a class="reference internal" href="../functions/presto/aggregate.html#id3" title="min"><code class="xref py py-func docutils literal notranslate"><span class="pre">min()</span></code></a>, <a class="reference internal" href="../functions/presto/aggregate.html#id2" title="max"><code class="xref py py-func docutils literal notranslate"><span class="pre">max()</span></code></a>, <a class="reference internal" href="../functions/presto/aggregate.html#array_agg" title="array_agg"><code class="xref py py-func docutils literal notranslate"><span class="pre">array_agg()</span></code></a>, <a class="reference internal" href="../functions/presto/aggregate.html#set_agg" title="set_agg"><code class="xref py py-func docutils literal notranslate"><span class="pre">set_agg()</span></code></a>, <a class="reference internal" href="../functions/presto/aggregate.html#map_agg" title="map_agg"><code class="xref py py-func docutils literal notranslate"><span class="pre">map_agg()</span></code></a>, <a class="reference internal" href="../functions/presto/aggregate.html#map_union" title="map_union"><code class="xref py py-func docutils literal notranslate"><span class="pre">map_union()</span></code></a>.</p>
+<p>One can use runtime statistic <cite>abandonedPartialAggregation</cite> to tell whether
+partial aggregation was abandoned.</p>
+</section>
 </section>
 
 
@@ -302,7 +392,7 @@ following types: boolean, tinyint, smallint, integer, bigint, varchar.</p>
     <h3><a href="../index.html">Table of Contents</a></h3>
     <ul>
 <li><a class="reference internal" href="#">Aggregations</a><ul>
-<li><a class="reference internal" href="#hashaggregation-operator">HashAggregation Operator</a></li>
+<li><a class="reference internal" href="#hashaggregation-and-streamingaggregation-operators">HashAggregation and StreamingAggregation Operators</a></li>
 <li><a class="reference internal" href="#push-down-into-table-scan">Push-Down into Table Scan</a></li>
 <li><a class="reference internal" href="#adaptive-array-based-aggregation">Adaptive Array-Based Aggregation</a><ul>
 <li><a class="reference internal" href="#hash-mode">Hash mode</a></li>
@@ -311,6 +401,7 @@ following types: boolean, tinyint, smallint, integer, bigint, varchar.</p>
 <li><a class="reference internal" href="#adaptivity">Adaptivity</a></li>
 </ul>
 </li>
+<li><a class="reference internal" href="#adaptive-disabling-of-partial-aggregation">Adaptive Disabling of Partial Aggregation</a></li>
 </ul>
 </li>
 </ul>

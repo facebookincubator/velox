@@ -281,7 +281,7 @@ input columns.</p>
 </table>
 </section>
 <section id="aggregationnode">
-<h3>AggregationNode<a class="headerlink" href="#aggregationnode" title="Permalink to this heading">¶</a></h3>
+<span id="id2"></span><h3>AggregationNode<a class="headerlink" href="#aggregationnode" title="Permalink to this heading">¶</a></h3>
 <p>The aggregate operation groups input data on a set of grouping keys, calculating
 each measure for each combination of the grouping keys. Optionally, inputs for
 individual measures are sorted and de-duplicated.</p>
@@ -366,7 +366,7 @@ aggregate functions.</p>
 aggregation step is ‘single’. Such computations cannot be split into partial + final.</p>
 </section>
 <section id="groupidnode">
-<span id="group-id-node"></span><h3>GroupIdNode<a class="headerlink" href="#groupidnode" title="Permalink to this heading">¶</a></h3>
+<span id="id3"></span><h3>GroupIdNode<a class="headerlink" href="#groupidnode" title="Permalink to this heading">¶</a></h3>
 <p>Duplicates the input for each of the specified grouping key sets. Used to
 implement aggregations over grouping sets.</p>
 <p>The output consists of grouping keys, followed by aggregation inputs,
@@ -592,7 +592,7 @@ number starting with 1.</p>
 </table>
 </section>
 <section id="tablewritenode">
-<span id="id2"></span><h3>TableWriteNode<a class="headerlink" href="#tablewritenode" title="Permalink to this heading">¶</a></h3>
+<span id="id4"></span><h3>TableWriteNode<a class="headerlink" href="#tablewritenode" title="Permalink to this heading">¶</a></h3>
 <p>The table write operation consumes one output and writes it to storage via a
 <a class="reference internal" href="connectors.html"><span class="doc">connector</span></a>. An example would be writing ORC or Parquet files. The table write
 operation return a list of columns containing the metadata of the written
@@ -847,7 +847,7 @@ the nodes executing the same query stage in a distributed query execution.</p>
 </table>
 </section>
 <section id="windownode">
-<span id="window-node"></span><h3>WindowNode<a class="headerlink" href="#windownode" title="Permalink to this heading">¶</a></h3>
+<span id="id5"></span><h3>WindowNode<a class="headerlink" href="#windownode" title="Permalink to this heading">¶</a></h3>
 <p>The Window operator is used to evaluate window functions. The operator adds columns
 for the window functions output at the end of the input columns.</p>
 <p>The window operator groups the input data into partitions based on the values
