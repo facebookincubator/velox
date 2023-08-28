@@ -387,21 +387,22 @@ class Re2ReplaceConstantPattern final : public VectorFunction {
   /**
    * @brief Constructor for the Re2ReplaceConstantPattern class.
    *
-   * This class provides a method to replace occurrences of a pattern in a string
-   * starting from a given position.
+   * This class provides a method to replace occurrences of a pattern in a
+   * string starting from a given position.
    *
-   * @param basePattern The regular expression pattern to search for in the input string.
+   * @param basePattern The regular expression pattern to search for in the
+   * input string.
    */
   explicit Re2ReplaceConstantPattern(StringView basePattern)
       : basePattern_(basePattern.getString()) {}
 
-
   /**
    * @brief Applies the regex replace operation on the input string vectors.
    *
-   * This function reads the input strings and replaces occurrences of the regex pattern
-   * starting from the given position. If the position is not provided, it defaults to 0.
-   * The result of the replacement operation is written to the resultRef vector.
+   * This function reads the input strings and replaces occurrences of the regex
+   * pattern starting from the given position. If the position is not provided,
+   * it defaults to 0. The result of the replacement operation is written to the
+   * resultRef vector.
    *
    * @param rows The rows of data to be processed.
    * @param args The arguments passed to the function.
@@ -419,21 +420,27 @@ class Re2ReplaceConstantPattern final : public VectorFunction {
       VectorPtr& resultRef) const final {
     VELOX_CHECK(args.size() == 3 || args.size() == 4);
 
-    // Decode the input vector containing the strings on which the replace operation is to be performed.
+    // Decode the input vector containing the strings on which the replace
+    // operation is to be performed.
     exec::LocalDecodedVector input(context, *args[0], rows);
-    // Ensure a writable output vector of type Array(VARCHAR) is prepared to receive the results.
-    BaseVector::ensureWritable(rows, ARRAY(VARCHAR()), context.pool(), resultRef);
+    // Ensure a writable output vector of type Array(VARCHAR) is prepared to
+    // receive the results.
+    BaseVector::ensureWritable(
+        rows, ARRAY(VARCHAR()), context.pool(), resultRef);
     exec::VectorWriter<Array<Varchar>> resultWriter;
     resultWriter.init(*resultRef->as<ArrayVector>());
 
-    // Decode the overwrite vector containing the strings to replace matched patterns with.
+    // Decode the overwrite vector containing the strings to replace matched
+    // patterns with.
     exec::LocalDecodedVector overwriteVec(context, *args[2], rows);
-    std::vector<re2::StringPiece> overwrite = {toStringPiece(overwriteVec->valueAt<StringView>(0))};
+    std::vector<re2::StringPiece> overwrite = {
+        toStringPiece(overwriteVec->valueAt<StringView>(0))};
 
     // Default position is 0 unless specified.
     int position = 0;
-    if (args.size() == 4){
-      // Decode the position vector containing the starting position for the regex replacement.
+    if (args.size() == 4) {
+      // Decode the position vector containing the starting position for the
+      // regex replacement.
       exec::LocalDecodedVector positionVec(context, *args[3], rows);
       position = positionVec->valueAt<int>(0);
     }
@@ -475,34 +482,32 @@ class Re2ReplaceConstantPattern final : public VectorFunction {
       // If there were replacements restore the original string structure.
       if (replacements > 0) {
         strValue = prefix + strValue;
-        const StringView& answer = StringView(strValue.c_str(), strValue.size());
-        arrayWriter.add_item().setNoCopy(answer);
+        const StringView& answer =
+            StringView(strValue.c_str(), strValue.size());
+        arrayWriter.add_item().append(answer);
         resultWriter.commit();
         mustRefSourceStrings = true;
       }
     });
     resultWriter.finish();
 
-
-    // Ensure that the strings in the result vector share the same string buffers as the input vector.
-    // This optimization minimizes the copying of data between vectors.
-    if (mustRefSourceStrings){
+    // Ensure that the strings in the result vector share the same string
+    // buffers as the input vector. This optimization minimizes the copying of
+    // data between vectors.
+    if (mustRefSourceStrings) {
       resultRef->as<ArrayVector>()
-        ->elements()
-        ->as<FlatVector<StringView>>()
-        ->acquireSharedStringBuffers(args[0].get());
+          ->elements()
+          ->as<FlatVector<StringView>>()
+          ->acquireSharedStringBuffers(args[0].get());
     }
-
   }
 
  private:
   const std::string basePattern_;
 };
 
-
-
 template <typename T>
-class Re2Replace final : public VectorFunction{
+class Re2Replace final : public VectorFunction {
  public:
   explicit Re2Replace() {}
   void apply(
@@ -510,29 +515,33 @@ class Re2Replace final : public VectorFunction{
       std::vector<VectorPtr>& args,
       const TypePtr& outputType,
       EvalCtx& context,
-      VectorPtr& resultRef) const final{
+      VectorPtr& resultRef) const final {
     VELOX_CHECK(args.size() == 3 || args.size() == 4);
-    if (auto pattern = getIfConstant<StringView>(*args[1])){
-      Re2ReplaceConstantPattern<T>(*pattern)
-        .apply(rows, args, outputType, context, resultRef);
+    if (auto pattern = getIfConstant<StringView>(*args[1])) {
+      Re2ReplaceConstantPattern<T>(*pattern).apply(
+          rows, args, outputType, context, resultRef);
       return;
     }
-    // Decode the input vector containing the strings on which the replace operation is to be performed.
+    // Decode the input vector containing the strings on which the replace
+    // operation is to be performed.
     exec::LocalDecodedVector input(context, *args[0], rows);
-    // Ensure a writable output vector of type Array(VARCHAR) is prepared to receive the results.
-    BaseVector::ensureWritable(rows, ARRAY(VARCHAR()), context.pool(), resultRef);
+    // Ensure a writable output vector of type Array(VARCHAR) is prepared to
+    // receive the results.
+    BaseVector::ensureWritable(
+        rows, ARRAY(VARCHAR()), context.pool(), resultRef);
     exec::VectorWriter<Array<Varchar>> resultWriter;
     resultWriter.init(*resultRef->as<ArrayVector>());
 
     // Decode the pattern vector containg the strings to match
     exec::LocalDecodedVector patternVec(context, *args[1], rows);
 
-    // Decode the overwrite vector containing the strings to replace matched patterns with.
+    // Decode the overwrite vector containing the strings to replace matched
+    // patterns with.
     exec::LocalDecodedVector overwriteVec(context, *args[2], rows);
 
     bool mustRefSourceStrings = false;
     VectorPtr localResult;
-    if (args.size() == 3){
+    if (args.size() == 3) {
       rows.applyToSelected([&](vector_size_t row) {
         resultWriter.setOffset(row);
         auto& arrayWriter = resultWriter.current();
@@ -541,7 +550,8 @@ class Re2Replace final : public VectorFunction{
         std::string strValue = currentString.getString();
 
         const StringView& currentPattern = patternVec->valueAt<StringView>(row);
-        const re2::RE2 pattern(patternVec->valueAt<StringView>(row).getString());
+        const re2::RE2 pattern(
+            patternVec->valueAt<StringView>(row).getString());
 
         try {
           checkForBadPattern(pattern);
@@ -550,19 +560,20 @@ class Re2Replace final : public VectorFunction{
           return;
         }
 
-        const StringView& currentOverwrite = overwriteVec->valueAt<StringView>(row);
-        std::vector<re2::StringPiece> overwrite {toStringPiece(overwriteVec->valueAt<StringView>(row))};
+        const StringView& currentOverwrite =
+            overwriteVec->valueAt<StringView>(row);
+        std::vector<re2::StringPiece> overwrite{
+            toStringPiece(overwriteVec->valueAt<StringView>(row))};
 
         int replacements = RE2::GlobalReplace(&strValue, pattern, overwrite[0]);
 
-        if (replacements > 0){
-          const StringView& answer = StringView(strValue.c_str(), strValue.size());
+        if (replacements > 0) {
+          const StringView& answer =
+              StringView(strValue.c_str(), strValue.size());
           arrayWriter.add_item().setNoCopy(answer);
           resultWriter.commit();
           mustRefSourceStrings = true;
         }
-
-
       });
     } else {
       exec::LocalDecodedVector positionVec(context, *args[3], rows);
@@ -574,7 +585,8 @@ class Re2Replace final : public VectorFunction{
         std::string strValue = currentString.getString();
 
         const StringView& currentPattern = patternVec->valueAt<StringView>(row);
-        const re2::RE2 pattern(patternVec->valueAt<StringView>(row).getString());
+        const re2::RE2 pattern(
+            patternVec->valueAt<StringView>(row).getString());
 
         try {
           checkForBadPattern(pattern);
@@ -583,39 +595,42 @@ class Re2Replace final : public VectorFunction{
           return;
         }
 
-        const StringView& currentOverwrite = overwriteVec->valueAt<StringView>(row);
-        std::vector<re2::StringPiece> overwrite {toStringPiece(overwriteVec->valueAt<StringView>(row))};
+        const StringView& currentOverwrite =
+            overwriteVec->valueAt<StringView>(row);
+        std::vector<re2::StringPiece> overwrite{
+            toStringPiece(overwriteVec->valueAt<StringView>(row))};
 
         int position = positionVec->valueAt<int>(row);
 
         std::string prefix;
-        if (position > 0){
+        if (position > 0) {
           prefix = strValue.substr(0, position);
           strValue = strValue.substr(position);
         }
         int replacements = RE2::GlobalReplace(&strValue, pattern, overwrite[0]);
 
-        if (replacements > 0){
+        if (replacements > 0) {
           strValue = prefix + strValue;
-          const StringView& answer = StringView(strValue.c_str(), strValue.size());
-          arrayWriter.add_item().setNoCopy(answer);
+          const StringView& answer =
+              StringView(strValue.c_str(), strValue.size());
+          auto& child = arrayWriter.add_item();
+          child.append(answer);
           resultWriter.commit();
           mustRefSourceStrings = true;
         }
-
       });
     }
     resultWriter.finish();
 
-    // Ensure that the strings in the result vector share the same string buffers as the input vector.
-    // This optimization minimizes the copying of data between vectors.
-    if (mustRefSourceStrings){
+    // Ensure that the strings in the result vector share the same string
+    // buffers as the input vector. This optimization minimizes the copying of
+    // data between vectors.
+    if (mustRefSourceStrings) {
       resultRef->as<ArrayVector>()
-        ->elements()
-        ->as<FlatVector<StringView>>()
-        ->acquireSharedStringBuffers(args[0].get());
+          ->elements()
+          ->as<FlatVector<StringView>>()
+          ->acquireSharedStringBuffers(args[0].get());
     }
-
   }
 };
 // Match string 'input' with a fixed pattern (with no wildcard characters).
@@ -1054,26 +1069,26 @@ std::shared_ptr<VectorFunction> makeRe2Extract(
   }
 }
 
-std::vector<std::shared_ptr<exec::FunctionSignature>> re2ReplaceSignatures(){
+std::vector<std::shared_ptr<exec::FunctionSignature>> re2ReplaceSignatures() {
   return {
 
-    // regex_replace (str, pattern, replace)
-    exec::FunctionSignatureBuilder()
+      // regex_replace (str, pattern, replace)
+      exec::FunctionSignatureBuilder()
           .returnType("varchar")
           .argumentType("varchar")
           .argumentType("varchar")
           .argumentType("varchar")
           .build(),
-    // regex_replace (str, pattern, replace, position)
-    exec::FunctionSignatureBuilder()
+      // regex_replace (str, pattern, replace, position)
+      exec::FunctionSignatureBuilder()
           .returnType("varchar")
           .argumentType("varchar")
           .argumentType("varchar")
           .argumentType("varchar")
           .argumentType("integer")
           .build(),
-        // regex_replace (str, pattern, replace, position)
-    exec::FunctionSignatureBuilder()
+      // regex_replace (str, pattern, replace, position)
+      exec::FunctionSignatureBuilder()
           .returnType("varchar")
           .argumentType("varchar")
           .argumentType("varchar")
@@ -1087,15 +1102,14 @@ std::shared_ptr<VectorFunction> makeRe2Replace(
     const std::string& name,
     const std::vector<VectorFunctionArg>& inputArgs,
     const core::QueryConfig& /*config*/
-    ) {
-
+) {
   auto numArgs = inputArgs.size();
 
   VELOX_USER_CHECK(
-    numArgs == 3 || numArgs == 4,
-    "{} requires between 2 and 4 arguments, but got {}",
-    name,
-    numArgs);
+      numArgs == 3 || numArgs == 4,
+      "{} requires between 2 and 4 arguments, but got {}",
+      name,
+      numArgs);
 
   VELOX_USER_CHECK(
       inputArgs[0].type->isVarchar(),
@@ -1112,30 +1126,29 @@ std::shared_ptr<VectorFunction> makeRe2Replace(
   BaseVector* constantPattern = inputArgs[1].constantValue.get();
 
   VELOX_USER_CHECK(
-    inputArgs[2].type->isVarchar(),
-    "{} requires the thrid argument of type VARCHAR, but got {}",
-    name,
-    inputArgs[1].type->toString());
+      inputArgs[2].type->isVarchar(),
+      "{} requires the thrid argument of type VARCHAR, but got {}",
+      name,
+      inputArgs[1].type->toString());
 
   // Check for the 4th argument if necessary
-  if (numArgs == 4){
+  if (numArgs == 4) {
     VELOX_USER_CHECK(
-      inputArgs[3].type->isInteger() || inputArgs[3].type->isBigint(),
-      "{} requires the fourth argument of type INTEGER, but got {}",
-      name,
-      inputArgs[3].type->toString());
+        inputArgs[3].type->isInteger() || inputArgs[3].type->isBigint(),
+        "{} requires the fourth argument of type INTEGER, but got {}",
+        name,
+        inputArgs[3].type->toString());
   }
 
   if (constantPattern != nullptr && !constantPattern->isNullAt(0)) {
-    auto pattern = constantPattern->as<ConstantVector<StringView>>()->valueAt(0);
+    auto pattern =
+        constantPattern->as<ConstantVector<StringView>>()->valueAt(0);
     // Use the overwrite value and logic as needed
     return std::make_shared<Re2ReplaceConstantPattern<int64_t>>(pattern);
   }
 
   return std::make_shared<Re2Replace<int64_t>>();
 }
-
-
 
 std::vector<std::shared_ptr<exec::FunctionSignature>> re2ExtractSignatures() {
   // varchar, varchar -> boolean

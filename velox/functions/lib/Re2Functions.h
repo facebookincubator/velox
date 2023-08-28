@@ -98,11 +98,11 @@ std::shared_ptr<exec::VectorFunction> makeRe2Extract(
 
 std::vector<std::shared_ptr<exec::FunctionSignature>> re2ExtractSignatures();
 
-//TODO: Write comments
+// TODO: Write comments
 std::shared_ptr<exec::VectorFunction> makeRe2Replace(
-  const std::string& name,
-  const std::vector<exec::VectorFunctionArg>& inputArgs,
-  const core::QueryConfig& config);
+    const std::string& name,
+    const std::vector<exec::VectorFunctionArg>& inputArgs,
+    const core::QueryConfig& config);
 
 std::vector<std::shared_ptr<exec::FunctionSignature>> re2ReplaceSignatures();
 
