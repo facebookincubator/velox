@@ -638,6 +638,7 @@ class DecimalType : public ScalarType<KIND> {
   static_assert(KIND == TypeKind::BIGINT || KIND == TypeKind::HUGEINT);
   static constexpr uint8_t kMaxPrecision = KIND == TypeKind::BIGINT ? 18 : 38;
   static constexpr uint8_t kMinPrecision = KIND == TypeKind::BIGINT ? 0 : 19;
+  static constexpr uint8_t kMaxScale = kMaxPrecision;
 
   inline bool equivalent(const Type& other) const override {
     if (!Type::hasSameTypeId(other)) {
@@ -662,7 +663,7 @@ class DecimalType : public ScalarType<KIND> {
   }
 
   std::string toString() const override {
-    return fmt::format("DECIMAL({},{})", precision(), scale());
+    return fmt::format("DECIMAL({}, {})", precision(), scale());
   }
 
   folly::dynamic serialize() const override {
