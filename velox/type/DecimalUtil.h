@@ -202,20 +202,16 @@ class DecimalUtil {
   ///
   /// Normally, return the rescaled value. Otherwise, if the `toValue` overflows
   /// the TOutput's limits or the `toValue` exceeds the precision's limits, it
-  /// will throw an exception.
+  /// will set an error message in `error` field and return an std::nullopt.
   template <typename TOutput>
-  inline static std::optional<TOutput> rescaleDouble(
-      double inputValue,
-      const int toPrecision,
-      const int toScale,
-      std::string& error) {
-    if (!std::isfinite(inputValue)) {
+  inline static std::optional<TOutput>
+  rescaleDouble(double value, int precision, int scale, std::string& error) {
+    if (!std::isfinite(value)) {
       error = "Value is not finite.";
       return std::nullopt;
     }
 
-    auto toValue =
-        inputValue * static_cast<double>(DecimalUtil::kPowersOfTen[toScale]);
+    auto toValue = value * DecimalUtil::kPowersOfTen[scale];
 
     TOutput rescaledValue;
     bool isOverflow = !std::isfinite(toValue);
@@ -228,8 +224,8 @@ class DecimalUtil {
       }
     }
 
-    if (isOverflow || rescaledValue < -DecimalUtil::kPowersOfTen[toPrecision] ||
-        rescaledValue > DecimalUtil::kPowersOfTen[toPrecision]) {
+    if (isOverflow || rescaledValue < -DecimalUtil::kPowersOfTen[precision] ||
+        rescaledValue > DecimalUtil::kPowersOfTen[precision]) {
       error = "Rescaled value is overflowed.";
       return std::nullopt;
     }
