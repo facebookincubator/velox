@@ -319,6 +319,20 @@ values throws.</p>
 </pre></div>
 </div>
 </section>
+<section id="from-decimal">
+<h3>From decimal<a class="headerlink" href="#from-decimal" title="Permalink to this heading">¶</a></h3>
+<p>By default, the decimal part is rounded. If cast_to_int_by_truncate is enabled, the decimal part will be truncated for casting to an integer.</p>
+<p>Valid examples</p>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">SELECT</span> <span class="n">cast</span><span class="p">(</span><span class="mf">2.56</span> <span class="n">decimal</span><span class="p">(</span><span class="mi">6</span><span class="p">,</span> <span class="mi">2</span><span class="p">)</span> <span class="k">as</span> <span class="n">integer</span><span class="p">);</span> <span class="o">--</span> <span class="mi">2</span> <span class="o">/*</span> <span class="n">cast_to_int_by_truncate</span> <span class="n">enabled</span> <span class="o">*/</span>
+<span class="n">SELECT</span> <span class="n">cast</span><span class="p">(</span><span class="mf">2.56</span> <span class="n">decimal</span><span class="p">(</span><span class="mi">6</span><span class="p">,</span> <span class="mi">2</span><span class="p">)</span> <span class="k">as</span> <span class="n">integer</span><span class="p">);</span> <span class="o">--</span> <span class="mi">3</span> <span class="o">/*</span> <span class="n">cast_to_int_by_truncate</span> <span class="n">disabled</span> <span class="o">*/</span>
+<span class="n">SELECT</span> <span class="n">cast</span><span class="p">(</span><span class="mf">3.46</span> <span class="n">decimal</span><span class="p">(</span><span class="mi">6</span><span class="p">,</span> <span class="mi">2</span><span class="p">)</span> <span class="k">as</span> <span class="n">integer</span><span class="p">);</span> <span class="o">--</span> <span class="mi">3</span>
+</pre></div>
+</div>
+<p>Invalid examples</p>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">SELECT</span> <span class="n">cast</span><span class="p">(</span><span class="mi">214748364890</span> <span class="n">decimal</span><span class="p">(</span><span class="mi">12</span><span class="p">,</span> <span class="mi">2</span><span class="p">)</span> <span class="k">as</span> <span class="n">integer</span><span class="p">);</span> <span class="o">--</span> <span class="n">Out</span> <span class="n">of</span> <span class="nb">range</span>
+</pre></div>
+</div>
+</section>
 </section>
 <section id="cast-to-boolean">
 <h2>Cast to Boolean<a class="headerlink" href="#cast-to-boolean" title="Permalink to this heading">¶</a></h2>
@@ -410,8 +424,8 @@ consistent with other supported cases of cast.</p>
 </pre></div>
 </div>
 </section>
-<section id="from-decimal">
-<h3>From decimal<a class="headerlink" href="#from-decimal" title="Permalink to this heading">¶</a></h3>
+<section id="id4">
+<h3>From decimal<a class="headerlink" href="#id4" title="Permalink to this heading">¶</a></h3>
 <p>Casting from decimal to double, float or any integral type is allowed. During decimal to an integral type conversion, if result overflows, or underflows, an exception is thrown.</p>
 <p>Valid example</p>
 <div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">SELECT</span> <span class="n">cast</span><span class="p">(</span><span class="n">decimal</span> <span class="s1">&#39;10.001&#39;</span> <span class="k">as</span> <span class="n">double</span><span class="p">);</span> <span class="o">--</span> <span class="mf">10.001</span>
@@ -438,8 +452,8 @@ consistent with other supported cases of cast.</p>
 </section>
 <section id="cast-to-timestamp">
 <h2>Cast to Timestamp<a class="headerlink" href="#cast-to-timestamp" title="Permalink to this heading">¶</a></h2>
-<section id="id4">
-<h3>From strings<a class="headerlink" href="#id4" title="Permalink to this heading">¶</a></h3>
+<section id="id5">
+<h3>From strings<a class="headerlink" href="#id5" title="Permalink to this heading">¶</a></h3>
 <p>Casting from a string to timestamp is allowed if the string represents a
 timestamp in the format <cite>YYYY-MM-DD</cite> followed by an optional <cite>hh:mm:ssZZ</cite>.
 Casting from invalid input values throws.</p>
@@ -467,8 +481,8 @@ Casting from invalid input values throws.</p>
 </section>
 <section id="cast-to-date">
 <h2>Cast to Date<a class="headerlink" href="#cast-to-date" title="Permalink to this heading">¶</a></h2>
-<section id="id5">
-<h3>From strings<a class="headerlink" href="#id5" title="Permalink to this heading">¶</a></h3>
+<section id="id6">
+<h3>From strings<a class="headerlink" href="#id6" title="Permalink to this heading">¶</a></h3>
 <p>Casting from a string to date is allowed if the string represents a date in the
 format <cite>YYYY-MM-DD</cite>. Casting from invalid input values throws.</p>
 <p>Valid example</p>
@@ -493,8 +507,8 @@ in the input is ignored.</p>
 </section>
 <section id="cast-to-decimal">
 <h2>Cast to Decimal<a class="headerlink" href="#cast-to-decimal" title="Permalink to this heading">¶</a></h2>
-<section id="id6">
-<h3>From integral types<a class="headerlink" href="#id6" title="Permalink to this heading">¶</a></h3>
+<section id="id7">
+<h3>From integral types<a class="headerlink" href="#id7" title="Permalink to this heading">¶</a></h3>
 <p>Casting an integral numberto a decimal of given precision and scale is allowed
 if the input value can be represented by the precision and scale. Casting from
 invalid input values throws.</p>
@@ -510,8 +524,8 @@ invalid input values throws.</p>
 </pre></div>
 </div>
 </section>
-<section id="id7">
-<h3>From decimal<a class="headerlink" href="#id7" title="Permalink to this heading">¶</a></h3>
+<section id="id8">
+<h3>From decimal<a class="headerlink" href="#id8" title="Permalink to this heading">¶</a></h3>
 <p>Casting one decimal to another is allowed if the input value can be represented
 by the result decimal type. When casting from a larger scale to a smaller one,
 the fraction part is rounded.</p>
@@ -546,6 +560,7 @@ the fraction part is rounded.</p>
 <li><a class="reference internal" href="#from-integral-types">From integral types</a></li>
 <li><a class="reference internal" href="#from-floating-point-types">From floating-point types</a></li>
 <li><a class="reference internal" href="#from-strings">From strings</a></li>
+<li><a class="reference internal" href="#from-decimal">From decimal</a></li>
 </ul>
 </li>
 <li><a class="reference internal" href="#cast-to-boolean">Cast to Boolean</a><ul>
@@ -556,23 +571,23 @@ the fraction part is rounded.</p>
 <li><a class="reference internal" href="#cast-to-floating-point-types">Cast to Floating-Point Types</a><ul>
 <li><a class="reference internal" href="#from-integral-or-floating-point-types">From integral or floating-point types</a></li>
 <li><a class="reference internal" href="#id3">From strings</a></li>
-<li><a class="reference internal" href="#from-decimal">From decimal</a></li>
+<li><a class="reference internal" href="#id4">From decimal</a></li>
 </ul>
 </li>
 <li><a class="reference internal" href="#cast-to-string">Cast to String</a></li>
 <li><a class="reference internal" href="#cast-to-timestamp">Cast to Timestamp</a><ul>
-<li><a class="reference internal" href="#id4">From strings</a></li>
+<li><a class="reference internal" href="#id5">From strings</a></li>
 <li><a class="reference internal" href="#from-date">From date</a></li>
 </ul>
 </li>
 <li><a class="reference internal" href="#cast-to-date">Cast to Date</a><ul>
-<li><a class="reference internal" href="#id5">From strings</a></li>
+<li><a class="reference internal" href="#id6">From strings</a></li>
 <li><a class="reference internal" href="#from-timestamp">From timestamp</a></li>
 </ul>
 </li>
 <li><a class="reference internal" href="#cast-to-decimal">Cast to Decimal</a><ul>
-<li><a class="reference internal" href="#id6">From integral types</a></li>
-<li><a class="reference internal" href="#id7">From decimal</a></li>
+<li><a class="reference internal" href="#id7">From integral types</a></li>
+<li><a class="reference internal" href="#id8">From decimal</a></li>
 </ul>
 </li>
 </ul>
