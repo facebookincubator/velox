@@ -595,15 +595,26 @@ int64_t fromDateString(const char* str, size_t len) {
   return daysSinceEpoch;
 }
 
-std::optional<int32_t>
-castFromDateString(const char* str, size_t len, bool isStandardCast) {
+int32_t castFromDateString(const char* str, size_t len, bool isIso8601) {
   int64_t daysSinceEpoch;
   size_t pos = 0;
 
   auto mode =
-      isStandardCast ? ParseMode::kStandardCast : ParseMode::kNonStandardCast;
+      isIso8601 ? ParseMode::kStandardCast : ParseMode::kNonStandardCast;
   if (!tryParseDateString(str, len, pos, daysSinceEpoch, mode)) {
-    return std::nullopt;
+    if (isIso8601) {
+      VELOX_USER_FAIL(
+          "Unable to parse date value: \"{}\"."
+          "Valid date string pattern is (YYYY-MM-DD), "
+          "and can be prefixed with [+-]",
+          std::string(str, len));
+    } else {
+      VELOX_USER_FAIL(
+          "Unable to parse date value: \"{}\"."
+          "Valid date string patterns include "
+          "(YYYY, YYYY-MM, YYYY-MM-DD), and any pattern prefixed with [+-]",
+          std::string(str, len));
+    }
   }
   return daysSinceEpoch;
 }

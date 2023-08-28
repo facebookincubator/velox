@@ -125,7 +125,7 @@ Expression Evaluation Configuration
        For the last two patterns, the trailing ``*`` can represent none or any sequence of characters, e.g:
          * "1970-01-01 123"
          * "1970-01-01 (BC)"
->>>>>>> add cast option to distinguish sparksql/presto cast
+       Regardless of this setting's value, leading and trailing spaces will be trimmed.
 
 Memory Management
 -----------------

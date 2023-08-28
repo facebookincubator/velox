@@ -668,11 +668,14 @@ TEST_F(CastExprTest, date) {
          "1812-04-15",
          "1920-01-02",
          "12345-12-18",
-         "2015-3-1",
-         "2015-3-18",
+         "1970-1-2",
+         "1970-01-2",
+         "1970-1-02",
          "+1970-01-02",
          "-1-1-1",
          "1970-01-01 ",
+         " 1970-01-01",
+         " 1970-01-01 ",
          std::nullopt},
         {0,
          18262,
@@ -681,10 +684,13 @@ TEST_F(CastExprTest, date) {
          -57604,
          -18262,
          3789742,
-         16495,
-         16512,
+         1,
+         1,
+         1,
          1,
          -719893,
+         0,
+         0,
          0,
          std::nullopt},
         false,
@@ -693,17 +699,16 @@ TEST_F(CastExprTest, date) {
         DATE());
   }
 
-  // Valid cases for cast_string_to_date_iso_8601=false.
   setCastStringToDateIsIso8601(false);
   testCast<std::string, int32_t>(
       "date",
       {"12345",
        "2015",
        "2015-03",
-       "2015-03-18 ",
-       "2015-03-18 123142",
        "2015-03-18T",
-       "2015-03-18T123123"},
+       "2015-03-18T123123",
+       "2015-03-18 123142",
+       "2015-03-18 (BC)"},
       {3789391, 16436, 16495, 16512, 16512, 16512, 16512},
       false,
       false,
@@ -745,13 +750,15 @@ TEST_F(CastExprTest, invalidDate) {
 
   setCastStringToDateIsIso8601(true);
   testCast<std::string, int32_t>(
-      "date", {"2015"}, {0}, true, false, VARCHAR(), DATE());
+      "date", {"12345"}, {0}, true, false, VARCHAR(), DATE());
   testCast<std::string, int32_t>(
       "date", {"2015-03"}, {0}, true, false, VARCHAR(), DATE());
   testCast<std::string, int32_t>(
+      "date", {"2015-03-18 123412"}, {0}, true, false, VARCHAR(), DATE());
+  testCast<std::string, int32_t>(
       "date", {"2015-03-18T"}, {0}, true, false, VARCHAR(), DATE());
   testCast<std::string, int32_t>(
-      "date", {"2015-03-18 "}, {0}, true, false, VARCHAR(), DATE());
+      "date", {"2015-03-18T123412"}, {0}, true, false, VARCHAR(), DATE());
   testCast<std::string, int32_t>(
       "date", {"2015-03-18 (BC)"}, {0}, true, false, VARCHAR(), DATE());
 }

@@ -125,25 +125,13 @@ VectorPtr CastExpr::castToDate(
     case TypeKind::VARCHAR: {
       auto* inputVector = input.as<SimpleVector<StringView>>();
       const auto& queryConfig = context.execCtx()->queryCtx()->queryConfig();
-      auto isStandardCast = queryConfig.isIso8601();
-      context.applyToSelectedNoThrow(rows, [&](vector_size_t row) {
+      auto isIso8601 = queryConfig.isIso8601();
+      applyToSelectedNoThrowLocal(context, rows, castResult, [&](int row) {
         try {
           auto inputString = inputVector->valueAt(row);
-          auto date = util::castFromDateString(inputString, isStandardCast);
-          if (date.has_value()) {
-            resultFlatVector->set(row, *date);
-          } else {
-            if (setNullInResultAtError()) {
-              resultFlatVector->setNull(row, true);
-            } else {
-              VELOX_USER_FAIL(
-                  castFromDateErrorMessage(inputString, isStandardCast));
-            }
-          }
-        } catch (const VeloxException& ue) {
-          if (!ue.isUserError()) {
-            throw;
-          }
+          resultFlatVector->set(
+              row, util::castFromDateString(inputString, isIso8601));
+        } catch (const VeloxUserError& ue) {
           VELOX_USER_FAIL(
               makeErrorMessage(input, row, DATE()) + " " + ue.message());
         } catch (const std::exception& e) {
