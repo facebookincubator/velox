@@ -226,7 +226,8 @@ TEST(DecimalTest, rescaleDouble) {
   checkRescaleDouble<int128_t>(99999.99, DECIMAL(20, 1), 1'000'000);
   checkRescaleDouble<int128_t>(99999.99, DECIMAL(20, 10), 999'999'900'000'000);
 
-  checkRescaleDouble(std::numeric_limits<double>::min(), DECIMAL(38, 2), 0);
+  checkRescaleDouble<int128_t>(
+      std::numeric_limits<double>::min(), DECIMAL(38, 2), 0);
 
   static const std::string kValueNotFinite = "Value is not finite.";
   static const std::string kOverflowedValue = "Rescaled value is overflowed.";
