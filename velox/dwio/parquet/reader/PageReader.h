@@ -238,9 +238,9 @@ class PageReader {
   const char* FOLLY_NONNULL readBytes(int32_t size, BufferPtr& copy);
 
   // Decompresses data starting at 'pageData_', consuming 'compressedsize' and
-  // producing up to 'uncompressedSize' bytes. The The start of the decoding
-  // result is returned. an intermediate copy may be made in 'uncompresseddata_'
-  const char* FOLLY_NONNULL uncompressData(
+  // producing up to 'uncompressedSize' bytes. The start of the decoding
+  // result is returned. an intermediate copy may be made in 'decompresseddata_'
+  const char* FOLLY_NONNULL decompressData(
       const char* FOLLY_NONNULL pageData,
       uint32_t compressedSize,
       uint32_t uncompressedSize);
@@ -446,10 +446,10 @@ class PageReader {
   // Copy of data if data straddles buffer boundary.
   BufferPtr pageBuffer_;
 
-  // Uncompressed data for the page. Rep-def-data in V1, data alone in V2.
-  BufferPtr uncompressedData_;
+  // decompressed data for the page. Rep-def-data in V1, data alone in V2.
+  BufferPtr decompressedData_;
 
-  // First byte of uncompressed encoded data. Contains the encoded data as a
+  // First byte of decompressed encoded data. Contains the encoded data as a
   // contiguous run of bytes.
   const char* FOLLY_NULLABLE pageData_{nullptr};
 
