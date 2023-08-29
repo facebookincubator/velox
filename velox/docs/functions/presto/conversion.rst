@@ -245,7 +245,7 @@ Casting a string to an integral type is allowed if the string represents an
 integral number within the range of the result type. By default, casting from
 strings that represent floating-point numbers is not allowed.
 
-If cast_to_int_by_truncate is set to true, and the string represents a decimal,
+If cast_to_int_by_truncate is set to true, and the string represents a floating-point number,
 the decimal part will be truncated for casting to an integer.
 
 Casting from invalid input values throws.
