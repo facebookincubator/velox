@@ -32,27 +32,6 @@
 
 namespace facebook::velox::exec {
 
-namespace {
-std::string castFromDateErrorMessage(
-    const StringView& inputString,
-    bool isStandardCast) {
-  if (isStandardCast) {
-    return fmt::format(
-        "Unable to parse date value: \"{}\"."
-        "Valid date string pattern is (YYYY-MM-DD), "
-        "and can be prefixed with [+-]",
-        inputString);
-  } else {
-    return fmt::format(
-        "Unable to parse date value: \"{}\"."
-        "Valid date string patterns include "
-        "(YYYY, YYYY-MM, YYYY-MM-DD), and any pattern prefixed with \"[+-]\" "
-        "or suffixed with trailing spaces or trailing 'T' with any characters.",
-        inputString);
-  }
-}
-} // namespace
-
 VectorPtr CastExpr::castFromDate(
     const SelectivityVector& rows,
     const BaseVector& input,
