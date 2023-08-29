@@ -3609,27 +3609,23 @@ TEST_F(DateTimeFunctionsTest, lastDayOfMonthDate) {
     return lastDayFunc(DATE()->toDays(dateStr));
   };
 
-  const auto parseDateStr = [&](const StringView& dateStr) {
-    return DATE()->toDays(dateStr);
-  };
-
   EXPECT_EQ(std::nullopt, lastDayFunc(std::nullopt));
-  EXPECT_EQ(parseDateStr("1970-01-31"), lastDay("1970-01-01"));
-  EXPECT_EQ(parseDateStr("2008-02-29"), lastDay("2008-02-01"));
-  EXPECT_EQ(parseDateStr("2023-02-28"), lastDay("2023-02-01"));
-  EXPECT_EQ(parseDateStr("2023-02-28"), lastDay("2023-02-01"));
-  EXPECT_EQ(parseDateStr("2023-03-31"), lastDay("2023-03-11"));
-  EXPECT_EQ(parseDateStr("2023-04-30"), lastDay("2023-04-21"));
-  EXPECT_EQ(parseDateStr("2023-05-31"), lastDay("2023-05-09"));
-  EXPECT_EQ(parseDateStr("2023-06-30"), lastDay("2023-06-01"));
-  EXPECT_EQ(parseDateStr("2023-07-31"), lastDay("2023-07-31"));
-  EXPECT_EQ(parseDateStr("2023-07-31"), lastDay("2023-07-31"));
-  EXPECT_EQ(parseDateStr("2023-07-31"), lastDay("2023-07-11"));
-  EXPECT_EQ(parseDateStr("2023-08-31"), lastDay("2023-08-01"));
-  EXPECT_EQ(parseDateStr("2023-09-30"), lastDay("2023-09-09"));
-  EXPECT_EQ(parseDateStr("2023-10-31"), lastDay("2023-10-01"));
-  EXPECT_EQ(parseDateStr("2023-11-30"), lastDay("2023-11-11"));
-  EXPECT_EQ(parseDateStr("2023-12-31"), lastDay("2023-12-12"));
+  EXPECT_EQ(parseDate("1970-01-31"), lastDay("1970-01-01"));
+  EXPECT_EQ(parseDate("2008-02-29"), lastDay("2008-02-01"));
+  EXPECT_EQ(parseDate("2023-02-28"), lastDay("2023-02-01"));
+  EXPECT_EQ(parseDate("2023-02-28"), lastDay("2023-02-01"));
+  EXPECT_EQ(parseDate("2023-03-31"), lastDay("2023-03-11"));
+  EXPECT_EQ(parseDate("2023-04-30"), lastDay("2023-04-21"));
+  EXPECT_EQ(parseDate("2023-05-31"), lastDay("2023-05-09"));
+  EXPECT_EQ(parseDate("2023-06-30"), lastDay("2023-06-01"));
+  EXPECT_EQ(parseDate("2023-07-31"), lastDay("2023-07-31"));
+  EXPECT_EQ(parseDate("2023-07-31"), lastDay("2023-07-31"));
+  EXPECT_EQ(parseDate("2023-07-31"), lastDay("2023-07-11"));
+  EXPECT_EQ(parseDate("2023-08-31"), lastDay("2023-08-01"));
+  EXPECT_EQ(parseDate("2023-09-30"), lastDay("2023-09-09"));
+  EXPECT_EQ(parseDate("2023-10-31"), lastDay("2023-10-01"));
+  EXPECT_EQ(parseDate("2023-11-30"), lastDay("2023-11-11"));
+  EXPECT_EQ(parseDate("2023-12-31"), lastDay("2023-12-12"));
 }
 
 TEST_F(DateTimeFunctionsTest, lastDayOfMonthTimestamp) {
@@ -3641,40 +3637,32 @@ TEST_F(DateTimeFunctionsTest, lastDayOfMonthTimestamp) {
     return lastDayFunc(util::fromTimestampString(dateStr));
   };
 
-  const auto parseDateStr = [&](const StringView& dateStr) {
-    return DATE()->toDays(dateStr);
-  };
-
   setQueryTimeZone("Pacific/Apia");
 
   EXPECT_EQ(std::nullopt, lastDayFunc(std::nullopt));
-  EXPECT_EQ(parseDateStr("1970-01-31"), lastDay("1970-01-01 20:23:00.007"));
-  EXPECT_EQ(parseDateStr("1970-01-31"), lastDay("1970-01-01 12:00:00.001"));
-  EXPECT_EQ(parseDateStr("2008-02-29"), lastDay("2008-02-01 12:00:00"));
-  EXPECT_EQ(parseDateStr("2023-02-28"), lastDay("2023-02-01 23:59:59.999"));
-  EXPECT_EQ(parseDateStr("2023-02-28"), lastDay("2023-02-01 12:00:00"));
-  EXPECT_EQ(parseDateStr("2023-03-31"), lastDay("2023-03-11 12:00:00"));
+  EXPECT_EQ(parseDate("1970-01-31"), lastDay("1970-01-01 20:23:00.007"));
+  EXPECT_EQ(parseDate("1970-01-31"), lastDay("1970-01-01 12:00:00.001"));
+  EXPECT_EQ(parseDate("2008-02-29"), lastDay("2008-02-01 12:00:00"));
+  EXPECT_EQ(parseDate("2023-02-28"), lastDay("2023-02-01 23:59:59.999"));
+  EXPECT_EQ(parseDate("2023-02-28"), lastDay("2023-02-01 12:00:00"));
+  EXPECT_EQ(parseDate("2023-03-31"), lastDay("2023-03-11 12:00:00"));
 }
 
 TEST_F(DateTimeFunctionsTest, lastDayOfMonthTimestampWithTimezone) {
-  const auto parseDateStr = [&](const StringView& dateStr) {
-    return DATE()->toDays(dateStr);
-  };
-
   EXPECT_EQ(
-      parseDateStr("1970-01-31"),
+      parseDate("1970-01-31"),
       evaluateWithTimestampWithTimezone<int32_t>(
           "last_day_of_month(c0)", 0, "+00:00"));
   EXPECT_EQ(
-      parseDateStr("1969-12-31"),
+      parseDate("1969-12-31"),
       evaluateWithTimestampWithTimezone<int32_t>(
           "last_day_of_month(c0)", 0, "-02:00"));
   EXPECT_EQ(
-      parseDateStr("2008-02-29"),
+      parseDate("2008-02-29"),
       evaluateWithTimestampWithTimezone<int32_t>(
           "last_day_of_month(c0)", 1201881600000, "+02:00"));
   EXPECT_EQ(
-      parseDateStr("2008-01-31"),
+      parseDate("2008-01-31"),
       evaluateWithTimestampWithTimezone<int32_t>(
           "last_day_of_month(c0)", 1201795200000, "-02:00"));
 }
