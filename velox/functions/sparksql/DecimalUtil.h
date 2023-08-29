@@ -97,9 +97,9 @@ class DecimalUtil {
   /// should treat the overflow flag first. Using HALF_UP rounding, the digit 5
   /// is rounded up.
   /// Compute the maximum bits required to increase, if it is less than
-  /// result type bits, result type is enough, if not, we should introduce int256_t as
-  /// intermediate type, and then convert to real result type with overflow
-  /// flag.
+  /// result type bits, result type is enough, if not, we should introduce
+  /// int256_t as intermediate type, and then convert to real result type with
+  /// overflow flag.
   template <typename R, typename A, typename B>
   inline static R divideWithRoundUp(
       R& r,
