@@ -26,8 +26,8 @@
 namespace facebook::velox {
 
 enum class ConversionErrorCode : unsigned char {
-  INFINITE_FLOATING_NUMBER,
-  OVERFLOWED_RESCALED_VALUE,
+  kInfiniteFloatingNumber,
+  kOverflowedRescaledValue,
 };
 
 /// A static class that holds helper functions for DECIMAL type.
@@ -213,7 +213,7 @@ class DecimalUtil {
   rescaleDouble(double value, int precision, int scale) {
     if (!std::isfinite(value)) {
       return folly::makeUnexpected<ConversionErrorCode>(
-          ConversionErrorCode::INFINITE_FLOATING_NUMBER);
+          ConversionErrorCode::kInfiniteFloatingNumber);
     }
 
     auto toValue = value * DecimalUtil::kPowersOfTen[scale];
@@ -232,7 +232,7 @@ class DecimalUtil {
     if (isOverflow || rescaledValue < -DecimalUtil::kPowersOfTen[precision] ||
         rescaledValue > DecimalUtil::kPowersOfTen[precision]) {
       return folly::makeUnexpected<ConversionErrorCode>(
-          ConversionErrorCode::OVERFLOWED_RESCALED_VALUE);
+          ConversionErrorCode::kOverflowedRescaledValue);
     }
     return folly::makeExpected<ConversionErrorCode>(rescaledValue);
   }

@@ -230,49 +230,49 @@ TEST(DecimalTest, rescaleDouble) {
   checkRescaleDoubleFails<int128_t>(
       std::numeric_limits<double>::max(),
       DECIMAL(38, 2),
-      ConversionErrorCode::OVERFLOWED_RESCALED_VALUE);
+      ConversionErrorCode::kOverflowedRescaledValue);
 
   // Test infinity double type numbers.
   checkRescaleDoubleFails<int64_t>(
-      NAN, DECIMAL(10, 2), ConversionErrorCode::INFINITE_FLOATING_NUMBER);
+      NAN, DECIMAL(10, 2), ConversionErrorCode::kInfiniteFloatingNumber);
   checkRescaleDoubleFails<int64_t>(
-      INFINITY, DECIMAL(10, 2), ConversionErrorCode::INFINITE_FLOATING_NUMBER);
+      INFINITY, DECIMAL(10, 2), ConversionErrorCode::kInfiniteFloatingNumber);
 
   checkRescaleDoubleFails<int64_t>(
       9999999999999999999999.99,
       DECIMAL(10, 2),
-      ConversionErrorCode::OVERFLOWED_RESCALED_VALUE);
+      ConversionErrorCode::kOverflowedRescaledValue);
 
   checkRescaleDoubleFails<int64_t>(
       static_cast<double>(
           static_cast<int128_t>(std::numeric_limits<int64_t>::max()) + 1),
       DECIMAL(10, 2),
-      ConversionErrorCode::OVERFLOWED_RESCALED_VALUE);
+      ConversionErrorCode::kOverflowedRescaledValue);
 
   checkRescaleDoubleFails<int64_t>(
       static_cast<double>(
           static_cast<int128_t>(std::numeric_limits<int64_t>::min()) - 1),
       DECIMAL(10, 2),
-      ConversionErrorCode::OVERFLOWED_RESCALED_VALUE);
+      ConversionErrorCode::kOverflowedRescaledValue);
 
   checkRescaleDoubleFails<int64_t>(
       static_cast<double>(DecimalUtil::kShortDecimalMax),
       DECIMAL(10, 2),
-      ConversionErrorCode::OVERFLOWED_RESCALED_VALUE);
+      ConversionErrorCode::kOverflowedRescaledValue);
   checkRescaleDoubleFails<int64_t>(
       static_cast<double>(DecimalUtil::kShortDecimalMin),
       DECIMAL(10, 2),
-      ConversionErrorCode::OVERFLOWED_RESCALED_VALUE);
+      ConversionErrorCode::kOverflowedRescaledValue);
 
   checkRescaleDoubleFails<int128_t>(
       static_cast<double>(DecimalUtil::kLongDecimalMax),
       DECIMAL(20, 2),
-      ConversionErrorCode::OVERFLOWED_RESCALED_VALUE);
+      ConversionErrorCode::kOverflowedRescaledValue);
 
   checkRescaleDoubleFails<int128_t>(
       static_cast<double>(DecimalUtil::kLongDecimalMin),
       DECIMAL(20, 2),
-      ConversionErrorCode::OVERFLOWED_RESCALED_VALUE);
+      ConversionErrorCode::kOverflowedRescaledValue);
 }
 
 } // namespace
