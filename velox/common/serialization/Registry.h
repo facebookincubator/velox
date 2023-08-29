@@ -26,24 +26,20 @@
 #include <string_view>
 #include <unordered_map>
 
+#include <folly/Preprocessor.h>
+#include <folly/container/F14Map.h>
 #include <glog/logging.h>
-#include "folly/Preprocessor.h"
-#include "folly/container/F14Map.h"
 
 #include "velox/common/base/Exceptions.h"
 #include "velox/core/Metaprogramming.h"
 
-namespace facebook {
-namespace velox {
+namespace facebook::velox {
 
-/**
- * @brief A template class that allows one to register function objects by keys.
- *
- * The keys are usually a string specifying the name, but can be anything that
- * can be used in a std::map.
- * It provides `Create` function to directly call with key and arguments.
- */
-
+/// A template class that allows one to register function objects by keys.
+///
+/// The keys are usually a string specifying the name, but can be anything that
+/// can be used in a "std::unordered_map".
+/// It provides `Create` function to directly call with key and arguments.
 template <class KeyType, class FunctionSignature>
 class Registry {
  public:
@@ -52,11 +48,13 @@ class Registry {
 
   Registry() : Create(creatorMap_) {}
 
+  Registry(const Registry& other) = delete;
+
   void Register(
       const KeyType& key,
       Creator creator,
       std::optional<std::string_view> helpMsg = std::nullopt) {
-    std::lock_guard<std::mutex> lock(registerutex_);
+    std::lock_guard<std::mutex> lock(registerMutex_);
     creatorMap_[key] = std::move(creator);
     if (helpMsg) {
       helpMessage_[key] = *helpMsg;
@@ -67,9 +65,7 @@ class Registry {
     return (creatorMap_.count(key) != 0);
   }
 
-  /**
-   * Returns the keys currently registered as a vector.
-   */
+  /// Returns the keys currently registered as a vector.
   std::vector<KeyType> Keys() const {
     std::vector<KeyType> keys;
     for (const auto& it : creatorMap_) {
@@ -91,11 +87,9 @@ class Registry {
   }
 
  private:
+  std::mutex registerMutex_;
   CreatorMap creatorMap_;
   std::unordered_map<KeyType, std::string> helpMessage_;
-  std::mutex registerutex_;
-
-  Registry(const Registry& other) = delete;
 
  public:
   template <typename T>
@@ -103,7 +97,8 @@ class Registry {
 
   template <class ReturnType, class... ArgTypes>
   struct CreateFunction<ReturnType(ArgTypes...)> {
-    CreateFunction(const CreatorMap& creatorMap) : creatorMap_(creatorMap) {}
+    explicit CreateFunction(const CreatorMap& creatorMap)
+        : creatorMap_(creatorMap) {}
 
     ReturnType operator()(const KeyType& key, ArgTypes... types) const {
       const auto it = creatorMap_.find(key);
@@ -123,15 +118,14 @@ class Registry {
     const CreatorMap& creatorMap_;
   };
 
-  // Provide Create function as a function object
-  // If there is no key found, it will:
-  //   Smart pointer types: return nullptr
-  //   Value types        : throw invalid_argument exception.
-  //
-  // Function signature:
-  //   ReturnType Create(const KeyType& key, ArgTypes...);
+  /// Provide Create function as a function object
+  /// If there is no key found, it will:
+  ///   Smart pointer types: return nullptr
+  ///   Value types        : throw invalid_argument exception.
+  ///
+  /// Function signature:
+  ///   ReturnType Create(const KeyType& key, ArgTypes...);
   const CreateFunction<FunctionSignature> Create;
 };
 
-} // namespace velox
-} // namespace facebook
+} // namespace facebook::velox
