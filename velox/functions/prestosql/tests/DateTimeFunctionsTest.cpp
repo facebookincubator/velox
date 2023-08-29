@@ -3629,7 +3629,7 @@ TEST_F(DateTimeFunctionsTest, lastDayOfMonthDate) {
 }
 
 TEST_F(DateTimeFunctionsTest, lastDayOfMonthTimestamp) {
-  const auto lastDayFunc = [&](const std::optional<Timestamp> date) {
+  const auto lastDayFunc = [&](const std::optional<Timestamp>& date) {
     return evaluateOnce<int32_t>("last_day_of_month(c0)", date);
   };
 
