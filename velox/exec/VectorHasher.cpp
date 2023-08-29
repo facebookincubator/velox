@@ -235,7 +235,6 @@ bool VectorHasher::makeValueIdsFlatWithNulls(
   });
   return success;
 }
-
 template <typename T, bool mayHaveNulls>
 bool VectorHasher::makeValueIdsDecoded(
     const SelectivityVector& rows,
@@ -247,36 +246,43 @@ bool VectorHasher::makeValueIdsDecoded(
   auto values = decoded_.data<T>();
 
   bool success = true;
-  rows.applyToSelected([&](vector_size_t row) INLINE_LAMBDA {
+  int decodedBaseVisited = 0;
+  rows.testSelected([&](vector_size_t row) {
     if constexpr (mayHaveNulls) {
       if (decoded_.isNullAt(row)) {
         if (multiplier_ == 1) {
           result[row] = 0;
         }
-        return;
+        return true;
       }
     }
-    auto baseIndex = indices[row];
-    uint64_t id = cachedHashes_[baseIndex];
-    if (id == 0) {
-      T value = values[baseIndex];
 
-      if (!success) {
-        // If all were not mappable we just analyze the remaining so we can
-        // decide the hash mode.
-        analyzeValue(value);
-        return;
+    auto baseIndex = indices[row];
+    uint64_t& id = cachedHashes_[baseIndex];
+
+    if (success) {
+      if (id == 0) {
+        T value = values[baseIndex];
+        id = valueId(value);
+        decodedBaseVisited++;
+        if (id == kUnmappable) {
+          analyzeValue(value);
+          success = false;
+        }
       }
-      id = valueId(value);
-      if (id == kUnmappable) {
-        analyzeValue(value);
-        success = false;
-        return;
+      result[row] = multiplier_ == 1 ? id : result[row] + multiplier_ * id;
+    } else {
+      if (id == 0) {
+        id = kUnmappable;
+        decodedBaseVisited++;
+        analyzeValue(values[baseIndex]);
       }
-      cachedHashes_[baseIndex] = id;
     }
-    result[row] = multiplier_ == 1 ? id : result[row] + multiplier_ * id;
+
+    bool shouldContinue = success || decodedBaseVisited < cachedHashes_.size();
+    return shouldContinue;
   });
+
   return success;
 }
 

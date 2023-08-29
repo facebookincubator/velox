@@ -177,6 +177,32 @@ BENCHMARK_RELATIVE(computeValueIdsFlatStrings) {
   benchmarkComputeValueIdsForStrings(true);
 }
 
+BENCHMARK(computeValueIdsLowCardinalityLargeBatchSize) {
+  folly::BenchmarkSuspender suspender;
+
+  vector_size_t cardinality = 300;
+  vector_size_t batchSize = 30'000'000;
+  BenchmarkBase base;
+
+  std::vector<std::optional<int64_t>> data(batchSize);
+  for (int i = 0; i < batchSize; i++) {
+    data[i] = i % cardinality;
+  }
+  auto values = base.vectorMaker().dictionaryVector<int64_t>(data);
+
+  for (int i = 0; i < 10; i++) {
+    raw_vector<uint64_t> hashes(batchSize);
+    SelectivityVector rows(batchSize);
+    VectorHasher hasher(CppToType<int64_t>::create(), 0);
+    hasher.decode(*values, rows);
+    suspender.dismiss();
+
+    bool ok = hasher.computeValueIds(rows, hashes);
+    folly::doNotOptimizeAway(ok);
+    suspender.rehire();
+  }
+}
+
 int main(int argc, char** argv) {
   folly::init(&argc, &argv);
   folly::runBenchmarks();
