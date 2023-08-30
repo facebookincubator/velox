@@ -225,84 +225,40 @@ const char* FOLLY_NONNULL PageReader::uncompressData(
     const char* pageData,
     uint32_t compressedSize,
     uint32_t uncompressedSize) {
-  switch (codec_) {
-    case thrift::CompressionCodec::UNCOMPRESSED:
-      return pageData;
-    case thrift::CompressionCodec::SNAPPY: {
-      dwio::common::ensureCapacity<char>(
-          uncompressedData_, uncompressedSize, &pool_);
+  if (codec_ == thrift::CompressionCodec::LZ4 ||
+      codec_ == thrift::CompressionCodec::LZO) {
+    return decompressLz4AndLzo(
+        pageData,
+        uncompressedData_,
+        compressedSize,
+        uncompressedSize,
+        pool_,
+        codec_);
+  }
 
-      size_t sizeFromSnappy;
-      if (!snappy::GetUncompressedLength(
-              pageData, compressedSize, &sizeFromSnappy)) {
-        VELOX_FAIL("Snappy uncompressed size not available");
-      }
-      VELOX_CHECK_EQ(uncompressedSize, sizeFromSnappy);
-      snappy::RawUncompress(
-          pageData, compressedSize, uncompressedData_->asMutable<char>());
-      return uncompressedData_->as<char>();
-    }
-    case thrift::CompressionCodec::ZSTD: {
-      dwio::common::ensureCapacity<char>(
-          uncompressedData_, uncompressedSize, &pool_);
-
-      auto ret = ZSTD_decompress(
-          uncompressedData_->asMutable<char>(),
-          uncompressedSize,
-          pageData,
-          compressedSize);
-      VELOX_CHECK(
-          !ZSTD_isError(ret),
-          "ZSTD returned an error: ",
-          ZSTD_getErrorName(ret));
-      return uncompressedData_->as<char>();
-    }
-    case thrift::CompressionCodec::GZIP: {
-      dwio::common::ensureCapacity<char>(
-          uncompressedData_, uncompressedSize, &pool_);
-      z_stream stream;
-      memset(&stream, 0, sizeof(stream));
-      constexpr int WINDOW_BITS = 15;
-      // Determine if this is libz or gzip from header.
-      constexpr int DETECT_CODEC = 32;
-      // Initialize decompressor.
-      auto ret = inflateInit2(&stream, WINDOW_BITS | DETECT_CODEC);
-      VELOX_CHECK(
-          (ret == Z_OK),
-          "zlib inflateInit failed: {}",
-          stream.msg ? stream.msg : "");
-      auto inflateEndGuard = folly::makeGuard([&] {
-        if (inflateEnd(&stream) != Z_OK) {
-          LOG(WARNING) << "inflateEnd: " << (stream.msg ? stream.msg : "");
-        }
-      });
-      // Decompress.
-      stream.next_in =
-          const_cast<Bytef*>(reinterpret_cast<const Bytef*>(pageData));
-      stream.avail_in = static_cast<uInt>(compressedSize);
-      stream.next_out =
-          reinterpret_cast<Bytef*>(uncompressedData_->asMutable<char>());
-      stream.avail_out = static_cast<uInt>(uncompressedSize);
-      ret = inflate(&stream, Z_FINISH);
-      VELOX_CHECK(
-          ret == Z_STREAM_END,
-          "GZipCodec failed: {}",
-          stream.msg ? stream.msg : "");
-      return uncompressedData_->as<char>();
-    }
-    case thrift::CompressionCodec::LZ4:
-    case thrift::CompressionCodec::LZO: {
-      return decompressLz4AndLzo(
-          pageData,
-          uncompressedData_,
-          compressedSize,
+  std::unique_ptr<dwio::common::SeekableInputStream> inputStream =
+      std::make_unique<dwio::common::SeekableArrayInputStream>(
+          pageData, compressedSize, 0);
+  auto streamDebugInfo =
+      fmt::format("Page Reader: Stream {}", inputStream_->getName());
+  std::unique_ptr<dwio::common::SeekableInputStream> decompressedStream =
+      dwio::common::compression::createDecompressor(
+          ThriftCodecToCompressionKind(codec_),
+          std::move(inputStream),
           uncompressedSize,
           pool_,
-          codec_);
-    }
-    default:
-      VELOX_FAIL("Unsupported Parquet compression type '{}'", codec_);
-  }
+          getParquetDecompressionOptions(),
+          streamDebugInfo,
+          nullptr,
+          true,
+          compressedSize);
+
+  dwio::common::ensureCapacity<char>(
+      uncompressedData_, uncompressedSize, &pool_);
+  decompressedStream->readFully(
+      uncompressedData_->asMutable<char>(), uncompressedSize);
+
+  return uncompressedData_->as<char>();
 }
 
 void PageReader::setPageRowInfo(bool forRepDef) {
