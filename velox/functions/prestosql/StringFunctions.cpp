@@ -292,51 +292,59 @@ class ConcatWsFunction : public exec::VectorFunction {
         name,
         numArgs);
 
-    sep_ = inputArgs[0]
-               .constantValue->as<ConstantVector<StringView>>()
-               ->valueAt(0)
-               .str();
-    auto numCols = numArgs - 1; // skip separator
+    BaseVector* constantPattern = inputArgs[0].constantValue.get();
+    VELOX_USER_CHECK(
+        constantPattern != nullptr && !constantPattern->isNullAt(0),
+        "{} requires first argument to be a constant string",
+        name);
+
+    delim_ = constantPattern->as<ConstantVector<StringView>>()->valueAt(0).str();
+    std::cout << "ggtest concat_ws: " << delim_ << " " << numArgs << std::endl;
 
     // Save constant values to constantStrings_.
     // Identify and combine consecutive constant inputs.
-    argMapping_.reserve(numCols);
-    constantStrings_.reserve(numCols);
+    argMapping_.reserve(numArgs - 1);
+    constantStrings_.reserve(numArgs - 1);
 
-    for (auto i = 0; i < numCols; ++i) {
+    for (auto i = 1; i < numArgs; ++i) {
       argMapping_.push_back(i);
 
-      auto strIdx = i + 1;
-      const auto& arg = inputArgs[strIdx];
+      std::cout << "ggtest idx:" << i << std::endl;
+      const auto& arg = inputArgs[i];
       if (arg.constantValue) {
         std::string value = arg.constantValue->as<ConstantVector<StringView>>()
                                 ->valueAt(0)
                                 .str();
+        std::cout << "ggtest value:" << value << std::endl;
 
-        column_index_t j = strIdx + 1;
+        column_index_t j = i + 1;
         for (; j < inputArgs.size(); ++j) {
+          std::cout << "ggtest j:" << j << std::endl;
           if (!inputArgs[j].constantValue) {
+            std::cout << "ggtest j break" << std::endl;
             break;
           }
 
-          value += sep_ +
+          value += delim_ +
               inputArgs[j]
                   .constantValue->as<ConstantVector<StringView>>()
                   ->valueAt(0)
                   .str();
+          std::cout << "ggtest j value:" << value << std::endl;
         }
 
         constantStrings_.push_back(std::string(value.data(), value.size()));
 
-        strIdx = j - 1;
-        i = strIdx - 1;
+        i = j - 1;
+        std::cout << "ggtest update i:" << i << std::endl;
       } else {
         constantStrings_.push_back(std::string());
+        std::cout << "ggtest blank" << std::endl;
       }
     }
 
     // Create StringViews for constant strings.
-    constantStringViews_.reserve(numCols);
+    constantStringViews_.reserve(numArgs - 1);
     for (const auto& constantString : constantStrings_) {
       constantStringViews_.push_back(
           StringView(constantString.data(), constantString.size()));
@@ -374,12 +382,17 @@ class ConcatWsFunction : public exec::VectorFunction {
     // Calculate the combined size of the result strings.
     size_t totalResultBytes = 0;
     rows.applyToSelected([&](int row) {
+      auto isFirst = true;
       for (int i = 0; i < numArgs; i++) {
-        if (constantStringViews_[i].empty()) {
-          auto value = decodedArgs[i]->valueAt<StringView>(row);
+        auto value =
+            constantStringViews_[i].empty() ? decodedArgs[i]->valueAt<StringView>(row) : constantStringViews_[i];
+        if (!value.empty()) {
+          if (isFirst) {
+            isFirst = false;
+          } else {
+            totalResultBytes += delim_.size();
+          }
           totalResultBytes += value.size();
-        } else {
-          totalResultBytes += constantStringViews_[i].size();
         }
       }
     });
@@ -390,6 +403,7 @@ class ConcatWsFunction : public exec::VectorFunction {
     rows.applyToSelected([&](int row) {
       const char* start = rawBuffer + offset;
       size_t combinedSize = 0;
+      auto isFirst = true;
       for (int i = 0; i < numArgs; i++) {
         StringView value;
         if (constantStringViews_[i].empty()) {
@@ -399,6 +413,13 @@ class ConcatWsFunction : public exec::VectorFunction {
         }
         auto size = value.size();
         if (size > 0) {
+          if (isFirst) {
+            isFirst = false;
+          } else {
+            memcpy(rawBuffer + offset, delim_.data(), delim_.size());
+            offset += delim_.size();
+            combinedSize += delim_.size();
+          }
           memcpy(rawBuffer + offset, value.data(), size);
           combinedSize += size;
           offset += size;
@@ -413,7 +434,6 @@ class ConcatWsFunction : public exec::VectorFunction {
     return {exec::FunctionSignatureBuilder()
                 .returnType("varchar")
                 .argumentType("varchar")
-                .argumentType("varchar")
                 .variableArity()
                 .build()};
   }
@@ -423,7 +443,7 @@ class ConcatWsFunction : public exec::VectorFunction {
   }
 
  private:
-  std::string sep_;
+  std::string delim_;
   std::vector<column_index_t> argMapping_;
   std::vector<std::string> constantStrings_;
   std::vector<StringView> constantStringViews_;
