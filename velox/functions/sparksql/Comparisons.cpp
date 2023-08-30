@@ -38,27 +38,99 @@ class ComparisonFunction final : public exec::VectorFunction {
       exec::EvalCtx& context,
       VectorPtr& result) const override {
     context.ensureWritable(rows, BOOLEAN(), result);
-    auto* flatResult = result->asFlatVector<bool>();
+    auto* flatResult = result->asUnchecked<FlatVector<bool>>();
     const Cmp cmp;
 
-    exec::DecodedArgs decodedArgs(rows, args, context);
-    auto decodedArg0 = decodedArgs.at(0);
-    auto decodedArg1 = decodedArgs.at(1);
-    if (decodedArg0->isIdentityMapping() && decodedArg1->isConstantMapping()) {
-      rows.applyToSelected([&](auto i) {
-        flatResult->set(
-            i, cmp(decodedArg0->valueAt<T>(i), decodedArg1->valueAt<T>(0)));
+    if (args[0]->isFlatEncoding() && args[1]->isFlatEncoding()) {
+      // Fast path for (flat, flat).
+      auto rawA = args[0]->asUnchecked<FlatVector<T>>()->mutableRawValues();
+      auto rawB = args[1]->asUnchecked<FlatVector<T>>()->mutableRawValues();
+      rows.applyToSelected(
+          [&](vector_size_t i) { flatResult->set(i, cmp(rawA[i], rawB[i])); });
+    } else if (args[0]->isConstantEncoding() && args[1]->isFlatEncoding()) {
+      // Fast path for (const, flat).
+      auto constant = args[0]->asUnchecked<ConstantVector<T>>()->valueAt(0);
+      auto rawValues =
+          args[1]->asUnchecked<FlatVector<T>>()->mutableRawValues();
+      rows.applyToSelected([&](vector_size_t i) {
+        flatResult->set(i, cmp(constant, rawValues[i]));
       });
-    } else if (
-        decodedArg0->isConstantMapping() && decodedArg1->isIdentityMapping()) {
-      rows.applyToSelected([&](auto i) {
-        flatResult->set(
-            i, cmp(decodedArg0->valueAt<T>(0), decodedArg1->valueAt<T>(i)));
+    } else if (args[0]->isFlatEncoding() && args[1]->isConstantEncoding()) {
+      // Fast path for (flat, const).
+      auto rawValues =
+          args[0]->asUnchecked<FlatVector<T>>()->mutableRawValues();
+      auto constant = args[1]->asUnchecked<ConstantVector<T>>()->valueAt(0);
+      rows.applyToSelected([&](vector_size_t i) {
+        flatResult->set(i, cmp(rawValues[i], constant));
       });
     } else {
-      rows.applyToSelected([&](auto i) {
+      // Fast path if one or more arguments are encoded.
+      exec::DecodedArgs decodedArgs(rows, args, context);
+      auto decoded0 = decodedArgs.at(0);
+      auto decoded1 = decodedArgs.at(1);
+      rows.applyToSelected([&](vector_size_t i) {
         flatResult->set(
-            i, cmp(decodedArg0->valueAt<T>(i), decodedArg1->valueAt<T>(i)));
+            i, cmp(decoded0->valueAt<T>(i), decoded1->valueAt<T>(i)));
+      });
+    }
+  }
+};
+
+// BoolComparisonFunction for bool as it uses compact representation
+template <typename Cmp>
+class BoolComparisonFunction final : public exec::VectorFunction {
+  bool supportsFlatNoNullsFastPath() const override {
+    return true;
+  }
+
+  void apply(
+      const SelectivityVector& rows,
+      std::vector<VectorPtr>& args,
+      const TypePtr& outputType,
+      exec::EvalCtx& context,
+      VectorPtr& result) const override {
+    context.ensureWritable(rows, BOOLEAN(), result);
+    auto* flatResult = result->asUnchecked<FlatVector<bool>>();
+    const Cmp cmp;
+
+    if (args[0]->isFlatEncoding() && args[1]->isFlatEncoding()) {
+      // Fast path for (flat, flat).
+      auto rawA = args[0]
+                      ->asUnchecked<FlatVector<bool>>()
+                      ->template mutableRawValues<uint64_t>();
+      auto rawB = args[1]
+                      ->asUnchecked<FlatVector<bool>>()
+                      ->template mutableRawValues<uint64_t>();
+      rows.applyToSelected([&](vector_size_t i) {
+        flatResult->set(
+            i, cmp(bits::isBitSet(rawA, i), bits::isBitSet(rawA, i)));
+      });
+    } else if (args[0]->isConstantEncoding() && args[1]->isFlatEncoding()) {
+      // Fast path for (const, flat).
+      auto constant = args[0]->asUnchecked<ConstantVector<bool>>()->valueAt(0);
+      auto rawValues = args[1]
+                           ->asUnchecked<FlatVector<bool>>()
+                           ->template mutableRawValues<uint64_t>();
+      rows.applyToSelected([&](vector_size_t i) {
+        flatResult->set(i, cmp(constant, bits::isBitSet(rawValues, i)));
+      });
+    } else if (args[0]->isFlatEncoding() && args[1]->isConstantEncoding()) {
+      // Fast path for (flat, const).
+      auto rawValues = args[0]
+                           ->asUnchecked<FlatVector<bool>>()
+                           ->template mutableRawValues<uint64_t>();
+      auto constant = args[1]->asUnchecked<ConstantVector<bool>>()->valueAt(0);
+      rows.applyToSelected([&](vector_size_t i) {
+        flatResult->set(i, cmp(bits::isBitSet(rawValues, i), constant));
+      });
+    } else {
+      // Fast path if one or more arguments are encoded.
+      exec::DecodedArgs decodedArgs(rows, args, context);
+      auto decoded0 = decodedArgs.at(0);
+      auto decoded1 = decodedArgs.at(1);
+      rows.applyToSelected([&](vector_size_t i) {
+        flatResult->set(
+            i, cmp(decoded0->valueAt<bool>(i), decoded1->valueAt<bool>(i)));
       });
     }
   }
@@ -78,7 +150,6 @@ std::shared_ptr<exec::VectorFunction> makeImpl(
     return std::make_shared<ComparisonFunction<      \
         Cmp<TypeTraits<TypeKind::kind>::NativeType>, \
         TypeKind::kind>>();
-    SCALAR_CASE(BOOLEAN)
     SCALAR_CASE(TINYINT)
     SCALAR_CASE(SMALLINT)
     SCALAR_CASE(INTEGER)
@@ -90,6 +161,9 @@ std::shared_ptr<exec::VectorFunction> makeImpl(
     SCALAR_CASE(VARBINARY)
     SCALAR_CASE(TIMESTAMP)
 #undef SCALAR_CASE
+    case TypeKind::BOOLEAN:
+      return std::make_shared<BoolComparisonFunction<
+          Cmp<TypeTraits<TypeKind::BOOLEAN>::NativeType>>>();
     default:
       VELOX_NYI(
           "{} does not support arguments of type {}",
@@ -182,7 +256,7 @@ class EqualtoNullSafe final : public exec::VectorFunction {
     DecodedVector* decoded0 = decodedArgs.at(0);
     DecodedVector* decoded1 = decodedArgs.at(1);
     context.ensureWritable(rows, BOOLEAN(), result);
-    auto* flatResult = result->asFlatVector<bool>();
+    auto* flatResult = result->asUnchecked<FlatVector<bool>>();
     flatResult->mutableRawValues<int64_t>();
 
     VELOX_DYNAMIC_TYPE_DISPATCH(
