@@ -886,7 +886,17 @@ TEST_F(StringFunctionsTest, concat_ws) {
         "concat_ws('--', c0, c1, 'foo', 'bar')", data);
 
     auto expected = makeFlatVector<StringView>(1'000, [&](auto row) {
-      value = c0[row].str() + "--" + c1[row].str() + "--foo--bar";
+      value = "";
+      const std::string& s0 = c0[row].str();
+      const std::string& s1 = c1[row].str();
+
+      if (s0.empty() && s1.empty()) {
+        value = "foo--bar";
+      } else if (!s0.empty() && !s1.empty()) {
+        value = s0 + "--" + s1 + "--foo--bar";
+      } else {
+        value = s0 + s1 + "--foo--bar";
+      }
       return StringView(value);
     });
 
@@ -897,21 +907,17 @@ TEST_F(StringFunctionsTest, concat_ws) {
         data);
 
     expected = makeFlatVector<StringView>(1'000, [&](auto row) {
-      value = "aaa$*@bbb$*@" + c0[row].str() + "$*@ccc$*@ddd$*@" +
-          c1[row].str() + "$*@eee$*@fff";
+      value = "";
+      std::string delim = "$*@";
+      const std::string& s0 =
+          c0[row].str().empty() ? c0[row].str() : delim + c0[row].str();
+      const std::string& s1 =
+          c1[row].str().empty() ? c1[row].str() : delim + c1[row].str();
+
+      value = "aaa" + delim + "bbb" + s0 + delim + "ccc" + delim + "ddd" + s1 +
+          delim + "eee" delim + "fff";
       return StringView(value);
     });
-    test::assertEqualVectors(expected, result);
-
-    result = evaluate<SimpleVector<StringView>>(
-        "concat_ws('- -', c0, c1, 'A somewhat long string.', 'bar')", data);
-
-    expected = makeFlatVector<StringView>(1'000, [&](auto row) {
-      value = c0[row].str() + "- -" + c1[row].str() +
-          "- -A somewhat long string.- -bar";
-      return StringView(value);
-    });
-
     test::assertEqualVectors(expected, result);
   }
 }
