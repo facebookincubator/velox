@@ -298,8 +298,8 @@ class ConcatWsFunction : public exec::VectorFunction {
         "{} requires first argument to be a constant string",
         name);
 
-    delim_ = constantPattern->as<ConstantVector<StringView>>()->valueAt(0).str();
-    std::cout << "ggtest concat_ws: " << delim_ << " " << numArgs << std::endl;
+    delim_ =
+        constantPattern->as<ConstantVector<StringView>>()->valueAt(0).str();
 
     // Save constant values to constantStrings_.
     // Identify and combine consecutive constant inputs.
@@ -309,19 +309,15 @@ class ConcatWsFunction : public exec::VectorFunction {
     for (auto i = 1; i < numArgs; ++i) {
       argMapping_.push_back(i);
 
-      std::cout << "ggtest idx:" << i << std::endl;
       const auto& arg = inputArgs[i];
       if (arg.constantValue) {
         std::string value = arg.constantValue->as<ConstantVector<StringView>>()
                                 ->valueAt(0)
                                 .str();
-        std::cout << "ggtest value:" << value << std::endl;
 
         column_index_t j = i + 1;
         for (; j < inputArgs.size(); ++j) {
-          std::cout << "ggtest j:" << j << std::endl;
           if (!inputArgs[j].constantValue) {
-            std::cout << "ggtest j break" << std::endl;
             break;
           }
 
@@ -330,16 +326,13 @@ class ConcatWsFunction : public exec::VectorFunction {
                   .constantValue->as<ConstantVector<StringView>>()
                   ->valueAt(0)
                   .str();
-          std::cout << "ggtest j value:" << value << std::endl;
         }
 
         constantStrings_.push_back(std::string(value.data(), value.size()));
 
         i = j - 1;
-        std::cout << "ggtest update i:" << i << std::endl;
       } else {
         constantStrings_.push_back(std::string());
-        std::cout << "ggtest blank" << std::endl;
       }
     }
 
@@ -384,8 +377,9 @@ class ConcatWsFunction : public exec::VectorFunction {
     rows.applyToSelected([&](int row) {
       auto isFirst = true;
       for (int i = 0; i < numArgs; i++) {
-        auto value =
-            constantStringViews_[i].empty() ? decodedArgs[i]->valueAt<StringView>(row) : constantStringViews_[i];
+        auto value = constantStringViews_[i].empty()
+            ? decodedArgs[i]->valueAt<StringView>(row)
+            : constantStringViews_[i];
         if (!value.empty()) {
           if (isFirst) {
             isFirst = false;
