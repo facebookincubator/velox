@@ -193,7 +193,7 @@ BENCHMARK(computeValueIdsLowCardinalityLargeBatchSize) {
   for (int i = 0; i < 10; i++) {
     raw_vector<uint64_t> hashes(batchSize);
     SelectivityVector rows(batchSize);
-    VectorHasher hasher(CppToType<int64_t>::create(), 0);
+    VectorHasher hasher(BIGINT(), 0);
     hasher.decode(*values, rows);
     suspender.dismiss();
 

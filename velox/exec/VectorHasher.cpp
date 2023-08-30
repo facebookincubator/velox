@@ -247,7 +247,7 @@ bool VectorHasher::makeValueIdsDecoded(
 
   bool success = true;
   int decodedBaseVisited = 0;
-  rows.testSelected([&](vector_size_t row) {
+  rows.testSelected([&](vector_size_t row) INLINE_LAMBDA {
     if constexpr (mayHaveNulls) {
       if (decoded_.isNullAt(row)) {
         if (multiplier_ == 1) {
