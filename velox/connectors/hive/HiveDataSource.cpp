@@ -204,55 +204,6 @@ void addSubfields(
   }
 }
 
-bool testFilters(
-    common::ScanSpec* scanSpec,
-    dwio::common::Reader* reader,
-    const std::string& filePath,
-    const std::unordered_map<std::string, std::optional<std::string>>&
-        partitionKey,
-    std::unordered_map<std::string, std::shared_ptr<HiveColumnHandle>>&
-        partitionKeysHandle) {
-  auto totalRows = reader->numberOfRows();
-  const auto& fileTypeWithId = reader->typeWithId();
-  const auto& rowType = reader->rowType();
-  for (const auto& child : scanSpec->children()) {
-    if (child->filter()) {
-      const auto& name = child->fieldName();
-      if (!rowType->containsChild(name)) {
-        // If missing column is partition key.
-        auto iter = partitionKey.find(name);
-        if (iter != partitionKey.end() && iter->second.has_value()) {
-          return applyPartitionFilter(
-              partitionKeysHandle[name]->dataType()->kind(),
-              iter->second.value(),
-              child->filter());
-        }
-        // Column is missing. Most likely due to schema evolution.
-        if (child->filter()->isDeterministic() &&
-            !child->filter()->testNull()) {
-          return false;
-        }
-      } else {
-        const auto& typeWithId = fileTypeWithId->childByName(name);
-        auto columnStats = reader->columnStatistics(typeWithId->id());
-        if (columnStats != nullptr &&
-            !testFilter(
-                child->filter(),
-                columnStats.get(),
-                totalRows.value(),
-                typeWithId->type())) {
-          VLOG(1) << "Skipping " << filePath
-                  << " based on stats and filter for column "
-                  << child->fieldName();
-          return false;
-        }
-      }
-    }
-  }
-
-  return true;
-}
-
 template <TypeKind ToKind>
 velox::variant convertFromString(const std::optional<std::string>& value) {
   if (value.has_value()) {
@@ -569,12 +520,7 @@ void HiveDataSource::addSplit(std::shared_ptr<ConnectorSplit> split) {
   }
 
   // Check filters and see if the whole split can be skipped.
-  if (!testFilters(
-          scanSpec_.get(),
-          reader_.get(),
-          split_->filePath,
-          split_->partitionKeys,
-          partitionKeys_)) {
+  if (!testFilters()) {
     emptySplit_ = true;
     ++runtimeStats_.skippedSplits;
     runtimeStats_.skippedSplitBytes += split_->length;
@@ -945,6 +891,56 @@ void HiveDataSource::configureRowReaderOptions(
     cs = std::make_shared<dwio::common::ColumnSelector>(rowType, columnNames);
   }
   options.select(cs).range(split_->start, split_->length);
+}
+
+bool HiveDataSource::testFilters() {
+  auto totalRows = reader_->numberOfRows();
+  const auto& fileTypeWithId = reader_->typeWithId();
+  const auto& rowType = reader_->rowType();
+  for (const auto& child : scanSpec_->children()) {
+    if (child->filter()) {
+      const auto& name = child->fieldName();
+      if (!rowType->containsChild(name)) {
+        // If missing column is partition key.
+        auto iter = split_->partitionKeys.find(name);
+        if (iter != split_->partitionKeys.end() && iter->second.has_value()) {
+          return applyPartitionFilter(
+              partitionKeys_[name]->dataType()->kind(),
+              iter->second.value(),
+              child->filter());
+        }
+        // Column is missing. Most likely due to schema evolution.
+        if (child->filter()->isDeterministic()) {
+          if (!child->filter()->testNull()) {
+            return false;
+          } else {
+            // Replace "<missing_column> is null" with constant "true", so we
+            // don't fail later on not finding the column (we ignore constant
+            // value when there is a filter in the column reader, but the
+            // constant value is set here for ColumnSelector to not throw).
+            auto isNullSpec = scanSpec_->childByName(child->fieldName());
+            setConstantValue(isNullSpec, BOOLEAN(), velox::variant(true));
+          }
+        }
+      } else {
+        const auto& typeWithId = fileTypeWithId->childByName(name);
+        auto columnStats = reader_->columnStatistics(typeWithId->id());
+        if (columnStats != nullptr &&
+            !testFilter(
+                child->filter(),
+                columnStats.get(),
+                totalRows.value(),
+                typeWithId->type())) {
+          VLOG(1) << "Skipping " << split_->filePath
+                  << " based on stats and filter for column "
+                  << child->fieldName();
+          return false;
+        }
+      }
+    }
+  }
+
+  return true;
 }
 
 } // namespace facebook::velox::connector::hive

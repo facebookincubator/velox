@@ -589,27 +589,38 @@ TEST_F(TableScanTest, subfieldPruningArrayType) {
 // columns.
 TEST_F(TableScanTest, missingColumns) {
   // Simulate schema change of adding a new column.
-  // - Create an "old" file with one column.
-  // - Create a "new" file with two columns.
-  vector_size_t size = 1'000;
-  auto oldData = makeRowVector(
-      {makeFlatVector<int64_t>(size, [](auto row) { return row; })});
-  auto newData = makeRowVector({
-      makeFlatVector<int64_t>(size, [](auto row) { return -row; }),
-      makeFlatVector<double>(size, [](auto row) { return row * 0.1; }),
-  });
+  // Create even files (old) with one column, odd ones (new) with two columns.
+  const vector_size_t size = 1'000;
+  std::vector<RowVectorPtr> rows;
+  const size_t numFiles{10};
+  auto filePaths = makeFilePaths(numFiles);
+  for (size_t i = 0; i < numFiles; ++i) {
+    if (i % 2 == 0) {
+      rows.emplace_back(makeRowVector({makeFlatVector<int64_t>(
+          size, [&](auto row) { return row + i * size; })}));
+    } else {
+      rows.emplace_back(makeRowVector({
+          makeFlatVector<int64_t>(
+              size, [&](auto row) { return -(row + i * size); }),
+          makeFlatVector<double>(
+              size, [&](auto row) { return row * 0.1 + i * size; }),
+      }));
+    }
+    writeToFile(filePaths[i]->path, {rows.back()});
+  }
 
-  auto filePaths = makeFilePaths(2);
-  writeToFile(filePaths[0]->path, {oldData});
-  writeToFile(filePaths[1]->path, {newData});
-
-  auto oldDataWithNull = makeRowVector({
-      makeFlatVector<int64_t>(size, [](auto row) { return row; }),
-      BaseVector::createNullConstant(DOUBLE(), size, pool_.get()),
-  });
-  createDuckDbTable({oldDataWithNull, newData});
+  // For duckdb ensure we have nulls for the missing column.
+  // Overwrite 'rows' and also reuse its 1st column vector.
+  auto constNull{BaseVector::createNullConstant(DOUBLE(), size, pool_.get())};
+  for (size_t i = 0; i < numFiles; ++i) {
+    if (i % 2 == 0) {
+      rows[i] = makeRowVector({rows[i]->childAt(0), constNull});
+    }
+  }
+  createDuckDbTable(rows);
 
   auto outputType = ROW({"c0", "c1"}, {BIGINT(), DOUBLE()});
+  auto outputTypeC0 = ROW({"c0"}, {BIGINT()});
 
   auto op = PlanBuilder(pool_.get()).tableScan(outputType).planNode();
   assertQuery(op, filePaths, "SELECT * FROM tmp");
@@ -619,6 +630,38 @@ TEST_F(TableScanTest, missingColumns) {
            .tableScan(outputType, {"c1 <= 100.1"})
            .planNode();
   assertQuery(op, filePaths, "SELECT * FROM tmp WHERE c1 <= 100.1");
+
+  // Use missing column in a tuple domain filter. Select *.
+  op = PlanBuilder(pool_.get())
+           .tableScan(outputType, {"c1 <= 2000.1"})
+           .planNode();
+  assertQuery(op, filePaths, "SELECT * FROM tmp WHERE c1 <= 2000.1");
+
+  // Use missing column in a tuple domain filter. Select c0.
+  op = PlanBuilder(pool_.get())
+           .tableScan(outputTypeC0, {"c1 <= 3000.1"}, "", outputType)
+           .planNode();
+  assertQuery(op, filePaths, "SELECT c0 FROM tmp WHERE c1 <= 3000.1");
+
+  // Use missing column in a tuple domain filter. Select count(*).
+  op = PlanBuilder(pool_.get())
+           .tableScan(ROW({}, {}), {"c1 <= 4000.1"}, "", outputType)
+           .singleAggregation({}, {"count(1)"})
+           .planNode();
+  assertQuery(op, filePaths, "SELECT count(*) FROM tmp WHERE c1 <= 4000.1");
+
+  // Use missing column 'c1' in 'is null' filter, while not selecting 'c1'.
+  op = PlanBuilder(pool_.get())
+           .tableScan(outputTypeC0, {"c1 is null"}, "", outputType)
+           .planNode();
+  assertQuery(op, filePaths, "SELECT c0 FROM tmp WHERE c1 is null");
+
+  // Use missing column 'c1' in 'is null' filter, while not selecting anything.
+  op = PlanBuilder(pool_.get())
+           .tableScan(ROW({}, {}), {"c1 is null"}, "", outputType)
+           .singleAggregation({}, {"count(1)"})
+           .planNode();
+  assertQuery(op, filePaths, "SELECT count(*) FROM tmp WHERE c1 is null");
 
   // Use column aliases.
   outputType = ROW({"a", "b"}, {BIGINT(), DOUBLE()});

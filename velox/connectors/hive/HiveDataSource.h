@@ -139,6 +139,10 @@ class HiveDataSource : public DataSource {
       dwio::common::RowReaderOptions&,
       const RowTypePtr& rowType) const;
 
+  // Checks filters and returns false if the whole split can be skipped, true
+  // otherwise.
+  bool testFilters();
+
   const RowTypePtr outputType_;
   // Column handles for the partition key columns keyed on partition key column
   // name.
