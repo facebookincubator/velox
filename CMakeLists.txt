@@ -31,7 +31,7 @@ project(velox)
 # If we are in an active conda env disable search in system paths and add env to
 # prefix path
 if(DEFINED ENV{CONDA_PREFIX})
-  if(NOT DEFINED ENV{VELOX_DEPENDENCY_SOURCE} OR $ENV{VELOX_DEPENDENCY_SOURCE}
+  if(NOT DEFINED ENV{VELOX_DEPENDENCY_SOURCE} OR "$ENV{VELOX_DEPENDENCY_SOURCE}"
                                                  STREQUAL "CONDA")
     message(STATUS "Using Conda environment: $ENV{CONDA_PREFIX}")
     set(CMAKE_FIND_USE_SYSTEM_ENVIRONMENT_PATH FALSE)
@@ -39,7 +39,7 @@ if(DEFINED ENV{CONDA_PREFIX})
     # Override in case it was set to CONDA
     set(ENV{VELOX_DEPENDENCY_SOURCE} AUTO)
   elseif(DEFINED ENV{VELOX_DEPENDENCY_SOURCE}
-         AND NOT $ENV{VELOX_DEPENDENCY_SOURCE} STREQUAL "CONDA")
+         AND NOT "$ENV{VELOX_DEPENDENCY_SOURCE}" STREQUAL "CONDA")
     message(STATUS "Overriding Conda environment: $ENV{CONDA_PREFIX}")
   endif()
 endif()
