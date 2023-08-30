@@ -121,6 +121,7 @@ bool PeeledEncoding::peelInternal(
       if (leaf->isLazy() && leaf->asUnchecked<LazyVector>()->isLoaded()) {
         auto lazy = leaf->asUnchecked<LazyVector>();
         leaf = lazy->loadedVectorShared();
+        setPeeled(leaf, fieldIndex, peeledVectors);
       }
       if (!constantFields.empty() && constantFields[fieldIndex]) {
         setPeeled(leaf, fieldIndex, maybePeeled);

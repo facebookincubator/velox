@@ -439,6 +439,27 @@ TEST_P(PeeledEncodingBasicTests, intermidiateLazyLayer) {
   assertEqualVectors(peeledVectors[0], flat1, *translatedRows);
 }
 
+TEST_P(PeeledEncodingBasicTests, innerLazyLayer) {
+  LocalDecodedVector localDecodedVector(execCtx_);
+  const SelectivityVector& rows = GetParam().rows;
+
+  auto lazy = fuzzer->wrapInLazyVector(flat1);
+  auto input = wrapInDictionaryLayers(lazy, {&dictWrap1});
+  BaseVector::loadedVectorShared(input);
+  std::vector<VectorPtr> peeledVectors;
+  auto peeledEncoding = PeeledEncoding::peel(
+      {input}, rows, localDecodedVector, true, peeledVectors);
+
+  ASSERT_EQ(peeledVectors.size(), 1);
+  ASSERT_EQ(peeledEncoding->wrapEncoding(), VectorEncoding::Simple::DICTIONARY);
+  ASSERT_TRUE(peeledVectors[0]->isFlatEncoding());
+
+  LocalSelectivityVector traslatedRowsHolder(execCtx_);
+  auto translatedRows =
+      peeledEncoding->translateToInnerRows(rows, traslatedRowsHolder);
+  assertEqualVectors(peeledVectors[0], flat1, *translatedRows);
+}
+
 TEST_F(PeeledEncodingTest, peelingFails) {
   VectorFuzzer::Options options;
   options.nullRatio = 0.3;
