@@ -915,7 +915,7 @@ TEST_F(StringFunctionsTest, concat_ws) {
           c1[row].str().empty() ? c1[row].str() : delim + c1[row].str();
 
       value = "aaa" + delim + "bbb" + s0 + delim + "ccc" + delim + "ddd" + s1 +
-          delim + "eee" delim + "fff";
+          delim + "eee" + delim + "fff";
       return StringView(value);
     });
     test::assertEqualVectors(expected, result);
