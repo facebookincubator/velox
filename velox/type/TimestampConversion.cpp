@@ -612,7 +612,9 @@ int32_t castFromDateString(const char* str, size_t len, bool isIso8601) {
       VELOX_USER_FAIL(
           "Unable to parse date value: \"{}\"."
           "Valid date string patterns include "
-          "(YYYY, YYYY-MM, YYYY-MM-DD), and any pattern prefixed with [+-]",
+          "(yyyy*, yyyy*-[m]m, yyyy*-[m]m-[d]d, "
+          "yyyy*-[m]m-[d]d *, yyyy*-[m]m-[d]dT*), "
+          "and any pattern prefixed with [+-]",
           std::string(str, len));
     }
   }
