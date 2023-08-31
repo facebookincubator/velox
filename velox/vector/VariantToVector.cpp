@@ -79,16 +79,14 @@ ArrayVectorPtr variantArrayToVector(
 
 struct NestedTypeCounter {
   TypeKind kind = TypeKind::UNKNOWN;
-  vector_size_t rowCount = 0;
-  vector_size_t rowsInserted = 0;
+  vector_size_t memberCount = 0;
+  vector_size_t membersInserted = 0;
   std::vector<NestedTypeCounter> children;
-  uint8_t precision = 0;
-  uint8_t scale = 0;
 };
 
 static void validateOrSetType(NestedTypeCounter& counter, const variant& v) {
-  if (v.isNull()) // If a row is null, it can be UNKNOWN, INVALID, or matching
-                  // our expected kind
+  if (v.isNull()) // If a variant is null, it can be UNKNOWN, INVALID, or
+                  // matching our expected kind
   {
     if (v.kind() != TypeKind::UNKNOWN && v.kind() != TypeKind::INVALID &&
         v.kind() != counter.kind) {
@@ -114,7 +112,7 @@ static void computeRowCountsAndType(
     NestedTypeCounter& counter,
     const variant& v) {
   validateOrSetType(counter, v);
-  counter.rowCount += 1;
+  counter.memberCount += 1;
   if (v.isNull()) {
     return;
   }
@@ -139,15 +137,17 @@ static VectorPtr allocateVector(
   switch (counter.kind) {
     case TypeKind::ARRAY: {
       BufferPtr sizes =
-          AlignedBuffer::allocate<vector_size_t>(counter.rowCount, pool, 0);
+          AlignedBuffer::allocate<vector_size_t>(counter.memberCount, pool, 0);
       BufferPtr offsets =
-          AlignedBuffer::allocate<vector_size_t>(counter.rowCount, pool, 0);
+          AlignedBuffer::allocate<vector_size_t>(counter.memberCount, pool, 0);
+      BufferPtr nulls =
+          AlignedBuffer::allocate<vector_size_t>(counter.memberCount, pool, 0);
       VectorPtr elements = allocateVector(counter.children.at(0), pool);
       return std::make_shared<ArrayVector>(
           pool,
           ARRAY(elements->type()),
-          /*nulls=*/nullptr,
-          counter.rowCount,
+          nulls,
+          counter.memberCount,
           std::move(offsets),
           std::move(sizes),
           std::move(elements));
@@ -155,7 +155,7 @@ static VectorPtr allocateVector(
     default: {
       TypePtr type;
       type = createScalarType(counter.kind);
-      return BaseVector::create(std::move(type), counter.rowCount, pool);
+      return BaseVector::create(std::move(type), counter.memberCount, pool);
     }
   }
 }
@@ -173,7 +173,7 @@ void setElementInFlatVector(
 static void incrementChildRowsInserted(NestedTypeCounter& counter) {
   for (NestedTypeCounter& child : counter.children) {
     incrementChildRowsInserted(child);
-    child.rowsInserted += 1;
+    child.membersInserted += 1;
   }
 }
 
@@ -182,7 +182,7 @@ static void insertVariantIntoVector(
     const variant& v,
     VectorPtr& vector) {
   if (v.isNull()) {
-    vector->setNull(counter.rowsInserted, true);
+    vector->setNull(counter.membersInserted, true);
     if (counter.kind == TypeKind::ROW) {
       incrementChildRowsInserted(counter);
     }
@@ -192,12 +192,12 @@ static void insertVariantIntoVector(
         auto asArray = vector->as<ArrayVector>();
         const std::vector<variant>& elements = v.array();
         vector_size_t offset = 0;
-        if (counter.rowsInserted != 0) {
-          offset = asArray->offsetAt(counter.rowsInserted - 1) +
-              asArray->sizeAt(counter.rowsInserted - 1);
+        if (counter.membersInserted != 0) {
+          offset = asArray->offsetAt(counter.membersInserted - 1) +
+              asArray->sizeAt(counter.membersInserted - 1);
         }
         asArray->setOffsetAndSize(
-            counter.rowsInserted, offset, elements.size());
+            counter.membersInserted, offset, elements.size());
         for (const variant& elt : elements) {
           insertVariantIntoVector(
               counter.children.at(0), elt, asArray->elements());
@@ -208,24 +208,24 @@ static void insertVariantIntoVector(
         VELOX_DYNAMIC_SCALAR_TYPE_DISPATCH(
             setElementInFlatVector,
             counter.kind,
-            counter.rowsInserted,
+            counter.membersInserted,
             v,
             vector);
         break;
       }
     }
-  counter.rowsInserted += 1;
+  counter.membersInserted += 1;
 }
 
 VectorPtr variantsToVector(
-    const std::vector<variant>& rows,
+    const std::vector<variant>& variants,
     velox::memory::MemoryPool* pool) {
   NestedTypeCounter counter;
-  for (const variant& v : rows) {
+  for (const variant& v : variants) {
     computeRowCountsAndType(counter, v);
   }
   VectorPtr resultVector = allocateVector(counter, pool);
-  for (const variant& v : rows) {
+  for (const variant& v : variants) {
     insertVariantIntoVector(counter, v, resultVector);
   }
   return resultVector;
