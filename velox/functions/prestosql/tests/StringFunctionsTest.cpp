@@ -173,11 +173,9 @@ class StringFunctionsTest : public FunctionBaseTest {
     testQuery("lower(upper(C0))");
   }
 
-  void testConcatCommonFlatVector(
+  void testConcatFlatVector(
       const std::vector<std::vector<std::string>>& inputTable,
-      const size_t argsCount,
-      const std::string& separator = "") {
-    bool concatWs = separator.size() > 0;
+      const size_t argsCount) {
     std::vector<VectorPtr> inputVectors;
 
     for (int i = 0; i < argsCount; i++) {
@@ -193,12 +191,7 @@ class StringFunctionsTest : public FunctionBaseTest {
     }
 
     auto buildConcatQuery = [&]() {
-      std::string output;
-      if (concatWs) {
-        output = "concat_ws('" + separator + "',";
-      } else {
-        output = "concat(";
-      }
+      std::string output = "concat(";
 
       for (int i = 0; i < argsCount; i++) {
         if (i != 0) {
@@ -210,9 +203,9 @@ class StringFunctionsTest : public FunctionBaseTest {
       return output;
     };
 
-    // Evaluate 'concat' or 'concat_ws' expression and verify no excessive
-    // memory allocation. We expect 2 allocations: one for the values buffer and
-    // another for the strings buffer. I.e. FlatVector<StringView>::values and
+    // Evaluate 'concat' expression and verify no excessive memory allocation.
+    // We expect 2 allocations: one for the values buffer and another for the
+    // strings buffer. I.e. FlatVector<StringView>::values and
     // FlatVector<StringView>::stringBuffers.
     auto numAllocsBefore = pool()->stats().numAllocs;
 
@@ -222,12 +215,9 @@ class StringFunctionsTest : public FunctionBaseTest {
     auto numAllocsAfter = pool()->stats().numAllocs;
     ASSERT_EQ(numAllocsAfter - numAllocsBefore, 2);
 
-    auto concatStd = [&](const std::vector<std::string>& inputs) {
+    auto concatStd = [](const std::vector<std::string>& inputs) {
       std::string output;
-      for (int i = 0; i < inputs.size(); i++) {
-        if (i != 0) {
-          output += separator;
-        }
+      for (auto& input : inputs) {
         output += inputs[i];
       }
 
@@ -748,7 +738,7 @@ TEST_F(StringFunctionsTest, concat) {
     }
 
     SCOPED_TRACE(fmt::format("Number of arguments: {}", argsCount));
-    testConcatCommonFlatVector(inputTable, argsCount);
+    testConcatFlatVector(inputTable, argsCount);
   }
 
   // Test constant input vector with 2 args
@@ -817,107 +807,6 @@ TEST_F(StringFunctionsTest, concat) {
       return StringView(value);
     });
 
-    test::assertEqualVectors(expected, result);
-  }
-}
-
-// Test concat_ws vector function
-TEST_F(StringFunctionsTest, concat_ws) {
-  size_t maxArgsCount = 10; // cols
-  size_t rowCount = 100;
-  size_t maxStringLength = 100;
-
-  std::vector<std::vector<std::string>> inputTable;
-  for (int argsCount = 1; argsCount <= maxArgsCount; argsCount++) {
-    inputTable.clear();
-
-    // Create table with argsCount columns
-    inputTable.resize(rowCount, std::vector<std::string>(argsCount));
-
-    // Fill the table
-    for (int row = 0; row < rowCount; row++) {
-      for (int col = 0; col < argsCount; col++) {
-        inputTable[row][col] =
-            generateRandomString(folly::Random::rand32() % maxStringLength);
-      }
-    }
-
-    SCOPED_TRACE(fmt::format("Number of arguments: {}", argsCount));
-    testConcatCommonFlatVector(inputTable, argsCount, "-");
-    testConcatCommonFlatVector(inputTable, argsCount, "testSep");
-  }
-
-  // Test constant input vector with 2 args
-  {
-    auto rows = makeRowVector(makeRowType({VARCHAR(), VARCHAR()}), 10);
-    auto c0 = generateRandomString(20);
-    auto c1 = generateRandomString(20);
-    auto result = evaluate<SimpleVector<StringView>>(
-        fmt::format("concat_ws('-', '{}', '{}')", c0, c1), rows);
-    for (int i = 0; i < 10; ++i) {
-      EXPECT_EQ(result->valueAt(i), c0 + "-" + c1);
-    }
-  }
-
-  // Multiple consecutive constant inputs.
-  {
-    std::string value;
-    auto data = makeRowVector({
-        makeFlatVector<StringView>(
-            1'000,
-            [&](auto /* row */) {
-              value = generateRandomString(
-                  folly::Random::rand32() % maxStringLength);
-              return StringView(value);
-            }),
-        makeFlatVector<StringView>(
-            1'000,
-            [&](auto /* row */) {
-              value = generateRandomString(
-                  folly::Random::rand32() % maxStringLength);
-              return StringView(value);
-            }),
-    });
-
-    auto c0 = data->childAt(0)->as<FlatVector<StringView>>()->rawValues();
-    auto c1 = data->childAt(1)->as<FlatVector<StringView>>()->rawValues();
-
-    auto result = evaluate<SimpleVector<StringView>>(
-        "concat_ws('--', c0, c1, 'foo', 'bar')", data);
-
-    auto expected = makeFlatVector<StringView>(1'000, [&](auto row) {
-      value = "";
-      const std::string& s0 = c0[row].str();
-      const std::string& s1 = c1[row].str();
-
-      if (s0.empty() && s1.empty()) {
-        value = "foo--bar";
-      } else if (!s0.empty() && !s1.empty()) {
-        value = s0 + "--" + s1 + "--foo--bar";
-      } else {
-        value = s0 + s1 + "--foo--bar";
-      }
-      return StringView(value);
-    });
-
-    test::assertEqualVectors(expected, result);
-
-    result = evaluate<SimpleVector<StringView>>(
-        "concat_ws('$*@', 'aaa', 'bbb', c0, 'ccc', 'ddd', c1, 'eee', 'fff')",
-        data);
-
-    expected = makeFlatVector<StringView>(1'000, [&](auto row) {
-      value = "";
-      std::string delim = "$*@";
-      const std::string& s0 =
-          c0[row].str().empty() ? c0[row].str() : delim + c0[row].str();
-      const std::string& s1 =
-          c1[row].str().empty() ? c1[row].str() : delim + c1[row].str();
-
-      value = "aaa" + delim + "bbb" + s0 + delim + "ccc" + delim + "ddd" + s1 +
-          delim + "eee" + delim + "fff";
-      return StringView(value);
-    });
     test::assertEqualVectors(expected, result);
   }
 }
