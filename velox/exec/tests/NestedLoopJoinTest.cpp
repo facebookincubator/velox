@@ -24,23 +24,6 @@ using namespace facebook::velox::exec::test;
 
 class NestedLoopJoinTest : public HiveConnectorTestBase {
  protected:
-  const std::string probeKeyName_{"t0"};
-  const std::string buildKeyName_{"u0"};
-  RowTypePtr probeType_{ROW({{probeKeyName_, BIGINT()}})};
-  RowTypePtr buildType_{ROW({{buildKeyName_, BIGINT()}})};
-  std::vector<std::string> comparisons_{"=", "<", "<=", "<>"};
-  std::vector<core::JoinType> joinTypes_{
-      core::JoinType::kInner,
-      core::JoinType::kLeft,
-      core::JoinType::kRight,
-      core::JoinType::kFull};
-  std::vector<std::string> outputLayout_{probeKeyName_, buildKeyName_};
-  std::string joinConditionStr_{probeKeyName_ + " {} " + buildKeyName_};
-  std::string queryStr_{fmt::format(
-      "SELECT {0}, {1} FROM t {{}} JOIN u ON t.{0} {{}} u.{1}",
-      probeKeyName_,
-      buildKeyName_)};
-
   void setProbeType(const RowTypePtr& probeType) {
     probeType_ = probeType;
   }
@@ -128,6 +111,24 @@ class NestedLoopJoinTest : public HiveConnectorTestBase {
       }
     }
   }
+
+ protected:
+  const std::string probeKeyName_{"t0"};
+  const std::string buildKeyName_{"u0"};
+  RowTypePtr probeType_{ROW({{probeKeyName_, BIGINT()}})};
+  RowTypePtr buildType_{ROW({{buildKeyName_, BIGINT()}})};
+  std::vector<std::string> comparisons_{"=", "<", "<=", "<>"};
+  std::vector<core::JoinType> joinTypes_{
+      core::JoinType::kInner,
+      core::JoinType::kLeft,
+      core::JoinType::kRight,
+      core::JoinType::kFull};
+  std::vector<std::string> outputLayout_{probeKeyName_, buildKeyName_};
+  std::string joinConditionStr_{probeKeyName_ + " {} " + buildKeyName_};
+  std::string queryStr_{fmt::format(
+      "SELECT {0}, {1} FROM t {{}} JOIN u ON t.{0} {{}} u.{1}",
+      probeKeyName_,
+      buildKeyName_)};
 };
 
 TEST_F(NestedLoopJoinTest, basic) {
