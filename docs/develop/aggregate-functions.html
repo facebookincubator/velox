@@ -454,8 +454,8 @@ implement toIntermediate() method which simply returns the input unmodified.</p>
 <span class="c1">/// Produces an accumulator initialized from a single value for each</span>
 <span class="c1">/// row in &#39;rows&#39;. The raw arguments of the aggregate are in &#39;args&#39;,</span>
 <span class="c1">/// which have the same meaning as in addRawInput. The result is</span>
-<span class="c1">/// placed in &#39;result&#39;. &#39;result is allocated if nullptr, otherwise</span>
-<span class="c1">/// it is expected to be a writable flat vector of the right type.</span>
+<span class="c1">/// placed in &#39;result&#39;. &#39;result&#39; is expected to be a writable flat vector of</span>
+<span class="c1">/// the right type.</span>
 <span class="c1">///</span>
 <span class="c1">/// @param rows A set of rows to produce intermediate results for. The</span>
 <span class="c1">/// &#39;result&#39; is expected to have rows.size() rows. Invalid rows represent rows</span>
