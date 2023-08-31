@@ -383,16 +383,28 @@ DecodedVector::DictionaryWrapping DecodedVector::dictionaryWrapping(
   BufferPtr indices = copyIndicesBuffer(indices_, size, wrapper.pool());
   // Only copy nulls if we have nulls coming from one of the wrappers, don't
   // do it if nulls are missing or from the base vector.
-  // TODO: remove the check for hasExtraNulls_ after #3553 is merged.
-  BufferPtr nulls =
-      hasExtraNulls_ ? copyNullsBuffer(nulls_, size, wrapper.pool()) : nullptr;
+  BufferPtr nulls;
+  if (hasExtraNulls_) {
+    nulls = copyNullsBuffer(nulls_, size, wrapper.pool());
+  } else {
+    if (!wrapper.mayHaveNulls()) {
+      nulls =
+          AlignedBuffer::allocate<bool>(size, wrapper.pool(), bits::kNotNull);
+
+      auto* mutableNulls = nulls->asMutable<uint64_t>();
+
+      for (auto i = 0; i < size; ++i) {
+        if (wrapper.isNullAt(i)) {
+          bits::setNull(mutableNulls, i);
+        }
+      }
+    }
+  }
+
   return {std::move(indices), std::move(nulls)};
 }
 
-VectorPtr DecodedVector::wrap(
-    VectorPtr data,
-    const BaseVector& wrapper,
-    vector_size_t size) {
+VectorPtr DecodedVector::wrap(VectorPtr data, vector_size_t size) {
   if (isConstantMapping_) {
     if (isNullAt(0)) {
       return BaseVector::createNullConstant(data->type(), size, data->pool());
@@ -405,7 +417,8 @@ VectorPtr DecodedVector::wrap(
     return BaseVector::wrapInConstant(size, constantIndex_, data);
   }
 
-  auto wrapping = dictionaryWrapping(wrapper, size);
+  auto wrapping = dictionaryWrapping(*baseVector_, size);
+
   return BaseVector::wrapInDictionary(
       std::move(wrapping.nulls),
       std::move(wrapping.indices),

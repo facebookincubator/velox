@@ -255,13 +255,14 @@ class DecodedVector {
   /// have been previously decoded by 'this'. This is used when 'data'
   /// is a component of the base vector of 'wrapper' and must be used
   /// in the same context, thus with the same indirections.
-  VectorPtr wrap(VectorPtr data, const BaseVector& wrapper, vector_size_t size);
+  /// When addWrapperBaseNullToWraps = true, all the nulls of
+  /// wrapper are added to the dictionary wrap. This is can be used when wrapper
+  /// is a parent row vector and data is one of its children. In this case,
+  /// nulls in the parent row will appear as nulls in the child.
+  VectorPtr wrap(VectorPtr data, vector_size_t size);
 
-  VectorPtr wrap(
-      VectorPtr data,
-      const BaseVector& wrapper,
-      const SelectivityVector& rows) {
-    return wrap(std::move(data), wrapper, rows.end());
+  VectorPtr wrap(VectorPtr data, const SelectivityVector& rows) {
+    return wrap(std::move(data), rows.end());
   }
 
   // Given a SelectivityVector 'rows', updates 'unwrapped' resizing it to match

@@ -128,13 +128,9 @@ class MapFromEntriesFunction : public exec::VectorFunction {
       wrappedValues = valueRowVector->childAt(1);
     } else {
       wrappedKeys = decodedValueVector->wrap(
-          valueRowVector->childAt(0),
-          *inputValueVector,
-          inputValueVector->size());
+          valueRowVector->childAt(0), inputValueVector->size());
       wrappedValues = decodedValueVector->wrap(
-          valueRowVector->childAt(1),
-          *inputValueVector,
-          inputValueVector->size());
+          valueRowVector->childAt(1), inputValueVector->size());
     }
 
     // To avoid creating new buffers, we try to reuse the input's buffers

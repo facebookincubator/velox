@@ -693,11 +693,11 @@ TEST_F(DecodedVectorTest, wrapOnDictionaryEncoding) {
   };
 
   decoded.decode(*dictionaryVector, allRows);
-  auto wrappedVector = decoded.wrap(intChildVector, *dictionaryVector, allRows);
+  auto wrappedVector = decoded.wrap(intChildVector, allRows);
   checkDepthOne(decoded, wrappedVector);
 
   decoded.decode(*dictionaryVector);
-  wrappedVector = decoded.wrap(intChildVector, *dictionaryVector, kSize);
+  wrappedVector = decoded.wrap(intChildVector, kSize);
   checkDepthOne(decoded, wrappedVector);
 
   // Test dictionary with depth two, a.k.a. dict(dict(flat)) multi-level
@@ -720,13 +720,11 @@ TEST_F(DecodedVectorTest, wrapOnDictionaryEncoding) {
   };
 
   decoded.decode(*dictionaryOverDictionaryVector, allRows);
-  wrappedVector =
-      decoded.wrap(intChildVector, *dictionaryOverDictionaryVector, allRows);
+  wrappedVector = decoded.wrap(intChildVector, allRows);
   checkDepthTwo(decoded, wrappedVector);
 
   decoded.decode(*dictionaryOverDictionaryVector);
-  wrappedVector =
-      decoded.wrap(intChildVector, *dictionaryOverDictionaryVector, kSize);
+  wrappedVector = decoded.wrap(intChildVector, kSize);
   checkDepthTwo(decoded, wrappedVector);
 
   // Test dictionary with depth two and no nulls
@@ -744,13 +742,11 @@ TEST_F(DecodedVectorTest, wrapOnDictionaryEncoding) {
   };
 
   decoded.decode(*noNullDictionaryOverDictionaryVector, allRows);
-  wrappedVector = decoded.wrap(
-      intChildVector, *noNullDictionaryOverDictionaryVector, allRows);
+  wrappedVector = decoded.wrap(intChildVector, allRows);
   checkDepthTwoAndNoNulls(decoded, wrappedVector);
 
   decoded.decode(*noNullDictionaryOverDictionaryVector);
-  wrappedVector = decoded.wrap(
-      intChildVector, *noNullDictionaryOverDictionaryVector, kSize);
+  wrappedVector = decoded.wrap(intChildVector, kSize);
   checkDepthTwoAndNoNulls(decoded, wrappedVector);
 }
 
@@ -778,13 +774,13 @@ TEST_F(DecodedVectorTest, wrapOnConstantEncoding) {
     DecodedVector decoded;
     {
       decoded.decode(*constantVector, allRows);
-      auto wrappedVector = decoded.wrap(intVector, *constantVector, allRows);
+      auto wrappedVector = decoded.wrap(intVector, allRows);
       check(decoded, wrappedVector);
     }
 
     {
       decoded.decode(*constantVector);
-      auto wrappedVector = decoded.wrap(intVector, *constantVector, kSize);
+      auto wrappedVector = decoded.wrap(intVector, kSize);
       check(decoded, wrappedVector);
     }
   }
@@ -810,12 +806,12 @@ TEST_F(DecodedVectorTest, wrapOnConstantEncoding) {
 
     {
       decoded.decode(*constantVector, allRows);
-      auto wrappedVector = decoded.wrap(intVector, *constantVector, allRows);
+      auto wrappedVector = decoded.wrap(intVector, allRows);
       check(decoded, wrappedVector);
     }
     {
       decoded.decode(*constantVector);
-      auto wrappedVector = decoded.wrap(intVector, *constantVector, kSize);
+      auto wrappedVector = decoded.wrap(intVector, kSize);
       check(decoded, wrappedVector);
     }
   }
@@ -847,10 +843,8 @@ TEST_F(DecodedVectorTest, dictionaryWrapOnConstantVector) {
   // Wrap the child vectors with the same dictionary wrapping as the parent
   // row vector.
   {
-    auto wrappedIntVector =
-        decoded.wrap(intChildVector, *dictionaryVector, selection);
-    auto wrappedConstVector =
-        decoded.wrap(constChildVector, *dictionaryVector, selection);
+    auto wrappedIntVector = decoded.wrap(intChildVector, selection);
+    auto wrappedConstVector = decoded.wrap(constChildVector, selection);
 
     // Ensure size of each child is same as the number of indices in the
     // dictionary encoding set.
@@ -858,10 +852,8 @@ TEST_F(DecodedVectorTest, dictionaryWrapOnConstantVector) {
     EXPECT_EQ(dictionarySize, wrappedConstVector->size());
   }
   {
-    auto wrappedIntVector =
-        decoded.wrap(intChildVector, *dictionaryVector, dictionarySize);
-    auto wrappedConstVector =
-        decoded.wrap(constChildVector, *dictionaryVector, dictionarySize);
+    auto wrappedIntVector = decoded.wrap(intChildVector, dictionarySize);
+    auto wrappedConstVector = decoded.wrap(constChildVector, dictionarySize);
 
     // Ensure size of each child is same as the number of indices in the
     // dictionary encoding set.
@@ -895,7 +887,7 @@ TEST_F(DecodedVectorTest, testWrapBehavior) {
     DecodedVector decodedVector(*dict);
     EXPECT_TRUE(decodedVector.isConstantMapping());
     EXPECT_TRUE(decodedVector.base() == constant.get());
-    auto wrappedVector = decodedVector.wrap(constant, *dict, vectorSize);
+    auto wrappedVector = decodedVector.wrap(constant, vectorSize);
     EXPECT_TRUE(wrappedVector->isConstantEncoding());
     assertEqualVectors(dict, wrappedVector);
   }
@@ -910,7 +902,7 @@ TEST_F(DecodedVectorTest, testWrapBehavior) {
     DecodedVector decodedVector(*dict);
     EXPECT_TRUE(decodedVector.isConstantMapping());
     EXPECT_TRUE(decodedVector.base() == arrayVector.get());
-    auto wrappedVector = decodedVector.wrap(arrayVector, *dict, vectorSize);
+    auto wrappedVector = decodedVector.wrap(arrayVector, vectorSize);
     EXPECT_TRUE(wrappedVector->isConstantEncoding());
     assertEqualVectors(dict, wrappedVector);
   }
@@ -926,7 +918,7 @@ TEST_F(DecodedVectorTest, testWrapBehavior) {
     DecodedVector decodedVector(*dict);
     EXPECT_TRUE(decodedVector.isConstantMapping());
     EXPECT_TRUE(decodedVector.base() == constant.get());
-    auto wrappedVector = decodedVector.wrap(constant, *dict, vectorSize);
+    auto wrappedVector = decodedVector.wrap(constant, vectorSize);
     EXPECT_TRUE(wrappedVector->isConstantEncoding());
     assertEqualVectors(dict, wrappedVector);
   }
@@ -942,7 +934,7 @@ TEST_F(DecodedVectorTest, testWrapBehavior) {
     EXPECT_TRUE(decodedVector.isConstantMapping());
     EXPECT_TRUE(decodedVector.base() == constant->valueVector().get());
     // Resultant wrap would wrap input vector into a null constant wrap.
-    auto wrappedVector = decodedVector.wrap(arrayVector, *dict, vectorSize);
+    auto wrappedVector = decodedVector.wrap(arrayVector, vectorSize);
     EXPECT_TRUE(wrappedVector->isConstantEncoding());
     assertEqualVectors(dict, wrappedVector);
   }
@@ -957,7 +949,7 @@ TEST_F(DecodedVectorTest, testWrapBehavior) {
     DecodedVector decodedVector(*dict);
     EXPECT_FALSE(decodedVector.isConstantMapping());
     EXPECT_TRUE(decodedVector.base() == constant.get());
-    auto wrappedVector = decodedVector.wrap(constant, *dict, vectorSize);
+    auto wrappedVector = decodedVector.wrap(constant, vectorSize);
     EXPECT_TRUE(isDictionary(wrappedVector->encoding()));
     assertEqualVectors(dict, wrappedVector);
   }
@@ -972,7 +964,7 @@ TEST_F(DecodedVectorTest, testWrapBehavior) {
     DecodedVector decodedVector(*dict);
     EXPECT_FALSE(decodedVector.isConstantMapping());
     EXPECT_TRUE(decodedVector.base() == arrayVector.get());
-    auto wrappedVector = decodedVector.wrap(arrayVector, *dict, vectorSize);
+    auto wrappedVector = decodedVector.wrap(arrayVector, vectorSize);
     EXPECT_TRUE(isDictionary(wrappedVector->encoding()));
     assertEqualVectors(dict, wrappedVector);
   }
@@ -987,7 +979,7 @@ TEST_F(DecodedVectorTest, testWrapBehavior) {
     DecodedVector decodedVector(*dict);
     EXPECT_TRUE(decodedVector.isConstantMapping());
     EXPECT_TRUE(decodedVector.base() == constant.get());
-    auto wrappedVector = decodedVector.wrap(constant, *dict, vectorSize);
+    auto wrappedVector = decodedVector.wrap(constant, vectorSize);
     EXPECT_TRUE(wrappedVector->isConstantEncoding());
     assertEqualVectors(dict, wrappedVector);
   }
@@ -1003,7 +995,7 @@ TEST_F(DecodedVectorTest, testWrapBehavior) {
     EXPECT_TRUE(decodedVector.isConstantMapping());
     EXPECT_TRUE(decodedVector.base() == constant->valueVector().get());
     // Resultant wrap would wrap input vector into a null constant wrap.
-    auto wrappedVector = decodedVector.wrap(arrayVector, *dict, vectorSize);
+    auto wrappedVector = decodedVector.wrap(arrayVector, vectorSize);
     EXPECT_TRUE(wrappedVector->isConstantEncoding());
     assertEqualVectors(dict, wrappedVector);
   }
@@ -1027,7 +1019,7 @@ TEST_F(DecodedVectorTest, testWrapBehavior) {
     EXPECT_TRUE(decodedVector.base() == intNullableVector.get());
 
     // Now wrap intVector which does not have any nulls.
-    auto wrappedVector = decodedVector.wrap(intVector, *dict, vectorSize);
+    auto wrappedVector = decodedVector.wrap(intVector, vectorSize);
     EXPECT_TRUE(isDictionary(wrappedVector->encoding()));
     // Ensure all nulls are propagated correctly.
     assertEqualVectors(dict, wrappedVector);
@@ -1051,7 +1043,7 @@ TEST_F(DecodedVectorTest, testWrapBehavior) {
     EXPECT_TRUE(decodedVector.base() == intNullableVector.get());
 
     // Now wrap intVector which does not have any nulls.
-    auto wrappedVector = decodedVector.wrap(intVector, *dict, vectorSize);
+    auto wrappedVector = decodedVector.wrap(intVector, vectorSize);
     EXPECT_TRUE(isDictionary(wrappedVector->encoding()));
     // Ensure all nulls are propagated correctly.
     assertEqualVectors(dict, wrappedVector);
@@ -1078,13 +1070,33 @@ TEST_F(DecodedVectorTest, testWrapBehavior) {
     EXPECT_TRUE(decodedVector.base() == intNullableVector.get());
 
     // Now wrap intVector which does not have any nulls.
-    auto wrappedVector = decodedVector.wrap(intVector, *dict, vectorSize);
+    auto wrappedVector = decodedVector.wrap(intVector, vectorSize);
     EXPECT_TRUE(isDictionary(wrappedVector->encoding()));
     // TODO: Switch this to ensure all nulls from base are propagated correctly
     // which should be the correct expected behavior.
     auto exptected =
         BaseVector::wrapInDictionary(noNulls, indices, vectorSize, intVector);
     assertEqualVectors(exptected, wrappedVector);
+  }
+}
+
+TEST_F(DecodedVectorTest, addWrapperBaseNullsToWrap) {
+  RowVectorPtr rowVector =
+      makeRowVector({makeFlatVector<int32_t>(0), makeFlatVector<int32_t>(0)});
+  rowVector->resize(4);
+  for (int i = 0; i < rowVector->size(); i++) {
+    rowVector->setNull(i, true);
+  }
+
+  auto dictionary = BaseVector::wrapInDictionary(
+      nullptr, makeIndices({0, 1, 2, 3}), 4, rowVector);
+
+  DecodedVector decoded(*dictionary, SelectivityVector(4));
+  auto wrappedVector = decoded.wrap(rowVector->childAt(0), 4);
+  EXPECT_EQ(wrappedVector->size(), 4);
+  EXPECT_EQ(wrappedVector->wrappedVector()->size(), 0);
+  for (int i = 0; i < 4; i++) {
+    EXPECT_TRUE(wrappedVector->isNullAt(i));
   }
 }
 

@@ -283,3 +283,37 @@ TEST_F(MapFromEntriesTest, rowsWithNullsNotPassedToCheckDuplicateKey) {
   ASSERT_NO_THROW(
       evaluate("try(map_from_entries(c0))", makeRowVector({arrayVector})));
 }
+
+TEST_F(MapFromEntriesTest, arrayOfDictionaryRowOfNulls) {
+  RowVectorPtr rowVector =
+      makeRowVector({makeFlatVector<int32_t>(0), makeFlatVector<int32_t>(0)});
+  rowVector->resize(4);
+  for (int i = 0; i < rowVector->size(); i++) {
+    rowVector->setNull(i, true);
+  }
+
+  EXPECT_EQ(rowVector->childAt(0)->size(), 0);
+  EXPECT_EQ(rowVector->childAt(0)->size(), 0);
+
+  auto indices = makeIndices({0, 1, 2, 3});
+
+  auto dictionary =
+      BaseVector::wrapInDictionary(nullptr, indices, 4, rowVector);
+
+  auto offsets = makeIndices({0, 2});
+  auto sizes = makeIndices({2, 2});
+
+  auto arrayVector = std::make_shared<ArrayVector>(
+      pool(),
+      ARRAY(ROW({INTEGER(), INTEGER()})),
+      nullptr,
+      2,
+      offsets,
+      sizes,
+      dictionary);
+  VectorPtr result =
+      evaluate("try(map_from_entries(c0))", makeRowVector({arrayVector}));
+  for (int i = 0; i < result->size(); i++) {
+    EXPECT_TRUE(result->isNullAt(i));
+  }
+}
