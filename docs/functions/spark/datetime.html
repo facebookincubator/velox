@@ -80,6 +80,21 @@ and date_sub(‘2023-07-10’, -2147483648) get -5877588-12-29.</p>
 </dd></dl>
 
 <dl class="spark function">
+<dt class="sig sig-object spark" id="dayofweek">
+<span class="sig-name descname"><span class="pre">dayofweek</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">date/timestamp</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">integer</span></span></span><a class="headerlink" href="#dayofweek" title="Permalink to this definition">¶</a></dt>
+<dd><p>Returns the day of the week for date/timestamp (1 = Sunday, 2 = Monday, …, 7 = Saturday).
+We can use <cite>dow</cite> as alias for</p>
+<p>SELECT dayofweek(‘2009-07-30’); – 5
+SELECT dayofweek(‘2023-08-22 11:23:00.100’); – 3</p>
+</dd></dl>
+
+<dl class="py function">
+<dt class="sig sig-object py" id="dow">
+<span class="sig-name descname"><span class="pre">dow</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">x</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">integer</span></span></span><a class="headerlink" href="#dow" title="Permalink to this definition">¶</a></dt>
+<dd><p>This is an alias for <a class="reference internal" href="../presto/datetime.html#day_of_week" title="day_of_week"><code class="xref py py-func docutils literal notranslate"><span class="pre">day_of_week()</span></code></a>.</p>
+</dd></dl>
+
+<dl class="spark function">
 <dt class="sig sig-object spark" id="last_day">
 <span class="sig-name descname"><span class="pre">last_day</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">date</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">date</span></span></span><a class="headerlink" href="#last_day" title="Permalink to this definition">¶</a></dt>
 <dd><p>Returns the last day of the month which the date belongs to.</p>
