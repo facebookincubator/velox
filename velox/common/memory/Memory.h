@@ -64,7 +64,18 @@ struct MemoryManagerOptions {
 
   /// Specifies the max memory capacity in bytes. MemoryManager will not
   /// enforce capacity. This will be used by MemoryArbitrator
-  int64_t capacity{kMaxMemory};
+  int64_t capacity{MemoryAllocator::kDefaultCapacityBytes};
+
+  /// Memory capacity for query/task memory pools. This capacity setting should
+  /// be equal or smaller than 'capacity'. The difference between 'capacity' and
+  /// 'queryMemoryCapacity' is reserved for system usage such as cache and
+  /// spilling.
+  ///
+  /// NOTE:
+  /// - if 'queryMemoryCapacity' is greater than 'capacity', the behavior
+  /// will be equivalent to as if they are equal, meaning no reservation
+  /// capacity for system usage.
+  int64_t queryMemoryCapacity{kMaxMemory};
 
   /// If true, check the memory pool and usage leaks on destruction.
   ///
@@ -116,9 +127,6 @@ class MemoryManager {
 
   /// Tries to get the singleton memory manager. If not previously initialized,
   /// the process singleton manager will be initialized.
-  // TODO(jtan6): remove 'ensureCapacity' in a compatible way as we always
-  //  want to ensureCapacity after cap checks completely responsible by
-  //  allocators
   FOLLY_EXPORT static MemoryManager& getInstance(
       const MemoryManagerOptions& options = MemoryManagerOptions{});
 
@@ -156,6 +164,10 @@ class MemoryManager {
   /// Invoked to grows a memory pool's free capacity with at least
   /// 'incrementBytes'. The function returns true on success, otherwise false.
   bool growPool(MemoryPool* pool, uint64_t incrementBytes);
+
+  /// Invoked to shrink alive pools to free 'targetBytes' capacity. The function
+  /// returns the actual freed memory capacity in bytes.
+  uint64_t shrinkPools(uint64_t targetBytes);
 
   /// Default unmanaged leaf pool with no threadsafe stats support. Libraries
   /// using this method can get a pool that is shared with other threads. The

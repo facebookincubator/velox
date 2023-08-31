@@ -71,7 +71,7 @@ void BaseVector::ensureNullsCapacity(
   auto fill = setNotNull ? bits::kNotNull : bits::kNull;
   // Ensure the size of nulls_ is always at least as large as length_.
   auto size = std::max(minimumSize, length_);
-  if (nulls_ && nulls_->isMutable()) {
+  if (nulls_ && !nulls_->isView() && nulls_->unique()) {
     if (nulls_->capacity() < bits::nbytes(size)) {
       AlignedBuffer::reallocate<bool>(&nulls_, size, fill);
     }
@@ -536,10 +536,7 @@ void BaseVector::ensureWritable(
   auto resultType = result->type();
   bool isUnknownType = resultType->containsUnknown();
   if (result->encoding() == VectorEncoding::Simple::LAZY) {
-    // TODO Figure out how to allow memory reuse for a newly loaded vector.
-    // LazyVector holds a reference to loaded vector, hence, unique() check
-    // below will never pass.
-    VELOX_NYI();
+    result = BaseVector::loadedVectorShared(result);
   }
   if (result.unique() && !isUnknownType) {
     switch (result->encoding()) {
@@ -809,6 +806,12 @@ void BaseVector::flattenVector(VectorPtr& vector) {
       auto* mapVector = vector->asUnchecked<MapVector>();
       BaseVector::flattenVector(mapVector->mapKeys());
       BaseVector::flattenVector(mapVector->mapValues());
+      return;
+    }
+    case VectorEncoding::Simple::LAZY: {
+      auto loadedVector =
+          vector->asUnchecked<LazyVector>()->loadedVectorShared();
+      BaseVector::flattenVector(loadedVector);
       return;
     }
     default:

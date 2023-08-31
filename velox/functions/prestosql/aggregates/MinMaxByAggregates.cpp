@@ -797,10 +797,7 @@ class MinMaxByNAggregate : public exec::Aggregate {
   }
 
   void destroy(folly::Range<char**> groups) override {
-    for (auto group : groups) {
-      auto* accumulator = Aggregate::value<AccumulatorType>(group);
-      std::destroy_at(accumulator);
-    }
+    destroyAccumulators<AccumulatorType>(groups);
   }
 
  private:
@@ -1060,6 +1057,8 @@ std::unique_ptr<exec::Aggregate> createNArg(
     case TypeKind::DOUBLE:
       return createNArg<NAggregate, double>(
           resultType, compareType, errorMessage);
+    case TypeKind::VARBINARY:
+      [[fallthrough]];
     case TypeKind::VARCHAR:
       return createNArg<NAggregate, StringView>(
           resultType, compareType, errorMessage);
@@ -1067,9 +1066,9 @@ std::unique_ptr<exec::Aggregate> createNArg(
       return createNArg<NAggregate, Timestamp>(
           resultType, compareType, errorMessage);
     case TypeKind::ARRAY:
-      FOLLY_FALLTHROUGH;
+      [[fallthrough]];
     case TypeKind::MAP:
-      FOLLY_FALLTHROUGH;
+      [[fallthrough]];
     case TypeKind::ROW:
       return createNArg<NAggregate, ComplexType>(
           resultType, compareType, errorMessage);

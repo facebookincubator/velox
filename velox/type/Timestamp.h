@@ -34,6 +34,8 @@ struct Timestamp {
  public:
   enum class Precision : int { kMilliseconds = 3, kNanoseconds = 9 };
   static constexpr int64_t kMillisecondsInSecond = 1'000;
+  static constexpr int64_t kMicrosecondsInMillisecond = 1'000;
+  static constexpr int64_t kNanosecondsInMicrosecond = 1'000;
   static constexpr int64_t kNanosecondsInMillisecond = 1'000'000;
 
   // Limit the range of seconds to avoid some problems. Seconds should be
@@ -124,6 +126,11 @@ struct Timestamp {
           e.what());
     }
   }
+
+  /// Due to the limit of std::chrono, throws if timestamp is outside of
+  /// [-32767-01-01, 32767-12-31] range.
+  std::chrono::time_point<std::chrono::system_clock, std::chrono::milliseconds>
+  toTimePoint() const;
 
   static Timestamp fromMillis(int64_t millis) {
     if (millis >= 0 || millis % 1'000 == 0) {

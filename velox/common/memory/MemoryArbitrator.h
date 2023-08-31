@@ -43,9 +43,9 @@ class MemoryArbitrator {
   struct Config {
     /// The string kind of this memory arbitrator.
     ///
-    /// NOTE: the arbitrator will only be created if its kind is set explicitly.
-    /// Otherwise MemoryArbitrator::create returns a nullptr.
-    std::string kind;
+    /// NOTE: If kind is not set, a noop arbitrator is created which grants the
+    /// maximum capacity to each newly created memory pool.
+    std::string kind{};
 
     /// The total memory capacity in bytes of all the running queries.
     ///
@@ -72,36 +72,37 @@ class MemoryArbitrator {
   using Factory = std::function<std::unique_ptr<MemoryArbitrator>(
       const MemoryArbitrator::Config& config)>;
 
-  /// Register factory for a specific kind of memory arbitrator.
+  /// Register factory for a specific 'kind' of memory arbitrator
   /// MemoryArbitrator::Create looks up the registry to find the factory to
   /// create arbitrator instance based on the kind specified in arbitrator
   /// config.
+  ///
+  /// NOTE: we only allow the same 'kind' of memory arbitrator to be registered
+  /// once. The function throws an error if 'kind' is already registered.
   static void registerFactory(const std::string& kind, Factory factory);
 
-  /// Unregister the registered factory for this kind. The arbitrator kind must
-  /// be registered through MemoryArbitrator::registerFactory, otherwise the
-  /// function throws a velox user exception error.
+  /// Unregister the registered factory for a specifc kind.
+  ///
+  /// NOTE: the function throws if the specified arbitrator 'kind' is not
+  /// registered.
   static void unregisterFactory(const std::string& kind);
 
-  /// Register all memory arbitrator factories including the shared
-  /// arbitrator implementation.
+  /// Register all the supported memory arbitrator kinds.
   static void registerAllFactories();
 
-  /// Unregister all memory arbitrator factories including the shared
-  /// arbitrator implementation.
+  /// Unregister all the supported memory arbitrator kinds.
   static void unregisterAllFactories();
 
   /// Invoked by the memory manager to create an instance of memory arbitrator
   /// based on the kind specified in 'config'. The arbitrator kind must be
-  /// registered through MemoryArbitrator::registerFactory, otherwise the
+  /// registered through MemoryArbitrator::registerFactory(), otherwise the
   /// function throws a velox user exception error.
   ///
   /// NOTE: if arbitrator kind is not set in 'config', then the function returns
-  /// nullptr.
-
+  /// nullptr, and the memory arbitration function is disabled.
   static std::unique_ptr<MemoryArbitrator> create(const Config& config);
 
-  virtual std::string kind() = 0;
+  virtual std::string kind() const = 0;
 
   uint64_t capacity() const {
     return capacity_;
@@ -140,6 +141,13 @@ class MemoryArbitrator {
       const std::vector<std::shared_ptr<MemoryPool>>& candidatePools,
       uint64_t targetBytes) = 0;
 
+  /// Invoked by the memory manager to shrink memory from a given list of memory
+  /// pools. The freed memory capacity is given back to the arbitrator. The
+  /// function returns the actual freed memory capacity in bytes.
+  virtual uint64_t shrinkMemory(
+      const std::vector<std::shared_ptr<MemoryPool>>& pools,
+      uint64_t targetBytes) = 0;
+
   /// The internal execution stats of the memory arbitrator.
   struct Stats {
     /// The number of arbitration requests.
@@ -162,9 +170,31 @@ class MemoryArbitrator {
     /// The free memory capacity in bytes.
     uint64_t freeCapacityBytes{0};
 
+    Stats(
+        uint64_t _numRequests,
+        uint64_t _numAborted,
+        uint64_t _numFailures,
+        uint64_t _queueTimeUs,
+        uint64_t _arbitrationTimeUs,
+        uint64_t _numShrunkBytes,
+        uint64_t _numReclaimedBytes,
+        uint64_t _maxCapacityBytes,
+        uint64_t _freeCapacityBytes);
+
+    Stats() = default;
+
+    Stats operator-(const Stats& other) const;
+    bool operator==(const Stats& other) const;
+    bool operator!=(const Stats& other) const;
+    bool operator<(const Stats& other) const;
+    bool operator>(const Stats& other) const;
+    bool operator>=(const Stats& other) const;
+    bool operator<=(const Stats& other) const;
+
     /// Returns the debug string of this stats.
     std::string toString() const;
   };
+
   virtual Stats stats() const = 0;
 
   /// Returns the debug string of this memory arbitrator.
@@ -180,6 +210,12 @@ class MemoryArbitrator {
   const uint64_t memoryPoolInitCapacity_;
   const uint64_t memoryPoolTransferCapacity_;
 };
+
+FOLLY_ALWAYS_INLINE std::ostream& operator<<(
+    std::ostream& o,
+    const MemoryArbitrator::Stats& stats) {
+  return o << stats.toString();
+}
 
 /// The memory reclaimer interface is used by memory pool to participate in
 /// the memory arbitration execution (enter/leave arbitration process) as well

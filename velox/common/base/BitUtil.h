@@ -691,8 +691,22 @@ bool inline hasIntersection(
       });
 }
 
-inline int32_t countLeadingZeros(uint64_t word) {
-  return __builtin_clzll(word);
+template <typename T = uint64_t>
+inline int32_t countLeadingZeros(T word) {
+  static_assert(std::is_same_v<T, uint64_t> || std::is_same_v<T, __uint128_t>);
+  /// Built-in Function: int __builtin_clz (unsigned int x) returns the number
+  /// of leading 0-bits in x, starting at the most significant bit position. If
+  /// x is 0, the result is undefined.
+  if (word == 0) {
+    return sizeof(T) * 8;
+  }
+  if constexpr (std::is_same_v<T, uint64_t>) {
+    return __builtin_clzll(word);
+  } else {
+    uint64_t hi = word >> 64;
+    uint64_t lo = static_cast<uint64_t>(word);
+    return (hi == 0) ? 64 + __builtin_clzll(lo) : __builtin_clzll(hi);
+  }
 }
 
 inline uint64_t nextPowerOfTwo(uint64_t size) {
@@ -956,6 +970,23 @@ inline void padToAlignment(
     std::memset(
         reinterpret_cast<char*>(pointer) + padIndex, 0, roundEnd - padIndex);
   }
+}
+
+/// Returns value with the order of the bytes reversed; for example, 0xaabb
+/// becomes 0xbbaa. Byte here always means exactly 8 bits.
+inline __int128_t builtin_bswap128(__int128_t value) {
+#if defined __has_builtin
+#if __has_builtin(__builtin_bswap128)
+#define VELOX_HAS_BUILTIN_BSWAP_INT128 1
+  return __builtin_bswap128(value);
+#endif
+#endif
+#if not VELOX_HAS_BUILTIN_BSWAP_INT128
+  return (static_cast<__uint128_t>(__builtin_bswap64(value)) << 64) |
+      __builtin_bswap64(value >> 64);
+#else
+#undef VELOX_HAS_BUILTIN_BSWAP_INT128
+#endif
 }
 
 } // namespace bits

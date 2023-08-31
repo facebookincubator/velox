@@ -15,9 +15,11 @@
  */
 #include "velox/functions/sparksql/Register.h"
 
+#include "velox/expression/RegisterSpecialForm.h"
 #include "velox/functions/lib/IsNull.h"
 #include "velox/functions/lib/Re2Functions.h"
 #include "velox/functions/lib/RegistrationHelpers.h"
+#include "velox/functions/prestosql/DateTimeFunctions.h"
 #include "velox/functions/prestosql/JsonFunctions.h"
 #include "velox/functions/prestosql/Rand.h"
 #include "velox/functions/prestosql/StringFunctions.h"
@@ -69,7 +71,12 @@ static void workAroundRegistrationMacro(const std::string& prefix) {
 
 namespace sparksql {
 
+void registerAllSpecialFormGeneralFunctions() {
+  exec::registerFunctionCallToSpecialForms();
+}
+
 void registerFunctions(const std::string& prefix) {
+  registerAllSpecialFormGeneralFunctions();
   registerFunction<RandFunction, double>({prefix + "rand"});
 
   // Register size functions
@@ -211,6 +218,23 @@ void registerFunctions(const std::string& prefix) {
       {prefix + "make_date"});
 
   registerFunction<LastDayFunction, Date, Date>({prefix + "last_day"});
+
+  registerFunction<DateAddFunction, Date, Date, int32_t>({prefix + "date_add"});
+  registerFunction<DateSubFunction, Date, Date, int32_t>({prefix + "date_sub"});
+
+  registerFunction<DayFunction, int64_t, Timestamp>(
+      {prefix + "day", prefix + "dayofmonth"});
+  registerFunction<DayFunction, int64_t, Date>(
+      {prefix + "day", prefix + "dayofmonth"});
+  registerFunction<DayOfYearFunction, int64_t, Timestamp>(
+      {prefix + "doy", prefix + "dayofyear"});
+  registerFunction<DayOfYearFunction, int64_t, Date>(
+      {prefix + "doy", prefix + "dayofyear"});
+
+  registerFunction<DayOfWeekFunction, int32_t, Timestamp>(
+      {prefix + "dow", prefix + "dayofweek"});
+  registerFunction<DayOfWeekFunction, int32_t, Date>(
+      {prefix + "dow", prefix + "dayofweek"});
 
   // Register bloom filter function
   registerFunction<BloomFilterMightContainFunction, bool, Varbinary, int64_t>(

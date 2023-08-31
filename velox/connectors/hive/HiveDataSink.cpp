@@ -22,12 +22,8 @@
 #include "velox/core/ITypedExpr.h"
 #include "velox/dwio/dwrf/writer/Writer.h"
 
-#ifdef VELOX_ENABLE_BACKWARD_COMPATIBILITY
-#include "velox/connectors/hive/HiveConnector.h"
-#else
 #include "velox/connectors/hive/TableHandle.h"
 #include "velox/exec/OperatorUtils.h"
-#endif
 
 #include <boost/lexical_cast.hpp>
 #include <boost/uuid/uuid_generators.hpp>
@@ -299,7 +295,9 @@ HiveDataSink::HiveDataSink(
           isBucketed() ? createBucketFunction(
                              *insertTableHandle_->bucketProperty(),
                              inputType_)
-                       : nullptr) {
+                       : nullptr),
+      writerFactory_(dwio::common::getWriterFactory(
+          insertTableHandle_->tableStorageFormat())) {
   VELOX_USER_CHECK(
       !isBucketed() || isPartitioned(), "A bucket table must be partitioned");
   if (isBucketed()) {
@@ -439,19 +437,18 @@ uint32_t HiveDataSink::appendWriter(const HiveWriterId& id) {
   writerInfo_.emplace_back(
       std::make_shared<HiveWriterInfo>(std::move(writerParameters)));
 
-  auto writerFactory =
-      dwio::common::getWriterFactory(insertTableHandle_->tableStorageFormat());
   dwio::common::WriterOptions options;
   options.schema = inputType_;
   options.memoryPool = connectorQueryCtx_->connectorMemoryPool();
   options.compressionKind = insertTableHandle_->compressionKind();
   ioStats_.emplace_back(std::make_shared<dwio::common::IoStatistics>());
-  writers_.emplace_back(writerFactory->createWriter(
-      dwio::common::DataSink::create(
+  writers_.emplace_back(writerFactory_->createWriter(
+      dwio::common::FileSink::create(
           writePath,
-          connectorQueryCtx_->memoryPool(),
-          dwio::common::MetricsLog::voidLog(),
-          ioStats_.back().get()),
+          {.bufferWrite = false,
+           .pool = connectorQueryCtx_->memoryPool(),
+           .metricLogger = dwio::common::MetricsLog::voidLog(),
+           .stats = ioStats_.back().get()}),
       options));
   // Extends the buffer used for partition rows calculations.
   partitionSizes_.emplace_back(0);

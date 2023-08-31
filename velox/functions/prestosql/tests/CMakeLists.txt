@@ -37,6 +37,7 @@ add_executable(
   ArrayNoneMatchTest.cpp
   ArrayNormalizeTest.cpp
   ArrayPositionTest.cpp
+  ArrayRemoveTest.cpp
   ArraySortTest.cpp
   ArrayShuffleTest.cpp
   ArraysOverlapTest.cpp
@@ -77,6 +78,7 @@ add_executable(
   SliceTest.cpp
   SequenceTest.cpp
   SplitTest.cpp
+  SplitToMapTest.cpp
   StringFunctionsTest.cpp
   TransformTest.cpp
   TransformKeysTest.cpp

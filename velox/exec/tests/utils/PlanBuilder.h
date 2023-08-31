@@ -476,6 +476,10 @@ class PlanBuilder {
       const std::vector<std::string>& keys,
       std::vector<core::PlanNodePtr> sources);
 
+  /// A convenience method to add a LocalMergeNode with a single source (the
+  /// current plan node).
+  PlanBuilder& localMerge(const std::vector<std::string>& keys);
+
   /// Adds an OrderByNode using specified ORDER BY clauses.
   ///
   /// For example,
@@ -672,7 +676,8 @@ class PlanBuilder {
   /// right sides.
   PlanBuilder& nestedLoopJoin(
       const core::PlanNodePtr& right,
-      const std::vector<std::string>& outputLayout);
+      const std::vector<std::string>& outputLayout,
+      core::JoinType joinType = core::JoinType::kInner);
 
   /// Add an UnnestNode to unnest one or more columns of type array or map.
   ///

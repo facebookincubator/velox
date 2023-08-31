@@ -29,7 +29,7 @@ Generic Configuration
        average row size is known and preferred_output_batch_bytes is used to compute the number of output rows.
    * - abandon_partial_aggregation_min_rows
      - integer
-     - 10000
+     - 100,000
      - Min number of rows when we check if a partial aggregation is not reducing the cardinality well and might be
        a subject to being abandoned.
    * - abandon_partial_aggregation_min_pct
@@ -108,7 +108,7 @@ Expression Evaluation Configuration
    * - cast_to_int_by_truncate
      - bool
      - false
-     - This flags forces the cast from float/double to integer to be performed by truncating the decimal part instead of rounding.
+     - This flags forces the cast from float/double/decimal/string to integer to be performed by truncating the decimal part instead of rounding.
 
 Memory Management
 -----------------
@@ -381,7 +381,7 @@ Hive Connector
      - The GCS service account configuration as json string.
 
 Presto-specific Configuration
-----------------------------
+-----------------------------
 .. list-table::
    :widths: 20 10 10 70
    :header-rows: 1

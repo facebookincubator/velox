@@ -17,6 +17,13 @@
 #include <boost/random/uniform_int_distribution.hpp>
 #include "velox/common/base/Fs.h"
 
+#include "velox/common/file/FileSystems.h"
+#include "velox/connectors/hive/HiveConnector.h"
+#include "velox/connectors/hive/HiveConnectorSplit.h"
+#include "velox/connectors/hive/TableHandle.h"
+#include "velox/dwio/dwrf/reader/DwrfReader.h"
+#include "velox/dwio/dwrf/writer/Writer.h"
+
 #include "velox/exec/tests/utils/PlanBuilder.h"
 #include "velox/exec/tests/utils/TempDirectoryPath.h"
 #include "velox/expression/SignatureBinder.h"
@@ -90,10 +97,21 @@ class AggregationFuzzer {
       const std::unordered_map<std::string, std::string>&
           customVerificationFunctions);
 
+  struct PlanWithSplits {
+    core::PlanNodePtr plan;
+    std::vector<exec::Split> splits;
+  };
+
   void go();
   void go(const std::string& planPath);
 
  private:
+  static inline const std::string kHiveConnectorId = "test-hive";
+
+  static exec::Split makeSplit(const std::string& filePath);
+
+  PlanWithSplits deserialize(const folly::dynamic& obj);
+
   struct Stats {
     // Names of functions that were tested.
     std::unordered_set<std::string> functionNames;
@@ -187,7 +205,7 @@ class AggregationFuzzer {
       bool customVerification,
       const std::vector<std::string>& projections);
 
-  void verifyAggregation(std::vector<core::PlanNodePtr> plans);
+  void verifyAggregation(const std::vector<PlanWithSplits>& plans);
 
   std::optional<MaterializedRowMultiset> computeDuckAggregation(
       const std::vector<std::string>& groupingKeys,
@@ -199,24 +217,65 @@ class AggregationFuzzer {
 
   velox::test::ResultOrError execute(
       const core::PlanNodePtr& plan,
-      bool injectSpill);
+      const std::vector<exec::Split>& splits = {},
+      bool injectSpill = false,
+      bool abandonPartial = false);
+
+  static bool hasPartialGroupBy(const core::PlanNodePtr& plan) {
+    auto partialAgg = core::PlanNode::findFirstNode(
+        plan.get(), [](const core::PlanNode* node) {
+          if (auto aggregation =
+                  dynamic_cast<const core::AggregationNode*>(node)) {
+            return aggregation->step() ==
+                core::AggregationNode::Step::kPartial &&
+                !aggregation->groupingKeys().empty();
+          }
+
+          return false;
+        });
+    return partialAgg != nullptr;
+  }
 
   void testPlans(
-      const std::vector<core::PlanNodePtr>& plans,
+      const std::vector<PlanWithSplits>& plans,
       bool verifyResults,
       const velox::test::ResultOrError& expected) {
     for (auto i = 0; i < plans.size(); ++i) {
+      const auto& planWithSplits = plans[i];
+
       LOG(INFO) << "Testing plan #" << i;
-      testPlan(plans[i], false /*injectSpill*/, verifyResults, expected);
+      testPlan(
+          planWithSplits,
+          false /*injectSpill*/,
+          false /*abandonPartial*/,
+          verifyResults,
+          expected);
 
       LOG(INFO) << "Testing plan #" << i << " with spilling";
-      testPlan(plans[i], true /*injectSpill*/, verifyResults, expected);
+      testPlan(
+          planWithSplits,
+          true /*injectSpill*/,
+          false /*abandonPartial*/,
+          verifyResults,
+          expected);
+
+      if (hasPartialGroupBy(planWithSplits.plan)) {
+        LOG(INFO) << "Testing plan #" << i
+                  << " with forced abandon-partial-aggregation";
+        testPlan(
+            planWithSplits,
+            false /*injectSpill*/,
+            true /*abandonPartial*/,
+            verifyResults,
+            expected);
+      }
     }
   }
 
   void testPlan(
-      const core::PlanNodePtr& plan,
+      const PlanWithSplits& planWithSplits,
       bool injectSpill,
+      bool abandonPartial,
       bool verifyResults,
       const velox::test::ResultOrError& expected);
 
@@ -233,7 +292,9 @@ class AggregationFuzzer {
   FuzzerGenerator rng_;
   size_t currentSeed_{0};
 
-  std::shared_ptr<memory::MemoryPool> pool_{memory::addDefaultLeafMemoryPool()};
+  std::shared_ptr<memory::MemoryPool> rootPool_{
+      memory::defaultMemoryManager().addRootPool()};
+  std::shared_ptr<memory::MemoryPool> pool_{rootPool_->addLeafChild("leaf")};
   VectorFuzzer vectorFuzzer_;
 
   Stats stats_;
@@ -305,6 +366,13 @@ AggregationFuzzer::AggregationFuzzer(
       persistAndRunOnce_{FLAGS_persist_and_run_once},
       reproPersistPath_{FLAGS_repro_persist_path},
       vectorFuzzer_{getFuzzerOptions(), pool_.get()} {
+  filesystems::registerLocalFileSystem();
+  auto hiveConnector =
+      connector::getConnectorFactory(
+          connector::hive::HiveConnectorFactory::kHiveConnectorName)
+          ->newConnector(kHiveConnectorId, nullptr);
+  connector::registerConnector(hiveConnector);
+
   seed(initialSeed);
   VELOX_CHECK(!signatureMap.empty(), "No function signatures available.");
 
@@ -367,6 +435,19 @@ AggregationFuzzer::AggregationFuzzer(
           auto resolvedType = SignatureBinder::tryResolveType(arg, {}, {});
           VELOX_CHECK_NOT_NULL(resolvedType);
 
+          // SignatureBinder::tryResolveType produces ROW types with empty field
+          // names. These won't work with TableScan.
+          if (resolvedType->isRow()) {
+            std::vector<std::string> names;
+            for (auto i = 0; i < resolvedType->size(); ++i) {
+              names.push_back(fmt::format("field{}", i));
+            }
+
+            std::vector<TypePtr> types = resolvedType->asRow().children();
+
+            resolvedType = ROW(std::move(names), std::move(types));
+          }
+
           callable.args.emplace_back(resolvedType);
         }
 
@@ -425,37 +506,69 @@ std::vector<std::string> makeNames(size_t n) {
   return names;
 }
 
+folly::dynamic serialize(
+    const AggregationFuzzer::PlanWithSplits& planWithSplits,
+    const std::string& dirPath,
+    std::unordered_map<std::string, std::string>& filePaths) {
+  folly::dynamic obj = folly::dynamic::object();
+  obj["plan"] = planWithSplits.plan->serialize();
+  if (planWithSplits.splits.empty()) {
+    return obj;
+  }
+
+  folly::dynamic jsonSplits = folly::dynamic::array();
+  jsonSplits.reserve(planWithSplits.splits.size());
+  for (const auto& split : planWithSplits.splits) {
+    const auto filePath =
+        std::dynamic_pointer_cast<connector::hive::HiveConnectorSplit>(
+            split.connectorSplit)
+            ->filePath;
+    if (filePaths.count(filePath) == 0) {
+      const auto newFilePath = fmt::format("{}/{}", dirPath, filePaths.size());
+      fs::copy(filePath, newFilePath);
+      filePaths.insert({filePath, newFilePath});
+    }
+    jsonSplits.push_back(filePaths.at(filePath));
+  }
+  obj["splits"] = jsonSplits;
+  return obj;
+}
+
 void persistReproInfo(
-    const std::vector<core::PlanNodePtr>& plans,
+    const std::vector<AggregationFuzzer::PlanWithSplits>& plans,
     const std::string& basePath) {
   if (!common::generateFileDirectory(basePath.c_str())) {
     return;
   }
 
   // Create a new directory
-  auto dirPath =
+  const auto dirPathOptional =
       common::generateTempFolderPath(basePath.c_str(), "aggregationVerifier");
-  if (!dirPath.has_value()) {
-    LOG(INFO) << "Failed to create directory for persisting plans.";
+  if (!dirPathOptional.has_value()) {
+    LOG(ERROR)
+        << "Failed to create directory for persisting plans using base path: "
+        << basePath;
     return;
   }
 
-  // Save plans.
-  std::string planPath;
-  planPath = fmt::format("{}/{}", dirPath->c_str(), kPlanNodeFileName);
+  const auto dirPath = dirPathOptional.value();
+
+  // Save plans and splits.
+  const std::string planPath = fmt::format("{}/{}", dirPath, kPlanNodeFileName);
+  std::unordered_map<std::string, std::string> filePaths;
   try {
     folly::dynamic array = folly::dynamic::array();
     array.reserve(plans.size());
-    for (auto plan : plans) {
-      array.push_back(plan->serialize());
+    for (auto planWithSplits : plans) {
+      array.push_back(serialize(planWithSplits, dirPath, filePaths));
     }
     auto planJson = folly::toJson(array);
     saveStringToFile(planJson, planPath.c_str());
+    LOG(INFO) << "Persisted aggregation plans to " << planPath;
   } catch (std::exception& e) {
-    planPath = e.what();
+    LOG(ERROR) << "Failed to store aggregation plans to " << planPath << ": "
+               << e.what();
   }
-
-  LOG(INFO) << "Persisted aggregation plans @ : " << planPath;
 }
 
 CallableSignature AggregationFuzzer::pickSignature() {
@@ -526,8 +639,35 @@ std::vector<RowVectorPtr> AggregationFuzzer::generateInputDataWithRowNumber(
   return input;
 }
 
+// static
+exec::Split AggregationFuzzer::makeSplit(const std::string& filePath) {
+  return exec::Split{std::make_shared<connector::hive::HiveConnectorSplit>(
+      kHiveConnectorId, filePath, dwio::common::FileFormat::DWRF)};
+}
+
+AggregationFuzzer::PlanWithSplits AggregationFuzzer::deserialize(
+    const folly::dynamic& obj) {
+  auto plan = velox::ISerializable::deserialize<core::PlanNode>(
+      obj["plan"], pool_.get());
+
+  std::vector<exec::Split> splits;
+  if (obj.count("splits") > 0) {
+    auto paths =
+        ISerializable::deserialize<std::vector<std::string>>(obj["splits"]);
+    for (const auto& path : paths) {
+      splits.push_back(makeSplit(path));
+    }
+  }
+
+  return PlanWithSplits{plan, splits};
+}
+
 void AggregationFuzzer::go(const std::string& planPath) {
   Type::registerSerDe();
+  connector::hive::HiveTableHandle::registerSerDe();
+  connector::hive::LocationHandle::registerSerDe();
+  connector::hive::HiveColumnHandle::registerSerDe();
+  connector::hive::HiveInsertTableHandle::registerSerDe();
   core::ITypedExpr::registerSerDe();
   core::PlanNode::registerSerDe();
   registerPartitionFunctionSerDe();
@@ -535,15 +675,12 @@ void AggregationFuzzer::go(const std::string& planPath) {
   LOG(INFO) << "Attempting to use serialized plan at: " << planPath;
   auto planString = restoreStringFromFile(planPath.c_str());
   auto parsedPlans = folly::parseJson(planString);
-  std::vector<core::PlanNodePtr> plans(parsedPlans.size());
+  std::vector<PlanWithSplits> plans(parsedPlans.size());
   std::transform(
       parsedPlans.begin(),
       parsedPlans.end(),
       plans.begin(),
-      [&](const folly::dynamic& plan) {
-        return velox::ISerializable::deserialize<core::PlanNode>(
-            plan, pool_.get());
-      });
+      [&](const folly::dynamic& obj) { return deserialize(obj); });
 
   verifyAggregation(plans);
 }
@@ -659,7 +796,9 @@ void AggregationFuzzer::go() {
 
 velox::test::ResultOrError AggregationFuzzer::execute(
     const core::PlanNodePtr& plan,
-    bool injectSpill) {
+    const std::vector<exec::Split>& splits,
+    bool injectSpill,
+    bool abandonPartial) {
   LOG(INFO) << "Executing query plan: " << std::endl
             << plan->toString(true, true);
 
@@ -667,6 +806,7 @@ velox::test::ResultOrError AggregationFuzzer::execute(
   try {
     std::shared_ptr<TempDirectoryPath> spillDirectory;
     AssertQueryBuilder builder(plan);
+
     if (injectSpill) {
       spillDirectory = exec::test::TempDirectoryPath::create();
       builder.spillDirectory(spillDirectory->path)
@@ -674,6 +814,18 @@ velox::test::ResultOrError AggregationFuzzer::execute(
           .config(core::QueryConfig::kAggregationSpillEnabled, "true")
           .config(core::QueryConfig::kTestingSpillPct, "100");
     }
+
+    if (abandonPartial) {
+      builder.config(core::QueryConfig::kAbandonPartialAggregationMinRows, "1")
+          .config(core::QueryConfig::kAbandonPartialAggregationMinPct, "0")
+          .config(core::QueryConfig::kMaxPartialAggregationMemory, "0")
+          .config(core::QueryConfig::kMaxExtendedPartialAggregationMemory, "0");
+    }
+
+    if (!splits.empty()) {
+      builder.splits(splits);
+    }
+
     resultOrError.result = builder.maxDrivers(2).copyResults(pool_.get());
     LOG(INFO) << resultOrError.result->toString();
   } catch (VeloxUserError& e) {
@@ -724,9 +876,12 @@ std::string makeDuckAggregationSql(
 }
 
 bool isDuckSupported(const TypePtr& type) {
+  // DuckDB doesn't support nanosecond precision for timestamps.
+  if (type->kind() == TypeKind::TIMESTAMP) {
+    return false;
+  }
   for (auto i = 0; i < type->size(); ++i) {
-    // DuckDB doesn't support nanosecond precision for timestamps.
-    if (type->childAt(i)->isTimestamp()) {
+    if (!isDuckSupported(type->childAt(i))) {
       return false;
     }
   }
@@ -778,7 +933,7 @@ AggregationFuzzer::computeDuckAggregation(
       outputType);
 }
 
-void makeAlternativePlans(
+void makeAlternativePlansWithValues(
     const std::vector<std::string>& groupingKeys,
     const std::vector<std::string>& aggregates,
     const std::vector<std::string>& masks,
@@ -824,7 +979,34 @@ void makeAlternativePlans(
                       .planNode());
 }
 
-void makeStreamingPlans(
+void makeAlternativePlansWithTableScan(
+    const std::vector<std::string>& groupingKeys,
+    const std::vector<std::string>& aggregates,
+    const std::vector<std::string>& masks,
+    const std::vector<std::string>& projections,
+    const RowTypePtr& inputRowType,
+    std::vector<core::PlanNodePtr>& plans) {
+  // Partial -> final aggregation plan.
+  plans.push_back(PlanBuilder()
+                      .tableScan(inputRowType)
+                      .partialAggregation(groupingKeys, aggregates, masks)
+                      .localPartition(groupingKeys)
+                      .finalAggregation()
+                      .optionalProject(projections)
+                      .planNode());
+
+  // Partial -> intermediate -> final aggregation plan.
+  plans.push_back(PlanBuilder()
+                      .tableScan(inputRowType)
+                      .partialAggregation(groupingKeys, aggregates, masks)
+                      .localPartition(groupingKeys)
+                      .intermediateAggregation()
+                      .finalAggregation()
+                      .optionalProject(projections)
+                      .planNode());
+}
+
+void makeStreamingPlansWithValues(
     const std::vector<std::string>& groupingKeys,
     const std::vector<std::string>& aggregates,
     const std::vector<std::string>& masks,
@@ -889,12 +1071,67 @@ void makeStreamingPlans(
                       .planNode());
 }
 
+void makeStreamingPlansWithTableScan(
+    const std::vector<std::string>& groupingKeys,
+    const std::vector<std::string>& aggregates,
+    const std::vector<std::string>& masks,
+    const std::vector<std::string>& projections,
+    const RowTypePtr& inputRowType,
+    std::vector<core::PlanNodePtr>& plans) {
+  // Single aggregation.
+  plans.push_back(PlanBuilder()
+                      .tableScan(inputRowType)
+                      .orderBy(groupingKeys, false)
+                      .streamingAggregation(
+                          groupingKeys,
+                          aggregates,
+                          masks,
+                          core::AggregationNode::Step::kSingle,
+                          false)
+                      .optionalProject(projections)
+                      .planNode());
+
+  // Partial -> final aggregation plan.
+  plans.push_back(
+      PlanBuilder()
+          .tableScan(inputRowType)
+          .orderBy(groupingKeys, false)
+          .partialStreamingAggregation(groupingKeys, aggregates, masks)
+          .finalAggregation()
+          .optionalProject(projections)
+          .planNode());
+
+  // Partial -> intermediate -> final aggregation plan.
+  plans.push_back(
+      PlanBuilder()
+          .tableScan(inputRowType)
+          .orderBy(groupingKeys, false)
+          .partialStreamingAggregation(groupingKeys, aggregates, masks)
+          .intermediateAggregation()
+          .finalAggregation()
+          .optionalProject(projections)
+          .planNode());
+
+  // Partial -> local merge -> final aggregation plan.
+  plans.push_back(
+      PlanBuilder()
+          .tableScan(inputRowType)
+          .orderBy(groupingKeys, true)
+          .partialStreamingAggregation(groupingKeys, aggregates, masks)
+          .localMerge(groupingKeys)
+          .finalAggregation()
+          .optionalProject(projections)
+          .planNode());
+}
+
 void AggregationFuzzer::testPlan(
-    const core::PlanNodePtr& plan,
+    const PlanWithSplits& planWithSplits,
     bool injectSpill,
+    bool abandonPartial,
     bool verifyResults,
     const velox::test::ResultOrError& expected) {
-  auto actual = execute(plan, injectSpill);
+  auto actual = execute(
+      planWithSplits.plan, planWithSplits.splits, injectSpill, abandonPartial);
 
   // Compare results or exceptions (if any). Fail is anything is different.
   if (expected.exceptionPtr || actual.exceptionPtr) {
@@ -985,10 +1222,10 @@ void AggregationFuzzer::verifyWindow(
           .window({fmt::format("{} over ({})", aggregates[0], frame.str())})
           .planNode();
   if (persistAndRunOnce_) {
-    persistReproInfo({plan}, reproPersistPath_);
+    persistReproInfo({{plan, {}}}, reproPersistPath_);
   }
   try {
-    auto resultOrError = execute(plan, false /*injectSpill*/);
+    auto resultOrError = execute(plan);
     if (resultOrError.exceptionPtr) {
       ++stats_.numFailed;
     }
@@ -1005,11 +1242,45 @@ void AggregationFuzzer::verifyWindow(
     }
   } catch (...) {
     if (!reproPersistPath_.empty()) {
-      persistReproInfo({plan}, reproPersistPath_);
+      persistReproInfo({{plan, {}}}, reproPersistPath_);
     }
     throw;
   }
 }
+
+namespace {
+void writeToFile(
+    const std::string& path,
+    const VectorPtr& vector,
+    memory::MemoryPool* pool) {
+  dwrf::WriterOptions options;
+  options.schema = vector->type();
+  options.memoryPool = pool;
+  auto writeFile = std::make_unique<LocalWriteFile>(path, true, false);
+  auto sink =
+      std::make_unique<dwio::common::WriteFileSink>(std::move(writeFile), path);
+  dwrf::Writer writer(std::move(sink), options);
+  writer.write(vector);
+  writer.close();
+}
+
+bool isTableScanSupported(const TypePtr& type) {
+  if (type->kind() == TypeKind::ROW && type->size() == 0) {
+    return false;
+  }
+  if (type->kind() == TypeKind::UNKNOWN) {
+    return false;
+  }
+
+  for (auto i = 0; i < type->size(); ++i) {
+    if (!isTableScanSupported(type->childAt(i))) {
+      return false;
+    }
+  }
+
+  return true;
+}
+} // namespace
 
 void AggregationFuzzer::verifyAggregation(
     const std::vector<std::string>& groupingKeys,
@@ -1018,38 +1289,87 @@ void AggregationFuzzer::verifyAggregation(
     const std::vector<RowVectorPtr>& input,
     bool customVerification,
     const std::vector<std::string>& projections) {
-  auto plan = PlanBuilder()
-                  .values(input)
-                  .singleAggregation(groupingKeys, aggregates, masks)
-                  .optionalProject(projections)
-                  .planNode();
+  auto firstPlan = PlanBuilder()
+                       .values(input)
+                       .singleAggregation(groupingKeys, aggregates, masks)
+                       .optionalProject(projections)
+                       .planNode();
 
-  std::vector<core::PlanNodePtr> plans;
-  plans.push_back(plan);
   // Create all the plans upfront.
-  makeAlternativePlans(
-      groupingKeys, aggregates, masks, projections, input, plans);
+  std::vector<PlanWithSplits> plans;
+  plans.push_back({firstPlan, {}});
 
-  // Evaluate same plans on flat inputs.
-  std::vector<RowVectorPtr> flatInput;
-  for (const auto& vector : input) {
-    auto flat = BaseVector::create<RowVector>(
-        vector->type(), vector->size(), vector->pool());
-    flat->copy(vector.get(), 0, 0, vector->size());
-    flatInput.push_back(flat);
-  }
+  auto directory = exec::test::TempDirectoryPath::create();
 
-  makeAlternativePlans(
-      groupingKeys, aggregates, masks, projections, flatInput, plans);
+  // Alternate between using Values and TableScan node.
 
-  if (!groupingKeys.empty()) {
-    // Use OrderBy + StreamingAggregation on original input.
-    makeStreamingPlans(
-        groupingKeys, aggregates, masks, projections, input, plans);
+  // Sometimes we generate zero-column input of type ROW({}) or a column of type
+  // UNKNOWN(). Such data cannot be written to a file and therefore cannot
+  // be tested with TableScan.
+  if (isTableScanSupported(input[0]->type()) && vectorFuzzer_.coinToss(0.5)) {
+    std::vector<exec::Split> splits;
+    auto writerPool = rootPool_->addAggregateChild("writer");
+    for (auto i = 0; i < input.size(); ++i) {
+      const std::string filePath = fmt::format("{}/{}", directory->path, i);
+      writeToFile(filePath, input[i], writerPool.get());
+      splits.push_back(makeSplit(filePath));
+    }
 
-    // Use OrderBy + StreamingAggregation on flattened input.
-    makeStreamingPlans(
-        groupingKeys, aggregates, masks, projections, flatInput, plans);
+    const auto inputRowType = asRowType(input[0]->type());
+
+    std::vector<core::PlanNodePtr> tableScanPlans;
+    makeAlternativePlansWithTableScan(
+        groupingKeys,
+        aggregates,
+        masks,
+        projections,
+        inputRowType,
+        tableScanPlans);
+
+    if (!groupingKeys.empty()) {
+      // Use OrderBy + StreamingAggregation on original input.
+      makeStreamingPlansWithTableScan(
+          groupingKeys,
+          aggregates,
+          masks,
+          projections,
+          inputRowType,
+          tableScanPlans);
+    }
+
+    for (const auto& plan : tableScanPlans) {
+      plans.push_back({plan, splits});
+    }
+  } else {
+    std::vector<core::PlanNodePtr> valuesPlans;
+    makeAlternativePlansWithValues(
+        groupingKeys, aggregates, masks, projections, input, valuesPlans);
+
+    // Evaluate same plans on flat inputs.
+    std::vector<RowVectorPtr> flatInput;
+    for (const auto& vector : input) {
+      auto flat = BaseVector::create<RowVector>(
+          vector->type(), vector->size(), vector->pool());
+      flat->copy(vector.get(), 0, 0, vector->size());
+      flatInput.push_back(flat);
+    }
+
+    makeAlternativePlansWithValues(
+        groupingKeys, aggregates, masks, projections, flatInput, valuesPlans);
+
+    if (!groupingKeys.empty()) {
+      // Use OrderBy + StreamingAggregation on original input.
+      makeStreamingPlansWithValues(
+          groupingKeys, aggregates, masks, projections, input, valuesPlans);
+
+      // Use OrderBy + StreamingAggregation on flattened input.
+      makeStreamingPlansWithValues(
+          groupingKeys, aggregates, masks, projections, flatInput, valuesPlans);
+    }
+
+    for (const auto& plan : valuesPlans) {
+      plans.push_back({plan, {}});
+    }
   }
 
   if (persistAndRunOnce_) {
@@ -1057,7 +1377,7 @@ void AggregationFuzzer::verifyAggregation(
   }
 
   try {
-    auto resultOrError = execute(plan, false /*injectSpill*/);
+    auto resultOrError = execute(firstPlan);
     if (resultOrError.exceptionPtr) {
       ++stats_.numFailed;
     }
@@ -1067,7 +1387,7 @@ void AggregationFuzzer::verifyAggregation(
     std::optional<MaterializedRowMultiset> expectedResult;
     if (verifyResults) {
       expectedResult = computeDuckAggregation(
-          groupingKeys, aggregates, masks, projections, input, plan);
+          groupingKeys, aggregates, masks, projections, input, firstPlan);
     }
 
     if (expectedResult && resultOrError.result) {
@@ -1091,9 +1411,9 @@ void AggregationFuzzer::verifyAggregation(
 // created by previous verifyAggregation function. Changes in nodes there will
 // require corresponding changes here.
 void AggregationFuzzer::verifyAggregation(
-    std::vector<core::PlanNodePtr> plans) {
+    const std::vector<PlanWithSplits>& plans) {
   VELOX_CHECK_GT(plans.size(), 0);
-  auto plan = plans.front();
+  const auto& plan = plans.front().plan;
   auto node = dynamic_cast<const core::AggregationNode*>(plan.get());
   auto projectionNode = dynamic_cast<const core::ProjectNode*>(plan.get());
   VELOX_CHECK(node || projectionNode);
@@ -1110,15 +1430,15 @@ void AggregationFuzzer::verifyAggregation(
   std::vector<std::string> groupingKeyNames;
   groupingKeyNames.reserve(groupingKeys.size());
 
-  for (auto gkey : groupingKeys) {
-    groupingKeyNames.push_back(gkey->name());
+  for (const auto& key : groupingKeys) {
+    groupingKeyNames.push_back(key->name());
   }
 
   // Get masks.
   std::vector<std::string> maskNames;
   maskNames.reserve(node->aggregates().size());
 
-  for (auto aggregate : node->aggregates()) {
+  for (const auto& aggregate : node->aggregates()) {
     if (aggregate.mask) {
       maskNames.push_back(aggregate.mask->name());
     }
@@ -1139,7 +1459,7 @@ void AggregationFuzzer::verifyAggregation(
     input.insert(input.end(), values.begin(), values.end());
   }
 
-  auto resultOrError = execute(plan, false /*injectSpill*/);
+  auto resultOrError = execute(plan);
   if (resultOrError.exceptionPtr) {
     ++stats_.numFailed;
   }

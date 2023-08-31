@@ -26,8 +26,8 @@ SelectiveTimestampColumnReader::SelectiveTimestampColumnReader(
     const std::shared_ptr<const TypeWithId>& nodeType,
     DwrfParams& params,
     common::ScanSpec& scanSpec)
-    : SelectiveColumnReader(nodeType->type, params, scanSpec, nodeType) {
-  EncodingKey encodingKey{fileType_->id, params.flatMapContext().sequence};
+    : SelectiveColumnReader(nodeType->type(), params, scanSpec, nodeType) {
+  EncodingKey encodingKey{fileType_->id(), params.flatMapContext().sequence};
   auto& stripe = params.stripeStreams();
   version_ = convertRleVersion(stripe.getEncoding(encodingKey).kind());
   auto data = encodingKey.forKind(proto::Stream_Kind_DATA);
@@ -66,7 +66,6 @@ void SelectiveTimestampColumnReader::seekToRowGroup(uint32_t index) {
 
 template <bool dense>
 void SelectiveTimestampColumnReader::readHelper(RowSet rows) {
-  vector_size_t numRows = rows.back() + 1;
   ExtractToReader extractValues(this);
   common::AlwaysTrue filter;
   DirectRleColumnVisitor<
@@ -99,7 +98,6 @@ void SelectiveTimestampColumnReader::readHelper(RowSet rows) {
   } else {
     decodeWithVisitor<velox::dwrf::RleDecoderV2<false>>(nano_.get(), visitor);
   }
-  readOffset_ += numRows;
 }
 
 void SelectiveTimestampColumnReader::read(
@@ -107,13 +105,19 @@ void SelectiveTimestampColumnReader::read(
     RowSet rows,
     const uint64_t* incomingNulls) {
   prepareRead<int64_t>(offset, rows, incomingNulls);
-  VELOX_CHECK(!scanSpec_->filter());
+  VELOX_CHECK(
+      !scanSpec_->filter(),
+      "Selective reader for TIMESTAMP doesn't support filter pushdown yet");
+  VELOX_CHECK(
+      !scanSpec_->valueHook(),
+      "Selective reader for TIMESTAMP doesn't support aggregation pushdown yet");
   bool isDense = rows.back() == rows.size() - 1;
   if (isDense) {
     readHelper<true>(rows);
   } else {
     readHelper<false>(rows);
   }
+  readOffset_ += rows.back() + 1;
 }
 
 namespace {
@@ -157,7 +161,7 @@ void SelectiveTimestampColumnReader::getValues(RowSet rows, VectorPtr* result) {
   fillTimestamps(rawTs, rawNulls, secondsData, nanosData, numValues_);
   values_ = tsValues;
   rawValues_ = values_->asMutable<char>();
-  getFlatValues<Timestamp, Timestamp>(rows, result, fileType_->type, true);
+  getFlatValues<Timestamp, Timestamp>(rows, result, fileType_->type(), true);
 }
 
 } // namespace facebook::velox::dwrf

@@ -38,7 +38,7 @@ class DataBuffer {
             pool_->allocateZeroFilled(1, sizeInBytes(size)))),
         size_(size),
         capacity_(size) {
-    DWIO_ENSURE(buf_ != nullptr || size == 0);
+    DWIO_ENSURE(buf_ != nullptr || size_ == 0);
   }
 
   DataBuffer(DataBuffer&& other) noexcept
@@ -60,11 +60,11 @@ class DataBuffer {
     clear();
   }
 
-  T* FOLLY_NULLABLE data() {
+  T* data() {
     return buf_;
   }
 
-  const T* FOLLY_NULLABLE data() const {
+  const T* data() const {
     return buf_;
   }
 
@@ -87,8 +87,7 @@ class DataBuffer {
   // Get with range check introduces significant overhead. Use index operator[]
   // when possible
   const T& at(uint64_t i) const {
-    DWIO_ENSURE_LT(
-        i, size_, "Accessing index out of range: ", i, " >= ", size_);
+    DWIO_ENSURE_LT(i, size_, "Accessing index out of range");
     return data()[i];
   }
 
@@ -141,17 +140,18 @@ class DataBuffer {
     append(offset, src.data() + srcOffset, items);
   }
 
-  void append(uint64_t offset, const T* FOLLY_NONNULL src, uint64_t items) {
+  void append(uint64_t offset, const T* src, uint64_t items) {
     reserve(offset + items);
     unsafeAppend(offset, src, items);
   }
 
-  /// Set a value to the specified offset - if offset overflows current capacity
-  /// It safely allocate more space to meet the request.
+  /// Sets a value to the specified offset - if offset overflows current
+  /// capacity It safely allocate more space to meet the request.
   void safeSet(uint64_t offset, T value) {
     if (offset >= capacity_) {
       // 50% increasing capacity or offset;
-      auto size = std::max(offset + 1, capacity_ + ((capacity_ + 1) / 2) + 1);
+      const auto size =
+          std::max(offset + 1, capacity_ + ((capacity_ + 1) / 2) + 1);
       reserve(size);
       VLOG(1) << "reserve size: " << size << " for offset set: " << offset;
     }
@@ -162,18 +162,16 @@ class DataBuffer {
     }
   }
 
-  void
-  extendAppend(uint64_t offset, const T* FOLLY_NONNULL src, uint64_t items) {
+  void extendAppend(uint64_t offset, const T* src, uint64_t items) {
     auto newSize = offset + items;
-    if (UNLIKELY(newSize > capacity_)) {
+    if (FOLLY_UNLIKELY(newSize > capacity_)) {
       reserve(newSize + ((newSize + 1) / 2) + 1);
     }
     unsafeAppend(offset, src, items);
   }
 
-  void
-  unsafeAppend(uint64_t offset, const T* FOLLY_NONNULL src, uint64_t items) {
-    if (LIKELY(items > 0)) {
+  void unsafeAppend(uint64_t offset, const T* src, uint64_t items) {
+    if (FOLLY_LIKELY(items > 0)) {
       std::memcpy(data() + offset, src, sizeInBytes(items));
     }
     size_ = (offset + items);
@@ -191,7 +189,7 @@ class DataBuffer {
   }
 
   void clear() {
-    if (!veloxRef_ && buf_) {
+    if ((veloxRef_ == nullptr) && (buf_ != nullptr)) {
       pool_->free(buf_, sizeInBytes(capacity_));
     }
     size_ = 0;
@@ -216,12 +214,12 @@ class DataBuffer {
     return sizeof(T) * items;
   }
 
-  velox::memory::MemoryPool* const FOLLY_NULLABLE pool_;
+  velox::memory::MemoryPool* const pool_;
   // The referenced velox buffer. 'buf_' owns the memory when 'veloxRef_' is
   // nullptr.
   const velox::BufferPtr veloxRef_{nullptr};
 
-  T* FOLLY_NULLABLE buf_;
+  T* buf_;
   // current size
   uint64_t size_;
   // maximal capacity (actual allocated memory)

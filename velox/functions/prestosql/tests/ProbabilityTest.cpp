@@ -280,6 +280,35 @@ TEST_F(ProbabilityTest, fCDF) {
   VELOX_ASSERT_THROW(fCDF(1, -kInf, -0.1), "value must non-negative");
 }
 
+TEST_F(ProbabilityTest, laplaceCDF) {
+  const auto laplaceCDF = [&](std::optional<double> location,
+                              std::optional<double> scale,
+                              std::optional<double> x) {
+    return evaluateOnce<double>("laplace_cdf(c0, c1, c2)", location, scale, x);
+  };
+
+  EXPECT_DOUBLE_EQ(0.5, laplaceCDF(0.0, 1.0, 0.0).value());
+  EXPECT_DOUBLE_EQ(0.5, laplaceCDF(5.0, 2.0, 5.0).value());
+  EXPECT_DOUBLE_EQ(0.0, laplaceCDF(5.0, 2.0, -kInf).value());
+  EXPECT_THAT(laplaceCDF(kNan, 1.0, 0.5), IsNan());
+  EXPECT_THAT(laplaceCDF(1.0, 1.0, kNan), IsNan());
+  EXPECT_THAT(laplaceCDF(kInf, 1.0, kNan), IsNan());
+  EXPECT_EQ(std::nullopt, laplaceCDF(std::nullopt, 1.0, 0.5));
+  EXPECT_EQ(std::nullopt, laplaceCDF(1.0, std::nullopt, 0.5));
+  EXPECT_EQ(std::nullopt, laplaceCDF(1.0, 1.0, std::nullopt));
+  EXPECT_EQ(0, laplaceCDF(kDoubleMax, 1.0, 0.5));
+  EXPECT_EQ(0.5, laplaceCDF(1.0, kDoubleMax, 0.5));
+  EXPECT_EQ(1, laplaceCDF(1.0, 1.0, kDoubleMax));
+  EXPECT_NEAR(
+      0.69673467014368329, laplaceCDF(kDoubleMin, 1.0, 0.5).value(), 1e-15);
+  EXPECT_EQ(0, laplaceCDF(1.0, kDoubleMin, 0.5));
+  EXPECT_NEAR(
+      0.18393972058572117, laplaceCDF(1.0, 1.0, kDoubleMin).value(), 1e-15);
+  VELOX_ASSERT_THROW(laplaceCDF(1.0, 0.0, 0.5), "scale must be greater than 0");
+  VELOX_ASSERT_THROW(
+      laplaceCDF(1.0, -1.0, 0.5), "scale must be greater than 0");
+}
+
 TEST_F(ProbabilityTest, poissonCDF) {
   const auto poissonCDF = [&](std::optional<double> lambda,
                               std::optional<int64_t> value) {
@@ -300,6 +329,46 @@ TEST_F(ProbabilityTest, poissonCDF) {
   VELOX_ASSERT_THROW(
       poissonCDF(3, -10), "value must be a non-negative integer");
   EXPECT_THROW(poissonCDF(kInf, 3), VeloxUserError);
+}
+
+TEST_F(ProbabilityTest, gammaCDF) {
+  const auto gammaCDF = [&](std::optional<double> shape,
+                            std::optional<double> scale,
+                            std::optional<double> value) {
+    return evaluateOnce<double>("gamma_cdf(c0, c1, c2)", shape, scale, value);
+  };
+
+  EXPECT_DOUBLE_EQ(0.96675918913720599, gammaCDF(0.5, 3.0, 6.8).value());
+  EXPECT_DOUBLE_EQ(0.50636537728827200, gammaCDF(1.5, 2.0, 2.4).value());
+  EXPECT_DOUBLE_EQ(0.55950671493478754, gammaCDF(5.0, 2.0, 10.0).value());
+  EXPECT_DOUBLE_EQ(0.01751372384616767, gammaCDF(6.5, 3.5, 8.1).value());
+  EXPECT_DOUBLE_EQ(1.0, gammaCDF(5.0, 2.0, 100.0).value());
+  EXPECT_DOUBLE_EQ(0.0, gammaCDF(5.0, 2.0, 0.0).value());
+  EXPECT_DOUBLE_EQ(0.15085496391539036, gammaCDF(2.5, 1.0, 1.0).value());
+  EXPECT_DOUBLE_EQ(1.0, gammaCDF(2.0, kInf, kInf).value());
+  EXPECT_DOUBLE_EQ(0.0, gammaCDF(kInf, 3.0, 6.0).value());
+  EXPECT_DOUBLE_EQ(0.0, gammaCDF(2.0, kInf, 6.0).value());
+  EXPECT_DOUBLE_EQ(1.0, gammaCDF(2.0, 3.0, kInf).value());
+  EXPECT_DOUBLE_EQ(0.0, gammaCDF(kDoubleMax, 3.0, 6.0).value());
+  EXPECT_DOUBLE_EQ(0.0, gammaCDF(2.0, kDoubleMax, 6.0).value());
+  EXPECT_DOUBLE_EQ(1.0, gammaCDF(2.0, 3.0, kDoubleMax).value());
+  EXPECT_DOUBLE_EQ(1.0, gammaCDF(kDoubleMin, 3.0, 6.0).value());
+  EXPECT_DOUBLE_EQ(1.0, gammaCDF(2.0, kDoubleMin, 6.0).value());
+  EXPECT_DOUBLE_EQ(0.0, gammaCDF(2.0, 3.0, kDoubleMin).value());
+
+  EXPECT_EQ(std::nullopt, gammaCDF(std::nullopt, 3.0, 6.0));
+  EXPECT_EQ(std::nullopt, gammaCDF(2.0, std::nullopt, 6.0));
+  EXPECT_EQ(std::nullopt, gammaCDF(2.0, 3.0, std::nullopt));
+
+  // invalid inputs
+  VELOX_ASSERT_THROW(gammaCDF(-1.0, 3.0, 6.0), "shape must be greater than 0");
+  VELOX_ASSERT_THROW(gammaCDF(2.0, -1.0, 6.0), "scale must be greater than 0");
+  VELOX_ASSERT_THROW(
+      gammaCDF(2.0, 3.0, -1.0), "value must be greater than, or equal to, 0");
+  VELOX_ASSERT_THROW(gammaCDF(kNan, 3.0, 6.0), "shape must be greater than 0");
+  VELOX_ASSERT_THROW(gammaCDF(2.0, kNan, 6.0), "scale must be greater than 0");
+  VELOX_ASSERT_THROW(
+      gammaCDF(2.0, 3.0, kNan), "value must be greater than, or equal to, 0");
 }
 
 } // namespace

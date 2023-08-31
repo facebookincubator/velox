@@ -73,7 +73,10 @@ class E2EFilterTest : public E2EFilterTestBase {
                                : (++flushCounter % flushEveryNBatches_ == 0);
       });
     };
-    auto sink = std::make_unique<MemorySink>(*leafPool_, 200 * 1024 * 1024);
+    auto sink = std::make_unique<MemorySink>(
+        200 * 1024 * 1024,
+        dwio::common::FileSink::Options{.pool = leafPool_.get()});
+    ASSERT_TRUE(sink->isBuffered());
     sinkPtr_ = sink.get();
     options.memoryPool = rootPool_.get();
     writer_ = std::make_unique<dwrf::Writer>(std::move(sink), options);
@@ -130,11 +133,11 @@ class E2EFilterTest : public E2EFilterTestBase {
           continue;
         }
         auto& child = schemaWithId->childAt(i);
-        mapFlatCols.push_back(child->column);
+        mapFlatCols.push_back(child->column());
         if (!rowType.childAt(i)->isRow()) {
           continue;
         }
-        flatmapNodeIdsAsStruct_[child->id] = mapFlatColsStructKeys[i];
+        flatmapNodeIdsAsStruct_[child->id()] = mapFlatColsStructKeys[i];
       }
       config->set(dwrf::Config::FLATTEN_MAP, true);
       config->set<const std::vector<uint32_t>>(

@@ -17,6 +17,7 @@
 #include <exception>
 #include <fstream>
 #include <stdexcept>
+#include <vector>
 #include "glog/logging.h"
 #include "gtest/gtest.h"
 
@@ -24,12 +25,13 @@
 
 #include "velox/common/base/tests/GTestUtils.h"
 #include "velox/exec/tests/utils/TempDirectoryPath.h"
+#include "velox/expression/CoalesceExpr.h"
 #include "velox/expression/ConjunctExpr.h"
 #include "velox/expression/ConstantExpr.h"
+#include "velox/expression/SwitchExpr.h"
 #include "velox/functions/Udf.h"
 #include "velox/functions/prestosql/registration/RegistrationFunctions.h"
 #include "velox/functions/prestosql/tests/utils/FunctionBaseTest.h"
-
 #include "velox/parse/Expressions.h"
 #include "velox/parse/ExpressionsParser.h"
 #include "velox/parse/TypeResolver.h"
@@ -74,13 +76,20 @@ class ExprTest : public testing::Test, public VectorTestBase {
     return parsed;
   }
 
+  // T can be ExprSet or ExprSetSimplified.
+  template <typename T = exec::ExprSet>
+  std::unique_ptr<T> compileExpression(const core::TypedExprPtr& expr) {
+    std::vector<core::TypedExprPtr> expressions = {expr};
+    return std::make_unique<T>(std::move(expressions), execCtx_.get());
+  }
+
+  // T can be ExprSet or ExprSetSimplified.
   template <typename T = exec::ExprSet>
   std::unique_ptr<T> compileExpression(
       const std::string& expr,
       const RowTypePtr& rowType) {
-    std::vector<core::TypedExprPtr> expressions = {
-        parseExpression(expr, rowType)};
-    return std::make_unique<T>(std::move(expressions), execCtx_.get());
+    auto parsedExpression = parseExpression(expr, rowType);
+    return compileExpression<T>(parsedExpression);
   }
 
   std::unique_ptr<exec::ExprSet> compileMultiple(
@@ -1750,6 +1759,71 @@ TEST_F(ExprTest, ifWithConstant) {
   EXPECT_EQ(true, result->as<ConstantVector<bool>>()->valueAt(0));
 }
 
+// Make sure that switch do set nulls for rows that are not evaluated by the
+// switch due to a throw.
+TEST_F(ExprTest, switchSetNullsForThrowIndices) {
+  // Build an input with c0 column having nulls at odd row index.
+  registerFunction<TestingAlwaysThrowsFunction, bool, int64_t>(
+      {"always_throws"});
+  registerFunction<TestingThrowsAtOddFunction, bool, int64_t>({"throw_at_odd"});
+
+  auto eval = [&](const std::string& input, auto inputRow) {
+    // Evaluate an expression in a no throw context without using try
+    // expression to verify that the switch sets the nulls. If we use try, try
+    // will add the nulls and we won't be able to check that the switch adds
+    // nulls.
+    auto exprSet = compileMultiple({input}, asRowType(inputRow->type()));
+    exec::EvalCtx context(execCtx_.get(), exprSet.get(), inputRow.get());
+    *context.mutableThrowOnError() = false;
+    std::vector<VectorPtr> results;
+    SelectivityVector rows(inputRow->size());
+    exprSet->eval(rows, context, results);
+    return results[0];
+  };
+
+  // All null.
+  {
+    auto input = vectorMaker_.flatVector<int64_t>({1, 2, 3, 4, 5});
+    auto result =
+        eval("if (always_throws(c0), 7, 1)", vectorMaker_.rowVector({input}));
+    for (int i = 0; i < input->size(); i++) {
+      EXPECT_TRUE(result->isNullAt(i));
+    }
+  }
+  {
+    auto input = vectorMaker_.flatVector<int64_t>({1, 1, 1, 4, 4});
+    auto result = eval(
+        "if(always_throws(c0), row_constructor(1,2), row_constructor(1,2))",
+        vectorMaker_.rowVector({input}));
+    EXPECT_EQ(result->size(), input->size());
+    for (int i = 0; i < input->size(); i++) {
+      EXPECT_TRUE(result->isNullAt(i)) << "index: " << i;
+    }
+  }
+
+  // Null at odd.
+  {
+    auto input = vectorMaker_.flatVector<int64_t>({1, 2, 3, 4, 5});
+    auto result =
+        eval("if(throw_at_odd(c0), 7, 1)", vectorMaker_.rowVector({input}));
+    EXPECT_EQ(result->size(), input->size());
+    for (int i = 0; i < input->size(); i++) {
+      EXPECT_EQ(result->isNullAt(i), input->valueAt(i) % 2);
+    }
+  }
+
+  {
+    auto input = vectorMaker_.flatVector<int64_t>({1, 1, 1, 4, 4});
+    auto result = eval(
+        "if(throw_at_odd(c0), array_constructor(1,2), array_constructor(1,2))",
+        vectorMaker_.rowVector({input}));
+    EXPECT_EQ(result->size(), input->size());
+    for (int i = 0; i < input->size(); i++) {
+      EXPECT_EQ(result->isNullAt(i), input->valueAt(i) % 2);
+    }
+  }
+}
+
 namespace {
 // Testing functions for generating intermediate results in different
 // encodings. The test case passes vectors to these and these
@@ -2263,12 +2337,27 @@ TEST_F(ExprTest, peeledConstant) {
   }
 }
 
+namespace {
+// In general simple functions should not throw runtime errors but only user
+// errors, since runtime errors are not suppressed with try. This is needed for
+// the unit test.
+template <typename T>
+struct ThrowRuntimeError {
+  template <typename TResult, typename TInput>
+  FOLLY_ALWAYS_INLINE void call(TResult&, const TInput&) {
+    // Throw runtime error,
+    VELOX_FAIL();
+  }
+};
+} // namespace
+
 TEST_F(ExprTest, exceptionContext) {
   auto data = makeRowVector({
       makeFlatVector<int32_t>({1, 2, 3}),
       makeFlatVector<int32_t>({1, 2, 3}),
   });
 
+  registerFunction<ThrowRuntimeError, int32_t, int32_t>({"runtime_error"});
   registerFunction<TestingAlwaysThrowsFunction, int32_t, int32_t>(
       {"always_throws"});
 
@@ -2310,12 +2399,12 @@ TEST_F(ExprTest, exceptionContext) {
       tempDirectory->path;
 
   try {
-    evaluate("always_throws(c0) + c1", data);
+    evaluate("runtime_error(c0) + c1", data);
     FAIL() << "Expected an exception";
   } catch (const VeloxException& e) {
-    ASSERT_EQ("always_throws(c0)", e.context());
+    ASSERT_EQ("runtime_error(c0)", e.context());
     ASSERT_EQ(
-        "plus(always_throws(c0), c1)", trimInputPath(e.topLevelContext()));
+        "plus(runtime_error(c0), c1)", trimInputPath(e.topLevelContext()));
     verifyDataAndSqlPaths(e, data);
   }
 
@@ -4070,6 +4159,170 @@ TEST_F(ExprTest, extractSubfields) {
       "transform(c2, c0 -> reduce(c0, 0, (c0, c2) -> c0 + c2, c0 -> c0 + c1[1]) + c0[1])",
       {"c1[1]", "c2"});
 }
+auto makeRow = [](const std::string& fieldName) {
+  return fmt::format(
+      "cast(row_constructor(1) as struct({} BOOLEAN))", fieldName);
+};
 
+TEST_F(ExprTest, extractSubfieldsWithDereference) {
+  // Tests extracting subfields from expressions using DeferenceTypedExpr to
+  // access fields without the field names initialized (all empty string).  In
+  // this case, the field's parent should be extracted.
+  std::vector<core::TypedExprPtr> expr = {
+      std::make_shared<core::DereferenceTypedExpr>(
+          REAL(),
+          std::make_shared<core::FieldAccessTypedExpr>(
+              ROW({{"", DOUBLE()}, {"", REAL()}, {"", BIGINT()}}),
+              std::make_shared<core::InputTypedExpr>(ROW(
+                  {{"c0",
+                    ROW({{"", DOUBLE()}, {"", REAL()}, {"", BIGINT()}})}})),
+              "c0"),
+          1)};
+
+  auto exprSet =
+      std::make_unique<exec::ExprSet>(std::move(expr), execCtx_.get());
+  auto subfields = exprSet->expr(0)->extractSubfields();
+
+  ASSERT_EQ(subfields.size(), 1);
+  ASSERT_EQ(subfields[0].toString(), "c0");
+}
+
+TEST_F(ExprTest, switchRowInputTypesAreTheSame) {
+  assertErrorSimplified(
+      fmt::format("switch(c0, {},  {})", makeRow("f1"), makeRow("f2")),
+      makeFlatVector<bool>(1),
+      "Else clause of a SWITCH statement must have the same type as 'then' clauses. Expected ROW<f1:BOOLEAN>, but got ROW<f2:BOOLEAN>.");
+
+  assertErrorSimplified(
+      fmt::format("if(c0, {},  {})", makeRow("f1"), makeRow("f2")),
+      {makeFlatVector<bool>(1)},
+      "Else clause of a SWITCH statement must have the same type as 'then' clauses. Expected ROW<f1:BOOLEAN>, but got ROW<f2:BOOLEAN>.");
+
+  {
+    auto condition = compileExpression("c0", {ROW({"c0"}, {BOOLEAN()})});
+    auto thenBranch = compileExpression(makeRow("f1"), {});
+    auto elseBranch = compileExpression(makeRow("f1"), {});
+    try {
+      exec::SwitchExpr switchExpr(
+          ROW({"c0"}, {BOOLEAN()}),
+          {condition->expr(0), thenBranch->expr(0), elseBranch->expr(0)},
+          false);
+      EXPECT_TRUE(false) << "Expected an error";
+    } catch (VeloxException& e) {
+      EXPECT_EQ(
+          "Switch expression type different than then clause. Expected ROW<f1:BOOLEAN> but got Actual ROW<c0:BOOLEAN>.",
+          e.message());
+    }
+  }
+}
+
+TEST_F(ExprTest, coalesceRowInputTypesAreTheSame) {
+  auto makeRow = [](const std::string& fieldName) {
+    return fmt::format(
+        "cast(row_constructor(1) as struct({} BOOLEAN))", fieldName);
+  };
+
+  assertErrorSimplified(
+      fmt::format("coalesce({},  {})", makeRow("f1"), makeRow("f2")),
+      makeFlatVector<bool>(1),
+      "Inputs to coalesce must have the same type. Expected ROW<f1:BOOLEAN>, but got ROW<f2:BOOLEAN>.");
+
+  {
+    auto expr1 = compileExpression(makeRow("f1"), {});
+    auto expr2 = compileExpression(makeRow("f1"), {});
+    try {
+      exec::CoalesceExpr coalesceExpr(
+          ROW({"c0"}, {BOOLEAN()}), {expr1->expr(0), expr2->expr(0)}, false);
+      EXPECT_TRUE(false) << "Expected an error";
+    } catch (VeloxException& e) {
+      EXPECT_EQ(
+          "Coalesce expression type different than its inputs. Expected ROW<f1:BOOLEAN> but got Actual ROW<c0:BOOLEAN>.",
+          e.message());
+    }
+  }
+
+  {
+    // Check that operator==() of CallTypedExpr, FieldAccessTypedExpr,
+    // ConcatTypedExpr, and LambdaTypedExpr returns false when result types are
+    // different.
+    auto call1 = std::make_shared<const core::CallTypedExpr>(
+        ROW({"row_field0"}, {BIGINT()}),
+        std::vector<core::TypedExprPtr>{
+            std::make_shared<const core::FieldAccessTypedExpr>(BIGINT(), "c0")},
+        "foo");
+    auto call2 = std::make_shared<const core::CallTypedExpr>(
+        ROW({""}, {BIGINT()}),
+        std::vector<core::TypedExprPtr>{
+            std::make_shared<const core::FieldAccessTypedExpr>(BIGINT(), "c0")},
+        "foo");
+    ASSERT_FALSE(*call1 == *call2);
+
+    auto fieldAccess1 = std::make_shared<const core::FieldAccessTypedExpr>(
+        ROW({"row_field0"}, {BIGINT()}), "c0");
+    auto fieldAccess2 = std::make_shared<const core::FieldAccessTypedExpr>(
+        ROW({""}, {BIGINT()}), "c0");
+    ASSERT_FALSE(*fieldAccess1 == *fieldAccess2);
+
+    auto concat1 = std::make_shared<const core::ConcatTypedExpr>(
+        std::vector<std::string>{"row_field0"},
+        std::vector<core::TypedExprPtr>{
+            std::make_shared<const core::FieldAccessTypedExpr>(
+                BIGINT(), "c0")});
+    auto concat2 = std::make_shared<const core::ConcatTypedExpr>(
+        std::vector<std::string>{""},
+        std::vector<core::TypedExprPtr>{
+            std::make_shared<const core::FieldAccessTypedExpr>(
+                BIGINT(), "c0")});
+    ASSERT_FALSE(*concat1 == *concat2);
+
+    auto lambda1 = std::make_shared<const core::LambdaTypedExpr>(
+        ROW({"c0"}, {BIGINT()}), call1);
+    auto lambda2 = std::make_shared<const core::LambdaTypedExpr>(
+        ROW({"c0"}, {BIGINT()}), call2);
+    ASSERT_FALSE(*lambda1 == *lambda2);
+  }
+
+  {
+    // cast(concat(c0) as row(row_field0)).row_field0 + coalesce(c1,
+    // concat(c0)).row_field0. The result type of the first concat is
+    // Row<"":bigint> while the result type of the second concat is
+    // Row<"row_field0":bigint>. This is a valid expression, so the expression
+    // compilation should not throw in this situation.
+    core::TypedExprPtr concat = std::make_shared<const core::ConcatTypedExpr>(
+        std::vector<std::string>{"row_field0"},
+        std::vector<core::TypedExprPtr>{
+            std::make_shared<const core::FieldAccessTypedExpr>(
+                BIGINT(), "c0")});
+    core::TypedExprPtr coalesce = std::make_shared<const core::CallTypedExpr>(
+        ROW({"row_field0"}, {BIGINT()}),
+        std::vector<core::TypedExprPtr>{
+            std::make_shared<const core::FieldAccessTypedExpr>(
+                ROW({"row_field0"}, {BIGINT()}), "c1"),
+            concat},
+        "coalesce");
+    core::TypedExprPtr dereference =
+        std::make_shared<const core::FieldAccessTypedExpr>(
+            BIGINT(), coalesce, "row_field0");
+    core::TypedExprPtr concat2 = std::make_shared<const core::ConcatTypedExpr>(
+        std::vector<std::string>{""},
+        std::vector<core::TypedExprPtr>{
+            std::make_shared<const core::FieldAccessTypedExpr>(
+                BIGINT(), "c0")});
+    ASSERT_FALSE(*concat == *concat2);
+    core::TypedExprPtr cast = std::make_shared<const core::CallTypedExpr>(
+        ROW({"row_field0"}, {BIGINT()}),
+        std::vector<core::TypedExprPtr>{concat2},
+        "cast");
+    core::TypedExprPtr dereference2 =
+        std::make_shared<const core::FieldAccessTypedExpr>(
+            BIGINT(), cast, "row_field0");
+    core::TypedExprPtr plus = std::make_shared<const core::CallTypedExpr>(
+        BIGINT(),
+        std::vector<core::TypedExprPtr>{dereference2, dereference},
+        "plus");
+
+    ASSERT_NO_THROW(compileExpression(plus));
+  }
+}
 } // namespace
 } // namespace facebook::velox::test

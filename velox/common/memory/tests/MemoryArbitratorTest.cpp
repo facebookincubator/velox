@@ -20,8 +20,10 @@
 #include <deque>
 
 #include "velox/common/base/tests/GTestUtils.h"
+#include "velox/common/memory/MallocAllocator.h"
 #include "velox/common/memory/Memory.h"
 #include "velox/common/memory/MemoryArbitrator.h"
+#include "velox/common/memory/SharedArbitrator.h"
 
 using namespace ::testing;
 
@@ -58,15 +60,90 @@ TEST_F(MemoryArbitrationTest, create) {
     config.capacity = 1 * GB;
     config.kind = kind;
     if (kind.empty()) {
-      ASSERT_EQ(MemoryArbitrator::create(config), nullptr);
+      auto arbitrator = MemoryArbitrator::create(config);
+      ASSERT_EQ(arbitrator->kind(), "NOOP");
     } else if (kind == unknownType) {
       VELOX_ASSERT_THROW(
           MemoryArbitrator::create(config),
           "Arbitrator factory for kind UNKNOWN not registered");
     } else {
-      VELOX_ASSERT_THROW(MemoryArbitrator::create(config), "");
+      FAIL();
     }
   }
+}
+
+TEST_F(MemoryArbitrationTest, createWithDefaultConf) {
+  MemoryArbitrator::Config config;
+  config.capacity = 1 * GB;
+  const auto& arbitrator = MemoryArbitrator::create(config);
+  ASSERT_EQ(arbitrator->kind(), "NOOP");
+}
+
+TEST_F(MemoryArbitrationTest, queryMemoryCapacity) {
+  {
+    // Reserved memory is not enforced when no arbitrator is provided.
+    auto allocator = std::make_shared<MallocAllocator>(8L << 20);
+    MemoryManager manager{
+        {.capacity = (int64_t)allocator->capacity(),
+         .queryMemoryCapacity = 4L << 20,
+         .allocator = allocator.get()}};
+    auto rootPool = manager.addRootPool("root-1", 8L << 20);
+    auto leafPool = rootPool->addLeafChild("leaf-1.0");
+    void* buffer;
+    ASSERT_NO_THROW({
+      buffer = leafPool->allocate(7L << 20);
+      leafPool->free(buffer, 7L << 20);
+    });
+  }
+  {
+    // Reserved memory is enforced when SharedMemoryArbitrator is used.
+    SharedArbitrator::registerFactory();
+    auto allocator = std::make_shared<MallocAllocator>(8L << 20);
+    MemoryManager manager{
+        {.capacity = (int64_t)allocator->capacity(),
+         .queryMemoryCapacity = 4L << 20,
+         .allocator = allocator.get(),
+         .arbitratorKind = "SHARED"}};
+    auto rootPool =
+        manager.addRootPool("root-1", 8L << 20, MemoryReclaimer::create());
+    auto leafPool = rootPool->addLeafChild("leaf-1.0");
+    void* buffer;
+    VELOX_ASSERT_THROW(
+        buffer = leafPool->allocate(7L << 20),
+        "Exceeded memory pool cap of 4.00MB");
+    ASSERT_NO_THROW(buffer = leafPool->allocate(4L << 20));
+    leafPool->free(buffer, 4L << 20);
+    SharedArbitrator::unregisterFactory();
+  }
+}
+
+TEST_F(MemoryArbitrationTest, arbitratorStats) {
+  MemoryArbitrator::Stats anchorStats(5, 5, 5, 5, 5, 5, 5, 5, 5);
+  MemoryArbitrator::Stats largeStats(8, 8, 8, 8, 8, 8, 8, 8, 8);
+  ASSERT_TRUE(!(anchorStats == largeStats));
+  ASSERT_TRUE(anchorStats != largeStats);
+  ASSERT_TRUE(anchorStats < largeStats);
+  ASSERT_TRUE(!(anchorStats > largeStats));
+  ASSERT_TRUE(anchorStats <= largeStats);
+  ASSERT_TRUE(!(anchorStats >= largeStats));
+  auto delta = largeStats - anchorStats;
+  ASSERT_EQ(delta, MemoryArbitrator::Stats(3, 3, 3, 3, 3, 3, 3, 8, 8));
+
+  MemoryArbitrator::Stats smallStats(2, 2, 2, 2, 2, 2, 2, 2, 2);
+  ASSERT_TRUE(!(anchorStats == smallStats));
+  ASSERT_TRUE(anchorStats != smallStats);
+  ASSERT_TRUE(!(anchorStats < smallStats));
+  ASSERT_TRUE(anchorStats > smallStats);
+  ASSERT_TRUE(!(anchorStats <= smallStats));
+  ASSERT_TRUE(anchorStats >= smallStats);
+
+  MemoryArbitrator::Stats invalidStats(2, 2, 2, 2, 2, 8, 8, 8, 8);
+  ASSERT_TRUE(!(anchorStats == invalidStats));
+  ASSERT_TRUE(anchorStats != invalidStats);
+  ASSERT_THROW(anchorStats < invalidStats, VeloxException);
+  ASSERT_THROW(anchorStats > invalidStats, VeloxException);
+  ASSERT_THROW(anchorStats <= invalidStats, VeloxException);
+  ASSERT_THROW(anchorStats >= invalidStats, VeloxException);
 }
 
 namespace {
@@ -81,24 +158,36 @@ class FakeTestArbitrator : public MemoryArbitrator {
              .retryArbitrationFailure = config.retryArbitrationFailure}) {}
 
   void reserveMemory(MemoryPool* pool, uint64_t bytes) override {
-    VELOX_NYI()
+    VELOX_NYI();
   }
 
-  void releaseMemory(MemoryPool* pool) override{VELOX_NYI()}
+  void releaseMemory(MemoryPool* pool) override {
+    VELOX_NYI();
+  }
 
-  std::string kind() override {
+  std::string kind() const override {
     return "USER";
   }
 
   bool growMemory(
       MemoryPool* pool,
       const std::vector<std::shared_ptr<MemoryPool>>& candidatePools,
-      uint64_t targetBytes) override{VELOX_NYI()}
+      uint64_t targetBytes) override {
+    VELOX_NYI();
+  }
 
-  Stats stats() const override{VELOX_NYI()}
+  uint64_t shrinkMemory(
+      const std::vector<std::shared_ptr<MemoryPool>>& pools,
+      uint64_t targetBytes) override {
+    VELOX_NYI();
+  }
+
+  Stats stats() const override {
+    VELOX_NYI();
+  }
 
   std::string toString() const override {
-    VELOX_NYI()
+    VELOX_NYI();
   }
 };
 } // namespace
@@ -108,6 +197,10 @@ class MemoryArbitratorFactoryTest : public testing::Test {
  protected:
   static void SetUpTestCase() {
     MemoryArbitrator::registerFactory(kind_, factory_);
+  }
+
+  static void TearDownTestCase() {
+    MemoryArbitrator::unregisterFactory(kind_);
   }
 
  protected:

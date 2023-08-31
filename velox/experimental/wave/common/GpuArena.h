@@ -121,7 +121,19 @@ class GpuArena {
  public:
   GpuArena(uint64_t singleArenaCapacity, GpuAllocator* allocator);
 
-  WaveBufferPtr allocate(uint64_t bytes);
+  WaveBufferPtr allocateBytes(uint64_t bytes);
+
+  template <typename T>
+  WaveBufferPtr allocate(int32_t items) {
+    static_assert(std::is_trivially_destructible_v<T>);
+    return allocateBytes(sizeof(T) * items);
+  }
+
+  template <typename T>
+  T* allocate(int n, WaveBufferPtr& holder) {
+    holder = allocate<T>(n);
+    return holder->as<T>();
+  }
 
   void free(Buffer* buffer);
 

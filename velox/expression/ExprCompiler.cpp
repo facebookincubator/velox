@@ -23,6 +23,7 @@
 #include "velox/expression/FieldReference.h"
 #include "velox/expression/LambdaExpr.h"
 #include "velox/expression/SimpleFunctionRegistry.h"
+#include "velox/expression/SpecialFormRegistry.h"
 #include "velox/expression/SwitchExpr.h"
 #include "velox/expression/TryExpr.h"
 #include "velox/expression/VectorFunction.h"
@@ -498,6 +499,11 @@ ExprPtr compileRewrittenExpression(
       captureFieldReference(fieldReference.get(), expr.get(), scope);
     }
     result = fieldReference;
+  } else if (
+      auto dereference =
+          dynamic_cast<const core::DereferenceTypedExpr*>(expr.get())) {
+    result = std::make_shared<FieldReference>(
+        expr->type(), std::move(compiledInputs), dereference->index());
   } else if (auto row = dynamic_cast<const core::InputTypedExpr*>(expr.get())) {
     VELOX_UNSUPPORTED("InputTypedExpr '{}' is not supported", row->toString());
   } else if (

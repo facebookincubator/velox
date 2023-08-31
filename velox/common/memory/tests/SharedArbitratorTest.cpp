@@ -23,6 +23,7 @@
 #include "folly/experimental/EventCount.h"
 #include "folly/futures/Barrier.h"
 #include "velox/common/base/tests/GTestUtils.h"
+#include "velox/common/memory/MallocAllocator.h"
 #include "velox/common/memory/Memory.h"
 #include "velox/common/memory/SharedArbitrator.h"
 #include "velox/common/testutil/TestValue.h"
@@ -284,8 +285,11 @@ class SharedArbitrationTest : public exec::test::HiveConnectorTestBase {
       int64_t memoryCapacity = 0,
       uint64_t memoryPoolInitCapacity = kMemoryPoolInitCapacity,
       uint64_t memoryPoolTransferCapacity = kMemoryPoolTransferCapacity) {
+    memoryCapacity = (memoryCapacity != 0) ? memoryCapacity : kMemoryCapacity;
+    allocator_ = std::make_shared<MallocAllocator>(memoryCapacity);
     MemoryManagerOptions options;
-    options.capacity = (memoryCapacity != 0) ? memoryCapacity : kMemoryCapacity;
+    options.allocator = allocator_.get();
+    options.capacity = allocator_->capacity();
     options.arbitratorKind = "SHARED";
     options.capacity = options.capacity;
     options.memoryPoolInitCapacity = memoryPoolInitCapacity;
@@ -316,6 +320,7 @@ class SharedArbitrationTest : public exec::test::HiveConnectorTestBase {
   }
 
   static inline FakeMemoryOperatorFactory* fakeOperatorFactory_;
+  std::shared_ptr<MemoryAllocator> allocator_;
   std::unique_ptr<MemoryManager> memoryManager_;
   SharedArbitrator* arbitrator_;
   RowTypePtr rowType_;
@@ -579,7 +584,7 @@ TEST_F(SharedArbitrationTest, reclaimFromCompletedOrderBy) {
   }
 }
 
-DEBUG_ONLY_TEST_F(SharedArbitrationTest, DISABLED_reclaimFromAggregation) {
+DEBUG_ONLY_TEST_F(SharedArbitrationTest, reclaimFromAggregation) {
   const int numVectors = 32;
   std::vector<RowVectorPtr> vectors;
   for (int i = 0; i < numVectors; ++i) {
@@ -606,7 +611,7 @@ DEBUG_ONLY_TEST_F(SharedArbitrationTest, DISABLED_reclaimFromAggregation) {
 
     const auto aggregationMemoryUsage = 32L << 20;
     const auto fakeAllocationSize =
-        kMemoryCapacity - aggregationMemoryUsage / 2;
+        kMemoryCapacity - aggregationMemoryUsage + 1;
 
     std::atomic<bool> injectAllocationOnce{true};
     fakeOperatorFactory_->setAllocationCallback([&](Operator* op) {
@@ -857,10 +862,10 @@ DEBUG_ONLY_TEST_F(SharedArbitrationTest, reclaimFromJoinBuilder) {
       joinQueryCtx = newQueryCtx(kMemoryCapacity);
     }
 
+    std::atomic_bool fakeAllocationReady{false};
     folly::EventCount fakeAllocationWait;
-    auto fakeAllocationWaitKey = fakeAllocationWait.prepareWait();
+    std::atomic_bool taskPauseDone{false};
     folly::EventCount taskPauseWait;
-    auto taskPauseWaitKey = taskPauseWait.prepareWait();
 
     const auto joinMemoryUsage = 32L << 20;
     const auto fakeAllocationSize = kMemoryCapacity - joinMemoryUsage / 2;
@@ -870,7 +875,7 @@ DEBUG_ONLY_TEST_F(SharedArbitrationTest, reclaimFromJoinBuilder) {
       if (!injectAllocationOnce.exchange(false)) {
         return Allocation{};
       }
-      fakeAllocationWait.wait(fakeAllocationWaitKey);
+      fakeAllocationWait.await([&]() { return fakeAllocationReady.load(); });
       auto buffer = op->pool()->allocate(fakeAllocationSize);
       return Allocation{op->pool(), buffer, fakeAllocationSize};
     });
@@ -888,24 +893,35 @@ DEBUG_ONLY_TEST_F(SharedArbitrationTest, reclaimFromJoinBuilder) {
           if (!injectAggregationByOnce.exchange(false)) {
             return;
           }
-          fakeAllocationWait.notify();
+          fakeAllocationReady.store(true);
+          fakeAllocationWait.notifyAll();
           // Wait for pause to be triggered.
-          taskPauseWait.wait(taskPauseWaitKey);
+          taskPauseWait.await([&]() { return taskPauseDone.load(); });
         })));
 
     SCOPED_TESTVALUE_SET(
         "facebook::velox::exec::Task::requestPauseLocked",
-        std::function<void(Task*)>(
-            ([&](Task* /*unused*/) { taskPauseWait.notify(); })));
+        std::function<void(Task*)>(([&](Task* /*unused*/) {
+          taskPauseDone.store(true);
+          taskPauseWait.notifyAll();
+        })));
+
+    // joinQueryCtx and fakeMemoryQueryCtx may be the same and thus share the
+    // same underlying QueryConfig.  We apply the changes here instead of using
+    // the AssertQueryBuilder to avoid a potential race condition caused by
+    // writing the config in the join thread, and reading it in the memThread.
+    std::unordered_map<std::string, std::string> config{
+        {core::QueryConfig::kSpillEnabled, "true"},
+        {core::QueryConfig::kJoinSpillEnabled, "true"},
+        {core::QueryConfig::kJoinSpillPartitionBits, "2"},
+    };
+    joinQueryCtx->testingOverrideConfigUnsafe(std::move(config));
 
     std::thread aggregationThread([&]() {
       auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
       auto task =
           AssertQueryBuilder(duckDbQueryRunner_)
               .spillDirectory(spillDirectory->path)
-              .config(core::QueryConfig::kSpillEnabled, "true")
-              .config(core::QueryConfig::kJoinSpillEnabled, "true")
-              .config(core::QueryConfig::kJoinSpillPartitionBits, "2")
               .queryCtx(joinQueryCtx)
               .plan(PlanBuilder(planNodeIdGenerator)
                         .values(vectors)
@@ -1205,17 +1221,25 @@ DEBUG_ONLY_TEST_F(
         std::function<void(Task*)>(
             [&](Task* /*unused*/) { taskPauseWait.notifyAll(); }));
 
+    // joinQueryCtx and fakeMemoryQueryCtx may be the same and thus share the
+    // same underlying QueryConfig.  We apply the changes here instead of using
+    // the AssertQueryBuilder to avoid a potential race condition caused by
+    // writing the config in the join thread, and reading it in the memThread.
+    std::unordered_map<std::string, std::string> config{
+        {core::QueryConfig::kSpillEnabled, "true"},
+        {core::QueryConfig::kJoinSpillEnabled, "true"},
+        {core::QueryConfig::kJoinSpillPartitionBits, "2"},
+        // NOTE: set an extreme large value to avoid non-reclaimable
+        // section in test.
+        {core::QueryConfig::kSpillableReservationGrowthPct, "8000"},
+    };
+    joinQueryCtx->testingOverrideConfigUnsafe(std::move(config));
+
     std::thread joinThread([&]() {
       auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
       auto task =
           AssertQueryBuilder(duckDbQueryRunner_)
               .spillDirectory(spillDirectory->path)
-              .config(core::QueryConfig::kSpillEnabled, "true")
-              .config(core::QueryConfig::kJoinSpillEnabled, "true")
-              .config(core::QueryConfig::kJoinSpillPartitionBits, "2")
-              // NOTE: set an extreme large value to avoid non-reclaimable
-              // section in test.
-              .config(core::QueryConfig::kSpillableReservationGrowthPct, "8000")
               .maxDrivers(numDrivers)
               .queryCtx(joinQueryCtx)
               .plan(PlanBuilder(planNodeIdGenerator)

@@ -26,11 +26,11 @@ SelectiveStringDictionaryColumnReader::SelectiveStringDictionaryColumnReader(
     const std::shared_ptr<const TypeWithId>& nodeType,
     DwrfParams& params,
     common::ScanSpec& scanSpec)
-    : SelectiveColumnReader(nodeType->type, params, scanSpec, nodeType),
+    : SelectiveColumnReader(nodeType->type(), params, scanSpec, nodeType),
       lastStrideIndex_(-1),
       provider_(params.stripeStreams().getStrideIndexProvider()) {
   auto& stripe = params.stripeStreams();
-  EncodingKey encodingKey{fileType_->id, params.flatMapContext().sequence};
+  EncodingKey encodingKey{fileType_->id(), params.flatMapContext().sequence};
   version_ = convertRleVersion(stripe.getEncoding(encodingKey).kind());
   scanState_.dictionary.numValues =
       stripe.getEncoding(encodingKey).dictionarysize();
@@ -181,7 +181,7 @@ void SelectiveStringDictionaryColumnReader::makeDictionaryBaseVector() {
 
     dictionaryValues_ = std::make_shared<FlatVector<StringView>>(
         &memoryPool_,
-        fileType_->type,
+        fileType_->type(),
         BufferPtr(nullptr), // TODO nulls
         scanState_.dictionary.numValues +
             scanState_.dictionary2.numValues, // length
@@ -191,7 +191,7 @@ void SelectiveStringDictionaryColumnReader::makeDictionaryBaseVector() {
   } else {
     dictionaryValues_ = std::make_shared<FlatVector<StringView>>(
         &memoryPool_,
-        fileType_->type,
+        fileType_->type(),
         BufferPtr(nullptr), // TODO nulls
         scanState_.dictionary.numValues /*length*/,
         scanState_.dictionary.values,
@@ -244,12 +244,12 @@ void SelectiveStringDictionaryColumnReader::read(
             ExtractStringDictionaryToGenericHook(
                 scanSpec_->valueHook(), rows, scanState_.rawState));
       }
-      return;
-    }
-    if (isDense) {
-      processFilter<true>(scanSpec_->filter(), rows, ExtractToReader(this));
     } else {
-      processFilter<false>(scanSpec_->filter(), rows, ExtractToReader(this));
+      if (isDense) {
+        processFilter<true>(scanSpec_->filter(), rows, ExtractToReader(this));
+      } else {
+        processFilter<false>(scanSpec_->filter(), rows, ExtractToReader(this));
+      }
     }
   } else {
     if (isDense) {
@@ -260,6 +260,8 @@ void SelectiveStringDictionaryColumnReader::read(
           scanSpec_->filter(), rows, dwio::common::DropValues());
     }
   }
+
+  readOffset_ += rows.back() + 1;
 }
 
 void SelectiveStringDictionaryColumnReader::getValues(

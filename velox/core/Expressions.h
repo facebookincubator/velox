@@ -209,6 +209,9 @@ class CallTypedExpr : public ITypedExpr {
     if (casted->name() != this->name()) {
       return false;
     }
+    if (*casted->type() != *this->type()) {
+      return false;
+    }
     return std::equal(
         this->inputs().begin(),
         this->inputs().end(),
@@ -227,9 +230,7 @@ class CallTypedExpr : public ITypedExpr {
 
 using CallTypedExprPtr = std::shared_ptr<const CallTypedExpr>;
 
-/// Represents one of two things:
-///     - a leaf in an expression tree specifying input column by name;
-///     - a dereference expression which selects a subfield in a struct by name.
+/// Represents a leaf in an expression tree specifying input column by name.
 class FieldAccessTypedExpr : public ITypedExpr {
  public:
   /// Used as a leaf in an expression tree specifying input column by name.
@@ -303,6 +304,9 @@ class FieldAccessTypedExpr : public ITypedExpr {
     if (casted->name_ != this->name_) {
       return false;
     }
+    if (*casted->type() != *this->type()) {
+      return false;
+    }
     return std::equal(
         this->inputs().begin(),
         this->inputs().end(),
@@ -326,6 +330,71 @@ class FieldAccessTypedExpr : public ITypedExpr {
 };
 
 using FieldAccessTypedExprPtr = std::shared_ptr<const FieldAccessTypedExpr>;
+
+/// Represents a dereference expression which selects a subfield in a struct by
+/// name.
+class DereferenceTypedExpr : public ITypedExpr {
+ public:
+  DereferenceTypedExpr(TypePtr type, TypedExprPtr input, uint32_t index)
+      : ITypedExpr{std::move(type), {std::move(input)}}, index_(index) {
+    // Make sure this isn't being used to access a top level column.
+    VELOX_USER_CHECK_NULL(
+        std::dynamic_pointer_cast<const InputTypedExpr>(inputs()[0]));
+  }
+
+  uint32_t index() const {
+    return index_;
+  }
+
+  const std::string& name() const {
+    return inputs()[0]->type()->asRow().nameOf(index_);
+  }
+
+  TypedExprPtr rewriteInputNames(
+      const std::unordered_map<std::string, TypedExprPtr>& mapping)
+      const override {
+    auto newInputs = rewriteInputsRecursive(mapping);
+    VELOX_CHECK_EQ(1, newInputs.size());
+
+    return std::make_shared<DereferenceTypedExpr>(type(), newInputs[0], index_);
+  }
+
+  std::string toString() const override {
+    return fmt::format(
+        "{}[{}]", inputs()[0]->toString(), std::quoted(name(), '"', '"'));
+  }
+
+  size_t localHash() const override {
+    static const size_t kBaseHash =
+        std::hash<const char*>()("DereferenceTypedExpr");
+    return bits::hashMix(kBaseHash, index_);
+  }
+
+  bool operator==(const ITypedExpr& other) const final {
+    const auto* casted = dynamic_cast<const DereferenceTypedExpr*>(&other);
+    if (!casted) {
+      return false;
+    }
+    if (casted->index_ != this->index_) {
+      return false;
+    }
+    return std::equal(
+        this->inputs().begin(),
+        this->inputs().end(),
+        casted->inputs().begin(),
+        casted->inputs().end(),
+        [](const auto& p1, const auto& p2) { return *p1 == *p2; });
+  }
+
+  folly::dynamic serialize() const override;
+
+  static TypedExprPtr create(const folly::dynamic& obj, void* context);
+
+ private:
+  const uint32_t index_;
+};
+
+using DereferenceTypedExprPtr = std::shared_ptr<const DereferenceTypedExpr>;
 
 /*
  * Evaluates a list of expressions to produce a row.
@@ -366,6 +435,9 @@ class ConcatTypedExpr : public ITypedExpr {
   bool operator==(const ITypedExpr& other) const override {
     const auto* casted = dynamic_cast<const ConcatTypedExpr*>(&other);
     if (!casted) {
+      return false;
+    }
+    if (*casted->type() != *this->type()) {
       return false;
     }
     return std::equal(
@@ -436,6 +508,9 @@ class LambdaTypedExpr : public ITypedExpr {
   bool operator==(const ITypedExpr& other) const override {
     const auto* casted = dynamic_cast<const LambdaTypedExpr*>(&other);
     if (!casted) {
+      return false;
+    }
+    if (*casted->type() != *this->type()) {
       return false;
     }
     return *signature_ == *casted->signature_ && *body_ == *casted->body_;

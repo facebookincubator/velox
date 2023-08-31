@@ -37,11 +37,12 @@ using namespace facebook::velox::exec::test;
 
 namespace {
 // Returns aggregated spilled stats by 'task'.
-Spiller::Stats spilledStats(const exec::Task& task) {
-  Spiller::Stats spilledStats;
+SpillStats spilledStats(const exec::Task& task) {
+  SpillStats spilledStats;
   auto stats = task.taskStats();
   for (auto& pipeline : stats.pipelineStats) {
     for (auto op : pipeline.operatorStats) {
+      spilledStats.spilledInputBytes += op.spilledInputBytes;
       spilledStats.spilledBytes += op.spilledBytes;
       spilledStats.spilledRows += op.spilledRows;
       spilledStats.spilledPartitions += op.spilledPartitions;
@@ -193,12 +194,14 @@ class OrderByTest : public OperatorTestBase {
       auto task = assertQueryOrdered(params, duckDbSql, sortingKeys);
       auto inputRows = toPlanStats(task->taskStats()).at(orderById).inputRows;
       if (inputRows > 0) {
+        EXPECT_LT(0, spilledStats(*task).spilledInputBytes);
         EXPECT_LT(0, spilledStats(*task).spilledBytes);
         EXPECT_EQ(1, spilledStats(*task).spilledPartitions);
         EXPECT_LT(0, spilledStats(*task).spilledFiles);
         // NOTE: the last input batch won't go spilling.
         EXPECT_GT(inputRows, spilledStats(*task).spilledRows);
       } else {
+        EXPECT_EQ(0, spilledStats(*task).spilledInputBytes);
         EXPECT_EQ(0, spilledStats(*task).spilledBytes);
       }
       OperatorTestBase::deleteTaskAndCheckSpillDirectory(task);
@@ -465,12 +468,27 @@ TEST_F(OrderByTest, spill) {
   params.spillDirectory = spillDirectory->path;
   auto task = assertQueryOrdered(
       params, "SELECT * FROM tmp ORDER BY c0 ASC NULLS LAST", {0});
-  auto stats = task->taskStats().pipelineStats;
-  EXPECT_LT(0, stats[0].operatorStats[1].spilledRows);
-  EXPECT_GT(kNumBatches * kNumRows, stats[0].operatorStats[1].spilledRows);
-  EXPECT_LT(0, stats[0].operatorStats[1].spilledBytes);
-  EXPECT_EQ(1, stats[0].operatorStats[1].spilledPartitions);
-  EXPECT_EQ(2, stats[0].operatorStats[1].spilledFiles);
+  auto stats = task->taskStats().pipelineStats[0].operatorStats[1];
+  ASSERT_GT(stats.spilledRows, 0);
+  ASSERT_LT(stats.spilledRows, kNumBatches * kNumRows);
+  ASSERT_GT(stats.spilledBytes, 0);
+  ASSERT_GT(stats.spilledInputBytes, 0);
+  ASSERT_EQ(stats.spilledPartitions, 1);
+  ASSERT_EQ(stats.spilledFiles, 2);
+  ASSERT_GT(stats.runtimeStats["spillRuns"].count, 0);
+  ASSERT_GT(stats.runtimeStats["spillFillTime"].sum, 0);
+  ASSERT_GT(stats.runtimeStats["spillSortTime"].sum, 0);
+  ASSERT_GT(stats.runtimeStats["spillSerializationTime"].sum, 0);
+  ASSERT_GT(stats.runtimeStats["spillFlushTime"].sum, 0);
+  ASSERT_EQ(
+      stats.runtimeStats["spillSerializationTime"].count,
+      stats.runtimeStats["spillFlushTime"].count);
+  ASSERT_GT(stats.runtimeStats["spillDiskWrites"].sum, 0);
+  ASSERT_GT(stats.runtimeStats["spillWriteTime"].sum, 0);
+  ASSERT_EQ(
+      stats.runtimeStats["spillDiskWrites"].count,
+      stats.runtimeStats["spillWriteTime"].count);
+
   OperatorTestBase::deleteTaskAndCheckSpillDirectory(task);
 }
 
@@ -529,6 +547,8 @@ TEST_F(OrderByTest, spillWithMemoryLimit) {
             .assertResults(results);
 
     auto stats = task->taskStats().pipelineStats;
+    ASSERT_EQ(
+        testData.expectSpill, stats[0].operatorStats[1].spilledInputBytes > 0);
     ASSERT_EQ(testData.expectSpill, stats[0].operatorStats[1].spilledBytes > 0);
     OperatorTestBase::deleteTaskAndCheckSpillDirectory(task);
   }

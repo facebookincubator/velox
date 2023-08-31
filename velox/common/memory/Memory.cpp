@@ -33,7 +33,7 @@ MemoryManager::MemoryManager(const MemoryManagerOptions& options)
       //  enabled.
       arbitrator_(MemoryArbitrator::create(
           {.kind = options.arbitratorKind,
-           .capacity = options.capacity,
+           .capacity = std::min(options.queryMemoryCapacity, options.capacity),
            .memoryPoolInitCapacity = options.memoryPoolInitCapacity,
            .memoryPoolTransferCapacity = options.memoryPoolTransferCapacity,
            .retryArbitrationFailure = options.retryArbitrationFailure})),
@@ -58,12 +58,13 @@ MemoryManager::MemoryManager(const MemoryManagerOptions& options)
               .checkUsageLeak = options.checkUsageLeak,
               .debugEnabled = options.debugEnabled})} {
   VELOX_CHECK_NOT_NULL(allocator_);
-  if (arbitrator_ != nullptr) {
-    VELOX_CHECK_EQ(
-        arbitrator_->capacity(),
-        capacity_,
-        "Memory arbitrator and memory manager must have the same capacity");
-  }
+  VELOX_CHECK_NOT_NULL(arbitrator_);
+  VELOX_CHECK_EQ(
+      allocator_->capacity(),
+      capacity_,
+      "MemoryAllocator capacity {} must be the same as MemoryManager capacity {}.",
+      allocator_->capacity(),
+      capacity_);
   VELOX_USER_CHECK_GE(capacity_, 0);
   MemoryAllocator::alignmentCheck(0, alignment_);
   defaultRoot_->grow(defaultRoot_->maxCapacity());
@@ -115,12 +116,6 @@ std::shared_ptr<MemoryPool> MemoryManager::addRootPool(
     const std::string& name,
     int64_t capacity,
     std::unique_ptr<MemoryReclaimer> reclaimer) {
-  if (arbitrator_ != nullptr) {
-    VELOX_CHECK_NOT_NULL(
-        reclaimer,
-        "Memory reclaimer must be set when configured with memory arbitrator");
-  }
-
   std::string poolName = name;
   if (poolName.empty()) {
     static std::atomic<int64_t> poolId{0};
@@ -148,13 +143,7 @@ std::shared_ptr<MemoryPool> MemoryManager::addRootPool(
       options);
   pools_.emplace(poolName, pool);
   VELOX_CHECK_EQ(pool->capacity(), 0);
-  if (arbitrator_ != nullptr) {
-    arbitrator_->reserveMemory(pool.get(), capacity);
-  } else {
-    // NOTE: if there is no memory arbitrator, then we set the memory pool's
-    // capacity to its configured max.
-    pool->grow(pool->maxCapacity());
-  }
+  arbitrator_->reserveMemory(pool.get(), capacity);
   return pool;
 }
 
@@ -172,13 +161,11 @@ std::shared_ptr<MemoryPool> MemoryManager::addLeafPool(
 bool MemoryManager::growPool(MemoryPool* pool, uint64_t incrementBytes) {
   VELOX_CHECK_NOT_NULL(pool);
   VELOX_CHECK_NE(pool->capacity(), kMaxMemory);
-  if (arbitrator_ == nullptr) {
-    return false;
-  }
-  // Holds a shared reference to each alive memory pool in 'pools_' to keep
-  // their aliveness during the memory arbitration process.
-  std::vector<std::shared_ptr<MemoryPool>> candidates = getAlivePools();
-  return arbitrator_->growMemory(pool, candidates, incrementBytes);
+  return arbitrator_->growMemory(pool, getAlivePools(), incrementBytes);
+}
+
+uint64_t MemoryManager::shrinkPools(uint64_t targetBytes) {
+  return arbitrator_->shrinkMemory(getAlivePools(), targetBytes);
 }
 
 void MemoryManager::dropPool(MemoryPool* pool) {
@@ -189,9 +176,7 @@ void MemoryManager::dropPool(MemoryPool* pool) {
     VELOX_FAIL("The dropped memory pool {} not found", pool->name());
   }
   pools_.erase(it);
-  if (arbitrator_ != nullptr) {
-    arbitrator_->releaseMemory(pool);
-  }
+  arbitrator_->releaseMemory(pool);
 }
 
 MemoryPool& MemoryManager::deprecatedSharedLeafPool() {
@@ -224,8 +209,9 @@ MemoryArbitrator* MemoryManager::arbitrator() {
 
 std::string MemoryManager::toString() const {
   std::stringstream out;
-  out << "Memory Manager[capacity " << succinctBytes(capacity_) << " alignment "
-      << succinctBytes(alignment_) << " usedBytes "
+  out << "Memory Manager[capacity "
+      << (capacity_ == kMaxMemory ? "UNLIMITED" : succinctBytes(capacity_))
+      << " alignment " << succinctBytes(alignment_) << " usedBytes "
       << succinctBytes(getTotalBytes()) << " number of pools " << numPools()
       << "\n";
   out << "List of root pools:\n";
@@ -234,6 +220,8 @@ std::string MemoryManager::toString() const {
   for (const auto& pool : pools) {
     out << "\t" << pool->name() << "\n";
   }
+  out << allocator_->toString() << "\n";
+  out << arbitrator_->toString();
   out << "]";
   return out.str();
 }

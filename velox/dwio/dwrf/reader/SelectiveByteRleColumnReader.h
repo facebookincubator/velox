@@ -32,11 +32,11 @@ class SelectiveByteRleColumnReader
       common::ScanSpec& scanSpec,
       bool isBool)
       : dwio::common::SelectiveByteRleColumnReader(
-            requestedType->type,
+            requestedType->type(),
             params,
             scanSpec,
             std::move(dataType)) {
-    EncodingKey encodingKey{fileType_->id, params.flatMapContext().sequence};
+    EncodingKey encodingKey{fileType_->id(), params.flatMapContext().sequence};
     auto& stripe = params.stripeStreams();
     if (isBool) {
       boolRle_ = createBooleanRleDecoder(
@@ -80,6 +80,7 @@ class SelectiveByteRleColumnReader
   void read(vector_size_t offset, RowSet rows, const uint64_t* incomingNulls)
       override {
     readCommon<SelectiveByteRleColumnReader>(offset, rows, incomingNulls);
+    readOffset_ += rows.back() + 1;
   }
 
   template <typename ColumnVisitor>
@@ -109,7 +110,6 @@ void SelectiveByteRleColumnReader::readWithVisitor(
       byteRle_->readWithVisitor<false>(nullptr, visitor);
     }
   }
-  readOffset_ += numRows;
 }
 
 } // namespace facebook::velox::dwrf

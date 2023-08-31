@@ -295,6 +295,7 @@ class CastExprTest : public functions::test::CastBaseTest {
 
   template <typename T>
   void testDecimalToIntegralCasts() {
+    setCastIntByTruncate(false);
     auto shortFlat = makeNullableFlatVector<int64_t>(
         {-300,
          -260,
@@ -352,6 +353,41 @@ class CastExprTest : public functions::test::CastBaseTest {
              55,
              55 /* 55.49 rounds to 55*/,
              56 /* 55.99 rounds to 56*/,
+             69,
+             72,
+             std::nullopt}));
+
+    setCastIntByTruncate(true);
+    testComplexCast(
+        "c0",
+        shortFlat,
+        makeNullableFlatVector<T>(
+            {-3,
+             -2 /*-2.6 truncated to -2*/,
+             -2 /*-2.3 truncated to -2*/,
+             -2,
+             -1,
+             0,
+             55,
+             57 /*57.49 truncated to 57*/,
+             57 /*57.55 truncated to 57*/,
+             69,
+             72,
+             std::nullopt}));
+
+    testComplexCast(
+        "c0",
+        longFlat,
+        makeNullableFlatVector<T>(
+            {-3,
+             -2 /*-2.55 truncated to -2*/,
+             -2 /*-2.45 truncated to -2*/,
+             -2,
+             -1,
+             0,
+             55,
+             55 /* 55.49 truncated to 55*/,
+             55 /* 55.99 truncated to 55*/,
              69,
              72,
              std::nullopt}));
@@ -437,27 +473,36 @@ TEST_F(CastExprTest, basics) {
       {1.888, 2.5, 3.6, 100.44, -100.101, 1.0, -2.0},
       {1.888, 2.5, 3.6, 100.44, -100.101, 1.0, -2.0});
   testCast<bool, std::string>("string", {true, false}, {"true", "false"});
+
+  gflags::FlagSaver flagSaver;
+  FLAGS_experimental_enable_legacy_cast = true;
+  testCast<double, std::string>(
+      "string",
+      {1.888, 2.5, 3.6, 100.44, -100.101, 1.0, -2.0},
+      {"1.888", "2.5", "3.6", "100.44", "-100.101", "1", "-2"});
 }
 
 TEST_F(CastExprTest, stringToTimestamp) {
-  testCast<std::string, Timestamp>(
-      "timestamp",
-      {
-          "1970-01-01",
-          "2000-01-01",
-          "1970-01-01 00:00:00",
-          "2000-01-01 12:21:56",
-          "1970-01-01 00:00:00-02:00",
-          std::nullopt,
-      },
-      {
-          Timestamp(0, 0),
-          Timestamp(946684800, 0),
-          Timestamp(0, 0),
-          Timestamp(946729316, 0),
-          Timestamp(7200, 0),
-          std::nullopt,
-      });
+  std::vector<std::optional<std::string>> input{
+      "1970-01-01",
+      "2000-01-01",
+      "1970-01-01 00:00:00",
+      "2000-01-01 12:21:56",
+      "1970-01-01 00:00:00-02:00",
+      std::nullopt,
+  };
+  std::vector<std::optional<Timestamp>> expected{
+      Timestamp(0, 0),
+      Timestamp(946684800, 0),
+      Timestamp(0, 0),
+      Timestamp(946729316, 0),
+      Timestamp(7200, 0),
+      std::nullopt,
+  };
+  testCast<std::string, Timestamp>("timestamp", input, expected);
+
+  setCastIntByTruncate(true);
+  testCast<std::string, Timestamp>("timestamp", input, expected);
 }
 
 TEST_F(CastExprTest, timestampToString) {
@@ -673,6 +718,8 @@ TEST_F(CastExprTest, primitiveInvalidCornerCases) {
     // Invalid strings.
     testCast<std::string, int8_t>("tinyint", {"1234567"}, {0}, true);
     testCast<std::string, int8_t>("tinyint", {"1.2"}, {0}, true);
+    testCast<std::string, int8_t>("tinyint", {"1.23444"}, {0}, true);
+    testCast<std::string, int8_t>("tinyint", {".2355"}, {0}, true);
     testCast<std::string, int8_t>("tinyint", {"1a"}, {0}, true);
     testCast<std::string, int8_t>("tinyint", {""}, {0}, true);
     testCast<std::string, int32_t>("integer", {"1'234'567"}, {0}, true);
@@ -707,7 +754,6 @@ TEST_F(CastExprTest, primitiveInvalidCornerCases) {
   {
     // Invalid strings.
     testCast<std::string, int8_t>("tinyint", {"1234567"}, {0}, true);
-    testCast<std::string, int8_t>("tinyint", {"1.2"}, {0}, true);
     testCast<std::string, int8_t>("tinyint", {"1a"}, {0}, true);
     testCast<std::string, int8_t>("tinyint", {""}, {0}, true);
     testCast<std::string, int32_t>("integer", {"1'234'567"}, {0}, true);
@@ -769,6 +815,9 @@ TEST_F(CastExprTest, primitiveValidCornerCases) {
     testCast<int8_t, bool>("boolean", {-1}, {true}, false);
     testCast<double, bool>("boolean", {1.0}, {true}, false);
     testCast<double, bool>("boolean", {1.1}, {true}, false);
+    testCast<double, bool>("boolean", {0.1}, {true}, false);
+    testCast<double, bool>("boolean", {-0.1}, {true}, false);
+    testCast<double, bool>("boolean", {-1.0}, {true}, false);
     testCast<float, bool>("boolean", {kNan}, {true}, false);
     testCast<float, bool>("boolean", {kInf}, {true}, false);
     testCast<double, bool>("boolean", {0.0000000000001}, {true}, false);
@@ -788,6 +837,17 @@ TEST_F(CastExprTest, primitiveValidCornerCases) {
   setCastIntByTruncate(true);
   // To integer.
   {
+    // Valid strings.
+    testCast<std::string, int8_t>("tinyint", {"1.2"}, {1}, false);
+    testCast<std::string, int8_t>("tinyint", {"1.23444"}, {1}, false);
+    testCast<std::string, int8_t>("tinyint", {".2355"}, {0}, false);
+    testCast<std::string, int8_t>("tinyint", {"-1.8"}, {-1}, false);
+    testCast<std::string, int8_t>("tinyint", {"1."}, {1}, false);
+    testCast<std::string, int8_t>("tinyint", {"-1."}, {-1}, false);
+    testCast<std::string, int8_t>("tinyint", {"0."}, {0}, false);
+    testCast<std::string, int8_t>("tinyint", {"."}, {0}, false);
+    testCast<std::string, int8_t>("tinyint", {"-."}, {0}, false);
+
     testCast<int32_t, int8_t>("tinyint", {1234567}, {-121}, false);
     testCast<int32_t, int8_t>("tinyint", {-1234567}, {121}, false);
     testCast<double, int8_t>("tinyint", {12345.67}, {57}, false);
@@ -826,6 +886,9 @@ TEST_F(CastExprTest, primitiveValidCornerCases) {
     testCast<int8_t, bool>("boolean", {-1}, {true}, false);
     testCast<double, bool>("boolean", {1.0}, {true}, false);
     testCast<double, bool>("boolean", {1.1}, {true}, false);
+    testCast<double, bool>("boolean", {0.1}, {true}, false);
+    testCast<double, bool>("boolean", {-0.1}, {true}, false);
+    testCast<double, bool>("boolean", {-1.0}, {true}, false);
     testCast<float, bool>("boolean", {kNan}, {false}, false);
     testCast<float, bool>("boolean", {kInf}, {true}, false);
     testCast<double, bool>("boolean", {0.0000000000001}, {true}, false);
@@ -914,9 +977,14 @@ TEST_F(CastExprTest, errorHandling) {
        "  122",
        "",
        "-12-3",
-       "125.5",
        "1234",
        "-129",
+       "1.1.1",
+       "1..",
+       "1.abc",
+       "..",
+       "-..",
+       "125.5",
        "127",
        "-128"},
       {std::nullopt,
@@ -929,6 +997,11 @@ TEST_F(CastExprTest, errorHandling) {
        std::nullopt,
        std::nullopt,
        std::nullopt,
+       std::nullopt,
+       std::nullopt,
+       std::nullopt,
+       std::nullopt,
+       125,
        127,
        -128},
       false,
@@ -1344,6 +1417,18 @@ TEST_F(CastExprTest, decimalToIntegralOutOfBoundsSetNullOnFailure) {
 TEST_F(CastExprTest, decimalToFloat) {
   testDecimalToFloatCasts<float>();
   testDecimalToFloatCasts<double>();
+}
+
+TEST_F(CastExprTest, decimalToBool) {
+  auto shortFlat = makeNullableFlatVector<int64_t>(
+      {DecimalUtil::kShortDecimalMin, 0, std::nullopt}, DECIMAL(18, 18));
+  testComplexCast(
+      "c0", shortFlat, makeNullableFlatVector<bool>({1, 0, std::nullopt}));
+
+  auto longFlat = makeNullableFlatVector<int128_t>(
+      {DecimalUtil::kLongDecimalMin, 0, std::nullopt}, DECIMAL(38, 5));
+  testComplexCast(
+      "c0", longFlat, makeNullableFlatVector<bool>({1, 0, std::nullopt}));
 }
 
 TEST_F(CastExprTest, decimalToDecimal) {

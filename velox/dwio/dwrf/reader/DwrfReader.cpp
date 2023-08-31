@@ -475,6 +475,9 @@ std::optional<size_t> DwrfRowReader::estimatedRowSizeHelper(
     case TypeKind::BIGINT: {
       return valueCount * sizeof(uint64_t);
     }
+    case TypeKind::HUGEINT: {
+      return valueCount * sizeof(uint128_t);
+    }
     case TypeKind::REAL: {
       return valueCount * sizeof(float);
     }
@@ -778,11 +781,13 @@ std::unique_ptr<dwio::common::RowReader> DwrfReader::createRowReader(
 std::unique_ptr<DwrfRowReader> DwrfReader::createDwrfRowReader(
     const RowReaderOptions& opts) const {
   auto rowReader = std::make_unique<DwrfRowReader>(readerBase_, opts);
-  // Load the first stripe on construction so that readers created in
-  // background have a reader tree and can preload the first
-  // stripe. Also the reader tree needs to exist in order to receive
-  // adaptation from a previous reader.
-  rowReader->startNextStripe();
+  if (opts.getEagerFirstStripeLoad()) {
+    // Load the first stripe on construction so that readers created in
+    // background have a reader tree and can preload the first
+    // stripe. Also the reader tree needs to exist in order to receive
+    // adaptation from a previous reader.
+    rowReader->startNextStripe();
+  }
   return rowReader;
 }
 

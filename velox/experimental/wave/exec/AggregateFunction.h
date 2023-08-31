@@ -13,12 +13,23 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+
 #pragma once
 
-#include <string>
+#include "velox/experimental/wave/exec/ErrorCode.h"
+#include "velox/experimental/wave/vector/Operand.h"
 
-namespace facebook::velox::functions::window {
-void registerBigintNthValue(const std::string& name);
+namespace facebook::velox::wave::aggregation {
 
-void registerIntegerNthValue(const std::string& name);
-} // namespace facebook::velox::functions::window
+struct AggregateFunction {
+  int accumulatorSize;
+
+  ErrorCode (
+      *addRawInput)(int numInputs, Operand* inputs, int i, void* accumulator);
+
+  ErrorCode (*extractValues)(void* accumulator, Operand* result, int i);
+
+  void* (*mergeAccumulators)(void* a, void* b);
+};
+
+} // namespace facebook::velox::wave::aggregation

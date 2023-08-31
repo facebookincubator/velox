@@ -28,7 +28,7 @@ namespace {
 BlockingReason fromStateToBlockingReason(HashBuild::State state) {
   switch (state) {
     case HashBuild::State::kRunning:
-      FOLLY_FALLTHROUGH;
+      [[fallthrough]];
     case HashBuild::State::kFinish:
       return BlockingReason::kNotBlocked;
     case HashBuild::State::kWaitForSpill:
@@ -74,35 +74,42 @@ HashBuild::HashBuild(
 
   joinBridge_->addBuilder();
 
-  auto outputType = joinNode_->sources()[1]->outputType();
+  auto inputType = joinNode_->sources()[1]->outputType();
 
   auto numKeys = joinNode_->rightKeys().size();
   keyChannels_.reserve(numKeys);
   folly::F14FastMap<column_index_t, column_index_t> keyChannelMap(numKeys);
   std::vector<std::string> names;
-  names.reserve(outputType->size());
+  names.reserve(inputType->size());
   std::vector<TypePtr> types;
-  types.reserve(outputType->size());
+  types.reserve(inputType->size());
 
   for (int i = 0; i < joinNode_->rightKeys().size(); ++i) {
     auto& key = joinNode_->rightKeys()[i];
-    auto channel = exprToChannel(key.get(), outputType);
+    auto channel = exprToChannel(key.get(), inputType);
     keyChannelMap[channel] = i;
     keyChannels_.emplace_back(channel);
-    names.emplace_back(outputType->nameOf(channel));
-    types.emplace_back(outputType->childAt(channel));
+    names.emplace_back(inputType->nameOf(channel));
+    types.emplace_back(inputType->childAt(channel));
   }
 
   // Identify the non-key build side columns and make a decoder for each.
-  const auto numDependents = outputType->size() - numKeys;
-  dependentChannels_.reserve(numDependents);
-  decoders_.reserve(numDependents);
-  for (auto i = 0; i < outputType->size(); ++i) {
+  const int32_t numDependents = inputType->size() - numKeys;
+  if (numDependents > 0) {
+    // Number of join keys (numKeys) may be less then number of input columns
+    // (inputType->size()). In this case numDependents is negative and cannot be
+    // used to call 'reserve'. This happens when we join different probe side
+    // keys with the same build side key: SELECT * FROM t LEFT JOIN u ON t.k1 =
+    // u.k AND t.k2 = u.k.
+    dependentChannels_.reserve(numDependents);
+    decoders_.reserve(numDependents);
+  }
+  for (auto i = 0; i < inputType->size(); ++i) {
     if (keyChannelMap.find(i) == keyChannelMap.end()) {
       dependentChannels_.emplace_back(i);
       decoders_.emplace_back(std::make_unique<DecodedVector>());
-      names.emplace_back(outputType->nameOf(i));
-      types.emplace_back(outputType->childAt(i));
+      names.emplace_back(inputType->nameOf(i));
+      types.emplace_back(inputType->childAt(i));
     }
   }
 
@@ -220,7 +227,7 @@ void HashBuild::setupSpiller(SpillPartition* spillPartition) {
       spillConfig.maxFileSize,
       spillConfig.minSpillRunSize,
       spillConfig.compressionKind,
-      Spiller::spillPool(),
+      Spiller::pool(),
       spillConfig.executor);
 
   const int32_t numPartitions = spiller_->hashBits().numPartitions();
@@ -249,9 +256,9 @@ void HashBuild::setupFilterForAntiJoins(
   const auto& expr = exprs.expr(0);
   filterPropagatesNulls_ = expr->propagatesNulls();
   if (filterPropagatesNulls_) {
-    const auto outputType = joinNode_->sources()[1]->outputType();
+    const auto inputType = joinNode_->sources()[1]->outputType();
     for (const auto& field : expr->distinctFields()) {
-      const auto index = outputType->getChildIdxIfExists(field->field());
+      const auto index = inputType->getChildIdxIfExists(field->field());
       if (!index.has_value()) {
         continue;
       }
@@ -640,6 +647,7 @@ void HashBuild::runSpill(const std::vector<Operator*>& spillOperators) {
   for (auto& spillOp : spillOperators) {
     HashBuild* build = dynamic_cast<HashBuild*>(spillOp);
     VELOX_CHECK_NOT_NULL(build);
+    ++build->numSpillRuns_;
     spillers.push_back(build->spiller_.get());
     build->addAndClearSpillTarget(targetRows, targetBytes);
   }
@@ -774,33 +782,28 @@ bool HashBuild::finishHashBuild() {
   std::vector<std::unique_ptr<BaseHashTable>> otherTables;
   otherTables.reserve(peers.size());
   SpillPartitionSet spillPartitions;
-  Spiller::Stats spillStats;
   for (auto* build : otherBuilds) {
     VELOX_CHECK_NOT_NULL(build->table_);
     otherTables.push_back(std::move(build->table_));
     if (build->spiller_ != nullptr) {
-      spillStats += build->spiller_->stats();
       build->spiller_->finishSpill(spillPartitions);
+      build->recordSpillStats();
     }
   }
 
   if (spiller_ != nullptr) {
-    spillStats += spiller_->stats();
-
-    {
-      auto lockedStats = stats_.wlock();
-      lockedStats->spilledBytes += spillStats.spilledBytes;
-      lockedStats->spilledRows += spillStats.spilledRows;
-      lockedStats->spilledPartitions += spillStats.spilledPartitions;
-      lockedStats->spilledFiles += spillStats.spilledFiles;
-    }
-
     spiller_->finishSpill(spillPartitions);
+    recordSpillStats();
 
-    // Verify all the spilled partitions are not empty as we won't spill on
-    // an empty one.
-    for (const auto& spillPartitionEntry : spillPartitions) {
-      VELOX_CHECK_GT(spillPartitionEntry.second->numFiles(), 0);
+    // Remove the spilled partitions which are empty so as we don't need to
+    // trigger unnecessary spilling at hash probe side.
+    auto iter = spillPartitions.begin();
+    while (iter != spillPartitions.end()) {
+      if (iter->second->numFiles() > 0) {
+        ++iter;
+      } else {
+        iter = spillPartitions.erase(iter);
+      }
     }
   }
 
@@ -822,6 +825,13 @@ bool HashBuild::finishHashBuild() {
   // table build.
   pool()->release();
   return true;
+}
+
+void HashBuild::recordSpillStats() {
+  VELOX_CHECK_NOT_NULL(spiller_);
+  const auto spillStats = spiller_->stats();
+  VELOX_CHECK_EQ(spillStats.spillSortTimeUs, 0);
+  Operator::recordSpillStats(spillStats);
 }
 
 void HashBuild::ensureTableFits(uint64_t numRows) {
@@ -965,7 +975,7 @@ BlockingReason HashBuild::isBlocked(ContinueFuture* future) {
       }
       break;
     case State::kWaitForBuild:
-      FOLLY_FALLTHROUGH;
+      [[fallthrough]];
     case State::kWaitForProbe:
       if (!future_.valid()) {
         setRunning();
@@ -1015,11 +1025,11 @@ void HashBuild::checkStateTransition(State state) {
       }
       break;
     case State::kWaitForBuild:
-      FOLLY_FALLTHROUGH;
+      [[fallthrough]];
     case State::kWaitForSpill:
-      FOLLY_FALLTHROUGH;
+      [[fallthrough]];
     case State::kWaitForProbe:
-      FOLLY_FALLTHROUGH;
+      [[fallthrough]];
     case State::kFinish:
       VELOX_CHECK_EQ(state_, State::kRunning);
       break;
@@ -1099,6 +1109,7 @@ void HashBuild::reclaim(uint64_t /*unused*/) {
   // TODO: consider to parallelize this disk spilling processing.
   for (auto* op : operators) {
     HashBuild* buildOp = static_cast<HashBuild*>(op);
+    ++buildOp->numSpillRuns_;
     buildOp->spiller_->fillSpillRuns(spillableStats);
     // TODO: support fine-grain disk spilling based on 'targetBytes' after
     // having row container memory compaction support later.

@@ -29,7 +29,7 @@ class BooleanColumnReader : public dwio::common::SelectiveByteRleColumnReader {
       ParquetParams& params,
       common::ScanSpec& scanSpec)
       : SelectiveByteRleColumnReader(
-            nodeType->type,
+            nodeType->type(),
             params,
             scanSpec,
             nodeType) {}
@@ -49,12 +49,12 @@ class BooleanColumnReader : public dwio::common::SelectiveByteRleColumnReader {
   void read(vector_size_t offset, RowSet rows, const uint64_t* incomingNulls)
       override {
     readCommon<BooleanColumnReader>(offset, rows, incomingNulls);
+    readOffset_ += rows.back() + 1;
   }
 
   template <typename ColumnVisitor>
   void readWithVisitor(RowSet rows, ColumnVisitor visitor) {
     formatData_->as<ParquetData>().readWithVisitor(visitor);
-    readOffset_ += rows.back() + 1;
   }
 };
 

@@ -25,10 +25,6 @@
 #include "velox/expression/ExprToSubfieldFilter.h"
 #include "velox/expression/FieldReference.h"
 
-#ifdef VELOX_ENABLE_BACKWARD_COMPATIBILITY
-#include "velox/connectors/hive/HiveConnectorSplit.h"
-#endif
-
 namespace facebook::velox::connector::hive {
 
 class HiveTableHandle;
@@ -234,13 +230,13 @@ bool testFilters(
         }
       } else {
         const auto& typeWithId = fileTypeWithId->childByName(name);
-        auto columnStats = reader->columnStatistics(typeWithId->id);
+        auto columnStats = reader->columnStatistics(typeWithId->id());
         if (columnStats != nullptr &&
             !testFilter(
                 child->filter(),
                 columnStats.get(),
                 totalRows.value(),
-                typeWithId->type)) {
+                typeWithId->type())) {
           VLOG(1) << "Skipping " << filePath
                   << " based on stats and filter for column "
                   << child->fieldName();
@@ -258,6 +254,9 @@ velox::variant convertFromString(const std::optional<std::string>& value) {
   if (value.has_value()) {
     if constexpr (ToKind == TypeKind::VARCHAR) {
       return velox::variant(value.value());
+    }
+    if constexpr (ToKind == TypeKind::VARBINARY) {
+      return velox::variant::binary((value.value()));
     }
     auto result = velox::util::Converter<ToKind>::cast(value.value());
 

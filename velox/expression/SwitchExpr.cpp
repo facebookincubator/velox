@@ -48,13 +48,19 @@ SwitchExpr::SwitchExpr(
       [](const ExprPtr& expr) { return expr->type(); });
 
   // Apply type checking.
-  resolveType(inputTypes);
+  auto typeExpected = resolveType(inputTypes);
+  VELOX_CHECK(
+      *typeExpected == *this->type(),
+      "Switch expression type different than then clause. Expected {} but got Actual {}.",
+      typeExpected->toString(),
+      this->type()->toString());
 }
 
 void SwitchExpr::evalSpecialForm(
     const SelectivityVector& rows,
     EvalCtx& context,
-    VectorPtr& result) {
+    VectorPtr& finalResult) {
+  VectorPtr localResult;
   LocalSelectivityVector remainingRows(context, rows);
 
   LocalSelectivityVector thenRows(context);
@@ -68,16 +74,15 @@ void SwitchExpr::evalSpecialForm(
     // If propagates nulls, we load lazies before conditions so that we can
     // avoid errors for null rows. Null propagation is on only if all thens and
     // else load access the same vectors, so there is no extra loading.
-    DecodedVector decoded;
     auto& remaining = *remainingRows.get();
     for (auto* field : distinctFields_) {
       context.ensureFieldLoaded(field->index(context), remaining);
       const auto& vector = context.getField(field->index(context));
       if (vector->mayHaveNulls()) {
-        decoded.decode(*vector, remaining);
-        addNulls(remaining, decoded.nulls(), context, type(), result);
+        LocalDecodedVector decoded(context, *vector, remaining);
+        addNulls(remaining, decoded->nulls(), context, type(), localResult);
         remaining.deselectNulls(
-            decoded.nulls(), remaining.begin(), remaining.end());
+            decoded->nulls(), remaining.begin(), remaining.end());
       }
     }
   }
@@ -107,7 +112,7 @@ void SwitchExpr::evalSpecialForm(
         nullptr);
     switch (booleanMix) {
       case BooleanMix::kAllTrue:
-        inputs_[2 * i + 1]->eval(*remainingRows.get(), context, result);
+        inputs_[2 * i + 1]->eval(*remainingRows.get(), context, localResult);
         remainingRows->clearAll();
         continue;
       case BooleanMix::kAllNull:
@@ -124,7 +129,7 @@ void SwitchExpr::evalSpecialForm(
         thenRows.get()->updateBounds();
 
         if (thenRows.get()->hasSelections()) {
-          inputs_[2 * i + 1]->eval(*thenRows.get(), context, result);
+          inputs_[2 * i + 1]->eval(*thenRows.get(), context, localResult);
           remainingRows.get()->deselect(*thenRows.get());
         }
       }
@@ -135,27 +140,33 @@ void SwitchExpr::evalSpecialForm(
   // Evaluate the "else" clause.
   if (remainingRows.get()->hasSelections()) {
     if (hasElseClause_) {
-      inputs_.back()->eval(*remainingRows.get(), context, result);
+      inputs_.back()->eval(*remainingRows.get(), context, localResult);
     } else {
-      context.ensureWritable(*remainingRows.get(), type(), result);
+      context.ensureWritable(*remainingRows.get(), type(), localResult);
 
       // fill in nulls for remainingRows
       remainingRows.get()->applyToSelected(
-          [&](auto row) { result->setNull(row, true); });
+          [&](auto row) { localResult->setNull(row, true); });
     }
   }
-  // Some rows may have not been evaluated by any then or else clause because a
-  // condition threw an error on these rows. We make sure the result vector has
-  // at least the size of rows.end().
-  if (context.errors() && (!result || result->size() < rows.end())) {
-    if (result && result->isConstantEncoding() && result.unique()) {
-      result->resize(rows.end());
-    } else {
+
+  // Some rows may have not been evaluated by any then or else clause because
+  // a condition threw an error on these rows. We set those to nulls to make
+  // sure the result vector is addressable at those indices.
+  if (context.errors()) {
+    // TODO: Fix decoding function vector issue #6269.
+    if (type()->kind() != TypeKind::FUNCTION) {
       LocalSelectivityVector nonErrorRows(context, rows);
       context.deselectErrors(*nonErrorRows);
-      addNulls(rows, nonErrorRows->asRange().bits(), context, result);
+      addNulls(rows, nonErrorRows->asRange().bits(), context, localResult);
     }
   }
+  // TODO: Fix evaluate lambda expression return vector of size 0 issue #6270.
+  if (type()->kind() != TypeKind::FUNCTION) {
+    VELOX_CHECK(localResult && localResult->size() >= rows.end());
+  }
+
+  context.moveOrCopyResult(localResult, rows, finalResult);
 }
 
 // This is safe to call only after all metadata is computed for input
@@ -230,7 +241,7 @@ TypePtr SwitchExpr::resolveType(const std::vector<TypePtr>& argTypes) {
         "Condition of  SWITCH statement is not bool");
 
     VELOX_CHECK(
-        thenType->equivalent(*expressionType),
+        *thenType == *expressionType,
         "All then clauses of a SWITCH statement must have the same type. "
         "Expected {}, but got {}.",
         expressionType->toString(),
@@ -243,7 +254,7 @@ TypePtr SwitchExpr::resolveType(const std::vector<TypePtr>& argTypes) {
     auto& elseClauseType = argTypes.back();
 
     VELOX_CHECK(
-        elseClauseType->equivalent(*expressionType),
+        *elseClauseType == *expressionType,
         "Else clause of a SWITCH statement must have the same type as 'then' clauses. "
         "Expected {}, but got {}.",
         expressionType->toString(),

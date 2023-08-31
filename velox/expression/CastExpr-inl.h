@@ -96,6 +96,9 @@ void CastExpr::applyToSelectedNoThrowLocal(
       try {
         func(row);
       } catch (const VeloxException& e) {
+        if (!e.isUserError()) {
+          throw;
+        }
         // Avoid double throwing.
         context.setVeloxExceptionError(row, std::current_exception());
       } catch (const std::exception& e) {
@@ -246,14 +249,19 @@ VectorPtr CastExpr::applyDecimalToIntegralCast(
   const auto precisionScale = getDecimalPrecisionScale(*fromType);
   const auto simpleInput = input.as<SimpleVector<FromNativeType>>();
   const auto scaleFactor = DecimalUtil::kPowersOfTen[precisionScale.second];
+  const auto castToIntByTruncate =
+      context.execCtx()->queryCtx()->queryConfig().isCastToIntByTruncate();
   applyToSelectedNoThrowLocal(context, rows, result, [&](int row) {
     auto value = simpleInput->valueAt(row);
     auto integralPart = value / scaleFactor;
-    auto fractionPart = value % scaleFactor;
-    auto sign = value >= 0 ? 1 : -1;
-    bool needsRoundUp =
-        (scaleFactor != 1) && (sign * fractionPart >= (scaleFactor >> 1));
-    integralPart += needsRoundUp ? sign : 0;
+    if (!castToIntByTruncate) {
+      auto fractionPart = value % scaleFactor;
+      auto sign = value >= 0 ? 1 : -1;
+      bool needsRoundUp =
+          (scaleFactor != 1) && (sign * fractionPart >= (scaleFactor >> 1));
+      integralPart += needsRoundUp ? sign : 0;
+    }
+
     if (integralPart > std::numeric_limits<To>::max() ||
         integralPart < std::numeric_limits<To>::min()) {
       if (setNullInResultAtError()) {
@@ -276,6 +284,24 @@ VectorPtr CastExpr::applyDecimalToIntegralCast(
 }
 
 template <typename FromNativeType>
+VectorPtr CastExpr::applyDecimalToBooleanCast(
+    const SelectivityVector& rows,
+    const BaseVector& input,
+    exec::EvalCtx& context) {
+  VectorPtr result;
+  context.ensureWritable(rows, BOOLEAN(), result);
+  (*result).clearNulls(rows);
+  auto resultBuffer =
+      result->asUnchecked<FlatVector<bool>>()->mutableRawValues<uint64_t>();
+  const auto simpleInput = input.as<SimpleVector<FromNativeType>>();
+  applyToSelectedNoThrowLocal(context, rows, result, [&](int row) {
+    auto value = simpleInput->valueAt(row);
+    bits::setBit(resultBuffer, row, value != 0);
+  });
+  return result;
+}
+
+template <typename FromNativeType>
 VectorPtr CastExpr::applyDecimalToPrimitiveCast(
     const SelectivityVector& rows,
     const BaseVector& input,
@@ -283,6 +309,8 @@ VectorPtr CastExpr::applyDecimalToPrimitiveCast(
     const TypePtr& fromType,
     const TypePtr& toType) {
   switch (toType->kind()) {
+    case TypeKind::BOOLEAN:
+      return applyDecimalToBooleanCast<FromNativeType>(rows, input, context);
     case TypeKind::TINYINT:
       return applyDecimalToIntegralCast<FromNativeType, TypeKind::TINYINT>(
           rows, input, context, fromType, toType);
@@ -338,7 +366,10 @@ void CastExpr::applyCastPrimitives(
         applyCastKernel<ToKind, FromKind, false /*truncate*/>(
             row, context, inputSimpleVector, resultFlatVector);
 
-      } catch (const VeloxUserError& ue) {
+      } catch (const VeloxException& ue) {
+        if (!ue.isUserError()) {
+          throw;
+        }
         setError(row, ue.message());
       } catch (const std::exception& e) {
         setError(row, e.what());
@@ -350,7 +381,10 @@ void CastExpr::applyCastPrimitives(
       try {
         applyCastKernel<ToKind, FromKind, true /*truncate*/>(
             row, context, inputSimpleVector, resultFlatVector);
-      } catch (const VeloxUserError& ue) {
+      } catch (const VeloxException& ue) {
+        if (!ue.isUserError()) {
+          throw;
+        }
         setError(row, ue.message());
       } catch (const std::exception& e) {
         setError(row, e.what());

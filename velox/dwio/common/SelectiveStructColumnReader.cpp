@@ -163,6 +163,7 @@ void SelectiveStructColumnReaderBase::read(
       reader->read(offset, activeRows, structNulls);
     }
   }
+
   // If this adds nulls, the field readers will miss a value for each null added
   // here.
   recordParentNullsInChildren(offset, rows);
@@ -210,7 +211,7 @@ bool SelectiveStructColumnReaderBase::isChildConstant(
                                                   // a filter on a subfield of a
                                                   // row type that doesn't exist
                                                   // in the output.
-       fileType_->type->kind() !=
+       fileType_->type()->kind() !=
            TypeKind::MAP && // If this is the case it means this is a flat map,
                             // so it can't have "missing" fields.
        childSpec.channel() >= fileType_->size());
@@ -320,7 +321,7 @@ void SelectiveStructColumnReaderBase::getValues(
   }
   if (nullsInReadRange_) {
     auto readerNulls = nullsInReadRange_->as<uint64_t>();
-    auto nulls = resultRow->mutableNulls(rows.size())->asMutable<uint64_t>();
+    auto* nulls = resultRow->mutableNulls(rows.size())->asMutable<uint64_t>();
     for (size_t i = 0; i < rows.size(); ++i) {
       bits::setBit(nulls, i, bits::isBitSet(readerNulls, rows[i]));
     }

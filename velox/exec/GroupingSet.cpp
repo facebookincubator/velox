@@ -56,6 +56,7 @@ GroupingSet::GroupingSet(
     bool isPartial,
     bool isRawInput,
     const Spiller::Config* spillConfig,
+    uint32_t* numSpillRuns,
     tsan_atomic<bool>* nonReclaimableSection,
     OperatorCtx* operatorCtx)
     : preGroupedKeyChannels_(std::move(preGroupedKeys)),
@@ -70,6 +71,7 @@ GroupingSet::GroupingSet(
                                 ->queryConfig()
                                 .aggregationSpillMemoryThreshold()),
       spillConfig_(spillConfig),
+      numSpillRuns_(numSpillRuns),
       nonReclaimableSection_(nonReclaimableSection),
       stringAllocator_(operatorCtx->pool()),
       rows_(operatorCtx->pool()),
@@ -139,7 +141,7 @@ GroupingSet::~GroupingSet() {
 std::unique_ptr<GroupingSet> GroupingSet::createForMarkDistinct(
     const RowTypePtr& inputType,
     std::vector<std::unique_ptr<VectorHasher>>&& hashers,
-    OperatorCtx* FOLLY_NONNULL operatorCtx,
+    OperatorCtx* operatorCtx,
     tsan_atomic<bool>* nonReclaimableSection) {
   return std::make_unique<GroupingSet>(
       inputType,
@@ -150,6 +152,7 @@ std::unique_ptr<GroupingSet> GroupingSet::createForMarkDistinct(
       /*isPartial*/ false,
       /*isRawInput*/ false,
       /*spillConfig*/ nullptr,
+      /*numSpillRuns*/ nullptr,
       nonReclaimableSection,
       operatorCtx);
 };
@@ -853,9 +856,10 @@ void GroupingSet::spill(int64_t targetRows, int64_t targetBytes) {
         spillConfig_->maxFileSize,
         spillConfig_->minSpillRunSize,
         spillConfig_->compressionKind,
-        Spiller::spillPool(),
+        Spiller::pool(),
         spillConfig_->executor);
   }
+  ++(*numSpillRuns_);
   spiller_->spill(targetRows, targetBytes);
   if (table_->rows()->numRows() == 0) {
     table_->clear();
@@ -940,9 +944,7 @@ bool GroupingSet::mergeNext(int32_t batchSize, const RowVectorPtr& result) {
   }
 }
 
-void GroupingSet::initializeRow(
-    SpillMergeStream& keys,
-    char* FOLLY_NONNULL row) {
+void GroupingSet::initializeRow(SpillMergeStream& keys, char* row) {
   for (auto i = 0; i < keyChannels_.size(); ++i) {
     mergeRows_->store(keys.decoded(i), keys.currentIndex(), mergeState_, i);
   }
@@ -964,7 +966,7 @@ void GroupingSet::extractSpillResult(const RowVectorPtr& result) {
   mergeRows_->clear();
 }
 
-void GroupingSet::updateRow(SpillMergeStream& input, char* FOLLY_NONNULL row) {
+void GroupingSet::updateRow(SpillMergeStream& input, char* row) {
   if (input.currentIndex() >= mergeSelection_.size()) {
     mergeSelection_.resize(bits::roundUp(input.currentIndex() + 1, 64));
     mergeSelection_.clearAll();
@@ -1042,9 +1044,16 @@ void GroupingSet::toIntermediate(
 
     if (function->supportsToIntermediate()) {
       populateTempVectors(i, input);
+      VELOX_DCHECK(aggregateVector);
       function->toIntermediate(rows, tempVectors_, aggregateVector);
       continue;
     }
+
+    // Initialize all groups, even if we only need just one, to make sure bulk
+    // free (intermediateRows_->eraseRows) is safe. It is not legal to free a
+    // group that hasn't been initialized.
+    function->initializeNewGroups(
+        intermediateGroups_.data(), intermediateRowNumbers_);
 
     // Check if mask is false for all rows.
     if (!rows.hasSelections()) {
@@ -1053,10 +1062,6 @@ void GroupingSet::toIntermediate(
       // element of flat result. This is most often a null but for
       // example count produces a zero, so we use the per-aggregate
       // functions.
-      function->initializeNewGroups(
-          intermediateGroups_.data(),
-          folly::Range<const vector_size_t*>(
-              intermediateRowNumbers_.data(), 1));
       firstGroup_.resize(numRows);
       std::fill(firstGroup_.begin(), firstGroup_.end(), intermediateGroups_[0]);
       function->extractAccumulators(
@@ -1065,9 +1070,6 @@ void GroupingSet::toIntermediate(
     }
 
     populateTempVectors(i, input);
-
-    function->initializeNewGroups(
-        intermediateGroups_.data(), intermediateRowNumbers_);
 
     function->addRawInput(
         intermediateGroups_.data(), rows, tempVectors_, false);

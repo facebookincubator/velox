@@ -20,7 +20,7 @@
 #include "folly/Random.h"
 #include "folly/lang/Assume.h"
 #include "velox/common/base/tests/GTestUtils.h"
-#include "velox/dwio/common/DataSink.h"
+#include "velox/dwio/common/FileSink.h"
 #include "velox/dwio/common/tests/utils/BatchMaker.h"
 #include "velox/dwio/dwrf/common/Common.h"
 #include "velox/dwio/dwrf/reader/DwrfReader.h"
@@ -185,6 +185,36 @@ void verifyFlatMapReading(
 }
 
 class TestFlatMapReader : public TestWithParam<bool> {};
+
+TEST_P(TestFlatMapReader, testReadFlatMapEmptyMap) {
+  const std::string fmSmall(getExampleFilePath("empty_flatmap.orc"));
+  auto returnFlatVector = GetParam();
+
+  ReaderOptions readerOpts{defaultPool.get()};
+  RowReaderOptions rowReaderOpts;
+  rowReaderOpts.setReturnFlatVector(returnFlatVector);
+  std::shared_ptr<const RowType> requestedType =
+      std::dynamic_pointer_cast<const RowType>(HiveTypeParser().parse("struct<\
+          id:int,\
+      mapCol:map<int,int>,\
+      ds:string>"));
+  rowReaderOpts.select(std::make_shared<ColumnSelector>(requestedType));
+  auto reader = DwrfReader::create(
+      createFileBufferedInput(fmSmall, readerOpts.getMemoryPool()), readerOpts);
+  auto rowReaderOwner = reader->createRowReader(rowReaderOpts);
+  auto rowReader = dynamic_cast<DwrfRowReader*>(rowReaderOwner.get());
+  VectorPtr batch;
+  rowReader->next(1, batch);
+  auto root = batch->as<RowVector>();
+
+  auto map = root->childAt(1)->as<MapVector>();
+  auto mapKeyInt = map->mapKeys()->as<SimpleVector<int32_t>>();
+  auto mapValueInt = map->mapValues()->as<SimpleVector<int32_t>>();
+
+  EXPECT_EQ(0, mapKeyInt->size());
+  EXPECT_EQ(0, mapValueInt->size());
+  EXPECT_EQ(mapKeyInt->getNullCount().has_value(), false);
+}
 
 TEST_P(TestFlatMapReader, testStringKeyLifeCycle) {
   const std::string fmSmall(getExampleFilePath("fm_small.orc"));
@@ -600,12 +630,12 @@ std::unordered_map<uint32_t, std::vector<std::string>> makeStructEncodingOption(
     const std::string& columnName,
     const std::vector<int32_t>& keys) {
   const auto schema = cs.getSchemaWithId();
-  const auto names = schema->type->as<TypeKind::ROW>().names();
+  const auto names = schema->type()->as<TypeKind::ROW>().names();
 
   for (uint32_t i = 0; i < names.size(); ++i) {
     if (columnName == names[i]) {
       std::unordered_map<uint32_t, std::vector<std::string>> config;
-      config[schema->childAt(i)->id] = stringify(keys);
+      config[schema->childAt(i)->id()] = stringify(keys);
       return config;
     }
   }
@@ -1064,31 +1094,31 @@ TEST(TestReader, fileColumnNamesReadAsLowerCaseComplexStruct) {
   auto type = reader->typeWithId();
 
   auto col0 = type->childAt(0);
-  EXPECT_EQ(col0->type->kind(), TypeKind::ROW);
+  EXPECT_EQ(col0->type()->kind(), TypeKind::ROW);
   EXPECT_EQ(type->childByName("cc"), col0);
 
   auto col0_0 = col0->childAt(0);
-  EXPECT_EQ(col0_0->type->kind(), TypeKind::BIGINT);
+  EXPECT_EQ(col0_0->type()->kind(), TypeKind::BIGINT);
   EXPECT_EQ(col0->childByName("cclong0"), col0_0);
 
   auto col0_1 = col0->childAt(1);
-  EXPECT_EQ(col0_1->type->kind(), TypeKind::MAP);
+  EXPECT_EQ(col0_1->type()->kind(), TypeKind::MAP);
   EXPECT_EQ(col0->childByName("ccmap1"), col0_1);
 
   auto col0_1_0 = col0_1->childAt(0);
-  EXPECT_EQ(col0_1_0->type->kind(), TypeKind::VARCHAR);
+  EXPECT_EQ(col0_1_0->type()->kind(), TypeKind::VARCHAR);
 
   auto col0_1_1 = col0_1->childAt(1);
-  EXPECT_EQ(col0_1_1->type->kind(), TypeKind::ROW);
+  EXPECT_EQ(col0_1_1->type()->kind(), TypeKind::ROW);
 
   auto col0_1_1_0 = col0_1_1->childAt(0);
-  EXPECT_EQ(col0_1_1_0->type->kind(), TypeKind::ARRAY);
+  EXPECT_EQ(col0_1_1_0->type()->kind(), TypeKind::ARRAY);
   EXPECT_EQ(col0_1_1->childByName("ccarray2"), col0_1_1_0);
 
   auto col0_1_1_0_0 = col0_1_1_0->childAt(0);
-  EXPECT_EQ(col0_1_1_0_0->type->kind(), TypeKind::ROW);
+  EXPECT_EQ(col0_1_1_0_0->type()->kind(), TypeKind::ROW);
   auto col0_1_1_0_0_0 = col0_1_1_0_0->childAt(0);
-  EXPECT_EQ(col0_1_1_0_0_0->type->kind(), TypeKind::INTEGER);
+  EXPECT_EQ(col0_1_1_0_0_0->type()->kind(), TypeKind::INTEGER);
   EXPECT_EQ(col0_1_1_0_0->childByName("ccint3"), col0_1_1_0_0_0);
 }
 
@@ -1311,7 +1341,7 @@ TEST(TestReader, testUpcastFloat) {
 
 TEST(TestReader, testEmptyFile) {
   auto pool = memory::addDefaultLeafMemoryPool();
-  MemorySink sink{*pool, 1024};
+  MemorySink sink{1024, {.pool = pool.get()}};
   DataBufferHolder holder{*pool, 1024, 0, DEFAULT_PAGE_GROW_RATIO, &sink};
   BufferedOutputStream output{holder};
 
@@ -1335,7 +1365,7 @@ TEST(TestReader, testEmptyFile) {
   DataBuffer<char> buf{*pool, 1};
   buf.data()[0] = psLen;
   sink.write(std::move(buf));
-  std::string_view data(sink.getData(), sink.size());
+  std::string_view data(sink.data(), sink.size());
   auto input = std::make_unique<BufferedInput>(
       std::make_shared<InMemoryReadFile>(data), *pool);
 
@@ -1432,12 +1462,13 @@ void testBufferLifeCycle(
       BatchMaker::createBatch(schema, batchSize * 2, *pool, rng, isNullAt);
   batches.push_back(vector);
 
-  auto sink = std::make_unique<MemorySink>(*pool, 1024 * 1024);
+  auto sink = std::make_unique<MemorySink>(
+      1024 * 1024, FileSink::Options{.pool = pool.get()});
   auto sinkPtr = sink.get();
   auto writer =
       E2EWriterTestUtil::writeData(std::move(sink), schema, batches, config);
 
-  std::string_view data(sinkPtr->getData(), sinkPtr->size());
+  std::string_view data(sinkPtr->data(), sinkPtr->size());
   auto input = std::make_unique<BufferedInput>(
       std::make_shared<InMemoryReadFile>(data), *pool);
 
@@ -1489,12 +1520,13 @@ void testFlatmapAsMapFieldLifeCycle(
       BatchMaker::createBatch(schema, batchSize * 5, *pool, rng, isNullAt);
   batches.push_back(vector);
 
-  auto sink = std::make_unique<MemorySink>(*pool, 1024 * 1024);
+  auto sink = std::make_unique<MemorySink>(
+      1024 * 1024, FileSink::Options{.pool = pool.get()});
   auto sinkPtr = sink.get();
   auto writer =
       E2EWriterTestUtil::writeData(std::move(sink), schema, batches, config);
 
-  std::string_view data(sinkPtr->getData(), sinkPtr->size());
+  std::string_view data(sinkPtr->data(), sinkPtr->size());
   auto input = std::make_unique<BufferedInput>(
       std::make_shared<InMemoryReadFile>(data), *pool);
 
@@ -1660,6 +1692,24 @@ TEST(TestReader, testFooterWrapper) {
   EXPECT_EQ(wrapper.numberOfRows(), 0);
 }
 
+TEST(TestReader, testOrcAndDwrfRowIndexStride) {
+  // orc footer
+  proto::orc::Footer orcFooter;
+  FooterWrapper orcFooterWrapper(&orcFooter);
+  EXPECT_FALSE(orcFooterWrapper.hasRowIndexStride());
+  orcFooter.set_rowindexstride(100);
+  ASSERT_TRUE(orcFooterWrapper.hasRowIndexStride());
+  EXPECT_EQ(orcFooterWrapper.rowIndexStride(), 100);
+
+  // dwrf footer
+  proto::Footer dwrfFooter;
+  FooterWrapper dwrfFooterWrapper(&dwrfFooter);
+  EXPECT_FALSE(dwrfFooterWrapper.hasRowIndexStride());
+  dwrfFooter.set_rowindexstride(100);
+  ASSERT_TRUE(dwrfFooterWrapper.hasRowIndexStride());
+  EXPECT_EQ(dwrfFooterWrapper.rowIndexStride(), 100);
+}
+
 TEST(TestReader, testOrcReaderComplexTypes) {
   const std::string icebergOrc(getExampleFilePath("complextypes_iceberg.orc"));
   const std::shared_ptr<const RowType> expectedType =
@@ -1783,7 +1833,8 @@ std::pair<std::unique_ptr<dwrf::Writer>, std::unique_ptr<DwrfReader>>
 createWriterReader(
     const std::vector<VectorPtr>& batches,
     memory::MemoryPool& pool) {
-  auto sink = std::make_unique<MemorySink>(pool, 1 << 20);
+  auto sink =
+      std::make_unique<MemorySink>(1 << 20, FileSink::Options{.pool = &pool});
   auto* sinkPtr = sink.get();
   auto writer = E2EWriterTestUtil::writeData(
       std::move(sink),
@@ -1791,7 +1842,7 @@ createWriterReader(
       batches,
       std::make_shared<Config>(),
       E2EWriterTestUtil::simpleFlushPolicyFactory(true));
-  std::string_view data(sinkPtr->getData(), sinkPtr->size());
+  std::string_view data(sinkPtr->data(), sinkPtr->size());
   auto input = std::make_unique<BufferedInput>(
       std::make_shared<InMemoryReadFile>(data), pool);
   ReaderOptions readerOpts(&pool);

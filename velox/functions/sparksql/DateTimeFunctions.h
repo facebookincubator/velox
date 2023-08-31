@@ -16,6 +16,7 @@
 
 #include "velox/functions/lib/DateTimeFormatter.h"
 #include "velox/functions/lib/TimeUtils.h"
+#include "velox/functions/prestosql/DateTimeImpl.h"
 #include "velox/type/tz/TimeZoneMap.h"
 
 namespace facebook::velox::functions::sparksql {
@@ -260,6 +261,61 @@ struct LastDayFunction {
         month,
         day);
     result = daysSinceEpoch;
+  }
+};
+
+template <typename T>
+struct DateAddFunction {
+  VELOX_DEFINE_FUNCTION_TYPES(T);
+
+  FOLLY_ALWAYS_INLINE void call(
+      out_type<Date>& result,
+      const arg_type<Date>& date,
+      const int32_t value) {
+    result = addToDate(date, DateTimeUnit::kDay, value);
+  }
+};
+
+template <typename T>
+struct DateSubFunction {
+  VELOX_DEFINE_FUNCTION_TYPES(T);
+
+  FOLLY_ALWAYS_INLINE void call(
+      out_type<Date>& result,
+      const arg_type<Date>& date,
+      const int32_t value) {
+    constexpr int32_t kMin = std::numeric_limits<int32_t>::min();
+    if (value > kMin) {
+      int32_t subValue = 0 - value;
+      result = addToDate(date, DateTimeUnit::kDay, subValue);
+    } else {
+      // If input values is kMin,  0 - value overflows.
+      // Subtract kMin in 2 steps to avoid overflow: -(-(kMin+1)), then -1.
+      int32_t subValue = 0 - (kMin + 1);
+      result = addToDate(date, DateTimeUnit::kDay, subValue);
+      result = addToDate(result, DateTimeUnit::kDay, 1);
+    }
+  }
+};
+
+template <typename T>
+struct DayOfWeekFunction : public InitSessionTimezone<T>,
+                           public TimestampWithTimezoneSupport<T> {
+  VELOX_DEFINE_FUNCTION_TYPES(T);
+
+  // 1 = Sunday, 2 = Monday, ..., 7 = Saturday
+  FOLLY_ALWAYS_INLINE int32_t getDayOfWeek(const std::tm& time) {
+    return time.tm_wday + 1;
+  }
+
+  FOLLY_ALWAYS_INLINE void call(
+      int32_t& result,
+      const arg_type<Timestamp>& timestamp) {
+    result = getDayOfWeek(getDateTime(timestamp, this->timeZone_));
+  }
+
+  FOLLY_ALWAYS_INLINE void call(int32_t& result, const arg_type<Date>& date) {
+    result = getDayOfWeek(getDateTime(date));
   }
 };
 

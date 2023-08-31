@@ -36,14 +36,14 @@ PageReader* FOLLY_NULLABLE readLeafRepDefs(
   }
   PageReader* pageReader = nullptr;
   auto& type = *reinterpret_cast<const ParquetTypeWithId*>(&reader->fileType());
-  if (type.type->kind() == TypeKind::ARRAY) {
+  if (type.type()->kind() == TypeKind::ARRAY) {
     pageReader = readLeafRepDefs(children[0], numTop, true);
     auto list = dynamic_cast<ListColumnReader*>(reader);
     assert(list);
     list->setLengthsFromRepDefs(*pageReader);
     return pageReader;
   }
-  if (type.type->kind() == TypeKind::MAP) {
+  if (type.type()->kind() == TypeKind::MAP) {
     pageReader = readLeafRepDefs(children[0], numTop, true);
     readLeafRepDefs(children[1], numTop, false);
     auto map = dynamic_cast<MapColumnReader*>(reader);
@@ -70,11 +70,11 @@ void skipUnreadLengthsAndNulls(dwio::common::SelectiveColumnReader& reader) {
   if (children.empty()) {
     return;
   }
-  if (reader.fileType().type->kind() == TypeKind::ARRAY) {
+  if (reader.fileType().type()->kind() == TypeKind::ARRAY) {
     reinterpret_cast<ListColumnReader*>(&reader)->skipUnreadLengths();
-  } else if (reader.fileType().type->kind() == TypeKind::ROW) {
+  } else if (reader.fileType().type()->kind() == TypeKind::ROW) {
     reinterpret_cast<StructColumnReader*>(&reader)->seekToEndOfPresetNulls();
-  } else if (reader.fileType().type->kind() == TypeKind::MAP) {
+  } else if (reader.fileType().type()->kind() == TypeKind::MAP) {
     reinterpret_cast<MapColumnReader*>(&reader)->skipUnreadLengths();
   } else {
     VELOX_UNREACHABLE();
@@ -87,8 +87,7 @@ void enqueueChildren(
     dwio::common::BufferedInput& input) {
   auto children = reader->children();
   if (children.empty()) {
-    reader->formatData().as<ParquetData>().enqueueRowGroup(index, input);
-    return;
+    return reader->formatData().as<ParquetData>().enqueueRowGroup(index, input);
   }
   for (auto* child : children) {
     enqueueChildren(child, index, input);
@@ -102,7 +101,7 @@ void ensureRepDefs(
   auto& nodeType =
       *reinterpret_cast<const ParquetTypeWithId*>(&reader.fileType());
   // Check that this is a direct child of the root struct.
-  if (nodeType.parent && !nodeType.parent->parent) {
+  if (nodeType.parent() && !nodeType.parent()->parent()) {
     skipUnreadLengthsAndNulls(reader);
     readLeafRepDefs(&reader, numTop, true);
   }
@@ -187,7 +186,7 @@ void MapColumnReader::read(
   ensureRepDefs(*this, offset + rows.back() + 1 - readOffset_);
   if (offset > readOffset_) {
     // There is no page reader on this level so cannot call skipNullsOnly on it.
-    if (fileType().parent && !fileType().parent->parent) {
+    if (fileType().parent() && !fileType().parent()->parent()) {
       skip(offset - readOffset_);
     }
     readOffset_ = offset;
@@ -290,7 +289,7 @@ void ListColumnReader::read(
   ensureRepDefs(*this, offset + rows.back() + 1 - readOffset_);
   if (offset > readOffset_) {
     // There is no page reader on this level so cannot call skipNullsOnly on it.
-    if (fileType().parent && !fileType().parent->parent) {
+    if (fileType().parent() && !fileType().parent()->parent()) {
       skip(offset - readOffset_);
     }
     readOffset_ = offset;

@@ -207,8 +207,8 @@ class Aggregate {
   /// Produces an accumulator initialized from a single value for each
   /// row in 'rows'. The raw arguments of the aggregate are in 'args',
   /// which have the same meaning as in addRawInput. The result is
-  /// placed in 'result'. 'result is allocated if nullptr, otherwise
-  /// it is expected to be a writable flat vector of the right type.
+  /// placed in 'result'. 'result' is expected to be a writable flat vector of
+  /// the right type.
   ///
   /// @param rows A set of rows to produce intermediate results for. The
   /// 'result' is expected to have rows.size() rows. Invalid rows represent rows
@@ -312,9 +312,23 @@ class Aggregate {
   }
 
   template <typename T>
+  void destroyAccumulator(char* group) const {
+    auto accumulator = value<T>(group);
+    std::destroy_at(accumulator);
+    memset(accumulator, 0, sizeof(T));
+  }
+
+  template <typename T>
+  void destroyAccumulators(folly::Range<char**> groups) const {
+    for (auto group : groups) {
+      destroyAccumulator<T>(group);
+    }
+  }
+
+  template <typename T>
   static uint64_t* getRawNulls(T* vector) {
     if (vector->mayHaveNulls()) {
-      BufferPtr nulls = vector->mutableNulls(vector->size());
+      BufferPtr& nulls = vector->mutableNulls(vector->size());
       return nulls->asMutable<uint64_t>();
     } else {
       return nullptr;

@@ -46,6 +46,34 @@ class MinMaxAggregate : public SimpleNumericAggregate<T, T, T> {
     return 1;
   }
 
+  bool supportsToIntermediate() const override {
+    return true;
+  }
+
+  void toIntermediate(
+      const SelectivityVector& rows,
+      std::vector<VectorPtr>& args,
+      VectorPtr& result) const override {
+    const auto& input = args[0];
+    if (rows.isAllSelected()) {
+      result = input;
+      return;
+    }
+
+    auto* pool = BaseAggregate::allocator_->pool();
+
+    result = BaseVector::create(input->type(), rows.size(), pool);
+
+    // Set result to NULL for rows that are masked out.
+    {
+      BufferPtr nulls = allocateNulls(rows.size(), pool, bits::kNull);
+      rows.clearNulls(nulls);
+      result->setNulls(nulls);
+    }
+
+    result->copy(input.get(), rows, nullptr);
+  }
+
   void extractValues(char** groups, int32_t numGroups, VectorPtr* result)
       override {
     BaseAggregate::template doExtractValues<T>(
@@ -105,6 +133,11 @@ class MaxAggregate : public MinMaxAggregate<T> {
       const SelectivityVector& rows,
       const std::vector<VectorPtr>& args,
       bool mayPushdown) override {
+    // Re-enable pushdown for TIMESTAMP after
+    // https://github.com/facebookincubator/velox/issues/6297 is fixed.
+    if (args[0]->typeKind() == TypeKind::TIMESTAMP) {
+      mayPushdown = false;
+    }
     if (mayPushdown && args[0]->isLazy()) {
       BaseAggregate::template pushdown<MinMaxHook<T, false>>(
           groups, rows, args[0]);
@@ -180,36 +213,16 @@ class MinAggregate : public MinMaxAggregate<T> {
     }
   }
 
-  bool supportsToIntermediate() const override {
-    return true;
-  }
-
-  void toIntermediate(
-      const SelectivityVector& rows,
-      std::vector<VectorPtr>& args,
-      VectorPtr& result) const override {
-    const auto& input = args[0];
-    if (rows.isAllSelected()) {
-      result = input;
-      return;
-    }
-
-    auto* pool = BaseAggregate::allocator_->pool();
-
-    result = BaseVector::create(input->type(), rows.size(), pool);
-    result->copy(input.get(), 0, 0, rows.size());
-
-    // Set result to NULL for rows that are masked out.
-    BufferPtr nulls = allocateNulls(rows.size(), pool, bits::kNull);
-    rows.clearNulls(nulls);
-    result->setNulls(nulls);
-  }
-
   void addRawInput(
       char** groups,
       const SelectivityVector& rows,
       const std::vector<VectorPtr>& args,
       bool mayPushdown) override {
+    // Re-enable pushdown for TIMESTAMP after
+    // https://github.com/facebookincubator/velox/issues/6297 is fixed.
+    if (args[0]->typeKind() == TypeKind::TIMESTAMP) {
+      mayPushdown = false;
+    }
     if (mayPushdown && args[0]->isLazy()) {
       BaseAggregate::template pushdown<MinMaxHook<T, true>>(
           groups, rows, args[0]);
@@ -317,7 +330,7 @@ class NonNumericMinMaxAggregateBase : public exec::Aggregate {
 
     uint64_t* rawNulls = nullptr;
     if ((*result)->mayHaveNulls()) {
-      BufferPtr nulls = (*result)->mutableNulls((*result)->size());
+      BufferPtr& nulls = (*result)->mutableNulls((*result)->size());
       rawNulls = nulls->asMutable<uint64_t>();
     }
 
@@ -701,9 +714,7 @@ class MinMaxNAggregateBase : public exec::Aggregate {
   }
 
   void destroy(folly::Range<char**> groups) override {
-    for (auto group : groups) {
-      std::destroy_at(value(group));
-    }
+    destroyAccumulators<AccumulatorType>(groups);
   }
 
  private:
@@ -890,8 +901,7 @@ exec::AggregateRegistrationResult registerMinMax(const std::string& name) {
           const TypePtr& resultType,
           const core::QueryConfig& /*config*/)
           -> std::unique_ptr<exec::Aggregate> {
-        const bool nAgg = (argTypes.size() == 2) ||
-            (argTypes.size() == 1 && argTypes[0]->size() == 2);
+        const bool nAgg = !resultType->equivalent(*argTypes[0]);
 
         if (nAgg) {
           // We have either 2 arguments: T, bigint (partial aggregation)
@@ -946,9 +956,14 @@ exec::AggregateRegistrationResult registerMinMax(const std::string& name) {
               return std::make_unique<TNumeric<Timestamp>>(resultType);
             case TypeKind::HUGEINT:
               return std::make_unique<TNumeric<int128_t>>(resultType);
+            case TypeKind::VARBINARY:
+              [[fallthrough]];
             case TypeKind::VARCHAR:
+              [[fallthrough]];
             case TypeKind::ARRAY:
+              [[fallthrough]];
             case TypeKind::MAP:
+              [[fallthrough]];
             case TypeKind::ROW:
               return std::make_unique<TNonNumeric>(inputType);
             default:

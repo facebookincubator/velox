@@ -342,6 +342,10 @@ if(${VELOX_ENABLE_GPU})
   enable_language(CUDA)
   # Determine CUDA_ARCHITECTURES automatically.
   cmake_policy(SET CMP0104 NEW)
+  if(CMAKE_BUILD_TYPE MATCHES Debug)
+    add_compile_options("$<$<COMPILE_LANGUAGE:CUDA>:-G>")
+  endif()
+  include_directories("${CMAKE_CUDA_TOOLKIT_INCLUDE_DIRECTORIES}")
 endif()
 
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
@@ -429,7 +433,7 @@ endif()
 if(NOT ${VELOX_BUILD_MINIMAL})
   # Locate or build protobuf.
   set_source(Protobuf)
-  resolve_dependency(Protobuf 3.21.4)
+  resolve_dependency(Protobuf 3.21 EXACT)
   include_directories(${Protobuf_INCLUDE_DIRS})
 endif()
 

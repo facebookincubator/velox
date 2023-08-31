@@ -126,7 +126,10 @@ struct OperatorStats {
 
   MemoryStats memoryStats;
 
-  // Total bytes written for spilling.
+  // Total bytes in memory for spilling
+  uint64_t spilledInputBytes{0};
+
+  // Total bytes written to file for spilling.
   uint64_t spilledBytes{0};
 
   // Total rows written for spilling.
@@ -203,6 +206,12 @@ class OperatorCtx {
     return operatorId_;
   }
 
+  /// Sets operatorId. The use is limited to renumbering operators from
+  /// DriverAdapter. Do not use outside of this.
+  void setOperatorIdFromAdapter(int32_t id) {
+    operatorId_ = id;
+  }
+
   const std::string& operatorType() const {
     return operatorType_;
   }
@@ -221,7 +230,7 @@ class OperatorCtx {
  private:
   DriverCtx* const driverCtx_;
   const core::PlanNodeId planNodeId_;
-  const int32_t operatorId_;
+  int32_t operatorId_;
   const std::string operatorType_;
   velox::memory::MemoryPool* const pool_;
 
@@ -453,6 +462,13 @@ class Operator : public BaseRuntimeStatWriter {
     return operatorCtx_->operatorId();
   }
 
+  /// Sets operator id. Use is limited to renumbering Operators from
+  /// DriverAdapter. Do not use outside of this.
+  void setOperatorIdFromAdapter(int32_t id) {
+    operatorCtx_->setOperatorIdFromAdapter(id);
+    stats().wlock()->operatorId = id;
+  }
+
   const std::string& operatorType() const {
     return operatorCtx_->operatorType();
   }
@@ -584,10 +600,13 @@ class Operator : public BaseRuntimeStatWriter {
   uint32_t outputBatchRows(
       std::optional<uint64_t> averageRowSize = std::nullopt) const;
 
+  /// Invoked to record spill stats in operator stats.
+  void recordSpillStats(const SpillStats& spillStats);
+
   const std::unique_ptr<OperatorCtx> operatorCtx_;
   const RowTypePtr outputType_;
-  // Contains the disk spilling related configs if spilling is enabled (e.g.
-  // the fs dir path to store spill files), otherwise null.
+  /// Contains the disk spilling related configs if spilling is enabled (e.g.
+  /// the fs dir path to store spill files), otherwise null.
   const std::optional<Spiller::Config> spillConfig_;
 
   folly::Synchronized<OperatorStats> stats_;
@@ -615,6 +634,9 @@ class Operator : public BaseRuntimeStatWriter {
 
   std::unordered_map<column_index_t, std::shared_ptr<common::Filter>>
       dynamicFilters_;
+
+  /// The number of times that spilling run on this operator.
+  uint32_t numSpillRuns_{0};
 };
 
 /// Given a row type returns indices for the specified subset of columns.

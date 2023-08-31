@@ -24,6 +24,8 @@
 #include "velox/type/TimestampConversion.h"
 #include "velox/type/Type.h"
 
+DECLARE_bool(experimental_enable_legacy_cast);
+
 namespace facebook::velox::util {
 
 template <TypeKind KIND, typename = void, bool TRUNCATE = false>
@@ -93,6 +95,8 @@ struct Converter<
 
       // Setting negative flag
       bool negative = false;
+      // Setting decimalPoint flag
+      bool decimalPoint = false;
       if (v[0] == '-') {
         if (len == 1) {
           VELOX_USER_FAIL("Cannot cast an '-' string to an integral value.");
@@ -102,10 +106,19 @@ struct Converter<
       }
       if (negative) {
         for (; index < len; index++) {
+          // Truncate the decimal
+          if (!decimalPoint && v[index] == '.') {
+            decimalPoint = true;
+            if (++index == len) {
+              break;
+            }
+          }
           if (!std::isdigit(v[index])) {
             VELOX_USER_FAIL("Encountered a non-digit character");
           }
-          result = result * 10 - (v[index] - '0');
+          if (!decimalPoint) {
+            result = result * 10 - (v[index] - '0');
+          }
           // Overflow check
           if (result > 0) {
             VELOX_USER_FAIL("Value is too large for type");
@@ -113,10 +126,19 @@ struct Converter<
         }
       } else {
         for (; index < len; index++) {
+          // Truncate the decimal
+          if (!decimalPoint && v[index] == '.') {
+            decimalPoint = true;
+            if (++index == len) {
+              break;
+            }
+          }
           if (!std::isdigit(v[index])) {
             VELOX_USER_FAIL("Encountered a non-digit character");
           }
-          result = result * 10 + (v[index] - '0');
+          if (!decimalPoint) {
+            result = result * 10 + (v[index] - '0');
+          }
           // Overflow check
           if (result < 0) {
             VELOX_USER_FAIL("Value is too large for type");
@@ -209,6 +231,9 @@ struct Converter<
       if (std::isnan(v)) {
         return 0;
       }
+      if constexpr (std::is_same_v<T, bool>) {
+        return v != 0;
+      }
       if constexpr (std::is_same_v<T, int128_t>) {
         return std::numeric_limits<int128_t>::max();
       } else if (v > LimitType::maxLimit()) {
@@ -232,6 +257,9 @@ struct Converter<
     if constexpr (TRUNCATE) {
       if (std::isnan(v)) {
         return 0;
+      }
+      if constexpr (std::is_same_v<T, bool>) {
+        return v != 0;
       }
       if constexpr (std::is_same_v<T, int128_t>) {
         return std::numeric_limits<int128_t>::max();
@@ -376,7 +404,8 @@ struct Converter<TypeKind::VARCHAR, void, TRUNCATE> {
   static std::string cast(const T& val) {
     if constexpr (std::is_same_v<T, double> || std::is_same_v<T, float>) {
       auto stringValue = folly::to<std::string>(val);
-      if (stringValue.find(".") == std::string::npos &&
+      if (!FLAGS_experimental_enable_legacy_cast &&
+          stringValue.find(".") == std::string::npos &&
           isdigit(stringValue[stringValue.length() - 1])) {
         stringValue += ".0";
       }
@@ -395,8 +424,8 @@ struct Converter<TypeKind::VARCHAR, void, TRUNCATE> {
 };
 
 // Allow conversions from string to TIMESTAMP type.
-template <>
-struct Converter<TypeKind::TIMESTAMP> {
+template <bool TRUNCATE>
+struct Converter<TypeKind::TIMESTAMP, void, TRUNCATE> {
   using T = typename TypeTraits<TypeKind::TIMESTAMP>::NativeType;
 
   template <typename From>

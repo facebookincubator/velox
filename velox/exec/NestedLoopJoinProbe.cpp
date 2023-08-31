@@ -72,7 +72,7 @@ NestedLoopJoinProbe::NestedLoopJoinProbe(
 BlockingReason NestedLoopJoinProbe::isBlocked(ContinueFuture* future) {
   switch (state_) {
     case ProbeOperatorState::kRunning:
-      FOLLY_FALLTHROUGH;
+      [[fallthrough]];
     case ProbeOperatorState::kFinish:
       return BlockingReason::kNotBlocked;
     case ProbeOperatorState::kWaitForBuild: {
@@ -222,7 +222,7 @@ RowVectorPtr NestedLoopJoinProbe::getMismatchedOutput(
     BufferPtr& unmatchedMapping,
     const std::vector<IdentityProjection>& projections,
     const std::vector<IdentityProjection>& nullProjections) {
-  if (matched.isAllSelected()) {
+  if (matched.isAllSelected() || joinCondition_ == nullptr) {
     return nullptr;
   }
 

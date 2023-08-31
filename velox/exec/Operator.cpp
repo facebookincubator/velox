@@ -271,6 +271,71 @@ void Operator::recordBlockingTime(uint64_t start, BlockingReason reason) {
       fmt::format("blocked{}Times", blockReason), RuntimeCounter(1));
 }
 
+void Operator::recordSpillStats(const SpillStats& spillStats) {
+  VELOX_CHECK(noMoreInput_);
+  auto lockedStats = stats_.wlock();
+  lockedStats->spilledInputBytes += spillStats.spilledInputBytes;
+  lockedStats->spilledBytes += spillStats.spilledBytes;
+  lockedStats->spilledRows += spillStats.spilledRows;
+  lockedStats->spilledPartitions += spillStats.spilledPartitions;
+  lockedStats->spilledFiles += spillStats.spilledFiles;
+  if (spillStats.spillFillTimeUs != 0) {
+    lockedStats->addRuntimeStat(
+        "spillFillTime",
+        RuntimeCounter{
+            static_cast<int64_t>(
+                spillStats.spillFillTimeUs *
+                Timestamp::kNanosecondsInMicrosecond),
+            RuntimeCounter::Unit::kNanos});
+  }
+  if (spillStats.spillSortTimeUs != 0) {
+    lockedStats->addRuntimeStat(
+        "spillSortTime",
+        RuntimeCounter{
+            static_cast<int64_t>(
+                spillStats.spillSortTimeUs *
+                Timestamp::kNanosecondsInMicrosecond),
+            RuntimeCounter::Unit::kNanos});
+  }
+  if (spillStats.spillSerializationTimeUs != 0) {
+    lockedStats->addRuntimeStat(
+        "spillSerializationTime",
+        RuntimeCounter{
+            static_cast<int64_t>(
+                spillStats.spillSerializationTimeUs *
+                Timestamp::kNanosecondsInMicrosecond),
+            RuntimeCounter::Unit::kNanos});
+  }
+  if (spillStats.spillFlushTimeUs != 0) {
+    lockedStats->addRuntimeStat(
+        "spillFlushTime",
+        RuntimeCounter{
+            static_cast<int64_t>(
+                spillStats.spillFlushTimeUs *
+                Timestamp::kNanosecondsInMicrosecond),
+            RuntimeCounter::Unit::kNanos});
+  }
+  if (spillStats.spillDiskWrites != 0) {
+    lockedStats->addRuntimeStat(
+        "spillDiskWrites",
+        RuntimeCounter{static_cast<int64_t>(spillStats.spillDiskWrites)});
+  }
+  if (spillStats.spillWriteTimeUs != 0) {
+    lockedStats->addRuntimeStat(
+        "spillWriteTime",
+        RuntimeCounter{
+            static_cast<int64_t>(
+                spillStats.spillWriteTimeUs *
+                Timestamp::kNanosecondsInMicrosecond),
+            RuntimeCounter::Unit::kNanos});
+  }
+  if (numSpillRuns_ != 0) {
+    lockedStats->addRuntimeStat(
+        "spillRuns", RuntimeCounter{static_cast<int64_t>(numSpillRuns_)});
+    updateGlobalSpillRunStats(numSpillRuns_);
+  }
+}
+
 std::string Operator::toString() const {
   std::stringstream out;
   if (auto task = operatorCtx_->task()) {
@@ -375,6 +440,7 @@ void OperatorStats::add(const OperatorStats& other) {
   }
 
   numDrivers += other.numDrivers;
+  spilledInputBytes += other.spilledInputBytes;
   spilledBytes += other.spilledBytes;
   spilledRows += other.spilledRows;
   spilledPartitions += other.spilledPartitions;
@@ -403,6 +469,13 @@ void OperatorStats::clear() {
   memoryStats.clear();
 
   runtimeStats.clear();
+
+  numDrivers = 0;
+  spilledInputBytes = 0;
+  spilledBytes = 0;
+  spilledRows = 0;
+  spilledPartitions = 0;
+  spilledFiles = 0;
 }
 
 std::unique_ptr<memory::MemoryReclaimer> Operator::MemoryReclaimer::create(

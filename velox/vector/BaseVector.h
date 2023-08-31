@@ -175,12 +175,14 @@ class BaseVector {
     return rawNulls_;
   }
 
+  // Ensures that nulls are writable (mutable and single referenced for
+  // BaseVector::length_).
   uint64_t* mutableRawNulls() {
     ensureNulls();
     return const_cast<uint64_t*>(rawNulls_);
   }
 
-  virtual BufferPtr mutableNulls(vector_size_t size) {
+  BufferPtr& mutableNulls(vector_size_t size) {
     ensureNullsCapacity(size);
     return nulls_;
   }
@@ -238,8 +240,11 @@ class BaseVector {
       vector_size_t index,
       vector_size_t otherIndex) const {
     static constexpr CompareFlags kEqualValueAtFlags = {
-        false, false, true /*equalOnly*/, false /*stopAtNull**/};
-    // Will always have value because stopAtNull is false.
+        false,
+        false,
+        true /*equalOnly*/,
+        CompareFlags::NullHandlingMode::NoStop /*nullHandlingMode**/};
+    // Will always have value because nullHandlingMode is NoStop.
     return compare(other, index, otherIndex, kEqualValueAtFlags).value() == 0;
   }
 
@@ -251,10 +256,9 @@ class BaseVector {
     return compare(other, index, otherIndex, CompareFlags()).value();
   }
 
-  // Returns < 0 if 'this' at 'index' is less than 'other' at
-  // 'otherIndex', 0 if equal and > 0 otherwise.
-  // If flags.stopAtNull is set, returns std::nullopt if null encountered
-  // whether it's top-level null or inside the data of complex type.
+  // Returns < 0 if 'this' at 'index' is less than 'other' at 'otherIndex', 0 if
+  // equal and > 0 otherwise. If flags.nullHandlingMode is not NoStop, the
+  // function may returns std::nullopt if null encountered.
   virtual std::optional<int32_t> compare(
       const BaseVector* other,
       vector_size_t index,
@@ -486,6 +490,9 @@ class BaseVector {
   //
   // Use SelectivityVector::empty() to make the 'result' writable and preserve
   // all current values.
+  //
+  // If 'result' is a lazy vector, then caller needs to ensure it is unique in
+  // order to re-use the loaded vector. Otherwise, a copy would be created.
   static void ensureWritable(
       const SelectivityVector& rows,
       const TypePtr& type,
@@ -761,15 +768,25 @@ class BaseVector {
   /*
    * Allocates or reallocates nulls_ with at least the given size if nulls_
    * hasn't been allocated yet or has been allocated with a smaller capacity.
+   * Ensures that nulls are writable (mutable and single referenced for
+   * minimumSize).
    */
   void ensureNullsCapacity(vector_size_t minimumSize, bool setNotNull = false);
 
   FOLLY_ALWAYS_INLINE static std::optional<int32_t>
   compareNulls(bool thisNull, bool otherNull, CompareFlags flags) {
     DCHECK(thisNull || otherNull);
-    // Null handling.
-    if (flags.stopAtNull) {
-      return std::nullopt;
+    switch (flags.nullHandlingMode) {
+      case CompareFlags::NullHandlingMode::StopAtRhsNull:
+        if (!otherNull) {
+          return false;
+        }
+        [[fallthrough]];
+      case CompareFlags::NullHandlingMode::StopAtNull:
+        return std::nullopt;
+      case CompareFlags::NullHandlingMode::NoStop:
+      default:
+        break;
     }
 
     if (thisNull) {
