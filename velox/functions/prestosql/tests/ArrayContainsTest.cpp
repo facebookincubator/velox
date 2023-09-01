@@ -15,6 +15,7 @@
  */
 
 #include <optional>
+#include <utility>
 #include "velox/functions/prestosql/tests/utils/FunctionBaseTest.h"
 #include "velox/vector/BaseVector.h"
 #include "velox/vector/SelectivityVector.h"
@@ -26,14 +27,24 @@ using namespace facebook::velox::functions::test;
 
 namespace {
 
-class ArrayContainsTest : public FunctionBaseTest {};
+class ArrayContainsTest : public FunctionBaseTest {
+ public:
+  void testContains(
+      ArrayVectorPtr arrayVector,
+      std::vector<int64_t> search,
+      const std::vector<std::optional<bool>>& expected) {
+    auto constSearch = BaseVector::wrapInConstant(
+        1, 0, makeArrayVector<int64_t>({std::move(search)}));
+    auto result = evaluate<SimpleVector<bool>>(
+        "contains(c0, c1)", makeRowVector({arrayVector, constSearch}));
+    assertEqualVectors(makeNullableFlatVector<bool>(expected), result);
+  }
 
-TEST_F(ArrayContainsTest, integerNoNulls) {
-  auto arrayVector = makeArrayVector<int64_t>(
-      {{1, 2, 3, 4}, {3, 4, 5}, {}, {5, 6, 7, 8, 9}, {7}, {10, 9, 8, 7}});
-
-  auto testContains = [&](std::optional<int64_t> search,
-                          const std::vector<std::optional<bool>>& expected) {
+  template <typename T>
+  void testContains(
+      ArrayVectorPtr arrayVector,
+      std::optional<T> search,
+      const std::vector<std::optional<bool>>& expected) {
     auto result = evaluate<SimpleVector<bool>>(
         "contains(c0, c1)",
         makeRowVector({
@@ -43,13 +54,24 @@ TEST_F(ArrayContainsTest, integerNoNulls) {
 
     assertEqualVectors(makeNullableFlatVector<bool>(expected), result);
   };
+};
 
-  testContains(1, {true, false, false, false, false, false});
-  testContains(3, {true, true, false, false, false, false});
-  testContains(5, {false, true, false, true, false, false});
-  testContains(7, {false, false, false, true, true, true});
-  testContains(-2, {false, false, false, false, false, false});
-  testContains(
+TEST_F(ArrayContainsTest, integerNoNulls) {
+  auto arrayVector = makeArrayVector<int64_t>(
+      {{1, 2, 3, 4}, {3, 4, 5}, {}, {5, 6, 7, 8, 9}, {7}, {10, 9, 8, 7}});
+
+  testContains<int64_t>(
+      arrayVector, 1, {true, false, false, false, false, false});
+  testContains<int64_t>(
+      arrayVector, 3, {true, true, false, false, false, false});
+  testContains<int64_t>(
+      arrayVector, 5, {false, true, false, true, false, false});
+  testContains<int64_t>(
+      arrayVector, 7, {false, false, false, true, true, true});
+  testContains<int64_t>(
+      arrayVector, -2, {false, false, false, false, false, false});
+  testContains<int64_t>(
+      arrayVector,
       std::nullopt,
       {std::nullopt,
        std::nullopt,
@@ -68,24 +90,20 @@ TEST_F(ArrayContainsTest, integerWithNulls) {
        {7, std::nullopt},
        {10, 9, 8, 7}});
 
-  auto testContains = [&](std::optional<int64_t> search,
-                          const std::vector<std::optional<bool>>& expected) {
-    auto result = evaluate<SimpleVector<bool>>(
-        "contains(c0, c1)",
-        makeRowVector({
-            arrayVector,
-            makeConstant(search, arrayVector->size()),
-        }));
-
-    assertEqualVectors(makeNullableFlatVector<bool>(expected), result);
-  };
-
-  testContains(1, {true, false, false, std::nullopt, std::nullopt, false});
-  testContains(3, {true, true, false, std::nullopt, std::nullopt, false});
-  testContains(5, {false, true, false, true, std::nullopt, false});
-  testContains(7, {false, false, false, true, true, true});
-  testContains(-2, {false, false, false, std::nullopt, std::nullopt, false});
-  testContains(
+  testContains<int64_t>(
+      arrayVector, 1, {true, false, false, std::nullopt, std::nullopt, false});
+  testContains<int64_t>(
+      arrayVector, 3, {true, true, false, std::nullopt, std::nullopt, false});
+  testContains<int64_t>(
+      arrayVector, 5, {false, true, false, true, std::nullopt, false});
+  testContains<int64_t>(
+      arrayVector, 7, {false, false, false, true, true, true});
+  testContains<int64_t>(
+      arrayVector,
+      -2,
+      {false, false, false, std::nullopt, std::nullopt, false});
+  testContains<int64_t>(
+      arrayVector,
       std::nullopt,
       {std::nullopt,
        std::nullopt,
@@ -108,25 +126,16 @@ TEST_F(ArrayContainsTest, varcharNoNulls) {
       {S("red"), S("purple"), S("green")},
   });
 
-  auto testContains = [&](std::optional<const char*> search,
-                          const std::vector<std::optional<bool>>& expected) {
-    auto result = evaluate<SimpleVector<bool>>(
-        "contains(c0, c1)",
-        makeRowVector({
-            arrayVector,
-            makeConstant(search, arrayVector->size()),
-        }));
-
-    assertEqualVectors(makeNullableFlatVector<bool>(expected), result);
-  };
-
-  testContains("red", {true, false, false, true});
-  testContains("blue", {true, true, false, false});
-  testContains("yellow", {false, true, false, false});
-  testContains("green", {false, false, false, true});
-  testContains("crimson red", {false, false, false, false});
-  testContains(
-      std::nullopt, {std::nullopt, std::nullopt, std::nullopt, std::nullopt});
+  testContains<StringView>(arrayVector, "red", {true, false, false, true});
+  testContains<StringView>(arrayVector, "blue", {true, true, false, false});
+  testContains<StringView>(arrayVector, "yellow", {false, true, false, false});
+  testContains<StringView>(arrayVector, "green", {false, false, false, true});
+  testContains<StringView>(
+      arrayVector, "crimson red", {false, false, false, false});
+  testContains<StringView>(
+      arrayVector,
+      std::nullopt,
+      {std::nullopt, std::nullopt, std::nullopt, std::nullopt});
 }
 
 TEST_F(ArrayContainsTest, varcharWithNulls) {
@@ -142,25 +151,18 @@ TEST_F(ArrayContainsTest, varcharWithNulls) {
       {S("red"), S("purple"), S("green")},
   });
 
-  auto testContains = [&](std::optional<const char*> search,
-                          const std::vector<std::optional<bool>>& expected) {
-    auto result = evaluate<SimpleVector<bool>>(
-        "contains(c0, c1)",
-        makeRowVector({
-            arrayVector,
-            makeConstant(search, arrayVector->size()),
-        }));
-
-    assertEqualVectors(makeNullableFlatVector<bool>(expected), result);
-  };
-
-  testContains("red", {true, std::nullopt, false, true});
-  testContains("blue", {true, true, false, false});
-  testContains("yellow", {false, true, false, false});
-  testContains("green", {false, std::nullopt, false, true});
-  testContains("crimson red", {false, std::nullopt, false, false});
-  testContains(
-      std::nullopt, {std::nullopt, std::nullopt, std::nullopt, std::nullopt});
+  testContains<StringView>(
+      arrayVector, "red", {true, std::nullopt, false, true});
+  testContains<StringView>(arrayVector, "blue", {true, true, false, false});
+  testContains<StringView>(arrayVector, "yellow", {false, true, false, false});
+  testContains<StringView>(
+      arrayVector, "green", {false, std::nullopt, false, true});
+  testContains<StringView>(
+      arrayVector, "crimson red", {false, std::nullopt, false, false});
+  testContains<StringView>(
+      arrayVector,
+      std::nullopt,
+      {std::nullopt, std::nullopt, std::nullopt, std::nullopt});
 }
 
 TEST_F(ArrayContainsTest, booleanNoNulls) {
@@ -173,21 +175,12 @@ TEST_F(ArrayContainsTest, booleanNoNulls) {
       {false, false, false},
   });
 
-  auto testContains = [&](std::optional<bool> search,
-                          const std::vector<std::optional<bool>>& expected) {
-    auto result = evaluate<SimpleVector<bool>>(
-        "contains(c0, c1)",
-        makeRowVector({
-            arrayVector,
-            makeConstant(search, arrayVector->size()),
-        }));
-
-    assertEqualVectors(makeNullableFlatVector<bool>(expected), result);
-  };
-
-  testContains(true, {true, true, false, false, true, false});
-  testContains(false, {true, false, true, false, true, true});
-  testContains(
+  testContains<bool>(
+      arrayVector, true, {true, true, false, false, true, false});
+  testContains<bool>(
+      arrayVector, false, {true, false, true, false, true, true});
+  testContains<bool>(
+      arrayVector,
       std::nullopt,
       {std::nullopt,
        std::nullopt,
@@ -207,21 +200,12 @@ TEST_F(ArrayContainsTest, booleanWithNulls) {
       {false, false, false},
   });
 
-  auto testContains = [&](std::optional<bool> search,
-                          const std::vector<std::optional<bool>>& expected) {
-    auto result = evaluate<SimpleVector<bool>>(
-        "contains(c0, c1)",
-        makeRowVector({
-            arrayVector,
-            makeConstant(search, arrayVector->size()),
-        }));
-
-    assertEqualVectors(makeNullableFlatVector<bool>(expected), result);
-  };
-
-  testContains(true, {true, true, std::nullopt, false, true, false});
-  testContains(false, {true, false, true, false, true, true});
-  testContains(
+  testContains<bool>(
+      arrayVector, true, {true, true, std::nullopt, false, true, false});
+  testContains<bool>(
+      arrayVector, false, {true, false, true, false, true, true});
+  testContains<bool>(
+      arrayVector,
       std::nullopt,
       {std::nullopt,
        std::nullopt,
@@ -347,6 +331,33 @@ TEST_F(ArrayContainsTest, preAllocatedNulls) {
        std::nullopt,
        std::nullopt,
        std::nullopt});
+}
+
+TEST_F(ArrayContainsTest, topLevelCardinalityGreaterThanBase) {
+  // ArrayVector with ConstantVector<Array> elements.
+  auto baseVector = makeArrayVector<int64_t>(
+      {{1, 2, 3, 4}, {3, 4, 5}, {6}, {5, 6, 7, 8, 9}, {7}, {10, 9, 8, 7}});
+  const vector_size_t kTopLevelCardinality = baseVector->size() * 2;
+  auto constantVector =
+      BaseVector::wrapInConstant(kTopLevelCardinality, 0, baseVector);
+  auto arrayVector = makeArrayVector({0, 3}, constantVector);
+
+  testContains(arrayVector, {1, 2, 3, 4}, {true, true});
+  testContains(arrayVector, {3, 4}, {false, false});
+  testContains(arrayVector, {5, 6, 7, 8, 9}, {false, false});
+}
+
+TEST_F(ArrayContainsTest, topLevelCardinalityLessThanBase) {
+  // ArrayVector with ConstantVector<Array> elements.
+  auto baseVector = makeArrayVector<int64_t>(
+      {{1, 2, 3, 4}, {3, 4, 5}, {}, {5, 6, 7, 8, 9}, {7}, {10, 9, 8, 7}});
+  const vector_size_t kTopLevelCardinality = baseVector->size() / 2;
+  auto constantVector =
+      BaseVector::wrapInConstant(kTopLevelCardinality, 0, baseVector);
+  auto arrayVector = makeArrayVector({0, 2}, constantVector);
+
+  testContains(arrayVector, {1, 2, 3, 4}, {true, true});
+  testContains(arrayVector, {3, 4}, {false, false});
 }
 
 } // namespace
