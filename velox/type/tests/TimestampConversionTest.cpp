@@ -153,7 +153,9 @@ TEST(DateTimeUtilTest, castFromDateStringInvalid) {
           fmt::format(
               "Unable to parse date value: \"{}\"."
               "Valid date string patterns include "
-              "(YYYY, YYYY-MM, YYYY-MM-DD), and any pattern prefixed with [+-]",
+              "(yyyy*, yyyy*-[m]m, yyyy*-[m]m-[d]d, "
+              "yyyy*-[m]m-[d]d *, yyyy*-[m]m-[d]dT*), "
+              "and any pattern prefixed with [+-]",
               std::string(str.data(), str.size())));
     }
   };
