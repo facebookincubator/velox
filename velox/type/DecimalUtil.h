@@ -86,6 +86,7 @@ class DecimalUtil {
         value);
   }
 
+  // Check if the precision can represent the value.
   template <typename T>
   FOLLY_ALWAYS_INLINE static bool valueInRange(T value, uint8_t precision) {
     return value < kPowersOfTen[precision] && value > -kPowersOfTen[precision];
