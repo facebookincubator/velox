@@ -284,7 +284,8 @@ class ConcatFunction : public exec::VectorFunction {
  * If search is an empty string, inserts replace in front of every character
  *and at the end of the string.
  **/
-class Replace : public exec::VectorFunction {
+template <bool ignoreEmptyReplaced>
+class ReplaceBase : public exec::VectorFunction {
  private:
   template <
       typename StringReader,
@@ -298,7 +299,10 @@ class Replace : public exec::VectorFunction {
       FlatVector<StringView>* results) const {
     rows.applyToSelected([&](int row) {
       auto proxy = exec::StringWriter<>(results, row);
-      stringImpl::replace(
+      stringImpl::replace<
+          decltype(proxy),
+          decltype(searchReader(row)),
+          ignoreEmptyReplaced>(
           proxy, stringReader(row), searchReader(row), replaceReader(row));
       proxy.finalize();
     });
@@ -317,7 +321,10 @@ class Replace : public exec::VectorFunction {
     rows.applyToSelected([&](int row) {
       auto proxy = exec::StringWriter<true /*reuseInput*/>(
           results, row, stringReader(row) /*reusedInput*/, true /*inPlace*/);
-      stringImpl::replaceInPlace(proxy, searchReader(row), replaceReader(row));
+      stringImpl::replaceInPlace<
+          decltype(proxy),
+          decltype(searchReader(row)),
+          ignoreEmptyReplaced>(proxy, searchReader(row), replaceReader(row));
       proxy.finalize();
     });
   }
@@ -429,6 +436,11 @@ class Replace : public exec::VectorFunction {
     return {{0, 2}};
   }
 };
+
+class Replace : public ReplaceBase<false /*ignoreEmptyReplaced*/> {};
+
+class ReplaceIgnoreEmptyReplaced
+    : public ReplaceBase<true /*ignoreEmptyReplaced*/> {};
 } // namespace
 
 VELOX_DECLARE_VECTOR_FUNCTION(
@@ -455,5 +467,10 @@ VELOX_DECLARE_VECTOR_FUNCTION(
     udf_replace,
     Replace::signatures(),
     std::make_unique<Replace>());
+
+VELOX_DECLARE_VECTOR_FUNCTION(
+    udf_replace_ignore_empty_replaced,
+    ReplaceIgnoreEmptyReplaced::signatures(),
+    std::make_unique<ReplaceIgnoreEmptyReplaced>());
 
 } // namespace facebook::velox::functions

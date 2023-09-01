@@ -205,6 +205,14 @@ class StringTest : public SparkFunctionBaseTest {
       std::optional<int32_t> toBase) {
     return evaluateOnce<std::string>("conv(c0, c1, c2)", str, fromBase, toBase);
   }
+
+  std::optional<std::string> replace(
+      std::optional<std::string> str,
+      std::optional<std::string> replaced,
+      std::optional<std::string> replacement) {
+    return evaluateOnce<std::string>(
+        "replace(c0, c1, c2)", str, replaced, replacement);
+  }
 };
 
 TEST_F(StringTest, Ascii) {
@@ -771,6 +779,20 @@ TEST_F(StringTest, conv) {
   EXPECT_EQ(conv(" ", 10, 16), std::nullopt);
   EXPECT_EQ(conv("", std::nullopt, 16), std::nullopt);
   EXPECT_EQ(conv("", 10, std::nullopt), std::nullopt);
+}
+
+TEST_F(StringTest, replace) {
+  EXPECT_EQ(replace("aaabaac", "a", "z"), "zzzbzzc");
+  EXPECT_EQ(replace("aaabaac", "", "z"), "aaabaac");
+  EXPECT_EQ(replace("aaabaac", "a", ""), "bc");
+  EXPECT_EQ(replace("aaabaac", "x", "z"), "aaabaac");
+  EXPECT_EQ(replace("aaabaac", "ab", "z"), "aazaac");
+  EXPECT_EQ(replace("aaabaac", "aa", "z"), "zabzc");
+  EXPECT_EQ(replace("aaabaac", "aa", "xyz"), "xyzabxyzc");
+  EXPECT_EQ(replace("aaabaac", "aaabaac", "z"), "z");
+  EXPECT_EQ(
+      replace("123\u6570\u6570\u636E", "\u6570\u636E", "data"),
+      "123\u6570data");
 }
 } // namespace
 } // namespace facebook::velox::functions::sparksql::test
