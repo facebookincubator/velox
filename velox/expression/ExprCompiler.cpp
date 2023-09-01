@@ -22,6 +22,7 @@
 #include "velox/expression/Expr.h"
 #include "velox/expression/FieldReference.h"
 #include "velox/expression/LambdaExpr.h"
+#include "velox/expression/RowConstructor.h"
 #include "velox/expression/SimpleFunctionRegistry.h"
 #include "velox/expression/SpecialFormRegistry.h"
 #include "velox/expression/SwitchExpr.h"
@@ -384,7 +385,7 @@ ExprPtr compileRewrittenExpression(
   if (dynamic_cast<const core::ConcatTypedExpr*>(expr.get())) {
     result = getSpecialForm(
         config,
-        "row_constructor",
+        RowConstructorCallToSpecialForm::kRowConstructor,
         resultType,
         std::move(compiledInputs),
         trackCpuUsage);

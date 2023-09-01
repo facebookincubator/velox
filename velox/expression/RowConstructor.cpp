@@ -19,8 +19,6 @@
 
 namespace facebook::velox::exec {
 
-const char* const kRowConstructor = "row_constructor";
-
 TypePtr RowConstructorCallToSpecialForm::resolveType(
     const std::vector<TypePtr>& argTypes) {
   auto numInput = argTypes.size();
@@ -39,7 +37,7 @@ ExprPtr RowConstructorCallToSpecialForm::constructSpecialForm(
     std::vector<ExprPtr>&& compiledChildren,
     bool trackCpuUsage,
     const core::QueryConfig& config) {
-  static auto rowConstructorVectorFunction =
+  auto rowConstructorVectorFunction =
       vectorFunctionFactories().withRLock([&config, &name](auto& functionMap) {
         auto functionIterator = functionMap.find(name);
         return functionIterator->second.factory(name, {}, config);
@@ -59,7 +57,7 @@ ExprPtr RowConstructorCallToSpecialForm::constructSpecialForm(
     bool trackCpuUsage,
     const core::QueryConfig& config) {
   return constructSpecialForm(
-      exec::kRowConstructor,
+      kRowConstructor,
       type,
       std::move(compiledChildren),
       trackCpuUsage,

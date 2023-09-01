@@ -29,6 +29,8 @@ class RowConstructorCallToSpecialForm : public FunctionCallToSpecialForm {
       bool trackCpuUsage,
       const core::QueryConfig& config) override;
 
+  static constexpr const char* kRowConstructor = "row_constructor";
+
  protected:
   ExprPtr constructSpecialForm(
       const std::string& name,

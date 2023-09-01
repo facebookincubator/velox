@@ -45,6 +45,7 @@ void registerFunctionCallToSpecialForms() {
   registerFunctionCallToSpecialForm(
       "try", std::make_unique<TryCallToSpecialForm>());
   registerFunctionCallToSpecialForm(
-      "row_constructor", std::make_unique<RowConstructorCallToSpecialForm>());
+      RowConstructorCallToSpecialForm::kRowConstructor,
+      std::make_unique<RowConstructorCallToSpecialForm>());
 }
 } // namespace facebook::velox::exec
