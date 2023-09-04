@@ -120,8 +120,8 @@ MapColumnReader::MapColumnReader(
   DWIO_ENSURE_EQ(fileType_->id(), dataType->id(), "working on the same node");
   auto& keyChildType = requestedType->childAt(0);
   auto& elementChildType = requestedType->childAt(1);
-  keyReader_ =
-      ParquetColumnReader::build(keyChildType, fileType_->childAt(0), params, *scanSpec.children()[0]);
+  keyReader_ = ParquetColumnReader::build(
+      keyChildType, fileType_->childAt(0), params, *scanSpec.children()[0]);
   elementReader_ = ParquetColumnReader::build(
       elementChildType, fileType_->childAt(1), params, *scanSpec.children()[1]);
   reinterpret_cast<const ParquetTypeWithId*>(dataType.get())
@@ -228,8 +228,8 @@ ListColumnReader::ListColumnReader(
           params,
           scanSpec) {
   auto& childType = requestedType->childAt(0);
-  child_ =
-      ParquetColumnReader::build(childType, fileType_->childAt(0), params, *scanSpec.children()[0]);
+  child_ = ParquetColumnReader::build(
+      childType, fileType_->childAt(0), params, *scanSpec.children()[0]);
   reinterpret_cast<const ParquetTypeWithId*>(dataType.get())
       ->makeLevelInfo(levelInfo_);
   children_ = {child_.get()};

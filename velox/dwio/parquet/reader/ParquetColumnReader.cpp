@@ -57,20 +57,24 @@ std::unique_ptr<dwio::common::SelectiveColumnReader> ParquetColumnReader::build(
           requestedType->type(), dataType, params, scanSpec);
 
     case TypeKind::ROW:
-      return std::make_unique<StructColumnReader>(requestedType, dataType, params, scanSpec);
+      return std::make_unique<StructColumnReader>(
+          requestedType, dataType, params, scanSpec);
 
     case TypeKind::VARBINARY:
     case TypeKind::VARCHAR:
       return std::make_unique<StringColumnReader>(dataType, params, scanSpec);
 
     case TypeKind::ARRAY:
-      return std::make_unique<ListColumnReader>(requestedType, dataType, params, scanSpec);
+      return std::make_unique<ListColumnReader>(
+          requestedType, dataType, params, scanSpec);
 
     case TypeKind::MAP:
-      return std::make_unique<MapColumnReader>(requestedType, dataType, params, scanSpec);
+      return std::make_unique<MapColumnReader>(
+          requestedType, dataType, params, scanSpec);
 
     case TypeKind::BOOLEAN:
-      return std::make_unique<BooleanColumnReader>(requestedType, dataType, params, scanSpec);
+      return std::make_unique<BooleanColumnReader>(
+          requestedType, dataType, params, scanSpec);
 
     default:
       VELOX_FAIL(

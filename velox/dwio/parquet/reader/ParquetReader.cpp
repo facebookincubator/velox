@@ -639,7 +639,7 @@ ParquetRowReader::ParquetRowReader(
   }
   ParquetParams params(pool_, readerBase_->fileMetaData());
   auto columnSelector = std::make_shared<ColumnSelector>(
-          ColumnSelector::apply(options_.getSelector(), readerBase_->schema()));
+      ColumnSelector::apply(options_.getSelector(), readerBase_->schema()));
   columnReader_ = ParquetColumnReader::build(
       columnSelector->getSchemaWithId(),
       readerBase_->schemaWithId(), // Id is schema id

@@ -34,7 +34,8 @@ StructColumnReader::StructColumnReader(
     auto childDataType = fileType_->childByName(childSpec->fieldName());
     auto childRequestedType =
         requestedType_->childByName(childSpec->fieldName());
-    addChild(ParquetColumnReader::build(childRequestedType, childDataType, params, *childSpec));
+    addChild(ParquetColumnReader::build(
+        childRequestedType, childDataType, params, *childSpec));
     childSpecs[i]->setSubscript(children_.size() - 1);
   }
   auto type = reinterpret_cast<const ParquetTypeWithId*>(fileType_.get());
