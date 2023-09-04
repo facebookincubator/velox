@@ -1,0 +1,806 @@
+Function : (Argument Types) -> Return Type
+abs : (bigint) -> bigint
+abs : (decimal(p,s)) -> decimal(p,s)
+abs : (double) -> double
+abs : (integer) -> integer
+abs : (real) -> real
+abs : (smallint) -> smallint
+abs : (tinyint) -> tinyint
+acos : (double) -> double
+all_keys_match : (map(K,V), function(K,boolean)) -> boolean
+all_match : (array(T), function(T,boolean)) -> boolean
+any_keys_match : (map(K,V), function(K,boolean)) -> boolean
+any_match : (array(T), function(T,boolean)) -> boolean
+any_values_match : (map(K,V), function(V,boolean)) -> boolean
+approx_distinct : (T) -> bigint
+approx_distinct : (T, double) -> bigint
+approx_most_frequent : (bigint, K, bigint) -> map(K,bigint)
+approx_percentile : (bigint, array(double)) -> array(bigint)
+approx_percentile : (bigint, array(double), double) -> array(bigint)
+approx_percentile : (bigint, bigint, array(double)) -> array(bigint)
+approx_percentile : (bigint, bigint, array(double), double) -> array(bigint)
+approx_percentile : (double, array(double)) -> array(double)
+approx_percentile : (double, array(double), double) -> array(double)
+approx_percentile : (double, bigint, array(double)) -> array(double)
+approx_percentile : (double, bigint, array(double), double) -> array(double)
+approx_percentile : (real, array(double)) -> array(real)
+approx_percentile : (real, array(double), double) -> array(real)
+approx_percentile : (real, bigint, array(double)) -> array(real)
+approx_percentile : (real, bigint, array(double), double) -> array(real)
+approx_percentile : (bigint, bigint, double) -> bigint
+approx_percentile : (bigint, bigint, double, double) -> bigint
+approx_percentile : (bigint, double) -> bigint
+approx_percentile : (bigint, double, double) -> bigint
+approx_percentile : (double, bigint, double) -> double
+approx_percentile : (double, bigint, double, double) -> double
+approx_percentile : (double, double) -> double
+approx_percentile : (double, double, double) -> double
+approx_percentile : (real, bigint, double) -> real
+approx_percentile : (real, bigint, double, double) -> real
+approx_percentile : (real, double) -> real
+approx_percentile : (real, double, double) -> real
+approx_set : (bigint) -> HyperLogLog
+approx_set : (bigint, double) -> HyperLogLog
+approx_set : (double) -> HyperLogLog
+approx_set : (double, double) -> HyperLogLog
+approx_set : (varchar(x)) -> HyperLogLog
+approx_set : (varchar(x), double) -> HyperLogLog
+arbitrary : (T) -> T
+array_agg : (T) -> array(T)
+array_average : (array(double)) -> double
+array_cum_sum : (array(T)) -> array(T)
+array_distinct : (array(E)) -> array(E)
+array_dupes : (array(T)) -> array(T)
+array_duplicates : (array(T)) -> array(T)
+array_except : (array(E), array(E)) -> array(E)
+array_frequency : (array(T)) -> map(T,integer)
+array_has_dupes : (array(T)) -> boolean
+array_has_duplicates : (array(T)) -> boolean
+array_intersect : (array(E), array(E)) -> array(E)
+array_intersect : (array(array(T))) -> array(T)
+array_join : (array(T), varchar) -> varchar
+array_join : (array(T), varchar, varchar) -> varchar
+array_max : (array(T)) -> T
+array_max_by : (array(T), function(T,U)) -> T
+array_min : (array(T)) -> T
+array_min_by : (array(T), function(T,U)) -> T
+array_normalize : (array(T), T) -> array(T)
+array_position : (array(T), T) -> bigint
+array_position : (array(T), T, bigint) -> bigint
+array_remove : (array(E), E) -> array(E)
+array_sort : (array(E)) -> array(E)
+array_sort : (array(T), function(T,T,integer)) -> array(T)
+array_sort_desc : (array(T)) -> array(T)
+array_sum : (array(bigint)) -> bigint
+array_sum : (array(double)) -> double
+array_union : (array(E), array(E)) -> array(E)
+arrays_overlap : (array(T), array(T)) -> boolean
+asin : (double) -> double
+atan : (double) -> double
+atan2 : (double, double) -> double
+avg : (decimal(p,s)) -> decimal(p,s)
+avg : (bigint) -> double
+avg : (double) -> double
+avg : (interval day to second) -> interval day to second
+avg : (interval year to month) -> interval year to month
+avg : (real) -> real
+bar : (double, bigint) -> varchar
+bar : (double, bigint, color, color) -> varchar
+beta_cdf : (double, double, double) -> double
+bing_tile : (integer, integer, integer) -> BingTile
+bing_tile : (varchar) -> BingTile
+bing_tile_at : (double, double, integer) -> BingTile
+bing_tile_children : (BingTile) -> array(BingTile)
+bing_tile_children : (BingTile, integer) -> array(BingTile)
+bing_tile_coordinates : (BingTile) -> row(x integer,y integer)
+bing_tile_parent : (BingTile) -> BingTile
+bing_tile_parent : (BingTile, integer) -> BingTile
+bing_tile_polygon : (BingTile) -> Geometry
+bing_tile_quadkey : (BingTile) -> varchar
+bing_tile_zoom_level : (BingTile) -> tinyint
+bing_tiles_around : (double, double, integer) -> array(BingTile)
+bing_tiles_around : (double, double, integer, double) -> array(BingTile)
+binomial_cdf : (integer, double, integer) -> double
+bit_count : (bigint, bigint) -> bigint
+bitwise_and : (bigint, bigint) -> bigint
+bitwise_and_agg : (bigint) -> bigint
+bitwise_arithmetic_shift_right : (bigint, bigint) -> bigint
+bitwise_left_shift : (bigint, integer) -> bigint
+bitwise_left_shift : (integer, integer) -> integer
+bitwise_left_shift : (smallint, integer) -> smallint
+bitwise_left_shift : (tinyint, integer) -> tinyint
+bitwise_logical_shift_right : (bigint, bigint, bigint) -> bigint
+bitwise_not : (bigint) -> bigint
+bitwise_or : (bigint, bigint) -> bigint
+bitwise_or_agg : (bigint) -> bigint
+bitwise_right_shift : (bigint, integer) -> bigint
+bitwise_right_shift : (integer, integer) -> integer
+bitwise_right_shift : (smallint, integer) -> smallint
+bitwise_right_shift : (tinyint, integer) -> tinyint
+bitwise_right_shift_arithmetic : (bigint, integer) -> bigint
+bitwise_right_shift_arithmetic : (integer, integer) -> integer
+bitwise_right_shift_arithmetic : (smallint, integer) -> smallint
+bitwise_right_shift_arithmetic : (tinyint, integer) -> tinyint
+bitwise_shift_left : (bigint, bigint, bigint) -> bigint
+bitwise_xor : (bigint, bigint) -> bigint
+bool_and : (boolean) -> boolean
+bool_or : (boolean) -> boolean
+cardinality : (HyperLogLog) -> bigint
+cardinality : (KHyperLogLog) -> bigint
+cardinality : (SetDigest) -> bigint
+cardinality : (array(E)) -> bigint
+cardinality : (map(K,V)) -> bigint
+cauchy_cdf : (double, double, double) -> double
+cbrt : (double) -> double
+ceil : (bigint) -> bigint
+ceil : (decimal(p,s)) -> decimal(rp,0)
+ceil : (double) -> double
+ceil : (integer) -> integer
+ceil : (real) -> real
+ceil : (smallint) -> smallint
+ceil : (tinyint) -> tinyint
+ceiling : (bigint) -> bigint
+ceiling : (decimal(p,s)) -> decimal(rp,0)
+ceiling : (double) -> double
+ceiling : (integer) -> integer
+ceiling : (real) -> real
+ceiling : (smallint) -> smallint
+ceiling : (tinyint) -> tinyint
+checksum : (T) -> varbinary
+chi_squared_cdf : (double, double) -> double
+chr : (bigint) -> varchar(1)
+classification_fall_out : (bigint, boolean, double) -> array(double)
+classification_fall_out : (bigint, boolean, double, double) -> array(double)
+classification_miss_rate : (bigint, boolean, double) -> array(double)
+classification_miss_rate : (bigint, boolean, double, double) -> array(double)
+classification_precision : (bigint, boolean, double) -> array(double)
+classification_precision : (bigint, boolean, double, double) -> array(double)
+classification_recall : (bigint, boolean, double) -> array(double)
+classification_recall : (bigint, boolean, double, double) -> array(double)
+classification_thresholds : (bigint, boolean, double) -> array(double)
+classification_thresholds : (bigint, boolean, double, double) -> array(double)
+codepoint : (varchar(1)) -> integer
+color : (double, color, color) -> color
+color : (double, double, double, color, color) -> color
+color : (varchar(x)) -> color
+combinations : (array(T), integer) -> array(array(T))
+concat : (E, array(E)) -> array(E)
+concat : (array(E)) -> array(E)
+concat : (array(E), E) -> array(E)
+concat : (char(x), char(y)) -> char(u)
+concat : (varbinary) -> varbinary
+concat : (varchar) -> varchar
+contains : (array(T), T) -> boolean
+convex_hull_agg : (Geometry) -> Geometry
+corr : (double, double) -> double
+corr : (real, real) -> real
+cos : (double) -> double
+cosh : (double) -> double
+cosine_similarity : (map(varchar,double), map(varchar,double)) -> double
+count : (aggregate) -> bigint
+count : (T) -> bigint
+count_if : (boolean) -> bigint
+covar_pop : (double, double) -> double
+covar_pop : (real, real) -> real
+covar_samp : (double, double) -> double
+covar_samp : (real, real) -> real
+crc32 : (varbinary) -> bigint
+create_hll : (bigint) -> HyperLogLog
+create_hll : (bigint, double) -> HyperLogLog
+cume_dist : (window) -> double
+current_date : (scalar) -> date
+current_time : (scalar) -> time with time zone
+current_timestamp : (scalar) -> timestamp with time zone
+current_timezone : (scalar) -> varchar
+custom_add : (bigint, bigint) -> bigint
+custom_rank : (window) -> bigint
+custom_sum : (bigint) -> bigint
+date : (timestamp) -> date
+date : (timestamp with time zone) -> date
+date : (varchar(x)) -> date
+date_add : (varchar(x), bigint, date) -> date
+date_add : (varchar(x), bigint, time) -> time
+date_add : (varchar(x), bigint, time with time zone) -> time with time zone
+date_add : (varchar(x), bigint, timestamp) -> timestamp
+date_add : (varchar(x), bigint, timestamp with time zone) -> timestamp with time zone
+date_diff : (varchar(x), date, date) -> bigint
+date_diff : (varchar(x), time with time zone, time with time zone) -> bigint
+date_diff : (varchar(x), time, time) -> bigint
+date_diff : (varchar(x), timestamp with time zone, timestamp with time zone) -> bigint
+date_diff : (varchar(x), timestamp, timestamp) -> bigint
+date_format : (timestamp with time zone, varchar(x)) -> varchar
+date_format : (timestamp, varchar(x)) -> varchar
+date_parse : (varchar(x), varchar(y)) -> timestamp
+date_trunc : (varchar(x), date) -> date
+date_trunc : (varchar(x), time) -> time
+date_trunc : (varchar(x), time with time zone) -> time with time zone
+date_trunc : (varchar(x), timestamp) -> timestamp
+date_trunc : (varchar(x), timestamp with time zone) -> timestamp with time zone
+day : (date) -> bigint
+day : (interval day to second) -> bigint
+day : (timestamp) -> bigint
+day : (timestamp with time zone) -> bigint
+day_of_month : (date) -> bigint
+day_of_month : (interval day to second) -> bigint
+day_of_month : (timestamp) -> bigint
+day_of_month : (timestamp with time zone) -> bigint
+day_of_week : (date) -> bigint
+day_of_week : (timestamp) -> bigint
+day_of_week : (timestamp with time zone) -> bigint
+day_of_year : (date) -> bigint
+day_of_year : (timestamp) -> bigint
+day_of_year : (timestamp with time zone) -> bigint
+degrees : (double) -> double
+dense_rank : (window) -> bigint
+differential_entropy : (bigint, double) -> double
+differential_entropy : (bigint, double, double) -> double
+differential_entropy : (bigint, double, double, varchar, double, double) -> double
+dow : (date) -> bigint
+dow : (timestamp) -> bigint
+dow : (timestamp with time zone) -> bigint
+doy : (date) -> bigint
+doy : (timestamp) -> bigint
+doy : (timestamp with time zone) -> bigint
+e : (scalar) -> double
+element_at : (array(E), bigint) -> E
+element_at : (map(K,V), K) -> V
+empty_approx_set : (scalar) -> HyperLogLog
+empty_approx_set : (double) -> HyperLogLog
+ends_with : (varchar(x), varchar(y)) -> boolean
+entropy : (bigint) -> double
+enum_key : (T) -> varchar
+enum_key : (T) -> varchar
+every : (boolean) -> boolean
+exp : (double) -> double
+expand_envelope : (Geometry, double) -> Geometry
+f_cdf : (double, double, double) -> double
+filter : (array(T), function(T,boolean)) -> array(T)
+find_first : (array(T), bigint, function(T,boolean)) -> T
+find_first : (array(T), function(T,boolean)) -> T
+find_first_index : (array(T), bigint, function(T,boolean)) -> bigint
+find_first_index : (array(T), function(T,boolean)) -> bigint
+first_value : (T) -> T
+flatten : (array(array(E))) -> array(E)
+flatten_geometry_collections : (Geometry) -> array(Geometry)
+floor : (bigint) -> bigint
+floor : (decimal(p,s)) -> decimal(rp,0)
+floor : (double) -> double
+floor : (integer) -> integer
+floor : (real) -> real
+floor : (smallint) -> smallint
+floor : (tinyint) -> tinyint
+fnv1_32 : (varbinary) -> bigint
+fnv1_64 : (varbinary) -> bigint
+fnv1a_32 : (varbinary) -> bigint
+fnv1a_64 : (varbinary) -> bigint
+format_datetime : (timestamp with time zone, varchar(x)) -> varchar
+format_datetime : (timestamp, varchar(x)) -> varchar
+from_base : (varchar(x), bigint) -> bigint
+from_base32 : (varbinary) -> varbinary
+from_base32 : (varchar(x)) -> varbinary
+from_base64 : (varbinary) -> varbinary
+from_base64 : (varchar(x)) -> varbinary
+from_base64url : (varbinary) -> varbinary
+from_base64url : (varchar(x)) -> varbinary
+from_big_endian_32 : (varbinary) -> integer
+from_big_endian_64 : (varbinary) -> bigint
+from_hex : (varbinary) -> varbinary
+from_hex : (varchar(x)) -> varbinary
+from_ieee754_32 : (varbinary) -> real
+from_ieee754_64 : (varbinary) -> double
+from_iso8601_date : (varchar(x)) -> date
+from_iso8601_timestamp : (varchar(x)) -> timestamp with time zone
+from_unixtime : (double) -> timestamp
+from_unixtime : (double, bigint, bigint) -> timestamp with time zone
+from_unixtime : (double, varchar(x)) -> timestamp with time zone
+from_utf8 : (varbinary) -> varchar
+from_utf8 : (varbinary, bigint) -> varchar
+from_utf8 : (varbinary, varchar(x)) -> varchar
+gamma_cdf : (double, double, double) -> double
+geometric_mean : (bigint) -> double
+geometric_mean : (double) -> double
+geometric_mean : (real) -> real
+geometry_as_geojson : (Geometry) -> varchar
+geometry_from_geojson : (varchar) -> Geometry
+geometry_invalid_reason : (Geometry) -> varchar
+geometry_nearest_points : (Geometry, Geometry) -> array(Geometry)
+geometry_to_bing_tiles : (Geometry, integer) -> array(BingTile)
+geometry_to_dissolved_bing_tiles : (Geometry, integer) -> array(BingTile)
+geometry_union : (array(Geometry)) -> Geometry
+geometry_union_agg : (Geometry) -> Geometry
+great_circle_distance : (double, double, double, double) -> double
+greatest : (E) -> E
+hamming_distance : (varchar(x), varchar(y)) -> bigint
+hash_counts : (SetDigest) -> map(bigint,smallint)
+hash_counts : (SetDigest) -> varchar
+histogram : (K) -> map(K,bigint)
+hmac_md5 : (varbinary, varbinary) -> varbinary
+hmac_sha1 : (varbinary, varbinary) -> varbinary
+hmac_sha256 : (varbinary, varbinary) -> varbinary
+hmac_sha512 : (varbinary, varbinary) -> varbinary
+hour : (interval day to second) -> bigint
+hour : (time) -> bigint
+hour : (time with time zone) -> bigint
+hour : (timestamp) -> bigint
+hour : (timestamp with time zone) -> bigint
+infinity : (scalar) -> double
+intersection_cardinality : (KHyperLogLog, KHyperLogLog) -> bigint
+intersection_cardinality : (SetDigest, SetDigest) -> bigint
+inverse_beta_cdf : (double, double, double) -> double
+inverse_binomial_cdf : (integer, double, double) -> integer
+inverse_cauchy_cdf : (double, double, double) -> double
+inverse_chi_squared_cdf : (double, double) -> double
+inverse_f_cdf : (double, double, double) -> double
+inverse_gamma_cdf : (double, double, double) -> double
+inverse_laplace_cdf : (double, double, double) -> double
+inverse_normal_cdf : (double, double, double) -> double
+inverse_poisson_cdf : (double, double) -> integer
+inverse_weibull_cdf : (double, double, double) -> double
+ip_prefix : (ipaddress, bigint) -> ipprefix
+ip_prefix : (varchar(x), bigint) -> ipprefix
+ip_subnet_max : (ipprefix) -> ipaddress
+ip_subnet_min : (ipprefix) -> ipaddress
+ip_subnet_range : (ipprefix) -> array(IPADDRESS)
+is_finite : (double) -> boolean
+is_infinite : (double) -> boolean
+is_json_scalar : (json) -> boolean
+is_json_scalar : (varchar(x)) -> boolean
+is_nan : (double) -> boolean
+is_subnet_of : (ipprefix, ipaddress) -> boolean
+is_subnet_of : (ipprefix, ipprefix) -> boolean
+jaccard_index : (KHyperLogLog, KHyperLogLog) -> double
+jaccard_index : (SetDigest, SetDigest) -> double
+json_array_contains : (json, bigint) -> boolean
+json_array_contains : (json, boolean) -> boolean
+json_array_contains : (json, double) -> boolean
+json_array_contains : (json, varchar(x)) -> boolean
+json_array_contains : (varchar(x), bigint) -> boolean
+json_array_contains : (varchar(x), boolean) -> boolean
+json_array_contains : (varchar(x), double) -> boolean
+json_array_contains : (varchar(x), varchar(y)) -> boolean
+json_array_get : (json, bigint) -> json
+json_array_get : (varchar(x), bigint) -> json
+json_array_length : (json) -> bigint
+json_array_length : (varchar(x)) -> bigint
+json_extract : (json, JsonPath) -> json
+json_extract : (varchar(x), JsonPath) -> json
+json_extract_scalar : (json, JsonPath) -> varchar
+json_extract_scalar : (varchar(x), JsonPath) -> varchar(x)
+json_format : (json) -> varchar
+json_parse : (varchar(x)) -> json
+json_size : (json, JsonPath) -> bigint
+json_size : (varchar(x), JsonPath) -> bigint
+key_sampling_percent : (varchar) -> double
+khyperloglog_agg : (bigint, bigint) -> KHyperLogLog
+khyperloglog_agg : (bigint, varchar(x)) -> KHyperLogLog
+khyperloglog_agg : (double, bigint) -> KHyperLogLog
+khyperloglog_agg : (double, varchar(x)) -> KHyperLogLog
+khyperloglog_agg : (varchar(x), bigint) -> KHyperLogLog
+khyperloglog_agg : (varchar(x), varchar(y)) -> KHyperLogLog
+kurtosis : (bigint) -> double
+kurtosis : (double) -> double
+lag : (T) -> T
+lag : (T, bigint) -> T
+lag : (T, bigint, T) -> T
+laplace_cdf : (double, double, double) -> double
+last_day_of_month : (date) -> date
+last_day_of_month : (timestamp) -> date
+last_day_of_month : (timestamp with time zone) -> date
+last_value : (T) -> T
+lead : (T) -> T
+lead : (T, bigint) -> T
+lead : (T, bigint, T) -> T
+least : (E) -> E
+length : (char(x)) -> bigint
+length : (varbinary) -> bigint
+length : (varchar(x)) -> bigint
+levenshtein_distance : (varchar(x), varchar(y)) -> bigint
+line_interpolate_point : (Geometry, double) -> Geometry
+line_locate_point : (Geometry, Geometry) -> double
+ln : (double) -> double
+localtime : (scalar) -> time
+localtimestamp : (scalar) -> timestamp
+log10 : (double) -> double
+log2 : (double) -> double
+lower : (char(x)) -> char(x)
+lower : (varchar(x)) -> varchar(x)
+lpad : (varbinary, bigint, varbinary) -> varbinary
+lpad : (varchar(x), bigint, varchar(y)) -> varchar
+ltrim : (char(x)) -> char(x)
+ltrim : (char(x), CodePoints) -> char(x)
+ltrim : (varchar(x)) -> varchar(x)
+ltrim : (varchar(x), CodePoints) -> varchar(x)
+make_set_digest : (bigint) -> SetDigest
+map : (array(K), array(V)) -> map(K,V)
+map : (scalar) -> map(unknown,unknown)
+map_agg : (K, V) -> map(K,V)
+map_concat : (map(K,V)) -> map(K,V)
+map_entries : (map(K,V)) -> array(row(K,V))
+map_filter : (map(K,V), function(K,V,boolean)) -> map(K,V)
+map_from_entries : (array(row(K,V))) -> map(K,V)
+map_keys : (map(K,V)) -> array(K)
+map_normalize : (map(varchar,double)) -> map(varchar,double)
+map_remove_null_values : (map(K,V)) -> map(K,V)
+map_subset : (MAP(K,V), ARRAY(K)) -> MAP(K,V)
+map_top_n : (map(K,V), bigint) -> map(K,V)
+map_top_n_keys : (map(K,V), bigint) -> array(K)
+map_top_n_keys : (map(K,V), bigint, function(K,K,integer)) -> array(K)
+map_top_n_values : (map(K,V), bigint) -> array(V)
+map_top_n_values : (map(K,V), bigint, function(V,V,integer)) -> array(V)
+map_union : (map(K,V)) -> map(K,V)
+map_union_sum : (map(K,V)) -> map(K,V)
+map_values : (map(K,V)) -> array(V)
+map_zip_with : (map(K,V1), map(K,V2), function(K,V1,V2,V3)) -> map(K,V3)
+max : (E) -> E
+max : (E, bigint) -> array(E)
+max_by : (V, K) -> V
+max_by : (V, K, bigint) -> array(V)
+md5 : (varbinary) -> varbinary
+merge : (HyperLogLog) -> HyperLogLog
+merge : (KHyperLogLog) -> KHyperLogLog
+merge : (qdigest(T)) -> qdigest(T)
+merge_hll : (array(HyperLogLog)) -> HyperLogLog
+merge_khll : (array(KHyperLogLog)) -> KHyperLogLog
+merge_set_digest : (SetDigest) -> SetDigest
+millisecond : (interval day to second) -> bigint
+millisecond : (time) -> bigint
+millisecond : (time with time zone) -> bigint
+millisecond : (timestamp) -> bigint
+millisecond : (timestamp with time zone) -> bigint
+min : (E) -> E
+min : (E, bigint) -> array(E)
+min_by : (V, K) -> V
+min_by : (V, K, bigint) -> array(V)
+minute : (interval day to second) -> bigint
+minute : (time) -> bigint
+minute : (time with time zone) -> bigint
+minute : (timestamp) -> bigint
+minute : (timestamp with time zone) -> bigint
+mod : (bigint, bigint) -> bigint
+mod : (decimal(a_precision,a_scale), decimal(b_precision,b_scale)) -> decimal(r_precision,r_scale)
+mod : (double, double) -> double
+mod : (integer, integer) -> integer
+mod : (real, real) -> real
+mod : (smallint, smallint) -> smallint
+mod : (tinyint, tinyint) -> tinyint
+month : (date) -> bigint
+month : (interval year to month) -> bigint
+month : (timestamp) -> bigint
+month : (timestamp with time zone) -> bigint
+multimap_agg : (K, V) -> map(K,array(V))
+multimap_from_entries : (array(row(K,V))) -> map(K,array(V))
+murmur3_x64_128 : (varbinary) -> varbinary
+nan : (scalar) -> double
+ngrams : (array(T), integer) -> array(array(T))
+no_keys_match : (map(K,V), function(K,boolean)) -> boolean
+no_values_match : (map(K,V), function(V,boolean)) -> boolean
+none_match : (array(T), function(T,boolean)) -> boolean
+normal_cdf : (double, double, double) -> double
+normalize : (varchar(x), varchar(y)) -> varchar
+now : (scalar) -> timestamp with time zone
+nth_value : (T, bigint) -> T
+ntile : (bigint) -> bigint
+numeric_histogram : (bigint, double) -> map(double,double)
+numeric_histogram : (bigint, double, double) -> map(double,double)
+numeric_histogram : (bigint, real) -> map(real,real)
+numeric_histogram : (bigint, real, double) -> map(real,real)
+parse_datetime : (varchar(x), varchar(y)) -> timestamp with time zone
+parse_duration : (varchar(x)) -> interval day to second
+parse_presto_data_size : (varchar(x)) -> decimal(38,0)
+percent_rank : (window) -> double
+pi : (scalar) -> double
+poisson_cdf : (double, integer) -> double
+pow : (double, double) -> double
+power : (double, double) -> double
+qdigest_agg : (V) -> qdigest(V)
+qdigest_agg : (V, bigint) -> qdigest(V)
+qdigest_agg : (V, bigint, double) -> qdigest(V)
+quantile_at_value : (qdigest(bigint), bigint) -> double
+quantile_at_value : (qdigest(double), double) -> double
+quantile_at_value : (qdigest(real), real) -> double
+quarter : (date) -> bigint
+quarter : (timestamp) -> bigint
+quarter : (timestamp with time zone) -> bigint
+radians : (double) -> double
+rand : (bigint) -> bigint
+rand : (scalar) -> double
+rand : (integer) -> integer
+rand : (smallint) -> smallint
+rand : (tinyint) -> tinyint
+random : (bigint) -> bigint
+random : (scalar) -> double
+random : (integer) -> integer
+random : (smallint) -> smallint
+random : (tinyint) -> tinyint
+rank : (window) -> bigint
+reduce : (array(T), S, function(S,T,S), function(S,R)) -> R
+reduce_agg : (T, S, function(S,T,S), function(S,S,S)) -> S
+regexp_extract : (varchar(x), Re2JRegExp) -> varchar(x)
+regexp_extract : (varchar(x), Re2JRegExp, bigint) -> varchar(x)
+regexp_extract_all : (varchar(x), Re2JRegExp) -> array(varchar(x))
+regexp_extract_all : (varchar(x), Re2JRegExp, bigint) -> array(varchar(x))
+regexp_like : (varchar(x), Re2JRegExp) -> boolean
+regexp_replace : (varchar, Re2JRegExp, function(array(varchar),varchar(x))) -> varchar
+regexp_replace : (varchar(x), Re2JRegExp) -> varchar(x)
+regexp_replace : (varchar(x), Re2JRegExp, varchar(y)) -> varchar(z)
+regexp_split : (varchar(x), Re2JRegExp) -> array(varchar(x))
+regr_intercept : (double, double) -> double
+regr_intercept : (real, real) -> real
+regr_slope : (double, double) -> double
+regr_slope : (real, real) -> real
+reidentification_potential : (KHyperLogLog, bigint) -> double
+remove_nulls : (array(T)) -> array(T)
+render : (boolean) -> varchar(16)
+render : (bigint, color) -> varchar(35)
+render : (double, color) -> varchar(41)
+render : (varchar(x), color) -> varchar(y)
+repeat : (T, integer) -> array(T)
+replace : (varchar(x), varchar(y), varchar(z)) -> varchar(u)
+replace : (varchar(x), varchar(y)) -> varchar(x)
+replace_first : (varchar, varchar, varchar) -> varchar
+reverse : (array(E)) -> array(E)
+reverse : (varbinary) -> varbinary
+reverse : (varchar(x)) -> varchar(x)
+rgb : (bigint, bigint, bigint) -> color
+round : (bigint) -> bigint
+round : (bigint, integer) -> bigint
+round : (decimal(p,s)) -> decimal(rp,rs)
+round : (decimal(p,s), integer) -> decimal(rp,s)
+round : (double) -> double
+round : (double, integer) -> double
+round : (integer) -> integer
+round : (integer, integer) -> integer
+round : (real) -> real
+round : (real, integer) -> real
+round : (smallint) -> smallint
+round : (smallint, integer) -> smallint
+round : (tinyint) -> tinyint
+round : (tinyint, integer) -> tinyint
+row_number : (window) -> bigint
+rpad : (varbinary, bigint, varbinary) -> varbinary
+rpad : (varchar(x), bigint, varchar(y)) -> varchar
+rtrim : (char(x)) -> char(x)
+rtrim : (char(x), CodePoints) -> char(x)
+rtrim : (varchar(x)) -> varchar(x)
+rtrim : (varchar(x), CodePoints) -> varchar(x)
+scale_qdigest : (qdigest(bigint), double) -> qdigest(bigint)
+scale_qdigest : (qdigest(double), double) -> qdigest(double)
+scale_qdigest : (qdigest(real), double) -> qdigest(real)
+second : (interval day to second) -> bigint
+second : (time) -> bigint
+second : (time with time zone) -> bigint
+second : (timestamp) -> bigint
+second : (timestamp with time zone) -> bigint
+secure_rand : (bigint, bigint) -> bigint
+secure_rand : (scalar) -> double
+secure_rand : (double, double) -> double
+secure_rand : (integer, integer) -> integer
+secure_rand : (smallint, smallint) -> smallint
+secure_rand : (tinyint, tinyint) -> tinyint
+secure_random : (bigint, bigint) -> bigint
+secure_random : (scalar) -> double
+secure_random : (double, double) -> double
+secure_random : (integer, integer) -> integer
+secure_random : (smallint, smallint) -> smallint
+secure_random : (tinyint, tinyint) -> tinyint
+sequence : (bigint, bigint) -> array(bigint)
+sequence : (bigint, bigint, bigint) -> array(bigint)
+sequence : (date, date) -> array(date)
+sequence : (date, date, interval day to second) -> array(date)
+sequence : (date, date, interval year to month) -> array(date)
+sequence : (timestamp, timestamp, interval day to second) -> array(timestamp)
+sequence : (timestamp, timestamp, interval year to month) -> array(timestamp)
+set_agg : (T) -> array(T)
+set_union : (array(T)) -> array(T)
+sha1 : (varbinary) -> varbinary
+sha256 : (varbinary) -> varbinary
+sha512 : (varbinary) -> varbinary
+shuffle : (array(E)) -> array(E)
+sign : (bigint) -> bigint
+sign : (decimal(p,s)) -> decimal(1,0)
+sign : (double) -> double
+sign : (integer) -> integer
+sign : (real) -> real
+sign : (smallint) -> smallint
+sign : (tinyint) -> tinyint
+simplify_geometry : (Geometry, double) -> Geometry
+sin : (double) -> double
+skewness : (bigint) -> double
+skewness : (double) -> double
+slice : (array(E), bigint, bigint) -> array(E)
+spatial_partitioning : (Geometry) -> varchar
+spatial_partitions : (KdbTree, Geometry) -> array(integer)
+spatial_partitions : (KdbTree, Geometry, double) -> array(integer)
+spatial_partitions : (KdbTree, SphericalGeography) -> array(integer)
+spatial_partitions : (KdbTree, SphericalGeography, double) -> array(integer)
+split : (varchar(x), varchar(y)) -> array(varchar(x))
+split : (varchar(x), varchar(y), bigint) -> array(varchar(x))
+split_part : (varchar(x), varchar(y), bigint) -> varchar(x)
+split_to_map : (varchar, varchar, varchar) -> map(varchar,varchar)
+split_to_map : (varchar, varchar, varchar, function(varchar,varchar,varchar,varchar)) -> map(varchar,varchar)
+split_to_multimap : (varchar, varchar, varchar) -> map(varchar,array(varchar))
+spooky_hash_v2_32 : (varbinary) -> varbinary
+spooky_hash_v2_64 : (varbinary) -> varbinary
+sqrt : (double) -> double
+st_area : (Geometry) -> double
+st_area : (SphericalGeography) -> double
+st_asbinary : (Geometry) -> varbinary
+st_astext : (Geometry) -> varchar
+st_astext : (SphericalGeography) -> varchar
+st_boundary : (Geometry) -> Geometry
+st_buffer : (Geometry, double) -> Geometry
+st_centroid : (Geometry) -> Geometry
+st_centroid : (SphericalGeography) -> SphericalGeography
+st_contains : (Geometry, Geometry) -> boolean
+st_convexhull : (Geometry) -> Geometry
+st_coorddim : (Geometry) -> tinyint
+st_crosses : (Geometry, Geometry) -> boolean
+st_difference : (Geometry, Geometry) -> Geometry
+st_dimension : (Geometry) -> tinyint
+st_disjoint : (Geometry, Geometry) -> boolean
+st_distance : (Geometry, Geometry) -> double
+st_distance : (SphericalGeography, SphericalGeography) -> double
+st_endpoint : (Geometry) -> Geometry
+st_envelope : (Geometry) -> Geometry
+st_envelopeaspts : (Geometry) -> array(Geometry)
+st_equals : (Geometry, Geometry) -> boolean
+st_exteriorring : (Geometry) -> Geometry
+st_geometries : (Geometry) -> array(Geometry)
+st_geometryfromtext : (varchar) -> Geometry
+st_geometryn : (Geometry, integer) -> Geometry
+st_geometrytype : (Geometry) -> varchar
+st_geomfrombinary : (varbinary) -> Geometry
+st_interiorringn : (Geometry, integer) -> Geometry
+st_interiorrings : (Geometry) -> array(Geometry)
+st_intersection : (Geometry, Geometry) -> Geometry
+st_intersects : (Geometry, Geometry) -> boolean
+st_isclosed : (Geometry) -> boolean
+st_isempty : (Geometry) -> boolean
+st_isring : (Geometry) -> boolean
+st_issimple : (Geometry) -> boolean
+st_isvalid : (Geometry) -> boolean
+st_length : (Geometry) -> double
+st_length : (SphericalGeography) -> double
+st_linefromtext : (varchar) -> Geometry
+st_linestring : (array(Geometry)) -> Geometry
+st_multipoint : (array(Geometry)) -> Geometry
+st_numgeometries : (Geometry) -> integer
+st_numinteriorring : (Geometry) -> bigint
+st_numpoints : (Geometry) -> bigint
+st_overlaps : (Geometry, Geometry) -> boolean
+st_point : (double, double) -> Geometry
+st_pointn : (Geometry, integer) -> Geometry
+st_points : (Geometry) -> array(Geometry)
+st_polygon : (varchar) -> Geometry
+st_relate : (Geometry, Geometry, varchar) -> boolean
+st_startpoint : (Geometry) -> Geometry
+st_symdifference : (Geometry, Geometry) -> Geometry
+st_touches : (Geometry, Geometry) -> boolean
+st_union : (Geometry, Geometry) -> Geometry
+st_within : (Geometry, Geometry) -> boolean
+st_x : (Geometry) -> double
+st_xmax : (Geometry) -> double
+st_xmin : (Geometry) -> double
+st_y : (Geometry) -> double
+st_ymax : (Geometry) -> double
+st_ymin : (Geometry) -> double
+starts_with : (varchar(x), varchar(y)) -> boolean
+stddev : (bigint) -> double
+stddev : (double) -> double
+stddev_pop : (bigint) -> double
+stddev_pop : (double) -> double
+stddev_samp : (bigint) -> double
+stddev_samp : (double) -> double
+strpos : (varchar(x), varchar(y)) -> bigint
+strpos : (varchar(x), varchar(y), bigint) -> bigint
+strrpos : (varchar(x), varchar(y)) -> bigint
+strrpos : (varchar(x), varchar(y), bigint) -> bigint
+substr : (char(x), bigint) -> char(x)
+substr : (char(x), bigint, bigint) -> char(x)
+substr : (varbinary, bigint) -> varbinary
+substr : (varbinary, bigint, bigint) -> varbinary
+substr : (varchar(x), bigint) -> varchar(x)
+substr : (varchar(x), bigint, bigint) -> varchar(x)
+sum : (bigint) -> bigint
+sum : (decimal(p,s)) -> decimal(38,s)
+sum : (double) -> double
+sum : (interval day to second) -> interval day to second
+sum : (interval year to month) -> interval year to month
+sum : (real) -> real
+tan : (double) -> double
+tanh : (double) -> double
+tdigest_agg : (V) -> tdigest(V)
+tdigest_agg : (V, bigint) -> tdigest(V)
+tdigest_agg : (V, bigint, double) -> tdigest(V)
+timezone_hour : (timestamp with time zone) -> bigint
+timezone_minute : (timestamp with time zone) -> bigint
+to_base : (bigint, bigint) -> varchar(64)
+to_base32 : (varbinary) -> varchar
+to_base64 : (varbinary) -> varchar
+to_base64url : (varbinary) -> varchar
+to_big_endian_32 : (integer) -> varbinary
+to_big_endian_64 : (bigint) -> varbinary
+to_geometry : (SphericalGeography) -> Geometry
+to_hex : (varbinary) -> varchar
+to_ieee754_32 : (real) -> varbinary
+to_ieee754_64 : (double) -> varbinary
+to_iso8601 : (date) -> varchar(16)
+to_iso8601 : (timestamp) -> varchar(35)
+to_iso8601 : (timestamp with time zone) -> varchar(35)
+to_milliseconds : (interval day to second) -> bigint
+to_spherical_geography : (Geometry) -> SphericalGeography
+to_unixtime : (timestamp) -> double
+to_unixtime : (timestamp with time zone) -> double
+to_utf8 : (varchar(x)) -> varbinary
+transform : (array(T), function(T,U)) -> array(U)
+transform_keys : (map(K1,V), function(K1,V,K2)) -> map(K2,V)
+transform_values : (map(K,V1), function(K,V1,V2)) -> map(K,V2)
+trim : (char(x)) -> char(x)
+trim : (char(x), CodePoints) -> char(x)
+trim : (varchar(x)) -> varchar(x)
+trim : (varchar(x), CodePoints) -> varchar(x)
+trim_array : (array(E), bigint) -> array(E)
+truncate : (decimal(p,s), integer) -> decimal(p,s)
+truncate : (decimal(p,s)) -> decimal(rp,0)
+truncate : (double) -> double
+truncate : (double, integer) -> double
+truncate : (real) -> real
+truncate : (real, integer) -> real
+typeof : (T) -> varchar
+uniqueness_distribution : (KHyperLogLog) -> map(bigint,double)
+uniqueness_distribution : (KHyperLogLog, bigint) -> map(bigint,double)
+upper : (char(x)) -> char(x)
+upper : (varchar(x)) -> varchar(x)
+url_decode : (varchar(x)) -> varchar(x)
+url_encode : (varchar(x)) -> varchar(y)
+url_extract_fragment : (varchar(x)) -> varchar(x)
+url_extract_host : (varchar(x)) -> varchar(x)
+url_extract_parameter : (varchar(x), varchar(y)) -> varchar(x)
+url_extract_path : (varchar(x)) -> varchar(x)
+url_extract_port : (varchar(x)) -> bigint
+url_extract_protocol : (varchar(x)) -> varchar(x)
+url_extract_query : (varchar(x)) -> varchar(x)
+uuid : (scalar) -> uuid
+value_at_quantile : (qdigest(bigint), double) -> bigint
+value_at_quantile : (qdigest(double), double) -> double
+value_at_quantile : (qdigest(real), double) -> real
+values_at_quantiles : (qdigest(bigint), array(double)) -> array(bigint)
+values_at_quantiles : (qdigest(double), array(double)) -> array(double)
+values_at_quantiles : (qdigest(real), array(double)) -> array(real)
+var_pop : (bigint) -> double
+var_pop : (double) -> double
+var_samp : (bigint) -> double
+var_samp : (double) -> double
+variance : (bigint) -> double
+variance : (double) -> double
+week : (date) -> bigint
+week : (timestamp) -> bigint
+week : (timestamp with time zone) -> bigint
+week_of_year : (date) -> bigint
+week_of_year : (timestamp) -> bigint
+week_of_year : (timestamp with time zone) -> bigint
+weibull_cdf : (double, double, double) -> double
+width_bucket : (double, array(double)) -> bigint
+width_bucket : (double, double, double, bigint) -> bigint
+wilson_interval_lower : (bigint, bigint, double) -> double
+wilson_interval_upper : (bigint, bigint, double) -> double
+word_stem : (varchar(x)) -> varchar(x)
+word_stem : (varchar(x), varchar(2)) -> varchar(x)
+xxhash64 : (varbinary) -> varbinary
+year : (date) -> bigint
+year : (interval year to month) -> bigint
+year : (timestamp) -> bigint
+year : (timestamp with time zone) -> bigint
+year_of_week : (date) -> bigint
+year_of_week : (timestamp) -> bigint
+year_of_week : (timestamp with time zone) -> bigint
+yow : (date) -> bigint
+yow : (timestamp) -> bigint
+yow : (timestamp with time zone) -> bigint
+zip : (array(T1), array(T2)) -> array(row(T1,T2))
+zip : (array(T1), array(T2), array(T3)) -> array(row(T1,T2,T3))
+zip : (array(T1), array(T2), array(T3), array(T4)) -> array(row(T1,T2,T3,T4))
+zip : (array(T1), array(T2), array(T3), array(T4), array(T5)) -> array(row(T1,T2,T3,T4,T5))
+zip : (array(T1), array(T2), array(T3), array(T4), array(T5), array(T6)) -> array(row(T1,T2,T3,T4,T5,T6))
+zip : (array(T1), array(T2), array(T3), array(T4), array(T5), array(T6), array(T7)) -> array(row(T1,T2,T3,T4,T5,T6,T7))
+zip_with : (array(T), array(U), function(T,U,R)) -> array(R)

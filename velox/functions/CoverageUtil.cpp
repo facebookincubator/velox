@@ -145,6 +145,37 @@ std::vector<std::string> readFunctionNamesFromFile(
   return names;
 }
 
+std::unordered_map<std::string, std::vector<std::string>> readPrestoFunctionNamesAndSignaturesFromFile() {
+  std::ifstream functions("data/all_functions_with_signatures");
+  std::unordered_map<std::string, std::vector<std::string>> presto_function_signatures;
+
+    std::string firstLine;
+    std::getline(functions, firstLine);
+
+    std::string line;
+    while (std::getline(functions, line)) {
+        std::istringstream lineStream(line);
+        std::string key;
+        std::string value;
+        std::getline(lineStream, key, ':');
+        std::getline(lineStream, value);
+
+        key.erase(0, key.find_first_not_of(" \t"));
+        key.erase(key.find_last_not_of(" \t") + 1);
+        value.erase(0, value.find_first_not_of(" \t"));
+        value.erase(value.find_last_not_of(" \t") + 1);
+
+        if (presto_function_signatures.find(key) == presto_function_signatures.end()) {
+            std::vector<std::string> values;
+            values.push_back(value);
+            presto_function_signatures[key] = values;
+        } else {
+            presto_function_signatures[key].push_back(value);
+        }
+    }
+    return presto_function_signatures;
+}
+
 std::string toFuncLink(
     const std::string& name,
     const std::string& domain = "") {
