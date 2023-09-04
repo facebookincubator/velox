@@ -610,7 +610,6 @@ class HashTable : public BaseHashTable {
   // VectorHashers.
   void clearUseRange(std::vector<bool>& useRange);
 
-  // 'initNormalizedKeys' is passed to 'insertBatch'.
   void rehash(bool initNormalizedKeys);
   void storeKeys(HashLookup& lookup, vector_size_t row);
 
@@ -620,17 +619,15 @@ class HashTable : public BaseHashTable {
   // a power of 2.
   void allocateTables(uint64_t size);
 
-  // 'initNormalizedKeys' is passed to 'rehash', if it's false and table
-  // is in normalized keys mode, the keys are retrieved from the row
-  // and the hash is made from this, without recomputing the normalized key.
+  // 'initNormalizedKeys' is passed to 'rehash' --> 'rehash' --> 'insertBatch'.
+  // If it's false and the table is in normalized keys mode,
+  // the keys are retrieved from the row and the hash is made
+  // from this, without recomputing the normalized key.
   void checkSize(int32_t numNew, bool initNormalizedKeys);
 
   // Computes hash numbers of the appropriate hash mode for 'groups',
   // stores these in 'hashes' and inserts the groups using
-  // insertForJoin or insertForGroupBy. 'initNormalizedKeys' is passed to
-  // 'hashRows', if it's false and table is in normalized keys mode,
-  // the keys are retrieved from the row and the hash is made from this,
-  // without recomputing the normalized key.
+  // insertForJoin or insertForGroupBy.
   bool insertBatch(
       char** groups,
       int32_t numGroups,
