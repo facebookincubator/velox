@@ -44,7 +44,7 @@ if(${VELOX_ENABLE_PARSE})
 endif()
 
 # hive connector depends on dwio
-if(${VELOX_ENABLE_HIVE_CONNECTOR})
+if(${VELOX_ENABLE_HIVE_CONNECTOR} OR ${VELOX_BUILD_PYTHON_PACKAGE})
   add_subdirectory(dwio)
 endif()
 
