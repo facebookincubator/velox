@@ -43,4 +43,3 @@ target_link_libraries(
          gflags::gflags
          glog::glog
   PRIVATE velox_test_util re2::re2)
-

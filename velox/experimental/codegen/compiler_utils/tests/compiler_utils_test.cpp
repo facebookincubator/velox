@@ -212,8 +212,8 @@ TEST(Compiler, ExternalLibraries) {
           .withAdditionalLinkerObject({FMT_LIB})};
 
   auto sourceCode = R"a(
-  #include <string>
   #include <fmt/format.h>
+  #include <string>
   extern "C" {
   std::string f() {
     return fmt::format("test {}",2);
