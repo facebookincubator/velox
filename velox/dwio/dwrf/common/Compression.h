@@ -33,7 +33,7 @@ using namespace dwio::common::compression;
 
 constexpr uint8_t PAGE_HEADER_SIZE = 3;
 
-static const CompressionOptions getDwrfOrcCompressionOptions(
+FOLLY_ALWAYS_INLINE CompressionOptions getDwrfOrcCompressionOptions(
     velox::common::CompressionKind kind,
     uint32_t compressionThreshold,
     int32_t zlibCompressionLevel,
@@ -41,7 +41,8 @@ static const CompressionOptions getDwrfOrcCompressionOptions(
   CompressionOptions options;
   options.compressionThreshold = compressionThreshold;
 
-  if (kind == velox::common::CompressionKind_ZLIB) {
+  if (kind == velox::common::CompressionKind_ZLIB ||
+      kind == velox::common::CompressionKind_GZIP) {
     options.format.zlib.windowBits = Compressor::DWRF_ORC_ZLIB_WINDOW_BITS;
     options.format.zlib.compressionLevel = zlibCompressionLevel;
   } else if (kind == velox::common::CompressionKind_ZSTD) {
@@ -84,9 +85,17 @@ static std::unique_ptr<dwio::common::BufferedOutputStream> createCompressor(
       encrypter);
 }
 
-static const CompressionOptions getDwrfOrcDecompressionOptions() {
+static const CompressionOptions getDwrfOrcDecompressionOptions(
+    common::CompressionKind kind) {
   CompressionOptions options;
-  options.format.zlib.windowBits = Compressor::DWRF_ORC_ZLIB_WINDOW_BITS;
+  if (kind == common::CompressionKind_ZLIB ||
+      kind == common::CompressionKind_GZIP) {
+    options.format.zlib.windowBits = Compressor::DWRF_ORC_ZLIB_WINDOW_BITS;
+  } else if (
+      kind == common::CompressionKind_LZ4 ||
+      kind == common::CompressionKind_LZO) {
+    options.format.lz4_lzo.isHadoopFrameFormat = false;
+  }
   return options;
 }
 
@@ -104,7 +113,7 @@ static std::unique_ptr<dwio::common::SeekableInputStream> createDecompressor(
     memory::MemoryPool& pool,
     const std::string& streamDebugInfo,
     const dwio::common::encryption::Decrypter* decryptr = nullptr) {
-  const CompressionOptions& options = getDwrfOrcDecompressionOptions();
+  const CompressionOptions& options = getDwrfOrcDecompressionOptions(kind);
   return createDecompressor(
       kind,
       std::move(input),
