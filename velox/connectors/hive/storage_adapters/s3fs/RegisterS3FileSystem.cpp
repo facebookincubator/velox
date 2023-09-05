@@ -64,8 +64,9 @@ void registerS3FileSystem() {
 
 void finalizeS3FileSystem() {
 #ifdef VELOX_ENABLE_S3
-  VELOX_CHECK_EQ(
-      s3fs.use_count(), 1, "Cannot finalize S3FileSystem while in use");
+  VELOX_CHECK(
+      !s3fs || (s3fs && s3fs.use_count() == 1),
+      "Cannot finalize S3FileSystem while in use");
   s3fs.reset();
   finalizeS3();
 #endif
