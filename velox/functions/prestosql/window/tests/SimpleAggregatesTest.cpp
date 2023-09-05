@@ -58,6 +58,12 @@ class AggregateWindowTestBase : public WindowTestBase {
   void testWindowFunction(
       const std::vector<RowVectorPtr>& vectors,
       const std::vector<std::string>& frameClauses) {
+    // DuckDb returns null for empty frames, which is incorrect for the count
+    // aggregate.
+    if ((function_.rfind("count", 0) == 0) &&
+        (frameClauses == kEmptyFrameClauses)) {
+      return;
+    }
     WindowTestBase::testWindowFunction(
         vectors, function_, {overClause_}, frameClauses);
   }

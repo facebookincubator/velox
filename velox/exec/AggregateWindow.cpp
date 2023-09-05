@@ -66,6 +66,9 @@ class AggregateWindowFunction : public exec::WindowFunction {
         resultType,
         config);
     aggregate_->setAllocator(stringAllocator_);
+    if (emptyResult_ == nullptr) {
+      computeDefaultAggregateValue(name, resultType);
+    }
 
     // Aggregate initialization.
     // Row layout is:
@@ -196,9 +199,13 @@ class AggregateWindowFunction : public exec::WindowFunction {
       vector_size_t resultOffset,
       const VectorPtr& result) {
     if (!validRows.hasSelections()) {
-      uint64_t* rawNulls = result->mutableRawNulls();
-      for (auto row = 0; row < validRows.size(); row++) {
-        bits::setNull(rawNulls, row + resultOffset, true);
+      if (emptyResult_->isNullAt(0)) {
+        uint64_t* rawNulls = result->mutableRawNulls();
+        for (auto row = 0; row < validRows.size(); row++) {
+          bits::setNull(rawNulls, row + resultOffset, true);
+        }
+      } else {
+        setEmptyFramesResult(validRows, resultOffset, result, emptyResult_);
       }
       return true;
     }
@@ -308,7 +315,7 @@ class AggregateWindowFunction : public exec::WindowFunction {
     });
 
     // Set null values for empty (non valid) frames in the output block.
-    setNullEmptyFramesResults(validRows, resultOffset, result);
+    setEmptyFramesResult(validRows, resultOffset, result, emptyResult_);
   }
 
   void simpleAggregation(
@@ -341,7 +348,34 @@ class AggregateWindowFunction : public exec::WindowFunction {
     });
 
     // Set null values for empty (non valid) frames in the output block.
-    setNullEmptyFramesResults(validRows, resultOffset, result);
+    setEmptyFramesResult(validRows, resultOffset, result, emptyResult_);
+  }
+
+  // Precompute and save the aggregate output for empty input in emptyResult_.
+  // This value is returned for rows with empty frames.
+  void computeDefaultAggregateValue(
+      const std::string& name,
+      const TypePtr& resultType) {
+    constexpr int kRowSizeOffset = 8;
+    constexpr int kOffset = kRowSizeOffset + 8;
+    aggregate_->setOffsets(kOffset, 0, 1, kRowSizeOffset);
+    std::vector<char> group(kOffset + aggregate_->accumulatorFixedWidthSize());
+    std::vector<char*> groups(1, group.data());
+    aggregate_->initializeNewGroups(
+        groups.data(), std::vector<vector_size_t>{0});
+
+    // addSingleGroupRawInput is called to catch the expected errors for
+    // incorrect inputs with the aggregate fuzzer.
+    char dummyGroup{
+        static_cast<char>(kOffset + aggregate_->accumulatorFixedWidthSize())};
+    SelectivityVector dummyRows(1, false);
+    aggregate_->addSingleGroupRawInput(
+        &dummyGroup, dummyRows, argVectors_, false);
+
+    emptyResult_ = BaseVector::create(resultType, 1, pool_);
+    aggregate_->extractValues(groups.data(), 1, &emptyResult_);
+    aggregate_->clear();
+    aggregate_->destroy(folly::Range(groups.data(), 1));
   }
 
   // Aggregate function object required for this window function evaluation.
@@ -374,6 +408,10 @@ class AggregateWindowFunction : public exec::WindowFunction {
   // Stores metadata about the previous output block of the partition
   // to optimize aggregate computation and reading argument vectors.
   std::optional<FrameMetadata> previousFrameMetadata_;
+
+  // Stores the initialized value of the aggregate for empty input. This value
+  // is returned for rows with empty frames instead of null.
+  VectorPtr emptyResult_ = nullptr;
 };
 
 } // namespace

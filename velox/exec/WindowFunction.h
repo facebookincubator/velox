@@ -111,11 +111,13 @@ class WindowFunction {
       const core::QueryConfig& config);
 
  protected:
-  // Set result NULL for rows with invalid frames in the input.
-  void setNullEmptyFramesResults(
+  // Set result to NULL for rows with invalid frames in the input when
+  // defaultValue is not provided, sets result to defaultValue otherwise.
+  void setEmptyFramesResult(
       const SelectivityVector& validRows,
       vector_size_t resultOffset,
-      const VectorPtr& result);
+      const VectorPtr& result,
+      const VectorPtr defaultValue = nullptr);
 
   const TypePtr resultType_;
   memory::MemoryPool* pool_;
