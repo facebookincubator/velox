@@ -15,6 +15,7 @@
  */
 #include "velox/exec/ContainerRowSerde.h"
 #include <gtest/gtest.h>
+#include <iostream>
 #include "velox/common/memory/HashStringAllocator.h"
 #include "velox/vector/tests/utils/VectorTestBase.h"
 
@@ -142,6 +143,92 @@ TEST_F(ContainerRowSerdeTest, nested) {
       {{map, std::nullopt}, {std::nullopt}});
 
   testRoundTrip(nestedArray);
+}
+
+TEST_F(ContainerRowSerdeTest, compareNullsInRowVector) {
+  std::optional<std::optional<int>> x =
+      std::make_optional<std::optional<int>>(std::nullopt);
+  auto data = makeRowVector({
+      makeNullableFlatVector<int32_t>({
+          1,
+          2,
+          3,
+      }),
+      makeFlatVector<std::string>({
+          "a",
+          "",
+          "Long test sentence ......",
+      }),
+  });
+
+  auto position = serialize(data);
+  ByteStream out;
+  HashStringAllocator::prepareRead(position.header, out);
+
+  auto someNulls = makeFlatVector<int32_t>(
+      10, [](auto row) { return row; }, [](auto row) { return row % 2 == 0; });
+  auto rowVector = makeRowVector({someNulls});
+  SelectivityVector rows(rowVector->size());
+  DecodedVector decodedVector;
+  decodedVector.decode(*rowVector, rows);
+
+  static const CompareFlags kCompareFlags{
+      true, // nullsFirst
+      true, // ascending
+      false, // equalsOnly
+      CompareFlags::NullHandlingMode::StopAtNull};
+
+  for (vector_size_t i = 0; i < 10; ++i) {
+    ASSERT_EQ(
+        i % 2 != 0,
+        ContainerRowSerde::compareWithNulls(
+            out, decodedVector, i, kCompareFlags)
+            .has_value());
+    HashStringAllocator::prepareRead(position.header, out);
+  }
+
+  allocator_.clear();
+}
+
+TEST_F(ContainerRowSerdeTest, compareNullsInArrayVector) {
+  auto data = makeArrayVector<int64_t>({{1, 2}});
+  auto position = serialize(data);
+  ByteStream out;
+  HashStringAllocator::prepareRead(position.header, out);
+
+  auto arrayVector = makeNullableArrayVector<int64_t>({
+      {{1}},
+      {{1, 2}},
+      {{1, std::nullopt, 1}},
+      std::nullopt,
+      {{1, 2, 3}},
+  });
+  SelectivityVector rows(arrayVector->size());
+  DecodedVector decodedVector;
+  decodedVector.decode(*arrayVector, rows);
+
+  static const CompareFlags kCompareFlags{
+      true, // nullsFirst
+      true, // ascending
+      false, // equalsOnly
+      CompareFlags::NullHandlingMode::StopAtNull};
+  auto leftSize = data->sizeAt(0);
+  for (vector_size_t i = 0; i < arrayVector->size(); ++i) {
+    if (i == 2) {
+      ASSERT_FALSE(ContainerRowSerde::compareWithNulls(
+                       out, decodedVector, 2, kCompareFlags)
+                       .has_value());
+    } else {
+      ASSERT_EQ(
+          leftSize - arrayVector->sizeAt(i),
+          ContainerRowSerde::compareWithNulls(
+              out, decodedVector, i, kCompareFlags)
+              .value());
+    }
+    HashStringAllocator::prepareRead(position.header, out);
+  }
+
+  allocator_.clear();
 }
 
 } // namespace

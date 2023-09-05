@@ -44,6 +44,12 @@ class ContainerRowSerde {
       const Type* type,
       CompareFlags flags);
 
+  static std::optional<int32_t> compareWithNulls(
+      ByteStream& left,
+      const DecodedVector& right,
+      vector_size_t index,
+      CompareFlags flags);
+
   static uint64_t hash(ByteStream& data, const Type* type);
 };
 
