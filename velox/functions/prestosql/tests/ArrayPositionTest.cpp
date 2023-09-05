@@ -858,7 +858,7 @@ TEST_F(ArrayPositionTest, invalidInstance) {
   assertEqualVectors(makeNullConstant(TypeKind::BIGINT, 2), result);
 }
 
-TEST_F(ArrayPositionTest, topLevelCardinalityGreaterThanBase) {
+TEST_F(ArrayPositionTest, constantEncodingElements) {
   // ArrayVector with ConstantVector<Array> elements.
   auto baseVector = makeArrayVector<int64_t>(
       {{1, 2, 3, 4},
@@ -867,35 +867,41 @@ TEST_F(ArrayPositionTest, topLevelCardinalityGreaterThanBase) {
        {5, 6, 7, 8, 9},
        {1, 2, 3, 4},
        {10, 9, 8, 7}});
-  const vector_size_t kTopLevelCardinality = baseVector->size() * 2;
+  const vector_size_t kTopLevelVectorSize = baseVector->size() * 2;
   auto constantVector =
-      BaseVector::wrapInConstant(kTopLevelCardinality, 0, baseVector);
+      BaseVector::wrapInConstant(kTopLevelVectorSize, 0, baseVector);
   auto arrayVector = makeArrayVector({0, 2, 7}, constantVector);
 
   testPosition(arrayVector, {1, 2, 3, 4}, {1, 1, 1});
   testPosition(arrayVector, {3, 4, 5}, {0, 0, 0});
   testPosition(arrayVector, {1, 2, 3, 4}, {1, 1, 1}, 1);
-  testPosition(arrayVector, {1, 2, 3, 4}, {2, 5, kTopLevelCardinality - 7}, -1);
+  testPosition(arrayVector, {1, 2, 3, 4}, {2, 5, kTopLevelVectorSize - 7}, -1);
 }
 
-TEST_F(ArrayPositionTest, topLevelCardinalityLessThanBase) {
-  // ArrayVector with ConstantVector<Array> elements.
+TEST_F(ArrayPositionTest, dictionaryEncodingElements) {
+  // ArrayVector with DictionaryVector<Array> elements.
   auto baseVector = makeArrayVector<int64_t>(
-      {{1, 2, 3, 4},
-       {3, 4, 5},
-       {},
-       {5, 6, 7, 8, 9},
-       {1, 2, 3, 4},
-       {10, 9, 8, 7}});
-  const vector_size_t kTopLevelCardinality = baseVector->size() / 2;
-  auto constantVector =
-      BaseVector::wrapInConstant(kTopLevelCardinality, 0, baseVector);
-  auto arrayVector = makeArrayVector({0, 2}, constantVector);
-
-  testPosition(arrayVector, {1, 2, 3, 4}, {1, 1}, std::nullopt);
-  testPosition(arrayVector, {3, 4, 5}, {0, 0}, std::nullopt);
-  testPosition(arrayVector, {1, 2, 3, 4}, {1, 1}, 1);
-  testPosition(arrayVector, {1, 2, 3, 4}, {2, 1}, -1);
+      {{1, 2, 3, 4}, {3, 4, 5}, {1, 2, 3, 4}, {10, 9, 8, 7}});
+  auto baseVectorSize = baseVector->size();
+  const vector_size_t kTopLevelVectorSize = baseVectorSize * 2;
+  BufferPtr indices =
+      AlignedBuffer::allocate<vector_size_t>(kTopLevelVectorSize, pool_.get());
+  auto rawIndices = indices->asMutable<vector_size_t>();
+  for (size_t i = 0; i < kTopLevelVectorSize; ++i) {
+    rawIndices[i] = i % baseVectorSize;
+  }
+  auto dictVector = BaseVector::wrapInDictionary(
+      nullptr, indices, kTopLevelVectorSize, baseVector);
+  auto arrayVector = makeArrayVector({0, baseVectorSize + 1}, dictVector);
+  // arrayVector is
+  // {
+  //    [[1, 2, 3, 4], [3, 4, 5], [1, 2, 3, 4], [10, 9, 8, 7], [1, 2, 3, 4]],
+  //    [[3, 4, 5], [1, 2, 3, 4], [10, 9, 8, 7]]
+  // }
+  testPosition(arrayVector, {1, 2, 3, 4}, {1, 2}, std::nullopt);
+  testPosition(arrayVector, {3, 4, 5}, {2, 1}, std::nullopt);
+  testPosition(arrayVector, {1, 2, 3, 4}, {1, 2}, 1);
+  testPosition(arrayVector, {1, 2, 3, 4}, {5, 2}, -1);
 }
 
 } // namespace

@@ -333,13 +333,13 @@ TEST_F(ArrayContainsTest, preAllocatedNulls) {
        std::nullopt});
 }
 
-TEST_F(ArrayContainsTest, topLevelCardinalityGreaterThanBase) {
+TEST_F(ArrayContainsTest, constantEncodingElements) {
   // ArrayVector with ConstantVector<Array> elements.
   auto baseVector = makeArrayVector<int64_t>(
       {{1, 2, 3, 4}, {3, 4, 5}, {6}, {5, 6, 7, 8, 9}, {7}, {10, 9, 8, 7}});
-  const vector_size_t kTopLevelCardinality = baseVector->size() * 2;
+  const vector_size_t kTopLevelVectorSize = baseVector->size() * 2;
   auto constantVector =
-      BaseVector::wrapInConstant(kTopLevelCardinality, 0, baseVector);
+      BaseVector::wrapInConstant(kTopLevelVectorSize, 0, baseVector);
   auto arrayVector = makeArrayVector({0, 3}, constantVector);
 
   testContains(arrayVector, {1, 2, 3, 4}, {true, true});
@@ -347,17 +347,28 @@ TEST_F(ArrayContainsTest, topLevelCardinalityGreaterThanBase) {
   testContains(arrayVector, {5, 6, 7, 8, 9}, {false, false});
 }
 
-TEST_F(ArrayContainsTest, topLevelCardinalityLessThanBase) {
-  // ArrayVector with ConstantVector<Array> elements.
-  auto baseVector = makeArrayVector<int64_t>(
-      {{1, 2, 3, 4}, {3, 4, 5}, {}, {5, 6, 7, 8, 9}, {7}, {10, 9, 8, 7}});
-  const vector_size_t kTopLevelCardinality = baseVector->size() / 2;
-  auto constantVector =
-      BaseVector::wrapInConstant(kTopLevelCardinality, 0, baseVector);
-  auto arrayVector = makeArrayVector({0, 2}, constantVector);
-
-  testContains(arrayVector, {1, 2, 3, 4}, {true, true});
-  testContains(arrayVector, {3, 4}, {false, false});
+TEST_F(ArrayContainsTest, dictionaryEncodingElements) {
+  // ArrayVector with DictionaryVector<Array> elements.
+  auto baseVector =
+      makeArrayVector<int64_t>({{1, 2, 3, 4}, {3, 4, 5}, {10, 9, 8, 7}});
+  auto baseVectorSize = baseVector->size();
+  const vector_size_t kTopLevelVectorSize = baseVectorSize * 2;
+  BufferPtr indices =
+      AlignedBuffer::allocate<vector_size_t>(kTopLevelVectorSize, pool_.get());
+  auto rawIndices = indices->asMutable<vector_size_t>();
+  for (size_t i = 0; i < kTopLevelVectorSize; ++i) {
+    rawIndices[i] = i % baseVectorSize;
+  }
+  auto dictVector = BaseVector::wrapInDictionary(
+      nullptr, indices, kTopLevelVectorSize, baseVector);
+  auto arrayVector = makeArrayVector({0, baseVectorSize + 1}, dictVector);
+  // arrayVector is
+  // {
+  //    [[1, 2, 3, 4], [3, 4, 5], [10, 9, 8, 7], [1, 2, 3, 4]],
+  //    [[3, 4, 5], [10, 9, 8, 7]]
+  // }
+  testContains(arrayVector, {1, 2, 3, 4}, {true, false});
+  testContains(arrayVector, {3, 4, 5}, {true, true});
 }
 
 } // namespace
