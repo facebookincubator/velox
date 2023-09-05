@@ -166,6 +166,20 @@ class TestVeloxVector(unittest.TestCase):
         for i in range(len(expected_flat)):
             self.assertEqual(expected_flat[i], v1.elements()[i])
 
+        v2 = pv.from_list([[1, 2], [None, None]])
+        self.assertTrue(isinstance(v2, pv.ArrayVector))
+        self.assertTrue(isinstance(v2.elements(), pv.FlatVector_BIGINT))
+        self.assertEqual(len(v2), 2)
+        expected_flat = [1, 2, None, None]
+        self.assertEqual(len(v2.elements()), len(expected_flat))
+        for i in range(len(expected_flat)):
+            self.assertEqual(expected_flat[i], v2.elements()[i])
+
+        with self.assertRaises(TypeError):
+            v = pv.from_list([[1], [1, 2, None]])
+        with self.assertRaises(RuntimeError):
+            v = pv.from_list([[None], [None, None, None]])
+
     def test_to_string(self):
         self.assertEqual(
             str(pv.from_list([1, 2, 3])),
