@@ -42,10 +42,5 @@ target_link_libraries(
          fmt::fmt
          gflags::gflags
          glog::glog
-         gtest
-         gtest_main
   PRIVATE velox_test_util re2::re2)
 
-if(NOT VELOX_DISABLE_GOOGLETEST)
-  target_link_libraries(velox_memory PUBLIC gtest)
-endif()
