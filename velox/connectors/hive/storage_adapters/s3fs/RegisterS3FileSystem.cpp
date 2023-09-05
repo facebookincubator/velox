@@ -26,16 +26,16 @@ namespace facebook::velox::filesystems {
 
 #ifdef VELOX_ENABLE_S3
 folly::once_flag S3FSInstantiationFlag;
-static std::shared_ptr<S3FileSystem> s3fs;
+
+// Only one instance of S3FileSystem is supported for now.
+// TODO: Support multiple S3FileSystem instances using a cache
+static std::shared_ptr<S3FileSystem> s3fs = nullptr;
 
 std::function<std::shared_ptr<
     FileSystem>(std::shared_ptr<const Config>, std::string_view)>
 fileSystemGenerator() {
   static auto filesystemGenerator = [](std::shared_ptr<const Config> properties,
                                        std::string_view filePath) {
-    // Only one instance of S3FileSystem is supported for now.
-    // TODO: Support multiple S3FileSystem instances using a cache
-    // Initialize on first access and reuse after that.
     folly::call_once(S3FSInstantiationFlag, [&properties]() {
       std::shared_ptr<S3FileSystem> fs;
       if (properties != nullptr) {
