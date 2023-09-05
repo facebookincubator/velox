@@ -61,6 +61,24 @@ function install_gcs-sdk-cpp {
     -DGOOGLE_CLOUD_CPP_ENABLE=storage
 }
 
+function install_azure-storage-sdk-cpp {
+  github_checkout azure/azure-sdk-for-cpp azure-storage-blobs_12.8.0
+
+  # install azure-storage-common
+  cd sdk/storage/azure-storage-common
+  echo "install storage-common"
+  cmake_install -DCMAKE_BUILD_TYPE=Release -DBUILD_SHARED_LIBS=OFF
+
+  cd -
+  # install azure-storage-blobs
+  cd sdk/storage/azure-storage-blobs
+   
+  sed -i 's/"name": "azure-storage-common-cpp",/"name": "azure-storage-common-cpp"/' vcpkg.json
+  sed -i 's/"default-features": false,//' vcpkg.json
+  sed -i 's/"version>=": "12\.3\.1"//' vcpkg.json
+  cmake_install -DCMAKE_BUILD_TYPE=Release -DBUILD_SHARED_LIBS=OFF
+}
+
 function install_libhdfs3 {
   github_checkout apache/hawq master
   cd $DEPENDENCY_DIR/hawq/depends/libhdfs3
@@ -101,12 +119,14 @@ fi
 install_aws=0
 install_gcs=0
 install_hdfs=0
+install_abfs=0
 
 if [ "$#" -eq 0 ]; then
     # Install all adapters by default
     install_aws=1
     install_gcs=1
     install_hdfs=1
+    install_abfs=1
 fi
 
 while [[ $# -gt 0 ]]; do
@@ -121,6 +141,10 @@ while [[ $# -gt 0 ]]; do
       ;;
     hdfs)
       install_hdfs=1
+      shift # past argument
+      ;;
+    abfs)
+      install_abfs=1
       shift # past argument
       ;;
     *)
@@ -138,6 +162,9 @@ if [ $install_aws -eq 1 ]; then
 fi
 if [ $install_hdfs -eq 1 ]; then
   install_libhdfs3
+fi
+if [ $install_abfs -eq 1 ]; then
+  install_azure-storage-sdk-cpp
 fi
 
 _ret=$?
