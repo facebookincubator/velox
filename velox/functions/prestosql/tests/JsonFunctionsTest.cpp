@@ -371,7 +371,7 @@ true, true, true, true, true, true, true, true, true, true, true])",
       false);
 }
 
-TEST_F(JsonFunctionsTest, jsonArrayContainsLong) {
+TEST_F(JsonFunctionsTest, jsonArrayContainsBigint) {
   EXPECT_EQ(jsonArrayContains<int64_t>(R"([])", 0), false);
   EXPECT_EQ(jsonArrayContains<int64_t>(R"([1.2, 2.3, 3.4])", 2), false);
   EXPECT_EQ(jsonArrayContains<int64_t>(R"([1.2, 2.0, 3.4])", 2), false);
