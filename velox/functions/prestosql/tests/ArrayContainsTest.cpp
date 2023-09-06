@@ -15,10 +15,7 @@
  */
 
 #include <optional>
-#include <utility>
 #include "velox/functions/prestosql/tests/utils/FunctionBaseTest.h"
-#include "velox/vector/BaseVector.h"
-#include "velox/vector/SelectivityVector.h"
 
 using namespace facebook::velox;
 using namespace facebook::velox::test;
@@ -29,23 +26,23 @@ namespace {
 
 class ArrayContainsTest : public FunctionBaseTest {
  public:
-  void testContains(
-      ArrayVectorPtr arrayVector,
-      std::vector<int64_t> search,
+  void testContainsConstantKey(
+      const ArrayVectorPtr& arrayVector,
+      const std::vector<int64_t>& search,
       const std::vector<std::optional<bool>>& expected) {
-    auto constSearch = BaseVector::wrapInConstant(
-        1, 0, makeArrayVector<int64_t>({std::move(search)}));
-    auto result = evaluate<SimpleVector<bool>>(
-        "contains(c0, c1)", makeRowVector({arrayVector, constSearch}));
+    auto constSearch =
+        BaseVector::wrapInConstant(1, 0, makeArrayVector<int64_t>({search}));
+    auto result =
+        evaluate("contains(c0, c1)", makeRowVector({arrayVector, constSearch}));
     assertEqualVectors(makeNullableFlatVector<bool>(expected), result);
   }
 
   template <typename T>
   void testContains(
-      ArrayVectorPtr arrayVector,
-      std::optional<T> search,
+      const ArrayVectorPtr& arrayVector,
+      T search,
       const std::vector<std::optional<bool>>& expected) {
-    auto result = evaluate<SimpleVector<bool>>(
+    auto result = evaluate(
         "contains(c0, c1)",
         makeRowVector({
             arrayVector,
@@ -60,19 +57,14 @@ TEST_F(ArrayContainsTest, integerNoNulls) {
   auto arrayVector = makeArrayVector<int64_t>(
       {{1, 2, 3, 4}, {3, 4, 5}, {}, {5, 6, 7, 8, 9}, {7}, {10, 9, 8, 7}});
 
-  testContains<int64_t>(
-      arrayVector, 1, {true, false, false, false, false, false});
-  testContains<int64_t>(
-      arrayVector, 3, {true, true, false, false, false, false});
-  testContains<int64_t>(
-      arrayVector, 5, {false, true, false, true, false, false});
-  testContains<int64_t>(
-      arrayVector, 7, {false, false, false, true, true, true});
-  testContains<int64_t>(
-      arrayVector, -2, {false, false, false, false, false, false});
-  testContains<int64_t>(
+  testContains(arrayVector, 1, {true, false, false, false, false, false});
+  testContains(arrayVector, 3, {true, true, false, false, false, false});
+  testContains(arrayVector, 5, {false, true, false, true, false, false});
+  testContains(arrayVector, 7, {false, false, false, true, true, true});
+  testContains(arrayVector, -2, {false, false, false, false, false, false});
+  testContains(
       arrayVector,
-      std::nullopt,
+      std::optional<int64_t>(std::nullopt),
       {std::nullopt,
        std::nullopt,
        std::nullopt,
@@ -90,21 +82,19 @@ TEST_F(ArrayContainsTest, integerWithNulls) {
        {7, std::nullopt},
        {10, 9, 8, 7}});
 
-  testContains<int64_t>(
+  testContains(
       arrayVector, 1, {true, false, false, std::nullopt, std::nullopt, false});
-  testContains<int64_t>(
+  testContains(
       arrayVector, 3, {true, true, false, std::nullopt, std::nullopt, false});
-  testContains<int64_t>(
-      arrayVector, 5, {false, true, false, true, std::nullopt, false});
-  testContains<int64_t>(
-      arrayVector, 7, {false, false, false, true, true, true});
-  testContains<int64_t>(
+  testContains(arrayVector, 5, {false, true, false, true, std::nullopt, false});
+  testContains(arrayVector, 7, {false, false, false, true, true, true});
+  testContains(
       arrayVector,
       -2,
       {false, false, false, std::nullopt, std::nullopt, false});
-  testContains<int64_t>(
+  testContains(
       arrayVector,
-      std::nullopt,
+      std::optional<int64_t>(std::nullopt),
       {std::nullopt,
        std::nullopt,
        std::nullopt,
@@ -132,9 +122,9 @@ TEST_F(ArrayContainsTest, varcharNoNulls) {
   testContains<StringView>(arrayVector, "green", {false, false, false, true});
   testContains<StringView>(
       arrayVector, "crimson red", {false, false, false, false});
-  testContains<StringView>(
+  testContains(
       arrayVector,
-      std::nullopt,
+      std::optional<StringView>(std::nullopt),
       {std::nullopt, std::nullopt, std::nullopt, std::nullopt});
 }
 
@@ -159,9 +149,9 @@ TEST_F(ArrayContainsTest, varcharWithNulls) {
       arrayVector, "green", {false, std::nullopt, false, true});
   testContains<StringView>(
       arrayVector, "crimson red", {false, std::nullopt, false, false});
-  testContains<StringView>(
+  testContains(
       arrayVector,
-      std::nullopt,
+      std::optional<StringView>(std::nullopt),
       {std::nullopt, std::nullopt, std::nullopt, std::nullopt});
 }
 
@@ -175,13 +165,11 @@ TEST_F(ArrayContainsTest, booleanNoNulls) {
       {false, false, false},
   });
 
-  testContains<bool>(
-      arrayVector, true, {true, true, false, false, true, false});
-  testContains<bool>(
-      arrayVector, false, {true, false, true, false, true, true});
-  testContains<bool>(
+  testContains(arrayVector, true, {true, true, false, false, true, false});
+  testContains(arrayVector, false, {true, false, true, false, true, true});
+  testContains(
       arrayVector,
-      std::nullopt,
+      std::optional<bool>(std::nullopt),
       {std::nullopt,
        std::nullopt,
        std::nullopt,
@@ -200,13 +188,12 @@ TEST_F(ArrayContainsTest, booleanWithNulls) {
       {false, false, false},
   });
 
-  testContains<bool>(
+  testContains(
       arrayVector, true, {true, true, std::nullopt, false, true, false});
-  testContains<bool>(
-      arrayVector, false, {true, false, true, false, true, true});
-  testContains<bool>(
+  testContains(arrayVector, false, {true, false, true, false, true, true});
+  testContains(
       arrayVector,
-      std::nullopt,
+      std::optional<bool>(std::nullopt),
       {std::nullopt,
        std::nullopt,
        std::nullopt,
@@ -262,31 +249,15 @@ TEST_F(ArrayContainsTest, preDefinedResults) {
   auto arrayVector = makeArrayVector<int64_t>(
       {{1, 2, 3, 4}, {3, 4, 5}, {}, {5, 6, 7, 8, 9}, {7}, {10, 9, 8, 7}});
 
-  auto testContains = [&](std::optional<int64_t> search,
-                          const std::vector<std::optional<bool>>& expected) {
-    VectorPtr result = makeFlatVector<bool>(6);
-    SelectivityVector rows(6);
-    rows.resize(6);
-
-    evaluate<SimpleVector<bool>>(
-        "contains(c0, c1)",
-        makeRowVector({
-            arrayVector,
-            makeConstant(search, arrayVector->size()),
-        }),
-        rows,
-        result);
-
-    assertEqualVectors(makeNullableFlatVector<bool>(expected), result);
-  };
-
-  testContains(1, {true, false, false, false, false, false});
-  testContains(3, {true, true, false, false, false, false});
-  testContains(5, {false, true, false, true, false, false});
-  testContains(7, {false, false, false, true, true, true});
-  testContains(-2, {false, false, false, false, false, false});
+  testContains(arrayVector, 1, {true, false, false, false, false, false});
+  testContains(arrayVector, 1, {true, false, false, false, false, false});
+  testContains(arrayVector, 3, {true, true, false, false, false, false});
+  testContains(arrayVector, 5, {false, true, false, true, false, false});
+  testContains(arrayVector, 7, {false, false, false, true, true, true});
+  testContains(arrayVector, -2, {false, false, false, false, false, false});
   testContains(
-      std::nullopt,
+      arrayVector,
+      std::optional<int64_t>(std::nullopt),
       {std::nullopt,
        std::nullopt,
        std::nullopt,
@@ -342,9 +313,9 @@ TEST_F(ArrayContainsTest, constantEncodingElements) {
       BaseVector::wrapInConstant(kTopLevelVectorSize, 0, baseVector);
   auto arrayVector = makeArrayVector({0, 3}, constantVector);
 
-  testContains(arrayVector, {1, 2, 3, 4}, {true, true});
-  testContains(arrayVector, {3, 4}, {false, false});
-  testContains(arrayVector, {5, 6, 7, 8, 9}, {false, false});
+  testContainsConstantKey(arrayVector, {1, 2, 3, 4}, {true, true});
+  testContainsConstantKey(arrayVector, {3, 4}, {false, false});
+  testContainsConstantKey(arrayVector, {5, 6, 7, 8, 9}, {false, false});
 }
 
 TEST_F(ArrayContainsTest, dictionaryEncodingElements) {
@@ -367,8 +338,8 @@ TEST_F(ArrayContainsTest, dictionaryEncodingElements) {
   //    [[1, 2, 3, 4], [3, 4, 5], [10, 9, 8, 7], [1, 2, 3, 4]],
   //    [[3, 4, 5], [10, 9, 8, 7]]
   // }
-  testContains(arrayVector, {1, 2, 3, 4}, {true, false});
-  testContains(arrayVector, {3, 4, 5}, {true, true});
+  testContainsConstantKey(arrayVector, {1, 2, 3, 4}, {true, false});
+  testContainsConstantKey(arrayVector, {3, 4, 5}, {true, true});
 }
 
 } // namespace

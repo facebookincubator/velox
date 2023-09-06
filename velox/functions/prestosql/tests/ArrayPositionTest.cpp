@@ -52,14 +52,14 @@ class ArrayPositionTest : public FunctionBaseTest {
   }
 
   void testPosition(
-      ArrayVectorPtr arrayVector,
-      std::vector<int64_t> search,
+      const ArrayVectorPtr& arrayVector,
+      const std::vector<int64_t>& search,
       const std::vector<std::optional<int64_t>>& expected,
       std::optional<int64_t> instanceOpt = std::nullopt) {
-    auto constSearch = BaseVector::wrapInConstant(
-        1, 0, makeArrayVector<int64_t>({std::move(search)}));
+    auto constSearch =
+        BaseVector::wrapInConstant(1, 0, makeArrayVector<int64_t>({search}));
     if (instanceOpt.has_value()) {
-      auto instanceResult = evaluate<SimpleVector<int64_t>>(
+      auto instanceResult = evaluate(
           "array_position(c0, c1, c2)",
           makeRowVector(
               {arrayVector,
