@@ -176,17 +176,20 @@ TEST(DecimalTest, toByteArray) {
   testToByteArray(DecimalUtil::kLongDecimalMax, expected8, 16);
 }
 
-TEST(DecimalTest, valueInRange) {
-  ASSERT_TRUE(DecimalUtil::valueInRange<int64_t>(12, 3));
-  ASSERT_TRUE(
-      DecimalUtil::valueInRange<int64_t>(DecimalUtil::kShortDecimalMax, 18));
-  ASSERT_FALSE(DecimalUtil::valueInRange<int64_t>(
+TEST(DecimalTest, valueInPrecisionRange) {
+  ASSERT_TRUE(DecimalUtil::valueInPrecisionRange<int64_t>(12, 3));
+  ASSERT_TRUE(DecimalUtil::valueInPrecisionRange<int64_t>(999, 3));
+  ASSERT_FALSE(DecimalUtil::valueInPrecisionRange<int64_t>(1000, 3));
+  ASSERT_FALSE(DecimalUtil::valueInPrecisionRange<int64_t>(1234, 3));
+  ASSERT_TRUE(DecimalUtil::valueInPrecisionRange<int64_t>(
+      DecimalUtil::kShortDecimalMax, 18));
+  ASSERT_FALSE(DecimalUtil::valueInPrecisionRange<int64_t>(
       DecimalUtil::kShortDecimalMax + 1, 18));
-  ASSERT_TRUE(
-      DecimalUtil::valueInRange<int128_t>(DecimalUtil::kLongDecimalMax, 38));
-  ASSERT_FALSE(DecimalUtil::valueInRange<int128_t>(
+  ASSERT_TRUE(DecimalUtil::valueInPrecisionRange<int128_t>(
+      DecimalUtil::kLongDecimalMax, 38));
+  ASSERT_FALSE(DecimalUtil::valueInPrecisionRange<int128_t>(
       DecimalUtil::kLongDecimalMax + 1, 38));
-  ASSERT_FALSE(DecimalUtil::valueInRange<int128_t>(
+  ASSERT_FALSE(DecimalUtil::valueInPrecisionRange<int128_t>(
       DecimalUtil::kLongDecimalMin - 1, 38));
 }
 
