@@ -164,6 +164,27 @@ struct LaplaceCDFFunction {
 };
 
 template <typename T>
+struct InverseLaplaceCDFFunction {
+  VELOX_DEFINE_FUNCTION_TYPES(T);
+  FOLLY_ALWAYS_INLINE void
+  call(double& result, double location, double scale, double p) {
+    VELOX_USER_CHECK_GT(scale, 0, "scale must be greater than 0");
+    VELOX_USER_CHECK_GE(p, 0, "p must be in the interval [0, 1]");
+    VELOX_USER_CHECK_LE(p, 1, "p must be in the interval [0, 1]");
+    if (std::isnan(location) || std::isnan(scale) || std::isnan(p)) {
+      result = std::numeric_limits<double>::quiet_NaN();
+      return;
+    }
+    try {
+      boost::math::laplace_distribution<> laplaceDist(location, scale);
+      result = boost::math::quantile(laplaceDist, p);
+    } catch (const std::exception& e) {
+      result = std::numeric_limits<double>::quiet_NaN();
+    }
+  }
+};
+
+template <typename T>
 struct InverseBetaCDFFunction {
   VELOX_DEFINE_FUNCTION_TYPES(T);
 

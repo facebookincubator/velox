@@ -370,6 +370,38 @@ TEST_F(ProbabilityTest, gammaCDF) {
   VELOX_ASSERT_THROW(
       gammaCDF(2.0, 3.0, kNan), "value must be greater than, or equal to, 0");
 }
+TEST_F(ProbabilityTest, inverseLaplaceCDF) {
+  const auto inverseLaplaceCDF = [&](std::optional<double> location,
+                                     std::optional<double> scale,
+                                     std::optional<double> probability) {
+    return evaluateOnce<double>(
+        "inverse_laplace_cdf(c0, c1, c2)", location, scale, probability);
+  };
+
+  EXPECT_EQ(0.0, inverseLaplaceCDF(0.0, 1.0, 0.5).value());
+  EXPECT_EQ(5.0, inverseLaplaceCDF(5.0, 2.0, 0.5).value());
+  EXPECT_THAT(inverseLaplaceCDF(kNan, 1.0, 0.5), IsNan());
+  VELOX_ASSERT_THROW(
+      inverseLaplaceCDF(1.0, 1.0, kNan), "p must be in the interval [0, 1]");
+  VELOX_ASSERT_THROW(
+      inverseLaplaceCDF(kInf, 1.0, kNan), "p must be in the interval [0, 1]");
+  VELOX_ASSERT_THROW(
+      inverseLaplaceCDF(1.0, 0.0, 0.5), "scale must be greater than 0");
+  VELOX_ASSERT_THROW(
+      inverseLaplaceCDF(1.0, -1.0, 0.5), "scale must be greater than 0");
+
+  EXPECT_EQ(inverseLaplaceCDF(std::nullopt, 1.0, 0.5), std::nullopt);
+  EXPECT_EQ(inverseLaplaceCDF(1.0, std::nullopt, 0.5), std::nullopt);
+  VELOX_ASSERT_THROW(
+      inverseLaplaceCDF(kDoubleMin, 1.0, kNan),
+      "p must be in the interval [0, 1]");
+  VELOX_ASSERT_THROW(
+      inverseLaplaceCDF(kDoubleMax, 1.0, kNan),
+      "p must be in the interval [0, 1]");
+  EXPECT_THAT(inverseLaplaceCDF(kInf, 1.0, 0.5), IsNan());
+  EXPECT_EQ(kInf, inverseLaplaceCDF(10.0, kDoubleMax, 0.999999999999));
+  EXPECT_EQ(10.0, inverseLaplaceCDF(10.0, kDoubleMin, 0.000000000001));
+}
 
 } // namespace
 } // namespace facebook::velox
