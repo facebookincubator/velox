@@ -67,14 +67,16 @@ void checkForCompatiblePattern(const std::string& pattern) {
   // If in a character class, points to the [ at the beginning of that class.
   const char* charClassStart = nullptr;
   // This minimal regex parser looks just for the class begin/end markers.
-  for (const char* c = pattern.data(); c < pattern.data() + pattern.size(); ++c) {
+  for (const char* c = pattern.data(); c < pattern.data() + pattern.size();
+       ++c) {
     if (*c == '\\') {
       ++c;
     } else if (*c == '[') {
       if (charClassStart) {
         VELOX_USER_FAIL(
             "{} does not support character class union, intersection, "
-            "or difference ([a[b]], [a&&[b]], [a&&[^b]])", "Velox");
+            "or difference ([a[b]], [a&&[b]], [a&&[^b]])",
+            "Velox");
       }
       charClassStart = c;
       // A ] immediately after a [ does not end the character class, and is
@@ -84,7 +86,6 @@ void checkForCompatiblePattern(const std::string& pattern) {
     }
   }
 }
-
 
 FlatVector<bool>& ensureWritableBool(
     const SelectivityVector& rows,
@@ -503,8 +504,7 @@ class Re2ReplaceConstantPattern final : public VectorFunction {
       int replacements = RE2::GlobalReplace(&strValue, re_, overwrite[0]);
 
       strValue = prefix + strValue;
-      const StringView& answer =
-          StringView(strValue.c_str(), strValue.size());
+      const StringView& answer = StringView(strValue.c_str(), strValue.size());
       arrayWriter.add_item().setNoCopy(answer);
       resultWriter.commit();
     });
@@ -517,7 +517,6 @@ class Re2ReplaceConstantPattern final : public VectorFunction {
         ->elements()
         ->as<FlatVector<StringView>>()
         ->acquireSharedStringBuffers(args[0].get());
-
   }
 
  private:
@@ -579,11 +578,12 @@ class Re2Replace final : public VectorFunction {
 
       const StringView& currentOverwrite =
           overwriteVec->valueAt<StringView>(row);
-      // When using the standard way of creating a StringPiece in this file (toStringPiece)
-      // the line below "strValue.substr(position);" overwrites the overwrite data buffer.
-      // I am unsure of why this is the case, but when you create a StringPiece using .getString()
-      // this bug is avoided.
-      std::vector<re2::StringPiece> overwrite = {re2::StringPiece(currentOverwrite.getString())};
+      // When using the standard way of creating a StringPiece in this file
+      // (toStringPiece) the line below "strValue.substr(position);" overwrites
+      // the overwrite data buffer. I am unsure of why this is the case, but
+      // when you create a StringPiece using .getString() this bug is avoided.
+      std::vector<re2::StringPiece> overwrite = {
+          re2::StringPiece(currentOverwrite.getString())};
       int position = 0;
       std::string prefix;
       if (args.size() == 4) {
@@ -602,10 +602,10 @@ class Re2Replace final : public VectorFunction {
         strValue = prefix + strValue;
       }
 
-      const StringView& answer =
-          StringView(strValue.c_str(), strValue.size());
-      // When we use "arrayWriter.add_item().setNoCopy(answer)", we oftentimes get
-      // incorrect sections of data stored. Using append has resolved this error
+      const StringView& answer = StringView(strValue.c_str(), strValue.size());
+      // When we use "arrayWriter.add_item().setNoCopy(answer)", we oftentimes
+      // get incorrect sections of data stored. Using append has resolved this
+      // error
       arrayWriter.add_item().append(answer);
       resultWriter.commit();
     });
@@ -619,7 +619,6 @@ class Re2Replace final : public VectorFunction {
         ->elements()
         ->as<FlatVector<StringView>>()
         ->acquireSharedStringBuffers(args[0].get());
-
   }
 };
 // Match string 'input' with a fixed pattern (with no wildcard characters).
