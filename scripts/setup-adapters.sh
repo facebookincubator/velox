@@ -66,7 +66,6 @@ function install_azure-storage-sdk-cpp {
 
   # install azure-storage-common
   cd sdk/storage/azure-storage-common
-  echo "install storage-common"
   cmake_install -DCMAKE_BUILD_TYPE=Release -DBUILD_SHARED_LIBS=OFF
 
   cd -
@@ -109,6 +108,9 @@ if [[ "$OSTYPE" == "linux-gnu"* ]]; then
       yum -y install libxml2-devel libgsasl-devel libuuid-devel
       # Dependencies of GCS, probably a workaround until the docker image is rebuilt
       yum -y install curl-devel c-ares-devel
+      # Dependencies of Azure Storage Blob Cpp
+      yum -y install gcc-c++
+      yum -y install perl-IPC-Cmd
    fi
 fi
 
