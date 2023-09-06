@@ -145,35 +145,49 @@ std::vector<std::string> readFunctionNamesFromFile(
   return names;
 }
 
-std::unordered_map<std::string, std::vector<std::string>> readPrestoFunctionNamesAndSignaturesFromFile() {
-  std::ifstream functions("data/all_functions_with_signatures");
-  std::unordered_map<std::string, std::vector<std::string>> presto_function_signatures;
-
-    std::string firstLine;
-    std::getline(functions, firstLine);
-
-    std::string line;
-    while (std::getline(functions, line)) {
-        std::istringstream lineStream(line);
-        std::string key;
-        std::string value;
-        std::getline(lineStream, key, ':');
-        std::getline(lineStream, value);
-
-        key.erase(0, key.find_first_not_of(" \t"));
-        key.erase(key.find_last_not_of(" \t") + 1);
-        value.erase(0, value.find_first_not_of(" \t"));
-        value.erase(value.find_last_not_of(" \t") + 1);
-
-        if (presto_function_signatures.find(key) == presto_function_signatures.end()) {
-            std::vector<std::string> values;
-            values.push_back(value);
-            presto_function_signatures[key] = values;
-        } else {
-            presto_function_signatures[key].push_back(value);
-        }
+std::string trim(const std::string& str) {
+    size_t first = str.find_first_not_of(" \t");
+    if (first == std::string::npos) {
+        return ""; // Empty or all whitespace
     }
-    return presto_function_signatures;
+    size_t last = str.find_last_not_of(" \t");
+    return str.substr(first, (last - first + 1));
+}
+
+std::pair<std::string, std::string> parseLine(const std::string& line) {
+    size_t pos = line.find(':');
+    if (pos != std::string::npos) {
+        std::string key = trim(line.substr(0, pos));
+        std::string value = trim(line.substr(pos + 1));
+        return std::make_pair(key, value);
+    }
+    return std::make_pair("", "");
+}
+
+std::tuple<std::unordered_map<std::string, std::vector<std::string>>, std::unordered_map<std::string, std::vector<std::string>>, std::unordered_map<std::string, std::vector<std::string>>> readPrestoFunctionNamesAndSignaturesFromFile() {
+  std::ifstream functions("data/all_functions_with_signatures.txt");
+
+  std::unordered_map<std::string, std::vector<std::string>> scalar, aggregate, window;
+  std::string currentSection;
+
+  std::string line;
+  while (std::getline(functions, line)) {
+      if (!line.empty() && line.back() == ':') {
+          currentSection = line.substr(0, line.size() - 1);
+      } else {
+          std::pair<std::string, std::string> keyValue = parseLine(line);
+          if (!keyValue.first.empty()) {
+              if (currentSection == "scalar") {
+                  scalar[keyValue.first].push_back(keyValue.second);
+              } else if (currentSection == "aggregate") {
+                  aggregate[keyValue.first].push_back(keyValue.second);
+              } else if (currentSection == "window") {
+                  window[keyValue.first].push_back(keyValue.second);
+              }
+          }
+      }
+  }
+  return std::make_tuple(scalar, aggregate, window);
 }
 
 std::string toFuncLink(
@@ -393,14 +407,30 @@ void printCoverageMap(
   std::cout << out.str() << std::endl;
 }
 
+bool ComparePrestoAndVeloxSignatures(const std::string& signature, const std::string& functionName,
+                            std::unordered_map<std::string, std::vector<std::string>> signatureMap) {
+   auto funcName = signatureMap.find(functionName);
+    if (funcName != signatureMap.end()) {
+        const std::vector<std::string>& values = funcName->second;
+        for (const std::string& value : values) {
+            if (value == signature) {
+                return true;
+            }
+        }
+    }
+    return false;
+}
+
 void printCoverageMapWithSignatures(
-    const std::vector<std::string>& scalarNames,
-    const std::vector<std::string>& aggNames,
-    const std::vector<std::string>& windowNames,
-    const std::unordered_set<std::string>& veloxNamesSet,
-    const std::unordered_set<std::string>& veloxAggNamesSet,
-    const std::unordered_set<std::string>& veloxWindowNamesSet,
+    const std::vector<std::string>& scalarNames, // presto names
+    const std::vector<std::string>& aggNames, // presto names
+    const std::vector<std::string>& windowNames, // presto names
+    const std::unordered_set<std::string>& veloxNamesSet, // velox names
+    const std::unordered_set<std::string>& veloxAggNamesSet, // velox names
+    const std::unordered_set<std::string>& veloxWindowNamesSet, // velox names
     const std::string& domain) {
+
+
   const auto scalarCnt = scalarNames.size();
   const auto aggCnt = aggNames.size();
   const auto windowCnt = windowNames.size();
@@ -416,66 +446,78 @@ void printCoverageMapWithSignatures(
   auto aggSignatureMap = getAggregateSignatureMap(veloxAggNames);
   auto windowSignatureMap = getWindowSignatureMap(veloxWindowNames);
 
-  // Make sure there is enough space for the longest function name + :func:
-  // syntax that turns function name into a link to function's description.
-  // const int columnSize = std::max(
-  //                            {maxLength(scalarNames),
-  //                             maxLength(aggNames),
-  //                             maxLength(windowNames)}) +
-  //     toFuncLink("", domain).size();
+  const auto prestoSignatureMap = readPrestoFunctionNamesAndSignaturesFromFile();
+  auto scalarPrestoSignatureMap = std::get<0>(prestoSignatureMap);
+  auto aggPrestoSignatureMap = std::get<1>(prestoSignatureMap);
+  auto windowPrestoSignatureMap = std::get<2>(prestoSignatureMap);
+
+  const auto scalarPrestoCnt = scalarPrestoSignatureMap.size();
+  const auto aggPrestoCnt = aggPrestoSignatureMap.size();
+  const auto windowPrestoCnt = windowPrestoSignatureMap.size();
+  
+  std::cout << scalarPrestoCnt <<std::endl;
+  std::cout << aggPrestoCnt <<std::endl;
+  std::cout << windowPrestoCnt <<std::endl;
 
   const std::string indent(4, ' ');
 
-  // const int numScalarColumns = 5;
-
-  // Split scalar functions into 'numScalarColumns' columns. Put all aggregate
-  // functions into one column.
-  // auto numRows = std::max(
-  //     {(size_t)std::ceil((double)scalarCnt / numScalarColumns),
-  //      aggCnt,
-  //      windowCnt});
-
-  // Keep track of cells which contain functions available in Velox. These cells
-  // need to be highlighted using CSS rules.
   TableCellTracker veloxCellTracker;
 
   auto printName = [&](int row,
                        int column,
                        const std::string& name,
-                       const std::string& functionname,
-                       const std::vector<std::string>& veloxNames,
-                       const std::string& functype) {
-    auto veloxFunctionExists =
-        std::find(veloxNames.begin(), veloxNames.end(), functionname);
-    if (veloxFunctionExists != veloxNames.end()) {
-      veloxCellTracker.add(row, column);
-      return toFuncLinkNew(name, domain, functype);
-    } else {
+                       const std::vector<std::string>& veloxNames
+                       ) {
+    // check if the passed presto function exists in velox, 
+    auto veloxFunctionExists = std::find(veloxNames.begin(), veloxNames.end(), name);
+    if (veloxFunctionExists != veloxNames.end()) { // if the passed presto function exists in velox
+      veloxCellTracker.add(row, column); // highlight the function name
+      return toFuncLinkNew(name, domain, ""); // print the function name with - :func
+    } else { //if the passed presto function doesn't exist in velox
       return fmt::format("- {}", name);
+    }
+  };
+
+
+  auto printSignature = [&](int row,
+                            int column, 
+                            const std::string& signature,
+                            const std::string& functionName,
+                            std::unordered_map<std::string, std::vector<std::string>> signatureMap
+                            ) {
+  if (ComparePrestoAndVeloxSignatures(signature, functionName, signatureMap) == true) { // if the passed presto signature exists in velox
+      veloxCellTracker.add(row, column); //highlight the signature
+      return toFuncLinkNew( fmt::format("-*- {}", signature), domain, "signature");
+    } else {
+      return toFuncLinkNew(signature, domain, "signature");
     }
   };
 
   std::ostringstream out;
   TablePrinter printer(3, 0, indent, out);
-  int numRows = 0;
+  int numRows = 0; 
   printer.header_new("Scalar Functions");
 
-  for (const auto& scalarName : scalarNames) {
+  for (const auto& scalarName : scalarNames) { // loop through all the presto scalar names.
     numRows = numRows + 1;
     printer.startRow();
-    printer.addColumn(
-        printName(numRows, 0, scalarName, scalarName, veloxNames, ""));
+    printer.addColumn( // add the function name first ( check if the function exists in velox, if yes, highlight it and add :func else dont)
+        printName(numRows, 0, scalarName, veloxNames));
     printer.endRow();
-    auto scalarExists = scalarSignatureMap.first.find(scalarName);
-    if (scalarExists != scalarSignatureMap.first.end()) {
-      for (const std::string& signature :
-           scalarSignatureMap.first[scalarName]) {
+
+    // check if the function name exists in the presto signature map
+    auto scalarExists = scalarPrestoSignatureMap.find(scalarName);
+
+    if (scalarExists != scalarPrestoSignatureMap.end()){
+      // if it exists, then loop through the values of signatures for that specific function name
+      for (const std::string& signature : scalarPrestoSignatureMap[scalarName]){
         numRows = numRows + 1;
-        printer.startRow();
-        printer.addColumn(printName(
-            numRows, 0, signature, scalarName, veloxNames, "signature"));
+        printer.addColumn(printSignature( // add the signature ( check whether it exists in velox also, if it exists in velox, highlight it, else dont)
+            numRows, 0, signature, scalarName, scalarSignatureMap.first));
         printer.endRow();
       }
+    } else {
+      std::cout << "scalar doesnt exist " << scalarName <<std::endl;
     }
     printer.startRow();
     printer.endRow();
@@ -486,17 +528,19 @@ void printCoverageMapWithSignatures(
     numRows = numRows + 1;
     printer.startRow();
     printer.addColumn(
-        printName(numRows, 0, aggName, aggName, veloxAggNames, ""));
+        printName(numRows, 0, aggName, veloxAggNames));
     printer.endRow();
-    auto aggExists = aggSignatureMap.first.find(aggName);
-    if (aggExists != aggSignatureMap.first.end()) {
-      for (const std::string& signature : aggSignatureMap.first[aggName]) {
+    auto aggExists = aggPrestoSignatureMap.find(aggName);
+    if (aggExists != aggPrestoSignatureMap.end()) {
+      for (const std::string& signature : aggPrestoSignatureMap[aggName]) {
         numRows = numRows + 1;
         printer.startRow();
-        printer.addColumn(printName(
-            numRows, 0, signature, aggName, veloxAggNames, "signature"));
+        printer.addColumn(printSignature(
+            numRows, 0, signature, aggName, aggSignatureMap.first));
         printer.endRow();
       }
+    } else {
+      std::cout << "agg doesnt exist " << aggName <<std::endl;
     }
     printer.startRow();
     printer.endRow();
@@ -507,18 +551,20 @@ void printCoverageMapWithSignatures(
     numRows = numRows + 1;
     printer.startRow();
     printer.addColumn(
-        printName(numRows, 0, windowName, windowName, veloxWindowNames, ""));
+        printName(numRows, 0, windowName, veloxWindowNames));
     printer.endRow();
-    auto windowExists = windowSignatureMap.first.find(windowName);
-    if (windowExists != windowSignatureMap.first.end()) {
+    auto windowExists = windowPrestoSignatureMap.find(windowName);
+    if (windowExists != windowPrestoSignatureMap.end()) {
       for (const std::string& signature :
-           windowSignatureMap.first[windowName]) {
+           windowPrestoSignatureMap[windowName]) {
         numRows = numRows + 1;
         printer.startRow();
-        printer.addColumn(printName(
-            numRows, 0, signature, windowName, veloxWindowNames, "signature"));
+        printer.addColumn(printSignature(
+            numRows, 0, signature, windowName, windowSignatureMap.first));
         printer.endRow();
       }
+    } else {
+      std::cout << "window doesnt exist " << windowName <<std::endl;
     }
     printer.startRow();
     printer.endRow();

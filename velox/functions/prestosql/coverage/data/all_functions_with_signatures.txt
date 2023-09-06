@@ -1,4 +1,5 @@
-Function : (Argument Types) -> Return Type
+scalar:
+
 abs : (bigint) -> bigint
 abs : (decimal(p,s)) -> decimal(p,s)
 abs : (double) -> double
@@ -12,41 +13,6 @@ all_match : (array(T), function(T,boolean)) -> boolean
 any_keys_match : (map(K,V), function(K,boolean)) -> boolean
 any_match : (array(T), function(T,boolean)) -> boolean
 any_values_match : (map(K,V), function(V,boolean)) -> boolean
-approx_distinct : (T) -> bigint
-approx_distinct : (T, double) -> bigint
-approx_most_frequent : (bigint, K, bigint) -> map(K,bigint)
-approx_percentile : (bigint, array(double)) -> array(bigint)
-approx_percentile : (bigint, array(double), double) -> array(bigint)
-approx_percentile : (bigint, bigint, array(double)) -> array(bigint)
-approx_percentile : (bigint, bigint, array(double), double) -> array(bigint)
-approx_percentile : (double, array(double)) -> array(double)
-approx_percentile : (double, array(double), double) -> array(double)
-approx_percentile : (double, bigint, array(double)) -> array(double)
-approx_percentile : (double, bigint, array(double), double) -> array(double)
-approx_percentile : (real, array(double)) -> array(real)
-approx_percentile : (real, array(double), double) -> array(real)
-approx_percentile : (real, bigint, array(double)) -> array(real)
-approx_percentile : (real, bigint, array(double), double) -> array(real)
-approx_percentile : (bigint, bigint, double) -> bigint
-approx_percentile : (bigint, bigint, double, double) -> bigint
-approx_percentile : (bigint, double) -> bigint
-approx_percentile : (bigint, double, double) -> bigint
-approx_percentile : (double, bigint, double) -> double
-approx_percentile : (double, bigint, double, double) -> double
-approx_percentile : (double, double) -> double
-approx_percentile : (double, double, double) -> double
-approx_percentile : (real, bigint, double) -> real
-approx_percentile : (real, bigint, double, double) -> real
-approx_percentile : (real, double) -> real
-approx_percentile : (real, double, double) -> real
-approx_set : (bigint) -> HyperLogLog
-approx_set : (bigint, double) -> HyperLogLog
-approx_set : (double) -> HyperLogLog
-approx_set : (double, double) -> HyperLogLog
-approx_set : (varchar(x)) -> HyperLogLog
-approx_set : (varchar(x), double) -> HyperLogLog
-arbitrary : (T) -> T
-array_agg : (T) -> array(T)
 array_average : (array(double)) -> double
 array_cum_sum : (array(T)) -> array(T)
 array_distinct : (array(E)) -> array(E)
@@ -78,12 +44,6 @@ arrays_overlap : (array(T), array(T)) -> boolean
 asin : (double) -> double
 atan : (double) -> double
 atan2 : (double, double) -> double
-avg : (decimal(p,s)) -> decimal(p,s)
-avg : (bigint) -> double
-avg : (double) -> double
-avg : (interval day to second) -> interval day to second
-avg : (interval year to month) -> interval year to month
-avg : (real) -> real
 bar : (double, bigint) -> varchar
 bar : (double, bigint, color, color) -> varchar
 beta_cdf : (double, double, double) -> double
@@ -103,7 +63,6 @@ bing_tiles_around : (double, double, integer, double) -> array(BingTile)
 binomial_cdf : (integer, double, integer) -> double
 bit_count : (bigint, bigint) -> bigint
 bitwise_and : (bigint, bigint) -> bigint
-bitwise_and_agg : (bigint) -> bigint
 bitwise_arithmetic_shift_right : (bigint, bigint) -> bigint
 bitwise_left_shift : (bigint, integer) -> bigint
 bitwise_left_shift : (integer, integer) -> integer
@@ -112,7 +71,6 @@ bitwise_left_shift : (tinyint, integer) -> tinyint
 bitwise_logical_shift_right : (bigint, bigint, bigint) -> bigint
 bitwise_not : (bigint) -> bigint
 bitwise_or : (bigint, bigint) -> bigint
-bitwise_or_agg : (bigint) -> bigint
 bitwise_right_shift : (bigint, integer) -> bigint
 bitwise_right_shift : (integer, integer) -> integer
 bitwise_right_shift : (smallint, integer) -> smallint
@@ -123,8 +81,6 @@ bitwise_right_shift_arithmetic : (smallint, integer) -> smallint
 bitwise_right_shift_arithmetic : (tinyint, integer) -> tinyint
 bitwise_shift_left : (bigint, bigint, bigint) -> bigint
 bitwise_xor : (bigint, bigint) -> bigint
-bool_and : (boolean) -> boolean
-bool_or : (boolean) -> boolean
 cardinality : (HyperLogLog) -> bigint
 cardinality : (KHyperLogLog) -> bigint
 cardinality : (SetDigest) -> bigint
@@ -146,19 +102,8 @@ ceiling : (integer) -> integer
 ceiling : (real) -> real
 ceiling : (smallint) -> smallint
 ceiling : (tinyint) -> tinyint
-checksum : (T) -> varbinary
 chi_squared_cdf : (double, double) -> double
 chr : (bigint) -> varchar(1)
-classification_fall_out : (bigint, boolean, double) -> array(double)
-classification_fall_out : (bigint, boolean, double, double) -> array(double)
-classification_miss_rate : (bigint, boolean, double) -> array(double)
-classification_miss_rate : (bigint, boolean, double, double) -> array(double)
-classification_precision : (bigint, boolean, double) -> array(double)
-classification_precision : (bigint, boolean, double, double) -> array(double)
-classification_recall : (bigint, boolean, double) -> array(double)
-classification_recall : (bigint, boolean, double, double) -> array(double)
-classification_thresholds : (bigint, boolean, double) -> array(double)
-classification_thresholds : (bigint, boolean, double, double) -> array(double)
 codepoint : (varchar(1)) -> integer
 color : (double, color, color) -> color
 color : (double, double, double, color, color) -> color
@@ -171,30 +116,17 @@ concat : (char(x), char(y)) -> char(u)
 concat : (varbinary) -> varbinary
 concat : (varchar) -> varchar
 contains : (array(T), T) -> boolean
-convex_hull_agg : (Geometry) -> Geometry
-corr : (double, double) -> double
-corr : (real, real) -> real
 cos : (double) -> double
 cosh : (double) -> double
 cosine_similarity : (map(varchar,double), map(varchar,double)) -> double
-count : (aggregate) -> bigint
-count : (T) -> bigint
-count_if : (boolean) -> bigint
-covar_pop : (double, double) -> double
-covar_pop : (real, real) -> real
-covar_samp : (double, double) -> double
-covar_samp : (real, real) -> real
 crc32 : (varbinary) -> bigint
 create_hll : (bigint) -> HyperLogLog
 create_hll : (bigint, double) -> HyperLogLog
-cume_dist : (window) -> double
-current_date : (scalar) -> date
-current_time : (scalar) -> time with time zone
-current_timestamp : (scalar) -> timestamp with time zone
-current_timezone : (scalar) -> varchar
+current_date : () -> date
+current_time : () -> time with time zone
+current_timestamp : () -> timestamp with time zone
+current_timezone : () -> varchar
 custom_add : (bigint, bigint) -> bigint
-custom_rank : (window) -> bigint
-custom_sum : (bigint) -> bigint
 date : (timestamp) -> date
 date : (timestamp with time zone) -> date
 date : (varchar(x)) -> date
@@ -231,26 +163,20 @@ day_of_year : (date) -> bigint
 day_of_year : (timestamp) -> bigint
 day_of_year : (timestamp with time zone) -> bigint
 degrees : (double) -> double
-dense_rank : (window) -> bigint
-differential_entropy : (bigint, double) -> double
-differential_entropy : (bigint, double, double) -> double
-differential_entropy : (bigint, double, double, varchar, double, double) -> double
 dow : (date) -> bigint
 dow : (timestamp) -> bigint
 dow : (timestamp with time zone) -> bigint
 doy : (date) -> bigint
 doy : (timestamp) -> bigint
 doy : (timestamp with time zone) -> bigint
-e : (scalar) -> double
+e : () -> double
 element_at : (array(E), bigint) -> E
 element_at : (map(K,V), K) -> V
-empty_approx_set : (scalar) -> HyperLogLog
+empty_approx_set : () -> HyperLogLog
 empty_approx_set : (double) -> HyperLogLog
 ends_with : (varchar(x), varchar(y)) -> boolean
-entropy : (bigint) -> double
 enum_key : (T) -> varchar
 enum_key : (T) -> varchar
-every : (boolean) -> boolean
 exp : (double) -> double
 expand_envelope : (Geometry, double) -> Geometry
 f_cdf : (double, double, double) -> double
@@ -259,7 +185,6 @@ find_first : (array(T), bigint, function(T,boolean)) -> T
 find_first : (array(T), function(T,boolean)) -> T
 find_first_index : (array(T), bigint, function(T,boolean)) -> bigint
 find_first_index : (array(T), function(T,boolean)) -> bigint
-first_value : (T) -> T
 flatten : (array(array(E))) -> array(E)
 flatten_geometry_collections : (Geometry) -> array(Geometry)
 floor : (bigint) -> bigint
@@ -297,9 +222,6 @@ from_utf8 : (varbinary) -> varchar
 from_utf8 : (varbinary, bigint) -> varchar
 from_utf8 : (varbinary, varchar(x)) -> varchar
 gamma_cdf : (double, double, double) -> double
-geometric_mean : (bigint) -> double
-geometric_mean : (double) -> double
-geometric_mean : (real) -> real
 geometry_as_geojson : (Geometry) -> varchar
 geometry_from_geojson : (varchar) -> Geometry
 geometry_invalid_reason : (Geometry) -> varchar
@@ -307,13 +229,11 @@ geometry_nearest_points : (Geometry, Geometry) -> array(Geometry)
 geometry_to_bing_tiles : (Geometry, integer) -> array(BingTile)
 geometry_to_dissolved_bing_tiles : (Geometry, integer) -> array(BingTile)
 geometry_union : (array(Geometry)) -> Geometry
-geometry_union_agg : (Geometry) -> Geometry
 great_circle_distance : (double, double, double, double) -> double
 greatest : (E) -> E
 hamming_distance : (varchar(x), varchar(y)) -> bigint
 hash_counts : (SetDigest) -> map(bigint,smallint)
 hash_counts : (SetDigest) -> varchar
-histogram : (K) -> map(K,bigint)
 hmac_md5 : (varbinary, varbinary) -> varbinary
 hmac_sha1 : (varbinary, varbinary) -> varbinary
 hmac_sha256 : (varbinary, varbinary) -> varbinary
@@ -323,7 +243,7 @@ hour : (time) -> bigint
 hour : (time with time zone) -> bigint
 hour : (timestamp) -> bigint
 hour : (timestamp with time zone) -> bigint
-infinity : (scalar) -> double
+infinity : () -> double
 intersection_cardinality : (KHyperLogLog, KHyperLogLog) -> bigint
 intersection_cardinality : (SetDigest, SetDigest) -> bigint
 inverse_beta_cdf : (double, double, double) -> double
@@ -371,25 +291,10 @@ json_parse : (varchar(x)) -> json
 json_size : (json, JsonPath) -> bigint
 json_size : (varchar(x), JsonPath) -> bigint
 key_sampling_percent : (varchar) -> double
-khyperloglog_agg : (bigint, bigint) -> KHyperLogLog
-khyperloglog_agg : (bigint, varchar(x)) -> KHyperLogLog
-khyperloglog_agg : (double, bigint) -> KHyperLogLog
-khyperloglog_agg : (double, varchar(x)) -> KHyperLogLog
-khyperloglog_agg : (varchar(x), bigint) -> KHyperLogLog
-khyperloglog_agg : (varchar(x), varchar(y)) -> KHyperLogLog
-kurtosis : (bigint) -> double
-kurtosis : (double) -> double
-lag : (T) -> T
-lag : (T, bigint) -> T
-lag : (T, bigint, T) -> T
 laplace_cdf : (double, double, double) -> double
 last_day_of_month : (date) -> date
 last_day_of_month : (timestamp) -> date
 last_day_of_month : (timestamp with time zone) -> date
-last_value : (T) -> T
-lead : (T) -> T
-lead : (T, bigint) -> T
-lead : (T, bigint, T) -> T
 least : (E) -> E
 length : (char(x)) -> bigint
 length : (varbinary) -> bigint
@@ -398,8 +303,8 @@ levenshtein_distance : (varchar(x), varchar(y)) -> bigint
 line_interpolate_point : (Geometry, double) -> Geometry
 line_locate_point : (Geometry, Geometry) -> double
 ln : (double) -> double
-localtime : (scalar) -> time
-localtimestamp : (scalar) -> timestamp
+localtime : () -> time
+localtimestamp : () -> timestamp
 log10 : (double) -> double
 log2 : (double) -> double
 lower : (char(x)) -> char(x)
@@ -410,10 +315,8 @@ ltrim : (char(x)) -> char(x)
 ltrim : (char(x), CodePoints) -> char(x)
 ltrim : (varchar(x)) -> varchar(x)
 ltrim : (varchar(x), CodePoints) -> varchar(x)
-make_set_digest : (bigint) -> SetDigest
 map : (array(K), array(V)) -> map(K,V)
-map : (scalar) -> map(unknown,unknown)
-map_agg : (K, V) -> map(K,V)
+map : () -> map(unknown,unknown)
 map_concat : (map(K,V)) -> map(K,V)
 map_entries : (map(K,V)) -> array(row(K,V))
 map_filter : (map(K,V), function(K,V,boolean)) -> map(K,V)
@@ -427,30 +330,16 @@ map_top_n_keys : (map(K,V), bigint) -> array(K)
 map_top_n_keys : (map(K,V), bigint, function(K,K,integer)) -> array(K)
 map_top_n_values : (map(K,V), bigint) -> array(V)
 map_top_n_values : (map(K,V), bigint, function(V,V,integer)) -> array(V)
-map_union : (map(K,V)) -> map(K,V)
-map_union_sum : (map(K,V)) -> map(K,V)
 map_values : (map(K,V)) -> array(V)
 map_zip_with : (map(K,V1), map(K,V2), function(K,V1,V2,V3)) -> map(K,V3)
-max : (E) -> E
-max : (E, bigint) -> array(E)
-max_by : (V, K) -> V
-max_by : (V, K, bigint) -> array(V)
 md5 : (varbinary) -> varbinary
-merge : (HyperLogLog) -> HyperLogLog
-merge : (KHyperLogLog) -> KHyperLogLog
-merge : (qdigest(T)) -> qdigest(T)
 merge_hll : (array(HyperLogLog)) -> HyperLogLog
 merge_khll : (array(KHyperLogLog)) -> KHyperLogLog
-merge_set_digest : (SetDigest) -> SetDigest
 millisecond : (interval day to second) -> bigint
 millisecond : (time) -> bigint
 millisecond : (time with time zone) -> bigint
 millisecond : (timestamp) -> bigint
 millisecond : (timestamp with time zone) -> bigint
-min : (E) -> E
-min : (E, bigint) -> array(E)
-min_by : (V, K) -> V
-min_by : (V, K, bigint) -> array(V)
 minute : (interval day to second) -> bigint
 minute : (time) -> bigint
 minute : (time with time zone) -> bigint
@@ -467,34 +356,23 @@ month : (date) -> bigint
 month : (interval year to month) -> bigint
 month : (timestamp) -> bigint
 month : (timestamp with time zone) -> bigint
-multimap_agg : (K, V) -> map(K,array(V))
 multimap_from_entries : (array(row(K,V))) -> map(K,array(V))
 murmur3_x64_128 : (varbinary) -> varbinary
-nan : (scalar) -> double
+nan : () -> double
 ngrams : (array(T), integer) -> array(array(T))
 no_keys_match : (map(K,V), function(K,boolean)) -> boolean
 no_values_match : (map(K,V), function(V,boolean)) -> boolean
 none_match : (array(T), function(T,boolean)) -> boolean
 normal_cdf : (double, double, double) -> double
 normalize : (varchar(x), varchar(y)) -> varchar
-now : (scalar) -> timestamp with time zone
-nth_value : (T, bigint) -> T
-ntile : (bigint) -> bigint
-numeric_histogram : (bigint, double) -> map(double,double)
-numeric_histogram : (bigint, double, double) -> map(double,double)
-numeric_histogram : (bigint, real) -> map(real,real)
-numeric_histogram : (bigint, real, double) -> map(real,real)
+now : () -> timestamp with time zone
 parse_datetime : (varchar(x), varchar(y)) -> timestamp with time zone
 parse_duration : (varchar(x)) -> interval day to second
 parse_presto_data_size : (varchar(x)) -> decimal(38,0)
-percent_rank : (window) -> double
-pi : (scalar) -> double
+pi : () -> double
 poisson_cdf : (double, integer) -> double
 pow : (double, double) -> double
 power : (double, double) -> double
-qdigest_agg : (V) -> qdigest(V)
-qdigest_agg : (V, bigint) -> qdigest(V)
-qdigest_agg : (V, bigint, double) -> qdigest(V)
 quantile_at_value : (qdigest(bigint), bigint) -> double
 quantile_at_value : (qdigest(double), double) -> double
 quantile_at_value : (qdigest(real), real) -> double
@@ -503,18 +381,16 @@ quarter : (timestamp) -> bigint
 quarter : (timestamp with time zone) -> bigint
 radians : (double) -> double
 rand : (bigint) -> bigint
-rand : (scalar) -> double
+rand : () -> double
 rand : (integer) -> integer
 rand : (smallint) -> smallint
 rand : (tinyint) -> tinyint
 random : (bigint) -> bigint
-random : (scalar) -> double
+random : () -> double
 random : (integer) -> integer
 random : (smallint) -> smallint
 random : (tinyint) -> tinyint
-rank : (window) -> bigint
 reduce : (array(T), S, function(S,T,S), function(S,R)) -> R
-reduce_agg : (T, S, function(S,T,S), function(S,S,S)) -> S
 regexp_extract : (varchar(x), Re2JRegExp) -> varchar(x)
 regexp_extract : (varchar(x), Re2JRegExp, bigint) -> varchar(x)
 regexp_extract_all : (varchar(x), Re2JRegExp) -> array(varchar(x))
@@ -524,10 +400,6 @@ regexp_replace : (varchar, Re2JRegExp, function(array(varchar),varchar(x))) -> v
 regexp_replace : (varchar(x), Re2JRegExp) -> varchar(x)
 regexp_replace : (varchar(x), Re2JRegExp, varchar(y)) -> varchar(z)
 regexp_split : (varchar(x), Re2JRegExp) -> array(varchar(x))
-regr_intercept : (double, double) -> double
-regr_intercept : (real, real) -> real
-regr_slope : (double, double) -> double
-regr_slope : (real, real) -> real
 reidentification_potential : (KHyperLogLog, bigint) -> double
 remove_nulls : (array(T)) -> array(T)
 render : (boolean) -> varchar(16)
@@ -556,7 +428,6 @@ round : (smallint) -> smallint
 round : (smallint, integer) -> smallint
 round : (tinyint) -> tinyint
 round : (tinyint, integer) -> tinyint
-row_number : (window) -> bigint
 rpad : (varbinary, bigint, varbinary) -> varbinary
 rpad : (varchar(x), bigint, varchar(y)) -> varchar
 rtrim : (char(x)) -> char(x)
@@ -572,13 +443,13 @@ second : (time with time zone) -> bigint
 second : (timestamp) -> bigint
 second : (timestamp with time zone) -> bigint
 secure_rand : (bigint, bigint) -> bigint
-secure_rand : (scalar) -> double
+secure_rand : () -> double
 secure_rand : (double, double) -> double
 secure_rand : (integer, integer) -> integer
 secure_rand : (smallint, smallint) -> smallint
 secure_rand : (tinyint, tinyint) -> tinyint
 secure_random : (bigint, bigint) -> bigint
-secure_random : (scalar) -> double
+secure_random : () -> double
 secure_random : (double, double) -> double
 secure_random : (integer, integer) -> integer
 secure_random : (smallint, smallint) -> smallint
@@ -590,8 +461,6 @@ sequence : (date, date, interval day to second) -> array(date)
 sequence : (date, date, interval year to month) -> array(date)
 sequence : (timestamp, timestamp, interval day to second) -> array(timestamp)
 sequence : (timestamp, timestamp, interval year to month) -> array(timestamp)
-set_agg : (T) -> array(T)
-set_union : (array(T)) -> array(T)
 sha1 : (varbinary) -> varbinary
 sha256 : (varbinary) -> varbinary
 sha512 : (varbinary) -> varbinary
@@ -605,10 +474,7 @@ sign : (smallint) -> smallint
 sign : (tinyint) -> tinyint
 simplify_geometry : (Geometry, double) -> Geometry
 sin : (double) -> double
-skewness : (bigint) -> double
-skewness : (double) -> double
 slice : (array(E), bigint, bigint) -> array(E)
-spatial_partitioning : (Geometry) -> varchar
 spatial_partitions : (KdbTree, Geometry) -> array(integer)
 spatial_partitions : (KdbTree, Geometry, double) -> array(integer)
 spatial_partitions : (KdbTree, SphericalGeography) -> array(integer)
@@ -685,12 +551,6 @@ st_y : (Geometry) -> double
 st_ymax : (Geometry) -> double
 st_ymin : (Geometry) -> double
 starts_with : (varchar(x), varchar(y)) -> boolean
-stddev : (bigint) -> double
-stddev : (double) -> double
-stddev_pop : (bigint) -> double
-stddev_pop : (double) -> double
-stddev_samp : (bigint) -> double
-stddev_samp : (double) -> double
 strpos : (varchar(x), varchar(y)) -> bigint
 strpos : (varchar(x), varchar(y), bigint) -> bigint
 strrpos : (varchar(x), varchar(y)) -> bigint
@@ -701,17 +561,8 @@ substr : (varbinary, bigint) -> varbinary
 substr : (varbinary, bigint, bigint) -> varbinary
 substr : (varchar(x), bigint) -> varchar(x)
 substr : (varchar(x), bigint, bigint) -> varchar(x)
-sum : (bigint) -> bigint
-sum : (decimal(p,s)) -> decimal(38,s)
-sum : (double) -> double
-sum : (interval day to second) -> interval day to second
-sum : (interval year to month) -> interval year to month
-sum : (real) -> real
 tan : (double) -> double
 tanh : (double) -> double
-tdigest_agg : (V) -> tdigest(V)
-tdigest_agg : (V, bigint) -> tdigest(V)
-tdigest_agg : (V, bigint, double) -> tdigest(V)
 timezone_hour : (timestamp with time zone) -> bigint
 timezone_minute : (timestamp with time zone) -> bigint
 to_base : (bigint, bigint) -> varchar(64)
@@ -760,19 +611,13 @@ url_extract_path : (varchar(x)) -> varchar(x)
 url_extract_port : (varchar(x)) -> bigint
 url_extract_protocol : (varchar(x)) -> varchar(x)
 url_extract_query : (varchar(x)) -> varchar(x)
-uuid : (scalar) -> uuid
+uuid : () -> uuid
 value_at_quantile : (qdigest(bigint), double) -> bigint
 value_at_quantile : (qdigest(double), double) -> double
 value_at_quantile : (qdigest(real), double) -> real
 values_at_quantiles : (qdigest(bigint), array(double)) -> array(bigint)
 values_at_quantiles : (qdigest(double), array(double)) -> array(double)
 values_at_quantiles : (qdigest(real), array(double)) -> array(real)
-var_pop : (bigint) -> double
-var_pop : (double) -> double
-var_samp : (bigint) -> double
-var_samp : (double) -> double
-variance : (bigint) -> double
-variance : (double) -> double
 week : (date) -> bigint
 week : (timestamp) -> bigint
 week : (timestamp with time zone) -> bigint
@@ -804,3 +649,169 @@ zip : (array(T1), array(T2), array(T3), array(T4), array(T5)) -> array(row(T1,T2
 zip : (array(T1), array(T2), array(T3), array(T4), array(T5), array(T6)) -> array(row(T1,T2,T3,T4,T5,T6))
 zip : (array(T1), array(T2), array(T3), array(T4), array(T5), array(T6), array(T7)) -> array(row(T1,T2,T3,T4,T5,T6,T7))
 zip_with : (array(T), array(U), function(T,U,R)) -> array(R)
+
+
+aggregate:
+
+approx_distinct : (T) -> bigint
+approx_distinct : (T, double) -> bigint
+approx_most_frequent : (bigint, K, bigint) -> map(K,bigint)
+approx_percentile : (bigint, array(double)) -> array(bigint)
+approx_percentile : (bigint, array(double), double) -> array(bigint)
+approx_percentile : (bigint, bigint, array(double)) -> array(bigint)
+approx_percentile : (bigint, bigint, array(double), double) -> array(bigint)
+approx_percentile : (double, array(double)) -> array(double)
+approx_percentile : (double, array(double), double) -> array(double)
+approx_percentile : (double, bigint, array(double)) -> array(double)
+approx_percentile : (double, bigint, array(double), double) -> array(double)
+approx_percentile : (real, array(double)) -> array(real)
+approx_percentile : (real, array(double), double) -> array(real)
+approx_percentile : (real, bigint, array(double)) -> array(real)
+approx_percentile : (real, bigint, array(double), double) -> array(real)
+approx_percentile : (bigint, bigint, double) -> bigint
+approx_percentile : (bigint, bigint, double, double) -> bigint
+approx_percentile : (bigint, double) -> bigint
+approx_percentile : (bigint, double, double) -> bigint
+approx_percentile : (double, bigint, double) -> double
+approx_percentile : (double, bigint, double, double) -> double
+approx_percentile : (double, double) -> double
+approx_percentile : (double, double, double) -> double
+approx_percentile : (real, bigint, double) -> real
+approx_percentile : (real, bigint, double, double) -> real
+approx_percentile : (real, double) -> real
+approx_percentile : (real, double, double) -> real
+approx_set : (bigint) -> HyperLogLog
+approx_set : (bigint, double) -> HyperLogLog
+approx_set : (double) -> HyperLogLog
+approx_set : (double, double) -> HyperLogLog
+approx_set : (varchar(x)) -> HyperLogLog
+approx_set : (varchar(x), double) -> HyperLogLog
+arbitrary : (T) -> T
+array_agg : (T) -> array(T)
+avg : (decimal(p,s)) -> decimal(p,s)
+avg : (bigint) -> double
+avg : (double) -> double
+avg : (interval day to second) -> interval day to second
+avg : (interval year to month) -> interval year to month
+avg : (real) -> real
+bitwise_and_agg : (bigint) -> bigint
+bitwise_or_agg : (bigint) -> bigint
+bool_and : (boolean) -> boolean
+bool_or : (boolean) -> boolean
+checksum : (T) -> varbinary
+classification_fall_out : (bigint, boolean, double) -> array(double)
+classification_fall_out : (bigint, boolean, double, double) -> array(double)
+classification_miss_rate : (bigint, boolean, double) -> array(double)
+classification_miss_rate : (bigint, boolean, double, double) -> array(double)
+classification_precision : (bigint, boolean, double) -> array(double)
+classification_precision : (bigint, boolean, double, double) -> array(double)
+classification_recall : (bigint, boolean, double) -> array(double)
+classification_recall : (bigint, boolean, double, double) -> array(double)
+classification_thresholds : (bigint, boolean, double) -> array(double)
+classification_thresholds : (bigint, boolean, double, double) -> array(double)
+convex_hull_agg : (Geometry) -> Geometry
+corr : (double, double) -> double
+corr : (real, real) -> real
+count : () -> bigint
+count : (T) -> bigint
+count_if : (boolean) -> bigint
+covar_pop : (double, double) -> double
+covar_pop : (real, real) -> real
+covar_samp : (double, double) -> double
+covar_samp : (real, real) -> real
+custom_sum : (bigint) -> bigint
+differential_entropy : (bigint, double) -> double
+differential_entropy : (bigint, double, double) -> double
+differential_entropy : (bigint, double, double, varchar, double, double) -> double
+entropy : (bigint) -> double
+every : (boolean) -> boolean
+geometric_mean : (bigint) -> double
+geometric_mean : (double) -> double
+geometric_mean : (real) -> real
+geometry_union_agg : (Geometry) -> Geometry
+histogram : (K) -> map(K,bigint)
+khyperloglog_agg : (bigint, bigint) -> KHyperLogLog
+khyperloglog_agg : (bigint, varchar(x)) -> KHyperLogLog
+khyperloglog_agg : (double, bigint) -> KHyperLogLog
+khyperloglog_agg : (double, varchar(x)) -> KHyperLogLog
+khyperloglog_agg : (varchar(x), bigint) -> KHyperLogLog
+khyperloglog_agg : (varchar(x), varchar(y)) -> KHyperLogLog
+kurtosis : (bigint) -> double
+kurtosis : (double) -> double
+make_set_digest : (bigint) -> SetDigest
+map_agg : (K, V) -> map(K,V)
+map_union : (map(K,V)) -> map(K,V)
+map_union_sum : (map(K,V)) -> map(K,V)
+max : (E) -> E
+max : (E, bigint) -> array(E)
+max_by : (V, K) -> V
+max_by : (V, K, bigint) -> array(V)
+merge : (HyperLogLog) -> HyperLogLog
+merge : (KHyperLogLog) -> KHyperLogLog
+merge : (qdigest(T)) -> qdigest(T)
+merge_set_digest : (SetDigest) -> SetDigest
+min : (E) -> E
+min : (E, bigint) -> array(E)
+min_by : (V, K) -> V
+min_by : (V, K, bigint) -> array(V)
+multimap_agg : (K, V) -> map(K,array(V))
+numeric_histogram : (bigint, double) -> map(double,double)
+numeric_histogram : (bigint, double, double) -> map(double,double)
+numeric_histogram : (bigint, real) -> map(real,real)
+numeric_histogram : (bigint, real, double) -> map(real,real)
+qdigest_agg : (V) -> qdigest(V)
+qdigest_agg : (V, bigint) -> qdigest(V)
+qdigest_agg : (V, bigint, double) -> qdigest(V)
+reduce_agg : (T, S, function(S,T,S), function(S,S,S)) -> S
+regr_intercept : (double, double) -> double
+regr_intercept : (real, real) -> real
+regr_slope : (double, double) -> double
+regr_slope : (real, real) -> real
+set_agg : (T) -> array(T)
+set_union : (array(T)) -> array(T)
+skewness : (bigint) -> double
+skewness : (double) -> double
+spatial_partitioning : (Geometry) -> varchar
+stddev : (bigint) -> double
+stddev : (double) -> double
+stddev_pop : (bigint) -> double
+stddev_pop : (double) -> double
+stddev_samp : (bigint) -> double
+stddev_samp : (double) -> double
+sum : (bigint) -> bigint
+sum : (decimal(p,s)) -> decimal(38,s)
+sum : (double) -> double
+sum : (interval day to second) -> interval day to second
+sum : (interval year to month) -> interval year to month
+sum : (real) -> real
+tdigest_agg : (V) -> tdigest(V)
+tdigest_agg : (V, bigint) -> tdigest(V)
+tdigest_agg : (V, bigint, double) -> tdigest(V)
+var_pop : (bigint) -> double
+var_pop : (double) -> double
+var_samp : (bigint) -> double
+var_samp : (double) -> double
+variance : (bigint) -> double
+variance : (double) -> double
+
+
+window:
+
+cume_dist : () -> double
+custom_rank : () -> bigint
+dense_rank : () -> bigint
+first_value : (T) -> T
+lag : (T) -> T
+lag : (T, bigint) -> T
+lag : (T, bigint, T) -> T
+last_value : (T) -> T
+lead : (T) -> T
+lead : (T, bigint) -> T
+lead : (T, bigint, T) -> T
+nth_value : (T, bigint) -> T
+ntile : (bigint) -> bigint
+percent_rank : () -> double
+rank : () -> bigint
+row_number : () -> bigint
+
+
