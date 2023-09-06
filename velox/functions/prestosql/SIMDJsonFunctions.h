@@ -81,8 +81,8 @@ struct SIMDJsonArrayContainsFunction {
       return false;
     }
 
-    try {
-      for (auto&& v : ctx.jsonDoc) {
+    for (auto&& v : ctx.jsonDoc) {
+      try {
         if constexpr (std::is_same_v<TInput, bool>) {
           if (v.type() == simdjson::ondemand::json_type::boolean &&
               v.get_bool() == value) {
@@ -118,10 +118,14 @@ struct SIMDJsonArrayContainsFunction {
             }
           }
         }
+      } catch (const simdjson::simdjson_error& e) {
+        if (e.error() != simdjson::INCORRECT_TYPE &&
+            e.error() != simdjson::NUMBER_ERROR) {
+          return false;
+        }
       }
-    } catch (const simdjson::simdjson_error&) {
-      return false;
     }
+
     return true;
   }
 };

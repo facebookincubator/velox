@@ -371,7 +371,7 @@ true, true, true, true, true, true, true, true, true, true, true])",
       false);
 }
 
-TEST_F(JsonFunctionsTest, jsonArrayContainsInt) {
+TEST_F(JsonFunctionsTest, jsonArrayContainsLong) {
   EXPECT_EQ(jsonArrayContains<int64_t>(R"([])", 0), false);
   EXPECT_EQ(jsonArrayContains<int64_t>(R"([1.2, 2.3, 3.4])", 2), false);
   EXPECT_EQ(jsonArrayContains<int64_t>(R"([1.2, 2.0, 3.4])", 2), false);
@@ -404,6 +404,9 @@ TEST_F(JsonFunctionsTest, jsonArrayContainsInt) {
           R"([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20])",
           23),
       false);
+  EXPECT_EQ(jsonArrayContains<int64_t>(R"([92233720368547758071])", -9), false);
+  EXPECT_EQ(
+      jsonArrayContains<int64_t>(R"([92233720368547758071,-9])", -9), true);
 }
 
 TEST_F(JsonFunctionsTest, jsonArrayContainsDouble) {
@@ -441,6 +444,8 @@ TEST_F(JsonFunctionsTest, jsonArrayContainsDouble) {
           R"([1.2, 2.3, 3.4, 4.5, 1.2, 2.3, 3.4, 4.5, 1.2, 2.3, 3.4, 4.5, 1.2, 2.3, 3.4, 4.5, 1.2, 2.3, 3.4, 4.5])",
           4.3),
       false);
+  EXPECT_EQ(jsonArrayContains<double>(R"([9.6E400])", 4.2), false);
+  EXPECT_EQ(jsonArrayContains<double>(R"([9.6E400,4.2])", 4.2), true);
 }
 
 TEST_F(JsonFunctionsTest, jsonArrayContainsString) {
