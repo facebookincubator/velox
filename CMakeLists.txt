@@ -203,7 +203,8 @@ if(VELOX_ENABLE_GCS)
 endif()
 
 if(VELOX_ENABLE_ABFS)
-  # Set AZURESDK_ROOT_DIR if you have a custom install location of Azure Storage SDK CPP.
+  # Set AZURESDK_ROOT_DIR if you have a custom install location of Azure Storage
+  # SDK CPP.
   if(AZURESDK_ROOT_DIR)
     list(APPEND CMAKE_PREFIX_PATH ${AZURESDK_ROOT_DIR})
   endif()
