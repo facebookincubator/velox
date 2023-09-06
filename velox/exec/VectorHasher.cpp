@@ -270,7 +270,9 @@ bool VectorHasher::makeValueIdsDecoded(
           success = false;
         }
       }
-      result[row] = multiplier_ == 1 ? id : result[row] + multiplier_ * id;
+      if (success) {
+        result[row] = multiplier_ == 1 ? id : result[row] + multiplier_ * id;
+      }
     } else {
       if (id == 0) {
         id = kUnmappable;
@@ -279,8 +281,7 @@ bool VectorHasher::makeValueIdsDecoded(
       }
     }
 
-    bool shouldContinue = success || decodedBaseVisited < cachedHashes_.size();
-    return shouldContinue;
+    return success || decodedBaseVisited < cachedHashes_.size();
   });
 
   return success;
