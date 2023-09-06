@@ -404,7 +404,6 @@ class Re2SearchAndExtract final : public VectorFunction {
   const bool emptyNoMatch_;
 };
 
-template <typename T>
 class Re2ReplaceConstantPattern final : public VectorFunction {
  public:
   /**
@@ -438,7 +437,7 @@ class Re2ReplaceConstantPattern final : public VectorFunction {
   void apply(
       const SelectivityVector& rows,
       std::vector<VectorPtr>& args,
-      const TypePtr& /* outputType*/,
+      const TypePtr& /*outputType*/,
       EvalCtx& context,
       VectorPtr& resultRef) const final {
     VELOX_CHECK(args.size() == 3 || args.size() == 4);
@@ -474,6 +473,7 @@ class Re2ReplaceConstantPattern final : public VectorFunction {
     // Check for any issues in the regex pattern.
     try {
       checkForBadPattern(re_);
+      checkForCompatiblePattern(basePattern_);
     } catch (const std::exception& e) {
       context.setErrors(rows, std::current_exception());
       return;
@@ -502,34 +502,28 @@ class Re2ReplaceConstantPattern final : public VectorFunction {
       // Perform the global replace operation starting from the given position.
       int replacements = RE2::GlobalReplace(&strValue, re_, overwrite[0]);
 
-      // If there were replacements restore the original string structure.
-      if (replacements > 0) {
-        strValue = prefix + strValue;
-        const StringView& answer =
-            StringView(strValue.c_str(), strValue.size());
-        arrayWriter.add_item().append(answer);
-        resultWriter.commit();
-        mustRefSourceStrings = true;
-      }
+      strValue = prefix + strValue;
+      const StringView& answer =
+          StringView(strValue.c_str(), strValue.size());
+      arrayWriter.add_item().setNoCopy(answer);
+      resultWriter.commit();
     });
     resultWriter.finish();
 
     // Ensure that the strings in the result vector share the same string
     // buffers as the input vector. This optimization minimizes the copying of
     // data between vectors.
-    if (mustRefSourceStrings) {
-      resultRef->as<ArrayVector>()
-          ->elements()
-          ->as<FlatVector<StringView>>()
-          ->acquireSharedStringBuffers(args[0].get());
-    }
+    resultRef->as<ArrayVector>()
+        ->elements()
+        ->as<FlatVector<StringView>>()
+        ->acquireSharedStringBuffers(args[0].get());
+
   }
 
  private:
   const std::string basePattern_;
 };
 
-template <typename T>
 class Re2Replace final : public VectorFunction {
  public:
   explicit Re2Replace() {}
@@ -541,7 +535,7 @@ class Re2Replace final : public VectorFunction {
       VectorPtr& resultRef) const final {
     VELOX_CHECK(args.size() == 3 || args.size() == 4);
     if (auto pattern = getIfConstant<StringView>(*args[1])) {
-      Re2ReplaceConstantPattern<T>(*pattern).apply(
+      Re2ReplaceConstantPattern(*pattern).apply(
           rows, args, outputType, context, resultRef);
       return;
     }
@@ -564,96 +558,68 @@ class Re2Replace final : public VectorFunction {
 
     bool mustRefSourceStrings = false;
     VectorPtr localResult;
-    if (args.size() == 3) {
-      rows.applyToSelected([&](vector_size_t row) {
-        resultWriter.setOffset(row);
-        auto& arrayWriter = resultWriter.current();
+    int position = 0;
+    rows.applyToSelected([&](vector_size_t row) {
+      resultWriter.setOffset(row);
+      auto& arrayWriter = resultWriter.current();
 
-        const StringView& currentString = input->valueAt<StringView>(row);
-        std::string strValue = currentString.getString();
+      const StringView& currentString = input->valueAt<StringView>(row);
+      std::string strValue = currentString.getString();
 
-        const StringView& currentPattern = patternVec->valueAt<StringView>(row);
-        const re2::RE2 pattern(
-            patternVec->valueAt<StringView>(row).getString());
+      const StringView& currentPattern = patternVec->valueAt<StringView>(row);
+      const re2::RE2 pattern(currentPattern.getString());
 
-        try {
-          checkForBadPattern(pattern);
-        } catch (const std::exception& e) {
-          context.setErrors(rows, std::current_exception());
-          return;
-        }
+      try {
+        checkForBadPattern(pattern);
+        checkForCompatiblePattern(currentPattern.getString());
+      } catch (const std::exception& e) {
+        context.setErrors(rows, std::current_exception());
+        return;
+      }
 
-        const StringView& currentOverwrite =
-            overwriteVec->valueAt<StringView>(row);
-        std::vector<re2::StringPiece> overwrite{
-            toStringPiece(overwriteVec->valueAt<StringView>(row))};
+      const StringView& currentOverwrite =
+          overwriteVec->valueAt<StringView>(row);
+      // When using the standard way of creating a StringPiece in this file (toStringPiece)
+      // the line below "strValue.substr(position);" overwrites the overwrite data buffer.
+      // I am unsure of why this is the case, but when you create a StringPiece using .getString()
+      // this bug is avoided.
+      std::vector<re2::StringPiece> overwrite = {re2::StringPiece(currentOverwrite.getString())};
+      int position = 0;
+      std::string prefix;
+      if (args.size() == 4) {
+        exec::LocalDecodedVector positionVec(context, *args[3], rows);
+        position = positionVec->valueAt<int>(row);
+        VELOX_CHECK(!(position < 0 || position > strValue.length()));
 
-        int replacements = RE2::GlobalReplace(&strValue, pattern, overwrite[0]);
-
-        if (replacements > 0) {
-          const StringView& answer =
-              StringView(strValue.c_str(), strValue.size());
-          arrayWriter.add_item().setNoCopy(answer);
-          resultWriter.commit();
-          mustRefSourceStrings = true;
-        }
-      });
-    } else {
-      exec::LocalDecodedVector positionVec(context, *args[3], rows);
-      rows.applyToSelected([&](vector_size_t row) {
-        resultWriter.setOffset(row);
-        auto& arrayWriter = resultWriter.current();
-
-        const StringView& currentString = input->valueAt<StringView>(row);
-        std::string strValue = currentString.getString();
-
-        const StringView& currentPattern = patternVec->valueAt<StringView>(row);
-        const re2::RE2 pattern(
-            patternVec->valueAt<StringView>(row).getString());
-
-        try {
-          checkForBadPattern(pattern);
-        } catch (const std::exception& e) {
-          context.setErrors(rows, std::current_exception());
-          return;
-        }
-
-        const StringView& currentOverwrite =
-            overwriteVec->valueAt<StringView>(row);
-        std::vector<re2::StringPiece> overwrite{
-            toStringPiece(overwriteVec->valueAt<StringView>(row))};
-
-        int position = positionVec->valueAt<int>(row);
-
-        std::string prefix;
         if (position > 0) {
           prefix = strValue.substr(0, position);
           strValue = strValue.substr(position);
         }
-        int replacements = RE2::GlobalReplace(&strValue, pattern, overwrite[0]);
+      }
 
-        if (replacements > 0) {
-          strValue = prefix + strValue;
-          const StringView& answer =
-              StringView(strValue.c_str(), strValue.size());
-          auto& child = arrayWriter.add_item();
-          child.append(answer);
-          resultWriter.commit();
-          mustRefSourceStrings = true;
-        }
-      });
-    }
+      int replacements = RE2::GlobalReplace(&strValue, pattern, overwrite[0]);
+      if (position > 0) {
+        strValue = prefix + strValue;
+      }
+
+      const StringView& answer =
+          StringView(strValue.c_str(), strValue.size());
+      // When we use "arrayWriter.add_item().setNoCopy(answer)", we oftentimes get
+      // incorrect sections of data stored. Using append has resolved this error
+      arrayWriter.add_item().append(answer);
+      resultWriter.commit();
+    });
+
     resultWriter.finish();
 
     // Ensure that the strings in the result vector share the same string
     // buffers as the input vector. This optimization minimizes the copying of
     // data between vectors.
-    if (mustRefSourceStrings) {
-      resultRef->as<ArrayVector>()
-          ->elements()
-          ->as<FlatVector<StringView>>()
-          ->acquireSharedStringBuffers(args[0].get());
-    }
+    resultRef->as<ArrayVector>()
+        ->elements()
+        ->as<FlatVector<StringView>>()
+        ->acquireSharedStringBuffers(args[0].get());
+
   }
 };
 // Match string 'input' with a fixed pattern (with no wildcard characters).
@@ -1167,10 +1133,10 @@ std::shared_ptr<VectorFunction> makeRe2Replace(
     auto pattern =
         constantPattern->as<ConstantVector<StringView>>()->valueAt(0);
     // Use the overwrite value and logic as needed
-    return std::make_shared<Re2ReplaceConstantPattern<int64_t>>(pattern);
+    return std::make_shared<Re2ReplaceConstantPattern>(pattern);
   }
 
-  return std::make_shared<Re2Replace<int64_t>>();
+  return std::make_shared<Re2Replace>();
 }
 
 std::vector<std::shared_ptr<exec::FunctionSignature>> re2ExtractSignatures() {
