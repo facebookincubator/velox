@@ -13,9 +13,8 @@
 # limitations under the License.
 add_executable(velox_vector_hash_all_benchmark SimpleVectorHashAllBenchmark.cpp)
 
-target_link_libraries(
-  velox_vector_hash_all_benchmark velox_vector velox_vector_test Folly::folly
-  ${FOLLY_BENCHMARK} fmt::fmt)
+target_link_libraries(velox_vector_hash_all_benchmark velox_vector Folly::folly
+                      ${FOLLY_BENCHMARK} fmt::fmt)
 
 add_executable(velox_vector_selectivity_vector_benchmark
                SelectivityVectorBenchmark.cpp)
