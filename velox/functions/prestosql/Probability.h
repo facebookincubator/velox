@@ -15,6 +15,8 @@
  */
 #pragma once
 
+#include <boost/math/distributions.hpp>
+#include <boost/math/distributions/cauchy.hpp>
 #include <boost/math/distributions/laplace.hpp>
 #include "boost/math/distributions/beta.hpp"
 #include "boost/math/distributions/binomial.hpp"
@@ -116,7 +118,6 @@ struct CauchyCDFFunction {
       result = 1.0;
     } else {
       VELOX_USER_CHECK_GE(scale, 0, "scale must be greater than 0");
-
       boost::math::cauchy_distribution<> dist(median, scale);
       result = boost::math::cdf(dist, value);
     }
@@ -159,6 +160,29 @@ struct LaplaceCDFFunction {
       VELOX_USER_CHECK_GT(scale, 0, "scale must be greater than 0");
       boost::math::laplace_distribution<> laplaceDist(location, scale);
       result = boost::math::cdf(laplaceDist, x);
+    }
+  }
+};
+
+template <typename T>
+struct InverseCauchyCDFFunction {
+  VELOX_DEFINE_FUNCTION_TYPES(T);
+  FOLLY_ALWAYS_INLINE void
+  call(double& result, double median, double scale, double probability) {
+    if (std::isnan(median) || std::isnan(scale) || std::isnan(probability) ||
+        scale <= 0) {
+      result = std::numeric_limits<double>::quiet_NaN();
+      VELOX_USER_CHECK_GT(scale, 0, "scale must be greater than 0");
+    } else if (
+        std::isinf(median) || median == std::numeric_limits<double>::max()) {
+      result = -std::numeric_limits<double>::infinity();
+    } else if (std::isinf(scale)) {
+      result = median;
+    } else if (probability == 1.0) {
+      result = std::numeric_limits<double>::infinity();
+    } else {
+      boost::math::cauchy_distribution<> cauchyDist(median, scale);
+      result = boost::math::quantile(cauchyDist, probability);
     }
   }
 };

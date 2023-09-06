@@ -121,6 +121,8 @@ void registerSimpleFunctions(const std::string& prefix) {
       {prefix + "gamma_cdf"});
   registerFunction<LaplaceCDFFunction, double, double, double, double>(
       {prefix + "laplace_cdf"});
+  registerFunction<InverseCauchyCDFFunction, double, double, double, double>(
+      {prefix + "inverse_cauchy_cdf"});
   registerFunction<
       WilsonIntervalUpperFunction,
       double,
