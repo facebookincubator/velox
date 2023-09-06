@@ -213,16 +213,14 @@ BENCHMARK(computeValueIdsLowCardinalityNotAllUsed) {
   BenchmarkBase base;
 
   auto data = base.vectorMaker().flatVector<int64_t>(
-      cardinality, [](vector_size_t row) { return row; }, nullptr);
-  BufferPtr indices =
-      AlignedBuffer::allocate<vector_size_t>(batchSize, base.pool_.get());
+      cardinality, [](vector_size_t row) { return row; });
+  BufferPtr indices = allocateIndices(batchSize, base.pool_.get());
   auto rawIndices = indices->asMutable<vector_size_t>();
   // Assign indices such that array is reversed.
   for (size_t i = 0; i < batchSize; ++i) {
     rawIndices[i] = i % (cardinality - 1);
   }
-  auto values = BaseVector::wrapInDictionary(
-      BufferPtr(nullptr), indices, batchSize, data);
+  auto values = BaseVector::wrapInDictionary(nullptr, indices, batchSize, data);
 
   for (int i = 0; i < 10; i++) {
     raw_vector<uint64_t> hashes(batchSize);

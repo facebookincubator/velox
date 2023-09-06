@@ -246,7 +246,7 @@ bool VectorHasher::makeValueIdsDecoded(
   auto values = decoded_.data<T>();
 
   bool success = true;
-  int decodedBaseVisited = 0;
+  int numCachedHashes = 0;
   rows.testSelected([&](vector_size_t row) INLINE_LAMBDA {
     if constexpr (mayHaveNulls) {
       if (decoded_.isNullAt(row)) {
@@ -264,24 +264,22 @@ bool VectorHasher::makeValueIdsDecoded(
       if (id == 0) {
         T value = values[baseIndex];
         id = valueId(value);
-        decodedBaseVisited++;
+        numCachedHashes++;
         if (id == kUnmappable) {
           analyzeValue(value);
           success = false;
         }
       }
-      if (success) {
-        result[row] = multiplier_ == 1 ? id : result[row] + multiplier_ * id;
-      }
+      result[row] = multiplier_ == 1 ? id : result[row] + multiplier_ * id;
     } else {
       if (id == 0) {
         id = kUnmappable;
-        decodedBaseVisited++;
+        numCachedHashes++;
         analyzeValue(values[baseIndex]);
       }
     }
 
-    return success || decodedBaseVisited < cachedHashes_.size();
+    return success || numCachedHashes < cachedHashes_.size();
   });
 
   return success;
