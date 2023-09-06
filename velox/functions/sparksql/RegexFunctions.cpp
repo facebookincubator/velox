@@ -87,6 +87,11 @@ std::shared_ptr<exec::VectorFunction> makeRegexReplace(
     const std::vector<exec::VectorFunctionArg>& inputArgs,
     const core::QueryConfig& config) {
   auto result = makeRe2Replace(name, inputArgs, config);
+  // The below line is commented out and handled within the RegexReplace
+  // functions. This enables input of Vectors of patterns
+  // instead of just constant patterns.
+  // This was done in order to emulate specific unit tests done
+  // in Spark SQL.
   // ensureRegexIsCompatible("REGEXP_REPLACE", inputArgs[1].constantValue);
   return result;
 }

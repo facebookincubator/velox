@@ -63,6 +63,29 @@ void checkForBadPattern(const RE2& re) {
   }
 }
 
+void checkForCompatiblePattern(const std::string& pattern) {
+  // If in a character class, points to the [ at the beginning of that class.
+  const char* charClassStart = nullptr;
+  // This minimal regex parser looks just for the class begin/end markers.
+  for (const char* c = pattern.data(); c < pattern.data() + pattern.size(); ++c) {
+    if (*c == '\\') {
+      ++c;
+    } else if (*c == '[') {
+      if (charClassStart) {
+        VELOX_USER_FAIL(
+            "{} does not support character class union, intersection, "
+            "or difference ([a[b]], [a&&[b]], [a&&[^b]])", "Velox");
+      }
+      charClassStart = c;
+      // A ] immediately after a [ does not end the character class, and is
+      // instead adds the character ].
+    } else if (*c == ']' && charClassStart + 1 != c) {
+      charClassStart = nullptr;
+    }
+  }
+}
+
+
 FlatVector<bool>& ensureWritableBool(
     const SelectivityVector& rows,
     EvalCtx& context,
