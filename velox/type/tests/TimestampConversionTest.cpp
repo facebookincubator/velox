@@ -15,10 +15,9 @@
  */
 
 #include "velox/type/TimestampConversion.h"
-#include <common/base/tests/GTestUtils.h>
 #include <gmock/gmock.h>
-#include <gtest/gtest.h>
 #include "velox/common/base/VeloxException.h"
+#include "velox/common/base/tests/GTestUtils.h"
 #include "velox/external/date/tz.h"
 #include "velox/type/Timestamp.h"
 #include "velox/type/tz/TimeZoneMap.h"

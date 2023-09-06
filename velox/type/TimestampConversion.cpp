@@ -268,7 +268,6 @@ bool tryParseDateString(
     return false;
   }
 
-  // In standard-cast mode, no more trailing characters.
   if (mode == ParseMode::kStandardCast) {
     // Skip trailing spaces.
     while (pos < len && characterIsSpace(buf[pos])) {
@@ -287,7 +286,7 @@ bool tryParseDateString(
     return false;
   }
 
-  // In non-standard cast mode, any optional trailing 'T' or spaces followed
+  // In non-standard cast mode, an optional trailing 'T' or space followed
   // by any optional characters are valid patterns.
   if (mode == ParseMode::kNonStandardCast) {
     daysSinceEpoch = daysSinceEpochFromDate(year, month, day);
