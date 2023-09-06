@@ -182,15 +182,15 @@ TEST(DecimalTest, valueInPrecisionRange) {
   ASSERT_FALSE(DecimalUtil::valueInPrecisionRange<int64_t>(1000, 3));
   ASSERT_FALSE(DecimalUtil::valueInPrecisionRange<int64_t>(1234, 3));
   ASSERT_TRUE(DecimalUtil::valueInPrecisionRange<int64_t>(
-      DecimalUtil::kShortDecimalMax, 18));
+      DecimalUtil::kShortDecimalMax, ShortDecimalType::kMaxPrecision));
   ASSERT_FALSE(DecimalUtil::valueInPrecisionRange<int64_t>(
-      DecimalUtil::kShortDecimalMax + 1, 18));
+      DecimalUtil::kShortDecimalMax + 1, ShortDecimalType::kMaxPrecision));
   ASSERT_TRUE(DecimalUtil::valueInPrecisionRange<int128_t>(
-      DecimalUtil::kLongDecimalMax, 38));
+      DecimalUtil::kLongDecimalMax, LongDecimalType::kMaxPrecision));
   ASSERT_FALSE(DecimalUtil::valueInPrecisionRange<int128_t>(
-      DecimalUtil::kLongDecimalMax + 1, 38));
+      DecimalUtil::kLongDecimalMax + 1, LongDecimalType::kMaxPrecision));
   ASSERT_FALSE(DecimalUtil::valueInPrecisionRange<int128_t>(
-      DecimalUtil::kLongDecimalMin - 1, 38));
+      DecimalUtil::kLongDecimalMin - 1, LongDecimalType::kMaxPrecision));
 }
 
 } // namespace
