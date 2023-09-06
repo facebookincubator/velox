@@ -64,6 +64,11 @@ function install_gcs-sdk-cpp {
 function install_azure-storage-sdk-cpp {
   github_checkout azure/azure-sdk-for-cpp azure-storage-blobs_12.8.0
 
+  #install azure-core
+  cd sdk/core/azure-core
+  cmake_install -DCMAKE_BUILD_TYPE=Release -DBUILD_SHARED_LIBS=OFF
+
+  cd -
   # install azure-storage-common
   cd sdk/storage/azure-storage-common
   cmake_install -DCMAKE_BUILD_TYPE=Release -DBUILD_SHARED_LIBS=OFF
@@ -71,7 +76,6 @@ function install_azure-storage-sdk-cpp {
   cd -
   # install azure-storage-blobs
   cd sdk/storage/azure-storage-blobs
-   
   sed -i 's/"name": "azure-storage-common-cpp",/"name": "azure-storage-common-cpp"/' vcpkg.json
   sed -i 's/"default-features": false,//' vcpkg.json
   sed -i 's/"version>=": "12\.3\.1"//' vcpkg.json
