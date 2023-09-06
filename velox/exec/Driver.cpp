@@ -143,7 +143,7 @@ class CancelGuard {
       Task* task,
       ThreadState* state,
       std::function<void(StopReason)> onTerminate)
-      : task_(task), state_(state), onTerminate_(onTerminate) {}
+      : task_(task), state_(state), onTerminate_(std::move(onTerminate)) {}
 
   void notThrown() {
     isThrow_ = false;
@@ -231,6 +231,16 @@ std::optional<column_index_t> getIdentityProjection(
   return std::nullopt;
 }
 } // namespace
+
+void Driver::initializeOperators() {
+  if (operatorsInitialized_) {
+    return;
+  }
+  operatorsInitialized_ = true;
+  for (auto& op : operators_) {
+    op->initialize();
+  }
+}
 
 void Driver::pushdownFilters(int operatorIndex) {
   auto op = operators_[operatorIndex].get();
@@ -370,7 +380,10 @@ StopReason Driver::runInternal(
   });
 
   try {
-    int32_t numOperators = operators_.size();
+    // Invoked to initialize the operators once before driver starts execution.
+    self->initializeOperators();
+
+    const int32_t numOperators = operators_.size();
     ContinueFuture future;
 
     for (;;) {
@@ -382,6 +395,8 @@ StopReason Driver::runInternal(
         }
 
         auto op = operators_[i].get();
+        VELOX_CHECK(op->isInitialized());
+
         // In case we are blocked, this index will point to the operator, whose
         // queuedTime we should update.
         curOpIndex_ = i;
