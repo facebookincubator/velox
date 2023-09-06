@@ -68,7 +68,7 @@ class ArrayPositionTest : public FunctionBaseTest {
       assertEqualVectors(
           makeNullableFlatVector<int64_t>(expected), instanceResult);
     } else {
-      auto result = evaluate<SimpleVector<int64_t>>(
+      auto result = evaluate(
           "array_position(c0, c1)", makeRowVector({arrayVector, constSearch}));
       assertEqualVectors(makeNullableFlatVector<int64_t>(expected), result);
     }
@@ -884,8 +884,7 @@ TEST_F(ArrayPositionTest, dictionaryEncodingElements) {
       {{1, 2, 3, 4}, {3, 4, 5}, {1, 2, 3, 4}, {10, 9, 8, 7}});
   auto baseVectorSize = baseVector->size();
   const vector_size_t kTopLevelVectorSize = baseVectorSize * 2;
-  BufferPtr indices =
-      AlignedBuffer::allocate<vector_size_t>(kTopLevelVectorSize, pool_.get());
+  BufferPtr indices = allocateIndices(kTopLevelVectorSize, pool_.get());
   auto rawIndices = indices->asMutable<vector_size_t>();
   for (size_t i = 0; i < kTopLevelVectorSize; ++i) {
     rawIndices[i] = i % baseVectorSize;

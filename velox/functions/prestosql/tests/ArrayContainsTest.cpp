@@ -104,24 +104,21 @@ TEST_F(ArrayContainsTest, integerWithNulls) {
 }
 
 TEST_F(ArrayContainsTest, varcharNoNulls) {
-  std::vector<std::string> colors = {
-      "red", "green", "blue", "yellow", "orange", "purple"};
-
-  using S = StringView;
-
   auto arrayVector = makeArrayVector<StringView>({
-      {S("red"), S("blue")},
-      {S("blue"), S("yellow"), S("orange")},
+      {"red"_sv, "blue"_sv},
+      {"blue"_sv, "yellow"_sv, "orange"_sv},
       {},
-      {S("red"), S("purple"), S("green")},
+      {"red"_sv, "purple"_sv, "green"_sv},
   });
 
-  testContains<StringView>(arrayVector, "red", {true, false, false, true});
-  testContains<StringView>(arrayVector, "blue", {true, true, false, false});
-  testContains<StringView>(arrayVector, "yellow", {false, true, false, false});
-  testContains<StringView>(arrayVector, "green", {false, false, false, true});
+  testContains<StringView>(arrayVector, "red"_sv, {true, false, false, true});
+  testContains<StringView>(arrayVector, "blue"_sv, {true, true, false, false});
   testContains<StringView>(
-      arrayVector, "crimson red", {false, false, false, false});
+      arrayVector, "yellow"_sv, {false, true, false, false});
+  testContains<StringView>(
+      arrayVector, "green"_sv, {false, false, false, true});
+  testContains<StringView>(
+      arrayVector, "crimson red"_sv, {false, false, false, false});
   testContains(
       arrayVector,
       std::optional<StringView>(std::nullopt),
@@ -129,26 +126,22 @@ TEST_F(ArrayContainsTest, varcharNoNulls) {
 }
 
 TEST_F(ArrayContainsTest, varcharWithNulls) {
-  std::vector<std::string> colors = {
-      "red", "green", "blue", "yellow", "orange", "purple"};
-
-  using S = StringView;
-
   auto arrayVector = makeNullableArrayVector<StringView>({
-      {S("red"), S("blue")},
-      {std::nullopt, S("blue"), S("yellow"), S("orange")},
+      {"red"_sv, "blue"_sv},
+      {std::nullopt, "blue"_sv, "yellow"_sv, "orange"_sv},
       {},
-      {S("red"), S("purple"), S("green")},
+      {"red"_sv, "purple"_sv, "green"_sv},
   });
 
   testContains<StringView>(
-      arrayVector, "red", {true, std::nullopt, false, true});
-  testContains<StringView>(arrayVector, "blue", {true, true, false, false});
-  testContains<StringView>(arrayVector, "yellow", {false, true, false, false});
+      arrayVector, "red"_sv, {true, std::nullopt, false, true});
+  testContains<StringView>(arrayVector, "blue"_sv, {true, true, false, false});
   testContains<StringView>(
-      arrayVector, "green", {false, std::nullopt, false, true});
+      arrayVector, "yellow"_sv, {false, true, false, false});
   testContains<StringView>(
-      arrayVector, "crimson red", {false, std::nullopt, false, false});
+      arrayVector, "green"_sv, {false, std::nullopt, false, true});
+  testContains<StringView>(
+      arrayVector, "crimson red"_sv, {false, std::nullopt, false, false});
   testContains(
       arrayVector,
       std::optional<StringView>(std::nullopt),
@@ -324,8 +317,7 @@ TEST_F(ArrayContainsTest, dictionaryEncodingElements) {
       makeArrayVector<int64_t>({{1, 2, 3, 4}, {3, 4, 5}, {10, 9, 8, 7}});
   auto baseVectorSize = baseVector->size();
   const vector_size_t kTopLevelVectorSize = baseVectorSize * 2;
-  BufferPtr indices =
-      AlignedBuffer::allocate<vector_size_t>(kTopLevelVectorSize, pool_.get());
+  BufferPtr indices = allocateIndices(kTopLevelVectorSize, pool_.get());
   auto rawIndices = indices->asMutable<vector_size_t>();
   for (size_t i = 0; i < kTopLevelVectorSize; ++i) {
     rawIndices[i] = i % baseVectorSize;
