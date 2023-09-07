@@ -141,6 +141,7 @@ std::unique_ptr<SerializedPage> ExchangeClient::next(
 
 void ExchangeClient::request(const RequestSpec& requestSpec) {
   auto& exec = folly::QueuedImmediateExecutor::instance();
+  auto client = shared_from_this();
   for (auto& source : requestSpec.sources) {
     if (source->supportsFlowControlV2()) {
       auto future =
@@ -148,24 +149,26 @@ void ExchangeClient::request(const RequestSpec& requestSpec) {
       VELOX_CHECK(future.valid());
       std::move(future)
           .via(&exec)
-          .thenValue([this, requestSource = source](auto&& response) {
+          .thenValue([client, requestSource = source](auto&& response) {
             RequestSpec requestSpec;
             {
-              std::lock_guard<std::mutex> l(queue_->mutex());
+              std::lock_guard<std::mutex> l(client->queue_->mutex());
               if (!response.atEnd) {
                 if (response.bytes > 0) {
-                  producingSources_.push(requestSource);
+                  client->producingSources_.push(requestSource);
                 } else {
-                  emptySources_.push(requestSource);
+                  client->emptySources_.push(requestSource);
                 }
               }
-              requestSpec = pickSourcesToRequestLocked();
+              requestSpec = client->pickSourcesToRequestLocked();
             }
-            request(requestSpec);
+            client->request(requestSpec);
           })
           .thenError(
               folly::tag_t<std::exception>{},
-              [&](const std::exception& e) { queue_->setError(e.what()); });
+              [client](const std::exception& e) {
+                client->queue_->setError(e.what());
+              });
     } else {
       auto future = source->request(requestSpec.maxBytes);
       VELOX_CHECK(future.valid());

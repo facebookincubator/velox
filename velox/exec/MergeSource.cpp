@@ -17,6 +17,7 @@
 #include "velox/exec/MergeSource.h"
 
 #include <boost/circular_buffer.hpp>
+#include <memory>
 #include "velox/exec/Merge.h"
 #include "velox/vector/VectorStream.h"
 
@@ -122,7 +123,7 @@ class MergeExchangeSource : public MergeSource {
       int destination,
       memory::MemoryPool* FOLLY_NONNULL pool)
       : mergeExchange_(mergeExchange),
-        client_(std::make_unique<ExchangeClient>(
+        client_(std::make_shared<ExchangeClient>(
             taskId,
             destination,
             pool,
@@ -185,7 +186,7 @@ class MergeExchangeSource : public MergeSource {
 
  private:
   MergeExchange* const mergeExchange_;
-  std::unique_ptr<ExchangeClient> client_;
+  std::shared_ptr<ExchangeClient> client_;
   std::unique_ptr<ByteStream> inputStream_;
   std::unique_ptr<SerializedPage> currentPage_;
   bool atEnd_ = false;

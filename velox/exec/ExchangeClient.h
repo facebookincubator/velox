@@ -15,6 +15,7 @@
  */
 #pragma once
 
+#include <memory>
 #include "velox/common/base/RuntimeMetrics.h"
 #include "velox/exec/ExchangeQueue.h"
 #include "velox/exec/ExchangeSource.h"
@@ -23,7 +24,7 @@ namespace facebook::velox::exec {
 
 // Handle for a set of producers. This may be shared by multiple Exchanges, one
 // per consumer thread.
-class ExchangeClient {
+class ExchangeClient : std::enable_shared_from_this<ExchangeClient> {
  public:
   static constexpr int32_t kDefaultMaxQueuedBytes = 32 << 20; // 32 MB.
   static constexpr int32_t kDefaultMaxWaitSeconds = 2;
