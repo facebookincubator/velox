@@ -276,12 +276,23 @@ class variant {
 
   static inline void verifyArrayElements(const std::vector<variant>& inputs) {
     if (!inputs.empty()) {
-      const auto elementTypeKind = inputs[0].kind();
-      for (int i = 1; i < inputs.size(); ++i) {
-        VELOX_CHECK_EQ(
-            elementTypeKind,
-            inputs[i].kind(),
-            "All array elements must be of the same kind");
+      auto elementTypeKind = TypeKind::UNKNOWN;
+      // Find the typeKind from the first non-null element.
+      int i = 0;
+      for (; i < inputs.size(); ++i) {
+        if (!inputs[i].isNull()) {
+          elementTypeKind = inputs[i].kind();
+          break;
+        }
+      }
+      // Verify that the remaining non-null elements match.
+      for (; i < inputs.size(); ++i) {
+        if (!inputs[i].isNull()) {
+          VELOX_CHECK_EQ(
+              elementTypeKind,
+              inputs[i].kind(),
+              "All array elements must be of the same kind");
+        }
       }
     }
   }
