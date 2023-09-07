@@ -246,6 +246,18 @@ void printTableCss(
   }
 }
 
+std::string formatSignature(const std::string& signature) {
+    std::string modifiedSignature = signature; // Make a copy to modify.
+    size_t first_arrow_pos = modifiedSignature.find("->");
+    if (first_arrow_pos != std::string::npos) {
+        size_t second_arrow_pos = modifiedSignature.rfind("->");
+        if (second_arrow_pos != std::string::npos && second_arrow_pos != first_arrow_pos) {
+            modifiedSignature.replace(first_arrow_pos, second_arrow_pos - first_arrow_pos + 2, "->");
+        }
+    }
+    return modifiedSignature;
+}
+
 /// Returns alphabetically sorted list of scalar functions available in Velox,
 /// excluding companion functions.
 std::pair<std::unordered_map<std::string, std::vector<std::string>>, int>
@@ -253,24 +265,22 @@ getScalarSignatureMap(std::vector<std::string> names) {
   std::unordered_map<std::string, std::vector<std::string>> signatureMap;
   int maxScalarLength = 0;
 
-  for (const auto& scalarName : names) {
-    auto vectorFunctionSignatures =
-        exec::getVectorFunctionSignatures(scalarName);
-    auto simpleFunctionSignatures =
-        exec::simpleFunctions().getFunctionSignatures(scalarName);
+for (const auto& scalarName : names) {
+    auto vectorFunctionSignatures = exec::getVectorFunctionSignatures(scalarName);
+    auto simpleFunctionSignatures = exec::simpleFunctions().getFunctionSignatures(scalarName);
     std::vector<std::string> signatures;
 
     if (vectorFunctionSignatures.has_value()) {
-      for (const auto& signature : vectorFunctionSignatures.value()) {
-        signatures.push_back(fmt::format("{}", signature->toString()));
-      }
+        for (const auto& signature : vectorFunctionSignatures.value()) {
+            signatures.push_back(formatSignature(fmt::format("{}", signature->toString())));
+        }
     }
 
     for (const auto& signature : simpleFunctionSignatures) {
-      signatures.push_back(fmt::format("{}", signature->toString()));
+        signatures.push_back(formatSignature(fmt::format("{}", signature->toString())));
     }
     signatureMap[scalarName] = signatures;
-  }
+}
 
   return std::make_pair(signatureMap, maxScalarLength);
 }
@@ -286,7 +296,7 @@ getWindowSignatureMap(std::vector<std::string> names) {
     auto windowFunctionSignatures = exec::getWindowFunctionSignatures(name);
     std::vector<std::string> signatures;
     for (const auto& signature : windowFunctionSignatures.value()) {
-      signatures.push_back(fmt::format("{}", signature->toString()));
+      signatures.push_back(formatSignature(fmt::format("{}", signature->toString())));
     }
     signatureMap[name] = signatures;
   }
@@ -306,7 +316,7 @@ getAggregateSignatureMap(std::vector<std::string> names) {
         exec::getAggregateFunctionSignatures(name);
     std::vector<std::string> signatures;
     for (const auto& signature : aggregateFunctionSignatures.value()) {
-      signatures.push_back(fmt::format("{}", signature->toString()));
+      signatures.push_back(formatSignature(fmt::format("{}", signature->toString())));
     }
     signatureMap[name] = signatures;
   }
