@@ -141,7 +141,7 @@ class LeadLagFunction : public exec::WindowFunction {
       if (offsets_->isNullAt(i)) {
         rowNumbers_[i] = kNullRow;
       } else {
-        vector_size_t offset = offsets_->valueAt(i);
+        auto offset = offsets_->valueAt(i);
         VELOX_USER_CHECK_GE(offset, 0, "Offset must be at least 0");
 
         if constexpr (isLag) {

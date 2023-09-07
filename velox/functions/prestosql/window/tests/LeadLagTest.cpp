@@ -58,6 +58,9 @@ TEST_P(LeadLagTest, offset) {
       makeFlatVector<int64_t>({1, 2, 3, 1, 2}),
       // Offsets with nulls.
       makeNullableFlatVector<int64_t>({1, 2, 3, std::nullopt, 2}),
+      // Large offsets(larger than uint32_t's max).
+      makeFlatVector<int64_t>(
+          {8000000000, 8000000000, 8000000000, 8000000000, 8000000000}),
   });
 
   createDuckDbTable({data});
@@ -74,6 +77,9 @@ TEST_P(LeadLagTest, offset) {
 
   // Constant offset.
   assertResults(fn("c0, 2"));
+
+  // Large offset.
+  assertResults(fn("c0, c3"));
 
   // Constant null offset. DuckDB returns incorrect results for this case. It
   // treats null offset as 0.
