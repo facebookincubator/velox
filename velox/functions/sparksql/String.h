@@ -146,7 +146,8 @@ std::vector<std::shared_ptr<exec::FunctionSignature>> concatWsSignatures();
 
 std::shared_ptr<exec::VectorFunction> makeConcatWs(
     const std::string& name,
-    const std::vector<exec::VectorFunctionArg>& inputArgs);
+    const std::vector<exec::VectorFunctionArg>& inputArgs,
+    const core::QueryConfig& config);
 
 /// Expands each char of the digest data to two chars,
 /// representing the hex value of each digest char, in order.

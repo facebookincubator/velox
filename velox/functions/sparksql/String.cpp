@@ -260,7 +260,6 @@ class ConcatWs : public exec::VectorFunction {
     ConcatWsVariableParameters concatWsVariableParameters(connector);
     concatWsVariableParameters.apply(selected, args, nullptr, context, result);
   }
-}
 };
 
 } // namespace
@@ -323,7 +322,8 @@ std::vector<std::shared_ptr<exec::FunctionSignature>> concatWsSignatures() {
 
 std::shared_ptr<exec::VectorFunction> makeConcatWs(
     const std::string& name,
-    const std::vector<exec::VectorFunctionArg>& inputArgs) {
+    const std::vector<exec::VectorFunctionArg>& inputArgs,
+    const core::QueryConfig& /*config*/) {
   static const auto kConcatWsFunction = std::make_shared<ConcatWs>();
   return kConcatWsFunction;
 }
