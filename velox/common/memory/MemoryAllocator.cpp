@@ -63,36 +63,36 @@ MemoryAllocator::SizeMix MemoryAllocator::allocationSize(
   int32_t pagesToAlloc = 0;
   for (int32_t sizeIndex = sizeClassSizes_.size() - 1; sizeIndex >= 0;
        --sizeIndex) {
-    const int32_t size = sizeClassSizes_[sizeIndex];
+    const int32_t unitSize = sizeClassSizes_[sizeIndex];
     const bool isSmallest =
         sizeIndex == 0 || sizeClassSizes_[sizeIndex - 1] < minSizeClass;
     // If the size is less than 1/8 of the size from the next larger,
     // use the next larger size.
-    if (size > (needed + (needed / 8)) && !isSmallest) {
+    if (unitSize > (needed + (needed / 8)) && !isSmallest) {
       continue;
     }
-    int32_t numUnits = std::max(1, needed / size);
-    needed -= numUnits * size;
-    if (isSmallest && needed > 0) {
+    const int32_t maxNumUnits = Allocation::PageRun::kMaxPagesInRun / unitSize;
+    int32_t numUnits =
+        std::min<int32_t>(maxNumUnits, std::max(1, needed / unitSize));
+    needed -= numUnits * unitSize;
+    if (isSmallest && needed > 0 && numUnits < maxNumUnits) {
       // If needed / size had a remainder, add one more unit. Do this
       // if the present size class is the smallest or 'minSizeClass'
       // size.
       ++numUnits;
-      needed -= size;
+      needed -= unitSize;
     }
-    if (FOLLY_UNLIKELY(numUnits * size > Allocation::PageRun::kMaxPagesInRun)) {
-      VELOX_MEM_ALLOC_ERROR(fmt::format(
-          "Too many pages {} to allocate, the number of units {} at size class of {} exceeds the PageRun limit {}",
-          numPages,
-          numUnits,
-          size,
-          Allocation::PageRun::kMaxPagesInRun));
-    }
-    mix.sizeCounts[mix.numSizes] = numUnits;
-    pagesToAlloc += numUnits * size;
-    mix.sizeIndices[mix.numSizes++] = sizeIndex;
+    VELOX_CHECK_LE(numUnits * unitSize, Allocation::PageRun::kMaxPagesInRun);
+
+    mix.sizeCounts.push_back(numUnits);
+    mix.sizeIndices.push_back(sizeIndex);
+    ++mix.numSizes;
+    pagesToAlloc += numUnits * unitSize;
     if (needed <= 0) {
       break;
+    }
+    if (FOLLY_UNLIKELY(numUnits == maxNumUnits)) {
+      ++sizeIndex;
     }
   }
   mix.totalPages = pagesToAlloc;

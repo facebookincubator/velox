@@ -426,14 +426,19 @@ class MemoryAllocator : public std::enable_shared_from_this<MemoryAllocator> {
   // allocation.
   struct SizeMix {
     // Index into 'sizeClassSizes_'
-    std::array<int32_t, kMaxSizeClasses> sizeIndices{};
+    std::vector<int32_t> sizeIndices;
     // Number of items of the class of the corresponding element in
     // '"sizeIndices'.
-    std::array<int32_t, kMaxSizeClasses> sizeCounts{};
+    std::vector<int32_t> sizeCounts;
     // Number of valid elements in 'sizeCounts' and 'sizeIndices'.
     int32_t numSizes{0};
     // Total number of pages.
     int32_t totalPages{0};
+
+    SizeMix() {
+      sizeIndices.reserve(kMaxSizeClasses);
+      sizeCounts.reserve(kMaxSizeClasses);
+    }
   };
 
   // Returns a mix of standard sizes and allocation counts for covering
