@@ -308,13 +308,14 @@ std::vector<std::shared_ptr<exec::FunctionSignature>> concatWsSignatures() {
       // varchar, varchar,... -> varchar.
       exec::FunctionSignatureBuilder()
           .returnType("varchar")
+          .constantArgumentType("varchar")
           .argumentType("varchar")
           .variableArity()
           .build(),
       // varchar, array(varchar) -> varchar.
       exec::FunctionSignatureBuilder()
           .returnType("varchar")
-          .argumentType("varchar")
+          .constantArgumentType("varchar")
           .argumentType("array(varchar)")
           .build(),
   };
