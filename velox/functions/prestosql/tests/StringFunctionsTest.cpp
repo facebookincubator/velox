@@ -192,7 +192,6 @@ class StringFunctionsTest : public FunctionBaseTest {
 
     auto buildConcatQuery = [&]() {
       std::string output = "concat(";
-
       for (int i = 0; i < argsCount; i++) {
         if (i != 0) {
           output += ",";
@@ -218,9 +217,8 @@ class StringFunctionsTest : public FunctionBaseTest {
     auto concatStd = [](const std::vector<std::string>& inputs) {
       std::string output;
       for (auto& input : inputs) {
-        output += inputs[i];
+        output += input;
       }
-
       return output;
     };
 
