@@ -15,6 +15,7 @@
  */
 #include "velox/expression/VectorFunction.h"
 #include "velox/functions/lib/LambdaFunctionUtil.h"
+
 namespace facebook::velox::functions {
 namespace {
 
@@ -171,12 +172,10 @@ class ReduceFunction : public exec::VectorFunction {
           nullptr,
           &localResult);
     }
-    context.moveOrCopyResult(localResult, *nonNullRows, result);
-    for (int i = 0; i < flatArray->size(); i++) {
-      if (flatArray->isNullAt(i)) {
-        result->setNull(i, true);
-      }
+    if (flatArray->rawNulls()) {
+      localResult->addNulls(flatArray->rawNulls(), rows);
     }
+    context.moveOrCopyResult(localResult, rows, result);
   }
 
   static std::vector<std::shared_ptr<exec::FunctionSignature>> signatures() {

@@ -125,21 +125,23 @@ TEST_F(ReduceTest, finalSelection) {
       "reduce(c0, 10, (s, x) -> s + x, s -> row_constructor(s)))",
       input);
 
-  auto expectedResult = makeFlatVector<int64_t>(
-      size,
-      [](auto row) -> int64_t {
-        if (row < 100) {
-          return row;
-        } else {
-          int64_t sum = 10;
-          for (auto i = 0; i < row % 5; i++) {
-            sum += row + i;
-          }
-          return sum;
-        }
-      },
+  auto expectedResult = makeRowVector(
+      {makeFlatVector<int64_t>(
+          size,
+          [](auto row) -> int64_t {
+            if (row < 100) {
+              return row;
+            } else {
+              int64_t sum = 10;
+              for (auto i = 0; i < row % 5; i++) {
+                sum += row + i;
+              }
+              return sum;
+            }
+          },
+          nullEvery(11))},
       nullEvery(11));
-  assertEqualVectors(expectedResult, result->childAt(0));
+  assertEqualVectors(expectedResult, result);
 }
 
 TEST_F(ReduceTest, elementIndicesOverwrite) {
