@@ -597,6 +597,7 @@ Valid examples
 ::
 
   SELECT cast('1970-01-01' as date); -- 1970-01-01
+  SELECT cast('1970-01-01 ' as date); -- 1970-01-01
 
 **cast_string_to_date_is_iso_8601=false**
 
@@ -622,7 +623,6 @@ Invalid examples
   SELECT cast('2012-Oct-23' as date); -- Invalid argument
   SELECT cast('2012/10/23' as date); -- Invalid argument
   SELECT cast('2012.10.23' as date); -- Invalid argument
-  SELECT cast('2012-10-23 ' as date); -- Invalid argument
 
 **cast_string_to_date_is_iso_8601=false**
 

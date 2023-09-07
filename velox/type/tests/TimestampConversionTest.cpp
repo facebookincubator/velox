@@ -121,6 +121,8 @@ TEST(DateTimeUtilTest, castFromDateString) {
     EXPECT_EQ(1, castFromDateString("+1970-01-02", isIso8601));
     EXPECT_EQ(-719893, castFromDateString("-1-1-1", isIso8601));
 
+    EXPECT_EQ(0, castFromDateString("1970-01-01 ", isIso8601));
+    EXPECT_EQ(0, castFromDateString(" 1970-01-01 ", isIso8601));
     EXPECT_EQ(0, castFromDateString(" 1970-01-01", isIso8601));
   }
 
@@ -131,9 +133,6 @@ TEST(DateTimeUtilTest, castFromDateString) {
   EXPECT_EQ(16512, castFromDateString("2015-03-18T123123", false));
   EXPECT_EQ(16512, castFromDateString("2015-03-18 123142", false));
   EXPECT_EQ(16512, castFromDateString("2015-03-18 (BC)", false));
-
-  EXPECT_EQ(0, castFromDateString("1970-01-01 ", false));
-  EXPECT_EQ(0, castFromDateString(" 1970-01-01 ", false));
 }
 
 TEST(DateTimeUtilTest, castFromDateStringInvalid) {
@@ -177,9 +176,6 @@ TEST(DateTimeUtilTest, castFromDateStringInvalid) {
   testCastFromDateStringInvalid("2015-03-18T", true);
   testCastFromDateStringInvalid("2015-03-18T123412", true);
   testCastFromDateStringInvalid("2015-03-18 (BC)", true);
-
-  testCastFromDateStringInvalid("1970-01-01 ", true);
-  testCastFromDateStringInvalid(" 1970-01-01 ", true);
 }
 
 TEST(DateTimeUtilTest, fromTimeString) {
