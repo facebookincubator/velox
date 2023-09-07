@@ -804,7 +804,7 @@ evaluating. Consider some examples.</p>
 </pre></div>
 </div>
 <p>Here, a &gt; 5 is evaluated on all rows where “a” is not null, but b &gt; 7 is
-evaluated on rows where b is not null and a is either null or not &gt; 5.</p>
+evaluated on rows where b is not null and a &gt; 5 is true.</p>
 <div class="highlight-c++ notranslate"><div class="highlight"><pre><span></span><span class="n">IF</span><span class="p">(</span><span class="n">condition</span><span class="p">,</span><span class="w"> </span><span class="n">a</span><span class="w"> </span><span class="o">+</span><span class="w"> </span><span class="mi">5</span><span class="p">,</span><span class="w"> </span><span class="n">b</span><span class="w"> </span><span class="o">-</span><span class="w"> </span><span class="mi">3</span><span class="p">)</span><span class="w"></span>
 </pre></div>
 </div>
@@ -1217,14 +1217,14 @@ result. Here is an example of a test for simple function “sqrt”:</p>
 <span class="w">  </span><span class="p">};</span><span class="w"></span>
 
 <span class="w">  </span><span class="n">EXPECT_EQ</span><span class="p">(</span><span class="mf">1.0</span><span class="p">,</span><span class="w"> </span><span class="n">sqrt</span><span class="p">(</span><span class="mi">1</span><span class="p">));</span><span class="w"></span>
-<span class="w">  </span><span class="n">EXPECT_TRUE</span><span class="p">(</span><span class="n">std</span><span class="o">::</span><span class="n">isnan</span><span class="p">(</span><span class="n">sqrt</span><span class="p">(</span><span class="mf">-1.0</span><span class="p">).</span><span class="n">value_or</span><span class="p">(</span><span class="mi">-1</span><span class="p">)));</span><span class="w"></span>
+<span class="w">  </span><span class="n">EXPECT_THAT</span><span class="p">(</span><span class="n">sqrt</span><span class="p">(</span><span class="mf">-1.0</span><span class="p">),</span><span class="w"> </span><span class="n">IsNan</span><span class="p">());</span><span class="w"></span>
 <span class="w">  </span><span class="n">EXPECT_EQ</span><span class="p">(</span><span class="mi">0</span><span class="p">,</span><span class="w"> </span><span class="n">sqrt</span><span class="p">(</span><span class="mi">0</span><span class="p">));</span><span class="w"></span>
 
 <span class="w">  </span><span class="n">EXPECT_EQ</span><span class="p">(</span><span class="mi">2</span><span class="p">,</span><span class="w"> </span><span class="n">sqrt</span><span class="p">(</span><span class="mi">4</span><span class="p">));</span><span class="w"></span>
 <span class="w">  </span><span class="n">EXPECT_EQ</span><span class="p">(</span><span class="mi">3</span><span class="p">,</span><span class="w"> </span><span class="n">sqrt</span><span class="p">(</span><span class="mi">9</span><span class="p">));</span><span class="w"></span>
 <span class="w">  </span><span class="n">EXPECT_FLOAT_EQ</span><span class="p">(</span><span class="mf">1.34078e+154</span><span class="p">,</span><span class="w"> </span><span class="n">sqrt</span><span class="p">(</span><span class="n">kDoubleMax</span><span class="p">).</span><span class="n">value_or</span><span class="p">(</span><span class="mi">-1</span><span class="p">));</span><span class="w"></span>
 <span class="w">  </span><span class="n">EXPECT_EQ</span><span class="p">(</span><span class="n">std</span><span class="o">::</span><span class="n">nullopt</span><span class="p">,</span><span class="w"> </span><span class="n">sqrt</span><span class="p">(</span><span class="n">std</span><span class="o">::</span><span class="n">nullopt</span><span class="p">));</span><span class="w"></span>
-<span class="w">  </span><span class="n">EXPECT_TRUE</span><span class="p">(</span><span class="n">std</span><span class="o">::</span><span class="n">isnan</span><span class="p">(</span><span class="n">sqrt</span><span class="p">(</span><span class="n">kNan</span><span class="p">).</span><span class="n">value_or</span><span class="p">(</span><span class="mi">-1</span><span class="p">)));</span><span class="w"></span>
+<span class="w">  </span><span class="n">EXPECT_THAT</span><span class="p">(</span><span class="n">sqrt</span><span class="p">(</span><span class="n">kNan</span><span class="p">),</span><span class="w"> </span><span class="n">IsNan</span><span class="p">());</span><span class="w"></span>
 <span class="p">}</span><span class="w"></span>
 </pre></div>
 </div>
@@ -1262,7 +1262,7 @@ multiple implementations, then the order in which function resolution will proce
 </div></blockquote>
 <p>The available function with lowest rank is picked during function resolution.
 If there is more than one function with the same lowest rank, we count the number of concrete types in the signature
-and return the signature with highest concrete types count. (a concrete type is any type other variadic or generic).</p>
+and return the signature with highest concrete types count. (a concrete type is any type other than variadic or generic).</p>
 <p>For example: consider the two signatures bellow which are both of type 4.</p>
 <div class="highlight-c++ notranslate"><div class="highlight"><pre><span></span><span class="kt">void</span><span class="w"> </span><span class="n">call</span><span class="p">(</span><span class="kt">bool</span><span class="o">&amp;</span><span class="w"> </span><span class="n">out</span><span class="p">,</span><span class="w"> </span><span class="k">const</span><span class="w"> </span><span class="kt">int</span><span class="o">&amp;</span><span class="w"> </span><span class="p">,</span><span class="w"> </span><span class="k">const</span><span class="w"> </span><span class="n">Any</span><span class="o">&amp;</span><span class="w"> </span><span class="p">,</span><span class="w"> </span><span class="k">const</span><span class="o">&amp;</span><span class="w"> </span><span class="n">Variadic</span><span class="o">&lt;</span><span class="kt">int</span><span class="o">&gt;</span><span class="p">)</span><span class="w">    </span><span class="c1">// concrete types = 2</span>
 <span class="kt">void</span><span class="w"> </span><span class="n">call</span><span class="p">(</span><span class="kt">bool</span><span class="o">&amp;</span><span class="w"> </span><span class="n">out</span><span class="p">,</span><span class="w"> </span><span class="k">const</span><span class="w"> </span><span class="kt">int</span><span class="o">&amp;</span><span class="w"> </span><span class="p">,</span><span class="w"> </span><span class="k">const</span><span class="w"> </span><span class="n">Any</span><span class="o">&amp;</span><span class="w"> </span><span class="p">,</span><span class="k">const</span><span class="w"> </span><span class="n">Any</span><span class="o">&amp;</span><span class="p">)</span><span class="w">               </span><span class="c1">// concrete types = 1</span>
