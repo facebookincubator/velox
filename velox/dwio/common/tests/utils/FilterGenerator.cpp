@@ -159,6 +159,19 @@ std::unique_ptr<Filter> ColumnStats<double>::makeRangeFilter(
 }
 
 template <>
+std::unique_ptr<Filter> ColumnStats<int128_t>::makeRangeFilter(
+    const FilterSpec& filterSpec) {
+  if (values_.empty()) {
+    return std::make_unique<velox::common::IsNull>();
+  }
+  int128_t lower = valueAtPct(filterSpec.startPct);
+  int128_t upper = valueAtPct(filterSpec.startPct + filterSpec.selectPct);
+
+  return std::make_unique<velox::common::HugeintRange>(
+      lower, upper, filterSpec.allowNulls_);
+}
+
+template <>
 std::unique_ptr<Filter> ColumnStats<StringView>::makeRangeFilter(
     const FilterSpec& filterSpec) {
   if (values_.empty()) {
@@ -441,6 +454,9 @@ SubfieldFilters FilterGenerator::makeSubfieldFilters(
         break;
       case TypeKind::BIGINT:
         stats = makeStats<TypeKind::BIGINT>(vector->type(), rowType_);
+        break;
+      case TypeKind::HUGEINT:
+        stats = makeStats<TypeKind::HUGEINT>(vector->type(), rowType_);
         break;
       case TypeKind::VARCHAR:
         stats = makeStats<TypeKind::VARCHAR>(vector->type(), rowType_);

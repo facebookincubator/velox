@@ -96,6 +96,14 @@ class ParquetReaderBenchmark {
             FilterKind::kDoubleRange,
             isForRowGroupSkip,
             allowNulls);
+      case TypeKind::HUGEINT:
+        return FilterSpec(
+            columnName,
+            startPct,
+            selectPct,
+            FilterKind::kHugeintRange,
+            isForRowGroupSkip,
+            allowNulls);
       default:
         VELOX_FAIL("Unsupported Data Type {}", type->childAt(0)->toString());
     }
@@ -136,6 +144,11 @@ class ParquetReaderBenchmark {
     return rowReader;
   }
 
+  // This method is the place where we do the read opeartions.
+  // scanSpec contains the setting of filters. e.g.
+  // filterRateX100 = 30 means it would filter out 70% of rows and 30% remain.
+  // nullsRateX100 = 70 means it would filter out 70% of rows and 30% remain.
+  // Return the number of rows after the filter and null-filter.
   int read(
       const RowTypePtr& rowType,
       std::shared_ptr<ScanSpec> scanSpec,
@@ -185,6 +198,7 @@ class ParquetReaderBenchmark {
     folly::BenchmarkSuspender suspender;
 
     auto rowType = ROW({columnName}, {type});
+    // Generating the data (consider the null rate).
     auto batches =
         dataSetBuilder_->makeDataset(rowType, kNumBatches, kNumRowsPerBatch)
             .withRowGroupSpecificData(kNumRowsPerRowGroup)
@@ -193,7 +207,7 @@ class ParquetReaderBenchmark {
     writeToFile(*batches, true);
     std::vector<FilterSpec> filterSpecs;
 
-    //    Filters on List and Map are not supported currently.
+    // Filters on List and Map are not supported currently.
     if (type->kind() != TypeKind::ARRAY && type->kind() != TypeKind::MAP) {
       filterSpecs.emplace_back(createFilterSpec(
           columnName, startPct, selectPct, rowType, false, false));
@@ -208,6 +222,7 @@ class ParquetReaderBenchmark {
     // upperBound and lowerBound are introduced to estimate the result size.
     auto resultSize = read(rowType, scanSpec, nextSize);
 
+    // Calculate the expected number of rows after the filters.
     // Add one to expected to avoid 0 in calculating upperBound and lowerBound.
     int expected = kNumBatches * kNumRowsPerBatch *
             (1 - (double)nullsRateX100 / 100) * ((double)selectPct / 100) +
@@ -366,6 +381,9 @@ void run(
 #define PARQUET_BENCHMARKS_NO_FILTER(_type_, _name_) \
   PARQUET_BENCHMARKS_FILTERS(_type_, _name_, 100)    \
   BENCHMARK_DRAW_LINE();
+
+PARQUET_BENCHMARKS(DECIMAL(18, 3), ShortDecimalType);
+PARQUET_BENCHMARKS(DECIMAL(38, 3), LongDecimalType);
 
 PARQUET_BENCHMARKS(BIGINT(), BigInt);
 PARQUET_BENCHMARKS(DOUBLE(), Double);

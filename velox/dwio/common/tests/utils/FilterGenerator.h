@@ -450,6 +450,10 @@ std::unique_ptr<Filter> ColumnStats<double>::makeRangeFilter(
     const FilterSpec& filterSpec);
 
 template <>
+std::unique_ptr<Filter> ColumnStats<int128_t>::makeRangeFilter(
+    const FilterSpec& filterSpec);
+
+template <>
 std::unique_ptr<Filter> ColumnStats<StringView>::makeRandomFilter(
     const FilterSpec& filterSpec);
 
