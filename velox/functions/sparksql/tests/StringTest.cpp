@@ -757,7 +757,7 @@ TEST_F(StringTest, translateNonconstantMatch) {
 }
 
 // Test concat_ws vector function
-TEST_F(StringFunctionsTest, concat_ws) {
+TEST_F(StringTest, concat_ws) {
   size_t maxArgsCount = 10; // cols
   size_t rowCount = 100;
   size_t maxStringLength = 100;
