@@ -70,11 +70,20 @@ inline velox::variant pyToVariant(const py::handle& obj) {
     std::vector<velox::variant> result;
     for (auto& item : objAsList) {
       result.push_back(pyToVariant(item));
-      if ((result.front().kind() != result.back().kind()) && !(item.is_none())) {
+      if ((result.front().kind() != result.back().kind()) &&
+          !(item.is_none())) {
         throw py::type_error("Array must consist of elements of only one kind");
       }
     }
     return velox::variant::array(std::move(result));
+  } else if (py::isinstance<py::dict>(obj)) {
+    py::dict objAsDict = py::cast<py::dict>(obj);
+    std::map<velox::variant, velox::variant> map;
+    for (auto item : objAsDict) {
+      map.emplace(
+          std::make_pair(pyToVariant(item.first), pyToVariant(item.second)));
+    }
+    return velox::variant::map(std::move(map));
   } else {
     throw py::type_error("Invalid type of object");
   }
@@ -449,6 +458,15 @@ static void addVectorBindings(
       m, "ArrayVector", py::module_local(asModuleLocalDefinitions))
       .def("elements", [](ArrayVectorPtr vec) -> VectorPtr {
         return vec->elements();
+      });
+
+  py::class_<MapVector, MapVectorPtr, BaseVector>(
+      m, "MapVector", py::module_local(asModuleLocalDefinitions))
+      .def(
+          "mapKeys",
+          [](MapVectorPtr vec) -> VectorPtr { return vec->mapKeys(); })
+      .def("mapValues", [](MapVectorPtr vec) -> VectorPtr {
+        return vec->mapValues();
       });
 
   constexpr TypeKind supportedTypes[] = {

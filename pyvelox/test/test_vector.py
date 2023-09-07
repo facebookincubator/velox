@@ -178,6 +178,18 @@ class TestVeloxVector(unittest.TestCase):
         with self.assertRaises(RuntimeError):
             v = pv.from_list([[None], [None, None, None]])
 
+    def test_map_vector(self):
+        v = pv.from_list([{"a": 1}, {"b": 2}])
+        self.assertTrue(isinstance(v, pv.MapVector))
+        self.assertTrue(isinstance(v.mapKeys(), pv.FlatVector_VARBINARY))
+        self.assertTrue(isinstance(v.mapValues(), pv.FlatVector_BIGINT))
+        self.assertEqual(len(v), 2)
+        expected_keys = ["a", "b"]
+        expected_values = [1, 2]
+        for i in range(len(v)):
+            self.assertEqual(expected_keys[i], v.mapKeys()[i])
+            self.assertEqual(expected_values[i], v.mapValues()[i])
+
     def test_to_string(self):
         self.assertEqual(
             str(pv.from_list([1, 2, 3])),

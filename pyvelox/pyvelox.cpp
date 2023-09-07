@@ -143,7 +143,9 @@ static VectorPtr pyListToVector(
   if (first_kind == velox::TypeKind::INVALID) {
     throw py::value_error(
         "Can't create a Velox vector consisting of only None");
-  } else if (first_kind == velox::TypeKind::ARRAY) {
+  } else if (
+      first_kind == velox::TypeKind::ARRAY ||
+      first_kind == velox::TypeKind::MAP) {
     return facebook::velox::core::variantsToVector(variants, pool);
   }
 

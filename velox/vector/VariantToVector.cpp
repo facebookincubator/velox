@@ -132,6 +132,16 @@ static void computeElementsCountsAndType(
         computeElementsCountsAndType(counter.children[0], elt);
       }
     } break;
+    case TypeKind::MAP: {
+      const std::map<variant, variant>& elements = v.map();
+      // map vector may have two data types each for the key
+      // and the value
+      counter.children.resize(2);
+      for (const std::pair<variant, variant> pair : elements) {
+        computeElementsCountsAndType(counter.children[0], pair.first);
+        computeElementsCountsAndType(counter.children[1], pair.second);
+      }
+    } break;
     default:
       // we have a simple type with no children
       break;
@@ -153,11 +163,30 @@ static VectorPtr allocateVector(
       return std::make_shared<ArrayVector>(
           pool,
           ARRAY(elements->type()),
-          nulls,
+          std::move(nulls),
           counter.elementCount,
           std::move(offsets),
           std::move(sizes),
           std::move(elements));
+    }
+    case TypeKind::MAP: {
+      BufferPtr sizes =
+          AlignedBuffer::allocate<vector_size_t>(counter.elementCount, pool, 0);
+      BufferPtr offsets =
+          AlignedBuffer::allocate<vector_size_t>(counter.elementCount, pool, 0);
+      BufferPtr nulls =
+          AlignedBuffer::allocate<vector_size_t>(counter.elementCount, pool, 0);
+      VectorPtr keys = allocateVector(counter.children.at(0), pool);
+      VectorPtr values = allocateVector(counter.children.at(1), pool);
+      return std::make_shared<MapVector>(
+          pool,
+          MAP(keys->type(), values->type()),
+          nulls,
+          counter.elementCount,
+          std::move(offsets),
+          std::move(sizes),
+          std::move(keys),
+          std::move(values));
     }
     default: {
       TypePtr type;
@@ -208,6 +237,17 @@ static void insertVariantIntoVector(
         for (const variant& elt : elements) {
           insertVariantIntoVector(
               counter.children.at(0), elt, asArray->elements());
+        }
+        break;
+      }
+      case TypeKind::MAP: {
+        auto asMap = vector->as<MapVector>();
+        const std::map<variant, variant>& elements = v.map();
+        VectorPtr& keys = asMap->mapKeys();
+        VectorPtr& values = asMap->mapValues();
+        for (const auto& pair : elements) {
+          insertVariantIntoVector(counter.children.at(0), pair.first, keys);
+          insertVariantIntoVector(counter.children.at(1), pair.second, values);
         }
         break;
       }
