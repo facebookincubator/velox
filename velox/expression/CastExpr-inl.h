@@ -564,6 +564,45 @@ void CastExpr::applyVarcharToDecimalCastKernel(
   });
 }
 
+template <typename TOutput>
+void CastExpr::applyDoubleToDecimal(
+    const SelectivityVector& rows,
+    const BaseVector& input,
+    exec::EvalCtx& context,
+    const TypePtr& toType,
+    VectorPtr& castResult) {
+  auto sourceVector = input.as<SimpleVector<double>>();
+  auto rawResults =
+      castResult->asUnchecked<FlatVector<TOutput>>()->mutableRawValues();
+  const auto toPrecisionScale = getDecimalPrecisionScale(*toType);
+  applyToSelectedNoThrowLocal(
+      context, rows, castResult, [&](vector_size_t row) {
+        if (sourceVector->isNullAt(row)) {
+          castResult->setNull(row, true);
+          return;
+        }
+        std::string error;
+        auto rescaledValue = DecimalUtil::rescaleDouble<TOutput>(
+            sourceVector->valueAt(row),
+            toPrecisionScale.first,
+            toPrecisionScale.second,
+            error);
+        if (!error.empty()) {
+          if (setNullInResultAtError()) {
+            castResult->setNull(row, true);
+          } else {
+            context.setVeloxExceptionError(
+                row, makeBadCastException(toType, input, row, error));
+          }
+        } else if (rescaledValue.has_value()) {
+          rawResults[row] = rescaledValue.value();
+        } else {
+          castResult->setNull(row, true);
+
+        }
+      });
+}
+
 template <typename FromNativeType, TypeKind ToKind>
 VectorPtr CastExpr::applyDecimalToFloatCast(
     const SelectivityVector& rows,

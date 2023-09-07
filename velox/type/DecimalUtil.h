@@ -16,6 +16,7 @@
 
 #pragma once
 
+#include <folly/Conv.h>
 #include <string>
 #include "velox/common/base/CheckedArithmetic.h"
 #include "velox/common/base/Exceptions.h"
@@ -205,6 +206,48 @@ class DecimalUtil {
           toScale);
     }
     return static_cast<TOutput>(rescaledValue);
+  }
+
+  /// Rescale a double value to decimal value.
+  ///
+  /// Use `folly::tryTo` to convert a double value to int128_t or int64_t. It
+  /// returns an error when overflow occurs so that we could determine whether
+  /// an overflow occurs through checking the result.
+  ///
+  /// Normally, return the rescaled value. Otherwise, if the `toValue` overflows
+  /// the TOutput's limits or the `toValue` exceeds the precision's limits, it
+  /// will throw an exception.
+  template <typename TOutput>
+  inline static std::optional<TOutput> rescaleDouble(
+      double inputValue,
+      const int toPrecision,
+      const int toScale,
+      std::string& error) {
+    if (!std::isfinite(inputValue)) {
+      error = "Value is not finite.";
+      return std::nullopt;
+    }
+
+    auto toValue =
+        inputValue * static_cast<double>(DecimalUtil::kPowersOfTen[toScale]);
+
+    TOutput rescaledValue;
+    bool isOverflow = !std::isfinite(toValue);
+    if (!isOverflow) {
+      auto result = folly::tryTo<TOutput>(std::round(toValue));
+      if (result.hasError()) {
+        isOverflow = true;
+      } else {
+        rescaledValue = result.value();
+      }
+    }
+
+    if (isOverflow || rescaledValue < -DecimalUtil::kPowersOfTen[toPrecision] ||
+        rescaledValue > DecimalUtil::kPowersOfTen[toPrecision]) {
+      error = "Rescaled value is overflowed.";
+      return std::nullopt;
+    }
+    return rescaledValue;
   }
 
   template <typename R, typename A, typename B>
