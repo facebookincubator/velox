@@ -165,6 +165,40 @@ std::unique_ptr<Filter> ColumnStats<StringView>::makeRangeFilter(
     return std::make_unique<velox::common::IsNull>();
   }
 
+  int32_t lowerIndex;
+  int32_t upperIndex;
+  StringView lower = valueAtPct(filterSpec.startPct, &lowerIndex);
+  StringView upper =
+      valueAtPct(filterSpec.startPct + filterSpec.selectPct, &upperIndex);
+
+  // When the filter rate is 0%, we should not allow the value at the boundary.
+  if (filterSpec.selectPct == 0) {
+    return std::make_unique<velox::common::BytesRange>(
+        std::string(lower),
+        false,
+        true,
+        std::string(upper),
+        false,
+        true,
+        filterSpec.allowNulls_);
+  }
+  return std::make_unique<velox::common::BytesRange>(
+      std::string(lower),
+      false,
+      false,
+      std::string(upper),
+      false,
+      false,
+      filterSpec.allowNulls_);
+}
+
+template <>
+std::unique_ptr<Filter> ColumnStats<StringView>::makeRandomFilter(
+    const FilterSpec& filterSpec) {
+  if (values_.empty()) {
+    return std::make_unique<velox::common::IsNull>();
+  }
+
   // used to determine if we can test a values filter reasonably
   int32_t lowerIndex;
   int32_t upperIndex;
