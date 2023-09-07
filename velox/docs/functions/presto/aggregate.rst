@@ -119,6 +119,14 @@ General Aggregate Functions
     Returns a multimap created from the input ``key`` / ``value`` pairs.
     Each key can be associated with multiple values.
 
+.. function:: product(x) -> bigint|double
+
+    Returns a product of non-NULL input values. If all input values are NULL, the result is NULL.
+
+    Supported types are: TINYINT, SMALLINT, INTEGER, BIGINT, REAL, and DOUBLE.
+
+    Return type is BIGINT for integer inputs and DOUBLE for floating point inputs.
+
 .. function:: set_agg(x) -> array<[same as input]>
 
     Returns an array created from the distinct input ``x`` elements.
