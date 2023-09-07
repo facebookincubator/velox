@@ -46,7 +46,7 @@ TEST(VariantTest, arrayInferType) {
       *variant::array({variant::array({variant(TypeKind::DOUBLE)})})
            .inferType());
   VELOX_ASSERT_THROW(
-      variant::array({variant(123456789), variant("")}),
+      variant::array({variant(123456789), variant("velox")}),
       "All array elements must be of the same kind");
 }
 
