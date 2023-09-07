@@ -399,8 +399,8 @@ class variant {
   std::string toJson(const TypePtr& type = nullptr) const;
 
   /// Used by python binding, do not change signature.
-  std::string pyToJson() const {
-    return toJson();
+  std::string pyToJson(const TypePtr& type) const {
+    return toJson(type);
   }
 
   folly::dynamic serialize() const;
