@@ -185,7 +185,7 @@ TEST(TypeTest, intervalYearMonth) {
 
 TEST(TypeTest, shortDecimal) {
   auto shortDecimal = DECIMAL(10, 5);
-  EXPECT_EQ(shortDecimal->toString(), "DECIMAL(10,5)");
+  EXPECT_EQ(shortDecimal->toString(), "DECIMAL(10, 5)");
   EXPECT_EQ(shortDecimal->size(), 0);
   EXPECT_THROW(shortDecimal->childAt(0), std::invalid_argument);
   EXPECT_EQ(shortDecimal->kind(), TypeKind::BIGINT);
@@ -218,7 +218,7 @@ TEST(TypeTest, shortDecimal) {
 
 TEST(TypeTest, longDecimal) {
   auto longDecimal = DECIMAL(30, 5);
-  EXPECT_EQ(longDecimal->toString(), "DECIMAL(30,5)");
+  EXPECT_EQ(longDecimal->toString(), "DECIMAL(30, 5)");
   EXPECT_EQ(longDecimal->size(), 0);
   EXPECT_THROW(longDecimal->childAt(0), std::invalid_argument);
   EXPECT_EQ(longDecimal->kind(), TypeKind::HUGEINT);
@@ -352,6 +352,7 @@ TEST(TypeTest, map) {
 }
 
 TEST(TypeTest, row) {
+  VELOX_ASSERT_THROW(ROW({{"a", nullptr}}), "Child types cannot be null");
   auto row0 = ROW({{"a", INTEGER()}, {"b", ROW({{"a", BIGINT()}})}});
   auto rowInner = row0->childAt(1);
   EXPECT_EQ(row0->toString(), "ROW<a:INTEGER,b:ROW<a:BIGINT>>");
