@@ -23,18 +23,6 @@
 namespace facebook::velox::functions::sparksql {
 namespace {
 
-inline static std::pair<uint8_t, uint8_t> adjustPrecisionScale(
-    const uint8_t rPrecision,
-    const uint8_t rScale) {
-  if (rPrecision <= 38) {
-    return {rPrecision, rScale};
-  } else {
-    int32_t minScale = std::min(static_cast<int32_t>(rScale), 6);
-    int32_t delta = rPrecision - 38;
-    return {38, std::max(rScale - delta, minScale)};
-  }
-}
-
 std::string getResultScale(std::string precision, std::string scale) {
   return fmt::format(
       "({}) <= 38 ? ({}) : max(({}) - ({}) + 38, min(({}), 6))",
@@ -43,15 +31,6 @@ std::string getResultScale(std::string precision, std::string scale) {
       scale,
       precision,
       scale);
-}
-
-template <typename R /* Result Type */>
-inline bool isOverflow(R result, uint8_t rPrecision) {
-  if (result > velox::DecimalUtil::kPowersOfTen[rPrecision] ||
-      result < -velox::DecimalUtil::kPowersOfTen[rPrecision]) {
-    return true;
-  }
-  return false;
 }
 
 template <
@@ -106,7 +85,9 @@ class DecimalBaseFunction : public exec::VectorFunction {
             rPrecision_,
             rScale_,
             overflow);
-        if (overflow || isOverflow(rawResults[row], rPrecision_)) {
+        if (overflow ||
+            !velox::DecimalUtil::valueInPrecisionRange(
+                rawResults[row], rPrecision_)) {
           result->setNull(row, true);
         }
       });
@@ -130,7 +111,9 @@ class DecimalBaseFunction : public exec::VectorFunction {
             rPrecision_,
             rScale_,
             overflow);
-        if (overflow || isOverflow(rawResults[row], rPrecision_)) {
+        if (overflow ||
+            !velox::DecimalUtil::valueInPrecisionRange(
+                rawResults[row], rPrecision_)) {
           result->setNull(row, true);
         }
       });
@@ -156,7 +139,9 @@ class DecimalBaseFunction : public exec::VectorFunction {
             rPrecision_,
             rScale_,
             overflow);
-        if (overflow || isOverflow(rawResults[row], rPrecision_)) {
+        if (overflow ||
+            !velox::DecimalUtil::valueInPrecisionRange(
+                rawResults[row], rPrecision_)) {
           result->setNull(row, true);
         }
       });
@@ -180,7 +165,9 @@ class DecimalBaseFunction : public exec::VectorFunction {
             rPrecision_,
             rScale_,
             overflow);
-        if (overflow || isOverflow(rawResults[row], rPrecision_)) {
+        if (overflow ||
+            !velox::DecimalUtil::valueInPrecisionRange(
+                rawResults[row], rPrecision_)) {
           result->setNull(row, true);
         }
       });
@@ -305,7 +292,8 @@ class Multiply {
       const uint8_t aScale,
       const uint8_t bPrecision,
       const uint8_t bScale) {
-    return adjustPrecisionScale(aPrecision + bPrecision + 1, aScale + bScale);
+    return DecimalUtil::adjustPrecisionScale(
+        aPrecision + bPrecision + 1, aScale + bScale);
   }
 
  private:
@@ -356,7 +344,7 @@ class Divide {
       const uint8_t bScale) {
     auto scale = std::max(6, aScale + bPrecision + 1);
     auto precision = aPrecision - aScale + bScale + scale;
-    return adjustPrecisionScale(precision, scale);
+    return DecimalUtil::adjustPrecisionScale(precision, scale);
   }
 };
 

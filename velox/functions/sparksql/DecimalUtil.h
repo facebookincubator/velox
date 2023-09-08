@@ -27,6 +27,25 @@ using int256_t = boost::multiprecision::int256_t;
 // DecimalUtil holds the utility function for Spark sql.
 class DecimalUtil {
  public:
+  /// Scale adjustment implementation is based on Hive's one, which is itself
+  /// inspired to SQLServer's one. In particular, when a result precision is
+  /// greater than {LongDecimalType::kMaxPrecision}, the corresponding scale is
+  /// reduced to prevent the integral part of a result from being truncated.
+  ///
+  /// This method is used only when
+  /// `spark.sql.decimalOperations.allowPrecisionLoss` is set to true.
+  inline static std::pair<uint8_t, uint8_t> adjustPrecisionScale(
+      const uint8_t rPrecision,
+      const uint8_t rScale) {
+    if (rPrecision <= LongDecimalType::kMaxPrecision) {
+      return {rPrecision, rScale};
+    } else {
+      int32_t minScale = std::min(static_cast<int32_t>(rScale), 6);
+      int32_t delta = rPrecision - 38;
+      return {38, std::max(rScale - delta, minScale)};
+    }
+  }
+
   /// @brief Convert int256 value to int64 or int128, set overflow to true if
   /// value cannot convert to specific type.
   /// @return The converted value.
