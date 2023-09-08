@@ -156,6 +156,16 @@ class SequenceFunction : public exec::VectorFunction {
   }
 
  private:
+  static void isDateValid(const int32_t date) {
+    // Find the number of seconds for the date;
+    // Casting 86400 to int64 to handle overflows gracefully.
+    int64_t daySeconds = date * (int64_t)(86400);
+    auto tmValue = gmtime((const time_t*)&daySeconds);
+    VELOX_USER_CHECK(
+        tmValue->tm_year < SHRT_MAX && tmValue->tm_year > 0,
+        "Invalid date type data");
+  }
+
   static vector_size_t checkArguments(
       DecodedVector* startVector,
       DecodedVector* stopVector,
@@ -163,6 +173,10 @@ class SequenceFunction : public exec::VectorFunction {
       vector_size_t row,
       bool isDate,
       bool isYearMonth) {
+    if (isDate) {
+      isDateValid(startVector->valueAt<int32_t>(row));
+      isDateValid(stopVector->valueAt<int32_t>(row));
+    }
     T start = startVector->valueAt<T>(row);
     T stop = stopVector->valueAt<T>(row);
     auto step = getStep(

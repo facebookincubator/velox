@@ -207,6 +207,18 @@ TEST_F(SequenceTest, dateInvalidIntervalDayStep) {
       expected);
 }
 
+TEST_F(SequenceTest, invalidDate) {
+  int64_t day = 86400000; // 24 * 60 * 60 * 1000
+  const auto startVector = makeFlatVector<int32_t>({1420919120, 1992}, DATE());
+  const auto stopVector = makeFlatVector<int32_t>({1476733096, 2000}, DATE());
+  auto stepVector =
+      makeFlatVector<int64_t>({1 * day, 1}, INTERVAL_YEAR_MONTH());
+  testExpressionWithError(
+      "sequence(C0, C1, C2)",
+      {startVector, stopVector, stepVector},
+      "Invalid date type data");
+}
+
 TEST_F(SequenceTest, dateYearMonthStep) {
   const auto startVector = makeFlatVector<int32_t>(
       {parseDate("1975-01-31"),
