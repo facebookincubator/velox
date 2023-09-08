@@ -413,15 +413,10 @@ class SubscriptImpl : public exec::Subscript {
     allElementRows->setAll();
     exec::LocalDecodedVector mapKeysHolder(context, *mapKeys, *allElementRows);
     auto mapKeysDecoded = mapKeysHolder.get();
-    auto mapKeysBase = mapKeysDecoded->base();
-    auto mapKeysIndices = mapKeysDecoded->indices();
 
     // Get index vector (second argument).
     exec::LocalDecodedVector indexHolder(context, *indexArg, rows);
     auto decodedIndices = indexHolder.get();
-    auto searchBase = decodedIndices->base();
-    auto searchIndices = decodedIndices->indices();
-
     auto rawSizes = baseMap->rawSizes();
     auto rawOffsets = baseMap->rawOffsets();
 
@@ -432,10 +427,8 @@ class SubscriptImpl : public exec::Subscript {
       size_t offset = rawOffsets[mapIndex];
 
       bool found = false;
-      auto searchIndex = searchIndices[row];
       for (auto i = 0; i < size; i++) {
-        if (mapKeysBase->equalValueAt(
-                searchBase, mapKeysIndices[offset + i], searchIndex)) {
+        if (mapKeysDecoded->equalValueAt(*decodedIndices, offset + i, row)) {
           rawIndices[row] = offset + i;
           found = true;
           break;

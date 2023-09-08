@@ -90,24 +90,17 @@ void applyComplexType(
   auto rawSizes = baseArray->rawSizes();
   auto rawOffsets = baseArray->rawOffsets();
   auto indices = arrayDecoded.indices();
-
-  auto elementsBase = elementsDecoded.base();
-  auto elementIndices = elementsDecoded.indices();
-  auto searchBase = searchDecoded.base();
   auto searchIndices = searchDecoded.indices();
 
   rows.applyToSelected([&](auto row) {
     auto size = rawSizes[indices[row]];
     auto offset = rawOffsets[indices[row]];
-
     bool foundNull = false;
 
-    auto searchIndex = searchIndices[row];
     for (auto i = 0; i < size; i++) {
       if (elementsDecoded.isNullAt(offset + i)) {
         foundNull = true;
-      } else if (elementsBase->equalValueAt(
-                     searchBase, elementIndices[offset + i], searchIndex)) {
+      } else if (elementsDecoded.equalValueAt(searchDecoded, offset + i, row)) {
         flatResult.set(row, true);
         return;
       }

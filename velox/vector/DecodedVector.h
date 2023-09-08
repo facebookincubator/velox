@@ -209,6 +209,16 @@ class DecodedVector {
     return bits::isBitNull(nulls_, indices_[idx]);
   }
 
+  /// Return whether this top-level vector has the same value at the given index
+  /// as the other top-level vector at the other vector's index.
+  bool equalValueAt(
+      const DecodedVector& other,
+      vector_size_t idx,
+      vector_size_t otherIndex) const {
+    return baseVector_->equalValueAt(
+        other.baseVector_, index(idx), other.index(otherIndex));
+  }
+
   /// Returns the largest decoded row number + 1, i.e. rows.end().
   vector_size_t size() const {
     return size_;

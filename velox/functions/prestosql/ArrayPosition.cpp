@@ -125,22 +125,14 @@ void applyTypedFirstMatch(
   auto rawOffsets = baseArray->rawOffsets();
   auto indices = arrayDecoded.indices();
 
-  auto elementsBase = elementsDecoded.base();
-  auto elementIndices = elementsDecoded.indices();
-
-  auto searchBase = searchDecoded.base();
-  auto searchIndices = searchDecoded.indices();
-
   rows.applyToSelected([&](auto row) {
     auto size = rawSizes[indices[row]];
     auto offset = rawOffsets[indices[row]];
-    auto searchIndex = searchIndices[row];
 
     int i;
     for (i = 0; i < size; i++) {
       if (!elementsDecoded.isNullAt(offset + i) &&
-          elementsBase->equalValueAt(
-              searchBase, elementIndices[offset + i], searchIndex)) {
+          elementsDecoded.equalValueAt(searchDecoded, offset + i, row)) {
         flatResult.set(row, i + 1);
         break;
       }
@@ -308,20 +300,12 @@ void applyTypedWithInstance(
   auto rawSizes = baseArray->rawSizes();
   auto rawOffsets = baseArray->rawOffsets();
   auto indices = arrayDecoded.indices();
-
-  auto elementsBase = elementsDecoded.base();
-  auto elementIndices = elementsDecoded.indices();
-  auto searchBase = searchDecoded.base();
-  auto searchIndices = searchDecoded.indices();
-
   int startIndex;
   int endIndex;
   int step;
 
   context.applyToSelectedNoThrow(rows, [&](auto row) {
     auto offset = rawOffsets[indices[row]];
-    auto searchIndex = searchIndices[row];
-
     auto instance = instanceDecoded.valueAt<int64_t>(row);
     VELOX_USER_CHECK_NE(
         instance,
@@ -334,8 +318,7 @@ void applyTypedWithInstance(
     int i;
     for (i = startIndex; i != endIndex; i += step) {
       if (!elementsDecoded.isNullAt(offset + i) &&
-          elementsBase->equalValueAt(
-              searchBase, elementIndices[offset + i], searchIndex)) {
+          elementsDecoded.equalValueAt(searchDecoded, offset + i, row)) {
         --instance;
         if (instance == 0) {
           flatResult.set(row, i + 1);
