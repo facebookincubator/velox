@@ -119,6 +119,7 @@ if [[ "$OSTYPE" == "linux-gnu"* ]]; then
       # Dependencies of Azure Storage Blob Cpp
       yum -y install gcc-c++
       yum -y install perl-IPC-Cmd
+      yum -y install openssl
    fi
 fi
 
