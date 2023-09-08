@@ -325,9 +325,9 @@ struct DateDiffFunction {
 
   FOLLY_ALWAYS_INLINE bool call(
       int32_t& result,
-      const arg_type<Date>& date1,
-      const arg_type<Date>& date2) {
-    int64_t value = diffDate(DateTimeUnit::kDay, date2, date1);
+      const arg_type<Date>& endDate,
+      const arg_type<Date>& startDate) {
+    int64_t value = diffDate(DateTimeUnit::kDay, startDate, endDate);
     if (value != (int32_t)value) {
       VELOX_UNSUPPORTED("integer overflow");
     }

@@ -380,16 +380,16 @@ TEST_F(DateTimeFunctionsTest, dayofWeekTs) {
 }
 
 TEST_F(DateTimeFunctionsTest, dateDiffDate) {
-  const auto dateDiff = [&](std::optional<int32_t> date1,
-                            std::optional<int32_t> date2) {
+  const auto dateDiff = [&](std::optional<int32_t> endDate,
+                            std::optional<int32_t> startDate) {
     return evaluateOnce<int32_t, int32_t>(
-        "date_diff(c0, c1)", {date1, date2}, {DATE(), DATE()});
+        "date_diff(c0, c1)", {endDate, startDate}, {DATE(), DATE()});
   };
 
-  const auto dateDiffAlias = [&](std::optional<int32_t> date1,
-                                 std::optional<int32_t> date2) {
+  const auto dateDiffAlias = [&](std::optional<int32_t> endDate,
+                                 std::optional<int32_t> startDate) {
     return evaluateOnce<int32_t, int32_t>(
-        "datediff(c0, c1)", {date1, date2}, {DATE(), DATE()});
+        "datediff(c0, c1)", {endDate, startDate}, {DATE(), DATE()});
   };
   // Check null behaviors
   EXPECT_EQ(std::nullopt, dateDiff(1, std::nullopt));
