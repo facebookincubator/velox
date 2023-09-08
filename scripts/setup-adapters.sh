@@ -70,8 +70,10 @@ function install_azure-storage-sdk-cpp {
     openssl_version="1.1.1n"
   fi
   cd sdk/core/azure-core
-  sed -i 's/"version-string"/"builtin-baseline": "dafef74af53669ef1cc9015f55e0ce809ead62aa","version-string"/' vcpkg.json
-  sed -i "s/\"version-string\"/\"overrides\": [{ \"name\": \"openssl\", \"version-string\": \"$openssl_version\" }],\"version-string\"/" vcpkg.json
+  if ! grep -q "baseline" vcpkg.json; then
+    sed -i 's/"version-string"/"builtin-baseline": "dafef74af53669ef1cc9015f55e0ce809ead62aa","version-string"/' vcpkg.json
+    sed -i "s/\"version-string\"/\"overrides\": [{ \"name\": \"openssl\", \"version-string\": \"$openssl_version\" }],\"version-string\"/" vcpkg.json
+  fi
   cmake_install -DCMAKE_BUILD_TYPE=Release -DBUILD_SHARED_LIBS=OFF
 
   cd -
@@ -82,7 +84,9 @@ function install_azure-storage-sdk-cpp {
   cd -
   # install azure-storage-blobs
   cd sdk/storage/azure-storage-blobs
-  sed -i 's/"version-semver"/"builtin-baseline": "dafef74af53669ef1cc9015f55e0ce809ead62aa","version-semver"/' vcpkg.json
+  if ! grep -q "baseline" vcpkg.json; then
+    sed -i 's/"version-semver"/"builtin-baseline": "dafef74af53669ef1cc9015f55e0ce809ead62aa","version-semver"/' vcpkg.json
+  fi
   cmake_install -DCMAKE_BUILD_TYPE=Release -DBUILD_SHARED_LIBS=OFF
 }
 
