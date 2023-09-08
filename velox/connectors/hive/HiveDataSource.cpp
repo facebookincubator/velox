@@ -848,7 +848,7 @@ std::shared_ptr<common::ScanSpec> HiveDataSource::makeScanSpec(
     auto& name = rowType->nameOf(i);
     auto& type = rowType->childAt(i);
     auto it = outputSubfields.find(name);
-    if (it == outputSubfields.end()) {
+    if (it != outputSubfields.end()) {
       spec->addFieldRecursively(name, *type, i);
       filterSubfields.erase(name);
       continue;
