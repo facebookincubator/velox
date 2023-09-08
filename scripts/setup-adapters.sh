@@ -64,8 +64,14 @@ function install_gcs-sdk-cpp {
 function install_azure-storage-sdk-cpp {
   github_checkout azure/azure-sdk-for-cpp azure-storage-blobs_12.8.0
 
-  #install azure-core
+  # install azure-core compatible with system pre-installed openssl version
+  openssl_version=$(openssl version -v | awk '{print $2}')
+  if [[ "$openssl_version" == 1.1.1* ]]; then
+    openssl_version="1.1.1n"
+  fi
   cd sdk/core/azure-core
+  sed -i 's/"version-string"/"builtin-baseline": "dafef74af53669ef1cc9015f55e0ce809ead62aa","version-string"/' vcpkg.json
+  sed -i "s/\"version-string\"/\"overrides\": [{ \"name\": \"openssl\", \"version-string\": \"$openssl_version\" }],\"version-string\"/" vcpkg.json
   cmake_install -DCMAKE_BUILD_TYPE=Release -DBUILD_SHARED_LIBS=OFF
 
   cd -
@@ -76,9 +82,7 @@ function install_azure-storage-sdk-cpp {
   cd -
   # install azure-storage-blobs
   cd sdk/storage/azure-storage-blobs
-  sed -i 's/"name": "azure-storage-common-cpp",/"name": "azure-storage-common-cpp"/' vcpkg.json
-  sed -i 's/"default-features": false,//' vcpkg.json
-  sed -i 's/"version>=": "12\.3\.1"//' vcpkg.json
+  sed -i 's/"version-semver"/"builtin-baseline": "dafef74af53669ef1cc9015f55e0ce809ead62aa","version-semver"/' vcpkg.json
   cmake_install -DCMAKE_BUILD_TYPE=Release -DBUILD_SHARED_LIBS=OFF
 }
 

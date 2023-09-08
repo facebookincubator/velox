@@ -409,6 +409,9 @@ jobs:
             export LIBHDFS3_CONF=$(pwd)/.circleci/hdfs-client.xml
             export HADOOP_HOME='/usr/local/hadoop'
             export PATH=~/adapter-deps/install/bin:/usr/local/hadoop/bin:${PATH}
+            curl -sL https://deb.nodesource.com/setup_10.x | sudo -E bash -
+            yum install -y nodejs
+            npm install -g azurite
             cd _build/release && ctest -j 16 -VV --output-on-failure
           no_output_timeout: 1h
       - post-steps
