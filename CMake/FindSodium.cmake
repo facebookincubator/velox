@@ -221,8 +221,8 @@ endif()
 
 # extract sodium version
 if(sodium_INCLUDE_DIR)
-  set(_VERSION_HEADER "${_INCLUDE_DIR}/sodium/version.h")
-  if(EXISTS _VERSION_HEADER)
+  set(_VERSION_HEADER "${sodium_INCLUDE_DIR}/sodium/version.h")
+  if(EXISTS ${_VERSION_HEADER})
     file(READ "${_VERSION_HEADER}" _VERSION_HEADER_CONTENT)
     string(
       REGEX
@@ -231,6 +231,8 @@ if(sodium_INCLUDE_DIR)
     set(sodium_VERSION
         "${sodium_VERSION}"
         PARENT_SCOPE)
+  else()
+    message(FATAL_ERROR "Sodium version could not be extracted.")
   endif()
 endif()
 
