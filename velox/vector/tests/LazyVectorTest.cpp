@@ -115,6 +115,11 @@ TEST_F(LazyVectorTest, dictionaryOverRowVectorWithLazyChild) {
   EXPECT_FALSE(isLazyNotLoaded(*dict.get()));
   // Ensure encoding layer is correctly initialized after lazy loading.
   EXPECT_NO_THROW(dict->mayHaveNullsRecursive());
+  // Ensure the original row vectors have same sizes.
+  auto baseRowVector = rowVector->as<RowVector>();
+  for (auto& child : baseRowVector->children()) {
+    EXPECT_EQ(child->size(), baseRowVector->size());
+  }
 }
 
 TEST_F(LazyVectorTest, selectiveRowVectorWithLazyChild) {
