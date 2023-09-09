@@ -269,15 +269,6 @@ bool tryParseDateString(
   }
 
   if (mode == ParseMode::kStandardCast) {
-    // Skip trailing spaces.
-    while (pos < len && characterIsSpace(buf[pos])) {
-      pos++;
-    }
-    // Check position. if end was not reached, non-space chars remaining.
-    if (pos < len) {
-      return false;
-    }
-
     daysSinceEpoch = daysSinceEpochFromDate(year, month, day);
 
     if (pos == len) {

@@ -673,9 +673,7 @@ TEST_F(CastExprTest, date) {
          "1970-1-02",
          "+1970-01-02",
          "-1-1-1",
-         "1970-01-01 ",
          " 1970-01-01",
-         " 1970-01-01 ",
          std::nullopt},
         {0,
          18262,
@@ -689,8 +687,6 @@ TEST_F(CastExprTest, date) {
          1,
          1,
          -719893,
-         0,
-         0,
          0,
          std::nullopt},
         false,
@@ -761,6 +757,10 @@ TEST_F(CastExprTest, invalidDate) {
       "date", {"2015-03-18T123412"}, {0}, true, false, VARCHAR(), DATE());
   testCast<std::string, int32_t>(
       "date", {"2015-03-18 (BC)"}, {0}, true, false, VARCHAR(), DATE());
+  testCast<std::string, int32_t>(
+      "date", {"1970-01-01 "}, {0}, true, false, VARCHAR(), DATE());
+  testCast<std::string, int32_t>(
+      "date", {" 1970-01-01 "}, {0}, true, false, VARCHAR(), DATE());
 }
 
 TEST_F(CastExprTest, primitiveInvalidCornerCases) {
