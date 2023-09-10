@@ -413,9 +413,6 @@ TEST_F(DateTimeFunctionsTest, dateDiffDate) {
       dateDiff(parseDate("-5877641-06-23"), parseDate("1994-09-12")));
 
   EXPECT_EQ(0, dateDiffAlias(parseDate("1994-04-20"), parseDate("1994-04-20")));
-
-  // Exception
-  // VELOX_ASSERT_THROW(dateDiff(0, 9999999999), "integer overflow");
 }
 
 } // namespace
