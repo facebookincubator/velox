@@ -213,10 +213,19 @@ class DecodedVector {
   /// as the other top-level vector at the other vector's index.
   bool equalValueAt(
       const DecodedVector& other,
-      vector_size_t idx,
+      vector_size_t index,
       vector_size_t otherIndex) const {
+    VELOX_CHECK_NOT_NULL(baseVector_);
+    static constexpr CompareFlags kEqualValueAtFlags = {
+        false,
+        false,
+        true /*equalOnly*/,
+        CompareFlags::NullHandlingMode::StopAtNull /*nullHandlingMode**/};
     return baseVector_->equalValueAt(
-        other.baseVector_, index(idx), other.index(otherIndex));
+        other.baseVector_,
+        this->index(index),
+        other.index(otherIndex),
+        kEqualValueAtFlags);
   }
 
   /// Returns the largest decoded row number + 1, i.e. rows.end().

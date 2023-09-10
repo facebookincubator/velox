@@ -1427,4 +1427,98 @@ TEST_F(DecodedVectorTest, previousIndicesInReUsedDecodedVector) {
   EXPECT_EQ(rawIndices[0], 0);
 }
 
+TEST_F(DecodedVectorTest, equalValueAtDictonary) {
+  auto baseVector = makeArrayVector<int64_t>({{1, 2}, {3, 4}, {11, 12}, {0}});
+  auto baseVectorSize = baseVector->size();
+  baseVector->setNull(3, true);
+  const vector_size_t extraNullSize = 5;
+  const vector_size_t kTopLevelVectorSize = baseVectorSize * 2 + extraNullSize;
+  BufferPtr indices = allocateIndices(kTopLevelVectorSize, pool_.get());
+  auto rawIndices = indices->asMutable<vector_size_t>();
+  for (size_t i = 0; i < kTopLevelVectorSize; ++i) {
+    rawIndices[i] = i % baseVectorSize;
+  }
+  auto nulls = makeNulls(kTopLevelVectorSize, [&](auto row) {
+    if (row < kTopLevelVectorSize - extraNullSize) {
+      return false;
+    } else {
+      return true;
+    }
+  });
+  auto dictVector = BaseVector::wrapInDictionary(
+      nulls, indices, kTopLevelVectorSize, baseVector);
+  DecodedVector decodedVector(*dictVector);
+  auto other =
+      BaseVector::wrapInConstant(1, 0, makeArrayVector<int64_t>({{11, 12}}));
+  DecodedVector otherDecoded(*other);
+  for (vector_size_t i = 0; i < kTopLevelVectorSize; ++i) {
+    vector_size_t baseIndex = i % baseVectorSize;
+    if (baseIndex == 3) {
+      // nulls of the base vector
+      ASSERT_THROW(
+          decodedVector.equalValueAt(otherDecoded, i, 0), VeloxException);
+    } else if (i >= (kTopLevelVectorSize - extraNullSize)) {
+      // extra nulls of the dictionary vector
+      ASSERT_THROW(
+          decodedVector.equalValueAt(otherDecoded, i, 0), VeloxException);
+    } else if (baseIndex == 2) {
+      ASSERT_TRUE(decodedVector.equalValueAt(otherDecoded, i, 0));
+    } else {
+      ASSERT_FALSE(decodedVector.equalValueAt(otherDecoded, i, 0));
+    }
+  }
+}
+
+TEST_F(DecodedVectorTest, equalValueAtDictOverDict) {
+  auto baseVector = makeArrayVector<int64_t>({{1, 2}, {3, 4}, {11, 12}, {0}});
+  auto baseVectorSize = baseVector->size();
+  baseVector->setNull(3, true);
+  const vector_size_t dictVecSize1 = baseVectorSize * 2;
+  BufferPtr indices1 = allocateIndices(dictVecSize1, pool_.get());
+  auto rawIndices1 = indices1->asMutable<vector_size_t>();
+  for (size_t i = 0; i < dictVecSize1; ++i) {
+    rawIndices1[i] = i % baseVectorSize;
+  }
+  auto dict1 =
+      BaseVector::wrapInDictionary(nullptr, indices1, dictVecSize1, baseVector);
+  const vector_size_t extraNullSize = 5;
+  const vector_size_t dictVecSize2 = dictVecSize1 * 3 + extraNullSize;
+  BufferPtr indices2 = allocateIndices(dictVecSize2, pool_.get());
+  auto rawIndices2 = indices2->asMutable<vector_size_t>();
+  for (size_t i = 0; i < dictVecSize2; ++i) {
+    rawIndices2[i] = i % baseVectorSize;
+  }
+  auto nulls = makeNulls(dictVecSize2, [&](auto row) {
+    if (row < dictVecSize2 - extraNullSize) {
+      return false;
+    } else {
+      return true;
+    }
+  });
+  auto dict2 =
+      BaseVector::wrapInDictionary(nulls, indices2, dictVecSize2, dict1);
+
+  DecodedVector decodedVector(*dict2);
+  auto other =
+      BaseVector::wrapInConstant(1, 0, makeArrayVector<int64_t>({{11, 12}}));
+  DecodedVector otherDecoded(*other);
+
+  for (vector_size_t i = 0; i < dictVecSize2; ++i) {
+    vector_size_t baseIndex = (i % dictVecSize1) % baseVectorSize;
+    if (baseIndex == 3) {
+      // nulls of the base vector
+      ASSERT_THROW(
+          decodedVector.equalValueAt(otherDecoded, i, 0), VeloxException);
+    } else if (i >= (dictVecSize2 - extraNullSize)) {
+      // extra nulls of the dictionary vector
+      ASSERT_THROW(
+          decodedVector.equalValueAt(otherDecoded, i, 0), VeloxException);
+    } else if (baseIndex == 2) {
+      ASSERT_TRUE(decodedVector.equalValueAt(otherDecoded, i, 0));
+    } else {
+      ASSERT_FALSE(decodedVector.equalValueAt(otherDecoded, i, 0));
+    }
+  }
+}
+
 } // namespace facebook::velox::test

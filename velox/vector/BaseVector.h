@@ -251,10 +251,24 @@ class BaseVector {
   /**
    * @return true if this vector has the same value at the given index as the
    * other vector at the other vector's index (including if both are null),
-   * false otherwise
+   * false otherwise. Use compareFlags to control the nullHandling mode.
    * @throws if the type_ of other doesn't match the type_ of this
    */
   virtual bool equalValueAt(
+      const BaseVector* other,
+      vector_size_t index,
+      vector_size_t otherIndex,
+      CompareFlags compareFlags) const {
+    return compare(other, index, otherIndex, compareFlags).value() == 0;
+  }
+
+  /**
+   * @return true if this vector has the same value at the given index as the
+   * other vector at the other vector's index (including if both are null),
+   * false otherwise. Use NoStop nullHandling mode by default.
+   * @throws if the type_ of other doesn't match the type_ of this
+   */
+  bool equalValueAt(
       const BaseVector* other,
       vector_size_t index,
       vector_size_t otherIndex) const {
@@ -263,8 +277,7 @@ class BaseVector {
         false,
         true /*equalOnly*/,
         CompareFlags::NullHandlingMode::NoStop /*nullHandlingMode**/};
-    // Will always have value because nullHandlingMode is NoStop.
-    return compare(other, index, otherIndex, kEqualValueAtFlags).value() == 0;
+    return equalValueAt(other, index, otherIndex, kEqualValueAtFlags);
   }
 
   int32_t compare(
