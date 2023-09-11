@@ -15,7 +15,6 @@
  */
 
 #include "velox/tpch/gen/TpchGen.h"
-#include "velox/external/duckdb/tpch/dbgen/include/dbgen/dbgen_gunk.hpp"
 #include "velox/external/duckdb/tpch/dbgen/include/dbgen/dss.h"
 #include "velox/external/duckdb/tpch/dbgen/include/dbgen/dsstypes.h"
 #include "velox/tpch/gen/DBGenIterator.h"

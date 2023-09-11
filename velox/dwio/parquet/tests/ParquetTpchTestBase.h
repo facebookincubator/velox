@@ -19,7 +19,9 @@
 
 #include "velox/common/base/Fs.h"
 #include "velox/common/file/FileSystems.h"
+#include "velox/connectors/tpch/TpchConnector.h"
 #include "velox/dwio/parquet/RegisterParquetReader.h"
+#include "velox/exec/tests/utils/AssertQueryBuilder.h"
 #include "velox/exec/tests/utils/HiveConnectorTestBase.h"
 #include "velox/exec/tests/utils/PlanBuilder.h"
 #include "velox/exec/tests/utils/TempDirectoryPath.h"
@@ -27,6 +29,8 @@
 #include "velox/functions/prestosql/aggregates/RegisterAggregateFunctions.h"
 #include "velox/functions/prestosql/registration/RegistrationFunctions.h"
 #include "velox/parse/TypeResolver.h"
+#include "velox/tpch/gen/TpchGen.h"
+#include "velox/vector/tests/utils/VectorTestBase.h"
 
 using namespace facebook::velox;
 using namespace facebook::velox::exec;
@@ -36,13 +40,16 @@ using namespace facebook::velox::parquet;
 namespace facebook::velox::exec::test {
 namespace {
 
-class ParquetTpchTestBase : public testing::Test {
+static constexpr char const* kTpchConnectorId{"test-tpch"};
+
+class ParquetTpchTestBase : public testing::Test,
+                            public ::facebook::velox::test::VectorTestBase {
  public:
   ParquetTpchTestBase() {}
 
   // Setup a DuckDB instance for the entire suite and load TPC-H data with scale
   // factor 0.01.
-  void SetUp() {
+  static void SetUpTestSuite() {
     if (duckDb_ == nullptr) {
       duckDb_ = std::make_shared<DuckDbQueryRunner>();
       constexpr double kTpchScaleFactor = 0.01;
@@ -60,8 +67,16 @@ class ParquetTpchTestBase : public testing::Test {
             connector::hive::HiveConnectorFactory::kHiveConnectorName)
             ->newConnector(kHiveConnectorId, nullptr);
     connector::registerConnector(hiveConnector);
+    auto tpchConnector =
+        connector::getConnectorFactory(
+            connector::tpch::TpchConnectorFactory::kTpchConnectorName)
+            ->newConnector(kTpchConnectorId, nullptr);
+    connector::registerConnector(tpchConnector);
     tempDirectory_ = TempDirectoryPath::create();
-    saveTpchTablesAsParquet();
+    std::shared_ptr<memory::MemoryPool> rootPool{
+        memory::defaultMemoryManager().addRootPool()};
+    std::shared_ptr<memory::MemoryPool> pool{rootPool->addLeafChild("leaf")};
+    saveTpchTablesAsParquet(pool.get());
     tpchBuilder_.initialize(tempDirectory_->path);
   }
 
@@ -73,28 +88,66 @@ class ParquetTpchTestBase : public testing::Test {
     auto task = assertQuery(tpchPlan, duckDbSql, sortingKeys);
   }
 
-  void TearDown() {
+  static void TearDownTestSuite() {
     connector::unregisterConnector(kHiveConnectorId);
+    connector::unregisterConnector(kTpchConnectorId);
     unregisterParquetReaderFactory();
   }
 
  private:
   /// Write TPC-H tables as a Parquet file to temp directory in hive-style
   /// partition
-  void saveTpchTablesAsParquet() {
-    constexpr int kRowGroupSize = 10'000;
-    const auto tableNames = tpchBuilder_.getTableNames();
+  static void saveTpchTablesAsParquet(memory::MemoryPool* pool) {
+    const auto tableNames = {
+        tpch::Table::TBL_PART,
+        tpch::Table::TBL_SUPPLIER,
+        tpch::Table::TBL_PARTSUPP,
+        tpch::Table::TBL_CUSTOMER,
+        tpch::Table::TBL_ORDERS,
+        tpch::Table::TBL_LINEITEM,
+        tpch::Table::TBL_NATION,
+        tpch::Table::TBL_REGION};
+
     for (const auto& tableName : tableNames) {
       auto tableDirectory =
-          fmt::format("{}/{}", tempDirectory_->path, tableName);
+          fmt::format("{}/{}", tempDirectory_->path, toTableName(tableName));
       fs::create_directory(tableDirectory);
-      auto filePath = fmt::format("{}/file.parquet", tableDirectory);
-      auto query = fmt::format(
-          fmt::runtime(kDuckDbParquetWriteSQL_.at(tableName)),
-          tableName,
-          filePath,
-          kRowGroupSize);
-      duckDb_->execute(query);
+      const auto outputRow = getTableSchema(tableName);
+      auto names = outputRow->names();
+
+      auto plan =
+          PlanBuilder().tableScan(tableName, std::move(names), 0.01).planNode();
+      auto split =
+          exec::Split(std::make_shared<connector::tpch::TpchConnectorSplit>(
+              kTpchConnectorId, 1, 0));
+
+      auto results = AssertQueryBuilder(plan).splits({split}).copyResults(pool);
+
+      auto tableHandle = std::make_shared<core::InsertTableHandle>(
+          kHiveConnectorId,
+          HiveConnectorTestBase::makeHiveInsertTableHandle(
+              outputRow->names(),
+              outputRow->children(),
+              {},
+              {},
+              HiveConnectorTestBase::makeLocationHandle(
+                  tableDirectory,
+                  std::nullopt,
+                  connector::hive::LocationHandle::TableType::kNew),
+              dwio::common::FileFormat::PARQUET));
+
+      auto scanPlan = PlanBuilder().values({results});
+      plan = scanPlan
+                 .tableWrite(
+                     scanPlan.planNode()->outputType(),
+                     outputRow->names(),
+                     nullptr,
+                     tableHandle,
+                     false,
+                     connector::CommitStrategy::kNoCommit)
+                 .planNode();
+
+      AssertQueryBuilder(plan).copyResults(pool);
     }
   }
 
@@ -127,53 +180,16 @@ class ParquetTpchTestBase : public testing::Test {
         params, addSplits, duckQuery, *duckDb_, sortingKeys);
   }
 
-  std::shared_ptr<DuckDbQueryRunner> duckDb_ = nullptr;
-  std::shared_ptr<TempDirectoryPath> tempDirectory_ = nullptr;
-  TpchQueryBuilder tpchBuilder_ =
-      TpchQueryBuilder(dwio::common::FileFormat::PARQUET);
-  const std::unordered_map<std::string, std::string> kDuckDbParquetWriteSQL_ = {
-      std::make_pair(
-          "lineitem",
-          R"(COPY (SELECT l_orderkey, l_partkey, l_suppkey, l_linenumber,
-         l_quantity::DOUBLE as quantity, l_extendedprice::DOUBLE as extendedprice, l_discount::DOUBLE as discount,
-         l_tax::DOUBLE as tax, l_returnflag, l_linestatus, l_shipdate AS shipdate, l_commitdate, l_receiptdate,
-         l_shipinstruct, l_shipmode, l_comment FROM {})
-         TO '{}'(FORMAT 'parquet', CODEC 'ZSTD', ROW_GROUP_SIZE {}))"),
-      std::make_pair(
-          "orders",
-          R"(COPY (SELECT o_orderkey, o_custkey, o_orderstatus,
-         o_totalprice::DOUBLE as o_totalprice,
-         o_orderdate, o_orderpriority, o_clerk, o_shippriority, o_comment FROM {})
-         TO '{}' (FORMAT 'parquet', CODEC 'ZSTD', ROW_GROUP_SIZE {}))"),
-      std::make_pair(
-          "customer",
-          R"(COPY (SELECT c_custkey, c_name, c_address, c_nationkey, c_phone,
-         c_acctbal::DOUBLE as c_acctbal, c_mktsegment, c_comment FROM {})
-         TO '{}' (FORMAT 'parquet', CODEC 'ZSTD', ROW_GROUP_SIZE {}))"),
-      std::make_pair(
-          "nation",
-          R"(COPY (SELECT * FROM {})
-          TO '{}' (FORMAT 'parquet', CODEC 'ZSTD', ROW_GROUP_SIZE {}))"),
-      std::make_pair(
-          "region",
-          R"(COPY (SELECT * FROM {})
-         TO '{}' (FORMAT 'parquet', CODEC 'ZSTD', ROW_GROUP_SIZE {}))"),
-      std::make_pair(
-          "part",
-          R"(COPY (SELECT p_partkey, p_name, p_mfgr, p_brand, p_type, p_size,
-         p_container, p_retailprice::DOUBLE, p_comment FROM {})
-         TO '{}' (FORMAT 'parquet', CODEC 'ZSTD', ROW_GROUP_SIZE {}))"),
-      std::make_pair(
-          "supplier",
-          R"(COPY (SELECT s_suppkey, s_name, s_address, s_nationkey, s_phone,
-         s_acctbal::DOUBLE, s_comment FROM {})
-         TO '{}' (FORMAT 'parquet', CODEC 'ZSTD', ROW_GROUP_SIZE {}))"),
-      std::make_pair(
-          "partsupp",
-          R"(COPY (SELECT ps_partkey, ps_suppkey, ps_availqty,
-         ps_supplycost::DOUBLE as supplycost, ps_comment FROM {})
-         TO '{}' (FORMAT 'parquet', CODEC 'ZSTD', ROW_GROUP_SIZE {}))")};
+  static std::shared_ptr<DuckDbQueryRunner> duckDb_;
+  static std::shared_ptr<TempDirectoryPath> tempDirectory_;
+  static TpchQueryBuilder tpchBuilder_;
 };
+
+std::shared_ptr<DuckDbQueryRunner> ParquetTpchTestBase::duckDb_ = nullptr;
+std::shared_ptr<TempDirectoryPath> ParquetTpchTestBase::tempDirectory_ =
+    nullptr;
+TpchQueryBuilder ParquetTpchTestBase::tpchBuilder_ =
+    TpchQueryBuilder(dwio::common::FileFormat::PARQUET);
 
 } // namespace
 } // namespace facebook::velox::exec::test
