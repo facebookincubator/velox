@@ -936,7 +936,10 @@ exec::AggregateRegistrationResult registerMinMax(const std::string& name) {
             case TypeKind::TIMESTAMP:
               return std::make_unique<TNumericN<Timestamp>>(resultType);
             case TypeKind::HUGEINT:
-              return std::make_unique<TNumericN<int128_t>>(resultType);
+              if(inputType->isLongDecimal()){
+                return std::make_unique<TNumericN<int128_t>>(resultType);
+              }
+              VELOX_NYI();
             default:
               VELOX_CHECK(
                   false,

@@ -361,8 +361,15 @@ class MinMaxNTest : public functions::aggregate::test::AggregationTestBase {
 
   template <typename T>
   void testNumericGlobalDecimal() {
+    TypePtr type;
+    if(std::is_same<T, int64_t>::value) {
+      type = DECIMAL(6, 2);
+    }
+    else {
+      type = DECIMAL(20, 2);
+    }
     auto data = makeRowVector({
-        makeFlatVector<T>({100000, 131011, 223454, 111911, 111300, 800000, 104000, 712452, 161213, 135243}, DECIMAL(6,2)),
+        makeFlatVector<T>({100000, 131011, 223454, 111911, 111300, 800000, 104000, 712452, 161213, 135243}, type),
     });
     auto expected = makeRowVector({
         makeArrayVector<T>({
