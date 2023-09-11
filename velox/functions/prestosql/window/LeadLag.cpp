@@ -143,6 +143,11 @@ class LeadLagFunction : public exec::WindowFunction {
       } else {
         auto offset = offsets_->valueAt(i);
         VELOX_USER_CHECK_GE(offset, 0, "Offset must be at least 0");
+        // Set rowNumber to kNullRow for out of range offset.
+        if (offset > partition_->numRows()) {
+          rowNumbers_[i] = kNullRow;
+          continue;
+        }
 
         if constexpr (isLag) {
           if constexpr (ignoreNulls) {

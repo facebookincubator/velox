@@ -110,6 +110,35 @@ TEST_P(LeadLagTest, offset) {
   assertQuery(queryInfo.planNode, expected);
 }
 
+TEST_P(LeadLagTest, bigOffsetWithIgnoreNulls) {
+  auto data = makeRowVector({
+      // Values.
+      makeNullableFlatVector<int64_t>({1, std::nullopt, 3, 4, 5}),
+      // Large offsets(larger than uint32_t's max).
+      // 1099511627777 is a little special, it is: ((int64_t) 1 << 40) + 1
+      // which is bigger than int32:max() and it is also a positive number
+      // if cast to int32. With only such a special number we can trigger
+      // some tricky bug.
+      makeFlatVector<int64_t>(
+          {1099511627777,
+           1099511627777,
+           1099511627777,
+           1099511627777,
+           1099511627777}),
+  });
+
+  createDuckDbTable({data});
+
+  auto assertResults = [&](const std::string& functionSql) {
+    auto queryInfo = buildWindowQuery({data}, functionSql, "order by c0", "");
+
+    SCOPED_TRACE(queryInfo.functionSql);
+    assertQuery(queryInfo.planNode, queryInfo.querySql);
+  };
+
+  assertResults(fn("c0, c1 IGNORE NULLS"));
+}
+
 TEST_P(LeadLagTest, defaultValue) {
   auto data = makeRowVector({
       // Values.
