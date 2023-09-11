@@ -24,7 +24,6 @@ if(VELOX_BUILD_PYTHON_PACKAGE)
     pyvelox
     PRIVATE velox_type
             velox_vector
-            velox_vector_test_lib
             velox_core
             velox_dwio_dwrf_proto
             velox_dwio_dwrf_common

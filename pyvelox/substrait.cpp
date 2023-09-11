@@ -115,7 +115,7 @@ static inline void finalizeSubstrait() {
 std::vector<std::shared_ptr<facebook::velox::connector::ConnectorSplit>>
 makeSplits(
     const facebook::velox::substrait::SubstraitVeloxPlanConverter& converter,
-    std::shared_ptr<const core::PlanNode> planNode,
+    const std::shared_ptr<const core::PlanNode> planNode,
     const std::string& dirPath) {
   const auto& splitInfos = converter.splitInfos();
   auto leafPlanNodeIds = planNode->leafPlanNodeIds();
