@@ -45,8 +45,8 @@ class ContainerRowSerde {
       CompareFlags flags);
 
   /// Return std::nullopt if encountered in NullHandlingMode::StopAtNull mode.
-  /// Support NullHandlingMode::NoStop mode as well and return
-  /// std::optional<int32_t>(0) if null encountered.
+  /// And return std::optional<int32_t>(0) if both sides are nulls in
+  /// NullHandlingMode::NoStop mode.
   static std::optional<int32_t> compareWithNulls(
       ByteStream& left,
       const DecodedVector& right,

@@ -526,10 +526,10 @@ std::optional<int32_t> compare<TypeKind::MAP>(
   std::vector<vector_size_t> indices(size);
   auto rightIndices = map->sortedKeyIndices(wrappedIndex);
   auto result = compareArrayIndices(left, *map->mapKeys(), rightIndices, flags);
-  if (result.has_value() && result.value() != 0) {
-    return result;
+  if (result && *result == 0) {
+    return compareArrayIndices(left, *map->mapValues(), rightIndices, flags);
   }
-  return compareArrayIndices(left, *map->mapValues(), rightIndices, flags);
+  return result;
 }
 
 std::optional<int32_t> compareSwitch(

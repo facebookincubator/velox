@@ -35,6 +35,29 @@ class ContainerRowSerdeTest : public testing::Test,
     return position;
   }
 
+  std::vector<std::shared_ptr<ByteStream>> serialize(
+      const VectorPtr& data,
+      std::vector<HashStringAllocator::Position>& positions) {
+    std::vector<std::shared_ptr<ByteStream>> byteStreams;
+    auto size = data->size();
+    byteStreams.reserve(size);
+    positions.reserve(size);
+
+    for (auto i = 0; i < size; ++i) {
+      ByteStream out(&allocator_);
+      auto position = allocator_.newWrite(out);
+      ContainerRowSerde::serialize(*data, i, out);
+      allocator_.finishWrite(out, 0);
+
+      auto cur = std::make_shared<ByteStream>();
+      HashStringAllocator::prepareRead(position.header, *cur);
+      byteStreams.emplace_back(cur);
+      positions.emplace_back(position);
+    }
+
+    return byteStreams;
+  }
+
   VectorPtr deserialize(
       HashStringAllocator::Position position,
       const TypePtr& type,
@@ -144,53 +167,16 @@ TEST_F(ContainerRowSerdeTest, nested) {
   testRoundTrip(nestedArray);
 }
 
-TEST_F(ContainerRowSerdeTest, compareNullsInRowVector) {
-  auto data = makeRowVector({makeFlatVector<int32_t>({
-      1,
-      2,
-      3,
-  })});
-
-  auto position = serialize(data);
-  ByteStream out;
-  HashStringAllocator::prepareRead(position.header, out);
-
-  auto someNulls = makeFlatVector<int32_t>(
-      10, [](auto row) { return row; }, [](auto row) { return row % 2 == 0; });
-  auto rowVector = makeRowVector({someNulls});
-  SelectivityVector rows(rowVector->size());
-  DecodedVector decodedVector;
-  decodedVector.decode(*rowVector, rows);
-
-  static const CompareFlags kCompareFlags{
-      true, // nullsFirst
-      true, // ascending
-      false, // equalsOnly
-      CompareFlags::NullHandlingMode::StopAtNull};
-
-  for (vector_size_t i = 0; i < 10; ++i) {
-    ASSERT_EQ(
-        i % 2 != 0,
-        ContainerRowSerde::compareWithNulls(
-            out, decodedVector, i, kCompareFlags)
-            .has_value());
-    HashStringAllocator::prepareRead(position.header, out);
-  }
-
-  allocator_.clear();
-}
-
 TEST_F(ContainerRowSerdeTest, compareNullsInArrayVector) {
-  auto data = makeNullableArrayVector<int64_t>({
+  auto data = makeArrayVector<int64_t>({
       {1, 2},
       {},
       {1, 2, 3, 4},
       {1, 3, 5},
   });
-  auto position = serialize(data);
-  ByteStream out;
-  HashStringAllocator::prepareRead(position.header, out);
 
+  std::vector<HashStringAllocator::Position> positions;
+  auto byteStreams = serialize(data, positions);
   auto arrayVector = makeNullableArrayVector<int64_t>({
       {{1, 2}},
       std::nullopt,
@@ -209,40 +195,40 @@ TEST_F(ContainerRowSerdeTest, compareNullsInArrayVector) {
 
   ASSERT_EQ(
       0,
-      ContainerRowSerde::compareWithNulls(out, decodedVector, 0, kCompareFlags)
+      ContainerRowSerde::compareWithNulls(
+          *byteStreams.at(0), decodedVector, 0, kCompareFlags)
           .value());
   ASSERT_EQ(
       0,
-      ContainerRowSerde::compareWithNulls(out, decodedVector, 1, kCompareFlags)
+      ContainerRowSerde::compareWithNulls(
+          *byteStreams.at(1), decodedVector, 1, kCompareFlags)
           .value());
-  ASSERT_FALSE(
-      ContainerRowSerde::compareWithNulls(out, decodedVector, 2, kCompareFlags)
-          .has_value());
+  ASSERT_FALSE(ContainerRowSerde::compareWithNulls(
+                   *byteStreams.at(2), decodedVector, 2, kCompareFlags)
+                   .has_value());
   ASSERT_EQ(
-      1,
-      ContainerRowSerde::compareWithNulls(out, decodedVector, 3, kCompareFlags)
+      -1,
+      ContainerRowSerde::compareWithNulls(
+          *byteStreams.at(3), decodedVector, 3, kCompareFlags)
           .value());
-  HashStringAllocator::prepareRead(position.header, out);
 
   allocator_.clear();
 }
 
 TEST_F(ContainerRowSerdeTest, compareNullsInMapVector) {
-  auto data = makeMapVector<int16_t, int64_t>({
-      {{1, 10}, {2, 20}},
-      {{3, 30}, {4, 40}, {5, 50}},
-      {{1, 10}, {3, 30}, {4, 40}, {6, 60}},
-      {},
+  auto data = makeNullableMapVector<int64_t, int64_t>({
+      {{{1, 10}, {4, 30}}},
+      {{{2, 20}}},
+      {{{3, 30}}},
+      {{{4, std::nullopt}}},
   });
-  auto position = serialize(data);
-  ByteStream out;
-  HashStringAllocator::prepareRead(position.header, out);
-
+  std::vector<HashStringAllocator::Position> positions;
+  auto byteStreams = serialize(data, positions);
   auto mapVector = makeNullableMapVector<int64_t, int64_t>({
-      {{}}, // empty map
-      std::nullopt, // null map
-      {{{1, 10}, {2, 20}}},
-      {{{1, 11}, {3, 30}, {4, std::nullopt}}},
+      {{{1, 10}, {3, 20}}},
+      {{{2, 20}}},
+      {{{3, 40}}},
+      {{{4, std::nullopt}}},
   });
 
   SelectivityVector rows(mapVector->size());
@@ -254,15 +240,73 @@ TEST_F(ContainerRowSerdeTest, compareNullsInMapVector) {
       true, // ascending
       false, // equalsOnly
       CompareFlags::NullHandlingMode::StopAtNull};
-  auto leftSize = data->sizeAt(0);
-  for (vector_size_t i = 0; i < mapVector->size(); ++i) {
-    if (i == 2) {
-      ASSERT_TRUE(ContainerRowSerde::compareWithNulls(
-                      out, decodedVector, 2, kCompareFlags)
-                      .has_value());
-    }
-    HashStringAllocator::prepareRead(position.header, out);
-  }
+
+  ASSERT_EQ(
+      1,
+      ContainerRowSerde::compareWithNulls(
+          *byteStreams.at(0), decodedVector, 0, kCompareFlags)
+          .value());
+  ASSERT_EQ(
+      0,
+      ContainerRowSerde::compareWithNulls(
+          *byteStreams.at(1), decodedVector, 1, kCompareFlags)
+          .value());
+  ASSERT_EQ(
+      -1,
+      ContainerRowSerde::compareWithNulls(
+          *byteStreams.at(2), decodedVector, 2, kCompareFlags)
+          .value());
+  ASSERT_FALSE(ContainerRowSerde::compareWithNulls(
+                   *byteStreams.at(3), decodedVector, 3, kCompareFlags)
+                   .has_value());
+  allocator_.clear();
+}
+
+TEST_F(ContainerRowSerdeTest, compareNullsInRowVector) {
+  auto data = makeRowVector({makeFlatVector<int32_t>({
+      1,
+      2,
+      3,
+      4,
+  })});
+
+  std::vector<HashStringAllocator::Position> positions;
+  auto byteStreams = serialize(data, positions);
+  auto someNulls = makeNullableFlatVector<int32_t>({
+      {1},
+      {3},
+      {2},
+      std::nullopt,
+  });
+  auto rowVector = makeRowVector({someNulls});
+  SelectivityVector rows(rowVector->size());
+  DecodedVector decodedVector;
+  decodedVector.decode(*rowVector, rows);
+
+  static const CompareFlags kCompareFlags{
+      true, // nullsFirst
+      true, // ascending
+      false, // equalsOnly
+      CompareFlags::NullHandlingMode::StopAtNull};
+
+  ASSERT_EQ(
+      0,
+      ContainerRowSerde::compareWithNulls(
+          *byteStreams.at(0), decodedVector, 0, kCompareFlags)
+          .value());
+  ASSERT_EQ(
+      -1,
+      ContainerRowSerde::compareWithNulls(
+          *byteStreams.at(1), decodedVector, 1, kCompareFlags)
+          .value());
+  ASSERT_EQ(
+      1,
+      ContainerRowSerde::compareWithNulls(
+          *byteStreams.at(2), decodedVector, 2, kCompareFlags)
+          .value());
+  ASSERT_FALSE(ContainerRowSerde::compareWithNulls(
+                   *byteStreams.at(3), decodedVector, 3, kCompareFlags)
+                   .has_value());
 
   allocator_.clear();
 }
