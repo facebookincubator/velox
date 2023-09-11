@@ -21,7 +21,7 @@
 #include "velox/dwio/common/ReaderFactory.h"
 #include "velox/dwio/common/SelectiveColumnReader.h"
 #include "velox/dwio/parquet/reader/ParquetTypeWithId.h"
-#include "velox/dwio/parquet/thrift/ParquetThriftTypes.h"
+#include "velox/dwio/parquet/thrift/gen-cpp2/parquet_types.h"
 
 namespace facebook::velox::parquet {
 

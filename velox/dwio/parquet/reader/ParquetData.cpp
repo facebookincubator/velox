@@ -24,7 +24,8 @@ using thrift::RowGroup;
 std::unique_ptr<dwio::common::FormatData> ParquetParams::toFormatData(
     const std::shared_ptr<const dwio::common::TypeWithId>& type,
     const common::ScanSpec& /*scanSpec*/) {
-  return std::make_unique<ParquetData>(type, metaData_.row_groups, pool());
+  return std::make_unique<ParquetData>(
+      type, metaData_.get_row_groups(), pool());
 }
 
 void ParquetData::filterRowGroups(
@@ -65,19 +66,20 @@ bool ParquetData::rowGroupMatches(
   auto column = type_->column();
   auto type = type_->type();
   auto rowGroup = rowGroups_[rowGroupId];
-  assert(!rowGroup.columns.empty());
+  const auto& columns = rowGroup.get_columns();
+  VELOX_CHECK(!columns.empty());
 
   if (!filter) {
     return true;
   }
 
-  if (rowGroup.columns[column].__isset.meta_data &&
-      rowGroup.columns[column].meta_data.__isset.statistics) {
+  if (columns[column].meta_data().has_value() &&
+      columns[column].meta_data()->statistics().has_value()) {
     auto columnStats = buildColumnStatisticsFromThrift(
-        rowGroup.columns[column].meta_data.statistics,
+        *columns[column].meta_data()->statistics(),
         *type,
-        rowGroup.num_rows);
-    return testFilter(filter, columnStats.get(), rowGroup.num_rows, type);
+        rowGroup.get_num_rows());
+    return testFilter(filter, columnStats.get(), rowGroup.get_num_rows(), type);
   }
   return true;
 }
@@ -85,25 +87,26 @@ bool ParquetData::rowGroupMatches(
 void ParquetData::enqueueRowGroup(
     uint32_t index,
     dwio::common::BufferedInput& input) {
-  auto& chunk = rowGroups_[index].columns[type_->column()];
+  const auto& chunk = rowGroups_[index].get_columns()[type_->column()];
   streams_.resize(rowGroups_.size());
   VELOX_CHECK(
-      chunk.__isset.meta_data,
+      chunk.meta_data().has_value(),
       "ColumnMetaData does not exist for schema Id ",
       type_->column());
-  auto& metaData = chunk.meta_data;
+  const auto& metaData = *chunk.meta_data();
 
-  uint64_t chunkReadOffset = metaData.data_page_offset;
-  if (metaData.__isset.dictionary_page_offset &&
-      metaData.dictionary_page_offset >= 4) {
+  uint64_t chunkReadOffset = metaData.get_data_page_offset();
+  if (metaData.dictionary_page_offset().has_value() &&
+      *metaData.dictionary_page_offset() >= 4) {
     // this assumes the data pages follow the dict pages directly.
-    chunkReadOffset = metaData.dictionary_page_offset;
+    chunkReadOffset = *metaData.dictionary_page_offset();
   }
   VELOX_CHECK_GE(chunkReadOffset, 0);
 
-  uint64_t readSize = (metaData.codec == thrift::CompressionCodec::UNCOMPRESSED)
-      ? metaData.total_uncompressed_size
-      : metaData.total_compressed_size;
+  uint64_t readSize =
+      (metaData.get_codec() == thrift::CompressionCodec::UNCOMPRESSED)
+      ? metaData.get_total_uncompressed_size()
+      : metaData.get_total_compressed_size();
 
   auto id = dwio::common::StreamIdentifier(type_->column());
   streams_[index] = input.enqueue({chunkReadOffset, readSize}, &id);
@@ -113,13 +116,14 @@ dwio::common::PositionProvider ParquetData::seekToRowGroup(uint32_t index) {
   static std::vector<uint64_t> empty;
   VELOX_CHECK_LT(index, streams_.size());
   VELOX_CHECK(streams_[index], "Stream not enqueued for column");
-  auto& metadata = rowGroups_[index].columns[type_->column()].meta_data;
+  auto& metadata =
+      *rowGroups_[index].get_columns()[type_->column()].meta_data();
   reader_ = std::make_unique<PageReader>(
       std::move(streams_[index]),
       pool_,
       type_,
-      metadata.codec,
-      metadata.total_compressed_size);
+      metadata.get_codec(),
+      metadata.get_total_compressed_size());
   return dwio::common::PositionProvider(empty);
 }
 
@@ -127,16 +131,19 @@ std::pair<int64_t, int64_t> ParquetData::getRowGroupRegion(
     uint32_t index) const {
   auto& rowGroup = rowGroups_[index];
 
-  VELOX_CHECK_GT(rowGroup.columns.size(), 0);
-  auto fileOffset = rowGroup.__isset.file_offset ? rowGroup.file_offset
-      : rowGroup.columns[0].meta_data.__isset.dictionary_page_offset
-      ? rowGroup.columns[0].meta_data.dictionary_page_offset
-      : rowGroup.columns[0].meta_data.data_page_offset;
+  VELOX_CHECK_GT(rowGroup.get_columns().size(), 0);
+  auto fileOffset = rowGroup.file_offset().has_value() ? *rowGroup.file_offset()
+      : rowGroup.get_columns()[0]
+            .meta_data()
+            ->dictionary_page_offset()
+            .has_value()
+      ? *rowGroup.get_columns()[0].meta_data()->dictionary_page_offset()
+      : rowGroup.get_columns()[0].meta_data()->get_data_page_offset();
   VELOX_CHECK_GT(fileOffset, 0);
 
-  auto length = rowGroup.__isset.total_compressed_size
-      ? rowGroup.total_compressed_size
-      : rowGroup.total_byte_size;
+  auto length = rowGroup.total_compressed_size().has_value()
+      ? *rowGroup.total_compressed_size()
+      : rowGroup.get_total_byte_size();
 
   return {fileOffset, length};
 }

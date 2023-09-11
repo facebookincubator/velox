@@ -35,5 +35,5 @@ target_link_libraries(
   parquet
   arrow
   Snappy::snappy
-  thrift
+  FBThrift::thriftcpp2
   zstd::zstd)

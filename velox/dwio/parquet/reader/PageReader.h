@@ -37,7 +37,7 @@ class PageReader {
       std::unique_ptr<dwio::common::SeekableInputStream> stream,
       memory::MemoryPool& pool,
       ParquetTypeWithIdPtr nodeType,
-      thrift::CompressionCodec::type codec,
+      thrift::CompressionCodec codec,
       int64_t chunkSize)
       : pool_(pool),
         inputStream_(std::move(stream)),
@@ -55,7 +55,7 @@ class PageReader {
   PageReader(
       std::unique_ptr<dwio::common::SeekableInputStream> stream,
       memory::MemoryPool& pool,
-      thrift::CompressionCodec::type codec,
+      thrift::CompressionCodec codec,
       int64_t chunkSize)
       : pool_(pool),
         inputStream_(std::move(stream)),
@@ -170,6 +170,20 @@ class PageReader {
   // supported by CacheInputStream but not the other
   // SeekableInputStreams.
   void preloadRepDefs();
+
+  // Reads the next buffer from `inputStream_` in case we exhausted the
+  // current one. Returns true if a new buffer was read, throws in case
+  // `inputStream_` was exhausted.
+  bool advanceBufferIfNeeded();
+
+  // Refill the buffer by reading and appending buffers to the IOBuf chain until
+  // `neededBytes` bytes are available. `currentBytes` points to the current
+  // byte being parsed, and `remainingBytes` contains how many bytes are left in
+  // the current buffer.
+  std::unique_ptr<folly::IOBuf> refillBufferIfNeeded(
+      const uint8_t* currentBuffer,
+      int remainingBytes,
+      int neededBytes);
 
   // Sets row number info after reading a page header. If 'forRepDef',
   // does not set non-top level row numbers by repdefs. This is on
@@ -342,7 +356,7 @@ class PageReader {
   const int32_t maxDefine_;
   const bool isTopLevel_;
 
-  const thrift::CompressionCodec::type codec_;
+  const thrift::CompressionCodec codec_;
   const int64_t chunkSize_;
   const char* FOLLY_NULLABLE bufferStart_{nullptr};
   const char* FOLLY_NULLABLE bufferEnd_{nullptr};
@@ -390,7 +404,7 @@ class PageReader {
   raw_vector<uint64_t> leafNulls_;
 
   // Encoding of current page.
-  thrift::Encoding::type encoding_;
+  thrift::Encoding encoding_;
 
   // Row number of first value in current page from start of ColumnChunk.
   int64_t rowOfPage_{0};
@@ -414,7 +428,7 @@ class PageReader {
 
   // Dictionary contents.
   dwio::common::DictionaryValues dictionary_;
-  thrift::Encoding::type dictionaryEncoding_;
+  thrift::Encoding dictionaryEncoding_;
 
   // Offset of current page's header from start of ColumnChunk.
   uint64_t pageStart_{0};

@@ -16,14 +16,12 @@
 
 #pragma once
 
-#include <thrift/protocol/TCompactProtocol.h> //@manual
 #include "velox/common/base/RawVector.h"
 #include "velox/dwio/common/BufferUtil.h"
 #include "velox/dwio/common/BufferedInput.h"
 #include "velox/dwio/common/ScanSpec.h"
 #include "velox/dwio/parquet/reader/PageReader.h"
-#include "velox/dwio/parquet/thrift/ParquetThriftTypes.h"
-#include "velox/dwio/parquet/thrift/ThriftTransport.h"
+#include "velox/dwio/parquet/thrift/gen-cpp2/parquet_types.h"
 
 namespace facebook::velox::parquet {
 class ParquetParams : public dwio::common::FormatParams {
@@ -184,6 +182,7 @@ class ParquetData : public dwio::common::FormatData {
   memory::MemoryPool& pool_;
   std::shared_ptr<const ParquetTypeWithId> type_;
   const std::vector<thrift::RowGroup>& rowGroups_;
+
   // Streams for this column in each of 'rowGroups_'. Will be created on or
   // ahead of first use, not at construction.
   std::vector<std::unique_ptr<dwio::common::SeekableInputStream>> streams_;

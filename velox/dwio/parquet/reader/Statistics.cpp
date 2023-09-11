@@ -15,23 +15,70 @@
  */
 
 #include "velox/dwio/parquet/reader/Statistics.h"
+#include "velox/dwio/common/Statistics.h"
 #include "velox/type/Type.h"
 
 namespace facebook::velox::parquet {
+namespace {
+
+using thrift::Statistics;
+
+template <typename T>
+inline const T load(const std::string& ptr) {
+  T ret;
+  memcpy(&ret, ptr.data(), sizeof(ret));
+  return ret;
+}
+
+template <typename T>
+inline std::optional<T> getMin(const Statistics& columnChunkStats) {
+  return columnChunkStats.min_value().has_value()
+      ? load<T>(columnChunkStats.min_value().value())
+      : (columnChunkStats.min().has_value()
+             ? std::optional<T>(load<T>(columnChunkStats.min().value()))
+             : std::nullopt);
+}
+
+template <typename T>
+inline std::optional<T> getMax(const Statistics& columnChunkStats) {
+  return columnChunkStats.max_value().has_value()
+      ? std::optional<T>(load<T>(columnChunkStats.max_value().value()))
+      : (columnChunkStats.max().has_value()
+             ? std::optional<T>(load<T>(columnChunkStats.max().value()))
+             : std::nullopt);
+}
+
+template <>
+inline std::optional<std::string> getMin(const Statistics& columnChunkStats) {
+  return columnChunkStats.min_value().has_value()
+      ? std::optional(columnChunkStats.min_value().value())
+      : (columnChunkStats.min().has_value()
+             ? std::optional(columnChunkStats.min().value())
+             : std::nullopt);
+}
+
+template <>
+inline std::optional<std::string> getMax(const Statistics& columnChunkStats) {
+  return columnChunkStats.max_value().has_value()
+      ? std::optional(columnChunkStats.max_value().value())
+      : (columnChunkStats.max().has_value()
+             ? std::optional(columnChunkStats.max().value())
+             : std::nullopt);
+}
+
+} // namespace
 
 std::unique_ptr<dwio::common::ColumnStatistics> buildColumnStatisticsFromThrift(
-    const thrift::Statistics& columnChunkStats,
+    const Statistics& columnChunkStats,
     const velox::Type& type,
     uint64_t numRowsInRowGroup) {
-  std::optional<uint64_t> nullCount = columnChunkStats.__isset.null_count
-      ? std::optional<uint64_t>(columnChunkStats.null_count)
-      : std::nullopt;
-  std::optional<uint64_t> valueCount = nullCount.has_value()
-      ? std::optional<uint64_t>(numRowsInRowGroup - nullCount.value())
-      : std::nullopt;
-  std::optional<bool> hasNull = columnChunkStats.__isset.null_count
-      ? std::optional<bool>(columnChunkStats.null_count > 0)
-      : std::nullopt;
+  std::optional<uint64_t> valueCount;
+  std::optional<bool> hasNull;
+
+  if (auto nullCountRef = columnChunkStats.null_count()) {
+    valueCount = numRowsInRowGroup - *nullCountRef;
+    hasNull = *nullCountRef > 0;
+  }
 
   switch (type.kind()) {
     case TypeKind::BOOLEAN:
