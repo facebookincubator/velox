@@ -44,6 +44,9 @@ class ContainerRowSerde {
       const Type* type,
       CompareFlags flags);
 
+  /// Return std::nullopt if encountered in NullHandlingMode::StopAtNull mode.
+  /// Support NullHandlingMode::NoStop mode as well and return
+  /// std::optional<int32_t>(0) if null encountered.
   static std::optional<int32_t> compareWithNulls(
       ByteStream& left,
       const DecodedVector& right,

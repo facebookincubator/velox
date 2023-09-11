@@ -391,31 +391,6 @@ std::optional<int32_t> compare<TypeKind::VARBINARY>(
   return flags.ascending ? result : result * -1;
 }
 
-std::optional<std::optional<int32_t>>
-compareNulls(bool leftNull, bool rightNull, CompareFlags flags) {
-  switch (flags.nullHandlingMode) {
-    case CompareFlags::NullHandlingMode::StopAtNull:
-      return std::make_optional<std::optional<int32_t>>(std::nullopt);
-    case CompareFlags::NullHandlingMode::NoStop:
-    default:
-      break;
-  }
-
-  if (leftNull && rightNull) {
-    return std::nullopt;
-  }
-
-  if (leftNull) {
-    return {{flags.nullsFirst ? -1 : 1}};
-  }
-
-  if (rightNull) {
-    return {{flags.nullsFirst ? 1 : -1}};
-  }
-
-  VELOX_UNREACHABLE();
-}
-
 template <>
 std::optional<int32_t> compare<TypeKind::ROW>(
     ByteStream& left,
@@ -435,16 +410,18 @@ std::optional<int32_t> compare<TypeKind::ROW>(
     auto rightNull = child->isNullAt(wrappedIndex);
 
     if (leftNull || rightNull) {
-      if (auto result = compareNulls(leftNull, rightNull, flags)) {
-        return result.value();
+      auto result = BaseVector::compareNulls(leftNull, rightNull, flags);
+      if (result && *result == 0) {
+        continue;
       }
-      continue;
+      return result;
     }
 
     auto result = compareSwitch(left, *child, wrappedIndex, flags);
-    if (result.has_value() && result.value() != 0) {
-      return result;
+    if (result && *result == 0) {
+      continue;
     }
+    return result;
   }
   return 0;
 }
@@ -468,16 +445,18 @@ std::optional<int32_t> compareArrays(
     bool rightNull = wrappedElements->isNullAt(elementIndex);
 
     if (leftNull || rightNull) {
-      if (auto result = compareNulls(leftNull, rightNull, flags)) {
-        return result.value();
+      auto result = BaseVector::compareNulls(leftNull, rightNull, flags);
+      if (result && *result == 0) {
+        continue;
       }
-      continue;
+      return result;
     }
 
     auto result = compareSwitch(left, *wrappedElements, elementIndex, flags);
-    if (result.has_value() && result.value() != 0) {
-      return result;
+    if (result && *result == 0) {
+      continue;
     }
+    return result;
   }
   return flags.ascending ? (leftSize - rightSize) : (rightSize - leftSize);
 }
@@ -501,16 +480,18 @@ std::optional<int32_t> compareArrayIndices(
     bool rightNull = wrappedElements->isNullAt(elementIndex);
 
     if (leftNull || rightNull) {
-      if (auto result = compareNulls(leftNull, rightNull, flags)) {
-        return result.value();
+      auto result = BaseVector::compareNulls(leftNull, rightNull, flags);
+      if (result && *result == 0) {
+        continue;
       }
-      continue;
+      return result;
     }
 
     auto result = compareSwitch(left, *wrappedElements, elementIndex, flags);
-    if (result.has_value() && result.value() != 0) {
-      return result;
+    if (result && *result == 0) {
+      continue;
     }
+    return result;
   }
   return flags.ascending ? (leftSize - rightSize) : (rightSize - leftSize);
 }
@@ -816,6 +797,7 @@ int32_t ContainerRowSerde::compare(
     const DecodedVector& right,
     vector_size_t index,
     CompareFlags flags) {
+  VELOX_DCHECK(!flags.mayStopAtNull(), "not supported null handling mode");
   return compareSwitch(left, *right.base(), right.index(index), flags).value();
 }
 
@@ -830,7 +812,6 @@ int32_t ContainerRowSerde::compare(
   return compareSwitch(left, right, type, flags);
 }
 
-// static
 std::optional<int32_t> ContainerRowSerde::compareWithNulls(
     ByteStream& left,
     const DecodedVector& right,

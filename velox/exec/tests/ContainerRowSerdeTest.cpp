@@ -15,7 +15,6 @@
  */
 #include "velox/exec/ContainerRowSerde.h"
 #include <gtest/gtest.h>
-#include <iostream>
 #include "velox/common/memory/HashStringAllocator.h"
 #include "velox/vector/tests/utils/VectorTestBase.h"
 
@@ -146,20 +145,11 @@ TEST_F(ContainerRowSerdeTest, nested) {
 }
 
 TEST_F(ContainerRowSerdeTest, compareNullsInRowVector) {
-  std::optional<std::optional<int>> x =
-      std::make_optional<std::optional<int>>(std::nullopt);
-  auto data = makeRowVector({
-      makeNullableFlatVector<int32_t>({
-          1,
-          2,
-          3,
-      }),
-      makeFlatVector<std::string>({
-          "a",
-          "",
-          "Long test sentence ......",
-      }),
-  });
+  auto data = makeRowVector({makeFlatVector<int32_t>({
+      1,
+      2,
+      3,
+  })});
 
   auto position = serialize(data);
   ByteStream out;
@@ -191,17 +181,21 @@ TEST_F(ContainerRowSerdeTest, compareNullsInRowVector) {
 }
 
 TEST_F(ContainerRowSerdeTest, compareNullsInArrayVector) {
-  auto data = makeArrayVector<int64_t>({{1, 2}});
+  auto data = makeNullableArrayVector<int64_t>({
+      {1, 2},
+      {},
+      {1, 2, 3, 4},
+      {1, 3, 5},
+  });
   auto position = serialize(data);
   ByteStream out;
   HashStringAllocator::prepareRead(position.header, out);
 
   auto arrayVector = makeNullableArrayVector<int64_t>({
-      {{1}},
       {{1, 2}},
-      {{1, std::nullopt, 1}},
       std::nullopt,
-      {{1, 2, 3}},
+      {{std::nullopt, 1}},
+      {{1, 5}},
   });
   SelectivityVector rows(arrayVector->size());
   DecodedVector decodedVector;
@@ -212,18 +206,60 @@ TEST_F(ContainerRowSerdeTest, compareNullsInArrayVector) {
       true, // ascending
       false, // equalsOnly
       CompareFlags::NullHandlingMode::StopAtNull};
+
+  ASSERT_EQ(
+      0,
+      ContainerRowSerde::compareWithNulls(out, decodedVector, 0, kCompareFlags)
+          .value());
+  ASSERT_EQ(
+      0,
+      ContainerRowSerde::compareWithNulls(out, decodedVector, 1, kCompareFlags)
+          .value());
+  ASSERT_FALSE(
+      ContainerRowSerde::compareWithNulls(out, decodedVector, 2, kCompareFlags)
+          .has_value());
+  ASSERT_EQ(
+      1,
+      ContainerRowSerde::compareWithNulls(out, decodedVector, 3, kCompareFlags)
+          .value());
+  HashStringAllocator::prepareRead(position.header, out);
+
+  allocator_.clear();
+}
+
+TEST_F(ContainerRowSerdeTest, compareNullsInMapVector) {
+  auto data = makeMapVector<int16_t, int64_t>({
+      {{1, 10}, {2, 20}},
+      {{3, 30}, {4, 40}, {5, 50}},
+      {{1, 10}, {3, 30}, {4, 40}, {6, 60}},
+      {},
+  });
+  auto position = serialize(data);
+  ByteStream out;
+  HashStringAllocator::prepareRead(position.header, out);
+
+  auto mapVector = makeNullableMapVector<int64_t, int64_t>({
+      {{}}, // empty map
+      std::nullopt, // null map
+      {{{1, 10}, {2, 20}}},
+      {{{1, 11}, {3, 30}, {4, std::nullopt}}},
+  });
+
+  SelectivityVector rows(mapVector->size());
+  DecodedVector decodedVector;
+  decodedVector.decode(*mapVector, rows);
+
+  static const CompareFlags kCompareFlags{
+      true, // nullsFirst
+      true, // ascending
+      false, // equalsOnly
+      CompareFlags::NullHandlingMode::StopAtNull};
   auto leftSize = data->sizeAt(0);
-  for (vector_size_t i = 0; i < arrayVector->size(); ++i) {
+  for (vector_size_t i = 0; i < mapVector->size(); ++i) {
     if (i == 2) {
-      ASSERT_FALSE(ContainerRowSerde::compareWithNulls(
-                       out, decodedVector, 2, kCompareFlags)
-                       .has_value());
-    } else {
-      ASSERT_EQ(
-          leftSize - arrayVector->sizeAt(i),
-          ContainerRowSerde::compareWithNulls(
-              out, decodedVector, i, kCompareFlags)
-              .value());
+      ASSERT_TRUE(ContainerRowSerde::compareWithNulls(
+                      out, decodedVector, 2, kCompareFlags)
+                      .has_value());
     }
     HashStringAllocator::prepareRead(position.header, out);
   }
