@@ -65,6 +65,7 @@ add_executable(
   MapKeysAndValuesTest.cpp
   MapTest.cpp
   MapZipWithTest.cpp
+  MultimapFromEntriesTest.cpp
   NotTest.cpp
   ProbabilityTest.cpp
   RandTest.cpp

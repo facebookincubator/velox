@@ -41,6 +41,7 @@ add_library(
   MapFromEntries.cpp
   MapKeysAndValues.cpp
   MapZipWith.cpp
+  MultimapFromEntries.cpp
   Not.cpp
   Reduce.cpp
   Repeat.cpp

@@ -75,6 +75,12 @@ Map Functions
                             MAP(ARRAY['a', 'b', 'c'], ARRAY[1, 2, 3]),
                             (k, v1, v2) -> k || CAST(v1/v2 AS VARCHAR));
 
+.. function:: multimap_from_entries(array(row(K, V))) -> map(K, array(V))
+
+    Returns a multimap created from the given array of entries. Each key can be associated with multiple values. ::
+
+        SELECT multimap_from_entries(ARRAY[(1, 'x'), (2, 'y'), (1, 'z')]); -- {1 -> ['x', 'z'], 2 -> ['y']}
+
 .. function:: subscript(map(K, V), key) -> V
    :noindex:
 
