@@ -1219,6 +1219,15 @@ int32_t HashProbe::evalFilter(int32_t numRows) {
         outputTableRows_[numPassed] = outputTableRows_[i];
         rawOutputProbeRowMapping[numPassed++] = rawOutputProbeRowMapping[i];
       }
+      // Last row in the sub-batch which is not added to outputTableRows_ but
+      // has filter_ as false needs to be added with NULLs as the current
+      // sub-batch rows need to be accounted for before the next sub-batch
+      // begins.
+      if ((i == (numRows - 1)) && (!noMatchDetector_.getCurrentRowPassed())) {
+        // The currentRow gets added with NULLs to outputTableRows_
+        // and assigns noMatchDetector_.lastRowAdded to true for tracking this.
+        noMatchDetector_.finishBatch(addMiss);
+      }
     }
     if (results_.atEnd()) {
       noMatchDetector_.finish(addMiss);

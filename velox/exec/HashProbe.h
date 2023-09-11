@@ -382,11 +382,16 @@ class HashProbe : public Operator {
     template <typename TOnMiss>
     void advance(vector_size_t row, bool passed, TOnMiss onMiss) {
       if (currentRow != row) {
-        if (currentRow != -1 && !currentRowPassed) {
+        if (currentRow != -1 && !currentRowPassed && !lastRowAdded) {
+          // Add the currentRow,i.e, the previous row for the incoming row
+          // with NULLs to build side. If the currentRow is from the previous
+          // sub-batch with currentRowPassed as false, then avoid it as it would
+          // have been already added at the last of its batch itself.
           onMiss(currentRow);
         }
         currentRow = row;
         currentRowPassed = false;
+        lastRowAdded = false;
       }
       if (passed) {
         currentRowPassed = true;
@@ -396,12 +401,24 @@ class HashProbe : public Operator {
     // Called when all rows from the current input batch were processed.
     template <typename TOnMiss>
     void finish(TOnMiss onMiss) {
-      if (!currentRowPassed) {
+      if (!currentRowPassed && !lastRowAdded) {
         onMiss(currentRow);
       }
 
       currentRow = -1;
       currentRowPassed = false;
+    }
+
+    // Called for the last row for the current input sub-batch processed.
+    template <typename TOnMiss>
+    void finishBatch(TOnMiss onMiss) {
+      onMiss(currentRow);
+      lastRowAdded = true;
+    }
+
+    // Returns the currentRowPassed value.
+    bool getCurrentRowPassed() {
+      return currentRowPassed;
     }
 
    private:
@@ -410,6 +427,9 @@ class HashProbe : public Operator {
 
     // True if currentRow has a match.
     bool currentRowPassed{false};
+
+    // True if currentRowPassed is false for the last input row in a sub-batch.
+    bool lastRowAdded{false};
   };
 
   // For left semi join filter with extra filter, de-duplicates probe side rows
