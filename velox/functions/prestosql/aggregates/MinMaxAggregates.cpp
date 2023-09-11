@@ -892,6 +892,15 @@ exec::AggregateRegistrationResult registerMinMax(const std::string& name) {
             .build());
   }
 
+   signatures.push_back(exec::AggregateFunctionSignatureBuilder()
+                           .integerVariable("a_precision")
+                           .integerVariable("a_scale")
+                           .argumentType("DECIMAL(a_precision, a_scale)")
+                           .argumentType("bigint")
+                           .intermediateType("row(bigint, array(DECIMAL(a_precision, a_scale)))")
+                           .returnType("array(DECIMAL(a_precision, a_scale))")
+                           .build());
+
   return exec::registerAggregateFunction(
       name,
       std::move(signatures),

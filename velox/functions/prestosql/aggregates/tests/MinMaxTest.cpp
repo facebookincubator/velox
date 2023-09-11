@@ -360,6 +360,34 @@ class MinMaxNTest : public functions::aggregate::test::AggregationTestBase {
   }
 
   template <typename T>
+  void testNumericGlobalDecimal() {
+    auto data = makeRowVector({
+        makeFlatVector<T>({100000, 131011, 223454, 111911, 111300, 800000, 104000, 712452, 161213, 135243}, DECIMAL(6,2)),
+    });
+    auto expected = makeRowVector({
+        makeArrayVector<T>({
+            {100000, 104000},
+        }),
+        makeArrayVector<T>({
+            {100000, 104000, 111300, 111911, 131011},
+        }),
+        makeArrayVector<T>({
+            {800000, 712452, 223454},
+        }),
+        makeArrayVector<T>({
+            {800000, 712452, 223454, 161213, 135243, 131011, 111911},
+        }),
+    });
+
+    testAggregations(
+        {data},
+        {},
+        {"min(c0, 2)", "min(c0, 5)", "max(c0, 3)", "max(c0, 7)"},
+        {expected});
+
+  }
+
+  template <typename T>
   void testNumericGroupBy() {
     auto data = makeRowVector({
         makeFlatVector<int16_t>({1, 2, 1, 1, 2, 2, 1, 2}),
@@ -477,6 +505,14 @@ TEST_F(MinMaxNTest, real) {
 TEST_F(MinMaxNTest, double) {
   testNumericGlobal<double>();
   testNumericGroupBy<double>();
+}
+
+TEST_F(MinMaxNTest, shortdecimal) {
+  testNumericGlobalDecimal<int64_t>();
+}
+
+TEST_F(MinMaxNTest, longdecimal) {
+  testNumericGlobalDecimal<int128_t>();
 }
 
 } // namespace
