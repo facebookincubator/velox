@@ -154,3 +154,17 @@ TEST_F(HashPartitionFunctionTest, spec) {
     ASSERT_EQ(hashSpec->toString(), copy->toString());
   }
 }
+
+TEST_F(HashPartitionFunctionTest, noKeyAndBitRange) {
+  const size_t numRows = 10'000;
+  RowVectorPtr vector = makeRowVector(
+      {makeFlatVector<int32_t>(numRows, [](auto row) { return row * 100 / 3; }),
+       makeFlatVector<int32_t>(numRows, [](auto row) { return row * 128; })});
+  RowTypePtr rowType = asRowType(vector->type());
+  HashPartitionFunction functionWithoutKeyAndBits(4, rowType, {}, {});
+  std::vector<uint32_t> partitions(numRows);
+  functionWithoutKeyAndBits.partition(*vector, partitions);
+  for (size_t i = 0; i < numRows; ++i) {
+    EXPECT_EQ(partitions[i], 0);
+  }
+}
