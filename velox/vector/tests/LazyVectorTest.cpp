@@ -256,7 +256,8 @@ TEST_F(LazyVectorTest, dictionaryOverLazyRowVectorWithLazyChildren) {
   RowVector* loadedVector =
       dict->valueVector()->loadedVector()->as<RowVector>();
   auto child = loadedVector->childAt(0);
-  EXPECT_FALSE(child->isLazy());
+  auto lazyChild = child->as<LazyVector>();
+  EXPECT_TRUE(lazyChild->isLoaded());
   assertEqualVectors(child, lazyInnerRowVector);
 }
 

@@ -98,7 +98,8 @@ class RowVector : public BaseVector {
       if (!children_[i]) {
         continue;
       }
-      if (children_[i]->as<LazyVector>()->isLoaded()) {
+      auto asLazy = children_[i]->as<LazyVector>();
+      if (asLazy && asLazy->isLoaded()) {
         continue;
       }
       auto newChild = BaseVector::loadedVectorShared(children_[i]);
