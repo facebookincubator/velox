@@ -411,14 +411,14 @@ std::optional<int32_t> compare<TypeKind::ROW>(
 
     if (leftNull || rightNull) {
       auto result = BaseVector::compareNulls(leftNull, rightNull, flags);
-      if (result && *result == 0) {
+      if (result.has_value() && result.value() == 0) {
         continue;
       }
       return result;
     }
 
     auto result = compareSwitch(left, *child, wrappedIndex, flags);
-    if (result && *result == 0) {
+    if (result.has_value() && result.value() == 0) {
       continue;
     }
     return result;
@@ -446,14 +446,14 @@ std::optional<int32_t> compareArrays(
 
     if (leftNull || rightNull) {
       auto result = BaseVector::compareNulls(leftNull, rightNull, flags);
-      if (result && *result == 0) {
+      if (result.has_value() && result.value() == 0) {
         continue;
       }
       return result;
     }
 
     auto result = compareSwitch(left, *wrappedElements, elementIndex, flags);
-    if (result && *result == 0) {
+    if (result.has_value() && result.value() == 0) {
       continue;
     }
     return result;
@@ -481,14 +481,14 @@ std::optional<int32_t> compareArrayIndices(
 
     if (leftNull || rightNull) {
       auto result = BaseVector::compareNulls(leftNull, rightNull, flags);
-      if (result && *result == 0) {
+      if (result.has_value() && result.value() == 0) {
         continue;
       }
       return result;
     }
 
     auto result = compareSwitch(left, *wrappedElements, elementIndex, flags);
-    if (result && *result == 0) {
+    if (result.has_value() && result.value() == 0) {
       continue;
     }
     return result;
@@ -526,7 +526,7 @@ std::optional<int32_t> compare<TypeKind::MAP>(
   std::vector<vector_size_t> indices(size);
   auto rightIndices = map->sortedKeyIndices(wrappedIndex);
   auto result = compareArrayIndices(left, *map->mapKeys(), rightIndices, flags);
-  if (result && *result == 0) {
+  if (result.has_value() && result.value() == 0) {
     return compareArrayIndices(left, *map->mapValues(), rightIndices, flags);
   }
   return result;
