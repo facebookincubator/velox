@@ -195,6 +195,68 @@ Each key can be associated with multiple values.</p>
 </dd></dl>
 
 <dl class="py function">
+<dt class="sig sig-object py" id="reduce_agg">
+<span class="sig-name descname"><span class="pre">reduce_agg</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">inputValue</span> <span class="pre">T</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">initialState</span> <span class="pre">S</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">inputFunction(S</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">T</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">S)</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">combineFunction(S</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">S</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">S)</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">S</span></span></span><a class="headerlink" href="#reduce_agg" title="Permalink to this definition">¶</a></dt>
+<dd><p>Reduces all non-NULL input values into a single value. <code class="docutils literal notranslate"><span class="pre">inputFunction</span></code>
+will be invoked for each non-NULL input value. If all inputs are NULL, the
+result is NULL. In addition to taking the input value, <code class="docutils literal notranslate"><span class="pre">inputFunction</span></code>
+takes the current state, initially <code class="docutils literal notranslate"><span class="pre">initialState</span></code>, and returns the new state.
+<code class="docutils literal notranslate"><span class="pre">combineFunction</span></code> will be invoked to combine two states into a new state.
+The final state is returned. Throws an error if <code class="docutils literal notranslate"><span class="pre">initialState</span></code> is NULL or
+<code class="docutils literal notranslate"><span class="pre">inputFunction</span></code> or <code class="docutils literal notranslate"><span class="pre">combineFunction</span></code> returns a NULL.:</p>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="o">--</span> <span class="n">Compute</span> <span class="nb">sum</span> <span class="p">(</span><span class="k">for</span> <span class="n">illustration</span> <span class="n">purposes</span> <span class="n">only</span><span class="p">;</span> <span class="n">use</span> <span class="n">SUM</span> <span class="n">aggregate</span> <span class="n">function</span> <span class="ow">in</span> <span class="n">production</span> <span class="n">queries</span><span class="p">)</span><span class="o">.</span>
+<span class="n">SELECT</span> <span class="nb">id</span><span class="p">,</span> <span class="n">reduce_agg</span><span class="p">(</span><span class="n">value</span><span class="p">,</span> <span class="mi">0</span><span class="p">,</span> <span class="p">(</span><span class="n">a</span><span class="p">,</span> <span class="n">b</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">a</span> <span class="o">+</span> <span class="n">b</span><span class="p">,</span> <span class="p">(</span><span class="n">a</span><span class="p">,</span> <span class="n">b</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">a</span> <span class="o">+</span> <span class="n">b</span><span class="p">)</span>
+<span class="n">FROM</span> <span class="p">(</span>
+    <span class="n">VALUES</span>
+        <span class="p">(</span><span class="mi">1</span><span class="p">,</span> <span class="mi">2</span><span class="p">),</span>
+        <span class="p">(</span><span class="mi">1</span><span class="p">,</span> <span class="mi">3</span><span class="p">),</span>
+        <span class="p">(</span><span class="mi">1</span><span class="p">,</span> <span class="mi">4</span><span class="p">),</span>
+        <span class="p">(</span><span class="mi">2</span><span class="p">,</span> <span class="mi">20</span><span class="p">),</span>
+        <span class="p">(</span><span class="mi">2</span><span class="p">,</span> <span class="mi">30</span><span class="p">),</span>
+        <span class="p">(</span><span class="mi">2</span><span class="p">,</span> <span class="mi">40</span><span class="p">)</span>
+<span class="p">)</span> <span class="n">AS</span> <span class="n">t</span><span class="p">(</span><span class="nb">id</span><span class="p">,</span> <span class="n">value</span><span class="p">)</span>
+<span class="n">GROUP</span> <span class="n">BY</span> <span class="nb">id</span><span class="p">;</span>
+<span class="o">--</span> <span class="p">(</span><span class="mi">1</span><span class="p">,</span> <span class="mi">9</span><span class="p">)</span>
+<span class="o">--</span> <span class="p">(</span><span class="mi">2</span><span class="p">,</span> <span class="mi">90</span><span class="p">)</span>
+
+<span class="o">--</span> <span class="n">Compute</span> <span class="n">product</span><span class="o">.</span>
+<span class="n">SELECT</span> <span class="nb">id</span><span class="p">,</span> <span class="n">reduce_agg</span><span class="p">(</span><span class="n">value</span><span class="p">,</span> <span class="mi">1</span><span class="p">,</span> <span class="p">(</span><span class="n">a</span><span class="p">,</span> <span class="n">b</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">a</span> <span class="o">*</span> <span class="n">b</span><span class="p">,</span> <span class="p">(</span><span class="n">a</span><span class="p">,</span> <span class="n">b</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">a</span> <span class="o">*</span> <span class="n">b</span><span class="p">)</span>
+<span class="n">FROM</span> <span class="p">(</span>
+    <span class="n">VALUES</span>
+        <span class="p">(</span><span class="mi">1</span><span class="p">,</span> <span class="mi">2</span><span class="p">),</span>
+        <span class="p">(</span><span class="mi">1</span><span class="p">,</span> <span class="mi">3</span><span class="p">),</span>
+        <span class="p">(</span><span class="mi">1</span><span class="p">,</span> <span class="mi">4</span><span class="p">),</span>
+        <span class="p">(</span><span class="mi">2</span><span class="p">,</span> <span class="mi">20</span><span class="p">),</span>
+        <span class="p">(</span><span class="mi">2</span><span class="p">,</span> <span class="mi">30</span><span class="p">),</span>
+        <span class="p">(</span><span class="mi">2</span><span class="p">,</span> <span class="mi">40</span><span class="p">)</span>
+<span class="p">)</span> <span class="n">AS</span> <span class="n">t</span><span class="p">(</span><span class="nb">id</span><span class="p">,</span> <span class="n">value</span><span class="p">)</span>
+<span class="n">GROUP</span> <span class="n">BY</span> <span class="nb">id</span><span class="p">;</span>
+<span class="o">--</span> <span class="p">(</span><span class="mi">1</span><span class="p">,</span> <span class="mi">24</span><span class="p">)</span>
+<span class="o">--</span> <span class="p">(</span><span class="mi">2</span><span class="p">,</span> <span class="mi">24000</span><span class="p">)</span>
+
+<span class="o">--</span> <span class="n">Compute</span> <span class="n">avg</span> <span class="p">(</span><span class="k">for</span> <span class="n">illustration</span> <span class="n">purposes</span> <span class="n">only</span><span class="p">;</span> <span class="n">use</span> <span class="n">AVG</span> <span class="n">aggregate</span> <span class="n">function</span> <span class="ow">in</span> <span class="n">production</span> <span class="n">queries</span><span class="p">)</span><span class="o">.</span>
+<span class="n">SELECT</span> <span class="nb">id</span><span class="p">,</span> <span class="n">sum_and_count</span><span class="o">.</span><span class="n">sum</span> <span class="o">/</span> <span class="n">sum_and_count</span><span class="o">.</span><span class="n">count</span> <span class="n">FROM</span> <span class="p">(</span>
+  <span class="n">SELECT</span> <span class="nb">id</span><span class="p">,</span> <span class="n">reduce_agg</span><span class="p">(</span><span class="n">value</span><span class="p">,</span> <span class="n">CAST</span><span class="p">(</span><span class="n">row</span><span class="p">(</span><span class="mi">0</span><span class="p">,</span> <span class="mi">0</span><span class="p">)</span> <span class="n">AS</span> <span class="n">row</span><span class="p">(</span><span class="nb">sum</span> <span class="n">double</span><span class="p">,</span> <span class="n">count</span> <span class="n">bigint</span><span class="p">)),</span>
+    <span class="p">(</span><span class="n">s</span><span class="p">,</span> <span class="n">x</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">CAST</span><span class="p">(</span><span class="n">row</span><span class="p">(</span><span class="n">s</span><span class="o">.</span><span class="n">sum</span> <span class="o">+</span> <span class="n">x</span><span class="p">,</span> <span class="n">s</span><span class="o">.</span><span class="n">count</span> <span class="o">+</span> <span class="mi">1</span><span class="p">)</span> <span class="n">AS</span> <span class="n">row</span><span class="p">(</span><span class="nb">sum</span> <span class="n">double</span><span class="p">,</span> <span class="n">count</span> <span class="n">bigint</span><span class="p">)),</span>
+    <span class="p">(</span><span class="n">s</span><span class="p">,</span> <span class="n">s2</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">CAST</span><span class="p">(</span><span class="n">row</span><span class="p">(</span><span class="n">s</span><span class="o">.</span><span class="n">sum</span> <span class="o">+</span> <span class="n">s2</span><span class="o">.</span><span class="n">sum</span><span class="p">,</span> <span class="n">s</span><span class="o">.</span><span class="n">count</span> <span class="o">+</span> <span class="n">s2</span><span class="o">.</span><span class="n">count</span><span class="p">)</span> <span class="n">AS</span> <span class="n">row</span><span class="p">(</span><span class="nb">sum</span> <span class="n">double</span><span class="p">,</span> <span class="n">count</span> <span class="n">bigint</span><span class="p">)))</span> <span class="n">AS</span> <span class="n">sum_and_count</span>
+  <span class="n">FROM</span> <span class="p">(</span>
+       <span class="n">VALUES</span>
+           <span class="p">(</span><span class="mi">1</span><span class="p">,</span> <span class="mi">2</span><span class="p">),</span>
+           <span class="p">(</span><span class="mi">1</span><span class="p">,</span> <span class="mi">3</span><span class="p">),</span>
+           <span class="p">(</span><span class="mi">1</span><span class="p">,</span> <span class="mi">4</span><span class="p">),</span>
+           <span class="p">(</span><span class="mi">2</span><span class="p">,</span> <span class="mi">20</span><span class="p">),</span>
+           <span class="p">(</span><span class="mi">2</span><span class="p">,</span> <span class="mi">30</span><span class="p">),</span>
+           <span class="p">(</span><span class="mi">2</span><span class="p">,</span> <span class="mi">40</span><span class="p">)</span>
+   <span class="p">)</span> <span class="n">AS</span> <span class="n">t</span><span class="p">(</span><span class="nb">id</span><span class="p">,</span> <span class="n">value</span><span class="p">)</span>
+   <span class="n">GROUP</span> <span class="n">BY</span> <span class="nb">id</span>
+<span class="p">);</span>
+<span class="o">--</span> <span class="p">(</span><span class="mi">1</span><span class="p">,</span> <span class="mf">3.0</span><span class="p">)</span>
+<span class="o">--</span> <span class="p">(</span><span class="mi">2</span><span class="p">,</span> <span class="mf">30.0</span><span class="p">)</span>
+</pre></div>
+</div>
+</dd></dl>
+
+<dl class="py function">
 <dt class="sig sig-object py" id="set_agg">
 <span class="sig-name descname"><span class="pre">set_agg</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">x</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">array&lt;[same</span> <span class="pre">as</span> <span class="pre">input]&gt;</span></span></span><a class="headerlink" href="#set_agg" title="Permalink to this definition">¶</a></dt>
 <dd><p>Returns an array created from the distinct input <code class="docutils literal notranslate"><span class="pre">x</span></code> elements.</p>
