@@ -323,7 +323,7 @@ template <typename T>
 struct DateDiffFunction {
   VELOX_DEFINE_FUNCTION_TYPES(T);
 
-  FOLLY_ALWAYS_INLINE bool call(
+  FOLLY_ALWAYS_INLINE void call(
       int32_t& result,
       const arg_type<Date>& endDate,
       const arg_type<Date>& startDate) {
@@ -332,7 +332,6 @@ struct DateDiffFunction {
       VELOX_UNSUPPORTED("integer overflow");
     }
     result = (int32_t)value;
-    return true;
   }
 };
 } // namespace facebook::velox::functions::sparksql

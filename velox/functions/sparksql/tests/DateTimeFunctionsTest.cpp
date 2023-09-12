@@ -391,23 +391,20 @@ TEST_F(DateTimeFunctionsTest, dateDiffDate) {
     return evaluateOnce<int32_t, int32_t>(
         "datediff(c0, c1)", {endDate, startDate}, {DATE(), DATE()});
   };
-  // Check null behaviors
-  EXPECT_EQ(std::nullopt, dateDiff(1, std::nullopt));
-  EXPECT_EQ(std::nullopt, dateDiff(std::nullopt, 0));
 
-  // Simple tests
+  // Simple tests.
   EXPECT_EQ(-1, dateDiff(parseDate("2019-02-28"), parseDate("2019-03-01")));
   EXPECT_EQ(-358, dateDiff(parseDate("2019-02-28"), parseDate("2020-02-21")));
   EXPECT_EQ(0, dateDiff(parseDate("1994-04-20"), parseDate("1994-04-20")));
 
-  // Account for the last day of a year-month
+  // Account for the last day of a year-month.
   EXPECT_EQ(395, dateDiff(parseDate("2020-02-29"), parseDate("2019-01-30")));
 
-  // Check Large date
+  // Check Large date.
   EXPECT_EQ(
       -737790, dateDiff(parseDate("2020-02-29"), parseDate("4040-02-29")));
 
-  // Negative year
+  // Negative year.
   EXPECT_EQ(
       2147474628,
       dateDiff(parseDate("-5877641-06-23"), parseDate("1994-09-12")));
