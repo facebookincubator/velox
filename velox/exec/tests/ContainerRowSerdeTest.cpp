@@ -25,6 +25,8 @@ namespace {
 class ContainerRowSerdeTest : public testing::Test,
                               public velox::test::VectorTestBase {
  protected:
+  // Writes all rows together and returns a position at the start of this
+  // combined write.
   HashStringAllocator::Position serialize(const VectorPtr& data) {
     ByteStream out(&allocator_);
     auto position = allocator_.newWrite(out);
@@ -35,6 +37,7 @@ class ContainerRowSerdeTest : public testing::Test,
     return position;
   }
 
+  // Writes each row individually and returns positions for individual rows.
   std::vector<HashStringAllocator::Position> serializeWithPositions(
       const VectorPtr& data) {
     std::vector<HashStringAllocator::Position> positions;
@@ -46,9 +49,6 @@ class ContainerRowSerdeTest : public testing::Test,
       auto position = allocator_.newWrite(out);
       ContainerRowSerde::serialize(*data, i, out);
       allocator_.finishWrite(out, 0);
-
-      auto cur = std::make_shared<ByteStream>();
-      HashStringAllocator::prepareRead(position.header, *cur);
       positions.emplace_back(position);
     }
 
@@ -95,12 +95,12 @@ class ContainerRowSerdeTest : public testing::Test,
         mode};
 
     for (auto i = 0; i < expected.size(); ++i) {
-      ByteStream buf;
-      HashStringAllocator::prepareRead(positions.at(i).header, buf);
+      ByteStream stream;
+      HashStringAllocator::prepareRead(positions.at(i).header, stream);
       ASSERT_EQ(
           expected.at(i),
           ContainerRowSerde::compareWithNulls(
-              buf, decodedVector, i, compareFlags));
+              stream, decodedVector, i, compareFlags));
     }
   }
 
@@ -187,41 +187,41 @@ TEST_F(ContainerRowSerdeTest, nested) {
 }
 
 TEST_F(ContainerRowSerdeTest, compareNullsInArrayVector) {
-  auto data = makeArrayVector<int64_t>({
+  auto data = makeNullableArrayVector<int64_t>({
       {1, 2},
       {1, 5},
       {1, 3, 5},
       {1, 2, 3, 4},
+      {1, 2, std::nullopt, 4},
+      {1, std::nullopt, 5},
   });
-
-  std::vector<HashStringAllocator::Position> positions =
-      serializeWithPositions(data);
+  auto positions = serializeWithPositions(data);
   auto arrayVector = makeNullableArrayVector<int64_t>({
       {1, 2},
       {1, 3},
       {1, 5},
       {std::nullopt, 1},
+      {1, 2, std::nullopt, 4},
+      {1, 5},
   });
-  SelectivityVector rows(arrayVector->size());
-  DecodedVector decodedVector;
-  decodedVector.decode(*arrayVector, rows);
+  DecodedVector decodedVector(*arrayVector);
 
   testCompareWithNulls(
       decodedVector,
       positions,
-      {{0}, {1}, {-1}, std::nullopt},
+      {{0}, {1}, {-1}, std::nullopt, std::nullopt, std::nullopt},
       false,
       CompareFlags::NullHandlingMode::StopAtNull);
   testCompareWithNulls(
       decodedVector,
       positions,
-      {{0}, {1}, {1}, {1}},
+      {{0}, {1}, {1}, {1}, std::nullopt, {1}},
       true,
       CompareFlags::NullHandlingMode::StopAtNull);
   testCompareWithNulls(
       decodedVector,
       positions,
-      {{0}, {1}, {-1}, {1}},
+      {{0}, {1}, {-1}, {1}, {0}, {-1}},
       false,
       CompareFlags::NullHandlingMode::NoStop);
 
@@ -235,18 +235,14 @@ TEST_F(ContainerRowSerdeTest, compareNullsInMapVector) {
       {{{3, 50}}},
       {{{4, std::nullopt}}},
   });
-  std::vector<HashStringAllocator::Position> positions =
-      serializeWithPositions(data);
+  auto positions = serializeWithPositions(data);
   auto mapVector = makeNullableMapVector<int64_t, int64_t>({
       {{{1, 10}, {3, 20}}},
       {{{2, 20}}},
       {{{3, 40}}},
       {{{4, std::nullopt}}},
   });
-
-  SelectivityVector rows(mapVector->size());
-  DecodedVector decodedVector;
-  decodedVector.decode(*mapVector, rows);
+  DecodedVector decodedVector(*mapVector);
 
   testCompareWithNulls(
       decodedVector,
@@ -277,19 +273,15 @@ TEST_F(ContainerRowSerdeTest, compareNullsInRowVector) {
       3,
       4,
   })});
-  std::vector<HashStringAllocator::Position> positions =
-      serializeWithPositions(data);
-
+  auto positions = serializeWithPositions(data);
   auto someNulls = makeNullableFlatVector<int32_t>({
-      {1},
-      {3},
-      {2},
+      1,
+      3,
+      2,
       std::nullopt,
   });
   auto rowVector = makeRowVector({someNulls});
-  SelectivityVector rows(rowVector->size());
-  DecodedVector decodedVector;
-  decodedVector.decode(*rowVector, rows);
+  DecodedVector decodedVector(*rowVector);
 
   testCompareWithNulls(
       decodedVector,

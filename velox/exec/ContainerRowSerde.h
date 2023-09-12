@@ -53,8 +53,8 @@ class ContainerRowSerde {
   /// Returns < 0 if 'left' is less than 'right' at 'index', 0 if
   /// equal and > 0 otherwise. If flags.nullHandlingMode is StopAtNull,
   /// returns std::nullopt if either 'left' or 'right' value is null or contains
-  /// a null. If flags.nullHandlingMode is NoStop, returns
-  /// std::optional<int32_t>(0) if both sides are nulls
+  /// a null. If flags.nullHandlingMode is NoStop then NULL is considered equal
+  /// to NULL.
   static std::optional<int32_t> compareWithNulls(
       ByteStream& left,
       const DecodedVector& right,
