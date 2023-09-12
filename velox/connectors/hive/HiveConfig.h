@@ -15,7 +15,6 @@
  */
 #pragma once
 
-#include <folly/Optional.h>
 #include <string>
 
 namespace facebook::velox {
