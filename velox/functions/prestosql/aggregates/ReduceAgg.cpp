@@ -287,19 +287,39 @@ class ReduceAgg : public exec::Aggregate {
       const SelectivityVector& rows,
       const std::vector<VectorPtr>& args,
       bool /*unused*/) override {
-    verifyInitialValueArg(args[1], rows);
+    const auto& input = args[0];
 
-    const auto& lambda = initializeInputLambda();
-
-    auto tracker = trackRowSize(group);
-    auto& accumulator = *value<ReduceAggAccumulator>(group);
-    if (!accumulator.hasValue()) {
-      // Copy initial value.
-      accumulator.write(args[1].get(), rows.begin(), allocator_);
+    auto nonNullIndices = collectNonNullRows(input, rows);
+    if (nonNullIndices->size() == 0) {
+      // Nothing to do. All input values are null.
+      return;
     }
 
-    applyLambda(
-        accumulator, args[0], rows, std::nullopt, lambda, *inputExprSet_);
+    const auto& initialValue = args[1];
+    verifyInitialValueArg(initialValue, rows);
+
+    const auto& lambda = initializeInputLambda();
+    const auto& lambdaInputType = lambda->signature();
+
+    // Convert non-null input values into 'state' values by applying
+    // inputFunction to a pair of (value, initialValue).
+    const auto numRows = nonNullIndices->size() / sizeof(vector_size_t);
+    auto nonNullInput =
+        BaseVector::wrapInDictionary(nullptr, nonNullIndices, numRows, input);
+    auto initialState = BaseVector::wrapInDictionary(
+        nullptr, nonNullIndices, numRows, initialValue);
+
+    auto lambdaInput =
+        makeLambdaInput(lambdaInputType, numRows, initialState, nonNullInput);
+
+    SelectivityVector nonNullRows(numRows);
+    VectorPtr combined;
+    expressionEvaluator_->evaluate(
+        inputExprSet_.get(), nonNullRows, *lambdaInput, combined);
+
+    checkStatesNotNull(combined, numRows);
+
+    addSingleGroup(combined, numRows, group);
   }
 
   void addSingleGroupIntermediateResults(
@@ -307,37 +327,19 @@ class ReduceAgg : public exec::Aggregate {
       const SelectivityVector& rows,
       const std::vector<VectorPtr>& args,
       bool mayPushdown) override {
-    auto& accumulator = *value<ReduceAggAccumulator>(group);
+    const auto& input = args[0];
 
-    std::optional<vector_size_t> skipRow;
-    if (!accumulator.hasValue()) {
-      // Copy first non-null value.
-      rows.testSelected([&](auto row) {
-        if (args[0]->isNullAt(row)) {
-          return true;
-        }
-
-        auto tracker = trackRowSize(group);
-        accumulator.write(args[0].get(), row, allocator_);
-        skipRow = row;
-        return false;
-      });
-    }
-
-    // All input values are null.
-    if (!accumulator.hasValue()) {
+    auto nonNullIndices = collectNonNullRows(input, rows);
+    if (nonNullIndices->size() == 0) {
+      // Nothing to do. All input values are null.
       return;
     }
 
-    // No rows left to process.
-    if (skipRow.has_value() && skipRow.value() == rows.end()) {
-      return;
-    }
+    auto numRows = nonNullIndices->size() / sizeof(vector_size_t);
+    auto combined =
+        BaseVector::wrapInDictionary(nullptr, nonNullIndices, numRows, input);
 
-    const auto& lambda = initializeCombineLambda();
-
-    auto tracker = trackRowSize(group);
-    applyLambda(accumulator, args[0], rows, skipRow, lambda, *combineExprSet_);
+    addSingleGroup(combined, numRows, group);
   }
 
   bool supportsToIntermediate() const override {
@@ -406,55 +408,6 @@ class ReduceAgg : public exec::Aggregate {
         std::vector<VectorPtr>{firstArg, secondArg});
   }
 
-  void applyLambda(
-      ReduceAggAccumulator& accumulator,
-      const VectorPtr& input,
-      const SelectivityVector& rows,
-      std::optional<vector_size_t> skipRow,
-      const core::LambdaTypedExprPtr& lambda,
-      exec::ExprSet& exprSet) {
-    auto* pool = allocator_->pool();
-
-    const auto lambdaInputType = lambda->signature();
-
-    const auto& stateType = lambdaInputType->childAt(0);
-    VectorPtr state = BaseVector::create(stateType, 1, pool);
-    accumulator.read(state, 0);
-
-    auto lambdaInput = makeLambdaInput(lambdaInputType, 1, state, nullptr);
-
-    SelectivityVector singleRow(1);
-
-    BufferPtr indices = allocateIndices(1, pool);
-    auto* rawIndices = indices->asMutable<vector_size_t>();
-
-    rows.applyToSelected([&](vector_size_t row) {
-      if (skipRow.has_value() && row <= skipRow.value()) {
-        return;
-      }
-
-      if (input->isNullAt(row)) {
-        return;
-      }
-
-      rawIndices[0] = row;
-      lambdaInput->children()[1] =
-          BaseVector::wrapInDictionary(nullptr, indices, 1, input);
-
-      VectorPtr newState;
-      expressionEvaluator_->evaluate(
-          &exprSet, singleRow, *lambdaInput, newState);
-
-      VELOX_USER_CHECK(
-          !newState->isNullAt(0),
-          "Lambda expressions in reduce_agg should not return null for non-null inputs");
-
-      lambdaInput->children()[0] = newState;
-    });
-
-    accumulator.write(lambdaInput->children()[0].get(), 0, allocator_);
-  }
-
   static void verifyInitialValueArg(
       const VectorPtr& arg,
       const SelectivityVector& rows) {
@@ -500,6 +453,106 @@ class ReduceAgg : public exec::Aggregate {
     const auto& lambda = lambdaExpressions_[index];
     VELOX_CHECK_NOT_NULL(lambda);
     return lambda;
+  }
+
+  // Combines 'numRows' states from 'input' with an optional 'accumulator' state
+  // and writes the result back to the accumulator.
+  void addSingleGroup(VectorPtr& input, vector_size_t numRows, char* group) {
+    // Combine 'input' states and an optional 'accumulator' state into one.
+    vector_size_t numCombined = numRows;
+    auto& accumulator = *value<ReduceAggAccumulator>(group);
+    if (accumulator.hasValue()) {
+      prepareToAppendOne(input, numRows);
+      accumulator.read(input, numRows);
+      ++numCombined;
+    }
+
+    if (numCombined > 1) {
+      input = combine(input, numCombined);
+    }
+
+    auto tracker = trackRowSize(group);
+    accumulator.write(input.get(), 0, allocator_);
+  }
+
+  BufferPtr collectNonNullRows(
+      const VectorPtr& input,
+      const SelectivityVector& rows) {
+    BufferPtr indices = allocateIndices(rows.size(), allocator_->pool());
+    auto* rawIndices = indices->asMutable<vector_size_t>();
+
+    vector_size_t i = 0;
+    rows.applyToSelected([&](auto row) {
+      if (!input->isNullAt(row)) {
+        rawIndices[i++] = row;
+      }
+    });
+
+    indices->setSize(sizeof(vector_size_t) * i);
+    return indices;
+  }
+
+  void checkStatesNotNull(const VectorPtr& states, vector_size_t size) {
+    if (states->mayHaveNulls()) {
+      for (auto i = 0; i < size; ++i) {
+        VELOX_USER_CHECK(
+            !states->isNullAt(i),
+            "Lambda expressions in reduce_agg should not return null for non-null inputs");
+      }
+    }
+  }
+
+  void prepareToAppendOne(VectorPtr& vector, vector_size_t size) {
+    SelectivityVector extraRow(size + 1, false);
+    extraRow.setValid(size, true);
+    extraRow.updateBounds();
+
+    BaseVector::ensureWritable(
+        extraRow, vector->type(), allocator_->pool(), vector);
+  }
+
+  // Combine first 'size' states into one.
+  VectorPtr combine(const VectorPtr& states, vector_size_t size) {
+    VELOX_CHECK_GT(size, 1);
+
+    const auto& lambda = initializeCombineLambda();
+
+    auto* pool = allocator_->pool();
+    const auto lambdaInputType = lambda->signature();
+
+    // [size/2, size) indices.
+    const auto halfSize = size / 2;
+    BufferPtr indices = allocateIndices(halfSize, pool);
+    auto* rawIndices = indices->asMutable<vector_size_t>();
+    std::iota(rawIndices, rawIndices + halfSize, halfSize);
+
+    auto lambdaInput = makeLambdaInput(
+        lambdaInputType,
+        halfSize,
+        states,
+        BaseVector::wrapInDictionary(nullptr, indices, halfSize, states));
+
+    SelectivityVector rows(halfSize);
+    VectorPtr combined;
+    expressionEvaluator_->evaluate(
+        combineExprSet_.get(), rows, *lambdaInput, combined);
+
+    checkStatesNotNull(combined, halfSize);
+
+    const bool hasExtraState = (size % 2 == 1);
+    const vector_size_t numCombined = halfSize + (hasExtraState ? 1 : 0);
+
+    if (numCombined == 1) {
+      return combined;
+    }
+
+    if (hasExtraState) {
+      // Add 'extra' state to 'combined'.
+      prepareToAppendOne(combined, halfSize);
+      combined->copy(states.get(), halfSize, size - 1, 1);
+    }
+
+    return combine(combined, numCombined);
   }
 
   mutable std::unique_ptr<exec::ExprSet> inputExprSet_;
