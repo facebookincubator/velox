@@ -33,7 +33,7 @@ HashPartitionFunction::HashPartitionFunction(
     const std::vector<VectorPtr>& constValues)
     : numPartitions_{hashBitRange.numPartitions()},
       hashBitRange_(hashBitRange) {
-  VELOX_CHECK(hashBitRange.numPartitions());
+  VELOX_CHECK_GT(hashBitRange.numPartitions(), 0);
   VELOX_CHECK(!keyChannels.empty());
   init(inputType, keyChannels, constValues);
 }
