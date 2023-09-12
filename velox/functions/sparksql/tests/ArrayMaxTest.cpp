@@ -149,11 +149,13 @@ class ArrayMaxFloatingPointTest : public ArrayMaxTest {
   static constexpr T kNaN = std::numeric_limits<T>::quiet_NaN();
 
   void runTest() {
-    EXPECT_EQ(arrayMax<T>({0.0000, 0.00001}), 0.00001);
-    EXPECT_EQ(arrayMax<T>({std::nullopt, 1.1, 1.11, -2.2, -1.0, kMin}), 1.11);
+    EXPECT_FLOAT_EQ(arrayMax<T>({0.0000, 0.00001}).value(), 0.00001);
+    EXPECT_FLOAT_EQ(
+        arrayMax<T>({std::nullopt, 1.1, 1.11, -2.2, -1.0, kMin}).value(), 1.11);
     EXPECT_EQ(arrayMax<T>({}), std::nullopt);
-    EXPECT_EQ(arrayMax<T>({kMin, 1.1, 1.22222, 1.33, std::nullopt}), 1.33);
-    EXPECT_EQ(arrayMax<T>({-0.00001, -0.0002, 0.0001}), 0.0001);
+    EXPECT_FLOAT_EQ(
+        arrayMax<T>({kMin, 1.1, 1.22222, 1.33, std::nullopt}).value(), 1.33);
+    EXPECT_FLOAT_EQ(arrayMax<T>({-0.00001, -0.0002, 0.0001}).value(), 0.0001);
 
     EXPECT_TRUE(std::isnan(
         arrayMax<T>({kMin, -0.0001, -0.0002, -0.0003, kMax, kNaN}).value()));

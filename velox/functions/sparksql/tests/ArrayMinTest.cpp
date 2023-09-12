@@ -154,8 +154,9 @@ class ArrayMinFloatingPointTest : public ArrayMinTest {
     EXPECT_EQ(arrayMin<T>({std::nullopt, 1.1, 1.11, -2.2, -1.0, kMin}), kMin);
     EXPECT_EQ(arrayMin<T>({}), std::nullopt);
     EXPECT_EQ(arrayMin<T>({kMin, 1.1, 1.22222, 1.33, std::nullopt}), kMin);
-    EXPECT_EQ(arrayMin<T>({-0.00001, -0.0002, 0.0001}), -0.0002);
-    EXPECT_EQ(arrayMin<T>({-0.0001, -0.0002, kMax, kNaN}), -0.0002);
+    EXPECT_FLOAT_EQ(arrayMin<T>({-0.00001, -0.0002, 0.0001}).value(), -0.0002);
+    EXPECT_FLOAT_EQ(
+        arrayMin<T>({-0.0001, -0.0002, kMax, kNaN}).value(), -0.0002);
   }
 };
 
