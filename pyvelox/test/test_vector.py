@@ -351,3 +351,20 @@ class TestVeloxVector(unittest.TestCase):
                 self.assertTrue(velox_vector.dtype(), expected_type)
                 for i in range(0, len(data)):
                     self.assertEqual(velox_vector[i], data[i])
+
+    def test_row_vector_basic(self):
+        vals = [2499109626526694126, 2342493223442167775, 4077358421272316858]
+        expected_vectors = [
+            pv.from_list(vals),
+        ]
+
+        def set_null(n: int) -> bool:
+            return False
+
+        rw = pv.row_vector(["a"], expected_vectors, set_null)
+
+        for i in range(len(rw)):
+            vec = rw[i]
+            N = len(vec)
+            for i in range(N):
+                assert vec[i] == vals[i]

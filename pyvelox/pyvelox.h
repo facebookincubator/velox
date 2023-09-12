@@ -16,10 +16,12 @@
 
 #pragma once
 
+#include <pybind11/functional.h>
 #include <pybind11/pybind11.h>
 #include <pybind11/stl.h>
 #include <pybind11/stl_bind.h>
 #include <velox/buffer/StringViewBufferHolder.h>
+#include <velox/dwio/dwrf/writer/Writer.h>
 #include <velox/expression/Expr.h>
 #include <velox/functions/prestosql/registration/RegistrationFunctions.h>
 #include <velox/parse/Expressions.h>
@@ -27,6 +29,7 @@
 #include <velox/parse/TypeResolver.h>
 #include <velox/type/Type.h>
 #include <velox/type/Variant.h>
+#include <velox/vector/ComplexVector.h>
 #include <velox/vector/DictionaryVector.h>
 #include <velox/vector/FlatVector.h>
 #include "folly/json.h"
@@ -107,6 +110,19 @@ inline velox::variant pyToVariant(const py::handle& obj, const Type& dtype) {
     default:
       throw py::type_error("Unsupported type supplied");
   }
+}
+
+inline void checkRowVectorBounds(const RowVectorPtr& v, vector_size_t idx) {
+  if (idx < 0 || size_t(idx) >= v->childrenSize()) {
+    throw std::out_of_range("Index out of range");
+  }
+}
+
+inline VectorPtr getVectorFromRowVectorPtr(
+    const RowVectorPtr& v,
+    vector_size_t idx) {
+  checkRowVectorBounds(v, idx);
+  return v->childAt(idx);
 }
 
 static VectorPtr pyToConstantVector(
@@ -503,6 +519,48 @@ static void addVectorBindings(
             std::move(indices_buffer),
             std::move(baseVector),
             PyVeloxContext::getSingletonInstance().pool());
+      });
+
+  m.def(
+      "row_vector",
+      [](std::vector<std::string>& names,
+         std::vector<VectorPtr>& values,
+         std::function<bool(vector_size_t /*row*/)> isNullAt = nullptr) {
+        auto setNulls =
+            [](const VectorPtr& vector,
+               std::function<bool(vector_size_t /*row*/)> isNullAt) {
+              for (vector_size_t i = 0; i < vector->size(); i++) {
+                if (isNullAt(i)) {
+                  vector->setNull(i, true);
+                }
+              }
+            };
+
+        std::vector<std::shared_ptr<const Type>> childTypes;
+        childTypes.resize(values.size());
+        for (int i = 0; i < values.size(); i++) {
+          childTypes[i] = values[i]->type();
+        }
+        auto rowType = ROW(std::move(names), std::move(childTypes));
+        const size_t vectorSize = values.empty() ? 0 : values.front()->size();
+
+        auto rowVector = std::make_shared<RowVector>(
+            PyVeloxContext::getSingletonInstance().pool(),
+            rowType,
+            BufferPtr(nullptr),
+            vectorSize,
+            values);
+        if (isNullAt) {
+          setNulls(rowVector, isNullAt);
+        }
+        return rowVector;
+      });
+
+  py::class_<RowVector, BaseVector, RowVectorPtr>(
+      m, "RowVector", py::module_local(asModuleLocalDefinitions))
+      .def("__len__", &RowVector::childrenSize)
+      .def("__getitem__", [](RowVectorPtr& v, vector_size_t idx) {
+        return getVectorFromRowVectorPtr(v, idx);
       });
 }
 
