@@ -21,7 +21,6 @@
 #include <pybind11/stl.h>
 #include <pybind11/stl_bind.h>
 #include <velox/buffer/StringViewBufferHolder.h>
-#include <velox/dwio/dwrf/writer/Writer.h>
 #include <velox/expression/Expr.h>
 #include <velox/functions/prestosql/registration/RegistrationFunctions.h>
 #include <velox/parse/Expressions.h>

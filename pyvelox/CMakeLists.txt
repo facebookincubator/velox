@@ -14,8 +14,7 @@
 
 if(VELOX_BUILD_PYTHON_PACKAGE)
   message("Creating pyvelox module")
-  include_directories(SYSTEM ${CMAKE_SOURCE_DIR} ${Protobuf_INCLUDE_DIRS}
-                      ${CMAKE_SOURCE_DIR}/velox/external/xxhash)
+  include_directories(SYSTEM ${CMAKE_SOURCE_DIR})
   add_definitions(-DCREATE_PYVELOX_MODULE -DVELOX_DISABLE_GOOGLETEST)
   # Define our Python module:
   pybind11_add_module(pyvelox MODULE pyvelox.cpp serde.cpp signatures.cpp
@@ -26,15 +25,11 @@ if(VELOX_BUILD_PYTHON_PACKAGE)
     PRIVATE velox_type
             velox_vector
             velox_core
-            velox_dwio_dwrf_proto
-            velox_dwio_dwrf_common
-            velox_hive_connector
             velox_exec
             velox_functions_prestosql
             velox_parse_parser
             velox_functions_prestosql
-            velox_functions_spark
-            ${Protobuf_LIBRARIES})
+            velox_functions_spark)
 
   install(TARGETS pyvelox LIBRARY DESTINATION .)
 else()
