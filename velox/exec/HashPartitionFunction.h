@@ -21,6 +21,9 @@
 
 namespace facebook::velox::exec {
 
+/// Calculates partition number for each row of the specified vector using a
+/// hash function. If no key channel is provided, the resulting partition number
+/// will always be zero.
 class HashPartitionFunction : public core::PartitionFunction {
  public:
   HashPartitionFunction(

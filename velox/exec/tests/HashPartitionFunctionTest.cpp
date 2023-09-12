@@ -26,10 +26,10 @@ class HashPartitionFunctionTest : public test::VectorTestBase,
 
 TEST_F(HashPartitionFunctionTest, function) {
   const int numRows = 10'000;
-  RowVectorPtr vector = makeRowVector(
+  auto vector = makeRowVector(
       {makeFlatVector<int32_t>(numRows, [](auto row) { return row * 100 / 3; }),
        makeFlatVector<int32_t>(numRows, [](auto row) { return row * 128; })});
-  RowTypePtr rowType = asRowType(vector->type());
+  auto rowType = asRowType(vector->type());
 
   // The test case the two hash partition functions having the same config.
   {
@@ -156,14 +156,14 @@ TEST_F(HashPartitionFunctionTest, spec) {
 }
 
 TEST_F(HashPartitionFunctionTest, noKeyAndBitRange) {
-  const size_t numRows = 10'000;
-  RowVectorPtr vector = makeRowVector(
-      {makeFlatVector<int32_t>(numRows, [](auto row) { return row * 100 / 3; }),
-       makeFlatVector<int32_t>(numRows, [](auto row) { return row * 128; })});
-  RowTypePtr rowType = asRowType(vector->type());
-  HashPartitionFunction functionWithoutKeyAndBits(4, rowType, {}, {});
+  auto vector = makeRowVector({makeFlatVector<int32_t>({1, 2, 3, 4, 5, 6})});
+  auto rowType = asRowType(vector->type());
+  const auto numRows{vector->size()};
+  HashPartitionFunction function(4, rowType, {}, {});
+
   std::vector<uint32_t> partitions(numRows);
-  functionWithoutKeyAndBits.partition(*vector, partitions);
+  auto partitionNum = function.partition(*vector, partitions);
+  EXPECT_EQ(partitionNum.value(), 0u);
   for (size_t i = 0; i < numRows; ++i) {
     EXPECT_EQ(partitions[i], 0);
   }
