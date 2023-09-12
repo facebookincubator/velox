@@ -62,7 +62,6 @@ std::optional<uint32_t> HashPartitionFunction::partition(
   const auto size = input.size();
 
   if (hashers_.empty()) {
-    partitions.resize(size, 0u);
     return 0u;
   }
 
