@@ -246,6 +246,7 @@ void HashProbe::maybeSetupSpillInput(
               spillConfig.joinPartitionBits),
       spillConfig.filePath,
       spillConfig.maxFileSize,
+      spillConfig.writeBufferSize,
       spillConfig.minSpillRunSize,
       spillConfig.compressionKind,
       Spiller::pool(),
