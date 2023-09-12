@@ -59,12 +59,11 @@ void HashPartitionFunction::init(
 std::optional<uint32_t> HashPartitionFunction::partition(
     const RowVector& input,
     std::vector<uint32_t>& partitions) {
-  const auto size = input.size();
-
   if (hashers_.empty()) {
     return 0u;
   }
 
+  const auto size = input.size();
   rows_.resize(size);
   rows_.setAll();
 

@@ -162,9 +162,7 @@ TEST_F(HashPartitionFunctionTest, noKeyAndBitRange) {
   HashPartitionFunction function(4, rowType, {}, {});
 
   std::vector<uint32_t> partitions(numRows);
-  auto partitionNum = function.partition(*vector, partitions);
-  EXPECT_EQ(partitionNum.value(), 0u);
-  for (size_t i = 0; i < numRows; ++i) {
-    EXPECT_EQ(partitions[i], 0);
-  }
+  const auto singlePartition = function.partition(*vector, partitions);
+  ASSERT_TRUE(singlePartition.has_value());
+  EXPECT_EQ(singlePartition.value(), 0u);
 }
