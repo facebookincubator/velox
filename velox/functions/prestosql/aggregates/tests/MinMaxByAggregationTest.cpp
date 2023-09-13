@@ -1134,6 +1134,50 @@ TEST_F(MinMaxByComplexTypes, array) {
       {data}, {}, {"min_by(c0, c1)", "max_by(c0, c1)"}, {expected});
 }
 
+TEST_F(MinMaxByComplexTypes, arrayCompare) {
+  auto data = makeRowVector({
+      makeArrayVector<int64_t>({
+          {1, 2, 3},
+          {4, 5},
+          {6, 7, 8},
+      }),
+      makeNullableArrayVector<int64_t>({
+          {1, 2, 3},
+          {std::nullopt, 2},
+          {6, 7, 8},
+      }),
+  });
+
+  auto expected = makeRowVector({
+      makeArrayVector<int64_t>({
+          {1, 2, 3},
+      }),
+      makeArrayVector<int64_t>({
+          {6, 7, 8},
+      }),
+  });
+
+  ASSERT_THROW(
+      testAggregations(
+          {data}, {}, {"min_by(c0, c1)", "max_by(c0, c1)"}, {expected}),
+      VeloxUserError);
+
+  data = makeRowVector({
+      makeArrayVector<int64_t>({
+          {1, 2, 3},
+          {4, 5},
+          {6, 7, 8},
+      }),
+      makeNullableArrayVector<int64_t>({
+          {1, 2, 3},
+          {2, 3},
+          {6, 7, 8},
+      }),
+  });
+  testAggregations(
+      {data}, {}, {"min_by(c0, c1)", "max_by(c0, c1)"}, {expected});
+}
+
 TEST_F(MinMaxByComplexTypes, arrayGroupBy) {
   auto data = makeRowVector({
       makeFlatVector<int64_t>({5, 6, 5, 6}),
@@ -1158,6 +1202,59 @@ TEST_F(MinMaxByComplexTypes, arrayGroupBy) {
       }),
   });
 
+  testAggregations(
+      {data}, {"c0"}, {"min_by(c1, c2)", "max_by(c1, c2)"}, {expected});
+}
+
+TEST_F(MinMaxByComplexTypes, groupByArrayCompare) {
+  auto data = makeRowVector({
+      makeFlatVector<int64_t>({5, 6, 5, 6}),
+      makeArrayVector<int64_t>({
+          {1, 2, 3},
+          {4, 5},
+          {},
+          {6, 7, 8},
+      }),
+      makeNullableArrayVector<int64_t>({
+          {1, 2, 3},
+          {2, 3},
+          {std::nullopt, 2},
+          {6, 7, 8},
+      }),
+  });
+
+  auto expected = makeRowVector({
+      makeFlatVector<int64_t>({5, 6}),
+      makeArrayVector<int64_t>({
+          {1, 2, 3},
+          {4, 5},
+      }),
+      makeArrayVector<int64_t>({
+          {},
+          {6, 7, 8},
+      }),
+  });
+
+  ASSERT_THROW(
+      testAggregations(
+          {data}, {"c0"}, {"min_by(c1, c2)", "max_by(c1, c2)"}, {expected}),
+      VeloxUserError);
+
+  data = makeRowVector({
+      makeFlatVector<int64_t>({5, 6, 5, 6}),
+      makeArrayVector<int64_t>({
+          {1, 2, 3},
+          {4, 5},
+          {},
+          {6, 7, 8},
+      }),
+      makeNullableArrayVector<int64_t>({
+          {1, 2, 3},
+          {2, 3},
+          {4, 5},
+          {6, 7, 8},
+      }),
+  });
   testAggregations(
       {data}, {"c0"}, {"min_by(c1, c2)", "max_by(c1, c2)"}, {expected});
 }

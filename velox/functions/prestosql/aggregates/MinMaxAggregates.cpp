@@ -362,6 +362,39 @@ class NonNumericMinMaxAggregateBase : public exec::Aggregate {
 
  protected:
   template <typename TCompareTest>
+  void updateAccumulator(
+      SingleValueAccumulator* accumulator,
+      DecodedVector& decoded,
+      vector_size_t i,
+      TCompareTest compareTest) {
+    // ARRAY comparison not supported for arrays with null elements
+    // ROW comparison not supported for fields with null elements
+    // MAP comparison not supported for null value elements
+    auto indices = decoded.indices();
+    auto baseVector = decoded.base();
+    VELOX_CHECK_NOT_NULL(accumulator);
+    if (!accumulator->hasValue()) {
+      accumulator->write(baseVector, indices[i], allocator_);
+      return;
+    }
+
+    static const CompareFlags kCompareFlags{
+        true, // nullsFirst
+        true, // ascending
+        false, // equalsOnly
+        CompareFlags::NullHandlingMode::StopAtNull};
+
+    auto result = accumulator->compare(decoded, i, kCompareFlags);
+    VELOX_USER_CHECK(
+        result.has_value(),
+        fmt::format(
+            "{} do not supported comparison with nulls", baseVector->type()));
+    if (compareTest(result.value())) {
+      accumulator->write(baseVector, indices[i], allocator_);
+    }
+  }
+
+  template <typename TCompareTest>
   void doUpdate(
       char** groups,
       const SelectivityVector& rows,
@@ -380,11 +413,9 @@ class NonNumericMinMaxAggregateBase : public exec::Aggregate {
       if (decoded.isNullAt(i)) {
         return;
       }
+
       auto accumulator = value<SingleValueAccumulator>(groups[i]);
-      if (!accumulator->hasValue() ||
-          compareTest(accumulator->compare(decoded, i))) {
-        accumulator->write(baseVector, indices[i], allocator_);
-      }
+      updateAccumulator(accumulator, decoded, i, compareTest);
     });
   }
 
@@ -405,10 +436,8 @@ class NonNumericMinMaxAggregateBase : public exec::Aggregate {
       }
 
       auto accumulator = value<SingleValueAccumulator>(group);
-      if (!accumulator->hasValue() ||
-          compareTest(accumulator->compare(decoded, 0))) {
-        accumulator->write(baseVector, indices[0], allocator_);
-      }
+      updateAccumulator(accumulator, decoded, 0, compareTest);
+
       return;
     }
 
@@ -417,10 +446,7 @@ class NonNumericMinMaxAggregateBase : public exec::Aggregate {
       if (decoded.isNullAt(i)) {
         return;
       }
-      if (!accumulator->hasValue() ||
-          compareTest(accumulator->compare(decoded, i))) {
-        accumulator->write(baseVector, indices[i], allocator_);
-      }
+      updateAccumulator(accumulator, decoded, i, compareTest);
     });
   }
 };

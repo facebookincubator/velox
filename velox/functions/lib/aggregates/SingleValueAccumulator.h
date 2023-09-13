@@ -38,6 +38,16 @@ struct SingleValueAccumulator {
   ///
   /// The caller needs to ensure that hasValue() is true before calling this
   /// method.
+  std::optional<int32_t> compare(
+      const DecodedVector& decoded,
+      vector_size_t index,
+      CompareFlags compareFlags) const;
+
+  /// Returns 0 if stored and new values are equal; <0 if stored value is less
+  /// then new value; >0 if stored value is greater than new value.
+  ///
+  /// The caller needs to ensure that hasValue() is true before calling this
+  /// method.
   int32_t compare(const DecodedVector& decoded, vector_size_t index) const;
 
   /// Returns memory back to HashStringAllocator.

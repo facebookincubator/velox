@@ -49,15 +49,30 @@ bool SingleValueAccumulator::hasValue() const {
   return start_.header != nullptr;
 }
 
+std::optional<int32_t> SingleValueAccumulator::compare(
+    const DecodedVector& decoded,
+    vector_size_t index,
+    CompareFlags compareFlags) const {
+  VELOX_CHECK_NOT_NULL(start_.header);
+  ByteStream stream;
+  HashStringAllocator::prepareRead(start_.header, stream);
+  auto result = exec::ContainerRowSerde::compareWithNulls(
+      stream, decoded, index, compareFlags);
+
+  VELOX_USER_CHECK(result.has_value());
+  return result.value();
+}
+
 int32_t SingleValueAccumulator::compare(
     const DecodedVector& decoded,
     vector_size_t index) const {
   VELOX_CHECK_NOT_NULL(start_.header);
-
-  ByteStream stream;
-  HashStringAllocator::prepareRead(start_.header, stream);
-  return exec::ContainerRowSerde::compare(
-      stream, decoded, index, {true, true, false});
+  static const CompareFlags kCompareFlags{
+      true, // nullsFirst
+      true, // ascending
+      false, // equalsOnly
+      CompareFlags::NullHandlingMode::NoStop};
+  return compare(decoded, index, kCompareFlags).value();
 }
 
 void SingleValueAccumulator::destroy(HashStringAllocator* allocator) {
