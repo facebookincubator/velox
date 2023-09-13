@@ -872,7 +872,7 @@ TEST_F(StringTest, concat_ws) {
         makeRowVector(
             {makeConstant("----", arrayVector->size()), arrayVector}));
 
-    expected = makeArrayVector<StringView>({
+    auto expected = makeArrayVector<StringView>({
         {S("red----blue")},
         {S("blue----yellow----orange")},
         {S("")},
