@@ -21,14 +21,16 @@ namespace facebook::velox::functions::aggregate {
 void checkAvgIntermediateType(const TypePtr& type) {
   VELOX_USER_CHECK(
       type->isRow() || type->isVarbinary(),
-      "Input type for final average must be row type or varbinary type.");
+      "Input type for final average must be row type or varbinary type, find {}",
+      type->toString());
   if (type->kind() == TypeKind::VARBINARY) {
     return;
   }
   VELOX_USER_CHECK(
       type->childAt(0)->kind() == TypeKind::DOUBLE ||
           type->childAt(0)->isLongDecimal(),
-      "Input type for sum in final average must be double or long decimal type.")
+      "Input type for sum in final average must be double or long decimal type, find {}",
+      type->childAt(0)->toString());
   VELOX_USER_CHECK_EQ(
       type->childAt(1)->kind(),
       TypeKind::BIGINT,
