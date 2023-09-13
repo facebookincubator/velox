@@ -868,9 +868,7 @@ TEST_F(StringTest, concat_ws) {
     });
 
     auto result = evaluate<SimpleVector<StringView>>(
-        "concat_ws('----', c0)",
-        makeRowVector(
-            {makeConstant("----", arrayVector->size()), arrayVector}));
+        "concat_ws('----', c0)", makeRowVector({arrayVector}));
 
     auto expected = makeArrayVector<StringView>({
         {S("red----blue")},
