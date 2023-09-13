@@ -19,6 +19,7 @@
 #include <limits>
 #include "velox/common/base/GTestMacros.h"
 #include "velox/common/time/CpuWallTimer.h"
+#include "velox/connectors/Connector.h"
 #include "velox/dwio/dwrf/common/Common.h"
 #include "velox/dwio/dwrf/common/Compression.h"
 #include "velox/dwio/dwrf/common/Config.h"
@@ -41,14 +42,18 @@ class WriterContext : public CompressionBufferPool {
   WriterContext(
       const std::shared_ptr<const Config>& config,
       std::shared_ptr<memory::MemoryPool> pool,
+      connector::ConnectorQueryCtx::ConnectorMemoryPoolFactory
+          connectorMemoryPoolFactory,
       const dwio::common::MetricsLogPtr& metricLogger =
           dwio::common::MetricsLog::voidLog(),
       std::unique_ptr<encryption::EncryptionHandler> handler = nullptr)
       : config_{config},
         pool_{std::move(pool)},
-        dictionaryPool_{pool_->addLeafChild(".dictionary")},
-        outputStreamPool_{pool_->addLeafChild(".compression")},
-        generalPool_{pool_->addLeafChild(".general")},
+        dictionaryPool_{
+            connectorMemoryPoolFactory(".dictionary", pool_.get(), true)},
+        outputStreamPool_{
+            connectorMemoryPoolFactory(".compression", pool_.get(), true)},
+        generalPool_{connectorMemoryPoolFactory(".general", pool_.get(), true)},
         indexEnabled_{getConfig(Config::CREATE_INDEX)},
         indexStride_{getConfig(Config::ROW_INDEX_STRIDE)},
         compression_{getConfig(Config::COMPRESSION)},

@@ -226,6 +226,8 @@ class OperatorCtx {
       const std::string& connectorId,
       const std::string& planNodeId,
       memory::MemoryPool* connectorPool,
+      connector::ConnectorQueryCtx::ConnectorMemoryPoolFactory
+          connectorMemoryPoolFactory,
       const common::SpillConfig* spillConfig = nullptr) const;
 
  private:
@@ -538,7 +540,7 @@ class Operator : public BaseRuntimeStatWriter {
   class MemoryReclaimer : public memory::MemoryReclaimer {
    public:
     static std::unique_ptr<memory::MemoryReclaimer> create(
-        DriverCtx* driverCtx,
+        const DriverCtx* driverCtx,
         Operator* op);
 
     void enterArbitration() override;

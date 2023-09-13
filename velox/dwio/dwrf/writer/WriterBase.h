@@ -17,6 +17,7 @@
 #pragma once
 
 #include "velox/common/base/GTestMacros.h"
+#include "velox/connectors/Connector.h"
 #include "velox/dwio/dwrf/writer/WriterContext.h"
 #include "velox/dwio/dwrf/writer/WriterSink.h"
 
@@ -72,6 +73,8 @@ class WriterBase {
   void initContext(
       const std::shared_ptr<const Config>& config,
       std::shared_ptr<velox::memory::MemoryPool> pool,
+      connector::ConnectorQueryCtx::ConnectorMemoryPoolFactory
+          connectorMemoryPoolFactory,
       std::unique_ptr<encryption::EncryptionHandler> handler = nullptr) {
     context_ = std::make_unique<WriterContext>(
         config, std::move(pool), sink_->metricsLog(), std::move(handler));

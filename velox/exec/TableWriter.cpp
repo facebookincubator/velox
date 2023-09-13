@@ -40,7 +40,8 @@ TableWriter::TableWriter(
           driverCtx_->pipelineId,
           driverCtx_->driverId,
           operatorType(),
-          tableWriteNode->insertTableHandle()->connectorId())),
+          tableWriteNode->insertTableHandle()->connectorId(),
+          Operator::MemoryReclaimer::create(driverCtx_, this))),
       insertTableHandle_(
           tableWriteNode->insertTableHandle()->connectorInsertTableHandle()),
       commitStrategy_(tableWriteNode->commitStrategy()) {
@@ -61,6 +62,16 @@ TableWriter::TableWriter(
       connectorId,
       planNodeId(),
       connectorPool_,
+      [&, self = this](
+          const std::string& name, memory::MemoryPool* parent, bool isLeaf) {
+        return isLeaf
+            ? parent->addLeafChild(
+                  name,
+                  true,
+                  Operator::MemoryReclaimer::create(driverCtx_, self))
+            : parent->addAggregateChild(
+                  name, Operator::MemoryReclaimer::create(driverCtx_, self));
+      },
       spillConfig_.has_value() ? &(spillConfig_.value()) : nullptr);
 
   auto names = tableWriteNode->columnNames();

@@ -224,9 +224,16 @@ class DataSource {
 /// of the caller.
 class ConnectorQueryCtx {
  public:
+  using ConnectorMemoryPoolFactory =
+      std::function<std::shared_ptr<memory::MemoryPool>(
+          const std::string& name,
+          memory::MemoryPool* parent,
+          bool isLeaf)>;
+
   ConnectorQueryCtx(
       memory::MemoryPool* operatorPool,
       memory::MemoryPool* connectorPool,
+      ConnectorMemoryPoolFactory connectorMemoryPoolFactory,
       const Config* connectorConfig,
       const common::SpillConfig* spillConfig,
       std::unique_ptr<core::ExpressionEvaluator> expressionEvaluator,
@@ -237,6 +244,7 @@ class ConnectorQueryCtx {
       int driverId)
       : operatorPool_(operatorPool),
         connectorPool_(connectorPool),
+        connectorMemoryPoolFactory_(connectorMemoryPoolFactory),
         config_(connectorConfig),
         spillConfig_(spillConfig),
         expressionEvaluator_(std::move(expressionEvaluator)),
@@ -260,6 +268,10 @@ class ConnectorQueryCtx {
   /// memory pool management, such as HiveDataSink.
   memory::MemoryPool* connectorMemoryPool() const {
     return connectorPool_;
+  }
+
+  ConnectorMemoryPoolFactory connectorMemoryPoolFactory() const {
+    return connectorMemoryPoolFactory_;
   }
 
   const Config* FOLLY_NONNULL config() const {
@@ -305,6 +317,7 @@ class ConnectorQueryCtx {
  private:
   memory::MemoryPool* operatorPool_;
   memory::MemoryPool* connectorPool_;
+  ConnectorMemoryPoolFactory connectorMemoryPoolFactory_;
   const Config* FOLLY_NONNULL config_;
   const common::SpillConfig* const spillConfig_;
   std::unique_ptr<core::ExpressionEvaluator> expressionEvaluator_;

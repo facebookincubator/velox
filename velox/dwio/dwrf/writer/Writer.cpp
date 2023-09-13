@@ -543,6 +543,7 @@ dwrf::WriterOptions getDwrfOptions(const dwio::common::WriterOptions& options) {
   dwrfOptions.config = Config::fromMap(configs);
   dwrfOptions.schema = options.schema;
   dwrfOptions.memoryPool = options.memoryPool;
+  dwrfOptions.connectorMemoryPoolFactory = options.connectorMemoryPoolFactory;
   return dwrfOptions;
 }
 

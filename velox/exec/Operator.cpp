@@ -50,10 +50,13 @@ OperatorCtx::createConnectorQueryCtx(
     const std::string& connectorId,
     const std::string& planNodeId,
     memory::MemoryPool* connectorPool,
+    connector::ConnectorQueryCtx::ConnectorMemoryPoolFactory
+        connectorMemoryPoolFactory,
     const common::SpillConfig* spillConfig) const {
   return std::make_shared<connector::ConnectorQueryCtx>(
       pool_,
       connectorPool,
+      connectorMemoryPoolFactory,
       driverCtx_->task->queryCtx()->getConnectorConfig(connectorId),
       spillConfig,
       std::make_unique<SimpleExpressionEvaluator>(
@@ -486,7 +489,7 @@ void OperatorStats::clear() {
 }
 
 std::unique_ptr<memory::MemoryReclaimer> Operator::MemoryReclaimer::create(
-    DriverCtx* driverCtx,
+    const DriverCtx* driverCtx,
     Operator* op) {
   return std::unique_ptr<memory::MemoryReclaimer>(
       new Operator::MemoryReclaimer(driverCtx->driver->shared_from_this(), op));

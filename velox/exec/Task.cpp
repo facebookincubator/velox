@@ -375,15 +375,18 @@ velox::memory::MemoryPool* Task::addConnectorPoolLocked(
     int pipelineId,
     uint32_t driverId,
     const std::string& operatorType,
-    const std::string& connectorId) {
+    const std::string& connectorId,
+    std::unique_ptr<memory::MemoryReclaimer> reclaimer) {
   auto* nodePool = getOrAddNodePool(planNodeId);
-  childPools_.push_back(nodePool->addAggregateChild(fmt::format(
-      "op.{}.{}.{}.{}.{}",
-      planNodeId,
-      pipelineId,
-      driverId,
-      operatorType,
-      connectorId)));
+  childPools_.push_back(nodePool->addAggregateChild(
+      fmt::format(
+          "op.{}.{}.{}.{}.{}",
+          planNodeId,
+          pipelineId,
+          driverId,
+          operatorType,
+          connectorId),
+      std::move(reclaimer)));
   return childPools_.back().get();
 }
 

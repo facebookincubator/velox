@@ -19,6 +19,7 @@
 #include <iterator>
 #include <limits>
 
+#include "velox/connectors/Connector.h"
 #include "velox/dwio/common/Writer.h"
 #include "velox/dwio/common/WriterFactory.h"
 #include "velox/dwio/dwrf/common/Encryption.h"
@@ -33,6 +34,8 @@ struct WriterOptions {
   std::shared_ptr<const Config> config = std::make_shared<Config>();
   std::shared_ptr<const Type> schema;
   velox::memory::MemoryPool* memoryPool;
+  connector::ConnectorQueryCtx::ConnectorMemoryPoolFactory
+      connectorMemoryPoolFactory;
   /// The default factory allows the writer to construct the default flush
   /// policy with the configs in its ctor.
   std::function<std::unique_ptr<DWRFFlushPolicy>()> flushPolicyFactory;
