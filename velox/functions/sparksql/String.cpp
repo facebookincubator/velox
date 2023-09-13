@@ -389,16 +389,22 @@ std::vector<std::shared_ptr<exec::FunctionSignature>> concatWsSignatures() {
 }
 
 std::shared_ptr<exec::VectorFunction> makeConcatWs(
-        const std::string& name,
-        const std::vector<exec::VectorFunctionArg>& inputArgs) {
-    auto numArgs = inputArgs.size();
-    VELOX_USER_CHECK(numArgs >= 1, "concat_ws requires one arguments at least, but got {}.", numArgs);
+    const std::string& name,
+    const std::vector<exec::VectorFunctionArg>& inputArgs) {
+  auto numArgs = inputArgs.size();
+  VELOX_USER_CHECK(
+      numArgs >= 1,
+      "concat_ws requires one arguments at least, but got {}.",
+      numArgs);
 
-    BaseVector* constantPattern = inputArgs[0].constantValue.get();
-    VELOX_USER_CHECK(nullptr != constantPattern, "concat_ws requires constant connector arguments.");
+  BaseVector* constantPattern = inputArgs[0].constantValue.get();
+  VELOX_USER_CHECK(
+      nullptr != constantPattern,
+      "concat_ws requires constant connector arguments.");
 
-    auto connector = constantPattern->as<ConstantVector<StringView>>()->valueAt(0).str();
-    return std::make_shared<ConcatWs>(connector);
+  auto connector =
+      constantPattern->as<ConstantVector<StringView>>()->valueAt(0).str();
+  return std::make_shared<ConcatWs>(connector);
 }
 
 void encodeDigestToBase16(uint8_t* output, int digestSize) {
