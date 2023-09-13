@@ -316,10 +316,8 @@ class ConcatWs : public exec::VectorFunction {
 
     auto arrayArgs = args[1]->typeKind() == TypeKind::ARRAY;
     if (arrayArgs) {
-      LOG(WARNING) << "ggtest ConcatWs array process\n";
       concatWsArray(selected, args, context, connector_, *flatResult);
     } else {
-      LOG(WARNING) << "ggtest ConcatWs multi args process";
       concatWsVariableParameters(
           selected, args, context, connector_, *flatResult);
     }
