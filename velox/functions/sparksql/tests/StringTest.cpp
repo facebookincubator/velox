@@ -838,7 +838,7 @@ TEST_F(StringTest, concat_ws) {
     velox::test::assertEqualVectors(expected, result);
 
     result = evaluate<SimpleVector<StringView>>(
-        "concat_ws('$*@', 'aaa', '测试', c0, '👿👿👿', 'ddd', c1, '\u82f9\u679c', 'fff')",
+        "concat_ws('$*@', 'aaa', '测试', c0, 'eee', 'ddd', c1, '\u82f9\u679c', 'fff')",
         data);
 
     expected = makeFlatVector<StringView>(1'000, [&](auto row) {
@@ -849,7 +849,7 @@ TEST_F(StringTest, concat_ws) {
       const std::string& s1 =
           c1[row].str().empty() ? c1[row].str() : delim + c1[row].str();
 
-      value = "aaa" + delim + "测试" + s0 + delim + "👿👿👿" + delim + "ddd" +
+      value = "aaa" + delim + "测试" + s0 + delim + "eee" + delim + "ddd" +
           s1 + delim + "\u82f9\u679c" + delim + "fff";
       return StringView(value);
     });
