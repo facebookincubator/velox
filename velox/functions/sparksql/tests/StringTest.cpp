@@ -849,8 +849,8 @@ TEST_F(StringTest, concat_ws) {
       const std::string& s1 =
           c1[row].str().empty() ? c1[row].str() : delim + c1[row].str();
 
-      value = "aaa" + delim + "测试" + s0 + delim + "eee" + delim + "ddd" +
-          s1 + delim + "\u82f9\u679c" + delim + "fff";
+      value = "aaa" + delim + "测试" + s0 + delim + "eee" + delim + "ddd" + s1 +
+          delim + "\u82f9\u679c" + delim + "fff";
       return StringView(value);
     });
     velox::test::assertEqualVectors(expected, result);
