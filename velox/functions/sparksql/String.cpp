@@ -390,7 +390,8 @@ std::vector<std::shared_ptr<exec::FunctionSignature>> concatWsSignatures() {
 
 std::shared_ptr<exec::VectorFunction> makeConcatWs(
     const std::string& name,
-    const std::vector<exec::VectorFunctionArg>& inputArgs) {
+    const std::vector<exec::VectorFunctionArg>& inputArgs,
+    const core::QueryConfig& /*config*/) {
   auto numArgs = inputArgs.size();
   VELOX_USER_CHECK(
       numArgs >= 1,
