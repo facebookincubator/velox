@@ -103,126 +103,193 @@ class Length : public exec::VectorFunction {
   }
 };
 
-class ConcatWsVariableParameters : public exec::VectorFunction {
- public:
-  explicit ConcatWsVariableParameters(const std::string& connector)
-      : connector_{connector} {}
+void concatWsVariableParameters(
+    const SelectivityVector& rows,
+    std::vector<VectorPtr>& args,
+    exec::EvalCtx& context,
+    const std::string& connector,
+    FlatVector<StringView>& flatResult) {
+  std::vector<column_index_t> argMapping;
+  std::vector<std::string> constantStrings;
+  std::vector<StringView> constantStringViews;
+  auto numArgs = args.size();
 
-  void apply(
-      const SelectivityVector& rows,
-      std::vector<VectorPtr>& args,
-      const TypePtr& /* outputType */,
-      exec::EvalCtx& context,
-      VectorPtr& result) const override {
-    std::vector<column_index_t> argMapping;
-    std::vector<std::string> constantStrings;
-    std::vector<StringView> constantStringViews;
-    auto numArgs = args.size();
-
-    // Save constant values to constantStrings_.
-    // Identify and combine consecutive constant inputs.
-    argMapping.reserve(numArgs - 1);
-    constantStrings.reserve(numArgs - 1);
-    for (auto i = 1; i < numArgs; ++i) {
-      argMapping.push_back(i);
-      if (args[i] && args[i]->as<ConstantVector<StringView>>() &&
-          !args[i]->as<ConstantVector<StringView>>()->isNullAt(0)) {
-        std::string value =
-            args[i]->as<ConstantVector<StringView>>()->valueAt(0).str();
-        column_index_t j = i + 1;
-        for (; j < args.size(); ++j) {
-          if (!args[j] || !args[j]->as<ConstantVector<StringView>>() ||
-              args[j]->as<ConstantVector<StringView>>()->isNullAt(0)) {
-            break;
-          }
-
-          value += connector_ +
-              args[j]->as<ConstantVector<StringView>>()->valueAt(0).str();
+  // Save constant values to constantStrings_.
+  // Identify and combine consecutive constant inputs.
+  argMapping.reserve(numArgs - 1);
+  constantStrings.reserve(numArgs - 1);
+  for (auto i = 1; i < numArgs; ++i) {
+    argMapping.push_back(i);
+    if (args[i] && args[i]->as<ConstantVector<StringView>>() &&
+        !args[i]->as<ConstantVector<StringView>>()->isNullAt(0)) {
+      std::string value =
+          args[i]->as<ConstantVector<StringView>>()->valueAt(0).str();
+      column_index_t j = i + 1;
+      for (; j < args.size(); ++j) {
+        if (!args[j] || !args[j]->as<ConstantVector<StringView>>() ||
+            args[j]->as<ConstantVector<StringView>>()->isNullAt(0)) {
+          break;
         }
-        constantStrings.push_back(std::string(value.data(), value.size()));
-        i = j - 1;
-      } else {
-        constantStrings.push_back(std::string());
+
+        value += connector +
+            args[j]->as<ConstantVector<StringView>>()->valueAt(0).str();
       }
+      constantStrings.push_back(std::string(value.data(), value.size()));
+      i = j - 1;
+    } else {
+      constantStrings.push_back(std::string());
     }
-
-    // Create StringViews for constant strings.
-    constantStringViews.reserve(numArgs - 1);
-    for (const auto& constantString : constantStrings) {
-      constantStringViews.push_back(
-          StringView(constantString.data(), constantString.size()));
-    }
-
-    auto flatResult = result->asFlatVector<StringView>();
-    auto numCols = argMapping.size();
-    std::vector<exec::LocalDecodedVector> decodedArgs;
-    decodedArgs.reserve(numCols);
-
-    for (auto i = 0; i < numCols; ++i) {
-      auto index = argMapping[i];
-      if (constantStringViews[i].empty()) {
-        decodedArgs.emplace_back(context, *args[index], rows);
-      } else {
-        // Do not decode constant inputs.
-        decodedArgs.emplace_back(context);
-      }
-    }
-
-    size_t totalResultBytes = 0;
-    rows.applyToSelected([&](auto row) {
-      auto isFirst = true;
-      for (int i = 0; i < numCols; i++) {
-        auto value = constantStringViews[i].empty()
-            ? decodedArgs[i]->valueAt<StringView>(row)
-            : constantStringViews[i];
-        if (!value.empty()) {
-          if (isFirst) {
-            isFirst = false;
-          } else {
-            totalResultBytes += connector_.size();
-          }
-          totalResultBytes += value.size();
-        }
-      }
-    });
-
-    // Allocate a string buffer.
-    auto rawBuffer = flatResult->getRawStringBufferWithSpace(totalResultBytes);
-    size_t offset = 0;
-    rows.applyToSelected([&](int row) {
-      const char* start = rawBuffer + offset;
-      size_t combinedSize = 0;
-      auto isFirst = true;
-      for (int i = 0; i < numCols; i++) {
-        StringView value;
-        if (constantStringViews[i].empty()) {
-          value = decodedArgs[i]->valueAt<StringView>(row);
-        } else {
-          value = constantStringViews[i];
-        }
-        auto size = value.size();
-        if (size > 0) {
-          if (isFirst) {
-            isFirst = false;
-          } else {
-            memcpy(rawBuffer + offset, connector_.data(), connector_.size());
-            offset += connector_.size();
-            combinedSize += connector_.size();
-          }
-          memcpy(rawBuffer + offset, value.data(), size);
-          combinedSize += size;
-          offset += size;
-        }
-      }
-      flatResult->setNoCopy(row, StringView(start, combinedSize));
-    });
   }
 
- private:
-  const std::string connector_;
-};
+  // Create StringViews for constant strings.
+  constantStringViews.reserve(numArgs - 1);
+  for (const auto& constantString : constantStrings) {
+    constantStringViews.push_back(
+        StringView(constantString.data(), constantString.size()));
+  }
+
+  auto numCols = argMapping.size();
+  std::vector<exec::LocalDecodedVector> decodedArgs;
+  decodedArgs.reserve(numCols);
+
+  for (auto i = 0; i < numCols; ++i) {
+    auto index = argMapping[i];
+    if (constantStringViews[i].empty()) {
+      decodedArgs.emplace_back(context, *args[index], rows);
+    } else {
+      // Do not decode constant inputs.
+      decodedArgs.emplace_back(context);
+    }
+  }
+
+  size_t totalResultBytes = 0;
+  rows.applyToSelected([&](auto row) {
+    auto isFirst = true;
+    for (int i = 0; i < numCols; i++) {
+      auto value = constantStringViews[i].empty()
+          ? decodedArgs[i]->valueAt<StringView>(row)
+          : constantStringViews[i];
+      if (!value.empty()) {
+        if (isFirst) {
+          isFirst = false;
+        } else {
+          totalResultBytes += connector.size();
+        }
+        totalResultBytes += value.size();
+      }
+    }
+  });
+
+  // Allocate a string buffer.
+  auto rawBuffer = flatResult.getRawStringBufferWithSpace(totalResultBytes);
+  size_t offset = 0;
+  rows.applyToSelected([&](int row) {
+    const char* start = rawBuffer + offset;
+    size_t combinedSize = 0;
+    auto isFirst = true;
+    for (int i = 0; i < numCols; i++) {
+      StringView value;
+      if (constantStringViews[i].empty()) {
+        value = decodedArgs[i]->valueAt<StringView>(row);
+      } else {
+        value = constantStringViews[i];
+      }
+      auto size = value.size();
+      if (size > 0) {
+        if (isFirst) {
+          isFirst = false;
+        } else {
+          memcpy(rawBuffer + offset, connector.data(), connector.size());
+          offset += connector.size();
+          combinedSize += connector.size();
+        }
+        memcpy(rawBuffer + offset, value.data(), size);
+        combinedSize += size;
+        offset += size;
+      }
+    }
+    flatResult.setNoCopy(row, StringView(start, combinedSize));
+  });
+}
+
+void concatWsArray(
+    const SelectivityVector& rows,
+    std::vector<VectorPtr>& args,
+    exec::EvalCtx& context,
+    const std::string& connector,
+    FlatVector<StringView>& flatResult) {
+  exec::LocalDecodedVector arrayHolder(context, *args[1], rows);
+  auto& arrayDecoded = *arrayHolder.get();
+  auto baseArray = arrayDecoded.base()->as<ArrayVector>();
+  auto rawSizes = baseArray->rawSizes();
+  auto rawOffsets = baseArray->rawOffsets();
+  auto indices = arrayDecoded.indices();
+
+  auto elements = arrayHolder.get()->base()->as<ArrayVector>()->elements();
+  exec::LocalSelectivityVector nestedRows(context, elements->size());
+  nestedRows.get()->setAll();
+  exec::LocalDecodedVector elementsHolder(
+      context, *elements, *nestedRows.get());
+  auto& elementsDecoded = *elementsHolder.get();
+  auto elementsBase = elementsDecoded.base();
+
+  size_t totalResultBytes = 0;
+  rows.applyToSelected([&](auto row) {
+    auto size = rawSizes[indices[row]];
+    auto offset = rawOffsets[indices[row]];
+
+    auto isFirst = true;
+    for (auto i = 0; i < size; ++i) {
+      if (!elementsBase->isNullAt(offset + i)) {
+        auto element = elementsDecoded.valueAt<StringView>(offset + i);
+        if (!element.empty()) {
+          if (isFirst) {
+            isFirst = false;
+          } else {
+            totalResultBytes += connector.size();
+          }
+          totalResultBytes += element.size();
+        }
+      }
+    }
+  });
+
+  // Allocate a string buffer.
+  auto rawBuffer = flatResult.getRawStringBufferWithSpace(totalResultBytes);
+  size_t bufferOffset = 0;
+  rows.applyToSelected([&](int row) {
+    auto size = rawSizes[indices[row]];
+    auto offset = rawOffsets[indices[row]];
+
+    const char* start = rawBuffer + bufferOffset;
+    size_t combinedSize = 0;
+    auto isFirst = true;
+    for (auto i = 0; i < size; ++i) {
+      if (!elementsBase->isNullAt(offset + i)) {
+        auto element = elementsDecoded.valueAt<StringView>(offset + i);
+        if (!element.empty()) {
+          if (isFirst) {
+            isFirst = false;
+          } else {
+            memcpy(
+                rawBuffer + bufferOffset, connector.data(), connector.size());
+            bufferOffset += connector.size();
+            combinedSize += connector.size();
+          }
+          memcpy(rawBuffer + bufferOffset, element.data(), element.size());
+          bufferOffset += element.size();
+          combinedSize += element.size();
+        }
+      }
+      flatResult.setNoCopy(row, StringView(start, combinedSize));
+    }
+  });
+}
 
 class ConcatWs : public exec::VectorFunction {
+ public:
+  explicit ConcatWs(const std::string& connector) : connector_(connector) {}
+
   bool isDefaultNullBehavior() const override {
     return false;
   }
@@ -233,33 +300,33 @@ class ConcatWs : public exec::VectorFunction {
       const TypePtr& /* outputType */,
       exec::EvalCtx& context,
       VectorPtr& result) const override {
-    auto numArgs = args.size();
-    VELOX_USER_CHECK(
-        numArgs >= 1,
-        "concat_ws requires one arguments at least, but got {}",
-        numArgs);
-
     context.ensureWritable(selected, VARCHAR(), result);
-    if (args[0]->isNullAt(0)) {
-      selected.applyToSelected([&](int row) { result->setNull(row, true); });
-      return;
-    }
-
+    auto flatResult = result->asFlatVector<StringView>();
+    auto numArgs = args.size();
     if (numArgs == 1) {
-      auto flatResult = result->asFlatVector<StringView>();
       selected.applyToSelected(
           [&](int row) { flatResult->setNoCopy(row, StringView("")); });
       return;
     }
 
-    auto connectorVector = args[0]->as<ConstantVector<StringView>>();
-    VELOX_USER_CHECK(
-        connectorVector, "concat_ws function supports only constant connector");
-    auto connector = connectorVector->valueAt(0).str();
+    if (args[0]->isNullAt(0)) {
+      selected.applyToSelected([&](int row) { result->setNull(row, true); });
+      return;
+    }
 
-    ConcatWsVariableParameters concatWsVariableParameters(connector);
-    concatWsVariableParameters.apply(selected, args, nullptr, context, result);
+    auto arrayArgs = args[1]->typeKind() == TypeKind::ARRAY;
+    if (arrayArgs) {
+      LOG(WARNING) << "ggtest ConcatWs array process\n";
+      concatWsArray(selected, args, context, connector_, *flatResult);
+    } else {
+      LOG(WARNING) << "ggtest ConcatWs multi args process";
+      concatWsVariableParameters(
+          selected, args, context, connector_, *flatResult);
+    }
   }
+
+ private:
+  const std::string connector_;
 };
 
 } // namespace

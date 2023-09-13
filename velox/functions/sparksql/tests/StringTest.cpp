@@ -758,6 +758,7 @@ TEST_F(StringTest, translateNonconstantMatch) {
 
 // Test concat_ws vector function
 TEST_F(StringTest, concat_ws) {
+  // test concat_ws variable arguments
   size_t maxArgsCount = 10; // cols
   size_t rowCount = 100;
   size_t maxStringLength = 100;
@@ -837,7 +838,7 @@ TEST_F(StringTest, concat_ws) {
     velox::test::assertEqualVectors(expected, result);
 
     result = evaluate<SimpleVector<StringView>>(
-        "concat_ws('$*@', 'aaa', 'bbb', c0, 'ccc', 'ddd', c1, 'eee', 'fff')",
+        "concat_ws('$*@', 'aaa', '测试', c0, '👿👿👿', 'ddd', c1, '\u82f9\u679c', 'fff')",
         data);
 
     expected = makeFlatVector<StringView>(1'000, [&](auto row) {
@@ -848,10 +849,37 @@ TEST_F(StringTest, concat_ws) {
       const std::string& s1 =
           c1[row].str().empty() ? c1[row].str() : delim + c1[row].str();
 
-      value = "aaa" + delim + "bbb" + s0 + delim + "ccc" + delim + "ddd" + s1 +
-          delim + "eee" + delim + "fff";
+      value = "aaa" + delim + "测试" + s0 + delim + "👿👿👿" + delim + "ddd" +
+          s1 + delim + "\u82f9\u679c" + delim + "fff";
       return StringView(value);
     });
+    velox::test::assertEqualVectors(expected, result);
+  }
+
+  // test concat_ws array
+  {
+    using S = StringView;
+    auto arrayVector = makeNullableArrayVector<StringView>({
+        {S("red"), S("blue")},
+        {S("blue"), std::nullopt, S("yellow"), std::nullopt, S("orange")},
+        {},
+        {std::nullopt},
+        {S("red"), S("purple"), S("green")},
+    });
+
+    auto result = evaluate<SimpleVector<StringView>>(
+        "concat_ws('----', arr)",
+        makeRowVector(
+            {makeConstant("----", arrayVector->size()), arrayVector}));
+
+    expected = makeArrayVector<StringView>({
+        {S("red----blue")},
+        {S("blue----yellow----orange")},
+        {S("")},
+        {S("")},
+        {S("red----purple----green")},
+    });
+
     velox::test::assertEqualVectors(expected, result);
   }
 }
