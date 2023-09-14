@@ -74,6 +74,15 @@ Array Functions
         SELECT array_sort(ARRAY [NULL, 1, NULL]); -- [1, NULL, NULL]
         SELECT array_sort(ARRAY [NULL, 2, 1]); -- [1, 2, NULL]
 
+.. spark:function:: array_union(array(E), array(E1)) -> array(E2)
+
+    Returns an array of the elements in the union of array1 and array2, without duplicates. ::
+
+        SELECT array_union(array(1, 2, 3), array(1, 3, 5)); -- [1, 2, 3, 5]
+        SELECT array_union(array(1, 3, 5), array(1, 2, 3)); -- [1, 3, 5, 2]
+        SELECT array_union(array(1, 2, 3), array(1, 3, 5, null)); -- [1, 2, 3, 5, null]
+        SELECT array_union(array(1, 2, NaN), array(1, 3, NaN)); -- [1, 2, NaN, 3]
+
 .. spark:function:: concat(array(E), array(E1), ..., array(En)) -> array(E, E1, ..., En)
 
     Returns the concatenation of array(E), array(E1), ..., array(En). ::

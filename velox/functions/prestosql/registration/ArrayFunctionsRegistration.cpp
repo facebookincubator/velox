@@ -17,6 +17,7 @@
 #include <string>
 
 #include "velox/functions/Registerer.h"
+#include "velox/functions/lib/ArrayUnionFunction.h"
 #include "velox/functions/lib/Repeat.h"
 #include "velox/functions/prestosql/ArrayConstructor.h"
 #include "velox/functions/prestosql/ArrayFunctions.h"
@@ -97,7 +98,7 @@ inline void registerArrayRemoveNullFunctions(const std::string& prefix) {
 
 template <typename T>
 inline void registerArrayUnionFunctions(const std::string& prefix) {
-  registerFunction<ArrayUnionFunction, Array<T>, Array<T>, Array<T>>(
+  registerFunction<ArrayUnionFunctionGeneral, Array<T>, Array<T>, Array<T>>(
       {prefix + "array_union"});
 }
 

@@ -867,37 +867,6 @@ struct ArrayFlattenFunction {
   }
 };
 
-/// This class implements the array union function.
-///
-/// DEFINITION:
-/// array_union(x, y) → array
-/// Returns an array of the elements in the union of x and y, without
-/// duplicates.
-template <typename T>
-struct ArrayUnionFunction {
-  VELOX_DEFINE_FUNCTION_TYPES(T)
-
-  template <typename Out, typename In>
-  void call(Out& out, const In& inputArray1, const In& inputArray2) {
-    folly::F14FastSet<typename In::element_t> elementSet;
-    bool nullAdded = false;
-    auto addItems = [&](auto& inputArray) {
-      for (const auto& item : inputArray) {
-        if (item.has_value()) {
-          if (elementSet.insert(item.value()).second) {
-            out.push_back(item.value());
-          }
-        } else if (!nullAdded) {
-          nullAdded = true;
-          out.add_null();
-        }
-      }
-    };
-    addItems(inputArray1);
-    addItems(inputArray2);
-  }
-};
-
 /// This class implements the array_remove function.
 ///
 /// DEFINITION:
