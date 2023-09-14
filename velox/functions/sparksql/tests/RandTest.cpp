@@ -103,7 +103,6 @@ TEST_F(RandTest, withSeed) {
 }
 
 TEST_F(RandTest, withoutSeed) {
-  // Test no seed.
   auto result1 = randWithNoSeed();
   auto result2 = randWithNoSeed();
   auto result3 = randWithNoSeed();
