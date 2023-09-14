@@ -36,6 +36,9 @@ DECLARE_int32(velox_exception_system_stacktrace_rate_limit_ms);
 
 namespace facebook {
 namespace velox {
+static const char* kNullKeyErrorMessage = "map key cannot be null";
+static const char* kIndeterminateKeyErrorMessage =
+    "map key cannot be indeterminate";
 
 namespace error_source {
 using namespace folly::string_literals;
