@@ -25,8 +25,6 @@ struct RandFunction {
 
   std::optional<std::mt19937> generator;
 
-  // Partition index is NOT needed to differentiate generator as ThreadLocalPRNG
-  // is used.
   FOLLY_ALWAYS_INLINE void call(double& result) {
     result = folly::Random::randDouble01();
   }
@@ -58,7 +56,7 @@ struct RandFunction {
     result = folly::Random::randDouble01(*generator);
   }
 
-  // For NULL constant input in unknown type.
+  // For NULL constant input of unknown type.
   FOLLY_ALWAYS_INLINE void callNullable(
       double& result,
       const UnknownValue* seed,

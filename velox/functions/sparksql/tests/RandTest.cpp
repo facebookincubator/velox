@@ -54,34 +54,55 @@ class RandTest : public SparkFunctionBaseTest {
     EXPECT_LT(result.value(), 1.0);
   }
 
-  bool areNotEqualVectors(const VectorPtr& vector1, const VectorPtr& vector2) {
-    for (auto i = 0; i < vector1->size(); i++) {
-      if (!vector1->equalValueAt(vector2.get(), i, i)) {
-        return true;
+  // Check whether two vectors that have same size & type, but not all same
+  // values.
+  void assertNotEqualVectors(const VectorPtr& left, const VectorPtr& right) {
+    ASSERT_EQ(left->size(), right->size());
+    ASSERT_TRUE(left->type()->equivalent(*right->type()));
+    for (auto i = 0; i < left->size(); i++) {
+      if (!left->equalValueAt(right.get(), i, i)) {
+        return;
       }
     }
-    return false;
+    FAIL() << "Expect two different vectors are produced.";
   }
 };
 
-TEST_F(RandTest, rand) {
+TEST_F(RandTest, withSeed) {
   checkResult(rand(0));
   // With same default partitionIndex used, same seed always produces same
   // result.
   EXPECT_EQ(rand(0), rand(0));
+
   checkResult(rand(1));
   EXPECT_EQ(rand(1), rand(1));
+
   checkResult(rand(20000));
   EXPECT_EQ(rand(20000), rand(20000));
+
   // Test with same seed, but different partitionIndex.
   EXPECT_NE(rand(0, 0), rand(0, 1));
   EXPECT_NE(rand(1000, 0), rand(1000, 1));
+
   checkResult(randWithNullSeed());
   // Null as seed is identical to 0 as seed.
   EXPECT_EQ(randWithNullSeed(), rand(0));
   // Same null as seed but different partition index.
   EXPECT_NE(randWithNullSeed(0), randWithNullSeed(1));
 
+  // Test with batch input.
+  auto batchResult1 = randWithBatchInput(100);
+  auto batchResult2 = randWithBatchInput(100);
+  // Same seed & partition index produce same results.
+  velox::test::assertEqualVectors(batchResult1, batchResult2);
+  batchResult1 = randWithBatchInput(100, 0 /*partitionIndex*/);
+  batchResult2 = randWithBatchInput(100, 1 /*partitionIndex*/);
+  // Same seed but different partition index cannot produce absolutely same
+  // result.
+  assertNotEqualVectors(batchResult1, batchResult2);
+}
+
+TEST_F(RandTest, withoutSeed) {
   // Test no seed.
   auto result1 = randWithNoSeed();
   auto result2 = randWithNoSeed();
@@ -93,17 +114,6 @@ TEST_F(RandTest, rand) {
   EXPECT_FALSE(
       (result1.value() == result2.value()) &&
       (result1.value() == result3.value()));
-
-  // Test with batch input.
-  auto batchResult1 = randWithBatchInput(100);
-  auto batchResult2 = randWithBatchInput(100);
-  // Same seed & partition index produce same results.
-  velox::test::assertEqualVectors(batchResult1, batchResult2);
-  batchResult1 = randWithBatchInput(100, 0 /*partitionIndex*/);
-  batchResult2 = randWithBatchInput(100, 1 /*partitionIndex*/);
-  // Same seed but different partition index cannot produce absolutely same
-  // result.
-  ASSERT_TRUE(areNotEqualVectors(batchResult1, batchResult2));
 }
 
 } // namespace
