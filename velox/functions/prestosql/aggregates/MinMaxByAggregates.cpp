@@ -1134,8 +1134,7 @@ exec::AggregateRegistrationResult registerMinMaxBy(const std::string& name) {
       "double",
       "varchar",
       "date",
-      "timestamp",
-      "array"};
+      "timestamp"};
 
   // Add support for all value types to 3-arg version of the aggregate.
   for (const auto& compareType : supportedCompareTypes) {

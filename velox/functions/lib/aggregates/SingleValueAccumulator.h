@@ -33,11 +33,11 @@ struct SingleValueAccumulator {
 
   bool hasValue() const;
 
-  /// Returns 0 if stored and new values are equal; <0 if stored value is less
-  /// then new value; >0 if stored value is greater than new value.
-  ///
-  /// The caller needs to ensure that hasValue() is true before calling this
-  /// method.
+  /// Returns < 0 if 'left' is less than 'right' at 'index', 0 if
+  /// equal and > 0 otherwise. If flags.nullHandlingMode is StopAtNull,
+  /// returns std::nullopt if either 'left' or 'right' value is null or contains
+  /// a null. If flags.nullHandlingMode is NoStop then NULL is considered equal
+  /// to NULL.
   std::optional<int32_t> compare(
       const DecodedVector& decoded,
       vector_size_t index,
