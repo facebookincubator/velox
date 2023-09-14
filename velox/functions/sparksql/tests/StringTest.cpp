@@ -870,15 +870,15 @@ TEST_F(StringTest, concat_ws) {
     auto result = evaluate<SimpleVector<StringView>>(
         "concat_ws('----', c0)", makeRowVector({arrayVector}));
 
-    auto expected = makeArrayVector<StringView>({
-        {S("red----blue")},
-        {S("blue----yellow----orange")},
-        {S("")},
-        {S("")},
-        {S("red----purple----green")},
-    });
+    auto expected = {
+        S("red----blue"),
+        S("blue----yellow----orange"),
+        S(""),
+        S(""),
+        S("red----purple----green"),
+    };
 
-    velox::test::assertEqualVectors(expected, result);
+    velox::test::assertEqualVectors(makeFlatVector<StringView>(expected), result);
   }
 }
 } // namespace
