@@ -16,6 +16,7 @@
     <script src="../_static/doctools.js"></script>
     <link rel="index" title="Index" href="../genindex.html" />
     <link rel="search" title="Search" href="../search.html" />
+    <link rel="next" title="Chapter 2: Flat Vectors of Strings" href="chapter02.html" />
     <link rel="prev" title="Programming Guide" href="../programming-guide.html" /> 
   </head><body>
     <div class="related" role="navigation" aria-label="related navigation">
@@ -24,6 +25,9 @@
         <li class="right" style="margin-right: 10px">
           <a href="../genindex.html" title="General Index"
              accesskey="I">index</a></li>
+        <li class="right" >
+          <a href="chapter02.html" title="Chapter 2: Flat Vectors of Strings"
+             accesskey="N">next</a> |</li>
         <li class="right" >
           <a href="../programming-guide.html" title="Programming Guide"
              accesskey="P">previous</a> |</li>
@@ -176,8 +180,8 @@ calling MemoryPool to release the memory.</p>
 allocated from it are destroyed.</p>
 <p>Let’s now look at the nulls buffer.</p>
 <p>We use the nulls buffer to store null flags, one bit per value.
-AlignedBuffer&lt;boo&gt;::allocate template is overwritten to allocate only one bit
-per entry, not 1 byte (=sizeof(bool). To read and write null bits we use
+AlignedBuffer&lt;bool&gt;::allocate template is overwritten to allocate only one bit
+per entry, not 1 byte (=sizeof(bool)). To read and write null bits we use
 Buffer::as&lt;uint64_t&gt;() and Buffer::asMutable&lt;uint64_t&gt;() method. Notice that we
 use uint64_t as template parameter, not bool.</p>
 <div class="highlight-c++ notranslate"><div class="highlight"><pre><span></span><span class="cp">#include</span><span class="w"> </span><span class="cpf">&quot;velox/common/base/Nulls.h&quot;</span><span class="cp"></span>
@@ -302,15 +306,19 @@ types are supported in Velox:</p>
 <td><p>int64_t</p></td>
 <td><p>64-bit integer.</p></td>
 </tr>
-<tr class="row-odd"><td><p>REAL</p></td>
+<tr class="row-odd"><td><p>HUGEINT</p></td>
+<td><p>int128_t</p></td>
+<td><p>128-bit integer.</p></td>
+</tr>
+<tr class="row-even"><td><p>REAL</p></td>
 <td><p>float</p></td>
 <td><p>32-bit floating point number.</p></td>
 </tr>
-<tr class="row-even"><td><p>DOUBLE</p></td>
+<tr class="row-odd"><td><p>DOUBLE</p></td>
 <td><p>double</p></td>
 <td><p>64-bit floating point number.</p></td>
 </tr>
-<tr class="row-odd"><td><p>VARCHAR</p></td>
+<tr class="row-even"><td><p>VARCHAR</p></td>
 <td><p>struct StringView</p></td>
 <td><p>Variable width string.</p></td>
 </tr>
@@ -398,6 +406,11 @@ strings.</p>
     <p class="topless"><a href="../programming-guide.html"
                           title="previous chapter">Programming Guide</a></p>
   </div>
+  <div>
+    <h4>Next topic</h4>
+    <p class="topless"><a href="chapter02.html"
+                          title="next chapter">Chapter 2: Flat Vectors of Strings</a></p>
+  </div>
   <div role="note" aria-label="source link">
     <h3>This Page</h3>
     <ul class="this-page-menu">
@@ -425,6 +438,9 @@ strings.</p>
         <li class="right" style="margin-right: 10px">
           <a href="../genindex.html" title="General Index"
              >index</a></li>
+        <li class="right" >
+          <a href="chapter02.html" title="Chapter 2: Flat Vectors of Strings"
+             >next</a> |</li>
         <li class="right" >
           <a href="../programming-guide.html" title="Programming Guide"
              >previous</a> |</li>
