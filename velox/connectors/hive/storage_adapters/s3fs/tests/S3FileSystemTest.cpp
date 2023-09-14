@@ -179,7 +179,6 @@ TEST_F(S3FileSystemTest, logLevel) {
 }
 
 TEST_F(S3FileSystemTest, writeFileAndRead) {
-  static constexpr size_t kMinPartSize = 5 * 1'024 * 1'024;
   const auto bucketName = "writedata";
   const auto file = "test.txt";
   const auto filename = localPath(bucketName) + "/" + file;
@@ -200,38 +199,52 @@ TEST_F(S3FileSystemTest, writeFileAndRead) {
   // dataContent length is 178.
   EXPECT_EQ(contentSize, 178);
 
+  // Append and flush a small batch of data.
   writeFile->append(dataContent.substr(0, 10));
   EXPECT_EQ(writeFile->size(), 10);
   writeFile->append(dataContent.substr(10, contentSize - 10));
   EXPECT_EQ(writeFile->size(), contentSize);
   writeFile->flush();
-
+  // Not parts must be uploaded.
   EXPECT_EQ(s3WriteFile->numPartsUploaded(), 0);
 
-  // Write data 178 * 100'000 ~ 17MB.
-  // Should have 4 parts in total with kMinPartSize = 5MB.
-  int partCount = 0;
-  uint64_t partSize = contentSize;
+  // Append data 178 * 100'000 ~ 16MB.
+  // Should have 1 part in total with kUploadPartSize = 10MB.
   for (int i = 0; i < 100'000; ++i) {
     writeFile->append(dataContent);
-    writeFile->flush();
-    partSize += contentSize;
-    if (partSize > kMinPartSize) {
-      ++partCount;
-      EXPECT_EQ(s3WriteFile->numPartsUploaded(), partCount);
-      partSize = 0;
-    }
   }
-  EXPECT_EQ(s3WriteFile->numPartsUploaded(), 3);
+  EXPECT_EQ(s3WriteFile->numPartsUploaded(), 1);
+  EXPECT_EQ(writeFile->size(), 100'001 * contentSize);
 
-  writeFile->close();
+  // append a large data buffer 178 * 150'000 ~ 25MB (2 parts).
+  std::vector<char> largeBuffer(contentSize * 150'000);
+  for (int i = 0; i < 150'000; ++i) {
+    memcpy(
+        largeBuffer.data() + (i * contentSize),
+        dataContent.data(),
+        contentSize);
+  }
+
+  writeFile->append({largeBuffer.data(), largeBuffer.size()});
+  EXPECT_EQ(writeFile->size(), 250'001 * contentSize);
+  // Total data = ~41 MB = 5 parts.
+  // But parts uploaded will be 4.
   EXPECT_EQ(s3WriteFile->numPartsUploaded(), 4);
+
+  // Uploads the last part.
+  writeFile->close();
+  EXPECT_EQ(s3WriteFile->numPartsUploaded(), 5);
 
   VELOX_ASSERT_THROW(
       writeFile->append(dataContent.substr(0, 10)), "File is closed");
 
   auto readFile = s3fs.openFileForRead(s3File);
-  std::int64_t size = readFile->size();
-  EXPECT_EQ(readFile->size(), contentSize * 100'001);
-  EXPECT_EQ(readFile->pread(0, size).substr(0, contentSize), dataContent);
+  ASSERT_EQ(readFile->size(), contentSize * 250'001);
+  // Sample and verify every 1'000 dataContent chunks.
+  for (int i = 0; i < 250; ++i) {
+    ASSERT_EQ(
+        readFile->pread(i * (1'000 * contentSize), contentSize), dataContent);
+  }
+  // Verify the last chunk.
+  ASSERT_EQ(readFile->pread(contentSize * 250'000, contentSize), dataContent);
 }

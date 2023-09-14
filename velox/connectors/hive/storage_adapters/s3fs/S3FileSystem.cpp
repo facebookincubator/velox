@@ -208,21 +208,6 @@ Aws::Utils::Logging::LogLevel inferS3LogLevel(std::string level) {
 
 namespace filesystems {
 
-// AWS C++ SDK allows streaming writes via the MultiPart upload API.
-// Multipart upload allows you to upload a single object as a set of parts.
-// Each part is a contiguous portion of the object's data.
-// Each part size (except last) must be between [5 MiB, 5 GiB].
-// https://docs.aws.amazon.com/AmazonS3/latest/userguide/qfacts.html
-// You can upload these object parts independently and in any order.
-/// After all parts of your object are uploaded, Amazon S3 assembles these parts
-/// and creates the object.
-// https://docs.aws.amazon.com/AmazonS3/latest/userguide/mpuoverview.html
-// S3WriteFile uses the Apache Arrow implementation as a reference.
-// https://github.com/apache/arrow/blob/main/cpp/src/arrow/filesystem/s3fs.cc
-// S3WriteFile is not thread-safe.
-// UploadPart is currently synchronous during flush.
-// TODO: Evaluate and add option for asynchronous part uploads.
-// TODO: Implement retry on failure.
 class S3WriteFile::Impl {
  public:
   explicit Impl(const std::string& path, Aws::S3::S3Client* client)
@@ -270,11 +255,7 @@ class S3WriteFile::Impl {
       uploadState_.id = outcome.GetResult().GetUploadId();
     }
 
-    // Create a StringStream to store the writes.
-    currentPart_ = Aws::MakeShared<Aws::StringStream>(
-        "PutObjectInputStream",
-        std::stringstream::in | std::stringstream::out |
-            std::stringstream::binary);
+    currentPart_.resize(kPartUploadSize);
     closed_ = false;
     fileSize_ = 0;
   }
@@ -282,28 +263,22 @@ class S3WriteFile::Impl {
   // Appends data to the end of the file.
   void append(std::string_view data) {
     VELOX_CHECK(!closed_, "File is closed");
-    // 'flush' API should trigger uploadPart.
-    // But upload part if the maximum part size is reached.
-    if (currentPartSize_ + data.size() >= kMaxPartSize) {
-      uploadPart();
+    if (data.size() + currentPartSize_ >= kPartUploadSize) {
+      upload(data);
+    } else {
+      // Append to current part.
+      memcpy(currentPartBuffer() + currentPartSize_, data.data(), data.size());
+      currentPartSize_ += data.size();
     }
-    currentPart_->write(data.data(), data.size());
-    currentPartSize_ += data.size();
     fileSize_ += data.size();
   }
 
-  // Upload the current part.
+  // No-op.
   void flush() {
     VELOX_CHECK(!closed_, "File is closed");
-    // Skip flushing an empty part.
-    if (currentPartSize_ == 0) {
-      return;
-    }
-    // Skip if current part size is less than the minimum part size.
-    if (currentPartSize_ < kMinPartSize) {
-      return;
-    }
-    uploadPart();
+    /// currentPartSize must be less than kPartUploadSize since
+    /// append() would have already flushed after reaching kUploadPartSize.
+    VELOX_CHECK_LE(currentPartSize_, kPartUploadSize);
   }
 
   // Complete the multipart upload and close the file.
@@ -311,7 +286,8 @@ class S3WriteFile::Impl {
     if (closed_) {
       return;
     }
-    uploadPart(true);
+    uploadPart({currentPartBuffer(), currentPartSize_}, true);
+    currentPartSize_ = 0;
     VELOX_CHECK_EQ(uploadState_.partNumber, uploadState_.completedParts.size());
     // Complete the multipart upload.
     {
@@ -340,8 +316,7 @@ class S3WriteFile::Impl {
   }
 
  private:
-  static constexpr size_t kMinPartSize = 5 * 1'024 * 1'024;
-  static constexpr size_t kMaxPartSize = 5l * 1'024 * 1'024 * 1'024;
+  static constexpr int64_t kPartUploadSize = 10 * 1024 * 1024;
   static constexpr const char* kApplicationOctetStream =
       "application/octet-stream";
 
@@ -353,18 +328,42 @@ class S3WriteFile::Impl {
   };
   UploadState uploadState_;
 
-  void uploadPart(bool isLast = false) {
+  // Data can be smaller or larger than the kPartUploadSize.
+  // Complete the currentPart_ and chunk the remaining data.
+  // Stash the remaining in the current part.
+  void upload(const std::string_view data) {
+    auto dataPtr = data.data();
+    auto dataSize = data.size();
+    // Fill-up the remaining currentPart_.
+    auto remainingBufferSize = kPartUploadSize - currentPartSize_;
+    memcpy(
+        currentPartBuffer() + currentPartSize_, dataPtr, remainingBufferSize);
+    uploadPart({currentPartBuffer(), kPartUploadSize});
+    dataPtr += remainingBufferSize;
+    dataSize -= remainingBufferSize;
+    while (dataSize > kPartUploadSize) {
+      uploadPart({dataPtr, kPartUploadSize});
+      dataPtr += kPartUploadSize;
+      dataSize -= kPartUploadSize;
+    }
+    // stash the remaining in currentPart;
+    memcpy(currentPartBuffer(), dataPtr, dataSize);
+    currentPartSize_ = dataSize;
+  }
+
+  void uploadPart(const std::string_view part, bool isLast = false) {
+    // Only the last part can be less than kPartUploadSize.
+    VELOX_CHECK(isLast || (!isLast && (part.size() == kPartUploadSize)));
     // Upload the part.
-    // Only the last part can be less than kMinPartSize.
-    VELOX_CHECK(isLast || (!isLast && (currentPartSize_ >= kMinPartSize)));
     {
       Aws::S3::Model::UploadPartRequest request;
       request.SetBucket(bucket_);
       request.SetKey(key_);
       request.SetUploadId(uploadState_.id);
       request.SetPartNumber(++uploadState_.partNumber);
-      request.SetContentLength(currentPartSize_);
-      request.SetBody(currentPart_);
+      request.SetContentLength(part.size());
+      request.SetBody(
+          std::make_shared<StringViewStream>(part.data(), part.size()));
       auto outcome = client_->UploadPart(request);
       VELOX_CHECK_AWS_OUTCOME(outcome, "Failed to upload", bucket_, key_);
       // Append ETag and part number for this uploaded part.
@@ -376,12 +375,14 @@ class S3WriteFile::Impl {
       part.SetETag(result.GetETag());
       uploadState_.completedParts.push_back(std::move(part));
     }
-    currentPart_->str(Aws::String());
-    currentPart_->clear();
-    currentPartSize_ = 0;
   }
 
-  std::shared_ptr<Aws::StringStream> currentPart_;
+  char* currentPartBuffer() {
+    return currentPart_.data();
+  }
+
+  // TODO: Pass a MemoryPool to S3WriteFile use a MemorySink.
+  std::vector<char> currentPart_;
   Aws::S3::S3Client* client_;
   std::string bucket_;
   std::string key_;
