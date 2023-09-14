@@ -878,7 +878,8 @@ TEST_F(StringTest, concat_ws) {
         S("red----purple----green"),
     };
 
-    velox::test::assertEqualVectors(makeFlatVector<StringView>(expected), result);
+    velox::test::assertEqualVectors(
+        makeFlatVector<StringView>(expected), result);
   }
 }
 } // namespace
