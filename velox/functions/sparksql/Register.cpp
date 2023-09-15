@@ -30,7 +30,6 @@
 #include "velox/functions/sparksql/In.h"
 #include "velox/functions/sparksql/LeastGreatest.h"
 #include "velox/functions/sparksql/MightContain.h"
-#include "velox/functions/sparksql/Rand.h"
 #include "velox/functions/sparksql/RegexFunctions.h"
 #include "velox/functions/sparksql/RegisterArithmetic.h"
 #include "velox/functions/sparksql/RegisterCompare.h"
@@ -238,8 +237,6 @@ void registerFunctions(const std::string& prefix) {
   // Register bloom filter function
   registerFunction<BloomFilterMightContainFunction, bool, Varbinary, int64_t>(
       {prefix + "might_contain"});
-
-  registerRandFunctions(prefix);
 }
 
 } // namespace sparksql
