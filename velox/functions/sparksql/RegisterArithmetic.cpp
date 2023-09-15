@@ -22,6 +22,28 @@
 
 namespace facebook::velox::functions::sparksql {
 
+void registerRandFunctions(const std::string& prefix) {
+  registerFunction<RandFunction, double>({prefix + "rand", prefix + "random"});
+  // Has seed & partition index as input.
+  registerFunction<
+      RandFunction,
+      double,
+      int32_t /*seed*/,
+      int32_t /*partition index*/>({prefix + "rand", prefix + "random"});
+  // Has seed & partition index as input.
+  registerFunction<
+      RandFunction,
+      double,
+      int64_t /*seed*/,
+      int32_t /*partition index*/>({prefix + "rand", prefix + "random"});
+  // NULL constant as seed of unknown type.
+  registerFunction<
+      RandFunction,
+      double,
+      UnknownValue /*seed*/,
+      int32_t /*partition index*/>({prefix + "rand", prefix + "random"});
+}
+
 void registerArithmeticFunctions(const std::string& prefix) {
   // Operators.
   registerBinaryNumeric<PlusFunction>({prefix + "add"});
@@ -67,27 +89,7 @@ void registerArithmeticFunctions(const std::string& prefix) {
   registerFunction<HypotFunction, double, double, double>({prefix + "hypot"});
   registerFunction<sparksql::Log2Function, double, double>({prefix + "log2"});
   registerFunction<sparksql::Log10Function, double, double>({prefix + "log10"});
-
-  // Rand functions.
-  registerFunction<RandFunction, double>({prefix + "rand", prefix + "random"});
-  // Has seed & partition index as input.
-  registerFunction<
-      RandFunction,
-      double,
-      int32_t /*seed*/,
-      int32_t /*partition index*/>({prefix + "rand", prefix + "random"});
-  // Has seed & partition index as input.
-  registerFunction<
-      RandFunction,
-      double,
-      int64_t /*seed*/,
-      int32_t /*partition index*/>({prefix + "rand", prefix + "random"});
-  // NULL constant as seed of unknown type.
-  registerFunction<
-      RandFunction,
-      double,
-      UnknownValue /*seed*/,
-      int32_t /*partition index*/>({prefix + "rand", prefix + "random"});
+  registerRandFunctions(prefix);
 }
 
 } // namespace facebook::velox::functions::sparksql
