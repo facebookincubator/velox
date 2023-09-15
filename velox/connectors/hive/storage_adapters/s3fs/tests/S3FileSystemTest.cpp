@@ -205,18 +205,18 @@ TEST_F(S3FileSystemTest, writeFileAndRead) {
   writeFile->append(dataContent.substr(10, contentSize - 10));
   EXPECT_EQ(writeFile->size(), contentSize);
   writeFile->flush();
-  // Not parts must be uploaded.
+  // No parts must have been uploaded.
   EXPECT_EQ(s3WriteFile->numPartsUploaded(), 0);
 
-  // Append data 178 * 100'000 ~ 16MB.
-  // Should have 1 part in total with kUploadPartSize = 10MB.
+  // Append data 178 * 100'000 ~ 16MiB.
+  // Should have 1 part in total with kUploadPartSize = 10MiB.
   for (int i = 0; i < 100'000; ++i) {
     writeFile->append(dataContent);
   }
   EXPECT_EQ(s3WriteFile->numPartsUploaded(), 1);
   EXPECT_EQ(writeFile->size(), 100'001 * contentSize);
 
-  // append a large data buffer 178 * 150'000 ~ 25MB (2 parts).
+  // Append a large data buffer 178 * 150'000 ~ 25MiB (2 parts).
   std::vector<char> largeBuffer(contentSize * 150'000);
   for (int i = 0; i < 150'000; ++i) {
     memcpy(
@@ -231,7 +231,7 @@ TEST_F(S3FileSystemTest, writeFileAndRead) {
   // But parts uploaded will be 4.
   EXPECT_EQ(s3WriteFile->numPartsUploaded(), 4);
 
-  // Uploads the last part.
+  // Upload the last part.
   writeFile->close();
   EXPECT_EQ(s3WriteFile->numPartsUploaded(), 5);
 
