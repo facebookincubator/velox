@@ -38,6 +38,7 @@ add_library(
   HashPartitionFunction.cpp
   HashProbe.cpp
   HashTable.cpp
+  HashWindowBuild.cpp
   JoinBridge.cpp
   Limit.cpp
   LocalPartition.cpp

@@ -11,16 +11,27 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-if(${VELOX_BUILD_TESTING})
-  add_subdirectory(tests)
-endif()
 
-if(${VELOX_ENABLE_BENCHMARKS})
-  add_subdirectory(benchmarks)
-endif()
+set(BENCHMARK_DEPENDENCIES_NO_FUNC
+    fmt::fmt
+    velox_dwio_common_exception
+    velox_functions_test_lib
+    velox_exec
+    velox_exec_test_lib
+    velox_vector_test_lib
+    gflags::gflags
+    Folly::folly
+    ${FOLLY_BENCHMARK})
 
-add_library(velox_window CumeDist.cpp FirstLastValue.cpp LeadLag.cpp Ntile.cpp
-                         WindowFunctionsRegistration.cpp)
+set(BENCHMARK_DEPENDENCIES
+    velox_window
+    velox_aggregates
+    velox_hive_connector
+    velox_functions_prestosql
+    velox_functions_lib
+    velox_vector_fuzzer
+    ${BENCHMARK_DEPENDENCIES_NO_FUNC})
 
-target_link_libraries(velox_window velox_buffer velox_exec
-                      velox_functions_window Folly::folly)
+add_executable(velox_windows_benchmarks WindowBenchmark.cpp)
+
+target_link_libraries(velox_windows_benchmarks ${BENCHMARK_DEPENDENCIES})

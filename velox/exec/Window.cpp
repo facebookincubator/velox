@@ -14,6 +14,7 @@
  * limitations under the License.
  */
 #include "velox/exec/Window.h"
+#include "velox/exec/HashWindowBuild.h"
 #include "velox/exec/OperatorUtils.h"
 #include "velox/exec/SortWindowBuild.h"
 #include "velox/exec/Task.h"
@@ -31,7 +32,7 @@ Window::Window(
           windowNode->id(),
           "Window"),
       numInputColumns_(windowNode->sources()[0]->outputType()->size()),
-      windowBuild_(std::make_unique<SortWindowBuild>(windowNode, pool())),
+      windowBuild_(std::make_unique<HashWindowBuild>(windowNode, pool())),
       windowNode_(windowNode),
       currentPartition_(nullptr),
       stringAllocator_(pool()) {}

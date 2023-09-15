@@ -287,7 +287,8 @@ TEST_P(LeadLagTest, emptyFrames) {
   std::vector<std::optional<int64_t>> expectedWindow;
 
   auto assertResults = [&](const std::string& functionSql) {
-    auto queryInfo = buildWindowQuery({data}, functionSql, "", kEmptyFrame);
+    auto queryInfo =
+        buildWindowQuery({data}, functionSql, "order by c0", kEmptyFrame);
     auto expected = makeRowVector({
         data->childAt(0),
         makeNullableFlatVector<int64_t>(expectedWindow),
