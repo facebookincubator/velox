@@ -147,7 +147,7 @@ The Drivers are resumed when the buffered size goes below PartitionedOutputBuffe
 </table>
 </section>
 <section id="expression-evaluation-configuration">
-<h2>Expression Evaluation Configuration<a class="headerlink" href="#expression-evaluation-configuration" title="Permalink to this heading">¶</a></h2>
+<span id="expression-evaluation-conf"></span><h2>Expression Evaluation Configuration<a class="headerlink" href="#expression-evaluation-configuration" title="Permalink to this heading">¶</a></h2>
 <table class="docutils align-default">
 <colgroup>
 <col style="width: 18%" />
@@ -183,6 +183,31 @@ when processing small batches, e.g. &lt; 10K rows.</p></td>
 <td><p>bool</p></td>
 <td><p>false</p></td>
 <td><p>This flags forces the cast from float/double/decimal/string to integer to be performed by truncating the decimal part instead of rounding.</p></td>
+</tr>
+<tr class="row-even"><td><p>cast_string_to_date_is_iso_8601</p></td>
+<td><p>bool</p></td>
+<td><p>true</p></td>
+<td><p>If set, cast from string to date allows only ISO 8601 formatted strings: <code class="docutils literal notranslate"><span class="pre">[+-](YYYY-MM-DD)</span></code>.
+Otherwise, allows all patterns supported by Spark:</p>
+<blockquote>
+<div><ul class="simple">
+<li><p><code class="docutils literal notranslate"><span class="pre">[+-]yyyy*</span></code></p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">[+-]yyyy*-[m]m</span></code></p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">[+-]yyyy*-[m]m-[d]d</span></code></p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">[+-]yyyy*-[m]m-[d]d</span> <span class="pre">*</span></code></p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">[+-]yyyy*-[m]m-[d]dT*</span></code></p></li>
+</ul>
+</div></blockquote>
+<p>The asterisk <code class="docutils literal notranslate"><span class="pre">*</span></code> in <code class="docutils literal notranslate"><span class="pre">yyyy*</span></code> stands for any numbers.
+For the last two patterns, the trailing <code class="docutils literal notranslate"><span class="pre">*</span></code> can represent none or any sequence of characters, e.g:</p>
+<blockquote>
+<div><ul class="simple">
+<li><p>“1970-01-01 123”</p></li>
+<li><p>“1970-01-01 (BC)”</p></li>
+</ul>
+</div></blockquote>
+<p>Regardless of this setting’s value, leading spaces will be trimmed.</p>
+</td>
 </tr>
 </tbody>
 </table>
