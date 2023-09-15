@@ -17,7 +17,7 @@
 
 #include "velox/functions/Macros.h"
 
-namespace facebook::velox::functions {
+namespace facebook::velox::functions::sparksql {
 
 template <typename T>
 struct RandFunction {
@@ -72,4 +72,26 @@ struct RandFunction {
   }
 };
 
-} // namespace facebook::velox::functions
+void registerRandFunctions(const std::string& prefix) {
+  // No input.
+  registerFunction<RandFunction, double>({prefix + "rand", prefix + "random"});
+  // Has seed & partition index as input.
+  registerFunction<
+      RandFunction,
+      double,
+      int32_t /*seed*/,
+      int32_t /*partition index*/>({prefix + "rand", prefix + "random"});
+  // Has seed & partition index as input.
+  registerFunction<
+      RandFunction,
+      double,
+      int64_t /*seed*/,
+      int32_t /*partition index*/>({prefix + "rand", prefix + "random"});
+  // NULL constant as seed of unknown type.
+  registerFunction<
+      RandFunction,
+      double,
+      UnknownValue /*seed*/,
+      int32_t /*partition index*/>({prefix + "rand", prefix + "random"});
+}
+} // namespace facebook::velox::functions::sparksql
