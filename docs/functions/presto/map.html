@@ -69,7 +69,7 @@
 <dt class="sig sig-object py">
 <span class="sig-name descname"><span class="pre">map</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">array(K)</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">array(V))</span> <span class="pre">-&gt;</span> <span class="pre">map(K</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">V</span></span></em><span class="sig-paren">)</span></dt>
 <dd><blockquote>
-<div><p>Returns a map created using the given key/value arrays.</p>
+<div><p>Returns a map created using the given key/value arrays. Keys are not allowed to be null or to contain nulls.</p>
 <div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">SELECT</span> <span class="nb">map</span><span class="p">(</span><span class="n">ARRAY</span><span class="p">[</span><span class="mi">1</span><span class="p">,</span><span class="mi">3</span><span class="p">],</span> <span class="n">ARRAY</span><span class="p">[</span><span class="mi">2</span><span class="p">,</span><span class="mi">4</span><span class="p">]);</span> <span class="o">--</span> <span class="p">{</span><span class="mi">1</span> <span class="o">-&gt;</span> <span class="mi">2</span><span class="p">,</span> <span class="mi">3</span> <span class="o">-&gt;</span> <span class="mi">4</span><span class="p">}</span>
 </pre></div>
 </div>
@@ -107,7 +107,7 @@ that key’s value in the resulting map comes from the last one of those maps.</
 <dl class="py function">
 <dt class="sig sig-object py" id="map_from_entries">
 <span class="sig-name descname"><span class="pre">map_from_entries</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">array(row(K</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">V)))</span> <span class="pre">-&gt;</span> <span class="pre">map(K</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">V</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#map_from_entries" title="Permalink to this definition">¶</a></dt>
-<dd><p>Returns a map created from the given array of entries.</p>
+<dd><p>Returns a map created from the given array of entries. Keys are not allowed to be null or to contain nulls.</p>
 <div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">SELECT</span> <span class="n">map_from_entries</span><span class="p">(</span><span class="n">ARRAY</span><span class="p">[(</span><span class="mi">1</span><span class="p">,</span> <span class="s1">&#39;x&#39;</span><span class="p">),</span> <span class="p">(</span><span class="mi">2</span><span class="p">,</span> <span class="s1">&#39;y&#39;</span><span class="p">)]);</span> <span class="o">--</span> <span class="p">{</span><span class="mi">1</span> <span class="o">-&gt;</span> <span class="s1">&#39;x&#39;</span><span class="p">,</span> <span class="mi">2</span> <span class="o">-&gt;</span> <span class="s1">&#39;y&#39;</span><span class="p">}</span>
 </pre></div>
 </div>
