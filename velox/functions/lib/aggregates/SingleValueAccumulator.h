@@ -50,6 +50,12 @@ struct SingleValueAccumulator {
   /// method.
   int32_t compare(const DecodedVector& decoded, vector_size_t index) const;
 
+  static int32_t compare(
+      const SingleValueAccumulator* accumulator,
+      const DecodedVector& decoded,
+      vector_size_t index,
+      CompareFlags compareFlags);
+
   /// Returns memory back to HashStringAllocator.
   void destroy(HashStringAllocator* allocator);
 

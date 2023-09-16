@@ -72,6 +72,21 @@ int32_t SingleValueAccumulator::compare(
       stream, decoded, index, {true, true, false});
 }
 
+// static
+int32_t SingleValueAccumulator::compare(
+    const SingleValueAccumulator* accumulator,
+    const DecodedVector& decoded,
+    vector_size_t index,
+    CompareFlags compareFlags) {
+  auto result = accumulator->compare(decoded, index, compareFlags);
+  VELOX_USER_CHECK(
+      result.has_value(),
+      fmt::format(
+          "{} comparison not supported for values that contain nulls",
+          mapTypeKindToName(decoded.base()->typeKind())));
+  return result.value();
+}
+
 void SingleValueAccumulator::destroy(HashStringAllocator* allocator) {
   if (start_.header != nullptr) {
     allocator->free(start_.header);

@@ -44,13 +44,27 @@ struct SparkComparator {
     } else {
       if constexpr (sparkGreaterThan) {
         return !accumulator->hasValue() ||
-            (accumulator->compare(newComparisons, index) <= 0);
+            SingleValueAccumulator::compare(
+                dynamic_cast<SingleValueAccumulator*>(accumulator),
+                newComparisons,
+                index,
+                kCompareFlags_) <= 0;
       } else {
         return !accumulator->hasValue() ||
-            (accumulator->compare(newComparisons, index) >= 0);
+            SingleValueAccumulator::compare(
+                dynamic_cast<SingleValueAccumulator*>(accumulator),
+                newComparisons,
+                index,
+                kCompareFlags_) >= 0;
       }
     }
   }
+
+  constexpr static CompareFlags kCompareFlags_{
+      true, // nullsFirst
+      true, // ascending
+      false, // equalsOnly
+      CompareFlags::NullHandlingMode::StopAtNull};
 };
 
 std::string toString(const std::vector<TypePtr>& types) {
@@ -74,6 +88,16 @@ template <
     class Aggregate,
     bool isMaxFunc>
 exec::AggregateRegistrationResult registerMinMaxBy(const std::string& name) {
+  std::vector<std::shared_ptr<exec::AggregateFunctionSignature>> signatures;
+  // V, C -> row(V, C) -> V.
+  signatures.push_back(exec::AggregateFunctionSignatureBuilder()
+                           .typeVariable("V")
+                           .typeVariable("C")
+                           .returnType("V")
+                           .intermediateType("row(V,C)")
+                           .argumentType("V")
+                           .argumentType("C")
+                           .build());
   const std::vector<std::string> supportedCompareTypes = {
       "boolean",
       "tinyint",
@@ -85,19 +109,6 @@ exec::AggregateRegistrationResult registerMinMaxBy(const std::string& name) {
       "varchar",
       "date",
       "timestamp"};
-
-  std::vector<std::shared_ptr<exec::AggregateFunctionSignature>> signatures;
-  for (const auto& compareType : supportedCompareTypes) {
-    // V, C -> row(V, C) -> V.
-    signatures.push_back(
-        exec::AggregateFunctionSignatureBuilder()
-            .typeVariable("T")
-            .returnType("T")
-            .intermediateType(fmt::format("row(T,{})", compareType))
-            .argumentType("T")
-            .argumentType(compareType)
-            .build());
-  }
 
   return exec::registerAggregateFunction(
       name,

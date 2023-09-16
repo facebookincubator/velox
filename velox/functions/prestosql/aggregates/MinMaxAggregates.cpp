@@ -381,7 +381,8 @@ class NonNumericMinMaxAggregateBase : public exec::Aggregate {
       }
       auto accumulator = value<SingleValueAccumulator>(groups[i]);
       if (!accumulator->hasValue() ||
-          compareTest(compare(accumulator, decoded, i))) {
+          compareTest(SingleValueAccumulator::compare(
+              accumulator, decoded, i, kCompareFlags_))) {
         accumulator->write(baseVector, indices[i], allocator_);
       }
     });
@@ -405,7 +406,8 @@ class NonNumericMinMaxAggregateBase : public exec::Aggregate {
 
       auto accumulator = value<SingleValueAccumulator>(group);
       if (!accumulator->hasValue() ||
-          compareTest(compare(accumulator, decoded, 0))) {
+          compareTest(SingleValueAccumulator::compare(
+              accumulator, decoded, 0, kCompareFlags_))) {
         accumulator->write(baseVector, indices[0], allocator_);
       }
       return;
@@ -417,30 +419,19 @@ class NonNumericMinMaxAggregateBase : public exec::Aggregate {
         return;
       }
       if (!accumulator->hasValue() ||
-          compareTest(compare(accumulator, decoded, i))) {
+          compareTest(SingleValueAccumulator::compare(
+              accumulator, decoded, i, kCompareFlags_))) {
         accumulator->write(baseVector, indices[i], allocator_);
       }
     });
   }
 
  private:
-  FOLLY_ALWAYS_INLINE static int32_t compare(
-      SingleValueAccumulator* accumulator,
-      DecodedVector& decoded,
-      vector_size_t index) {
-    static const CompareFlags kCompareFlags{
-        true, // nullsFirst
-        true, // ascending
-        false, // equalsOnly
-        CompareFlags::NullHandlingMode::StopAtNull};
-    auto result = accumulator->compare(decoded, index, kCompareFlags);
-    VELOX_USER_CHECK(
-        result.has_value(),
-        fmt::format(
-            "{} comparison not supported for values that contain nulls",
-            mapTypeKindToName(decoded.base()->typeKind())));
-    return result.value();
-  }
+  constexpr static CompareFlags kCompareFlags_{
+      true, // nullsFirst
+      true, // ascending
+      false, // equalsOnly
+      CompareFlags::NullHandlingMode::StopAtNull};
 };
 
 class NonNumericMaxAggregate : public NonNumericMinMaxAggregateBase {
