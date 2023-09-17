@@ -110,7 +110,7 @@ TEST_P(LeadLagTest, offset) {
   assertQuery(queryInfo.planNode, expected);
 }
 
-TEST_P(LeadLagTest, bigOffsetWithIgnoreNulls) {
+TEST_P(LeadLagTest, ignoreNullsInt64Offset) {
   auto data = makeRowVector({
       // Values.
       makeNullableFlatVector<int64_t>({1, std::nullopt, 3, 4, 5}),
