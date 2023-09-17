@@ -79,6 +79,26 @@ class E2EFilterTest : public E2EFilterTestBase {
     writer_->close();
   }
 
+  void writeToMemoryAbort(const std::vector<RowVectorPtr>& batches) {
+    auto sink = std::make_unique<MemorySink>(
+        200 * 1024 * 1024, FileSink::Options{.pool = leafPool_.get()});
+    sinkPtr_ = sink.get();
+    options_.memoryPool = rootPool_.get();
+    options_.flushPolicyFactory = [&]() {
+      return std::make_unique<LambdaFlushPolicy>(
+          rowsInRowGroup_, bytesInRowGroup_, [&]() { return false; });
+    };
+
+    writer_ = std::make_unique<facebook::velox::parquet::Writer>(
+        std::move(sink), options_);
+    for (auto& batch : batches) {
+      writer_->write(batch);
+    }
+    EXPECT_NE(nullptr, sinkPtr_->data());
+    writer_->abort();
+    EXPECT_EQ(nullptr, sinkPtr_->data());
+  }
+
   std::unique_ptr<dwio::common::Reader> makeReader(
       const dwio::common::ReaderOptions& opts,
       std::unique_ptr<dwio::common::BufferedInput> input) override {
@@ -613,6 +633,14 @@ TEST_F(E2EFilterTest, combineRowGroup) {
   auto parquetReader = dynamic_cast<ParquetReader&>(*reader.get());
   EXPECT_EQ(parquetReader.numberOfRowGroups(), 1);
   EXPECT_EQ(parquetReader.numberOfRows(), 5);
+}
+
+TEST_F(E2EFilterTest, abort) {
+  rowType_ = ROW({INTEGER()});
+  std::vector<RowVectorPtr> batches;
+  batches.push_back(std::static_pointer_cast<RowVector>(
+      test::BatchMaker::createBatch(rowType_, 2, *leafPool_, nullptr, 0)));
+  writeToMemoryAbort(batches);
 }
 
 // Define main so that gflags get processed.

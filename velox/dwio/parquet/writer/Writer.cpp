@@ -83,6 +83,12 @@ class ArrowDataBufferSink : public ::arrow::io::OutputStream {
     return sink_->isClosed();
   }
 
+  void abort() {
+    sink_->close();
+    sink_ = nullptr;
+    buffer_.clear();
+  }
+
  private:
   std::unique_ptr<dwio::common::FileSink> sink_;
   const double growRatio_;
@@ -270,7 +276,12 @@ void Writer::close() {
 }
 
 void Writer::abort() {
-  VELOX_NYI("abort function for Parquet writer is not supported yet");
+  stream_->abort();
+  if (arrowContext_->writer) {
+    arrowContext_->writer.reset();
+  }
+  arrowContext_->stagingChunks.clear();
+  arrowContext_.reset();
 }
 
 parquet::WriterOptions getParquetOptions(

@@ -20,8 +20,6 @@
 #include <folly/init/Init.h>
 #include "velox/common/base/Fs.h"
 #include "velox/common/base/tests/GTestUtils.h"
-#include "velox/core/Config.h"
-#include "velox/dwio/common/Options.h"
 #include "velox/exec/tests/utils/PlanBuilder.h"
 #include "velox/exec/tests/utils/TempDirectoryPath.h"
 #include "velox/vector/fuzzer/VectorFuzzer.h"
@@ -67,7 +65,8 @@ class HiveDataSinkTest : public exec::test::HiveConnectorTestBase {
   std::shared_ptr<connector::hive::HiveInsertTableHandle>
   createHiveInsertTableHandle(
       const RowTypePtr& outputRowType,
-      const std::string& outputDirectoryPath) {
+      const std::string& outputDirectoryPath,
+      dwio::common::FileFormat fileFormat) {
     return makeHiveInsertTableHandle(
         outputRowType->names(),
         outputRowType->children(),
@@ -77,16 +76,17 @@ class HiveDataSinkTest : public exec::test::HiveConnectorTestBase {
             outputDirectoryPath,
             std::nullopt,
             connector::hive::LocationHandle::TableType::kNew),
-        dwio::common::FileFormat::DWRF,
+        fileFormat,
         CompressionKind::CompressionKind_ZSTD);
   }
 
   std::shared_ptr<HiveDataSink> createDataSink(
       const RowTypePtr& rowType,
-      const std::string& outputDirectoryPath) {
+      const std::string& outputDirectoryPath,
+      dwio::common::FileFormat fileFormat = dwio::common::FileFormat::DWRF) {
     return std::make_shared<HiveDataSink>(
         rowType,
-        createHiveInsertTableHandle(rowType, outputDirectoryPath),
+        createHiveInsertTableHandle(rowType, outputDirectoryPath, fileFormat),
         connectorQueryCtx_.get(),
         CommitStrategy::kNoCommit,
         connectorConfig_);
@@ -484,6 +484,47 @@ TEST_F(HiveDataSinkTest, abort) {
         "Hive data sink hash been aborted");
   }
 }
+
+TEST_F(HiveDataSinkTest, abortParquetWriter) {
+#ifdef VELOX_ENABLE_PARQUET
+  for (bool empty : {true, false}) {
+    SCOPED_TRACE(fmt::format("Data sink is empty: {}", empty));
+    const auto outputDirectory = TempDirectoryPath::create();
+    auto dataSink = createDataSink(
+        rowType_, outputDirectory->path, dwio::common::FileFormat::PARQUET);
+
+    std::vector<RowVectorPtr> vectors;
+    VectorFuzzer::Options options;
+    options.vectorSize = 1;
+    VectorFuzzer fuzzer(options, pool());
+    vectors.push_back(fuzzer.fuzzRow(rowType_));
+
+    // TODO: CONSTANT cannot be exported to Arrow yet, add encoding options in
+    // the VectorFuzzer.
+    std::vector<VectorPtr> newChildren;
+    for (const auto& ptr : vectors) {
+      for (const auto& child : ptr->children()) {
+        if (!child->isConstantEncoding()) {
+          newChildren.push_back(child);
+        }
+      }
+    }
+    std::vector<RowVectorPtr> newVectors = {makeRowVector(newChildren)};
+    std::swap(vectors, newVectors);
+
+    ASSERT_TRUE(dataSink->close(false).empty());
+    // Can't close after abort.
+    VELOX_ASSERT_THROW(
+        dataSink->close(true), "Can't close an aborted hive data sink");
+    ASSERT_TRUE(dataSink->close(false).empty());
+    // Can't append after abort.
+    VELOX_ASSERT_THROW(
+        dataSink->appendData(vectors.back()),
+        "Hive data sink hash been aborted");
+  }
+#endif
+}
+
 } // namespace
 } // namespace facebook::velox::connector::hive
 
