@@ -137,7 +137,6 @@ Mathematical Functions
     Returns a cryptographically secure random value in the range 0.0 <= x < 1.0.
 
 .. function:: secure_random(lower, upper) → [same as input]
-   :noindex:
 
     Returns a cryptographically secure random value in the range lower <= x < upper, where lower < upper.
 
