@@ -1803,12 +1803,22 @@ TEST_F(StringFunctionsTest, hammingDistance) {
   EXPECT_EQ(hammingDistance("hello", "world"), 4);
   EXPECT_EQ(hammingDistance("Customs", "Luptoki"), 4);
   EXPECT_EQ(hammingDistance("This is lame", "Why to slam "), 8);
+  EXPECT_EQ(
+      hammingDistance(
+          "The quick brown fox jumps over the lazy dog",
+          "The quick green dog jumps over the grey pot"),
+      10);
+
   EXPECT_EQ(hammingDistance(std::nullopt, std::nullopt), std::nullopt);
   EXPECT_EQ(hammingDistance("hello", std::nullopt), std::nullopt);
   EXPECT_EQ(hammingDistance(std::nullopt, "world"), std::nullopt);
 
-  // Tests for unicode
   EXPECT_EQ(hammingDistance("hello na\u00EFve world", "hello naive world"), 1);
+  EXPECT_EQ(
+      hammingDistance(
+          "The quick b\u0155\u00F6wn fox jumps over the laz\uFF59 dog",
+          "The quick br\u006Fwn fox jumps over the la\u1E91y dog"),
+      4);
   EXPECT_EQ(
       hammingDistance(
           "\u4FE1\u5FF5,\u7231,\u5E0C\u671B",
@@ -1822,7 +1832,6 @@ TEST_F(StringFunctionsTest, hammingDistance) {
   EXPECT_EQ(hammingDistance("\u0001", "\u0001"), 0);
   EXPECT_EQ(hammingDistance("\u0001", "\u0002"), 1);
 
-  // Tests for invalid arguments
   VELOX_ASSERT_THROW(
       hammingDistance("\u0000", "\u0001"),
       "The input strings to hamming_distance function must have the same length");

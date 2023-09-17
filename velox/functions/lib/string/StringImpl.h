@@ -183,9 +183,10 @@ hammingDistanceUnicode(const TInString& left, const TInString& right) {
   std::string_view rightSV = std::string_view(right.data(), right.size());
   int64_t leftLength = leftSV.size();
   int64_t rightLength = rightSV.size();
+  int leftSize = 0;
+  int rightSize = 0;
 
   while (leftPosition < leftLength && rightPosition < rightLength) {
-    int leftSize, rightSize;
     auto codePointLeft = utf8proc_codepoint(
         leftSV.data() + leftPosition, leftSV.data() + leftLength, leftSize);
     auto codePointRight = utf8proc_codepoint(
