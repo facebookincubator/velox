@@ -353,18 +353,35 @@ class TestVeloxVector(unittest.TestCase):
                     self.assertEqual(velox_vector[i], data[i])
 
     def test_row_vector_basic(self):
-        vals = [2499109626526694126, 2342493223442167775, 4077358421272316858]
+        vals = pv.from_list([10, 20, 30])
         expected_vectors = [
-            pv.from_list(vals),
+            vals,
         ]
 
-        def set_null(n: int) -> bool:
-            return False
-
-        rw = pv.row_vector(["a"], expected_vectors, set_null)
+        rw = pv.row_vector(["a"], [vals])
 
         for i in range(len(rw)):
             vec = rw[i]
             N = len(vec)
-            for i in range(N):
-                assert vec[i] == vals[i]
+            for j in range(N):
+                assert vec[j] == expected_vectors[i][j]
+
+        assert not rw.may_have_nulls()
+
+    def test_row_vector_with_nulls(self):
+        vals = [
+            pv.from_list([1, 2, 3, 1, 2]),
+            pv.from_list([4, 5, 6, 4, 5]),
+            pv.from_list([7, 8, 9, 7, 8]),
+            pv.from_list([10, 11, 12, 10, 11]),
+        ]
+
+        col_names = ["a", "b", "c", "d"]
+
+        rw = pv.row_vector(col_names, vals, [True, False, True, False, True])
+        for i in range(len(rw)):
+            vec = rw[i]
+            for j in range(len(vec)):
+                assert vec[j] == vals[i][j]
+
+        assert rw.may_have_nulls()
