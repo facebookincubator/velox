@@ -51,6 +51,9 @@ class LeadLagTest : public WindowTestBase,
 };
 
 TEST_P(LeadLagTest, offset) {
+  // largeOffset is larger than std::numeric_limits<int32_t>::max()
+  // and is a negative number when cast to int32.
+  int64_t largeOffset = (int64_t)std::numeric_limits<int32_t>::max() * 2;
   auto data = makeRowVector({
       // Values.
       makeFlatVector<int64_t>({1, 2, 3, 4, 5}),
@@ -58,9 +61,9 @@ TEST_P(LeadLagTest, offset) {
       makeFlatVector<int64_t>({1, 2, 3, 1, 2}),
       // Offsets with nulls.
       makeNullableFlatVector<int64_t>({1, 2, 3, std::nullopt, 2}),
-      // Large offsets(larger than uint32_t's max).
+      // Large offsets.
       makeFlatVector<int64_t>(
-          {8000000000, 8000000000, 8000000000, 8000000000, 8000000000}),
+          {largeOffset, largeOffset, largeOffset, largeOffset, largeOffset}),
   });
 
   createDuckDbTable({data});
@@ -80,6 +83,10 @@ TEST_P(LeadLagTest, offset) {
 
   // Large offset.
   assertResults(fn("c0, c3"));
+
+  // Large + CONSTANT offset.
+  // 8589934590 == (int64_t)std::numeric_limits<int32_t>::max() * 2
+  assertResults(fn("c0, 8589934590"));
 
   // Constant null offset. DuckDB returns incorrect results for this case. It
   // treats null offset as 0.
@@ -130,7 +137,12 @@ TEST_P(LeadLagTest, ignoreNullsInt64Offset) {
     assertQuery(queryInfo.planNode, queryInfo.querySql);
   };
 
+  // Test the large offset which is a column reference.
   assertResults(fn("c0, c1 IGNORE NULLS"));
+
+  // Test the large offset which is a CONSTANT.
+  // 4294967297 == (int64_t)std::numeric_limits<uint32_t>::max() + 2
+  assertResults(fn("c0, 4294967297 IGNORE NULLS"));
 }
 
 TEST_P(LeadLagTest, defaultValue) {

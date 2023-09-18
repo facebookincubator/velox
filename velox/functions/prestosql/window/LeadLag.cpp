@@ -291,6 +291,11 @@ void LeadLagFunction<true>::setRowNumbersForConstantOffset() {
   }
 
   auto constantOffsetValue = constantOffset_.value();
+  // Set row number to kNullRow for out of range offset.
+  if (constantOffsetValue > partition_->numRows()) {
+    std::fill(rowNumbers_.begin(), rowNumbers_.end(), kNullRow);
+    return;
+  }
 
   // Figure out how many rows at the start should be NULL.
   vector_size_t nullCnt = 0;
@@ -325,6 +330,11 @@ void LeadLagFunction<false>::setRowNumbersForConstantOffset() {
   }
 
   auto constantOffsetValue = constantOffset_.value();
+  // Set row number to kNullRow for out of range offset.
+  if (constantOffsetValue > partition_->numRows()) {
+    std::fill(rowNumbers_.begin(), rowNumbers_.end(), kNullRow);
+    return;
+  }
 
   // Figure out how many rows at the end should be NULL.
   vector_size_t nonNullCnt = std::max<vector_size_t>(
