@@ -127,10 +127,8 @@ class LeadLagFunction : public exec::WindowFunction {
     }
   }
 
-  /// Handle the NULL && out range of range constant offset.
-  /// Returns true if it is NULL or out of range offset, false otherwise.
-  bool setRowNumbersForConstantNullOrOutOfRangeOffset();
   void setRowNumbersForConstantOffset();
+  void setRowNumbersForConstantOffset(int64_t constantOffsetValue);
 
   template <bool ignoreNulls>
   void setRowNumbers(vector_size_t numRows) {
@@ -287,29 +285,25 @@ class LeadLagFunction : public exec::WindowFunction {
 };
 
 template <bool isLag>
-bool LeadLagFunction<isLag>::setRowNumbersForConstantNullOrOutOfRangeOffset() {
+void LeadLagFunction<isLag>::setRowNumbersForConstantOffset() {
   if (isConstantOffsetNull_) {
     std::fill(rowNumbers_.begin(), rowNumbers_.end(), kNullRow);
-    return true;
+    return;
   }
 
   auto constantOffsetValue = constantOffset_.value();
   // Set row number to kNullRow for out of range offset.
   if (constantOffsetValue > partition_->numRows()) {
     std::fill(rowNumbers_.begin(), rowNumbers_.end(), kNullRow);
-    return true;
-  }
-
-  return false;
-}
-
-template <>
-void LeadLagFunction<true>::setRowNumbersForConstantOffset() {
-  if (setRowNumbersForConstantNullOrOutOfRangeOffset()) {
     return;
   }
 
-  auto constantOffsetValue = constantOffset_.value();
+  setRowNumbersForConstantOffset(constantOffsetValue);
+}
+
+template <>
+void LeadLagFunction<true>::setRowNumbersForConstantOffset(
+    int64_t constantOffsetValue) {
   // Figure out how many rows at the start should be NULL.
   vector_size_t nullCnt = 0;
   if (constantOffsetValue > partitionOffset_) {
@@ -336,13 +330,8 @@ void LeadLagFunction<true>::setRowNumbersForConstantOffset() {
 }
 
 template <>
-void LeadLagFunction<false>::setRowNumbersForConstantOffset() {
-  if (setRowNumbersForConstantNullOrOutOfRangeOffset()) {
-    return;
-  }
-
-  auto constantOffsetValue = constantOffset_.value();
-
+void LeadLagFunction<false>::setRowNumbersForConstantOffset(
+    int64_t constantOffsetValue) {
   // Figure out how many rows at the end should be NULL.
   vector_size_t nonNullCnt = std::max<vector_size_t>(
       0,
