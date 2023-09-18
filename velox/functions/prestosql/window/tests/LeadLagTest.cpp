@@ -84,9 +84,8 @@ TEST_P(LeadLagTest, offset) {
   // Large offset.
   assertResults(fn("c0, c3"));
 
-  // Large + CONSTANT offset.
-  // 8589934590 == (int64_t)std::numeric_limits<int32_t>::max() * 2
-  assertResults(fn("c0, 8589934590"));
+  // Large && CONSTANT offset.
+  assertResults(fn(fmt::format("c0, {}", largeOffset)));
 
   // Constant null offset. DuckDB returns incorrect results for this case. It
   // treats null offset as 0.
@@ -121,12 +120,13 @@ TEST_P(LeadLagTest, ignoreNullsInt64Offset) {
   // The offset is bigger than int32:max() and it is also a positive number
   // if cast to int32. With only such a special number we can trigger
   // some tricky bug.
-  int64_t offset = (int64_t)std::numeric_limits<uint32_t>::max() + 2;
+  int64_t largeOffset = (int64_t)std::numeric_limits<uint32_t>::max() + 2;
   auto data = makeRowVector(
       {// Values.
        makeNullableFlatVector<int64_t>({1, std::nullopt, 3, 4, 5}),
        // Offsets.
-       makeFlatVector<int64_t>({offset, offset, offset, offset, offset})});
+       makeFlatVector<int64_t>(
+           {largeOffset, largeOffset, largeOffset, largeOffset, largeOffset})});
 
   createDuckDbTable({data});
 
@@ -141,8 +141,7 @@ TEST_P(LeadLagTest, ignoreNullsInt64Offset) {
   assertResults(fn("c0, c1 IGNORE NULLS"));
 
   // Test the large offset which is a CONSTANT.
-  // 4294967297 == (int64_t)std::numeric_limits<uint32_t>::max() + 2
-  assertResults(fn("c0, 4294967297 IGNORE NULLS"));
+  assertResults(fn(fmt::format("c0, {} IGNORE NULLS", largeOffset)));
 }
 
 TEST_P(LeadLagTest, defaultValue) {
