@@ -17,6 +17,7 @@
 #include "velox/functions/lib/aggregates/MinMaxByAggregatesBase.h"
 #include "velox/functions/lib/aggregates/ValueSet.h"
 #include "velox/functions/prestosql/aggregates/AggregateNames.h"
+#include "velox/functions/prestosql/aggregates/Compare.h"
 
 using namespace facebook::velox::functions::aggregate;
 
@@ -47,27 +48,19 @@ struct Comparator {
       // is less than vector value.
       if constexpr (greaterThan) {
         return !accumulator->hasValue() ||
-            SingleValueAccumulator::compare(
+            prestosql::compare(
                 dynamic_cast<SingleValueAccumulator*>(accumulator),
                 newComparisons,
-                index,
-                kCompareFlags_) < 0;
+                index) < 0;
       } else {
         return !accumulator->hasValue() ||
-            SingleValueAccumulator::compare(
+            prestosql::compare(
                 dynamic_cast<SingleValueAccumulator*>(accumulator),
                 newComparisons,
-                index,
-                kCompareFlags_) > 0;
+                index) > 0;
       }
     }
   }
-
-  constexpr static CompareFlags kCompareFlags_{
-      true, // nullsFirst
-      true, // ascending
-      false, // equalsOnly
-      CompareFlags::NullHandlingMode::NoStop};
 };
 
 template <typename T>

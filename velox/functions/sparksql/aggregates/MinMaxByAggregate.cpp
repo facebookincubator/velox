@@ -44,27 +44,38 @@ struct SparkComparator {
     } else {
       if constexpr (sparkGreaterThan) {
         return !accumulator->hasValue() ||
-            SingleValueAccumulator::compare(
+            compare(
                 dynamic_cast<SingleValueAccumulator*>(accumulator),
                 newComparisons,
-                index,
-                kCompareFlags_) <= 0;
+                index) <= 0;
       } else {
         return !accumulator->hasValue() ||
-            SingleValueAccumulator::compare(
+            compare(
                 dynamic_cast<SingleValueAccumulator*>(accumulator),
                 newComparisons,
-                index,
-                kCompareFlags_) >= 0;
+                index) >= 0;
       }
     }
   }
 
-  constexpr static CompareFlags kCompareFlags_{
-      true, // nullsFirst
-      true, // ascending
-      false, // equalsOnly
-      CompareFlags::NullHandlingMode::StopAtNull};
+  FOLLY_ALWAYS_INLINE static int32_t compare(
+      const SingleValueAccumulator* accumulator,
+      const DecodedVector& decoded,
+      vector_size_t index) {
+    static const CompareFlags kCompareFlags{
+        true, // nullsFirst
+        true, // ascending
+        false, // equalsOnly
+        CompareFlags::NullHandlingMode::NoStop};
+
+    auto result = accumulator->compare(decoded, index, kCompareFlags);
+    VELOX_USER_CHECK(
+        result.has_value(),
+        fmt::format(
+            "{} comparison not supported for values that contain nulls",
+            mapTypeKindToName(decoded.base()->typeKind())));
+    return result.value();
+  }
 };
 
 std::string toString(const std::vector<TypePtr>& types) {

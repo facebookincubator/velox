@@ -20,6 +20,7 @@
 #include "velox/functions/lib/aggregates/SimpleNumericAggregate.h"
 #include "velox/functions/lib/aggregates/SingleValueAccumulator.h"
 #include "velox/functions/prestosql/aggregates/AggregateNames.h"
+#include "velox/functions/prestosql/aggregates/Compare.h"
 
 using namespace facebook::velox::functions::aggregate;
 
@@ -381,8 +382,7 @@ class NonNumericMinMaxAggregateBase : public exec::Aggregate {
       }
       auto accumulator = value<SingleValueAccumulator>(groups[i]);
       if (!accumulator->hasValue() ||
-          compareTest(SingleValueAccumulator::compare(
-              accumulator, decoded, i, kCompareFlags_))) {
+          compareTest(prestosql::compare(accumulator, decoded, i))) {
         accumulator->write(baseVector, indices[i], allocator_);
       }
     });
@@ -406,8 +406,7 @@ class NonNumericMinMaxAggregateBase : public exec::Aggregate {
 
       auto accumulator = value<SingleValueAccumulator>(group);
       if (!accumulator->hasValue() ||
-          compareTest(SingleValueAccumulator::compare(
-              accumulator, decoded, 0, kCompareFlags_))) {
+          compareTest(prestosql::compare(accumulator, decoded, 0))) {
         accumulator->write(baseVector, indices[0], allocator_);
       }
       return;
@@ -419,19 +418,11 @@ class NonNumericMinMaxAggregateBase : public exec::Aggregate {
         return;
       }
       if (!accumulator->hasValue() ||
-          compareTest(SingleValueAccumulator::compare(
-              accumulator, decoded, i, kCompareFlags_))) {
+          compareTest(prestosql::compare(accumulator, decoded, i))) {
         accumulator->write(baseVector, indices[i], allocator_);
       }
     });
   }
-
- private:
-  constexpr static CompareFlags kCompareFlags_{
-      true, // nullsFirst
-      true, // ascending
-      false, // equalsOnly
-      CompareFlags::NullHandlingMode::StopAtNull};
 };
 
 class NonNumericMaxAggregate : public NonNumericMinMaxAggregateBase {
