@@ -267,7 +267,7 @@ supported conversions to/from JSON are listed in <a class="reference internal" h
 <td><p>Y</p></td>
 <td><p>Y</p></td>
 <td><p>Y</p></td>
-<td></td>
+<td><p>Y</p></td>
 <td></td>
 <td></td>
 <td></td>
@@ -496,6 +496,10 @@ consistent with other supported cases of cast.</p>
 <span class="n">SELECT</span> <span class="n">cast</span><span class="p">(</span><span class="n">infinity</span><span class="p">()</span> <span class="k">as</span> <span class="n">varchar</span><span class="p">);</span> <span class="o">--</span> <span class="s1">&#39;Infinity&#39;</span>
 <span class="n">SELECT</span> <span class="n">cast</span><span class="p">(</span><span class="n">true</span> <span class="k">as</span> <span class="n">varchar</span><span class="p">);</span> <span class="o">--</span> <span class="s1">&#39;true&#39;</span>
 <span class="n">SELECT</span> <span class="n">cast</span><span class="p">(</span><span class="n">timestamp</span> <span class="s1">&#39;1970-01-01 00:00:00&#39;</span> <span class="k">as</span> <span class="n">varchar</span><span class="p">);</span> <span class="o">--</span> <span class="s1">&#39;1970-01-01T00:00:00.000&#39;</span>
+<span class="n">SELECT</span> <span class="n">cast</span><span class="p">(</span><span class="n">cast</span><span class="p">(</span><span class="mf">22.51</span> <span class="k">as</span> <span class="n">DECIMAL</span><span class="p">(</span><span class="mi">5</span><span class="p">,</span> <span class="mi">3</span><span class="p">))</span> <span class="k">as</span> <span class="n">varchar</span><span class="p">);</span> <span class="o">--</span> <span class="s1">&#39;22.510&#39;</span>
+<span class="n">SELECT</span> <span class="n">cast</span><span class="p">(</span><span class="n">cast</span><span class="p">(</span><span class="o">-</span><span class="mf">22.51</span> <span class="k">as</span> <span class="n">DECIMAL</span><span class="p">(</span><span class="mi">4</span><span class="p">,</span> <span class="mi">2</span><span class="p">))</span> <span class="k">as</span> <span class="n">varchar</span><span class="p">);</span> <span class="o">--</span> <span class="s1">&#39;-22.51&#39;</span>
+<span class="n">SELECT</span> <span class="n">cast</span><span class="p">(</span><span class="n">cast</span><span class="p">(</span><span class="mf">0.123</span> <span class="k">as</span> <span class="n">DECIMAL</span><span class="p">(</span><span class="mi">3</span><span class="p">,</span> <span class="mi">3</span><span class="p">))</span> <span class="k">as</span> <span class="n">varchar</span><span class="p">);</span> <span class="o">--</span> <span class="s1">&#39;0.123&#39;</span>
+<span class="n">SELECT</span> <span class="n">cast</span><span class="p">(</span><span class="n">cast</span><span class="p">(</span><span class="mi">1</span> <span class="k">as</span> <span class="n">DECIMAL</span><span class="p">(</span><span class="mi">6</span><span class="p">,</span> <span class="mi">2</span><span class="p">))</span> <span class="k">as</span> <span class="n">varchar</span><span class="p">);</span> <span class="o">--</span> <span class="s1">&#39;1.00&#39;</span>
 </pre></div>
 </div>
 </section>
