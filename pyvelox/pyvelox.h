@@ -35,7 +35,7 @@
 
 #include "context.h"
 
-/// TODO: remove 
+/// TODO: remove
 #include <iostream>
 
 namespace facebook::velox::py {
@@ -135,7 +135,6 @@ inline std::string rowVectorToString(const RowVectorPtr& v) {
   } else {
     return v->toString();
   }
-  
 }
 
 static VectorPtr pyToConstantVector(
@@ -538,8 +537,7 @@ static void addVectorBindings(
       "row_vector",
       [](std::vector<std::string>& names,
          std::vector<VectorPtr>& values,
-         const std::optional<py::list>& nullability_list
-         ) {
+         const std::optional<py::list>& nullability_list) {
         std::vector<std::shared_ptr<const Type>> childTypes;
         childTypes.resize(values.size());
         for (int i = 0; i < values.size(); i++) {
@@ -551,16 +549,20 @@ static void addVectorBindings(
         if (nullability_list.has_value()) {
           auto nullability_values = nullability_list.value();
           nullability_buffer = AlignedBuffer::allocate<bool>(
-            nullability_values.size(), PyVeloxContext::getSingletonInstance().pool());
+              nullability_values.size(),
+              PyVeloxContext::getSingletonInstance().pool());
           for (size_t idx = 0; idx < nullability_values.size(); idx++) {
             if (!py::isinstance<py::bool_>(nullability_values[idx])) {
               throw py::type_error("Found a value that's not a bool");
-            }  
+            }
             bool value = py::cast<bool>(nullability_values[idx]);
-            bits::setBit(nullability_buffer->asMutable<uint64_t>(), idx, bits::kNull ? value : !value);
+            bits::setBit(
+                nullability_buffer->asMutable<uint64_t>(),
+                idx,
+                bits::kNull ? value : !value);
           }
         }
-        
+
         return std::make_shared<RowVector>(
             PyVeloxContext::getSingletonInstance().pool(),
             rowType,
@@ -575,9 +577,7 @@ static void addVectorBindings(
   py::class_<RowVector, BaseVector, RowVectorPtr>(
       m, "RowVector", py::module_local(asModuleLocalDefinitions))
       .def("__len__", &RowVector::childrenSize)
-      .def("__str__", [](RowVectorPtr& v) {
-        return rowVectorToString(v);
-      })
+      .def("__str__", [](RowVectorPtr& v) { return rowVectorToString(v); })
       .def("may_have_nulls", &RowVector::mayHaveNulls)
       .def("__getitem__", [](RowVectorPtr& v, vector_size_t idx) {
         return getVectorFromRowVectorPtr(v, idx);
