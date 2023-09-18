@@ -33,7 +33,18 @@ struct RandFunction {
       double& result,
       const int32_t* seed,
       const int32_t* partitionIndex) {
-    callNullable(result, (int64_t*)seed, partitionIndex);
+    VELOX_USER_CHECK_NOT_NULL(partitionIndex, "partitionIndex cannot be null.");
+    if (!generator.has_value()) {
+      generator = std::mt19937{};
+      if (seed) {
+        generator->seed((uint64_t)*seed + *partitionIndex);
+      } else {
+        // For null input, 0 plus partitionIndex is the seed, consistent with
+        // Spark.
+        generator->seed(*partitionIndex);
+      }
+    }
+    result = folly::Random::randDouble01(*generator);
   }
 
   /// To differentiate generator for each thread, seed plus partitionIndex is
@@ -46,7 +57,7 @@ struct RandFunction {
     if (!generator.has_value()) {
       generator = std::mt19937{};
       if (seed) {
-        generator->seed(*seed + *partitionIndex);
+        generator->seed((uint64_t)*seed + *partitionIndex);
       } else {
         // For null input, 0 plus partitionIndex is the seed, consistent with
         // Spark.
