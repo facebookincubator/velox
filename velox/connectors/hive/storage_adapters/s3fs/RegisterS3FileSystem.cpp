@@ -60,19 +60,19 @@ std::function<std::unique_ptr<velox::dwio::common::FileSink>(
 s3WriteFileSinkGenerator() {
   static auto s3WriteFileSink =
       [](const std::string& fileURI,
-         const velox::dwio::common::FileSink::Options& options) {
-        if (isS3File(fileURI)) {
-          auto fileSystem =
-              filesystems::getFileSystem(fileURI, options.connectorProperties);
-          return std::make_unique<dwio::common::WriteFileSink>(
-              fileSystem->openFileForWrite(fileURI),
-              fileURI,
-              options.metricLogger,
-              options.stats);
-        }
-        return static_cast<std::unique_ptr<dwio::common::WriteFileSink>>(
-            nullptr);
-      };
+         const velox::dwio::common::FileSink::Options& options)
+      -> std::unique_ptr<dwio::common::WriteFileSink> {
+    if (isS3File(fileURI)) {
+      auto fileSystem =
+          filesystems::getFileSystem(fileURI, options.connectorProperties);
+      return std::make_unique<dwio::common::WriteFileSink>(
+          fileSystem->openFileForWrite(fileURI),
+          fileURI,
+          options.metricLogger,
+          options.stats);
+    }
+    return nullptr;
+  };
 
   return s3WriteFileSink;
 }
