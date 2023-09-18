@@ -40,10 +40,9 @@ class S3InsertTest : public testing::Test, public VectorTestBase {
  public:
   static constexpr char const* kMinioConnectionString{"127.0.0.1:7000"};
   static void SetUpTestSuite() {
-    if (minioServer_ == nullptr) {
-      minioServer_ = std::make_shared<MinioServer>(kMinioConnectionString);
-      minioServer_->start();
-    }
+    minioServer_ = std::make_shared<MinioServer>(kMinioConnectionString);
+    minioServer_->start();
+
     ioExecutor_ = std::make_unique<folly::IOThreadPoolExecutor>(3);
     filesystems::registerS3FileSystem();
     auto hiveConnector =
@@ -58,10 +57,9 @@ class S3InsertTest : public testing::Test, public VectorTestBase {
 
   static void TearDownTestSuite() {
     filesystems::finalizeS3FileSystem();
-    if (minioServer_ != nullptr) {
-      minioServer_->stop();
-      minioServer_ = nullptr;
-    }
+    unregisterConnector(kHiveConnectorId);
+    minioServer_->stop();
+    minioServer_ = nullptr;
   }
 
   static std::shared_ptr<MinioServer> minioServer_;
@@ -74,7 +72,7 @@ std::unique_ptr<folly::IOThreadPoolExecutor> S3InsertTest::ioExecutor_ =
 PlanNodePtr createInsertPlan(
     PlanBuilder& inputPlan,
     const RowTypePtr& outputRowType,
-    const std::string& outputDirectoryPath,
+    const std::string_view& outputDirectoryPath,
     const std::vector<std::string>& partitionedBy = {},
     const std::shared_ptr<HiveBucketProperty>& bucketProperty = {},
     const connector::hive::LocationHandle::TableType& outputTableType =
@@ -88,7 +86,7 @@ PlanNodePtr createInsertPlan(
           partitionedBy,
           bucketProperty,
           HiveConnectorTestBase::makeLocationHandle(
-              outputDirectoryPath, std::nullopt, outputTableType),
+              outputDirectoryPath.data(), std::nullopt, outputTableType),
           FileFormat::PARQUET));
 
   auto insertPlan = inputPlan.tableWrite(
@@ -103,7 +101,7 @@ PlanNodePtr createInsertPlan(
 
 TEST_F(S3InsertTest, s3InsertTest) {
   const int64_t kExpectedRows = 1'000;
-  const char* kOutputDirectory = "s3://writedata/";
+  const std::string_view kOutputDirectory{"s3://writedata/"};
 
   auto rowType = ROW(
       {"c0", "c1", "c2", "c3"}, {BIGINT(), INTEGER(), SMALLINT(), DOUBLE()});
@@ -120,11 +118,16 @@ TEST_F(S3InsertTest, s3InsertTest) {
   auto plan = createInsertPlan(
       PlanBuilder().values({input}), rowType, kOutputDirectory);
 
+  // Execute the write plan.
   auto result = AssertQueryBuilder(plan).copyResults(pool());
 
+  // Get the fragment from the TableWriter output.
   auto fragmentVector = result->childAt(TableWriteTraits::kFragmentChannel)
                             ->asFlatVector<StringView>();
 
+  // The fragment contains data provided by the DataSink#finish.
+  // This includes the target filename, rowCount, etc...
+  // Extract the filename, row counts, filesize.
   std::vector<std::string> writeFiles;
   int64_t numRows{0};
   int64_t writeFileSize{0};
@@ -148,7 +151,7 @@ TEST_F(S3InsertTest, s3InsertTest) {
   ASSERT_EQ(numRows, kExpectedRows);
   ASSERT_EQ(writeFiles.size(), 1);
 
-  // Verify that the data is written to S3 correctly.
+  // Verify that the data is written to S3 correctly by scanning the file.
   auto tableScan = PlanBuilder(pool_.get()).tableScan(rowType).planNode();
   CursorParameters params;
   params.planNode = tableScan;
