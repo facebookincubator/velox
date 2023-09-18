@@ -127,8 +127,23 @@ class LeadLagFunction : public exec::WindowFunction {
     }
   }
 
-  void setRowNumbersForConstantOffset();
-  void setRowNumbersForConstantOffset(int64_t constantOffsetValue);
+  void setRowNumbersForConstantOffset(vector_size_t offset);
+
+  void setRowNumbersForConstantOffset() {
+    if (isConstantOffsetNull_) {
+      std::fill(rowNumbers_.begin(), rowNumbers_.end(), kNullRow);
+      return;
+    }
+
+    auto constantOffsetValue = constantOffset_.value();
+    // Set row number to kNullRow for out of range offset.
+    if (constantOffsetValue > partition_->numRows()) {
+      std::fill(rowNumbers_.begin(), rowNumbers_.end(), kNullRow);
+      return;
+    }
+
+    setRowNumbersForConstantOffset(constantOffsetValue);
+  }
 
   template <bool ignoreNulls>
   void setRowNumbers(vector_size_t numRows) {
@@ -284,31 +299,14 @@ class LeadLagFunction : public exec::WindowFunction {
   std::vector<vector_size_t> rowNumbers_;
 };
 
-template <bool isLag>
-void LeadLagFunction<isLag>::setRowNumbersForConstantOffset() {
-  if (isConstantOffsetNull_) {
-    std::fill(rowNumbers_.begin(), rowNumbers_.end(), kNullRow);
-    return;
-  }
-
-  auto constantOffsetValue = constantOffset_.value();
-  // Set row number to kNullRow for out of range offset.
-  if (constantOffsetValue > partition_->numRows()) {
-    std::fill(rowNumbers_.begin(), rowNumbers_.end(), kNullRow);
-    return;
-  }
-
-  setRowNumbersForConstantOffset(constantOffsetValue);
-}
-
 template <>
 void LeadLagFunction<true>::setRowNumbersForConstantOffset(
-    int64_t constantOffsetValue) {
+    vector_size_t offset) {
   // Figure out how many rows at the start should be NULL.
   vector_size_t nullCnt = 0;
-  if (constantOffsetValue > partitionOffset_) {
-    nullCnt = std::min<vector_size_t>(
-        constantOffsetValue - partitionOffset_, rowNumbers_.size());
+  if (offset > partitionOffset_) {
+    nullCnt =
+        std::min<vector_size_t>(offset - partitionOffset_, rowNumbers_.size());
     if (nullCnt) {
       std::fill(rowNumbers_.begin(), rowNumbers_.begin() + nullCnt, kNullRow);
     }
@@ -318,26 +316,26 @@ void LeadLagFunction<true>::setRowNumbersForConstantOffset(
     auto rawNulls = nulls_->as<uint64_t>();
     for (auto i = nullCnt; i < rowNumbers_.size(); i++) {
       rowNumbers_[i] = rowNumberIgnoreNull(
-          rawNulls, constantOffsetValue, partitionOffset_ + i - 1, -1, -1);
+          rawNulls, offset, partitionOffset_ + i - 1, -1, -1);
     }
   } else {
     // Populate sequential values for non-NULL rows.
     std::iota(
         rowNumbers_.begin() + nullCnt,
         rowNumbers_.end(),
-        partitionOffset_ + nullCnt - constantOffsetValue);
+        partitionOffset_ + nullCnt - offset);
   }
 }
 
 template <>
 void LeadLagFunction<false>::setRowNumbersForConstantOffset(
-    int64_t constantOffsetValue) {
+    vector_size_t offset) {
   // Figure out how many rows at the end should be NULL.
   vector_size_t nonNullCnt = std::max<vector_size_t>(
       0,
       std::min<vector_size_t>(
           rowNumbers_.size(),
-          partition_->numRows() - partitionOffset_ - constantOffsetValue));
+          partition_->numRows() - partitionOffset_ - offset));
   if (nonNullCnt < rowNumbers_.size()) {
     std::fill(rowNumbers_.begin() + nonNullCnt, rowNumbers_.end(), kNullRow);
   }
@@ -349,7 +347,7 @@ void LeadLagFunction<false>::setRowNumbersForConstantOffset(
       for (auto i = 0; i < nonNullCnt; i++) {
         rowNumbers_[i] = rowNumberIgnoreNull(
             rawNulls,
-            constantOffsetValue,
+            offset,
             partitionOffset_ + i + 1,
             partition_->numRows(),
             1);
@@ -358,7 +356,7 @@ void LeadLagFunction<false>::setRowNumbersForConstantOffset(
       std::iota(
           rowNumbers_.begin(),
           rowNumbers_.begin() + nonNullCnt,
-          partitionOffset_ + constantOffsetValue);
+          partitionOffset_ + offset);
     }
   }
 }
