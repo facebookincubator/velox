@@ -111,21 +111,15 @@ TEST_P(LeadLagTest, offset) {
 }
 
 TEST_P(LeadLagTest, ignoreNullsInt64Offset) {
-  auto data = makeRowVector({
-      // Values.
-      makeNullableFlatVector<int64_t>({1, std::nullopt, 3, 4, 5}),
-      // Large offsets(larger than uint32_t's max).
-      // 1099511627777 is a little special, it is: ((int64_t) 1 << 40) + 1
-      // which is bigger than int32:max() and it is also a positive number
-      // if cast to int32. With only such a special number we can trigger
-      // some tricky bug.
-      makeFlatVector<int64_t>(
-          {1099511627777,
-           1099511627777,
-           1099511627777,
-           1099511627777,
-           1099511627777}),
-  });
+  // The offset is bigger than int32:max() and it is also a positive number
+  // if cast to int32. With only such a special number we can trigger
+  // some tricky bug.
+  int64_t offset = (int64_t)std::numeric_limits<uint32_t>::max() + 2;
+  auto data = makeRowVector(
+      {// Values.
+       makeNullableFlatVector<int64_t>({1, std::nullopt, 3, 4, 5}),
+       // Offsets.
+       makeFlatVector<int64_t>({offset, offset, offset, offset, offset})});
 
   createDuckDbTable({data});
 
