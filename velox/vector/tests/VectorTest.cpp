@@ -565,6 +565,124 @@ class VectorTest : public testing::Test, public test::VectorTestBase {
     testCopy(lazy, level - 1);
   }
 
+  void testCopyFromUnknown(const VectorPtr& vector) {
+    SCOPED_TRACE(vector->toString());
+
+    const vector_size_t size = 1'000;
+
+    ASSERT_GE(vector->size(), size);
+
+    // Save a copy of the 'vector' to compare results after copy.
+    auto vectorCopy = BaseVector::copy(*vector);
+
+    auto unknown = makeAllNullFlatVector<UnknownValue>(size);
+
+    // Copy every 3-rd row.
+    SelectivityVector rowsToCopy(size, false);
+    for (auto i = 0; i < size; i += 3) {
+      rowsToCopy.setValid(i, true);
+    }
+    rowsToCopy.updateBounds();
+
+    SelectivityVector rowsToKeep(size);
+    rowsToKeep.deselect(rowsToCopy);
+
+    // Copy from row N to N - 10 for N >= 0 and from row N to N for N < 10;
+    std::vector<vector_size_t> toSourceRow(size);
+    for (auto i = 0; i < size; i += 3) {
+      if (i < 10) {
+        toSourceRow[i] = i;
+      } else {
+        toSourceRow[i] = i - 10;
+      }
+    }
+
+    vector->copy(unknown.get(), rowsToCopy, toSourceRow.data());
+
+    rowsToCopy.applyToSelected(
+        [&](auto row) { EXPECT_TRUE(vector->isNullAt(row)) << "at " << row; });
+
+    rowsToKeep.applyToSelected([&](vector_size_t row) {
+      EXPECT_FALSE(vector->isNullAt(row));
+      EXPECT_TRUE(vector->equalValueAt(vectorCopy.get(), row, row))
+          << "at " << row << ": " << vector->toString(row) << " vs. "
+          << vectorCopy->toString(row);
+    });
+  }
+
+  void testCopySingleRangeFromUnknown(const VectorPtr& vector) {
+    SCOPED_TRACE(vector->toString());
+
+    const vector_size_t size = 1'000;
+
+    ASSERT_GE(vector->size(), size);
+
+    // Save a copy of the 'vector' to compare results after copy.
+    auto vectorCopy = BaseVector::copy(*vector);
+
+    auto unknown = makeAllNullFlatVector<UnknownValue>(size);
+
+    vector->copy(unknown.get(), 40, 33, 78);
+
+    for (auto i = 0; i < size; ++i) {
+      if (i < 40 || i >= 40 + 78) {
+        EXPECT_FALSE(vector->isNullAt(i));
+        EXPECT_TRUE(vector->equalValueAt(vectorCopy.get(), i, i))
+            << "at " << i << ": " << vector->toString(i) << " vs. "
+            << vectorCopy->toString(i);
+      } else {
+        EXPECT_TRUE(vector->isNullAt(i)) << "at " << i;
+      }
+    }
+  }
+
+  void testCopyRangesFromUnknown(const VectorPtr& vector) {
+    SCOPED_TRACE(vector->toString());
+
+    const vector_size_t size = 1'000;
+
+    ASSERT_GE(vector->size(), size);
+
+    // Save a copy of the 'vector' to compare results after copy.
+    auto vectorCopy = BaseVector::copy(*vector);
+
+    auto unknown = makeAllNullFlatVector<UnknownValue>(size);
+
+    std::vector<BaseVector::CopyRange> rangesToCopy = {
+        {0, 0, 7},
+        {10, 12, 5},
+        {100, 500, 79},
+        {200, 601, 1},
+        {990, 950, 10},
+    };
+
+    std::vector<BaseVector::CopyRange> rangesToKeep = {
+        {0, 7, 5},
+        {0, 17, 500 - 17},
+        {0, 579, 601 - 579},
+        {0, 602, 950 - 602},
+        {0, 960, 40},
+    };
+
+    vector->copyRanges(unknown.get(), rangesToCopy);
+
+    for (const auto& range : rangesToCopy) {
+      for (auto i = 0; i < range.count; ++i) {
+        EXPECT_TRUE(vector->isNullAt(range.targetIndex + i));
+      }
+    }
+
+    for (const auto& range : rangesToKeep) {
+      for (auto i = 0; i < range.count; ++i) {
+        auto index = range.targetIndex + i;
+        EXPECT_FALSE(vector->isNullAt(index));
+        EXPECT_TRUE(vector->equalValueAt(vectorCopy.get(), index, index))
+            << "at " << index << ": " << vector->toString(index) << " vs. "
+            << vectorCopy->toString(index);
+      }
+    }
+  }
+
   static void testSlice(
       const VectorPtr& vec,
       int level,
@@ -1119,6 +1237,60 @@ TEST_F(VectorTest, copyToAllNullsFlatVector) {
   for (auto i = 4; i < size; ++i) {
     ASSERT_TRUE(allNulls->isNullAt(i));
   }
+}
+
+TEST_F(VectorTest, copyFromUnknown) {
+  vector_size_t size = 1'000;
+
+  auto test = [&](const auto& makeVectorFunc) {
+    auto vector = makeVectorFunc();
+    testCopyFromUnknown(vector);
+
+    vector = makeVectorFunc();
+    testCopySingleRangeFromUnknown(vector);
+
+    vector = makeVectorFunc();
+    testCopyRangesFromUnknown(vector);
+  };
+
+  // Copy to BIGINT.
+  test([&]() {
+    return makeFlatVector<int64_t>(size, [](auto row) { return row; });
+  });
+
+  // Copy to BOOLEAN.
+  test([&]() {
+    return makeFlatVector<bool>(size, [](auto row) { return row % 7 == 3; });
+  });
+
+  // Copy to VARCHAR.
+  test([&]() {
+    return makeFlatVector<std::string>(
+        size, [](auto row) { return std::string(row % 17, 'x'); });
+  });
+
+  // Copy to ARRAY.
+  test([&]() {
+    return makeArrayVector<int64_t>(
+        size, [](auto row) { return row % 7; }, [](auto row) { return row; });
+  });
+
+  // Copy to MAP.
+  test([&]() {
+    return makeMapVector<int64_t, double>(
+        size,
+        [](auto row) { return row % 7; },
+        [](auto row) { return row; },
+        [](auto row) { return row * 0.1; });
+  });
+
+  // Copy to ROW.
+  test([&]() {
+    return makeRowVector({
+        makeFlatVector<int64_t>(size, [](auto row) { return row; }),
+        makeFlatVector<double>(size, [](auto row) { return row * 0.1; }),
+    });
+  });
 }
 
 TEST_F(VectorTest, wrapInConstant) {
@@ -2589,7 +2761,7 @@ TEST_F(VectorTest, toCopyRanges) {
 }
 
 TEST_F(VectorTest, rowCopyRanges) {
-  RowVectorPtr RowVectorDest = makeRowVector(
+  RowVectorPtr rowVectorDest = makeRowVector(
       {makeFlatVector<int32_t>({1, 2}), makeFlatVector<int32_t>({1, 2})});
   RowVectorPtr RowVectorSrc = makeRowVector(
       {makeFlatVector<int32_t>({3, 4}), makeFlatVector<int32_t>({3, 4})});
@@ -2598,15 +2770,143 @@ TEST_F(VectorTest, rowCopyRanges) {
       .targetIndex = 2,
       .count = 2,
   }};
-  RowVectorDest->resize(4);
+  rowVectorDest->resize(4);
 
   // Make sure nulls overwritten.
-  RowVectorDest->setNull(2, true);
-  RowVectorDest->setNull(3, true);
+  rowVectorDest->setNull(2, true);
+  rowVectorDest->setNull(3, true);
 
-  RowVectorDest->copyRanges(RowVectorSrc.get(), baseRanges);
+  rowVectorDest->copyRanges(RowVectorSrc.get(), baseRanges);
   auto expected = makeRowVector(
       {makeFlatVector<int32_t>({1, 2, 3, 4}),
        makeFlatVector<int32_t>({1, 2, 3, 4})});
-  test::assertEqualVectors(expected, RowVectorDest);
+  test::assertEqualVectors(expected, rowVectorDest);
+}
+
+TEST_F(VectorTest, containsNullAtIntegers) {
+  VectorPtr data = makeFlatVector<int32_t>({1, 2, 3});
+  for (auto i = 0; i < data->size(); ++i) {
+    EXPECT_FALSE(data->containsNullAt(i));
+  }
+
+  auto indices = makeIndices({0, 0, 1, 1, 2, 2});
+  auto dictionary = wrapInDictionary(indices, data);
+
+  for (auto i = 0; i < dictionary->size(); ++i) {
+    EXPECT_FALSE(dictionary->containsNullAt(i));
+  }
+
+  auto nulls = makeNulls({true, false, true, false, true, false});
+  dictionary = BaseVector::wrapInDictionary(nulls, indices, 6, data);
+  for (auto i = 0; i < dictionary->size(); i += 2) {
+    EXPECT_TRUE(dictionary->containsNullAt(i));
+  }
+
+  for (auto i = 1; i < dictionary->size(); i += 2) {
+    EXPECT_FALSE(dictionary->containsNullAt(i));
+  }
+
+  data = makeNullableFlatVector<int32_t>({1, std::nullopt, 3});
+  EXPECT_FALSE(data->containsNullAt(0));
+  EXPECT_TRUE(data->containsNullAt(1));
+  EXPECT_FALSE(data->containsNullAt(2));
+
+  dictionary = wrapInDictionary(indices, data);
+  EXPECT_FALSE(dictionary->containsNullAt(0));
+  EXPECT_FALSE(dictionary->containsNullAt(1));
+  EXPECT_TRUE(dictionary->containsNullAt(2));
+  EXPECT_TRUE(dictionary->containsNullAt(3));
+  EXPECT_FALSE(dictionary->containsNullAt(4));
+  EXPECT_FALSE(dictionary->containsNullAt(5));
+
+  dictionary = BaseVector::wrapInDictionary(nulls, indices, 6, data);
+  EXPECT_TRUE(dictionary->containsNullAt(0));
+  EXPECT_FALSE(dictionary->containsNullAt(1));
+  EXPECT_TRUE(dictionary->containsNullAt(2));
+  EXPECT_TRUE(dictionary->containsNullAt(3));
+  EXPECT_TRUE(dictionary->containsNullAt(4));
+  EXPECT_FALSE(dictionary->containsNullAt(5));
+
+  data = makeConstant(10, 3);
+  for (auto i = 0; i < data->size(); ++i) {
+    EXPECT_FALSE(data->containsNullAt(i));
+  }
+
+  data = makeNullConstant(TypeKind::INTEGER, 3);
+  for (auto i = 0; i < data->size(); ++i) {
+    EXPECT_TRUE(data->containsNullAt(i));
+  }
+}
+
+TEST_F(VectorTest, containsNullAtArrays) {
+  auto data = makeNullableArrayVector<int32_t>({
+      {{1, 2}},
+      {{1, 2, std::nullopt, 3}},
+      {{}},
+      std::nullopt,
+      {{1, 2, 3, 4}},
+  });
+
+  EXPECT_FALSE(data->containsNullAt(0));
+  EXPECT_TRUE(data->containsNullAt(1));
+  EXPECT_FALSE(data->containsNullAt(2));
+  EXPECT_TRUE(data->containsNullAt(3));
+  EXPECT_FALSE(data->containsNullAt(4));
+}
+
+TEST_F(VectorTest, containsNullAtMaps) {
+  auto data = makeNullableMapVector<int32_t, int64_t>({
+      {{{1, 10}, {2, 20}}},
+      {{{3, 30}}},
+      {{{1, 10}, {2, 20}, {3, std::nullopt}, {4, 40}}},
+      {{}},
+      std::nullopt,
+      {{{1, 10}, {2, 20}, {3, 30}, {4, 40}}},
+  });
+
+  EXPECT_FALSE(data->containsNullAt(0));
+  EXPECT_FALSE(data->containsNullAt(1));
+  EXPECT_TRUE(data->containsNullAt(2));
+  EXPECT_FALSE(data->containsNullAt(3));
+  EXPECT_TRUE(data->containsNullAt(4));
+  EXPECT_FALSE(data->containsNullAt(5));
+}
+
+TEST_F(VectorTest, containsNullAtStructs) {
+  auto data = makeRowVector(
+      {
+          makeNullableFlatVector<int32_t>({1, 2, std::nullopt, 4, 5}),
+          makeNullableFlatVector<int64_t>(
+              {10, std::nullopt, std::nullopt, 40, 50}),
+          makeNullableFlatVector<int16_t>({1, 2, 3, 4, 5}),
+          makeNullableFlatVector<int16_t>({10, 20, 30, 40, 50}),
+      },
+      [](auto row) { return row == 3; });
+
+  EXPECT_FALSE(data->containsNullAt(0));
+  EXPECT_TRUE(data->containsNullAt(1));
+  EXPECT_TRUE(data->containsNullAt(2));
+  EXPECT_TRUE(data->containsNullAt(3));
+  EXPECT_FALSE(data->containsNullAt(4));
+
+  data = makeRowVector(
+      {
+          makeNullableFlatVector<int32_t>({1, 2, 3, 4, 5, 6}),
+          makeNullableArrayVector<int64_t>({
+              {{1, 2}},
+              {{1, 2, std::nullopt, 3}},
+              {{}},
+              {{1, 2, 3}},
+              std::nullopt,
+              {{1, 2, 3, 4, 5}},
+          }),
+      },
+      [](auto row) { return row == 3; });
+
+  EXPECT_FALSE(data->containsNullAt(0));
+  EXPECT_TRUE(data->containsNullAt(1));
+  EXPECT_FALSE(data->containsNullAt(2));
+  EXPECT_TRUE(data->containsNullAt(3));
+  EXPECT_TRUE(data->containsNullAt(4));
+  EXPECT_FALSE(data->containsNullAt(5));
 }

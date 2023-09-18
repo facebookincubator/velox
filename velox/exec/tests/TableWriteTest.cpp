@@ -16,6 +16,8 @@
 #include "folly/dynamic.h"
 #include "velox/common/base/Fs.h"
 #include "velox/common/base/tests/GTestUtils.h"
+#include "velox/common/hyperloglog/SparseHll.h"
+#include "velox/common/testutil/TestValue.h"
 #include "velox/connectors/hive/HiveConfig.h"
 #include "velox/connectors/hive/HivePartitionFunction.h"
 #include "velox/dwio/common/WriterFactory.h"
@@ -37,6 +39,8 @@ using namespace facebook::velox::exec::test;
 using namespace facebook::velox::connector;
 using namespace facebook::velox::connector::hive;
 using namespace facebook::velox::dwio::common;
+using namespace facebook::velox::common::testutil;
+using namespace facebook::velox::common::hll;
 
 enum class TestMode {
   kUnpartitioned,
@@ -182,6 +186,8 @@ class TableWriteTest : public HiveConnectorTestBase {
                 "c4", core::SortOrder{true, true}),
             std::make_shared<const HiveSortingColumn>(
                 "c1", core::SortOrder{false, false})};
+        sortColumnIndices_ = {4, 1};
+        sortedFlags_ = {{true, true}, {false, false}};
       }
       bucketProperty_ = std::make_shared<HiveBucketProperty>(
           testParam_.bucketKind(), 4, bucketedBy, bucketedTypes, sortedBy);
@@ -735,16 +741,16 @@ class TableWriteTest : public HiveConnectorTestBase {
   }
 
   // Gets the hash function used by the production code to build bucket id.
-  std::unique_ptr<core::PartitionFunction> getBucketFunction() {
+  std::unique_ptr<core::PartitionFunction> getBucketFunction(
+      const RowTypePtr& outputType) {
     const auto& bucketedBy = bucketProperty_->bucketedBy();
     std::vector<column_index_t> bucketedByChannels;
     bucketedByChannels.reserve(bucketedBy.size());
-    for (int32_t i = 0; i < bucketedBy.size(); ++i) {
+    for (auto i = 0; i < bucketedBy.size(); ++i) {
       const auto& bucketColumn = bucketedBy[i];
-      for (column_index_t columnChannel = 0;
-           columnChannel < tableSchema_->size();
+      for (column_index_t columnChannel = 0; columnChannel < outputType->size();
            ++columnChannel) {
-        if (tableSchema_->nameOf(columnChannel) == bucketColumn) {
+        if (outputType->nameOf(columnChannel) == bucketColumn) {
           bucketedByChannels.push_back(columnChannel);
           break;
         }
@@ -758,13 +764,15 @@ class TableWriteTest : public HiveConnectorTestBase {
 
   // Verifies the bucketed file data by checking if the bucket id of each read
   // row is the same as the one encoded in the corresponding bucketed file name.
-  void verifyBucketedFileData(const std::filesystem::path& filePath) {
+  void verifyBucketedFileData(
+      const std::filesystem::path& filePath,
+      const RowTypePtr& outputFileType) {
     const std::vector<std::filesystem::path> filePaths = {filePath};
 
     // Read data from bucketed file on disk into 'rowVector'.
     core::PlanNodeId scanNodeId;
     auto plan = PlanBuilder()
-                    .tableScan(tableSchema_, {}, "", tableSchema_)
+                    .tableScan(outputFileType, {}, "", outputFileType)
                     .capturePlanNodeId(scanNodeId)
                     .planNode();
     const auto resultVector =
@@ -779,18 +787,42 @@ class TableWriteTest : public HiveConnectorTestBase {
     // Compute the bucket id from read result by applying hash partition on
     // bucketed columns in read result, and we expect they all match the one
     // encoded in file name.
-    auto bucketFunction = getBucketFunction();
+    auto bucketFunction = getBucketFunction(outputFileType);
     std::vector<uint32_t> bucketIds;
     bucketIds.reserve(resultVector->size());
     bucketFunction->partition(*resultVector, bucketIds);
     for (const auto bucketId : bucketIds) {
       ASSERT_EQ(expectedBucketId, bucketId);
     }
+
+    if (!testParam_.bucketSort()) {
+      return;
+    }
+    // Verifies the sorting behavior
+    for (int i = 0; i < resultVector->size() - 1; ++i) {
+      for (int j = 0; j < sortColumnIndices_.size(); ++j) {
+        auto compareResult =
+            resultVector->childAt(sortColumnIndices_.at(j))
+                ->compare(
+                    resultVector->childAt(sortColumnIndices_.at(j))
+                        ->wrappedVector(),
+                    i,
+                    i + 1,
+                    sortedFlags_[j]);
+        if (compareResult.has_value()) {
+          if (compareResult.value() < 0) {
+            break;
+          }
+          ASSERT_EQ(compareResult.value(), 0);
+        }
+      }
+    }
   }
 
   // Verifies the file layout and data produced by a table writer.
   void verifyTableWriterOutput(
       const std::string& targetDir,
+      const RowTypePtr& bucketCheckFileType,
       bool verifyPartitionedData = true,
       bool verifyBucketedData = true) {
     SCOPED_TRACE(testParam_.toString());
@@ -810,7 +842,7 @@ class TableWriteTest : public HiveConnectorTestBase {
       return;
     }
     ASSERT_EQ(numPartitionKeyValues_.size(), 2);
-    const int32_t totalPartitions =
+    const auto totalPartitions =
         numPartitionKeyValues_[0] * numPartitionKeyValues_[1];
     ASSERT_LE(dirPaths.size(), totalPartitions + numPartitionKeyValues_[0]);
     int32_t numLeafDir{0};
@@ -840,7 +872,7 @@ class TableWriteTest : public HiveConnectorTestBase {
           filePath);
       verifyBucketedFilePath(filePath, targetDir);
       if (verifyBucketedData) {
-        verifyBucketedFileData(filePath);
+        verifyBucketedFileData(filePath, bucketCheckFileType);
       }
     }
     if (verifyPartitionedData) {
@@ -879,6 +911,8 @@ class TableWriteTest : public HiveConnectorTestBase {
   std::vector<TypePtr> partitionTypes_;
   std::vector<column_index_t> partitionChannels_;
   std::vector<uint32_t> numPartitionKeyValues_;
+  std::vector<column_index_t> sortColumnIndices_;
+  std::vector<CompareFlags> sortedFlags_;
   std::shared_ptr<HiveBucketProperty> bucketProperty_{nullptr};
   core::PlanNodeId tableWriteNodeId_;
 };
@@ -1020,9 +1054,27 @@ class BucketedTableOnlyWriteTest
         testParams.push_back(TestParam{
             fileFormat,
             TestMode::kBucketed,
+            CommitStrategy::kNoCommit,
+            HiveBucketProperty::Kind::kHiveCompatible,
+            true,
+            multiDrivers,
+            CompressionKind_ZSTD}
+                                 .value);
+        testParams.push_back(TestParam{
+            fileFormat,
+            TestMode::kBucketed,
             CommitStrategy::kTaskCommit,
             HiveBucketProperty::Kind::kHiveCompatible,
             false,
+            multiDrivers,
+            CompressionKind_ZSTD}
+                                 .value);
+        testParams.push_back(TestParam{
+            fileFormat,
+            TestMode::kBucketed,
+            CommitStrategy::kTaskCommit,
+            HiveBucketProperty::Kind::kHiveCompatible,
+            true,
             multiDrivers,
             CompressionKind_ZSTD}
                                  .value);
@@ -1038,9 +1090,27 @@ class BucketedTableOnlyWriteTest
         testParams.push_back(TestParam{
             fileFormat,
             TestMode::kBucketed,
+            CommitStrategy::kNoCommit,
+            HiveBucketProperty::Kind::kPrestoNative,
+            true,
+            multiDrivers,
+            CompressionKind_ZSTD}
+                                 .value);
+        testParams.push_back(TestParam{
+            fileFormat,
+            TestMode::kBucketed,
             CommitStrategy::kTaskCommit,
             HiveBucketProperty::Kind::kPrestoNative,
             false,
+            multiDrivers,
+            CompressionKind_ZSTD}
+                                 .value);
+        testParams.push_back(TestParam{
+            fileFormat,
+            TestMode::kBucketed,
+            CommitStrategy::kNoCommit,
+            HiveBucketProperty::Kind::kPrestoNative,
+            true,
             multiDrivers,
             CompressionKind_ZSTD}
                                  .value);
@@ -1179,8 +1249,8 @@ class AllTableWriterTest : public TableWriteTest,
 
 // Runs a pipeline with read + filter + project (with substr) + write.
 TEST_P(AllTableWriterTest, scanFilterProjectWrite) {
-  auto filePaths = makeFilePaths(10);
-  auto vectors = makeVectors(filePaths.size(), 1000);
+  auto filePaths = makeFilePaths(5);
+  auto vectors = makeVectors(filePaths.size(), 500);
   for (int i = 0; i < filePaths.size(); i++) {
     writeToFile(filePaths[i]->path, vectors[i]);
   }
@@ -1221,12 +1291,12 @@ TEST_P(AllTableWriterTest, scanFilterProjectWrite) {
       makeHiveConnectorSplits(outputDirectory),
       "SELECT c0, c1, c3, c5, c2 + c3, substr(c5, 1, 1) FROM tmp WHERE c2 <> 0");
 
-  verifyTableWriterOutput(outputDirectory->path, false);
+  verifyTableWriterOutput(outputDirectory->path, outputType, false);
 }
 
 TEST_P(AllTableWriterTest, renameAndReorderColumns) {
-  auto filePaths = makeFilePaths(10);
-  auto vectors = makeVectors(filePaths.size(), 1'000);
+  auto filePaths = makeFilePaths(5);
+  auto vectors = makeVectors(filePaths.size(), 500);
   for (int i = 0; i < filePaths.size(); ++i) {
     writeToFile(filePaths[i]->path, vectors[i]);
   }
@@ -1275,13 +1345,13 @@ TEST_P(AllTableWriterTest, renameAndReorderColumns) {
       makeHiveConnectorSplits(outputDirectory),
       "SELECT c2, c5, c4, c1, c0, c3 FROM tmp");
 
-  verifyTableWriterOutput(outputDirectory->path, false);
+  verifyTableWriterOutput(outputDirectory->path, tableSchema_, false);
 }
 
 // Runs a pipeline with read + write.
 TEST_P(AllTableWriterTest, directReadWrite) {
-  auto filePaths = makeFilePaths(10);
-  auto vectors = makeVectors(filePaths.size(), 1000);
+  auto filePaths = makeFilePaths(5);
+  auto vectors = makeVectors(filePaths.size(), 200);
   for (int i = 0; i < filePaths.size(); i++) {
     writeToFile(filePaths[i]->path, vectors[i]);
   }
@@ -1311,7 +1381,7 @@ TEST_P(AllTableWriterTest, directReadWrite) {
       makeHiveConnectorSplits(outputDirectory),
       "SELECT * FROM tmp");
 
-  verifyTableWriterOutput(outputDirectory->path);
+  verifyTableWriterOutput(outputDirectory->path, rowType_);
 }
 
 // Tests writing constant vectors.
@@ -1342,7 +1412,7 @@ TEST_P(AllTableWriterTest, constantVectors) {
       makeHiveConnectorSplits(outputDirectory),
       "SELECT * FROM tmp");
 
-  verifyTableWriterOutput(outputDirectory->path);
+  verifyTableWriterOutput(outputDirectory->path, rowType_);
 }
 
 TEST_P(AllTableWriterTest, emptyInput) {
@@ -1363,8 +1433,8 @@ TEST_P(AllTableWriterTest, emptyInput) {
 }
 
 TEST_P(AllTableWriterTest, commitStrategies) {
-  auto filePaths = makeFilePaths(10);
-  auto vectors = makeVectors(filePaths.size(), 1000);
+  auto filePaths = makeFilePaths(5);
+  auto vectors = makeVectors(filePaths.size(), 100);
 
   createDuckDbTable(vectors);
 
@@ -1390,7 +1460,7 @@ TEST_P(AllTableWriterTest, commitStrategies) {
         PlanBuilder().tableScan(rowType_).planNode(),
         makeHiveConnectorSplits(outputDirectory),
         "SELECT * FROM tmp");
-    verifyTableWriterOutput(outputDirectory->path);
+    verifyTableWriterOutput(outputDirectory->path, rowType_);
   }
   // Test kNoCommit commit strategy writing to non-temporary files.
   {
@@ -1414,7 +1484,7 @@ TEST_P(AllTableWriterTest, commitStrategies) {
         PlanBuilder().tableScan(rowType_).planNode(),
         makeHiveConnectorSplits(outputDirectory),
         "SELECT * FROM tmp");
-    verifyTableWriterOutput(outputDirectory->path);
+    verifyTableWriterOutput(outputDirectory->path, rowType_);
   }
 }
 
@@ -2042,7 +2112,7 @@ TEST_P(BucketedTableOnlyWriteTest, bucketCountLimit) {
           PlanBuilder().tableScan(rowType_).planNode(),
           makeHiveConnectorSplits(outputDirectory),
           "SELECT * FROM tmp");
-      verifyTableWriterOutput(outputDirectory->path);
+      verifyTableWriterOutput(outputDirectory->path, rowType_);
     }
   }
 }
@@ -2195,6 +2265,199 @@ TEST_P(AllTableWriterTest, tableWriteOutputCheck) {
       commitStrategyToString(commitStrategy_));
   ASSERT_EQ(obj[TableWriteTraits::klastPageContextKey], true);
   ASSERT_EQ(obj[TableWriteTraits::kLifeSpanContextKey], "TaskWide");
+}
+
+TEST_P(AllTableWriterTest, columnStatsDataTypes) {
+  auto rowType =
+      ROW({"c0", "c1", "c2", "c3", "c4", "c5", "c6", "c7", "c8"},
+          {BIGINT(),
+           INTEGER(),
+           SMALLINT(),
+           REAL(),
+           DOUBLE(),
+           VARCHAR(),
+           BOOLEAN(),
+           MAP(DATE(), BIGINT()),
+           ARRAY(BIGINT())});
+  setDataTypes(rowType);
+  std::vector<RowVectorPtr> input;
+  input.push_back(makeRowVector(
+      rowType_->names(),
+      {
+          makeFlatVector<int64_t>(1'000, [&](auto row) { return 1; }),
+          makeFlatVector<int32_t>(1'000, [&](auto row) { return 1; }),
+          makeFlatVector<int16_t>(1'000, [&](auto row) { return row; }),
+          makeFlatVector<float>(1'000, [&](auto row) { return row + 33.23; }),
+          makeFlatVector<double>(1'000, [&](auto row) { return row + 33.23; }),
+          makeFlatVector<StringView>(
+              1'000,
+              [&](auto row) {
+                return StringView(std::to_string(row).c_str());
+              }),
+          makeFlatVector<bool>(1'000, [&](auto row) { return true; }),
+          makeMapVector<int32_t, int64_t>(
+              1'000,
+              [](auto /*row*/) { return 5; },
+              [](auto row) { return row; },
+              [](auto row) { return row * 3; }),
+          makeArrayVector<int64_t>(
+              1'000,
+              [](auto /*row*/) { return 5; },
+              [](auto row) { return row * 3; }),
+      }));
+  createDuckDbTable(input);
+  auto outputDirectory = TempDirectoryPath::create();
+
+  std::vector<FieldAccessTypedExprPtr> groupingKeyFields;
+  for (int i = 0; i < partitionedBy_.size(); ++i) {
+    groupingKeyFields.emplace_back(std::make_shared<core::FieldAccessTypedExpr>(
+        partitionTypes_.at(i), partitionedBy_.at(i)));
+  }
+
+  // aggregation node
+  core::TypedExprPtr intInputField =
+      std::make_shared<const core::FieldAccessTypedExpr>(SMALLINT(), "c2");
+  auto minCallExpr = std::make_shared<const core::CallTypedExpr>(
+      SMALLINT(), std::vector<core::TypedExprPtr>{intInputField}, "min");
+  auto maxCallExpr = std::make_shared<const core::CallTypedExpr>(
+      SMALLINT(), std::vector<core::TypedExprPtr>{intInputField}, "max");
+  auto distinctCountCallExpr = std::make_shared<const core::CallTypedExpr>(
+      VARCHAR(),
+      std::vector<core::TypedExprPtr>{intInputField},
+      "approx_distinct");
+
+  core::TypedExprPtr strInputField =
+      std::make_shared<const core::FieldAccessTypedExpr>(VARCHAR(), "c5");
+  auto maxDataSizeCallExpr = std::make_shared<const core::CallTypedExpr>(
+      BIGINT(),
+      std::vector<core::TypedExprPtr>{strInputField},
+      "max_data_size_for_stats");
+  auto sumDataSizeCallExpr = std::make_shared<const core::CallTypedExpr>(
+      BIGINT(),
+      std::vector<core::TypedExprPtr>{strInputField},
+      "sum_data_size_for_stats");
+
+  core::TypedExprPtr boolInputField =
+      std::make_shared<const core::FieldAccessTypedExpr>(BOOLEAN(), "c6");
+  auto countCallExpr = std::make_shared<const core::CallTypedExpr>(
+      BIGINT(), std::vector<core::TypedExprPtr>{boolInputField}, "count");
+  auto countIfCallExpr = std::make_shared<const core::CallTypedExpr>(
+      BIGINT(), std::vector<core::TypedExprPtr>{boolInputField}, "count_if");
+
+  core::TypedExprPtr mapInputField =
+      std::make_shared<const core::FieldAccessTypedExpr>(
+          MAP(DATE(), BIGINT()), "c7");
+  auto countMapCallExpr = std::make_shared<const core::CallTypedExpr>(
+      BIGINT(), std::vector<core::TypedExprPtr>{mapInputField}, "count");
+  auto sumDataSizeMapCallExpr = std::make_shared<const core::CallTypedExpr>(
+      BIGINT(),
+      std::vector<core::TypedExprPtr>{mapInputField},
+      "sum_data_size_for_stats");
+
+  core::TypedExprPtr arrayInputField =
+      std::make_shared<const core::FieldAccessTypedExpr>(
+          MAP(DATE(), BIGINT()), "c7");
+  auto countArrayCallExpr = std::make_shared<const core::CallTypedExpr>(
+      BIGINT(), std::vector<core::TypedExprPtr>{mapInputField}, "count");
+  auto sumDataSizeArrayCallExpr = std::make_shared<const core::CallTypedExpr>(
+      BIGINT(),
+      std::vector<core::TypedExprPtr>{mapInputField},
+      "sum_data_size_for_stats");
+
+  const std::vector<std::string> aggregateNames = {
+      "min",
+      "max",
+      "approx_distinct",
+      "max_data_size_for_stats",
+      "sum_data_size_for_stats",
+      "count",
+      "count_if",
+      "count",
+      "sum_data_size_for_stats",
+      "count",
+      "sum_data_size_for_stats",
+  };
+  std::vector<core::AggregationNode::Aggregate> aggregates = {
+      core::AggregationNode::Aggregate{minCallExpr, nullptr, {}, {}},
+      core::AggregationNode::Aggregate{maxCallExpr, nullptr, {}, {}},
+      core::AggregationNode::Aggregate{distinctCountCallExpr, nullptr, {}, {}},
+      core::AggregationNode::Aggregate{maxDataSizeCallExpr, nullptr, {}, {}},
+      core::AggregationNode::Aggregate{sumDataSizeCallExpr, nullptr, {}, {}},
+      core::AggregationNode::Aggregate{countCallExpr, nullptr, {}, {}},
+      core::AggregationNode::Aggregate{countIfCallExpr, nullptr, {}, {}},
+      core::AggregationNode::Aggregate{countMapCallExpr, nullptr, {}, {}},
+      core::AggregationNode::Aggregate{sumDataSizeMapCallExpr, nullptr, {}, {}},
+      core::AggregationNode::Aggregate{countArrayCallExpr, nullptr, {}, {}},
+      core::AggregationNode::Aggregate{
+          sumDataSizeArrayCallExpr, nullptr, {}, {}},
+  };
+  const auto aggregationNode = std::make_shared<core::AggregationNode>(
+      core::PlanNodeId(),
+      core::AggregationNode::Step::kPartial,
+      groupingKeyFields,
+      std::vector<core::FieldAccessTypedExprPtr>{},
+      aggregateNames,
+      aggregates,
+      false, // ignoreNullKeys
+      PlanBuilder().values({input}).planNode());
+
+  auto plan = PlanBuilder()
+                  .values({input})
+                  .tableWrite(
+                      rowType_,
+                      rowType_->names(),
+                      aggregationNode,
+                      std::make_shared<core::InsertTableHandle>(
+                          kHiveConnectorId,
+                          makeHiveInsertTableHandle(
+                              rowType_->names(),
+                              rowType_->children(),
+                              partitionedBy_,
+                              nullptr,
+                              makeLocationHandle(outputDirectory->path))),
+                      false,
+                      CommitStrategy::kNoCommit)
+                  .planNode();
+
+  // the result is in format of : row/fragments/context/[partition]/[stats]
+  int nextColumnStatsIndex = 3 + partitionedBy_.size();
+  const RowVectorPtr result = AssertQueryBuilder(plan).copyResults(pool());
+  auto minStatsVector =
+      result->childAt(nextColumnStatsIndex++)->asFlatVector<int16_t>();
+  ASSERT_EQ(minStatsVector->valueAt(0), 0);
+  const auto maxStatsVector =
+      result->childAt(nextColumnStatsIndex++)->asFlatVector<int16_t>();
+  ASSERT_EQ(maxStatsVector->valueAt(0), 999);
+  const auto distinctCountStatsVector =
+      result->childAt(nextColumnStatsIndex++)->asFlatVector<StringView>();
+  HashStringAllocator allocator{pool_.get()};
+  DenseHll denseHll{
+      std::string(distinctCountStatsVector->valueAt(0)).c_str(), &allocator};
+  ASSERT_EQ(denseHll.cardinality(), 1000);
+  const auto maxDataSizeStatsVector =
+      result->childAt(nextColumnStatsIndex++)->asFlatVector<int64_t>();
+  ASSERT_EQ(maxDataSizeStatsVector->valueAt(0), 7);
+  const auto sumDataSizeStatsVector =
+      result->childAt(nextColumnStatsIndex++)->asFlatVector<int64_t>();
+  ASSERT_EQ(sumDataSizeStatsVector->valueAt(0), 6890);
+  const auto countStatsVector =
+      result->childAt(nextColumnStatsIndex++)->asFlatVector<int64_t>();
+  ASSERT_EQ(countStatsVector->valueAt(0), 1000);
+  const auto countIfStatsVector =
+      result->childAt(nextColumnStatsIndex++)->asFlatVector<int64_t>();
+  ASSERT_EQ(countStatsVector->valueAt(0), 1000);
+  const auto countMapStatsVector =
+      result->childAt(nextColumnStatsIndex++)->asFlatVector<int64_t>();
+  ASSERT_EQ(countMapStatsVector->valueAt(0), 1000);
+  const auto sumDataSizeMapStatsVector =
+      result->childAt(nextColumnStatsIndex++)->asFlatVector<int64_t>();
+  ASSERT_EQ(sumDataSizeMapStatsVector->valueAt(0), 64000);
+  const auto countArrayStatsVector =
+      result->childAt(nextColumnStatsIndex++)->asFlatVector<int64_t>();
+  ASSERT_EQ(countArrayStatsVector->valueAt(0), 1000);
+  const auto sumDataSizeArrayStatsVector =
+      result->childAt(nextColumnStatsIndex++)->asFlatVector<int64_t>();
+  ASSERT_EQ(sumDataSizeArrayStatsVector->valueAt(0), 64000);
 }
 
 TEST_P(AllTableWriterTest, columnStats) {
@@ -2455,6 +2718,68 @@ TEST_P(AllTableWriterTest, tableWrittenBytes) {
       ASSERT_GT(operatorStats.at(i).physicalWrittenBytes, 0);
     }
   }
+}
+
+DEBUG_ONLY_TEST_P(
+    UnpartitionedTableWriterTest,
+    fileWriterFlushErrorOnDriverClose) {
+  VectorFuzzer::Options options;
+  const int batchSize = 1000;
+  options.vectorSize = batchSize;
+  VectorFuzzer fuzzer(options, pool());
+  const int numBatches = 10;
+  std::vector<RowVectorPtr> vectors;
+  int numRows{0};
+  for (int i = 0; i < numBatches; ++i) {
+    numRows += batchSize;
+    vectors.push_back(fuzzer.fuzzRow(rowType_));
+  }
+  std::atomic<int> writeInputs{0};
+  std::atomic<bool> triggerWriterOOM{false};
+  SCOPED_TESTVALUE_SET(
+      "facebook::velox::exec::Driver::runInternal::addInput",
+      std::function<void(Operator*)>([&](Operator* op) {
+        if (op->operatorType() != "TableWrite") {
+          return;
+        }
+        if (++writeInputs != 3) {
+          return;
+        }
+        op->testingOperatorCtx()->task()->requestAbort();
+        triggerWriterOOM = true;
+      }));
+  SCOPED_TESTVALUE_SET(
+      "facebook::velox::memory::MemoryPoolImpl::reserveThreadSafe",
+      std::function<void(memory::MemoryPool*)>([&](memory::MemoryPool* pool) {
+        const std::string dictPoolRe(".*dictionary");
+        const std::string generalPoolRe(".*general");
+        const std::string compressionPoolRe(".*compression");
+        if (!RE2::FullMatch(pool->name(), dictPoolRe) &&
+            !RE2::FullMatch(pool->name(), generalPoolRe) &&
+            !RE2::FullMatch(pool->name(), compressionPoolRe)) {
+          return;
+        }
+        if (!triggerWriterOOM) {
+          return;
+        }
+        VELOX_MEM_POOL_CAP_EXCEEDED("Inject write OOM");
+      }));
+
+  auto outputDirectory = TempDirectoryPath::create();
+  auto op = createInsertPlan(
+      PlanBuilder().values(vectors),
+      rowType_,
+      outputDirectory->path,
+      partitionedBy_,
+      bucketProperty_,
+      compressionKind_,
+      getNumWriters(),
+      connector::hive::LocationHandle::TableType::kNew,
+      commitStrategy_);
+
+  VELOX_ASSERT_THROW(
+      assertQuery(op, fmt::format("SELECT {}", numRows)),
+      "Aborted for external error");
 }
 
 VELOX_INSTANTIATE_TEST_SUITE_P(

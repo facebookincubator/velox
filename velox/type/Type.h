@@ -435,8 +435,7 @@ struct TypeParameter {
 ///   IntegerType    ArrayType
 ///                     |
 ///                   BigintType
-class Type : public Tree<const std::shared_ptr<const Type>>,
-             public velox::ISerializable {
+class Type : public Tree<const TypePtr>, public velox::ISerializable {
  public:
   explicit Type(TypeKind kind) : kind_{kind} {}
 
@@ -491,6 +490,8 @@ class Type : public Tree<const std::shared_ptr<const Type>>,
   // todo(youknowjack): avoid expensive virtual function calls for these
   // simple functions
   virtual size_t cppSizeInBytes() const {
+    // Must be a std::invalid_argument instead of VeloxException in order to
+    // generate python ValueError in python bindings.
     throw std::invalid_argument{"Not a fixed width type: " + toString()};
   }
 
@@ -774,9 +775,14 @@ class UnknownType : public TypeBase<TypeKind::UNKNOWN> {
 
 class ArrayType : public TypeBase<TypeKind::ARRAY> {
  public:
-  explicit ArrayType(std::shared_ptr<const Type> child);
+  explicit ArrayType(TypePtr child);
 
-  const std::shared_ptr<const Type>& elementType() const {
+  explicit ArrayType(
+      std::vector<std::string>&& /*names*/,
+      std::vector<TypePtr>&& types)
+      : ArrayType(std::move(types[0])) {}
+
+  const TypePtr& elementType() const {
     return child_;
   }
 
@@ -784,7 +790,20 @@ class ArrayType : public TypeBase<TypeKind::ARRAY> {
     return 1;
   }
 
+  std::vector<TypePtr> children() const {
+    return {child_};
+  }
+
+  std::vector<std::string> names() const {
+    return {"element"};
+  }
+
   const std::shared_ptr<const Type>& childAt(uint32_t idx) const override;
+
+  const char* nameOf(uint32_t idx) const {
+    VELOX_USER_CHECK_EQ(idx, 0, "Array type should have only one child");
+    return "element";
+  }
 
   std::string toString() const override;
 
@@ -797,21 +816,24 @@ class ArrayType : public TypeBase<TypeKind::ARRAY> {
   }
 
  protected:
-  std::shared_ptr<const Type> child_;
+  TypePtr child_;
   const std::vector<TypeParameter> parameters_;
 };
 
 class MapType : public TypeBase<TypeKind::MAP> {
  public:
-  MapType(
-      std::shared_ptr<const Type> keyType,
-      std::shared_ptr<const Type> valueType);
+  MapType(TypePtr keyType, TypePtr valueType);
 
-  const std::shared_ptr<const Type>& keyType() const {
+  explicit MapType(
+      std::vector<std::string>&& /*names*/,
+      std::vector<TypePtr>&& types)
+      : MapType(std::move(types[0]), std::move(types[1])) {}
+
+  const TypePtr& keyType() const {
     return keyType_;
   }
 
-  const std::shared_ptr<const Type>& valueType() const {
+  const TypePtr& valueType() const {
     return valueType_;
   }
 
@@ -819,9 +841,19 @@ class MapType : public TypeBase<TypeKind::MAP> {
     return 2;
   }
 
+  std::vector<TypePtr> children() const {
+    return {keyType_, valueType_};
+  }
+
+  std::vector<std::string> names() const {
+    return {"key", "value"};
+  }
+
   std::string toString() const override;
 
-  const std::shared_ptr<const Type>& childAt(uint32_t idx) const override;
+  const TypePtr& childAt(uint32_t idx) const override;
+
+  const char* nameOf(uint32_t idx) const;
 
   bool equivalent(const Type& other) const override;
 
@@ -832,8 +864,8 @@ class MapType : public TypeBase<TypeKind::MAP> {
   }
 
  private:
-  std::shared_ptr<const Type> keyType_;
-  std::shared_ptr<const Type> valueType_;
+  TypePtr keyType_;
+  TypePtr valueType_;
   const std::vector<TypeParameter> parameters_;
 };
 
@@ -1245,8 +1277,7 @@ struct TypeFactory<TypeKind::UNKNOWN> {
 
 template <>
 struct TypeFactory<TypeKind::ARRAY> {
-  static std::shared_ptr<const ArrayType> create(
-      std::shared_ptr<const Type> elementType) {
+  static std::shared_ptr<const ArrayType> create(TypePtr elementType) {
     return std::make_shared<ArrayType>(std::move(elementType));
   }
 };
@@ -1254,9 +1285,9 @@ struct TypeFactory<TypeKind::ARRAY> {
 template <>
 struct TypeFactory<TypeKind::MAP> {
   static std::shared_ptr<const MapType> create(
-      std::shared_ptr<const Type> keyType,
-      std::shared_ptr<const Type> valType) {
-    return std::make_shared<MapType>(keyType, valType);
+      TypePtr keyType,
+      TypePtr valType) {
+    return std::make_shared<MapType>(std::move(keyType), std::move(valType));
   }
 };
 
@@ -1264,31 +1295,27 @@ template <>
 struct TypeFactory<TypeKind::ROW> {
   static std::shared_ptr<const RowType> create(
       std::vector<std::string>&& names,
-      std::vector<std::shared_ptr<const Type>>&& types) {
+      std::vector<TypePtr>&& types) {
     return std::make_shared<const RowType>(std::move(names), std::move(types));
   }
 };
 
-std::shared_ptr<const ArrayType> ARRAY(std::shared_ptr<const Type> elementType);
+std::shared_ptr<const ArrayType> ARRAY(TypePtr elementType);
 
 std::shared_ptr<const RowType> ROW(
     std::vector<std::string>&& names,
-    std::vector<std::shared_ptr<const Type>>&& types);
+    std::vector<TypePtr>&& types);
 
 std::shared_ptr<const RowType> ROW(
-    std::initializer_list<
-        std::pair<const std::string, std::shared_ptr<const Type>>>&& pairs);
+    std::initializer_list<std::pair<const std::string, TypePtr>>&& pairs);
 
-std::shared_ptr<const RowType> ROW(
-    std::vector<std::shared_ptr<const Type>>&& pairs);
+std::shared_ptr<const RowType> ROW(std::vector<TypePtr>&& pairs);
 
-std::shared_ptr<const MapType> MAP(
-    std::shared_ptr<const Type> keyType,
-    std::shared_ptr<const Type> valType);
+std::shared_ptr<const MapType> MAP(TypePtr keyType, TypePtr valType);
 
 std::shared_ptr<const FunctionType> FUNCTION(
-    std::vector<std::shared_ptr<const Type>>&& argumentTypes,
-    std::shared_ptr<const Type> returnType);
+    std::vector<TypePtr>&& argumentTypes,
+    TypePtr returnType);
 
 template <typename Class>
 std::shared_ptr<const OpaqueType> OPAQUE() {

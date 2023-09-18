@@ -23,6 +23,7 @@
 #include "velox/common/process/ThreadDebugInfo.h"
 #include "velox/common/time/CpuWallTimer.h"
 #include "velox/connectors/Connector.h"
+#include "velox/core/PlanFragment.h"
 #include "velox/core/PlanNode.h"
 #include "velox/core/QueryCtx.h"
 #include "velox/exec/Spiller.h"
@@ -240,7 +241,7 @@ struct DriverCtx {
       const std::string& operatorType);
 
   /// Builds the spill config for the operator with specified 'operatorId'.
-  std::optional<Spiller::Config> makeSpillConfig(int32_t operatorId) const;
+  std::optional<common::SpillConfig> makeSpillConfig(int32_t operatorId) const;
 };
 
 class Driver : public std::enable_shared_from_this<Driver> {
@@ -408,6 +409,7 @@ using AdaptDriverFunction =
 
 struct DriverAdapter {
   std::string label;
+  std::function<void(const core::PlanFragment&)> inspect;
   AdaptDriverFunction adapt;
 };
 

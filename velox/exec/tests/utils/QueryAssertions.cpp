@@ -49,6 +49,16 @@ template <>
 }
 
 template <>
+::duckdb::Value duckValueAt<TypeKind::VARBINARY>(
+    const VectorPtr& vector,
+    vector_size_t index) {
+  // DuckDB requires zero-ending string
+  auto stringView = vector->as<SimpleVector<StringView>>()->valueAt(index);
+  return ::duckdb::Value::BLOB(
+      reinterpret_cast<const uint8_t*>(stringView.begin()), stringView.size());
+}
+
+template <>
 ::duckdb::Value duckValueAt<TypeKind::TIMESTAMP>(
     const VectorPtr& vector,
     vector_size_t index) {
@@ -229,6 +239,16 @@ template <>
 velox::variant variantAt<TypeKind::TIMESTAMP>(const ::duckdb::Value& value) {
   return velox::variant::timestamp(
       duckdbTimestampToVelox(value.GetValue<::duckdb::timestamp_t>()));
+}
+
+template <>
+velox::variant variantAt<TypeKind::VARCHAR>(const ::duckdb::Value& value) {
+  return velox::variant(StringView(::duckdb::StringValue::Get(value)));
+}
+
+template <>
+velox::variant variantAt<TypeKind::VARBINARY>(const ::duckdb::Value& value) {
+  return velox::variant(StringView(::duckdb::StringValue::Get(value)));
 }
 
 variant nullVariant(const TypePtr& type) {
@@ -700,6 +720,20 @@ bool MaterializedRowEpsilonComparator::sortByUniqueKey(
   return hasUniqueKeys(expectedSorted_) && hasUniqueKeys(actualSorted_);
 }
 
+std::string toTypeString(const MaterializedRow& row) {
+  std::ostringstream out;
+  out << "ROW(";
+  const auto numColumns = row.size();
+  for (auto i = 0; i < numColumns; ++i) {
+    if (i > 0) {
+      out << ", ";
+    }
+    out << mapTypeKindToName(row[i].kind());
+  }
+  out << ")";
+  return out.str();
+}
+
 bool equalTypeKinds(const MaterializedRow& left, const MaterializedRow& right) {
   if (left.size() != right.size()) {
     return false;
@@ -985,7 +1019,9 @@ bool assertEqualResults(
   }
 
   if (!equalTypeKinds(*expectedRows.begin(), *actualRows.begin())) {
-    ADD_FAILURE() << "Types of expected and actual results do not match";
+    ADD_FAILURE() << "Types of expected and actual results do not match: "
+                  << toTypeString(*expectedRows.begin()) << " vs. "
+                  << toTypeString(*actualRows.begin());
     return false;
   }
 

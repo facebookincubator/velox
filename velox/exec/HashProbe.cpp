@@ -125,7 +125,12 @@ HashProbe::HashProbe(
       filterResult_(1),
       outputTableRows_(outputBatchSize_) {
   VELOX_CHECK_NOT_NULL(joinBridge_);
+}
 
+void HashProbe::initialize() {
+  Operator::initialize();
+
+  VELOX_CHECK(hashers_.empty());
   hashers_ = createVectorHashers(probeType_, joinNode_->leftKeys());
 
   const auto numKeys = hashers_.size();
@@ -134,6 +139,7 @@ HashProbe::HashProbe(
     keyChannels_.push_back(hasher->channel());
   }
 
+  VELOX_CHECK_NULL(lookup_);
   lookup_ = std::make_unique<HashLookup>(hashers_);
   auto buildType = joinNode_->sources()[1]->outputType();
   auto tableType = makeTableType(buildType.get(), joinNode_->rightKeys());
@@ -246,6 +252,7 @@ void HashProbe::maybeSetupSpillInput(
               spillConfig.joinPartitionBits),
       spillConfig.filePath,
       spillConfig.maxFileSize,
+      spillConfig.writeBufferSize,
       spillConfig.minSpillRunSize,
       spillConfig.compressionKind,
       Spiller::pool(),
@@ -382,11 +389,13 @@ void HashProbe::spillInput(RowVectorPtr& input) {
   const auto numInput = input->size();
   prepareInputIndicesBuffers(
       input->size(), spiller_->state().spilledPartitionSet());
-  spillHashFunction_->partition(*input, spillPartitions_);
+  const auto singlePartition =
+      spillHashFunction_->partition(*input, spillPartitions_);
 
   vector_size_t numNonSpillingInput = 0;
   for (auto row = 0; row < numInput; ++row) {
-    const auto partition = spillPartitions_[row];
+    const auto partition = singlePartition.has_value() ? singlePartition.value()
+                                                       : spillPartitions_[row];
     if (!spiller_->isSpilled(partition)) {
       rawNonSpillInputIndicesBuffer_[numNonSpillingInput++] = row;
       continue;

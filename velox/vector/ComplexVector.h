@@ -85,6 +85,8 @@ class RowVector : public BaseVector {
 
   virtual ~RowVector() override {}
 
+  bool containsNullAt(vector_size_t idx) const override;
+
   std::optional<int32_t> compare(
       const BaseVector* other,
       vector_size_t index,
@@ -315,9 +317,7 @@ struct ArrayVectorBase : BaseVector {
       const BaseVector* source,
       const folly::Range<const CopyRange*>& ranges,
       VectorPtr* targetValues,
-      const BaseVector* sourceValues,
-      VectorPtr* targetKeys,
-      const BaseVector* sourceKeys);
+      VectorPtr* targetKeys);
 
   void validateArrayVectorBase(
       const VectorValidateOptions& options,
@@ -326,7 +326,9 @@ struct ArrayVectorBase : BaseVector {
  private:
   BufferPtr
   ensureIndices(BufferPtr& buf, const vector_size_t*& raw, vector_size_t size) {
-    if (buf && buf->isMutable() &&
+    // TODO: change this to isMutable(). See
+    // https://github.com/facebookincubator/velox/issues/6562.
+    if (buf && !buf->isView() &&
         buf->capacity() >= size * sizeof(vector_size_t)) {
       return buf;
     }
@@ -376,6 +378,8 @@ class ArrayVector : public ArrayVectorBase {
         type->childAt(0)->toString());
   }
 
+  bool containsNullAt(vector_size_t idx) const override;
+
   std::optional<int32_t> compare(
       const BaseVector* other,
       vector_size_t index,
@@ -401,20 +405,7 @@ class ArrayVector : public ArrayVectorBase {
 
   void copyRanges(
       const BaseVector* source,
-      const folly::Range<const CopyRange*>& ranges) override {
-    const ArrayVector* sourceArray{};
-    if (auto wrapped = source->wrappedVector();
-        !wrapped->isConstantEncoding()) {
-      sourceArray = wrapped->asUnchecked<ArrayVector>();
-    }
-    copyRangesImpl(
-        source,
-        ranges,
-        &elements_,
-        sourceArray ? sourceArray->elements_.get() : nullptr,
-        nullptr,
-        nullptr);
-  }
+      const folly::Range<const CopyRange*>& ranges) override;
 
   uint64_t retainedSize() const override {
     return BaseVector::retainedSize() + offsets_->capacity() +
@@ -500,6 +491,8 @@ class MapVector : public ArrayVectorBase {
 
   virtual ~MapVector() override {}
 
+  bool containsNullAt(vector_size_t idx) const override;
+
   std::optional<int32_t> compare(
       const BaseVector* other,
       vector_size_t index,
@@ -539,20 +532,7 @@ class MapVector : public ArrayVectorBase {
 
   void copyRanges(
       const BaseVector* source,
-      const folly::Range<const CopyRange*>& ranges) override {
-    const MapVector* sourceMap{};
-    if (auto wrapped = source->wrappedVector();
-        !wrapped->isConstantEncoding()) {
-      sourceMap = wrapped->asUnchecked<MapVector>();
-    }
-    copyRangesImpl(
-        source,
-        ranges,
-        &values_,
-        sourceMap ? sourceMap->values_.get() : nullptr,
-        &keys_,
-        sourceMap ? sourceMap->keys_.get() : nullptr);
-  }
+      const folly::Range<const CopyRange*>& ranges) override;
 
   uint64_t retainedSize() const override {
     return BaseVector::retainedSize() + offsets_->capacity() +

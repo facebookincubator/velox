@@ -82,6 +82,8 @@ Generic Configuration
      - 1000
      - The minimum number of table rows that can trigger the parallel hash join table build.
 
+.. _expression-evaluation-conf:
+
 Expression Evaluation Configuration
 -----------------------------------
 .. list-table::
@@ -109,6 +111,21 @@ Expression Evaluation Configuration
      - bool
      - false
      - This flags forces the cast from float/double/decimal/string to integer to be performed by truncating the decimal part instead of rounding.
+   * - cast_string_to_date_is_iso_8601
+     - bool
+     - true
+     - If set, cast from string to date allows only ISO 8601 formatted strings: ``[+-](YYYY-MM-DD)``.
+       Otherwise, allows all patterns supported by Spark:
+         * ``[+-]yyyy*``
+         * ``[+-]yyyy*-[m]m``
+         * ``[+-]yyyy*-[m]m-[d]d``
+         * ``[+-]yyyy*-[m]m-[d]d *``
+         * ``[+-]yyyy*-[m]m-[d]dT*``
+       The asterisk ``*`` in ``yyyy*`` stands for any numbers.
+       For the last two patterns, the trailing ``*`` can represent none or any sequence of characters, e.g:
+         * "1970-01-01 123"
+         * "1970-01-01 (BC)"
+       Regardless of this setting's value, leading spaces will be trimmed.
 
 Memory Management
 -----------------
@@ -198,6 +215,11 @@ Spilling
      - integer
      - 0
      - The maximum allowed spill file size. Zero means unlimited.
+   * - spill_write_buffer_size
+     - integer
+     - 4MB
+     - The maximum size in bytes to buffer the serialized spill data before write to disk for IO efficiency.
+       If set to zero, buffering is disabled.
    * - min_spill_run_size
      - integer
      - 256MB
@@ -206,6 +228,12 @@ Spilling
        If the limit is zero, then the spiller always spills a previously spilled partition if it has any data. This is
        to avoid spill from a partition with a small amount of data which might result in generating too many small
        spilled files.
+   * - spill_compression_codec
+     - string
+     - none
+     - Specifies the compression algorithm type to compress the spilled data before write to disk to trade CPU for IO
+       efficiency. The supported compression codecs are: ZLIB, SNAPPY, LZO, ZSTD, LZ4 and GZIP.
+       NONE means no compression.
    * - spiller_start_partition_bit
      - integer
      - 29

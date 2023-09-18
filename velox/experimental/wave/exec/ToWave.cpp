@@ -351,11 +351,10 @@ bool CompileState::compile() {
   int32_t operatorIndex = 0;
   int32_t nodeIndex = 0;
   RowTypePtr outputType;
+  // Make sure operator states are initialized.  We will need to inspect some of
+  // them during the transformation.
+  driver_.initializeOperators();
   for (; operatorIndex < operators.size(); ++operatorIndex) {
-    if (auto filterProject = dynamic_cast<velox::exec::FilterProject*>(
-            operators[operatorIndex])) {
-      filterProject->ensureInitialized();
-    }
     if (!addOperator(operators[operatorIndex], nodeIndex, outputType)) {
       break;
     }
@@ -392,6 +391,7 @@ bool CompileState::compile() {
       std::move(subfields_),
       std::move(operands_));
   auto waveOp = waveOpUnique.get();
+  waveOp->initialize();
   std::vector<std::unique_ptr<exec::Operator>> added;
   added.push_back(std::move(waveOpUnique));
   auto replaced = driverFactory_.replaceOperators(
@@ -408,7 +408,7 @@ bool waveDriverAdapter(
 }
 
 void registerWave() {
-  exec::DriverAdapter waveAdapter{"Wave", waveDriverAdapter};
+  exec::DriverAdapter waveAdapter{"Wave", {}, waveDriverAdapter};
   exec::DriverFactory::registerAdapter(waveAdapter);
 }
 } // namespace facebook::velox::wave
