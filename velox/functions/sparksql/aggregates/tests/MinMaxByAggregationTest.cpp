@@ -83,7 +83,7 @@ TEST_F(MinMaxByAggregateTest, arrayCompare) {
   });
 
   testAggregations(
-      {data}, {}, {"min_by(c0, c1)", "max_by(c0, c1)"}, {expected});
+      {data}, {}, {"spark_min_by(c0, c1)", "spark_max_by(c0, c1)"}, {expected});
 
   data = makeRowVector({
       makeArrayVector<int64_t>({
@@ -108,7 +108,7 @@ TEST_F(MinMaxByAggregateTest, arrayCompare) {
   });
 
   testAggregations(
-      {data}, {}, {"min_by(c0, c1)", "max_by(c0, c1)"}, {expected});
+      {data}, {}, {"spark_min_by(c0, c1)", "spark_max_by(c0, c1)"}, {expected});
 }
 
 TEST_F(MinMaxByAggregateTest, mapCompare) {
@@ -135,7 +135,7 @@ TEST_F(MinMaxByAggregateTest, mapCompare) {
   });
 
   testAggregations(
-      {data}, {}, {"min_by(c0, c1)", "max_by(c0, c1)"}, {expected});
+      {data}, {}, {"spark_min_by(c0, c1)", "spark_max_by(c0, c1)"}, {expected});
 
   data = makeRowVector({
       makeArrayVector<int64_t>({
@@ -160,7 +160,7 @@ TEST_F(MinMaxByAggregateTest, mapCompare) {
   });
 
   testAggregations(
-      {data}, {}, {"min_by(c0, c1)", "max_by(c0, c1)"}, {expected});
+      {data}, {}, {"spark_min_by(c0, c1)", "spark_max_by(c0, c1)"}, {expected});
 }
 
 TEST_F(MinMaxByAggregateTest, rowCompare) {
@@ -187,7 +187,7 @@ TEST_F(MinMaxByAggregateTest, rowCompare) {
   });
 
   testAggregations(
-      {data}, {}, {"min_by(c0, c1)", "max_by(c0, c1)"}, {expected});
+      {data}, {}, {"spark_min_by(c0, c1)", "spark_max_by(c0, c1)"}, {expected});
 
   data = makeRowVector({
       makeArrayVector<int64_t>({
@@ -212,7 +212,7 @@ TEST_F(MinMaxByAggregateTest, rowCompare) {
   });
 
   testAggregations(
-      {data}, {}, {"min_by(c0, c1)", "max_by(c0, c1)"}, {expected});
+      {data}, {}, {"spark_min_by(c0, c1)", "spark_max_by(c0, c1)"}, {expected});
 }
 
 } // namespace

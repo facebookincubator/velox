@@ -14,7 +14,9 @@
  * limitations under the License.
  */
 
-#include "Compare.h"
+#include "velox/functions/prestosql/aggregates/Compare.h"
+
+using namespace facebook::velox::functions::aggregate;
 
 namespace facebook::velox::aggregate::prestosql {
 

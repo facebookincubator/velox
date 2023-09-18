@@ -382,7 +382,7 @@ class NonNumericMinMaxAggregateBase : public exec::Aggregate {
       }
       auto accumulator = value<SingleValueAccumulator>(groups[i]);
       if (!accumulator->hasValue() ||
-          compareTest(prestosql::compare(accumulator, decoded, i))) {
+          compareTest(compare(accumulator, decoded, i))) {
         accumulator->write(baseVector, indices[i], allocator_);
       }
     });
@@ -406,7 +406,7 @@ class NonNumericMinMaxAggregateBase : public exec::Aggregate {
 
       auto accumulator = value<SingleValueAccumulator>(group);
       if (!accumulator->hasValue() ||
-          compareTest(prestosql::compare(accumulator, decoded, 0))) {
+          compareTest(compare(accumulator, decoded, 0))) {
         accumulator->write(baseVector, indices[0], allocator_);
       }
       return;
@@ -418,7 +418,7 @@ class NonNumericMinMaxAggregateBase : public exec::Aggregate {
         return;
       }
       if (!accumulator->hasValue() ||
-          compareTest(prestosql::compare(accumulator, decoded, i))) {
+          compareTest(compare(accumulator, decoded, i))) {
         accumulator->write(baseVector, indices[i], allocator_);
       }
     });

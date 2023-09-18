@@ -20,12 +20,17 @@
 #include "velox/functions/lib/aggregates/SingleValueAccumulator.h"
 #include "velox/vector/DecodedVector.h"
 
-using namespace facebook::velox::functions::aggregate;
-
 namespace facebook::velox::aggregate::prestosql {
 
+/// Compare the new value of the DecodedVector at the given index with the value
+/// stored in the SingleValueAccumulator. Returns 0 if stored and new values are
+/// equal; <0 if stored value is less then new value; >0 if stored value is
+/// greater than new value.
+///
+/// The default nullHandlingMode in Presto is StopAtNull so it will throw an
+/// exception when complex type values contain nulls.
 int32_t compare(
-    const SingleValueAccumulator* accumulator,
+    const velox::functions::aggregate::SingleValueAccumulator* accumulator,
     const DecodedVector& decoded,
     vector_size_t index);
 

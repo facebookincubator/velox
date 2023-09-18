@@ -44,16 +44,10 @@ struct SparkComparator {
     } else {
       if constexpr (sparkGreaterThan) {
         return !accumulator->hasValue() ||
-            compare(
-                dynamic_cast<SingleValueAccumulator*>(accumulator),
-                newComparisons,
-                index) <= 0;
+            compare(accumulator, newComparisons, index) <= 0;
       } else {
         return !accumulator->hasValue() ||
-            compare(
-                dynamic_cast<SingleValueAccumulator*>(accumulator),
-                newComparisons,
-                index) >= 0;
+            compare(accumulator, newComparisons, index) >= 0;
       }
     }
   }
@@ -67,13 +61,7 @@ struct SparkComparator {
         true, // ascending
         false, // equalsOnly
         CompareFlags::NullHandlingMode::NoStop};
-
     auto result = accumulator->compare(decoded, index, kCompareFlags);
-    VELOX_USER_CHECK(
-        result.has_value(),
-        fmt::format(
-            "{} comparison not supported for values that contain nulls",
-            mapTypeKindToName(decoded.base()->typeKind())));
     return result.value();
   }
 };

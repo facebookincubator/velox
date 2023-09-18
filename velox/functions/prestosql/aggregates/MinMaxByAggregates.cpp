@@ -48,16 +48,10 @@ struct Comparator {
       // is less than vector value.
       if constexpr (greaterThan) {
         return !accumulator->hasValue() ||
-            prestosql::compare(
-                dynamic_cast<SingleValueAccumulator*>(accumulator),
-                newComparisons,
-                index) < 0;
+            prestosql::compare(accumulator, newComparisons, index) < 0;
       } else {
         return !accumulator->hasValue() ||
-            prestosql::compare(
-                dynamic_cast<SingleValueAccumulator*>(accumulator),
-                newComparisons,
-                index) > 0;
+            prestosql::compare(accumulator, newComparisons, index) > 0;
       }
     }
   }
