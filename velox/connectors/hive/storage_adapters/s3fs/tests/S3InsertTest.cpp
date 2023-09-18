@@ -39,6 +39,9 @@ using namespace facebook::velox::filesystems;
 class S3InsertTest : public testing::Test, public VectorTestBase {
  public:
   static constexpr char const* kMinioConnectionString{"127.0.0.1:7000"};
+  /// We use static initialization because we want a single version of the
+  /// Minio server running.
+  /// Each test must use a unique bucket to avoid concurrency issues.
   static void SetUpTestSuite() {
     minioServer_ = std::make_shared<MinioServer>(kMinioConnectionString);
     minioServer_->start();
@@ -124,6 +127,8 @@ TEST_F(S3InsertTest, s3InsertTest) {
   // Get the fragment from the TableWriter output.
   auto fragmentVector = result->childAt(TableWriteTraits::kFragmentChannel)
                             ->asFlatVector<StringView>();
+
+  ASSERT(fragmentVector);
 
   // The fragment contains data provided by the DataSink#finish.
   // This includes the target filename, rowCount, etc...
