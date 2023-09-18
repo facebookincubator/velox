@@ -1187,6 +1187,36 @@ TEST_F(TableScanTest, emptyFile) {
   }
 }
 
+// select * from data_with_null;
+//  id
+//------
+// NULL
+//    1
+//    2
+//(3 rows)
+TEST_F(TableScanTest, nullDataTest) {
+  auto filePath = facebook::velox::test::getDataFilePath(
+      "velox/exec/tests", "data/data_with_null.orc");
+
+  auto rowType = ROW({"id"}, {BIGINT()});
+  auto plan = PlanBuilder().tableScan(rowType).project({"id"}).planNode();
+  auto split = HiveConnectorSplitBuilder(filePath)
+                   .fileFormat(dwio::common::FileFormat::ORC)
+                   .start(0)
+                   .length(fs::file_size(filePath))
+                   .build();
+  auto result = AssertQueryBuilder(plan).split(split).copyResults(pool());
+
+  ASSERT_EQ(result->size(), 3);
+  auto rows = result->as<RowVector>();
+  ASSERT_TRUE(rows);
+  ASSERT_EQ(rows->childrenSize(), 1);
+  auto col = rows->childAt(0)->as<SimpleVector<int64_t>>();
+  ASSERT_TRUE(col->isNullAt(0));
+  ASSERT_EQ(col->valueAt(1), 1);
+  ASSERT_EQ(col->valueAt(2), 2);
+}
+
 TEST_F(TableScanTest, partitionedTableVarcharKey) {
   auto rowType = ROW({"c0", "c1"}, {BIGINT(), DOUBLE()});
   auto vectors = makeVectors(10, 1'000, rowType);

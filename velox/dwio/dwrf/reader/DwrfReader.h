@@ -372,8 +372,23 @@ class DwrfReaderFactory : public dwio::common::ReaderFactory {
   }
 };
 
+class OrcReaderFactory : public dwio::common::ReaderFactory {
+ public:
+  OrcReaderFactory() : ReaderFactory(dwio::common::FileFormat::ORC) {}
+
+  std::unique_ptr<dwio::common::Reader> createReader(
+      std::unique_ptr<dwio::common::BufferedInput> input,
+      const dwio::common::ReaderOptions& options) override {
+    return DwrfReader::create(std::move(input), options);
+  }
+};
+
 void registerDwrfReaderFactory();
 
+void registerOrcReaderFactory();
+
 void unregisterDwrfReaderFactory();
+
+void unregisterOrcReaderFactory();
 
 } // namespace facebook::velox::dwrf

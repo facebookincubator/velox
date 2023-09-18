@@ -139,6 +139,7 @@ void HiveConnectorFactory::initialize() {
   static bool once = []() {
     dwio::common::registerFileSinks();
     dwrf::registerDwrfReaderFactory();
+    dwrf::registerOrcReaderFactory();
     dwrf::registerDwrfWriterFactory();
 // Meta's buck build system needs this check.
 #ifdef VELOX_ENABLE_PARQUET

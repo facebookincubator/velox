@@ -1064,8 +1064,16 @@ void registerDwrfReaderFactory() {
   dwio::common::registerReaderFactory(std::make_shared<DwrfReaderFactory>());
 }
 
+void registerOrcReaderFactory() {
+  dwio::common::registerReaderFactory(std::make_shared<OrcReaderFactory>());
+}
+
 void unregisterDwrfReaderFactory() {
   dwio::common::unregisterReaderFactory(dwio::common::FileFormat::DWRF);
+}
+
+void unregisterOrcReaderFactory() {
+  dwio::common::unregisterReaderFactory(dwio::common::FileFormat::ORC);
 }
 
 } // namespace facebook::velox::dwrf

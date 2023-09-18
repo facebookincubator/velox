@@ -299,7 +299,9 @@ class SelectiveColumnReader {
         values_->capacity());
 
     anyNulls_ = true;
-    bits::setNull(rawResultNulls_, numValues_);
+    if (!returnReaderNulls_) {
+      bits::setNull(rawResultNulls_, numValues_);
+    }
     // Set the default value at the nominal width of the reader but
     // calculate the index based on the actual width of the
     // data. These may differ for integer and dictionary readers.
