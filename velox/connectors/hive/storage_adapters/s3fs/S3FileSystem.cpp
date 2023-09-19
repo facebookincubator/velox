@@ -353,7 +353,7 @@ class S3WriteFile::Impl {
       dataPtr += kPartUploadSize;
       dataSize -= kPartUploadSize;
     }
-    // stash the remaining at the beginning of currentPart;
+    // Stash the remaining at the beginning of currentPart.
     currentPart_->unsafeAppend(0, dataPtr, dataSize);
   }
 
