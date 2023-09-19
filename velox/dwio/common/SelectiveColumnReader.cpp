@@ -45,10 +45,10 @@ SelectiveColumnReader::SelectiveColumnReader(
     const TypePtr& requestedType,
     dwio::common::FormatParams& params,
     velox::common::ScanSpec& scanSpec,
-    std::shared_ptr<const dwio::common::TypeWithId> type)
+    std::shared_ptr<const dwio::common::TypeWithId> fileType)
     : memoryPool_(params.pool()),
-      fileType_(type),
-      formatData_(params.toFormatData(type, scanSpec)),
+      fileType_(fileType),
+      formatData_(params.toFormatData(fileType, scanSpec)),
       scanSpec_(&scanSpec),
       requestedType_(requestedType) {}
 

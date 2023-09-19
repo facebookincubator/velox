@@ -27,7 +27,7 @@ class SelectiveByteRleColumnReader
 
   SelectiveByteRleColumnReader(
       const std::shared_ptr<const dwio::common::TypeWithId>& requestedType,
-      std::shared_ptr<const dwio::common::TypeWithId> dataType,
+      std::shared_ptr<const dwio::common::TypeWithId> fileType,
       DwrfParams& params,
       common::ScanSpec& scanSpec,
       bool isBool)
@@ -35,7 +35,7 @@ class SelectiveByteRleColumnReader
             requestedType->type(),
             params,
             scanSpec,
-            std::move(dataType)) {
+            std::move(fileType)) {
     EncodingKey encodingKey{fileType_->id(), params.flatMapContext().sequence};
     auto& stripe = params.stripeStreams();
     if (isBool) {

@@ -28,12 +28,12 @@ class SelectiveIntegerColumnReader : public SelectiveColumnReader {
       const TypePtr& requestedType,
       dwio::common::FormatParams& params,
       velox::common::ScanSpec& scanSpec,
-      std::shared_ptr<const dwio::common::TypeWithId> type)
+      std::shared_ptr<const dwio::common::TypeWithId> fileType)
       : SelectiveColumnReader(
             requestedType,
             params,
             scanSpec,
-            std::move(type)) {}
+            std::move(fileType)) {}
 
   void getValues(RowSet rows, VectorPtr* result) override {
     getIntValues(rows, requestedType_, result);

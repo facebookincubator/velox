@@ -96,7 +96,7 @@ class SelectiveListColumnReader : public SelectiveRepeatedColumnReader {
  public:
   SelectiveListColumnReader(
       const std::shared_ptr<const dwio::common::TypeWithId>& requestedType,
-      const std::shared_ptr<const dwio::common::TypeWithId>& dataType,
+      const std::shared_ptr<const dwio::common::TypeWithId>& fileType,
       FormatParams& params,
       velox::common::ScanSpec& scanSpec);
 
@@ -122,7 +122,7 @@ class SelectiveMapColumnReader : public SelectiveRepeatedColumnReader {
  public:
   SelectiveMapColumnReader(
       const std::shared_ptr<const dwio::common::TypeWithId>& requestedType,
-      const std::shared_ptr<const dwio::common::TypeWithId>& dataType,
+      const std::shared_ptr<const dwio::common::TypeWithId>& fileType,
       FormatParams& params,
       velox::common::ScanSpec& scanSpec);
 
