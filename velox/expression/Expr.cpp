@@ -359,11 +359,9 @@ bool isFlat(const BaseVector& vector) {
 }
 
 inline void checkResultInternalState(VectorPtr& result) {
-#ifndef NDEBUG
   if (result != nullptr) {
     result->validate();
   }
-#endif
 }
 
 } // namespace

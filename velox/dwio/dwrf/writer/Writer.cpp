@@ -158,6 +158,8 @@ void Writer::write(const VectorPtr& input) {
       }
     }
 
+    LOG(ERROR) << "input " << input->toString();
+    LOG(ERROR) << rowOffset << ", " << rowOffset + numRowsToWrite;
     const auto rawSize = writer_->write(
         input, common::Ranges::of(rowOffset, rowOffset + numRowsToWrite));
     rowOffset += numRowsToWrite;

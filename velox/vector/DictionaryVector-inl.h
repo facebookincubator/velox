@@ -28,9 +28,7 @@ void DictionaryVector<T>::setInternalState() {
 
   // Sanity check indices for non-null positions. Enabled in debug mode only to
   // avoid performance hit in production.
-#ifndef NDEBUG
   validate({});
-#endif
 
   if (isLazyNotLoaded(*dictionaryValues_)) {
     VELOX_CHECK(
