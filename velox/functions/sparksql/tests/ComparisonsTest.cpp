@@ -167,9 +167,9 @@ TEST_F(ComparisonsTest, testdecimal) {
 
   // Test with different data types.
   std::vector<VectorPtr> invalidInputs = {
-      makeFlatVector<int64_t>({1}, DECIMAL(10, 5)),
-      makeFlatVector<int64_t>({1}, DECIMAL(10, 4))};
-  auto invalidResult = makeConstant<bool>({true}, 1);
+      makeFlatVector(std::vector<int64_t>{1}, DECIMAL(10, 5)),
+      makeFlatVector(std::vector<int64_t>{1}, DECIMAL(10, 4))};
+  auto invalidResult = makeConstant<bool>(true, 1);
   VELOX_ASSERT_THROW(
       runAndCompare(
           fmt::format("{}(c1, c0)", "equalto"), invalidInputs, invalidResult),
