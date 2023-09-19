@@ -84,6 +84,11 @@ class ReaderBase {
   /// the data still exists in the buffered inputs.
   bool isRowGroupBuffered(int32_t rowGroupIndex) const;
 
+  static std::shared_ptr<const dwio::common::TypeWithId> createTypeWithId(
+      const std::shared_ptr<const dwio::common::TypeWithId>& inputType,
+      const RowTypePtr& rowTypePtr,
+      bool fileColumnNamesReadAsLowerCase);
+
  private:
   // Reads and parses file footer.
   void loadFileMetaData();
@@ -564,6 +569,33 @@ std::shared_ptr<const RowType> ReaderBase::createRowType(
       std::move(childNames), std::move(childTypes));
 }
 
+std::shared_ptr<const dwio::common::TypeWithId> ReaderBase::createTypeWithId(
+    const std::shared_ptr<const dwio::common::TypeWithId>& inputType,
+    const RowTypePtr& rowTypePtr,
+    bool fileColumnNamesReadAsLowerCase) {
+  if (!fileColumnNamesReadAsLowerCase) {
+    return inputType;
+  }
+  std::vector<std::string> names;
+  names.reserve(rowTypePtr->names().size());
+  std::vector<TypePtr> types = rowTypePtr->children();
+  for (const auto& name : rowTypePtr->names()) {
+    std::string childName = name;
+    folly::toLowerAscii(childName);
+    names.emplace_back(childName);
+  }
+  auto convertedType =
+      TypeFactory<TypeKind::ROW>::create(std::move(names), std::move(types));
+
+  auto children = inputType->getChildren();
+  return std::make_shared<const dwio::common::TypeWithId>(
+      convertedType,
+      std::move(children),
+      inputType->id(),
+      inputType->maxId(),
+      inputType->column());
+}
+
 void ReaderBase::scheduleRowGroups(
     const std::vector<uint32_t>& rowGroupIds,
     int32_t currentGroup,
@@ -638,13 +670,17 @@ ParquetRowReader::ParquetRowReader(
     return; // TODO
   }
   ParquetParams params(pool_, columnReaderStats_, readerBase_->fileMetaData());
-  auto columnSelector = std::make_shared<ColumnSelector>(
-      ColumnSelector::apply(options_.getSelector(), readerBase_->schema()));
+  // ColumnSelector::apply does not work for schema pruning case.
+  auto columnSelector = options_.getSelector();
   columnReader_ = ParquetColumnReader::build(
-      columnSelector->getSchemaWithId(),
+      ReaderBase::createTypeWithId(
+          columnSelector->getSchemaWithId(),
+          asRowType(options_.getSelector()->getSchemaWithId()->type()),
+          readerBase_->isFileColumnNamesReadAsLowerCase()),
       readerBase_->schemaWithId(), // Id is schema id
       params,
-      *options_.getScanSpec());
+      *options_.getScanSpec(),
+      pool_);
 
   filterRowGroups();
   if (!rowGroupIds_.empty()) {

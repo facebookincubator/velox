@@ -442,6 +442,82 @@ TEST_F(ParquetTableScanTest, readAsLowerCase) {
       result.second, {makeRowVector({"a"}, {makeFlatVector<int64_t>({0, 1})})});
 }
 
+TEST_F(ParquetTableScanTest, structSelection) {
+  auto vector = makeArrayVector<StringView>({{}});
+  loadData(
+      getExampleFilePath("contacts.parquet"),
+      ROW({"name"}, {ROW({"first", "last"}, {VARCHAR(), VARCHAR()})}),
+      makeRowVector(
+          {"t"},
+          {
+              vector,
+          }));
+  assertSelectWithFilter({"name"}, {}, "", "SELECT ('Janet', 'Jones')");
+
+  loadData(
+      getExampleFilePath("contacts.parquet"),
+      ROW({"name"},
+          {ROW(
+              {"first", "middle", "last"}, {VARCHAR(), VARCHAR(), VARCHAR()})}),
+      makeRowVector(
+          {"t"},
+          {
+              vector,
+          }));
+  assertSelectWithFilter({"name"}, {}, "", "SELECT ('Janet', null, 'Jones')");
+
+  loadData(
+      getExampleFilePath("contacts.parquet"),
+      ROW({"name"}, {ROW({"first", "middle"}, {VARCHAR(), VARCHAR()})}),
+      makeRowVector(
+          {"t"},
+          {
+              vector,
+          }));
+  assertSelectWithFilter({"name"}, {}, "", "SELECT ('Janet', null)");
+
+  loadData(
+      getExampleFilePath("contacts.parquet"),
+      ROW({"name"}, {ROW({"middle", "last"}, {VARCHAR(), VARCHAR()})}),
+      makeRowVector(
+          {"t"},
+          {
+              vector,
+          }));
+  assertSelectWithFilter({"name"}, {}, "", "SELECT (null, 'Jones')");
+
+  loadData(
+      getExampleFilePath("contacts.parquet"),
+      ROW({"name"}, {ROW({"middle"}, {VARCHAR()})}),
+      makeRowVector(
+          {"t"},
+          {
+              vector,
+          }));
+  assertSelectWithFilter({"name"}, {}, "", "SELECT row(null)");
+
+  loadData(
+      getExampleFilePath("contacts.parquet"),
+      ROW({"name"}, {ROW({"middle", "info"}, {VARCHAR(), VARCHAR()})}),
+      makeRowVector(
+          {"t"},
+          {
+              vector,
+          }));
+  assertSelectWithFilter({"name"}, {}, "", "SELECT NULL");
+
+  loadData(
+      getExampleFilePath("contacts.parquet"),
+      ROW({"name"}, {ROW({}, {})}),
+      makeRowVector(
+          {"t"},
+          {
+              vector,
+          }));
+
+  assertSelectWithFilter({"name"}, {}, "", "SELECT t from tmp");
+}
+
 int main(int argc, char** argv) {
   testing::InitGoogleTest(&argc, argv);
   folly::init(&argc, &argv, false);
