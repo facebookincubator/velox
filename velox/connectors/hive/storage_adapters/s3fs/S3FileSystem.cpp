@@ -216,8 +216,8 @@ class S3WriteFile::Impl {
       Aws::S3::S3Client* client,
       memory::MemoryPool* pool)
       : client_(client) {
-    VELOX_CHECK(client);
-    VELOX_CHECK(pool);
+    VELOX_CHECK_NOT_NULL(client);
+    VELOX_CHECK_NOT_NULL(pool);
     getBucketAndKeyFromS3Path(path, bucket_, key_);
     pool_ = pool->addLeafChild(".s3writefile");
     currentPart_ = std::make_unique<dwio::common::DataBuffer<char>>(*pool_);

@@ -180,7 +180,7 @@ class DataBuffer {
   void unsafeAppend(const T* src, uint64_t items) {
     if (FOLLY_LIKELY(items > 0)) {
       std::memcpy(data() + size_, src, sizeInBytes(items));
-      size_ = (size_ + items);
+      size_ += items;
     }
   }
 
