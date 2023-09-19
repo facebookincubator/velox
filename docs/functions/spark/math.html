@@ -196,12 +196,37 @@ Supported types are: TINYINT, SMALLINT, INTEGER, BIGINT, FLOAT and DOUBLE.</p>
 <dl class="spark function">
 <dt class="sig sig-object spark" id="rand">
 <span class="sig-name descname"><span class="pre">rand</span></span><span class="sig-paren">(</span><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">double</span></span></span><a class="headerlink" href="#rand" title="Permalink to this definition">¶</a></dt>
-<dd><p>Returns a random value with independent and identically distributed uniformly distributed values in [0, 1).</p>
+<dd><p>Returns a random value with uniformly distributed values in [0, 1).</p>
 <div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">SELECT</span> <span class="n">rand</span><span class="p">();</span> <span class="o">--</span> <span class="mf">0.9629742951434543</span>
-<span class="n">SELECT</span> <span class="n">rand</span><span class="p">(</span><span class="mi">0</span><span class="p">);</span> <span class="o">--</span> <span class="mf">0.7604953758285915</span>
-<span class="n">SELECT</span> <span class="n">rand</span><span class="p">(</span><span class="n">null</span><span class="p">);</span> <span class="o">--</span> <span class="mf">0.7604953758285915</span>
 </pre></div>
 </div>
+</dd></dl>
+
+<dl class="spark function">
+<dt class="sig sig-object spark" id="id0">
+<span class="sig-name descname"><span class="pre">rand</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">seed</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">partitionIndex</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">double</span></span></span><a class="headerlink" href="#id0" title="Permalink to this definition">¶</a></dt>
+<dd><p>Returns a random value with uniformly distributed values in [0, 1) using a seed formed
+by combining user-specified <code class="docutils literal notranslate"><span class="pre">seed</span></code> and framework provided <code class="docutils literal notranslate"><span class="pre">partitionIndex</span></code>. The
+framework is responsible for deterministic partitioning of the data and assigning unique
+<code class="docutils literal notranslate"><span class="pre">partitionIndex</span></code> to each thread (in a deterministic way).
+<code class="docutils literal notranslate"><span class="pre">seed</span></code> must be constant. NULL <code class="docutils literal notranslate"><span class="pre">seed</span></code> is identical to zero <code class="docutils literal notranslate"><span class="pre">seed</span></code>. <code class="docutils literal notranslate"><span class="pre">partitionIndex</span></code>
+cannot be NULL.</p>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">SELECT</span> <span class="n">rand</span><span class="p">(</span><span class="mi">0</span><span class="p">);</span>    <span class="o">--</span> <span class="mf">0.5488135024422883</span>
+<span class="n">SELECT</span> <span class="n">rand</span><span class="p">(</span><span class="n">NULL</span><span class="p">);</span> <span class="o">--</span> <span class="mf">0.5488135024422883</span>
+</pre></div>
+</div>
+</dd></dl>
+
+<dl class="spark function">
+<dt class="sig sig-object spark" id="random">
+<span class="sig-name descname"><span class="pre">random</span></span><span class="sig-paren">(</span><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">double</span></span></span><a class="headerlink" href="#random" title="Permalink to this definition">¶</a></dt>
+<dd><p>An alias for <code class="docutils literal notranslate"><span class="pre">rand()</span></code>.</p>
+</dd></dl>
+
+<dl class="spark function">
+<dt class="sig sig-object spark" id="id3">
+<span class="sig-name descname"><span class="pre">random</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">seed</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">partitionIndex</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">double</span></span></span><a class="headerlink" href="#id3" title="Permalink to this definition">¶</a></dt>
+<dd><p>An alias for <code class="docutils literal notranslate"><span class="pre">rand(seed,</span> <span class="pre">partitionIndex)</span></code>.</p>
 </dd></dl>
 
 <dl class="spark function">
