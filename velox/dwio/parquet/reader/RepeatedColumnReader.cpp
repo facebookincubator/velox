@@ -33,6 +33,9 @@ PageReader* readLeafRepDefs(
       return nullptr;
     }
     auto pageReader = reader->formatData().as<ParquetData>().reader();
+    if (pageReader == nullptr) {
+      return nullptr;
+    }
     pageReader->decodeRepDefs(numTop);
     return pageReader;
   }
@@ -113,7 +116,8 @@ MapColumnReader::MapColumnReader(
     const TypePtr& requestedType,
     const std::shared_ptr<const dwio::common::TypeWithId>& fileType,
     ParquetParams& params,
-    common::ScanSpec& scanSpec)
+    common::ScanSpec& scanSpec,
+    memory::MemoryPool& pool)
     : dwio::common::SelectiveMapColumnReader(
           requestedType,
           fileType,
@@ -123,9 +127,17 @@ MapColumnReader::MapColumnReader(
   auto& keyChildType = requestedType->childAt(0);
   auto& elementChildType = requestedType->childAt(1);
   keyReader_ = ParquetColumnReader::build(
-      keyChildType, fileType_->childAt(0), params, *scanSpec.children()[0]);
+      keyChildType,
+      fileType_->childAt(0),
+      params,
+      *scanSpec.children()[0],
+      pool);
   elementReader_ = ParquetColumnReader::build(
-      elementChildType, fileType_->childAt(1), params, *scanSpec.children()[1]);
+      elementChildType,
+      fileType_->childAt(1),
+      params,
+      *scanSpec.children()[1],
+      pool);
   reinterpret_cast<const ParquetTypeWithId*>(fileType.get())
       ->makeLevelInfo(levelInfo_);
   children_ = {keyReader_.get(), elementReader_.get()};
@@ -222,7 +234,8 @@ ListColumnReader::ListColumnReader(
     const TypePtr& requestedType,
     const std::shared_ptr<const dwio::common::TypeWithId>& fileType,
     ParquetParams& params,
-    common::ScanSpec& scanSpec)
+    common::ScanSpec& scanSpec,
+    memory::MemoryPool& pool)
     : dwio::common::SelectiveListColumnReader(
           requestedType,
           fileType,
@@ -230,7 +243,7 @@ ListColumnReader::ListColumnReader(
           scanSpec) {
   auto& childType = requestedType->childAt(0);
   child_ = ParquetColumnReader::build(
-      childType, fileType_->childAt(0), params, *scanSpec.children()[0]);
+      childType, fileType_->childAt(0), params, *scanSpec.children()[0], pool);
   reinterpret_cast<const ParquetTypeWithId*>(fileType.get())
       ->makeLevelInfo(levelInfo_);
   children_ = {child_.get()};
