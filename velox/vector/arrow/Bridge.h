@@ -80,6 +80,9 @@ void exportToArrow(
 /// actual data (containing encoding) to create an ArrowSchema.
 void exportToArrow(const VectorPtr&, ArrowSchema&);
 
+/// Export the type of a Velox TypePtr to an ArrowSchema.
+void exportToArrow(const TypePtr&, ArrowSchema&);
+
 /// Import an ArrowSchema into a Velox Type object.
 ///
 /// This function does the exact opposite of the function above. TypePtr carries

@@ -16,6 +16,9 @@
 
 #include "velox/vector/arrow/Bridge.h"
 
+#include <arrow/c/bridge.h>
+#include <arrow/type.h>
+#include <arrow/type_fwd.h>
 #include "velox/buffer/Buffer.h"
 #include "velox/common/base/BitUtil.h"
 #include "velox/common/base/CheckedArithmetic.h"
@@ -613,6 +616,61 @@ void exportBase(
   out.release = releaseArrowArray;
 }
 
+std::shared_ptr<::arrow::Field> getArrowField(const TypePtr& type) {
+  switch (type->kind()) {
+    case TypeKind::BOOLEAN:
+      return ::arrow::field(type->name(), ::arrow::boolean());
+    case TypeKind::TINYINT:
+      return ::arrow::field(type->name(), ::arrow::int8());
+    case TypeKind::SMALLINT:
+      return ::arrow::field(type->name(), ::arrow::int16());
+    case TypeKind::INTEGER:
+      return ::arrow::field(type->name(), ::arrow::int32());
+    case TypeKind::BIGINT:
+      return ::arrow::field(type->name(), ::arrow::int64());
+    case TypeKind::REAL:
+      return ::arrow::field(type->name(), ::arrow::float32());
+    case TypeKind::DOUBLE:
+      return ::arrow::field(type->name(), ::arrow::float64());
+    case TypeKind::VARCHAR:
+      return ::arrow::field(type->name(), ::arrow::utf8());
+    case TypeKind::VARBINARY:
+      return ::arrow::field(type->name(), ::arrow::binary());
+    case TypeKind::HUGEINT: {
+      auto scale = type->asLongDecimal().scale();
+      auto precision = type->asLongDecimal().precision();
+      return ::arrow::field(type->name(), ::arrow::decimal(precision, scale));
+    }
+    case TypeKind::ROW: {
+      auto rowType = std::dynamic_pointer_cast<const RowType>(type);
+      std::vector<std::shared_ptr<::arrow::Field>> fields;
+      for (auto children : rowType->children()) {
+        fields.push_back(getArrowField(children));
+      }
+
+      return ::arrow::field(type->name(), ::arrow::struct_(fields));
+    }
+    case TypeKind::ARRAY: {
+      auto arrayType = std::dynamic_pointer_cast<const ArrayType>(type);
+      return ::arrow::field(
+          type->name(), ::arrow::list(getArrowField(arrayType->elementType())));
+    }
+    case TypeKind::MAP: {
+      auto mapType = std::dynamic_pointer_cast<const MapType>(type);
+
+      return ::arrow::field(
+          type->name(),
+          ::arrow::map(
+              getArrowField(mapType->keyType())->type(),
+              getArrowField(mapType->valueType())->type()));
+    }
+    default:
+      VELOX_USER_FAIL(
+          "Unable to convert '{}' velox type to arrow schema",
+          type->toString());
+  }
+}
+
 } // namespace
 
 void exportToArrow(
@@ -620,6 +678,21 @@ void exportToArrow(
     ArrowArray& arrowArray,
     memory::MemoryPool* pool) {
   exportBase(*vector, Selection(vector->size()), arrowArray, pool);
+}
+
+void exportToArrow(const TypePtr& type, ArrowSchema& arrowSchema) {
+  auto field = getArrowField(type);
+  std::shared_ptr<::arrow::Schema> schema = nullptr;
+  if (field->type()->id() == ::arrow::Type::STRUCT) {
+    auto fields = getArrowField(type)->type()->fields();
+    schema = ::arrow::schema(fields);
+  } else {
+    schema = ::arrow::schema({getArrowField(type)});
+  }
+
+  ::arrow::ExportSchema(*schema, &arrowSchema);
+
+  // arrowSchema.format = exportArrowFormatStr(type, nullptr);
 }
 
 void exportToArrow(const VectorPtr& vec, ArrowSchema& arrowSchema) {

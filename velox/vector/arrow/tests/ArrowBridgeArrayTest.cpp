@@ -32,10 +32,10 @@ using namespace facebook::velox;
 void mockSchemaRelease(ArrowSchema*) {}
 void mockArrayRelease(ArrowArray*) {}
 
-void exportToArrow(const TypePtr& type, ArrowSchema& out) {
-  auto pool = &facebook::velox::memory::deprecatedSharedLeafPool();
-  exportToArrow(BaseVector::create(type, 0, pool), out);
-}
+// void exportToArrow(const TypePtr& type, ArrowSchema& out) {
+//   auto pool = &facebook::velox::memory::deprecatedSharedLeafPool();
+//   exportToArrow(BaseVector::create(type, 0, pool), out);
+// }
 
 class ArrowBridgeArrayExportTest : public testing::Test {
  protected:
