@@ -195,6 +195,17 @@ TEST_F(PlanNodeSerdeTest, groupId) {
   testSerde(plan);
 }
 
+TEST_F(PlanNodeSerdeTest, expand) {
+  auto plan = PlanBuilder()
+                  .values({data_})
+                  .expand(
+                      {{"c0", "c1", "c2", "0"},
+                       {"c0", "c1", "", "1"},
+                       {"c0", "", "", "2"}})
+                  .planNode();
+  testSerde(plan);
+}
+
 TEST_F(PlanNodeSerdeTest, localPartition) {
   auto plan = PlanBuilder()
                   .values({data_})

@@ -50,6 +50,7 @@ TableWriteNode              TableWrite
 TableWriteMergeNode         TableWriteMerge
 PartitionedOutputNode       PartitionedOutput
 ExchangeNode                Exchange                                         Y
+ExpandNode                  Expand
 MergeExchangeNode           MergeExchange                                    Y
 ValuesNode                  Values                                           Y
 LocalMergeNode              LocalMerge
@@ -292,6 +293,33 @@ Note: Presto allows multiple global grouping sets in a single SQL query.
 Hence, globalGroupingSets is a vector of groupIds.
 
 
+.. _ExpandNode:
+
+ExpandNode
+~~~~~~~~~~~
+
+Apply all of the grouping expressions to every input row, hence we will get multiply output rows
+for an input row. Using project and unnest can be employed to implement the expand functionality.
+However, the performance is suboptimal when creating an array constructor within the Project operation.
+
+Here is an example to demonstrate how the Expand functionality works.
+
+One input row will generate three output rows based on the number of projection numbers.
+
+.. image:: images/expand.png
+    :width: 400
+    :align: center
+
+.. list-table::
+   :widths: 10 30
+   :align: left
+   :header-rows: 1
+
+   * - Property
+     - Description
+   * - projections
+     - The input row will be expanded based on these projection expressions.
+   
 .. _GroupIdNode:
 
 GroupIdNode

@@ -792,6 +792,58 @@ class TableWriteMergeNode : public PlanNode {
   const RowTypePtr outputType_;
 };
 
+/// For each input row, generates N rows with M additional columns according to
+/// specified 'projections'. 'Projections' is an N x M matrix of expressions.
+/// Each expression is either a column reference or a constant. Both null and
+/// non-null constants are allowed. 'Names' is a list of new column names. It
+/// contains exactly M entries. The semantic of this operator matches Spark.
+class ExpandNode : public PlanNode {
+ public:
+  /// @param id Plan node ID.
+  /// @param projectSets A list of project sets. The output conatins one cloumn
+  /// for each project expr. The project expr may be cloumn reference, null or
+  /// int constant.
+  /// @param names The names and order of the projects in the output.
+  /// @param source Input plan node.
+  ExpandNode(
+      PlanNodeId id,
+      std::vector<std::vector<TypedExprPtr>> projects,
+      std::vector<std::string> names,
+      PlanNodePtr source);
+
+  const RowTypePtr& outputType() const override {
+    return outputType_;
+  }
+
+  const std::vector<PlanNodePtr>& sources() const override {
+    return sources_;
+  }
+
+  const std::vector<std::vector<TypedExprPtr>>& projections() const {
+    return projections_;
+  }
+
+  const std::vector<std::string>& names() const {
+    return names_;
+  }
+
+  std::string_view name() const override {
+    return "Expand";
+  }
+
+  folly::dynamic serialize() const override;
+
+  static PlanNodePtr create(const folly::dynamic& obj, void* context);
+
+ private:
+  void addDetails(std::stringstream& stream) const override;
+
+  const std::vector<PlanNodePtr> sources_;
+  const RowTypePtr outputType_;
+  const std::vector<std::vector<TypedExprPtr>> projections_;
+  const std::vector<std::string> names_;
+};
+
 /// Plan node used to implement aggregations over grouping sets. Duplicates the
 /// aggregation input for each set of grouping keys. The output contains one
 /// column for each grouping key, followed by aggregation inputs, followed by a

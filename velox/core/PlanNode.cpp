@@ -443,6 +443,90 @@ PlanNodePtr AggregationNode::create(const folly::dynamic& obj, void* context) {
 }
 
 namespace {
+RowTypePtr getExpandOutputType(
+    const std::vector<std::vector<TypedExprPtr>>& projections,
+    std::vector<std::string>& names) {
+  std::vector<TypePtr> types;
+  types.reserve(names.size());
+  for (int32_t i = 0; i < names.size(); ++i) {
+    types.push_back(projections[0][i]->type());
+  }
+
+  return ROW(std::move(names), std::move(types));
+}
+} // namespace
+
+ExpandNode::ExpandNode(
+    PlanNodeId id,
+    std::vector<std::vector<TypedExprPtr>> projections,
+    std::vector<std::string> names,
+    PlanNodePtr source)
+    : PlanNode(std::move(id)),
+      sources_{source},
+      outputType_(getExpandOutputType(projections, names)),
+      projections_(std::move(projections)),
+      names_(outputType_->names()) {
+  VELOX_CHECK_GT(names_.size(), 0);
+  VELOX_CHECK_GT(projections_.size(), 0);
+
+  std::unordered_set<std::string> nameSets;
+  for (const auto& name : names_) {
+    if (nameSets.find(name) != nameSets.end()) {
+      VELOX_USER_FAIL("The columns names contain duplicate names")
+    }
+    nameSets.insert(name);
+  }
+
+  for (const auto& rowProjection : projections_) {
+    VELOX_CHECK_GT(rowProjection.size(), names.size());
+    for (const auto& columnProjection : rowProjection) {
+      auto field = std::dynamic_pointer_cast<const core::FieldAccessTypedExpr>(
+          columnProjection);
+      auto constant = std::dynamic_pointer_cast<const core::ConstantTypedExpr>(
+          columnProjection);
+      if (!field && !constant) {
+        VELOX_USER_FAIL(
+            "Expand operator doesn't support this expression. Only column references and constants are supported.{} ",
+            columnProjection->toString());
+      }
+    }
+  }
+}
+
+void ExpandNode::addDetails(std::stringstream& stream) const {
+  for (auto i = 0; i < projections_.size(); ++i) {
+    if (i > 0) {
+      stream << ", ";
+    }
+    stream << "[";
+    addKeys(stream, projections_[i]);
+    stream << "]";
+  }
+}
+
+folly::dynamic ExpandNode::serialize() const {
+  auto obj = PlanNode::serialize();
+  obj["projections"] = ISerializable::serialize(projections_);
+  obj["names"] = ISerializable::serialize(names_);
+
+  return obj;
+}
+
+// static
+PlanNodePtr ExpandNode::create(const folly::dynamic& obj, void* context) {
+  auto source = deserializeSingleSource(obj, context);
+  auto names = deserializeStrings(obj["names"]);
+  auto projections =
+      ISerializable::deserialize<std::vector<std::vector<ITypedExpr>>>(
+          obj["projections"], context);
+  return std::make_shared<ExpandNode>(
+      deserializePlanNodeId(obj),
+      std::move(projections),
+      std::move(names),
+      std::move(source));
+}
+
+namespace {
 RowTypePtr getGroupIdOutputType(
     const std::vector<GroupIdNode::GroupingKeyInfo>& groupingKeyInfos,
     const std::vector<FieldAccessTypedExprPtr>& aggregationInputs,
@@ -2107,6 +2191,7 @@ void PlanNode::registerSerDe() {
   registry.Register("AssignUniqueIdNode", AssignUniqueIdNode::create);
   registry.Register("EnforceSingleRowNode", EnforceSingleRowNode::create);
   registry.Register("ExchangeNode", ExchangeNode::create);
+  registry.Register("ExpandNode", ExpandNode::create);
   registry.Register("FilterNode", FilterNode::create);
   registry.Register("GroupIdNode", GroupIdNode::create);
   registry.Register("HashJoinNode", HashJoinNode::create);

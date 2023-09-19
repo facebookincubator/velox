@@ -517,6 +517,18 @@ class PlanBuilder {
       const std::vector<std::string>& aggregationInputs,
       std::string groupIdName = "group_id");
 
+  /// Add an ExpandNode using specified projections. See comments for
+  /// ExpandNode class for description of this plan node.
+  ///
+  /// @param projections A list of projection expressions. Each value in one
+  /// projection is the column name, null or the const value.
+  ///
+  /// For example,
+  ///
+  ///     .expand({"a", "b", "", "1"})
+  ///
+  PlanBuilder& expand(const std::vector<std::vector<std::string>>& projections);
+
   /// Add a LocalMergeNode using specified ORDER BY clauses.
   ///
   /// For example,

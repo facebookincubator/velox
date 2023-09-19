@@ -273,6 +273,17 @@ TEST_F(PlanNodeToStringTest, aggregation) {
       plan->toString(true, false));
 }
 
+TEST_F(PlanNodeToStringTest, expand) {
+  auto plan = PlanBuilder()
+                  .values({data_})
+                  .expand({{"c0", "", "c2", "0"}, {"", "c1", "c2", "1"}})
+                  .planNode();
+  ASSERT_EQ("-- Expand\n", plan->toString());
+  ASSERT_EQ(
+      "-- Expand[[c0, null, c2, 0], [null, c1, c2, 1]] -> c0:SMALLINT, c1:INTEGER, c2:BIGINT, group_id_0:BIGINT\n",
+      plan->toString(true, false));
+}
+
 TEST_F(PlanNodeToStringTest, groupId) {
   auto plan = PlanBuilder()
                   .values({data_})
