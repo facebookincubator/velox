@@ -30,8 +30,7 @@ class ArrayMaxTest : public SparkFunctionBaseTest {
  protected:
   template <typename T>
   std::optional<T> arrayMax(const std::vector<std::optional<T>>& input) {
-    std::vector<std::vector<std::optional<T>>> vec = {input};
-    auto row = makeRowVector({makeNullableArrayVector(vec)});
+    auto row = makeRowVector({makeNullableArrayVector({input})});
     return evaluateOnce<T>("array_max(C0)", row);
   }
 };
