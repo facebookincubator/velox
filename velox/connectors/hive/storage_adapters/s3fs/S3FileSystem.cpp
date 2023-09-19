@@ -215,11 +215,10 @@ class S3WriteFile::Impl {
       const std::string& path,
       Aws::S3::S3Client* client,
       memory::MemoryPool* pool)
-      : client_(client) {
+      : client_(client), pool_(pool) {
     VELOX_CHECK_NOT_NULL(client);
     VELOX_CHECK_NOT_NULL(pool);
     getBucketAndKeyFromS3Path(path, bucket_, key_);
-    pool_ = pool->addLeafChild(".s3writefile");
     currentPart_ = std::make_unique<dwio::common::DataBuffer<char>>(*pool_);
     currentPart_->reserve(kPartUploadSize);
     // Check that the object doesn't exist, if it does throw an error.
@@ -383,9 +382,9 @@ class S3WriteFile::Impl {
     }
   }
 
-  std::shared_ptr<memory::MemoryPool> pool_;
-  std::unique_ptr<dwio::common::DataBuffer<char>> currentPart_;
   Aws::S3::S3Client* client_;
+  memory::MemoryPool* pool_;
+  std::unique_ptr<dwio::common::DataBuffer<char>> currentPart_;
   std::string bucket_;
   std::string key_;
   size_t fileSize_ = -1;
