@@ -64,19 +64,19 @@ class ComparisonFunction final : public exec::VectorFunction {
         flatResult->set(i, cmp(rawValues[i], constant));
       });
     } else {
-      // Fast path if one or more arguments are encoded.
+      // Path if one or more arguments are encoded.
       exec::DecodedArgs decodedArgs(rows, args, context);
-      auto decoded0 = decodedArgs.at(0);
-      auto decoded1 = decodedArgs.at(1);
+      auto decodedA = decodedArgs.at(0);
+      auto decodedB = decodedArgs.at(1);
       rows.applyToSelected([&](vector_size_t i) {
         flatResult->set(
-            i, cmp(decoded0->valueAt<T>(i), decoded1->valueAt<T>(i)));
+            i, cmp(decodedA->valueAt<T>(i), decodedB->valueAt<T>(i)));
       });
     }
   }
 };
 
-// BoolComparisonFunction for bool as it uses compact representation
+// ComparisonFunction instance for bool as it uses compact representation
 template <typename Cmp>
 class BoolComparisonFunction final : public exec::VectorFunction {
   bool supportsFlatNoNullsFastPath() const override {
@@ -126,11 +126,11 @@ class BoolComparisonFunction final : public exec::VectorFunction {
     } else {
       // Fast path if one or more arguments are encoded.
       exec::DecodedArgs decodedArgs(rows, args, context);
-      auto decoded0 = decodedArgs.at(0);
-      auto decoded1 = decodedArgs.at(1);
+      auto decodedA = decodedArgs.at(0);
+      auto decodedB = decodedArgs.at(1);
       rows.applyToSelected([&](vector_size_t i) {
         flatResult->set(
-            i, cmp(decoded0->valueAt<bool>(i), decoded1->valueAt<bool>(i)));
+            i, cmp(decodedA->valueAt<bool>(i), decodedB->valueAt<bool>(i)));
       });
     }
   }
@@ -176,8 +176,8 @@ template <TypeKind kind>
 void applyTyped(
     const SelectivityVector& rows,
     std::vector<VectorPtr>& args,
-    DecodedVector* decoded0,
-    DecodedVector* decoded1,
+    DecodedVector* decodedLhs,
+    DecodedVector* decodedRhs,
     exec::EvalCtx& context,
     FlatVector<bool>* flatResult) {
   using T = typename TypeTraits<kind>::NativeType;
@@ -187,13 +187,13 @@ void applyTyped(
     // When there is no nulls, it reduces to normal equality function
     rows.applyToSelected([&](vector_size_t i) {
       flatResult->set(
-          i, equal(decoded0->valueAt<T>(i), decoded1->valueAt<T>(i)));
+          i, equal(decodedLhs->valueAt<T>(i), decodedRhs->valueAt<T>(i)));
     });
   } else {
     // (isnull(a) AND isnull(b)) || (a == b)
     // When DecodedVector::nulls() is null it means there are no nulls.
-    auto* rawNulls0 = decoded0->nulls();
-    auto* rawNulls1 = decoded1->nulls();
+    auto* rawNulls0 = decodedLhs->nulls();
+    auto* rawNulls1 = decodedRhs->nulls();
     rows.applyToSelected([&](vector_size_t i) {
       auto isNull0 = rawNulls0 && bits::isBitNull(rawNulls0, i);
       auto isNull1 = rawNulls1 && bits::isBitNull(rawNulls1, i);
@@ -201,7 +201,7 @@ void applyTyped(
           i,
           (isNull0 || isNull1)
               ? isNull0 && isNull1
-              : equal(decoded0->valueAt<T>(i), decoded1->valueAt<T>(i)));
+              : equal(decodedLhs->valueAt<T>(i), decodedRhs->valueAt<T>(i)));
     });
   }
 }
@@ -210,33 +210,33 @@ template <>
 void applyTyped<TypeKind::ARRAY>(
     const SelectivityVector& /* rows */,
     std::vector<VectorPtr>& /* args */,
-    DecodedVector* /* decoded0 */,
-    DecodedVector* /* decoded1 */,
+    DecodedVector* /* decodedLhs */,
+    DecodedVector* /* decodedRhs */,
     exec::EvalCtx& /* context */,
     FlatVector<bool>* /* flatResult */) {
-  VELOX_NYI("equalnullsafe does not support arrays.");
+  VELOX_NYI("euqaltonullsafe does not support arrays.");
 }
 
 template <>
 void applyTyped<TypeKind::MAP>(
     const SelectivityVector& /* rows */,
     std::vector<VectorPtr>& /* args */,
-    DecodedVector* /* decoded0 */,
-    DecodedVector* /* decoded1 */,
+    DecodedVector* /* decodedLhs */,
+    DecodedVector* /* decodedRhs */,
     exec::EvalCtx& /* context */,
     FlatVector<bool>* /* flatResult */) {
-  VELOX_NYI("equalnullsafe does not support maps.");
+  VELOX_NYI("euqaltonullsafe does not support maps.");
 }
 
 template <>
 void applyTyped<TypeKind::ROW>(
     const SelectivityVector& /* rows */,
     std::vector<VectorPtr>& /* args */,
-    DecodedVector* /* decoded0 */,
-    DecodedVector* /* decoded1 */,
+    DecodedVector* /* decodedLhs */,
+    DecodedVector* /* decodedRhs */,
     exec::EvalCtx& /* context */,
     FlatVector<bool>* /* flatResult */) {
-  VELOX_NYI("equalnullsafe does not support structs.");
+  VELOX_NYI("euqaltonullsafe does not support structs.");
 }
 
 class EqualtoNullSafe final : public exec::VectorFunction {
@@ -253,8 +253,8 @@ class EqualtoNullSafe final : public exec::VectorFunction {
       VectorPtr& result) const override {
     exec::DecodedArgs decodedArgs(rows, args, context);
 
-    DecodedVector* decoded0 = decodedArgs.at(0);
-    DecodedVector* decoded1 = decodedArgs.at(1);
+    DecodedVector* decodedLhs = decodedArgs.at(0);
+    DecodedVector* decodedRhs = decodedArgs.at(1);
     context.ensureWritable(rows, BOOLEAN(), result);
     auto* flatResult = result->asUnchecked<FlatVector<bool>>();
     flatResult->mutableRawValues<int64_t>();
@@ -264,8 +264,8 @@ class EqualtoNullSafe final : public exec::VectorFunction {
         args[0]->typeKind(),
         rows,
         args,
-        decoded0,
-        decoded1,
+        decodedLhs,
+        decodedRhs,
         context,
         flatResult);
   }
@@ -308,7 +308,7 @@ std::shared_ptr<exec::VectorFunction> makeGreaterThanOrEqual(
   return makeImpl<GreaterOrEqual>(functionName, args);
 }
 
-std::shared_ptr<exec::VectorFunction> makeEqualNullSafe(
+std::shared_ptr<exec::VectorFunction> makeEqualToNullSafe(
     const std::string& name,
     const std::vector<exec::VectorFunctionArg>& inputArgs,
     const core::QueryConfig& /*config*/) {

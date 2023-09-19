@@ -153,7 +153,7 @@ equalNullSafeSignatures() {
               .build()};
 }
 
-std::shared_ptr<exec::VectorFunction> makeEqualNullSafe(
+std::shared_ptr<exec::VectorFunction> makeEqualToNullSafe(
     const std::string& name,
     const std::vector<exec::VectorFunctionArg>& inputArgs,
     const core::QueryConfig& config);

@@ -174,7 +174,7 @@ TEST_F(ComparisonsTest, testdecimal) {
       runAndCompare(
           fmt::format("{}(c1, c0)", "equalto"), invalidInputs, invalidResult),
       "Scalar function signature is not supported: "
-      "equalto(DECIMAL(10,4), DECIMAL(10,5))");
+      "equalto(DECIMAL(10, 4), DECIMAL(10, 5))");
 }
 
 TEST_F(ComparisonsTest, testdictionary) {
