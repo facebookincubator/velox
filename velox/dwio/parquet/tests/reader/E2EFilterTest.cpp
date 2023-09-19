@@ -55,7 +55,8 @@ class E2EFilterTest : public E2EFilterTestBase {
   void writeToMemory(
       const TypePtr&,
       const std::vector<RowVectorPtr>& batches,
-      bool forRowGroupSkip = false) override {
+      bool forRowGroupSkip = false,
+      const TypePtr& schema = nullptr) override {
     auto sink = std::make_unique<MemorySink>(
         200 * 1024 * 1024, FileSink::Options{.pool = leafPool_.get()});
     sinkPtr_ = sink.get();
@@ -69,6 +70,8 @@ class E2EFilterTest : public E2EFilterTestBase {
                 : (++flushCounter % flushEveryNBatches_ == 0);
           });
     };
+
+    options_.schema = schema;
 
     writer_ = std::make_unique<facebook::velox::parquet::Writer>(
         std::move(sink), options_);
@@ -613,6 +616,26 @@ TEST_F(E2EFilterTest, combineRowGroup) {
   auto parquetReader = dynamic_cast<ParquetReader&>(*reader.get());
   EXPECT_EQ(parquetReader.numberOfRowGroups(), 1);
   EXPECT_EQ(parquetReader.numberOfRows(), 5);
+}
+
+TEST_F(E2EFilterTest, configurableWriteSchema) {
+  rowType_ = ROW({"c0"}, {INTEGER()});
+  std::vector<RowVectorPtr> batches;
+  for (int i = 0; i < 5; i++) {
+    batches.push_back(std::static_pointer_cast<RowVector>(
+        test::BatchMaker::createBatch(rowType_, 1, *leafPool_, nullptr, 0)));
+  }
+
+  auto newType = ROW({"int32"}, {INTEGER()});
+  writeToMemory(rowType_, batches, false, newType);
+  std::string_view data(sinkPtr_->data(), sinkPtr_->size());
+  dwio::common::ReaderOptions readerOpts{leafPool_.get()};
+  auto input = std::make_unique<BufferedInput>(
+      std::make_shared<InMemoryReadFile>(data), readerOpts.getMemoryPool());
+  auto reader = makeReader(readerOpts, std::move(input));
+  auto parquetReader = dynamic_cast<ParquetReader&>(*reader.get());
+  EXPECT_EQ(parquetReader.rowType()->containsChild("int32"), true);
+  EXPECT_EQ(parquetReader.rowType()->containsChild("c0"), false);
 }
 
 // Define main so that gflags get processed.
