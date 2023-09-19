@@ -49,6 +49,22 @@ inline std::exception_ptr makeBadCastException(
       std::current_exception(),
       makeErrorMessage(input, row, resultType, errorDetails),
       false));
+}
+
+/// Represent the varchar fragment.
+///
+/// For example:
+/// | value | wholeDigits | fractionalDigits | exponent | sign
+/// | 9999999999.99 | 9999999999 | 99 | nullopt | 1
+/// | 15 | 15 |  | nullopt | 1
+/// | 1.5 | 1 | 5 | nullopt | 1
+/// | -1.5 | 1 | 5 | nullopt | -1
+/// | 31.523e-2 | 31 | 523 | -2 | 1
+struct DecimalComponents {
+  std::string_view wholeDigits;
+  std::string_view fractionalDigits;
+  std::optional<int32_t> exponent = std::nullopt;
+  int8_t sign = 1;
 };
 
 // Copied from format.h of fmt.
@@ -126,6 +142,215 @@ StringView convertToStringView(
   return StringView(startPosition, writePosition - startPosition);
 }
 
+size_t parseDigitsRun(
+    const char* s,
+    size_t start,
+    size_t size,
+    std::string_view& out) {
+  size_t pos = start;
+  for (; pos < size; ++pos) {
+    if (!std::isdigit(s[pos])) {
+      break;
+    }
+  }
+  out = std::string_view(s + start, pos - start);
+  return pos;
+}
+
+std::optional<DecimalComponents> parseDecimalComponents(
+    const char* s,
+    size_t size) {
+  if (size == 0) {
+    return std::nullopt;
+  }
+  DecimalComponents out;
+  size_t pos = 0;
+  // Sign of the number.
+  if (s[pos] == '-') {
+    out.sign = -1;
+    ++pos;
+  } else if (s[pos] == '+') {
+    out.sign = 1;
+    ++pos;
+  }
+  // First run of digits.
+  pos = parseDigitsRun(s, pos, size, out.wholeDigits);
+  if (pos == size) {
+    return out.wholeDigits.empty() ? std::nullopt
+                                   : std::optional<DecimalComponents>(out);
+  }
+  // Optional dot (if given in fractional form).
+  if (s[pos] == '.') {
+    // Second run of digits.
+    ++pos;
+    pos = parseDigitsRun(s, pos, size, out.fractionalDigits);
+  }
+  if (out.wholeDigits.empty() && out.fractionalDigits.empty()) {
+    // Need at least some digits (whole or fractional).
+    return std::nullopt;
+  }
+  if (pos == size) {
+    return out;
+  }
+  // Optional exponent.
+  if (s[pos] == 'e' || s[pos] == 'E') {
+    ++pos;
+    if (pos != size && s[pos] == '+') {
+      ++pos;
+    }
+    folly::StringPiece p = {s + pos, size - pos};
+    auto tryExp =
+        folly::tryTo<int32_t>(folly::StringPiece(s + pos, size - pos));
+    if (tryExp.hasError()) {
+      return std::nullopt;
+    }
+    out.exponent = tryExp.value();
+    return out;
+  }
+  return pos == size ? std::optional<DecimalComponents>(out) : std::nullopt;
+}
+
+/// Multiple out by the appropriate power of 10 necessary to add source parsed
+/// as int128_t and then adds the parsed value of source.
+bool shiftAndAdd(std::string_view input, int128_t& out) {
+  auto length = input.size();
+  if (length == 0) {
+    return true;
+  }
+
+  bool overflow =
+      __builtin_mul_overflow(out, DecimalUtil::kPowersOfTen[length], &out);
+  if (overflow) {
+    return false;
+  }
+  auto tryValue =
+      folly::tryTo<int128_t>(folly::StringPiece(input.data(), length));
+  if (tryValue.hasError()) {
+    return false;
+  }
+
+  overflow = __builtin_add_overflow(out, tryValue.value(), &out);
+  VELOX_DCHECK(!overflow)
+  return true;
+}
+
+/// Derives from Arrow function DecimalFromString.
+/// Arrow implementation:
+/// https://github.com/apache/arrow/blob/main/cpp/src/arrow/util/decimal.cc#L637
+///
+/// Firstly, it will parse the varchar to DecimalComponents which contains the
+/// message that can represent a value. Secondly, process the exponent to get
+/// the value parsedScale. Thirdly, compute the rescaled value.
+/// The caller should test if `error` is empty
+template <typename T>
+std::optional<T> rescaleVarchar(
+    const StringView s,
+    int toPrecision,
+    int toScale,
+    std::string& error) {
+  auto decimalComponentsOpt = parseDecimalComponents(s.data(), s.size());
+  if (!decimalComponentsOpt.has_value()) {
+    error = "Value is not a number.";
+    return std::nullopt;
+  }
+  auto decimalComponents = decimalComponentsOpt.value();
+
+  // Count number of significant digits (without leading zeros).
+  size_t firstNonZero = decimalComponents.wholeDigits.find_first_not_of('0');
+  size_t significantDigits = decimalComponents.fractionalDigits.size();
+  if (firstNonZero != std::string::npos) {
+    significantDigits += decimalComponents.wholeDigits.size() - firstNonZero;
+  }
+  int32_t parsedPrecision = static_cast<int32_t>(significantDigits);
+
+  int32_t parsedScale = 0;
+  bool addOne = false;
+  int32_t fractionalDigitsSize = decimalComponents.fractionalDigits.size();
+  if (decimalComponents.exponent.has_value()) {
+    auto adjustedExponent = decimalComponents.exponent.value();
+    parsedScale = -adjustedExponent + fractionalDigitsSize;
+    // Truncate the fractionalDigits.
+    if (parsedScale > toScale) {
+      // adjustedExponent is negative, fractionalDigits only consider the last
+      // digit to round up.
+      if (-adjustedExponent >= toScale) {
+        if (fractionalDigitsSize > 0 &&
+            decimalComponents.fractionalDigits[0] >= '5') {
+          addOne = true;
+        }
+        decimalComponents.fractionalDigits = "";
+        parsedScale -= fractionalDigitsSize;
+      } else {
+        auto reduceDigits = adjustedExponent + toScale;
+        if (fractionalDigitsSize > reduceDigits &&
+            decimalComponents.fractionalDigits[reduceDigits] >= '5') {
+          addOne = true;
+        }
+        decimalComponents.fractionalDigits = std::string_view(
+            decimalComponents.fractionalDigits.data(),
+            std::min(reduceDigits, fractionalDigitsSize));
+        parsedScale -=
+            fractionalDigitsSize - decimalComponents.fractionalDigits.size();
+      }
+    }
+  } else {
+    if (fractionalDigitsSize > toScale) {
+      if (decimalComponents.fractionalDigits[toScale] >= '5') {
+        addOne = true;
+      }
+      parsedScale = toScale;
+      decimalComponents.fractionalDigits =
+          std::string_view(decimalComponents.fractionalDigits.data(), toScale);
+    } else {
+      parsedScale = fractionalDigitsSize;
+    }
+  }
+
+  int128_t out = 0;
+  if (!shiftAndAdd(decimalComponents.wholeDigits, out)) {
+    error = "Value too large.";
+    return std::nullopt;
+  }
+
+  if (!shiftAndAdd(decimalComponents.fractionalDigits, out)) {
+    error = "Value too large.";
+    return std::nullopt;
+  }
+  if (addOne) {
+    bool overflow = __builtin_add_overflow(out, 1, &out);
+    if (UNLIKELY(overflow)) {
+      error = "Value too large.";
+      return std::nullopt;
+    }
+  }
+  out = out * decimalComponents.sign;
+
+  if (parsedScale < 0) {
+    /// Force the scale to zero, to avoid negative scales (due to
+    /// compatibility issues with external systems such as databases).
+    if (-parsedScale + toScale > LongDecimalType::kMaxScale) {
+      error = "Value too large.";
+      return std::nullopt;
+    }
+
+    bool overflow = __builtin_mul_overflow(
+        out, DecimalUtil::kPowersOfTen[-parsedScale + toScale], &out);
+    if (UNLIKELY(overflow)) {
+      error = "Value too large.";
+      return std::nullopt;
+    }
+    parsedPrecision -= parsedScale;
+    parsedScale = toScale;
+  }
+  bool overflow = false;
+  auto rescaledValue = DecimalUtil::rescaleWithRoundUp<int128_t, T>(
+      out, parsedPrecision, parsedScale, toPrecision, toScale, overflow, false);
+  if (overflow) {
+    error = "Value too large.";
+    return std::nullopt;
+  }
+  return rescaledValue;
+}
 } // namespace
 
 template <bool adjustForTimeZone>
@@ -262,12 +487,14 @@ void CastExpr::applyDecimalCastKernel(
 
   applyToSelectedNoThrowLocal(
       context, rows, castResult, [&](vector_size_t row) {
+        bool overflow = false;
         auto rescaledValue = DecimalUtil::rescaleWithRoundUp<TInput, TOutput>(
             sourceVector->valueAt(row),
             fromPrecisionScale.first,
             fromPrecisionScale.second,
             toPrecisionScale.first,
-            toPrecisionScale.second);
+            toPrecisionScale.second,
+            overflow);
         if (rescaledValue.has_value()) {
           castResultRawBuffer[row] = rescaledValue.value();
         } else {
@@ -299,6 +526,42 @@ void CastExpr::applyIntToDecimalCastKernel(
           castResult->setNull(row, true);
         }
       });
+}
+
+template <typename T>
+void CastExpr::applyVarcharToDecimalCastKernel(
+    const SelectivityVector& rows,
+    const BaseVector& input,
+    exec::EvalCtx& context,
+    const TypePtr& toType,
+    VectorPtr& result) {
+  auto sourceVector = input.as<SimpleVector<StringView>>();
+  auto rawBuffer = result->asUnchecked<FlatVector<T>>()->mutableRawValues();
+  const auto toPrecisionScale = getDecimalPrecisionScale(*toType);
+  auto setError = [&](vector_size_t row, const std::string& details) {
+    if (setNullInResultAtError()) {
+      result->setNull(row, true);
+    } else {
+      context.setVeloxExceptionError(
+          row, makeBadCastException(toType, input, row, details));
+    }
+  };
+
+  rows.applyToSelected([&](auto row) {
+    std::string error;
+    auto rescaledValue = rescaleVarchar<T>(
+        sourceVector->valueAt(row),
+        toPrecisionScale.first,
+        toPrecisionScale.second,
+        error);
+    if (!error.empty()) {
+      setError(row, error);
+    } else if (rescaledValue.has_value()) {
+      rawBuffer[row] = rescaledValue.value();
+    } else {
+      result->setNull(row, true);
+    }
+  });
 }
 
 template <typename FromNativeType, TypeKind ToKind>

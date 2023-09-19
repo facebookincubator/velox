@@ -151,10 +151,11 @@ class DecimalUtil {
       const int fromPrecision,
       const int fromScale,
       const int toPrecision,
-      const int toScale) {
+      const int toScale,
+      bool& isOverflow,
+      bool throwIfOverflow = true) {
     int128_t rescaledValue = inputValue;
     auto scaleDifference = toScale - fromScale;
-    bool isOverflow = false;
     if (scaleDifference >= 0) {
       isOverflow = __builtin_mul_overflow(
           rescaledValue,
@@ -173,11 +174,15 @@ class DecimalUtil {
     }
     // Check overflow.
     if (!valueInPrecisionRange(rescaledValue, toPrecision) || isOverflow) {
-      VELOX_USER_FAIL(
-          "Cannot cast DECIMAL '{}' to DECIMAL({}, {})",
-          DecimalUtil::toString(inputValue, DECIMAL(fromPrecision, fromScale)),
-          toPrecision,
-          toScale);
+      if (throwIfOverflow) {
+        VELOX_USER_FAIL(
+            "Cannot cast DECIMAL '{}' to DECIMAL({}, {})",
+            DecimalUtil::toString(inputValue, DECIMAL(fromPrecision, fromScale)),
+            toPrecision,
+            toScale);
+      } else {
+        isOverflow = true;
+      }
     }
     return static_cast<TOutput>(rescaledValue);
   }
