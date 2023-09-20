@@ -47,30 +47,31 @@ TEST_F(ArrayMaxTest, boolean) {
 }
 
 TEST_F(ArrayMaxTest, varchar) {
-  EXPECT_EQ(arrayMax<StringView>({"red"_sv, "blue"_sv}), "red"_sv);
+  EXPECT_EQ(arrayMax<std::string>({"red"_sv, "blue"_sv}), "red"_sv);
   EXPECT_EQ(
-      arrayMax<StringView>({std::nullopt, "blue"_sv, "yellow"_sv, "orange"_sv}),
+      arrayMax<std::string>(
+          {std::nullopt, "blue"_sv, "yellow"_sv, "orange"_sv}),
       "yellow"_sv);
-  EXPECT_EQ(arrayMax<StringView>({}), std::nullopt);
-  EXPECT_EQ(arrayMax<StringView>({std::nullopt}), std::nullopt);
+  EXPECT_EQ(arrayMax<std::string>({}), std::nullopt);
+  EXPECT_EQ(arrayMax<std::string>({std::nullopt}), std::nullopt);
 }
 
 // Test non-inlined (> 12 length) nullable strings.
 TEST_F(ArrayMaxTest, longVarchar) {
   EXPECT_EQ(
-      arrayMax<StringView>(
+      arrayMax<std::string>(
           {"red shiny car ahead"_sv, "blue clear sky above"_sv}),
       "red shiny car ahead"_sv);
   EXPECT_EQ(
-      arrayMax<StringView>(
+      arrayMax<std::string>(
           {std::nullopt,
            "blue clear sky above"_sv,
            "yellow rose flowers"_sv,
            "orange beautiful sunset"_sv}),
       "yellow rose flowers"_sv);
-  EXPECT_EQ(arrayMax<StringView>({}), std::nullopt);
+  EXPECT_EQ(arrayMax<std::string>({}), std::nullopt);
   EXPECT_EQ(
-      arrayMax<StringView>(
+      arrayMax<std::string>(
           {"red shiny car ahead"_sv,
            "purple is an elegant color"_sv,
            "green plants make us happy"_sv}),
@@ -78,22 +79,23 @@ TEST_F(ArrayMaxTest, longVarchar) {
 }
 
 TEST_F(ArrayMaxTest, date) {
-  auto D = [](const std::string& dateStr) { return DATE()->toDays(dateStr); };
+  auto dt = [](const std::string& dateStr) { return DATE()->toDays(dateStr); };
   EXPECT_EQ(
-      arrayMax<int32_t>({D("1970-01-01"), D("2023-08-23")}), D("2023-08-23"));
+      arrayMax<int32_t>({dt("1970-01-01"), dt("2023-08-23")}),
+      dt("2023-08-23"));
   EXPECT_EQ(arrayMax<int32_t>({}), std::nullopt);
   EXPECT_EQ(
-      arrayMax<int32_t>({D("1970-01-01"), std::nullopt}), D("1970-01-01"));
+      arrayMax<int32_t>({dt("1970-01-01"), std::nullopt}), dt("1970-01-01"));
 }
 
 TEST_F(ArrayMaxTest, timestamp) {
-  auto T = [](int64_t micros) { return Timestamp::fromMicros(micros); };
-  EXPECT_EQ(arrayMax<Timestamp>({T(0), T(1)}), T(1));
+  auto ts = [](int64_t micros) { return Timestamp::fromMicros(micros); };
+  EXPECT_EQ(arrayMax<Timestamp>({ts(0), ts(1)}), ts(1));
   EXPECT_EQ(
-      arrayMax<Timestamp>({T(0), T(1), Timestamp::max(), Timestamp::min()}),
+      arrayMax<Timestamp>({ts(0), ts(1), Timestamp::max(), Timestamp::min()}),
       Timestamp::max());
   EXPECT_EQ(arrayMax<Timestamp>({}), std::nullopt);
-  EXPECT_EQ(arrayMax<Timestamp>({T(0), std::nullopt}), T(0));
+  EXPECT_EQ(arrayMax<Timestamp>({ts(0), std::nullopt}), ts(0));
 }
 
 template <typename Type>

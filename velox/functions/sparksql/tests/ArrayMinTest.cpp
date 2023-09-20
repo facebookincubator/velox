@@ -49,30 +49,31 @@ TEST_F(ArrayMinTest, boolean) {
 } // namespace
 
 TEST_F(ArrayMinTest, varchar) {
-  EXPECT_EQ(arrayMin<StringView>({"red"_sv, "blue"_sv}), "blue"_sv);
+  EXPECT_EQ(arrayMin<std::string>({"red"_sv, "blue"_sv}), "blue"_sv);
   EXPECT_EQ(
-      arrayMin<StringView>({std::nullopt, "blue"_sv, "yellow"_sv, "orange"_sv}),
+      arrayMin<std::string>(
+          {std::nullopt, "blue"_sv, "yellow"_sv, "orange"_sv}),
       "blue"_sv);
-  EXPECT_EQ(arrayMin<StringView>({}), std::nullopt);
-  EXPECT_EQ(arrayMin<StringView>({std::nullopt}), std::nullopt);
+  EXPECT_EQ(arrayMin<std::string>({}), std::nullopt);
+  EXPECT_EQ(arrayMin<std::string>({std::nullopt}), std::nullopt);
 }
 
 // Test non-inlined (> 12 length) nullable strings.
 TEST_F(ArrayMinTest, longVarchar) {
   EXPECT_EQ(
-      arrayMin<StringView>(
+      arrayMin<std::string>(
           {"red shiny car ahead"_sv, "blue clear sky above"_sv}),
       "blue clear sky above"_sv);
   EXPECT_EQ(
-      arrayMin<StringView>(
+      arrayMin<std::string>(
           {std::nullopt,
            "blue clear sky above"_sv,
            "yellow rose flowers"_sv,
            "orange beautiful sunset"_sv}),
       "blue clear sky above"_sv);
-  EXPECT_EQ(arrayMin<StringView>({}), std::nullopt);
+  EXPECT_EQ(arrayMin<std::string>({}), std::nullopt);
   EXPECT_EQ(
-      arrayMin<StringView>(
+      arrayMin<std::string>(
           {"red shiny car ahead"_sv,
            "purple is an elegant color"_sv,
            "green plants make us happy"_sv}),
@@ -80,22 +81,23 @@ TEST_F(ArrayMinTest, longVarchar) {
 }
 
 TEST_F(ArrayMinTest, date) {
-  auto D = [](const std::string& dateStr) { return DATE()->toDays(dateStr); };
+  auto dt = [](const std::string& dateStr) { return DATE()->toDays(dateStr); };
   EXPECT_EQ(
-      arrayMin<int32_t>({D("1970-01-01"), D("2023-08-23")}), D("1970-01-01"));
+      arrayMin<int32_t>({dt("1970-01-01"), dt("2023-08-23")}),
+      dt("1970-01-01"));
   EXPECT_EQ(arrayMin<int32_t>({}), std::nullopt);
   EXPECT_EQ(
-      arrayMin<int32_t>({D("1970-01-01"), std::nullopt}), D("1970-01-01"));
+      arrayMin<int32_t>({dt("1970-01-01"), std::nullopt}), dt("1970-01-01"));
 }
 
 TEST_F(ArrayMinTest, timestamp) {
-  auto T = [](int64_t micros) { return Timestamp::fromMicros(micros); };
-  EXPECT_EQ(arrayMin<Timestamp>({T(0), T(1)}), T(0));
+  auto ts = [](int64_t micros) { return Timestamp::fromMicros(micros); };
+  EXPECT_EQ(arrayMin<Timestamp>({ts(0), ts(1)}), ts(0));
   EXPECT_EQ(
-      arrayMin<Timestamp>({T(0), T(1), Timestamp::max(), Timestamp::min()}),
+      arrayMin<Timestamp>({ts(0), ts(1), Timestamp::max(), Timestamp::min()}),
       Timestamp::min());
   EXPECT_EQ(arrayMin<Timestamp>({}), std::nullopt);
-  EXPECT_EQ(arrayMin<Timestamp>({T(0), std::nullopt}), T(0));
+  EXPECT_EQ(arrayMin<Timestamp>({ts(0), std::nullopt}), ts(0));
 }
 
 template <typename Type>
