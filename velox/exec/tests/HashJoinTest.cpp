@@ -5751,6 +5751,63 @@ DEBUG_ONLY_TEST_F(HashJoinTest, hashBuildAbortDuringInputgProcessing) {
   }
 }
 
+TEST_F(HashJoinTest, malformedDictEvalFilter) {
+  /*
+   * The last row of previous batch did not pass the filter.
+   * Forcing it be included as the first row of next batch.
+   * This leads to 2 problems:
+   * 1. Incorrect row count.
+   * 2. The first row of final batch passes the filter, row count
+   * is incorrect as well as the final output dictionary is corrupted.
+   */
+  auto probeVectors = std::vector<RowVectorPtr>{makeRowVector(
+      {"t_k1", "t_k2"},
+      {makeFlatVector<int32_t>(20, [](auto row) { return 1 + row % 2; }),
+       makeFlatVector<int32_t>(20, [](auto row) { return row; })})};
+  auto buildVectors = std::vector<RowVectorPtr>{
+      makeRowVector({"u_k1"}, {makeFlatVector<int32_t>({1, 2})})};
+  createDuckDbTable("t", probeVectors);
+  createDuckDbTable("u", {buildVectors});
+  auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
+
+  std::vector<std::string> filters = {
+      "t_k1=1", /* Alternate rows pass this
+                   filter and last row of a
+                   batch fails.*/
+      "t_k1=5", /* All rows fail this filter */
+      "t_k2>9" /* All rows in second batch pass*/
+  };
+
+  for (auto filter : filters) {
+    auto plan = PlanBuilder(planNodeIdGenerator)
+                    .values(probeVectors, true)
+                    .hashJoin(
+                        {"t_k1"},
+                        {"u_k1"},
+                        PlanBuilder(planNodeIdGenerator)
+                            .values(buildVectors, true)
+                            .planNode(),
+                        filter,
+                        {"t_k1", "u_k1"},
+                        core::JoinType::kLeft)
+                    .planNode();
+
+    HashJoinBuilder(*pool_, duckDbQueryRunner_, driverExecutor_.get())
+        .planNode(plan)
+        .injectSpill(false)
+        .checkSpillStats(false)
+        .spillMemoryThreshold(1)
+        .maxSpillLevel(0)
+        .numDrivers(1)
+        .config(
+            core::QueryConfig::kPreferredOutputBatchRows, std::to_string(10))
+        .referenceQuery(fmt::format(
+            "SELECT t_k1, u_k1 from t left join u on t_k1 = u_k1 and {}",
+            filter))
+        .run();
+  }
+}
+
 DEBUG_ONLY_TEST_F(HashJoinTest, hashProbeAbortDuringInputProcessing) {
   constexpr int64_t kMaxBytes = 1LL << 30; // 1GB
   VectorFuzzer fuzzer({.vectorSize = 1000}, pool());
