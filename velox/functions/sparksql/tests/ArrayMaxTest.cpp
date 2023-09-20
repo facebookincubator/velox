@@ -30,7 +30,8 @@ class ArrayMaxTest : public SparkFunctionBaseTest {
  protected:
   template <typename T>
   std::optional<T> arrayMax(const std::vector<std::optional<T>>& input) {
-    auto row = makeRowVector({makeNullableArrayVector({input})});
+    auto row = makeRowVector({makeNullableArrayVector(
+        std::vector<std::vector<std::optional<T>>>{input})});
     return evaluateOnce<T>("array_max(C0)", row);
   }
 };
@@ -101,66 +102,48 @@ TEST_F(ArrayMaxTest, timestamp) {
 template <typename Type>
 class ArrayMaxIntegralTest : public ArrayMaxTest {
  public:
-  using T = typename Type::NativeType::NativeType;
-
-  void runTest() {
-    EXPECT_EQ(
-        arrayMax<T>(
-            {std::numeric_limits<T>::min(),
-             0,
-             1,
-             2,
-             3,
-             std::numeric_limits<T>::max()}),
-        std::numeric_limits<T>::max());
-    EXPECT_EQ(
-        arrayMax<T>(
-            {std::numeric_limits<T>::max(),
-             3,
-             2,
-             1,
-             0,
-             -1,
-             std::numeric_limits<T>::min()}),
-        std::numeric_limits<T>::max());
-    EXPECT_EQ(
-        arrayMax<T>(
-            {101, 102, 103, std::numeric_limits<T>::max(), std::nullopt}),
-        std::numeric_limits<T>::max());
-    EXPECT_EQ(
-        arrayMax<T>({std::nullopt, -1, -2, -3, std::numeric_limits<T>::min()}),
-        -1);
-    EXPECT_EQ(arrayMax<T>({}), std::nullopt);
-    EXPECT_EQ(arrayMax<T>({std::nullopt}), std::nullopt);
-  }
+  using NATIVE_TYPE = typename Type::NativeType::NativeType;
 };
 
 TYPED_TEST_SUITE(ArrayMaxIntegralTest, FunctionBaseTest::IntegralTypes);
 
 TYPED_TEST(ArrayMaxIntegralTest, basic) {
-  this->runTest();
+  using T = typename TestFixture::NATIVE_TYPE;
+  EXPECT_EQ(
+      this->template arrayMax<T>(
+          {std::numeric_limits<T>::min(),
+           0,
+           1,
+           2,
+           3,
+           std::numeric_limits<T>::max()}),
+      std::numeric_limits<T>::max());
+  EXPECT_EQ(
+      this->template arrayMax<T>(
+          {std::numeric_limits<T>::max(),
+           3,
+           2,
+           1,
+           0,
+           -1,
+           std::numeric_limits<T>::min()}),
+      std::numeric_limits<T>::max());
+  EXPECT_EQ(
+      this->template arrayMax<T>(
+          {101, 102, 103, std::numeric_limits<T>::max(), std::nullopt}),
+      std::numeric_limits<T>::max());
+  EXPECT_EQ(
+      this->template arrayMax<T>(
+          {std::nullopt, -1, -2, -3, std::numeric_limits<T>::min()}),
+      -1);
+  EXPECT_EQ(this->template arrayMax<T>({}), std::nullopt);
+  EXPECT_EQ(this->template arrayMax<T>({std::nullopt}), std::nullopt);
 }
 
 template <typename Type>
 class ArrayMaxFloatingPointTest : public ArrayMaxTest {
  public:
-  using T = typename Type::NativeType::NativeType;
-  static constexpr T kMin = std::numeric_limits<T>::lowest();
-  static constexpr T kMax = std::numeric_limits<T>::max();
-  static constexpr T kNaN = std::numeric_limits<T>::quiet_NaN();
-
-  void runTest() {
-    EXPECT_FLOAT_EQ(arrayMax<T>({0.0000, 0.00001}).value(), 0.00001);
-    EXPECT_FLOAT_EQ(
-        arrayMax<T>({std::nullopt, 1.1, 1.11, -2.2, -1.0, kMin}).value(), 1.11);
-    EXPECT_EQ(arrayMax<T>({}), std::nullopt);
-    EXPECT_FLOAT_EQ(
-        arrayMax<T>({kMin, 1.1, 1.22222, 1.33, std::nullopt}).value(), 1.33);
-    EXPECT_FLOAT_EQ(arrayMax<T>({-0.00001, -0.0002, 0.0001}).value(), 0.0001);
-
-    EXPECT_TRUE(std::isnan(
-        arrayMax<T>({kMin, -0.0001, -0.0002, -0.0003, kMax, kNaN}).value()));
-  }
+  using NATIVE_TYPE = typename Type::NativeType::NativeType;
 };
 
 TYPED_TEST_SUITE(
@@ -168,7 +151,28 @@ TYPED_TEST_SUITE(
     FunctionBaseTest::FloatingPointTypes);
 
 TYPED_TEST(ArrayMaxFloatingPointTest, basic) {
-  this->runTest();
+  using T = typename TestFixture::NATIVE_TYPE;
+  static constexpr T kMin = std::numeric_limits<T>::lowest();
+  static constexpr T kMax = std::numeric_limits<T>::max();
+  static constexpr T kNaN = std::numeric_limits<T>::quiet_NaN();
+
+  EXPECT_FLOAT_EQ(
+      this->template arrayMax<T>({0.0000, 0.00001}).value(), 0.00001);
+  EXPECT_FLOAT_EQ(
+      this->template arrayMax<T>({std::nullopt, 1.1, 1.11, -2.2, -1.0, kMin})
+          .value(),
+      1.11);
+  EXPECT_EQ(this->template arrayMax<T>({}), std::nullopt);
+  EXPECT_FLOAT_EQ(
+      this->template arrayMax<T>({kMin, 1.1, 1.22222, 1.33, std::nullopt})
+          .value(),
+      1.33);
+  EXPECT_FLOAT_EQ(
+      this->template arrayMax<T>({-0.00001, -0.0002, 0.0001}).value(), 0.0001);
+
+  EXPECT_TRUE(std::isnan(
+      this->template arrayMax<T>({kMin, -0.0001, -0.0002, -0.0003, kMax, kNaN})
+          .value()));
 }
 
 } // namespace

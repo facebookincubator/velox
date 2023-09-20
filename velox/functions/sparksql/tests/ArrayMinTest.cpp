@@ -31,8 +31,8 @@ class ArrayMinTest : public SparkFunctionBaseTest {
  protected:
   template <typename T>
   std::optional<T> arrayMin(const std::vector<std::optional<T>>& input) {
-    std::vector<std::vector<std::optional<T>>> vec = {input};
-    auto row = makeRowVector({makeNullableArrayVector(vec)});
+    auto row = makeRowVector({makeNullableArrayVector(
+        std::vector<std::vector<std::optional<T>>>{input})});
     return evaluateOnce<T>("array_min(C0)", row);
   }
 };
@@ -103,63 +103,48 @@ TEST_F(ArrayMinTest, timestamp) {
 template <typename Type>
 class ArrayMinIntegralTest : public ArrayMinTest {
  public:
-  using T = typename Type::NativeType::NativeType;
-
-  void runTest() {
-    EXPECT_EQ(
-        arrayMin<T>(
-            {std::numeric_limits<T>::min(),
-             0,
-             1,
-             2,
-             3,
-             std::numeric_limits<T>::max()}),
-        std::numeric_limits<T>::min());
-    EXPECT_EQ(
-        arrayMin<T>(
-            {std::numeric_limits<T>::max(),
-             3,
-             2,
-             1,
-             0,
-             -1,
-             std::numeric_limits<T>::min()}),
-        std::numeric_limits<T>::min());
-    EXPECT_EQ(
-        arrayMin<T>(
-            {101, 102, 103, std::numeric_limits<T>::max(), std::nullopt}),
-        101);
-    EXPECT_EQ(
-        arrayMin<T>({std::nullopt, -1, -2, -3, std::numeric_limits<T>::min()}),
-        std::numeric_limits<T>::min());
-    EXPECT_EQ(arrayMin<T>({}), std::nullopt);
-    EXPECT_EQ(arrayMin<T>({std::nullopt}), std::nullopt);
-  }
+  using NATIVE_TYPE = typename Type::NativeType::NativeType;
 };
 
 TYPED_TEST_SUITE(ArrayMinIntegralTest, FunctionBaseTest::IntegralTypes);
 
 TYPED_TEST(ArrayMinIntegralTest, basic) {
-  this->runTest();
+  using T = typename TestFixture::NATIVE_TYPE;
+  EXPECT_EQ(
+      this->template arrayMin<T>(
+          {std::numeric_limits<T>::min(),
+           0,
+           1,
+           2,
+           3,
+           std::numeric_limits<T>::max()}),
+      std::numeric_limits<T>::min());
+  EXPECT_EQ(
+      this->template arrayMin<T>(
+          {std::numeric_limits<T>::max(),
+           3,
+           2,
+           1,
+           0,
+           -1,
+           std::numeric_limits<T>::min()}),
+      std::numeric_limits<T>::min());
+  EXPECT_EQ(
+      this->template arrayMin<T>(
+          {101, 102, 103, std::numeric_limits<T>::max(), std::nullopt}),
+      101);
+  EXPECT_EQ(
+      this->template arrayMin<T>(
+          {std::nullopt, -1, -2, -3, std::numeric_limits<T>::min()}),
+      std::numeric_limits<T>::min());
+  EXPECT_EQ(this->template arrayMin<T>({}), std::nullopt);
+  EXPECT_EQ(this->template arrayMin<T>({std::nullopt}), std::nullopt);
 }
 
 template <typename Type>
 class ArrayMinFloatingPointTest : public ArrayMinTest {
  public:
-  using T = typename Type::NativeType::NativeType;
-  static constexpr T kMin = std::numeric_limits<T>::lowest();
-  static constexpr T kMax = std::numeric_limits<T>::max();
-  static constexpr T kNaN = std::numeric_limits<T>::quiet_NaN();
-
-  void runTest() {
-    EXPECT_EQ(arrayMin<T>({0.0000, 0.00001}), 0.0000);
-    EXPECT_EQ(arrayMin<T>({std::nullopt, 1.1, 1.11, -2.2, -1.0, kMin}), kMin);
-    EXPECT_EQ(arrayMin<T>({}), std::nullopt);
-    EXPECT_EQ(arrayMin<T>({kMin, 1.1, 1.22222, 1.33, std::nullopt}), kMin);
-    EXPECT_FLOAT_EQ(arrayMin<T>({-0.00001, -0.0002, 0.0001}).value(), -0.0002);
-    EXPECT_FLOAT_EQ(
-        arrayMin<T>({-0.0001, -0.0002, kMax, kNaN}).value(), -0.0002);
-  }
+  using NATIVE_TYPE = typename Type::NativeType::NativeType;
 };
 
 TYPED_TEST_SUITE(
@@ -167,7 +152,24 @@ TYPED_TEST_SUITE(
     FunctionBaseTest::FloatingPointTypes);
 
 TYPED_TEST(ArrayMinFloatingPointTest, basic) {
-  this->runTest();
+  using T = typename TestFixture::NATIVE_TYPE;
+  static constexpr T kMin = std::numeric_limits<T>::lowest();
+  static constexpr T kMax = std::numeric_limits<T>::max();
+  static constexpr T kNaN = std::numeric_limits<T>::quiet_NaN();
+
+  EXPECT_EQ(this->template arrayMin<T>({0.0000, 0.00001}), 0.0000);
+  EXPECT_EQ(
+      this->template arrayMin<T>({std::nullopt, 1.1, 1.11, -2.2, -1.0, kMin}),
+      kMin);
+  EXPECT_EQ(this->template arrayMin<T>({}), std::nullopt);
+  EXPECT_EQ(
+      this->template arrayMin<T>({kMin, 1.1, 1.22222, 1.33, std::nullopt}),
+      kMin);
+  EXPECT_FLOAT_EQ(
+      this->template arrayMin<T>({-0.00001, -0.0002, 0.0001}).value(), -0.0002);
+  EXPECT_FLOAT_EQ(
+      this->template arrayMin<T>({-0.0001, -0.0002, kMax, kNaN}).value(),
+      -0.0002);
 }
 
 } // namespace
