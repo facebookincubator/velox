@@ -14,9 +14,11 @@
  * limitations under the License.
  */
 
+#include "velox/common/base/Fs.h"
 #include "velox/dwio/common/tests/E2EFilterTestBase.h"
 #include "velox/dwio/parquet/reader/ParquetReader.h"
 #include "velox/dwio/parquet/writer/Writer.h"
+#include "velox/exec/tests/utils/TempDirectoryPath.h"
 
 #include <folly/init/Init.h>
 
@@ -79,30 +81,60 @@ class E2EFilterTest : public E2EFilterTestBase {
     writer_->close();
   }
 
-  void writeToMemoryAbort(const std::vector<RowVectorPtr>& batches) {
-    auto sink = std::make_unique<MemorySink>(
-        200 * 1024 * 1024, FileSink::Options{.pool = leafPool_.get()});
-    sinkPtr_ = sink.get();
+  std::unique_ptr<dwio::common::Reader> makeReader(
+      const dwio::common::ReaderOptions& opts,
+      std::unique_ptr<dwio::common::BufferedInput> input) override {
+    return std::make_unique<ParquetReader>(std::move(input), opts);
+  }
+
+  void testLocalFileSinkCloseAbort(bool isAbort) {
+    auto rowType = ROW({INTEGER()});
+    std::vector<RowVectorPtr> batches;
+    batches.push_back(std::static_pointer_cast<RowVector>(
+        test::BatchMaker::createBatch(rowType, 2, *leafPool_, nullptr, 0)));
+    LocalFileSink::registerFactory();
+    auto root = exec::test::TempDirectoryPath::create();
+    auto filePath = fs::path(root->path) / "xxx/yyy/zzz/test_file.ext";
+
+    ASSERT_FALSE(fs::exists(filePath.string()));
+    auto sink = FileSink::create(
+        fmt::format("file:{}", filePath.string()), {.pool = leafPool_.get()});
+    ASSERT_TRUE(sink->isBuffered());
+    EXPECT_TRUE(fs::exists(filePath.string()));
+
     options_.memoryPool = rootPool_.get();
     options_.flushPolicyFactory = [&]() {
       return std::make_unique<LambdaFlushPolicy>(
           rowsInRowGroup_, bytesInRowGroup_, [&]() { return false; });
     };
 
-    writer_ = std::make_unique<facebook::velox::parquet::Writer>(
+    auto sinkPtr = sink.get();
+    EXPECT_FALSE(sinkPtr->isClosed());
+
+    auto writer = std::make_unique<facebook::velox::parquet::Writer>(
         std::move(sink), options_);
     for (auto& batch : batches) {
-      writer_->write(batch);
+      writer->write(batch);
     }
-    EXPECT_NE(nullptr, sinkPtr_->data());
-    writer_->abort();
-    EXPECT_EQ(nullptr, sinkPtr_->data());
-  }
+    writer->flush();
+    auto size = sinkPtr->size();
+    EXPECT_EQ(size, fs::file_size(filePath));
 
-  std::unique_ptr<dwio::common::Reader> makeReader(
-      const dwio::common::ReaderOptions& opts,
-      std::unique_ptr<dwio::common::BufferedInput> input) override {
-    return std::make_unique<ParquetReader>(std::move(input), opts);
+    batches.clear();
+    batches.push_back(std::static_pointer_cast<RowVector>(
+        test::BatchMaker::createBatch(rowType, 2, *leafPool_, nullptr, 0)));
+    for (auto& batch : batches) {
+      writer->write(batch);
+    }
+
+    // Close would do flush, abort would not.
+    if (isAbort) {
+      writer->abort();
+      EXPECT_EQ(size, fs::file_size(filePath));
+    } else {
+      writer->close();
+      EXPECT_LT(size, fs::file_size(filePath));
+    }
   }
 
   std::unique_ptr<facebook::velox::parquet::Writer> writer_;
@@ -635,12 +667,12 @@ TEST_F(E2EFilterTest, combineRowGroup) {
   EXPECT_EQ(parquetReader.numberOfRows(), 5);
 }
 
+TEST_F(E2EFilterTest, close) {
+  testLocalFileSinkCloseAbort(false);
+}
+
 TEST_F(E2EFilterTest, abort) {
-  rowType_ = ROW({INTEGER()});
-  std::vector<RowVectorPtr> batches;
-  batches.push_back(std::static_pointer_cast<RowVector>(
-      test::BatchMaker::createBatch(rowType_, 2, *leafPool_, nullptr, 0)));
-  writeToMemoryAbort(batches);
+  testLocalFileSinkCloseAbort(true);
 }
 
 // Define main so that gflags get processed.

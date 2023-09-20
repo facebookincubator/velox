@@ -84,8 +84,7 @@ class ArrowDataBufferSink : public ::arrow::io::OutputStream {
   }
 
   void abort() {
-    sink_->close();
-    sink_ = nullptr;
+    sink_.reset();
     buffer_.clear();
   }
 
@@ -277,10 +276,6 @@ void Writer::close() {
 
 void Writer::abort() {
   stream_->abort();
-  if (arrowContext_->writer) {
-    arrowContext_->writer.reset();
-  }
-  arrowContext_->stagingChunks.clear();
   arrowContext_.reset();
 }
 
