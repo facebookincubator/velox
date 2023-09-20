@@ -371,6 +371,10 @@ class ColumnVisitor {
     return rows_;
   }
 
+  const vector_size_t* remainingRows() const {
+    return rows_ + rowIndex_;
+  }
+
   vector_size_t numRows() {
     return numRows_;
   }
