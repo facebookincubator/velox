@@ -22,25 +22,37 @@ elseif(${VELOX_BUILD_TEST_UTILS})
 endif()
 
 add_library(
-  velox_dwio_common
-  BitConcatenation.cpp
-  BitPackDecoder.cpp
+  velox_dwio_common_base
   BufferedInput.cpp
   CachedBufferedInput.cpp
   CacheInputStream.cpp
-  ColumnSelector.cpp
   DataBufferHolder.cpp
+  FileSink.cpp
+  InputStream.cpp
+  IoStatistics.cpp
+  OutputStream.cpp
+  SeekableInputStream.cpp)
+target_link_libraries(
+  velox_dwio_common_base
+  velox_dwio_common_exception
+  velox_buffer
+  velox_caching
+  velox_exception
+  velox_memory
+  Folly::folly)
+
+add_library(
+  velox_dwio_common
+  BitConcatenation.cpp
+  BitPackDecoder.cpp
+  ColumnSelector.cpp
   DecoderUtil.cpp
   DirectDecoder.cpp
   DwioMetricsLog.cpp
-  FileSink.cpp
   FlatMapHelper.cpp
-  InputStream.cpp
   IntDecoder.cpp
-  IoStatistics.cpp
   MetadataFilter.cpp
   Options.cpp
-  OutputStream.cpp
   Range.cpp
   Reader.cpp
   ReaderFactory.cpp
@@ -50,7 +62,6 @@ add_library(
   SelectiveColumnReader.cpp
   SelectiveRepeatedColumnReader.cpp
   SelectiveStructColumnReader.cpp
-  SeekableInputStream.cpp
   TypeUtils.cpp
   TypeWithId.cpp
   WriterFactory.cpp
@@ -61,16 +72,11 @@ target_include_directories(velox_dwio_common PRIVATE ${Protobuf_INCLUDE_DIRS})
 
 target_link_libraries(
   velox_dwio_common
-  velox_buffer
-  velox_caching
   velox_common_compression
+  velox_dwio_common_base
   velox_dwio_common_compression
   velox_dwio_common_encryption
-  velox_dwio_common_exception
-  velox_exception
   velox_expression
-  velox_memory
   velox_exec
   Boost::regex
-  Folly::folly
   glog::glog)
