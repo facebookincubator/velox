@@ -313,7 +313,7 @@ PlanBuilder& PlanBuilder::tableWrite(const std::string& outputDirectoryPath) {
   auto hiveHandle = std::make_shared<connector::hive::HiveInsertTableHandle>(
       columnHandles,
       locationHandle,
-      dwio::common::FileFormat::DWRF,
+      fileFormat_,
       nullptr, // bucketProperty,
       common::CompressionKind_NONE);
 

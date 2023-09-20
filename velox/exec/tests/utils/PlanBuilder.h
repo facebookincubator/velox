@@ -242,8 +242,8 @@ class PlanBuilder {
   /// function will skip creating a FilterNode in that case.
   PlanBuilder& optionalFilter(const std::string& optionalFilter);
 
-  /// Adds a TableWriteNode to write all input columns into an unpartitioned
-  /// unbucketed Hive table without collecting statistics using DWRF file format
+  /// Adds a TableWriteNode to write all input columns into an un-partitioned
+  /// un-bucketed Hive table without collecting statistics using fileFormat_
   /// without compression.
   ///
   /// @param outputDirectoryPath Path to a directory to write data to.
@@ -811,6 +811,12 @@ class PlanBuilder {
     return *this;
   }
 
+  /// Set file format.
+  PlanBuilder& fileFormat(const dwio::common::FileFormat format) {
+    fileFormat_ = format;
+    return *this;
+  }
+
  protected:
   // Users who create custom operators might want to extend the PlanBuilder to
   // customize extended plan builders. Those functions are needed in such
@@ -868,6 +874,7 @@ class PlanBuilder {
  protected:
   core::PlanNodePtr planNode_;
   parse::ParseOptions options_;
+  dwio::common::FileFormat fileFormat_ = dwio::common::FileFormat::DWRF;
 
  private:
   std::shared_ptr<core::PlanNodeIdGenerator> planNodeIdGenerator_;
