@@ -142,21 +142,60 @@ uint64_t LocalReadFile::preadv(
   // Dropped bytes sized so that a typical dropped range of 50K is not
   // too many iovecs.
   static thread_local std::vector<char> droppedBytes(16 * 1024);
+  uint64_t totalBytesRead = 0;
   std::vector<struct iovec> iovecs;
   iovecs.reserve(buffers.size());
+
+  auto preadvRun = [&]() -> ssize_t {
+    auto bytesRead = folly::preadv(fd_, iovecs.data(), iovecs.size(), offset);
+    if (bytesRead < 0) {
+      perror("preadv");
+      LOG(ERROR) << "preadv failed with error: " << strerror(errno);
+    } else {
+      totalBytesRead += bytesRead;
+      offset += bytesRead;
+    }
+    iovecs.clear();
+    return bytesRead;
+  };
+
   for (auto& range : buffers) {
     if (!range.data()) {
       auto skipSize = range.size();
       while (skipSize) {
         auto bytes = std::min<size_t>(droppedBytes.size(), skipSize);
+
+        if (iovecs.size() >= IOV_MAX) {
+          auto bytesRead = preadvRun();
+          if (bytesRead < 0) {
+            return bytesRead;
+          }
+        }
+
         iovecs.push_back({droppedBytes.data(), bytes});
         skipSize -= bytes;
       }
     } else {
+      if (iovecs.size() >= IOV_MAX) {
+        auto bytesRead = preadvRun();
+        if (bytesRead < 0) {
+          return bytesRead;
+        }
+      }
+
       iovecs.push_back({range.data(), range.size()});
     }
   }
-  return folly::preadv(fd_, iovecs.data(), iovecs.size(), offset);
+
+  // Perform any remaining preadv calls
+  if (!iovecs.empty()) {
+    auto bytesRead = preadvRun();
+    if (bytesRead < 0) {
+      return bytesRead;
+    }
+  }
+
+  return totalBytesRead;
 }
 
 uint64_t LocalReadFile::size() const {

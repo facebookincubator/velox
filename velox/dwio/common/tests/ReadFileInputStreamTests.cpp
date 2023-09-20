@@ -14,7 +14,9 @@
  * limitations under the License.
  */
 
+#include "velox/common/file/FileSystems.h"
 #include "velox/dwio/common/InputStream.h"
+#include "velox/exec/tests/utils/TempFilePath.h"
 
 #include <string_view>
 #include "folly/io/Cursor.h"
@@ -73,3 +75,34 @@ TEST(ReadFileInputStream, VReadIOBufs) {
   std::vector<std::string> expected = {"aaaaab", "bcccc"};
   EXPECT_EQ(result, expected);
 }
+
+TEST(ReadFileInputStream, LocalReadFile) { 
+  filesystems::registerLocalFileSystem(); 
+  auto tempFile = ::exec::test::TempFilePath::create(); 
+  const auto& filename = tempFile->path; 
+  remove(filename.c_str()); 
+  { 
+    LocalWriteFile writeFile(filename); 
+    for (int i = 0; i < 1027; ++i) 
+    writeFile.append("abc"); 
+    ASSERT_EQ(writeFile.size(), static_cast<uint64_t>(3081)); 
+  } 
+
+  auto file = std::make_shared<LocalReadFile>(filename); 
+  ASSERT_EQ(static_cast<uint64_t>(3081), file->size()); 
+
+  auto readFile = 
+    std::make_shared<facebook::velox::dwio::common::ReadFileInputStream>(file); 
+  std::vector<Region> regions; 
+
+  for (int i = 0; i < 3081; i += 3) { 
+    regions.push_back(Region(static_cast<uint64_t>(i), static_cast<uint64_t>(1))); 
+  } 
+  ASSERT_GT(regions.size(), IOV_MAX); 
+
+  std::vector<folly::Range<char*>> buffers; 
+  std::vector<folly::IOBuf> iobufs(regions.size()); 
+
+  readFile->vread(regions, {iobufs.data(), iobufs.size()}, LogType::TEST); 
+  remove(filename.c_str()); 
+} 
