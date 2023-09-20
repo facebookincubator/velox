@@ -31,9 +31,9 @@ class SelectiveIntegerColumnReader : public SelectiveColumnReader {
       std::shared_ptr<const dwio::common::TypeWithId> fileType)
       : SelectiveColumnReader(
             requestedType,
+            std::move(fileType),
             params,
-            scanSpec,
-            std::move(fileType)) {}
+            scanSpec) {}
 
   void getValues(RowSet rows, VectorPtr* result) override {
     getIntValues(rows, requestedType_, result);

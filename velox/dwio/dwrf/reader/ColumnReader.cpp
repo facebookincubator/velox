@@ -202,8 +202,8 @@ class ByteRleColumnReader : public ColumnReader {
 
  public:
   ByteRleColumnReader(
-      std::shared_ptr<const dwio::common::TypeWithId> fileType,
       TypePtr requestedType,
+      std::shared_ptr<const dwio::common::TypeWithId> fileType,
       StripeStreams& stripe,
       const StreamLabels& streamLabels,
       std::function<std::unique_ptr<ByteRleDecoder>(
@@ -377,8 +377,8 @@ class DecimalColumnReader : public ColumnReader {
 
  public:
   DecimalColumnReader(
-      std::shared_ptr<const dwio::common::TypeWithId> fileType,
       TypePtr requestedType,
+      std::shared_ptr<const dwio::common::TypeWithId> fileType,
       StripeStreams& stripe,
       const StreamLabels& streamLabels,
       FlatMapContext flatMapContext);
@@ -393,8 +393,8 @@ class DecimalColumnReader : public ColumnReader {
 
 template <typename DataT>
 DecimalColumnReader<DataT>::DecimalColumnReader(
-    std::shared_ptr<const dwio::common::TypeWithId> fileType,
     TypePtr requestedType,
+    std::shared_ptr<const dwio::common::TypeWithId> fileType,
     StripeStreams& stripe,
     const StreamLabels& streamLabels,
     FlatMapContext flatMapContext)
@@ -483,8 +483,8 @@ template <class ReqT>
 class IntegerDirectColumnReader : public ColumnReader {
  public:
   IntegerDirectColumnReader(
-      std::shared_ptr<const dwio::common::TypeWithId> fileType,
       TypePtr requestedType,
+      std::shared_ptr<const dwio::common::TypeWithId> fileType,
       StripeStreams& stripe,
       const StreamLabels& streamLabels,
       uint32_t numBytes,
@@ -504,8 +504,8 @@ class IntegerDirectColumnReader : public ColumnReader {
 
 template <class ReqT>
 IntegerDirectColumnReader<ReqT>::IntegerDirectColumnReader(
-    std::shared_ptr<const dwio::common::TypeWithId> fileType,
     TypePtr requestedType,
+    std::shared_ptr<const dwio::common::TypeWithId> fileType,
     StripeStreams& stripe,
     const StreamLabels& streamLabels,
     uint32_t numBytes,
@@ -580,8 +580,8 @@ template <class ReqT>
 class IntegerDictionaryColumnReader : public ColumnReader {
  public:
   IntegerDictionaryColumnReader(
-      std::shared_ptr<const dwio::common::TypeWithId> fileType,
       TypePtr requestedType,
+      std::shared_ptr<const dwio::common::TypeWithId> fileType,
       StripeStreams& stripe,
       const StreamLabels& streamLabels,
       uint32_t numBytes,
@@ -648,8 +648,8 @@ class IntegerDictionaryColumnReader : public ColumnReader {
 
 template <class ReqT>
 IntegerDictionaryColumnReader<ReqT>::IntegerDictionaryColumnReader(
-    std::shared_ptr<const dwio::common::TypeWithId> fileType,
     TypePtr requestedType,
+    std::shared_ptr<const dwio::common::TypeWithId> fileType,
     StripeStreams& stripe,
     const StreamLabels& streamLabels,
     uint32_t numBytes,
@@ -873,8 +873,8 @@ template <class DataT, class ReqT>
 class FloatingPointColumnReader : public ColumnReader {
  public:
   FloatingPointColumnReader(
-      std::shared_ptr<const dwio::common::TypeWithId> fileType,
       TypePtr requestedType,
+      std::shared_ptr<const dwio::common::TypeWithId> fileType,
       StripeStreams& stripe,
       const StreamLabels& streamLabels,
       FlatMapContext flatMapContext);
@@ -927,8 +927,8 @@ class FloatingPointColumnReader : public ColumnReader {
 
 template <class DataT, class ReqT>
 FloatingPointColumnReader<DataT, ReqT>::FloatingPointColumnReader(
-    std::shared_ptr<const dwio::common::TypeWithId> fileType,
     TypePtr requestedType,
+    std::shared_ptr<const dwio::common::TypeWithId> fileType,
     StripeStreams& stripe,
     const StreamLabels& streamLabels,
     FlatMapContext flatMapContext)
@@ -2277,48 +2277,48 @@ struct RleDecoderFactory<int8_t> {
 
 template <typename DataT>
 std::unique_ptr<ColumnReader> buildByteRleColumnReader(
-    const std::shared_ptr<const dwio::common::TypeWithId>& fileType,
     TypePtr requestedType,
+    const std::shared_ptr<const dwio::common::TypeWithId>& fileType,
     StripeStreams& stripe,
     const StreamLabels& streamLabels,
     FlatMapContext flatMapContext) {
   switch (requestedType->kind()) {
     case TypeKind::BOOLEAN:
       return std::make_unique<ByteRleColumnReader<DataT, bool>>(
-          fileType,
           std::move(requestedType),
+          fileType,
           stripe,
           streamLabels,
           RleDecoderFactory<DataT>::get(),
           std::move(flatMapContext));
     case TypeKind::TINYINT:
       return std::make_unique<ByteRleColumnReader<DataT, int8_t>>(
-          fileType,
           std::move(requestedType),
+          fileType,
           stripe,
           streamLabels,
           RleDecoderFactory<DataT>::get(),
           std::move(flatMapContext));
     case TypeKind::SMALLINT:
       return std::make_unique<ByteRleColumnReader<DataT, int16_t>>(
-          fileType,
           std::move(requestedType),
+          fileType,
           stripe,
           streamLabels,
           RleDecoderFactory<DataT>::get(),
           std::move(flatMapContext));
     case TypeKind::INTEGER:
       return std::make_unique<ByteRleColumnReader<DataT, int32_t>>(
-          fileType,
           std::move(requestedType),
+          fileType,
           stripe,
           streamLabels,
           RleDecoderFactory<DataT>::get(),
           std::move(flatMapContext));
     case TypeKind::BIGINT:
       return std::make_unique<ByteRleColumnReader<DataT, int64_t>>(
-          fileType,
           std::move(requestedType),
+          fileType,
           stripe,
           streamLabels,
           RleDecoderFactory<DataT>::get(),
@@ -2331,8 +2331,8 @@ std::unique_ptr<ColumnReader> buildByteRleColumnReader(
 
 template <template <class> class IntegerColumnReaderT>
 std::unique_ptr<ColumnReader> buildTypedIntegerColumnReader(
-    const std::shared_ptr<const dwio::common::TypeWithId>& fileType,
     TypePtr requestedType,
+    const std::shared_ptr<const dwio::common::TypeWithId>& fileType,
     FlatMapContext flatMapContext,
     StripeStreams& stripe,
     const StreamLabels& streamLabels,
@@ -2342,24 +2342,24 @@ std::unique_ptr<ColumnReader> buildTypedIntegerColumnReader(
   switch (requestedType->kind()) {
     case TypeKind::INTEGER:
       return std::make_unique<IntegerColumnReaderT<int32_t>>(
-          fileType,
           requestedType,
+          fileType,
           stripe,
           streamLabels,
           numBytes,
           std::move(flatMapContext));
     case TypeKind::BIGINT:
       return std::make_unique<IntegerColumnReaderT<int64_t>>(
-          fileType,
           requestedType,
+          fileType,
           stripe,
           streamLabels,
           numBytes,
           std::move(flatMapContext));
     case TypeKind::SMALLINT:
       return std::make_unique<IntegerColumnReaderT<int16_t>>(
-          fileType,
           requestedType,
+          fileType,
           stripe,
           streamLabels,
           numBytes,
@@ -2372,8 +2372,8 @@ std::unique_ptr<ColumnReader> buildTypedIntegerColumnReader(
 }
 
 std::unique_ptr<ColumnReader> buildIntegerReader(
-    const std::shared_ptr<const dwio::common::TypeWithId>& fileType,
     TypePtr requestedType,
+    const std::shared_ptr<const dwio::common::TypeWithId>& fileType,
     uint32_t numBytes,
     FlatMapContext flatMapContext,
     StripeStreams& stripe,
@@ -2383,8 +2383,8 @@ std::unique_ptr<ColumnReader> buildIntegerReader(
     case proto::ColumnEncoding_Kind_DICTIONARY:
     case proto::ColumnEncoding_Kind_DICTIONARY_V2:
       return buildTypedIntegerColumnReader<IntegerDictionaryColumnReader>(
-          fileType,
           requestedType,
+          fileType,
           std::move(flatMapContext),
           stripe,
           streamLabels,
@@ -2392,8 +2392,8 @@ std::unique_ptr<ColumnReader> buildIntegerReader(
     case proto::ColumnEncoding_Kind_DIRECT:
     case proto::ColumnEncoding_Kind_DIRECT_V2:
       return buildTypedIntegerColumnReader<IntegerDirectColumnReader>(
-          fileType,
           requestedType,
+          fileType,
           std::move(flatMapContext),
           stripe,
           streamLabels,
@@ -2415,8 +2415,8 @@ std::unique_ptr<ColumnReader> ColumnReader::build(
   switch (fileType->type()->kind()) {
     case TypeKind::INTEGER:
       return buildIntegerReader(
-          fileType,
           requestedType->type(),
+          fileType,
           dwio::common::INT_BYTE_SIZE,
           std::move(flatMapContext),
           stripe,
@@ -2424,15 +2424,15 @@ std::unique_ptr<ColumnReader> ColumnReader::build(
     case TypeKind::BIGINT:
       if (fileType->type()->isDecimal()) {
         return std::make_unique<DecimalColumnReader<int64_t>>(
-            fileType,
             requestedType->type(),
+            fileType,
             stripe,
             streamLabels,
             std::move(flatMapContext));
       } else {
         return buildIntegerReader(
-            fileType,
             requestedType->type(),
+            fileType,
             dwio::common::LONG_BYTE_SIZE,
             std::move(flatMapContext),
             stripe,
@@ -2440,8 +2440,8 @@ std::unique_ptr<ColumnReader> ColumnReader::build(
       }
     case TypeKind::SMALLINT:
       return buildIntegerReader(
-          fileType,
           requestedType->type(),
+          fileType,
           dwio::common::SHORT_BYTE_SIZE,
           std::move(flatMapContext),
           stripe,
@@ -2472,15 +2472,15 @@ std::unique_ptr<ColumnReader> ColumnReader::build(
       }
     case TypeKind::BOOLEAN:
       return buildByteRleColumnReader<bool>(
-          fileType,
           requestedType->type(),
+          fileType,
           stripe,
           streamLabels,
           std::move(flatMapContext));
     case TypeKind::TINYINT:
       return buildByteRleColumnReader<int8_t>(
-          fileType,
           requestedType->type(),
+          fileType,
           stripe,
           streamLabels,
           std::move(flatMapContext));
@@ -2517,23 +2517,23 @@ std::unique_ptr<ColumnReader> ColumnReader::build(
     case TypeKind::REAL:
       if (requestedType->type()->kind() == TypeKind::REAL) {
         return std::make_unique<FloatingPointColumnReader<float, float>>(
-            fileType,
             requestedType->type(),
+            fileType,
             stripe,
             streamLabels,
             std::move(flatMapContext));
       } else {
         return std::make_unique<FloatingPointColumnReader<float, double>>(
-            fileType,
             requestedType->type(),
+            fileType,
             stripe,
             streamLabels,
             std::move(flatMapContext));
       }
     case TypeKind::DOUBLE:
       return std::make_unique<FloatingPointColumnReader<double, double>>(
-          fileType,
           requestedType->type(),
+          fileType,
           stripe,
           streamLabels,
           std::move(flatMapContext));
@@ -2543,8 +2543,8 @@ std::unique_ptr<ColumnReader> ColumnReader::build(
     case TypeKind::HUGEINT:
       if (fileType->type()->isDecimal()) {
         return std::make_unique<DecimalColumnReader<int128_t>>(
-            fileType,
             requestedType->type(),
+            fileType,
             stripe,
             streamLabels,
             std::move(flatMapContext));

@@ -106,7 +106,7 @@ class SelectiveStructColumnReaderBase : public SelectiveColumnReader {
       FormatParams& params,
       velox::common::ScanSpec& scanSpec,
       bool isRoot = false)
-      : SelectiveColumnReader(fileType->type(), params, scanSpec, fileType),
+      : SelectiveColumnReader(fileType->type(), fileType, params, scanSpec),
         requestedType_(requestedType),
         debugString_(
             getExceptionContext().message(VeloxException::Type::kSystem)),

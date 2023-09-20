@@ -116,8 +116,8 @@ class ColumnReaderTestBase {
 
   void buildReader(
       const std::shared_ptr<const Type>& requestedType,
-      std::vector<uint64_t> nodes = {},
       const std::shared_ptr<const Type>& fileType = nullptr,
+      std::vector<uint64_t> nodes = {},
       common::ScanSpec* scanSpec = nullptr) {
     const std::shared_ptr<const RowType>& rowType =
         std::dynamic_pointer_cast<const RowType>(requestedType);
@@ -378,7 +378,7 @@ class SchemaMismatchTest : public TestWithParam<bool>,
     // build columnReader_ and selectiveColumnReader_. They are used as
     // mismatch ColumnReaders
     auto scanSpec2 = std::make_unique<common::ScanSpec>("root2");
-    buildReader(requestedType, {}, fileType, scanSpec2.get());
+    buildReader(requestedType, fileType, {}, scanSpec2.get());
     VectorPtr mismatchBatch = newBatch(requestedType);
     if (columnReader_) {
       columnReader_->next(size, mismatchBatch, nullptr);
@@ -817,7 +817,7 @@ TEST_P(TestColumnReader, testIntegerRLEv2) {
         std::make_unique<common::BigintRange>(2100, 2140, false));
     scanSpec->childByName("col_1")->setFilter(
         std::make_unique<common::BigintRange>(11, 20, false));
-    buildReader(rowType, {}, nullptr, scanSpec.get());
+    buildReader(rowType, nullptr, {}, scanSpec.get());
     selectiveColumnReader_->next(size, batch, nullptr);
 
     auto rowVector = std::dynamic_pointer_cast<RowVector>(batch);
@@ -2661,7 +2661,7 @@ TEST_P(TestNonSelectiveColumnReader, testListSkipWithNullsNoData) {
   // create the row type
   auto rowType = HiveTypeParser().parse("struct<col0:array<bigint>>");
   // selected filter tree nodes list
-  buildReader(rowType, {0, 1});
+  buildReader(rowType, nullptr, {0, 1});
 
   VectorPtr batch = newBatch(rowType);
 
@@ -3171,7 +3171,7 @@ TEST_P(TestNonSelectiveColumnReader, testMapSkipWithNullsNoData) {
 
   // create the row type
   auto rowType = HiveTypeParser().parse("struct<col0:map<bigint,bigint>>");
-  buildReader(rowType, {0, 1});
+  buildReader(rowType, nullptr, {0, 1});
 
   VectorPtr batch = newBatch(rowType);
 
@@ -3229,7 +3229,7 @@ TEST_P(TestNonSelectiveColumnReader, testMapWithAllNulls) {
 
   // create the row type
   auto rowType = HiveTypeParser().parse("struct<col0:map<bigint,bigint>>");
-  buildReader(rowType, {0, 1});
+  buildReader(rowType, nullptr, {0, 1});
 
   VectorPtr batch = newBatch(rowType);
   skipAndRead(batch, /* read */ 8);
@@ -4079,7 +4079,7 @@ TEST_P(StringReaderTests, testStringDirectUseBatchAfterClose) {
           Return(new SeekableArrayInputStream(lengths.data(), lengths.size())));
 
   auto rowType = HiveTypeParser().parse("struct<myString:string>");
-  buildReader(rowType, {});
+  buildReader(rowType, nullptr, {});
 
   std::vector<VectorPtr> batches;
   for (size_t i = 0; i < ROW_COUNT; ++i) {

@@ -31,9 +31,9 @@ class SelectiveFloatingPointColumnReader : public SelectiveColumnReader {
       velox::common::ScanSpec& scanSpec)
       : SelectiveColumnReader(
             requestedType,
+            std::move(fileType),
             params,
-            scanSpec,
-            std::move(fileType)) {}
+            scanSpec) {}
 
   // Offers fast path only if data and result widths match.
   bool hasBulkPath() const override {

@@ -43,9 +43,9 @@ class SelectiveRepeatedColumnReader : public SelectiveColumnReader {
       std::shared_ptr<const dwio::common::TypeWithId> type)
       : SelectiveColumnReader(
             requestedType,
+            std::move(type),
             params,
-            scanSpec,
-            std::move(type)) {}
+            scanSpec) {}
 
   /// Reads 'numLengths' next lengths into 'result'. If 'nulls' is
   /// non-null, each kNull bit signifies a null with a length of 0 to

@@ -31,9 +31,9 @@ class BooleanColumnReader : public dwio::common::SelectiveByteRleColumnReader {
       common::ScanSpec& scanSpec)
       : SelectiveByteRleColumnReader(
             requestedType->type(),
+            std::move(fileType),
             params,
-            scanSpec,
-            std::move(fileType)) {}
+            scanSpec) {}
 
   void seekToRowGroup(uint32_t index) override {
     SelectiveByteRleColumnReader::seekToRowGroup(index);

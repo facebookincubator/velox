@@ -26,7 +26,7 @@ SelectiveStringDictionaryColumnReader::SelectiveStringDictionaryColumnReader(
     const std::shared_ptr<const TypeWithId>& fileType,
     DwrfParams& params,
     common::ScanSpec& scanSpec)
-    : SelectiveColumnReader(fileType->type(), params, scanSpec, fileType),
+    : SelectiveColumnReader(fileType->type(), fileType, params, scanSpec),
       lastStrideIndex_(-1),
       provider_(params.stripeStreams().getStrideIndexProvider()),
       statistics_(params.runtimeStatistics()) {

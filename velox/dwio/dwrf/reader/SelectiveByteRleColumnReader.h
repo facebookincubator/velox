@@ -33,9 +33,9 @@ class SelectiveByteRleColumnReader
       bool isBool)
       : dwio::common::SelectiveByteRleColumnReader(
             requestedType->type(),
+            std::move(fileType),
             params,
-            scanSpec,
-            std::move(fileType)) {
+            scanSpec) {
     EncodingKey encodingKey{fileType_->id(), params.flatMapContext().sequence};
     auto& stripe = params.stripeStreams();
     if (isBool) {
