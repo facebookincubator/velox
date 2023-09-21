@@ -421,6 +421,12 @@ uint64_t SharedArbitrator::reclaim(
   numReclaimedBytes_ += reclaimedBytes - freedBytes;
   numShrunkBytes_ += freedBytes;
   reclaimTimeUs_ += reclaimDurationUs;
+  VELOX_MEM_LOG(INFO) << "Reclaimed from memory pool " << pool->name()
+                      << " with target of " << succinctBytes(targetBytes)
+                      << ", actually reclaimed " << succinctBytes(freedBytes)
+                      << " free memory and "
+                      << succinctBytes(reclaimedBytes - freedBytes)
+                      << " used memory";
   return reclaimedBytes;
 }
 
@@ -511,6 +517,9 @@ SharedArbitrator::ScopedArbitration::ScopedArbitration(
   VELOX_CHECK_NOT_NULL(requestor_);
   VELOX_CHECK_NOT_NULL(arbitrator_);
   arbitrator_->startArbitration(requestor);
+  if (arbitrator_->arbitrationStateCheckCb_ != nullptr) {
+    arbitrator_->arbitrationStateCheckCb_(*requestor);
+  }
 }
 
 SharedArbitrator::ScopedArbitration::~ScopedArbitration() {

@@ -280,15 +280,15 @@ class Driver : public std::enable_shared_from_this<Driver> {
 
   void initializeOperatorStats(std::vector<OperatorStats>& stats);
 
-  // Close operators and add operator stats to the task.
+  /// Close operators and add operator stats to the task.
   void closeOperators();
 
-  // Returns true if all operators between the source and 'aggregation' are
-  // order-preserving and do not increase cardinality.
+  /// Returns true if all operators between the source and 'aggregation' are
+  /// order-preserving and do not increase cardinality.
   bool mayPushdownAggregation(Operator* aggregation) const;
 
-  // Returns a subset of channels for which there are operators upstream from
-  // filterSource that accept dynamically generated filters.
+  /// Returns a subset of channels for which there are operators upstream from
+  /// filterSource that accept dynamically generated filters.
   std::unordered_set<column_index_t> canPushdownFilters(
       const Operator* filterSource,
       const std::vector<column_index_t>& channels) const;
@@ -300,7 +300,7 @@ class Driver : public std::enable_shared_from_this<Driver> {
   /// Returns the Operator with 'operatorId' or nullptr if not found.
   Operator* findOperator(int32_t operatorId) const;
 
-  // Returns a list of all operators.
+  /// Returns a list of all operators.
   std::vector<Operator*> operators() const;
 
   std::string toString() const;
@@ -315,8 +315,8 @@ class Driver : public std::enable_shared_from_this<Driver> {
     return ctx_->task;
   }
 
-  // Updates the stats in Task and frees resources. Only called by Task for
-  // closing non-running Drivers.
+  /// Updates the stats in Task and frees resources. Only called by Task for
+  /// closing non-running Drivers.
   void closeByTask();
 
   BlockingReason blockingReason() const {
@@ -349,10 +349,10 @@ class Driver : public std::enable_shared_from_this<Driver> {
   // position in the pipeline.
   void pushdownFilters(int operatorIndex);
 
-  /// If 'trackOperatorCpuUsage_' is true, returns initialized timer object to
-  /// track cpu and wall time of an operation. Returns null otherwise.
-  /// The delta CpuWallTiming object would be passes to 'func' upon
-  /// destruction of the timer.
+  // If 'trackOperatorCpuUsage_' is true, returns initialized timer object to
+  // track cpu and wall time of an operation. Returns null otherwise.
+  // The delta CpuWallTiming object would be passes to 'func' upon
+  // destruction of the timer.
   template <typename F>
   std::unique_ptr<DeltaCpuWallTimer<F>> createDeltaCpuWallTimer(F&& func) {
     return trackOperatorCpuUsage_
@@ -396,6 +396,14 @@ class Driver : public std::enable_shared_from_this<Driver> {
 
   friend struct DriverFactory;
 };
+
+/// Callback used by memory arbitration to check if a driver thread under memory
+/// arbitration has been put in suspension state. This is to prevent arbitration
+/// deadlock as the arbitrator might reclaim memory from the task of the driver
+/// thread which is under arbitration. The task reclaim needs to wait for the
+/// drivers to go off thread. A suspended driver thread is not counted as
+/// running.
+void driverArbitrationStateCheck(memory::MemoryPool& pool);
 
 using OperatorSupplier = std::function<
     std::unique_ptr<Operator>(int32_t operatorId, DriverCtx* ctx)>;
@@ -523,16 +531,15 @@ struct DriverFactory {
   static std::vector<DriverAdapter> adapters;
 };
 
-// Begins and ends a section where a thread is running but not
-// counted in its Task. Using this, a Driver thread can for
-// example stop its own Task. For arbitrating memory overbooking,
-// the contending threads go suspended and each in turn enters a
-// global critical section. When running the arbitration strategy, a
-// thread can stop and restart Tasks, including its own. When a Task
-// is stopped, its drivers are blocked or suspended and the strategy thread
-// can alter the Task's memory including spilling or killing the whole Task.
-// Other threads waiting to run the arbitration, are in a suspended state
-// which also means that they are instantaneously killable or spillable.
+/// Begins and ends a section where a thread is running but not counted in its
+/// Task. Using this, a Driver thread can for example stop its own Task. For
+/// arbitrating memory overbooking, the contending threads go suspended and each
+/// in turn enters a global critical section. When running the arbitration
+/// strategy, a thread can stop and restart Tasks, including its own. When a
+/// Task is stopped, its drivers are blocked or suspended and the strategy
+/// thread can alter the Task's memory including spilling or killing the whole
+/// Task. Other threads waiting to run the arbitration, are in a suspended state
+/// which also means that they are instantaneously killable or spillable.
 class SuspendedSection {
  public:
   explicit SuspendedSection(Driver* driver);
@@ -541,5 +548,27 @@ class SuspendedSection {
  private:
   Driver* driver_;
 };
+
+/// Provides the execution context of a driver thread. This is set to a
+/// per-thread local variable if the running thread is a driver thread.
+struct DriverThreadContext {
+  const DriverCtx& driverCtx;
+};
+
+/// Object used to set/restore the driver thread context when driver execution
+/// starts/leaves the driver thread.
+class ScopedDriverThreadContext {
+ public:
+  explicit ScopedDriverThreadContext(const DriverCtx& driverCtx);
+  ~ScopedDriverThreadContext();
+
+ private:
+  DriverThreadContext* const savedDriverThreadCtx_{nullptr};
+  DriverThreadContext currentDriverThreadCtx_;
+};
+
+/// Returns the driver thread context set by a per-thread local variable if the
+/// current running thread is a driver thread.
+DriverThreadContext* driverThreadContext();
 
 } // namespace facebook::velox::exec

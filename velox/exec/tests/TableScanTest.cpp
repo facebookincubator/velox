@@ -19,7 +19,6 @@
 #include "velox/common/testutil/TestValue.h"
 #include "velox/connectors/hive/HiveConfig.h"
 #include "velox/connectors/hive/HiveConnector.h"
-#include "velox/connectors/hive/HiveConnectorSplit.h"
 #include "velox/dwio/common/tests/utils/DataFiles.h"
 #include "velox/exec/PartitionedOutputBufferManager.h"
 #include "velox/exec/PlanNodeStats.h"
@@ -314,6 +313,72 @@ TEST_F(TableScanTest, columnPruning) {
 
   op = tableScanNode(ROW({"c3", "c0"}, {REAL(), BIGINT()}));
   assertQuery(op, {filePath}, "SELECT c3, c0 FROM tmp");
+}
+
+TEST_F(TableScanTest, timestamp) {
+  vector_size_t size = 10'000;
+  auto rowVector = makeRowVector(
+      {makeFlatVector<int64_t>(size, [](vector_size_t row) { return row; }),
+       makeFlatVector<Timestamp>(
+           size,
+           [](vector_size_t row) {
+             return Timestamp(
+                 row, (row % 1000) * Timestamp::kNanosecondsInMillisecond);
+           },
+           [](vector_size_t row) {
+             return row % 5 == 0; /* null every 5 rows */
+           })});
+
+  auto filePath = TempFilePath::create();
+  writeToFile(filePath->path, {rowVector});
+  createDuckDbTable({rowVector});
+
+  auto dataColumns = ROW({"c0", "c1"}, {BIGINT(), TIMESTAMP()});
+  auto op = tableScanNode(dataColumns);
+  assertQuery(op, {filePath}, "SELECT c0, c1 FROM tmp");
+
+  op = PlanBuilder(pool_.get())
+           .tableScan(
+               ROW({"c0", "c1"}, {BIGINT(), TIMESTAMP()}),
+               {"c1 is null"},
+               "",
+               dataColumns)
+           .planNode();
+  assertQuery(op, {filePath}, "SELECT c0, c1 FROM tmp WHERE c1 is null");
+
+  op = PlanBuilder(pool_.get())
+           .tableScan(
+               ROW({"c0", "c1"}, {BIGINT(), TIMESTAMP()}),
+               {"c1 < '1970-01-01 01:30:00'::TIMESTAMP"},
+               "",
+               dataColumns)
+           .planNode();
+  assertQuery(
+      op,
+      {filePath},
+      "SELECT c0, c1 FROM tmp WHERE c1 < timestamp '1970-01-01 01:30:00'");
+
+  op = PlanBuilder(pool_.get())
+           .tableScan(ROW({"c0"}, {BIGINT()}), {}, "", dataColumns)
+           .planNode();
+  assertQuery(op, {filePath}, "SELECT c0 FROM tmp");
+
+  op = PlanBuilder(pool_.get())
+           .tableScan(ROW({"c0"}, {BIGINT()}), {"c1 is null"}, "", dataColumns)
+           .planNode();
+  assertQuery(op, {filePath}, "SELECT c0 FROM tmp WHERE c1 is null");
+
+  op = PlanBuilder(pool_.get())
+           .tableScan(
+               ROW({"c0"}, {BIGINT()}),
+               {"c1 < timestamp'1970-01-01 01:30:00'"},
+               "",
+               dataColumns)
+           .planNode();
+  assertQuery(
+      op,
+      {filePath},
+      "SELECT c0 FROM tmp WHERE c1 < timestamp'1970-01-01 01:30:00'");
 }
 
 TEST_F(TableScanTest, subfieldPruningRowType) {
@@ -3186,6 +3251,17 @@ TEST_F(TableScanTest, readMissingFieldsInMap) {
       ASSERT_TRUE(val->isNullAt(j));
     }
   }
+
+  // Scan with type mismatch in the 1st item (map vs integer). We should throw.
+  rowType = ROW({"i1", "a2"}, {{INTEGER(), ARRAY(structType)}});
+
+  op = PlanBuilder()
+           .tableScan(rowType, {}, "", rowType)
+           .project({"i1"})
+           .planNode();
+
+  EXPECT_THROW(
+      AssertQueryBuilder(op).split(split).copyResults(pool()), VeloxUserError);
 }
 
 // Tests various projections of top level columns using the output type passed

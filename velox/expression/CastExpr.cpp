@@ -504,11 +504,40 @@ void CastExpr::applyPeeled(
         "Attempting to cast from {} to itself.",
         fromType->toString());
 
-    if (castToOperator_) {
-      castToOperator_->castTo(input, context, rows, toType, result);
+    auto applyCustomCast = [&]() {
+      if (castToOperator_) {
+        castToOperator_->castTo(input, context, rows, toType, result);
+      } else {
+        castFromOperator_->castFrom(input, context, rows, toType, result);
+      }
+    };
+
+    if (setNullInResultAtError()) {
+      // This can be optimized by passing setNullInResultAtError() to castTo and
+      // castFrom operations.
+
+      ErrorVectorPtr oldErrors;
+      context.swapErrors(oldErrors);
+
+      applyCustomCast();
+
+      if (context.errors()) {
+        auto errors = context.errors();
+        auto rawNulls = result->mutableRawNulls();
+
+        rows.applyToSelected([&](auto row) {
+          if (errors->isIndexInRange(row) && !errors->isNullAt(row)) {
+            bits::setNull(rawNulls, row, true);
+          }
+        });
+      };
+      // Restore original state.
+      context.swapErrors(oldErrors);
+
     } else {
-      castFromOperator_->castFrom(input, context, rows, toType, result);
+      applyCustomCast();
     }
+
   } else if (fromType->isDate()) {
     result = castFromDate(rows, input, context, toType);
   } else if (toType->isDate()) {
@@ -518,14 +547,26 @@ void CastExpr::applyPeeled(
   } else if (toType->isLongDecimal()) {
     result = applyDecimal<int128_t>(rows, input, context, fromType, toType);
   } else if (fromType->isDecimal()) {
-    result = VELOX_DYNAMIC_DECIMAL_TYPE_DISPATCH(
-        applyDecimalToPrimitiveCast,
-        fromType,
-        rows,
-        input,
-        context,
-        fromType,
-        toType);
+    switch (toType->kind()) {
+      case TypeKind::VARCHAR:
+        result = VELOX_DYNAMIC_DECIMAL_TYPE_DISPATCH(
+            applyDecimalToVarcharCast,
+            fromType,
+            rows,
+            input,
+            context,
+            fromType);
+        break;
+      default:
+        result = VELOX_DYNAMIC_DECIMAL_TYPE_DISPATCH(
+            applyDecimalToPrimitiveCast,
+            fromType,
+            rows,
+            input,
+            context,
+            fromType,
+            toType);
+    }
   } else {
     switch (toType->kind()) {
       case TypeKind::MAP:

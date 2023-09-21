@@ -371,6 +371,25 @@ class BaseVector {
         nulls_->asMutable<uint64_t>(), idx, bits::kNull ? value : !value);
   }
 
+  struct CopyRange {
+    vector_size_t sourceIndex;
+    vector_size_t targetIndex;
+    vector_size_t count;
+  };
+
+  /// Sets null flags for each row in 'ranges' to 'isNull'.
+  static void setNulls(
+      uint64_t* rawNulls,
+      const folly::Range<const CopyRange*>& ranges,
+      bool isNull);
+
+  /// Copies null flags for each row in 'ranges' from 'sourceRawNulls' to
+  /// 'targetRawNulls'.
+  static void copyNulls(
+      uint64_t* targetRawNulls,
+      const uint64_t* sourceRawNulls,
+      const folly::Range<const CopyRange*>& ranges);
+
   static int32_t
   countNulls(const BufferPtr& nulls, vector_size_t begin, vector_size_t end) {
     return nulls ? bits::countNulls(nulls->as<uint64_t>(), begin, end) : 0;
@@ -436,12 +455,6 @@ class BaseVector {
     CopyRange range{sourceIndex, targetIndex, count};
     copyRanges(source, folly::Range(&range, 1));
   }
-
-  struct CopyRange {
-    vector_size_t sourceIndex;
-    vector_size_t targetIndex;
-    vector_size_t count;
-  };
 
   /// Converts SelectivityVetor into a list of CopyRanges having sourceIndex ==
   /// targetIndex. Aims to produce as few ranges as possible. If all rows are
@@ -605,18 +618,6 @@ class BaseVector {
     setNulls(nullptr);
   }
 
-  // Ensures that '*indices' has space for 'size' elements. Sets
-  // elements between the old and new sizes to 'initialValue' if the
-  // new size > old size. If memory is moved, '*raw' is maintained to
-  // point to element 0 of (*indices)->as<vector_size_t>().
-  void resizeIndices(
-      vector_size_t size,
-      BufferPtr* indices,
-      const vector_size_t** raw,
-      std::optional<vector_size_t> initialValue = std::nullopt) {
-    resizeIndices(size, this->pool(), indices, raw, initialValue);
-  }
-
   void
   clearIndices(BufferPtr& indices, vector_size_t start, vector_size_t end) {
     if (start == end) {
@@ -626,12 +627,19 @@ class BaseVector {
     std::fill(data + start, data + end, 0);
   }
 
+  /// Ensures that '*indices' is singly-referenced and has space for 'size'
+  /// elements. Sets elements between the old and new sizes to 0 if
+  /// the new size > old size.
+  ///
+  /// If '*indices' is nullptr, read-only, not uniquely-referenced, or doesn't
+  /// have capacity for 'size' elements allocates new buffer and copies data to
+  /// it. Updates '*raw' to point to element 0 of
+  /// (*indices)->as<vector_size_t>().
   static void resizeIndices(
       vector_size_t size,
       velox::memory::MemoryPool* pool,
       BufferPtr* indices,
-      const vector_size_t** raw,
-      std::optional<vector_size_t> initialValue = std::nullopt);
+      const vector_size_t** raw);
 
   // Makes sure '*buffer' has space for 'size' items of T and is writable. Sets
   // 'raw' to point to the writable contents of '*buffer'.
@@ -691,15 +699,6 @@ class BaseVector {
   /// nulls buffer if singly-referenced, mutable and has at least one null bit
   /// set.
   virtual void prepareForReuse();
-
-  // True if left and right are the same or if right is
-  // TypeKind::UNKNOWN.  ArrayVector copying may come across unknown
-  // type data for null-only content. Nulls can be transferred between
-  // two unknowns but values cannot be assigned into an unknown 'left'
-  // from a not-unknown 'right'.
-  static bool compatibleKind(TypeKind left, TypeKind right) {
-    return left == right || right == TypeKind::UNKNOWN;
-  }
 
   /// Returns a brief summary of the vector. If 'recursive' is true, includes a
   /// summary of all the layers of encodings starting with the top layer.
@@ -905,6 +904,32 @@ class BaseVector {
   // don't need to reallocate the result for every batch.
   bool memoDisabled_{false};
 };
+
+/// Loops over rows in 'ranges' and invokes 'func' for each row.
+/// @param TFunc A void function taking two arguments: targetIndex and
+/// sourceIndex.
+template <typename TFunc>
+void applyToEachRow(
+    const folly::Range<const BaseVector::CopyRange*>& ranges,
+    const TFunc& func) {
+  for (const auto& range : ranges) {
+    for (auto i = 0; i < range.count; ++i) {
+      func(range.targetIndex + i, range.sourceIndex + i);
+    }
+  }
+}
+
+/// Loops over 'ranges' and invokes 'func' for each range.
+/// @param TFunc A void function taking 3 arguments: targetIndex, sourceIndex
+/// and count.
+template <typename TFunc>
+void applyToEachRange(
+    const folly::Range<const BaseVector::CopyRange*>& ranges,
+    const TFunc& func) {
+  for (const auto& range : ranges) {
+    func(range.targetIndex, range.sourceIndex, range.count);
+  }
+}
 
 template <>
 uint64_t BaseVector::byteSize<bool>(vector_size_t count);

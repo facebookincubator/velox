@@ -61,13 +61,12 @@ void SelectiveStructColumnReaderBase::next(
       numValues -= bits::countBits(mutation->deletedRows, 0, numValues);
     }
 
+    auto resultRowVector = std::dynamic_pointer_cast<RowVector>(result);
     // no readers
     // This can be either count(*) query or a query that select only
     // constant columns (partition keys or columns missing from an old file
     // due to schema evolution)
-    result->resize(numValues);
-
-    auto resultRowVector = std::dynamic_pointer_cast<RowVector>(result);
+    resultRowVector->setSize(numValues);
     auto& childSpecs = scanSpec_->children();
     for (auto& childSpec : childSpecs) {
       VELOX_CHECK(childSpec->isConstant());
@@ -309,6 +308,8 @@ void SelectiveStructColumnReaderBase::getValues(
   if (auto reused = tryReuseResult(*result)) {
     *result = std::move(reused);
   } else {
+    VLOG(1) << "Reallocating result row vector with " << rowType.size()
+            << " children";
     std::vector<VectorPtr> children(rowType.size());
     fillRowVectorChildren(*result->get()->pool(), rowType, children);
     *result = std::make_shared<RowVector>(
@@ -319,7 +320,7 @@ void SelectiveStructColumnReaderBase::getValues(
         std::move(children));
   }
   auto* resultRow = static_cast<RowVector*>(result->get());
-  resultRow->resize(rows.size());
+  resultRow->setSize(rows.size());
   if (!rows.size()) {
     return;
   }
@@ -372,9 +373,11 @@ void SelectiveStructColumnReaderBase::getValues(
           &memoryPool_,
           resultRow->type()->childAt(channel),
           rows.size(),
-          std::move(loader));
+          std::move(loader),
+          std::move(childResult));
     }
   }
+  resultRow->updateContainsLazyNotLoaded();
 }
 
 } // namespace facebook::velox::dwio::common

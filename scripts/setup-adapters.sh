@@ -64,13 +64,13 @@ function install_gcs-sdk-cpp {
 function install_azure-storage-sdk-cpp {
   github_checkout azure/azure-sdk-for-cpp azure-storage-blobs_12.8.0
 
-  # install azure-core compatible with system pre-installed openssl version
-  openssl_version=$(openssl version -v | awk '{print $2}')
-  if [[ "$openssl_version" == 1.1.1* ]]; then
-    openssl_version="1.1.1n"
-  fi
   cd sdk/core/azure-core
   if ! grep -q "baseline" vcpkg.json; then
+    # build and install azure-core with the version compatible with system pre-installed openssl
+    openssl_version=$(openssl version -v | awk '{print $2}')
+    if [[ "$openssl_version" == 1.1.1* ]]; then
+      openssl_version="1.1.1n"
+    fi
     sed -i 's/"version-string"/"builtin-baseline": "dafef74af53669ef1cc9015f55e0ce809ead62aa","version-string"/' vcpkg.json
     sed -i "s/\"version-string\"/\"overrides\": [{ \"name\": \"openssl\", \"version-string\": \"$openssl_version\" }],\"version-string\"/" vcpkg.json
   fi
@@ -116,13 +116,15 @@ if [[ "$OSTYPE" == "linux-gnu"* ]]; then
       apt install -y --no-install-recommends libxml2-dev libgsasl7-dev uuid-dev
       # Dependencies of GCS, probably a workaround until the docker image is rebuilt
       apt install -y --no-install-recommends libc-ares-dev libcurl4-openssl-dev
+      # Dependencies of Azure Storage Blob cpp
+      apt install -y openssl
    else # Assume Fedora/CentOS
       yum -y install libxml2-devel libgsasl-devel libuuid-devel
       # Dependencies of GCS, probably a workaround until the docker image is rebuilt
       yum -y install curl-devel c-ares-devel
       # Dependencies of Azure Storage Blob Cpp
-      yum -y install gcc-c++
       yum -y install perl-IPC-Cmd
+      yum -y install openssl
    fi
 fi
 

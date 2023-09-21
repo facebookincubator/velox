@@ -80,6 +80,15 @@ class FieldReference : public SpecialForm {
       std::vector<VectorPtr>* complexConstants = nullptr) const override;
 
  private:
+  void
+  apply(const SelectivityVector& rows, EvalCtx& context, VectorPtr& result);
+
+  bool addNullsFast(
+      const SelectivityVector& rows,
+      EvalCtx& context,
+      VectorPtr& result,
+      const RowVector* row);
+
   const std::string field_;
   int32_t index_ = -1;
 };

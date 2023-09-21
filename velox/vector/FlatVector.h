@@ -140,15 +140,43 @@ class FlatVector final : public SimpleVector<T> {
     return values_;
   }
 
+  /// Ensures that 'values_' is singly-referenced and has space for 'size'
+  /// elements. Sets elements between the old and new sizes to T() if
+  /// the new size > old size.
+  ///
+  /// If 'values_' is nullptr, read-only, not uniquely-referenced, or doesn't
+  /// have capacity for 'size' elements allocates new buffer and copies data to
+  /// it. Updates 'rawValues_' to point to element 0 of
+  /// values_->as<T>().
   BufferPtr mutableValues(vector_size_t size) {
-    // TODO: change this to isMutable(). See
-    // https://github.com/facebookincubator/velox/issues/6562.
-    if (values_ && !values_->isView() &&
-        values_->capacity() >= BaseVector::byteSize<T>(size)) {
-      return values_;
+    const auto numNewBytes = BaseVector::byteSize<T>(size);
+    if (values_ && !values_->isView() && values_->unique()) {
+      if (values_->size() < numNewBytes) {
+        AlignedBuffer::reallocate<T>(&values_, size, T());
+      }
+    } else {
+      BufferPtr newValues =
+          AlignedBuffer::allocate<T>(size, BaseVector::pool(), T());
+      if (values_) {
+        const auto numCopyBytes =
+            std::min<vector_size_t>(values_->size(), numNewBytes);
+        if constexpr (!std::is_same_v<T, bool>) {
+          auto dst = newValues->asMutable<char>();
+          auto src = values_->as<char>();
+          memcpy(dst, src, numCopyBytes);
+        } else {
+          auto dst = newValues->asMutable<T>();
+          auto src = values_->as<T>();
+          if (Buffer::is_pod_like_v<T>) {
+            memcpy(dst, src, numCopyBytes);
+          } else {
+            std::copy(src, src + numCopyBytes / sizeof(T), dst);
+          }
+        }
+      }
+      values_ = newValues;
     }
 
-    values_ = AlignedBuffer::allocate<T>(size, BaseVector::pool_);
     rawValues_ = values_->asMutable<T>();
     return values_;
   }
@@ -230,16 +258,13 @@ class FlatVector final : public SimpleVector<T> {
     if (count == 0) {
       return;
     }
-    copyValuesAndNulls(source, targetIndex, sourceIndex, count);
+    BaseVector::CopyRange range{sourceIndex, targetIndex, count};
+    copyRanges(source, folly::Range(&range, 1));
   }
 
   void copyRanges(
       const BaseVector* source,
-      const folly::Range<const BaseVector::CopyRange*>& ranges) override {
-    for (auto& range : ranges) {
-      copy(source, range.targetIndex, range.sourceIndex, range.count);
-    }
-  }
+      const folly::Range<const BaseVector::CopyRange*>& ranges) override;
 
   void resize(vector_size_t newSize, bool setNotNull = true) override;
 
@@ -450,12 +475,6 @@ class FlatVector final : public SimpleVector<T> {
       const SelectivityVector& rows,
       const vector_size_t* toSourceRow);
 
-  void copyValuesAndNulls(
-      const BaseVector* source,
-      vector_size_t targetIndex,
-      vector_size_t sourceIndex,
-      vector_size_t count);
-
   // Ensures that the values buffer has space for 'newSize' elements and is
   // mutable. Sets elements between the old and new sizes to 'initialValue' if
   // the new size > old size.
@@ -510,33 +529,8 @@ void FlatVector<StringView>::copy(
     const vector_size_t* toSourceRow);
 
 template <>
-void FlatVector<StringView>::copy(
-    const BaseVector* source,
-    vector_size_t targetIndex,
-    vector_size_t sourceIndex,
-    vector_size_t count);
-
-template <>
-void FlatVector<StringView>::copyRanges(
-    const BaseVector* source,
-    const folly::Range<const CopyRange*>& ranges);
-
-template <>
 void FlatVector<StringView>::validate(
     const VectorValidateOptions& options) const;
-
-template <>
-void FlatVector<bool>::copyValuesAndNulls(
-    const BaseVector* source,
-    const SelectivityVector& rows,
-    const vector_size_t* toSourceRow);
-
-template <>
-void FlatVector<bool>::copyValuesAndNulls(
-    const BaseVector* source,
-    vector_size_t targetIndex,
-    vector_size_t sourceIndex,
-    vector_size_t count);
 
 template <>
 Buffer* FlatVector<StringView>::getBufferWithSpace(vector_size_t size);
