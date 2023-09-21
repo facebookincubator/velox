@@ -97,6 +97,16 @@ class VectorFuzzer {
     /// If true, fuzzer will generate top-level nulls for dictionaries.
     bool dictionaryHasNulls{true};
 
+    /// If >0, fuzzer will generate uneven dictionaries with size of
+    /// larger / less / equal than the base vector size controlled by randomly.
+    /// If =0, fuzzer will always generate even dictionaries with the same size.
+    vector_size_t unevenDictionarySizeRange{3};
+
+    /// Chance of generation of dictionaries where the base vector size could be
+    /// smallerOrEqual than indirection size. (`smallerBaseVectorRatio` is a
+    /// double between 0 and 1).
+    double smallerBaseVectorRatio{0.5};
+
     /// Size of the generated strings. If `stringVariableLength` is true, the
     /// semantic of this option becomes "string maximum length". Here this
     /// represents number of characters and not bytes.

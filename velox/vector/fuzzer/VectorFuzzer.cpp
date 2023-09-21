@@ -552,7 +552,19 @@ VectorPtr VectorFuzzer::fuzzComplex(const TypePtr& type, vector_size_t size) {
 }
 
 VectorPtr VectorFuzzer::fuzzDictionary(const VectorPtr& vector) {
-  return fuzzDictionary(vector, vector->size());
+  VELOX_USER_CHECK(
+      opts_.unevenDictionarySizeRange >= 0,
+      "Fuzzer opts_.unevenDictionarySizeRange must >= 0");
+  if (opts_.unevenDictionarySizeRange == 0) {
+    return fuzzDictionary(vector, vector->size());
+  }
+
+  auto scale = rand<vector_size_t>(rng_) % opts_.unevenDictionarySizeRange;
+  if (coinToss(opts_.smallerBaseVectorRatio)) {
+    return fuzzDictionary(vector, vector->size() * scale);
+  } else {
+    return fuzzDictionary(vector, vector->size() / (scale + 1));
+  }
 }
 
 VectorPtr VectorFuzzer::fuzzDictionary(
