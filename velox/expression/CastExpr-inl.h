@@ -403,15 +403,21 @@ VectorPtr CastExpr::applyDecimalToVarcharCast(
 
   auto flatResult = result->asFlatVector<StringView>();
   if (StringView::isInline(rowSize)) {
-    char inlined[StringView::kInlineSize];
+    char* mutableRawValues = flatResult->mutableRawValues<char>();
     applyToSelectedNoThrowLocal(context, rows, result, [&](vector_size_t row) {
       if (simpleInput->isNullAt(row)) {
         result->setNull(row, true);
       } else {
-        flatResult->setNoCopy(
-            row,
-            convertToStringView<FromNativeType>(
-                simpleInput->valueAt(row), scale, rowSize, inlined));
+        // First 4 bytes store string size, and the remaining 12 bytes store the
+        // inline string.
+        auto stringView = convertToStringView<FromNativeType>(
+            simpleInput->valueAt(row),
+            scale,
+            rowSize,
+            mutableRawValues + sizeof(uint32_t));
+        uint32_t size = stringView.size();
+        memcpy(mutableRawValues, &size, sizeof(uint32_t));
+        mutableRawValues += sizeof(StringView);
       }
     });
     return result;
