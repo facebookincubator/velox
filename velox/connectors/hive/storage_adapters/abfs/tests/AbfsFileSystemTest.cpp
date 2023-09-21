@@ -41,12 +41,13 @@ class AbfsFileSystemTest : public testing::Test {
   static std::shared_ptr<const Config> hiveConfig(
       const std::unordered_map<std::string, std::string> configOverride = {},
       bool useAzuriteConnectionStr = true) {
-    std::unordered_map<std::string, std::string> config({
-        {"fs.azure.account.key.test.dfs.core.windows.net", "test"},
-        {filesystems::abfs::AbfsFileSystem::kReadAbfsConnectionStr,
-         facebook::velox::filesystems::test::AzuriteConnectionString},
-         { facebook::velox::filesystems::abfs::AbfsFileSystem::kReaderAbfsIoThreads, "4" }
-    });
+    std::unordered_map<std::string, std::string> config(
+        {{"fs.azure.account.key.test.dfs.core.windows.net", "test"},
+         {filesystems::abfs::AbfsFileSystem::kReadAbfsConnectionStr,
+          facebook::velox::filesystems::test::AzuriteConnectionString},
+         {facebook::velox::filesystems::abfs::AbfsFileSystem::
+              kReaderAbfsIoThreads,
+          "4"}});
 
     if (!useAzuriteConnectionStr) {
       config.erase(filesystems::abfs::AbfsFileSystem::kReadAbfsConnectionStr);
@@ -55,7 +56,8 @@ class AbfsFileSystemTest : public testing::Test {
     // Update the default config map with the supplied configOverride map
     for (const auto& item : configOverride) {
       config[item.first] = item.second;
-      std::cout << "config " + item.first + " value " + item.second << std::endl;
+      std::cout << "config " + item.first + " value " + item.second
+                << std::endl;
     }
 
     return std::make_shared<const core::MemConfig>(std::move(config));
@@ -136,12 +138,19 @@ void readData(ReadFile* readFile) {
   ASSERT_EQ(std::string_view(buff2, sizeof(buff2)), "cccccddddd");
 
   std::vector<folly::IOBuf> iobufs(2);
-  std::vector<Region> regions = {{0, 10}, { 10, 5}};
-  readFile->preadv({ regions.data(), regions.size() }, { iobufs.data(), iobufs.size() });
-  ASSERT_EQ(std::string_view(
-    reinterpret_cast<const char*>(iobufs[0].writableData()), iobufs[0].length()), "aaaaabbbbb");
-  ASSERT_EQ(std::string_view(
-    reinterpret_cast<const char*>(iobufs[1].writableData()), iobufs[1].length()), "ccccc");
+  std::vector<Region> regions = {{0, 10}, {10, 5}};
+  readFile->preadv(
+      {regions.data(), regions.size()}, {iobufs.data(), iobufs.size()});
+  ASSERT_EQ(
+      std::string_view(
+          reinterpret_cast<const char*>(iobufs[0].writableData()),
+          iobufs[0].length()),
+      "aaaaabbbbb");
+  ASSERT_EQ(
+      std::string_view(
+          reinterpret_cast<const char*>(iobufs[1].writableData()),
+          iobufs[1].length()),
+      "ccccc");
 }
 
 TEST_F(AbfsFileSystemTest, readFile) {
