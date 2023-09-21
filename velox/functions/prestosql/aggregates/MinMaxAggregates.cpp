@@ -535,7 +535,7 @@ struct MinMaxNAccumulator {
   }
 
   void checkAndSetN(DecodedVector& decodedN, vector_size_t row) {
-    // Null N is ignored.
+    // Skip null N.
     if (decodedN.isNullAt(row)) {
       return;
     }
@@ -652,7 +652,7 @@ class MinMaxNAggregateBase : public exec::Aggregate {
 
     auto tracker = trackRowSize(group);
     rows.applyToSelected([&](vector_size_t i) {
-      // Null value && N are ignored.
+      // Skip null value or N.
       if (!decodedValue_.isNullAt(i) && !decodedN_.isNullAt(i)) {
         addRawInput(group, i);
       }

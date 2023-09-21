@@ -105,7 +105,7 @@ struct MinMaxByNAccumulator {
   }
 
   void checkAndSetN(DecodedVector& decodedN, vector_size_t row) {
-    // Null N is ignored.
+    // Skip null N.
     if (decodedN.isNullAt(row)) {
       return;
     }

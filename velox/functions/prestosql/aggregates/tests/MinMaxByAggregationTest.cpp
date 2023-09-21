@@ -1470,15 +1470,15 @@ TEST_F(MinMaxByNTest, globalWithNullN) {
   // Rows with null 'compare' should be ignored.
   auto data = makeRowVector(
       {makeFlatVector<int32_t>({1, 2, 3, 4, 5, 6, 7}),
-       makeNullableFlatVector<int64_t>({77, 66, 55, 44, 33, 22, 11}),
+       makeFlatVector<int64_t>({77, 66, 55, 44, 33, 22, 11}),
        makeNullableFlatVector<int64_t>(
            {3, std::nullopt, 3, 3, 3, std::nullopt, 3})});
 
   auto expected = makeRowVector({
-      makeNullableArrayVector<int32_t>({
+      makeArrayVector<int32_t>({
           {7, 5, 4},
       }),
-      makeNullableArrayVector<int32_t>({
+      makeArrayVector<int32_t>({
           {1, 3, 4},
       }),
   });
@@ -1489,7 +1489,7 @@ TEST_F(MinMaxByNTest, globalWithNullN) {
   // All 'N' are null.
   data = makeRowVector({
       makeFlatVector<int32_t>({1, 2, 3, 4, 5, 6, 7}),
-      makeNullableFlatVector<int64_t>({77, 66, 55, 44, 33, 22, 11}),
+      makeFlatVector<int64_t>({77, 66, 55, 44, 33, 22, 11}),
       makeNullConstant(TypeKind::BIGINT, 7),
   });
 
@@ -1670,7 +1670,7 @@ TEST_F(MinMaxByNTest, groupByWithNullN) {
   auto data = makeRowVector({
       makeFlatVector<int16_t>({1, 2, 1, 2, 1, 2, 1}),
       makeFlatVector<int32_t>({1, 2, 3, 4, 5, 6, 7}),
-      makeNullableFlatVector<int64_t>({77, 66, 55, 44, 33, 22, 11}),
+      makeFlatVector<int64_t>({77, 66, 55, 44, 33, 22, 11}),
       makeNullableFlatVector<int64_t>(
           {3, std::nullopt, 3, 3, std::nullopt, 3, 3}),
   });
@@ -1694,7 +1694,7 @@ TEST_F(MinMaxByNTest, groupByWithNullN) {
   data = makeRowVector({
       makeFlatVector<int16_t>({1, 2, 1, 2, 1, 2, 1}),
       makeFlatVector<int32_t>({1, 2, 3, 4, 5, 6, 7}),
-      makeNullableFlatVector<int64_t>({77, 66, 55, 44, 33, 22, 11}),
+      makeFlatVector<int64_t>({77, 66, 55, 44, 33, 22, 11}),
       makeNullableFlatVector<int64_t>(
           {3, std::nullopt, 3, std::nullopt, std::nullopt, std::nullopt, 3}),
   });
