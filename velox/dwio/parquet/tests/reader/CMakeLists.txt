@@ -37,7 +37,6 @@ target_link_libraries(
   velox_e2e_filter_test_base
   velox_dwio_parquet_writer
   velox_dwio_native_parquet_reader
-  velox_exec_test_lib
   lz4::lz4
   lzo2::lzo2
   zstd::zstd
