@@ -55,7 +55,7 @@ GroupingSet::GroupingSet(
     bool ignoreNullKeys,
     bool isPartial,
     bool isRawInput,
-    const Spiller::Config* spillConfig,
+    const common::SpillConfig* spillConfig,
     uint32_t* numSpillRuns,
     tsan_atomic<bool>* nonReclaimableSection,
     OperatorCtx* operatorCtx)
@@ -854,6 +854,7 @@ void GroupingSet::spill(int64_t targetRows, int64_t targetBytes) {
         std::vector<CompareFlags>(),
         spillConfig_->filePath,
         spillConfig_->maxFileSize,
+        spillConfig_->writeBufferSize,
         spillConfig_->minSpillRunSize,
         spillConfig_->compressionKind,
         Spiller::pool(),

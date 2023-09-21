@@ -135,19 +135,28 @@ void Exchange::close() {
   exchangeClient_ = nullptr;
 }
 
-uint64_t Exchange::backgroundCpuTimeMs() const {
-  return exchangeClient_ ? exchangeClient_->backgroundCpuTimeMs() : 0;
-}
-
 void Exchange::recordExchangeClientStats() {
   if (!processSplits_) {
     return;
   }
 
   auto lockedStats = stats_.wlock();
+  const auto exchangeClientStats = exchangeClient_->stats();
   for (const auto& [name, value] : exchangeClient_->stats()) {
     lockedStats->runtimeStats.erase(name);
     lockedStats->runtimeStats.insert({name, value});
+  }
+
+  auto backgroundCpuTimeMs =
+      exchangeClientStats.find(ExchangeClient::kBackgroundCpuTimeMs);
+  if (backgroundCpuTimeMs != exchangeClientStats.end()) {
+    const CpuWallTiming backgroundTiming{
+        static_cast<uint64_t>(backgroundCpuTimeMs->second.count),
+        0,
+        static_cast<uint64_t>(backgroundCpuTimeMs->second.sum) *
+            Timestamp::kNanosecondsInMillisecond};
+    lockedStats->backgroundTiming.clear();
+    lockedStats->backgroundTiming.add(backgroundTiming);
   }
 }
 

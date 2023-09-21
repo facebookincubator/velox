@@ -30,7 +30,10 @@ TableWriter::TableWriter(
           tableWriteNode->outputType(),
           operatorId,
           tableWriteNode->id(),
-          "TableWrite"),
+          "TableWrite",
+          tableWriteNode->canSpill(driverCtx->queryConfig())
+              ? driverCtx->makeSpillConfig(operatorId)
+              : std::nullopt),
       driverCtx_(driverCtx),
       connectorPool_(driverCtx_->task->addConnectorPoolLocked(
           planNodeId(),
@@ -41,6 +44,7 @@ TableWriter::TableWriter(
       insertTableHandle_(
           tableWriteNode->insertTableHandle()->connectorInsertTableHandle()),
       commitStrategy_(tableWriteNode->commitStrategy()) {
+  setConnectorOrWriterMemoryReclaimer(connectorPool_);
   if (tableWriteNode->outputType()->size() == 1) {
     VELOX_USER_CHECK_NULL(tableWriteNode->aggregationNode());
   } else {
@@ -55,7 +59,13 @@ TableWriter::TableWriter(
   const auto& connectorId = tableWriteNode->insertTableHandle()->connectorId();
   connector_ = connector::getConnector(connectorId);
   connectorQueryCtx_ = operatorCtx_->createConnectorQueryCtx(
-      connectorId, planNodeId(), connectorPool_);
+      connectorId,
+      planNodeId(),
+      connectorPool_,
+      [this](memory::MemoryPool* pool) {
+        setConnectorOrWriterMemoryReclaimer(pool);
+      },
+      spillConfig_.has_value() ? &(spillConfig_.value()) : nullptr);
 
   auto names = tableWriteNode->columnNames();
   auto types = tableWriteNode->columns()->children();
@@ -82,6 +92,22 @@ void TableWriter::createDataSink() {
       insertTableHandle_,
       connectorQueryCtx_.get(),
       commitStrategy_);
+}
+
+void TableWriter::abortDataSink() {
+  VELOX_CHECK(!closed_);
+  closed_ = true;
+  if (dataSink_ != nullptr) {
+    dataSink_->close(false);
+  }
+}
+
+std::vector<std::string> TableWriter::closeDataSink() {
+  // We only expect closeDataSink called once.
+  VELOX_CHECK(!closed_);
+  VELOX_CHECK_NOT_NULL(dataSink_);
+  closed_ = true;
+  return dataSink_->close(true);
 }
 
 void TableWriter::addInput(RowVectorPtr input) {
@@ -112,6 +138,13 @@ void TableWriter::addInput(RowVectorPtr input) {
   }
 }
 
+void TableWriter::noMoreInput() {
+  Operator::noMoreInput();
+  if (aggregation_ != nullptr) {
+    aggregation_->noMoreInput();
+  }
+}
+
 RowVectorPtr TableWriter::getOutput() {
   // Making sure the output is read only once after the write is fully done.
   if (!noMoreInput_ || finished_) {
@@ -129,6 +162,7 @@ RowVectorPtr TableWriter::getOutput() {
 
   finished_ = true;
   updateWrittenBytes();
+  const std::vector<std::string> fragments = closeDataSink();
 
   if (outputType_->size() == 1) {
     // NOTE: this is for non-prestissimo use cases.
@@ -140,8 +174,6 @@ RowVectorPtr TableWriter::getOutput() {
         std::vector<VectorPtr>{std::make_shared<ConstantVector<int64_t>>(
             pool(), 1, false /*isNull*/, BIGINT(), numWrittenRows_)});
   }
-
-  const std::vector<std::string> fragments = dataSink_->finish();
 
   vector_size_t numOutputRows = fragments.size() + 1;
 
@@ -208,6 +240,56 @@ void TableWriter::updateWrittenBytes() {
   const auto writtenBytes = dataSink_->getCompletedBytes();
   auto lockedStats = stats_.wlock();
   lockedStats->physicalWrittenBytes = writtenBytes;
+}
+
+void TableWriter::close() {
+  if (!closed_) {
+    // Abort the data sink if the query has already failed and no need for
+    // regular close.
+    abortDataSink();
+  }
+  if (aggregation_ != nullptr) {
+    aggregation_->close();
+  }
+}
+
+void TableWriter::setConnectorOrWriterMemoryReclaimer(
+    memory::MemoryPool* pool) {
+  VELOX_CHECK_NOT_NULL(pool);
+  if (operatorCtx_->pool()->reclaimer() != nullptr) {
+    pool->setReclaimer(
+        TableWriter::MemoryReclaimer::create(operatorCtx_->driverCtx(), this));
+  }
+}
+
+std::unique_ptr<memory::MemoryReclaimer> TableWriter::MemoryReclaimer::create(
+    DriverCtx* driverCtx,
+    Operator* op) {
+  return std::unique_ptr<memory::MemoryReclaimer>(
+      new TableWriter::MemoryReclaimer(
+          driverCtx->driver->shared_from_this(), op));
+}
+
+bool TableWriter::MemoryReclaimer::reclaimableBytes(
+    const memory::MemoryPool& pool,
+    uint64_t& reclaimableBytes) const {
+  VELOX_CHECK(!pool.isLeaf());
+  reclaimableBytes = 0;
+  return false;
+}
+
+uint64_t TableWriter::MemoryReclaimer::reclaim(
+    memory::MemoryPool* pool,
+    uint64_t /*unused*/) {
+  VELOX_CHECK(!pool->isLeaf());
+  return 0;
+}
+
+void TableWriter::MemoryReclaimer::abort(
+    memory::MemoryPool* pool,
+    const std::exception_ptr& /* error */) {
+  VELOX_CHECK(!pool->isLeaf());
+  return;
 }
 
 // static

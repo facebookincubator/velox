@@ -51,6 +51,11 @@ void FlatVector<bool>::copyValuesAndNulls(
     const BaseVector* source,
     const SelectivityVector& rows,
     const vector_size_t* toSourceRow) {
+  if (source->typeKind() == TypeKind::UNKNOWN) {
+    rows.applyToSelected([&](auto row) { setNull(row, true); });
+    return;
+  }
+
   source = source->loadedVector();
   VELOX_CHECK(
       BaseVector::compatibleKind(BaseVector::typeKind(), source->typeKind()));
@@ -233,7 +238,7 @@ void FlatVector<StringView>::prepareForReuse() {
 
   // Check values buffer. Keep the buffer if singly-referenced and mutable.
   // Reset otherwise.
-  if (values_ && !(values_->unique() && values_->isMutable())) {
+  if (values_ && !values_->isMutable()) {
     values_ = nullptr;
     rawValues_ = nullptr;
   }
@@ -242,7 +247,7 @@ void FlatVector<StringView>::prepareForReuse() {
   // not too large.
   if (!stringBuffers_.empty()) {
     auto& firstBuffer = stringBuffers_.front();
-    if (firstBuffer->unique() && firstBuffer->isMutable() &&
+    if (firstBuffer->isMutable() &&
         firstBuffer->capacity() <= kMaxStringSizeForReuse) {
       firstBuffer->setSize(0);
       setStringBuffers({firstBuffer});
@@ -285,7 +290,7 @@ void FlatVector<StringView>::setNoCopy(
     const vector_size_t idx,
     const StringView& value) {
   VELOX_DCHECK(idx < BaseVector::length_);
-  VELOX_DCHECK(values_->isMutable());
+  VELOX_DCHECK(!values_->isView());
   rawValues_[idx] = value;
   if (BaseVector::nulls_) {
     BaseVector::setNull(idx, false);
@@ -477,6 +482,15 @@ template <>
 void FlatVector<StringView>::copyRanges(
     const BaseVector* source,
     const folly::Range<const CopyRange*>& ranges) {
+  if (source->typeKind() == TypeKind::UNKNOWN) {
+    for (const auto& range : ranges) {
+      for (auto i = 0; i < range.count; ++i) {
+        setNull(range.targetIndex + i, true);
+      }
+    }
+    return;
+  }
+
   auto leaf = source->wrappedVector()->asUnchecked<SimpleVector<StringView>>();
   if (pool_ == leaf->pool()) {
     // We copy referencing the storage of 'source'.

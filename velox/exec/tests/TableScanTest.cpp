@@ -17,6 +17,7 @@
 #include "velox/common/base/Fs.h"
 #include "velox/common/base/tests/GTestUtils.h"
 #include "velox/common/testutil/TestValue.h"
+#include "velox/connectors/hive/HiveConfig.h"
 #include "velox/connectors/hive/HiveConnector.h"
 #include "velox/connectors/hive/HiveConnectorSplit.h"
 #include "velox/dwio/common/tests/utils/DataFiles.h"
@@ -442,6 +443,166 @@ TEST_F(TableScanTest, subfieldPruningRemainingFilterRootFieldMissing) {
   }
   ASSERT_EQ(rows->size(), expectedSize);
   ASSERT_EQ(d->size(), expectedSize);
+}
+
+TEST_F(TableScanTest, subfieldPruningRemainingFilterStruct) {
+  auto structType = ROW({"a", "b"}, {BIGINT(), BIGINT()});
+  auto rowType = ROW({"c", "d"}, {structType, BIGINT()});
+  auto vectors = makeVectors(3, 10, rowType);
+  auto filePath = TempFilePath::create();
+  writeToFile(filePath->path, vectors);
+  enum { kNoOutput = 0, kWholeColumn = 1, kSubfieldOnly = 2 };
+  for (int outputColumn = kNoOutput; outputColumn <= kSubfieldOnly;
+       ++outputColumn) {
+    for (int filterColumn = kWholeColumn; filterColumn <= kSubfieldOnly;
+         ++filterColumn) {
+      SCOPED_TRACE(fmt::format("{} {}", outputColumn, filterColumn));
+      std::unordered_map<std::string, std::shared_ptr<connector::ColumnHandle>>
+          assignments;
+      assignments["d"] = std::make_shared<HiveColumnHandle>(
+          "d", HiveColumnHandle::ColumnType::kRegular, BIGINT(), BIGINT());
+      if (outputColumn > kNoOutput) {
+        std::vector<common::Subfield> subfields;
+        if (outputColumn == kSubfieldOnly) {
+          subfields.emplace_back("c.b");
+        }
+        assignments["c"] = std::make_shared<HiveColumnHandle>(
+            "c",
+            HiveColumnHandle::ColumnType::kRegular,
+            structType,
+            structType,
+            std::move(subfields));
+      }
+      core::TypedExprPtr remainingFilter;
+      if (filterColumn == kWholeColumn) {
+        remainingFilter = parseExpr(
+            "coalesce(c, cast(null AS ROW(a BIGINT, b BIGINT))).a % 2 == 0",
+            rowType);
+      } else {
+        remainingFilter = parseExpr("c.a % 2 == 0", rowType);
+      }
+      auto op =
+          PlanBuilder()
+              .tableScan(
+                  outputColumn == kNoOutput ? ROW({"d"}, {BIGINT()}) : rowType,
+                  makeTableHandle(SubfieldFilters{}, remainingFilter),
+                  assignments)
+              .planNode();
+      auto split = makeHiveConnectorSplit(filePath->path);
+      auto result = AssertQueryBuilder(op).split(split).copyResults(pool());
+      int expectedSize = 0;
+      std::vector<std::vector<BaseVector::CopyRange>> ranges;
+      for (auto& vec : vectors) {
+        std::vector<BaseVector::CopyRange> rs;
+        auto& c = vec->as<RowVector>()->childAt(0);
+        auto* a = c->as<RowVector>()->childAt(0)->asFlatVector<int64_t>();
+        for (int i = 0; i < vec->size(); ++i) {
+          if (!c->isNullAt(i) && !a->isNullAt(i) && a->valueAt(i) % 2 == 0) {
+            rs.push_back({i, expectedSize++, 1});
+          }
+        }
+        ranges.push_back(std::move(rs));
+      }
+      auto expected = BaseVector::create(rowType, expectedSize, pool());
+      auto& d = expected->as<RowVector>()->childAt(1);
+      for (int i = 0; i < vectors.size(); ++i) {
+        expected->copyRanges(vectors[i].get(), ranges[i]);
+      }
+      if (outputColumn == kNoOutput) {
+        expected = makeRowVector({"d"}, {d});
+      }
+      auto rows = result->as<RowVector>();
+      ASSERT_TRUE(rows);
+      ASSERT_EQ(rows->size(), expectedSize);
+      for (int i = 0; i < expectedSize; ++i) {
+        ASSERT_TRUE(rows->equalValueAt(expected.get(), i, i))
+            << "Row " << i << ": " << rows->toString(i) << " vs "
+            << expected->toString(i);
+      }
+    }
+  }
+}
+
+TEST_F(TableScanTest, subfieldPruningRemainingFilterMap) {
+  auto mapVector = makeMapVector<int64_t, int64_t>(
+      10,
+      [](auto) { return 3; },
+      [](auto i) { return i % 3; },
+      [](auto i) { return i % 3; });
+  auto mapType = mapVector->type();
+  auto vector = makeRowVector(
+      {"a", "b"}, {makeFlatVector<int64_t>(10, folly::identity), mapVector});
+  auto rowType = asRowType(vector->type());
+  auto filePath = TempFilePath::create();
+  writeToFile(filePath->path, {vector});
+  enum { kNoOutput = 0, kWholeColumn = 1, kSubfieldOnly = 2 };
+  for (int outputColumn = kNoOutput; outputColumn <= kSubfieldOnly;
+       ++outputColumn) {
+    for (int filterColumn = kWholeColumn; filterColumn <= kSubfieldOnly;
+         ++filterColumn) {
+      SCOPED_TRACE(fmt::format("{} {}", outputColumn, filterColumn));
+      std::unordered_map<std::string, std::shared_ptr<connector::ColumnHandle>>
+          assignments;
+      assignments["a"] = std::make_shared<HiveColumnHandle>(
+          "a", HiveColumnHandle::ColumnType::kRegular, BIGINT(), BIGINT());
+      if (outputColumn > kNoOutput) {
+        std::vector<common::Subfield> subfields;
+        if (outputColumn == kSubfieldOnly) {
+          subfields.emplace_back("b[1]");
+        }
+        assignments["b"] = std::make_shared<HiveColumnHandle>(
+            "b",
+            HiveColumnHandle::ColumnType::kRegular,
+            mapType,
+            mapType,
+            std::move(subfields));
+      }
+      core::TypedExprPtr remainingFilter;
+      if (filterColumn == kWholeColumn) {
+        remainingFilter = parseExpr(
+            "coalesce(b, cast(null AS MAP(BIGINT, BIGINT)))[0] == 0", rowType);
+      } else {
+        remainingFilter = parseExpr("b[0] == 0", rowType);
+      }
+      auto op =
+          PlanBuilder()
+              .tableScan(
+                  outputColumn == kNoOutput ? ROW({"a"}, {BIGINT()}) : rowType,
+                  makeTableHandle(SubfieldFilters{}, remainingFilter),
+                  assignments)
+              .planNode();
+      auto split = makeHiveConnectorSplit(filePath->path);
+      auto result = AssertQueryBuilder(op).split(split).copyResults(pool());
+      auto expected = vector;
+      auto a = vector->as<RowVector>()->childAt(0);
+      if (outputColumn == kNoOutput) {
+        expected = makeRowVector({"a"}, {a});
+      } else if (
+          outputColumn == kSubfieldOnly && filterColumn == kSubfieldOnly) {
+        auto sizes = allocateIndices(10, pool());
+        auto* rawSizes = sizes->asMutable<vector_size_t>();
+        std::fill(rawSizes, rawSizes + 10, 2);
+        auto b = std::make_shared<MapVector>(
+            pool(),
+            mapType,
+            nullptr,
+            10,
+            mapVector->offsets(),
+            sizes,
+            mapVector->mapKeys(),
+            mapVector->mapValues());
+        expected = makeRowVector({"a", "b"}, {a, b});
+      }
+      auto rows = result->as<RowVector>();
+      ASSERT_TRUE(rows);
+      ASSERT_EQ(rows->size(), 10);
+      for (int i = 0; i < 10; ++i) {
+        ASSERT_TRUE(rows->equalValueAt(expected.get(), i, i))
+            << "Row " << i << ": " << rows->toString(i) << " vs "
+            << expected->toString(i);
+      }
+    }
+  }
 }
 
 TEST_F(TableScanTest, subfieldPruningMapType) {
@@ -2190,6 +2351,20 @@ TEST_F(TableScanTest, remainingFilterSkippedStrides) {
   EXPECT_EQ(skippedStrides.sum, 1);
 }
 
+TEST_F(TableScanTest, skipStridesForParentNulls) {
+  auto b = makeFlatVector<int64_t>(10'000, folly::identity);
+  auto a = makeRowVector({"b"}, {b}, [](auto i) { return i % 2 == 0; });
+  auto vector = makeRowVector({"a"}, {a});
+  auto file = TempFilePath::create();
+  writeToFile(file->path, {vector});
+  auto plan = PlanBuilder()
+                  .tableScan(asRowType(vector->type()), {"a.b IS NULL"})
+                  .planNode();
+  auto split = makeHiveConnectorSplit(file->path);
+  auto result = AssertQueryBuilder(plan).split(split).copyResults(pool());
+  ASSERT_EQ(result->size(), 5000);
+}
+
 /// Test the handling of constant remaining filter results which occur when
 /// filter input is a dictionary vector with all indices being the same (i.e.
 /// DictionaryVector::isConstant() == true).
@@ -2879,32 +3054,45 @@ TEST_F(TableScanTest, readMissingFieldsInArray) {
   }
 }
 
-// Tests queries that use that read more row fields than exist in the data in a
-// map.
+// Tests queries that read more row fields than exist in the data in a map and
+// array.
 TEST_F(TableScanTest, readMissingFieldsInMap) {
   vector_size_t size = 1'000;
-  auto rowVector = makeRowVector({
+  auto valuesVector = makeRowVector({
       makeFlatVector<int64_t>(size * 4, [](auto row) { return row; }),
-      makeFlatVector<int64_t>(size * 4, [](auto row) { return row; }),
+      makeFlatVector<int32_t>(size * 4, [](auto row) { return row; }),
   });
   auto keysVector =
       makeFlatVector<int64_t>(size * 4, [](auto row) { return row % 4; });
   std::vector<vector_size_t> offsets;
-  for (int i = 0; i < size; i++) {
+  for (auto i = 0; i < size; i++) {
     offsets.push_back(i * 4);
   }
-  auto mapVector = makeMapVector(offsets, keysVector, rowVector);
+  auto mapVector = makeMapVector(offsets, keysVector, valuesVector);
+  auto arrayVector = makeArrayVector(offsets, valuesVector);
 
   auto filePath = TempFilePath::create();
-  writeToFile(filePath->path, {makeRowVector({mapVector})});
-  // Create a row type with additional fields not present in the file.
-  auto rowType = makeRowType(
-      {MAP(BIGINT(), makeRowType({BIGINT(), BIGINT(), BIGINT(), BIGINT()}))});
+  writeToFile(filePath->path, {makeRowVector({mapVector, arrayVector})});
 
-  // Query all the fields.
+  // Create a row type with additional fields in the structure not present in
+  // the file ('c' and 'd') and with all columns having different names than in
+  // the file.
+  auto structType =
+      ROW({"a", "b", "c", "d"}, {BIGINT(), INTEGER(), DOUBLE(), REAL()});
+  auto rowType =
+      ROW({"m1", "a2"}, {{MAP(BIGINT(), structType), ARRAY(structType)}});
+
   auto op = PlanBuilder()
-                .tableScan(rowType)
-                .project({"c0[0].c0", "c0[1].c1", "c0[2].c2", "c0[3].c3"})
+                .tableScan(rowType, {}, "", rowType)
+                .project(
+                    {"m1[0].a",
+                     "m1[1].b",
+                     "m1[2].c",
+                     "m1[3].d",
+                     "a2[1].a",
+                     "a2[2].b",
+                     "a2[3].c",
+                     "a2[4].d"})
                 .planNode();
 
   auto split = makeHiveConnectorSplit(filePath->path);
@@ -2913,23 +3101,88 @@ TEST_F(TableScanTest, readMissingFieldsInMap) {
   ASSERT_EQ(result->size(), size);
   auto rows = result->as<RowVector>();
   ASSERT_TRUE(rows);
-  ASSERT_EQ(rows->childrenSize(), 4);
+  ASSERT_EQ(rows->childrenSize(), 8);
   // The fields that exist in the data should be present and correct.
-  for (int i = 0; i < 2; i++) {
+  for (int i = 0; i < 8; i += 4) {
     auto val = rows->childAt(i)->as<SimpleVector<int64_t>>();
     ASSERT_TRUE(val);
     ASSERT_EQ(val->size(), size);
-    for (int j = 0; j < size; j++) {
+    for (auto j = 0; j < size; j++) {
       ASSERT_FALSE(val->isNullAt(j));
-      ASSERT_EQ(val->valueAt(j), j * 4 + i);
+      ASSERT_EQ(val->valueAt(j), j * 4);
+    }
+  }
+  for (int i = 1; i < 8; i += 4) {
+    auto val = rows->childAt(i)->as<SimpleVector<int32_t>>();
+    ASSERT_TRUE(val);
+    ASSERT_EQ(val->size(), size);
+    for (auto j = 0; j < size; j++) {
+      ASSERT_FALSE(val->isNullAt(j));
+      ASSERT_EQ(val->valueAt(j), j * 4 + 1);
     }
   }
   // The fields that don't exist in the data should be null.
-  for (int i = 2; i < 4; i++) {
-    auto val = rows->childAt(i)->as<SimpleVector<int64_t>>();
+  for (int i = 2; i < 8; i += 4) {
+    auto val = rows->childAt(i)->as<SimpleVector<double>>();
     ASSERT_TRUE(val);
     ASSERT_EQ(val->size(), size);
-    for (int j = 0; j < size; j++) {
+    for (auto j = 0; j < size; j++) {
+      ASSERT_TRUE(val->isNullAt(j));
+    }
+  }
+  for (int i = 3; i < 8; i += 4) {
+    auto val = rows->childAt(i)->as<SimpleVector<float>>();
+    ASSERT_TRUE(val);
+    ASSERT_EQ(val->size(), size);
+    for (auto j = 0; j < size; j++) {
+      ASSERT_TRUE(val->isNullAt(j));
+    }
+  }
+
+  // Now run query with column mapping using names - we should not be able to
+  // find any names.
+  result = AssertQueryBuilder(op)
+               .connectorConfig(
+                   kHiveConnectorId,
+                   connector::hive::HiveConfig::kOrcUseColumnNames,
+                   "true")
+               .split(split)
+               .copyResults(pool());
+
+  ASSERT_EQ(result->size(), size);
+  rows = result->as<RowVector>();
+  ASSERT_TRUE(rows);
+  ASSERT_EQ(rows->childrenSize(), 8);
+
+  for (int i = 0; i < 8; i += 4) {
+    auto val = rows->childAt(i)->as<SimpleVector<int64_t>>();
+    ASSERT_TRUE(val != nullptr);
+    ASSERT_EQ(val->size(), size);
+    for (auto j = 0; j < size; j++) {
+      ASSERT_TRUE(val->isNullAt(j));
+    }
+  }
+  for (int i = 1; i < 8; i += 4) {
+    auto val = rows->childAt(i)->as<SimpleVector<int32_t>>();
+    ASSERT_TRUE(val != nullptr);
+    ASSERT_EQ(val->size(), size);
+    for (auto j = 0; j < size; j++) {
+      ASSERT_TRUE(val->isNullAt(j));
+    }
+  }
+  for (int i = 2; i < 8; i += 4) {
+    auto val = rows->childAt(i)->as<SimpleVector<double>>();
+    ASSERT_TRUE(val != nullptr);
+    ASSERT_EQ(val->size(), size);
+    for (auto j = 0; j < size; j++) {
+      ASSERT_TRUE(val->isNullAt(j));
+    }
+  }
+  for (int i = 3; i < 8; i += 4) {
+    auto val = rows->childAt(i)->as<SimpleVector<float>>();
+    ASSERT_TRUE(val != nullptr);
+    ASSERT_EQ(val->size(), size);
+    for (auto j = 0; j < size; j++) {
       ASSERT_TRUE(val->isNullAt(j));
     }
   }
@@ -3001,7 +3254,7 @@ TEST_F(TableScanTest, tableScanProjections) {
   testQueryRow({3, 2});
 }
 
-// Tests queries that use that read more row fields than exist in the data, and
+// Tests queries that read more row fields than exist in the data, and
 // read additional columns besides just the row.
 TEST_F(TableScanTest, readMissingFieldsWithMoreColumns) {
   vector_size_t size = 1'000;
@@ -3020,18 +3273,20 @@ TEST_F(TableScanTest, readMissingFieldsWithMoreColumns) {
 
   auto filePath = TempFilePath::create();
   writeToFile(filePath->path, {rowVector});
-  // Create a row type with additional fields not present in the file.
-  auto rowType = makeRowType(
-      {makeRowType({BIGINT(), BIGINT(), BIGINT(), BIGINT()}),
-       INTEGER(),
-       DOUBLE(),
-       BOOLEAN(),
-       VARCHAR()});
+
+  // Create a row type with additional fields in the structure not present in
+  // the file ('c' and 'd') and with all columns having different names than in
+  // the file.
+  auto structType =
+      ROW({"a", "b", "c", "d"}, {BIGINT(), BIGINT(), BIGINT(), BIGINT()});
+  auto rowType =
+      ROW({"st1", "i2", "d3", "b4", "c4"},
+          {{structType, INTEGER(), DOUBLE(), BOOLEAN(), VARCHAR()}});
 
   auto op =
       PlanBuilder()
-          .tableScan(rowType)
-          .project({"c0.c0", "c0.c1", "c0.c2", "c0.c3", "c1", "c2", "c3", "c4"})
+          .tableScan(rowType, {}, "", rowType)
+          .project({"st1.a", "st1.b", "st1.c", "st1.d", "i2", "d3", "b4", "c4"})
           .planNode();
 
   auto split = makeHiveConnectorSplit(filePath->path);
@@ -3088,6 +3343,59 @@ TEST_F(TableScanTest, readMissingFieldsWithMoreColumns) {
   ASSERT_TRUE(stringCol);
   ASSERT_EQ(stringCol->size(), size);
   for (int j = 0; j < size; j++) {
+    ASSERT_FALSE(stringCol->isNullAt(j));
+    ASSERT_EQ(stringCol->valueAt(j), fruitViews[j % fruitViews.size()]);
+  }
+
+  // Now run query with column mapping using names - we should not be able to
+  // find any names, except for the last string column.
+  result = AssertQueryBuilder(op)
+               .connectorConfig(
+                   kHiveConnectorId,
+                   connector::hive::HiveConfig::kOrcUseColumnNames,
+                   "true")
+               .split(split)
+               .copyResults(pool());
+
+  ASSERT_EQ(result->size(), size);
+  rows = result->as<RowVector>();
+  ASSERT_TRUE(rows);
+  ASSERT_EQ(rows->childrenSize(), 8);
+
+  for (int i = 0; i < 4; i++) {
+    auto val = rows->childAt(i)->as<SimpleVector<int64_t>>();
+    ASSERT_TRUE(val != nullptr);
+    ASSERT_EQ(val->size(), size);
+    for (auto j = 0; j < size; j++) {
+      ASSERT_TRUE(val->isNullAt(j));
+    }
+  }
+
+  intCol = rows->childAt(4)->as<SimpleVector<int32_t>>();
+  ASSERT_TRUE(intCol != nullptr);
+  ASSERT_EQ(intCol->size(), size);
+  for (auto j = 0; j < size; j++) {
+    ASSERT_TRUE(intCol->isNullAt(j));
+  }
+
+  doubleCol = rows->childAt(5)->as<SimpleVector<double>>();
+  ASSERT_TRUE(doubleCol != nullptr);
+  ASSERT_EQ(doubleCol->size(), size);
+  for (auto j = 0; j < size; j++) {
+    ASSERT_TRUE(doubleCol->isNullAt(j));
+  }
+
+  boolCol = rows->childAt(6)->as<SimpleVector<bool>>();
+  ASSERT_TRUE(boolCol != nullptr);
+  ASSERT_EQ(boolCol->size(), size);
+  for (auto j = 0; j < size; j++) {
+    ASSERT_TRUE(boolCol->isNullAt(j));
+  }
+
+  stringCol = rows->childAt(7)->as<SimpleVector<StringView>>();
+  ASSERT_TRUE(stringCol != nullptr);
+  ASSERT_EQ(stringCol->size(), size);
+  for (auto j = 0; j < size; j++) {
     ASSERT_FALSE(stringCol->isNullAt(j));
     ASSERT_EQ(stringCol->valueAt(j), fruitViews[j % fruitViews.size()]);
   }

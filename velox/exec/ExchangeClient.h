@@ -27,6 +27,7 @@ class ExchangeClient {
  public:
   static constexpr int32_t kDefaultMaxQueuedBytes = 32 << 20; // 32 MB.
   static constexpr int32_t kDefaultMaxWaitSeconds = 2;
+  static inline const std::string kBackgroundCpuTimeMs = "backgroundCpuTimeMs";
 
   ExchangeClient(
       std::string taskId,
@@ -60,9 +61,9 @@ class ExchangeClient {
   // Closes exchange sources.
   void close();
 
-  uint64_t backgroundCpuTimeMs() const;
-
   // Returns runtime statistics aggregated across all of the exchange sources.
+  // ExchangeClient is expected to report background CPU time by including a
+  // runtime metric named ExchangeClient::kBackgroundCpuTimeMs.
   folly::F14FastMap<std::string, RuntimeMetric> stats() const;
 
   std::shared_ptr<ExchangeQueue> queue() const {

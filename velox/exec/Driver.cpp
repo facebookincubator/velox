@@ -53,7 +53,7 @@ velox::memory::MemoryPool* DriverCtx::addOperatorPool(
   return task->addOperatorPool(planNodeId, pipelineId, driverId, operatorType);
 }
 
-std::optional<Spiller::Config> DriverCtx::makeSpillConfig(
+std::optional<common::SpillConfig> DriverCtx::makeSpillConfig(
     int32_t operatorId) const {
   const auto& queryConfig = task->queryCtx()->queryConfig();
   if (!queryConfig.spillEnabled()) {
@@ -62,10 +62,11 @@ std::optional<Spiller::Config> DriverCtx::makeSpillConfig(
   if (task->spillDirectory().empty()) {
     return std::nullopt;
   }
-  return Spiller::Config(
+  return common::SpillConfig(
       makeOperatorSpillPath(
           task->spillDirectory(), pipelineId, driverId, operatorId),
       queryConfig.maxSpillFileSize(),
+      queryConfig.spillWriteBufferSize(),
       queryConfig.minSpillRunSize(),
       task->queryCtx()->spillExecutor(),
       queryConfig.spillableReservationGrowthPct(),
@@ -340,7 +341,9 @@ CpuWallTiming Driver::processLazyTiming(
   auto it = lockStats->runtimeStats.find(LazyVector::kCpuNanos);
   if (it != lockStats->runtimeStats.end()) {
     auto cpu = it->second.sum;
-    cpuDelta = cpu - lockStats->lastLazyCpuNanos;
+    cpuDelta = cpu >= lockStats->lastLazyCpuNanos
+        ? cpu - lockStats->lastLazyCpuNanos
+        : 0;
     if (cpuDelta == 0) {
       // return early if no change. Checking one counter is enough. If
       // this did not change and the other did, the change would be
@@ -357,13 +360,19 @@ CpuWallTiming Driver::processLazyTiming(
   it = lockStats->runtimeStats.find(LazyVector::kWallNanos);
   if (it != lockStats->runtimeStats.end()) {
     auto wall = it->second.sum;
-    wallDelta = wall - lockStats->lastLazyWallNanos;
-    lockStats->lastLazyWallNanos = wall;
+    wallDelta = wall >= lockStats->lastLazyWallNanos
+        ? wall - lockStats->lastLazyWallNanos
+        : 0;
+    if (wallDelta > 0) {
+      lockStats->lastLazyWallNanos = wall;
+    }
   }
   operators_[0]->stats().wlock()->getOutputTiming.add(
       CpuWallTiming{1, wallDelta, cpuDelta});
   return CpuWallTiming{
-      1, timing.wallNanos - wallDelta, timing.cpuNanos - cpuDelta};
+      1,
+      timing.wallNanos >= wallDelta ? timing.wallNanos - wallDelta : 0,
+      timing.cpuNanos >= cpuDelta ? timing.cpuNanos - cpuDelta : 0};
 }
 
 StopReason Driver::runInternal(
@@ -472,7 +481,7 @@ StopReason Driver::runInternal(
             {
               auto timer = createDeltaCpuWallTimer(
                   [op, this](const CpuWallTiming& deltaTiming) {
-                    auto selfdelta = processLazyTiming(*op, deltaTiming);
+                    processLazyTiming(*op, deltaTiming);
                     op->stats().wlock()->getOutputTiming.add(deltaTiming);
                   });
               RuntimeStatWriterScopeGuard statsWriterGuard(op);
@@ -536,7 +545,7 @@ StopReason Driver::runInternal(
               if (op->isFinished()) {
                 auto timer = createDeltaCpuWallTimer(
                     [op, this](const CpuWallTiming& timing) {
-                      auto selfdelta = processLazyTiming(*op, timing);
+                      processLazyTiming(*op, timing);
                       op->stats().wlock()->finishTiming.add(timing);
                     });
                 RuntimeStatWriterScopeGuard statsWriterGuard(nextOp);

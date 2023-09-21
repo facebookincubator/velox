@@ -75,6 +75,8 @@ class AggregationFuzzerRunner {
       "avg_merge",
       "avg_merge_extract_double",
       "avg_merge_extract_real",
+      // Lambda functions are not supported yet.
+      "reduce_agg",
   };
 
   // Functions whose results verification should be skipped. These can be
@@ -109,9 +111,6 @@ class AggregationFuzzerRunner {
           {"min_by", ""},
           {"map_union_sum", "array_sort(map_keys({}))"},
           {"multimap_agg", "transform_values({}, (k, v) -> array_sort(v))"},
-          // https://github.com/facebookincubator/velox/issues/6314
-          {"min", ""},
-          {"max", ""},
           // TODO: Skip result verification of companion functions that return
           // complex types that contain floating-point fields for now, until we
           // fix

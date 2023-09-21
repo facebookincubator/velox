@@ -80,6 +80,19 @@ class DictionaryVector : public SimpleVector<T> {
 
   bool isNullAt(vector_size_t idx) const override;
 
+  bool containsNullAt(vector_size_t idx) const override {
+    if constexpr (std::is_same_v<T, ComplexType>) {
+      if (isNullAt(idx)) {
+        return true;
+      }
+
+      auto innerIndex = getDictionaryIndex(idx);
+      return dictionaryValues_->containsNullAt(innerIndex);
+    } else {
+      return isNullAt(idx);
+    }
+  }
+
   const T valueAtFast(vector_size_t idx) const;
 
   /**
@@ -118,7 +131,9 @@ class DictionaryVector : public SimpleVector<T> {
   }
 
   BufferPtr mutableIndices(vector_size_t size) {
-    if (indices_ && indices_->isMutable() &&
+    // TODO: change this to isMutable(). See
+    // https://github.com/facebookincubator/velox/issues/6562.
+    if (indices_ && !indices_->isView() &&
         indices_->capacity() >= size * sizeof(vector_size_t)) {
       return indices_;
     }
