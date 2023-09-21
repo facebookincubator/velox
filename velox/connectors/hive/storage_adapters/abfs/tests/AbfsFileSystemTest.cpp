@@ -29,6 +29,8 @@
 
 using namespace facebook::velox;
 
+using ::facebook::velox::common::Region;
+
 constexpr int kOneMB = 1 << 20;
 static const std::string filePath = "test_file.txt";
 static const std::string fullFilePath =
@@ -43,6 +45,7 @@ class AbfsFileSystemTest : public testing::Test {
         {"fs.azure.account.key.test.dfs.core.windows.net", "test"},
         {filesystems::abfs::AbfsFileSystem::kReadAbfsConnectionStr,
          facebook::velox::filesystems::test::AzuriteConnectionString},
+         { facebook::velox::filesystems::abfs::AbfsFileSystem::kReaderAbfsIoThreads, "4" }
     });
 
     if (!useAzuriteConnectionStr) {
@@ -52,6 +55,7 @@ class AbfsFileSystemTest : public testing::Test {
     // Update the default config map with the supplied configOverride map
     for (const auto& item : configOverride) {
       config[item.first] = item.second;
+      std::cout << "config " + item.first + " value " + item.second << std::endl;
     }
 
     return std::make_shared<const core::MemConfig>(std::move(config));
@@ -120,6 +124,24 @@ void readData(ReadFile* readFile) {
   ASSERT_EQ(zarf, "ccccccccccddddd");
   ASSERT_EQ(warf, "abbbbbcc");
   ASSERT_EQ(warfFromBuf, "abbbbbcc");
+
+  char buff1[10];
+  char buff2[10];
+  std::vector<folly::Range<char*>> buffers = {
+      folly::Range<char*>(buff1, 10),
+      folly::Range<char*>(nullptr, kOneMB - 5),
+      folly::Range<char*>(buff2, 10)};
+  ASSERT_EQ(10 + kOneMB - 5 + 10, readFile->preadv(0, buffers));
+  ASSERT_EQ(std::string_view(buff1, sizeof(buff1)), "aaaaabbbbb");
+  ASSERT_EQ(std::string_view(buff2, sizeof(buff2)), "cccccddddd");
+
+  std::vector<folly::IOBuf> iobufs(2);
+  std::vector<Region> regions = {{0, 10}, { 10, 5}};
+  readFile->preadv({ regions.data(), regions.size() }, { iobufs.data(), iobufs.size() });
+  ASSERT_EQ(std::string_view(
+    reinterpret_cast<const char*>(iobufs[0].writableData()), iobufs[0].length()), "aaaaabbbbb");
+  ASSERT_EQ(std::string_view(
+    reinterpret_cast<const char*>(iobufs[1].writableData()), iobufs[1].length()), "ccccc");
 }
 
 TEST_F(AbfsFileSystemTest, readFile) {

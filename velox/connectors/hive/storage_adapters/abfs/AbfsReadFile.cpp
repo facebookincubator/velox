@@ -129,14 +129,6 @@ void AbfsReadFile::preadv(
     folly::Range<const common::Region*> regions,
     folly::Range<folly::IOBuf*> iobufs) const {
   VELOX_CHECK_EQ(regions.size(), iobufs.size());
-  for (size_t i = 0; i < regions.size(); ++i) {
-    const auto& region = regions[i];
-    auto& output = iobufs[i];
-    output = folly::IOBuf(folly::IOBuf::CREATE, region.length);
-    pread(region.offset, region.length, output.writableData());
-    output.append(region.length);
-  }
-
   if (ioExecutor_) {
     std::vector<folly::Future<folly::Unit>> futures;
     for (size_t i = 0; i < regions.size(); ++i) {
@@ -170,6 +162,14 @@ void AbfsReadFile::preadv(
     }
     for (size_t i = 0; i < regions.size(); ++i) {
       iobufs[i].append(regions[i].length);
+    }
+  } else {
+    for (size_t i = 0; i < regions.size(); ++i) {
+      const auto& region = regions[i];
+      auto& output = iobufs[i];
+      output = folly::IOBuf(folly::IOBuf::CREATE, region.length);
+      pread(region.offset, region.length, output.writableData());
+      output.append(region.length);
     }
   }
 }
