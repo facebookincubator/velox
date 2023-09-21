@@ -122,6 +122,10 @@ class DictionaryVector : public SimpleVector<T> {
     return indices_;
   }
 
+  VectorPtr& valueVector() {
+    return dictionaryValues_;
+  }
+
   const VectorPtr& valueVector() const override {
     return dictionaryValues_;
   }
