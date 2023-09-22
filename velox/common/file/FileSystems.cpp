@@ -49,6 +49,24 @@ void registerFileSystem(
   registeredFileSystems().emplace_back(schemeMatcher, fileSystemGenerator);
 }
 
+// Overloaded version of registerFileSystem, for fileSystem which do not require
+// config object to be passed on each instance of getFileSystem. Once config is
+// passed to registerFileSystem, the config object will be re-used for all the
+// subsequent calls to getFileSystem.
+void registerFileSystem(
+    const std::function<bool(std::string_view)> schemeMatcher,
+    const std::function<std::shared_ptr<FileSystem>(
+        std::shared_ptr<const Config>,
+        std::string_view)> fileSystemGenerator,
+    const std::shared_ptr<const Config> config) {
+  registerFileSystem(
+      schemeMatcher,
+      [&config, &fileSystemGenerator](
+          std::shared_ptr<const Config> /*unused*/, std::string_view path) {
+        return fileSystemGenerator(config, path);
+      });
+}
+
 std::shared_ptr<FileSystem> getFileSystem(
     std::string_view filePath,
     std::shared_ptr<const Config> properties) {
