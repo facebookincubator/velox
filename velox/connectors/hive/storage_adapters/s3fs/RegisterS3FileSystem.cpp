@@ -38,16 +38,11 @@ fileSystemGenerator() {
   static auto filesystemGenerator = [](std::shared_ptr<const Config> properties,
                                        std::string_view filePath) {
     folly::call_once(S3FSInstantiationFlag, [&properties]() {
-      std::shared_ptr<S3FileSystem> fs;
-      if (properties != nullptr) {
-        initializeS3(properties.get());
-        fs = std::make_shared<S3FileSystem>(properties);
-      } else {
-        auto config = std::make_shared<core::MemConfig>();
-        initializeS3(config.get());
-        fs = std::make_shared<S3FileSystem>(config);
-      }
-      s3fs = fs;
+      // S3 FS always requires properties.
+      // Either endpoint is required or credentials are required.
+      VELOX_CHECK_NOT_NULL(properties);
+      initializeS3(properties.get());
+      s3fs = std::make_shared<S3FileSystem>(properties);
     });
     return s3fs;
   };
