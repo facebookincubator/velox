@@ -27,6 +27,12 @@
 
 namespace facebook::velox {
 
+#define RETURN_IF_ERROR(func, result) \
+  result = func;                      \
+  if (result < 0) {                   \
+    return result;                    \
+  }
+
 std::string ReadFile::pread(uint64_t offset, uint64_t length) const {
   std::string buf;
   buf.resize(length);
@@ -146,11 +152,11 @@ uint64_t LocalReadFile::preadv(
   std::vector<struct iovec> iovecs;
   iovecs.reserve(buffers.size());
 
-  auto preadvRun = [&]() -> ssize_t {
-    auto bytesRead = folly::preadv(fd_, iovecs.data(), iovecs.size(), offset);
+  auto readvFunc = [&]() -> ssize_t {
+    const auto bytesRead =
+        folly::preadv(fd_, iovecs.data(), iovecs.size(), offset);
     if (bytesRead < 0) {
-      perror("preadv");
-      LOG(ERROR) << "preadv failed with error: " << strerror(errno);
+      LOG(ERROR) << "preadv failed with error: " << folly::errnoStr(errno);
     } else {
       totalBytesRead += bytesRead;
       offset += bytesRead;
@@ -166,10 +172,8 @@ uint64_t LocalReadFile::preadv(
         auto bytes = std::min<size_t>(droppedBytes.size(), skipSize);
 
         if (iovecs.size() >= IOV_MAX) {
-          auto bytesRead = preadvRun();
-          if (bytesRead < 0) {
-            return bytesRead;
-          }
+          ssize_t bytesRead{0};
+          RETURN_IF_ERROR(readvFunc(), bytesRead);
         }
 
         iovecs.push_back({droppedBytes.data(), bytes});
@@ -177,10 +181,8 @@ uint64_t LocalReadFile::preadv(
       }
     } else {
       if (iovecs.size() >= IOV_MAX) {
-        auto bytesRead = preadvRun();
-        if (bytesRead < 0) {
-          return bytesRead;
-        }
+        ssize_t bytesRead{0};
+        RETURN_IF_ERROR(readvFunc(), bytesRead);
       }
 
       iovecs.push_back({range.data(), range.size()});
@@ -189,10 +191,8 @@ uint64_t LocalReadFile::preadv(
 
   // Perform any remaining preadv calls
   if (!iovecs.empty()) {
-    auto bytesRead = preadvRun();
-    if (bytesRead < 0) {
-      return bytesRead;
-    }
+    ssize_t bytesRead{0};
+    RETURN_IF_ERROR(readvFunc(), bytesRead);
   }
 
   return totalBytesRead;
