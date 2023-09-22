@@ -231,7 +231,11 @@ interpreted literally, i.e., as full string matches.</p>
 <span class="sig-name descname"><span class="pre">strpos</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">string</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">substring</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">instance</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">bigint</span></span></span></dt>
 <dd><p>Returns the position of the N-th <code class="docutils literal notranslate"><span class="pre">instance</span></code> of <code class="docutils literal notranslate"><span class="pre">substring</span></code> in <code class="docutils literal notranslate"><span class="pre">string</span></code>.
 <code class="docutils literal notranslate"><span class="pre">instance</span></code> must be a positive number.
-Positions start with <code class="docutils literal notranslate"><span class="pre">1</span></code>. If not found, <code class="docutils literal notranslate"><span class="pre">0</span></code> is returned.</p>
+Positions start with <code class="docutils literal notranslate"><span class="pre">1</span></code>. If not found, <code class="docutils literal notranslate"><span class="pre">0</span></code> is returned.
+It takes into account overlapping strings when counting occurrences.</p>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">SELECT</span> <span class="n">strpos</span><span class="p">(</span><span class="s1">&#39;aaa&#39;</span><span class="p">,</span> <span class="s1">&#39;aa&#39;</span><span class="p">,</span> <span class="mi">2</span><span class="p">);</span> <span class="o">--</span> <span class="mi">2</span>
+</pre></div>
+</div>
 </dd></dl>
 
 <dl class="py function">
@@ -246,7 +250,11 @@ Positions start with <code class="docutils literal notranslate"><span class="pre
 <span class="sig-name descname"><span class="pre">strrpos</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">string</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">substring</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">instance</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">bigint</span></span></span></dt>
 <dd><p>Returns the position of the N-th <code class="docutils literal notranslate"><span class="pre">instance</span></code> of <code class="docutils literal notranslate"><span class="pre">substring</span></code> in <code class="docutils literal notranslate"><span class="pre">string</span></code> starting from the end of the string.
 <code class="docutils literal notranslate"><span class="pre">instance</span></code> must be a positive number.
-Positions start with <code class="docutils literal notranslate"><span class="pre">1</span></code>. If not found, <code class="docutils literal notranslate"><span class="pre">0</span></code> is returned.</p>
+Positions start with <code class="docutils literal notranslate"><span class="pre">1</span></code>. If not found, <code class="docutils literal notranslate"><span class="pre">0</span></code> is returned.
+It takes into account overlapping strings when counting occurrences.</p>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">SELECT</span> <span class="n">strrpos</span><span class="p">(</span><span class="s1">&#39;aaa&#39;</span><span class="p">,</span> <span class="s1">&#39;aa&#39;</span><span class="p">,</span> <span class="mi">2</span><span class="p">);</span> <span class="o">--</span> <span class="mi">1</span>
+</pre></div>
+</div>
 </dd></dl>
 
 <dl class="py function">
