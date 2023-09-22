@@ -88,11 +88,12 @@ TEST_F(S3InsertTest, s3InsertTest) {
   minioServer_->addBucket("writedata");
 
   // Insert into s3 with one writer.
-  auto plan = PlanBuilder()
-                  .fileFormat(dwio::common::FileFormat::PARQUET)
-                  .values({input})
-                  .tableWrite(kOutputDirectory.data())
-                  .planNode();
+  auto plan =
+      PlanBuilder()
+          .values({input})
+          .tableWrite(
+              kOutputDirectory.data(), dwio::common::FileFormat::PARQUET)
+          .planNode();
 
   // Execute the write plan.
   auto results = AssertQueryBuilder(plan).copyResults(pool());
