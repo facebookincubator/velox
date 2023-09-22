@@ -214,12 +214,12 @@ class S3WriteFile::Impl {
   explicit Impl(
       const std::string& path,
       Aws::S3::S3Client* client,
-      memory::MemoryPool* pool)
-      : client_(client), pool_(pool) {
+      const std::shared_ptr<memory::MemoryPool>& leafPool)
+      : client_(client), leafPool_(leafPool) {
     VELOX_CHECK_NOT_NULL(client);
-    VELOX_CHECK_NOT_NULL(pool);
+    VELOX_CHECK_NOT_NULL(leafPool_);
     getBucketAndKeyFromS3Path(path, bucket_, key_);
-    currentPart_ = std::make_unique<dwio::common::DataBuffer<char>>(*pool_);
+    currentPart_ = std::make_unique<dwio::common::DataBuffer<char>>(*leafPool_);
     currentPart_->reserve(kPartUploadSize);
     // Check that the object doesn't exist, if it does throw an error.
     {
@@ -383,7 +383,7 @@ class S3WriteFile::Impl {
   }
 
   Aws::S3::S3Client* client_;
-  memory::MemoryPool* pool_;
+  const std::shared_ptr<memory::MemoryPool> leafPool_;
   std::unique_ptr<dwio::common::DataBuffer<char>> currentPart_;
   std::string bucket_;
   std::string key_;
@@ -393,8 +393,8 @@ class S3WriteFile::Impl {
 S3WriteFile::S3WriteFile(
     const std::string& path,
     Aws::S3::S3Client* client,
-    memory::MemoryPool* pool) {
-  impl_ = std::make_shared<Impl>(path, client, pool);
+    const std::shared_ptr<memory::MemoryPool>& leafPool) {
+  impl_ = std::make_shared<Impl>(path, client, leafPool);
 }
 
 void S3WriteFile::append(std::string_view data) {
@@ -633,8 +633,8 @@ std::unique_ptr<WriteFile> S3FileSystem::openFileForWrite(
     std::string_view path,
     const FileOptions& options) {
   const auto file = s3Path(path);
-  auto s3file =
-      std::make_unique<S3WriteFile>(file, impl_->s3Client(), options.pool);
+  auto s3file = std::make_unique<S3WriteFile>(
+      file, impl_->s3Client(), std::move(options.leafPool));
   return s3file;
 }
 

@@ -36,7 +36,7 @@ namespace facebook::velox::filesystems {
 /// such as S3.
 struct FileOptions {
   std::unordered_map<std::string, std::string> values;
-  memory::MemoryPool* pool{nullptr};
+  std::shared_ptr<memory::MemoryPool> leafPool{nullptr};
 };
 
 /// An abstract FileSystem

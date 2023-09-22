@@ -179,7 +179,7 @@ void LocalFileSink::write(std::vector<DataBuffer<char>>& buffers) {
 }
 
 MemorySink::MemorySink(size_t capacity, const Options& options)
-    : FileSink{"MemorySink", options}, data_{*options.pool, capacity} {}
+    : FileSink{"MemorySink", options}, data_{*options.leafPool, capacity} {}
 
 void MemorySink::write(std::vector<DataBuffer<char>>& buffers) {
   writeImpl(buffers, [&](auto& buffer) {

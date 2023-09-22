@@ -40,7 +40,8 @@ class FileSink : public Closeable {
     /// Connector properties are required to create a FileSink on FileSystems
     /// such as S3.
     const std::shared_ptr<const Config>& connectorProperties{nullptr};
-    memory::MemoryPool* pool{nullptr};
+    /// FileSink pool must be a leaf pool.
+    const std::shared_ptr<memory::MemoryPool>& leafPool{nullptr};
     MetricsLogPtr metricLogger{MetricsLog::voidLog()};
     IoStatistics* stats{nullptr};
   };
@@ -48,7 +49,7 @@ class FileSink : public Closeable {
   FileSink(std::string name, const Options& options)
       : name_{std::move(name)},
         connectorProperties_{options.connectorProperties},
-        pool_(options.pool),
+        leafPool_(options.leafPool),
         metricLogger_{options.metricLogger},
         stats_{options.stats},
         size_{0} {}
@@ -107,7 +108,7 @@ class FileSink : public Closeable {
 
   const std::string name_;
   const std::shared_ptr<const Config> connectorProperties_;
-  memory::MemoryPool* const pool_;
+  std::shared_ptr<memory::MemoryPool> const leafPool_;
   const MetricsLogPtr metricLogger_;
   IoStatistics* const stats_;
 

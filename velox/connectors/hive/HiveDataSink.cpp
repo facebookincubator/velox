@@ -497,12 +497,17 @@ uint32_t HiveDataSink::appendWriter(const HiveWriterId& id) {
   options.compressionKind = insertTableHandle_->compressionKind();
   options.setMemoryReclaimer = connectorQueryCtx_->setMemoryReclaimer();
   ioStats_.emplace_back(std::make_shared<dwio::common::IoStatistics>());
+  // TODO: we need to set memory reclaimer of the created leaf memory pool to
+  // integrate with memory arbitrator later.
+  auto fileSinkPool =
+      connectorQueryCtx_->connectorMemoryPool()->addLeafChild("fileSink");
+
   auto writer = writerFactory_->createWriter(
       dwio::common::FileSink::create(
           writePath,
           {.bufferWrite = false,
            .connectorProperties = connectorProperties_,
-           .pool = connectorQueryCtx_->memoryPool(),
+           .leafPool = fileSinkPool,
            .metricLogger = dwio::common::MetricsLog::voidLog(),
            .stats = ioStats_.back().get()}),
       options);

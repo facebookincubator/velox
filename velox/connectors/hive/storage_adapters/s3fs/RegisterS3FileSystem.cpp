@@ -66,7 +66,7 @@ s3WriteFileSinkGenerator() {
       auto fileSystem =
           filesystems::getFileSystem(fileURI, options.connectorProperties);
       return std::make_unique<dwio::common::WriteFileSink>(
-          fileSystem->openFileForWrite(fileURI, {{}, options.pool}),
+          fileSystem->openFileForWrite(fileURI, {{}, options.leafPool}),
           fileURI,
           options.metricLogger,
           options.stats);
