@@ -243,10 +243,10 @@ class PlanBuilder {
   PlanBuilder& optionalFilter(const std::string& optionalFilter);
 
   /// Adds a TableWriteNode to write all input columns into an un-partitioned
-  /// un-bucketed Hive table without collecting statistics using fileFormat
-  /// without compression.
+  /// un-bucketed Hive table without collecting statistics without compression.
   ///
   /// @param outputDirectoryPath Path to a directory to write data to.
+  /// @param fileFormat File format to use for the written data.
   PlanBuilder& tableWrite(
       const std::string& outputDirectoryPath,
       dwio::common::FileFormat fileFormat = dwio::common::FileFormat::DWRF);
