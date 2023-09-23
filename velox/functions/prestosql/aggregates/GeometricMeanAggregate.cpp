@@ -60,9 +60,8 @@ class GeometricMeanAggregate {
     void combine(
         HashStringAllocator* /*allocator*/,
         exec::arg_type<Row<double, int64_t>> other) {
-      // Use VELOX_USER_CHECK here to make aggregation fuzzer happy.
-      VELOX_USER_CHECK(other.at<0>().has_value());
-      VELOX_USER_CHECK(other.at<1>().has_value());
+      VELOX_CHECK(other.at<0>().has_value());
+      VELOX_CHECK(other.at<1>().has_value());
       logSum_ += other.at<0>().value();
       count_ = checkedPlus<int64_t>(count_, other.at<1>().value());
     }
@@ -135,7 +134,7 @@ void registerGeometricMeanAggregate(const std::string& prefix) {
           }
         }
       },
-      true);
+      false);
 }
 
 } // namespace facebook::velox::aggregate::prestosql
