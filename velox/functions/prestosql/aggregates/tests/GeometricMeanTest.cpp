@@ -36,7 +36,7 @@ class GeometricMeanTest : public AggregationTestBase {
 
 TEST_F(GeometricMeanTest, globalEmpty) {
   auto data = makeRowVector({
-      makeFlatVector<int64_t>(std::vector<int64_t>{}),
+      makeFlatVector(std::vector<int64_t>{}),
   });
 
   testAggregations({data}, {}, {"geometric_mean(c0)"}, "SELECT NULL");
@@ -194,6 +194,36 @@ TEST_F(GeometricMeanTest, groupByDoubles) {
   });
 
   testAggregations({data}, {"c0"}, {"geometric_mean(c1)"}, {expected});
+}
+
+TEST_F(GeometricMeanTest, groupByTwoPhases) {
+  // Use two data vectors to test two-phase agg
+  auto data1 = makeRowVector({
+      makeFlatVector<int32_t>(50, [](auto row) { return row / 10; }),
+      makeFlatVector<int64_t>(50, [](auto row) { return row; }),
+  });
+
+  auto data2 = makeRowVector({
+      makeFlatVector<int32_t>(50, [](auto row) { return (row + 50) / 10; }),
+      makeFlatVector<int64_t>(50, [](auto row) { return row + 50; }),
+  });
+
+  auto expected = makeRowVector({
+      makeFlatVector<int32_t>({0, 1, 2, 3, 4, 5, 6, 7, 8, 9}),
+      makeFlatVector<double>(
+          10,
+          [](auto row) {
+            double logSum = 0;
+            int64_t count = 0;
+            for (int32_t i = 0; i < 10; ++i) {
+              logSum += std::log(row * 10 + i);
+              count++;
+            }
+            return std::exp(logSum / count);
+          }),
+  });
+
+  testAggregations({data1, data2}, {"c0"}, {"geometric_mean(c1)"}, {expected});
 }
 
 } // namespace

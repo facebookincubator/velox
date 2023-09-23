@@ -15,7 +15,6 @@
  */
 
 #include <cmath>
-#include "velox/exec/Aggregate.h"
 #include "velox/exec/SimpleAggregateAdapter.h"
 #include "velox/functions/prestosql/aggregates/AggregateNames.h"
 
@@ -39,22 +38,19 @@ class GeometricMeanAggregate {
   static bool toIntermediate(
       exec::out_type<Row<double, int64_t>>& out,
       exec::arg_type<T> in) {
-    out.copy_from(std::make_tuple(static_cast<double>(in), 1));
+    out.copy_from(std::make_tuple(std::log(in), 1));
     return true;
   }
 
   struct AccumulatorType {
     // Sum of `log(value)`.
-    double logSum_;
+    double logSum_{0};
     // Count of values.
-    int64_t count_;
+    int64_t count_{0};
 
     AccumulatorType() = delete;
 
-    explicit AccumulatorType(HashStringAllocator* /*allocator*/) {
-      logSum_ = 0;
-      count_ = 0;
-    }
+    explicit AccumulatorType(HashStringAllocator* /*allocator*/) {}
 
     void addInput(HashStringAllocator* /*allocator*/, exec::arg_type<T> data) {
       logSum_ += std::log(data);
@@ -64,8 +60,9 @@ class GeometricMeanAggregate {
     void combine(
         HashStringAllocator* /*allocator*/,
         exec::arg_type<Row<double, int64_t>> other) {
-      VELOX_CHECK(other.at<0>().has_value());
-      VELOX_CHECK(other.at<1>().has_value());
+      // Use VELOX_USER_CHECK here to make aggregation fuzzer happy.
+      VELOX_USER_CHECK(other.at<0>().has_value());
+      VELOX_USER_CHECK(other.at<1>().has_value());
       logSum_ += other.at<0>().value();
       count_ = checkedPlus<int64_t>(count_, other.at<1>().value());
     }
@@ -119,10 +116,10 @@ void registerGeometricMeanAggregate(const std::string& prefix) {
                   SimpleAggregateAdapter<GeometricMeanAggregate<double>>>(
                   resultType);
             default:
-              VELOX_FAIL(
+              VELOX_USER_FAIL(
                   "Unknown input type for {} aggregation {}",
                   name,
-                  inputType->kindName());
+                  inputType->toString());
           }
         } else {
           switch (resultType->kind()) {
@@ -132,9 +129,9 @@ void registerGeometricMeanAggregate(const std::string& prefix) {
                   SimpleAggregateAdapter<GeometricMeanAggregate<double>>>(
                   resultType);
             default:
-              VELOX_FAIL(
+              VELOX_USER_FAIL(
                   "Unsupported result type for final aggregation: {}",
-                  resultType->kindName());
+                  resultType->toString());
           }
         }
       },

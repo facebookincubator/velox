@@ -84,7 +84,7 @@ General Aggregate Functions
 
 .. function:: geometric_mean(x) -> double
 
-    Returns the geometric mean of all input values.
+    Returns the `geometric mean <https://en.wikipedia.org/wiki/Geometric_mean>`_ of all input values.
 
     Supported types are BIGINT and DOUBLE.
 
