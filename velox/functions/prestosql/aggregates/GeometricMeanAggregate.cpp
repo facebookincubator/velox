@@ -102,7 +102,7 @@ void registerGeometricMeanAggregate(const std::string& prefix) {
           const TypePtr& resultType,
           const core::QueryConfig& /*config*/)
           -> std::unique_ptr<exec::Aggregate> {
-        VELOX_CHECK_EQ(argTypes.size(), 1, "{} takes one argument", name);
+        VELOX_USER_CHECK_EQ(argTypes.size(), 1, "{} takes one argument", name);
         auto inputType = argTypes[0];
         if (exec::isRawInput(step)) {
           switch (inputType->kind()) {

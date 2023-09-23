@@ -34,6 +34,20 @@ class GeometricMeanTest : public AggregationTestBase {
   }
 };
 
+double geometricMean(
+    int32_t start,
+    int32_t end,
+    int32_t steps,
+    std::function<double(int32_t)> valueConverter) {
+  double logSum = 0;
+  int64_t count = 0;
+  for (int32_t i = start; i < end; i += steps) {
+    logSum += std::log(valueConverter(i));
+    count++;
+  }
+  return std::exp(logSum / count);
+}
+
 TEST_F(GeometricMeanTest, globalEmpty) {
   auto data = makeRowVector({
       makeFlatVector(std::vector<int64_t>{}),
@@ -52,17 +66,8 @@ TEST_F(GeometricMeanTest, globalNulls) {
   // All nulls.
   testAggregations({data}, {}, {"geometric_mean(c0)"}, "SELECT NULL");
 
-  // Every other is null.
-  double logSum = 0;
-  int64_t count = 0;
-  for (auto i = 1; i < 100; i += 2) {
-    logSum += std::log(i);
-    count++;
-  }
-  double geometricMean = std::exp(logSum / count);
-
   auto expected = makeRowVector({
-      makeConstant(geometricMean, 1),
+      makeConstant(geometricMean(1, 100, 2, folly::identity), 1),
   });
 
   testAggregations({data}, {}, {"geometric_mean(c1)"}, {expected});
@@ -73,17 +78,9 @@ TEST_F(GeometricMeanTest, globalIntegers) {
       makeFlatVector<int64_t>(100, [](auto row) { return row / 7; }),
   });
 
-  double logSum = 0;
-  int64_t count = 0;
-  for (auto i = 1; i < 100; ++i) {
-    logSum += std::log(i / 7);
-    count++;
-  }
-  double geometricMean = std::exp(logSum / count);
-
   auto expected = makeRowVector({
       makeFlatVector(std::vector<double>{
-          geometricMean,
+          geometricMean(1, 100, 1, [](int32_t i) { return i / 7; }),
       }),
   });
 
@@ -112,13 +109,8 @@ TEST_F(GeometricMeanTest, groupByNulls) {
       makeFlatVector<double>(
           10,
           [](auto row) {
-            double logSum = 0;
-            int64_t count = 0;
-            for (int32_t i = 1; i < 10; i += 2) {
-              logSum += std::log(row * 10 + i);
-              count++;
-            }
-            return std::exp(logSum / count);
+            return geometricMean(
+                1, 10, 2, [&](int32_t i) { return row * 10 + i; });
           },
           [](auto row) { return row == 3; }),
   });
@@ -137,13 +129,8 @@ TEST_F(GeometricMeanTest, groupByIntegers) {
       makeFlatVector<double>(
           10,
           [](auto row) {
-            double logSum = 0;
-            int64_t count = 0;
-            for (int32_t i = 0; i < 10; ++i) {
-              logSum += std::log(row * 10 + i);
-              count++;
-            }
-            return std::exp(logSum / count);
+            return geometricMean(
+                0, 10, 1, [&](int32_t i) { return row * 10 + i; });
           }),
   });
 
@@ -155,18 +142,9 @@ TEST_F(GeometricMeanTest, globalDoubles) {
       makeFlatVector<double>(100, [](auto row) { return row * 0.1 / 7; }),
   });
 
-  double logSum = 0;
-  int64_t count = 0;
-  for (int32_t i = 0; i < 100; ++i) {
-    logSum += std::log(i * 0.1 / 7);
-    count++;
-  }
-  double geometricMean = std::exp(logSum / count);
-
   auto expected = makeRowVector({
       makeFlatVector(std::vector<double>{
-          geometricMean,
-      }),
+          geometricMean(0, 100, 1, [&](int32_t i) { return i * 0.1 / 7; })}),
   });
 
   testAggregations({data}, {}, {"geometric_mean(c0)"}, {expected});
@@ -183,47 +161,36 @@ TEST_F(GeometricMeanTest, groupByDoubles) {
       makeFlatVector<double>(
           10,
           [](auto row) {
-            double logSum = 0;
-            int64_t count = 0;
-            for (int32_t i = 0; i < 10; ++i) {
-              logSum += std::log(row + i * 0.1);
-              count++;
-            }
-            return std::exp(logSum / count);
+            return geometricMean(
+                0, 10, 1, [&](int32_t i) { return row + i * 0.1; });
           }),
   });
 
   testAggregations({data}, {"c0"}, {"geometric_mean(c1)"}, {expected});
 }
 
-TEST_F(GeometricMeanTest, groupByTwoPhases) {
-  // Use two data vectors to test two-phase agg
-  auto data1 = makeRowVector({
-      makeFlatVector<int32_t>(50, [](auto row) { return row / 10; }),
-      makeFlatVector<int64_t>(50, [](auto row) { return row; }),
-  });
-
-  auto data2 = makeRowVector({
-      makeFlatVector<int32_t>(50, [](auto row) { return (row + 50) / 10; }),
-      makeFlatVector<int64_t>(50, [](auto row) { return row + 50; }),
-  });
+TEST_F(GeometricMeanTest, groupByMultipleBatches) {
+  auto data = {
+      makeRowVector({
+          makeFlatVector<int32_t>(50, [](auto row) { return row / 10; }),
+          makeFlatVector<int64_t>(50, [](auto row) { return row; }),
+      }),
+      makeRowVector({
+          makeFlatVector<int32_t>(50, [](auto row) { return (row + 50) / 10; }),
+          makeFlatVector<int64_t>(50, [](auto row) { return row + 50; }),
+      })};
 
   auto expected = makeRowVector({
       makeFlatVector<int32_t>({0, 1, 2, 3, 4, 5, 6, 7, 8, 9}),
       makeFlatVector<double>(
           10,
           [](auto row) {
-            double logSum = 0;
-            int64_t count = 0;
-            for (int32_t i = 0; i < 10; ++i) {
-              logSum += std::log(row * 10 + i);
-              count++;
-            }
-            return std::exp(logSum / count);
+            return geometricMean(
+                0, 10, 1, [&](int32_t i) { return row * 10 + i; });
           }),
   });
 
-  testAggregations({data1, data2}, {"c0"}, {"geometric_mean(c1)"}, {expected});
+  testAggregations(data, {"c0"}, {"geometric_mean(c1)"}, {expected});
 }
 
 } // namespace
