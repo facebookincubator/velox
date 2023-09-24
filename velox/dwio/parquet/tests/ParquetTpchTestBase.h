@@ -30,11 +30,6 @@
 #include "velox/parse/TypeResolver.h"
 #include "velox/tpch/gen/TpchGen.h"
 
-using namespace facebook::velox;
-using namespace facebook::velox::exec;
-using namespace facebook::velox::exec::test;
-using namespace facebook::velox::parquet;
-
 namespace facebook::velox::exec::test {
 namespace {
 
@@ -55,7 +50,7 @@ class ParquetTpchTestBase : public testing::Test {
 
     parse::registerTypeResolver();
     filesystems::registerLocalFileSystem();
-    registerParquetReaderFactory();
+    velox::parquet::registerParquetReaderFactory();
 
     auto hiveConnector =
         connector::getConnectorFactory(
@@ -81,7 +76,7 @@ class ParquetTpchTestBase : public testing::Test {
 
   static void TearDownTestSuite() {
     connector::unregisterConnector(kHiveConnectorId);
-    unregisterParquetReaderFactory();
+    velox::parquet::unregisterParquetReaderFactory();
   }
 
  private:

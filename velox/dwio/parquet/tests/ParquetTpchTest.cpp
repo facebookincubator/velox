@@ -17,6 +17,8 @@
 #include "velox/common/base/tests/GTestUtils.h"
 #include "velox/dwio/parquet/tests/ParquetTpchTestBase.h"
 
+using namespace facebook::velox::exec::test;
+
 class ParquetTpchTest : public ParquetTpchTestBase {
  public:
   ParquetTpchTest() : ParquetTpchTestBase() {}
