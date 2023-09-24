@@ -19,6 +19,8 @@
 #include <folly/ScopeGuard.h>
 
 #include "velox/common/time/CpuWallTimer.h"
+//#include "velox/connectors/hive/HiveConfig.h"
+//#include "velox/core/Config.h"
 #include "velox/dwio/dwrf/common/Common.h"
 #include "velox/dwio/dwrf/utils/ProtoUtils.h"
 #include "velox/dwio/dwrf/writer/FlushPolicy.h"
@@ -546,6 +548,20 @@ dwrf::WriterOptions getDwrfOptions(const dwio::common::WriterOptions& options) {
         Config::COMPRESSION.configKey(),
         std::to_string(options.compressionKind.value()));
   }
+
+  configs.emplace(
+      Config::STRIPE_SIZE.configKey(),
+      std::to_string(options.kOrcWriterMaxStripeSize));
+  configs.emplace(
+      Config::MAX_DICTIONARY_SIZE.configKey(),
+      std::to_string(options.kOrcWriterMaxDictionaryMemory));
+//  configs.emplace(
+//      Config::STRIPE_SIZE.configKey(),
+//      std::to_string(HiveConfig::getKOrcWriterMaxStripeSize(connectorConfig)));
+//  configs.emplace(
+//      Config::MAX_DICTIONARY_SIZE.configKey(),
+//      std::to_string(
+//          HiveConfig::getKOrcWriterMaxDictionaryMemory(connectorConfig)));
   dwrf::WriterOptions dwrfOptions;
   dwrfOptions.config = Config::fromMap(configs);
   dwrfOptions.schema = options.schema;

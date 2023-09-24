@@ -627,6 +627,8 @@ struct WriterOptions {
   velox::memory::MemoryPool* memoryPool;
   velox::memory::SetMemoryReclaimer setMemoryReclaimer{nullptr};
   std::optional<velox::common::CompressionKind> compressionKind;
+  uint64_t kOrcWriterMaxStripeSize = 256L * 1024L * 1024L;
+  uint64_t kOrcWriterMaxDictionaryMemory = 80L * 1024L * 1024L;
 };
 
 } // namespace common

@@ -285,6 +285,7 @@ parquet::WriterOptions getParquetOptions(
 
 std::unique_ptr<dwio::common::Writer> ParquetWriterFactory::createWriter(
     std::unique_ptr<dwio::common::FileSink> sink,
+    const connector::ConnectorQueryCtx& connectorQueryCtx,
     const dwio::common::WriterOptions& options) {
   auto parquetOptions = getParquetOptions(options);
   return std::make_unique<Writer>(std::move(sink), parquetOptions);

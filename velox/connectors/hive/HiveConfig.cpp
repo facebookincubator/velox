@@ -165,4 +165,17 @@ int32_t HiveConfig::numCacheFileHandles(const Config* config) {
   return config->get<int32_t>(kNumCacheFileHandles, 20'000);
 }
 
+uint64_t const HiveConfig::getKOrcWriterMaxStripeSize(const Config* config) {
+  if (config->get<std::string>(kOrcWriterMaxStripeSize) == "104MB")
+    return 104L * 1024L * 1024L;
+  return 256L * 1024L * 1024L;
+}
+
+uint64_t const HiveConfig::getKOrcWriterMaxDictionaryMemory(
+    const Config* config) {
+  if (config->get<std::string>(kOrcWriterMaxDictionaryMemory) == "32MB")
+    return 32 * 1024L * 1024L;
+  return 80L * 1024L * 1024L;
+}
+
 } // namespace facebook::velox::connector::hive

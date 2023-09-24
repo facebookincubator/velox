@@ -106,6 +106,15 @@ class HiveConfig {
   /// Maximum number of entries in the file handle cache.
   static constexpr const char* kNumCacheFileHandles = "num_cached_file_handles";
 
+  /// Maximum stripe size for orc file.
+  static constexpr const char* kOrcWriterMaxStripeSize =
+      "orc_optimized_writer_max_stripe_size";
+
+  static constexpr const char* kOrcWriterMaxStripeRows =
+      "orc_optimized_writer_max_stripe_rows";
+  static constexpr const char* kOrcWriterMaxDictionaryMemory =
+      "orc_optimized_writer_max_dictionary_memory";
+
   static InsertExistingPartitionsBehavior insertExistingPartitionsBehavior(
       const Config* config);
 
@@ -146,6 +155,10 @@ class HiveConfig {
   static int32_t maxCoalescedDistanceBytes(const Config* config);
 
   static int32_t numCacheFileHandles(const Config* config);
+
+  static uint64_t const getKOrcWriterMaxStripeSize(const Config* config);
+
+  static uint64_t const getKOrcWriterMaxDictionaryMemory(const Config* config);
 };
 
 } // namespace facebook::velox::connector::hive
