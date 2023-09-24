@@ -96,22 +96,41 @@ void MergeJoin::initializeFilter(
   auto numFields = filter_->expr(0)->distinctFields().size();
   names.reserve(numFields);
   types.reserve(numFields);
+
+  // When 'channel' in the 'filter_' is found in 'inputType', first try to add
+  // the projection if it's in 'output_', otherwise, add it to filter input
+  // projections. Finally, add it's name and type to 'names' and 'types'.
+  auto addChannel = [&](column_index_t channel,
+                        const std::vector<IdentityProjection>& outputs,
+                        std::vector<IdentityProjection>& filters,
+                        const RowTypePtr& inputType) {
+    bool inOutputs{false};
+    for (const auto [inputChannel, outputChannel] : outputs) {
+      if (inputChannel == channel) {
+        filterInputToOutputChannel_.emplace(filterChannel++, outputChannel);
+        inOutputs = true;
+        break;
+      }
+    }
+    if (!inOutputs) {
+      filters.emplace_back(channel, filterChannel++);
+    }
+    names.emplace_back(inputType->nameOf(channel));
+    types.emplace_back(inputType->childAt(channel));
+  };
+
   for (const auto& field : filter_->expr(0)->distinctFields()) {
     const auto& name = field->field();
     auto channel = leftType->getChildIdxIfExists(name);
     if (channel.has_value()) {
-      auto channelValue = channel.value();
-      filterLeftInputs_.emplace_back(channelValue, filterChannel++);
-      names.emplace_back(leftType->nameOf(channelValue));
-      types.emplace_back(leftType->childAt(channelValue));
+      addChannel(
+          channel.value(), leftProjections_, filterLeftInputs_, leftType);
       continue;
     }
     channel = rightType->getChildIdxIfExists(name);
     if (channel.has_value()) {
-      auto channelValue = channel.value();
-      filterRightInputs_.emplace_back(channelValue, filterChannel++);
-      names.emplace_back(rightType->nameOf(channelValue));
-      types.emplace_back(rightType->childAt(channelValue));
+      addChannel(
+          channel.value(), rightProjections_, filterRightInputs_, rightType);
       continue;
     }
     VELOX_FAIL(
@@ -242,8 +261,6 @@ void MergeJoin::addOutputRow(
   copyRow(right, rightIndex, output_, outputSize_, rightProjections_);
 
   if (filter_) {
-    // TODO Re-use output_ columns when possible.
-
     copyRow(left, leftIndex, filterInput_, outputSize_, filterLeftInputs_);
     copyRow(right, rightIndex, filterInput_, outputSize_, filterRightInputs_);
 
@@ -273,11 +290,18 @@ void MergeJoin::prepareOutput() {
     outputSize_ = 0;
 
     if (filterInput_ != nullptr) {
-      // When filterInput_ contains array or map columns, their child vectors
-      // (elements, keys and values) keep growing after each call to
-      // 'copyRow'. Call BaseVector::resize(0) on these child vectors to avoid
-      // that.
-      for (auto& child : filterInput_->children()) {
+      for (auto i = 0; i < filterInputType_->size(); ++i) {
+        auto& child = filterInput_->childAt(i);
+        if (filterInputToOutputChannel_.find(i) !=
+            filterInputToOutputChannel_.end()) {
+          child = output_->childAt(filterInputToOutputChannel_[i]);
+          continue;
+        }
+
+        // When filterInput_ contains array or map columns, their child vectors
+        // (elements, keys and values) keep growing after each call to
+        // 'copyRow'. Call BaseVector::resize(0) on these child vectors to avoid
+        // that.
         if (child->typeKind() == TypeKind::ARRAY) {
           child->as<ArrayVector>()->prepareForReuse();
         } else if (child->typeKind() == TypeKind::MAP) {
@@ -289,7 +313,15 @@ void MergeJoin::prepareOutput() {
 
   if (filter_ != nullptr && filterInput_ == nullptr) {
     std::vector<VectorPtr> inputs(filterInputType_->size());
+    for (const auto [filterInputChannel, outputChannel] :
+         filterInputToOutputChannel_) {
+      inputs[filterInputChannel] = output_->childAt(outputChannel);
+    }
     for (auto i = 0; i < filterInputType_->size(); ++i) {
+      if (filterInputToOutputChannel_.find(i) !=
+          filterInputToOutputChannel_.end()) {
+        continue;
+      }
       inputs[i] = BaseVector::create(
           filterInputType_->childAt(i), outputBatchSize_, operatorCtx_->pool());
     }
@@ -395,6 +427,9 @@ RowVectorPtr MergeJoin::getOutput() {
       if (filter_) {
         output = applyFilter(output);
         if (output != nullptr) {
+          for (const auto [channel, _] : filterInputToOutputChannel_) {
+            filterInput_->childAt(channel).reset();
+          }
           return output;
         }
 
