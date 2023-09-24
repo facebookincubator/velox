@@ -17,6 +17,23 @@
 
 namespace facebook::velox::test {
 
+namespace {
+template <TypeKind kind>
+void setNotNullValue(
+    const VectorPtr& vector,
+    vector_size_t index,
+    variant value) {
+  using T = typename TypeTraits<kind>::NativeType;
+
+  if constexpr (std::is_same_v<T, StringView>) {
+    vector->asFlatVector<T>()->set(
+        index, StringView(value.value<const char*>()));
+  } else {
+    vector->asFlatVector<T>()->set(index, value.value<T>());
+  }
+}
+} // namespace
+
 // static
 std::shared_ptr<const RowType> VectorMaker::rowType(
     std::vector<std::shared_ptr<const Type>>&& types) {
@@ -25,6 +42,41 @@ std::shared_ptr<const RowType> VectorMaker::rowType(
     names.push_back(fmt::format("c{}", i));
   }
   return ROW(std::move(names), std::move(types));
+}
+
+// static
+RowVectorPtr VectorMaker::rowVector(
+    const RowTypePtr& rowType,
+    const std::vector<std::vector<variant>>& data,
+    memory::MemoryPool* pool) {
+  auto vectorSize = static_cast<vector_size_t>(data.size());
+
+  // Create the underlying vector.
+  auto rowVector = std::dynamic_pointer_cast<RowVector>(
+      BaseVector::create(rowType, vectorSize, pool));
+  for (auto& field : rowVector->children()) {
+    field->resize(vectorSize);
+  }
+
+  vector_size_t rowIndex = 0;
+  for (const auto& arrayElement : data) {
+    for (auto i = 0; i < rowType->size(); i++) {
+      const auto& value = arrayElement[i];
+      if (value.isNull()) {
+        rowVector->childAt(i)->setNull(rowIndex, true);
+      } else {
+        VELOX_DYNAMIC_SCALAR_TYPE_DISPATCH(
+            setNotNullValue,
+            rowType->childAt(i)->kind(),
+            rowVector->childAt(i),
+            rowIndex,
+            value);
+      }
+    }
+    rowIndex++;
+  }
+
+  return rowVector;
 }
 
 RowVectorPtr VectorMaker::rowVector(const std::vector<VectorPtr>& children) {
@@ -123,23 +175,6 @@ MapVectorPtr VectorMaker::allNullMapVector(
       nullptr,
       nullptr);
 }
-
-namespace {
-template <TypeKind kind>
-void setNotNullValue(
-    const VectorPtr& vector,
-    vector_size_t index,
-    variant value) {
-  using T = typename TypeTraits<kind>::NativeType;
-
-  if constexpr (std::is_same_v<T, StringView>) {
-    vector->asFlatVector<T>()->set(
-        index, StringView(value.value<const char*>()));
-  } else {
-    vector->asFlatVector<T>()->set(index, value.value<T>());
-  }
-}
-} // namespace
 
 ArrayVectorPtr VectorMaker::arrayOfRowVector(
     const RowTypePtr& rowType,

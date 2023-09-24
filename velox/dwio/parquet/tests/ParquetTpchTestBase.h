@@ -20,6 +20,7 @@
 #include "velox/common/base/Fs.h"
 #include "velox/common/file/FileSystems.h"
 #include "velox/dwio/parquet/RegisterParquetReader.h"
+#include "velox/exec/tests/utils/AssertQueryBuilder.h"
 #include "velox/exec/tests/utils/HiveConnectorTestBase.h"
 #include "velox/exec/tests/utils/PlanBuilder.h"
 #include "velox/exec/tests/utils/TempDirectoryPath.h"
@@ -43,7 +44,7 @@ class ParquetTpchTestBase : public testing::Test {
 
   // Setup a DuckDB instance for the entire suite and load TPC-H data with scale
   // factor 0.01.
-  void SetUp() {
+  static void SetUpTestSuite() {
     if (duckDb_ == nullptr) {
       duckDb_ = std::make_shared<DuckDbQueryRunner>();
       constexpr double kTpchScaleFactor = 0.01;
@@ -61,8 +62,12 @@ class ParquetTpchTestBase : public testing::Test {
             connector::hive::HiveConnectorFactory::kHiveConnectorName)
             ->newConnector(kHiveConnectorId, nullptr);
     connector::registerConnector(hiveConnector);
+
     tempDirectory_ = TempDirectoryPath::create();
-    saveTpchTablesAsParquet();
+    std::shared_ptr<memory::MemoryPool> rootPool{
+        memory::defaultMemoryManager().addRootPool()};
+    std::shared_ptr<memory::MemoryPool> pool{rootPool->addLeafChild("leaf")};
+    saveTpchTablesAsParquet(pool.get());
     tpchBuilder_.initialize(tempDirectory_->path);
   }
 
@@ -74,7 +79,7 @@ class ParquetTpchTestBase : public testing::Test {
     auto task = assertQuery(tpchPlan, duckDbSql, sortingKeys);
   }
 
-  void TearDown() {
+  static void TearDownTestSuite() {
     connector::unregisterConnector(kHiveConnectorId);
     unregisterParquetReaderFactory();
   }
@@ -82,20 +87,57 @@ class ParquetTpchTestBase : public testing::Test {
  private:
   /// Write TPC-H tables as a Parquet file to temp directory in hive-style
   /// partition
-  void saveTpchTablesAsParquet() {
-    constexpr int kRowGroupSize = 10'000;
-    const auto tableNames = tpchBuilder_.getTableNames();
-    for (const auto& tableName : tableNames) {
+  static void saveTpchTablesAsParquet(memory::MemoryPool* pool) {
+    static constexpr auto tables = {
+        tpch::Table::TBL_PART,
+        tpch::Table::TBL_SUPPLIER,
+        tpch::Table::TBL_PARTSUPP,
+        tpch::Table::TBL_CUSTOMER,
+        tpch::Table::TBL_ORDERS,
+        tpch::Table::TBL_LINEITEM,
+        tpch::Table::TBL_NATION,
+        tpch::Table::TBL_REGION};
+
+    for (const auto& table : tables) {
+      auto tableName = std::string(toTableName(table));
       auto tableDirectory =
           fmt::format("{}/{}", tempDirectory_->path, tableName);
-      fs::create_directory(tableDirectory);
-      auto filePath = fmt::format("{}/file.parquet", tableDirectory);
+
+      auto tableSchema = velox::tpch::getTableSchema(table);
+      auto tt = kDuckDbParquetWriteSQL_.at(tableName);
       auto query = fmt::format(
-          fmt::runtime(kDuckDbParquetWriteSQL_.at(tableName)),
-          tableName,
-          filePath,
-          kRowGroupSize);
-      duckDb_->execute(query);
+          fmt::runtime(kDuckDbParquetWriteSQL_.at(tableName)), tableName);
+      // TODO: The name of API `executeOrdered` is confused, it do nothing
+      // related to sorting, and should be updated with a more proper name.
+      auto result = duckDb_->executeOrdered(query, tableSchema);
+      auto ptr = velox::test::VectorMaker::rowVector(tableSchema, result, pool);
+      result.size();
+
+      auto tableHandle = std::make_shared<core::InsertTableHandle>(
+          kHiveConnectorId,
+          HiveConnectorTestBase::makeHiveInsertTableHandle(
+              tableSchema->names(),
+              tableSchema->children(),
+              {},
+              {},
+              HiveConnectorTestBase::makeLocationHandle(
+                  tableDirectory,
+                  std::nullopt,
+                  connector::hive::LocationHandle::TableType::kNew),
+              dwio::common::FileFormat::PARQUET));
+
+      auto scanPlan = PlanBuilder().values({ptr});
+      auto plan = scanPlan
+                      .tableWrite(
+                          scanPlan.planNode()->outputType(),
+                          tableSchema->names(),
+                          nullptr,
+                          tableHandle,
+                          false,
+                          connector::CommitStrategy::kNoCommit)
+                      .planNode();
+
+      AssertQueryBuilder(plan).copyResults(pool);
     }
   }
 
@@ -128,53 +170,95 @@ class ParquetTpchTestBase : public testing::Test {
         params, addSplits, duckQuery, *duckDb_, sortingKeys);
   }
 
-  std::shared_ptr<DuckDbQueryRunner> duckDb_ = nullptr;
-  std::shared_ptr<TempDirectoryPath> tempDirectory_ = nullptr;
-  TpchQueryBuilder tpchBuilder_ =
-      TpchQueryBuilder(dwio::common::FileFormat::PARQUET);
-  const std::unordered_map<std::string, std::string> kDuckDbParquetWriteSQL_ = {
-      std::make_pair(
-          "lineitem",
-          R"(COPY (SELECT l_orderkey, l_partkey, l_suppkey, l_linenumber,
-         l_quantity::DOUBLE as quantity, l_extendedprice::DOUBLE as extendedprice, l_discount::DOUBLE as discount,
-         l_tax::DOUBLE as tax, l_returnflag, l_linestatus, l_shipdate AS shipdate, l_commitdate, l_receiptdate,
-         l_shipinstruct, l_shipmode, l_comment FROM {})
-         TO '{}'(FORMAT 'parquet', CODEC 'ZSTD', ROW_GROUP_SIZE {}))"),
-      std::make_pair(
-          "orders",
-          R"(COPY (SELECT o_orderkey, o_custkey, o_orderstatus,
-         o_totalprice::DOUBLE as o_totalprice,
-         o_orderdate, o_orderpriority, o_clerk, o_shippriority, o_comment FROM {})
-         TO '{}' (FORMAT 'parquet', CODEC 'ZSTD', ROW_GROUP_SIZE {}))"),
-      std::make_pair(
-          "customer",
-          R"(COPY (SELECT c_custkey, c_name, c_address, c_nationkey, c_phone,
-         c_acctbal::DOUBLE as c_acctbal, c_mktsegment, c_comment FROM {})
-         TO '{}' (FORMAT 'parquet', CODEC 'ZSTD', ROW_GROUP_SIZE {}))"),
-      std::make_pair(
-          "nation",
-          R"(COPY (SELECT * FROM {})
-          TO '{}' (FORMAT 'parquet', CODEC 'ZSTD', ROW_GROUP_SIZE {}))"),
-      std::make_pair(
-          "region",
-          R"(COPY (SELECT * FROM {})
-         TO '{}' (FORMAT 'parquet', CODEC 'ZSTD', ROW_GROUP_SIZE {}))"),
-      std::make_pair(
-          "part",
-          R"(COPY (SELECT p_partkey, p_name, p_mfgr, p_brand, p_type, p_size,
-         p_container, p_retailprice::DOUBLE, p_comment FROM {})
-         TO '{}' (FORMAT 'parquet', CODEC 'ZSTD', ROW_GROUP_SIZE {}))"),
-      std::make_pair(
-          "supplier",
-          R"(COPY (SELECT s_suppkey, s_name, s_address, s_nationkey, s_phone,
-         s_acctbal::DOUBLE, s_comment FROM {})
-         TO '{}' (FORMAT 'parquet', CODEC 'ZSTD', ROW_GROUP_SIZE {}))"),
-      std::make_pair(
-          "partsupp",
-          R"(COPY (SELECT ps_partkey, ps_suppkey, ps_availqty,
-         ps_supplycost::DOUBLE as supplycost, ps_comment FROM {})
-         TO '{}' (FORMAT 'parquet', CODEC 'ZSTD', ROW_GROUP_SIZE {}))")};
+  static std::shared_ptr<DuckDbQueryRunner> duckDb_;
+  static std::shared_ptr<TempDirectoryPath> tempDirectory_;
+  static TpchQueryBuilder tpchBuilder_;
+  static std::unordered_map<std::string, const std::string>
+      kDuckDbParquetWriteSQL_;
 };
+
+std::shared_ptr<DuckDbQueryRunner> ParquetTpchTestBase::duckDb_ = nullptr;
+std::shared_ptr<TempDirectoryPath> ParquetTpchTestBase::tempDirectory_ =
+    nullptr;
+TpchQueryBuilder ParquetTpchTestBase::tpchBuilder_ =
+    TpchQueryBuilder(dwio::common::FileFormat::PARQUET);
+
+std::unordered_map<std::string, const std::string>
+    ParquetTpchTestBase::kDuckDbParquetWriteSQL_ = {
+        std::make_pair(
+            "lineitem",
+            R"(SELECT l_orderkey,
+                      l_partkey,
+                      l_suppkey,
+                      l_linenumber,
+                      L_QUANTITY::DOUBLE AS quantity,
+                      L_EXTENDEDPRICE::DOUBLE AS extendedprice,
+                      L_DISCOUNT::DOUBLE AS discount,
+                      L_TAX::DOUBLE AS tax,
+                      l_returnflag,
+                      l_linestatus,
+                      l_shipdate AS shipdate,
+                      l_commitdate,
+                      l_receiptdate,
+                      l_shipinstruct,
+                      l_shipmode,
+                      l_comment
+              FROM {})"),
+        std::make_pair(
+            "orders",
+            R"(SELECT o_orderkey,
+                      o_custkey,
+                      o_orderstatus,
+                      o_totalprice::DOUBLE as o_totalprice,
+                      o_orderdate,
+                      o_orderpriority,
+                      o_clerk,
+                      o_shippriority,
+                      o_comment
+              FROM {})"),
+        std::make_pair(
+            "customer",
+            R"(SELECT c_custkey,
+                      c_name,
+                      c_address,
+                      c_nationkey,
+                      c_phone,
+                      c_acctbal::DOUBLE as c_acctbal,
+                      c_mktsegment,
+                      c_comment
+              FROM {})"),
+        std::make_pair("nation", R"(SELECT * FROM {})"),
+        std::make_pair("region", R"(SELECT * FROM {})"),
+        std::make_pair(
+            "part",
+            R"(SELECT p_partkey,
+                      p_name,
+                      p_mfgr,
+                      p_brand,
+                      p_type,
+                      p_size,
+                      p_container,
+                      p_retailprice::DOUBLE,
+                      p_comment
+                FROM {})"),
+        std::make_pair(
+            "supplier",
+            R"(SELECT s_suppkey,
+                      s_name,
+                      s_address,
+                      s_nationkey,
+                      s_phone,
+                      s_acctbal::DOUBLE,
+                      s_comment
+                FROM {})"),
+        std::make_pair(
+            "partsupp",
+            R"(SELECT ps_partkey,
+                      ps_suppkey,
+                      ps_availqty,
+                      ps_supplycost::DOUBLE as supplycost,
+                      ps_comment
+                FROM {})")};
 
 } // namespace
 } // namespace facebook::velox::exec::test

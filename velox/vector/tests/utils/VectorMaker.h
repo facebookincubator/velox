@@ -98,6 +98,11 @@ class VectorMaker {
   static std::shared_ptr<const RowType> rowType(
       std::vector<std::shared_ptr<const Type>>&& types);
 
+  static RowVectorPtr rowVector(
+      const RowTypePtr& rowType,
+      const std::vector<std::vector<variant>>& data,
+      memory::MemoryPool* pool);
+
   RowVectorPtr rowVector(const std::vector<VectorPtr>& children);
 
   RowVectorPtr rowVector(
