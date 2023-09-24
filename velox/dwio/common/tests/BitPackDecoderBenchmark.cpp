@@ -22,13 +22,14 @@
 #include "velox/dwio/common/tests/Lemire/bmipacking32.h"
 #endif
 
-#include "velox/external/duckdb/duckdb-fastpforlib.hpp"
+#include "velox/dwio/common/tests/duckdb/FastpforLib.h"
 
 #include <arrow/util/rle_encoding.h>
 #include <folly/Benchmark.h>
 #include <folly/Random.h>
 #include <folly/init/Init.h>
-#include "velox/external/duckdb/duckdb.hpp"
+
+#include <duckdb.hpp>
 
 using namespace folly;
 using namespace facebook::velox;

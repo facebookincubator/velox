@@ -77,12 +77,12 @@ target_link_libraries(
 
 if(VELOX_ENABLE_ARROW)
   add_executable(velox_dwio_common_bitpack_decoder_benchmark
-                 BitPackDecoderBenchmark.cpp)
+                 BitPackDecoderBenchmark.cpp duckdb/FastpforLib.cpp)
 
   target_compile_options(velox_dwio_common_bitpack_decoder_benchmark
                          PRIVATE -Wno-deprecated-declarations)
 
   target_link_libraries(
-    velox_dwio_common_bitpack_decoder_benchmark velox_dwio_common arrow duckdb
-    Folly::folly ${FOLLY_BENCHMARK})
+    velox_dwio_common_bitpack_decoder_benchmark velox_dwio_common arrow
+    duckdb_static Folly::folly ${FOLLY_BENCHMARK})
 endif()

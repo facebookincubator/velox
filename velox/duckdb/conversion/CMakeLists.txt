@@ -13,12 +13,13 @@
 # limitations under the License.
 add_library(velox_duckdb_conversion DuckConversion.cpp)
 
-target_link_libraries(velox_duckdb_conversion velox_core velox_vector duckdb)
+target_link_libraries(velox_duckdb_conversion velox_core velox_vector
+                      duckdb_static)
 
 add_library(velox_duckdb_parser DuckParser.cpp)
 
-target_link_libraries(velox_duckdb_parser velox_duckdb_conversion duckdb
-                      velox_parse_expression)
+target_link_libraries(velox_duckdb_parser velox_duckdb_conversion
+                      velox_parse_expression duckdb_static)
 
 if(${VELOX_BUILD_TESTING})
   add_subdirectory(tests)
