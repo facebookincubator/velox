@@ -220,6 +220,54 @@ void SelectiveColumnReader::getIntValues(
   }
 }
 
+void SelectiveColumnReader::getUnsignedIntValues(
+    RowSet rows,
+    const TypePtr& requestedType,
+    VectorPtr* result) {
+  switch (requestedType->kind()) {
+    case TypeKind::SMALLINT:
+      switch (valueSize_) {
+        case 4:
+          getFlatValues<int32_t, int16_t>(rows, result, requestedType);
+          break;
+        default:
+          VELOX_FAIL("Unsupported value size: {}", valueSize_);
+      }
+      break;
+    case TypeKind::INTEGER:
+      switch (valueSize_) {
+        case 4:
+          getFlatValues<int32_t, int32_t>(rows, result, requestedType);
+          break;
+        default:
+          VELOX_FAIL("Unsupported value size: {}", valueSize_);
+      }
+      break;
+    case TypeKind::BIGINT:
+      switch (valueSize_) {
+        case 4:
+          getFlatValues<uint32_t, int64_t>(rows, result, requestedType);
+          break;
+        default:
+          VELOX_FAIL("Unsupported value size: {}", valueSize_);
+      }
+      break;
+    case TypeKind::HUGEINT:
+      switch (valueSize_) {
+        case 8:
+          getFlatValues<uint64_t, int128_t>(rows, result, requestedType);
+          break;
+        default:
+          VELOX_FAIL("Unsupported value size: {}", valueSize_);
+      }
+      break;
+    default:
+      VELOX_FAIL(
+          "Not a valid type for unsigned integer reader: {}",
+          requestedType->toString());
+  }
+}
+
 template <>
 void SelectiveColumnReader::getFlatValues<int8_t, bool>(
     RowSet rows,

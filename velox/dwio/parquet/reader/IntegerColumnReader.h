@@ -53,6 +53,18 @@ class IntegerColumnReader : public dwio::common::SelectiveIntegerColumnReader {
     return numValues;
   }
 
+  void getValues(RowSet rows, VectorPtr* result) {
+    auto parquetDataType =
+        std::dynamic_pointer_cast<const ParquetTypeWithId>(fileType_);
+    auto logicalType = parquetDataType.get()->logicalType_;
+    if (logicalType.has_value() && logicalType.value().__isset.INTEGER &&
+        !logicalType.value().INTEGER.isSigned) {
+      getUnsignedIntValues(rows, requestedType_, result);
+    } else {
+      getIntValues(rows, requestedType_, result);
+    }
+  }
+
   void read(
       vector_size_t offset,
       RowSet rows,

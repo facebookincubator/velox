@@ -51,6 +51,12 @@ class ParquetReaderTestBase : public testing::Test {
     return ROW({"int", "bigint"}, {INTEGER(), BIGINT()});
   }
 
+  static RowTypePtr unsignedIntSchema() {
+    return ROW(
+        {"uint8", "uint16", "uint32", "uint64"},
+        {SMALLINT(), INTEGER(), BIGINT(), DECIMAL(20, 0)});
+  }
+
   static RowTypePtr upperSchemaToLowerCase() {
     return ROW({"a", "b"}, {BIGINT(), BIGINT()});
   }

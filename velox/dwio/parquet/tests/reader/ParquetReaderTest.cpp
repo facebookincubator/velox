@@ -260,6 +260,50 @@ TEST_F(ParquetReaderTest, parseInt) {
   assertReadExpected(intSchema(), *rowReader, expected, *pool_);
 }
 
+TEST_F(ParquetReaderTest, parseUnsignedInt) {
+  // uint.parquet holds unsigned integer columns (uint8: TINYINT, uint16:
+  // SMALLINT, uint32: INTEGER, uint64: BIGINT) and 3 rows. Data is in plain
+  // uncompressed format:
+  //   uint8: [255, 3, 3]
+  //   uint16: [65535, 2000, 3000]
+  //   uint32: [4294967295, 2000000000, 3000000000]
+  //   uint64: [18446744073709551615, 2000000000000000000, 3000000000000000000]
+  const std::string sample(getExampleFilePath("uint.parquet"));
+
+  ReaderOptions readerOptions{defaultPool.get()};
+  ParquetReader reader = createReader(sample, readerOptions);
+
+  EXPECT_EQ(reader.numberOfRows(), 3ULL);
+  auto type = reader.typeWithId();
+  EXPECT_EQ(type->size(), 4ULL);
+  auto col0 = type->childAt(0);
+  EXPECT_EQ(col0->type()->kind(), TypeKind::TINYINT);
+  auto col1 = type->childAt(1);
+  EXPECT_EQ(col1->type()->kind(), TypeKind::SMALLINT);
+  auto col2 = type->childAt(2);
+  EXPECT_EQ(col2->type()->kind(), TypeKind::INTEGER);
+  auto col3 = type->childAt(3);
+  EXPECT_EQ(col3->type()->kind(), TypeKind::BIGINT);
+
+  auto rowType = unsignedIntSchema();
+  RowReaderOptions rowReaderOpts;
+  rowReaderOpts.select(
+      std::make_shared<facebook::velox::dwio::common::ColumnSelector>(
+          rowType, rowType->names()));
+  rowReaderOpts.setScanSpec(makeScanSpec(rowType));
+  auto rowReader = reader.createRowReader(rowReaderOpts);
+
+  auto expected = vectorMaker_->rowVector(
+      {vectorMaker_->flatVector<int16_t>({255, 2, 3}),
+       vectorMaker_->flatVector<int32_t>({65535, 2000, 3000}),
+       vectorMaker_->flatVector<int64_t>({4294967295, 2000000000, 3000000000}),
+       vectorMaker_->flatVector<int128_t>(
+           {18446744073709551615ULL,
+            2000000000000000000ULL,
+            3000000000000000000ULL})});
+  assertReadExpected(unsignedIntSchema(), *rowReader, expected, *pool_);
+}
+
 TEST_F(ParquetReaderTest, parseDate) {
   // date.parquet holds a single column (date: DATE) and
   // 25 rows.
