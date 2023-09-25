@@ -17,7 +17,9 @@
 #include "velox/common/base/tests/GTestUtils.h"
 #include "velox/external/date/tz.h"
 #include "velox/functions/prestosql/tests/utils/FunctionBaseTest.h"
+#include "velox/functions/prestosql/types/TimeWithTimeZoneType.h"
 #include "velox/functions/prestosql/types/TimestampWithTimeZoneType.h"
+#include "velox/functions/prestosql/types/TimestampWithTimeZoneUtil.h"
 #include "velox/type/tz/TimeZoneMap.h"
 
 using namespace facebook::velox;
@@ -232,6 +234,39 @@ class DateTimeFunctionsTest : public functions::test::FunctionBaseTest {
             ? date::make_zoned(
                   timeZone.value(), std::chrono::system_clock::now())
             : std::chrono::system_clock::now()));
+  }
+
+  struct TimeWithTimezone {
+    TimeWithTimezone(int64_t milliSeconds, int16_t timezoneId)
+        : milliSeconds_(milliSeconds), timezoneId_(timezoneId) {}
+
+    int64_t milliSeconds_{0};
+    int16_t timezoneId_{0};
+
+    bool operator<=(const TimeWithTimezone& other) const {
+      auto millsA =
+          facebook::velox::TimeUtil::toGMT(milliSeconds_, timezoneId_);
+      auto millsB = facebook::velox::TimeUtil::toGMT(
+          other.milliSeconds_, other.timezoneId_);
+      return millsA <= millsB;
+    }
+  };
+
+  TimeWithTimezone getCurrentTimeWithTimezone(
+      const std::optional<std::string>& timeZone) {
+    auto millis = getCurrentTimeMs();
+
+    if (timeZone.has_value()) {
+      const int64_t tzid = util::getTimeZoneID(timeZone.value());
+      auto zone = date::locate_zone(util::getTimeZoneName(tzid));
+
+      millis = facebook::velox::TimeUtil::toTimezone(millis, *zone);
+      return TimeWithTimezone(
+          facebook::velox::TimeUtil::getMillisOfDay(millis), tzid);
+    }
+
+    return TimeWithTimezone(
+        facebook::velox::TimeUtil::getMillisOfDay(millis), 0);
   }
 };
 
@@ -3942,6 +3977,50 @@ TEST_F(DateTimeFunctionsTest, currentDateWithoutTimezone) {
   EXPECT_LE(dateBefore, result);
   EXPECT_LE(result, dateAfter);
   EXPECT_LE(dateAfter - dateBefore, 1);
+}
+
+TEST_F(DateTimeFunctionsTest, currentTimeWithTimezone) {
+  const auto evaluateCurrentTime =
+      [&](const std::string& functionName,
+          const std::optional<std::string>& timeZone) {
+        // Pass an empty vector here since current_time has no parameter.
+        auto emptyRowVector = makeRowVector(ROW({}), 1);
+
+        // DuckDB uses function name get_current_time
+        // so manually constructing the CallExpr here.
+        auto callExpr = std::make_shared<const core::CallTypedExpr>(
+            TIME_WITH_TIME_ZONE(),
+            std::vector<core::TypedExprPtr>{},
+            functionName);
+
+        auto dateBefore = getCurrentTimeWithTimezone(timeZone);
+        auto actual = evaluate(callExpr, emptyRowVector);
+        auto dateAfter = getCurrentTimeWithTimezone(timeZone);
+
+        auto actualConstant = actual->as<SimpleVector<int64_t>>();
+        ASSERT_EQ(1, actualConstant->size());
+
+        auto timeWithTimeZone = actualConstant->valueAt(0);
+        auto time = TimeWithTimezone{
+            unpackMillisUtc(timeWithTimeZone),
+            unpackZoneKeyId(timeWithTimeZone)};
+
+        EXPECT_LE(dateBefore, time);
+        EXPECT_LE(time, dateAfter);
+      };
+
+  std::vector<std::optional<std::string>> timeZones = {
+      std::nullopt, "America/Los_Angeles", "Europe/Berlin"};
+
+  for (std::optional<std::string> timeZone : timeZones) {
+    if (timeZone.has_value()) {
+      setQueryTimeZone(timeZone.value());
+    } else {
+      disableAdjustTimestampToTimezone();
+    }
+
+    evaluateCurrentTime("current_time", timeZone);
+  }
 }
 
 TEST_F(DateTimeFunctionsTest, timeZoneHour) {

@@ -18,6 +18,7 @@
 #include "velox/common/base/CompareFlags.h"
 #include "velox/functions/Macros.h"
 #include "velox/functions/prestosql/types/TimestampWithTimeZoneType.h"
+#include "velox/functions/prestosql/types/TimestampWithTimeZoneUtil.h"
 
 namespace facebook::velox::functions {
 

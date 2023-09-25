@@ -29,6 +29,7 @@ add_library(
   StringView.cpp
   StringView.h
   Subfield.cpp
+  TimeUtil.h
   Timestamp.cpp
   TimestampConversion.cpp
   Tokenizer.cpp
