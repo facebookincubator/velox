@@ -22,7 +22,6 @@
 namespace facebook::velox::functions::window {
 
 namespace {
-template <typename T>
 class NthValueFunction : public exec::WindowFunction {
  public:
   explicit NthValueFunction(
@@ -33,20 +32,37 @@ class NthValueFunction : public exec::WindowFunction {
       : WindowFunction(resultType, pool, nullptr), ignoreNulls_(ignoreNulls) {
     VELOX_CHECK_EQ(args.size(), 2);
     VELOX_CHECK_NULL(args[0].constantValue);
+    auto offsetType = args[1].type;
+    VELOX_CHECK(
+        (offsetType->isInteger() || offsetType->isBigint()),
+        "Invalid offset type: {}",
+        offsetType->toString());
     valueIndex_ = args[0].index.value();
     if (args[1].constantValue) {
       if (args[1].constantValue->isNullAt(0)) {
         isConstantOffsetNull_ = true;
         return;
       }
-      constantOffset_ =
-          args[1].constantValue->template as<ConstantVector<T>>()->valueAt(0);
+      if (offsetType->isInteger()) {
+        constantOffset_ =
+            args[1]
+                .constantValue->template as<ConstantVector<int32_t>>()
+                ->valueAt(0);
+      } else {
+        constantOffset_ =
+            args[1]
+                .constantValue->template as<ConstantVector<int64_t>>()
+                ->valueAt(0);
+      }
       VELOX_USER_CHECK_GE(
           constantOffset_.value(), 1, "Offset must be at least 1");
     } else {
       offsetIndex_ = args[1].index.value();
-      offsets_ =
-          BaseVector::create<FlatVector<T>>(CppToType<T>::create(), 0, pool);
+      if (offsetType->isInteger()) {
+        offsets_ = BaseVector::create<FlatVector<int32_t>>(INTEGER(), 0, pool);
+      } else {
+        offsets_ = BaseVector::create<FlatVector<int64_t>>(BIGINT(), 0, pool);
+      }
     }
 
     nulls_ = allocateNulls(0, pool);
@@ -134,7 +150,7 @@ class NthValueFunction : public exec::WindowFunction {
       const vector_size_t* frameStarts,
       const vector_size_t* frameEnds,
       vector_size_t leastFrame) {
-    T constantOffsetValue = constantOffset_.value();
+    auto constantOffsetValue = constantOffset_.value();
     if (ignoreNulls) {
       auto rawNulls = nulls_->as<uint64_t>();
       validRows.applyToSelected([&](auto i) {
@@ -153,18 +169,19 @@ class NthValueFunction : public exec::WindowFunction {
     }
   }
 
-  template <bool ignoreNulls>
+  template <bool ignoreNulls, typename T>
   void setRowNumbersApplyLoop(
       const SelectivityVector& validRows,
       const vector_size_t* frameStarts,
       const vector_size_t* frameEnds,
       vector_size_t leastFrame = 0) {
     auto rawNulls = nulls_->as<uint64_t>();
+    auto offsetsVector = offsets_->as<FlatVector<T>>();
     validRows.applyToSelected([&](auto i) {
-      if (offsets_->isNullAt(i)) {
+      if (offsetsVector->isNullAt(i)) {
         rowNumbers_[i] = kNullRow;
       } else {
-        T offset = offsets_->valueAt(i);
+        T offset = offsetsVector->valueAt(i);
         VELOX_USER_CHECK_GE(offset, 1, "Offset must be at least 1");
         if constexpr (ignoreNulls) {
           setRowNumberIgnoreNulls(
@@ -188,10 +205,21 @@ class NthValueFunction : public exec::WindowFunction {
         offsetIndex_, partitionOffset_, numRows, 0, offsets_);
 
     if (ignoreNulls) {
-      setRowNumbersApplyLoop<true>(
-          validRows, frameStarts, frameEnds, leastFrame);
+      if (offsets_->type()->isInteger()) {
+        setRowNumbersApplyLoop<true, int32_t>(
+            validRows, frameStarts, frameEnds, leastFrame);
+      } else {
+        setRowNumbersApplyLoop<true, int64_t>(
+            validRows, frameStarts, frameEnds, leastFrame);
+      }
     } else {
-      setRowNumbersApplyLoop<false>(validRows, frameStarts, frameEnds);
+      if (offsets_->type()->isInteger()) {
+        setRowNumbersApplyLoop<false, int32_t>(
+            validRows, frameStarts, frameEnds);
+      } else {
+        setRowNumbersApplyLoop<false, int64_t>(
+            validRows, frameStarts, frameEnds);
+      }
     }
   }
 
@@ -206,6 +234,7 @@ class NthValueFunction : public exec::WindowFunction {
     invalidRows_.applyToSelected([&](auto i) { rowNumbers_[i] = kNullRow; });
   }
 
+  template <typename T>
   inline void setRowNumber(
       vector_size_t i,
       const vector_size_t* frameStarts,
@@ -217,6 +246,7 @@ class NthValueFunction : public exec::WindowFunction {
     rowNumbers_[i] = rowNumber <= frameEnd ? rowNumber : kNullRow;
   }
 
+  template <typename T>
   inline void setRowNumberIgnoreNulls(
       vector_size_t i,
       const uint64_t* rawNulls,
@@ -250,12 +280,12 @@ class NthValueFunction : public exec::WindowFunction {
   const exec::WindowPartition* partition_;
 
   // These fields are set if the offset argument is a constant value.
-  std::optional<T> constantOffset_;
+  std::optional<int64_t> constantOffset_;
   bool isConstantOffsetNull_ = false;
 
   // This vector is used to extract values of the offset argument column
   // (if not a constant offset value).
-  FlatVectorPtr<T> offsets_;
+  VectorPtr offsets_ = nullptr;
 
   // This offset tracks how far along the partition rows have been output.
   // This can be used to optimize reading offset column values corresponding
@@ -276,7 +306,6 @@ class NthValueFunction : public exec::WindowFunction {
 };
 } // namespace
 
-template <typename T>
 void registerNthValue(const std::string& name, TypeKind offsetTypeKind) {
   std::vector<exec::FunctionSignaturePtr> signatures{
       exec::FunctionSignatureBuilder()
@@ -298,16 +327,16 @@ void registerNthValue(const std::string& name, TypeKind offsetTypeKind) {
           HashStringAllocator* /*stringAllocator*/,
           const core::QueryConfig& /*queryConfig*/)
           -> std::unique_ptr<exec::WindowFunction> {
-        return std::make_unique<NthValueFunction<T>>(
+        return std::make_unique<NthValueFunction>(
             args, resultType, ignoreNulls, pool);
       });
 }
 
 void registerNthValueInteger(const std::string& name) {
-  registerNthValue<int32_t>(name, TypeKind::INTEGER);
+  registerNthValue(name, TypeKind::INTEGER);
 }
 
 void registerNthValueBigint(const std::string& name) {
-  registerNthValue<int64_t>(name, TypeKind::BIGINT);
+  registerNthValue(name, TypeKind::BIGINT);
 }
 } // namespace facebook::velox::functions::window
