@@ -99,38 +99,18 @@ class ParquetTpchTestBase : public testing::Test {
           fmt::format("{}/{}", tempDirectory_->path, tableName);
 
       auto tableSchema = velox::tpch::getTableSchema(table);
-      auto tt = kDuckDbParquetWriteSQL_.at(tableName);
       auto query = fmt::format(
           fmt::runtime(kDuckDbParquetWriteSQL_.at(tableName)), tableName);
       // TODO: The name of API `executeOrdered` is confused, it do nothing
       // related to sorting, and should be updated with a more proper name.
       auto result = duckDb_->executeOrdered(query, tableSchema);
-      auto ptr = velox::test::VectorMaker::rowVector(tableSchema, result, pool);
-      result.size();
-
-      auto tableHandle = std::make_shared<core::InsertTableHandle>(
-          kHiveConnectorId,
-          HiveConnectorTestBase::makeHiveInsertTableHandle(
-              tableSchema->names(),
-              tableSchema->children(),
-              {},
-              {},
-              HiveConnectorTestBase::makeLocationHandle(
-                  tableDirectory,
-                  std::nullopt,
-                  connector::hive::LocationHandle::TableType::kNew),
-              dwio::common::FileFormat::PARQUET));
-
-      auto scanPlan = PlanBuilder().values({ptr});
-      auto plan = scanPlan
-                      .tableWrite(
-                          scanPlan.planNode()->outputType(),
-                          tableSchema->names(),
-                          nullptr,
-                          tableHandle,
-                          false,
-                          connector::CommitStrategy::kNoCommit)
-                      .planNode();
+      auto rows =
+          velox::test::VectorMaker::rowVector(tableSchema, result, pool);
+      auto plan =
+          PlanBuilder()
+              .values({rows})
+              .tableWrite(tableDirectory, dwio::common::FileFormat::PARQUET)
+              .planNode();
 
       AssertQueryBuilder(plan).copyResults(pool);
     }
