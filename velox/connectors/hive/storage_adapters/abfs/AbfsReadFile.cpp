@@ -25,13 +25,8 @@ namespace facebook::velox::filesystems::abfs {
 
 AbfsReadFile::AbfsReadFile(
     const std::string& path,
-    const std::string& connectStr,
-    const int32_t loadQuantum,
-    const std::shared_ptr<folly::Executor> ioExecutor)
-    : path_(path),
-      connectStr_(connectStr),
-      loadQuantum_(loadQuantum),
-      ioExecutor_(ioExecutor) {
+    const std::string& connectStr)
+    : path_(path), connectStr_(connectStr) {
   auto abfsAccount = AbfsAccount(path_);
   fileSystem_ = abfsAccount.fileSystem();
   fileName_ = abfsAccount.filePath();
@@ -77,51 +72,16 @@ uint64_t AbfsReadFile::preadv(
   for (auto& range : buffers) {
     length += range.size();
   }
-  if (ioExecutor_) {
-    size_t requestOffset = offset;
-    std::vector<folly::Future<folly::Unit>> futures;
-    for (auto region : buffers) {
-      const auto& buffer = region.data();
-      if (buffer) {
-        auto loadQuantum = calculateSplitQuantum(region.size(), loadQuantum_);
-        if (region.size() > loadQuantum) {
-          std::vector<std::tuple<uint64_t, uint64_t>> ranges;
-          splitRegion(region.size(), loadQuantum, ranges);
-          for (size_t idx = 0; idx < ranges.size(); idx++) {
-            auto cursor = std::get<0>(ranges[idx]);
-            auto length = std::get<1>(ranges[idx]);
-            auto future = folly::via(
-                ioExecutor_.get(),
-                [this, buffer, region, requestOffset, cursor, length]() {
-                  char* b = reinterpret_cast<char*>(buffer);
-                  preadInternal(requestOffset + cursor, length, b + cursor);
-                });
-            futures.push_back(std::move(future));
-          }
-        } else {
-          auto future = folly::via(
-              ioExecutor_.get(), [this, requestOffset, buffer, region]() {
-                preadInternal(requestOffset, region.size(), buffer);
-              });
-          futures.push_back(std::move(future));
-        }
-      }
-      requestOffset += region.size();
+  std::string result(length, 0);
+  preadInternal(offset, length, static_cast<char*>(result.data()));
+  size_t resultOffset = 0;
+  for (auto range : buffers) {
+    if (range.data()) {
+      memcpy(range.data(), &(result.data()[resultOffset]), range.size());
     }
-    for (int64_t i = futures.size() - 1; i >= 0; --i) {
-      futures[i].wait();
-    }
-  } else {
-    std::string result(length, 0);
-    preadInternal(offset, length, static_cast<char*>(result.data()));
-    size_t resultOffset = 0;
-    for (auto range : buffers) {
-      if (range.data()) {
-        memcpy(range.data(), &(result.data()[resultOffset]), range.size());
-      }
-      resultOffset += range.size();
-    }
+    resultOffset += range.size();
   }
+
   return length;
 }
 
@@ -129,48 +89,12 @@ void AbfsReadFile::preadv(
     folly::Range<const common::Region*> regions,
     folly::Range<folly::IOBuf*> iobufs) const {
   VELOX_CHECK_EQ(regions.size(), iobufs.size());
-  if (ioExecutor_) {
-    std::vector<folly::Future<folly::Unit>> futures;
-    for (size_t i = 0; i < regions.size(); ++i) {
-      const auto& region = regions[i];
-      auto& output = iobufs[i];
-      output = folly::IOBuf(folly::IOBuf::CREATE, region.length);
-      auto loadQuantum = calculateSplitQuantum(region.length, loadQuantum_);
-      if (region.length > loadQuantum) {
-        std::vector<std::tuple<uint64_t, uint64_t>> ranges;
-        splitRegion(region.length, loadQuantum, ranges);
-        for (size_t idx = 0; idx < ranges.size(); idx++) {
-          auto cursor = std::get<0>(ranges[idx]);
-          auto length = std::get<1>(ranges[idx]);
-          auto future = folly::via(
-              ioExecutor_.get(), [this, region, &output, cursor, length]() {
-                char* b = reinterpret_cast<char*>(output.writableData());
-                preadInternal(region.offset + cursor, length, b + cursor);
-              });
-          futures.push_back(std::move(future));
-        }
-      } else {
-        auto future = folly::via(ioExecutor_.get(), [this, region, &output]() {
-          char* b = reinterpret_cast<char*>(output.writableData());
-          preadInternal(region.offset, region.length, b);
-        });
-        futures.push_back(std::move(future));
-      }
-    }
-    for (int64_t i = futures.size() - 1; i >= 0; --i) {
-      futures[i].wait();
-    }
-    for (size_t i = 0; i < regions.size(); ++i) {
-      iobufs[i].append(regions[i].length);
-    }
-  } else {
-    for (size_t i = 0; i < regions.size(); ++i) {
-      const auto& region = regions[i];
-      auto& output = iobufs[i];
-      output = folly::IOBuf(folly::IOBuf::CREATE, region.length);
-      pread(region.offset, region.length, output.writableData());
-      output.append(region.length);
-    }
+  for (size_t i = 0; i < regions.size(); ++i) {
+    const auto& region = regions[i];
+    auto& output = iobufs[i];
+    output = folly::IOBuf(folly::IOBuf::CREATE, region.length);
+    pread(region.offset, region.length, output.writableData());
+    output.append(region.length);
   }
 }
 

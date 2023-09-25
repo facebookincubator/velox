@@ -21,8 +21,6 @@ namespace facebook::velox::filesystems::abfs {
 
 class AbfsFileSystem : public FileSystem {
  public:
-  static constexpr const char* kReaderAbfsIoThreads = "fs.azure.ioThreads";
-
   static constexpr const char* kReaderAbfsUseHttps = "fs.azure.useHttps";
 
   static constexpr const char* kReadAbfsConnectionStr =

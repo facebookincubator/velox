@@ -26,11 +26,7 @@ class AbfsReadFile final : public ReadFile {
   constexpr static uint64_t kNaturalReadSize = 4 << 20; // 4M
   constexpr static uint64_t kReadConcurrency = 8;
 
-  explicit AbfsReadFile(
-      const std::string& path,
-      const std::string& connectStr,
-      const int32_t loadQuantum,
-      const std::shared_ptr<folly::Executor> ioExecutor);
+  explicit AbfsReadFile(const std::string& path, const std::string& connectStr);
 
   void initialize();
 
@@ -71,8 +67,6 @@ class AbfsReadFile final : public ReadFile {
 
   const std::string path_;
   const std::string connectStr_;
-  const int32_t loadQuantum_;
-  const std::shared_ptr<folly::Executor> ioExecutor_;
   std::string fileSystem_;
   std::string fileName_;
   std::unique_ptr<BlobClient> fileClient_;

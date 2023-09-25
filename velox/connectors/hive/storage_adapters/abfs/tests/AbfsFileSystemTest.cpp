@@ -44,10 +44,7 @@ class AbfsFileSystemTest : public testing::Test {
     std::unordered_map<std::string, std::string> config(
         {{"fs.azure.account.key.test.dfs.core.windows.net", "test"},
          {filesystems::abfs::AbfsFileSystem::kReadAbfsConnectionStr,
-          facebook::velox::filesystems::test::AzuriteConnectionString},
-         {facebook::velox::filesystems::abfs::AbfsFileSystem::
-              kReaderAbfsIoThreads,
-          "4"}});
+          facebook::velox::filesystems::test::AzuriteConnectionString}});
 
     if (!useAzuriteConnectionStr) {
       config.erase(filesystems::abfs::AbfsFileSystem::kReadAbfsConnectionStr);

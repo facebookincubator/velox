@@ -44,15 +44,6 @@ class AbfsConfig {
     return abfsAccount.connectionString(useHttps(), config_->get(key).value());
   }
 
-  int32_t loadQuantum() const {
-    // TODO support dynamic set from spark conf.
-    return AbfsReadFile::kNaturalReadSize;
-  }
-
-  int32_t ioThreadPoolSize() const {
-    return config_->get<int32_t>(AbfsFileSystem::kReaderAbfsIoThreads, 0);
-  }
-
   bool useHttps() const {
     return config_->get<bool>(AbfsFileSystem::kReaderAbfsUseHttps, true);
   }
@@ -70,13 +61,8 @@ class AbfsFileSystem::Impl {
  public:
   explicit Impl(const Config* config) : abfsConfig_(config) {
     const size_t originCount = initCounter_++;
-    if (abfsConfig_.ioThreadPoolSize() > 0) {
-      ioExecutor_ = std::make_shared<folly::IOThreadPoolExecutor>(
-          abfsConfig_.ioThreadPoolSize());
-    }
-    LOG(INFO) << "Init ABFS file system(" << std::to_string(originCount)
-              << "), thread pool size:"
-              << std::to_string(abfsConfig_.ioThreadPoolSize());
+    LOG(INFO) << "Init ABFS file system (" << std::to_string(originCount)
+              << ")";
   }
 
   ~Impl() {
@@ -87,14 +73,6 @@ class AbfsFileSystem::Impl {
   const std::string connectionString(const std::string& path) const {
     // extract account name
     return abfsConfig_.connectionString(path);
-  }
-
-  const int32_t getLoadQuantum() const {
-    return abfsConfig_.loadQuantum();
-  }
-
-  const std::shared_ptr<folly::Executor>& getIOExecutor() const {
-    return ioExecutor_;
   }
 
  private:
@@ -117,10 +95,7 @@ std::unique_ptr<ReadFile> AbfsFileSystem::openFileForRead(
     std::string_view path,
     const FileOptions& /*unused*/) {
   auto abfsfile = std::make_unique<AbfsReadFile>(
-      std::string(path),
-      impl_->connectionString(std::string(path)),
-      impl_->getLoadQuantum(),
-      impl_->getIOExecutor());
+      std::string(path), impl_->connectionString(std::string(path)));
   abfsfile->initialize();
   return abfsfile;
 }
