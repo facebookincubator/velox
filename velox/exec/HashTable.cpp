@@ -653,22 +653,22 @@ void HashTable<ignoreNullKeys>::joinNormalizedKeyProbe(HashLookup& lookup) {
   int32_t probeIndex = 0;
   int32_t numProbes = lookup.rows.size();
   const vector_size_t* rows = lookup.rows.data();
-  constexpr int32_t probeStep = 64;
-  ProbeState states[probeStep];
+  constexpr int32_t groupSize = 64;
+  ProbeState states[groupSize];
   const uint64_t* keys = lookup.normalizedKeys.data();
   const uint64_t* hashes = lookup.hashes.data();
   char** hits = lookup.hits.data();
   constexpr int32_t kKeyOffset =
       -static_cast<int32_t>(sizeof(normalized_key_t));
-  for (; probeIndex + probeStep <= numProbes; probeIndex += probeStep) {
-    for (int32_t i = 0; i < probeStep; ++i) {
+  for (; probeIndex + groupSize <= numProbes; probeIndex += groupSize) {
+    for (int32_t i = 0; i < groupSize; ++i) {
       int32_t row = rows[probeIndex + i];
       states[i].preProbe(*this, hashes[row], row);
     }
-    for (int32_t i = 0; i < probeStep; ++i) {
+    for (int32_t i = 0; i < groupSize; ++i) {
       states[i].firstProbe(*this, kKeyOffset);
     }
-    for (int32_t i = 0; i < probeStep; ++i) {
+    for (int32_t i = 0; i < groupSize; ++i) {
       hits[states[i].row()] = states[i].joinNormalizedKeyFullProbe(*this, keys);
     }
   }
