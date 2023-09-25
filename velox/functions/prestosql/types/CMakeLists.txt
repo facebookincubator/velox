@@ -11,8 +11,9 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-add_library(velox_presto_types HyperLogLogType.cpp JsonType.cpp
-                               TimestampWithTimeZoneType.cpp)
+add_library(
+  velox_presto_types HyperLogLogType.cpp JsonType.cpp
+                     TimestampWithTimeZoneType.cpp TimeWithTimeZoneType.cpp)
 
 target_link_libraries(velox_presto_types velox_memory velox_expression
                       velox_functions_util)

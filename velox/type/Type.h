@@ -38,6 +38,7 @@
 #include "velox/common/serialization/Serializable.h"
 #include "velox/type/HugeInt.h"
 #include "velox/type/StringView.h"
+#include "velox/type/TimeUtil.h"
 #include "velox/type/Timestamp.h"
 #include "velox/type/Tree.h"
 
@@ -552,6 +553,8 @@ class Type : public Tree<const TypePtr>, public velox::ISerializable {
   bool isIntervalDayTime() const;
 
   bool isDate() const;
+
+  bool isTimeMillis() const;
 
   bool containsUnknown() const;
 
@@ -1296,6 +1299,57 @@ FOLLY_ALWAYS_INLINE bool isDateName(const std::string& name) {
 FOLLY_ALWAYS_INLINE bool Type::isDate() const {
   // The pointers can be compared since DATE is a singleton.
   return this == DATE().get();
+}
+
+/// A TimeMillis is stored as milliseconds from midnight on 1970-01-01T00:00:00
+/// in the time zone of the session. When performing calculations on a time
+/// the client's time zone must be taken into account.
+class TimeMillisType : public BigintType {
+ private:
+  TimeMillisType() = default;
+
+ public:
+  static const std::shared_ptr<const TimeMillisType>& get() {
+    static const std::shared_ptr<const TimeMillisType> kType{
+        new TimeMillisType()};
+    return kType;
+  }
+
+  const char* name() const override {
+    return "TIME_MILLIS";
+  }
+
+  bool equivalent(const Type& other) const override {
+    return this == &other;
+  }
+
+  std::string toString() const override {
+    return name();
+  }
+
+  /// Convert millis to string representation according to timeZone
+  static std::string valueToString(
+      int64_t millis,
+      const date::time_zone* timeZone = nullptr);
+
+  folly::dynamic serialize() const override {
+    folly::dynamic obj = folly::dynamic::object;
+    obj["name"] = "TimeMillisType";
+    obj["type"] = name();
+    return obj;
+  }
+
+  static TypePtr deserialize(const folly::dynamic& /*obj*/) {
+    return TimeMillisType::get();
+  }
+};
+
+FOLLY_ALWAYS_INLINE std::shared_ptr<const TimeMillisType> TIME_MILLIS() {
+  return TimeMillisType::get();
+}
+
+FOLLY_ALWAYS_INLINE bool Type::isTimeMillis() const {
+  return this == TIME_MILLIS().get();
 }
 
 /// Used as T for SimpleVector subclasses that wrap another vector when

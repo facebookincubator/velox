@@ -6,6 +6,10 @@ Date and Time Functions
 
     Returns the current date.
 
+.. function:: current_time() -> time with time zone
+
+    Returns the current time as of the start of the query.
+
 .. function:: date(x) -> date
 
     This is an alias for ``CAST(x AS date)``.

@@ -215,6 +215,7 @@ TEST_F(CustomTypeTest, getCustomTypeNames) {
           "JSON",
           "HYPERLOGLOG",
           "TIMESTAMP WITH TIME ZONE",
+          "TIME WITH TIME ZONE",
       }),
       names);
 
@@ -227,6 +228,7 @@ TEST_F(CustomTypeTest, getCustomTypeNames) {
           "JSON",
           "HYPERLOGLOG",
           "TIMESTAMP WITH TIME ZONE",
+          "TIME WITH TIME ZONE",
           "FANCY_INT",
       }),
       names);

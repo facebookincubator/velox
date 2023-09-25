@@ -155,11 +155,16 @@ void registerSimpleFunctions(const std::string& prefix) {
   registerFunction<DateParseFunction, Timestamp, Varchar, Varchar>(
       {prefix + "date_parse"});
   registerFunction<CurrentDateFunction, Date>({prefix + "current_date"});
+  registerFunction<CurrentTimeFunction, TimeWithTimezone>(
+      {prefix + "current_time"});
+  registerFunction<CurrentTimeFunction, TimeWithTimezone>(
+      {prefix + "get_current_time"});
 }
 } // namespace
 
 void registerDateTimeFunctions(const std::string& prefix) {
   registerTimestampWithTimeZoneType();
+  registerTimeWithTimeZoneType();
 
   registerSimpleFunctions(prefix);
   VELOX_REGISTER_VECTOR_FUNCTION(udf_from_unixtime, prefix + "from_unixtime");

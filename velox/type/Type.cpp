@@ -215,6 +215,7 @@ void Type::registerSerDe() {
   registry.Register(
       "IntervalYearMonthType", IntervalYearMonthType::deserialize);
   registry.Register("DateType", DateType::deserialize);
+  registry.Register("TimeMillisType", TimeMillisType::deserialize);
 }
 
 std::string ArrayType::toString() const {
@@ -1030,6 +1031,33 @@ int32_t DateType::toDays(folly::StringPiece in) const {
 
 int32_t DateType::toDays(const char* in, size_t len) const {
   return util::fromDateString(in, len);
+}
+
+std::string TimeMillisType::valueToString(
+    int64_t millis,
+    const date::time_zone* zone) {
+  int64_t millisOfDay = velox::TimeUtil::getMillisOfDay(millis);
+  if (zone != nullptr) {
+    millisOfDay = velox::TimeUtil::toTimezone(millisOfDay, *zone);
+  }
+
+  auto seconds = millisOfDay / velox::TimeUtil::kMillisecondsInSecond;
+  auto milliseconds = millisOfDay % velox::TimeUtil::kMillisecondsInSecond;
+  std::tm tmValue{};
+  VELOX_USER_CHECK_NOT_NULL(
+      gmtime_r((const time_t*)&seconds, &tmValue),
+      "Can't convert seconds to time: {}",
+      folly::to<std::string>(seconds));
+
+  // return ISO 8601 time format.
+  // %T - equivalent to "%H:%M:%S" (the ISO 8601 time format)
+  // so this return time in the format
+  // %H:%M:%S.nnn for milliseconds precision.
+  std::ostringstream oss;
+  oss << std::put_time(&tmValue, "%T");
+  oss << '.' << std::setfill('0') << std::setw(3) << milliseconds;
+
+  return oss.str();
 }
 
 namespace {

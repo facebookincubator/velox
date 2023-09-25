@@ -16,6 +16,7 @@
 #include "velox/type/Type.h"
 #include <sstream>
 #include "velox/common/base/tests/GTestUtils.h"
+#include "velox/external/date/tz.h"
 
 using namespace facebook;
 using namespace facebook::velox;
@@ -163,6 +164,30 @@ TEST(TypeTest, date) {
   EXPECT_FALSE(INTEGER()->equivalent(*date));
 
   testTypeSerde(date);
+}
+
+TEST(TypeTest, timeMillis) {
+  auto time = TIME_MILLIS();
+  EXPECT_EQ(time->toString(), "TIME_MILLIS");
+  EXPECT_EQ(time->size(), 0);
+  EXPECT_THROW(time->childAt(0), std::invalid_argument);
+  EXPECT_EQ(time->kind(), TypeKind::BIGINT);
+  EXPECT_STREQ(time->kindName(), "BIGINT");
+  EXPECT_EQ(time->begin(), time->end());
+
+  EXPECT_TRUE(time->kindEquals(BIGINT()));
+  EXPECT_NE(*time, *BIGINT());
+  EXPECT_FALSE(time->equivalent(*BIGINT()));
+  EXPECT_FALSE(BIGINT()->equivalent(*time));
+
+  int64_t millis =
+      kMillisInHour * 4 + kMillisInMinute * 6 + kMillisInSecond * 7 + 98;
+  EXPECT_EQ(
+      "01:02:03.456",
+      TIME_MILLIS()->valueToString(
+          -25076544, date::locate_zone("Asia/Shanghai")));
+  EXPECT_EQ("04:06:07.098", TIME_MILLIS()->valueToString(millis));
+  testTypeSerde(time);
 }
 
 TEST(TypeTest, intervalDayTime) {

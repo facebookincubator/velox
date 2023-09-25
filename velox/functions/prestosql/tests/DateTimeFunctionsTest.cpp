@@ -232,6 +232,39 @@ class DateTimeFunctionsTest : public functions::test::FunctionBaseTest {
                   timeZone.value(), std::chrono::system_clock::now())
             : std::chrono::system_clock::now()));
   }
+
+  struct TimeWithTimezone {
+    TimeWithTimezone(int64_t milliSeconds, int16_t timezoneId)
+        : milliSeconds_(milliSeconds), timezoneId_(timezoneId) {}
+
+    int64_t milliSeconds_{0};
+    int16_t timezoneId_{0};
+
+    bool operator<=(const TimeWithTimezone& other) const {
+      auto millsA =
+          facebook::velox::TimeUtil::toGMT(milliSeconds_, timezoneId_);
+      auto millsB = facebook::velox::TimeUtil::toGMT(
+          other.milliSeconds_, other.timezoneId_);
+      return millsA <= millsB;
+    }
+  };
+
+  TimeWithTimezone getCurrentTimeWithTimezone(
+      const std::optional<std::string>& timeZone) {
+    auto millis = getCurrentTimeMs();
+
+    if (timeZone.has_value()) {
+      const int64_t tzid = util::getTimeZoneID(timeZone.value());
+      auto zone = date::locate_zone(util::getTimeZoneName(tzid));
+
+      millis = facebook::velox::TimeUtil::toTimezone(millis, *zone);
+      return TimeWithTimezone(
+          facebook::velox::TimeUtil::getMillisOfDay(millis), tzid);
+    }
+
+    return TimeWithTimezone(
+        facebook::velox::TimeUtil::getMillisOfDay(millis), 0);
+  }
 };
 
 bool operator==(
@@ -3441,6 +3474,39 @@ TEST_F(DateTimeFunctionsTest, currentDateWithoutTimezone) {
   EXPECT_LE(dateBefore, result);
   EXPECT_LE(result, dateAfter);
   EXPECT_LE(dateAfter - dateBefore, 1);
+}
+
+TEST_F(DateTimeFunctionsTest, currentTimeWithTimezone) {
+  auto emptyRowVector = makeRowVector(ROW({}), 1);
+  std::vector<std::optional<std::string>> timeZones = {
+      std::nullopt, "America/Los_Angeles"};
+
+  for (std::optional<std::string> tz : timeZones) {
+    if (tz.has_value()) {
+      setQueryTimeZone(tz.value());
+    } else {
+      disableAdjustTimestampToTimezone();
+    }
+
+    auto dateBefore = getCurrentTimeWithTimezone(tz);
+    auto resultVector = evaluate("current_time", emptyRowVector);
+    auto dateAfter = getCurrentTimeWithTimezone(tz);
+
+    EXPECT_EQ(1, resultVector->size());
+
+    auto constantVector = resultVector->as<ConstantVector<ComplexType>>();
+    EXPECT_EQ(0, constantVector->index());
+
+    auto rowVector = constantVector->valueVector()->as<RowVector>();
+    ASSERT_EQ(1, rowVector->size());
+
+    auto time = TimeWithTimezone{
+        rowVector->children()[0]->as<SimpleVector<int64_t>>()->valueAt(0),
+        rowVector->children()[1]->as<SimpleVector<int16_t>>()->valueAt(0)};
+
+    EXPECT_LE(dateBefore, time);
+    EXPECT_LE(time, dateAfter);
+  }
 }
 
 TEST_F(DateTimeFunctionsTest, timeZoneHour) {

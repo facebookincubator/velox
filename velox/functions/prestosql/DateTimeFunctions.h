@@ -19,7 +19,9 @@
 #include "velox/functions/lib/DateTimeFormatter.h"
 #include "velox/functions/lib/TimeUtils.h"
 #include "velox/functions/prestosql/DateTimeImpl.h"
+#include "velox/functions/prestosql/types/TimeWithTimeZoneType.h"
 #include "velox/functions/prestosql/types/TimestampWithTimeZoneType.h"
+#include "velox/type/TimeUtil.h"
 #include "velox/type/TimestampConversion.h"
 #include "velox/type/Type.h"
 #include "velox/type/tz/TimeZoneMap.h"
@@ -1283,6 +1285,34 @@ struct CurrentDateFunction {
             localTimepoint(std::chrono::milliseconds(now.toMillis()));
     result = std::chrono::floor<date::days>((localTimepoint).time_since_epoch())
                  .count();
+  }
+};
+
+template <typename T>
+struct CurrentTimeFunction {
+  VELOX_DEFINE_FUNCTION_TYPES(T);
+
+  const date::time_zone* timeZone_ = nullptr;
+  std::optional<int64_t> sessionTzID_;
+
+  FOLLY_ALWAYS_INLINE void initialize(const core::QueryConfig& config) {
+    timeZone_ = getTimeZoneFromConfig(config);
+
+    if (timeZone_ != nullptr) {
+      sessionTzID_ = util::getTimeZoneID(timeZone_->name());
+    }
+  }
+
+  FOLLY_ALWAYS_INLINE void call(out_type<TimeWithTimezone>& result) {
+    // Get UTC millis
+    auto utcMillis = getCurrentTimeMs();
+    if (timeZone_ != nullptr) {
+      utcMillis = velox::TimeUtil::toTimezone(utcMillis, *timeZone_);
+    }
+
+    int16_t timezoneId = sessionTzID_.value_or(0);
+    result =
+        std::make_tuple(velox::TimeUtil::getMillisOfDay(utcMillis), timezoneId);
   }
 };
 
