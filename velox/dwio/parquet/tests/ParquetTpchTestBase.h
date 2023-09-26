@@ -166,10 +166,10 @@ std::unordered_map<std::string, const std::string>
                       l_partkey,
                       l_suppkey,
                       l_linenumber,
-                      L_QUANTITY::DOUBLE AS quantity,
-                      L_EXTENDEDPRICE::DOUBLE AS extendedprice,
-                      L_DISCOUNT::DOUBLE AS discount,
-                      L_TAX::DOUBLE AS tax,
+                      L_QUANTITY AS quantity,
+                      L_EXTENDEDPRICE AS extendedprice,
+                      L_DISCOUNT AS discount,
+                      L_TAX AS tax,
                       l_returnflag,
                       l_linestatus,
                       l_shipdate AS shipdate,
@@ -184,7 +184,7 @@ std::unordered_map<std::string, const std::string>
             R"(SELECT o_orderkey,
                       o_custkey,
                       o_orderstatus,
-                      o_totalprice::DOUBLE as o_totalprice,
+                      o_totalprice as o_totalprice,
                       o_orderdate,
                       o_orderpriority,
                       o_clerk,
@@ -198,7 +198,7 @@ std::unordered_map<std::string, const std::string>
                       c_address,
                       c_nationkey,
                       c_phone,
-                      c_acctbal::DOUBLE as c_acctbal,
+                      c_acctbal as c_acctbal,
                       c_mktsegment,
                       c_comment
               FROM {})"),
@@ -213,7 +213,7 @@ std::unordered_map<std::string, const std::string>
                       p_type,
                       p_size,
                       p_container,
-                      p_retailprice::DOUBLE,
+                      p_retailprice,
                       p_comment
                 FROM {})"),
         std::make_pair(
@@ -223,7 +223,7 @@ std::unordered_map<std::string, const std::string>
                       s_address,
                       s_nationkey,
                       s_phone,
-                      s_acctbal::DOUBLE,
+                      s_acctbal,
                       s_comment
                 FROM {})"),
         std::make_pair(
@@ -231,7 +231,7 @@ std::unordered_map<std::string, const std::string>
             R"(SELECT ps_partkey,
                       ps_suppkey,
                       ps_availqty,
-                      ps_supplycost::DOUBLE as supplycost,
+                      ps_supplycost as supplycost,
                       ps_comment
                 FROM {})")};
 
