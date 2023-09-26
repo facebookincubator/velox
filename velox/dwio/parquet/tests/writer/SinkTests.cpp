@@ -41,7 +41,7 @@ class SinkTest : public ParquetWriterTestBase {
 
 TEST_F(SinkTest, close) {
   auto batches = createBatches(ROW({INTEGER(), VARCHAR()}), 2, 3);
-  auto filePath = createTempPath();
+  auto filePath = fs::path(fmt::format("{}/test_close.txt", tempPath_->path));
   auto [writer, sinkPtr] = createWriterWithSinkPtr(filePath.string(), [&]() {
     return std::make_unique<LambdaFlushPolicy>(
         kRowsInRowGroup, kBytesInRowGroup, [&]() { return false; });
@@ -52,8 +52,7 @@ TEST_F(SinkTest, close) {
   }
   writer->flush();
 
-  auto size = sinkPtr->size();
-  EXPECT_EQ(size, fs::file_size(filePath));
+  ASSERT_EQ(fs::file_size(filePath), sinkPtr->size());
 
   for (auto& batch : batches) {
     writer->write(batch);
@@ -61,13 +60,12 @@ TEST_F(SinkTest, close) {
 
   // Close would flush
   writer->close();
-  size = sinkPtr->size();
-  EXPECT_EQ(size, fs::file_size(filePath));
+  ASSERT_EQ(fs::file_size(filePath), sinkPtr->size());
 }
 
 TEST_F(SinkTest, abort) {
   auto batches = createBatches(ROW({INTEGER(), VARCHAR()}), 2, 3);
-  auto filePath = createTempPath();
+  auto filePath = fs::path(fmt::format("{}/test_abort.txt", tempPath_->path));
   auto [writer, sinkPtr] = createWriterWithSinkPtr(filePath.string(), [&]() {
     return std::make_unique<LambdaFlushPolicy>(
         kRowsInRowGroup, kBytesInRowGroup, [&]() { return false; });
@@ -79,7 +77,7 @@ TEST_F(SinkTest, abort) {
   writer->flush();
 
   auto size = sinkPtr->size();
-  EXPECT_EQ(size, fs::file_size(filePath));
+  ASSERT_EQ(size, fs::file_size(filePath));
 
   for (auto& batch : batches) {
     writer->write(batch);
@@ -87,5 +85,5 @@ TEST_F(SinkTest, abort) {
 
   // Abort would not flush.
   writer->abort();
-  EXPECT_EQ(size, fs::file_size(filePath));
+  ASSERT_EQ(size, fs::file_size(filePath));
 }

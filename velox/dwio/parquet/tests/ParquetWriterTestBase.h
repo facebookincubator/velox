@@ -34,11 +34,7 @@ class ParquetWriterTestBase : public testing::Test {
     dwio::common::LocalFileSink::registerFactory();
     rootPool_ = memory::defaultMemoryManager().addRootPool("ParquetWriterTest");
     leafPool_ = rootPool_->addLeafChild("SinkTest");
-  }
-
-  fs::path createTempPath() {
-    auto root = exec::test::TempDirectoryPath::create();
-    return fs::path(fmt::format("{}/test_file.txt", root->path));
+    tempPath_ = exec::test::TempDirectoryPath::create();
   }
 
   std::vector<RowVectorPtr> createBatches(
@@ -75,5 +71,6 @@ class ParquetWriterTestBase : public testing::Test {
 
   std::shared_ptr<memory::MemoryPool> rootPool_;
   std::shared_ptr<memory::MemoryPool> leafPool_;
+  std::shared_ptr<exec::test::TempDirectoryPath> tempPath_;
 };
 } // namespace facebook::velox::parquet
