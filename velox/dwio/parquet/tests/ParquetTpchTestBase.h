@@ -99,8 +99,7 @@ class ParquetTpchTestBase : public testing::Test {
           fmt::format("{}/{}", tempDirectory_->path, tableName);
 
       auto tableSchema = velox::tpch::getTableSchema(table);
-      auto query = fmt::format(
-          fmt::runtime(kDuckDbParquetWriteSQL_.at(tableName)), tableName);
+      auto query = fmt::format("SELECT * FROM {}", tableName);
       // TODO: The name of API `executeOrdered` is confused, it do nothing
       // related to sorting, and should be updated with a more proper name.
       auto result = duckDb_->executeOrdered(query, tableSchema);
@@ -148,8 +147,6 @@ class ParquetTpchTestBase : public testing::Test {
   static std::shared_ptr<DuckDbQueryRunner> duckDb_;
   static std::shared_ptr<TempDirectoryPath> tempDirectory_;
   static TpchQueryBuilder tpchBuilder_;
-  static std::unordered_map<std::string, const std::string>
-      kDuckDbParquetWriteSQL_;
 };
 
 std::shared_ptr<DuckDbQueryRunner> ParquetTpchTestBase::duckDb_ = nullptr;
@@ -157,83 +154,6 @@ std::shared_ptr<TempDirectoryPath> ParquetTpchTestBase::tempDirectory_ =
     nullptr;
 TpchQueryBuilder ParquetTpchTestBase::tpchBuilder_ =
     TpchQueryBuilder(dwio::common::FileFormat::PARQUET);
-
-std::unordered_map<std::string, const std::string>
-    ParquetTpchTestBase::kDuckDbParquetWriteSQL_ = {
-        std::make_pair(
-            "lineitem",
-            R"(SELECT l_orderkey,
-                      l_partkey,
-                      l_suppkey,
-                      l_linenumber,
-                      L_QUANTITY AS quantity,
-                      L_EXTENDEDPRICE AS extendedprice,
-                      L_DISCOUNT AS discount,
-                      L_TAX AS tax,
-                      l_returnflag,
-                      l_linestatus,
-                      l_shipdate AS shipdate,
-                      l_commitdate,
-                      l_receiptdate,
-                      l_shipinstruct,
-                      l_shipmode,
-                      l_comment
-              FROM {})"),
-        std::make_pair(
-            "orders",
-            R"(SELECT o_orderkey,
-                      o_custkey,
-                      o_orderstatus,
-                      o_totalprice as o_totalprice,
-                      o_orderdate,
-                      o_orderpriority,
-                      o_clerk,
-                      o_shippriority,
-                      o_comment
-              FROM {})"),
-        std::make_pair(
-            "customer",
-            R"(SELECT c_custkey,
-                      c_name,
-                      c_address,
-                      c_nationkey,
-                      c_phone,
-                      c_acctbal as c_acctbal,
-                      c_mktsegment,
-                      c_comment
-              FROM {})"),
-        std::make_pair("nation", R"(SELECT * FROM {})"),
-        std::make_pair("region", R"(SELECT * FROM {})"),
-        std::make_pair(
-            "part",
-            R"(SELECT p_partkey,
-                      p_name,
-                      p_mfgr,
-                      p_brand,
-                      p_type,
-                      p_size,
-                      p_container,
-                      p_retailprice,
-                      p_comment
-                FROM {})"),
-        std::make_pair(
-            "supplier",
-            R"(SELECT s_suppkey,
-                      s_name,
-                      s_address,
-                      s_nationkey,
-                      s_phone,
-                      s_acctbal,
-                      s_comment
-                FROM {})"),
-        std::make_pair(
-            "partsupp",
-            R"(SELECT ps_partkey,
-                      ps_suppkey,
-                      ps_availqty,
-                      ps_supplycost as supplycost,
-                      ps_comment
-                FROM {})")};
 
 } // namespace
 } // namespace facebook::velox::exec::test
