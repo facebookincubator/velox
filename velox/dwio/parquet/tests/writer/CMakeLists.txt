@@ -12,15 +12,15 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-add_executable(velox_parquet_writer_sink_test SinkTests.cpp)
+add_executable(velox_parquet_writer_test SinkTests.cpp)
 
 add_test(
-  NAME velox_parquet_writer_sink_test
-  COMMAND velox_parquet_writer_sink_test
+  NAME velox_parquet_writer_test
+  COMMAND velox_parquet_writer_test
   WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR})
 
 target_link_libraries(
-  velox_parquet_writer_sink_test
+  velox_parquet_writer_test
   velox_dwio_parquet_writer
   velox_dwio_common_test_utils
   velox_exec_test_lib

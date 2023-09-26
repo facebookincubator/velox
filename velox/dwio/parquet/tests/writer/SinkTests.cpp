@@ -61,7 +61,8 @@ TEST_F(SinkTest, close) {
 
   // Close would flush
   writer->close();
-  EXPECT_LT(size, fs::file_size(filePath));
+  size = sinkPtr->size();
+  EXPECT_EQ(size, fs::file_size(filePath));
 }
 
 TEST_F(SinkTest, abort) {
