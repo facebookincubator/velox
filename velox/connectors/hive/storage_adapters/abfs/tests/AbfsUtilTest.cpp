@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
-#include "connectors/hive/storage_adapters/abfs/AbfsUtil.h"
+#include "velox/connectors/hive/storage_adapters/abfs/AbfsUtil.h"
 
 #include "gtest/gtest.h"
 

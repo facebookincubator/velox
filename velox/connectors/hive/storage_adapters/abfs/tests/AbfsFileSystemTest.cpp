@@ -14,14 +14,14 @@
  * limitations under the License.
  */
 
-#include "connectors/hive/storage_adapters/abfs/AbfsFileSystem.h"
-#include "connectors/hive/storage_adapters/abfs/AbfsReadFile.h"
-#include "connectors/hive/storage_adapters/abfs/tests/AzuriteServer.h"
+#include "velox/connectors/hive/storage_adapters/abfs/AbfsFileSystem.h"
 #include "gtest/gtest.h"
 #include "velox/common/file/File.h"
 #include "velox/common/file/FileSystems.h"
 #include "velox/connectors/hive/FileHandle.h"
 #include "velox/connectors/hive/HiveConfig.h"
+#include "velox/connectors/hive/storage_adapters/abfs/AbfsReadFile.h"
+#include "velox/connectors/hive/storage_adapters/abfs/tests/AzuriteServer.h"
 #include "velox/exec/tests/utils/TempFilePath.h"
 
 #include <atomic>

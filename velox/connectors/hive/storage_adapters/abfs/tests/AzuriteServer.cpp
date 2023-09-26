@@ -15,7 +15,6 @@
  */
 
 #include "velox/connectors/hive/storage_adapters/abfs/tests/AzuriteServer.h"
-#include <boost/date_time/posix_time/posix_time.hpp>
 
 namespace facebook::velox::filesystems::test {
 void AzuriteServer::start() {
