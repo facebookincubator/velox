@@ -385,3 +385,20 @@ class TestVeloxVector(unittest.TestCase):
                 assert vec[j] == vals[i][j]
 
         assert rw.may_have_nulls()
+
+    def test_row_vector_with_variable_child_size(self):
+        v1 = pv.from_list([10, 20, 30])
+        v2 = pv.from_list([10, 20, 30, 40])
+        v3 = pv.from_list([10])
+
+        expected_vectors = [v1, v2, v3]
+
+        col_names = ["a", "b", "c"]
+
+        rw = pv.row_vector(col_names, [v1, v2, v3])
+
+        for i in range(len(rw)):
+            vec = rw[i]
+            N = len(vec)
+            for j in range(N):
+                assert vec[j] == expected_vectors[i][j]

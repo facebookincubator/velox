@@ -35,8 +35,6 @@
 
 #include "context.h"
 
-/// TODO: remove
-#include <iostream>
 
 namespace facebook::velox::py {
 
@@ -129,9 +127,7 @@ inline VectorPtr getVectorFromRowVectorPtr(
 
 inline std::string rowVectorToString(const RowVectorPtr& v) {
   if (v->childrenSize() > 0) {
-    auto child = v->childAt(0);
-    size_t limit = child->size();
-    return v->toString(0, limit);
+    return v->toString(0, v->size());
   } else {
     return v->toString();
   }
@@ -544,7 +540,7 @@ static void addVectorBindings(
           childTypes[i] = values[i]->type();
         }
         auto rowType = ROW(std::move(names), std::move(childTypes));
-        const size_t vectorSize = values.empty() ? 0 : values.front()->size();
+        const size_t vectorSize = values.size();
         BufferPtr nullability_buffer = nullptr;
         if (nullability_list.has_value()) {
           auto nullability_values = nullability_list.value();
@@ -572,7 +568,7 @@ static void addVectorBindings(
       },
       py::arg("names"),
       py::arg("values"),
-      py::arg("nullability") = std::nullopt);
+      py::arg("nulls") = std::nullopt);
 
   py::class_<RowVector, BaseVector, RowVectorPtr>(
       m, "RowVector", py::module_local(asModuleLocalDefinitions))
