@@ -320,6 +320,11 @@ int32_t HashStringAllocator::freeListSizes_[kNumFreeLists + 1] = {
     std::numeric_limits<int32_t>::max(),
     std::numeric_limits<int32_t>::max()};
 
+// static
+folly::Range<const int32_t*> HashStringAllocator::freeListSizes() {
+  return folly::Range<const int32_t*>(&freeListSizes_[0], kNumFreeLists + 1);
+}
+
 int32_t HashStringAllocator::freeListIndex(int32_t size, uint32_t mask) {
   static_assert(sizeof(freeListSizes_) >= sizeof(xsimd::batch<int32_t>));
   auto vsize = xsimd::broadcast(size);
@@ -399,6 +404,10 @@ HashStringAllocator::allocateFromFreeList(
     int32_t freeListIndex) {
   constexpr int32_t kMaxCheckedForFit = 5;
   int32_t counter = 0;
+  if (mustHaveSize && largestInFreeList_[freeListIndex] < preferredSize) {
+    return nullptr;
+  }
+  int32_t largestFreeSize = 0;
   Header* largest = nullptr;
   Header* found = nullptr;
   for (auto* item = free_[freeListIndex].next(); item != &free_[freeListIndex];
@@ -413,7 +422,8 @@ HashStringAllocator::allocateFromFreeList(
     if (!largest || size > largest->size()) {
       largest = header;
     }
-    if (!mustHaveSize && ++counter > kMaxCheckedForFit) {
+    ++counter;
+    if (!mustHaveSize && counter > kMaxCheckedForFit) {
       break;
     }
   }
@@ -421,9 +431,9 @@ HashStringAllocator::allocateFromFreeList(
     found = largest;
   }
   if (!found) {
+    largestInFreeList_[freeListIndex] = largest ? largest->size() : 0;
     return nullptr;
   }
-
   --numFree_;
   freeBytes_ -= found->size() + sizeof(Header);
   removeFromFreeList(found);
@@ -479,8 +489,12 @@ void HashStringAllocator::free(Header* _header) {
     } else {
       ++numFree_;
     }
-    auto freeIndex = freeListIndex(header->size());
+    auto freedSize = header->size();
+    auto freeIndex = freeListIndex(freedSize);
     freeNonEmpty_ |= 1 << freeIndex;
+    if (largestInFreeList_[freeIndex] < freedSize) {
+      largestInFreeList_[freeIndex] = freedSize;
+    }
     free_[freeIndex].insert(
         reinterpret_cast<CompactDoubleList*>(header->begin()));
     markAsFree(header);

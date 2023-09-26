@@ -335,6 +335,11 @@ class HashStringAllocator : public StreamArena {
     return cumulativeBytes_;
   }
 
+  // Returns the starting sizes of free lists. Allocating one of these
+  // sizes will always be fast because all elements of the free list
+  // in question will fit.
+  static folly::Range<const int32_t*> freeListSizes();
+
   // Checks the free space accounting and consistency of
   // Headers. Throws when detects corruption. Returns the number of allocated
   // payload bytes, excluding headers, continue links and other overhead.
@@ -362,6 +367,9 @@ class HashStringAllocator : public StreamArena {
   // match the size progression for growing F14 containers. Static array of
   // exactly 8 ints for simd.
   static int32_t freeListSizes_[HashStringAllocator::kNumFreeLists + 1];
+
+  // The largest size present in each free list.
+  int32_t largestInFreeList_[HashStringAllocator::kNumFreeLists + 1] = {};
 
   void newRange(int32_t bytes, ByteRange* range, bool contiguous);
 

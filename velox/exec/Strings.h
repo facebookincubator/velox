@@ -32,7 +32,7 @@ struct Strings {
 
   /// Maximum size of a string passed to 'append'. Used to calculate the amount
   /// of space to reserve for future strings.
-  size_t maxStringSize = 0;
+  int32_t maxStringSize = 0;
 
   /// Copies the string into contiguous memory allocated via
   /// HashStringAllocator. Returns StringView over the copy.
