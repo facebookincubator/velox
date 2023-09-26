@@ -15,6 +15,7 @@
  */
 #include "velox/exec/SortedAggregations.h"
 #include "velox/common/base/RawVector.h"
+#include "velox/exec/TimSort.hpp"
 
 namespace facebook::velox::exec {
 
@@ -207,7 +208,7 @@ void SortedAggregations::sortSingleGroup(
         {inputMapping_[aggregate.sortingKeys[i]], aggregate.sortingOrders[i]});
   }
 
-  std::sort(
+  gfx::timsort(
       groupRows.begin(),
       groupRows.end(),
       [&](const char* leftRow, const char* rightRow) {

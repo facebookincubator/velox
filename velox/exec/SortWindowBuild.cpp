@@ -16,6 +16,7 @@
 
 #include "velox/exec/SortWindowBuild.h"
 #include "velox/exec/MemoryReclaimer.h"
+#include "velox/exec/TimSort.hpp"
 
 namespace facebook::velox::exec {
 
@@ -197,7 +198,7 @@ void SortWindowBuild::sortPartitions() {
   RowContainerIterator iter;
   data_->listRows(&iter, numRows_, sortedRows_.data());
 
-  std::sort(
+  gfx::timsort(
       sortedRows_.begin(),
       sortedRows_.end(),
       [this](const char* leftRow, const char* rightRow) {

@@ -22,6 +22,7 @@
 
 #include "velox/common/base/Exceptions.h"
 #include "velox/common/base/SimdUtil.h"
+#include "velox/exec/TimSort.hpp"
 
 #include <folly/Likely.h>
 
@@ -319,7 +320,7 @@ class MergeArray {
         streams_.push_back(std::move(stream));
       }
     }
-    std::sort(
+    gfx::timsort(
         streams_.begin(),
         streams_.end(),
         [](const auto& left, const auto& right) { return *left < *right; });

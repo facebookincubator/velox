@@ -21,6 +21,7 @@
 #include "velox/common/process/ProcessBase.h"
 #include "velox/common/testutil/TestValue.h"
 #include "velox/exec/OperatorUtils.h"
+#include "velox/exec/TimSort.hpp"
 #include "velox/vector/VectorTypeUtils.h"
 
 using facebook::velox::common::testutil::TestValue;
@@ -1320,7 +1321,7 @@ void HashTable<ignoreNullKeys>::enableRangeWhereCan(
     }
   }
 
-  std::sort(indices.begin(), indices.end(), [&](auto i, auto j) {
+  gfx::timsort(indices.begin(), indices.end(), [&](auto i, auto j) {
     return rangeMultipliers[i] < rangeMultipliers[j];
   });
 

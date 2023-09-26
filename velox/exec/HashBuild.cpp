@@ -18,6 +18,7 @@
 #include "velox/common/testutil/TestValue.h"
 #include "velox/exec/OperatorUtils.h"
 #include "velox/exec/Task.h"
+#include "velox/exec/TimSort.hpp"
 #include "velox/expression/FieldReference.h"
 
 using facebook::velox::common::testutil::TestValue;
@@ -685,7 +686,7 @@ void HashBuild::runSpill(const std::vector<Operator*>& spillOperators) {
   SpillPartitionNumSet partitionsToSpill;
   std::vector<int32_t> partitionIndices(spillableStats.size());
   std::iota(partitionIndices.begin(), partitionIndices.end(), 0);
-  std::sort(
+  gfx::timsort(
       partitionIndices.begin(),
       partitionIndices.end(),
       [&](int32_t lhs, int32_t rhs) {

@@ -20,6 +20,7 @@
 #include "velox/exec/Aggregate.h"
 #include "velox/exec/ContainerRowSerde.h"
 #include "velox/exec/Operator.h"
+#include "velox/exec/TimSort.hpp"
 
 namespace facebook::velox::exec {
 namespace {
@@ -316,7 +317,7 @@ int32_t RowContainer::findRows(folly::Range<char**> rows, char** result) {
   for (auto i = 0; i < rows_.numRanges(); ++i) {
     ranges[i] = rows_.rangeAt(i);
   }
-  std::sort(
+  gfx::timsort(
       ranges.begin(), ranges.end(), [](const auto& left, const auto& right) {
         return left.data() < right.data();
       });
