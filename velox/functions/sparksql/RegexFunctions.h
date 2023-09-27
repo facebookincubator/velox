@@ -60,4 +60,28 @@ std::shared_ptr<exec::VectorFunction> makeRegexExtract(
     const std::vector<exec::VectorFunctionArg>& inputArgs,
     const core::QueryConfig& config);
 
+std::shared_ptr<exec::VectorFunction> makeRegexReplace(
+    const std::string& name,
+    const std::vector<exec::VectorFunctionArg>& inputArgs,
+    const core::QueryConfig& config);
+
+/// Full implementation of Re2Replace found in SparkSQL only,
+/// due to semantic mismatches betweeen Spark and Presto
+/// regex_replace(string, pattern, overwrite) → string
+/// regex_replace(string, pattern, overwrite, position) → string
+///
+/// If a string has a substring that matches the given pattern, replace
+/// the match in the string wither overwrite and return the string. If
+/// optional paramter position is provided, only make replacements
+/// after that positon in the string (1 indexed).
+///
+/// If position <= 0, throw error.
+/// If position > length string, return string.
+std::shared_ptr<exec::VectorFunction> makeRe2Replace(
+    const std::string& name,
+    const std::vector<exec::VectorFunctionArg>& inputArgs,
+    const core::QueryConfig& config);
+
+std::vector<std::shared_ptr<exec::FunctionSignature>> re2ReplaceSignatures();
+
 } // namespace facebook::velox::functions::sparksql

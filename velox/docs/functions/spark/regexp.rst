@@ -34,3 +34,43 @@ See https://github.com/google/re2/wiki/Syntax for more information.
     the entire string by anchoring the pattern using ``^`` and ``$``. ::
 
         SELECT rlike('1a 2b 14m', '\d+b'); -- true
+
+.. spark:function:: regex_replace(string, pattern, overwrite) -> varchar
+
+    Replaces all substrings in ``string`` that match the regular expression ``pattern`` with the string ``overwrite``. If no match is found, the original string is returned as is.
+
+    Parameters:
+
+    - **string**: The string to be searched.
+    - **pattern**: The regular expression pattern that is searched for in the string.
+    - **overwrite**: The string that replaces the substrings in ``string`` that match the ``pattern``.
+
+    Examples:
+
+    ::
+
+        SELECT regex_replace('Hello, World!', 'l', 'L'); -- 'HeLLo, WorLd!'
+
+.. spark:function:: regex_replace(string, pattern, overwrite, position) -> varchar
+   :noindex:
+
+    Replaces all substrings in ``string`` that match the regular expression ``pattern`` with the string ``overwrite`` starting from the specified ``position``. If the ``position`` is less than one, the function returns the original ``string`` without any modifications. If ``position`` is greater than the length of ``string``, the function returns an error.
+
+    This function is 1-indexed, meaning the first character in ``string`` is considered position 1.
+
+    Parameters:
+
+    - **string**: The string to be searched.
+    - **pattern**: The regular expression pattern that is searched for in the string.
+    - **overwrite**: The string that replaces the substrings in ``string`` that match the ``pattern``.
+    - **position**: The 1-based index position in ``string`` to start the search.
+
+    Examples:
+
+    ::
+
+        SELECT regex_replace('Hello, World!', 'l', 'L', 6); -- 'Hello, WorLd!'
+
+        SELECT regex_replace('Hello, World!', 'l', 'L', -5); -- 'Hello, World!'
+
+        SELECT regex_replace('Hello, World!', 'l', 'L', 100); -- ERROR: Position exceeds string length.
