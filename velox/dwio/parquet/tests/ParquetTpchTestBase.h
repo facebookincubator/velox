@@ -62,6 +62,7 @@ class ParquetTpchTestBase : public testing::Test {
     std::shared_ptr<memory::MemoryPool> rootPool{
         memory::defaultMemoryManager().addRootPool()};
     std::shared_ptr<memory::MemoryPool> pool{rootPool->addLeafChild("leaf")};
+    vectorMaker_ = std::make_shared<velox::test::VectorMaker>(pool.get());
     saveTpchTablesAsParquet(pool.get());
     tpchBuilder_.initialize(tempDirectory_->path);
   }
@@ -100,11 +101,8 @@ class ParquetTpchTestBase : public testing::Test {
 
       auto tableSchema = velox::tpch::getTableSchema(table);
       auto query = fmt::format("SELECT * FROM {}", tableName);
-      // TODO: The name of API `executeOrdered` is confused, it do nothing
-      // related to sorting, and should be updated with a more proper name.
       auto result = duckDb_->executeOrdered(query, tableSchema);
-      auto rows =
-          velox::test::VectorMaker::rowVector(tableSchema, result, pool);
+      auto rows = vectorMaker_->rowVector(tableSchema, result);
       auto plan =
           PlanBuilder()
               .values({rows})
@@ -147,10 +145,13 @@ class ParquetTpchTestBase : public testing::Test {
   static std::shared_ptr<DuckDbQueryRunner> duckDb_;
   static std::shared_ptr<TempDirectoryPath> tempDirectory_;
   static TpchQueryBuilder tpchBuilder_;
+  static std::shared_ptr<velox::test::VectorMaker> vectorMaker_;
 };
 
 std::shared_ptr<DuckDbQueryRunner> ParquetTpchTestBase::duckDb_ = nullptr;
 std::shared_ptr<TempDirectoryPath> ParquetTpchTestBase::tempDirectory_ =
+    nullptr;
+std::shared_ptr<velox::test::VectorMaker> ParquetTpchTestBase::vectorMaker_ =
     nullptr;
 TpchQueryBuilder ParquetTpchTestBase::tpchBuilder_ =
     TpchQueryBuilder(dwio::common::FileFormat::PARQUET);

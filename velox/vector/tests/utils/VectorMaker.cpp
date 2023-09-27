@@ -44,16 +44,14 @@ std::shared_ptr<const RowType> VectorMaker::rowType(
   return ROW(std::move(names), std::move(types));
 }
 
-// static
 RowVectorPtr VectorMaker::rowVector(
     const RowTypePtr& rowType,
-    const std::vector<std::vector<variant>>& data,
-    memory::MemoryPool* pool) {
+    const std::vector<std::vector<variant>>& data) {
   auto vectorSize = static_cast<vector_size_t>(data.size());
 
   // Create the underlying vector.
   auto rowVector = std::dynamic_pointer_cast<RowVector>(
-      BaseVector::create(rowType, vectorSize, pool));
+      BaseVector::create(rowType, vectorSize, pool_));
   for (auto& field : rowVector->children()) {
     field->resize(vectorSize);
   }
