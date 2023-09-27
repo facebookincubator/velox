@@ -49,6 +49,15 @@ struct TraceData {
 // difficult to figure out from stacks in a core dump.
 class TraceContext {
  public:
+  /// Well-known traces.
+  static constexpr const char* kFileSystemOpenFileForRead{
+      "FileSystem::openFileForRead"};
+  static constexpr const char* kFileSystemOpenFileForWrite{
+      "FileSystem::openFileForWrite"};
+  static constexpr const char* kFilePRead{"File::pread"};
+  static constexpr const char* kFileAppend{"File::append"};
+  static constexpr const char* kFileFlush{"File::flush"};
+
   // Starts a trace context. isTemporary is false if this is a generic
   // operation for which records should be kept for the lifetime of
   // the process, like opening a file. This is true if we are
