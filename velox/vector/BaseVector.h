@@ -573,6 +573,10 @@ class BaseVector {
     VELOX_UNSUPPORTED("Vector is not a wrapper");
   }
 
+  // Returns a loaded version of the current vector, resolving potential lazy
+  // evaluation.
+  // Note that specializations of this method are not guaranteed to be
+  // thread-safe.
   virtual BaseVector* loadedVector() {
     return this;
   }

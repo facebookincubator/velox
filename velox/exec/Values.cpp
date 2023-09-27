@@ -15,6 +15,7 @@
  */
 #include "velox/exec/Values.h"
 #include "velox/common/testutil/TestValue.h"
+#include "velox/vector/BaseVector.h"
 
 using facebook::velox::common::testutil::TestValue;
 
@@ -36,7 +37,12 @@ Values::Values(
   values_.reserve(values->values().size());
   for (auto& vector : values->values()) {
     if (vector->size() > 0) {
-      values_.emplace_back(vector);
+      // If there could be many instances of this operator, copy the input data
+      // since vectors are not-thread safe.
+      values_.emplace_back(
+          values->isParallelizable()
+              ? std::dynamic_pointer_cast<RowVector>(BaseVector::copy(*vector))
+              : vector);
     }
   }
 }
