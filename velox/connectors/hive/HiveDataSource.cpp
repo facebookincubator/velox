@@ -20,7 +20,7 @@
 #include <unordered_map>
 
 #include "velox/common/caching/AsyncDataCache.h"
-#include "velox/dwio/common/CachedBufferedInput.h"
+#include "velox/common/io/CachedBufferedInput.h"
 #include "velox/dwio/common/ReaderFactory.h"
 #include "velox/expression/ExprToSubfieldFilter.h"
 #include "velox/expression/FieldReference.h"
@@ -917,14 +917,13 @@ HiveDataSource::createBufferedInput(
   if (cache_) {
     return std::make_unique<dwio::common::CachedBufferedInput>(
         fileHandle.file,
-        dwio::common::MetricsLog::voidLog(),
         fileHandle.uuid.id(),
         cache_,
         Connector::getTracker(scanId_, readerOpts.loadQuantum()),
         fileHandle.groupId.id(),
         ioStats_,
         executor_,
-        readerOpts);
+        pool_);
   }
   return std::make_unique<dwio::common::BufferedInput>(
       fileHandle.file,

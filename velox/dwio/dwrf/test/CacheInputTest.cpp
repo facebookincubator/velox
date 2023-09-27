@@ -19,8 +19,8 @@
 #include <folly/executors/IOThreadPoolExecutor.h>
 #include "velox/common/caching/FileIds.h"
 #include "velox/common/file/FileSystems.h"
+#include "velox/common/io/CachedBufferedInput.h"
 #include "velox/common/memory/MmapAllocator.h"
-#include "velox/dwio/common/CachedBufferedInput.h"
 #include "velox/dwio/dwrf/common/Common.h"
 #include "velox/exec/tests/utils/TempDirectoryPath.h"
 
@@ -230,14 +230,13 @@ class CacheTest : public testing::Test {
     auto data = std::make_unique<StripeData>();
     data->input = std::make_unique<CachedBufferedInput>(
         readFile,
-        MetricsLog::voidLog(),
         fileId,
         cache_.get(),
         tracker,
         groupId,
         ioStats,
         executor_.get(),
-        ReaderOptions(pool_.get()));
+        pool_.get());
     data->file = readFile.get();
     for (auto i = 0; i < numColumns; ++i) {
       int32_t streamIndex = i * (kMaxStreams / numColumns);
@@ -459,14 +458,13 @@ TEST_F(CacheTest, window) {
   auto file = inputByPath("test_for_window", fileId, groupId);
   auto input = std::make_unique<CachedBufferedInput>(
       file,
-      MetricsLog::voidLog(),
       fileId,
       cache_.get(),
       tracker,
       groupId,
       ioStats_,
       executor_.get(),
-      ReaderOptions(pool_.get()));
+      pool_.get());
   auto begin = 4 * kMB;
   auto end = 17 * kMB;
   auto stream = input->read(begin, end - begin, LogType::TEST);
@@ -646,20 +644,11 @@ class FileWithReadAhead {
       cache::AsyncDataCache* FOLLY_NONNULL cache,
       IoStatisticsPtr stats,
       memory::MemoryPool& pool,
-      folly::Executor* executor)
-      : options_(&pool) {
+      folly::Executor* executor) {
     fileId_ = std::make_unique<StringIdLease>(fileIds(), name);
     file_ = std::make_shared<TestReadFile>(fileId_->id(), kFileSize, stats);
     bufferedInput_ = std::make_unique<CachedBufferedInput>(
-        file_,
-        MetricsLog::voidLog(),
-        fileId_->id(),
-        cache,
-        nullptr,
-        0,
-        stats,
-        executor,
-        options_);
+        file_, fileId_->id(), cache, nullptr, 0, stats, executor, &pool);
     auto sequential = StreamIdentifier::sequentialFile();
     stream_ = bufferedInput_->enqueue(Region{0, file_->size()}, &sequential);
     // Trigger load of next 4MB after reading the first 2MB of the previous 4MB
@@ -678,7 +667,6 @@ class FileWithReadAhead {
   std::unique_ptr<CachedBufferedInput> bufferedInput_;
   std::unique_ptr<SeekableInputStream> stream_;
   std::shared_ptr<TestReadFile> file_;
-  ReaderOptions options_;
 };
 
 TEST_F(CacheTest, readAhead) {

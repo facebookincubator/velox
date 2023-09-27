@@ -25,7 +25,6 @@
 #include "velox/dwio/common/CacheInputStream.h"
 #include "velox/dwio/common/InputStream.h"
 #include "velox/dwio/common/IoStatistics.h"
-#include "velox/dwio/common/Options.h"
 
 DECLARE_int32(cache_load_quantum);
 
@@ -56,6 +55,7 @@ struct CacheRequest {
 
 class CachedBufferedInput : public BufferedInput {
  public:
+#ifdef VELOX_ENABLE_BACKWARD_COMPATIBILITY
   CachedBufferedInput(
       std::shared_ptr<ReadFile> readFile,
       const MetricsLogPtr& metricsLog,
@@ -97,6 +97,46 @@ class CachedBufferedInput : public BufferedInput {
         executor_(executor),
         fileSize_(input_->getLength()),
         options_(readerOptions) {}
+#else
+
+  CachedBufferedInput(
+      std::shared_ptr<ReadFile> readFile,
+      uint64_t fileNum,
+      cache::AsyncDataCache* FOLLY_NONNULL cache,
+      std::shared_ptr<cache::ScanTracker> tracker,
+      uint64_t groupId,
+      std::shared_ptr<IoStatistics> ioStats,
+      folly::Executor* FOLLY_NULLABLE executor,
+      velox::memory::MemoryPool* FOLLY_NONNULL pool)
+      : BufferedInput(std::move(readFile), *pool),
+        cache_(cache),
+        fileNum_(fileNum),
+        tracker_(std::move(tracker)),
+        groupId_(groupId),
+        ioStats_(std::move(ioStats)),
+        executor_(executor),
+        fileSize_(input_->getLength()),
+        pool_(pool) {}
+
+  CachedBufferedInput(
+      std::shared_ptr<ReadFileInputStream> input,
+      uint64_t fileNum,
+      cache::AsyncDataCache* FOLLY_NONNULL cache,
+      std::shared_ptr<cache::ScanTracker> tracker,
+      uint64_t groupId,
+      std::shared_ptr<IoStatistics> ioStats,
+      folly::Executor* FOLLY_NULLABLE executor,
+      velox::memory::MemoryPool* FOLLY_NONNULL pool)
+      : BufferedInput(std::move(input), *pool),
+        cache_(cache),
+        fileNum_(fileNum),
+        tracker_(std::move(tracker)),
+        groupId_(groupId),
+        ioStats_(std::move(ioStats)),
+        executor_(executor),
+        fileSize_(input_->getLength()),
+        pool_(pool) {}
+#endif
 
   ~CachedBufferedInput() override {
     for (auto& load : allCoalescedLoads_) {
@@ -111,6 +151,9 @@ class CachedBufferedInput : public BufferedInput {
   void load(const LogType) override;
 
   bool isBuffered(uint64_t offset, uint64_t length) const override;
+
+  std::unique_ptr<SeekableInputStream> read(uint64_t offset, uint64_t length)
+      const;
 
   std::unique_ptr<SeekableInputStream>
   read(uint64_t offset, uint64_t length, LogType logType) const override;
@@ -141,7 +184,7 @@ class CachedBufferedInput : public BufferedInput {
         groupId_,
         ioStats_,
         executor_,
-        options_);
+        pool_);
   }
 
   cache::AsyncDataCache* FOLLY_NONNULL cache() const {
@@ -196,7 +239,7 @@ class CachedBufferedInput : public BufferedInput {
 
   const uint64_t fileSize_;
   int64_t prefetchSize_{0};
-  ReaderOptions options_;
+  velox::memory::MemoryPool* pool_;
 };
 
 } // namespace facebook::velox::dwio::common

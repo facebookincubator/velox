@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
-#include "velox/dwio/common/CachedBufferedInput.h"
+#include "velox/common/io/CachedBufferedInput.h"
 #include "velox/common/memory/Allocation.h"
 #include "velox/common/process/TraceContext.h"
 #include "velox/dwio/common/CacheInputStream.h"
@@ -27,6 +27,12 @@ DEFINE_int32(
 using ::facebook::velox::common::Region;
 
 namespace facebook::velox::dwio::common {
+
+namespace {
+// Default values for Cached Access
+static constexpr int32_t kDefaultLoadQuantum = 8 << 20; // 8MB
+static constexpr int32_t kDefaultCoalesceDistance = 512 << 10; // 512K
+} // namespace
 
 using cache::CachePin;
 using cache::CoalescedLoad;
@@ -64,7 +70,7 @@ std::unique_ptr<SeekableInputStream> CachedBufferedInput::enqueue(
       tracker_,
       id,
       groupId_,
-      options_.loadQuantum());
+      kDefaultLoadQuantum);
   requests_.back().stream = stream.get();
   return stream;
 }
@@ -82,7 +88,7 @@ bool CachedBufferedInput::shouldPreload(int32_t numPages) {
   }
   for (auto& request : requests_) {
     numPages += bits::roundUp(
-                    std::min<int32_t>(request.size, options_.loadQuantum()),
+                    std::min<int32_t>(request.size, kDefaultLoadQuantum),
                     memory::AllocationTraits::kPageSize) /
         memory::AllocationTraits::kPageSize;
   }
@@ -184,7 +190,7 @@ void CachedBufferedInput::load(const LogType) {
       if (prefetchAnyway || adjustedReadPct(trackingData) >= readPct) {
         request.processed = true;
         auto parts = makeRequestParts(
-            request, trackingData, options_.loadQuantum(), extraRequests);
+            request, trackingData, kDefaultLoadQuantum, extraRequests);
         for (auto part : parts) {
           if (cache_->exists(part->key)) {
             continue;
@@ -218,7 +224,7 @@ void CachedBufferedInput::makeLoads(
     return;
   }
   bool isSsd = !requests[0]->ssdPin.empty();
-  int32_t maxDistance = isSsd ? 20000 : options_.maxCoalesceDistance();
+  int32_t maxDistance = isSsd ? 20000 : kDefaultCoalesceDistance;
   std::sort(
       requests.begin(),
       requests.end(),
@@ -248,7 +254,7 @@ void CachedBufferedInput::makeLoads(
         return size;
       },
       [&](int32_t index) {
-        if (coalescedBytes > options_.maxCoalesceBytes()) {
+        if (coalescedBytes > kDefaultCoalesceDistance) {
           coalescedBytes = 0;
           return kNoCoalesce;
         }
@@ -472,7 +478,7 @@ void CachedBufferedInput::readRegion(
         ioStats_,
         groupId_,
         requests,
-        options_.maxCoalesceDistance());
+        kDefaultCoalesceDistance);
   }
   allCoalescedLoads_.push_back(load);
   coalescedLoads_.withWLock([&](auto& loads) {
@@ -501,6 +507,12 @@ std::shared_ptr<cache::CoalescedLoad> CachedBufferedInput::coalescedLoad(
 
 std::unique_ptr<SeekableInputStream> CachedBufferedInput::read(
     uint64_t offset,
+    uint64_t length) const {
+  return read(offset, length, LogType::UNKNOWN);
+}
+
+std::unique_ptr<SeekableInputStream> CachedBufferedInput::read(
+    uint64_t offset,
     uint64_t length,
     LogType /*logType*/) const {
   VELOX_CHECK_LE(offset + length, fileSize_);
@@ -513,7 +525,7 @@ std::unique_ptr<SeekableInputStream> CachedBufferedInput::read(
       nullptr,
       TrackingId(),
       0,
-      options_.loadQuantum());
+      kDefaultLoadQuantum);
 }
 
 bool CachedBufferedInput::prefetch(Region region) {

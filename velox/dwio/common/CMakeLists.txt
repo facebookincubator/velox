@@ -26,7 +26,6 @@ add_library(
   BitConcatenation.cpp
   BitPackDecoder.cpp
   BufferedInput.cpp
-  CachedBufferedInput.cpp
   CacheInputStream.cpp
   ColumnSelector.cpp
   DataBufferHolder.cpp
@@ -64,6 +63,7 @@ target_link_libraries(
   velox_buffer
   velox_caching
   velox_common_compression
+  velox_common_io
   velox_dwio_common_compression
   velox_dwio_common_encryption
   velox_dwio_common_exception

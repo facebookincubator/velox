@@ -16,10 +16,10 @@
 
 #include <folly/executors/QueuedImmediateExecutor.h>
 
+#include "velox/common/io/CachedBufferedInput.h"
 #include "velox/common/process/TraceContext.h"
 #include "velox/common/time/Timer.h"
 #include "velox/dwio/common/CacheInputStream.h"
-#include "velox/dwio/common/CachedBufferedInput.h"
 
 using ::facebook::velox::common::Region;
 

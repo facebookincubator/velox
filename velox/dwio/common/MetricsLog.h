@@ -40,7 +40,8 @@ class MetricsLog {
     STREAM_BUNDLE,
     GROUP,
     BLOCK,
-    TEST
+    TEST,
+    UNKNOWN
   };
 
   virtual ~MetricsLog() = default;
@@ -159,6 +160,8 @@ class MetricsLog {
         return "BLOCK";
       case MetricsType::TEST:
         return "TEST";
+      case MetricsType::UNKNOWN:
+        return "UNKNOWN";
     }
   }
 
