@@ -20,6 +20,7 @@
 #include "velox/common/file/FileSystems.h"
 #include "velox/common/testutil/TestValue.h"
 #include "velox/core/QueryConfig.h"
+#include "velox/exec/MemoryReclaimer.h"
 #include "velox/exec/PlanNodeStats.h"
 #include "velox/exec/Spiller.h"
 #include "velox/exec/tests/utils/AssertQueryBuilder.h"
@@ -1095,7 +1096,7 @@ DEBUG_ONLY_TEST_F(OrderByTest, abortDuringOutputProcessing) {
     auto queryCtx = std::make_shared<core::QueryCtx>(executor_.get());
     queryCtx->testingOverrideMemoryPool(
         memory::defaultMemoryManager().addRootPool(
-            queryCtx->queryId(), kMaxBytes, memory::MemoryReclaimer::create()));
+            queryCtx->queryId(), kMaxBytes, DefaultMemoryReclaimer::create()));
     auto expectedResult =
         AssertQueryBuilder(
             PlanBuilder()
@@ -1189,7 +1190,7 @@ DEBUG_ONLY_TEST_F(OrderByTest, abortDuringInputgProcessing) {
     auto queryCtx = std::make_shared<core::QueryCtx>(executor_.get());
     queryCtx->testingOverrideMemoryPool(
         memory::defaultMemoryManager().addRootPool(
-            queryCtx->queryId(), kMaxBytes, memory::MemoryReclaimer::create()));
+            queryCtx->queryId(), kMaxBytes, DefaultMemoryReclaimer::create()));
     auto expectedResult =
         AssertQueryBuilder(
             PlanBuilder()

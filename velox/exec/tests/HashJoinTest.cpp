@@ -22,6 +22,7 @@
 #include "velox/dwio/common/tests/utils/BatchMaker.h"
 #include "velox/exec/HashBuild.h"
 #include "velox/exec/HashJoinBridge.h"
+#include "velox/exec/MemoryReclaimer.h"
 #include "velox/exec/PlanNodeStats.h"
 #include "velox/exec/tests/utils/AssertQueryBuilder.h"
 #include "velox/exec/tests/utils/Cursor.h"
@@ -5572,7 +5573,7 @@ DEBUG_ONLY_TEST_F(HashJoinTest, hashBuildAbortDuringOutputProcessing) {
   for (const auto& testData : testSettings) {
     SCOPED_TRACE(testData.debugString());
     auto queryPool = memory::defaultMemoryManager().addRootPool(
-        "", kMaxBytes, memory::MemoryReclaimer::create());
+        "", kMaxBytes, DefaultMemoryReclaimer::create());
 
     core::PlanNodeId probeScanId;
     auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
@@ -5677,7 +5678,7 @@ DEBUG_ONLY_TEST_F(HashJoinTest, hashBuildAbortDuringInputgProcessing) {
   for (const auto& testData : testSettings) {
     SCOPED_TRACE(testData.debugString());
     auto queryPool = memory::defaultMemoryManager().addRootPool(
-        "", kMaxBytes, memory::MemoryReclaimer::create());
+        "", kMaxBytes, DefaultMemoryReclaimer::create());
 
     core::PlanNodeId probeScanId;
     auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
@@ -5783,7 +5784,7 @@ DEBUG_ONLY_TEST_F(HashJoinTest, hashProbeAbortDuringInputProcessing) {
   for (const auto& testData : testSettings) {
     SCOPED_TRACE(testData.debugString());
     auto queryPool = memory::defaultMemoryManager().addRootPool(
-        "", kMaxBytes, memory::MemoryReclaimer::create());
+        "", kMaxBytes, DefaultMemoryReclaimer::create());
 
     core::PlanNodeId probeScanId;
     auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();

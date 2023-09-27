@@ -15,6 +15,9 @@
  */
 #include "velox/exec/ExchangeClient.h"
 
+#include "velox/exec/Driver.h"
+#include "velox/exec/Task.h"
+
 namespace facebook::velox::exec {
 
 void ExchangeClient::addRemoteTaskId(const std::string& taskId) {
@@ -271,5 +274,4 @@ std::string ExchangeClient::toJsonString() const {
   }
   return folly::toPrettyJson(obj);
 }
-
 } // namespace facebook::velox::exec

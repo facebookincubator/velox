@@ -24,6 +24,7 @@
 #include "velox/common/memory/Memory.h"
 #include "velox/common/memory/MmapAllocator.h"
 #include "velox/common/testutil/TestValue.h"
+#include "velox/exec/MemoryReclaimer.h"
 
 DECLARE_bool(velox_memory_leak_check_enabled);
 DECLARE_bool(velox_memory_pool_debug_enabled);
@@ -2648,27 +2649,27 @@ TEST_P(MemoryPoolTest, memoryReclaimerSetCheck) {
   // Valid use case: parent has memory reclaimer but child doesn't set.
   {
     auto root =
-        manager->addRootPool("", kMaxMemory, memory::MemoryReclaimer::create());
+        manager->addRootPool("", kMaxMemory, DefaultMemoryReclaimer::create());
     // Can't set more tha once.
     VELOX_ASSERT_THROW(
-        root->setReclaimer(memory::MemoryReclaimer::create()), "");
+        root->setReclaimer(DefaultMemoryReclaimer::create()), "");
     VELOX_ASSERT_THROW(root->setReclaimer(nullptr), "");
     auto aggrChild = root->addAggregateChild("aggregateChild");
-    aggrChild->setReclaimer(memory::MemoryReclaimer::create());
+    aggrChild->setReclaimer(DefaultMemoryReclaimer::create());
     VELOX_ASSERT_THROW(
-        aggrChild->setReclaimer(memory::MemoryReclaimer::create()), "");
+        aggrChild->setReclaimer(DefaultMemoryReclaimer::create()), "");
     // Can't set empty reclaimer.
     VELOX_ASSERT_THROW(aggrChild->setReclaimer(nullptr), "");
     auto leafChild = root->addLeafChild("leafChild");
-    leafChild->setReclaimer(memory::MemoryReclaimer::create());
+    leafChild->setReclaimer(DefaultMemoryReclaimer::create());
     VELOX_ASSERT_THROW(
-        leafChild->setReclaimer(memory::MemoryReclaimer::create()), "");
+        leafChild->setReclaimer(DefaultMemoryReclaimer::create()), "");
     VELOX_ASSERT_THROW(leafChild->setReclaimer(nullptr), "");
   }
   // Valid use case: both parent and child set memory reclaimer.
   {
     auto root =
-        manager->addRootPool("", kMaxMemory, memory::MemoryReclaimer::create());
+        manager->addRootPool("", kMaxMemory, DefaultMemoryReclaimer::create());
     auto aggrChild = root->addAggregateChild("aggregateChild");
     auto leafChild = root->addLeafChild("leafChild");
   }
@@ -2677,24 +2678,24 @@ TEST_P(MemoryPoolTest, memoryReclaimerSetCheck) {
     auto root = manager->addRootPool("", kMaxMemory);
     auto aggrChild = root->addAggregateChild("aggregateChild");
     auto leafChild = root->addLeafChild("leafChild");
-    root->setReclaimer(memory::MemoryReclaimer::create());
+    root->setReclaimer(DefaultMemoryReclaimer::create());
     VELOX_ASSERT_THROW(aggrChild->setReclaimer(nullptr), "");
-    aggrChild->setReclaimer(memory::MemoryReclaimer::create());
+    aggrChild->setReclaimer(DefaultMemoryReclaimer::create());
     VELOX_ASSERT_THROW(leafChild->setReclaimer(nullptr), "");
-    leafChild->setReclaimer(memory::MemoryReclaimer::create());
+    leafChild->setReclaimer(DefaultMemoryReclaimer::create());
   }
   // Invalid use case: parent has no memory reclaimer but child set.
   {
     auto root = manager->addRootPool("", kMaxMemory);
     VELOX_ASSERT_THROW(
         root->addAggregateChild(
-            "aggregateChild", memory::MemoryReclaimer::create()),
+            "aggregateChild", DefaultMemoryReclaimer::create()),
         "");
     VELOX_ASSERT_THROW(
         root->addLeafChild(
             "leafChild",
             folly::Random::oneIn(2),
-            memory::MemoryReclaimer::create()),
+            DefaultMemoryReclaimer::create()),
         "");
   }
 }
@@ -2731,7 +2732,7 @@ TEST_P(MemoryPoolTest, reclaimAPIsWithDefaultReclaimer) {
     auto pool = manager.addRootPool(
         "shrinkAPIs",
         kMaxMemory,
-        testData.hasReclaimer ? memory::MemoryReclaimer::create() : nullptr);
+        testData.hasReclaimer ? DefaultMemoryReclaimer::create() : nullptr);
     pools.push_back(pool);
 
     struct Allocation {
@@ -2746,19 +2747,18 @@ TEST_P(MemoryPoolTest, reclaimAPIsWithDefaultReclaimer) {
           ? pool->addLeafChild(
                 std::to_string(i),
                 isLeafThreadSafe_,
-                testData.hasReclaimer ? memory::MemoryReclaimer::create()
+                testData.hasReclaimer ? DefaultMemoryReclaimer::create()
                                       : nullptr)
           : pool->addAggregateChild(
                 std::to_string(i),
-                testData.hasReclaimer ? memory::MemoryReclaimer::create()
+                testData.hasReclaimer ? DefaultMemoryReclaimer::create()
                                       : nullptr);
       pools.push_back(childPool);
       for (int j = 0; j < testData.numGrandchildren; ++j) {
         auto grandChild = childPool->addLeafChild(
             std::to_string(j),
             isLeafThreadSafe_,
-            testData.hasReclaimer ? memory::MemoryReclaimer::create()
-                                  : nullptr);
+            testData.hasReclaimer ? DefaultMemoryReclaimer::create() : nullptr);
         pools.push_back(grandChild);
       }
     }

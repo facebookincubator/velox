@@ -24,6 +24,7 @@
 #include "velox/exec/Exchange.h"
 #include "velox/exec/HashBuild.h"
 #include "velox/exec/LocalPlanner.h"
+#include "velox/exec/MemoryReclaimer.h"
 #include "velox/exec/Merge.h"
 #include "velox/exec/NestedLoopJoinBuild.h"
 #include "velox/exec/OperatorUtils.h"
@@ -345,7 +346,7 @@ std::unique_ptr<memory::MemoryReclaimer> Task::createNodeReclaimer(
   // Sets memory reclaimer for the parent node memory pool on the first child
   // operator construction which has set memory reclaimer.
   return isHashJoinNode ? HashJoinMemoryReclaimer::create()
-                        : memory::MemoryReclaimer::create();
+                        : DefaultMemoryReclaimer::create();
 }
 
 std::unique_ptr<memory::MemoryReclaimer> Task::createTaskReclaimer() {
@@ -403,7 +404,9 @@ velox::memory::MemoryPool* Task::addExchangeClientPool(
     uint32_t pipelineId) {
   auto* nodePool = getOrAddNodePool(planNodeId);
   childPools_.push_back(nodePool->addLeafChild(
-      fmt::format("exchangeClient.{}.{}", planNodeId, pipelineId)));
+      fmt::format("exchangeClient.{}.{}", planNodeId, pipelineId),
+      true,
+      DefaultMemoryReclaimer::create()));
   return childPools_.back().get();
 }
 
