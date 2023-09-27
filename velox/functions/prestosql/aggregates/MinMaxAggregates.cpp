@@ -427,16 +427,6 @@ class NonNumericMinMaxAggregateBase : public exec::Aggregate {
     });
   }
 
-  FOLLY_ALWAYS_INLINE static void checkNestedNull(
-      const DecodedVector& decoded,
-      vector_size_t index) {
-    VELOX_USER_CHECK(
-        !decoded.base()->containsNullAt(index),
-        fmt::format(
-            "{} comparison not supported for values that contain nulls",
-            mapTypeKindToName(decoded.base()->typeKind())));
-  }
-
   bool checkNulls(const DecodedVector& decoded, vector_size_t index) {
     if (decoded.isNullAt(index)) {
       return true;
@@ -454,7 +444,7 @@ class NonNumericMinMaxAggregateBase : public exec::Aggregate {
   }
 
  private:
-  bool throwOnNestedNulls_;
+  const bool throwOnNestedNulls_;
 };
 
 class NonNumericMaxAggregate : public NonNumericMinMaxAggregateBase {
@@ -946,7 +936,7 @@ exec::AggregateRegistrationResult registerMinMax(const std::string& name) {
           const core::QueryConfig& /*config*/)
           -> std::unique_ptr<exec::Aggregate> {
         const bool nAgg = !resultType->equivalent(*argTypes[0]);
-        bool throwOnNestedNulls = velox::exec::isRawInput(step);
+        const bool throwOnNestedNulls = velox::exec::isRawInput(step);
 
         if (nAgg) {
           // We have either 2 arguments: T, bigint (partial aggregation)

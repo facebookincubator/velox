@@ -397,25 +397,13 @@ TEST_F(MinMaxTest, arrayCheckNulls) {
       }),
   });
 
-  auto expectedMin = makeRowVector({
-      makeArrayVector<int64_t>({
-          {1, 2},
-      }),
-  });
-
-  auto expectedMax = makeRowVector({
-      makeArrayVector<int64_t>({
-          {6, 7},
-      }),
-  });
-
-  VELOX_ASSERT_THROW(
-      testAggregations({data}, {}, {"min(c0)"}, {expectedMin}),
-      "ARRAY comparison not supported for values that contain nulls");
-
-  VELOX_ASSERT_THROW(
-      testAggregations({data}, {}, {"max(c0)"}, {expectedMax}),
-      "ARRAY comparison not supported for values that contain nulls");
+  for (const auto& expr : {"min(c0)", "max(c0)"}) {
+    auto plan =
+        PlanBuilder().values({data}).singleAggregation({}, {expr}).planNode();
+    VELOX_ASSERT_THROW(
+        AssertQueryBuilder(plan).copyResults(pool()),
+        "ARRAY comparison not supported for values that contain nulls");
+  }
 }
 
 TEST_F(MinMaxTest, rowCheckNull) {
@@ -434,24 +422,13 @@ TEST_F(MinMaxTest, rowCheckNull) {
       }),
   });
 
-  auto expectedMin = makeRowVector({
-      makeRowVector(
-          {makeFlatVector<StringView>({"a"_sv}),
-           makeFlatVector<StringView>({"aa"_sv})}),
-  });
-
-  auto expectedMax = makeRowVector({
-      makeRowVector(
-          {makeFlatVector<StringView>({"c"_sv}),
-           makeFlatVector<StringView>({"cc"_sv})}),
-  });
-
-  VELOX_ASSERT_THROW(
-      testAggregations({data}, {}, {"min(c0)"}, {expectedMin}),
-      "ROW comparison not supported for values that contain nulls");
-  VELOX_ASSERT_THROW(
-      testAggregations({data}, {}, {"max(c0)"}, {expectedMax}),
-      "ROW comparison not supported for values that contain nulls");
+  for (const auto& expr : {"min(c0)", "max(c0)"}) {
+    auto plan =
+        PlanBuilder().values({data}).singleAggregation({}, {expr}).planNode();
+    VELOX_ASSERT_THROW(
+        AssertQueryBuilder(plan).copyResults(pool()),
+        "ROW comparison not supported for values that contain nulls");
+  }
 }
 
 class MinMaxNTest : public functions::aggregate::test::AggregationTestBase {
