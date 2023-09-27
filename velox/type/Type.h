@@ -455,6 +455,10 @@ class Type : public Tree<const TypePtr>, public velox::ISerializable {
 
   virtual bool isPrimitiveType() const = 0;
 
+  virtual bool isOrderable() const = 0;
+
+  virtual bool isComparable() const = 0;
+
   /// Returns unique logical type name. It can be
   /// different from the physical type name returned by 'kindName()'.
   virtual const char* name() const = 0;
@@ -571,6 +575,14 @@ class TypeBase : public Type {
     return TypeTraits<KIND>::isFixedWidth;
   }
 
+  bool isOrderable() const override {
+    return false;
+  }
+
+  bool isComparable() const override {
+    return false;
+  }
+
   const char* kindName() const override {
     return TypeTraits<KIND>::name;
   }
@@ -598,6 +610,14 @@ class ScalarType : public TypeBase<KIND> {
 
   std::string toString() const override {
     return TypeTraits<KIND>::name;
+  }
+
+  bool isOrderable() const override {
+    return true;
+  }
+
+  bool isComparable() const override {
+    return true;
   }
 
   size_t cppSizeInBytes() const override {
@@ -761,6 +781,10 @@ class UnknownType : public TypeBase<TypeKind::UNKNOWN> {
     return 0;
   }
 
+  bool isOrderable() const override {
+    return false;
+  }
+
   bool equivalent(const Type& other) const override {
     return Type::hasSameTypeId(other);
   }
@@ -796,6 +820,14 @@ class ArrayType : public TypeBase<TypeKind::ARRAY> {
 
   std::vector<std::string> names() const {
     return {"element"};
+  }
+
+  bool isOrderable() const override {
+    return child_->isOrderable();
+  }
+
+  bool isComparable() const override {
+    return child_->isComparable();
   }
 
   const std::shared_ptr<const Type>& childAt(uint32_t idx) const override;
@@ -849,6 +881,10 @@ class MapType : public TypeBase<TypeKind::MAP> {
     return {"key", "value"};
   }
 
+  bool isComparable() const override {
+    return keyType_->isComparable() && valueType_->isComparable();
+  }
+
   std::string toString() const override;
 
   const TypePtr& childAt(uint32_t idx) const override;
@@ -882,6 +918,10 @@ class RowType : public TypeBase<TypeKind::ROW> {
   const std::vector<std::shared_ptr<const Type>>& children() const {
     return children_;
   }
+
+  bool isOrderable() const override;
+
+  bool isComparable() const override;
 
   const std::shared_ptr<const Type>& findChild(folly::StringPiece name) const;
 
@@ -952,6 +992,14 @@ class FunctionType : public TypeBase<TypeKind::FUNCTION> {
 
   const std::vector<std::shared_ptr<const Type>>& children() const {
     return children_;
+  }
+
+  bool isOrderable() const override {
+    return false;
+  }
+
+  bool isComparable() const override {
+    return false;
   }
 
   bool equivalent(const Type& other) const override;
