@@ -371,15 +371,17 @@ const TypePtr& RowType::findChild(folly::StringPiece name) const {
 }
 
 bool RowType::isOrderable() const {
-  return std::all_of(children_.cbegin(), children_.cend(), [](const auto& c) {
-    return c->isOrderable();
-  });
+  return std::all_of(
+      children_.cbegin(), children_.cend(), [](const auto& child) {
+        return child->isOrderable();
+      });
 }
 
 bool RowType::isComparable() const {
-  return std::all_of(children_.cbegin(), children_.cend(), [](const auto& c) {
-    return c->isOrderable();
-  });
+  return std::all_of(
+      children_.cbegin(), children_.cend(), [](const auto& child) {
+        return child->isComparable();
+      });
 }
 
 bool RowType::containsChild(std::string_view name) const {

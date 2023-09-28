@@ -455,9 +455,17 @@ class Type : public Tree<const TypePtr>, public velox::ISerializable {
 
   virtual bool isPrimitiveType() const = 0;
 
-  virtual bool isOrderable() const = 0;
-
+  /// Returns true if equality relationship is defined for the values of this
+  /// type, i.e. a == b is defined and returns true, false or null. For example,
+  /// scalar types are usually comparable and complex types are comparable if
+  /// their nested types are.
   virtual bool isComparable() const = 0;
+
+  /// Returns true if less than relationship is defined for the values of this
+  /// type, i.e. a <= b returns true or false. For example, scalar types are
+  /// usually orderable, arrays and structs are orderable if their nested types
+  /// are, while map types are not orderable.
+  virtual bool isOrderable() const = 0;
 
   /// Returns unique logical type name. It can be
   /// different from the physical type name returned by 'kindName()'.
@@ -779,10 +787,6 @@ class UnknownType : public TypeBase<TypeKind::UNKNOWN> {
 
   size_t cppSizeInBytes() const override {
     return 0;
-  }
-
-  bool isOrderable() const override {
-    return false;
   }
 
   bool equivalent(const Type& other) const override {

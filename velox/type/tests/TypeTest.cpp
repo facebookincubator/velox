@@ -880,7 +880,7 @@ TEST(TypeTest, orderableComparable) {
 
   rowType = ROW({INTEGER(), mapType});
   EXPECT_FALSE(rowType->isOrderable());
-  EXPECT_FALSE(rowType->isComparable());
+  EXPECT_TRUE(rowType->isComparable());
 
   // Decimal types.
   auto shortDecimal = DECIMAL(10, 5);
