@@ -17,7 +17,6 @@
 #include "velox/functions/lib/RegistrationHelpers.h"
 
 #include "velox/common/base/Exceptions.h"
-#include "velox/expression/VectorWriters.h"
 
 namespace facebook::velox::functions::sparksql {
 namespace {
@@ -111,6 +110,18 @@ void ensureRegexIsCompatible(
       std::string(pattern.data(), pattern.size()), functionName);
 }
 
+/// Full implementation of RegexReplace found in SparkSQL only,
+/// due to semantic mismatches betweeen Spark and Presto
+/// regex_replace(string, pattern, overwrite) → string
+/// regex_replace(string, pattern, overwrite, position) → string
+///
+/// If a string has a substring that matches the given pattern, replace
+/// the match in the string wither overwrite and return the string. If
+/// optional paramter position is provided, only make replacements
+/// after that positon in the string (1 indexed).
+///
+/// If position <= 0, throw error.
+/// If position > length string, return string.
 template <typename T>
 struct regexReplaceFunction {
   VELOX_DEFINE_FUNCTION_TYPES(T);
