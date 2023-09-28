@@ -206,6 +206,14 @@ class AggregationTestBase : public exec::test::OperatorTestBase {
         });
   }
 
+  /// Use abandon-partial-aggregation optimization to trigger the toIntermediate
+  /// code path.
+  void testToIntermediate(
+      const std::vector<RowVectorPtr>& data,
+      const std::vector<std::string>& groupingKeys,
+      const std::vector<std::string>& aggregates,
+      const std::unordered_map<std::string, std::string>& config = {});
+
   /// Specifies that aggregate functions used in this test are not sensitive
   /// to the order of inputs.
   void allowInputShuffle() {

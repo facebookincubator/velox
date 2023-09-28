@@ -431,6 +431,40 @@ TEST_F(MinMaxTest, rowCheckNull) {
   }
 }
 
+TEST_F(MinMaxTest, toIntermediateNullCheck) {
+  auto batch = makeRowVector({
+      makeArrayVectorFromJson<int32_t>({
+          "[1, 2]",
+          "[6, 7]",
+          "[2, 3]",
+      }),
+      makeFlatVector<int32_t>({
+          1,
+          2,
+          3,
+      }),
+  });
+
+  auto batchWithNull = makeRowVector({
+      makeArrayVectorFromJson<int32_t>({
+          "[1, 2]",
+          "[6, 7]",
+          "[3, null]",
+      }),
+      makeFlatVector<int32_t>({
+          1,
+          2,
+          3,
+      }),
+  });
+
+  for (const auto& expr : {"min(c0)", "max(c0)"}) {
+    VELOX_ASSERT_THROW(
+        testToIntermediate({batch, batchWithNull}, {"c1"}, {expr}),
+        "ARRAY comparison not supported for values that contain nulls");
+  }
+}
+
 class MinMaxNTest : public functions::aggregate::test::AggregationTestBase {
  protected:
   void SetUp() override {

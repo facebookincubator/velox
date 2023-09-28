@@ -999,4 +999,24 @@ VectorPtr AggregationTestBase::testStreaming(
   return result;
 }
 
+void AggregationTestBase::testToIntermediate(
+    const std::vector<RowVectorPtr>& data,
+    const std::vector<std::string>& groupingKeys,
+    const std::vector<std::string>& aggregates,
+    const std::unordered_map<std::string, std::string>& config) {
+  auto builder = PlanBuilder().values(data);
+  builder.partialAggregation(groupingKeys, aggregates)
+      .intermediateAggregation()
+      .finalAggregation();
+  AssertQueryBuilder queryBuilder(builder.planNode());
+  queryBuilder.config(core::QueryConfig::kAbandonPartialAggregationMinRows, "1")
+      .config(core::QueryConfig::kAbandonPartialAggregationMinPct, "0")
+      .config(core::QueryConfig::kMaxPartialAggregationMemory, "0")
+      .config(core::QueryConfig::kMaxExtendedPartialAggregationMemory, "0")
+      .maxDrivers(1);
+  for (const auto& [key, value] : config) {
+    queryBuilder.config(key, value);
+  }
+  queryBuilder.copyResults(pool());
+}
 } // namespace facebook::velox::functions::aggregate::test
