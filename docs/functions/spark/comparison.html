@@ -49,7 +49,7 @@
 <span class="sig-name descname"><span class="pre">between</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">x</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">min</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">max</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">boolean</span></span></span><a class="headerlink" href="#between" title="Permalink to this definition">¶</a></dt>
 <dd><p>Returns true if x is within the specified [min, max] range
 inclusive. The types of all arguments must be the same.
-Supported types are: TINYINT, SMALLINT, INTEGER, BIGINT, DOUBLE, REAL.</p>
+Supported types are: TINYINT, SMALLINT, INTEGER, BIGINT, DOUBLE, REAL, DECIMAL.</p>
 </dd></dl>
 
 <dl class="spark function">
@@ -58,7 +58,10 @@ Supported types are: TINYINT, SMALLINT, INTEGER, BIGINT, DOUBLE, REAL.</p>
 <dd><p>Returns true if x is equal to y. Supports all scalar types. The
 types of x and y must be the same. Unlike <a class="reference internal" href="#equalto" title="equalto"><code class="xref spark spark-func docutils literal notranslate"><span class="pre">equalto()</span></code></a> returns true if both inputs
 are NULL and false if one of the inputs is NULL.
-Corresponds to Spark’s operator <code class="docutils literal notranslate"><span class="pre">&lt;=&gt;</span></code>.</p>
+Corresponds to Spark’s operator <code class="docutils literal notranslate"><span class="pre">&lt;=&gt;</span></code>.
+Note that NaN in Spark is handled differently from standard floating point semantics.
+It is considered larger than any other numeric values. This rule is applied for functions
+“equalnullsafe”, “equalto”, “greaterthan”, “greaterthanorequal”, “lessthan”, “lessthanorequal”.</p>
 </dd></dl>
 
 <dl class="spark function">
