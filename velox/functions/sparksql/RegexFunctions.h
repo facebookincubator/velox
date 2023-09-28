@@ -84,4 +84,6 @@ std::shared_ptr<exec::VectorFunction> makeRe2Replace(
 
 std::vector<std::shared_ptr<exec::FunctionSignature>> re2ReplaceSignatures();
 
+void registerRegexReplace(const std::string& prefix);
+
 } // namespace facebook::velox::functions::sparksql
