@@ -15,7 +15,7 @@
  */
 
 #pragma once
-#include <azure/storage/blobs.hpp>
+#include <azure/storage/common/storage_exception.hpp>
 #include "velox/common/file/File.h"
 
 #include <fmt/format.h>
@@ -55,44 +55,37 @@ class AbfsAccount {
     credKey_ = fmt::format("fs.azure.account.key.{}", accountNameWithSuffix_);
   }
 
-  const std::string accountNameWithSuffix() {
+  const std::string accountNameWithSuffix() const {
     return accountNameWithSuffix_;
   }
 
-  const std::string scheme() {
+  const std::string scheme() const {
     return scheme_;
   }
 
-  const std::string accountName() {
+  const std::string accountName() const {
     return accountName_;
   }
 
-  const std::string endpointSuffix() {
+  const std::string endpointSuffix() const {
     return endpointSuffix_;
   }
 
-  const std::string fileSystem() {
+  const std::string fileSystem() const {
     return fileSystem_;
   }
 
-  const std::string filePath() {
+  const std::string filePath() const {
     return filePath_;
   }
 
-  const std::string credKey() {
+  const std::string credKey() const {
     return credKey_;
   }
 
-  std::string connectionString(bool useHttps, std::string accountKey) {
-    auto protocol = "https";
-    if (!useHttps) {
-      // This is only used for testing.
-      protocol = "http";
-    }
-
+  const std::string connectionString(const std::string accountKey) const {
     return fmt::format(
-        "DefaultEndpointsProtocol={};AccountName={};AccountKey={};EndpointSuffix={}",
-        protocol,
+        "DefaultEndpointsProtocol=https;AccountName={};AccountKey={};EndpointSuffix={}",
         accountName(),
         accountKey,
         endpointSuffix());
@@ -109,7 +102,7 @@ class AbfsAccount {
   std::string credKey_;
 };
 
-inline std::string throwStorageExceptionWithOperationDetails(
+inline const std::string throwStorageExceptionWithOperationDetails(
     std::string operation,
     std::string path,
     Azure::Storage::StorageException& error) {
@@ -119,4 +112,5 @@ inline std::string throwStorageExceptionWithOperationDetails(
       path,
       error.what());
 }
+
 } // namespace facebook::velox::filesystems::abfs

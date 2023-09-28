@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
-#include <azure/storage/blobs.hpp>
+#include <azure/storage/blobs/blob_client.hpp>
 #include <folly/executors/ThreadedExecutor.h>
 #include <folly/futures/Future.h>
 #include "velox/common/file/File.h"

@@ -13,11 +13,11 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-#include "AbfsFileSystem.h"
-#include "AbfsReadFile.h"
-#include "AbfsUtil.h"
+#include "velox/connectors/hive/storage_adapters/abfs/AbfsFileSystem.h"
 #include "velox/common/file/File.h"
 #include "velox/connectors/hive/HiveConfig.h"
+#include "velox/connectors/hive/storage_adapters/abfs/AbfsReadFile.h"
+#include "velox/connectors/hive/storage_adapters/abfs/AbfsUtil.h"
 #include "velox/core/Config.h"
 
 #include <fmt/format.h>
@@ -25,8 +25,6 @@
 #include <glog/logging.h>
 
 namespace facebook::velox::filesystems::abfs {
-folly::once_flag abfsInitiationFlag;
-
 class AbfsConfig {
  public:
   AbfsConfig(const Config* config) : config_(config) {}
@@ -41,11 +39,7 @@ class AbfsConfig {
     VELOX_USER_CHECK(
         config_->isValueExists(key), "Failed to find storage credentials");
 
-    return abfsAccount.connectionString(useHttps(), config_->get(key).value());
-  }
-
-  bool useHttps() const {
-    return config_->get<bool>(AbfsFileSystem::kReaderAbfsUseHttps, true);
+    return abfsAccount.connectionString(config_->get(key).value());
   }
 
   std::string connectionString() const {
@@ -60,14 +54,11 @@ class AbfsConfig {
 class AbfsFileSystem::Impl {
  public:
   explicit Impl(const Config* config) : abfsConfig_(config) {
-    const size_t originCount = initCounter_++;
-    LOG(INFO) << "Init ABFS file system (" << std::to_string(originCount)
-              << ")";
+    LOG(INFO) << "Init ABFS file system";
   }
 
   ~Impl() {
-    const size_t newCount = --initCounter_;
-    LOG(INFO) << "Dispose ABFS file system(" << std::to_string(newCount) << ")";
+    LOG(INFO) << "Dispose ABFS file system";
   }
 
   const std::string connectionString(const std::string& path) const {
@@ -78,10 +69,8 @@ class AbfsFileSystem::Impl {
  private:
   const AbfsConfig abfsConfig_;
   std::shared_ptr<folly::Executor> ioExecutor_;
-  static std::atomic<size_t> initCounter_;
 };
 
-std::atomic<size_t> AbfsFileSystem::Impl::initCounter_(0);
 AbfsFileSystem::AbfsFileSystem(const std::shared_ptr<const Config>& config)
     : FileSystem(config) {
   impl_ = std::make_shared<Impl>(config.get());
@@ -98,22 +87,5 @@ std::unique_ptr<ReadFile> AbfsFileSystem::openFileForRead(
       std::string(path), impl_->connectionString(std::string(path)));
   abfsfile->initialize();
   return abfsfile;
-}
-
-static std::function<std::shared_ptr<FileSystem>(
-    std::shared_ptr<const Config>,
-    std::string_view)>
-    filesystemGenerator = [](std::shared_ptr<const Config> properties,
-                             std::string_view filePath) {
-      static std::shared_ptr<FileSystem> filesystem;
-      folly::call_once(abfsInitiationFlag, [&properties]() {
-        filesystem = std::make_shared<AbfsFileSystem>(properties);
-      });
-      return filesystem;
-    };
-
-void registerAbfsFileSystem() {
-  LOG(INFO) << "Register ABFS";
-  registerFileSystem(isAbfsFile, filesystemGenerator);
 }
 } // namespace facebook::velox::filesystems::abfs

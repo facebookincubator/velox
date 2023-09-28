@@ -39,11 +39,8 @@ TEST(AbfsUtilsTest, abfsAccount) {
   EXPECT_EQ(
       abfsAccount.credKey(), "fs.azure.account.key.test.dfs.core.windows.net");
   EXPECT_EQ(
-      abfsAccount.connectionString(true, "123"),
+      abfsAccount.connectionString("123"),
       "DefaultEndpointsProtocol=https;AccountName=test;AccountKey=123;EndpointSuffix=core.windows.net");
-  EXPECT_EQ(
-      abfsAccount.connectionString(false, "123"),
-      "DefaultEndpointsProtocol=http;AccountName=test;AccountKey=123;EndpointSuffix=core.windows.net");
 
   auto abfssAccount = AbfsAccount(
       "abfss://test@test.dfs.core.windows.net/sf_1/store_sales/ss_sold_date_sk=2450816/part-00002-a29c25f1-4638-494e-8428-a84f51dcea41.c000.snappy.parquet");

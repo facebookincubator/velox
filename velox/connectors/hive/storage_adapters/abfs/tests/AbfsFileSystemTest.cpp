@@ -16,6 +16,7 @@
 
 #include "velox/connectors/hive/storage_adapters/abfs/AbfsFileSystem.h"
 #include "gtest/gtest.h"
+#include "velox/common/base/tests/GTestUtils.h"
 #include "velox/common/file/File.h"
 #include "velox/common/file/FileSystems.h"
 #include "velox/connectors/hive/FileHandle.h"
@@ -203,78 +204,45 @@ TEST_F(AbfsFileSystemTest, missingFile) {
 TEST_F(AbfsFileSystemTest, openFileForWriteNotImplemented) {
   auto hiveConfig = AbfsFileSystemTest::hiveConfig();
   auto abfs = filesystems::getFileSystem(fullFilePath, hiveConfig);
-  try {
-    abfs->openFileForWrite(fullFilePath);
-    FAIL() << "Expected VeloxException";
-  } catch (VeloxException const& err) {
-    EXPECT_EQ(err.message(), std::string("write for abfs not implemented"));
-  }
+  VELOX_ASSERT_THROW(
+      abfs->openFileForWrite(fullFilePath), "write for abfs not implemented");
 }
 
 TEST_F(AbfsFileSystemTest, renameNotImplemented) {
   auto hiveConfig = AbfsFileSystemTest::hiveConfig();
   auto abfs = filesystems::getFileSystem(fullFilePath, hiveConfig);
-  try {
-    abfs->rename("text", "text2");
-    FAIL() << "Expected VeloxException";
-  } catch (VeloxException const& err) {
-    EXPECT_EQ(err.message(), std::string("rename for abfs not implemented"));
-  }
+  VELOX_ASSERT_THROW(
+      abfs->rename("text", "text2"), "rename for abfs not implemented");
 }
 
 TEST_F(AbfsFileSystemTest, removeNotImplemented) {
   auto hiveConfig = AbfsFileSystemTest::hiveConfig();
   auto abfs = filesystems::getFileSystem(fullFilePath, hiveConfig);
-  try {
-    abfs->remove("text");
-    FAIL() << "Expected VeloxException";
-  } catch (VeloxException const& err) {
-    EXPECT_EQ(err.message(), std::string("remove for abfs not implemented"));
-  }
+  VELOX_ASSERT_THROW(abfs->remove("text"), "remove for abfs not implemented");
 }
 
 TEST_F(AbfsFileSystemTest, existsNotImplemented) {
   auto hiveConfig = AbfsFileSystemTest::hiveConfig();
   auto abfs = filesystems::getFileSystem(fullFilePath, hiveConfig);
-  try {
-    abfs->exists("text");
-    FAIL() << "Expected VeloxException";
-  } catch (VeloxException const& err) {
-    EXPECT_EQ(err.message(), std::string("exists for abfs not implemented"));
-  }
+  VELOX_ASSERT_THROW(abfs->exists("text"), "exists for abfs not implemented");
 }
 
 TEST_F(AbfsFileSystemTest, listNotImplemented) {
   auto hiveConfig = AbfsFileSystemTest::hiveConfig();
   auto abfs = filesystems::getFileSystem(fullFilePath, hiveConfig);
-  try {
-    abfs->list("dir");
-    FAIL() << "Expected VeloxException";
-  } catch (VeloxException const& err) {
-    EXPECT_EQ(err.message(), std::string("list for abfs not implemented"));
-  }
+  VELOX_ASSERT_THROW(abfs->list("dir"), "list for abfs not implemented");
 }
 
 TEST_F(AbfsFileSystemTest, mkdirNotImplemented) {
   auto hiveConfig = AbfsFileSystemTest::hiveConfig();
   auto abfs = filesystems::getFileSystem(fullFilePath, hiveConfig);
-  try {
-    abfs->mkdir("dir");
-    FAIL() << "Expected VeloxException";
-  } catch (VeloxException const& err) {
-    EXPECT_EQ(err.message(), std::string("mkdir for abfs not implemented"));
-  }
+  VELOX_ASSERT_THROW(abfs->mkdir("dir"), "mkdir for abfs not implemented");
 }
 
 TEST_F(AbfsFileSystemTest, rmdirNotImplemented) {
   auto hiveConfig = AbfsFileSystemTest::hiveConfig();
   auto abfs = filesystems::getFileSystem(fullFilePath, hiveConfig);
-  try {
-    abfs->rmdir("dir");
-    FAIL() << "Expected VeloxException";
-  } catch (VeloxException const& err) {
-    EXPECT_EQ(err.message(), std::string("rmdir for abfs not implemented"));
-  }
+  VELOX_ASSERT_THROW(abfs->rmdir("dir"), "rmdir for abfs not implemented");
 }
 
 TEST_F(AbfsFileSystemTest, credNotFOund) {
@@ -284,12 +252,8 @@ TEST_F(AbfsFileSystemTest, credNotFOund) {
   auto abfs =
       std::make_shared<facebook::velox::filesystems::abfs::AbfsFileSystem>(
           hiveConfig);
-  try {
-    abfs->openFileForRead(abfsFile);
-    FAIL() << "Expected VeloxException";
-  } catch (VeloxException const& err) {
-    EXPECT_EQ(err.errorCode(), std::string("INVALID_ARGUMENT"));
-  }
+  VELOX_ASSERT_THROW(
+      abfs->openFileForRead(abfsFile), "Failed to find storage credentials");
 }
 
 TEST_F(AbfsFileSystemTest, splitRegion) {

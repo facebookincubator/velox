@@ -17,7 +17,8 @@
 #include "velox/core/Config.h"
 #include "velox/exec/tests/utils/TempDirectoryPath.h"
 
-#include <azure/storage/blobs.hpp>
+#include <azure/storage/blobs/blob_container_client.hpp>
+#include <azure/storage/blobs/block_blob_client.hpp>
 #include <fmt/format.h>
 #include <pwd.h>
 #include <unistd.h>

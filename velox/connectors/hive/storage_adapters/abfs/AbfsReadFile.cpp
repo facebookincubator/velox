@@ -14,8 +14,8 @@
  * limitations under the License.
  */
 
-#include "AbfsReadFile.h"
-#include "AbfsUtil.h"
+#include "velox/connectors/hive/storage_adapters/abfs/AbfsReadFile.h"
+#include "velox/connectors/hive/storage_adapters/abfs/AbfsUtil.h"
 
 #include <fmt/format.h>
 #include <folly/synchronization/CallOnce.h>
@@ -127,10 +127,10 @@ void AbfsReadFile::preadInternal(
   range.Offset = offset;
   range.Length = length;
 
-  Azure::Storage::Blobs::DownloadBlobOptions what;
-  what.Range = range;
+  Azure::Storage::Blobs::DownloadBlobOptions blob;
+  blob.Range = range;
 
-  auto response = fileClient_->Download(what);
+  auto response = fileClient_->Download(blob);
   response.Value.BodyStream->ReadToCount(
       reinterpret_cast<uint8_t*>(position), length);
 }
