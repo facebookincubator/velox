@@ -16,9 +16,9 @@
 
 #pragma once
 
+#include "velox/common/io/StreamIdentifier.h"
 #include "velox/common/memory/AllocationPool.h"
 #include "velox/dwio/common/SeekableInputStream.h"
-#include "velox/dwio/common/StreamIdentifier.h"
 
 // Use WS VRead API to load
 DECLARE_bool(wsVRLoad);

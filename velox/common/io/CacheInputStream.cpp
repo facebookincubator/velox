@@ -16,14 +16,14 @@
 
 #include <folly/executors/QueuedImmediateExecutor.h>
 
+#include "velox/common/io/CacheInputStream.h"
+#include "velox/common/io/CachedBufferedInput.h"
 #include "velox/common/process/TraceContext.h"
 #include "velox/common/time/Timer.h"
-#include "velox/dwio/common/CacheInputStream.h"
-#include "velox/dwio/common/CachedBufferedInput.h"
 
 using ::facebook::velox::common::Region;
 
-namespace facebook::velox::dwio::common {
+namespace facebook::velox::io {
 
 using velox::cache::ScanTracker;
 using velox::cache::TrackingId;
@@ -332,4 +332,4 @@ void CacheInputStream::loadPosition() {
     loadPosition();
   }
 }
-} // namespace facebook::velox::dwio::common
+} // namespace facebook::velox::io

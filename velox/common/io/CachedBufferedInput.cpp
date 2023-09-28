@@ -14,10 +14,10 @@
  * limitations under the License.
  */
 
-#include "velox/dwio/common/CachedBufferedInput.h"
+#include "velox/common/io/CachedBufferedInput.h"
+#include "velox/common/io/CacheInputStream.h"
 #include "velox/common/memory/Allocation.h"
 #include "velox/common/process/TraceContext.h"
-#include "velox/dwio/common/CacheInputStream.h"
 
 DEFINE_int32(
     cache_prefetch_min_pct,
@@ -25,8 +25,7 @@ DEFINE_int32(
     "Minimum percentage of actual uses over references to a column for prefetching. No prefetch if > 100");
 
 using ::facebook::velox::common::Region;
-
-namespace facebook::velox::dwio::common {
+namespace facebook::velox::io {
 
 using cache::CachePin;
 using cache::CoalescedLoad;
@@ -35,6 +34,13 @@ using cache::ScanTracker;
 using cache::SsdFile;
 using cache::SsdPin;
 using cache::TrackingId;
+using dwio::common::IoStatistics;
+using dwio::common::LogType;
+using dwio::common::MetricsLog;
+using dwio::common::ReadFileInputStream;
+using dwio::common::SeekableArrayInputStream;
+using dwio::common::SeekableInputStream;
+using dwio::common::StreamIdentifier;
 using memory::MemoryAllocator;
 
 std::unique_ptr<SeekableInputStream> CachedBufferedInput::enqueue(
@@ -64,7 +70,7 @@ std::unique_ptr<SeekableInputStream> CachedBufferedInput::enqueue(
       tracker_,
       id,
       groupId_,
-      options_.loadQuantum());
+      loadQuantum_);
   requests_.back().stream = stream.get();
   return stream;
 }
@@ -82,7 +88,7 @@ bool CachedBufferedInput::shouldPreload(int32_t numPages) {
   }
   for (auto& request : requests_) {
     numPages += bits::roundUp(
-                    std::min<int32_t>(request.size, options_.loadQuantum()),
+                    std::min<int32_t>(request.size, loadQuantum_),
                     memory::AllocationTraits::kPageSize) /
         memory::AllocationTraits::kPageSize;
   }
@@ -154,7 +160,7 @@ int32_t adjustedReadPct(const cache::TrackingData& trackingData) {
 }
 } // namespace
 
-void CachedBufferedInput::load(const LogType) {
+void CachedBufferedInput::load(const MetricsLog::MetricsType) {
   // 'requests_ is cleared on exit.
   auto requests = std::move(requests_);
   cache::SsdFile* FOLLY_NULLABLE ssdFile = nullptr;
@@ -184,7 +190,7 @@ void CachedBufferedInput::load(const LogType) {
       if (prefetchAnyway || adjustedReadPct(trackingData) >= readPct) {
         request.processed = true;
         auto parts = makeRequestParts(
-            request, trackingData, options_.loadQuantum(), extraRequests);
+            request, trackingData, loadQuantum_, extraRequests);
         for (auto part : parts) {
           if (cache_->exists(part->key)) {
             continue;
@@ -218,7 +224,7 @@ void CachedBufferedInput::makeLoads(
     return;
   }
   bool isSsd = !requests[0]->ssdPin.empty();
-  int32_t maxDistance = isSsd ? 20000 : options_.maxCoalesceDistance();
+  int32_t maxDistance = isSsd ? 20000 : coalesceDistance_;
   std::sort(
       requests.begin(),
       requests.end(),
@@ -248,7 +254,7 @@ void CachedBufferedInput::makeLoads(
         return size;
       },
       [&](int32_t index) {
-        if (coalescedBytes > options_.maxCoalesceBytes()) {
+        if (coalescedBytes > coalesceDistance_) {
           coalescedBytes = 0;
           return kNoCoalesce;
         }
@@ -467,12 +473,7 @@ void CachedBufferedInput::readRegion(
     load = std::make_shared<SsdLoad>(*cache_, ioStats_, groupId_, requests);
   } else {
     load = std::make_shared<DwioCoalescedLoad>(
-        *cache_,
-        input_,
-        ioStats_,
-        groupId_,
-        requests,
-        options_.maxCoalesceDistance());
+        *cache_, input_, ioStats_, groupId_, requests, coalesceDistance_);
   }
   allCoalescedLoads_.push_back(load);
   coalescedLoads_.withWLock([&](auto& loads) {
@@ -501,11 +502,17 @@ std::shared_ptr<cache::CoalescedLoad> CachedBufferedInput::coalescedLoad(
 
 std::unique_ptr<SeekableInputStream> CachedBufferedInput::read(
     uint64_t offset,
+    uint64_t length) const {
+  return read(offset, length, LogType::UNKNOWN);
+}
+
+std::unique_ptr<SeekableInputStream> CachedBufferedInput::read(
+    uint64_t offset,
     uint64_t length,
     LogType /*logType*/) const {
   VELOX_CHECK_LE(offset + length, fileSize_);
   return std::make_unique<CacheInputStream>(
-      const_cast<CachedBufferedInput*>(this),
+      const_cast<CachedBufferedInput*>(this), // Remove const qualifier
       ioStats_.get(),
       Region{offset, length},
       input_,
@@ -513,7 +520,7 @@ std::unique_ptr<SeekableInputStream> CachedBufferedInput::read(
       nullptr,
       TrackingId(),
       0,
-      options_.loadQuantum());
+      loadQuantum_);
 }
 
 bool CachedBufferedInput::prefetch(Region region) {
@@ -531,4 +538,4 @@ bool CachedBufferedInput::prefetch(Region region) {
   return true;
 }
 
-} // namespace facebook::velox::dwio::common
+} // namespace facebook::velox::io
