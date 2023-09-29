@@ -37,7 +37,7 @@ class QueryCtx {
   QueryCtx(
       folly::Executor* executor = nullptr,
       std::unordered_map<std::string, std::string> queryConfigValues = {},
-      std::unordered_map<std::string, std::shared_ptr<Config>>
+      std::unordered_map<std::string, std::shared_ptr<const Config>>
           connectorConfigs = {},
       cache::AsyncDataCache* cache = cache::AsyncDataCache::getInstance(),
       std::shared_ptr<memory::MemoryPool> pool = nullptr,
@@ -51,7 +51,7 @@ class QueryCtx {
   explicit QueryCtx(
       folly::Executor::KeepAlive<> executorKeepalive,
       std::unordered_map<std::string, std::string> queryConfigValues = {},
-      std::unordered_map<std::string, std::shared_ptr<Config>>
+      std::unordered_map<std::string, std::shared_ptr<const Config>>
           connectorConfigs = {},
       cache::AsyncDataCache* cache = cache::AsyncDataCache::getInstance(),
       std::shared_ptr<memory::MemoryPool> pool = nullptr,
@@ -80,12 +80,13 @@ class QueryCtx {
     return queryConfig_;
   }
 
-  Config* getConnectorConfig(const std::string& connectorId) const {
+  std::shared_ptr<const Config> getConnectorConfig(
+      const std::string& connectorId) const {
     auto it = connectorConfigs_.find(connectorId);
     if (it == connectorConfigs_.end()) {
       return getEmptyConfig();
     }
-    return it->second.get();
+    return it->second;
   }
 
   /// Overrides the previous configuration. Note that this function is NOT
@@ -117,10 +118,10 @@ class QueryCtx {
   }
 
  private:
-  static Config* getEmptyConfig() {
-    static const std::unique_ptr<Config> kEmptyConfig =
-        std::make_unique<MemConfig>();
-    return kEmptyConfig.get();
+  static std::shared_ptr<Config> getEmptyConfig() {
+    static const std::shared_ptr<Config> kEmptyConfig =
+        std::make_shared<MemConfig>();
+    return kEmptyConfig;
   }
 
   void initPool(const std::string& queryId) {
@@ -132,7 +133,8 @@ class QueryCtx {
 
   const std::string queryId_;
 
-  std::unordered_map<std::string, std::shared_ptr<Config>> connectorConfigs_;
+  std::unordered_map<std::string, std::shared_ptr<const Config>>
+      connectorConfigs_;
   cache::AsyncDataCache* cache_;
   std::shared_ptr<memory::MemoryPool> pool_;
   folly::Executor* executor_;

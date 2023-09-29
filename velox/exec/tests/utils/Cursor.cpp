@@ -124,7 +124,7 @@ TaskCursor::TaskCursor(const CursorParameters& params)
     queryCtx = std::make_shared<core::QueryCtx>(
         executor_.get(),
         std::unordered_map<std::string, std::string>{},
-        std::unordered_map<std::string, std::shared_ptr<Config>>{},
+        std::unordered_map<std::string, std::shared_ptr<const Config>>{},
         cache::AsyncDataCache::getInstance(),
         nullptr,
         nullptr,

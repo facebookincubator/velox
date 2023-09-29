@@ -52,11 +52,18 @@ OperatorCtx::createConnectorQueryCtx(
     memory::MemoryPool* connectorPool,
     memory::SetMemoryReclaimer setMemoryReclaimer,
     const common::SpillConfig* spillConfig) const {
+  auto connectorConfig =
+      driverCtx_->task->queryCtx()->getConnectorConfig(connectorId);
+  VELOX_CHECK(connectorConfig);
+  if (connectorConfig->empty()) {
+    connectorConfig =
+        connector::getConnector(connectorId)->connectorProperties();
+  }
   return std::make_shared<connector::ConnectorQueryCtx>(
       pool_,
       connectorPool,
       std::move(setMemoryReclaimer),
-      driverCtx_->task->queryCtx()->getConnectorConfig(connectorId),
+      connectorConfig,
       spillConfig,
       std::make_unique<SimpleExpressionEvaluator>(
           execCtx()->queryCtx(), execCtx()->pool()),

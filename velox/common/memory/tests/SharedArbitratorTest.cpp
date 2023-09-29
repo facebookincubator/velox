@@ -343,7 +343,7 @@ class SharedArbitrationTest : public exec::test::HiveConnectorTestBase {
   std::shared_ptr<core::QueryCtx> newQueryCtx(
       int64_t memoryCapacity = kMaxMemory,
       std::unique_ptr<MemoryReclaimer>&& reclaimer = nullptr) {
-    std::unordered_map<std::string, std::shared_ptr<Config>> configs;
+    std::unordered_map<std::string, std::shared_ptr<const Config>> configs;
     std::shared_ptr<MemoryPool> pool = memoryManager_->addRootPool(
         "",
         memoryCapacity,

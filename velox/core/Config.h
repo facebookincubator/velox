@@ -63,6 +63,10 @@ class Config {
   virtual std::unordered_map<std::string, std::string> valuesCopy() const {
     VELOX_UNSUPPORTED("method valuesCopy() is not supported by this config");
   }
+
+  virtual bool empty() const {
+    return values().empty();
+  }
 };
 
 namespace core {

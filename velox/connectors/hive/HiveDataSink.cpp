@@ -274,15 +274,13 @@ HiveDataSink::HiveDataSink(
     RowTypePtr inputType,
     std::shared_ptr<const HiveInsertTableHandle> insertTableHandle,
     const ConnectorQueryCtx* connectorQueryCtx,
-    CommitStrategy commitStrategy,
-    const std::shared_ptr<const Config>& connectorProperties)
+    CommitStrategy commitStrategy)
     : inputType_(std::move(inputType)),
       insertTableHandle_(std::move(insertTableHandle)),
       connectorQueryCtx_(connectorQueryCtx),
       commitStrategy_(commitStrategy),
-      connectorProperties_(connectorProperties),
-      maxOpenWriters_(
-          HiveConfig::maxPartitionsPerWriters(connectorQueryCtx_->config())),
+      maxOpenWriters_(HiveConfig::maxPartitionsPerWriters(
+          connectorQueryCtx_->getConnectorConfig().get())),
       partitionChannels_(getPartitionChannels(insertTableHandle_)),
       partitionIdGenerator_(
           !partitionChannels_.empty() ? std::make_unique<PartitionIdGenerator>(
@@ -501,7 +499,7 @@ uint32_t HiveDataSink::appendWriter(const HiveWriterId& id) {
       dwio::common::FileSink::create(
           writePath,
           {.bufferWrite = false,
-           .connectorProperties = connectorProperties_,
+           .connectorProperties = connectorQueryCtx_->getConnectorConfig(),
            .pool = connectorQueryCtx_->memoryPool(),
            .metricLogger = dwio::common::MetricsLog::voidLog(),
            .stats = ioStats_.back().get()}),
@@ -615,10 +613,11 @@ std::pair<std::string, std::string> HiveDataSink::getWriterFileNames(
 }
 
 HiveWriterParameters::UpdateMode HiveDataSink::getUpdateMode() const {
+  auto config = connectorQueryCtx_->getConnectorConfig().get();
   if (insertTableHandle_->isInsertTable()) {
     if (insertTableHandle_->isPartitioned()) {
-      const auto insertBehavior = HiveConfig::insertExistingPartitionsBehavior(
-          connectorQueryCtx_->config());
+      const auto insertBehavior =
+          HiveConfig::insertExistingPartitionsBehavior(config);
       switch (insertBehavior) {
         case HiveConfig::InsertExistingPartitionsBehavior::kOverwrite:
           return HiveWriterParameters::UpdateMode::kOverwrite;
@@ -634,7 +633,7 @@ HiveWriterParameters::UpdateMode HiveDataSink::getUpdateMode() const {
       if (insertTableHandle_->isBucketed()) {
         VELOX_USER_FAIL("Cannot insert into bucketed unpartitioned Hive table");
       }
-      if (HiveConfig::immutablePartitions(connectorProperties_.get())) {
+      if (HiveConfig::immutablePartitions(config)) {
         VELOX_USER_FAIL("Unpartitioned Hive tables are immutable.");
       }
       return HiveWriterParameters::UpdateMode::kAppend;

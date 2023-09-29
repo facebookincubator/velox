@@ -228,7 +228,7 @@ class ConnectorQueryCtx {
       memory::MemoryPool* operatorPool,
       memory::MemoryPool* connectorPool,
       memory::SetMemoryReclaimer setMemoryReclaimer,
-      const Config* connectorConfig,
+      std::shared_ptr<const Config> connectorConfig,
       const common::SpillConfig* spillConfig,
       std::unique_ptr<core::ExpressionEvaluator> expressionEvaluator,
       cache::AsyncDataCache* cache,
@@ -239,7 +239,7 @@ class ConnectorQueryCtx {
       : operatorPool_(operatorPool),
         connectorPool_(connectorPool),
         setMemoryReclaimer_(std::move(setMemoryReclaimer)),
-        config_(connectorConfig),
+        connectorConfig_(std::move(connectorConfig)),
         spillConfig_(spillConfig),
         expressionEvaluator_(std::move(expressionEvaluator)),
         cache_(cache),
@@ -248,7 +248,7 @@ class ConnectorQueryCtx {
         taskId_(taskId),
         driverId_(driverId),
         planNodeId_(planNodeId) {
-    VELOX_CHECK_NOT_NULL(connectorConfig);
+    VELOX_CHECK_NOT_NULL(connectorConfig_);
   }
 
   /// Returns the associated operator's memory pool which is a leaf kind of
@@ -271,8 +271,12 @@ class ConnectorQueryCtx {
     return setMemoryReclaimer_;
   }
 
-  const Config* config() const {
-    return config_;
+  void setConnectorConfig(std::shared_ptr<const Config> config) {
+    connectorConfig_ = std::move(config);
+  }
+
+  std::shared_ptr<const Config> getConnectorConfig() const {
+    return connectorConfig_;
   }
 
   const common::SpillConfig* getSpillConfig() const {
@@ -315,7 +319,7 @@ class ConnectorQueryCtx {
   memory::MemoryPool* const operatorPool_;
   memory::MemoryPool* const connectorPool_;
   const memory::SetMemoryReclaimer setMemoryReclaimer_;
-  const Config* config_;
+  std::shared_ptr<const Config> connectorConfig_;
   const common::SpillConfig* const spillConfig_;
   std::unique_ptr<core::ExpressionEvaluator> expressionEvaluator_;
   cache::AsyncDataCache* cache_;

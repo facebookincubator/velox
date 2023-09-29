@@ -75,16 +75,14 @@ std::unique_ptr<DataSource> HiveConnector::createDataSource(
         std::string,
         std::shared_ptr<connector::ColumnHandle>>& columnHandles,
     ConnectorQueryCtx* connectorQueryCtx) {
+  const auto config = connectorQueryCtx->getConnectorConfig().get();
   dwio::common::ReaderOptions options(connectorQueryCtx->memoryPool());
-  options.setMaxCoalesceBytes(
-      HiveConfig::maxCoalescedBytes(connectorQueryCtx->config()));
-  options.setMaxCoalesceDistance(
-      HiveConfig::maxCoalescedDistanceBytes(connectorQueryCtx->config()));
+  options.setMaxCoalesceBytes(HiveConfig::maxCoalescedBytes(config));
+  options.setMaxCoalesceDistance(HiveConfig::maxCoalescedDistanceBytes(config));
   options.setFileColumnNamesReadAsLowerCase(
-      HiveConfig::isFileColumnNamesReadAsLowerCase(
-          connectorQueryCtx->config()));
+      HiveConfig::isFileColumnNamesReadAsLowerCase(config));
   options.setUseColumnNamesForColumnMapping(
-      HiveConfig::isOrcUseColumnNames(connectorQueryCtx->config()));
+      HiveConfig::isOrcUseColumnNames(config));
 
   return std::make_unique<HiveDataSource>(
       outputType,
@@ -107,12 +105,9 @@ std::unique_ptr<DataSink> HiveConnector::createDataSink(
       connectorInsertTableHandle);
   VELOX_CHECK_NOT_NULL(
       hiveInsertHandle, "Hive connector expecting hive write handle!");
+
   return std::make_unique<HiveDataSink>(
-      inputType,
-      hiveInsertHandle,
-      connectorQueryCtx,
-      commitStrategy,
-      connectorProperties());
+      inputType, hiveInsertHandle, connectorQueryCtx, commitStrategy);
 }
 
 std::unique_ptr<core::PartitionFunction> HivePartitionFunctionSpec::create(

@@ -48,7 +48,7 @@ class HiveDataSinkTest : public exec::test::HiveConnectorTestBase {
         opPool_.get(),
         connectorPool_.get(),
         nullptr,
-        connectorConfig_.get(),
+        connectorConfig_,
         nullptr,
         nullptr,
         nullptr,
@@ -88,8 +88,7 @@ class HiveDataSinkTest : public exec::test::HiveConnectorTestBase {
         rowType,
         createHiveInsertTableHandle(rowType, outputDirectoryPath),
         connectorQueryCtx_.get(),
-        CommitStrategy::kNoCommit,
-        connectorConfig_);
+        CommitStrategy::kNoCommit);
   }
 
   std::vector<std::string> listFiles(const std::string& dirPath) {
