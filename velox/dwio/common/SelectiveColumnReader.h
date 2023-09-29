@@ -126,7 +126,7 @@ class SelectiveColumnReader {
       const TypePtr& requestedType,
       dwio::common::FormatParams& params,
       velox::common::ScanSpec& scanSpec,
-      std::shared_ptr<const dwio::common::TypeWithId> type);
+      std::shared_ptr<const dwio::common::TypeWithId> fileType);
 
   virtual ~SelectiveColumnReader() = default;
 

@@ -269,6 +269,8 @@ TEST_F(Substrait2VeloxPlanConversionTest, q6) {
   std::string planPath =
       getDataFilePath("velox/substrait/tests", "data/q6_first_stage.json");
 
+  std::cout << "planPath " << planPath << std::endl;
+
   // Read q6_first_stage.json and resume the Substrait plan.
   ::substrait::Plan substraitPlan;
   JsonToProtoConverter::readFromFile(planPath, substraitPlan);
