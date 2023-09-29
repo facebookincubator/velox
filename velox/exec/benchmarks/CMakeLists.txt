@@ -13,8 +13,9 @@
 # limitations under the License.
 add_executable(velox_exec_vector_hasher_benchmark VectorHasherBenchmark.cpp)
 
-target_link_libraries(velox_exec_vector_hasher_benchmark velox_exec
-                      velox_vector_test_lib ${FOLLY_BENCHMARK})
+target_link_libraries(
+  velox_exec_vector_hasher_benchmark velox_exec_vector_hasher_benchmark
+  velox_exec velox_vector_test_lib ${FOLLY_BENCHMARK})
 
 add_executable(velox_filter_project_benchmark FilterProjectBenchmark.cpp)
 

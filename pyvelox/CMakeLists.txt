@@ -24,6 +24,7 @@ if(VELOX_BUILD_PYTHON_PACKAGE)
     pyvelox
     PRIVATE velox_type
             velox_vector
+            velox_common_compression
             velox_core
             velox_exec
             velox_functions_prestosql
@@ -37,5 +38,6 @@ else()
   # reasons.
   message("Creating pyvelox library")
   add_library(pyvelox pyvelox.cpp pyvelox.h)
-  target_link_libraries(pyvelox velox_type pybind11::module)
+  target_link_libraries(pyvelox velox_type pybind11::module
+                        velox_common_compression)
 endif()
