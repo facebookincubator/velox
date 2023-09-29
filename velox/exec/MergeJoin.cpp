@@ -311,8 +311,8 @@ void MergeJoin::prepareOutput() {
 
         // When filterInput_ contains array or map columns that are not
         // projected to output, their child vectors(elements, keys and values)
-        // keep growing after each call to 'copyRow'. Call BaseVector::resize(0)
-        // on these child vectors to avoid that.
+        // keep growing after each call to 'copyRow'. Call prepareForReuse() to
+        // reset non-reusable buffers and updates child vectors for reusing.
         if (child->typeKind() == TypeKind::ARRAY) {
           child->as<ArrayVector>()->prepareForReuse();
         } else if (child->typeKind() == TypeKind::MAP) {
