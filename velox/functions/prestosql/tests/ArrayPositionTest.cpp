@@ -28,8 +28,45 @@ namespace {
 template <typename T>
 using TwoDimVector = std::vector<std::vector<std::optional<T>>>;
 
+template <typename T>
+void appendVariant(std::vector<variant>& values, const T& x) {
+  values.push_back(x);
+};
+
+template <typename TupleT, std::size_t... Is>
+variant toVariantRow(const TupleT& tp, std::index_sequence<Is...>) {
+  std::vector<variant> values;
+  (appendVariant(values, std::get<Is>(tp)), ...);
+  return variant::row(values);
+}
+
+template <typename TupleT, std::size_t TupSize = std::tuple_size_v<TupleT>>
+variant toVariantRow(const TupleT& tp) {
+  return toVariantRow(tp, std::make_index_sequence<TupSize>{});
+}
+
 class ArrayPositionTest : public FunctionBaseTest {
  protected:
+  template <typename TupleT>
+  ArrayVectorPtr makeArrayOfRowVector2(
+      const std::vector<std::vector<std::optional<TupleT>>>& data,
+      const RowTypePtr& rowType) {
+    std::vector<std::vector<variant>> arrays;
+    for (const auto& v : data) {
+      std::vector<variant> elements;
+      for (const auto& u : v) {
+        if (u.has_value()) {
+          elements.push_back(toVariantRow(u.value()));
+        } else {
+          elements.push_back(variant::null(TypeKind::ROW));
+        }
+      }
+      arrays.push_back(elements);
+    }
+
+    return makeArrayOfRowVector(rowType, arrays);
+  }
+
   void evalExpr(
       const std::vector<VectorPtr>& input,
       const std::string& expression,
@@ -353,31 +390,17 @@ TEST_F(ArrayPositionTest, boolean) {
 }
 
 TEST_F(ArrayPositionTest, row) {
-  std::vector<std::vector<variant>> data{
-      {
-          variant::row({1, "red"}),
-          variant::row({2, "blue"}),
-          variant::row({3, "green"}),
-      },
-      {
-          variant::row({2, "blue"}),
-          variant(TypeKind::ROW), // null
-          variant::row({5, "green"}),
-      },
-      {},
-      {
-          variant(TypeKind::ROW), // null
-      },
-      {
-          variant::row({1, "yellow"}),
-          variant::row({2, "blue"}),
-          variant::row({4, "green"}),
-          variant::row({5, "purple"}),
-      },
-  };
+  std::vector<std::vector<std::optional<std::tuple<int32_t, std::string>>>>
+      data = {
+          {{{1, "red"}}, {{2, "blue"}}, {{3, "green"}}},
+          {{{2, "blue"}}, std::nullopt, {{5, "green"}}},
+          {},
+          {std::nullopt},
+          {{{1, "yellow"}}, {{2, "blue"}}, {{4, "green"}}, {{5, "purple"}}},
+      };
 
   auto rowType = ROW({INTEGER(), VARCHAR()});
-  auto arrayVector = makeArrayOfRowVector(rowType, data);
+  auto arrayVector = makeArrayOfRowVector2(data, rowType);
   auto size = arrayVector->size();
 
   auto testPositionOfRow =
@@ -669,32 +692,28 @@ TEST_F(ArrayPositionTest, primitiveWithInstanceFastPath) {
 }
 
 TEST_F(ArrayPositionTest, rowWithInstance) {
-  std::vector<std::vector<variant>> data{
-      {variant::row({1, "red"}),
-       variant::row({2, "blue"}),
-       variant::row({3, "green"}),
-       variant::row({1, "red"})},
-      {variant::row({2, "blue"}),
-       variant(TypeKind::ROW), // null
-       variant::row({5, "green"}),
-       variant::row({2, "blue"})},
-      {},
-      {
-          variant(TypeKind::ROW), // null
-      },
-      {
-          variant::row({1, "yellow"}),
-          variant::row({2, "blue"}),
-          variant::row({4, "green"}),
-          variant::row({2, "blue"}),
-          variant::row({2, "blue"}),
-          variant::row({5, "purple"}),
-      },
-  };
+  std::vector<std::vector<std::optional<std::tuple<int32_t, std::string>>>>
+      data = {
+          {{{1, "red"}}, {{2, "blue"}}, {{3, "green"}}, {{1, "red"}}},
+          {{{2, "blue"}}, std::nullopt, {{5, "green"}}, {{2, "blue"}}},
+          {},
+          {std::nullopt},
+          {
+              {{1, "yellow"}},
+              {{2, "blue"}},
+              {{4, "green"}},
+              {{2, "blue"}},
+              {{2, "blue"}},
+              {{5, "purple"}},
+          },
+      };
 
   auto rowType = ROW({INTEGER(), VARCHAR()});
-  auto arrayVector = makeArrayOfRowVector(rowType, data);
+  auto arrayVector = makeArrayOfRowVector2(data, rowType);
   auto size = arrayVector->size();
+
+  LOG(ERROR) << arrayVector->toString();
+  LOG(ERROR) << arrayVector->toString(0, 10);
 
   auto testPositionOfRow =
       [&](int32_t n,
