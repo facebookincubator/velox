@@ -278,6 +278,7 @@ The final state is returned. Throws an error if <code class="docutils literal no
 <dt class="sig sig-object py" id="set_union">
 <span class="sig-name descname"><span class="pre">set_union</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">array(T))</span> <span class="pre">-&gt;</span> <span class="pre">array(T</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#set_union" title="Permalink to this definition">¶</a></dt>
 <dd><p>Returns an array of all the distinct values contained in each array of the input.</p>
+<p>Returns an empty array if all input arrays are NULL.</p>
 <p>Example:</p>
 <div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">SELECT</span> <span class="n">set_union</span><span class="p">(</span><span class="n">elements</span><span class="p">)</span>
 <span class="n">FROM</span> <span class="p">(</span>
