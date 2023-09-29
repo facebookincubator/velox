@@ -29,6 +29,7 @@ add_library(
   ArraySum.cpp
   Comparisons.cpp
   DecimalVectorFunctions.cpp
+  DecimalVectorFunctions.cpp
   ElementAt.cpp
   FilterFunctions.cpp
   FromUnixTime.cpp
