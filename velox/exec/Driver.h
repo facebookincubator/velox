@@ -403,6 +403,7 @@ class Driver : public std::enable_shared_from_this<Driver> {
   friend struct DriverFactory;
 };
 
+#ifdef VELOX_ENABLE_BACKWARD_COMPATIBILITY
 /// Callback used by memory arbitration to check if a driver thread under memory
 /// arbitration has been put in suspension state. This is to prevent arbitration
 /// deadlock as the arbitrator might reclaim memory from the task of the driver
@@ -410,6 +411,7 @@ class Driver : public std::enable_shared_from_this<Driver> {
 /// drivers to go off thread. A suspended driver thread is not counted as
 /// running.
 void driverArbitrationStateCheck(memory::MemoryPool& pool);
+#endif
 
 using OperatorSupplier = std::function<
     std::unique_ptr<Operator>(int32_t operatorId, DriverCtx* ctx)>;

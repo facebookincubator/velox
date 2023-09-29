@@ -830,6 +830,7 @@ std::string Driver::toJsonString() const {
   return folly::toPrettyJson(obj);
 }
 
+#ifdef VELOX_ENABLE_BACKWARD_COMPATIBILITY
 void driverArbitrationStateCheck(memory::MemoryPool& pool) {
   const auto* driverThreadCtx = driverThreadContext();
   if (driverThreadCtx != nullptr) {
@@ -842,6 +843,7 @@ void driverArbitrationStateCheck(memory::MemoryPool& pool) {
     }
   }
 }
+#endif
 
 SuspendedSection::SuspendedSection(Driver* driver) : driver_(driver) {
   if (driver->task()->enterSuspended(driver->state()) != StopReason::kNone) {
