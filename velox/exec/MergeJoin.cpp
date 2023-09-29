@@ -97,26 +97,35 @@ void MergeJoin::initializeFilter(
   names.reserve(numFields);
   types.reserve(numFields);
 
-  // When 'channel' in the 'filter_' is found in 'inputType', first try to add
-  // the projection if it's in 'output_', otherwise, add it to filter input
-  // projections. Finally, add it's name and type to 'names' and 'types'.
+  // This function is called in a loop for all columns used in a filter
+  // expression. For each column, 'channel' specifies column index in the left
+  // or right side of the join input, 'outputs' specifies the mapping from input
+  // columns of that side of the join to the output of the join; 'filters'
+  // specifies the mapping from input columns to the 'filterInput_' for columns
+  // that are not projected to the output.
+  // This function checks whether the column is projected to the output and if
+  // so adds an entry to 'filterInputToOutputChannel_'. Otherwise, adds an entry
+  // to 'filters'.
+  // At the end of the loop each column used in a filter appears either in
+  // filterInputToOutputChannel_ (in case the column is projected to the join
+  // output), filterLeftInputs_ (in case the column is not projected to the join
+  // output and it comes from the left side of the join), filterRightInputs_ (in
+  // case the column is not projected to the join output and it comes from the
+  // right side of the join).
   auto addChannel = [&](column_index_t channel,
                         const std::vector<IdentityProjection>& outputs,
                         std::vector<IdentityProjection>& filters,
                         const RowTypePtr& inputType) {
-    bool inOutputs{false};
+    names.emplace_back(inputType->nameOf(channel));
+    types.emplace_back(inputType->childAt(channel));
+
     for (const auto [inputChannel, outputChannel] : outputs) {
       if (inputChannel == channel) {
         filterInputToOutputChannel_.emplace(filterChannel++, outputChannel);
-        inOutputs = true;
-        break;
+        return;
       }
     }
-    if (!inOutputs) {
-      filters.emplace_back(channel, filterChannel++);
-    }
-    names.emplace_back(inputType->nameOf(channel));
-    types.emplace_back(inputType->childAt(channel));
+    filters.emplace_back(channel, filterChannel++);
   };
 
   for (const auto& field : filter_->expr(0)->distinctFields()) {
@@ -292,16 +301,18 @@ void MergeJoin::prepareOutput() {
     if (filterInput_ != nullptr) {
       for (auto i = 0; i < filterInputType_->size(); ++i) {
         auto& child = filterInput_->childAt(i);
+        // If 'child' is also projected to output, make 'child' to use the same
+        // shared pointer to the output column.
         if (filterInputToOutputChannel_.find(i) !=
             filterInputToOutputChannel_.end()) {
           child = output_->childAt(filterInputToOutputChannel_[i]);
           continue;
         }
 
-        // When filterInput_ contains array or map columns, their child vectors
-        // (elements, keys and values) keep growing after each call to
-        // 'copyRow'. Call BaseVector::resize(0) on these child vectors to avoid
-        // that.
+        // When filterInput_ contains array or map columns that are not
+        // projected to output, their child vectors(elements, keys and values)
+        // keep growing after each call to 'copyRow'. Call BaseVector::resize(0)
+        // on these child vectors to avoid that.
         if (child->typeKind() == TypeKind::ARRAY) {
           child->as<ArrayVector>()->prepareForReuse();
         } else if (child->typeKind() == TypeKind::MAP) {
