@@ -28,45 +28,8 @@ namespace {
 template <typename T>
 using TwoDimVector = std::vector<std::vector<std::optional<T>>>;
 
-template <typename T>
-void appendVariant(std::vector<variant>& values, const T& x) {
-  values.push_back(x);
-};
-
-template <typename TupleT, std::size_t... Is>
-variant toVariantRow(const TupleT& tp, std::index_sequence<Is...>) {
-  std::vector<variant> values;
-  (appendVariant(values, std::get<Is>(tp)), ...);
-  return variant::row(values);
-}
-
-template <typename TupleT, std::size_t TupSize = std::tuple_size_v<TupleT>>
-variant toVariantRow(const TupleT& tp) {
-  return toVariantRow(tp, std::make_index_sequence<TupSize>{});
-}
-
 class ArrayPositionTest : public FunctionBaseTest {
  protected:
-  template <typename TupleT>
-  ArrayVectorPtr makeArrayOfRowVector2(
-      const std::vector<std::vector<std::optional<TupleT>>>& data,
-      const RowTypePtr& rowType) {
-    std::vector<std::vector<variant>> arrays;
-    for (const auto& v : data) {
-      std::vector<variant> elements;
-      for (const auto& u : v) {
-        if (u.has_value()) {
-          elements.push_back(toVariantRow(u.value()));
-        } else {
-          elements.push_back(variant::null(TypeKind::ROW));
-        }
-      }
-      arrays.push_back(elements);
-    }
-
-    return makeArrayOfRowVector(rowType, arrays);
-  }
-
   void evalExpr(
       const std::vector<VectorPtr>& input,
       const std::string& expression,
@@ -400,7 +363,7 @@ TEST_F(ArrayPositionTest, row) {
       };
 
   auto rowType = ROW({INTEGER(), VARCHAR()});
-  auto arrayVector = makeArrayOfRowVector2(data, rowType);
+  auto arrayVector = makeArrayOfRowVector(data, rowType);
   auto size = arrayVector->size();
 
   auto testPositionOfRow =
@@ -709,11 +672,8 @@ TEST_F(ArrayPositionTest, rowWithInstance) {
       };
 
   auto rowType = ROW({INTEGER(), VARCHAR()});
-  auto arrayVector = makeArrayOfRowVector2(data, rowType);
+  auto arrayVector = makeArrayOfRowVector(data, rowType);
   auto size = arrayVector->size();
-
-  LOG(ERROR) << arrayVector->toString();
-  LOG(ERROR) << arrayVector->toString(0, 10);
 
   auto testPositionOfRow =
       [&](int32_t n,
