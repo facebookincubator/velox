@@ -46,8 +46,18 @@ enum class Table : uint8_t {
   TBL_REGION,
 };
 
+static constexpr auto tables = {
+    tpch::Table::TBL_PART,
+    tpch::Table::TBL_SUPPLIER,
+    tpch::Table::TBL_PARTSUPP,
+    tpch::Table::TBL_CUSTOMER,
+    tpch::Table::TBL_ORDERS,
+    tpch::Table::TBL_LINEITEM,
+    tpch::Table::TBL_NATION,
+    tpch::Table::TBL_REGION};
+
 /// Returns table name as a string.
-std::string_view toTableName(Table table);
+StringView toTableName(Table table);
 
 /// Returns the table enum value given a table name.
 Table fromTableName(std::string_view tableName);

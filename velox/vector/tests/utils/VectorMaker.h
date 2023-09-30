@@ -108,11 +108,6 @@ class VectorMaker {
       const std::shared_ptr<const RowType>& rowType,
       vector_size_t size);
 
-  /// Create an RowVector from std::vector<std::vector<variant>>.
-  RowVectorPtr rowVector(
-      const RowTypePtr& rowType,
-      const std::vector<std::vector<variant>>& data);
-
   template <typename T>
   using EvalType = typename CppToType<T>::NativeType;
 

@@ -19,6 +19,7 @@
 
 #include "velox/common/base/Fs.h"
 #include "velox/common/file/FileSystems.h"
+#include "velox/connectors/tpch/TpchConnector.h"
 #include "velox/dwio/parquet/RegisterParquetReader.h"
 #include "velox/exec/tests/utils/AssertQueryBuilder.h"
 #include "velox/exec/tests/utils/HiveConnectorTestBase.h"
@@ -33,6 +34,8 @@
 namespace facebook::velox::exec::test {
 namespace {
 
+static constexpr char const* kTpchConnectorId{"test-tpch"};
+
 class ParquetTpchTestBase : public testing::Test {
  public:
   ParquetTpchTestBase() {}
@@ -42,9 +45,8 @@ class ParquetTpchTestBase : public testing::Test {
   static void SetUpTestSuite() {
     if (duckDb_ == nullptr) {
       duckDb_ = std::make_shared<DuckDbQueryRunner>();
-      constexpr double kTpchScaleFactor = 0.01;
-      duckDb_->initializeTpch(kTpchScaleFactor);
     }
+
     functions::prestosql::registerAllScalarFunctions();
     aggregate::prestosql::registerAllAggregateFunctions();
 
@@ -62,7 +64,11 @@ class ParquetTpchTestBase : public testing::Test {
     std::shared_ptr<memory::MemoryPool> rootPool{
         memory::defaultMemoryManager().addRootPool()};
     std::shared_ptr<memory::MemoryPool> pool{rootPool->addLeafChild("leaf")};
-    vectorMaker_ = std::make_shared<velox::test::VectorMaker>(pool.get());
+    auto tpchConnector =
+        connector::getConnectorFactory(
+            connector::tpch::TpchConnectorFactory::kTpchConnectorName)
+            ->newConnector(kTpchConnectorId, nullptr);
+    connector::registerConnector(tpchConnector);
     saveTpchTablesAsParquet(pool.get());
     tpchBuilder_.initialize(tempDirectory_->path);
   }
@@ -84,30 +90,25 @@ class ParquetTpchTestBase : public testing::Test {
   /// Write TPC-H tables as a Parquet file to temp directory in hive-style
   /// partition
   static void saveTpchTablesAsParquet(memory::MemoryPool* pool) {
-    static constexpr auto tables = {
-        tpch::Table::TBL_PART,
-        tpch::Table::TBL_SUPPLIER,
-        tpch::Table::TBL_PARTSUPP,
-        tpch::Table::TBL_CUSTOMER,
-        tpch::Table::TBL_ORDERS,
-        tpch::Table::TBL_LINEITEM,
-        tpch::Table::TBL_NATION,
-        tpch::Table::TBL_REGION};
-
-    for (const auto& table : tables) {
-      auto tableName = std::string(toTableName(table));
+    for (const auto& table : tpch::tables) {
+      auto tableName = toTableName(table);
       auto tableDirectory =
           fmt::format("{}/{}", tempDirectory_->path, tableName);
-
-      auto tableSchema = velox::tpch::getTableSchema(table);
-      auto query = fmt::format("SELECT * FROM {}", tableName);
-      auto result = duckDb_->executeOrdered(query, tableSchema);
-      auto rows = vectorMaker_->rowVector(tableSchema, result);
+      auto tableSchema = tpch::getTableSchema(table);
+      auto names = tableSchema->names();
       auto plan =
-          PlanBuilder()
-              .values({rows})
-              .tableWrite(tableDirectory, dwio::common::FileFormat::PARQUET)
-              .planNode();
+          PlanBuilder().tableScan(table, std::move(names), 0.01).planNode();
+      auto split =
+          exec::Split(std::make_shared<connector::tpch::TpchConnectorSplit>(
+              kTpchConnectorId, 1, 0));
+
+      auto rows = AssertQueryBuilder(plan).splits({split}).copyResults(pool);
+      duckDb_->createTable(tableName, {rows});
+
+      plan = PlanBuilder()
+                 .values({rows})
+                 .tableWrite(tableDirectory, dwio::common::FileFormat::PARQUET)
+                 .planNode();
 
       AssertQueryBuilder(plan).copyResults(pool);
     }
@@ -145,13 +146,10 @@ class ParquetTpchTestBase : public testing::Test {
   static std::shared_ptr<DuckDbQueryRunner> duckDb_;
   static std::shared_ptr<TempDirectoryPath> tempDirectory_;
   static TpchQueryBuilder tpchBuilder_;
-  static std::shared_ptr<velox::test::VectorMaker> vectorMaker_;
 };
 
 std::shared_ptr<DuckDbQueryRunner> ParquetTpchTestBase::duckDb_ = nullptr;
 std::shared_ptr<TempDirectoryPath> ParquetTpchTestBase::tempDirectory_ =
-    nullptr;
-std::shared_ptr<velox::test::VectorMaker> ParquetTpchTestBase::vectorMaker_ =
     nullptr;
 TpchQueryBuilder ParquetTpchTestBase::tpchBuilder_ =
     TpchQueryBuilder(dwio::common::FileFormat::PARQUET);
