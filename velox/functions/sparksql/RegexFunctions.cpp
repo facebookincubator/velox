@@ -13,6 +13,7 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+#include <re2/stringpiece.h>
 #include "velox/functions/lib/Re2Functions.h"
 #include "velox/functions/lib/RegistrationHelpers.h"
 
@@ -123,46 +124,75 @@ void ensureRegexIsCompatible(
 /// If position <= 0, throw error.
 /// If position > length string, return string.
 template <typename T>
-struct regexReplaceFunction {
+struct RegexReplaceFunction {
   VELOX_DEFINE_FUNCTION_TYPES(T);
 
-  FOLLY_ALWAYS_INLINE bool call(
+  FOLLY_ALWAYS_INLINE void call(
       out_type<Varchar>& result,
-      const arg_type<Varchar>& string,
+      const arg_type<Varchar>& stringInput,
       const arg_type<Varchar>& pattern,
       const arg_type<Varchar>& replace) {
     checkForCompatiblePattern(pattern);
-    re2::RE2 patternRE(toStringPiece(pattern));
-    re2::StringPiece replaceSP = toStringPiece(replace);
-    std::string stringS = std::string(string.data(), string.size());
-    int replacements = RE2::GlobalReplace(&stringS, patternRE, replaceSP);
-    result.resize(stringS.size());
-    std::memcpy(result.data(), stringS.data(), stringS.size());
-    return true;
+
+    re2::RE2* patternRegex = getCachedRegex_(pattern.str());
+    re2::StringPiece replaceStringPiece = toStringPiece(replace);
+
+    std::string string(stringInput.data(), stringInput.size());
+    RE2::GlobalReplace(&string, *patternRegex, replaceStringPiece);
+
+    // Prepare the final result string without unnecessary copying
+    result.resize(string.size());
+    std::memcpy(result.data(), string.data(), string.size());
   }
 
-  FOLLY_ALWAYS_INLINE bool call(
+  FOLLY_ALWAYS_INLINE void call(
       out_type<Varchar>& result,
-      const arg_type<Varchar>& string,
+      const arg_type<Varchar>& stringInput,
       const arg_type<Varchar>& pattern,
       const arg_type<Varchar>& replace,
       const arg_type<int64_t>& position) {
-    VELOX_CHECK(!(position - 1 < 0));
+    VELOX_CHECK_LT(-1, position - 1);
     checkForCompatiblePattern(pattern);
-    re2::RE2 patternRE(toStringPiece(pattern));
-    re2::StringPiece replaceSP = toStringPiece(replace);
-    std::string stringS = std::string(string.data(), string.size());
-    std::string prefix = stringS.substr(0, position - 1);
-    if (position - 1 > stringS.length()) {
-      stringS = "";
-    } else {
-      stringS = stringS.substr(position - 1);
+
+    re2::RE2* patternRegex = getCachedRegex_(pattern.str());
+    re2::StringPiece replaceStringPiece = toStringPiece(replace);
+    re2::StringPiece inputStringPiece(stringInput.data(), stringInput.size());
+
+    const char* prefixEnd = inputStringPiece.data() +
+        std::min(stringInput.size(), static_cast<size_t>(position - 1));
+    re2::StringPiece prefix(
+        inputStringPiece.data(), prefixEnd - inputStringPiece.data());
+
+    re2::StringPiece targetStringPiece(
+        prefixEnd, inputStringPiece.end() - prefixEnd);
+
+    std::string targetString(
+        targetStringPiece.data(), targetStringPiece.size());
+    RE2::GlobalReplace(&targetString, *patternRegex, replaceStringPiece);
+
+    // Prepare the final result string without unnecessary copying
+    result.resize(prefix.size() + targetString.size());
+    std::memcpy(result.data(), prefix.data(), prefix.size());
+    std::memcpy(
+        result.data() + prefix.size(),
+        targetString.data(),
+        targetString.size());
+  }
+
+ private:
+  mutable std::unordered_map<std::string, std::unique_ptr<re2::RE2>>
+      patternCache_;
+
+  re2::RE2* getCachedRegex_(const std::string& pattern) const {
+    auto it = patternCache_.find(pattern);
+    if (it != patternCache_.end()) {
+      return it->second.get();
     }
-    int replacements = RE2::GlobalReplace(&stringS, patternRE, replaceSP);
-    stringS = prefix + stringS;
-    result.resize(stringS.size());
-    std::memcpy(result.data(), stringS.data(), stringS.size());
-    return true;
+
+    auto patternRegex = std::make_unique<re2::RE2>(pattern);
+    auto* rawPatternRegex = patternRegex.get();
+    patternCache_[pattern] = std::move(patternRegex);
+    return rawPatternRegex;
   }
 };
 
@@ -192,10 +222,10 @@ std::shared_ptr<exec::VectorFunction> makeRegexExtract(
 }
 
 void registerRegexReplace(const std::string& prefix) {
-  registerFunction<regexReplaceFunction, Varchar, Varchar, Varchar, Varchar>(
+  registerFunction<RegexReplaceFunction, Varchar, Varchar, Varchar, Varchar>(
       {prefix + "regex_replace"});
   registerFunction<
-      regexReplaceFunction,
+      RegexReplaceFunction,
       Varchar,
       Varchar,
       Varchar,

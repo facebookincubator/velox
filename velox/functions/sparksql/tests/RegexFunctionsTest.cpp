@@ -334,6 +334,10 @@ TEST_F(RegexFunctionsTest, RegexReplaceRegistration) {
   testRegexReplaceSimpleOnce({"abc"}, "a", "teehee", "teeheebc");
 }
 
+TEST_F(RegexFunctionsTest, RegexReplaceEmptyString) {
+  testRegexReplaceSimpleOnce({""}, "empty string", "nothing", "");
+}
+
 TEST_F(RegexFunctionsTest, RegexReplaceSimple) {
   testRegexReplaceSimpleOnce({"Hello World"}, "l", "L", "HeLLo WorLd");
 }
@@ -352,7 +356,7 @@ TEST_F(RegexFunctionsTest, RegexReplaceMatchSparkSqlTestSimple) {
       positions);
 }
 
-TEST_F(RegexFunctionsTest, RegexReplaceEmptyString) {
+TEST_F(RegexFunctionsTest, RegexReplaceWithEmptyString) {
   testRegexReplaceSimpleOnce({"abc"}, "a", "", "bc");
 }
 
