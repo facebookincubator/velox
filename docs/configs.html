@@ -143,6 +143,13 @@ The Drivers are resumed when the buffered size goes below PartitionedOutputBuffe
 <td><p>1000</p></td>
 <td><p>The minimum number of table rows that can trigger the parallel hash join table build.</p></td>
 </tr>
+<tr class="row-even"><td><p>debug.validate_output_from_operators</p></td>
+<td><p>bool</p></td>
+<td><p>false</p></td>
+<td><p>If set to true, then during execution of tasks, the output vectors of every operator are validated for consistency.
+This is an expensive check so should only be used for debugging. It can help debug issues where malformed vector
+cause failures or crashes by helping identify which operator is generating them.</p></td>
+</tr>
 </tbody>
 </table>
 </section>
