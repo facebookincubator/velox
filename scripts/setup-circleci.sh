@@ -111,8 +111,8 @@ cp -a hadoop /usr/local/
 cmake_install gflags -DBUILD_SHARED_LIBS=ON -DBUILD_STATIC_LIBS=ON -DBUILD_gflags_LIB=ON -DLIB_SUFFIX=64 -DCMAKE_INSTALL_PREFIX:PATH=/usr
 cmake_install glog -DBUILD_SHARED_LIBS=ON -DCMAKE_INSTALL_PREFIX:PATH=/usr
 cmake_install snappy -DSNAPPY_BUILD_TESTS=OFF
-cmake_install fmt -DFMT_TEST=OFF
 cmake_install folly -DFOLLY_HAVE_INT128_T=ON
+cmake_install fmt -DFMT_TEST=OFF
 
 cmake_install fizz/fizz -DBUILD_TESTS=OFF
 cmake_install wangle/wangle -DBUILD_TESTS=OFF
