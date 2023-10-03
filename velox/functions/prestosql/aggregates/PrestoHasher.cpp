@@ -267,7 +267,9 @@ void PrestoHasher::hash<TypeKind::ROW>(
     children_[i]->hash(baseRow->childAt(i), elementRows, childHashes);
 
     rows.applyToSelected([&](auto row) {
-      rawHashes[row] = safeHash(rawHashes[row], rowChildHashes[indices[row]]);
+      auto currentHash =
+          baseRow->isNullAt(indices[row]) ? 0 : rowChildHashes[indices[row]];
+      rawHashes[row] = safeHash(rawHashes[row], currentHash);
     });
   }
 }

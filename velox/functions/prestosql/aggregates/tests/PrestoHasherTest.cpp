@@ -320,6 +320,14 @@ TEST_F(PrestoHasherTest, rows) {
        makeNullableFlatVector<int64_t>({std::nullopt, 4})});
 
   assertHash(row, {7113531408683827503, -1169223928725763049});
+
+  // Test hashing RowVector with some nulls in it.
+  row = makeRowVector(
+      {makeFlatVector<int64_t>({1991, 1992}), makeFlatVector<int64_t>({1, 2})},
+      [](auto row) { return row == 1; });
+
+  // Row #1 is null, so the hash value is 31 * 31(see safeHash for more detail).
+  assertHash(row, {-1540705282624379165, 961});
 }
 
 TEST_F(PrestoHasherTest, wrongVectorType) {
