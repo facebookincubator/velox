@@ -560,5 +560,45 @@ TEST_F(RegexFunctionsTest, RegexReplaceMassiveVectors) {
       100000);
 }
 
+TEST_F(RegexFunctionsTest, RegexReplaceCacheLimitTest) {
+  std::vector<std::optional<std::string>> patterns;
+  std::vector<std::optional<std::string>> strings;
+  std::vector<std::optional<std::string>> replaces;
+  std::vector<std::optional<std::string>> expectedOutputs;
+
+  for (int i = 0; i <= kMaxCompiledRegexes; ++i) {
+    patterns.push_back("\\d" + std::to_string(i) + "-\\d" + std::to_string(i));
+    strings.push_back("1" + std::to_string(i) + "-2" + std::to_string(i));
+    replaces.push_back("X" + std::to_string(i) + "-Y" + std::to_string(i));
+    expectedOutputs.push_back(
+        "X" + std::to_string(i) + "-Y" + std::to_string(i));
+  }
+
+  EXPECT_THROW(
+      testingRegexReplaceRowsSimple(
+          strings, patterns, replaces, expectedOutputs),
+      VeloxRuntimeError);
+}
+
+TEST_F(RegexFunctionsTest, RegexReplaceCacheMissLimit) {
+  std::vector<std::optional<std::string>> patterns;
+  std::vector<std::optional<std::string>> strings;
+  std::vector<std::optional<std::string>> replaces;
+  std::vector<std::optional<std::string>> expectedOutputs;
+  std::vector<int64_t> positions;
+
+  for (int i = 0; i <= kMaxCompiledRegexes - 1; ++i) {
+    patterns.push_back("\\d" + std::to_string(i) + "-\\d" + std::to_string(i));
+    strings.push_back("1" + std::to_string(i) + "-2" + std::to_string(i));
+    replaces.push_back("X" + std::to_string(i) + "-Y" + std::to_string(i));
+    expectedOutputs.push_back(
+        "X" + std::to_string(i) + "-Y" + std::to_string(i));
+    positions.push_back(1);
+  }
+
+  testingRegexReplaceRowsSimple(
+      strings, patterns, replaces, expectedOutputs, positions, 50000);
+}
+
 } // namespace
 } // namespace facebook::velox::functions::sparksql

@@ -188,7 +188,7 @@ struct RegexReplaceFunction {
     if (it != patternCache_.end()) {
       return it->second.get();
     }
-
+    VELOX_CHECK_LT(patternCache_.size(), kMaxCompiledRegexes);
     auto patternRegex = std::make_unique<re2::RE2>(pattern);
     auto* rawPatternRegex = patternRegex.get();
     patternCache_[pattern] = std::move(patternRegex);
