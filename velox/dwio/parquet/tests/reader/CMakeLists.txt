@@ -18,8 +18,13 @@ add_test(
   COMMAND velox_dwio_parquet_reader_test
   WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR})
 target_link_libraries(
-  velox_dwio_parquet_reader_test velox_dwio_native_parquet_reader
-  velox_link_libs ${TEST_LINK_LIBS})
+  velox_dwio_parquet_reader_test
+  velox_dwio_native_parquet_reader
+  velox_link_libs
+  velox_exec_test_lib
+  velox_temp_path
+  fmt::fmt
+  ${TEST_LINK_LIBS})
 
 add_executable(velox_dwio_parquet_page_reader_test ParquetPageReaderTest.cpp)
 add_test(
@@ -27,8 +32,13 @@ add_test(
   COMMAND velox_dwio_parquet_page_reader_test
   WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR})
 target_link_libraries(
-  velox_dwio_parquet_page_reader_test velox_dwio_native_parquet_reader
-  velox_link_libs ${TEST_LINK_LIBS})
+  velox_dwio_parquet_page_reader_test
+  velox_dwio_native_parquet_reader
+  velox_link_libs
+  velox_exec_test_lib
+  velox_temp_path
+  fmt::fmt
+  ${TEST_LINK_LIBS})
 
 add_executable(velox_parquet_e2e_filter_test E2EFilterTest.cpp)
 add_test(velox_parquet_e2e_filter_test velox_parquet_e2e_filter_test)

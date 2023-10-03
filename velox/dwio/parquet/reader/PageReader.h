@@ -68,8 +68,8 @@ class PageReader {
         chunkSize_(chunkSize),
         nullConcatenation_(pool_) {}
 
-  common::CompressionKind ThriftCodecToCompressionKind(
-      thrift::CompressionCodec::type codec) const {
+  static common::CompressionKind ThriftCodecToCompressionKind(
+      thrift::CompressionCodec::type codec) {
     switch (codec) {
       case thrift::CompressionCodec::UNCOMPRESSED:
         return common::CompressionKind::CompressionKind_NONE;

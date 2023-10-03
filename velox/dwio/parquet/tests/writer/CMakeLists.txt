@@ -31,3 +31,23 @@ target_link_libraries(
   ${TEST_LINK_LIBS}
   gtest
   fmt::fmt)
+
+add_executable(velox_parquet_writer_test ParquetWriterTest.cpp)
+
+add_test(
+  NAME velox_parquet_writer_test
+  COMMAND velox_parquet_writer_test
+  WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR})
+
+target_link_libraries(
+  velox_parquet_writer_test
+  velox_dwio_parquet_writer
+  velox_dwio_common_test_utils
+  velox_exec_test_lib
+  velox_temp_path
+  Boost::regex
+  velox_link_libs
+  Folly::folly
+  ${TEST_LINK_LIBS}
+  gtest
+  fmt::fmt)

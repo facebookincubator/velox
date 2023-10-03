@@ -16,28 +16,14 @@
 
 #include <utility>
 
-#include "velox/common/base/Fs.h"
-#include "velox/dwio/parquet/tests/ParquetWriterTestBase.h"
-#include "velox/dwio/parquet/writer/Writer.h"
+#include "velox/dwio/parquet/tests/ParquetTestBase.h"
 
 using namespace facebook::velox;
 using namespace facebook::velox::dwio::common;
 using namespace facebook::velox::parquet;
+using namespace facebook::velox::dwio::parquet;
 
-class SinkTest : public ParquetWriterTestBase {
- protected:
-  std::pair<std::unique_ptr<parquet::Writer>, FileSink*>
-  createWriterWithSinkPtr(
-      const std::string& filePath,
-      std::function<std::unique_ptr<DefaultFlushPolicy>()> flushPolicy) {
-    auto sink = createSink(filePath);
-    auto sinkPtr = sink.get();
-    return {createWriter(std::move(sink), std::move(flushPolicy)), sinkPtr};
-  }
-
-  static constexpr uint64_t kRowsInRowGroup = 10'000;
-  static constexpr uint64_t kBytesInRowGroup = 128 * 1'024 * 1'024;
-};
+class SinkTest : public ParquetTestBase {};
 
 TEST_F(SinkTest, close) {
   auto batches = createBatches(ROW({INTEGER(), VARCHAR()}), 2, 3);

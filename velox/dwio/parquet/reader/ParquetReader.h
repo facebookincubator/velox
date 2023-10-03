@@ -119,6 +119,8 @@ class ParquetReader : public dwio::common::Reader {
 
   size_t numberOfRowGroups() const;
 
+  const thrift::FileMetaData& getFileMetaData() const;
+
   std::unique_ptr<dwio::common::RowReader> createRowReader(
       const dwio::common::RowReaderOptions& options = {}) const override;
 

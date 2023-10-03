@@ -782,6 +782,10 @@ size_t ParquetReader::numberOfRowGroups() const {
   return readerBase_->fileMetaData().row_groups.size();
 }
 
+const thrift::FileMetaData& ParquetReader::getFileMetaData() const {
+  return readerBase_->fileMetaData();
+}
+
 std::unique_ptr<dwio::common::RowReader> ParquetReader::createRowReader(
     const dwio::common::RowReaderOptions& options) const {
   return std::make_unique<ParquetRowReader>(readerBase_, options);
