@@ -193,6 +193,7 @@ General Aggregate Functions
 .. function:: set_agg(x) -> array<[same as input]>
 
     Returns an array created from the distinct input ``x`` elements.
+    ``x`` must not contains nulls when it is complex type.
 
 .. function:: set_union(array(T)) -> array(T)
 
