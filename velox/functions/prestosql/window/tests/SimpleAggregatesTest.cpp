@@ -27,7 +27,6 @@ static const std::vector<std::string> kAggregateFunctions = {
     std::string("sum(c2)"),
     std::string("min(c2)"),
     std::string("max(c2)"),
-    std::string("count(c2)"),
     std::string("avg(c2)"),
     std::string("sum(1)")};
 
@@ -129,5 +128,43 @@ TEST_F(StringAggregatesTest, nonFixedWidthAggregate) {
   testWindowFunction(input, "max(c2)", kOverClauses);
 }
 
+class CountAggregateTest : public WindowTestBase {};
+
+TEST_F(CountAggregateTest, basic) {
+  testWindowFunction({makeSimpleVector(10)}, "count(c2)", kOverClauses);
+}
+
+TEST_F(CountAggregateTest, singlePartition) {
+  testWindowFunction(
+      {makeSinglePartitionVector(50), makeSinglePartitionVector(40)},
+      "count(c2)",
+      kOverClauses);
+}
+
+TEST_F(CountAggregateTest, singleRowPartitions) {
+  testWindowFunction(
+      {makeSingleRowPartitionsVector(40)}, "count(c2)", kOverClauses);
+}
+
+TEST_F(CountAggregateTest, emptyFrames) {
+  auto c0 = makeFlatVector<int64_t>({-1, -1, -1, -1, -1, -1, 2, 2, 2, 2});
+  auto c1 = makeFlatVector<double>({-1, -2, -3, -4, -5, -6, -7, -8, -9, -10});
+  auto input = makeRowVector({c0, c1});
+
+  auto expected = makeRowVector(
+      {c0, c1, makeFlatVector<int64_t>({0, 0, 0, 1, 2, 3, 0, 0, 0, 1})});
+  std::string overClause = "partition by c0 order by c1 desc";
+  std::string frameClause = "rows between 6 preceding and 3 preceding";
+  testWindowFunction({input}, "count(c1)", overClause, frameClause, expected);
+
+  expected = makeRowVector(
+      {c0, c1, makeFlatVector<int64_t>({0, 0, 0, 0, 0, 0, 0, 0, 0, 0})});
+  frameClause = "rows between 6 following and unbounded following";
+  testWindowFunction({input}, "count(c1)", overClause, frameClause, expected);
+}
+
+TEST_F(CountAggregateTest, randomInput) {
+  testWindowFunction({makeRandomInputVector(25)}, "count(c2)", kOverClauses);
+}
 }; // namespace
 }; // namespace facebook::velox::window::test

@@ -146,6 +146,16 @@ class WindowTestBase : public exec::test::OperatorTestBase {
       const std::vector<std::string>& frameClauses = {""},
       bool createTable = true);
 
+  /// This function tests the window function for the given overClause and
+  /// frameClause. Asserts that the result is equal to expectedResult, if
+  /// specified. Otherwise asserts that the result matches with DuckDb.
+  void testWindowFunction(
+      const std::vector<RowVectorPtr>& input,
+      const std::string& function,
+      const std::string& overClause,
+      const std::string& frameClause,
+      const RowVectorPtr& expectedResult = nullptr);
+
   /// This function tests the SQL query for the window function and overClause
   /// combination with the input RowVectors. It is expected that query execution
   /// will throw an exception with the errorMessage specified.

@@ -106,6 +106,22 @@ RowVectorPtr WindowTestBase::makeRandomInputVector(vector_size_t size) {
 void WindowTestBase::testWindowFunction(
     const std::vector<RowVectorPtr>& input,
     const std::string& function,
+    const std::string& overClause,
+    const std::string& frameClause,
+    const RowVectorPtr& expectedResult) {
+  auto queryInfo = buildWindowQuery(input, function, overClause, frameClause);
+  SCOPED_TRACE(queryInfo.functionSql);
+  if (expectedResult == nullptr) {
+    // Validate results with DuckDb if expectedResult is not provided.
+    assertQuery(queryInfo.planNode, queryInfo.querySql);
+  } else {
+    assertQuery(queryInfo.planNode, expectedResult);
+  }
+}
+
+void WindowTestBase::testWindowFunction(
+    const std::vector<RowVectorPtr>& input,
+    const std::string& function,
     const std::vector<std::string>& overClauses,
     const std::vector<std::string>& frameClauses,
     bool createTable) {
@@ -114,10 +130,7 @@ void WindowTestBase::testWindowFunction(
   }
   for (const auto& overClause : overClauses) {
     for (auto& frameClause : frameClauses) {
-      auto queryInfo =
-          buildWindowQuery(input, function, overClause, frameClause);
-      SCOPED_TRACE(queryInfo.functionSql);
-      assertQuery(queryInfo.planNode, queryInfo.querySql);
+      testWindowFunction(input, function, overClause, frameClause);
     }
   }
 }
