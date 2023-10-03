@@ -88,26 +88,26 @@ int32_t toDate(std::string_view stringDate) {
 
 } // namespace
 
-StringView toTableName(Table table) {
+std::string_view toTableName(Table table) {
   switch (table) {
     case Table::TBL_PART:
-      return "part"_sv;
+      return "part";
     case Table::TBL_SUPPLIER:
-      return "supplier"_sv;
+      return "supplier";
     case Table::TBL_PARTSUPP:
-      return "partsupp"_sv;
+      return "partsupp";
     case Table::TBL_CUSTOMER:
-      return "customer"_sv;
+      return "customer";
     case Table::TBL_ORDERS:
-      return "orders"_sv;
+      return "orders";
     case Table::TBL_LINEITEM:
-      return "lineitem"_sv;
+      return "lineitem";
     case Table::TBL_NATION:
-      return "nation"_sv;
+      return "nation";
     case Table::TBL_REGION:
-      return "region"_sv;
+      return "region";
   }
-  return ""_sv; // make gcc happy.
+  return ""; // make gcc happy.
 }
 
 Table fromTableName(std::string_view tableName) {

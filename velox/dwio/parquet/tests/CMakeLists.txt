@@ -26,7 +26,8 @@ add_subdirectory(reader)
 add_subdirectory(writer)
 add_subdirectory(thrift)
 
-add_executable(velox_dwio_parquet_tpch_test ParquetTpchTest.cpp)
+add_executable(velox_dwio_parquet_tpch_test ParquetTpchTest.cpp
+                                            ParquetTpchTestBase.cpp)
 add_test(
   NAME velox_dwio_parquet_tpch_test
   COMMAND velox_dwio_parquet_tpch_test

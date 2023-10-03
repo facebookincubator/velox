@@ -57,7 +57,7 @@ static constexpr auto tables = {
     tpch::Table::TBL_REGION};
 
 /// Returns table name as a string.
-StringView toTableName(Table table);
+std::string_view toTableName(Table table);
 
 /// Returns the table enum value given a table name.
 Table fromTableName(std::string_view tableName);
