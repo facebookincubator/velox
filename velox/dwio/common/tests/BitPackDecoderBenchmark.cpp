@@ -39,7 +39,7 @@ static const uint64_t kNumValues = 1024768 * 8;
 
 namespace duckdb {
 
-class ByteBuffer { // on to the 10 thousandth impl
+class ByteBuffer {
  public:
   ByteBuffer() {}
   ByteBuffer(char* ptr, uint64_t len) : ptr(ptr), len(len) {}
@@ -68,15 +68,6 @@ class ByteBuffer { // on to the 10 thousandth impl
     return val;
   }
 
-  void copy_to(char* dest, uint64_t len) {
-    available(len);
-    std::memcpy(dest, ptr, len);
-  }
-
-  void zero() {
-    std::memset(ptr, 0, len);
-  }
-
   void available(uint64_t req_len) {
     if (req_len > len) {
       throw std::runtime_error("Out of buffer");
@@ -86,67 +77,44 @@ class ByteBuffer { // on to the 10 thousandth impl
 
 class ParquetDecodeUtils {
  public:
-  template <class T>
-  static T ZigzagToInt(const T& n) {
-    return (n >> 1) ^ -(n & 1);
-  }
-
-  static const uint64_t BITPACK_MASKS[];
-  static const uint64_t BITPACK_MASKS_SIZE;
-  static const uint8_t BITPACK_DLEN;
+  static const uint64_t kBitpackMasks[];
+  static const uint64_t kBitpackMasksSize;
+  static const uint8_t kBitpackDLen;
 
   template <typename T>
-  static uint32_t BitUnpack(
+  static uint32_t bitUnpack(
       ByteBuffer& buffer,
       uint8_t& bitpack_pos,
       T* dest,
       uint32_t count,
       uint8_t width) {
-    if (width >= ParquetDecodeUtils::BITPACK_MASKS_SIZE) {
+    if (width >= ParquetDecodeUtils::kBitpackMasksSize) {
       throw InvalidInputException(
           "The width (%d) of the bitpacked data exceeds the supported max width (%d), "
           "the file might be corrupted.",
           width,
-          ParquetDecodeUtils::BITPACK_MASKS_SIZE);
+          ParquetDecodeUtils::kBitpackMasksSize);
     }
-    auto mask = BITPACK_MASKS[width];
+    auto mask = kBitpackMasks[width];
 
     for (uint32_t i = 0; i < count; i++) {
       T val = (buffer.get<uint8_t>() >> bitpack_pos) & mask;
       bitpack_pos += width;
-      while (bitpack_pos > BITPACK_DLEN) {
+      while (bitpack_pos > kBitpackDLen) {
         buffer.inc(1);
         val |= (T(buffer.get<uint8_t>())
-                << T(BITPACK_DLEN - (bitpack_pos - width))) &
+                << T(kBitpackDLen - (bitpack_pos - width))) &
             mask;
-        bitpack_pos -= BITPACK_DLEN;
+        bitpack_pos -= kBitpackDLen;
       }
       dest[i] = val;
     }
     return count;
   }
-
-  template <class T>
-  static T VarintDecode(ByteBuffer& buf) {
-    T result = 0;
-    uint8_t shift = 0;
-    while (true) {
-      auto byte = buf.read<uint8_t>();
-      result |= T(byte & 127) << shift;
-      if ((byte & 128) == 0) {
-        break;
-      }
-      shift += 7;
-      if (shift > sizeof(T) * 8) {
-        throw std::runtime_error("Varint-decoding found too large number");
-      }
-    }
-    return result;
-  }
 };
 } // namespace duckdb
 
-const uint64_t duckdb::ParquetDecodeUtils::BITPACK_MASKS[] = {
+const uint64_t duckdb::ParquetDecodeUtils::kBitpackMasks[] = {
     0,
     1,
     3,
@@ -213,10 +181,10 @@ const uint64_t duckdb::ParquetDecodeUtils::BITPACK_MASKS[] = {
     9223372036854775807,
     18446744073709551615ULL};
 
-const uint64_t duckdb::ParquetDecodeUtils::BITPACK_MASKS_SIZE =
-    sizeof(ParquetDecodeUtils::BITPACK_MASKS) / sizeof(uint64_t);
+const uint64_t duckdb::ParquetDecodeUtils::kBitpackMasksSize =
+    sizeof(ParquetDecodeUtils::kBitpackMasks) / sizeof(uint64_t);
 
-const uint8_t duckdb::ParquetDecodeUtils::BITPACK_DLEN = 8;
+const uint8_t duckdb::ParquetDecodeUtils::kBitpackDLen = 8;
 
 // Array of bit packed representations of randomInts_u32. The array at index i
 // is packed i bits wide and the values come from the low bits of
@@ -319,7 +287,7 @@ void duckdbBitUnpack(uint8_t bitWidth, T* result) {
       reinterpret_cast<char*>(bitPackedData[bitWidth].data()),
       BYTES(kNumValues, bitWidth));
   uint8_t bitpack_pos = 0;
-  duckdb::ParquetDecodeUtils::BitUnpack<T>(
+  duckdb::ParquetDecodeUtils::bitUnpack<T>(
       duckInputBuffer, bitpack_pos, result, kNumValues, bitWidth);
 }
 
