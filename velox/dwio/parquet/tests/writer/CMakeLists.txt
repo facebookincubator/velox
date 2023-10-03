@@ -24,6 +24,7 @@ target_link_libraries(
   velox_parquet_writer_sink_test
   velox_dwio_parquet_writer
   velox_dwio_common_test_utils
+  velox_vector_fuzzer
   velox_exec_test_lib
   velox_temp_path
   Boost::regex

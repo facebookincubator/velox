@@ -19,11 +19,8 @@
 #include <gtest/gtest.h>
 #include <string>
 #include "velox/common/base/Fs.h"
-#include "velox/dwio/common/FileSink.h"
-#include "velox/dwio/common/tests/utils/DataFiles.h"
 #include "velox/dwio/parquet/writer/Writer.h"
 #include "velox/exec/tests/utils/TempDirectoryPath.h"
-#include "velox/vector/fuzzer/VectorFuzzer.h"
 
 namespace facebook::velox::parquet {
 

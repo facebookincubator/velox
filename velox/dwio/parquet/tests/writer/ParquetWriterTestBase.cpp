@@ -15,6 +15,8 @@
  */
 
 #include "velox/dwio/parquet/tests/writer/ParquetWriterTestBase.h"
+#include "velox/dwio/common/tests/utils/DataFiles.h"
+#include "velox/vector/fuzzer/VectorFuzzer.h"
 
 namespace facebook::velox::parquet {
 
@@ -49,5 +51,4 @@ std::unique_ptr<Writer> ParquetWriterTestBase::createWriter(
   options.flushPolicyFactory = flushPolicy;
   return std::make_unique<Writer>(std::move(sink), options);
 }
-
 } // namespace facebook::velox::parquet
