@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
-#include "velox/dwio/parquet/tests/ParquetWriterTestBase.h"
+#include "velox/dwio/parquet/tests/writer/ParquetWriterTestBase.h"
 
 namespace facebook::velox::parquet {
 

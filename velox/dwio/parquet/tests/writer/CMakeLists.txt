@@ -13,7 +13,7 @@
 # limitations under the License.
 
 add_executable(velox_parquet_writer_sink_test SinkTests.cpp
-                                              ../ParquetWriterTestBase.cpp)
+                                              ParquetWriterTestBase.cpp)
 
 add_test(
   NAME velox_parquet_writer_sink_test
