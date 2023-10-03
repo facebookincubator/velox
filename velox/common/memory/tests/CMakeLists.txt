@@ -31,9 +31,11 @@ target_link_libraries(
   velox_memory_test
   PRIVATE velox_caching
           velox_common_base
+          velox_core
           velox_exception
           velox_exec
           velox_exec_test_lib
+          velox_hive_connector
           velox_memory
           velox_temp_path
           velox_test_util

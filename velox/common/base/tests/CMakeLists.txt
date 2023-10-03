@@ -37,6 +37,7 @@ target_link_libraries(
           velox_time
           velox_exception
           velox_temp_path
+          velox_type
           Boost::filesystem
           Boost::headers
           Folly::folly
@@ -49,17 +50,8 @@ add_executable(velox_id_map_test IdMapTest.cpp)
 
 add_test(velox_id_map_test velox_id_map_test)
 
-target_link_libraries(
-  velox_id_map_test
-  velox_id_map
-  velox_common_base
-  velox_memory
-  Boost::headers
-  gflags::gflags
-  glog::glog
-  gtest
-  gtest_main
-  pthread)
+target_link_libraries(velox_id_map_test PRIVATE velox_id_map Folly::folly gtest
+                                                gtest_main)
 
 add_executable(velox_memcpy_meter Memcpy.cpp)
 target_link_libraries(

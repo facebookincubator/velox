@@ -45,10 +45,5 @@ endif()
 add_library(velox_id_map BigintIdMap.cpp)
 target_link_libraries(
   velox_id_map
-  velox_memory
-  velox_flag_definitions
-  velox_process
-  glog::glog
-  Folly::folly
-  fmt::fmt
-  gflags::gflags)
+  PUBLIC velox_common_base velox_flag_definitions velox_memory Folly::folly
+  PRIVATE velox_exception)

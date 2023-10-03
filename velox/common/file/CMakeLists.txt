@@ -17,7 +17,7 @@ include_directories(.)
 add_library(velox_file File.cpp FileSystems.cpp Utils.cpp)
 target_link_libraries(
   velox_file
-  PUBLIC velox_exception Folly::folly
+  PUBLIC velox_exception velox_memory Folly::folly
   PRIVATE velox_common_base fmt::fmt glog::glog)
 
 if(${VELOX_BUILD_TESTING})

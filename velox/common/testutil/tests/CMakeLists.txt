@@ -16,11 +16,5 @@ add_executable(velox_test_util_test TestValueTest.cpp SpillConfigTest.cpp)
 gtest_add_tests(velox_test_util_test "" AUTO)
 
 target_link_libraries(
-  velox_test_util_test
-  PRIVATE
-  velox_test_util
-  velox_exception
-  velox_spill_config
-  velox_exec
-  gtest
-  gtest_main)
+  velox_test_util_test PRIVATE velox_core velox_spill_config velox_test_util
+                               gtest gtest_main)
