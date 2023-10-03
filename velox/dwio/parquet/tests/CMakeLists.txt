@@ -15,6 +15,7 @@
 set(TEST_LINK_LIBS
     velox_dwio_common_test_utils
     velox_vector_test_lib
+    velox_vector_fuzzer
     gtest
     gtest_main
     gmock
