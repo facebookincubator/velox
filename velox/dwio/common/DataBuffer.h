@@ -223,14 +223,14 @@ class DataBuffer {
   }
 
   velox::memory::MemoryPool* const pool_;
-  /// The referenced velox buffer. 'buf_' owns the memory when 'veloxRef_' is
-  /// nullptr.
+  // The referenced velox buffer. 'buf_' owns the memory when 'veloxRef_' is
+  // nullptr.
   const velox::BufferPtr veloxRef_{nullptr};
-  /// Buffer storing the items.
+  // Buffer storing the items.
   T* buf_;
-  /// Current number of items of type T.
+  // Current number of items of type T.
   uint64_t size_;
-  /// Maximum capacity of items of type T.
+  // Maximum capacity of items of type T.
   uint64_t capacity_;
 };
 } // namespace common
