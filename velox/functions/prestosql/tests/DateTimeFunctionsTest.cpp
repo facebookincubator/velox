@@ -407,12 +407,12 @@ TEST_F(DateTimeFunctionsTest, fromUnixtime) {
   EXPECT_EQ(Timestamp(-1, 9000), fromUnixtime(-0.999991));
   EXPECT_EQ(Timestamp(4000000000, 0), fromUnixtime(4000000000));
   EXPECT_EQ(
-      Timestamp(9'223'372'036'854'775, 807'000'000), fromUnixtime(3.87111e+37));
+      Timestamp(9'223'372'036'854'774, 807'000'000), fromUnixtime(3.87111e+37));
   // double(123000000) to uint64_t conversion returns 123000144.
   EXPECT_EQ(Timestamp(4000000000, 123000144), fromUnixtime(4000000000.123));
-  EXPECT_EQ(Timestamp(9'223'372'036'854'775, 807'000'000), fromUnixtime(kInf));
+  EXPECT_EQ(Timestamp(9'223'372'036'854'774, 807'000'000), fromUnixtime(kInf));
   EXPECT_EQ(
-      Timestamp(-9'223'372'036'854'776, 192'000'000), fromUnixtime(-kInf));
+      Timestamp(-9'223'372'036'854'775, 192'000'000), fromUnixtime(-kInf));
   EXPECT_EQ(Timestamp(0, 0), fromUnixtime(kNan));
 }
 

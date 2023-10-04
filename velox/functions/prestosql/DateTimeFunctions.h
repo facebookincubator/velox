@@ -408,7 +408,7 @@ struct TimestampMinusIntervalDayTime {
       out_type<IntervalDayTime>& result,
       const arg_type<Timestamp>& a,
       const arg_type<Timestamp>& b) {
-    result = a.toMillis() - b.toMillis();
+    result = checkedMinus(a.toMillis(), b.toMillis());
   }
 };
 

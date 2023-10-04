@@ -48,14 +48,14 @@ struct Timestamp {
   static constexpr int64_t kNanosecondsInMillisecond = 1'000'000;
 
   // Limit the range of seconds to avoid some problems. Seconds should be
-  // in the range [INT64_MIN/1000 - 1, INT64_MAX/1000].
+  // in the range [INT64_MIN/1000, INT64_MAX/1000 -1].
   // Presto's Timestamp is stored in one 64-bit signed integer for
   // milliseconds, this range ensures that Timestamp's range in Velox will not
   // be smaller than Presto, and can make Timestamp::toString work correctly.
   static constexpr int64_t kMaxSeconds =
-      std::numeric_limits<int64_t>::max() / kMillisecondsInSecond;
+      std::numeric_limits<int64_t>::max() / kMillisecondsInSecond - 1;
   static constexpr int64_t kMinSeconds =
-      std::numeric_limits<int64_t>::min() / kMillisecondsInSecond - 1;
+      std::numeric_limits<int64_t>::min() / kMillisecondsInSecond;
 
   // Nanoseconds should be less than 1 second.
   static constexpr uint64_t kMaxNanos = 999'999'999;

@@ -79,12 +79,6 @@ TEST(TimestampTest, arithmeticOverflow) {
 
   Timestamp ts1(positiveSecond, nano);
   VELOX_ASSERT_THROW(
-      ts1.toMillis(),
-      fmt::format(
-          "Could not convert Timestamp({}, {}) to milliseconds",
-          positiveSecond,
-          nano));
-  VELOX_ASSERT_THROW(
       ts1.toMicros(),
       fmt::format(
           "Could not convert Timestamp({}, {}) to microseconds",
@@ -98,12 +92,6 @@ TEST(TimestampTest, arithmeticOverflow) {
           nano));
 
   Timestamp ts2(negativeSecond, 0);
-  VELOX_ASSERT_THROW(
-      ts2.toMillis(),
-      fmt::format(
-          "Could not convert Timestamp({}, {}) to milliseconds",
-          negativeSecond,
-          0));
   VELOX_ASSERT_THROW(
       ts2.toMicros(),
       fmt::format(
@@ -187,8 +175,8 @@ DEBUG_ONLY_TEST(TimestampTest, invalidInput) {
 TEST(TimestampTest, toString) {
   auto kMin = Timestamp(Timestamp::kMinSeconds, 0);
   auto kMax = Timestamp(Timestamp::kMaxSeconds, Timestamp::kMaxNanos);
-  EXPECT_EQ("-292275055-05-16T16:47:04.000000000", kMin.toString());
-  EXPECT_EQ("292278994-08-17T07:12:55.999999999", kMax.toString());
+  EXPECT_EQ("-292275055-05-16T16:47:05.000000000", kMin.toString());
+  EXPECT_EQ("292278994-08-17T07:12:54.999999999", kMax.toString());
   EXPECT_EQ(
       "1-01-01T05:17:32.000000000", Timestamp(-62135577748, 0).toString());
   EXPECT_EQ(
@@ -206,8 +194,8 @@ TEST(TimestampTest, toStringPrestoCastBehavior) {
       .zeroPaddingYear = true,
       .dateTimeSeparator = ' ',
   };
-  EXPECT_EQ("-292275055-05-16 16:47:04.000", kMin.toString(options));
-  EXPECT_EQ("292278994-08-17 07:12:55.999", kMax.toString(options));
+  EXPECT_EQ("-292275055-05-16 16:47:05.000", kMin.toString(options));
+  EXPECT_EQ("292278994-08-17 07:12:54.999", kMax.toString(options));
   EXPECT_EQ(
       "0001-01-01 05:17:32.000", Timestamp(-62135577748, 0).toString(options));
   EXPECT_EQ(
@@ -297,6 +285,13 @@ TEST(TimestampTest, outOfRange) {
       t.toTimePoint(), "Timestamp is outside of supported range");
   VELOX_ASSERT_THROW(
       t.toTimezone(*timezone), "Timestamp is outside of supported range");
+}
+
+TEST(TimestampTest, limts) {
+  // Make sure that Timestamp fits as milliseconds in int64_t.
+  EXPECT_NO_THROW(Timestamp(Timestamp::kMinSeconds, 0).toMillis());
+  EXPECT_NO_THROW(
+      Timestamp(Timestamp::kMaxSeconds, Timestamp::kMaxNanos).toMillis());
 }
 } // namespace
 } // namespace facebook::velox
