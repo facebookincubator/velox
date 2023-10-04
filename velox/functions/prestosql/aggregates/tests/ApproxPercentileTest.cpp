@@ -541,5 +541,19 @@ TEST_F(ApproxPercentileTest, noInput) {
   }
 }
 
+TEST_F(ApproxPercentileTest, nullPercentile) {
+  auto values = makeFlatVector<int32_t>({1, 2, 3, 4});
+  // Array of NULL percentiles.
+  std::vector<std::vector<std::optional<double>>> percentileData = {
+      {std::nullopt}, {std::nullopt}, {std::nullopt}, {std::nullopt}};
+  auto percentile = makeNullableArrayVector<double>(percentileData);
+  auto rows = makeRowVector({values, percentile});
+
+  VELOX_ASSERT_THROW(
+      testAggregations(
+          {rows}, {}, {"approx_percentile(c0, c1)"}, "SELECT NULL"),
+      "Percentile cannot be null");
+}
+
 } // namespace
 } // namespace facebook::velox::aggregate::test
