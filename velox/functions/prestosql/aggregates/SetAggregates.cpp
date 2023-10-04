@@ -199,11 +199,11 @@ class SetBaseAggregate : public exec::Aggregate {
 template <typename T>
 class SetAggAggregate : public SetBaseAggregate<T> {
  public:
-  SetAggAggregate(const TypePtr& resultType, const bool throwOnNestedNulls)
+  explicit SetAggAggregate(
+      const TypePtr& resultType,
+      const bool throwOnNestedNulls = false)
       : SetBaseAggregate<T>(resultType),
         throwOnNestedNulls_(throwOnNestedNulls) {}
-  explicit SetAggAggregate(const TypePtr& resultType)
-      : SetBaseAggregate<T>(resultType), throwOnNestedNulls_(false) {}
 
   using Base = SetBaseAggregate<T>;
 
@@ -219,8 +219,9 @@ class SetAggAggregate : public SetBaseAggregate<T> {
 
     if (throwOnNestedNulls_) {
       DecodedVector decodedElements(*elements, rows);
+      auto indices = decodedElements.indices();
       rows.applyToSelected(
-          [&](vector_size_t i) { checkNulls(decodedElements, i); });
+          [&](vector_size_t i) { checkNulls(decodedElements, indices, i); });
     }
 
     const auto numRows = rows.size();
@@ -261,13 +262,13 @@ class SetAggAggregate : public SetBaseAggregate<T> {
       const std::vector<VectorPtr>& args,
       bool /*mayPushdown*/) override {
     Base::decoded_.decode(*args[0], rows);
-
+    auto indices = Base::decoded_.indices();
     rows.applyToSelected([&](vector_size_t i) {
       auto* group = groups[i];
       Base::clearNull(group);
 
       if (throwOnNestedNulls_) {
-        checkNulls(Base::decoded_, i);
+        checkNulls(Base::decoded_, indices, i);
       }
 
       auto tracker = Base::trackRowSize(group);
@@ -286,9 +287,10 @@ class SetAggAggregate : public SetBaseAggregate<T> {
     auto* accumulator = Base::value(group);
 
     auto tracker = Base::trackRowSize(group);
+    auto indices = Base::decoded_.indices();
     rows.applyToSelected([&](vector_size_t i) {
       if (throwOnNestedNulls_) {
-        checkNulls(Base::decoded_, i);
+        checkNulls(Base::decoded_, indices, i);
       }
 
       accumulator->addValue(Base::decoded_, i, Base::allocator_);
@@ -296,20 +298,21 @@ class SetAggAggregate : public SetBaseAggregate<T> {
   }
 
  private:
-  bool checkNulls(const DecodedVector& decoded, vector_size_t index) const {
+  void checkNulls(
+      const DecodedVector& decoded,
+      const vector_size_t* indices,
+      vector_size_t index) const {
     if (decoded.isNullAt(index)) {
-      return true;
+      return;
     }
 
     if (throwOnNestedNulls_) {
       VELOX_USER_CHECK(
-          !decoded.base()->containsNullAt(index),
+          !decoded.base()->containsNullAt(indices[index]),
           fmt::format(
               "{} comparison not supported for values that contain nulls",
               mapTypeKindToName(decoded.base()->typeKind())));
     }
-
-    return false;
   }
 
   const bool throwOnNestedNulls_;
