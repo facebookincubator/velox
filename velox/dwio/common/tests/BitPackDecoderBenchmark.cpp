@@ -23,12 +23,12 @@
 #endif
 
 #include "velox/external/duckdb/duckdb-fastpforlib.hpp"
-#include "velox/external/duckdb/duckdb-parquetdecodeutils.hpp"
 
 #include <arrow/util/rle_encoding.h>
 #include <folly/Benchmark.h>
 #include <folly/Random.h>
 #include <folly/init/Init.h>
+#include "duckdb.hpp"
 
 using namespace folly;
 using namespace facebook::velox;
@@ -36,6 +36,116 @@ using namespace facebook::velox;
 using RowSet = folly::Range<const facebook::velox::vector_size_t*>;
 
 static const uint64_t kNumValues = 1024768 * 8;
+
+namespace duckdb {
+
+class ByteBuffer { // on to the 10 thousandth impl
+ public:
+  ByteBuffer(){};
+  ByteBuffer(char* ptr, uint64_t len) : ptr(ptr), len(len){};
+
+  char* ptr = nullptr;
+  uint64_t len = 0;
+
+ public:
+  void inc(uint64_t increment) {
+    available(increment);
+    len -= increment;
+    ptr += increment;
+  }
+
+  template <class T>
+  T read() {
+    T val = get<T>();
+    inc(sizeof(T));
+    return val;
+  }
+
+  template <class T>
+  T get() {
+    available(sizeof(T));
+    T val = Load<T>((data_ptr_t)ptr);
+    return val;
+  }
+
+  void copy_to(char* dest, uint64_t len) {
+    available(len);
+    std::memcpy(dest, ptr, len);
+  }
+
+  void zero() {
+    std::memset(ptr, 0, len);
+  }
+
+  void available(uint64_t req_len) {
+    if (req_len > len) {
+      throw std::runtime_error("Out of buffer");
+    }
+  }
+};
+
+class ParquetDecodeUtils {
+ public:
+  template <class T>
+  static T ZigzagToInt(const T n) {
+    return (n >> 1) ^ -(n & 1);
+  }
+
+  static const uint64_t BITPACK_MASKS[];
+  static const uint64_t BITPACK_MASKS_SIZE;
+  static const uint8_t BITPACK_DLEN;
+
+  template <typename T>
+  static uint32_t BitUnpack(
+      ByteBuffer& buffer,
+      uint8_t& bitpack_pos,
+      T* dest,
+      uint32_t count,
+      uint8_t width) {
+    if (width >= ParquetDecodeUtils::BITPACK_MASKS_SIZE) {
+      throw InvalidInputException(
+          "The width (%d) of the bitpacked data exceeds the supported max width (%d), "
+          "the file might be corrupted.",
+          width,
+          ParquetDecodeUtils::BITPACK_MASKS_SIZE);
+    }
+    auto mask = BITPACK_MASKS[width];
+
+    for (uint32_t i = 0; i < count; i++) {
+      T val = (buffer.get<uint8_t>() >> bitpack_pos) & mask;
+      bitpack_pos += width;
+      while (bitpack_pos > BITPACK_DLEN) {
+        buffer.inc(1);
+        val |= (T(buffer.get<uint8_t>())
+                << T(BITPACK_DLEN - (bitpack_pos - width))) &
+            mask;
+        bitpack_pos -= BITPACK_DLEN;
+      }
+      dest[i] = val;
+    }
+    return count;
+  }
+
+  template <class T>
+  static T VarintDecode(ByteBuffer& buf) {
+    T result = 0;
+    uint8_t shift = 0;
+    while (true) {
+      auto byte = buf.read<uint8_t>();
+      result |= T(byte & 127) << shift;
+      if ((byte & 128) == 0) {
+        break;
+      }
+      shift += 7;
+      if (shift > sizeof(T) * 8) {
+        throw std::runtime_error("Varint-decoding found too large number");
+      }
+    }
+    return result;
+  }
+};
+} // namespace duckdb
+
 const uint64_t duckdb::ParquetDecodeUtils::BITPACK_MASKS[] = {
     0,
     1,
