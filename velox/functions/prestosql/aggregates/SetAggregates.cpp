@@ -309,9 +309,8 @@ class SetAggAggregate : public SetBaseAggregate<T> {
     if (throwOnNestedNulls_) {
       VELOX_USER_CHECK(
           !decoded.base()->containsNullAt(indices[index]),
-          fmt::format(
-              "{} comparison not supported for values that contain nulls",
-              mapTypeKindToName(decoded.base()->typeKind())));
+          "{} comparison not supported for values that contain nulls",
+          mapTypeKindToName(decoded.base()->typeKind()));
     }
   }
 
