@@ -480,11 +480,15 @@ class ApproxPercentileAggregate : public exec::Aggregate {
     auto i = decoded.index(0);
     if (decoded.base()->typeKind() == TypeKind::DOUBLE) {
       isArray = false;
-      data =
-          decoded.base()->asUnchecked<ConstantVector<double>>()->rawValues() +
-          i;
+      auto baseVector = decoded.base();
+      if (baseVector->encoding() == VectorEncoding::Simple::FLAT) {
+        data = baseVector->asUnchecked<FlatVector<double>>()->rawValues() + i;
+      } else {
+        // ConstantVector
+        data = baseVector->asUnchecked<ConstantVector<double>>()->rawValues();
+      }
       len = 1;
-      isNull = {false};
+      isNull = {baseVector->isNullAt(i)};
     } else if (decoded.base()->typeKind() == TypeKind::ARRAY) {
       isArray = true;
       auto arrays = decoded.base()->asUnchecked<ArrayVector>();
