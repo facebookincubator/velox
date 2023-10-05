@@ -328,6 +328,57 @@ If <code class="docutils literal notranslate"><span class="pre">index</span></co
 </dd></dl>
 
 <dl class="py function">
+<dt class="sig sig-object py" id="find_first">
+<span class="sig-name descname"><span class="pre">find_first</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">array(T)</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">function(T</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">boolean)</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">T</span></span></span><a class="headerlink" href="#find_first" title="Permalink to this definition">¶</a></dt>
+<dd><p>Returns the first element of <code class="docutils literal notranslate"><span class="pre">array</span></code> that matches the predicate.
+Returns <code class="docutils literal notranslate"><span class="pre">NULL</span></code> if no element matches the predicate.
+Throws if the first matching element is NULL to avoid ambiguous results
+for no-match and first-match-is-null cases.</p>
+</dd></dl>
+
+<dl class="py function">
+<dt class="sig sig-object py" id="id2">
+<span class="sig-name descname"><span class="pre">find_first</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">array(T)</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">index</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">function(T</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">boolean)</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">E</span></span></span><a class="headerlink" href="#id2" title="Permalink to this definition">¶</a></dt>
+<dd><p>Returns the first element of <code class="docutils literal notranslate"><span class="pre">array</span></code> that matches the predicate.
+Returns <code class="docutils literal notranslate"><span class="pre">NULL</span></code> if no element matches the predicate.
+Throws if the first matching element is NULL to avoid ambiguous results
+for no-match and first-match-is-null cases.
+If <code class="docutils literal notranslate"><span class="pre">index</span></code> &gt; 0, the search for element starts at position <code class="docutils literal notranslate"><span class="pre">index</span></code>
+until the end of the array.
+If <code class="docutils literal notranslate"><span class="pre">index</span></code> &lt; 0, the search for element starts at position <code class="docutils literal notranslate"><span class="pre">abs(index)</span></code>
+counting from the end of the array, until the start of the array.</p>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">SELECT</span> <span class="n">find_first</span><span class="p">(</span><span class="n">ARRAY</span><span class="p">[</span><span class="mi">3</span><span class="p">,</span> <span class="mi">4</span><span class="p">,</span> <span class="mi">5</span><span class="p">,</span> <span class="mi">6</span><span class="p">],</span> <span class="mi">2</span><span class="p">,</span> <span class="n">x</span> <span class="o">-&gt;</span> <span class="n">x</span> <span class="o">&gt;</span> <span class="mi">0</span><span class="p">);</span> <span class="o">--</span> <span class="mi">4</span>
+<span class="n">SELECT</span> <span class="n">find_first</span><span class="p">(</span><span class="n">ARRAY</span><span class="p">[</span><span class="mi">3</span><span class="p">,</span> <span class="mi">4</span><span class="p">,</span> <span class="mi">5</span><span class="p">,</span> <span class="mi">6</span><span class="p">],</span> <span class="o">-</span><span class="mi">2</span><span class="p">,</span> <span class="n">x</span> <span class="o">-&gt;</span> <span class="n">x</span> <span class="o">&gt;</span> <span class="mi">0</span><span class="p">);</span> <span class="o">--</span> <span class="mi">5</span>
+<span class="n">SELECT</span> <span class="n">find_first</span><span class="p">(</span><span class="n">ARRAY</span><span class="p">[</span><span class="mi">3</span><span class="p">,</span> <span class="mi">4</span><span class="p">,</span> <span class="mi">5</span><span class="p">,</span> <span class="mi">6</span><span class="p">],</span> <span class="mi">2</span><span class="p">,</span> <span class="n">x</span> <span class="o">-&gt;</span> <span class="n">x</span> <span class="o">&lt;</span> <span class="mi">4</span><span class="p">);</span> <span class="o">--</span> <span class="n">NULL</span>
+<span class="n">SELECT</span> <span class="n">find_first</span><span class="p">(</span><span class="n">ARRAY</span><span class="p">[</span><span class="mi">3</span><span class="p">,</span> <span class="mi">4</span><span class="p">,</span> <span class="mi">5</span><span class="p">,</span> <span class="mi">6</span><span class="p">],</span> <span class="o">-</span><span class="mi">2</span><span class="p">,</span> <span class="n">x</span> <span class="o">-&gt;</span> <span class="n">x</span> <span class="o">&gt;</span> <span class="mi">5</span><span class="p">);</span> <span class="o">--</span> <span class="n">NULL</span>
+</pre></div>
+</div>
+</dd></dl>
+
+<dl class="py function">
+<dt class="sig sig-object py" id="find_first_index">
+<span class="sig-name descname"><span class="pre">find_first_index</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">array(T)</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">function(T</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">boolean)</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">BIGINT</span></span></span><a class="headerlink" href="#find_first_index" title="Permalink to this definition">¶</a></dt>
+<dd><p>Returns the 1-based index of the first element of <code class="docutils literal notranslate"><span class="pre">array</span></code> that matches the predicate.
+Returns <code class="docutils literal notranslate"><span class="pre">NULL</span></code> if no such element exists.</p>
+</dd></dl>
+
+<dl class="py function">
+<dt class="sig sig-object py" id="id3">
+<span class="sig-name descname"><span class="pre">find_first_index</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">array(T)</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">index</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">function(T</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">boolean)</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">BIGINT</span></span></span><a class="headerlink" href="#id3" title="Permalink to this definition">¶</a></dt>
+<dd><p>Returns the 1-based index of the first element of <code class="docutils literal notranslate"><span class="pre">array</span></code> that matches the predicate.
+Returns <code class="docutils literal notranslate"><span class="pre">NULL</span></code> if no such element exists.
+If <code class="docutils literal notranslate"><span class="pre">index</span></code> &gt; 0, the search for element starts at position <code class="docutils literal notranslate"><span class="pre">index</span></code> until the end of the array.
+If <code class="docutils literal notranslate"><span class="pre">index</span></code> &lt; 0, the search for element starts at position <code class="docutils literal notranslate"><span class="pre">abs(index)</span></code> counting from
+the end of the array, until the start of the array.</p>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">SELECT</span> <span class="n">find_first</span><span class="p">(</span><span class="n">ARRAY</span><span class="p">[</span><span class="mi">3</span><span class="p">,</span> <span class="mi">4</span><span class="p">,</span> <span class="mi">5</span><span class="p">,</span> <span class="mi">6</span><span class="p">],</span> <span class="mi">2</span><span class="p">,</span> <span class="n">x</span> <span class="o">-&gt;</span> <span class="n">x</span> <span class="o">&gt;</span> <span class="mi">0</span><span class="p">);</span> <span class="o">--</span> <span class="mi">2</span>
+<span class="n">SELECT</span> <span class="n">find_first</span><span class="p">(</span><span class="n">ARRAY</span><span class="p">[</span><span class="mi">3</span><span class="p">,</span> <span class="mi">4</span><span class="p">,</span> <span class="mi">5</span><span class="p">,</span> <span class="mi">6</span><span class="p">],</span> <span class="o">-</span><span class="mi">2</span><span class="p">,</span> <span class="n">x</span> <span class="o">-&gt;</span> <span class="n">x</span> <span class="o">&gt;</span> <span class="mi">0</span><span class="p">);</span> <span class="o">--</span> <span class="mi">3</span>
+<span class="n">SELECT</span> <span class="n">find_first</span><span class="p">(</span><span class="n">ARRAY</span><span class="p">[</span><span class="mi">3</span><span class="p">,</span> <span class="mi">4</span><span class="p">,</span> <span class="mi">5</span><span class="p">,</span> <span class="mi">6</span><span class="p">],</span> <span class="mi">2</span><span class="p">,</span> <span class="n">x</span> <span class="o">-&gt;</span> <span class="n">x</span> <span class="o">&lt;</span> <span class="mi">4</span><span class="p">);</span> <span class="o">--</span> <span class="n">NULL</span>
+<span class="n">SELECT</span> <span class="n">find_first</span><span class="p">(</span><span class="n">ARRAY</span><span class="p">[</span><span class="mi">3</span><span class="p">,</span> <span class="mi">4</span><span class="p">,</span> <span class="mi">5</span><span class="p">,</span> <span class="mi">6</span><span class="p">],</span> <span class="o">-</span><span class="mi">2</span><span class="p">,</span> <span class="n">x</span> <span class="o">-&gt;</span> <span class="n">x</span> <span class="o">&gt;</span> <span class="mi">5</span><span class="p">);</span> <span class="o">--</span> <span class="n">NULL</span>
+</pre></div>
+</div>
+</dd></dl>
+
+<dl class="py function">
 <dt class="sig sig-object py" id="flatten">
 <span class="sig-name descname"><span class="pre">flatten</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">array(array(T)))</span> <span class="pre">-&gt;</span> <span class="pre">array(T</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#flatten" title="Permalink to this definition">¶</a></dt>
 <dd><p>Flattens an <code class="docutils literal notranslate"><span class="pre">array(array(T))</span></code> to an <code class="docutils literal notranslate"><span class="pre">array(T)</span></code> by concatenating the contained arrays.</p>
