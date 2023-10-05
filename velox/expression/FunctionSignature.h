@@ -90,8 +90,8 @@ class SignatureVariable {
   const std::string name_;
   const std::string constraint_;
   const ParameterType type_;
-  // This property only applies to type variables and indicates if the type
-  // can bind to unknown or not.
+  // The following properties apply only to type variables and indicate whether
+  // the type can bind only to known, orderable or comparable types.
   bool knownTypesOnly_ = false;
   bool orderableTypesOnly_ = false;
   bool comparableTypesOnly_ = false;
@@ -277,7 +277,7 @@ class FunctionSignatureBuilder {
   FunctionSignatureBuilder& knownTypeVariable(const std::string& name);
 
   /// Orderable implies comparable, this method would enable
-  /// comaprableTypesOnly_ too.
+  /// comparableTypesOnly_ too.
   FunctionSignatureBuilder& orderableTypeVariable(const std::string& name);
 
   FunctionSignatureBuilder& comparableTypeVariable(const std::string& name);
@@ -346,7 +346,7 @@ class AggregateFunctionSignatureBuilder {
   AggregateFunctionSignatureBuilder& knownTypeVariable(const std::string& name);
 
   /// Orderable implies comparable, this method would enable
-  /// comaprableTypesOnly_ too.
+  /// comparableTypesOnly_ too.
   AggregateFunctionSignatureBuilder& orderableTypeVariable(
       const std::string& name);
 
