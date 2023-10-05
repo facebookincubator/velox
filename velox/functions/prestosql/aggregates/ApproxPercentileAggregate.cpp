@@ -469,40 +469,49 @@ class ApproxPercentileAggregate : public exec::Aggregate {
     VELOX_CHECK_EQ(argIndex, args.size());
   }
 
+  /// Extract percentile info: the raw data, the length and the null-ness from
+  /// top-level ArrayVector.
+  void extractPercentiles(
+      const ArrayVector* arrays,
+      vector_size_t indexInBaseVector,
+      const double*& data,
+      vector_size_t& len,
+      std::vector<bool>& isNull) {
+    auto elements = arrays->elements()->asFlatVector<double>();
+    auto offset = arrays->offsetAt(indexInBaseVector);
+    data = elements->rawValues() + offset;
+    len = arrays->sizeAt(indexInBaseVector);
+    isNull.resize(len);
+    for (auto index = offset; index < offset + len; index++) {
+      isNull[index - offset] = elements->isNullAt(index);
+    }
+  }
+
   void checkSetPercentile(
       const SelectivityVector& rows,
       const BaseVector& vec) {
     DecodedVector decoded(vec, rows);
+    VELOX_USER_CHECK(
+        decoded.isConstantMapping(),
+        "Percentile argument must be constant for all input rows");
     bool isArray;
     const double* data;
     vector_size_t len;
     std::vector<bool> isNull;
-    auto i = decoded.index(0);
+    auto indexInBaseVector = decoded.index(0);
     if (decoded.base()->typeKind() == TypeKind::DOUBLE) {
       isArray = false;
       auto baseVector = decoded.base();
-      if (baseVector->encoding() == VectorEncoding::Simple::FLAT) {
-        data = baseVector->asUnchecked<FlatVector<double>>()->rawValues() + i;
-      } else {
-        // ConstantVector
-        data = baseVector->asUnchecked<ConstantVector<double>>()->rawValues();
-      }
+      data = baseVector->asUnchecked<ConstantVector<double>>()->rawValues();
       len = 1;
-      isNull = {baseVector->isNullAt(i)};
+      isNull = {baseVector->isNullAt(indexInBaseVector)};
     } else if (decoded.base()->typeKind() == TypeKind::ARRAY) {
       isArray = true;
       auto arrays = decoded.base()->asUnchecked<ArrayVector>();
       VELOX_USER_CHECK(
           arrays->elements()->isFlatEncoding(),
           "Only flat encoding is allowed for percentile array elements");
-      auto elements = arrays->elements()->asFlatVector<double>();
-      auto startIndex = arrays->offsetAt(i);
-      data = elements->rawValues() + startIndex;
-      len = arrays->sizeAt(i);
-      isNull.resize(len);
-      for (auto index = startIndex; index < startIndex + len; index++) {
-        isNull[index - startIndex] = elements->isNullAt(index);
-      }
+      extractPercentiles(arrays, indexInBaseVector, data, len, isNull);
     } else {
       VELOX_USER_FAIL(
           "Incorrect type for percentile: {}", decoded.base()->typeKind());
@@ -514,7 +523,7 @@ class ApproxPercentileAggregate : public exec::Aggregate {
       bool isArray,
       const double* data,
       vector_size_t len,
-      std::vector<bool> isNull) {
+      const std::vector<bool>& isNull) {
     if (!percentiles_) {
       VELOX_USER_CHECK_GT(len, 0, "Percentile cannot be empty");
       percentiles_ = {
@@ -679,28 +688,22 @@ class ApproxPercentileAggregate : public exec::Aggregate {
         return;
       }
       if (!accumulator) {
-        int j = percentiles.index(i);
+        int indexInBaseVector = percentiles.index(i);
         auto percentilesBase = percentiles.base()->asUnchecked<ArrayVector>();
         auto percentileBaseElements =
             percentilesBase->elements()->asFlatVector<double>();
         if constexpr (checkIntermediateInputs) {
           VELOX_USER_CHECK(percentileBaseElements);
-          VELOX_USER_CHECK(!percentilesBase->isNullAt(j));
+          VELOX_USER_CHECK(!percentilesBase->isNullAt(indexInBaseVector));
         }
-        auto rawPercentiles = percentileBaseElements->rawValues();
+
         bool isArray = percentileIsArray->valueAt(i);
-        auto startIndex = percentilesBase->offsetAt(j);
-        auto len = percentilesBase->sizeAt(j);
-        std::vector<bool> isNull(len);
-        if (isArray) {
-          for (auto index = startIndex; index < len + startIndex; index++) {
-            isNull[index - startIndex] =
-                percentileBaseElements->isNullAt(index);
-          }
-        } else {
-          isNull[0] = false;
-        }
-        checkSetPercentile(isArray, rawPercentiles + startIndex, len, isNull);
+        const double* data;
+        vector_size_t len;
+        std::vector<bool> isNull;
+        extractPercentiles(
+            percentilesBase, indexInBaseVector, data, len, isNull);
+        checkSetPercentile(isArray, data, len, isNull);
 
         if (!accuracy->isNullAt(i)) {
           checkSetAccuracy(accuracy->valueAt(i));
