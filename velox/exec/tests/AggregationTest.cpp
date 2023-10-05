@@ -1459,7 +1459,7 @@ TEST_F(AggregationTest, groupingSets) {
   auto plan =
       PlanBuilder()
           .values({data})
-          .groupId({{"k1"}, {"k2"}}, {"a", "b"})
+          .groupId({"k1", "k2"}, {{"k1"}, {"k2"}}, {"a", "b"})
           .singleAggregation(
               {"k1", "k2", "group_id"},
               {"count(1) as count_1", "sum(a) as sum_a", "max(b) as max_b"})
@@ -1474,7 +1474,7 @@ TEST_F(AggregationTest, groupingSets) {
   // group_id column.
   plan = PlanBuilder()
              .values({data})
-             .groupId({{"k1"}, {"k2"}}, {"a", "b"})
+             .groupId({"k1", "k2"}, {{"k1"}, {"k2"}}, {"a", "b"})
              .project(
                  {"k1",
                   "k2",
@@ -1497,14 +1497,15 @@ TEST_F(AggregationTest, groupingSets) {
       "SELECT null, k2, count(1), null, max(b) FROM tmp GROUP BY k2");
 
   // Cube.
-  plan = PlanBuilder()
-             .values({data})
-             .groupId({{"k1", "k2"}, {"k1"}, {"k2"}, {}}, {"a", "b"})
-             .singleAggregation(
-                 {"k1", "k2", "group_id"},
-                 {"count(1) as count_1", "sum(a) as sum_a", "max(b) as max_b"})
-             .project({"k1", "k2", "count_1", "sum_a", "max_b"})
-             .planNode();
+  plan =
+      PlanBuilder()
+          .values({data})
+          .groupId({"k1", "k2"}, {{"k1", "k2"}, {"k1"}, {"k2"}, {}}, {"a", "b"})
+          .singleAggregation(
+              {"k1", "k2", "group_id"},
+              {"count(1) as count_1", "sum(a) as sum_a", "max(b) as max_b"})
+          .project({"k1", "k2", "count_1", "sum_a", "max_b"})
+          .planNode();
 
   assertQuery(
       plan,
@@ -1513,7 +1514,7 @@ TEST_F(AggregationTest, groupingSets) {
   // Rollup.
   plan = PlanBuilder()
              .values({data})
-             .groupId({{"k1", "k2"}, {"k1"}, {}}, {"a", "b"})
+             .groupId({"k1", "k2"}, {{"k1", "k2"}, {"k1"}, {}}, {"a", "b"})
              .singleAggregation(
                  {"k1", "k2", "group_id"},
                  {"count(1) as count_1", "sum(a) as sum_a", "max(b) as max_b"})
@@ -1544,7 +1545,7 @@ TEST_F(AggregationTest, groupingSetsOutput) {
   auto reversedOrderPlan =
       PlanBuilder()
           .values({data})
-          .groupId({{"k2", "k1"}, {}}, {"a", "b"})
+          .groupId({"k2", "k1"}, {{"k2", "k1"}, {}}, {"a", "b"})
           .capturePlanNode(reversedOrderGroupIdNode)
           .singleAggregation(
               {"k2", "k1", "group_id"},
@@ -1555,7 +1556,7 @@ TEST_F(AggregationTest, groupingSetsOutput) {
   auto orderPlan =
       PlanBuilder()
           .values({data})
-          .groupId({{"k1", "k2"}, {}}, {"a", "b"})
+          .groupId({"k1", "k2"}, {{"k1", "k2"}, {}}, {"a", "b"})
           .capturePlanNode(orderGroupIdNode)
           .singleAggregation(
               {"k1", "k2", "group_id"},
@@ -1582,6 +1583,32 @@ TEST_F(AggregationTest, groupingSetsOutput) {
   auto reversedOrderResult = readCursor(reversedOrderParams, [](Task*) {});
 
   assertEqualResults(orderResult.second, reversedOrderResult.second);
+}
+
+TEST_F(AggregationTest, groupingSetsSameKey) {
+  auto data = makeRowVector(
+      {"o_key", "o_status"},
+      {makeFlatVector<int64_t>({0, 1, 2, 3, 4}),
+       makeFlatVector<std::string>({"", "x", "xx", "xxx", "xxxx"})});
+
+  createDuckDbTable({data});
+
+  auto plan = PlanBuilder()
+                  .values({data})
+                  .groupId(
+                      {"o_key", "o_key as o_key_1"},
+                      {{"o_key", "o_key_1"}, {"o_key"}, {"o_key_1"}, {}},
+                      {"o_status"})
+                  .singleAggregation(
+                      {"o_key", "o_key_1", "group_id"},
+                      {"max(o_status) as max_o_status"})
+                  .project({"o_key", "o_key_1", "max_o_status"})
+                  .planNode();
+
+  assertQuery(
+      plan,
+      "SELECT o_key, o_key_1, max(o_status) as max_o_status FROM ("
+      "select o_key, o_key as o_key_1, o_status FROM tmp) GROUP BY GROUPING SETS ((o_key, o_key_1), (o_key), (o_key_1), ())");
 }
 
 TEST_F(AggregationTest, outputBatchSizeCheckWithSpill) {
