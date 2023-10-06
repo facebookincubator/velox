@@ -15,10 +15,10 @@
  */
 
 #include "velox/expression/EvalCtx.h"
-#include <exception>
 #include "velox/common/base/RawVector.h"
 #include "velox/expression/Expr.h"
 #include "velox/expression/PeeledEncoding.h"
+#include "velox/vector/BaseVector.h"
 
 namespace facebook::velox::exec {
 
@@ -273,6 +273,49 @@ VectorPtr EvalCtx::ensureFieldLoaded(
   return field;
 }
 
+namespace {
+// Helper function for addNulls that ensures result is unique and have writable
+// nulls for size.
+// The method should also guarantee that result is not constant since addNulls
+// is not defined for constant vectors.
+void prepareForNullWriting(
+    VectorPtr& result,
+    vector_size_t size,
+    EvalCtx& context) {
+  if (result->isFlatEncoding()) {
+    if (!result.unique() || !result->isNullsWritable()) {
+      BaseVector::ensureWritable(
+          SelectivityVector::empty(), result->type(), context.pool(), result);
+    }
+    if (result->size() < size) {
+      result->resize(size);
+    }
+    return;
+  }
+
+  // Complex types or non-flat encodings, we wrap result in dictionary vector.
+  auto dictionarySize = std::max(size, result->size());
+  auto indices = allocateIndices(dictionarySize, context.pool());
+
+  auto* rawIndices = indices->asMutable<vector_size_t>();
+  for (int i = 0; i < result->size(); i++) {
+    rawIndices[i] = i;
+  }
+
+  BufferPtr nulls = nullptr;
+  if (result->size() < size) {
+    nulls = allocateNulls(dictionarySize, context.pool());
+    auto* mutableNulls = nulls->asMutable<uint64_t>();
+    for (int i = result->size(); i < size; ++i) {
+      bits::setNull(mutableNulls, i, true);
+    }
+  }
+
+  result = BaseVector::wrapInDictionary(
+      nulls, indices, size, result, true /*requireDictionaryOutput*/);
+}
+} // namespace
+
 // static
 void EvalCtx::addNulls(
     const SelectivityVector& rows,
@@ -300,25 +343,7 @@ void EvalCtx::addNulls(
     return;
   }
 
-  if (!result.unique() || !result->isNullsWritable()) {
-    BaseVector::ensureWritable(
-        SelectivityVector::empty(), type, context.pool(), result);
-  }
-
-  if (result->size() < rows.end()) {
-    if (result->encoding() == VectorEncoding::Simple::ROW) {
-      // Avoid calling resize on all children by adding top level nulls only.
-      // We know from the check above that result is unique and isNullsWritable.
-      result->asUnchecked<RowVector>()->appendNulls(
-          rows.end() - result->size());
-    } else {
-      BaseVector::ensureWritable(
-          SelectivityVector::empty(), type, context.pool(), result);
-
-      result->resize(rows.end());
-    }
-  }
-
+  prepareForNullWriting(result, rows.end(), context);
   result->addNulls(rawNulls, rows);
 }
 

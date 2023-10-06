@@ -14,11 +14,14 @@
  * limitations under the License.
  */
 
+#include <cstdint>
 #include <exception>
 #include "gtest/gtest.h"
 
 #include "velox/common/base/tests/GTestUtils.h"
 #include "velox/expression/EvalCtx.h"
+#include "velox/vector/BaseVector.h"
+#include "velox/vector/SelectivityVector.h"
 #include "velox/vector/tests/utils/VectorTestBase.h"
 
 using namespace facebook::velox;
@@ -220,4 +223,98 @@ TEST_F(EvalCtxTest, localSingleRow) {
       ASSERT_FALSE(singleRow->isValid(i));
     }
   }
+}
+
+namespace {
+auto createCopy(const VectorPtr& input) {
+  VectorPtr result;
+  SelectivityVector rows(input->size());
+  BaseVector::ensureWritable(rows, input->type(), input->pool(), result);
+  result->copy(input.get(), rows, nullptr);
+  return result;
+}
+} // namespace
+
+TEST_F(EvalCtxTest, addNullsGenerateValidVectors) {
+  EvalCtx context(&execCtx_);
+
+  // Add nulls to odd indices and verify that addNulls generates valid vectors
+  // and correct nulls.
+  auto runSingleTest = [&](VectorPtr& vector, vector_size_t size) {
+    SelectivityVector rows(size);
+
+    std::vector<bool> previousNullity;
+    for (int i = 0; i < vector->size(); i++) {
+      previousNullity.push_back(vector->isNullAt(i));
+    }
+
+    for (int i = 0; i < rows.size(); i++) {
+      rows.setValid(i, i % 2);
+    }
+
+    context.addNulls(rows, nullptr, context, vector->type(), vector);
+    vector->validate();
+
+    for (int i = 0; i < rows.size(); i++) {
+      if (i % 2) {
+        ASSERT_TRUE(vector->isNullAt(i));
+      } else if (i < previousNullity.size()) {
+        ASSERT_EQ(vector->isNullAt(i), previousNullity[i]);
+      }
+    }
+  };
+
+  auto test = [&](VectorPtr& vector) {
+    // Create a copy and make sure original vector does not change.
+    {
+      auto ptrCopy = vector;
+      auto deepCopy = createCopy(vector);
+      runSingleTest(ptrCopy, ptrCopy->size());
+      runSingleTest(ptrCopy, ptrCopy->size() * 2);
+      runSingleTest(ptrCopy, 1);
+
+      test::assertEqualVectors(deepCopy, vector);
+    }
+
+    runSingleTest(vector, vector->size());
+    runSingleTest(vector, 1);
+    runSingleTest(vector, 2 * vector->size());
+  };
+
+  // Constant null.
+  auto nullConstantVector = makeNullConstant(TypeKind::BIGINT, 10);
+  test(nullConstantVector);
+
+  // Constant not null.
+  auto constantVector = makeConstant<int64_t>(10, 10);
+  test(constantVector);
+
+  // Row vector with top level nulls.
+  VectorPtr rowVector = makeRowVector({makeFlatVector<int32_t>({0, 1, 2})});
+  rowVector->as<RowVector>()->appendNulls(10);
+  test(rowVector);
+
+  // Dictionary row vector with added nulls.
+  auto nulls = makeNulls(rowVector->size() + 100, [&](auto row) {
+    return row >= rowVector->size();
+  });
+  auto indices =
+      makeIndices(rowVector->size() + 100, [&](auto row) { return row; });
+  auto dictionaryVector = BaseVector::wrapInDictionary(
+      nulls, indices, rowVector->size() + 100, rowVector);
+  dictionaryVector->validate();
+  test(dictionaryVector);
+
+  // Array.
+  VectorPtr arrayVector = makeArrayVector<int32_t>({{1, 2}, {2, 3}});
+  test(arrayVector);
+
+  // Map.
+  VectorPtr mapVector =
+      makeMapVector<int64_t, float>({{{8, 2.0 / 6.0}, {9, 3.0 / 6.0}}});
+  test(mapVector);
+
+  // Flat.
+  VectorPtr flatVector = makeFlatVector<int32_t>({1, 2, 3, 4, 5, 6});
+  test(flatVector);
 }

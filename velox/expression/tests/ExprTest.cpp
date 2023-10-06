@@ -3228,11 +3228,12 @@ TEST_F(ExprTest, addNulls) {
   {
     auto vector = makeConstant<int64_t>(100, kSize - 1);
     exec::EvalCtx::addNulls(rows, rawNulls, context, BIGINT(), vector);
-    ASSERT_TRUE(vector->isFlatEncoding());
+    ASSERT_EQ(vector->encoding(), VectorEncoding::Simple::DICTIONARY);
     ASSERT_EQ(vector->size(), kSize);
+    DecodedVector decoded(*vector, vector->size());
     for (auto i = 0; i < kSize - 1; ++i) {
       ASSERT_FALSE(vector->isNullAt(i));
-      ASSERT_EQ(vector->asFlatVector<int64_t>()->valueAt(i), 100);
+      ASSERT_EQ(decoded.valueAt<int64_t>(i), 100);
     }
     ASSERT_TRUE(vector->isNullAt(kSize - 1));
   }

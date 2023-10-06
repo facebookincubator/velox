@@ -130,10 +130,12 @@ VectorPtr BaseVector::wrapInDictionary(
     BufferPtr nulls,
     BufferPtr indices,
     vector_size_t size,
-    VectorPtr vector) {
+    VectorPtr vector,
+    bool requireDictionaryOutput) {
   // Dictionary that doesn't add nulls over constant is same as constant. Just
   // make sure to adjust the size.
-  if (vector->encoding() == VectorEncoding::Simple::CONSTANT && !nulls) {
+  if (!requireDictionaryOutput &&
+      vector->encoding() == VectorEncoding::Simple::CONSTANT && !nulls) {
     if (size == vector->size()) {
       return vector;
     }

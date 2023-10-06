@@ -497,7 +497,8 @@ class BaseVector {
       BufferPtr nulls,
       BufferPtr indices,
       vector_size_t size,
-      VectorPtr vector);
+      VectorPtr vector,
+      bool requireDictionaryOutput = false);
 
   static VectorPtr
   wrapInSequence(BufferPtr lengths, vector_size_t size, VectorPtr vector);
