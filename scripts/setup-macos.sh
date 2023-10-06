@@ -65,6 +65,8 @@ function update_brew {
   BREW_PATH=${BREW_PATH:-$DEFAULT_BREW_PATH}
   $BREW_PATH update --auto-update --verbose
   $BREW_PATH developer off
+  INSTALL_PREFIX=${INSTALL_PREFIX:-$($BREW_PATH --prefix)}
+  echo ${INSTALL_PREFIX}
 }
 
 function install_build_prerequisites {
