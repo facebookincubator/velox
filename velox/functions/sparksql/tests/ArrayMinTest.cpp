@@ -49,11 +49,10 @@ TEST_F(ArrayMinTest, boolean) {
 } // namespace
 
 TEST_F(ArrayMinTest, varchar) {
-  EXPECT_EQ(arrayMin<std::string>({"red"_sv, "blue"_sv}), "blue"_sv);
+  EXPECT_EQ(arrayMin<std::string>({"red", "blue"}), "blue");
   EXPECT_EQ(
-      arrayMin<std::string>(
-          {std::nullopt, "blue"_sv, "yellow"_sv, "orange"_sv}),
-      "blue"_sv);
+      arrayMin<std::string>({std::nullopt, "blue", "yellow", "orange"}),
+      "blue");
   EXPECT_EQ(arrayMin<std::string>({}), std::nullopt);
   EXPECT_EQ(arrayMin<std::string>({std::nullopt}), std::nullopt);
 }
@@ -61,23 +60,22 @@ TEST_F(ArrayMinTest, varchar) {
 // Test non-inlined (> 12 length) nullable strings.
 TEST_F(ArrayMinTest, longVarchar) {
   EXPECT_EQ(
-      arrayMin<std::string>(
-          {"red shiny car ahead"_sv, "blue clear sky above"_sv}),
-      "blue clear sky above"_sv);
+      arrayMin<std::string>({"red shiny car ahead", "blue clear sky above"}),
+      "blue clear sky above");
   EXPECT_EQ(
       arrayMin<std::string>(
           {std::nullopt,
-           "blue clear sky above"_sv,
-           "yellow rose flowers"_sv,
-           "orange beautiful sunset"_sv}),
-      "blue clear sky above"_sv);
+           "blue clear sky above",
+           "yellow rose flowers",
+           "orange beautiful sunset"}),
+      "blue clear sky above");
   EXPECT_EQ(arrayMin<std::string>({}), std::nullopt);
   EXPECT_EQ(
       arrayMin<std::string>(
-          {"red shiny car ahead"_sv,
-           "purple is an elegant color"_sv,
-           "green plants make us happy"_sv}),
-      "green plants make us happy"_sv);
+          {"red shiny car ahead",
+           "purple is an elegant color",
+           "green plants make us happy"}),
+      "green plants make us happy");
 }
 
 TEST_F(ArrayMinTest, date) {

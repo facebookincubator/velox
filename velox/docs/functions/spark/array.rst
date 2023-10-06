@@ -40,17 +40,16 @@ Array Functions
 
 .. function:: array_min(array(E)) -> E
 
-    Returns the minimum value of input array. 
-    The result matches the type of the elements.
-    NULL elements are skipped. If array is empty, or contains only NULL elements, NULL is returned.
-    NaN is greater than any non-NaN elements for double/float type. ::
+    Returns minimum non-NULL element of the array. Returns NULL if array is empty or all elements are NULL.
+    When E is DOUBLE or REAL, NaN value is considered greater than any non-NaN value. ::
 
         SELECT array_min(ARRAY [1, 2, 3]); -- 1
         SELECT array_min(ARRAY [-1, -2, -2]); -- -2
         SELECT array_min(ARRAY [-1, -2, NULL]); -- -2
         SELECT array_min(ARRAY [NULL, NULL]); -- NULL
         SELECT array_min(ARRAY []); -- NULL
-        SELECT array_min(ARRAY [4.0, float('nan')]) -- 4.0
+        SELECT array_min(ARRAY [4.0, float('nan')]); -- 4.0
+        SELECT array_min(ARRAY [NULL, float('nan')]); -- NaN
 
 .. spark:function:: array_sort(array(E)) -> array(E)
 

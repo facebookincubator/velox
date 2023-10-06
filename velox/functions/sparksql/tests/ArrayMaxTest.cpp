@@ -48,11 +48,10 @@ TEST_F(ArrayMaxTest, boolean) {
 }
 
 TEST_F(ArrayMaxTest, varchar) {
-  EXPECT_EQ(arrayMax<std::string>({"red"_sv, "blue"_sv}), "red"_sv);
+  EXPECT_EQ(arrayMax<std::string>({"red", "blue"}), "red");
   EXPECT_EQ(
-      arrayMax<std::string>(
-          {std::nullopt, "blue"_sv, "yellow"_sv, "orange"_sv}),
-      "yellow"_sv);
+      arrayMax<std::string>({std::nullopt, "blue", "yellow", "orange"}),
+      "yellow");
   EXPECT_EQ(arrayMax<std::string>({}), std::nullopt);
   EXPECT_EQ(arrayMax<std::string>({std::nullopt}), std::nullopt);
 }
@@ -60,23 +59,22 @@ TEST_F(ArrayMaxTest, varchar) {
 // Test non-inlined (> 12 length) nullable strings.
 TEST_F(ArrayMaxTest, longVarchar) {
   EXPECT_EQ(
-      arrayMax<std::string>(
-          {"red shiny car ahead"_sv, "blue clear sky above"_sv}),
-      "red shiny car ahead"_sv);
+      arrayMax<std::string>({"red shiny car ahead", "blue clear sky above"}),
+      "red shiny car ahead");
   EXPECT_EQ(
       arrayMax<std::string>(
           {std::nullopt,
-           "blue clear sky above"_sv,
-           "yellow rose flowers"_sv,
-           "orange beautiful sunset"_sv}),
-      "yellow rose flowers"_sv);
+           "blue clear sky above",
+           "yellow rose flowers",
+           "orange beautiful sunset"}),
+      "yellow rose flowers");
   EXPECT_EQ(arrayMax<std::string>({}), std::nullopt);
   EXPECT_EQ(
       arrayMax<std::string>(
-          {"red shiny car ahead"_sv,
-           "purple is an elegant color"_sv,
-           "green plants make us happy"_sv}),
-      "red shiny car ahead"_sv);
+          {"red shiny car ahead",
+           "purple is an elegant color",
+           "green plants make us happy"}),
+      "red shiny car ahead");
 }
 
 TEST_F(ArrayMaxTest, date) {
