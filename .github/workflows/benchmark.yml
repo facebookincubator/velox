@@ -49,15 +49,16 @@ jobs:
       BASELINE_OUTPUT_PATH: "${{ github.workspace }}/benchmark-results/baseline/"
       CONTENDER_OUTPUT_PATH: "${{ github.workspace }}/benchmark-results/contender/"
     steps:
-      - name: "Restore ccache" 
-         uses: actions/cache/restore@v3 
-         id: restore-cache 
-         with: 
-           path: ".ccache" 
-           key: ccache-benchmark-${{ github.sha }} 
-           restore-keys: | 
-             ccache-benchmark- 
-       
+
+      - name: "Restore ccache"
+        uses: actions/cache/restore@v3
+        id: restore-cache
+        with:
+          path: ".ccache"
+          key: ccache-benchmark-${{ github.sha }}
+          restore-keys: |
+            ccache-benchmark-
+
       - name: "Checkout Repo"
         if: ${{ github.event_name == 'pull_request' }}
         uses: actions/checkout@v3
