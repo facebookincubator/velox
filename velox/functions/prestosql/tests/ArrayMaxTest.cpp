@@ -14,6 +14,7 @@
  * limitations under the License.
  */
 
+#include <cmath>
 #include <optional>
 #include "velox/functions/prestosql/tests/utils/FunctionBaseTest.h"
 
@@ -146,9 +147,17 @@ TEST_F(ArrayMaxTest, longVarcharNoNulls) {
 // Test documented example.
 TEST_F(ArrayMaxTest, docs) {
   auto input = makeNullableArrayVector<int32_t>(
-      {{1, 2, 3}, {-1, -2, -2}, {-1, -2, std::nullopt}, {}});
-  auto expected =
-      makeNullableFlatVector<int32_t>({3, -1, std::nullopt, std::nullopt});
+      {{1, 2, 3},
+       {-1, -2, -2},
+       {-1, -2, std::nullopt},
+       {},
+       {-0.0001, -0.0002, -0.0003, std::numeric_limits<double>::quiet_NaN()}});
+  auto expected = makeNullableFlatVector<int32_t>(
+      {3,
+       -1,
+       std::nullopt,
+       std::nullopt,
+       std::numeric_limits<double>::quiet_NaN()});
   testArrayMax(input, expected);
 }
 
@@ -278,6 +287,19 @@ class ArrayMaxFloatingPointTest : public FunctionBaseTest {
          0.0001});
     testArrayMax(input, expected);
   }
+
+  void testNan() {
+    auto input = makeArrayVector<T>(
+        {{std::numeric_limits<T>::lowest(),
+          -0.0001,
+          -0.0002,
+          -0.0003,
+          std::numeric_limits<T>::max(),
+          std::numeric_limits<T>::quiet_NaN()}});
+    auto expected =
+        makeNullableFlatVector<T>({std::numeric_limits<T>::quiet_NaN()});
+    testArrayMax(input, expected);
+  }
 };
 
 } // namespace
@@ -302,4 +324,8 @@ TYPED_TEST(ArrayMaxFloatingPointTest, arrayMaxNullable) {
 
 TYPED_TEST(ArrayMaxFloatingPointTest, arrayMax) {
   this->testNoNulls();
+}
+
+TYPED_TEST(ArrayMaxFloatingPointTest, arrayMaxNan) {
+  this->testNan();
 }

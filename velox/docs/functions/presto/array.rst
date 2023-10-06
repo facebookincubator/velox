@@ -93,21 +93,26 @@ Array Functions
 
 .. function:: array_max(array(E)) -> E
 
-    Returns the maximum value of input array. ::
+    Returns maximum non-NULL element of the array. Returns NULL if array is empty or contains a NULL element.
+    When E is DOUBLE or REAL, returns NaN if any element is NaN. ::
 
         SELECT array_max(ARRAY [1, 2, 3]); -- 3
         SELECT array_max(ARRAY [-1, -2, -2]); -- -1
         SELECT array_max(ARRAY [-1, -2, NULL]); -- NULL
         SELECT array_max(ARRAY []); -- NULL
+        SELECT array_max(ARRAY [-0.0001, -0.0002, -0.0003, nan()]); -- NaN
 
 .. function:: array_min(array(E)) -> E
 
-    Returns the minimum value of input array. ::
+    Returns minimum non-NULL element of the array. Returns NULL if array is empty or contains a NULL element.
+    When E is DOUBLE or REAL, NaN value is considered greater than any non-NaN value. ::
 
         SELECT array_min(ARRAY [1, 2, 3]); -- 1
         SELECT array_min(ARRAY [-1, -2, -2]); -- -2
         SELECT array_min(ARRAY [-1, -2, NULL]); -- NULL
         SELECT array_min(ARRAY []); -- NULL
+        SELECT array_min(ARRAY [4.0, nan()]); -- 4.0
+        SELECT array_min(ARRAY [NULL, nan()]); -- NaN
 
 .. function:: array_normalize(array(E), E) -> array(E)
 

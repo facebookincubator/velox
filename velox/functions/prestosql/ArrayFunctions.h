@@ -28,6 +28,22 @@ struct ArrayMinMaxFunction {
 
   template <typename T>
   void update(T& currentValue, const T& candidateValue) {
+    // NaN is greater than any non-NaN elements for double/float type.
+    if constexpr (std::is_floating_point_v<T>) {
+      if constexpr (isMax) {
+        if (std::isnan(candidateValue) ||
+            (!std::isnan(currentValue) && candidateValue > currentValue)) {
+          currentValue = candidateValue;
+        }
+      } else {
+        if (std::isnan(currentValue) ||
+            (!std::isnan(candidateValue) && candidateValue < currentValue)) {
+          currentValue = candidateValue;
+        }
+      }
+      return;
+    }
+
     if constexpr (isMax) {
       if (candidateValue > currentValue) {
         currentValue = candidateValue;
@@ -45,7 +61,6 @@ struct ArrayMinMaxFunction {
   }
 
   void assign(out_type<Varchar>& out, const arg_type<Varchar>& value) {
-    // TODO: reuse strings once support landed.
     out.resize(value.size());
     if (value.size() != 0) {
       std::memcpy(out.data(), value.data(), value.size());

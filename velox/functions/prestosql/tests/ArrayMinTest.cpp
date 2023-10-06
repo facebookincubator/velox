@@ -70,6 +70,17 @@ class ArrayMinTest : public FunctionBaseTest {
     testExpr<T>(expected, "array_min(C0)", {arrayVector});
   }
 
+  template <typename T>
+  void testFloatNan() {
+    auto input = makeArrayVector<T>(
+        {{-0.0001,
+          -0.0002,
+          std::numeric_limits<T>::max(),
+          std::numeric_limits<T>::quiet_NaN()}});
+    auto expected = makeNullableFlatVector<T>({-0.0002});
+    testExpr<T>(expected, "array_min(C0)", {input});
+  }
+
   void testInLineVarcharNullable() {
     using S = StringView;
 
@@ -168,4 +179,9 @@ TEST_F(ArrayMinTest, varcharArrays) {
 TEST_F(ArrayMinTest, boolArrays) {
   testBoolNullable();
   testBool();
+}
+
+TEST_F(ArrayMinTest, floatWithNanArrays) {
+  testFloatNan<float>();
+  testFloatNan<double>();
 }
