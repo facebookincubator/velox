@@ -81,6 +81,36 @@ The final state is converted into the final result by applying a finish function
 </div>
 </dd></dl>
 
+<dl class="py function">
+<dt class="sig sig-object py" id="array_max">
+<span class="sig-name descname"><span class="pre">array_max</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">array(E)</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">E</span></span></span><a class="headerlink" href="#array_max" title="Permalink to this definition">¶</a></dt>
+<dd><p>Returns maximum non-NULL element of the array. Returns NULL if array is empty or all elements are NULL.
+When E is DOUBLE or REAL, returns NaN if any element is NaN.</p>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">SELECT</span> <span class="n">array_max</span><span class="p">(</span><span class="n">ARRAY</span> <span class="p">[</span><span class="mi">1</span><span class="p">,</span> <span class="mi">2</span><span class="p">,</span> <span class="mi">3</span><span class="p">]);</span> <span class="o">--</span> <span class="mi">3</span>
+<span class="n">SELECT</span> <span class="n">array_max</span><span class="p">(</span><span class="n">ARRAY</span> <span class="p">[</span><span class="o">-</span><span class="mi">1</span><span class="p">,</span> <span class="o">-</span><span class="mi">2</span><span class="p">,</span> <span class="o">-</span><span class="mi">2</span><span class="p">]);</span> <span class="o">--</span> <span class="o">-</span><span class="mi">1</span>
+<span class="n">SELECT</span> <span class="n">array_max</span><span class="p">(</span><span class="n">ARRAY</span> <span class="p">[</span><span class="o">-</span><span class="mi">1</span><span class="p">,</span> <span class="o">-</span><span class="mi">2</span><span class="p">,</span> <span class="n">NULL</span><span class="p">]);</span> <span class="o">--</span> <span class="o">-</span><span class="mi">1</span>
+<span class="n">SELECT</span> <span class="n">array_max</span><span class="p">(</span><span class="n">ARRAY</span> <span class="p">[]);</span> <span class="o">--</span> <span class="n">NULL</span>
+<span class="n">SELECT</span> <span class="n">array_max</span><span class="p">(</span><span class="n">ARRAY</span> <span class="p">[</span><span class="o">-</span><span class="mf">0.0001</span><span class="p">,</span> <span class="o">-</span><span class="mf">0.0002</span><span class="p">,</span> <span class="o">-</span><span class="mf">0.0003</span><span class="p">,</span> <span class="nb">float</span><span class="p">(</span><span class="s1">&#39;nan&#39;</span><span class="p">)]);</span> <span class="o">--</span> <span class="n">NaN</span>
+</pre></div>
+</div>
+</dd></dl>
+
+<dl class="py function">
+<dt class="sig sig-object py" id="array_min">
+<span class="sig-name descname"><span class="pre">array_min</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">array(E)</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">E</span></span></span><a class="headerlink" href="#array_min" title="Permalink to this definition">¶</a></dt>
+<dd><p>Returns minimum non-NULL element of the array. Returns NULL if array is empty or all elements are NULL.
+When E is DOUBLE or REAL, NaN value is considered greater than any non-NaN value.</p>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">SELECT</span> <span class="n">array_min</span><span class="p">(</span><span class="n">ARRAY</span> <span class="p">[</span><span class="mi">1</span><span class="p">,</span> <span class="mi">2</span><span class="p">,</span> <span class="mi">3</span><span class="p">]);</span> <span class="o">--</span> <span class="mi">1</span>
+<span class="n">SELECT</span> <span class="n">array_min</span><span class="p">(</span><span class="n">ARRAY</span> <span class="p">[</span><span class="o">-</span><span class="mi">1</span><span class="p">,</span> <span class="o">-</span><span class="mi">2</span><span class="p">,</span> <span class="o">-</span><span class="mi">2</span><span class="p">]);</span> <span class="o">--</span> <span class="o">-</span><span class="mi">2</span>
+<span class="n">SELECT</span> <span class="n">array_min</span><span class="p">(</span><span class="n">ARRAY</span> <span class="p">[</span><span class="o">-</span><span class="mi">1</span><span class="p">,</span> <span class="o">-</span><span class="mi">2</span><span class="p">,</span> <span class="n">NULL</span><span class="p">]);</span> <span class="o">--</span> <span class="o">-</span><span class="mi">2</span>
+<span class="n">SELECT</span> <span class="n">array_min</span><span class="p">(</span><span class="n">ARRAY</span> <span class="p">[</span><span class="n">NULL</span><span class="p">,</span> <span class="n">NULL</span><span class="p">]);</span> <span class="o">--</span> <span class="n">NULL</span>
+<span class="n">SELECT</span> <span class="n">array_min</span><span class="p">(</span><span class="n">ARRAY</span> <span class="p">[]);</span> <span class="o">--</span> <span class="n">NULL</span>
+<span class="n">SELECT</span> <span class="n">array_min</span><span class="p">(</span><span class="n">ARRAY</span> <span class="p">[</span><span class="mf">4.0</span><span class="p">,</span> <span class="nb">float</span><span class="p">(</span><span class="s1">&#39;nan&#39;</span><span class="p">)]);</span> <span class="o">--</span> <span class="mf">4.0</span>
+<span class="n">SELECT</span> <span class="n">array_min</span><span class="p">(</span><span class="n">ARRAY</span> <span class="p">[</span><span class="n">NULL</span><span class="p">,</span> <span class="nb">float</span><span class="p">(</span><span class="s1">&#39;nan&#39;</span><span class="p">)]);</span> <span class="o">--</span> <span class="n">NaN</span>
+</pre></div>
+</div>
+</dd></dl>
+
 <dl class="spark function">
 <dt class="sig sig-object spark" id="array_sort">
 <span class="sig-name descname"><span class="pre">array_sort</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">array(E))</span> <span class="pre">-&gt;</span> <span class="pre">array(E</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#array_sort" title="Permalink to this definition">¶</a></dt>
