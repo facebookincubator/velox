@@ -11,4 +11,10 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-add_library(velox_common_io INTERFACE)
+find_package(Folly REQUIRED)
+include_directories(${FOLLY_INCLUDE_DIR})
+
+add_library(velox_common_io IoStatistics.h IoStatistics.cpp)
+
+target_link_libraries(velox_common_io Boost::regex Folly::folly
+                      ${FOLLY_BENCHMARK} glog::glog)
