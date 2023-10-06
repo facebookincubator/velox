@@ -24,7 +24,7 @@
 
 #include <folly/dynamic.h>
 
-namespace facebook::velox::io {
+namespace facebook::velox::dwio::common {
 
 struct OperationCounters {
   uint64_t resourceThrottleCount{0};
@@ -143,4 +143,4 @@ class IoStatistics {
   mutable std::mutex operationStatsMutex_;
 };
 
-} // namespace facebook::velox::io
+} // namespace facebook::velox::dwio::common

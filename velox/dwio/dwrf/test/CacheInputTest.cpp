@@ -19,7 +19,6 @@
 #include <folly/executors/IOThreadPoolExecutor.h>
 #include "velox/common/caching/FileIds.h"
 #include "velox/common/file/FileSystems.h"
-#include "velox/common/io/IoStatistics.h"
 #include "velox/common/io/Options.h"
 #include "velox/common/memory/MmapAllocator.h"
 #include "velox/dwio/common/CachedBufferedInput.h"
@@ -209,7 +208,9 @@ class CacheTest : public testing::Test {
       fileIds_.push_back(lease);
       fileIds_.push_back(groupLease);
       auto stream = std::make_shared<TestReadFile>(
-          lease.id(), 1UL << 63, std::make_shared<io::IoStatistics>());
+          lease.id(),
+          1UL << 63,
+          std::make_shared<dwio::common::IoStatistics>());
       pathToInput_[lease.id()] = stream;
       return stream;
     }
@@ -613,7 +614,7 @@ TEST_F(CacheTest, ssdThreads) {
   // We read 4 files on 8 threads. Threads 0 and 1 read file 0, 2 and 3 read
   // file 1 etc. Each tread reads its file 4 times.
   for (int i = 0; i < kNumThreads; ++i) {
-    stats.push_back(std::make_shared<io::IoStatistics>());
+    stats.push_back(std::make_shared<dwio::common::IoStatistics>());
     threads.push_back(std::thread([i, this, threadStats = stats.back()]() {
       for (auto counter = 0; counter < 4; ++counter) {
         readLoop(
@@ -702,7 +703,7 @@ TEST_F(CacheTest, readAhead) {
   // current cache entry of each file is consumed.
 
   for (int threadIndex = 0; threadIndex < kNumThreads; ++threadIndex) {
-    stats.push_back(std::make_shared<io::IoStatistics>());
+    stats.push_back(std::make_shared<dwio::common::IoStatistics>());
     threads.push_back(std::thread([threadIndex,
                                    this,
                                    threadStats = stats.back()]() {

@@ -15,7 +15,6 @@
  */
 #pragma once
 
-#include "velox/common/io/IoStatistics.h"
 #include "velox/connectors/Connector.h"
 #include "velox/connectors/hive/FileHandle.h"
 #include "velox/connectors/hive/HiveConnectorSplit.h"
@@ -153,7 +152,7 @@ class HiveDataSource : public DataSource {
   // name.
   std::unordered_map<std::string, std::shared_ptr<HiveColumnHandle>>
       partitionKeys_;
-  std::shared_ptr<io::IoStatistics> ioStats_;
+  std::shared_ptr<dwio::common::IoStatistics> ioStats_;
   std::shared_ptr<common::ScanSpec> scanSpec_;
   std::shared_ptr<common::MetadataFilter> metadataFilter_;
   dwio::common::RowReaderOptions rowReaderOpts_;

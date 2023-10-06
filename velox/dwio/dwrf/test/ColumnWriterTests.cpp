@@ -1546,7 +1546,7 @@ std::unique_ptr<DwrfReader> getDwrfReader(
   writer.close();
 
   std::string_view data(sinkPtr->data(), sinkPtr->size());
-  dwio::common::ReaderOptions readerOpts{&leafPool};
+  ReaderOptions readerOpts{&leafPool};
   return std::make_unique<DwrfReader>(
       readerOpts,
       std::make_unique<BufferedInput>(
