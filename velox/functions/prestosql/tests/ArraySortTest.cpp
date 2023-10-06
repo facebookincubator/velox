@@ -543,11 +543,10 @@ TEST_F(ArraySortTest, lambda) {
 }
 
 TEST_F(ArraySortTest, failOnMapTypeSort) {
-  static const StringView kErrorMessage =
+  static const std::string kErrorMessage =
       "Scalar function signature is not supported"_sv;
-  auto arrayOfMapVector = BaseVector::createNullConstant(
-      ARRAY(MAP(BIGINT(), VARCHAR())), 8, pool());
-  auto data = makeRowVector({arrayOfMapVector});
+  auto data = makeRowVector({BaseVector::createNullConstant(
+      ARRAY(MAP(BIGINT(), VARCHAR())), 8, pool())});
   auto testFail = [&](const std::string& name) {
     VELOX_ASSERT_THROW(
         evaluate(fmt::format("{}(c0, x -> x)", name), data), kErrorMessage);
