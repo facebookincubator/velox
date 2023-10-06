@@ -543,18 +543,25 @@ TEST_F(ArraySortTest, lambda) {
 }
 
 TEST_F(ArraySortTest, failOnMapTypeSort) {
-  auto data = makeRowVector({makeAllNullMapVector(10, INTEGER(), VARCHAR())});
-  auto testFail = [&](const std::string& name, const std::string& lambdaExpr) {
+  static const StringView kErrorMessage =
+      "Scalar function signature is not supported"_sv;
+  std::vector<std::pair<std::string, std::optional<int64_t>>> a{
+      {"a", {1}}, {"b", {2}}};
+  std::vector<std::pair<std::string, std::optional<int64_t>>> b{
+      {"c", {3}}, {"d", {4}}};
+  auto arrayOfMapVector =
+      makeArrayOfMapVector<std::string, int64_t>({{a, b}, {std::nullopt}});
+  auto data = makeRowVector({arrayOfMapVector});
+  auto testFail = [&](const std::string& name) {
     VELOX_ASSERT_THROW(
-        evaluate(fmt::format("{}(c0, {})", name, lambdaExpr), data),
-        "(1 vs. 0)");
+        evaluate(fmt::format("{}(c0, {})", name, "x -> x"), data),
+        kErrorMessage);
     VELOX_ASSERT_THROW(
-        evaluate(fmt::format("{}(c0)", name), data),
-        "Scalar function signature is not supported");
+        evaluate(fmt::format("{}(c0)", name), data), kErrorMessage);
   };
 
-  testFail("array_sort", "x -> x");
-  testFail("array_sort_desc", "x -> x");
+  testFail("array_sort");
+  testFail("array_sort_desc");
 }
 
 VELOX_INSTANTIATE_TEST_SUITE_P(
