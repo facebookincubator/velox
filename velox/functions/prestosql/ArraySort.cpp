@@ -374,14 +374,14 @@ std::vector<std::shared_ptr<exec::FunctionSignature>> signatures(
   std::vector<std::shared_ptr<exec::FunctionSignature>> signatures = {
       // array(T) -> array(T)
       exec::FunctionSignatureBuilder()
-          .typeVariable("T")
+          .orderableTypeVariable("T")
           .returnType("array(T)")
           .argumentType("array(T)")
           .build(),
       // array(T), function(T,U), boolean -> array(T)
       exec::FunctionSignatureBuilder()
           .typeVariable("T")
-          .typeVariable("U")
+          .orderableTypeVariable("U")
           .returnType("array(T)")
           .argumentType("array(T)")
           .constantArgumentType("function(T,U)")
