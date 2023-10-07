@@ -471,7 +471,7 @@ class ApproxPercentileAggregate : public exec::Aggregate {
 
   /// Extract percentile info: the raw data, the length and the null-ness from
   /// top-level ArrayVector.
-  void extractPercentiles(
+  static void extractPercentiles(
       const ArrayVector* arrays,
       vector_size_t indexInBaseVector,
       const double*& data,
@@ -502,7 +502,8 @@ class ApproxPercentileAggregate : public exec::Aggregate {
     if (decoded.base()->typeKind() == TypeKind::DOUBLE) {
       isArray = false;
       auto baseVector = decoded.base();
-      data = baseVector->asUnchecked<ConstantVector<double>>()->rawValues();
+      data = baseVector->asUnchecked<ConstantVector<double>>()->rawValues() +
+          indexInBaseVector;
       len = 1;
       isNull = {baseVector->isNullAt(indexInBaseVector)};
     } else if (decoded.base()->typeKind() == TypeKind::ARRAY) {
