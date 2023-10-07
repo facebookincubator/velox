@@ -638,7 +638,7 @@ TEST_F(ParquetReaderTest, prefetchRowGroups) {
   const std::string sample(getExampleFilePath("multiple_row_groups.parquet"));
   const int numRowGroups = 4;
 
-  ReaderOptions readerOptions{defaultPool.get()};
+  facebook::velox::dwio::common::ReaderOptions readerOptions{defaultPool.get()};
   // Disable preload of file.
   readerOptions.setFilePreloadThreshold(0);
 
@@ -647,7 +647,10 @@ TEST_F(ParquetReaderTest, prefetchRowGroups) {
   // 4: Exactly as total number of row groups.
   // 10: More than total number of row groups.
   const std::vector<int> numPrefetchRowGroups{
-      ReaderOptions::kDefaultPrefetchRowGroups, 2, 4, 10};
+      facebook::velox::dwio::common::ReaderOptions::kDefaultPrefetchRowGroups,
+      2,
+      4,
+      10};
   for (auto numPrefetch : numPrefetchRowGroups) {
     readerOptions.setPrefetchRowGroups(numPrefetch);
 
