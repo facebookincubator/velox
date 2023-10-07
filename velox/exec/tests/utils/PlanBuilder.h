@@ -721,6 +721,11 @@ class PlanBuilder {
   ///  rows between a + 10 preceding and 10 following)"
   PlanBuilder& window(const std::vector<std::string>& windowFunctions);
 
+  /// Adds WindowNode to compute window functions over pre-sorted inputs.
+  /// All functions must use same partition by and sorting keys and input must
+  /// be already sorted on these.
+  PlanBuilder& streamingWindow(const std::vector<std::string>& windowFunctions);
+
   /// Add a RowNumberNode to compute single row_number window function with an
   /// optional limit and no sorting.
   PlanBuilder& rowNumber(
@@ -840,6 +845,12 @@ class PlanBuilder {
       const std::vector<std::string>& masks,
       core::AggregationNode::Step step,
       const std::vector<TypePtr>& resultTypes);
+
+  /// Create WindowNode based on whether input is sorted and then compute the
+  /// window functions.
+  PlanBuilder& window(
+      const std::vector<std::string>& windowFunctions,
+      bool inputSorted);
 
  protected:
   core::PlanNodePtr planNode_;
