@@ -581,8 +581,8 @@ void ReaderBase::scheduleRowGroups(
   for (auto counter = 0; counter < FLAGS_parquet_prefetch_rowgroups;
        ++counter) {
     if (nextGroup) {
-      if (inputs_.count(nextGroup) != 0) {
-        inputs_[nextGroup] = reader.loadRowGroup(thisGroup, input_);
+      if (inputs_.count(nextGroup) == 0) {
+        inputs_[nextGroup] = reader.loadRowGroup(nextGroup, input_);
       }
     } else {
       break;
@@ -730,7 +730,6 @@ bool ParquetRowReader::advanceToNextRowGroup() {
     return false;
   }
 
-  auto nextRowGroupIndex = rowGroupIds_[nextRowGroupIdsIdx_];
   readerBase_->scheduleRowGroups(
       rowGroupIds_,
       nextRowGroupIdsIdx_,
@@ -739,7 +738,7 @@ bool ParquetRowReader::advanceToNextRowGroup() {
   rowsInCurrentRowGroup_ = currentRowGroupPtr_->num_rows;
   currentRowInGroup_ = 0;
   nextRowGroupIdsIdx_++;
-  columnReader_->seekToRowGroup(nextRowGroupIndex);
+  columnReader_->seekToRowGroup(rowGroupIds_[nextRowGroupIdsIdx_]);
   return true;
 }
 
