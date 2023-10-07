@@ -730,6 +730,7 @@ bool ParquetRowReader::advanceToNextRowGroup() {
     return false;
   }
 
+  auto nextRowGroupIndex = rowGroupIds_[nextRowGroupIdsIdx_];
   readerBase_->scheduleRowGroups(
       rowGroupIds_,
       nextRowGroupIdsIdx_,
@@ -738,7 +739,7 @@ bool ParquetRowReader::advanceToNextRowGroup() {
   rowsInCurrentRowGroup_ = currentRowGroupPtr_->num_rows;
   currentRowInGroup_ = 0;
   nextRowGroupIdsIdx_++;
-  columnReader_->seekToRowGroup(rowGroupIds_[nextRowGroupIdsIdx_]);
+  columnReader_->seekToRowGroup(nextRowGroupIndex);
   return true;
 }
 
