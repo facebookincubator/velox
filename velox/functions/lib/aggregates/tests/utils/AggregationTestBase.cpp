@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
-#include "velox/functions/lib/aggregates/tests/AggregationTestBase.h"
+#include "velox/functions/lib/aggregates/tests/utils/AggregationTestBase.h"
 #include "velox/common/base/tests/GTestUtils.h"
 
 #include "velox/common/file/FileSystems.h"
