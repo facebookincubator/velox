@@ -18,6 +18,9 @@ add_library(velox_functions_aggregates SingleValueAccumulator.cpp
 target_link_libraries(velox_functions_aggregates velox_exec
                       velox_presto_serializer Folly::folly)
 
-if(${VELOX_BUILD_TESTING})
-  add_subdirectory(tests)
+# Currently there is no test under tests folder, so it looks
+# a little strange here, when there is tests under tests directory
+# we need to rewrite this if condition.
+if(${VELOX_BUILD_TESTING} OR ${VELOX_BUILD_TEST_UTILS})
+  add_subdirectory(tests/utils)
 endif()
