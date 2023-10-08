@@ -13,6 +13,8 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+
+#include "velox/functions/prestosql/aggregates/Compare.h"
 #include "velox/functions/prestosql/aggregates/MapAggregateBase.h"
 
 namespace facebook::velox::aggregate::prestosql {
@@ -46,8 +48,9 @@ class MapAggAggregate : public MapAggregateBase<K> {
     if (throwOnNestedNulls_) {
       DecodedVector decodedKeys(*keys, rows);
       auto indices = decodedKeys.indices();
-      rows.applyToSelected(
-          [&](vector_size_t i) { checkNulls(decodedKeys, indices, i); });
+      rows.applyToSelected([&](vector_size_t i) {
+        checkNestedNulls(decodedKeys, indices, i, throwOnNestedNulls_);
+      });
     }
 
     // Convert input to a single-entry map. Convert entries with null keys to
@@ -102,7 +105,8 @@ class MapAggAggregate : public MapAggregateBase<K> {
     auto indices = Base::decodedKeys_.indices();
 
     rows.applyToSelected([&](vector_size_t row) {
-      if (checkNulls(Base::decodedKeys_, indices, row)) {
+      if (checkNestedNulls(
+              Base::decodedKeys_, indices, row, throwOnNestedNulls_)) {
         return;
       }
 
@@ -127,7 +131,8 @@ class MapAggAggregate : public MapAggregateBase<K> {
 
     auto tracker = Base::trackRowSize(group);
     rows.applyToSelected([&](vector_size_t row) {
-      if (checkNulls(Base::decodedKeys_, indices, row)) {
+      if (checkNestedNulls(
+              Base::decodedKeys_, indices, row, throwOnNestedNulls_)) {
         return;
       }
 
@@ -138,24 +143,6 @@ class MapAggAggregate : public MapAggregateBase<K> {
   }
 
  private:
-  bool checkNulls(
-      const DecodedVector& decoded,
-      const vector_size_t* indices,
-      vector_size_t index) const {
-    if (decoded.isNullAt(index)) {
-      return true;
-    }
-
-    if (throwOnNestedNulls_) {
-      VELOX_USER_CHECK(
-          !decoded.base()->containsNullAt(indices[index]),
-          "{} comparison not supported for values that contain nulls",
-          mapTypeKindToName(decoded.base()->typeKind()));
-    }
-
-    return false;
-  }
-
   const bool throwOnNestedNulls_;
 };
 
