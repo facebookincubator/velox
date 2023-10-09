@@ -16,14 +16,13 @@
 
 #include "velox/connectors/hive/HiveDataSource.h"
 
-#include <string>
-#include <unordered_map>
-
-#include "velox/dwio/common/CachedBufferedInput.h"
-#include "velox/dwio/common/DirectBufferedInput.h"
+#include "velox/connectors/hive/HiveConfig.h"
 #include "velox/dwio/common/ReaderFactory.h"
 #include "velox/expression/ExprToSubfieldFilter.h"
 #include "velox/expression/FieldReference.h"
+
+#include <string>
+#include <unordered_map>
 
 namespace facebook::velox::connector::hive {
 
@@ -358,18 +357,13 @@ HiveDataSource::HiveDataSource(
         std::string,
         std::shared_ptr<connector::ColumnHandle>>& columnHandles,
     FileHandleFactory* fileHandleFactory,
-    core::ExpressionEvaluator* expressionEvaluator,
-    cache::AsyncDataCache* cache,
-    const std::string& scanId,
     folly::Executor* executor,
-    const dwio::common::ReaderOptions& options)
-    : fileHandleFactory_(fileHandleFactory),
-      readerOpts_(options),
-      pool_(&options.getMemoryPool()),
+    ConnectorQueryCtx* connectorQueryCtx)
+    : pool_(connectorQueryCtx->memoryPool()),
       outputType_(outputType),
-      expressionEvaluator_(expressionEvaluator),
-      cache_(cache),
-      scanId_(scanId),
+      expressionEvaluator_(connectorQueryCtx->expressionEvaluator()),
+      fileHandleFactory_(fileHandleFactory),
+      connectorQueryCtx_(connectorQueryCtx),
       executor_(executor) {
   // Column handled keyed on the column alias, the name used in the query.
   for (const auto& [canonicalizedName, columnHandle] : columnHandles) {
@@ -410,7 +404,8 @@ HiveDataSource::HiveDataSource(
   VELOX_CHECK(
       hiveTableHandle_ != nullptr,
       "TableHandle must be an instance of HiveTableHandle");
-  if (readerOpts_.isFileColumnNamesReadAsLowerCase()) {
+  if (HiveConfig::isFileColumnNamesReadAsLowerCase(
+          connectorQueryCtx->config())) {
     checkColumnNameLowerCase(outputType_);
     checkColumnNameLowerCase(hiveTableHandle_->subfieldFilters());
     checkColumnNameLowerCase(hiveTableHandle_->remainingFilter());
@@ -474,62 +469,20 @@ HiveDataSource::HiveDataSource(
         *scanSpec_, *remainingFilter, expressionEvaluator_);
   }
 
-  readerOpts_.setFileSchema(hiveTableHandle_->dataColumns());
   ioStats_ = std::make_shared<io::IoStatistics>();
-}
-
-inline uint8_t parseDelimiter(const std::string& delim) {
-  for (char const& ch : delim) {
-    if (!std::isdigit(ch)) {
-      return delim[0];
-    }
-  }
-  return stoi(delim);
-}
-
-void HiveDataSource::parseSerdeParameters(
-    const std::unordered_map<std::string, std::string>& serdeParameters) {
-  auto fieldIt = serdeParameters.find(dwio::common::SerDeOptions::kFieldDelim);
-  if (fieldIt == serdeParameters.end()) {
-    fieldIt = serdeParameters.find("serialization.format");
-  }
-  auto collectionIt =
-      serdeParameters.find(dwio::common::SerDeOptions::kCollectionDelim);
-  if (collectionIt == serdeParameters.end()) {
-    // For collection delimiter, Hive 1.x, 2.x uses "colelction.delim", but
-    // Hive 3.x uses "collection.delim".
-    // See: https://issues.apache.org/jira/browse/HIVE-16922)
-    collectionIt = serdeParameters.find("colelction.delim");
-  }
-  auto mapKeyIt =
-      serdeParameters.find(dwio::common::SerDeOptions::kMapKeyDelim);
-
-  if (fieldIt == serdeParameters.end() &&
-      collectionIt == serdeParameters.end() &&
-      mapKeyIt == serdeParameters.end()) {
-    return;
-  }
-
-  uint8_t fieldDelim = '\1';
-  uint8_t collectionDelim = '\2';
-  uint8_t mapKeyDelim = '\3';
-  if (fieldIt != serdeParameters.end()) {
-    fieldDelim = parseDelimiter(fieldIt->second);
-  }
-  if (collectionIt != serdeParameters.end()) {
-    collectionDelim = parseDelimiter(collectionIt->second);
-  }
-  if (mapKeyIt != serdeParameters.end()) {
-    mapKeyDelim = parseDelimiter(mapKeyIt->second);
-  }
-  dwio::common::SerDeOptions serDeOptions(
-      fieldDelim, collectionDelim, mapKeyDelim);
-  readerOpts_.setSerDeOptions(serDeOptions);
 }
 
 std::unique_ptr<SplitReader> HiveDataSource::createSplitReader() {
   return SplitReader::create(
-      split_, readerOutputType_, partitionKeys_, scanSpec_, pool_);
+      split_,
+      hiveTableHandle_,
+      scanSpec_,
+      readerOutputType_,
+      &partitionKeys_,
+      fileHandleFactory_,
+      executor_,
+      connectorQueryCtx_,
+      ioStats_);
 }
 
 void HiveDataSource::addSplit(std::shared_ptr<ConnectorSplit> split) {
@@ -541,30 +494,12 @@ void HiveDataSource::addSplit(std::shared_ptr<ConnectorSplit> split) {
 
   VLOG(1) << "Adding split " << split_->toString();
 
-  if (readerOpts_.getFileFormat() != dwio::common::FileFormat::UNKNOWN) {
-    VELOX_CHECK(
-        readerOpts_.getFileFormat() == split_->fileFormat,
-        "HiveDataSource received splits of different formats: {} and {}",
-        toString(readerOpts_.getFileFormat()),
-        toString(split_->fileFormat));
-  } else {
-    parseSerdeParameters(split_->serdeParameters);
-    readerOpts_.setFileFormat(split_->fileFormat);
-  }
-
-  auto fileHandle = fileHandleFactory_->generate(split_->filePath).second;
-  auto input = createBufferedInput(*fileHandle, readerOpts_);
-
   if (splitReader_) {
     splitReader_.reset();
   }
+
   splitReader_ = createSplitReader();
-  splitReader_->prepareSplit(
-      hiveTableHandle_,
-      readerOpts_,
-      std::move(input),
-      metadataFilter_,
-      runtimeStats_);
+  splitReader_->prepareSplit(metadataFilter_, runtimeStats_);
 }
 
 std::optional<RowVectorPtr> HiveDataSource::next(
@@ -786,33 +721,6 @@ std::shared_ptr<common::ScanSpec> HiveDataSource::makeScanSpec(
   }
 
   return spec;
-}
-
-std::unique_ptr<dwio::common::BufferedInput>
-HiveDataSource::createBufferedInput(
-    const FileHandle& fileHandle,
-    const dwio::common::ReaderOptions& readerOpts) {
-  if (cache_) {
-    return std::make_unique<dwio::common::CachedBufferedInput>(
-        fileHandle.file,
-        dwio::common::MetricsLog::voidLog(),
-        fileHandle.uuid.id(),
-        cache_,
-        Connector::getTracker(scanId_, readerOpts.loadQuantum()),
-        fileHandle.groupId.id(),
-        ioStats_,
-        executor_,
-        readerOpts);
-  }
-  return std::make_unique<dwio::common::DirectBufferedInput>(
-      fileHandle.file,
-      dwio::common::MetricsLog::voidLog(),
-      fileHandle.uuid.id(),
-      Connector::getTracker(scanId_, readerOpts.loadQuantum()),
-      fileHandle.groupId.id(),
-      ioStats_,
-      executor_,
-      readerOpts);
 }
 
 vector_size_t HiveDataSource::evaluateRemainingFilter(RowVectorPtr& rowVector) {

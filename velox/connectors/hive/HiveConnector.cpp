@@ -75,27 +75,14 @@ std::unique_ptr<DataSource> HiveConnector::createDataSource(
         std::string,
         std::shared_ptr<connector::ColumnHandle>>& columnHandles,
     ConnectorQueryCtx* connectorQueryCtx) {
-  dwio::common::ReaderOptions options(connectorQueryCtx->memoryPool());
-  options.setMaxCoalesceBytes(
-      HiveConfig::maxCoalescedBytes(connectorQueryCtx->config()));
-  options.setMaxCoalesceDistance(
-      HiveConfig::maxCoalescedDistanceBytes(connectorQueryCtx->config()));
-  options.setFileColumnNamesReadAsLowerCase(
-      HiveConfig::isFileColumnNamesReadAsLowerCase(
-          connectorQueryCtx->config()));
-  options.setUseColumnNamesForColumnMapping(
-      HiveConfig::isOrcUseColumnNames(connectorQueryCtx->config()));
 
   return std::make_unique<HiveDataSource>(
       outputType,
       tableHandle,
       columnHandles,
       &fileHandleFactory_,
-      connectorQueryCtx->expressionEvaluator(),
-      connectorQueryCtx->cache(),
-      connectorQueryCtx->scanId(),
       executor_,
-      options);
+      connectorQueryCtx);
 }
 
 std::unique_ptr<DataSink> HiveConnector::createDataSink(
