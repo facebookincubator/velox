@@ -75,7 +75,6 @@ std::unique_ptr<DataSource> HiveConnector::createDataSource(
         std::string,
         std::shared_ptr<connector::ColumnHandle>>& columnHandles,
     ConnectorQueryCtx* connectorQueryCtx) {
-
   return std::make_unique<HiveDataSource>(
       outputType,
       tableHandle,

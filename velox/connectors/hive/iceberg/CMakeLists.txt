@@ -11,10 +11,17 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-include(GoogleTest)
-add_executable(velox_test_util_test TestValueTest.cpp SpillConfigTest.cpp)
-gtest_add_tests(velox_test_util_test "" AUTO)
+
+add_library(velox_hive_iceberg_splitreader
+            IcebergSplitReader.cpp IcebergSplit.cpp DeleteFileReader.cpp)
 
 target_link_libraries(
-  velox_test_util_test PRIVATE velox_test_util velox_exception
-                               velox_spill_config velox_exec gtest gtest_main)
+  velox_hive_iceberg_splitreader
+  Folly::folly
+  gflags::gflags
+  glog::glog
+  gtest
+  gtest_main
+  xsimd)
+
+add_subdirectory(tests)

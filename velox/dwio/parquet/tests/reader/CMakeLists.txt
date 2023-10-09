@@ -43,6 +43,7 @@ target_link_libraries(
   ZLIB::ZLIB
   ${TEST_LINK_LIBS})
 
+message(STATUS "velox_hive_connector_libs ${velox_hive_connector_libs}")
 add_executable(velox_dwio_parquet_reader_benchmark ParquetReaderBenchmark.cpp)
 target_link_libraries(
   velox_dwio_parquet_reader_benchmark
