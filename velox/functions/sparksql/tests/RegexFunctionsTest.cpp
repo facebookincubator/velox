@@ -577,7 +577,7 @@ TEST_F(RegexFunctionsTest, RegexReplaceCacheLimitTest) {
   EXPECT_THROW(
       testingRegexReplaceRowsSimple(
           strings, patterns, replaces, expectedOutputs),
-      VeloxRuntimeError);
+      VeloxUserError);
 }
 
 TEST_F(RegexFunctionsTest, RegexReplaceCacheMissLimit) {

@@ -13,11 +13,11 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+#include <folly/container/F14Map.h>
 #include <re2/stringpiece.h>
+#include "velox/common/base/Exceptions.h"
 #include "velox/functions/lib/Re2Functions.h"
 #include "velox/functions/lib/RegistrationHelpers.h"
-
-#include "velox/common/base/Exceptions.h"
 
 namespace facebook::velox::functions::sparksql {
 namespace {
@@ -25,18 +25,8 @@ namespace {
 using ::re2::RE2;
 
 template <typename T>
-re2::StringPiece toStringPiece(const T& s) {
-  return re2::StringPiece(s.data(), s.size());
-}
-
-// If v is a non-null constant vector, returns the constant value. Otherwise
-// returns nullopt.
-template <typename T>
-std::optional<T> getIfConstant(const BaseVector& v) {
-  if (v.isConstantEncoding() && !v.isNullAt(0)) {
-    return v.as<ConstantVector<T>>()->valueAt(0);
-  }
-  return std::nullopt;
+re2::StringPiece toStringPiece(const T& string) {
+  return re2::StringPiece(string.data(), string.size());
 }
 
 void checkForBadPattern(const RE2& re) {
@@ -94,7 +84,7 @@ void checkForCompatiblePattern(
 // Blocks patterns that contain character class union, intersection, or
 // difference because these are not understood by RE2 and will be parsed as a
 // different pattern than in java.util.regex.
-void ensureRegexIsCompatible(
+void ensureRegexIsConstantAndCompatible(
     const char* functionName,
     const VectorPtr& patternVector) {
   if (!patternVector ||
@@ -127,25 +117,27 @@ template <typename T>
 struct RegexReplaceFunction {
   VELOX_DEFINE_FUNCTION_TYPES(T);
 
-  FOLLY_ALWAYS_INLINE void call(
+  void call(
       out_type<Varchar>& result,
       const arg_type<Varchar>& stringInput,
       const arg_type<Varchar>& pattern,
       const arg_type<Varchar>& replace) {
     checkForCompatiblePattern(pattern);
 
-    re2::RE2* patternRegex = getCachedRegex_(pattern.str());
+    re2::RE2* patternRegex = getCachedRegex(pattern.str());
     re2::StringPiece replaceStringPiece = toStringPiece(replace);
 
     std::string string(stringInput.data(), stringInput.size());
     RE2::GlobalReplace(&string, *patternRegex, replaceStringPiece);
 
     // Prepare the final result string without unnecessary copying
-    result.resize(string.size());
-    std::memcpy(result.data(), string.data(), string.size());
+    if (string.size()) {
+      result.resize(string.size());
+      std::memcpy(result.data(), string.data(), string.size());
+    }
   }
 
-  FOLLY_ALWAYS_INLINE void call(
+  void call(
       out_type<Varchar>& result,
       const arg_type<Varchar>& stringInput,
       const arg_type<Varchar>& pattern,
@@ -154,7 +146,7 @@ struct RegexReplaceFunction {
     VELOX_CHECK_LT(-1, position - 1);
     checkForCompatiblePattern(pattern);
 
-    re2::RE2* patternRegex = getCachedRegex_(pattern.str());
+    re2::RE2* patternRegex = getCachedRegex(pattern.str());
     re2::StringPiece replaceStringPiece = toStringPiece(replace);
     re2::StringPiece inputStringPiece(stringInput.data(), stringInput.size());
 
@@ -171,29 +163,35 @@ struct RegexReplaceFunction {
     RE2::GlobalReplace(&targetString, *patternRegex, replaceStringPiece);
 
     // Prepare the final result string without unnecessary copying
-    result.resize(prefix.size() + targetString.size());
-    std::memcpy(result.data(), prefix.data(), prefix.size());
-    std::memcpy(
-        result.data() + prefix.size(),
-        targetString.data(),
-        targetString.size());
+    if (targetString.size() || prefix.size()) {
+      result.resize(prefix.size() + targetString.size());
+      std::memcpy(result.data(), prefix.data(), prefix.size());
+      std::memcpy(
+          result.data() + prefix.size(),
+          targetString.data(),
+          targetString.size());
+    }
   }
 
  private:
-  mutable std::unordered_map<std::string, std::unique_ptr<re2::RE2>>
-      patternCache_;
-
-  re2::RE2* getCachedRegex_(const std::string& pattern) const {
+  re2::RE2* getCachedRegex(const std::string& pattern) const {
     auto it = patternCache_.find(pattern);
     if (it != patternCache_.end()) {
       return it->second.get();
     }
-    VELOX_CHECK_LT(patternCache_.size(), kMaxCompiledRegexes);
+    VELOX_USER_CHECK_LT(
+        patternCache_.size(),
+        kMaxCompiledRegexes,
+        "regex_replace hit the maximum number of unique regexes: kMaxCompiledRegexes");
     auto patternRegex = std::make_unique<re2::RE2>(pattern);
     auto* rawPatternRegex = patternRegex.get();
-    patternCache_[pattern] = std::move(patternRegex);
+    checkForBadPattern(*rawPatternRegex);
+    patternCache_.emplace(pattern, std::move(patternRegex));
     return rawPatternRegex;
   }
+
+  mutable folly::F14FastMap<std::string, std::unique_ptr<re2::RE2>>
+      patternCache_;
 };
 
 } // namespace
@@ -208,7 +206,7 @@ std::shared_ptr<exec::VectorFunction> makeRLike(
     const core::QueryConfig& config) {
   // Return any errors from re2Search() first.
   auto result = makeRe2Search(name, inputArgs, config);
-  ensureRegexIsCompatible("RLIKE", inputArgs[1].constantValue);
+  ensureRegexIsConstantAndCompatible("RLIKE", inputArgs[1].constantValue);
   return result;
 }
 
@@ -217,7 +215,8 @@ std::shared_ptr<exec::VectorFunction> makeRegexExtract(
     const std::vector<exec::VectorFunctionArg>& inputArgs,
     const core::QueryConfig& config) {
   auto result = makeRe2Extract(name, inputArgs, config, /*emptyNoMatch=*/true);
-  ensureRegexIsCompatible("REGEXP_EXTRACT", inputArgs[1].constantValue);
+  ensureRegexIsConstantAndCompatible(
+      "REGEXP_EXTRACT", inputArgs[1].constantValue);
   return result;
 }
 

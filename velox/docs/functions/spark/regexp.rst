@@ -38,6 +38,7 @@ See https://github.com/google/re2/wiki/Syntax for more information.
 .. spark:function:: regex_replace(string, pattern, overwrite) -> varchar
 
     Replaces all substrings in ``string`` that match the regular expression ``pattern`` with the string ``overwrite``. If no match is found, the original string is returned as is.
+    There is a limit to the number of unique regexes to be compiled per function call (kMaxCompiledRegexes defined in velox/functions/lib/Re2Functions.h).
 
     Parameters:
 
