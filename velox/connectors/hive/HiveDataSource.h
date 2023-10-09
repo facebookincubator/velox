@@ -143,9 +143,9 @@ class HiveDataSource : public DataSource {
   SelectivityVector filterRows_;
   exec::FilterEvalCtx filterEvalCtx_;
 
-  FileHandleFactory* fileHandleFactory_;
-  const ConnectorQueryCtx* const connectorQueryCtx_;
-  folly::Executor* executor_;
+  FileHandleFactory* const fileHandleFactory_;
+  ConnectorQueryCtx* const connectorQueryCtx_;
+  folly::Executor* const executor_;
 };
 
 } // namespace facebook::velox::connector::hive

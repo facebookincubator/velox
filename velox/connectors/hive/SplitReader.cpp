@@ -19,13 +19,14 @@
 #include "velox/connectors/hive/HiveConfig.h"
 #include "velox/connectors/hive/HiveConnectorSplit.h"
 #include "velox/connectors/hive/TableHandle.h"
+#include "velox/connectors/hive/iceberg/IcebergSplitReader.h"
 #include "velox/dwio/common/CachedBufferedInput.h"
 #include "velox/dwio/common/DirectBufferedInput.h"
 #include "velox/dwio/common/Options.h"
 #include "velox/dwio/common/ReaderFactory.h"
 
 #include <folly/Conv.h>
-#include <gtest/gtest.h>
+// #include <gtest/gtest.h>
 
 #include <string>
 #include <unordered_map>
@@ -145,19 +146,34 @@ std::unique_ptr<SplitReader> SplitReader::create(
     std::unordered_map<std::string, std::shared_ptr<HiveColumnHandle>>*
         partitionKeys,
     FileHandleFactory* fileHandleFactory,
+    ConnectorQueryCtx* connectorQueryCtx,
     folly::Executor* executor,
-    const ConnectorQueryCtx* connectorQueryCtx,
     std::shared_ptr<io::IoStatistics> ioStats) {
-  return std::make_unique<SplitReader>(
-      hiveSplit,
-      hiveTableHandle,
-      scanSpec,
-      readerOutputType,
-      partitionKeys,
-      fileHandleFactory,
-      executor,
-      connectorQueryCtx,
-      ioStats);
+  //  Create the SplitReader based on hiveSplit->customSplitInfo["table_format"]
+  if (hiveSplit->customSplitInfo["table_format"] == "hive_iceberg") {
+    return std::make_unique<iceberg::IcebergSplitReader>(
+        hiveSplit,
+        hiveTableHandle,
+        scanSpec,
+        readerOutputType,
+        partitionKeys,
+        fileHandleFactory,
+
+        connectorQueryCtx,
+        executor,
+        ioStats);
+  } else {
+    return std::make_unique<SplitReader>(
+        hiveSplit,
+        hiveTableHandle,
+        scanSpec,
+        readerOutputType,
+        partitionKeys,
+        fileHandleFactory,
+        connectorQueryCtx,
+        executor,
+        ioStats);
+  }
 }
 
 SplitReader::SplitReader(
@@ -168,8 +184,8 @@ SplitReader::SplitReader(
     std::unordered_map<std::string, std::shared_ptr<HiveColumnHandle>>*
         partitionKeys,
     FileHandleFactory* fileHandleFactory,
+    ConnectorQueryCtx* connectorQueryCtx,
     folly::Executor* executor,
-    const ConnectorQueryCtx* connectorQueryCtx,
     std::shared_ptr<io::IoStatistics> ioStats)
     : hiveSplit_(hiveSplit),
       hiveTableHandle_(hiveTableHandle),
@@ -177,8 +193,8 @@ SplitReader::SplitReader(
       readerOutputType_(readerOutputType),
       partitionKeys_(partitionKeys),
       fileHandleFactory_(fileHandleFactory),
-      executor_(executor),
       connectorQueryCtx_(connectorQueryCtx),
+      executor_(executor),
       ioStats_(ioStats),
       baseReaderOpts_(connectorQueryCtx->memoryPool()) {}
 

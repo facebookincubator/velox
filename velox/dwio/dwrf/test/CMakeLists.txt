@@ -347,6 +347,7 @@ add_test(velox_dwrf_e2e_filter_test velox_dwrf_e2e_filter_test)
 target_link_libraries(
   velox_dwrf_e2e_filter_test
   velox_e2e_filter_test_base
+  velox_hive_connector
   velox_link_libs
   velox_test_util
   Folly::folly
