@@ -63,9 +63,12 @@ class GroupingSet {
   bool hasOutput();
 
   /// Called if partial aggregation has reached memory limit or if hasOutput()
-  /// returns true.
+  /// returns true. 'maxOutputRows' and 'maxOutputBytes' specify the max number
+  /// of rows/bytes to return in 'result' respectively. The function stops
+  /// producing output if it exceeds either limit.
   bool getOutput(
-      int32_t batchSize,
+      int32_t maxOutputRows,
+      int32_t maxOutputBytes,
       RowContainerIterator& iterator,
       RowVectorPtr& result);
 
@@ -105,6 +108,9 @@ class GroupingSet {
     return spiller_->stats();
   }
 
+  /// Returns true if spilling has triggered on this grouping set.
+  bool hasSpilled() const;
+
   /// Returns the hashtable stats.
   HashTableStats hashTableStats() const {
     return table_ ? table_->stats() : HashTableStats{};
@@ -125,6 +131,10 @@ class GroupingSet {
 
   /// Returns an estimate of the average row size.
   std::optional<int64_t> estimateRowSize() const;
+
+  memory::MemoryPool& testingPool() const {
+    return pool_;
+  }
 
  private:
   void addInputForActiveRows(const RowVectorPtr& input, bool mayPushdown);
@@ -164,15 +174,22 @@ class GroupingSet {
 
   // Produces output in if spilling has occurred. First produces data
   // from non-spilled partitions, then merges spill runs and unspilled data
-  // form spilled partitions. Returns nullptr when at end. 'batchSize' specifies
-  // the max number of output rows in 'result'.
-  bool getOutputWithSpill(int32_t batchSize, const RowVectorPtr& result);
+  // form spilled partitions. Returns nullptr when at end. 'maxOutputRows' and
+  // 'maxOutputBytes' specifies the max number of output rows and bytes in
+  // 'result'.
+  bool getOutputWithSpill(
+      int32_t maxOutputRows,
+      int32_t maxOutputBytes,
+      const RowVectorPtr& result);
 
   // Reads rows from the current spilled partition until producing a batch of
   // final results in 'result'. Returns false and leaves 'result' empty when
-  // the partition is fully read. 'batchSize' specifies the max number of output
-  // rows in 'result'.
-  bool mergeNext(int32_t batchSize, const RowVectorPtr& result);
+  // the partition is fully read. 'maxOutputRows' and 'maxOutputBytes' specify
+  // the max number of output rows and bytes in 'result'.
+  bool mergeNext(
+      int32_t maxOutputRows,
+      int32_t maxOutputBytes,
+      const RowVectorPtr& result);
 
   // Initializes a new row in 'mergeRows' with the keys from the
   // current element from 'keys'. Accumulators are left in the initial
@@ -200,6 +217,14 @@ class GroupingSet {
   // 'excludeToIntermediate' is true, skip the functions that support
   // 'toIntermediate'.
   std::vector<Accumulator> accumulators(bool excludeToIntermediate);
+
+  // Calculates the number of groups to extract from 'rowsWhileReadingSpill_'
+  // container with rows starting at 'nonSpilledIndex_' in 'nonSpilledRows_'.
+  // 'maxOutputRows' and 'maxOutputBytes' specifies the max number of groups and
+  // bytes to extract.
+  size_t numNonSpilledGroupsToExtract(
+      int32_t maxOutputRows,
+      int32_t maxOutputBytes) const;
 
   std::vector<column_index_t> keyChannels_;
 
@@ -290,14 +315,14 @@ class GroupingSet {
   std::optional<Spiller::SpillRows> nonSpilledRows_;
 
   // Index of first in 'nonSpilledRows_' that has not been added to output.
-  size_t nonSpilledIndex_ = 0;
+  size_t nonSpilledRowIndex_{0};
 
   // Pool of the OperatorCtx. Used for spilling.
   memory::MemoryPool& pool_;
 
-  // The RowContainer of 'table_' is moved here before freeing
-  // 'table_' when starting to read spill output.
-  std::unique_ptr<RowContainer> rowsWhileReadingSpill_;
+  // The RowContainer of 'table_' is moved here before freeing 'table_' when
+  // starting to read spill output.
+  std::unique_ptr<RowContainer> nonSpilledRowContainer_;
 
   // Counts input batches and triggers spilling if folly hash of this % 100 <=
   // 'testSpillPct_';.

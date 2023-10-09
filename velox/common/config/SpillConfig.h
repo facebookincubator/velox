@@ -21,7 +21,7 @@
 #include "velox/common/compression/Compression.h"
 
 namespace facebook::velox::common {
-// Specifies the config for spilling.
+/// Specifies the config for spilling.
 struct SpillConfig {
   SpillConfig(
       const std::string& _filePath,
@@ -29,27 +29,15 @@ struct SpillConfig {
       uint64_t _writeBufferSize,
       uint64_t _minSpillRunSize,
       folly::Executor* _executor,
+      int32_t _minSpillableReservationPct,
       int32_t _spillableReservationGrowthPct,
       uint8_t _startPartitionBit,
       uint8_t _joinPartitionBits,
       uint8_t _aggregationPartitionBits,
+      bool _aggregationSpillAll,
       int32_t _maxSpillLevel,
       int32_t _testSpillPct,
-      const std::string& _compressionKind)
-      : filePath(_filePath),
-        maxFileSize(
-            _maxFileSize == 0 ? std::numeric_limits<int64_t>::max()
-                              : _maxFileSize),
-        writeBufferSize(_writeBufferSize),
-        minSpillRunSize(_minSpillRunSize),
-        executor(_executor),
-        spillableReservationGrowthPct(_spillableReservationGrowthPct),
-        startPartitionBit(_startPartitionBit),
-        joinPartitionBits(_joinPartitionBits),
-        aggregationPartitionBits(_aggregationPartitionBits),
-        maxSpillLevel(_maxSpillLevel),
-        testSpillPct(_testSpillPct),
-        compressionKind(common::stringToCompressionKind(_compressionKind)) {}
+      const std::string& _compressionKind);
 
   /// Returns the hash join spilling level with given 'startBitOffset'.
   ///
@@ -81,36 +69,46 @@ struct SpillConfig {
   /// generating too many small spilled files.
   uint64_t minSpillRunSize;
 
-  // Executor for spilling. If nullptr spilling writes on the Driver's thread.
+  /// Executor for spilling. If nullptr spilling writes on the Driver's thread.
   folly::Executor* executor; // Not owned.
 
-  // The spillable memory reservation growth percentage of the current
-  // reservation size.
+  /// The minimal spillable memory reservation in percentage of the current
+  /// memory usage.
+  int32_t minSpillableReservationPct;
+
+  /// The spillable memory reservation growth in percentage of the current
+  /// memory usage.
   int32_t spillableReservationGrowthPct;
 
-  // Used to calculate spill partition number.
+  /// Used to calculate spill partition number.
   uint8_t startPartitionBit;
 
-  // Used to calculate the spill hash partition number for hash join with
-  // 'startPartitionBit'.
+  /// Used to calculate the spill hash partition number for hash join with
+  /// 'startPartitionBit'.
   uint8_t joinPartitionBits;
 
-  // Used to calculate the spill hash partition number for aggregation with
-  // 'startPartitionBit'.
+  /// Used to calculate the spill hash partition number for aggregation with
+  /// 'startPartitionBit'.
   uint8_t aggregationPartitionBits;
 
-  // The max allowed spilling level with zero being the initial spilling
-  // level. This only applies for hash build spilling which needs recursive
-  // spilling when the build table is too big. If it is set to -1, then there
-  // is no limit and then some extreme large query might run out of spilling
-  // partition bits at the end.
+  /// If true and spilling has been triggered during the input processing, the
+  /// spiller will spill all the remaining in-memory state to disk before output
+  /// processing. This is to simplify the aggregation query OOM prevention in
+  /// output processing stage.
+  bool aggregationSpillAll;
+
+  /// The max allowed spilling level with zero being the initial spilling
+  /// level. This only applies for hash build spilling which needs recursive
+  /// spilling when the build table is too big. If it is set to -1, then there
+  /// is no limit and then some extreme large query might run out of spilling
+  /// partition bits at the end.
   int32_t maxSpillLevel;
 
-  // Percentage of input batches to be spilled for testing. 0 means no
-  // spilling for test.
+  /// Percentage of input batches to be spilled for testing. 0 means no
+  /// spilling for test.
   int32_t testSpillPct;
 
-  // CompressionKind when spilling, CompressionKind_NONE means no compression.
+  /// CompressionKind when spilling, CompressionKind_NONE means no compression.
   common::CompressionKind compressionKind;
 };
 } // namespace facebook::velox::common

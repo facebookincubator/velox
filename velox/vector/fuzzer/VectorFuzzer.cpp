@@ -23,6 +23,7 @@
 
 #include "velox/common/base/Exceptions.h"
 #include "velox/type/Timestamp.h"
+#include "velox/vector/BaseVector.h"
 #include "velox/vector/FlatVector.h"
 #include "velox/vector/NullsBuilder.h"
 #include "velox/vector/VectorTypeUtils.h"
@@ -287,6 +288,8 @@ void fuzzFlatPrimitiveImpl(
     } else if constexpr (std::is_same_v<TCpp, int128_t>) {
       if (vector->type()->isLongDecimal()) {
         flatVector->set(i, randLongDecimal(vector->type(), rng));
+      } else if (vector->type()->isHugeint()) {
+        flatVector->set(i, rand<int128_t>(rng));
       } else {
         VELOX_NYI();
       }
@@ -304,21 +307,26 @@ class VectorLoaderWrap : public VectorLoader {
  public:
   explicit VectorLoaderWrap(VectorPtr vector) : vector_(vector) {}
 
-  void loadInternal(RowSet rowSet, ValueHook* hook, VectorPtr* result)
-      override {
+  void loadInternal(
+      RowSet rowSet,
+      ValueHook* hook,
+      vector_size_t resultSize,
+      VectorPtr* result) override {
     VELOX_CHECK(!hook, "VectorLoaderWrap doesn't support ValueHook");
     SelectivityVector rows(rowSet.back() + 1, false);
     for (auto row : rowSet) {
       rows.setValid(row, true);
     }
     rows.updateBounds();
-    *result = makeEncodingPreservedCopy(rows);
+    *result = makeEncodingPreservedCopy(rows, resultSize);
   }
 
  private:
   // Returns a copy of 'vector_' while retaining dictionary encoding if present.
   // Multiple dictionary layers are collapsed into one.
-  VectorPtr makeEncodingPreservedCopy(SelectivityVector& rows);
+  VectorPtr makeEncodingPreservedCopy(
+      SelectivityVector& rows,
+      vector_size_t vectorSize);
   VectorPtr vector_;
 };
 
@@ -681,6 +689,18 @@ RowVectorPtr VectorFuzzer::fuzzInputRow(const RowTypePtr& rowType) {
   return fuzzRow(rowType, opts_.vectorSize, false);
 }
 
+RowVectorPtr VectorFuzzer::fuzzInputFlatRow(const RowTypePtr& rowType) {
+  std::vector<VectorPtr> children;
+  auto size = static_cast<vector_size_t>(opts_.vectorSize);
+  children.reserve(rowType->size());
+  for (auto i = 0; i < rowType->size(); ++i) {
+    children.emplace_back(fuzzFlat(rowType->childAt(i), size));
+  }
+
+  return std::make_shared<RowVector>(
+      pool_, rowType, nullptr, size, std::move(children));
+}
+
 RowVectorPtr VectorFuzzer::fuzzRow(
     std::vector<VectorPtr>&& children,
     std::vector<std::string> childrenNames,
@@ -771,28 +791,24 @@ std::pair<int8_t, int8_t> VectorFuzzer::randPrecisionScale(
   return {precision, scale};
 }
 
-TypePtr VectorFuzzer::randScalarNonFloatingPointType() {
-  static TypePtr kNonFloatingPointTypes[]{
-      BOOLEAN(),
-      TINYINT(),
-      SMALLINT(),
-      INTEGER(),
-      BIGINT(),
-      VARCHAR(),
-      VARBINARY(),
-      TIMESTAMP(),
-  };
-  static constexpr int kNumTypes =
-      sizeof(kNonFloatingPointTypes) / sizeof(kNonFloatingPointTypes[0]);
-  return kNonFloatingPointTypes[rand<uint32_t>(rng_) % kNumTypes];
-}
-
 TypePtr VectorFuzzer::randType(int maxDepth) {
   return velox::randType(rng_, maxDepth);
 }
 
+TypePtr VectorFuzzer::randType(
+    const std::vector<TypePtr>& scalarTypes,
+    int maxDepth) {
+  return velox::randType(rng_, scalarTypes, maxDepth);
+}
+
 RowTypePtr VectorFuzzer::randRowType(int maxDepth) {
   return velox::randRowType(rng_, maxDepth);
+}
+
+RowTypePtr VectorFuzzer::randRowType(
+    const std::vector<TypePtr>& scalarTypes,
+    int maxDepth) {
+  return velox::randRowType(rng_, scalarTypes, maxDepth);
 }
 
 VectorPtr VectorFuzzer::wrapInLazyVector(VectorPtr baseVector) {
@@ -919,13 +935,17 @@ RowVectorPtr VectorFuzzer::fuzzRowChildrenToLazy(
       std::move(children));
 }
 
-VectorPtr VectorLoaderWrap::makeEncodingPreservedCopy(SelectivityVector& rows) {
-  VectorPtr result;
+VectorPtr VectorLoaderWrap::makeEncodingPreservedCopy(
+    SelectivityVector& rows,
+    vector_size_t vectorSize) {
   DecodedVector decoded;
   decoded.decode(*vector_, rows, false);
 
   if (decoded.isConstantMapping() || decoded.isIdentityMapping()) {
+    VectorPtr result;
+
     BaseVector::ensureWritable(rows, vector_->type(), vector_->pool(), result);
+    result->resize(vectorSize);
     result->copy(vector_.get(), rows, nullptr);
     return result;
   }
@@ -941,37 +961,45 @@ VectorPtr VectorLoaderWrap::makeEncodingPreservedCopy(SelectivityVector& rows) {
   });
   baseRows.updateBounds();
 
+  VectorPtr baseResult;
   BaseVector::ensureWritable(
-      baseRows, baseVector->type(), vector_->pool(), result);
-  result->copy(baseVector, baseRows, nullptr);
+      baseRows, baseVector->type(), vector_->pool(), baseResult);
+  baseResult->copy(baseVector, baseRows, nullptr);
 
-  BufferPtr indices = allocateIndices(rows.end(), vector_->pool());
+  BufferPtr indices = allocateIndices(vectorSize, vector_->pool());
   auto rawIndices = indices->asMutable<vector_size_t>();
   auto decodedIndices = decoded.indices();
   rows.applyToSelected(
       [&](auto row) { rawIndices[row] = decodedIndices[row]; });
 
   BufferPtr nulls = nullptr;
-  if (decoded.nulls()) {
-    if (!baseRows.hasSelections()) {
-      nulls = allocateNulls(rows.end(), vector_->pool(), bits::kNull);
-    } else {
-      nulls = AlignedBuffer::allocate<bool>(rows.end(), vector_->pool());
-      std::memcpy(
-          nulls->asMutable<uint64_t>(),
-          decoded.nulls(),
-          bits::nbytes(rows.end()));
+  if (decoded.nulls() || vectorSize > rows.end()) {
+    // We fill [rows.end(), vectorSize) with nulls then copy nulls for selected
+    // baseRows.
+    nulls = allocateNulls(vectorSize, vector_->pool(), bits::kNull);
+    if (baseRows.hasSelections()) {
+      if (decoded.nulls()) {
+        std::memcpy(
+            nulls->asMutable<uint64_t>(),
+            decoded.nulls(),
+            bits::nbytes(rows.end()));
+      } else {
+        bits::fillBits(
+            nulls->asMutable<uint64_t>(), 0, rows.end(), bits::kNotNull);
+      }
     }
   }
 
   return BaseVector::wrapInDictionary(
-      std::move(nulls), std::move(indices), rows.end(), result);
+      std::move(nulls), std::move(indices), vectorSize, baseResult);
 }
 
-TypePtr randType(FuzzerGenerator& rng, int maxDepth) {
+namespace {
+
+const std::vector<TypePtr> defaultScalarTypes() {
   // @TODO Add decimal TypeKinds to randType.
   // Refer https://github.com/facebookincubator/velox/issues/3942
-  static TypePtr kScalarTypes[]{
+  static std::vector<TypePtr> kScalarTypes{
       BOOLEAN(),
       TINYINT(),
       SMALLINT(),
@@ -985,29 +1013,49 @@ TypePtr randType(FuzzerGenerator& rng, int maxDepth) {
       DATE(),
       INTERVAL_DAY_TIME(),
   };
-  static constexpr int kNumScalarTypes =
-      sizeof(kScalarTypes) / sizeof(kScalarTypes[0]);
+  return kScalarTypes;
+}
+} // namespace
+
+TypePtr randType(FuzzerGenerator& rng, int maxDepth) {
+  return randType(rng, defaultScalarTypes(), maxDepth);
+}
+
+TypePtr randType(
+    FuzzerGenerator& rng,
+    const std::vector<TypePtr>& scalarTypes,
+    int maxDepth) {
+  const int numScalarTypes = scalarTypes.size();
   // Should we generate a scalar type?
   if (maxDepth <= 1 || rand<bool>(rng)) {
-    return kScalarTypes[rand<uint32_t>(rng) % kNumScalarTypes];
+    return scalarTypes[rand<uint32_t>(rng) % numScalarTypes];
   }
   switch (rand<uint32_t>(rng) % 3) {
     case 0:
-      return MAP(randType(rng, 0), randType(rng, maxDepth - 1));
+      return MAP(
+          randType(rng, scalarTypes, 0),
+          randType(rng, scalarTypes, maxDepth - 1));
     case 1:
-      return ARRAY(randType(rng, maxDepth - 1));
+      return ARRAY(randType(rng, scalarTypes, maxDepth - 1));
     default:
-      return randRowType(rng, maxDepth - 1);
+      return randRowType(rng, scalarTypes, maxDepth - 1);
   }
 }
 
 RowTypePtr randRowType(FuzzerGenerator& rng, int maxDepth) {
+  return randRowType(rng, defaultScalarTypes(), maxDepth);
+}
+
+RowTypePtr randRowType(
+    FuzzerGenerator& rng,
+    const std::vector<TypePtr>& scalarTypes,
+    int maxDepth) {
   int numFields = 1 + rand<uint32_t>(rng) % 7;
   std::vector<std::string> names;
   std::vector<TypePtr> fields;
   for (int i = 0; i < numFields; ++i) {
     names.push_back(fmt::format("f{}", i));
-    fields.push_back(randType(rng, maxDepth));
+    fields.push_back(randType(rng, scalarTypes, maxDepth));
   }
   return ROW(std::move(names), std::move(fields));
 }

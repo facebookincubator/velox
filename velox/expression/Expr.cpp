@@ -999,9 +999,12 @@ Expr::PeelEncodingsResult Expr::peelEncodings(
   }
 
   // If the expression depends on one dictionary, results are cacheable.
-  bool mayCache = distinctFields_.size() == 1 &&
-      VectorEncoding::isDictionary(context.wrapEncoding()) &&
-      !peeledVectors[0]->memoDisabled();
+  bool mayCache = false;
+  if (context.isCacheEnabled()) {
+    mayCache = distinctFields_.size() == 1 &&
+        VectorEncoding::isDictionary(context.wrapEncoding()) &&
+        !peeledVectors[0]->memoDisabled();
+  }
 
   common::testutil::TestValue::adjust(
       "facebook::velox::exec::Expr::peelEncodings::mayCache", &mayCache);
@@ -1093,53 +1096,12 @@ bool Expr::removeSureNulls(
   return false;
 }
 
-// static
-void Expr::addNulls(
-    const SelectivityVector& rows,
-    const uint64_t* rawNulls,
-    EvalCtx& context,
-    const TypePtr& type,
-    VectorPtr& result) {
-  // If there's no `result` yet, return a NULL ContantVector.
-  if (!result) {
-    result = BaseVector::createNullConstant(type, rows.end(), context.pool());
-    return;
-  }
-
-  // If result is already a NULL ConstantVector, resize the vector if necessary,
-  // or do nothing otherwise.
-  if (result->isConstantEncoding() && result->isNullAt(0)) {
-    if (result->size() < rows.end()) {
-      if (result.unique()) {
-        result->resize(rows.end());
-      } else {
-        result =
-            BaseVector::createNullConstant(type, rows.end(), context.pool());
-      }
-    }
-    return;
-  }
-
-  if (!result.unique() || !result->isNullsWritable()) {
-    BaseVector::ensureWritable(
-        SelectivityVector::empty(), type, context.pool(), result);
-  }
-
-  if (result->size() < rows.end()) {
-    BaseVector::ensureWritable(
-        SelectivityVector::empty(), type, context.pool(), result);
-    result->resize(rows.end());
-  }
-
-  result->addNulls(rawNulls, rows);
-}
-
 void Expr::addNulls(
     const SelectivityVector& rows,
     const uint64_t* FOLLY_NULLABLE rawNulls,
     EvalCtx& context,
     VectorPtr& result) {
-  addNulls(rows, rawNulls, context, type(), result);
+  EvalCtx::addNulls(rows, rawNulls, context, type(), result);
 }
 
 void Expr::evalWithNulls(

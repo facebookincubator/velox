@@ -176,6 +176,9 @@ class MemoryArbitrator {
     /// The sum of all reclaim operation durations during arbitration in
     /// microseconds.
     uint64_t reclaimTimeUs{0};
+    /// The total number of times of the reclaim attempts that end up failing
+    /// due to reclaiming at non-reclaimable stage.
+    uint64_t numNonReclaimableAttempts{0};
 
     Stats(
         uint64_t _numRequests,
@@ -188,7 +191,8 @@ class MemoryArbitrator {
         uint64_t _numReclaimedBytes,
         uint64_t _maxCapacityBytes,
         uint64_t _freeCapacityBytes,
-        uint64_t _reclaimTimeUs);
+        uint64_t _reclaimTimeUs,
+        uint64_t _numNonReclaimableAttempts);
 
     Stats() = default;
 
@@ -252,6 +256,17 @@ FOLLY_ALWAYS_INLINE std::ostream& operator<<(
 /// through techniques such as disks spilling.
 class MemoryReclaimer {
  public:
+  /// Used to collect memory reclaim execution stats.
+  struct Stats {
+    /// The total number of times of the reclaim attempts that end up failing
+    /// due to reclaiming at non-reclaimable stage.
+    uint64_t numNonReclaimableAttempts{0};
+
+    bool operator==(const Stats& other) const;
+
+    bool operator!=(const Stats& other) const;
+  };
+
   virtual ~MemoryReclaimer() = default;
 
   static std::unique_ptr<MemoryReclaimer> create();
@@ -286,7 +301,8 @@ class MemoryReclaimer {
   /// memory bytes but there is no guarantees. If 'targetBytes' is zero, then it
   /// reclaims all the reclaimable memory from the memory 'pool'. The function
   /// returns the actual reclaimed memory bytes.
-  virtual uint64_t reclaim(MemoryPool* pool, uint64_t targetBytes);
+  virtual uint64_t
+  reclaim(MemoryPool* pool, uint64_t targetBytes, Stats& stats);
 
   /// Invoked by the memory arbitrator to abort memory 'pool' and the associated
   /// query execution when encounters non-recoverable memory reclaim error or
@@ -300,4 +316,32 @@ class MemoryReclaimer {
  protected:
   MemoryReclaimer() = default;
 };
+
+/// The memory arbitration context which is set on per-thread local variable by
+/// memory arbitrator. It is used to indicate a running thread is under memory
+/// arbitration processing or not. This helps to enable sanity check such as all
+/// the memory reservations during memory arbitration should come from the
+/// spilling memory pool.
+struct MemoryArbitrationContext {
+  const MemoryPool& requestor;
+};
+
+/// Object used to set/restore the memory arbitration context when a thread is
+/// under memory arbitration processing.
+class ScopedMemoryArbitrationContext {
+ public:
+  explicit ScopedMemoryArbitrationContext(const MemoryPool& requestor);
+  ~ScopedMemoryArbitrationContext();
+
+ private:
+  MemoryArbitrationContext* const savedArbitrationCtx_{nullptr};
+  MemoryArbitrationContext currentArbitrationCtx_;
+};
+
+/// Returns the memory arbitration context set by a per-thread local variable if
+/// the running thread is under memory arbitration processing.
+MemoryArbitrationContext* memoryArbitrationContext();
+
+/// Returns true if the running thread is under memory arbitration or not.
+bool underMemoryArbitration();
 } // namespace facebook::velox::memory

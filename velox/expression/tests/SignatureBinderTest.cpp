@@ -15,6 +15,7 @@
  */
 #include "velox/expression/SignatureBinder.h"
 #include <gtest/gtest.h>
+#include <velox/type/HugeInt.h>
 #include <vector>
 #include "velox/common/base/tests/GTestUtils.h"
 #include "velox/functions/prestosql/types/TimestampWithTimeZoneType.h"
@@ -377,6 +378,119 @@ TEST(SignatureBinderTest, knownOnly) {
   }
 }
 
+TEST(SignatureBinderTest, orderableComparable) {
+  auto signature = exec::FunctionSignatureBuilder()
+                       .orderableTypeVariable("T")
+                       .returnType("array(T)")
+                       .argumentType("array(T)")
+                       .build();
+  {
+    auto actualTypes = std::vector<TypePtr>{ARRAY(BIGINT())};
+    exec::SignatureBinder binder(*signature, actualTypes);
+    ASSERT_TRUE(binder.tryBind());
+  }
+
+  {
+    auto actualTypes = std::vector<TypePtr>{ARRAY(MAP(BIGINT(), BIGINT()))};
+    exec::SignatureBinder binder(*signature, actualTypes);
+    ASSERT_FALSE(binder.tryBind());
+  }
+
+  signature = exec::FunctionSignatureBuilder()
+                  .typeVariable("V")
+                  .orderableTypeVariable("T")
+                  .returnType("row(V)")
+                  .argumentType("row(V, T)")
+                  .build();
+  {
+    auto actualTypes = std::vector<TypePtr>{ROW({BIGINT(), ARRAY(DOUBLE())})};
+    exec::SignatureBinder binder(*signature, actualTypes);
+    ASSERT_TRUE(binder.tryBind());
+  }
+
+  {
+    auto actualTypes =
+        std::vector<TypePtr>{ROW({MAP(VARCHAR(), BIGINT()), ARRAY(DOUBLE())})};
+    exec::SignatureBinder binder(*signature, actualTypes);
+    ASSERT_TRUE(binder.tryBind());
+  }
+
+  {
+    auto actualTypes =
+        std::vector<TypePtr>{ROW({BIGINT(), MAP(VARCHAR(), BIGINT())})};
+    exec::SignatureBinder binder(*signature, actualTypes);
+    ASSERT_FALSE(binder.tryBind());
+  }
+}
+
+TEST(SignatureBinderTest, orderableComparableAggregate) {
+  auto signature = exec::AggregateFunctionSignatureBuilder()
+                       .typeVariable("T")
+                       .returnType("T")
+                       .intermediateType("T")
+                       .argumentType("T")
+                       .build();
+  {
+    auto actualTypes = std::vector<TypePtr>{ARRAY(MAP(BIGINT(), BIGINT()))};
+    exec::SignatureBinder binder(*signature, actualTypes);
+    ASSERT_TRUE(binder.tryBind());
+  }
+
+  signature = exec::AggregateFunctionSignatureBuilder()
+                  .comparableTypeVariable("T")
+                  .returnType("T")
+                  .intermediateType("T")
+                  .argumentType("T")
+                  .build();
+  {
+    auto actualTypes =
+        std::vector<TypePtr>{ROW({MAP(VARCHAR(), BIGINT()), ARRAY(DOUBLE())})};
+    exec::SignatureBinder binder(*signature, actualTypes);
+    ASSERT_TRUE(binder.tryBind());
+  }
+
+  signature = exec::AggregateFunctionSignatureBuilder()
+                  .orderableTypeVariable("T")
+                  .returnType("T")
+                  .intermediateType("T")
+                  .argumentType("T")
+                  .build();
+  {
+    auto actualTypes =
+        std::vector<TypePtr>{ROW({MAP(VARCHAR(), BIGINT()), ARRAY(DOUBLE())})};
+    exec::SignatureBinder binder(*signature, actualTypes);
+    ASSERT_FALSE(binder.tryBind());
+  }
+
+  {
+    auto actualTypes = std::vector<TypePtr>{ROW({BIGINT(), ARRAY(DOUBLE())})};
+    exec::SignatureBinder binder(*signature, actualTypes);
+    ASSERT_TRUE(binder.tryBind());
+  }
+
+  signature = exec::AggregateFunctionSignatureBuilder()
+                  .typeVariable("T")
+                  .orderableTypeVariable("M")
+                  .returnType("T")
+                  .intermediateType("M")
+                  .argumentType("T")
+                  .argumentType("M")
+                  .build();
+  {
+    auto actualTypes =
+        std::vector<TypePtr>{MAP(VARCHAR(), BIGINT()), ARRAY(DOUBLE())};
+    exec::SignatureBinder binder(*signature, actualTypes);
+    ASSERT_TRUE(binder.tryBind());
+  }
+
+  {
+    auto actualTypes =
+        std::vector<TypePtr>{ARRAY(DOUBLE()), MAP(VARCHAR(), BIGINT())};
+    exec::SignatureBinder binder(*signature, actualTypes);
+    ASSERT_FALSE(binder.tryBind());
+  }
+}
+
 TEST(SignatureBinderTest, generics) {
   // array(T), T -> boolean
   {
@@ -428,6 +542,16 @@ TEST(SignatureBinderTest, generics) {
                          .build();
 
     testSignatureBinder(signature, {MAP(BIGINT(), DOUBLE())}, ARRAY(DOUBLE()));
+  }
+
+  {
+    auto signature = exec::FunctionSignatureBuilder()
+                         .typeVariable("T")
+                         .returnType("T")
+                         .argumentType("T")
+                         .build();
+
+    testSignatureBinder(signature, {HUGEINT()}, HUGEINT());
   }
 }
 
@@ -687,4 +811,15 @@ TEST(SignatureBinderTest, customType) {
           .argumentType("fancy_type")
           .build(),
       "Type doesn't exist: FANCY_TYPE");
+}
+
+TEST(SignatureBinderTest, hugeIntType) {
+  // Logical type as an argument type.
+  {
+    auto signature = exec::FunctionSignatureBuilder()
+                         .returnType("hugeint")
+                         .argumentType("hugeint")
+                         .build();
+    testSignatureBinder(signature, {HUGEINT()}, HUGEINT());
+  }
 }

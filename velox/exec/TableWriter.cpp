@@ -162,6 +162,7 @@ RowVectorPtr TableWriter::getOutput() {
 
   finished_ = true;
   updateWrittenBytes();
+  updateNumWrittenFiles();
   const std::vector<std::string> fragments = closeDataSink();
 
   if (outputType_->size() == 1) {
@@ -242,6 +243,12 @@ void TableWriter::updateWrittenBytes() {
   lockedStats->physicalWrittenBytes = writtenBytes;
 }
 
+void TableWriter::updateNumWrittenFiles() {
+  auto lockedStats = stats_.wlock();
+  lockedStats->addRuntimeStat(
+      "numWrittenFiles", RuntimeCounter(dataSink_->numWrittenFiles()));
+}
+
 void TableWriter::close() {
   if (!closed_) {
     // Abort the data sink if the query has already failed and no need for
@@ -280,7 +287,8 @@ bool TableWriter::MemoryReclaimer::reclaimableBytes(
 
 uint64_t TableWriter::MemoryReclaimer::reclaim(
     memory::MemoryPool* pool,
-    uint64_t /*unused*/) {
+    uint64_t /*unused*/,
+    memory::MemoryReclaimer::Stats& /*unused*/) {
   VELOX_CHECK(!pool->isLeaf());
   return 0;
 }

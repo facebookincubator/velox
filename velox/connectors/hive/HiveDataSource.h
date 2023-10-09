@@ -15,6 +15,7 @@
  */
 #pragma once
 
+#include "velox/common/io/IoStatistics.h"
 #include "velox/connectors/Connector.h"
 #include "velox/connectors/hive/FileHandle.h"
 #include "velox/connectors/hive/HiveConnectorSplit.h"
@@ -147,18 +148,26 @@ class HiveDataSource : public DataSource {
   void parseSerdeParameters(
       const std::unordered_map<std::string, std::string>& serdeParameters);
 
+  const RowVectorPtr& getEmptyOutput() {
+    if (!emptyOutput_) {
+      emptyOutput_ = RowVector::createEmpty(outputType_, pool_);
+    }
+    return emptyOutput_;
+  }
+
   const RowTypePtr outputType_;
   // Column handles for the partition key columns keyed on partition key column
   // name.
   std::unordered_map<std::string, std::shared_ptr<HiveColumnHandle>>
       partitionKeys_;
-  std::shared_ptr<dwio::common::IoStatistics> ioStats_;
+  std::shared_ptr<io::IoStatistics> ioStats_;
   std::shared_ptr<common::ScanSpec> scanSpec_;
   std::shared_ptr<common::MetadataFilter> metadataFilter_;
   dwio::common::RowReaderOptions rowReaderOpts_;
   std::unique_ptr<dwio::common::Reader> reader_;
   std::unique_ptr<exec::ExprSet> remainingFilterExprSet_;
   bool emptySplit_;
+  RowVectorPtr emptyOutput_;
 
   dwio::common::RuntimeStatistics runtimeStats_;
 

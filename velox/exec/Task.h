@@ -18,6 +18,7 @@
 #include "velox/core/QueryCtx.h"
 #include "velox/exec/Driver.h"
 #include "velox/exec/LocalPartition.h"
+#include "velox/exec/MemoryReclaimer.h"
 #include "velox/exec/MergeSource.h"
 #include "velox/exec/Split.h"
 #include "velox/exec/TaskStats.h"
@@ -75,6 +76,8 @@ class Task : public std::enable_shared_from_this<Task> {
   std::string toString() const;
 
   std::string toJsonString() const;
+
+  std::string toShortJsonString() const;
 
   /// Returns universally unique identifier of the task.
   const std::string& uuid() const {
@@ -622,6 +625,13 @@ class Task : public std::enable_shared_from_this<Task> {
   std::unique_ptr<memory::MemoryReclaimer> createNodeReclaimer(
       bool isHashJoinNode) const;
 
+  // Creates a memory reclaimer instance for an exchange client if the task
+  // memory pool has set memory reclaimer. We don't support to reclaim memory
+  // from an exchange client, and the customized reclaimer is used to handle
+  // memory arbitration request initiated under the driver execution context.
+  std::unique_ptr<memory::MemoryReclaimer> createExchangeClientReclaimer()
+      const;
+
   // Creates a memory reclaimer instance for this task. If the query memory
   // pool doesn't set memory reclaimer, then the function simply returns null.
   // Otherwise, it creates a customized memory reclaimer for this task.
@@ -638,12 +648,15 @@ class Task : public std::enable_shared_from_this<Task> {
   /// occurred. This should only be called inside mutex_ protection.
   std::string errorMessageLocked() const;
 
-  class MemoryReclaimer : public memory::MemoryReclaimer {
+  class MemoryReclaimer : public exec::MemoryReclaimer {
    public:
     static std::unique_ptr<memory::MemoryReclaimer> create(
         const std::shared_ptr<Task>& task);
 
-    uint64_t reclaim(memory::MemoryPool* pool, uint64_t targetBytes) override;
+    uint64_t reclaim(
+        memory::MemoryPool* pool,
+        uint64_t targetBytes,
+        memory::MemoryReclaimer::Stats& stats) override;
 
     void abort(memory::MemoryPool* pool, const std::exception_ptr& error)
         override;
