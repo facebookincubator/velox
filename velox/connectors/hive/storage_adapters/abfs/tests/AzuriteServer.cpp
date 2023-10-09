@@ -19,8 +19,8 @@
 namespace facebook::velox::filesystems::test {
 void AzuriteServer::start() {
   try {
-    serverProcess_ =
-        std::make_unique<boost::process::child>(env_, exePath_, CommandOptions);
+    serverProcess_ = std::make_unique<boost::process::child>(
+        env_, exePath_, commandOptions_);
     serverProcess_->wait_for(std::chrono::duration<int, std::milli>(30000));
     VELOX_CHECK_EQ(
         serverProcess_->exit_code(),
@@ -48,7 +48,24 @@ bool AzuriteServer::isRunning() {
 }
 
 // requires azurite executable to be on the PATH
-AzuriteServer::AzuriteServer() {
+AzuriteServer::AzuriteServer(int64_t port) : port_(port) {
+  std::string dataLocation = "/tmp/azurite_" + std::to_string(port);
+  std::string logFilePath =
+      "/tmp/azurite/azurite" + std::to_string(port) + ".log";
+  std::printf(
+      "Launch azurite instance with port - %s, data location - %s, log file path - %s\n",
+      std::to_string(port).c_str(),
+      dataLocation.c_str(),
+      logFilePath.c_str());
+  commandOptions_ = {
+      "--silent",
+      "--blobPort",
+      std::to_string(port),
+      "--location",
+      dataLocation,
+      "--debug",
+      logFilePath,
+  };
   env_ = (boost::process::environment)boost::this_process::environment();
   env_["PATH"] = env_["PATH"].to_string() + AzuriteSearchPath;
   env_["AZURITE_ACCOUNTS"] =

@@ -114,10 +114,6 @@ std::string AbfsReadFile::getName() const {
   return fileName_;
 }
 
-uint64_t AbfsReadFile::getNaturalReadSize() const {
-  return kNaturalReadSize;
-}
-
 void AbfsReadFile::preadInternal(
     uint64_t offset,
     uint64_t length,
@@ -135,35 +131,4 @@ void AbfsReadFile::preadInternal(
       reinterpret_cast<uint8_t*>(position), length);
 }
 
-// static
-uint64_t AbfsReadFile::calculateSplitQuantum(
-    const uint64_t length,
-    const uint64_t loadQuantum) {
-  if (length <= loadQuantum * kReadConcurrency) {
-    return loadQuantum;
-  } else {
-    return length / kReadConcurrency;
-  }
-}
-
-// static
-void AbfsReadFile::splitRegion(
-    const uint64_t length,
-    const uint64_t loadQuantum,
-    std::vector<std::tuple<uint64_t, uint64_t>>& range) {
-  uint64_t cursor = 0;
-  while (cursor + loadQuantum < length) {
-    range.emplace_back(cursor, loadQuantum);
-    cursor += loadQuantum;
-  }
-
-  if ((length - cursor) > (loadQuantum / 2)) {
-    range.emplace_back(cursor, (length - cursor));
-  } else {
-    auto last = range.back();
-    range.pop_back();
-    range.emplace_back(
-        std::get<0>(last), std::get<1>(last) + (length - cursor));
-  }
-}
 } // namespace facebook::velox::filesystems::abfs

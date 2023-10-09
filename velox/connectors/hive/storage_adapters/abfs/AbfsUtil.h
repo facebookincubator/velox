@@ -33,63 +33,22 @@ inline bool isAbfsFile(const std::string_view filename) {
 
 class AbfsAccount {
  public:
-  AbfsAccount(const std::string path) {
-    auto file = std::string("");
-    if (path.find(kAbfssScheme) == 0) {
-      file = std::string(path.substr(8));
-      scheme_ = kAbfssScheme.substr(0, 5);
-    } else {
-      file = std::string(path.substr(7));
-      scheme_ = kAbfsScheme.substr(0, 4);
-    }
+  explicit AbfsAccount(const std::string path);
 
-    auto firstAt = file.find_first_of("@");
-    fileSystem_ = std::string(file.substr(0, firstAt));
-    auto firstSep = file.find_first_of("/");
-    filePath_ = std::string(file.substr(firstSep + 1));
+  const std::string accountNameWithSuffix() const;
+  const std::string scheme() const;
 
-    accountNameWithSuffix_ = file.substr(firstAt + 1, firstSep - firstAt - 1);
-    auto firstDot = accountNameWithSuffix_.find_first_of(".");
-    accountName_ = accountNameWithSuffix_.substr(0, firstDot);
-    endpointSuffix_ = accountNameWithSuffix_.substr(firstDot + 5);
-    credKey_ = fmt::format("fs.azure.account.key.{}", accountNameWithSuffix_);
-  }
+  const std::string accountName() const;
 
-  const std::string accountNameWithSuffix() const {
-    return accountNameWithSuffix_;
-  }
+  const std::string endpointSuffix() const;
 
-  const std::string scheme() const {
-    return scheme_;
-  }
+  const std::string fileSystem() const;
 
-  const std::string accountName() const {
-    return accountName_;
-  }
+  const std::string filePath() const;
 
-  const std::string endpointSuffix() const {
-    return endpointSuffix_;
-  }
+  const std::string credKey() const;
 
-  const std::string fileSystem() const {
-    return fileSystem_;
-  }
-
-  const std::string filePath() const {
-    return filePath_;
-  }
-
-  const std::string credKey() const {
-    return credKey_;
-  }
-
-  const std::string connectionString(const std::string accountKey) const {
-    return fmt::format(
-        "DefaultEndpointsProtocol=https;AccountName={};AccountKey={};EndpointSuffix={}",
-        accountName(),
-        accountKey,
-        endpointSuffix());
-  }
+  const std::string connectionString(const std::string accountKey) const;
 
  private:
   std::string scheme_;

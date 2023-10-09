@@ -51,16 +51,9 @@ class AbfsReadFile final : public ReadFile {
 
   std::string getName() const final;
 
-  uint64_t getNaturalReadSize() const final;
-
-  static uint64_t calculateSplitQuantum(
-      const uint64_t length,
-      const uint64_t loadQuantum);
-
-  static void splitRegion(
-      const uint64_t length,
-      const uint64_t loadQuantum,
-      std::vector<std::tuple<uint64_t, uint64_t>>& range);
+  uint64_t getNaturalReadSize() const {
+    return kNaturalReadSize;
+  }
 
  private:
   void preadInternal(uint64_t offset, uint64_t length, char* pos) const;

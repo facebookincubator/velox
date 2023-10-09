@@ -27,10 +27,8 @@
 
 namespace facebook::velox::filesystems::test {
 using namespace Azure::Storage::Blobs;
-static const std::string AzuriteServerExecutableName{"azurite"};
+static const std::string AzuriteServerExecutableName{"azurite-blob"};
 static const std::string AzuriteSearchPath{":/usr/bin/azurite"};
-static const std::string AzuriteDataLocation{"/tmp/azurite"};
-static const std::string AzuriteLogFile{"/tmp/azurite/azurite.log"};
 static const std::string AzuriteAccountName{"test"};
 static const std::string AzuriteContainerName{"test"};
 // the default key of Azurite Server used for connection
@@ -46,17 +44,9 @@ static const std::string AzuriteABFSEndpoint = fmt::format(
     AzuriteAccountName,
     AzuriteContainerName);
 
-static const std::vector<std::string> CommandOptions = {
-    "--silent",
-    "--location",
-    AzuriteDataLocation,
-    "--debug",
-    AzuriteLogFile,
-};
-
 class AzuriteServer {
  public:
-  AzuriteServer();
+  AzuriteServer(int64_t port);
 
   void start();
 
@@ -71,6 +61,9 @@ class AzuriteServer {
 
   virtual ~AzuriteServer();
 
+ private:
+  int64_t port_;
+  std::vector<std::string> commandOptions_;
   std::unique_ptr<::boost::process::child> serverProcess_;
   boost::filesystem::path exePath_;
   boost::process::environment env_;

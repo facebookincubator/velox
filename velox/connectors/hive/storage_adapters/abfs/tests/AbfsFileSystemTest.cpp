@@ -23,6 +23,7 @@
 #include "velox/connectors/hive/HiveConfig.h"
 #include "velox/connectors/hive/storage_adapters/abfs/AbfsReadFile.h"
 #include "velox/connectors/hive/storage_adapters/abfs/tests/AzuriteServer.h"
+#include "velox/exec/tests/utils/PortUtil.h"
 #include "velox/exec/tests/utils/TempFilePath.h"
 
 #include <atomic>
@@ -63,28 +64,30 @@ class AbfsFileSystemTest : public testing::Test {
 
  public:
   static void SetUpTestSuite() {
-    if (azuriteServer_ == nullptr) {
-      auto config = hiveConfig();
-      azuriteServer_ =
-          std::make_shared<facebook::velox::filesystems::test::AzuriteServer>();
-      azuriteServer_->start();
-      auto tempFile = createFile();
-      azuriteServer_->addFile(
-          tempFile->path,
-          filePath,
-          config->get<std::string>(
-              filesystems::abfs::AbfsFileSystem::kReadAbfsConnectionStr, ""));
-    }
     filesystems::abfs::registerAbfsFileSystem();
   }
 
-  static void TearDownTestSuite() {
-    if (azuriteServer_ != nullptr) {
-      azuriteServer_->stop();
-    }
+  static std::atomic<bool> startThreads;
+
+  void SetUp() override {
+    auto config = hiveConfig();
+    auto ports = facebook::velox::exec::test::getFreePorts(1);
+    int64_t port = ports[0];
+    azuriteServer_ =
+        std::make_shared<facebook::velox::filesystems::test::AzuriteServer>(
+            port);
+    azuriteServer_->start();
+    auto tempFile = createFile();
+    azuriteServer_->addFile(
+        tempFile->path,
+        filePath,
+        config->get<std::string>(
+            filesystems::abfs::AbfsFileSystem::kReadAbfsConnectionStr, ""));
   }
 
-  static std::atomic<bool> startThreads;
+  void TearDown() override {
+    azuriteServer_->stop();
+  }
 
  private:
   static std::shared_ptr<::exec::test::TempFilePath> createFile() {
@@ -100,8 +103,6 @@ class AbfsFileSystemTest : public testing::Test {
       azuriteServer_;
 };
 
-std::shared_ptr<facebook::velox::filesystems::test::AzuriteServer>
-    AbfsFileSystemTest::azuriteServer_ = nullptr;
 std::atomic<bool> AbfsFileSystemTest::startThreads = false;
 
 void readData(ReadFile* readFile) {
@@ -254,19 +255,4 @@ TEST_F(AbfsFileSystemTest, credNotFOund) {
           hiveConfig);
   VELOX_ASSERT_THROW(
       abfs->openFileForRead(abfsFile), "Failed to find storage credentials");
-}
-
-TEST_F(AbfsFileSystemTest, splitRegion) {
-  std::vector<std::tuple<uint64_t, uint64_t>> ranges;
-  filesystems::abfs::AbfsReadFile::splitRegion(5, 5, ranges);
-  EXPECT_EQ(1, ranges.size());
-  ranges.clear();
-  filesystems::abfs::AbfsReadFile::splitRegion(6, 5, ranges);
-  EXPECT_EQ(1, ranges.size());
-  ranges.clear();
-  filesystems::abfs::AbfsReadFile::splitRegion(8, 5, ranges);
-  EXPECT_EQ(2, ranges.size());
-  ranges.clear();
-  filesystems::abfs::AbfsReadFile::splitRegion(4, 5, ranges);
-  EXPECT_EQ(1, ranges.size());
 }

@@ -54,15 +54,15 @@ class AbfsConfig {
 class AbfsFileSystem::Impl {
  public:
   explicit Impl(const Config* config) : abfsConfig_(config) {
-    LOG(INFO) << "Init ABFS file system";
+    LOG(INFO) << "Init Azure ABFS file system";
   }
 
   ~Impl() {
-    LOG(INFO) << "Dispose ABFS file system";
+    LOG(INFO) << "Dispose Azure ABFS file system";
   }
 
   const std::string connectionString(const std::string& path) const {
-    // extract account name
+    // Extract account name
     return abfsConfig_.connectionString(path);
   }
 
