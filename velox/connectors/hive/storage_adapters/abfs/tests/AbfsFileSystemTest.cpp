@@ -41,16 +41,9 @@ static const std::string fullFilePath =
 class AbfsFileSystemTest : public testing::Test {
  public:
   static std::shared_ptr<const Config> hiveConfig(
-      const std::unordered_map<std::string, std::string> configOverride = {},
-      bool useAzuriteConnectionStr = true) {
+      const std::unordered_map<std::string, std::string> configOverride = {}) {
     std::unordered_map<std::string, std::string> config(
-        {{"fs.azure.account.key.test.dfs.core.windows.net", "test"},
-         {filesystems::abfs::AbfsFileSystem::kReadAbfsConnectionStr,
-          facebook::velox::filesystems::test::AzuriteConnectionString}});
-
-    if (!useAzuriteConnectionStr) {
-      config.erase(filesystems::abfs::AbfsFileSystem::kReadAbfsConnectionStr);
-    }
+        {{"fs.azure.account.key.test.dfs.core.windows.net", "test"}});
 
     // Update the default config map with the supplied configOverride map
     for (const auto& item : configOverride) {
@@ -63,30 +56,22 @@ class AbfsFileSystemTest : public testing::Test {
   }
 
  public:
-  static void SetUpTestSuite() {
-    filesystems::abfs::registerAbfsFileSystem();
-  }
-
   static std::atomic<bool> startThreads;
+  static std::shared_ptr<facebook::velox::filesystems::test::AzuriteServer>
+      azuriteServer;
 
   void SetUp() override {
-    auto config = hiveConfig();
-    auto ports = facebook::velox::exec::test::getFreePorts(1);
-    int64_t port = ports[0];
-    azuriteServer_ =
+    auto port = facebook::velox::exec::test::getFreePort();
+    azuriteServer =
         std::make_shared<facebook::velox::filesystems::test::AzuriteServer>(
             port);
-    azuriteServer_->start();
+    azuriteServer->start();
     auto tempFile = createFile();
-    azuriteServer_->addFile(
-        tempFile->path,
-        filePath,
-        config->get<std::string>(
-            filesystems::abfs::AbfsFileSystem::kReadAbfsConnectionStr, ""));
+    azuriteServer->addFile(tempFile->path, filePath);
   }
 
   void TearDown() override {
-    azuriteServer_->stop();
+    azuriteServer->stop();
   }
 
  private:
@@ -98,10 +83,10 @@ class AbfsFileSystemTest : public testing::Test {
     tempFile->append("ddddd");
     return tempFile;
   }
-
-  static std::shared_ptr<facebook::velox::filesystems::test::AzuriteServer>
-      azuriteServer_;
 };
+
+std::shared_ptr<facebook::velox::filesystems::test::AzuriteServer>
+    AbfsFileSystemTest::azuriteServer = nullptr;
 
 std::atomic<bool> AbfsFileSystemTest::startThreads = false;
 
@@ -153,16 +138,20 @@ void readData(ReadFile* readFile) {
 }
 
 TEST_F(AbfsFileSystemTest, readFile) {
-  auto hiveConfig = AbfsFileSystemTest::hiveConfig();
-  auto abfs = filesystems::getFileSystem(fullFilePath, hiveConfig);
+  auto hiveConfig = AbfsFileSystemTest::hiveConfig(
+      {{filesystems::abfs::AbfsFileSystem::kReadAbfsConnectionStr,
+        azuriteServer->connectionStr()}});
+  auto abfs = std::make_shared<filesystems::abfs::AbfsFileSystem>(hiveConfig);
   auto readFile = abfs->openFileForRead(fullFilePath);
   readData(readFile.get());
 }
 
 TEST_F(AbfsFileSystemTest, multipleThreadsWithReadFile) {
   startThreads = false;
-  auto hiveConfig = AbfsFileSystemTest::hiveConfig();
-  auto abfs = filesystems::getFileSystem(fullFilePath, hiveConfig);
+  auto hiveConfig = AbfsFileSystemTest::hiveConfig(
+      {{filesystems::abfs::AbfsFileSystem::kReadAbfsConnectionStr,
+        azuriteServer->connectionStr()}});
+  auto abfs = std::make_shared<filesystems::abfs::AbfsFileSystem>(hiveConfig);
 
   std::vector<std::thread> threads;
   std::mt19937 generator(std::random_device{}());
@@ -191,10 +180,12 @@ TEST_F(AbfsFileSystemTest, multipleThreadsWithReadFile) {
 
 TEST_F(AbfsFileSystemTest, missingFile) {
   try {
-    auto hiveConfig = AbfsFileSystemTest::hiveConfig();
+    auto hiveConfig = AbfsFileSystemTest::hiveConfig(
+        {{filesystems::abfs::AbfsFileSystem::kReadAbfsConnectionStr,
+          azuriteServer->connectionStr()}});
     const std::string abfsFile =
         facebook::velox::filesystems::test::AzuriteABFSEndpoint + "test.txt";
-    auto abfs = filesystems::getFileSystem(abfsFile, hiveConfig);
+    auto abfs = std::make_shared<filesystems::abfs::AbfsFileSystem>(hiveConfig);
     auto readFile = abfs->openFileForRead(abfsFile);
     FAIL() << "Expected VeloxException";
   } catch (VeloxException const& err) {
@@ -203,53 +194,67 @@ TEST_F(AbfsFileSystemTest, missingFile) {
 }
 
 TEST_F(AbfsFileSystemTest, openFileForWriteNotImplemented) {
-  auto hiveConfig = AbfsFileSystemTest::hiveConfig();
-  auto abfs = filesystems::getFileSystem(fullFilePath, hiveConfig);
+  auto hiveConfig = AbfsFileSystemTest::hiveConfig(
+      {{filesystems::abfs::AbfsFileSystem::kReadAbfsConnectionStr,
+        azuriteServer->connectionStr()}});
+  auto abfs = std::make_shared<filesystems::abfs::AbfsFileSystem>(hiveConfig);
   VELOX_ASSERT_THROW(
       abfs->openFileForWrite(fullFilePath), "write for abfs not implemented");
 }
 
 TEST_F(AbfsFileSystemTest, renameNotImplemented) {
-  auto hiveConfig = AbfsFileSystemTest::hiveConfig();
-  auto abfs = filesystems::getFileSystem(fullFilePath, hiveConfig);
+  auto hiveConfig = AbfsFileSystemTest::hiveConfig(
+      {{filesystems::abfs::AbfsFileSystem::kReadAbfsConnectionStr,
+        azuriteServer->connectionStr()}});
+  auto abfs = std::make_shared<filesystems::abfs::AbfsFileSystem>(hiveConfig);
   VELOX_ASSERT_THROW(
       abfs->rename("text", "text2"), "rename for abfs not implemented");
 }
 
 TEST_F(AbfsFileSystemTest, removeNotImplemented) {
-  auto hiveConfig = AbfsFileSystemTest::hiveConfig();
-  auto abfs = filesystems::getFileSystem(fullFilePath, hiveConfig);
+  auto hiveConfig = AbfsFileSystemTest::hiveConfig(
+      {{filesystems::abfs::AbfsFileSystem::kReadAbfsConnectionStr,
+        azuriteServer->connectionStr()}});
+  auto abfs = std::make_shared<filesystems::abfs::AbfsFileSystem>(hiveConfig);
   VELOX_ASSERT_THROW(abfs->remove("text"), "remove for abfs not implemented");
 }
 
 TEST_F(AbfsFileSystemTest, existsNotImplemented) {
-  auto hiveConfig = AbfsFileSystemTest::hiveConfig();
-  auto abfs = filesystems::getFileSystem(fullFilePath, hiveConfig);
+  auto hiveConfig = AbfsFileSystemTest::hiveConfig(
+      {{filesystems::abfs::AbfsFileSystem::kReadAbfsConnectionStr,
+        azuriteServer->connectionStr()}});
+  auto abfs = std::make_shared<filesystems::abfs::AbfsFileSystem>(hiveConfig);
   VELOX_ASSERT_THROW(abfs->exists("text"), "exists for abfs not implemented");
 }
 
 TEST_F(AbfsFileSystemTest, listNotImplemented) {
-  auto hiveConfig = AbfsFileSystemTest::hiveConfig();
-  auto abfs = filesystems::getFileSystem(fullFilePath, hiveConfig);
+  auto hiveConfig = AbfsFileSystemTest::hiveConfig(
+      {{filesystems::abfs::AbfsFileSystem::kReadAbfsConnectionStr,
+        azuriteServer->connectionStr()}});
+  auto abfs = std::make_shared<filesystems::abfs::AbfsFileSystem>(hiveConfig);
   VELOX_ASSERT_THROW(abfs->list("dir"), "list for abfs not implemented");
 }
 
 TEST_F(AbfsFileSystemTest, mkdirNotImplemented) {
-  auto hiveConfig = AbfsFileSystemTest::hiveConfig();
-  auto abfs = filesystems::getFileSystem(fullFilePath, hiveConfig);
+  auto hiveConfig = AbfsFileSystemTest::hiveConfig(
+      {{filesystems::abfs::AbfsFileSystem::kReadAbfsConnectionStr,
+        azuriteServer->connectionStr()}});
+  auto abfs = std::make_shared<filesystems::abfs::AbfsFileSystem>(hiveConfig);
   VELOX_ASSERT_THROW(abfs->mkdir("dir"), "mkdir for abfs not implemented");
 }
 
 TEST_F(AbfsFileSystemTest, rmdirNotImplemented) {
-  auto hiveConfig = AbfsFileSystemTest::hiveConfig();
-  auto abfs = filesystems::getFileSystem(fullFilePath, hiveConfig);
+  auto hiveConfig = AbfsFileSystemTest::hiveConfig(
+      {{filesystems::abfs::AbfsFileSystem::kReadAbfsConnectionStr,
+        azuriteServer->connectionStr()}});
+  auto abfs = std::make_shared<filesystems::abfs::AbfsFileSystem>(hiveConfig);
   VELOX_ASSERT_THROW(abfs->rmdir("dir"), "rmdir for abfs not implemented");
 }
 
 TEST_F(AbfsFileSystemTest, credNotFOund) {
   const std::string abfsFile =
       std::string("abfs://test@test1.dfs.core.windows.net/test");
-  auto hiveConfig = AbfsFileSystemTest::hiveConfig({}, false);
+  auto hiveConfig = AbfsFileSystemTest::hiveConfig({});
   auto abfs =
       std::make_shared<facebook::velox::filesystems::abfs::AbfsFileSystem>(
           hiveConfig);

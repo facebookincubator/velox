@@ -34,11 +34,6 @@ static const std::string AzuriteContainerName{"test"};
 // the default key of Azurite Server used for connection
 static const std::string AzuriteAccountKey{
     "Eby8vdM02xNOcqFlqUwJPLlmEtlCDXJ1OUzFT50uSRZ6IFsuFq2UVErCz4I6tq/K1SZFPTOtr/KBHBeksoGMGw=="};
-static const std::string AzuriteConnectionString = fmt::format(
-    "DefaultEndpointsProtocol=http;AccountName={};AccountKey={};BlobEndpoint=http://127.0.0.1:10000/{};",
-    AzuriteAccountName,
-    AzuriteAccountKey,
-    AzuriteAccountName);
 static const std::string AzuriteABFSEndpoint = fmt::format(
     "abfs://{}@{}.dfs.core.windows.net/",
     AzuriteAccountName,
@@ -48,16 +43,15 @@ class AzuriteServer {
  public:
   AzuriteServer(int64_t port);
 
+  const std::string connectionStr() const;
+
   void start();
 
   void stop();
 
   bool isRunning();
 
-  void addFile(
-      std::string source,
-      std::string destination,
-      std::string connectionString);
+  void addFile(std::string source, std::string destination);
 
   virtual ~AzuriteServer();
 

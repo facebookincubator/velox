@@ -17,11 +17,20 @@
 #include "velox/connectors/hive/storage_adapters/abfs/tests/AzuriteServer.h"
 
 namespace facebook::velox::filesystems::test {
+const std::string AzuriteServer::connectionStr() const {
+  return fmt::format(
+      "DefaultEndpointsProtocol=http;AccountName={};AccountKey={};BlobEndpoint=http://127.0.0.1:{}/{};",
+      AzuriteAccountName,
+      AzuriteAccountKey,
+      port_,
+      AzuriteAccountName);
+}
+
 void AzuriteServer::start() {
   try {
     serverProcess_ = std::make_unique<boost::process::child>(
         env_, exePath_, commandOptions_);
-    serverProcess_->wait_for(std::chrono::duration<int, std::milli>(30000));
+    serverProcess_->wait_for(std::chrono::duration<int, std::milli>(10000));
     VELOX_CHECK_EQ(
         serverProcess_->exit_code(),
         383,
@@ -49,9 +58,8 @@ bool AzuriteServer::isRunning() {
 
 // requires azurite executable to be on the PATH
 AzuriteServer::AzuriteServer(int64_t port) : port_(port) {
-  std::string dataLocation = "/tmp/azurite_" + std::to_string(port);
-  std::string logFilePath =
-      "/tmp/azurite/azurite" + std::to_string(port) + ".log";
+  std::string dataLocation = fmt::format("/tmp/azurite_{}", port);
+  std::string logFilePath = fmt::format("/tmp/azurite/azurite_{}.log", port);
   std::printf(
       "Launch azurite instance with port - %s, data location - %s, log file path - %s\n",
       std::to_string(port).c_str(),
@@ -81,12 +89,9 @@ AzuriteServer::AzuriteServer(int64_t port) : port_(port) {
   }
 }
 
-void AzuriteServer::addFile(
-    std::string source,
-    std::string destination,
-    std::string connectionString) {
+void AzuriteServer::addFile(std::string source, std::string destination) {
   auto containerClient = BlobContainerClient::CreateFromConnectionString(
-      connectionString, AzuriteContainerName);
+      connectionStr(), AzuriteContainerName);
   containerClient.CreateIfNotExists();
   auto blobClient = containerClient.GetBlockBlobClient(destination);
   blobClient.UploadFrom(source);

@@ -27,7 +27,8 @@ add_library(
   QueryAssertions.cpp
   SumNonPODAggregate.cpp
   TpchQueryBuilder.cpp
-  VectorTestUtil.cpp)
+  VectorTestUtil.cpp
+  PortUtil.cpp)
 
 target_link_libraries(
   velox_exec_test_lib

@@ -36,6 +36,7 @@ class AbfsAccount {
   explicit AbfsAccount(const std::string path);
 
   const std::string accountNameWithSuffix() const;
+
   const std::string scheme() const;
 
   const std::string accountName() const;
