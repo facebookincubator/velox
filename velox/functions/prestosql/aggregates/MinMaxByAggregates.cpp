@@ -1175,7 +1175,7 @@ exec::AggregateRegistrationResult registerMinMaxBy(const std::string& name) {
           if (isRawInput) {
             // Input is: V, C.
             return create<Aggregate, Comparator, isMaxFunc>(
-                resultType, argTypes[0], argTypes[1], errorMessage);
+                resultType, argTypes[0], argTypes[1], errorMessage, true);
           } else {
             // Input is: ROW(V, C).
             const auto& rowType = argTypes[0];
