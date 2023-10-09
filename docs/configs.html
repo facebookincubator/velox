@@ -150,6 +150,12 @@ The Drivers are resumed when the buffered size goes below PartitionedOutputBuffe
 This is an expensive check so should only be used for debugging. It can help debug issues where malformed vector
 cause failures or crashes by helping identify which operator is generating them.</p></td>
 </tr>
+<tr class="row-odd"><td><p>enable_expression_evaluation_cache</p></td>
+<td><p>bool</p></td>
+<td><p>true</p></td>
+<td><p>Whether to enable caches in expression evaluation. If set to true, optimizations including vector pools and
+evalWithMemo are enabled.</p></td>
+</tr>
 </tbody>
 </table>
 </section>
