@@ -917,15 +917,16 @@ struct ConvFunction {
       return false;
     }
 
-    // Consistent with spark, only supports base belonging to [2, 36].
-    const int MIN_BASE = 2;
-    const int MAX_BASE = 36;
-    if (fromBase < MIN_BASE || fromBase > MAX_BASE ||
-        std::abs(toBase) < MIN_BASE || std::abs(toBase) > MAX_BASE) {
+    // Consistent with spark, only supports fromBase belonging to [2, 36]
+    // and toBase belonging to [2, 36] or [-36, -2].
+    const int minBase = 2;
+    const int maxBase = 36;
+    if (fromBase < minBase || fromBase > maxBase ||
+        std::abs(toBase) < minBase || std::abs(toBase) > maxBase) {
       return false;
     }
 
-    // Fast path for case "0", regardless of fromBase/toBase.
+    // Fast path for case '0', regardless of fromBase/toBase.
     if (input.data()[0] == '0' && input.size() == 1) {
       result.append(input);
       return true;
@@ -952,13 +953,13 @@ struct ConvFunction {
     free(inputChars);
 
     bool hasNegativeMark = false;
-    const unsigned long MAX_UNSIGNED_INT64 = 0xFFFFFFFFFFFFFFFF;
+    const unsigned long maxUnsignedInt64 = 0xFFFFFFFFFFFFFFFF;
     if (isNegativeInput && toBase < 0) {
       hasNegativeMark = true;
     } else if (isNegativeInput && toBase > 0) {
       // If toBase > 0, the result is unsigned. Converts the original nagative
       // value to unsigned one.
-      unsignedValue = MAX_UNSIGNED_INT64 - unsignedValue + 1;
+      unsignedValue = maxUnsignedInt64 - unsignedValue + 1;
     }
     toBase = toBase < 0 ? -toBase : toBase;
 
@@ -983,12 +984,10 @@ struct ConvFunction {
     if (resultSize == 0) {
       return false;
     }
-    if (resultSize != 64) {
-      for (int k = 0; k < resultSize; k++) {
-        std::memcpy(result.data() + k, result.data() + i + 1 + k, 1);
-      }
+    if (resultSize < 64) {
+      std::memcpy(result.data(), result.data() + i + 1, resultSize);
+      result.resize(resultSize);
     }
-    result.resize(resultSize);
     return true;
   }
 };

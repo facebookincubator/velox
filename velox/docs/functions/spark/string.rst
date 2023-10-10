@@ -23,6 +23,14 @@ Unless specified otherwise, all functions return NULL if at least one of the arg
         SELECT contains('Spark SQL', null); -- NULL
         SELECT contains(x'537061726b2053514c', x'537061726b'); -- true
 
+.. spark:function:: conv(num, fromBase, toBase) -> string
+
+    Converts ``num`` represented in string from one base to another. Only supports ``fromBase``
+    belonging to [2, 36] and ``toBase`` belonging to [2, 36] or [-36, -2].
+
+        SELECT conv('100', 2, 10); -- 4
+        SELECT conv('-10', 16, -10); -- -16
+
 .. spark:function:: endswith(left, right) -> boolean
 
     Returns true if 'left' ends with 'right'. Otherwise, returns false. ::
