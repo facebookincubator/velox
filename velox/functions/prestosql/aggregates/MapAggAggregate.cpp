@@ -25,9 +25,7 @@ namespace {
 template <typename K>
 class MapAggAggregate : public MapAggregateBase<K> {
  public:
-  explicit MapAggAggregate(
-      TypePtr resultType,
-      const bool throwOnNestedNulls = false)
+  explicit MapAggAggregate(TypePtr resultType, bool throwOnNestedNulls = false)
       : MapAggregateBase<K>(std::move(resultType)),
         throwOnNestedNulls_(throwOnNestedNulls) {}
 
@@ -47,7 +45,7 @@ class MapAggAggregate : public MapAggregateBase<K> {
 
     if (throwOnNestedNulls_) {
       DecodedVector decodedKeys(*keys, rows);
-      auto indices = decodedKeys.indices();
+      const auto* indices = decodedKeys.indices();
       rows.applyToSelected([&](vector_size_t i) {
         checkNestedNulls(decodedKeys, indices, i, throwOnNestedNulls_);
       });
@@ -102,7 +100,7 @@ class MapAggAggregate : public MapAggregateBase<K> {
       bool /*mayPushdown*/) override {
     Base::decodedKeys_.decode(*args[0], rows);
     Base::decodedValues_.decode(*args[1], rows);
-    auto indices = Base::decodedKeys_.indices();
+    const auto* indices = Base::decodedKeys_.indices();
 
     rows.applyToSelected([&](vector_size_t row) {
       if (checkNestedNulls(
@@ -173,7 +171,7 @@ exec::AggregateRegistrationResult registerMapAgg(const std::string& name) {
             "{} ({}): unexpected number of arguments",
             name);
         const bool throwOnNestedNulls = rawInput;
-        auto typeKind = resultType->childAt(0)->kind();
+        const auto typeKind = resultType->childAt(0)->kind();
         switch (typeKind) {
           case TypeKind::BOOLEAN:
             return std::make_unique<MapAggAggregate<bool>>(resultType);

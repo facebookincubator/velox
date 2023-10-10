@@ -34,9 +34,9 @@ int32_t compare(
     const DecodedVector& decoded,
     vector_size_t index);
 
-/// Check nested nulls in a complex type vector. Returns true if value at
-/// specified index is null. Throw an exception if the base vector contains
-/// nulls if throwOnNestedNulls is true.
+/// Checks nested nulls in a complex type vector. Returns true if value at
+/// specified index is null. Throws an exception if the base vector contains
+/// nulls if 'throwOnNestedNulls' is true.
 bool checkNestedNulls(
     const DecodedVector& decoded,
     const vector_size_t* indices,
