@@ -927,13 +927,13 @@ struct ConvFunction {
 
     // Fast path for case "0", regardless of fromBase/toBase.
     if (input.data()[0] == '0' && input.size() == 1) {
-      result.setNoCopy(StringView(input.data(), 1));
+      result.append(input);
       return true;
     }
 
     // No need to do the conversion.
     if (fromBase == toBase) {
-      result.setNoCopy(StringView(input.data(), input.size()));
+      result.append(input);
       return true;
     }
 
@@ -983,8 +983,12 @@ struct ConvFunction {
     if (resultSize == 0) {
       return false;
     }
+    if (resultSize != 64) {
+      for (int k = 0; k < resultSize; k++) {
+        std::memcpy(result.data() + k, result.data() + i + 1 + k, 1);
+      }
+    }
     result.resize(resultSize);
-    result.setNoCopy(StringView(result.data() + i + 1, resultSize));
     return true;
   }
 };
