@@ -34,6 +34,9 @@ bool Exchange::getSplits(ContinueFuture* future) {
         auto remoteSplit = std::dynamic_pointer_cast<RemoteConnectorSplit>(
             split.connectorSplit);
         VELOX_CHECK(remoteSplit, "Wrong type of split");
+        LOG(ERROR) << "-------- " << operatorCtx_->task()->taskId()
+                   << " Exchange operator getSplits addRemoteSplit:"
+                   << remoteSplit->toString();
         exchangeClient_->addRemoteTaskId(remoteSplit->taskId);
         ++stats_.wlock()->numSplits;
       } else {
@@ -96,6 +99,9 @@ bool Exchange::isFinished() {
 }
 
 RowVectorPtr Exchange::getOutput() {
+  LOG(ERROR) << "-------- " << operatorCtx_->task()->taskId()
+             << "Exchange::getOutput, currentPage_ is "
+             << (currentPage_ == nullptr ? "null" : "not null");
   if (!currentPage_) {
     return nullptr;
   }

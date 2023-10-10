@@ -340,6 +340,7 @@ void HiveDataSink::appendData(RowVectorPtr input) {
 
   // Write to unpartitioned table.
   if (!isPartitioned()) {
+    LOG(ERROR) << "-------- HiveDataSink::appendData. unpartitioned write";
     const auto index = ensureWriter(HiveWriterId::unpartitionedId());
     writers_[index]->write(input);
     writerInfo_[index]->numWrittenRows += input->size();
@@ -357,6 +358,8 @@ void HiveDataSink::appendData(RowVectorPtr input) {
   // All inputs belong to a single non-bucketed partition. The partition id must
   // be zero.
   if (!isBucketed() && partitionIdGenerator_->numPartitions() == 1) {
+    LOG(ERROR)
+        << "-------- HiveDataSink::appendData. Not bucketed and partition id is 0";
     const auto index = ensureWriter(HiveWriterId{0});
     writers_[index]->write(input);
     writerInfo_[index]->numWrittenRows += input->size();
@@ -365,6 +368,9 @@ void HiveDataSink::appendData(RowVectorPtr input) {
 
   splitInputRowsAndEnsureWriters();
 
+  LOG(ERROR)
+      << "-------- HiveDataSink::appendData. partitioned write, writers_.size:"
+      << writers_.size();
   for (auto index = 0; index < writers_.size(); ++index) {
     const vector_size_t partitionSize = partitionSizes_[index];
     if (partitionSize == 0) {
@@ -374,6 +380,9 @@ void HiveDataSink::appendData(RowVectorPtr input) {
     RowVectorPtr writerInput = partitionSize == input->size()
         ? input
         : exec::wrap(partitionSize, partitionRows_[index], input);
+    LOG(ERROR)
+        << "-------- HiveDataSink::appendData. partitioned write, writers_ index:"
+        << index;
     writers_[index]->write(writerInput);
     writerInfo_[index]->numWrittenRows += partitionSize;
   }
@@ -501,6 +510,7 @@ uint32_t HiveDataSink::appendWriter(const HiveWriterId& id) {
   options.compressionKind = insertTableHandle_->compressionKind();
   options.setMemoryReclaimer = connectorQueryCtx_->setMemoryReclaimer();
   ioStats_.emplace_back(std::make_shared<io::IoStatistics>());
+  LOG(ERROR) << "-------- HiveDataSink, createWriter";
   auto writer = writerFactory_->createWriter(
       dwio::common::FileSink::create(
           writePath,
@@ -583,6 +593,9 @@ HiveWriterParameters HiveDataSink::getWriterParameters(
 
   auto [targetFileName, writeFileName] = getWriterFileNames(bucketId);
 
+  LOG(ERROR)
+      << "-------- HiveDataSink::getWriterParameters. insertTableHandle_->locationHandle()->writePath():"
+      << insertTableHandle_->locationHandle()->writePath();
   return HiveWriterParameters{
       updateMode,
       partition,

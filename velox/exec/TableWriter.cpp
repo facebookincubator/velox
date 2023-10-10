@@ -111,6 +111,8 @@ std::vector<std::string> TableWriter::closeDataSink() {
 }
 
 void TableWriter::addInput(RowVectorPtr input) {
+  LOG(ERROR) << "-------- " << driverCtx_->task->taskId()
+             << "TableWriter::addInput, input size:" << input->size();
   if (input->size() == 0) {
     return;
   }
@@ -139,6 +141,8 @@ void TableWriter::addInput(RowVectorPtr input) {
 }
 
 void TableWriter::noMoreInput() {
+  LOG(ERROR) << "-------- " << driverCtx_->task->taskId()
+             << "TableWriter::noMoreInput";
   Operator::noMoreInput();
   if (aggregation_ != nullptr) {
     aggregation_->noMoreInput();

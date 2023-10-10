@@ -1067,6 +1067,8 @@ bool Task::addSplitWithSequence(
     std::lock_guard<std::mutex> l(mutex_);
     isTaskRunning = isRunningLocked();
     if (isTaskRunning) {
+      LOG(ERROR) << "-------- " << taskId_
+                 << "Task::addSplitWithSequence, isTaskRunning";
       // The same split can be added again in some systems. The systems that
       // want 'one split processed once only' would use this method and
       // duplicate splits would be ignored.
@@ -1083,6 +1085,8 @@ bool Task::addSplitWithSequence(
   }
 
   if (!isTaskRunning) {
+    LOG(ERROR) << "-------- " << taskId_
+               << "Task::addSplitWithSequence, !isTaskRunning";
     addRemoteSplit(planNodeId, split);
   }
 
@@ -1096,6 +1100,7 @@ void Task::addSplit(const core::PlanNodeId& planNodeId, exec::Split&& split) {
     std::lock_guard<std::mutex> l(mutex_);
     isTaskRunning = isRunningLocked();
     if (isTaskRunning) {
+      LOG(ERROR) << "-------- " << taskId_ << "Task::addSplit, isTaskRunning";
       promise = addSplitLocked(
           getPlanNodeSplitsStateLocked(planNodeId), std::move(split));
     }
@@ -1107,6 +1112,7 @@ void Task::addSplit(const core::PlanNodeId& planNodeId, exec::Split&& split) {
 
   if (!isTaskRunning) {
     // Safe because 'split' is moved away above only if 'isTaskRunning'.
+    LOG(ERROR) << "-------- " << taskId_ << "Task::addSplit, !isTaskRunning";
     addRemoteSplit(planNodeId, split);
   }
 }
@@ -1118,6 +1124,8 @@ void Task::addRemoteSplit(
     if (exchangeClientByPlanNode_.count(planNodeId)) {
       auto remoteSplit =
           std::dynamic_pointer_cast<RemoteConnectorSplit>(split.connectorSplit);
+      LOG(ERROR) << "-------- taskID:" << taskId_
+                 << " Task::addRemoteSplit:" << remoteSplit->toString();
       VELOX_CHECK(remoteSplit, "Wrong type of split");
       exchangeClientByPlanNode_[planNodeId]->addRemoteTaskId(
           remoteSplit->taskId);
@@ -1673,6 +1681,7 @@ ContinueFuture Task::terminate(TaskState terminalState) {
       }
     }
 
+    //
     LOG(INFO) << "Terminating task " << taskId() << " with state "
               << taskStateString(state_) << " after running for "
               << timeSinceStartMsLocked() << " ms.";

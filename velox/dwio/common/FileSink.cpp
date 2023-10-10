@@ -90,6 +90,7 @@ std::unique_ptr<FileSink> FileSink::create(
     const std::string& filePath,
     const Options& options) {
   DWIO_ENSURE_NOT_NULL(options.metricLogger);
+  LOG(ERROR) << "-------- FileSink::create, filePath:" << filePath;
   for (auto& factory : factories()) {
     auto result = factory(filePath, options);
     if (result) {

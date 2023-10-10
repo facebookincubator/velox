@@ -100,6 +100,9 @@ bool PartitionedOutputBufferManager::getData(
     buffer->getData(destination, maxBytes, sequence, notify);
     return true;
   }
+  LOG(ERROR)
+      << "-------- PartitionedOutputBufferManager::getData, buffer not exist, buffer taskId:"
+      << taskId << ",destination:" << destination;
   return false;
 }
 

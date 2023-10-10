@@ -241,6 +241,9 @@ PartitionedOutputBuffer::PartitionedOutputBuffer(
 void PartitionedOutputBuffer::updateOutputBuffers(
     int numBuffers,
     bool noMoreBuffers) {
+  LOG(ERROR) << "-------- " << task_->taskId()
+             << "PartitionedOutputBuffer::updateOutputBuffers, numBuffers:"
+             << numBuffers << "noMoreBuffers:" << noMoreBuffers;
   if (isPartitioned()) {
     VELOX_CHECK_EQ(buffers_.size(), numBuffers);
     VELOX_CHECK(noMoreBuffers);
@@ -288,6 +291,9 @@ void PartitionedOutputBuffer::updateNumDrivers(uint32_t newNumDrivers) {
 }
 
 void PartitionedOutputBuffer::addOutputBuffersLocked(int numBuffers) {
+  LOG(ERROR) << "-------- " << task_->taskId()
+             << "PartitionedOutputBuffer::addOutputBuffersLocked, numBuffers:"
+             << numBuffers;
   VELOX_CHECK(!noMoreBuffers_);
   VELOX_CHECK(!isPartitioned());
   buffers_.reserve(numBuffers);
@@ -533,6 +539,9 @@ void PartitionedOutputBuffer::updateAfterAcknowledgeLocked(
 }
 
 bool PartitionedOutputBuffer::deleteResults(int destination) {
+  LOG(ERROR) << "-------- " << task_->taskId()
+             << "PartitionedOutputBuffer::deleteResults, destination:"
+             << destination;
   std::vector<std::shared_ptr<SerializedPage>> freed;
   std::vector<ContinuePromise> promises;
   bool isFinished;
@@ -572,6 +581,9 @@ void PartitionedOutputBuffer::getData(
     uint64_t maxBytes,
     int64_t sequence,
     DataAvailableCallback notify) {
+  LOG(ERROR) << "-------- " << task_->taskId()
+             << "PartitionedOutputBuffer::getData, destination:" << destination
+             << "current buffers size: " << buffers_.size();
   std::vector<std::unique_ptr<folly::IOBuf>> data;
   std::vector<std::shared_ptr<SerializedPage>> freed;
   std::vector<ContinuePromise> promises;
@@ -579,6 +591,10 @@ void PartitionedOutputBuffer::getData(
     std::lock_guard<std::mutex> l(mutex_);
 
     if (!isPartitioned() && destination >= buffers_.size()) {
+      LOG(ERROR)
+          << "-------- " << task_->taskId()
+          << "PartitionedOutputBuffer::getData:addOutputBuffersLocked for (destination+1)"
+          << destination + 1;
       addOutputBuffersLocked(destination + 1);
     }
 
@@ -600,6 +616,8 @@ void PartitionedOutputBuffer::getData(
 }
 
 void PartitionedOutputBuffer::terminate() {
+  LOG(ERROR) << "-------- " << task_->taskId()
+             << "PartitionedOutputBuffer::terminate";
   VELOX_CHECK(!task_->isRunning());
 
   std::vector<ContinuePromise> outstandingPromises;

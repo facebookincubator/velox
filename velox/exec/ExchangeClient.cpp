@@ -20,10 +20,14 @@ namespace facebook::velox::exec {
 void ExchangeClient::addRemoteTaskId(const std::string& taskId) {
   RequestSpec requestSpec;
   std::shared_ptr<ExchangeSource> toClose;
+  LOG(ERROR) << "-------- " << taskId
+             << " enter ExchangeClient::addRemoteTaskId";
   {
     std::lock_guard<std::mutex> l(queue_->mutex());
 
     bool duplicate = !taskIds_.insert(taskId).second;
+    LOG(ERROR) << "-------- " << taskId
+               << " ExchangeClient::addRemoteTaskId. duplicate:" << duplicate;
     if (duplicate) {
       // Do not add sources twice. Presto protocol may add duplicate sources
       // and the task updates have no guarantees of arriving in order.
@@ -32,7 +36,14 @@ void ExchangeClient::addRemoteTaskId(const std::string& taskId) {
 
     std::shared_ptr<ExchangeSource> source;
     try {
+      LOG(ERROR)
+          << "-------- " << taskId
+          << " ExchangeClient::addRemoteTaskId. before creating ExchangeSource. destination_:"
+          << destination_;
       source = ExchangeSource::create(taskId, destination_, queue_, pool_);
+      LOG(ERROR)
+          << "-------- " << taskId
+          << " ExchangeClient::addRemoteTaskId. After creating ExchangeSource";
     } catch (const VeloxException& e) {
       throw;
     } catch (const std::exception& e) {

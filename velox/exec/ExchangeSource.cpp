@@ -22,6 +22,10 @@ std::shared_ptr<ExchangeSource> ExchangeSource::create(
     int destination,
     std::shared_ptr<ExchangeQueue> queue,
     memory::MemoryPool* pool) {
+  LOG(ERROR)
+      << "-------- " << taskId
+      << " ExchangeSource::create. factories() size:"
+      << factories().size();
   for (auto& factory : factories()) {
     auto result = factory(taskId, destination, queue, pool);
     if (result) {
