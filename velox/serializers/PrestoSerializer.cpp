@@ -919,10 +919,11 @@ class VectorStream {
           child->flush(out);
         }
         writeInt32(out, nullCount_ + nonNullCount_);
-        if (nullCount_ + nonNullCount_ == 0) {
+        if (!counted_ && nullCount_ + nonNullCount_ == 0) {
           // If nothing was added, there is still one offset in the wire
           // format.
           lengths_.appendOne<int32_t>(0);
+          counted_ = true;
         }
         lengths_.flush(out);
         flushNulls(out);
@@ -931,10 +932,11 @@ class VectorStream {
       case TypeKind::ARRAY:
         children_[0]->flush(out);
         writeInt32(out, nullCount_ + nonNullCount_);
-        if (nullCount_ + nonNullCount_ == 0) {
+        if (!counted_ && nullCount_ + nonNullCount_ == 0) {
           // If nothing was added, there is still one offset in the wire
           // format.
           lengths_.appendOne<int32_t>(0);
+          counted_ = true;
         }
         lengths_.flush(out);
         flushNulls(out);
@@ -946,10 +948,11 @@ class VectorStream {
         // hash table size. -1 means not included in serialization.
         writeInt32(out, -1);
         writeInt32(out, nullCount_ + nonNullCount_);
-        if (nullCount_ + nonNullCount_ == 0) {
+        if (!counted_ && nullCount_ + nonNullCount_ == 0) {
           // If nothing was added, there is still one offset in the wire
           // format.
           lengths_.appendOne<int32_t>(0);
+          counted_ = true;
         }
 
         lengths_.flush(out);
@@ -995,6 +998,7 @@ class VectorStream {
   int32_t nullCount_{0};
   int32_t totalLength_{0};
   bool hasLengths_{false};
+  bool counted_{false};
   ByteRange header_;
   ByteStream nulls_;
   ByteStream lengths_;
