@@ -66,7 +66,6 @@ class AggregateWindowFunction : public exec::WindowFunction {
         resultType,
         config);
     aggregate_->setAllocator(stringAllocator_);
-    computeDefaultAggregateValue(resultType);
 
     // Aggregate initialization.
     // Row layout is:
@@ -98,6 +97,11 @@ class AggregateWindowFunction : public exec::WindowFunction {
     // Constructing a vector of a single result value used for copying from
     // the aggregate to the final result.
     aggregateResultVector_ = BaseVector::create(resultType, 1, pool_);
+
+    // Constructing a vector of a single result value for empty frames.
+    emptyResult_ = BaseVector::create(resultType, 1, pool_);
+
+    computeDefaultAggregateValue();
   }
 
   ~AggregateWindowFunction() {
@@ -351,8 +355,19 @@ class AggregateWindowFunction : public exec::WindowFunction {
 
   // Precompute and save the aggregate output for empty input in emptyResult_.
   // This value is returned for rows with empty frames.
-  void computeDefaultAggregateValue(const TypePtr& resultType) {
-    constexpr int kRowSizeOffset = 8;
+  void computeDefaultAggregateValue() {
+    SelectivityVector rows(1, false);
+    BaseVector::prepareForReuse(emptyResult_, 1);
+
+    static auto kSingleGroup = std::vector<vector_size_t>{0};
+    aggregate_->clear();
+    aggregate_->initializeNewGroups(&rawSingleGroupRow_, kSingleGroup);
+    aggregateInitialized_ = true;
+    aggregate_->addSingleGroupRawInput(
+        rawSingleGroupRow_, rows, argVectors_, false);
+    aggregate_->extractValues(&rawSingleGroupRow_, 1, &emptyResult_);
+
+    /*constexpr int kRowSizeOffset = 8;
     constexpr int kOffset = kRowSizeOffset + 8;
     aggregate_->setOffsets(kOffset, 0, 1, kRowSizeOffset);
     std::vector<char> group(kOffset + aggregate_->accumulatorFixedWidthSize());
@@ -381,7 +396,7 @@ class AggregateWindowFunction : public exec::WindowFunction {
     emptyResult_ = BaseVector::create(resultType, 1, pool_);
     aggregate_->extractValues(groups.data(), 1, &emptyResult_);
     aggregate_->clear();
-    aggregate_->destroy(folly::Range(groups.data(), 1));
+    aggregate_->destroy(folly::Range(groups.data(), 1)); */
   }
 
   // Aggregate function object required for this window function evaluation.
