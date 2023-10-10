@@ -30,21 +30,12 @@ class AbfsConfig {
   AbfsConfig(const Config* config) : config_(config) {}
 
   std::string connectionString(const std::string& path) const {
-    if (!connectionString().empty()) {
-      // This is only used for testing.
-      return connectionString();
-    }
     auto abfsAccount = AbfsAccount(path);
     auto key = abfsAccount.credKey();
     VELOX_USER_CHECK(
         config_->isValueExists(key), "Failed to find storage credentials");
 
     return abfsAccount.connectionString(config_->get(key).value());
-  }
-
-  std::string connectionString() const {
-    return config_->get<std::string>(
-        AbfsFileSystem::kReadAbfsConnectionStr, "");
   }
 
  private:
@@ -54,11 +45,11 @@ class AbfsConfig {
 class AbfsFileSystem::Impl {
  public:
   explicit Impl(const Config* config) : abfsConfig_(config) {
-    LOG(INFO) << "Init Azure ABFS file system";
+    LOG(INFO) << "Init Azure Blob file system";
   }
 
   ~Impl() {
-    LOG(INFO) << "Dispose Azure ABFS file system";
+    LOG(INFO) << "Dispose Azure Blob file system";
   }
 
   const std::string connectionString(const std::string& path) const {

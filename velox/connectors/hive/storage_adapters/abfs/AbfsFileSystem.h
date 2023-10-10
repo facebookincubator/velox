@@ -19,11 +19,21 @@
 
 namespace facebook::velox::filesystems::abfs {
 
+/// Implementation of the ABS (Azure Blob Storage) filesystem and file
+/// interface. We provide a registration method for reading and writing files so
+/// that the appropriate type of file can be constructed based on a filename.
+/// The supported schema is `abfs(s)://` to align with the valid scheme
+/// identifiers used in the Hadoop Filesystem ABFS driver when integrating with
+/// Azure Blob Storage. One key difference here is that the ABFS Hadoop client
+/// driver always uses Transport Layer Security (TLS) regardless of the
+/// authentication method chosen when using the `abfss` schema, but not mandated
+/// when using the `abfs` schema. In our implementation, we always use the HTTPS
+/// protocol, regardless of whether the schema is `abfs://` or `abfss://`. The
+/// legacy wabs(s):// schema is not supported as it has been deprecated already
+/// by Azure Storage team. Reference document -
+/// https://learn.microsoft.com/en-us/azure/databricks/storage/azure-storage.
 class AbfsFileSystem : public FileSystem {
  public:
-  static constexpr const char* kReadAbfsConnectionStr =
-      "fs.azure.abfs.connectionString"; // for testing
-
   explicit AbfsFileSystem(const std::shared_ptr<const Config>& config);
 
   std::string name() const override;

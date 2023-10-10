@@ -30,7 +30,7 @@ void AzuriteServer::start() {
   try {
     serverProcess_ = std::make_unique<boost::process::child>(
         env_, exePath_, commandOptions_);
-    serverProcess_->wait_for(std::chrono::duration<int, std::milli>(10000));
+    serverProcess_->wait_for(std::chrono::duration<int, std::milli>(5000));
     VELOX_CHECK_EQ(
         serverProcess_->exit_code(),
         383,
