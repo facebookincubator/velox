@@ -34,8 +34,6 @@ FOLLY_ALWAYS_INLINE int32_t toCacheIndex(const TypePtr& type) {
       BIGINT().get(),
       REAL().get(),
       DOUBLE().get(),
-      VARCHAR().get(),
-      VARBINARY().get(),
       TIMESTAMP().get(),
       DATE().get(),
   };
