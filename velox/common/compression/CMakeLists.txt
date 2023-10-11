@@ -12,5 +12,12 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+if(${VELOX_BUILD_TESTING})
+  add_subdirectory(tests)
+endif()
+
 add_library(velox_common_compression Compression.cpp LzoDecompressor.cpp)
-target_link_libraries(velox_common_compression Folly::folly)
+target_link_libraries(
+  velox_common_compression
+  PUBLIC Folly::folly
+  PRIVATE velox_exception)

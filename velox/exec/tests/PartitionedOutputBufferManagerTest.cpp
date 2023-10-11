@@ -15,11 +15,10 @@
  */
 #include "velox/exec/PartitionedOutputBufferManager.h"
 #include <gtest/gtest.h>
-#include <velox/common/memory/MemoryAllocator.h>
 #include "folly/experimental/EventCount.h"
 #include "velox/common/base/tests/GTestUtils.h"
 #include "velox/dwio/common/tests/utils/BatchMaker.h"
-#include "velox/exec/Exchange.h"
+#include "velox/exec/Task.h"
 #include "velox/exec/tests/utils/PlanBuilder.h"
 #include "velox/serializers/PrestoSerializer.h"
 
@@ -69,7 +68,7 @@ class PartitionedOutputBufferManagerTest : public testing::Test {
           std::to_string(maxPartitionedOutputBufferSize);
     }
     auto queryCtx = std::make_shared<core::QueryCtx>(
-        executor_.get(), std::move(configSettings));
+        executor_.get(), core::QueryConfig(std::move(configSettings)));
 
     auto task =
         Task::create(taskId, std::move(planFragment), 0, std::move(queryCtx));
@@ -79,7 +78,7 @@ class PartitionedOutputBufferManagerTest : public testing::Test {
   }
 
   std::unique_ptr<SerializedPage> makeSerializedPage(
-      std::shared_ptr<const RowType> rowType,
+      RowTypePtr rowType,
       vector_size_t size) {
     auto vector = std::dynamic_pointer_cast<RowVector>(
         BatchMaker::createBatch(rowType, size, *pool_));
@@ -102,25 +101,25 @@ class PartitionedOutputBufferManagerTest : public testing::Test {
 
   void enqueue(
       const std::string& taskId,
-      std::shared_ptr<const RowType> rowType,
+      const RowTypePtr& rowType,
       vector_size_t size,
       bool expectedBlock = false) {
-    enqueue(taskId, 0, std::move(rowType), size);
+    enqueue(taskId, 0, rowType, size);
   }
 
   void enqueue(
       const std::string& taskId,
       int destination,
-      std::shared_ptr<const RowType> rowType,
+      const RowTypePtr& rowType,
       vector_size_t size,
       bool expectedBlock = false) {
     ContinueFuture future;
-    auto blockingReason = bufferManager_->enqueue(
+    auto blocked = bufferManager_->enqueue(
         taskId, destination, makeSerializedPage(rowType, size), &future);
     if (!expectedBlock) {
-      ASSERT_EQ(blockingReason, BlockingReason::kNotBlocked);
+      ASSERT_FALSE(blocked);
     }
-    if (blockingReason != BlockingReason::kNotBlocked) {
+    if (blocked) {
       future.wait();
     }
   }
@@ -149,22 +148,22 @@ class PartitionedOutputBufferManagerTest : public testing::Test {
          &receivedData](
             std::vector<std::unique_ptr<folly::IOBuf>> pages,
             int64_t inSequence) {
-          EXPECT_FALSE(receivedData) << "for destination " << destination;
-          EXPECT_EQ(pages.size(), expectedGroups)
+          ASSERT_FALSE(receivedData) << "for destination " << destination;
+          ASSERT_EQ(pages.size(), expectedGroups)
               << "for destination " << destination;
           for (int i = 0; i < pages.size(); ++i) {
             if (i == pages.size() - 1) {
-              EXPECT_EQ(expectedEndMarker, pages[i] == nullptr)
+              ASSERT_EQ(expectedEndMarker, pages[i] == nullptr)
                   << "for destination " << destination;
             } else {
-              EXPECT_TRUE(pages[i] != nullptr)
+              ASSERT_TRUE(pages[i] != nullptr)
                   << "for destination " << destination;
             }
           }
-          EXPECT_EQ(inSequence, sequence) << "for destination " << destination;
+          ASSERT_EQ(inSequence, sequence) << "for destination " << destination;
           receivedData = true;
         }));
-    EXPECT_TRUE(receivedData) << "for destination " << destination;
+    ASSERT_TRUE(receivedData) << "for destination " << destination;
   }
 
   void fetchOne(
@@ -423,6 +422,8 @@ TEST_F(PartitionedOutputBufferManagerTest, arbitrayBuffer) {
     ASSERT_EQ(
         buffer.toString(), "[ARBITRARY_BUFFER PAGES[2] NO MORE DATA[false]]");
     buffer.noMoreData();
+    ASSERT_FALSE(buffer.empty());
+    ASSERT_TRUE(buffer.hasNoMoreData());
     ASSERT_EQ(
         buffer.toString(), "[ARBITRARY_BUFFER PAGES[2] NO MORE DATA[true]]");
     pages = buffer.getPages(1'000'000'000);
@@ -562,20 +563,19 @@ TEST_F(PartitionedOutputBufferManagerTest, basicPartitioned) {
       taskId, rowType_, PartitionedOutputNode::Kind::kPartitioned, 5, 1);
   verifyOutputBuffer(task, OutputBufferStatus::kInitiated);
 
-  // Partitioned output buffer doesn't allow to update output buffers once
-  // created.
+  // Duplicateb update buffers with the same settings are allowed and ignored.
+  ASSERT_TRUE(bufferManager_->updateOutputBuffers(taskId, 5, true));
+  ASSERT_FALSE(bufferManager_->isFinished(taskId));
+  // Partitioned output buffer doesn't allow to update with different number of
+  // output buffers once created.
   VELOX_ASSERT_THROW(
-      bufferManager_->updateOutputBuffers(taskId, 5 + 1, true),
-      "updateOutputBuffers is not supported on PARTITIONED output buffer");
+      bufferManager_->updateOutputBuffers(taskId, 5 + 1, true), "");
+  // Partitioned output buffer doesn't expect more output buffers once created.
+  VELOX_ASSERT_THROW(bufferManager_->updateOutputBuffers(taskId, 5, false), "");
   VELOX_ASSERT_THROW(
-      bufferManager_->updateOutputBuffers(taskId, 5 + 1, false),
-      "updateOutputBuffers is not supported on PARTITIONED output buffer");
+      bufferManager_->updateOutputBuffers(taskId, 5 - 1, true), "");
   VELOX_ASSERT_THROW(
-      bufferManager_->updateOutputBuffers(taskId, 5 - 1, true),
-      "updateOutputBuffers is not supported on PARTITIONED output buffer");
-  VELOX_ASSERT_THROW(
-      bufferManager_->updateOutputBuffers(taskId, 5 - 1, false),
-      "updateOutputBuffers is not supported on PARTITIONED output buffer");
+      bufferManager_->updateOutputBuffers(taskId, 5 - 1, false), "");
 
   // - enqueue one group per destination
   // - fetch and ask one group per destination
@@ -761,8 +761,10 @@ TEST_F(PartitionedOutputBufferManagerTest, basicArbitrary) {
   fetchOneAndAck(taskId, numDestinations - 1, 0);
   ackedSeqbyDestination[numDestinations - 1] = 1;
 
-  bufferManager_->updateOutputBuffers(taskId, numDestinations, true);
-  VELOX_ASSERT_THROW(fetchOneAndAck(taskId, numDestinations, 0), "");
+  bufferManager_->updateOutputBuffers(taskId, numDestinations - 1, false);
+  VELOX_ASSERT_THROW(
+      fetchOneAndAck(taskId, numDestinations - 1, 0),
+      "(0 vs. 1) Get received for an already acknowledged item");
 
   receivedData = false;
   registerForData(taskId, numDestinations - 2, 0, 1, receivedData);
@@ -772,13 +774,18 @@ TEST_F(PartitionedOutputBufferManagerTest, basicArbitrary) {
   ackedSeqbyDestination[numDestinations - 2] = 1;
 
   noMoreData(taskId);
+  EXPECT_FALSE(bufferManager_->isFinished(taskId));
   EXPECT_TRUE(task->isRunning());
   for (int i = 0; i < numDestinations; ++i) {
     fetchEndMarker(taskId, i, ackedSeqbyDestination[i]);
   }
   EXPECT_TRUE(bufferManager_->isFinished(taskId));
-
   EXPECT_FALSE(task->isRunning());
+
+  // NOTE: arbitrary buffer finish condition doesn't depend on no more
+  // (destination )buffers update flag.
+  bufferManager_->updateOutputBuffers(taskId, numDestinations, true);
+
   EXPECT_TRUE(bufferManager_->isFinished(taskId));
   bufferManager_->removeTask(taskId);
   EXPECT_TRUE(task->isFinished());
@@ -919,20 +926,19 @@ TEST_P(AllPartitionedOutputBufferManagerTest, outputBufferUtilization) {
   const auto destination = 0;
   auto task = initializeTask(taskId, rowType_, kind_, 1, 1);
   verifyOutputBuffer(task, OutputBufferStatus::kInitiated);
-  if (kind_ !=
-      facebook::velox::core::PartitionedOutputNode::Kind::kPartitioned) {
+  if (kind_ == facebook::velox::core::PartitionedOutputNode::Kind::kBroadcast) {
     bufferManager_->updateOutputBuffers(taskId, destination, true);
   }
 
-  BlockingReason blockingReason;
+  bool blocked = false;
   do {
     ContinueFuture future;
-    blockingReason = bufferManager_->enqueue(
+    blocked = bufferManager_->enqueue(
         taskId, destination, makeSerializedPage(rowType_, 100), &future);
-    if (blockingReason == BlockingReason::kNotBlocked) {
+    if (!blocked) {
       verifyOutputBuffer(task, OutputBufferStatus::kRunning);
     }
-  } while (blockingReason == BlockingReason::kNotBlocked);
+  } while (!blocked);
 
   verifyOutputBuffer(task, OutputBufferStatus::kBlocked);
 
@@ -944,7 +950,7 @@ TEST_P(AllPartitionedOutputBufferManagerTest, outputBufferUtilization) {
   verifyOutputBuffer(task, OutputBufferStatus::kRunning);
 
   ContinueFuture future;
-  blockingReason = bufferManager_->enqueue(
+  bufferManager_->enqueue(
       taskId, destination, makeSerializedPage(rowType_, 200), &future);
   verifyOutputBuffer(task, OutputBufferStatus::kBlocked);
   auto oldUtilization = task->taskStats().outputBufferUtilization;
@@ -990,17 +996,13 @@ TEST_F(PartitionedOutputBufferManagerTest, outOfOrderAcks) {
 }
 
 TEST_F(PartitionedOutputBufferManagerTest, errorInQueue) {
-  auto queue = std::make_shared<ExchangeQueue>(1 << 20);
-  auto page = std::make_unique<SerializedPage>(folly::IOBuf::copyBuffer("", 0));
-  std::vector<ContinuePromise> promises;
-  { queue->setError("error"); }
-  for (auto& promise : promises) {
-    promise.setValue();
-  }
+  auto queue = std::make_shared<ExchangeQueue>();
+  queue->setError("Forced failure");
+
+  std::lock_guard<std::mutex> l(queue->mutex());
   ContinueFuture future;
   bool atEnd = false;
-  EXPECT_THROW(
-      auto page = queue->dequeueLocked(&atEnd, &future), std::runtime_error);
+  VELOX_ASSERT_THROW(queue->dequeueLocked(&atEnd, &future), "Forced failure");
 }
 
 TEST_F(PartitionedOutputBufferManagerTest, setQueueErrorWithPendingPages) {
@@ -1013,20 +1015,20 @@ TEST_F(PartitionedOutputBufferManagerTest, setQueueErrorWithPendingPages) {
 
   auto page = std::make_unique<SerializedPage>(std::move(iobuf));
 
-  auto queue = std::make_shared<ExchangeQueue>(1 << 20);
+  auto queue = std::make_shared<ExchangeQueue>();
   std::vector<ContinuePromise> promises;
   {
     std::lock_guard<std::mutex> l(queue->mutex());
     queue->enqueueLocked(std::move(page), promises);
   }
 
-  queue->setError("error");
+  queue->setError("Forced failure");
 
   // Expect a throw on dequeue after the queue has been set error.
+  std::lock_guard<std::mutex> l(queue->mutex());
   ContinueFuture future;
   bool atEnd = false;
-  ASSERT_THROW(
-      auto page = queue->dequeueLocked(&atEnd, &future), std::runtime_error);
+  VELOX_ASSERT_THROW(queue->dequeueLocked(&atEnd, &future), "Forced failure");
 }
 
 TEST_F(PartitionedOutputBufferManagerTest, getDataOnFailedTask) {

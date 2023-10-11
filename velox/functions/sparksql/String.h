@@ -75,24 +75,45 @@ template <typename T>
 struct AsciiFunction {
   VELOX_DEFINE_FUNCTION_TYPES(T);
 
-  FOLLY_ALWAYS_INLINE bool call(int32_t& result, const arg_type<Varchar>& s) {
+  FOLLY_ALWAYS_INLINE void call(int32_t& result, const arg_type<Varchar>& s) {
+    if (s.empty()) {
+      result = 0;
+      return;
+    }
+    int size;
+    result = utf8proc_codepoint(s.data(), s.data() + s.size(), size);
+  }
+
+  FOLLY_ALWAYS_INLINE void callAscii(
+      int32_t& result,
+      const arg_type<Varchar>& s) {
     result = s.empty() ? 0 : s.data()[0];
-    return true;
   }
 };
 
+/// chr function
+/// chr(n) -> string
+/// Returns the Unicode code point ``n`` as a single character string.
+/// If ``n < 0``, the result is an empty string.
+/// If ``n >= 256``, the result is equivalent to chr(``n % 256``).
 template <typename T>
 struct ChrFunction {
   VELOX_DEFINE_FUNCTION_TYPES(T);
 
-  FOLLY_ALWAYS_INLINE bool call(out_type<Varchar>& result, int64_t ord) {
-    if (ord < 0) {
+  FOLLY_ALWAYS_INLINE void call(out_type<Varchar>& result, int64_t n) {
+    if (n < 0) {
       result.resize(0);
     } else {
-      result.resize(1);
-      *result.data() = ord;
+      n = n & 0xFF;
+      if (n < 0x80) {
+        result.resize(1);
+        result.data()[0] = n;
+      } else {
+        result.resize(2);
+        result.data()[0] = 0xC0 + (n >> 6);
+        result.data()[1] = 0x80 + (n & 0x3F);
+      }
     }
-    return true;
   }
 };
 
@@ -386,9 +407,8 @@ struct TrimSpaceFunctionBase {
       const arg_type<Varchar>& srcStr) {
     // Because utf-8 and Ascii have the same space character code, both are
     // char=32. So trimAsciiSpace can be reused here.
-    stringImpl::
-        trimAsciiWhiteSpace<leftTrim, rightTrim, stringImpl::isAsciiSpace>(
-            result, srcStr);
+    stringImpl::trimAscii<leftTrim, rightTrim>(
+        result, srcStr, stringImpl::isAsciiSpace);
   }
 };
 

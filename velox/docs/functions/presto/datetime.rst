@@ -36,6 +36,7 @@ Unit        Example Truncated Value
 ``minute``  ``2001-08-22 03:04:00.000``
 ``hour``    ``2001-08-22 03:00:00.000``
 ``day``     ``2001-08-22 00:00:00.000``
+``week``    ``2001-08-20 00:00:00.000``
 ``month``   ``2001-08-01 00:00:00.000``
 ``quarter`` ``2001-07-01 00:00:00.000``
 ``year``    ``2001-01-01 00:00:00.000``
@@ -185,6 +186,10 @@ arbitrary large timestamps.
 .. function:: hour(x) -> bigint
 
     Returns the hour of the day from ``x``. The value ranges from 0 to 23.
+
+.. function:: last_day_of_month(x) -> date
+
+    Returns the last day of the month.
 
 .. function:: millisecond(x) -> int64
 

@@ -17,8 +17,8 @@
 #include "velox/exec/tests/SimpleAggregateFunctionsRegistration.h"
 #include "velox/exec/tests/utils/AssertQueryBuilder.h"
 #include "velox/exec/tests/utils/PlanBuilder.h"
+#include "velox/functions/lib/aggregates/DecimalAggregate.h"
 #include "velox/functions/lib/aggregates/tests/AggregationTestBase.h"
-#include "velox/functions/prestosql/aggregates/DecimalAggregate.h"
 #include "velox/parse/TypeResolver.h"
 #include "velox/vector/tests/utils/VectorTestBase.h"
 
@@ -333,6 +333,69 @@ TEST_F(AverageAggregationTest, avg) {
   testFunction("simple_avg");
 }
 
+TEST_F(AverageAggregationTest, overflow) {
+  auto makeSingleAggregationPlan = [this](
+                                       const std::string& functionName,
+                                       bool singleGroup,
+                                       const VectorPtr& vector) {
+    return PlanBuilder()
+        .values({makeRowVector({makeFlatVector<bool>({true, true}), vector})})
+        .singleAggregation(
+            singleGroup ? std::vector<std::string>{}
+                        : std::vector<std::string>{"c0"},
+            {fmt::format("{}(c1)", functionName)})
+        .planNode();
+  };
+
+  auto makePlan = [this](
+                      const std::string& functionName,
+                      bool singleGroup,
+                      const VectorPtr& vector) {
+    return PlanBuilder()
+        .values({makeRowVector({makeFlatVector<bool>({true, true}), vector})})
+        .partialAggregation(
+            singleGroup ? std::vector<std::string>{}
+                        : std::vector<std::string>{"c0"},
+            {fmt::format("{}(c1)", functionName)})
+        .intermediateAggregation()
+        .finalAggregation()
+        .planNode();
+  };
+
+  auto testFunction = [&](const std::string& functionName, bool singleGroup) {
+    auto vector = makeRowVector(
+        {makeFlatVector<double>({100.0, 200.0}),
+         makeFlatVector<int64_t>({8490071280492378624, 8490071280492378624})});
+    auto constantVector = BaseVector::wrapInConstant(100, 0, vector);
+    auto expected = makeRowVector(
+        {makeNullableFlatVector<double>({std::nullopt, std::nullopt})});
+
+    auto plan = makeSingleAggregationPlan(functionName, singleGroup, vector);
+    VELOX_ASSERT_THROW(assertQuery(plan, expected), "integer overflow");
+
+    plan = makeSingleAggregationPlan(functionName, singleGroup, constantVector);
+    VELOX_ASSERT_THROW(assertQuery(plan, expected), "integer overflow");
+
+    plan = makePlan(functionName, singleGroup, vector);
+    VELOX_ASSERT_THROW(assertQuery(plan, expected), "integer overflow");
+
+    plan = makePlan(functionName, singleGroup, constantVector);
+    VELOX_ASSERT_THROW(assertQuery(plan, expected), "integer overflow");
+  };
+  testFunction("avg_merge", true);
+  testFunction("avg_merge", false);
+  testFunction("avg_merge_extract_real", true);
+  testFunction("avg_merge_extract_real", false);
+  testFunction("avg_merge_extract_double", true);
+  testFunction("avg_merge_extract_double", false);
+  testFunction("simple_avg_merge", true);
+  testFunction("simple_avg_merge", false);
+  testFunction("simple_avg_merge_extract_real", true);
+  testFunction("simple_avg_merge_extract_real", false);
+  testFunction("simple_avg_merge_extract_double", true);
+  testFunction("simple_avg_merge_extract_double", false);
+}
+
 TEST_F(AverageAggregationTest, partialResults) {
   auto testFunction = [this](const std::string& functionName) {
     auto data = makeRowVector(
@@ -352,7 +415,7 @@ TEST_F(AverageAggregationTest, partialResults) {
 }
 
 TEST_F(AverageAggregationTest, decimalAccumulator) {
-  LongDecimalWithOverflowState accumulator;
+  functions::aggregate::LongDecimalWithOverflowState accumulator;
   accumulator.sum = -1000;
   accumulator.count = 10;
   accumulator.overflow = -1;
@@ -360,7 +423,7 @@ TEST_F(AverageAggregationTest, decimalAccumulator) {
   char* buffer = new char[accumulator.serializedSize()];
   StringView serialized(buffer, accumulator.serializedSize());
   accumulator.serialize(serialized);
-  LongDecimalWithOverflowState mergedAccumulator;
+  functions::aggregate::LongDecimalWithOverflowState mergedAccumulator;
   mergedAccumulator.mergeWith(serialized);
 
   ASSERT_EQ(mergedAccumulator.sum, accumulator.sum);
@@ -378,6 +441,7 @@ TEST_F(AverageAggregationTest, decimalAccumulator) {
 }
 
 TEST_F(AverageAggregationTest, avgDecimal) {
+  // Skip testing with TableScan because decimal is not supported in writers.
   auto shortDecimal = makeNullableFlatVector<int64_t>(
       {1'000, 2'000, 3'000, 4'000, 5'000, std::nullopt}, DECIMAL(10, 1));
   // Short decimal aggregation
@@ -387,7 +451,9 @@ TEST_F(AverageAggregationTest, avgDecimal) {
       {"avg(c0)"},
       {},
       {makeRowVector(
-          {makeNullableFlatVector<int64_t>({3'000}, DECIMAL(10, 1))})});
+          {makeNullableFlatVector<int64_t>({3'000}, DECIMAL(10, 1))})},
+      /*config*/ {},
+      /*testWithTableScan*/ false);
 
   // Long decimal aggregation
   testAggregations(
@@ -403,7 +469,9 @@ TEST_F(AverageAggregationTest, avgDecimal) {
       {"avg(c0)"},
       {},
       {makeRowVector({makeFlatVector(
-          std::vector<int128_t>{HugeInt::build(10, 300)}, DECIMAL(23, 4))})});
+          std::vector<int128_t>{HugeInt::build(10, 300)}, DECIMAL(23, 4))})},
+      /*config*/ {},
+      /*testWithTableScan*/ false);
   // Round-up average.
   testAggregations(
       {makeRowVector(
@@ -412,7 +480,9 @@ TEST_F(AverageAggregationTest, avgDecimal) {
       {"avg(c0)"},
       {},
       {makeRowVector(
-          {makeFlatVector(std::vector<int64_t>{337}, DECIMAL(3, 2))})});
+          {makeFlatVector(std::vector<int64_t>{337}, DECIMAL(3, 2))})},
+      /*config*/ {},
+      /*testWithTableScan*/ false);
 
   // The total sum overflows the max int128_t limit.
   std::vector<int128_t> rawVector;
@@ -426,7 +496,9 @@ TEST_F(AverageAggregationTest, avgDecimal) {
       {},
       {makeRowVector({makeFlatVector(
           std::vector<int128_t>{DecimalUtil::kLongDecimalMax},
-          DECIMAL(38, 0))})});
+          DECIMAL(38, 0))})},
+      /*config*/ {},
+      /*testWithTableScan*/ false);
   // The total sum underflows the min int128_t limit.
   rawVector.clear();
   auto underFlowTestResult = makeFlatVector(
@@ -439,7 +511,9 @@ TEST_F(AverageAggregationTest, avgDecimal) {
       {},
       {"avg(c0)"},
       {},
-      {makeRowVector({underFlowTestResult})});
+      {makeRowVector({underFlowTestResult})},
+      /*config*/ {},
+      /*testWithTableScan*/ false);
 
   // Add more rows to show that average result starts deviating from expected
   // result with varying row count.
@@ -464,7 +538,9 @@ TEST_F(AverageAggregationTest, avgDecimal) {
       {"avg(c0)"},
       {},
       {makeRowVector(
-          {makeFlatVector(std::vector<int64_t>{100}, DECIMAL(3, 2))})});
+          {makeFlatVector(std::vector<int64_t>{100}, DECIMAL(3, 2))})},
+      /*config*/ {},
+      /*testWithTableScan*/ false);
 
   auto newSize = shortDecimal->size() * 2;
   auto indices = makeIndices(newSize, [&](int row) { return row / 2; });
@@ -477,7 +553,9 @@ TEST_F(AverageAggregationTest, avgDecimal) {
       {"avg(c0)"},
       {},
       {makeRowVector(
-          {makeFlatVector(std::vector<int64_t>{3'000}, DECIMAL(10, 1))})});
+          {makeFlatVector(std::vector<int64_t>{3'000}, DECIMAL(10, 1))})},
+      /*config*/ {},
+      /*testWithTableScan*/ false);
 
   // Decimal average aggregation with multiple groups.
   auto inputRows = {
@@ -509,7 +587,13 @@ TEST_F(AverageAggregationTest, avgDecimal) {
           {makeNullableFlatVector<int32_t>({3}),
            makeFlatVector(std::vector<int64_t>{-2498}, DECIMAL(5, 2))})};
 
-  testAggregations(inputRows, {"c0"}, {"avg(c1)"}, expectedResult);
+  testAggregations(
+      inputRows,
+      {"c0"},
+      {"avg(c1)"},
+      expectedResult,
+      /*config*/ {},
+      /*testWithTableScan*/ false);
 }
 
 TEST_F(AverageAggregationTest, avgDecimalWithMultipleRowVectors) {
@@ -522,7 +606,13 @@ TEST_F(AverageAggregationTest, avgDecimalWithMultipleRowVectors) {
   auto expectedResult = {makeRowVector(
       {makeFlatVector(std::vector<int64_t>{350}, DECIMAL(5, 2))})};
 
-  testAggregations(inputRows, {}, {"avg(c0)"}, expectedResult);
+  testAggregations(
+      inputRows,
+      {},
+      {"avg(c0)"},
+      expectedResult,
+      /*config*/ {},
+      /*testWithTableScan*/ false);
 }
 
 TEST_F(AverageAggregationTest, constantVectorOverflow) {

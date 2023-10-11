@@ -18,6 +18,7 @@
 #include "velox/dwio/common/TypeUtils.h"
 
 #include "velox/dwio/dwrf/reader/SelectiveByteRleColumnReader.h"
+#include "velox/dwio/dwrf/reader/SelectiveDecimalColumnReader.h"
 #include "velox/dwio/dwrf/reader/SelectiveFlatMapColumnReader.h"
 #include "velox/dwio/dwrf/reader/SelectiveFloatingPointColumnReader.h"
 #include "velox/dwio/dwrf/reader/SelectiveIntegerDictionaryColumnReader.h"
@@ -38,7 +39,7 @@ std::unique_ptr<SelectiveColumnReader> buildIntegerReader(
     DwrfParams& params,
     uint32_t numBytes,
     common::ScanSpec& scanSpec) {
-  EncodingKey ek{dataType->id, params.flatMapContext().sequence};
+  EncodingKey ek{dataType->id(), params.flatMapContext().sequence};
   auto& stripe = params.stripeStreams();
   switch (static_cast<int64_t>(stripe.getEncoding(ek).kind())) {
     case proto::ColumnEncoding_Kind_DICTIONARY:
@@ -62,19 +63,24 @@ std::unique_ptr<SelectiveColumnReader> SelectiveDwrfReader::build(
     common::ScanSpec& scanSpec,
     bool isRoot) {
   DWIO_ENSURE(
-      !isRoot || dataType->type->kind() == TypeKind::ROW,
+      !isRoot || dataType->type()->kind() == TypeKind::ROW,
       "The root object can only be a row.");
   dwio::common::typeutils::checkTypeCompatibility(
-      *dataType->type, *requestedType->type);
-  EncodingKey ek{dataType->id, params.flatMapContext().sequence};
+      *dataType->type(), *requestedType->type());
+  EncodingKey ek{dataType->id(), params.flatMapContext().sequence};
   auto& stripe = params.stripeStreams();
-  switch (dataType->type->kind()) {
+  switch (dataType->type()->kind()) {
     case TypeKind::INTEGER:
       return buildIntegerReader(
           requestedType, dataType, params, INT_BYTE_SIZE, scanSpec);
     case TypeKind::BIGINT:
-      return buildIntegerReader(
-          requestedType, dataType, params, LONG_BYTE_SIZE, scanSpec);
+      if (dataType->type()->isDecimal()) {
+        return std::make_unique<SelectiveDecimalColumnReader<int64_t>>(
+            requestedType, params, scanSpec);
+      } else {
+        return buildIntegerReader(
+            requestedType, dataType, params, LONG_BYTE_SIZE, scanSpec);
+      }
     case TypeKind::SMALLINT:
       return buildIntegerReader(
           requestedType, dataType, params, SHORT_BYTE_SIZE, scanSpec);
@@ -90,19 +96,19 @@ std::unique_ptr<SelectiveColumnReader> SelectiveDwrfReader::build(
       return std::make_unique<SelectiveMapColumnReader>(
           requestedType, dataType, params, scanSpec);
     case TypeKind::REAL:
-      if (requestedType->type->kind() == TypeKind::REAL) {
+      if (requestedType->type()->kind() == TypeKind::REAL) {
         return std::make_unique<
             SelectiveFloatingPointColumnReader<float, float>>(
-            requestedType->type, dataType, params, scanSpec);
+            requestedType->type(), dataType, params, scanSpec);
       } else {
         return std::make_unique<
             SelectiveFloatingPointColumnReader<float, double>>(
-            requestedType->type, dataType, params, scanSpec);
+            requestedType->type(), dataType, params, scanSpec);
       }
     case TypeKind::DOUBLE:
       return std::make_unique<
           SelectiveFloatingPointColumnReader<double, double>>(
-          requestedType->type, dataType, params, scanSpec);
+          requestedType->type(), dataType, params, scanSpec);
     case TypeKind::ROW:
       return std::make_unique<SelectiveStructColumnReader>(
           requestedType, dataType, params, scanSpec, isRoot);
@@ -129,10 +135,16 @@ std::unique_ptr<SelectiveColumnReader> SelectiveDwrfReader::build(
     case TypeKind::TIMESTAMP:
       return std::make_unique<SelectiveTimestampColumnReader>(
           dataType, params, scanSpec);
+    case TypeKind::HUGEINT:
+      if (dataType->type()->isDecimal()) {
+        return std::make_unique<SelectiveDecimalColumnReader<int128_t>>(
+            requestedType, params, scanSpec);
+      }
+      [[fallthrough]];
     default:
       DWIO_RAISE(
           "buildReader unhandled type: " +
-          mapTypeKindToName(dataType->type->kind()));
+          mapTypeKindToName(dataType->type()->kind()));
   }
 }
 

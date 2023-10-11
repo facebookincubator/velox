@@ -72,8 +72,15 @@ NestedLoopJoinProbe::NestedLoopJoinProbe(
 BlockingReason NestedLoopJoinProbe::isBlocked(ContinueFuture* future) {
   switch (state_) {
     case ProbeOperatorState::kRunning:
-      FOLLY_FALLTHROUGH;
+      [[fallthrough]];
     case ProbeOperatorState::kFinish:
+      return BlockingReason::kNotBlocked;
+    case ProbeOperatorState::kWaitForPeers:
+      if (future_.valid()) {
+        *future = std::move(future_);
+        return BlockingReason::kWaitForJoinProbe;
+      }
+      setState(ProbeOperatorState::kFinish);
       return BlockingReason::kNotBlocked;
     case ProbeOperatorState::kWaitForBuild: {
       VELOX_CHECK(!buildVectors_.has_value());
@@ -120,7 +127,8 @@ void NestedLoopJoinProbe::addInput(RowVectorPtr input) {
 }
 
 RowVectorPtr NestedLoopJoinProbe::getOutput() {
-  if (isFinished()) {
+  if (state_ == ProbeOperatorState::kFinish ||
+      state_ == ProbeOperatorState::kWaitForPeers) {
     return nullptr;
   }
   RowVectorPtr output{nullptr};
@@ -222,7 +230,7 @@ RowVectorPtr NestedLoopJoinProbe::getMismatchedOutput(
     BufferPtr& unmatchedMapping,
     const std::vector<IdentityProjection>& projections,
     const std::vector<IdentityProjection>& nullProjections) {
-  if (matched.isAllSelected()) {
+  if (matched.isAllSelected() || joinCondition_ == nullptr) {
     return nullptr;
   }
 
@@ -278,13 +286,13 @@ void NestedLoopJoinProbe::beginBuildMismatch() {
   std::vector<ContinuePromise> promises;
   std::vector<std::shared_ptr<Driver>> peers;
   if (!operatorCtx_->task()->allPeersFinished(
-          planNodeId(), operatorCtx_->driver(), nullptr, promises, peers)) {
-    setState(ProbeOperatorState::kFinish);
+          planNodeId(), operatorCtx_->driver(), &future_, promises, peers)) {
+    VELOX_CHECK(future_.valid());
+    setState(ProbeOperatorState::kWaitForPeers);
     return;
   }
 
   lastProbe_ = true;
-  VELOX_CHECK(promises.empty());
   // From now on, buildIndex_ is used to indexing into buildMismatched_
   VELOX_CHECK_EQ(buildIndex_, 0);
   for (auto& peer : peers) {
@@ -298,6 +306,9 @@ void NestedLoopJoinProbe::beginBuildMismatch() {
   peers.clear();
   for (auto& matched : buildMatched_) {
     matched.updateBounds();
+  }
+  for (auto& promise : promises) {
+    promise.setValue();
   }
 }
 

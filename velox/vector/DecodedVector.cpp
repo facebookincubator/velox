@@ -53,7 +53,7 @@ void DecodedVector::decode(
   bool isTopLevelLazyAndLoaded =
       vector.isLazy() && vector.asUnchecked<LazyVector>()->isLoaded();
   if (isTopLevelLazyAndLoaded || (loadLazy_ && isLazyNotLoaded(vector))) {
-    decode(*vector.loadedVector(), rows);
+    decode(*vector.loadedVector(), rows, loadLazy);
     return;
   }
 

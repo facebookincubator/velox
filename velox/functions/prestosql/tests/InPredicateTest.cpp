@@ -15,25 +15,59 @@
  */
 #include "velox/functions/prestosql/tests/utils/FunctionBaseTest.h"
 
-using namespace facebook::velox;
 using namespace facebook::velox::test;
 using namespace facebook::velox::functions::test;
+
+namespace facebook::velox::functions {
+namespace {
 
 class InPredicateTest : public FunctionBaseTest {
  protected:
   template <typename T>
-  void testIntegers() {
+  std::string getInList(
+      std::vector<std::optional<T>> input,
+      const TypePtr& type = CppToType<T>::create()) {
+    FlatVectorPtr<T> flatVec = makeNullableFlatVector<T>(input, type);
+    std::string inList;
+    auto len = flatVec->size();
+    auto toString = [&](vector_size_t idx) {
+      if (type->isDecimal()) {
+        if (flatVec->isNullAt(idx)) {
+          return std::string("null");
+        }
+        return fmt::format(
+            "cast({} as {})", flatVec->toString(idx), type->toString());
+      }
+      return flatVec->toString(idx);
+    };
+
+    for (auto i = 0; i < len - 1; i++) {
+      inList += fmt::format("{}, ", toString(i));
+    }
+    inList += toString(len - 1);
+    return inList;
+  }
+
+  template <typename T>
+  void testValues(const TypePtr type = CppToType<T>::create()) {
+    if (type->isDecimal()) {
+      this->options_.parseDecimalAsDouble = false;
+    }
     std::shared_ptr<memory::MemoryPool> pool{
         memory::addDefaultLeafMemoryPool()};
 
     const vector_size_t size = 1'000;
-    auto vector = makeFlatVector<T>(size, [](auto row) { return row % 17; });
+    auto inList = getInList<T>({1, 3, 5}, type);
+
+    auto vector = makeFlatVector<T>(
+        size, [](auto row) { return row % 17; }, nullptr, type);
     auto vectorWithNulls = makeFlatVector<T>(
-        size, [](auto row) { return row % 17; }, nullEvery(7));
+        size, [](auto row) { return row % 17; }, nullEvery(7), type);
     auto rowVector = makeRowVector({vector, vectorWithNulls});
 
     // no nulls
-    auto result = evaluate<SimpleVector<bool>>("c0 IN (1, 3, 5)", rowVector);
+    auto result = evaluate<SimpleVector<bool>>(
+        fmt::format("c0 IN ({})", inList), rowVector);
     auto expected = makeFlatVector<bool>(size, [](auto row) {
       auto n = row % 17;
       return n == 1 || n == 3 || n == 5;
@@ -42,7 +76,8 @@ class InPredicateTest : public FunctionBaseTest {
     assertEqualVectors(expected, result);
 
     // some nulls
-    result = evaluate<SimpleVector<bool>>("c1 IN (1, 3, 5)", rowVector);
+    result = evaluate<SimpleVector<bool>>(
+        fmt::format("c1 IN ({})", inList), rowVector);
     expected = makeFlatVector<bool>(
         size,
         [](auto row) {
@@ -55,7 +90,9 @@ class InPredicateTest : public FunctionBaseTest {
 
     // null values in the in-list
     // The results can be either true or null, but not false.
-    result = evaluate<SimpleVector<bool>>("c0 IN (1, 3, null, 5)", rowVector);
+    inList = getInList<T>({1, 3, std::nullopt, 5}, type);
+    result = evaluate<SimpleVector<bool>>(
+        fmt::format("c0 IN ({})", inList), rowVector);
     expected = makeFlatVector<bool>(
         size,
         [](auto /* row */) { return true; },
@@ -66,7 +103,8 @@ class InPredicateTest : public FunctionBaseTest {
 
     assertEqualVectors(expected, result);
 
-    result = evaluate<SimpleVector<bool>>("c1 IN (1, 3, null, 5)", rowVector);
+    result = evaluate<SimpleVector<bool>>(
+        fmt::format("c1 IN ({})", inList), rowVector);
     expected = makeFlatVector<bool>(
         size,
         [](auto /* row */) { return true; },
@@ -77,7 +115,9 @@ class InPredicateTest : public FunctionBaseTest {
 
     assertEqualVectors(expected, result);
 
-    result = evaluate<SimpleVector<bool>>("c0 IN (2, null)", rowVector);
+    inList = getInList<T>({2, std::nullopt}, type);
+    result = evaluate<SimpleVector<bool>>(
+        fmt::format("c0 IN ({})", inList), rowVector);
     expected = makeFlatVector<bool>(
         size,
         [](auto /* row */) { return true; },
@@ -88,7 +128,8 @@ class InPredicateTest : public FunctionBaseTest {
 
     assertEqualVectors(expected, result);
 
-    result = evaluate<SimpleVector<bool>>("c1 IN (2, null)", rowVector);
+    result = evaluate<SimpleVector<bool>>(
+        fmt::format("c1 IN ({})", inList), rowVector);
     expected = makeFlatVector<bool>(
         size,
         [](auto /* row */) { return true; },
@@ -130,7 +171,10 @@ class InPredicateTest : public FunctionBaseTest {
     auto dict = BaseVector::wrapInDictionary(nulls, indices, size, vector);
 
     rowVector = makeRowVector({dict});
-    result = evaluate<SimpleVector<bool>>("c0 IN (2, 5, 9)", rowVector);
+
+    inList = getInList<T>({2, 5, 9}, type);
+    result = evaluate<SimpleVector<bool>>(
+        fmt::format("c0 IN ({})", inList), rowVector);
     assertEqualVectors(expected, result);
 
     // an in list with nulls only is always null.
@@ -141,52 +185,113 @@ class InPredicateTest : public FunctionBaseTest {
   }
 
   template <typename T>
-  void testsIntegerConstant() {
+  void testConstantValues(const TypePtr type = CppToType<T>::create()) {
     const vector_size_t size = 1'000;
     auto rowVector = makeRowVector(
-        {makeConstant((T)123, size),
-         makeNullConstant(CppToType<T>::create()->kind(), size)});
+        {makeConstant(static_cast<T>(123), size, type),
+         BaseVector::createNullConstant(type, size, pool())});
+    auto inList = getInList<T>({1, 3, 5}, type);
 
     auto constTrue = makeConstant(true, size);
     auto constFalse = makeConstant(false, size);
     auto constNull = makeNullConstant(TypeKind::BOOLEAN, size);
 
     // a miss
-    auto result = evaluate<SimpleVector<bool>>("c0 IN (1, 3, 5)", rowVector);
+    auto result = evaluate<SimpleVector<bool>>(
+        fmt::format("c0 IN ({})", inList), rowVector);
     assertEqualVectors(constFalse, result);
 
+    // null
+    result = evaluate<SimpleVector<bool>>(
+        fmt::format("c1 IN ({})", inList), rowVector);
+    assertEqualVectors(constNull, result);
+
     // a hit
-    result = evaluate<SimpleVector<bool>>("c0 IN (1, 123, 5)", rowVector);
+    inList = getInList<T>({1, 123, 5}, type);
+    result = evaluate<SimpleVector<bool>>(
+        fmt::format("c0 IN ({})", inList), rowVector);
     assertEqualVectors(constTrue, result);
 
     // a miss that is a null
-    result = evaluate<SimpleVector<bool>>("c0 IN (1, null, 5)", rowVector);
+    inList = getInList<T>({1, std::nullopt, 5}, type);
+    result = evaluate<SimpleVector<bool>>(
+        fmt::format("c0 IN ({})", inList), rowVector);
     assertEqualVectors(constNull, result);
+  }
 
-    // null
-    result = evaluate<SimpleVector<bool>>("c1 IN (1, 3, 5)", rowVector);
-    assertEqualVectors(constNull, result);
+  core::TypedExprPtr makeInExpression(const VectorPtr& values) {
+    BufferPtr offsets = allocateOffsets(1, pool());
+    BufferPtr sizes = allocateSizes(1, pool());
+    auto* rawSizes = sizes->asMutable<vector_size_t>();
+    rawSizes[0] = values->size();
+
+    return std::make_shared<core::CallTypedExpr>(
+        BOOLEAN(),
+        std::vector<core::TypedExprPtr>{
+            std::make_shared<core::FieldAccessTypedExpr>(values->type(), "c0"),
+            std::make_shared<core::ConstantTypedExpr>(
+                std::make_shared<ArrayVector>(
+                    pool(),
+                    ARRAY(values->type()),
+                    nullptr,
+                    1,
+                    offsets,
+                    sizes,
+                    values)),
+        },
+        "in");
+  }
+
+  VectorPtr makeTimestampVector(const std::vector<int64_t>& millis) {
+    std::vector<Timestamp> timestamps;
+    timestamps.reserve(millis.size());
+    for (auto n : millis) {
+      timestamps.push_back(Timestamp::fromMillis(n));
+    }
+
+    return makeFlatVector(timestamps);
   }
 };
 
 TEST_F(InPredicateTest, bigint) {
-  testIntegers<int64_t>();
-  testsIntegerConstant<int64_t>();
+  testValues<int64_t>();
+  testConstantValues<int64_t>();
 }
 
 TEST_F(InPredicateTest, integer) {
-  testIntegers<int32_t>();
-  testsIntegerConstant<int32_t>();
+  testValues<int32_t>();
+  testConstantValues<int32_t>();
 }
 
 TEST_F(InPredicateTest, smallint) {
-  testIntegers<int16_t>();
-  testsIntegerConstant<int16_t>();
+  testValues<int16_t>();
+  testConstantValues<int16_t>();
 }
 
 TEST_F(InPredicateTest, tinyint) {
-  testIntegers<int8_t>();
-  testsIntegerConstant<int8_t>();
+  testValues<int8_t>();
+  testConstantValues<int8_t>();
+}
+
+TEST_F(InPredicateTest, timestamp) {
+  auto inValues = makeTimestampVector({0, 1, 1'133, 12'345});
+
+  auto data =
+      makeRowVector({makeTimestampVector({0, 2, 123, 1'133, 78, 12'345})});
+  auto expected = makeFlatVector<bool>({true, false, false, true, false, true});
+
+  auto result = evaluate(makeInExpression(inValues), {data});
+  assertEqualVectors(expected, result);
+}
+
+TEST_F(InPredicateTest, shortDecimal) {
+  testValues<int64_t>(DECIMAL(5, 2));
+  testConstantValues<int64_t>(DECIMAL(5, 2));
+}
+
+TEST_F(InPredicateTest, longDecimal) {
+  testValues<int128_t>(DECIMAL(19, 7));
+  testConstantValues<int128_t>(DECIMAL(19, 7));
 }
 
 TEST_F(InPredicateTest, boolean) {
@@ -377,3 +482,438 @@ TEST_F(InPredicateTest, reusableResult) {
   auto expected = makeFlatVector<bool>({false, true, true, false});
   assertEqualVectors(expected, actual);
 }
+
+TEST_F(InPredicateTest, doubleWithZero) {
+  // zero and negative zero, FloatingPointRange
+  auto input = makeRowVector({
+      makeNullableFlatVector<double>({0.0, -0.0}, DOUBLE()),
+  });
+  auto predicate = "c0 IN ( 0.0 )";
+  auto result = evaluate<SimpleVector<bool>>(predicate, input);
+  auto expected = makeNullableFlatVector<bool>({true, true});
+  assertEqualVectors(expected, result);
+
+  // zero and negative zero, BigintValuesUsingHashTable, 0 in valuesList
+  input = makeRowVector({
+      makeNullableFlatVector<double>({0.0, -0.0}, DOUBLE()),
+  });
+  predicate = "c0 IN ( 0.0, 1.2, 2.3 )";
+  result = evaluate<SimpleVector<bool>>(predicate, input);
+  expected = makeNullableFlatVector<bool>({true, true});
+  assertEqualVectors(expected, result);
+
+  // zero and negative zero, BigintValuesUsingHashTable, -0 in valuesList
+  input = makeRowVector({
+      makeNullableFlatVector<double>({0.0, -0.0}, DOUBLE()),
+  });
+  predicate = "c0 IN ( -0.0, 1.2, 2.3, null )";
+  result = evaluate<SimpleVector<bool>>(predicate, input);
+  expected = makeNullableFlatVector<bool>({true, true});
+  assertEqualVectors(expected, result);
+
+  // duplicate 0
+  input = makeRowVector({
+      makeNullableFlatVector<double>({0.0, -0.0}, DOUBLE()),
+  });
+  predicate = "c0 IN ( 0.0, 0.0, -0.0 )";
+  result = evaluate<SimpleVector<bool>>(predicate, input);
+  expected = makeNullableFlatVector<bool>({true, true});
+  assertEqualVectors(expected, result);
+
+  input = makeRowVector({
+      makeNullableFlatVector<double>({0.0, -0.0, 1.0, 2.0}, DOUBLE()),
+  });
+  predicate = "c0 IN ( 0.0 )";
+  result = evaluate<SimpleVector<bool>>(predicate, input);
+  expected = makeNullableFlatVector<bool>({true, true, false, false});
+  assertEqualVectors(expected, result);
+
+  input = makeRowVector({
+      makeNullableFlatVector<double>({0.0, -0.0, 1.0, 2.0}, DOUBLE()),
+  });
+  predicate = "c0 IN ( -0.0 )";
+  result = evaluate<SimpleVector<bool>>(predicate, input);
+  expected = makeNullableFlatVector<bool>({true, true, false, false});
+  assertEqualVectors(expected, result);
+}
+
+TEST_F(InPredicateTest, double) {
+  // No Null
+  auto input = makeRowVector({
+      makeNullableFlatVector<double>({1.2, 2.3, 3.4}, DOUBLE()),
+  });
+  std::string predicate = "c0 IN ( 1.2, 2.3, 3.4 )";
+  auto expected = makeConstant(true, input->size());
+  auto result = evaluate<SimpleVector<bool>>(predicate, input);
+  assertEqualVectors(expected, result);
+
+  // InList has Null
+  // Since there is only one non-null float, it will use FloatingPointRange
+  input = makeRowVector({
+      makeNullableFlatVector<double>({1.2, 2.3, 3.4}, DOUBLE()),
+  });
+  predicate = "c0 IN ( 1.2, null )";
+  result = evaluate<SimpleVector<bool>>(predicate, input);
+  expected = makeNullableFlatVector<bool>({true, std::nullopt, std::nullopt});
+  assertEqualVectors(expected, result);
+
+  // InList has Null
+  // Multiple non-null, using BigintValuesUsingHashTable
+  predicate = "c0 IN ( 1.2, 2.3, null )";
+  result = evaluate<SimpleVector<bool>>(predicate, input);
+  expected = makeNullableFlatVector<bool>({true, true, std::nullopt});
+  assertEqualVectors(expected, result);
+
+  // Value(input) has NULL
+  input = makeRowVector({
+      makeNullableFlatVector<double>({1.2, 1.3, std::nullopt}, DOUBLE()),
+  });
+  predicate = "c0 IN ( 1.2, 2.3 )";
+  result = evaluate<SimpleVector<bool>>(predicate, input);
+  expected = makeNullableFlatVector<bool>({true, false, std::nullopt});
+  assertEqualVectors(expected, result);
+
+  // NaN
+  input = makeRowVector({
+      makeNullableFlatVector<double>({std::nan("")}, DOUBLE()),
+  });
+  predicate = "c0 IN ( 1.2, 2.3 )";
+  result = evaluate<SimpleVector<bool>>(predicate, input);
+  expected = makeNullableFlatVector<bool>({false});
+  assertEqualVectors(expected, result);
+
+  predicate = "c0 IN ( 1.2, null )";
+  result = evaluate<SimpleVector<bool>>(predicate, input);
+  expected = makeNullableFlatVector<bool>({std::nullopt});
+  assertEqualVectors(expected, result);
+
+  // Infinity
+  input = makeRowVector({
+      makeNullableFlatVector<double>(
+          {std::numeric_limits<double>::infinity()}, DOUBLE()),
+  });
+  predicate = "c0 IN ( 1.2, 2.3 )";
+  result = evaluate<SimpleVector<bool>>(predicate, input);
+  expected = makeNullableFlatVector<bool>({false});
+  assertEqualVectors(expected, result);
+}
+
+TEST_F(InPredicateTest, float) {
+  // No Null
+  auto input = makeRowVector({
+      makeNullableFlatVector<float>({1.2, 2.3, 3.4}, REAL()),
+  });
+  std::string predicate =
+      "c0 IN ( CAST(1.2 AS REAL), CAST(2.3 AS REAL), CAST(3.4 AS REAL) )";
+  auto expected = makeConstant(true, input->size());
+  auto result = evaluate<SimpleVector<bool>>(predicate, input);
+  assertEqualVectors(expected, result);
+
+  /// InList has Null
+  // Since there is only one non-null float, it will use FloatingPointRange
+  predicate = "c0 IN ( CAST(1.2 AS REAL), null )";
+  result = evaluate<SimpleVector<bool>>(predicate, input);
+  expected = makeNullableFlatVector<bool>({true, std::nullopt, std::nullopt});
+  assertEqualVectors(expected, result);
+
+  // InList has Null
+  // Multiple non-null, using BigintValuesUsingHashTable
+  predicate = "c0 IN ( CAST(1.2 AS REAL), CAST(1.3 AS REAL), null )";
+  result = evaluate<SimpleVector<bool>>(predicate, input);
+  expected = makeNullableFlatVector<bool>({true, std::nullopt, std::nullopt});
+  assertEqualVectors(expected, result);
+
+  // Value(input) has NULL
+  input = makeRowVector({
+      makeNullableFlatVector<float>({1.2, 2.3, std::nullopt}, REAL()),
+  });
+  predicate = "c0 IN ( CAST(1.2 AS REAL), CAST(1.3 AS REAL) )";
+  result = evaluate<SimpleVector<bool>>(predicate, input);
+  expected = makeNullableFlatVector<bool>({true, false, std::nullopt});
+  assertEqualVectors(expected, result);
+
+  // NaN
+  input = makeRowVector({
+      makeNullableFlatVector<float>({std::nan("")}, REAL()),
+  });
+  predicate = "c0 IN ( CAST(1.2 AS REAL), CAST(1.3 AS REAL) )";
+  result = evaluate<SimpleVector<bool>>(predicate, input);
+  expected = makeNullableFlatVector<bool>({false});
+  assertEqualVectors(expected, result);
+
+  predicate = "c0 IN ( CAST(1.2 AS REAL), null )";
+  result = evaluate<SimpleVector<bool>>(predicate, input);
+  expected = makeNullableFlatVector<bool>({std::nullopt});
+  assertEqualVectors(expected, result);
+
+  // Infinity
+  input = makeRowVector({
+      makeNullableFlatVector<float>(
+          {std::numeric_limits<float>::infinity()}, REAL()),
+  });
+  predicate = "c0 IN ( CAST(1.2 AS REAL), CAST(1.3 AS REAL) )";
+  result = evaluate<SimpleVector<bool>>(predicate, input);
+  expected = makeNullableFlatVector<bool>({false});
+  assertEqualVectors(expected, result);
+}
+
+TEST_F(InPredicateTest, bigIntDuplicateWithBigintRange) {
+  auto input = makeRowVector({
+      makeFlatVector<int64_t>({1, 2}, BIGINT()),
+  });
+  std::string predicate = "c0 IN ( 2, 2, 2, 2 )";
+  auto expected = makeNullableFlatVector<bool>({false, true});
+  auto result = evaluate<SimpleVector<bool>>(predicate, input);
+  assertEqualVectors(expected, result);
+
+  // NOT IN
+  input = makeRowVector({
+      makeFlatVector<int64_t>({3, 4, 5}, BIGINT()),
+  });
+  predicate = "c0 NOT IN ( 4, 4, 4, 4 )";
+  expected = makeNullableFlatVector<bool>({true, false, true});
+  result = evaluate<SimpleVector<bool>>(predicate, input);
+  assertEqualVectors(expected, result);
+
+  // NULL
+  input = makeRowVector({
+      makeFlatVector<int64_t>({3, 4, 5}, BIGINT()),
+  });
+  predicate = "c0 IN ( 4, 4, 4, 4, null )";
+  expected = makeNullableFlatVector<bool>({std::nullopt, true, std::nullopt});
+  result = evaluate<SimpleVector<bool>>(predicate, input);
+  assertEqualVectors(expected, result);
+}
+
+TEST_F(InPredicateTest, bigIntDuplicateWithBigintValuesUsingBitmask) {
+  auto input = makeRowVector({
+      makeFlatVector<int64_t>({1, 2, 5}, BIGINT()),
+  });
+  std::string predicate = "c0 IN ( 1, 2, 2, 3, 4 )";
+  auto expected = makeNullableFlatVector<bool>({true, true, false});
+  auto result = evaluate<SimpleVector<bool>>(predicate, input);
+  assertEqualVectors(expected, result);
+
+  // NULL
+  input = makeRowVector({
+      makeFlatVector<int64_t>({0, 4, 5}, BIGINT()),
+  });
+  predicate = "c0 IN ( 1, 3, 4, 4, 4, 5, null )";
+  expected = makeNullableFlatVector<bool>({std::nullopt, true, true});
+  result = evaluate<SimpleVector<bool>>(predicate, input);
+  assertEqualVectors(expected, result);
+}
+
+// Filter.cpp range check logic (uint64_t)range + 1 == values.size()
+// will have correctness issue, if there is no dedupe logic
+TEST_F(InPredicateTest, bigIntDuplicateWithContinuousBlock) {
+  auto input = makeRowVector({
+      makeNullableFlatVector<int64_t>({3}, BIGINT()),
+  });
+  auto predicate = "c0 IN ( 1, 2, 2, 4 )";
+  auto result = evaluate<SimpleVector<bool>>(predicate, input);
+  auto expected = makeNullableFlatVector<bool>({false});
+  assertEqualVectors(expected, result);
+}
+
+TEST_F(InPredicateTest, doubleDuplicateWithFloatingPointRange) {
+  auto input = makeRowVector({
+      makeFlatVector<double>({1.2, 2.3}, DOUBLE()),
+  });
+  std::string predicate = "c0 IN ( 1.2, 1.2, null )";
+  auto expected = makeNullableFlatVector<bool>({true, std::nullopt});
+  auto result = evaluate<SimpleVector<bool>>(predicate, input);
+  assertEqualVectors(expected, result);
+}
+
+TEST_F(InPredicateTest, doubleDuplicateWithBigintValuesUsingHashTable) {
+  auto input = makeRowVector({
+      makeFlatVector<double>({1.2, 4.5}, DOUBLE()),
+  });
+  std::string predicate = "c0 IN ( 1.2, 1.2, 2.3, 3.4 )";
+  auto expected = makeNullableFlatVector<bool>({true, false});
+  auto result = evaluate<SimpleVector<bool>>(predicate, input);
+  assertEqualVectors(expected, result);
+
+  // NULL
+  input = makeRowVector({
+      makeFlatVector<double>({1.2, 4.5}, DOUBLE()),
+  });
+  predicate = "c0 IN ( 1.2, 1.2, 2.3, 3.4, null )";
+  expected = makeNullableFlatVector<bool>({true, std::nullopt});
+  result = evaluate<SimpleVector<bool>>(predicate, input);
+  assertEqualVectors(expected, result);
+
+  // NaN
+  input = makeRowVector({
+      makeFlatVector<double>({std::nan(""), std::nan("")}, DOUBLE()),
+  });
+  predicate = "c0 IN ( 1.2, 1.2, 2.3, 3.4 )";
+  expected = makeNullableFlatVector<bool>({false, false});
+  result = evaluate<SimpleVector<bool>>(predicate, input);
+  assertEqualVectors(expected, result);
+
+  // NaN with null
+  input = makeRowVector({
+      makeFlatVector<double>({std::nan(""), std::nan("")}, DOUBLE()),
+  });
+  predicate = "c0 IN ( 1.2, 1.2, 2.3, 3.4, null )";
+  expected = makeNullableFlatVector<bool>({std::nullopt, std::nullopt});
+  result = evaluate<SimpleVector<bool>>(predicate, input);
+  assertEqualVectors(expected, result);
+
+  // Inf, -Inf
+  input = makeRowVector({
+      makeFlatVector<double>(
+          {std::numeric_limits<double>::infinity(),
+           -std::numeric_limits<double>::infinity()},
+          DOUBLE()),
+  });
+  predicate = "c0 IN ( 1.2, 1.2, 2.3, 3.4 )";
+  expected = makeNullableFlatVector<bool>({false, false});
+  result = evaluate<SimpleVector<bool>>(predicate, input);
+  assertEqualVectors(expected, result);
+
+  // Inf, -Inf with null
+  input = makeRowVector({
+      makeFlatVector<double>(
+          {std::numeric_limits<double>::infinity(),
+           -std::numeric_limits<double>::infinity()},
+          DOUBLE()),
+  });
+  predicate = "c0 IN ( 1.2, 1.2, 2.3, 3.4, null )";
+  expected = makeNullableFlatVector<bool>({std::nullopt, std::nullopt});
+  result = evaluate<SimpleVector<bool>>(predicate, input);
+  assertEqualVectors(expected, result);
+}
+
+TEST_F(InPredicateTest, floatDuplicateWithFloatingPointRange) {
+  // No Null
+  auto input = makeRowVector({
+      makeNullableFlatVector<float>({1.2, 2.3}, REAL()),
+  });
+  std::string predicate = "c0 IN ( CAST(1.2 AS REAL), CAST(1.2 AS REAL) )";
+  auto expected = makeNullableFlatVector<bool>({true, false});
+  auto result = evaluate<SimpleVector<bool>>(predicate, input);
+  assertEqualVectors(expected, result);
+
+  // with null
+  input = makeRowVector({
+      makeNullableFlatVector<float>({1.2, 2.3}, REAL()),
+  });
+  predicate = "c0 IN ( CAST(1.2 AS REAL), CAST(1.2 AS REAL), null )";
+  expected = makeNullableFlatVector<bool>({true, std::nullopt});
+  result = evaluate<SimpleVector<bool>>(predicate, input);
+  assertEqualVectors(expected, result);
+}
+
+TEST_F(InPredicateTest, floatDuplicateWithBigintValuesUsingHashTable) {
+  // No Null
+  auto input = makeRowVector({
+      makeNullableFlatVector<float>({1.2, 2.3}, REAL()),
+  });
+  std::string predicate =
+      "c0 IN ( CAST(1.2 AS REAL), CAST(1.2 AS REAL), CAST(1.2 AS REAL), CAST(2.3 AS REAL) )";
+  auto expected = makeNullableFlatVector<bool>({true, true});
+  auto result = evaluate<SimpleVector<bool>>(predicate, input);
+  assertEqualVectors(expected, result);
+}
+
+TEST_F(InPredicateTest, arrays) {
+  auto inValues = makeArrayVector<int32_t>({
+      {1},
+      {1, 2},
+      {1, 2, 3},
+      {},
+  });
+
+  auto data = makeRowVector({
+      makeNullableArrayVector<int32_t>({
+          {{1, 2, 3}},
+          {{}},
+          {{1, 3}},
+          std::nullopt,
+          {{2, 4, 5, 6}},
+          {{1, std::nullopt, 2}},
+          {{1, 2, 3, 4}},
+      }),
+  });
+
+  auto expected = makeNullableFlatVector<bool>({
+      true,
+      true,
+      false,
+      std::nullopt,
+      false,
+      std::nullopt,
+      false,
+  });
+  auto result = evaluate(makeInExpression(inValues), {data});
+  assertEqualVectors(expected, result);
+
+  auto inValuesWithNulls = makeNullableArrayVector<int32_t>({
+      {1},
+      {1, std::nullopt, 2},
+      {1, 2, 3},
+      {},
+  });
+
+  expected = makeNullableFlatVector<bool>(
+      {true,
+       true,
+       std::nullopt,
+       std::nullopt,
+       std::nullopt,
+       std::nullopt,
+       std::nullopt});
+  result = evaluate(makeInExpression(inValuesWithNulls), {data});
+  assertEqualVectors(expected, result);
+}
+
+TEST_F(InPredicateTest, maps) {
+  auto inValues = makeMapVector<int32_t, int64_t>({
+      {{1, 10}},
+      {{1, 10}, {2, 20}},
+      {},
+  });
+
+  auto inExpr = makeInExpression(inValues);
+
+  auto data = makeRowVector({
+      makeMapVector<int32_t, int64_t>({
+          {{1, 10}},
+          {{1, 10}, {2, 12}, {3, 13}},
+          {{1, 10}, {2, 20}},
+          {{1, 10}, {2, 20}, {3, 30}},
+          {},
+          {{1, 5}},
+      }),
+  });
+
+  auto expected = makeFlatVector<bool>({true, false, true, false, true, false});
+  auto result = evaluate(inExpr, {data});
+  assertEqualVectors(expected, result);
+}
+
+TEST_F(InPredicateTest, structs) {
+  auto inValues = makeRowVector({
+      makeFlatVector<int32_t>({1, 2, 3}),
+      makeFlatVector<std::string>({"a", "b", "c"}),
+  });
+
+  auto inExpr = makeInExpression(inValues);
+
+  auto data = makeRowVector({
+      makeRowVector({
+          makeFlatVector<int32_t>({1, 1, 2, 2, 3, 4}),
+          makeFlatVector<std::string>({"a", "zzz", "b", "abc", "c", "c"}),
+      }),
+  });
+
+  auto expected = makeFlatVector<bool>({true, false, true, false, true, false});
+  auto result = evaluate(inExpr, {data});
+  assertEqualVectors(expected, result);
+}
+
+} // namespace
+} // namespace facebook::velox::functions

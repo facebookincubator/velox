@@ -29,7 +29,7 @@ Generic Configuration
        average row size is known and preferred_output_batch_bytes is used to compute the number of output rows.
    * - abandon_partial_aggregation_min_rows
      - integer
-     - 10000
+     - 100,000
      - Min number of rows when we check if a partial aggregation is not reducing the cardinality well and might be
        a subject to being abandoned.
    * - abandon_partial_aggregation_min_pct
@@ -66,6 +66,12 @@ Generic Configuration
      - integer
      - 32MB
      - Used for backpressure to block local exchange producers when the local exchange buffer reaches or exceeds this size.
+   * - exchange.max_buffer_size
+     - integer
+     - 32MB
+     - Size of buffer in the exchange client that holds data fetched from other nodes before it is processed.
+       A larger buffer can increase network throughput for larger clusters and thus decrease query processing time
+       at the expense of reducing the amount of memory available for other usage.
    * - max_page_partitioning_buffer_size
      - integer
      - 32MB
@@ -75,6 +81,19 @@ Generic Configuration
      - integer
      - 1000
      - The minimum number of table rows that can trigger the parallel hash join table build.
+   * - debug.validate_output_from_operators
+     - bool
+     - false
+     - If set to true, then during execution of tasks, the output vectors of every operator are validated for consistency.
+       This is an expensive check so should only be used for debugging. It can help debug issues where malformed vector
+       cause failures or crashes by helping identify which operator is generating them.
+   * - enable_expression_evaluation_cache
+     - bool
+     - true
+     - Whether to enable caches in expression evaluation. If set to true, optimizations including vector pools and
+       evalWithMemo are enabled.
+
+.. _expression-evaluation-conf:
 
 Expression Evaluation Configuration
 -----------------------------------
@@ -102,7 +121,22 @@ Expression Evaluation Configuration
    * - cast_to_int_by_truncate
      - bool
      - false
-     - This flags forces the cast from float/double to integer to be performed by truncating the decimal part instead of rounding.
+     - This flags forces the cast from float/double/decimal/string to integer to be performed by truncating the decimal part instead of rounding.
+   * - cast_string_to_date_is_iso_8601
+     - bool
+     - true
+     - If set, cast from string to date allows only ISO 8601 formatted strings: ``[+-](YYYY-MM-DD)``.
+       Otherwise, allows all patterns supported by Spark:
+         * ``[+-]yyyy*``
+         * ``[+-]yyyy*-[m]m``
+         * ``[+-]yyyy*-[m]m-[d]d``
+         * ``[+-]yyyy*-[m]m-[d]d *``
+         * ``[+-]yyyy*-[m]m-[d]dT*``
+       The asterisk ``*`` in ``yyyy*`` stands for any numbers.
+       For the last two patterns, the trailing ``*`` can represent none or any sequence of characters, e.g:
+         * "1970-01-01 123"
+         * "1970-01-01 (BC)"
+       Regardless of this setting's value, leading spaces will be trimmed.
 
 Memory Management
 -----------------
@@ -165,6 +199,12 @@ Spilling
      - integer
      - 0
      - Maximum amount of memory in bytes that a final aggregation can use before spilling. 0 means unlimited.
+   * - aggregation_spill_all
+     - boolean
+     - false
+     - If true and spilling has been triggered during the input processing, the spiller will spill all the remaining
+     - in-memory state to disk before output processing. This is to simplify the aggregation query OOM prevention in
+     - output processing stage.
    * - join_spill_memory_threshold
      - integer
      - 0
@@ -173,14 +213,21 @@ Spilling
      - integer
      - 0
      - Maximum amount of memory in bytes that an order by can use before spilling. 0 means unlimited.
+   * - min_spillable_reservation_pct
+     - integer
+     - 5
+     - The minimal available spillable memory reservation in percentage of the current memory usage. Suppose the current
+       memory usage size of M, available memory reservation size of N and min reservation percentage of P,
+       if M * P / 100 > N, then spiller operator needs to grow the memory reservation with percentage of
+       'spillable_reservation_growth_pct' (see below). This ensures we have sufficient amount of memory reservation to
+       process the large input outlier.
    * - spillable_reservation_growth_pct
      - integer
-     - 25
-     - The spillable memory reservation growth percentage of the current memory reservation size. Suppose a growth
-       percentage of N and the current memory reservation size of M, the next memory reservation size will be
-       M * (1 + N / 100). After growing the memory reservation K times, the memory reservation size will be
-       M * (1 + N / 100) ^ K. Hence the memory reservation grows along a series of powers of (1 + N / 100).
-       If the memory reservation fails, it starts spilling.
+     - 10
+     - The spillable memory reservation growth percentage of the current memory usage. Suppose a growth percentage of N
+       and the current memory usage size of M, the next memory reservation size will be M * (1 + N / 100). After growing
+       the memory reservation K times, the memory reservation size will be M * (1 + N / 100) ^ K. Hence the memory
+       reservation grows along a series of powers of (1 + N / 100). If the memory reservation fails, it starts spilling.
    * - max_spill_level
      - integer
      - 4
@@ -192,6 +239,11 @@ Spilling
      - integer
      - 0
      - The maximum allowed spill file size. Zero means unlimited.
+   * - spill_write_buffer_size
+     - integer
+     - 4MB
+     - The maximum size in bytes to buffer the serialized spill data before write to disk for IO efficiency.
+       If set to zero, buffering is disabled.
    * - min_spill_run_size
      - integer
      - 256MB
@@ -200,15 +252,26 @@ Spilling
        If the limit is zero, then the spiller always spills a previously spilled partition if it has any data. This is
        to avoid spill from a partition with a small amount of data which might result in generating too many small
        spilled files.
+   * - spill_compression_codec
+     - string
+     - none
+     - Specifies the compression algorithm type to compress the spilled data before write to disk to trade CPU for IO
+       efficiency. The supported compression codecs are: ZLIB, SNAPPY, LZO, ZSTD, LZ4 and GZIP.
+       NONE means no compression.
    * - spiller_start_partition_bit
      - integer
      - 29
      - The start partition bit which is used with `spiller_partition_bits` together to calculate the spilling partition number.
-   * - spiller_partition_bits
+   * - join_spiller_partition_bits
      - integer
      - 2
-     - The number of bits used to calculate the spilling partition number. The number of spilling partitions will be power of
-       two. At the moment the maximum value is 3, meaning we only support up to 8-way spill partitioning.
+     - The number of bits (N) used to calculate the spilling partition number for hash join: 2 ^ N. At the moment the maximum
+       value is 3, meaning we only support up to 8-way spill partitioning.
+   * - aggregation_spiller_partition_bits
+     - integer
+     - 0
+     - The number of bits (N) used to calculate the spilling partition number for hash aggregation: 2 ^ N. At the moment the
+       maximum value is 3, meaning we only support up to 8-way spill partitioning.
    * - testing.spill_pct
      - integer
      - 0
@@ -277,7 +340,7 @@ Hive Connector
        the update mode field of the table writer operator output. ``OVERWRITE``
        sets the update mode to indicate overwriting a partition if exists. ``ERROR`` sets the update mode to indicate
        error throwing if writing to an existing partition.
-   * - immutable_partitions
+   * - hive.immutable-partitions
      - bool
      - false
      - True if appending data to an existing unpartitioned table is allowed. Currently this configuration does not
@@ -286,7 +349,7 @@ Hive Connector
      - bool
      - false
      - True if reading the source file column names as lower case, and planner should guarantee
-     - the input column name and filter is also lower case to achive case-insensitive read..    
+       the input column name and filter is also lower case to achive case-insensitive read.
    * - max-coalesced-bytes
      - integer
      - 512KB
@@ -327,7 +390,7 @@ Hive Connector
      - bool
      - false
      - Use path-style access for all requests to the S3-compatible storage. This is for S3-compatible storage that
-       doesn’t support virtual-hosted-style access.
+       doesn't support virtual-hosted-style access.
    * - hive.s3.ssl.enabled
      - bool
      - true
@@ -369,6 +432,21 @@ Hive Connector
      -
      - The GCS service account configuration as json string.
 
+Presto-specific Configuration
+-----------------------------
+.. list-table::
+   :widths: 20 10 10 70
+   :header-rows: 1
+
+   * - Property Name
+     - Type
+     - Default Value
+     - Description
+   * - presto.array_agg.ignore_nulls
+     - bool
+     - false
+     - If true, ``array_agg`` function ignores null inputs.
+
 Spark-specific Configuration
 ----------------------------
 .. list-table::
@@ -383,3 +461,16 @@ Spark-specific Configuration
      - bool
      - true
      - If false, ``size`` function returns null for null input.
+   * - spark.bloom_filter.expected_num_items
+     - integer
+     - 1000000
+     - The default number of expected items for the bloom filter in :spark:func:`bloom_filter_agg` function.
+   * - spark.bloom_filter.num_bits
+     - integer
+     - 8388608
+     - The default number of bits to use for the bloom filter in :spark:func:`bloom_filter_agg` function.
+   * - spark.bloom_filter.max_num_bits
+     - integer
+     - 4194304
+     - The maximum number of bits to use for the bloom filter in :spark:func:`bloom_filter_agg` function,
+       the value of this config can not exceed the default value.

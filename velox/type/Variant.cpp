@@ -16,8 +16,8 @@
 
 #include "velox/type/Variant.h"
 #include <cfloat>
-#include "common/encode/Base64.h"
 #include "folly/json.h"
+#include "velox/common/encode/Base64.h"
 #include "velox/type/DecimalUtil.h"
 #include "velox/type/HugeInt.h"
 
@@ -163,6 +163,23 @@ bool dispatchDynamicVariantEquality(
       VariantEquality, equals<false>, a.kind(), a, b);
 }
 
+std::string encloseWithQuote(std::string str) {
+  constexpr auto kDoubleQuote = '"';
+
+  std::stringstream ss;
+  ss << std::quoted(str, kDoubleQuote, kDoubleQuote);
+  return ss.str();
+}
+
+template <typename T>
+std::string stringifyFloatingPointerValue(T val) {
+  if (std::isinf(val) || std::isnan(val)) {
+    return encloseWithQuote(folly::to<std::string>(val));
+  } else {
+    return folly::to<std::string>(val);
+  }
+}
+
 void variant::throwCheckIsKindError(TypeKind kind) const {
   throw std::invalid_argument{fmt::format(
       "wrong kind! {} != {}",
@@ -181,10 +198,6 @@ std::string variant::toJson(const TypePtr& type) const {
 
   if (isNull()) {
     return "null";
-  }
-
-  if (type->isDate()) {
-    return '"' + DATE()->toString(value<TypeKind::INTEGER>()) + '"';
   }
 
   switch (kind_) {
@@ -252,16 +265,19 @@ std::string variant::toJson(const TypePtr& type) const {
       VELOX_CHECK(type && type->isLongDecimal());
       return DecimalUtil::toString(value<TypeKind::HUGEINT>(), type);
     case TypeKind::TINYINT:
-      FOLLY_FALLTHROUGH;
+      [[fallthrough]];
     case TypeKind::SMALLINT:
-      FOLLY_FALLTHROUGH;
+      [[fallthrough]];
     case TypeKind::INTEGER:
-      FOLLY_FALLTHROUGH;
+      if (type->isDate()) {
+        return '"' + DATE()->toString(value<TypeKind::INTEGER>()) + '"';
+      }
+      [[fallthrough]];
     case TypeKind::BIGINT:
       if (type && type->isShortDecimal()) {
         return DecimalUtil::toString(value<TypeKind::BIGINT>(), type);
       }
-      FOLLY_FALLTHROUGH;
+      [[fallthrough]];
     case TypeKind::BOOLEAN: {
       auto converted = VariantConverter::convert<TypeKind::VARCHAR>(*this);
       if (converted.isNull()) {
@@ -271,20 +287,10 @@ std::string variant::toJson(const TypePtr& type) const {
       }
     }
     case TypeKind::REAL: {
-      auto val = value<TypeKind::REAL>();
-      if (std::isnormal(val)) {
-        return folly::to<std::string>(val);
-      } else {
-        return '"' + folly::to<std::string>(val) + '"';
-      }
+      return stringifyFloatingPointerValue<float>(value<TypeKind::REAL>());
     }
     case TypeKind::DOUBLE: {
-      auto val = value<TypeKind::DOUBLE>();
-      if (std::isnormal(val)) {
-        return folly::to<std::string>(val);
-      } else {
-        return '"' + folly::to<std::string>(val) + '"';
-      }
+      return stringifyFloatingPointerValue<double>(value<TypeKind::DOUBLE>());
     }
     case TypeKind::TIMESTAMP: {
       auto& timestamp = value<TypeKind::TIMESTAMP>();
@@ -462,7 +468,7 @@ variant variant::create(const folly::dynamic& variantobj) {
       return variant::map(map);
     }
     case TypeKind::ROW:
-      FOLLY_FALLTHROUGH;
+      [[fallthrough]];
     case TypeKind::ARRAY: {
       VELOX_USER_CHECK(kind == TypeKind::ARRAY || kind == TypeKind::ROW);
       std::vector<variant> values;

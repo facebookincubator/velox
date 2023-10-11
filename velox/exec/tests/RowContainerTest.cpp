@@ -13,6 +13,7 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+#include "velox/common/base/tests/GTestUtils.h"
 #include "velox/exec/Aggregate.h"
 #include "velox/exec/VectorHasher.h"
 #include "velox/exec/tests/utils/RowContainerTestBase.h"
@@ -255,6 +256,18 @@ class RowContainerTest : public exec::test::RowContainerTestBase {
     EXPECT_EQ(usage, sum);
   }
 
+  std::vector<char*> store(
+      RowContainer& rowContainer,
+      DecodedVector& decodedVector,
+      vector_size_t size) {
+    std::vector<char*> rows(size);
+    for (size_t row = 0; row < size; ++row) {
+      rows[row] = rowContainer.newRow();
+      rowContainer.store(decodedVector, row, rows[row], 0);
+    }
+    return rows;
+  }
+
   // Stores the input vector in Row Container, extracts it and compares. Returns
   // the container.
   std::unique_ptr<RowContainer> roundTrip(const VectorPtr& input) {
@@ -264,13 +277,8 @@ class RowContainerTest : public exec::test::RowContainerTestBase {
     // Store the vector in the rowContainer.
     auto rowContainer = std::make_unique<RowContainer>(types, pool_.get());
     auto size = input->size();
-    SelectivityVector allRows(size);
-    std::vector<char*> rows(size);
-    DecodedVector decoded(*input, allRows);
-    for (size_t row = 0; row < size; ++row) {
-      rows[row] = rowContainer->newRow();
-      rowContainer->store(decoded, row, rows[row], 0);
-    }
+    DecodedVector decoded(*input);
+    auto rows = store(*rowContainer, decoded, size);
 
     testExtractColumn(*rowContainer, rows, 0, input);
     return rowContainer;
@@ -957,8 +965,8 @@ TEST_F(RowContainerTest, compareDouble) {
 }
 
 TEST_F(RowContainerTest, partition) {
-  // We assign an arbitrary partition number to each row and iterate
-  // over the rows a partition at a time.
+  // We assign an arbitrary partition number to each row and iterate over the
+  // rows a partition at a time.
   constexpr int32_t kNumRows = 100019;
   constexpr uint8_t kNumPartitions = 16;
   auto batch = makeDataset(
@@ -986,7 +994,32 @@ TEST_F(RowContainerTest, partition) {
     }
   }
 
-  auto& partitions = data->partitions();
+  // Expect throws before we get row partitions from this row container.
+  for (auto partition = 0; partition < kNumPartitions; ++partition) {
+    char* dummyBuffer;
+    RowPartitions dummyRowPartitions(data->numRows(), *pool_);
+    VELOX_ASSERT_THROW(
+        data->listPartitionRows(
+            iter,
+            partition,
+            1'000, /* maxRows */
+            dummyRowPartitions,
+            &dummyBuffer),
+        "Can't list partition rows from a mutable row container");
+  }
+
+  auto partitions = data->createRowPartitions(*pool_);
+  ASSERT_FALSE(data->testingMutable());
+  // Verify we can only get row partitions once from a row container.
+  VELOX_ASSERT_THROW(
+      data->createRowPartitions(*pool_),
+      "Can only create RowPartitions once from a row container");
+  // Verify we can't insert new row into a immutable row container.
+#ifndef NDEBUG
+  VELOX_ASSERT_THROW(
+      data->newRow(), "Can't add row into an immutable row container")
+#endif
+
   std::vector<uint8_t> rowPartitions(kNumRows);
   // Assign a partition to each row based on  modulo of first column.
   std::vector<std::vector<char*>> partitionRows(kNumPartitions);
@@ -997,7 +1030,7 @@ TEST_F(RowContainerTest, partition) {
     rowPartitions[i] = partition;
     partitionRows[partition].push_back(rows[i]);
   }
-  partitions.appendPartitions(
+  partitions->appendPartitions(
       folly::Range<const uint8_t*>(rowPartitions.data(), kNumRows));
   for (auto partition = 0; partition < kNumPartitions; ++partition) {
     std::vector<char*> result(partitionRows[partition].size() + 10);
@@ -1006,7 +1039,11 @@ TEST_F(RowContainerTest, partition) {
     int32_t resultBatch = 1;
     // Read the rows in multiple batches.
     while (auto numResults = data->listPartitionRows(
-               iter, partition, resultBatch, result.data() + numFound)) {
+               iter,
+               partition,
+               resultBatch,
+               *partitions,
+               result.data() + numFound)) {
       numFound += numResults;
       resultBatch += 13;
     }
@@ -1014,6 +1051,17 @@ TEST_F(RowContainerTest, partition) {
     result.resize(numFound);
     EXPECT_EQ(partitionRows[partition], result);
   }
+}
+
+TEST_F(RowContainerTest, partitionWithEmptyRowContainer) {
+  auto rowType = ROW(
+      {{"int_val", INTEGER()},
+       {"long_val", BIGINT()},
+       {"string_val", VARCHAR()}});
+  auto rowContainer =
+      std::make_unique<RowContainer>(rowType->children(), pool_.get());
+  auto partitions = rowContainer->createRowPartitions(*pool_);
+  ASSERT_EQ(partitions->size(), 0);
 }
 
 TEST_F(RowContainerTest, probedFlag) {
@@ -1127,4 +1175,134 @@ TEST_F(RowContainerTest, probedFlag) {
       makeNullableFlatVector<bool>(
           {true, true, true, true, std::nullopt, true}),
       result);
+}
+
+TEST_F(RowContainerTest, mixedFree) {
+  constexpr int32_t kNumRows = 100'000;
+  constexpr int32_t kNumBad = 100;
+  std::vector<TypePtr> dependent = {
+      TIMESTAMP(),
+      TIMESTAMP(),
+      TIMESTAMP(),
+      TIMESTAMP(),
+      TIMESTAMP(),
+      TIMESTAMP(),
+      TIMESTAMP(),
+      TIMESTAMP(),
+      TIMESTAMP(),
+      TIMESTAMP(),
+      TIMESTAMP()};
+  auto data1 = makeRowContainer({SMALLINT()}, dependent);
+  auto data2 = makeRowContainer({SMALLINT()}, dependent);
+  std::vector<char*> rows;
+
+  // We put every second row in one container and every second in the other.
+  for (auto i = 0; i < 100'000; ++i) {
+    rows.push_back(data1->newRow());
+    rows.push_back(data2->newRow());
+  }
+
+  // We add some bad rows that are in neither container.
+  for (auto i = 0; i < kNumBad; ++i) {
+    rows.push_back(reinterpret_cast<char*>(i));
+    rows.push_back(reinterpret_cast<char*>((1UL << 48) + i));
+  }
+
+  // We check that the containers correctly identify their own rows.
+  std::vector<char*> result1(rows.size());
+  std::vector<char*> result2(rows.size());
+  ASSERT_EQ(
+      kNumRows,
+      data1->findRows(
+          folly::Range<char**>(rows.data(), rows.size()), result1.data()));
+  for (auto i = 0; i < kNumRows * 2; i += 2) {
+    ASSERT_EQ(rows[i], result1[i / 2]);
+  }
+  ASSERT_EQ(
+      kNumRows,
+      data2->findRows(
+          folly::Range<char**>(rows.data(), rows.size()), result2.data()));
+  for (auto i = 1; i < kNumRows * 2; i += 2) {
+    ASSERT_EQ(rows[i], result2[i / 2]);
+  }
+
+  // We erase all rows from both containers and check there are no corruptions.
+  data1->eraseRows(folly::Range<char**>(result1.data(), kNumRows));
+  data2->eraseRows(folly::Range<char**>(result2.data(), kNumRows));
+  EXPECT_EQ(0, data1->numRows());
+  EXPECT_EQ(0, data2->numRows());
+  data1->checkConsistency();
+  data2->checkConsistency();
+}
+
+TEST_F(RowContainerTest, unknown) {
+  std::vector<TypePtr> types = {UNKNOWN()};
+  auto rowContainer = std::make_unique<RowContainer>(types, pool_.get());
+
+  auto data = makeRowVector({
+      makeAllNullFlatVector<UnknownValue>(5),
+  });
+
+  auto size = data->size();
+  DecodedVector decoded(*data->childAt(0));
+  auto rows = store(*rowContainer, decoded, size);
+
+  std::vector<uint64_t> hashes(size, 0);
+  rowContainer->hash(
+      0, folly::Range(rows.data(), rows.size()), false /*mix*/, hashes.data());
+  for (auto hash : hashes) {
+    ASSERT_EQ(BaseVector::kNullHash, hash);
+  }
+
+  // Fill in hashes with sequential numbers: 0, 1, 2,..
+  std::iota(hashes.begin(), hashes.end(), 0);
+  rowContainer->hash(
+      0, folly::Range(rows.data(), rows.size()), true /*mix*/, hashes.data());
+  for (auto i = 0; i < size; ++i) {
+    ASSERT_EQ(bits::hashMix(i, BaseVector::kNullHash), hashes[i]);
+  }
+
+  for (size_t row = 0; row < size; ++row) {
+    ASSERT_TRUE(rowContainer->equals<false>(
+        rows[row], rowContainer->columnAt(0), decoded, row));
+  }
+
+  {
+    // Verify compare method with two rows as input
+    std::sort(rows.begin(), rows.end(), [&](const char* l, const char* r) {
+      return rowContainer->compare(l, r, 0, {}) < 0;
+    });
+    VectorPtr result = BaseVector::create(UNKNOWN(), rows.size(), pool_.get());
+    rowContainer->extractColumn(rows.data(), rows.size(), 0, result);
+    // Since the Vector is just a null constant, it should be indistinguishable
+    // from the original.
+    assertEqualVectors(data->childAt(0), result);
+  }
+
+  std::vector<std::pair<int, char*>> indexedRows(rows.size());
+  for (size_t i = 0; i < rows.size(); ++i) {
+    indexedRows[i] = std::make_pair(i, rows[i]);
+  }
+
+  // Verify compare method with row and decoded vector as input
+  // Sorting a NULL constant Vector doesn't change the Vector, so we just
+  // validate that it runs without throwing an exception.
+  EXPECT_NO_THROW(std::sort(
+      indexedRows.begin(),
+      indexedRows.end(),
+      [&](const std::pair<int, char*>& l, const std::pair<int, char*>& r) {
+        return rowContainer->compare(
+                   l.second, rowContainer->columnAt(0), decoded, r.first, {}) <
+            0;
+      }));
+
+  // Verify compareRows method with row as input.
+  // Sorting a NULL constant Vector doesn't change the Vector, so we just
+  // validate that it runs without throwing an exception.
+  EXPECT_NO_THROW(std::sort(
+      indexedRows.begin(),
+      indexedRows.end(),
+      [&](const std::pair<int, char*>& l, const std::pair<int, char*>& r) {
+        return rowContainer->compareRows(l.second, r.second) < 0;
+      }));
 }

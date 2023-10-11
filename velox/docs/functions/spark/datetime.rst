@@ -7,6 +7,45 @@ Convenience Extraction Functions
 
 These functions support TIMESTAMP and DATE input types.
 
+.. spark:function:: date_add(start_date, num_days) -> date
+
+    Returns the date that is num_days after start_date.
+    If num_days is a negative value then these amount of days will be
+    deducted from start_date.
+
+.. spark:function:: date_sub(start_date, num_days) -> date
+
+    Returns the date that is num_days before start_date. According to the inputs,
+    the returned date will wrap around between the minimum negative date and
+    maximum positive date. date_sub('1969-12-31', -2147483648) get 5881580-07-11,
+    and date_sub('2023-07-10', -2147483648) get -5877588-12-29.
+
+    num_days can be positive or negative.
+
+.. spark:function:: dayofyear(date) -> integer
+
+    Returns Returns the day of year of the date/timestamp. ::
+
+    SELECT dayofyear('2016-04-09'); -- 100
+
+.. spark:function:: dayofmonth(date) -> integer
+
+    Returns the day of month of the date/timestamp. ::
+
+    SELECT dayofmonth('2009-07-30'); -- 30
+
+.. spark:function:: dayofweek(date/timestamp) -> integer
+
+    Returns the day of the week for date/timestamp (1 = Sunday, 2 = Monday, ..., 7 = Saturday).
+    We can use `dow` as alias for ::
+
+    SELECT dayofweek('2009-07-30'); -- 5
+    SELECT dayofweek('2023-08-22 11:23:00.100'); -- 3
+
+.. function:: dow(x) -> integer
+
+    This is an alias for :func:`day_of_week`.
+
 .. spark:function:: last_day(date) -> date
 
     Returns the last day of the month which the date belongs to.
@@ -51,6 +90,13 @@ These functions support TIMESTAMP and DATE input types.
     <https://spark.apache.org/docs/latest/sql-ref-datetime-pattern.html>`_.
     Returns null if ``string`` does not match ``format`` or if ``format``
     is invalid.
+
+.. function:: week_of_year(x) -> integer
+
+    Returns the `ISO-Week`_ of the year from x. The value ranges from ``1`` to ``53``.
+    A week is considered to start on a Monday and week 1 is the first week with >3 days.
+
+.. _ISO-Week: https://en.wikipedia.org/wiki/ISO_week_date
 
 .. spark:function:: year(x) -> integer
 

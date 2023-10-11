@@ -13,14 +13,23 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+#include <memory>
 
 #include "velox/expression/EvalCtx.h"
 #include "velox/expression/Expr.h"
 #include "velox/expression/VectorFunction.h"
 #include "velox/functions/lib/CheckDuplicateKeys.h"
 #include "velox/functions/lib/RowsTranslationUtil.h"
+#include "velox/vector/BaseVector.h"
+#include "velox/vector/ComplexVector.h"
+
 namespace facebook::velox::functions {
 namespace {
+static const char* kNullKeyErrorMessage = "map key cannot be null";
+static const char* kIndeterminateKeyErrorMessage =
+    "map key cannot be indeterminate";
+static const char* kErrorMessageEntryNotNull = "map entry cannot be null";
+
 // See documentation at https://prestodb.io/docs/current/functions/map.html
 class MapFromEntriesFunction : public exec::VectorFunction {
  public:
@@ -33,7 +42,6 @@ class MapFromEntriesFunction : public exec::VectorFunction {
     VELOX_CHECK_EQ(args.size(), 1);
     auto& arg = args[0];
     VectorPtr localResult;
-
     // Input can be constant or flat.
     if (arg->isConstantEncoding()) {
       auto* constantArray = arg->as<ConstantVector<ComplexType>>();
@@ -58,14 +66,19 @@ class MapFromEntriesFunction : public exec::VectorFunction {
   }
 
   static std::vector<std::shared_ptr<exec::FunctionSignature>> signatures() {
-    return {// array(unknown) -> map(unknown, unknown)
+    return {// unknown -> map(unknown, unknown)
+            exec::FunctionSignatureBuilder()
+                .returnType("map(unknown, unknown)")
+                .argumentType("unknown")
+                .build(),
+            // array(unknown) -> map(unknown, unknown)
             exec::FunctionSignatureBuilder()
                 .returnType("map(unknown, unknown)")
                 .argumentType("array(unknown)")
                 .build(),
             // array(row(K,V)) -> map(K,V)
             exec::FunctionSignatureBuilder()
-                .knownTypeVariable("K")
+                .typeVariable("K")
                 .typeVariable("V")
                 .returnType("map(K,V)")
                 .argumentType("array(row(K,V))")
@@ -79,59 +92,136 @@ class MapFromEntriesFunction : public exec::VectorFunction {
       const TypePtr& outputType,
       exec::EvalCtx& context) const {
     auto& inputValueVector = inputArray->elements();
-    exec::LocalDecodedVector decodedValueVector(context);
-    decodedValueVector.get()->decode(*inputValueVector);
-    auto valueRowVector = decodedValueVector->base()->as<RowVector>();
-    auto keyValueVector = valueRowVector->childAt(0);
+    exec::LocalDecodedVector decodedRowVector(context);
+    decodedRowVector.get()->decode(*inputValueVector);
+    // If the input array(unknown) then all rows should have errors.
+    if (inputValueVector->typeKind() == TypeKind::UNKNOWN) {
+      try {
+        VELOX_USER_FAIL(kErrorMessageEntryNotNull);
+      } catch (...) {
+        context.setErrors(rows, std::current_exception());
+      }
+
+      auto sizes = allocateSizes(rows.end(), context.pool());
+      auto offsets = allocateSizes(rows.end(), context.pool());
+
+      // Output in this case is map(unknown, unknown), but all elements are
+      // nulls, all offsets and sizes are 0.
+      return std::make_shared<MapVector>(
+          context.pool(),
+          outputType,
+          inputArray->nulls(),
+          rows.end(),
+          sizes,
+          offsets,
+          BaseVector::create(UNKNOWN(), 0, context.pool()),
+          BaseVector::create(UNKNOWN(), 0, context.pool()));
+    }
+
+    exec::LocalSelectivityVector remianingRows(context, rows);
+    auto rowVector = decodedRowVector->base()->as<RowVector>();
+    auto keyVector = rowVector->childAt(0);
 
     BufferPtr changedSizes = nullptr;
     vector_size_t* mutableSizes = nullptr;
+    auto resetSize = [&](vector_size_t row) {
+      if (!mutableSizes) {
+        changedSizes = allocateSizes(rows.end(), context.pool());
+        mutableSizes = changedSizes->asMutable<vector_size_t>();
+        rows.applyToSelected([&](vector_size_t row) {
+          mutableSizes[row] = inputArray->rawSizes()[row];
+        });
+      }
+      mutableSizes[row] = 0;
+    };
 
     // Validate all map entries and map keys are not null.
-    if (decodedValueVector->mayHaveNulls() || keyValueVector->mayHaveNulls()) {
+    if (decodedRowVector->mayHaveNulls() || keyVector->mayHaveNulls() ||
+        keyVector->mayHaveNullsRecursive()) {
       context.applyToSelectedNoThrow(rows, [&](vector_size_t row) {
         const auto size = inputArray->sizeAt(row);
         const auto offset = inputArray->offsetAt(row);
-        for (auto i = 0; i < size; ++i) {
-          const bool isMapEntryNull = decodedValueVector->isNullAt(offset + i);
-          if (isMapEntryNull) {
-            if (!mutableSizes) {
-              changedSizes = allocateSizes(rows.end(), context.pool());
-              mutableSizes = changedSizes->asMutable<vector_size_t>();
-              rows.applyToSelected([&](vector_size_t row) {
-                mutableSizes[row] = inputArray->rawSizes()[row];
-              });
-            }
 
+        for (auto i = 0; i < size; ++i) {
+          // Check nulls in the top level row vector.
+          const bool isMapEntryNull = decodedRowVector->isNullAt(offset + i);
+          if (isMapEntryNull) {
             // Set the sizes to 0 so that the final map vector generated is
             // valid in case we are inside a try. The map vector needs to be
-            // valid because its consumed by checkDuplicateKeys before try sets
-            // invalid rows to null.
-            mutableSizes[row] = 0;
-            VELOX_USER_FAIL("map entry cannot be null");
+            // valid because its consumed by checkDuplicateKeys before try
+            // sets invalid rows to null.
+            resetSize(row);
+            VELOX_USER_FAIL(kErrorMessageEntryNotNull);
           }
 
-          const bool isMapKeyNull =
-              keyValueVector->isNullAt(decodedValueVector->index(offset + i));
-          VELOX_USER_CHECK(!isMapKeyNull, "map key cannot be null");
+          // Check null keys.
+          auto keyIndex = decodedRowVector->index(offset + i);
+          if (keyVector->isNullAt(keyIndex)) {
+            resetSize(row);
+            VELOX_USER_FAIL(kNullKeyErrorMessage);
+          }
+
+          // Check nested null in keys.
+          if (keyVector->containsNullAt(keyIndex)) {
+            resetSize(row);
+            VELOX_USER_FAIL(fmt::format(
+                "{}: {}",
+                kIndeterminateKeyErrorMessage,
+                keyVector->toString(keyIndex)));
+          }
         }
       });
     }
 
+    context.deselectErrors(*remianingRows.get());
+
     VectorPtr wrappedKeys;
     VectorPtr wrappedValues;
-    if (decodedValueVector->isIdentityMapping()) {
-      wrappedKeys = valueRowVector->childAt(0);
-      wrappedValues = valueRowVector->childAt(1);
+    if (decodedRowVector->isIdentityMapping()) {
+      wrappedKeys = rowVector->childAt(0);
+      wrappedValues = rowVector->childAt(1);
+    } else if (decodedRowVector->isConstantMapping()) {
+      if (decodedRowVector->isNullAt(0)) {
+        // If top level row is null, child might not be addressable at index 0
+        // so we do not try to read it.
+        wrappedKeys = BaseVector::createNullConstant(
+            rowVector->childAt(0)->type(),
+            decodedRowVector->size(),
+            context.pool());
+        wrappedValues = BaseVector::createNullConstant(
+            rowVector->childAt(1)->type(),
+            decodedRowVector->size(),
+            context.pool());
+      } else {
+        wrappedKeys = BaseVector::wrapInConstant(
+            decodedRowVector->size(),
+            decodedRowVector->index(0),
+            rowVector->childAt(0));
+        wrappedValues = BaseVector::wrapInConstant(
+            decodedRowVector->size(),
+            decodedRowVector->index(0),
+            rowVector->childAt(1));
+      }
     } else {
-      wrappedKeys = decodedValueVector->wrap(
-          valueRowVector->childAt(0),
-          *inputValueVector,
-          inputValueVector->size());
-      wrappedValues = decodedValueVector->wrap(
-          valueRowVector->childAt(1),
-          *inputValueVector,
-          inputValueVector->size());
+      // Dictionary.
+      auto indices = allocateIndices(decodedRowVector->size(), context.pool());
+      auto nulls = allocateNulls(decodedRowVector->size(), context.pool());
+      auto* mutableNulls = nulls->asMutable<uint64_t>();
+      memcpy(
+          indices->asMutable<vector_size_t>(),
+          decodedRowVector->indices(),
+          BaseVector::byteSize<vector_size_t>(decodedRowVector->size()));
+      // Any null in the top row(X, Y) should be marked as null since its
+      // not guranteed to be addressable at X or Y.
+      for (auto i = 0; i < decodedRowVector->size(); i++) {
+        if (decodedRowVector->isNullAt(i)) {
+          bits::setNull(mutableNulls, i);
+        }
+      }
+      wrappedKeys = BaseVector::wrapInDictionary(
+          nulls, indices, decodedRowVector->size(), rowVector->childAt(0));
+      wrappedValues = BaseVector::wrapInDictionary(
+          nulls, indices, decodedRowVector->size(), rowVector->childAt(1));
     }
 
     // To avoid creating new buffers, we try to reuse the input's buffers
@@ -146,7 +236,7 @@ class MapFromEntriesFunction : public exec::VectorFunction {
         wrappedKeys,
         wrappedValues);
 
-    checkDuplicateKeys(mapVector, rows, context);
+    checkDuplicateKeys(mapVector, *remianingRows, context);
     return mapVector;
   }
 };

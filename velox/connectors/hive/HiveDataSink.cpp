@@ -18,10 +18,14 @@
 
 #include "velox/common/base/Fs.h"
 #include "velox/connectors/hive/HiveConfig.h"
-#include "velox/connectors/hive/HiveConnector.h"
 #include "velox/connectors/hive/HivePartitionFunction.h"
 #include "velox/core/ITypedExpr.h"
+#include "velox/dwio/common/SortingWriter.h"
 #include "velox/dwio/dwrf/writer/Writer.h"
+#include "velox/exec/SortBuffer.h"
+
+#include "velox/connectors/hive/TableHandle.h"
+#include "velox/exec/OperatorUtils.h"
 
 #include <boost/lexical_cast.hpp>
 #include <boost/uuid/uuid_generators.hpp>
@@ -270,11 +274,13 @@ HiveDataSink::HiveDataSink(
     RowTypePtr inputType,
     std::shared_ptr<const HiveInsertTableHandle> insertTableHandle,
     const ConnectorQueryCtx* connectorQueryCtx,
-    CommitStrategy commitStrategy)
+    CommitStrategy commitStrategy,
+    const std::shared_ptr<const Config>& connectorProperties)
     : inputType_(std::move(inputType)),
       insertTableHandle_(std::move(insertTableHandle)),
       connectorQueryCtx_(connectorQueryCtx),
       commitStrategy_(commitStrategy),
+      connectorProperties_(connectorProperties),
       maxOpenWriters_(
           HiveConfig::maxPartitionsPerWriters(connectorQueryCtx_->config())),
       partitionChannels_(getPartitionChannels(insertTableHandle_)),
@@ -293,7 +299,10 @@ HiveDataSink::HiveDataSink(
           isBucketed() ? createBucketFunction(
                              *insertTableHandle_->bucketProperty(),
                              inputType_)
-                       : nullptr) {
+                       : nullptr),
+      writerFactory_(dwio::common::getWriterFactory(
+          insertTableHandle_->tableStorageFormat())),
+      spillConfig_(connectorQueryCtx->getSpillConfig()) {
   VELOX_USER_CHECK(
       !isBucketed() || isPartitioned(), "A bucket table must be partitioned");
   if (isBucketed()) {
@@ -305,9 +314,30 @@ HiveDataSink::HiveDataSink(
           (commitStrategy_ == CommitStrategy::kTaskCommit),
       "Unsupported commit strategy: {}",
       commitStrategyToString(commitStrategy_));
+
+  if (!isBucketed()) {
+    return;
+  }
+  const auto& sortedProperty = insertTableHandle_->bucketProperty()->sortedBy();
+  if (!sortedProperty.empty()) {
+    sortColumnIndices_.reserve(sortedProperty.size());
+    sortCompareFlags_.reserve(sortedProperty.size());
+    for (int i = 0; i < sortedProperty.size(); ++i) {
+      sortColumnIndices_.push_back(
+          inputType_->getChildIdx(sortedProperty.at(i)->sortColumn()));
+      sortCompareFlags_.push_back(
+          {sortedProperty.at(i)->sortOrder().isNullsFirst(),
+           sortedProperty.at(i)->sortOrder().isAscending(),
+           false,
+           CompareFlags::NullHandlingMode::NoStop});
+    }
+  }
 }
 
 void HiveDataSink::appendData(RowVectorPtr input) {
+  checkNotAborted();
+  checkNotClosed();
+
   // Write to unpartitioned table.
   if (!isPartitioned()) {
     const auto index = ensureWriter(HiveWriterId::unpartitionedId());
@@ -358,6 +388,8 @@ void HiveDataSink::computePartitionAndBucketIds(const RowVectorPtr& input) {
 }
 
 int64_t HiveDataSink::getCompletedBytes() const {
+  checkNotAborted();
+
   int64_t completedBytes{0};
   for (const auto& ioStats : ioStats_) {
     completedBytes += ioStats->rawBytesWritten();
@@ -365,7 +397,18 @@ int64_t HiveDataSink::getCompletedBytes() const {
   return completedBytes;
 }
 
-std::vector<std::string> HiveDataSink::finish() const {
+int32_t HiveDataSink::numWrittenFiles() const {
+  return writers_.size();
+}
+
+std::vector<std::string> HiveDataSink::close(bool success) {
+  closeInternal(!success);
+  if (!success) {
+    VELOX_CHECK(aborted_);
+    return {};
+  }
+  VELOX_CHECK(closed_);
+
   std::vector<std::string> partitionUpdates;
   partitionUpdates.reserve(writerInfo_.size());
 
@@ -398,9 +441,28 @@ std::vector<std::string> HiveDataSink::finish() const {
   return partitionUpdates;
 }
 
-void HiveDataSink::close() {
-  for (const auto& writer : writers_) {
-    writer->close();
+void HiveDataSink::closeInternal(bool abort) {
+  if (closedOrAborted()) {
+    if (abort) {
+      // We can't call abort on a closed data sink.
+      VELOX_CHECK(aborted_, "Can't abort a closed hive data sink");
+    } else {
+      // We can't call close on an aborted data sink.
+      VELOX_CHECK(closed_, "Can't close an aborted hive data sink");
+    }
+    return;
+  }
+
+  if (!abort) {
+    closed_ = true;
+    for (const auto& writer : writers_) {
+      writer->close();
+    }
+  } else {
+    aborted_ = true;
+    for (const auto& writer : writers_) {
+      writer->abort();
+    }
   }
 }
 
@@ -433,19 +495,23 @@ uint32_t HiveDataSink::appendWriter(const HiveWriterId& id) {
   writerInfo_.emplace_back(
       std::make_shared<HiveWriterInfo>(std::move(writerParameters)));
 
-  auto writerFactory =
-      dwio::common::getWriterFactory(insertTableHandle_->tableStorageFormat());
   dwio::common::WriterOptions options;
   options.schema = inputType_;
   options.memoryPool = connectorQueryCtx_->connectorMemoryPool();
-  ioStats_.emplace_back(std::make_shared<dwio::common::IoStatistics>());
-  writers_.emplace_back(writerFactory->createWriter(
-      dwio::common::DataSink::create(
+  options.compressionKind = insertTableHandle_->compressionKind();
+  options.setMemoryReclaimer = connectorQueryCtx_->setMemoryReclaimer();
+  ioStats_.emplace_back(std::make_shared<io::IoStatistics>());
+  auto writer = writerFactory_->createWriter(
+      dwio::common::FileSink::create(
           writePath,
-          connectorQueryCtx_->memoryPool(),
-          dwio::common::MetricsLog::voidLog(),
-          ioStats_.back().get()),
-      options));
+          {.bufferWrite = false,
+           .connectorProperties = connectorProperties_,
+           .pool = connectorQueryCtx_->memoryPool(),
+           .metricLogger = dwio::common::MetricsLog::voidLog(),
+           .stats = ioStats_.back().get()}),
+      options);
+  writer = maybeCreateBucketSortWriter(std::move(writer));
+  writers_.emplace_back(std::move(writer));
   // Extends the buffer used for partition rows calculations.
   partitionSizes_.emplace_back(0);
   partitionRows_.emplace_back(nullptr);
@@ -453,6 +519,25 @@ uint32_t HiveDataSink::appendWriter(const HiveWriterId& id) {
 
   writerIndexMap_.emplace(id, writers_.size() - 1);
   return writerIndexMap_[id];
+}
+
+std::unique_ptr<facebook::velox::dwio::common::Writer>
+HiveDataSink::maybeCreateBucketSortWriter(
+    std::unique_ptr<facebook::velox::dwio::common::Writer> writer) {
+  if (sortColumnIndices_.empty()) {
+    return writer;
+  }
+  auto sortBuffer = std::make_unique<exec::SortBuffer>(
+      inputType_,
+      sortColumnIndices_,
+      sortCompareFlags_,
+      1000, // todo batch size
+      connectorQueryCtx_->memoryPool(),
+      &nonReclaimableSection_,
+      &numSpillRuns_,
+      spillConfig_);
+  return std::make_unique<dwio::common::SortingWriter>(
+      std::move(writer), std::move(sortBuffer));
 }
 
 void HiveDataSink::splitInputRowsAndEnsureWriters() {
@@ -553,7 +638,7 @@ HiveWriterParameters::UpdateMode HiveDataSink::getUpdateMode() const {
       if (insertTableHandle_->isBucketed()) {
         VELOX_USER_FAIL("Cannot insert into bucketed unpartitioned Hive table");
       }
-      if (HiveConfig::immutablePartitions(connectorQueryCtx_->config())) {
+      if (HiveConfig::immutablePartitions(connectorProperties_.get())) {
         VELOX_USER_FAIL("Unpartitioned Hive tables are immutable.");
       }
       return HiveWriterParameters::UpdateMode::kAppend;

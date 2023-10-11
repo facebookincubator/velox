@@ -18,8 +18,8 @@
 #include <optional>
 #include <string>
 
+#include <glog/logging.h>
 #include "folly/lang/Hint.h"
-#include "glog/logging.h"
 #include "gtest/gtest.h"
 #include "velox/expression/Expr.h"
 #include "velox/functions/Udf.h"
@@ -1062,6 +1062,28 @@ TEST_F(SimpleFunctionTest, isAsciiArgs) {
 
   input->as<SimpleVector<StringView>>()->computeAndSetIsAscii(rows);
   ASSERT_TRUE(function_t::isAsciiArgs(rows, {input}));
+}
+
+template <typename T>
+struct StringInputIntOutputFunction {
+  VELOX_DEFINE_FUNCTION_TYPES(T);
+
+  void call(int32_t& out, const arg_type<Varchar>& input) {
+    throw std::runtime_error(
+        "This method is not expected to be called for all-ascii input!");
+  }
+
+  void callAscii(int32_t& out, const arg_type<Varchar>& input) {
+    out = input.size();
+  }
+};
+
+TEST_F(SimpleFunctionTest, TestcallAscii) {
+  registerFunction<StringInputIntOutputFunction, int32_t, Varchar>(
+      {"get_input_size"});
+  auto asciiInput = makeFlatVector<std::string>({"abc123", "10% #\0"});
+  EXPECT_NO_THROW(evaluate<SimpleVector<int32_t>>(
+      "get_input_size(c0)", makeRowVector({asciiInput})));
 }
 
 // Return false always.

@@ -16,6 +16,7 @@
 
 #pragma once
 
+#include <folly/compression/Compression.h>
 #include <string>
 
 namespace facebook::velox::common {
@@ -31,10 +32,16 @@ enum CompressionKind {
   CompressionKind_MAX = INT64_MAX
 };
 
+std::unique_ptr<folly::io::Codec> compressionKindToCodec(CompressionKind kind);
+
+CompressionKind codecTypeToCompressionKind(folly::io::CodecType type);
+
 /**
  * Get the name of the CompressionKind.
  */
 std::string compressionKindToString(CompressionKind kind);
+
+CompressionKind stringToCompressionKind(const std::string& kind);
 
 constexpr uint64_t DEFAULT_COMPRESSION_BLOCK_SIZE = 256 * 1024;
 

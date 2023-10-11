@@ -153,10 +153,39 @@ struct TrimFunctionBase {
     stringImpl::trimUnicodeWhiteSpace<leftTrim, rightTrim>(result, input);
   }
 
+  FOLLY_ALWAYS_INLINE void call(
+      out_type<Varchar>& result,
+      const arg_type<Varchar>& input,
+      const arg_type<Varchar>& trimCharacters) {
+    if (stringCore::isAscii(trimCharacters.data(), trimCharacters.size())) {
+      callAscii(result, input, trimCharacters);
+    } else {
+      VELOX_UNSUPPORTED(
+          "trim functions with custom trim characters and non-ASCII inputs are not supported yet");
+    }
+  }
+
   FOLLY_ALWAYS_INLINE void callAscii(
       out_type<Varchar>& result,
       const arg_type<Varchar>& input) {
-    stringImpl::trimAsciiWhiteSpace<leftTrim, rightTrim>(result, input);
+    stringImpl::trimAscii<leftTrim, rightTrim>(
+        result, input, stringImpl::isAsciiWhiteSpace);
+  }
+
+  FOLLY_ALWAYS_INLINE void callAscii(
+      out_type<Varchar>& result,
+      const arg_type<Varchar>& input,
+      const arg_type<Varchar>& trimCharacters) {
+    const auto numChars = trimCharacters.size();
+    const auto* chars = trimCharacters.data();
+    stringImpl::trimAscii<leftTrim, rightTrim>(result, input, [&](char c) {
+      for (auto i = 0; i < numChars; ++i) {
+        if (c == chars[i]) {
+          return true;
+        }
+      }
+      return false;
+    });
   }
 };
 
@@ -180,6 +209,51 @@ struct LengthFunction {
 
   FOLLY_ALWAYS_INLINE void callAscii(int64_t& result, const StringView& input) {
     result = stringImpl::length<true>(input);
+  }
+};
+
+/// Returns number of bytes in the specified varbinary.
+template <typename T>
+struct LengthVarbinaryFunction {
+  VELOX_DEFINE_FUNCTION_TYPES(T);
+
+  FOLLY_ALWAYS_INLINE void call(int64_t& result, const StringView& input) {
+    result = input.size();
+  }
+};
+
+template <typename T>
+struct StartsWithFunction {
+  VELOX_DEFINE_FUNCTION_TYPES(T);
+
+  FOLLY_ALWAYS_INLINE void call(
+      out_type<bool>& result,
+      const arg_type<Varchar>& x,
+      const arg_type<Varchar>& y) {
+    if (x.size() < y.size()) {
+      result = false;
+      return;
+    }
+
+    result = (memcmp(x.data(), y.data(), y.size()) == 0);
+  }
+};
+
+template <typename T>
+struct EndsWithFunction {
+  VELOX_DEFINE_FUNCTION_TYPES(T);
+
+  FOLLY_ALWAYS_INLINE void call(
+      out_type<bool>& result,
+      const arg_type<Varchar>& x,
+      const arg_type<Varchar>& y) {
+    if (x.size() < y.size()) {
+      result = false;
+      return;
+    }
+
+    result =
+        (memcmp(x.data() + (x.size() - y.size()), y.data(), y.size()) == 0);
   }
 };
 
@@ -266,5 +340,94 @@ struct StrLPosFunction : public StrPosFunctionBase<T, true> {};
 
 template <typename T>
 struct StrRPosFunction : public StrPosFunctionBase<T, false> {};
+
+template <typename T>
+struct LevenshteinDistanceFunction {
+  VELOX_DEFINE_FUNCTION_TYPES(T);
+
+  void call(
+      out_type<int64_t>& result,
+      const arg_type<Varchar>& left,
+      const arg_type<Varchar>& right) {
+    auto leftCodePoints = stringImpl::stringToCodePoints(left);
+    auto rightCodePoints = stringImpl::stringToCodePoints(right);
+    doCall<int32_t>(
+        result,
+        leftCodePoints.data(),
+        rightCodePoints.data(),
+        leftCodePoints.size(),
+        rightCodePoints.size());
+  }
+
+  void callAscii(
+      out_type<int64_t>& result,
+      const arg_type<Varchar>& left,
+      const arg_type<Varchar>& right) {
+    auto leftCodePoints = reinterpret_cast<const uint8_t*>(left.data());
+    auto rightCodePoints = reinterpret_cast<const uint8_t*>(right.data());
+    doCall<uint8_t>(
+        result, leftCodePoints, rightCodePoints, left.size(), right.size());
+  }
+
+  template <typename TCodePoint>
+  void doCall(
+      out_type<int64_t>& result,
+      const TCodePoint* leftCodePoints,
+      const TCodePoint* rightCodePoints,
+      size_t leftCodePointsSize,
+      size_t rightCodePointsSize) {
+    if (leftCodePointsSize < rightCodePointsSize) {
+      doCall(
+          result,
+          rightCodePoints,
+          leftCodePoints,
+          rightCodePointsSize,
+          leftCodePointsSize);
+      return;
+    }
+    if (rightCodePointsSize == 0) {
+      result = leftCodePointsSize;
+      return;
+    }
+
+    static const int32_t kMaxCombinedInputSize = 1'000'000;
+    auto combinedInputSize = leftCodePointsSize * rightCodePointsSize;
+    VELOX_USER_CHECK_LE(
+        combinedInputSize,
+        kMaxCombinedInputSize,
+        "The combined inputs size exceeded max Levenshtein distance combined input size,"
+        " the code points size of left is {}, code points size of right is {}",
+        leftCodePointsSize,
+        rightCodePointsSize);
+
+    std::vector<int32_t> distances;
+    distances.reserve(rightCodePointsSize);
+    for (int i = 0; i < rightCodePointsSize; i++) {
+      distances.push_back(i + 1);
+    }
+
+    for (int i = 0; i < leftCodePointsSize; i++) {
+      auto leftUpDistance = distances[0];
+      if (leftCodePoints[i] == rightCodePoints[0]) {
+        distances[0] = i;
+      } else {
+        distances[0] = std::min(i, distances[0]) + 1;
+      }
+      for (int j = 1; j < rightCodePointsSize; j++) {
+        auto leftUpDistanceNext = distances[j];
+        if (leftCodePoints[i] == rightCodePoints[j]) {
+          distances[j] = leftUpDistance;
+        } else {
+          distances[j] =
+              std::min(
+                  distances[j - 1], std::min(leftUpDistance, distances[j])) +
+              1;
+        }
+        leftUpDistance = leftUpDistanceNext;
+      }
+    }
+    result = distances[rightCodePointsSize - 1];
+  }
+};
 
 } // namespace facebook::velox::functions

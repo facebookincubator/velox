@@ -269,6 +269,17 @@ uint8_t gather8Bits(
 
 namespace detail {
 template <typename T, typename A, size_t kSizeT = sizeof(T)>
+struct MaskLoad;
+}
+
+template <typename T, typename A = xsimd::default_arch>
+xsimd::batch<T, A>
+maskLoad(const T* addr, xsimd::batch_bool<T, A> mask, const A& arch = {}) {
+  return detail::MaskLoad<T, A>::apply(addr, mask, arch);
+}
+
+namespace detail {
+template <typename T, typename A, size_t kSizeT = sizeof(T)>
 struct BitMask;
 }
 
@@ -413,6 +424,11 @@ inline bool isDense(const T* values, int32_t size) {
 // Reinterpret batch of U into batch of T.
 template <typename T, typename U, typename A = xsimd::default_arch>
 xsimd::batch<T, A> reinterpretBatch(xsimd::batch<U, A>, const A& = {});
+
+// Compares memory at 'x' and 'y' and returns true if 'size' leading bytes are
+// equal. May address up to SIMD width -1 past end of either 'x' or 'y'.
+template <typename A = xsimd::default_arch>
+inline bool memEqualUnsafe(const void* x, const void* y, int32_t size);
 
 } // namespace facebook::velox::simd
 

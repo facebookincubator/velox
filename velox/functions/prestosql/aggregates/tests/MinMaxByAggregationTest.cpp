@@ -461,12 +461,16 @@ class MinMaxByGlobalByAggregationTest
          fmt::format("SELECT {}", asSql(dataAt<T>(3)))}};
     for (const auto& testData : testSettings) {
       SCOPED_TRACE(testData.debugString());
+      // Skip testing with TableScan because the result for some testData
+      // depends on input order that is non-deterministic with two splits.
       testAggregations(
           {testData.inputRowVector},
           {},
           {"min_by(c0, c1)"},
           {},
-          testData.verifyDuckDbSql);
+          testData.verifyDuckDbSql,
+          /*config*/ {},
+          /*testWithTableScan*/ false);
     }
   }
 
@@ -555,12 +559,16 @@ class MinMaxByGlobalByAggregationTest
          fmt::format("SELECT {}", asSql(dataAt<T>(3)))}};
     for (const auto& testData : testSettings) {
       SCOPED_TRACE(testData.debugString());
+      // Skip testing with TableScan because the result for some testData
+      // depends on input order that is non-deterministic with two splits.
       testAggregations(
           {testData.inputRowVector},
           {},
           {"max_by(c0, c1)"},
           {},
-          testData.verifyDuckDbSql);
+          testData.verifyDuckDbSql,
+          /*config*/ {},
+          /*testWithTableScan*/ false);
     }
   }
 };
@@ -845,12 +853,16 @@ class MinMaxByGroupByAggregationTest
              asSql(dataAt<T>(0)))}};
     for (const auto& testData : testSettings) {
       SCOPED_TRACE(testData.debugString());
+      // Skip testing with TableScan because the result for some testData
+      // depends on input order that is non-deterministic with two splits.
       testAggregations(
           {testData.inputRowVector},
           {"c2"},
           {"min_by(c0, c1)"},
           {},
-          testData.verifyDuckDbSql);
+          testData.verifyDuckDbSql,
+          /*config*/ {},
+          /*testWithTableScan*/ false);
     }
   }
 
@@ -994,12 +1006,16 @@ class MinMaxByGroupByAggregationTest
              asSql(dataAt<T>(0)))}};
     for (const auto& testData : testSettings) {
       SCOPED_TRACE(testData.debugString());
+      // Skip testing with TableScan because the result for some testData
+      // depends on input order that is non-deterministic with two splits.
       testAggregations(
           {testData.inputRowVector},
           {"c2"},
           {"max_by(c0, c1)"},
           {},
-          testData.verifyDuckDbSql);
+          testData.verifyDuckDbSql,
+          /*config*/ {},
+          /*testWithTableScan*/ false);
     }
   }
 };
@@ -1214,6 +1230,137 @@ TEST_F(MinMaxByComplexTypes, mapGroupBy) {
       {data}, {"c0"}, {"min_by(c1, c2)", "max_by(c1, c2)"}, {expected});
 }
 
+TEST_F(MinMaxByComplexTypes, arrayCompare) {
+  auto data = makeRowVector({
+      makeArrayVector<int64_t>({
+          {1, 2, 3},
+          {4, 5},
+          {6, 7, 8},
+      }),
+      makeNullableArrayVector<int64_t>({
+          {1, 2, 3},
+          {std::nullopt, 2},
+          {6, 7, 8},
+      }),
+  });
+
+  auto expected = makeRowVector({
+      makeArrayVector<int64_t>({
+          {1, 2, 3},
+      }),
+      makeArrayVector<int64_t>({
+          {6, 7, 8},
+      }),
+  });
+
+  VELOX_ASSERT_THROW(
+      testAggregations(
+          {data}, {}, {"min_by(c0, c1)", "max_by(c0, c1)"}, {expected}),
+      "ARRAY comparison not supported for values that contain nulls");
+  data = makeRowVector({
+      makeArrayVector<int64_t>({
+          {1, 2, 3},
+          {4, 5},
+          {6, 7, 8},
+      }),
+      makeNullableArrayVector<int64_t>({
+          {1, 2, 3},
+          {3, std::nullopt, 4},
+          {6, 7, 8},
+      }),
+  });
+  testAggregations(
+      {data}, {}, {"min_by(c0, c1)", "max_by(c0, c1)"}, {expected});
+}
+
+TEST_F(MinMaxByComplexTypes, mapCompare) {
+  auto data = makeRowVector({
+      makeArrayVector<int64_t>({
+          {1, 2, 3},
+          {4, 5},
+          {6, 7, 8},
+      }),
+      makeNullableMapVector<int64_t, int64_t>({
+          {{{1, 1}, {2, 2}}},
+          {{{1, 1}, {2, std::nullopt}}},
+          {{{4, 50}}},
+      }),
+  });
+
+  auto expected = makeRowVector({
+      makeArrayVector<int64_t>({
+          {1, 2, 3},
+      }),
+      makeArrayVector<int64_t>({
+          {6, 7, 8},
+      }),
+  });
+
+  VELOX_ASSERT_THROW(
+      testAggregations(
+          {data}, {}, {"min_by(c0, c1)", "max_by(c0, c1)"}, {expected}),
+      "MAP comparison not supported for values that contain nulls");
+
+  data = makeRowVector({
+      makeArrayVector<int64_t>({
+          {1, 2, 3},
+          {4, 5},
+          {6, 7, 8},
+      }),
+      makeNullableMapVector<int64_t, int64_t>({
+          {{{1, 1}, {2, 2}}},
+          {{{1, 1}, {2, 3}}},
+          {{{4, 50}}},
+      }),
+  });
+  testAggregations(
+      {data}, {}, {"min_by(c0, c1)", "max_by(c0, c1)"}, {expected});
+}
+
+TEST_F(MinMaxByComplexTypes, rowCompare) {
+  auto data = makeRowVector({
+      makeArrayVector<int64_t>({
+          {1, 2, 3},
+          {4, 5},
+          {6, 7, 8},
+      }),
+      makeRowVector({makeNullableFlatVector<int32_t>({
+          1,
+          std::nullopt,
+          3,
+      })}),
+  });
+
+  auto expected = makeRowVector({
+      makeArrayVector<int64_t>({
+          {1, 2, 3},
+      }),
+      makeArrayVector<int64_t>({
+          {6, 7, 8},
+      }),
+  });
+
+  VELOX_ASSERT_THROW(
+      testAggregations(
+          {data}, {}, {"min_by(c0, c1)", "max_by(c0, c1)"}, {expected}),
+      "ROW comparison not supported for values that contain nulls");
+
+  data = makeRowVector({
+      makeArrayVector<int64_t>({
+          {1, 2, 3},
+          {4, 5},
+          {6, 7, 8},
+      }),
+      makeRowVector({makeNullableFlatVector<int32_t>({
+          1,
+          2,
+          3,
+      })}),
+  });
+  testAggregations(
+      {data}, {}, {"min_by(c0, c1)", "max_by(c0, c1)"}, {expected});
+}
+
 class MinMaxByNTest : public AggregationTestBase {
  protected:
   void SetUp() override {
@@ -1335,6 +1482,42 @@ TEST_F(MinMaxByNTest, globalWithNullCompare) {
       {data}, {}, {"min_by(c0, c1, 3)", "max_by(c0, c1, 4)"}, {expected});
 }
 
+TEST_F(MinMaxByNTest, globalWithNullN) {
+  // Rows with null 'compare' should be ignored.
+  auto data = makeRowVector(
+      {makeFlatVector<int32_t>({1, 2, 3, 4, 5, 6, 7}),
+       makeFlatVector<int64_t>({77, 66, 55, 44, 33, 22, 11}),
+       makeNullableFlatVector<int64_t>(
+           {3, std::nullopt, 3, 3, 3, std::nullopt, 3})});
+
+  auto expected = makeRowVector({
+      makeArrayVector<int32_t>({
+          {7, 5, 4},
+      }),
+      makeArrayVector<int32_t>({
+          {1, 3, 4},
+      }),
+  });
+
+  testAggregations(
+      {data}, {}, {"min_by(c0, c1, c2)", "max_by(c0, c1, c2)"}, {expected});
+
+  // All 'N' are null.
+  data = makeRowVector({
+      makeFlatVector<int32_t>({1, 2, 3, 4, 5, 6, 7}),
+      makeFlatVector<int64_t>({77, 66, 55, 44, 33, 22, 11}),
+      makeNullConstant(TypeKind::BIGINT, 7),
+  });
+
+  expected = makeRowVector({
+      makeAllNullArrayVector(1, INTEGER()),
+      makeAllNullArrayVector(1, INTEGER()),
+  });
+
+  testAggregations(
+      {data}, {}, {"min_by(c0, c1, c2)", "max_by(c0, c1, c2)"}, {expected});
+}
+
 TEST_F(MinMaxByNTest, sortedGlobal) {
   auto data = makeRowVector({
       makeFlatVector<int32_t>({1, 2, 3, 4, 5, 6, 7}),
@@ -1406,10 +1589,13 @@ TEST_F(MinMaxByNTest, groupBy) {
       {data}, {"c0"}, {"min_by(c1, c2, 3)", "max_by(c1, c2, 4)"}, {expected});
 
   // bool type of comparison
+  // Make input size at least 8 to ensure drivers get 2 input batches for
+  // spilling when tested with data read from files.
   data = makeRowVector({
-      makeFlatVector<int16_t>({1, 2, 1, 2}),
-      makeFlatVector<int32_t>({1, 2, 3, 4}),
-      makeFlatVector<bool>({true, false, false, true}),
+      makeFlatVector<int16_t>({1, 2, 1, 2, 1, 2, 1, 2}),
+      makeFlatVector<int32_t>({1, 2, 3, 4, 1, 2, 3, 4}),
+      makeFlatVector<bool>(
+          {true, false, false, true, true, false, false, true}),
   });
 
   expected = makeRowVector({
@@ -1496,6 +1682,56 @@ TEST_F(MinMaxByNTest, groupByWithNullCompare) {
 
   testAggregations(
       {data}, {"c0"}, {"min_by(c1, c2, 3)", "max_by(c1, c2, 4)"}, {expected});
+}
+
+TEST_F(MinMaxByNTest, groupByWithNullN) {
+  // Rows with null 'N' should be ignored.
+  auto data = makeRowVector({
+      makeFlatVector<int16_t>({1, 2, 1, 2, 1, 2, 1}),
+      makeFlatVector<int32_t>({1, 2, 3, 4, 5, 6, 7}),
+      makeFlatVector<int64_t>({77, 66, 55, 44, 33, 22, 11}),
+      makeNullableFlatVector<int64_t>(
+          {3, std::nullopt, 3, 3, std::nullopt, 3, 3}),
+  });
+
+  auto expected = makeRowVector({
+      makeFlatVector<int16_t>({1, 2}),
+      makeArrayVector<int32_t>({
+          {7, 3, 1},
+          {6, 4},
+      }),
+      makeArrayVector<int32_t>({
+          {1, 3, 7},
+          {4, 6},
+      }),
+  });
+
+  testAggregations(
+      {data}, {"c0"}, {"min_by(c1, c2, c3)", "max_by(c1, c2, c3)"}, {expected});
+
+  // All 'N' values are null for one group.
+  data = makeRowVector({
+      makeFlatVector<int16_t>({1, 2, 1, 2, 1, 2, 1}),
+      makeFlatVector<int32_t>({1, 2, 3, 4, 5, 6, 7}),
+      makeFlatVector<int64_t>({77, 66, 55, 44, 33, 22, 11}),
+      makeNullableFlatVector<int64_t>(
+          {3, std::nullopt, 3, std::nullopt, std::nullopt, std::nullopt, 3}),
+  });
+
+  expected = makeRowVector({
+      makeFlatVector<int16_t>({1, 2}),
+      makeNullableArrayVector<int32_t>({
+          {{7, 3, 1}},
+          std::nullopt,
+      }),
+      makeNullableArrayVector<int32_t>({
+          {{1, 3, 7}},
+          std::nullopt,
+      }),
+  });
+
+  testAggregations(
+      {data}, {"c0"}, {"min_by(c1, c2, c3)", "max_by(c1, c2, c3)"}, {expected});
 }
 
 TEST_F(MinMaxByNTest, sortedGroupBy) {
@@ -1756,6 +1992,119 @@ TEST_F(MinMaxByNTest, groupByVarchar) {
 
   testAggregations(
       {data}, {"c0"}, {"min_by(c1, c2, 3)", "max_by(c1, c2, 4)"}, {expected});
+}
+
+TEST_F(MinMaxByNTest, stringComparison) {
+  std::string s[6];
+  for (int i = 0; i < 6; ++i) {
+    s[i] = std::string(StringView::kInlineSize, 'x') + std::to_string(i);
+  }
+
+  auto data = makeRowVector({
+      makeFlatVector<std::string>({s[0], s[1], s[2], s[3], s[4], s[5]}),
+      makeRowVector({
+          makeFlatVector<int16_t>({1, 2, 3, 4, 5, 6}),
+          makeFlatVector<int32_t>({10, 20, 30, 40, 50, 60}),
+      }),
+      makeFlatVector<int16_t>({1, 2, 3, 4, 5, 6}),
+      makeFlatVector<std::string>({s[5], s[4], s[3], s[2], s[1], s[0]}),
+      makeFlatVector<bool>({true, true, true, false, false, false}),
+  });
+
+  // Test min_by(row, varchar, n) and max_by(row, varchar, n).
+  {
+    // Global.
+    auto expected = makeRowVector({
+        makeArrayVector(
+            {0},
+            makeRowVector({
+                makeFlatVector<int16_t>({1, 2, 3}),
+                makeFlatVector<int32_t>({10, 20, 30}),
+            })),
+        makeArrayVector(
+            {0},
+            makeRowVector({
+                makeFlatVector<int16_t>({6, 5, 4, 3}),
+                makeFlatVector<int32_t>({60, 50, 40, 30}),
+            })),
+    });
+    testAggregations(
+        {data}, {}, {"min_by(c1, c0, 3)", "max_by(c1, c0, 4)"}, {expected});
+    testReadFromFiles(
+        {data}, {}, {"min_by(c1, c0, 3)", "max_by(c1, c0, 4)"}, {expected});
+
+    // Group-by.
+    expected = makeRowVector({
+        makeFlatVector<bool>({false, true}),
+        makeArrayVector(
+            {0, 2},
+            makeRowVector({
+                makeFlatVector<int16_t>({4, 5, 1, 2}),
+                makeFlatVector<int32_t>({40, 50, 10, 20}),
+            })),
+        makeArrayVector(
+            {0, 2},
+            makeRowVector({
+                makeFlatVector<int16_t>({6, 5, 3, 2}),
+                makeFlatVector<int32_t>({60, 50, 30, 20}),
+            })),
+    });
+    testAggregations(
+        {data}, {"c4"}, {"min_by(c1, c0, 2)", "max_by(c1, c0, 2)"}, {expected});
+    testReadFromFiles(
+        {data}, {"c4"}, {"min_by(c1, c0, 2)", "max_by(c1, c0, 2)"}, {expected});
+  }
+
+  // Test min_by(smallint, varchar, n) and max_by(smallint, varchar, n).
+  {
+    // Global.
+    auto expected = makeRowVector({
+        makeArrayVector({0}, makeFlatVector<int16_t>({1, 2, 3})),
+        makeArrayVector({0}, makeFlatVector<int16_t>({6, 5, 4, 3})),
+    });
+    testAggregations(
+        {data}, {}, {"min_by(c2, c0, 3)", "max_by(c2, c0, 4)"}, {expected});
+    testReadFromFiles(
+        {data}, {}, {"min_by(c2, c0, 3)", "max_by(c2, c0, 4)"}, {expected});
+
+    // Group-by.
+    expected = makeRowVector({
+        makeFlatVector<bool>({false, true}),
+        makeArrayVector({0, 2}, makeFlatVector<int16_t>({4, 5, 1, 2})),
+        makeArrayVector({0, 2}, makeFlatVector<int16_t>({6, 5, 3, 2})),
+    });
+    testAggregations(
+        {data}, {"c4"}, {"min_by(c2, c0, 2)", "max_by(c2, c0, 2)"}, {expected});
+    testReadFromFiles(
+        {data}, {"c4"}, {"min_by(c2, c0, 2)", "max_by(c2, c0, 2)"}, {expected});
+  }
+
+  // Test min_by(varchar, varchar, n) and max_by(varchar, varchar, n).
+  {
+    // Global.
+    auto expected = makeRowVector({
+        makeArrayVector({0}, makeFlatVector<std::string>({s[5], s[4], s[3]})),
+        makeArrayVector(
+            {0}, makeFlatVector<std::string>({s[0], s[1], s[2], s[3]})),
+    });
+    testAggregations(
+        {data}, {}, {"min_by(c3, c0, 3)", "max_by(c3, c0, 4)"}, {expected});
+    testReadFromFiles(
+        {data}, {}, {"min_by(c3, c0, 3)", "max_by(c3, c0, 4)"}, {expected});
+
+    // Group-by.
+    expected = makeRowVector({
+        makeFlatVector<bool>({false, true}),
+        makeArrayVector(
+            {0, 2}, makeFlatVector<std::string>({s[2], s[1], s[5], s[4]})),
+        makeArrayVector(
+            {0, 2}, makeFlatVector<std::string>({s[0], s[1], s[3], s[4]})),
+    });
+    testAggregations(
+        {data}, {"c4"}, {"min_by(c3, c0, 2)", "max_by(c3, c0, 2)"}, {expected});
+    testReadFromFiles(
+        {data}, {"c4"}, {"min_by(c3, c0, 2)", "max_by(c3, c0, 2)"}, {expected});
+  }
 }
 
 } // namespace

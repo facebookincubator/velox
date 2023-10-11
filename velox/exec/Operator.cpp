@@ -15,12 +15,14 @@
  */
 #include "velox/exec/Operator.h"
 #include "velox/common/base/SuccinctPrinter.h"
-#include "velox/common/process/ProcessBase.h"
+#include "velox/common/testutil/TestValue.h"
 #include "velox/exec/Driver.h"
 #include "velox/exec/HashJoinBridge.h"
 #include "velox/exec/OperatorUtils.h"
 #include "velox/exec/Task.h"
 #include "velox/expression/Expr.h"
+
+using facebook::velox::common::testutil::TestValue;
 
 namespace facebook::velox::exec {
 
@@ -47,14 +49,18 @@ std::shared_ptr<connector::ConnectorQueryCtx>
 OperatorCtx::createConnectorQueryCtx(
     const std::string& connectorId,
     const std::string& planNodeId,
-    memory::MemoryPool* connectorPool) const {
+    memory::MemoryPool* connectorPool,
+    memory::SetMemoryReclaimer setMemoryReclaimer,
+    const common::SpillConfig* spillConfig) const {
   return std::make_shared<connector::ConnectorQueryCtx>(
       pool_,
       connectorPool,
+      std::move(setMemoryReclaimer),
       driverCtx_->task->queryCtx()->getConnectorConfig(connectorId),
+      spillConfig,
       std::make_unique<SimpleExpressionEvaluator>(
           execCtx()->queryCtx(), execCtx()->pool()),
-      driverCtx_->task->queryCtx()->allocator(),
+      driverCtx_->task->queryCtx()->cache(),
       driverCtx_->task->queryCtx()->queryId(),
       taskId(),
       planNodeId,
@@ -67,7 +73,7 @@ Operator::Operator(
     int32_t operatorId,
     std::string planNodeId,
     std::string operatorType,
-    std::optional<Spiller::Config> spillConfig)
+    std::optional<common::SpillConfig> spillConfig)
     : operatorCtx_(std::make_unique<OperatorCtx>(
           driverCtx,
           planNodeId,
@@ -131,6 +137,11 @@ std::unique_ptr<JoinBridge> Operator::joinBridgeFromPlanNode(
     }
   }
   return nullptr;
+}
+
+void Operator::initialize() {
+  VELOX_CHECK(!initialized_);
+  initialized_ = true;
 }
 
 // static
@@ -269,6 +280,71 @@ void Operator::recordBlockingTime(uint64_t start, BlockingReason reason) {
       fmt::format("blocked{}Times", blockReason), RuntimeCounter(1));
 }
 
+void Operator::recordSpillStats(const SpillStats& spillStats) {
+  VELOX_CHECK(noMoreInput_);
+  auto lockedStats = stats_.wlock();
+  lockedStats->spilledInputBytes += spillStats.spilledInputBytes;
+  lockedStats->spilledBytes += spillStats.spilledBytes;
+  lockedStats->spilledRows += spillStats.spilledRows;
+  lockedStats->spilledPartitions += spillStats.spilledPartitions;
+  lockedStats->spilledFiles += spillStats.spilledFiles;
+  if (spillStats.spillFillTimeUs != 0) {
+    lockedStats->addRuntimeStat(
+        "spillFillTime",
+        RuntimeCounter{
+            static_cast<int64_t>(
+                spillStats.spillFillTimeUs *
+                Timestamp::kNanosecondsInMicrosecond),
+            RuntimeCounter::Unit::kNanos});
+  }
+  if (spillStats.spillSortTimeUs != 0) {
+    lockedStats->addRuntimeStat(
+        "spillSortTime",
+        RuntimeCounter{
+            static_cast<int64_t>(
+                spillStats.spillSortTimeUs *
+                Timestamp::kNanosecondsInMicrosecond),
+            RuntimeCounter::Unit::kNanos});
+  }
+  if (spillStats.spillSerializationTimeUs != 0) {
+    lockedStats->addRuntimeStat(
+        "spillSerializationTime",
+        RuntimeCounter{
+            static_cast<int64_t>(
+                spillStats.spillSerializationTimeUs *
+                Timestamp::kNanosecondsInMicrosecond),
+            RuntimeCounter::Unit::kNanos});
+  }
+  if (spillStats.spillFlushTimeUs != 0) {
+    lockedStats->addRuntimeStat(
+        "spillFlushTime",
+        RuntimeCounter{
+            static_cast<int64_t>(
+                spillStats.spillFlushTimeUs *
+                Timestamp::kNanosecondsInMicrosecond),
+            RuntimeCounter::Unit::kNanos});
+  }
+  if (spillStats.spillDiskWrites != 0) {
+    lockedStats->addRuntimeStat(
+        "spillDiskWrites",
+        RuntimeCounter{static_cast<int64_t>(spillStats.spillDiskWrites)});
+  }
+  if (spillStats.spillWriteTimeUs != 0) {
+    lockedStats->addRuntimeStat(
+        "spillWriteTime",
+        RuntimeCounter{
+            static_cast<int64_t>(
+                spillStats.spillWriteTimeUs *
+                Timestamp::kNanosecondsInMicrosecond),
+            RuntimeCounter::Unit::kNanos});
+  }
+  if (numSpillRuns_ != 0) {
+    lockedStats->addRuntimeStat(
+        "spillRuns", RuntimeCounter{static_cast<int64_t>(numSpillRuns_)});
+    updateGlobalSpillRunStats(numSpillRuns_);
+  }
+}
+
 std::string Operator::toString() const {
   std::stringstream out;
   if (auto task = operatorCtx_->task()) {
@@ -362,6 +438,8 @@ void OperatorStats::add(const OperatorStats& other) {
 
   finishTiming.add(other.finishTiming);
 
+  backgroundTiming.add(other.backgroundTiming);
+
   memoryStats.add(other.memoryStats);
 
   for (const auto& [name, stats] : other.runtimeStats) {
@@ -373,6 +451,7 @@ void OperatorStats::add(const OperatorStats& other) {
   }
 
   numDrivers += other.numDrivers;
+  spilledInputBytes += other.spilledInputBytes;
   spilledBytes += other.spilledBytes;
   spilledRows += other.spilledRows;
   spilledPartitions += other.spilledPartitions;
@@ -398,9 +477,18 @@ void OperatorStats::clear() {
 
   finishTiming.clear();
 
+  backgroundTiming.clear();
+
   memoryStats.clear();
 
   runtimeStats.clear();
+
+  numDrivers = 0;
+  spilledInputBytes = 0;
+  spilledBytes = 0;
+  spilledRows = 0;
+  spilledPartitions = 0;
+  spilledFiles = 0;
 }
 
 std::unique_ptr<memory::MemoryReclaimer> Operator::MemoryReclaimer::create(
@@ -411,19 +499,28 @@ std::unique_ptr<memory::MemoryReclaimer> Operator::MemoryReclaimer::create(
 }
 
 void Operator::MemoryReclaimer::enterArbitration() {
-  std::shared_ptr<Driver> driver = ensureDriver();
-  // The driver must be alive as the operator is still under memory arbitration
-  // processing.
-  VELOX_CHECK_NOT_NULL(driver);
-  if (FOLLY_UNLIKELY(!driver->state().isOnThread())) {
-    // NOTE: some memory arbitration are triggered from non-driver execution
-    // context such as async streaming shuffle, table scan prefetch etc. We
-    // should guarantee that such async operations won't mutate the operator
-    // state.
+  DriverThreadContext* driverThreadCtx = driverThreadContext();
+  if (FOLLY_UNLIKELY(driverThreadCtx == nullptr)) {
+    // Skips the driver suspension handling if this memory arbitration request
+    // is not issued from a driver thread. For example, async streaming shuffle
+    // and table scan prefetch execution path might initiate memory arbitration
+    // request from non-driver thread.
     return;
   }
-  VELOX_CHECK_EQ(std::this_thread::get_id(), driver->state().thread);
-  if (driver->task()->enterSuspended(driver->state()) != StopReason::kNone) {
+
+  Driver* const runningDriver = driverThreadCtx->driverCtx.driver;
+  if (auto opDriver = ensureDriver()) {
+    // NOTE: the current running driver might not be the driver of the operator
+    // that requests memory arbitration. The reason is that an operator might
+    // extend the buffer allocated from the other operator either from the same
+    // or different drivers. But they must be from the same task.
+    VELOX_CHECK_EQ(
+        runningDriver->task()->taskId(),
+        opDriver->task()->taskId(),
+        "The current running driver and the request driver must be from the same task");
+  }
+  if (runningDriver->task()->enterSuspended(runningDriver->state()) !=
+      StopReason::kNone) {
     // There is no need for arbitration if the associated task has already
     // terminated.
     VELOX_FAIL("Terminate detected when entering suspension");
@@ -431,16 +528,20 @@ void Operator::MemoryReclaimer::enterArbitration() {
 }
 
 void Operator::MemoryReclaimer::leaveArbitration() noexcept {
-  std::shared_ptr<Driver> driver = ensureDriver();
-  // The driver must be alive as the operator is still under memory arbitration
-  // processing.
-  VELOX_CHECK_NOT_NULL(driver);
-  if (FOLLY_UNLIKELY(!driver->state().isOnThread())) {
-    // NOTE: see the comment in enterArbitration.
+  DriverThreadContext* driverThreadCtx = driverThreadContext();
+  if (FOLLY_UNLIKELY(driverThreadCtx == nullptr)) {
+    // Skips the driver suspension handling if this memory arbitration request
+    // is not issued from a driver thread.
     return;
   }
-  VELOX_CHECK_EQ(std::this_thread::get_id(), driver->state().thread);
-  driver->task()->leaveSuspended(driver->state());
+  Driver* const runningDriver = driverThreadCtx->driverCtx.driver;
+  if (auto opDriver = ensureDriver()) {
+    VELOX_CHECK_EQ(
+        runningDriver->task()->taskId(),
+        opDriver->task()->taskId(),
+        "The current running driver and the request driver must be from the same task");
+  }
+  runningDriver->task()->leaveSuspended(runningDriver->state());
 }
 
 bool Operator::MemoryReclaimer::reclaimableBytes(
@@ -457,7 +558,8 @@ bool Operator::MemoryReclaimer::reclaimableBytes(
 
 uint64_t Operator::MemoryReclaimer::reclaim(
     memory::MemoryPool* pool,
-    uint64_t targetBytes) {
+    uint64_t targetBytes,
+    memory::MemoryReclaimer::Stats& stats) {
   std::shared_ptr<Driver> driver = ensureDriver();
   if (FOLLY_UNLIKELY(driver == nullptr)) {
     return 0;
@@ -471,11 +573,16 @@ uint64_t Operator::MemoryReclaimer::reclaim(
       driver->state().isTerminated);
   VELOX_CHECK(driver->task()->pauseRequested());
 
-  op_->reclaim(targetBytes);
+  TestValue::adjust(
+      "facebook::velox::exec::Operator::MemoryReclaimer::reclaim", pool);
+
+  op_->reclaim(targetBytes, stats);
   return pool->shrink(targetBytes);
 }
 
-void Operator::MemoryReclaimer::abort(memory::MemoryPool* pool) {
+void Operator::MemoryReclaimer::abort(
+    memory::MemoryPool* pool,
+    const std::exception_ptr& /* error */) {
   std::shared_ptr<Driver> driver = ensureDriver();
   if (FOLLY_UNLIKELY(driver == nullptr)) {
     return;
@@ -486,7 +593,7 @@ void Operator::MemoryReclaimer::abort(memory::MemoryPool* pool) {
       driver->state().isTerminated);
   VELOX_CHECK(driver->task()->isCancelled());
 
-  // Calls operator close to free up major memory usage.
-  op_->close();
+  // Calls operator abort to free up major memory usage.
+  op_->abort();
 }
 } // namespace facebook::velox::exec

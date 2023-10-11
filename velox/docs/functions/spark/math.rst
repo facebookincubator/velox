@@ -36,6 +36,14 @@ Mathematical Functions
     Returns ``x`` rounded up to the nearest integer.  
     Supported types are: BIGINT and DOUBLE.
 
+.. spark:function:: cosh(x) -> double
+
+    Returns the hyperbolic cosine of ``x``.
+
+.. spark:function:: cot(x) -> double
+
+    Returns the cotangent of ``x``(measured in radians). Supported type is DOUBLE.
+
 .. spark:function:: csc(x) -> double
 
     Returns the cosecant of ``x``.
@@ -67,6 +75,15 @@ Mathematical Functions
 
     Returns the natural logarithm of the “given value ``x`` plus one”.
     Return NULL if x is less than or equal to -1.
+
+.. spark:function:: log2(x) -> double
+
+    Returns the logarithm of ``x`` with base 2. Return null for zero and non-positive input.
+
+.. spark:function:: log10(x) -> double
+
+    Returns the logarithm of ``x`` with base 10. Return null for zero and non-positive input.
+
 .. spark:function:: multiply(x, y) -> [same as x]
 
     Returns the result of multiplying x by y. The types of x and y must be the same.
@@ -83,6 +100,7 @@ Mathematical Functions
 .. spark:function:: pmod(n, m) -> [same as n]
 
     Returns the positive remainder of n divided by m.
+    Supported types are: TINYINT, SMALLINT, INTEGER, BIGINT, FLOAT and DOUBLE.
 
 .. spark:function:: power(x, p) -> double
 
@@ -90,11 +108,29 @@ Mathematical Functions
 
 .. spark:function:: rand() -> double
 
-    Returns a random value with independent and identically distributed uniformly distributed values in [0, 1). ::
+    Returns a random value with uniformly distributed values in [0, 1). ::
 
         SELECT rand(); -- 0.9629742951434543
-        SELECT rand(0); -- 0.7604953758285915
-        SELECT rand(null); -- 0.7604953758285915
+
+.. spark:function:: rand(seed, partitionIndex) -> double
+
+    Returns a random value with uniformly distributed values in [0, 1) using a seed formed
+    by combining user-specified ``seed`` and framework provided ``partitionIndex``. The
+    framework is responsible for deterministic partitioning of the data and assigning unique
+    ``partitionIndex`` to each thread (in a deterministic way).
+    ``seed`` must be constant. NULL ``seed`` is identical to zero ``seed``. ``partitionIndex``
+    cannot be NULL. ::
+
+        SELECT rand(0);    -- 0.5488135024422883
+        SELECT rand(NULL); -- 0.5488135024422883
+
+.. spark:function:: random() -> double
+
+    An alias for ``rand()``.
+
+.. spark:function:: random(seed, partitionIndex) -> double
+
+    An alias for ``rand(seed, partitionIndex)``.
 
 .. spark:function:: remainder(n, m) -> [same as n]
 

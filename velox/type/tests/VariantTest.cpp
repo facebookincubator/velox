@@ -13,9 +13,12 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+
 #include "velox/type/Variant.h"
 #include <gtest/gtest.h>
 #include <velox/type/Type.h>
+#include "velox/common/base/tests/GTestUtils.h"
+
 #include <numeric>
 
 using namespace facebook::velox;
@@ -42,6 +45,9 @@ TEST(VariantTest, arrayInferType) {
       *ARRAY(ARRAY(DOUBLE())),
       *variant::array({variant::array({variant(TypeKind::DOUBLE)})})
            .inferType());
+  VELOX_ASSERT_THROW(
+      variant::array({variant(123456789), variant("velox")}),
+      "All array elements must be of the same kind");
 }
 
 TEST(VariantTest, mapInferType) {
@@ -269,6 +275,24 @@ TEST_F(VariantSerializationTest, opaqueToString) {
   EXPECT_EQ(
       s,
       "Opaque<type:OPAQUE<SerializableClass>,value:\"{\"name\":\"test_class\",\"value\":false}\">");
+}
+
+TEST(VariantFloatingToJsonTest, normalTest) {
+  // Zero
+  EXPECT_EQ(variant::create<float>(0).toJson(), "0");
+  EXPECT_EQ(variant::create<double>(0).toJson(), "0");
+
+  // Infinite
+  EXPECT_EQ(
+      variant::create<float>(std::numeric_limits<float>::infinity()).toJson(),
+      "\"Infinity\"");
+  EXPECT_EQ(
+      variant::create<double>(std::numeric_limits<double>::infinity()).toJson(),
+      "\"Infinity\"");
+
+  // NaN
+  EXPECT_EQ(variant::create<float>(0.0 / 0.0).toJson(), "\"NaN\"");
+  EXPECT_EQ(variant::create<double>(0.0 / 0.0).toJson(), "\"NaN\"");
 }
 
 TEST(VariantTest, opaqueSerializationNotRegistered) {

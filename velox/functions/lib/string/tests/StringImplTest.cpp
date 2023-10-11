@@ -15,6 +15,7 @@
  */
 
 #include "velox/functions/lib/string/StringImpl.h"
+#include "velox/common/base/tests/GTestUtils.h"
 #include "velox/core/CoreTypeSystem.h"
 #include "velox/type/StringView.h"
 
@@ -248,6 +249,88 @@ TEST_F(StringImplTest, charToCodePoint) {
   testExpectDeath("");
 }
 
+TEST_F(StringImplTest, stringToCodePoints) {
+  auto testStringToCodePoints =
+      [](const std::string& charString,
+         const std::vector<int32_t>& expectedCodePoints) {
+        std::vector<int32_t> codePoints = stringToCodePoints(charString);
+        ASSERT_EQ(codePoints.size(), expectedCodePoints.size());
+        for (int i = 0; i < codePoints.size(); i++) {
+          ASSERT_EQ(codePoints.at(i), expectedCodePoints.at(i));
+        }
+      };
+
+  testStringToCodePoints("", {});
+  testStringToCodePoints("h", {0x0068});
+  testStringToCodePoints("hello", {0x0068, 0x0065, 0x006C, 0x006C, 0x006F});
+
+  testStringToCodePoints("hïllo", {0x0068, 0x00EF, 0x006C, 0x006C, 0x006F});
+  testStringToCodePoints("hüóOO", {0x0068, 0x00FC, 0x00F3, 0x004F, 0x004F});
+  testStringToCodePoints("\u840C", {0x840C});
+
+  VELOX_ASSERT_THROW(
+      testStringToCodePoints("\xA9", {}),
+      "Invalid UTF-8 encoding in characters");
+  VELOX_ASSERT_THROW(
+      testStringToCodePoints("ü\xA9", {}),
+      "Invalid UTF-8 encoding in characters");
+  VELOX_ASSERT_THROW(
+      testStringToCodePoints("ü\xA9hello wooooorld", {}),
+      "Invalid UTF-8 encoding in characters");
+  VELOX_ASSERT_THROW(
+      testStringToCodePoints("ü\xA9hello wooooooooorrrrrld", {}),
+      "Invalid UTF-8 encoding in characters");
+}
+
+TEST_F(StringImplTest, overlappedStringPosition) {
+  auto testValidInputAsciiLpos = [](const std::string& string,
+                                    const std::string& substr,
+                                    const int64_t instance,
+                                    const int64_t expectedPosition) {
+    auto result = stringPosition</*isAscii*/ true, true>(
+        StringView(string), StringView(substr), instance);
+    ASSERT_EQ(result, expectedPosition);
+  };
+  auto testValidInputAsciiRpos = [](const std::string& string,
+                                    const std::string& substr,
+                                    const int64_t instance,
+                                    const int64_t expectedPosition) {
+    auto result = stringPosition</*isAscii*/ true, false>(
+        StringView(string), StringView(substr), instance);
+    ASSERT_EQ(result, expectedPosition);
+  };
+
+  auto testValidInputUnicodeLpos = [](const std::string& string,
+                                      const std::string& substr,
+                                      const int64_t instance,
+                                      const int64_t expectedPosition) {
+    auto result = stringPosition</*isAscii*/ false, true>(
+        StringView(string), StringView(substr), instance);
+    ASSERT_EQ(result, expectedPosition);
+  };
+
+  auto testValidInputUnicodeRpos = [](const std::string& string,
+                                      const std::string& substr,
+                                      const int64_t instance,
+                                      const int64_t expectedPosition) {
+    auto result = stringPosition</*isAscii*/ false, false>(
+        StringView(string), StringView(substr), instance);
+    ASSERT_EQ(result, expectedPosition);
+  };
+
+  testValidInputAsciiLpos("aaa", "aa", 2, 2L);
+  testValidInputAsciiRpos("aaa", "aa", 2, 1L);
+
+  testValidInputAsciiLpos("|||", "||", 2, 2L);
+  testValidInputAsciiRpos("|||", "||", 2, 1L);
+
+  testValidInputUnicodeLpos("😋😋😋", "😋😋", 2, 2L);
+  testValidInputUnicodeRpos("😋😋😋", "😋😋", 2, 1L);
+
+  testValidInputUnicodeLpos("你你你", "你你", 2, 2L);
+  testValidInputUnicodeRpos("你你你", "你你", 2, 1L);
+}
+
 TEST_F(StringImplTest, stringPosition) {
   auto testValidInputAscii = [](const std::string& string,
                                 const std::string& substr,
@@ -397,6 +480,20 @@ TEST_F(StringImplTest, getByteRange) {
     EXPECT_EQ(expectedStartByteIndex, range.first);
     EXPECT_EQ(expectedEndByteIndex, range.second);
   }
+
+  // Test bad unicode strings.
+
+  // This exercises bad unicode byte in determining startByteIndex.
+  std::string badUnicode = "aa\xff  ";
+  auto range = getByteRange<false>(badUnicode.data(), 4, 3);
+  EXPECT_EQ(range.first, 3);
+  EXPECT_EQ(range.second, 6);
+
+  // This exercises bad unicode byte in determining endByteIndex.
+  badUnicode = "\xff aa";
+  range = getByteRange<false>(badUnicode.data(), 1, 3);
+  EXPECT_EQ(range.first, 0);
+  EXPECT_EQ(range.second, 3);
 }
 
 TEST_F(StringImplTest, pad) {
@@ -495,6 +592,11 @@ TEST_F(StringImplTest, pad) {
   runTestUserError("text", -1, "a");
   runTestUserError(
       "text", ((int64_t)std::numeric_limits<int32_t>::max()) + 1, "a");
+  // Additional tests with bad unicode bytes.
+  runTest("abcd\xff \xff ef", 6, "0", "abcd\xff ", "abcd\xff ");
+  runTest(
+      "abcd\xff \xff ef", 11, "0", "0abcd\xff \xff ef", "abcd\xff \xff ef0");
+  runTest("abcd\xff ef", 6, "0", "abcd\xff ", "abcd\xff ");
 }
 
 // Make sure that utf8proc_codepoint returns invalid codepoint (-1) for
@@ -536,4 +638,8 @@ TEST_F(StringImplTest, utf8proc_codepoint) {
       utf8proc_codepoint(fourBytesChar.data(), fourBytesChar.data() + 4, size),
       -1);
   EXPECT_EQ(size, 4);
+}
+
+TEST_F(StringImplTest, isUnicodeWhiteSpace) {
+  EXPECT_FALSE(isUnicodeWhiteSpace(-1));
 }

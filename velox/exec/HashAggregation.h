@@ -43,9 +43,12 @@ class HashAggregation : public Operator {
 
   bool isFinished() override;
 
-  void reclaim(uint64_t targetBytes) override;
+  void reclaim(uint64_t targetBytes, memory::MemoryReclaimer::Stats& stats)
+      override;
 
   void close() override;
+
+  void abort() override;
 
  private:
   void updateRuntimeStats();
@@ -72,8 +75,8 @@ class HashAggregation : public Operator {
   void recordSpillStats();
 
   const bool isPartialOutput_;
-  const bool isDistinct_;
   const bool isGlobal_;
+  const bool isDistinct_;
   const int64_t maxExtendedPartialAggregationMemoryUsage_;
 
   int64_t maxPartialAggregationMemoryUsage_;

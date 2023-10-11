@@ -25,7 +25,7 @@ namespace facebook::velox::memory {
 /// The implementation of MemoryAllocator using malloc.
 class MallocAllocator : public MemoryAllocator {
  public:
-  explicit MallocAllocator(size_t capacity = 0);
+  explicit MallocAllocator(size_t capacity);
 
   ~MallocAllocator() override {
     // TODO: Remove the check when memory leak issue is resolved.
@@ -37,6 +37,17 @@ class MallocAllocator : public MemoryAllocator {
     }
   }
 
+  void registerCache(const std::shared_ptr<Cache>& cache) override {
+    VELOX_CHECK_NULL(cache_);
+    VELOX_CHECK_NOT_NULL(cache);
+    VELOX_CHECK(cache->allocator() == this);
+    cache_ = cache;
+  }
+
+  Cache* cache() const override {
+    return cache_.get();
+  }
+
   Kind kind() const override {
     return kind_;
   }
@@ -45,41 +56,14 @@ class MallocAllocator : public MemoryAllocator {
     return capacity_;
   }
 
-  bool allocateNonContiguous(
-      MachinePageCount numPages,
-      Allocation& out,
-      ReservationCallback reservationCB = nullptr,
-      MachinePageCount minSizeClass = 0) override;
+  void freeContiguous(ContiguousAllocation& allocation) override;
 
   int64_t freeNonContiguous(Allocation& allocation) override;
 
-  bool allocateContiguous(
-      MachinePageCount numPages,
-      Allocation* collateral,
-      ContiguousAllocation& allocation,
-      ReservationCallback reservationCB = nullptr,
-      MachinePageCount maxPages = 0) override {
-    bool result;
-    stats_.recordAllocate(AllocationTraits::pageBytes(numPages), 1, [&]() {
-      result = allocateContiguousImpl(
-          numPages, collateral, allocation, reservationCB, maxPages);
-    });
-    return result;
-  }
-
-  void freeContiguous(ContiguousAllocation& allocation) override {
-    stats_.recordFree(
-        allocation.size(), [&]() { freeContiguousImpl(allocation); });
-  }
-
-  bool growContiguous(
+  bool growContiguousWithoutRetry(
       MachinePageCount increment,
       ContiguousAllocation& allocation,
       ReservationCallback reservationCB = nullptr) override;
-
-  void* allocateBytes(uint64_t bytes, uint16_t alignment) override;
-
-  void* allocateZeroFilled(uint64_t bytes) override;
 
   void freeBytes(void* p, uint64_t bytes) noexcept override;
 
@@ -95,15 +79,24 @@ class MallocAllocator : public MemoryAllocator {
     return numMapped_;
   }
 
-  Stats stats() const override {
-    return stats_;
-  }
-
   bool checkConsistency() const override;
 
   std::string toString() const override;
 
  private:
+  bool allocateNonContiguousWithoutRetry(
+      MachinePageCount numPages,
+      Allocation& out,
+      ReservationCallback reservationCB = nullptr,
+      MachinePageCount minSizeClass = 0) override;
+
+  bool allocateContiguousWithoutRetry(
+      MachinePageCount numPages,
+      Allocation* FOLLY_NULLABLE collateral,
+      ContiguousAllocation& allocation,
+      ReservationCallback reservationCB = nullptr,
+      MachinePageCount maxPages = 0) override;
+
   bool allocateContiguousImpl(
       MachinePageCount numPages,
       Allocation* FOLLY_NULLABLE collateral,
@@ -112,6 +105,10 @@ class MallocAllocator : public MemoryAllocator {
       MachinePageCount maxPages);
 
   void freeContiguousImpl(ContiguousAllocation& allocation);
+
+  void* allocateBytesWithoutRetry(uint64_t bytes, uint16_t alignment) override;
+
+  void* allocateZeroFilledWithoutRetry(uint64_t bytes) override;
 
   /// Increment current usage and check current allocator consistency to make
   /// sure current usage does not go above 'capacity_'. If it goes above
@@ -149,7 +146,7 @@ class MallocAllocator : public MemoryAllocator {
   const Kind kind_;
 
   /// Capacity in bytes. Total allocation byte is not allowed to exceed this
-  /// value. Setting this to 0 means no capacity enforcement.
+  /// value.
   const size_t capacity_;
 
   /// Current total allocated bytes by this 'MallocAllocator'.
@@ -161,6 +158,6 @@ class MallocAllocator : public MemoryAllocator {
   /// Tracks malloc'd pointers to detect bad frees.
   std::unordered_set<void*> mallocs_;
 
-  Stats stats_;
+  std::shared_ptr<Cache> cache_;
 };
 } // namespace facebook::velox::memory

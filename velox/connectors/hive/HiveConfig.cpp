@@ -132,12 +132,17 @@ std::string HiveConfig::gcsEndpoint(const Config* config) {
 
 // static
 std::string HiveConfig::gcsScheme(const Config* config) {
-  return config->get<std::string>(kGCSScheme, std::string(""));
+  return config->get<std::string>(kGCSScheme, std::string("https"));
 }
 
 // static
 std::string HiveConfig::gcsCredentials(const Config* config) {
   return config->get<std::string>(kGCSCredentials, std::string(""));
+}
+
+// static.
+bool HiveConfig::isOrcUseColumnNames(const Config* config) {
+  return config->get<bool>(kOrcUseColumnNames, false);
 }
 
 // static.
@@ -153,6 +158,11 @@ int64_t HiveConfig::maxCoalescedBytes(const Config* config) {
 // static.
 int32_t HiveConfig::maxCoalescedDistanceBytes(const Config* config) {
   return config->get<int32_t>(kMaxCoalescedDistanceBytes, 512 << 10);
+}
+
+// static.
+int32_t HiveConfig::numCacheFileHandles(const Config* config) {
+  return config->get<int32_t>(kNumCacheFileHandles, 20'000);
 }
 
 } // namespace facebook::velox::connector::hive

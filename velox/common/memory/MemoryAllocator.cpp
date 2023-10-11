@@ -114,7 +114,7 @@ MemoryAllocator* MemoryAllocator::getInstance() {
 
 // static
 std::shared_ptr<MemoryAllocator> MemoryAllocator::createDefaultInstance() {
-  return std::make_shared<MallocAllocator>();
+  return std::make_shared<MallocAllocator>(kDefaultCapacityBytes);
 }
 
 // static
@@ -160,7 +160,74 @@ MachinePageCount MemoryAllocator::roundUpToSizeClassSize(
   return *std::lower_bound(sizes.begin(), sizes.end(), pages);
 }
 
+bool MemoryAllocator::allocateNonContiguous(
+    MachinePageCount numPages,
+    Allocation& out,
+    ReservationCallback reservationCB,
+    MachinePageCount minSizeClass) {
+  if (cache() == nullptr) {
+    return allocateNonContiguousWithoutRetry(
+        numPages, out, reservationCB, minSizeClass);
+  }
+  return cache()->makeSpace(numPages, [&]() {
+    return allocateNonContiguousWithoutRetry(
+        numPages, out, reservationCB, minSizeClass);
+  });
+}
+
+bool MemoryAllocator::allocateContiguous(
+    MachinePageCount numPages,
+    Allocation* collateral,
+    ContiguousAllocation& allocation,
+    ReservationCallback reservationCB,
+    MachinePageCount maxPages) {
+  if (cache() == nullptr) {
+    return allocateContiguousWithoutRetry(
+        numPages, collateral, allocation, reservationCB, maxPages);
+  }
+  return cache()->makeSpace(numPages, [&]() {
+    return allocateContiguousWithoutRetry(
+        numPages, collateral, allocation, reservationCB, maxPages);
+  });
+}
+
+bool MemoryAllocator::growContiguous(
+    MachinePageCount increment,
+    ContiguousAllocation& allocation,
+    ReservationCallback reservationCB) {
+  if (cache() == nullptr) {
+    return growContiguousWithoutRetry(increment, allocation, reservationCB);
+  }
+  return cache()->makeSpace(increment, [&]() {
+    return growContiguousWithoutRetry(increment, allocation, reservationCB);
+  });
+}
+
+void* MemoryAllocator::allocateBytes(uint64_t bytes, uint16_t alignment) {
+  if (cache() == nullptr) {
+    return allocateBytesWithoutRetry(bytes, alignment);
+  }
+  void* result = nullptr;
+  cache()->makeSpace(AllocationTraits::numPages(bytes), [&]() {
+    result = allocateBytesWithoutRetry(bytes, alignment);
+    return result != nullptr;
+  });
+  return result;
+}
+
 void* MemoryAllocator::allocateZeroFilled(uint64_t bytes) {
+  if (cache() == nullptr) {
+    return allocateZeroFilledWithoutRetry(bytes);
+  }
+  void* result = nullptr;
+  cache()->makeSpace(AllocationTraits::numPages(bytes), [&]() {
+    result = allocateZeroFilledWithoutRetry(bytes);
+    return result != nullptr;
+  });
+  return result;
+}
+
+void* MemoryAllocator::allocateZeroFilledWithoutRetry(uint64_t bytes) {
   void* result = allocateBytes(bytes);
   if (result != nullptr) {
     ::memset(result, 0, bytes);

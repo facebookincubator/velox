@@ -80,7 +80,7 @@ std::string columnEncodingKindToString(ColumnEncodingKind kind) {
 }
 
 DwrfStreamIdentifier EncodingKey::forKind(const proto::Stream_Kind kind) const {
-  return DwrfStreamIdentifier(node, sequence, 0, kind);
+  return DwrfStreamIdentifier(node_, sequence_, 0, kind);
 }
 
 namespace {
@@ -98,9 +98,9 @@ CompressionKind orcCompressionToCompressionKind(
     case proto::orc::CompressionKind::LZO:
       return CompressionKind::CompressionKind_LZO;
     case proto::orc::CompressionKind::LZ4:
-      return CompressionKind::CompressionKind_ZSTD;
-    case proto::orc::CompressionKind::ZSTD:
       return CompressionKind::CompressionKind_LZ4;
+    case proto::orc::CompressionKind::ZSTD:
+      return CompressionKind::CompressionKind_ZSTD;
   }
   return CompressionKind::CompressionKind_NONE;
 }

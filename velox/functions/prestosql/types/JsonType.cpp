@@ -99,7 +99,7 @@ void castToJson(
   } else {
     context.applyToSelectedNoThrow(rows, [&](auto row) {
       if (inputVector->isNullAt(row)) {
-        VELOX_FAIL("Map keys cannot be null.");
+        VELOX_USER_FAIL("Map keys cannot be null.");
       } else {
         result.clear();
         generateJsonTyped<T, true>(*inputVector, row, result, input.type());
@@ -197,7 +197,7 @@ struct AsJson {
     if (isMapKey && decoded_->mayHaveNulls()) {
       context.applyToSelectedNoThrow(rows, [&](auto row) {
         if (decoded_->isNullAt(row)) {
-          VELOX_FAIL("Cannot cast map with null keys to JSON.");
+          VELOX_USER_FAIL("Cannot cast map with null keys to JSON.");
         }
       });
     }
@@ -499,7 +499,10 @@ FOLLY_ALWAYS_INLINE void castFromJsonTyped<TypeKind::VARCHAR>(
     const folly::dynamic& object,
     exec::GenericWriter& writer) {
   if (isJsonType(writer.type())) {
-    writer.castTo<Varchar>().append(toJson(object));
+    // Sort keys to match Presto's behavior.
+    folly::json::serialization_opts opts;
+    opts.sort_keys = true;
+    writer.castTo<Varchar>().append(folly::json::serialize(object, opts));
   } else if (object.isBool()) {
     writer.castTo<Varchar>().append(object.asBool() ? "true" : "false");
   } else {
@@ -706,6 +709,7 @@ void castFromJson(
       try {
         object = folly::parseJson(inputVector->valueAt(row));
       } catch (const std::exception& e) {
+        writer.commitNull();
         VELOX_USER_FAIL("Not a JSON input: {}", inputVector->valueAt(row));
       }
 
@@ -715,12 +719,17 @@ void castFromJson(
         try {
           castFromJsonTyped<kind>(object, writer.current());
         } catch (const VeloxException& ve) {
+          if (!ve.isUserError()) {
+            throw;
+          }
+          writer.commitNull();
           VELOX_USER_FAIL(
               "Cannot cast from Json value {} to {}: {}",
               inputVector->valueAt(row),
               result.type()->toString(),
               ve.message());
         } catch (const std::exception& e) {
+          writer.commitNull();
           VELOX_USER_FAIL(
               "Cannot cast from Json value {} to {}: {}",
               inputVector->valueAt(row),

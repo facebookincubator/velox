@@ -32,7 +32,7 @@ auto defaultPool = memory::addDefaultLeafMemoryPool();
 
 TEST_F(ParquetPageReaderTest, smallPage) {
   auto readFile =
-      std::make_shared<LocalReadFile>(getExampleFilePath("smallPageHeader"));
+      std::make_shared<LocalReadFile>(getExampleFilePath("small_page_header"));
   auto file = std::make_shared<ReadFileInputStream>(std::move(readFile));
   auto headerSize = file->getLength();
   auto inputStream = std::make_unique<SeekableFileInputStream>(
@@ -60,7 +60,7 @@ TEST_F(ParquetPageReaderTest, smallPage) {
 
 TEST_F(ParquetPageReaderTest, largePage) {
   auto readFile =
-      std::make_shared<LocalReadFile>(getExampleFilePath("largePageHeader"));
+      std::make_shared<LocalReadFile>(getExampleFilePath("large_page_header"));
   auto file = std::make_shared<ReadFileInputStream>(std::move(readFile));
   auto headerSize = file->getLength();
   auto inputStream = std::make_unique<SeekableFileInputStream>(
@@ -89,13 +89,13 @@ TEST_F(ParquetPageReaderTest, largePage) {
 
 TEST_F(ParquetPageReaderTest, corruptedPageHeader) {
   auto readFile = std::make_shared<LocalReadFile>(
-      getExampleFilePath("corruptedPageHeader"));
+      getExampleFilePath("corrupted_page_header"));
   auto file = std::make_shared<ReadFileInputStream>(std::move(readFile));
   auto headerSize = file->getLength();
   auto inputStream = std::make_unique<SeekableFileInputStream>(
       std::move(file), 0, headerSize, *defaultPool, LogType::TEST);
 
-  // In the corruptedPageHeader, the min_value length is set incorrectly on
+  // In the corrupted_page_header, the min_value length is set incorrectly on
   // purpose. This is to simulate the situation where the Parquet Page Header is
   // corrupted. And an error is expected to be thrown.
   auto pageReader = std::make_unique<PageReader>(
@@ -105,4 +105,11 @@ TEST_F(ParquetPageReaderTest, corruptedPageHeader) {
       headerSize);
 
   EXPECT_THROW(pageReader->readPageHeader(), VeloxException);
+}
+
+TEST(CompressionOptionsTest, testCompressionOptions) {
+  auto options = PageReader::getParquetDecompressionOptions();
+  EXPECT_EQ(
+      options.format.zlib.windowBits,
+      dwio::common::compression::Compressor::PARQUET_ZLIB_WINDOW_BITS);
 }

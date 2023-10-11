@@ -12,6 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+
 add_executable(velox_dwio_parquet_writer_benchmark ParquetWriterBenchmark.cpp)
 target_link_libraries(
   velox_dwio_parquet_writer_benchmark
@@ -24,3 +25,26 @@ target_link_libraries(
   velox_tpch_gen
   Folly::folly
   ${FOLLY_BENCHMARK})
+
+add_executable(velox_parquet_writer_sink_test SinkTests.cpp
+                                              ParquetWriterTestBase.cpp)
+
+add_test(
+  NAME velox_parquet_writer_sink_test
+  COMMAND velox_parquet_writer_sink_test
+  WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR})
+
+target_link_libraries(
+  velox_parquet_writer_sink_test
+  velox_dwio_parquet_writer
+  velox_dwio_common_test_utils
+  velox_vector_fuzzer
+  velox_exec_test_lib
+  velox_temp_path
+  Boost::regex
+  velox_link_libs
+  Folly::folly
+  ${TEST_LINK_LIBS}
+  gtest
+  fmt::fmt)
+

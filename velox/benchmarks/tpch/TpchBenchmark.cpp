@@ -175,6 +175,13 @@ DEFINE_int32(
     512 << 10,
     "Maximum distance in bytes in which coalesce will combine requests");
 
+DEFINE_int32(
+    parquet_prefetch_rowgroups,
+    1,
+    "Number of next row groups to "
+    "prefetch. 1 means prefetch the next row group before decoding "
+    "the current one");
+
 struct RunStats {
   std::map<std::string, std::string> flags;
   int64_t micros{0};
@@ -230,9 +237,10 @@ class TpchBenchmark {
             static_cast<uint64_t>(FLAGS_ssd_checkpoint_interval_gb) << 30);
       }
 
-      auto allocator = std::make_shared<memory::MmapAllocator>(options);
-      allocator_ = std::make_shared<cache::AsyncDataCache>(
-          allocator, memoryBytes, std::move(ssdCache));
+      allocator_ = std::make_shared<memory::MmapAllocator>(options);
+      cache_ =
+          cache::AsyncDataCache::create(allocator_.get(), std::move(ssdCache));
+      cache::AsyncDataCache::setInstance(cache_.get());
       memory::MemoryAllocator::setDefaultInstance(allocator_.get());
     }
     functions::prestosql::registerAllScalarFunctions();
@@ -259,6 +267,10 @@ class TpchBenchmark {
             connector::hive::HiveConnectorFactory::kHiveConnectorName)
             ->newConnector(kHiveConnectorId, properties, ioExecutor_.get());
     connector::registerConnector(hiveConnector);
+  }
+
+  void shutdown() {
+    cache_->shutdown();
   }
 
   std::pair<std::unique_ptr<TaskCursor>, std::vector<RowVectorPtr>> run(
@@ -382,15 +394,13 @@ class TpchBenchmark {
         }
 #endif
 
-        auto cache = dynamic_cast<cache::AsyncDataCache*>(allocator_.get());
-        if (cache) {
-          cache->clear();
+        if (cache_) {
+          cache_->clear();
         }
       }
       if (FLAGS_clear_ssd_cache) {
-        auto cache = dynamic_cast<cache::AsyncDataCache*>(allocator_.get());
-        if (cache) {
-          auto ssdCache = cache->ssdCache();
+        if (cache_) {
+          auto ssdCache = cache_->ssdCache();
           if (ssdCache) {
             ssdCache->clear();
           }
@@ -462,7 +472,7 @@ class TpchBenchmark {
   std::unique_ptr<folly::IOThreadPoolExecutor> ioExecutor_;
   std::unique_ptr<folly::IOThreadPoolExecutor> cacheExecutor_;
   std::shared_ptr<memory::MemoryAllocator> allocator_;
-
+  std::shared_ptr<cache::AsyncDataCache> cache_;
   // Parameter combinations to try. Each element specifies a flag and possible
   // values. All permutations are tried.
   std::vector<ParameterDim> parameters_;
@@ -578,6 +588,7 @@ int tpchBenchmarkMain() {
   } else {
     benchmark.runAllCombinations();
   }
+  benchmark.shutdown();
   queryBuilder.reset();
   return 0;
 }

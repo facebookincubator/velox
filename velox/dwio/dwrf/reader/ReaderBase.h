@@ -21,6 +21,7 @@
 #include "velox/dwio/common/SeekableInputStream.h"
 #include "velox/dwio/common/TypeWithId.h"
 #include "velox/dwio/dwrf/common/Compression.h"
+#include "velox/dwio/dwrf/common/Decryption.h"
 #include "velox/dwio/dwrf/common/FileMetadata.h"
 #include "velox/dwio/dwrf/common/Statistics.h"
 #include "velox/dwio/dwrf/reader/StripeMetadataCache.h"
@@ -118,8 +119,12 @@ class ReaderBase {
     return *footer_;
   }
 
-  const std::shared_ptr<const RowType>& getSchema() const {
+  const RowTypePtr& getSchema() const {
     return schema_;
+  }
+
+  void setSchema(const RowTypePtr& newSchema) {
+    schema_ = newSchema;
   }
 
   const std::shared_ptr<const dwio::common::TypeWithId>& getSchemaWithId()

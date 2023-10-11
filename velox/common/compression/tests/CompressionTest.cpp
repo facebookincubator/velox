@@ -20,11 +20,11 @@
 #include "velox/common/base/tests/GTestUtils.h"
 #include "velox/common/compression/Compression.h"
 
-using namespace facebook::velox::common;
+namespace facebook::velox::common {
 
 class CompressionTest : public testing::Test {};
 
-TEST(CompressionTest, testCompressionNames) {
+TEST_F(CompressionTest, testCompressionNames) {
   EXPECT_EQ("none", compressionKindToString(CompressionKind_NONE));
   EXPECT_EQ("zlib", compressionKindToString(CompressionKind_ZLIB));
   EXPECT_EQ("snappy", compressionKindToString(CompressionKind_SNAPPY));
@@ -35,3 +35,28 @@ TEST(CompressionTest, testCompressionNames) {
       "unknown - 99",
       compressionKindToString(static_cast<CompressionKind>(99)));
 }
+
+TEST_F(CompressionTest, compressionKindToCodec) {
+  ASSERT_EQ(
+      folly::io::CodecType::NO_COMPRESSION,
+      compressionKindToCodec(CompressionKind::CompressionKind_NONE)->type());
+  ASSERT_EQ(
+      folly::io::CodecType::LZ4,
+      compressionKindToCodec(CompressionKind::CompressionKind_LZ4)->type());
+  EXPECT_THROW(
+      compressionKindToCodec(CompressionKind::CompressionKind_LZO),
+      facebook::velox::VeloxException);
+}
+
+TEST_F(CompressionTest, stringToCompressionKind) {
+  EXPECT_EQ(stringToCompressionKind("none"), CompressionKind_NONE);
+  EXPECT_EQ(stringToCompressionKind("zlib"), CompressionKind_ZLIB);
+  EXPECT_EQ(stringToCompressionKind("snappy"), CompressionKind_SNAPPY);
+  EXPECT_EQ(stringToCompressionKind("lzo"), CompressionKind_LZO);
+  EXPECT_EQ(stringToCompressionKind("lz4"), CompressionKind_LZ4);
+  EXPECT_EQ(stringToCompressionKind("zstd"), CompressionKind_ZSTD);
+  EXPECT_EQ(stringToCompressionKind("gzip"), CompressionKind_GZIP);
+  VELOX_ASSERT_THROW(
+      stringToCompressionKind("bz2"), "Not support compression kind bz2");
+}
+} // namespace facebook::velox::common

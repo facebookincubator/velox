@@ -16,17 +16,12 @@ add_library(
   velox_dwio_dwrf_common
   ByteRLE.cpp
   Common.cpp
-  Compression.cpp
   Config.cpp
-  DataBufferHolder.cpp
   Decryption.cpp
   Encryption.cpp
   EncryptionSpecification.cpp
   FileMetadata.cpp
   IntEncoder.cpp
-  OutputStream.cpp
-  PagedInputStream.cpp
-  PagedOutputStream.cpp
   RLEv1.cpp
   RLEv2.cpp
   Statistics.cpp
@@ -40,6 +35,7 @@ target_link_libraries(
   velox_common_base
   velox_common_compression
   velox_dwio_common
+  velox_dwio_common_compression
   velox_dwio_dwrf_proto
   velox_caching
   Snappy::snappy

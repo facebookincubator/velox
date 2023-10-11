@@ -260,11 +260,37 @@ Probability Functions: cdf
     Compute the Cauchy cdf with given parameters median and scale (gamma): P(N; median, scale).
     The scale parameter must be a positive double. The value parameter must be a double on the interval [0, 1].
 
+.. function:: chi_squared_cdf(df, value) -> double
+
+    Compute the Chi-square cdf with given df (degrees of freedom) parameter:  P(N < value; df).
+    The df parameter must be a positive real number, and value must be a non-negative real value (both of type DOUBLE).
+
+.. function:: f_cdf(df1, df2, value) -> double
+
+    Compute the F cdf with given df1 (numerator degrees of freedom) and df2 (denominator degrees of freedom) parameters:  P(N < value; df1, df2).
+    The numerator and denominator df parameters must be positive real numbers. The value must be a non-negative real number.
+
+.. function:: gamma_cdf(shape, scale, value) -> double
+
+    Compute the Gamma cdf with given shape and scale parameters: P(N < value; shape, scale).
+    The shape and scale parameters must be positive real numbers. The value must be a non-negative real number.
+
+.. function:: laplace_cdf(mean, scale, value) -> double
+
+     Compute the Laplace cdf with given mean and scale parameters: P(N < value; mean, scale).
+     The mean and value must be real values and the scale parameter must be a
+     positive value (all of type DOUBLE).
+
 .. function:: normal_cdf(mean, sd, value) -> double
 
     Compute the Normal cdf with given mean and standard deviation (sd): P(N < value; mean, sd).
     The mean and value must be real values and the standard deviation must be a real and
     positive value (all of type DOUBLE).
+
+.. function:: poisson_cdf(lambda, value) -> double
+
+    Compute the Poisson cdf with given lambda (mean) parameter:  P(N <= value; lambda).
+    The lambda parameter must be a positive real number (of type DOUBLE) and value must be a non-negative integer.
 
 
 ====================================
@@ -277,3 +303,17 @@ Probability Functions: inverse_cdf
     probability (p): P(N < n). The a, b parameters must be positive real values (all of type DOUBLE).
     The probability p must lie on the interval [0, 1].
 
+
+====================================
+Statistical Functions
+====================================
+
+.. function:: wilson_interval_lower(successes, trials, z) -> double
+
+    Returns the lower bound of the Wilson score interval of a Bernoulli trial process
+    at a confidence specified by the z-score z.
+
+.. function:: wilson_interval_upper(successes, trials, z) -> double
+
+    Returns the upper bound of the Wilson score interval of a Bernoulli trial process
+    at a confidence specified by the z-score z.

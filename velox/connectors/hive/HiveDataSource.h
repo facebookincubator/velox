@@ -15,6 +15,7 @@
  */
 #pragma once
 
+#include "velox/common/io/IoStatistics.h"
 #include "velox/connectors/Connector.h"
 #include "velox/connectors/hive/FileHandle.h"
 #include "velox/connectors/hive/HiveConnectorSplit.h"
@@ -37,9 +38,8 @@ class HiveDataSource : public DataSource {
           std::shared_ptr<connector::ColumnHandle>>& columnHandles,
       FileHandleFactory* fileHandleFactory,
       core::ExpressionEvaluator* expressionEvaluator,
-      memory::MemoryAllocator* allocator,
+      cache::AsyncDataCache* cache,
       const std::string& scanId,
-      bool fileColumnNamesReadAsLowerCase,
       folly::Executor* executor,
       const dwio::common::ReaderOptions& options);
 
@@ -73,10 +73,12 @@ class HiveDataSource : public DataSource {
   // Internal API, made public to be accessible in unit tests.  Do not use in
   // other places.
   static std::shared_ptr<common::ScanSpec> makeScanSpec(
-      const SubfieldFilters& filters,
       const RowTypePtr& rowType,
-      const std::vector<const HiveColumnHandle*>& columnHandles,
-      const std::vector<common::Subfield>& remainingFilterInputs,
+      const folly::F14FastMap<
+          std::string,
+          std::vector<const common::Subfield*>>& outputSubfields,
+      const SubfieldFilters& filters,
+      const RowTypePtr& dataColumns,
       memory::MemoryPool* pool);
 
   // Internal API, made public to be accessible in unit tests.  Do not use in
@@ -106,7 +108,12 @@ class HiveDataSource : public DataSource {
   dwio::common::ReaderOptions readerOpts_;
   memory::MemoryPool* pool_;
   VectorPtr output_;
+
+  // Output type from file reader.  This is different from outputType_ that it
+  // contains column names before assignment, and columns that only used in
+  // remaining filter.
   RowTypePtr readerOutputType_;
+
   std::unique_ptr<dwio::common::RowReader> rowReader_;
 
  private:
@@ -138,18 +145,29 @@ class HiveDataSource : public DataSource {
       dwio::common::RowReaderOptions&,
       const RowTypePtr& rowType) const;
 
+  void parseSerdeParameters(
+      const std::unordered_map<std::string, std::string>& serdeParameters);
+
+  const RowVectorPtr& getEmptyOutput() {
+    if (!emptyOutput_) {
+      emptyOutput_ = RowVector::createEmpty(outputType_, pool_);
+    }
+    return emptyOutput_;
+  }
+
   const RowTypePtr outputType_;
   // Column handles for the partition key columns keyed on partition key column
   // name.
   std::unordered_map<std::string, std::shared_ptr<HiveColumnHandle>>
       partitionKeys_;
-  std::shared_ptr<dwio::common::IoStatistics> ioStats_;
+  std::shared_ptr<io::IoStatistics> ioStats_;
   std::shared_ptr<common::ScanSpec> scanSpec_;
   std::shared_ptr<common::MetadataFilter> metadataFilter_;
   dwio::common::RowReaderOptions rowReaderOpts_;
   std::unique_ptr<dwio::common::Reader> reader_;
   std::unique_ptr<exec::ExprSet> remainingFilterExprSet_;
   bool emptySplit_;
+  RowVectorPtr emptyOutput_;
 
   dwio::common::RuntimeStatistics runtimeStats_;
 
@@ -162,7 +180,7 @@ class HiveDataSource : public DataSource {
   SelectivityVector filterRows_;
   exec::FilterEvalCtx filterEvalCtx_;
 
-  memory::MemoryAllocator* const allocator_;
+  cache::AsyncDataCache* const cache_{nullptr};
   const std::string& scanId_;
   folly::Executor* executor_;
 };

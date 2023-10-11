@@ -77,9 +77,10 @@ class HashBuild final : public Operator {
 
   bool isFinished() override;
 
-  void reclaim(uint64_t targetBytes) override;
+  void reclaim(uint64_t targetBytes, memory::MemoryReclaimer::Stats& stats)
+      override;
 
-  void close() override;
+  void abort() override;
 
  private:
   void setState(State state);
@@ -112,9 +113,11 @@ class HashBuild final : public Operator {
     return spillConfig_.has_value();
   }
 
-  const Spiller::Config* spillConfig() const {
+  const common::SpillConfig* spillConfig() const {
     return spillConfig_.has_value() ? &spillConfig_.value() : nullptr;
   }
+
+  void recordSpillStats();
 
   // Indicates if the input is read from spill data or not.
   bool isInputFromSpill() const;
@@ -148,6 +151,11 @@ class HashBuild final : public Operator {
   // group spill to run. The operator will transition to 'kWaitForSpill' state
   // accordingly.
   bool ensureInputFits(RowVectorPtr& input);
+
+  // Invoked to ensure there is sufficient memory to build the join table with
+  // the specified 'numRows' if spilling is enabled. The function throws to fail
+  // the query if the memory reservation fails.
+  void ensureTableFits(uint64_t numRows);
 
   // Invoked to reserve memory for 'input' if disk spilling is enabled. The
   // function returns true on success, otherwise false.
@@ -236,6 +244,10 @@ class HashBuild final : public Operator {
   const bool nullAware_;
 
   std::shared_ptr<HashJoinBridge> joinBridge_;
+
+  // The maximum memory usage that a hash build can hold before spilling.
+  // If it is zero, then there is no such limit.
+  const uint64_t spillMemoryThreshold_;
 
   std::shared_ptr<SpillOperatorGroup> spillGroup_;
 

@@ -22,28 +22,29 @@
 
 namespace facebook::velox::exec {
 
+namespace detail {
 class Destination {
  public:
   Destination(
       const std::string& taskId,
       int destination,
-      memory::MemoryPool* FOLLY_NONNULL pool)
+      memory::MemoryPool* pool)
       : taskId_(taskId), destination_(destination), pool_(pool) {
     setTargetSizePct();
   }
 
   // Resets the destination before starting a new batch.
   void beginBatch() {
-    rows_.clear();
-    row_ = 0;
+    ranges_.clear();
+    rangeIdx_ = 0;
   }
 
   void addRow(vector_size_t row) {
-    rows_.push_back(IndexRange{row, 1});
+    ranges_.push_back(IndexRange{row, 1});
   }
 
   void addRows(const IndexRange& rows) {
-    rows_.push_back(rows);
+    ranges_.push_back(rows);
   }
 
   BlockingReason advance(
@@ -52,13 +53,13 @@ class Destination {
       const RowVectorPtr& output,
       PartitionedOutputBufferManager& bufferManager,
       const std::function<void()>& bufferReleaseFn,
-      bool* FOLLY_NONNULL atEnd,
-      ContinueFuture* FOLLY_NONNULL future);
+      bool* atEnd,
+      ContinueFuture* future);
 
   BlockingReason flush(
       PartitionedOutputBufferManager& bufferManager,
       const std::function<void()>& bufferReleaseFn,
-      ContinueFuture* FOLLY_NULLABLE future);
+      ContinueFuture* future);
 
   bool isFinished() const {
     return finished_;
@@ -84,19 +85,19 @@ class Destination {
   // the same time. This is done for each batch so that the average
   // batch size for each converges.
   void setTargetSizePct() {
-    // Flush at  70 to 120% of target row or byte count.
+    // Flush at 70 to 120% of target row or byte count.
     targetSizePct_ = 70 + (folly::Random::rand32(rng_) % 50);
-    targetNumRows_ = (10000 * targetSizePct_) / 100;
+    targetNumRows_ = (10'000 * targetSizePct_) / 100;
   }
 
   const std::string taskId_;
   const int destination_;
-  memory::MemoryPool* FOLLY_NONNULL const pool_;
+  memory::MemoryPool* const pool_;
   uint64_t bytesInCurrent_{0};
-  std::vector<IndexRange> rows_;
+  std::vector<IndexRange> ranges_;
 
-  // First row of 'rows_' that is not appended to 'current_'
-  vector_size_t row_{0};
+  // First range index of 'ranges_' that is not appended to 'current_'.
+  vector_size_t rangeIdx_{0};
   std::unique_ptr<VectorStreamGroup> current_;
   bool finished_{false};
 
@@ -112,6 +113,7 @@ class Destination {
   // Generator for varying target batch size. Randomly seeded at construction.
   folly::Random::DefaultGenerator rng_;
 };
+} // namespace detail
 
 // In a distributed query engine data needs to be shuffled between workers so
 // that each worker only has to process a fraction of the total data. Because
@@ -130,7 +132,7 @@ class PartitionedOutput : public Operator {
 
   PartitionedOutput(
       int32_t operatorId,
-      DriverCtx* FOLLY_NONNULL ctx,
+      DriverCtx* ctx,
       const std::shared_ptr<const core::PartitionedOutputNode>& planNode);
 
   void addInput(RowVectorPtr input) override;
@@ -146,7 +148,7 @@ class PartitionedOutput : public Operator {
     return true;
   }
 
-  BlockingReason isBlocked(ContinueFuture* FOLLY_NONNULL future) override {
+  BlockingReason isBlocked(ContinueFuture* future) override {
     if (blockingReason_ != BlockingReason::kNotBlocked) {
       *future = std::move(future_);
       blockingReason_ = BlockingReason::kNotBlocked;
@@ -192,7 +194,7 @@ class PartitionedOutput : public Operator {
   std::vector<IndexRange> topLevelRanges_;
   std::vector<vector_size_t*> sizePointers_;
   std::vector<vector_size_t> rowSize_;
-  std::vector<std::unique_ptr<Destination>> destinations_;
+  std::vector<std::unique_ptr<detail::Destination>> destinations_;
   bool replicatedAny_{false};
   RowVectorPtr output_;
 
