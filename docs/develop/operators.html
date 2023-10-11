@@ -331,16 +331,19 @@ individual measures are sorted and de-duplicated.</p>
 <tr class="row-even"><td><p>call</p></td>
 <td><p>An expression for computing the measure, e.g. count(1), sum(a), avg(b). Expressions must be in the form of aggregate function calls over input columns directly, e.g. sum(c) is ok, but sum(c + d) is not.</p></td>
 </tr>
-<tr class="row-odd"><td><p>mask</p></td>
+<tr class="row-odd"><td><p>rawInputTypes</p></td>
+<td><p>A list of raw input types for the aggregation function. There are used to correctly identify aggregation function, e.g. to decide between min(x) and min(x, n) in case of intermediate aggregation. These can be different from the input types specified in ‘call’ when aggregation step is intermediate or final.</p></td>
+</tr>
+<tr class="row-even"><td><p>mask</p></td>
 <td><p>An optional boolean input column that’s used to mask out rows for this particular measure. Multiple measures may specify same input column as a mask.</p></td>
 </tr>
-<tr class="row-even"><td><p>sortingKeys</p></td>
+<tr class="row-odd"><td><p>sortingKeys</p></td>
 <td><p>An optional list of input columns to sort by before computing the measure. If specified, sortingOrders must be used to specify the sort order for each sorting key.</p></td>
 </tr>
-<tr class="row-odd"><td><p>sortingOrders</p></td>
+<tr class="row-even"><td><p>sortingOrders</p></td>
 <td><p>A list of sorting orders for each sorting key.</p></td>
 </tr>
-<tr class="row-even"><td><p>distinct</p></td>
+<tr class="row-odd"><td><p>distinct</p></td>
 <td><p>A boolean flag indicating that inputs must be de-duplicated before computing the measure.</p></td>
 </tr>
 </tbody>
