@@ -68,7 +68,8 @@ void readData(ReadFile* readFile, bool checkFileSize = true) {
       folly::Range<char*>(middle, sizeof(middle)),
       folly::Range<char*>(
           nullptr,
-          (char*)(uint64_t)(15 + kOneMB - 500000 - sizeof(head) - sizeof(middle) - sizeof(tail))),
+          (char*)(uint64_t)(15 + kOneMB - 500000 - sizeof(head) -
+                            sizeof(middle) - sizeof(tail))),
       folly::Range<char*>(tail, sizeof(tail))};
   ASSERT_EQ(15 + kOneMB, readFile->preadv(0, buffers));
   ASSERT_EQ(std::string_view(head, sizeof(head)), "aaaaabbbbbcc");
@@ -103,6 +104,12 @@ TEST(InMemoryFile, preadv) {
       {5 + 5 + kOneMB + 2, 3UL, {}}};
 
   std::vector<folly::IOBuf> iobufs(readRegions.size());
+  for (size_t i = 0; i < iobufs.size(); i++) {
+    const auto& region = readRegions[i];
+    auto& output = iobufs[i];
+    output = folly::IOBuf(folly::IOBuf::CREATE, region.length);
+    output.append(region.length);
+  }
   readFile.preadv(readRegions, {iobufs.data(), iobufs.size()});
   std::vector<std::string> values;
   values.reserve(iobufs.size());

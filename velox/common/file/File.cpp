@@ -69,7 +69,6 @@ void ReadFile::preadv(
     const auto& region = regions[i];
     auto& output = iobufs[i];
     pread(region.offset, region.length, output.writableData());
-    output.append(region.length);
   }
 }
 

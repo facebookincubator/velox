@@ -60,6 +60,12 @@ TEST_F(ReadFileInputStreamTest, LocalReadFile) {
 
   std::vector<folly::Range<char*>> buffers;
   std::vector<folly::IOBuf> iobufs(regions.size());
+  for (size_t i = 0; i < regions.size(); i++) {
+    const auto& region = regions[i];
+    auto& output = iobufs[i];
+    output = folly::IOBuf(folly::IOBuf::CREATE, region.length);
+    output.append(region.length);
+  }
 
   readStream->vread(regions, {iobufs.data(), iobufs.size()}, LogType::TEST);
   remove(filename.c_str());
@@ -100,6 +106,12 @@ TEST(ReadFileInputStream, VReadIOBufs) {
   ASSERT_EQ(inputStream.getLength(), 15);
   std::vector<Region> regions = {{0, 6}, {9, 5}};
   std::vector<folly::IOBuf> iobufs(regions.size());
+  for (size_t i = 0; i < regions.size(); i++) {
+    const auto& region = regions[i];
+    auto& output = iobufs[i];
+    output = folly::IOBuf(folly::IOBuf::CREATE, region.length);
+    output.append(region.length);
+  }
   inputStream.vread(regions, {iobufs.data(), iobufs.size()}, LogType::STREAM);
   std::vector<std::string> result;
   std::transform(
