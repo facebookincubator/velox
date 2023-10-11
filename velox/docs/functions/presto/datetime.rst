@@ -6,6 +6,10 @@ Date and Time Functions
 
     Returns the current date.
 
+.. function:: current_timezone() -> string
+
+    Returns current timezone in the format defined by IANA.
+
 .. function:: date(x) -> date
 
     This is an alias for ``CAST(x AS date)``.

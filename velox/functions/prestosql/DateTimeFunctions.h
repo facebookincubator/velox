@@ -100,6 +100,28 @@ struct TimestampWithTimezoneSupport {
 } // namespace
 
 template <typename T>
+struct CurrentTimezoneFunction : public TimestampWithTimezoneSupport<T> {
+  VELOX_DEFINE_FUNCTION_TYPES(T);
+
+  std::string timezoneId;
+
+  FOLLY_ALWAYS_INLINE void initialize(const core::QueryConfig& config) {
+    auto sessionTzName = config.sessionTimezone();
+
+    std::optional<int64_t> sessionTzID;
+    // Set the timezone to the session timezone. If there's
+    // no session timezone, fallback to 0 (GMT).
+    if (!sessionTzName.empty()) {
+      sessionTzID = util::getTimeZoneID(sessionTzName);
+    }
+    timezoneId = std::to_string(sessionTzID.value_or(0));
+  }
+
+  FOLLY_ALWAYS_INLINE void call(out_type<Varchar>& result) {
+    result = timezoneId;
+  }
+};
+template <typename T>
 struct DateFunction : public TimestampWithTimezoneSupport<T> {
   VELOX_DEFINE_FUNCTION_TYPES(T);
 
