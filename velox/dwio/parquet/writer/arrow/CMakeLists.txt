@@ -47,6 +47,7 @@ target_link_libraries(
   velox_dwio_arrow_parquet_writer_lib
   velox_dwio_arrow_parquet_writer_util_lib
   velox_dwio_arrow_parquet_writer_thrift_lib
+  velox_dwio_common_compression
   velox_dwio_common
   velox_arrow_bridge
   parquet

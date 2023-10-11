@@ -25,7 +25,6 @@
 #include "parquet/exception.h"
 #include "velox/dwio/parquet/writer/arrow/Platform.h"
 #include "velox/dwio/parquet/writer/arrow/Types.h"
-#include "velox/dwio/parquet/writer/arrow/util/Compression.h"
 
 namespace arrow {
 

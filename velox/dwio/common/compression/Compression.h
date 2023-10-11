@@ -35,7 +35,12 @@ class Compressor {
 
   virtual ~Compressor() = default;
 
-  virtual uint64_t compress(const void* src, void* dest, uint64_t length) = 0;
+  virtual int64_t maxCompressedLen(int64_t input_len, const uint8_t* input) = 0;
+  virtual uint64_t compress(
+      const void* src,
+      void* dest,
+      uint64_t length,
+      uint64_t outputLength = 0) = 0;
 
  protected:
   int32_t level_;
@@ -114,5 +119,4 @@ std::unique_ptr<dwio::common::SeekableInputStream> createDecompressor(
 std::unique_ptr<Compressor> createCompressor(
     facebook::velox::common::CompressionKind kind,
     const CompressionOptions& options);
-
 } // namespace facebook::velox::dwio::common::compression

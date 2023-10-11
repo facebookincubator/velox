@@ -32,18 +32,38 @@ using dwio::common::encryption::Encrypter;
 using facebook::velox::common::CompressionKind;
 using memory::MemoryPool;
 
+constexpr int kUseDefaultCompressionLevel = std::numeric_limits<int>::min();
+constexpr int kGZipDefaultCompressionLevel = 9;
+constexpr int kGzipCodecWindowBits = 16;
+
 namespace {
 
 class ZstdCompressor : public Compressor {
  public:
   explicit ZstdCompressor(int32_t level) : Compressor{level} {}
 
-  uint64_t compress(const void* src, void* dest, uint64_t length) override;
+  uint64_t compress(
+      const void* src,
+      void* dest,
+      uint64_t length,
+      uint64_t outputLength = 0) override;
+  int64_t maxCompressedLen(int64_t inputLen, const uint8_t* input) override;
 };
 
-uint64_t
-ZstdCompressor::compress(const void* src, void* dest, uint64_t length) {
-  auto ret = ZSTD_compress(dest, length, src, length, level_);
+int64_t ZstdCompressor::maxCompressedLen(
+    int64_t inputLen,
+    const uint8_t* input) {
+  VELOX_CHECK_GE(inputLen, 0);
+  return ZSTD_compressBound(static_cast<size_t>(inputLen));
+}
+
+uint64_t ZstdCompressor::compress(
+    const void* src,
+    void* dest,
+    uint64_t length,
+    uint64_t outputLength) {
+  auto ret = ZSTD_compress(
+      dest, outputLength == 0 ? length : outputLength, src, length, level_);
   if (ZSTD_isError(ret)) {
     // it's fine to hit dest size too small
     if (ZSTD_getErrorCode(ret) == ZSTD_ErrorCode::ZSTD_error_dstSize_tooSmall) {
@@ -56,24 +76,36 @@ ZstdCompressor::compress(const void* src, void* dest, uint64_t length) {
 
 class ZlibCompressor : public Compressor {
  public:
-  explicit ZlibCompressor(int32_t level);
+  explicit ZlibCompressor(int32_t level, int32_t windowBits);
 
   ~ZlibCompressor() override;
-
-  uint64_t compress(const void* src, void* dest, uint64_t length) override;
+  uint64_t compress(
+      const void* src,
+      void* dest,
+      uint64_t length,
+      uint64_t outputLength = 0) override;
+  int64_t maxCompressedLen(int64_t inputLen, const uint8_t* input) override;
 
  private:
   bool isCompressCalled_;
   z_stream stream_;
 };
 
-ZlibCompressor::ZlibCompressor(int32_t level)
+ZlibCompressor::ZlibCompressor(
+    int32_t level,
+    int32_t windowBits = -15 /* raw deflate */)
     : Compressor{level}, isCompressCalled_{false} {
   stream_.zalloc = Z_NULL;
   stream_.zfree = Z_NULL;
   stream_.opaque = Z_NULL;
   DWIO_ENSURE_EQ(
-      deflateInit2(&stream_, level_, Z_DEFLATED, -15, 8, Z_DEFAULT_STRATEGY),
+      deflateInit2(
+          &stream_,
+          level_,
+          Z_DEFLATED,
+          windowBits,
+          8 /* memLevel */,
+          Z_DEFAULT_STRATEGY),
       Z_OK,
       "Error while calling deflateInit2() for zlib.");
 }
@@ -85,15 +117,30 @@ ZlibCompressor::~ZlibCompressor() {
   }
 }
 
-uint64_t
-ZlibCompressor::compress(const void* src, void* dest, uint64_t length) {
+// Moved from Arrow.
+int64_t ZlibCompressor::maxCompressedLen(
+    int64_t input_length,
+    const uint8_t* input) {
+  // Must be in compression mode
+  int64_t maxLen = deflateBound(&stream_, static_cast<uLong>(input_length));
+  // ARROW-3514: return a more pessimistic estimate to account for bugs
+  // in old zlib versions.
+  return maxLen + 12;
+}
+
+uint64_t ZlibCompressor::compress(
+    const void* src,
+    void* dest,
+    uint64_t length,
+    uint64_t outputLength) {
   isCompressCalled_ = true;
   DWIO_ENSURE_EQ(deflateReset(&stream_), Z_OK, "Failed to reset deflate.");
 
   stream_.avail_in = static_cast<uint32_t>(length);
   stream_.next_in = reinterpret_cast<unsigned char*>(const_cast<void*>(src));
   stream_.next_out = reinterpret_cast<unsigned char*>(dest);
-  stream_.avail_out = static_cast<uint32_t>(length);
+  stream_.avail_out =
+      static_cast<uint32_t>(outputLength == 0 ? length : outputLength);
 
   auto ret = deflate(&stream_, Z_FINISH);
   if (ret == Z_STREAM_END) {
@@ -105,6 +152,40 @@ ZlibCompressor::compress(const void* src, void* dest, uint64_t length) {
   }
 
   return stream_.total_out;
+}
+
+class SnappyCompressor : public Compressor {
+ public:
+  explicit SnappyCompressor(int32_t level) : Compressor(level) {}
+
+  uint64_t compress(
+      const void* src,
+      void* dest,
+      uint64_t length,
+      uint64_t outputLength = 0) override;
+
+  int64_t maxCompressedLen(int64_t inputLen, const uint8_t* input) override;
+};
+
+int64_t SnappyCompressor::maxCompressedLen(
+    int64_t input_len,
+    const uint8_t* input) {
+  DCHECK_GE(input_len, 0);
+  return snappy::MaxCompressedLength(static_cast<size_t>(input_len));
+}
+
+uint64_t SnappyCompressor::compress(
+    const void* input,
+    void* outputBuffer,
+    uint64_t inputLen,
+    uint64_t outputBufferLen) {
+  size_t outputSize;
+  snappy::RawCompress(
+      reinterpret_cast<const char*>(input),
+      static_cast<size_t>(inputLen),
+      reinterpret_cast<char*>(outputBuffer),
+      &outputSize);
+  return static_cast<int64_t>(outputSize);
 }
 
 class ZlibDecompressor : public Decompressor {
@@ -465,21 +546,34 @@ std::unique_ptr<Compressor> createCompressor(
   switch (kind) {
     case CompressionKind::CompressionKind_NONE:
       return nullptr;
+    case CompressionKind::CompressionKind_GZIP: {
+      XLOG_FIRST_N(INFO, 1) << fmt::format(
+          "Initializing gzip compressor with compression level {}",
+          options.format.zlib.compressionLevel);
+      return std::make_unique<ZlibCompressor>(
+          kGZipDefaultCompressionLevel,
+          options.format.zlib.windowBits +
+              kGzipCodecWindowBits /* windowBits for gzip */);
+    }
     case CompressionKind::CompressionKind_ZLIB: {
       XLOG_FIRST_N(INFO, 1) << fmt::format(
-          "Initialized zlib compressor with compression level {}",
+          "Initializing zlib compressor with compression level {}",
           options.format.zlib.compressionLevel);
       return std::make_unique<ZlibCompressor>(
           options.format.zlib.compressionLevel);
     }
     case CompressionKind::CompressionKind_ZSTD: {
       XLOG_FIRST_N(INFO, 1) << fmt::format(
-          "Initialized zstd compressor with compression level {}",
+          "Initializing zstd compressor with compression level {}",
           options.format.zstd.compressionLevel);
       return std::make_unique<ZstdCompressor>(
           options.format.zstd.compressionLevel);
     }
     case CompressionKind::CompressionKind_SNAPPY:
+      XLOG_FIRST_N(INFO, 1) << fmt::format(
+          "Initializing Snappy compressor default with compression level {}",
+          kUseDefaultCompressionLevel);
+      return std::make_unique<SnappyCompressor>(kUseDefaultCompressionLevel);
     case CompressionKind::CompressionKind_LZO:
     case CompressionKind::CompressionKind_LZ4:
     default:

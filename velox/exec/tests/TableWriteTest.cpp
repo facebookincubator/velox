@@ -2010,7 +2010,8 @@ TEST_P(UnpartitionedTableWriterTest, differentCompression) {
     }
     if (compressionKind == CompressionKind_NONE ||
         compressionKind == CompressionKind_ZLIB ||
-        compressionKind == CompressionKind_ZSTD) {
+        compressionKind == CompressionKind_ZSTD ||
+        compressionKind == CompressionKind_SNAPPY) {
       auto result = AssertQueryBuilder(plan)
                         .config(
                             QueryConfig::kTaskWriterCount,

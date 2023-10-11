@@ -17,7 +17,6 @@
 // Adapted from Apache Arrow.
 
 #include "velox/dwio/parquet/writer/arrow/ColumnWriter.h"
-
 #include <glog/logging.h>
 #include <algorithm>
 #include <cstdint>
@@ -43,6 +42,7 @@
 #include "arrow/util/rle_encoding.h"
 #include "arrow/util/type_traits.h"
 
+#include "velox/dwio/common/compression/Compression.h"
 #include "velox/dwio/parquet/writer/arrow/ColumnPage.h"
 #include "velox/dwio/parquet/writer/arrow/Encoding.h"
 #include "velox/dwio/parquet/writer/arrow/Encryption.h"
@@ -51,13 +51,7 @@
 #include "velox/dwio/parquet/writer/arrow/LevelConversion.h"
 #include "velox/dwio/parquet/writer/arrow/Metadata.h"
 #include "velox/dwio/parquet/writer/arrow/PageIndex.h"
-#include "velox/dwio/parquet/writer/arrow/Platform.h"
-#include "velox/dwio/parquet/writer/arrow/Properties.h"
-#include "velox/dwio/parquet/writer/arrow/Schema.h"
-#include "velox/dwio/parquet/writer/arrow/Statistics.h"
 #include "velox/dwio/parquet/writer/arrow/ThriftInternal.h"
-#include "velox/dwio/parquet/writer/arrow/Types.h"
-#include "velox/dwio/parquet/writer/arrow/util/Compression.h"
 #include "velox/dwio/parquet/writer/arrow/util/Crc32.h"
 #include "velox/dwio/parquet/writer/arrow/util/VisitArrayInline.h"
 
@@ -269,8 +263,48 @@ int LevelEncoder::Encode(int batch_size, const int16_t* levels) {
   return num_encoded;
 }
 
-// ----------------------------------------------------------------------
-// PageWriter implementation
+velox::dwio::common::compression::CompressionOptions
+arrowCodecOptToCompressionOpt(
+    Compression::type codecType,
+    const CodecOptions& codecOptions) {
+  velox::dwio::common::compression::CompressionOptions options;
+  // TODO @karteek. Find right value for Parquet. Currently setting to
+  // "orc.compression.threshold", 256
+  options.compressionThreshold = 256;
+  if (codecType == Compression::ZSTD) {
+    options.format.zstd.compressionLevel = codecOptions.compression_level;
+  } else if (codecType == Compression::GZIP) {
+    options.format.zlib.windowBits =
+        velox::dwio::common::compression::Compressor::PARQUET_ZLIB_WINDOW_BITS;
+    options.format.zlib.compressionLevel = codecOptions.compression_level;
+  }
+  return options;
+}
+
+velox::common::CompressionKind arrowCodecToCompressionKind(
+    Compression::type codec) {
+  switch (codec) {
+    case Compression::UNCOMPRESSED:
+      return velox::common::CompressionKind::CompressionKind_NONE;
+    case Compression::SNAPPY:
+      return velox::common::CompressionKind::CompressionKind_SNAPPY;
+    case Compression::GZIP:
+      return velox::common::CompressionKind::CompressionKind_GZIP;
+    case Compression::ZSTD:
+      return velox::common::CompressionKind::CompressionKind_ZSTD;
+    case Compression::LZ4:
+    case Compression::LZ4_FRAME:
+    case Compression::LZ4_HADOOP:
+      return velox::common::CompressionKind::CompressionKind_LZ4;
+    case Compression::LZO:
+      return velox::common::CompressionKind::CompressionKind_LZO;
+    case Compression::BROTLI:
+    case Compression::BZ2:
+      VELOX_UNSUPPORTED("Arrow compression type is unsupported {}", codec);
+  }
+}
+//  ----------------------------------------------------------------------
+//  PageWriter implementation
 
 // This subclass delimits pages appearing in a serialized stream, each preceded
 // by a serialized Thrift format::PageHeader indicating the type of each page
@@ -310,7 +344,9 @@ class SerializedPageWriter : public PageWriter {
     if (data_encryptor_ != nullptr || meta_encryptor_ != nullptr) {
       InitEncryption();
     }
-    compressor_ = GetCodec(codec, codec_options);
+    veloxCompressor_ = velox::dwio::common::compression::createCompressor(
+        arrowCodecToCompressionKind(codec),
+        arrowCodecOptToCompressionOpt(codec, codec_options));
     thrift_serializer_ = std::make_unique<ThriftSerializer>();
   }
 
@@ -407,24 +443,21 @@ class SerializedPageWriter : public PageWriter {
    */
   void Compress(const Buffer& src_buffer, ResizableBuffer* dest_buffer)
       override {
-    DCHECK(compressor_ != nullptr);
+    DCHECK(veloxCompressor_ != nullptr);
 
     // Compress the data
-    int64_t max_compressed_size =
-        compressor_->MaxCompressedLen(src_buffer.size(), src_buffer.data());
-
+    int64_t maxCompressedSize = veloxCompressor_->maxCompressedLen(
+        src_buffer.size(), src_buffer.data());
     // Use Arrow::Buffer::shrink_to_fit = false
     // underlying buffer only keeps growing. Resize to a smaller size does not
     // reallocate.
-    PARQUET_THROW_NOT_OK(dest_buffer->Resize(max_compressed_size, false));
+    PARQUET_THROW_NOT_OK(dest_buffer->Resize(maxCompressedSize, false));
 
-    PARQUET_ASSIGN_OR_THROW(
-        int64_t compressed_size,
-        compressor_->Compress(
-            src_buffer.size(),
-            src_buffer.data(),
-            max_compressed_size,
-            dest_buffer->mutable_data()));
+    auto compressed_size = veloxCompressor_->compress(
+        src_buffer.data(),
+        dest_buffer->mutable_data(),
+        src_buffer.size(),
+        maxCompressedSize);
     PARQUET_THROW_NOT_OK(dest_buffer->Resize(compressed_size, false));
   }
 
@@ -565,7 +598,7 @@ class SerializedPageWriter : public PageWriter {
   }
 
   bool has_compressor() override {
-    return (compressor_ != nullptr);
+    return (veloxCompressor_ != nullptr);
   }
 
   int64_t num_values() {
@@ -686,8 +719,7 @@ class SerializedPageWriter : public PageWriter {
   std::unique_ptr<ThriftSerializer> thrift_serializer_;
 
   // Compression codec to use.
-  std::unique_ptr<util::Codec> compressor_;
-
+  std::unique_ptr<dwio::common::compression::Compressor> veloxCompressor_;
   std::string data_page_aad_;
   std::string data_page_header_aad_;
 
@@ -1843,8 +1875,8 @@ class TypedColumnWriterImpl : public ColumnWriterImpl,
     *null_count = io.null_count;
   }
 
-  Result<std::shared_ptr<Array>> MaybeReplaceValidity(
-      std::shared_ptr<Array> array,
+  Result<std::shared_ptr<::arrow::Array>> MaybeReplaceValidity(
+      std::shared_ptr<::arrow::Array> array,
       int64_t new_null_count,
       ::arrow::MemoryPool* memory_pool) {
     if (bits_buffer_ == nullptr) {
@@ -2052,7 +2084,8 @@ Status TypedColumnWriterImpl<DType>::WriteArrowDictionary(
   std::shared_ptr<::arrow::Array> indices = data.indices();
 
   auto update_stats = [&](int64_t num_chunk_levels,
-                          const std::shared_ptr<Array>& chunk_indices) {
+                          const std::shared_ptr<::arrow::Array>&
+                              chunk_indices) {
     // TODO(PARQUET-2068) This approach may make two copies.  First, a copy of
     // the indices array to a (hopefully smaller) referenced indices array.
     // Second, a copy of the values array to a (probably not smaller) referenced
@@ -2109,7 +2142,7 @@ Status TypedColumnWriterImpl<DType>::WriteArrowDictionary(
         batch_size,
         AddIfNotNull(def_levels, offset),
         AddIfNotNull(rep_levels, offset));
-    std::shared_ptr<Array> writeable_indices =
+    std::shared_ptr<::arrow::Array> writeable_indices =
         indices->Slice(value_offset, batch_num_spaced_values);
     if (page_statistics_) {
       update_stats(/*num_chunk_levels=*/batch_size, writeable_indices);
@@ -2716,7 +2749,7 @@ Status TypedColumnWriterImpl<ByteArrayType>::WriteArrowDense(
         batch_size,
         AddIfNotNull(def_levels, offset),
         AddIfNotNull(rep_levels, offset));
-    std::shared_ptr<Array> data_slice =
+    std::shared_ptr<::arrow::Array> data_slice =
         array.Slice(value_offset, batch_num_spaced_values);
     PARQUET_ASSIGN_OR_THROW(
         data_slice,
@@ -2817,7 +2850,7 @@ struct SerializeFunctor<
   // proportional to the precision. Arrow's Decimal are always stored with 16/32
   // bytes. Thus the internal FLBA pointer must be adjusted by the offset
   // calculated here.
-  int32_t Offset(const Array& array) {
+  int32_t Offset(const ::arrow::Array& array) {
     auto decimal_type =
         checked_pointer_cast<::arrow::DecimalType>(array.type());
     return decimal_type->byte_width() -

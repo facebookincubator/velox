@@ -160,8 +160,7 @@ TEST_P(AllWriterCompressionTest, compression) {
     getFooter().add_statistics();
   }
 
-  if (compressionKind_ == CompressionKind::CompressionKind_SNAPPY ||
-      compressionKind_ == CompressionKind::CompressionKind_LZO ||
+  if (compressionKind_ == CompressionKind::CompressionKind_LZO ||
       compressionKind_ == CompressionKind::CompressionKind_LZ4 ||
       compressionKind_ == CompressionKind::CompressionKind_GZIP ||
       compressionKind_ == CompressionKind::CompressionKind_MAX) {
