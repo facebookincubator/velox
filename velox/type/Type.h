@@ -2390,6 +2390,16 @@ struct IsRowType<Row<Ts...>> {
 
 } // namespace facebook::velox
 
+namespace std {
+template <>
+struct hash<::facebook::velox::UnknownValue> {
+  size_t operator()(const ::facebook::velox::UnknownValue& /* value */) const {
+    return 0;
+  }
+};
+
+} // namespace std
+
 namespace folly {
 template <>
 struct hasher<::facebook::velox::UnknownValue> {
