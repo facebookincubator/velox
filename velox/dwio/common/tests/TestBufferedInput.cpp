@@ -87,8 +87,8 @@ void expectPreadvs(
             EXPECT_EQ(read.label, region.label);
           }
           ASSERT_LE(region.offset + region.length, content.size());
-          iobuf = folly::IOBuf(
-              folly::IOBuf::COPY_BUFFER,
+          memcpy(
+              iobuf.writableData(),
               content.data() + region.offset,
               region.length);
         }

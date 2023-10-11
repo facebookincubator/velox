@@ -68,7 +68,6 @@ void ReadFile::preadv(
   for (size_t i = 0; i < regions.size(); ++i) {
     const auto& region = regions[i];
     auto& output = iobufs[i];
-    output = folly::IOBuf(folly::IOBuf::CREATE, region.length);
     pread(region.offset, region.length, output.writableData());
     output.append(region.length);
   }
