@@ -169,6 +169,38 @@ TEST_F(GeometricMeanTest, groupByDoubles) {
   testAggregations({data}, {"c0"}, {"geometric_mean(c1)"}, {expected});
 }
 
+TEST_F(GeometricMeanTest, globalReals) {
+  auto data = makeRowVector({
+      makeFlatVector<float>(100, [](auto row) { return row * 0.1 / 7; }),
+  });
+
+  auto expected = makeRowVector({
+      makeFlatVector(std::vector<float>{static_cast<float>(
+          geometricMean(0, 100, 1, [&](int32_t i) { return i * 0.1 / 7; }))}),
+  });
+
+  testAggregations({data}, {}, {"geometric_mean(c0)"}, {expected});
+}
+
+TEST_F(GeometricMeanTest, groupByReals) {
+  auto data = makeRowVector({
+      makeFlatVector<int32_t>(100, [](auto row) { return row / 10; }),
+      makeFlatVector<float>(100, [](auto row) { return row * 0.1; }),
+  });
+
+  auto expected = makeRowVector({
+      makeFlatVector<int32_t>({0, 1, 2, 3, 4, 5, 6, 7, 8, 9}),
+      makeFlatVector<float>(
+          10,
+          [](auto row) {
+            return geometricMean(
+                0, 10, 1, [&](int32_t i) { return row + i * 0.1; });
+          }),
+  });
+
+  testAggregations({data}, {"c0"}, {"geometric_mean(c1)"}, {expected});
+}
+
 TEST_F(GeometricMeanTest, groupByMultipleBatches) {
   auto data = {
       makeRowVector({
