@@ -908,6 +908,57 @@ struct ConvFunction {
 
   static constexpr bool is_default_ascii_behavior = true;
 
+  const uint64_t maxUnsignedInt64_ = 0xFFFFFFFFFFFFFFFF;
+
+  uint64_t parseNumber(
+      const arg_type<Varchar>& input,
+      int32_t fromBase,
+      bool isNegativeInput) {
+    int startIndex = isNegativeInput ? 1 : 0;
+    std::vector<int> numberVector;
+    for (int i = startIndex; i < input.size(); i++) {
+      char c = input.data()[i];
+      int number;
+      if (std::isdigit(c)) {
+        number = c - '0';
+        // Only valid characters will be converted till the first
+        // occurence of invalid character.
+        if (number >= fromBase) {
+          break;
+        }
+        numberVector.push_back(number);
+      } else if (std::islower(c)) {
+        number = c - 'a' + 10;
+        if (number >= fromBase) {
+          break;
+        }
+        numberVector.push_back(number);
+      } else if (std::isupper(c)) {
+        number = c - 'A' + 10;
+        if (number >= fromBase) {
+          break;
+        }
+        numberVector.push_back(number);
+      } else if (c == ' ') {
+        continue;
+      } else {
+        break;
+      }
+    }
+    int base = 1;
+    uint64_t unsignedValue = 0;
+    for (int i = numberVector.size() - 1; i >= 0; i--) {
+      uint64_t originalValue = unsignedValue;
+      unsignedValue += numberVector[i] * base;
+      // Overflow case.
+      if (unsignedValue < originalValue) {
+        return maxUnsignedInt64_;
+      }
+      base *= fromBase;
+    }
+    return unsignedValue;
+  }
+
   FOLLY_ALWAYS_INLINE bool call(
       out_type<Varchar>& result,
       const arg_type<Varchar>& input,
@@ -926,40 +977,27 @@ struct ConvFunction {
       return false;
     }
 
-    // Fast path for case '0', regardless of fromBase/toBase.
-    if (input.data()[0] == '0' && input.size() == 1) {
-      result.append(input);
-      return true;
-    }
-
-    // No need to do the conversion.
-    if (fromBase == toBase) {
-      result.append(input);
-      return true;
-    }
-
     bool isNegativeInput;
-    char* inputChars = (char*)malloc(input.size() + 1);
-    std::memcpy(inputChars, input.data(), input.size());
-    inputChars[input.size()] = '\0';
-    unsigned long unsignedValue;
     if (input.data()[0] == '-') {
       isNegativeInput = true;
-      unsignedValue = strtoul(inputChars + 1, nullptr, fromBase);
     } else {
       isNegativeInput = false;
-      unsignedValue = strtoul(inputChars, nullptr, fromBase);
     }
-    free(inputChars);
+    uint64_t unsignedValue = parseNumber(input, fromBase, isNegativeInput);
+    if (unsignedValue == 0) {
+      result.append("0");
+      return true;
+    }
 
     bool hasNegativeMark = false;
-    const unsigned long maxUnsignedInt64 = 0xFFFFFFFFFFFFFFFF;
-    if (isNegativeInput && toBase < 0) {
-      hasNegativeMark = true;
-    } else if (isNegativeInput && toBase > 0) {
-      // If toBase > 0, the result is unsigned. Converts the original nagative
-      // value to unsigned one.
-      unsignedValue = maxUnsignedInt64 - unsignedValue + 1;
+    if (isNegativeInput) {
+      if (toBase < 0) {
+        hasNegativeMark = true;
+      } else {
+        // If toBase > 0, the result is unsigned. Converts the original nagative
+        // value to unsigned one.
+        unsignedValue = maxUnsignedInt64_ - unsignedValue + 1;
+      }
     }
     toBase = toBase < 0 ? -toBase : toBase;
 

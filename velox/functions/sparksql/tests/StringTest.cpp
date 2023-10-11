@@ -734,15 +734,29 @@ TEST_F(StringTest, conv) {
   EXPECT_EQ(conv("110", 2, 10), "6");
   EXPECT_EQ(conv("15", 10, 16), "F");
   EXPECT_EQ(conv("big", 36, 16), "3A48");
-  EXPECT_EQ(conv("9223372036854775807", 36, 16), "FFFFFFFFFFFFFFFF");
-  // Space is contained, but has no impact on the conversion.
-  EXPECT_EQ(conv(" 15 ", 10, 16), "F");
   EXPECT_EQ(conv("-15", 10, -16), "-F");
   EXPECT_EQ(conv("-15", 10, 16), "FFFFFFFFFFFFFFF1");
   EXPECT_EQ(conv("-10", 16, -10), "-16");
-  // If there is an invalid digit in the number, the longest
-  // valid prefix should be converted.
+
+  // Overflow case.
+  EXPECT_EQ(conv("9223372036854775807", 36, 16), "FFFFFFFFFFFFFFFF");
+
+  // Test with space contained.
+  EXPECT_EQ(conv("15 ", 10, 16), "F");
+  EXPECT_EQ(conv(" 15 ", 10, 16), "F");
+
+  // Test with invalid characters.
+  // Only converts "11".
   EXPECT_EQ(conv("11abc", 10, 16), "B");
+  // Only converts "F".
+  EXPECT_EQ(conv("FH", 16, 10), "15");
+  // Discards followed invalid character even though converting to same base.
+  EXPECT_EQ(conv("FH", 16, 16), "F");
+  // Begins with invalid character.
+  EXPECT_EQ(conv("HF", 16, 10), "0");
+  // All are invalid for binary base.
+  EXPECT_EQ(conv("2345", 2, 10), "0");
+
   // Test null result.
   EXPECT_EQ(conv("", 10, 16), std::nullopt);
   EXPECT_EQ(conv("", std::nullopt, 16), std::nullopt);
