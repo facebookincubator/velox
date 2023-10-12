@@ -450,6 +450,12 @@ TEST_P(PrestoSerializerTest, roundTrip) {
   }
 }
 
+TEST_P(PrestoSerializerTest, emptyArrayOfRowVector) {
+  // The value of nullCount_ + nonNullCount_ of the inner RowVector is 0.
+  auto arrayOfRow = vectorMaker_->arrayOfRowVector(ROW({UNKNOWN()}), {{}});
+  testRoundTrip(arrayOfRow);
+}
+
 INSTANTIATE_TEST_SUITE_P(
     PrestoSerializerTest,
     PrestoSerializerTest,
