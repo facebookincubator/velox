@@ -401,6 +401,26 @@ std::vector<std::shared_ptr<exec::FunctionSignature>> signatures(
   return signatures;
 }
 
+std::vector<std::shared_ptr<exec::FunctionSignature>> relaxSignatures() {
+  std::vector<std::shared_ptr<exec::FunctionSignature>> signatures = {
+      // array(T) -> array(T)
+      exec::FunctionSignatureBuilder()
+          .typeVariable("T")
+          .returnType("array(T)")
+          .argumentType("array(T)")
+          .build(),
+      // array(T), function(T,U), boolean -> array(T)
+      exec::FunctionSignatureBuilder()
+          .typeVariable("T")
+          .typeVariable("U")
+          .returnType("array(T)")
+          .argumentType("array(T)")
+          .constantArgumentType("function(T,U)")
+          .build(),
+  };
+  return signatures;
+}
+
 core::CallTypedExprPtr asArraySortCall(
     const std::string& prefix,
     const core::TypedExprPtr& expr) {
@@ -463,5 +483,10 @@ VELOX_DECLARE_STATEFUL_VECTOR_FUNCTION(
     udf_array_sort_desc,
     signatures(false),
     createDesc);
+
+VELOX_DECLARE_STATEFUL_VECTOR_FUNCTION(
+    udf_array_sort_relax,
+    relaxSignatures(),
+    createAsc);
 
 } // namespace facebook::velox::functions
