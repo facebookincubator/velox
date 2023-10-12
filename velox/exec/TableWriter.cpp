@@ -142,7 +142,7 @@ void TableWriter::addInput(RowVectorPtr input) {
 
 void TableWriter::noMoreInput() {
   LOG(ERROR) << "-------- " << driverCtx_->task->taskId()
-             << "TableWriter::noMoreInput";
+             << " TableWriter::noMoreInput";
   Operator::noMoreInput();
   if (aggregation_ != nullptr) {
     aggregation_->noMoreInput();
@@ -167,6 +167,7 @@ RowVectorPtr TableWriter::getOutput() {
   finished_ = true;
   updateWrittenBytes();
   updateNumWrittenFiles();
+  // trigger writer close
   const std::vector<std::string> fragments = closeDataSink();
 
   if (outputType_->size() == 1) {
