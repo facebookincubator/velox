@@ -539,10 +539,10 @@ class MinMaxByAggregateBase : public exec::Aggregate {
         sizeof(ComparisonAccumulatorType));
   }
 
+  const bool throwOnNestedNulls_;
   DecodedVector decodedValue_;
   DecodedVector decodedComparison_;
   DecodedVector decodedIntermediateResult_;
-  const bool throwOnNestedNulls_;
 };
 
 template <
