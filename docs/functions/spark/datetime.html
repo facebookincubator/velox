@@ -56,6 +56,17 @@ deducted from start_date.</p>
 </dd></dl>
 
 <dl class="spark function">
+<dt class="sig sig-object spark" id="datediff">
+<span class="sig-name descname"><span class="pre">datediff</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">endDate</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">startDate</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">integer</span></span></span><a class="headerlink" href="#datediff" title="Permalink to this definition">¶</a></dt>
+<dd><p>Returns the number of days from startDate to endDate. Only DATE type is allowed
+for input.</p>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">SELECT</span> <span class="n">datediff</span><span class="p">(</span><span class="s1">&#39;2009-07-31&#39;</span><span class="p">,</span> <span class="s1">&#39;2009-07-30&#39;</span><span class="p">);</span> <span class="o">--</span> <span class="mi">1</span>
+<span class="n">SELECT</span> <span class="n">datediff</span><span class="p">(</span><span class="s1">&#39;2009-07-30&#39;</span><span class="p">,</span> <span class="s1">&#39;2009-07-31&#39;</span><span class="p">);</span> <span class="o">--</span> <span class="o">-</span><span class="mi">1</span>
+</pre></div>
+</div>
+</dd></dl>
+
+<dl class="spark function">
 <dt class="sig sig-object spark" id="date_sub">
 <span class="sig-name descname"><span class="pre">date_sub</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">start_date</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">num_days</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">date</span></span></span><a class="headerlink" href="#date_sub" title="Permalink to this definition">¶</a></dt>
 <dd><p>Returns the date that is num_days before start_date. According to the inputs,
