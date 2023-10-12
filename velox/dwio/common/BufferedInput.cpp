@@ -27,7 +27,7 @@ namespace facebook::velox::dwio::common {
 
 void BufferedInput::load(const LogType logType) {
   // no regions to load
-  if (regions_.size() == 0) {
+  if (regions_.empty()) {
     return;
   }
 
@@ -48,9 +48,7 @@ void BufferedInput::load(const LogType logType) {
     for (size_t i = 0; i < regions_.size(); ++i) {
       const auto& region = regions_[i];
       allocatedBufs[i] = allocate(region);
-      auto iobuf = folly::IOBuf::wrapBuffer(allocatedBufs[i]);
-      auto& b = iobufs[i];
-      b = *iobuf;
+      iobufs[i] = folly::IOBuf::wrapBufferAsValue(allocatedBufs[i]);
     }
     // Now we have all buffers and regions, load it in parallel
     input_->vread(regions_, {iobufs.data(), iobufs.size()}, logType);
