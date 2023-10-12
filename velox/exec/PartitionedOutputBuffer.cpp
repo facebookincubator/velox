@@ -46,6 +46,7 @@ std::vector<std::shared_ptr<SerializedPage>> ArbitraryBuffer::getPages(
       // destination buffers after the buffers have all been consumed.
       VELOX_CHECK_EQ(pages_.size(), 1);
       pages.push_back(nullptr);
+      LOG(ERROR) << "-------- "  << "ArbitraryBuffer::getPages nullptr";
       break;
     }
     bytesRemoved += pages_.front()->size();
