@@ -327,11 +327,7 @@ struct DateDiffFunction {
       int32_t& result,
       const arg_type<Date>& endDate,
       const arg_type<Date>& startDate) {
-    int64_t value = diffDate(DateTimeUnit::kDay, startDate, endDate);
-    if (value != (int32_t)value) {
-      VELOX_UNSUPPORTED("integer overflow");
-    }
-    result = (int32_t)value;
+    result = endDate - startDate;
   }
 };
 } // namespace facebook::velox::functions::sparksql

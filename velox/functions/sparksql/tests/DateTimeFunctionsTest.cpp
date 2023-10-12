@@ -383,12 +383,6 @@ TEST_F(DateTimeFunctionsTest, dateDiffDate) {
   const auto dateDiff = [&](std::optional<int32_t> endDate,
                             std::optional<int32_t> startDate) {
     return evaluateOnce<int32_t, int32_t>(
-        "date_diff(c0, c1)", {endDate, startDate}, {DATE(), DATE()});
-  };
-
-  const auto dateDiffAlias = [&](std::optional<int32_t> endDate,
-                                 std::optional<int32_t> startDate) {
-    return evaluateOnce<int32_t, int32_t>(
         "datediff(c0, c1)", {endDate, startDate}, {DATE(), DATE()});
   };
 
@@ -404,12 +398,10 @@ TEST_F(DateTimeFunctionsTest, dateDiffDate) {
   EXPECT_EQ(
       -737790, dateDiff(parseDate("2020-02-29"), parseDate("4040-02-29")));
 
-  // Negative year.
+  // Overflowed result, consistent with spark.
   EXPECT_EQ(
       2147474628,
       dateDiff(parseDate("-5877641-06-23"), parseDate("1994-09-12")));
-
-  EXPECT_EQ(0, dateDiffAlias(parseDate("1994-04-20"), parseDate("1994-04-20")));
 }
 
 } // namespace

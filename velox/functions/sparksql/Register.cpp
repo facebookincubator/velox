@@ -233,8 +233,6 @@ void registerFunctions(const std::string& prefix) {
   registerFunction<MakeDateFunction, Date, int32_t, int32_t, int32_t>(
       {prefix + "make_date"});
   registerFunction<DateDiffFunction, int32_t, Date, Date>(
-      {prefix + "date_diff"});
-  registerFunction<DateDiffFunction, int32_t, Date, Date>(
       {prefix + "datediff"});
   registerFunction<LastDayFunction, Date, Date>({prefix + "last_day"});
 
