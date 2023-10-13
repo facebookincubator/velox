@@ -484,6 +484,9 @@ VELOX_DECLARE_STATEFUL_VECTOR_FUNCTION(
     signatures(false),
     createDesc);
 
+// Add an internal version of array_sort for used by AggregationFuzzerTest to
+// transform or sort the results to a value that can be verified, details in
+// https://github.com/facebookincubator/velox/issues/6999.
 VELOX_DECLARE_STATEFUL_VECTOR_FUNCTION(
     udf_array_sort_relax,
     relaxSignatures(),
