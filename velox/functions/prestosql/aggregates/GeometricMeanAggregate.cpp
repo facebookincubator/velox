@@ -113,38 +113,24 @@ void registerGeometricMeanAggregate(const std::string& prefix) {
           -> std::unique_ptr<exec::Aggregate> {
         VELOX_USER_CHECK_EQ(argTypes.size(), 1, "{} takes one argument", name);
         auto inputType = argTypes[0];
-        if (exec::isRawInput(step)) {
-          switch (inputType->kind()) {
-            case TypeKind::BIGINT:
-              return std::make_unique<SimpleAggregateAdapter<
-                  GeometricMeanAggregate<int64_t, double>>>(resultType);
-            case TypeKind::DOUBLE:
-              return std::make_unique<SimpleAggregateAdapter<
-                  GeometricMeanAggregate<double, double>>>(resultType);
-            case TypeKind::REAL:
-              return std::make_unique<
-                  SimpleAggregateAdapter<GeometricMeanAggregate<float, float>>>(
-                  resultType);
-            default:
-              VELOX_USER_FAIL(
-                  "Unknown input type for {} aggregation {}",
-                  name,
-                  inputType->toString());
-          }
-        } else {
-          switch (resultType->kind()) {
-            case TypeKind::DOUBLE:
-            case TypeKind::ROW:
-              return std::make_unique<SimpleAggregateAdapter<
-                  GeometricMeanAggregate<double, double>>>(resultType);
-            case TypeKind::REAL:
-              return std::make_unique<SimpleAggregateAdapter<
-                  GeometricMeanAggregate<double, float>>>(resultType);
-            default:
-              VELOX_USER_FAIL(
-                  "Unsupported result type for final aggregation: {}",
-                  resultType->toString());
-          }
+
+        switch (inputType->kind()) {
+          case TypeKind::BIGINT:
+            return std::make_unique<SimpleAggregateAdapter<
+                GeometricMeanAggregate<int64_t, double>>>(resultType);
+          case TypeKind::DOUBLE:
+            return std::make_unique<
+                SimpleAggregateAdapter<GeometricMeanAggregate<double, double>>>(
+                resultType);
+          case TypeKind::REAL:
+            return std::make_unique<
+                SimpleAggregateAdapter<GeometricMeanAggregate<float, float>>>(
+                resultType);
+          default:
+            VELOX_USER_FAIL(
+                "Unknown input type for {} aggregation {}",
+                name,
+                inputType->toString());
         }
       },
       false);
