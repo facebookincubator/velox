@@ -20,8 +20,6 @@
 #include "velox/functions/lib/aggregates/DecimalAggregate.h"
 #include "velox/functions/lib/aggregates/SimpleNumericAggregate.h"
 
-using namespace facebook::velox::aggregate;
-
 namespace facebook::velox::functions::aggregate {
 
 template <typename TInput, typename TAccumulator, typename ResultType>
@@ -130,7 +128,8 @@ class SumAggregateBase
     const auto& arg = args[0];
 
     if (mayPushdown && arg->isLazy()) {
-      BaseAggregate::template pushdown<SumHook<TValue, TData>>(
+      BaseAggregate::template pushdown<
+          facebook::velox::aggregate::SumHook<TValue, TData>>(
           groups, rows, arg);
       return;
     }
@@ -196,4 +195,4 @@ class DecimalSumAggregate
   }
 };
 
-} // namespace facebook::velox::aggregate::prestosql
+} // namespace facebook::velox::functions::aggregate

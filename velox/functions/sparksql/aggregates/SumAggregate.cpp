@@ -19,7 +19,7 @@ using namespace facebook::velox::functions::aggregate;
 
 namespace facebook::velox::functions::aggregate::sparksql {
 
-exec::AggregateRegistrationResult registerSum(const std::string& name) {
+void registerSum(const std::string& name) {
   std::vector<std::shared_ptr<exec::AggregateFunctionSignature>> signatures{
       exec::AggregateFunctionSignatureBuilder()
           .returnType("real")
@@ -41,7 +41,7 @@ exec::AggregateRegistrationResult registerSum(const std::string& name) {
                              .build());
   }
 
-  return exec::registerAggregateFunction(
+  exec::registerAggregateFunction(
       name,
       std::move(signatures),
       [name](
