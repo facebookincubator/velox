@@ -19,7 +19,7 @@
 #include "velox/common/base/AsyncSource.h"
 #include "velox/common/testutil/TestValue.h"
 #include "velox/exec/Aggregate.h"
-#include "velox/exec/TimSort.hpp"
+#include "velox/external/timsort/TimSort.hpp"
 
 using facebook::velox::common::testutil::TestValue;
 

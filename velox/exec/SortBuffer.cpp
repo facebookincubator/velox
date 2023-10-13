@@ -16,7 +16,6 @@
 
 #include "SortBuffer.h"
 #include "velox/exec/MemoryReclaimer.h"
-#include "velox/exec/TimSort.hpp"
 #include "velox/vector/BaseVector.h"
 
 namespace facebook::velox::exec {
@@ -119,7 +118,7 @@ void SortBuffer::noMoreInput() {
     sortedRows_.resize(numInputRows_);
     RowContainerIterator iter;
     data_->listRows(&iter, numInputRows_, sortedRows_.data());
-    gfx::timsort(
+    std::sort(
         sortedRows_.begin(),
         sortedRows_.end(),
         [this](const char* leftRow, const char* rightRow) {
