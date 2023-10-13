@@ -534,7 +534,7 @@ static void addVectorBindings(
         size_t vectorSize = values.size() > 0 ? values[0]->size() : 0;
         for (int i = 0; i < values.size(); i++) {
           // choose child with smallest size to calculate the vector size
-          if(i > 0 && values[i]->size() < vectorSize) {
+          if (i > 0 && values[i]->size() < vectorSize) {
             vectorSize = values[i]->size();
           }
           childTypes.push_back(values[i]->type());
@@ -546,12 +546,15 @@ static void addVectorBindings(
           auto nullabilityValues = nullabilityDict.value();
           nullabilityBuffer = AlignedBuffer::allocate<bool>(
               values.size(),
-              PyVeloxContext::getSingletonInstance().pool(), true);
-          for (const auto &&item : nullabilityValues) {
+              PyVeloxContext::getSingletonInstance().pool(),
+              true);
+          for (const auto&& item : nullabilityValues) {
             auto row = item.first;
             auto nullability = item.second;
-            if (!py::isinstance<py::int_>(row) || !py::isinstance<py::bool_>(nullability)) {
-              throw py::type_error("nullability must be a dictionary, rowId in int and nullability in boolean");
+            if (!py::isinstance<py::int_>(row) ||
+                !py::isinstance<py::bool_>(nullability)) {
+              throw py::type_error(
+                  "nullability must be a dictionary, rowId in int and nullability in boolean");
             }
             int rowId = py::cast<int>(row);
             bool nullabilityVal = py::cast<bool>(nullability);
