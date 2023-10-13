@@ -75,6 +75,7 @@ add_executable(
   RepeatTest.cpp
   ReverseTest.cpp
   RoundTest.cpp
+  RowFunctionTest.cpp
   ScalarFunctionRegTest.cpp
   SimpleComparisonMatcherTest.cpp
   SliceTest.cpp
