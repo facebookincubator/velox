@@ -13,16 +13,19 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-#include "velox/exec/Spill.h"
+
 #include <gtest/gtest.h>
 #include <algorithm>
 #include <memory>
+
 #include "velox/common/base/RuntimeMetrics.h"
 #include "velox/common/base/tests/GTestUtils.h"
 #include "velox/common/file/FileSystems.h"
 #include "velox/exec/OperatorUtils.h"
+#include "velox/exec/Spill.h"
 #include "velox/exec/tests/utils/TempDirectoryPath.h"
 #include "velox/serializers/PrestoSerializer.h"
+#include "velox/type/Timestamp.h"
 #include "velox/vector/tests/utils/VectorTestBase.h"
 
 using namespace facebook::velox;
@@ -87,6 +90,7 @@ class SpillTest : public ::testing::TestWithParam<common::CompressionKind>,
 
   void setupSpillState(
       int64_t targetFileSize,
+      uint64_t writeBufferSize,
       int numPartitions,
       int numBatches,
       int numRowsPerBatch = 1000,
@@ -153,6 +157,7 @@ class SpillTest : public ::testing::TestWithParam<common::CompressionKind>,
         1,
         compareFlags,
         targetFileSize,
+        writeBufferSize,
         compressionKind_,
         pool(),
         &stats_);
@@ -256,6 +261,7 @@ class SpillTest : public ::testing::TestWithParam<common::CompressionKind>,
     const auto prevGStats = globalSpillStats();
     setupSpillState(
         targetFileSize,
+        0,
         numPartitions,
         numBatches,
         numRowsPerBatch,
@@ -356,8 +362,9 @@ class SpillTest : public ::testing::TestWithParam<common::CompressionKind>,
     ASSERT_EQ(
         finalStats.toString(),
         fmt::format(
-            "spillRuns[{}] spilledBytes[{}] spilledRows[{}] spilledPartitions[{}] spilledFiles[{}] spillFillTimeUs[{}] spillSortTime[{}] spillSerializationTime[{}] spillDiskWrites[{}] spillFlushTime[{}] spillWriteTime[{}]",
+            "spillRuns[{}] spilledInputBytes[{}] spilledBytes[{}] spilledRows[{}] spilledPartitions[{}] spilledFiles[{}] spillFillTimeUs[{}] spillSortTime[{}] spillSerializationTime[{}] spillDiskWrites[{}] spillFlushTime[{}] spillWriteTime[{}]",
             finalStats.spillRuns,
+            succinctBytes(finalStats.spilledInputBytes),
             succinctBytes(finalStats.spilledBytes),
             finalStats.spilledRows,
             finalStats.spilledPartitions,
@@ -420,7 +427,9 @@ TEST_P(SpillTest, spillTimestamp) {
       Timestamp{12, 0},
       Timestamp{0, 17'123'456},
       Timestamp{1, 17'123'456},
-      Timestamp{-1, 17'123'456}};
+      Timestamp{-1, 17'123'456},
+      Timestamp{Timestamp::kMaxSeconds, Timestamp::kMaxNanos},
+      Timestamp{Timestamp::kMinSeconds, 0}};
 
   SpillState state(
       spillPath,
@@ -428,6 +437,7 @@ TEST_P(SpillTest, spillTimestamp) {
       1,
       emptyCompareFlags,
       1024,
+      0,
       compressionKind_,
       pool(),
       &stats_);
@@ -675,6 +685,7 @@ INSTANTIATE_TEST_SUITE_P(
     SpillTestSuite,
     SpillTest,
     ::testing::Values(
+        common::CompressionKind::CompressionKind_NONE,
         common::CompressionKind::CompressionKind_ZLIB,
         common::CompressionKind::CompressionKind_SNAPPY,
         common::CompressionKind::CompressionKind_ZSTD,
@@ -683,7 +694,9 @@ INSTANTIATE_TEST_SUITE_P(
 
 TEST(SpillTest, spillStats) {
   SpillStats stats1;
+  ASSERT_TRUE(stats1.empty());
   stats1.spillRuns = 100;
+  stats1.spilledInputBytes = 2048;
   stats1.spilledBytes = 1024;
   stats1.spilledPartitions = 1024;
   stats1.spilledFiles = 1023;
@@ -694,8 +707,10 @@ TEST(SpillTest, spillStats) {
   stats1.spillFillTimeUs = 1023;
   stats1.spilledRows = 1023;
   stats1.spillSerializationTimeUs = 1023;
+  ASSERT_FALSE(stats1.empty());
   SpillStats stats2;
   stats2.spillRuns = 100;
+  stats2.spilledInputBytes = 2048;
   stats2.spilledBytes = 1024;
   stats2.spilledPartitions = 1025;
   stats2.spilledFiles = 1026;
@@ -721,6 +736,7 @@ TEST(SpillTest, spillStats) {
   ASSERT_TRUE(stats1 <= stats1);
 
   SpillStats delta = stats2 - stats1;
+  ASSERT_EQ(delta.spilledInputBytes, 0);
   ASSERT_EQ(delta.spilledBytes, 0);
   ASSERT_EQ(delta.spilledPartitions, 1);
   ASSERT_EQ(delta.spilledFiles, 3);
@@ -732,6 +748,7 @@ TEST(SpillTest, spillStats) {
   ASSERT_EQ(delta.spilledRows, 8);
   ASSERT_EQ(delta.spillSerializationTimeUs, 9);
   delta = stats1 - stats2;
+  ASSERT_EQ(delta.spilledInputBytes, 0);
   ASSERT_EQ(delta.spilledBytes, 0);
   ASSERT_EQ(delta.spilledPartitions, -1);
   ASSERT_EQ(delta.spilledFiles, -3);
@@ -742,6 +759,7 @@ TEST(SpillTest, spillStats) {
   ASSERT_EQ(delta.spillFillTimeUs, -7);
   ASSERT_EQ(delta.spilledRows, -8);
   ASSERT_EQ(delta.spillSerializationTimeUs, -9);
+  stats1.spilledInputBytes = 2060;
   stats1.spilledBytes = 1030;
   VELOX_ASSERT_THROW(stats1 < stats2, "");
   VELOX_ASSERT_THROW(stats1 > stats2, "");
@@ -754,5 +772,5 @@ TEST(SpillTest, spillStats) {
   ASSERT_EQ(zeroStats, stats1);
   ASSERT_EQ(
       stats2.toString(),
-      "spillRuns[100] spilledBytes[1.00KB] spilledRows[1031] spilledPartitions[1025] spilledFiles[1026] spillFillTimeUs[1.03ms] spillSortTime[1.03ms] spillSerializationTime[1.03ms] spillDiskWrites[1028] spillFlushTime[1.03ms] spillWriteTime[1.03ms]");
+      "spillRuns[100] spilledInputBytes[2.00KB] spilledBytes[1.00KB] spilledRows[1031] spilledPartitions[1025] spilledFiles[1026] spillFillTimeUs[1.03ms] spillSortTime[1.03ms] spillSerializationTime[1.03ms] spillDiskWrites[1028] spillFlushTime[1.03ms] spillWriteTime[1.03ms]");
 }

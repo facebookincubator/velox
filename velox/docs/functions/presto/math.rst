@@ -275,6 +275,12 @@ Probability Functions: cdf
     Compute the Gamma cdf with given shape and scale parameters: P(N < value; shape, scale).
     The shape and scale parameters must be positive real numbers. The value must be a non-negative real number.
 
+.. function:: laplace_cdf(mean, scale, value) -> double
+
+     Compute the Laplace cdf with given mean and scale parameters: P(N < value; mean, scale).
+     The mean and value must be real values and the scale parameter must be a
+     positive value (all of type DOUBLE).
+
 .. function:: normal_cdf(mean, sd, value) -> double
 
     Compute the Normal cdf with given mean and standard deviation (sd): P(N < value; mean, sd).
@@ -296,3 +302,18 @@ Probability Functions: inverse_cdf
     Compute the inverse of the Beta cdf with given a, b parameters for the cumulative
     probability (p): P(N < n). The a, b parameters must be positive real values (all of type DOUBLE).
     The probability p must lie on the interval [0, 1].
+
+
+====================================
+Statistical Functions
+====================================
+
+.. function:: wilson_interval_lower(successes, trials, z) -> double
+
+    Returns the lower bound of the Wilson score interval of a Bernoulli trial process
+    at a confidence specified by the z-score z.
+
+.. function:: wilson_interval_upper(successes, trials, z) -> double
+
+    Returns the upper bound of the Wilson score interval of a Bernoulli trial process
+    at a confidence specified by the z-score z.

@@ -18,7 +18,7 @@
 #include "velox/common/file/FileSystems.h"
 #include "velox/common/testutil/TestValue.h"
 #include "velox/connectors/hive/HiveConnectorSplit.h"
-#include "velox/dwio/common/DataSink.h"
+#include "velox/dwio/common/FileSink.h"
 #include "velox/dwio/common/tests/utils/BatchMaker.h"
 #include "velox/exec/Exchange.h"
 #include "velox/exec/PartitionedOutputBufferManager.h"
@@ -49,6 +49,10 @@ class MultiFragmentTest : public HiveConnectorTestBase {
     return fmt::format("local://{}-{}", prefix, num);
   }
 
+  static std::string makeBadTaskId(const std::string& prefix, int num) {
+    return fmt::format("bad://{}-{}", prefix, num);
+  }
+
   static exec::Consumer noopConsumer() {
     return [](RowVectorPtr, ContinueFuture*) {
       return BlockingReason::kNotBlocked;
@@ -63,7 +67,7 @@ class MultiFragmentTest : public HiveConnectorTestBase {
       int64_t maxMemory = memory::kMaxMemory) {
     auto configCopy = configSettings_;
     auto queryCtx = std::make_shared<core::QueryCtx>(
-        executor_.get(), std::move(configCopy));
+        executor_.get(), core::QueryConfig(std::move(configCopy)));
     queryCtx->testingOverrideMemoryPool(
         memory::defaultMemoryManager().addRootPool(
             queryCtx->queryId(), maxMemory));
@@ -146,12 +150,20 @@ class MultiFragmentTest : public HiveConnectorTestBase {
 
   void verifyExchangeStats(
       const std::shared_ptr<Task>& task,
-      int32_t expectedCount) const {
+      int32_t expectedNumPagesCount,
+      int32_t expectedBackgroundCpuCount) const {
     auto exchangeStats =
         task->taskStats().pipelineStats[0].operatorStats[0].runtimeStats;
     ASSERT_EQ(1, exchangeStats.count("localExchangeSource.numPages"));
     ASSERT_EQ(
-        expectedCount, exchangeStats.at("localExchangeSource.numPages").count);
+        expectedNumPagesCount,
+        exchangeStats.at("localExchangeSource.numPages").count);
+    ASSERT_EQ(
+        expectedBackgroundCpuCount,
+        exchangeStats.at(ExchangeClient::kBackgroundCpuTimeMs).count);
+    auto cpuBackgroundTimeMs =
+        task->taskStats().pipelineStats[0].operatorStats[0].backgroundTiming;
+    ASSERT_EQ(expectedBackgroundCpuCount, cpuBackgroundTimeMs.count);
   }
 
   RowTypePtr rowType_{
@@ -186,7 +198,7 @@ TEST_F(MultiFragmentTest, aggregationSingleKey) {
   for (int i = 0; i < 3; i++) {
     finalAggPlan = PlanBuilder()
                        .exchange(partialAggPlan->outputType())
-                       .finalAggregation({"c0"}, {"sum(a0)"}, {BIGINT()})
+                       .finalAggregation({"c0"}, {"sum(a0)"}, {{BIGINT()}})
                        .partitionedOutput({}, 1)
                        .planNode();
 
@@ -271,11 +283,12 @@ TEST_F(MultiFragmentTest, aggregationMultiKey) {
   core::PlanNodePtr finalAggPlan;
   std::vector<std::string> finalAggTaskIds;
   for (int i = 0; i < 3; i++) {
-    finalAggPlan = PlanBuilder()
-                       .exchange(partialAggPlan->outputType())
-                       .finalAggregation({"c0", "c1"}, {"sum(a0)"}, {BIGINT()})
-                       .partitionedOutput({}, 1)
-                       .planNode();
+    finalAggPlan =
+        PlanBuilder()
+            .exchange(partialAggPlan->outputType())
+            .finalAggregation({"c0", "c1"}, {"sum(a0)"}, {{BIGINT()}})
+            .partitionedOutput({}, 1)
+            .planNode();
 
     finalAggTaskIds.push_back(makeTaskId("final-agg", i));
     auto task = makeTask(finalAggTaskIds.back(), finalAggPlan, i);
@@ -316,7 +329,7 @@ TEST_F(MultiFragmentTest, distributedTableScan) {
     auto task =
         assertQuery(op, {leafTaskId}, "SELECT c2, c1 % 2, c0 % 10 FROM tmp");
 
-    verifyExchangeStats(task, 1);
+    verifyExchangeStats(task, 1, 1);
 
     ASSERT_TRUE(waitForTaskCompletion(leafTask.get())) << leafTask->taskId();
   }
@@ -464,7 +477,7 @@ TEST_F(MultiFragmentTest, partitionedOutput) {
     auto task =
         assertQuery(op, intermediateTaskIds, "SELECT c3, c0, c2 FROM tmp");
 
-    verifyExchangeStats(task, kFanout);
+    verifyExchangeStats(task, kFanout, kFanout);
 
     ASSERT_TRUE(waitForTaskCompletion(leafTask.get())) << leafTask->taskId();
   }
@@ -670,11 +683,11 @@ TEST_F(MultiFragmentTest, replicateNullsAndAny) {
 
   // Collect results and verify number of nulls is 3 times larger than in the
   // original data.
-  auto op =
-      PlanBuilder()
-          .exchange(finalAggPlan->outputType())
-          .finalAggregation({}, {"sum(a0)", "sum(a1)"}, {BIGINT(), BIGINT()})
-          .planNode();
+  auto op = PlanBuilder()
+                .exchange(finalAggPlan->outputType())
+                .finalAggregation(
+                    {}, {"sum(a0)", "sum(a1)"}, {{BIGINT()}, {BIGINT()}})
+                .planNode();
 
   assertQuery(
       op,
@@ -1305,7 +1318,7 @@ DEBUG_ONLY_TEST_F(
       })));
   auto rootPlan = PlanBuilder()
                       .exchange(leafPlan->outputType())
-                      .finalAggregation({"c0"}, {"count(c1)"}, {BIGINT()})
+                      .finalAggregation({"c0"}, {"count(c1)"}, {{BIGINT()}})
                       .planNode();
 
   const int64_t kRootMemoryLimit = 1 << 20;
@@ -1390,6 +1403,55 @@ TEST_F(MultiFragmentTest, taskTerminateWithPendingOutputBuffers) {
   receivedIobufs.clear();
   ASSERT_EQ(task.use_count(), 1);
   task.reset();
+}
+
+TEST_F(MultiFragmentTest, taskTerminateWithProblematicRemainingRemoteSplits) {
+  // Start the task with 2 drivers.
+  auto probeData =
+      makeRowVector({"p_c0"}, {makeFlatVector<int64_t>({1, 2, 3})});
+  auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
+  core::PlanNodeId exchangeNodeId;
+  auto plan = PlanBuilder(planNodeIdGenerator)
+                  .values({probeData}, true)
+                  .hashJoin(
+                      {"p_c0"},
+                      {"c0"},
+                      PlanBuilder(planNodeIdGenerator)
+                          .exchange(rowType_)
+                          .capturePlanNodeId(exchangeNodeId)
+                          .planNode(),
+                      "",
+                      {"c0"})
+                  .partitionedOutput({}, 1)
+                  .planNode();
+  auto taskId = makeTaskId("final", 0);
+  auto task = makeTask(taskId, plan, 0);
+  Task::start(task, 2);
+
+  // Wait for all drivers to be blocked, so that the promises will be made.
+  bool allDriversBlocked = false;
+  while (!allDriversBlocked) {
+    allDriversBlocked = true;
+    task->testingVisitDrivers([&](Driver* driver) {
+      if (driver->isOnThread() ||
+          (driver->blockingReason() != BlockingReason::kWaitForSplit &&
+           driver->blockingReason() != BlockingReason::kWaitForProducer &&
+           driver->blockingReason() != BlockingReason::kWaitForJoinBuild)) {
+        allDriversBlocked = false;
+      }
+    });
+  }
+
+  // Add one bad remote split and trigger Task::terminate.
+  task->addSplit(exchangeNodeId, remoteSplit(makeBadTaskId("leaf", 0)));
+
+  // Add one more bad split, making sure `remainingRemoteSplits` is not empty
+  // and processing it would cause an exception.
+  task->addSplit(exchangeNodeId, remoteSplit(makeBadTaskId("leaf", 1)));
+
+  // Wait for the task to fail, and make sure the task has been deleted instead
+  // of hanging as a zombie task.
+  ASSERT_TRUE(waitForTaskFailure(task.get(), 3'000'000)) << task->taskId();
 }
 
 DEBUG_ONLY_TEST_F(MultiFragmentTest, mergeWithEarlyTermination) {

@@ -24,6 +24,10 @@
 #include "velox/expression/FunctionSignature.h"
 #include "velox/vector/BaseVector.h"
 
+namespace facebook::velox::core {
+class ExpressionEvaluator;
+}
+
 namespace facebook::velox::exec {
 
 class AggregateFunctionSignature;
@@ -84,6 +88,18 @@ class Aggregate {
   void setAllocator(HashStringAllocator* allocator) {
     setAllocatorInternal(allocator);
   }
+
+  /// Called for functions that take one or more lambda expression as input.
+  /// These expressions must appear after all non-lambda inputs.
+  /// These expressions cannot use captures.
+  ///
+  /// @param lambdaExpressions A list of lambda inputs (in the order they appear
+  /// in function call).
+  /// @param expressionEvaluator An instance of ExpressionEvaluator to use for
+  /// evaluating lambda expressions.
+  void setLambdaExpressions(
+      std::vector<core::LambdaTypedExprPtr> lambdaExpressions,
+      std::shared_ptr<core::ExpressionEvaluator> expressionEvaluator);
 
   // Sets the offset and null indicator position of 'this'.
   // @param offset Offset in bytes from the start of the row of the accumulator
@@ -191,7 +207,7 @@ class Aggregate {
   //
   // 'result' and its parts are expected to be singly referenced. If
   // other threads or operators hold references that they would use
-  // after 'result' has been updated by this, effects will b unpredictable.
+  // after 'result' has been updated by this, effects will be unpredictable.
   virtual void
   extractValues(char** groups, int32_t numGroups, VectorPtr* result) = 0;
 
@@ -207,8 +223,8 @@ class Aggregate {
   /// Produces an accumulator initialized from a single value for each
   /// row in 'rows'. The raw arguments of the aggregate are in 'args',
   /// which have the same meaning as in addRawInput. The result is
-  /// placed in 'result'. 'result is allocated if nullptr, otherwise
-  /// it is expected to be a writable flat vector of the right type.
+  /// placed in 'result'. 'result' is expected to be a writable flat vector of
+  /// the right type.
   ///
   /// @param rows A set of rows to produce intermediate results for. The
   /// 'result' is expected to have rows.size() rows. Invalid rows represent rows
@@ -312,9 +328,23 @@ class Aggregate {
   }
 
   template <typename T>
+  void destroyAccumulator(char* group) const {
+    auto accumulator = value<T>(group);
+    std::destroy_at(accumulator);
+    memset(accumulator, 0, sizeof(T));
+  }
+
+  template <typename T>
+  void destroyAccumulators(folly::Range<char**> groups) const {
+    for (auto group : groups) {
+      destroyAccumulator<T>(group);
+    }
+  }
+
+  template <typename T>
   static uint64_t* getRawNulls(T* vector) {
     if (vector->mayHaveNulls()) {
-      BufferPtr nulls = vector->mutableNulls(vector->size());
+      BufferPtr& nulls = vector->mutableNulls(vector->size());
       return nulls->asMutable<uint64_t>();
     } else {
       return nullptr;
@@ -347,7 +377,9 @@ class Aggregate {
   // operator for this aggregate. If 0, clearing the null as part of update
   // is not needed.
   uint64_t numNulls_ = 0;
-  HashStringAllocator* allocator_;
+  HashStringAllocator* allocator_{nullptr};
+  std::shared_ptr<core::ExpressionEvaluator> expressionEvaluator_{nullptr};
+  std::vector<core::LambdaTypedExprPtr> lambdaExpressions_;
 
   // When selectivity vector has holes, in the pushdown, we need to generate a
   // different indices vector as the one we get from the DecodedVector is simply

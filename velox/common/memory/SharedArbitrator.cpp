@@ -210,6 +210,7 @@ bool SharedArbitrator::growMemory(
     // Get refreshed stats before the memory arbitration retry.
     candidates = getCandidateStats(candidatePools);
     if (arbitrateMemory(requestor, candidates, targetBytes)) {
+      ++numSucceeded_;
       return true;
     }
     if (numRetries > 0) {
@@ -394,27 +395,41 @@ uint64_t SharedArbitrator::reclaimUsedMemoryFromCandidates(
 uint64_t SharedArbitrator::reclaim(
     MemoryPool* pool,
     uint64_t targetBytes) noexcept {
-  const uint64_t oldCapacity = pool->capacity();
+  uint64_t reclaimDurationUs{0};
+  uint64_t reclaimedBytes{0};
   uint64_t freedBytes{0};
-  try {
-    freedBytes = pool->shrink(targetBytes);
-    if (freedBytes < targetBytes) {
-      pool->reclaim(targetBytes - freedBytes);
+  MemoryReclaimer::Stats reclaimerStats;
+  {
+    MicrosecondTimer reclaimTimer(&reclaimDurationUs);
+    const uint64_t oldCapacity = pool->capacity();
+    try {
+      freedBytes = pool->shrink(targetBytes);
+      if (freedBytes < targetBytes) {
+        pool->reclaim(targetBytes - freedBytes, reclaimerStats);
+      }
+    } catch (const std::exception& e) {
+      VELOX_MEM_LOG(ERROR) << "Failed to reclaim from memory pool "
+                           << pool->name() << ", aborting it!";
+      abort(pool, std::current_exception());
+      // Free up all the free capacity from the aborted pool as the associated
+      // query has failed at this point.
+      pool->shrink();
     }
-  } catch (const std::exception& e) {
-    VELOX_MEM_LOG(ERROR) << "Failed to reclaim from memory pool "
-                         << pool->name() << ", aborting it!";
-    abort(pool, std::current_exception());
-    // Free up all the free capacity from the aborted pool as the associated
-    // query has failed at this point.
-    pool->shrink();
+    const uint64_t newCapacity = pool->capacity();
+    VELOX_CHECK_GE(oldCapacity, newCapacity);
+    reclaimedBytes = oldCapacity - newCapacity;
   }
-  const uint64_t newCapacity = pool->capacity();
-  VELOX_CHECK_GE(oldCapacity, newCapacity);
-  const uint64_t reclaimedbytes = oldCapacity - newCapacity;
+  numReclaimedBytes_ += reclaimedBytes - freedBytes;
   numShrunkBytes_ += freedBytes;
-  numReclaimedBytes_ += reclaimedbytes - freedBytes;
-  return reclaimedbytes;
+  reclaimTimeUs_ += reclaimDurationUs;
+  numNonReclaimableAttempts_ += reclaimerStats.numNonReclaimableAttempts;
+  VELOX_MEM_LOG(INFO) << "Reclaimed from memory pool " << pool->name()
+                      << " with target of " << succinctBytes(targetBytes)
+                      << ", actually reclaimed " << succinctBytes(freedBytes)
+                      << " free memory and "
+                      << succinctBytes(reclaimedBytes - freedBytes)
+                      << " used memory";
+  return reclaimedBytes;
 }
 
 void SharedArbitrator::abort(
@@ -469,6 +484,7 @@ MemoryArbitrator::Stats SharedArbitrator::stats() const {
 MemoryArbitrator::Stats SharedArbitrator::statsLocked() const {
   Stats stats;
   stats.numRequests = numRequests_;
+  stats.numSucceeded = numSucceeded_;
   stats.numAborted = numAborted_;
   stats.numFailures = numFailures_;
   stats.queueTimeUs = queueTimeUs_;
@@ -477,6 +493,8 @@ MemoryArbitrator::Stats SharedArbitrator::statsLocked() const {
   stats.numReclaimedBytes = numReclaimedBytes_;
   stats.maxCapacityBytes = capacity_;
   stats.freeCapacityBytes = freeCapacity_;
+  stats.reclaimTimeUs = reclaimTimeUs_;
+  stats.numNonReclaimableAttempts = numNonReclaimableAttempts_;
   return stats;
 }
 
@@ -487,7 +505,7 @@ std::string SharedArbitrator::toString() const {
 
 std::string SharedArbitrator::toStringLocked() const {
   return fmt::format(
-      "ARBITRATOR[{}] CAPACITY {} {}",
+      "ARBITRATOR[{} CAPACITY[{}] {}]",
       kind_,
       succinctBytes(capacity_),
       statsLocked().toString());
@@ -498,10 +516,13 @@ SharedArbitrator::ScopedArbitration::ScopedArbitration(
     SharedArbitrator* arbitrator)
     : requestor_(requestor),
       arbitrator_(arbitrator),
-      startTime_(std::chrono::steady_clock::now()) {
-  VELOX_CHECK_NOT_NULL(requestor_);
+      startTime_(std::chrono::steady_clock::now()),
+      arbitrationCtx_(*requestor_) {
   VELOX_CHECK_NOT_NULL(arbitrator_);
   arbitrator_->startArbitration(requestor);
+  if (arbitrator_->arbitrationStateCheckCb_ != nullptr) {
+    arbitrator_->arbitrationStateCheckCb_(*requestor);
+  }
 }
 
 SharedArbitrator::ScopedArbitration::~ScopedArbitration() {
@@ -561,7 +582,7 @@ void SharedArbitrator::finishArbitration() {
   }
 }
 
-std::string SharedArbitrator::kind() {
+std::string SharedArbitrator::kind() const {
   return kind_;
 }
 

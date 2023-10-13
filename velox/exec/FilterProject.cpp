@@ -52,15 +52,21 @@ FilterProject::FilterProject(
           operatorId,
           project ? project->id() : filter->id(),
           "FilterProject"),
-      hasFilter_(filter != nullptr) {
+      hasFilter_(filter != nullptr),
+      project_(project),
+      filter_(filter) {}
+
+void FilterProject::initialize() {
+  Operator::initialize();
   std::vector<core::TypedExprPtr> allExprs;
   if (hasFilter_) {
-    allExprs.push_back(filter->filter());
+    VELOX_CHECK_NOT_NULL(filter_);
+    allExprs.push_back(filter_->filter());
   }
-  if (project) {
-    const auto& inputType = project->sources()[0]->outputType();
-    for (column_index_t i = 0; i < project->projections().size(); i++) {
-      auto& projection = project->projections()[i];
+  if (project_) {
+    const auto& inputType = project_->sources()[0]->outputType();
+    for (column_index_t i = 0; i < project_->projections().size(); i++) {
+      auto& projection = project_->projections()[i];
       bool identityProjection = checkAddIdentityProjection(
           projection, inputType, i, identityProjections_);
       if (!identityProjection) {
@@ -78,8 +84,8 @@ FilterProject::FilterProject(
   exprs_ = makeExprSetFromFlag(std::move(allExprs), operatorCtx_->execCtx());
 
   if (numExprs_ > 0 && !identityProjections_.empty()) {
-    auto inputType = project ? project->sources()[0]->outputType()
-                             : filter->sources()[0]->outputType();
+    const auto inputType = project_ ? project_->sources()[0]->outputType()
+                                    : filter_->sources()[0]->outputType();
     std::unordered_set<uint32_t> distinctFieldIndices;
     for (auto field : exprs_->distinctFields()) {
       auto fieldIndex = inputType->getChildIdx(field->name());
@@ -92,6 +98,8 @@ FilterProject::FilterProject(
       }
     }
   }
+  filter_.reset();
+  project_.reset();
 }
 
 void FilterProject::addInput(RowVectorPtr input) {

@@ -19,7 +19,7 @@
 #include <random>
 
 #include "velox/experimental/wave/common/Cuda.h"
-#include "velox/experimental/wave/common/IdMap.h"
+#include "velox/experimental/wave/common/IdMap.cuh"
 
 DEFINE_bool(benchmark, false, "");
 
@@ -43,7 +43,7 @@ struct IdMapHolder {
 
 template <typename T>
 __global__ void initTable(IdMap<T>* idMap) {
-  idMap->initTable();
+  idMap->clearTable();
 }
 
 template <typename T>
@@ -61,9 +61,10 @@ IdMapHolder<T> createIdMap(GpuAllocator* allocator, int capacity) {
 template <typename T>
 __global__ void
 runMakeIds(IdMap<T>* idMap, const T* values, int size, int32_t* output) {
-  int offset = blockIdx.x * blockDim.x;
-  size = min(blockDim.x, size - offset);
-  idMap->makeIds(values + offset, size, output + offset);
+  int step = gridDim.x * blockDim.x;
+  for (int i = threadIdx.x + blockIdx.x * blockDim.x; i < size; i += step) {
+    output[i] = idMap->makeId(values[i]);
+  }
 }
 
 template <typename T>
@@ -172,5 +173,9 @@ TEST(IdMapTest, overflowNoEmptyMarker) {
 int main(int argc, char** argv) {
   testing::InitGoogleTest(&argc, argv);
   folly::Init follyInit(&argc, &argv);
+  if (int device; cudaGetDevice(&device) != cudaSuccess) {
+    LOG(WARNING) << "No CUDA detected, skipping all tests";
+    return 0;
+  }
   return RUN_ALL_TESTS();
 }

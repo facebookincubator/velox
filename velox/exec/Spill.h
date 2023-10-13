@@ -145,6 +145,8 @@ class SpillFile {
 struct SpillStats {
   /// The number of times that spilling runs on an operator.
   uint64_t spillRuns{0};
+  /// The number of bytes in memory to spill
+  uint64_t spilledInputBytes{0};
   /// The number of bytes spilled to disks.
   ///
   /// NOTE: if compression is enabled, this counts the compressed bytes.
@@ -172,6 +174,7 @@ struct SpillStats {
 
   SpillStats(
       uint64_t _spillRuns,
+      uint64_t _spilledInputBytes,
       uint64_t _spilledBytes,
       uint64_t _spilledRows,
       uint32_t _spilledPartitions,
@@ -184,6 +187,8 @@ struct SpillStats {
       uint64_t _spillWriteTimeUs);
 
   SpillStats() = default;
+
+  bool empty() const;
 
   SpillStats& operator+=(const SpillStats& other);
   SpillStats operator-(const SpillStats& other) const;
@@ -228,6 +233,7 @@ class SpillFileList {
       const std::vector<CompareFlags>& sortCompareFlags,
       const std::string& path,
       uint64_t targetFileSize,
+      uint64_t writeBufferSize,
       common::CompressionKind compressionKind,
       memory::MemoryPool* pool,
       folly::Synchronized<SpillStats>* stats);
@@ -246,7 +252,7 @@ class SpillFileList {
   void finishFile();
 
   SpillFiles files() {
-    VELOX_CHECK(!files_.empty());
+    VELOX_CHECK(!files_.empty() || (batch_ != nullptr));
     finishFile();
     return std::move(files_);
   }
@@ -277,6 +283,7 @@ class SpillFileList {
   const std::vector<CompareFlags> sortCompareFlags_;
   const std::string path_;
   const uint64_t targetFileSize_;
+  const uint64_t writeBufferSize_;
   const common::CompressionKind compressionKind_;
   memory::MemoryPool* const pool_;
   folly::Synchronized<SpillStats>* const stats_;
@@ -573,6 +580,7 @@ class SpillState {
       int32_t numSortingKeys,
       const std::vector<CompareFlags>& sortCompareFlags,
       uint64_t targetFileSize,
+      uint64_t writeBufferSize,
       common::CompressionKind compressionKind,
       memory::MemoryPool* pool,
       folly::Synchronized<SpillStats>* stats);
@@ -612,16 +620,15 @@ class SpillState {
     return spilledPartitionSet_.size() == maxPartitions_;
   }
 
-  // Appends data to 'partition'. The rows given by 'indices' must be
-  // sorted for a sorted spill and must hash to 'partition'. It is
-  // safe to call this on multiple threads if all threads specify a
-  // different partition.
-  // Returns the size to sppend to partition.
+  /// Appends data to 'partition'. The rows given by 'indices' must be sorted
+  /// for a sorted spill and must hash to 'partition'. It is safe to call this
+  /// on multiple threads if all threads specify a different partition. Returns
+  /// the size to sppend to partition.
   uint64_t appendToPartition(int32_t partition, const RowVectorPtr& rows);
 
-  // Finishes a sorted run for 'partition'. If write is called for 'partition'
-  // again, the data does not have to be sorted relative to the data
-  // written so far.
+  /// Finishes a sorted run for 'partition'. If write is called for 'partition'
+  /// again, the data does not have to be sorted relative to the data written so
+  /// far.
   void finishWrite(int32_t partition) {
     VELOX_DCHECK(isPartitionSpilled(partition));
     files_[partition]->finishFile();
@@ -632,9 +639,9 @@ class SpillState {
   /// no spilled data.
   SpillFiles files(int32_t partition);
 
-  // Starts reading values for 'partition'. If 'extra' is non-null, it can be
-  // a stream of rows from a RowContainer so as to merge unspilled data with
-  // spilled data.
+  /// Starts reading values for 'partition'. If 'extra' is non-null, it can be
+  /// a stream of rows from a RowContainer so as to merge unspilled data with
+  /// spilled data.
   std::unique_ptr<TreeOfLosers<SpillMergeStream>> startMerge(
       int32_t partition,
       std::unique_ptr<SpillMergeStream>&& extra);
@@ -648,13 +655,19 @@ class SpillState {
 
   std::vector<std::string> testingSpilledFilePaths() const;
 
+  /// Returns the set of partitions that have spilled data.
+  SpillPartitionNumSet testingNonEmptySpilledPartitionSet() const;
+
  private:
+  void updateSpilledInputBytes(uint64_t bytes);
+
   const RowTypePtr type_;
   const std::string path_;
   const int32_t maxPartitions_;
   const int32_t numSortingKeys_;
   const std::vector<CompareFlags> sortCompareFlags_;
   const uint64_t targetFileSize_;
+  const uint64_t writeBufferSize_;
   const common::CompressionKind compressionKind_;
   memory::MemoryPool* const pool_;
   folly::Synchronized<SpillStats>* const stats_;
@@ -693,6 +706,9 @@ void updateGlobalSpillWriteStats(
     uint64_t spilledBytes,
     uint64_t flushTimeUs,
     uint64_t writeTimeUs);
+// Increment the spill memory bytes.
+void updateGlobalSpillMemoryBytes(uint64_t spilledInputBytes);
+
 /// Increments the spilled files by one.
 void incrementGlobalSpilledFiles();
 

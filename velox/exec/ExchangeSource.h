@@ -39,49 +39,61 @@ class ExchangeSource : public std::enable_shared_from_this<ExchangeSource> {
       std::shared_ptr<ExchangeQueue> queue,
       memory::MemoryPool* pool);
 
-  /// Temporary API to indicate whether 'request(maxBytes)' API is supported.
-  virtual bool supportsFlowControl() const {
+  /// Temporary API to indicate whether 'request(maxBytes, maxWaitSeconds)' API
+  /// is supported.
+  virtual bool supportsFlowControlV2() const {
     return false;
   }
 
-  // Returns true if there is no request to the source pending or if
-  // this should be retried. If true, the caller is expected to call
-  // request(). This is expected to be called while holding lock over
-  // queue_.mutex(). This sets the status of 'this' to be pending. The
-  // caller is thus expected to call request() without holding a lock over
-  // queue_.mutex(). This pattern prevents multiple exchange consumer
-  // threads from issuing the same request.
+  /// Returns true if there is no request to the source pending or if
+  /// this should be retried. If true, the caller is expected to call
+  /// request(). This is expected to be called while holding lock over
+  /// queue_.mutex(). This sets the status of 'this' to be pending. The
+  /// caller is thus expected to call request() without holding a lock over
+  /// queue_.mutex(). This pattern prevents multiple exchange consumer
+  /// threads from issuing the same request.
   virtual bool shouldRequestLocked() = 0;
 
   virtual bool isRequestPendingLocked() const {
     return requestPending_;
   }
 
-  // Requests the producer to generate more data. Call only if shouldRequest()
-  // was true. The object handles its own lifetime by acquiring a
-  // shared_from_this() pointer if needed.
-  virtual void request() {
-    VELOX_UNSUPPORTED();
-  }
-
   /// Requests the producer to generate up to 'maxBytes' more data.
   /// Returns a future that completes when producer responds either with 'data'
   /// or with a message indicating that all data has been already produced or
-  /// data will take more time to produce. Legacy ExchangeSources return empty
-  /// future and keep fetching data until it arrives or no-more-data message is
-  /// received.
-  virtual ContinueFuture request(uint32_t maxBytes) {
-    request();
-    return ContinueFuture::makeEmpty();
+  /// data will take more time to produce.
+  virtual ContinueFuture request(uint32_t /*maxBytes*/) {
+    VELOX_NYI();
   }
 
-  // Close the exchange source. May be called before all data
-  // has been received and proessed. This can happen in case
-  // of an error or an operator like Limit aborting the query
-  // once it received enough data.
+  struct Response {
+    /// Size of the response in bytes. Zero means response didn't contain any
+    /// data.
+    const int64_t bytes;
+
+    /// Boolean indicating that there will be no more data.
+    const bool atEnd;
+  };
+
+  /// Requests the producer to generate up to 'maxBytes' more data and reply
+  /// within 'maxWaitSeconds'. Returns a future that completes when producer
+  /// responds either with 'data' or with a message indicating that all data has
+  /// been already produced or data will take more time to produce.
+  virtual folly::SemiFuture<Response> request(
+      uint32_t /*maxBytes*/,
+      uint32_t /*maxWaitSeconds*/) {
+    VELOX_NYI();
+  }
+
+  /// Close the exchange source. May be called before all data
+  /// has been received and processed. This can happen in case
+  /// of an error or an operator like Limit aborting the query
+  /// once it received enough data.
   virtual void close() = 0;
 
-  // Returns runtime statistics.
+  // Returns runtime statistics. ExchangeSource is expected to report
+  // background CPU time by including a runtime metric named
+  // ExchangeClient::kBackgroundCpuTimeMs.
   virtual folly::F14FastMap<std::string, int64_t> stats() const = 0;
 
   virtual std::string toString() {

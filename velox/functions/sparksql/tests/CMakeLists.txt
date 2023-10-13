@@ -15,9 +15,11 @@
 add_executable(
   velox_functions_spark_test
   ArithmeticTest.cpp
+  ArrayMaxTest.cpp
+  ArrayMinTest.cpp
   ArraySortTest.cpp
   BitwiseTest.cpp
-  CompareNullSafeTests.cpp
+  ComparisonsTest.cpp
   DateTimeFunctionsTest.cpp
   ElementAtTest.cpp
   HashTest.cpp
@@ -25,6 +27,7 @@ add_executable(
   LeastGreatestTest.cpp
   MapTest.cpp
   MightContainTest.cpp
+  RandTest.cpp
   RegexFunctionsTest.cpp
   SizeTest.cpp
   SortArrayTest.cpp

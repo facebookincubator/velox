@@ -19,11 +19,8 @@
 
 #include "velox/connectors/hive/HiveConfig.h"
 #include "velox/connectors/hive/HiveConnector.h"
-#include "velox/expression/ExprToSubfieldFilter.h"
-
-#ifndef VELOX_ENABLE_BACKWARD_COMPATIBILITY
 #include "velox/connectors/hive/HiveDataSource.h"
-#endif
+#include "velox/expression/ExprToSubfieldFilter.h"
 
 namespace facebook::velox::connector::hive {
 namespace {
@@ -217,6 +214,82 @@ TEST_F(HiveConnectorTest, makeScanSpec_requiredSubfields_allSubscripts) {
   validateNullConstant(*elements->childByName("c0c1"), *BIGINT());
 }
 
+TEST_F(HiveConnectorTest, makeScanSpec_requiredSubfields_doubleMapKey) {
+  auto rowType =
+      ROW({{"c0", MAP(REAL(), BIGINT())}, {"c1", MAP(DOUBLE(), BIGINT())}});
+  auto scanSpec = HiveDataSource::makeScanSpec(
+      rowType,
+      groupSubfields(makeSubfields({"c0[0]", "c1[-1]"})),
+      {},
+      nullptr,
+      pool_.get());
+  auto* keysFilter = scanSpec->childByName("c0")
+                         ->childByName(ScanSpec::kMapKeysFieldName)
+                         ->filter();
+  ASSERT_TRUE(keysFilter);
+  ASSERT_TRUE(applyFilter(*keysFilter, 0.0f));
+  ASSERT_TRUE(applyFilter(*keysFilter, 0.99f));
+  ASSERT_FALSE(applyFilter(*keysFilter, 1.0f));
+  ASSERT_TRUE(applyFilter(*keysFilter, -0.99f));
+  ASSERT_FALSE(applyFilter(*keysFilter, -1.0f));
+  keysFilter = scanSpec->childByName("c1")
+                   ->childByName(ScanSpec::kMapKeysFieldName)
+                   ->filter();
+  ASSERT_TRUE(keysFilter);
+  ASSERT_FALSE(applyFilter(*keysFilter, 0.0));
+  ASSERT_TRUE(applyFilter(*keysFilter, -1.0));
+  ASSERT_TRUE(applyFilter(*keysFilter, -1.99));
+  ASSERT_FALSE(applyFilter(*keysFilter, -2.0));
+
+  // Integer min and max means infinities.
+  scanSpec = HiveDataSource::makeScanSpec(
+      rowType,
+      groupSubfields(makeSubfields(
+          {"c0[-9223372036854775808]", "c1[9223372036854775807]"})),
+      {},
+      nullptr,
+      pool_.get());
+  keysFilter = scanSpec->childByName("c0")
+                   ->childByName(ScanSpec::kMapKeysFieldName)
+                   ->filter();
+  ASSERT_TRUE(applyFilter(*keysFilter, -1e30f));
+  ASSERT_FALSE(applyFilter(*keysFilter, -9223370000000000000.0f));
+  keysFilter = scanSpec->childByName("c1")
+                   ->childByName(ScanSpec::kMapKeysFieldName)
+                   ->filter();
+  ASSERT_TRUE(applyFilter(*keysFilter, 1e100));
+  ASSERT_FALSE(applyFilter(*keysFilter, 9223372036854700000.0));
+  scanSpec = HiveDataSource::makeScanSpec(
+      rowType,
+      groupSubfields(makeSubfields(
+          {"c0[9223372036854775807]", "c0[-9223372036854775808]"})),
+      {},
+      nullptr,
+      pool_.get());
+  keysFilter = scanSpec->childByName("c0")
+                   ->childByName(ScanSpec::kMapKeysFieldName)
+                   ->filter();
+  ASSERT_TRUE(applyFilter(*keysFilter, -1e30f));
+  ASSERT_FALSE(applyFilter(*keysFilter, 0.0f));
+  ASSERT_TRUE(applyFilter(*keysFilter, 1e30f));
+
+  // Unrepresentable values.
+  scanSpec = HiveDataSource::makeScanSpec(
+      rowType,
+      groupSubfields(makeSubfields({"c0[-100000000]", "c0[100000000]"})),
+      {},
+      nullptr,
+      pool_.get());
+  keysFilter = scanSpec->childByName("c0")
+                   ->childByName(ScanSpec::kMapKeysFieldName)
+                   ->filter();
+  ASSERT_TRUE(applyFilter(*keysFilter, -100000000.0f));
+  ASSERT_FALSE(applyFilter(*keysFilter, -100000008.0f));
+  ASSERT_FALSE(applyFilter(*keysFilter, 0.0f));
+  ASSERT_TRUE(applyFilter(*keysFilter, 100000000.0f));
+  ASSERT_FALSE(applyFilter(*keysFilter, 100000008.0f));
+}
+
 TEST_F(HiveConnectorTest, makeScanSpec_filtersNotInRequiredSubfields) {
   auto c0Type = ROW({
       {"c0c0", BIGINT()},
@@ -322,7 +395,7 @@ TEST_F(HiveConnectorTest, extractFiltersFromRemainingFilter) {
   // Change these once HUGEINT filter merge is fixed.
   ASSERT_TRUE(remaining);
   ASSERT_EQ(
-      remaining->toString(), "not(lt(ROW[\"c2\"],cast 0 as DECIMAL(20,0)))");
+      remaining->toString(), "not(lt(ROW[\"c2\"],cast 0 as DECIMAL(20, 0)))");
 }
 
 } // namespace

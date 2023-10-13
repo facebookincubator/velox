@@ -142,6 +142,8 @@ class HashStringAllocator : public StreamArena {
       return *reinterpret_cast<Header**>(end() - kContinuedPtrSize);
     }
 
+    std::string toString();
+
    private:
     uint32_t data_;
   };
@@ -333,10 +335,19 @@ class HashStringAllocator : public StreamArena {
     return cumulativeBytes_;
   }
 
+  // Returns the starting sizes of free lists. Allocating one of these
+  // sizes will always be fast because all elements of the free list
+  // in question will fit.
+  static folly::Range<const int32_t*> freeListSizeClasses();
+
   // Checks the free space accounting and consistency of
   // Headers. Throws when detects corruption. Returns the number of allocated
   // payload bytes, excluding headers, continue links and other overhead.
   int64_t checkConsistency() const;
+
+  /// Returns 'true' if this is empty. The implementation includes a call to
+  /// checkConsistency() which makes it slow. Do not use in hot paths.
+  bool isEmpty() const;
 
   /// Throws if 'this' is not empty. Checks consistency of
   /// 'this'. This is a fast check for RowContainer users freeing the
@@ -344,16 +355,28 @@ class HashStringAllocator : public StreamArena {
   /// builds.
   void checkEmpty() const;
 
+  // Returns the cumulative number of free list items allocations have looked at
+  // and skipped because too small.
+  int64_t numFreeListNoFit() const {
+    return numFreeListNoFit_;
+  }
+
+  std::string toString() const;
+
  private:
   static constexpr int32_t kUnitSize = 16 * memory::AllocationTraits::kPageSize;
   static constexpr int32_t kMinContiguous = 48;
-  static constexpr int32_t kNumFreeLists = 7;
+  static constexpr int32_t kNumFreeLists = 10;
 
-  // different sizes have different free lists. Sizes below first size go to
-  // freeLists_[0]. Sizes >= freeListSize_[i] go to freeLists_[i + 1]. The sizes
-  // match the size progression for growing F14 containers. Static array of
-  // exactly 8 ints for simd.
-  static int32_t freeListSizes_[HashStringAllocator::kNumFreeLists + 1];
+  // different sizes have different free lists. Sizes below first size
+  // go to freeLists_[0]. Sizes >= freeListSize_[i] go to freeLists_[i
+  // + 1]. The sizes match the size progression for growing F14
+  // containers. Static array of multiple of 8 ints for simd.
+  static int32_t freeListSizes_[HashStringAllocator::kNumFreeLists + 7];
+
+  // The largest size present in each free list. This is updated when freing and
+  // when failing to find a large enough block in the free list in question.
+  int32_t largestInFreeList_[HashStringAllocator::kNumFreeLists] = {};
 
   void newRange(int32_t bytes, ByteRange* range, bool contiguous);
 
@@ -436,6 +459,10 @@ class HashStringAllocator : public StreamArena {
 
   // Sum of sizes in 'allocationsFromPool_'.
   int64_t sizeFromPool_{0};
+
+  // Count of times a free list item was skipped because it did not fit
+  // requested size.
+  int64_t numFreeListNoFit_{0};
 };
 
 // Utility for keeping track of allocation between two points in

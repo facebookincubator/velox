@@ -14,6 +14,7 @@
  * limitations under the License.
  */
 #include "velox/exec/TableScan.h"
+
 #include "velox/common/time/Timer.h"
 #include "velox/exec/Task.h"
 #include "velox/expression/Expr.h"
@@ -45,7 +46,9 @@ TableScan::TableScan(
           tableHandle_->connectorId())),
       readBatchSize_(driverCtx_->task->queryCtx()
                          ->queryConfig()
-                         .preferredOutputBatchRows()) {
+                         .preferredOutputBatchRows()),
+      maxReadBatchSize_(
+          driverCtx_->task->queryCtx()->queryConfig().maxOutputBatchRows()) {
   connector_ = connector::getConnector(tableHandle_->connectorId());
 }
 
@@ -160,7 +163,13 @@ RowVectorPtr TableScan::getOutput() {
          },
          &debugString_});
 
-    auto dataOptional = dataSource_->next(readBatchSize_, blockingFuture_);
+    int readBatchSize = readBatchSize_;
+    if (maxFilteringRatio_ > 0) {
+      readBatchSize = std::min(
+          maxReadBatchSize_,
+          static_cast<int>(readBatchSize / maxFilteringRatio_));
+    }
+    auto dataOptional = dataSource_->next(readBatchSize, blockingFuture_);
     checkPreload();
 
     {
@@ -182,6 +191,11 @@ RowVectorPtr TableScan::getOutput() {
       if (data) {
         if (data->size() > 0) {
           lockedStats->addInputVector(data->estimateFlatSize(), data->size());
+          constexpr int kMaxSelectiveBatchSizeMultiplier = 4;
+          maxFilteringRatio_ = std::max(
+              {maxFilteringRatio_,
+               1.0 * data->size() / readBatchSize,
+               1.0 / kMaxSelectiveBatchSizeMultiplier});
           return data;
         }
         continue;

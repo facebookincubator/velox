@@ -136,7 +136,7 @@ class ColumnReaderTestBase {
     if (useSelectiveReader()) {
       if (!scanSpec) {
         scanSpec_ = std::make_unique<common::ScanSpec>("root");
-        scanSpec_->addAllChildFields(*dataTypeWithId->type);
+        scanSpec_->addAllChildFields(*dataTypeWithId->type());
         scanSpec = scanSpec_.get();
       }
       makeFieldSpecs("", 0, rowType, scanSpec);
@@ -145,6 +145,7 @@ class ColumnReaderTestBase {
           dataTypeWithId,
           streams_,
           labels_,
+          columnReaderStatistics_,
           scanSpec,
           FlatMapContext{});
       selectiveColumnReader_->setIsTopLevel();
@@ -215,6 +216,7 @@ class ColumnReaderTestBase {
 
  private:
   std::unique_ptr<common::ScanSpec> scanSpec_;
+  ColumnReaderStatistics columnReaderStatistics_;
 };
 
 struct StringReaderTestParams {
@@ -256,7 +258,6 @@ class StringReaderTests
   const bool expectMemoryReuse_;
   const bool returnFlatVector_;
 
- private:
   bool useSelectiveReader() const override {
     return GetParam().useSelectiveReader;
   }
@@ -807,7 +808,7 @@ TEST_P(TestColumnReader, testIntegerRLEv2) {
   // create the row type
   auto rowType =
       HiveTypeParser().parse("struct<col_0:int,col_1:int,col_2:int>");
-  auto dataType = TypeWithId::create(rowType)->type;
+  auto dataType = TypeWithId::create(rowType)->type();
   VectorPtr batch = newBatch(rowType);
   if (useSelectiveReader()) {
     auto scanSpec = std::make_unique<common::ScanSpec>("root");
@@ -1333,7 +1334,11 @@ TEST_P(StringReaderTests, testStringDictSkipNoNulls) {
     ASSERT_EQ(rowsRead, batch->size());
     ASSERT_EQ(0, getNullCount(batch));
 
-    if (returnFlatVector_) {
+    if (useSelectiveReader()) {
+      // Selective reader can return either flat or dictionary vector based on
+      // selectivity.
+      stringBatch = getOnlyChild<SimpleVector<StringView>>(batch);
+    } else if (returnFlatVector_) {
       stringBatch = getOnlyChild<FlatVector<StringView>>(batch);
     } else {
       stringBatch = getOnlyChild<DictionaryVector<StringView>>(batch);

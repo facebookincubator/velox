@@ -296,6 +296,7 @@ std::vector<SortOrder> deserializeSortingOrders(const folly::dynamic& array) {
 folly::dynamic AggregationNode::Aggregate::serialize() const {
   folly::dynamic obj = folly::dynamic::object();
   obj["call"] = call->serialize();
+  obj["rawInputTypes"] = ISerializable::serialize(rawInputTypes);
   if (mask) {
     obj["mask"] = mask->serialize();
   }
@@ -310,6 +311,8 @@ AggregationNode::Aggregate AggregationNode::Aggregate::deserialize(
     const folly::dynamic& obj,
     void* context) {
   auto call = ISerializable::deserialize<CallTypedExpr>(obj["call"]);
+  auto rawInputTypes =
+      ISerializable::deserialize<std::vector<Type>>(obj["rawInputTypes"]);
   FieldAccessTypedExprPtr mask;
   if (obj.count("mask")) {
     mask = ISerializable::deserialize<FieldAccessTypedExpr>(obj["mask"]);
@@ -318,7 +321,12 @@ AggregationNode::Aggregate AggregationNode::Aggregate::deserialize(
   auto sortingOrders = deserializeSortingOrders(obj["sortingOrders"]);
   bool distinct = obj["distinct"].asBool();
   return {
-      call, mask, std::move(sortingKeys), std::move(sortingOrders), distinct};
+      call,
+      rawInputTypes,
+      mask,
+      std::move(sortingKeys),
+      std::move(sortingOrders),
+      distinct};
 }
 
 // static
@@ -376,6 +384,32 @@ RowTypePtr getGroupIdOutputType(
 
   return ROW(std::move(names), std::move(types));
 }
+
+std::vector<std::vector<std::string>> getGroupingSets(
+    const std::vector<std::vector<FieldAccessTypedExprPtr>>& groupingSetFields,
+    const std::vector<GroupIdNode::GroupingKeyInfo>& groupingKeyInfos) {
+  std::unordered_map<std::string, std::string> inputToOutputGroupingKeyMap;
+  for (const auto& groupKeyInfo : groupingKeyInfos) {
+    inputToOutputGroupingKeyMap[groupKeyInfo.input->name()] =
+        groupKeyInfo.output;
+  }
+
+  // Prestissimo passes grouping keys with their input column name to Velox.
+  // But Velox expects the output column name for the grouping key.
+  std::vector<std::vector<std::string>> groupingSets;
+  groupingSets.reserve(groupingSetFields.size());
+  for (const auto& groupFields : groupingSetFields) {
+    std::vector<std::string> groupingKeys;
+    groupingKeys.reserve(groupFields.size());
+    for (const auto& groupingField : groupFields) {
+      groupingKeys.push_back(
+          inputToOutputGroupingKeyMap[groupingField->name()]);
+    }
+    groupingSets.push_back(groupingKeys);
+  }
+  return groupingSets;
+}
+
 } // namespace
 
 GroupIdNode::GroupIdNode(
@@ -391,11 +425,34 @@ GroupIdNode::GroupIdNode(
           groupingKeyInfos,
           aggregationInputs,
           groupIdName)),
+      groupingSets_(getGroupingSets(groupingSets, groupingKeyInfos)),
+      groupingKeyInfos_(std::move(groupingKeyInfos)),
+      aggregationInputs_(std::move(aggregationInputs)),
+      groupIdName_(std::move(groupIdName)) {
+  VELOX_USER_CHECK_GE(
+      groupingSets_.size(),
+      2,
+      "GroupIdNode requires two or more grouping sets.");
+}
+
+GroupIdNode::GroupIdNode(
+    PlanNodeId id,
+    std::vector<std::vector<std::string>> groupingSets,
+    std::vector<GroupingKeyInfo> groupingKeyInfos,
+    std::vector<FieldAccessTypedExprPtr> aggregationInputs,
+    std::string groupIdName,
+    PlanNodePtr source)
+    : PlanNode(std::move(id)),
+      sources_{source},
+      outputType_(getGroupIdOutputType(
+          groupingKeyInfos,
+          aggregationInputs,
+          groupIdName)),
       groupingSets_(std::move(groupingSets)),
       groupingKeyInfos_(std::move(groupingKeyInfos)),
       aggregationInputs_(std::move(aggregationInputs)),
       groupIdName_(std::move(groupIdName)) {
-  VELOX_CHECK_GE(
+  VELOX_USER_CHECK_GE(
       groupingSets_.size(),
       2,
       "GroupIdNode requires two or more grouping sets.");
@@ -407,7 +464,12 @@ void GroupIdNode::addDetails(std::stringstream& stream) const {
       stream << ", ";
     }
     stream << "[";
-    addFields(stream, groupingSets_[i]);
+    for (auto j = 0; j < groupingSets_[i].size(); j++) {
+      if (j > 0) {
+        stream << ", ";
+      }
+      stream << groupingSets_[i][j];
+    }
     stream << "]";
   }
 }
@@ -434,14 +496,16 @@ folly::dynamic GroupIdNode::serialize() const {
 // static
 PlanNodePtr GroupIdNode::create(const folly::dynamic& obj, void* context) {
   auto source = deserializeSingleSource(obj, context);
-  auto groupingSets = ISerializable::deserialize<
-      std::vector<std::vector<FieldAccessTypedExpr>>>(obj["groupingSets"]);
   std::vector<GroupingKeyInfo> groupingKeyInfos;
   for (const auto& info : obj["groupingKeyInfos"]) {
     groupingKeyInfos.push_back(
         {info["output"].asString(),
          ISerializable::deserialize<FieldAccessTypedExpr>(info["input"])});
   }
+
+  auto groupingSets =
+      ISerializable::deserialize<std::vector<std::vector<std::string>>>(
+          obj["groupingSets"]);
   return std::make_shared<GroupIdNode>(
       deserializePlanNodeId(obj),
       std::move(groupingSets),
@@ -1105,12 +1169,14 @@ WindowNode::WindowNode(
     std::vector<SortOrder> sortingOrders,
     std::vector<std::string> windowColumnNames,
     std::vector<Function> windowFunctions,
+    bool inputsSorted,
     PlanNodePtr source)
     : PlanNode(std::move(id)),
       partitionKeys_(std::move(partitionKeys)),
       sortingKeys_(std::move(sortingKeys)),
       sortingOrders_(std::move(sortingOrders)),
       windowFunctions_(std::move(windowFunctions)),
+      inputsSorted_(inputsSorted),
       sources_{std::move(source)},
       outputType_(getWindowOutputType(
           sources_[0]->outputType(),
@@ -1146,6 +1212,8 @@ void WindowNode::addDetails(std::stringstream& stream) const {
     stream << outputType_->names()[i] << " := ";
     addWindowFunction(stream, windowFunctions_[i - numInputCols]);
   }
+
+  stream << " inputsSorted [" << inputsSorted_ << "]";
 }
 
 namespace {
@@ -1262,6 +1330,7 @@ folly::dynamic WindowNode::serialize() const {
     windowNames.push_back(outputType_->nameOf(i));
   }
   obj["names"] = ISerializable::serialize(windowNames);
+  obj["inputsSorted"] = inputsSorted_;
 
   return obj;
 }
@@ -1281,6 +1350,8 @@ PlanNodePtr WindowNode::create(const folly::dynamic& obj, void* context) {
 
   auto windowNames = deserializeStrings(obj["names"]);
 
+  auto inputsSorted = obj["inputsSorted"].asBool();
+
   return std::make_shared<WindowNode>(
       deserializePlanNodeId(obj),
       partitionKeys,
@@ -1288,6 +1359,7 @@ PlanNodePtr WindowNode::create(const folly::dynamic& obj, void* context) {
       sortingOrders,
       windowNames,
       functions,
+      inputsSorted,
       source);
 }
 

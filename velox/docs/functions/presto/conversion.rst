@@ -30,7 +30,7 @@ are supported if the conversion of their element types are supported. In additio
 supported conversions to/from JSON are listed in :doc:`json`.
 
 .. list-table::
-   :widths: 25 25 25 25 25 25 25 25 25 25 25 25
+   :widths: 25 25 25 25 25 25 25 25 25 25 25 25 25
    :header-rows: 1
 
    * -
@@ -43,6 +43,7 @@ supported conversions to/from JSON are listed in :doc:`json`.
      - double
      - varchar
      - timestamp
+     - timestamp with time zone
      - date
      - decimal
    * - tinyint
@@ -54,6 +55,7 @@ supported conversions to/from JSON are listed in :doc:`json`.
      - Y
      - Y
      - Y
+     -
      -
      -
      - Y
@@ -68,6 +70,7 @@ supported conversions to/from JSON are listed in :doc:`json`.
      - Y
      -
      -
+     -
      - Y
    * - integer
      - Y
@@ -80,6 +83,7 @@ supported conversions to/from JSON are listed in :doc:`json`.
      - Y
      -
      -
+     -
      - Y
    * - bigint
      - Y
@@ -90,6 +94,7 @@ supported conversions to/from JSON are listed in :doc:`json`.
      - Y
      - Y
      - Y
+     -
      -
      -
      - Y
@@ -105,6 +110,7 @@ supported conversions to/from JSON are listed in :doc:`json`.
      -
      -
      -
+     -
    * - real
      - Y
      - Y
@@ -114,6 +120,7 @@ supported conversions to/from JSON are listed in :doc:`json`.
      - Y
      - Y
      - Y
+     -
      -
      -
      -
@@ -129,6 +136,7 @@ supported conversions to/from JSON are listed in :doc:`json`.
      -
      -
      -
+     -
    * - varchar
      - Y
      - Y
@@ -139,6 +147,7 @@ supported conversions to/from JSON are listed in :doc:`json`.
      - Y
      - Y
      - Y
+     -
      - Y
      -
    * - timestamp
@@ -150,8 +159,22 @@ supported conversions to/from JSON are listed in :doc:`json`.
      -
      -
      - Y
+     - Y
+     - Y
+     - Y
+     -
+   * - timestamp with time zone
+     -
+     -
+     -
+     -
+     -
+     -
+     -
      -
      - Y
+     - Y
+     -
      -
    * - date
      -
@@ -165,12 +188,14 @@ supported conversions to/from JSON are listed in :doc:`json`.
      - Y
      -
      -
+     -
    * - decimal
      - Y
      - Y
      - Y
      - Y
-     -
+     - Y
+     - Y
      - Y
      - Y
      -
@@ -242,9 +267,13 @@ From strings
 ^^^^^^^^^^^^
 
 Casting a string to an integral type is allowed if the string represents an
-integral number within the range of the result type. Casting from strings that
-represent floating-point numbers is not allowed. Casting from invalid input
-values throws.
+integral number within the range of the result type. By default, casting from
+strings that represent floating-point numbers is not allowed.
+
+If cast_to_int_by_truncate is set to true, and the string represents a floating-point number,
+the decimal part will be truncated for casting to an integer.
+
+Casting from invalid input values throws.
 
 Valid examples
 
@@ -254,19 +283,62 @@ Valid examples
   SELECT cast('+1' as tinyint); -- 1
   SELECT cast('-1' as tinyint); -- -1
 
+Valid examples if cast_to_int_by_truncate=true
+
+::
+
+  SELECT cast('12345.67' as tinyint); -- 12345
+  SELECT cast('1.2' as tinyint); -- 1
+  SELECT cast('-1.8' as tinyint); -- -1
+  SELECT cast('1.' as tinyint); -- 1
+  SELECT cast('-1.' as tinyint); -- -1
+  SELECT cast('0.' as tinyint); -- 0
+  SELECT cast('.' as tinyint); -- 0
+  SELECT cast('-.' as tinyint); -- 0
+
 Invalid examples
 
 ::
 
   SELECT cast('1234567' as tinyint); -- Out of range
-  SELECT cast('12345.67' as tinyint); -- Invalid argument
-  SELECT cast('1.2' as tinyint); -- Invalid argument
   SELECT cast('1a' as tinyint); -- Invalid argument
   SELECT cast('' as tinyint); -- Invalid argument
   SELECT cast('1,234,567' as bigint); -- Invalid argument
   SELECT cast('1'234'567' as bigint); -- Invalid argument
   SELECT cast('nan' as bigint); -- Invalid argument
   SELECT cast('infinity' as bigint); -- Invalid argument
+
+Invalid examples if cast_to_int_by_truncate=false
+
+::
+
+  SELECT cast('12345.67' as tinyint); -- Invalid argument
+  SELECT cast('1.2' as tinyint); -- Invalid argument
+  SELECT cast('-1.8' as tinyint); -- Invalid argument
+  SELECT cast('1.' as tinyint); -- Invalid argument
+  SELECT cast('-1.' as tinyint); -- Invalid argument
+  SELECT cast('0.' as tinyint); -- Invalid argument
+  SELECT cast('.' as tinyint); -- Invalid argument
+  SELECT cast('-.' as tinyint); -- Invalid argument
+
+From decimal
+^^^^^^^^^^^^
+
+By default, the decimal part is rounded. If cast_to_int_by_truncate is enabled, the decimal part will be truncated for casting to an integer.
+
+Valid examples
+
+::
+
+  SELECT cast(2.56 decimal(6, 2) as integer); -- 2 /* cast_to_int_by_truncate enabled */
+  SELECT cast(2.56 decimal(6, 2) as integer); -- 3 /* cast_to_int_by_truncate disabled */
+  SELECT cast(3.46 decimal(6, 2) as integer); -- 3
+
+Invalid examples
+
+::
+  
+  SELECT cast(214748364890 decimal(12, 2) as integer); -- Out of range
 
 Cast to Boolean
 ---------------
@@ -410,8 +482,12 @@ Valid examples
   SELECT cast(infinity() as varchar); -- 'Infinity'
   SELECT cast(true as varchar); -- 'true'
   SELECT cast(timestamp '1970-01-01 00:00:00' as varchar); -- '1970-01-01T00:00:00.000'
+  SELECT cast(cast(22.51 as DECIMAL(5, 3)) as varchar); -- '22.510'
+  SELECT cast(cast(-22.51 as DECIMAL(4, 2)) as varchar); -- '-22.51'
+  SELECT cast(cast(0.123 as DECIMAL(3, 3)) as varchar); -- '0.123'
+  SELECT cast(cast(1 as DECIMAL(6, 2)) as varchar); -- '1.00'
 
-Cast to Timestamp
+Cast to TIMESTAMP
 -----------------
 
 From strings
@@ -448,28 +524,119 @@ Valid examples
   SELECT cast(date '1970-01-01' as timestamp); -- 1970-01-01 00:00:00
   SELECT cast(date '2012-03-09' as timestamp); -- 2012-03-09 00:00:00
 
+From TIMESTAMP WITH TIME ZONE
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+The results depend on whether configuration property `adjust_timestamp_to_session_timezone` is set or not.
+
+If set to true, input timezone is ignored and timestamp is returned as is. For example,
+"1970-01-01 00:00:00.000 America/Los_Angeles" becomes "1970-01-01 00:00:00.000".
+
+Otherwise, timestamp is shifted by the offset of the timezone. For example,
+"1970-01-01 00:00:00.000 America/Los_Angeles" becomes "1969-12-31 16:00:00.000".
+
+Valid examples
+
+::
+
+  -- `adjust_timestamp_to_session_timezone` is true
+  SELECT cast(timestamp '1970-01-01 00:00:00 America/Los_Angeles' as timestamp); -- 1970-01-01 00:00:00.000
+  SELECT cast(timestamp '2012-03-09 10:00:00 Asia/Chongqing' as timestamp); -- 2012-03-09 10:00:00.000
+  SELECT cast(from_unixtime(0, '+06:00') as timestamp); -- 1970-01-01 00:00:00.000
+  SELECT cast(from_unixtime(0, '-02:00') as timestamp); -- 1970-01-01 00:00:00.000
+
+  -- `adjust_timestamp_to_session_timezone` is false
+  SELECT cast(timestamp '1970-01-01 00:00:00 America/Los_Angeles' as timestamp); -- 1969-12-31 16:00:00.000
+  SELECT cast(timestamp '2012-03-09 10:00:00 Asia/Chongqing' as timestamp); -- 2012-03-09 18:00:00.000
+  SELECT cast(from_unixtime(0, '+06:00') as timestamp); -- 1970-01-01 06:00:00.000
+  SELECT cast(from_unixtime(0, '-02:00') as timestamp); -- 1969-12-31 22:00:00.000
+
+Cast to TIMESTAMP WITH TIME ZONE
+--------------------------------
+
+From TIMESTAMP
+^^^^^^^^^^^^^^
+
+The results depend on whether configuration property `adjust_timestamp_to_session_timezone` is set or not.
+
+If set to true, the output is adjusted to be equivalent as the input timestamp in UTC
+based on the user provided `session_timezone` (if any). For example, when user supplies
+"America/Los_Angeles" "1970-01-01 00:00:00.000" becomes "1969-12-31 16:00:00.000 America/Los_Angeles".
+
+Otherwise, the user provided `session_timezone` (if any) is simply appended to the input
+timestamp. For example, "1970-01-01 00:00:00.000" becomes "1970-01-01 00:00:00.000 America/Los_Angeles".
+
+Valid examples
+
+::
+
+  -- `adjust_timestamp_to_session_timezone` is true
+  SELECT cast(timestamp '1970-01-01 00:00:00' as timestamp with time zone); -- 1969-12-31 16:00:00.000 America/Los_Angeles
+  SELECT cast(timestamp '2012-03-09 10:00:00' as timestamp with time zone); -- 2012-03-09 02:00:00.000 America/Los_Angeles
+  SELECT cast(from_unixtime(0) as timestamp with time zone); -- 1969-12-31 16:00:00.000 America/Los_Angeles
+
+  -- `adjust_timestamp_to_session_timezone` is false
+  SELECT cast(timestamp '1970-01-01 00:00:00' as timestamp with time zone); -- 1970-01-01 00:00:00.000 America/Los_Angeles
+  SELECT cast(timestamp '2012-03-09 10:00:00' as timestamp with time zone); -- 2012-03-09 10:00:00.000 America/Los_Angeles
+  SELECT cast(from_unixtime(0) as timestamp with time zone); -- 1970-01-01 00:00:00.000 America/Los_Angeles
+
 Cast to Date
 ------------
 
 From strings
 ^^^^^^^^^^^^
 
-Casting from a string to date is allowed if the string represents a date in the
-format `YYYY-MM-DD`. Casting from invalid input values throws.
+By default, only ISO 8601 strings are supported: `[+-]YYYY-MM-DD`.
 
-Valid example
+If cast_string_to_date_is_iso_8601 is set to false, all Spark supported patterns are allowed.
+See the documentation for cast_string_to_date_is_iso_8601 in :ref:`Expression Evaluation Configuration<expression-evaluation-conf>`
+for the full list of supported patterns.
+
+Casting from invalid input values throws.
+
+Valid examples
+
+**cast_string_to_date_is_iso_8601=true**
 
 ::
 
   SELECT cast('1970-01-01' as date); -- 1970-01-01
 
-Invalid example
+**cast_string_to_date_is_iso_8601=false**
+
+::
+
+  SELECT cast('1970' as date); -- 1970-01-01
+  SELECT cast('1970-01' as date); -- 1970-01-01
+  SELECT cast('1970-01-01' as date); -- 1970-01-01
+  SELECT cast('1970-01-01T123' as date); -- 1970-01-01
+  SELECT cast('1970-01-01 ' as date); -- 1970-01-01
+  SELECT cast('1970-01-01 (BC)' as date); -- 1970-01-01
+
+Invalid examples
+
+**cast_string_to_date_is_iso_8601=true**
+
+::
+
+  SELECT cast('2012' as date); -- Invalid argument
+  SELECT cast('2012-10' as date); -- Invalid argument
+  SELECT cast('2012-10-23T123' as date); -- Invalid argument
+  SELECT cast('2012-10-23 (BC)' as date); -- Invalid argument
+  SELECT cast('2012-Oct-23' as date); -- Invalid argument
+  SELECT cast('2012/10/23' as date); -- Invalid argument
+  SELECT cast('2012.10.23' as date); -- Invalid argument
+  SELECT cast('2012-10-23 ' as date); -- Invalid argument
+
+**cast_string_to_date_is_iso_8601=false**
 
 ::
 
   SELECT cast('2012-Oct-23' as date); -- Invalid argument
+  SELECT cast('2012/10/23' as date); -- Invalid argument
+  SELECT cast('2012.10.23' as date); -- Invalid argument
 
-From timestamp
+From TIMESTAMP
 ^^^^^^^^^^^^^^
 
 Casting from timestamp to date is allowed. If present, the part of `hh:mm:ss`

@@ -345,7 +345,7 @@ size_t MemoryPool::preferredSize(size_t size) {
   if (size < 8) {
     return 8;
   }
-  int32_t bits = 63 - bits::countLeadingZeros(size);
+  int32_t bits = 63 - bits::countLeadingZeros<uint64_t>(size);
   size_t lower = 1ULL << bits;
   // Size is a power of 2.
   if (lower == size) {
@@ -430,7 +430,10 @@ void* MemoryPoolImpl::allocate(int64_t size) {
   if (FOLLY_UNLIKELY(buffer == nullptr)) {
     release(alignedSize);
     VELOX_MEM_ALLOC_ERROR(fmt::format(
-        "{} failed with {} bytes from {}", __FUNCTION__, size, toString()));
+        "{} failed with {} from {}",
+        __FUNCTION__,
+        succinctBytes(size),
+        toString()));
   }
   DEBUG_RECORD_ALLOC(buffer, size);
   return buffer;
@@ -445,10 +448,10 @@ void* MemoryPoolImpl::allocateZeroFilled(int64_t numEntries, int64_t sizeEach) {
   if (FOLLY_UNLIKELY(buffer == nullptr)) {
     release(alignedSize);
     VELOX_MEM_ALLOC_ERROR(fmt::format(
-        "{} failed with {} entries and {} bytes each from {}",
+        "{} failed with {} entries and {} each from {}",
         __FUNCTION__,
         numEntries,
-        sizeEach,
+        succinctBytes(sizeEach),
         toString()));
   }
   DEBUG_RECORD_ALLOC(buffer, size);
@@ -464,10 +467,10 @@ void* MemoryPoolImpl::reallocate(void* p, int64_t size, int64_t newSize) {
   if (FOLLY_UNLIKELY(newP == nullptr)) {
     release(alignedNewSize);
     VELOX_MEM_ALLOC_ERROR(fmt::format(
-        "{} failed with {} new bytes and {} old bytes from {}",
+        "{} failed with new {} and old {} from {}",
         __FUNCTION__,
-        newSize,
-        size,
+        succinctBytes(newSize),
+        succinctBytes(size),
         toString()));
   }
   DEBUG_RECORD_ALLOC(newP, newSize);
@@ -651,6 +654,13 @@ bool MemoryPoolImpl::maybeReserve(uint64_t increment) {
 }
 
 void MemoryPoolImpl::reserve(uint64_t size, bool reserveOnly) {
+  if (FOLLY_UNLIKELY(underMemoryArbitration() && !isSpillMemoryPool(this))) {
+    VELOX_FAIL(
+        "Unexpected non-spilling memory reservation from memory pool: {}, arbitration request pool: {}",
+        name(),
+        memoryArbitrationContext()->requestor.name());
+  }
+
   if (FOLLY_LIKELY(trackUsage_)) {
     if (FOLLY_LIKELY(threadSafe_)) {
       reserveThreadSafe(size, reserveOnly);
@@ -913,11 +923,13 @@ bool MemoryPoolImpl::reclaimableBytes(uint64_t& reclaimableBytes) const {
   return reclaimer()->reclaimableBytes(*this, reclaimableBytes);
 }
 
-uint64_t MemoryPoolImpl::reclaim(uint64_t targetBytes) {
+uint64_t MemoryPoolImpl::reclaim(
+    uint64_t targetBytes,
+    memory::MemoryReclaimer::Stats& stats) {
   if (reclaimer() == nullptr) {
     return 0;
   }
-  return reclaimer()->reclaim(this, targetBytes);
+  return reclaimer()->reclaim(this, targetBytes, stats);
 }
 
 void MemoryPoolImpl::enterArbitration() {

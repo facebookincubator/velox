@@ -68,7 +68,7 @@ class PartitionedOutputBufferManagerTest : public testing::Test {
           std::to_string(maxPartitionedOutputBufferSize);
     }
     auto queryCtx = std::make_shared<core::QueryCtx>(
-        executor_.get(), std::move(configSettings));
+        executor_.get(), core::QueryConfig(std::move(configSettings)));
 
     auto task =
         Task::create(taskId, std::move(planFragment), 0, std::move(queryCtx));
@@ -422,6 +422,8 @@ TEST_F(PartitionedOutputBufferManagerTest, arbitrayBuffer) {
     ASSERT_EQ(
         buffer.toString(), "[ARBITRARY_BUFFER PAGES[2] NO MORE DATA[false]]");
     buffer.noMoreData();
+    ASSERT_FALSE(buffer.empty());
+    ASSERT_TRUE(buffer.hasNoMoreData());
     ASSERT_EQ(
         buffer.toString(), "[ARBITRARY_BUFFER PAGES[2] NO MORE DATA[true]]");
     pages = buffer.getPages(1'000'000'000);

@@ -265,6 +265,35 @@ TEST_F(VectorHasherTest, nullConstant) {
   }
 }
 
+TEST_F(VectorHasherTest, unknown) {
+  auto hasher = exec::VectorHasher::create(UNKNOWN(), 1);
+  auto vector = vectorMaker_->allNullFlatVector<UnknownValue>(100);
+
+  // Test hashing without mixing.
+  raw_vector<uint64_t> hashes(100);
+  std::fill(hashes.begin(), hashes.end(), 0);
+  hasher->decode(*vector, oddRows_);
+  hasher->hash(oddRows_, false, hashes);
+  for (int32_t i = 0; i < 100; i++) {
+    EXPECT_EQ(hashes[i], (i % 2 == 0) ? 0 : exec::VectorHasher::kNullHash)
+        << "at " << i;
+  }
+
+  hasher->decode(*vector, allRows_);
+  hasher->hash(allRows_, false, hashes);
+  for (int32_t i = 0; i < 100; i++) {
+    EXPECT_EQ(hashes[i], exec::VectorHasher::kNullHash) << "at " << i;
+  }
+
+  // Test mixing.
+  std::iota(hashes.begin(), hashes.end(), 0);
+  hasher->hash(allRows_, true, hashes);
+  for (int32_t i = 0; i < 100; i++) {
+    auto expected = bits::hashMix(i, exec::VectorHasher::kNullHash);
+    EXPECT_EQ(hashes[i], expected) << "at " << i;
+  }
+}
+
 TEST_F(VectorHasherTest, dictionary) {
   auto hasher = exec::VectorHasher::create(BIGINT(), 1);
 
@@ -382,6 +411,47 @@ TEST_F(VectorHasherTest, stringIds) {
   // range.
   hasher->lookupValueIds(*vector, rows, scratchMemory, hashes);
   EXPECT_EQ(numInRange, rows.countSelected());
+}
+
+// Tests distinct overflow, but starting with a small string
+TEST_F(VectorHasherTest, stringDistinctOverflow) {
+  auto hasher = exec::VectorHasher::create(VARCHAR(), 1);
+
+  constexpr uint32_t numRows{10000};
+
+  // 7 vectors, 10000 rows each.
+  // The 1st row of every batch has a small string.
+  std::vector<FlatVectorPtr<StringView>> batches;
+  std::vector<std::vector<std::string>> strings;
+  strings.resize(7);
+  for (auto i = 0; i < 7; ++i) {
+    auto& stringVec = strings[i];
+    stringVec.resize(numRows);
+    batches.emplace_back(vectorMaker_->flatVector<StringView>(
+        numRows, [&i, &stringVec, numRows](vector_size_t row) {
+          const auto num = numRows * i + row;
+          stringVec[row] = (row != 0)
+              ? fmt::format("abcdefghijabcdefghij{}", num)
+              : fmt::format("s{}", num);
+          return StringView(stringVec[row]);
+        }));
+  }
+
+  SelectivityVector rows(numRows, true);
+  raw_vector<uint64_t> hashes{numRows};
+  for (auto i = 0; i < 7; ++i) {
+    if (i < 5) {
+      ASSERT_TRUE(hasher->mayUseValueIds());
+      ASSERT_EQ(i * numRows, hasher->numUniqueValues());
+    } else {
+      ASSERT_FALSE(hasher->mayUseValueIds());
+      ASSERT_EQ(0, hasher->numUniqueValues());
+    }
+    if (hasher->mayUseValueIds()) {
+      hasher->decode(*batches[i], rows);
+      hasher->computeValueIds(rows, hashes);
+    }
+  }
 }
 
 TEST_F(VectorHasherTest, integerIds) {

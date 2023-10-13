@@ -113,7 +113,9 @@ class ZlibDecompressor : public Decompressor {
  public:
   explicit ZlibDecompressor(
       uint64_t blockSize,
-      const std::string& streamDebugInfo);
+      int windowBits,
+      const std::string& streamDebugInfo,
+      bool izGzip = false);
   ~ZlibDecompressor() override;
 
   uint64_t decompress(
@@ -137,7 +139,9 @@ class ZlibDecompressor : public Decompressor {
 
 ZlibDecompressor::ZlibDecompressor(
     uint64_t blockSize,
-    const std::string& streamDebugInfo)
+    int windowBits,
+    const std::string& streamDebugInfo,
+    bool isGzip)
     : Decompressor{blockSize, streamDebugInfo} {
   zstream_.next_in = Z_NULL;
   zstream_.avail_in = 0;
@@ -146,7 +150,12 @@ ZlibDecompressor::ZlibDecompressor(
   zstream_.opaque = Z_NULL;
   zstream_.next_out = Z_NULL;
   zstream_.avail_out = folly::to<uInt>(blockSize);
-  auto result = inflateInit2(&zstream_, -15);
+  int zlibWindowBits = windowBits;
+  constexpr int GZIP_DETECT_CODE = 32;
+  if (isGzip) {
+    zlibWindowBits = zlibWindowBits | GZIP_DETECT_CODE;
+  }
+  const auto result = inflateInit2(&zstream_, zlibWindowBits);
   DWIO_ENSURE_EQ(
       result,
       Z_OK,
@@ -232,6 +241,9 @@ uint64_t Lz4Decompressor::decompress(
   return static_cast<uint64_t>(result);
 }
 
+// NOTE: We do not keep `ZSTD_DCtx' around on purpose, because if we keep it
+// around, in flat map column reader we have hundreds of thousands of
+// decompressors at same time and causing OOM.
 class ZstdDecompressor : public Decompressor {
  public:
   explicit ZstdDecompressor(
@@ -245,8 +257,9 @@ class ZstdDecompressor : public Decompressor {
       char* dest,
       uint64_t destLength) override;
 
-  uint64_t getUncompressedLength(const char* src, uint64_t srcLength)
-      const override;
+  std::pair<int64_t, bool> getDecompressedLength(
+      const char* src,
+      uint64_t srcLength) const override;
 };
 
 uint64_t ZstdDecompressor::decompress(
@@ -264,7 +277,7 @@ uint64_t ZstdDecompressor::decompress(
   return ret;
 }
 
-uint64_t ZstdDecompressor::getUncompressedLength(
+std::pair<int64_t, bool> ZstdDecompressor::getDecompressedLength(
     const char* src,
     uint64_t srcLength) const {
   auto uncompressedLength = ZSTD_getFrameContentSize(src, srcLength);
@@ -272,14 +285,14 @@ uint64_t ZstdDecompressor::getUncompressedLength(
   // bound
   if (uncompressedLength == ZSTD_CONTENTSIZE_UNKNOWN ||
       uncompressedLength == ZSTD_CONTENTSIZE_ERROR) {
-    return blockSize_;
+    return {blockSize_, false};
   }
   DWIO_ENSURE_LE(
       uncompressedLength,
       blockSize_,
       "Insufficient buffer size. Info: ",
       streamDebugInfo_);
-  return uncompressedLength;
+  return {uncompressedLength, true};
 }
 
 class SnappyDecompressor : public Decompressor {
@@ -295,8 +308,9 @@ class SnappyDecompressor : public Decompressor {
       char* dest,
       uint64_t destLength) override;
 
-  uint64_t getUncompressedLength(const char* src, uint64_t srcLength)
-      const override;
+  std::pair<int64_t, bool> getDecompressedLength(
+      const char* src,
+      uint64_t srcLength) const override;
 };
 
 uint64_t SnappyDecompressor::decompress(
@@ -304,7 +318,7 @@ uint64_t SnappyDecompressor::decompress(
     uint64_t srcLength,
     char* dest,
     uint64_t destLength) {
-  auto length = getUncompressedLength(src, srcLength);
+  auto [length, _] = getDecompressedLength(src, srcLength);
   DWIO_ENSURE_GE(destLength, length);
   DWIO_ENSURE(
       snappy::RawUncompress(src, srcLength, dest),
@@ -313,23 +327,24 @@ uint64_t SnappyDecompressor::decompress(
   return length;
 }
 
-uint64_t SnappyDecompressor::getUncompressedLength(
+std::pair<int64_t, bool> SnappyDecompressor::getDecompressedLength(
     const char* src,
     uint64_t srcLength) const {
   size_t uncompressedLength;
   // in the case when decompression size is not available, return the upper
   // bound
   if (!snappy::GetUncompressedLength(src, srcLength, &uncompressedLength)) {
-    return blockSize_;
+    return {blockSize_, false};
   }
   DWIO_ENSURE_LE(
       uncompressedLength,
       blockSize_,
       "Insufficient buffer size. Info: ",
       streamDebugInfo_);
-  return uncompressedLength;
+  return {uncompressedLength, true};
 }
 
+// TODO: Is this really needed?
 class ZlibDecompressionStream : public PagedInputStream,
                                 private ZlibDecompressor {
  public:
@@ -337,18 +352,27 @@ class ZlibDecompressionStream : public PagedInputStream,
       std::unique_ptr<dwio::common::SeekableInputStream> inStream,
       uint64_t blockSize,
       MemoryPool& pool,
-      const std::string& streamDebugInfo)
-      : PagedInputStream{std::move(inStream), pool, streamDebugInfo},
-        ZlibDecompressor{blockSize, streamDebugInfo} {}
+      int windowBits,
+      const std::string& streamDebugInfo,
+      bool isGzip = false,
+      bool useRawDecompression = false,
+      size_t compressedLength = 0)
+      : PagedInputStream{std::move(inStream), pool, streamDebugInfo, useRawDecompression, compressedLength},
+        ZlibDecompressor{blockSize, windowBits, streamDebugInfo, isGzip} {}
   ~ZlibDecompressionStream() override = default;
 
-  bool Next(const void** data, int32_t* size) override;
+  bool readOrSkip(const void** data, int32_t* size) override;
 };
 
-bool ZlibDecompressionStream::Next(const void** data, int32_t* size) {
+bool ZlibDecompressionStream::readOrSkip(const void** data, int32_t* size) {
+  if (data) {
+    VELOX_CHECK_EQ(pendingSkip_, 0);
+  }
   // if the user pushed back, return them the partial buffer
   if (outputBufferLength_) {
-    *data = outputBufferPtr_;
+    if (data) {
+      *data = outputBufferPtr_;
+    }
     *size = static_cast<int32_t>(outputBufferLength_);
     outputBufferPtr_ += outputBufferLength_;
     bytesReturned_ += outputBufferLength_;
@@ -368,7 +392,9 @@ bool ZlibDecompressionStream::Next(const void** data, int32_t* size) {
       static_cast<size_t>(inputBufferPtrEnd_ - inputBufferPtr_),
       remainingLength_);
   if (state_ == State::ORIGINAL) {
-    *data = inputBufferPtr_;
+    if (data) {
+      *data = inputBufferPtr_;
+    }
     *size = static_cast<int32_t>(availSize);
     outputBufferPtr_ = inputBufferPtr_ + availSize;
     outputBufferLength_ = 0;
@@ -380,7 +406,8 @@ bool ZlibDecompressionStream::Next(const void** data, int32_t* size) {
         getName(),
         " Info: ",
         ZlibDecompressor::streamDebugInfo_);
-    prepareOutputBuffer(getUncompressedLength(inputBufferPtr_, availSize));
+    prepareOutputBuffer(
+        getDecompressedLength(inputBufferPtr_, availSize).first);
 
     reset();
     zstream_.next_in =
@@ -419,7 +446,9 @@ bool ZlibDecompressionStream::Next(const void** data, int32_t* size) {
       }
     } while (result != Z_STREAM_END);
     *size = static_cast<int32_t>(blockSize_ - zstream_.avail_out);
-    *data = outputBufferPtr_;
+    if (data) {
+      *data = outputBufferPtr_;
+    }
     outputBufferLength_ = 0;
     outputBufferPtr_ += *size;
   }
@@ -436,13 +465,11 @@ std::unique_ptr<BufferedOutputStream> createCompressor(
     CompressionKind kind,
     CompressionBufferPool& bufferPool,
     DataBufferHolder& bufferHolder,
-    uint32_t compressionThreshold,
-    int32_t zlibCompressionLevel,
-    int32_t zstdCompressionLevel,
     uint8_t pageHeaderSize,
+    const CompressionOptions& options,
     const Encrypter* encrypter) {
   std::unique_ptr<Compressor> compressor;
-  switch (static_cast<int64_t>(kind)) {
+  switch (kind) {
     case CompressionKind::CompressionKind_NONE:
       if (!encrypter) {
         return std::make_unique<BufferedOutputStream>(bufferHolder);
@@ -450,17 +477,19 @@ std::unique_ptr<BufferedOutputStream> createCompressor(
       // compressor remain as nullptr
       break;
     case CompressionKind::CompressionKind_ZLIB: {
-      compressor = std::make_unique<ZlibCompressor>(zlibCompressionLevel);
+      compressor = std::make_unique<ZlibCompressor>(
+          options.format.zlib.compressionLevel);
       XLOG_FIRST_N(INFO, 1) << fmt::format(
           "Initialized zlib compressor with compression level {}",
-          zlibCompressionLevel);
+          options.format.zlib.compressionLevel);
       break;
     }
     case CompressionKind::CompressionKind_ZSTD: {
-      compressor = std::make_unique<ZstdCompressor>(zstdCompressionLevel);
+      compressor = std::make_unique<ZstdCompressor>(
+          options.format.zstd.compressionLevel);
       XLOG_FIRST_N(INFO, 1) << fmt::format(
           "Initialized zstd compressor with compression level {}",
-          zstdCompressionLevel);
+          options.format.zstd.compressionLevel);
       break;
     }
     case CompressionKind::CompressionKind_SNAPPY:
@@ -473,7 +502,7 @@ std::unique_ptr<BufferedOutputStream> createCompressor(
   return std::make_unique<PagedOutputStream>(
       bufferPool,
       bufferHolder,
-      compressionThreshold,
+      options.compressionThreshold,
       pageHeaderSize,
       std::move(compressor),
       encrypter);
@@ -484,8 +513,11 @@ std::unique_ptr<dwio::common::SeekableInputStream> createDecompressor(
     std::unique_ptr<dwio::common::SeekableInputStream> input,
     uint64_t blockSize,
     MemoryPool& pool,
+    const CompressionOptions& options,
     const std::string& streamDebugInfo,
-    const Decrypter* decrypter) {
+    const Decrypter* decrypter,
+    bool useRawDecompression,
+    size_t compressedLength) {
   std::unique_ptr<Decompressor> decompressor;
   switch (static_cast<int64_t>(kind)) {
     case CompressionKind::CompressionKind_NONE:
@@ -499,10 +531,34 @@ std::unique_ptr<dwio::common::SeekableInputStream> createDecompressor(
         // When file is not encrypted, we can use zlib streaming codec to avoid
         // copying data
         return std::make_unique<ZlibDecompressionStream>(
-            std::move(input), blockSize, pool, streamDebugInfo);
+            std::move(input),
+            blockSize,
+            pool,
+            options.format.zlib.windowBits,
+            streamDebugInfo,
+            false,
+            useRawDecompression,
+            compressedLength);
       }
-      decompressor =
-          std::make_unique<ZlibDecompressor>(blockSize, streamDebugInfo);
+      decompressor = std::make_unique<ZlibDecompressor>(
+          blockSize, options.format.zlib.windowBits, streamDebugInfo, false);
+      break;
+    case CompressionKind::CompressionKind_GZIP:
+      if (!decrypter) {
+        // When file is not encrypted, we can use zlib streaming codec to avoid
+        // copying data
+        return std::make_unique<ZlibDecompressionStream>(
+            std::move(input),
+            blockSize,
+            pool,
+            options.format.zlib.windowBits,
+            streamDebugInfo,
+            true,
+            useRawDecompression,
+            compressedLength);
+      }
+      decompressor = std::make_unique<ZlibDecompressor>(
+          blockSize, options.format.zlib.windowBits, streamDebugInfo, true);
       break;
     case CompressionKind::CompressionKind_SNAPPY:
       decompressor =
@@ -528,7 +584,9 @@ std::unique_ptr<dwio::common::SeekableInputStream> createDecompressor(
       pool,
       std::move(decompressor),
       decrypter,
-      streamDebugInfo);
+      streamDebugInfo,
+      useRawDecompression,
+      compressedLength);
 }
 
 } // namespace facebook::velox::dwio::common::compression

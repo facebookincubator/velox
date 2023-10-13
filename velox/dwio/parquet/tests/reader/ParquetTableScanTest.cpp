@@ -24,9 +24,7 @@
 #include "velox/exec/tests/utils/PlanBuilder.h"
 #include "velox/type/tests/SubfieldFiltersBuilder.h"
 
-#ifndef VELOX_ENABLE_BACKWARD_COMPATIBILITY
 #include "velox/connectors/hive/HiveConfig.h"
-#endif
 
 using namespace facebook::velox;
 using namespace facebook::velox::exec;
@@ -265,11 +263,11 @@ TEST_F(ParquetTableScanTest, decimalSubfieldFilter) {
   VELOX_ASSERT_THROW(
       assertSelectWithFilter(
           {"a"}, {"a < 1000.7"}, "", "SELECT a FROM tmp WHERE a < 1000.7"),
-      "Scalar function signature is not supported: lt(DECIMAL(5,2), DECIMAL(5,1))");
+      "Scalar function signature is not supported: lt(DECIMAL(5, 2), DECIMAL(5, 1))");
   VELOX_ASSERT_THROW(
       assertSelectWithFilter(
           {"a"}, {"a = 1000.7"}, "", "SELECT a FROM tmp WHERE a = 1000.7"),
-      "Scalar function signature is not supported: eq(DECIMAL(5,2), DECIMAL(5,1))");
+      "Scalar function signature is not supported: eq(DECIMAL(5, 2), DECIMAL(5, 1))");
 }
 
 // Core dump is fixed.

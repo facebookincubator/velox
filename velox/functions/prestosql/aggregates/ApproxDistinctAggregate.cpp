@@ -200,10 +200,7 @@ class ApproxDistinctAggregate : public exec::Aggregate {
   }
 
   void destroy(folly::Range<char**> groups) override {
-    for (auto group : groups) {
-      // All accumulators are default constructed also for nulls.
-      std::destroy_at(value<HllAccumulator>(group));
-    }
+    destroyAccumulators<HllAccumulator>(groups);
   }
 
   void addRawInput(
@@ -319,7 +316,7 @@ class ApproxDistinctAggregate : public exec::Aggregate {
 
     uint64_t* rawNulls = nullptr;
     if (result->mayHaveNulls()) {
-      BufferPtr nulls = result->mutableNulls(result->size());
+      BufferPtr& nulls = result->mutableNulls(result->size());
       rawNulls = nulls->asMutable<uint64_t>();
     }
 

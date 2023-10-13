@@ -20,27 +20,28 @@ namespace facebook::velox {
 
 struct ByteRange;
 
-// An abstract class that holds memory for serialized vector
-// content. A single repartitioning target is one use case: The bytes
-// held are released as a unit when the destination acknowledges
-// receipt. Another use case is a hash table partition that holds
-// complex types as serialized rows.
+/// An abstract class that holds memory for serialized vector content. A single
+/// repartitioning target is one use case: The bytes held are released as a unit
+/// when the destination acknowledges receipt. Another use case is a hash table
+/// partition that holds complex types as serialized rows.
 class StreamArena {
  public:
   explicit StreamArena(memory::MemoryPool* pool);
 
   virtual ~StreamArena() = default;
 
-  // Sets range to refer  to at least one page of writable memory owned by
-  // 'this'. Up to 'numPages' may be  allocated.
+  /// Sets range to the request 'bytes' of writable memory owned by 'this'.
+  /// We allocate non-contiguous memory to store range bytes if requested
+  /// 'bytes' is equal or less than the largest class page size. Otherwise, we
+  /// allocate from contiguous memory.
   virtual void newRange(int32_t bytes, ByteRange* range);
 
-  // sets 'range' to point to a small piece of memory owned by this. These alwys
-  // come from the heap. The use case is for headers that may change length
-  // based on data properties, not for bulk data.
+  /// sets 'range' to point to a small piece of memory owned by this. These
+  /// always come from the heap. The use case is for headers that may change
+  /// length based on data properties, not for bulk data.
   virtual void newTinyRange(int32_t bytes, ByteRange* range);
 
-  // Returns the Total size in bytes held by all Allocations.
+  /// Returns the Total size in bytes held by all Allocations.
   virtual size_t size() const {
     return size_;
   }
@@ -51,15 +52,27 @@ class StreamArena {
 
  private:
   memory::MemoryPool* const pool_;
-  // All allocations.
+  const memory::MachinePageCount allocationQuantum_{2};
+
+  // All non-contiguous allocations.
   std::vector<std::unique_ptr<memory::Allocation>> allocations_;
+
   // The allocation from which pages are given out. Moved to 'allocations_' when
   // used up.
   memory::Allocation allocation_;
+
+  // The index of page run in 'allocation_' for next allocation.
   int32_t currentRun_ = 0;
-  int32_t currentPage_ = 0;
-  memory::MachinePageCount allocationQuantum_ = 2;
+
+  // The byte offset in page run indexed by 'currentRun_' for next allocation.
+  int32_t currentOffset_ = 0;
+
+  // All contiguous allocations.
+  std::vector<memory::ContiguousAllocation> largeAllocations_;
+
+  // Tracks all the contiguous and non-contiguous allocations in bytes.
   size_t size_ = 0;
+
   std::vector<std::string> tinyRanges_;
 };
 

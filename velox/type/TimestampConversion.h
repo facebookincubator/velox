@@ -55,6 +55,9 @@ bool isValidDayOfYear(int32_t year, int32_t dayOfYear);
 // Returns max day of month for inputted month of inputted year
 int32_t getMaxDayOfMonth(int32_t year, int32_t month);
 
+// Returns last day of month since unix epoch (1970-01-01).
+int64_t lastDayOfMonthSinceEpochFromDate(const std::tm& dateTime);
+
 /// Date conversions.
 
 /// Returns the (signed) number of days since unix epoch (1970-01-01).
@@ -82,8 +85,8 @@ inline int64_t fromDateString(const StringView& str) {
 }
 
 /// Cast string to date.
-/// When isNonStandardCast = false, only support "[+-]YYYY-MM-DD" format.
-/// When isNonStandardCast = true, supported date formats include:
+/// When isIso8601 = true, only support "[+-]YYYY-MM-DD" format (ISO 8601).
+/// When isIso8601 = false, supported date formats include:
 ///
 /// `[+-]YYYY*`
 /// `[+-]YYYY*-[M]M`
@@ -93,12 +96,10 @@ inline int64_t fromDateString(const StringView& str) {
 /// `[+-]YYYY*-[M]M-[D]DT*`
 ///
 /// Throws VeloxUserError if the format or date is invalid.
-int32_t castFromDateString(const char* buf, size_t len, bool isNonStandardCast);
+int32_t castFromDateString(const char* buf, size_t len, bool isIso8601);
 
-inline int32_t castFromDateString(
-    const StringView& str,
-    bool isNonStandardCast) {
-  return castFromDateString(str.data(), str.size(), isNonStandardCast);
+inline int32_t castFromDateString(const StringView& str, bool isIso8601) {
+  return castFromDateString(str.data(), str.size(), isIso8601);
 }
 
 // Extracts the day of the week from the number of days since epoch

@@ -504,7 +504,7 @@ int RowContainer::compareComplexType(
     const DecodedVector& decoded,
     vector_size_t index,
     CompareFlags flags) {
-  VELOX_DCHECK(!flags.stopAtNull, "not supported compare flag");
+  VELOX_DCHECK(!flags.mayStopAtNull(), "not supported null handling mode");
 
   ByteStream stream;
   prepareRead(row, offset, stream);
@@ -525,7 +525,7 @@ int32_t RowContainer::compareComplexType(
     int32_t leftOffset,
     int32_t rightOffset,
     CompareFlags flags) {
-  VELOX_DCHECK(!flags.stopAtNull, "not supported compare flag");
+  VELOX_DCHECK(!flags.mayStopAtNull(), "not supported null handling mode");
 
   ByteStream leftStream;
   ByteStream rightStream;
@@ -587,6 +587,14 @@ void RowContainer::hash(
     folly::Range<char**> rows,
     bool mix,
     uint64_t* result) {
+  if (typeKinds_[column] == TypeKind::UNKNOWN) {
+    for (auto i = 0; i < rows.size(); ++i) {
+      result[i] = mix ? bits::hashMix(result[i], BaseVector::kNullHash)
+                      : BaseVector::kNullHash;
+    }
+    return;
+  }
+
   bool nullable = column >= keyTypes_.size() || nullableKeys_;
   VELOX_DYNAMIC_TYPE_DISPATCH(
       hashTyped,

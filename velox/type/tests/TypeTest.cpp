@@ -65,6 +65,10 @@ TEST(TypeTest, integer) {
   testTypeSerde(int0);
 }
 
+TEST(TypeTest, hugeint) {
+  EXPECT_EQ(getType("HUGEINT", {}), HUGEINT());
+}
+
 TEST(TypeTest, timestamp) {
   auto t0 = TIMESTAMP();
   EXPECT_EQ(t0->toString(), "TIMESTAMP");
@@ -185,7 +189,7 @@ TEST(TypeTest, intervalYearMonth) {
 
 TEST(TypeTest, shortDecimal) {
   auto shortDecimal = DECIMAL(10, 5);
-  EXPECT_EQ(shortDecimal->toString(), "DECIMAL(10,5)");
+  EXPECT_EQ(shortDecimal->toString(), "DECIMAL(10, 5)");
   EXPECT_EQ(shortDecimal->size(), 0);
   EXPECT_THROW(shortDecimal->childAt(0), std::invalid_argument);
   EXPECT_EQ(shortDecimal->kind(), TypeKind::BIGINT);
@@ -218,7 +222,7 @@ TEST(TypeTest, shortDecimal) {
 
 TEST(TypeTest, longDecimal) {
   auto longDecimal = DECIMAL(30, 5);
-  EXPECT_EQ(longDecimal->toString(), "DECIMAL(30,5)");
+  EXPECT_EQ(longDecimal->toString(), "DECIMAL(30, 5)");
   EXPECT_EQ(longDecimal->size(), 0);
   EXPECT_THROW(longDecimal->childAt(0), std::invalid_argument);
   EXPECT_EQ(longDecimal->kind(), TypeKind::HUGEINT);
@@ -352,6 +356,7 @@ TEST(TypeTest, map) {
 }
 
 TEST(TypeTest, row) {
+  VELOX_ASSERT_THROW(ROW({{"a", nullptr}}), "Child types cannot be null");
   auto row0 = ROW({{"a", INTEGER()}, {"b", ROW({{"a", BIGINT()}})}});
   auto rowInner = row0->childAt(1);
   EXPECT_EQ(row0->toString(), "ROW<a:INTEGER,b:ROW<a:BIGINT>>");
@@ -397,16 +402,16 @@ TEST(TypeTest, row) {
   }
 
   auto row1 =
-      ROW({{"a,b", INTEGER()}, {"my \"column\"", ROW({{"#1", BIGINT()}})}});
+      ROW({{"a,b", INTEGER()}, {R"(my "column")", ROW({{"#1", BIGINT()}})}});
   EXPECT_EQ(
       row1->toString(),
-      "ROW<\"a,b\":INTEGER,\"my \"\"column\"\"\":ROW<\"#1\":BIGINT>>");
+      R"(ROW<"a,b":INTEGER,"my ""column""":ROW<"#1":BIGINT>>)");
   EXPECT_EQ(row1->nameOf(0), "a,b");
-  EXPECT_EQ(row1->nameOf(1), "my \"column\"");
-  EXPECT_EQ(row1->childAt(1)->toString(), "ROW<\"#1\":BIGINT>");
+  EXPECT_EQ(row1->nameOf(1), R"(my "column")");
+  EXPECT_EQ(row1->childAt(1)->toString(), R"(ROW<"#1":BIGINT>)");
 
   auto row2 = ROW({{"", INTEGER()}});
-  EXPECT_EQ(row2->toString(), "ROW<\"\":INTEGER>");
+  EXPECT_EQ(row2->toString(), R"(ROW<"":INTEGER>)");
   EXPECT_EQ(row2->nameOf(0), "");
 
   VELOX_ASSERT_THROW(createScalarType(TypeKind::ROW), "not a scalar type");
@@ -843,4 +848,96 @@ TEST(TypeTest, unionWith) {
       childRowType1->unionWith(childRowType2)->equivalent(*resultRowType));
   ASSERT_TRUE(
       childRowType1->unionWith(childRowType1)->equivalent(*resultRowType2));
+}
+
+TEST(TypeTest, orderableComparable) {
+  // Scalar type.
+  EXPECT_TRUE(INTEGER()->isOrderable());
+  EXPECT_TRUE(INTEGER()->isComparable());
+  EXPECT_TRUE(REAL()->isOrderable());
+  EXPECT_TRUE(REAL()->isComparable());
+  EXPECT_TRUE(VARCHAR()->isOrderable());
+  EXPECT_TRUE(VARCHAR()->isComparable());
+  EXPECT_TRUE(BIGINT()->isOrderable());
+  EXPECT_TRUE(BIGINT()->isComparable());
+  EXPECT_TRUE(DOUBLE()->isOrderable());
+  EXPECT_TRUE(DOUBLE()->isComparable());
+
+  // Map type.
+  auto mapType = MAP(INTEGER(), REAL());
+  EXPECT_FALSE(mapType->isOrderable());
+  EXPECT_TRUE(mapType->isComparable());
+
+  // Array type.
+  auto arrayType = ARRAY(INTEGER());
+  EXPECT_TRUE(arrayType->isOrderable());
+  EXPECT_TRUE(arrayType->isComparable());
+
+  arrayType = ARRAY(mapType);
+  EXPECT_FALSE(arrayType->isOrderable());
+  EXPECT_TRUE(arrayType->isComparable());
+
+  // Row type.
+  auto rowType = ROW({INTEGER(), REAL()});
+  EXPECT_TRUE(rowType->isOrderable());
+  EXPECT_TRUE(rowType->isComparable());
+
+  rowType = ROW({INTEGER(), mapType});
+  EXPECT_FALSE(rowType->isOrderable());
+  EXPECT_TRUE(rowType->isComparable());
+
+  // Decimal types.
+  auto shortDecimal = DECIMAL(10, 5);
+  EXPECT_TRUE(shortDecimal->isOrderable());
+  EXPECT_TRUE(shortDecimal->isComparable());
+
+  auto longDecimal = DECIMAL(30, 5);
+  EXPECT_TRUE(longDecimal->isOrderable());
+  EXPECT_TRUE(longDecimal->isComparable());
+
+  // Function type.
+  auto functionType = std::make_shared<FunctionType>(
+      std::vector<TypePtr>{BIGINT(), VARCHAR()}, BOOLEAN());
+  EXPECT_FALSE(functionType->isOrderable());
+  EXPECT_FALSE(functionType->isComparable());
+
+  // Mixed.
+  mapType = MAP(INTEGER(), functionType);
+  EXPECT_FALSE(mapType->isOrderable());
+  EXPECT_FALSE(mapType->isComparable());
+
+  arrayType = ARRAY(mapType);
+  EXPECT_FALSE(arrayType->isOrderable());
+  EXPECT_FALSE(arrayType->isComparable());
+
+  rowType = ROW({INTEGER(), mapType});
+  EXPECT_FALSE(rowType->isOrderable());
+  EXPECT_FALSE(rowType->isComparable());
+}
+
+TEST(TypeTest, functionTypeEquivalent) {
+  auto functionType = std::make_shared<FunctionType>(
+      std::vector<TypePtr>{BIGINT(), VARCHAR()}, BOOLEAN());
+  auto otherFunctionType =
+      std::make_shared<FunctionType>(std::vector<TypePtr>{BIGINT()}, BOOLEAN());
+  EXPECT_FALSE(functionType->equivalent(*otherFunctionType));
+
+  otherFunctionType = std::make_shared<FunctionType>(
+      std::vector<TypePtr>{BIGINT(), VARCHAR()}, BOOLEAN());
+  EXPECT_TRUE(functionType->equivalent(*otherFunctionType));
+
+  functionType = std::make_shared<FunctionType>(
+      std::vector<TypePtr>{ARRAY(BIGINT())}, BOOLEAN());
+  otherFunctionType = std::make_shared<FunctionType>(
+      std::vector<TypePtr>{ARRAY(BIGINT())}, BOOLEAN());
+  EXPECT_TRUE(functionType->equivalent(*otherFunctionType));
+
+  functionType = std::make_shared<FunctionType>(
+      std::vector<TypePtr>{MAP(BIGINT(), VARCHAR())}, BOOLEAN());
+  EXPECT_FALSE(functionType->equivalent(*otherFunctionType));
+
+  otherFunctionType = std::make_shared<FunctionType>(
+      std::vector<TypePtr>{MAP(BIGINT(), VARCHAR())}, BOOLEAN());
+
+  EXPECT_TRUE(functionType->equivalent(*otherFunctionType));
 }

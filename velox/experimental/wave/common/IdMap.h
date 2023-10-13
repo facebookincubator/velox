@@ -28,30 +28,18 @@ class IdMap {
  public:
   void init(int capacity, T* values, int32_t* ids);
 
-  __device__ void initTable() {
-    for (int i = threadIdx.x; i < capacity_; i += blockDim.x) {
-      values_[i] = kEmptyMarker;
-      ids_[i] = 0;
-    }
-  }
+  __device__ void clearTable();
 
-  __device__ void makeIds(const T* values, int64_t size, int32_t* output);
+  __device__ int32_t makeId(T value);
+
+  __device__ int cardinality() const {
+    return lastId_;
+  }
 
  private:
-  __device__ static T casValue(T* address, T compare, T val) {
-    if constexpr (std::is_same_v<T, StringView>) {
-      return address->cas(compare, val);
-    } else if constexpr (sizeof(T) == 8) {
-      using ULL = unsigned long long;
-      return atomicCAS((ULL*)address, (ULL)compare, (ULL)val);
-    } else {
-      return atomicCAS(address, compare, val);
-    }
-  }
+  __device__ static T casValue(T* address, T compare, T val);
 
-  __device__ void storeNewId(volatile int32_t* id) {
-    *id = atomicAdd(const_cast<int*>(&lastId_), 1) + 1;
-  }
+  __device__ void storeNewId(volatile int32_t* id);
 
   // `ensureIdReady' cannot be executed in the same lockstep with `storeNewId'
   // (e.g. in the else branch of `storeNewId'), which will cause deadlock if
@@ -59,15 +47,7 @@ class IdMap {
   // will cause the whole warp to wait).
   __device__ static void ensureIdReady(
       volatile const int32_t* id,
-      int32_t placeholder) {
-    if (*id != placeholder) {
-      return;
-    }
-    auto t0 = clock64();
-    while (*id == placeholder) {
-      assert(clock64() - t0 < 1'000'000);
-    }
-  }
+      int32_t placeholder);
 
   static constexpr T kEmptyMarker = {};
   int capacity_;
@@ -96,40 +76,6 @@ void IdMap<T, H>::init(int capacity, T* values, int32_t* ids) {
   ids_ = ids;
   emptyId_ = 0;
   lastId_ = 0;
-}
-
-template <typename T, typename H>
-__device__ void
-IdMap<T, H>::makeIds(const T* values, int64_t size, int32_t* output) {
-  auto mask = capacity_ - 1;
-  auto maxEntries = capacity_ - capacity_ / 4;
-  for (int64_t i = threadIdx.x; i < size; i += blockDim.x) {
-    if (values[i] == kEmptyMarker) {
-      if (emptyId_ <= 0) {
-        if (atomicCAS(const_cast<int*>(&emptyId_), 0, -1) == 0) {
-          storeNewId(&emptyId_);
-        }
-        ensureIdReady(&emptyId_, -1);
-      }
-      output[i] = emptyId_;
-      continue;
-    }
-    for (auto j = H()(values[i]) & mask;; j = (j + 1) & mask) {
-      if (lastId_ > maxEntries) {
-        output[i] = -1;
-        return;
-      }
-      if (values_[j] == kEmptyMarker &&
-          casValue(&values_[j], kEmptyMarker, values[i]) == kEmptyMarker) {
-        storeNewId(&ids_[j]);
-      }
-      if (values_[j] == values[i]) {
-        ensureIdReady(&ids_[j], 0);
-        output[i] = ids_[j];
-        break;
-      }
-    }
-  }
 }
 
 } // namespace facebook::velox::wave

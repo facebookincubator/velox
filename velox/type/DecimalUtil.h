@@ -82,8 +82,16 @@ class DecimalUtil {
   FOLLY_ALWAYS_INLINE static void valueInRange(int128_t value) {
     VELOX_CHECK(
         (value >= kLongDecimalMin && value <= kLongDecimalMax),
-        "Value '{}' is not in the range of Decimal Type",
+        "Decimal overflow. Value '{}' is not in the range of Decimal Type",
         value);
+  }
+
+  // Returns true if the precision can represent the value.
+  template <typename T>
+  FOLLY_ALWAYS_INLINE static bool valueInPrecisionRange(
+      T value,
+      uint8_t precision) {
+    return value < kPowersOfTen[precision] && value > -kPowersOfTen[precision];
   }
 
   /// Helper function to convert a decimal value to string.
@@ -161,10 +169,9 @@ class DecimalUtil {
       }
     }
     // Check overflow.
-    if (rescaledValue < -DecimalUtil::kPowersOfTen[toPrecision] ||
-        rescaledValue > DecimalUtil::kPowersOfTen[toPrecision] || isOverflow) {
+    if (!valueInPrecisionRange(rescaledValue, toPrecision) || isOverflow) {
       VELOX_USER_FAIL(
-          "Cannot cast DECIMAL '{}' to DECIMAL({},{})",
+          "Cannot cast DECIMAL '{}' to DECIMAL({}, {})",
           DecimalUtil::toString(inputValue, DECIMAL(fromPrecision, fromScale)),
           toPrecision,
           toScale);
@@ -181,10 +188,9 @@ class DecimalUtil {
     bool isOverflow = __builtin_mul_overflow(
         rescaledValue, DecimalUtil::kPowersOfTen[toScale], &rescaledValue);
     // Check overflow.
-    if (rescaledValue < -DecimalUtil::kPowersOfTen[toPrecision] ||
-        rescaledValue > DecimalUtil::kPowersOfTen[toPrecision] || isOverflow) {
+    if (!valueInPrecisionRange(rescaledValue, toPrecision) || isOverflow) {
       VELOX_USER_FAIL(
-          "Cannot cast {} '{}' to DECIMAL({},{})",
+          "Cannot cast {} '{}' to DECIMAL({}, {})",
           SimpleTypeTrait<TInput>::name,
           inputValue,
           toPrecision,
@@ -315,7 +321,9 @@ class DecimalUtil {
   /// significant byte is in the zeroth element. The array will contain the
   /// minimum number of bytes required to represent this BigInteger, including
   /// at least one sign bit, which is (ceil((this.bitLength() + 1)/8)).
-  static void toByteArray(int128_t value, char* out, int32_t& length);
+  ///
+  /// @return The length of out.
+  static int32_t toByteArray(int128_t value, char* out);
 
   static constexpr __uint128_t kOverflowMultiplier = ((__uint128_t)1 << 127);
 }; // DecimalUtil

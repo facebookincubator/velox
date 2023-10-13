@@ -143,7 +143,7 @@ TEST_F(GenericViewTest, compare) {
   ASSERT_NE(reader[0].compare(reader[1], flags).value(), 0);
   ASSERT_NE(reader[0].compare(reader[2], flags).value(), 0);
 
-  flags.stopAtNull = true;
+  flags.nullHandlingMode = CompareFlags::NullHandlingMode::StopAtNull;
   ASSERT_FALSE(reader[0].compare(reader[2], flags).has_value());
   ASSERT_TRUE(reader[0].compare(reader[1], flags).has_value());
 }

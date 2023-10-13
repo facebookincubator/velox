@@ -30,10 +30,32 @@ class time_zone;
 
 namespace facebook::velox {
 
+struct TimestampToStringOptions {
+  enum Precision : int8_t {
+    kMilliseconds = 3,
+    kNanoseconds = 9,
+  } precision = kNanoseconds;
+
+  bool zeroPaddingYear = false;
+  char dateTimeSeparator = 'T';
+  bool dateOnly = false;
+};
+
+// Our own version of gmtime_r to avoid expensive calls to __tz_convert.  This
+// might not be very significant in micro benchmark, but is causing significant
+// context switching cost in real world queries with higher concurrency (71% of
+// time is on __tz_convert for some queries).
+//
+// Return whether the epoch second can be converted to a valid std::tm.
+bool epochToUtc(int64_t seconds, std::tm& out);
+
+std::string
+tmToString(const std::tm&, int nanos, const TimestampToStringOptions&);
+
 struct Timestamp {
  public:
-  enum class Precision : int { kMilliseconds = 3, kNanoseconds = 9 };
   static constexpr int64_t kMillisecondsInSecond = 1'000;
+  static constexpr int64_t kMicrosecondsInMillisecond = 1'000;
   static constexpr int64_t kNanosecondsInMicrosecond = 1'000;
   static constexpr int64_t kNanosecondsInMillisecond = 1'000'000;
 
@@ -103,7 +125,7 @@ struct Timestamp {
           (int64_t)(nanos_ / 1'000'000));
     } catch (const std::exception& e) {
       VELOX_USER_FAIL(
-          "Could not convert Timestamp({}, {}) to microseconds, {}",
+          "Could not convert Timestamp({}, {}) to milliseconds, {}",
           seconds_,
           nanos_,
           e.what());
@@ -125,6 +147,11 @@ struct Timestamp {
           e.what());
     }
   }
+
+  /// Due to the limit of std::chrono, throws if timestamp is outside of
+  /// [-32767-01-01, 32767-12-31] range.
+  std::chrono::time_point<std::chrono::system_clock, std::chrono::milliseconds>
+  toTimePoint() const;
 
   static Timestamp fromMillis(int64_t millis) {
     if (millis >= 0 || millis % 1'000 == 0) {
@@ -258,31 +285,13 @@ struct Timestamp {
     return StringView("TODO: Implement");
   };
 
-  std::string toString(
-      const Precision& precision = Precision::kNanoseconds) const {
-    // gmtime is not thread-safe. Make sure to use gmtime_r.
-    std::tm tmValue;
-    VELOX_USER_CHECK_NOT_NULL(
-        gmtime_r((const time_t*)&seconds_, &tmValue),
+  std::string toString(const TimestampToStringOptions& options = {}) const {
+    std::tm tm;
+    VELOX_USER_CHECK(
+        epochToUtc(seconds_, tm),
         "Can't convert seconds to time: {}",
-        folly::to<std::string>(seconds_));
-
-    // return ISO 8601 time format.
-    // %F - equivalent to "%Y-%m-%d" (the ISO 8601 date format)
-    // T - literal T
-    // %T - equivalent to "%H:%M:%S" (the ISO 8601 time format)
-    // so this return time in the format
-    // %Y-%m-%dT%H:%M:%S.nnnnnnnnn for nanoseconds precision, or
-    // %Y-%m-%dT%H:%M:%S.nnn for milliseconds precision
-    // Note there is no Z suffix, which denotes UTC timestamp.
-    auto width = static_cast<int>(precision);
-    auto value =
-        precision == Precision::kMilliseconds ? nanos_ / 1'000'000 : nanos_;
-    std::ostringstream oss;
-    oss << std::put_time(&tmValue, "%FT%T");
-    oss << '.' << std::setfill('0') << std::setw(width) << value;
-
-    return oss.str();
+        seconds_);
+    return tmToString(tm, nanos_, options);
   }
 
   operator std::string() const {

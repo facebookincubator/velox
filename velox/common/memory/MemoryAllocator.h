@@ -146,13 +146,17 @@ class MemoryAllocator;
 class Cache {
  public:
   virtual ~Cache() = default;
-  /// This method should be implemented so that it tries to accommodate the
-  /// passed in 'allocate' by freeing up space from 'this' if needed. 'numPages'
-  /// is the number of pages 'allocate' tries to allocate.It should return true
-  /// if 'allocate' succeeds, and false otherwise.
+  /// This method should be implemented so that it tries to
+  /// accommodate the passed in 'allocate' by freeing up space from
+  /// 'this' if needed. 'numPages' is the number of pages 'allocate
+  /// needs to be free for allocate to succeed. This should return
+  /// true if 'allocate' succeeds, and false otherwise. 'numPages' can
+  /// be less than the planned allocation, even 0 but not
+  /// negative. This is possible if 'allocate' brings its own memory
+  /// that is exchanged for the new allocation.
   virtual bool makeSpace(
       memory::MachinePageCount numPages,
-      std::function<bool()> allocate) = 0;
+      std::function<bool(Allocation&)> allocate) = 0;
 
   virtual MemoryAllocator* allocator() const = 0;
 };
@@ -206,6 +210,8 @@ class MemoryAllocator : public std::enable_shared_from_this<MemoryAllocator> {
   static constexpr int32_t kMaxSizeClasses = 12;
   static constexpr uint16_t kMinAlignment = alignof(max_align_t);
   static constexpr uint16_t kMaxAlignment = 64;
+  static constexpr uint64_t kDefaultCapacityBytes =
+      std::numeric_limits<int64_t>::max();
 
   /// Returns the kind of this memory allocator. For AsyncDataCache, it returns
   /// the kind of the delegated memory allocator underneath.

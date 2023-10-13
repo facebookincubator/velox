@@ -43,6 +43,7 @@ add_library(
   LocalPartition.cpp
   LocalPlanner.cpp
   MarkDistinct.cpp
+  MemoryReclaimer.cpp
   Merge.cpp
   MergeJoin.cpp
   MergeSource.cpp
@@ -58,11 +59,14 @@ add_library(
   ProbeOperatorState.cpp
   RowContainer.cpp
   RowNumber.cpp
+  SortBuffer.cpp
   SortedAggregations.cpp
+  SortWindowBuild.cpp
   Spill.cpp
   SpillOperatorGroup.cpp
   Spiller.cpp
   StreamingAggregation.cpp
+  StreamingWindowBuild.cpp
   Strings.cpp
   TableScan.cpp
   TableWriteMerge.cpp
@@ -74,6 +78,7 @@ add_library(
   Values.cpp
   VectorHasher.cpp
   Window.cpp
+  WindowBuild.cpp
   WindowFunction.cpp
   WindowPartition.cpp
   AssignUniqueId.cpp

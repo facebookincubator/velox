@@ -49,11 +49,15 @@ std::shared_ptr<connector::ConnectorQueryCtx>
 OperatorCtx::createConnectorQueryCtx(
     const std::string& connectorId,
     const std::string& planNodeId,
-    memory::MemoryPool* connectorPool) const {
+    memory::MemoryPool* connectorPool,
+    memory::SetMemoryReclaimer setMemoryReclaimer,
+    const common::SpillConfig* spillConfig) const {
   return std::make_shared<connector::ConnectorQueryCtx>(
       pool_,
       connectorPool,
+      std::move(setMemoryReclaimer),
       driverCtx_->task->queryCtx()->getConnectorConfig(connectorId),
+      spillConfig,
       std::make_unique<SimpleExpressionEvaluator>(
           execCtx()->queryCtx(), execCtx()->pool()),
       driverCtx_->task->queryCtx()->cache(),
@@ -69,7 +73,7 @@ Operator::Operator(
     int32_t operatorId,
     std::string planNodeId,
     std::string operatorType,
-    std::optional<Spiller::Config> spillConfig)
+    std::optional<common::SpillConfig> spillConfig)
     : operatorCtx_(std::make_unique<OperatorCtx>(
           driverCtx,
           planNodeId,
@@ -133,6 +137,11 @@ std::unique_ptr<JoinBridge> Operator::joinBridgeFromPlanNode(
     }
   }
   return nullptr;
+}
+
+void Operator::initialize() {
+  VELOX_CHECK(!initialized_);
+  initialized_ = true;
 }
 
 // static
@@ -274,6 +283,7 @@ void Operator::recordBlockingTime(uint64_t start, BlockingReason reason) {
 void Operator::recordSpillStats(const SpillStats& spillStats) {
   VELOX_CHECK(noMoreInput_);
   auto lockedStats = stats_.wlock();
+  lockedStats->spilledInputBytes += spillStats.spilledInputBytes;
   lockedStats->spilledBytes += spillStats.spilledBytes;
   lockedStats->spilledRows += spillStats.spilledRows;
   lockedStats->spilledPartitions += spillStats.spilledPartitions;
@@ -428,6 +438,8 @@ void OperatorStats::add(const OperatorStats& other) {
 
   finishTiming.add(other.finishTiming);
 
+  backgroundTiming.add(other.backgroundTiming);
+
   memoryStats.add(other.memoryStats);
 
   for (const auto& [name, stats] : other.runtimeStats) {
@@ -439,6 +451,7 @@ void OperatorStats::add(const OperatorStats& other) {
   }
 
   numDrivers += other.numDrivers;
+  spilledInputBytes += other.spilledInputBytes;
   spilledBytes += other.spilledBytes;
   spilledRows += other.spilledRows;
   spilledPartitions += other.spilledPartitions;
@@ -464,9 +477,18 @@ void OperatorStats::clear() {
 
   finishTiming.clear();
 
+  backgroundTiming.clear();
+
   memoryStats.clear();
 
   runtimeStats.clear();
+
+  numDrivers = 0;
+  spilledInputBytes = 0;
+  spilledBytes = 0;
+  spilledRows = 0;
+  spilledPartitions = 0;
+  spilledFiles = 0;
 }
 
 std::unique_ptr<memory::MemoryReclaimer> Operator::MemoryReclaimer::create(
@@ -477,26 +499,28 @@ std::unique_ptr<memory::MemoryReclaimer> Operator::MemoryReclaimer::create(
 }
 
 void Operator::MemoryReclaimer::enterArbitration() {
-  std::shared_ptr<Driver> driver = ensureDriver();
-  // The driver must be alive as the operator is still under memory arbitration
-  // processing.
-  VELOX_CHECK_NOT_NULL(driver);
-  if (FOLLY_UNLIKELY(
-          !driver->state().isOnThread() ||
-          (std::this_thread::get_id() != driver->state().thread))) {
-    // NOTE: some memory arbitration are triggered from non-driver execution
-    // context such as async streaming shuffle, table scan prefetch etc. And
-    // those async operations might execute in parallel with the driver threads.
-    // Therefore, it is possible that driver is not on the thread or the
-    // arbitration thread is not the current running driver thread. If memory
-    // arbitration is triggered in non-driver context, then we can't and also
-    // don't need to enter driver suspension state which only applies for driver
-    // thread so that the task pause operation can wait for all driver threads
-    // to stop. We only need to guarantee that such async operations won't
-    // mutate the operator state.g
+  DriverThreadContext* driverThreadCtx = driverThreadContext();
+  if (FOLLY_UNLIKELY(driverThreadCtx == nullptr)) {
+    // Skips the driver suspension handling if this memory arbitration request
+    // is not issued from a driver thread. For example, async streaming shuffle
+    // and table scan prefetch execution path might initiate memory arbitration
+    // request from non-driver thread.
     return;
   }
-  if (driver->task()->enterSuspended(driver->state()) != StopReason::kNone) {
+
+  Driver* const runningDriver = driverThreadCtx->driverCtx.driver;
+  if (auto opDriver = ensureDriver()) {
+    // NOTE: the current running driver might not be the driver of the operator
+    // that requests memory arbitration. The reason is that an operator might
+    // extend the buffer allocated from the other operator either from the same
+    // or different drivers. But they must be from the same task.
+    VELOX_CHECK_EQ(
+        runningDriver->task()->taskId(),
+        opDriver->task()->taskId(),
+        "The current running driver and the request driver must be from the same task");
+  }
+  if (runningDriver->task()->enterSuspended(runningDriver->state()) !=
+      StopReason::kNone) {
     // There is no need for arbitration if the associated task has already
     // terminated.
     VELOX_FAIL("Terminate detected when entering suspension");
@@ -504,17 +528,20 @@ void Operator::MemoryReclaimer::enterArbitration() {
 }
 
 void Operator::MemoryReclaimer::leaveArbitration() noexcept {
-  std::shared_ptr<Driver> driver = ensureDriver();
-  // The driver must be alive as the operator is still under memory arbitration
-  // processing.
-  VELOX_CHECK_NOT_NULL(driver);
-  if (FOLLY_UNLIKELY(
-          !driver->state().isOnThread() ||
-          (std::this_thread::get_id() != driver->state().thread))) {
-    // NOTE: see the comment in enterArbitration.
+  DriverThreadContext* driverThreadCtx = driverThreadContext();
+  if (FOLLY_UNLIKELY(driverThreadCtx == nullptr)) {
+    // Skips the driver suspension handling if this memory arbitration request
+    // is not issued from a driver thread.
     return;
   }
-  driver->task()->leaveSuspended(driver->state());
+  Driver* const runningDriver = driverThreadCtx->driverCtx.driver;
+  if (auto opDriver = ensureDriver()) {
+    VELOX_CHECK_EQ(
+        runningDriver->task()->taskId(),
+        opDriver->task()->taskId(),
+        "The current running driver and the request driver must be from the same task");
+  }
+  runningDriver->task()->leaveSuspended(runningDriver->state());
 }
 
 bool Operator::MemoryReclaimer::reclaimableBytes(
@@ -531,7 +558,8 @@ bool Operator::MemoryReclaimer::reclaimableBytes(
 
 uint64_t Operator::MemoryReclaimer::reclaim(
     memory::MemoryPool* pool,
-    uint64_t targetBytes) {
+    uint64_t targetBytes,
+    memory::MemoryReclaimer::Stats& stats) {
   std::shared_ptr<Driver> driver = ensureDriver();
   if (FOLLY_UNLIKELY(driver == nullptr)) {
     return 0;
@@ -548,7 +576,7 @@ uint64_t Operator::MemoryReclaimer::reclaim(
   TestValue::adjust(
       "facebook::velox::exec::Operator::MemoryReclaimer::reclaim", pool);
 
-  op_->reclaim(targetBytes);
+  op_->reclaim(targetBytes, stats);
   return pool->shrink(targetBytes);
 }
 

@@ -28,7 +28,7 @@ namespace {
 BlockingReason fromStateToBlockingReason(HashBuild::State state) {
   switch (state) {
     case HashBuild::State::kRunning:
-      FOLLY_FALLTHROUGH;
+      [[fallthrough]];
     case HashBuild::State::kFinish:
       return BlockingReason::kNotBlocked;
     case HashBuild::State::kWaitForSpill:
@@ -74,35 +74,42 @@ HashBuild::HashBuild(
 
   joinBridge_->addBuilder();
 
-  auto outputType = joinNode_->sources()[1]->outputType();
+  auto inputType = joinNode_->sources()[1]->outputType();
 
   auto numKeys = joinNode_->rightKeys().size();
   keyChannels_.reserve(numKeys);
   folly::F14FastMap<column_index_t, column_index_t> keyChannelMap(numKeys);
   std::vector<std::string> names;
-  names.reserve(outputType->size());
+  names.reserve(inputType->size());
   std::vector<TypePtr> types;
-  types.reserve(outputType->size());
+  types.reserve(inputType->size());
 
   for (int i = 0; i < joinNode_->rightKeys().size(); ++i) {
     auto& key = joinNode_->rightKeys()[i];
-    auto channel = exprToChannel(key.get(), outputType);
+    auto channel = exprToChannel(key.get(), inputType);
     keyChannelMap[channel] = i;
     keyChannels_.emplace_back(channel);
-    names.emplace_back(outputType->nameOf(channel));
-    types.emplace_back(outputType->childAt(channel));
+    names.emplace_back(inputType->nameOf(channel));
+    types.emplace_back(inputType->childAt(channel));
   }
 
   // Identify the non-key build side columns and make a decoder for each.
-  const auto numDependents = outputType->size() - numKeys;
-  dependentChannels_.reserve(numDependents);
-  decoders_.reserve(numDependents);
-  for (auto i = 0; i < outputType->size(); ++i) {
+  const int32_t numDependents = inputType->size() - numKeys;
+  if (numDependents > 0) {
+    // Number of join keys (numKeys) may be less then number of input columns
+    // (inputType->size()). In this case numDependents is negative and cannot be
+    // used to call 'reserve'. This happens when we join different probe side
+    // keys with the same build side key: SELECT * FROM t LEFT JOIN u ON t.k1 =
+    // u.k AND t.k2 = u.k.
+    dependentChannels_.reserve(numDependents);
+    decoders_.reserve(numDependents);
+  }
+  for (auto i = 0; i < inputType->size(); ++i) {
     if (keyChannelMap.find(i) == keyChannelMap.end()) {
       dependentChannels_.emplace_back(i);
       decoders_.emplace_back(std::make_unique<DecodedVector>());
-      names.emplace_back(outputType->nameOf(i));
-      types.emplace_back(outputType->childAt(i));
+      names.emplace_back(inputType->nameOf(i));
+      types.emplace_back(inputType->childAt(i));
     }
   }
 
@@ -194,6 +201,7 @@ void HashBuild::setupSpiller(SpillPartition* spillPartition) {
   if (spillPartition == nullptr) {
     spillGroup_->addOperator(
         *this,
+        operatorCtx_->driver()->shared_from_this(),
         [&](const std::vector<Operator*>& operators) { runSpill(operators); });
   } else {
     spillInputReader_ = spillPartition->createReader();
@@ -218,6 +226,7 @@ void HashBuild::setupSpiller(SpillPartition* spillPartition) {
       std::vector<CompareFlags>(),
       spillConfig.filePath,
       spillConfig.maxFileSize,
+      spillConfig.writeBufferSize,
       spillConfig.minSpillRunSize,
       spillConfig.compressionKind,
       Spiller::pool(),
@@ -249,9 +258,9 @@ void HashBuild::setupFilterForAntiJoins(
   const auto& expr = exprs.expr(0);
   filterPropagatesNulls_ = expr->propagatesNulls();
   if (filterPropagatesNulls_) {
-    const auto outputType = joinNode_->sources()[1]->outputType();
+    const auto inputType = joinNode_->sources()[1]->outputType();
     for (const auto& field : expr->distinctFields()) {
-      const auto index = outputType->getChildIdxIfExists(field->field());
+      const auto index = inputType->getChildIdxIfExists(field->field());
       if (!index.has_value()) {
         continue;
       }
@@ -788,10 +797,15 @@ bool HashBuild::finishHashBuild() {
     spiller_->finishSpill(spillPartitions);
     recordSpillStats();
 
-    // Verify all the spilled partitions are not empty as we won't spill on
-    // an empty one.
-    for (const auto& spillPartitionEntry : spillPartitions) {
-      VELOX_CHECK_GT(spillPartitionEntry.second->numFiles(), 0);
+    // Remove the spilled partitions which are empty so as we don't need to
+    // trigger unnecessary spilling at hash probe side.
+    auto iter = spillPartitions.begin();
+    while (iter != spillPartitions.end()) {
+      if (iter->second->numFiles() > 0) {
+        ++iter;
+      } else {
+        iter = spillPartitions.erase(iter);
+      }
     }
   }
 
@@ -838,9 +852,12 @@ void HashBuild::ensureTableFits(uint64_t numRows) {
     return;
   }
 
+  // TODO: add spilling support here in case of threshold triggered spilling.
+#if 0
   // NOTE: the memory arbitrator must have spilled everything from this hash
   // build operator and all its peers.
   VELOX_CHECK(spiller_->isAllSpilled());
+#endif
 
   // Throw a memory cap exceeded error to fail this query.
   VELOX_MEM_POOL_CAP_EXCEEDED(fmt::format(
@@ -963,7 +980,7 @@ BlockingReason HashBuild::isBlocked(ContinueFuture* future) {
       }
       break;
     case State::kWaitForBuild:
-      FOLLY_FALLTHROUGH;
+      [[fallthrough]];
     case State::kWaitForProbe:
       if (!future_.valid()) {
         setRunning();
@@ -1013,11 +1030,11 @@ void HashBuild::checkStateTransition(State state) {
       }
       break;
     case State::kWaitForBuild:
-      FOLLY_FALLTHROUGH;
+      [[fallthrough]];
     case State::kWaitForSpill:
-      FOLLY_FALLTHROUGH;
+      [[fallthrough]];
     case State::kWaitForProbe:
-      FOLLY_FALLTHROUGH;
+      [[fallthrough]];
     case State::kFinish:
       VELOX_CHECK_EQ(state_, State::kRunning);
       break;
@@ -1053,7 +1070,9 @@ bool HashBuild::testingTriggerSpill() {
       spillConfig()->testSpillPct;
 }
 
-void HashBuild::reclaim(uint64_t /*unused*/) {
+void HashBuild::reclaim(
+    uint64_t /*unused*/,
+    memory::MemoryReclaimer::Stats& stats) {
   VELOX_CHECK(canReclaim());
   auto* driver = operatorCtx_->driver();
 
@@ -1063,11 +1082,11 @@ void HashBuild::reclaim(uint64_t /*unused*/) {
   // build processing and is not under non-reclaimable execution section.
   if ((state_ != State::kRunning && state_ != State::kWaitForBuild) ||
       nonReclaimableSection_) {
-    // TODO: add stats to record the non-reclaimable case and reduce the log
-    // frequency if it is too verbose.
+    // TODO: reduce the log frequency if it is too verbose.
+    ++stats.numNonReclaimableAttempts;
     LOG(WARNING) << "Can't reclaim from hash build operator, state_["
                  << stateName(state_) << "], nonReclaimableSection_["
-                 << nonReclaimableSection_ << "], " << toString();
+                 << nonReclaimableSection_ << "], " << pool()->name();
     return;
   }
 
@@ -1082,12 +1101,12 @@ void HashBuild::reclaim(uint64_t /*unused*/) {
     if ((buildOp->state_ != State::kRunning &&
          buildOp->state_ != State::kWaitForBuild) ||
         buildOp->nonReclaimableSection_) {
-      // TODO: add stats to record the non-reclaimable case and reduce the log
-      // frequency if it is too verbose.
+      // TODO: reduce the log frequency if it is too verbose.
+      ++stats.numNonReclaimableAttempts;
       LOG(WARNING) << "Can't reclaim from hash build operator, state_["
                    << stateName(buildOp->state_) << "], nonReclaimableSection_["
                    << buildOp->nonReclaimableSection_ << "], "
-                   << buildOp->toString();
+                   << buildOp->pool()->name();
       return;
     }
   }

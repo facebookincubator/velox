@@ -15,6 +15,7 @@
  */
 
 #include "velox/functions/lib/aggregates/tests/AggregationTestBase.h"
+#include "velox/common/base/tests/GTestUtils.h"
 
 #include "velox/common/file/FileSystems.h"
 #include "velox/connectors/hive/HiveConnector.h"
@@ -33,6 +34,7 @@
 #include "velox/vector/tests/utils/VectorMaker.h"
 #endif
 
+using facebook::velox::exec::Spiller;
 using facebook::velox::exec::test::AssertQueryBuilder;
 using facebook::velox::exec::test::CursorParameters;
 using facebook::velox::exec::test::PlanBuilder;
@@ -42,7 +44,16 @@ namespace facebook::velox::functions::aggregate::test {
 
 namespace {
 constexpr const char* kHiveConnectorId = "test-hive";
+
+void enableAbandonPartialAggregation(AssertQueryBuilder& queryBuilder) {
+  queryBuilder.config(core::QueryConfig::kAbandonPartialAggregationMinRows, "1")
+      .config(core::QueryConfig::kAbandonPartialAggregationMinPct, "0")
+      .config(core::QueryConfig::kMaxPartialAggregationMemory, "0")
+      .config(core::QueryConfig::kMaxExtendedPartialAggregationMemory, "0")
+      .maxDrivers(1);
 }
+
+} // namespace
 
 std::vector<RowVectorPtr> AggregationTestBase::makeVectors(
     const RowTypePtr& rowType,
@@ -77,9 +88,11 @@ void AggregationTestBase::testAggregations(
     const std::vector<std::string>& groupingKeys,
     const std::vector<std::string>& aggregates,
     const std::string& duckDbSql,
-    const std::unordered_map<std::string, std::string>& config) {
+    const std::unordered_map<std::string, std::string>& config,
+    bool testWithTableScan) {
   SCOPED_TRACE(duckDbSql);
-  testAggregations(data, groupingKeys, aggregates, {}, duckDbSql, config);
+  testAggregations(
+      data, groupingKeys, aggregates, {}, duckDbSql, config, testWithTableScan);
 }
 
 void AggregationTestBase::testAggregations(
@@ -87,8 +100,16 @@ void AggregationTestBase::testAggregations(
     const std::vector<std::string>& groupingKeys,
     const std::vector<std::string>& aggregates,
     const std::vector<RowVectorPtr>& expectedResult,
-    const std::unordered_map<std::string, std::string>& config) {
-  testAggregations(data, groupingKeys, aggregates, {}, expectedResult, config);
+    const std::unordered_map<std::string, std::string>& config,
+    bool testWithTableScan) {
+  testAggregations(
+      data,
+      groupingKeys,
+      aggregates,
+      {},
+      expectedResult,
+      config,
+      testWithTableScan);
 }
 
 void AggregationTestBase::testAggregations(
@@ -97,7 +118,8 @@ void AggregationTestBase::testAggregations(
     const std::vector<std::string>& aggregates,
     const std::vector<std::string>& postAggregationProjections,
     const std::string& duckDbSql,
-    const std::unordered_map<std::string, std::string>& config) {
+    const std::unordered_map<std::string, std::string>& config,
+    bool testWithTableScan) {
   SCOPED_TRACE(duckDbSql);
   testAggregations(
       [&](PlanBuilder& builder) { builder.values(data); },
@@ -105,7 +127,8 @@ void AggregationTestBase::testAggregations(
       aggregates,
       postAggregationProjections,
       [&](auto& builder) { return builder.assertResults(duckDbSql); },
-      config);
+      config,
+      testWithTableScan);
 }
 
 namespace {
@@ -497,8 +520,8 @@ void writeToFile(
   options.schema = vector->type();
   options.memoryPool = pool;
   auto writeFile = std::make_unique<LocalWriteFile>(path, true, false);
-  auto sink = std::make_unique<dwio::common::WriteFileDataSink>(
-      std::move(writeFile), path);
+  auto sink =
+      std::make_unique<dwio::common::WriteFileSink>(std::move(writeFile), path);
   dwrf::Writer writer(std::move(sink), options);
   writer.write(vector);
   writer.close();
@@ -529,7 +552,8 @@ void AggregationTestBase::testReadFromFiles(
     const std::vector<std::string>& aggregates,
     const std::vector<std::string>& postAggregationProjections,
     std::function<std::shared_ptr<exec::Task>(exec::test::AssertQueryBuilder&)>
-        assertResults) {
+        assertResults,
+    const std::unordered_map<std::string, std::string>& config) {
   PlanBuilder builder(pool());
   makeSource(builder);
   auto input = AssertQueryBuilder(builder.planNode()).copyResults(pool());
@@ -554,12 +578,17 @@ void AggregationTestBase::testReadFromFiles(
   // so it would be the same as the original test.
   {
     ScopedChange<bool> disableTestStreaming(&testStreaming_, false);
-    testAggregations(
+    testAggregationsImpl(
         [&](auto& builder) { builder.tableScan(asRowType(input->type())); },
         groupingKeys,
         aggregates,
         postAggregationProjections,
-        [&](auto& builder) { return assertResults(builder.splits(splits)); });
+        [&](auto& builder) { return assertResults(builder.splits(splits)); },
+        config);
+  }
+
+  for (const auto& file : files) {
+    remove(file->path.c_str());
   }
 }
 
@@ -569,14 +598,16 @@ void AggregationTestBase::testAggregations(
     const std::vector<std::string>& aggregates,
     const std::vector<std::string>& postAggregationProjections,
     const std::vector<RowVectorPtr>& expectedResult,
-    const std::unordered_map<std::string, std::string>& config) {
+    const std::unordered_map<std::string, std::string>& config,
+    bool testWithTableScan) {
   testAggregations(
       [&](PlanBuilder& builder) { builder.values(data); },
       groupingKeys,
       aggregates,
       postAggregationProjections,
       [&](auto& builder) { return builder.assertResults(expectedResult); },
-      config);
+      config,
+      testWithTableScan);
 }
 
 void AggregationTestBase::testAggregations(
@@ -584,14 +615,16 @@ void AggregationTestBase::testAggregations(
     const std::vector<std::string>& groupingKeys,
     const std::vector<std::string>& aggregates,
     const std::string& duckDbSql,
-    const std::unordered_map<std::string, std::string>& config) {
+    const std::unordered_map<std::string, std::string>& config,
+    bool testWithTableScan) {
   testAggregations(
       makeSource,
       groupingKeys,
       aggregates,
       {},
       [&](auto& builder) { return builder.assertResults(duckDbSql); },
-      config);
+      config,
+      testWithTableScan);
 }
 
 RowVectorPtr AggregationTestBase::validateStreamingInTestAggregations(
@@ -656,7 +689,7 @@ RowVectorPtr AggregationTestBase::validateStreamingInTestAggregations(
   return expected;
 }
 
-void AggregationTestBase::testAggregations(
+void AggregationTestBase::testAggregationsImpl(
     std::function<void(PlanBuilder&)> makeSource,
     const std::vector<std::string>& groupingKeys,
     const std::vector<std::string>& aggregates,
@@ -698,6 +731,8 @@ void AggregationTestBase::testAggregations(
 
     auto spillDirectory = exec::test::TempDirectoryPath::create();
 
+    ASSERT_EQ(Spiller::pool()->stats().currentBytes, 0);
+    const auto peakSpillMemoryUsage = Spiller::pool()->stats().peakBytes;
     AssertQueryBuilder queryBuilder(builder.planNode(), duckDbQueryRunner_);
     queryBuilder.configs(config)
         .config(core::QueryConfig::kTestingSpillPct, "100")
@@ -712,6 +747,9 @@ void AggregationTestBase::testAggregations(
     auto inputRows = toPlanStats(task->taskStats()).at(partialNodeId).inputRows;
     if (inputRows > 1) {
       EXPECT_LT(0, spilledBytes(*task));
+      ASSERT_EQ(Spiller::pool()->stats().currentBytes, 0);
+      ASSERT_GT(Spiller::pool()->stats().peakBytes, 0);
+      ASSERT_GE(Spiller::pool()->stats().peakBytes, peakSpillMemoryUsage);
     } else {
       EXPECT_EQ(0, spilledBytes(*task));
     }
@@ -735,12 +773,8 @@ void AggregationTestBase::testAggregations(
     }
 
     AssertQueryBuilder queryBuilder(builder.planNode(), duckDbQueryRunner_);
-    queryBuilder.configs(config)
-        .config(core::QueryConfig::kAbandonPartialAggregationMinRows, "1")
-        .config(core::QueryConfig::kAbandonPartialAggregationMinPct, "0")
-        .config(core::QueryConfig::kMaxPartialAggregationMemory, "0")
-        .config(core::QueryConfig::kMaxExtendedPartialAggregationMemory, "0")
-        .maxDrivers(1);
+    queryBuilder.configs(config);
+    enableAbandonPartialAggregation(queryBuilder);
 
     auto task = assertResults(queryBuilder);
 
@@ -874,6 +908,35 @@ void AggregationTestBase::testAggregations(
   }
 }
 
+void AggregationTestBase::testAggregations(
+    std::function<void(PlanBuilder&)> makeSource,
+    const std::vector<std::string>& groupingKeys,
+    const std::vector<std::string>& aggregates,
+    const std::vector<std::string>& postAggregationProjections,
+    std::function<std::shared_ptr<exec::Task>(AssertQueryBuilder&)>
+        assertResults,
+    const std::unordered_map<std::string, std::string>& config,
+    bool testWithTableScan) {
+  testAggregationsImpl(
+      makeSource,
+      groupingKeys,
+      aggregates,
+      postAggregationProjections,
+      assertResults,
+      config);
+
+  if (testWithTableScan) {
+    SCOPED_TRACE("Test reading input from table scan");
+    testReadFromFiles(
+        makeSource,
+        groupingKeys,
+        aggregates,
+        postAggregationProjections,
+        assertResults,
+        config);
+  }
+}
+
 namespace {
 std::pair<TypePtr, TypePtr> getResultTypes(
     const std::string& name,
@@ -993,4 +1056,91 @@ VectorPtr AggregationTestBase::testStreaming(
   return result;
 }
 
+void AggregationTestBase::testFailingAggregations(
+    const std::vector<RowVectorPtr>& data,
+    const std::vector<std::string>& groupingKeys,
+    const std::vector<std::string>& aggregates,
+    const std::string& expectedMessage,
+    const std::unordered_map<std::string, std::string>& config) {
+  {
+    SCOPED_TRACE("Run single");
+    auto builder = PlanBuilder().values(data);
+    builder.singleAggregation(groupingKeys, aggregates);
+    AssertQueryBuilder queryBuilder(builder.planNode());
+    queryBuilder.configs(config);
+    VELOX_ASSERT_THROW(queryBuilder.copyResults(pool()), expectedMessage);
+  }
+
+  {
+    SCOPED_TRACE("Run partial + final");
+    auto builder = PlanBuilder().values(data);
+    builder.partialAggregation(groupingKeys, aggregates).finalAggregation();
+    AssertQueryBuilder queryBuilder(builder.planNode());
+    queryBuilder.configs(config);
+    VELOX_ASSERT_THROW(queryBuilder.copyResults(pool()), expectedMessage);
+  }
+
+  {
+    SCOPED_TRACE("Run partial + final with abandon partial agg");
+    auto builder = PlanBuilder().values(data);
+    builder.partialAggregation(groupingKeys, aggregates)
+        .intermediateAggregation()
+        .finalAggregation();
+    AssertQueryBuilder queryBuilder(builder.planNode());
+    queryBuilder.configs(config);
+    enableAbandonPartialAggregation(queryBuilder);
+    VELOX_ASSERT_THROW(queryBuilder.copyResults(pool()), expectedMessage);
+  }
+
+  {
+    SCOPED_TRACE("Run partial + intermediate + final");
+    auto builder = PlanBuilder().values(data);
+    builder.partialAggregation(groupingKeys, aggregates)
+        .intermediateAggregation()
+        .finalAggregation();
+    AssertQueryBuilder queryBuilder(builder.planNode());
+    queryBuilder.configs(config);
+    VELOX_ASSERT_THROW(queryBuilder.copyResults(pool()), expectedMessage);
+  }
+
+  if (!groupingKeys.empty()) {
+    SCOPED_TRACE("Run partial + local exchange + final");
+    auto builder = PlanBuilder().values(data);
+    builder.partialAggregation(groupingKeys, aggregates)
+        .localPartition(groupingKeys)
+        .finalAggregation();
+    AssertQueryBuilder queryBuilder(builder.planNode());
+    queryBuilder.configs(config);
+    VELOX_ASSERT_THROW(queryBuilder.copyResults(pool()), expectedMessage);
+  }
+
+  {
+    SCOPED_TRACE(
+        "Run partial + local exchange + intermediate + local exchange + final");
+    auto builder = PlanBuilder().values(data);
+    builder.partialAggregation(groupingKeys, aggregates);
+
+    if (groupingKeys.empty()) {
+      builder.localPartitionRoundRobinRow();
+    } else {
+      builder.localPartition(groupingKeys);
+    }
+
+    builder.intermediateAggregation()
+        .localPartition(groupingKeys)
+        .finalAggregation();
+
+    AssertQueryBuilder queryBuilder(builder.planNode());
+    queryBuilder.configs(config);
+    VELOX_ASSERT_THROW(queryBuilder.copyResults(pool()), expectedMessage);
+  }
+
+  if (testStreaming_ && groupingKeys.empty()) {
+    SCOPED_TRACE("Streaming");
+    auto makeSource = [&](PlanBuilder& builder) { builder.values(data); };
+    VELOX_ASSERT_THROW(
+        validateStreamingInTestAggregations(makeSource, aggregates, config),
+        expectedMessage);
+  }
+}
 } // namespace facebook::velox::functions::aggregate::test

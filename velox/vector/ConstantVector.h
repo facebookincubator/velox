@@ -276,6 +276,18 @@ class ConstantVector final : public SimpleVector<T> {
     VELOX_FAIL("addNulls not supported");
   }
 
+  bool containsNullAt(vector_size_t idx) const override {
+    if constexpr (std::is_same_v<T, ComplexType>) {
+      if (isNullAt(idx)) {
+        return true;
+      }
+
+      return valueVector_->containsNullAt(index_);
+    } else {
+      return isNullAt(idx);
+    }
+  }
+
   std::optional<int32_t> compare(
       const BaseVector* other,
       vector_size_t index,
@@ -316,6 +328,20 @@ class ConstantVector final : public SimpleVector<T> {
 
   bool isNullsWritable() const override {
     return false;
+  }
+
+  void validate(const VectorValidateOptions& options) const override {
+    // Do not call BaseVector's validate() since the nulls buffer has
+    // a fixed size for constant vectors.
+    if (options.callback) {
+      options.callback(*this);
+    }
+    if (valueVector_ != nullptr) {
+      if (!isNull_) {
+        VELOX_CHECK_LT(index_, valueVector_->size());
+      }
+      valueVector_->validate(options);
+    }
   }
 
  protected:

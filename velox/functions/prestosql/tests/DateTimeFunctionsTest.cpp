@@ -688,6 +688,7 @@ TEST_F(DateTimeFunctionsTest, hour) {
   EXPECT_EQ(std::nullopt, hour(std::nullopt));
   EXPECT_EQ(0, hour(Timestamp(0, 0)));
   EXPECT_EQ(23, hour(Timestamp(-1, 9000)));
+  EXPECT_EQ(23, hour(Timestamp(-1, Timestamp::kMaxNanos)));
   EXPECT_EQ(7, hour(Timestamp(4000000000, 0)));
   EXPECT_EQ(7, hour(Timestamp(4000000000, 123000000)));
   EXPECT_EQ(10, hour(Timestamp(998474645, 321000000)));
@@ -2788,12 +2789,12 @@ TEST_F(DateTimeFunctionsTest, formatDateTime) {
 
   // Multi-specifier and literal formats
   EXPECT_EQ(
-      "AD 19 1970 4 Thu 1970 1 1 1 AM 2 2 2 2 33 11 5 Asia/Kolkata",
+      "AD 19 1970 4 Thu 1970 1 1 1 AM 8 8 8 8 3 11 5 Asia/Kolkata",
       formatDatetime(
           fromTimestampString("1970-01-01 02:33:11.5"),
           "G C Y e E y D M d a K h H k m s S zzzz"));
   EXPECT_EQ(
-      "AD 19 1970 4 asdfghjklzxcvbnmqwertyuiop Thu ' 1970 1 1 1 AM 2 2 2 2 33 11 5 1234567890\\\"!@#$%^&*()-+`~{}[];:,./ Asia/Kolkata",
+      "AD 19 1970 4 asdfghjklzxcvbnmqwertyuiop Thu ' 1970 1 1 1 AM 8 8 8 8 3 11 5 1234567890\\\"!@#$%^&*()-+`~{}[];:,./ Asia/Kolkata",
       formatDatetime(
           fromTimestampString("1970-01-01 02:33:11.5"),
           "G C Y e 'asdfghjklzxcvbnmqwertyuiop' E '' y D M d a K h H k m s S 1234567890\\\"!@#$%^&*()-+`~{}[];:,./ zzzz"));
@@ -3046,21 +3047,43 @@ TEST_F(DateTimeFunctionsTest, dateFormat) {
   EXPECT_EQ("z", dateFormat(fromTimestampString("1970-01-01"), "%z"));
   EXPECT_EQ("g", dateFormat(fromTimestampString("1970-01-01"), "%g"));
 
-  // With timezone
+  // With timezone. Indian Standard Time (IST) UTC+5:30.
   setQueryTimeZone("Asia/Kolkata");
+
   EXPECT_EQ(
       "1970-01-01", dateFormat(fromTimestampString("1970-01-01"), "%Y-%m-%d"));
   EXPECT_EQ(
-      "2000-02-29 12:00:00 AM",
+      "2000-02-29 05:30:00 AM",
       dateFormat(
           fromTimestampString("2000-02-29 00:00:00.987"), "%Y-%m-%d %r"));
   EXPECT_EQ(
-      "2000-02-29 00:00:00.987000",
+      "2000-02-29 05:30:00.987000",
       dateFormat(
           fromTimestampString("2000-02-29 00:00:00.987"),
           "%Y-%m-%d %H:%i:%s.%f"));
   EXPECT_EQ(
-      "-2000-02-29 00:00:00.987000",
+      "-2000-02-29 05:53:28.987000",
+      dateFormat(
+          fromTimestampString("-2000-02-29 00:00:00.987"),
+          "%Y-%m-%d %H:%i:%s.%f"));
+
+  // Same timestamps with a different timezone. Pacific Daylight Time (North
+  // America) PDT UTC-8:00.
+  setQueryTimeZone("America/Los_Angeles");
+
+  EXPECT_EQ(
+      "1969-12-31", dateFormat(fromTimestampString("1970-01-01"), "%Y-%m-%d"));
+  EXPECT_EQ(
+      "2000-02-28 04:00:00 PM",
+      dateFormat(
+          fromTimestampString("2000-02-29 00:00:00.987"), "%Y-%m-%d %r"));
+  EXPECT_EQ(
+      "2000-02-28 16:00:00.987000",
+      dateFormat(
+          fromTimestampString("2000-02-29 00:00:00.987"),
+          "%Y-%m-%d %H:%i:%s.%f"));
+  EXPECT_EQ(
+      "-2000-02-28 16:07:02.987000",
       dateFormat(
           fromTimestampString("-2000-02-29 00:00:00.987"),
           "%Y-%m-%d %H:%i:%s.%f"));
@@ -3575,4 +3598,72 @@ TEST_F(DateTimeFunctionsTest, castDateToTimestamp) {
   EXPECT_EQ(
       Timestamp(-18297 * kSecondsInDay, 0),
       castDateToTimestamp(DATE()->toDays("1919-11-28")));
+}
+
+TEST_F(DateTimeFunctionsTest, lastDayOfMonthDate) {
+  const auto lastDayFunc = [&](const std::optional<int32_t> date) {
+    return evaluateOnce<int32_t, int32_t>(
+        "last_day_of_month(c0)", {date}, {DATE()});
+  };
+
+  const auto lastDay = [&](const StringView& dateStr) {
+    return lastDayFunc(DATE()->toDays(dateStr));
+  };
+
+  EXPECT_EQ(std::nullopt, lastDayFunc(std::nullopt));
+  EXPECT_EQ(parseDate("1970-01-31"), lastDay("1970-01-01"));
+  EXPECT_EQ(parseDate("2008-02-29"), lastDay("2008-02-01"));
+  EXPECT_EQ(parseDate("2023-02-28"), lastDay("2023-02-01"));
+  EXPECT_EQ(parseDate("2023-02-28"), lastDay("2023-02-01"));
+  EXPECT_EQ(parseDate("2023-03-31"), lastDay("2023-03-11"));
+  EXPECT_EQ(parseDate("2023-04-30"), lastDay("2023-04-21"));
+  EXPECT_EQ(parseDate("2023-05-31"), lastDay("2023-05-09"));
+  EXPECT_EQ(parseDate("2023-06-30"), lastDay("2023-06-01"));
+  EXPECT_EQ(parseDate("2023-07-31"), lastDay("2023-07-31"));
+  EXPECT_EQ(parseDate("2023-07-31"), lastDay("2023-07-31"));
+  EXPECT_EQ(parseDate("2023-07-31"), lastDay("2023-07-11"));
+  EXPECT_EQ(parseDate("2023-08-31"), lastDay("2023-08-01"));
+  EXPECT_EQ(parseDate("2023-09-30"), lastDay("2023-09-09"));
+  EXPECT_EQ(parseDate("2023-10-31"), lastDay("2023-10-01"));
+  EXPECT_EQ(parseDate("2023-11-30"), lastDay("2023-11-11"));
+  EXPECT_EQ(parseDate("2023-12-31"), lastDay("2023-12-12"));
+}
+
+TEST_F(DateTimeFunctionsTest, lastDayOfMonthTimestamp) {
+  const auto lastDayFunc = [&](const std::optional<Timestamp>& date) {
+    return evaluateOnce<int32_t>("last_day_of_month(c0)", date);
+  };
+
+  const auto lastDay = [&](const StringView& dateStr) {
+    return lastDayFunc(util::fromTimestampString(dateStr));
+  };
+
+  setQueryTimeZone("Pacific/Apia");
+
+  EXPECT_EQ(std::nullopt, lastDayFunc(std::nullopt));
+  EXPECT_EQ(parseDate("1970-01-31"), lastDay("1970-01-01 20:23:00.007"));
+  EXPECT_EQ(parseDate("1970-01-31"), lastDay("1970-01-01 12:00:00.001"));
+  EXPECT_EQ(parseDate("2008-02-29"), lastDay("2008-02-01 12:00:00"));
+  EXPECT_EQ(parseDate("2023-02-28"), lastDay("2023-02-01 23:59:59.999"));
+  EXPECT_EQ(parseDate("2023-02-28"), lastDay("2023-02-01 12:00:00"));
+  EXPECT_EQ(parseDate("2023-03-31"), lastDay("2023-03-11 12:00:00"));
+}
+
+TEST_F(DateTimeFunctionsTest, lastDayOfMonthTimestampWithTimezone) {
+  EXPECT_EQ(
+      parseDate("1970-01-31"),
+      evaluateWithTimestampWithTimezone<int32_t>(
+          "last_day_of_month(c0)", 0, "+00:00"));
+  EXPECT_EQ(
+      parseDate("1969-12-31"),
+      evaluateWithTimestampWithTimezone<int32_t>(
+          "last_day_of_month(c0)", 0, "-02:00"));
+  EXPECT_EQ(
+      parseDate("2008-02-29"),
+      evaluateWithTimestampWithTimezone<int32_t>(
+          "last_day_of_month(c0)", 1201881600000, "+02:00"));
+  EXPECT_EQ(
+      parseDate("2008-01-31"),
+      evaluateWithTimestampWithTimezone<int32_t>(
+          "last_day_of_month(c0)", 1201795200000, "-02:00"));
 }

@@ -56,6 +56,9 @@ class MemoryManager;
 
 constexpr int64_t kMaxMemory = std::numeric_limits<int64_t>::max();
 
+/// Sets the memory reclaimer to the provided memory pool.
+using SetMemoryReclaimer = std::function<void(MemoryPool*)>;
+
 /// This class provides the memory allocation interfaces for a query execution.
 /// Each query execution entity creates a dedicated memory pool object. The
 /// memory pool objects from a query are organized as a tree with four levels
@@ -405,7 +408,9 @@ class MemoryPool : public std::enable_shared_from_this<MemoryPool> {
   /// noop if the reclaimer is not set, otherwise invoke the reclaimer's
   /// corresponding method. The function returns the actually freed capacity
   /// from the root of this memory pool.
-  virtual uint64_t reclaim(uint64_t targetBytes) = 0;
+  virtual uint64_t reclaim(
+      uint64_t targetBytes,
+      memory::MemoryReclaimer::Stats& stats) = 0;
 
   /// Invoked by the memory arbitrator to abort a root memory pool. The function
   /// forwards the request to the corresponding query object to abort its
@@ -532,6 +537,9 @@ class MemoryPool : public std::enable_shared_from_this<MemoryPool> {
   // visitChildren() cost as we don't have to upgrade the weak pointer and copy
   // out the upgraded shared pointers.git
   std::unordered_map<std::string, std::weak_ptr<MemoryPool>> children_;
+
+  friend class TestMemoryReclaimer;
+  friend class MemoryReclaimer;
 };
 
 std::ostream& operator<<(std::ostream& out, MemoryPool::Kind kind);
@@ -621,7 +629,8 @@ class MemoryPoolImpl : public MemoryPool {
 
   bool reclaimableBytes(uint64_t& reclaimableBytes) const override;
 
-  uint64_t reclaim(uint64_t targetBytes) override;
+  uint64_t reclaim(uint64_t targetBytes, memory::MemoryReclaimer::Stats& stats)
+      override;
 
   uint64_t shrink(uint64_t targetBytes = 0) override;
 
@@ -875,8 +884,8 @@ class MemoryPoolImpl : public MemoryPool {
         << MemoryAllocator::kindString(allocator_->kind())
         << (trackUsage_ ? " track-usage" : " no-usage-track")
         << (threadSafe_ ? " thread-safe" : " non-thread-safe") << "]<";
-    if (maxCapacity_ != kMaxMemory) {
-      out << "max capacity " << succinctBytes(maxCapacity_) << " ";
+    if (maxCapacity() != kMaxMemory) {
+      out << "max capacity " << succinctBytes(maxCapacity()) << " ";
     } else {
       out << "unlimited max capacity ";
     }

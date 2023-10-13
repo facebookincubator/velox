@@ -29,6 +29,29 @@ enum SubfieldKind {
   kLongSubscript
 };
 
+// Contains field name separators to be used in Tokenizer.
+struct Separators {
+  static const std::shared_ptr<Separators>& get() {
+    static const std::shared_ptr<Separators> instance =
+        std::make_shared<Separators>();
+    return instance;
+  }
+
+  bool isSeparator(char c) const {
+    return (
+        c == closeBracket || c == dot || c == openBracket || c == quote ||
+        c == wildCard);
+  }
+
+  char backSlash = '\\';
+  char closeBracket = ']';
+  char dot = '.';
+  char openBracket = '[';
+  char quote = '\"';
+  char wildCard = '*';
+  char unicodeCaret = '^';
+};
+
 class Subfield {
  public:
   class PathElement {
@@ -71,7 +94,9 @@ class Subfield {
 
   class NestedField final : public PathElement {
    public:
-    explicit NestedField(const std::string& name) : name_(name) {}
+    explicit NestedField(const std::string& name) : name_(name) {
+      VELOX_USER_CHECK_NE(name, "", "NestedFields must have non-empty names.");
+    }
 
     SubfieldKind kind() const override {
       return kNestedField;
@@ -193,7 +218,10 @@ class Subfield {
   };
 
  public:
-  explicit Subfield(const std::string& path);
+  // Separators: the customized separators to tokenize field name.
+  explicit Subfield(
+      const std::string& path,
+      const std::shared_ptr<Separators>& separators = Separators::get());
 
   explicit Subfield(std::vector<std::unique_ptr<PathElement>>&& path);
 

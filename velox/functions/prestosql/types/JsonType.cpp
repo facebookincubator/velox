@@ -99,7 +99,7 @@ void castToJson(
   } else {
     context.applyToSelectedNoThrow(rows, [&](auto row) {
       if (inputVector->isNullAt(row)) {
-        VELOX_FAIL("Map keys cannot be null.");
+        VELOX_USER_FAIL("Map keys cannot be null.");
       } else {
         result.clear();
         generateJsonTyped<T, true>(*inputVector, row, result, input.type());
@@ -197,7 +197,7 @@ struct AsJson {
     if (isMapKey && decoded_->mayHaveNulls()) {
       context.applyToSelectedNoThrow(rows, [&](auto row) {
         if (decoded_->isNullAt(row)) {
-          VELOX_FAIL("Cannot cast map with null keys to JSON.");
+          VELOX_USER_FAIL("Cannot cast map with null keys to JSON.");
         }
       });
     }
@@ -499,7 +499,10 @@ FOLLY_ALWAYS_INLINE void castFromJsonTyped<TypeKind::VARCHAR>(
     const folly::dynamic& object,
     exec::GenericWriter& writer) {
   if (isJsonType(writer.type())) {
-    writer.castTo<Varchar>().append(toJson(object));
+    // Sort keys to match Presto's behavior.
+    folly::json::serialization_opts opts;
+    opts.sort_keys = true;
+    writer.castTo<Varchar>().append(folly::json::serialize(object, opts));
   } else if (object.isBool()) {
     writer.castTo<Varchar>().append(object.asBool() ? "true" : "false");
   } else {
@@ -665,17 +668,30 @@ FOLLY_ALWAYS_INLINE void castFromJsonTyped<TypeKind::ROW>(
   } else {
     auto rowType = writer.type()->asRow();
     column_index_t fieldCount = rowType.size();
-    auto notFound = object.items().end();
+
+    folly::F14FastMap<std::string, const folly::dynamic*> lowerCaseKeys;
+    lowerCaseKeys.reserve(object.size());
+
+    for (const auto& [key, value] : object.items()) {
+      // Skip null values.
+      if (!value.isNull()) {
+        const auto lowerCaseKey =
+            boost::algorithm::to_lower_copy(key.asString());
+        lowerCaseKeys.insert({lowerCaseKey, &value});
+      }
+    }
 
     for (column_index_t i = 0; i < fieldCount; ++i) {
-      auto it = object.find(rowType.nameOf(i));
-      if (it == notFound || it->second.isNull()) {
+      const auto lowerCaseName =
+          boost::algorithm::to_lower_copy(rowType.nameOf(i));
+      auto it = lowerCaseKeys.find(lowerCaseName);
+      if (it == lowerCaseKeys.end()) {
         writerTyped.set_null_at(i);
       } else {
         VELOX_DYNAMIC_TYPE_DISPATCH(
             castFromJsonTyped,
             rowType.childAt(i)->kind(),
-            it->second,
+            *(it->second),
             writerTyped.get_writer_at(i));
       }
     }
@@ -716,6 +732,9 @@ void castFromJson(
         try {
           castFromJsonTyped<kind>(object, writer.current());
         } catch (const VeloxException& ve) {
+          if (!ve.isUserError()) {
+            throw;
+          }
           writer.commitNull();
           VELOX_USER_FAIL(
               "Cannot cast from Json value {} to {}: {}",

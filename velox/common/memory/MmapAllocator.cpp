@@ -78,7 +78,7 @@ bool MmapAllocator::allocateNonContiguousWithoutRetry(
   if (numAllocated_ + mix.totalPages > capacity_) {
     VELOX_MEM_LOG_EVERY_MS(WARNING, 1000)
         << "Exceeding memory allocator limit when allocate " << mix.totalPages
-        << " pages with capacity of " << capacity_;
+        << " pages with capacity of " << capacity_ << " pages";
     if ((bytesFreed != 0) && (reservationCB != nullptr)) {
       reservationCB(bytesFreed, false);
     }
@@ -87,7 +87,7 @@ bool MmapAllocator::allocateNonContiguousWithoutRetry(
   if (numAllocated_.fetch_add(mix.totalPages) + mix.totalPages > capacity_) {
     VELOX_MEM_LOG_EVERY_MS(WARNING, 1000)
         << "Exceeded memory allocator limit when allocate " << mix.totalPages
-        << " pages with capacity of " << capacity_;
+        << " pages with capacity of " << capacity_ << " pages";
     numAllocated_.fetch_sub(mix.totalPages);
     if ((bytesFreed != 0) && (reservationCB != nullptr)) {
       reservationCB(bytesFreed, false);
@@ -159,10 +159,10 @@ bool MmapAllocator::allocateNonContiguousWithoutRetry(
 }
 
 bool MmapAllocator::ensureEnoughMappedPages(int32_t newMappedNeeded) {
-  std::lock_guard<std::mutex> l(sizeClassBalanceMutex_);
   if (testingHasInjectedFailure(InjectedFailure::kMadvise)) {
     return false;
   }
+  std::lock_guard<std::mutex> l(sizeClassBalanceMutex_);
   const auto totalMaps =
       numMapped_.fetch_add(newMappedNeeded) + newMappedNeeded;
   if (totalMaps <= capacity_) {
@@ -332,7 +332,7 @@ bool MmapAllocator::allocateContiguousImpl(
     VELOX_MEM_LOG_EVERY_MS(WARNING, 1000)
         << "Exceeded memory allocator limit when allocate " << newPages
         << " new pages for total allocation of " << numPages
-        << " pages, the memory allocator capacity is " << capacity_;
+        << " pages, the memory allocator capacity is " << capacity_ << " pages";
     rollbackAllocation(0);
     return false;
   }
@@ -429,7 +429,7 @@ bool MmapAllocator::growContiguousWithoutRetry(
     VELOX_MEM_LOG_EVERY_MS(WARNING, 1000)
         << "Exceeded memory allocator limit when adding " << increment
         << " new pages for total allocation of " << allocation.numPages()
-        << " pages, the memory allocator capacity is " << capacity_;
+        << " pages, the memory allocator capacity is " << capacity_ << " pages";
     numAllocated_ -= increment;
     if (reservationCB != nullptr) {
       reservationCB(AllocationTraits::pageBytes(increment), false);
@@ -985,13 +985,14 @@ bool MmapAllocator::useMalloc(uint64_t bytes) {
 
 std::string MmapAllocator::toString() const {
   std::stringstream out;
-  out << "[Memory capacity " << capacity_ << " allocated " << numAllocated_
-      << " mapped " << numMapped_ << " external mapped " << numExternalMapped_
-      << std::endl;
+  out << "Memory Allocator[" << kindString(kind_) << " capacity "
+      << ((capacity_ == kMaxMemory) ? "UNLIMITED" : succinctBytes(capacity_))
+      << " allocated pages " << numAllocated_ << " mapped pages " << numMapped_
+      << " external mapped pages " << numExternalMapped_ << std::endl;
   for (auto& sizeClass : sizeClasses_) {
     out << sizeClass->toString() << std::endl;
   }
-  out << "]" << std::endl;
+  out << "]";
   return out.str();
 }
 

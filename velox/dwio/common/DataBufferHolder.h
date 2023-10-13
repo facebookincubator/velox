@@ -17,7 +17,7 @@
 #pragma once
 
 #include "velox/dwio/common/DataBuffer.h"
-#include "velox/dwio/common/DataSink.h"
+#include "velox/dwio/common/FileSink.h"
 
 namespace facebook::velox::dwio::common {
 
@@ -34,43 +34,20 @@ class DataBufferHolder {
       uint64_t maxSize,
       uint64_t initialSize = 0,
       float growRatio = DEFAULT_PAGE_GROW_RATIO,
-      dwio::common::DataSink* sink = nullptr)
-      : pool_{pool},
+      dwio::common::FileSink* sink = nullptr)
+      : pool_{&pool},
         sink_{sink},
         maxSize_{maxSize},
-        initialSize_{initialSize ? initialSize : maxSize},
+        initialSize_{(initialSize > 0) ? initialSize : maxSize},
         growRatio_{growRatio} {
-    DWIO_ENSURE_GT(initialSize_, 0);
-    DWIO_ENSURE_LE(initialSize_, maxSize_);
-    DWIO_ENSURE_GE(growRatio_, MIN_PAGE_GROW_RATIO);
+    VELOX_CHECK_GT(initialSize_, 0);
+    VELOX_CHECK_LE(initialSize_, maxSize_);
+    VELOX_CHECK_GE(growRatio_, MIN_PAGE_GROW_RATIO);
   }
 
-  // Take content of the incoming data buffer. It is the callers responsibility
-  // to resize the buffer (if required).
-  void take(const std::vector<folly::StringPiece>& buffers) {
-    // compute size
-    uint64_t totalSize = 0;
-    for (auto& buf : buffers) {
-      totalSize += buf.size();
-    }
-    if (totalSize > 0) {
-      dwio::common::DataBuffer<char> buf(pool_, totalSize);
-      auto data = buf.data();
-      for (auto& buffer : buffers) {
-        auto size = buffer.size();
-        std::memcpy(data, buffer.begin(), size);
-        data += size;
-      }
-      // If possibly, write content of the data to output immediately.
-      // Otherwise, make a copy and add it to buffer list
-      if (sink_) {
-        sink_->write(std::move(buf));
-      } else {
-        buffers_.push_back(std::move(buf));
-      }
-      size_ += totalSize;
-    }
-  }
+  /// Takes content of the incoming data buffer. It is the caller's
+  /// responsibility to resize the buffer (if required).
+  void take(const std::vector<folly::StringPiece>& buffers);
 
   void take(folly::StringPiece buffer) {
     take(std::vector<folly::StringPiece>{buffer});
@@ -85,12 +62,13 @@ class DataBufferHolder {
   }
 
   void truncate(size_t newSize) {
-    DWIO_ENSURE_LE(newSize, size_);
-    DWIO_ENSURE(!sink_, "Only non sink buffers can be truncated");
+    VELOX_CHECK_LE(newSize, size_);
+    VELOX_CHECK_NULL(sink_, "Only non sink buffers can be truncated");
+
     size_t newCount = 0;
     size_t sizeRemaining = newSize;
     for (auto& buf : buffers_) {
-      newCount++;
+      ++newCount;
       if (sizeRemaining > buf.size()) {
         sizeRemaining -= buf.size();
       } else {
@@ -107,18 +85,17 @@ class DataBufferHolder {
     size_ = newSize;
   }
 
-  // Spill buffered data to another data buffer
+  /// Spill buffered data to another data buffer
   void spill(dwio::common::DataBuffer<char>& out) const {
-    DWIO_ENSURE(!sink_);
+    VELOX_CHECK_NULL(sink_);
     out.resize(size_);
     size_t offset = 0;
-    auto data = out.data();
-    for (auto& buf : buffers_) {
-      std::memcpy(data + offset, buf.data(), buf.size());
+    auto* const data = out.data();
+    for (const auto& buf : buffers_) {
+      ::memcpy(data + offset, buf.data(), buf.size());
       offset += buf.size();
     }
   }
-
   void reset() {
     buffers_.clear();
     size_ = 0;
@@ -137,19 +114,19 @@ class DataBufferHolder {
     return size_;
   }
 
-  // Try resize the buffer. Returned buffer follows below rules
-  // - size() == capacity()
-  // - size() >= min buffer size + header size
-  // - size() <= max buffer size + header size
-  // - size() increases by grow ratio until increment fits or exceeds max size
-  // Return true when buffer size is increased
+  /// Tries to resize the buffer. Returned buffer follows below rules
+  /// - size() == capacity()
+  /// - size() >= min buffer size + header size
+  /// - size() <= max buffer size + header size
+  /// - size() increases by grow ratio until increment fits or exceeds max size
+  /// Returns true when buffer size is increased
   bool tryResize(
       dwio::common::DataBuffer<char>& buffer,
       uint64_t headerSize = 0,
       uint64_t increment = 1) const;
 
   memory::MemoryPool& getMemoryPool() {
-    return pool_;
+    return *pool_;
   }
 
  private:
@@ -157,18 +134,18 @@ class DataBufferHolder {
     suppressed_ = false;
   }
 
-  memory::MemoryPool& pool_;
-  std::vector<dwio::common::DataBuffer<char>> buffers_;
-  dwio::common::DataSink* sink_;
-
-  // state
-  bool suppressed_{false};
-  uint64_t size_{0};
+  memory::MemoryPool* const pool_;
+  dwio::common::FileSink* const sink_;
+  const uint64_t maxSize_;
 
   // members used for controlling allocated buffer size
-  uint64_t maxSize_;
-  uint64_t initialSize_;
-  float growRatio_;
+  const uint64_t initialSize_;
+  const float growRatio_;
+
+  // state
+  uint64_t size_{0};
+  std::vector<dwio::common::DataBuffer<char>> buffers_;
+  bool suppressed_{false};
 };
 
 } // namespace facebook::velox::dwio::common

@@ -94,7 +94,7 @@ void E2EFilterTestBase::readWithoutFilter(
     uint64_t& time) {
   dwio::common::ReaderOptions readerOpts{leafPool_.get()};
   dwio::common::RowReaderOptions rowReaderOpts;
-  std::string_view data(sinkPtr_->getData(), sinkPtr_->size());
+  std::string_view data(sinkPtr_->data(), sinkPtr_->size());
   auto input = std::make_unique<BufferedInput>(
       std::make_shared<InMemoryReadFile>(data), readerOpts.getMemoryPool());
   auto reader = makeReader(readerOpts, std::move(input));
@@ -146,11 +146,12 @@ void E2EFilterTestBase::readWithFilter(
     bool skipCheck) {
   dwio::common::ReaderOptions readerOpts{leafPool_.get()};
   dwio::common::RowReaderOptions rowReaderOpts;
-  std::string_view data(sinkPtr_->getData(), sinkPtr_->size());
+  std::string_view data(sinkPtr_->data(), sinkPtr_->size());
   auto input = std::make_unique<BufferedInput>(
       std::make_shared<InMemoryReadFile>(data), readerOpts.getMemoryPool());
   auto reader = makeReader(readerOpts, std::move(input));
-  // The  spec must stay live over the lifetime of the reader.
+
+  // The spec must stay live over the lifetime of the reader.
   setUpRowReaderOptions(rowReaderOpts, spec);
   OwnershipChecker ownershipChecker;
   auto rowReader = reader->createRowReader(rowReaderOpts);
@@ -452,7 +453,7 @@ void E2EFilterTestBase::testMetadataFilterImpl(
   specC->setChannel(0);
   ReaderOptions readerOpts{leafPool_.get()};
   RowReaderOptions rowReaderOpts;
-  std::string_view data(sinkPtr_->getData(), sinkPtr_->size());
+  std::string_view data(sinkPtr_->data(), sinkPtr_->size());
   auto input = std::make_unique<BufferedInput>(
       std::make_shared<InMemoryReadFile>(data), readerOpts.getMemoryPool());
   auto reader = makeReader(readerOpts, std::move(input));
@@ -649,7 +650,7 @@ void E2EFilterTestBase::testSubfieldsPruning() {
       ->setFilter(common::createBigintValues({1}, false));
   ReaderOptions readerOpts{leafPool_.get()};
   RowReaderOptions rowReaderOpts;
-  std::string_view data(sinkPtr_->getData(), sinkPtr_->size());
+  std::string_view data(sinkPtr_->data(), sinkPtr_->size());
   auto input = std::make_unique<BufferedInput>(
       std::make_shared<InMemoryReadFile>(data), readerOpts.getMemoryPool());
   auto reader = makeReader(readerOpts, std::move(input));
@@ -714,7 +715,7 @@ void E2EFilterTestBase::testMutationCornerCases() {
   auto& rowType = batches[0]->type();
   writeToMemory(rowType, batches, false);
   ReaderOptions readerOpts{leafPool_.get()};
-  std::string_view data(sinkPtr_->getData(), sinkPtr_->size());
+  std::string_view data(sinkPtr_->data(), sinkPtr_->size());
   auto input = std::make_unique<BufferedInput>(
       std::make_shared<InMemoryReadFile>(data), readerOpts.getMemoryPool());
   auto reader = makeReader(readerOpts, std::move(input));
