@@ -450,6 +450,45 @@ The value ranges from <code class="docutils literal notranslate"><span class="pr
 </dd></dl>
 
 </section>
+<section id="time-zones">
+<h2>Time Zones<a class="headerlink" href="#time-zones" title="Permalink to this heading">¶</a></h2>
+<p>Velox has full support for time zone rules, which are needed to perform date/time
+calculations correctly. Typically, the session time zone is used for temporal
+calculations. This is the time zone of the client computer that submits the query, if
+available. Otherwise, it is the time zone of the server running the Presto coordinator.</p>
+<p>Queries that operate with time zones that follow daylight saving can produce unexpected
+results. For example, if we run the following query in the <cite>America/Los Angeles</cite> time
+zone:</p>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">SELECT</span> <span class="n">date_add</span><span class="p">(</span><span class="s1">&#39;hour&#39;</span><span class="p">,</span> <span class="mi">24</span><span class="p">,</span> <span class="n">cast</span><span class="p">(</span><span class="s1">&#39;2014-03-08 09:00:00&#39;</span> <span class="k">as</span> <span class="n">timestamp</span><span class="p">));</span>
+<span class="o">--</span> <span class="mi">2014</span><span class="o">-</span><span class="mi">03</span><span class="o">-</span><span class="mi">09</span> <span class="mi">10</span><span class="p">:</span><span class="mi">00</span><span class="p">:</span><span class="mf">00.000</span>
+</pre></div>
+</div>
+<p>The timestamp appears to only advance 23 hours. This is because on March 9th clocks in
+<cite>America/Los Angeles</cite> are turned forward 1 hour, so March 9th only has 23 hours. To
+advance the day part of the timestamp, use the <cite>day</cite> unit instead:</p>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">SELECT</span> <span class="n">date_add</span><span class="p">(</span><span class="s1">&#39;day&#39;</span><span class="p">,</span> <span class="mi">1</span><span class="p">,</span> <span class="n">cast</span><span class="p">(</span><span class="s1">&#39;2014-03-08 09:00:00&#39;</span> <span class="k">as</span> <span class="n">timestamp</span><span class="p">));</span>
+<span class="o">--</span> <span class="mi">2014</span><span class="o">-</span><span class="mi">03</span><span class="o">-</span><span class="mi">09</span> <span class="mi">09</span><span class="p">:</span><span class="mi">00</span><span class="p">:</span><span class="mf">00.000</span>
+</pre></div>
+</div>
+<p>This works because the <a class="reference internal" href="#date_add" title="date_add"><code class="xref py py-func docutils literal notranslate"><span class="pre">date_add()</span></code></a> function treats the timestamp as list of fields, adds
+the value to the specified field and then rolls any overflow into the next higher field.</p>
+<p>Time zones are also necessary for parsing and printing timestamps. Queries that use this
+functionality can also produce unexpected results. For example, on the same machine:</p>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">SELECT</span> <span class="n">cast</span><span class="p">(</span><span class="s1">&#39;2014-03-09 02:30:00&#39;</span> <span class="k">as</span> <span class="n">timestamp</span><span class="p">);</span>
+</pre></div>
+</div>
+<p>The above query causes an error because there was no 2:30 AM on March 9th in
+<cite>America/Los_Angeles</cite> due to a daylight saving time transition.</p>
+<p>Similarly, the following query has two possible outcomes due to a daylight saving time
+transition:</p>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">SELECT</span> <span class="n">cast</span><span class="p">(</span><span class="s1">&#39;2014-11-02 01:30:00&#39;</span> <span class="k">as</span> <span class="n">timestamp</span><span class="p">);</span>
+<span class="o">--</span> <span class="mi">2014</span><span class="o">-</span><span class="mi">11</span><span class="o">-</span><span class="mi">02</span> <span class="mi">08</span><span class="p">:</span><span class="mi">30</span><span class="p">:</span><span class="mf">00.000</span>
+</pre></div>
+</div>
+<p>It can be interpreted as <cite>2014-11-02 01:30:00 PDT</cite>, or <cite>2014-11-02 01:30:00 PST</cite>, which are
+<cite>2014-11-02 08:30:00 UTC</cite> or <cite>2014-11-02 09:30:00 UTC</cite> respectively. The former one is
+picked to be consistent with Presto.</p>
+</section>
 </section>
 
 
@@ -468,6 +507,7 @@ The value ranges from <code class="docutils literal notranslate"><span class="pr
 <li><a class="reference internal" href="#mysql-date-functions">MySQL Date Functions</a></li>
 <li><a class="reference internal" href="#java-date-functions">Java Date Functions</a></li>
 <li><a class="reference internal" href="#convenience-extraction-functions">Convenience Extraction Functions</a></li>
+<li><a class="reference internal" href="#time-zones">Time Zones</a></li>
 </ul>
 </li>
 </ul>
