@@ -19,7 +19,8 @@
 #include <gtest/gtest.h>
 #include <unordered_set>
 
-#include "velox/exec/tests/AggregationFuzzerRunner.h"
+#include "velox/exec/tests/utils/AggregationFuzzerRunner.h"
+#include "velox/exec/tests/utils/DuckQueryRunner.h"
 #include "velox/functions/sparksql/aggregates/Register.h"
 
 DEFINE_int64(
@@ -72,10 +73,14 @@ int main(int argc, char** argv) {
       {"min_by", ""}};
 
   size_t initialSeed = FLAGS_seed == 0 ? std::time(nullptr) : FLAGS_seed;
-  return facebook::velox::exec::test::AggregationFuzzerRunner::runFuzzer(
-      FLAGS_only,
-      initialSeed,
-      std::nullopt,
-      skipFunctions,
-      customVerificationFunctions);
+  auto duckQueryRunner =
+      std::make_unique<facebook::velox::exec::test::DuckQueryRunner>();
+
+  using Runner = facebook::velox::exec::test::AggregationFuzzerRunner;
+
+  Runner::Options options;
+  options.onlyFunctions = FLAGS_only;
+  options.skipFunctions = skipFunctions;
+  options.customVerificationFunctions = customVerificationFunctions;
+  return Runner::run(initialSeed, std::move(duckQueryRunner), options);
 }

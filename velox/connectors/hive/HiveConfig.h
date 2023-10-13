@@ -46,7 +46,8 @@ class HiveConfig {
 
   /// Whether new data can be inserted into an unpartition table.
   /// Velox currently does not support appending data to existing partitions.
-  static constexpr const char* kImmutablePartitions = "immutable_partitions";
+  static constexpr const char* kImmutablePartitions =
+      "hive.immutable-partitions";
 
   /// Virtual addressing is used for AWS S3 and is the default
   /// (path-style-access is false). Path access style is used for some on-prem
@@ -106,6 +107,17 @@ class HiveConfig {
   /// Maximum number of entries in the file handle cache.
   static constexpr const char* kNumCacheFileHandles = "num_cached_file_handles";
 
+  // TODO: Refactor and merge config and session property.
+  static constexpr const char* kOrcWriterMaxStripeSize =
+      "orc_optimized_writer_max_stripe_size";
+  static constexpr const char* kOrcWriterMaxStripeSizeConfig =
+      "hive.orc.writer.stripe-max-size";
+
+  static constexpr const char* kOrcWriterMaxDictionaryMemory =
+      "orc_optimized_writer_max_dictionary_memory";
+  static constexpr const char* kOrcWriterMaxDictionaryMemoryConfig =
+      "hive.orc.writer.dictionary-max-memory";
+
   static InsertExistingPartitionsBehavior insertExistingPartitionsBehavior(
       const Config* config);
 
@@ -146,6 +158,14 @@ class HiveConfig {
   static int32_t maxCoalescedDistanceBytes(const Config* config);
 
   static int32_t numCacheFileHandles(const Config* config);
+
+  static uint64_t const getKOrcWriterMaxStripeSize(
+      const Config* connectorQueryCtxConfig,
+      const Config* connectorPropertiesConfig);
+
+  static uint64_t const getKOrcWriterMaxDictionaryMemory(
+      const Config* connectorQueryCtxConfig,
+      const Config* connectorPropertiesConfig);
 };
 
 } // namespace facebook::velox::connector::hive

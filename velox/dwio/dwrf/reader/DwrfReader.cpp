@@ -408,14 +408,17 @@ void DwrfRowReader::resetFilterCaches() {
 std::optional<std::vector<velox::dwio::common::RowReader::PrefetchUnit>>
 DwrfRowReader::prefetchUnits() {
   auto rowsInStripe = getReader().getRowsPerStripe();
-  DWIO_ENSURE(rowsInStripe.size() == lastStripe);
-  std::vector<PrefetchUnit> res;
-  res.reserve(lastStripe);
+  DWIO_ENSURE(firstStripe <= rowsInStripe.size());
+  DWIO_ENSURE(lastStripe <= rowsInStripe.size());
+  DWIO_ENSURE(firstStripe <= lastStripe);
 
-  for (int i = 0; i < rowsInStripe.size(); i++) {
+  std::vector<PrefetchUnit> res;
+  res.reserve(lastStripe - firstStripe);
+
+  for (auto stripe = firstStripe; stripe < lastStripe; ++stripe) {
     res.push_back(
-        {.rowCount = rowsInStripe[i],
-         .prefetch = std::bind(&DwrfRowReader::prefetch, this, i)});
+        {.rowCount = rowsInStripe[stripe],
+         .prefetch = std::bind(&DwrfRowReader::prefetch, this, stripe)});
   }
   return res;
 }
@@ -467,13 +470,15 @@ DwrfRowReader::FetchResult DwrfRowReader::fetch(uint32_t stripeIndex) {
       prefetchedStripeBase->footer,
       getDecryptionHandler());
 
+  auto stripe = getReader().getFooter().stripes(stripeIndex);
   StripeStreamsImpl stripeStreams(
       state,
       getColumnSelector(),
       options_,
-      getReader().getFooter().stripes(stripeIndex).offset(),
+      stripe.offset(),
+      stripe.numberOfRows(),
       *this,
-      currentStripe);
+      stripeIndex);
 
   auto scanSpec = options_.getScanSpec().get();
   auto requestedType = getColumnSelector().getSchemaWithId();
@@ -490,6 +495,7 @@ DwrfRowReader::FetchResult DwrfRowReader::fetch(uint32_t stripeIndex) {
         dataType,
         stripeStreams,
         streamLabels,
+        columnReaderStatistics_,
         scanSpec,
         flatMapContext,
         true); // isRoot

@@ -37,16 +37,15 @@ std::vector<core::LambdaTypedExprPtr> extractLambdaInputs(
   return lambdas;
 }
 
-std::vector<TypePtr> populateAggregateInputs(
+void populateAggregateInputs(
     const core::AggregationNode::Aggregate& aggregate,
     const RowType& inputType,
     AggregateInfo& info,
     memory::MemoryPool* pool) {
   auto& channels = info.inputs;
   auto& constants = info.constantInputs;
-  std::vector<TypePtr> argTypes;
+
   for (const auto& arg : aggregate.call->inputs()) {
-    argTypes.push_back(arg->type());
     if (auto field =
             dynamic_cast<const core::FieldAccessTypedExpr*>(arg.get())) {
       channels.push_back(inputType.getChildIdx(field->name()));
@@ -70,8 +69,6 @@ std::vector<TypePtr> populateAggregateInputs(
           arg->toString());
     }
   }
-
-  return argTypes;
 }
 
 void verifyIntermediateInputs(
@@ -149,16 +146,11 @@ HashAggregation::HashAggregation(
 
     AggregateInfo info;
     info.distinct = aggregate.distinct;
-    auto argTypes =
-        populateAggregateInputs(aggregate, inputType->asRow(), info, pool());
+    populateAggregateInputs(aggregate, inputType->asRow(), info, pool());
 
-    if (isRawInput(aggregationNode->step())) {
-      info.intermediateType =
-          Aggregate::intermediateType(aggregate.call->name(), argTypes);
-    } else {
-      verifyIntermediateInputs(aggregate.call->name(), argTypes);
-      info.intermediateType = argTypes[0];
-    }
+    info.intermediateType = Aggregate::intermediateType(
+        aggregate.call->name(), aggregate.rawInputTypes);
+
     // Setup aggregation mask: convert the Variable Reference name to the
     // channel (projection) index, if there is a mask.
     if (const auto& mask = aggregate.mask) {
@@ -170,8 +162,10 @@ HashAggregation::HashAggregation(
     const auto& resultType = outputType_->childAt(numHashers + i);
     info.function = Aggregate::create(
         aggregate.call->name(),
-        aggregationNode->step(),
-        argTypes,
+        isPartialOutput(aggregationNode->step())
+            ? core::AggregationNode::Step::kPartial
+            : core::AggregationNode::Step::kSingle,
+        aggregate.rawInputTypes,
         resultType,
         driverCtx->queryConfig());
 
@@ -309,10 +303,12 @@ void HashAggregation::updateRuntimeStats() {
 }
 
 void HashAggregation::recordSpillStats() {
-  const auto spillStatsOr = groupingSet_->spilledStats();
+  auto spillStatsOr = groupingSet_->spilledStats();
   if (!spillStatsOr.has_value()) {
     return;
   }
+  VELOX_CHECK_EQ(spillStatsOr.value().spillRuns, 0);
+  spillStatsOr.value().spillRuns = numSpillRuns_;
   Operator::recordSpillStats(spillStatsOr.value());
 }
 
@@ -444,13 +440,17 @@ RowVectorPtr HashAggregation::getOutput() {
     return output;
   }
 
-  const auto batchSize =
-      isGlobal_ ? 1 : outputBatchRows(groupingSet_->estimateRowSize());
-
+  const auto& queryConfig = operatorCtx_->driverCtx()->queryConfig();
+  const auto maxOutputRows =
+      isGlobal_ ? 1 : queryConfig.preferredOutputBatchRows();
   // Reuse output vectors if possible.
-  prepareOutput(batchSize);
+  prepareOutput(maxOutputRows);
 
-  bool hasData = groupingSet_->getOutput(batchSize, resultIterator_, output_);
+  bool hasData = groupingSet_->getOutput(
+      maxOutputRows,
+      queryConfig.preferredOutputBatchBytes(),
+      resultIterator_,
+      output_);
   if (!hasData) {
     resultIterator_.reset();
     if (noMoreInput_) {
@@ -475,24 +475,40 @@ bool HashAggregation::isFinished() {
   return finished_;
 }
 
-void HashAggregation::reclaim(uint64_t targetBytes) {
+void HashAggregation::reclaim(
+    uint64_t targetBytes,
+    memory::MemoryReclaimer::Stats& stats) {
   VELOX_CHECK(canReclaim());
-  auto* driver = operatorCtx_->driver();
 
-  /// NOTE: an aggregation operator is reclaimable if it hasn't started output
-  /// processing and is not under non-reclaimable execution section.
-  if (noMoreInput_ || nonReclaimableSection_) {
-    // TODO: add stats to record the non-reclaimable case and reduce the log
-    // frequency if it is too verbose.
-    LOG(WARNING) << "Can't reclaim from aggregation operator, noMoreInput_["
-                 << noMoreInput_ << "], nonReclaimableSection_["
-                 << nonReclaimableSection_ << "], " << toString();
+  // NOTE: an aggregation operator is reclaimable if it hasn't started output
+  // processing and is not under non-reclaimable execution section.
+  if (nonReclaimableSection_) {
+    // TODO: reduce the log frequency if it is too verbose.
+    ++stats.numNonReclaimableAttempts;
+    LOG(WARNING)
+        << "Can't reclaim from aggregation operator which is under non-reclaimable section: "
+        << pool()->toString();
     return;
   }
 
-  // TODO: support fine-grain disk spilling based on 'targetBytes' after having
-  // row container memory compaction support later.
-  groupingSet_->spill(0, targetBytes);
+  if (noMoreInput_) {
+    if (groupingSet_->hasSpilled()) {
+      LOG(WARNING)
+          << "Can't reclaim from aggregation operator which has spilled and is under output processing: "
+          << pool()->toString();
+      return;
+    }
+    // Spill all the rows starting from the next output row pointed by
+    // 'resultIterator_'.
+    groupingSet_->spill(resultIterator_);
+    // NOTE: we will only spill once during the output processing stage so
+    // record stats here.
+    recordSpillStats();
+  } else {
+    // TODO: support fine-grain disk spilling based on 'targetBytes' after
+    // having row container memory compaction support later.
+    groupingSet_->spill(0, targetBytes);
+  }
   VELOX_CHECK_EQ(groupingSet_->numRows(), 0);
   VELOX_CHECK_EQ(groupingSet_->numDistinct(), 0);
   // Release the minimum reserved memory.

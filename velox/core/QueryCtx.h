@@ -34,9 +34,21 @@ class QueryCtx {
   /// mode, executor is not needed. Hence, we don't require executor to always
   /// be passed in here, but instead, ensure that executor exists when actually
   /// being used.
+  // TODO(jtan6): Deprecate this constructor after external dependencies are
+  //   migrated
+  QueryCtx(
+      folly::Executor* executor,
+      std::unordered_map<std::string, std::string> queryConfigValues,
+      std::unordered_map<std::string, std::shared_ptr<Config>>
+          connectorConfigs = {},
+      cache::AsyncDataCache* cache = cache::AsyncDataCache::getInstance(),
+      std::shared_ptr<memory::MemoryPool> pool = nullptr,
+      std::shared_ptr<folly::Executor> spillExecutor = nullptr,
+      const std::string& queryId = "");
+
   QueryCtx(
       folly::Executor* executor = nullptr,
-      std::unordered_map<std::string, std::string> queryConfigValues = {},
+      QueryConfig&& queryConfig = QueryConfig{{}},
       std::unordered_map<std::string, std::shared_ptr<Config>>
           connectorConfigs = {},
       cache::AsyncDataCache* cache = cache::AsyncDataCache::getInstance(),
@@ -145,7 +157,14 @@ class QueryCtx {
 class ExecCtx {
  public:
   ExecCtx(memory::MemoryPool* pool, QueryCtx* queryCtx)
-      : pool_(pool), queryCtx_(queryCtx), vectorPool_{pool} {}
+      : pool_(pool),
+        queryCtx_(queryCtx),
+        exprEvalCacheEnabled_(
+            !queryCtx ||
+            queryCtx->queryConfig().isExpressionEvaluationCacheEnabled()),
+        vectorPool_(
+            exprEvalCacheEnabled_ ? std::make_unique<VectorPool>(pool)
+                                  : nullptr) {}
 
   velox::memory::MemoryPool* pool() const {
     return pool_;
@@ -162,6 +181,7 @@ class ExecCtx {
   /// Prefer using LocalSelectivityVector which takes care of returning the
   /// vector to the pool on destruction.
   std::unique_ptr<SelectivityVector> getSelectivityVector(int32_t size) {
+    VELOX_CHECK(exprEvalCacheEnabled_ || selectivityVectorPool_.empty());
     if (selectivityVectorPool_.empty()) {
       return std::make_unique<SelectivityVector>(size);
     }
@@ -175,6 +195,7 @@ class ExecCtx {
   // content. The caller is responsible for setting the size and
   // assigning the contents.
   std::unique_ptr<SelectivityVector> getSelectivityVector() {
+    VELOX_CHECK(exprEvalCacheEnabled_ || selectivityVectorPool_.empty());
     if (selectivityVectorPool_.empty()) {
       return std::make_unique<SelectivityVector>();
     }
@@ -183,11 +204,17 @@ class ExecCtx {
     return vector;
   }
 
-  void releaseSelectivityVector(std::unique_ptr<SelectivityVector>&& vector) {
-    selectivityVectorPool_.push_back(std::move(vector));
+  // Returns true if the vector was moved into the pool.
+  bool releaseSelectivityVector(std::unique_ptr<SelectivityVector>&& vector) {
+    if (exprEvalCacheEnabled_) {
+      selectivityVectorPool_.push_back(std::move(vector));
+      return true;
+    }
+    return false;
   }
 
   std::unique_ptr<DecodedVector> getDecodedVector() {
+    VELOX_CHECK(exprEvalCacheEnabled_ || decodedVectorPool_.empty());
     if (decodedVectorPool_.empty()) {
       return std::make_unique<DecodedVector>();
     }
@@ -196,42 +223,63 @@ class ExecCtx {
     return vector;
   }
 
-  void releaseDecodedVector(std::unique_ptr<DecodedVector>&& vector) {
-    decodedVectorPool_.push_back(std::move(vector));
+  // Returns true if the vector was moved into the pool.
+  bool releaseDecodedVector(std::unique_ptr<DecodedVector>&& vector) {
+    if (exprEvalCacheEnabled_) {
+      decodedVectorPool_.push_back(std::move(vector));
+      return true;
+    }
+    return false;
   }
 
-  VectorPool& vectorPool() {
-    return vectorPool_;
+  VectorPool* vectorPool() {
+    return vectorPool_.get();
   }
 
   /// Gets a possibly recycled vector of 'type and 'size'. Allocates from
   /// 'pool_' if no pre-allocated vector.
   VectorPtr getVector(const TypePtr& type, vector_size_t size) {
-    return vectorPool_.get(type, size);
+    if (vectorPool_) {
+      return vectorPool_->get(type, size);
+    } else {
+      return BaseVector::create(type, size, pool_);
+    }
   }
 
   /// Moves 'vector' to the pool if it is reusable, else leaves it in
   /// place. Returns true if the vector was moved into the pool.
   bool releaseVector(VectorPtr& vector) {
-    return vectorPool_.release(vector);
+    if (vectorPool_) {
+      return vectorPool_->release(vector);
+    }
+    return false;
   }
 
   /// Moves elements of 'vectors' to the pool if reusable, else leaves them
   /// in place. Returns number of vectors that were moved into the pool.
   size_t releaseVectors(std::vector<VectorPtr>& vectors) {
-    return vectorPool_.release(vectors);
+    if (vectorPool_) {
+      return vectorPool_->release(vectors);
+    }
+    return 0;
+  }
+
+  bool exprEvalCacheEnabled() const {
+    return exprEvalCacheEnabled_;
   }
 
  private:
   // Pool for all Buffers for this thread.
-  memory::MemoryPool* pool_;
-  QueryCtx* queryCtx_;
+  memory::MemoryPool* const pool_;
+  QueryCtx* const queryCtx_;
+
+  const bool exprEvalCacheEnabled_;
   // A pool of preallocated DecodedVectors for use by expressions and operators.
   std::vector<std::unique_ptr<DecodedVector>> decodedVectorPool_;
   // A pool of preallocated SelectivityVectors for use by expressions
   // and operators.
   std::vector<std::unique_ptr<SelectivityVector>> selectivityVectorPool_;
-  VectorPool vectorPool_;
+  std::unique_ptr<VectorPool> vectorPool_;
 };
 
 } // namespace facebook::velox::core

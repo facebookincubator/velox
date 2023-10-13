@@ -33,6 +33,10 @@ String Functions
     This function provides the same functionality as the
     SQL-standard concatenation operator (``||``).
 
+.. function:: ends_with(string, substring) -> boolean
+
+    Returns whether ``string`` ends_with with ``substring``.
+
 .. function:: from_utf8(binary) -> varchar
 
     Decodes a UTF-8 encoded string from ``binary``. Invalid UTF-8 sequences
@@ -145,6 +149,10 @@ String Functions
     entryDelimiter and keyValueDelimiter must not be empty and must not be the same.
 
     Raises an error if there are duplicate keys.
+
+.. function:: starts_with(string, substring) -> boolean
+
+    Returns whether ``string`` starts with ``substring``.
 
 .. function:: strpos(string, substring) -> bigint
 

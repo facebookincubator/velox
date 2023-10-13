@@ -43,6 +43,7 @@ add_library(
   LocalPartition.cpp
   LocalPlanner.cpp
   MarkDistinct.cpp
+  MemoryReclaimer.cpp
   Merge.cpp
   MergeJoin.cpp
   MergeSource.cpp
@@ -65,6 +66,7 @@ add_library(
   SpillOperatorGroup.cpp
   Spiller.cpp
   StreamingAggregation.cpp
+  StreamingWindowBuild.cpp
   Strings.cpp
   TableScan.cpp
   TableWriteMerge.cpp

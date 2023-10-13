@@ -254,7 +254,7 @@ TEST_F(PlanNodeToStringTest, aggregation) {
 TEST_F(PlanNodeToStringTest, groupId) {
   auto plan = PlanBuilder()
                   .values({data_})
-                  .groupId({{"c0"}, {"c1"}}, {"c2"})
+                  .groupId({"c0", "c1"}, {{"c0"}, {"c1"}}, {"c2"})
                   .planNode();
   ASSERT_EQ("-- GroupId\n", plan->toString());
   ASSERT_EQ(
@@ -263,11 +263,20 @@ TEST_F(PlanNodeToStringTest, groupId) {
 
   plan = PlanBuilder()
              .values({data_})
-             .groupId({{"c0", "c1"}, {"c1"}}, {"c2"}, "gid")
+             .groupId({"c0", "c1"}, {{"c0", "c1"}, {"c1"}}, {"c2"}, "gid")
              .planNode();
   ASSERT_EQ("-- GroupId\n", plan->toString());
   ASSERT_EQ(
       "-- GroupId[[c0, c1], [c1]] -> c0:SMALLINT, c1:INTEGER, c2:BIGINT, gid:BIGINT\n",
+      plan->toString(true, false));
+
+  plan = PlanBuilder()
+             .values({data_})
+             .groupId({"c0", "c0 as c1"}, {{"c0", "c1"}, {"c1"}}, {"c2"}, "gid")
+             .planNode();
+  ASSERT_EQ("-- GroupId\n", plan->toString());
+  ASSERT_EQ(
+      "-- GroupId[[c0, c1], [c1]] -> c0:SMALLINT, c1:SMALLINT, c2:BIGINT, gid:BIGINT\n",
       plan->toString(true, false));
 }
 
@@ -683,7 +692,7 @@ TEST_F(PlanNodeToStringTest, window) {
   ASSERT_EQ("-- Window\n", plan->toString());
   ASSERT_EQ(
       "-- Window[partition by [a] order by [b ASC NULLS LAST] "
-      "d := window1(ROW[\"c\"]) RANGE between 10 PRECEDING and UNBOUNDED FOLLOWING] "
+      "d := window1(ROW[\"c\"]) RANGE between 10 PRECEDING and UNBOUNDED FOLLOWING inputsSorted [0]] "
       "-> a:VARCHAR, b:BIGINT, c:BIGINT, d:BIGINT\n",
       plan->toString(true, false));
 
@@ -695,7 +704,32 @@ TEST_F(PlanNodeToStringTest, window) {
   ASSERT_EQ("-- Window\n", plan->toString());
   ASSERT_EQ(
       "-- Window[partition by [a] order by [] "
-      "w0 := window1(ROW[\"c\"]) RANGE between CURRENT ROW and b FOLLOWING] "
+      "w0 := window1(ROW[\"c\"]) RANGE between CURRENT ROW and b FOLLOWING inputsSorted [0]] "
+      "-> a:VARCHAR, b:BIGINT, c:BIGINT, w0:BIGINT\n",
+      plan->toString(true, false));
+
+  plan = PlanBuilder()
+             .tableScan(ROW({"a", "b", "c"}, {VARCHAR(), BIGINT(), BIGINT()}))
+             .streamingWindow(
+                 {"window1(c) over (partition by a order by b "
+                  "range between 10 preceding and unbounded following) AS d"})
+             .planNode();
+  ASSERT_EQ("-- Window\n", plan->toString());
+  ASSERT_EQ(
+      "-- Window[partition by [a] order by [b ASC NULLS LAST] "
+      "d := window1(ROW[\"c\"]) RANGE between 10 PRECEDING and UNBOUNDED FOLLOWING inputsSorted [1]] "
+      "-> a:VARCHAR, b:BIGINT, c:BIGINT, d:BIGINT\n",
+      plan->toString(true, false));
+
+  plan = PlanBuilder()
+             .tableScan(ROW({"a", "b", "c"}, {VARCHAR(), BIGINT(), BIGINT()}))
+             .streamingWindow({"window1(c) over (partition by a "
+                               "range between current row and b following)"})
+             .planNode();
+  ASSERT_EQ("-- Window\n", plan->toString());
+  ASSERT_EQ(
+      "-- Window[partition by [a] order by [] "
+      "w0 := window1(ROW[\"c\"]) RANGE between CURRENT ROW and b FOLLOWING inputsSorted [1]] "
       "-> a:VARCHAR, b:BIGINT, c:BIGINT, w0:BIGINT\n",
       plan->toString(true, false));
 }

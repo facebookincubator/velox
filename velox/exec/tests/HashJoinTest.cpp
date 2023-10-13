@@ -845,6 +845,7 @@ class HashJoinTest : public HiveConnectorTestBase {
   RowTypePtr probeType_;
   RowTypePtr buildType_;
 
+  memory::MemoryReclaimer::Stats reclaimerStats_;
   friend class HashJoinBuilder;
 };
 
@@ -5028,11 +5029,15 @@ DEBUG_ONLY_TEST_F(HashJoinTest, reclaimDuringInputProcessing) {
     }
 
     if (testData.expectedReclaimable) {
-      op->reclaim(folly::Random::oneIn(2) ? 0 : folly::Random::rand32());
+      op->reclaim(
+          folly::Random::oneIn(2) ? 0 : folly::Random::rand32(),
+          reclaimerStats_);
       ASSERT_EQ(op->pool()->currentBytes(), 0);
     } else {
       VELOX_ASSERT_THROW(
-          op->reclaim(folly::Random::oneIn(2) ? 0 : folly::Random::rand32()),
+          op->reclaim(
+              folly::Random::oneIn(2) ? 0 : folly::Random::rand32(),
+              reclaimerStats_),
           "");
     }
 
@@ -5041,6 +5046,7 @@ DEBUG_ONLY_TEST_F(HashJoinTest, reclaimDuringInputProcessing) {
 
     taskThread.join();
   }
+  ASSERT_EQ(reclaimerStats_, memory::MemoryReclaimer::Stats{});
 }
 
 DEBUG_ONLY_TEST_F(HashJoinTest, reclaimDuringReserve) {
@@ -5152,7 +5158,8 @@ DEBUG_ONLY_TEST_F(HashJoinTest, reclaimDuringReserve) {
   ASSERT_TRUE(reclaimable);
   ASSERT_GT(reclaimableBytes, 0);
 
-  op->reclaim(folly::Random::oneIn(2) ? 0 : folly::Random::rand32());
+  op->reclaim(
+      folly::Random::oneIn(2) ? 0 : folly::Random::rand32(), reclaimerStats_);
   ASSERT_EQ(op->pool()->currentBytes(), 0);
 
   driverWait.notify();
@@ -5160,6 +5167,7 @@ DEBUG_ONLY_TEST_F(HashJoinTest, reclaimDuringReserve) {
   task.reset();
 
   taskThread.join();
+  ASSERT_EQ(reclaimerStats_, memory::MemoryReclaimer::Stats{});
 }
 
 DEBUG_ONLY_TEST_F(HashJoinTest, reclaimDuringAllocation) {
@@ -5276,10 +5284,14 @@ DEBUG_ONLY_TEST_F(HashJoinTest, reclaimDuringAllocation) {
     ASSERT_EQ(reclaimable, enableSpilling);
     if (enableSpilling) {
       ASSERT_GE(reclaimableBytes, 0);
-      op->reclaim(folly::Random::oneIn(2) ? 0 : folly::Random::rand32());
+      op->reclaim(
+          folly::Random::oneIn(2) ? 0 : folly::Random::rand32(),
+          reclaimerStats_);
     } else {
       VELOX_ASSERT_THROW(
-          op->reclaim(folly::Random::oneIn(2) ? 0 : folly::Random::rand32()),
+          op->reclaim(
+              folly::Random::oneIn(2) ? 0 : folly::Random::rand32(),
+              reclaimerStats_),
           "");
       ASSERT_EQ(reclaimableBytes, 0);
     }
@@ -5290,6 +5302,7 @@ DEBUG_ONLY_TEST_F(HashJoinTest, reclaimDuringAllocation) {
 
     taskThread.join();
   }
+  ASSERT_EQ(reclaimerStats_, memory::MemoryReclaimer::Stats{1});
 }
 
 DEBUG_ONLY_TEST_F(HashJoinTest, reclaimDuringOutputProcessing) {
@@ -5395,13 +5408,17 @@ DEBUG_ONLY_TEST_F(HashJoinTest, reclaimDuringOutputProcessing) {
     if (enableSpilling) {
       ASSERT_GT(reclaimableBytes, 0);
       const auto usedMemoryBytes = op->pool()->currentBytes();
-      op->reclaim(folly::Random::oneIn(2) ? 0 : folly::Random::rand32());
+      op->reclaim(
+          folly::Random::oneIn(2) ? 0 : folly::Random::rand32(),
+          reclaimerStats_);
       // No reclaim as the operator has started output processing.
       ASSERT_EQ(usedMemoryBytes, op->pool()->currentBytes());
     } else {
       ASSERT_EQ(reclaimableBytes, 0);
       VELOX_ASSERT_THROW(
-          op->reclaim(folly::Random::oneIn(2) ? 0 : folly::Random::rand32()),
+          op->reclaim(
+              folly::Random::oneIn(2) ? 0 : folly::Random::rand32(),
+              reclaimerStats_),
           "");
     }
 
@@ -5410,6 +5427,7 @@ DEBUG_ONLY_TEST_F(HashJoinTest, reclaimDuringOutputProcessing) {
 
     taskThread.join();
   }
+  ASSERT_EQ(reclaimerStats_, memory::MemoryReclaimer::Stats{1});
 }
 
 DEBUG_ONLY_TEST_F(HashJoinTest, reclaimDuringWaitForProbe) {
@@ -5469,7 +5487,7 @@ DEBUG_ONLY_TEST_F(HashJoinTest, reclaimDuringWaitForProbe) {
         SuspendedSection suspendedSection(driver);
         auto taskPauseWait = task->requestPause();
         taskPauseWait.wait();
-        op->reclaim(0);
+        op->reclaim(0, reclaimerStats_);
         Task::resume(task);
       })));
 
@@ -5529,7 +5547,8 @@ DEBUG_ONLY_TEST_F(HashJoinTest, reclaimDuringWaitForProbe) {
   ASSERT_GT(reclaimableBytes, 0);
 
   const auto usedMemoryBytes = op->pool()->currentBytes();
-  op->reclaim(folly::Random::oneIn(2) ? 0 : folly::Random::rand32());
+  op->reclaim(
+      folly::Random::oneIn(2) ? 0 : folly::Random::rand32(), reclaimerStats_);
   // No reclaim as the build operator is not in building table state.
   ASSERT_EQ(usedMemoryBytes, op->pool()->currentBytes());
 
@@ -5538,6 +5557,7 @@ DEBUG_ONLY_TEST_F(HashJoinTest, reclaimDuringWaitForProbe) {
   task.reset();
 
   taskThread.join();
+  ASSERT_EQ(reclaimerStats_, memory::MemoryReclaimer::Stats{1});
 }
 
 DEBUG_ONLY_TEST_F(HashJoinTest, hashBuildAbortDuringOutputProcessing) {
@@ -5855,5 +5875,107 @@ DEBUG_ONLY_TEST_F(HashJoinTest, hashProbeAbortDuringInputProcessing) {
     task.reset();
     waitForAllTasksToBeDeleted();
   }
+}
+
+TEST_F(HashJoinTest, leftJoinWithMissAtEndOfBatch) {
+  // Tests some cases where the row at the end of an output batch fails the
+  // filter.
+  auto probeVectors = std::vector<RowVectorPtr>{makeRowVector(
+      {"t_k1", "t_k2"},
+      {makeFlatVector<int32_t>(20, [](auto row) { return 1 + row % 2; }),
+       makeFlatVector<int32_t>(20, [](auto row) { return row; })})};
+  auto buildVectors = std::vector<RowVectorPtr>{
+      makeRowVector({"u_k1"}, {makeFlatVector<int32_t>({1, 2})})};
+  createDuckDbTable("t", probeVectors);
+  createDuckDbTable("u", {buildVectors});
+  auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
+
+  auto test = [&](const std::string& filter) {
+    auto plan = PlanBuilder(planNodeIdGenerator)
+                    .values(probeVectors, true)
+                    .hashJoin(
+                        {"t_k1"},
+                        {"u_k1"},
+                        PlanBuilder(planNodeIdGenerator)
+                            .values(buildVectors, true)
+                            .planNode(),
+                        filter,
+                        {"t_k1", "u_k1"},
+                        core::JoinType::kLeft)
+                    .planNode();
+
+    HashJoinBuilder(*pool_, duckDbQueryRunner_, driverExecutor_.get())
+        .planNode(plan)
+        .injectSpill(false)
+        .checkSpillStats(false)
+        .spillMemoryThreshold(1)
+        .maxSpillLevel(0)
+        .numDrivers(1)
+        .config(
+            core::QueryConfig::kPreferredOutputBatchRows, std::to_string(10))
+        .referenceQuery(fmt::format(
+            "SELECT t_k1, u_k1 from t left join u on t_k1 = u_k1 and {}",
+            filter))
+        .run();
+  };
+
+  // Alternate rows pass this filter and last row of a batch fails.
+  test("t_k1=1");
+
+  // All rows fail this filter.
+  test("t_k1=5");
+
+  // All rows in the second batch pass this filter.
+  test("t_k2 > 9");
+}
+
+TEST_F(HashJoinTest, leftJoinWithMissAtEndOfBatchMultipleBuildMatches) {
+  // Tests some cases where the row at the end of an output batch fails the
+  // filter and there are multiple matches with the build side..
+  auto probeVectors = std::vector<RowVectorPtr>{makeRowVector(
+      {"t_k1", "t_k2"},
+      {makeFlatVector<int32_t>(10, [](auto row) { return 1 + row % 2; }),
+       makeFlatVector<int32_t>(10, [](auto row) { return row; })})};
+  auto buildVectors = std::vector<RowVectorPtr>{
+      makeRowVector({"u_k1"}, {makeFlatVector<int32_t>({1, 2, 1, 2})})};
+  createDuckDbTable("t", probeVectors);
+  createDuckDbTable("u", {buildVectors});
+  auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
+
+  auto test = [&](const std::string& filter) {
+    auto plan = PlanBuilder(planNodeIdGenerator)
+                    .values(probeVectors, true)
+                    .hashJoin(
+                        {"t_k1"},
+                        {"u_k1"},
+                        PlanBuilder(planNodeIdGenerator)
+                            .values(buildVectors, true)
+                            .planNode(),
+                        filter,
+                        {"t_k1", "u_k1"},
+                        core::JoinType::kLeft)
+                    .planNode();
+
+    HashJoinBuilder(*pool_, duckDbQueryRunner_, driverExecutor_.get())
+        .planNode(plan)
+        .injectSpill(false)
+        .checkSpillStats(false)
+        .spillMemoryThreshold(1)
+        .maxSpillLevel(0)
+        .numDrivers(1)
+        .config(
+            core::QueryConfig::kPreferredOutputBatchRows, std::to_string(10))
+        .referenceQuery(fmt::format(
+            "SELECT t_k1, u_k1 from t left join u on t_k1 = u_k1 and {}",
+            filter))
+        .run();
+  };
+
+  // In this case the rows with t_k2 = 4 appear at the end of the first batch,
+  // meaning the last rows in that output batch are misses, and don't get added.
+  // The rows with t_k2 = 8 appear in the second batch so only one row is
+  // written, meaning there is space in the second output batch for the miss
+  // with tk_2 = 4 to get written.
+  test("t_k2 != 4 and t_k2 != 8");
 }
 } // namespace

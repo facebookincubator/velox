@@ -238,6 +238,10 @@ class VectorFuzzer {
   // elements.
   RowVectorPtr fuzzInputRow(const RowTypePtr& rowType);
 
+  /// Same as the function above, but all generated vectors are flat, i.e. no
+  /// constant or dictionary-encoded vectors at any level.
+  RowVectorPtr fuzzInputFlatRow(const RowTypePtr& rowType);
+
   // Generates a random type, including maps, vectors, and arrays. maxDepth
   // limits the maximum level of nesting for complex types. maxDepth <= 1 means
   // no complex types are allowed.
@@ -245,7 +249,16 @@ class VectorFuzzer {
   // There are no options to control type generation yet; these may be added in
   // the future.
   TypePtr randType(int maxDepth = 5);
+
+  /// Same as the function above, but only generate orderable types.
+  /// MAP types are not generated as they are not orderable.
+  TypePtr randOrderableType(int maxDepth = 5);
+
+  TypePtr randType(const std::vector<TypePtr>& scalarTypes, int maxDepth = 5);
   RowTypePtr randRowType(int maxDepth = 5);
+  RowTypePtr randRowType(
+      const std::vector<TypePtr>& scalarTypes,
+      int maxDepth = 5);
 
   // Generates short decimal TypePtr with random precision and scale.
   inline TypePtr randShortDecimalType() {
@@ -260,10 +273,6 @@ class VectorFuzzer {
         randPrecisionScale(LongDecimalType::kMaxPrecision);
     return DECIMAL(precision, scale);
   }
-
-  // Generate a random non-floating-point primitive type to be used as join keys
-  // or group-by key for aggregations, etc.
-  TypePtr randScalarNonFloatingPointType();
 
   void reSeed(size_t seed) {
     rng_.seed(seed);
@@ -342,12 +351,26 @@ class VectorFuzzer {
   FuzzerGenerator rng_;
 };
 
-/// Generates a random type, including maps, vectors, and arrays. maxDepth
+/// Generates a random type, including maps, structs, and arrays. maxDepth
 /// limits the maximum level of nesting for complex types. maxDepth <= 1 means
 /// no complex types are allowed.
 TypePtr randType(FuzzerGenerator& rng, int maxDepth = 5);
 
+/// Same as the function above, but only generate orderable types.
+/// MAP types are not generated as they are not orderable.
+TypePtr randOrderableType(FuzzerGenerator& rng, int maxDepth = 5);
+
+TypePtr randType(
+    FuzzerGenerator& rng,
+    const std::vector<TypePtr>& scalarTypes,
+    int maxDepth = 5);
+
 /// Generates a random ROW type.
 RowTypePtr randRowType(FuzzerGenerator& rng, int maxDepth = 5);
+
+RowTypePtr randRowType(
+    FuzzerGenerator& rng,
+    const std::vector<TypePtr>& scalarTypes,
+    int maxDepth = 5);
 
 } // namespace facebook::velox

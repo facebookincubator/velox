@@ -37,7 +37,6 @@ add_library(
   FlatMapHelper.cpp
   InputStream.cpp
   IntDecoder.cpp
-  IoStatistics.cpp
   MetadataFilter.cpp
   Options.cpp
   OutputStream.cpp
@@ -63,8 +62,8 @@ target_link_libraries(
   velox_dwio_common
   velox_buffer
   velox_caching
+  velox_common_io
   velox_common_compression
-  velox_dwio_common_compression
   velox_dwio_common_encryption
   velox_dwio_common_exception
   velox_exception

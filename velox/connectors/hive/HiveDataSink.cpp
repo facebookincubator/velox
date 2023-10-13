@@ -397,6 +397,10 @@ int64_t HiveDataSink::getCompletedBytes() const {
   return completedBytes;
 }
 
+int32_t HiveDataSink::numWrittenFiles() const {
+  return writers_.size();
+}
+
 std::vector<std::string> HiveDataSink::close(bool success) {
   closeInternal(!success);
   if (!success) {
@@ -496,7 +500,12 @@ uint32_t HiveDataSink::appendWriter(const HiveWriterId& id) {
   options.memoryPool = connectorQueryCtx_->connectorMemoryPool();
   options.compressionKind = insertTableHandle_->compressionKind();
   options.setMemoryReclaimer = connectorQueryCtx_->setMemoryReclaimer();
-  ioStats_.emplace_back(std::make_shared<dwio::common::IoStatistics>());
+  options.maxStripeSize = std::optional(HiveConfig::getKOrcWriterMaxStripeSize(
+      connectorQueryCtx_->config(), connectorProperties_.get()));
+  options.maxDictionaryMemory =
+      std::optional(HiveConfig::getKOrcWriterMaxDictionaryMemory(
+          connectorQueryCtx_->config(), connectorProperties_.get()));
+  ioStats_.emplace_back(std::make_shared<io::IoStatistics>());
   auto writer = writerFactory_->createWriter(
       dwio::common::FileSink::create(
           writePath,
@@ -634,7 +643,7 @@ HiveWriterParameters::UpdateMode HiveDataSink::getUpdateMode() const {
       if (insertTableHandle_->isBucketed()) {
         VELOX_USER_FAIL("Cannot insert into bucketed unpartitioned Hive table");
       }
-      if (HiveConfig::immutablePartitions(connectorQueryCtx_->config())) {
+      if (HiveConfig::immutablePartitions(connectorProperties_.get())) {
         VELOX_USER_FAIL("Unpartitioned Hive tables are immutable.");
       }
       return HiveWriterParameters::UpdateMode::kAppend;

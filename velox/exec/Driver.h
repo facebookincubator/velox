@@ -323,8 +323,14 @@ class Driver : public std::enable_shared_from_this<Driver> {
     return blockingReason_;
   }
 
-  static std::shared_ptr<Driver> testingCreate() {
-    return std::shared_ptr<Driver>(new Driver());
+  static std::shared_ptr<Driver> testingCreate(
+      std::unique_ptr<DriverCtx> ctx = nullptr) {
+    auto driver = new Driver();
+    if (ctx != nullptr) {
+      ctx->driver = driver;
+      driver->ctx_ = std::move(ctx);
+    }
+    return std::shared_ptr<Driver>(driver);
   }
 
  private:
@@ -396,14 +402,6 @@ class Driver : public std::enable_shared_from_this<Driver> {
 
   friend struct DriverFactory;
 };
-
-/// Callback used by memory arbitration to check if a driver thread under memory
-/// arbitration has been put in suspension state. This is to prevent arbitration
-/// deadlock as the arbitrator might reclaim memory from the task of the driver
-/// thread which is under arbitration. The task reclaim needs to wait for the
-/// drivers to go off thread. A suspended driver thread is not counted as
-/// running.
-void driverArbitrationStateCheck(memory::MemoryPool& pool);
 
 using OperatorSupplier = std::function<
     std::unique_ptr<Operator>(int32_t operatorId, DriverCtx* ctx)>;

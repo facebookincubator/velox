@@ -144,7 +144,10 @@ class TableWriter : public Operator {
         const memory::MemoryPool& pool,
         uint64_t& reclaimableBytes) const override;
 
-    uint64_t reclaim(memory::MemoryPool* pool, uint64_t targetBytes) override;
+    uint64_t reclaim(
+        memory::MemoryPool* pool,
+        uint64_t targetBytes,
+        memory::MemoryReclaimer::Stats& stats) override;
 
     void abort(memory::MemoryPool* pool, const std::exception_ptr& /* error */)
         override;
@@ -162,6 +165,9 @@ class TableWriter : public Operator {
 
   // Updates physicalWrittenBytes in OperatorStats with current written bytes.
   void updateWrittenBytes();
+
+  // Updates numWrittenFiles in runtimeStats.
+  void updateNumWrittenFiles();
 
   std::string createTableCommitContext(bool lastOutput);
 

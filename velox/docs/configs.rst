@@ -81,6 +81,17 @@ Generic Configuration
      - integer
      - 1000
      - The minimum number of table rows that can trigger the parallel hash join table build.
+   * - debug.validate_output_from_operators
+     - bool
+     - false
+     - If set to true, then during execution of tasks, the output vectors of every operator are validated for consistency.
+       This is an expensive check so should only be used for debugging. It can help debug issues where malformed vector
+       cause failures or crashes by helping identify which operator is generating them.
+   * - enable_expression_evaluation_cache
+     - bool
+     - true
+     - Whether to enable caches in expression evaluation. If set to true, optimizations including vector pools and
+       evalWithMemo are enabled.
 
 .. _expression-evaluation-conf:
 
@@ -188,6 +199,12 @@ Spilling
      - integer
      - 0
      - Maximum amount of memory in bytes that a final aggregation can use before spilling. 0 means unlimited.
+   * - aggregation_spill_all
+     - boolean
+     - false
+     - If true and spilling has been triggered during the input processing, the spiller will spill all the remaining
+     - in-memory state to disk before output processing. This is to simplify the aggregation query OOM prevention in
+     - output processing stage.
    * - join_spill_memory_threshold
      - integer
      - 0
@@ -196,14 +213,21 @@ Spilling
      - integer
      - 0
      - Maximum amount of memory in bytes that an order by can use before spilling. 0 means unlimited.
+   * - min_spillable_reservation_pct
+     - integer
+     - 5
+     - The minimal available spillable memory reservation in percentage of the current memory usage. Suppose the current
+       memory usage size of M, available memory reservation size of N and min reservation percentage of P,
+       if M * P / 100 > N, then spiller operator needs to grow the memory reservation with percentage of
+       'spillable_reservation_growth_pct' (see below). This ensures we have sufficient amount of memory reservation to
+       process the large input outlier.
    * - spillable_reservation_growth_pct
      - integer
-     - 25
-     - The spillable memory reservation growth percentage of the current memory reservation size. Suppose a growth
-       percentage of N and the current memory reservation size of M, the next memory reservation size will be
-       M * (1 + N / 100). After growing the memory reservation K times, the memory reservation size will be
-       M * (1 + N / 100) ^ K. Hence the memory reservation grows along a series of powers of (1 + N / 100).
-       If the memory reservation fails, it starts spilling.
+     - 10
+     - The spillable memory reservation growth percentage of the current memory usage. Suppose a growth percentage of N
+       and the current memory usage size of M, the next memory reservation size will be M * (1 + N / 100). After growing
+       the memory reservation K times, the memory reservation size will be M * (1 + N / 100) ^ K. Hence the memory
+       reservation grows along a series of powers of (1 + N / 100). If the memory reservation fails, it starts spilling.
    * - max_spill_level
      - integer
      - 4
@@ -316,7 +340,7 @@ Hive Connector
        the update mode field of the table writer operator output. ``OVERWRITE``
        sets the update mode to indicate overwriting a partition if exists. ``ERROR`` sets the update mode to indicate
        error throwing if writing to an existing partition.
-   * - immutable_partitions
+   * - hive.immutable-partitions
      - bool
      - false
      - True if appending data to an existing unpartitioned table is allowed. Currently this configuration does not

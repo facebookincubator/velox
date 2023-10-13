@@ -94,9 +94,8 @@ void validateTimePoint(const std::chrono::time_point<
 
 std::chrono::time_point<std::chrono::system_clock, std::chrono::milliseconds>
 Timestamp::toTimePoint() const {
-  auto tp = std::chrono::
-      time_point<std::chrono::system_clock, std::chrono::milliseconds>(
-          std::chrono::milliseconds(toMillis()));
+  using namespace std::chrono;
+  auto tp = time_point<system_clock, milliseconds>(milliseconds(toMillis()));
   validateTimePoint(tp);
   return tp;
 }
@@ -104,7 +103,8 @@ Timestamp::toTimePoint() const {
 void Timestamp::toTimezone(const date::time_zone& zone) {
   auto tp = toTimePoint();
   auto epoch = zone.to_local(tp).time_since_epoch();
-  seconds_ = std::chrono::duration_cast<std::chrono::seconds>(epoch).count();
+  // NOTE: Round down to get the seconds of the current time point.
+  seconds_ = std::chrono::floor<std::chrono::seconds>(epoch).count();
 }
 
 void Timestamp::toTimezone(int16_t tzID) {
@@ -116,6 +116,145 @@ void Timestamp::toTimezone(int16_t tzID) {
     // Other ids go this path.
     toTimezone(*date::locate_zone(util::getTimeZoneName(tzID)));
   }
+}
+
+namespace {
+
+constexpr int kTmYearBase = 1900;
+constexpr int64_t kLeapYearOffset = 4000000000ll;
+
+inline bool isLeap(int64_t y) {
+  return y % 4 == 0 && (y % 100 != 0 || y % 400 == 0);
+}
+
+inline int64_t leapThroughEndOf(int64_t y) {
+  // Add a large offset to make the calculation for negative years correct.
+  y += kLeapYearOffset;
+  VELOX_DCHECK_GE(y, 0);
+  return y / 4 - y / 100 + y / 400;
+}
+
+const int monthLengths[][12] = {
+    {31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31},
+    {31, 29, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31},
+};
+
+// clang-format off
+const char intToStr[][3] = {
+    "00", "01", "02", "03", "04", "05", "06", "07", "08", "09",
+    "10", "11", "12", "13", "14", "15", "16", "17", "18", "19",
+    "20", "21", "22", "23", "24", "25", "26", "27", "28", "29",
+    "30", "31", "32", "33", "34", "35", "36", "37", "38", "39",
+    "40", "41", "42", "43", "44", "45", "46", "47", "48", "49",
+    "50", "51", "52", "53", "54", "55", "56", "57", "58", "59",
+    "60", "61",
+};
+// clang-format on
+
+void appendSmallInt(int n, std::string& out) {
+  VELOX_DCHECK_LE(n, 61);
+  out.append(intToStr[n], 2);
+}
+
+} // namespace
+
+bool epochToUtc(int64_t epoch, std::tm& tm) {
+  constexpr int kSecondsPerHour = 3600;
+  constexpr int kSecondsPerDay = 24 * kSecondsPerHour;
+  constexpr int kDaysPerYear = 365;
+  int64_t days = epoch / kSecondsPerDay;
+  int64_t rem = epoch % kSecondsPerDay;
+  while (rem < 0) {
+    rem += kSecondsPerDay;
+    --days;
+  }
+  tm.tm_hour = rem / kSecondsPerHour;
+  rem = rem % kSecondsPerHour;
+  tm.tm_min = rem / 60;
+  tm.tm_sec = rem % 60;
+  tm.tm_wday = (4 + days) % 7;
+  if (tm.tm_wday < 0) {
+    tm.tm_wday += 7;
+  }
+  int64_t y = 1970;
+  if (y + days / kDaysPerYear <= -kLeapYearOffset + 10) {
+    return false;
+  }
+  bool leapYear;
+  while (days < 0 || days >= kDaysPerYear + (leapYear = isLeap(y))) {
+    auto newy = y + days / kDaysPerYear - (days < 0);
+    days -= (newy - y) * kDaysPerYear + leapThroughEndOf(newy - 1) -
+        leapThroughEndOf(y - 1);
+    y = newy;
+  }
+  y -= kTmYearBase;
+  if (y > std::numeric_limits<decltype(tm.tm_year)>::max() ||
+      y < std::numeric_limits<decltype(tm.tm_year)>::min()) {
+    return false;
+  }
+  tm.tm_year = y;
+  tm.tm_yday = days;
+  auto* ip = monthLengths[leapYear];
+  for (tm.tm_mon = 0; days >= ip[tm.tm_mon]; ++tm.tm_mon) {
+    days = days - ip[tm.tm_mon];
+  }
+  tm.tm_mday = days + 1;
+  tm.tm_isdst = 0;
+  return true;
+}
+
+std::string tmToString(
+    const std::tm& tmValue,
+    int nanos,
+    const TimestampToStringOptions& options) {
+  VELOX_DCHECK_GE(nanos, 0);
+  VELOX_DCHECK_LT(nanos, 1'000'000'000);
+  int width = options.precision;
+  std::string out;
+  out.reserve(options.dateOnly ? 10 : 26 + width);
+  int n = kTmYearBase + tmValue.tm_year;
+  bool negative = n < 0;
+  if (negative) {
+    out += '-';
+    n = -n;
+  }
+  while (n > 0) {
+    out += '0' + n % 10;
+    n /= 10;
+  }
+  if (options.zeroPaddingYear && out.size() < negative + 4) {
+    while (out.size() < negative + 4) {
+      out += '0';
+    }
+  }
+  std::reverse(out.begin() + negative, out.end());
+  out += '-';
+  appendSmallInt(1 + tmValue.tm_mon, out);
+  out += '-';
+  appendSmallInt(tmValue.tm_mday, out);
+  if (options.dateOnly) {
+    return out;
+  }
+  out += options.dateTimeSeparator;
+  appendSmallInt(tmValue.tm_hour, out);
+  out += ':';
+  appendSmallInt(tmValue.tm_min, out);
+  out += ':';
+  appendSmallInt(tmValue.tm_sec, out);
+  out += '.';
+  int offset = out.size();
+  if (options.precision == TimestampToStringOptions::kMilliseconds) {
+    nanos /= 1'000'000;
+  }
+  while (nanos > 0) {
+    out += '0' + nanos % 10;
+    nanos /= 10;
+  }
+  while (out.size() - offset < width) {
+    out += '0';
+  }
+  std::reverse(out.begin() + offset, out.end());
+  return out;
 }
 
 void parseTo(folly::StringPiece in, ::facebook::velox::Timestamp& out) {

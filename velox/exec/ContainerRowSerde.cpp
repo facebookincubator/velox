@@ -440,9 +440,8 @@ std::optional<int32_t> compareArrays(
   auto leftNulls = readNulls(left, leftSize);
   auto wrappedElements = elements.wrappedVector();
   for (auto i = 0; i < compareSize; ++i) {
-    auto elementIndex = elements.wrappedIndex(offset + i);
     bool leftNull = bits::isBitSet(leftNulls.data(), i);
-    bool rightNull = wrappedElements->isNullAt(elementIndex);
+    bool rightNull = elements.isNullAt(offset + i);
 
     if (leftNull || rightNull) {
       auto result = BaseVector::compareNulls(leftNull, rightNull, flags);
@@ -452,6 +451,7 @@ std::optional<int32_t> compareArrays(
       return result;
     }
 
+    auto elementIndex = elements.wrappedIndex(offset + i);
     auto result = compareSwitch(left, *wrappedElements, elementIndex, flags);
     if (result.has_value() && result.value() == 0) {
       continue;
@@ -475,9 +475,8 @@ std::optional<int32_t> compareArrayIndices(
   auto leftNulls = readNulls(left, leftSize);
   auto wrappedElements = elements.wrappedVector();
   for (auto i = 0; i < compareSize; ++i) {
-    auto elementIndex = elements.wrappedIndex(rightIndices[i]);
     bool leftNull = bits::isBitSet(leftNulls.data(), i);
-    bool rightNull = wrappedElements->isNullAt(elementIndex);
+    bool rightNull = elements.isNullAt(rightIndices[i]);
 
     if (leftNull || rightNull) {
       auto result = BaseVector::compareNulls(leftNull, rightNull, flags);
@@ -487,6 +486,7 @@ std::optional<int32_t> compareArrayIndices(
       return result;
     }
 
+    auto elementIndex = elements.wrappedIndex(rightIndices[i]);
     auto result = compareSwitch(left, *wrappedElements, elementIndex, flags);
     if (result.has_value() && result.value() == 0) {
       continue;
@@ -797,6 +797,8 @@ int32_t ContainerRowSerde::compare(
     const DecodedVector& right,
     vector_size_t index,
     CompareFlags flags) {
+  VELOX_DCHECK(
+      !right.isNullAt(index), "Null top-level values are not supported");
   VELOX_DCHECK(!flags.mayStopAtNull(), "not supported null handling mode");
   return compareSwitch(left, *right.base(), right.index(index), flags).value();
 }
@@ -817,6 +819,8 @@ std::optional<int32_t> ContainerRowSerde::compareWithNulls(
     const DecodedVector& right,
     vector_size_t index,
     CompareFlags flags) {
+  VELOX_DCHECK(
+      !right.isNullAt(index), "Null top-level values are not supported");
   return compareSwitch(left, *right.base(), right.index(index), flags);
 }
 
