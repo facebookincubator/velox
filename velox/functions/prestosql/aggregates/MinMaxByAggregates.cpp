@@ -1182,7 +1182,7 @@ exec::AggregateRegistrationResult registerMinMaxBy(const std::string& name) {
             const auto& valueType = rowType->childAt(0);
             const auto& compareType = rowType->childAt(1);
             return create<Aggregate, Comparator, isMaxFunc>(
-                resultType, valueType, compareType, errorMessage);
+                resultType, valueType, compareType, errorMessage, true);
           }
         }
       });

@@ -327,9 +327,12 @@ class MinMaxByAggregateBase : public exec::Aggregate {
         decodedComparison_.isNullAt(0)) {
       return;
     }
+
+    const auto* indices = decodedComparison_.indices();
     if (decodedValue_.mayHaveNulls() || decodedComparison_.mayHaveNulls()) {
       rows.applyToSelected([&](vector_size_t i) {
-        if (decodedComparison_.isNullAt(i)) {
+        if (velox::aggregate::prestosql::checkNestedNulls(
+                decodedComparison_, indices, i, throwOnNestedNulls_)) {
           return;
         }
         updateValues(
@@ -342,6 +345,10 @@ class MinMaxByAggregateBase : public exec::Aggregate {
       });
     } else {
       rows.applyToSelected([&](vector_size_t i) {
+        if (throwOnNestedNulls_) {
+          velox::aggregate::prestosql::checkNestedNulls(
+              decodedComparison_, indices, i, throwOnNestedNulls_);
+        }
         updateValues(
             groups[i], decodedValue_, decodedComparison_, i, false, mayUpdate);
       });
@@ -404,9 +411,12 @@ class MinMaxByAggregateBase : public exec::Aggregate {
     // the maximum.
     decodedValue_.decode(*args[0], rows);
     decodedComparison_.decode(*args[1], rows);
+    const auto* indices = decodedComparison_.indices();
+
     if (decodedValue_.isConstantMapping() &&
         decodedComparison_.isConstantMapping()) {
-      if (decodedComparison_.isNullAt(0)) {
+      if (velox::aggregate::prestosql::checkNestedNulls(
+              decodedComparison_, indices, 0, throwOnNestedNulls_)) {
         return;
       }
       updateValues(
@@ -419,7 +429,8 @@ class MinMaxByAggregateBase : public exec::Aggregate {
     } else if (
         decodedValue_.mayHaveNulls() || decodedComparison_.mayHaveNulls()) {
       rows.applyToSelected([&](vector_size_t i) {
-        if (decodedComparison_.isNullAt(i)) {
+        if (velox::aggregate::prestosql::checkNestedNulls(
+                decodedComparison_, indices, i, throwOnNestedNulls_)) {
           return;
         }
         updateValues(
@@ -432,6 +443,10 @@ class MinMaxByAggregateBase : public exec::Aggregate {
       });
     } else {
       rows.applyToSelected([&](vector_size_t i) {
+        if (throwOnNestedNulls_) {
+          velox::aggregate::prestosql::checkNestedNulls(
+              decodedComparison_, indices, i, throwOnNestedNulls_);
+        }
         updateValues(
             group, decodedValue_, decodedComparison_, i, false, mayUpdate);
       });
@@ -500,16 +515,10 @@ class MinMaxByAggregateBase : public exec::Aggregate {
   inline void updateValues(
       char* group,
       const DecodedVector& decodedValues,
-      DecodedVector& decodedComparisons,
+      const DecodedVector& decodedComparisons,
       vector_size_t index,
       bool isValueNull,
       MayUpdate mayUpdate) {
-    if (throwOnNestedNulls_) {
-      const auto* indices = decodedComparisons.indices();
-      velox::aggregate::prestosql::checkNestedNulls(
-          decodedComparisons, indices, index, throwOnNestedNulls_);
-    }
-
     auto isFirstValue = isNull(group);
     clearNull(group);
     if (mayUpdate(
