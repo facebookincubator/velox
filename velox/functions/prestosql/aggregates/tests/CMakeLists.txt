@@ -29,6 +29,7 @@ add_executable(
   CountIfAggregationTest.cpp
   CovarianceAggregationTest.cpp
   EntropyAggregationTest.cpp
+  GeometricMeanTest.cpp
   HistogramTest.cpp
   Main.cpp
   MapAccumulatorTest.cpp
@@ -46,6 +47,7 @@ add_executable(
   ValueListTest.cpp
   VarianceAggregationTest.cpp
   MaxSizeForStatsTest.cpp
+  CompareTest.cpp
   SumDataSizeForStatsTest.cpp)
 
 add_test(

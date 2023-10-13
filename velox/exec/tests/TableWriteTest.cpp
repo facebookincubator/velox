@@ -70,7 +70,8 @@ static std::shared_ptr<core::AggregationNode> generateAggregationNode(
       BIGINT(), std::vector<core::TypedExprPtr>{inputField}, "min");
   std::vector<std::string> aggregateNames = {"min"};
   std::vector<core::AggregationNode::Aggregate> aggregates = {
-      core::AggregationNode::Aggregate{callExpr, nullptr, {}, {}}};
+      core::AggregationNode::Aggregate{
+          callExpr, {{BIGINT()}}, nullptr, {}, {}}};
   return std::make_shared<core::AggregationNode>(
       core::PlanNodeId(),
       step,
@@ -80,6 +81,29 @@ static std::shared_ptr<core::AggregationNode> generateAggregationNode(
       aggregates,
       false, // ignoreNullKeys
       source);
+}
+
+std::function<PlanNodePtr(std::string, PlanNodePtr)> addTableWriter(
+    const RowTypePtr& inputColumns,
+    const std::vector<std::string>& tableColumnNames,
+    const std::shared_ptr<core::AggregationNode>& aggregationNode,
+    const std::shared_ptr<core::InsertTableHandle>& insertHandle,
+    bool hasPartitioningScheme,
+    connector::CommitStrategy commitStrategy =
+        connector::CommitStrategy::kNoCommit) {
+  return [=](core::PlanNodeId nodeId,
+             core::PlanNodePtr source) -> core::PlanNodePtr {
+    return std::make_shared<core::TableWriteNode>(
+        nodeId,
+        inputColumns,
+        tableColumnNames,
+        aggregationNode,
+        insertHandle,
+        hasPartitioningScheme,
+        TableWriteTraits::outputType(aggregationNode),
+        commitStrategy,
+        std::move(source));
+  };
 }
 
 FOLLY_ALWAYS_INLINE std::ostream& operator<<(std::ostream& os, TestMode mode) {
@@ -471,7 +495,7 @@ class TableWriteTest : public HiveConnectorTestBase {
       std::shared_ptr<core::AggregationNode> aggregationNode = nullptr) {
     if (numTableWriters == 1) {
       auto insertPlan = inputPlan
-                            .tableWrite(
+                            .addNode(addTableWriter(
                                 inputRowType,
                                 tableRowType->names(),
                                 aggregationNode,
@@ -483,7 +507,7 @@ class TableWriteTest : public HiveConnectorTestBase {
                                     bucketProperty,
                                     compressionKind),
                                 bucketProperty != nullptr,
-                                outputCommitStrategy)
+                                outputCommitStrategy))
                             .capturePlanNodeId(tableWriteNodeId_);
       if (aggregateResult) {
         insertPlan.project({TableWriteTraits::rowCountColumnName()})
@@ -495,7 +519,7 @@ class TableWriteTest : public HiveConnectorTestBase {
       return insertPlan.planNode();
     } else if (bucketProperty_ == nullptr) {
       auto insertPlan = inputPlan.localPartitionRoundRobin()
-                            .tableWrite(
+                            .addNode(addTableWriter(
                                 inputRowType,
                                 tableRowType->names(),
                                 nullptr,
@@ -507,7 +531,7 @@ class TableWriteTest : public HiveConnectorTestBase {
                                     bucketProperty,
                                     compressionKind),
                                 bucketProperty != nullptr,
-                                outputCommitStrategy)
+                                outputCommitStrategy))
                             .capturePlanNodeId(tableWriteNodeId_)
                             .localPartition(std::vector<std::string>{})
                             .tableWriteMerge();
@@ -536,7 +560,7 @@ class TableWriteTest : public HiveConnectorTestBase {
           bucketProperty->sortedBy());
       auto insertPlan =
           inputPlan.localPartitionByBucket(localPartitionBucketProperty)
-              .tableWrite(
+              .addNode(addTableWriter(
                   inputRowType,
                   tableRowType->names(),
                   nullptr,
@@ -548,7 +572,7 @@ class TableWriteTest : public HiveConnectorTestBase {
                       bucketProperty,
                       compressionKind),
                   bucketProperty != nullptr,
-                  outputCommitStrategy)
+                  outputCommitStrategy))
               .capturePlanNodeId(tableWriteNodeId_)
               .localPartition({})
               .tableWriteMerge();
@@ -1986,14 +2010,11 @@ TEST_P(UnpartitionedTableWriterTest, differentCompression) {
     if (compressionKind == CompressionKind_NONE ||
         compressionKind == CompressionKind_ZLIB ||
         compressionKind == CompressionKind_ZSTD) {
-      auto result =
-          AssertQueryBuilder(plan)
-              .config(
-                  QueryConfig::kTaskWriterCount,
-                  std::to_string(numTableWriterCount_))
-              .connectorConfig(
-                  kHiveConnectorId, HiveConfig::kImmutablePartitions, "true")
-              .copyResults(pool());
+      auto result = AssertQueryBuilder(plan)
+                        .config(
+                            QueryConfig::kTaskWriterCount,
+                            std::to_string(numTableWriterCount_))
+                        .copyResults(pool());
       assertEqualResults(
           {makeRowVector({makeConstant<int64_t>(100, 1)})}, {result});
     } else {
@@ -2002,19 +2023,40 @@ TEST_P(UnpartitionedTableWriterTest, differentCompression) {
               .config(
                   QueryConfig::kTaskWriterCount,
                   std::to_string(numTableWriterCount_))
-              .connectorConfig(
-                  kHiveConnectorId, HiveConfig::kImmutablePartitions, "true")
               .copyResults(pool()),
           "Unsupported compression type:");
     }
   }
 }
 
-TEST_P(UnpartitionedTableWriterTest, createAndInsertIntoUnpartitionedTable) {
-  // When table type is NEW, we always return UpdateMode::kNew. In this case
-  // no exception is expected because we are trying to insert rows into a new
-  // table.
-  for (auto immutablePartitionsEnabled : {"true", "false"}) {
+TEST_P(UnpartitionedTableWriterTest, immutableSettings) {
+  struct {
+    connector::hive::LocationHandle::TableType dataType;
+    bool immutablePartitionsEnabled;
+    bool expectedInsertSuccees;
+
+    std::string debugString() const {
+      return fmt::format(
+          "dataType:{}, immutablePartitionsEnabled:{}, operationSuccess:{}",
+          dataType,
+          immutablePartitionsEnabled,
+          expectedInsertSuccees);
+    }
+  } testSettings[] = {
+      {connector::hive::LocationHandle::TableType::kNew, true, true},
+      {connector::hive::LocationHandle::TableType::kNew, false, true},
+      {connector::hive::LocationHandle::TableType::kExisting, true, false},
+      {connector::hive::LocationHandle::TableType::kExisting, false, true}};
+
+  for (auto testData : testSettings) {
+    SCOPED_TRACE(testData.debugString());
+    std::unordered_map<std::string, std::string> propFromFile{
+        {"hive.immutable-partitions",
+         testData.immutablePartitionsEnabled ? "true" : "false"}};
+    std::shared_ptr<const Config> connectorProperties{
+        std::make_shared<core::MemConfig>(propFromFile)};
+    resetHiveConnector(connectorProperties);
+
     auto input = makeVectors(10, 10);
     auto outputDirectory = TempDirectoryPath::create();
     auto plan = createInsertPlan(
@@ -2025,92 +2067,21 @@ TEST_P(UnpartitionedTableWriterTest, createAndInsertIntoUnpartitionedTable) {
         nullptr,
         CompressionKind_NONE,
         numTableWriterCount_,
-        connector::hive::LocationHandle::TableType::kNew);
+        testData.dataType);
 
-    auto result = AssertQueryBuilder(plan)
-                      .config(
-                          QueryConfig::kTaskWriterCount,
-                          std::to_string(numTableWriterCount_))
-                      .connectorConfig(
-                          kHiveConnectorId,
-                          HiveConfig::kImmutablePartitions,
-                          immutablePartitionsEnabled)
-                      .copyResults(pool());
-    assertEqualResults(
-        {makeRowVector({makeConstant<int64_t>(100, 1)})}, {result});
-  }
-}
-
-TEST_P(
-    UnpartitionedTableWriterTest,
-    appendToAnExistingUnpartitionedTableNotAllowed) {
-  // When table type is EXISTING and "immutable_partitions" config is set to
-  // true, inserts into such unpartitioned tables are not allowed.
-  //
-  // We assert that an error is thrown in this case.
-
-  auto input = makeVectors(10, 10);
-  auto outputDirectory = TempDirectoryPath::create();
-  auto plan = createInsertPlan(
-      PlanBuilder().values(input),
-      rowType_,
-      outputDirectory->path,
-      {},
-      nullptr,
-      CompressionKind_NONE,
-      numTableWriterCount_,
-      connector::hive::LocationHandle::TableType::kExisting);
-
-  VELOX_ASSERT_THROW(
-      AssertQueryBuilder(plan)
-          .connectorConfig(
-              kHiveConnectorId, HiveConfig::kImmutablePartitions, "true")
-          .copyResults(pool()),
-      "Unpartitioned Hive tables are immutable.");
-}
-
-TEST_P(UnpartitionedTableWriterTest, appendToAnExistingUnpartitionedTable) {
-  // This test uses the default value "false" for the "immutable_partitions"
-  // config allowing writes to an existing unpartitioned table.
-  //
-  // The test inserts data vector by vector and checks the intermediate
-  // results as well as the final result.
-
-  auto kRowsPerVector = 100;
-  auto input = makeVectors(10, kRowsPerVector);
-
-  createDuckDbTable(input);
-
-  for (auto tableType : tableTypes_) {
-    auto outputDirectory = TempDirectoryPath::create();
-    auto numRows = 0;
-
-    for (auto rowVector : input) {
-      numRows += kRowsPerVector;
-      auto plan = createInsertPlan(
-          PlanBuilder().values({rowVector}),
-          rowType_,
-          outputDirectory->path,
-          {},
-          nullptr,
-          CompressionKind_NONE,
-          numTableWriterCount_,
-          tableType);
-      assertQueryWithWriterConfigs(
-          plan, fmt::format("SELECT {}", kRowsPerVector));
-      assertQuery(
-          PlanBuilder()
-              .tableScan(rowType_)
-              .singleAggregation({}, {"count(*)"})
-              .planNode(),
-          makeHiveConnectorSplits(outputDirectory),
-          fmt::format("SELECT {}", numRows));
+    if (!testData.expectedInsertSuccees) {
+      VELOX_ASSERT_THROW(
+          AssertQueryBuilder(plan).copyResults(pool()),
+          "Unpartitioned Hive tables are immutable.");
+    } else {
+      auto result = AssertQueryBuilder(plan)
+                        .config(
+                            QueryConfig::kTaskWriterCount,
+                            std::to_string(numTableWriterCount_))
+                        .copyResults(pool());
+      assertEqualResults(
+          {makeRowVector({makeConstant<int64_t>(100, 1)})}, {result});
     }
-
-    assertQuery(
-        PlanBuilder().tableScan(rowType_).planNode(),
-        makeHiveConnectorSplits(outputDirectory),
-        "SELECT * FROM tmp");
   }
 }
 
@@ -2434,19 +2405,33 @@ TEST_P(AllTableWriterTest, columnStatsDataTypes) {
       "count",
       "sum_data_size_for_stats",
   };
+
+  auto makeAggregate = [](const auto& callExpr) {
+    std::vector<TypePtr> rawInputTypes;
+    for (const auto& input : callExpr->inputs()) {
+      rawInputTypes.push_back(input->type());
+    }
+    return core::AggregationNode::Aggregate{
+        callExpr,
+        rawInputTypes,
+        nullptr, // mask
+        {}, // sortingKeys
+        {} // sortingOrders
+    };
+  };
+
   std::vector<core::AggregationNode::Aggregate> aggregates = {
-      core::AggregationNode::Aggregate{minCallExpr, nullptr, {}, {}},
-      core::AggregationNode::Aggregate{maxCallExpr, nullptr, {}, {}},
-      core::AggregationNode::Aggregate{distinctCountCallExpr, nullptr, {}, {}},
-      core::AggregationNode::Aggregate{maxDataSizeCallExpr, nullptr, {}, {}},
-      core::AggregationNode::Aggregate{sumDataSizeCallExpr, nullptr, {}, {}},
-      core::AggregationNode::Aggregate{countCallExpr, nullptr, {}, {}},
-      core::AggregationNode::Aggregate{countIfCallExpr, nullptr, {}, {}},
-      core::AggregationNode::Aggregate{countMapCallExpr, nullptr, {}, {}},
-      core::AggregationNode::Aggregate{sumDataSizeMapCallExpr, nullptr, {}, {}},
-      core::AggregationNode::Aggregate{countArrayCallExpr, nullptr, {}, {}},
-      core::AggregationNode::Aggregate{
-          sumDataSizeArrayCallExpr, nullptr, {}, {}},
+      makeAggregate(minCallExpr),
+      makeAggregate(maxCallExpr),
+      makeAggregate(distinctCountCallExpr),
+      makeAggregate(maxDataSizeCallExpr),
+      makeAggregate(sumDataSizeCallExpr),
+      makeAggregate(countCallExpr),
+      makeAggregate(countIfCallExpr),
+      makeAggregate(countMapCallExpr),
+      makeAggregate(sumDataSizeMapCallExpr),
+      makeAggregate(countArrayCallExpr),
+      makeAggregate(sumDataSizeArrayCallExpr),
   };
   const auto aggregationNode = std::make_shared<core::AggregationNode>(
       core::PlanNodeId(),
@@ -2460,7 +2445,7 @@ TEST_P(AllTableWriterTest, columnStatsDataTypes) {
 
   auto plan = PlanBuilder()
                   .values({input})
-                  .tableWrite(
+                  .addNode(addTableWriter(
                       rowType_,
                       rowType_->names(),
                       aggregationNode,
@@ -2473,7 +2458,7 @@ TEST_P(AllTableWriterTest, columnStatsDataTypes) {
                               nullptr,
                               makeLocationHandle(outputDirectory->path))),
                       false,
-                      CommitStrategy::kNoCommit)
+                      CommitStrategy::kNoCommit))
                   .planNode();
 
   // the result is in format of : row/fragments/context/[partition]/[stats]
@@ -2549,7 +2534,7 @@ TEST_P(AllTableWriterTest, columnStats) {
 
   auto plan = PlanBuilder()
                   .values({input})
-                  .tableWrite(
+                  .addNode(addTableWriter(
                       rowType_,
                       rowType_->names(),
                       aggregationNode,
@@ -2562,7 +2547,7 @@ TEST_P(AllTableWriterTest, columnStats) {
                               bucketProperty_,
                               makeLocationHandle(outputDirectory->path))),
                       false,
-                      commitStrategy_)
+                      commitStrategy_))
                   .planNode();
 
   auto result = AssertQueryBuilder(plan).copyResults(pool());
@@ -2648,7 +2633,7 @@ TEST_P(AllTableWriterTest, columnStatsWithTableWriteMerge) {
       core::AggregationNode::Step::kPartial,
       PlanBuilder().values({input}).planNode());
 
-  auto tableWriterPlan = PlanBuilder().values({input}).tableWrite(
+  auto tableWriterPlan = PlanBuilder().values({input}).addNode(addTableWriter(
       rowType_,
       rowType_->names(),
       aggregationNode,
@@ -2661,7 +2646,7 @@ TEST_P(AllTableWriterTest, columnStatsWithTableWriteMerge) {
               bucketProperty_,
               makeLocationHandle(outputDirectory->path))),
       false,
-      commitStrategy_);
+      commitStrategy_));
 
   auto mergeAggregationNode = generateAggregationNode(
       "min",
@@ -2729,7 +2714,7 @@ TEST_P(AllTableWriterTest, columnStatsWithTableWriteMerge) {
 
 // TODO: add partitioned table write update mode tests and more failure tests.
 
-TEST_P(AllTableWriterTest, tableWrittenBytes) {
+TEST_P(AllTableWriterTest, tableWriterStats) {
   const int32_t numBatches = 2;
   auto rowType =
       ROW({"c0", "p0", "c3", "c5"}, {VARCHAR(), BIGINT(), REAL(), VARCHAR()});
@@ -2769,10 +2754,21 @@ TEST_P(AllTableWriterTest, tableWrittenBytes) {
 
   auto task = assertQueryWithWriterConfigs(
       plan, inputFilePaths, "SELECT count(*) FROM tmp");
-  auto operatorStats = task->taskStats().pipelineStats.at(0).operatorStats;
-  for (int i = 0; i < operatorStats.size(); i++) {
-    if (operatorStats.at(i).operatorType == "TableWrite") {
-      ASSERT_GT(operatorStats.at(i).physicalWrittenBytes, 0);
+
+  // Each batch would create a new partition, numWrittenFiles is same as
+  // partition num when not bucketed. When bucketed, it's partitionNum *
+  // bucketNum, bucket number is 4
+  const int numWrittenFiles =
+      bucketProperty_ == nullptr ? numBatches : numBatches * 4;
+  for (int i = 0; i < task->taskStats().pipelineStats.size(); ++i) {
+    auto operatorStats = task->taskStats().pipelineStats.at(i).operatorStats;
+    for (int j = 0; j < operatorStats.size(); ++j) {
+      if (operatorStats.at(j).operatorType == "TableWrite") {
+        ASSERT_GT(operatorStats.at(j).physicalWrittenBytes, 0);
+        ASSERT_EQ(
+            operatorStats.at(j).runtimeStats.at("numWrittenFiles").sum,
+            numWrittenFiles);
+      }
     }
   }
 }

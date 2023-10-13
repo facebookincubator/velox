@@ -24,9 +24,10 @@
 
 #include "velox/common/file/FileSystems.h"
 #include "velox/exec/Aggregate.h"
-#include "velox/exec/tests/AggregationFuzzer.h"
+#include "velox/exec/tests/utils/AggregationFuzzer.h"
 #include "velox/parse/TypeResolver.h"
 #include "velox/serializers/PrestoSerializer.h"
+#include "velox/vector/fuzzer/VectorFuzzer.h"
 
 namespace facebook::velox::exec::test {
 
@@ -67,90 +68,67 @@ namespace facebook::velox::exec::test {
 
 class AggregationFuzzerRunner {
  public:
-  // List of functions that have known bugs that cause crashes or failures.
-  static inline const std::unordered_set<std::string> skipFunctions_ = {
-      // https://github.com/facebookincubator/velox/issues/3493
-      "stddev_pop",
-      // https://github.com/facebookincubator/velox/issues/6344
-      "avg_merge",
-      "avg_merge_extract_double",
-      "avg_merge_extract_real",
-      // Lambda functions are not supported yet.
-      "reduce_agg",
+  struct Options {
+    /// Comma-separated list of functions to test. By default, all functions
+    /// are tested.
+    std::string onlyFunctions;
+
+    /// Set of functions to not test.
+    std::unordered_set<std::string> skipFunctions;
+
+    /// Set of functions whose results are non-deterministic. These can be
+    /// order-dependent functions whose results depend on the order of input
+    /// rows, or functions that return complex-typed results containing
+    /// floating-point fields.
+    ///
+    /// For some functions, the result can be transformed to a deterministic
+    /// value. If such transformation exists, it can be specified to be used for
+    /// results verification. If no transformation is specified, results are not
+    /// verified.
+    ///
+    /// Keys are function names. Values are optional transformations. "{}"
+    /// should be used to indicate the original value, i.e. "f({})"
+    /// transformation applies function 'f' to aggregation result.
+    std::unordered_map<std::string, std::string> customVerificationFunctions;
+
+    /// Timestamp precision to use when generating inputs of type TIMESTAMP.
+    VectorFuzzer::Options::TimestampPrecision timestampPrecision{
+        VectorFuzzer::Options::TimestampPrecision::kNanoSeconds};
+
+    /// A set of configuration properties to use when running query plans.
+    /// Could be used to specify timezone or enable/disable settings that
+    /// affect semantics of individual aggregate functions.
+    std::unordered_map<std::string, std::string> queryConfigs;
   };
 
-  // Functions whose results verification should be skipped. These can be
-  // order-dependent functions whose results depend on the order of input rows,
-  // or functions that return complex-typed results containing floating-point
-  // fields. For some functions, the result can be transformed to a value that
-  // can be verified. If such transformation exists, it can be specified to be
-  // used for results verification. If no transformation is specified, results
-  // are not verified.
-  static inline const std::unordered_map<std::string, std::string>
-      customVerificationFunctions_ = {
-          // Order-dependent functions.
-          {"approx_distinct", ""},
-          {"approx_distinct_partial", ""},
-          {"approx_distinct_merge", ""},
-          {"approx_set", ""},
-          {"approx_set_partial", ""},
-          {"approx_set_merge", ""},
-          {"approx_percentile_partial", ""},
-          {"approx_percentile_merge", ""},
-          {"arbitrary", ""},
-          {"array_agg", "array_sort({})"},
-          {"array_agg_partial", "array_sort({})"},
-          {"array_agg_merge", "array_sort({})"},
-          {"array_agg_merge_extract", "array_sort({})"},
-          {"set_agg", "array_sort({})"},
-          {"set_union", "array_sort({})"},
-          {"map_agg", "array_sort(map_keys({}))"},
-          {"map_union", "array_sort(map_keys({}))"},
-          {"map_union_sum", "array_sort(map_keys({}))"},
-          {"max_by", ""},
-          {"min_by", ""},
-          {"map_union_sum", "array_sort(map_keys({}))"},
-          {"multimap_agg", "transform_values({}, (k, v) -> array_sort(v))"},
-          // TODO: Skip result verification of companion functions that return
-          // complex types that contain floating-point fields for now, until we
-          // fix
-          // test utilities in QueryAssertions to tolerate floating-point
-          // imprecision in complex types.
-          // https://github.com/facebookincubator/velox/issues/4481
-          {"avg_partial", ""},
-          {"avg_merge", ""},
-          // Semantically inconsistent functions
-          {"skewness", ""},
-          {"kurtosis", ""},
-          {"entropy", ""},
-          // https://github.com/facebookincubator/velox/issues/6330
-          {"max_data_size_for_stats", ""},
-          {"sum_data_size_for_stats", ""},
-  };
-
-  static int run(const std::string& planPath) {
-    return runFuzzer("", 0, {planPath});
+  static int run(
+      size_t seed,
+      std::unique_ptr<ReferenceQueryRunner> referenceQueryRunner,
+      const Options& options) {
+    return runFuzzer(
+        seed, std::nullopt, std::move(referenceQueryRunner), options);
   }
 
-  static int run(const std::string& onlyFunctions, size_t seed) {
-    return runFuzzer(onlyFunctions, seed, std::nullopt);
+  static int runRepro(
+      const std::optional<std::string>& planPath,
+      std::unique_ptr<ReferenceQueryRunner> referenceQueryRunner) {
+    return runFuzzer(0, planPath, std::move(referenceQueryRunner), {});
   }
 
+ private:
   static int runFuzzer(
-      const std::string& onlyFunctions,
       size_t seed,
       const std::optional<std::string>& planPath,
-      const std::unordered_set<std::string>& skipFunctions = skipFunctions_,
-      const std::unordered_map<std::string, std::string>&
-          customVerificationFunctions = customVerificationFunctions_) {
+      std::unique_ptr<ReferenceQueryRunner> referenceQueryRunner,
+      const Options& options) {
     auto signatures = facebook::velox::exec::getAggregateFunctionSignatures();
     if (signatures.empty()) {
       LOG(ERROR) << "No aggregate functions registered.";
       exit(1);
     }
 
-    auto filteredSignatures =
-        filterSignatures(signatures, onlyFunctions, skipFunctions);
+    auto filteredSignatures = filterSignatures(
+        signatures, options.onlyFunctions, options.skipFunctions);
     if (filteredSignatures.empty()) {
       LOG(ERROR)
           << "No aggregate functions left after filtering using 'only' and 'skip' lists.";
@@ -163,12 +141,17 @@ class AggregationFuzzerRunner {
     facebook::velox::filesystems::registerLocalFileSystem();
 
     facebook::velox::exec::test::aggregateFuzzer(
-        filteredSignatures, seed, customVerificationFunctions, planPath);
+        filteredSignatures,
+        seed,
+        options.customVerificationFunctions,
+        options.timestampPrecision,
+        options.queryConfigs,
+        planPath,
+        std::move(referenceQueryRunner));
     // Calling gtest here so that it can be recognized as tests in CI systems.
     return RUN_ALL_TESTS();
   }
 
- private:
   static std::unordered_set<std::string> splitNames(const std::string& names) {
     // Parse, lower case and trim it.
     std::vector<folly::StringPiece> nameList;

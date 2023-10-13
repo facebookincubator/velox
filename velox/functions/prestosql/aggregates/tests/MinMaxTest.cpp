@@ -50,7 +50,8 @@ class MinMaxTest : public functions::aggregate::test::AggregationTestBase {
   }
 
   template <typename TAgg>
-  void doTest(TAgg agg, const TypePtr& inputType) {
+  void
+  doTest(TAgg agg, const TypePtr& inputType, bool testWithTableScan = true) {
     auto rowType = ROW({"c0", "c1", "mask"}, {BIGINT(), inputType, BOOLEAN()});
     auto vectors = fuzzData(rowType);
     createDuckDbTable(vectors);
@@ -61,7 +62,12 @@ class MinMaxTest : public functions::aggregate::test::AggregationTestBase {
 
     // Global aggregation.
     testAggregations(
-        vectors, {}, {agg(c1)}, fmt::format("SELECT {} FROM tmp", agg(c1)));
+        vectors,
+        {},
+        {agg(c1)},
+        fmt::format("SELECT {} FROM tmp", agg(c1)),
+        /*config*/ {},
+        testWithTableScan);
 
     // Group by aggregation.
     testAggregations(
@@ -70,12 +76,19 @@ class MinMaxTest : public functions::aggregate::test::AggregationTestBase {
         },
         {"p0"},
         {agg(c1)},
-        fmt::format("SELECT c0 % 10, {} FROM tmp GROUP BY 1", agg(c1)));
+        fmt::format("SELECT c0 % 10, {} FROM tmp GROUP BY 1", agg(c1)),
+        /*config*/ {},
+        testWithTableScan);
 
     // Masked aggregations.
     auto maskedAgg = agg(c1) + " filter (where mask)";
     testAggregations(
-        vectors, {}, {maskedAgg}, fmt::format("SELECT {} FROM tmp", maskedAgg));
+        vectors,
+        {},
+        {maskedAgg},
+        fmt::format("SELECT {} FROM tmp", maskedAgg),
+        /*config*/ {},
+        testWithTableScan);
 
     testAggregations(
         [&](auto& builder) {
@@ -83,7 +96,9 @@ class MinMaxTest : public functions::aggregate::test::AggregationTestBase {
         },
         {"p0"},
         {maskedAgg},
-        fmt::format("SELECT c0 % 10, {} FROM tmp GROUP BY 1", maskedAgg));
+        fmt::format("SELECT c0 % 10, {} FROM tmp GROUP BY 1", maskedAgg),
+        /*config*/ {},
+        testWithTableScan);
 
     // Encodings: use filter to wrap aggregation inputs in a dictionary.
     testAggregations(
@@ -95,14 +110,17 @@ class MinMaxTest : public functions::aggregate::test::AggregationTestBase {
         {"p0"},
         {agg(c1)},
         fmt::format(
-            "SELECT c0 % 11, {} FROM tmp WHERE c0 % 2 = 0 GROUP BY 1",
-            agg(c1)));
+            "SELECT c0 % 11, {} FROM tmp WHERE c0 % 2 = 0 GROUP BY 1", agg(c1)),
+        /*config*/ {},
+        testWithTableScan);
 
     testAggregations(
         [&](auto& builder) { builder.values(vectors).filter("c0 % 2 = 0"); },
         {},
         {agg(c1)},
-        fmt::format("SELECT {} FROM tmp WHERE c0 % 2 = 0", agg(c1)));
+        fmt::format("SELECT {} FROM tmp WHERE c0 % 2 = 0", agg(c1)),
+        /*config*/ {},
+        testWithTableScan);
   }
 };
 
@@ -266,26 +284,26 @@ TEST_F(MinMaxTest, initialValue) {
 }
 
 TEST_F(MinMaxTest, maxShortDecimal) {
-  doTest(max, DECIMAL(18, 3));
+  doTest(max, DECIMAL(18, 3), false);
 }
 
 TEST_F(MinMaxTest, minShortDecimal) {
-  doTest(min, DECIMAL(3, 1));
+  doTest(min, DECIMAL(3, 1), false);
 }
 
 TEST_F(MinMaxTest, maxLongDecimal) {
-  doTest(max, DECIMAL(20, 3));
+  doTest(max, DECIMAL(20, 3), false);
 }
 
 TEST_F(MinMaxTest, minLongDecimal) {
-  doTest(min, DECIMAL(38, 19));
+  doTest(min, DECIMAL(38, 19), false);
 }
 
 TEST_F(MinMaxTest, array) {
   auto data = makeRowVector({
       makeNullableArrayVector<int64_t>({
           {1, 2, 3},
-          {std::nullopt, 2},
+          {2, std::nullopt},
           {6, 7, 8},
       }),
   });
@@ -317,7 +335,7 @@ TEST_F(MinMaxTest, map) {
   auto data = makeRowVector({
       makeNullableMapVector<int64_t, int64_t>({
           {{{1, 1}, {2, 2}}},
-          {{{1, 1}, {2, std::nullopt}}},
+          {{{2, std::nullopt}, {2, 3}}},
           {{{4, 50}}},
       }),
   });
@@ -345,17 +363,26 @@ TEST_F(MinMaxTest, map) {
 TEST_F(MinMaxTest, row) {
   auto data = makeRowVector({
       makeRowVector({
+          makeFlatVector<StringView>({
+              "a"_sv,
+              "b"_sv,
+              "c"_sv,
+          }),
           makeNullableFlatVector<StringView>({
-              "abc"_sv,
               std::nullopt,
               "efg"_sv,
+              "hij"_sv,
           }),
       }),
   });
 
   auto expected = makeRowVector({
-      makeRowVector({makeFlatVector<StringView>({"abc"_sv})}),
-      makeRowVector({makeFlatVector<StringView>({"efg"_sv})}),
+      makeRowVector(
+          {makeFlatVector<StringView>({"a"_sv}),
+           makeFlatVector<StringView>({"abc"_sv})}),
+      makeRowVector(
+          {makeFlatVector<StringView>({"c"_sv}),
+           makeFlatVector<StringView>({"hij"_sv})}),
   });
 
   VELOX_ASSERT_THROW(
@@ -364,15 +391,107 @@ TEST_F(MinMaxTest, row) {
 
   data = makeRowVector({
       makeRowVector({
+          makeFlatVector<StringView>({
+              "a"_sv,
+              "b"_sv,
+              "c"_sv,
+          }),
           makeNullableFlatVector<StringView>({
               "abc"_sv,
-              "ef"_sv,
               "efg"_sv,
+              "hij"_sv,
           }),
       }),
   });
-
   testAggregations({data}, {}, {"min(c0)", "max(c0)"}, {expected});
+}
+
+TEST_F(MinMaxTest, arrayCheckNulls) {
+  auto batch = makeRowVector({
+      makeArrayVectorFromJson<int32_t>({
+          "[1, 2]",
+          "[6, 7]",
+          "[2, 3]",
+      }),
+      makeFlatVector<int32_t>({
+          1,
+          2,
+          3,
+      }),
+  });
+
+  auto batchWithNull = makeRowVector({
+      makeArrayVectorFromJson<int32_t>({
+          "[1, 2]",
+          "[6, 7]",
+          "[3, null]",
+      }),
+      makeFlatVector<int32_t>({
+          1,
+          2,
+          3,
+      }),
+  });
+
+  for (const auto& expr : {"min(c0)", "max(c0)"}) {
+    testFailingAggregations(
+        {batch, batchWithNull},
+        {},
+        {expr},
+        "ARRAY comparison not supported for values that contain nulls");
+    testFailingAggregations(
+        {batch, batchWithNull},
+        {"c1"},
+        {expr},
+        "ARRAY comparison not supported for values that contain nulls");
+  }
+}
+
+TEST_F(MinMaxTest, rowCheckNull) {
+  auto batch = makeRowVector({
+      makeRowVector({
+          makeFlatVector<StringView>({
+              "a"_sv,
+              "b"_sv,
+              "c"_sv,
+          }),
+          makeNullableFlatVector<StringView>({
+              "aa"_sv,
+              "bb"_sv,
+              "cc"_sv,
+          }),
+      }),
+      makeFlatVector<int8_t>({1, 2, 3}),
+  });
+
+  auto batchWithNull = makeRowVector({
+      makeRowVector({
+          makeFlatVector<StringView>({
+              "a"_sv,
+              "b"_sv,
+              "c"_sv,
+          }),
+          makeNullableFlatVector<StringView>({
+              "aa"_sv,
+              std::nullopt,
+              "cc"_sv,
+          }),
+      }),
+      makeFlatVector<int8_t>({1, 2, 3}),
+  });
+
+  for (const auto& expr : {"min(c0)", "max(c0)"}) {
+    testFailingAggregations(
+        {batch, batchWithNull},
+        {},
+        {expr},
+        "ROW comparison not supported for values that contain nulls");
+    testFailingAggregations(
+        {batch, batchWithNull},
+        {"c1"},
+        {expr},
+        "ROW comparison not supported for values that contain nulls");
+  }
 }
 
 class MinMaxNTest : public functions::aggregate::test::AggregationTestBase {
@@ -484,6 +603,14 @@ class MinMaxNTest : public functions::aggregate::test::AggregationTestBase {
         {},
         {"min(c0, c1)", "min(c0, c3)", "max(c0, c2)", "max(c0, c3)"},
         {expected});
+
+    // Second argument of max_n/min_n must be less than or equal to 10000.
+    VELOX_ASSERT_THROW(
+        testAggregations({data}, {}, {"min(c0, 10001)"}, {expected}),
+        "second argument of max/min must be less than or equal to 10000");
+    VELOX_ASSERT_THROW(
+        testAggregations({data}, {}, {"max(c0, 10001)"}, {expected}),
+        "second argument of max/min must be less than or equal to 10000");
   }
 
   template <typename T>

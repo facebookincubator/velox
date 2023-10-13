@@ -459,7 +459,8 @@ BaseVector* RowVector::loadedVector() {
     if (!children_[i]) {
       continue;
     }
-    auto newChild = BaseVector::loadedVectorShared(children_[i]);
+    auto& newChild = BaseVector::loadedVectorShared(children_[i]);
+    // This is not needed but can potentially optimize decoding speed later.
     if (children_[i].get() != newChild.get()) {
       children_[i] = newChild;
     }
@@ -1233,6 +1234,17 @@ void MapVector::copyRanges(
     const BaseVector* source,
     const folly::Range<const CopyRange*>& ranges) {
   copyRangesImpl(source, ranges, &values_, &keys_);
+}
+
+void RowVector::appendNulls(vector_size_t numberOfRows) {
+  VELOX_CHECK_GE(numberOfRows, 0);
+  if (numberOfRows == 0) {
+    return;
+  }
+  auto newSize = numberOfRows + BaseVector::length_;
+  auto oldSize = BaseVector::length_;
+  BaseVector::resize(newSize, false);
+  bits::fillBits(mutableRawNulls(), oldSize, newSize, bits::kNull);
 }
 
 } // namespace velox

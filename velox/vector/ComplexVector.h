@@ -22,7 +22,6 @@
 #include <folly/hash/Hash.h>
 #include <glog/logging.h>
 
-#include <velox/vector/BaseVector.h>
 #include "velox/type/Type.h"
 #include "velox/vector/BaseVector.h"
 #include "velox/vector/LazyVector.h"
@@ -109,6 +108,11 @@ class RowVector : public BaseVector {
   size_t childrenSize() const {
     return childrenSize_;
   }
+
+  // Resize a row vector by adding trailing nulls to the top level row without
+  // resizing children.
+  // Caller should ensure that the vector is unique before calling this method.
+  void appendNulls(vector_size_t numberOfRows);
 
   /// Get the child vector at a given offset.
   VectorPtr& childAt(column_index_t index) {

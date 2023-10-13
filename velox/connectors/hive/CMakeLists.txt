@@ -25,10 +25,12 @@ add_library(
   HiveDataSource.cpp
   HivePartitionUtil.cpp
   PartitionIdGenerator.cpp
+  SplitReader.cpp
   TableHandle.cpp)
 
 target_link_libraries(
   velox_hive_connector
+  velox_common_io
   velox_connector
   velox_dwio_catalog_fbhive
   velox_dwio_dwrf_reader

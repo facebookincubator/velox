@@ -179,6 +179,8 @@ Properties of individual measures.
      - Description
    * - call
      - An expression for computing the measure, e.g. count(1), sum(a), avg(b). Expressions must be in the form of aggregate function calls over input columns directly, e.g. sum(c) is ok, but sum(c + d) is not.
+   * - rawInputTypes
+     - A list of raw input types for the aggregation function. There are used to correctly identify aggregation function, e.g. to decide between min(x) and min(x, n) in case of intermediate aggregation. These can be different from the input types specified in 'call' when aggregation step is intermediate or final.
    * - mask
      - An optional boolean input column that's used to mask out rows for this particular measure. Multiple measures may specify same input column as a mask.
    * - sortingKeys
@@ -232,12 +234,82 @@ followed by the group ID column. The type of group ID column is BIGINT.
      - Description
    * - groupingSets
      - List of grouping key sets. Keys within each set must be unique, but keys can repeat across the sets.
+     - Grouping keys are specified with their output names.
    * - groupingKeyInfos
      - The names and order of the grouping key columns in the output.
    * - aggregationInputs
      - Input columns to duplicate.
    * - groupIdName
      - The name for the group-id column that identifies the grouping set. Zero-based integer corresponding to the position of the grouping set in the 'groupingSets' list.
+
+GroupIdNode is typically used to compute GROUPING SETS, CUBE and ROLLUP.
+
+While usually GroupingSets do not repeat with the same grouping key column, there are some use-cases where
+they might. To illustrate why GroupingSets might do so lets examine the following SQL query:
+
+.. code-block:: sql
+
+  SELECT count(orderkey), count(DISTINCT orderkey) FROM orders;
+
+In this query the user wants to compute global aggregates using the same column, though with
+and without the DISTINCT clause. With a particular optimization strategy
+`optimize.mixed-distinct-aggregations <https://www.qubole.com/blog/presto-optimizes-aggregations-over-distinct-values>`_, Presto uses GroupIdNode to compute these.
+
+First, the optimizer creates a GroupIdNode to duplicate every row assigning one copy
+to group 0 and another to group 1. This is achieved using the GroupIdNode with 2 grouping sets
+each using orderkey as a grouping key. In order to disambiguate the
+groups the orderkey column is aliased as a grouping key for one of the
+grouping sets.
+
+Lets say the orders table has 5 rows:
+
+.. code-block::
+
+  orderkey
+     1
+     2
+     2
+     3
+     4
+
+The GroupIdNode would transform this into:
+
+.. code-block::
+
+    orderkey   orderkey1   group_id
+    1             null        0
+    2             null        0
+    2             null        0
+    3             null        0
+    4             null        0
+    null           1          1
+    null           2          1
+    null           2          1
+    null           3          1
+    null           4          1
+
+Then Presto plans an aggregation using (orderkey, group_id) and count(orderkey1).
+
+This results in the following 5 rows:
+
+.. code-block::
+
+    orderkey     group_id     count(orderkey1) as c
+    1                0         null
+    2                0         null
+    3                0         null
+    4                0         null
+    null             1          5
+
+Then Presto plans a second aggregation with no keys and count(orderkey), arbitrary(c).
+Since both aggregations ignore nulls this correctly computes the number of
+distinct orderkeys and the count of all orderkeys.
+
+.. code-block::
+
+    count(orderkey)     arbitrary(c)
+     4                     5
+
 
 HashJoinNode and MergeJoinNode
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -619,6 +691,8 @@ If no sorting columns are specified then the order of the results is unspecified
     - Output column names for each window function invocation in windowFunctions list below.
   * - windowFunctions
     - Window function calls with the frame clause. e.g row_number(), first_value(name) between range 10 preceding and current row. The default frame is between range unbounded preceding and current row.
+  * - inputsSorted
+    - If true, the Window operator assumes that the inputs are clustered on partition keys and sorted on sorting keys in sorting orders. In this case, the operator splits the window partition and begins processing it as soon as it receives the data. If false, the Window operator accumulates all inputs first, then sorts the data, splits the window partition based on the defined criteria, and then processes each window partition sequentially.
 
 RowNumberNode
 ~~~~~~~~~~~~~

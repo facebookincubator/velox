@@ -20,7 +20,6 @@
 #include <re2/re2.h>
 #include <sstream>
 #include <typeindex>
-#include "velox/common/base/Exceptions.h"
 #include "velox/type/TimestampConversion.h"
 
 namespace std {
@@ -370,6 +369,20 @@ const TypePtr& RowType::findChild(folly::StringPiece name) const {
   VELOX_USER_FAIL(makeFieldNotFoundErrorMessage(name, names_));
 }
 
+bool RowType::isOrderable() const {
+  return std::all_of(
+      children_.cbegin(), children_.cend(), [](const auto& child) {
+        return child->isOrderable();
+      });
+}
+
+bool RowType::isComparable() const {
+  return std::all_of(
+      children_.cbegin(), children_.cend(), [](const auto& child) {
+        return child->isComparable();
+      });
+}
+
 bool RowType::containsChild(std::string_view name) const {
   return getChildIdxIfExists(std::string(name)).has_value();
 }
@@ -528,11 +541,23 @@ bool FunctionType::equivalent(const Type& other) const {
   if (&other == this) {
     return true;
   }
+
   if (!Type::hasSameTypeId(other)) {
     return false;
   }
+
   auto& otherTyped = *reinterpret_cast<const FunctionType*>(&other);
-  return children_ == otherTyped.children_;
+  if (children_.size() != otherTyped.size()) {
+    return false;
+  }
+
+  for (auto i = 0; i < children_.size(); ++i) {
+    if (!children_.at(i)->equivalent(*otherTyped.children_.at(i))) {
+      return false;
+    }
+  }
+
+  return true;
 }
 
 std::string FunctionType::toString() const {
@@ -701,6 +726,7 @@ VELOX_DEFINE_SCALAR_ACCESSOR(BOOLEAN);
 VELOX_DEFINE_SCALAR_ACCESSOR(TINYINT);
 VELOX_DEFINE_SCALAR_ACCESSOR(SMALLINT);
 VELOX_DEFINE_SCALAR_ACCESSOR(BIGINT);
+VELOX_DEFINE_SCALAR_ACCESSOR(HUGEINT);
 VELOX_DEFINE_SCALAR_ACCESSOR(REAL);
 VELOX_DEFINE_SCALAR_ACCESSOR(DOUBLE);
 VELOX_DEFINE_SCALAR_ACCESSOR(TIMESTAMP);
@@ -957,19 +983,12 @@ std::string DateType::toString(int32_t days) const {
   // Find the number of seconds for the days_;
   // Casting 86400 to int64 to handle overflows gracefully.
   int64_t daySeconds = days * (int64_t)(86400);
-
-  // gmtime is not thread-safe. Make sure to use gmtime_r.
   std::tm tmValue;
-  VELOX_CHECK_NOT_NULL(
-      gmtime_r((const time_t*)&daySeconds, &tmValue),
-      "Can't convert days to dates: {}",
-      days);
-
-  // return ISO 8601 time format.
-  // %F - equivalent to "%Y-%m-%d" (the ISO 8601 date format)
-  std::ostringstream oss;
-  oss << std::put_time(&tmValue, "%F");
-  return oss.str();
+  VELOX_CHECK(
+      epochToUtc(daySeconds, tmValue), "Can't convert days to dates: {}", days);
+  TimestampToStringOptions options;
+  options.dateOnly = true;
+  return tmToString(tmValue, 0, options);
 }
 
 int32_t DateType::toDays(folly::StringPiece in) const {
@@ -990,6 +1009,7 @@ const SingletonTypeMap& singletonBuiltInTypes() {
       {"SMALLINT", SMALLINT()},
       {"INTEGER", INTEGER()},
       {"BIGINT", BIGINT()},
+      {"HUGEINT", HUGEINT()},
       {"REAL", REAL()},
       {"DOUBLE", DOUBLE()},
       {"VARCHAR", VARCHAR()},
