@@ -33,9 +33,12 @@
 #if CODEGEN_ENABLED == 1
 #include "velox/experimental/codegen/CodegenLogger.h"
 #endif
+#include "velox/common/process/Profiler.h"
 #include "velox/common/testutil/TestValue.h"
 
 using facebook::velox::common::testutil::TestValue;
+
+DEFINE_bool(enable_perf, true, "Monitor with constant backgroun linux perf");
 
 namespace facebook::velox::exec {
 
@@ -931,6 +934,11 @@ void Task::createDriversLocked(
         firstPipelineDriverIndex += factory->numDrivers;
       }
     }
+  }
+
+  // Start profiling after init of stats and before starting Drivers.
+  if (FLAGS_enable_perf && !self->spillDirectory_.empty()) {
+    self->startProfilingLocked();
   }
 
   // Start all the join bridges before we start driver execution.
@@ -2482,6 +2490,28 @@ void Task::MemoryReclaimer::abort(
   // Set timeout to zero to infinite wait until task completes.
   task->taskCompletionFuture(0).wait();
   memory::MemoryReclaimer::abort(pool, error);
+}
+
+void Task::startProfilingLocked() {
+  if (profileDirectory_.empty()) {
+    profileDirectory_ = spillDirectory_;
+    const char* slash = strrchr(profileDirectory_.c_str(), '/');
+    if (!slash) {
+      LOG(ERROR) << "Spill path not set and profile enabled: "
+                 << profileDirectory_;
+      return;
+    }
+    profileDirectory_.resize(slash - profileDirectory_.c_str());
+    auto statname = fmt::format("profileDir={}", profileDirectory_);
+    taskStats_.pipelineStats[0].operatorStats[0].addRuntimeStat(
+        statname, RuntimeCounter(1));
+  }
+
+  if (process::Profiler::isRunning()) {
+    return;
+  }
+  auto path = fmt::format("{}/profile-{}", profileDirectory_, taskId_);
+  process::Profiler::start(path);
 }
 
 } // namespace facebook::velox::exec
