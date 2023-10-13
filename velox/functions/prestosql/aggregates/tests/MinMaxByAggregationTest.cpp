@@ -1289,11 +1289,7 @@ TEST_F(MinMaxByComplexTypes, rowCompare) {
           {4, 5},
           {6, 7, 8},
       }),
-      makeRowVector({makeNullableFlatVector<int32_t>({
-          1,
-          2,
-          3,
-      })}),
+      makeRowVector({makeNullableFlatVector<int32_t>({1, 2, 3})}),
   });
 
   auto expected = makeRowVector({
@@ -1311,39 +1307,23 @@ TEST_F(MinMaxByComplexTypes, rowCompare) {
 
 TEST_F(MinMaxByComplexTypes, arrayCheckNulls) {
   auto batch = makeRowVector({
-      makeFlatVector<int32_t>({
-          1,
-          2,
-          3,
-      }),
+      makeFlatVector<int32_t>({1, 2, 3}),
       makeArrayVectorFromJson<int32_t>({
           "[1, 2]",
           "[6, 7]",
           "[2, 3]",
       }),
-      makeFlatVector<int32_t>({
-          1,
-          2,
-          3,
-      }),
+      makeFlatVector<int32_t>({1, 2, 3}),
   });
 
   auto batchWithNull = makeRowVector({
-      makeFlatVector<int32_t>({
-          1,
-          2,
-          3,
-      }),
+      makeFlatVector<int32_t>({1, 2, 3}),
       makeArrayVectorFromJson<int32_t>({
           "[1, 2]",
           "[6, 7]",
           "[3, null]",
       }),
-      makeFlatVector<int32_t>({
-          1,
-          2,
-          3,
-      }),
+      makeFlatVector<int32_t>({1, 2, 3}),
   });
 
   for (const auto& expr : {"min_by(c0, c1)", "max_by(c0, c1)"}) {
@@ -1364,16 +1344,8 @@ TEST_F(MinMaxByComplexTypes, rowCheckNull) {
   auto batch = makeRowVector({
       makeFlatVector<int8_t>({1, 2, 3}),
       makeRowVector({
-          makeFlatVector<StringView>({
-              "a"_sv,
-              "b"_sv,
-              "c"_sv,
-          }),
-          makeNullableFlatVector<StringView>({
-              "aa"_sv,
-              "bb"_sv,
-              "cc"_sv,
-          }),
+          makeFlatVector<std::string>({"a", "b", "c"}),
+          makeFlatVector<std::string>({"aa", "bb", "cc"})
       }),
       makeFlatVector<int8_t>({1, 2, 3}),
   });
@@ -1381,16 +1353,8 @@ TEST_F(MinMaxByComplexTypes, rowCheckNull) {
   auto batchWithNull = makeRowVector({
       makeFlatVector<int8_t>({1, 2, 3}),
       makeRowVector({
-          makeFlatVector<StringView>({
-              "a"_sv,
-              "b"_sv,
-              "c"_sv,
-          }),
-          makeNullableFlatVector<StringView>({
-              "aa"_sv,
-              std::nullopt,
-              "cc"_sv,
-          }),
+          makeFlatVector<std::string>({"a", "b", "c"}),
+          makeNullableFlatVector<std::string>({"aa", std::nullopt, "cc"}),
       }),
       makeFlatVector<int8_t>({1, 2, 3}),
   });
