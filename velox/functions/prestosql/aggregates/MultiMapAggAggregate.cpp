@@ -16,6 +16,7 @@
 #include "velox/exec/Aggregate.h"
 #include "velox/exec/Strings.h"
 #include "velox/functions/prestosql/aggregates/AggregateNames.h"
+#include "velox/functions/prestosql/aggregates/Compare.h"
 #include "velox/functions/prestosql/aggregates/ValueList.h"
 #include "velox/vector/FlatVector.h"
 
@@ -127,8 +128,11 @@ struct MultiMapAccumulator {
 template <typename K>
 class MultiMapAggAggregate : public exec::Aggregate {
  public:
-  explicit MultiMapAggAggregate(TypePtr resultType)
-      : exec::Aggregate(std::move(resultType)) {}
+  explicit MultiMapAggAggregate(
+      TypePtr resultType,
+      const bool throwOnNestedNulls = false)
+      : exec::Aggregate(std::move(resultType)),
+        throwOnNestedNulls_(throwOnNestedNulls) {}
 
   using AccumulatorType = MultiMapAccumulator<K>;
 
@@ -157,17 +161,20 @@ class MultiMapAggAggregate : public exec::Aggregate {
       bool mayPushdown) override {
     decodedKeys_.decode(*args[0], rows);
     decodedValues_.decode(*args[1], rows);
+    auto indices = decodedValues_.indices();
 
     rows.applyToSelected([&](vector_size_t row) {
       // Skip null keys.
-      if (!decodedKeys_.isNullAt(row)) {
-        auto group = groups[row];
-        clearNull(group);
-
-        auto* accumulator = value<AccumulatorType>(group);
-        auto tracker = trackRowSize(group);
-        accumulator->insert(decodedKeys_, decodedValues_, row, *allocator_);
+      if (throwOnNestedNulls_ &&
+          checkNestedNulls(decodedValues_, indices, row, throwOnNestedNulls_)) {
+        return;
       }
+      auto group = groups[row];
+      clearNull(group);
+
+      auto* accumulator = value<AccumulatorType>(group);
+      auto tracker = trackRowSize(group);
+      accumulator->insert(decodedKeys_, decodedValues_, row, *allocator_);
     });
   }
 
@@ -185,9 +192,15 @@ class MultiMapAggAggregate : public exec::Aggregate {
     auto* valueArrays_ = decodedValueArrays_.base()->template as<ArrayVector>();
 
     decodedValues_.decode(*valueArrays_->elements());
+    auto indices = decodedValueArrays_.indices();
 
     VELOX_CHECK_NOT_NULL(mapVector);
     rows.applyToSelected([&](vector_size_t row) {
+      if (throwOnNestedNulls_ &&
+          checkNestedNulls(
+              decodedValueArrays_, indices, row, throwOnNestedNulls_)) {
+        return;
+      }
       if (!decodedMaps_.isNullAt(row)) {
         auto* group = groups[row];
         auto accumulator = value<AccumulatorType>(group);
@@ -219,16 +232,19 @@ class MultiMapAggAggregate : public exec::Aggregate {
       bool mayPushdown) override {
     decodedKeys_.decode(*args[0], rows);
     decodedValues_.decode(*args[1], rows);
+    auto indices = decodedValues_.indices();
 
     auto* accumulator = value<AccumulatorType>(group);
     auto tracker = trackRowSize(group);
 
     rows.applyToSelected([&](vector_size_t row) {
       // Skip null keys.
-      if (!decodedKeys_.isNullAt(row)) {
-        clearNull(group);
-        accumulator->insert(decodedKeys_, decodedValues_, row, *allocator_);
+      if (throwOnNestedNulls_ &&
+          checkNestedNulls(decodedValues_, indices, row, throwOnNestedNulls_)) {
+        return;
       }
+      clearNull(group);
+      accumulator->insert(decodedKeys_, decodedValues_, row, *allocator_);
     });
   }
 
@@ -246,11 +262,17 @@ class MultiMapAggAggregate : public exec::Aggregate {
     auto* valueArrays_ = decodedValueArrays_.base()->template as<ArrayVector>();
 
     decodedValues_.decode(*valueArrays_->elements());
+    auto indices = decodedValueArrays_.indices();
 
     auto accumulator = value<AccumulatorType>(group);
 
     VELOX_CHECK_NOT_NULL(mapVector);
     rows.applyToSelected([&](vector_size_t row) {
+      if (throwOnNestedNulls_ &&
+          checkNestedNulls(
+              decodedValueArrays_, indices, row, throwOnNestedNulls_)) {
+        return;
+      }
       if (!decodedMaps_.isNullAt(row)) {
         clearNull(group);
         auto decodedRow = decodedMaps_.index(row);
@@ -359,6 +381,8 @@ class MultiMapAggAggregate : public exec::Aggregate {
   DecodedVector decodedValues_;
   DecodedVector decodedMaps_;
   DecodedVector decodedValueArrays_;
+
+  const bool throwOnNestedNulls_;
 };
 
 exec::AggregateRegistrationResult registerMultiMapAgg(const std::string& name) {
@@ -399,31 +423,47 @@ exec::AggregateRegistrationResult registerMultiMapAgg(const std::string& name) {
           const core::QueryConfig& /*config*/)
           -> std::unique_ptr<exec::Aggregate> {
         auto typeKind = resultType->childAt(0)->kind();
+        auto complexType = argTypes.at(1)->kind();
+        auto rawInput = exec::isRawInput(step);
+        bool throwOnNestedNulls = rawInput;
+        if (rawInput &&
+            (complexType == TypeKind::ARRAY || complexType == TypeKind::ROW ||
+             complexType == TypeKind::MAP)) {
+          throwOnNestedNulls = true;
+        }
         switch (typeKind) {
           case TypeKind::BOOLEAN:
-            return std::make_unique<MultiMapAggAggregate<bool>>(resultType);
+            return std::make_unique<MultiMapAggAggregate<bool>>(
+                resultType, throwOnNestedNulls);
           case TypeKind::TINYINT:
-            return std::make_unique<MultiMapAggAggregate<int8_t>>(resultType);
+            return std::make_unique<MultiMapAggAggregate<int8_t>>(
+                resultType, throwOnNestedNulls);
           case TypeKind::SMALLINT:
-            return std::make_unique<MultiMapAggAggregate<int16_t>>(resultType);
+            return std::make_unique<MultiMapAggAggregate<int16_t>>(
+                resultType, throwOnNestedNulls);
           case TypeKind::INTEGER:
-            return std::make_unique<MultiMapAggAggregate<int32_t>>(resultType);
+            return std::make_unique<MultiMapAggAggregate<int32_t>>(
+                resultType, throwOnNestedNulls);
           case TypeKind::BIGINT:
-            return std::make_unique<MultiMapAggAggregate<int64_t>>(resultType);
+            return std::make_unique<MultiMapAggAggregate<int64_t>>(
+                resultType, throwOnNestedNulls);
           case TypeKind::REAL:
-            return std::make_unique<MultiMapAggAggregate<float>>(resultType);
+            return std::make_unique<MultiMapAggAggregate<float>>(
+                resultType, throwOnNestedNulls);
           case TypeKind::DOUBLE:
-            return std::make_unique<MultiMapAggAggregate<double>>(resultType);
+            return std::make_unique<MultiMapAggAggregate<double>>(
+                resultType, throwOnNestedNulls);
           case TypeKind::TIMESTAMP:
             return std::make_unique<MultiMapAggAggregate<Timestamp>>(
-                resultType);
+                resultType, throwOnNestedNulls);
           case TypeKind::VARBINARY:
             [[fallthrough]];
           case TypeKind::VARCHAR:
             return std::make_unique<MultiMapAggAggregate<StringView>>(
-                resultType);
+                resultType, throwOnNestedNulls);
           case TypeKind::UNKNOWN:
-            return std::make_unique<MultiMapAggAggregate<int32_t>>(resultType);
+            return std::make_unique<MultiMapAggAggregate<int32_t>>(
+                resultType, throwOnNestedNulls);
           default:
             VELOX_UNREACHABLE(
                 "Unexpected type {}", mapTypeKindToName(typeKind));

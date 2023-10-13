@@ -180,5 +180,34 @@ TEST_F(MultiMapAggTest, stringKeyGroupBy) {
       {expected});
 }
 
+TEST_F(MultiMapAggTest, arrayCheckNulls) {
+  auto data = makeRowVector({
+      makeFlatVector<int32_t>({2, 1}),
+      makeArrayVectorFromJson<int32_t>({
+          "[3,1,null]",
+          "[9,2,7,null]",
+      }),
+  });
+
+  testFailingAggregations(
+      {data},
+      {},
+      {"multimap_agg(c0, c1)"},
+      "ARRAY comparison not supported for values that contain nulls");
+
+  data = makeRowVector({
+      makeFlatVector<int32_t>({2, 1, 2, 1}),
+      makeFlatVector<int32_t>({4, 5, 5, 2}),
+      makeArrayVectorFromJson<int32_t>(
+          {"[3,1,null]", "[9,2,7,null]", "[9,2,7,null]", "[3,1,null]"}),
+  });
+
+  testFailingAggregations(
+      {data},
+      {"c0"},
+      {"multimap_agg(c1, c2)"},
+      "ARRAY comparison not supported for values that contain nulls");
+}
+
 } // namespace
 } // namespace facebook::velox::aggregate::prestosql
