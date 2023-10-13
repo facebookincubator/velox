@@ -53,7 +53,7 @@ class IntegerColumnReader : public dwio::common::SelectiveIntegerColumnReader {
     return numValues;
   }
 
-  void getValues(RowSet rows, VectorPtr* result) {
+  void getValues(RowSet rows, VectorPtr* result) override {
     auto parquetDataType =
         std::dynamic_pointer_cast<const ParquetTypeWithId>(fileType_);
     auto logicalType = parquetDataType->logicalType_;
