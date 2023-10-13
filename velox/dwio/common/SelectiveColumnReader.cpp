@@ -228,7 +228,7 @@ void SelectiveColumnReader::getUnsignedIntValues(
     case TypeKind::SMALLINT:
       switch (valueSize_) {
         case 4:
-          getFlatValues<int32_t, int16_t>(rows, result, requestedType);
+          getFlatValues<uint32_t, int16_t>(rows, result, requestedType);
           break;
         default:
           VELOX_FAIL("Unsupported value size: {}", valueSize_);
@@ -237,7 +237,7 @@ void SelectiveColumnReader::getUnsignedIntValues(
     case TypeKind::INTEGER:
       switch (valueSize_) {
         case 4:
-          getFlatValues<int32_t, int32_t>(rows, result, requestedType);
+          getFlatValues<uint32_t, int32_t>(rows, result, requestedType);
           break;
         default:
           VELOX_FAIL("Unsupported value size: {}", valueSize_);
