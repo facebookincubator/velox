@@ -194,7 +194,7 @@ TEST_F(GeometricMeanTest, groupByReals) {
       makeFlatVector<float>(
           10,
           [](auto row) {
-            return geometricMean<double>(
+            return geometricMean<float>(
                 0, 10, 1, [&](int32_t i) { return row + i * 0.1; });
           }),
   });
