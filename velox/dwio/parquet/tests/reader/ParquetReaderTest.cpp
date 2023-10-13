@@ -270,7 +270,7 @@ TEST_F(ParquetReaderTest, parseUnsignedInt) {
   //   uint64: [18446744073709551615, 2000000000000000000, 3000000000000000000]
   const std::string sample(getExampleFilePath("uint.parquet"));
 
-  ReaderOptions readerOptions{defaultPool.get()};
+  facebook::velox::dwio::common::ReaderOptions readerOptions{defaultPool.get()};
   ParquetReader reader = createReader(sample, readerOptions);
 
   EXPECT_EQ(reader.numberOfRows(), 3ULL);
