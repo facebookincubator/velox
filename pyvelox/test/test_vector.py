@@ -377,10 +377,12 @@ class TestVeloxVector(unittest.TestCase):
         ]
 
         col_names = ["a", "b", "c", "d"]
+        rw = pv.row_vector(col_names, vals, {0: True, 2: True})
+        print(rw)
 
-        rw = pv.row_vector(col_names, vals, [True, False, True, False, True])
         for i in range(len(rw)):
             vec = rw[i]
+            str1 = ""
             for j in range(len(vec)):
                 assert vec[j] == vals[i][j]
 

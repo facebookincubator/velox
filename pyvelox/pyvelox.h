@@ -118,18 +118,14 @@ inline void checkRowVectorBounds(const RowVectorPtr& v, vector_size_t idx) {
 }
 
 inline VectorPtr getVectorFromRowVectorPtr(
-    const RowVectorPtr& v,
+    const RowVectorPtr& vector,
     vector_size_t idx) {
-  checkRowVectorBounds(v, idx);
-  return v->childAt(idx);
+  checkRowVectorBounds(vector, idx);
+  return vector->childAt(idx);
 }
 
-inline std::string rowVectorToString(const RowVectorPtr& v) {
-  if (v->childrenSize() > 0) {
-    return v->toString(0, v->size());
-  } else {
-    return v->toString();
-  }
+inline std::string rowVectorToString(const RowVectorPtr& vector) {
+  return vector->toString(0, vector->size());
 }
 
 static VectorPtr pyToConstantVector(
@@ -530,42 +526,50 @@ static void addVectorBindings(
 
   m.def(
       "row_vector",
-      [](std::vector<std::string>& names,
+      [](std::vector<std::string>& children,
          std::vector<VectorPtr>& values,
-         const std::optional<py::list>& nullability_list) {
+         const std::optional<py::dict>& nullabilityDict) {
         std::vector<std::shared_ptr<const Type>> childTypes;
-        childTypes.resize(values.size());
+        childTypes.reserve(values.size());
+        size_t vectorSize = values.size() > 0 ? values[0]->size() : 0;
         for (int i = 0; i < values.size(); i++) {
-          childTypes[i] = values[i]->type();
+          // choose child with smallest size to calculate the vector size
+          if(i > 0 && values[i]->size() < vectorSize) {
+            vectorSize = values[i]->size();
+          }
+          childTypes.push_back(values[i]->type());
         }
-        auto rowType = ROW(std::move(names), std::move(childTypes));
-        const size_t vectorSize = values.size();
-        BufferPtr nullability_buffer = nullptr;
-        if (nullability_list.has_value()) {
-          auto nullability_values = nullability_list.value();
-          nullability_buffer = AlignedBuffer::allocate<bool>(
-              nullability_values.size(),
-              PyVeloxContext::getSingletonInstance().pool());
-          for (size_t idx = 0; idx < nullability_values.size(); idx++) {
-            if (!py::isinstance<py::bool_>(nullability_values[idx])) {
-              throw py::type_error("Found a value that's not a bool");
+        auto rowType = ROW(std::move(children), std::move(childTypes));
+
+        BufferPtr nullabilityBuffer = nullptr;
+        if (nullabilityDict.has_value()) {
+          auto nullabilityValues = nullabilityDict.value();
+          nullabilityBuffer = AlignedBuffer::allocate<bool>(
+              values.size(),
+              PyVeloxContext::getSingletonInstance().pool(), true);
+          for (const auto &&item : nullabilityValues) {
+            auto row = item.first;
+            auto nullability = item.second;
+            if (!py::isinstance<py::int_>(row) || !py::isinstance<py::bool_>(nullability)) {
+              throw py::type_error("nullability must be a dictionary, rowId in int and nullability in boolean");
             }
-            bool value = py::cast<bool>(nullability_values[idx]);
+            int rowId = py::cast<int>(row);
+            bool nullabilityVal = py::cast<bool>(nullability);
             bits::setBit(
-                nullability_buffer->asMutable<uint64_t>(),
-                idx,
-                bits::kNull ? value : !value);
+                nullabilityBuffer->asMutable<uint64_t>(),
+                rowId,
+                bits::kNull ? nullabilityVal : !nullabilityVal);
           }
         }
 
         return std::make_shared<RowVector>(
             PyVeloxContext::getSingletonInstance().pool(),
             rowType,
-            nullability_buffer,
+            nullabilityBuffer,
             vectorSize,
             values);
       },
-      py::arg("names"),
+      py::arg("children"),
       py::arg("values"),
       py::arg("nulls") = std::nullopt);
 
