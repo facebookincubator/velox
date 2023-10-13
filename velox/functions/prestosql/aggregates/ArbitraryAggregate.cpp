@@ -316,6 +316,7 @@ exec::AggregateRegistrationResult registerArbitrary(const std::string& name) {
 
 void registerArbitraryAggregate(const std::string& prefix) {
   registerArbitrary(prefix + kArbitrary);
+  registerArbitrary(prefix + kAnyValue);
 }
 
 } // namespace facebook::velox::aggregate::prestosql
