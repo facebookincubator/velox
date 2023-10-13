@@ -17,8 +17,8 @@
 
 #include "velox/exec/Aggregate.h"
 #include "velox/exec/ContainerRowSerde.h"
+#include "velox/functions/lib/CheckNestedNulls.h"
 #include "velox/functions/lib/aggregates/SingleValueAccumulator.h"
-#include "velox/functions/prestosql/aggregates/Compare.h"
 #include "velox/vector/FlatVector.h"
 
 namespace facebook::velox::functions::aggregate {
@@ -331,7 +331,7 @@ class MinMaxByAggregateBase : public exec::Aggregate {
     const auto* indices = decodedComparison_.indices();
     if (decodedValue_.mayHaveNulls() || decodedComparison_.mayHaveNulls()) {
       rows.applyToSelected([&](vector_size_t i) {
-        if (velox::aggregate::prestosql::checkNestedNulls(
+        if (checkNestedNulls(
                 decodedComparison_, indices, i, throwOnNestedNulls_)) {
           return;
         }
@@ -346,8 +346,7 @@ class MinMaxByAggregateBase : public exec::Aggregate {
     } else {
       rows.applyToSelected([&](vector_size_t i) {
         if (throwOnNestedNulls_) {
-          velox::aggregate::prestosql::checkNestedNulls(
-              decodedComparison_, indices, i, throwOnNestedNulls_);
+          checkNestedNulls(decodedComparison_, indices, i, throwOnNestedNulls_);
         }
         updateValues(
             groups[i], decodedValue_, decodedComparison_, i, false, mayUpdate);
@@ -415,7 +414,7 @@ class MinMaxByAggregateBase : public exec::Aggregate {
 
     if (decodedValue_.isConstantMapping() &&
         decodedComparison_.isConstantMapping()) {
-      if (velox::aggregate::prestosql::checkNestedNulls(
+      if (checkNestedNulls(
               decodedComparison_, indices, 0, throwOnNestedNulls_)) {
         return;
       }
@@ -429,7 +428,7 @@ class MinMaxByAggregateBase : public exec::Aggregate {
     } else if (
         decodedValue_.mayHaveNulls() || decodedComparison_.mayHaveNulls()) {
       rows.applyToSelected([&](vector_size_t i) {
-        if (velox::aggregate::prestosql::checkNestedNulls(
+        if (checkNestedNulls(
                 decodedComparison_, indices, i, throwOnNestedNulls_)) {
           return;
         }
@@ -444,8 +443,7 @@ class MinMaxByAggregateBase : public exec::Aggregate {
     } else {
       rows.applyToSelected([&](vector_size_t i) {
         if (throwOnNestedNulls_) {
-          velox::aggregate::prestosql::checkNestedNulls(
-              decodedComparison_, indices, i, throwOnNestedNulls_);
+          checkNestedNulls(decodedComparison_, indices, i, throwOnNestedNulls_);
         }
         updateValues(
             group, decodedValue_, decodedComparison_, i, false, mayUpdate);

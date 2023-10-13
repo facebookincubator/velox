@@ -1343,10 +1343,9 @@ TEST_F(MinMaxByComplexTypes, arrayCheckNulls) {
 TEST_F(MinMaxByComplexTypes, rowCheckNull) {
   auto batch = makeRowVector({
       makeFlatVector<int8_t>({1, 2, 3}),
-      makeRowVector({
-          makeFlatVector<std::string>({"a", "b", "c"}),
-          makeFlatVector<std::string>({"aa", "bb", "cc"})
-      }),
+      makeRowVector(
+          {makeFlatVector<std::string>({"a", "b", "c"}),
+           makeFlatVector<std::string>({"aa", "bb", "cc"})}),
       makeFlatVector<int8_t>({1, 2, 3}),
   });
 
