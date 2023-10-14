@@ -401,7 +401,7 @@ std::vector<std::shared_ptr<exec::FunctionSignature>> signatures(
   return signatures;
 }
 
-std::vector<std::shared_ptr<exec::FunctionSignature>> relaxSignatures() {
+std::vector<std::shared_ptr<exec::FunctionSignature>> internalSignatures() {
   std::vector<std::shared_ptr<exec::FunctionSignature>> signatures = {
       // array(T) -> array(T)
       exec::FunctionSignatureBuilder()
@@ -456,6 +456,11 @@ core::TypedExprPtr rewriteArraySortCall(
           functions::prestosql::isSimpleComparison(prefix, *lambda)) {
     std::string name = comparison->isLessThen ? prefix + "array_sort"
                                               : prefix + "array_sort_desc";
+
+    if (!comparison->expr->type()->isOrderable()) {
+      return nullptr;
+    }
+
     auto rewritten = std::make_shared<core::CallTypedExpr>(
         call->type(),
         std::vector<core::TypedExprPtr>{
@@ -488,8 +493,8 @@ VELOX_DECLARE_STATEFUL_VECTOR_FUNCTION(
 // transform or sort the results to a value that can be verified, details in
 // https://github.com/facebookincubator/velox/issues/6999.
 VELOX_DECLARE_STATEFUL_VECTOR_FUNCTION(
-    udf_array_sort_relax,
-    relaxSignatures(),
+    udf_internal$array_sort,
+    internalSignatures(),
     createAsc);
 
 } // namespace facebook::velox::functions

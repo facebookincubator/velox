@@ -123,7 +123,7 @@ void registerArrayFunctions(const std::string& prefix) {
   VELOX_REGISTER_VECTOR_FUNCTION(
       udf_array_sort_desc, prefix + "array_sort_desc");
   VELOX_REGISTER_VECTOR_FUNCTION(
-      udf_array_sort_relax, prefix + "array_sort_relax");
+      udf_internal$array_sort, prefix + "internal$array_sort");
 
   exec::registerExpressionRewrite([prefix](const auto& expr) {
     return rewriteArraySortCall(prefix, expr);
