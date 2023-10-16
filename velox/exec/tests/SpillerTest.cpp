@@ -219,7 +219,9 @@ class SpillerTest : public exec::test::RowContainerTestBase {
       ASSERT_TRUE(spiller_->isAllSpilled());
     }
 
+    ASSERT_FALSE(spiller_->finalized());
     Spiller::SpillRows unspilledPartitionRows = spiller_->finishSpill();
+    ASSERT_TRUE(spiller_->finalized());
     SpillPartitionNumSet expectedSpillPartitions;
     if (spillPct == 100 || type_ == Spiller::Type::kAggregateOutput) {
       ASSERT_TRUE(unspilledPartitionRows.empty());
@@ -1205,7 +1207,9 @@ TEST_P(AggregationInputOnly, spillWithEmptyPartitions) {
     ASSERT_GT(stats.spillSerializationTimeUs, 0);
     ASSERT_GT(stats.spillDiskWrites, 0);
     // Expect no non-spilling partitions.
+    ASSERT_FALSE(spiller_->finalized());
     ASSERT_TRUE(spiller_->finishSpill().empty());
+    ASSERT_TRUE(spiller_->finalized());
     const auto finalStats = spiller_->stats();
     ASSERT_GT(finalStats, stats);
     ASSERT_GT(finalStats.spillFillTimeUs, stats.spillFillTimeUs);
@@ -1293,7 +1297,9 @@ TEST_P(NoHashJoin, spillPartition) {
         SpillPartitionNumSet{std::min<uint32_t>(1, numPartitions_ - 1)});
     spiller_->spill(
         SpillPartitionNumSet{std::min<uint32_t>(1, numPartitions_ - 1)});
+    ASSERT_FALSE(spiller_->finalized());
     spiller_->finishSpill();
+    ASSERT_TRUE(spiller_->finalized());
     verifySortedSpillData();
     VELOX_ASSERT_THROW(
         spiller_->spill(SpillPartitionNumSet{0}), "Spiller has been finalized");
@@ -1314,7 +1320,9 @@ TEST_P(NoHashJoin, spillPartition) {
     spiller_->spill(SpillPartitionNumSet(
         spillPartitionNums.begin(), spillPartitionNums.end()));
     ASSERT_TRUE(spiller_->isAllSpilled());
+    ASSERT_FALSE(spiller_->finalized());
     spiller_->finishSpill();
+    ASSERT_TRUE(spiller_->finalized());
     ASSERT_TRUE(spiller_->isAllSpilled());
     verifySortedSpillData();
     VELOX_ASSERT_THROW(
@@ -1336,7 +1344,9 @@ TEST_P(NoHashJoin, spillPartition) {
     ASSERT_TRUE(spiller_->isAllSpilled());
     spiller_->spill();
     ASSERT_TRUE(spiller_->isAllSpilled());
+    ASSERT_FALSE(spiller_->finalized());
     spiller_->finishSpill();
+    ASSERT_TRUE(spiller_->finalized());
     ASSERT_TRUE(spiller_->isAllSpilled());
     verifySortedSpillData();
     VELOX_ASSERT_THROW(
@@ -1363,7 +1373,9 @@ TEST_P(AllTypes, nonSortedSpillFunctions) {
     std::iota(spillPartitionNums.begin(), spillPartitionNums.end(), 0);
     spiller_->spill(SpillPartitionNumSet(
         spillPartitionNums.begin(), spillPartitionNums.end()));
+    ASSERT_FALSE(spiller_->finalized());
     spiller_->finishSpill();
+    ASSERT_TRUE(spiller_->finalized());
     verifySortedSpillData();
     return;
   }
