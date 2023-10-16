@@ -164,8 +164,14 @@ TEST_F(PlanNodeSerdeTest, filter) {
 TEST_F(PlanNodeSerdeTest, groupId) {
   auto plan = PlanBuilder()
                   .values({data_})
-                  .groupId({{"c0"}, {"c0", "c1"}}, {"c2"})
+                  .groupId({"c0", "c1"}, {{"c0"}, {"c0", "c1"}}, {"c2"})
                   .planNode();
+  testSerde(plan);
+
+  plan = PlanBuilder()
+             .values({data_})
+             .groupId({"c0", "c0 as c1"}, {{"c0"}, {"c0", "c1"}}, {"c2"})
+             .planNode();
   testSerde(plan);
 }
 
@@ -407,6 +413,23 @@ TEST_F(PlanNodeSerdeTest, window) {
   plan = PlanBuilder()
              .values({data_})
              .window({"sum(c0) over (partition by c1 order by c2)"})
+             .planNode();
+
+  testSerde(plan);
+
+  // Test StreamingWindow serde.
+  plan =
+      PlanBuilder()
+          .values({data_})
+          .streamingWindow(
+              {"sum(c0) over (partition by c1 order by c2 rows between 10 preceding and 5 following)"})
+          .planNode();
+
+  testSerde(plan);
+
+  plan = PlanBuilder()
+             .values({data_})
+             .streamingWindow({"sum(c0) over (partition by c1 order by c2)"})
              .planNode();
 
   testSerde(plan);

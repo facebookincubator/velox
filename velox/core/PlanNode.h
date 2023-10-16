@@ -497,6 +497,11 @@ class AggregationNode : public PlanNode {
     /// Function name and input column names.
     CallTypedExprPtr call;
 
+    /// Raw input types used to properly identify aggregate function. These
+    /// might be different from the input types specified in 'call' when
+    /// aggregation step is kIntermediate or kFinal.
+    std::vector<TypePtr> rawInputTypes;
+
     /// Optional name of input column to use as a mask. Column type must be
     /// BOOLEAN.
     FieldAccessTypedExprPtr mask;
@@ -718,17 +723,6 @@ class TableWriteMergeNode : public PlanNode {
   /// 'outputType' specifies the type to store the metadata of table write
   /// output which contains the following columns: 'numWrittenRows', 'fragment'
   /// and 'tableCommitContext'.
-#ifdef VELOX_ENABLE_BACKWARD_COMPATIBILITY
-  TableWriteMergeNode(
-      const PlanNodeId& id,
-      RowTypePtr outputType,
-      PlanNodePtr source)
-      : PlanNode(id),
-        aggregationNode_(nullptr),
-        sources_{std::move(source)},
-        outputType_(std::move(outputType)) {}
-#endif
-
   TableWriteMergeNode(
       const PlanNodeId& id,
       RowTypePtr outputType,
@@ -788,6 +782,7 @@ class GroupIdNode : public PlanNode {
   /// @param id Plan node ID.
   /// @param groupingSets A list of grouping key sets. Grouping keys within the
   /// set must be unique, but grouping keys across sets may repeat.
+  /// Note: groupingSets are specified using output column names.
   /// @param groupingKeyInfos The names and order of the grouping keys in the
   /// output.
   /// @param aggregationInputs Columns that contain inputs to the aggregate
@@ -797,7 +792,7 @@ class GroupIdNode : public PlanNode {
   /// @param source Input plan node.
   GroupIdNode(
       PlanNodeId id,
-      std::vector<std::vector<FieldAccessTypedExprPtr>> groupingSets,
+      std::vector<std::vector<std::string>> groupingSets,
       std::vector<GroupingKeyInfo> groupingKeyInfos,
       std::vector<FieldAccessTypedExprPtr> aggregationInputs,
       std::string groupIdName,
@@ -811,8 +806,7 @@ class GroupIdNode : public PlanNode {
     return sources_;
   }
 
-  const std::vector<std::vector<FieldAccessTypedExprPtr>>& groupingSets()
-      const {
+  const std::vector<std::vector<std::string>>& groupingSets() const {
     return groupingSets_;
   }
 
@@ -845,7 +839,12 @@ class GroupIdNode : public PlanNode {
 
   const std::vector<PlanNodePtr> sources_;
   const RowTypePtr outputType_;
-  const std::vector<std::vector<FieldAccessTypedExprPtr>> groupingSets_;
+
+  // Specifies groupingSets with output column names.
+  // This allows for the case when a single input column could map
+  // to multiple output columns which are used in separate grouping sets.
+  const std::vector<std::vector<std::string>> groupingSets_;
+
   const std::vector<GroupingKeyInfo> groupingKeyInfos_;
   const std::vector<FieldAccessTypedExprPtr> aggregationInputs_;
   const std::string groupIdName_;
@@ -2039,7 +2038,28 @@ class WindowNode : public PlanNode {
       std::vector<SortOrder> sortingOrders,
       std::vector<std::string> windowColumnNames,
       std::vector<Function> windowFunctions,
+      bool inputsSorted,
       PlanNodePtr source);
+
+#ifdef VELOX_ENABLE_BACKWARD_COMPATIBILITY
+  WindowNode(
+      PlanNodeId id,
+      std::vector<FieldAccessTypedExprPtr> partitionKeys,
+      std::vector<FieldAccessTypedExprPtr> sortingKeys,
+      std::vector<SortOrder> sortingOrders,
+      std::vector<std::string> windowColumnNames,
+      std::vector<Function> windowFunctions,
+      PlanNodePtr source)
+      : WindowNode(
+            id,
+            partitionKeys,
+            sortingKeys,
+            sortingOrders,
+            windowColumnNames,
+            windowFunctions,
+            false,
+            source){};
+#endif
 
   const std::vector<PlanNodePtr>& sources() const override {
     return sources_;
@@ -2067,6 +2087,10 @@ class WindowNode : public PlanNode {
     return windowFunctions_;
   }
 
+  bool inputsSorted() const {
+    return inputsSorted_;
+  }
+
   std::string_view name() const override {
     return "Window";
   }
@@ -2084,6 +2108,8 @@ class WindowNode : public PlanNode {
   const std::vector<SortOrder> sortingOrders_;
 
   const std::vector<Function> windowFunctions_;
+
+  const bool inputsSorted_;
 
   const std::vector<PlanNodePtr> sources_;
 

@@ -795,6 +795,10 @@ TypePtr VectorFuzzer::randType(int maxDepth) {
   return velox::randType(rng_, maxDepth);
 }
 
+TypePtr VectorFuzzer::randOrderableType(int maxDepth) {
+  return velox::randOrderableType(rng_, maxDepth);
+}
+
 TypePtr VectorFuzzer::randType(
     const std::vector<TypePtr>& scalarTypes,
     int maxDepth) {
@@ -943,9 +947,15 @@ VectorPtr VectorLoaderWrap::makeEncodingPreservedCopy(
 
   if (decoded.isConstantMapping() || decoded.isIdentityMapping()) {
     VectorPtr result;
-
     BaseVector::ensureWritable(rows, vector_->type(), vector_->pool(), result);
-    result->resize(vectorSize);
+    if (result->typeKind() == TypeKind::ROW) {
+      // Avoid calling resize on all children by adding top level nulls only.
+      // We know from the check above that result is unique and isNullsWritable.
+      result->asUnchecked<RowVector>()->appendNulls(
+          vectorSize - result->size());
+    } else {
+      result->resize(vectorSize);
+    }
     result->copy(vector_.get(), rows, nullptr);
     return result;
   }
@@ -1019,6 +1029,27 @@ const std::vector<TypePtr> defaultScalarTypes() {
 
 TypePtr randType(FuzzerGenerator& rng, int maxDepth) {
   return randType(rng, defaultScalarTypes(), maxDepth);
+}
+
+TypePtr randOrderableType(FuzzerGenerator& rng, int maxDepth) {
+  // Should we generate a scalar type?
+  if (maxDepth <= 1 || rand<bool>(rng)) {
+    return randType(rng, 0);
+  }
+
+  // ARRAY or ROW?
+  if (rand<bool>(rng)) {
+    return ARRAY(randOrderableType(rng, maxDepth - 1));
+  }
+
+  auto numFields = 1 + rand<uint32_t>(rng) % 7;
+  std::vector<std::string> names;
+  std::vector<TypePtr> fields;
+  for (int i = 0; i < numFields; ++i) {
+    names.push_back(fmt::format("f{}", i));
+    fields.push_back(randOrderableType(rng, maxDepth - 1));
+  }
+  return ROW(std::move(names), std::move(fields));
 }
 
 TypePtr randType(
