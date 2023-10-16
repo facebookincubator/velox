@@ -17,6 +17,7 @@
 #pragma once
 
 #include "velox/common/memory/AllocationPool.h"
+#include "velox/dwio/common/Options.h"
 #include "velox/dwio/common/SeekableInputStream.h"
 #include "velox/dwio/common/StreamIdentifier.h"
 
@@ -35,7 +36,8 @@ class BufferedInput {
       const MetricsLogPtr& metricsLog = MetricsLog::voidLog(),
       IoStatistics* FOLLY_NULLABLE stats = nullptr,
       uint64_t maxMergeDistance = kMaxMergeDistance,
-      std::optional<bool> wsVRLoad = std::nullopt)
+      std::optional<bool> wsVRLoad = std::nullopt,
+      const io::ReaderOptions* options = nullptr)
       : input_{std::make_shared<ReadFileInputStream>(
             std::move(readFile),
             metricsLog,
@@ -43,17 +45,22 @@ class BufferedInput {
         pool_{pool},
         maxMergeDistance_{maxMergeDistance},
         wsVRLoad_{wsVRLoad},
+        loadQuantum_(options ? options->loadQuantum() : 0),
+        options_(options),
         allocPool_{std::make_unique<memory::AllocationPool>(&pool)} {}
 
   BufferedInput(
       std::shared_ptr<ReadFileInputStream> input,
       memory::MemoryPool& pool,
       uint64_t maxMergeDistance = kMaxMergeDistance,
-      std::optional<bool> wsVRLoad = std::nullopt)
+      std::optional<bool> wsVRLoad = std::nullopt,
+      const io::ReaderOptions* options = nullptr)
       : input_(std::move(input)),
         pool_(pool),
         maxMergeDistance_{maxMergeDistance},
         wsVRLoad_{wsVRLoad},
+        loadQuantum_(options ? options->loadQuantum() : 0),
+        options_(options),
         allocPool_{std::make_unique<memory::AllocationPool>(&pool)} {}
 
   BufferedInput(BufferedInput&&) = default;
@@ -67,11 +74,11 @@ class BufferedInput {
     return input_->getName();
   }
 
-  // The previous API was taking a vector of regions
-  // Now we allow callers to enqueue region any time/place
-  // and we do final load into buffer in 2 steps (enqueue....load)
-  // 'si' allows tracking which streams actually get read. This may control
-  // read-ahead and caching for BufferedInput implementations supporting
+  // The previous API was taking a vector of regions Now we allow
+  // callers to enqueue region any time/place and we do final load
+  // into buffer in 2 steps (enqueue....load) 'si' allows tracking
+  // which streams actually get read. This may control read-ahead and
+  // caching for BufferedInput implementations supporting
   // these.
   virtual std::unique_ptr<SeekableInputStream> enqueue(
       velox::common::Region region,
@@ -119,7 +126,8 @@ class BufferedInput {
   // Create a new (clean) instance of BufferedInput sharing the same
   // underlying file and memory pool.  The enqueued regions are NOT copied.
   virtual std::unique_ptr<BufferedInput> clone() const {
-    return std::make_unique<BufferedInput>(input_, pool_);
+    return std::make_unique<BufferedInput>(
+        input_, pool_, maxMergeDistance_, wsVRLoad_, options_);
   }
 
   std::unique_ptr<SeekableInputStream> loadCompleteFile() {
@@ -152,6 +160,8 @@ class BufferedInput {
  private:
   uint64_t maxMergeDistance_;
   std::optional<bool> wsVRLoad_;
+  const int32_t loadQuantum_;
+  const io::ReaderOptions* options_;
   std::unique_ptr<memory::AllocationPool> allocPool_;
 
   // Regions enqueued for reading

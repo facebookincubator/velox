@@ -60,16 +60,7 @@ void BufferedInput::load(const LogType logType) {
   } else {
     for (const auto& region : regions_) {
       auto allocated = allocate(region);
-      uint64_t usec = 0;
-      {
-        MicrosecondTimer timer(&usec);
-        input_->read(
-            allocated.data(), allocated.size(), region.offset, logType);
-      }
-      if (auto* stats = input_->getStats()) {
-        stats->read().increment(region.length);
-        stats->queryThreadIoLatency().increment(usec);
-      }
+      input_->read(allocated.data(), allocated.size(), region.offset, logType);
     }
   }
 
@@ -89,6 +80,16 @@ std::unique_ptr<SeekableInputStream> BufferedInput::enqueue(
   auto ret = readBuffer(region.offset, region.length);
   if (ret) {
     return ret;
+  }
+
+  if (loadQuantum_ && region.length > loadQuantum_ * 1.5) {
+    return std::make_unique<SeekableFileInputStream>(
+        input_,
+        region.offset,
+        region.length,
+        pool_,
+        dwio::common::LogType::FILE,
+        loadQuantum_);
   }
 
   // push to region pool and give the caller the callback
