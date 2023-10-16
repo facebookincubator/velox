@@ -20,6 +20,7 @@
 #include "velox/connectors/hive/storage_adapters/abfs/AbfsUtil.h"
 #include "velox/core/Config.h"
 
+#include <azure/storage/blobs/blob_client.hpp>
 #include <fmt/format.h>
 #include <folly/executors/IOThreadPoolExecutor.h>
 #include <glog/logging.h>
@@ -74,8 +75,14 @@ std::string AbfsFileSystem::name() const {
 std::unique_ptr<ReadFile> AbfsFileSystem::openFileForRead(
     std::string_view path,
     const FileOptions& /*unused*/) {
-  auto abfsfile = std::make_unique<AbfsReadFile>(
-      std::string(path), impl_->connectionString(std::string(path)));
+  auto abfsAccount = AbfsAccount(std::string(path));
+  auto client =
+      std::make_unique<BlobClient>(BlobClient::CreateFromConnectionString(
+          impl_->connectionString(std::string(path)),
+          abfsAccount.fileSystem(),
+          abfsAccount.filePath()));
+  auto abfsfile =
+      std::make_unique<AbfsReadFile>(abfsAccount, std::move(client));
   abfsfile->initialize();
   return abfsfile;
 }

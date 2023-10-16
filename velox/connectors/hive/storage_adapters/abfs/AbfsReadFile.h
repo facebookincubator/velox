@@ -14,10 +14,14 @@
  * limitations under the License.
  */
 
-#include <azure/storage/blobs/blob_client.hpp>
 #include <folly/executors/ThreadedExecutor.h>
 #include <folly/futures/Future.h>
 #include "velox/common/file/File.h"
+#include "velox/connectors/hive/storage_adapters/abfs/AbfsUtil.h"
+
+namespace Azure::Storage::Blobs {
+class BlobClient;
+}
 
 namespace facebook::velox::filesystems::abfs {
 using namespace Azure::Storage::Blobs;
@@ -26,7 +30,9 @@ class AbfsReadFile final : public ReadFile {
   constexpr static uint64_t kNaturalReadSize = 4 << 20; // 4M
   constexpr static uint64_t kReadConcurrency = 8;
 
-  explicit AbfsReadFile(const std::string& path, const std::string& connectStr);
+  explicit AbfsReadFile(
+      const AbfsAccount& abfsAccount,
+      std::unique_ptr<BlobClient> client);
 
   void initialize();
 
@@ -58,10 +64,7 @@ class AbfsReadFile final : public ReadFile {
  private:
   void preadInternal(uint64_t offset, uint64_t length, char* pos) const;
 
-  const std::string path_;
-  const std::string connectStr_;
-  std::string fileSystem_;
-  std::string fileName_;
+  const AbfsAccount abfsAccount_;
   std::unique_ptr<BlobClient> fileClient_;
 
   int64_t length_ = -1;

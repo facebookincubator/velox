@@ -55,7 +55,6 @@ class AbfsFileSystemTest : public testing::Test {
   }
 
  public:
-  static std::atomic<bool> startThreads;
   std::shared_ptr<facebook::velox::filesystems::test::AzuriteServer>
       azuriteServer;
 
@@ -83,8 +82,6 @@ class AbfsFileSystemTest : public testing::Test {
     return tempFile;
   }
 };
-
-std::atomic<bool> AbfsFileSystemTest::startThreads = false;
 
 void readData(ReadFile* readFile) {
   ASSERT_EQ(readFile->size(), 15 + kOneMB);
@@ -143,7 +140,7 @@ TEST_F(AbfsFileSystemTest, readFile) {
 }
 
 TEST_F(AbfsFileSystemTest, multipleThreadsWithReadFile) {
-  startThreads = false;
+  std::atomic<bool> startThreads = false;
   auto hiveConfig = AbfsFileSystemTest::hiveConfig(
       {{"fs.azure.account.key.test.dfs.core.windows.net",
         azuriteServer->connectionStr()}});
@@ -155,17 +152,16 @@ TEST_F(AbfsFileSystemTest, multipleThreadsWithReadFile) {
   std::uniform_int_distribution<std::size_t> distribution(
       0, sleepTimesInMicroseconds.size() - 1);
   for (int i = 0; i < 10; i++) {
-    auto thread = std::thread(
-        [&abfs, &distribution, &generator, &sleepTimesInMicroseconds] {
-          int index = distribution(generator);
-          while (!AbfsFileSystemTest::startThreads) {
-            std::this_thread::yield();
-          }
-          std::this_thread::sleep_for(
-              std::chrono::microseconds(sleepTimesInMicroseconds[index]));
-          auto readFile = abfs->openFileForRead(fullFilePath);
-          readData(readFile.get());
-        });
+    auto thread = std::thread([&] {
+      int index = distribution(generator);
+      while (!startThreads) {
+        std::this_thread::yield();
+      }
+      std::this_thread::sleep_for(
+          std::chrono::microseconds(sleepTimesInMicroseconds[index]));
+      auto readFile = abfs->openFileForRead(fullFilePath);
+      readData(readFile.get());
+    });
     threads.emplace_back(std::move(thread));
   }
   startThreads = true;

@@ -17,23 +17,16 @@
 #include "velox/connectors/hive/storage_adapters/abfs/AbfsReadFile.h"
 #include "velox/connectors/hive/storage_adapters/abfs/AbfsUtil.h"
 
+#include <azure/storage/blobs/blob_client.hpp>
 #include <fmt/format.h>
 #include <folly/synchronization/CallOnce.h>
 #include <glog/logging.h>
 
 namespace facebook::velox::filesystems::abfs {
-
 AbfsReadFile::AbfsReadFile(
-    const std::string& path,
-    const std::string& connectStr)
-    : path_(path), connectStr_(connectStr) {
-  auto abfsAccount = AbfsAccount(path_);
-  fileSystem_ = abfsAccount.fileSystem();
-  fileName_ = abfsAccount.filePath();
-  fileClient_ =
-      std::make_unique<BlobClient>(BlobClient::CreateFromConnectionString(
-          connectStr_, fileSystem_, fileName_));
-}
+    const AbfsAccount& abfsAccount,
+    std::unique_ptr<BlobClient> client)
+    : abfsAccount_(abfsAccount), fileClient_(std::move(client)) {}
 
 // Gets the length of the file.
 // Checks if there are any issues reading the file.
@@ -46,7 +39,8 @@ void AbfsReadFile::initialize() {
     auto properties = fileClient_->GetProperties();
     length_ = properties.Value.BlobSize;
   } catch (Azure::Storage::StorageException& e) {
-    throwStorageExceptionWithOperationDetails("GetProperties", fileName_, e);
+    throwStorageExceptionWithOperationDetails(
+        "GetProperties", abfsAccount_.filePath(), e);
   }
 
   VELOX_CHECK_GE(length_, 0);
@@ -111,7 +105,7 @@ bool AbfsReadFile::shouldCoalesce() const {
 }
 
 std::string AbfsReadFile::getName() const {
-  return fileName_;
+  return abfsAccount_.filePath();
 }
 
 void AbfsReadFile::preadInternal(
