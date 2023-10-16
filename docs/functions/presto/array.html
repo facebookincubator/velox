@@ -485,6 +485,17 @@ Throws if the element is not present in the array. Corresponds to SQL subscript 
 </dd></dl>
 
 <dl class="py function">
+<dt class="sig sig-object py" id="remove_nulls">
+<span class="sig-name descname"><span class="pre">remove_nulls</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">x</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">array</span></span></span><a class="headerlink" href="#remove_nulls" title="Permalink to this definition">¶</a></dt>
+<dd><p>Remove null values from an array <code class="docutils literal notranslate"><span class="pre">array</span></code>:</p>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">SELECT</span> <span class="n">remove_nulls</span><span class="p">(</span><span class="n">ARRAY</span><span class="p">[</span><span class="mi">1</span><span class="p">,</span> <span class="n">NULL</span><span class="p">,</span> <span class="mi">3</span><span class="p">,</span> <span class="n">NULL</span><span class="p">]);</span> <span class="o">--</span> <span class="p">[</span><span class="mi">1</span><span class="p">,</span> <span class="mi">3</span><span class="p">]</span>
+<span class="n">SELECT</span> <span class="n">remove_nulls</span><span class="p">(</span><span class="n">ARRAY</span><span class="p">[</span><span class="n">true</span><span class="p">,</span> <span class="n">false</span><span class="p">,</span> <span class="n">NULL</span><span class="p">]);</span> <span class="o">--</span> <span class="p">[</span><span class="n">true</span><span class="p">,</span> <span class="n">false</span><span class="p">]</span>
+<span class="n">SELECT</span> <span class="n">remove_nulls</span><span class="p">(</span><span class="n">ARRAY</span><span class="p">[</span><span class="n">ARRAY</span><span class="p">[</span><span class="mi">1</span><span class="p">,</span> <span class="mi">2</span><span class="p">],</span> <span class="n">NULL</span><span class="p">,</span> <span class="n">ARRAY</span><span class="p">[</span><span class="mi">1</span><span class="p">,</span> <span class="n">NULL</span><span class="p">,</span> <span class="mi">3</span><span class="p">]]);</span> <span class="o">--</span> <span class="p">[[</span><span class="mi">1</span><span class="p">,</span> <span class="mi">2</span><span class="p">],</span> <span class="p">[</span><span class="mi">1</span><span class="p">,</span> <span class="n">null</span><span class="p">,</span> <span class="mi">3</span><span class="p">]]</span>
+</pre></div>
+</div>
+</dd></dl>
+
+<dl class="py function">
 <dt class="sig sig-object py" id="zip">
 <span class="sig-name descname"><span class="pre">zip</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">array(T)</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">array(U)</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">..)</span> <span class="pre">-&gt;</span> <span class="pre">array(row(T</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">U</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">...)</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#zip" title="Permalink to this definition">¶</a></dt>
 <dd><p>Returns the merge of the given arrays, element-wise into a single array of rows.
