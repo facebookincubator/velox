@@ -733,9 +733,11 @@ TEST_F(StringTest, conv) {
   EXPECT_EQ(conv("4", 10, 2), "100");
   EXPECT_EQ(conv("110", 2, 10), "6");
   EXPECT_EQ(conv("15", 10, 16), "F");
+  EXPECT_EQ(conv("15", 10, -16), "F");
   EXPECT_EQ(conv("big", 36, 16), "3A48");
   EXPECT_EQ(conv("-15", 10, -16), "-F");
   EXPECT_EQ(conv("-1", 10, 16), "FFFFFFFFFFFFFFFF");
+  EXPECT_EQ(conv("FFFFFFFFFFFFFFFF", 16, -10), "-1");
   EXPECT_EQ(conv("-15", 10, 16), "FFFFFFFFFFFFFFF1");
   EXPECT_EQ(conv("-10", 16, -10), "-16");
 

@@ -950,28 +950,30 @@ struct ConvFunction {
       return true;
     }
 
-    bool isOutputNegative = false;
+    int64_t signedValue;
     if (isInputNegative) {
       if (toBase < 0) {
-        toBase = -toBase;
-        isOutputNegative = true;
+        signedValue = -unsignedValue;
       } else {
         // If toBase > 0, the result is unsigned. Converts the original nagative
         // value to unsigned one.
         unsignedValue = kMaxUnsignedInt64_ - unsignedValue + 1;
+      }
+    } else {
+      if (toBase < 0) {
+        signedValue = (int64_t)unsignedValue;
       }
     }
 
     result.resize(64);
     auto resultBuffer = result.data();
     std::to_chars_result toStatus;
-    if (isOutputNegative) {
-      int64_t signedValue = -unsignedValue;
-      toStatus =
-          std::to_chars(resultBuffer, resultBuffer + 64, signedValue, toBase);
+    if (toBase < 0) {
+      toStatus = std::to_chars(
+          resultBuffer, resultBuffer + 64, signedValue, std::abs(toBase));
     } else {
-      toStatus =
-          std::to_chars(resultBuffer, resultBuffer + 64, unsignedValue, toBase);
+      toStatus = std::to_chars(
+          resultBuffer, resultBuffer + 64, unsignedValue, std::abs(toBase));
     }
 
     result.resize(toStatus.ptr - resultBuffer);
