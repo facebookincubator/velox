@@ -19,20 +19,10 @@
 #include "velox/common/file/File.h"
 #include "velox/connectors/hive/storage_adapters/abfs/AbfsUtil.h"
 
-namespace Azure::Storage::Blobs {
-class BlobClient;
-}
-
 namespace facebook::velox::filesystems::abfs {
-using namespace Azure::Storage::Blobs;
 class AbfsReadFile final : public ReadFile {
  public:
-  constexpr static uint64_t kNaturalReadSize = 4 << 20; // 4M
-  constexpr static uint64_t kReadConcurrency = 8;
-
-  explicit AbfsReadFile(
-      const AbfsAccount& abfsAccount,
-      std::unique_ptr<BlobClient> client);
+  explicit AbfsReadFile(const std::string& path, const std::string& connectStr);
 
   void initialize();
 
@@ -57,16 +47,10 @@ class AbfsReadFile final : public ReadFile {
 
   std::string getName() const final;
 
-  uint64_t getNaturalReadSize() const {
-    return kNaturalReadSize;
-  }
+  uint64_t getNaturalReadSize() const final;
 
- private:
-  void preadInternal(uint64_t offset, uint64_t length, char* pos) const;
-
-  const AbfsAccount abfsAccount_;
-  std::unique_ptr<BlobClient> fileClient_;
-
-  int64_t length_ = -1;
+ protected:
+  class Impl;
+  std::shared_ptr<Impl> impl_;
 };
 } // namespace facebook::velox::filesystems::abfs
