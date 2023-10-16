@@ -1,7 +1,7 @@
 scalar:
 
 abs : (bigint) -> bigint
-abs : (decimal(p,s)) -> decimal(p,s)
+abs : (DECIMAL(a_precision,a_scale)) -> DECIMAL(a_precision,a_scale)
 abs : (double) -> double
 abs : (integer) -> integer
 abs : (real) -> real
@@ -91,14 +91,14 @@ cardinality : (map(K,V)) -> bigint
 cauchy_cdf : (double,double,double) -> double
 cbrt : (double) -> double
 ceil : (bigint) -> bigint
-ceil : (decimal(p,s)) -> decimal(rp,0)
+ceil : (DECIMAL(a_precision,a_scale)) -> DECIMAL(r_precision,0)
 ceil : (double) -> double
 ceil : (integer) -> integer
 ceil : (real) -> real
 ceil : (smallint) -> smallint
 ceil : (tinyint) -> tinyint
 ceiling : (bigint) -> bigint
-ceiling : (decimal(p,s)) -> decimal(rp,0)
+ceiling : (DECIMAL(a_precision,a_scale)) -> DECIMAL(r_precision,0)
 ceiling : (double) -> double
 ceiling : (integer) -> integer
 ceiling : (real) -> real
@@ -190,7 +190,7 @@ find_first_index : (array(T),function(T,boolean)) -> bigint
 flatten : (array(array(E))) -> array(E)
 flatten_geometry_collections : (Geometry) -> array(Geometry)
 floor : (bigint) -> bigint
-floor : (decimal(p,s)) -> decimal(rp,0)
+floor : (DECIMAL(a_precision,a_scale)) -> DECIMAL(r_precision,0)
 floor : (double) -> double
 floor : (integer) -> integer
 floor : (real) -> real
@@ -347,7 +347,7 @@ minute : (time with time zone) -> bigint
 minute : (timestamp) -> bigint
 minute : (timestamp with time zone) -> bigint
 mod : (bigint,bigint) -> bigint
-mod : (decimal(a_precision,a_scale),decimal(b_precision,b_scale)) -> decimal(r_precision,r_scale)
+mod : (DECIMAL(a_precision,a_scale),DECIMAL(b_precision,b_scale)) -> DECIMAL(r_precision,r_scale)
 mod : (double,double) -> double
 mod : (integer,integer) -> integer
 mod : (real,real) -> real
@@ -369,7 +369,7 @@ normalize : (varchar(x),varchar(y)) -> varchar
 now : () -> timestamp with time zone
 parse_datetime : (varchar(x),varchar(y)) -> timestamp with time zone
 parse_duration : (varchar(x)) -> interval day to second
-parse_presto_data_size : (varchar(x)) -> decimal(38,0)
+parse_presto_data_size : (varchar(x)) -> DECIMAL(38,0)
 pi : () -> double
 poisson_cdf : (double,integer) -> double
 pow : (double,double) -> double
@@ -417,8 +417,8 @@ reverse : (varchar(x)) -> varchar(x)
 rgb : (bigint,bigint,bigint) -> color
 round : (bigint) -> bigint
 round : (bigint,integer) -> bigint
-round : (decimal(p,s)) -> decimal(rp,rs)
-round : (decimal(p,s),integer) -> decimal(rp,s)
+round : (DECIMAL(a_precision,a_scale)) -> DECIMAL(r_precision,r_scale)
+round : (DECIMAL(a_precision,a_scale),integer) -> DECIMAL(r_precision,a_scale)
 round : (double) -> double
 round : (double,integer) -> double
 round : (integer) -> integer
@@ -467,7 +467,7 @@ sha256 : (varbinary) -> varbinary
 sha512 : (varbinary) -> varbinary
 shuffle : (array(E)) -> array(E)
 sign : (bigint) -> bigint
-sign : (decimal(p,s)) -> decimal(1,0)
+sign : (DECIMAL(a_precision,a_scale)) -> DECIMAL(1,0)
 sign : (double) -> double
 sign : (integer) -> integer
 sign : (real) -> real
@@ -593,8 +593,8 @@ trim : (char(x),CodePoints) -> char(x)
 trim : (varchar(x)) -> varchar(x)
 trim : (varchar(x),CodePoints) -> varchar(x)
 trim_array : (array(E),bigint) -> array(E)
-truncate : (decimal(p,s),integer) -> decimal(p,s)
-truncate : (decimal(p,s)) -> decimal(rp,0)
+truncate : (DECIMAL(a_precision,a_scale),integer) -> DECIMAL(a_precision,a_scale)
+truncate : (DECIMAL(a_precision,a_scale)) -> DECIMAL(r_precision,0)
 truncate : (double) -> double
 truncate : (double,integer) -> double
 truncate : (real) -> real
@@ -690,7 +690,7 @@ approx_set : (varchar(x)) -> HyperLogLog
 approx_set : (varchar(x),double) -> HyperLogLog
 arbitrary : (T) -> T
 array_agg : (T) -> array(T)
-avg : (decimal(p,s)) -> decimal(p,s)
+avg : (DECIMAL(a_precision,a_scale)) -> DECIMAL(a_precision,a_scale)
 avg : (bigint) -> double
 avg : (double) -> double
 avg : (interval day to second) -> interval day to second
@@ -794,7 +794,7 @@ stddev_pop : (double) -> double
 stddev_samp : (bigint) -> double
 stddev_samp : (double) -> double
 sum : (bigint) -> bigint
-sum : (decimal(p,s)) -> decimal(38,s)
+sum : (DECIMAL(a_precision,a_scale)) -> DECIMAL(38,a_scale)
 sum : (double) -> double
 sum : (interval day to second) -> interval day to second
 sum : (interval year to month) -> interval year to month
