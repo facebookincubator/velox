@@ -401,7 +401,8 @@ std::vector<std::shared_ptr<exec::FunctionSignature>> signatures(
   return signatures;
 }
 
-std::vector<std::shared_ptr<exec::FunctionSignature>> internalSignatures() {
+std::vector<std::shared_ptr<exec::FunctionSignature>>
+internalCanonicalizeSignatures() {
   std::vector<std::shared_ptr<exec::FunctionSignature>> signatures = {
       // array(T) -> array(T)
       exec::FunctionSignatureBuilder()
@@ -489,12 +490,12 @@ VELOX_DECLARE_STATEFUL_VECTOR_FUNCTION(
     signatures(false),
     createDesc);
 
-// Add an internal version of array_sort for used by AggregationFuzzerTest to
-// transform or sort the results to a value that can be verified, details in
+// An internal function to canonicalize an array to allow for comparisons. Used
+// in AggregationFuzzerTest. Details in
 // https://github.com/facebookincubator/velox/issues/6999.
 VELOX_DECLARE_STATEFUL_VECTOR_FUNCTION(
-    udf_internal$array_sort,
-    internalSignatures(),
+    udf_$internal$canonicalize,
+    internalCanonicalizeSignatures(),
     createAsc);
 
 } // namespace facebook::velox::functions

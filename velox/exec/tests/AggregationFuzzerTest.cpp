@@ -40,6 +40,7 @@ DEFINE_string(
 int main(int argc, char** argv) {
   facebook::velox::aggregate::prestosql::registerAllAggregateFunctions();
   facebook::velox::functions::prestosql::registerAllScalarFunctions();
+  facebook::velox::functions::prestosql::registerInternalFunctions();
 
   ::testing::InitGoogleTest(&argc, argv);
 
@@ -80,20 +81,20 @@ int main(int argc, char** argv) {
           {"approx_percentile_partial", ""},
           {"approx_percentile_merge", ""},
           {"arbitrary", ""},
-          {"array_agg", "internal$array_sort({})"},
-          {"array_agg_partial", "internal$array_sort({})"},
-          {"array_agg_merge", "internal$array_sort({})"},
-          {"array_agg_merge_extract", "internal$array_sort({})"},
-          {"set_agg", "internal$array_sort({})"},
-          {"set_union", "internal$array_sort({})"},
-          {"map_agg", "internal$array_sort(map_keys({}))"},
-          {"map_union", "internal$array_sort(map_keys({}))"},
-          {"map_union_sum", "internal$array_sort(map_keys({}))"},
+          {"array_agg", "\"$internal$canonicalize\"({})"},
+          {"array_agg_partial", "\"$internal$canonicalize\"({})"},
+          {"array_agg_merge", "\"$internal$canonicalize\"({})"},
+          {"array_agg_merge_extract", "\"$internal$canonicalize\"({})"},
+          {"set_agg", "\"$internal$canonicalize\"({})"},
+          {"set_union", "\"$internal$canonicalize\"({})"},
+          {"map_agg", "\"$internal$canonicalize\"(map_keys({}))"},
+          {"map_union", "\"$internal$canonicalize\"(map_keys({}))"},
+          {"map_union_sum", "\"$internal$canonicalize\"(map_keys({}))"},
           {"max_by", ""},
           {"min_by", ""},
-          {"map_union_sum", "internal$array_sort(map_keys({}))"},
+          {"map_union_sum", "\"$internal$canonicalize\"(map_keys({}))"},
           {"multimap_agg",
-           "transform_values({}, (k, v) -> internal$array_sort(v))"},
+           "transform_values({}, (k, v) -> \"$internal$canonicalize\"(v))"},
           // TODO: Skip result verification of companion functions that return
           // complex types that contain floating-point fields for now, until we
           // fix

@@ -95,6 +95,11 @@ inline void registerArrayRemoveFunctions(const std::string& prefix) {
       {prefix + "array_remove"});
 }
 
+void registerInternalArrayFunctions(const std::string& prefix) {
+  VELOX_REGISTER_VECTOR_FUNCTION(
+      udf_$internal$canonicalize, "$internal$canonicalize");
+}
+
 void registerArrayFunctions(const std::string& prefix) {
   registerArrayConstructor(prefix + "array_constructor");
   VELOX_REGISTER_VECTOR_FUNCTION(udf_all_match, prefix + "all_match");
@@ -122,8 +127,6 @@ void registerArrayFunctions(const std::string& prefix) {
   VELOX_REGISTER_VECTOR_FUNCTION(udf_array_sort, prefix + "array_sort");
   VELOX_REGISTER_VECTOR_FUNCTION(
       udf_array_sort_desc, prefix + "array_sort_desc");
-  VELOX_REGISTER_VECTOR_FUNCTION(
-      udf_internal$array_sort, prefix + "internal$array_sort");
 
   exec::registerExpressionRewrite([prefix](const auto& expr) {
     return rewriteArraySortCall(prefix, expr);
