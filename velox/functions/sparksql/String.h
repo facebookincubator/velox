@@ -912,55 +912,6 @@ struct ConvFunction {
   static const int kMinBase = 2;
   static const int kMaxBase = 36;
 
-  uint64_t parseNumber(
-      const arg_type<Varchar>& input,
-      int32_t fromBase,
-      bool isNegativeInput) {
-    int startIndex = isNegativeInput ? 1 : 0;
-    std::vector<int> numberVector;
-    for (int i = startIndex; i < input.size(); i++) {
-      char c = input.data()[i];
-      int number;
-      if (std::isdigit(c)) {
-        number = c - '0';
-        // Only valid characters will be converted till the first
-        // occurence of invalid character.
-        if (number >= fromBase) {
-          break;
-        }
-        numberVector.push_back(number);
-      } else if (std::islower(c)) {
-        number = c - 'a' + 10;
-        if (number >= fromBase) {
-          break;
-        }
-        numberVector.push_back(number);
-      } else if (std::isupper(c)) {
-        number = c - 'A' + 10;
-        if (number >= fromBase) {
-          break;
-        }
-        numberVector.push_back(number);
-      } else if (c == ' ') {
-        continue;
-      } else {
-        break;
-      }
-    }
-    int base = 1;
-    uint64_t unsignedValue = 0;
-    for (int i = numberVector.size() - 1; i >= 0; i--) {
-      uint64_t originalValue = unsignedValue;
-      unsignedValue += numberVector[i] * base;
-      // Overflow case.
-      if (unsignedValue < originalValue) {
-        return kMaxUnsignedInt64_;
-      }
-      base *= fromBase;
-    }
-    return unsignedValue;
-  }
-
   FOLLY_ALWAYS_INLINE bool call(
       out_type<Varchar>& result,
       const arg_type<Varchar>& input,
@@ -977,46 +928,56 @@ struct ConvFunction {
       return false;
     }
 
-    const bool isNegativeInput = (input.data()[0] == '-');
-    uint64_t unsignedValue = parseNumber(input, fromBase, isNegativeInput);
+    // Ignore space.
+    int i = 0;
+    for (; i < input.size(); i++) {
+      if (input.data()[i] != ' ') {
+        break;
+      }
+    }
+    const bool isInputNegative = (input.data()[i] == '-');
+    // Skip negative symbol.
+    i = isInputNegative ? i + 1 : i;
+    uint64_t unsignedValue;
+    auto fromStatus = std::from_chars(
+        input.data() + i, input.data() + input.size(), unsignedValue, fromBase);
+    if (fromStatus.ec == std::errc::result_out_of_range) {
+      unsignedValue = kMaxUnsignedInt64_;
+    }
+
     if (unsignedValue == 0) {
       result.append("0");
       return true;
     }
 
-    bool hasNegativeMark = false;
-    if (isNegativeInput) {
+    bool isOutputNegative = false;
+    if (isInputNegative) {
       if (toBase < 0) {
-        hasNegativeMark = true;
+        toBase = -toBase;
+        isOutputNegative = true;
       } else {
         // If toBase > 0, the result is unsigned. Converts the original nagative
         // value to unsigned one.
         unsignedValue = kMaxUnsignedInt64_ - unsignedValue + 1;
       }
     }
-    toBase = toBase < 0 ? -toBase : toBase;
 
     result.resize(64);
-    auto resultBuffer = result.data() + 63;
-    while (unsignedValue > 0) {
-      int remainder = unsignedValue % toBase;
-      if (remainder < 10) {
-        *resultBuffer-- = (char)(remainder + (int)'0');
-      } else {
-        *resultBuffer-- = (char)(remainder - 10 + (int)'A');
-      }
-      unsignedValue = unsignedValue / toBase;
+    auto resultBuffer = result.data();
+    std::to_chars_result toStatus;
+    if (isOutputNegative) {
+      int64_t signedValue = -unsignedValue;
+      toStatus =
+          std::to_chars(resultBuffer, resultBuffer + 64, signedValue, toBase);
+    } else {
+      toStatus =
+          std::to_chars(resultBuffer, resultBuffer + 64, unsignedValue, toBase);
     }
-    if (hasNegativeMark) {
-      *resultBuffer-- = '-';
-    }
-    auto resultSize = 64 - (++resultBuffer - result.data());
-    if (resultSize == 0) {
-      return false;
-    }
-    if (resultSize < 64) {
-      std::memcpy(result.data(), resultBuffer, resultSize);
-      result.resize(resultSize);
+
+    result.resize(toStatus.ptr - resultBuffer);
+    // Converts to uppper case, consistent with Spark.
+    for (int j = 0; j < result.size(); j++) {
+      resultBuffer[j] = std::toupper(resultBuffer[j]);
     }
     return true;
   }
