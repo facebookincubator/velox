@@ -908,7 +908,9 @@ struct ConvFunction {
 
   static constexpr bool is_default_ascii_behavior = true;
 
-  const uint64_t maxUnsignedInt64_ = 0xFFFFFFFFFFFFFFFF;
+  static const uint64_t kMaxUnsignedInt64_ = 0xFFFFFFFFFFFFFFFF;
+  static const int kMinBase = 2;
+  static const int kMaxBase = 36;
 
   uint64_t parseNumber(
       const arg_type<Varchar>& input,
@@ -952,7 +954,7 @@ struct ConvFunction {
       unsignedValue += numberVector[i] * base;
       // Overflow case.
       if (unsignedValue < originalValue) {
-        return maxUnsignedInt64_;
+        return kMaxUnsignedInt64_;
       }
       base *= fromBase;
     }
@@ -970,19 +972,12 @@ struct ConvFunction {
 
     // Consistent with spark, only supports fromBase belonging to [2, 36]
     // and toBase belonging to [2, 36] or [-36, -2].
-    const int minBase = 2;
-    const int maxBase = 36;
-    if (fromBase < minBase || fromBase > maxBase ||
-        std::abs(toBase) < minBase || std::abs(toBase) > maxBase) {
+    if (fromBase < kMinBase || fromBase > kMaxBase ||
+        std::abs(toBase) < kMinBase || std::abs(toBase) > kMaxBase) {
       return false;
     }
 
-    bool isNegativeInput;
-    if (input.data()[0] == '-') {
-      isNegativeInput = true;
-    } else {
-      isNegativeInput = false;
-    }
+    const bool isNegativeInput = (input.data()[0] == '-');
     uint64_t unsignedValue = parseNumber(input, fromBase, isNegativeInput);
     if (unsignedValue == 0) {
       result.append("0");
@@ -996,34 +991,31 @@ struct ConvFunction {
       } else {
         // If toBase > 0, the result is unsigned. Converts the original nagative
         // value to unsigned one.
-        unsignedValue = maxUnsignedInt64_ - unsignedValue + 1;
+        unsignedValue = kMaxUnsignedInt64_ - unsignedValue + 1;
       }
     }
     toBase = toBase < 0 ? -toBase : toBase;
 
     result.resize(64);
-    auto resultBuffer = result.data();
-    int i = 63;
+    auto resultBuffer = result.data() + 63;
     while (unsignedValue > 0) {
       int remainder = unsignedValue % toBase;
       if (remainder < 10) {
-        resultBuffer[i] = (char)(remainder + (int)'0');
+        *resultBuffer-- = (char)(remainder + (int)'0');
       } else {
-        resultBuffer[i] = (char)(remainder - 10 + (int)'A');
+        *resultBuffer-- = (char)(remainder - 10 + (int)'A');
       }
-      i--;
       unsignedValue = unsignedValue / toBase;
     }
     if (hasNegativeMark) {
-      resultBuffer[i] = '-';
-      i--;
+      *resultBuffer-- = '-';
     }
-    auto resultSize = 64 - i - 1;
+    auto resultSize = 64 - (++resultBuffer - result.data());
     if (resultSize == 0) {
       return false;
     }
     if (resultSize < 64) {
-      std::memcpy(result.data(), result.data() + i + 1, resultSize);
+      std::memcpy(result.data(), resultBuffer, resultSize);
       result.resize(resultSize);
     }
     return true;

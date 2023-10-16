@@ -23,13 +23,20 @@ Unless specified otherwise, all functions return NULL if at least one of the arg
         SELECT contains('Spark SQL', null); -- NULL
         SELECT contains(x'537061726b2053514c', x'537061726b'); -- true
 
-.. spark:function:: conv(num, fromBase, toBase) -> string
+.. spark:function:: conv(number, fromBase, toBase) -> varchar
 
-    Converts ``num`` represented in string from one base to another. Only supports ``fromBase``
-    belonging to [2, 36] and ``toBase`` belonging to [2, 36] or [-36, -2].
+    Converts ``number`` represented as a string from ``fromBase`` to ``toBase``.
+    ``fromBase`` must be a value between 2 and 36. ``toBase`` must be a a value between 2
+    and 36 or between -36 and -2. Negative ``toBase`` means output will be a signed number
+    and positive ``toBase`` means it will be unsigned.
+    If ``number`` is empty or given base is invalid, returns NULL.
+    Only converts valid characters till the first occurence of illegal character. If the
+    start is illegal, just returns "0". ::
 
-        SELECT conv('100', 2, 10); -- 4
-        SELECT conv('-10', 16, -10); -- -16
+        SELECT conv('100', 2, 10); -- '4'
+        SELECT conv('-10', 16, -10); -- -'16'
+        SELECT conv('H1F', 16, 10); -- '0'
+        SELECT conv("-1", 10, 16); -- 'FFFFFFFFFFFFFFFF'
 
 .. spark:function:: endswith(left, right) -> boolean
 
