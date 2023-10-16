@@ -16,8 +16,8 @@
 #pragma once
 #include <string>
 
-namespace facebook::velox::exec {
+namespace facebook::velox::exec::window {
 
 void registerAggregateWindowFunction(const std::string& name);
 
-} // namespace facebook::velox::exec
+} // namespace facebook::velox::exec::window

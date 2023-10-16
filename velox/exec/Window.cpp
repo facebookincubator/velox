@@ -15,9 +15,9 @@
  */
 #include "velox/exec/Window.h"
 #include "velox/exec/OperatorUtils.h"
-#include "velox/exec/SortWindowBuild.h"
-#include "velox/exec/StreamingWindowBuild.h"
 #include "velox/exec/Task.h"
+#include "velox/exec/window/SortWindowBuild.h"
+#include "velox/exec/window/StreamingWindowBuild.h"
 
 namespace facebook::velox::exec {
 
@@ -36,9 +36,11 @@ Window::Window(
       currentPartition_(nullptr),
       stringAllocator_(pool()) {
   if (windowNode->inputsSorted()) {
-    windowBuild_ = std::make_unique<StreamingWindowBuild>(windowNode, pool());
+    windowBuild_ =
+        std::make_unique<window::StreamingWindowBuild>(windowNode, pool());
   } else {
-    windowBuild_ = std::make_unique<SortWindowBuild>(windowNode, pool());
+    windowBuild_ =
+        std::make_unique<window::SortWindowBuild>(windowNode, pool());
   }
 }
 
@@ -108,7 +110,7 @@ void Window::createWindowFunctions() {
 
   const auto& inputType = windowNode_->sources()[0]->outputType();
   for (const auto& windowNodeFunction : windowNode_->windowFunctions()) {
-    std::vector<WindowFunctionArg> functionArgs;
+    std::vector<window::WindowFunctionArg> functionArgs;
     functionArgs.reserve(windowNodeFunction.functionCall->inputs().size());
     for (auto& arg : windowNodeFunction.functionCall->inputs()) {
       auto channel = exprToChannel(arg.get(), inputType);
@@ -122,7 +124,7 @@ void Window::createWindowFunctions() {
       }
     }
 
-    windowFunctions_.push_back(WindowFunction::create(
+    windowFunctions_.push_back(window::WindowFunction::create(
         windowNodeFunction.functionCall->name(),
         functionArgs,
         windowNodeFunction.functionCall->type(),

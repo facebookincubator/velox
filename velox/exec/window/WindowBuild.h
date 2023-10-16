@@ -16,9 +16,9 @@
 #pragma once
 
 #include "velox/exec/RowContainer.h"
-#include "velox/exec/WindowPartition.h"
+#include "velox/exec/window/WindowPartition.h"
 
-namespace facebook::velox::exec {
+namespace facebook::velox::exec::window {
 
 // The Window operator needs to see all input rows, and separate them into
 // partitions based on a partitioning key. There are many approaches to do
@@ -98,4 +98,4 @@ class WindowBuild {
   vector_size_t numRows_ = 0;
 };
 
-} // namespace facebook::velox::exec
+} // namespace facebook::velox::exec::window

@@ -16,9 +16,9 @@
 
 #pragma once
 
-#include "velox/exec/WindowBuild.h"
+#include "velox/exec/window/WindowBuild.h"
 
-namespace facebook::velox::exec {
+namespace facebook::velox::exec::window {
 
 /// The StreamingWindowBuild is used when the input data is already sorted by
 /// {partition keys + order by keys}. The logic identifies partition changes
@@ -69,4 +69,4 @@ class StreamingWindowBuild : public WindowBuild {
   vector_size_t currentPartition_ = -1;
 };
 
-} // namespace facebook::velox::exec
+} // namespace facebook::velox::exec::window

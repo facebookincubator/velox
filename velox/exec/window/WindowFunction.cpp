@@ -14,10 +14,10 @@
  * limitations under the License.
  */
 
-#include "velox/exec/WindowFunction.h"
+#include "velox/exec/window/WindowFunction.h"
 #include "velox/expression/FunctionSignature.h"
 
-namespace facebook::velox::exec {
+namespace facebook::velox::exec::window {
 
 WindowFunctionMap& windowFunctions() {
   static WindowFunctionMap functions;
@@ -87,4 +87,4 @@ void WindowFunction::setNullEmptyFramesResults(
       [&](auto i) { result->setNull(resultOffset + i, true); });
 }
 
-} // namespace facebook::velox::exec
+} // namespace facebook::velox::exec::window

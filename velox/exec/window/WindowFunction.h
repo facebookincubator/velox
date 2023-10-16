@@ -16,11 +16,11 @@
 #pragma once
 
 #include "velox/core/QueryConfig.h"
-#include "velox/exec/WindowPartition.h"
+#include "velox/exec/window/WindowPartition.h"
 #include "velox/expression/FunctionSignature.h"
 #include "velox/vector/BaseVector.h"
 
-namespace facebook::velox::exec {
+namespace facebook::velox::exec::window {
 
 // Represents arguments for window functions. Stores argument type,
 // the constant value(if it is one) or the column index in the input row
@@ -161,4 +161,4 @@ using WindowFunctionMap = std::unordered_map<std::string, WindowFunctionEntry>;
 
 /// Returns a map of all window function names to their registrations.
 WindowFunctionMap& windowFunctions();
-} // namespace facebook::velox::exec
+} // namespace facebook::velox::exec::window

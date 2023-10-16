@@ -17,9 +17,9 @@
 
 #include "velox/exec/Operator.h"
 #include "velox/exec/RowContainer.h"
-#include "velox/exec/WindowBuild.h"
-#include "velox/exec/WindowFunction.h"
-#include "velox/exec/WindowPartition.h"
+#include "velox/exec/window/WindowBuild.h"
+#include "velox/exec/window/WindowFunction.h"
+#include "velox/exec/window/WindowPartition.h"
 
 namespace facebook::velox::exec {
 
@@ -153,7 +153,7 @@ class Window : public Operator {
 
   // WindowBuild is used to store input rows and return WindowPartitions
   // for the processing.
-  std::unique_ptr<WindowBuild> windowBuild_;
+  std::unique_ptr<window::WindowBuild> windowBuild_;
 
   // The cached window plan node used for window function initialization. It is
   // reset after the initialization.
@@ -161,7 +161,7 @@ class Window : public Operator {
 
   // Used to access window partition rows and columns by the window
   // operator and functions. This structure is owned by the WindowBuild.
-  std::unique_ptr<WindowPartition> currentPartition_;
+  std::unique_ptr<window::WindowPartition> currentPartition_;
 
   // HashStringAllocator required by functions that allocate out of line
   // buffers.
@@ -170,7 +170,7 @@ class Window : public Operator {
   // Vector of WindowFunction objects required by this operator.
   // WindowFunction is the base API implemented by all the window functions.
   // The functions are ordered by their positions in the output columns.
-  std::vector<std::unique_ptr<exec::WindowFunction>> windowFunctions_;
+  std::vector<std::unique_ptr<exec::window::WindowFunction>> windowFunctions_;
   // Vector of WindowFrames corresponding to each windowFunction above.
   // It represents the frame spec for the function computation.
   std::vector<WindowFrame> windowFrames_;

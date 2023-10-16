@@ -15,7 +15,7 @@
  */
 #include "velox/exec/tests/utils/PlanBuilder.h"
 #include "velox/common/base/tests/GTestUtils.h"
-#include "velox/exec/WindowFunction.h"
+#include "velox/exec/window/WindowFunction.h"
 #include "velox/functions/prestosql/aggregates/RegisterAggregateFunctions.h"
 #include "velox/functions/prestosql/registration/RegistrationFunctions.h"
 #include "velox/parse/TypeResolver.h"
@@ -85,7 +85,8 @@ void registerWindowFunction() {
           .returnType("BIGINT")
           .build(),
   };
-  exec::registerWindowFunction("window1", std::move(signatures), nullptr);
+  exec::window::registerWindowFunction(
+      "window1", std::move(signatures), nullptr);
 }
 } // namespace
 

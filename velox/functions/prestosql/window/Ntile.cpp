@@ -15,7 +15,7 @@
  */
 
 #include "velox/common/base/Exceptions.h"
-#include "velox/exec/WindowFunction.h"
+#include "velox/exec/window/WindowFunction.h"
 #include "velox/expression/FunctionSignature.h"
 #include "velox/vector/FlatVector.h"
 
@@ -23,10 +23,10 @@ namespace facebook::velox::window::prestosql {
 
 namespace {
 
-class NtileFunction : public exec::WindowFunction {
+class NtileFunction : public exec::window::WindowFunction {
  public:
   explicit NtileFunction(
-      const std::vector<exec::WindowFunctionArg>& args,
+      const std::vector<exec::window::WindowFunctionArg>& args,
       velox::memory::MemoryPool* pool)
       : WindowFunction(BIGINT(), pool, nullptr) {
     if (args[0].constantValue) {
@@ -45,7 +45,7 @@ class NtileFunction : public exec::WindowFunction {
     bucketFlatVector_ = bucketVector_->asFlatVector<int64_t>();
   }
 
-  void resetPartition(const exec::WindowPartition* partition) override {
+  void resetPartition(const exec::window::WindowPartition* partition) override {
     partition_ = partition;
     partitionOffset_ = 0;
     numPartitionRows_ = partition->numRows();
@@ -208,7 +208,7 @@ class NtileFunction : public exec::WindowFunction {
   BucketMetrics fixedBucketMetrics_;
 
   // Current WindowPartition used for accessing rows in the apply method.
-  const exec::WindowPartition* partition_;
+  const exec::window::WindowPartition* partition_;
   int64_t numPartitionRows_ = 0;
 
   // Denotes how far along the partition rows are output already.
@@ -235,17 +235,17 @@ void registerNtile(const std::string& name) {
           .build(),
   };
 
-  exec::registerWindowFunction(
+  exec::window::registerWindowFunction(
       name,
       std::move(signatures),
       [name](
-          const std::vector<exec::WindowFunctionArg>& args,
+          const std::vector<exec::window::WindowFunctionArg>& args,
           const TypePtr& /*resultType*/,
           bool /*ignoreNulls*/,
           velox::memory::MemoryPool* pool,
           HashStringAllocator* /*stringAllocator*/,
           const core::QueryConfig& /*queryConfig*/)
-          -> std::unique_ptr<exec::WindowFunction> {
+          -> std::unique_ptr<exec::window::WindowFunction> {
         return std::make_unique<NtileFunction>(args, pool);
       });
 }

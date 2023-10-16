@@ -15,7 +15,7 @@
  */
 #include <gtest/gtest.h>
 
-#include "velox/exec/WindowFunction.h"
+#include "velox/exec/window/WindowFunction.h"
 #include "velox/expression/SignatureBinder.h"
 #include "velox/type/Type.h"
 
@@ -37,7 +37,7 @@ void registerWindowFunction(const std::string& name) {
           .build(),
       exec::FunctionSignatureBuilder().returnType("date").build(),
   };
-  exec::registerWindowFunction(name, std::move(signatures), nullptr);
+  exec::window::registerWindowFunction(name, std::move(signatures), nullptr);
 }
 } // namespace
 
@@ -51,7 +51,8 @@ class WindowFunctionRegistryTest : public testing::Test {
   TypePtr resolveWindowFunction(
       const std::string& name,
       const std::vector<TypePtr>& argTypes) {
-    if (auto windowFunctionSignatures = getWindowFunctionSignatures(name)) {
+    if (auto windowFunctionSignatures =
+            window::getWindowFunctionSignatures(name)) {
       for (const auto& signature : windowFunctionSignatures.value()) {
         SignatureBinder binder(*signature, argTypes);
         if (binder.tryBind()) {

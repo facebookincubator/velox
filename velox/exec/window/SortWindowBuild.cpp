@@ -14,9 +14,9 @@
  * limitations under the License.
  */
 
-#include "velox/exec/SortWindowBuild.h"
+#include "velox/exec/window/SortWindowBuild.h"
 
-namespace facebook::velox::exec {
+namespace facebook::velox::exec::window {
 
 SortWindowBuild::SortWindowBuild(
     const std::shared_ptr<const core::WindowNode>& windowNode,
@@ -128,4 +128,4 @@ bool SortWindowBuild::hasNextPartition() {
       currentPartition_ < int(partitionStartRows_.size() - 2);
 }
 
-} // namespace facebook::velox::exec
+} // namespace facebook::velox::exec::window

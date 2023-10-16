@@ -15,7 +15,7 @@
  */
 
 #include "velox/common/base/Exceptions.h"
-#include "velox/exec/WindowFunction.h"
+#include "velox/exec/window/WindowFunction.h"
 #include "velox/expression/FunctionSignature.h"
 #include "velox/vector/FlatVector.h"
 
@@ -29,10 +29,10 @@ enum class ValueType {
 };
 
 template <ValueType TValue>
-class FirstLastValueFunction : public exec::WindowFunction {
+class FirstLastValueFunction : public exec::window::WindowFunction {
  public:
   explicit FirstLastValueFunction(
-      const std::vector<exec::WindowFunctionArg>& args,
+      const std::vector<exec::window::WindowFunctionArg>& args,
       const TypePtr& resultType,
       bool ignoreNulls,
       velox::memory::MemoryPool* pool)
@@ -43,7 +43,7 @@ class FirstLastValueFunction : public exec::WindowFunction {
     nulls_ = allocateNulls(0, pool_);
   }
 
-  void resetPartition(const exec::WindowPartition* partition) override {
+  void resetPartition(const exec::window::WindowPartition* partition) override {
     partition_ = partition;
   }
 
@@ -142,7 +142,7 @@ class FirstLastValueFunction : public exec::WindowFunction {
   // vector. This is used to retrieve column values from the partition data.
   column_index_t valueIndex_;
 
-  const exec::WindowPartition* partition_;
+  const exec::window::WindowPartition* partition_;
 
   // The first_value, last_value functions directly write from the input column
   // to the resultVector using the extractColumn API specifying the rowNumber
@@ -170,16 +170,16 @@ void registerFirstLastInternal(const std::string& name) {
           .build(),
   };
 
-  exec::registerWindowFunction(
+  exec::window::registerWindowFunction(
       name,
       std::move(signatures),
-      [](const std::vector<exec::WindowFunctionArg>& args,
+      [](const std::vector<exec::window::WindowFunctionArg>& args,
          const TypePtr& resultType,
          bool ignoreNulls,
          velox::memory::MemoryPool* pool,
          HashStringAllocator* /*stringAllocator*/,
          const velox::core::QueryConfig& /*queryConfig*/)
-          -> std::unique_ptr<exec::WindowFunction> {
+          -> std::unique_ptr<exec::window::WindowFunction> {
         return std::make_unique<FirstLastValueFunction<TValue>>(
             args, resultType, ignoreNulls, pool);
       });

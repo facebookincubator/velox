@@ -16,6 +16,7 @@ set(CMAKE_WINDOW_TEST_LINK_LIBRARIES
     velox_core
     velox_exec
     velox_exec_test_lib
+    velox_exec_window
     velox_functions_window_test_lib
     velox_vector_fuzzer
     velox_vector_test_lib

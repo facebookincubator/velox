@@ -16,7 +16,7 @@
 
 #include <gtest/gtest.h>
 
-#include "velox/exec/WindowFunction.h"
+#include "velox/exec/window/WindowFunction.h"
 #include "velox/functions/prestosql/window/WindowFunctionsRegistration.h"
 
 namespace facebook::velox::window::test {
@@ -25,21 +25,21 @@ class WindowFunctionRegTest : public testing::Test {};
 
 TEST_F(WindowFunctionRegTest, prefix) {
   // Remove all functions and check for no entries.
-  exec::windowFunctions().clear();
-  EXPECT_EQ(0, exec::windowFunctions().size());
+  exec::window::windowFunctions().clear();
+  EXPECT_EQ(0, exec::window::windowFunctions().size());
 
   // Register without prefix and memorize function maps.
   window::prestosql::registerAllWindowFunctions();
-  const auto windowFuncMapBase = exec::windowFunctions();
+  const auto windowFuncMapBase = exec::window::windowFunctions();
 
   // Remove all functions and check for no entries.
-  exec::windowFunctions().clear();
-  EXPECT_EQ(0, exec::windowFunctions().size());
+  exec::window::windowFunctions().clear();
+  EXPECT_EQ(0, exec::window::windowFunctions().size());
 
   // Register with prefix and check all functions have the prefix.
   const std::string prefix{"test.abc_schema."};
   window::prestosql::registerAllWindowFunctions(prefix);
-  auto& windowFuncMap = exec::windowFunctions();
+  auto& windowFuncMap = exec::window::windowFunctions();
   for (const auto& entry : windowFuncMap) {
     EXPECT_EQ(prefix, entry.first.substr(0, prefix.size()));
     EXPECT_EQ(1, windowFuncMapBase.count(entry.first.substr(prefix.size())));

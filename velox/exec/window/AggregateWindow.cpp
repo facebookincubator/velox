@@ -14,14 +14,14 @@
  * limitations under the License.
  */
 
-#include "velox/exec/AggregateWindow.h"
+#include "velox/exec/window/AggregateWindow.h"
 #include "velox/common/base/Exceptions.h"
 #include "velox/exec/Aggregate.h"
-#include "velox/exec/WindowFunction.h"
+#include "velox/exec/window/WindowFunction.h"
 #include "velox/expression/FunctionSignature.h"
 #include "velox/vector/FlatVector.h"
 
-namespace facebook::velox::exec {
+namespace facebook::velox::exec::window {
 
 namespace {
 
@@ -29,11 +29,11 @@ namespace {
 // Creates an Aggregate function object for the window function invocation.
 // At each row, computes the aggregation across all rows from the frameStart
 // to frameEnd boundaries at that row using singleGroup.
-class AggregateWindowFunction : public exec::WindowFunction {
+class AggregateWindowFunction : public exec::window::WindowFunction {
  public:
   AggregateWindowFunction(
       const std::string& name,
-      const std::vector<exec::WindowFunctionArg>& args,
+      const std::vector<exec::window::WindowFunctionArg>& args,
       const TypePtr& resultType,
       bool ignoreNulls,
       velox::memory::MemoryPool* pool,
@@ -108,7 +108,7 @@ class AggregateWindowFunction : public exec::WindowFunction {
     }
   }
 
-  void resetPartition(const exec::WindowPartition* partition) override {
+  void resetPartition(const exec::window::WindowPartition* partition) override {
     partition_ = partition;
 
     previousFrameMetadata_.reset();
@@ -350,7 +350,7 @@ class AggregateWindowFunction : public exec::WindowFunction {
   bool aggregateInitialized_{false};
 
   // Current WindowPartition used for accessing rows in the apply method.
-  const exec::WindowPartition* partition_;
+  const exec::window::WindowPartition* partition_;
 
   // Args information : their types, column indexes in inputs and vectors
   // used to populate values to pass to the aggregate function.
@@ -388,17 +388,17 @@ void registerAggregateWindowFunction(const std::string& name) {
         aggregateFunctionSignatures.value().begin(),
         aggregateFunctionSignatures.value().end());
 
-    exec::registerWindowFunction(
+    exec::window::registerWindowFunction(
         name,
         std::move(signatures),
         [name](
-            const std::vector<exec::WindowFunctionArg>& args,
+            const std::vector<exec::window::WindowFunctionArg>& args,
             const TypePtr& resultType,
             bool ignoreNulls,
             velox::memory::MemoryPool* pool,
             HashStringAllocator* stringAllocator,
             const core::QueryConfig& config)
-            -> std::unique_ptr<exec::WindowFunction> {
+            -> std::unique_ptr<exec::window::WindowFunction> {
           return std::make_unique<AggregateWindowFunction>(
               name,
               args,
@@ -410,4 +410,4 @@ void registerAggregateWindowFunction(const std::string& name) {
         });
   }
 }
-} // namespace facebook::velox::exec
+} // namespace facebook::velox::exec::window

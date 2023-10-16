@@ -15,17 +15,17 @@
  */
 
 #include "velox/common/base/Exceptions.h"
-#include "velox/exec/WindowFunction.h"
+#include "velox/exec/window/WindowFunction.h"
 
 namespace facebook::velox::window::prestosql {
 
 namespace {
 
 template <bool isLag>
-class LeadLagFunction : public exec::WindowFunction {
+class LeadLagFunction : public exec::window::WindowFunction {
  public:
   explicit LeadLagFunction(
-      const std::vector<exec::WindowFunctionArg>& args,
+      const std::vector<exec::window::WindowFunctionArg>& args,
       const TypePtr& resultType,
       bool ignoreNulls,
       velox::memory::MemoryPool* pool)
@@ -38,7 +38,7 @@ class LeadLagFunction : public exec::WindowFunction {
     nulls_ = allocateNulls(0, pool);
   }
 
-  void resetPartition(const exec::WindowPartition* partition) override {
+  void resetPartition(const exec::window::WindowPartition* partition) override {
     partition_ = partition;
     partitionOffset_ = 0;
     ignoreNullsForPartition_ = false;
@@ -87,7 +87,8 @@ class LeadLagFunction : public exec::WindowFunction {
   }
 
  private:
-  void initializeOffset(const std::vector<exec::WindowFunctionArg>& args) {
+  void initializeOffset(
+      const std::vector<exec::window::WindowFunctionArg>& args) {
     if (args.size() == 1) {
       constantOffset_ = 1;
       return;
@@ -110,7 +111,7 @@ class LeadLagFunction : public exec::WindowFunction {
   }
 
   void initializeDefaultValue(
-      const std::vector<exec::WindowFunctionArg>& args) {
+      const std::vector<exec::window::WindowFunctionArg>& args) {
     if (args.size() <= 2) {
       return;
     }
@@ -276,7 +277,7 @@ class LeadLagFunction : public exec::WindowFunction {
   // Constant 'default_value' or null if default value is not constant.
   VectorPtr constantDefaultValue_;
 
-  const exec::WindowPartition* partition_;
+  const exec::window::WindowPartition* partition_;
 
   // Reusable vector of offsets if these are not constant.
   FlatVectorPtr<int64_t> offsets_;
@@ -390,34 +391,34 @@ std::vector<exec::FunctionSignaturePtr> signatures() {
 } // namespace
 
 void registerLag(const std::string& name) {
-  exec::registerWindowFunction(
+  exec::window::registerWindowFunction(
       name,
       signatures(),
       [name](
-          const std::vector<exec::WindowFunctionArg>& args,
+          const std::vector<exec::window::WindowFunctionArg>& args,
           const TypePtr& resultType,
           bool ignoreNulls,
           velox::memory::MemoryPool* pool,
           HashStringAllocator* /*stringAllocator*/,
           const velox::core::QueryConfig& /*queryConfig*/)
-          -> std::unique_ptr<exec::WindowFunction> {
+          -> std::unique_ptr<exec::window::WindowFunction> {
         return std::make_unique<LeadLagFunction<true>>(
             args, resultType, ignoreNulls, pool);
       });
 }
 
 void registerLead(const std::string& name) {
-  exec::registerWindowFunction(
+  exec::window::registerWindowFunction(
       name,
       signatures(),
       [name](
-          const std::vector<exec::WindowFunctionArg>& args,
+          const std::vector<exec::window::WindowFunctionArg>& args,
           const TypePtr& resultType,
           bool ignoreNulls,
           velox::memory::MemoryPool* pool,
           HashStringAllocator* /*stringAllocator*/,
           const velox::core::QueryConfig& /*queryConfig*/)
-          -> std::unique_ptr<exec::WindowFunction> {
+          -> std::unique_ptr<exec::window::WindowFunction> {
         return std::make_unique<LeadLagFunction<false>>(
             args, resultType, ignoreNulls, pool);
       });

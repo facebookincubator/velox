@@ -15,7 +15,7 @@
  */
 
 #include "velox/common/base/Exceptions.h"
-#include "velox/exec/WindowFunction.h"
+#include "velox/exec/window/WindowFunction.h"
 #include "velox/expression/FunctionSignature.h"
 #include "velox/vector/FlatVector.h"
 
@@ -31,12 +31,12 @@ enum class RankType {
 namespace {
 
 template <RankType TRank, typename TResult>
-class RankFunction : public exec::WindowFunction {
+class RankFunction : public exec::window::WindowFunction {
  public:
   explicit RankFunction(const TypePtr& resultType)
       : WindowFunction(resultType, nullptr, nullptr) {}
 
-  void resetPartition(const exec::WindowPartition* partition) override {
+  void resetPartition(const exec::window::WindowPartition* partition) override {
     rank_ = 1;
     currentPeerGroupStart_ = 0;
     previousPeerCount_ = 0;
@@ -97,17 +97,17 @@ void registerRankInternal(
       exec::FunctionSignatureBuilder().returnType(returnType).build(),
   };
 
-  exec::registerWindowFunction(
+  exec::window::registerWindowFunction(
       name,
       std::move(signatures),
       [name](
-          const std::vector<exec::WindowFunctionArg>& /*args*/,
+          const std::vector<exec::window::WindowFunctionArg>& /*args*/,
           const TypePtr& resultType,
           bool /*ignoreNulls*/,
           velox::memory::MemoryPool* /*pool*/,
           HashStringAllocator* /*stringAllocator*/,
           const core::QueryConfig& /*queryConfig*/)
-          -> std::unique_ptr<exec::WindowFunction> {
+          -> std::unique_ptr<exec::window::WindowFunction> {
         return std::make_unique<RankFunction<TRank, TResult>>(resultType);
       });
 }

@@ -15,17 +15,17 @@
  */
 
 #include "velox/common/base/Exceptions.h"
-#include "velox/exec/WindowFunction.h"
+#include "velox/exec/window/WindowFunction.h"
 #include "velox/expression/FunctionSignature.h"
 #include "velox/vector/FlatVector.h"
 
 namespace facebook::velox::functions::window {
 
 namespace {
-class NthValueFunction : public exec::WindowFunction {
+class NthValueFunction : public exec::window::WindowFunction {
  public:
   explicit NthValueFunction(
-      const std::vector<exec::WindowFunctionArg>& args,
+      const std::vector<exec::window::WindowFunctionArg>& args,
       const TypePtr& resultType,
       bool ignoreNulls,
       velox::memory::MemoryPool* pool)
@@ -67,7 +67,7 @@ class NthValueFunction : public exec::WindowFunction {
     nulls_ = allocateNulls(0, pool);
   }
 
-  void resetPartition(const exec::WindowPartition* partition) override {
+  void resetPartition(const exec::window::WindowPartition* partition) override {
     partition_ = partition;
     partitionOffset_ = 0;
   }
@@ -263,7 +263,7 @@ class NthValueFunction : public exec::WindowFunction {
   column_index_t valueIndex_;
   column_index_t offsetIndex_;
 
-  const exec::WindowPartition* partition_;
+  const exec::window::WindowPartition* partition_;
 
   // These fields are set if the offset argument is a constant value.
   std::optional<int64_t> constantOffset_;
@@ -302,17 +302,17 @@ void registerNthValue(const std::string& name, TypeKind offsetTypeKind) {
           .build(),
   };
 
-  exec::registerWindowFunction(
+  exec::window::registerWindowFunction(
       name,
       std::move(signatures),
       [name](
-          const std::vector<exec::WindowFunctionArg>& args,
+          const std::vector<exec::window::WindowFunctionArg>& args,
           const TypePtr& resultType,
           bool ignoreNulls,
           velox::memory::MemoryPool* pool,
           HashStringAllocator* /*stringAllocator*/,
           const core::QueryConfig& /*queryConfig*/)
-          -> std::unique_ptr<exec::WindowFunction> {
+          -> std::unique_ptr<exec::window::WindowFunction> {
         return std::make_unique<NthValueFunction>(
             args, resultType, ignoreNulls, pool);
       });

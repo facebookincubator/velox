@@ -20,7 +20,7 @@
 #include <iomanip>
 #include <iostream>
 #include "velox/exec/Aggregate.h"
-#include "velox/exec/WindowFunction.h"
+#include "velox/exec/window/WindowFunction.h"
 #include "velox/functions/FunctionRegistry.h"
 
 namespace facebook::velox::functions {
@@ -338,7 +338,7 @@ std::vector<std::string> getSortedAggregateNames() {
 /// Returns alphabetically sorted list of window functions available in Velox,
 /// excluding companion functions.
 std::vector<std::string> getSortedWindowNames() {
-  const auto& functions = exec::windowFunctions();
+  const auto& functions = exec::window::windowFunctions();
 
   std::vector<std::string> names;
   names.reserve(functions.size());
@@ -372,7 +372,7 @@ void printCoverageMap(
 
   std::unordered_set<std::string> veloxAggNames;
   std::unordered_set<std::string> veloxWindowNames;
-  const auto& veloxWindowFunctions = exec::windowFunctions();
+  const auto& veloxWindowFunctions = exec::window::windowFunctions();
 
   exec::aggregateFunctions().withRLock(
       [&](const auto& veloxAggregateFunctions) {

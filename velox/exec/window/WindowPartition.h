@@ -22,7 +22,7 @@
 /// the input rows in the Window Operator. This works completely in-memory.
 /// TODO: This implementation will be revised for Spill to disk semantics.
 
-namespace facebook::velox::exec {
+namespace facebook::velox::exec::window {
 class WindowPartition {
  public:
   /// The WindowPartition is used by the Window operator and WindowFunction
@@ -132,4 +132,4 @@ class WindowPartition {
   // ORDER BY column info for this partition.
   const std::vector<std::pair<column_index_t, core::SortOrder>> sortKeyInfo_;
 };
-} // namespace facebook::velox::exec
+} // namespace facebook::velox::exec::window

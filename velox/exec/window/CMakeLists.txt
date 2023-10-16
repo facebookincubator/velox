@@ -11,12 +11,10 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-if(${VELOX_BUILD_TESTING})
-  add_subdirectory(tests)
-endif()
+add_library(
+  velox_exec_window
+  AggregateWindow.cpp SortWindowBuild.cpp StreamingWindowBuild.cpp
+  WindowBuild.cpp WindowFunction.cpp WindowPartition.cpp)
 
-add_library(velox_window CumeDist.cpp FirstLastValue.cpp LeadLag.cpp Ntile.cpp
-                         WindowFunctionsRegistration.cpp)
-
-target_link_libraries(velox_window velox_buffer velox_exec_window
-                      velox_functions_window Folly::folly)
+target_link_libraries(velox_exec_window velox_core velox_vector
+                      velox_common_base velox_common_compression)

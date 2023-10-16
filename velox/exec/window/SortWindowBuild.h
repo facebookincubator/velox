@@ -16,9 +16,9 @@
 
 #pragma once
 
-#include "velox/exec/WindowBuild.h"
+#include "velox/exec/window/WindowBuild.h"
 
-namespace facebook::velox::exec {
+namespace facebook::velox::exec::window {
 
 // Sorts input data of the Window by {partition keys, sort keys}
 // to identify window partitions. This sort fully orders
@@ -75,4 +75,4 @@ class SortWindowBuild : public WindowBuild {
   vector_size_t currentPartition_ = -1;
 };
 
-} // namespace facebook::velox::exec
+} // namespace facebook::velox::exec::window

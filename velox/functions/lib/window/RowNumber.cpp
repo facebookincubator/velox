@@ -15,7 +15,7 @@
  */
 
 #include "velox/common/base/Exceptions.h"
-#include "velox/exec/WindowFunction.h"
+#include "velox/exec/window/WindowFunction.h"
 #include "velox/expression/FunctionSignature.h"
 #include "velox/vector/FlatVector.h"
 
@@ -23,12 +23,13 @@ namespace facebook::velox::functions::window {
 
 namespace {
 
-class RowNumberFunction : public exec::WindowFunction {
+class RowNumberFunction : public exec::window::WindowFunction {
  public:
   explicit RowNumberFunction(const TypePtr& resultType)
       : WindowFunction(resultType, nullptr, nullptr) {}
 
-  void resetPartition(const exec::WindowPartition* /*partition*/) override {
+  void resetPartition(
+      const exec::window::WindowPartition* /*partition*/) override {
     rowNumber_ = 1;
   }
 
@@ -72,17 +73,17 @@ void registerRowNumber(const std::string& name, TypeKind resultTypeKind) {
           .build(),
   };
 
-  exec::registerWindowFunction(
+  exec::window::registerWindowFunction(
       name,
       std::move(signatures),
       [name](
-          const std::vector<exec::WindowFunctionArg>& /*args*/,
+          const std::vector<exec::window::WindowFunctionArg>& /*args*/,
           const TypePtr& resultType,
           bool /*ignoreNulls*/,
           velox::memory::MemoryPool* /*pool*/,
           HashStringAllocator* /*stringAllocator*/,
           const core::QueryConfig& /*queryConfig*/)
-          -> std::unique_ptr<exec::WindowFunction> {
+          -> std::unique_ptr<exec::window::WindowFunction> {
         return std::make_unique<RowNumberFunction>(resultType);
       });
 }

@@ -11,6 +11,8 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
+add_subdirectory(window)
+
 add_library(
   velox_exec
   AddressableNonNullValueList.cpp
@@ -19,7 +21,6 @@ add_library(
   AggregateCompanionSignatures.cpp
   AggregateFunctionRegistry.cpp
   AggregationMasks.cpp
-  AggregateWindow.cpp
   ArrowStream.cpp
   ContainerRowSerde.cpp
   DistinctAggregations.cpp
@@ -61,12 +62,10 @@ add_library(
   RowNumber.cpp
   SortBuffer.cpp
   SortedAggregations.cpp
-  SortWindowBuild.cpp
   Spill.cpp
   SpillOperatorGroup.cpp
   Spiller.cpp
   StreamingAggregation.cpp
-  StreamingWindowBuild.cpp
   Strings.cpp
   TableScan.cpp
   TableWriteMerge.cpp
@@ -78,14 +77,12 @@ add_library(
   Values.cpp
   VectorHasher.cpp
   Window.cpp
-  WindowBuild.cpp
-  WindowFunction.cpp
-  WindowPartition.cpp
   AssignUniqueId.cpp
   PartitionFunction.cpp)
 
 target_link_libraries(
   velox_exec
+  velox_exec_window
   velox_file
   velox_core
   velox_vector

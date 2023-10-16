@@ -14,7 +14,6 @@
  * limitations under the License.
  */
 #include "velox/exec/PartitionFunction.h"
-#include "velox/exec/WindowFunction.h"
 #include "velox/exec/tests/utils/HiveConnectorTestBase.h"
 #include "velox/exec/tests/utils/PlanBuilder.h"
 #include "velox/functions/prestosql/aggregates/RegisterAggregateFunctions.h"

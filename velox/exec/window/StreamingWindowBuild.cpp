@@ -14,9 +14,9 @@
  * limitations under the License.
  */
 
-#include "velox/exec/StreamingWindowBuild.h"
+#include "velox/exec/window/StreamingWindowBuild.h"
 
-namespace facebook::velox::exec {
+namespace facebook::velox::exec::window {
 
 StreamingWindowBuild::StreamingWindowBuild(
     const std::shared_ptr<const core::WindowNode>& windowNode,
@@ -98,4 +98,4 @@ bool StreamingWindowBuild::hasNextPartition() {
       currentPartition_ < int(partitionStartRows_.size() - 2);
 }
 
-} // namespace facebook::velox::exec
+} // namespace facebook::velox::exec::window

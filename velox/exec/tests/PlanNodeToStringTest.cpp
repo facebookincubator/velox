@@ -15,9 +15,9 @@
  */
 
 #include "velox/connectors/hive/HiveConnectorSplit.h"
-#include "velox/exec/WindowFunction.h"
 #include "velox/exec/tests/utils/HiveConnectorTestBase.h"
 #include "velox/exec/tests/utils/PlanBuilder.h"
+#include "velox/exec/window/WindowFunction.h"
 #include "velox/functions/prestosql/aggregates/RegisterAggregateFunctions.h"
 #include "velox/functions/prestosql/registration/RegistrationFunctions.h"
 #include "velox/parse/TypeResolver.h"
@@ -681,7 +681,8 @@ TEST_F(PlanNodeToStringTest, window) {
           .returnType("BIGINT")
           .build(),
   };
-  exec::registerWindowFunction("window1", std::move(signatures), nullptr);
+  exec::window::registerWindowFunction(
+      "window1", std::move(signatures), nullptr);
 
   auto plan =
       PlanBuilder()

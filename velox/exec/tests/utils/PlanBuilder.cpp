@@ -22,8 +22,8 @@
 #include "velox/exec/HashPartitionFunction.h"
 #include "velox/exec/RoundRobinPartitionFunction.h"
 #include "velox/exec/TableWriter.h"
-#include "velox/exec/WindowFunction.h"
 #include "velox/exec/tests/utils/TempDirectoryPath.h"
+#include "velox/exec/window/WindowFunction.h"
 #include "velox/expression/ExprToSubfieldFilter.h"
 #include "velox/expression/FunctionCallToSpecialForm.h"
 #include "velox/expression/SignatureBinder.h"
@@ -1273,7 +1273,7 @@ namespace {
 std::string throwWindowFunctionDoesntExist(const std::string& name) {
   std::stringstream error;
   error << "Window function doesn't exist: " << name << ".";
-  if (exec::windowFunctions().empty()) {
+  if (exec::window::windowFunctions().empty()) {
     error << " Registry of window functions is empty. "
              "Make sure to register some window functions.";
   }
@@ -1295,7 +1295,8 @@ TypePtr resolveWindowType(
     const std::string& windowFunctionName,
     const std::vector<TypePtr>& inputTypes,
     bool nullOnFailure) {
-  if (auto signatures = exec::getWindowFunctionSignatures(windowFunctionName)) {
+  if (auto signatures =
+          exec::window::getWindowFunctionSignatures(windowFunctionName)) {
     for (const auto& signature : signatures.value()) {
       exec::SignatureBinder binder(*signature, inputTypes);
       if (binder.tryBind()) {

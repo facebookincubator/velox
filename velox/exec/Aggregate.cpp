@@ -19,7 +19,7 @@
 #include <unordered_map>
 #include "velox/exec/AggregateCompanionAdapter.h"
 #include "velox/exec/AggregateCompanionSignatures.h"
-#include "velox/exec/AggregateWindow.h"
+#include "velox/exec/window/AggregateWindow.h"
 #include "velox/expression/SignatureBinder.h"
 
 namespace facebook::velox::exec {
@@ -78,7 +78,7 @@ AggregateRegistrationResult registerAggregateFunction(
   }
 
   // Register the aggregate as a window function also.
-  registerAggregateWindowFunction(sanitizedName);
+  window::registerAggregateWindowFunction(sanitizedName);
 
   // Register companion function if needed.
   if (registerCompanionFunctions) {

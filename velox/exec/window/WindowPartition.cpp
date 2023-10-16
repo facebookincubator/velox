@@ -13,9 +13,9 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-#include "velox/exec/WindowPartition.h"
+#include "velox/exec/window/WindowPartition.h"
 
-namespace facebook::velox::exec {
+namespace facebook::velox::exec::window {
 
 WindowPartition::WindowPartition(
     RowContainer* data,
@@ -171,4 +171,4 @@ std::pair<vector_size_t, vector_size_t> WindowPartition::computePeerBuffers(
   return {peerStart, peerEnd};
 }
 
-} // namespace facebook::velox::exec
+} // namespace facebook::velox::exec::window
