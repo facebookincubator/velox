@@ -25,6 +25,23 @@ resolve_dependency_url(FOLLY)
 
 message(STATUS "Building Folly from source")
 
+if(APPLE AND NOT DEFINED OPENSSL_ROOT_DIR)
+  find_program(BREW brew)
+  if(BREW)
+    execute_process(
+      COMMAND brew --prefix openssl@1.1
+      OUTPUT_VARIABLE OPENSSL_ROOT_DIR
+      OUTPUT_STRIP_TRAILING_WHITESPACE)
+    set(ENV{OPENSSL_ROOT_DIR} ${OPENSSL_ROOT_DIR})
+  endif()
+  if(NOT OPENSSL_ROOT_DIR)
+    message(
+      FATAL_ERROR
+        "Unable to locate brew prefix for OpenSSL 1.1. Please install with `brew install openssl@1.1` or set OPENSSL_ROOT_DIR"
+    )
+  endif()
+endif()
+
 if(gflags_SOURCE STREQUAL "BUNDLED")
   set(glog_patch && git apply ${CMAKE_CURRENT_LIST_DIR}/folly-gflags-glog.patch)
 endif()
