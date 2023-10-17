@@ -95,7 +95,7 @@ inline void registerArrayRemoveFunctions(const std::string& prefix) {
       {prefix + "array_remove"});
 }
 
-void registerInternalArrayFunctions(const std::string& prefix) {
+void registerInternalArrayFunctions() {
   VELOX_REGISTER_VECTOR_FUNCTION(
       udf_$internal$canonicalize, "$internal$canonicalize");
 }

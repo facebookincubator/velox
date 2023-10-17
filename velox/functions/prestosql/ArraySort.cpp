@@ -409,16 +409,7 @@ internalCanonicalizeSignatures() {
           .typeVariable("T")
           .returnType("array(T)")
           .argumentType("array(T)")
-          .build(),
-      // array(T), function(T,U), boolean -> array(T)
-      exec::FunctionSignatureBuilder()
-          .typeVariable("T")
-          .typeVariable("U")
-          .returnType("array(T)")
-          .argumentType("array(T)")
-          .constantArgumentType("function(T,U)")
-          .build(),
-  };
+          .build()};
   return signatures;
 }
 
