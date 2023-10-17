@@ -241,6 +241,9 @@ void registerFunctions(const std::string& prefix) {
   registerFunction<DateAddFunction, Date, Date, int32_t>({prefix + "date_add"});
   registerFunction<DateSubFunction, Date, Date, int32_t>({prefix + "date_sub"});
 
+  registerFunction<QuarterFunction, int32_t, Timestamp>({prefix + "quarter"});
+  registerFunction<QuarterFunction, int32_t, Date>({prefix + "quarter"});
+
   registerFunction<DayFunction, int64_t, Timestamp>(
       {prefix + "day", prefix + "dayofmonth"});
   registerFunction<DayFunction, int64_t, Date>(

@@ -229,6 +229,33 @@ struct MakeDateFunction {
 };
 
 template <typename T>
+struct QuarterFunction : public InitSessionTimezone<T>,
+                         public TimestampWithTimezoneSupport<T> {
+  VELOX_DEFINE_FUNCTION_TYPES(T);
+
+  FOLLY_ALWAYS_INLINE int32_t getQuarter(const std::tm& time) {
+    return time.tm_mon / 3 + 1;
+  }
+
+  FOLLY_ALWAYS_INLINE void call(
+      int32_t& result,
+      const arg_type<Timestamp>& timestamp) {
+    result = getQuarter(getDateTime(timestamp, this->timeZone_));
+  }
+
+  FOLLY_ALWAYS_INLINE void call(int32_t& result, const arg_type<Date>& date) {
+    result = getQuarter(getDateTime(date));
+  }
+
+  FOLLY_ALWAYS_INLINE void call(
+      int32_t& result,
+      const arg_type<TimestampWithTimezone>& timestampWithTimezone) {
+    auto timestamp = this->toTimestamp(timestampWithTimezone);
+    result = getQuarter(getDateTime(timestamp, nullptr));
+  }
+};
+
+template <typename T>
 struct LastDayFunction {
   VELOX_DEFINE_FUNCTION_TYPES(T);
 
