@@ -121,12 +121,22 @@ struct SimdComparator {
       exec::LocalDecodedVector lhsDecoded(context, lhs, rows);
       exec::LocalDecodedVector rhsDecoded(context, rhs, rows);
 
-      context.template applyToSelectedNoThrow(rows, [&](auto row) {
-        auto l = lhsDecoded->template valueAt<T>(row);
-        auto r = rhsDecoded->template valueAt<T>(row);
-        auto filtered = ComparisonOp()(l, r);
-        resultVector->set(row, filtered);
-      });
+      if (!resultVector->rawNulls()) {
+        context.template applyToSelectedNoThrow(rows, [&](auto row) {
+          auto l = lhsDecoded->template valueAt<T>(row);
+          auto r = rhsDecoded->template valueAt<T>(row);
+          auto filtered = ComparisonOp()(l, r);
+          bits::setBit(reinterpret_cast<uint64_t*>(rawResult), row, filtered);
+        });
+      } else {
+        context.template applyToSelectedNoThrow(rows, [&](auto row) {
+          auto l = lhsDecoded->template valueAt<T>(row);
+          auto r = rhsDecoded->template valueAt<T>(row);
+          auto filtered = ComparisonOp()(l, r);
+          resultVector->setNull(row, false);
+          bits::setBit(reinterpret_cast<uint64_t*>(rawResult), row, filtered);
+        });
+      }
       return;
     }
 
