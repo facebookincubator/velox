@@ -89,11 +89,13 @@ struct ApproxMostFrequentAggregate : exec::Aggregate {
       const SelectivityVector& rows,
       const std::vector<VectorPtr>& args,
       bool) override {
-    decodeArguments(rows, args);
+    bool hasWeight = decodeArguments(rows, args);
     rows.applyToSelected([&](auto row) {
       if (!decodedValues_.isNullAt(row)) {
         auto* accumulator = initAccumulator(groups[row]);
-        accumulator->insert(decodedValues_.valueAt<T>(row));
+        accumulator->insert(
+            decodedValues_.valueAt<T>(row),
+            hasWeight ? decodedWeights_.valueAt<int64_t>(row) : 1);
       }
     });
   }
@@ -111,11 +113,13 @@ struct ApproxMostFrequentAggregate : exec::Aggregate {
       const SelectivityVector& rows,
       const std::vector<VectorPtr>& args,
       bool) override {
-    decodeArguments(rows, args);
+    bool hasWeight = decodeArguments(rows, args);
     auto* accumulator = initAccumulator(group);
     rows.applyToSelected([&](auto row) {
       if (!decodedValues_.isNullAt(row)) {
-        accumulator->insert(decodedValues_.valueAt<T>(row));
+        accumulator->insert(
+            decodedValues_.valueAt<T>(row),
+            hasWeight ? decodedWeights_.valueAt<int64_t>(row) : 1);
       }
     });
   }
@@ -219,15 +223,25 @@ struct ApproxMostFrequentAggregate : exec::Aggregate {
   }
 
  private:
-  void decodeArguments(
+  // Return true if the argument contains weight
+  bool decodeArguments(
       const SelectivityVector& rows,
       const std::vector<VectorPtr>& args) {
-    VELOX_CHECK_EQ(args.size(), 3);
+    auto argsSize = args.size();
+    if (argsSize != 3 && argsSize != 4) {
+      VELOX_USER_FAIL(
+          "Unexpected number of arguments, argument number should either 3 or 4.");
+    }
     DecodedVector decodedBuckets(*args[0], rows);
-    decodedValues_.decode(*args[1], rows);
-    DecodedVector decodedCapacity(*args[2], rows);
     setConstantArgument("Buckets", buckets_, decodedBuckets);
+    vector_size_t capacityIdx = argsSize == 3 ? 2 : 3;
+    decodedValues_.decode(*args[1], rows);
+    if (argsSize == 4) {
+      decodedWeights_.decode(*args[2], rows);
+    }
+    DecodedVector decodedCapacity(*args[capacityIdx], rows);
     setConstantArgument("Capacity", capacity_, decodedCapacity);
+    return argsSize == 4;
   }
 
   static void
@@ -325,6 +339,7 @@ struct ApproxMostFrequentAggregate : exec::Aggregate {
 
   static constexpr int64_t kMissingArgument = -1;
   DecodedVector decodedValues_;
+  DecodedVector decodedWeights_;
   int64_t buckets_ = kMissingArgument;
   int64_t capacity_ = kMissingArgument;
 };
@@ -361,6 +376,16 @@ exec::AggregateRegistrationResult registerApproxMostFrequent(
                 "row(bigint, bigint, array({}), array(bigint))", valueType))
             .argumentType("bigint")
             .argumentType(valueType)
+            .argumentType("bigint")
+            .build());
+    signatures.push_back(
+        exec::AggregateFunctionSignatureBuilder()
+            .returnType(fmt::format("map({},bigint)", valueType))
+            .intermediateType(fmt::format(
+                "row(bigint, bigint, array({}), array(bigint))", valueType))
+            .argumentType("bigint")
+            .argumentType(valueType)
+            .argumentType("bigint")
             .argumentType("bigint")
             .build());
   }

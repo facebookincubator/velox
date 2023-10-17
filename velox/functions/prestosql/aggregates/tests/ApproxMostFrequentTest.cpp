@@ -43,6 +43,11 @@ struct ApproxMostFrequentTest : AggregationTestBase {
     return makeFlatVector<T>(1000, [](auto row) { return std::sqrt(row); });
   }
 
+  std::shared_ptr<FlatVector<int64_t>> makeWeights() {
+    return makeFlatVector<int64_t>(
+        1000, [](auto row) { return static_cast<int64_t>(std::sqrt(row)); });
+  }
+
   std::shared_ptr<FlatVector<T>> makeValuesWithNulls() {
     auto values = makeValues();
     for (int i = 0; i < values->size(); ++i) {
@@ -57,11 +62,22 @@ struct ApproxMostFrequentTest : AggregationTestBase {
     return makeMapVector<T, int64_t>({{{30, 61}, {29, 59}, {28, 57}}});
   }
 
+  MapVectorPtr makeWeightedGlobalExpected() {
+    return makeMapVector<T, int64_t>({{{30, 1830}, {29, 1711}, {28, 1596}}});
+  }
+
   MapVectorPtr makeGroupedExpected() {
     return makeMapVector<T, int64_t>(
         {{{24, 49}, {27, 55}, {30, 61}},
          {{22, 45}, {25, 51}, {28, 57}},
          {{23, 47}, {26, 53}, {29, 59}}});
+  }
+
+  MapVectorPtr makeWeightedGroupedExpected() {
+    return makeMapVector<T, int64_t>(
+        {{{24, 1176}, {27, 1485}, {30, 1830}},
+         {{31, 1209}, {25, 1275}, {28, 1596}},
+         {{23, 1081}, {26, 1378}, {29, 1711}}});
   }
 
   MapVectorPtr makeEmptyGroupExpected() {
@@ -90,11 +106,25 @@ MapVectorPtr ApproxMostFrequentTest<StringView>::makeGlobalExpected() {
 }
 
 template <>
+MapVectorPtr ApproxMostFrequentTest<StringView>::makeWeightedGlobalExpected() {
+  return makeMapVector<StringView, int64_t>(
+      {{{"30", 1830}, {"29", 1711}, {"28", 1596}}});
+}
+
+template <>
 MapVectorPtr ApproxMostFrequentTest<StringView>::makeGroupedExpected() {
   return makeMapVector<StringView, int64_t>(
       {{{"24", 49}, {"27", 55}, {"30", 61}},
        {{"22", 45}, {"25", 51}, {"28", 57}},
        {{"23", 47}, {"26", 53}, {"29", 59}}});
+}
+
+template <>
+MapVectorPtr ApproxMostFrequentTest<StringView>::makeWeightedGroupedExpected() {
+  return makeMapVector<StringView, int64_t>(
+      {{{"24", 1176}, {"27", 1485}, {"30", 1830}},
+       {{"31", 1209}, {"25", 1275}, {"28", 1596}},
+       {{"23", 1081}, {"26", 1378}, {"29", 1711}}});
 }
 
 using ValueTypes = ::testing::Types<int, StringView>;
@@ -110,6 +140,17 @@ TYPED_TEST(ApproxMostFrequentTest, global) {
       {this->makeRowVector({expected})});
 }
 
+TYPED_TEST(ApproxMostFrequentTest, weightedGlobal) {
+  auto values = this->makeValues();
+  auto weights = this->makeWeights();
+  auto expected = this->makeWeightedGlobalExpected();
+  this->testAggregations(
+      {this->makeRowVector({values, weights})},
+      {},
+      {"approx_most_frequent(3, c0, c1, 31)"},
+      {this->makeRowVector({expected})});
+}
+
 TYPED_TEST(ApproxMostFrequentTest, grouped) {
   auto values = this->makeValues();
   auto keys = this->makeKeys();
@@ -119,6 +160,19 @@ TYPED_TEST(ApproxMostFrequentTest, grouped) {
       {this->makeRowVector({keys, values})},
       {"c0"},
       {"approx_most_frequent(3, c1, 11)"},
+      {this->makeRowVector({groupKeys, expected})});
+}
+
+TYPED_TEST(ApproxMostFrequentTest, weightedGrouped) {
+  auto values = this->makeValues();
+  auto keys = this->makeKeys();
+  auto groupKeys = this->makeGroupKeys();
+  auto weights = this->makeWeights();
+  auto expected = this->makeWeightedGroupedExpected();
+  this->testAggregations(
+      {this->makeRowVector({keys, values, weights})},
+      {"c0"},
+      {"approx_most_frequent(3, c1, c2, 11)"},
       {this->makeRowVector({groupKeys, expected})});
 }
 
