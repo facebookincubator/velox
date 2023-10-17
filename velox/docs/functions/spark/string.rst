@@ -33,7 +33,7 @@ Unless specified otherwise, all functions return NULL if at least one of the arg
     Returns NULL if ``number`` is empty.
     Leading spaces will be skipped. ``number`` may contain other characters not valid for
     ``fromBase``. All characters starting from the first invalid character till the end of
-    the string are ignored. Returns '0' if no valid character is found in such rule. ::
+    the string are ignored. Returns '0' if no valid character is found in this rule. ::
 
         SELECT conv('100', 2, 10); -- '4'
         SELECT conv('-10', 16, -10); -- '-16'

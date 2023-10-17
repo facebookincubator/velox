@@ -943,10 +943,13 @@ struct ConvFunction {
     uint64_t unsignedValue;
     auto fromStatus = std::from_chars(
         input.data() + i, input.data() + input.size(), unsignedValue, fromBase);
+    if (fromStatus.ec == std::errc::invalid_argument) {
+      result.append("0");
+      return true;
+    }
     if (fromStatus.ec == std::errc::result_out_of_range) {
       unsignedValue = kMaxUnsignedInt64_;
     }
-
     if (unsignedValue == 0) {
       result.append("0");
       return true;
