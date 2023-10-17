@@ -417,15 +417,22 @@ void printCoverageMap(
   std::cout << out.str() << std::endl;
 }
 
+std::string toUpperCase(const std::string& str) {
+    std::string result = str;
+    std::transform(result.begin(), result.end(), result.begin(), ::toupper);
+    return result;
+}
+
+// Function to compare two strings after converting them to uppercase
 bool ComparePrestoAndVeloxSignatures(const std::string& signature, const std::string& functionName,
                             std::unordered_map<std::string, std::vector<std::string>> signatureMap) {
    auto funcName = signatureMap.find(functionName);
     if (funcName != signatureMap.end()) {
         const std::vector<std::string>& values = funcName->second;
         for (const std::string& value : values) {
-            if (value == signature) {
-                return true;
-            }
+          if(toUpperCase(signature) == toUpperCase(value)){
+            return true;
+          }
         }
     }
     return false;
