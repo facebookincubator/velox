@@ -305,8 +305,19 @@ void SplitReader::setPartitionValue(
       it != partitionKeys_.end(),
       "ColumnHandle is missing for partition key {}",
       partitionKey);
-  auto constValue = VELOX_DYNAMIC_SCALAR_TYPE_DISPATCH(
-      convertFromString, it->second->dataType()->kind(), value);
+  velox::variant constValue;
+  if (it->second->dataType()->isDate()) {
+    // TODO: need to align with query config for isIso8601.
+    if (value.has_value()) {
+      constValue = velox::variant(
+          velox::util::castFromDateString(StringView(value.value()), false));
+    } else {
+      constValue = velox::variant(TypeKind::INTEGER);
+    }
+  } else {
+    constValue = VELOX_DYNAMIC_SCALAR_TYPE_DISPATCH(
+        convertFromString, it->second->dataType()->kind(), value);
+  }
   setConstantValue(spec, it->second->dataType(), constValue);
 }
 
