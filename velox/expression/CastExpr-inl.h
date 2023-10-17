@@ -564,14 +564,14 @@ void CastExpr::applyVarcharToDecimalCastKernel(
   });
 }
 
-template <typename TOutput>
+template <typename TInput, typename TOutput>
 void CastExpr::applyDoubleToDecimal(
     const SelectivityVector& rows,
     const BaseVector& input,
     exec::EvalCtx& context,
     const TypePtr& toType,
     VectorPtr& castResult) {
-  auto sourceVector = input.as<SimpleVector<double>>();
+  auto sourceVector = input.as<SimpleVector<TInput>>();
   auto rawResults =
       castResult->asUnchecked<FlatVector<TOutput>>()->mutableRawValues();
   const auto toPrecisionScale = getDecimalPrecisionScale(*toType);
@@ -598,7 +598,6 @@ void CastExpr::applyDoubleToDecimal(
           rawResults[row] = rescaledValue.value();
         } else {
           castResult->setNull(row, true);
-
         }
       });
 }
