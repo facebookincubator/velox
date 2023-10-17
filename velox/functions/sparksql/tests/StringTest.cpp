@@ -736,12 +736,14 @@ TEST_F(StringTest, conv) {
   EXPECT_EQ(conv("15", 10, -16), "F");
   EXPECT_EQ(conv("big", 36, 16), "3A48");
   EXPECT_EQ(conv("-15", 10, -16), "-F");
-  EXPECT_EQ(conv("-1", 10, 16), "FFFFFFFFFFFFFFFF");
-  EXPECT_EQ(conv("FFFFFFFFFFFFFFFF", 16, -10), "-1");
-  EXPECT_EQ(conv("-15", 10, 16), "FFFFFFFFFFFFFFF1");
   EXPECT_EQ(conv("-10", 16, -10), "-16");
 
   // Overflow case.
+  EXPECT_EQ(conv("-1", 10, 16), "FFFFFFFFFFFFFFFF");
+  EXPECT_EQ(conv("FFFFFFFFFFFFFFFF", 16, -10), "-1");
+  EXPECT_EQ(conv("-FFFFFFFFFFFFFFFF", 16, -10), "-1");
+  EXPECT_EQ(conv("-FFFFFFFFFFFFFFFF", 16, 10), "18446744073709551615");
+  EXPECT_EQ(conv("-15", 10, 16), "FFFFFFFFFFFFFFF1");
   EXPECT_EQ(conv("9223372036854775807", 36, 16), "FFFFFFFFFFFFFFFF");
 
   // Test with space contained.
@@ -754,6 +756,7 @@ TEST_F(StringTest, conv) {
   // Only converts "F".
   EXPECT_EQ(conv("FH", 16, 10), "15");
   // Discards followed invalid character even though converting to same base.
+  EXPECT_EQ(conv("11abc", 10, 10), "11");
   EXPECT_EQ(conv("FH", 16, 16), "F");
   // Begins with invalid character.
   EXPECT_EQ(conv("HF", 16, 10), "0");

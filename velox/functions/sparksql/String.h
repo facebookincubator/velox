@@ -928,16 +928,18 @@ struct ConvFunction {
       return false;
     }
 
-    // Ignore space.
+    // Ignore leading spaces.
     int i = 0;
     for (; i < input.size(); i++) {
       if (input.data()[i] != ' ') {
         break;
       }
     }
-    const bool isInputNegative = (input.data()[i] == '-');
+    const bool isNegativeInput = (input.data()[i] == '-');
     // Skip negative symbol.
-    i = isInputNegative ? i + 1 : i;
+    if (isNegativeInput) {
+      ++i;
+    }
     uint64_t unsignedValue;
     auto fromStatus = std::from_chars(
         input.data() + i, input.data() + input.size(), unsignedValue, fromBase);
@@ -951,13 +953,14 @@ struct ConvFunction {
     }
 
     int64_t signedValue;
-    if (isInputNegative) {
+    // When toBase is negative, converts to signed value. Otherwise, converts to
+    // unsigned value. Overflow is allowed, consistent with Spark.
+    if (isNegativeInput) {
+      int64_t negativeInput = -std::abs((int64_t)unsignedValue);
       if (toBase < 0) {
-        signedValue = -unsignedValue;
+        signedValue = negativeInput;
       } else {
-        // If toBase > 0, the result is unsigned. Converts the original nagative
-        // value to unsigned one.
-        unsignedValue = kMaxUnsignedInt64_ - unsignedValue + 1;
+        unsignedValue = (uint64_t)(negativeInput);
       }
     } else {
       if (toBase < 0) {
@@ -978,8 +981,8 @@ struct ConvFunction {
 
     result.resize(toStatus.ptr - resultBuffer);
     // Converts to uppper case, consistent with Spark.
-    for (int j = 0; j < result.size(); j++) {
-      resultBuffer[j] = std::toupper(resultBuffer[j]);
+    for (int i = 0; i < result.size(); i++) {
+      resultBuffer[i] = std::toupper(resultBuffer[i]);
     }
     return true;
   }

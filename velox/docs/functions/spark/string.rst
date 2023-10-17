@@ -26,17 +26,22 @@ Unless specified otherwise, all functions return NULL if at least one of the arg
 .. spark:function:: conv(number, fromBase, toBase) -> varchar
 
     Converts ``number`` represented as a string from ``fromBase`` to ``toBase``.
-    ``fromBase`` must be a value inclusively between 2 and 36. ``toBase`` must be a value
-    inclusively between 2 and 36 or between -36 and -2. Negative ``toBase`` means output
-    will be a signed number and positive ``toBase`` means it will be an unsigned number.
-    If ``number`` is empty or given base is invalid, returns NULL.
-    Only converts valid characters till the first occurence of illegal character. If the
-    start is illegal, just returns '0'. ::
+    ``fromBase`` must be an INTEGER value between 2 and 36 inclusively. ``toBase`` must
+    be an INTEGER value between 2 and 36 inclusively or between -36 and -2 inclusively.
+    Otherwise, returns NULL.
+    Returns a signed number if ``toBase`` is negative. Otherwise, returns an unsigned one.
+    Returns NULL if ``number`` is empty.
+    Leading spaces will be skipped. ``number`` may contain other characters not valid for
+    ``fromBase``. All characters starting from the first invalid character till the end of
+    the string are ignored. Returns '0' if no valid character is found in such rule. ::
 
         SELECT conv('100', 2, 10); -- '4'
-        SELECT conv('-10', 16, -10); -- -'16'
-        SELECT conv('H1F', 16, 10); -- '0'
+        SELECT conv('-10', 16, -10); -- '-16'
         SELECT conv("-1", 10, 16); -- 'FFFFFFFFFFFFFFFF'
+        SELECT conv("123", 10, 39); -- NULL
+        SELECT conv('', 16, 10); -- NULL
+        SELECT conv("11ABC", 10, 16); -- 'B'
+        SELECT conv('H016F', 16, 10); -- '0'
 
 .. spark:function:: endswith(left, right) -> boolean
 
