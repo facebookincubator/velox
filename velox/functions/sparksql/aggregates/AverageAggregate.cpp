@@ -385,6 +385,15 @@ exec::AggregateRegistrationResult registerAverage(const std::string& name) {
           .returnType("DECIMAL(r_precision, r_scale)")
           .build());
 
+  signatures.push_back(
+      exec::AggregateFunctionSignatureBuilder()
+          .integerVariable("a_precision")
+          .integerVariable("a_scale")
+          .argumentType("DECIMAL(a_precision, a_scale)")
+          .intermediateType("ROW(DECIMAL(a_precision, a_scale), BIGINT)")
+          .returnType("DECIMAL(a_precision, a_scale)")
+          .build());
+
   return exec::registerAggregateFunction(
       name,
       std::move(signatures),
