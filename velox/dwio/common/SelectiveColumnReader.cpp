@@ -225,10 +225,25 @@ void SelectiveColumnReader::getUnsignedIntValues(
     const TypePtr& requestedType,
     VectorPtr* result) {
   switch (requestedType->kind()) {
+    case TypeKind::TINYINT:
+      switch (valueSize_) {
+        case 1:
+          getFlatValues<uint8_t, uint8_t>(rows, result, requestedType);
+          break;
+        case 4:
+          getFlatValues<uint32_t, uint8_t>(rows, result, requestedType);
+          break;
+        default:
+          VELOX_FAIL("Unsupported value size: {}", valueSize_);
+      }
+      break;
     case TypeKind::SMALLINT:
       switch (valueSize_) {
+        case 2:
+          getFlatValues<uint16_t, uint16_t>(rows, result, requestedType);
+          break;
         case 4:
-          getFlatValues<uint32_t, int16_t>(rows, result, requestedType);
+          getFlatValues<uint32_t, uint16_t>(rows, result, requestedType);
           break;
         default:
           VELOX_FAIL("Unsupported value size: {}", valueSize_);
@@ -237,7 +252,7 @@ void SelectiveColumnReader::getUnsignedIntValues(
     case TypeKind::INTEGER:
       switch (valueSize_) {
         case 4:
-          getFlatValues<uint32_t, int32_t>(rows, result, requestedType);
+          getFlatValues<uint32_t, uint32_t>(rows, result, requestedType);
           break;
         default:
           VELOX_FAIL("Unsupported value size: {}", valueSize_);
@@ -246,7 +261,10 @@ void SelectiveColumnReader::getUnsignedIntValues(
     case TypeKind::BIGINT:
       switch (valueSize_) {
         case 4:
-          getFlatValues<uint32_t, int64_t>(rows, result, requestedType);
+          getFlatValues<uint32_t, uint64_t>(rows, result, requestedType);
+          break;
+        case 8:
+          getFlatValues<uint64_t, uint64_t>(rows, result, requestedType);
           break;
         default:
           VELOX_FAIL("Unsupported value size: {}", valueSize_);
@@ -255,7 +273,10 @@ void SelectiveColumnReader::getUnsignedIntValues(
     case TypeKind::HUGEINT:
       switch (valueSize_) {
         case 8:
-          getFlatValues<uint64_t, int128_t>(rows, result, requestedType);
+          getFlatValues<uint64_t, uint128_t>(rows, result, requestedType);
+          break;
+        case 16:
+          getFlatValues<uint128_t, uint128_t>(rows, result, requestedType);
           break;
         default:
           VELOX_FAIL("Unsupported value size: {}", valueSize_);
