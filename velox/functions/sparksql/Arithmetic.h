@@ -280,4 +280,13 @@ struct Log10Function {
     return true;
   }
 };
+
+template <typename T>
+struct Atan2Function {
+  template <typename TInput>
+  FOLLY_ALWAYS_INLINE void call(TInput& result, TInput y, TInput x) {
+    result = std::atan2(y + 0.0, x + 0.0);
+  }
+};
+
 } // namespace facebook::velox::functions::sparksql

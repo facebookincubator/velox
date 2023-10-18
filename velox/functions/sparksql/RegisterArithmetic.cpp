@@ -95,6 +95,7 @@ void registerArithmeticFunctions(const std::string& prefix) {
   VELOX_REGISTER_VECTOR_FUNCTION(udf_decimal_sub, prefix + "subtract");
   VELOX_REGISTER_VECTOR_FUNCTION(udf_decimal_mul, prefix + "multiply");
   VELOX_REGISTER_VECTOR_FUNCTION(udf_decimal_div, prefix + "divide");
+  registerFunction<Atan2Function, double, double, double>({prefix + "atan2"});
 }
 
 } // namespace facebook::velox::functions::sparksql
