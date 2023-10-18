@@ -37,16 +37,15 @@ std::vector<core::LambdaTypedExprPtr> extractLambdaInputs(
   return lambdas;
 }
 
-std::vector<TypePtr> populateAggregateInputs(
+void populateAggregateInputs(
     const core::AggregationNode::Aggregate& aggregate,
     const RowType& inputType,
     AggregateInfo& info,
     memory::MemoryPool* pool) {
   auto& channels = info.inputs;
   auto& constants = info.constantInputs;
-  std::vector<TypePtr> argTypes;
+
   for (const auto& arg : aggregate.call->inputs()) {
-    argTypes.push_back(arg->type());
     if (auto field =
             dynamic_cast<const core::FieldAccessTypedExpr*>(arg.get())) {
       channels.push_back(inputType.getChildIdx(field->name()));
@@ -70,8 +69,6 @@ std::vector<TypePtr> populateAggregateInputs(
           arg->toString());
     }
   }
-
-  return argTypes;
 }
 
 void verifyIntermediateInputs(
@@ -149,16 +146,11 @@ HashAggregation::HashAggregation(
 
     AggregateInfo info;
     info.distinct = aggregate.distinct;
-    auto argTypes =
-        populateAggregateInputs(aggregate, inputType->asRow(), info, pool());
+    populateAggregateInputs(aggregate, inputType->asRow(), info, pool());
 
-    if (isRawInput(aggregationNode->step())) {
-      info.intermediateType =
-          Aggregate::intermediateType(aggregate.call->name(), argTypes);
-    } else {
-      verifyIntermediateInputs(aggregate.call->name(), argTypes);
-      info.intermediateType = argTypes[0];
-    }
+    info.intermediateType = Aggregate::intermediateType(
+        aggregate.call->name(), aggregate.rawInputTypes);
+
     // Setup aggregation mask: convert the Variable Reference name to the
     // channel (projection) index, if there is a mask.
     if (const auto& mask = aggregate.mask) {
@@ -170,8 +162,10 @@ HashAggregation::HashAggregation(
     const auto& resultType = outputType_->childAt(numHashers + i);
     info.function = Aggregate::create(
         aggregate.call->name(),
-        aggregationNode->step(),
-        argTypes,
+        isPartialOutput(aggregationNode->step())
+            ? core::AggregationNode::Step::kPartial
+            : core::AggregationNode::Step::kSingle,
+        aggregate.rawInputTypes,
         resultType,
         driverCtx->queryConfig());
 

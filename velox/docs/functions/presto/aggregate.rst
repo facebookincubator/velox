@@ -82,11 +82,11 @@ General Aggregate Functions
     each input value occurs. Supports integral, floating-point,
     boolean, timestamp, and date input types.
 
-.. function:: geometric_mean(x) -> double
+.. function:: geometric_mean(bigint) -> double
+              geometric_mean(double) -> double
+              geometric_mean(real) -> real
 
     Returns the `geometric mean <https://en.wikipedia.org/wiki/Geometric_mean>`_ of all input values.
-
-    Supported types are BIGINT and DOUBLE.
 
 .. function:: max_by(x, y) -> [same as x]
 
@@ -223,13 +223,17 @@ General Aggregate Functions
 Bitwise Aggregate Functions
 ---------------------------
 
-.. function:: bitwise_and_agg(x) -> bigint
+.. function:: bitwise_and_agg(x) -> [same as x]
 
     Returns the bitwise AND of all input values in 2's complement representation.
 
-.. function:: bitwise_or_agg(x) -> bigint
+    Supported types are TINYINT, SMALLINT, INTEGER and BIGINT.
+
+.. function:: bitwise_or_agg(x) -> [same as x]
 
     Returns the bitwise OR of all input values in 2's complement representation.
+
+    Supported types are TINYINT, SMALLINT, INTEGER and BIGINT.
 
 .. function:: bitwise_xor_agg(x) -> [same as x]
 
