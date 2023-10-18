@@ -3101,5 +3101,170 @@ TEST_F(VectorTest, appendNulls) {
   // Append negative.
   EXPECT_ANY_THROW(rowVector->appendNulls(-1));
 }
+
+TEST_F(VectorTest, primitiveTypeNullEqual) {
+  auto base = makeNullableFlatVector<int32_t>({1, 2, std::nullopt});
+  auto other = makeNullableFlatVector<int32_t>({1, std::nullopt, 1});
+  // No null compare.
+  ASSERT_TRUE(
+      base->equalValueAt(
+              other.get(), 0, 0, CompareFlags::NullHandlingMode::StopAtNull)
+          .value());
+  ASSERT_TRUE(
+      base->equalValueAt(
+              other.get(), 0, 0, CompareFlags::NullHandlingMode::StopAtNull)
+          .value());
+  // Null compare in NoStop mode.
+  ASSERT_FALSE(
+      base->equalValueAt(
+              other.get(), 1, 1, CompareFlags::NullHandlingMode::NoStop)
+          .value());
+  ASSERT_FALSE(
+      base->equalValueAt(
+              other.get(), 2, 2, CompareFlags::NullHandlingMode::NoStop)
+          .value());
+  // Null equal in StopAtNull mode.
+  ASSERT_FALSE(
+      base->equalValueAt(
+              other.get(), 1, 1, CompareFlags::NullHandlingMode::StopAtNull)
+          .has_value());
+  ASSERT_FALSE(
+      base->equalValueAt(
+              other.get(), 2, 2, CompareFlags::NullHandlingMode::StopAtNull)
+          .has_value());
+}
+
+TEST_F(VectorTest, complexTypeNullEqual) {
+  auto base =
+      makeArrayVectorFromJson<int32_t>({"[0, 1]", "[2, 2]", "[2, null]"});
+  auto other =
+      makeArrayVectorFromJson<int32_t>({"[0, 1]", "[2, null]", "[1, 2]"});
+  // No null compare.
+  ASSERT_TRUE(base->equalValueAt(
+                      other.get(), 0, 0, CompareFlags::NullHandlingMode::NoStop)
+                  .value());
+  ASSERT_TRUE(
+      base->equalValueAt(
+              other.get(), 0, 0, CompareFlags::NullHandlingMode::StopAtNull)
+          .value());
+  ASSERT_FALSE(
+      base->equalValueAt(
+              other.get(), 2, 2, CompareFlags::NullHandlingMode::NoStop)
+          .value());
+  ASSERT_FALSE(
+      base->equalValueAt(
+              other.get(), 2, 2, CompareFlags::NullHandlingMode::StopAtNull)
+          .value());
+  // Null compare in NoStop mode.
+  ASSERT_FALSE(
+      base->equalValueAt(
+              other.get(), 1, 1, CompareFlags::NullHandlingMode::NoStop)
+          .value());
+  // Null compare in StopAtNull mode.
+  ASSERT_FALSE(
+      base->equalValueAt(
+              other.get(), 1, 1, CompareFlags::NullHandlingMode::StopAtNull)
+          .has_value());
+}
+
+TEST_F(VectorTest, dictionaryNullEqual) {
+  auto base =
+      makeArrayVectorFromJson<int32_t>({"[0, 1]", "[2, 2]", "[2, null]"});
+  auto other =
+      makeArrayVectorFromJson<int32_t>({"[0, 1]", "[2, null]", "[1, 2]"});
+  auto baseVectorSize = base->size();
+  auto kTopLevelVectorSize = baseVectorSize * 2;
+  BufferPtr indices = test::makeIndices(
+      kTopLevelVectorSize,
+      [&](vector_size_t i) { return i % baseVectorSize; },
+      pool_.get());
+  auto dictVector =
+      BaseVector::wrapInDictionary(nullptr, indices, kTopLevelVectorSize, base);
+
+  for (vector_size_t i = 0; i < 2; ++i) {
+    // No null compare.
+    ASSERT_TRUE(dictVector
+                    ->equalValueAt(
+                        other.get(),
+                        i * baseVectorSize,
+                        0,
+                        CompareFlags::NullHandlingMode::NoStop)
+                    .value());
+    ASSERT_TRUE(dictVector
+                    ->equalValueAt(
+                        other.get(),
+                        i * baseVectorSize,
+                        0,
+                        CompareFlags::NullHandlingMode::StopAtNull)
+                    .value());
+    ASSERT_FALSE(dictVector
+                     ->equalValueAt(
+                         other.get(),
+                         2 + i * baseVectorSize,
+                         2,
+                         CompareFlags::NullHandlingMode::NoStop)
+                     .value());
+    ASSERT_FALSE(dictVector
+                     ->equalValueAt(
+                         other.get(),
+                         2 + i * baseVectorSize,
+                         2,
+                         CompareFlags::NullHandlingMode::StopAtNull)
+                     .value());
+    // Null compare in NoStop mode.
+    ASSERT_FALSE(dictVector
+                     ->equalValueAt(
+                         other.get(),
+                         1 + i * baseVectorSize,
+                         1,
+                         CompareFlags::NullHandlingMode::NoStop)
+                     .value());
+    // Null compare in StopAtNull mode.
+    ASSERT_FALSE(dictVector
+                     ->equalValueAt(
+                         other.get(),
+                         1 + i * baseVectorSize,
+                         1,
+                         CompareFlags::NullHandlingMode::StopAtNull)
+                     .has_value());
+  }
+}
+
+TEST_F(VectorTest, constantNullEqual) {
+  auto base =
+      makeArrayVectorFromJson<int32_t>({"[0, 1]", "[2, 2]", "[2, null]"});
+  auto other =
+      makeArrayVectorFromJson<int32_t>({"[0, 1]", "[2, null]", "[1, 2]"});
+  auto baseVectorSize = base->size();
+  auto kTopLevelVectorSize = baseVectorSize * 2;
+  auto constantVector =
+      BaseVector::wrapInConstant(kTopLevelVectorSize, 1, base);
+  // No null compare.
+  ASSERT_TRUE(base->equalValueAt(
+                      other.get(), 0, 0, CompareFlags::NullHandlingMode::NoStop)
+                  .value());
+  ASSERT_TRUE(
+      base->equalValueAt(
+              other.get(), 0, 0, CompareFlags::NullHandlingMode::StopAtNull)
+          .value());
+  // Null compare in NoStop mode.
+  ASSERT_FALSE(
+      base->equalValueAt(
+              other.get(), 1, 0, CompareFlags::NullHandlingMode::NoStop)
+          .value());
+  ASSERT_FALSE(
+      base->equalValueAt(
+              other.get(), 2, 0, CompareFlags::NullHandlingMode::NoStop)
+          .value());
+  // Null compare in StopAtNull mode.
+  ASSERT_FALSE(
+      base->equalValueAt(
+              other.get(), 1, 1, CompareFlags::NullHandlingMode::StopAtNull)
+          .has_value());
+  ASSERT_FALSE(
+      base->equalValueAt(
+              other.get(), 2, 1, CompareFlags::NullHandlingMode::StopAtNull)
+          .has_value());
+}
 } // namespace
 } // namespace facebook::velox
