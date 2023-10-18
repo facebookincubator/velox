@@ -539,8 +539,9 @@ class SelectiveColumnReader {
 
   const BufferPtr& resultNulls() const {
     static const BufferPtr kNullBuffer;
-    return !anyNulls_ ? kNullBuffer
-                      : returnReaderNulls_ ? nullsInReadRange_ : resultNulls_;
+    return !anyNulls_        ? kNullBuffer
+        : returnReaderNulls_ ? nullsInReadRange_
+                             : resultNulls_;
   }
 
   memory::MemoryPool& memoryPool_;
