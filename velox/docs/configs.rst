@@ -445,9 +445,9 @@ Hive Connector
    * - fs.azure.account.key.<storage-account>.dfs.core.windows.net
      - string
      -
-     - The credentials to access the specific Azure Blob Storage account. Replace <storage-account> with the name of your Azure Storage account.
-        This property aligns with how Spark configures Azure account key credentials for accessing Azure storage. 
-        By setting this property multiple times with different storage account names, you can access multiple Azure storage accounts.
+     -  The credentials to access the specific Azure Blob Storage account, replace <storage-account> with the name of your Azure Storage account.
+        This property aligns with how Spark configures Azure account key credentials for accessing Azure storage, by setting this property multiple
+        times with different storage account names, you can access multiple Azure storage accounts.
 
 Presto-specific Configuration
 -----------------------------
