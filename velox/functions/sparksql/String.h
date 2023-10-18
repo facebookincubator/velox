@@ -971,21 +971,34 @@ struct ConvFunction {
       }
     }
 
-    result.resize(64);
-    auto resultBuffer = result.data();
+    int32_t resultSize;
     std::to_chars_result toStatus;
     if (toBase < 0) {
+      resultSize = (int32_t)std::floor(
+                       std::log(std::abs(signedValue)) / std::log(-toBase)) +
+          1;
+      // Negative symbol is considered.
+      if (signedValue < 0) {
+        ++resultSize;
+      }
+      result.resize(resultSize);
       toStatus = std::to_chars(
-          resultBuffer, resultBuffer + 64, signedValue, std::abs(toBase));
+          result.data(), result.data() + result.size(), signedValue, -toBase);
     } else {
+      resultSize =
+          (int32_t)std::floor(std::log(unsignedValue) / std::log(toBase)) + 1;
+      result.resize(resultSize);
       toStatus = std::to_chars(
-          resultBuffer, resultBuffer + 64, unsignedValue, std::abs(toBase));
+          result.data(),
+          result.data() + result.size(),
+          unsignedValue,
+          std::abs(toBase));
     }
+    result.resize(toStatus.ptr - result.data());
 
-    result.resize(toStatus.ptr - resultBuffer);
     // Converts to uppper case, consistent with Spark.
     for (int i = 0; i < result.size(); i++) {
-      resultBuffer[i] = std::toupper(resultBuffer[i]);
+      result.data()[i] = std::toupper(result.data()[i]);
     }
     return true;
   }
