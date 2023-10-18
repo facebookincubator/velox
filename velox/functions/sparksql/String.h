@@ -912,10 +912,8 @@ struct ConvFunction {
   static const int kMinBase = 2;
   static const int kMaxBase = 36;
 
-  bool checkInput(
-      const arg_type<Varchar>& input,
-      const int32_t fromBase,
-      const int32_t toBase) {
+  static bool
+  checkInput(const StringView& input, int32_t fromBase, int32_t toBase) {
     if (input.empty()) {
       return false;
     }
@@ -928,7 +926,7 @@ struct ConvFunction {
     return true;
   }
 
-  int32_t skipLeadingSpaces(const arg_type<Varchar>& input) {
+  static int32_t skipLeadingSpaces(const StringView& input) {
     // Ignore leading spaces.
     int i = 0;
     for (; i < input.size(); i++) {
@@ -939,10 +937,8 @@ struct ConvFunction {
     return i;
   }
 
-  std::optional<uint64_t> toUnsigned(
-      const arg_type<Varchar>& input,
-      const int32_t start,
-      const int32_t fromBase) {
+  uint64_t
+  toUnsigned(const StringView& input, int32_t start, int32_t fromBase) {
     uint64_t unsignedValue;
     auto fromStatus = std::from_chars(
         input.data() + start,
@@ -950,7 +946,7 @@ struct ConvFunction {
         unsignedValue,
         fromBase);
     if (fromStatus.ec == std::errc::invalid_argument) {
-      return std::nullopt;
+      return 0;
     }
     if (fromStatus.ec == std::errc::result_out_of_range) {
       return kMaxUnsignedInt64_;
@@ -958,17 +954,14 @@ struct ConvFunction {
     return unsignedValue;
   }
 
-  void toUpper(char* buffer, const int32_t size) {
+  static void toUpper(char* buffer, const int32_t size) {
     for (int i = 0; i < size; i++) {
       buffer[i] = std::toupper(buffer[i]);
     }
   }
 
   // For signed value, toBase is negative.
-  void toChars(
-      out_type<Varchar>& result,
-      const int64_t signedValue,
-      const int32_t toBase) {
+  void toChars(out_type<Varchar>& result, int64_t signedValue, int32_t toBase) {
     int32_t resultSize =
         (int32_t)std::floor(
             std::log(std::abs(signedValue)) / std::log(-toBase)) +
@@ -984,10 +977,8 @@ struct ConvFunction {
   }
 
   // For unsigned value, toBase is positive.
-  void toChars(
-      out_type<Varchar>& result,
-      const uint64_t unsignedValue,
-      const int32_t toBase) {
+  void
+  toChars(out_type<Varchar>& result, uint64_t unsignedValue, int32_t toBase) {
     int32_t resultSize =
         (int32_t)std::floor(std::log(unsignedValue) / std::log(toBase)) + 1;
     result.resize(resultSize);
@@ -1002,8 +993,8 @@ struct ConvFunction {
   bool call(
       out_type<Varchar>& result,
       const arg_type<Varchar>& input,
-      const int32_t fromBase,
-      const int32_t toBase) {
+      int32_t fromBase,
+      int32_t toBase) {
     if (!checkInput(input, fromBase, toBase)) {
       return false;
     }
@@ -1019,32 +1010,28 @@ struct ConvFunction {
       ++i;
     }
 
-    std::optional<uint64_t> unsignedValueOpt = toUnsigned(input, i, fromBase);
-    if (!unsignedValueOpt.has_value() || unsignedValueOpt.value() == 0) {
+    uint64_t unsignedValue = toUnsigned(input, i, fromBase);
+    if (unsignedValue == 0) {
       result.append("0");
       return true;
     }
 
-    uint64_t unsignedValue = unsignedValueOpt.value();
     int64_t signedValue;
     // When toBase is negative, converts to signed value. Otherwise, converts to
     // unsigned value. Overflow is allowed, consistent with Spark.
-    if (isNegativeInput) {
-      int64_t negativeInput = -std::abs((int64_t)unsignedValue);
-      if (toBase < 0) {
-        signedValue = negativeInput;
-        toChars(result, signedValue, toBase);
+    if (toBase < 0) {
+      if (isNegativeInput) {
+        signedValue = -std::abs((int64_t)unsignedValue);
       } else {
-        unsignedValue = (uint64_t)(negativeInput);
-        toChars(result, unsignedValue, toBase);
-      }
-    } else {
-      if (toBase < 0) {
         signedValue = (int64_t)unsignedValue;
-        toChars(result, signedValue, toBase);
-      } else {
-        toChars(result, unsignedValue, toBase);
       }
+      toChars(result, signedValue, toBase);
+    } else {
+      if (isNegativeInput) {
+        int64_t negativeInput = -std::abs((int64_t)unsignedValue);
+        unsignedValue = (uint64_t)negativeInput;
+      } // Here directly use unsignedValue for isNegativeInput=false.
+      toChars(result, unsignedValue, toBase);
     }
 
     // Converts to uppper case, consistent with Spark.
