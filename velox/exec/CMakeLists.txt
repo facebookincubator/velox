@@ -51,6 +51,7 @@ add_library(
   NestedLoopJoinProbe.cpp
   Operator.cpp
   OperatorUtils.cpp
+  PrefixSort.cpp
   OrderBy.cpp
   PartitionedOutput.cpp
   OutputBuffer.cpp

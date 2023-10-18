@@ -336,6 +336,8 @@ class QueryConfig {
   static constexpr const char* kEnableExpressionEvaluationCache =
       "enable_expression_evaluation_cache";
 
+  static constexpr const char* kEnablePrefixSort = "enable_prefix_sort";
+
   uint64_t queryMaxMemoryPerNode() const {
     return toCapacity(
         get<std::string>(kQueryMaxMemoryPerNode, "0B"), CapacityUnit::BYTE);
@@ -662,6 +664,10 @@ class QueryConfig {
 
   bool isExpressionEvaluationCacheEnabled() const {
     return get<bool>(kEnableExpressionEvaluationCache, true);
+  }
+
+  bool isPrefixSortEnabled() const {
+    return get<bool>(kEnablePrefixSort, false);
   }
 
   template <typename T>

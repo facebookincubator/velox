@@ -41,3 +41,9 @@ add_executable(velox_sort_benchmark RowContainerSortBenchmark.cpp)
 
 target_link_libraries(velox_sort_benchmark velox_exec velox_exec_test_lib
                       velox_vector_test_lib ${FOLLY_BENCHMARK})
+
+add_executable(velox_prefix_sort_benchmark PrefixSortBenchmark.cpp)
+
+target_link_libraries(
+  velox_prefix_sort_benchmark velox_exec velox_vector_test_lib
+  velox_exec_test_lib ${FOLLY_BENCHMARK})

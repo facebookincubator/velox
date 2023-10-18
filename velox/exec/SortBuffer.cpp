@@ -15,6 +15,7 @@
  */
 
 #include "SortBuffer.h"
+#include "PrefixSort.h"
 #include "velox/exec/MemoryReclaimer.h"
 #include "velox/vector/BaseVector.h"
 
@@ -29,7 +30,8 @@ SortBuffer::SortBuffer(
     tsan_atomic<bool>* nonReclaimableSection,
     uint32_t* numSpillRuns,
     const common::SpillConfig* spillConfig,
-    uint64_t spillMemoryThreshold)
+    uint64_t spillMemoryThreshold,
+    const bool enablePrefixSort)
     : input_(input),
       sortCompareFlags_(sortCompareFlags),
       outputBatchSize_(outputBatchSize),
@@ -37,7 +39,8 @@ SortBuffer::SortBuffer(
       nonReclaimableSection_(nonReclaimableSection),
       numSpillRuns_(numSpillRuns),
       spillConfig_(spillConfig),
-      spillMemoryThreshold_(spillMemoryThreshold) {
+      spillMemoryThreshold_(spillMemoryThreshold),
+      enablePrefixSort_(enablePrefixSort) {
   VELOX_CHECK_GE(input_->size(), sortCompareFlags_.size());
   VELOX_CHECK_GT(sortCompareFlags_.size(), 0);
   VELOX_CHECK_EQ(sortColumnIndices.size(), sortCompareFlags_.size());
@@ -117,20 +120,27 @@ void SortBuffer::noMoreInput() {
     // the rows.
     sortedRows_.resize(numInputRows_);
     RowContainerIterator iter;
-    data_->listRows(&iter, numInputRows_, sortedRows_.data());
-    std::sort(
-        sortedRows_.begin(),
-        sortedRows_.end(),
-        [this](const char* leftRow, const char* rightRow) {
-          for (vector_size_t index = 0; index < sortCompareFlags_.size();
-               ++index) {
-            if (auto result = data_->compare(
-                    leftRow, rightRow, index, sortCompareFlags_[index])) {
-              return result < 0;
+    if (enablePrefixSort_) {
+      auto prefixSort =
+          PrefixSort(data_.get(), sortCompareFlags_, numInputRows_);
+      prefixSort.preparePrefix();
+      prefixSort.sort(sortedRows_);
+    } else {
+      data_->listRows(&iter, numInputRows_, sortedRows_.data());
+      std::sort(
+          sortedRows_.begin(),
+          sortedRows_.end(),
+          [this](const char* leftRow, const char* rightRow) {
+            for (vector_size_t index = 0; index < sortCompareFlags_.size();
+                 ++index) {
+              if (auto result = data_->compare(
+                      leftRow, rightRow, index, sortCompareFlags_[index])) {
+                return result < 0;
+              }
             }
-          }
-          return false;
-        });
+            return false;
+          });
+    }
   } else {
     // Finish spill, and we shouldn't get any rows from non-spilled partition as
     // there is only one hash partition for SortBuffer.

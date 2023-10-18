@@ -161,6 +161,7 @@ class RowContainer {
  public:
   static constexpr uint64_t kUnlimited = std::numeric_limits<uint64_t>::max();
   using Eraser = std::function<void(folly::Range<char**> rows)>;
+  friend class PrefixSort;
 
   // 'keyTypes' gives the type of row and use 'allocator' for bulk
   // allocation.

@@ -69,7 +69,8 @@ OrderBy::OrderBy(
       &nonReclaimableSection_,
       &numSpillRuns_,
       spillConfig_.has_value() ? &(spillConfig_.value()) : nullptr,
-      operatorCtx_->driverCtx()->queryConfig().orderBySpillMemoryThreshold());
+      operatorCtx_->driverCtx()->queryConfig().orderBySpillMemoryThreshold(),
+      driverCtx->queryConfig().isPrefixSortEnabled());
 }
 
 void OrderBy::addInput(RowVectorPtr input) {

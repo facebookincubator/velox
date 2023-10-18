@@ -39,7 +39,8 @@ class SortBuffer {
       tsan_atomic<bool>* nonReclaimableSection,
       uint32_t* numSpillRuns,
       const common::SpillConfig* spillConfig = nullptr,
-      uint64_t spillMemoryThreshold = 0);
+      uint64_t spillMemoryThreshold = 0,
+      const bool enablePrefixSort = false);
 
   void addInput(const VectorPtr& input);
 
@@ -130,6 +131,8 @@ class SortBuffer {
   RowVectorPtr output_;
   // The number of rows that has been returned.
   size_t numOutputRows_{0};
+
+  const bool enablePrefixSort_;
 };
 
 } // namespace facebook::velox::exec
