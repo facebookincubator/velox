@@ -912,8 +912,7 @@ struct ConvFunction {
   static const int kMinBase = 2;
   static const int kMaxBase = 36;
 
-  static bool
-  checkInput(const StringView& input, int32_t fromBase, int32_t toBase) {
+  static bool checkInput(StringView input, int32_t fromBase, int32_t toBase) {
     if (input.empty()) {
       return false;
     }
@@ -926,7 +925,7 @@ struct ConvFunction {
     return true;
   }
 
-  static int32_t skipLeadingSpaces(const StringView& input) {
+  static int32_t skipLeadingSpaces(StringView input) {
     // Ignore leading spaces.
     int i = 0;
     for (; i < input.size(); i++) {
@@ -937,8 +936,8 @@ struct ConvFunction {
     return i;
   }
 
-  uint64_t
-  toUnsigned(const StringView& input, int32_t start, int32_t fromBase) {
+  static uint64_t
+  toUnsigned(StringView input, int32_t start, int32_t fromBase) {
     uint64_t unsignedValue;
     auto fromStatus = std::from_chars(
         input.data() + start,
@@ -961,7 +960,8 @@ struct ConvFunction {
   }
 
   // For signed value, toBase is negative.
-  void toChars(out_type<Varchar>& result, int64_t signedValue, int32_t toBase) {
+  static void
+  toChars(out_type<Varchar>& result, int64_t signedValue, int32_t toBase) {
     int32_t resultSize =
         (int32_t)std::floor(
             std::log(std::abs(signedValue)) / std::log(-toBase)) +
@@ -977,7 +977,7 @@ struct ConvFunction {
   }
 
   // For unsigned value, toBase is positive.
-  void
+  static void
   toChars(out_type<Varchar>& result, uint64_t unsignedValue, int32_t toBase) {
     int32_t resultSize =
         (int32_t)std::floor(std::log(unsignedValue) / std::log(toBase)) + 1;
@@ -1016,10 +1016,10 @@ struct ConvFunction {
       return true;
     }
 
-    int64_t signedValue;
     // When toBase is negative, converts to signed value. Otherwise, converts to
     // unsigned value. Overflow is allowed, consistent with Spark.
     if (toBase < 0) {
+      int64_t signedValue;
       if (isNegativeInput) {
         signedValue = -std::abs((int64_t)unsignedValue);
       } else {
@@ -1030,7 +1030,7 @@ struct ConvFunction {
       if (isNegativeInput) {
         int64_t negativeInput = -std::abs((int64_t)unsignedValue);
         unsignedValue = (uint64_t)negativeInput;
-      } // Here directly use unsignedValue for isNegativeInput=false.
+      } // Here directly use unsignedValue if isNegativeInput = false.
       toChars(result, unsignedValue, toBase);
     }
 
