@@ -746,11 +746,11 @@ TEST_F(StringTest, conv) {
   EXPECT_EQ(conv("-15", 10, 16), "FFFFFFFFFFFFFFF1");
   EXPECT_EQ(conv("9223372036854775807", 36, 16), "FFFFFFFFFFFFFFFF");
 
-  // Test with space contained.
+  // Leading and trailing spaces.
   EXPECT_EQ(conv("15 ", 10, 16), "F");
   EXPECT_EQ(conv(" 15 ", 10, 16), "F");
 
-  // Test with invalid characters.
+  // Invalid characters.
   // Only converts "11".
   EXPECT_EQ(conv("11abc", 10, 16), "B");
   // Only converts "F".
@@ -763,8 +763,12 @@ TEST_F(StringTest, conv) {
   // All are invalid for binary base.
   EXPECT_EQ(conv("2345", 2, 10), "0");
 
-  // Test null result.
+  // Negative symbol only.
+  EXPECT_EQ(conv("-", 10, 16), "0");
+
+  // Null result.
   EXPECT_EQ(conv("", 10, 16), std::nullopt);
+  EXPECT_EQ(conv(" ", 10, 16), std::nullopt);
   EXPECT_EQ(conv("", std::nullopt, 16), std::nullopt);
   EXPECT_EQ(conv("", 10, std::nullopt), std::nullopt);
 }

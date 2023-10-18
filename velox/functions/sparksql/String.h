@@ -912,22 +912,23 @@ struct ConvFunction {
   static const int kMinBase = 2;
   static const int kMaxBase = 36;
 
-  FOLLY_ALWAYS_INLINE bool call(
-      out_type<Varchar>& result,
+  bool checkInput(
       const arg_type<Varchar>& input,
-      int32_t fromBase,
-      int32_t toBase) {
+      const int32_t fromBase,
+      const int32_t toBase) {
     if (input.empty()) {
       return false;
     }
-
     // Consistent with spark, only supports fromBase belonging to [2, 36]
     // and toBase belonging to [2, 36] or [-36, -2].
     if (fromBase < kMinBase || fromBase > kMaxBase ||
         std::abs(toBase) < kMinBase || std::abs(toBase) > kMaxBase) {
       return false;
     }
+    return true;
+  }
 
+  int32_t skipLeadingSpaces(const arg_type<Varchar>& input) {
     // Ignore leading spaces.
     int i = 0;
     for (; i < input.size(); i++) {
@@ -935,26 +936,96 @@ struct ConvFunction {
         break;
       }
     }
+    return i;
+  }
+
+  std::optional<uint64_t> toUnsigned(
+      const arg_type<Varchar>& input,
+      const int32_t start,
+      const int32_t fromBase) {
+    uint64_t unsignedValue;
+    auto fromStatus = std::from_chars(
+        input.data() + start,
+        input.data() + input.size(),
+        unsignedValue,
+        fromBase);
+    if (fromStatus.ec == std::errc::invalid_argument) {
+      return std::nullopt;
+    }
+    if (fromStatus.ec == std::errc::result_out_of_range) {
+      return kMaxUnsignedInt64_;
+    }
+    return unsignedValue;
+  }
+
+  void toUpper(char* buffer, const int32_t size) {
+    for (int i = 0; i < size; i++) {
+      buffer[i] = std::toupper(buffer[i]);
+    }
+  }
+
+  // For signed value, toBase is negative.
+  void toChars(
+      out_type<Varchar>& result,
+      const int64_t signedValue,
+      const int32_t toBase) {
+    int32_t resultSize =
+        (int32_t)std::floor(
+            std::log(std::abs(signedValue)) / std::log(-toBase)) +
+        1;
+    // Negative symbol is considered.
+    if (signedValue < 0) {
+      ++resultSize;
+    }
+    result.resize(resultSize);
+    auto toStatus = std::to_chars(
+        result.data(), result.data() + result.size(), signedValue, -toBase);
+    result.resize(toStatus.ptr - result.data());
+  }
+
+  // For unsigned value, toBase is positive.
+  void toChars(
+      out_type<Varchar>& result,
+      const uint64_t unsignedValue,
+      const int32_t toBase) {
+    int32_t resultSize =
+        (int32_t)std::floor(std::log(unsignedValue) / std::log(toBase)) + 1;
+    result.resize(resultSize);
+    auto toStatus = std::to_chars(
+        result.data(),
+        result.data() + result.size(),
+        unsignedValue,
+        std::abs(toBase));
+    result.resize(toStatus.ptr - result.data());
+  }
+
+  bool call(
+      out_type<Varchar>& result,
+      const arg_type<Varchar>& input,
+      const int32_t fromBase,
+      const int32_t toBase) {
+    if (!checkInput(input, fromBase, toBase)) {
+      return false;
+    }
+
+    auto i = skipLeadingSpaces(input);
+    // All are spaces.
+    if (i == input.size()) {
+      return false;
+    }
     const bool isNegativeInput = (input.data()[i] == '-');
-    // Skip negative symbol.
+    // Skips negative symbol.
     if (isNegativeInput) {
       ++i;
     }
-    uint64_t unsignedValue;
-    auto fromStatus = std::from_chars(
-        input.data() + i, input.data() + input.size(), unsignedValue, fromBase);
-    if (fromStatus.ec == std::errc::invalid_argument) {
-      result.append("0");
-      return true;
-    }
-    if (fromStatus.ec == std::errc::result_out_of_range) {
-      unsignedValue = kMaxUnsignedInt64_;
-    }
-    if (unsignedValue == 0) {
+
+    std::optional<uint64_t> unsignedValueOpt = toUnsigned(input, i, fromBase);
+    if (!unsignedValueOpt.has_value() || unsignedValueOpt.value() == 0) {
       result.append("0");
       return true;
     }
 
+    uint64_t unsignedValue = unsignedValueOpt.value();
     int64_t signedValue;
     // When toBase is negative, converts to signed value. Otherwise, converts to
     // unsigned value. Overflow is allowed, consistent with Spark.
@@ -962,43 +1033,23 @@ struct ConvFunction {
       int64_t negativeInput = -std::abs((int64_t)unsignedValue);
       if (toBase < 0) {
         signedValue = negativeInput;
+        toChars(result, signedValue, toBase);
       } else {
         unsignedValue = (uint64_t)(negativeInput);
+        toChars(result, unsignedValue, toBase);
       }
     } else {
       if (toBase < 0) {
         signedValue = (int64_t)unsignedValue;
+        toChars(result, signedValue, toBase);
+      } else {
+        toChars(result, unsignedValue, toBase);
       }
     }
-
-    int32_t resultSize;
-    std::to_chars_result toStatus;
-    if (toBase < 0) {
-      resultSize = (int32_t)std::floor(
-                       std::log(std::abs(signedValue)) / std::log(-toBase)) +
-          1;
-      // Negative symbol is considered.
-      if (signedValue < 0) {
-        ++resultSize;
-      }
-      result.resize(resultSize);
-      toStatus = std::to_chars(
-          result.data(), result.data() + result.size(), signedValue, -toBase);
-    } else {
-      resultSize =
-          (int32_t)std::floor(std::log(unsignedValue) / std::log(toBase)) + 1;
-      result.resize(resultSize);
-      toStatus = std::to_chars(
-          result.data(),
-          result.data() + result.size(),
-          unsignedValue,
-          std::abs(toBase));
-    }
-    result.resize(toStatus.ptr - result.data());
 
     // Converts to uppper case, consistent with Spark.
-    for (int i = 0; i < result.size(); i++) {
-      result.data()[i] = std::toupper(result.data()[i]);
+    if (std::abs(toBase) > 10) {
+      toUpper(result.data(), result.size());
     }
     return true;
   }
