@@ -384,9 +384,9 @@ TEST_F(ExprStatsTest, errorLog) {
 
   evaluate(*exprSet, data);
 
-  // Expect errors at rows 2 and 4.
-  ASSERT_EQ(2, listener->exceptionCount());
-  ASSERT_EQ(2, exceptions.size());
+  // Expect errors at rows 2, 4 and 6.
+  ASSERT_EQ(3, listener->exceptionCount());
+  ASSERT_EQ(3, exceptions.size());
   for (const auto& exception : exceptions) {
     ASSERT_TRUE(
         exception.find("Context: cast((c0) as INTEGER)") != std::string::npos);
@@ -422,7 +422,7 @@ TEST_F(ExprStatsTest, errorLog) {
   ASSERT_TRUE(
       exceptions[1].find("Error Code: INVALID_ARGUMENT") != std::string::npos);
   ASSERT_TRUE(
-      exceptions[2].find("Error Code: ARITHMETIC_ERROR") != std::string::npos);
+      exceptions[2].find("Error Code: INVALID_ARGUMENT") != std::string::npos);
   ASSERT_TRUE(
       exceptions[3].find("Error Code: ARITHMETIC_ERROR") != std::string::npos);
 

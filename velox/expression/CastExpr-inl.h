@@ -126,6 +126,27 @@ StringView convertToStringView(
   return StringView(startPosition, writePosition - startPosition);
 }
 
+inline bool hasLeadingOrTrailingWhitespace(StringView value) {
+  if (value.empty()) {
+    return false;
+  }
+  char toCheck[]{value.data()[0], value.data()[value.size() - 1]};
+  for (char c : toCheck) {
+    // Use the identical list of whitespaces from std::isspace. Implement for
+    // speed.
+    switch (c) {
+      case ' ':
+      case '\t':
+      case '\r':
+      case '\n':
+      case '\v':
+      case '\f':
+        return true;
+    }
+  }
+  return false;
+}
+
 } // namespace
 
 template <bool adjustForTimeZone>
@@ -206,7 +227,10 @@ void CastExpr::applyCastKernel(
     if constexpr (
         TypeTraits<ToKind>::isPrimitiveType &&
         TypeTraits<ToKind>::isFixedWidth) {
-      if (inputRowValue.size() == 0) {
+      if (inputRowValue.size() == 0 ||
+          (!Truncate &&
+           std::is_integral_v<typename TypeTraits<ToKind>::NativeType> &&
+           hasLeadingOrTrailingWhitespace(inputRowValue))) {
         if (setNullInResultAtError()) {
           result->setNull(row, true);
         } else {

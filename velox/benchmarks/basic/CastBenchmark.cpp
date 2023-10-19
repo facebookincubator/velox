@@ -32,6 +32,11 @@ int main(int argc, char** argv) {
   auto invalidInput = vectorMaker.flatVector<facebook::velox::StringView>({""});
   auto validInput = vectorMaker.flatVector<facebook::velox::StringView>({""});
   auto nanInput = vectorMaker.flatVector<facebook::velox::StringView>({""});
+  auto whitespaceInput = vectorMaker.flatVector<facebook::velox::StringView>(
+      vectorSize, [&](auto j) {
+        return StringView::makeInline(
+            j % 2 == 0 ? fmt::format(" {}", j) : fmt::format("{} ", j));
+      });
   auto decimalInput = vectorMaker.flatVector<int64_t>(
       vectorSize, [&](auto j) { return 12345 * j; }, nullptr, DECIMAL(9, 2));
   auto shortDecimalInput = vectorMaker.flatVector<int64_t>(
@@ -68,6 +73,7 @@ int main(int argc, char** argv) {
               {"valid",
                "empty",
                "nan",
+               "whitespace",
                "decimal",
                "short_decimal",
                "long_decimal",
@@ -75,6 +81,7 @@ int main(int argc, char** argv) {
               {validInput,
                invalidInput,
                nanInput,
+               whitespaceInput,
                decimalInput,
                shortDecimalInput,
                longDecimalInput,
@@ -84,6 +91,10 @@ int main(int argc, char** argv) {
           "tryexpr_cast_invalid_empty_input", "try (cast (empty as int))")
       .addExpression("try_cast_invalid_nan", "try_cast (nan as int)")
       .addExpression("tryexpr_cast_invalid_nan", "try (cast (nan as int))")
+      .addExpression(
+          "try_cast_invalid_whitespace", "try_cast (whitespace as int)")
+      .addExpression(
+          "tryexpr_cast_invalid_whitespace", "try (cast (whitespace as int))")
       .addExpression("try_cast_valid", "try_cast (valid as int)")
       .addExpression("tryexpr_cast_valid", "try (cast (valid as int))")
       .addExpression("cast_valid", "cast(valid as int)")

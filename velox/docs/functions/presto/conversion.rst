@@ -268,7 +268,9 @@ From strings
 
 Casting a string to an integral type is allowed if the string represents an
 integral number within the range of the result type. By default, casting from
-strings that represent floating-point numbers is not allowed.
+strings that represent floating-point numbers is not allowed. Casting from
+strings that contain non-numerical and non-sign characters, whitespaces for example
+is not valid either, by default.
 
 If cast_to_int_by_truncate is set to true, and the string represents a floating-point number,
 the decimal part will be truncated for casting to an integer.
@@ -314,12 +316,19 @@ Invalid examples if cast_to_int_by_truncate=false
 
   SELECT cast('12345.67' as tinyint); -- Invalid argument
   SELECT cast('1.2' as tinyint); -- Invalid argument
+  SELECT cast('1.0' as tinyint); -- Invalid argument
   SELECT cast('-1.8' as tinyint); -- Invalid argument
   SELECT cast('1.' as tinyint); -- Invalid argument
   SELECT cast('-1.' as tinyint); -- Invalid argument
   SELECT cast('0.' as tinyint); -- Invalid argument
+  SELECT cast('1E4' as bigint); -- Invalid argument
+  SELECT cast('1e4' as bigint); -- Invalid argument
   SELECT cast('.' as tinyint); -- Invalid argument
   SELECT cast('-.' as tinyint); -- Invalid argument
+  SELECT cast(' ' as smallint); -- Invalid argument
+  SELECT cast('1 ' as smallint); -- Invalid argument
+  SELECT cast('infinity' as bigint); -- Invalid argument
+  SELECT cast('nan' as bigint); -- Invalid argument
 
 From decimal
 ^^^^^^^^^^^^
@@ -391,6 +400,8 @@ Invalid examples
   SELECT cast('-1' as boolean); -- Invalid argument
   SELECT cast('tr' as boolean); -- Invalid argument
   SELECT cast('tru' as boolean); -- Invalid argument
+  SELECT cast('true ' as boolean); -- Invalid argument
+  SELECT cast(' f' as boolean); -- Invalid argument
 
 Cast to Floating-Point Types
 ----------------------------
@@ -428,7 +439,9 @@ Valid examples
 
   SELECT cast('1.' as real); -- 1.0
   SELECT cast('1' as real); -- 1.0
+  SELECT cast('1.0 ' as real); -- 1.0
   SELECT cast('1.7E308' as real); -- Infinity
+  SELECT cast(' 1.7E308' as real); -- Infinity
   SELECT cast('infinity' as real); -- Infinity (case insensitive)
   SELECT cast('-infinity' as real); -- -Infinity (case insensitive)
   SELECT cast('nan' as real); -- NaN (case insensitive)
@@ -437,7 +450,6 @@ Invalid examples
 
 ::
 
-  SELECT cast('1.7E308' as real); -- Out of range
   SELECT cast('1.2a' as real); -- Invalid argument
   SELECT cast('1.2.3' as real); -- Invalid argument
 

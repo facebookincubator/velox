@@ -806,14 +806,22 @@ TEST_F(CastExprTest, primitiveInvalidCornerCases) {
     // Invalid strings.
     testCast<std::string, int8_t>("tinyint", {"1234567"}, {0}, true);
     testCast<std::string, int8_t>("tinyint", {"1.2"}, {0}, true);
+    testCast<std::string, int16_t>("smallint", {"1.0"}, {0}, true);
     testCast<std::string, int8_t>("tinyint", {"1.23444"}, {0}, true);
     testCast<std::string, int8_t>("tinyint", {".2355"}, {0}, true);
     testCast<std::string, int8_t>("tinyint", {"1a"}, {0}, true);
     testCast<std::string, int8_t>("tinyint", {""}, {0}, true);
+    testCast<std::string, int8_t>("tinyint", {" "}, {0}, true);
+    testCast<std::string, int16_t>("smallint", {"1 "}, {0}, true);
+    testCast<std::string, int16_t>("smallint", {" 1"}, {0}, true);
     testCast<std::string, int32_t>("integer", {"1'234'567"}, {0}, true);
     testCast<std::string, int32_t>("integer", {"1,234,567"}, {0}, true);
+    testCast<std::string, int64_t>("bigint", {"1E4"}, {0}, true);
+    testCast<std::string, int64_t>("bigint", {"1e4"}, {0}, true);
     testCast<std::string, int64_t>("bigint", {"infinity"}, {0}, true);
+    testCast<std::string, int64_t>("bigint", {"infinity "}, {0}, true);
     testCast<std::string, int64_t>("bigint", {"nan"}, {0}, true);
+    testCast<std::string, int64_t>("bigint", {"nan "}, {0}, true);
   }
 
   // To floating-point.
@@ -833,8 +841,12 @@ TEST_F(CastExprTest, primitiveInvalidCornerCases) {
     testCast<std::string, bool>("boolean", {"infinity"}, {0}, true);
     testCast<std::string, bool>("boolean", {"12"}, {0}, true);
     testCast<std::string, bool>("boolean", {"-1"}, {0}, true);
+    testCast<std::string, bool>("boolean", {"1.0"}, {0}, true);
+    testCast<std::string, bool>("boolean", {"0.0"}, {0}, true);
     testCast<std::string, bool>("boolean", {"tr"}, {0}, true);
     testCast<std::string, bool>("boolean", {"tru"}, {0}, true);
+    testCast<std::string, bool>("boolean", {"true "}, {0}, true);
+    testCast<std::string, bool>("boolean", {" f"}, {0}, true);
   }
 
   setCastIntByTruncate(true);
@@ -878,6 +890,8 @@ TEST_F(CastExprTest, primitiveValidCornerCases) {
     testCast<double, int64_t>("bigint", {12345.12}, {12345}, false);
     testCast<double, int64_t>("bigint", {12345.67}, {12346}, false);
     testCast<std::string, int8_t>("tinyint", {"+1"}, {1}, false);
+    testCast<std::string, int32_t>("integer", {"-1"}, {-1}, false);
+    testCast<std::string, int64_t>("bigint", {"12345"}, {12345}, false);
   }
 
   // To floating-point.
@@ -885,6 +899,9 @@ TEST_F(CastExprTest, primitiveValidCornerCases) {
     testCast<std::string, float>("real", {"1.7E308"}, {kInf}, false);
     testCast<std::string, float>("real", {"1."}, {1.0}, false);
     testCast<std::string, float>("real", {"1"}, {1}, false);
+    testCast<std::string, float>("real", {" 1.7E308"}, {kInf}, false);
+    testCast<std::string, float>("real", {"1. "}, {1.0}, false);
+    testCast<std::string, float>("real", {"1 "}, {1}, false);
     // When casting from "Infinity" and "NaN", Presto is case sensitive. But we
     // let them be case insensitive to be consistent with other conversions.
     testCast<std::string, float>("real", {"infinity"}, {kInf}, false);
