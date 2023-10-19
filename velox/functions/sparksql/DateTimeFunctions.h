@@ -342,42 +342,36 @@ template <typename T>
 struct AddMonthsFunction {
   VELOX_DEFINE_FUNCTION_TYPES(T);
 
-  FOLLY_ALWAYS_INLINE int getYear(const std::tm& time) {
-    return 1900 + time.tm_year;
-  }
-
-  FOLLY_ALWAYS_INLINE int getMonth(const std::tm& time) {
-    return 1 + time.tm_mon;
-  }
-
-  FOLLY_ALWAYS_INLINE int getDay(const std::tm& time) {
-    return time.tm_mday;
-  }
-
   FOLLY_ALWAYS_INLINE void call(
       out_type<Date>& result,
-      const arg_type<Date>& date,
-      const int32_t value) {
-    auto dateTime = getDateTime(date);
-    auto year = getYear(dateTime);
-    auto month = getMonth(dateTime);
-    auto day = getDay(dateTime);
+      const arg_type<Date>& startDate,
+      int32_t numMonths) {
+    auto dateTime = getDateTime(startDate);
+    auto startYear = getYear(dateTime);
+    auto startMonth = getMonth(dateTime);
+    auto startDay = getDay(dateTime);
 
-    int64_t m = month - 1 + value;
-    int64_t y = (m >= 0 ? m : m - 11) / 12;
-    auto dm = static_cast<int32_t>(m - y * 12 + 1);
-    auto dy = year + y;
+    // Similar to handling number in base 12, makes startMonth in range [0, 11].
+    int64_t monthAdded = startMonth - 1 + numMonths;
+    // Year offset used to adjust month/year when monthAdded not in range
+    // [0, 11].
+    int64_t yearOffset = (monthAdded >= 0 ? monthAdded : monthAdded - 11) / 12;
+    // Adjusts monthAdded to natural month in range [1, 12].
+    auto month = static_cast<int32_t>(monthAdded - yearOffset * 12 + 1);
+    // Adjusts year.
+    auto year = startYear + yearOffset;
 
-    auto lastDay = util::getMaxDayOfMonth(dy, dm);
-    auto daysSinceEpoch =
-        util::daysSinceEpochFromDate(dy, dm, lastDay < day ? lastDay : day);
+    auto lastDay = util::getMaxDayOfMonth(year, month);
+    // Adjusts day to valid one.
+    auto day = lastDay < startDay ? lastDay : startDay;
+    auto daysSinceEpoch = util::daysSinceEpochFromDate(
+        year, month, lastDay < startDay ? lastDay : startDay);
     VELOX_USER_CHECK_EQ(
         daysSinceEpoch,
         (int32_t)daysSinceEpoch,
-        "Integer overflow in add_months({}-{}-{})",
-        year,
-        month,
-        day);
+        "Integer overflow in add_months({}, {})",
+        DATE()->toString(startDate),
+        numMonths);
     result = daysSinceEpoch;
   }
 };

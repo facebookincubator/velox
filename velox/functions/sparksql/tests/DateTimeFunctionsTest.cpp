@@ -409,36 +409,35 @@ TEST_F(DateTimeFunctionsTest, dateDiffDate) {
 }
 
 TEST_F(DateTimeFunctionsTest, addMonths) {
-  const auto parseDate =
-      [](const std::optional<const char*> date) -> std::optional<int32_t> {
-    if (date.has_value()) {
-      return DATE()->toDays(date.value());
-    }
-    return std::nullopt;
+  const auto parseDate = [](const std::string& dateString) {
+    return DATE()->toDays(dateString);
   };
 
-  const auto addMonths =
-      [&](const std::optional<const char*> date,
-          std::optional<int32_t> value) -> std::optional<std::string> {
-    auto res = evaluateOnce<int32_t, int32_t>(
-        "add_months(c0, c1)", {parseDate(date), value}, {DATE(), INTEGER()});
-    if (res.has_value()) {
-      return DATE()->toString(res.value());
-    }
-    return std::nullopt;
+  const auto addMonths = [&](const std::string& dateString, int32_t value) {
+    return evaluateOnce<int32_t, int32_t>(
+        "add_months(c0, c1)",
+        {parseDate(dateString), value},
+        {DATE(), INTEGER()});
   };
 
-  EXPECT_EQ("2015-02-28", addMonths("2015-01-30", 1));
-  EXPECT_EQ("2015-01-30", addMonths("2015-01-30", 0));
-  EXPECT_EQ("2016-02-29", addMonths("2016-03-30", -1));
-  EXPECT_EQ("2014-11-30", addMonths("2015-01-30", -2));
+  EXPECT_EQ(addMonths("2015-01-30", 1), parseDate("2015-02-28"));
+  EXPECT_EQ(addMonths("2015-01-30", 11), parseDate("2015-12-30"));
+  EXPECT_EQ(addMonths("2015-01-01", 10), parseDate("2015-11-01"));
+  EXPECT_EQ(addMonths("2015-01-31", 24), parseDate("2017-01-31"));
+  EXPECT_EQ(addMonths("2015-01-31", 8), parseDate("2015-09-30"));
+  EXPECT_EQ(addMonths("2015-01-30", 0), parseDate("2015-01-30"));
+  EXPECT_EQ(addMonths("2016-03-30", -1), parseDate("2016-02-29"));
+  EXPECT_EQ(addMonths("2015-01-30", -2), parseDate("2014-11-30"));
+  EXPECT_EQ(addMonths("2015-04-20", -24), parseDate("2013-04-20"));
 
   constexpr int32_t kMin = std::numeric_limits<int32_t>::min();
   constexpr int32_t kMax = std::numeric_limits<int32_t>::max();
   VELOX_ASSERT_THROW(
-      addMonths("2023-07-10", kMin), "Integer overflow in add_months");
+      addMonths("2023-07-10", kMin),
+      fmt::format("Integer overflow in add_months(2023-07-10, {})", kMin));
   VELOX_ASSERT_THROW(
-      addMonths("2023-07-10", kMax), "Integer overflow in add_months");
+      addMonths("2023-07-10", kMax),
+      fmt::format("Integer overflow in add_months(2023-07-10, {})", kMax));
 }
 } // namespace
 } // namespace facebook::velox::functions::sparksql::test
