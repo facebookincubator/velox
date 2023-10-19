@@ -130,7 +130,7 @@ TEST_F(E2EFilterTest, integerDirect) {
 
 TEST_F(E2EFilterTest, integerDeltaBinaryPack) {
   options_.enableDictionary = false;
-  options_.encoding = ::parquet::Encoding::DELTA_BINARY_PACKED;
+  options_.encoding = facebook::velox::parquet::arrow::Encoding::DELTA_BINARY_PACKED;
 
   testWithTypes(
       "short_val:smallint,"
