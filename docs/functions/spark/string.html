@@ -72,6 +72,33 @@ If <code class="docutils literal notranslate"><span class="pre">n</span> <span c
 </dd></dl>
 
 <dl class="spark function">
+<dt class="sig sig-object spark" id="conv">
+<span class="sig-name descname"><span class="pre">conv</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">number</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">fromBase</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">toBase</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">varchar</span></span></span><a class="headerlink" href="#conv" title="Permalink to this definition">¶</a></dt>
+<dd><p>Converts <code class="docutils literal notranslate"><span class="pre">number</span></code> represented as a string from <code class="docutils literal notranslate"><span class="pre">fromBase</span></code> to <code class="docutils literal notranslate"><span class="pre">toBase</span></code>.
+<code class="docutils literal notranslate"><span class="pre">fromBase</span></code> must be an INTEGER value between 2 and 36 inclusively. <code class="docutils literal notranslate"><span class="pre">toBase</span></code> must
+be an INTEGER value between 2 and 36 inclusively or between -36 and -2 inclusively.
+Otherwise, returns NULL.
+Returns a signed number if <code class="docutils literal notranslate"><span class="pre">toBase</span></code> is negative. Otherwise, returns an unsigned one.
+Returns NULL if <code class="docutils literal notranslate"><span class="pre">number</span></code> is empty.
+Skips leading spaces. <code class="docutils literal notranslate"><span class="pre">number</span></code> may contain other characters not valid for <code class="docutils literal notranslate"><span class="pre">fromBase</span></code>.
+All characters starting from the first invalid character till the end of the string are
+ignored. Only converts valid characters even though <code class="docutils literal notranslate"><span class="pre">fromBase</span></code> = <code class="docutils literal notranslate"><span class="pre">toBase</span></code>. Returns
+‘0’ if no valid character is found.</p>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">SELECT</span> <span class="n">conv</span><span class="p">(</span><span class="s1">&#39;100&#39;</span><span class="p">,</span> <span class="mi">2</span><span class="p">,</span> <span class="mi">10</span><span class="p">);</span> <span class="o">--</span> <span class="s1">&#39;4&#39;</span>
+<span class="n">SELECT</span> <span class="n">conv</span><span class="p">(</span><span class="s1">&#39;-10&#39;</span><span class="p">,</span> <span class="mi">16</span><span class="p">,</span> <span class="o">-</span><span class="mi">10</span><span class="p">);</span> <span class="o">--</span> <span class="s1">&#39;-16&#39;</span>
+<span class="n">SELECT</span> <span class="n">conv</span><span class="p">(</span><span class="s2">&quot;-1&quot;</span><span class="p">,</span> <span class="mi">10</span><span class="p">,</span> <span class="mi">16</span><span class="p">);</span> <span class="o">--</span> <span class="s1">&#39;FFFFFFFFFFFFFFFF&#39;</span>
+<span class="n">SELECT</span> <span class="n">conv</span><span class="p">(</span><span class="s2">&quot;123&quot;</span><span class="p">,</span> <span class="mi">10</span><span class="p">,</span> <span class="mi">39</span><span class="p">);</span> <span class="o">--</span> <span class="n">NULL</span>
+<span class="n">SELECT</span> <span class="n">conv</span><span class="p">(</span><span class="s1">&#39;&#39;</span><span class="p">,</span> <span class="mi">16</span><span class="p">,</span> <span class="mi">10</span><span class="p">);</span> <span class="o">--</span> <span class="n">NULL</span>
+<span class="n">SELECT</span> <span class="n">conv</span><span class="p">(</span><span class="s1">&#39; &#39;</span><span class="p">,</span> <span class="mi">2</span><span class="p">,</span> <span class="mi">10</span><span class="p">);</span> <span class="o">--</span> <span class="n">NULL</span>
+<span class="n">SELECT</span> <span class="n">conv</span><span class="p">(</span><span class="s2">&quot;11&quot;</span><span class="p">,</span> <span class="mi">10</span><span class="p">,</span> <span class="mi">16</span><span class="p">);</span> <span class="o">--</span> <span class="s1">&#39;B&#39;</span>
+<span class="n">SELECT</span> <span class="n">conv</span><span class="p">(</span><span class="s2">&quot;11ABC&quot;</span><span class="p">,</span> <span class="mi">10</span><span class="p">,</span> <span class="mi">16</span><span class="p">);</span> <span class="o">--</span> <span class="s1">&#39;B&#39;</span>
+<span class="n">SELECT</span> <span class="n">conv</span><span class="p">(</span><span class="s2">&quot;11abc&quot;</span><span class="p">,</span> <span class="mi">10</span><span class="p">,</span> <span class="mi">10</span><span class="p">);</span> <span class="o">--</span> <span class="s1">&#39;11&#39;</span>
+<span class="n">SELECT</span> <span class="n">conv</span><span class="p">(</span><span class="s1">&#39;H016F&#39;</span><span class="p">,</span> <span class="mi">16</span><span class="p">,</span> <span class="mi">10</span><span class="p">);</span> <span class="o">--</span> <span class="s1">&#39;0&#39;</span>
+</pre></div>
+</div>
+</dd></dl>
+
+<dl class="spark function">
 <dt class="sig sig-object spark" id="endswith">
 <span class="sig-name descname"><span class="pre">endswith</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">left</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">right</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">boolean</span></span></span><a class="headerlink" href="#endswith" title="Permalink to this definition">¶</a></dt>
 <dd><p>Returns true if ‘left’ ends with ‘right’. Otherwise, returns false.</p>
