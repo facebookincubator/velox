@@ -370,6 +370,8 @@ class XxHash64Function final : public exec::VectorFunction {
 
 } // namespace
 
+// Not all types are supported by now. Check types when making hash function.
+// See checkArgTypes.
 std::vector<std::shared_ptr<exec::FunctionSignature>> hashSignatures() {
   return {exec::FunctionSignatureBuilder()
               .returnType("integer")
@@ -378,9 +380,9 @@ std::vector<std::shared_ptr<exec::FunctionSignature>> hashSignatures() {
               .build()};
 }
 
-void checkInputType(const std::vector<exec::VectorFunctionArg>& inputArgs) {
-  for (int i = 0; i < inputArgs.size(); i++) {
-    switch (inputArgs[i].type->kind()) {
+void checkArgTypes(const std::vector<exec::VectorFunctionArg>& args) {
+  for (const auto& arg : args) {
+    switch (arg.type->kind()) {
       case TypeKind::BOOLEAN:
       case TypeKind::TINYINT:
       case TypeKind::SMALLINT:
@@ -394,8 +396,7 @@ void checkInputType(const std::vector<exec::VectorFunctionArg>& inputArgs) {
       case TypeKind::TIMESTAMP:
         break;
       default:
-        VELOX_USER_FAIL(
-            "Unsupported type for hash: {}", inputArgs[i].type->toString())
+        VELOX_USER_FAIL("Unsupported type for hash: {}", arg.type->toString())
     }
   }
 }
@@ -404,7 +405,7 @@ std::shared_ptr<exec::VectorFunction> makeHash(
     const std::string& name,
     const std::vector<exec::VectorFunctionArg>& inputArgs,
     const core::QueryConfig& /*config*/) {
-  checkInputType(inputArgs);
+  checkArgTypes(inputArgs);
   static const auto kHashFunction = std::make_shared<Murmur3HashFunction>();
   return kHashFunction;
 }
@@ -413,7 +414,7 @@ std::shared_ptr<exec::VectorFunction> makeHashWithSeed(
     const std::string& name,
     const std::vector<exec::VectorFunctionArg>& inputArgs,
     const core::QueryConfig& /*config*/) {
-  checkInputType(inputArgs);
+  checkArgTypes(inputArgs);
   const auto& constantSeed = inputArgs[0].constantValue;
   if (!constantSeed || constantSeed->isNullAt(0)) {
     VELOX_USER_FAIL("{} requires a constant non-null seed argument.", name);
@@ -453,7 +454,7 @@ std::shared_ptr<exec::VectorFunction> makeXxHash64(
     const std::string& name,
     const std::vector<exec::VectorFunctionArg>& inputArgs,
     const core::QueryConfig& /*config*/) {
-  checkInputType(inputArgs);
+  checkArgTypes(inputArgs);
   static const auto kXxHash64Function = std::make_shared<XxHash64Function>();
   return kXxHash64Function;
 }
