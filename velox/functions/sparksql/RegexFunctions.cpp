@@ -130,7 +130,6 @@ struct RegexReplaceFunction {
     std::string string(stringInput.data(), stringInput.size());
     RE2::GlobalReplace(&string, *patternRegex, replaceStringPiece);
 
-    // Prepare the final result string without unnecessary copying
     if (string.size()) {
       result.resize(string.size());
       std::memcpy(result.data(), string.data(), string.size());
@@ -143,7 +142,7 @@ struct RegexReplaceFunction {
       const arg_type<Varchar>& pattern,
       const arg_type<Varchar>& replace,
       const arg_type<int64_t>& position) {
-    VELOX_CHECK_LT(-1, position - 1);
+    VELOX_USER_CHECK_LT(-1, position - 1);
     checkForCompatiblePattern(pattern);
 
     re2::RE2* patternRegex = getCachedRegex(pattern.str());
@@ -162,7 +161,6 @@ struct RegexReplaceFunction {
         targetStringPiece.data(), targetStringPiece.size());
     RE2::GlobalReplace(&targetString, *patternRegex, replaceStringPiece);
 
-    // Prepare the final result string without unnecessary copying
     if (targetString.size() || prefix.size()) {
       result.resize(prefix.size() + targetString.size());
       std::memcpy(result.data(), prefix.data(), prefix.size());
@@ -182,7 +180,8 @@ struct RegexReplaceFunction {
     VELOX_USER_CHECK_LT(
         patternCache_.size(),
         kMaxCompiledRegexes,
-        "regex_replace hit the maximum number of unique regexes: kMaxCompiledRegexes");
+        "regex_replace hit the maximum number of unique regexes: {}",
+        kMaxCompiledRegexes);
     auto patternRegex = std::make_unique<re2::RE2>(pattern);
     auto* rawPatternRegex = patternRegex.get();
     checkForBadPattern(*rawPatternRegex);

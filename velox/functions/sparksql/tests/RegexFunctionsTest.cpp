@@ -44,11 +44,10 @@ class RegexFunctionsTest : public test::SparkFunctionBaseTest {
         fmt::format("regexp_extract(c0, '{}')", pattern), str);
   }
 
-  void testRegexReplaceSimpleOnce(
+  std::string testRegexReplaceSimpleOnce(
       const std::vector<std::optional<std::string>>& input,
       std::string pattern,
       std::string replace,
-      std::string output,
       std::optional<int> position =
           std::nullopt /*adding the optional position parameter*/) {
     auto valueAt = [&input](vector_size_t row) {
@@ -72,38 +71,50 @@ class RegexFunctionsTest : public test::SparkFunctionBaseTest {
                 "regex_replace(c0, '{}', '{}', {})",
                 pattern,
                 replace,
-                *position),
+                position.value()),
             rowVector);
       }
     }();
+    return result.value();
+  }
+  std::shared_ptr<facebook::velox::FlatVector<facebook::velox::StringView>>
+  convertOutput(const std::vector<std::string>& output, size_t repeatCount) {
+    std::vector<std::optional<facebook::velox::StringView>> repeatedOutput(
+        output.size() * repeatCount);
 
-    EXPECT_EQ(result, output);
+    using StringView = facebook::velox::StringView;
+
+    for (size_t i = 0; i < repeatCount; ++i) {
+      for (size_t j = 0; j < output.size(); ++j) {
+        repeatedOutput[i * output.size() + j] = !output[j].empty()
+            ? std::optional<StringView>(output[j])
+            : std::nullopt;
+      }
+    }
+
+    return makeNullableFlatVector(repeatedOutput);
   }
 
-  void testingRegexReplaceRowsSimple(
+  std::shared_ptr<facebook::velox::SimpleVector<facebook::velox::StringView>>
+  testingRegexReplaceRowsSimple(
       const std::vector<std::optional<std::string>>& input,
       const std::vector<std::optional<std::string>>& pattern,
       const std::vector<std::optional<std::string>>& replace,
-      const std::vector<std::optional<std::string>>& output,
-      const std::optional<std::vector<int64_t>>& positionOpt = std::nullopt,
+      const std::optional<std::vector<int64_t>>& position = std::nullopt,
       int repeatCount = 1) {
-    if (repeatCount < 1) {
-      return;
-    }
+    EXPECT_GT(repeatCount, 0);
 
-    // Repeat the inputs
+    // Repeat the inputs to allow for testing very large dataframes.
     std::vector<std::optional<std::string>> repeatedInput(
         input.size() * repeatCount);
     std::vector<std::optional<std::string>> repeatedPattern(
         pattern.size() * repeatCount);
     std::vector<std::optional<std::string>> repeatedReplace(
         replace.size() * repeatCount);
-    std::vector<std::optional<StringView>> repeatedOutput(
-        output.size() * repeatCount); // Modified to StringView
     std::optional<std::vector<int64_t>> repeatedPosition;
 
-    if (positionOpt.has_value()) {
-      repeatedPosition.emplace(positionOpt->size() * repeatCount);
+    if (position.has_value()) {
+      repeatedPosition.emplace(position->size() * repeatCount);
     }
 
     for (int i = 0; i < repeatCount; ++i) {
@@ -118,17 +129,11 @@ class RegexFunctionsTest : public test::SparkFunctionBaseTest {
           replace.end(),
           repeatedReplace.begin() + i * replace.size());
 
-      // Convert to StringView while copying for repeatedOutput
-      for (size_t j = 0; j < output.size(); ++j) {
-        repeatedOutput[i * output.size() + j] =
-            output[j] ? StringView(*output[j]) : StringView();
-      }
-
-      if (positionOpt.has_value()) {
+      if (position.has_value()) {
         std::copy(
-            positionOpt->begin(),
-            positionOpt->end(),
-            repeatedPosition->begin() + i * positionOpt->size());
+            position->begin(),
+            position->end(),
+            repeatedPosition->begin() + i * position->size());
       }
     }
 
@@ -168,7 +173,7 @@ class RegexFunctionsTest : public test::SparkFunctionBaseTest {
 
     std::shared_ptr<SimpleVector<StringView>>
         result; // Modified return type to SimpleVector<StringView>
-    if (positionOpt) {
+    if (position) {
       auto position = *repeatedPosition;
 
       auto valueAtPosition = [&position](vector_size_t row) -> int64_t {
@@ -191,13 +196,11 @@ class RegexFunctionsTest : public test::SparkFunctionBaseTest {
           "regex_replace(c0, c1, c2)",
           makeRowVector({inputString, patternString, replaceString}));
     }
-
-    auto expectedResult = makeNullableFlatVector<StringView>(repeatedOutput);
-
-    assertEqualVectors(expectedResult, result);
+    return result;
   }
 
-  void testingRegexReplaceSimpleConstantPattern(
+  std::shared_ptr<facebook::velox::SimpleVector<facebook::velox::StringView>>
+  testingRegexReplaceSimpleConstantPattern(
       const std::vector<std::optional<std::string>>& input,
       std::string pattern,
       const std::vector<std::optional<std::string>>& replace,
@@ -247,18 +250,7 @@ class RegexFunctionsTest : public test::SparkFunctionBaseTest {
           fmt::format("regex_replace(c0, '{}', c1)", pattern),
           makeRowVector({inputString, replaceString}));
     }
-
-    std::vector<std::optional<StringView>> convertedOutput(output.size());
-
-    for (size_t i = 0; i < output.size(); ++i) {
-      if (output[i].has_value()) {
-        convertedOutput[i] = StringView(*output[i]);
-      }
-    }
-
-    auto expectedResult = makeNullableFlatVector<StringView>(convertedOutput);
-
-    assertEqualVectors(expectedResult, result);
+    return result;
   };
 };
 
@@ -331,200 +323,245 @@ TEST_F(RegexFunctionsTest, RegexMatchRegistration) {
 }
 
 TEST_F(RegexFunctionsTest, RegexReplaceRegistration) {
-  testRegexReplaceSimpleOnce({"abc"}, "a", "teehee", "teeheebc");
+  std::string output = "teeheebc";
+  auto result = testRegexReplaceSimpleOnce({"abc"}, "a", "teehee");
+  EXPECT_EQ(result, output);
 }
 
 TEST_F(RegexFunctionsTest, RegexReplaceEmptyString) {
-  testRegexReplaceSimpleOnce({""}, "empty string", "nothing", "");
+  std::string output = "";
+  auto result = testRegexReplaceSimpleOnce({""}, "empty string", "nothing");
+  EXPECT_EQ(result, output);
 }
 
 TEST_F(RegexFunctionsTest, RegexReplaceSimple) {
-  testRegexReplaceSimpleOnce({"Hello World"}, "l", "L", "HeLLo WorLd");
+  std::string output = "HeLLo WorLd";
+  auto result = testRegexReplaceSimpleOnce({"Hello World"}, "l", "L");
+  EXPECT_EQ(result, output);
 }
 
 TEST_F(RegexFunctionsTest, RegexReplaceSimplePosition) {
-  testRegexReplaceSimpleOnce({"Hello World"}, "l", "L", "Hello WorLd", {6});
+  std::string output = "Hello WorLd";
+  auto result = testRegexReplaceSimpleOnce({"Hello World"}, "l", "L", {6});
+  EXPECT_EQ(result, output);
+}
+
+TEST_F(RegexFunctionsTest, RegexReplaceNonAsciiPosition) {
+  std::string output = "Rèsume is updated";
+  auto result =
+      testRegexReplaceSimpleOnce({"Résume is updated"}, "é", "è", {2});
+  EXPECT_EQ(result, output);
 }
 
 TEST_F(RegexFunctionsTest, RegexReplaceMatchSparkSqlTestSimple) {
   std::vector<int64_t> positions = {1, 1, 1};
-  testingRegexReplaceRowsSimple(
+  const std::vector<std::string> outputVector = {"300", "400", "400-400"};
+  auto result = testingRegexReplaceRowsSimple(
       {"100-200", "100-200", "100-200"},
       {"(\\d+)-(\\d+)", "(\\d+)-(\\d+)", "(\\d+)"},
       {"300", "400", "400"},
-      {"300", "400", "400-400"},
       positions);
+  auto output = convertOutput({"300", "400", "400-400"}, 1);
+  assertEqualVectors(result, output);
 }
 
 TEST_F(RegexFunctionsTest, RegexReplaceWithEmptyString) {
-  testRegexReplaceSimpleOnce({"abc"}, "a", "", "bc");
+  std::string output = "bc";
+  auto result = testRegexReplaceSimpleOnce({"abc"}, "a", "");
+  EXPECT_EQ(result, output);
 }
 
 TEST_F(RegexFunctionsTest, RegexBadJavaPattern) {
   EXPECT_THROW(
-      testRegexReplaceSimpleOnce({"[]"}, "[a[b]]", "", ""), VeloxUserError);
+      testRegexReplaceSimpleOnce({"[]"}, "[a[b]]", ""), VeloxUserError);
   EXPECT_THROW(
-      testRegexReplaceSimpleOnce({"[]"}, "[a&&[b]]", "", ""), VeloxUserError);
+      testRegexReplaceSimpleOnce({"[]"}, "[a&&[b]]", ""), VeloxUserError);
   EXPECT_THROW(
-      testRegexReplaceSimpleOnce({"[]"}, "[a&&[^b]]", "", ""), VeloxUserError);
+      testRegexReplaceSimpleOnce({"[]"}, "[a&&[^b]]", ""), VeloxUserError);
 }
 
 TEST_F(RegexFunctionsTest, RegexReplacePosition) {
-  testRegexReplaceSimpleOnce({"abca"}, "a", "", "abc", {2});
-  testRegexReplaceSimpleOnce({"abca"}, "a", "", "bc", {1});
-  testRegexReplaceSimpleOnce({"abca"}, "bc", "aaa", "aaaaa", {1});
+  std::string output1 = "abc";
+  std::string output2 = "bc";
+  std::string output3 = "aaaaa";
+  auto result1 = testRegexReplaceSimpleOnce({"abca"}, "a", "", {2});
+  auto result2 = testRegexReplaceSimpleOnce({"abca"}, "a", "", {1});
+  auto result3 = testRegexReplaceSimpleOnce({"abca"}, "bc", "aaa", {1});
+  EXPECT_EQ(result1, output1);
+  EXPECT_EQ(result2, output2);
+  EXPECT_EQ(result3, output3);
 }
 
 TEST_F(RegexFunctionsTest, RegexReplaceNegativePosition) {
   EXPECT_THROW(
-      testRegexReplaceSimpleOnce({"abc"}, "a", "", "abc", {-1}),
-      VeloxRuntimeError);
+      testRegexReplaceSimpleOnce({"abc"}, "a", "", {-1}), VeloxRuntimeError);
 }
 
 TEST_F(RegexFunctionsTest, RegexReplaceZeroPosition) {
   EXPECT_THROW(
-      testRegexReplaceSimpleOnce({"abc"}, "a", "", "abc", {0}),
-      VeloxRuntimeError);
+      testRegexReplaceSimpleOnce({"abc"}, "a", "", {0}), VeloxRuntimeError);
 }
 
 TEST_F(RegexFunctionsTest, RegexReplacePositionTooLarge) {
-  testRegexReplaceSimpleOnce({"abc"}, "a", "", "abc", {1000});
-  testRegexReplaceSimpleOnce({"abc"}, "a", "", "abc", {4});
+  std::string output = "abc";
+  auto result1 = testRegexReplaceSimpleOnce({"abc"}, "a", "", {1000});
+  auto result2 = testRegexReplaceSimpleOnce({"abc"}, "a", "", {4});
+  EXPECT_EQ(result1, output);
+  EXPECT_EQ(result2, output);
 }
 
 TEST_F(RegexFunctionsTest, RegexReplaceSpecialCharacters) {
-  testRegexReplaceSimpleOnce({"a.b.c.a"}, "\\.", "", "abca");
+  std::string output = "abca";
+  auto result = testRegexReplaceSimpleOnce({"a.b.c.a"}, "\\.", "");
+  EXPECT_EQ(result, output);
 }
 
 TEST_F(RegexFunctionsTest, RegexReplaceNoReplacement) {
-  testRegexReplaceSimpleOnce({"abcde"}, "f", "z", "abcde");
+  std::string output = "abcde";
+  auto result = testRegexReplaceSimpleOnce({"abcde"}, "f", "z");
+  EXPECT_EQ(result, output);
 }
 
 TEST_F(RegexFunctionsTest, RegexReplaceMultipleMatches) {
-  testRegexReplaceSimpleOnce({"aa"}, "a", "b", "bb");
+  std::string output = "bb";
+  auto result = testRegexReplaceSimpleOnce({"aa"}, "a", "b");
+  EXPECT_EQ(result, output);
 }
 
 TEST_F(RegexFunctionsTest, RegexReplaceWord) {
-  testRegexReplaceSimpleOnce({"I like pie"}, "pie", "cake", "I like cake");
+  std::string output = "I like cake";
+  auto result = testRegexReplaceSimpleOnce({"I like pie"}, "pie", "cake");
 }
 
 TEST_F(RegexFunctionsTest, RegexReplaceEscapedCharacters) {
-  testRegexReplaceSimpleOnce({"abc\\de"}, "\\\\", "", "abcde");
+  std::string output = "abcde";
+  auto result = testRegexReplaceSimpleOnce({"abc\\de"}, "\\\\", "");
+  EXPECT_EQ(result, output);
 }
 
 TEST_F(RegexFunctionsTest, RegexReplacePatternBeforePosition) {
-  testRegexReplaceSimpleOnce({"abcdef"}, "d", "z", "abcdef", {5});
+  std::string output = "abcdef";
+  auto result = testRegexReplaceSimpleOnce({"abcdef"}, "d", "z", {5});
+  EXPECT_EQ(result, output);
 }
 
 TEST_F(RegexFunctionsTest, RegexReplaceConstantPattern) {
   std::vector<int64_t> positions = {1, 2};
-  testingRegexReplaceSimpleConstantPattern(
+  const std::vector<std::string> outputVector = {
+      "the sky was blue", "coding isn't fun"};
+  auto result = testingRegexReplaceSimpleConstantPattern(
       {"the sky is blue", "coding is fun"},
       "is",
       {"was", "isn't"},
       {"the sky was blue", "coding isn't fun"},
       positions);
+  auto output = convertOutput(outputVector, 1);
+  assertEqualVectors(result, output);
 }
 
 TEST_F(RegexFunctionsTest, RegexReplaceDataframe) {
   // Basic Replacement
   std::vector<int64_t> positions = {1, 2};
-  testingRegexReplaceRowsSimple(
+  const std::vector<std::string> outputVector = {"hi world", "coding was fun"};
+  auto result = testingRegexReplaceRowsSimple(
       {"hello world", "coding is fun"},
       {"hello", " is"},
       {"hi", " was"},
-      {"hi world", "coding was fun"},
       positions);
+  auto output = convertOutput(outputVector, 1);
+  assertEqualVectors(result, output);
 }
 TEST_F(RegexFunctionsTest, RegexReplaceDataframeMultiple) {
   // Multiple matches
   std::vector<int64_t> positions = {1, 1};
-  testingRegexReplaceRowsSimple(
+  const std::vector<std::string> outputVector = {
+      "fruit fruit fruit", "fruit fruit fruit"};
+  auto result = testingRegexReplaceRowsSimple(
       {"apple apple apple", "banana banana banana"},
       {"apple", "banana"},
       {"fruit", "fruit"},
-      {"fruit fruit fruit", "fruit fruit fruit"},
       positions);
+  auto output = convertOutput(outputVector, 1);
+  assertEqualVectors(result, output);
 }
 TEST_F(RegexFunctionsTest, RegexReplaceDataframeSpecial) {
   // Special characters
   std::vector<int64_t> positions = {1, 1};
-  testingRegexReplaceRowsSimple(
-      {"a.b.c", "[coding]"},
-      {R"(\.)", R"(\[|\])"},
-      {"-", ""},
-      {"a-b-c", "coding"},
-      positions);
+  const std::vector<std::string> outputVector = {"a-b-c", "coding"};
+  auto result = testingRegexReplaceRowsSimple(
+      {"a.b.c", "[coding]"}, {R"(\.)", R"(\[|\])"}, {"-", ""}, positions);
+  auto output = convertOutput(outputVector, 1);
+  assertEqualVectors(result, output);
 }
 TEST_F(RegexFunctionsTest, RegexReplaceDataframeSizes) {
   // Replacement with different sizes
   std::vector<int64_t> positions = {1, 1};
-  testingRegexReplaceRowsSimple(
+  const std::vector<std::string> outputVector = {"fantastic day", "short"};
+  auto result = testingRegexReplaceRowsSimple(
       {"good day", "shorter"},
       {"good", "shorter"},
       {"fantastic", "short"},
-      {"fantastic day", "short"},
       positions);
+  auto output = convertOutput(outputVector, 1);
+  assertEqualVectors(result, output);
 }
 TEST_F(RegexFunctionsTest, RegexReplaceDataframeNoMatches) {
   // No matches
   std::vector<int64_t> positions = {1, 1};
-  testingRegexReplaceRowsSimple(
-      {"apple", "banana"},
-      {"orange", "grape"},
-      {"fruit", "fruit"},
-      {"apple", "banana"},
-      positions);
+  const std::vector<std::string> outputVector = {"apple", "banana"};
+  auto result = testingRegexReplaceRowsSimple(
+      {"apple", "banana"}, {"orange", "grape"}, {"fruit", "fruit"}, positions);
+  auto output = convertOutput(outputVector, 1);
+  assertEqualVectors(result, output);
 }
 TEST_F(RegexFunctionsTest, RegexReplaceDataframeOffsetPosition) {
   // Offset position
   std::vector<int64_t> positions = {9, 6};
-  testingRegexReplaceRowsSimple(
+  const std::vector<std::string> outputVector = {
+      "apple pie fruit", "grape fruit grape"};
+  auto result = testingRegexReplaceRowsSimple(
       {"apple pie apple", "grape banana grape"},
       {"apple", "banana"},
       {"fruit", "fruit"},
-      {"apple pie fruit", "grape fruit grape"},
       positions);
+  auto output = convertOutput(outputVector, 1);
+  assertEqualVectors(result, output);
 }
 TEST_F(RegexFunctionsTest, RegexReplaceEmptyStringsAndPatterns) {
   // Empty strings and patterns
   std::vector<int64_t> positions = {1, 1};
-  testingRegexReplaceRowsSimple(
-      {"", "hello"},
-      {"", "llo"},
-      {"prefix ", " world"},
-      {"prefix ", "he world"},
-      positions);
+  const std::vector<std::string> outputVector = {"prefix ", "he world"};
+  auto result = testingRegexReplaceRowsSimple(
+      {"", "hello"}, {"", "llo"}, {"prefix ", " world"}, positions);
+  auto output = convertOutput(outputVector, 1);
+  assertEqualVectors(result, output);
 }
 TEST_F(RegexFunctionsTest, RegexReplaceDataframeCharacterTypes) {
   // Multiple character types
   std::vector<int64_t> positions = {1, 1};
-  testingRegexReplaceRowsSimple(
-      {"123ABC", "!@#"},
-      {R"(\d)", R"(\W)"},
-      {"X", "Y"},
-      {"XXXABC", "YYY"},
-      positions);
+  const std::vector<std::string> outputVector = {"XXXABC", "YYY"};
+  auto result = testingRegexReplaceRowsSimple(
+      {"123ABC", "!@#"}, {R"(\d)", R"(\W)"}, {"X", "Y"}, positions);
+  auto output = convertOutput(outputVector, 1);
+  assertEqualVectors(result, output);
 }
 TEST_F(RegexFunctionsTest, RegexReplaceDataframeBadPosition) {
   // Larger offsets than string size
   std::vector<int64_t> positions = {10, 15};
-  testingRegexReplaceRowsSimple(
-      {"apple", "banana"},
-      {"apple", "banana"},
-      {"fruit", "fruit"},
-      {"apple", "banana"},
-      positions);
+  const std::vector<std::string> outputVector = {"apple", "banana"};
+  auto result = testingRegexReplaceRowsSimple(
+      {"apple", "banana"}, {"apple", "banana"}, {"fruit", "fruit"}, positions);
+  auto output = convertOutput(outputVector, 1);
+  assertEqualVectors(result, output);
 }
 
 TEST_F(RegexFunctionsTest, RegexReplaceDataframeLastCharacter) {
   std::vector<int64_t> positions = {5, 6};
-  testingRegexReplaceRowsSimple(
-      {"applez", "bananaz"},
-      {"z", "z"},
-      {"", ""},
-      {"apple", "banana"},
-      positions);
+  const std::vector<std::string> outputVector = {"apple", "banana"};
+  auto result = testingRegexReplaceRowsSimple(
+      {"applez", "bananaz"}, {"z", "z"}, {"", ""}, positions);
+  auto output = convertOutput(outputVector, 1);
+  assertEqualVectors(result, output);
 }
 
 // Test to match
@@ -534,37 +571,43 @@ TEST_F(RegexFunctionsTest, RegexReplaceDataframeLastCharacter) {
 // function that does not pass a position parameter.
 TEST_F(RegexFunctionsTest, RegexReplaceMatchSparkSqlTest) {
   std::vector<int64_t> positions = {1, 1, 1};
-  testingRegexReplaceRowsSimple(
+  const std::vector<std::string> outputVector = {"300", "400", "400-400"};
+  auto result = testingRegexReplaceRowsSimple(
       {"100-200", "100-200", "100-200"},
       {"(\\d+)-(\\d+)", "(\\d+)-(\\d+)", "(\\d+)"},
       {"300", "400", "400"},
-      {"300", "400", "400-400"},
       positions);
+  auto output = convertOutput(outputVector, 1);
+  assertEqualVectors(result, output);
 }
 TEST_F(RegexFunctionsTest, RegexReplaceRowsNoPosition) {
-  testingRegexReplaceRowsSimple(
+  const std::vector<std::string> outputVector = {"300", "400", "400-400"};
+  auto result = testingRegexReplaceRowsSimple(
       {"100-200", "100-200", "100-200"},
       {"(\\d+)-(\\d+)", "(\\d+)-(\\d+)", "(\\d+)"},
-      {"300", "400", "400"},
-      {"300", "400", "400-400"});
+      {"300", "400", "400"});
+  auto output = convertOutput(outputVector, 1);
+  assertEqualVectors(result, output);
 }
 
 TEST_F(RegexFunctionsTest, RegexReplaceMassiveVectors) {
   std::vector<int64_t> positions = {1, 1, 1};
-  testingRegexReplaceRowsSimple(
+  const std::vector<std::string> outputVector = {"300", "400", "400-400"};
+  auto result = testingRegexReplaceRowsSimple(
       {"100-200", "100-200", "100-200"},
       {"(\\d+)-(\\d+)", "(\\d+)-(\\d+)", "(\\d+)"},
       {"300", "400", "400"},
-      {"300", "400", "400-400"},
       positions,
       100000);
+  auto output = convertOutput(outputVector, 100000);
+  assertEqualVectors(result, output);
 }
 
 TEST_F(RegexFunctionsTest, RegexReplaceCacheLimitTest) {
   std::vector<std::optional<std::string>> patterns;
   std::vector<std::optional<std::string>> strings;
   std::vector<std::optional<std::string>> replaces;
-  std::vector<std::optional<std::string>> expectedOutputs;
+  std::vector<std::string> expectedOutputs;
 
   for (int i = 0; i <= kMaxCompiledRegexes; ++i) {
     patterns.push_back("\\d" + std::to_string(i) + "-\\d" + std::to_string(i));
@@ -575,8 +618,7 @@ TEST_F(RegexFunctionsTest, RegexReplaceCacheLimitTest) {
   }
 
   EXPECT_THROW(
-      testingRegexReplaceRowsSimple(
-          strings, patterns, replaces, expectedOutputs),
+      testingRegexReplaceRowsSimple(strings, patterns, replaces),
       VeloxUserError);
 }
 
@@ -584,7 +626,7 @@ TEST_F(RegexFunctionsTest, RegexReplaceCacheMissLimit) {
   std::vector<std::optional<std::string>> patterns;
   std::vector<std::optional<std::string>> strings;
   std::vector<std::optional<std::string>> replaces;
-  std::vector<std::optional<std::string>> expectedOutputs;
+  std::vector<std::string> expectedOutputs;
   std::vector<int64_t> positions;
 
   for (int i = 0; i <= kMaxCompiledRegexes - 1; ++i) {
@@ -596,8 +638,10 @@ TEST_F(RegexFunctionsTest, RegexReplaceCacheMissLimit) {
     positions.push_back(1);
   }
 
-  testingRegexReplaceRowsSimple(
-      strings, patterns, replaces, expectedOutputs, positions, 50000);
+  auto result = testingRegexReplaceRowsSimple(
+      strings, patterns, replaces, positions, 50000);
+  auto output = convertOutput(expectedOutputs, 50000);
+  assertEqualVectors(result, output);
 }
 
 } // namespace

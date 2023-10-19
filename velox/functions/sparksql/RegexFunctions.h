@@ -66,8 +66,8 @@ std::shared_ptr<exec::VectorFunction> makeRegexExtract(
 /// regex_replace(string, pattern, overwrite, position) → string
 ///
 /// If a string has a substring that matches the given pattern, replace
-/// the match in the string wither overwrite and return the string. If
-/// optional paramter position is provided, only make replacements
+/// the match in the string with overwrite and return the string. If
+/// optional parameter position is provided, only make replacements
 /// after that positon in the string (1 indexed).
 ///
 /// If position <= 0, throw error.
