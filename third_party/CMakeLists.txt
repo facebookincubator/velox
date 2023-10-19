@@ -46,6 +46,7 @@ if(VELOX_ENABLE_ARROW)
   if(NOT Thrift_FOUND)
     set(THRIFT_ROOT ${ARROW_PREFIX}/src/arrow_ep-build/thrift_ep-install)
     set(THRIFT_LIB ${THRIFT_ROOT}/lib/libthrift.a)
+
     file(MAKE_DIRECTORY ${THRIFT_ROOT}/include)
     set(THRIFT_INCLUDE_DIR ${THRIFT_ROOT}/include)
   endif()
