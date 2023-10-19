@@ -509,6 +509,10 @@ struct CacheStats {
   // Sum of scores of evicted entries. This serves to infer an average
   // lifetime for entries in cache.
   int64_t sumEvictScore{0};
+  // Total size of entries pinned for shared access.
+  int64_t numSharedPinSize{0};
+  // Total size of entries pinned for exclusive access.
+  int64_t numExclusivePinSize{0};
 
   std::shared_ptr<SsdCacheStats> ssdStats = nullptr;
 

@@ -315,6 +315,9 @@ void CacheShard::removeEntryLocked(AsyncDataCacheEntry* entry) {
       RawFileCacheKey{entry->key_.fileNum.id(), entry->key_.offset});
   VELOX_CHECK(it != entryMap_.end());
   entryMap_.erase(it);
+  if (it->second->isShared()) {
+    numEvictChecks_
+  }
   entry->key_.fileNum.clear();
   entry->setSsdFile(nullptr, 0);
   if (entry->isPrefetch()) {
@@ -472,8 +475,10 @@ void CacheShard::updateStats(CacheStats& stats) {
       continue;
     } else if (entry->isExclusive()) {
       ++stats.numExclusive;
+      stats.numExclusivePinSize += entry->size();
     } else if (entry->isShared()) {
       ++stats.numShared;
+      stats.numSharedPinSize += entry->size();
     }
     if (entry->isPrefetch_) {
       ++stats.numPrefetch;
@@ -626,7 +631,11 @@ bool AsyncDataCache::makeSpace(
   }
   for (auto nthAttempt = 0; nthAttempt < kMaxAttempts; ++nthAttempt) {
     if (canTryAllocate(numPages, acquired)) {
+      LOG(INFO) << "Attempting to allocate " << numPages << " pages. Attempt # "
+                << nthAttempt;
       if (allocate(acquired)) {
+        LOG(INFO) << "Allocation successful after " << nthAttempt
+                  << " attempts for " << numPages << " pages";
         return true;
       }
     }
@@ -774,7 +783,9 @@ std::string CacheStats::toString() const {
       << "\n"
       // Cache entries
       << "Cache entries: " << numEntries << " read pins: " << numShared
+      << " (totalSize: " << succinctBytes(numSharedPinSize) << ")"
       << " write pins: " << numExclusive
+      << " (totalSize: " << succinctBytes(numExclusivePinSize) << ")"
       << " num write wait: " << numWaitExclusive
       << " empty entries: " << numEmptyEntries
       << "\n"

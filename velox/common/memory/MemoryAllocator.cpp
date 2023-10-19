@@ -209,6 +209,9 @@ bool MemoryAllocator::allocateContiguous(
   }
   auto numCollateralPages =
       allocation.numPages() + (collateral ? collateral->numPages() : 0);
+  LOG(INFO) << "Cache: requested to makeSpace. numPages:" << numPages << " "
+            << "numCollateralPages:" << numCollateralPages << " "
+            << "maxPages:" << maxPages;
   const bool success = cache()->makeSpace(
       pagesToAcquire(numPages, numCollateralPages), [&](Allocation& acquired) {
         freeNonContiguous(acquired);
@@ -216,6 +219,9 @@ bool MemoryAllocator::allocateContiguous(
             numPages, collateral, allocation, reservationCB, maxPages);
       });
   if (!success) {
+    LOG(INFO) << "MakeSpace unsuccessful for numPages:" << numPages << " "
+              << "numCollateralPages:" << numCollateralPages << " "
+              << "maxPages:" << maxPages;
     // There can be a failure where allocation was never called because there
     // never was a chance based on numAllocated() and capacity(). Make sure old
     // data is still freed.
@@ -231,6 +237,10 @@ bool MemoryAllocator::allocateContiguous(
     if ((reservationCB) != nullptr && (freedBytes > 0)) {
       reservationCB(freedBytes, false);
     }
+  } else {
+    LOG(INFO) << "MakeSpace SUCCESS for numPages:" << numPages << " "
+              << "numCollateralPages:" << numCollateralPages << " "
+              << "maxPages:" << maxPages;
   }
   return success;
 }
