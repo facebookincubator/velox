@@ -19,6 +19,7 @@
 #include <string>
 #include "velox/common/base/CheckedArithmetic.h"
 #include "velox/common/base/Exceptions.h"
+#include "velox/common/base/Nulls.h"
 #include "velox/type/Type.h"
 
 namespace facebook::velox {
@@ -81,12 +82,65 @@ class DecimalUtil {
   FOLLY_ALWAYS_INLINE static void valueInRange(int128_t value) {
     VELOX_CHECK(
         (value >= kLongDecimalMin && value <= kLongDecimalMax),
-        "Value '{}' is not in the range of Decimal Type",
+        "Decimal overflow. Value '{}' is not in the range of Decimal Type",
         value);
+  }
+
+  // Returns true if the precision can represent the value.
+  template <typename T>
+  FOLLY_ALWAYS_INLINE static bool valueInPrecisionRange(
+      T value,
+      uint8_t precision) {
+    return value < kPowersOfTen[precision] && value > -kPowersOfTen[precision];
   }
 
   /// Helper function to convert a decimal value to string.
   static std::string toString(const int128_t value, const TypePtr& type);
+
+  template <typename T>
+  inline static void fillDecimals(
+      T* decimals,
+      const uint64_t* nullsPtr,
+      const T* values,
+      const int64_t* scales,
+      int32_t numValues,
+      int32_t targetScale) {
+    for (int32_t i = 0; i < numValues; i++) {
+      if (!nullsPtr || !bits::isBitNull(nullsPtr, i)) {
+        int32_t currentScale = scales[i];
+        T value = values[i];
+        if constexpr (std::is_same_v<T, std::int64_t>) { // Short Decimal
+          if (targetScale > currentScale &&
+              targetScale - currentScale <= ShortDecimalType::kMaxPrecision) {
+            value *= static_cast<T>(kPowersOfTen[targetScale - currentScale]);
+          } else if (
+              targetScale < currentScale &&
+              currentScale - targetScale <= ShortDecimalType::kMaxPrecision) {
+            value /= static_cast<T>(kPowersOfTen[currentScale - targetScale]);
+          } else if (targetScale != currentScale) {
+            VELOX_FAIL("Decimal scale out of range");
+          }
+        } else { // Long Decimal
+          if (targetScale > currentScale) {
+            while (targetScale > currentScale) {
+              int32_t scaleAdjust = std::min<int32_t>(
+                  ShortDecimalType::kMaxPrecision, targetScale - currentScale);
+              value *= kPowersOfTen[scaleAdjust];
+              currentScale += scaleAdjust;
+            }
+          } else if (targetScale < currentScale) {
+            while (currentScale > targetScale) {
+              int32_t scaleAdjust = std::min<int32_t>(
+                  ShortDecimalType::kMaxPrecision, currentScale - targetScale);
+              value /= kPowersOfTen[scaleAdjust];
+              currentScale -= scaleAdjust;
+            }
+          }
+        }
+        decimals[i] = value;
+      }
+    }
+  }
 
   template <typename TInput, typename TOutput>
   inline static std::optional<TOutput> rescaleWithRoundUp(
@@ -115,10 +169,9 @@ class DecimalUtil {
       }
     }
     // Check overflow.
-    if (rescaledValue < -DecimalUtil::kPowersOfTen[toPrecision] ||
-        rescaledValue > DecimalUtil::kPowersOfTen[toPrecision] || isOverflow) {
+    if (!valueInPrecisionRange(rescaledValue, toPrecision) || isOverflow) {
       VELOX_USER_FAIL(
-          "Cannot cast DECIMAL '{}' to DECIMAL({},{})",
+          "Cannot cast DECIMAL '{}' to DECIMAL({}, {})",
           DecimalUtil::toString(inputValue, DECIMAL(fromPrecision, fromScale)),
           toPrecision,
           toScale);
@@ -135,10 +188,9 @@ class DecimalUtil {
     bool isOverflow = __builtin_mul_overflow(
         rescaledValue, DecimalUtil::kPowersOfTen[toScale], &rescaledValue);
     // Check overflow.
-    if (rescaledValue < -DecimalUtil::kPowersOfTen[toPrecision] ||
-        rescaledValue > DecimalUtil::kPowersOfTen[toPrecision] || isOverflow) {
+    if (!valueInPrecisionRange(rescaledValue, toPrecision) || isOverflow) {
       VELOX_USER_FAIL(
-          "Cannot cast {} '{}' to DECIMAL({},{})",
+          "Cannot cast {} '{}' to DECIMAL({}, {})",
           SimpleTypeTrait<TInput>::name,
           inputValue,
           toPrecision,
@@ -248,6 +300,30 @@ class DecimalUtil {
       avg = avg * overflow + (int)(totalRemainder * overflow);
     }
   }
+
+  /// Origins from java side BigInteger#bitLength.
+  ///
+  /// Returns the number of bits in the minimal two's-complement
+  /// representation of this BigInteger, <em>excluding</em> a sign bit.
+  /// For positive BigIntegers, this is equivalent to the number of bits in
+  /// the ordinary binary representation.  For zero this method returns
+  /// {@code 0}.  (Computes {@code (ceil(log2(this < 0 ? -this : this+1)))}.)
+  ///
+  /// @return number of bits in the minimal two's-complement
+  ///         representation of this BigInteger, <em>excluding</em> a sign bit.
+  static int32_t getByteArrayLength(int128_t value);
+
+  /// This method return the same result with the BigInterger#toByteArray()
+  /// method in Java side.
+  ///
+  /// Returns a byte array containing the two's-complement representation of
+  /// this BigInteger. The byte array will be in big-endian byte-order: the most
+  /// significant byte is in the zeroth element. The array will contain the
+  /// minimum number of bytes required to represent this BigInteger, including
+  /// at least one sign bit, which is (ceil((this.bitLength() + 1)/8)).
+  ///
+  /// @return The length of out.
+  static int32_t toByteArray(int128_t value, char* out);
 
   static constexpr __uint128_t kOverflowMultiplier = ((__uint128_t)1 << 127);
 }; // DecimalUtil

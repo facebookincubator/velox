@@ -23,6 +23,7 @@
 #include "velox/common/process/ThreadDebugInfo.h"
 #include "velox/common/time/CpuWallTimer.h"
 #include "velox/connectors/Connector.h"
+#include "velox/core/PlanFragment.h"
 #include "velox/core/PlanNode.h"
 #include "velox/core/QueryCtx.h"
 #include "velox/exec/Spiller.h"
@@ -91,7 +92,7 @@ std::ostream& operator<<(std::ostream& out, const StopReason& reason);
 // suspended, off thread or blocked.
 struct ThreadState {
   // The thread currently running this.
-  std::atomic<std::thread::id> thread{};
+  std::atomic<std::thread::id> thread{std::thread::id()};
   // The tid of 'thread'. Allows finding the thread in a debugger.
   std::atomic<int32_t> tid{0};
   // True if queued on an executor but not on thread.
@@ -161,6 +162,10 @@ enum class BlockingReason {
   /// Build operator is blocked waiting for all its peers to stop to run group
   /// spill on all of them.
   kWaitForSpill,
+  /// Some operators (like Table Scan) may run long loops and can 'voluntarily'
+  /// exit them because Task requested to yield or stop or after a certain time.
+  /// This is the blocking reason used in such cases.
+  kYield,
 };
 
 std::string blockingReasonToString(BlockingReason reason);
@@ -240,7 +245,57 @@ struct DriverCtx {
       const std::string& operatorType);
 
   /// Builds the spill config for the operator with specified 'operatorId'.
-  std::optional<Spiller::Config> makeSpillConfig(int32_t operatorId) const;
+  std::optional<common::SpillConfig> makeSpillConfig(int32_t operatorId) const;
+};
+
+constexpr const char* kOpMethodNone = "";
+constexpr const char* kOpMethodIsBlocked = "isBlocked";
+constexpr const char* kOpMethodNeedsInput = "needsInput";
+constexpr const char* kOpMethodGetOutput = "getOutput";
+constexpr const char* kOpMethodAddInput = "addInput";
+constexpr const char* kOpMethodNoMoreInput = "noMoreInput";
+
+/// Same as the structure below, but does not have atomic members.
+/// Used to return the status from the struct with atomics.
+struct OpCallStatusRaw {
+  /// Time (ms) when the operator call started.
+  size_t timeStartMs{0};
+  /// Id of the operator, method of which is currently running. It is index into
+  /// the vector of Driver's operators.
+  int32_t opId{0};
+  /// Method of the operator, which is currently running.
+  const char* method{kOpMethodNone};
+
+  bool empty() const {
+    return timeStartMs == 0;
+  }
+
+  static std::string formatCall(Operator* op, const char* operatorMethod);
+  size_t callDuration() const;
+};
+
+/// Structure holds the information about the current operator call the driver
+/// is in. Can be used to detect deadlocks and otherwise blocked calls.
+/// If timeStartMs is zero, then we aren't in an operator call.
+struct OpCallStatus {
+  OpCallStatus() {}
+
+  /// The status accessor.
+  OpCallStatusRaw operator()() const {
+    return OpCallStatusRaw{timeStartMs, opId, method};
+  }
+
+  void start(int32_t operatorId, const char* operatorMethod);
+  void stop();
+
+ private:
+  /// Time (ms) when the operator call started.
+  std::atomic_size_t timeStartMs{0};
+  /// Id of the operator, method of which is currently running. It is index into
+  /// the vector of Driver's operators.
+  std::atomic_int32_t opId{0};
+  /// Method of the operator, which is currently running.
+  std::atomic<const char*> method{kOpMethodNone};
 };
 
 class Driver : public std::enable_shared_from_this<Driver> {
@@ -259,6 +314,10 @@ class Driver : public std::enable_shared_from_this<Driver> {
   /// operator must produce data that will be returned to caller.
   RowVectorPtr next(std::shared_ptr<BlockingState>& blockingState);
 
+  /// Invoked to initialize the operators from this driver once on its first
+  /// execution.
+  void initializeOperators();
+
   bool isOnThread() const {
     return state_.isOnThread();
   }
@@ -275,14 +334,15 @@ class Driver : public std::enable_shared_from_this<Driver> {
 
   void initializeOperatorStats(std::vector<OperatorStats>& stats);
 
-  void addStatsToTask();
+  /// Close operators and add operator stats to the task.
+  void closeOperators();
 
-  // Returns true if all operators between the source and 'aggregation' are
-  // order-preserving and do not increase cardinality.
+  /// Returns true if all operators between the source and 'aggregation' are
+  /// order-preserving and do not increase cardinality.
   bool mayPushdownAggregation(Operator* aggregation) const;
 
-  // Returns a subset of channels for which there are operators upstream from
-  // filterSource that accept dynamically generated filters.
+  /// Returns a subset of channels for which there are operators upstream from
+  /// filterSource that accept dynamically generated filters.
   std::unordered_set<column_index_t> canPushdownFilters(
       const Operator* filterSource,
       const std::vector<column_index_t>& channels) const;
@@ -291,15 +351,24 @@ class Driver : public std::enable_shared_from_this<Driver> {
   /// example, hash join probe accesses the corresponding build by id.
   Operator* findOperator(std::string_view planNodeId) const;
 
-  /// Returns the Operator with 'operatorId' or nullptr if not found.
+  /// Returns the Operator with 'operatorId' (basically by index) or throws if
+  /// not found.
   Operator* findOperator(int32_t operatorId) const;
 
-  // Returns a list of all operators.
+  /// Returns the Operator with 'operatorId' (basically by index) or nullptr if
+  /// not found.
+  Operator* findOperatorNoThrow(int32_t operatorId) const;
+
+  /// Returns a list of all operators.
   std::vector<Operator*> operators() const;
 
   std::string toString() const;
 
   std::string toJsonString() const;
+
+  OpCallStatusRaw opCallStatus() const {
+    return opCallStatus_();
+  }
 
   DriverCtx* driverCtx() const {
     return ctx_.get();
@@ -309,12 +378,22 @@ class Driver : public std::enable_shared_from_this<Driver> {
     return ctx_->task;
   }
 
-  // Updates the stats in Task and frees resources. Only called by Task for
-  // closing non-running Drivers.
+  /// Updates the stats in Task and frees resources. Only called by Task for
+  /// closing non-running Drivers.
   void closeByTask();
 
   BlockingReason blockingReason() const {
     return blockingReason_;
+  }
+
+  static std::shared_ptr<Driver> testingCreate(
+      std::unique_ptr<DriverCtx> ctx = nullptr) {
+    auto driver = new Driver();
+    if (ctx != nullptr) {
+      ctx->driver = driver;
+      driver->ctx_ = std::move(ctx);
+    }
+    return std::shared_ptr<Driver>(driver);
   }
 
  private:
@@ -339,10 +418,10 @@ class Driver : public std::enable_shared_from_this<Driver> {
   // position in the pipeline.
   void pushdownFilters(int operatorIndex);
 
-  /// If 'trackOperatorCpuUsage_' is true, returns initialized timer object to
-  /// track cpu and wall time of an operation. Returns null otherwise.
-  /// The delta CpuWallTiming object would be passes to 'func' upon
-  /// destruction of the timer.
+  // If 'trackOperatorCpuUsage_' is true, returns initialized timer object to
+  // track cpu and wall time of an operation. Returns null otherwise.
+  // The delta CpuWallTiming object would be passes to 'func' upon
+  // destruction of the timer.
   template <typename F>
   std::unique_ptr<DeltaCpuWallTimer<F>> createDeltaCpuWallTimer(F&& func) {
     return trackOperatorCpuUsage_
@@ -350,24 +429,41 @@ class Driver : public std::enable_shared_from_this<Driver> {
         : nullptr;
   }
 
+  // Adjusts 'timing' by removing the lazy load wall and CPU times
+  // accrued since last time timing information was recorded for
+  // 'op'. The accrued lazy load times are credited to the source
+  // operator of 'this'. The per-operator runtimeStats for lazy load
+  // are left in place to reflect which operator triggered the load
+  // but these do not bias the op's timing.
+  CpuWallTiming processLazyTiming(Operator& op, const CpuWallTiming& timing);
+
   std::unique_ptr<DriverCtx> ctx_;
+
+  bool operatorsInitialized_{false};
+
   std::atomic_bool closed_{false};
+
+  OpCallStatus opCallStatus_;
 
   // Set via Task and serialized by Task's mutex.
   ThreadState state_;
 
   // Timer used to track down the time we are sitting in the driver queue.
   size_t queueTimeStartMicros_{0};
-  // Index of the current operator to run (or the 1st one if we haven't
-  // started yet). Used to determine which operator's queueTime we should
-  // update.
-  size_t curOpIndex_{0};
+  // Id (index in the vector) of the current operator to run (or the 1st one if
+  // we haven't started yet). Used to determine which operator's queueTime we
+  // should update.
+  size_t curOperatorId_{0};
 
   std::vector<std::unique_ptr<Operator>> operators_;
 
   BlockingReason blockingReason_{BlockingReason::kNotBlocked};
 
   bool trackOperatorCpuUsage_;
+
+  // Indicates that a DriverAdapter can rearrange Operators. Set to false at end
+  // of DriverFactory::createDriver().
+  bool isAdaptable_{true};
 
   friend struct DriverFactory;
 };
@@ -377,6 +473,16 @@ using OperatorSupplier = std::function<
 
 using Consumer = std::function<BlockingReason(RowVectorPtr, ContinueFuture*)>;
 using ConsumerSupplier = std::function<Consumer()>;
+
+struct DriverFactory;
+using AdaptDriverFunction =
+    std::function<bool(const DriverFactory& factory, Driver& driver)>;
+
+struct DriverAdapter {
+  std::string label;
+  std::function<void(const core::PlanFragment&)> inspect;
+  AdaptDriverFunction adapt;
+};
 
 struct DriverFactory {
   std::vector<std::shared_ptr<const core::PlanNode>> planNodes;
@@ -415,6 +521,18 @@ struct DriverFactory {
       std::unique_ptr<DriverCtx> ctx,
       std::shared_ptr<ExchangeClient> exchangeClient,
       std::function<int(int pipelineId)> numDrivers);
+
+  /// Replaces operators at indices 'begin' to 'end - 1' with
+  /// 'replaceWith, in the Driver being created.  Sets operator ids to be
+  /// consecutive after the replace. May only be called from inside a
+  /// DriverAdapter. Returns the replaced Operators.
+  std::vector<std::unique_ptr<Operator>> replaceOperators(
+      Driver& driver,
+      int32_t begin,
+      int32_t end,
+      std::vector<std::unique_ptr<Operator>> replaceWith) const;
+
+  static void registerAdapter(DriverAdapter adapter);
 
   bool supportsSingleThreadedExecution() const {
     return !needsPartitionedOutput() && !needsExchangeClient() &&
@@ -472,18 +590,19 @@ struct DriverFactory {
   /// Returns plan node IDs for which Nested Loop Join Bridges must be created
   /// based on this pipeline.
   std::vector<core::PlanNodeId> needsNestedLoopJoinBridges() const;
+
+  static std::vector<DriverAdapter> adapters;
 };
 
-// Begins and ends a section where a thread is running but not
-// counted in its Task. Using this, a Driver thread can for
-// example stop its own Task. For arbitrating memory overbooking,
-// the contending threads go suspended and each in turn enters a
-// global critical section. When running the arbitration strategy, a
-// thread can stop and restart Tasks, including its own. When a Task
-// is stopped, its drivers are blocked or suspended and the strategy thread
-// can alter the Task's memory including spilling or killing the whole Task.
-// Other threads waiting to run the arbitration, are in a suspended state
-// which also means that they are instantaneously killable or spillable.
+/// Begins and ends a section where a thread is running but not counted in its
+/// Task. Using this, a Driver thread can for example stop its own Task. For
+/// arbitrating memory overbooking, the contending threads go suspended and each
+/// in turn enters a global critical section. When running the arbitration
+/// strategy, a thread can stop and restart Tasks, including its own. When a
+/// Task is stopped, its drivers are blocked or suspended and the strategy
+/// thread can alter the Task's memory including spilling or killing the whole
+/// Task. Other threads waiting to run the arbitration, are in a suspended state
+/// which also means that they are instantaneously killable or spillable.
 class SuspendedSection {
  public:
   explicit SuspendedSection(Driver* driver);
@@ -492,5 +611,27 @@ class SuspendedSection {
  private:
   Driver* driver_;
 };
+
+/// Provides the execution context of a driver thread. This is set to a
+/// per-thread local variable if the running thread is a driver thread.
+struct DriverThreadContext {
+  const DriverCtx& driverCtx;
+};
+
+/// Object used to set/restore the driver thread context when driver execution
+/// starts/leaves the driver thread.
+class ScopedDriverThreadContext {
+ public:
+  explicit ScopedDriverThreadContext(const DriverCtx& driverCtx);
+  ~ScopedDriverThreadContext();
+
+ private:
+  DriverThreadContext* const savedDriverThreadCtx_{nullptr};
+  DriverThreadContext currentDriverThreadCtx_;
+};
+
+/// Returns the driver thread context set by a per-thread local variable if the
+/// current running thread is a driver thread.
+DriverThreadContext* driverThreadContext();
 
 } // namespace facebook::velox::exec

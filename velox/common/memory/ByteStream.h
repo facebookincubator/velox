@@ -23,14 +23,16 @@
 namespace facebook::velox {
 
 struct ByteRange {
-  // Start of buffer. Not owned.
+  /// Start of buffer. Not owned.
   uint8_t* buffer;
 
-  // Number of bytes or bits starting at 'buffer'.
+  /// Number of bytes or bits starting at 'buffer'.
   int32_t size;
 
-  // Index of next byte/bit to be read/written in 'buffer'.
+  /// Index of next byte/bit to be read/written in 'buffer'.
   int32_t position;
+
+  std::string toString() const;
 };
 
 class OutputStreamListener {
@@ -94,11 +96,11 @@ class OStreamOutputStream : public OutputStream {
 /// seeking back to start to write a length header.
 class ByteStream {
  public:
-  // For input.
+  /// For input.
   ByteStream() : isBits_(false), isReverseBitOrder_(false) {}
   virtual ~ByteStream() = default;
 
-  // For output.
+  /// For output.
   ByteStream(
       StreamArena* arena,
       bool isBits = false,
@@ -230,10 +232,16 @@ class ByteStream {
   /// space.
   char* writePosition();
 
+  int32_t testingAllocatedBytes() const {
+    return allocatedBytes_;
+  }
+
   std::string toString() const;
 
  private:
-  void extend(int32_t bytes = memory::AllocationTraits::kPageSize);
+  void extend(int32_t bytes);
+
+  int32_t newRangeSize(int32_t bytes) const;
 
   void updateEnd() {
     if (!ranges_.empty() && current_ == &ranges_.back() &&
@@ -242,7 +250,7 @@ class ByteStream {
     }
   }
 
-  StreamArena* arena_{nullptr};
+  StreamArena* const arena_{nullptr};
 
   // Indicates that position in ranges_ is in bits, not bytes.
   const bool isBits_;
@@ -254,6 +262,8 @@ class ByteStream {
   bool isReversed_ = false;
 
   std::vector<ByteRange> ranges_;
+  // The total number of bytes allocated from 'arena_' in 'ranges_'.
+  int64_t allocatedBytes_{0};
 
   // Pointer to the current element of 'ranges_'.
   ByteRange* current_{nullptr};

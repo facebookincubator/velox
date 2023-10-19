@@ -34,7 +34,6 @@ TEST_F(TransformKeysTest, basic) {
 
   auto result =
       evaluate<MapVector>("transform_keys(c0, (k, v) -> k + 5)", input);
-
   auto expectedResult = makeMapVector<int64_t, int32_t>(
       size,
       [](auto row) { return row % 5; },
@@ -54,6 +53,37 @@ TEST_F(TransformKeysTest, basic) {
   assertEqualVectors(expectedResult, result);
 }
 
+TEST_F(TransformKeysTest, evaluateSubsetOfRows) {
+  // Test to verify that output complex vector of valid internal state is
+  // generated when only a subset of the rows are evaluated. To simulate this,
+  // the trailing rows are unselected to generate a keys vector of smaller size
+  // so that indices for those rows would point to out of bounds location in
+  // keys.
+  vector_size_t size = 100;
+  auto input = makeRowVector({
+      makeMapVector<int64_t, int32_t>(
+          size,
+          [](auto row) { return row % 5; },
+          [](auto row) { return row % 7; },
+          [](auto row) { return row % 11; },
+          nullEvery(13)),
+  });
+
+  SelectivityVector inputRows(size, false);
+  inputRows.setValidRange(0, size / 3, true);
+  inputRows.updateBounds();
+
+  auto result = evaluate<MapVector>(
+      "transform_keys(c0, (k, v) -> k + 5)", input, inputRows);
+  auto expectedResult = makeMapVector<int64_t, int32_t>(
+      size / 3,
+      [](auto row) { return row % 5; },
+      [](auto row) { return row % 7 + 5; },
+      [](auto row) { return row % 11; },
+      nullEvery(13));
+  assertEqualVectors(expectedResult, result, inputRows);
+}
+
 TEST_F(TransformKeysTest, duplicateKeys) {
   vector_size_t size = 1'000;
   auto input = makeRowVector({
@@ -66,11 +96,11 @@ TEST_F(TransformKeysTest, duplicateKeys) {
   });
 
   VELOX_ASSERT_THROW(
-      evaluate<MapVector>("transform_keys(c0, (k, v) -> 10 + k % 2)", input),
+      evaluate("transform_keys(c0, (k, v) -> 10 + k % 2)", input),
       "Duplicate map keys (11) are not allowed");
 
-  ASSERT_NO_THROW(evaluate<MapVector>(
-      "try(transform_keys(c0, (k, v) -> 10 + k % 2))", input));
+  ASSERT_NO_THROW(
+      evaluate("try(transform_keys(c0, (k, v) -> 10 + k % 2))", input));
 }
 
 TEST_F(TransformKeysTest, differentResultType) {

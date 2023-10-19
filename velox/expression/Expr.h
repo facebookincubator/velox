@@ -25,6 +25,8 @@
 #include "velox/core/Expressions.h"
 #include "velox/expression/DecodedArgs.h"
 #include "velox/expression/EvalCtx.h"
+#include "velox/expression/VectorFunction.h"
+#include "velox/type/Subfield.h"
 #include "velox/vector/SimpleVector.h"
 
 /// GFlag used to enable saving input vector and expression SQL on disk in case
@@ -285,6 +287,12 @@ class Expr {
     isMultiplyReferenced_ = true;
   }
 
+  std::vector<common::Subfield> extractSubfields() const;
+
+  virtual void extractSubfieldsImpl(
+      folly::F14FastMap<std::string, int32_t>* shadowedNames,
+      std::vector<common::Subfield>* subfields) const;
+
   template <typename T>
   const T* as() const {
     return dynamic_cast<const T*>(this);
@@ -340,17 +348,6 @@ class Expr {
   const ExprStats& stats() const {
     return stats_;
   }
-
-  // Adds nulls from 'rawNulls' to positions of 'result' given by
-  // 'rows'. Ensures that '*result' is writable, of sufficient size
-  // and that it can take nulls. Makes a new '*result' when
-  // appropriate.
-  static void addNulls(
-      const SelectivityVector& rows,
-      const uint64_t* FOLLY_NULLABLE rawNulls,
-      EvalCtx& context,
-      const TypePtr& type,
-      VectorPtr& result);
 
   void addNulls(
       const SelectivityVector& rows,
@@ -836,6 +833,13 @@ class SimpleExpressionEvaluator : public core::ExpressionEvaluator {
   core::QueryCtx* const queryCtx_;
   memory::MemoryPool* const pool_;
   std::unique_ptr<core::ExecCtx> execCtx_;
+};
+
+class Subscript : public exec::VectorFunction {
+ public:
+  virtual bool canPushdown() const {
+    return false;
+  }
 };
 
 } // namespace facebook::velox::exec

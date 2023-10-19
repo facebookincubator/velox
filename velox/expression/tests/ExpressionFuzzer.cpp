@@ -287,7 +287,7 @@ bool isSupportedSignature(const exec::FunctionSignature& signature) {
   // Not supporting lambda functions, or functions using decimal and
   // timestamp with time zone types.
   return !(
-      useTypeName(signature, "function") ||
+      useTypeName(signature, "opaque") || useTypeName(signature, "function") ||
       useTypeName(signature, "long_decimal") ||
       useTypeName(signature, "short_decimal") ||
       useTypeName(signature, "decimal") ||
@@ -856,8 +856,8 @@ core::TypedExprPtr ExpressionFuzzer::generateExpression(
     }
   }
   if (!expression) {
-    LOG(INFO) << "Couldn't find a proper function to return '"
-              << returnType->toString() << "'. Returning a constant instead.";
+    VLOG(1) << "Couldn't find a proper function to return '"
+            << returnType->toString() << "'. Returning a constant instead.";
     return generateArgConstant(returnType);
   }
   expressionBank_.insert(expression);

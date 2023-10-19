@@ -19,7 +19,8 @@
 #include <gtest/gtest.h>
 #include <unordered_set>
 
-#include "velox/exec/tests/AggregationFuzzerRunner.h"
+#include "velox/exec/tests/utils/AggregationFuzzerRunner.h"
+#include "velox/exec/tests/utils/DuckQueryRunner.h"
 #include "velox/functions/sparksql/aggregates/Register.h"
 
 DEFINE_int64(
@@ -60,13 +61,26 @@ int main(int argc, char** argv) {
       {"last", ""},
       {"last_ignore_null", ""},
       {"first", ""},
-      {"first_ignore_null", ""}};
+      {"first_ignore_null", ""},
+      // TODO: Skip result verification of companion functions that return
+      // complex types that contain floating-point fields for now, until we
+      // fix test utilities in QueryAssertions to tolerate floating-point
+      // imprecision in complex types.
+      // https://github.com/facebookincubator/velox/issues/4481
+      {"avg_partial", ""},
+      {"avg_merge", ""},
+      {"max_by", ""},
+      {"min_by", ""}};
 
   size_t initialSeed = FLAGS_seed == 0 ? std::time(nullptr) : FLAGS_seed;
-  return facebook::velox::exec::test::AggregationFuzzerRunner::runFuzzer(
-      FLAGS_only,
-      initialSeed,
-      std::nullopt,
-      skipFunctions,
-      customVerificationFunctions);
+  auto duckQueryRunner =
+      std::make_unique<facebook::velox::exec::test::DuckQueryRunner>();
+
+  using Runner = facebook::velox::exec::test::AggregationFuzzerRunner;
+
+  Runner::Options options;
+  options.onlyFunctions = FLAGS_only;
+  options.skipFunctions = skipFunctions;
+  options.customVerificationFunctions = customVerificationFunctions;
+  return Runner::run(initialSeed, std::move(duckQueryRunner), options);
 }

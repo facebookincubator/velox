@@ -64,10 +64,12 @@ TopNRowNumberNode           TopNRowNumber
 Plan Nodes
 ----------
 
+.. _TableScanNode:
+
 TableScanNode
 ~~~~~~~~~~~~~
 
-The table scan operation reads data from a connector. For example, when used
+The table scan operation reads data from a :doc:`connector </develop/connectors>`. For example, when used
 with HiveConnector, table scan reads data from ORC or Parquet files.
 
 .. list-table::
@@ -89,7 +91,7 @@ with HiveConnector, table scan reads data from ORC or Parquet files.
 ArrowStreamNode
 ~~~~~~~~~~~~~~~
 
-The Arrow stream operation reads data from an Arrow array stream. The ArrowArrayStream structure is defined in Arrow abi, 
+The Arrow stream operation reads data from an Arrow array stream. The ArrowArrayStream structure is defined in Arrow abi,
 and provides the required callbacks to interact with a streaming source of Arrow arrays.
 
 .. list-table::
@@ -137,11 +139,14 @@ input columns.
    * - expressions
      - Expressions for the output columns.
 
+.. _AggregationNode:
+
 AggregationNode
 ~~~~~~~~~~~~~~~
 
 The aggregate operation groups input data on a set of grouping keys, calculating
-each measure for each combination of the grouping keys.
+each measure for each combination of the grouping keys. Optionally, inputs for
+individual measures are sorted and de-duplicated.
 
 .. list-table::
    :widths: 10 30
@@ -159,13 +164,57 @@ each measure for each combination of the grouping keys.
    * - aggregateNames
      - Names for the output columns for the measures.
    * - aggregates
-     - Expressions for computing the measures, e.g. count(1), sum(a), avg(b). Expressions must be in the form of aggregate function calls over input columns directly, e.g. sum(c) is ok, but sum(c + d) is not.
-   * - aggregationMasks
-     - For each measure, an optional boolean input column that is used to mask out rows for this particular measure.
+     - One or more measures to compute. Each measure specifies an expression, e.g. count(1), sum(a), avg(b), optional boolean input column that's used to mask out rows for this particular measure, optional list of input columns to sort by before computing the measure, an optional flag to indicate that inputs must be deduplicated before computing the measure. Expressions must be in the form of aggregate function calls over input columns directly, e.g. sum(c) is ok, but sum(c + d) is not.
    * - ignoreNullKeys
      - A boolean flag indicating whether the aggregation should drop rows with nulls in any of the grouping keys. Used to avoid unnecessary processing for an aggregation followed by an inner join on the grouping keys.
 
-.. _group-id-node:
+Properties of individual measures.
+
+.. list-table::
+   :widths: 10 30
+   :align: left
+   :header-rows: 1
+
+   * - Property
+     - Description
+   * - call
+     - An expression for computing the measure, e.g. count(1), sum(a), avg(b). Expressions must be in the form of aggregate function calls over input columns directly, e.g. sum(c) is ok, but sum(c + d) is not.
+   * - rawInputTypes
+     - A list of raw input types for the aggregation function. There are used to correctly identify aggregation function, e.g. to decide between min(x) and min(x, n) in case of intermediate aggregation. These can be different from the input types specified in 'call' when aggregation step is intermediate or final.
+   * - mask
+     - An optional boolean input column that's used to mask out rows for this particular measure. Multiple measures may specify same input column as a mask.
+   * - sortingKeys
+     - An optional list of input columns to sort by before computing the measure. If specified, sortingOrders must be used to specify the sort order for each sorting key.
+   * - sortingOrders
+     - A list of sorting orders for each sorting key.
+   * - distinct
+     - A boolean flag indicating that inputs must be de-duplicated before computing the measure.
+
+Note that if measures specify sorting keys, HashAggregation operator accumulates
+all input rows in memory before sorting these and adding to accumulators. This
+requires a lot more memory as compared to when inputs do not need to be sorted.
+
+Similarly, if measures request inputs to be de-duplicated, HashAggregation
+operator accumulates all distinct input rows in memory before adding these to
+accumulators. This requires more memory as compared to when inputs do not need
+to be de-duplicated.
+
+Furthermore, many aggregate functions produce same results on sorted and
+unsorted inputs, e.g. func:`min`, func:`max`, :func:`count`, :func:`sum`.
+The query planner should avoid generating plans that request sorted inputs
+for such aggregate functions. Some examples of aggregate functions that are
+sensitive to the order of inputs include :func:`array_agg` and :func:`min_by`
+(in the presence of ties).
+
+Similarly, some aggregate functions produce same results on unique inputs as well
+as inputs with duplicates, e.g. :func:`min`, :func:`max`. The query planner
+should avoid generating plans that request de-duplicating inputs for such
+aggregate functions.
+
+Finally, note that computing measures over sorted input is only possible if
+aggregation step is 'single'. Such computations cannot be split into partial + final.
+
+.. _GroupIdNode:
 
 GroupIdNode
 ~~~~~~~~~~~
@@ -185,12 +234,82 @@ followed by the group ID column. The type of group ID column is BIGINT.
      - Description
    * - groupingSets
      - List of grouping key sets. Keys within each set must be unique, but keys can repeat across the sets.
+     - Grouping keys are specified with their output names.
    * - groupingKeyInfos
      - The names and order of the grouping key columns in the output.
    * - aggregationInputs
      - Input columns to duplicate.
    * - groupIdName
      - The name for the group-id column that identifies the grouping set. Zero-based integer corresponding to the position of the grouping set in the 'groupingSets' list.
+
+GroupIdNode is typically used to compute GROUPING SETS, CUBE and ROLLUP.
+
+While usually GroupingSets do not repeat with the same grouping key column, there are some use-cases where
+they might. To illustrate why GroupingSets might do so lets examine the following SQL query:
+
+.. code-block:: sql
+
+  SELECT count(orderkey), count(DISTINCT orderkey) FROM orders;
+
+In this query the user wants to compute global aggregates using the same column, though with
+and without the DISTINCT clause. With a particular optimization strategy
+`optimize.mixed-distinct-aggregations <https://www.qubole.com/blog/presto-optimizes-aggregations-over-distinct-values>`_, Presto uses GroupIdNode to compute these.
+
+First, the optimizer creates a GroupIdNode to duplicate every row assigning one copy
+to group 0 and another to group 1. This is achieved using the GroupIdNode with 2 grouping sets
+each using orderkey as a grouping key. In order to disambiguate the
+groups the orderkey column is aliased as a grouping key for one of the
+grouping sets.
+
+Lets say the orders table has 5 rows:
+
+.. code-block::
+
+  orderkey
+     1
+     2
+     2
+     3
+     4
+
+The GroupIdNode would transform this into:
+
+.. code-block::
+
+    orderkey   orderkey1   group_id
+    1             null        0
+    2             null        0
+    2             null        0
+    3             null        0
+    4             null        0
+    null           1          1
+    null           2          1
+    null           2          1
+    null           3          1
+    null           4          1
+
+Then Presto plans an aggregation using (orderkey, group_id) and count(orderkey1).
+
+This results in the following 5 rows:
+
+.. code-block::
+
+    orderkey     group_id     count(orderkey1) as c
+    1                0         null
+    2                0         null
+    3                0         null
+    4                0         null
+    null             1          5
+
+Then Presto plans a second aggregation with no keys and count(orderkey), arbitrary(c).
+Since both aggregations ignore nulls this correctly computes the number of
+distinct orderkeys and the count of all orderkeys.
+
+.. code-block::
+
+    count(orderkey)     arbitrary(c)
+     4                     5
+
 
 HashJoinNode and MergeJoinNode
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -341,11 +460,13 @@ number starting with 1.
    * - ordinalityName
      - Optional name for the ordinality column.
 
+.. _TableWriteNode:
+
 TableWriteNode
 ~~~~~~~~~~~~~~
 
 The table write operation consumes one output and writes it to storage via a
-connector. An example would be writing ORC or Parquet files. The table write
+:doc:`connector </develop/connectors>`. An example would be writing ORC or Parquet files. The table write
 operation return a list of columns containing the metadata of the written
 data: the number of rows written to storage, the writer context information,
 the written file paths on storage and the collected column stats.
@@ -362,7 +483,7 @@ the written file paths on storage and the collected column stats.
    * - columnNames
      - Column names to use when writing to storage. These can be different from the input column names.
    * - aggregationNode
-     - Aggregation plan node used to collect the column stats of the data written to storage.
+     - Optional Aggregation plan node used to collect column stats for the data written to storage.
    * - insertTableHandle
      - Connector-specific description of the destination table.
    * - outputType
@@ -397,12 +518,12 @@ distribution fields.
 
    * - Property
      - Description
+   * - kind
+     - Specifies output buffer types: kPartitioned, kBroadcast and kArbitrary. For kPartitioned type, rows are partitioned and each sent to corresponding destination partition. For kBroadcast type, rows are not partitioned and sent to all the destination partitions. For kArbitrary type, rows are not partitioned and each sent to any one of the destination partitions.
    * - keys
      - Zero or more input fields to use for calculating a partition for each row.
    * - numPartitions
-     - Number of partitions to split the data into.
-   * - broadcast
-     - Boolean flag indicating whether all rows should be sent to all partitions.
+     - Number of partitions to split the data into.g
    * - replicateNullsAndAny
      - Boolean flag indicating whether rows with nulls in the keys should be sent to all partitions and, in case there are no such rows, whether a single arbitrarily chosen row should be sent to all partitions. Used to provide global-scope information necessary to implement anti join semantics on a single node.
    * - partitionFunctionFactory
@@ -538,7 +659,7 @@ the nodes executing the same query stage in a distributed query execution.
    * - taskUniqueId
      - A 24-bit integer to uniquely identify the task id across all the nodes.
 
-.. _window-node:
+.. _WindowNode:
 
 WindowNode
 ~~~~~~~~~~
@@ -570,6 +691,8 @@ If no sorting columns are specified then the order of the results is unspecified
     - Output column names for each window function invocation in windowFunctions list below.
   * - windowFunctions
     - Window function calls with the frame clause. e.g row_number(), first_value(name) between range 10 preceding and current row. The default frame is between range unbounded preceding and current row.
+  * - inputsSorted
+    - If true, the Window operator assumes that the inputs are clustered on partition keys and sorted on sorting keys in sorting orders. In this case, the operator splits the window partition and begins processing it as soon as it receives the data. If false, the Window operator accumulates all inputs first, then sorts the data, splits the window partition based on the defined criteria, and then processes each window partition sequentially.
 
 RowNumberNode
 ~~~~~~~~~~~~~
@@ -583,8 +706,8 @@ each batch of input it computes and returns the results before accepting the
 next batch of input.
 
 This operator accumulates state: a hash table mapping partition keys to total
-number of rows seen in this partition so far. This operator doesn't support
-spilling yet.
+number of rows seen in this partition so far. Returning the row numbers as
+a column in the output is optional. This operator doesn't support spilling yet.
 
 This operator is equivalent to a WindowNode followed by
 FilterNode(row_number <= limit), but it uses less memory and CPU and makes
@@ -600,7 +723,7 @@ results available before seeing all input.
   * - partitionKeys
     - Partition by columns.
   * - rowNumberColumnName
-    - Output column name for the row numbers.
+    - Optional output column name for the row numbers. If specified, the generated row numbers are returned as an output column appearing after all input columns.
   * - limit
     - Optional per-partition limit. If specified, the number of rows produced by this node will not exceed this value for any given partition. Extra rows will be dropped.
 
@@ -615,8 +738,8 @@ a 'limit' number of top rows for each partition. After receiving all input,
 assigns row numbers within each partition starting from 1.
 
 This operator accumulates state: a hash table mapping partition keys to a list
-of top 'limit' rows within that partition. This operator doesn't support
-spilling yet.
+of top 'limit' rows within that partition.  Returning the row numbers as
+a column in the output is optional. This operator doesn't support spilling yet.
 
 This operator is logically equivalent to a WindowNode followed by
 FilterNode(row_number <= limit), but it uses less memory and CPU.
@@ -635,7 +758,7 @@ FilterNode(row_number <= limit), but it uses less memory and CPU.
   * - sortingOrders
     - Sorting order for each sorting key above. The supported sort orders are asc nulls first, asc nulls last, desc nulls first and desc nulls last.
   * - rowNumberColumnName
-    - Output column name for the row numbers.
+    - Optional output column name for the row numbers. If specified, the generated row numbers are returned as an output column appearing after all input columns.
   * - limit
     - Per-partition limit. If specified, the number of rows produced by this node will not exceed this value for any given partition. Extra rows will be dropped.
 

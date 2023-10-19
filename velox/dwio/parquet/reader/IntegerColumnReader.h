@@ -29,15 +29,15 @@ class IntegerColumnReader : public dwio::common::SelectiveIntegerColumnReader {
       ParquetParams& params,
       common::ScanSpec& scanSpec)
       : SelectiveIntegerColumnReader(
-            requestedType->type,
+            requestedType->type(),
             params,
             scanSpec,
             std::move(dataType)) {}
 
   bool hasBulkPath() const override {
     return !formatData_->as<ParquetData>().isDeltaBinaryPacked() &&
-        !this->type()->isLongDecimal() &&
-        ((this->type()->isShortDecimal())
+        !this->fileType().type()->isLongDecimal() &&
+        ((this->fileType().type()->isShortDecimal())
              ? formatData_->as<ParquetData>().hasDictionary()
              : true);
   }
@@ -60,18 +60,18 @@ class IntegerColumnReader : public dwio::common::SelectiveIntegerColumnReader {
       const uint64_t* /*incomingNulls*/) override {
     auto& data = formatData_->as<ParquetData>();
     VELOX_WIDTH_DISPATCH(
-        parquetSizeOfIntKind(fileType_->type->kind()),
+        parquetSizeOfIntKind(fileType_->type()->kind()),
         prepareRead,
         offset,
         rows,
         nullptr);
     readCommon<IntegerColumnReader>(rows);
+    readOffset_ += rows.back() + 1;
   }
 
   template <typename ColumnVisitor>
   void readWithVisitor(RowSet rows, ColumnVisitor visitor) {
     formatData_->as<ParquetData>().readWithVisitor(visitor);
-    readOffset_ += rows.back() + 1;
   }
 };
 

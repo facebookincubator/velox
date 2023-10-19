@@ -20,6 +20,9 @@
 #include "folly/ssl/OpenSSLHash.h"
 #pragma GCC diagnostic pop
 
+#include <boost/locale.hpp>
+#include <codecvt>
+#include <string>
 #include "velox/expression/VectorFunction.h"
 #include "velox/functions/Macros.h"
 #include "velox/functions/UDFOutputString.h"
@@ -75,24 +78,45 @@ template <typename T>
 struct AsciiFunction {
   VELOX_DEFINE_FUNCTION_TYPES(T);
 
-  FOLLY_ALWAYS_INLINE bool call(int32_t& result, const arg_type<Varchar>& s) {
+  FOLLY_ALWAYS_INLINE void call(int32_t& result, const arg_type<Varchar>& s) {
+    if (s.empty()) {
+      result = 0;
+      return;
+    }
+    int size;
+    result = utf8proc_codepoint(s.data(), s.data() + s.size(), size);
+  }
+
+  FOLLY_ALWAYS_INLINE void callAscii(
+      int32_t& result,
+      const arg_type<Varchar>& s) {
     result = s.empty() ? 0 : s.data()[0];
-    return true;
   }
 };
 
+/// chr function
+/// chr(n) -> string
+/// Returns the Unicode code point ``n`` as a single character string.
+/// If ``n < 0``, the result is an empty string.
+/// If ``n >= 256``, the result is equivalent to chr(``n % 256``).
 template <typename T>
 struct ChrFunction {
   VELOX_DEFINE_FUNCTION_TYPES(T);
 
-  FOLLY_ALWAYS_INLINE bool call(out_type<Varchar>& result, int64_t ord) {
-    if (ord < 0) {
+  FOLLY_ALWAYS_INLINE void call(out_type<Varchar>& result, int64_t n) {
+    if (n < 0) {
       result.resize(0);
     } else {
-      result.resize(1);
-      *result.data() = ord;
+      n = n & 0xFF;
+      if (n < 0x80) {
+        result.resize(1);
+        result.data()[0] = n;
+      } else {
+        result.resize(2);
+        result.data()[0] = 0xC0 + (n >> 6);
+        result.data()[1] = 0x80 + (n & 0x3F);
+      }
     }
-    return true;
   }
 };
 
@@ -262,6 +286,60 @@ struct EndsWithFunction {
   }
 };
 
+/// Returns the substring from str before count occurrences of the delimiter
+/// delim. If count is positive, everything to the left of the final delimiter
+/// (counting from the left) is returned. If count is negative, everything to
+/// the right of the final delimiter (counting from the right) is returned. The
+/// function substring_index performs a case-sensitive match when searching for
+/// delim.
+template <typename T>
+struct SubstringIndexFunction {
+  VELOX_DEFINE_FUNCTION_TYPES(T);
+
+  // Results refer to strings in the first argument.
+  static constexpr int32_t reuse_strings_from_arg = 0;
+
+  // ASCII input always produces ASCII result.
+  static constexpr bool is_default_ascii_behavior = true;
+
+  FOLLY_ALWAYS_INLINE void call(
+      out_type<Varchar>& result,
+      const arg_type<Varchar>& str,
+      const arg_type<Varchar>& delim,
+      const int32_t& count) {
+    if (count == 0) {
+      result.setEmpty();
+      return;
+    }
+
+    int64_t index;
+    if (count > 0) {
+      index = stringImpl::stringPosition<true, true>(str, delim, count);
+    } else {
+      index = stringImpl::stringPosition<true, false>(str, delim, -count);
+    }
+
+    // If 'delim' is not found or found fewer than 'count' times,
+    // return the input string directly.
+    if (index == 0) {
+      result.setNoCopy(str);
+      return;
+    }
+
+    auto start = 0;
+    auto length = str.size();
+    const auto delimLength = delim.size();
+    if (count > 0) {
+      length = index - 1;
+    } else {
+      start = index + delimLength - 1;
+      length -= start;
+    }
+
+    result.setNoCopy(StringView(str.data() + start, length));
+  }
+};
+
 /// ltrim(trimStr, srcStr) -> varchar
 ///     Remove leading specified characters from srcStr. The specified character
 ///     is any character contained in trimStr.
@@ -386,9 +464,8 @@ struct TrimSpaceFunctionBase {
       const arg_type<Varchar>& srcStr) {
     // Because utf-8 and Ascii have the same space character code, both are
     // char=32. So trimAsciiSpace can be reused here.
-    stringImpl::
-        trimAsciiWhiteSpace<leftTrim, rightTrim, stringImpl::isAsciiSpace>(
-            result, srcStr);
+    stringImpl::trimAscii<leftTrim, rightTrim>(
+        result, srcStr, stringImpl::isAsciiSpace);
   }
 };
 

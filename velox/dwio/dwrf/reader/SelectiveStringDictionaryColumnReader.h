@@ -81,6 +81,9 @@ class SelectiveStringDictionaryColumnReader
       dwio::common::IntDecoder</*isSigned*/ false>& lengthDecoder,
       dwio::common::DictionaryValues& values);
   void ensureInitialized();
+
+  void makeFlat(VectorPtr* result);
+
   std::unique_ptr<dwio::common::IntDecoder</*isSigned*/ false>> dictIndex_;
   std::unique_ptr<ByteRleDecoder> inDictionaryReader_;
   std::unique_ptr<dwio::common::SeekableInputStream> strideDictStream_;
@@ -95,18 +98,19 @@ class SelectiveStringDictionaryColumnReader
   RleVersion version_;
 
   const StrideIndexProvider& provider_;
+  dwio::common::ColumnReaderStatistics& statistics_;
 
   // lazy load the dictionary
   std::unique_ptr<dwio::common::IntDecoder</*isSigned*/ false>> lengthDecoder_;
   std::unique_ptr<dwio::common::SeekableInputStream> blobStream_;
   bool initialized_{false};
+  vector_size_t numRowsScanned_;
 };
 
 template <typename TVisitor>
 void SelectiveStringDictionaryColumnReader::readWithVisitor(
     RowSet rows,
     TVisitor visitor) {
-  vector_size_t numRows = rows.back() + 1;
   if (version_ == velox::dwrf::RleVersion_1) {
     decodeWithVisitor<velox::dwrf::RleDecoderV1<false>>(
         dictIndex_.get(), visitor);
@@ -114,7 +118,6 @@ void SelectiveStringDictionaryColumnReader::readWithVisitor(
     decodeWithVisitor<velox::dwrf::RleDecoderV2<false>>(
         dictIndex_.get(), visitor);
   }
-  readOffset_ += numRows;
 }
 
 template <typename TFilter, bool isDense, typename ExtractValues>

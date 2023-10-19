@@ -16,8 +16,8 @@
 
 #include "velox/type/TimestampConversion.h"
 #include <gmock/gmock.h>
-#include <gtest/gtest.h>
 #include "velox/common/base/VeloxException.h"
+#include "velox/common/base/tests/GTestUtils.h"
 #include "velox/external/date/tz.h"
 #include "velox/type/Timestamp.h"
 #include "velox/type/tz/TimeZoneMap.h"
@@ -107,6 +107,79 @@ TEST(DateTimeUtilTest, fromDateStrInvalid) {
   // Too large of a year.
   EXPECT_THROW(fromDateString("1000000"), VeloxUserError);
   EXPECT_THROW(fromDateString("-1000000"), VeloxUserError);
+}
+
+TEST(DateTimeUtilTest, castFromDateString) {
+  for (bool isIso8601 : {true, false}) {
+    EXPECT_EQ(0, castFromDateString("1970-01-01", isIso8601));
+    EXPECT_EQ(3789742, castFromDateString("12345-12-18", isIso8601));
+
+    EXPECT_EQ(1, castFromDateString("1970-1-2", isIso8601));
+    EXPECT_EQ(1, castFromDateString("1970-01-2", isIso8601));
+    EXPECT_EQ(1, castFromDateString("1970-1-02", isIso8601));
+
+    EXPECT_EQ(1, castFromDateString("+1970-01-02", isIso8601));
+    EXPECT_EQ(-719893, castFromDateString("-1-1-1", isIso8601));
+
+    EXPECT_EQ(0, castFromDateString(" 1970-01-01", isIso8601));
+  }
+
+  EXPECT_EQ(3789391, castFromDateString("12345", false));
+  EXPECT_EQ(16436, castFromDateString("2015", false));
+  EXPECT_EQ(16495, castFromDateString("2015-03", false));
+  EXPECT_EQ(16512, castFromDateString("2015-03-18T", false));
+  EXPECT_EQ(16512, castFromDateString("2015-03-18T123123", false));
+  EXPECT_EQ(16512, castFromDateString("2015-03-18 123142", false));
+  EXPECT_EQ(16512, castFromDateString("2015-03-18 (BC)", false));
+
+  EXPECT_EQ(0, castFromDateString("1970-01-01 ", false));
+  EXPECT_EQ(0, castFromDateString(" 1970-01-01 ", false));
+}
+
+TEST(DateTimeUtilTest, castFromDateStringInvalid) {
+  auto testCastFromDateStringInvalid = [&](const StringView& str,
+                                           bool isIso8601) {
+    if (isIso8601) {
+      VELOX_ASSERT_THROW(
+          castFromDateString(str, isIso8601),
+          fmt::format(
+              "Unable to parse date value: \"{}\"."
+              "Valid date string pattern is (YYYY-MM-DD), "
+              "and can be prefixed with [+-]",
+              std::string(str.data(), str.size())));
+    } else {
+      VELOX_ASSERT_THROW(
+          castFromDateString(str, isIso8601),
+          fmt::format(
+              "Unable to parse date value: \"{}\"."
+              "Valid date string patterns include "
+              "(yyyy*, yyyy*-[m]m, yyyy*-[m]m-[d]d, "
+              "yyyy*-[m]m-[d]d *, yyyy*-[m]m-[d]dT*), "
+              "and any pattern prefixed with [+-]",
+              std::string(str.data(), str.size())));
+    }
+  };
+
+  for (bool isIso8601 : {true, false}) {
+    testCastFromDateStringInvalid("2012-Oct-23", isIso8601);
+    testCastFromDateStringInvalid("2012-Oct-23", isIso8601);
+    testCastFromDateStringInvalid("2015-03-18X", isIso8601);
+    testCastFromDateStringInvalid("2015/03/18", isIso8601);
+    testCastFromDateStringInvalid("2015.03.18", isIso8601);
+    testCastFromDateStringInvalid("20150318", isIso8601);
+    testCastFromDateStringInvalid("2015-031-8", isIso8601);
+  }
+
+  testCastFromDateStringInvalid("12345", true);
+  testCastFromDateStringInvalid("2015", true);
+  testCastFromDateStringInvalid("2015-03", true);
+  testCastFromDateStringInvalid("2015-03-18 123412", true);
+  testCastFromDateStringInvalid("2015-03-18T", true);
+  testCastFromDateStringInvalid("2015-03-18T123412", true);
+  testCastFromDateStringInvalid("2015-03-18 (BC)", true);
+
+  testCastFromDateStringInvalid("1970-01-01 ", true);
+  testCastFromDateStringInvalid(" 1970-01-01 ", true);
 }
 
 TEST(DateTimeUtilTest, fromTimeString) {
@@ -226,6 +299,19 @@ TEST(DateTimeUtilTest, toGMT) {
   ts = fromTimestampString("2021-03-14 08:00:00");
   ts.toGMT(*laZone);
   EXPECT_EQ(ts, fromTimestampString("2021-03-14 15:00:00"));
+
+  // Ambiguous time 2019-11-03 01:00:00.
+  // It could be 2019-11-03 01:00:00 PDT == 2019-11-03 08:00:00 UTC
+  // or 2019-11-03 01:00:00 PST == 2019-11-03 09:00:00 UTC.
+  ts = fromTimestampString("2019-11-03 01:00:00");
+  ts.toGMT(*laZone);
+  EXPECT_EQ(ts, fromTimestampString("2019-11-03 08:00:00"));
+
+  // Nonexistent time 2019-03-10 02:00:00.
+  // It is in a gap between 2019-03-10 02:00:00 PST and 2019-03-10 03:00:00 PDT
+  // which are both equivalent to 2019-03-10 10:00:00 UTC.
+  ts = fromTimestampString("2019-03-10 02:00:00");
+  EXPECT_THROW(ts.toGMT(*laZone), VeloxUserError);
 }
 
 TEST(DateTimeUtilTest, toTimezone) {

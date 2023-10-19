@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
-#include "connectors/hive/storage_adapters/s3fs/S3Util.h"
+#include "velox/connectors/hive/storage_adapters/s3fs/S3Util.h"
 
 #include "gtest/gtest.h"
 
@@ -104,7 +104,7 @@ TEST(S3UtilTest, s3Path) {
 TEST(S3UtilTest, bucketAndKeyFromS3Path) {
   std::string bucket, key;
   auto path = "bucket/file.txt";
-  bucketAndKeyFromS3Path(path, bucket, key);
+  getBucketAndKeyFromS3Path(path, bucket, key);
   EXPECT_EQ(bucket, "bucket");
   EXPECT_EQ(key, "file.txt");
 }

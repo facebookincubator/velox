@@ -171,7 +171,12 @@ class HashTableBenchmark : public VectorTestBase {
             params_.buildType->childAt(channel), channel));
       }
       auto table = HashTable<true>::createForJoin(
-          std::move(keyHashers), dependentTypes, true, false, pool_.get());
+          std::move(keyHashers),
+          dependentTypes,
+          true,
+          false,
+          1'000,
+          pool_.get());
 
       makeRows(params_.size, 1, sequence, params_.buildType, batches);
       copyVectorsToTable(batches, startOffset, table.get());
@@ -614,6 +619,10 @@ int main(int argc, char** argv) {
 
   auto allocator = std::make_shared<memory::MmapAllocator>(options);
   memory::MemoryAllocator::setDefaultInstance(allocator.get());
+  memory::MemoryManager::getInstance(memory::MemoryManagerOptions{
+      .capacity = static_cast<int64_t>(options.capacity),
+      .allocator = allocator.get()});
+
   auto bm = std::make_unique<HashTableBenchmark>();
   std::vector<HashTableBenchmarkRun> results;
 

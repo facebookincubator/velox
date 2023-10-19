@@ -134,13 +134,10 @@ void SelectiveColumnReader::getFlatValues(
     upcastScalarValues<T, TVector>(rows);
   }
   valueSize_ = sizeof(TVector);
-  BufferPtr nulls = anyNulls_
-      ? (returnReaderNulls_ ? nullsInReadRange_ : resultNulls_)
-      : nullptr;
   *result = std::make_shared<FlatVector<TVector>>(
       &memoryPool_,
       type,
-      nulls,
+      resultNulls(),
       numValues_,
       values_,
       std::move(stringBuffers_));
@@ -183,7 +180,7 @@ void SelectiveColumnReader::upcastScalarValues(RowSet rows) {
   }
   vector_size_t rowIndex = 0;
   auto nextRow = rows[rowIndex];
-  bool moveNulls = shouldMoveNulls(rows);
+  auto* moveNullsFrom = shouldMoveNulls(rows);
   for (size_t i = 0; i < numValues_; i++) {
     if (sourceRows[i] < nextRow) {
       continue;
@@ -191,9 +188,8 @@ void SelectiveColumnReader::upcastScalarValues(RowSet rows) {
 
     VELOX_DCHECK(sourceRows[i] == nextRow);
     buf[rowIndex] = typedSourceValues[i];
-    if (moveNulls && rowIndex != i) {
-      bits::setBit(
-          rawResultNulls_, rowIndex, bits::isBitSet(rawResultNulls_, i));
+    if (moveNullsFrom && rowIndex != i) {
+      bits::setBit(rawResultNulls_, rowIndex, bits::isBitSet(moveNullsFrom, i));
     }
     valueRows_[rowIndex] = nextRow;
     rowIndex++;
@@ -239,7 +235,7 @@ void SelectiveColumnReader::compactScalarValues(RowSet rows, bool isFinal) {
   }
   vector_size_t rowIndex = 0;
   auto nextRow = rows[rowIndex];
-  bool moveNulls = shouldMoveNulls(rows);
+  auto* moveNullsFrom = shouldMoveNulls(rows);
   for (size_t i = 0; i < numValues_; i++) {
     if (sourceRows[i] < nextRow) {
       continue;
@@ -247,9 +243,8 @@ void SelectiveColumnReader::compactScalarValues(RowSet rows, bool isFinal) {
 
     VELOX_DCHECK(sourceRows[i] == nextRow);
     typedDestValues[rowIndex] = typedSourceValues[i];
-    if (moveNulls && rowIndex != i) {
-      bits::setBit(
-          rawResultNulls_, rowIndex, bits::isBitSet(rawResultNulls_, i));
+    if (moveNullsFrom && rowIndex != i) {
+      bits::setBit(rawResultNulls_, rowIndex, bits::isBitSet(moveNullsFrom, i));
     }
     if (!isFinal) {
       valueRows_[rowIndex] = nextRow;
@@ -310,7 +305,7 @@ void SelectiveColumnReader::compactComplexValues(
   }
   vector_size_t rowIndex = 0;
   auto nextRow = rows[rowIndex];
-  bool moveNulls = shouldMoveNulls(rows);
+  auto* moveNullsFrom = shouldMoveNulls(rows);
   for (size_t i = 0; i < numValues_; i++) {
     if (sourceRows[i] < nextRow) {
       continue;
@@ -319,9 +314,8 @@ void SelectiveColumnReader::compactComplexValues(
     VELOX_DCHECK(sourceRows[i] == nextRow);
     // The value at i is moved to be the value at 'rowIndex'.
     move(i, rowIndex);
-    if (moveNulls && rowIndex != i) {
-      bits::setBit(
-          rawResultNulls_, rowIndex, bits::isBitSet(rawResultNulls_, i));
+    if (moveNullsFrom && rowIndex != i) {
+      bits::setBit(rawResultNulls_, rowIndex, bits::isBitSet(moveNullsFrom, i));
     }
     if (!isFinal) {
       valueRows_[rowIndex] = nextRow;
@@ -368,7 +362,7 @@ void SelectiveColumnReader::filterNulls(
         }
       }
     }
-    readOffset_ += rows.back() + 1;
+
     return;
   }
 
@@ -391,7 +385,6 @@ void SelectiveColumnReader::filterNulls(
       }
     }
   }
-  readOffset_ += rows.back() + 1;
 }
 
 } // namespace facebook::velox::dwio::common

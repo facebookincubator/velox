@@ -16,9 +16,10 @@
 
 #pragma once
 
-#include "velox/dwio/common/Common.h"
+#include "velox/common/compression/Compression.h"
 #include "velox/dwio/common/DataBuffer.h"
-#include "velox/dwio/common/DataSink.h"
+#include "velox/dwio/common/FileSink.h"
+#include "velox/dwio/common/FlushPolicy.h"
 #include "velox/dwio/common/Options.h"
 #include "velox/dwio/common/Writer.h"
 #include "velox/dwio/common/WriterFactory.h"
@@ -32,17 +33,70 @@ class ArrowDataBufferSink;
 
 struct ArrowContext;
 
+class DefaultFlushPolicy : public dwio::common::FlushPolicy {
+ public:
+  DefaultFlushPolicy()
+      : rowsInRowGroup_(1'024 * 1'024), bytesInRowGroup_(128 * 1'024 * 1'024) {}
+  DefaultFlushPolicy(uint64_t rowsInRowGroup, int64_t bytesInRowGroup)
+      : rowsInRowGroup_(rowsInRowGroup), bytesInRowGroup_(bytesInRowGroup) {}
+
+  bool shouldFlush(
+      const dwio::common::StripeProgress& stripeProgress) override {
+    return stripeProgress.stripeRowCount >= rowsInRowGroup_ ||
+        stripeProgress.stripeSizeEstimate >= bytesInRowGroup_;
+  }
+
+  void onClose() override {
+    // No-op
+  }
+
+  uint64_t rowsInRowGroup() const {
+    return rowsInRowGroup_;
+  }
+
+  int64_t bytesInRowGroup() const {
+    return bytesInRowGroup_;
+  }
+
+ private:
+  const uint64_t rowsInRowGroup_;
+  const int64_t bytesInRowGroup_;
+};
+
+class LambdaFlushPolicy : public DefaultFlushPolicy {
+ public:
+  explicit LambdaFlushPolicy(
+      uint64_t rowsInRowGroup,
+      int64_t bytesInRowGroup,
+      std::function<bool()> lambda)
+      : DefaultFlushPolicy(rowsInRowGroup, bytesInRowGroup) {
+    lambda_ = std::move(lambda);
+  }
+  virtual ~LambdaFlushPolicy() override = default;
+
+  bool shouldFlush(
+      const dwio::common::StripeProgress& stripeProgress) override {
+    return lambda_() || DefaultFlushPolicy::shouldFlush(stripeProgress);
+  }
+
+ private:
+  std::function<bool()> lambda_;
+};
+
 struct WriterOptions {
   bool enableDictionary = true;
   int64_t dataPageSize = 1'024 * 1'024;
-  int32_t rowsInRowGroup = 10'000;
-  int64_t maxRowGroupLength = 1'024 * 1'024;
   int64_t dictionaryPageSizeLimit = 1'024 * 1'024;
-  double bufferGrowRatio = 1;
-  dwio::common::CompressionKind compression =
-      dwio::common::CompressionKind_NONE;
+  // Growth ratio passed to ArrowDataBufferSink. The default value is a
+  // heuristic borrowed from
+  // folly/FBVector(https://github.com/facebook/folly/blob/main/folly/docs/FBVector.md#memory-handling).
+  double bufferGrowRatio = 1.5;
+  common::CompressionKind compression = common::CompressionKind_NONE;
   ::parquet::Encoding::type encoding = ::parquet::Encoding::PLAIN;
   velox::memory::MemoryPool* memoryPool;
+  // The default factory allows the writer to construct the default flush
+  // policy with the configs in its ctor.
+  std::function<std::unique_ptr<DefaultFlushPolicy>()> flushPolicyFactory;
 };
 
 // Writes Velox vectors into  a DataSink using Arrow Parquet writer.
@@ -53,17 +107,17 @@ class Writer : public dwio::common::Writer {
   // temporary memory. 'properties' specifies Parquet-specific
   // options.
   Writer(
-      std::unique_ptr<dwio::common::DataSink> sink,
+      std::unique_ptr<dwio::common::FileSink> sink,
       const WriterOptions& options,
       std::shared_ptr<memory::MemoryPool> pool);
 
   Writer(
-      std::unique_ptr<dwio::common::DataSink> sink,
+      std::unique_ptr<dwio::common::FileSink> sink,
       const WriterOptions& options);
 
   ~Writer() override = default;
 
-  static bool isCodecAvailable(dwio::common::CompressionKind compression);
+  static bool isCodecAvailable(common::CompressionKind compression);
 
   // Appends 'data' into the writer.
   void write(const VectorPtr& data) override;
@@ -78,9 +132,9 @@ class Writer : public dwio::common::Writer {
   // live until destruction of 'this'.
   void close() override;
 
- private:
-  const int32_t rowsInRowGroup_;
+  void abort() override;
 
+ private:
   // Pool for 'stream_'.
   std::shared_ptr<memory::MemoryPool> pool_;
   std::shared_ptr<memory::MemoryPool> generalPool_;
@@ -89,6 +143,8 @@ class Writer : public dwio::common::Writer {
   std::shared_ptr<ArrowDataBufferSink> stream_;
 
   std::shared_ptr<ArrowContext> arrowContext_;
+
+  std::unique_ptr<DefaultFlushPolicy> flushPolicy_;
 };
 
 class ParquetWriterFactory : public dwio::common::WriterFactory {
@@ -96,7 +152,7 @@ class ParquetWriterFactory : public dwio::common::WriterFactory {
   ParquetWriterFactory() : WriterFactory(dwio::common::FileFormat::PARQUET) {}
 
   std::unique_ptr<dwio::common::Writer> createWriter(
-      std::unique_ptr<dwio::common::DataSink> sink,
+      std::unique_ptr<dwio::common::FileSink> sink,
       const dwio::common::WriterOptions& options) override;
 };
 

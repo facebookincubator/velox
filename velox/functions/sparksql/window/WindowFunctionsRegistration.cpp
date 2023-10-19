@@ -14,12 +14,15 @@
  * limitations under the License.
  */
 #include "velox/functions/sparksql/window/WindowFunctionsRegistration.h"
-#include "velox/functions/lib/window/NthValue.h"
+#include "velox/functions/lib/window/RegistrationFunctions.h"
 
 namespace facebook::velox::functions::window::sparksql {
 
 void registerWindowFunctions(const std::string& prefix) {
-  functions::window::registerIntegerNthValue(prefix + "nth_value");
+  functions::window::registerNthValueInteger(prefix + "nth_value");
+  functions::window::registerRowNumberInteger(prefix + "row_number");
+  functions::window::registerRankInteger(prefix + "rank");
+  functions::window::registerDenseRankInteger(prefix + "dense_rank");
 }
 
 } // namespace facebook::velox::functions::window::sparksql

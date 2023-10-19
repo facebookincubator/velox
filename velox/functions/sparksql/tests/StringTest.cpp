@@ -140,6 +140,14 @@ class StringTest : public SparkFunctionBaseTest {
     return evaluateOnce<std::string>("left(c0, c1)", str, length);
   }
 
+  std::optional<std::string> substringIndex(
+      const std::string& str,
+      const std::string& delim,
+      int32_t count) {
+    return evaluateOnce<std::string, std::string, std::string, int32_t>(
+        "substring_index(c0, c1, c2)", str, delim, count);
+  }
+
   std::optional<std::string> overlay(
       std::optional<std::string> input,
       std::optional<std::string> replace,
@@ -195,17 +203,32 @@ class StringTest : public SparkFunctionBaseTest {
 TEST_F(StringTest, Ascii) {
   EXPECT_EQ(ascii(std::string("\0", 1)), 0);
   EXPECT_EQ(ascii(" "), 32);
-  EXPECT_EQ(ascii("😋"), -16);
+  EXPECT_EQ(ascii("😋"), 128523);
   EXPECT_EQ(ascii(""), 0);
+  EXPECT_EQ(ascii("¥"), 165);
+  EXPECT_EQ(ascii("®"), 174);
+  EXPECT_EQ(ascii("©"), 169);
+  EXPECT_EQ(ascii("VELOX"), 86);
+  EXPECT_EQ(ascii("VIP"), 86);
+  EXPECT_EQ(ascii("Viod"), 86);
+  EXPECT_EQ(ascii("V®"), 86);
+  EXPECT_EQ(ascii("ÇÉµABC"), 199);
+  EXPECT_EQ(ascii("Ȼ %($)"), 571);
+  EXPECT_EQ(ascii("@£Ɇ123"), 64);
   EXPECT_EQ(ascii(std::nullopt), std::nullopt);
 }
 
 TEST_F(StringTest, Chr) {
-  EXPECT_EQ(chr(0), std::string("\0", 1));
-  EXPECT_EQ(chr(32), " ");
   EXPECT_EQ(chr(-16), "");
-  EXPECT_EQ(chr(256), std::string("\0", 1));
-  EXPECT_EQ(chr(256 + 32), std::string(" ", 1));
+  EXPECT_EQ(chr(0), std::string("\0", 1));
+  EXPECT_EQ(chr(0x100), std::string("\0", 1));
+  EXPECT_EQ(chr(0x1100), std::string("\0", 1));
+  EXPECT_EQ(chr(0x20), "\x20");
+  EXPECT_EQ(chr(0x100 + 0x20), "\x20");
+  EXPECT_EQ(chr(0x80), "\xC2\x80");
+  EXPECT_EQ(chr(0x100 + 0x80), "\xC2\x80");
+  EXPECT_EQ(chr(0xFF), "\xC3\xBF");
+  EXPECT_EQ(chr(0x100 + 0xFF), "\xC3\xBF");
   EXPECT_EQ(chr(std::nullopt), std::nullopt);
 }
 
@@ -353,6 +376,37 @@ TEST_F(StringTest, endsWith) {
   EXPECT_EQ(endsWith("-- hello there!", "hello there"), false);
   EXPECT_EQ(endsWith("-- hello there!", std::nullopt), std::nullopt);
   EXPECT_EQ(endsWith(std::nullopt, "abc"), std::nullopt);
+}
+
+TEST_F(StringTest, substringIndex) {
+  EXPECT_EQ(substringIndex("www.apache.org", ".", 3), "www.apache.org");
+  EXPECT_EQ(substringIndex("www.apache.org", ".", 2), "www.apache");
+  EXPECT_EQ(substringIndex("www.apache.org", ".", 1), "www");
+  EXPECT_EQ(substringIndex("www.apache.org", ".", 0), "");
+  EXPECT_EQ(substringIndex("www.apache.org", ".", -1), "org");
+  EXPECT_EQ(substringIndex("www.apache.org", ".", -2), "apache.org");
+  EXPECT_EQ(substringIndex("www.apache.org", ".", -3), "www.apache.org");
+  // Str is empty string.
+  EXPECT_EQ(substringIndex("", ".", 1), "");
+  // Empty string delim.
+  EXPECT_EQ(substringIndex("www.apache.org", "", 1), "");
+  // Delim does not exist in str.
+  EXPECT_EQ(substringIndex("www.apache.org", "#", 2), "www.apache.org");
+  EXPECT_EQ(substringIndex("www.apache.org", "WW", 1), "www.apache.org");
+  // Delim is 2 chars.
+  EXPECT_EQ(substringIndex("www||apache||org", "||", 2), "www||apache");
+  EXPECT_EQ(substringIndex("www||apache||org", "||", -2), "apache||org");
+  // Non ascii chars.
+  EXPECT_EQ(substringIndex("大千世界大千世界", "千", 2), "大千世界大");
+
+  // Overlapped delim.
+  EXPECT_EQ(substringIndex("||||||", "|||", 3), "||");
+  EXPECT_EQ(substringIndex("||||||", "|||", -4), "|||");
+  EXPECT_EQ(substringIndex("aaaaa", "aa", 2), "a");
+  EXPECT_EQ(substringIndex("aaaaa", "aa", -4), "aaa");
+  EXPECT_EQ(substringIndex("aaaaa", "aa", 0), "");
+  EXPECT_EQ(substringIndex("aaaaa", "aa", 5), "aaaaa");
+  EXPECT_EQ(substringIndex("aaaaa", "aa", -5), "aaaaa");
 }
 
 TEST_F(StringTest, trim) {

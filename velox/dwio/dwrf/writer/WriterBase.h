@@ -24,7 +24,7 @@ namespace facebook::velox::dwrf {
 
 class WriterBase {
  public:
-  explicit WriterBase(std::unique_ptr<dwio::common::DataSink> sink)
+  explicit WriterBase(std::unique_ptr<dwio::common::FileSink> sink)
       : sink_{std::move(sink)} {
     DWIO_ENSURE_NOT_NULL(sink_);
   }
@@ -72,9 +72,14 @@ class WriterBase {
   void initContext(
       const std::shared_ptr<const Config>& config,
       std::shared_ptr<velox::memory::MemoryPool> pool,
+      const velox::memory::SetMemoryReclaimer& setReclaimer = nullptr,
       std::unique_ptr<encryption::EncryptionHandler> handler = nullptr) {
     context_ = std::make_unique<WriterContext>(
-        config, std::move(pool), sink_->getMetricsLog(), std::move(handler));
+        config,
+        std::move(pool),
+        setReclaimer,
+        sink_->metricsLog(),
+        std::move(handler));
     writerSink_ = std::make_unique<WriterSink>(
         *sink_,
         context_->getMemoryPool(MemoryUsageCategory::OUTPUT_STREAM),
@@ -88,11 +93,11 @@ class WriterBase {
 
   template <typename T>
   void writeProto(const T& t) {
-    writeProto(t, context_->compression);
+    writeProto(t, context_->compression());
   }
 
   template <typename T>
-  void writeProto(const T& t, dwio::common::CompressionKind kind) {
+  void writeProto(const T& t, common::CompressionKind kind) {
     auto holder = context_->newDataBufferHolder();
     auto stream = context_->newStream(kind, *holder);
 
@@ -109,7 +114,7 @@ class WriterBase {
       const dwio::common::encryption::Encrypter* encrypter = nullptr) {
     auto holder = context_->newDataBufferHolder();
     auto stream =
-        context_->newStream(context_->compression, *holder, encrypter);
+        context_->newStream(context_->compression(), *holder, encrypter);
 
     t.SerializeToZeroCopyStream(stream.get());
     stream->flush();
@@ -122,15 +127,15 @@ class WriterBase {
 
   proto::StripeInformation& addStripeInfo() {
     auto stripe = footer_.add_stripes();
-    stripe->set_numberofrows(context_->stripeRowCount);
-    if (context_->stripeRawSize > 0 || context_->stripeRowCount == 0) {
+    stripe->set_numberofrows(context_->stripeRowCount());
+    if (context_->stripeRawSize() > 0 || context_->stripeRowCount() == 0) {
       // ColumnTransformWriter, when rewriting presto written
       // file does not have rawSize.
-      stripe->set_rawdatasize(context_->stripeRawSize);
+      stripe->set_rawdatasize(context_->stripeRawSize());
     }
 
-    auto checksum = writerSink_->getChecksum();
-    if (checksum) {
+    auto* checksum = writerSink_->getChecksum();
+    if (checksum != nullptr) {
       stripe->set_checksum(checksum->getDigest());
     }
     return *stripe;
@@ -143,7 +148,7 @@ class WriterBase {
   void validateStreamSize(
       const DwrfStreamIdentifier& streamId,
       uint64_t streamSize) {
-    if (context_->isStreamSizeAboveThresholdCheckEnabled) {
+    if (context_->streamSizeAboveThresholdCheckEnabled()) {
       // Jolly doesn't support Streams bigger than 2GB.
       DWIO_ENSURE_LE(
           streamSize,
@@ -154,13 +159,13 @@ class WriterBase {
   }
 
  private:
+  void writeUserMetadata(uint32_t writerVersion);
+
   std::unique_ptr<WriterContext> context_;
-  std::unique_ptr<dwio::common::DataSink> sink_;
+  std::unique_ptr<dwio::common::FileSink> sink_;
   std::unique_ptr<WriterSink> writerSink_;
   proto::Footer footer_;
   std::unordered_map<std::string, std::string> userMetadata_;
-
-  void writeUserMetadata(uint32_t writerVersion);
 
   friend class WriterTest;
   VELOX_FRIEND_TEST(WriterBaseTest, FlushWriterSinkUponClose);

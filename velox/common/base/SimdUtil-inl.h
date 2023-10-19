@@ -863,6 +863,48 @@ uint8_t gather8Bits(
 
 namespace detail {
 
+template <typename T, typename A>
+xsimd::batch<T, A> genericMaskLoad(
+    const T* addr,
+    xsimd::batch_bool<T, A> mask) {
+  return xsimd::select<T, A>(
+      mask, xsimd::load_unaligned<A, T>(addr), xsimd::broadcast<T, A>(0));
+}
+
+template <typename T, typename A>
+struct MaskLoad<T, A, 4> {
+  static xsimd::batch<T, A>
+  apply(const T* addr, xsimd::batch_bool<T, A> mask, const xsimd::generic&) {
+    return genericMaskLoad(addr, mask);
+  }
+
+#if XSIMD_WITH_AVX2
+  static xsimd::batch<T, A>
+  apply(const T* addr, xsimd::batch_bool<T, A> mask, const xsimd::avx2&) {
+    return _mm256_maskload_epi32(addr, mask);
+  }
+#endif
+};
+
+template <typename T, typename A>
+struct MaskLoad<T, A, 8> {
+  static xsimd::batch<T, A>
+  apply(const T* addr, xsimd::batch_bool<T, A> mask, const xsimd::generic&) {
+    return genericMaskLoad(addr, mask);
+  }
+
+#if XSIMD_WITH_AVX2
+  static xsimd::batch<T, A>
+  apply(const T* addr, xsimd::batch_bool<T, A> mask, const xsimd::avx2&) {
+    return _mm256_maskload_epi64(addr, mask);
+  }
+#endif
+};
+
+} // namespace detail
+
+namespace detail {
+
 template <typename A>
 struct GetHalf<int64_t, int32_t, A> {
 #if XSIMD_WITH_AVX2
@@ -1207,6 +1249,25 @@ struct ReinterpretBatch<int32_t, uint32_t, A> {
 };
 
 template <typename A>
+struct ReinterpretBatch<uint64_t, uint32_t, A> {
+#if XSIMD_WITH_NEON
+  static xsimd::batch<uint64_t, A> apply(
+      xsimd::batch<uint32_t, A> data,
+      const xsimd::neon&) {
+    return vreinterpret_u64_u32(data.data);
+  }
+#endif
+
+#if XSIMD_WITH_NEON64
+  static xsimd::batch<uint64_t, A> apply(
+      xsimd::batch<uint32_t, A> data,
+      const xsimd::neon64&) {
+    return vreinterpretq_u64_u32(data.data);
+  }
+#endif
+};
+
+template <typename A>
 struct ReinterpretBatch<uint64_t, int64_t, A> {
 #if XSIMD_WITH_NEON
   static xsimd::batch<uint64_t, A> apply(
@@ -1221,6 +1282,25 @@ struct ReinterpretBatch<uint64_t, int64_t, A> {
       xsimd::batch<int64_t, A> data,
       const xsimd::neon64&) {
     return vreinterpretq_u64_s64(data.data);
+  }
+#endif
+};
+
+template <typename A>
+struct ReinterpretBatch<uint32_t, int64_t, A> {
+#if XSIMD_WITH_NEON
+  static xsimd::batch<uint32_t, A> apply(
+      xsimd::batch<int64_t, A> data,
+      const xsimd::neon&) {
+    return vreinterpret_u32_s64(data.data);
+  }
+#endif
+
+#if XSIMD_WITH_NEON64
+  static xsimd::batch<uint32_t, A> apply(
+      xsimd::batch<int64_t, A> data,
+      const xsimd::neon64&) {
+    return vreinterpretq_u32_s64(data.data);
   }
 #endif
 };
@@ -1244,6 +1324,25 @@ struct ReinterpretBatch<int64_t, uint64_t, A> {
 #endif
 };
 
+template <typename A>
+struct ReinterpretBatch<uint32_t, uint64_t, A> {
+#if XSIMD_WITH_NEON
+  static xsimd::batch<uint32_t, A> apply(
+      xsimd::batch<uint64_t, A> data,
+      const xsimd::neon&) {
+    return vreinterpret_u32_u64(data.data);
+  }
+#endif
+
+#if XSIMD_WITH_NEON64
+  static xsimd::batch<uint32_t, A> apply(
+      xsimd::batch<uint64_t, A> data,
+      const xsimd::neon64&) {
+    return vreinterpretq_u32_u64(data.data);
+  }
+#endif
+};
+
 #endif
 
 } // namespace detail
@@ -1251,6 +1350,28 @@ struct ReinterpretBatch<int64_t, uint64_t, A> {
 template <typename T, typename U, typename A>
 xsimd::batch<T, A> reinterpretBatch(xsimd::batch<U, A> data, const A& arch) {
   return detail::ReinterpretBatch<T, U, A>::apply(data, arch);
+}
+
+template <typename A>
+inline bool memEqualUnsafe(const void* x, const void* y, int32_t size) {
+  constexpr int32_t kBatch = xsimd::batch<uint8_t, A>::size;
+
+  auto left = reinterpret_cast<const uint8_t*>(x);
+  auto right = reinterpret_cast<const uint8_t*>(y);
+  while (size > 0) {
+    auto bits = toBitMask(
+        xsimd::batch<uint8_t, A>::load_unaligned(left) ==
+        xsimd::batch<uint8_t, A>::load_unaligned(right));
+    if (bits == allSetBitMask<uint8_t, A>()) {
+      left += kBatch;
+      right += kBatch;
+      size -= kBatch;
+      continue;
+    }
+    auto leading = __builtin_ctz(~bits);
+    return leading >= size;
+  }
+  return true;
 }
 
 } // namespace facebook::velox::simd

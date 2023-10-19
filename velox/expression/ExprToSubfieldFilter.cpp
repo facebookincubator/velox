@@ -50,37 +50,42 @@ T singleValue(const VectorPtr& vector) {
   return simpleVector->valueAt(0);
 }
 
-const core::FieldAccessTypedExpr* asField(
-    const core::ITypedExpr* expr,
-    int index) {
-  return dynamic_cast<const core::FieldAccessTypedExpr*>(
-      expr->inputs()[index].get());
-}
-
 const core::CallTypedExpr* asCall(const core::ITypedExpr* expr) {
   return dynamic_cast<const core::CallTypedExpr*>(expr);
 }
 
-bool toSubfield(
-    const core::FieldAccessTypedExpr* field,
-    common::Subfield& subfield) {
+bool toSubfield(const core::ITypedExpr* field, common::Subfield& subfield) {
   std::vector<std::unique_ptr<common::Subfield::PathElement>> path;
   for (auto* current = field;;) {
-    path.push_back(
-        std::make_unique<common::Subfield::NestedField>(current->name()));
+    if (auto* fieldAccess =
+            dynamic_cast<const core::FieldAccessTypedExpr*>(current)) {
+      path.push_back(
+          std::make_unique<common::Subfield::NestedField>(fieldAccess->name()));
+    } else if (
+        auto* dereference =
+            dynamic_cast<const core::DereferenceTypedExpr*>(current)) {
+      const auto& name = dereference->name();
+      // When the field name is empty string, it typically means that the field
+      // name was not set in the parent type.
+      if (name == "") {
+        return false;
+      }
+      path.push_back(std::make_unique<common::Subfield::NestedField>(name));
+    } else if (!dynamic_cast<const core::InputTypedExpr*>(current)) {
+      return false;
+    } else {
+      break;
+    }
+
     if (current->inputs().empty()) {
       break;
     }
     if (current->inputs().size() != 1) {
       return false;
     }
-    auto* parent = current->inputs()[0].get();
-    current = dynamic_cast<const core::FieldAccessTypedExpr*>(parent);
+    current = current->inputs()[0].get();
     if (!current) {
-      if (!dynamic_cast<const core::InputTypedExpr*>(parent)) {
-        return false;
-      }
-      break;
+      return false;
     }
   }
   std::reverse(path.begin(), path.end());
@@ -159,6 +164,8 @@ std::unique_ptr<common::Filter> makeLessThanOrEqualFilter(
       return lessThanOrEqualFloat(singleValue<float>(upper));
     case TypeKind::VARCHAR:
       return lessThanOrEqual(singleValue<StringView>(upper));
+    case TypeKind::TIMESTAMP:
+      return lessThanOrEqual(singleValue<Timestamp>(upper));
     default:
       return nullptr;
   }
@@ -188,6 +195,8 @@ std::unique_ptr<common::Filter> makeLessThanFilter(
       return lessThanFloat(singleValue<float>(upper));
     case TypeKind::VARCHAR:
       return lessThan(singleValue<StringView>(upper));
+    case TypeKind::TIMESTAMP:
+      return lessThan(singleValue<Timestamp>(upper));
     default:
       return nullptr;
   }
@@ -217,6 +226,8 @@ std::unique_ptr<common::Filter> makeGreaterThanOrEqualFilter(
       return greaterThanOrEqualFloat(singleValue<float>(lower));
     case TypeKind::VARCHAR:
       return greaterThanOrEqual(singleValue<StringView>(lower));
+    case TypeKind::TIMESTAMP:
+      return greaterThanOrEqual(singleValue<Timestamp>(lower));
     default:
       return nullptr;
   }
@@ -246,6 +257,8 @@ std::unique_ptr<common::Filter> makeGreaterThanFilter(
       return greaterThanFloat(singleValue<float>(lower));
     case TypeKind::VARCHAR:
       return greaterThan(singleValue<StringView>(lower));
+    case TypeKind::TIMESTAMP:
+      return greaterThan(singleValue<Timestamp>(lower));
     default:
       return nullptr;
   }
@@ -273,6 +286,8 @@ std::unique_ptr<common::Filter> makeEqualFilter(
       return equalHugeint(singleValue<int128_t>(value));
     case TypeKind::VARCHAR:
       return equal(singleValue<StringView>(value));
+    case TypeKind::TIMESTAMP:
+      return equal(singleValue<Timestamp>(value));
     default:
       return nullptr;
   }
@@ -428,6 +443,11 @@ std::unique_ptr<common::Filter> makeBetweenFilter(
       }
       return between(
           singleValue<StringView>(lower), singleValue<StringView>(upper));
+    case TypeKind::TIMESTAMP:
+      return negated
+          ? nullptr
+          : between(
+                singleValue<Timestamp>(lower), singleValue<Timestamp>(upper));
     default:
       return nullptr;
   }
@@ -440,71 +460,58 @@ std::unique_ptr<common::Filter> leafCallToSubfieldFilter(
     common::Subfield& subfield,
     core::ExpressionEvaluator* evaluator,
     bool negated) {
+  if (call.inputs().empty()) {
+    return nullptr;
+  }
+
+  const auto* leftSide = call.inputs()[0].get();
+
   if (call.name() == "eq") {
-    if (auto field = asField(&call, 0)) {
-      if (toSubfield(field, subfield)) {
-        return negated ? makeNotEqualFilter(call.inputs()[1], evaluator)
-                       : makeEqualFilter(call.inputs()[1], evaluator);
-      }
+    if (toSubfield(leftSide, subfield)) {
+      return negated ? makeNotEqualFilter(call.inputs()[1], evaluator)
+                     : makeEqualFilter(call.inputs()[1], evaluator);
     }
   } else if (call.name() == "neq") {
-    if (auto field = asField(&call, 0)) {
-      if (toSubfield(field, subfield)) {
-        return negated ? makeEqualFilter(call.inputs()[1], evaluator)
-                       : makeNotEqualFilter(call.inputs()[1], evaluator);
-      }
+    if (toSubfield(leftSide, subfield)) {
+      return negated ? makeEqualFilter(call.inputs()[1], evaluator)
+                     : makeNotEqualFilter(call.inputs()[1], evaluator);
     }
   } else if (call.name() == "lte") {
-    if (auto field = asField(&call, 0)) {
-      if (toSubfield(field, subfield)) {
-        return negated ? makeGreaterThanFilter(call.inputs()[1], evaluator)
-                       : makeLessThanOrEqualFilter(call.inputs()[1], evaluator);
-      }
+    if (toSubfield(leftSide, subfield)) {
+      return negated ? makeGreaterThanFilter(call.inputs()[1], evaluator)
+                     : makeLessThanOrEqualFilter(call.inputs()[1], evaluator);
     }
   } else if (call.name() == "lt") {
-    if (auto field = asField(&call, 0)) {
-      if (toSubfield(field, subfield)) {
-        return negated
-            ? makeGreaterThanOrEqualFilter(call.inputs()[1], evaluator)
-            : makeLessThanFilter(call.inputs()[1], evaluator);
-      }
+    if (toSubfield(leftSide, subfield)) {
+      return negated ? makeGreaterThanOrEqualFilter(call.inputs()[1], evaluator)
+                     : makeLessThanFilter(call.inputs()[1], evaluator);
     }
   } else if (call.name() == "gte") {
-    if (auto field = asField(&call, 0)) {
-      if (toSubfield(field, subfield)) {
-        return negated
-            ? makeLessThanFilter(call.inputs()[1], evaluator)
-            : makeGreaterThanOrEqualFilter(call.inputs()[1], evaluator);
-      }
+    if (toSubfield(leftSide, subfield)) {
+      return negated
+          ? makeLessThanFilter(call.inputs()[1], evaluator)
+          : makeGreaterThanOrEqualFilter(call.inputs()[1], evaluator);
     }
   } else if (call.name() == "gt") {
-    if (auto field = asField(&call, 0)) {
-      if (toSubfield(field, subfield)) {
-        return negated ? makeLessThanOrEqualFilter(call.inputs()[1], evaluator)
-                       : makeGreaterThanFilter(call.inputs()[1], evaluator);
-      }
+    if (toSubfield(leftSide, subfield)) {
+      return negated ? makeLessThanOrEqualFilter(call.inputs()[1], evaluator)
+                     : makeGreaterThanFilter(call.inputs()[1], evaluator);
     }
   } else if (call.name() == "between") {
-    if (auto field = asField(&call, 0)) {
-      if (toSubfield(field, subfield)) {
-        return makeBetweenFilter(
-            call.inputs()[1], call.inputs()[2], evaluator, negated);
-      }
+    if (toSubfield(leftSide, subfield)) {
+      return makeBetweenFilter(
+          call.inputs()[1], call.inputs()[2], evaluator, negated);
     }
   } else if (call.name() == "in") {
-    if (auto field = asField(&call, 0)) {
-      if (toSubfield(field, subfield)) {
-        return makeInFilter(call.inputs()[1], evaluator, negated);
-      }
+    if (toSubfield(leftSide, subfield)) {
+      return makeInFilter(call.inputs()[1], evaluator, negated);
     }
   } else if (call.name() == "is_null") {
-    if (auto field = asField(&call, 0)) {
-      if (toSubfield(field, subfield)) {
-        if (negated) {
-          return isNotNull();
-        }
-        return isNull();
+    if (toSubfield(leftSide, subfield)) {
+      if (negated) {
+        return isNotNull();
       }
+      return isNull();
     }
   }
   return nullptr;

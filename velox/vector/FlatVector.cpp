@@ -47,159 +47,6 @@ void FlatVector<bool>::set(vector_size_t idx, bool value) {
 }
 
 template <>
-void FlatVector<bool>::copyValuesAndNulls(
-    const BaseVector* source,
-    const SelectivityVector& rows,
-    const vector_size_t* toSourceRow) {
-  source = source->loadedVector();
-  VELOX_CHECK(
-      BaseVector::compatibleKind(BaseVector::typeKind(), source->typeKind()));
-  VELOX_CHECK(BaseVector::length_ >= rows.end());
-  const uint64_t* sourceNulls = source->rawNulls();
-  uint64_t* rawNulls = const_cast<uint64_t*>(BaseVector::rawNulls_);
-  if (source->mayHaveNulls()) {
-    rawNulls = BaseVector::mutableRawNulls();
-  }
-  uint64_t* rawValues = reinterpret_cast<uint64_t*>(rawValues_);
-  if (source->isFlatEncoding()) {
-    auto flat = source->asUnchecked<FlatVector<bool>>();
-    auto* sourceValues = source->typeKind() != TypeKind::UNKNOWN
-        ? flat->rawValues<uint64_t>()
-        : nullptr;
-    if (!sourceValues) {
-      // All rows in source vector are null.
-      rows.applyToSelected(
-          [&](auto row) { bits::setNull(rawNulls, row, true); });
-    } else {
-      if (toSourceRow) {
-        rows.applyToSelected([&](auto row) {
-          int32_t sourceRow = toSourceRow[row];
-          if (sourceValues) {
-            bits::setBit(
-                rawValues, row, bits::isBitSet(sourceValues, sourceRow));
-          }
-          if (rawNulls) {
-            bits::setNull(
-                rawNulls,
-                row,
-                sourceNulls && bits::isBitNull(sourceNulls, sourceRow));
-          }
-        });
-      } else {
-        rows.applyToSelected([&](auto row) {
-          if (sourceValues) {
-            bits::setBit(rawValues, row, bits::isBitSet(sourceValues, row));
-          }
-          if (rawNulls) {
-            bits::setNull(
-                rawNulls,
-                row,
-                sourceNulls && bits::isBitNull(sourceNulls, row));
-          }
-        });
-      }
-    }
-  } else if (source->isConstantEncoding()) {
-    auto constant = source->asUnchecked<ConstantVector<bool>>();
-    if (constant->isNullAt(0)) {
-      addNulls(nullptr, rows);
-      return;
-    }
-    bool value = constant->valueAt(0);
-    auto range = rows.asRange();
-    if (value) {
-      bits::orBits(rawValues, range.bits(), range.begin(), range.end());
-    } else {
-      bits::andWithNegatedBits(
-          rawValues, range.bits(), range.begin(), range.end());
-    }
-    rows.clearNulls(rawNulls);
-  } else {
-    auto sourceVector = source->asUnchecked<SimpleVector<bool>>();
-    rows.applyToSelected([&](auto row) {
-      int32_t sourceRow = toSourceRow ? toSourceRow[row] : row;
-      if (!source->isNullAt(sourceRow)) {
-        bits::setBit(rawValues, row, sourceVector->valueAt(sourceRow));
-        if (rawNulls) {
-          bits::clearNull(rawNulls, row);
-        }
-      } else {
-        bits::setNull(rawNulls, row);
-      }
-    });
-  }
-}
-
-template <>
-void FlatVector<bool>::copyValuesAndNulls(
-    const BaseVector* source,
-    vector_size_t targetIndex,
-    vector_size_t sourceIndex,
-    vector_size_t count) {
-  if (count == 0) {
-    return;
-  }
-  source = source->loadedVector();
-  VELOX_CHECK(
-      BaseVector::compatibleKind(BaseVector::typeKind(), source->typeKind()));
-  VELOX_CHECK(source->size() >= sourceIndex + count);
-  VELOX_CHECK(BaseVector::length_ >= targetIndex + count);
-
-  const uint64_t* sourceNulls = source->rawNulls();
-  auto rawValues = reinterpret_cast<uint64_t*>(rawValues_);
-  uint64_t* rawNulls = const_cast<uint64_t*>(BaseVector::rawNulls_);
-  if (source->mayHaveNulls()) {
-    rawNulls = BaseVector::mutableRawNulls();
-  }
-  if (source->isFlatEncoding()) {
-    if (source->typeKind() != TypeKind::UNKNOWN) {
-      auto* sourceValues =
-          source->asUnchecked<FlatVector<bool>>()->rawValues<uint64_t>();
-      bits::copyBits(sourceValues, sourceIndex, rawValues, targetIndex, count);
-    }
-    if (rawNulls) {
-      if (sourceNulls) {
-        bits::copyBits(sourceNulls, sourceIndex, rawNulls, targetIndex, count);
-      } else {
-        bits::fillBits(
-            rawNulls, targetIndex, targetIndex + count, bits::kNotNull);
-      }
-    }
-  } else if (source->isConstantEncoding()) {
-    auto constant = source->asUnchecked<ConstantVector<bool>>();
-    if (constant->isNullAt(0)) {
-      bits::fillBits(rawNulls, targetIndex, targetIndex + count, bits::kNull);
-      return;
-    }
-    bool value = constant->valueAt(0);
-    bits::fillBits(rawValues, targetIndex, targetIndex + count, value);
-    if (rawNulls) {
-      bits::fillBits(
-          rawNulls, targetIndex, targetIndex + count, bits::kNotNull);
-    }
-  } else {
-    auto sourceVector = source->typeKind() != TypeKind::UNKNOWN
-        ? source->asUnchecked<SimpleVector<bool>>()
-        : nullptr;
-    for (int32_t i = 0; i < count; ++i) {
-      if (!source->isNullAt(sourceIndex + i)) {
-        if (sourceVector) {
-          bits::setBit(
-              rawValues,
-              targetIndex + i,
-              sourceVector->valueAt(sourceIndex + i));
-        }
-        if (rawNulls) {
-          bits::clearNull(rawNulls, targetIndex + i);
-        }
-      } else {
-        bits::setNull(rawNulls, targetIndex + i);
-      }
-    }
-  }
-}
-
-template <>
 Buffer* FlatVector<StringView>::getBufferWithSpace(vector_size_t size) {
   VELOX_DCHECK_GE(stringBuffers_.size(), stringBufferSet_.size());
 
@@ -233,7 +80,7 @@ void FlatVector<StringView>::prepareForReuse() {
 
   // Check values buffer. Keep the buffer if singly-referenced and mutable.
   // Reset otherwise.
-  if (values_ && !(values_->unique() && values_->isMutable())) {
+  if (values_ && !values_->isMutable()) {
     values_ = nullptr;
     rawValues_ = nullptr;
   }
@@ -242,7 +89,7 @@ void FlatVector<StringView>::prepareForReuse() {
   // not too large.
   if (!stringBuffers_.empty()) {
     auto& firstBuffer = stringBuffers_.front();
-    if (firstBuffer->unique() && firstBuffer->isMutable() &&
+    if (firstBuffer->isMutable() &&
         firstBuffer->capacity() <= kMaxStringSizeForReuse) {
       firstBuffer->setSize(0);
       setStringBuffers({firstBuffer});
@@ -285,7 +132,7 @@ void FlatVector<StringView>::setNoCopy(
     const vector_size_t idx,
     const StringView& value) {
   VELOX_DCHECK(idx < BaseVector::length_);
-  VELOX_DCHECK(values_->isMutable());
+  VELOX_DCHECK(!values_->isView());
   rawValues_[idx] = value;
   if (BaseVector::nulls_) {
     BaseVector::setNull(idx, false);
@@ -449,7 +296,7 @@ void FlatVector<StringView>::copy(
       setIsAscii(ascii.value(), rows);
     } else {
       // ASCII-ness for the 'rows' is not known.
-      ensureIsAsciiCapacity(rows.end());
+      ensureIsAsciiCapacity();
       // If we arent All ascii, then invalidate
       // because the remaining selected rows might be ascii
       if (!asciiInfo.isAllAscii()) {
@@ -461,39 +308,39 @@ void FlatVector<StringView>::copy(
   }
 }
 
+// For strings, we also verify if they point to valid memory locations inside
+// the string buffers.
 template <>
-void FlatVector<StringView>::copy(
-    const BaseVector* source,
-    vector_size_t targetIndex,
-    vector_size_t sourceIndex,
-    vector_size_t count) {
-  if (count == 0) {
+void FlatVector<StringView>::validate(
+    const VectorValidateOptions& options) const {
+  SimpleVector<StringView>::validate(options);
+  auto byteSize = BaseVector::byteSize<StringView>(BaseVector::size());
+  if (byteSize == 0) {
     return;
   }
-  BaseVector::copy(source, targetIndex, sourceIndex, count);
-}
+  VELOX_CHECK_NOT_NULL(values_);
+  VELOX_CHECK_GE(values_->size(), byteSize);
+  auto rawValues = values_->as<StringView>();
 
-template <>
-void FlatVector<StringView>::copyRanges(
-    const BaseVector* source,
-    const folly::Range<const CopyRange*>& ranges) {
-  auto leaf = source->wrappedVector()->asUnchecked<SimpleVector<StringView>>();
-  if (pool_ == leaf->pool()) {
-    // We copy referencing the storage of 'source'.
-    for (auto& r : ranges) {
-      copyValuesAndNulls(source, r.targetIndex, r.sourceIndex, r.count);
+  for (auto i = 0; i < BaseVector::length_; ++i) {
+    if (isNullAt(i)) {
+      continue;
     }
-    acquireSharedStringBuffers(source);
-  } else {
-    for (auto& r : ranges) {
-      for (auto i = 0; i < r.count; ++i) {
-        if (source->isNullAt(r.sourceIndex + i)) {
-          setNull(r.targetIndex + i, true);
-        } else {
-          set(r.targetIndex + i,
-              leaf->valueAt(source->wrappedIndex(r.sourceIndex + i)));
+    auto stringView = rawValues[i];
+    if (!stringView.isInline()) {
+      bool isValid = false;
+      for (const auto& buffer : stringBuffers_) {
+        auto start = buffer->as<char>();
+        if (stringView.data() >= start &&
+            stringView.data() < start + buffer->size()) {
+          isValid = true;
+          break;
         }
       }
+      VELOX_CHECK(
+          isValid,
+          "String view at idx {} points outside of the string buffers",
+          i)
     }
   }
 }

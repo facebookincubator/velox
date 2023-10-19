@@ -21,6 +21,7 @@
 #include "velox/dwio/common/SeekableInputStream.h"
 #include "velox/dwio/common/TypeWithId.h"
 #include "velox/dwio/dwrf/common/Compression.h"
+#include "velox/dwio/dwrf/common/Decryption.h"
 #include "velox/dwio/dwrf/common/FileMetadata.h"
 #include "velox/dwio/dwrf/common/Statistics.h"
 #include "velox/dwio/dwrf/reader/StripeMetadataCache.h"
@@ -118,8 +119,12 @@ class ReaderBase {
     return *footer_;
   }
 
-  const std::shared_ptr<const RowType>& getSchema() const {
+  const RowTypePtr& getSchema() const {
     return schema_;
+  }
+
+  void setSchema(const RowTypePtr& newSchema) {
+    schema_ = newSchema;
   }
 
   const std::shared_ptr<const dwio::common::TypeWithId>& getSchemaWithId()
@@ -159,13 +164,13 @@ class ReaderBase {
   uint64_t getCompressionBlockSize() const {
     return postScript_->hasCompressionBlockSize()
         ? postScript_->compressionBlockSize()
-        : dwio::common::DEFAULT_COMPRESSION_BLOCK_SIZE;
+        : common::DEFAULT_COMPRESSION_BLOCK_SIZE;
   }
 
-  dwio::common::CompressionKind getCompressionKind() const {
+  common::CompressionKind getCompressionKind() const {
     return postScript_->hasCompressionBlockSize()
         ? postScript_->compression()
-        : dwio::common::CompressionKind::CompressionKind_NONE;
+        : common::CompressionKind::CompressionKind_NONE;
   }
 
   WriterVersion getWriterVersion() const {

@@ -78,10 +78,13 @@ class TransformValuesFunction : public exec::VectorFunction {
           &transformedValues);
     }
 
+    // Set nulls for rows not present in 'rows'.
+    BufferPtr newNulls = addNullsForUnselectedRows(flatMap, rows);
+
     auto localResult = std::make_shared<MapVector>(
         flatMap->pool(),
         outputType,
-        flatMap->nulls(),
+        std::move(newNulls),
         flatMap->size(),
         flatMap->offsets(),
         flatMap->sizes(),
@@ -93,7 +96,7 @@ class TransformValuesFunction : public exec::VectorFunction {
   static std::vector<std::shared_ptr<exec::FunctionSignature>> signatures() {
     // map(K, V1), function(K, V1) -> V2 -> map(K, V2)
     return {exec::FunctionSignatureBuilder()
-                .knownTypeVariable("K")
+                .typeVariable("K")
                 .typeVariable("V1")
                 .typeVariable("V2")
                 .returnType("map(K,V2)")

@@ -106,6 +106,13 @@ class TableScan : public SourceOperator {
   int32_t numReadyPreloadedSplits_{0};
 
   int32_t readBatchSize_;
+  int32_t maxReadBatchSize_;
+
+  // Exits getOutput() method after this many milliseconds.
+  // Zero means 'no limit'.
+  size_t getOutputTimeLimitMs_{0};
+
+  double maxFilteringRatio_{0};
 
   // String shown in ExceptionContext inside DataSource and LazyVector loading.
   std::string debugString_;

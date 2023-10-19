@@ -17,7 +17,7 @@
 
 namespace facebook::velox::dwrf {
 namespace detail {
-using dwio::common::CompressionKind;
+using common::CompressionKind;
 
 CompressionKind orcCompressionToCompressionKind(
     proto::orc::CompressionKind compression) {
@@ -93,7 +93,13 @@ TypeKind TypeWrapper::kind() const {
     // Date is a logical type of INTEGER (for the number of days since EPOCH).
     case proto::orc::Type_Kind_DATE:
       return TypeKind::INTEGER;
-    case proto::orc::Type_Kind_DECIMAL:
+    case proto::orc::Type_Kind_DECIMAL: {
+      if (orcPtr()->precision() <= velox::ShortDecimalType::kMaxPrecision) {
+        return TypeKind::BIGINT;
+      } else {
+        return TypeKind::HUGEINT;
+      }
+    }
     case proto::orc::Type_Kind_CHAR:
     case proto::orc::Type_Kind_TIMESTAMP_INSTANT:
       DWIO_RAISE(
@@ -104,9 +110,9 @@ TypeKind TypeWrapper::kind() const {
   }
 }
 
-dwio::common::CompressionKind PostScript::compression() const {
+common::CompressionKind PostScript::compression() const {
   return format_ == DwrfFormat::kDwrf
-      ? static_cast<dwio::common::CompressionKind>(dwrfPtr()->compression())
+      ? static_cast<common::CompressionKind>(dwrfPtr()->compression())
       : detail::orcCompressionToCompressionKind(orcPtr()->compression());
 }
 

@@ -50,6 +50,7 @@ TopNRowNumber::TopNRowNumber(
         false, // allowDuplicates
         false, // isJoinBuild
         false, // hasProbedFlag
+        0, // minTableSizeForParallelJoinBuild
         pool());
     partitionOffset_ = table_->rows()->columnAt(numKeys).offset();
     lookup_ = std::make_unique<HashLookup>(table_->hashers());
@@ -275,6 +276,23 @@ RowVectorPtr TopNRowNumber::getOutput() {
 
 bool TopNRowNumber::isFinished() {
   return finished_;
+}
+
+void TopNRowNumber::close() {
+  if (table_) {
+    partitionIt_.reset();
+    partitions_.resize(1000);
+    while (auto numPartitions = table_->listAllRows(
+               &partitionIt_,
+               partitions_.size(),
+               RowContainer::kUnlimited,
+               partitions_.data())) {
+      for (auto i = 0; i < numPartitions; ++i) {
+        std::destroy_at(
+            reinterpret_cast<TopRows*>(partitions_[i] + partitionOffset_));
+      }
+    }
+  }
 }
 
 } // namespace facebook::velox::exec

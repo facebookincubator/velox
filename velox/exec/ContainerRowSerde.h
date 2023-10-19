@@ -15,35 +15,55 @@
  */
 #pragma once
 
-#include "velox/vector/RowSerde.h"
+#include "velox/common/memory/ByteStream.h"
+#include "velox/vector/BaseVector.h"
+#include "velox/vector/DecodedVector.h"
 
 namespace facebook::velox::exec {
 
-// Row-wise serialization for use in hash tables and order by.
-
-class ContainerRowSerde : public RowSerde {
+/// Row-wise serialization for use in hash tables and order by.
+class ContainerRowSerde {
  public:
-  void serialize(const BaseVector& source, vector_size_t index, ByteStream& out)
-      const override;
+  /// Serializes value from source[index] into 'out'. The value must not be
+  /// null.
+  static void
+  serialize(const BaseVector& source, vector_size_t index, ByteStream& out);
 
-  void deserialize(ByteStream& in, vector_size_t index, BaseVector* result)
-      const override;
+  static void
+  deserialize(ByteStream& in, vector_size_t index, BaseVector* result);
 
-  int32_t compare(
+  /// Returns < 0 if 'left' is less than 'right' at 'index', 0 if
+  /// equal and > 0 otherwise. flags.nullHandlingMode can be only NoStop and
+  /// support null-safe equal.
+  /// Top level rows in right are not allowed to be null.
+  static int32_t compare(
       ByteStream& left,
       const DecodedVector& right,
       vector_size_t index,
-      CompareFlags flags) const override;
+      CompareFlags flags);
 
-  int32_t compare(
+  /// Returns < 0 if 'left' is less than 'right' at 'index', 0 if
+  /// equal and > 0 otherwise. flags.nullHandlingMode can be only NoStop and
+  /// support null-safe equal.
+  static int32_t compare(
       ByteStream& left,
       ByteStream& right,
       const Type* type,
-      CompareFlags flags) const override;
+      CompareFlags flags);
 
-  uint64_t hash(ByteStream& data, const Type* type) const override;
+  /// Returns < 0 if 'left' is less than 'right' at 'index', 0 if
+  /// equal and > 0 otherwise. If flags.nullHandlingMode is StopAtNull,
+  /// returns std::nullopt if either 'left' or 'right' value is null or contains
+  /// a null. If flags.nullHandlingMode is NoStop then NULL is considered equal
+  /// to NULL.
+  /// Top level rows in right are not allowed to be null.
+  static std::optional<int32_t> compareWithNulls(
+      ByteStream& left,
+      const DecodedVector& right,
+      vector_size_t index,
+      CompareFlags flags);
 
-  static const ContainerRowSerde& instance();
+  static uint64_t hash(ByteStream& data, const Type* type);
 };
 
 } // namespace facebook::velox::exec

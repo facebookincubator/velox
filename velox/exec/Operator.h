@@ -124,9 +124,17 @@ struct OperatorStats {
 
   CpuWallTiming finishTiming;
 
+  // CPU time spent on background activities (activities that are not
+  // running on driver threads). Operators are responsible to report background
+  // CPU time at a reasonable time granularity.
+  CpuWallTiming backgroundTiming;
+
   MemoryStats memoryStats;
 
-  // Total bytes written for spilling.
+  // Total bytes in memory for spilling
+  uint64_t spilledInputBytes{0};
+
+  // Total bytes written to file for spilling.
   uint64_t spilledBytes{0};
 
   // Total rows written for spilling.
@@ -137,6 +145,10 @@ struct OperatorStats {
 
   // Total current spilled files.
   uint32_t spilledFiles{0};
+
+  // Last recorded values for lazy loading times for loads triggered by 'this'.
+  int64_t lastLazyCpuNanos{0};
+  int64_t lastLazyWallNanos{0};
 
   std::unordered_map<std::string, RuntimeMetric> runtimeStats;
 
@@ -203,6 +215,12 @@ class OperatorCtx {
     return operatorId_;
   }
 
+  /// Sets operatorId. The use is limited to renumbering operators from
+  /// DriverAdapter. Do not use outside of this.
+  void setOperatorIdFromAdapter(int32_t id) {
+    operatorId_ = id;
+  }
+
   const std::string& operatorType() const {
     return operatorType_;
   }
@@ -216,12 +234,14 @@ class OperatorCtx {
   std::shared_ptr<connector::ConnectorQueryCtx> createConnectorQueryCtx(
       const std::string& connectorId,
       const std::string& planNodeId,
-      memory::MemoryPool* connectorPool) const;
+      memory::MemoryPool* connectorPool,
+      memory::SetMemoryReclaimer setMemoryReclaimer = nullptr,
+      const common::SpillConfig* spillConfig = nullptr) const;
 
  private:
   DriverCtx* const driverCtx_;
   const core::PlanNodeId planNodeId_;
-  const int32_t operatorId_;
+  int32_t operatorId_;
   const std::string operatorType_;
   velox::memory::MemoryPool* const pool_;
 
@@ -282,79 +302,96 @@ class Operator : public BaseRuntimeStatWriter {
   /// 'planNodeId' is a query-level unique identifier of the PlanNode to which
   /// 'this' corresponds. 'operatorType' is a label for use in stats. If
   /// 'canSpill' is true, then disk spilling is allowed for this operator.
+  ///
+  /// NOTE: the operator (and any derived operator class) constructor should
+  /// not allocate memory from memory pool. The latter might trigger memory
+  /// arbitration operation that can lead to deadlock as both operator
+  /// construction and operator memory reclaim need to acquire task lock.
   Operator(
       DriverCtx* driverCtx,
       RowTypePtr outputType,
       int32_t operatorId,
       std::string planNodeId,
       std::string operatorType,
-      std::optional<Spiller::Config> spillConfig = std::nullopt);
+      std::optional<common::SpillConfig> spillConfig = std::nullopt);
 
   virtual ~Operator() = default;
 
-  // Returns true if 'this' can accept input. Not used if operator is a source
-  // operator, e.g. the first operator in the pipeline.
+  /// Does initialization work for this operator which requires memory
+  /// allocation from memory pool that can't be done under operator constructor.
+  ///
+  /// NOTE: the default implementation set 'initialized_' to true to ensure we
+  /// never call this more than once.
+  virtual void initialize();
+
+  /// Indicates if this operator has been initialized or not.
+  bool isInitialized() const {
+    return initialized_;
+  }
+
+  /// Returns true if 'this' can accept input. Not used if operator is a source
+  /// operator, e.g. the first operator in the pipeline.
   virtual bool needsInput() const = 0;
 
-  // Adds input. Not used if operator is a source operator, e.g. the first
-  // operator in the pipeline.
-  // @param input Non-empty input vector.
+  /// Adds input. Not used if operator is a source operator, e.g. the first
+  /// operator in the pipeline.
+  /// @param input Non-empty input vector.
   virtual void addInput(RowVectorPtr input) = 0;
 
-  // Informs 'this' that addInput will no longer be called. This means
-  // that any partial state kept by 'this' should be returned by
-  // the next call(s) to getOutput. Not used if operator is a source operator,
-  // e.g. the first operator in the pipeline.
+  /// Informs 'this' that addInput will no longer be called. This means
+  /// that any partial state kept by 'this' should be returned by
+  /// the next call(s) to getOutput. Not used if operator is a source operator,
+  /// e.g. the first operator in the pipeline.
   virtual void noMoreInput() {
     noMoreInput_ = true;
   }
 
-  // Returns a RowVector with the result columns. Returns nullptr if
-  // no more output can be produced without more input or if blocked
-  // for outside causes. isBlocked distinguishes between the
-  // cases. Sink operator, e.g. the last operator in the pipeline, must return
-  // nullptr and pass results to the consumer through a custom mechanism.
-  // @return nullptr or a non-empty output vector.
+  /// Returns a RowVector with the result columns. Returns nullptr if
+  /// no more output can be produced without more input or if blocked
+  /// for outside causes. isBlocked distinguishes between the
+  /// cases. Sink operator, e.g. the last operator in the pipeline, must return
+  /// nullptr and pass results to the consumer through a custom mechanism.
+  /// @return nullptr or a non-empty output vector.
   virtual RowVectorPtr getOutput() = 0;
 
-  // Returns kNotBlocked if 'this' is not prevented from
-  // advancing. Otherwise, returns a reason and sets 'future' to a
-  // future that will be realized when the reason is no longer present.
-  // The caller must wait for the `future` to complete before making
-  // another call.
+  /// Returns kNotBlocked if 'this' is not prevented from
+  /// advancing. Otherwise, returns a reason and sets 'future' to a
+  /// future that will be realized when the reason is no longer present.
+  /// The caller must wait for the `future` to complete before making
+  /// another call.
   virtual BlockingReason isBlocked(ContinueFuture* future) = 0;
 
-  // Returns true if completely finished processing and no more output will be
-  // produced. Some operators may finish early before receiving all input and
-  // noMoreInput() message. For example, Limit operator finishes as soon as it
-  // receives specified number of rows and HashProbe finishes early if the build
-  // side is empty.
+  /// Returns true if completely finished processing and no more output will be
+  /// produced. Some operators may finish early before receiving all input and
+  /// noMoreInput() message. For example, Limit operator finishes as soon as it
+  /// receives specified number of rows and HashProbe finishes early if the
+  /// build side is empty.
   virtual bool isFinished() = 0;
 
-  // Returns single-column dynamically generated filters to be pushed down to
-  // upstream operators. Used to push down filters on join keys from broadcast
-  // hash join into probe-side table scan. Can also be used to push down TopN
-  // cutoff.
+  /// Returns single-column dynamically generated filters to be pushed down to
+  /// upstream operators. Used to push down filters on join keys from broadcast
+  /// hash join into probe-side table scan. Can also be used to push down TopN
+  /// cutoff.
   virtual const std::
       unordered_map<column_index_t, std::shared_ptr<common::Filter>>&
       getDynamicFilters() const {
     return dynamicFilters_;
   }
 
-  // Clears dynamically generated filters. Called after filters were pushed
-  // down.
+  /// Clears dynamically generated filters. Called after filters were pushed
+  /// down.
   virtual void clearDynamicFilters() {
     dynamicFilters_.clear();
   }
 
-  // Returns true if this operator would accept a filter dynamically generated
-  // by a downstream operator.
+  /// Returns true if this operator would accept a filter dynamically generated
+  /// by a downstream operator.
   virtual bool canAddDynamicFilter() const {
     return false;
   }
 
-  // Adds a filter dynamically generated by a downstream operator. Called only
-  // if canAddFilter() returns true.
+  /// Adds a filter dynamically generated by a downstream operator. Called only
+  /// if canAddFilter() returns true.
   virtual void addDynamicFilter(
       column_index_t /*outputChannel*/,
       const std::shared_ptr<common::Filter>& /*filter*/) {
@@ -363,19 +400,28 @@ class Operator : public BaseRuntimeStatWriter {
         toString());
   }
 
-  // Returns a list of identify projections, e.g. columns that are projected
-  // as-is possibly after applying a filter.
+  /// Returns a list of identify projections, e.g. columns that are projected
+  /// as-is possibly after applying a filter.
   const std::vector<IdentityProjection>& identityProjections() const {
     return identityProjections_;
   }
 
-  // Frees all resources associated with 'this'. No other methods
-  // should be called after this.
+  /// Frees all resources associated with 'this'. No other methods
+  /// should be called after this.
   virtual void close() {
     input_ = nullptr;
     results_.clear();
     // Release the unused memory reservation on close.
     operatorCtx_->pool()->release();
+  }
+
+  /// Invoked by memory arbitrator to free up operator's resource immediately on
+  /// memory abort, and the query will stop running after this call.
+  ///
+  /// NOTE: we don't expect any access to this operator except close method
+  /// call.
+  virtual void abort() {
+    close();
   }
 
   // Returns true if 'this' never has more output rows than input rows.
@@ -434,7 +480,9 @@ class Operator : public BaseRuntimeStatWriter {
   /// NOTE: this method doesn't return the actually freed memory bytes. The
   /// caller need to claim the actually freed memory space by shrinking the
   /// associated root memory pool's capacity accordingly.
-  virtual void reclaim(uint64_t targetBytes) {}
+  virtual void reclaim(
+      uint64_t targetBytes,
+      memory::MemoryReclaimer::Stats& stats) {}
 
   const core::PlanNodeId& planNodeId() const {
     return operatorCtx_->planNodeId();
@@ -442,6 +490,13 @@ class Operator : public BaseRuntimeStatWriter {
 
   const int32_t operatorId() const {
     return operatorCtx_->operatorId();
+  }
+
+  /// Sets operator id. Use is limited to renumbering Operators from
+  /// DriverAdapter. Do not use outside of this.
+  void setOperatorIdFromAdapter(int32_t id) {
+    operatorCtx_->setOperatorIdFromAdapter(id);
+    stats().wlock()->operatorId = id;
   }
 
   const std::string& operatorType() const {
@@ -488,6 +543,12 @@ class Operator : public BaseRuntimeStatWriter {
     return operatorCtx_.get();
   }
 
+  /// Returns true if this operator has received no more input signal. This
+  /// method is only used for test.
+  bool testingNoMoreInput() const {
+    return noMoreInput_;
+  }
+
  protected:
   static std::vector<std::unique_ptr<PlanNodeTranslator>>& translators();
   friend class NonReclaimableSection;
@@ -506,16 +567,21 @@ class Operator : public BaseRuntimeStatWriter {
         const memory::MemoryPool& pool,
         uint64_t& reclaimableBytes) const override;
 
-    uint64_t reclaim(memory::MemoryPool* pool, uint64_t targetBytes) override;
+    uint64_t reclaim(
+        memory::MemoryPool* pool,
+        uint64_t targetBytes,
+        memory::MemoryReclaimer::Stats& stats) override;
 
-    void abort(memory::MemoryPool* pool) override;
+    void abort(memory::MemoryPool* pool, const std::exception_ptr& /* error */)
+        override;
 
-   private:
+   protected:
     MemoryReclaimer(const std::shared_ptr<Driver>& driver, Operator* op)
         : driver_(driver), op_(op) {
       VELOX_CHECK_NOT_NULL(op_);
     }
 
+   private:
     // Gets the shared pointer to the associated driver to ensure the liveness
     // of the operator during the memory reclaim operation.
     //
@@ -574,11 +640,16 @@ class Operator : public BaseRuntimeStatWriter {
   uint32_t outputBatchRows(
       std::optional<uint64_t> averageRowSize = std::nullopt) const;
 
+  /// Invoked to record spill stats in operator stats.
+  void recordSpillStats(const SpillStats& spillStats);
+
   const std::unique_ptr<OperatorCtx> operatorCtx_;
   const RowTypePtr outputType_;
-  // Contains the disk spilling related configs if spilling is enabled (e.g.
-  // the fs dir path to store spill files), otherwise null.
-  const std::optional<Spiller::Config> spillConfig_;
+  /// Contains the disk spilling related configs if spilling is enabled (e.g.
+  /// the fs dir path to store spill files), otherwise null.
+  const std::optional<common::SpillConfig> spillConfig_;
+
+  bool initialized_{false};
 
   folly::Synchronized<OperatorStats> stats_;
 
@@ -605,6 +676,9 @@ class Operator : public BaseRuntimeStatWriter {
 
   std::unordered_map<column_index_t, std::shared_ptr<common::Filter>>
       dynamicFilters_;
+
+  /// The number of times that spilling run on this operator.
+  uint32_t numSpillRuns_{0};
 };
 
 /// Given a row type returns indices for the specified subset of columns.

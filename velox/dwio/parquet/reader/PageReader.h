@@ -17,9 +17,11 @@
 #pragma once
 
 #include <arrow/util/rle_encoding.h>
+#include "velox/common/compression/Compression.h"
 #include "velox/dwio/common/BitConcatenation.h"
 #include "velox/dwio/common/DirectDecoder.h"
 #include "velox/dwio/common/SelectiveColumnReader.h"
+#include "velox/dwio/common/compression/Compression.h"
 #include "velox/dwio/parquet/reader/BooleanDecoder.h"
 #include "velox/dwio/parquet/reader/DeltaBpDecoder.h"
 #include "velox/dwio/parquet/reader/ParquetTypeWithId.h"
@@ -67,6 +69,45 @@ class PageReader {
         chunkSize_(chunkSize),
         nullConcatenation_(pool_) {}
 
+  common::CompressionKind ThriftCodecToCompressionKind(
+      thrift::CompressionCodec::type codec) const {
+    switch (codec) {
+      case thrift::CompressionCodec::UNCOMPRESSED:
+        return common::CompressionKind::CompressionKind_NONE;
+        break;
+      case thrift::CompressionCodec::SNAPPY:
+        return common::CompressionKind::CompressionKind_SNAPPY;
+        break;
+      case thrift::CompressionCodec::GZIP:
+        return common::CompressionKind::CompressionKind_GZIP;
+        break;
+      case thrift::CompressionCodec::LZO:
+        return common::CompressionKind::CompressionKind_LZO;
+        break;
+      case thrift::CompressionCodec::LZ4:
+        return common::CompressionKind::CompressionKind_LZ4;
+        break;
+      case thrift::CompressionCodec::ZSTD:
+        return common::CompressionKind::CompressionKind_ZSTD;
+        break;
+      case thrift::CompressionCodec::LZ4_RAW:
+        return common::CompressionKind::CompressionKind_LZ4;
+      default:
+        VELOX_UNSUPPORTED(
+            "Unsupported compression type: " +
+            facebook::velox::parquet::thrift::to_string(codec));
+        break;
+    }
+  }
+
+  static const dwio::common::compression::CompressionOptions
+  getParquetDecompressionOptions() {
+    dwio::common::compression::CompressionOptions options;
+    options.format.zlib.windowBits =
+        dwio::common::compression::Compressor::PARQUET_ZLIB_WINDOW_BITS;
+    return options;
+  }
+
   /// Advances 'numRows' top level rows.
   void skip(int64_t numRows);
 
@@ -75,7 +116,7 @@ class PageReader {
   /// levels.
   void decodeRepDefs(int32_t numTopLevelRows);
 
-  /// Returns lengths and/or nulls   from 'begin' to 'end' for the level of
+  /// Returns lengths and/or nulls from 'begin' to 'end' for the level of
   /// 'info' using 'mode'. 'maxItems' is the maximum number of nulls and lengths
   /// to produce. 'lengths' is only filled for mode kList. 'nulls' is filled
   /// from bit position 'nullsStartIndex'. Returns the number of lengths/nulls
@@ -202,9 +243,9 @@ class PageReader {
   const char* FOLLY_NONNULL readBytes(int32_t size, BufferPtr& copy);
 
   // Decompresses data starting at 'pageData_', consuming 'compressedsize' and
-  // producing up to 'uncompressedSize' bytes. The The start of the decoding
-  // result is returned. an intermediate copy may be made in 'uncompresseddata_'
-  const char* FOLLY_NONNULL uncompressData(
+  // producing up to 'uncompressedSize' bytes. The start of the decoding
+  // result is returned. an intermediate copy may be made in 'decompresseddata_'
+  const char* FOLLY_NONNULL decompressData(
       const char* FOLLY_NONNULL pageData,
       uint32_t compressedSize,
       uint32_t uncompressedSize);
@@ -259,8 +300,8 @@ class PageReader {
       Visitor visitor) {
     if (nulls) {
       nullsFromFastPath = dwio::common::useFastPath<Visitor, true>(visitor) &&
-          (!this->type_->type->isLongDecimal()) &&
-          (this->type_->type->isShortDecimal() ? isDictionary() : true);
+          (!this->type_->type()->isLongDecimal()) &&
+          (this->type_->type()->isShortDecimal() ? isDictionary() : true);
 
       if (isDictionary()) {
         auto dictVisitor = visitor.toDictionaryColumnVisitor();
@@ -280,7 +321,7 @@ class PageReader {
         deltaBpDecoder_->readWithVisitor<false>(nulls, visitor);
       } else {
         directDecoder_->readWithVisitor<false>(
-            nulls, visitor, !this->type_->type->isShortDecimal());
+            nulls, visitor, !this->type_->type()->isShortDecimal());
       }
     }
   }
@@ -415,10 +456,10 @@ class PageReader {
   // Copy of data if data straddles buffer boundary.
   BufferPtr pageBuffer_;
 
-  // Uncompressed data for the page. Rep-def-data in V1, data alone in V2.
-  BufferPtr uncompressedData_;
+  // decompressed data for the page. Rep-def-data in V1, data alone in V2.
+  BufferPtr decompressedData_;
 
-  // First byte of uncompressed encoded data. Contains the encoded data as a
+  // First byte of decompressed encoded data. Contains the encoded data as a
   // contiguous run of bytes.
   const char* FOLLY_NULLABLE pageData_{nullptr};
 

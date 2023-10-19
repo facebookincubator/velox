@@ -46,6 +46,11 @@ struct AllocationTraits {
     return bits::roundUp(bytes, kPageSize) / kPageSize;
   }
 
+  /// Returns the round up page bytes.
+  FOLLY_ALWAYS_INLINE static MachinePageCount roundUpPageBytes(uint64_t bytes) {
+    return bits::roundUp(bytes, kPageSize);
+  }
+
   /// The number of pages in a huge page.
   FOLLY_ALWAYS_INLINE static MachinePageCount numPagesInHugePage() {
     VELOX_DCHECK_GE(kHugePageSize, kPageSize);
@@ -155,6 +160,9 @@ class Allocation {
     return numPages_ == 0;
   }
 
+  /// Moves the runs in 'from' to 'this'. 'from' is empty on return.
+  void appendMove(Allocation& from);
+
   std::string toString() const;
 
  private:
@@ -184,6 +192,7 @@ class Allocation {
   VELOX_FRIEND_TEST(MemoryAllocatorTest, allocationClass1);
   VELOX_FRIEND_TEST(MemoryAllocatorTest, allocationClass2);
   VELOX_FRIEND_TEST(AllocationTest, append);
+  VELOX_FRIEND_TEST(AllocationTest, appendMove);
 };
 
 /// Represents a run of contiguous pages that do not belong to any size class.

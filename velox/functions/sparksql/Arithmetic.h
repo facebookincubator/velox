@@ -46,7 +46,7 @@ struct RemainderFunction {
 };
 
 template <typename T>
-struct PModFunction {
+struct PModIntFunction {
   template <typename TInput>
   FOLLY_ALWAYS_INLINE bool call(TInput& result, const TInput a, const TInput n)
 #if defined(__has_feature)
@@ -62,6 +62,20 @@ struct PModFunction {
     }
 
     result = (r > 0) ? r : (r + n) % n;
+    return true;
+  }
+};
+
+template <typename T>
+struct PModFloatFunction {
+  template <typename TInput>
+  FOLLY_ALWAYS_INLINE bool
+  call(TInput& result, const TInput a, const TInput n) {
+    if (UNLIKELY(n == (TInput)0)) {
+      return false;
+    }
+    TInput r = fmod(a, n);
+    result = (r > 0) ? r : fmod(r + n, n);
     return true;
   }
 };
@@ -193,6 +207,14 @@ struct CscFunction {
 };
 
 template <typename T>
+struct CoshFunction {
+  template <typename TInput>
+  FOLLY_ALWAYS_INLINE void call(TInput& result, TInput a) {
+    result = std::cosh(a);
+  }
+};
+
+template <typename T>
 struct ToBinaryStringFunction {
   VELOX_DEFINE_FUNCTION_TYPES(T);
 
@@ -220,12 +242,41 @@ struct HypotFunction {
 };
 
 template <typename T>
+struct Log2Function {
+  FOLLY_ALWAYS_INLINE bool call(double& result, double a) {
+    if (a <= 0.0) {
+      return false;
+    }
+    result = std::log2(a);
+    return true;
+  }
+};
+
+template <typename T>
 struct Log1pFunction {
   FOLLY_ALWAYS_INLINE bool call(double& result, double a) {
     if (a <= -1) {
       return false;
     }
     result = std::log1p(a);
+    return true;
+  }
+};
+
+template <typename T>
+struct CotFunction {
+  FOLLY_ALWAYS_INLINE void call(double& result, double a) {
+    result = 1 / std::tan(a);
+  }
+};
+
+template <typename T>
+struct Log10Function {
+  FOLLY_ALWAYS_INLINE bool call(double& result, double a) {
+    if (a <= 0.0) {
+      return false;
+    }
+    result = std::log10(a);
     return true;
   }
 };

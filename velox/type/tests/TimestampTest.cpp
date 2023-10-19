@@ -15,8 +15,10 @@
  */
 
 #include <gtest/gtest.h>
+#include <random>
 
 #include "velox/common/base/tests/GTestUtils.h"
+#include "velox/external/date/tz.h"
 #include "velox/type/Timestamp.h"
 
 namespace facebook::velox {
@@ -76,14 +78,44 @@ TEST(TimestampTest, arithmeticOverflow) {
   uint64_t nano = Timestamp::kMaxNanos;
 
   Timestamp ts1(positiveSecond, nano);
-  VELOX_ASSERT_THROW(ts1.toMillis(), "Could not convert Timestamp");
-  VELOX_ASSERT_THROW(ts1.toMicros(), "Could not convert Timestamp");
-  VELOX_ASSERT_THROW(ts1.toNanos(), "Could not convert Timestamp");
+  VELOX_ASSERT_THROW(
+      ts1.toMillis(),
+      fmt::format(
+          "Could not convert Timestamp({}, {}) to milliseconds",
+          positiveSecond,
+          nano));
+  VELOX_ASSERT_THROW(
+      ts1.toMicros(),
+      fmt::format(
+          "Could not convert Timestamp({}, {}) to microseconds",
+          positiveSecond,
+          nano));
+  VELOX_ASSERT_THROW(
+      ts1.toNanos(),
+      fmt::format(
+          "Could not convert Timestamp({}, {}) to nanoseconds",
+          positiveSecond,
+          nano));
 
   Timestamp ts2(negativeSecond, 0);
-  VELOX_ASSERT_THROW(ts2.toMillis(), "Could not convert Timestamp");
-  VELOX_ASSERT_THROW(ts2.toMicros(), "Could not convert Timestamp");
-  VELOX_ASSERT_THROW(ts2.toNanos(), "Could not convert Timestamp");
+  VELOX_ASSERT_THROW(
+      ts2.toMillis(),
+      fmt::format(
+          "Could not convert Timestamp({}, {}) to milliseconds",
+          negativeSecond,
+          0));
+  VELOX_ASSERT_THROW(
+      ts2.toMicros(),
+      fmt::format(
+          "Could not convert Timestamp({}, {}) to microseconds",
+          negativeSecond,
+          0));
+  VELOX_ASSERT_THROW(
+      ts2.toNanos(),
+      fmt::format(
+          "Could not convert Timestamp({}, {}) to nanoseconds",
+          negativeSecond,
+          0));
 }
 
 TEST(TimestampTest, toAppend) {
@@ -157,6 +189,147 @@ TEST(TimestampTest, toString) {
   auto kMax = Timestamp(Timestamp::kMaxSeconds, Timestamp::kMaxNanos);
   EXPECT_EQ("-292275055-05-16T16:47:04.000000000", kMin.toString());
   EXPECT_EQ("292278994-08-17T07:12:55.999999999", kMax.toString());
+  EXPECT_EQ(
+      "1-01-01T05:17:32.000000000", Timestamp(-62135577748, 0).toString());
+  EXPECT_EQ(
+      "-224876953-12-19T16:58:03.000000000",
+      Timestamp(-7096493348463717, 0).toString());
+  EXPECT_EQ(
+      "-1-11-29T19:33:20.000000000", Timestamp(-62170000000, 0).toString());
 }
+
+TEST(TimestampTest, toStringPrestoCastBehavior) {
+  auto kMin = Timestamp(Timestamp::kMinSeconds, 0);
+  auto kMax = Timestamp(Timestamp::kMaxSeconds, Timestamp::kMaxNanos);
+  TimestampToStringOptions options = {
+      .precision = TimestampToStringOptions::kMilliseconds,
+      .zeroPaddingYear = true,
+      .dateTimeSeparator = ' ',
+  };
+  EXPECT_EQ("-292275055-05-16 16:47:04.000", kMin.toString(options));
+  EXPECT_EQ("292278994-08-17 07:12:55.999", kMax.toString(options));
+  EXPECT_EQ(
+      "0001-01-01 05:17:32.000", Timestamp(-62135577748, 0).toString(options));
+  EXPECT_EQ(
+      "0000-03-24 13:20:00.000", Timestamp(-62160000000, 0).toString(options));
+  EXPECT_EQ(
+      "-224876953-12-19 16:58:03.000",
+      Timestamp(-7096493348463717, 0).toString(options));
+  EXPECT_EQ(
+      "-0001-11-29 19:33:20.000", Timestamp(-62170000000, 0).toString(options));
+}
+
+namespace {
+std::string toStringAlt(
+    const Timestamp& t,
+    TimestampToStringOptions::Precision precision) {
+  auto seconds = t.getSeconds();
+  std::tm tmValue;
+  VELOX_CHECK_NOT_NULL(gmtime_r((const time_t*)&seconds, &tmValue));
+  auto width = static_cast<int>(precision);
+  auto value = precision == TimestampToStringOptions::kMilliseconds
+      ? t.getNanos() / 1'000'000
+      : t.getNanos();
+  std::ostringstream oss;
+  oss << std::put_time(&tmValue, "%FT%T");
+  oss << '.' << std::setfill('0') << std::setw(width) << value;
+  return oss.str();
+}
+} // namespace
+
+TEST(TimestampTest, compareWithToStringAlt) {
+  uint64_t seed = 42;
+  // seed = std::random_device{}();
+  std::default_random_engine gen(seed);
+  std::uniform_int_distribution<int64_t> distSec(
+      Timestamp::kMinSeconds, Timestamp::kMaxSeconds);
+  std::uniform_int_distribution<uint64_t> distNano(0, Timestamp::kMaxNanos);
+  for (int i = 0; i < 10000; ++i) {
+    Timestamp t(distSec(gen), distNano(gen));
+    for (auto precision :
+         {TimestampToStringOptions::kMilliseconds,
+          TimestampToStringOptions::kNanoseconds}) {
+      TimestampToStringOptions options{};
+      options.precision = precision;
+      ASSERT_EQ(t.toString(options), toStringAlt(t, precision))
+          << t.getSeconds() << ' ' << t.getNanos();
+    }
+  }
+}
+
+TEST(TimestampTest, increaseOperator) {
+  auto ts = Timestamp(0, 999999998);
+  EXPECT_EQ("1970-01-01T00:00:00.999999998", ts.toString());
+  ++ts;
+  EXPECT_EQ("1970-01-01T00:00:00.999999999", ts.toString());
+  ++ts;
+  EXPECT_EQ("1970-01-01T00:00:01.000000000", ts.toString());
+  ++ts;
+  EXPECT_EQ("1970-01-01T00:00:01.000000001", ts.toString());
+  ++ts;
+  EXPECT_EQ("1970-01-01T00:00:01.000000002", ts.toString());
+
+  auto kMax = Timestamp(Timestamp::kMaxSeconds, Timestamp::kMaxNanos);
+  VELOX_ASSERT_THROW(++kMax, "Timestamp nanos out of range");
+}
+
+TEST(TimestampTest, decreaseOperator) {
+  auto ts = Timestamp(0, 2);
+  EXPECT_EQ("1970-01-01T00:00:00.000000002", ts.toString());
+  --ts;
+  EXPECT_EQ("1970-01-01T00:00:00.000000001", ts.toString());
+  --ts;
+  EXPECT_EQ("1970-01-01T00:00:00.000000000", ts.toString());
+  --ts;
+  EXPECT_EQ("1969-12-31T23:59:59.999999999", ts.toString());
+  --ts;
+  EXPECT_EQ("1969-12-31T23:59:59.999999998", ts.toString());
+
+  auto kMin = Timestamp(Timestamp::kMinSeconds, 0);
+  VELOX_ASSERT_THROW(--kMin, "Timestamp nanos out of range");
+}
+
+TEST(TimestampTest, outOfRange) {
+  auto* timezone = date::locate_zone("GMT");
+  Timestamp t(-3217830796800, 0);
+
+  VELOX_ASSERT_THROW(
+      t.toTimePoint(), "Timestamp is outside of supported range");
+  VELOX_ASSERT_THROW(
+      t.toTimezone(*timezone), "Timestamp is outside of supported range");
+}
+
+TEST(TimestampTest, epochToUtc) {
+  std::tm tm;
+  ASSERT_FALSE(epochToUtc(-(1ll << 60), tm));
+  ASSERT_FALSE(epochToUtc(1ll << 60, tm));
+}
+
+TEST(TimestampTest, randomEpochToUtc) {
+  uint64_t seed = 42;
+  // seed = std::random_device{}();
+  std::default_random_engine gen(seed);
+  std::uniform_int_distribution<time_t> dist(
+      std::numeric_limits<time_t>::min(), std::numeric_limits<time_t>::max());
+  std::tm actual, expected;
+  for (int i = 0; i < 10000; ++i) {
+    auto epoch = dist(gen);
+    SCOPED_TRACE(fmt::format("epoch={}", epoch));
+    if (gmtime_r(&epoch, &expected)) {
+      ASSERT_TRUE(epochToUtc(epoch, actual));
+      ASSERT_EQ(expected.tm_year, actual.tm_year);
+      ASSERT_EQ(expected.tm_yday, actual.tm_yday);
+      ASSERT_EQ(expected.tm_mon, actual.tm_mon);
+      ASSERT_EQ(expected.tm_mday, actual.tm_mday);
+      ASSERT_EQ(expected.tm_wday, actual.tm_wday);
+      ASSERT_EQ(expected.tm_hour, actual.tm_hour);
+      ASSERT_EQ(expected.tm_min, actual.tm_min);
+      ASSERT_EQ(expected.tm_sec, actual.tm_sec);
+    } else {
+      ASSERT_FALSE(epochToUtc(epoch, actual));
+    }
+  }
+}
+
 } // namespace
 } // namespace facebook::velox

@@ -15,6 +15,7 @@
  */
 
 #include "velox/dwio/dwrf/common/Common.h"
+#include "velox/common/compression/Compression.h"
 
 #include <folly/Conv.h>
 
@@ -79,11 +80,11 @@ std::string columnEncodingKindToString(ColumnEncodingKind kind) {
 }
 
 DwrfStreamIdentifier EncodingKey::forKind(const proto::Stream_Kind kind) const {
-  return DwrfStreamIdentifier(node, sequence, 0, kind);
+  return DwrfStreamIdentifier(node_, sequence_, 0, kind);
 }
 
 namespace {
-using dwio::common::CompressionKind;
+using common::CompressionKind;
 
 CompressionKind orcCompressionToCompressionKind(
     proto::orc::CompressionKind compression) {
@@ -97,9 +98,9 @@ CompressionKind orcCompressionToCompressionKind(
     case proto::orc::CompressionKind::LZO:
       return CompressionKind::CompressionKind_LZO;
     case proto::orc::CompressionKind::LZ4:
-      return CompressionKind::CompressionKind_ZSTD;
-    case proto::orc::CompressionKind::ZSTD:
       return CompressionKind::CompressionKind_LZ4;
+    case proto::orc::CompressionKind::ZSTD:
+      return CompressionKind::CompressionKind_ZSTD;
   }
   return CompressionKind::CompressionKind_NONE;
 }

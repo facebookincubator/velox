@@ -435,8 +435,7 @@ struct TypeParameter {
 ///   IntegerType    ArrayType
 ///                     |
 ///                   BigintType
-class Type : public Tree<const std::shared_ptr<const Type>>,
-             public velox::ISerializable {
+class Type : public Tree<const TypePtr>, public velox::ISerializable {
  public:
   explicit Type(TypeKind kind) : kind_{kind} {}
 
@@ -455,6 +454,18 @@ class Type : public Tree<const std::shared_ptr<const Type>>,
   }
 
   virtual bool isPrimitiveType() const = 0;
+
+  /// Returns true if equality relationship is defined for the values of this
+  /// type, i.e. a == b is defined and returns true, false or null. For example,
+  /// scalar types are usually comparable and complex types are comparable if
+  /// their nested types are.
+  virtual bool isComparable() const = 0;
+
+  /// Returns true if less than relationship is defined for the values of this
+  /// type, i.e. a <= b returns true or false. For example, scalar types are
+  /// usually orderable, arrays and structs are orderable if their nested types
+  /// are, while map types are not orderable.
+  virtual bool isOrderable() const = 0;
 
   /// Returns unique logical type name. It can be
   /// different from the physical type name returned by 'kindName()'.
@@ -491,6 +502,8 @@ class Type : public Tree<const std::shared_ptr<const Type>>,
   // todo(youknowjack): avoid expensive virtual function calls for these
   // simple functions
   virtual size_t cppSizeInBytes() const {
+    // Must be a std::invalid_argument instead of VeloxException in order to
+    // generate python ValueError in python bindings.
     throw std::invalid_argument{"Not a fixed width type: " + toString()};
   }
 
@@ -570,6 +583,14 @@ class TypeBase : public Type {
     return TypeTraits<KIND>::isFixedWidth;
   }
 
+  bool isOrderable() const override {
+    return false;
+  }
+
+  bool isComparable() const override {
+    return false;
+  }
+
   const char* kindName() const override {
     return TypeTraits<KIND>::name;
   }
@@ -597,6 +618,14 @@ class ScalarType : public TypeBase<KIND> {
 
   std::string toString() const override {
     return TypeTraits<KIND>::name;
+  }
+
+  bool isOrderable() const override {
+    return true;
+  }
+
+  bool isComparable() const override {
+    return true;
   }
 
   size_t cppSizeInBytes() const override {
@@ -662,7 +691,7 @@ class DecimalType : public ScalarType<KIND> {
   }
 
   std::string toString() const override {
-    return fmt::format("DECIMAL({},{})", precision(), scale());
+    return fmt::format("DECIMAL({}, {})", precision(), scale());
   }
 
   folly::dynamic serialize() const override {
@@ -774,9 +803,14 @@ class UnknownType : public TypeBase<TypeKind::UNKNOWN> {
 
 class ArrayType : public TypeBase<TypeKind::ARRAY> {
  public:
-  explicit ArrayType(std::shared_ptr<const Type> child);
+  explicit ArrayType(TypePtr child);
 
-  const std::shared_ptr<const Type>& elementType() const {
+  explicit ArrayType(
+      std::vector<std::string>&& /*names*/,
+      std::vector<TypePtr>&& types)
+      : ArrayType(std::move(types[0])) {}
+
+  const TypePtr& elementType() const {
     return child_;
   }
 
@@ -784,7 +818,28 @@ class ArrayType : public TypeBase<TypeKind::ARRAY> {
     return 1;
   }
 
+  std::vector<TypePtr> children() const {
+    return {child_};
+  }
+
+  std::vector<std::string> names() const {
+    return {"element"};
+  }
+
+  bool isOrderable() const override {
+    return child_->isOrderable();
+  }
+
+  bool isComparable() const override {
+    return child_->isComparable();
+  }
+
   const std::shared_ptr<const Type>& childAt(uint32_t idx) const override;
+
+  const char* nameOf(uint32_t idx) const {
+    VELOX_USER_CHECK_EQ(idx, 0, "Array type should have only one child");
+    return "element";
+  }
 
   std::string toString() const override;
 
@@ -797,21 +852,24 @@ class ArrayType : public TypeBase<TypeKind::ARRAY> {
   }
 
  protected:
-  std::shared_ptr<const Type> child_;
+  TypePtr child_;
   const std::vector<TypeParameter> parameters_;
 };
 
 class MapType : public TypeBase<TypeKind::MAP> {
  public:
-  MapType(
-      std::shared_ptr<const Type> keyType,
-      std::shared_ptr<const Type> valueType);
+  MapType(TypePtr keyType, TypePtr valueType);
 
-  const std::shared_ptr<const Type>& keyType() const {
+  explicit MapType(
+      std::vector<std::string>&& /*names*/,
+      std::vector<TypePtr>&& types)
+      : MapType(std::move(types[0]), std::move(types[1])) {}
+
+  const TypePtr& keyType() const {
     return keyType_;
   }
 
-  const std::shared_ptr<const Type>& valueType() const {
+  const TypePtr& valueType() const {
     return valueType_;
   }
 
@@ -819,9 +877,23 @@ class MapType : public TypeBase<TypeKind::MAP> {
     return 2;
   }
 
+  std::vector<TypePtr> children() const {
+    return {keyType_, valueType_};
+  }
+
+  std::vector<std::string> names() const {
+    return {"key", "value"};
+  }
+
+  bool isComparable() const override {
+    return keyType_->isComparable() && valueType_->isComparable();
+  }
+
   std::string toString() const override;
 
-  const std::shared_ptr<const Type>& childAt(uint32_t idx) const override;
+  const TypePtr& childAt(uint32_t idx) const override;
+
+  const char* nameOf(uint32_t idx) const;
 
   bool equivalent(const Type& other) const override;
 
@@ -832,8 +904,8 @@ class MapType : public TypeBase<TypeKind::MAP> {
   }
 
  private:
-  std::shared_ptr<const Type> keyType_;
-  std::shared_ptr<const Type> valueType_;
+  TypePtr keyType_;
+  TypePtr valueType_;
   const std::vector<TypeParameter> parameters_;
 };
 
@@ -851,9 +923,12 @@ class RowType : public TypeBase<TypeKind::ROW> {
     return children_;
   }
 
+  bool isOrderable() const override;
+
+  bool isComparable() const override;
+
   const std::shared_ptr<const Type>& findChild(folly::StringPiece name) const;
 
-  // Note: Internally does a linear search on all child names, cost is O(N).
   bool containsChild(std::string_view name) const;
 
   uint32_t getChildIdx(const std::string& name) const;
@@ -876,7 +951,8 @@ class RowType : public TypeBase<TypeKind::ROW> {
   void printChildren(std::stringstream& ss, std::string_view delimiter = ",")
       const;
 
-  std::shared_ptr<RowType> unionWith(std::shared_ptr<RowType>& rowType) const;
+  std::shared_ptr<RowType> unionWith(
+      std::shared_ptr<const RowType> rowType) const;
 
   folly::dynamic serialize() const override;
 
@@ -920,6 +996,14 @@ class FunctionType : public TypeBase<TypeKind::FUNCTION> {
 
   const std::vector<std::shared_ptr<const Type>>& children() const {
     return children_;
+  }
+
+  bool isOrderable() const override {
+    return false;
+  }
+
+  bool isComparable() const override {
+    return false;
   }
 
   bool equivalent(const Type& other) const override;
@@ -1097,7 +1181,7 @@ class IntervalDayTimeType : public BigintType {
   }
 };
 
-FOLLY_ALWAYS_INLINE std::shared_ptr<const IntervalDayTimeType>
+FOLLY_ALWAYS_INLINE const std::shared_ptr<const IntervalDayTimeType>&
 INTERVAL_DAY_TIME() {
   return IntervalDayTimeType::get();
 }
@@ -1150,7 +1234,7 @@ class IntervalYearMonthType : public IntegerType {
   }
 };
 
-FOLLY_ALWAYS_INLINE std::shared_ptr<const IntervalYearMonthType>
+FOLLY_ALWAYS_INLINE const std::shared_ptr<const IntervalYearMonthType>&
 INTERVAL_YEAR_MONTH() {
   return IntervalYearMonthType::get();
 }
@@ -1201,7 +1285,7 @@ class DateType : public IntegerType {
   }
 };
 
-FOLLY_ALWAYS_INLINE std::shared_ptr<const DateType> DATE() {
+FOLLY_ALWAYS_INLINE const std::shared_ptr<const DateType>& DATE() {
   return DateType::get();
 }
 
@@ -1245,8 +1329,7 @@ struct TypeFactory<TypeKind::UNKNOWN> {
 
 template <>
 struct TypeFactory<TypeKind::ARRAY> {
-  static std::shared_ptr<const ArrayType> create(
-      std::shared_ptr<const Type> elementType) {
+  static std::shared_ptr<const ArrayType> create(TypePtr elementType) {
     return std::make_shared<ArrayType>(std::move(elementType));
   }
 };
@@ -1254,9 +1337,9 @@ struct TypeFactory<TypeKind::ARRAY> {
 template <>
 struct TypeFactory<TypeKind::MAP> {
   static std::shared_ptr<const MapType> create(
-      std::shared_ptr<const Type> keyType,
-      std::shared_ptr<const Type> valType) {
-    return std::make_shared<MapType>(keyType, valType);
+      TypePtr keyType,
+      TypePtr valType) {
+    return std::make_shared<MapType>(std::move(keyType), std::move(valType));
   }
 };
 
@@ -1264,31 +1347,27 @@ template <>
 struct TypeFactory<TypeKind::ROW> {
   static std::shared_ptr<const RowType> create(
       std::vector<std::string>&& names,
-      std::vector<std::shared_ptr<const Type>>&& types) {
+      std::vector<TypePtr>&& types) {
     return std::make_shared<const RowType>(std::move(names), std::move(types));
   }
 };
 
-std::shared_ptr<const ArrayType> ARRAY(std::shared_ptr<const Type> elementType);
+std::shared_ptr<const ArrayType> ARRAY(TypePtr elementType);
 
 std::shared_ptr<const RowType> ROW(
     std::vector<std::string>&& names,
-    std::vector<std::shared_ptr<const Type>>&& types);
+    std::vector<TypePtr>&& types);
 
 std::shared_ptr<const RowType> ROW(
-    std::initializer_list<
-        std::pair<const std::string, std::shared_ptr<const Type>>>&& pairs);
+    std::initializer_list<std::pair<const std::string, TypePtr>>&& pairs);
 
-std::shared_ptr<const RowType> ROW(
-    std::vector<std::shared_ptr<const Type>>&& pairs);
+std::shared_ptr<const RowType> ROW(std::vector<TypePtr>&& pairs);
 
-std::shared_ptr<const MapType> MAP(
-    std::shared_ptr<const Type> keyType,
-    std::shared_ptr<const Type> valType);
+std::shared_ptr<const MapType> MAP(TypePtr keyType, TypePtr valType);
 
 std::shared_ptr<const FunctionType> FUNCTION(
-    std::vector<std::shared_ptr<const Type>>&& argumentTypes,
-    std::shared_ptr<const Type> returnType);
+    std::vector<TypePtr>&& argumentTypes,
+    TypePtr returnType);
 
 template <typename Class>
 std::shared_ptr<const OpaqueType> OPAQUE() {
@@ -1584,7 +1663,8 @@ VELOX_SCALAR_ACCESSOR(DOUBLE);
 VELOX_SCALAR_ACCESSOR(TIMESTAMP);
 VELOX_SCALAR_ACCESSOR(VARCHAR);
 VELOX_SCALAR_ACCESSOR(VARBINARY);
-VELOX_SCALAR_ACCESSOR(UNKNOWN);
+
+TypePtr UNKNOWN();
 
 template <TypeKind KIND>
 std::shared_ptr<const Type> createScalarType() {

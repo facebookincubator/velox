@@ -77,10 +77,12 @@ class HashStringAllocatorTest : public testing::Test {
     return folly::Random::rand32(rng_);
   }
 
-  std::string randomString() {
+  std::string randomString(int32_t size = 0) {
     std::string result;
     result.resize(
-        20 + (rand32() % 10 > 8 ? rand32() % 200 : 1000 + rand32() % 1000));
+        size != 0 ? size
+                  : 20 +
+                (rand32() % 10 > 8 ? rand32() % 200 : 1000 + rand32() % 1000));
     for (auto i = 0; i < result.size(); ++i) {
       result[i] = 32 + (rand32() % 96);
     }
@@ -93,12 +95,48 @@ class HashStringAllocatorTest : public testing::Test {
   folly::Random::DefaultGenerator rng_;
 };
 
+TEST_F(HashStringAllocatorTest, headerToString) {
+  ASSERT_NO_THROW(allocator_->toString());
+
+  auto h1 = allocate(123);
+  auto h2 = allocate(456);
+
+  ASSERT_EQ(h1->toString(), "size: 123");
+  ASSERT_EQ(h2->toString(), "size: 456");
+
+  allocator_->free(h1);
+  ASSERT_EQ(h1->toString(), "|free| size: 123");
+  ASSERT_EQ(h2->toString(), "size: 456, previous is free (123 bytes)");
+
+  auto h3 = allocate(123'456);
+  ASSERT_EQ(h3->toString(), "size: 123456");
+
+  ASSERT_NO_THROW(allocator_->toString());
+
+  ByteStream stream(allocator_.get());
+  auto h4 = allocator_->newWrite(stream).header;
+  std::string data(123'456, 'x');
+  stream.appendStringPiece(folly::StringPiece(data.data(), data.size()));
+  allocator_->finishWrite(stream, 0);
+
+  ASSERT_EQ(h4->toString(), "|multipart| size: 123 [64913, 58436]");
+
+  ASSERT_EQ(
+      h4->nextContinued()->toString(),
+      "|multipart| size: 64913 [58436], at end");
+
+  ASSERT_EQ(h4->nextContinued()->nextContinued()->toString(), "size: 58436");
+
+  ASSERT_NO_THROW(allocator_->toString());
+}
+
 TEST_F(HashStringAllocatorTest, allocate) {
   for (auto count = 0; count < 3; ++count) {
     std::vector<HSA::Header*> headers;
     for (auto i = 0; i < 10'000; ++i) {
       headers.push_back(allocate((i % 10) * 10));
     }
+    EXPECT_FALSE(allocator_->isEmpty());
     allocator_->checkConsistency();
     for (int32_t step = 7; step >= 1; --step) {
       for (auto i = 0; i < headers.size(); i += step) {
@@ -110,6 +148,7 @@ TEST_F(HashStringAllocatorTest, allocate) {
       allocator_->checkConsistency();
     }
   }
+  EXPECT_TRUE(allocator_->isEmpty());
   // We allow for some free overhead for free lists after all is freed.
   EXPECT_LE(allocator_->retainedSize() - allocator_->freeSpace(), 250);
 }
@@ -176,6 +215,25 @@ TEST_F(HashStringAllocatorTest, finishWrite) {
   copy.resize(4);
   stream.readBytes(copy.data(), 4);
   ASSERT_EQ(copy, "abcd");
+
+  allocator_->checkConsistency();
+
+  std::vector<int32_t> sizes = {
+      50000, 100000, 200000, 1000000, 3000000, 5000000};
+  for (auto size : sizes) {
+    auto largeString = randomString(size);
+
+    auto start = allocator_->newWrite(stream);
+    stream.appendStringPiece(folly::StringPiece(largeString));
+    allocator_->finishWrite(stream, 0);
+
+    HSA::prepareRead(start.header, stream);
+    std::string copy;
+    copy.resize(largeString.size());
+    stream.readBytes(copy.data(), copy.size());
+    ASSERT_EQ(copy, largeString);
+    allocator_->checkConsistency();
+  }
 }
 
 TEST_F(HashStringAllocatorTest, multipart) {
@@ -414,6 +472,38 @@ TEST_F(HashStringAllocatorTest, externalLeak) {
 
   allocator.reset();
   EXPECT_EQ(initialBytes, pool->currentBytes());
+}
+
+TEST_F(HashStringAllocatorTest, freeLists) {
+  auto sizes = HashStringAllocator::freeListSizeClasses();
+  std::vector<HashStringAllocator::Header*> allocations;
+  // We make alternating allocations of different free list size
+  // classes. We free the small ones. We allocate a larger size from
+  // the same size class, This reads the free list and moves to a
+  // larger list. On the second time around, this remembers that the
+  // smaller fre list dies not have entries of that size.
+  auto small = sizes[1] + 2;
+  auto larger = sizes[2] + 2;
+  for (auto i = 0; i < 100; ++i) {
+    allocations.push_back(allocator_->allocate(i == 0 ? small + 10 : small));
+    allocations.push_back(allocator_->allocate(larger));
+  }
+  for (auto i = 0; i < allocations.size(); i += 2) {
+    allocator_->free(allocations[i]);
+  }
+  allocations[0] = allocator_->allocate(small);
+  // This comes from head of free list.
+  EXPECT_EQ(0, allocator_->numFreeListNoFit());
+  allocations[2] = allocator_->allocate(small + 10);
+  // Last in free llist fits.
+  EXPECT_EQ(98, allocator_->numFreeListNoFit());
+  allocations[4] = allocator_->allocate(small + 10);
+  // Traverse the free list again but no fit.
+  EXPECT_EQ(2 * 98, allocator_->numFreeListNoFit());
+  allocations[6] = allocator_->allocate(small + 10);
+  // Now we know there is no fit in the list for small, so it is not
+  // retraversed.
+  EXPECT_EQ(2 * 98, allocator_->numFreeListNoFit());
 }
 
 } // namespace

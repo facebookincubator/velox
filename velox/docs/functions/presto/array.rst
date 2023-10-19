@@ -127,10 +127,17 @@ Array Functions
 
     If ``instance > 0``, returns the position of the ``instance``-th occurrence of the ``element`` in array ``x``. If ``instance < 0``, returns the position of the ``instance``-to-last occurrence of the ``element`` in array ``x``. If no matching element instance is found, 0 is returned.
 
+.. function:: array_remove(x, element) -> array
+
+    Remove all elements that equal ``element`` from array ``x``.
+
+        SELECT array_remove(ARRAY [1, 2, 3], 3); -- [1, 2]
+        SELECT array_remove(ARRAY [2, 1, NULL], 1); -- [2, NULL]
+
 .. function:: array_sort(array(E)) -> array(E)
 
-    Returns an array which has the sorted order of the input array x. The elements of x must
-    be orderable. Null elements will be placed at the end of the returned array.::
+    Returns an array which has the sorted order of the input array x. E must be
+    an orderable type. Null elements will be placed at the end of the returned array.::
 
         SELECT array_sort(ARRAY [1, 2, 3]); -- [1, 2, 3]
         SELECT array_sort(ARRAY [3, 2, 1]); -- [1, 2, 3]
@@ -141,14 +148,15 @@ Array Functions
 .. function:: array_sort(array(T), function(T,U)) -> array(T)
 
     Returns the array sorted by values computed using specified lambda in ascending
-    order. Null elements will be placed at the end of the returned array. ::
+    order. U must be an orderable type. Null elements will be placed at the end of
+    the returned array. ::
 
         SELECT array_sort(ARRAY ['cat', 'leopard', 'mouse'], x -> length(x)); -- ['cat', 'mouse', 'leopard']
 
 .. function:: array_sort_desc(array(E)) -> array(E)
 
-    Returns the array sorted in the descending order. The elements of the array must
-    be orderable. Null elements will be placed at the end of the returned array.::
+    Returns the array sorted in the descending order. E must be an orderable type.
+    Null elements will be placed at the end of the returned array.::
 
         SELECT array_sort_desc(ARRAY [1, 2, 3]); -- [3, 2, 1]
         SELECT array_sort_desc(ARRAY [3, 2, 1]); -- [3, 2, 1]
@@ -159,7 +167,8 @@ Array Functions
 .. function:: array_sort_desc(array(T), function(T,U)) -> array(T)
 
     Returns the array sorted by values computed using specified lambda in descending
-    order. Null elements will be placed at the end of the returned array. ::
+    order. U must be an orderable type. Null elements will be placed at the end of
+    the returned array. ::
 
         SELECT array_sort_desc(ARRAY ['cat', 'leopard', 'mouse'], x -> length(x)); -- ['leopard', 'mouse', 'cat']
 
@@ -201,6 +210,47 @@ Array Functions
         SELECT filter(ARRAY [], x -> true); -- []
         SELECT filter(ARRAY [5, -6, NULL, 7], x -> x > 0); -- [5, 7]
         SELECT filter(ARRAY [5, NULL, 7, NULL], x -> x IS NOT NULL); -- [5, 7]
+
+.. function:: find_first(array(T), function(T,boolean)) -> T
+
+    Returns the first element of ``array`` that matches the predicate.
+    Returns ``NULL`` if no element matches the predicate.
+    Throws if the first matching element is NULL to avoid ambiguous results
+    for no-match and first-match-is-null cases.
+
+.. function:: find_first(array(T), index, function(T,boolean)) -> E
+
+    Returns the first element of ``array`` that matches the predicate.
+    Returns ``NULL`` if no element matches the predicate.
+    Throws if the first matching element is NULL to avoid ambiguous results
+    for no-match and first-match-is-null cases.
+    If ``index`` > 0, the search for element starts at position ``index``
+    until the end of the array.
+    If ``index`` < 0, the search for element starts at position ``abs(index)``
+    counting from the end of the array, until the start of the array. ::
+
+        SELECT find_first(ARRAY[3, 4, 5, 6], 2, x -> x > 0); -- 4
+        SELECT find_first(ARRAY[3, 4, 5, 6], -2, x -> x > 0); -- 5
+        SELECT find_first(ARRAY[3, 4, 5, 6], 2, x -> x < 4); -- NULL
+        SELECT find_first(ARRAY[3, 4, 5, 6], -2, x -> x > 5); -- NULL
+
+.. function:: find_first_index(array(T), function(T,boolean)) -> BIGINT
+
+    Returns the 1-based index of the first element of ``array`` that matches the predicate.
+    Returns ``NULL`` if no such element exists.
+
+.. function:: find_first_index(array(T), index, function(T,boolean)) -> BIGINT
+
+    Returns the 1-based index of the first element of ``array`` that matches the predicate.
+    Returns ``NULL`` if no such element exists.
+    If ``index`` > 0, the search for element starts at position ``index`` until the end of the array.
+    If ``index`` < 0, the search for element starts at position ``abs(index)`` counting from
+    the end of the array, until the start of the array. ::
+
+        SELECT find_first(ARRAY[3, 4, 5, 6], 2, x -> x > 0); -- 2
+        SELECT find_first(ARRAY[3, 4, 5, 6], -2, x -> x > 0); -- 3
+        SELECT find_first(ARRAY[3, 4, 5, 6], 2, x -> x < 4); -- NULL
+        SELECT find_first(ARRAY[3, 4, 5, 6], -2, x -> x > 5); -- NULL
 
 .. function:: flatten(array(array(T))) -> array(T)
 
@@ -281,6 +331,14 @@ Array Functions
         SELECT trim_array(ARRAY[1, 2, 3, 4], 1); -- [1, 2, 3]
         SELECT trim_array(ARRAY[1, 2, 3, 4], 2); -- [1, 2]
         SELECT trim_array(ARRAY[1, 2, 3, 4], 4); -- []
+
+.. function:: remove_nulls(x) -> array
+
+    Remove null values from an array ``array``::
+
+        SELECT remove_nulls(ARRAY[1, NULL, 3, NULL]); -- [1, 3]
+        SELECT remove_nulls(ARRAY[true, false, NULL]); -- [true, false]
+        SELECT remove_nulls(ARRAY[ARRAY[1, 2], NULL, ARRAY[1, NULL, 3]]); -- [[1, 2], [1, null, 3]]
 
 .. function:: zip(array(T), array(U),..) -> array(row(T,U, ...))
 

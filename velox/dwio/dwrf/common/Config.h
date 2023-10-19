@@ -18,8 +18,8 @@
 
 #include <functional>
 #include <unordered_map>
+#include "velox/common/compression/Compression.h"
 #include "velox/common/config/Config.h"
-#include "velox/dwio/common/Common.h"
 #include "velox/dwio/dwrf/common/Common.h"
 
 namespace facebook::velox::dwrf {
@@ -30,7 +30,7 @@ class Config : public common::ConfigBase<Config> {
   using Entry = common::ConfigBase<Config>::Entry<T>;
 
   static Entry<WriterVersion> WRITER_VERSION;
-  static Entry<dwio::common::CompressionKind> COMPRESSION;
+  static Entry<common::CompressionKind> COMPRESSION;
   static Entry<int32_t> ZLIB_COMPRESSION_LEVEL;
   static Entry<int32_t> ZSTD_COMPRESSION_LEVEL;
   static Entry<uint64_t> COMPRESSION_BLOCK_SIZE;
@@ -62,16 +62,16 @@ class Config : public common::ConfigBase<Config> {
   static Entry<uint32_t> MAP_FLAT_MAX_KEYS;
   static Entry<uint64_t> MAX_DICTIONARY_SIZE;
   static Entry<uint64_t> STRIPE_SIZE;
-  // With this config, we don't even try the more memory intensive encodings
-  // on writer start up.
+  /// With this config, we don't even try the more memory intensive encodings on
+  /// writer start up.
   static Entry<bool> FORCE_LOW_MEMORY_MODE;
-  // Disable low memory mode mostly for test purposes.
+  /// Disable low memory mode mostly for test purposes.
   static Entry<bool> DISABLE_LOW_MEMORY_MODE;
-  // Fail the writer, when Stream size is above threshold
-  // Streams greater than 2GB will be failed to be read by Jolly/Presto reader.
+  /// Fail the writer, when Stream size is above threshold. Streams greater than
+  /// 2GB will be failed to be read by Jolly/Presto reader.
   static Entry<bool> STREAM_SIZE_ABOVE_THRESHOLD_CHECK_ENABLED;
-  // Limit the raw data size per batch to avoid being forced
-  // to write oversized stripes.
+  /// Limit the raw data size per batch to avoid being forced to write oversized
+  /// stripes.
   static Entry<uint64_t> RAW_DATA_SIZE_PER_BATCH;
   static Entry<bool> MAP_STATISTICS;
 

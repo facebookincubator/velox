@@ -17,6 +17,8 @@
 
 #include "velox/connectors/hive/HiveConnector.h"
 #include "velox/connectors/hive/HiveConnectorSplit.h"
+#include "velox/connectors/hive/HiveDataSink.h"
+#include "velox/connectors/hive/TableHandle.h"
 #include "velox/dwio/dwrf/common/Config.h"
 #include "velox/exec/Operator.h"
 #include "velox/exec/tests/utils/OperatorTestBase.h"
@@ -33,8 +35,12 @@ using ColumnHandleMap =
 class HiveConnectorTestBase : public OperatorTestBase {
  public:
   HiveConnectorTestBase();
+
   void SetUp() override;
   void TearDown() override;
+
+  void resetHiveConnector(
+      const std::shared_ptr<const Config>& connectorProperties);
 
   void writeToFile(const std::string& filePath, RowVectorPtr vector);
 
@@ -132,6 +138,7 @@ class HiveConnectorTestBase : public OperatorTestBase {
   /// @param bucketProperty if not nulll, specifies the property for a bucket
   /// table.
   /// @param locationHandle Location handle for the table write.
+  /// @param compressionKind compression algorithm to use for table write.
   static std::shared_ptr<connector::hive::HiveInsertTableHandle>
   makeHiveInsertTableHandle(
       const std::vector<std::string>& tableColumnNames,
@@ -140,7 +147,8 @@ class HiveConnectorTestBase : public OperatorTestBase {
       std::shared_ptr<connector::hive::HiveBucketProperty> bucketProperty,
       std::shared_ptr<connector::hive::LocationHandle> locationHandle,
       const dwio::common::FileFormat tableStorageFormat =
-          dwio::common::FileFormat::DWRF);
+          dwio::common::FileFormat::DWRF,
+      const std::optional<common::CompressionKind> compressionKind = {});
 
   static std::shared_ptr<connector::hive::HiveInsertTableHandle>
   makeHiveInsertTableHandle(
@@ -149,7 +157,8 @@ class HiveConnectorTestBase : public OperatorTestBase {
       const std::vector<std::string>& partitionedBy,
       std::shared_ptr<connector::hive::LocationHandle> locationHandle,
       const dwio::common::FileFormat tableStorageFormat =
-          dwio::common::FileFormat::DWRF);
+          dwio::common::FileFormat::DWRF,
+      const std::optional<common::CompressionKind> compressionKind = {});
 
   static std::shared_ptr<connector::hive::HiveColumnHandle> regularColumn(
       const std::string& name,

@@ -18,6 +18,7 @@
 #include <cctype>
 #include <random>
 #include "velox/common/base/VeloxException.h"
+#include "velox/common/base/tests/GTestUtils.h"
 #include "velox/expression/Expr.h"
 #include "velox/functions/lib/StringEncodingUtils.h"
 #include "velox/functions/lib/string/StringImpl.h"
@@ -26,7 +27,6 @@
 using namespace facebook::velox;
 using namespace facebook::velox::exec;
 using namespace facebook::velox::functions::test;
-using namespace std::string_literals;
 
 namespace {
 /// Generate an ascii random string of size length
@@ -301,6 +301,10 @@ class StringFunctionsTest : public FunctionBaseTest {
       const std::string& subString,
       int64_t instance);
 
+  int64_t levenshteinDistance(
+      const std::string& left,
+      const std::string& right);
+
   using replace_input_test_t = std::vector<std::pair<
       std::tuple<std::string, std::string, std::string>,
       std::string>>;
@@ -314,48 +318,6 @@ class StringFunctionsTest : public FunctionBaseTest {
       const std::string& search,
       const std::string& replace,
       bool multiReferenced);
-
-  static std::string generateInvalidUtf8() {
-    std::string str;
-    str.resize(2);
-    // Create corrupt data below.
-    char16_t c = u'\u04FF';
-    str[0] = (char)c;
-    str[1] = (char)c;
-    return str;
-  }
-
-  // Generate complex encoding with the format:
-  // whitespace|unicode line separator|ascii|two bytes encoding|three bytes
-  // encoding|four bytes encoding|whitespace|unicode line separator
-  static std::string generateComplexUtf8(bool invalid = false) {
-    std::string str;
-    // White spaces
-    str.append(" \u2028"s);
-    if (invalid) {
-      str.append(generateInvalidUtf8());
-    }
-    // Ascii
-    str.append("hello");
-    // two bytes
-    str.append(" \u017F");
-    // three bytes
-    str.append(" \u4FE1");
-    // four bytes
-    std::string tmp;
-    tmp.resize(4);
-    tmp[0] = 0xF0;
-    tmp[1] = 0xAF;
-    tmp[2] = 0xA8;
-    tmp[3] = 0x9F;
-    str.append(" ").append(tmp);
-    if (invalid) {
-      str.append(generateInvalidUtf8());
-    }
-    // white spaces
-    str.append("\u2028 ");
-    return str;
-  }
 };
 
 /**
@@ -890,6 +852,42 @@ TEST_F(StringFunctionsTest, length) {
   }
 }
 
+TEST_F(StringFunctionsTest, startsWith) {
+  auto startsWith = [&](const std::string& x, const std::string& y) {
+    return evaluateOnce<bool>(
+               "starts_with(c0, c1)", std::optional(x), std::optional(y))
+        .value();
+  };
+
+  ASSERT_TRUE(startsWith("", ""));
+  ASSERT_TRUE(startsWith("Hello world!", ""));
+  ASSERT_TRUE(startsWith("Hello world!", "Hello"));
+  ASSERT_TRUE(startsWith("Hello world!", "Hello world"));
+  ASSERT_TRUE(startsWith("Hello world!", "Hello world!"));
+
+  ASSERT_FALSE(startsWith("Hello world!", "Hello world! "));
+  ASSERT_FALSE(startsWith("Hello world!", "hello"));
+  ASSERT_FALSE(startsWith("", " "));
+}
+
+TEST_F(StringFunctionsTest, endsWith) {
+  auto endsWith = [&](const std::string& x, const std::string& y) {
+    return evaluateOnce<bool>(
+               "ends_with(c0, c1)", std::optional(x), std::optional(y))
+        .value();
+  };
+
+  ASSERT_TRUE(endsWith("", ""));
+  ASSERT_TRUE(endsWith("Hello world!", ""));
+  ASSERT_TRUE(endsWith("Hello world!", "world!"));
+  ASSERT_TRUE(endsWith("Hello world!", "lo world!"));
+  ASSERT_TRUE(endsWith("Hello world!", "Hello world!"));
+
+  ASSERT_FALSE(endsWith("Hello world!", " Hello world!"));
+  ASSERT_FALSE(endsWith("Hello world!", "hello"));
+  ASSERT_FALSE(endsWith("", " "));
+}
+
 // Test strpos function
 template <typename TInstance>
 void StringFunctionsTest::testStringPositionAllFlatVector(
@@ -1129,6 +1127,81 @@ TEST_F(StringFunctionsTest, codePoint) {
   for (int i = 0; i < 10; ++i) {
     EXPECT_EQ(result->valueAt(i), 0x78);
   }
+}
+
+int64_t StringFunctionsTest::levenshteinDistance(
+    const std::string& left,
+    const std::string& right) {
+  return evaluateOnce<int64_t>(
+             "levenshtein_distance(c0, c1)",
+             std::optional(left),
+             std::optional(right))
+      .value();
+}
+
+TEST_F(StringFunctionsTest, asciiLevenshteinDistance) {
+  EXPECT_EQ(levenshteinDistance("", ""), 0);
+  EXPECT_EQ(levenshteinDistance("", "hello"), 5);
+  EXPECT_EQ(levenshteinDistance("hello", ""), 5);
+  EXPECT_EQ(levenshteinDistance("hello", "hello"), 0);
+  EXPECT_EQ(levenshteinDistance("hello", "olleh"), 4);
+  EXPECT_EQ(levenshteinDistance("hello world", "hello"), 6);
+  EXPECT_EQ(levenshteinDistance("hello", "hello world"), 6);
+  EXPECT_EQ(levenshteinDistance("hello world", "hel wold"), 3);
+  EXPECT_EQ(levenshteinDistance("hello world", "hellq wodld"), 2);
+  EXPECT_EQ(levenshteinDistance("hello word", "dello world"), 2);
+  EXPECT_EQ(levenshteinDistance("  facebook  ", "  facebook  "), 0);
+  EXPECT_EQ(levenshteinDistance("hello", std::string(100000, 'h')), 99999);
+  EXPECT_EQ(levenshteinDistance(std::string(100000, 'l'), "hello"), 99998);
+  EXPECT_EQ(levenshteinDistance(std::string(1000001, 'h'), ""), 1000001);
+  EXPECT_EQ(levenshteinDistance("", std::string(1000001, 'h')), 1000001);
+}
+
+TEST_F(StringFunctionsTest, unicodeLevenshteinDistance) {
+  EXPECT_EQ(
+      levenshteinDistance("hello na\u00EFve world", "hello naive world"), 1);
+  EXPECT_EQ(
+      levenshteinDistance("hello na\u00EFve world", "hello na:ive world"), 2);
+  EXPECT_EQ(
+      levenshteinDistance(
+          "\u4FE1\u5FF5,\u7231,\u5E0C\u671B",
+          "\u4FE1\u4EF0,\u7231,\u5E0C\u671B"),
+      1);
+  EXPECT_EQ(
+      levenshteinDistance(
+          "\u4F11\u5FF5,\u7231,\u5E0C\u671B",
+          "\u4FE1\u5FF5,\u7231,\u5E0C\u671B"),
+      1);
+  EXPECT_EQ(
+      levenshteinDistance(
+          "\u4FE1\u5FF5,\u7231,\u5E0C\u671B", "\u4FE1\u5FF5\u5E0C\u671B"),
+      3);
+  EXPECT_EQ(
+      levenshteinDistance(
+          "\u4FE1\u5FF5,\u7231,\u5E0C\u671B", "\u4FE1\u5FF5,love,\u5E0C\u671B"),
+      4);
+}
+
+TEST_F(StringFunctionsTest, invalidLevenshteinDistance) {
+  VELOX_ASSERT_THROW(
+      levenshteinDistance("a\xA9ü", "hello world"),
+      "Invalid UTF-8 encoding in characters");
+  VELOX_ASSERT_THROW(
+      levenshteinDistance("Ψ\xFF\xFFΣΓΔA", "abc"),
+      "Invalid UTF-8 encoding in characters");
+  VELOX_ASSERT_THROW(
+      levenshteinDistance("ab", "AΔΓΣ\xFF\xFFΨ"),
+      "Invalid UTF-8 encoding in characters");
+
+  VELOX_ASSERT_THROW(
+      levenshteinDistance(std::string(1001, 'h'), std::string(1001, 'o')),
+      "The combined inputs size exceeded max Levenshtein distance combined input size");
+  VELOX_ASSERT_THROW(
+      levenshteinDistance(std::string(500001, 'h'), "bec"),
+      "The combined inputs size exceeded max Levenshtein distance combined input size");
+  VELOX_ASSERT_THROW(
+      levenshteinDistance("bec", std::string(500001, 'h')),
+      "The combined inputs size exceeded max Levenshtein distance combined input size");
 }
 
 void StringFunctionsTest::testReplaceInPlace(
@@ -1654,123 +1727,6 @@ TEST_F(StringFunctionsTest, asciiPropagationWithDisparateInput) {
   testAsciiPropagation(c1, c3, c2, all, true, "ascii_propagation_check", {});
 }
 
-TEST_F(StringFunctionsTest, trim) {
-  // Making input vector
-  std::string complexStr = generateComplexUtf8();
-  std::string expectedComplexStr = complexStr.substr(4, complexStr.size() - 8);
-
-  const auto trim = [&](std::optional<std::string> input) {
-    return evaluateOnce<std::string>("trim(c0)", input);
-  };
-
-  EXPECT_EQ("facebook", trim("  facebook  "));
-  EXPECT_EQ("facebook", trim("  facebook"));
-  EXPECT_EQ("facebook", trim("facebook  "));
-  EXPECT_EQ("facebook", trim("\n\nfacebook \n "));
-  EXPECT_EQ("", trim(" \n"));
-  EXPECT_EQ("", trim(""));
-  EXPECT_EQ("", trim("    "));
-  EXPECT_EQ("a", trim("  a  "));
-
-  EXPECT_EQ(
-      "\u4FE1\u5FF5 \u7231 \u5E0C\u671B",
-      trim("\u4FE1\u5FF5 \u7231 \u5E0C\u671B \u2028 "));
-  EXPECT_EQ(
-      "\u4FE1\u5FF5 \u7231 \u5E0C\u671B",
-      trim("\u4FE1\u5FF5 \u7231 \u5E0C\u671B  "));
-  EXPECT_EQ(
-      "\u4FE1\u5FF5 \u7231 \u5E0C\u671B",
-      trim(" \u4FE1\u5FF5 \u7231 \u5E0C\u671B "));
-  EXPECT_EQ(
-      "\u4FE1\u5FF5 \u7231 \u5E0C\u671B",
-      trim("  \u4FE1\u5FF5 \u7231 \u5E0C\u671B"));
-  EXPECT_EQ(
-      "\u4FE1\u5FF5 \u7231 \u5E0C\u671B",
-      trim(" \u2028 \u4FE1\u5FF5 \u7231 \u5E0C\u671B"));
-
-  EXPECT_EQ(expectedComplexStr, trim(complexStr));
-  EXPECT_EQ(
-      "Ψ\xFF\xFFΣΓΔA", trim("\u2028 \r \t \nΨ\xFF\xFFΣΓΔA \u2028 \r \t \n"));
-}
-
-TEST_F(StringFunctionsTest, ltrim) {
-  std::string complexStr = generateComplexUtf8();
-  std::string expectedComplexStr = complexStr.substr(4, complexStr.size() - 4);
-
-  const auto ltrim = [&](std::optional<std::string> input) {
-    return evaluateOnce<std::string>("ltrim(c0)", input);
-  };
-
-  EXPECT_EQ("facebook", ltrim("facebook"));
-  EXPECT_EQ("facebook ", ltrim("  facebook "));
-  EXPECT_EQ("facebook \n", ltrim("\n\nfacebook \n"));
-  EXPECT_EQ("", ltrim("\n"));
-  EXPECT_EQ("", ltrim(" "));
-  EXPECT_EQ("", ltrim("     "));
-  EXPECT_EQ("a  ", ltrim("  a  "));
-  EXPECT_EQ("facebo ok", ltrim(" facebo ok"));
-  EXPECT_EQ("move fast", ltrim("\tmove fast"));
-  EXPECT_EQ("move fast", ltrim("\r\t move fast"));
-  EXPECT_EQ("hello", ltrim("\n\t\r hello"));
-
-  EXPECT_EQ("\u4F60\u597D", ltrim(" \u4F60\u597D"));
-  EXPECT_EQ("\u4F60\u597D ", ltrim(" \u4F60\u597D "));
-  EXPECT_EQ(
-      "\u4FE1\u5FF5 \u7231 \u5E0C\u671B  ",
-      ltrim("\u4FE1\u5FF5 \u7231 \u5E0C\u671B  "));
-  EXPECT_EQ(
-      "\u4FE1\u5FF5 \u7231 \u5E0C\u671B ",
-      ltrim(" \u4FE1\u5FF5 \u7231 \u5E0C\u671B "));
-  EXPECT_EQ(
-      "\u4FE1\u5FF5 \u7231 \u5E0C\u671B",
-      ltrim("  \u4FE1\u5FF5 \u7231 \u5E0C\u671B"));
-  EXPECT_EQ(
-      "\u4FE1\u5FF5 \u7231 \u5E0C\u671B",
-      ltrim(" \u2028 \u4FE1\u5FF5 \u7231 \u5E0C\u671B"));
-
-  EXPECT_EQ(expectedComplexStr, ltrim(complexStr));
-  EXPECT_EQ("Ψ\xFF\xFFΣΓΔA", ltrim("  \u2028 \r \t \n   Ψ\xFF\xFFΣΓΔA"));
-}
-
-TEST_F(StringFunctionsTest, rtrim) {
-  std::string complexStr = generateComplexUtf8();
-  std::string expectedComplexStr = complexStr.substr(0, complexStr.size() - 4);
-
-  const auto rtrim = [&](std::optional<std::string> input) {
-    return evaluateOnce<std::string>("rtrim(c0)", input);
-  };
-
-  EXPECT_EQ("facebook", rtrim("facebook"));
-  EXPECT_EQ(" facebook", rtrim(" facebook  "));
-  EXPECT_EQ("\nfacebook", rtrim("\nfacebook \n\n"));
-  EXPECT_EQ("", rtrim(" \n"));
-  EXPECT_EQ("", rtrim(" "));
-  EXPECT_EQ("", rtrim("     "));
-  EXPECT_EQ("  a", rtrim("  a  "));
-  EXPECT_EQ("facebo ok", rtrim("facebo ok "));
-  EXPECT_EQ("move fast", rtrim("move fast\t"));
-  EXPECT_EQ("move fast", rtrim("move fast\r\t "));
-  EXPECT_EQ("hello", rtrim("hello\n\t\r "));
-
-  EXPECT_EQ(" \u4F60\u597D", rtrim(" \u4F60\u597D"));
-  EXPECT_EQ(" \u4F60\u597D", rtrim(" \u4F60\u597D "));
-  EXPECT_EQ(
-      "\u4FE1\u5FF5 \u7231 \u5E0C\u671B",
-      rtrim("\u4FE1\u5FF5 \u7231 \u5E0C\u671B  "));
-  EXPECT_EQ(
-      " \u4FE1\u5FF5 \u7231 \u5E0C\u671B",
-      rtrim(" \u4FE1\u5FF5 \u7231 \u5E0C\u671B "));
-  EXPECT_EQ(
-      "\u4FE1\u5FF5 \u7231 \u5E0C\u671B",
-      rtrim("\u4FE1\u5FF5 \u7231 \u5E0C\u671B  "));
-  EXPECT_EQ(
-      "\u4FE1\u5FF5 \u7231 \u5E0C\u671B",
-      rtrim("\u4FE1\u5FF5 \u7231 \u5E0C\u671B \u2028 "));
-
-  EXPECT_EQ(expectedComplexStr, rtrim(complexStr));
-  EXPECT_EQ("     Ψ\xFF\xFFΣΓΔA", rtrim("     Ψ\xFF\xFFΣΓΔA \u2028 \r \t \n"));
-}
-
 TEST_F(StringFunctionsTest, rpad) {
   const auto rpad = [&](std::optional<std::string> string,
                         std::optional<int64_t> size,
@@ -1875,5 +1831,13 @@ TEST_F(StringFunctionsTest, concatInSwitchExpr) {
       evaluate("if(c0, concat(c1, '-zzz'), concat('aaa-', c1))", data);
   auto expected = makeFlatVector<StringView>(
       {"This is a long sentence-zzz"_sv, "aaa-This is some other sentence"_sv});
+  test::assertEqualVectors(expected, result);
+}
+
+TEST_F(StringFunctionsTest, varbinaryLength) {
+  auto vector = makeFlatVector<std::string>(
+      {"hi", "", "\u4FE1\u5FF5 \u7231 \u5E0C\u671B  \u671B"}, VARBINARY());
+  auto expected = makeFlatVector<int64_t>({2, 0, 22});
+  auto result = evaluate("length(c0)", makeRowVector({vector}));
   test::assertEqualVectors(expected, result);
 }

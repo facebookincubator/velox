@@ -58,8 +58,8 @@ class E2EWriterTests : public Test {
 
   std::unique_ptr<DwrfReader> createReader(
       const MemorySink& sink,
-      const ReaderOptions& opts) {
-    std::string_view data(sink.getData(), sink.size());
+      const dwio::common::ReaderOptions& opts) {
+    std::string_view data(sink.data(), sink.size());
     return std::make_unique<DwrfReader>(
         opts,
         std::make_unique<BufferedInput>(
@@ -74,13 +74,15 @@ class E2EWriterTests : public Test {
     size_t stripes = 3;
 
     // write file to memory
-    auto config = std::make_shared<Config>();
-    config->set(Config::FLATTEN_MAP, true);
+    auto config = std::make_shared<dwrf::Config>();
+    config->set(dwrf::Config::FLATTEN_MAP, true);
     config->set<const std::vector<uint32_t>>(
-        Config::MAP_FLAT_COLS, mapColumnIds);
-    config->set(Config::MAP_STATISTICS, true);
+        dwrf::Config::MAP_FLAT_COLS, mapColumnIds);
+    config->set(dwrf::Config::MAP_STATISTICS, true);
 
-    auto sink = std::make_unique<MemorySink>(*leafPool_, 200 * 1024 * 1024);
+    auto sink = std::make_unique<MemorySink>(
+        200 * 1024 * 1024,
+        dwio::common::FileSink::Options{.pool = leafPool_.get()});
     auto sinkPtr = sink.get();
 
     dwrf::WriterOptions options;
@@ -95,7 +97,7 @@ class E2EWriterTests : public Test {
 
     writer.close();
 
-    ReaderOptions readerOpts{defaultPool.get()};
+    dwio::common::ReaderOptions readerOpts{defaultPool.get()};
     RowReaderOptions rowReaderOpts;
     auto reader = createReader(*sinkPtr, readerOpts);
     auto rowReader = reader->createRowReader(rowReaderOpts);
@@ -124,15 +126,17 @@ class E2EWriterTests : public Test {
     size_t stripes = 3;
 
     // write file to memory
-    auto config = std::make_shared<Config>();
+    auto config = std::make_shared<dwrf::Config>();
     // Ensure we cross stride boundary
-    config->set(Config::ROW_INDEX_STRIDE, strideSize);
-    config->set(Config::FLATTEN_MAP, true);
+    config->set(dwrf::Config::ROW_INDEX_STRIDE, strideSize);
+    config->set(dwrf::Config::FLATTEN_MAP, true);
     config->set<const std::vector<uint32_t>>(
-        Config::MAP_FLAT_COLS, mapColumnIds);
-    config->set(Config::MAP_STATISTICS, true);
+        dwrf::Config::MAP_FLAT_COLS, mapColumnIds);
+    config->set(dwrf::Config::MAP_STATISTICS, true);
 
-    auto sink = std::make_unique<MemorySink>(*leafPool_, 400 * 1024 * 1024);
+    auto sink = std::make_unique<MemorySink>(
+        400 * 1024 * 1024,
+        dwio::common::FileSink::Options{.pool = leafPool_.get()});
     auto sinkPtr = sink.get();
 
     dwrf::WriterOptions options;
@@ -155,7 +159,7 @@ class E2EWriterTests : public Test {
 
     writer.close();
 
-    ReaderOptions readerOpts{leafPool_.get()};
+    dwio::common::ReaderOptions readerOpts{leafPool_.get()};
     RowReaderOptions rowReaderOpts;
     auto reader = createReader(*sinkPtr, readerOpts);
     auto rowReader = reader->createRowReader(rowReaderOpts);
@@ -167,7 +171,7 @@ class E2EWriterTests : public Test {
     for (auto mapColumn : mapColumnIds) {
       folly::F14FastMap<KeyInfo, uint64_t, folly::transparent<KeyInfoHash>>
           featureStreamSizes;
-      auto mapTypeId = typeWithId->childAt(mapColumn)->id;
+      auto mapTypeId = typeWithId->childAt(mapColumn)->id();
       auto valueTypeId = mapTypeId + 2;
       for (int32_t i = 0; i < reader->getNumberOfStripes(); ++i) {
         auto currentStripeInfo = dwrfRowReader->loadStripe(i, preload);
@@ -176,6 +180,7 @@ class E2EWriterTests : public Test {
             dwrfRowReader->getColumnSelector(),
             rowReaderOpts,
             currentStripeInfo.offset(),
+            currentStripeInfo.numberOfRows(),
             *dwrfRowReader,
             i);
 
@@ -198,11 +203,11 @@ class E2EWriterTests : public Test {
         auto allStreams = stripeStreams.getStreamIdentifiers();
         for (const auto& streamIdPerNode : allStreams) {
           for (const auto& streamId : streamIdPerNode.second) {
-            if (streamId.encodingKey().sequence != 0 &&
+            if (streamId.encodingKey().sequence() != 0 &&
                 streamId.column() == mapColumn) {
               // Update the aggregate.
               const auto& keyInfo =
-                  sequenceToKey.at(streamId.encodingKey().sequence);
+                  sequenceToKey.at(streamId.encodingKey().sequence());
               auto streamLength = stripeStreams.getStreamLength(streamId);
               auto it = featureStreamSizes.find(keyInfo);
               if (it == featureStreamSizes.end()) {
@@ -259,10 +264,11 @@ TEST_F(E2EWriterTests, DISABLED_TestFileCreation) {
       "struct_val:struct<a:float,b:double>"
       ">");
 
-  auto config = std::make_shared<Config>();
-  config->set(Config::FLATTEN_MAP, true);
+  auto config = std::make_shared<dwrf::Config>();
+  config->set(dwrf::Config::FLATTEN_MAP, true);
   config->set(
-      Config::MAP_FLAT_COLS, {12, 13}); /* this is the second and third map */
+      dwrf::Config::MAP_FLAT_COLS,
+      {12, 13}); /* this is the second and third map */
 
   std::vector<VectorPtr> batches;
   for (size_t i = 0; i < batchCount; ++i) {
@@ -272,8 +278,7 @@ TEST_F(E2EWriterTests, DISABLED_TestFileCreation) {
 
   auto path = "/tmp/e2e_generated_file.orc";
   auto localWriteFile = std::make_unique<LocalWriteFile>(path, true, false);
-  auto sink =
-      std::make_unique<WriteFileDataSink>(std::move(localWriteFile), path);
+  auto sink = std::make_unique<WriteFileSink>(std::move(localWriteFile), path);
   E2EWriterTestUtil::writeData(
       std::move(sink),
       type,
@@ -322,11 +327,12 @@ TEST_F(E2EWriterTests, E2E) {
       "struct_val:struct<a:float,b:double>"
       ">");
 
-  auto config = std::make_shared<Config>();
-  config->set(Config::ROW_INDEX_STRIDE, static_cast<uint32_t>(1000));
-  config->set(Config::FLATTEN_MAP, true);
+  auto config = std::make_shared<dwrf::Config>();
+  config->set(dwrf::Config::ROW_INDEX_STRIDE, static_cast<uint32_t>(1000));
+  config->set(dwrf::Config::FLATTEN_MAP, true);
   config->set(
-      Config::MAP_FLAT_COLS, {12, 13}); /* this is the second and third map */
+      dwrf::Config::MAP_FLAT_COLS,
+      {12, 13}); /* this is the second and third map */
 
   std::vector<VectorPtr> batches;
   for (size_t i = 0; i < batchCount; ++i) {
@@ -355,14 +361,14 @@ TEST_F(E2EWriterTests, FlatMapDictionaryEncoding) {
       "map_val:map<bigint,map<int, string>>"
       ">");
 
-  auto config = std::make_shared<Config>();
-  config->set(Config::ROW_INDEX_STRIDE, static_cast<uint32_t>(1000));
-  config->set(Config::FLATTEN_MAP, true);
-  config->set(Config::MAP_FLAT_COLS, {0, 1, 2, 3, 4});
-  config->set(Config::MAP_FLAT_DISABLE_DICT_ENCODING, false);
-  config->set(Config::DICTIONARY_NUMERIC_KEY_SIZE_THRESHOLD, 1.0f);
-  config->set(Config::DICTIONARY_STRING_KEY_SIZE_THRESHOLD, 1.0f);
-  config->set(Config::ENTROPY_KEY_STRING_SIZE_THRESHOLD, 0.0f);
+  auto config = std::make_shared<dwrf::Config>();
+  config->set(dwrf::Config::ROW_INDEX_STRIDE, static_cast<uint32_t>(1000));
+  config->set(dwrf::Config::FLATTEN_MAP, true);
+  config->set(dwrf::Config::MAP_FLAT_COLS, {0, 1, 2, 3, 4});
+  config->set(dwrf::Config::MAP_FLAT_DISABLE_DICT_ENCODING, false);
+  config->set(dwrf::Config::DICTIONARY_NUMERIC_KEY_SIZE_THRESHOLD, 1.0f);
+  config->set(dwrf::Config::DICTIONARY_STRING_KEY_SIZE_THRESHOLD, 1.0f);
+  config->set(dwrf::Config::ENTROPY_KEY_STRING_SIZE_THRESHOLD, 0.0f);
 
   std::vector<VectorPtr> batches;
   std::mt19937 gen;
@@ -393,10 +399,10 @@ TEST_F(E2EWriterTests, MaxFlatMapKeys) {
   auto batch =
       createRowVector(pool.get(), type, 1, b::create(*pool, b::rows{row}));
 
-  auto config = std::make_shared<Config>();
-  config->set(Config::FLATTEN_MAP, true);
-  config->set(Config::MAP_FLAT_COLS, {0});
-  config->set(Config::MAP_FLAT_MAX_KEYS, keyLimit);
+  auto config = std::make_shared<dwrf::Config>();
+  config->set(dwrf::Config::FLATTEN_MAP, true);
+  config->set(dwrf::Config::MAP_FLAT_COLS, {0});
+  config->set(dwrf::Config::MAP_FLAT_MAX_KEYS, keyLimit);
 
   E2EWriterTestUtil::testWriter(
       *pool, type, E2EWriterTestUtil::generateBatches(batch), 1, 1, config);
@@ -417,11 +423,13 @@ TEST_F(E2EWriterTests, PresentStreamIsSuppressedOnFlatMap) {
   auto batch =
       createRowVector(pool.get(), type, 1, b::create(*pool, b::rows{row}));
 
-  auto config = std::make_shared<Config>();
-  config->set(Config::FLATTEN_MAP, true);
-  config->set(Config::MAP_FLAT_COLS, {0});
+  auto config = std::make_shared<dwrf::Config>();
+  config->set(dwrf::Config::FLATTEN_MAP, true);
+  config->set(dwrf::Config::MAP_FLAT_COLS, {0});
 
-  auto sink = std::make_unique<MemorySink>(*pool, 200 * 1024 * 1024);
+  auto sink = std::make_unique<MemorySink>(
+      200 * 1024 * 1024,
+      dwio::common::FileSink::Options{.pool = leafPool_.get()});
   auto sinkPtr = sink.get();
 
   auto writer = E2EWriterTestUtil::writeData(
@@ -431,7 +439,7 @@ TEST_F(E2EWriterTests, PresentStreamIsSuppressedOnFlatMap) {
       config,
       E2EWriterTestUtil::simpleFlushPolicyFactory(true));
 
-  ReaderOptions readerOpts{defaultPool.get()};
+  dwio::common::ReaderOptions readerOpts{defaultPool.get()};
   RowReaderOptions rowReaderOpts;
   auto reader = createReader(*sinkPtr, readerOpts);
   auto rowReader = reader->createRowReader(rowReaderOpts);
@@ -466,10 +474,10 @@ TEST_F(E2EWriterTests, TooManyFlatMapKeys) {
   auto batch =
       createRowVector(pool.get(), type, 1, b::create(*pool, b::rows{row}));
 
-  auto config = std::make_shared<Config>();
-  config->set(Config::FLATTEN_MAP, true);
-  config->set(Config::MAP_FLAT_COLS, {0});
-  config->set(Config::MAP_FLAT_MAX_KEYS, keyLimit);
+  auto config = std::make_shared<dwrf::Config>();
+  config->set(dwrf::Config::FLATTEN_MAP, true);
+  config->set(dwrf::Config::MAP_FLAT_COLS, {0});
+  config->set(dwrf::Config::MAP_FLAT_MAX_KEYS, keyLimit);
 
   EXPECT_THROW(
       E2EWriterTestUtil::testWriter(
@@ -522,10 +530,10 @@ TEST_F(E2EWriterTests, FlatMapBackfill) {
   batches.push_back(batch);
   // TODO: Add another batch inside last stride, to test for backfill in stride.
 
-  auto config = std::make_shared<Config>();
-  config->set(Config::FLATTEN_MAP, true);
-  config->set(Config::MAP_FLAT_COLS, {0});
-  config->set(Config::ROW_INDEX_STRIDE, strideSize);
+  auto config = std::make_shared<dwrf::Config>();
+  config->set(dwrf::Config::FLATTEN_MAP, true);
+  config->set(dwrf::Config::MAP_FLAT_COLS, {0});
+  config->set(dwrf::Config::ROW_INDEX_STRIDE, strideSize);
 
   E2EWriterTestUtil::testWriter(
       *pool,
@@ -567,13 +575,14 @@ void testFlatMapWithNulls(
       pool.get(), type, rowCount, b::create(*pool, std::move(rows)));
   batches.push_back(batch);
 
-  auto config = std::make_shared<Config>();
-  config->set(Config::FLATTEN_MAP, true);
-  config->set(Config::MAP_FLAT_COLS, {0});
-  config->set(Config::ROW_INDEX_STRIDE, strideSize);
+  auto config = std::make_shared<dwrf::Config>();
+  config->set(dwrf::Config::FLATTEN_MAP, true);
+  config->set(dwrf::Config::MAP_FLAT_COLS, {0});
+  config->set(dwrf::Config::ROW_INDEX_STRIDE, strideSize);
   config->set(
-      Config::MAP_FLAT_DISABLE_DICT_ENCODING, !enableFlatmapDictionaryEncoding);
-  config->set(Config::MAP_FLAT_DICT_SHARE, shareDictionary);
+      dwrf::Config::MAP_FLAT_DISABLE_DICT_ENCODING,
+      !enableFlatmapDictionaryEncoding);
+  config->set(dwrf::Config::MAP_FLAT_DICT_SHARE, shareDictionary);
 
   E2EWriterTestUtil::testWriter(
       *pool,
@@ -633,10 +642,10 @@ TEST_F(E2EWriterTests, FlatMapEmpty) {
       pool.get(), type, rowCount, b::create(*pool, std::move(rows)));
   batches.push_back(batch);
 
-  auto config = std::make_shared<Config>();
-  config->set(Config::FLATTEN_MAP, true);
-  config->set(Config::MAP_FLAT_COLS, {0});
-  config->set(Config::ROW_INDEX_STRIDE, strideSize);
+  auto config = std::make_shared<dwrf::Config>();
+  config->set(dwrf::Config::FLATTEN_MAP, true);
+  config->set(dwrf::Config::MAP_FLAT_COLS, {0});
+  config->set(dwrf::Config::ROW_INDEX_STRIDE, strideSize);
 
   E2EWriterTestUtil::testWriter(
       *pool,
@@ -754,8 +763,10 @@ TEST_F(E2EWriterTests, PartialStride) {
 
   size_t size = 1'000;
 
-  auto config = std::make_shared<Config>();
-  auto sink = std::make_unique<MemorySink>(*leafPool_, 2 * 1024 * 1024);
+  auto config = std::make_shared<dwrf::Config>();
+  auto sink = std::make_unique<MemorySink>(
+      2 * 1024 * 1024,
+      dwio::common::FileSink::Options{.pool = leafPool_.get()});
   auto sinkPtr = sink.get();
 
   dwrf::WriterOptions options;
@@ -796,7 +807,7 @@ TEST_F(E2EWriterTests, PartialStride) {
   writer.write(batch);
   writer.close();
 
-  ReaderOptions readerOpts{defaultPool.get()};
+  dwio::common::ReaderOptions readerOpts{defaultPool.get()};
   RowReaderOptions rowReaderOpts;
   auto reader = createReader(*sinkPtr, readerOpts);
   ASSERT_EQ(size - nullCount, reader->columnStatistics(1)->getNumberOfValues())
@@ -819,11 +830,11 @@ TEST_F(E2EWriterTests, OversizeRows) {
       "map_val_field_2:map<string, map<string, map<string, map<string, string>>>>"
       ">,"
       ">");
-  auto config = std::make_shared<Config>();
-  config->set(Config::DISABLE_LOW_MEMORY_MODE, true);
-  config->set(Config::STRIPE_SIZE, 10 * kSizeMB);
+  auto config = std::make_shared<dwrf::Config>();
+  config->set(dwrf::Config::DISABLE_LOW_MEMORY_MODE, true);
+  config->set(dwrf::Config::STRIPE_SIZE, 10 * kSizeMB);
   config->set(
-      Config::RAW_DATA_SIZE_PER_BATCH, folly::to<uint64_t>(20 * 1024UL));
+      dwrf::Config::RAW_DATA_SIZE_PER_BATCH, folly::to<uint64_t>(20 * 1024UL));
 
   // Retained bytes in vector: 44704
   auto singleBatch = E2EWriterTestUtil::generateBatches(
@@ -853,9 +864,9 @@ TEST_F(E2EWriterTests, OversizeBatches) {
       "float_val:float,"
       "double_val:double,"
       ">");
-  auto config = std::make_shared<Config>();
-  config->set(Config::DISABLE_LOW_MEMORY_MODE, true);
-  config->set(Config::STRIPE_SIZE, 10 * kSizeMB);
+  auto config = std::make_shared<dwrf::Config>();
+  config->set(dwrf::Config::DISABLE_LOW_MEMORY_MODE, true);
+  config->set(dwrf::Config::STRIPE_SIZE, 10 * kSizeMB);
 
   // Test splitting a gigantic batch.
   auto singleBatch = E2EWriterTestUtil::generateBatches(
@@ -898,11 +909,11 @@ TEST_F(E2EWriterTests, OverflowLengthIncrements) {
       "struct<"
       "struct_val:struct<bigint_val:bigint>"
       ">");
-  auto config = std::make_shared<Config>();
-  config->set(Config::DISABLE_LOW_MEMORY_MODE, true);
-  config->set(Config::STRIPE_SIZE, 10 * kSizeMB);
+  auto config = std::make_shared<dwrf::Config>();
+  config->set(dwrf::Config::DISABLE_LOW_MEMORY_MODE, true);
+  config->set(dwrf::Config::STRIPE_SIZE, 10 * kSizeMB);
   config->set(
-      Config::RAW_DATA_SIZE_PER_BATCH,
+      dwrf::Config::RAW_DATA_SIZE_PER_BATCH,
       folly::to<uint64_t>(500 * 1024UL * 1024UL));
 
   const size_t size = 1024;
@@ -968,7 +979,9 @@ class E2EEncryptionTest : public E2EWriterTests {
     // make sure we always write dictionary to test stride index
     config->set(Config::DICTIONARY_STRING_KEY_SIZE_THRESHOLD, 1.0f);
     config->set(Config::ENTROPY_KEY_STRING_SIZE_THRESHOLD, 0.0f);
-    auto sink = std::make_unique<MemorySink>(*leafPool_, 16 * 1024 * 1024);
+    auto sink = std::make_unique<MemorySink>(
+        16 * 1024 * 1024,
+        dwio::common::FileSink::Options{.pool = leafPool_.get()});
     sink_ = sink.get();
     dwrf::WriterOptions options;
     options.config = config;
@@ -989,7 +1002,7 @@ class E2EEncryptionTest : public E2EWriterTests {
     writer_->close();
 
     // read it back for compare
-    ReaderOptions readerOpts{defaultPool.get()};
+    dwio::common::ReaderOptions readerOpts{defaultPool.get()};
     readerOpts.setDecrypterFactory(decrypterFactory);
     return createReader(*sink_, readerOpts);
   }
@@ -1229,7 +1242,8 @@ void testWriter(
     const std::shared_ptr<const Type>& type,
     size_t batchCount,
     std::function<VectorPtr()> generator,
-    const std::shared_ptr<Config> config = std::make_shared<Config>()) {
+    const std::shared_ptr<dwrf::Config> config =
+        std::make_shared<dwrf::Config>()) {
   std::vector<VectorPtr> batches;
   for (auto i = 0; i < batchCount; ++i) {
     batches.push_back(generator());
@@ -1409,9 +1423,9 @@ TEST_F(E2EWriterTests, fuzzFlatmap) {
       {"flatmap2", MAP(VARCHAR(), ARRAY(REAL()))},
       {"flatmap3", MAP(INTEGER(), MAP(INTEGER(), REAL()))},
   });
-  auto config = std::make_shared<Config>();
-  config->set(Config::FLATTEN_MAP, true);
-  config->set(Config::MAP_FLAT_COLS, {0, 1, 2});
+  auto config = std::make_shared<dwrf::Config>();
+  config->set(dwrf::Config::FLATTEN_MAP, true);
+  config->set(dwrf::Config::MAP_FLAT_COLS, {0, 1, 2});
   auto seed = folly::Random::rand32();
   LOG(INFO) << "seed: " << seed;
   std::mt19937 rng{seed};

@@ -23,8 +23,8 @@
 #include "velox/common/base/Exceptions.h"
 #include "velox/common/base/tests/GTestUtils.h"
 #include "velox/functions/Registerer.h"
+#include "velox/functions/lib/CheckedArithmetic.h"
 #include "velox/functions/prestosql/Arithmetic.h"
-#include "velox/functions/prestosql/CheckedArithmetic.h"
 #include "velox/functions/prestosql/StringFunctions.h"
 #include "velox/functions/prestosql/tests/utils/FunctionBaseTest.h"
 #include "velox/functions/remote/client/Remote.h"
@@ -160,10 +160,10 @@ TEST_P(RemoteFunctionTest, connectionError) {
 
   // Check it throw and that the exception has the "connection refused"
   // substring.
-  EXPECT_THROW(func(), VeloxUserError);
+  EXPECT_THROW(func(), VeloxRuntimeError);
   try {
     func();
-  } catch (const VeloxUserError& e) {
+  } catch (const VeloxRuntimeError& e) {
     EXPECT_THAT(e.message(), testing::HasSubstr("Channel is !good()"));
   }
 }

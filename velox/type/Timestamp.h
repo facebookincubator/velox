@@ -30,10 +30,33 @@ class time_zone;
 
 namespace facebook::velox {
 
+struct TimestampToStringOptions {
+  enum Precision : int8_t {
+    kMilliseconds = 3,
+    kNanoseconds = 9,
+  } precision = kNanoseconds;
+
+  bool zeroPaddingYear = false;
+  char dateTimeSeparator = 'T';
+  bool dateOnly = false;
+};
+
+// Our own version of gmtime_r to avoid expensive calls to __tz_convert.  This
+// might not be very significant in micro benchmark, but is causing significant
+// context switching cost in real world queries with higher concurrency (71% of
+// time is on __tz_convert for some queries).
+//
+// Return whether the epoch second can be converted to a valid std::tm.
+bool epochToUtc(int64_t seconds, std::tm& out);
+
+std::string
+tmToString(const std::tm&, int nanos, const TimestampToStringOptions&);
+
 struct Timestamp {
  public:
-  enum class Precision : int { kMilliseconds = 3, kNanoseconds = 9 };
   static constexpr int64_t kMillisecondsInSecond = 1'000;
+  static constexpr int64_t kMicrosecondsInMillisecond = 1'000;
+  static constexpr int64_t kNanosecondsInMicrosecond = 1'000;
   static constexpr int64_t kNanosecondsInMillisecond = 1'000'000;
 
   // Limit the range of seconds to avoid some problems. Seconds should be
@@ -62,6 +85,12 @@ struct Timestamp {
 
   // Returns the current unix timestamp (ms precision).
   static Timestamp now();
+
+  static Timestamp create(const folly::dynamic& obj) {
+    auto seconds = obj["seconds"].asInt();
+    auto nanos = obj["nanos"].asInt();
+    return Timestamp(seconds, nanos);
+  }
 
   int64_t getSeconds() const {
     return seconds_;
@@ -96,7 +125,7 @@ struct Timestamp {
           (int64_t)(nanos_ / 1'000'000));
     } catch (const std::exception& e) {
       VELOX_USER_FAIL(
-          "Could not convert Timestamp({}, {}) to microseconds, {}",
+          "Could not convert Timestamp({}, {}) to milliseconds, {}",
           seconds_,
           nanos_,
           e.what());
@@ -118,6 +147,11 @@ struct Timestamp {
           e.what());
     }
   }
+
+  /// Due to the limit of std::chrono, throws if timestamp is outside of
+  /// [-32767-01-01, 32767-12-31] range.
+  std::chrono::time_point<std::chrono::system_clock, std::chrono::milliseconds>
+  toTimePoint() const;
 
   static Timestamp fromMillis(int64_t millis) {
     if (millis >= 0 || millis % 1'000 == 0) {
@@ -220,40 +254,44 @@ struct Timestamp {
         (seconds_ == b.seconds_ && nanos_ >= b.nanos_);
   }
 
+  void operator++() {
+    if (nanos_ < kMaxNanos) {
+      nanos_++;
+      return;
+    }
+    if (seconds_ < kMaxSeconds) {
+      seconds_++;
+      nanos_ = 0;
+      return;
+    }
+    VELOX_USER_FAIL("Timestamp nanos out of range");
+  }
+
+  void operator--() {
+    if (nanos_ > 0) {
+      nanos_--;
+      return;
+    }
+    if (seconds_ > kMinSeconds) {
+      seconds_--;
+      nanos_ = kMaxNanos;
+      return;
+    }
+    VELOX_USER_FAIL("Timestamp nanos out of range");
+  }
+
   // Needed for serialization of FlatVector<Timestamp>
   operator StringView() const {
     return StringView("TODO: Implement");
   };
 
-  std::string toString(
-      const Precision& precision = Precision::kNanoseconds) const {
-    // mbasmanova: error: no matching function for call to 'gmtime_r'
-    // mbasmanova: time_t is long not long long
-    // struct tm tmValue;
-    // auto bt = gmtime_r(&seconds_, &tmValue);
-    auto bt = gmtime((const time_t*)&seconds_);
-    if (!bt) {
-      const auto& error_message = folly::to<std::string>(
-          "Can't convert Seconds to time: ", folly::to<std::string>(seconds_));
-      throw std::runtime_error{error_message};
-    }
-
-    // return ISO 8601 time format.
-    // %F - equivalent to "%Y-%m-%d" (the ISO 8601 date format)
-    // T - literal T
-    // %T - equivalent to "%H:%M:%S" (the ISO 8601 time format)
-    // so this return time in the format
-    // %Y-%m-%dT%H:%M:%S.nnnnnnnnn for nanoseconds precision, or
-    // %Y-%m-%dT%H:%M:%S.nnn for milliseconds precision
-    // Note there is no Z suffix, which denotes UTC timestamp.
-    auto width = static_cast<int>(precision);
-    auto value =
-        precision == Precision::kMilliseconds ? nanos_ / 1'000'000 : nanos_;
-    std::ostringstream oss;
-    oss << std::put_time(bt, "%FT%T");
-    oss << '.' << std::setfill('0') << std::setw(width) << value;
-
-    return oss.str();
+  std::string toString(const TimestampToStringOptions& options = {}) const {
+    std::tm tm;
+    VELOX_USER_CHECK(
+        epochToUtc(seconds_, tm),
+        "Can't convert seconds to time: {}",
+        seconds_);
+    return tmToString(tm, nanos_, options);
   }
 
   operator std::string() const {
@@ -262,6 +300,13 @@ struct Timestamp {
 
   operator folly::dynamic() const {
     return folly::dynamic(seconds_);
+  }
+
+  folly::dynamic serialize() const {
+    folly::dynamic obj = folly::dynamic::object;
+    obj["seconds"] = seconds_;
+    obj["nanos"] = nanos_;
+    return obj;
   }
 
  private:

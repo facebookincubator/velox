@@ -50,6 +50,7 @@ class SelectiveFloatingPointColumnReader
       override {
     using T = SelectiveFloatingPointColumnReader<TData, TRequested>;
     this->template readCommon<T>(offset, rows, incomingNulls);
+    this->readOffset_ += rows.back() + 1;
   }
 
   template <typename TVisitor>
@@ -71,7 +72,7 @@ SelectiveFloatingPointColumnReader<TData, TRequested>::
           params,
           scanSpec),
       decoder_(params.stripeStreams().getStream(
-          EncodingKey{this->fileType_->id, params.flatMapContext().sequence}
+          EncodingKey{this->fileType_->id(), params.flatMapContext().sequence}
               .forKind(proto::Stream_Kind_DATA),
           params.streamLabels().label(),
           true)) {}
@@ -89,14 +90,12 @@ template <typename TVisitor>
 void SelectiveFloatingPointColumnReader<TData, TRequested>::readWithVisitor(
     RowSet rows,
     TVisitor visitor) {
-  vector_size_t numRows = rows.back() + 1;
   if (this->nullsInReadRange_) {
     decoder_.template readWithVisitor<true, TVisitor>(
         this->nullsInReadRange_->template as<uint64_t>(), visitor);
   } else {
     decoder_.template readWithVisitor<false, TVisitor>(nullptr, visitor);
   }
-  this->readOffset_ += numRows;
 }
 
 } // namespace facebook::velox::dwrf

@@ -22,11 +22,11 @@ namespace facebook::velox::functions::sparksql {
 //   - Integer types (tinyint, smallint, integer, bigint)
 //   - Varchar, varbinary
 //   - Real, double
-//
-// TODO:
 //   - Decimal
 //   - Date
 //   - Timestamp
+//
+// TODO:
 //   - Row, Array: hash the elements in order
 //   - Map: iterate over map, hashing key then value. Since map ordering is
 //        unspecified, hashing logically equivalent maps may result in
@@ -34,7 +34,14 @@ namespace facebook::velox::functions::sparksql {
 
 std::vector<std::shared_ptr<exec::FunctionSignature>> hashSignatures();
 
+std::vector<std::shared_ptr<exec::FunctionSignature>> hashWithSeedSignatures();
+
 std::shared_ptr<exec::VectorFunction> makeHash(
+    const std::string& name,
+    const std::vector<exec::VectorFunctionArg>& inputArgs,
+    const core::QueryConfig& config);
+
+std::shared_ptr<exec::VectorFunction> makeHashWithSeed(
     const std::string& name,
     const std::vector<exec::VectorFunctionArg>& inputArgs,
     const core::QueryConfig& config);
@@ -44,10 +51,11 @@ std::shared_ptr<exec::VectorFunction> makeHash(
 //   - Integer types (byte, short, int, long)
 //   - String, Binary
 //   - Float, Double
+//   - Decimal
+//   - Date
+//   - Timestamp
 //
 // Unsupported:
-//   - Decimal
-//   - Datetime
 //   - Structs, Arrays: hash the elements in order
 //   - Maps: iterate over map, hashing key then value. Since map ordering is
 //        unspecified, hashing logically equivalent maps may result in
@@ -55,7 +63,15 @@ std::shared_ptr<exec::VectorFunction> makeHash(
 
 std::vector<std::shared_ptr<exec::FunctionSignature>> xxhash64Signatures();
 
+std::vector<std::shared_ptr<exec::FunctionSignature>>
+xxhash64WithSeedSignatures();
+
 std::shared_ptr<exec::VectorFunction> makeXxHash64(
+    const std::string& name,
+    const std::vector<exec::VectorFunctionArg>& inputArgs,
+    const core::QueryConfig& config);
+
+std::shared_ptr<exec::VectorFunction> makeXxHash64WithSeed(
     const std::string& name,
     const std::vector<exec::VectorFunctionArg>& inputArgs,
     const core::QueryConfig& config);

@@ -63,6 +63,8 @@ class RemoteFunction : public exec::VectorFunction {
       VectorPtr& result) const override {
     try {
       applyRemote(rows, args, outputType, context, result);
+    } catch (const VeloxRuntimeError&) {
+      throw;
     } catch (const std::exception&) {
       context.setErrors(rows, std::current_exception());
     }
@@ -111,7 +113,16 @@ class RemoteFunction : public exec::VectorFunction {
     requestInputs->payload_ref() = rowVectorToIOBuf(
         remoteRowVector, rows.end(), *context.pool(), serde_.get());
 
-    thriftClient_->sync_invokeFunction(remoteResponse, request);
+    try {
+      thriftClient_->sync_invokeFunction(remoteResponse, request);
+    } catch (const std::exception& e) {
+      VELOX_FAIL(
+          "Error while executing remote function '{}' at '{}': {}",
+          functionName_,
+          location_.describe(),
+          e.what());
+    }
+
     auto outputRowVector = IOBufToRowVector(
         remoteResponse.get_result().get_payload(),
         ROW({outputType}),

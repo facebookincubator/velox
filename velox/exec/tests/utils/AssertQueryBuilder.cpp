@@ -64,6 +64,14 @@ AssertQueryBuilder& AssertQueryBuilder::config(
   return *this;
 }
 
+AssertQueryBuilder& AssertQueryBuilder::configs(
+    const std::unordered_map<std::string, std::string>& values) {
+  for (auto& entry : values) {
+    configs_[entry.first] = entry.second;
+  }
+  return *this;
+}
+
 AssertQueryBuilder& AssertQueryBuilder::connectorConfig(
     const std::string& connectorId,
     const std::string& key,
@@ -214,9 +222,9 @@ AssertQueryBuilder::readCursor() {
       static std::atomic<uint64_t> cursorQueryId{0};
       params_.queryCtx = std::make_shared<core::QueryCtx>(
           executor_.get(),
-          std::unordered_map<std::string, std::string>{},
+          core::QueryConfig({}),
           std::unordered_map<std::string, std::shared_ptr<Config>>{},
-          memory::MemoryAllocator::getInstance(),
+          cache::AsyncDataCache::getInstance(),
           nullptr,
           nullptr,
           fmt::format("TaskCursorQuery_{}", cursorQueryId++));

@@ -33,13 +33,17 @@ String Functions
     This function provides the same functionality as the
     SQL-standard concatenation operator (``||``).
 
+.. function:: ends_with(string, substring) -> boolean
+
+    Returns whether ``string`` ends_with with ``substring``.
+
 .. function:: from_utf8(binary) -> varchar
 
     Decodes a UTF-8 encoded string from ``binary``. Invalid UTF-8 sequences
     are replaced with the Unicode replacement character ``U+FFFD``.
 
 .. function:: from_utf8(binary, replace) -> varchar
-   :noindex:
+    :noindex:
 
     Decodes a UTF-8 encoded string from ``binary``. Invalid UTF-8 sequences are
     replaced with `replace`. The `replace` argument can be either Unicode code
@@ -49,6 +53,11 @@ String Functions
 .. function:: length(string) -> bigint
 
     Returns the length of ``string`` in characters.
+
+.. function:: levenshtein_distance(string_1, string_2) -> bigint
+
+    Returns the Levenshtein edit distance of 2 strings. I.e. the minimum number of single-character edits
+    (insertions, deletions or substitutions) needed to convert ``string_1`` to ``string_2``.
 
 .. function:: lower(string) -> varchar
 
@@ -63,14 +72,23 @@ String Functions
 
 .. function:: ltrim(string) -> varchar
 
-    Removes leading whitespace from string.
+    Removes leading whitespace from string. See :func:`trim` for the set of
+    recognized whitespace characters.
+
+.. function:: ltrim(string, chars) -> varchar
+    :noindex:
+
+    Removes the longest substring containing only characters in ``chars`` from the beginning of the ``string``. ::
+
+        SELECT ltrim('test', 't'); -- est
+        SELECT ltrim('tetris', 'te'); -- ris
 
 .. function:: replace(string, search) -> varchar
 
     Removes all instances of ``search`` from ``string``.
 
 .. function:: replace(string, search, replace) -> varchar
-   :noindex:
+    :noindex:
 
     Replaces all instances of ``search`` with ``replace`` in ``string``.
 
@@ -78,7 +96,7 @@ String Functions
     character and at the end of the ``string``.
 
 .. function:: reverse(string) -> varchar
-   :noindex:
+    :noindex:
 
     Reverses ``string``.
 
@@ -91,14 +109,23 @@ String Functions
 
 .. function:: rtrim(string) -> varchar
 
-    Removes trailing whitespace from string.
+    Removes trailing whitespace from string. See :func:`trim` for the set of
+    recognized whitespace characters.
+
+.. function:: rtrim(string, chars) -> varchar
+    :noindex:
+
+    Removes the longest substring containing only characters in ``chars`` from the end of the ``string``. ::
+
+        SELECT rtrim('test', 't'); -- tes
+        SELECT rtrim('test...', '.'); -- test
 
 .. function:: split(string, delimiter) -> array(string)
 
     Splits ``string`` on ``delimiter`` and returns an array.
 
 .. function:: split(string, delimiter, limit) -> array(string)
-   :noindex:
+    :noindex:
 
     Splits ``string`` on ``delimiter`` and returns an array of size at most ``limit``.
 
@@ -112,17 +139,35 @@ String Functions
     Field indexes start with 1. If the index is larger than the number of fields,
     then null is returned.
 
+.. function:: split_to_map(string, entryDelimiter, keyValueDelimiter) -> map<varchar, varchar>
+
+    Splits ``string`` by ``entryDelimiter`` and ``keyValueDelimiter`` and returns a map.
+    ``entryDelimiter`` splits ``string`` into key-value pairs. ``keyValueDelimiter`` splits
+    each pair into key and value. Note that ``entryDelimiter`` and ``keyValueDelimiter`` are
+    interpreted literally, i.e., as full string matches.
+
+    entryDelimiter and keyValueDelimiter must not be empty and must not be the same.
+
+    Raises an error if there are duplicate keys.
+
+.. function:: starts_with(string, substring) -> boolean
+
+    Returns whether ``string`` starts with ``substring``.
+
 .. function:: strpos(string, substring) -> bigint
 
     Returns the starting position of the first instance of ``substring`` in
     ``string``. Positions start with ``1``. If not found, ``0`` is returned.
 
 .. function:: strpos(string, substring, instance) -> bigint
-   :noindex:
+    :noindex:
 
     Returns the position of the N-th ``instance`` of ``substring`` in ``string``.
     ``instance`` must be a positive number.
     Positions start with ``1``. If not found, ``0`` is returned.
+    It takes into account overlapping strings when counting occurrences. ::
+
+        SELECT strpos('aaa', 'aa', 2); -- 2
 
 .. function:: strrpos(string, substring) -> bigint
 
@@ -130,11 +175,14 @@ String Functions
     ``string``. Positions start with ``1``. If not found, ``0`` is returned.
 
 .. function:: strrpos(string, substring, instance) -> bigint
-   :noindex:
+    :noindex:
 
     Returns the position of the N-th ``instance`` of ``substring`` in ``string`` starting from the end of the string.
     ``instance`` must be a positive number.
     Positions start with ``1``. If not found, ``0`` is returned.
+    It takes into account overlapping strings when counting occurrences. ::
+        
+        SELECT strrpos('aaa', 'aa', 2); -- 1
 
 .. function:: substr(string, start) -> varchar
 
@@ -144,7 +192,7 @@ String Functions
     value of ``start`` is greater then length of the ``string``.
 
 .. function:: substr(string, start, length) -> varchar
-   :noindex:
+    :noindex:
 
     Returns a substring from ``string`` of length ``length`` from the starting
     position ``start``. Positions start with ``1``. A negative starting
@@ -155,6 +203,37 @@ String Functions
 .. function:: trim(string) -> varchar
 
     Removes starting and ending whitespaces from ``string``.
+
+    Recognized whitespace characters:
+
+    ======  =========================== ======  ===========================
+    Code    Description                 Code    Description
+    ======  =========================== ======  ===========================
+    9       TAB (horizontal tab)        U+1680  Ogham Space Mark
+    10      LF (NL line feed, new line) U+2000  En Quad
+    11      VT (vertical tab)           U+2001  Em Quad
+    12      FF (NP form feed, new page) U+2002  En Space
+    13      CR (carriage return)        U+2003  Em Space
+    28      FS (file separator)         U+2004  Three-Per-Em Space
+    29      GS (group separator)        U+2005  Four-Per-Em Space
+    30      RS (record separator)       U+2006  Four-Per-Em Space
+    31      US (unit separator)         U+2008  Punctuation Space
+    32      Space                       U+2009  Thin Space
+    _       _                           U+200a  Hair Space
+    _       _                           U+200a  Hair Space
+    _       _                           U+2028  Line Separator
+    _       _                           U+2029  Paragraph Separator
+    _       _                           U+205f  Medium Mathematical Space
+    _       _                           U+3000  Ideographic Space
+    ======  =========================== ======  ===========================
+
+.. function:: trim(string, chars) -> varchar
+    :noindex:
+
+    Removes the longest substring containing only characters in ``chars`` from the beginning and end of the ``string``. ::
+
+        SELECT trim('test', 't'); -- es
+        SELECT trim('.t.e.s.t.', '.t'); -- e.s
 
 .. function:: upper(string) -> varchar
 

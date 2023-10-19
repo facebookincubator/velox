@@ -27,12 +27,16 @@ int32_t alignBits(int32_t numBits) {
 int32_t alignBytes(int32_t numBytes) {
   return bits::roundUp(numBytes, 8);
 }
+
+bool isFixedWidth(const TypePtr& type) {
+  return type->isFixedWidth() && !type->isLongDecimal();
+}
 } // namespace
 
 // static
 std::optional<int32_t> UnsafeRowFast::fixedRowSize(const RowTypePtr& rowType) {
   for (const auto& child : rowType->children()) {
-    if (!child->isFixedWidth()) {
+    if (!isFixedWidth(child)) {
       return std::nullopt;
     }
   }
@@ -59,24 +63,22 @@ void UnsafeRowFast::initialize(const TypePtr& type) {
     case TypeKind::ARRAY: {
       auto arrayBase = base->as<ArrayVector>();
       children_.push_back(UnsafeRowFast(arrayBase->elements()));
-      childIsFixedWidth_.push_back(
-          arrayBase->elements()->type()->isFixedWidth());
+      childIsFixedWidth_.push_back(isFixedWidth(arrayBase->elements()->type()));
       break;
     }
     case TypeKind::MAP: {
       auto mapBase = base->as<MapVector>();
       children_.push_back(UnsafeRowFast(mapBase->mapKeys()));
       children_.push_back(UnsafeRowFast(mapBase->mapValues()));
-      childIsFixedWidth_.push_back(mapBase->mapKeys()->type()->isFixedWidth());
-      childIsFixedWidth_.push_back(
-          mapBase->mapValues()->type()->isFixedWidth());
+      childIsFixedWidth_.push_back(isFixedWidth(mapBase->mapKeys()->type()));
+      childIsFixedWidth_.push_back(isFixedWidth(mapBase->mapValues()->type()));
       break;
     }
     case TypeKind::ROW: {
       auto rowBase = base->as<RowVector>();
       for (const auto& child : rowBase->children()) {
         children_.push_back(UnsafeRowFast(child));
-        childIsFixedWidth_.push_back(child->type()->isFixedWidth());
+        childIsFixedWidth_.push_back(isFixedWidth(child->type()));
       }
 
       rowNullBytes_ = alignBits(type->size());
@@ -87,17 +89,17 @@ void UnsafeRowFast::initialize(const TypePtr& type) {
       fixedWidthTypeKind_ = true;
       break;
     case TypeKind::TINYINT:
-      FOLLY_FALLTHROUGH;
+      [[fallthrough]];
     case TypeKind::SMALLINT:
-      FOLLY_FALLTHROUGH;
+      [[fallthrough]];
     case TypeKind::INTEGER:
-      FOLLY_FALLTHROUGH;
+      [[fallthrough]];
     case TypeKind::BIGINT:
-      FOLLY_FALLTHROUGH;
+      [[fallthrough]];
     case TypeKind::REAL:
-      FOLLY_FALLTHROUGH;
+      [[fallthrough]];
     case TypeKind::DOUBLE:
-      FOLLY_FALLTHROUGH;
+      [[fallthrough]];
     case TypeKind::UNKNOWN:
       valueBytes_ = type->cppSizeInBytes();
       fixedWidthTypeKind_ = true;
@@ -107,8 +109,10 @@ void UnsafeRowFast::initialize(const TypePtr& type) {
       valueBytes_ = sizeof(int64_t);
       fixedWidthTypeKind_ = true;
       break;
+    case TypeKind::HUGEINT:
+      [[fallthrough]];
     case TypeKind::VARCHAR:
-      FOLLY_FALLTHROUGH;
+      [[fallthrough]];
     case TypeKind::VARBINARY:
       // Nothing to do.
       break;
@@ -124,11 +128,13 @@ int32_t UnsafeRowFast::rowSize(vector_size_t index) {
 int32_t UnsafeRowFast::variableWidthRowSize(vector_size_t index) {
   switch (typeKind_) {
     case TypeKind::VARCHAR:
-      FOLLY_FALLTHROUGH;
+      [[fallthrough]];
     case TypeKind::VARBINARY: {
       auto value = decoded_.valueAt<StringView>(index);
       return alignBytes(value.size());
     }
+    case TypeKind::HUGEINT:
+      return DecimalUtil::getByteArrayLength(decoded_.valueAt<int128_t>(index));
     case TypeKind::ARRAY:
       return arrayRowSize(index);
     case TypeKind::MAP:
@@ -186,11 +192,15 @@ int32_t UnsafeRowFast::serializeVariableWidth(
     char* buffer) {
   switch (typeKind_) {
     case TypeKind::VARCHAR:
-      FOLLY_FALLTHROUGH;
+      [[fallthrough]];
     case TypeKind::VARBINARY: {
       auto value = decoded_.valueAt<StringView>(index);
       memcpy(buffer, value.data(), value.size());
       return value.size();
+    }
+    case TypeKind::HUGEINT: {
+      auto value = decoded_.valueAt<int128_t>(index);
+      return DecimalUtil::toByteArray(value, buffer);
     }
     case TypeKind::ARRAY:
       return serializeArray(index, buffer);

@@ -49,6 +49,16 @@ template <>
 }
 
 template <>
+::duckdb::Value duckValueAt<TypeKind::VARBINARY>(
+    const VectorPtr& vector,
+    vector_size_t index) {
+  // DuckDB requires zero-ending string
+  auto stringView = vector->as<SimpleVector<StringView>>()->valueAt(index);
+  return ::duckdb::Value::BLOB(
+      reinterpret_cast<const uint8_t*>(stringView.begin()), stringView.size());
+}
+
+template <>
 ::duckdb::Value duckValueAt<TypeKind::TIMESTAMP>(
     const VectorPtr& vector,
     vector_size_t index) {
@@ -229,6 +239,16 @@ template <>
 velox::variant variantAt<TypeKind::TIMESTAMP>(const ::duckdb::Value& value) {
   return velox::variant::timestamp(
       duckdbTimestampToVelox(value.GetValue<::duckdb::timestamp_t>()));
+}
+
+template <>
+velox::variant variantAt<TypeKind::VARCHAR>(const ::duckdb::Value& value) {
+  return velox::variant(StringView(::duckdb::StringValue::Get(value)));
+}
+
+template <>
+velox::variant variantAt<TypeKind::VARBINARY>(const ::duckdb::Value& value) {
+  return velox::variant(StringView(::duckdb::StringValue::Get(value)));
 }
 
 variant nullVariant(const TypePtr& type) {
@@ -442,26 +462,6 @@ variant variantAt(const VectorPtr& vector, vector_size_t row) {
   }
 
   return VELOX_DYNAMIC_SCALAR_TYPE_DISPATCH(variantAt, typeKind, vector, row);
-}
-
-std::vector<MaterializedRow> materialize(const RowVectorPtr& vector) {
-  auto size = vector->size();
-  std::vector<MaterializedRow> rows;
-  rows.reserve(size);
-
-  auto rowType = vector->type()->as<TypeKind::ROW>();
-
-  for (size_t i = 0; i < size; ++i) {
-    auto numColumns = rowType.size();
-    MaterializedRow row;
-    row.reserve(numColumns);
-    for (size_t j = 0; j < numColumns; ++j) {
-      row.push_back(variantAt(vector->childAt(j), i));
-    }
-    rows.push_back(row);
-  }
-
-  return rows;
 }
 
 MaterializedRow getColumns(
@@ -700,6 +700,20 @@ bool MaterializedRowEpsilonComparator::sortByUniqueKey(
   return hasUniqueKeys(expectedSorted_) && hasUniqueKeys(actualSorted_);
 }
 
+std::string toTypeString(const MaterializedRow& row) {
+  std::ostringstream out;
+  out << "ROW(";
+  const auto numColumns = row.size();
+  for (auto i = 0; i < numColumns; ++i) {
+    if (i > 0) {
+      out << ", ";
+    }
+    out << mapTypeKindToName(row[i].kind());
+  }
+  out << ")";
+  return out.str();
+}
+
 bool equalTypeKinds(const MaterializedRow& left, const MaterializedRow& right) {
   if (left.size() != right.size()) {
     return false;
@@ -774,6 +788,26 @@ void verifyDuckDBResult(const DuckDBQueryResult& result, std::string_view sql) {
 
 } // namespace
 
+std::vector<MaterializedRow> materialize(const RowVectorPtr& vector) {
+  auto size = vector->size();
+  std::vector<MaterializedRow> rows;
+  rows.reserve(size);
+
+  auto rowType = vector->type()->as<TypeKind::ROW>();
+
+  for (size_t i = 0; i < size; ++i) {
+    auto numColumns = rowType.size();
+    MaterializedRow row;
+    row.reserve(numColumns);
+    for (size_t j = 0; j < numColumns; ++j) {
+      row.push_back(variantAt(vector->childAt(j), i));
+    }
+    rows.push_back(row);
+  }
+
+  return rows;
+}
+
 void DuckDbQueryRunner::createTable(
     const std::string& name,
     const std::vector<RowVectorPtr>& data) {
@@ -822,12 +856,6 @@ void DuckDbQueryRunner::createTable(
       appender.EndRow();
     }
   }
-}
-
-void DuckDbQueryRunner::initializeTpch(double scaleFactor) {
-  db_.LoadExtension<::duckdb::TPCHExtension>();
-  auto query = fmt::format("CALL dbgen(sf={})", scaleFactor);
-  execute(query);
 }
 
 DuckDBQueryResult DuckDbQueryRunner::execute(const std::string& sql) {
@@ -893,7 +921,7 @@ static bool compareMaterializedRows(
   }
 
   for (auto& it : left) {
-    if (right.count(it) == 0) {
+    if (right.count(it) != left.count(it)) {
       return false;
     }
   }
@@ -902,7 +930,7 @@ static bool compareMaterializedRows(
   // left, check the other way around. E.g., left = {1, 1, 2}, right = {1, 2,
   // 3}.
   for (auto& it : right) {
-    if (left.count(it) == 0) {
+    if (left.count(it) != right.count(it)) {
       return false;
     }
   }
@@ -985,7 +1013,9 @@ bool assertEqualResults(
   }
 
   if (!equalTypeKinds(*expectedRows.begin(), *actualRows.begin())) {
-    ADD_FAILURE() << "Types of expected and actual results do not match";
+    ADD_FAILURE() << "Types of expected and actual results do not match: "
+                  << toTypeString(*expectedRows.begin()) << " vs. "
+                  << toTypeString(*actualRows.begin());
     return false;
   }
 
@@ -1017,16 +1047,23 @@ bool assertEqualResults(
   return true;
 }
 
+MaterializedRowMultiset materialize(const std::vector<RowVectorPtr>& vectors) {
+  MaterializedRowMultiset materialized;
+  for (auto vector : vectors) {
+    auto rows = materialize(vector);
+    std::copy(
+        rows.begin(),
+        rows.end(),
+        std::inserter(materialized, materialized.end()));
+  }
+  return materialized;
+}
+
 bool assertEqualResults(
     const MaterializedRowMultiset& expectedRows,
     const std::vector<RowVectorPtr>& actual) {
-  MaterializedRowMultiset actualRows;
-  for (auto vector : actual) {
-    auto rows = materialize(vector);
-    std::copy(
-        rows.begin(), rows.end(), std::inserter(actualRows, actualRows.end()));
-  }
-  return assertEqualResults(expectedRows, actualRows, "Unexpected results");
+  return assertEqualResults(
+      expectedRows, materialize(actual), "Unexpected results");
 }
 
 void assertResults(
@@ -1236,16 +1273,49 @@ bool waitForTaskStateChange(
   return task->state() == state;
 }
 
-bool waitForTaskDriversToFinish(exec::Task* task, uint64_t maxWaitMicros) {
-  VELOX_USER_CHECK(!task->isRunning());
-  uint64_t waitMicros = 0;
-  while ((task->numFinishedDrivers() != task->numTotalDrivers()) &&
-         (waitMicros < maxWaitMicros)) {
-    const uint64_t kWaitMicros = 1000;
-    std::this_thread::sleep_for(std::chrono::microseconds(kWaitMicros));
-    waitMicros += kWaitMicros;
+void waitForAllTasksToBeDeleted(uint64_t maxWaitUs) {
+  const uint64_t numCreatedTasks = Task::numCreatedTasks();
+  uint64_t numDeletedTasks = Task::numDeletedTasks();
+  uint64_t waitUs = 0;
+  while (numCreatedTasks > numDeletedTasks) {
+    constexpr uint64_t kWaitInternalUs = 1'000;
+    std::this_thread::sleep_for(std::chrono::microseconds(kWaitInternalUs));
+    waitUs += kWaitInternalUs;
+    numDeletedTasks = Task::numDeletedTasks();
+    if (waitUs >= maxWaitUs) {
+      break;
+    }
   }
-  return task->numFinishedDrivers() == task->numTotalDrivers();
+  VELOX_CHECK_EQ(
+      numDeletedTasks,
+      numCreatedTasks,
+      "{} tasks have been created while only {} have been deleted after waiting for {} us",
+      numCreatedTasks,
+      numDeletedTasks,
+      waitUs);
+}
+
+void waitForAllTasksToBeDeleted(
+    uint64_t expectedDeletedTasks,
+    uint64_t maxWaitUs) {
+  uint64_t numDeletedTasks = Task::numDeletedTasks();
+  uint64_t waitUs = 0;
+  while (expectedDeletedTasks > numDeletedTasks) {
+    constexpr uint64_t kWaitInternalUs = 1'000;
+    std::this_thread::sleep_for(std::chrono::microseconds(kWaitInternalUs));
+    waitUs += kWaitInternalUs;
+    numDeletedTasks = Task::numDeletedTasks();
+    if (waitUs >= maxWaitUs) {
+      break;
+    }
+  }
+  VELOX_CHECK_EQ(
+      numDeletedTasks,
+      expectedDeletedTasks,
+      "expected {} tasks to be deleted but only {} have been deleted after waiting for {} us",
+      expectedDeletedTasks,
+      numDeletedTasks,
+      waitUs);
 }
 
 std::shared_ptr<Task> assertQuery(

@@ -810,6 +810,7 @@ TEST(FilterTest, bytesRange) {
   EXPECT_FALSE(filter->testBytes("b", 1));
   EXPECT_FALSE(filter->testBytes("c", 1));
   EXPECT_TRUE(filter->testBytes(nullptr, 0));
+  EXPECT_FALSE(filter->testBytesRange("b", "c", false));
 
   // <= b
   filter = lessThanOrEqual("b");
@@ -817,6 +818,7 @@ TEST(FilterTest, bytesRange) {
   EXPECT_TRUE(filter->testBytes("b", 1));
   EXPECT_FALSE(filter->testBytes("c", 1));
   EXPECT_TRUE(filter->testBytes(nullptr, 0));
+  EXPECT_TRUE(filter->testBytesRange("b", "c", false));
 
   // >= b
   filter = greaterThanOrEqual("b");
@@ -824,6 +826,7 @@ TEST(FilterTest, bytesRange) {
   EXPECT_TRUE(filter->testBytes("b", 1));
   EXPECT_TRUE(filter->testBytes("c", 1));
   EXPECT_FALSE(filter->testBytes(nullptr, 0));
+  EXPECT_TRUE(filter->testBytesRange("a", "b", false));
 
   // > b
   filter = greaterThan("b");
@@ -831,6 +834,7 @@ TEST(FilterTest, bytesRange) {
   EXPECT_FALSE(filter->testBytes("b", 1));
   EXPECT_TRUE(filter->testBytes("c", 1));
   EXPECT_FALSE(filter->testBytes(nullptr, 0));
+  EXPECT_FALSE(filter->testBytesRange("a", "b", false));
 
   // < ''
   filter = lessThan("");
@@ -1818,4 +1822,59 @@ TEST(FilterTest, dateRange) {
       between(DATE()->toDays("1970-01-01"), DATE()->toDays("1980-01-01"));
   EXPECT_TRUE(applyFilter(*filter, DATE()->toDays("1970-06-01")));
   EXPECT_FALSE(applyFilter(*filter, DATE()->toDays("1980-06-01")));
+}
+
+TEST(FilterTest, timestampRange) {
+  // x = timestamp '1970-01-01 00:00:10.123'
+  auto filter = equal(Timestamp(10, 123000000), false);
+  EXPECT_FALSE(filter->testNull());
+
+  EXPECT_TRUE(filter->testTimestamp(Timestamp(10, 123000000)));
+  EXPECT_FALSE(filter->testTimestamp(Timestamp()));
+  EXPECT_FALSE(filter->testTimestamp(Timestamp(-10, 123000000)));
+
+  EXPECT_FALSE(filter->testTimestampRange(
+      Timestamp(-777, 123450000), Timestamp(9, 123000000), false));
+  EXPECT_FALSE(filter->testTimestampRange(
+      Timestamp(10, 125000000), Timestamp(999, 12), false));
+  EXPECT_TRUE(filter->testTimestampRange(
+      Timestamp(-123, 123450000), Timestamp(123, 123450000), false));
+  EXPECT_TRUE(filter->testTimestampRange(
+      Timestamp(10, 122000000), Timestamp(10, 124000000), false));
+
+  // x between timestamp '1970-01-01 00:00:10.123' and timestamp '1970-01-01
+  // 00:02:00.456'
+  filter = between(Timestamp(10, 123000000), Timestamp(120, 456000000), false);
+  EXPECT_FALSE(filter->testNull());
+
+  EXPECT_TRUE(filter->testTimestamp(Timestamp(10, 123000001)));
+  EXPECT_TRUE(filter->testTimestamp(Timestamp(111, 999999999)));
+  EXPECT_FALSE(filter->testTimestamp(Timestamp()));
+  EXPECT_FALSE(filter->testTimestamp(Timestamp(123, 0)));
+
+  EXPECT_FALSE(filter->testTimestampRange(
+      Timestamp(-123, 123450000), Timestamp(9, 123450000), false));
+  EXPECT_FALSE(filter->testTimestampRange(
+      Timestamp(-123, 123450000), Timestamp(9, 123450000), true));
+  EXPECT_TRUE(filter->testTimestampRange(
+      Timestamp(-123, 123450000), Timestamp(20, 123450000), false));
+  EXPECT_TRUE(filter->testTimestampRange(
+      Timestamp(111, 999999999), Timestamp(123, 777777777), false));
+
+  //  x > timestamp '1970-01-01 00:00:10.123' or x = null
+  Timestamp ts(10, 123000000);
+  filter = greaterThan(ts, true);
+  EXPECT_TRUE(filter->testNull());
+
+  EXPECT_FALSE(filter->testTimestamp(Timestamp()));
+  EXPECT_TRUE(filter->testTimestamp(Timestamp(10, 124000000)));
+
+  EXPECT_FALSE(filter->testTimestampRange(
+      Timestamp(-123, 123450000), Timestamp(9, 123000000), false));
+  EXPECT_TRUE(filter->testTimestampRange(
+      Timestamp(-123, 123450000), Timestamp(9, 123000000), true));
+  EXPECT_TRUE(filter->testTimestampRange(
+      Timestamp(5, 123000000), Timestamp(30, 123000000), false));
+  EXPECT_TRUE(filter->testTimestampRange(
+      Timestamp(5, 123000000), Timestamp(30, 123000000), true));
 }

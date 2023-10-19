@@ -85,6 +85,17 @@ struct TaskStats {
   uint64_t numRunningDrivers{0};
   /// Drivers blocked for various reasons. Based on enum BlockingReason.
   std::unordered_map<BlockingReason, uint64_t> numBlockedDrivers;
+
+  /// Output buffer's memory utilization ratio measured as
+  /// current buffer usage / max buffer size
+  double outputBufferUtilization{0};
+  /// Indicates if output buffer is over-utilized and thus blocks the producers.
+  bool outputBufferOverutilized{false};
+
+  /// The longest still running operator call in "op::call" format.
+  std::string longestRunningOpCall;
+  /// The longest still running operator call's duration in ms.
+  size_t longestRunningOpCallMs{0};
 };
 
 } // namespace facebook::velox::exec

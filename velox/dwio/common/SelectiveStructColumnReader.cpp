@@ -71,9 +71,11 @@ void SelectiveStructColumnReaderBase::next(
     auto& childSpecs = scanSpec_->children();
     for (auto& childSpec : childSpecs) {
       VELOX_CHECK(childSpec->isConstant());
-      auto channel = childSpec->channel();
-      resultRowVector->childAt(channel) =
-          BaseVector::wrapInConstant(numValues, 0, childSpec->constantValue());
+      if (childSpec->projectOut()) {
+        auto channel = childSpec->channel();
+        resultRowVector->childAt(channel) = BaseVector::wrapInConstant(
+            numValues, 0, childSpec->constantValue());
+      }
     }
     return;
   }
@@ -123,13 +125,15 @@ void SelectiveStructColumnReaderBase::read(
         activeRows, kind == velox::common::FilterKind::kIsNull, false);
     if (outputRows_.empty()) {
       recordParentNullsInChildren(offset, rows);
+      lazyVectorReadOffset_ = offset;
+      readOffset_ = offset + rows.back() + 1;
       return;
     }
     activeRows = outputRows_;
   }
 
-  VELOX_CHECK(!children_.empty());
   auto& childSpecs = scanSpec_->children();
+  VELOX_CHECK(!childSpecs.empty());
   for (size_t i = 0; i < childSpecs.size(); ++i) {
     auto& childSpec = childSpecs[i];
     if (isChildConstant(*childSpec)) {
@@ -163,6 +167,7 @@ void SelectiveStructColumnReaderBase::read(
       reader->read(offset, activeRows, structNulls);
     }
   }
+
   // If this adds nulls, the field readers will miss a value for each null added
   // here.
   recordParentNullsInChildren(offset, rows);
@@ -210,7 +215,7 @@ bool SelectiveStructColumnReaderBase::isChildConstant(
                                                   // a filter on a subfield of a
                                                   // row type that doesn't exist
                                                   // in the output.
-       fileType_->type->kind() !=
+       fileType_->type()->kind() !=
            TypeKind::MAP && // If this is the case it means this is a flat map,
                             // so it can't have "missing" fields.
        childSpec.channel() >= fileType_->size());
@@ -293,7 +298,7 @@ void setNullField(vector_size_t size, VectorPtr& field) {
 void SelectiveStructColumnReaderBase::getValues(
     RowSet rows,
     VectorPtr* result) {
-  VELOX_CHECK(!children_.empty());
+  VELOX_CHECK(!scanSpec_->children().empty());
   VELOX_CHECK(
       *result != nullptr,
       "SelectiveStructColumnReaderBase expects a non-null result");
@@ -304,6 +309,8 @@ void SelectiveStructColumnReaderBase::getValues(
   if (auto reused = tryReuseResult(*result)) {
     *result = std::move(reused);
   } else {
+    VLOG(1) << "Reallocating result row vector with " << rowType.size()
+            << " children";
     std::vector<VectorPtr> children(rowType.size());
     fillRowVectorChildren(*result->get()->pool(), rowType, children);
     *result = std::make_shared<RowVector>(
@@ -320,7 +327,7 @@ void SelectiveStructColumnReaderBase::getValues(
   }
   if (nullsInReadRange_) {
     auto readerNulls = nullsInReadRange_->as<uint64_t>();
-    auto nulls = resultRow->mutableNulls(rows.size())->asMutable<uint64_t>();
+    auto* nulls = resultRow->mutableNulls(rows.size())->asMutable<uint64_t>();
     for (size_t i = 0; i < rows.size(); ++i) {
       bits::setBit(nulls, i, bits::isBitSet(readerNulls, rows[i]));
     }
@@ -367,9 +374,11 @@ void SelectiveStructColumnReaderBase::getValues(
           &memoryPool_,
           resultRow->type()->childAt(channel),
           rows.size(),
-          std::move(loader));
+          std::move(loader),
+          std::move(childResult));
     }
   }
+  resultRow->updateContainsLazyNotLoaded();
 }
 
 } // namespace facebook::velox::dwio::common

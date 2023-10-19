@@ -24,6 +24,8 @@
 #include "velox/exec/tests/utils/PlanBuilder.h"
 #include "velox/type/tests/SubfieldFiltersBuilder.h"
 
+#include "velox/connectors/hive/HiveConfig.h"
+
 using namespace facebook::velox;
 using namespace facebook::velox::exec;
 using namespace facebook::velox::exec::test;
@@ -261,11 +263,183 @@ TEST_F(ParquetTableScanTest, decimalSubfieldFilter) {
   VELOX_ASSERT_THROW(
       assertSelectWithFilter(
           {"a"}, {"a < 1000.7"}, "", "SELECT a FROM tmp WHERE a < 1000.7"),
-      "Scalar function signature is not supported: lt(DECIMAL(5,2), DECIMAL(5,1))");
+      "Scalar function signature is not supported: lt(DECIMAL(5, 2), DECIMAL(5, 1))");
   VELOX_ASSERT_THROW(
       assertSelectWithFilter(
           {"a"}, {"a = 1000.7"}, "", "SELECT a FROM tmp WHERE a = 1000.7"),
-      "Scalar function signature is not supported: eq(DECIMAL(5,2), DECIMAL(5,1))");
+      "Scalar function signature is not supported: eq(DECIMAL(5, 2), DECIMAL(5, 1))");
+}
+
+// Core dump is fixed.
+TEST_F(ParquetTableScanTest, map) {
+  auto vector = makeMapVector<StringView, StringView>({{{"name", "gluten"}}});
+
+  loadData(
+      getExampleFilePath("types.parquet"),
+      ROW({"map"}, {MAP(VARCHAR(), VARCHAR())}),
+      makeRowVector(
+          {"map"},
+          {
+              vector,
+          }));
+
+  assertSelectWithFilter({"map"}, {}, "", "SELECT map FROM tmp");
+}
+
+// Core dump is fixed.
+TEST_F(ParquetTableScanTest, singleRowStruct) {
+  auto vector = makeArrayVector<int32_t>({{}});
+  loadData(
+      getExampleFilePath("single_row_struct.parquet"),
+      ROW({"s"}, {ROW({"a", "b"}, {BIGINT(), BIGINT()})}),
+      makeRowVector(
+          {"s"},
+          {
+              vector,
+          }));
+
+  assertSelectWithFilter({"s"}, {}, "", "SELECT (0, 1)");
+}
+
+// Core dump and incorrect result are fixed.
+TEST_F(ParquetTableScanTest, DISABLED_array) {
+  auto vector = makeArrayVector<int32_t>({{1, 2, 3}});
+
+  loadData(
+      getExampleFilePath("old_repeated_int.parquet"),
+      ROW({"repeatedInt"}, {ARRAY(INTEGER())}),
+      makeRowVector(
+          {"repeatedInt"},
+          {
+              vector,
+          }));
+
+  assertSelectWithFilter(
+      {"repeatedInt"}, {}, "", "SELECT repeatedInt FROM tmp");
+}
+
+// Optional array with required elements.
+// Incorrect result.
+TEST_F(ParquetTableScanTest, DISABLED_optArrayReqEle) {
+  auto vector = makeArrayVector<StringView>({});
+
+  loadData(
+      getExampleFilePath("array_0.parquet"),
+      ROW({"_1"}, {ARRAY(VARCHAR())}),
+      makeRowVector(
+          {"_1"},
+          {
+              vector,
+          }));
+
+  assertSelectWithFilter(
+      {"_1"},
+      {},
+      "",
+      "SELECT UNNEST(array[array['a', 'b'], array['c', 'd'], array['e', 'f'], array[], null])");
+}
+
+// Required array with required elements.
+// Core dump is fixed, but the result is incorrect.
+TEST_F(ParquetTableScanTest, DISABLED_reqArrayReqEle) {
+  auto vector = makeArrayVector<StringView>({});
+
+  loadData(
+      getExampleFilePath("array_1.parquet"),
+      ROW({"_1"}, {ARRAY(VARCHAR())}),
+      makeRowVector(
+          {"_1"},
+          {
+              vector,
+          }));
+
+  assertSelectWithFilter(
+      {"_1"},
+      {},
+      "",
+      "SELECT UNNEST(array[array['a', 'b'], array['c', 'd'], array[]])");
+}
+
+// Required array with optional elements.
+// Incorrect result.
+TEST_F(ParquetTableScanTest, DISABLED_reqArrayOptEle) {
+  auto vector = makeArrayVector<StringView>({});
+
+  loadData(
+      getExampleFilePath("array_2.parquet"),
+      ROW({"_1"}, {ARRAY(VARCHAR())}),
+      makeRowVector(
+          {"_1"},
+          {
+              vector,
+          }));
+
+  assertSelectWithFilter(
+      {"_1"},
+      {},
+      "",
+      "SELECT UNNEST(array[array['a', null], array[], array[null, 'b']])");
+}
+
+// Required array with legacy format.
+// Incorrect result.
+TEST_F(ParquetTableScanTest, DISABLED_reqArrayLegacy) {
+  auto vector = makeArrayVector<StringView>({});
+
+  loadData(
+      getExampleFilePath("array_3.parquet"),
+      ROW({"_1"}, {ARRAY(VARCHAR())}),
+      makeRowVector(
+          {"_1"},
+          {
+              vector,
+          }));
+
+  assertSelectWithFilter(
+      {"_1"},
+      {},
+      "",
+      "SELECT UNNEST(array[array['a', 'b'], array[], array['c', 'd']])");
+}
+
+TEST_F(ParquetTableScanTest, readAsLowerCase) {
+  auto plan = PlanBuilder(pool_.get())
+                  .tableScan(ROW({"a"}, {BIGINT()}), {}, "")
+                  .planNode();
+  CursorParameters params;
+  std::shared_ptr<folly::Executor> executor =
+      std::make_shared<folly::CPUThreadPoolExecutor>(
+          std::thread::hardware_concurrency());
+  std::shared_ptr<core::QueryCtx> queryCtx =
+      std::make_shared<core::QueryCtx>(executor.get());
+  std::unordered_map<std::string, std::string> configs = {
+      {std::string(
+           connector::hive::HiveConfig::kFileColumnNamesReadAsLowerCase),
+       "true"}};
+  queryCtx->setConnectorConfigOverridesUnsafe(
+      kHiveConnectorId, std::move(configs));
+  params.queryCtx = queryCtx;
+  params.planNode = plan;
+  const int numSplitsPerFile = 1;
+
+  bool noMoreSplits = false;
+  auto addSplits = [&](exec::Task* task) {
+    if (!noMoreSplits) {
+      auto const splits = HiveConnectorTestBase::makeHiveConnectorSplits(
+          {getExampleFilePath("upper.parquet")},
+          numSplitsPerFile,
+          dwio::common::FileFormat::PARQUET);
+      for (const auto& split : splits) {
+        task->addSplit("0", exec::Split(split));
+      }
+      task->noMoreSplits("0");
+    }
+    noMoreSplits = true;
+  };
+  auto result = readCursor(params, addSplits);
+  ASSERT_TRUE(waitForTaskCompletion(result.first->task().get()));
+  assertEqualResults(
+      result.second, {makeRowVector({"a"}, {makeFlatVector<int64_t>({0, 1})})});
 }
 
 int main(int argc, char** argv) {

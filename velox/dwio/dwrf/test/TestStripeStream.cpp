@@ -92,7 +92,13 @@ StripeStreamsImpl createAndLoadStripeStreams(
     const ColumnSelector& selector) {
   TestProvider indexProvider;
   StripeStreamsImpl streams{
-      stripeReader, selector, RowReaderOptions{}, 0, indexProvider, 0};
+      stripeReader,
+      selector,
+      RowReaderOptions{},
+      0,
+      StripeStreamsImpl::kUnknownStripeRows,
+      indexProvider,
+      0};
   enqueueReads(stripeReader, selector, 0, 0);
   streams.loadReadPlan();
   return streams;
@@ -241,7 +247,13 @@ TEST(StripeStream, zeroLength) {
   TestProvider indexProvider;
   ColumnSelector cs{std::dynamic_pointer_cast<const RowType>(type)};
   StripeStreamsImpl streams{
-      stripeReader, cs, RowReaderOptions{}, 0, indexProvider, 0};
+      stripeReader,
+      cs,
+      RowReaderOptions{},
+      0,
+      StripeStreamsImpl::kUnknownStripeRows,
+      indexProvider,
+      0};
   streams.loadReadPlan();
   auto const& actual = isPtr->getReads();
   EXPECT_EQ(actual.size(), 0);
@@ -429,7 +441,13 @@ TEST(StripeStream, readEncryptedStreams) {
   ColumnSelector selector{readerBase->getSchema(), {1, 2, 4}, true};
   TestProvider provider;
   StripeStreamsImpl streams{
-      *stripeReader, selector, RowReaderOptions{}, 0, provider, 0};
+      *stripeReader,
+      selector,
+      RowReaderOptions{},
+      0,
+      StripeStreamsImpl::kUnknownStripeRows,
+      provider,
+      0};
 
   // make sure projected columns exist
   std::unordered_set<uint32_t> existed{1, 2, 4};
@@ -504,7 +522,13 @@ TEST(StripeStream, schemaMismatch) {
       std::dynamic_pointer_cast<const RowType>(schema), {4, 5}, true};
   TestProvider provider;
   StripeStreamsImpl streams{
-      *stripeReader, selector, RowReaderOptions{}, 0, provider, 0};
+      *stripeReader,
+      selector,
+      RowReaderOptions{},
+      0,
+      StripeStreamsImpl::kUnknownStripeRows,
+      provider,
+      0};
 
   // make sure all columns exist. Node id of b and c in the file is 3, 4
   for (uint32_t node = 3; node < 4; ++node) {
@@ -527,7 +551,7 @@ class TestStripeStreams : public StripeStreamsBase {
 
   const proto::ColumnEncoding& getEncoding(
       const EncodingKey& ek) const override {
-    return *getEncodingProxy(ek.node, ek.sequence);
+    return *getEncodingProxy(ek.node(), ek.sequence());
   }
 
   std::unique_ptr<SeekableInputStream> getStream(
@@ -535,8 +559,8 @@ class TestStripeStreams : public StripeStreamsBase {
       std::string_view /* label */,
       bool throwIfNotFound) const override {
     return std::unique_ptr<SeekableInputStream>(getStreamProxy(
-        si.encodingKey().node,
-        si.encodingKey().sequence,
+        si.encodingKey().node(),
+        si.encodingKey().sequence(),
         static_cast<proto::Stream_Kind>(si.kind()),
         throwIfNotFound));
   }
@@ -557,6 +581,10 @@ class TestStripeStreams : public StripeStreamsBase {
 
   bool getUseVInts(const DwrfStreamIdentifier& /* unused */) const override {
     return true; // current tests all expect results from using vints
+  }
+
+  int64_t stripeRows() const override {
+    VELOX_UNSUPPORTED();
   }
 
   uint32_t rowsPerRowGroup() const override {

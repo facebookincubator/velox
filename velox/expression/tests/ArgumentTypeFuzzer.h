@@ -64,9 +64,15 @@ class ArgumentTypeFuzzer {
   auto& variables() const {
     return signature_.variables();
   }
+
   /// Bind each type variable that is not determined by the return type to a
   /// randomly generated type.
   void determineUnboundedTypeVariables();
+
+  TypePtr randType();
+
+  /// Generates an orderable random type, including structs, and arrays.
+  TypePtr randOrderableType();
 
   const exec::FunctionSignature& signature_;
 

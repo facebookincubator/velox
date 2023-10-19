@@ -39,6 +39,29 @@ class TableWriteTraits {
   static const TypePtr& contextColumnType();
 
   /// Defines the column channels in table write output.
+  /// Both the statistics and the row_count + fragments are transferred over the
+  /// same communication link between the TableWriter and TableFinish. Thus the
+  /// multiplexing is needed.
+  ///
+  ///  The transferred page layout looks like:
+  /// [row_count_channel], [fragment_channel], [context_channel],
+  /// [statistic_channel_1] ... [statistic_channel_N]]
+  ///
+  /// [row_count_channel] - contains number of rows processed by a TableWriter
+  /// [fragment_channel] - contains data provided by the DataSink#finish
+  /// [statistic_channel_1] ...[statistic_channel_N] -
+  /// contain aggregated statistics computed by the statistics aggregation
+  /// within the TableWriter
+  ///
+  /// For convenience, we never set both: [row_count_channel] +
+  /// [fragment_channel] and the [statistic_channel_1] ...
+  /// [statistic_channel_N].
+  ///
+  /// If this is a row that holds statistics - the [row_count_channel] +
+  /// [fragment_channel] will be NULL.
+  ///
+  /// If this is a row that holds the row count
+  /// or the fragment - all the statistics channels will be set to NULL.
   static constexpr int32_t kRowCountChannel = 0;
   static constexpr int32_t kFragmentChannel = 1;
   static constexpr int32_t kContextChannel = 2;
@@ -51,14 +74,25 @@ class TableWriteTraits {
       "pageSinkCommitStrategy";
   static constexpr std::string_view klastPageContextKey = "lastPage";
 
-  /// TODO: add column stats support.
-  static const RowTypePtr& outputType();
+  static const RowTypePtr outputType(
+      const std::shared_ptr<core::AggregationNode>& aggregationNode = nullptr);
 
   /// Returns the parsed commit context from table writer 'output'.
   static folly::dynamic getTableCommitContext(const RowVectorPtr& output);
 
   /// Returns the sum of row counts from table writer 'output'.
   static int64_t getRowCount(const RowVectorPtr& output);
+
+  /// Creates the statistics output.
+  /// Statistics page layout (aggregate by partition):
+  /// row     fragments     context     [partition]   stats1     stats2 ...
+  /// null       null          X          [X]            X          X
+  /// null       null          X          [X]            X          X
+  static RowVectorPtr createAggregationStatsOutput(
+      RowTypePtr outputType,
+      RowVectorPtr aggregationOutput,
+      StringView tableCommitContext,
+      velox::memory::MemoryPool* pool);
 };
 
 /**
@@ -75,25 +109,17 @@ class TableWriter : public Operator {
     return BlockingReason::kNotBlocked;
   }
 
+  void initialize() override;
+
   void addInput(RowVectorPtr input) override;
 
-  void noMoreInput() override {
-    Operator::noMoreInput();
-    close();
-  }
+  void noMoreInput() override;
 
   virtual bool needsInput() const override {
     return true;
   }
 
-  void close() override {
-    if (!closed_) {
-      if (dataSink_) {
-        dataSink_->close();
-      }
-      closed_ = true;
-    }
-  }
+  void close() override;
 
   RowVectorPtr getOutput() override;
 
@@ -102,16 +128,58 @@ class TableWriter : public Operator {
   }
 
  private:
+  // The memory reclaimer customized for connector and file writer memory pools.
+  //
+  // NOTE: we shall always reclaim memory from table write operator's reclaimer
+  // instead of file or connector writer's reclaimer. So the customized memory
+  // reclaimer here only handle memory arbitration enter/leave but does nothing
+  // for the actual memory reclamation related operations.
+  class MemoryReclaimer : public Operator::MemoryReclaimer {
+   public:
+    static std::unique_ptr<memory::MemoryReclaimer> create(
+        DriverCtx* driverCtx,
+        Operator* op);
+
+    bool reclaimableBytes(
+        const memory::MemoryPool& pool,
+        uint64_t& reclaimableBytes) const override;
+
+    uint64_t reclaim(
+        memory::MemoryPool* pool,
+        uint64_t targetBytes,
+        memory::MemoryReclaimer::Stats& stats) override;
+
+    void abort(memory::MemoryPool* pool, const std::exception_ptr& /* error */)
+        override;
+
+   private:
+    MemoryReclaimer(const std::shared_ptr<Driver>& driver, Operator* op)
+        : Operator::MemoryReclaimer(driver, op) {}
+  };
+
   void createDataSink();
+
+  std::vector<std::string> closeDataSink();
+
+  void abortDataSink();
 
   // Updates physicalWrittenBytes in OperatorStats with current written bytes.
   void updateWrittenBytes();
+
+  // Updates numWrittenFiles in runtimeStats.
+  void updateNumWrittenFiles();
+
+  std::string createTableCommitContext(bool lastOutput);
+
+  // Invoked to set memory reclaimer for connector and file writer memory pool.
+  void setConnectorOrWriterMemoryReclaimer(memory::MemoryPool* pool);
 
   const DriverCtx* const driverCtx_;
   memory::MemoryPool* const connectorPool_;
   const std::shared_ptr<connector::ConnectorInsertTableHandle>
       insertTableHandle_;
   const connector::CommitStrategy commitStrategy_;
+  std::unique_ptr<Operator> aggregation_;
   std::shared_ptr<connector::Connector> connector_;
   std::shared_ptr<connector::ConnectorQueryCtx> connectorQueryCtx_;
   std::unique_ptr<connector::DataSink> dataSink_;

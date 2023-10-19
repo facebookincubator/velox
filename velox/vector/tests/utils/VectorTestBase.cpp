@@ -16,8 +16,6 @@
 
 #include "velox/vector/tests/utils/VectorTestBase.h"
 
-#include "velox/exec/Task.h"
-
 namespace facebook::velox::test {
 
 BufferPtr makeIndicesInReverse(vector_size_t size, memory::MemoryPool* pool) {
@@ -44,8 +42,6 @@ BufferPtr makeIndices(
 }
 
 VectorTestBase::~VectorTestBase() {
-  // Wait for all the tasks to be deleted.
-  exec::Task::testingWaitForAllTasksToBeDeleted();
   // Reset the executor to wait for all the async activities to finish.
   executor_.reset();
 }
@@ -112,6 +108,17 @@ BufferPtr VectorTestBase::makeNulls(const std::vector<bool>& values) {
     bits::setNull(rawNulls, i, values[i]);
   }
   return nulls;
+}
+
+std::vector<RowVectorPtr> VectorTestBase::split(const RowVectorPtr& vector) {
+  const auto numRows = vector->size();
+  VELOX_CHECK_GE(numRows, 2);
+
+  const auto n = numRows / 2;
+  return {
+      std::dynamic_pointer_cast<RowVector>(vector->slice(0, n)),
+      std::dynamic_pointer_cast<RowVector>(vector->slice(n, numRows - n)),
+  };
 }
 
 void assertEqualVectors(const VectorPtr& expected, const VectorPtr& actual) {

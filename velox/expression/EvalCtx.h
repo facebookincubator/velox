@@ -81,7 +81,15 @@ class EvalCtx {
 
   void restore(ScopedContextSaver& saver);
 
+  // If exceptionPtr is known to be a VeloxException use setVeloxExceptionError
+  // instead.
   void setError(vector_size_t index, const std::exception_ptr& exceptionPtr);
+
+  // Similar to setError but more performant, should be used when the user knows
+  // for sure that exception_ptr is a velox exception.
+  void setVeloxExceptionError(
+      vector_size_t index,
+      const std::exception_ptr& exceptionPtr);
 
   void setErrors(
       const SelectivityVector& rows,
@@ -95,6 +103,12 @@ class EvalCtx {
     rows.template applyToSelected([&](auto row) INLINE_LAMBDA {
       try {
         func(row);
+      } catch (const VeloxException& e) {
+        if (!e.isUserError()) {
+          throw;
+        }
+        // Avoid double throwing.
+        setVeloxExceptionError(row, std::current_exception());
       } catch (const std::exception& e) {
         setError(row, std::current_exception());
       }
@@ -124,6 +138,13 @@ class EvalCtx {
       const SelectivityVector& elementRows,
       const BufferPtr& elementToTopLevelRows,
       ErrorVectorPtr& topLevelErrors);
+
+  // Given a mapping from element rows to top-level rows, set errors in
+  // in the elements as nulls int the top level row.
+  void convertElementErrorsToTopLevelNulls(
+      const SelectivityVector& elementRows,
+      const BufferPtr& elementToTopLevelRows,
+      VectorPtr& result);
 
   void deselectErrors(SelectivityVector& rows) const {
     if (!errors_) {
@@ -226,13 +247,25 @@ class EvalCtx {
     peeledEncoding_ = std::move(peel);
   }
 
+  bool resultShouldBePreserved(
+      const VectorPtr& result,
+      const SelectivityVector& rows) const {
+    return result && !isFinalSelection() && *finalSelection() != rows;
+  }
+
   // Copy "rows" of localResult into results if "result" is partially populated
   // and must be preserved. Copy localResult pointer into result otherwise.
   void moveOrCopyResult(
       const VectorPtr& localResult,
       const SelectivityVector& rows,
       VectorPtr& result) const {
-    if (result && !isFinalSelection() && *finalSelection() != rows) {
+#ifndef NDEBUG
+    if (localResult != nullptr) {
+      // Make sure local/temporary vectors have consistent state.
+      localResult->validate();
+    }
+#endif
+    if (resultShouldBePreserved(result, rows)) {
       BaseVector::ensureWritable(rows, result->type(), result->pool(), result);
       result->copy(localResult.get(), rows, nullptr);
     } else {
@@ -240,7 +273,18 @@ class EvalCtx {
     }
   }
 
-  VectorPool& vectorPool() const {
+  /// Adds nulls from 'rawNulls' to positions of 'result' given by
+  /// 'rows'. Ensures that '*result' is writable, of sufficient size
+  /// and that it can take nulls. Makes a new '*result' when
+  /// appropriate.
+  static void addNulls(
+      const SelectivityVector& rows,
+      const uint64_t* FOLLY_NULLABLE rawNulls,
+      EvalCtx& context,
+      const TypePtr& type,
+      VectorPtr& result);
+
+  VectorPool* vectorPool() const {
     return execCtx_->vectorPool();
   }
 
@@ -248,7 +292,11 @@ class EvalCtx {
     return execCtx_->getVector(type, size);
   }
 
+  // Return true if the vector was moved to the pool.
   bool releaseVector(VectorPtr& vector) {
+    if (!vector) {
+      return false;
+    }
     return execCtx_->releaseVector(vector);
   }
 
@@ -263,7 +311,7 @@ class EvalCtx {
       const TypePtr& type,
       VectorPtr& result) {
     BaseVector::ensureWritable(
-        rows, type, execCtx_->pool(), result, &execCtx_->vectorPool());
+        rows, type, execCtx_->pool(), result, execCtx_->vectorPool());
   }
 
   /// Make sure the vector is addressable up to index `size`-1. Initialize all
@@ -273,10 +321,17 @@ class EvalCtx {
     return peeledEncoding_.get();
   }
 
+  /// Returns true if caching in expression evaluation is enabled, such as
+  /// Expr::evalWithMemo.
+  bool cacheEnabled() const {
+    return cacheEnabled_;
+  }
+
  private:
   core::ExecCtx* const FOLLY_NONNULL execCtx_;
   ExprSet* FOLLY_NULLABLE const exprSet_;
   const RowVector* FOLLY_NULLABLE row_;
+  const bool cacheEnabled_;
   bool inputFlatNoNulls_;
 
   // Corresponds 1:1 to children of 'row_'. Set to an inner vector

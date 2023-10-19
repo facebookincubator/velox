@@ -17,7 +17,7 @@
 
 #include "velox/expression/ComplexViewTypes.h"
 #include "velox/functions/Udf.h"
-#include "velox/functions/prestosql/CheckedArithmetic.h"
+#include "velox/functions/lib/CheckedArithmetic.h"
 #include "velox/type/Conversions.h"
 
 namespace facebook::velox::functions {
@@ -167,8 +167,7 @@ struct CombinationsFunction {
 
   static constexpr int32_t kMaxCombinationSize = 5;
   static constexpr int64_t kMaxNumberOfCombinations = 100000;
-  /// TODO: Add ability to re-use strings once reuse_strings_from_arg supports
-  /// reusing strings nested within complex types.
+  static constexpr int32_t reuse_strings_from_arg = 0;
 
   int64_t calculateCombinationCount(
       int64_t inputArraySize,
@@ -613,6 +612,53 @@ struct ArrayTrimFunctionString {
   }
 };
 
+template <typename T>
+struct ArrayRemoveNullFunction {
+  VELOX_DEFINE_FUNCTION_TYPES(T);
+
+  // Fast path for primitives.
+  template <typename Out, typename In>
+  FOLLY_ALWAYS_INLINE void call(Out& out, const In& inputArray) {
+    for (int i = 0; i < inputArray.size(); ++i) {
+      if (inputArray[i].has_value()) {
+        auto& newItem = out.add_item();
+        newItem = inputArray[i].value();
+      }
+    }
+  }
+
+  // Generic implementation.
+  FOLLY_ALWAYS_INLINE void call(
+      out_type<Array<Generic<T1>>>& out,
+      const arg_type<Array<Generic<T1>>>& inputArray) {
+    for (int i = 0; i < inputArray.size(); ++i) {
+      if (inputArray[i].has_value()) {
+        auto& newItem = out.add_item();
+        newItem.copy_from(inputArray[i].value());
+      }
+    }
+  }
+};
+
+template <typename T>
+struct ArrayRemoveNullFunctionString {
+  VELOX_DEFINE_FUNCTION_TYPES(T);
+
+  static constexpr int32_t reuse_strings_from_arg = 0;
+
+  // String version that avoids copy of strings.
+  FOLLY_ALWAYS_INLINE void call(
+      out_type<Array<Varchar>>& out,
+      const arg_type<Array<Varchar>>& inputArray) {
+    for (int i = 0; i < inputArray.size(); ++i) {
+      if (inputArray[i].has_value()) {
+        auto& newItem = out.add_item();
+        newItem.setNoCopy(inputArray[i].value());
+      }
+    }
+  }
+};
+
 /// This class implements the array flatten function.
 ///
 /// DEFINITION:
@@ -697,35 +743,85 @@ struct ArrayUnionFunction {
   }
 };
 
+/// This class implements the array_remove function.
+///
+/// DEFINITION:
+/// array_remove(x, element) -> array
+/// Remove all elements that equal element from array x.
 template <typename T>
-struct ArrayUnionFunctionString {
+struct ArrayRemoveFunction {
+  VELOX_DEFINE_FUNCTION_TYPES(T);
+
+  // Fast path for primitives.
+  template <typename Out, typename In, typename E>
+  void call(Out& out, const In& inputArray, E element) {
+    for (const auto& item : inputArray) {
+      if (item.has_value()) {
+        if (element != item.value()) {
+          auto& newItem = out.add_item();
+          newItem = item.value();
+        }
+      } else {
+        out.add_null();
+      }
+    }
+  }
+
+  // Generic implementation.
+  void call(
+      out_type<Array<Generic<T1>>>& out,
+      const arg_type<Array<Generic<T1>>>& array,
+      const arg_type<Generic<T1>>& element) {
+    static constexpr CompareFlags kFlags = {
+        false, false, true, CompareFlags::NullHandlingMode::StopAtNull};
+    std::vector<std::optional<exec::GenericView>> toCopyItems;
+    for (const auto& item : array) {
+      if (item.has_value()) {
+        auto result = element.compare(item.value(), kFlags);
+        VELOX_USER_CHECK(
+            result.has_value(),
+            "array_remove does not support arrays with elements that are null or contain null")
+        if (result.value()) {
+          toCopyItems.push_back(item.value());
+        }
+      } else {
+        toCopyItems.push_back(std::nullopt);
+      }
+    }
+
+    for (const auto& item : toCopyItems) {
+      if (item.has_value()) {
+        auto& newItem = out.add_item();
+        newItem.copy_from(item.value());
+      } else {
+        out.add_null();
+      }
+    }
+  }
+};
+
+template <typename T>
+struct ArrayRemoveFunctionString {
   VELOX_DEFINE_FUNCTION_TYPES(T);
 
   static constexpr int32_t reuse_strings_from_arg = 0;
 
   // String version that avoids copy of strings.
-  FOLLY_ALWAYS_INLINE void call(
+  void call(
       out_type<Array<Varchar>>& out,
-      const arg_type<Array<Varchar>>& inputArray1,
-      const arg_type<Array<Varchar>>& inputArray2) {
-    folly::F14FastSet<StringView> elementSet;
-    bool nullAdded = false;
-    auto addItems = [&](auto& inputArray) {
-      for (const auto& item : inputArray) {
-        if (item.has_value()) {
-          if (elementSet.insert(item.value()).second) {
-            auto& newItem = out.add_item();
-            newItem.setNoCopy(item.value());
-          }
-        } else if (!nullAdded) {
-          nullAdded = true;
-          out.add_null();
+      const arg_type<Array<Varchar>>& inputArray,
+      const arg_type<Varchar>& element) {
+    for (const auto& item : inputArray) {
+      if (item.has_value()) {
+        auto result = element.compare(item.value());
+        if (result) {
+          auto& newItem = out.add_item();
+          newItem.setNoCopy(item.value());
         }
+      } else {
+        out.add_null();
       }
-    };
-    addItems(inputArray1);
-    addItems(inputArray2);
+    }
   }
 };
-
 } // namespace facebook::velox::functions

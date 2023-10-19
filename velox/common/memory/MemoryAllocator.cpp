@@ -114,7 +114,7 @@ MemoryAllocator* MemoryAllocator::getInstance() {
 
 // static
 std::shared_ptr<MemoryAllocator> MemoryAllocator::createDefaultInstance() {
-  return std::make_shared<MallocAllocator>();
+  return std::make_shared<MallocAllocator>(kDefaultCapacityBytes);
 }
 
 // static
@@ -160,7 +160,123 @@ MachinePageCount MemoryAllocator::roundUpToSizeClassSize(
   return *std::lower_bound(sizes.begin(), sizes.end(), pages);
 }
 
+namespace {
+MachinePageCount pagesToAcquire(
+    MachinePageCount numPages,
+    MachinePageCount collateralPages) {
+  return numPages <= collateralPages ? 0 : numPages - collateralPages;
+}
+} // namespace
+
+bool MemoryAllocator::allocateNonContiguous(
+    MachinePageCount numPages,
+    Allocation& out,
+    ReservationCallback reservationCB,
+    MachinePageCount minSizeClass) {
+  if (cache() == nullptr) {
+    return allocateNonContiguousWithoutRetry(
+        numPages, out, reservationCB, minSizeClass);
+  }
+  const bool success = cache()->makeSpace(
+      pagesToAcquire(numPages, out.numPages()), [&](Allocation& acquired) {
+        freeNonContiguous(acquired);
+        return allocateNonContiguousWithoutRetry(
+            numPages, out, reservationCB, minSizeClass);
+      });
+  if (!success) {
+    // There can be a failure where allocation was never called because there
+    // never was a chance based on numAllocated() and capacity(). Make sure old
+    // data is still freed.
+    if (!out.empty()) {
+      if (reservationCB) {
+        reservationCB(AllocationTraits::pageBytes(out.numPages()), false);
+      }
+      freeNonContiguous(out);
+    }
+  }
+  return success;
+}
+
+bool MemoryAllocator::allocateContiguous(
+    MachinePageCount numPages,
+    Allocation* collateral,
+    ContiguousAllocation& allocation,
+    ReservationCallback reservationCB,
+    MachinePageCount maxPages) {
+  if (cache() == nullptr) {
+    return allocateContiguousWithoutRetry(
+        numPages, collateral, allocation, reservationCB, maxPages);
+  }
+  auto numCollateralPages =
+      allocation.numPages() + (collateral ? collateral->numPages() : 0);
+  const bool success = cache()->makeSpace(
+      pagesToAcquire(numPages, numCollateralPages), [&](Allocation& acquired) {
+        freeNonContiguous(acquired);
+        return allocateContiguousWithoutRetry(
+            numPages, collateral, allocation, reservationCB, maxPages);
+      });
+  if (!success) {
+    // There can be a failure where allocation was never called because there
+    // never was a chance based on numAllocated() and capacity(). Make sure old
+    // data is still freed.
+    int64_t freedBytes{0};
+    if ((collateral != nullptr) && !collateral->empty()) {
+      freedBytes += AllocationTraits::pageBytes(collateral->numPages());
+      freeNonContiguous(*collateral);
+    }
+    if (!allocation.empty()) {
+      freedBytes += allocation.size();
+      freeContiguous(allocation);
+    }
+    if ((reservationCB) != nullptr && (freedBytes > 0)) {
+      reservationCB(freedBytes, false);
+    }
+  }
+  return success;
+}
+
+bool MemoryAllocator::growContiguous(
+    MachinePageCount increment,
+    ContiguousAllocation& allocation,
+    ReservationCallback reservationCB) {
+  if (cache() == nullptr) {
+    return growContiguousWithoutRetry(increment, allocation, reservationCB);
+  }
+  return cache()->makeSpace(increment, [&](Allocation& acquired) {
+    freeNonContiguous(acquired);
+    return growContiguousWithoutRetry(increment, allocation, reservationCB);
+  });
+}
+
+void* MemoryAllocator::allocateBytes(uint64_t bytes, uint16_t alignment) {
+  if (cache() == nullptr) {
+    return allocateBytesWithoutRetry(bytes, alignment);
+  }
+  void* result = nullptr;
+  cache()->makeSpace(
+      AllocationTraits::numPages(bytes), [&](Allocation& acquired) {
+        freeNonContiguous(acquired);
+        result = allocateBytesWithoutRetry(bytes, alignment);
+        return result != nullptr;
+      });
+  return result;
+}
+
 void* MemoryAllocator::allocateZeroFilled(uint64_t bytes) {
+  if (cache() == nullptr) {
+    return allocateZeroFilledWithoutRetry(bytes);
+  }
+  void* result = nullptr;
+  cache()->makeSpace(
+      AllocationTraits::numPages(bytes), [&](Allocation& acquired) {
+        freeNonContiguous(acquired);
+        result = allocateZeroFilledWithoutRetry(bytes);
+        return result != nullptr;
+      });
+  return result;
+}
+
+void* MemoryAllocator::allocateZeroFilledWithoutRetry(uint64_t bytes) {
   void* result = allocateBytes(bytes);
   if (result != nullptr) {
     ::memset(result, 0, bytes);

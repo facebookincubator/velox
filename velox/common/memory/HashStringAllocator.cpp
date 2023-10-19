@@ -56,6 +56,33 @@ void markAsFree(HashStringAllocator::Header* FOLLY_NONNULL header) {
 }
 } // namespace
 
+std::string HashStringAllocator::Header::toString() {
+  std::ostringstream out;
+  if (isFree()) {
+    out << "|free| ";
+  }
+  if (isContinued()) {
+    out << "|multipart| ";
+  }
+  out << "size: " << size();
+  if (isContinued()) {
+    auto next = nextContinued();
+    out << " [" << next->size();
+    while (next->isContinued()) {
+      next = next->nextContinued();
+      out << ", " << next->size();
+    }
+    out << "]";
+  }
+  if (isPreviousFree()) {
+    out << ", previous is free (" << *previousFreeSize(this) << " bytes)";
+  }
+  if (next() == nullptr) {
+    out << ", at end";
+  }
+  return out.str();
+}
+
 HashStringAllocator::~HashStringAllocator() {
   clear();
 }
@@ -192,23 +219,19 @@ HashStringAllocator::finishWrite(ByteStream& stream, int32_t numReserveBytes) {
   return {startPosition_, currentPosition};
 }
 
-void HashStringAllocator::newSlab(int32_t size) {
+void HashStringAllocator::newSlab() {
   constexpr int32_t kSimdPadding = simd::kPadding - sizeof(Header);
-  char* run = nullptr;
-  uint64_t available = 0;
-  int32_t needed = std::max<int32_t>(
-      bits::roundUp(
-          size + 2 * sizeof(Header) + kSimdPadding,
-          memory::AllocationTraits::kPageSize),
-      kUnitSize);
-  auto pagesNeeded = memory::AllocationTraits::numPages(needed);
-  // All large allocations are made standalone in pool().
-  VELOX_CHECK_LE(pagesNeeded, pool()->largestSizeClass());
-  if (pool_.allocatedBytes() >= pool_.hugePageThreshold()) {
-    needed = memory::AllocationTraits::kHugePageSize;
-  }
-  run = pool_.allocateFixed(needed);
-  available = needed - sizeof(Header) - kSimdPadding;
+  const int64_t needed = pool_.allocatedBytes() >= pool_.hugePageThreshold()
+      ? memory::AllocationTraits::kHugePageSize
+      : kUnitSize;
+  auto run = pool_.allocateFixed(needed);
+  // We check we got exactly the requested amount. checkConsistency()
+  // depends on slabs made here coinciding with ranges from
+  // AllocationPool::rangeAt(). Sometimes the last range can be
+  // several huge pages for severl huge page sized arenas but
+  // checkConsistency() can interpret that.
+  VELOX_CHECK_EQ(0, pool_.freeBytes());
+  auto available = needed - sizeof(Header) - kSimdPadding;
 
   VELOX_CHECK_NOT_NULL(run);
   VELOX_CHECK_GT(available, 0);
@@ -287,15 +310,29 @@ void HashStringAllocator::freeRestOfBlock(Header* header, int32_t keepBytes) {
 
 // Free list sizes align with size of containers. + 20 allows for padding for an
 // alignment of 16 bytes.
-int32_t HashStringAllocator::freeListSizes_[kNumFreeLists + 1] = {
+int32_t HashStringAllocator::freeListSizes_[kNumFreeLists + 7] = {
+    30,
+    50,
     72,
     8 * 16 + 20,
+    100,
     16 * 16 + 20,
     32 * 16 + 20,
     64 * 16 + 20,
     128 * 16 + 20,
     std::numeric_limits<int32_t>::max(),
-    std::numeric_limits<int32_t>::max()};
+    std::numeric_limits<int32_t>::max(),
+    std::numeric_limits<int32_t>::max(),
+    std::numeric_limits<int32_t>::max(),
+    std::numeric_limits<int32_t>::max(),
+    std::numeric_limits<int32_t>::max(),
+    std::numeric_limits<int32_t>::max(),
+};
+
+// static
+folly::Range<const int32_t*> HashStringAllocator::freeListSizeClasses() {
+  return folly::Range<const int32_t*>(&freeListSizes_[0], kNumFreeLists);
+}
 
 int32_t HashStringAllocator::freeListIndex(int32_t size, uint32_t mask) {
   static_assert(sizeof(freeListSizes_) >= sizeof(xsimd::batch<int32_t>));
@@ -328,7 +365,7 @@ HashStringAllocator::allocate(int32_t size, bool exactSize) {
   }
   auto header = allocateFromFreeLists(size, exactSize, exactSize);
   if (!header) {
-    newSlab(size);
+    newSlab();
     header = allocateFromFreeLists(size, exactSize, exactSize);
     VELOX_CHECK(header != nullptr);
     VELOX_CHECK_GT(header->size(), 0);
@@ -376,6 +413,10 @@ HashStringAllocator::allocateFromFreeList(
     int32_t freeListIndex) {
   constexpr int32_t kMaxCheckedForFit = 5;
   int32_t counter = 0;
+  if (mustHaveSize && largestInFreeList_[freeListIndex] < preferredSize) {
+    return nullptr;
+  }
+  int32_t largestFreeSize = 0;
   Header* largest = nullptr;
   Header* found = nullptr;
   for (auto* item = free_[freeListIndex].next(); item != &free_[freeListIndex];
@@ -390,17 +431,22 @@ HashStringAllocator::allocateFromFreeList(
     if (!largest || size > largest->size()) {
       largest = header;
     }
-    if (!mustHaveSize && ++counter > kMaxCheckedForFit) {
+    ++counter;
+    if (!mustHaveSize && counter > kMaxCheckedForFit) {
       break;
     }
   }
+  numFreeListNoFit_ += counter;
   if (!mustHaveSize && !found) {
     found = largest;
   }
   if (!found) {
+    // We have traversed the complete free list and therefore know the largest
+    // size. Either the list is empty or mustHaveSize is true and there is no
+    // block large enough.
+    largestInFreeList_[freeListIndex] = largest ? largest->size() : 0;
     return nullptr;
   }
-
   --numFree_;
   freeBytes_ -= found->size() + sizeof(Header);
   removeFromFreeList(found);
@@ -456,8 +502,12 @@ void HashStringAllocator::free(Header* _header) {
     } else {
       ++numFree_;
     }
-    auto freeIndex = freeListIndex(header->size());
+    auto freedSize = header->size();
+    auto freeIndex = freeListIndex(freedSize);
     freeNonEmpty_ |= 1 << freeIndex;
+    if (largestInFreeList_[freeIndex] < freedSize) {
+      largestInFreeList_[freeIndex] = freedSize;
+    }
     free_[freeIndex].insert(
         reinterpret_cast<CompactDoubleList*>(header->begin()));
     markAsFree(header);
@@ -541,12 +591,53 @@ void HashStringAllocator::ensureAvailable(int32_t bytes, Position& position) {
   position = finishWrite(stream, 0).first;
 }
 
-void HashStringAllocator::checkConsistency() const {
-  uint64_t numFree = 0;
-  uint64_t freeBytes = 0;
+std::string HashStringAllocator::toString() const {
+  std::ostringstream out;
+
+  out << "allocated: " << cumulativeBytes_ << " bytes" << std::endl;
+  out << "free: " << freeBytes_ << " bytes in " << numFree_ << " blocks"
+      << std::endl;
+  out << "standalone allocations: " << sizeFromPool_ << " bytes in "
+      << allocationsFromPool_.size() << " allocations" << std::endl;
+  out << "ranges: " << pool_.numRanges() << std::endl;
+
+  static const auto kHugePageSize = memory::AllocationTraits::kHugePageSize;
+
   for (auto i = 0; i < pool_.numRanges(); ++i) {
     auto topRange = pool_.rangeAt(i);
-    const auto kHugePageSize = memory::AllocationTraits::kHugePageSize;
+    auto topRangeSize = topRange.size();
+
+    out << "range " << i << ": " << topRangeSize << " bytes" << std::endl;
+
+    // Some ranges are short and contain one arena. Some are multiples of huge
+    // page size and contain one arena per huge page.
+    for (int64_t subRangeStart = 0; subRangeStart < topRangeSize;
+         subRangeStart += kHugePageSize) {
+      auto range = folly::Range<char*>(
+          topRange.data() + subRangeStart,
+          std::min<int64_t>(topRangeSize, kHugePageSize));
+      auto size = range.size() - simd::kPadding;
+
+      auto end = reinterpret_cast<Header*>(range.data() + size);
+      auto header = reinterpret_cast<Header*>(range.data());
+      while (header != nullptr && header != end) {
+        out << "\t" << header->toString() << std::endl;
+        header = header->next();
+      }
+    }
+  }
+
+  return out.str();
+}
+
+int64_t HashStringAllocator::checkConsistency() const {
+  static const auto kHugePageSize = memory::AllocationTraits::kHugePageSize;
+
+  uint64_t numFree = 0;
+  uint64_t freeBytes = 0;
+  int64_t allocatedBytes = 0;
+  for (auto i = 0; i < pool_.numRanges(); ++i) {
+    auto topRange = pool_.rangeAt(i);
     auto topRangeSize = topRange.size();
     if (topRangeSize >= kHugePageSize) {
       VELOX_CHECK_EQ(0, topRangeSize % kHugePageSize);
@@ -586,6 +677,9 @@ void HashStringAllocator::checkConsistency() const {
           // continue header is readable and not free.
           auto continued = header->nextContinued();
           VELOX_CHECK(!continued->isFree());
+          allocatedBytes += header->size() - sizeof(void*);
+        } else {
+          allocatedBytes += header->size();
         }
         previousFree = header->isFree();
         header = reinterpret_cast<Header*>(header->end());
@@ -614,6 +708,16 @@ void HashStringAllocator::checkConsistency() const {
 
   VELOX_CHECK_EQ(numInFreeList, numFree_);
   VELOX_CHECK_EQ(bytesInFreeList, freeBytes_);
+  return allocatedBytes;
+}
+
+bool HashStringAllocator::isEmpty() const {
+  return sizeFromPool_ == 0 && checkConsistency() == 0;
+}
+
+void HashStringAllocator::checkEmpty() const {
+  VELOX_CHECK_EQ(0, sizeFromPool_);
+  VELOX_CHECK_EQ(0, checkConsistency());
 }
 
 } // namespace facebook::velox

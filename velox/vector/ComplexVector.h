@@ -22,7 +22,6 @@
 #include <folly/hash/Hash.h>
 #include <glog/logging.h>
 
-#include <velox/vector/BaseVector.h>
 #include "velox/type/Type.h"
 #include "velox/vector/BaseVector.h"
 #include "velox/vector/LazyVector.h"
@@ -77,6 +76,7 @@ class RowVector : public BaseVector {
             type->childAt(i)->toString());
       }
     }
+    updateContainsLazyNotLoaded();
   }
 
   static std::shared_ptr<RowVector> createEmpty(
@@ -84,6 +84,8 @@ class RowVector : public BaseVector {
       velox::memory::MemoryPool* pool);
 
   virtual ~RowVector() override {}
+
+  bool containsNullAt(vector_size_t idx) const override;
 
   std::optional<int32_t> compare(
       const BaseVector* other,
@@ -93,18 +95,7 @@ class RowVector : public BaseVector {
 
   uint64_t hashValueAt(vector_size_t index) const override;
 
-  BaseVector* loadedVector() override {
-    for (auto i = 0; i < childrenSize_; ++i) {
-      if (!children_[i]) {
-        continue;
-      }
-      auto newChild = BaseVector::loadedVectorShared(children_[i]);
-      if (children_[i].get() != newChild.get()) {
-        children_[i] = newChild;
-      }
-    }
-    return this;
-  }
+  BaseVector* loadedVector() override;
 
   const BaseVector* loadedVector() const override {
     return const_cast<RowVector*>(this)->loadedVector();
@@ -117,6 +108,11 @@ class RowVector : public BaseVector {
   size_t childrenSize() const {
     return childrenSize_;
   }
+
+  // Resize a row vector by adding trailing nulls to the top level row without
+  // resizing children.
+  // Caller should ensure that the vector is unique before calling this method.
+  void appendNulls(vector_size_t numberOfRows);
 
   /// Get the child vector at a given offset.
   VectorPtr& childAt(column_index_t index) {
@@ -192,6 +188,14 @@ class RowVector : public BaseVector {
 
   VectorPtr slice(vector_size_t offset, vector_size_t length) const override;
 
+  bool containsLazyNotLoaded() const {
+    return containsLazyNotLoaded_;
+  }
+
+  void updateContainsLazyNotLoaded() const;
+
+  void validate(const VectorValidateOptions& options) const override;
+
  private:
   vector_size_t childSize() const {
     bool allConstant = false;
@@ -220,6 +224,21 @@ class RowVector : public BaseVector {
 
   const size_t childrenSize_;
   mutable std::vector<VectorPtr> children_;
+
+  // Flag to indicate if any children of this vector contain lazy vector that
+  // has not been loaded.  Used to optimize recursive laziness check.  This will
+  // be initialized in the constructor, and should be updated by calling
+  // updateContainsLazyNotLoaded whenever a new lazy child is set (e.g. in table
+  // scan), or a lazy child is loaded (e.g. in LazyVector::ensureLoadedRows and
+  // loadedVector).
+  mutable bool containsLazyNotLoaded_;
+
+  // Flag to indicate all children has been loaded (non-recursively).  Used to
+  // optimize loadedVector calls.  If this is true, we don't recurse into
+  // children to check if they are loaded.  Will be set to true when
+  // loadedVector is called, and reset to false when updateContainsLazyNotLoaded
+  // is called (i.e. some children are likely updated to lazy).
+  mutable bool childrenLoaded_ = false;
 };
 
 // Common parent class for ARRAY and MAP vectors.  Contains 'offsets' and
@@ -251,17 +270,19 @@ struct ArrayVectorBase : BaseVector {
   }
 
   BufferPtr mutableOffsets(size_t size) {
-    return ensureIndices(offsets_, rawOffsets_, size);
+    BaseVector::resizeIndices(size, pool_, &offsets_, &rawOffsets_);
+    return offsets_;
   }
 
   BufferPtr mutableSizes(size_t size) {
-    return ensureIndices(sizes_, rawSizes_, size);
+    BaseVector::resizeIndices(size, pool_, &sizes_, &rawSizes_);
+    return sizes_;
   }
 
   void resize(vector_size_t size, bool setNotNull = true) override {
     if (BaseVector::length_ < size) {
-      resizeIndices(size, &offsets_, &rawOffsets_);
-      resizeIndices(size, &sizes_, &rawSizes_);
+      BaseVector::resizeIndices(size, pool_, &offsets_, &rawOffsets_);
+      BaseVector::resizeIndices(size, pool_, &sizes_, &rawSizes_);
       clearIndices(sizes_, length_, size);
       // No need to clear offset indices since we set sizes to 0.
     }
@@ -313,20 +334,11 @@ struct ArrayVectorBase : BaseVector {
       const BaseVector* source,
       const folly::Range<const CopyRange*>& ranges,
       VectorPtr* targetValues,
-      const BaseVector* sourceValues,
-      VectorPtr* targetKeys,
-      const BaseVector* sourceKeys);
+      VectorPtr* targetKeys);
 
- private:
-  BufferPtr
-  ensureIndices(BufferPtr& buf, const vector_size_t*& raw, vector_size_t size) {
-    if (buf && buf->isMutable() &&
-        buf->capacity() >= size * sizeof(vector_size_t)) {
-      return buf;
-    }
-    resizeIndices(size, &buf, &raw, 0);
-    return buf;
-  }
+  void validateArrayVectorBase(
+      const VectorValidateOptions& options,
+      vector_size_t minChildVectorSize) const;
 
  protected:
   BufferPtr offsets_;
@@ -370,6 +382,8 @@ class ArrayVector : public ArrayVectorBase {
         type->childAt(0)->toString());
   }
 
+  bool containsNullAt(vector_size_t idx) const override;
+
   std::optional<int32_t> compare(
       const BaseVector* other,
       vector_size_t index,
@@ -395,20 +409,7 @@ class ArrayVector : public ArrayVectorBase {
 
   void copyRanges(
       const BaseVector* source,
-      const folly::Range<const CopyRange*>& ranges) override {
-    const ArrayVector* sourceArray{};
-    if (auto wrapped = source->wrappedVector();
-        !wrapped->isConstantEncoding()) {
-      sourceArray = wrapped->asUnchecked<ArrayVector>();
-    }
-    copyRangesImpl(
-        source,
-        ranges,
-        &elements_,
-        sourceArray ? sourceArray->elements_.get() : nullptr,
-        nullptr,
-        nullptr);
-  }
+      const folly::Range<const CopyRange*>& ranges) override;
 
   uint64_t retainedSize() const override {
     return BaseVector::retainedSize() + offsets_->capacity() +
@@ -437,6 +438,8 @@ class ArrayVector : public ArrayVectorBase {
   }
 
   VectorPtr slice(vector_size_t offset, vector_size_t length) const override;
+
+  void validate(const VectorValidateOptions& options) const override;
 
  private:
   VectorPtr elements_;
@@ -492,6 +495,8 @@ class MapVector : public ArrayVectorBase {
 
   virtual ~MapVector() override {}
 
+  bool containsNullAt(vector_size_t idx) const override;
+
   std::optional<int32_t> compare(
       const BaseVector* other,
       vector_size_t index,
@@ -531,20 +536,7 @@ class MapVector : public ArrayVectorBase {
 
   void copyRanges(
       const BaseVector* source,
-      const folly::Range<const CopyRange*>& ranges) override {
-    const MapVector* sourceMap{};
-    if (auto wrapped = source->wrappedVector();
-        !wrapped->isConstantEncoding()) {
-      sourceMap = wrapped->asUnchecked<MapVector>();
-    }
-    copyRangesImpl(
-        source,
-        ranges,
-        &values_,
-        sourceMap ? sourceMap->values_.get() : nullptr,
-        &keys_,
-        sourceMap ? sourceMap->keys_.get() : nullptr);
-  }
+      const folly::Range<const CopyRange*>& ranges) override;
 
   uint64_t retainedSize() const override {
     return BaseVector::retainedSize() + offsets_->capacity() +
@@ -586,6 +578,8 @@ class MapVector : public ArrayVectorBase {
   }
 
   VectorPtr slice(vector_size_t offset, vector_size_t length) const override;
+
+  void validate(const VectorValidateOptions& options) const override;
 
  protected:
   virtual void resetDataDependentFlags(const SelectivityVector* rows) override {
