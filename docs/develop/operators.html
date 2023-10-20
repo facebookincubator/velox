@@ -981,10 +981,10 @@ FilterNode(row_number &lt;= limit), but it uses less memory and CPU.</p>
 </thead>
 <tbody>
 <tr class="row-even"><td><p>partitionKeys</p></td>
-<td><p>Partition by columns for the window functions.</p></td>
+<td><p>Partition by columns for the window functions. May be empty.</p></td>
 </tr>
 <tr class="row-odd"><td><p>sortingKeys</p></td>
-<td><p>Order by columns for the window functions.</p></td>
+<td><p>Order by columns for the window functions. Cannot be empty and cannot overlap with ‘partitionKeys’.</p></td>
 </tr>
 <tr class="row-even"><td><p>sortingOrders</p></td>
 <td><p>Sorting order for each sorting key above. The supported sort orders are asc nulls first, asc nulls last, desc nulls first and desc nulls last.</p></td>
