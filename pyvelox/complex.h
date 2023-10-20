@@ -13,18 +13,17 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+
 #pragma once
 
-#include "velox/vector/ComplexVector.h"
+#include <pybind11/pybind11.h>
 
-namespace facebook::velox::core {
+#include "velox/vector/FlatVector.h"
 
-// Converts a sequence of values from a variant array to an ArrayVector. The
-// output ArrayVector contains one single row, which contains the elements
-// extracted from the input variant vector.
-ArrayVectorPtr variantArrayToVector(
-    const TypePtr& arrayType,
-    const std::vector<variant>& variantArray,
+namespace facebook::velox::py {
+    
+VectorPtr variantsToVector(
+    const std::vector<variant>& variants,
     velox::memory::MemoryPool* pool);
 
-} // namespace facebook::velox::core
+}

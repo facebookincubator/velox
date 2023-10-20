@@ -15,6 +15,7 @@
  */
 
 #include "pyvelox.h"
+#include "complex.h"
 #include "conversion.h"
 #include "serde.h"
 #include "signatures.h"
@@ -144,7 +145,7 @@ static VectorPtr pyListToVector(
     throw py::value_error(
         "Can't create a Velox vector consisting of only None");
   } else if (first_kind == velox::TypeKind::ARRAY) {
-    return facebook::velox::core::variantsToVector(variants, pool);
+    return variantsToVector(variants, pool);
   }
 
   return VELOX_DYNAMIC_SCALAR_TYPE_DISPATCH(
