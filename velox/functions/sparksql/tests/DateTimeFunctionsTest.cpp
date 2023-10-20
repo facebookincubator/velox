@@ -14,10 +14,6 @@
  * limitations under the License.
  */
 
-#include <stdint.h>
-
-#include <type/Type.h>
-#include <optional>
 #include "velox/common/base/tests/GTestUtils.h"
 #include "velox/functions/sparksql/tests/SparkFunctionBaseTest.h"
 #include "velox/type/tz/TimeZoneMap.h"

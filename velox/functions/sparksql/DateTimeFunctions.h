@@ -14,7 +14,6 @@
  * limitations under the License.
  */
 
-#include <common/base/Exceptions.h>
 #include "velox/functions/lib/DateTimeFormatter.h"
 #include "velox/functions/lib/TimeUtils.h"
 #include "velox/functions/prestosql/DateTimeImpl.h"
