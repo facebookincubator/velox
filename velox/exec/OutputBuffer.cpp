@@ -13,7 +13,7 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-#include "velox/exec/PartitionedOutputBuffer.h"
+#include "velox/exec/OutputBuffer.h"
 #include "velox/exec/Task.h"
 
 namespace facebook::velox::exec {
@@ -219,15 +219,14 @@ void releaseAfterAcknowledge(
 }
 } // namespace
 
-PartitionedOutputBuffer::PartitionedOutputBuffer(
+OutputBuffer::OutputBuffer(
     std::shared_ptr<Task> task,
     PartitionedOutputNode::Kind kind,
     int numDestinations,
     uint32_t numDrivers)
     : task_(std::move(task)),
       kind_(kind),
-      maxSize_(
-          task_->queryCtx()->queryConfig().maxPartitionedOutputBufferSize()),
+      maxSize_(task_->queryCtx()->queryConfig().maxPartitionedOutputBufferSize()),
       continueSize_((maxSize_ * kContinuePct) / 100),
       arbitraryBuffer_(
           isArbitrary() ? std::make_unique<ArbitraryBuffer>() : nullptr),
@@ -238,7 +237,7 @@ PartitionedOutputBuffer::PartitionedOutputBuffer(
   }
 }
 
-void PartitionedOutputBuffer::updateOutputBuffers(
+void OutputBuffer::updateOutputBuffers(
     int numBuffers,
     bool noMoreBuffers) {
   if (isPartitioned()) {
@@ -272,7 +271,7 @@ void PartitionedOutputBuffer::updateOutputBuffers(
   }
 }
 
-void PartitionedOutputBuffer::updateNumDrivers(uint32_t newNumDrivers) {
+void OutputBuffer::updateNumDrivers(uint32_t newNumDrivers) {
   bool isNoMoreDrivers{false};
   {
     std::lock_guard<std::mutex> l(mutex_);
@@ -287,7 +286,7 @@ void PartitionedOutputBuffer::updateNumDrivers(uint32_t newNumDrivers) {
   }
 }
 
-void PartitionedOutputBuffer::addOutputBuffersLocked(int numBuffers) {
+void OutputBuffer::addOutputBuffersLocked(int numBuffers) {
   VELOX_CHECK(!noMoreBuffers_);
   VELOX_CHECK(!isPartitioned());
   buffers_.reserve(numBuffers);
@@ -305,7 +304,7 @@ void PartitionedOutputBuffer::addOutputBuffersLocked(int numBuffers) {
   }
 }
 
-bool PartitionedOutputBuffer::enqueue(
+bool OutputBuffer::enqueue(
     int destination,
     std::unique_ptr<SerializedPage> data,
     ContinueFuture* future) {
@@ -337,7 +336,7 @@ bool PartitionedOutputBuffer::enqueue(
     }
 
     if (totalSize_ > maxSize_ && future) {
-      promises_.emplace_back("PartitionedOutputBuffer::enqueue");
+      promises_.emplace_back("OutputBuffer::enqueue");
       *future = promises_.back().getSemiFuture();
       blocked = true;
     }
@@ -351,7 +350,7 @@ bool PartitionedOutputBuffer::enqueue(
   return blocked;
 }
 
-void PartitionedOutputBuffer::enqueueBroadcastOutputLocked(
+void OutputBuffer::enqueueBroadcastOutputLocked(
     std::unique_ptr<SerializedPage> data,
     std::vector<DataAvailable>& dataAvailableCbs) {
   VELOX_DCHECK(isBroadcast());
@@ -373,7 +372,7 @@ void PartitionedOutputBuffer::enqueueBroadcastOutputLocked(
   }
 }
 
-void PartitionedOutputBuffer::enqueueArbitraryOutputLocked(
+void OutputBuffer::enqueueArbitraryOutputLocked(
     std::unique_ptr<SerializedPage> data,
     std::vector<DataAvailable>& dataAvailableCbs) {
   VELOX_DCHECK(isArbitrary());
@@ -399,7 +398,7 @@ void PartitionedOutputBuffer::enqueueArbitraryOutputLocked(
   }
 }
 
-void PartitionedOutputBuffer::enqueuePartitionedOutputLocked(
+void OutputBuffer::enqueuePartitionedOutputLocked(
     int destination,
     std::unique_ptr<SerializedPage> data,
     std::vector<DataAvailable>& dataAvailableCbs) {
@@ -420,17 +419,17 @@ void PartitionedOutputBuffer::enqueuePartitionedOutputLocked(
   }
 }
 
-void PartitionedOutputBuffer::noMoreData() {
+void OutputBuffer::noMoreData() {
   // Increment number of finished drivers.
   checkIfDone(true);
 }
 
-void PartitionedOutputBuffer::noMoreDrivers() {
+void OutputBuffer::noMoreDrivers() {
   // Do not increment number of finished drivers.
   checkIfDone(false);
 }
 
-void PartitionedOutputBuffer::checkIfDone(bool oneDriverFinished) {
+void OutputBuffer::checkIfDone(bool oneDriverFinished) {
   std::vector<DataAvailable> finished;
   {
     std::lock_guard<std::mutex> l(mutex_);
@@ -469,12 +468,12 @@ void PartitionedOutputBuffer::checkIfDone(bool oneDriverFinished) {
   }
 }
 
-bool PartitionedOutputBuffer::isFinished() {
+bool OutputBuffer::isFinished() {
   std::lock_guard<std::mutex> l(mutex_);
   return isFinishedLocked();
 }
 
-bool PartitionedOutputBuffer::isFinishedLocked() {
+bool OutputBuffer::isFinishedLocked() {
   // NOTE: for broadcast output buffer, we can only mark it as finished after
   // receiving the no more (destination) buffers signal.
   if (isBroadcast() && !noMoreBuffers_) {
@@ -488,7 +487,7 @@ bool PartitionedOutputBuffer::isFinishedLocked() {
   return true;
 }
 
-void PartitionedOutputBuffer::acknowledge(int destination, int64_t sequence) {
+void OutputBuffer::acknowledge(int destination, int64_t sequence) {
   std::vector<std::shared_ptr<SerializedPage>> freed;
   std::vector<ContinuePromise> promises;
   {
@@ -506,7 +505,7 @@ void PartitionedOutputBuffer::acknowledge(int destination, int64_t sequence) {
   releaseAfterAcknowledge(freed, promises);
 }
 
-void PartitionedOutputBuffer::updateAfterAcknowledgeLocked(
+void OutputBuffer::updateAfterAcknowledgeLocked(
     const std::vector<std::shared_ptr<SerializedPage>>& freed,
     std::vector<ContinuePromise>& promises) {
   uint64_t totalFreed = 0;
@@ -532,7 +531,7 @@ void PartitionedOutputBuffer::updateAfterAcknowledgeLocked(
   }
 }
 
-bool PartitionedOutputBuffer::deleteResults(int destination) {
+bool OutputBuffer::deleteResults(int destination) {
   std::vector<std::shared_ptr<SerializedPage>> freed;
   std::vector<ContinuePromise> promises;
   bool isFinished;
@@ -567,7 +566,7 @@ bool PartitionedOutputBuffer::deleteResults(int destination) {
   return isFinished;
 }
 
-void PartitionedOutputBuffer::getData(
+void OutputBuffer::getData(
     int destination,
     uint64_t maxBytes,
     int64_t sequence,
@@ -599,7 +598,7 @@ void PartitionedOutputBuffer::getData(
   }
 }
 
-void PartitionedOutputBuffer::terminate() {
+void OutputBuffer::terminate() {
   VELOX_CHECK(!task_->isRunning());
 
   std::vector<ContinuePromise> outstandingPromises;
@@ -612,14 +611,14 @@ void PartitionedOutputBuffer::terminate() {
   }
 }
 
-std::string PartitionedOutputBuffer::toString() {
+std::string OutputBuffer::toString() {
   std::lock_guard<std::mutex> l(mutex_);
   return toStringLocked();
 }
 
-std::string PartitionedOutputBuffer::toStringLocked() const {
+std::string OutputBuffer::toStringLocked() const {
   std::stringstream out;
-  out << "[PartitionedOutputBuffer[" << kind_ << "] totalSize_=" << totalSize_
+  out << "[OutputBuffer[" << kind_ << "] totalSize_=" << totalSize_
       << "b, num producers blocked=" << promises_.size()
       << ", completed=" << numFinished_ << "/" << numDrivers_ << ", "
       << (atEnd_ ? "at end, " : "") << "destinations: " << std::endl;
@@ -634,11 +633,11 @@ std::string PartitionedOutputBuffer::toStringLocked() const {
   return out.str();
 }
 
-double PartitionedOutputBuffer::getUtilization() const {
+double OutputBuffer::getUtilization() const {
   return totalSize_ / (double)maxSize_;
 }
 
-bool PartitionedOutputBuffer::isOverutilized() const {
+bool OutputBuffer::isOverutilized() const {
   return (totalSize_ > maxSize_) && !atEnd_;
 }
 
