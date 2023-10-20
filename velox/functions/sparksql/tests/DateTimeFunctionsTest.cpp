@@ -26,6 +26,10 @@ namespace facebook::velox::functions::sparksql::test {
 namespace {
 
 class DateTimeFunctionsTest : public SparkFunctionBaseTest {
+ public:
+  static constexpr int32_t kMin = std::numeric_limits<int32_t>::min();
+  static constexpr int32_t kMax = std::numeric_limits<int32_t>::max();
+
  protected:
   void setQueryTimeZone(const std::string& timeZone) {
     queryCtx_->testingOverrideConfigUnsafe({
@@ -182,7 +186,6 @@ TEST_F(DateTimeFunctionsTest, makeDate) {
   EXPECT_EQ(makeDate(1920, 1, 25), DATE()->toDays("1920-01-25"));
   EXPECT_EQ(makeDate(-10, 1, 30), DATE()->toDays("-0010-01-30"));
 
-  constexpr int32_t kMax = std::numeric_limits<int32_t>::max();
   auto errorMessage = fmt::format("Date out of range: {}-12-15", kMax);
   VELOX_ASSERT_THROW(makeDate(kMax, 12, 15), errorMessage);
 
@@ -253,8 +256,6 @@ TEST_F(DateTimeFunctionsTest, dateAdd) {
   EXPECT_EQ(parseDate("2019-02-28"), dateAdd(parseDate("2020-02-29"), -366));
 
   // Check for minimum and maximum tests.
-  constexpr int32_t kMin = std::numeric_limits<int32_t>::min();
-  constexpr int32_t kMax = std::numeric_limits<int32_t>::max();
   EXPECT_EQ(parseDate("5881580-07-11"), dateAdd(parseDate("1970-01-01"), kMax));
   EXPECT_EQ(
       parseDate("1969-12-31"), dateAdd(parseDate("-5877641-06-23"), kMax));
@@ -286,8 +287,6 @@ TEST_F(DateTimeFunctionsTest, dateSub) {
   EXPECT_EQ(parseDate("2020-02-29"), dateSub("2019-02-28", -366));
 
   // Check for minimum and maximum tests.
-  constexpr int32_t kMin = std::numeric_limits<int32_t>::min();
-  constexpr int32_t kMax = std::numeric_limits<int32_t>::max();
   EXPECT_EQ(parseDate("-5877641-06-23"), dateSub("1969-12-31", kMax));
   EXPECT_EQ(parseDate("1970-01-01"), dateSub("5881580-07-11", kMax));
   EXPECT_EQ(parseDate("1970-01-01"), dateSub("-5877641-06-23", kMin));
@@ -409,10 +408,6 @@ TEST_F(DateTimeFunctionsTest, dateDiffDate) {
 }
 
 TEST_F(DateTimeFunctionsTest, addMonths) {
-  const auto parseDate = [](const std::string& dateString) {
-    return DATE()->toDays(dateString);
-  };
-
   const auto addMonths = [&](const std::string& dateString, int32_t value) {
     return evaluateOnce<int32_t, int32_t>(
         "add_months(c0, c1)",
@@ -426,12 +421,13 @@ TEST_F(DateTimeFunctionsTest, addMonths) {
   EXPECT_EQ(addMonths("2015-01-31", 24), parseDate("2017-01-31"));
   EXPECT_EQ(addMonths("2015-01-31", 8), parseDate("2015-09-30"));
   EXPECT_EQ(addMonths("2015-01-30", 0), parseDate("2015-01-30"));
+  // The last day of Feb. 2016 is 29th.
   EXPECT_EQ(addMonths("2016-03-30", -1), parseDate("2016-02-29"));
+  // The last day of Feb. 2015 is 28th.
+  EXPECT_EQ(addMonths("2015-03-31", -1), parseDate("2015-02-28"));
   EXPECT_EQ(addMonths("2015-01-30", -2), parseDate("2014-11-30"));
   EXPECT_EQ(addMonths("2015-04-20", -24), parseDate("2013-04-20"));
 
-  constexpr int32_t kMin = std::numeric_limits<int32_t>::min();
-  constexpr int32_t kMax = std::numeric_limits<int32_t>::max();
   VELOX_ASSERT_THROW(
       addMonths("2023-07-10", kMin),
       fmt::format("Integer overflow in add_months(2023-07-10, {})", kMin));
