@@ -13,6 +13,7 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+
 #pragma once
 #include "velox/common/base/BitUtil.h"
 namespace facebook::velox::parquet {
@@ -82,7 +83,7 @@ class ByteStreamSplitDecoder {
   }
  protected:
   template <class T>
-  double readValue() {
+  T readValue() {
     uint8_t buf[sizeof(T)];
     for (int i = 0; i < sizeof(T); i++) {
       buf[i] = *(bufferStart_ + i * numValues_);

@@ -37,7 +37,7 @@ class FloatingPointColumnReader
       common::ScanSpec& scanSpec);
 
   bool hasBulkPath() const override {
-    this->formatData_->template as<ParquetData>().isByteStreamSplit();
+    return !this->formatData_->template as<ParquetData>().isByteStreamSplit();
   }
 
   void seekToRowGroup(uint32_t index) override {
