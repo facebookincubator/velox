@@ -38,11 +38,7 @@ void setElementInFlatVector(
     VectorPtr& vector) {
   using NativeType = typename TypeTraits<Kind>::NativeType;
   auto asFlat = vector->asFlatVector<NativeType>();
-  try {
-      asFlat->set(idx, NativeType{v.value<NativeType>()});
-  } catch (const std::exception& e) {
-      throw py::type_error("size: "+std::to_string(vector->size())+", idx: "+std::to_string(idx));
-  }
+  asFlat->set(idx, NativeType{v.value<NativeType>()});
 }
 
 void constructType(TypePtr& type, const variant& v, Counter& counter){
