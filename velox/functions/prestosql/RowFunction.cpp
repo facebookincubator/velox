@@ -28,18 +28,13 @@ class RowFunction : public exec::VectorFunction {
       exec::EvalCtx& context,
       VectorPtr& result) const override {
     auto argsCopy = args;
-
-    for (auto& child : args) {
-      VELOX_CHECK_GE(child->size(), rows.end(), "Child size less than Row size")
-    }
-
     RowVectorPtr row = std::make_shared<RowVector>(
         context.pool(),
         outputType,
         BufferPtr(nullptr),
         rows.end(),
         std::move(argsCopy),
-        0);
+        0 /*nullCount*/);
     context.moveOrCopyResult(row, rows, result);
   }
 

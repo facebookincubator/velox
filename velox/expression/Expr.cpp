@@ -1471,6 +1471,17 @@ void Expr::applyFunction(
       ? computeIsAsciiForResult(vectorFunction_.get(), inputValues_, rows)
       : std::nullopt;
 
+#ifndef NDEBUG
+  // Ensure that inputValues_ has its size >= rows.end()
+  for (auto& inputVector : inputValues_) {
+    if (inputVector) {
+      VELOX_CHECK_GE(
+          inputVector->size(),
+          rows.end(),
+          "Argument vector smaller than rows.end()");
+    }
+  }
+#endif
   try {
     vectorFunction_->apply(rows, inputValues_, type(), context, result);
   } catch (const VeloxException& ve) {

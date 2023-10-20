@@ -111,6 +111,7 @@ class VectorTestBase {
     if (isNullAt) {
       setNulls(rowVector, isNullAt);
     }
+    rowVector->validate({});
     return rowVector;
   }
 
@@ -121,13 +122,16 @@ class VectorTestBase {
     if (isNullAt) {
       setNulls(rowVector, isNullAt);
     }
+    rowVector->validate({});
     return rowVector;
   }
 
   RowVectorPtr makeRowVector(
       const std::shared_ptr<const RowType>& rowType,
       vector_size_t size) {
-    return vectorMaker_.rowVector(rowType, size);
+    auto rowVector = vectorMaker_.rowVector(rowType, size);
+    rowVector->validate({});
+    return rowVector;
   }
 
   /// Splits input vector into 2. First half of rows goes to first vector, the
