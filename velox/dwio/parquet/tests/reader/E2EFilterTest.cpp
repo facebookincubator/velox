@@ -274,6 +274,28 @@ TEST_F(E2EFilterTest, floatAndDoubleDirect) {
       20);
 }
 
+TEST_F(E2EFilterTest, floatAndDoubleByteStreamSplit) {
+  options_.enableDictionary = false;
+  options_.dataPageSize = 4 * 1024;
+  options_.encoding =
+      facebook::velox::parquet::arrow::Encoding::BYTE_STREAM_SPLIT;
+
+  testWithTypes(
+      "float_val:float,"
+      "double_val:double,"
+      "float_val2:float,"
+      "double_val2:double,"
+      "float_null:float",
+      [&]() {
+        makeAllNulls("float_null");
+        makeQuantizedFloat<float>("float_val2", 200, true);
+        makeQuantizedFloat<double>("double_val2", 522, true);
+      },
+      true,
+      {"float_val", "double_val", "float_val2", "double_val2", "float_null"},
+      20);
+}
+
 TEST_F(E2EFilterTest, floatAndDouble) {
   // float_val and double_val may be direct since the
   // values are random.float_val2 and double_val2 are expected to be

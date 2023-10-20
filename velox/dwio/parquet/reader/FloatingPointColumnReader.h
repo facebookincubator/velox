@@ -36,6 +36,10 @@ class FloatingPointColumnReader
       ParquetParams& params,
       common::ScanSpec& scanSpec);
 
+  bool hasBulkPath() const override {
+    this->formatData_->template as<ParquetData>().isByteStreamSplit();
+  }
+
   void seekToRowGroup(uint32_t index) override {
     base::seekToRowGroup(index);
     this->scanState().clear();

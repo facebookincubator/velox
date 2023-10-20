@@ -175,6 +175,10 @@ class ParquetData : public dwio::common::FormatData {
     return reader_->isDeltaBinaryPacked();
   }
 
+  bool isByteStreamSplit() const {
+    return reader_->isByteStreamSplit();
+  }
+
   bool parentNullsInLeaves() const override {
     return true;
   }
